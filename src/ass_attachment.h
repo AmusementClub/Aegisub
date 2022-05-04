@@ -23,7 +23,7 @@
 /// @class AssAttachment
 class AssAttachment final : public AssEntry {
 	/// ASS uuencoded entry data, including header.
-	boost::flyweight<std::string> entry_data;
+	std::string entry_data;
 
 	/// Name of the attached file, with SSA font mangling if it is a ttf
 	boost::flyweight<std::string> filename;
@@ -35,7 +35,7 @@ public:
 	size_t GetSize() const;
 
 	/// Add a line of data (without newline) read from a subtitle file
-	void AddData(std::string const& data) { entry_data = entry_data.get() + data + "\r\n"; }
+	void AddData(std::string const& data) { entry_data += data + "\r\n"; }
 
 	/// Extract the contents of this attachment to a file
 	/// @param filename Path to save the attachment to

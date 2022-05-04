@@ -35,12 +35,21 @@ if(WIN32)
         )
     endif()
 elseif(APPLE)
-    add_custom_command(
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen/buildvm_arch.h"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen"
-        COMMAND luajit-minilua ../dynasm/dynasm.lua -D P64 -D JIT -D FFI -D FPU -D HFABI -D VER= -o "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen/buildvm_arch.h" vm_x64.dasc
-        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/vendor/luajit/src
-    )
+    if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64")
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen/buildvm_arch.h"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen"
+            COMMAND luajit-minilua ../dynasm/dynasm.lua -D ENDIAN_LE -D P64 -D FFI -D DUALNUM -D FPU -D HFABI -D NO_UNWIND -D VER=80 -o "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen/buildvm_arch.h" vm_arm64.dasc
+            WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/vendor/luajit/src
+        )
+    else()
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen/buildvm_arch.h"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen"
+            COMMAND luajit-minilua ../dynasm/dynasm.lua -D P64 -D JIT -D FFI -D FPU -D HFABI -D VER= -o "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen/buildvm_arch.h" vm_x64.dasc
+            WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/vendor/luajit/src
+        )
+    endif()
 else()
     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
         add_custom_command(
@@ -70,6 +79,7 @@ add_executable(luajit-buildvm
 )
 target_compile_definitions(luajit-buildvm PRIVATE LUAJIT_ENABLE_LUA52COMPAT)
 target_include_directories(luajit-buildvm PRIVATE vendor/luajit/src "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen")
+
 if(APPLE)
     add_custom_command(
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/lj_vm.s"
@@ -201,8 +211,10 @@ else()
     target_link_libraries(luajit ${CMAKE_DL_LIBS})
 endif()
 if(APPLE)
-    target_compile_definitions(luajit-buildvm PRIVATE LUAJIT_ENABLE_GC64)
-    target_compile_definitions(luajit PRIVATE LUAJIT_ENABLE_GC64)
+    if(NOT CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64")
+        target_compile_definitions(luajit-buildvm PRIVATE LUAJIT_ENABLE_GC64)
+        target_compile_definitions(luajit PRIVATE LUAJIT_ENABLE_GC64)
+    endif()
 endif()
 
 add_subdirectory(vendor/luabins)
@@ -643,7 +655,7 @@ if(WITH_FFMS2)
     target_link_libraries(Aegisub LINK_PRIVATE ${FFMS2_LIBRARIES})
     target_sources(Aegisub PRIVATE src/audio_provider_ffmpegsource.cpp src/ffmpegsource_common.cpp src/video_provider_ffmpegsource.cpp)
 else()
-    message(SEND_ERROR
+    message(WARNING
         "No supported video/audio reader interface was enabled.\n"
         "You will not be able to open any video or audio files in Aegisub unless you install a supported video/audio provider.\n"
         "You will however still be able to open \"dummy\" video, ie. a blank, virtual video clip with subtitles overlaid.\n"

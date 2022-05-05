@@ -10,6 +10,6 @@
 		}
 	},
 	"Subtitle" : {
-		"Provider" : "CSRI/xy-vsfilter_aegisub"
+		"Provider" : "CSRI/vsfilter_textsub"
 	}
 }

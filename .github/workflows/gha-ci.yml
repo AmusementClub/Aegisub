@@ -34,7 +34,7 @@ jobs:
             #brew upgrade autoconf freetype gettext icu4c
             brew analytics off  # https://github.com/Homebrew/brew/issues/142 https://github.com/Homebrew/brew/pull/6745
             brew install automake boost ffmpeg ffms2 fftw fribidi libass \
-                         lua luarocks m4 wxmac hunspell uchardet
+                         lua luarocks m4 wxwidgets hunspell uchardet
             # Use bundled googletest
             git submodule --quiet init
             git submodule --quiet update vendor/googletest

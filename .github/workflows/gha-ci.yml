@@ -176,6 +176,10 @@ jobs:
 
         7z.exe x vendor/aegisub9212.zip -ovendor/aegisub9212
 
+        Invoke-WebRequest -Uri https://github.com/AmusementClub/ffms2/releases/download/nightly-20220119/release-ffms2-x86_64-nightly-20220119-0-g90975ec.v2.zip -OutFile vendor/ffms2.zip
+
+        7z.exe x vendor/ffms2.zip -ovendor
+
         Move-Item -Path build-dir\Release\Aegisub.exe -Destination build-dir\Aegisub.exe
         Remove-Item -Path build-dir\Release\*.exp,build-dir\Release\*.lib,build-dir\Release\*.exe
         Move-Item -Path build-dir\Aegisub.exe -Destination build-dir\Release\Aegisub.exe
@@ -183,7 +187,7 @@ jobs:
         Copy-Item -Path automation\autoload,automation\demos,automation\include -Destination build-dir\Release\automation -Recurse
 
         Copy-Item -Path C:\vcpkg\installed\x64-windows-release\bin\AviSynth.dll -Destination build-dir\Release
-        Copy-Item -Path vendor\ffms2\ffms2-2.23.1-msvc\x64\ffms2.dll -Destination build-dir\Release
+        Copy-Item -Path vendor\ffms2.dll -Destination build-dir\Release
         Copy-Item -Path vendor\aegisub9212\csri,vendor\aegisub9212\dictionaries,vendor\aegisub9212\licenses,vendor\aegisub9212\locale,vendor\aegisub9212\AssDraw3.exe,vendor\aegisub9212\AssDraw3.chm,vendor\aegisub9212\DirectShowSource.dll -Destination build-dir\Release -Recurse
 
     - name: upload artifact

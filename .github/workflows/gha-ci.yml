@@ -155,7 +155,7 @@ jobs:
         bash.exe build/version.sh .
         New-Item -Path build-dir -ItemType directory
         Set-Location build-dir
-        cmake.exe '-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake' '-DVCPKG_TARGET_TRIPLET=x64-windows-release' '-DFFMS2_INCLUDE_DIRS=../vendor/ffms2/ffms2-2.23.1-msvc/include' '-DFFMS2_LIBRARIES=../vendor/ffms2/ffms2-2.23.1-msvc/x64/ffms2.lib' '-DXAUDIO2_REDIST=ON' '-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /GR /EHsc /DUNICODE /D_UNICODE /MP' '-DCMAKE_C_FLAGS=/DWIN32 /D_WINDOWS /DUNICODE /D_UNICODE /MP' '-DWITH_TEST=ON' ..
+        cmake.exe '-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake' '-DVCPKG_TARGET_TRIPLET=x64-windows-release' '-DFFMS2_INCLUDE_DIRS=../vendor/ffms2/ffms2-2.23.1-msvc/include' '-DFFMS2_LIBRARIES=../vendor/ffms2/ffms2-2.23.1-msvc/x64/ffms2.lib' '-DXAUDIO2_REDIST=ON' '-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /GR /EHsc /DUNICODE /D_UNICODE /MP /DwxDEBUG_LEVEL=0' '-DCMAKE_C_FLAGS=/DWIN32 /D_WINDOWS /DUNICODE /D_UNICODE /MP /DwxDEBUG_LEVEL=0' '-DWITH_TEST=ON' ..
 
     - name: Add msbuild to PATH
       uses: microsoft/setup-msbuild@v1.0.2

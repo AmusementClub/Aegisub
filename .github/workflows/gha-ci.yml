@@ -172,7 +172,7 @@ jobs:
 
     - name: package
       run: |
-        Invoke-WebRequest -Uri https://ftp.wangqr.tk/aegisub/aegisub-win64-cmake-20210713-r9212.zip -OutFile vendor/aegisub9212.zip
+        Invoke-WebRequest -Uri https://github.com/AmusementClub/Aegisub/releases/download/artifacts/aegisub-win64-cmake-20210713-r9212.zip -OutFile vendor/aegisub9212.zip
 
         7z.exe x vendor/aegisub9212.zip -ovendor/aegisub9212
 

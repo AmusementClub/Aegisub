@@ -91,7 +91,7 @@ jobs:
             mkdir build-dir
             cd build-dir
             if (echo "${{ matrix.os }}" | grep -qE '^macos-') ; then
-              CMAKE_PLATFORM_OPTIONS='-DICU_INCLUDE_DIR=/usr/local/opt/icu4c/include -DICU_UC_LIBRARY_RELEASE=/usr/local/opt/icu4c/lib/libicuuc.dylib -DICU_IN_LIBRARY_RELEASE=/usr/local/opt/icu4c/lib/libicui18n.dylib'
+              CMAKE_PLATFORM_OPTIONS='-DICU_INCLUDE_DIR=/usr/local/opt/icu4c/include -DICU_UC_LIBRARY_RELEASE=/usr/local/opt/icu4c/lib/libicuuc.dylib -DICU_DT_LIBRARY_RELEASE=/usr/local/opt/icu4c/lib/libicudata.dylib -DICU_IN_LIBRARY_RELEASE=/usr/local/opt/icu4c/lib/libicui18n.dylib'
             fi
             cmake -DCMAKE_CXX_FLAGS='-Wall -Wextra -Wno-unused-parameter -pedantic' -DCMAKE_C_FLAGS='-Wall -Wextra -Wno-unused-parameter' -DWITH_STARTUPLOG=ON -DWITH_TEST=ON $CMAKE_PLATFORM_OPTIONS .. || (cat CMakeFiles/CMakeOutput.log CMakeFiles/CMakeError.log; exit 1)
           fi

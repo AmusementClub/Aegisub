@@ -206,7 +206,7 @@ target_include_directories(luajit PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/vendor/lu
 if(WIN32)
     target_sources(luajit PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/lj_vm.obj")
 else()
-    enable_language(ASM-ATT)
+    enable_language(ASM)
     target_sources(luajit PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/lj_vm.s")
     target_link_libraries(luajit ${CMAKE_DL_LIBS})
 endif()
@@ -562,9 +562,20 @@ target_include_directories(Aegisub PRIVATE ${ass_INCLUDE_DIRS})
 target_link_libraries(Aegisub LINK_PRIVATE ${ass_LIBRARIES})
 
 find_package(Boost REQUIRED container filesystem locale regex thread)
-target_link_libraries(libaegisub PRIVATE "Boost::locale" "Boost::regex" "Boost::thread")
+target_link_libraries(libaegisub PRIVATE "Boost::locale" "Boost::thread")
 target_link_libraries(libaegisub PUBLIC "Boost::headers" "Boost::container" "Boost::filesystem")
-target_link_libraries(Aegisub PRIVATE "Boost::headers" "Boost::container" "Boost::filesystem" "Boost::locale" "Boost::regex")
+target_link_libraries(Aegisub PRIVATE "Boost::headers" "Boost::container" "Boost::filesystem" "Boost::locale")
+# Handle Boost::regex with icu support for Boost >= 1.76.0. https://github.com/boostorg/regex/issues/143
+if(TARGET Boost::regex_icu)
+    target_link_libraries(libaegisub PRIVATE "Boost::regex_icu")
+    target_link_libraries(Aegisub PRIVATE "Boost::regex_icu")
+else()
+    target_link_libraries(libaegisub PRIVATE "Boost::regex")
+    target_link_libraries(Aegisub PRIVATE "Boost::regex")
+    find_package(ICU REQUIRED uc dt in)
+    target_link_libraries(libaegisub PRIVATE "ICU::uc" "ICU::dt" "ICU::in")
+    target_link_libraries(Aegisub PRIVATE "ICU::uc" "ICU::dt" "ICU::in")
+endif()
 
 find_package(OpenGL REQUIRED)
 target_link_libraries(Aegisub PRIVATE "OpenGL::GL")
@@ -576,9 +587,9 @@ endif()
 find_package(Iconv REQUIRED)
 target_link_libraries(libaegisub PRIVATE "Iconv::Iconv")
 
-find_package(ICU REQUIRED uc in)
+find_package(ICU REQUIRED uc)
 target_link_libraries(libaegisub PRIVATE "ICU::uc")
-target_link_libraries(Aegisub PRIVATE "ICU::uc" "ICU::in")
+target_link_libraries(Aegisub PRIVATE "ICU::uc")
 
 find_package(wxWidgets REQUIRED adv base core gl stc xml)
 option(WITH_WXSTC "Enable wxStyledTextCtrl support" ON)
@@ -644,6 +655,17 @@ if(WIN32)
 else()
     set(WITH_DIRECTSOUND OFF)
     set(WITH_XAUDIO2 OFF)
+endif()
+
+if(APPLE)
+    option(WITH_COREAUDIO "Enable CoreAudio support" ON)
+    if(WITH_COREAUDIO)
+        target_compile_definitions(Aegisub PRIVATE "WITH_COREAUDIO")
+        target_link_libraries(Aegisub PRIVATE "-framework AudioToolbox")
+        target_sources(Aegisub PRIVATE src/audio_player_coreaudio.cpp)
+    endif()
+else()
+    set(WITH_COREAUDIO OFF)
 endif()
 
 find_package(FFMS2)
@@ -765,6 +787,8 @@ else()
         set(DEFAULT_PLAYER_AUDIO "PulseAudio" CACHE STRING "Default audio player")
     elseif(WITH_ALSA)
         set(DEFAULT_PLAYER_AUDIO "ALSA" CACHE STRING "Default audio player")
+    elseif(WITH_COREAUDIO)
+        set(DEFAULT_PLAYER_AUDIO "CoreAudio" CACHE STRING "Default audio player")
     elseif(WITH_OPENAL)
         set(DEFAULT_PLAYER_AUDIO "OpenAL" CACHE STRING "Default audio player")
     elseif(WITH_PORTAUDIO)
@@ -847,13 +871,14 @@ message(STATUS "\n"
     "\n"
     "Audio Players\n"
     "  ALSA:                  ${WITH_ALSA}\n"
+    "  CoreAudio:             ${WITH_COREAUDIO}\n"
     "  DirectSound:           ${WITH_DIRECTSOUND}\n"
     "  DirectSound-old:       ${WITH_DIRECTSOUND}\n"
-    "  XAudio2:               ${WITH_XAUDIO2}\n"
     "  OpenAL:                ${WITH_OPENAL}\n"
     "  OSS:                   ${WITH_OSS}\n"
     "  PortAudio:             ${WITH_PORTAUDIO}\n"
     "  PulseAudio:            ${WITH_LIBPULSE}\n"
+    "  XAudio2:               ${WITH_XAUDIO2}\n"
     "\n"
     "Misc Packages\n"
     "  AviSynth:              ${WITH_AVISYNTH}\n"

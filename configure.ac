@@ -295,6 +295,23 @@ AC_SUBST(ALSA_CFLAGS)
 AC_SUBST(ALSA_LIBS)
 AC_SUBST(with_alsa)
 
+
+#######
+## CoreAudio
+#######
+AC_ARG_WITH(coreaudio,
+            AS_HELP_STRING([--without-coreaudio],
+                           [build without CoreAudio audio player [auto]]))
+AS_IF([test x$build_darwin = xyes], [
+  COREAUDIO_LIBS="-framework AudioToolbox"
+  AC_SUBST(COREAUDIO_LIBS)
+  with_coreaudio="yes"
+], [with_coreaudio="no"])
+
+AS_IF([test x$with_coreaudio = xyes], AC_DEFINE(WITH_COREAUDIO, 1, [Enable CoreAudio Support]))
+
+AC_SUBST(with_coreaudio)
+
 #########
 ## OpenAL
 #########
@@ -532,16 +549,17 @@ AC_DEFINE_UNQUOTED([UPDATE_CHECKER_BASE_URL], ["$with_update_url"],
 #   it above.
 ####################################################################
 AC_ARG_WITH(player-audio,
-            AS_HELP_STRING([--with-player-audio=(ALSA|OpenAL|PortAudio|PulseAudio|OSS)],
-                           [Default Audio Player [Linux/ALSA, Darwin/OpenAL, 1:*/OSS, 2:*/PortAudio]]))
+            AS_HELP_STRING([--with-player-audio=(ALSA|CoreAudio|OpenAL|PortAudio|PulseAudio|OSS)],
+                           [Default Audio Player [Linux/ALSA, Darwin/CoreAudio, 1:*/OSS, 2:*/PortAudio]]))
 
 # Default audio player.
 AS_IF([test -z "$with_player_audio"], [
   AS_IF([test x$build_linux = xyes && test x$with_alsa = xyes],    [DEFAULT_PLAYER_AUDIO="ALSA"],
-        [test x$build_darwin = xyes && test x$with_openal = xyes], [DEFAULT_PLAYER_AUDIO="OpenAL"],
+        [test x$build_darwin = xyes && test x$with_coreaudio = xyes], [DEFAULT_PLAYER_AUDIO="CoreAudio"],
         [test x$with_portaudio = xyes],                            [DEFAULT_PLAYER_AUDIO="PortAudio"],
         [test x$with_oss = xyes],                                  [DEFAULT_PLAYER_AUDIO="OSS"],
         [test x$with_alsa = xyes],                                 [DEFAULT_PLAYER_AUDIO="ALSA"],
+        [test x$with_coreaudio = xyes],                            [DEFAULT_PLAYER_AUDIO="CoreAudio"],
         [test x$with_openal = xyes],                               [DEFAULT_PLAYER_AUDIO="OpenAL"],
         [test x$with_libpulse = xyes],                             [DEFAULT_PLAYER_AUDIO="PulseAudio"])],
   [DEFAULT_PLAYER_AUDIO="$with_player_audio"])
@@ -610,6 +628,7 @@ Default Settings
 
 Audio Players
   ALSA:                  $with_alsa $alsa_disabled
+  CoreAudio:             $with_coreaudio
   OpenAL:                $with_openal $openal_disabled
   OSS:                   $with_oss $oss_disabled
   PortAudio:             $with_portaudio $portaudio_disabled

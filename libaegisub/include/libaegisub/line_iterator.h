@@ -55,7 +55,7 @@ public:
 /// @class line_iterator
 /// @brief An iterator over lines in a stream
 template<class OutputType = std::string>
-class line_iterator final : public line_iterator_base, public std::iterator<std::input_iterator_tag, OutputType> {
+class line_iterator final : public line_iterator_base {
 	OutputType value; ///< Value to return when this is dereference
 
 	/// @brief Convert a string to the output type
@@ -101,6 +101,9 @@ public:
 	}
 
 	// typedefs needed by some stl algorithms
+	typedef std::input_iterator_tag iterator_category;
+	typedef OutputType value_type;
+	typedef std::ptrdiff_t difference_type;
 	typedef OutputType* pointer;
 	typedef OutputType& reference;
 	typedef const OutputType* const_pointer;

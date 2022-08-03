@@ -100,6 +100,8 @@ AudioSpectrumRenderer::~AudioSpectrumRenderer()
 
 void AudioSpectrumRenderer::RecreateCache()
 {
+	update_derivation_values();
+
 #ifdef WITH_FFTW3
 	if (dft_plan)
 	{
@@ -147,7 +149,7 @@ void AudioSpectrumRenderer::SetResolution(size_t _derivation_size, size_t _deriv
 	{
 		derivation_dist_user = _derivation_dist;
 		update_derivation_values();
-		AgeCache(0);
+		AgeCache (0);
 	}
 
 	if (derivation_size_user != _derivation_size)
@@ -164,6 +166,7 @@ void AudioSpectrumRenderer::set_reference_frequency_position(float pos_fref_)
 
 	pos_fref = pos_fref_;
 }
+
 
 template<class T>
 void AudioSpectrumRenderer::ConvertToFloat(size_t count, T *dest) {
@@ -212,7 +215,7 @@ void AudioSpectrumRenderer::FillBlock(size_t block_index, float *block)
 	// calculations and its user-provided counterpart. Thus, the display is
 	// kept independent of the sampling rate.
 	const float scale_fix =
-		1.f / sqrtf(float(1 << (derivation_size - derivation_size_user)));
+		1.f / sqrtf (float (1 << (derivation_size - derivation_size_user)));
 
 #ifdef WITH_FFTW3
 	ConvertToFloat(2 << derivation_size, dft_input);

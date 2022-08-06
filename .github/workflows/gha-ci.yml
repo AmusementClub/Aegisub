@@ -181,15 +181,27 @@ jobs:
 
         7z.exe x vendor/ffms2.zip -ovendor
 
+        Invoke-WebRequest -Uri https://github.com/AmusementClub/assrender/releases/download/0.37.1/assrender_v0371_0.16.0.zip -OutFile vendor/assrender.zip
+        Invoke-WebRequest -Uri https://github.com/HomeOfVapourSynthEvolution/xy-VSFilter/releases/download/r3/xy-VSFilter-r3.7z -OutFile vendor/xy-vsf.7z
+        Invoke-WebRequest -Uri https://github.com/Masaiki/VSFilterMod/releases/download/r5.2.7/VSFilterMod_bin.zip -OutFile vendor/vsfmod.zip
+        
+        7z.exe x vendor/assrender.zip -ovendor
+        7z.exe x vendor/xy-vsf.7z -ovendor
+        7z.exe x vendor/vsfmod.zip -ovendor
+
         Move-Item -Path build-dir\Release\Aegisub.exe -Destination build-dir\Aegisub.exe
         Remove-Item -Path build-dir\Release\*.exp,build-dir\Release\*.lib,build-dir\Release\*.exe
         Move-Item -Path build-dir\Aegisub.exe -Destination build-dir\Release\Aegisub.exe
         New-Item -Path build-dir\Release\automation -ItemType directory
         Copy-Item -Path automation\autoload,automation\demos,automation\include -Destination build-dir\Release\automation -Recurse
 
+        New-Item -Path build-dir\Release\csri -ItemType directory
+
         Copy-Item -Path C:\vcpkg\installed\x64-windows-release\bin\AviSynth.dll -Destination build-dir\Release
         Copy-Item -Path vendor\ffms2.dll -Destination build-dir\Release
-        Copy-Item -Path vendor\aegisub9212\csri,vendor\aegisub9212\dictionaries,vendor\aegisub9212\licenses,vendor\aegisub9212\locale,vendor\aegisub9212\AssDraw3.exe,vendor\aegisub9212\AssDraw3.chm,vendor\aegisub9212\DirectShowSource.dll -Destination build-dir\Release -Recurse
+        Copy-Item -Path vendor\x64\*.dll -Destination build-dir\Release\csri
+        Copy-Item -Path vendor\plugins64\xy-VSFilter.dll -Destination build-dir\Release\csri
+        Copy-Item -Path vendor\aegisub9212\dictionaries,vendor\aegisub9212\licenses,vendor\aegisub9212\locale,vendor\aegisub9212\AssDraw3.exe,vendor\aegisub9212\AssDraw3.chm,vendor\aegisub9212\DirectShowSource.dll -Destination build-dir\Release -Recurse
 
     - name: upload artifact
       uses: actions/upload-artifact@v2

@@ -10,7 +10,8 @@ jobs:
   build-nix:
     strategy:
       matrix:
-        os: [ubuntu-20.04, macos-11]
+        #os: [ubuntu-20.04, macos-11]
+        os: [ubuntu-20.04]
         build_suite: [autoconf, cmake]
         with_coveralls: [no]
         # Run one build with gcov and coveralls

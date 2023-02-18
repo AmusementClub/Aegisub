@@ -12,7 +12,7 @@ if ! test -d "${srcdir}/.git"; then
     done < "${version_h_path}"
     if test x$BUILD_GIT_VERSION_NUMBER != x -a x$BUILD_GIT_VERSION_STRING != x; then
       export VERSION_SOURCE="from cached git_version.h"
-      exit 0
+      return 0
     else
       echo "invalid git_version.h"
       exit 2
@@ -36,7 +36,7 @@ resource_version='0, 0, 0'
 if test x$git_version_str != x; then
   git_version_str="${git_version_str##v}"
   tagged_release=1
-  if [ $(echo $git_version_str | grep '[0-9].[0-9].[0-9]') ]; then
+  if [ $(echo $git_version_str | grep '[0-9]\.[0-9]\.[0-9]') ]; then
     installer_version=$git_version_str
     resource_version=$(echo $git_version_str | sed 's/\./, /g')
   fi

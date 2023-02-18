@@ -177,11 +177,11 @@ jobs:
 
         7z.exe x vendor/aegisub9212.zip -ovendor/aegisub9212
 
-        Invoke-WebRequest -Uri https://github.com/AmusementClub/ffms2/releases/download/nightly-20220119/release-ffms2-x86_64-nightly-20220119-0-g90975ec.v2.zip -OutFile vendor/ffms2.zip
+        Invoke-WebRequest -Uri https://github.com/AmusementClub/ffms2/releases/download/nightly-20230218/release-ffms2-x86_64-nightly-20230218-ge4270cc.zip -OutFile vendor/ffms2.zip
 
         7z.exe x vendor/ffms2.zip -ovendor
 
-        Invoke-WebRequest -Uri https://github.com/AmusementClub/assrender/releases/download/0.37.1/assrender_v0371_0.16.0.zip -OutFile vendor/assrender.zip
+        Invoke-WebRequest -Uri https://github.com/AmusementClub/assrender/releases/download/0.38.0/assrender_v0380_0.17.0.zip -OutFile vendor/assrender.zip
         Invoke-WebRequest -Uri https://github.com/HomeOfVapourSynthEvolution/xy-VSFilter/releases/download/r3/xy-VSFilter-r3.7z -OutFile vendor/xy-vsf.7z
         Invoke-WebRequest -Uri https://github.com/Masaiki/VSFilterMod/releases/download/r5.2.7/VSFilterMod_bin.zip -OutFile vendor/vsfmod.zip
         

@@ -24,7 +24,7 @@ jobs:
 
     steps:
       - name: checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: install deps
         run: |
@@ -122,7 +122,7 @@ jobs:
 
       - name: upload artifact
         if: ${{ startsWith( matrix.os, 'macos-' ) && matrix.build_suite == 'autoconf' }}
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: aegisub-macos-GHA
           path: aegisub-macos-GHA.dmg
@@ -131,10 +131,10 @@ jobs:
     runs-on: windows-latest
     steps:
     - name: checkout code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
 
     - name: cache vcpkg packages
-      uses: pat-s/always-upload-cache@v2
+      uses: pat-s/always-upload-cache@v3
       with:
         path: C:\Users\runneradmin\AppData\Local\vcpkg\archives
         key: vcpkg-archives-${{ github.run_id }}
@@ -159,7 +159,7 @@ jobs:
         cmake.exe '-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake' '-DVCPKG_TARGET_TRIPLET=x64-windows-release' '-DFFMS2_INCLUDE_DIRS=../vendor/ffms2/ffms2-2.23.1-msvc/include' '-DFFMS2_LIBRARIES=../vendor/ffms2/ffms2-2.23.1-msvc/x64/ffms2.lib' '-DXAUDIO2_REDIST=ON' '-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /GR /EHsc /DUNICODE /D_UNICODE /MP /DwxDEBUG_LEVEL=0' '-DCMAKE_C_FLAGS=/DWIN32 /D_WINDOWS /DUNICODE /D_UNICODE /MP /DwxDEBUG_LEVEL=0' '-DWITH_TEST=ON' ..
 
     - name: Add msbuild to PATH
-      uses: microsoft/setup-msbuild@v1.0.2
+      uses: microsoft/setup-msbuild@v1.1
 
     - name: build
       run: |
@@ -173,7 +173,7 @@ jobs:
 
     - name: upload build artifact
       if: always()
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: aegisub-win64-builddir
         path: build-dir/
@@ -211,7 +211,7 @@ jobs:
         Copy-Item -Path vendor\aegisub9212\dictionaries,vendor\aegisub9212\licenses,vendor\aegisub9212\locale,vendor\aegisub9212\AssDraw3.exe,vendor\aegisub9212\AssDraw3.chm,vendor\aegisub9212\DirectShowSource.dll -Destination build-dir\Release -Recurse
 
     - name: upload artifact
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: aegisub-win64-cmake-GHA
         path: build-dir/Release

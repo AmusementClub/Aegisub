@@ -171,6 +171,13 @@ jobs:
         Set-Location build-dir
         MSBuild.exe test.vcxproj -p:Configuration=Release
 
+    - name: upload build artifact
+      if: always()
+      uses: actions/upload-artifact@v2
+      with:
+        name: aegisub-win64-builddir
+        path: build-dir/
+
     - name: package
       run: |
         Invoke-WebRequest -Uri https://github.com/AmusementClub/Aegisub/releases/download/artifacts/aegisub-win64-cmake-20210713-r9212.zip -OutFile vendor/aegisub9212.zip

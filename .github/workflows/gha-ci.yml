@@ -140,23 +140,36 @@ jobs:
         key: vcpkg-archives-${{ github.run_id }}
         restore-keys: vcpkg-archives-
 
+    - name: Run vcpkg
+      uses: lukka/run-vcpkg@v7
+      with:
+        setupOnly: true
+        vcpkgDirectory: '${{ github.workspace }}/vcpkg'
+        vcpkgGitCommitId: 96ec7fb25da25e0463446e552d59715a47c95e73 # boost 1.79.0, Apr 21 2022.
+
     - name: install deps
       run: |
         Invoke-WebRequest -Uri https://github.com/FFMS/ffms2/releases/download/2.23/ffms2-2.23.1-msvc.7z -OutFile vendor/ffms2-2.23.1-msvc.7z
 
         7z.exe x vendor/ffms2-2.23.1-msvc.7z -ovendor/ffms2
 
-        Set-Content -Value "" -Path "C:\vcpkg\vcpkg.disable-metrics" -Force
+        # msys mirrors have deleted the version of libtool used by vcpkg, so we have to update this file.
+        # see https://github.com/microsoft/vcpkg/commit/fd766eba2b4cf59c7123d46189be373e2cee959d
+        (Get-Content "${{github.workspace}}\vcpkg\scripts\cmake\vcpkg_acquire_msys.cmake") -replace 'libtool-2.4.6-9-x86_64.pkg.tar.xz', 'libtool-2.4.7-3-x86_64.pkg.tar.zst' -replace 'b309799e5a9d248ef66eaf11a0bd21bf4e8b9bd5c677c627ec83fa760ce9f0b54ddf1b62cbb436e641fbbde71e3b61cb71ff541d866f8ca7717a3a0dbeb00ebf', 'a202ddaefa93d8a4b15431dc514e3a6200c47275c5a0027c09cc32b28bc079b1b9a93d5ef65adafdc9aba5f76a42f3303b1492106ddf72e67f1801ebfe6d02cc' | Set-Content "${{github.workspace}}\vcpkg\scripts\cmake\vcpkg_acquire_msys.cmake"
+        # zlib: update URL.
+        (Get-Content "${{github.workspace}}\vcpkg\ports\zlib\portfile.cmake") -replace 'https://www.zlib.net', 'https://www.zlib.net/fossils/' | Set-Content "${{github.workspace}}\vcpkg\ports\zlib\portfile.cmake"
+
+        Set-Content -Value "" -Path "${{ github.workspace }}\vcpkg\vcpkg.disable-metrics" -Force
         # Fix vcpkg wxwidgets fail when building without debug
-        (Get-Content "C:\vcpkg\ports\wxwidgets\vcpkg-cmake-wrapper.cmake") -replace '    _find_package', '    #_find_package' | Set-Content "C:\vcpkg\ports\wxwidgets\vcpkg-cmake-wrapper.cmake"
-        vcpkg.exe install --triplet x64-windows-release avisynthplus boost-asio boost-container boost-crc boost-filesystem boost-flyweight boost-gil boost-interprocess 'boost-locale[icu]' 'boost-regex[icu]' boost-scope-exit boost-thread fftw3 hunspell icu libass libiconv uchardet wxwidgets xaudio2redist gtest
+        (Get-Content "${{github.workspace}}\vcpkg\ports\wxwidgets\vcpkg-cmake-wrapper.cmake") -replace '    _find_package', '    #_find_package' | Set-Content "${{github.workspace}}\vcpkg\ports\wxwidgets\vcpkg-cmake-wrapper.cmake"
+        & "${{github.workspace}}\vcpkg\vcpkg.exe" install --triplet x64-windows-release avisynthplus boost-asio boost-container boost-crc boost-filesystem boost-flyweight boost-gil boost-interprocess 'boost-locale[icu]' 'boost-regex[icu]' boost-scope-exit boost-thread fftw3 hunspell icu libass libiconv uchardet wxwidgets xaudio2redist gtest
 
     - name: configure
       run: |
         bash.exe build/version.sh .
         New-Item -Path build-dir -ItemType directory
         Set-Location build-dir
-        cmake.exe '-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake' '-DVCPKG_TARGET_TRIPLET=x64-windows-release' '-DFFMS2_INCLUDE_DIRS=../vendor/ffms2/ffms2-2.23.1-msvc/include' '-DFFMS2_LIBRARIES=../vendor/ffms2/ffms2-2.23.1-msvc/x64/ffms2.lib' '-DXAUDIO2_REDIST=ON' '-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /GR /EHsc /DUNICODE /D_UNICODE /MP /DwxDEBUG_LEVEL=0' '-DCMAKE_C_FLAGS=/DWIN32 /D_WINDOWS /DUNICODE /D_UNICODE /MP /DwxDEBUG_LEVEL=0' '-DWITH_TEST=ON' ..
+        cmake.exe '-DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake' '-DVCPKG_TARGET_TRIPLET=x64-windows-release' '-DFFMS2_INCLUDE_DIRS=../vendor/ffms2/ffms2-2.23.1-msvc/include' '-DFFMS2_LIBRARIES=../vendor/ffms2/ffms2-2.23.1-msvc/x64/ffms2.lib' '-DXAUDIO2_REDIST=ON' '-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /GR /EHsc /DUNICODE /D_UNICODE /MP /DwxDEBUG_LEVEL=0' '-DCMAKE_C_FLAGS=/DWIN32 /D_WINDOWS /DUNICODE /D_UNICODE /MP /DwxDEBUG_LEVEL=0' '-DWITH_TEST=ON' ..
 
     - name: Add msbuild to PATH
       uses: microsoft/setup-msbuild@v1.1
@@ -206,7 +219,7 @@ jobs:
 
         New-Item -Path build-dir\Release\csri -ItemType directory
 
-        Copy-Item -Path C:\vcpkg\installed\x64-windows-release\bin\AviSynth.dll -Destination build-dir\Release
+        Copy-Item -Path "${{ github.workspace }}\vcpkg\installed\x64-windows-release\bin\AviSynth.dll" -Destination build-dir\Release
         Copy-Item -Path vendor\ffms2.dll -Destination build-dir\Release
         Copy-Item -Path vendor\x64\*.dll -Destination build-dir\Release\csri
         Copy-Item -Path vendor\plugins64\xy-VSFilter.dll -Destination build-dir\Release\csri

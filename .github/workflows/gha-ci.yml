@@ -144,6 +144,7 @@ jobs:
       uses: lukka/run-vcpkg@v7
       with:
         setupOnly: true
+        doNotCache: true
         vcpkgDirectory: '${{ github.workspace }}/vcpkg'
         vcpkgGitCommitId: 96ec7fb25da25e0463446e552d59715a47c95e73 # boost 1.79.0, Apr 21 2022.
 

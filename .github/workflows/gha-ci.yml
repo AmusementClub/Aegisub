@@ -137,8 +137,8 @@ jobs:
       uses: pat-s/always-upload-cache@v3
       with:
         path: C:\Users\runneradmin\AppData\Local\vcpkg\archives
-        key: vcpkg-archives-${{ github.run_id }}
-        restore-keys: vcpkg-archives-
+        key: vcpkg-archives-static-${{ github.run_id }}
+        restore-keys: vcpkg-archives-static-
 
     - name: Run vcpkg
       uses: lukka/run-vcpkg@v7
@@ -163,14 +163,14 @@ jobs:
         Set-Content -Value "" -Path "${{ github.workspace }}\vcpkg\vcpkg.disable-metrics" -Force
         # Fix vcpkg wxwidgets fail when building without debug
         (Get-Content "${{github.workspace}}\vcpkg\ports\wxwidgets\vcpkg-cmake-wrapper.cmake") -replace '    _find_package', '    #_find_package' | Set-Content "${{github.workspace}}\vcpkg\ports\wxwidgets\vcpkg-cmake-wrapper.cmake"
-        & "${{github.workspace}}\vcpkg\vcpkg.exe" install --triplet x64-windows-release avisynthplus boost-asio boost-container boost-crc boost-filesystem boost-flyweight boost-gil boost-interprocess 'boost-locale[icu]' 'boost-regex[icu]' boost-scope-exit boost-thread fftw3 hunspell icu libass libiconv uchardet wxwidgets xaudio2redist gtest
+        & "${{github.workspace}}\vcpkg\vcpkg.exe" install --triplet x64-windows-static-md avisynthplus boost-asio boost-container boost-crc boost-filesystem boost-flyweight boost-gil boost-interprocess 'boost-locale[icu]' 'boost-regex[icu]' boost-scope-exit boost-thread fftw3 hunspell icu libass libiconv uchardet wxwidgets xaudio2redist gtest
 
     - name: configure
       run: |
         bash.exe build/version.sh .
         New-Item -Path build-dir -ItemType directory
         Set-Location build-dir
-        cmake.exe '-DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake' '-DVCPKG_TARGET_TRIPLET=x64-windows-release' '-DFFMS2_INCLUDE_DIRS=../vendor/ffms2/ffms2-2.23.1-msvc/include' '-DFFMS2_LIBRARIES=../vendor/ffms2/ffms2-2.23.1-msvc/x64/ffms2.lib' '-DXAUDIO2_REDIST=ON' '-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /GR /EHsc /DUNICODE /D_UNICODE /MP /DwxDEBUG_LEVEL=0' '-DCMAKE_C_FLAGS=/DWIN32 /D_WINDOWS /DUNICODE /D_UNICODE /MP /DwxDEBUG_LEVEL=0' '-DWITH_TEST=ON' ..
+        cmake.exe '-DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake' '-DVCPKG_TARGET_TRIPLET=x64-windows-static-md' '-DFFMS2_INCLUDE_DIRS=../vendor/ffms2/ffms2-2.23.1-msvc/include' '-DFFMS2_LIBRARIES=../vendor/ffms2/ffms2-2.23.1-msvc/x64/ffms2.lib' '-DXAUDIO2_REDIST=ON' '-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /GR /EHsc /DUNICODE /D_UNICODE /MP /DwxDEBUG_LEVEL=0' '-DCMAKE_C_FLAGS=/DWIN32 /D_WINDOWS /DUNICODE /D_UNICODE /MP /DwxDEBUG_LEVEL=0' '-DWITH_TEST=ON' ..
 
     - name: Add msbuild to PATH
       uses: microsoft/setup-msbuild@v1.1
@@ -218,7 +218,7 @@ jobs:
 
         New-Item -Path build-dir\Release\csri -ItemType directory
 
-        Copy-Item -Path "${{ github.workspace }}\vcpkg\installed\x64-windows-release\bin\AviSynth.dll" -Destination build-dir\Release
+        Copy-Item -Path "${{ github.workspace }}\vcpkg\installed\x64-windows-static-md\bin\AviSynth.dll" -Destination build-dir\Release
         Copy-Item -Path vendor\ffms2.dll -Destination build-dir\Release
         Copy-Item -Path vendor\x64\*.dll -Destination build-dir\Release\csri
         Copy-Item -Path vendor\plugins64\xy-VSFilter.dll -Destination build-dir\Release\csri

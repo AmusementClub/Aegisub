@@ -2,7 +2,7 @@ name: GitHubActions CI tests
 
 on:
   push:
-    branches: [master, dev, ci, mod]
+    branches: [master, dev, ci]
   # pull_request:
   workflow_dispatch:
 
@@ -180,8 +180,6 @@ jobs:
         MSBuild.exe Aegisub.vcxproj -p:Configuration=Release
 
     - name: run tests
-      # latest boost broke the build for tests/vfr.cpp.
-      if: false
       run: |
         Set-Location build-dir
         MSBuild.exe test.vcxproj -p:Configuration=Release

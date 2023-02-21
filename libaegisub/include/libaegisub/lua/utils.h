@@ -22,7 +22,6 @@
 #include <type_traits>
 
 #include <boost/config.hpp>
-#include <boost/flyweight.hpp>
 
 #ifndef BOOST_NORETURN
 #include <boost/exception/detail/attribute_noreturn.hpp>
@@ -76,12 +75,6 @@ void push_value(lua_State *L, std::vector<T> const& value) {
 		push_value(L, value[i]);
 		lua_rawseti(L, -2, i + 1);
 	}
-}
-
-template<typename T>
-inline void push_value(lua_State *L, boost::flyweight<T> const& value) {
-	const T& v = value;
-	push_value(L, v);
 }
 
 int exception_wrapper(lua_State *L, int (*func)(lua_State *L));

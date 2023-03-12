@@ -52,13 +52,12 @@ function karaskel.collect_head(subs, generate_furigana)
 	end
 	
 	-- First pass: collect all existing styles and get resolution info
-	for i, l in ipairs(subs) do
+	for i = 1, #subs do
 		if aegisub.progress.is_cancelled() then error("User cancelled") end
+		local l = subs[i]
 		
 		if l.class == "style" then
-			if not first_style_line then
-				first_style_line = i
-			end
+			if not first_style_line then first_style_line = i end
 			-- Store styles into the style table
 			styles.n = styles.n + 1
 			styles[styles.n] = l
@@ -67,7 +66,7 @@ function karaskel.collect_head(subs, generate_furigana)
 			
 			-- And also generate furigana styles if wanted
 			if generate_furigana and not l.name:match("furigana") then
-				aegisub.debug.out(5, "Creating furigana style for style: %s\n", l.name)
+				aegisub.debug.out(5, "Creating furigana style for style: " .. l.name .. "\n")
 				local fs = table.copy(l)
 				fs.fontsize = l.fontsize * karaskel.furigana_scale
 				fs.outline = l.outline * karaskel.furigana_scale
@@ -81,13 +80,7 @@ function karaskel.collect_head(subs, generate_furigana)
 			-- Also look for script resolution
 			local k = l.key:lower()
 			meta[k] = l.value
-		else
-			break
 		end
-	end
-	
-	if first_style_line == nil then
-		error("Karaskel error: No styles were found in the file, bug?!")
 	end
 	
 	-- Second pass: insert all toinsert styles that don't already exist
@@ -103,7 +96,30 @@ function karaskel.collect_head(subs, generate_furigana)
 	end
 	
 	-- Fix resolution data
-	meta.res_x, meta.res_y = subs.script_resolution()
+	if meta.playresx then
+		meta.res_x = math.floor(meta.playresx)
+	end
+	if meta.playresy then
+		meta.res_y = math.floor(meta.playresy)
+	end
+	if meta.res_x == 0 and meta_res_y == 0 then
+		meta.res_x = 384
+		meta.res_y = 288
+	elseif meta.res_x == 0 then
+		-- This is braindead, but it's how TextSub does things...
+		if meta.res_y == 1024 then
+			meta.res_x = 1280
+		else
+			meta.res_x = meta.res_y / 3 * 4
+		end
+	elseif meta.res_y == 0 then
+		-- As if 1280x960 didn't exist
+		if meta.res_x == 1280 then
+			meta.res_y = 1024
+		else
+			meta.res_y = meta.res_x * 3 / 4
+		end
+	end
 	
 	local video_x, video_y = aegisub.video_size()
 	if video_y then

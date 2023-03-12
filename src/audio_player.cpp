@@ -53,6 +53,9 @@ std::unique_ptr<AudioPlayer> CreateXAudio2Player(agi::AudioProvider* providers, 
 #ifdef WITH_OPENAL
 std::unique_ptr<AudioPlayer> CreateOpenALPlayer(agi::AudioProvider *providers, wxWindow *window);
 #endif
+#ifdef WITH_COREAUDIO
+std::unique_ptr<AudioPlayer> CreateCoreAudioPlayer(agi::AudioProvider *providers, wxWindow *window);
+#endif
 #ifdef WITH_PORTAUDIO
 std::unique_ptr<AudioPlayer> CreatePortAudioPlayer(agi::AudioProvider *providers, wxWindow *window);
 #endif
@@ -83,6 +86,9 @@ namespace {
 #endif
 #ifdef WITH_OPENAL
 		{"OpenAL", CreateOpenALPlayer, false},
+#endif
+#ifdef WITH_COREAUDIO
+		{"CoreAudio", CreateCoreAudioPlayer, false},
 #endif
 #ifdef WITH_PORTAUDIO
 		{"PortAudio", CreatePortAudioPlayer, false},

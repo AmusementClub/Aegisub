@@ -5,6 +5,7 @@ HAVE_ALSA       = @with_alsa@
 HAVE_FFMS2      = @with_ffms2@
 HAVE_HUNSPELL   = @with_hunspell@
 HAVE_LIBPULSE   = @with_libpulse@
+HAVE_COREAUDIO  = @with_coreaudio@
 HAVE_OPENAL     = @with_openal@
 HAVE_OSS        = @with_oss@
 HAVE_PORTAUDIO  = @with_portaudio@

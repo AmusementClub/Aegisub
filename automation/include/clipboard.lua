@@ -1,4 +1,4 @@
--- Copyright (c) 2012, Thomas Goyne <plorkyeran@aegisub.org>
+﻿-- Copyright (c) 2012, Thomas Goyne <plorkyeran@aegisub.org>
 --
 -- Permission to use, copy, modify, and distribute this software for any
 -- purpose with or without fee is hereby granted, provided that the above
@@ -12,5 +12,5 @@
 -- ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 -- OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-_G.clipboard = require 'aegisub.clipboard'
+_G.clipboard = aegisub.__init_clipboard()
 return _G.clipboard

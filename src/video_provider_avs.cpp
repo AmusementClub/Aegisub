@@ -224,6 +224,19 @@ AVSValue AvisynthVideoProvider::Open(agi::fs::path const& filename) {
 		return env->Invoke("Import", videoFilename);
 	}
 
+	// Try L-SMASH-Works
+	// Load LSMASHSource.dll from app dir if it exists
+	auto lsmashworks_path(config::path->Decode("?data/LSMASHSource.dll"));
+	if (agi::fs::FileExists(lsmashworks_path))
+		env->Invoke("LoadPlugin", env->SaveString(agi::fs::ShortName(lsmashworks_path).c_str()));
+
+	// Then try using L-SMASH-Works
+	if (env->FunctionExists("LWLibavVideoSource")) {
+		decoder_name = "Avisynth/LWLibavVideoSource";
+		LOG_I("avisynth/video") << "Opening file with LWLibavVideoSource";
+		return env->Invoke("LWLibavVideoSource", videoFilename);
+	}
+
 	// Open avi file with AviSource
 	if (agi::fs::HasExtension(filename, "avi")) {
 		LOG_I("avisynth/video") << "Opening .avi file with AviSource";

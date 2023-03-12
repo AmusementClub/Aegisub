@@ -1,4 +1,4 @@
--- Copyright (c) 2012, Thomas Goyne <plorkyeran@aegisub.org>
+﻿-- Copyright (c) 2012, Thomas Goyne <plorkyeran@aegisub.org>
 --
 -- Permission to use, copy, modify, and distribute this software for any
 -- purpose with or without fee is hereby granted, provided that the above
@@ -12,11 +12,4 @@
 -- ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 -- OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-local check = require 'aegisub.argcheck'
-local ffi_util = require 'aegisub.ffi'
-local impl = aegisub.__init_clipboard()
-
-return {
-  get = function() return ffi_util.string(impl.get()) end,
-  set = check'string'(impl.set)
-}
+return aegisub.__init_clipboard()

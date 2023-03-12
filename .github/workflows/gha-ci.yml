@@ -3,13 +3,15 @@ name: GitHubActions CI tests
 on:
   push:
     branches: [master, dev, ci]
-  pull_request:
+  # pull_request:
+  workflow_dispatch:
 
 jobs:
   build-nix:
     strategy:
       matrix:
-        os: [ubuntu-20.04, macos-10.15]
+        #os: [ubuntu-20.04, macos-11]
+        os: [ubuntu-20.04]
         build_suite: [autoconf, cmake]
         with_coveralls: [no]
         # Run one build with gcov and coveralls
@@ -22,7 +24,7 @@ jobs:
 
     steps:
       - name: checkout code
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
 
       - name: install deps
         run: |
@@ -33,7 +35,7 @@ jobs:
             #brew upgrade autoconf freetype gettext icu4c
             brew analytics off  # https://github.com/Homebrew/brew/issues/142 https://github.com/Homebrew/brew/pull/6745
             brew install automake boost ffmpeg ffms2 fftw fribidi libass \
-                         lua luarocks m4 wxmac hunspell uchardet
+                         lua luarocks m4 wxwidgets hunspell uchardet
             # Use bundled googletest
             git submodule --quiet init
             git submodule --quiet update vendor/googletest
@@ -90,7 +92,7 @@ jobs:
             mkdir build-dir
             cd build-dir
             if (echo "${{ matrix.os }}" | grep -qE '^macos-') ; then
-              CMAKE_PLATFORM_OPTIONS='-DICU_INCLUDE_DIR=/usr/local/opt/icu4c/include -DICU_UC_LIBRARY_RELEASE=/usr/local/opt/icu4c/lib/libicuuc.dylib -DICU_IN_LIBRARY_RELEASE=/usr/local/opt/icu4c/lib/libicui18n.dylib'
+              CMAKE_PLATFORM_OPTIONS='-DICU_INCLUDE_DIR=/usr/local/opt/icu4c/include -DICU_UC_LIBRARY_RELEASE=/usr/local/opt/icu4c/lib/libicuuc.dylib -DICU_DT_LIBRARY_RELEASE=/usr/local/opt/icu4c/lib/libicudata.dylib -DICU_IN_LIBRARY_RELEASE=/usr/local/opt/icu4c/lib/libicui18n.dylib'
             fi
             cmake -DCMAKE_CXX_FLAGS='-Wall -Wextra -Wno-unused-parameter -pedantic' -DCMAKE_C_FLAGS='-Wall -Wextra -Wno-unused-parameter' -DWITH_STARTUPLOG=ON -DWITH_TEST=ON $CMAKE_PLATFORM_OPTIONS .. || (cat CMakeFiles/CMakeOutput.log CMakeFiles/CMakeError.log; exit 1)
           fi
@@ -120,7 +122,7 @@ jobs:
 
       - name: upload artifact
         if: ${{ startsWith( matrix.os, 'macos-' ) && matrix.build_suite == 'autoconf' }}
-        uses: actions/upload-artifact@v2
+        uses: actions/upload-artifact@v3
         with:
           name: aegisub-macos-GHA
           path: aegisub-macos-GHA.dmg
@@ -129,14 +131,22 @@ jobs:
     runs-on: windows-latest
     steps:
     - name: checkout code
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
 
     - name: cache vcpkg packages
-      uses: pat-s/always-upload-cache@v2
+      uses: pat-s/always-upload-cache@v3
       with:
         path: C:\Users\runneradmin\AppData\Local\vcpkg\archives
         key: vcpkg-archives-${{ github.run_id }}
         restore-keys: vcpkg-archives-
+
+    - name: Run vcpkg
+      uses: lukka/run-vcpkg@v7
+      with:
+        setupOnly: true
+        doNotCache: true
+        vcpkgDirectory: '${{ github.workspace }}/vcpkg'
+        vcpkgGitCommitId: 96ec7fb25da25e0463446e552d59715a47c95e73 # boost 1.79.0, Apr 21 2022.
 
     - name: install deps
       run: |
@@ -144,23 +154,26 @@ jobs:
 
         7z.exe x vendor/ffms2-2.23.1-msvc.7z -ovendor/ffms2
 
-        Set-Content -Value "" -Path "C:\vcpkg\vcpkg.disable-metrics" -Force
-        vcpkg.exe install --triplet x64-windows avisynthplus boost-asio boost-container boost-crc boost-filesystem boost-flyweight boost-gil boost-interprocess 'boost-locale[icu]' 'boost-regex[icu]' boost-scope-exit boost-thread fftw3 hunspell icu libass libiconv uchardet wxwidgets xaudio2redist gtest
-        Remove-Item –Path C:\vcpkg\installed\x64-windows\debug –Recurse
-        Remove-Item –Path C:\vcpkg\installed\x64-windows\share\expat\expat-debug.cmake
-        Remove-Item –Path C:\vcpkg\installed\x64-windows\share\GTest\GTestTargets-debug.cmake
-        Remove-Item –Path C:\vcpkg\installed\x64-windows\share\liblzma\liblzmaTargets-debug.cmake
-        Remove-Item –Path C:\vcpkg\installed\x64-windows\share\libpng\libpng-targets-debug.cmake
+        # msys mirrors have deleted the version of libtool used by vcpkg, so we have to update this file.
+        # see https://github.com/microsoft/vcpkg/commit/fd766eba2b4cf59c7123d46189be373e2cee959d
+        (Get-Content "${{github.workspace}}\vcpkg\scripts\cmake\vcpkg_acquire_msys.cmake") -replace 'libtool-2.4.6-9-x86_64.pkg.tar.xz', 'libtool-2.4.7-3-x86_64.pkg.tar.zst' -replace 'b309799e5a9d248ef66eaf11a0bd21bf4e8b9bd5c677c627ec83fa760ce9f0b54ddf1b62cbb436e641fbbde71e3b61cb71ff541d866f8ca7717a3a0dbeb00ebf', 'a202ddaefa93d8a4b15431dc514e3a6200c47275c5a0027c09cc32b28bc079b1b9a93d5ef65adafdc9aba5f76a42f3303b1492106ddf72e67f1801ebfe6d02cc' | Set-Content "${{github.workspace}}\vcpkg\scripts\cmake\vcpkg_acquire_msys.cmake"
+        # zlib: update URL.
+        (Get-Content "${{github.workspace}}\vcpkg\ports\zlib\portfile.cmake") -replace 'https://www.zlib.net', 'https://www.zlib.net/fossils/' | Set-Content "${{github.workspace}}\vcpkg\ports\zlib\portfile.cmake"
+
+        Set-Content -Value "" -Path "${{ github.workspace }}\vcpkg\vcpkg.disable-metrics" -Force
+        # Fix vcpkg wxwidgets fail when building without debug
+        (Get-Content "${{github.workspace}}\vcpkg\ports\wxwidgets\vcpkg-cmake-wrapper.cmake") -replace '    _find_package', '    #_find_package' | Set-Content "${{github.workspace}}\vcpkg\ports\wxwidgets\vcpkg-cmake-wrapper.cmake"
+        & "${{github.workspace}}\vcpkg\vcpkg.exe" install --triplet x64-windows-release avisynthplus boost-asio boost-container boost-crc boost-filesystem boost-flyweight boost-gil boost-interprocess 'boost-locale[icu]' 'boost-regex[icu]' boost-scope-exit boost-thread fftw3 hunspell icu libass libiconv uchardet wxwidgets xaudio2redist gtest
 
     - name: configure
       run: |
         bash.exe build/version.sh .
         New-Item -Path build-dir -ItemType directory
         Set-Location build-dir
-        cmake.exe '-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake' '-DFFMS2_INCLUDE_DIRS=../vendor/ffms2/ffms2-2.23.1-msvc/include' '-DFFMS2_LIBRARIES=../vendor/ffms2/ffms2-2.23.1-msvc/x64/ffms2.lib' '-DXAUDIO2_REDIST=ON' '-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /GR /EHsc /DUNICODE /D_UNICODE /MP' '-DCMAKE_C_FLAGS=/DWIN32 /D_WINDOWS /DUNICODE /D_UNICODE /MP' '-DWITH_TEST=ON' ..
+        cmake.exe '-DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake' '-DVCPKG_TARGET_TRIPLET=x64-windows-release' '-DFFMS2_INCLUDE_DIRS=../vendor/ffms2/ffms2-2.23.1-msvc/include' '-DFFMS2_LIBRARIES=../vendor/ffms2/ffms2-2.23.1-msvc/x64/ffms2.lib' '-DXAUDIO2_REDIST=ON' '-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /GR /EHsc /DUNICODE /D_UNICODE /MP /DwxDEBUG_LEVEL=0' '-DCMAKE_C_FLAGS=/DWIN32 /D_WINDOWS /DUNICODE /D_UNICODE /MP /DwxDEBUG_LEVEL=0' '-DWITH_TEST=ON' ..
 
     - name: Add msbuild to PATH
-      uses: microsoft/setup-msbuild@v1.0.2
+      uses: microsoft/setup-msbuild@v1.1
 
     - name: build
       run: |
@@ -172,11 +185,30 @@ jobs:
         Set-Location build-dir
         MSBuild.exe test.vcxproj -p:Configuration=Release
 
+    - name: upload build artifact
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: aegisub-win64-builddir
+        path: build-dir/
+
     - name: package
       run: |
-        Invoke-WebRequest -Uri https://ftp.wangqr.tk/aegisub/aegisub-win64-cmake-20210713-r9212.zip -OutFile vendor/aegisub9212.zip
+        Invoke-WebRequest -Uri https://github.com/AmusementClub/Aegisub/releases/download/artifacts/aegisub-win64-cmake-20210713-r9212.zip -OutFile vendor/aegisub9212.zip
 
         7z.exe x vendor/aegisub9212.zip -ovendor/aegisub9212
+
+        Invoke-WebRequest -Uri https://github.com/AmusementClub/ffms2/releases/download/nightly-20230218/release-ffms2-x86_64-nightly-20230218-ge4270cc.zip -OutFile vendor/ffms2.zip
+
+        7z.exe x vendor/ffms2.zip -ovendor
+
+        Invoke-WebRequest -Uri https://github.com/AmusementClub/assrender/releases/download/0.38.0/assrender_v0380_0.17.0.zip -OutFile vendor/assrender.zip
+        Invoke-WebRequest -Uri https://github.com/HomeOfVapourSynthEvolution/xy-VSFilter/releases/download/r3/xy-VSFilter-r3.7z -OutFile vendor/xy-vsf.7z
+        Invoke-WebRequest -Uri https://github.com/Masaiki/VSFilterMod/releases/download/r5.2.7/VSFilterMod_bin.zip -OutFile vendor/vsfmod.zip
+        
+        7z.exe x vendor/assrender.zip -ovendor
+        7z.exe x vendor/xy-vsf.7z -ovendor
+        7z.exe x vendor/vsfmod.zip -ovendor
 
         Move-Item -Path build-dir\Release\Aegisub.exe -Destination build-dir\Aegisub.exe
         Remove-Item -Path build-dir\Release\*.exp,build-dir\Release\*.lib,build-dir\Release\*.exe
@@ -184,12 +216,16 @@ jobs:
         New-Item -Path build-dir\Release\automation -ItemType directory
         Copy-Item -Path automation\autoload,automation\demos,automation\include -Destination build-dir\Release\automation -Recurse
 
-        Copy-Item -Path C:\vcpkg\installed\x64-windows\bin\AviSynth.dll -Destination build-dir\Release
-        Copy-Item -Path vendor\ffms2\ffms2-2.23.1-msvc\x64\ffms2.dll -Destination build-dir\Release
-        Copy-Item -Path vendor\aegisub9212\csri,vendor\aegisub9212\dictionaries,vendor\aegisub9212\licenses,vendor\aegisub9212\locale,vendor\aegisub9212\AssDraw3.exe,vendor\aegisub9212\AssDraw3.chm,vendor\aegisub9212\DirectShowSource.dll -Destination build-dir\Release -Recurse
+        New-Item -Path build-dir\Release\csri -ItemType directory
+
+        Copy-Item -Path "${{ github.workspace }}\vcpkg\installed\x64-windows-release\bin\AviSynth.dll" -Destination build-dir\Release
+        Copy-Item -Path vendor\ffms2.dll -Destination build-dir\Release
+        Copy-Item -Path vendor\x64\*.dll -Destination build-dir\Release\csri
+        Copy-Item -Path vendor\plugins64\xy-VSFilter.dll -Destination build-dir\Release\csri
+        Copy-Item -Path vendor\aegisub9212\dictionaries,vendor\aegisub9212\licenses,vendor\aegisub9212\locale,vendor\aegisub9212\AssDraw3.exe,vendor\aegisub9212\AssDraw3.chm,vendor\aegisub9212\DirectShowSource.dll -Destination build-dir\Release -Recurse
 
     - name: upload artifact
-      uses: actions/upload-artifact@v2
+      uses: actions/upload-artifact@v3
       with:
         name: aegisub-win64-cmake-GHA
         path: build-dir/Release

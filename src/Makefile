@@ -132,6 +132,7 @@ endif
 $(d)audio_player_alsa.o_FLAGS      := $(CFLAGS_ALSA)
 $(d)audio_player_portaudio.o_FLAGS := $(CFLAGS_PORTAUDIO)
 $(d)audio_player_pulse.o_FLAGS     := $(CFLAGS_LIBPULSE)
+$(d)audio_player_coreaudio.o_FLAGS := $(CFLAGS_COREAUDIO)
 $(d)audio_player_openal.o_FLAGS    := $(CFLAGS_OPENAL)
 $(d)audio_player_oss.o_FLAGS       := $(CFLAGS_OSS)
 
@@ -148,6 +149,11 @@ endif
 ifeq (yes, $(HAVE_LIBPULSE))
 src_LIBS += $(LIBS_LIBPULSE)
 src_OBJ += $(d)audio_player_pulse.o
+endif
+
+ifeq (yes, $(HAVE_COREAUDIO))
+src_LIBS += $(LIBS_COREAUDIO)
+src_OBJ += $(d)audio_player_coreaudio.o
 endif
 
 ifeq (yes, $(HAVE_OPENAL))

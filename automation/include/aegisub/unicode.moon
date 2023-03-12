@@ -1,4 +1,4 @@
--- Copyright (c) 2007, Niels Martin Hansen, Rodrigo Braz Monteiro
+﻿-- Copyright (c) 2007, Niels Martin Hansen, Rodrigo Braz Monteiro
 -- All rights reserved.
 --
 -- Redistribution and use in source and binary forms, with or without
@@ -30,23 +30,10 @@
 
 impl = require 'aegisub.__unicode_impl'
 
-check = require 'aegisub.argcheck'
-ffi = require 'ffi'
-ffi_util = require 'aegisub.ffi'
-
-err_buff = ffi.new 'char *[1]'
-conv_func = (f) -> check'string' (str) ->
-  err_buff[0] = nil
-  result = f str, err_buff
-  errmsg = ffi_util.string err_buff[0]
-  if errmsg
-    error errmsg, 2
-  ffi_util.string result
-
 local unicode
 unicode =
   -- Return the number of bytes occupied by the character starting at the i'th byte in s
-  charwidth: check'string ?number' (s, i) ->
+  charwidth: (s, i) ->
     b = s\byte i or 1
     -- FIXME, something in karaskel results in this case, shouldn't happen
     -- What would "proper" behaviour be? Zero? Or just explode?
@@ -57,7 +44,7 @@ unicode =
     else                4
 
   -- Returns an iterator function for iterating over the characters in s
-  chars: check'string' (s) ->
+  chars: (s) ->
     curchar, i = 0, 1
     ->
       return if i > s\len()
@@ -69,13 +56,13 @@ unicode =
 
   -- Returns the number of characters in s
   -- Runs in O(s:len()) time!
-  len: check'string' (s) ->
+  len: (s) ->
     n = 0
     n += 1 for c in unicode.chars s
     n
 
   -- Get codepoint of first char in s
-  codepoint: check'string' (s) ->
+  codepoint: (s) ->
     -- Basic case, ASCII
     b = s\byte 1
     return b if b < 128
@@ -99,8 +86,8 @@ unicode =
       res = res*64 + s\byte(i) - 128
     res
 
-  to_upper_case: conv_func impl.to_upper_case
-  to_lower_case: conv_func impl.to_lower_case
-  to_fold_case: conv_func impl.to_fold_case
+  to_upper_case: impl.to_upper_case
+  to_lower_case: impl.to_lower_case
+  to_fold_case: impl.to_fold_case
 
 return unicode

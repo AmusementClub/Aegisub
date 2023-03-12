@@ -44,17 +44,17 @@ AssAttachment::AssAttachment(agi::fs::path const& name, AssEntryGroup group)
 	agi::read_file_mapping file(name);
 	auto buff = file.read();
 	entry_data = (group == AssEntryGroup::FONT ? "fontname: " : "filename: ") + filename.get() + "\r\n";
-	entry_data = entry_data.get() + agi::ass::UUEncode(buff, buff + file.size());
+	entry_data += agi::ass::UUEncode(buff, buff + file.size());
 }
 
 size_t AssAttachment::GetSize() const {
-	auto header_end = entry_data.get().find('\n');
-	return entry_data.get().size() - header_end - 1;
+	auto header_end = entry_data.find('\n');
+	return entry_data.size() - header_end - 1;
 }
 
 void AssAttachment::Extract(agi::fs::path const& filename) const {
-	auto header_end = entry_data.get().find('\n');
-	auto decoded = agi::ass::UUDecode(entry_data.get().c_str() + header_end + 1, &entry_data.get().back() + 1);
+	auto header_end = entry_data.find('\n');
+	auto decoded = agi::ass::UUDecode(entry_data.c_str() + header_end + 1, &entry_data.back() + 1);
 	agi::io::Save(filename, true).Get().write(&decoded[0], decoded.size());
 }
 

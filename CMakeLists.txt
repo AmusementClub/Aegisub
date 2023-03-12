@@ -35,12 +35,21 @@ if(WIN32)
         )
     endif()
 elseif(APPLE)
-    add_custom_command(
-        OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen/buildvm_arch.h"
-        COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen"
-        COMMAND luajit-minilua ../dynasm/dynasm.lua -D P64 -D JIT -D FFI -D FPU -D HFABI -D VER= -o "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen/buildvm_arch.h" vm_x64.dasc
-        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/vendor/luajit/src
-    )
+    if(CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64")
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen/buildvm_arch.h"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen"
+            COMMAND luajit-minilua ../dynasm/dynasm.lua -D ENDIAN_LE -D P64 -D FFI -D DUALNUM -D FPU -D HFABI -D NO_UNWIND -D VER=80 -o "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen/buildvm_arch.h" vm_arm64.dasc
+            WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/vendor/luajit/src
+        )
+    else()
+        add_custom_command(
+            OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen/buildvm_arch.h"
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen"
+            COMMAND luajit-minilua ../dynasm/dynasm.lua -D P64 -D JIT -D FFI -D FPU -D HFABI -D VER= -o "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen/buildvm_arch.h" vm_x64.dasc
+            WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/vendor/luajit/src
+        )
+    endif()
 else()
     if(CMAKE_SIZEOF_VOID_P EQUAL 8)
         add_custom_command(
@@ -70,6 +79,7 @@ add_executable(luajit-buildvm
 )
 target_compile_definitions(luajit-buildvm PRIVATE LUAJIT_ENABLE_LUA52COMPAT)
 target_include_directories(luajit-buildvm PRIVATE vendor/luajit/src "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen")
+
 if(APPLE)
     add_custom_command(
         OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/lj_vm.s"
@@ -196,13 +206,15 @@ target_include_directories(luajit PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/vendor/lu
 if(WIN32)
     target_sources(luajit PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/lj_vm.obj")
 else()
+    enable_language(ASM)
     target_sources(luajit PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/lj_vm.s")
-    set_property(SOURCE "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/lj_vm.s" PROPERTY LANGUAGE C)
     target_link_libraries(luajit ${CMAKE_DL_LIBS})
 endif()
 if(APPLE)
-    target_compile_definitions(luajit-buildvm PRIVATE LUAJIT_ENABLE_GC64)
-    target_compile_definitions(luajit PRIVATE LUAJIT_ENABLE_GC64)
+    if(NOT CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64")
+        target_compile_definitions(luajit-buildvm PRIVATE LUAJIT_ENABLE_GC64)
+        target_compile_definitions(luajit PRIVATE LUAJIT_ENABLE_GC64)
+    endif()
 endif()
 
 add_subdirectory(vendor/luabins)
@@ -550,9 +562,20 @@ target_include_directories(Aegisub PRIVATE ${ass_INCLUDE_DIRS})
 target_link_libraries(Aegisub LINK_PRIVATE ${ass_LIBRARIES})
 
 find_package(Boost REQUIRED container filesystem locale regex thread)
-target_link_libraries(libaegisub PRIVATE "Boost::locale" "Boost::regex" "Boost::thread")
+target_link_libraries(libaegisub PRIVATE "Boost::locale" "Boost::thread")
 target_link_libraries(libaegisub PUBLIC "Boost::headers" "Boost::container" "Boost::filesystem")
-target_link_libraries(Aegisub PRIVATE "Boost::headers" "Boost::container" "Boost::filesystem" "Boost::locale" "Boost::regex")
+target_link_libraries(Aegisub PRIVATE "Boost::headers" "Boost::container" "Boost::filesystem" "Boost::locale")
+# Handle Boost::regex with icu support for Boost >= 1.76.0. https://github.com/boostorg/regex/issues/143
+if(TARGET Boost::regex_icu)
+    target_link_libraries(libaegisub PRIVATE "Boost::regex_icu")
+    target_link_libraries(Aegisub PRIVATE "Boost::regex_icu")
+else()
+    target_link_libraries(libaegisub PRIVATE "Boost::regex")
+    target_link_libraries(Aegisub PRIVATE "Boost::regex")
+    find_package(ICU REQUIRED uc dt in)
+    target_link_libraries(libaegisub PRIVATE "ICU::uc" "ICU::dt" "ICU::in")
+    target_link_libraries(Aegisub PRIVATE "ICU::uc" "ICU::dt" "ICU::in")
+endif()
 
 find_package(OpenGL REQUIRED)
 target_link_libraries(Aegisub PRIVATE "OpenGL::GL")
@@ -564,9 +587,9 @@ endif()
 find_package(Iconv REQUIRED)
 target_link_libraries(libaegisub PRIVATE "Iconv::Iconv")
 
-find_package(ICU REQUIRED uc in)
+find_package(ICU REQUIRED uc)
 target_link_libraries(libaegisub PRIVATE "ICU::uc")
-target_link_libraries(Aegisub PRIVATE "ICU::uc" "ICU::in")
+target_link_libraries(Aegisub PRIVATE "ICU::uc")
 
 find_package(wxWidgets REQUIRED adv base core gl stc xml)
 option(WITH_WXSTC "Enable wxStyledTextCtrl support" ON)
@@ -634,6 +657,17 @@ else()
     set(WITH_XAUDIO2 OFF)
 endif()
 
+if(APPLE)
+    option(WITH_COREAUDIO "Enable CoreAudio support" ON)
+    if(WITH_COREAUDIO)
+        target_compile_definitions(Aegisub PRIVATE "WITH_COREAUDIO")
+        target_link_libraries(Aegisub PRIVATE "-framework AudioToolbox")
+        target_sources(Aegisub PRIVATE src/audio_player_coreaudio.cpp)
+    endif()
+else()
+    set(WITH_COREAUDIO OFF)
+endif()
+
 find_package(FFMS2)
 option(WITH_FFMS2 "Enable FFMS2 support" ${FFMS2_FOUND})
 if(WITH_FFMS2)
@@ -643,7 +677,7 @@ if(WITH_FFMS2)
     target_link_libraries(Aegisub LINK_PRIVATE ${FFMS2_LIBRARIES})
     target_sources(Aegisub PRIVATE src/audio_provider_ffmpegsource.cpp src/ffmpegsource_common.cpp src/video_provider_ffmpegsource.cpp)
 else()
-    message(SEND_ERROR
+    message(WARNING
         "No supported video/audio reader interface was enabled.\n"
         "You will not be able to open any video or audio files in Aegisub unless you install a supported video/audio provider.\n"
         "You will however still be able to open \"dummy\" video, ie. a blank, virtual video clip with subtitles overlaid.\n"
@@ -753,6 +787,8 @@ else()
         set(DEFAULT_PLAYER_AUDIO "PulseAudio" CACHE STRING "Default audio player")
     elseif(WITH_ALSA)
         set(DEFAULT_PLAYER_AUDIO "ALSA" CACHE STRING "Default audio player")
+    elseif(WITH_COREAUDIO)
+        set(DEFAULT_PLAYER_AUDIO "CoreAudio" CACHE STRING "Default audio player")
     elseif(WITH_OPENAL)
         set(DEFAULT_PLAYER_AUDIO "OpenAL" CACHE STRING "Default audio player")
     elseif(WITH_PORTAUDIO)
@@ -835,13 +871,14 @@ message(STATUS "\n"
     "\n"
     "Audio Players\n"
     "  ALSA:                  ${WITH_ALSA}\n"
+    "  CoreAudio:             ${WITH_COREAUDIO}\n"
     "  DirectSound:           ${WITH_DIRECTSOUND}\n"
     "  DirectSound-old:       ${WITH_DIRECTSOUND}\n"
-    "  XAudio2:               ${WITH_XAUDIO2}\n"
     "  OpenAL:                ${WITH_OPENAL}\n"
     "  OSS:                   ${WITH_OSS}\n"
     "  PortAudio:             ${WITH_PORTAUDIO}\n"
     "  PulseAudio:            ${WITH_LIBPULSE}\n"
+    "  XAudio2:               ${WITH_XAUDIO2}\n"
     "\n"
     "Misc Packages\n"
     "  AviSynth:              ${WITH_AVISYNTH}\n"

@@ -1,8 +1,8 @@
-[![Build Status](https://github.com/wangqr/Aegisub/actions/workflows/gha-ci.yml/badge.svg)](https://github.com/wangqr/Aegisub/actions/workflows/gha-ci.yml)
+[![Build Status](https://github.com/AmusementClub/Aegisub/actions/workflows/gha-ci.yml/badge.svg)](https://github.com/AmusementClub/Aegisub/actions/workflows/gha-ci.yml)
 
 # Aegisub
 
-For binaries and general information see [the homepage](http://www.aegisub.org) and [release page](https://github.com/wangqr/Aegisub/releases).
+For binaries and general information see [the homepage](http://www.aegisub.org) and [release page](https://github.com/AmusementClub/Aegisub/releases).
 
 The bug tracker can be found at https://github.com/wangqr/Aegisub/issues .
 

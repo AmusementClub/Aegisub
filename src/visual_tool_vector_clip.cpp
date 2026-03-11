@@ -50,14 +50,17 @@ VisualToolVectorClip::VisualToolVectorClip(VideoDisplay *parent, agi::Context *c
 }
 
 void VisualToolVectorClip::SetToolbar(wxToolBar *toolBar) {
+	if (this->toolBar)
+		this->toolBar->Unbind(wxEVT_TOOL, &VisualToolVectorClip::OnSubTool, this);
 	this->toolBar = toolBar;
 
 	toolBar->AddSeparator();
 #ifdef __WXMSW__
-	int icon_size = AEGI_BITMAP_ICON_SIZE(toolBar, 16);
+	int icon_size = OPT_GET("Video/Scale with DPI")->GetBool() ? toolBar->FromDIP(16) : 16;
 #else
 	int icon_size = OPT_GET("App/Toolbar Icon Size")->GetInt();
 #endif
+	toolBar->SetToolBitmapSize(wxSize(icon_size, icon_size));
 
 #ifdef __WXMSW__
 #define ICON(name) CMD_ICON_BUNDLE_GET(name, wxLayout_Default)
@@ -77,9 +80,13 @@ void VisualToolVectorClip::SetToolbar(wxToolBar *toolBar) {
 	toolBar->ToggleTool(BUTTON_DRAG, true);
 	toolBar->Realize();
 	toolBar->Show(true);
-	toolBar->Bind(wxEVT_TOOL, [=](wxCommandEvent& e) { SetMode(e.GetId() - BUTTON_DRAG); });
+	toolBar->Bind(wxEVT_TOOL, &VisualToolVectorClip::OnSubTool, this);
 	SetMode(features.empty());
 #undef ICON
+}
+
+void VisualToolVectorClip::OnSubTool(wxCommandEvent &event) {
+	SetMode(event.GetId() - BUTTON_DRAG);
 }
 
 void VisualToolVectorClip::SetMode(int new_mode) {

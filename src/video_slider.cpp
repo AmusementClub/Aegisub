@@ -47,23 +47,41 @@
 #include <wx/dcbuffer.h>
 #include <wx/settings.h>
 
+namespace {
+int ScaleVideoUi(wxWindow *window, int value) {
+	return OPT_GET("Video/Scale with DPI")->GetBool() ? window->FromDIP(value) : value;
+}
+
+wxSize ScaleVideoUi(wxWindow *window, wxSize const& value) {
+	return OPT_GET("Video/Scale with DPI")->GetBool() ? window->FromDIP(value) : value;
+}
+}
+
 VideoSlider::VideoSlider (wxWindow* parent, agi::Context *c)
 : wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, wxWANTS_CHARS | wxFULL_REPAINT_ON_RESIZE)
 , c(c)
 , connections(agi::signal::make_vector({
 	OPT_SUB("Video/Slider/Show Keyframes", [=] { Refresh(false); }),
+	OPT_SUB("Video/Scale with DPI", [=](agi::OptionValue const&) { UpdateScale(); }),
 	c->videoController->AddSeekListener(&VideoSlider::SetValue, this),
 	c->project->AddVideoProviderListener(&VideoSlider::VideoOpened, this),
 	c->project->AddKeyframesListener(&VideoSlider::KeyframesChanged, this),
 }))
 {
-	auto slider_size = FromDIP(wxSize(20, 25));
-	SetClientSize(slider_size);
-	SetMinSize(slider_size);
+	UpdateScale();
 	SetBackgroundStyle(wxBG_STYLE_PAINT);
 
 	c->videoSlider = this;
 	VideoOpened(c->project->VideoProvider());
+}
+
+void VideoSlider::UpdateScale() {
+	auto slider_size = ScaleVideoUi(this, wxSize(20, 25));
+	SetClientSize(slider_size);
+	SetMinSize(slider_size);
+	if (GetParent())
+		GetParent()->Layout();
+	Refresh(false);
 }
 
 void VideoSlider::SetValue(int value) {
@@ -88,7 +106,7 @@ void VideoSlider::KeyframesChanged(std::vector<int> const& newKeyframes) {
 
 int VideoSlider::GetValueAtX(int x) {
 	int w = GetClientSize().GetWidth();
-	int margin = FromDIP(5);
+	int margin = ScaleVideoUi(this, 5);
 	// Special case
 	if (w <= margin * 2) return 0;
 
@@ -99,7 +117,7 @@ int VideoSlider::GetXAtValue(int value) {
 	if (max <= 0) return 0;
 
 	int w = GetClientSize().GetWidth();
-	int margin = FromDIP(5);
+	int margin = ScaleVideoUi(this, 5);
 	return (int64_t)value * (int64_t)(w - margin * 2) / (int64_t)max + margin;
 }
 
@@ -123,7 +141,7 @@ void VideoSlider::OnMouse(wxMouseEvent &event) {
 		// If the slider didn't already have focus, don't seek if the user
 		// clicked very close to the current location as they were probably
 		// just trying to focus the slider
-		if (!had_focus && abs(x - GetXAtValue(val)) < FromDIP(4))
+		if (!had_focus && abs(x - GetXAtValue(val)) < ScaleVideoUi(this, 4))
 			return;
 
 		// Shift click to snap to keyframe
@@ -185,14 +203,14 @@ void VideoSlider::OnPaint(wxPaintEvent &) {
 	wxAutoBufferedPaintDC dc(this);
 	int w,h;
 	GetClientSize(&w, &h);
-	const int margin = FromDIP(5);
-	const int groove_margin = FromDIP(8);
-	const int keyframe_top = FromDIP(2);
-	const int cursor_half = std::max(1, FromDIP(2));
-	const int cursor_wing = std::max(1, FromDIP(4));
-	const int cursor_tail = std::max(1, FromDIP(5));
-	const int selection_width = std::max(1, FromDIP(7));
-	const int selection_height = std::max(1, FromDIP(4));
+	const int margin = ScaleVideoUi(this, 5);
+	const int groove_margin = ScaleVideoUi(this, 8);
+	const int keyframe_top = ScaleVideoUi(this, 2);
+	const int cursor_half = std::max(1, ScaleVideoUi(this, 2));
+	const int cursor_wing = std::max(1, ScaleVideoUi(this, 4));
+	const int cursor_tail = std::max(1, ScaleVideoUi(this, 5));
+	const int selection_width = std::max(1, ScaleVideoUi(this, 7));
+	const int selection_height = std::max(1, ScaleVideoUi(this, 4));
 
 	// Colors
 	wxColour shad = wxSystemSettings::GetColour(wxSYS_COLOUR_3DDKSHADOW);

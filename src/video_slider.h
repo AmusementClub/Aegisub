@@ -58,6 +58,7 @@ class VideoSlider: public wxWindow {
 	void VideoOpened(AsyncVideoProvider *new_provider);
 	/// Keyframe open even handler
 	void KeyframesChanged(std::vector<int> const& newKeyframes);
+	void UpdateScale();
 
 	void OnMouse(wxMouseEvent &event);
 	void OnKeyDown(wxKeyEvent &event);

@@ -41,6 +41,7 @@ class VisualToolVectorClip final : public VisualTool<VisualToolVectorClipDraggab
 	/// @brief Set the mode
 	/// @param mode 0-7
 	void SetMode(int mode);
+	void OnSubTool(wxCommandEvent &event);
 
 	void Save();
 	void Commit(wxString message="") override;

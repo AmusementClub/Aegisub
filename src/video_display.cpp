@@ -363,6 +363,11 @@ void VideoDisplay::UpdateSize() {
 }
 
 void VideoDisplay::RefreshVideoScale() {
+	if (tool && toolBar) {
+		toolBar->ClearTools();
+		tool->SetToolbar(toolBar);
+		GetGrandParent()->Layout();
+	}
 	if (con->project->VideoProvider())
 		UpdateSize();
 }

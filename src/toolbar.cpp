@@ -70,6 +70,15 @@ namespace {
 
 		/// Listener for hotkey change signal
 		agi::signal::Connection hotkeys_changed_slot;
+		agi::signal::Connection video_dpi_slot;
+
+		bool IsVideoToolbar() const {
+			return name == "video" || name == "visual_tools";
+		}
+
+		int GetVideoToolbarIconSize() const {
+			return OPT_GET("Video/Scale with DPI")->GetBool() ? FromDIP(16) : 16;
+		}
 
 		/// Enable/disable the toolbar buttons
 		void OnIdle(wxIdleEvent &) {
@@ -139,7 +148,10 @@ namespace {
 					flags & cmd::COMMAND_TOGGLE ? wxITEM_CHECK :
 					wxITEM_NORMAL;
 
-				AddTool(TOOL_ID_BASE + commands.size(), command->StrDisplay(context), command->IconBundle(GetLayoutDirection()), GetTooltip(command), kind);
+				if (IsVideoToolbar())
+					AddTool(TOOL_ID_BASE + commands.size(), command->StrDisplay(context), command->Icon(GetVideoToolbarIconSize(), GetLayoutDirection()), GetTooltip(command), kind);
+				else
+					AddTool(TOOL_ID_BASE + commands.size(), command->StrDisplay(context), command->IconBundle(GetLayoutDirection()), GetTooltip(command), kind);
 
 				commands.push_back(command);
 				needs_onidle = needs_onidle || flags != cmd::COMMAND_NORMAL;
@@ -177,6 +189,7 @@ namespace {
 #endif
 		, icon_size_slot(OPT_SUB("App/Toolbar Icon Size", &Toolbar::OnIconSizeChange, this))
 		, hotkeys_changed_slot(hotkey::inst->AddHotkeyChangeListener(&Toolbar::RegenerateToolbar, this))
+		, video_dpi_slot(IsVideoToolbar() ? OPT_SUB("Video/Scale with DPI", [=](agi::OptionValue const&) { RegenerateToolbar(); }) : agi::signal::Connection())
 		{
 			Populate();
 			Bind(wxEVT_TOOL, &Toolbar::OnClick, this);
@@ -203,6 +216,7 @@ namespace {
 		}))
 #endif
 		, hotkeys_changed_slot(hotkey::inst->AddHotkeyChangeListener(&Toolbar::RegenerateToolbar, this))
+		, video_dpi_slot(IsVideoToolbar() ? OPT_SUB("Video/Scale with DPI", [=](agi::OptionValue const&) { RegenerateToolbar(); }) : agi::signal::Connection())
 		{
 			parent->SetToolBar(this);
 			Populate();

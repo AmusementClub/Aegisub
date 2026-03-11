@@ -90,3 +90,5 @@ vendor/luajit/src/luajit
 
 .nuget
 .vs
+/build-dir
+/vendor

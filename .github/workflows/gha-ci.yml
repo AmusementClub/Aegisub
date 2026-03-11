@@ -147,7 +147,7 @@ jobs:
         Set-Content -Value "" -Path "C:\vcpkg\vcpkg.disable-metrics" -Force
         # Fix vcpkg wxwidgets fail when building without debug
         (Get-Content "C:\vcpkg\ports\wxwidgets\vcpkg-cmake-wrapper.cmake") -replace '    _find_package', '    #_find_package' | Set-Content "C:\vcpkg\ports\wxwidgets\vcpkg-cmake-wrapper.cmake"
-        vcpkg.exe install --triplet x64-windows-release avisynthplus boost-asio boost-container boost-crc boost-filesystem boost-flyweight boost-gil boost-interprocess 'boost-locale[icu]' 'boost-regex[icu]' boost-scope-exit boost-thread fftw3 hunspell icu libass libiconv uchardet wxwidgets xaudio2redist gtest
+        vcpkg.exe install --triplet x64-windows-release avisynthplus boost-asio boost-container boost-crc boost-filesystem boost-flyweight boost-gil boost-interprocess 'boost-locale[icu]' 'boost-regex[icu]' boost-rational boost-scope-exit boost-spirit boost-thread fftw3 hunspell icu libass libiconv uchardet wxwidgets xaudio2redist gtest
 
     - name: configure
       run: |

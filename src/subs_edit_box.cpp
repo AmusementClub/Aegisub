@@ -537,7 +537,7 @@ void SubsEditBox::OnChangeStc(wxStyledTextEvent &event) {
 #endif
 
 void SubsEditBox::OnChangeTc(wxCommandEvent& event) {
-	if (line && edit_ctrl_tc->GetValue().utf8_str() != line->Text.get()) {
+	if (line && from_wx(edit_ctrl_tc->GetValue()) != line->Text.get()) {
 		CommitText(_("modify text"));
 		UpdateCharacterCount(line->Text);
 	}

@@ -24,8 +24,7 @@
 #include <boost/config.hpp>
 
 #ifndef BOOST_NORETURN
-#include <boost/exception/detail/attribute_noreturn.hpp>
-#define BOOST_NORETURN BOOST_ATTRIBUTE_NORETURN
+#define BOOST_NORETURN [[noreturn]]
 #endif
 
 namespace agi { namespace lua {

@@ -123,6 +123,30 @@ bool ForwardMouseWheelEvent(wxWindow *source, wxMouseEvent &evt) {
 	return false;
 }
 
+bool IsVideoDpiScaled() {
+	return OPT_GET("Video/Scale with DPI")->GetBool();
+}
+
+int ScaleVideoUi(wxWindow *window, int value) {
+	return IsVideoDpiScaled() ? window->FromDIP(value) : value;
+}
+
+wxSize ScaleVideoUi(wxWindow *window, wxSize const& value) {
+	return IsVideoDpiScaled() ? window->FromDIP(value) : value;
+}
+
+int GetVideoUiIconSize(wxWindow *window, int logical_size) {
+	return ScaleVideoUi(window, logical_size);
+}
+
+double GetWindowScaleFactor(wxWindow *window) {
+#ifdef __WXMSW__
+	return window->GetDPIScaleFactor();
+#else
+	return window->GetContentScaleFactor();
+#endif
+}
+
 std::string GetClipboard() {
 	wxString data;
 	wxClipboard *cb = wxClipboard::Get();

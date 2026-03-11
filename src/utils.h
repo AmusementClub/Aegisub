@@ -66,6 +66,12 @@ void SetFloatOnParent(wxWindow *window);
 /// @return Should the calling code process the event?
 bool ForwardMouseWheelEvent(wxWindow *source, wxMouseEvent &evt);
 
+bool IsVideoDpiScaled();
+int ScaleVideoUi(wxWindow *window, int value);
+wxSize ScaleVideoUi(wxWindow *window, wxSize const& value);
+int GetVideoUiIconSize(wxWindow *window, int logical_size = 16);
+double GetWindowScaleFactor(wxWindow *window);
+
 /// Clean up the given cache directory, limiting the size to max_size
 /// @param directory Directory to clean
 /// @param file_type Wildcard pattern for files to clean up

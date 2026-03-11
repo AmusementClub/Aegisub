@@ -47,16 +47,6 @@
 #include <wx/dcbuffer.h>
 #include <wx/settings.h>
 
-namespace {
-int ScaleVideoUi(wxWindow *window, int value) {
-	return OPT_GET("Video/Scale with DPI")->GetBool() ? window->FromDIP(value) : value;
-}
-
-wxSize ScaleVideoUi(wxWindow *window, wxSize const& value) {
-	return OPT_GET("Video/Scale with DPI")->GetBool() ? window->FromDIP(value) : value;
-}
-}
-
 VideoSlider::VideoSlider (wxWindow* parent, agi::Context *c)
 : wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, wxWANTS_CHARS | wxFULL_REPAINT_ON_RESIZE)
 , c(c)

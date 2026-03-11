@@ -139,12 +139,7 @@ VideoDisplay::~VideoDisplay () {
 double VideoDisplay::GetVideoScaleFactor() const {
 	if (!OPT_GET("Video/Scale with DPI")->GetBool())
 		return 1.0;
-
-#ifdef __WXMSW__
-	return GetDPIScaleFactor();
-#else
-	return scale_factor;
-#endif
+	return GetWindowScaleFactor(const_cast<VideoDisplay *>(this));
 }
 
 bool VideoDisplay::InitContext() {

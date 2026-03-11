@@ -24,6 +24,7 @@
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "retina_helper.h"
+#include "utils.h"
 
 #include <libaegisub/hotkey.h>
 #include <libaegisub/json.h>
@@ -77,7 +78,7 @@ namespace {
 		}
 
 		int GetVideoToolbarIconSize() const {
-			return OPT_GET("Video/Scale with DPI")->GetBool() ? FromDIP(16) : 16;
+			return GetVideoUiIconSize(const_cast<Toolbar *>(this));
 		}
 
 		/// Enable/disable the toolbar buttons

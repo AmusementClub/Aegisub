@@ -44,6 +44,7 @@
 #include <vector>
 
 #include <wx/bitmap.h>
+#include <wx/bmpbndl.h>
 #include <wx/button.h>
 #include <wx/choice.h>
 #include <wx/dcclient.h>
@@ -69,6 +70,21 @@
 #endif
 
 namespace {
+
+wxBitmap MakeMaskedBitmap(wxBitmap bitmap) {
+	bitmap.SetMask(new wxMask(bitmap, wxColour(255, 0, 255)));
+	return bitmap;
+}
+
+wxBitmapBundle MakeMaskedEyedropperBundle(int dir) {
+	wxVector<wxBitmap> bitmaps;
+	bitmaps.push_back(MakeMaskedBitmap(GETIMAGEDIR(eyedropper_tool_16, dir, 16)));
+	bitmaps.push_back(MakeMaskedBitmap(GETIMAGEDIR(eyedropper_tool_24, dir, 24)));
+	bitmaps.push_back(MakeMaskedBitmap(GETIMAGEDIR(eyedropper_tool_32, dir, 32)));
+	bitmaps.push_back(MakeMaskedBitmap(GETIMAGEDIR(eyedropper_tool_48, dir, 48)));
+	bitmaps.push_back(MakeMaskedBitmap(GETIMAGEDIR(eyedropper_tool_64, dir, 64)));
+	return wxBitmapBundle::FromBitmaps(bitmaps);
+}
 
 enum class PickerDirection {
 	HorzVert,
@@ -493,7 +509,7 @@ class DialogColorPicker final : public wxDialog {
 	wxSpinCtrl *alpha_input;
 
 	/// The eyedropper is set to a blank icon when it's clicked, so store its normal bitmap
-	wxBitmap eyedropper_bitmap;
+	wxBitmapBundle eyedropper_bitmap;
 
 	/// The point where the eyedropper was click, used to make it possible to either
 	/// click the eyedropper or drag the eyedropper
@@ -639,12 +655,7 @@ DialogColorPicker::DialogColorPicker(wxWindow *parent, agi::Color initial_color,
 	preview_box = new wxStaticBitmap(this, -1, wxBitmap(preview_size.x, preview_size.y, 24), wxDefaultPosition, preview_size, STATIC_BORDER_FLAG);
 	recent_box = new ColorPickerRecent(this, 8, 4, recent_cell_size);
 
-#if defined(__WXMSW__)
-	eyedropper_bitmap = CMD_ICON_GET(eyedropper_tool, wxLayout_Default, AEGI_BITMAP_ICON_SIZE(this, 24));
-#else
-	eyedropper_bitmap = GETIMAGE(eyedropper_tool_24);
-#endif
-	eyedropper_bitmap.SetMask(new wxMask(eyedropper_bitmap, wxColour(255, 0, 255)));
+	eyedropper_bitmap = MakeMaskedEyedropperBundle(wxLayout_Default);
 #if wxCHECK_VERSION(3, 1, 0) && defined(__WXMAC__)
 	screen_dropper_icon = new wxGenericStaticBitmap(this, -1, eyedropper_bitmap, wxDefaultPosition, wxDefaultSize, wxRAISED_BORDER);
 #else

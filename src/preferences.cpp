@@ -479,6 +479,16 @@ class CommandRenderer final : public wxDataViewCustomRenderer {
 	wxDataViewIconText value;
 	static const int icon_width = 20;
 
+	int GetIconWidth() const {
+		auto view = GetView();
+		return view ? view->FromDIP(icon_width) : icon_width;
+	}
+
+	wxSize GetDefaultSize() const {
+		auto view = GetView();
+		return view ? view->FromDIP(wxSize(80, 20)) : wxSize(80, 20);
+	}
+
 public:
 	CommandRenderer()
 	: wxDataViewCustomRenderer("wxDataViewIconText", wxDATAVIEW_CELL_EDITABLE)
@@ -491,10 +501,11 @@ public:
 		iconText << value;
 
 		wxString text = iconText.GetText();
+		int iconWidth = GetIconWidth();
 
 		// adjust the label rect to take the width of the icon into account
-		label_rect.x += icon_width;
-		label_rect.width -= icon_width;
+		label_rect.x += iconWidth;
+		label_rect.width -= iconWidth;
 
 		wxTextCtrl* ctrl = new wxTextCtrl(parent, -1, text, label_rect.GetPosition(), label_rect.GetSize(), wxTE_PROCESS_ENTER);
 		ctrl->SetInsertionPointEnd();
@@ -510,10 +521,11 @@ public:
 
 	bool Render(wxRect rect, wxDC *dc, int state) override {
 		wxIcon const& icon = value.GetIcon();
+		int iconWidth = GetIconWidth();
 		if (icon.IsOk())
 			dc->DrawIcon(icon, rect.x, rect.y + (rect.height - icon.GetHeight()) / 2);
 
-		RenderText(value.GetText(), icon_width, rect, dc, state);
+		RenderText(value.GetText(), iconWidth, rect, dc, state);
 
 		return true;
 	}
@@ -521,10 +533,10 @@ public:
 	wxSize GetSize() const override {
 		if (!value.GetText().empty()) {
 			wxSize size = GetTextExtent(value.GetText());
-			size.x += icon_width;
+			size.x += GetIconWidth();
 			return size;
 		}
-		return wxSize(80,20);
+		return GetDefaultSize();
 	}
 
 	bool GetValueFromEditorCtrl(wxWindow* editor, wxVariant &var) override {
@@ -541,6 +553,11 @@ public:
 class HotkeyRenderer final : public wxDataViewCustomRenderer {
 	wxString value;
 	wxTextCtrl *ctrl = nullptr;
+
+	wxSize GetDefaultSize() const {
+		auto view = GetView();
+		return view ? view->FromDIP(wxSize(80, 20)) : wxSize(80, 20);
+	}
 
 public:
 	HotkeyRenderer()
@@ -575,7 +592,7 @@ public:
 	}
 
 	bool GetValue(wxVariant &) const override { return false; }
-	wxSize GetSize() const override { return !value ? wxSize(80, 20) : GetTextExtent(value); }
+	wxSize GetSize() const override { return !value ? GetDefaultSize() : GetTextExtent(value); }
 	bool HasEditorCtrl() const override { return true; }
 };
 

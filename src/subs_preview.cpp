@@ -43,6 +43,7 @@
 
 #include <libaegisub/make_unique.h>
 
+#include <wx/dcbuffer.h>
 #include <wx/dcclient.h>
 #include <wx/msgdlg.h>
 
@@ -53,8 +54,8 @@ SubtitlesPreview::SubtitlesPreview(wxWindow *parent, wxSize size, int winStyle, 
 , sub_file(agi::make_unique<AssFile>())
 , line(new AssDialogue)
 {
-	size = parent->FromDIP(size);
 	line->Text = "{\\q2}preview";
+	SetBackgroundStyle(wxBG_STYLE_PAINT);
 
 	SetStyle(*style);
 
@@ -119,11 +120,13 @@ void SubtitlesPreview::UpdateBitmap() {
 
 	// Convert frame to bitmap
 	*bmp = static_cast<wxBitmap>(GetImage(frame));
-	Refresh();
+	Refresh(false);
 }
 
 void SubtitlesPreview::OnPaint(wxPaintEvent &) {
-	wxPaintDC(this).DrawBitmap(*bmp, 0, 0);
+	wxAutoBufferedPaintDC dc(this);
+	if (bmp)
+		dc.DrawBitmap(*bmp, 0, 0);
 }
 
 void SubtitlesPreview::OnSize(wxSizeEvent &evt) {

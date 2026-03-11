@@ -15,6 +15,8 @@
 #include <cstdlib>
 #include <utility>
 
+#include <wx/defs.h>
+
 #include "bitmap.h"
 #include "default_config.h"
 
@@ -26,6 +28,13 @@ wxBitmap libresrc_getimage_resized(const unsigned char* image, size_t size, int 
 wxIcon libresrc_geticon(const unsigned char *image, size_t size);
 #define GETIMAGE(a) libresrc_getimage(a, sizeof(a))
 #define GETIMAGEDIR(a, d, s) libresrc_getimage_resized(a, sizeof(a), d, s)
+#if defined(__WXMSW__) && wxCHECK_VERSION(3, 1, 5)
+#define AEGI_BITMAP_ICON_SIZE(window, size) (size)
+#elif defined(__WXMSW__)
+#define AEGI_BITMAP_ICON_SIZE(window, size) ((window)->FromDIP(size))
+#else
+#define AEGI_BITMAP_ICON_SIZE(window, size) (size)
+#endif
 #define CMD_ICON_GET(icon, dir, size) ( \
     (size) <= 16 ? GETIMAGEDIR(icon##_16, (dir), (size)) : \
     (size) <= 24 ? GETIMAGEDIR(icon##_24, (dir), (size)) : \

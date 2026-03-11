@@ -601,7 +601,7 @@ DialogColorPicker::DialogColorPicker(wxWindow *parent, agi::Color initial_color,
 	recent_box = new ColorPickerRecent(this, 8, 4, 16);
 
 #if defined(__WXMSW__)
-	eyedropper_bitmap = CMD_ICON_GET(eyedropper_tool, wxLayout_Default, FromDIP(24));
+	eyedropper_bitmap = CMD_ICON_GET(eyedropper_tool, wxLayout_Default, AEGI_BITMAP_ICON_SIZE(this, 24));
 #else
 	eyedropper_bitmap = GETIMAGE(eyedropper_tool_24);
 #endif

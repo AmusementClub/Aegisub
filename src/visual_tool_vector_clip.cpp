@@ -54,7 +54,7 @@ void VisualToolVectorClip::SetToolbar(wxToolBar *toolBar) {
 
 	toolBar->AddSeparator();
 #ifdef __WXMSW__
-	int icon_size = toolBar->FromDIP(16);
+	int icon_size = AEGI_BITMAP_ICON_SIZE(toolBar, 16);
 #else
 	int icon_size = OPT_GET("App/Toolbar Icon Size")->GetInt();
 #endif

@@ -187,11 +187,11 @@ wxSizer *make_move_buttons(wxWindow *parent, wxButton **up, wxButton **down, wxB
 	sizer->AddStretchSpacer(1);
 
 #if defined(__WXMSW__)
-	*up     = add_bitmap_button(parent, sizer, CMD_ICON_GET(arrow_up, wxLayout_Default, parent->FromDIP(24)), _("Move style up"));
-	*down   = add_bitmap_button(parent, sizer, CMD_ICON_GET(arrow_down, wxLayout_Default, parent->FromDIP(24)), _("Move style down"));
-	*top    = add_bitmap_button(parent, sizer, CMD_ICON_GET(arrow_up_stop, wxLayout_Default, parent->FromDIP(24)), _("Move style to top"));
-	*bottom = add_bitmap_button(parent, sizer, CMD_ICON_GET(arrow_down_stop, wxLayout_Default, parent->FromDIP(24)), _("Move style to bottom"));
-	*sort   = add_bitmap_button(parent, sizer, CMD_ICON_GET(arrow_sort, wxLayout_Default, parent->FromDIP(24)), _("Sort styles alphabetically"));
+	*up     = add_bitmap_button(parent, sizer, CMD_ICON_GET(arrow_up, wxLayout_Default, AEGI_BITMAP_ICON_SIZE(parent, 24)), _("Move style up"));
+	*down   = add_bitmap_button(parent, sizer, CMD_ICON_GET(arrow_down, wxLayout_Default, AEGI_BITMAP_ICON_SIZE(parent, 24)), _("Move style down"));
+	*top    = add_bitmap_button(parent, sizer, CMD_ICON_GET(arrow_up_stop, wxLayout_Default, AEGI_BITMAP_ICON_SIZE(parent, 24)), _("Move style to top"));
+	*bottom = add_bitmap_button(parent, sizer, CMD_ICON_GET(arrow_down_stop, wxLayout_Default, AEGI_BITMAP_ICON_SIZE(parent, 24)), _("Move style to bottom"));
+	*sort   = add_bitmap_button(parent, sizer, CMD_ICON_GET(arrow_sort, wxLayout_Default, AEGI_BITMAP_ICON_SIZE(parent, 24)), _("Sort styles alphabetically"));
 #else
 	*up     = add_bitmap_button(parent, sizer, GETIMAGE(arrow_up_24), _("Move style up"));
 	*down   = add_bitmap_button(parent, sizer, GETIMAGE(arrow_down_24), _("Move style down"));

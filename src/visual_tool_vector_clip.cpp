@@ -59,7 +59,11 @@ void VisualToolVectorClip::SetToolbar(wxToolBar *toolBar) {
 	int icon_size = OPT_GET("App/Toolbar Icon Size")->GetInt();
 #endif
 
-#define ICON(name) CMD_ICON_GET(name, wxLayout_Default, icon_size)
+#ifdef __WXMSW__
+#define ICON(name) CMD_ICON_BUNDLE_GET(name, wxLayout_Default)
+#else
+#define ICON(name) wxBitmapBundle::FromBitmap(CMD_ICON_GET(name, wxLayout_Default, icon_size))
+#endif
 	toolBar->AddTool(BUTTON_DRAG, _("Drag"), ICON(visual_vector_clip_drag), _("Drag control points"), wxITEM_CHECK);
 	toolBar->AddTool(BUTTON_LINE, _("Line"), ICON(visual_vector_clip_line), _("Appends a line"), wxITEM_CHECK);
 	toolBar->AddTool(BUTTON_BICUBIC, _("Bicubic"), ICON(visual_vector_clip_bicubic), _("Appends a bezier bicubic curve"), wxITEM_CHECK);

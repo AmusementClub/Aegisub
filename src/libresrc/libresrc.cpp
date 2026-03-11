@@ -15,21 +15,47 @@
 #include "libresrc.h"
 
 #include <wx/bitmap.h>
+#include <wx/bmpbndl.h>
 #include <wx/icon.h>
 #include <wx/image.h>
 #include <wx/intl.h>
 #include <wx/mstream.h>
 
-wxBitmap libresrc_getimage(const unsigned char *buff, size_t size) {
+namespace {
+wxBitmap libresrc_getimage_directional(const unsigned char *buff, size_t size, int dir) {
 	wxMemoryInputStream mem(buff, size);
-	return wxBitmap(wxImage(mem));
+	if (dir != wxLayout_RightToLeft)
+		return wxBitmap(wxImage(mem));
+	return wxBitmap(wxImage(mem).Mirror());
+}
+}
+
+wxBitmap libresrc_getimage(const unsigned char *buff, size_t size) {
+	return libresrc_getimage_directional(buff, size, wxLayout_LeftToRight);
 }
 
 wxBitmap libresrc_getimage_resized(const unsigned char* buff, size_t size, int dir, int resize) {
 	wxMemoryInputStream mem(buff, size);
 	if (dir != wxLayout_RightToLeft)
-		return wxBitmap(wxImage(mem).Scale(resize, resize));
+		return wxBitmap(wxImage(mem).Scale(resize, resize, wxIMAGE_QUALITY_HIGH));
 	return wxBitmap(wxImage(mem).Scale(resize, resize, wxIMAGE_QUALITY_HIGH).Mirror());
+}
+
+wxBitmapBundle libresrc_getimage_bundle(
+	const unsigned char *image16, size_t size16,
+	const unsigned char *image24, size_t size24,
+	const unsigned char *image32, size_t size32,
+	const unsigned char *image48, size_t size48,
+	const unsigned char *image64, size_t size64,
+	int dir)
+{
+	wxVector<wxBitmap> bitmaps;
+	bitmaps.push_back(libresrc_getimage_directional(image16, size16, dir));
+	bitmaps.push_back(libresrc_getimage_directional(image24, size24, dir));
+	bitmaps.push_back(libresrc_getimage_directional(image32, size32, dir));
+	bitmaps.push_back(libresrc_getimage_directional(image48, size48, dir));
+	bitmaps.push_back(libresrc_getimage_directional(image64, size64, dir));
+	return wxBitmapBundle::FromBitmaps(bitmaps);
 }
 
 wxIcon libresrc_geticon(const unsigned char *buff, size_t size) {

@@ -21,6 +21,7 @@
 #include <vector>
 
 #include <wx/bitmap.h>
+#include <wx/bmpbndl.h>
 #include <wx/intl.h>
 #include <wx/string.h>
 
@@ -34,7 +35,9 @@ namespace agi { struct Context; }
 #define STR_DISP(a) wxString StrDisplay(const agi::Context *) const override { return _(a); }
 #define STR_HELP(a) wxString StrHelp() const override { return _(a); }
 #define CMD_TYPE(a) int Type() const override { using namespace cmd; return a; }
-#define CMD_ICON(icon) wxBitmap Icon(int size, wxLayoutDirection dir = wxLayout_LeftToRight) const override { return CMD_ICON_GET(icon, dir, size); }
+#define CMD_ICON(icon) \
+	wxBitmap Icon(int size, wxLayoutDirection dir = wxLayout_LeftToRight) const override { return CMD_ICON_GET(icon, dir, size); } \
+	wxBitmapBundle IconBundle(wxLayoutDirection dir = wxLayout_LeftToRight) const override { return CMD_ICON_BUNDLE_GET(icon, dir); }
 
 #define COMMAND_GROUP(cname, cmdname, menu, disp, help) \
 struct cname final : public Command {                   \
@@ -102,6 +105,7 @@ DEFINE_EXCEPTION(CommandNotFound, CommandError);
 		/// Request icon.
 		/// @param size Icon size.
 		virtual wxBitmap Icon(int size, wxLayoutDirection = wxLayout_LeftToRight) const { return wxBitmap{}; }
+		virtual wxBitmapBundle IconBundle(wxLayoutDirection = wxLayout_LeftToRight) const { return wxBitmapBundle::FromBitmap(wxBitmap{}); }
 
 		/// Command function
 		virtual void operator()(agi::Context *c)=0;

@@ -69,8 +69,10 @@ AudioKaraoke::AudioKaraoke(wxWindow *parent, agi::Context *c)
 	using std::bind;
 
 #if defined(__WXMSW__)
-	cancel_button = new wxBitmapButton(this, -1, CMD_ICON_GET(kara_split_cancel, wxLayout_Default, AEGI_BITMAP_ICON_SIZE(this, 16)));
-	accept_button = new wxBitmapButton(this, -1, CMD_ICON_GET(kara_split_accept, wxLayout_Default, AEGI_BITMAP_ICON_SIZE(this, 16)));
+	cancel_button = new wxBitmapButton(this, -1, wxNullBitmap);
+	accept_button = new wxBitmapButton(this, -1, wxNullBitmap);
+	cancel_button->SetBitmap(CMD_ICON_BUNDLE_GET(kara_split_cancel, wxLayout_Default));
+	accept_button->SetBitmap(CMD_ICON_BUNDLE_GET(kara_split_accept, wxLayout_Default));
 #else
 	cancel_button = new wxBitmapButton(this, -1, GETIMAGE(kara_split_cancel_16));
 	accept_button = new wxBitmapButton(this, -1, GETIMAGE(kara_split_accept_16));

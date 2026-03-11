@@ -603,12 +603,12 @@ struct video_opt_autoscroll final : public Command {
 	}
 };
 
-struct video_opt_scale_with_dpi final : public validator_video_loaded {
+struct video_opt_scale_with_dpi final : public Command {
 	CMD_NAME("video/opt/scale_with_dpi")
 	STR_MENU("Scale video with monitor DPI")
 	STR_DISP("Scale video with monitor DPI")
 	STR_HELP("Toggle whether the video display scales with the current monitor DPI")
-	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
+	CMD_TYPE(COMMAND_TOGGLE)
 
 	bool IsActive(const agi::Context *) override {
 		return OPT_GET("Video/Scale with DPI")->GetBool();

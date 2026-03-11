@@ -356,7 +356,8 @@ TimeEdit *SubsEditBox::MakeTimeCtrl(wxString const& tooltip, TimeField field) {
 void SubsEditBox::MakeButton(const char *cmd_name) {
 	cmd::Command *command = cmd::get(cmd_name);
 #ifdef __WXMSW__
-	wxBitmapButton* btn = new wxBitmapButton(this, -1, command->Icon(AEGI_BITMAP_ICON_SIZE(this, 16)));
+	wxBitmapButton* btn = new wxBitmapButton(this, -1, wxNullBitmap);
+	btn->SetBitmap(command->IconBundle(GetLayoutDirection()));
 #else
 	wxBitmapButton *btn = new wxBitmapButton(this, -1, command->Icon(OPT_GET("App/Toolbar Icon Size")->GetInt()));
 #endif

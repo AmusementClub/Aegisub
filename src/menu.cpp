@@ -200,11 +200,11 @@ public:
 		wxMenuItem *item = new wxMenuItem(parent, id_base + items.size(), menu_text, co->StrHelp(), kind);
 #if defined(__WXMSW__)
 		if (kind == wxITEM_NORMAL)
-			item->SetBitmap(co->Icon(AEGI_BITMAP_ICON_SIZE(context->parent, 16)));
+			item->SetBitmap(co->IconBundle(context->parent->GetLayoutDirection()));
 #elif !defined(__WXMAC__)
 		/// @todo Maybe make this a configuration option instead?
 		if (kind == wxITEM_NORMAL)
-			item->SetBitmap(co->Icon(16));
+			item->SetBitmap(co->IconBundle(context->parent->GetLayoutDirection()));
 #endif
 		parent->Append(item);
 		items.push_back(co->name());

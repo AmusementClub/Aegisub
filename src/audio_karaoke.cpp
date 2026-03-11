@@ -154,6 +154,10 @@ void AudioKaraoke::OnSize(wxSizeEvent &evt) {
 void AudioKaraoke::OnPaint(wxPaintEvent &) {
 	int w, h;
 	split_area->GetClientSize(&w, &h);
+	const int arrow_width = split_area->FromDIP(20);
+	const int arrow_half_height = split_area->FromDIP(6);
+	const int arrow_inner = split_area->FromDIP(4);
+	const int arrow_outer = split_area->FromDIP(10);
 
 	wxPaintDC dc(split_area);
 	wxMemoryDC bmp_dc(rendered_line);
@@ -177,12 +181,12 @@ void AudioKaraoke::OnPaint(wxPaintEvent &) {
 
 	// Draw scroll arrows if needed
 	if (scroll_x > 0) {
-		dc.DrawRectangle(0, 0, 20, h);
+		dc.DrawRectangle(0, 0, arrow_width, h);
 
 		wxPoint triangle[] = {
-			wxPoint(10, h / 2 - 6),
-			wxPoint(4, h / 2),
-			wxPoint(10, h / 2 + 6)
+			wxPoint(arrow_outer, h / 2 - arrow_half_height),
+			wxPoint(arrow_inner, h / 2),
+			wxPoint(arrow_outer, h / 2 + arrow_half_height)
 		};
 		dc.SetBrush(*wxBLACK_BRUSH);
 		dc.DrawPolygon(3, triangle);
@@ -190,12 +194,12 @@ void AudioKaraoke::OnPaint(wxPaintEvent &) {
 
 	if (rendered_line.GetWidth() - scroll_x > w) {
 		dc.SetBrush(*wxWHITE_BRUSH);
-		dc.DrawRectangle(w - 20, 0, 20, h);
+		dc.DrawRectangle(w - arrow_width, 0, arrow_width, h);
 
 		wxPoint triangle[] = {
-			wxPoint(w - 10, h / 2 - 6),
-			wxPoint(w - 4, h / 2),
-			wxPoint(w - 10, h / 2 + 6)
+			wxPoint(w - arrow_outer, h / 2 - arrow_half_height),
+			wxPoint(w - arrow_inner, h / 2),
+			wxPoint(w - arrow_outer, h / 2 + arrow_half_height)
 		};
 		dc.SetBrush(*wxBLACK_BRUSH);
 		dc.DrawPolygon(3, triangle);

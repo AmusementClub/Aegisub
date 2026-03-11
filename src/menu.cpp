@@ -46,10 +46,6 @@
 #include <wx/menu.h>
 #include <wx/menuitem.h>
 
-#if defined(__WXMSW__) && wxCHECK_VERSION(3, 1, 3)
-#include <wx/renderer.h>
-#endif
-
 #ifdef __WXMAC__
 #include <wx/app.h>
 #endif
@@ -203,15 +199,8 @@ public:
 
 		wxMenuItem *item = new wxMenuItem(parent, id_base + items.size(), menu_text, co->StrHelp(), kind);
 #if defined(__WXMSW__)
-#if wxCHECK_VERSION(3, 1, 3)
-		if (kind == wxITEM_NORMAL) {
-			int size = wxRendererNative::Get().GetCheckMarkSize(context->parent).GetWidth();
-			item->SetBitmap(co->Icon(size > 0 ? size : 16));
-		}
-#else
 		if (kind == wxITEM_NORMAL)
-			item->SetBitmap(co->Icon(context->parent->FromDIP(16)));
-#endif
+			item->SetBitmap(co->Icon(AEGI_BITMAP_ICON_SIZE(context->parent, 16)));
 #elif !defined(__WXMAC__)
 		/// @todo Maybe make this a configuration option instead?
 		if (kind == wxITEM_NORMAL)

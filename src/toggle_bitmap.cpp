@@ -45,10 +45,10 @@ ToggleBitmap::ToggleBitmap(wxWindow *parent, agi::Context *context, const char *
 : wxControl(parent, -1, wxDefaultPosition, wxDefaultSize, wxSUNKEN_BORDER)
 , context(context)
 , command(*cmd::get(cmd_name))
-, img(command.Icon(icon_size))
+, img(command.Icon(parent->FromDIP(icon_size)))
 {
-	int w = size.GetWidth() != -1 ? size.GetWidth() : img.GetWidth();
-	int h = size.GetHeight() != -1 ? size.GetHeight() : img.GetHeight();
+	int w = size.GetWidth() != -1 ? parent->FromDIP(size.GetWidth()) : img.GetWidth();
+	int h = size.GetHeight() != -1 ? parent->FromDIP(size.GetHeight()) : img.GetHeight();
 	SetClientSize(w, h);
 	GetSize(&w, &h);
 	SetSizeHints(w, h, w, h);

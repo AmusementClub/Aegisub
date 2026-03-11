@@ -39,6 +39,7 @@
 #include <libaegisub/scoped_ptr.h>
 #include <libaegisub/make_unique.h>
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
@@ -82,20 +83,50 @@ wxDEFINE_EVENT(EVT_SPECTRUM_CHANGE, wxCommandEvent);
 class ColorPickerSpectrum final : public wxControl {
 	int x;
 	int y;
+	int arrow_size;
 
 	wxBitmap *background;
 	PickerDirection direction;
 
+	int GetSpectrumWidth() const {
+		int width = GetClientSize().x - 2;
+		if (direction == PickerDirection::Vert)
+			width -= arrow_size + 1;
+		return std::max(width, 1);
+	}
+
+	int GetSpectrumHeight() const {
+		int height = GetClientSize().y - 2;
+		if (direction == PickerDirection::Horz)
+			height -= arrow_size + 1;
+		return std::max(height, 1);
+	}
+
+	int GetLogicalWidth() const { return background ? background->GetWidth() : 1; }
+	int GetLogicalHeight() const { return background ? background->GetHeight() : 1; }
+
+	static int ScaleToDisplay(int value, int logical_extent, int display_extent) {
+		if (logical_extent <= 1 || display_extent <= 1) return 0;
+		return value * (display_extent - 1) / (logical_extent - 1);
+	}
+
+	static int ScaleToLogical(int value, int display_extent, int logical_extent) {
+		if (logical_extent <= 1 || display_extent <= 1) return 0;
+		return value * (logical_extent - 1) / (display_extent - 1);
+	}
+
 	void OnPaint(wxPaintEvent &evt) {
 		if (!background) return;
 
-		int height = background->GetHeight();
-		int width = background->GetWidth();
+		int height = GetSpectrumHeight();
+		int width = GetSpectrumWidth();
+		int display_x = ScaleToDisplay(x, GetLogicalWidth(), width);
+		int display_y = ScaleToDisplay(y, GetLogicalHeight(), height);
 		wxPaintDC dc(this);
 
 		wxMemoryDC memdc;
 		memdc.SelectObject(*background);
-		dc.Blit(1, 1, width, height, &memdc, 0, 0);
+		dc.StretchBlit(1, 1, width, height, &memdc, 0, 0, background->GetWidth(), background->GetHeight());
 
 		wxPoint arrow[3];
 		wxRect arrow_box;
@@ -108,34 +139,34 @@ class ColorPickerSpectrum final : public wxControl {
 		switch (direction) {
 			case PickerDirection::HorzVert:
 				// Make a little cross
-				dc.DrawLine(x-4, y+1, x+7, y+1);
-				dc.DrawLine(x+1, y-4, x+1, y+7);
+				dc.DrawLine(display_x - arrow_size, display_y + 1, display_x + arrow_size + 3, display_y + 1);
+				dc.DrawLine(display_x + 1, display_y - arrow_size, display_x + 1, display_y + arrow_size + 3);
 				break;
 			case PickerDirection::Horz:
 				// Make a vertical line stretching all the way across
-				dc.DrawLine(x+1, 1, x+1, height+1);
+				dc.DrawLine(display_x + 1, 1, display_x + 1, height + 1);
 				// Points for arrow
-				arrow[0] = wxPoint(x+1, height+2);
-				arrow[1] = wxPoint(x+1-spectrum_horz_vert_arrow_size, height+2+spectrum_horz_vert_arrow_size);
-				arrow[2] = wxPoint(x+1+spectrum_horz_vert_arrow_size, height+2+spectrum_horz_vert_arrow_size);
+				arrow[0] = wxPoint(display_x + 1, height + 2);
+				arrow[1] = wxPoint(display_x + 1 - arrow_size, height + 2 + arrow_size);
+				arrow[2] = wxPoint(display_x + 1 + arrow_size, height + 2 + arrow_size);
 
 				arrow_box.SetLeft(0);
 				arrow_box.SetTop(height + 2);
-				arrow_box.SetRight(width + 1 + spectrum_horz_vert_arrow_size);
-				arrow_box.SetBottom(height + 2 + spectrum_horz_vert_arrow_size);
+				arrow_box.SetRight(width + 1 + arrow_size);
+				arrow_box.SetBottom(height + 2 + arrow_size);
 				break;
 			case PickerDirection::Vert:
 				// Make a horizontal line stretching all the way across
-				dc.DrawLine(1, y+1, width+1, y+1);
+				dc.DrawLine(1, display_y + 1, width + 1, display_y + 1);
 				// Points for arrow
-				arrow[0] = wxPoint(width+2, y+1);
-				arrow[1] = wxPoint(width+2+spectrum_horz_vert_arrow_size, y+1-spectrum_horz_vert_arrow_size);
-				arrow[2] = wxPoint(width+2+spectrum_horz_vert_arrow_size, y+1+spectrum_horz_vert_arrow_size);
+				arrow[0] = wxPoint(width + 2, display_y + 1);
+				arrow[1] = wxPoint(width + 2 + arrow_size, display_y + 1 - arrow_size);
+				arrow[2] = wxPoint(width + 2 + arrow_size, display_y + 1 + arrow_size);
 
 				arrow_box.SetLeft(width + 2);
 				arrow_box.SetTop(0);
-				arrow_box.SetRight(width + 2 + spectrum_horz_vert_arrow_size);
-				arrow_box.SetBottom(height + 1 + spectrum_horz_vert_arrow_size);
+				arrow_box.SetRight(width + 2 + arrow_size);
+				arrow_box.SetBottom(height + 1 + arrow_size);
 				break;
 		}
 
@@ -159,7 +190,7 @@ class ColorPickerSpectrum final : public wxControl {
 		dc.SetLogicalFunction(wxCOPY);
 		dc.SetPen(blkpen);
 		dc.SetBrush(*wxTRANSPARENT_BRUSH);
-		dc.DrawRectangle(0, 0, background->GetWidth()+2, background->GetHeight()+2);
+		dc.DrawRectangle(0, 0, width + 2, height + 2);
 	}
 
 	void OnMouse(wxMouseEvent &evt) {
@@ -180,8 +211,8 @@ class ColorPickerSpectrum final : public wxControl {
 
 		if (evt.LeftDown() || (HasCapture() && evt.LeftIsDown())) {
 			// Adjust for the 1px black border around the control
-			int newx = mid(0, evt.GetX() - 1, GetClientSize().x - 3);
-			int newy = mid(0, evt.GetY() - 1, GetClientSize().y - 3);
+			int newx = ScaleToLogical(mid(0, evt.GetX() - 1, GetSpectrumWidth() - 1), GetSpectrumWidth(), GetLogicalWidth());
+			int newy = ScaleToLogical(mid(0, evt.GetY() - 1, GetSpectrumHeight() - 1), GetSpectrumHeight(), GetLogicalHeight());
 			SetXY(newx, newy);
 			wxCommandEvent evt2(EVT_SPECTRUM_CHANGE, GetId());
 			AddPendingEvent(evt2);
@@ -195,14 +226,16 @@ public:
 	: wxControl(parent, -1, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE)
 	, x(-1)
 	, y(-1)
+	, arrow_size(parent->FromDIP(spectrum_horz_vert_arrow_size))
 	, background(nullptr)
 	, direction(direction)
 	{
+		size = parent->FromDIP(size);
 		size.x += 2;
 		size.y += 2;
 
-		if (direction == PickerDirection::Vert) size.x += spectrum_horz_vert_arrow_size + 1;
-		if (direction == PickerDirection::Horz) size.y += spectrum_horz_vert_arrow_size + 1;
+		if (direction == PickerDirection::Vert) size.x += arrow_size + 1;
+		if (direction == PickerDirection::Horz) size.y += arrow_size + 1;
 
 		SetClientSize(size);
 		SetMinSize(GetSize());
@@ -281,7 +314,7 @@ class ColorPickerRecent final : public wxStaticBitmap {
 				int y = cy * cellsize;
 
 				dc.SetBrush(wxBrush(to_wx(colors[cy * cols + cx])));
-				dc.DrawRectangle(x, y, x+cellsize, y+cellsize);
+				dc.DrawRectangle(x, y, cellsize, cellsize);
 			}
 		}
 
@@ -554,6 +587,12 @@ DialogColorPicker::DialogColorPicker(wxWindow *parent, agi::Color initial_color,
 : wxDialog(parent, -1, _("Select Color"))
 , callback(std::move(callback))
 {
+	const int gap = FromDIP(5);
+	const int border = FromDIP(3);
+	const wxSize preview_size = FromDIP(wxSize(40, 40));
+	const int recent_cell_size = FromDIP(16);
+	const int dropper_magnification = FromDIP(8);
+
 	// generate spectrum slider bar images
 	for (int i = 0; i < 3; ++i) {
 		rgb_slider[i] = make_slider([=](int y, unsigned char *rgb) {
@@ -597,8 +636,8 @@ DialogColorPicker::DialogColorPicker(wxWindow *parent, agi::Color initial_color,
 	for (auto& elem : hsv_input)
 		elem = new wxSpinCtrl(this, -1, "", wxDefaultPosition, colorinput_size, wxSP_ARROW_KEYS, 0, 255);
 
-	preview_box = new wxStaticBitmap(this, -1, wxBitmap(40, 40, 24), wxDefaultPosition, wxSize(40, 40), STATIC_BORDER_FLAG);
-	recent_box = new ColorPickerRecent(this, 8, 4, 16);
+	preview_box = new wxStaticBitmap(this, -1, wxBitmap(preview_size.x, preview_size.y, 24), wxDefaultPosition, preview_size, STATIC_BORDER_FLAG);
+	recent_box = new ColorPickerRecent(this, 8, 4, recent_cell_size);
 
 #if defined(__WXMSW__)
 	eyedropper_bitmap = CMD_ICON_GET(eyedropper_tool, wxLayout_Default, AEGI_BITMAP_ICON_SIZE(this, 24));
@@ -611,16 +650,16 @@ DialogColorPicker::DialogColorPicker(wxWindow *parent, agi::Color initial_color,
 #else
 	screen_dropper_icon = new wxStaticBitmap(this, -1, eyedropper_bitmap, wxDefaultPosition, wxDefaultSize, wxRAISED_BORDER);
 #endif
-	screen_dropper = new ColorPickerScreenDropper(this, 7, 7, 8);
+	screen_dropper = new ColorPickerScreenDropper(this, 7, 7, dropper_magnification);
 
 	// Arrange the controls in a nice way
 	wxSizer *spectop_sizer = new wxBoxSizer(wxHORIZONTAL);
-	spectop_sizer->Add(new wxStaticText(this, -1, _("Spectrum mode:")), 0, wxALIGN_CENTER_VERTICAL|wxALIGN_LEFT|wxRIGHT, 5);
+	spectop_sizer->Add(new wxStaticText(this, -1, _("Spectrum mode:")), 0, wxALIGN_CENTER_VERTICAL|wxALIGN_LEFT|wxRIGHT, gap);
 	spectop_sizer->Add(colorspace_choice, 0, wxALIGN_CENTER_VERTICAL|wxALIGN_LEFT);
-	spectop_sizer->Add(5, 5, 1, wxEXPAND);
+	spectop_sizer->Add(gap, gap, 1, wxEXPAND);
 	spectop_sizer->Add(preview_box, 0, wxALIGN_CENTER_VERTICAL);
 
-	wxSizer *spectrum_sizer = new wxFlexGridSizer(3, 5, 5);
+	wxSizer *spectrum_sizer = new wxFlexGridSizer(3, gap, gap);
 	spectrum_sizer->Add(spectop_sizer, wxEXPAND);
 	spectrum_sizer->AddStretchSpacer(1);
 	spectrum_sizer->AddStretchSpacer(1);
@@ -630,32 +669,32 @@ DialogColorPicker::DialogColorPicker(wxWindow *parent, agi::Color initial_color,
 	if (!alpha)
 		spectrum_sizer->Hide(alpha_slider);
 
-	spectrum_box->Add(spectrum_sizer, 0, wxALL, 3);
+	spectrum_box->Add(spectrum_sizer, 0, wxALL, border);
 
 	wxString rgb_labels[] = { _("Red:"), _("Green:"), _("Blue:") };
-	rgb_box->Add(MakeColorInputSizer(rgb_labels, rgb_input), 1, wxALL|wxEXPAND, 3);
+	rgb_box->Add(MakeColorInputSizer(rgb_labels, rgb_input), 1, wxALL|wxEXPAND, border);
 
 	wxString ass_labels[] = { "ASS:", "HTML:", _("Alpha:") };
 	wxControl *ass_ctrls[] = { ass_input, html_input, alpha_input };
 	auto ass_colors_sizer = MakeColorInputSizer(ass_labels, ass_ctrls);
 	if (!alpha)
 		ass_colors_sizer->Hide(alpha_input);
-	rgb_box->Add(ass_colors_sizer, 0, wxALL|wxCENTER|wxEXPAND, 3);
+	rgb_box->Add(ass_colors_sizer, 0, wxALL|wxCENTER|wxEXPAND, border);
 
 	wxString hsl_labels[] = { _("Hue:"), _("Sat.:"), _("Lum.:") };
-	hsl_box->Add(MakeColorInputSizer(hsl_labels, hsl_input), 0, wxALL|wxEXPAND, 3);
+	hsl_box->Add(MakeColorInputSizer(hsl_labels, hsl_input), 0, wxALL|wxEXPAND, border);
 
 	wxString hsv_labels[] = { _("Hue:"), _("Sat.:"), _("Value:") };
-	hsv_box->Add(MakeColorInputSizer(hsv_labels, hsv_input), 0, wxALL|wxEXPAND, 3);
+	hsv_box->Add(MakeColorInputSizer(hsv_labels, hsv_input), 0, wxALL|wxEXPAND, border);
 
 	wxSizer *hsx_sizer = new wxBoxSizer(wxHORIZONTAL);
 	hsx_sizer->Add(hsl_box);
-	hsx_sizer->AddSpacer(5);
+	hsx_sizer->AddSpacer(gap);
 	hsx_sizer->Add(hsv_box);
 
 	wxSizer *picker_sizer = new wxBoxSizer(wxHORIZONTAL);
 	picker_sizer->AddStretchSpacer();
-	picker_sizer->Add(screen_dropper_icon, 0, wxALIGN_CENTER|wxRIGHT, 5);
+	picker_sizer->Add(screen_dropper_icon, 0, wxALIGN_CENTER|wxRIGHT, gap);
 	picker_sizer->Add(screen_dropper, 0, wxALIGN_CENTER);
 	picker_sizer->AddStretchSpacer();
 	picker_sizer->Add(recent_box, 0, wxALIGN_CENTER);
@@ -665,7 +704,7 @@ DialogColorPicker::DialogColorPicker(wxWindow *parent, agi::Color initial_color,
 
 	wxSizer *input_sizer = new wxBoxSizer(wxVERTICAL);
 	input_sizer->Add(rgb_box, 0, wxEXPAND);
-	input_sizer->AddSpacer(5);
+	input_sizer->AddSpacer(gap);
 	input_sizer->Add(hsx_sizer, 0, wxEXPAND);
 	input_sizer->AddStretchSpacer(1);
 	input_sizer->Add(picker_sizer, 0, wxEXPAND);
@@ -673,8 +712,8 @@ DialogColorPicker::DialogColorPicker(wxWindow *parent, agi::Color initial_color,
 	input_sizer->Add(button_sizer, 0, wxALIGN_RIGHT);
 
 	wxSizer *main_sizer = new wxBoxSizer(wxHORIZONTAL);
-	main_sizer->Add(spectrum_box, 1, wxALL | wxEXPAND, 5);
-	main_sizer->Add(input_sizer, 0, (wxALL&~wxLEFT)|wxEXPAND, 5);
+	main_sizer->Add(spectrum_box, 1, wxALL | wxEXPAND, gap);
+	main_sizer->Add(input_sizer, 0, (wxALL&~wxLEFT)|wxEXPAND, gap);
 
 	SetSizerAndFit(main_sizer);
 
@@ -722,7 +761,7 @@ DialogColorPicker::DialogColorPicker(wxWindow *parent, agi::Color initial_color,
 
 template<int N, class Control>
 wxSizer *DialogColorPicker::MakeColorInputSizer(wxString (&labels)[N], Control *(&inputs)[N]) {
-	auto sizer = new wxFlexGridSizer(2, 5, 5);
+	auto sizer = new wxFlexGridSizer(2, FromDIP(5), FromDIP(5));
 	for (int i = 0; i < N; ++i) {
 		sizer->Add(new wxStaticText(this, -1, labels[i]), wxSizerFlags(1).Center().Left());
 		sizer->Add(inputs[i]);
@@ -892,7 +931,7 @@ void DialogColorPicker::UpdateSpectrumDisplay() {
 		previewdc.SelectObject(tempBmp);
 		previewdc.SetPen(*wxTRANSPARENT_PEN);
 		previewdc.SetBrush(wxBrush(to_wx(cur_color)));
-		previewdc.DrawRectangle(0, 0, 40, 40);
+		previewdc.DrawRectangle(0, 0, tempBmp.GetWidth(), tempBmp.GetHeight());
 	}
 	preview_box->SetBitmap(tempBmp);
 
@@ -1094,7 +1133,7 @@ void DialogColorPicker::OnDropperMouse(wxMouseEvent &evt) {
 
 	if (evt.LeftUp()) {
 		wxPoint ptdiff = evt.GetPosition() - eyedropper_grab_point;
-		bool release_now = eyedropper_is_grabbed || abs(ptdiff.x) + abs(ptdiff.y) > 7;
+		bool release_now = eyedropper_is_grabbed || abs(ptdiff.x) + abs(ptdiff.y) > FromDIP(7);
 		if (release_now) {
 			screen_dropper_icon->ReleaseMouse();
 			eyedropper_is_grabbed = false;

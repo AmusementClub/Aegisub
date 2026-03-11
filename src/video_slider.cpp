@@ -57,8 +57,9 @@ VideoSlider::VideoSlider (wxWindow* parent, agi::Context *c)
 	c->project->AddKeyframesListener(&VideoSlider::KeyframesChanged, this),
 }))
 {
-	SetClientSize(20,25);
-	SetMinSize(wxSize(20, 25));
+	auto slider_size = FromDIP(wxSize(20, 25));
+	SetClientSize(slider_size);
+	SetMinSize(slider_size);
 	SetBackgroundStyle(wxBG_STYLE_PAINT);
 
 	c->videoSlider = this;
@@ -87,17 +88,19 @@ void VideoSlider::KeyframesChanged(std::vector<int> const& newKeyframes) {
 
 int VideoSlider::GetValueAtX(int x) {
 	int w = GetClientSize().GetWidth();
+	int margin = FromDIP(5);
 	// Special case
-	if (w <= 10) return 0;
+	if (w <= margin * 2) return 0;
 
-	return (int64_t)(x-5)*(int64_t)max/(int64_t)(w-10);
+	return (int64_t)(x - margin) * (int64_t)max / (int64_t)(w - margin * 2);
 }
 
 int VideoSlider::GetXAtValue(int value) {
 	if (max <= 0) return 0;
 
 	int w = GetClientSize().GetWidth();
-	return (int64_t)value*(int64_t)(w-10)/(int64_t)max+5;
+	int margin = FromDIP(5);
+	return (int64_t)value * (int64_t)(w - margin * 2) / (int64_t)max + margin;
 }
 
 BEGIN_EVENT_TABLE(VideoSlider, wxWindow)
@@ -120,7 +123,7 @@ void VideoSlider::OnMouse(wxMouseEvent &event) {
 		// If the slider didn't already have focus, don't seek if the user
 		// clicked very close to the current location as they were probably
 		// just trying to focus the slider
-		if (!had_focus && abs(x - GetXAtValue(val)) < 4)
+		if (!had_focus && abs(x - GetXAtValue(val)) < FromDIP(4))
 			return;
 
 		// Shift click to snap to keyframe
@@ -182,6 +185,14 @@ void VideoSlider::OnPaint(wxPaintEvent &) {
 	wxAutoBufferedPaintDC dc(this);
 	int w,h;
 	GetClientSize(&w, &h);
+	const int margin = FromDIP(5);
+	const int groove_margin = FromDIP(8);
+	const int keyframe_top = FromDIP(2);
+	const int cursor_half = std::max(1, FromDIP(2));
+	const int cursor_wing = std::max(1, FromDIP(4));
+	const int cursor_tail = std::max(1, FromDIP(5));
+	const int selection_width = std::max(1, FromDIP(7));
+	const int selection_height = std::max(1, FromDIP(4));
 
 	// Colors
 	wxColour shad = wxSystemSettings::GetColour(wxSYS_COLOUR_3DDKSHADOW);
@@ -205,10 +216,10 @@ void VideoSlider::OnPaint(wxPaintEvent &) {
 	}
 
 	// Draw slider
-	x1 = 5;
-	x2 = w-5;
-	y1 = 8;
-	y2 = h-8;
+	x1 = margin;
+	x2 = w - margin;
+	y1 = groove_margin;
+	y2 = h - groove_margin;
 	dc.SetPen(wxPen(shad));
 	dc.DrawLine(x1,y1,x2,y1);
 	dc.DrawLine(x1,y1,x1,y2);
@@ -222,7 +233,7 @@ void VideoSlider::OnPaint(wxPaintEvent &) {
 		dc.SetPen(wxPen(shad));
 		for (int frame : keyframes) {
 			curX = GetXAtValue(frame);
-			dc.DrawLine(curX,2,curX,8);
+			dc.DrawLine(curX, keyframe_top, curX, groove_margin);
 		}
 	}
 
@@ -232,33 +243,33 @@ void VideoSlider::OnPaint(wxPaintEvent &) {
 	// Fill bg
 	dc.SetBrush(wxBrush(face));
 	dc.SetPen(*wxTRANSPARENT_PEN);
-	dc.DrawRectangle(curX-2,y1-1,4,y2-y1+5);
+	dc.DrawRectangle(curX - cursor_half, y1 - 1, cursor_half * 2, y2 - y1 + cursor_tail);
 	dc.SetBrush(wxNullBrush);
 
 	// Draw cursor highlights
 	dc.SetPen(wxPen(high));
-	dc.DrawLine(curX,y1-2,curX-4,y1+2);
-	dc.DrawLine(curX-3,y1+2,curX-3,y2+5);
+	dc.DrawLine(curX, y1 - cursor_half, curX - cursor_wing, y1 + cursor_half);
+	dc.DrawLine(curX - (cursor_wing - 1), y1 + cursor_half, curX - (cursor_wing - 1), y2 + cursor_tail);
 
 	// Draw cursor shades
 	dc.SetPen(wxPen(shad));
-	dc.DrawLine(curX+1,y1-1,curX+4,y1+2);
-	dc.DrawLine(curX+3,y1+2,curX+3,y2+5);
-	dc.DrawLine(curX-3,y2+4,curX+3,y2+4);
+	dc.DrawLine(curX + 1, y1 - 1, curX + cursor_wing, y1 + cursor_half);
+	dc.DrawLine(curX + (cursor_wing - 1), y1 + cursor_half, curX + (cursor_wing - 1), y2 + cursor_tail);
+	dc.DrawLine(curX - (cursor_wing - 1), y2 + cursor_tail - 1, curX + (cursor_wing - 1), y2 + cursor_tail - 1);
 
 	// Draw cursor outline
 	dc.SetPen(wxPen(bord));
-	dc.DrawLine(curX,y1-3,curX-4,y1+1);
-	dc.DrawLine(curX,y1-3,curX+4,y1+1);
-	dc.DrawLine(curX-4,y1+1,curX-4,y2+5);
-	dc.DrawLine(curX+4,y1+1,curX+4,y2+5);
-	dc.DrawLine(curX-3,y2+5,curX+4,y2+5);
-	dc.DrawLine(curX-3,y2,curX+4,y2);
+	dc.DrawLine(curX, y1 - (cursor_half + 1), curX - cursor_wing, y1 + 1);
+	dc.DrawLine(curX, y1 - (cursor_half + 1), curX + cursor_wing, y1 + 1);
+	dc.DrawLine(curX - cursor_wing, y1 + 1, curX - cursor_wing, y2 + cursor_tail);
+	dc.DrawLine(curX + cursor_wing, y1 + 1, curX + cursor_wing, y2 + cursor_tail);
+	dc.DrawLine(curX - (cursor_wing - 1), y2 + cursor_tail, curX + cursor_wing, y2 + cursor_tail);
+	dc.DrawLine(curX - (cursor_wing - 1), y2, curX + cursor_wing, y2);
 
 	// Draw selection
 	dc.SetPen(*wxTRANSPARENT_PEN);
 	dc.SetBrush(HasFocus() ? wxBrush(sel) : wxBrush(notSel));
-	dc.DrawRectangle(curX-3,y2+1,7,4);
+	dc.DrawRectangle(curX - selection_width / 2, y2 + 1, selection_width, selection_height);
 }
 
 void VideoSlider::OnFocus(wxFocusEvent &) {

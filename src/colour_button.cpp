@@ -26,9 +26,21 @@
 
 AGI_DEFINE_EVENT(EVT_COLOR, agi::Color)
 
+namespace {
+wxSize ScaleBitmapSize(wxWindow *parent, wxSize const& size) {
+	return parent->FromDIP(size);
+}
+
+wxSize ScaleButtonSize(wxWindow *parent, wxSize const& size) {
+	auto scaled = ScaleBitmapSize(parent, size);
+	auto padding = parent->FromDIP(wxSize(6, 6));
+	return wxSize(scaled.GetWidth() + padding.GetWidth(), scaled.GetHeight() + padding.GetHeight());
+}
+}
+
 ColourButton::ColourButton(wxWindow *parent, wxSize const& size, bool alpha, agi::Color col, wxValidator const& validator)
-: wxButton(parent, -1, "", wxDefaultPosition, wxSize(size.GetWidth() + 6, size.GetHeight() + 6), 0, validator)
-, bmp(size)
+: wxButton(parent, -1, "", wxDefaultPosition, ScaleButtonSize(parent, size), 0, validator)
+, bmp(ScaleBitmapSize(parent, size))
 , colour(std::move(col))
 {
 	UpdateBitmap();

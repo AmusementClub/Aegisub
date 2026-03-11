@@ -60,6 +60,7 @@ DialogDetachedVideo::DialogDetachedVideo(agi::Context *context)
 , old_slider(context->videoSlider)
 , video_open(context->project->AddVideoProviderListener(&DialogDetachedVideo::OnVideoOpen, this))
 {
+	SetSize(FromDIP(wxSize(400, 300)));
 	// Set obscure stuff
 	SetExtraStyle((GetExtraStyle() & ~wxWS_EX_BLOCK_EVENTS) | wxWS_EX_PROCESS_UI_UPDATES);
 

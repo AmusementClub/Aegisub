@@ -87,7 +87,7 @@ DialogTranslation::DialogTranslation(agi::Context *c)
 		line_number_display = new wxStaticText(this, -1, "");
 		original_box->Add(line_number_display, 0, wxBOTTOM, 5);
 
-		original_text = new wxStyledTextCtrl(this, -1, wxDefaultPosition, wxSize(320, 80));
+		original_text = new wxStyledTextCtrl(this, -1, wxDefaultPosition, FromDIP(wxSize(320, 80)));
 		original_text->SetWrapMode(wxSTC_WRAP_WORD);
 		original_text->SetMarginWidth(1, 0);
 		original_text->StyleSetForeground(1, wxColour(10, 60, 200));
@@ -100,7 +100,7 @@ DialogTranslation::DialogTranslation(agi::Context *c)
 	{
 #ifdef WITH_WXSTC
 		if (use_stc) {
-			translated_text_stc = new SubsStyledTextEditCtrl(this, wxSize(320, 80), 0, nullptr);
+			translated_text_stc = new SubsStyledTextEditCtrl(this, FromDIP(wxSize(320, 80)), 0, nullptr);
 			translated_text_stc->SetWrapMode(wxSTC_WRAP_WORD);
 			translated_text_stc->SetMarginWidth(1, 0);
 			translated_text_stc->SetFocus();
@@ -108,7 +108,7 @@ DialogTranslation::DialogTranslation(agi::Context *c)
 		}
 		else {
 #endif
-			translated_text_tc = new SubsTextEditCtrl(this, wxSize(320, 80), 0, nullptr);
+			translated_text_tc = new SubsTextEditCtrl(this, FromDIP(wxSize(320, 80)), 0, nullptr);
 			translated_text_tc->SetFocus();
 			translated_text_tc->Bind(wxEVT_CHAR_HOOK, &DialogTranslation::OnKeyDown, this);
 #ifdef WITH_WXSTC

@@ -47,12 +47,13 @@
 #include <wx/msgdlg.h>
 
 SubtitlesPreview::SubtitlesPreview(wxWindow *parent, wxSize size, int winStyle, agi::Color col)
-: wxWindow(parent, -1, wxDefaultPosition, size, winStyle)
+: wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, winStyle)
 , style(new AssStyle)
 , back_color(col)
 , sub_file(agi::make_unique<AssFile>())
 , line(new AssDialogue)
 {
+	size = parent->FromDIP(size);
 	line->Text = "{\\q2}preview";
 
 	SetStyle(*style);
@@ -62,6 +63,7 @@ SubtitlesPreview::SubtitlesPreview(wxWindow *parent, wxSize size, int winStyle, 
 	sub_file->Events.push_back(*line);
 
 	SetSizeHints(size.GetWidth(), size.GetHeight(), -1, -1);
+	SetClientSize(size);
 	wxSizeEvent evt(size);
 	OnSize(evt);
 	UpdateBitmap();

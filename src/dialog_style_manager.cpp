@@ -291,7 +291,7 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 	wxSizer *StorageButtons = make_edit_buttons(this, _("Copy to &current script ->"), &MoveToLocal, &StorageNew, &StorageEdit, &StorageCopy, &StorageDelete);
 
 	wxSizer *StorageListSizer = new wxBoxSizer(wxHORIZONTAL);
-	StorageList = new wxListBox(this, -1, wxDefaultPosition, wxSize(240,250), 0, nullptr, wxLB_EXTENDED);
+	StorageList = new wxListBox(this, -1, wxDefaultPosition, FromDIP(wxSize(240, 250)), 0, nullptr, wxLB_EXTENDED);
 	StorageListSizer->Add(StorageList,1,wxEXPAND | wxRIGHT,0);
 	StorageListSizer->Add(make_move_buttons(this, &StorageMoveUp, &StorageMoveDown, &StorageMoveTop, &StorageMoveBottom, &StorageSort), wxSizerFlags().Expand());
 
@@ -309,7 +309,7 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 	MoveImportSizer->Add(CurrentImport,1,wxEXPAND,0);
 
 	wxSizer *CurrentListSizer = new wxBoxSizer(wxHORIZONTAL);
-	CurrentList = new wxListBox(this, -1, wxDefaultPosition, wxSize(240,250), 0, nullptr, wxLB_EXTENDED);
+	CurrentList = new wxListBox(this, -1, wxDefaultPosition, FromDIP(wxSize(240, 250)), 0, nullptr, wxLB_EXTENDED);
 	CurrentListSizer->Add(CurrentList,1,wxEXPAND | wxRIGHT,0);
 	CurrentListSizer->Add(make_move_buttons(this, &CurrentMoveUp, &CurrentMoveDown, &CurrentMoveTop, &CurrentMoveBottom, &CurrentSort), wxSizerFlags().Expand());
 

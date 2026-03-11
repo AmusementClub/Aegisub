@@ -65,6 +65,7 @@ public:
 DialogAutosave::DialogAutosave(wxWindow *parent)
 : d(parent, -1, _("Open autosave file"), wxDefaultPosition, wxSize(800, 350), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 {
+	d.SetSize(d.FromDIP(wxSize(800, 350)));
 	d.SetIcon(GETICON(open_toolbutton_16));
 
 	wxSizer *files_box = new wxStaticBoxSizer(wxVERTICAL, &d, _("Files"));

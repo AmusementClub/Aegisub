@@ -187,11 +187,11 @@ void OptionPage::OptionChoice(wxFlexGridSizer *flex, const wxString &name, const
 
 wxFlexGridSizer* OptionPage::PageSizer(wxString name) {
 	auto tmp_sizer = new wxStaticBoxSizer(wxHORIZONTAL, this, name);
-	sizer->Add(tmp_sizer, 0,wxEXPAND, 5);
-	auto flex = new wxFlexGridSizer(2,5,5);
+	sizer->Add(tmp_sizer, 0,wxEXPAND, FromDIP(5));
+	auto flex = new wxFlexGridSizer(2, FromDIP(5), FromDIP(5));
 	flex->AddGrowableCol(0,1);
-	tmp_sizer->Add(flex, 1, wxEXPAND, 5);
-	sizer->AddSpacer(8);
+	tmp_sizer->Add(flex, 1, wxEXPAND, FromDIP(5));
+	sizer->AddSpacer(FromDIP(8));
 	return flex;
 }
 

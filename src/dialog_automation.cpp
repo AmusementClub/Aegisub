@@ -113,7 +113,7 @@ DialogAutomation::DialogAutomation(agi::Context *c)
 	SetIcon(GETICON(automation_toolbutton_16));
 
 	// create main controls
-	list = new wxListView(this, -1, wxDefaultPosition, wxSize(600, 175), wxLC_REPORT|wxLC_SINGLE_SEL);
+	list = new wxListView(this, -1, wxDefaultPosition, FromDIP(wxSize(600, 175)), wxLC_REPORT|wxLC_SINGLE_SEL);
 	wxButton *add_button = new wxButton(this, -1, _("&Add"));
 	remove_button = new wxButton(this, -1, _("&Remove"));
 	reload_button = new wxButton(this, -1, _("Re&load"));

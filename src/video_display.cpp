@@ -94,10 +94,10 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 , retina_helper(agi::make_unique<RetinaHelper>(this))
 , scale_factor(retina_helper->GetScaleFactor())
 , scale_factor_connection(retina_helper->AddScaleFactorListener([=](int new_scale_factor) {
-	double new_zoom = zoomValue * new_scale_factor / scale_factor;
 	scale_factor = new_scale_factor;
-	SetZoom(new_zoom);
+	RefreshVideoScale();
 }))
+, dpi_scale_option_connection(OPT_SUB("Video/Scale with DPI", [=](agi::OptionValue const&) { RefreshVideoScale(); }))
 {
 	zoomBox->SetValue(fmt_wx("%g%%", zoomValue * 100.));
 	zoomBox->Bind(wxEVT_COMBOBOX, &VideoDisplay::SetZoomFromBox, this);
@@ -134,6 +134,17 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 VideoDisplay::~VideoDisplay () {
 	Unload();
 	con->videoController->Unbind(EVT_FRAME_READY, &VideoDisplay::UploadFrameData, this);
+}
+
+double VideoDisplay::GetVideoScaleFactor() const {
+	if (!OPT_GET("Video/Scale with DPI")->GetBool())
+		return 1.0;
+
+#ifdef __WXMSW__
+	return GetDPIScaleFactor();
+#else
+	return scale_factor;
+#endif
 }
 
 bool VideoDisplay::InitContext() {
@@ -327,7 +338,7 @@ void VideoDisplay::UpdateSize() {
 	if (!provider || !IsShownOnScreen()) return;
 
 	videoSize.Set(provider->GetWidth(), provider->GetHeight());
-	videoSize *= zoomValue;
+	videoSize *= zoomValue * GetVideoScaleFactor();
 	if (con->videoController->GetAspectRatioType() != AspectRatio::Default)
 		videoSize.SetWidth(videoSize.GetHeight() * con->videoController->GetAspectRatioValue());
 
@@ -349,6 +360,11 @@ void VideoDisplay::UpdateSize() {
 	}
 
 	PositionVideo();
+}
+
+void VideoDisplay::RefreshVideoScale() {
+	if (con->project->VideoProvider())
+		UpdateSize();
 }
 
 void VideoDisplay::OnSizeEvent(wxSizeEvent &event) {

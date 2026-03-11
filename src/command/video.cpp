@@ -603,6 +603,23 @@ struct video_opt_autoscroll final : public Command {
 	}
 };
 
+struct video_opt_scale_with_dpi final : public validator_video_loaded {
+	CMD_NAME("video/opt/scale_with_dpi")
+	STR_MENU("Scale video with monitor DPI")
+	STR_DISP("Scale video with monitor DPI")
+	STR_HELP("Toggle whether the video display scales with the current monitor DPI")
+	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
+
+	bool IsActive(const agi::Context *) override {
+		return OPT_GET("Video/Scale with DPI")->GetBool();
+	}
+
+	void operator()(agi::Context *c) override {
+		OPT_SET("Video/Scale with DPI")->SetBool(!OPT_GET("Video/Scale with DPI")->GetBool());
+		c->videoDisplay->SetZoom(c->videoDisplay->GetZoom());
+	}
+};
+
 struct video_play final : public validator_video_loaded {
 	CMD_NAME("video/play")
 	CMD_ICON(button_play)
@@ -767,6 +784,7 @@ namespace cmd {
 		reg(agi::make_unique<video_open>());
 		reg(agi::make_unique<video_open_dummy>());
 		reg(agi::make_unique<video_opt_autoscroll>());
+		reg(agi::make_unique<video_opt_scale_with_dpi>());
 		reg(agi::make_unique<video_play>());
 		reg(agi::make_unique<video_play_line>());
 		reg(agi::make_unique<video_show_overscan>());

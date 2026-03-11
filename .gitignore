@@ -92,3 +92,4 @@ vendor/luajit/src/luajit
 .vs
 /build-dir
 /vendor
+/tools

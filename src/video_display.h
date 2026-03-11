@@ -110,8 +110,11 @@ class VideoDisplay final : public wxGLCanvas {
 	std::unique_ptr<RetinaHelper> retina_helper;
 	int scale_factor;
 	agi::signal::Connection scale_factor_connection;
+	agi::signal::Connection dpi_scale_option_connection;
 
 	bool render_requested;
+
+	double GetVideoScaleFactor() const;
 
 	/// @brief Draw an overscan mask
 	/// @param horizontal_percent The percent of the video reserved horizontally
@@ -128,6 +131,7 @@ class VideoDisplay final : public wxGLCanvas {
 	/// @brief Set the size of the display based on the current zoom and video resolution
 	void UpdateSize();
 	void PositionVideo();
+	void RefreshVideoScale();
 	/// Set the zoom level to that indicated by the dropdown
 	void SetZoomFromBox(wxCommandEvent&);
 	/// Set the zoom level to that indicated by the text

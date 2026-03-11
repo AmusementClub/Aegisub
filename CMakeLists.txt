@@ -314,7 +314,14 @@ target_link_libraries(libaegisub PRIVATE luajit luabins)
 
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config.cpp" "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config.h"
-    DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config_platform.json"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/libresrc/manifest.respack"
+        "${PROJECT_SOURCE_DIR}/src/libresrc/default_config.json"
+        "${PROJECT_SOURCE_DIR}/src/libresrc/default_hotkey.json"
+        "${PROJECT_SOURCE_DIR}/src/libresrc/default_menu.json"
+        "${PROJECT_SOURCE_DIR}/src/libresrc/default_mru.json"
+        "${PROJECT_SOURCE_DIR}/src/libresrc/default_toolbar.json"
+        "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config_platform.json"
     COMMAND luajit-minilua "${PROJECT_SOURCE_DIR}/tools/respack.lua" manifest.respack default_config.cpp default_config.h
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc"
 )

@@ -115,6 +115,7 @@ AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 	SetMinimumSizeY(panel->GetSize().GetHeight());
 
 	audioDisplay->Bind(wxEVT_MOUSEWHEEL, &AudioBox::OnMouseWheel, this);
+	zoom_preview_timer.Bind(wxEVT_TIMER, &AudioBox::OnZoomPreviewTimer, this);
 
 	audioDisplay->SetZoomLevel(-HorizontalZoom->GetValue());
 	audioDisplay->SetAmplitudeScale(pow(mid(1, VerticalZoom->GetValue(), 100) / 50.0, 3));
@@ -145,6 +146,7 @@ void AudioBox::OnMouseWheel(wxMouseEvent &evt) {
 		mouse_zoom_accum += evt.GetWheelRotation();
 		int zoom_delta = mouse_zoom_accum / evt.GetWheelDelta();
 		mouse_zoom_accum %= evt.GetWheelDelta();
+		FlushPendingZoomPreview();
 		SetHorizontalZoom(audioDisplay->GetZoomLevel() + zoom_delta);
 	}
 }
@@ -169,7 +171,23 @@ void AudioBox::OnSashDrag(wxSashEvent &event) {
 void AudioBox::OnHorizontalZoom(wxScrollEvent &event) {
 	// Negate the value since we want zoom out to be on bottom and zoom in on top,
 	// but the control doesn't want negative on bottom and positive on top.
-	SetHorizontalZoom(-event.GetPosition());
+	int new_zoom = -event.GetPosition();
+	auto event_type = event.GetEventType();
+	if (event_type == wxEVT_SCROLL_THUMBTRACK) {
+		pending_horizontal_zoom = new_zoom;
+		horizontal_zoom_pending = true;
+		if (!zoom_preview_timer.IsRunning())
+			zoom_preview_timer.Start(zoom_preview_interval_ms, true);
+	}
+	else if (event_type == wxEVT_SCROLL_THUMBRELEASE || event_type == wxEVT_SCROLL_CHANGED) {
+		pending_horizontal_zoom = new_zoom;
+		horizontal_zoom_pending = true;
+		FlushPendingZoomPreview();
+	}
+	else {
+		FlushPendingZoomPreview();
+		SetHorizontalZoom(new_zoom);
+	}
 }
 
 void AudioBox::SetHorizontalZoom(int new_zoom) {
@@ -178,14 +196,57 @@ void AudioBox::SetHorizontalZoom(int new_zoom) {
 	OPT_SET("Audio/Zoom/Horizontal")->SetInt(new_zoom);
 }
 
+void AudioBox::ApplyVerticalZoomPos(int pos) {
+	OPT_SET("Audio/Zoom/Vertical")->SetInt(pos);
+	audioDisplay->SetAmplitudeScale(pow(pos / 50.0, 3));
+	if (!VolumeBar->IsEnabled()) {
+		VolumeBar->SetValue(pos);
+		controller->SetVolume(pow(pos / 50.0, 3));
+	}
+}
+
+void AudioBox::FlushPendingZoomPreview() {
+	if (zoom_preview_timer.IsRunning())
+		zoom_preview_timer.Stop();
+
+	if (horizontal_zoom_pending) {
+		SetHorizontalZoom(pending_horizontal_zoom);
+		horizontal_zoom_pending = false;
+	}
+
+	if (vertical_zoom_pending) {
+		ApplyVerticalZoomPos(pending_vertical_zoom_pos);
+		vertical_zoom_pending = false;
+	}
+}
+
+void AudioBox::OnZoomPreviewTimer(wxTimerEvent &) {
+	FlushPendingZoomPreview();
+}
+
 void AudioBox::OnVerticalZoom(wxScrollEvent &event) {
 	int pos = mid(1, event.GetPosition(), 100);
-	OPT_SET("Audio/Zoom/Vertical")->SetInt(pos);
 	double value = pow(pos / 50.0, 3);
-	audioDisplay->SetAmplitudeScale(value);
 	if (!VolumeBar->IsEnabled()) {
 		VolumeBar->SetValue(pos);
 		controller->SetVolume(value);
+	}
+
+	auto event_type = event.GetEventType();
+	if (event_type == wxEVT_SCROLL_THUMBTRACK) {
+		pending_vertical_zoom_pos = pos;
+		vertical_zoom_pending = true;
+		if (!zoom_preview_timer.IsRunning())
+			zoom_preview_timer.Start(zoom_preview_interval_ms, true);
+	}
+	else if (event_type == wxEVT_SCROLL_THUMBRELEASE || event_type == wxEVT_SCROLL_CHANGED) {
+		pending_vertical_zoom_pos = pos;
+		vertical_zoom_pending = true;
+		FlushPendingZoomPreview();
+	}
+	else {
+		FlushPendingZoomPreview();
+		ApplyVerticalZoomPos(pos);
 	}
 }
 

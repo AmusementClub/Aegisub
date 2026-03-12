@@ -29,6 +29,7 @@
 
 #include <wx/defs.h>
 #include <wx/sashwin.h>
+#include <wx/timer.h>
 
 #include <libaegisub/signal.h>
 
@@ -71,13 +72,23 @@ class AudioBox final : public wxSashWindow {
 
 	// Mouse wheel zoom accumulator
 	int mouse_zoom_accum = 0;
+	wxTimer zoom_preview_timer;
+	int pending_horizontal_zoom = 0;
+	int pending_vertical_zoom_pos = 0;
+	bool horizontal_zoom_pending = false;
+	bool vertical_zoom_pending = false;
+
+	static const int zoom_preview_interval_ms = 16;
 
 	void SetHorizontalZoom(int new_zoom);
+	void ApplyVerticalZoomPos(int pos);
+	void FlushPendingZoomPreview();
 	void OnAudioOpen();
 	void OnHorizontalZoom(wxScrollEvent &event);
 	void OnMouseWheel(wxMouseEvent &evt);
 	void OnSashDrag(wxSashEvent &event);
 	void OnVerticalLink(agi::OptionValue const& opt);
+	void OnZoomPreviewTimer(wxTimerEvent &event);
 	void OnVerticalZoom(wxScrollEvent &event);
 	void OnVolume(wxScrollEvent &event);
 

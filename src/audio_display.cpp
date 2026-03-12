@@ -639,6 +639,8 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 	scrollbar->SetPosition(scroll_left);
 	timeline->SetPosition(scroll_left);
 	Refresh();
+	if (audio_marker)
+		Update();
 }
 
 void AudioDisplay::ScrollTimeRangeInView(const TimeRange &range)
@@ -1337,6 +1339,8 @@ void AudioDisplay::OnSelectionChanged()
 	}
 
 	RefreshRect(scrollbar->GetBounds(), false);
+	if (audio_marker)
+		Update();
 }
 
 void AudioDisplay::OnScrollTimer(wxTimerEvent &event)
@@ -1369,9 +1373,13 @@ void AudioDisplay::OnStyleRangesChanged()
 	for (auto pair : asrm) style_ranges.push_back(pair);
 
 	RefreshRect(wxRect(0, audio_top, GetClientSize().GetWidth(), audio_height), false);
+	if (audio_marker)
+		Update();
 }
 
 void AudioDisplay::OnMarkerMoved()
 {
 	RefreshRect(wxRect(0, audio_top, GetClientSize().GetWidth(), audio_height), false);
+	if (audio_marker)
+		Update();
 }

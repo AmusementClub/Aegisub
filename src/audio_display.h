@@ -136,6 +136,11 @@ class AudioDisplay: public wxWindow {
 	wxString track_cursor_label;
 	/// Bounding rectangle last drawn track cursor label
 	wxRect track_cursor_label_rect;
+	wxRect GetTrackCursorLineRect(int pos) const;
+	wxRect CalcTrackCursorLabelRect(wxDC &dc) const;
+	void EnsurePaintBitmap();
+	void RepaintBufferRect(wxDC &dc, wxRect rect);
+	void PresentBufferRect(wxRect rect);
 	/// @brief Move the tracking cursor
 	/// @param new_pos   New absolute pixel position of the tracking cursor
 	/// @param show_time Display timestamp by the tracking cursor?

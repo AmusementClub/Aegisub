@@ -60,7 +60,7 @@ void VisualToolDrag::SetToolbar(wxToolBar *tb) {
 	if (toolbar)
 		toolbar->Unbind(wxEVT_TOOL, &VisualToolDrag::OnSubTool, this);
 	toolbar = tb;
-	int icon_size = OPT_GET("Video/Scale with DPI")->GetBool() ? toolbar->FromDIP(16) : 16;
+	int icon_size = toolbar->FromDIP(16);
 	toolbar->SetToolBitmapSize(wxSize(icon_size, icon_size));
 	toolbar->AddSeparator();
 	move_pos_button = toolbar->AddTool(-1, _("Toggle between \\move and \\pos"), ICON(visual_move_conv_move))->GetId();

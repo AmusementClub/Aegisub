@@ -56,7 +56,7 @@ void VisualToolVectorClip::SetToolbar(wxToolBar *toolBar) {
 
 	toolBar->AddSeparator();
 #ifdef __WXMSW__
-	int icon_size = OPT_GET("Video/Scale with DPI")->GetBool() ? toolBar->FromDIP(16) : 16;
+	int icon_size = toolBar->FromDIP(16);
 #else
 	int icon_size = OPT_GET("App/Toolbar Icon Size")->GetInt();
 #endif

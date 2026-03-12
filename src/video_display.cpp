@@ -322,8 +322,12 @@ void VideoDisplay::PositionVideo() {
 	}
 
 	if (tool)
-		tool->SetDisplayArea(viewport_left / scale_factor, viewport_top / scale_factor,
-		                     viewport_width / scale_factor, viewport_height / scale_factor);
+		tool->SetDisplayArea(
+			static_cast<int>(viewport_left / GetWindowScaleFactor(this)),
+			static_cast<int>(viewport_top / GetWindowScaleFactor(this)),
+			static_cast<int>(viewport_width / GetWindowScaleFactor(this)),
+			static_cast<int>(viewport_height / GetWindowScaleFactor(this))
+		);
 
 	Render();
 }
@@ -458,8 +462,12 @@ void VideoDisplay::SetTool(std::unique_ptr<VisualToolBase> new_tool) {
 	else {
 		// UpdateSize fits the window to the video, which we don't want to do
 		GetGrandParent()->Layout();
-		tool->SetDisplayArea(viewport_left / scale_factor, viewport_top / scale_factor,
-		                     viewport_width / scale_factor, viewport_height / scale_factor);
+		tool->SetDisplayArea(
+			static_cast<int>(viewport_left / GetWindowScaleFactor(this)),
+			static_cast<int>(viewport_top / GetWindowScaleFactor(this)),
+			static_cast<int>(viewport_width / GetWindowScaleFactor(this)),
+			static_cast<int>(viewport_height / GetWindowScaleFactor(this))
+		);
 	}
 }
 

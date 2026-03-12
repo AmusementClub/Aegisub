@@ -74,7 +74,7 @@ namespace {
 		agi::signal::Connection video_dpi_slot;
 
 		bool IsVideoToolbar() const {
-			return name == "video" || name == "visual_tools";
+			return name == "video";
 		}
 
 		int GetVideoToolbarIconSize() const {

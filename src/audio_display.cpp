@@ -311,7 +311,7 @@ public:
 	{
 		int width, height;
 		display->GetTextExtent("0123456789:.", &width, &height);
-		bounds.height = height + 4;
+		bounds.height = height + display->FromDIP(4);
 	}
 
 	void SetColourScheme(std::string const& name)
@@ -431,15 +431,17 @@ public:
 		int next_scale_mark_pos;
 		int last_text_right = -1;
 		int last_hour = -1, last_minute = -1;
+		int major_tick_height = display->FromDIP(6);
+		int minor_tick_height = display->FromDIP(4);
 		if (duration < 3600) last_hour = 0; // Trick to only show hours if audio is longer than 1 hour
 		do {
 			next_scale_mark_pos = int(next_scale_mark * scale_minor_divisor / ms_per_pixel) - pixel_left;
 			bool mark_is_major = next_scale_mark % scale_major_modulo == 0;
 
 			if (mark_is_major)
-				dc.DrawLine(next_scale_mark_pos, bottom-6, next_scale_mark_pos, bottom-1);
+				dc.DrawLine(next_scale_mark_pos, bottom - major_tick_height, next_scale_mark_pos, bottom-1);
 			else
-				dc.DrawLine(next_scale_mark_pos, bottom-4, next_scale_mark_pos, bottom-1);
+				dc.DrawLine(next_scale_mark_pos, bottom - minor_tick_height, next_scale_mark_pos, bottom-1);
 
 			// Print time labels on major scale marks
 			if (mark_is_major && next_scale_mark_pos > last_text_right)
@@ -829,6 +831,7 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 	for (wxRegionIterator region(GetUpdateRegion()); region; ++region)
 	{
 		wxRect updrect = region.GetRect();
+		int foot_size = FromDIP(6);
 
 		redraw_scrollbar |= scrollbar->GetBounds().Intersects(updrect);
 		redraw_timeline |= timeline->GetBounds().Intersects(updrect);
@@ -902,6 +905,7 @@ void AudioDisplay::PaintMarkers(wxDC &dc, TimeRange updtime)
 
 void AudioDisplay::PaintFoot(wxDC &dc, int marker_x, int dir)
 {
+	int foot_size = FromDIP(6);
 	wxPoint foot_top[3] = { wxPoint(foot_size * dir, 0), wxPoint(0, 0), wxPoint(0, foot_size) };
 	wxPoint foot_bot[3] = { wxPoint(foot_size * dir, 0), wxPoint(0, -foot_size), wxPoint(0, 0) };
 	dc.DrawPolygon(3, foot_top, marker_x, audio_top);
@@ -924,18 +928,19 @@ void AudioDisplay::PaintLabels(wxDC &dc, TimeRange updtime)
 		wxSize extent = dc.GetTextExtent(label.text);
 		int left = RelativeXFromTime(label.range.begin());
 		int width = AbsoluteXFromTime(label.range.length());
+		int label_top = audio_top + FromDIP(4);
 
 		// If it doesn't fit, truncate
 		if (width < extent.GetWidth())
 		{
-			dc.SetClippingRegion(left, audio_top + 4, width, extent.GetHeight());
-			dc.DrawText(label.text, left, audio_top + 4);
+			dc.SetClippingRegion(left, label_top, width, extent.GetHeight());
+			dc.DrawText(label.text, left, label_top);
 			dc.DestroyClippingRegion();
 		}
 		// Otherwise center in the range
 		else
 		{
-			dc.DrawText(label.text, left + (width - extent.GetWidth()) / 2, audio_top + 4);
+			dc.DrawText(label.text, left + (width - extent.GetWidth()) / 2, label_top);
 		}
 	}
 }
@@ -955,8 +960,9 @@ void AudioDisplay::PaintTrackCursor(wxDC &dc) {
 	fc.Set(font);
 
 	wxSize label_size(dc.GetTextExtent(track_cursor_label));
-	wxPoint label_pos(track_cursor_pos - scroll_left - label_size.x/2, audio_top + 2);
-	label_pos.x = mid(2, label_pos.x, GetClientSize().GetWidth() - label_size.x - 2);
+	int label_margin = FromDIP(2);
+	wxPoint label_pos(track_cursor_pos - scroll_left - label_size.x/2, audio_top + label_margin);
+	label_pos.x = mid(label_margin, label_pos.x, GetClientSize().GetWidth() - label_size.x - label_margin);
 
 	int old_bg_mode = dc.GetBackgroundMode();
 	dc.SetBackgroundMode(wxTRANSPARENT);
@@ -973,9 +979,9 @@ void AudioDisplay::PaintTrackCursor(wxDC &dc) {
 	dc.DrawText(track_cursor_label, label_pos.x, label_pos.y);
 	dc.SetBackgroundMode(old_bg_mode);
 
-	label_pos.x -= 2;
-	label_pos.y -= 2;
-	label_size.IncBy(4, 4);
+	label_pos.x -= label_margin;
+	label_pos.y -= label_margin;
+	label_size.IncBy(label_margin * 2, label_margin * 2);
 	// If the rendered text changes size we have to draw it an extra time to make sure the entire thing was drawn
 	bool need_extra_redraw = track_cursor_label_rect.GetSize() != label_size;
 	track_cursor_label_rect.SetPosition(label_pos);

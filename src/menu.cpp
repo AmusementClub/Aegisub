@@ -93,8 +93,11 @@ public:
 
 		if (mru->empty()) {
 			Resize(1);
-			items[0]->Enable(false);
-			items[0]->SetItemLabel(_("Empty"));
+			if (items[0]->IsEnabled())
+				items[0]->Enable(false);
+			wxString emptyLabel = _("Empty");
+			if (items[0]->GetItemLabel() != emptyLabel)
+				items[0]->SetItemLabel(emptyLabel);
 			return;
 		}
 
@@ -103,10 +106,13 @@ public:
 			wxString name = it->wstring();
 			if (!name.StartsWith("?"))
 				name = it->filename().wstring();
-			items[i]->SetItemLabel(fmt_wx("%s%d %s",
+			wxString newLabel = fmt_wx("%s%d %s",
 				i <= 9 ? "&" : "", i + 1,
-				name));
-			items[i]->Enable(true);
+				name);
+			if (items[i]->GetItemLabel() != newLabel)
+				items[i]->SetItemLabel(newLabel);
+			if (!items[i]->IsEnabled())
+				items[i]->Enable(true);
 		}
 	}
 };
@@ -132,6 +138,9 @@ class CommandManager {
 
 	/// Project context
 	agi::Context *context;
+	/// True while a menu popup session is active; used to avoid repeated
+	/// updates when switching between menu titles/submenus.
+	bool menu_open_active = false;
 
 	/// Connection for hotkey change signal
 	agi::signal::Connection hotkeys_changed;
@@ -141,18 +150,23 @@ class CommandManager {
 		cmd::Command *c = cmd::get(item.first);
 		int flags = c->Type();
 		if (flags & cmd::COMMAND_VALIDATE) {
-			item.second->Enable(c->Validate(context));
+			bool enabled = c->Validate(context);
+			if (item.second->IsEnabled() != enabled)
+				item.second->Enable(enabled);
 			flags = c->Type();
 		}
 		if (flags & cmd::COMMAND_DYNAMIC_NAME)
 			UpdateItemName(item);
-		if (flags & cmd::COMMAND_DYNAMIC_HELP)
-			item.second->SetHelp(c->StrHelp());
+		if (flags & cmd::COMMAND_DYNAMIC_HELP) {
+			wxString help = c->StrHelp();
+			if (item.second->GetHelp() != help)
+				item.second->SetHelp(help);
+		}
 		if (flags & cmd::COMMAND_RADIO || flags & cmd::COMMAND_TOGGLE) {
 			bool check = c->IsActive(context);
 			// Don't call Check(false) on radio items as this causes wxGtk to
 			// send a menu clicked event, and it should be a no-op anyway
-			if (check || flags & cmd::COMMAND_TOGGLE)
+			if ((check || flags & cmd::COMMAND_TOGGLE) && item.second->IsChecked() != check)
 				item.second->Check(check);
 		}
 	}
@@ -164,7 +178,9 @@ class CommandManager {
 			text = c->StrMenu(context);
 		else
 			text = item.second->GetItemLabel().BeforeFirst('\t');
-		item.second->SetItemLabel(text + to_wx("\t" + hotkey::get_hotkey_str_first("Default", c->name())));
+		wxString newLabel = text + to_wx("\t" + hotkey::get_hotkey_str_first("Default", c->name()));
+		if (item.second->GetItemLabel() != newLabel)
+			item.second->SetItemLabel(newLabel);
 	}
 
 public:
@@ -239,11 +255,36 @@ public:
 		parent->AppendSubMenu(mru.back(), _("&Recent"));
 	}
 
-	void OnMenuOpen(wxMenuEvent &) {
+	void OnMenuOpen(wxMenuEvent &evt) {
 		if (!context)
 			return;
-		for (auto const& item : dynamic_items) UpdateItem(item);
-		for (auto item : mru) item->Update();
+		if (menu_open_active)
+			return;
+		menu_open_active = true;
+
+		wxMenu *opened_menu = evt.GetMenu();
+		bool limit_scope = opened_menu != nullptr;
+
+		for (auto const& item : dynamic_items) {
+			if (limit_scope && item.second->GetMenu() != opened_menu)
+				continue;
+			UpdateItem(item);
+		}
+
+		if (limit_scope) {
+			for (auto item : mru) {
+				if (item == opened_menu)
+					item->Update();
+			}
+		}
+		else {
+			for (auto item : mru)
+				item->Update();
+		}
+	}
+
+	void OnMenuClose(wxMenuEvent &) {
+		menu_open_active = false;
 	}
 
 	void OnMenuClick(wxCommandEvent &evt) {
@@ -537,9 +578,11 @@ namespace menu {
 
 #ifdef __WXMAC__
 		menu->Bind(wxEVT_MENU_OPEN, &CommandManager::OnMenuOpen, &menu->cm);
+		menu->Bind(wxEVT_MENU_CLOSE, &CommandManager::OnMenuClose, &menu->cm);
 		menu->Bind(wxEVT_MENU, &CommandManager::OnMenuClick, &menu->cm);
 #else
 		window->Bind(wxEVT_MENU_OPEN, &CommandManager::OnMenuOpen, &menu->cm);
+		window->Bind(wxEVT_MENU_CLOSE, &CommandManager::OnMenuClose, &menu->cm);
 		window->Bind(wxEVT_MENU, &CommandManager::OnMenuClick, &menu->cm);
 #endif
 
@@ -557,13 +600,13 @@ namespace menu {
 		auto menu = agi::make_unique<CommandMenu>(id_base, c);
 		build_menu(name, c, &menu->cm, menu.get());
 		menu->Bind(wxEVT_MENU_OPEN, &CommandManager::OnMenuOpen, &menu->cm);
+		menu->Bind(wxEVT_MENU_CLOSE, &CommandManager::OnMenuClose, &menu->cm);
 		menu->Bind(wxEVT_MENU, &CommandManager::OnMenuClick, &menu->cm);
 		return std::unique_ptr<wxMenu>(menu.release());
 	}
 
 	void OpenPopupMenu(wxMenu *menu, wxWindow *parent_window) {
-		wxMenuEvent evt;
-		evt.SetEventType(wxEVT_MENU_OPEN);
+		wxMenuEvent evt(wxEVT_MENU_OPEN, wxID_ANY, menu);
 		menu->ProcessEvent(evt);
 		parent_window->PopupMenu(menu);
 	}

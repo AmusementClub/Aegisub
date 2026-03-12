@@ -181,7 +181,7 @@ void BaseGrid::UpdateStyle() {
 	dc.SetFont(font);
 
 	// Set line height
-	lineHeight = dc.GetCharHeight() + FromDIP(4);
+	lineHeight = dc.GetCharHeight() + 4;
 
 	// Set row brushes
 	row_colors.Default.SetColour(to_wx(OPT_GET("Colour/Subtitle Grid/Background/Background")->GetColor()));

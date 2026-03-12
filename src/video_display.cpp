@@ -54,7 +54,6 @@
 #include <libaegisub/make_unique.h>
 
 #include <algorithm>
-#include <cmath>
 #include <wx/combobox.h>
 #include <wx/menu.h>
 #include <wx/textctrl.h>
@@ -322,18 +321,9 @@ void VideoDisplay::PositionVideo() {
 		}
 	}
 
-	if (tool) {
-		double const scale = GetWindowScaleFactor(this);
-		auto scale_to_int = [scale](int v) {
-			return static_cast<int>(std::lround(v / scale));
-		};
-		tool->SetDisplayArea(
-			scale_to_int(viewport_left),
-			scale_to_int(viewport_top),
-			scale_to_int(viewport_width),
-			scale_to_int(viewport_height)
-		);
-	}
+	if (tool)
+		tool->SetDisplayArea(viewport_left / scale_factor, viewport_top / scale_factor,
+			viewport_width / scale_factor, viewport_height / scale_factor);
 
 	Render();
 }
@@ -361,6 +351,7 @@ void VideoDisplay::UpdateSize() {
 		SetMinClientSize(videoSize / scale_factor);
 		SetMaxClientSize(videoSize / scale_factor);
 
+		GetParent()->Layout();
 		GetGrandParent()->Layout();
 	}
 
@@ -371,6 +362,7 @@ void VideoDisplay::RefreshVideoScale() {
 	if (tool && toolBar) {
 		toolBar->ClearTools();
 		tool->SetToolbar(toolBar);
+		GetParent()->Layout();
 		GetGrandParent()->Layout();
 	}
 	if (con->project->VideoProvider())
@@ -467,17 +459,10 @@ void VideoDisplay::SetTool(std::unique_ptr<VisualToolBase> new_tool) {
 		UpdateSize();
 	else {
 		// UpdateSize fits the window to the video, which we don't want to do
+		GetParent()->Layout();
 		GetGrandParent()->Layout();
-		double const scale = GetWindowScaleFactor(this);
-		auto scale_to_int = [scale](int v) {
-			return static_cast<int>(std::lround(v / scale));
-		};
-		tool->SetDisplayArea(
-			scale_to_int(viewport_left),
-			scale_to_int(viewport_top),
-			scale_to_int(viewport_width),
-			scale_to_int(viewport_height)
-		);
+		tool->SetDisplayArea(viewport_left / scale_factor, viewport_top / scale_factor,
+			viewport_width / scale_factor, viewport_height / scale_factor);
 	}
 }
 

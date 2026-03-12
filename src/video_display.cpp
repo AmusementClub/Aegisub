@@ -54,6 +54,7 @@
 #include <libaegisub/make_unique.h>
 
 #include <algorithm>
+#include <cmath>
 #include <wx/combobox.h>
 #include <wx/menu.h>
 #include <wx/textctrl.h>
@@ -321,13 +322,18 @@ void VideoDisplay::PositionVideo() {
 		}
 	}
 
-	if (tool)
+	if (tool) {
+		double const scale = GetWindowScaleFactor(this);
+		auto scale_to_int = [scale](int v) {
+			return static_cast<int>(std::lround(v / scale));
+		};
 		tool->SetDisplayArea(
-			static_cast<int>(viewport_left / GetWindowScaleFactor(this)),
-			static_cast<int>(viewport_top / GetWindowScaleFactor(this)),
-			static_cast<int>(viewport_width / GetWindowScaleFactor(this)),
-			static_cast<int>(viewport_height / GetWindowScaleFactor(this))
+			scale_to_int(viewport_left),
+			scale_to_int(viewport_top),
+			scale_to_int(viewport_width),
+			scale_to_int(viewport_height)
 		);
+	}
 
 	Render();
 }
@@ -462,11 +468,15 @@ void VideoDisplay::SetTool(std::unique_ptr<VisualToolBase> new_tool) {
 	else {
 		// UpdateSize fits the window to the video, which we don't want to do
 		GetGrandParent()->Layout();
+		double const scale = GetWindowScaleFactor(this);
+		auto scale_to_int = [scale](int v) {
+			return static_cast<int>(std::lround(v / scale));
+		};
 		tool->SetDisplayArea(
-			static_cast<int>(viewport_left / GetWindowScaleFactor(this)),
-			static_cast<int>(viewport_top / GetWindowScaleFactor(this)),
-			static_cast<int>(viewport_width / GetWindowScaleFactor(this)),
-			static_cast<int>(viewport_height / GetWindowScaleFactor(this))
+			scale_to_int(viewport_left),
+			scale_to_int(viewport_top),
+			scale_to_int(viewport_width),
+			scale_to_int(viewport_height)
 		);
 	}
 }

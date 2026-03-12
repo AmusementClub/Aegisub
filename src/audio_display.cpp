@@ -131,8 +131,8 @@ public:
 }
 
 class AudioDisplay::AudioDisplayScrollbar final : public AudioDisplayInteractionObject {
-	static const int height = 15;
-	static const int min_width = 10;
+	static const int base_height = 15;
+	static const int base_min_width = 10;
 
 	wxRect bounds;
 	wxRect thumb;
@@ -151,11 +151,14 @@ class AudioDisplay::AudioDisplayScrollbar final : public AudioDisplayInteraction
 	/// Containing display to send scroll events to
 	AudioDisplay *display;
 
+	int GetHeight() const { return display->FromDIP(base_height); }
+	int GetMinWidth() const { return display->FromDIP(base_min_width); }
+
 	// Recalculate thumb bounds from position and length data
 	void RecalculateThumb()
 	{
 		thumb.width = int((int64_t)bounds.width * page_length / data_length);
-		thumb.height = height;
+		thumb.height = GetHeight();
 		thumb.x = int((int64_t)bounds.width * position / data_length);
 		thumb.y = bounds.y;
 	}
@@ -170,9 +173,9 @@ public:
 	void SetDisplaySize(const wxSize &display_size)
 	{
 		bounds.x = 0;
-		bounds.y = display_size.y - height;
+		bounds.y = display_size.y - GetHeight();
 		bounds.width = display_size.x;
-		bounds.height = height;
+		bounds.height = GetHeight();
 		page_length = display_size.x;
 
 		RecalculateThumb();
@@ -266,14 +269,13 @@ public:
 		dc.SetBrush(wxBrush(colours.Light()));
 
 		// Paint the thumb at least min_width, expand to both left and right
+		int min_width = GetMinWidth();
 		if (thumb.width < min_width)
 			dc.DrawRectangle(wxRect(thumb.x - (min_width - thumb.width) / 2, thumb.y, min_width, thumb.height));
 		else
 			dc.DrawRectangle(thumb);
 	}
 };
-
-const int AudioDisplay::AudioDisplayScrollbar::min_width;
 
 class AudioDisplay::AudioDisplayTimeline final : public AudioDisplayInteractionObject {
 	int duration = 0;          ///< Total duration in ms

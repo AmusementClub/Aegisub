@@ -826,37 +826,26 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 
 	wxBufferedPaintDC dc(this);
 
-	wxRect audio_bounds(0, audio_top, GetClientSize().GetWidth(), audio_height);
-	bool redraw_scrollbar = false;
-	bool redraw_timeline = false;
+	int client_width = GetClientSize().GetWidth();
+	int foot_size = FromDIP(6);
 
-	for (wxRegionIterator region(GetUpdateRegion()); region; ++region)
-	{
-		wxRect updrect = region.GetRect();
-		int foot_size = FromDIP(6);
+	// wxBufferedPaintDC uses a fresh buffer each paint, so we must
+	// always repaint the full content to avoid uninitialised regions.
+	timeline->Paint(dc);
 
-		redraw_scrollbar |= scrollbar->GetBounds().Intersects(updrect);
-		redraw_timeline |= timeline->GetBounds().Intersects(updrect);
+	wxRect full_rect(0, audio_top, client_width, audio_height);
+	TimeRange full_time(
+		std::max(0, TimeFromRelativeX(-foot_size)),
+		std::max(0, TimeFromRelativeX(client_width + foot_size)));
 
-		if (audio_bounds.Intersects(updrect))
-		{
-			TimeRange updtime(
-				std::max(0, TimeFromRelativeX(updrect.x - foot_size)),
-				std::max(0, TimeFromRelativeX(updrect.x + updrect.width + foot_size)));
-
-			PaintAudio(dc, updtime, updrect);
-			PaintMarkers(dc, updtime);
-			PaintLabels(dc, updtime);
-		}
-	}
+	PaintAudio(dc, full_time, full_rect);
+	PaintMarkers(dc, full_time);
+	PaintLabels(dc, full_time);
 
 	if (track_cursor_pos >= 0)
 		PaintTrackCursor(dc);
 
-	if (redraw_scrollbar)
-		scrollbar->Paint(dc, HasFocus(), audio_load_position);
-	if (redraw_timeline)
-		timeline->Paint(dc);
+	scrollbar->Paint(dc, HasFocus(), audio_load_position);
 }
 
 void AudioDisplay::PaintAudio(wxDC &dc, const TimeRange updtime, const wxRect updrect)

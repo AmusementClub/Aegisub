@@ -190,7 +190,7 @@ void VideoSlider::OnKeyDown(wxKeyEvent &event) {
 }
 
 void VideoSlider::OnPaint(wxPaintEvent &) {
-	wxAutoBufferedPaintDC dc(this);
+	wxBufferedPaintDC dc(this);
 	int w,h;
 	GetClientSize(&w, &h);
 	const int margin = ScaleVideoUi(this, 5);

@@ -300,7 +300,7 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 	GetClientSize(&w,&h);
 	w -= scrollBar->GetSize().GetWidth();
 
-	wxAutoBufferedPaintDC dc(this);
+	wxBufferedPaintDC dc(this);
 	dc.SetFont(font);
 
 	dc.SetBackground(row_colors.Default);

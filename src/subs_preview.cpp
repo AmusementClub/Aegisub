@@ -124,7 +124,7 @@ void SubtitlesPreview::UpdateBitmap() {
 }
 
 void SubtitlesPreview::OnPaint(wxPaintEvent &) {
-	wxAutoBufferedPaintDC dc(this);
+	wxBufferedPaintDC dc(this);
 	if (bmp)
 		dc.DrawBitmap(*bmp, 0, 0);
 }

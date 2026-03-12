@@ -67,7 +67,7 @@ void ToggleBitmap::OnMouseEvent(wxMouseEvent &) {
 }
 
 void ToggleBitmap::OnPaint(wxPaintEvent &) {
-	wxAutoBufferedPaintDC dc(this);
+	wxBufferedPaintDC dc(this);
 
 	// Get background color
 	wxColour bgColor = command.IsActive(context) ? wxColour(0,255,0) : wxColour(255,0,0);

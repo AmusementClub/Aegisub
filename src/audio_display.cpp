@@ -820,7 +820,7 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 {
 	if (!audio_renderer_provider || !provider) return;
 
-	wxAutoBufferedPaintDC dc(this);
+	wxBufferedPaintDC dc(this);
 
 	wxRect audio_bounds(0, audio_top, GetClientSize().GetWidth(), audio_height);
 	bool redraw_scrollbar = false;

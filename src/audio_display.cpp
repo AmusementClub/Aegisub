@@ -824,28 +824,45 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 {
 	if (!audio_renderer_provider || !provider) return;
 
-	wxBufferedPaintDC dc(this);
+	wxSize cs = GetClientSize();
+	if (!paint_bitmap.IsOk() || paint_bitmap.GetWidth() != cs.x || paint_bitmap.GetHeight() != cs.y)
+		paint_bitmap = wxBitmap(cs.x, cs.y, wxBITMAP_SCREEN_DEPTH);
 
-	int client_width = GetClientSize().GetWidth();
+	// Persistent bitmap keeps old content between paints, so only
+	// the invalidated (dirty) regions need to be redrawn.
+	wxBufferedPaintDC dc(this, paint_bitmap);
+
 	int foot_size = FromDIP(6);
+	wxRect audio_bounds(0, audio_top, cs.x, audio_height);
+	bool redraw_scrollbar = false;
+	bool redraw_timeline = false;
 
-	// wxBufferedPaintDC uses a fresh buffer each paint, so we must
-	// always repaint the full content to avoid uninitialised regions.
-	timeline->Paint(dc);
+	for (wxRegionIterator region(GetUpdateRegion()); region; ++region)
+	{
+		wxRect updrect = region.GetRect();
 
-	wxRect full_rect(0, audio_top, client_width, audio_height);
-	TimeRange full_time(
-		std::max(0, TimeFromRelativeX(-foot_size)),
-		std::max(0, TimeFromRelativeX(client_width + foot_size)));
+		redraw_scrollbar |= scrollbar->GetBounds().Intersects(updrect);
+		redraw_timeline |= timeline->GetBounds().Intersects(updrect);
 
-	PaintAudio(dc, full_time, full_rect);
-	PaintMarkers(dc, full_time);
-	PaintLabels(dc, full_time);
+		if (audio_bounds.Intersects(updrect))
+		{
+			TimeRange updtime(
+				std::max(0, TimeFromRelativeX(updrect.x - foot_size)),
+				std::max(0, TimeFromRelativeX(updrect.x + updrect.width + foot_size)));
+
+			PaintAudio(dc, updtime, updrect);
+			PaintMarkers(dc, updtime);
+			PaintLabels(dc, updtime);
+		}
+	}
 
 	if (track_cursor_pos >= 0)
 		PaintTrackCursor(dc);
 
-	scrollbar->Paint(dc, HasFocus(), audio_load_position);
+	if (redraw_scrollbar)
+		scrollbar->Paint(dc, HasFocus(), audio_load_position);
+	if (redraw_timeline)
+		timeline->Paint(dc);
 }
 
 void AudioDisplay::PaintAudio(wxDC &dc, const TimeRange updtime, const wxRect updrect)
@@ -1179,6 +1196,9 @@ void AudioDisplay::OnKeyDown(wxKeyEvent& event)
 
 void AudioDisplay::OnSize(wxSizeEvent &)
 {
+	// Invalidate persistent back buffer so it gets recreated at the new size
+	paint_bitmap = wxBitmap();
+
 	// We changed size, update the sub-controls' internal data and redraw
 	wxSize size = GetClientSize();
 

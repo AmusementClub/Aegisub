@@ -124,6 +124,9 @@ class AudioDisplay: public wxWindow {
 	/// Width of the audio marker feet in pixels
 	static const int foot_size = 6;
 
+	/// Persistent back buffer for flicker-free painting
+	wxBitmap paint_bitmap;
+
 	/// Zoom level given as a number, see SetZoomLevel for details
 	int zoom_level;
 

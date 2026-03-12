@@ -827,47 +827,46 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 {
 	if (!audio_renderer_provider || !provider) return;
 
-	EnsurePaintBitmap();
-	wxBufferedPaintDC dc(this, paint_bitmap);
-
-	for (wxRegionIterator region(GetUpdateRegion()); region; ++region)
 	{
-		wxRect rect = region.GetRect();
-		if (rect.width <= 0 || rect.height <= 0)
-			continue;
+		EnsurePaintBitmap();
+		wxBufferedPaintDC dc(this, paint_bitmap);
 
-		rect.Intersect(wxRect(wxPoint(0, 0), GetClientSize()));
-		if (rect.width <= 0 || rect.height <= 0)
-			continue;
+		for (wxRegionIterator region(GetUpdateRegion()); region; ++region)
+		{
+			wxRect rect = region.GetRect();
+			if (rect.width <= 0 || rect.height <= 0)
+				continue;
 
-		dc.SetClippingRegion(rect);
+			rect.Intersect(wxRect(wxPoint(0, 0), GetClientSize()));
+			if (rect.width <= 0 || rect.height <= 0)
+				continue;
 
-		bool redraw_scrollbar = scrollbar->GetBounds().Intersects(rect);
-		bool redraw_timeline = timeline->GetBounds().Intersects(rect);
-		int foot_size = FromDIP(6);
-		wxRect audio_bounds(0, audio_top, GetClientSize().GetWidth(), audio_height);
-		if (audio_bounds.Intersects(rect)) {
-			TimeRange updtime(
-				std::max(0, TimeFromRelativeX(rect.x - foot_size)),
-				std::max(0, TimeFromRelativeX(rect.x + rect.width + foot_size)));
-			PaintAudio(dc, updtime, rect);
-			PaintMarkers(dc, updtime);
-			PaintLabels(dc, updtime);
+			dc.SetClippingRegion(rect);
+
+			bool redraw_scrollbar = scrollbar->GetBounds().Intersects(rect);
+			bool redraw_timeline = timeline->GetBounds().Intersects(rect);
+			int foot_size = FromDIP(6);
+			wxRect audio_bounds(0, audio_top, GetClientSize().GetWidth(), audio_height);
+			if (audio_bounds.Intersects(rect)) {
+				TimeRange updtime(
+					std::max(0, TimeFromRelativeX(rect.x - foot_size)),
+					std::max(0, TimeFromRelativeX(rect.x + rect.width + foot_size)));
+				PaintAudio(dc, updtime, rect);
+				PaintMarkers(dc, updtime);
+				PaintLabels(dc, updtime);
+			}
+
+			if (redraw_scrollbar)
+				scrollbar->Paint(dc, HasFocus(), audio_load_position);
+			if (redraw_timeline)
+				timeline->Paint(dc);
+
+			dc.DestroyClippingRegion();
 		}
-
-		if (redraw_scrollbar)
-			scrollbar->Paint(dc, HasFocus(), audio_load_position);
-		if (redraw_timeline)
-			timeline->Paint(dc);
-
-		dc.DestroyClippingRegion();
 	}
 
-	track_cursor_overlay.Reset();
-	if (track_cursor_pos >= 0) {
-		wxDCOverlay overlaydc(track_cursor_overlay, &dc);
-		PaintTrackCursor(dc);
-	}
+	if (track_cursor_pos >= 0)
+		RefreshTrackCursorOverlay();
 }
 
 void AudioDisplay::EnsurePaintBitmap() {

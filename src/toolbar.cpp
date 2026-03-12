@@ -84,10 +84,17 @@ namespace {
 		/// Enable/disable the toolbar buttons
 		void OnIdle(wxIdleEvent &) {
 			for (size_t i = 0; i < commands.size(); ++i) {
-				if (commands[i]->Type() & cmd::COMMAND_VALIDATE)
-					EnableTool(TOOL_ID_BASE + i, commands[i]->Validate(context));
-				if (commands[i]->Type() & cmd::COMMAND_TOGGLE || commands[i]->Type() & cmd::COMMAND_RADIO)
-					ToggleTool(TOOL_ID_BASE + i, commands[i]->IsActive(context));
+				int const id = TOOL_ID_BASE + static_cast<int>(i);
+				if (commands[i]->Type() & cmd::COMMAND_VALIDATE) {
+					bool enabled = commands[i]->Validate(context);
+					if (GetToolEnabled(id) != enabled)
+						EnableTool(id, enabled);
+				}
+				if (commands[i]->Type() & cmd::COMMAND_TOGGLE || commands[i]->Type() & cmd::COMMAND_RADIO) {
+					bool active = commands[i]->IsActive(context);
+					if (GetToolState(id) != active)
+						ToggleTool(id, active);
+				}
 			}
 		}
 

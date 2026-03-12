@@ -1012,8 +1012,18 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 	int old_pos = track_cursor_pos;
 	track_cursor_pos = new_pos;
 
-	RefreshRect(wxRect(old_pos - scroll_left - 1, audio_top, 2, audio_height - 1), false);
-	RefreshRect(wxRect(new_pos - scroll_left - 1, audio_top, 2, audio_height - 1), false);
+	int const cursor_height = audio_height + 1;
+	if (old_pos >= 0 && new_pos >= 0) {
+		int left = std::min(old_pos, new_pos) - scroll_left - 1;
+		int width = std::abs(new_pos - old_pos) + 3;
+		RefreshRect(wxRect(left, audio_top, width, cursor_height), false);
+	}
+	else {
+		if (old_pos >= 0)
+			RefreshRect(wxRect(old_pos - scroll_left - 1, audio_top, 3, cursor_height), false);
+		if (new_pos >= 0)
+			RefreshRect(wxRect(new_pos - scroll_left - 1, audio_top, 3, cursor_height), false);
+	}
 
 	// Make sure the old label gets cleared away
 	RefreshRect(track_cursor_label_rect, false);

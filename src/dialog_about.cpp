@@ -95,6 +95,9 @@ void ShowAboutDialog(wxWindow *parent) {
 		"    Lua - Copyright (c) Lua.org, PUC-Rio;\n"
 		"    LuaJIT - Copyright (c) Mike Pall;\n"
 		"    luabins - Copyright (c) Alexander Gladysh;\n"
+#ifdef WITH_LUASOCKET
+		"    LuaSocket - Copyright (c) Diego Nehab;\n"
+#endif
 #ifdef WITH_HUNSPELL
 		"    Hunspell - Copyright (c) Kevin Hendricks;\n"
 #endif

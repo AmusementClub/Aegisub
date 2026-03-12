@@ -88,7 +88,7 @@ vendor/luajit/src/lj_vm.s
 vendor/luajit/src/luajit
 
 .vs
-/build-dir
+/build-*
 /vendor
 /tools
 CMakePresets.json

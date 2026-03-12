@@ -218,6 +218,13 @@ if(APPLE)
 endif()
 
 add_subdirectory(vendor/luabins)
+option(LUASOCKET "Enable LuaSocket support" OFF)
+set(AEGISUB_LUASOCKET_ROOT "${PROJECT_SOURCE_DIR}/vendor/luasocket" CACHE PATH "Path to a LuaSocket source checkout")
+
+if(LUASOCKET)
+    include(LuaSocket)
+    aegisub_add_luasocket_target()
+endif()
 
 ## libaegisub
 add_library(libaegisub STATIC
@@ -311,6 +318,10 @@ else()
     target_precompile_headers(libaegisub PRIVATE "libaegisub/lagi_pre.h")
 endif()
 target_link_libraries(libaegisub PRIVATE luajit luabins)
+if(LUASOCKET)
+    target_compile_definitions(libaegisub PRIVATE WITH_LUASOCKET)
+    target_link_libraries(libaegisub PRIVATE luasocket)
+endif()
 
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config.cpp" "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config.h"
@@ -505,6 +516,9 @@ add_executable(Aegisub WIN32
 )
 target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} libaegisub luajit)
 target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
+if(LUASOCKET)
+    target_compile_definitions(Aegisub PRIVATE WITH_LUASOCKET)
+endif()
 target_include_directories(Aegisub PRIVATE "src/libresrc" "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc")
 if(APPLE)
     # CMake on macOS currently does not support pch with objc, so use the old way

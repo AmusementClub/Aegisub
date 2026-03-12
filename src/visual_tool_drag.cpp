@@ -71,6 +71,8 @@ void VisualToolDrag::SetToolbar(wxToolBar *tb) {
 }
 
 void VisualToolDrag::UpdateToggleButtons() {
+	if (!toolbar || move_pos_button < 0) return;
+
 	bool to_move = true;
 	if (active_line) {
 		Vector2D p1, p2;

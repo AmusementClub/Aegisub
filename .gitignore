@@ -54,7 +54,6 @@ acconf.h.in
 aclocal.m4
 autom4te.cache
 automation/aegisub-lua
-build/userconfig/*.props
 conf.sh
 config.log
 config.status
@@ -88,7 +87,6 @@ vendor/luajit/src/gen
 vendor/luajit/src/lj_vm.s
 vendor/luajit/src/luajit
 
-.nuget
 .vs
 /build-dir
 /vendor

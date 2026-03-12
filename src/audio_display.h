@@ -35,6 +35,7 @@
 #include <memory>
 
 #include <wx/gdicmn.h>
+#include <wx/overlay.h>
 #include <wx/string.h>
 #include <wx/timer.h>
 #include <wx/window.h>
@@ -126,6 +127,7 @@ class AudioDisplay: public wxWindow {
 
 	/// Persistent back buffer for flicker-free painting
 	wxBitmap paint_bitmap;
+	wxOverlay track_cursor_overlay;
 
 	/// Zoom level given as a number, see SetZoomLevel for details
 	int zoom_level;
@@ -136,11 +138,8 @@ class AudioDisplay: public wxWindow {
 	wxString track_cursor_label;
 	/// Bounding rectangle last drawn track cursor label
 	wxRect track_cursor_label_rect;
-	wxRect GetTrackCursorLineRect(int pos) const;
-	wxRect CalcTrackCursorLabelRect(wxDC &dc) const;
 	void EnsurePaintBitmap();
-	void RepaintBufferRect(wxDC &dc, wxRect rect);
-	void PresentBufferRect(wxRect rect);
+	void RefreshTrackCursorOverlay();
 	/// @brief Move the tracking cursor
 	/// @param new_pos   New absolute pixel position of the tracking cursor
 	/// @param show_time Display timestamp by the tracking cursor?

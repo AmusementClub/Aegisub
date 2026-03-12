@@ -52,7 +52,6 @@
 
 #include <wx/dcbuffer.h>
 #include <wx/dcclient.h>
-#include <wx/dcmemory.h>
 #include <wx/mousestate.h>
 
 /// @class AudioDisplayInteractionObject
@@ -830,34 +829,43 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 	wxBufferedPaintDC dc(this, paint_bitmap);
 
 	for (wxRegionIterator region(GetUpdateRegion()); region; ++region)
-		RepaintBufferRect(dc, region.GetRect());
-}
+	{
+		wxRect rect = region.GetRect();
+		if (rect.width <= 0 || rect.height <= 0)
+			continue;
 
-wxRect AudioDisplay::GetTrackCursorLineRect(int pos) const {
-	if (pos < 0)
-		return wxRect();
-	return wxRect(pos - scroll_left - 1, audio_top, 3, audio_height + 1);
-}
+		rect.Intersect(wxRect(wxPoint(0, 0), GetClientSize()));
+		if (rect.width <= 0 || rect.height <= 0)
+			continue;
 
-wxRect AudioDisplay::CalcTrackCursorLabelRect(wxDC &dc) const {
-	if (track_cursor_pos < 0 || track_cursor_label.empty())
-		return wxRect();
+		dc.SetClippingRegion(rect);
 
-	wxFont font = dc.GetFont();
-	wxString face_name = FontFace("Audio/Track Cursor");
-	if (!face_name.empty())
-		font.SetFaceName(face_name);
-	font.SetWeight(wxFONTWEIGHT_BOLD);
-	dc.SetFont(font);
+		bool redraw_scrollbar = scrollbar->GetBounds().Intersects(rect);
+		bool redraw_timeline = timeline->GetBounds().Intersects(rect);
+		int foot_size = FromDIP(6);
+		wxRect audio_bounds(0, audio_top, GetClientSize().GetWidth(), audio_height);
+		if (audio_bounds.Intersects(rect)) {
+			TimeRange updtime(
+				std::max(0, TimeFromRelativeX(rect.x - foot_size)),
+				std::max(0, TimeFromRelativeX(rect.x + rect.width + foot_size)));
+			PaintAudio(dc, updtime, rect);
+			PaintMarkers(dc, updtime);
+			PaintLabels(dc, updtime);
+		}
 
-	wxSize label_size(dc.GetTextExtent(track_cursor_label));
-	int label_margin = FromDIP(2);
-	wxPoint label_pos(track_cursor_pos - scroll_left - label_size.x / 2, audio_top + label_margin);
-	label_pos.x = mid(label_margin, label_pos.x, GetClientSize().GetWidth() - label_size.x - label_margin);
-	label_pos.x -= label_margin;
-	label_pos.y -= label_margin;
-	label_size.IncBy(label_margin * 2, label_margin * 2);
-	return wxRect(label_pos, label_size);
+		if (redraw_scrollbar)
+			scrollbar->Paint(dc, HasFocus(), audio_load_position);
+		if (redraw_timeline)
+			timeline->Paint(dc);
+
+		dc.DestroyClippingRegion();
+	}
+
+	track_cursor_overlay.Reset();
+	if (track_cursor_pos >= 0) {
+		wxDCOverlay overlaydc(track_cursor_overlay, &dc);
+		PaintTrackCursor(dc);
+	}
 }
 
 void AudioDisplay::EnsurePaintBitmap() {
@@ -866,54 +874,12 @@ void AudioDisplay::EnsurePaintBitmap() {
 		paint_bitmap = wxBitmap(cs.x, cs.y, wxBITMAP_SCREEN_DEPTH);
 }
 
-void AudioDisplay::RepaintBufferRect(wxDC &dc, wxRect rect) {
-	if (rect.width <= 0 || rect.height <= 0)
-		return;
-
-	rect.Intersect(wxRect(wxPoint(0, 0), GetClientSize()));
-	if (rect.width <= 0 || rect.height <= 0)
-		return;
-
-	dc.SetClippingRegion(rect);
-
-	bool redraw_scrollbar = scrollbar->GetBounds().Intersects(rect);
-	bool redraw_timeline = timeline->GetBounds().Intersects(rect);
-	int foot_size = FromDIP(6);
-	wxRect audio_bounds(0, audio_top, GetClientSize().GetWidth(), audio_height);
-	if (audio_bounds.Intersects(rect)) {
-		TimeRange updtime(
-			std::max(0, TimeFromRelativeX(rect.x - foot_size)),
-			std::max(0, TimeFromRelativeX(rect.x + rect.width + foot_size)));
-		PaintAudio(dc, updtime, rect);
-		PaintMarkers(dc, updtime);
-		PaintLabels(dc, updtime);
-	}
-
-	if (track_cursor_pos >= 0) {
-		wxRect cursor_rect = GetTrackCursorLineRect(track_cursor_pos);
-		cursor_rect.Union(track_cursor_label_rect);
-		if (cursor_rect.Intersects(rect))
-			PaintTrackCursor(dc);
-	}
-
-	if (redraw_scrollbar)
-		scrollbar->Paint(dc, HasFocus(), audio_load_position);
-	if (redraw_timeline)
-		timeline->Paint(dc);
-
-	dc.DestroyClippingRegion();
-}
-
-void AudioDisplay::PresentBufferRect(wxRect rect) {
-	rect.Intersect(wxRect(wxPoint(0, 0), GetClientSize()));
-	if (rect.width <= 0 || rect.height <= 0)
-		return;
-
-	wxMemoryDC memdc;
-	memdc.SelectObject(paint_bitmap);
-	wxClientDC clientdc(this);
-	clientdc.Blit(rect.x, rect.y, rect.width, rect.height, &memdc, rect.x, rect.y);
-	memdc.SelectObject(wxNullBitmap);
+void AudioDisplay::RefreshTrackCursorOverlay() {
+	wxClientDC dc(this);
+	wxDCOverlay overlaydc(track_cursor_overlay, &dc);
+	overlaydc.Clear();
+	if (track_cursor_pos >= 0)
+		PaintTrackCursor(dc);
 }
 
 void AudioDisplay::PaintAudio(wxDC &dc, const TimeRange updtime, const wxRect updrect)
@@ -1062,11 +1028,6 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 {
 	if (new_pos == track_cursor_pos) return;
 
-	EnsurePaintBitmap();
-	wxRect old_label_rect = track_cursor_label_rect;
-	wxRect old_line_rect = GetTrackCursorLineRect(track_cursor_pos);
-
-	int old_pos = track_cursor_pos;
 	track_cursor_pos = new_pos;
 
 	if (show_time)
@@ -1079,16 +1040,7 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 		track_cursor_label_rect.SetSize(wxSize(0,0));
 		track_cursor_label.Clear();
 	}
-
-	wxMemoryDC memdc;
-	memdc.SelectObject(paint_bitmap);
-	wxRect dirty = old_line_rect;
-	dirty.Union(old_label_rect);
-	dirty.Union(GetTrackCursorLineRect(track_cursor_pos));
-	dirty.Union(CalcTrackCursorLabelRect(memdc));
-	RepaintBufferRect(memdc, dirty);
-	PresentBufferRect(dirty);
-	memdc.SelectObject(wxNullBitmap);
+	RefreshTrackCursorOverlay();
 }
 
 void AudioDisplay::RemoveTrackCursor()
@@ -1239,6 +1191,7 @@ void AudioDisplay::OnKeyDown(wxKeyEvent& event)
 
 void AudioDisplay::OnSize(wxSizeEvent &)
 {
+	track_cursor_overlay.Reset();
 	// Invalidate persistent back buffer so it gets recreated at the new size
 	paint_bitmap = wxBitmap();
 

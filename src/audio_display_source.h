@@ -9,6 +9,7 @@ class AudioDisplaySource {
 public:
 	virtual ~AudioDisplaySource() = default;
 
+	virtual int64_t GetNumSamples() const = 0;
 	virtual int GetChannels() const = 0;
 	virtual int GetSampleRate() const = 0;
 	virtual void GetFloatAudio(float *buf, int64_t start, int64_t count) const = 0;

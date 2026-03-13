@@ -1,0 +1,29 @@
+add_executable(audio-display-bench EXCLUDE_FROM_ALL
+    tools/audio_display_bench_main.cpp
+    src/audio_display_analysis.cpp
+    src/audio_display_source.cpp
+    src/audio_mix_policy.cpp
+    src/audio_waveform_summary_cache.cpp
+    src/fft.cpp
+)
+target_include_directories(audio-display-bench PRIVATE
+    "${PROJECT_SOURCE_DIR}/src"
+    "${PROJECT_SOURCE_DIR}/libaegisub/include"
+)
+target_link_libraries(audio-display-bench PRIVATE libaegisub)
+
+find_package(benchmark CONFIG QUIET)
+if(benchmark_FOUND)
+    add_executable(audio-micro-bench EXCLUDE_FROM_ALL
+        tools/audio_micro_bench_main.cpp
+        src/audio_display_analysis.cpp
+        src/audio_display_source.cpp
+        src/audio_mix_policy.cpp
+        src/audio_waveform_summary_cache.cpp
+    )
+    target_include_directories(audio-micro-bench PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${PROJECT_SOURCE_DIR}/libaegisub/include"
+    )
+    target_link_libraries(audio-micro-bench PRIVATE benchmark::benchmark libaegisub)
+endif()

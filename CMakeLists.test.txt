@@ -22,6 +22,7 @@ if(GTEST_FOUND)
         src/audio_display_analysis.cpp
         src/audio_display_source.cpp
         src/audio_mix_policy.cpp
+        src/audio_waveform_summary_cache.cpp
         tests/tests/cajun.cpp
         tests/tests/calltip_provider.cpp
         tests/tests/character_count.cpp

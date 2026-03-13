@@ -1,5 +1,7 @@
 #include "audio_display_analysis.h"
 
+#include <cmath>
+
 AudioWaveformSummary AnalyzeWaveformInterleaved(const float *samples, int frames, int channels, AudioMixPolicy policy) {
 	AudioWaveformSummary summary;
 	if (!samples || frames <= 0 || channels <= 0)
@@ -10,8 +12,78 @@ AudioWaveformSummary AnalyzeWaveformInterleaved(const float *samples, int frames
 	double avg_min_accum = 0.0;
 	double avg_max_accum = 0.0;
 
-	for (int i = 0; i < frames; ++i) {
-		float mixed = MixAudioFrameToMono(policy, samples + i * channels, channels);
+	if (channels == 1) {
+		for (int i = 0; i < frames; ++i) {
+			float mixed = samples[i];
+			if (mixed > 0.f) {
+				if (mixed > peak_max)
+					peak_max = mixed;
+				avg_max_accum += mixed;
+			}
+			else {
+				if (mixed < peak_min)
+					peak_min = mixed;
+				avg_min_accum += mixed;
+			}
+		}
+
+		summary.peak_min = peak_min;
+		summary.peak_max = peak_max;
+		summary.avg_min = static_cast<float>(avg_min_accum / frames);
+		summary.avg_max = static_cast<float>(avg_max_accum / frames);
+		return summary;
+	}
+
+	if (channels == 2) {
+		if (policy == AudioMixPolicy::MonoAverage) {
+			for (int i = 0; i < frames; ++i) {
+				float mixed = (samples[i * 2] + samples[i * 2 + 1]) * 0.5f;
+				if (mixed > 0.f) {
+					if (mixed > peak_max)
+						peak_max = mixed;
+					avg_max_accum += mixed;
+				}
+				else {
+					if (mixed < peak_min)
+						peak_min = mixed;
+					avg_min_accum += mixed;
+				}
+			}
+
+			summary.peak_min = peak_min;
+			summary.peak_max = peak_max;
+			summary.avg_min = static_cast<float>(avg_min_accum / frames);
+			summary.avg_max = static_cast<float>(avg_max_accum / frames);
+			return summary;
+		}
+		if (policy == AudioMixPolicy::MonoMaxAbs) {
+			for (int i = 0; i < frames; ++i) {
+				const float a = samples[i * 2];
+				const float b = samples[i * 2 + 1];
+				float mixed = std::fabs(a) >= std::fabs(b) ? a : b;
+				if (mixed > 0.f) {
+					if (mixed > peak_max)
+						peak_max = mixed;
+					avg_max_accum += mixed;
+				}
+				else {
+					if (mixed < peak_min)
+						peak_min = mixed;
+					avg_min_accum += mixed;
+				}
+			}
+
+			summary.peak_min = peak_min;
+			summary.peak_max = peak_max;
+			summary.avg_min = static_cast<float>(avg_min_accum / frames);
+			summary.avg_max = static_cast<float>(avg_max_accum / frames);
+			return summary;
+		}
+	}
+
+	const float *cur = samples;
+	for (int i = 0; i < frames; ++i, cur += channels) {
+		float mixed = MixAudioFrameToMono(policy, cur, channels);
 		if (mixed > 0.f) {
 			if (mixed > peak_max)
 				peak_max = mixed;

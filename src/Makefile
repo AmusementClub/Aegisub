@@ -43,6 +43,7 @@ src_OBJ := \
 	$(d)audio_renderer.o \
 	$(d)audio_renderer_spectrum.o \
 	$(d)audio_renderer_waveform.o \
+	$(d)audio_waveform_summary_cache.o \
 	$(d)audio_timing_dialogue.o \
 	$(d)audio_timing_karaoke.o \
 	$(d)auto4_base.o \

@@ -5,6 +5,7 @@
 #include "../../src/audio_display_analysis.h"
 #include "../../src/audio_display_source.h"
 #include "../../src/audio_mix_policy.h"
+#include "../../src/audio_waveform_summary_cache.h"
 
 #include <libaegisub/audio/provider.h>
 
@@ -55,6 +56,28 @@ struct FloatStereoProvider final : agi::AudioProvider {
 		for (int64_t i = 0; i < count; ++i) {
 			out[i * 2 + 0] = samples[(start + i) * 2 + 0];
 			out[i * 2 + 1] = samples[(start + i) * 2 + 1];
+		}
+	}
+};
+
+struct CountingStereoProvider final : agi::AudioProvider {
+	mutable int fill_calls = 0;
+
+	CountingStereoProvider() {
+		channels = 2;
+		num_samples = 1 << 16;
+		decoded_samples = num_samples;
+		sample_rate = 48000;
+		bytes_per_sample = sizeof(int16_t);
+		float_samples = false;
+	}
+
+	void FillBuffer(void *buf, int64_t start, int64_t count) const override {
+		++fill_calls;
+		auto out = static_cast<int16_t *>(buf);
+		for (int64_t i = 0; i < count; ++i) {
+			out[i * 2 + 0] = static_cast<int16_t>(((start + i) * 17) % 32767);
+			out[i * 2 + 1] = static_cast<int16_t>(-(((start + i) * 29) % 32768));
 		}
 	}
 };
@@ -109,4 +132,37 @@ TEST(lagi_audio_display, waveform_analysis_uses_requested_mix_policy) {
 	EXPECT_GT(average.peak_min, maxabs.peak_min);
 	EXPECT_NEAR(-0.9f, maxabs.peak_min, 1e-6f);
 	EXPECT_NEAR(0.5f, maxabs.peak_max, 1e-6f);
+}
+
+TEST(lagi_audio_display, waveform_summary_cache_reuses_hot_block) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioWaveformSummaryCache cache;
+	cache.SetSource(source.get());
+	cache.SetMillisecondsPerPixel(20.0);
+	cache.SetMixPolicy(AudioMixPolicy::MonoMaxAbs);
+
+	const auto &first = cache.Get(0);
+	int calls_after_first = provider.fill_calls;
+	const auto &second = cache.Get(0);
+
+	EXPECT_EQ(1, calls_after_first);
+	EXPECT_EQ(calls_after_first, provider.fill_calls);
+	EXPECT_EQ(first.summaries[0].peak_max, second.summaries[0].peak_max);
+}
+
+TEST(lagi_audio_display, waveform_summary_cache_invalidates_on_zoom_change) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioWaveformSummaryCache cache;
+	cache.SetSource(source.get());
+	cache.SetMillisecondsPerPixel(20.0);
+	cache.SetMixPolicy(AudioMixPolicy::MonoMaxAbs);
+
+	cache.Get(0);
+	int calls_after_first = provider.fill_calls;
+	cache.SetMillisecondsPerPixel(10.0);
+	cache.Get(0);
+
+	EXPECT_GT(provider.fill_calls, calls_after_first);
 }

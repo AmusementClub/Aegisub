@@ -463,6 +463,7 @@ add_executable(Aegisub WIN32
     src/audio_renderer.cpp
     src/audio_renderer_spectrum.cpp
     src/audio_renderer_waveform.cpp
+    src/audio_waveform_summary_cache.cpp
     src/audio_timing_dialogue.cpp
     src/audio_timing_karaoke.cpp
     src/auto4_base.cpp

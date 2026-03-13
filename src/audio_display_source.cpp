@@ -12,6 +12,9 @@ namespace {
 class AudioProviderDisplaySource final : public AudioDisplaySource {
 	agi::AudioProvider *provider;
 	mutable std::vector<char> raw_buffer;
+	mutable std::vector<int16_t> s16_buffer;
+	mutable std::vector<int32_t> s32_buffer;
+	mutable std::vector<double> f64_buffer;
 
 	static float DecodeUInt8(uint8_t sample) {
 		return static_cast<float>(static_cast<int>(sample) - 128) / 128.0f;
@@ -55,6 +58,10 @@ public:
 	: provider(provider) {
 	}
 
+	int64_t GetNumSamples() const override {
+		return provider ? provider->GetNumSamples() : 0;
+	}
+
 	int GetChannels() const override {
 		return provider ? provider->GetChannels() : 0;
 	}
@@ -70,19 +77,15 @@ public:
 		int channels = std::max(1, provider->GetChannels());
 		int bytes_per_sample = std::max(1, provider->GetBytesPerSample());
 		size_t sample_count = static_cast<size_t>(count) * channels;
-		size_t raw_size = sample_count * bytes_per_sample;
-		raw_buffer.resize(raw_size);
-		provider->GetAudio(raw_buffer.data(), start, count);
-
-		const char *src = raw_buffer.data();
 		if (provider->AreSamplesFloat()) {
 			if (bytes_per_sample == 4) {
-				for (size_t i = 0; i < sample_count; ++i)
-					buf[i] = DecodeFloat32(src + i * bytes_per_sample);
+				provider->GetAudio(buf, start, count);
 			}
 			else if (bytes_per_sample == 8) {
+				f64_buffer.resize(sample_count);
+				provider->GetAudio(f64_buffer.data(), start, count);
 				for (size_t i = 0; i < sample_count; ++i)
-					buf[i] = DecodeFloat64(src + i * bytes_per_sample);
+					buf[i] = static_cast<float>(f64_buffer[i]);
 			}
 			else {
 				std::fill(buf, buf + sample_count, 0.f);
@@ -91,20 +94,31 @@ public:
 		else {
 			switch (bytes_per_sample) {
 				case 1:
+					raw_buffer.resize(sample_count);
+					provider->GetAudio(raw_buffer.data(), start, count);
 					for (size_t i = 0; i < sample_count; ++i)
-						buf[i] = DecodeUInt8(static_cast<uint8_t>(src[i]));
+						buf[i] = DecodeUInt8(static_cast<uint8_t>(raw_buffer[i]));
 					break;
 				case 2:
+					s16_buffer.resize(sample_count);
+					provider->GetAudio(s16_buffer.data(), start, count);
 					for (size_t i = 0; i < sample_count; ++i)
-						buf[i] = DecodeInt16(src + i * bytes_per_sample);
+						buf[i] = static_cast<float>(s16_buffer[i]) / 32768.0f;
 					break;
 				case 3:
+					raw_buffer.resize(sample_count * bytes_per_sample);
+					provider->GetAudio(raw_buffer.data(), start, count);
+					{
+						const char *src = raw_buffer.data();
 					for (size_t i = 0; i < sample_count; ++i)
 						buf[i] = DecodeInt24(src + i * bytes_per_sample);
+					}
 					break;
 				case 4:
+					s32_buffer.resize(sample_count);
+					provider->GetAudio(s32_buffer.data(), start, count);
 					for (size_t i = 0; i < sample_count; ++i)
-						buf[i] = DecodeInt32(src + i * bytes_per_sample);
+						buf[i] = static_cast<float>(s32_buffer[i] / 2147483648.0);
 					break;
 				default:
 					std::fill(buf, buf + sample_count, 0.f);

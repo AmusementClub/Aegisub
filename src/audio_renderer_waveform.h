@@ -32,9 +32,9 @@
 #include "audio_mix_policy.h"
 
 #include <memory>
-#include <vector>
 
 class AudioColorScheme;
+class AudioWaveformSummaryCache;
 class wxArrayString;
 
 /// Render a waveform display of PCM audio data
@@ -42,15 +42,14 @@ class AudioWaveformRenderer final : public AudioRendererBitmapProvider {
 	/// Colour tables used for rendering
 	std::vector<AudioColorScheme> colors;
 
-	/// Pre-allocated buffer for audio fetched from provider
-	std::vector<float> audio_buffer;
+	std::unique_ptr<AudioWaveformSummaryCache> summary_cache;
 
 	/// Whether to render max+avg or just max
 	bool render_averages;
 	AudioMixPolicy mix_policy = AudioMixPolicy::MonoMaxAbs;
 
-	void OnSetProvider() override { audio_buffer.clear(); }
-	void OnSetMillisecondsPerPixel() override { audio_buffer.clear(); }
+	void OnSetProvider() override;
+	void OnSetMillisecondsPerPixel() override;
 
 public:
 	/// @brief Constructor
@@ -72,8 +71,7 @@ public:
 	/// @brief Cleans up the cache
 	/// @param max_size Maximum size in bytes for the cache
 	///
-	/// Does nothing for waveform renderer, since it does not have a backend cache
-	void AgeCache(size_t max_size) override { }
+	void AgeCache(size_t max_size) override;
 
 	/// Get a list of waveform rendering modes
 	static wxArrayString GetWaveformStyles();

@@ -614,11 +614,55 @@ AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::C
 	Bind(wxEVT_CHAR_HOOK, &AudioDisplay::OnKeyDown, this);
 	Bind(wxEVT_KEY_DOWN, &AudioDisplay::OnKeyDown, this);
 	scroll_timer.Bind(wxEVT_TIMER, &AudioDisplay::OnScrollTimer, this);
+	high_frequency_refresh_timer.Bind(wxEVT_TIMER, &AudioDisplay::OnHighFrequencyRefreshTimer, this);
 	load_timer.Bind(wxEVT_TIMER, &AudioDisplay::OnLoadTimer, this);
 }
 
 AudioDisplay::~AudioDisplay()
 {
+}
+
+void AudioDisplay::QueueHighFrequencyRefresh(const wxRect *rect, bool update) {
+	pending_high_frequency_refresh = true;
+	pending_high_frequency_update |= update;
+
+	if (!rect) {
+		pending_high_frequency_full_refresh = true;
+	}
+	else if (!pending_high_frequency_full_refresh) {
+		if (pending_high_frequency_rect.IsEmpty())
+			pending_high_frequency_rect = *rect;
+		else
+			pending_high_frequency_rect.Union(*rect);
+	}
+
+	if (!high_frequency_refresh_timer.IsRunning())
+		high_frequency_refresh_timer.Start(high_frequency_refresh_interval_ms, true);
+}
+
+void AudioDisplay::FlushHighFrequencyRefresh() {
+	if (!pending_high_frequency_refresh)
+		return;
+
+	if (high_frequency_refresh_timer.IsRunning())
+		high_frequency_refresh_timer.Stop();
+
+	if (pending_high_frequency_full_refresh)
+		Refresh();
+	else if (!pending_high_frequency_rect.IsEmpty())
+		RefreshRect(pending_high_frequency_rect, false);
+
+	if (pending_high_frequency_update)
+		Update();
+
+	pending_high_frequency_full_refresh = false;
+	pending_high_frequency_refresh = false;
+	pending_high_frequency_update = false;
+	pending_high_frequency_rect = wxRect();
+}
+
+void AudioDisplay::OnHighFrequencyRefreshTimer(wxTimerEvent &) {
+	FlushHighFrequencyRefresh();
 }
 
 void AudioDisplay::ScrollBy(int pixel_amount)
@@ -638,9 +682,10 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 	scroll_left = pixel_position;
 	scrollbar->SetPosition(scroll_left);
 	timeline->SetPosition(scroll_left);
-	Refresh();
 	if (audio_marker)
-		Update();
+		QueueHighFrequencyRefresh(nullptr, true);
+	else
+		Refresh();
 }
 
 void AudioDisplay::ScrollTimeRangeInView(const TimeRange &range)
@@ -1193,6 +1238,12 @@ void AudioDisplay::OnKeyDown(wxKeyEvent& event)
 void AudioDisplay::OnSize(wxSizeEvent &)
 {
 	track_cursor_overlay.Reset();
+	if (high_frequency_refresh_timer.IsRunning())
+		high_frequency_refresh_timer.Stop();
+	pending_high_frequency_full_refresh = false;
+	pending_high_frequency_refresh = false;
+	pending_high_frequency_update = false;
+	pending_high_frequency_rect = wxRect();
 	// Invalidate persistent back buffer so it gets recreated at the new size
 	paint_bitmap = wxBitmap();
 
@@ -1337,9 +1388,10 @@ void AudioDisplay::OnSelectionChanged()
 		ScrollTimeRangeInView(sel);
 	}
 
-	RefreshRect(scrollbar->GetBounds(), false);
 	if (audio_marker)
-		Update();
+		QueueHighFrequencyRefresh(&scrollbar->GetBounds(), true);
+	else
+		RefreshRect(scrollbar->GetBounds(), false);
 }
 
 void AudioDisplay::OnScrollTimer(wxTimerEvent &event)
@@ -1371,14 +1423,18 @@ void AudioDisplay::OnStyleRangesChanged()
 	style_ranges.clear();
 	for (auto pair : asrm) style_ranges.push_back(pair);
 
-	RefreshRect(wxRect(0, audio_top, GetClientSize().GetWidth(), audio_height), false);
+	const wxRect audio_rect(0, audio_top, GetClientSize().GetWidth(), audio_height);
 	if (audio_marker)
-		Update();
+		QueueHighFrequencyRefresh(&audio_rect, true);
+	else
+		RefreshRect(audio_rect, false);
 }
 
 void AudioDisplay::OnMarkerMoved()
 {
-	RefreshRect(wxRect(0, audio_top, GetClientSize().GetWidth(), audio_height), false);
+	const wxRect audio_rect(0, audio_top, GetClientSize().GetWidth(), audio_height);
 	if (audio_marker)
-		Update();
+		QueueHighFrequencyRefresh(&audio_rect, true);
+	else
+		RefreshRect(audio_rect, false);
 }

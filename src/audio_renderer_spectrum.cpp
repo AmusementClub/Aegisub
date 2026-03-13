@@ -49,6 +49,17 @@
 #include <wx/image.h>
 #include <wx/dcmemory.h>
 
+namespace {
+inline float max_inclusive_range(const float *values, int first, int last) {
+	float max_value = values[first];
+	for (int i = first + 1; i <= last; ++i) {
+		if (values[i] > max_value)
+			max_value = values[i];
+	}
+	return max_value;
+}
+}
+
 /// Allocates blocks of derived data for the audio spectrum
 struct AudioSpectrumCacheBlockFactory {
 	typedef std::unique_ptr<float, std::default_delete<float[]>> BlockType;
@@ -93,6 +104,42 @@ AudioSpectrumRenderer::AudioSpectrumRenderer(std::string const& color_scheme_nam
 		colors.emplace_back(12, color_scheme_name, i);
 }
 
+void AudioSpectrumRenderer::EnsureRenderScaleCache(int imgheight) {
+	bool interpolated = imgheight > 1 << derivation_size;
+	if (render_scale_cache_height == imgheight
+		&& render_scale_cache_derivation_size == derivation_size
+		&& render_scale_cache_interpolated == interpolated)
+		return;
+
+	render_scale_cache_height = imgheight;
+	render_scale_cache_derivation_size = derivation_size;
+	render_scale_cache_interpolated = interpolated;
+
+	render_band_a.resize(imgheight);
+	render_band_b.resize(imgheight);
+	render_band_frac.resize(interpolated ? imgheight : 0);
+
+	const int maxband = 1 << derivation_size;
+	if (interpolated) {
+		for (int y = 0; y < imgheight; ++y) {
+			double ideal = static_cast<double>(y + 1.) / imgheight * maxband;
+			int lower = std::max(0, std::min(maxband - 1, static_cast<int>(std::floor(ideal))));
+			int upper = std::max(0, std::min(maxband - 1, static_cast<int>(std::ceil(ideal))));
+			render_band_a[y] = lower;
+			render_band_b[y] = upper;
+			render_band_frac[y] = static_cast<float>(ideal - std::floor(ideal));
+		}
+	}
+	else {
+		for (int y = 0; y < imgheight; ++y) {
+			int sample1 = std::max(0, maxband * y / imgheight);
+			int sample2 = std::min(maxband - 1, maxband * (y + 1) / imgheight);
+			render_band_a[y] = sample1;
+			render_band_b[y] = sample2;
+		}
+	}
+}
+
 AudioSpectrumRenderer::~AudioSpectrumRenderer()
 {
 	// This sequence will clean up
@@ -102,6 +149,7 @@ AudioSpectrumRenderer::~AudioSpectrumRenderer()
 
 void AudioSpectrumRenderer::RecreateCache()
 {
+	rolling_window_valid = false;
 #ifdef WITH_FFTW3
 	if (dft_plan)
 	{
@@ -167,14 +215,37 @@ void AudioSpectrumRenderer::FillBlock(size_t block_index, float *block)
 
 	const int channels = std::max(1, display_source->GetChannels());
 	const size_t sample_count = static_cast<size_t>(2) << derivation_size;
+	const size_t hop_samples = static_cast<size_t>(1) << derivation_dist;
 	int64_t first_sample = (((int64_t)block_index) << derivation_dist) - ((int64_t)1 << derivation_size);
-	audio_scratch.resize(sample_count * channels);
 	mono_scratch.resize(sample_count);
-	display_source->GetFloatAudio(audio_scratch.data(), first_sample, sample_count);
-	if (channels == 1)
-		std::copy(audio_scratch.begin(), audio_scratch.begin() + sample_count, mono_scratch.begin());
-	else
-		MixAudioToMono(mix_policy, audio_scratch.data(), static_cast<int>(sample_count), channels, mono_scratch.data());
+
+	bool reused_window = rolling_window_valid
+		&& block_index == rolling_window_block_index + 1
+		&& hop_samples <= sample_count;
+
+	if (reused_window) {
+		const size_t overlap_samples = sample_count - hop_samples;
+		std::move(mono_scratch.begin() + hop_samples, mono_scratch.end(), mono_scratch.begin());
+
+		audio_scratch.resize(hop_samples * channels);
+		display_source->GetFloatAudio(audio_scratch.data(), first_sample + overlap_samples, hop_samples);
+		float *tail = mono_scratch.data() + overlap_samples;
+		if (channels == 1)
+			std::copy(audio_scratch.begin(), audio_scratch.begin() + hop_samples, tail);
+		else
+			MixAudioToMono(mix_policy, audio_scratch.data(), static_cast<int>(hop_samples), channels, tail);
+	}
+	else {
+		audio_scratch.resize(sample_count * channels);
+		display_source->GetFloatAudio(audio_scratch.data(), first_sample, sample_count);
+		if (channels == 1)
+			std::copy(audio_scratch.begin(), audio_scratch.begin() + sample_count, mono_scratch.begin());
+		else
+			MixAudioToMono(mix_policy, audio_scratch.data(), static_cast<int>(sample_count), channels, mono_scratch.data());
+	}
+
+	rolling_window_valid = true;
+	rolling_window_block_index = block_index;
 
 #ifdef WITH_FFTW3
 	for (size_t i = 0; i < sample_count; ++i)
@@ -234,31 +305,43 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 	const AudioColorScheme *pal = &colors[style];
 
 	/// @todo Make minband and maxband configurable
-	int minband = 0;
-	int maxband = 1 << derivation_size;
+	EnsureRenderScaleCache(imgheight);
+	const bool interpolated = imgheight > 1 << derivation_size;
+	const double samples_per_pixel = pixel_ms * display_source->GetSampleRate() / 1000.0;
+	size_t last_block_index = static_cast<size_t>(-1);
+	float *last_power = nullptr;
+	const int *band_a = render_band_a.data();
+	const int *band_b = render_band_b.data();
+	const float *band_frac = interpolated ? render_band_frac.data() : nullptr;
 
 	// ax = absolute x, absolute to the virtual spectrum bitmap
 	for (int ax = start; ax < end; ++ax)
 	{
 		// Derived audio data
-		size_t block_index = (size_t)(ax * pixel_ms * provider->GetSampleRate() / 1000) >> derivation_dist;
-		float *power = &cache->Get(block_index);
+		size_t block_index = static_cast<size_t>(ax * samples_per_pixel) >> derivation_dist;
+		float *power;
+		if (block_index == last_block_index)
+			power = last_power;
+		else {
+			power = &cache->Get(block_index);
+			last_block_index = block_index;
+			last_power = power;
+		}
 
 		// Prepare bitmap writing
 		unsigned char *px = imgdata + (imgheight-1) * stride + (ax - start) * 3;
 
 		// Scale up or down vertically?
-		if (imgheight > 1<<derivation_size)
+		if (interpolated)
 		{
 			// Interpolate
 			for (int y = 0; y < imgheight; ++y)
 			{
 				assert(px >= imgdata);
 				assert(px < imgdata + imgheight*stride);
-				auto ideal = (double)(y+1.)/imgheight * (maxband-minband) + minband;
-				float sample1 = power[(int)floor(ideal)+minband];
-				float sample2 = power[(int)ceil(ideal)+minband];
-				float frac = ideal - floor(ideal);
+				float sample1 = power[band_a[y]];
+				float sample2 = power[band_b[y]];
+				float frac = band_frac[y];
 				float val = (1-frac)*sample1 + frac*sample2;
 				pal->map(val*amplitude_scale, px);
 				px -= stride;
@@ -271,9 +354,7 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 			{
 				assert(px >= imgdata);
 				assert(px < imgdata + imgheight*stride);
-				int sample1 = std::max(0, maxband * y/imgheight + minband);
-				int sample2 = std::min((1<<derivation_size)-1, maxband * (y+1)/imgheight + minband);
-				float maxval = *std::max_element(&power[sample1], &power[sample2 + 1]);
+				float maxval = max_inclusive_range(power, band_a[y], band_b[y]);
 				pal->map(maxval*amplitude_scale, px);
 				px -= stride;
 			}

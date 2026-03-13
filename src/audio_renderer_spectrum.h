@@ -101,6 +101,15 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 	std::vector<float> audio_scratch;
 	std::vector<float> mono_scratch;
 	AudioMixPolicy mix_policy = AudioMixPolicy::MonoAverage;
+	bool rolling_window_valid = false;
+	size_t rolling_window_block_index = 0;
+	std::vector<int> render_band_a;
+	std::vector<int> render_band_b;
+	std::vector<float> render_band_frac;
+	int render_scale_cache_height = 0;
+	size_t render_scale_cache_derivation_size = 0;
+	bool render_scale_cache_interpolated = false;
+	void EnsureRenderScaleCache(int imgheight);
 
 public:
 	/// @brief Constructor

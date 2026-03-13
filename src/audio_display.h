@@ -94,6 +94,14 @@ class AudioDisplay: public wxWindow {
 
 	/// Timer for scrolling when markers are dragged out of the displayed area
 	wxTimer scroll_timer;
+	wxTimer high_frequency_refresh_timer;
+	bool pending_high_frequency_full_refresh = false;
+	bool pending_high_frequency_refresh = false;
+	bool pending_high_frequency_update = false;
+	wxRect pending_high_frequency_rect;
+	static const int high_frequency_refresh_interval_ms = 16;
+	void QueueHighFrequencyRefresh(const wxRect *rect, bool update);
+	void FlushHighFrequencyRefresh();
 
 	wxTimer load_timer;
 	int64_t last_sample_decoded = 0;
@@ -197,6 +205,7 @@ class AudioDisplay: public wxWindow {
 	/// wxWidgets keypress event
 	void OnKeyDown(wxKeyEvent& event);
 	void OnScrollTimer(wxTimerEvent &event);
+	void OnHighFrequencyRefreshTimer(wxTimerEvent &event);
 	void OnLoadTimer(wxTimerEvent &);
 	void OnMouseEnter(wxMouseEvent&);
 	void OnMouseLeave(wxMouseEvent&);

@@ -37,6 +37,7 @@
 #include <libaegisub/make_unique.h>
 
 #include <algorithm>
+#include <sstream>
 #include <wx/dcmemory.h>
 
 enum {
@@ -71,6 +72,28 @@ void AudioWaveformRenderer::OnSetMillisecondsPerPixel() {
 void AudioWaveformRenderer::AgeCache(size_t max_size) {
 	if (summary_cache)
 		summary_cache->Age(max_size);
+}
+
+std::vector<std::string> AudioWaveformRenderer::GetDebugInfo() const {
+	if (!summary_cache)
+		return {};
+	auto metrics = summary_cache->GetMetricsSnapshot();
+	std::ostringstream line1;
+	std::ostringstream line2;
+	line1 << "WF gen=" << metrics.generation
+		<< " hits=" << metrics.cache_hits
+		<< " miss=" << metrics.cache_misses
+		<< " vis=" << metrics.visible_builds
+		<< " pf_req=" << metrics.prefetch_requests
+		<< " pf_build=" << metrics.prefetch_builds
+		<< " stale=" << metrics.stale_drops;
+	line2 << "WF cache entries=" << metrics.cache_entries
+		<< " bytes=" << metrics.cache_bytes
+		<< " evict=" << metrics.evictions;
+	return {
+		line1.str(),
+		line2.str()
+	};
 }
 
 void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)

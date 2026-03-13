@@ -72,6 +72,7 @@ public:
 	/// @param max_size Maximum size in bytes for the cache
 	///
 	void AgeCache(size_t max_size) override;
+	std::vector<std::string> GetDebugInfo() const override;
 
 	/// Get a list of waveform rendering modes
 	static wxArrayString GetWaveformStyles();

@@ -46,6 +46,7 @@
 #include <libaegisub/make_unique.h>
 
 #include <algorithm>
+#include <sstream>
 
 #include <wx/image.h>
 #include <wx/dcmemory.h>
@@ -229,4 +230,26 @@ void AudioSpectrumRenderer::AgeCache(size_t max_size)
 {
 	if (analysis_cache)
 		analysis_cache->Age(max_size);
+}
+
+std::vector<std::string> AudioSpectrumRenderer::GetDebugInfo() const {
+	if (!analysis_cache)
+		return {};
+	auto metrics = analysis_cache->GetMetricsSnapshot();
+	std::ostringstream line1;
+	std::ostringstream line2;
+	line1 << "SP gen=" << metrics.generation
+		<< " hits=" << metrics.cache_hits
+		<< " miss=" << metrics.cache_misses
+		<< " vis=" << metrics.visible_builds
+		<< " pf_req=" << metrics.prefetch_requests
+		<< " pf_build=" << metrics.prefetch_builds
+		<< " stale=" << metrics.stale_drops;
+	line2 << "SP cache entries=" << metrics.cache_entries
+		<< " bytes=" << metrics.cache_bytes
+		<< " evict=" << metrics.evictions;
+	return {
+		line1.str(),
+		line2.str()
+	};
 }

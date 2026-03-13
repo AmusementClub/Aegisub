@@ -30,6 +30,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include <wx/gdicmn.h>
@@ -293,4 +294,5 @@ public:
 	/// Deriving classes should override this method if they implement any
 	/// kind of caching.
 	virtual void AgeCache(size_t max_size) { }
+	virtual std::vector<std::string> GetDebugInfo() const { return {}; }
 };

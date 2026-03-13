@@ -189,6 +189,7 @@ class AudioDisplay: public wxWindow {
 	/// Paint the track cursor
 	/// @param dc DC to paint to
 	void PaintTrackCursor(wxDC &dc);
+	void DrawDebugInfo(wxDC &dc);
 
 	/// Forward the mouse event to the appropriate child control, if any
 	/// @return Was the mouse event forwarded somewhere?

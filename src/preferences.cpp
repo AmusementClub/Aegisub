@@ -154,6 +154,7 @@ void Audio(wxTreebook *book, Preferences *parent) {
 	p->OptionAdd(display, _("Cursor time"), "Audio/Display/Draw/Cursor Time");
 	p->OptionAdd(display, _("Video position"), "Audio/Display/Draw/Video Position");
 	p->OptionAdd(display, _("Seconds boundaries"), "Audio/Display/Draw/Seconds");
+	p->OptionAdd(display, _("Debug metrics"), "Audio/Display/Draw/Debug Metrics");
 	p->CellSkip(display);
 	p->OptionChoice(display, _("Waveform Style"), AudioWaveformRenderer::GetWaveformStyles(), "Audio/Display/Waveform Style");
 

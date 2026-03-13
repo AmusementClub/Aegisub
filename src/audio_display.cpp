@@ -52,6 +52,7 @@
 
 #include <wx/dcbuffer.h>
 #include <wx/dcclient.h>
+#include <wx/font.h>
 #include <wx/mousestate.h>
 
 /// @class AudioDisplayInteractionObject
@@ -908,6 +909,9 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 
 			dc.DestroyClippingRegion();
 		}
+
+		if (OPT_GET("Audio/Display/Draw/Debug Metrics")->GetBool())
+			DrawDebugInfo(dc);
 	}
 
 	if (track_cursor_pos >= 0)
@@ -926,6 +930,43 @@ void AudioDisplay::RefreshTrackCursorOverlay() {
 	overlaydc.Clear();
 	if (track_cursor_pos >= 0)
 		PaintTrackCursor(dc);
+}
+
+void AudioDisplay::DrawDebugInfo(wxDC &dc) {
+	if (!audio_renderer_provider)
+		return;
+
+	auto lines = audio_renderer_provider->GetDebugInfo();
+	if (lines.empty())
+		return;
+
+	wxFont font = dc.GetFont();
+	font.SetPointSize(std::max(7, font.GetPointSize() - 1));
+	dc.SetFont(font);
+
+	int max_width = 0;
+	int line_height = 0;
+	for (const auto& line : lines) {
+		wxSize extent = dc.GetTextExtent(to_wx(line));
+		max_width = std::max(max_width, extent.GetWidth());
+		line_height = std::max(line_height, extent.GetHeight());
+	}
+
+	const int padding = FromDIP(4);
+	const int left = GetClientSize().GetWidth() - max_width - padding * 2 - FromDIP(6);
+	const int top = audio_top + padding;
+	const int height = static_cast<int>(lines.size()) * line_height + padding * 2;
+
+	dc.SetPen(*wxTRANSPARENT_PEN);
+	dc.SetBrush(wxBrush(wxColour(0, 0, 0, 160)));
+	dc.DrawRectangle(left, top, max_width + padding * 2, height);
+	dc.SetTextForeground(*wxWHITE);
+
+	int y = top + padding;
+	for (const auto& line : lines) {
+		dc.DrawText(to_wx(line), left + padding, y);
+		y += line_height;
+	}
 }
 
 void AudioDisplay::PaintAudio(wxDC &dc, const TimeRange updtime, const wxRect updrect)

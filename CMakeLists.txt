@@ -4,6 +4,11 @@ include(CheckIncludeFiles)
 
 project(Aegisub)
 
+option(AEGISUB_LUAJIT_SHARED "Build bundled LuaJIT as a shared library on Windows" OFF)
+if(AEGISUB_LUAJIT_SHARED AND NOT WIN32)
+    message(FATAL_ERROR "AEGISUB_LUAJIT_SHARED is currently only supported on Windows")
+endif()
+
 list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 
 # Explicitly set the build type to Release if no other type is specified
@@ -127,7 +132,12 @@ add_custom_command(
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/vendor/luajit/src
 )
 
-add_library(luajit STATIC
+set(AEGISUB_LUAJIT_LIBRARY_TYPE STATIC)
+if(WIN32 AND AEGISUB_LUAJIT_SHARED)
+    set(AEGISUB_LUAJIT_LIBRARY_TYPE SHARED)
+endif()
+
+add_library(luajit ${AEGISUB_LUAJIT_LIBRARY_TYPE}
     vendor/luajit/src/lib_base.c
     vendor/luajit/src/lib_math.c
     vendor/luajit/src/lib_bit.c
@@ -203,6 +213,10 @@ add_library(luajit STATIC
 )
 target_compile_definitions(luajit PRIVATE LUAJIT_ENABLE_LUA52COMPAT)
 target_include_directories(luajit PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen" PUBLIC "vendor/luajit/src")
+if(WIN32 AND AEGISUB_LUAJIT_SHARED)
+    target_compile_definitions(luajit PRIVATE LUA_BUILD_AS_DLL)
+    set_target_properties(luajit PROPERTIES OUTPUT_NAME lua51)
+endif()
 if(WIN32)
     target_sources(luajit PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/lj_vm.obj")
 else()
@@ -310,6 +324,9 @@ if(APPLE)
 endif()
 set_target_properties(libaegisub PROPERTIES PREFIX "")
 target_compile_definitions(libaegisub PRIVATE CMAKE_BUILD)
+if(WIN32 AND AEGISUB_LUAJIT_SHARED)
+    target_compile_definitions(libaegisub PRIVATE LUA_BUILD_AS_DLL)
+endif()
 target_include_directories(libaegisub PUBLIC "libaegisub/include")
 if(APPLE)
     # CMake on macOS currently does not support pch with objc, so use the old way
@@ -518,6 +535,14 @@ target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} libaegisub luajit)
 target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
 if(LUASOCKET)
     target_compile_definitions(Aegisub PRIVATE WITH_LUASOCKET)
+endif()
+if(WIN32 AND AEGISUB_LUAJIT_SHARED)
+    target_compile_definitions(Aegisub PRIVATE LUA_BUILD_AS_DLL)
+    add_custom_command(TARGET Aegisub POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:luajit>
+            $<TARGET_FILE_DIR:Aegisub>
+    )
 endif()
 target_include_directories(Aegisub PRIVATE "src/libresrc" "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc")
 if(APPLE)
@@ -853,6 +878,13 @@ if(NOT WIN32)
     install(FILES "packages/desktop/scalable.svg" DESTINATION "share/icons/hicolor/scalable/apps" RENAME aegisub.svg)
 endif()
 install(TARGETS Aegisub DESTINATION bin)
+if(WIN32 AND AEGISUB_LUAJIT_SHARED)
+    install(TARGETS luajit
+        RUNTIME DESTINATION bin
+        LIBRARY DESTINATION bin
+        ARCHIVE DESTINATION lib
+    )
+endif()
 
 # Build translations
 find_package(Gettext)

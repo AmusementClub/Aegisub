@@ -69,6 +69,7 @@ make
 ```
 
 Features can be turned on/off in CMake by toggling the `WITH_*` switches.
+On Windows, `-DAEGISUB_LUAJIT_SHARED=ON` builds the bundled LuaJIT as `lua51.dll` instead of statically linking it into the executable.
 
 For Archlinux users, you can also try the [PKGBUILD in project wiki](https://github.com/wangqr/Aegisub/wiki/PKGBUILD-for-Arch).
 

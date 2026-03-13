@@ -127,6 +127,8 @@ jobs:
 
   build-win:
     runs-on: windows-latest
+    env:
+      AEGISUB_LUAJIT_SHARED: 'OFF'
     steps:
     - name: checkout code
       uses: actions/checkout@v2
@@ -154,7 +156,7 @@ jobs:
         bash.exe build/version.sh .
         New-Item -Path build-dir -ItemType directory
         Set-Location build-dir
-        cmake.exe '-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake' '-DVCPKG_TARGET_TRIPLET=x64-windows-release' '-DFFMS2_INCLUDE_DIRS=../vendor/ffms2/ffms2-2.23.1-msvc/include' '-DFFMS2_LIBRARIES=../vendor/ffms2/ffms2-2.23.1-msvc/x64/ffms2.lib' '-DXAUDIO2_REDIST=ON' '-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /GR /EHsc /DUNICODE /D_UNICODE /MP' '-DCMAKE_C_FLAGS=/DWIN32 /D_WINDOWS /DUNICODE /D_UNICODE /MP' '-DWITH_TEST=ON' ..
+        cmake.exe '-DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake' '-DVCPKG_TARGET_TRIPLET=x64-windows-release' '-DFFMS2_INCLUDE_DIRS=../vendor/ffms2/ffms2-2.23.1-msvc/include' '-DFFMS2_LIBRARIES=../vendor/ffms2/ffms2-2.23.1-msvc/x64/ffms2.lib' '-DXAUDIO2_REDIST=ON' '-DCMAKE_CXX_FLAGS=/DWIN32 /D_WINDOWS /GR /EHsc /DUNICODE /D_UNICODE /MP' '-DCMAKE_C_FLAGS=/DWIN32 /D_WINDOWS /DUNICODE /D_UNICODE /MP' '-DWITH_TEST=ON' "-DAEGISUB_LUAJIT_SHARED=$env:AEGISUB_LUAJIT_SHARED" ..
 
     - name: Add msbuild to PATH
       uses: microsoft/setup-msbuild@v1.0.2
@@ -178,6 +180,9 @@ jobs:
         Move-Item -Path build-dir\Release\Aegisub.exe -Destination build-dir\Aegisub.exe
         Remove-Item -Path build-dir\Release\*.exp,build-dir\Release\*.lib,build-dir\Release\*.exe
         Move-Item -Path build-dir\Aegisub.exe -Destination build-dir\Release\Aegisub.exe
+        if ($env:AEGISUB_LUAJIT_SHARED -eq 'ON' -and -not (Test-Path build-dir\Release\lua51.dll)) {
+          throw 'lua51.dll was not produced in build-dir\Release'
+        }
         New-Item -Path build-dir\Release\automation -ItemType directory
         Copy-Item -Path automation\autoload,automation\demos,automation\include -Destination build-dir\Release\automation -Recurse
 

@@ -22,6 +22,9 @@
 #ifdef WITH_FFMS2
 #include "ffmpegsource_common.h"
 #endif
+#ifdef WITH_AVISYNTH
+#include "avisynth_wrap.h"
+#endif
 
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/fs.h>
@@ -40,6 +43,7 @@ struct factory {
 	const char *name;
 	std::unique_ptr<AudioProvider> (*create)(fs::path const&, BackgroundRunner *);
 	bool (*is_available)();
+	std::string (*availability_error)();
 	bool hidden;
 };
 
@@ -47,22 +51,54 @@ struct factory {
 bool IsFFmpegSourceAvailable() {
 	return ffms::IsAvailable();
 }
+
+std::string GetFFmpegSourceAvailabilityError() {
+	auto err = ffms::GetLoadError();
+	return err.empty() ? "runtime library is unavailable." : err;
+}
 #endif
 
+#ifdef WITH_AVISYNTH
+bool IsAvisynthAvailable() {
+	return avisynth::IsAvailable();
+}
+
+std::string GetAvisynthAvailabilityError() {
+	auto err = avisynth::GetLoadError();
+	return err.empty() ? "runtime library is unavailable." : err;
+}
+#endif
+
+std::string GetDisplayName(factory const& provider) {
+	std::string name = provider.name;
+	if (!provider.hidden && provider.is_available && !provider.is_available())
+		name += " (Unavailable)";
+	return name;
+}
+
 const factory providers[] = {
-	{"Dummy", CreateDummyAudioProvider, nullptr, true},
-	{"PCM", CreatePCMAudioProvider, nullptr, true},
+	{"Dummy", CreateDummyAudioProvider, nullptr, nullptr, true},
+	{"PCM", CreatePCMAudioProvider, nullptr, nullptr, true},
 #ifdef WITH_FFMS2
-	{"FFmpegSource", CreateFFmpegSourceAudioProvider, IsFFmpegSourceAvailable, false},
+	{"FFmpegSource", CreateFFmpegSourceAudioProvider, IsFFmpegSourceAvailable, GetFFmpegSourceAvailabilityError, false},
 #endif
 #ifdef WITH_AVISYNTH
-	{"Avisynth", CreateAvisynthAudioProvider, nullptr, false},
+	{"Avisynth", CreateAvisynthAudioProvider, IsAvisynthAvailable, GetAvisynthAvailabilityError, false},
 #endif
 };
 }
 
 std::vector<std::string> GetAudioProviderNames() {
 	return ::GetClasses(boost::make_iterator_range(std::begin(providers), std::end(providers)));
+}
+
+std::vector<std::pair<std::string, std::string>> GetAudioProviderChoices() {
+	std::vector<std::pair<std::string, std::string>> choices;
+	for (auto const& provider : providers) {
+		if (!provider.hidden)
+			choices.emplace_back(GetDisplayName(provider), provider.name);
+	}
+	return choices;
 }
 
 std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
@@ -79,7 +115,7 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 
 	for (auto const& factory : sorted) {
 		if (factory->is_available && !factory->is_available()) {
-			std::string err = std::string(factory->name) + ": runtime library is unavailable.";
+			std::string err = std::string(factory->name) + ": " + (factory->availability_error ? factory->availability_error() : "runtime library is unavailable.");
 			LOG_D("audio_provider") << err;
 			msg_all += err + "\n";
 			continue;

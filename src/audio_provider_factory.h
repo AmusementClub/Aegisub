@@ -17,6 +17,8 @@
 #include <libaegisub/fs_fwd.h>
 
 #include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 
 namespace agi {
@@ -29,3 +31,4 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(agi::fs::path const& filena
                                                      agi::Path const& path_helper,
                                                      agi::BackgroundRunner *br);
 std::vector<std::string> GetAudioProviderNames();
+std::vector<std::pair<std::string, std::string>> GetAudioProviderChoices();

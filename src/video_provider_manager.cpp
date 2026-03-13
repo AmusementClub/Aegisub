@@ -22,6 +22,9 @@
 #ifdef WITH_FFMS2
 #include "ffmpegsource_common.h"
 #endif
+#ifdef WITH_AVISYNTH
+#include "avisynth_wrap.h"
+#endif
 
 #include <libaegisub/fs.h>
 #include <libaegisub/log.h>
@@ -40,6 +43,7 @@ namespace {
 		const char *name;
 		std::unique_ptr<VideoProvider> (*create)(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
 		bool (*is_available)();
+		std::string (*availability_error)();
 		bool hidden;
 	};
 
@@ -47,22 +51,54 @@ namespace {
 	bool IsFFmpegSourceAvailable() {
 		return ffms::IsAvailable();
 	}
+
+	std::string GetFFmpegSourceAvailabilityError() {
+		auto err = ffms::GetLoadError();
+		return err.empty() ? "runtime library is unavailable." : err;
+	}
 #endif
 
+#ifdef WITH_AVISYNTH
+	bool IsAvisynthAvailable() {
+		return avisynth::IsAvailable();
+	}
+
+	std::string GetAvisynthAvailabilityError() {
+		auto err = avisynth::GetLoadError();
+		return err.empty() ? "runtime library is unavailable." : err;
+	}
+#endif
+
+	std::string GetDisplayName(factory const& provider) {
+		std::string name = provider.name;
+		if (!provider.hidden && provider.is_available && !provider.is_available())
+			name += " (Unavailable)";
+		return name;
+	}
+
 	const factory providers[] = {
-		{"Dummy", CreateDummyVideoProvider, nullptr, true},
-		{"YUV4MPEG", CreateYUV4MPEGVideoProvider, nullptr, true},
+		{"Dummy", CreateDummyVideoProvider, nullptr, nullptr, true},
+		{"YUV4MPEG", CreateYUV4MPEGVideoProvider, nullptr, nullptr, true},
 #ifdef WITH_FFMS2
-		{"FFmpegSource", CreateFFmpegSourceVideoProvider, IsFFmpegSourceAvailable, false},
+		{"FFmpegSource", CreateFFmpegSourceVideoProvider, IsFFmpegSourceAvailable, GetFFmpegSourceAvailabilityError, false},
 #endif
 #ifdef WITH_AVISYNTH
-		{"Avisynth", CreateAvisynthVideoProvider, nullptr, false},
+		{"Avisynth", CreateAvisynthVideoProvider, IsAvisynthAvailable, GetAvisynthAvailabilityError, false},
 #endif
 	};
 }
 
 std::vector<std::string> VideoProviderFactory::GetClasses() {
 	return ::GetClasses(boost::make_iterator_range(std::begin(providers), std::end(providers)));
+}
+
+std::vector<std::pair<std::string, std::string>> VideoProviderFactory::GetChoices() {
+	std::vector<std::pair<std::string, std::string>> choices;
+	for (auto const& provider : providers) {
+		if (!provider.hidden)
+			choices.emplace_back(GetDisplayName(provider), provider.name);
+	}
+	return choices;
 }
 
 std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br) {
@@ -77,7 +113,7 @@ std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path c
 	for (auto factory : sorted) {
 		std::string err;
 		if (factory->is_available && !factory->is_available()) {
-			err = "runtime library is unavailable.";
+			err = factory->availability_error ? factory->availability_error() : "runtime library is unavailable.";
 			errors += std::string(factory->name) + ": " + err + "\n";
 			LOG_D("manager/video/provider") << factory->name << ": " << err;
 			continue;

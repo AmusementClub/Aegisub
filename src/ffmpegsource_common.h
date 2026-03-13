@@ -34,6 +34,7 @@
 
 #ifdef WITH_FFMS2
 #include <map>
+#include <string>
 
 #include <ffms.h>
 
@@ -46,6 +47,8 @@ namespace ffms {
 #ifdef WITH_FFMS2_RUNTIME_LOADING
 	void EnsureLoaded();
 	bool IsAvailable() noexcept;
+	std::string GetLoadError();
+	std::string GetLoadedLibrary();
 
 	#define AGI_FFMS2_FN(name) extern decltype(&FFMS_##name) name;
 	#include "ffms2_functions.inc"
@@ -53,6 +56,8 @@ namespace ffms {
 #else
 	inline void EnsureLoaded() {}
 	inline bool IsAvailable() noexcept { return true; }
+	inline std::string GetLoadError() { return {}; }
+	inline std::string GetLoadedLibrary() { return {}; }
 
 	#define AGI_FFMS2_FN(name) constexpr auto name = &FFMS_##name;
 	#include "ffms2_functions.inc"

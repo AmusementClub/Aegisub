@@ -38,7 +38,15 @@
 #include <avisynth.h>
 #include "options.h"
 
+#include <libaegisub/log.h>
+
+#ifdef _WIN32
+#include <libaegisub/charset_conv_win.h>
+#include <libaegisub/util.h>
+#endif
+
 #include <mutex>
+#include <string>
 
 #ifndef _WIN32
 #include <dlfcn.h>
@@ -55,6 +63,8 @@
 
 const AVS_Linkage* AVS_linkage;
 
+typedef IScriptEnvironment* __stdcall FUNC(int);
+
 // Allocate storage for and initialise static members
 namespace {
 	int avs_refcount = 0;
@@ -65,12 +75,44 @@ namespace {
 #endif
 	IScriptEnvironment *env = nullptr;
 	std::mutex AviSynthMutex;
-}
+	FUNC* CreateScriptEnv = nullptr;
+	std::string load_error;
+	std::string loaded_library;
+	bool load_attempted = false;
+	bool load_complete = false;
 
-typedef IScriptEnvironment* __stdcall FUNC(int);
+	std::string GetLoadFailureReason() {
+#ifdef _WIN32
+		return agi::util::ErrorString(GetLastError());
+#else
+		auto err = dlerror();
+		return err ? err : "unknown error";
+#endif
+	}
 
-AviSynthWrapper::AviSynthWrapper() {
-	if (!avs_refcount++) {
+	std::string GetLoadedLibraryPath() {
+#ifdef _WIN32
+		std::wstring path(32768, L'\0');
+		auto len = GetModuleFileNameW(hLib, &path[0], static_cast<DWORD>(path.size()));
+		if (!len)
+			return AVISYNTH_SO;
+		path.resize(len);
+		return agi::charset::ConvertW(path);
+#else
+		Dl_info info{};
+		if (CreateScriptEnv && dladdr(reinterpret_cast<void *>(CreateScriptEnv), &info) && info.dli_fname)
+			return info.dli_fname;
+		return AVISYNTH_SO;
+#endif
+	}
+
+	void EnsureAvisynthRuntimeLoaded() {
+		if (load_complete)
+			return;
+		if (load_attempted)
+			throw AvisynthError(load_error.c_str());
+		load_attempted = true;
+
 #ifdef _WIN32
 #define CONCATENATE(x, y) x ## y
 #define _Lstr(x) CONCATENATE(L, x)
@@ -81,17 +123,59 @@ AviSynthWrapper::AviSynthWrapper() {
 		hLib = dlopen(AVISYNTH_SO, RTLD_LAZY | RTLD_LOCAL | RTLD_DEEPBIND);
 #endif
 
-		if (!hLib)
-			throw AvisynthError("Could not load avisynth.dll");
+		if (!hLib) {
+			load_error = std::string("Could not load Avisynth runtime library '") + AVISYNTH_SO + "': " + GetLoadFailureReason();
+			LOG_W("provider/avisynth/runtime") << load_error;
+			throw AvisynthError(load_error.c_str());
+		}
 
 #ifdef _WIN32
-		FUNC* CreateScriptEnv = (FUNC*)GetProcAddress(hLib, "CreateScriptEnvironment");
+		CreateScriptEnv = reinterpret_cast<FUNC*>(GetProcAddress(hLib, "CreateScriptEnvironment"));
 #else
-		FUNC* CreateScriptEnv = (FUNC*)dlsym(hLib, "CreateScriptEnvironment");
+		dlerror();
+		CreateScriptEnv = reinterpret_cast<FUNC*>(dlsym(hLib, "CreateScriptEnvironment"));
 #endif
-		if (!CreateScriptEnv)
-			throw AvisynthError("Failed to get address of CreateScriptEnv from avisynth.dll");
+		if (!CreateScriptEnv) {
+			load_error = std::string("Failed to resolve Avisynth symbol CreateScriptEnvironment: ") + GetLoadFailureReason();
+			LOG_W("provider/avisynth/runtime") << load_error;
+			throw AvisynthError(load_error.c_str());
+		}
 
+		loaded_library = GetLoadedLibraryPath();
+		load_error.clear();
+		load_complete = true;
+		LOG_I("provider/avisynth/runtime") << "Loaded Avisynth from " << loaded_library;
+	}
+}
+
+namespace avisynth {
+	bool IsAvailable() noexcept {
+		std::lock_guard<std::mutex> lock(AviSynthMutex);
+		try {
+			EnsureAvisynthRuntimeLoaded();
+			return true;
+		}
+		catch (...) {
+			return false;
+		}
+	}
+
+	std::string GetLoadError() {
+		std::lock_guard<std::mutex> lock(AviSynthMutex);
+		return load_error;
+	}
+
+	std::string GetLoadedLibrary() {
+		std::lock_guard<std::mutex> lock(AviSynthMutex);
+		return loaded_library;
+	}
+}
+
+AviSynthWrapper::AviSynthWrapper() {
+	std::lock_guard<std::mutex> lock(AviSynthMutex);
+	EnsureAvisynthRuntimeLoaded();
+
+	if (!avs_refcount++) {
 		// Require Avisynth 2.5.6+?
 		if (OPT_GET("Provider/Avisynth/Allow Ancient")->GetBool())
 			env = CreateScriptEnv(AVISYNTH_INTERFACE_VERSION-1);
@@ -110,13 +194,10 @@ AviSynthWrapper::AviSynthWrapper() {
 }
 
 AviSynthWrapper::~AviSynthWrapper() {
+	std::lock_guard<std::mutex> lock(AviSynthMutex);
 	if (!--avs_refcount) {
 		delete env;
-#ifdef _WIN32
-		FreeLibrary(hLib);
-#else
-		dlclose(hLib);
-#endif
+		env = nullptr;
 	}
 }
 

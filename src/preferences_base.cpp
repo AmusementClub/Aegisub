@@ -28,6 +28,7 @@
 #include <libaegisub/make_unique.h>
 
 #include <wx/checkbox.h>
+#include <wx/clntdata.h>
 #include <wx/combobox.h>
 #include <wx/dirdlg.h>
 #include <wx/event.h>
@@ -177,6 +178,51 @@ void OptionPage::OptionChoice(wxFlexGridSizer *flex, const wxString &name, const
 			else if (!choices.empty())
 				cb->SetSelection(0);
 			cb->Bind(wxEVT_COMBOBOX, StringUpdater(opt_name, parent));
+			break;
+		}
+
+		default:
+			throw agi::InternalError("Unsupported type");
+	}
+}
+
+void OptionPage::OptionChoice(wxFlexGridSizer *flex, const wxString &name, const std::vector<std::pair<std::string, std::string>> &choices, const char *opt_name) {
+	parent->AddChangeableOption(opt_name);
+	const auto opt = OPT_GET(opt_name);
+
+	auto cb = new wxComboBox(this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0, nullptr, wxCB_READONLY | wxCB_DROPDOWN);
+	Add(flex, name, cb);
+
+	for (auto const& choice : choices)
+		cb->Append(to_wx(choice.first), new wxStringClientData(to_wx(choice.second)));
+
+	switch (opt->GetType()) {
+		case agi::OptionType::Int: {
+			int val = opt->GetInt();
+			cb->Select(val < static_cast<int>(choices.size()) ? val : 0);
+			cb->Bind(wxEVT_COMBOBOX, IntCBUpdater(opt_name, parent));
+			break;
+		}
+		case agi::OptionType::String: {
+			wxString val(to_wx(opt->GetString()));
+			for (unsigned i = 0; i < cb->GetCount(); ++i) {
+				auto data = static_cast<wxStringClientData *>(cb->GetClientObject(i));
+				if (data && data->GetData() == val) {
+					cb->SetSelection(i);
+					break;
+				}
+			}
+			if (cb->GetSelection() == wxNOT_FOUND && !choices.empty())
+				cb->SetSelection(0);
+			auto prefs = parent;
+			std::string option_name = opt_name;
+			cb->Bind(wxEVT_COMBOBOX, [prefs, option_name, cb](wxCommandEvent& evt) {
+				evt.Skip();
+				auto sel = cb->GetSelection();
+				auto data = sel != wxNOT_FOUND ? static_cast<wxStringClientData *>(cb->GetClientObject(sel)) : nullptr;
+				wxString value = data ? data->GetData() : evt.GetString();
+				prefs->SetOption(agi::make_unique<agi::OptionValueString>(option_name, from_wx(value)));
+			});
 			break;
 		}
 

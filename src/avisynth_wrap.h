@@ -36,8 +36,16 @@
 
 #include <libaegisub/exception.h>
 
+#include <string>
+
 class IScriptEnvironment;
 namespace std { class mutex; }
+
+namespace avisynth {
+	bool IsAvailable() noexcept;
+	std::string GetLoadError();
+	std::string GetLoadedLibrary();
+}
 
 class AviSynthWrapper {
 	AviSynthWrapper(AviSynthWrapper const&);

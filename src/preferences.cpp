@@ -378,8 +378,7 @@ void Advanced_Audio(wxTreebook *book, Preferences *parent) {
 
 	auto expert = p->PageSizer(_("Expert"));
 
-	wxArrayString ap_choice = to_wx(GetAudioProviderNames());
-	p->OptionChoice(expert, _("Audio provider"), ap_choice, "Audio/Provider");
+	p->OptionChoice(expert, _("Audio provider"), GetAudioProviderChoices(), "Audio/Provider");
 
 	wxArrayString apl_choice = to_wx(AudioPlayerFactory::GetClasses());
 	p->OptionChoice(expert, _("Audio player"), apl_choice, "Audio/Player");
@@ -448,8 +447,7 @@ void Advanced_Video(wxTreebook *book, Preferences *parent) {
 
 	auto expert = p->PageSizer(_("Expert"));
 
-	wxArrayString vp_choice = to_wx(VideoProviderFactory::GetClasses());
-	p->OptionChoice(expert, _("Video provider"), vp_choice, "Video/Provider");
+	p->OptionChoice(expert, _("Video provider"), VideoProviderFactory::GetChoices(), "Video/Provider");
 
 	wxArrayString sp_choice = to_wx(SubtitlesProviderFactory::GetClasses());
 	p->OptionChoice(expert, _("Subtitles provider"), sp_choice, "Subtitle/Provider");

@@ -462,6 +462,7 @@ add_executable(Aegisub WIN32
     src/audio_player.cpp
     src/audio_provider_factory.cpp
     src/audio_renderer.cpp
+    src/audio_spectrum_analysis_cache.cpp
     src/audio_renderer_spectrum.cpp
     src/audio_renderer_waveform.cpp
     src/audio_waveform_summary_cache.cpp

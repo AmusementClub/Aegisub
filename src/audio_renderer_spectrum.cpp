@@ -34,6 +34,7 @@
 
 #include "audio_renderer_spectrum.h"
 
+#include "audio_spectrum_analysis_cache.h"
 #include "audio_colorscheme.h"
 #include "audio_display_source.h"
 #include "audio_mix_policy.h"
@@ -60,48 +61,12 @@ inline float max_inclusive_range(const float *values, int first, int last) {
 }
 }
 
-/// Allocates blocks of derived data for the audio spectrum
-struct AudioSpectrumCacheBlockFactory {
-	typedef std::unique_ptr<float, std::default_delete<float[]>> BlockType;
-
-	/// Pointer back to the owning spectrum renderer
-	AudioSpectrumRenderer *spectrum;
-
-	/// @brief Allocate and fill a data block
-	/// @param i Index of the block to produce data for
-	/// @return Newly allocated and filled block
-	///
-	/// The filling is delegated to the spectrum renderer
-	BlockType ProduceBlock(size_t i)
-	{
-		auto res = new float[((size_t)1)<<spectrum->derivation_size];
-		spectrum->FillBlock(i, res);
-		return BlockType(res);
-	}
-
-	/// @brief Calculate the in-memory size of a spec
-	/// @return The size in bytes of a spectrum cache block
-	size_t GetBlockSize() const
-	{
-		return sizeof(float) << spectrum->derivation_size;
-	}
-};
-
-/// @brief Cache for audio spectrum frequency-power data
-class AudioSpectrumCache
-: public DataBlockCache<float, 10, AudioSpectrumCacheBlockFactory> {
-public:
-	AudioSpectrumCache(size_t block_count, AudioSpectrumRenderer *renderer)
-	: DataBlockCache(block_count, AudioSpectrumCacheBlockFactory{renderer})
-	{
-	}
-};
-
 AudioSpectrumRenderer::AudioSpectrumRenderer(std::string const& color_scheme_name)
 {
 	colors.reserve(AudioStyle_MAX);
 	for (int i = 0; i < AudioStyle_MAX; ++i)
 		colors.emplace_back(12, color_scheme_name, i);
+	analysis_cache = std::make_unique<AudioSpectrumAnalysisCache>();
 }
 
 void AudioSpectrumRenderer::EnsureRenderScaleCache(int imgheight) {
@@ -142,47 +107,14 @@ void AudioSpectrumRenderer::EnsureRenderScaleCache(int imgheight) {
 
 AudioSpectrumRenderer::~AudioSpectrumRenderer()
 {
-	// This sequence will clean up
-	provider = nullptr;
-	RecreateCache();
 }
 
 void AudioSpectrumRenderer::RecreateCache()
 {
-	rolling_window_valid = false;
-#ifdef WITH_FFTW3
-	if (dft_plan)
-	{
-		fftw_destroy_plan(dft_plan);
-		fftw_free(dft_input);
-		fftw_free(dft_output);
-		dft_plan = nullptr;
-		dft_input = nullptr;
-		dft_output = nullptr;
-	}
-#endif
-
-	if (provider)
-	{
-		size_t block_count = (size_t)((provider->GetNumSamples() + ((size_t)1<<derivation_dist) - 1) >> derivation_dist);
-		cache = agi::make_unique<AudioSpectrumCache>(block_count, this);
-
-#ifdef WITH_FFTW3
-		dft_input = fftw_alloc_real(2<<derivation_size);
-		dft_output = fftw_alloc_complex(2<<derivation_size);
-		dft_plan = fftw_plan_dft_r2c_1d(
-			2<<derivation_size,
-			dft_input,
-			dft_output,
-			FFTW_MEASURE);
-#else
-		// Allocate scratch for 6x the derivation size:
-		// 2x for the input sample data
-		// 2x for the real part of the output
-		// 2x for the imaginary part of the output
-		fft_scratch.resize(6 << derivation_size);
-#endif
-		audio_scratch.resize(2 << derivation_size);
+	if (analysis_cache) {
+		analysis_cache->SetSource(display_source);
+		analysis_cache->SetMixPolicy(mix_policy);
+		analysis_cache->SetResolution(derivation_size, derivation_dist);
 	}
 }
 
@@ -194,99 +126,16 @@ void AudioSpectrumRenderer::OnSetProvider()
 void AudioSpectrumRenderer::SetResolution(size_t _derivation_size, size_t _derivation_dist)
 {
 	if (derivation_dist != _derivation_dist)
-	{
 		derivation_dist = _derivation_dist;
-		if (cache)
-			cache->Age(0);
-	}
 
 	if (derivation_size != _derivation_size)
-	{
 		derivation_size = _derivation_size;
-		RecreateCache();
-	}
-}
-
-void AudioSpectrumRenderer::FillBlock(size_t block_index, float *block)
-{
-	assert(cache);
-	assert(block);
-	assert(display_source);
-
-	const int channels = std::max(1, display_source->GetChannels());
-	const size_t sample_count = static_cast<size_t>(2) << derivation_size;
-	const size_t hop_samples = static_cast<size_t>(1) << derivation_dist;
-	int64_t first_sample = (((int64_t)block_index) << derivation_dist) - ((int64_t)1 << derivation_size);
-	mono_scratch.resize(sample_count);
-
-	bool reused_window = rolling_window_valid
-		&& block_index == rolling_window_block_index + 1
-		&& hop_samples <= sample_count;
-
-	if (reused_window) {
-		const size_t overlap_samples = sample_count - hop_samples;
-		std::move(mono_scratch.begin() + hop_samples, mono_scratch.end(), mono_scratch.begin());
-
-		audio_scratch.resize(hop_samples * channels);
-		display_source->GetFloatAudio(audio_scratch.data(), first_sample + overlap_samples, hop_samples);
-		float *tail = mono_scratch.data() + overlap_samples;
-		if (channels == 1)
-			std::copy(audio_scratch.begin(), audio_scratch.begin() + hop_samples, tail);
-		else
-			MixAudioToMono(mix_policy, audio_scratch.data(), static_cast<int>(hop_samples), channels, tail);
-	}
-	else {
-		audio_scratch.resize(sample_count * channels);
-		display_source->GetFloatAudio(audio_scratch.data(), first_sample, sample_count);
-		if (channels == 1)
-			std::copy(audio_scratch.begin(), audio_scratch.begin() + sample_count, mono_scratch.begin());
-		else
-			MixAudioToMono(mix_policy, audio_scratch.data(), static_cast<int>(sample_count), channels, mono_scratch.data());
-	}
-
-	rolling_window_valid = true;
-	rolling_window_block_index = block_index;
-
-#ifdef WITH_FFTW3
-	for (size_t i = 0; i < sample_count; ++i)
-		dft_input[i] = mono_scratch[i];
-
-	fftw_execute(dft_plan);
-
-	double scale_factor = 9 / sqrt(2 << (derivation_size + 1));
-
-	fftw_complex *o = dft_output;
-	for (size_t si = (size_t)1<<derivation_size; si > 0; --si)
-	{
-		*block++ = log10( sqrt(o[0][0] * o[0][0] + o[0][1] * o[0][1]) * scale_factor + 1 );
-		o++;
-	}
-#else
-	std::copy(mono_scratch.begin(), mono_scratch.begin() + sample_count, &fft_scratch[0]);
-
-	float *fft_input = &fft_scratch[0];
-	float *fft_real = &fft_scratch[0] + (2 << derivation_size);
-	float *fft_imag = &fft_scratch[0] + (4 << derivation_size);
-
-	FFT fft;
-	fft.Transform(2<<derivation_size, fft_input, fft_real, fft_imag);
-
-	float scale_factor = 9 / sqrt(2 * (float)(2<<derivation_size));
-
-	for (size_t si = 1<<derivation_size; si > 0; --si)
-	{
-		// With x in range [0;1], log10(x*9+1) will also be in range [0;1],
-		// although the FFT output can apparently get greater magnitudes than 1
-		// despite the input being limited to [-1;+1).
-		*block++ = log10( sqrt(*fft_real * *fft_real + *fft_imag * *fft_imag) * scale_factor + 1 );
-		fft_real++; fft_imag++;
-	}
-#endif
+	RecreateCache();
 }
 
 void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
 {
-	if (!cache)
+	if (!analysis_cache || !analysis_cache->IsReady())
 		return;
 
 	assert(bmp.IsOk());
@@ -309,7 +158,7 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 	const bool interpolated = imgheight > 1 << derivation_size;
 	const double samples_per_pixel = pixel_ms * display_source->GetSampleRate() / 1000.0;
 	size_t last_block_index = static_cast<size_t>(-1);
-	float *last_power = nullptr;
+	const float *last_power = nullptr;
 	const int *band_a = render_band_a.data();
 	const int *band_b = render_band_b.data();
 	const float *band_frac = interpolated ? render_band_frac.data() : nullptr;
@@ -319,11 +168,11 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 	{
 		// Derived audio data
 		size_t block_index = static_cast<size_t>(ax * samples_per_pixel) >> derivation_dist;
-		float *power;
+		const float *power;
 		if (block_index == last_block_index)
 			power = last_power;
 		else {
-			power = &cache->Get(block_index);
+			power = analysis_cache->Get(block_index);
 			last_block_index = block_index;
 			last_power = power;
 		}
@@ -377,6 +226,6 @@ void AudioSpectrumRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRende
 
 void AudioSpectrumRenderer::AgeCache(size_t max_size)
 {
-	if (cache)
-		cache->Age(max_size);
+	if (analysis_cache)
+		analysis_cache->Age(max_size);
 }

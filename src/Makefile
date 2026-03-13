@@ -42,6 +42,7 @@ src_OBJ := \
 	$(d)audio_player.o \
 	$(d)audio_provider_factory.o \
 	$(d)audio_renderer.o \
+	$(d)audio_spectrum_analysis_cache.o \
 	$(d)audio_renderer_spectrum.o \
 	$(d)audio_renderer_waveform.o \
 	$(d)audio_waveform_summary_cache.o \

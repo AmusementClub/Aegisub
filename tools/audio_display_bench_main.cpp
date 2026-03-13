@@ -1,6 +1,7 @@
 #include "audio_display_analysis.h"
 #include "audio_display_source.h"
 #include "audio_mix_policy.h"
+#include "audio_spectrum_analysis_cache.h"
 #include "audio_waveform_summary_cache.h"
 #include "fft.h"
 
@@ -325,6 +326,51 @@ BenchResult RunNewSpectrumBench() {
 	return { "new_spectrum_block_float", iterations, total_ms, total_ms / iterations, total_frames / (total_ms / 1000.0) / 1'000'000.0 };
 }
 
+BenchResult RunSpectrumAnalysisCacheColdBench() {
+	constexpr int iterations = 200;
+	SyntheticInt16StereoProvider provider(1 << 16);
+	auto source = CreateAudioDisplaySource(&provider);
+	volatile float sink = 0.f;
+
+	auto t0 = clock_type::now();
+	for (int i = 0; i < iterations; ++i) {
+		AudioSpectrumAnalysisCache cache;
+		cache.SetSource(source.get());
+		cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+		cache.SetResolution(9, 7);
+		const float *block = cache.Get(0);
+		sink += block[0];
+	}
+	auto t1 = clock_type::now();
+	(void)sink;
+
+	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	return { "spectrum_analysis_cache_cold", iterations, total_ms, total_ms / iterations, 0.0 };
+}
+
+BenchResult RunSpectrumAnalysisCacheHotBench() {
+	constexpr int iterations = 20000;
+	SyntheticInt16StereoProvider provider(1 << 16);
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(9, 7);
+	const float *warm = cache.Get(0);
+	volatile float sink = warm[0];
+
+	auto t0 = clock_type::now();
+	for (int i = 0; i < iterations; ++i) {
+		const float *block = cache.Get(0);
+		sink += block[0];
+	}
+	auto t1 = clock_type::now();
+	(void)sink;
+
+	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	return { "spectrum_analysis_cache_hot", iterations, total_ms, total_ms / iterations, 0.0 };
+}
+
 float RunOldSpectrumRenderKernel(const std::vector<std::vector<float>> &blocks, int imgheight, int derivation_size, float amplitude_scale) {
 	float sink = 0.f;
 	int maxband = 1 << derivation_size;
@@ -538,6 +584,8 @@ int main(int argc, char **argv) {
 	results.push_back(RunWaveformBench());
 	results.push_back(RunOldSpectrumBench());
 	results.push_back(RunNewSpectrumBench());
+	results.push_back(RunSpectrumAnalysisCacheColdBench());
+	results.push_back(RunSpectrumAnalysisCacheHotBench());
 	results.push_back(RunOldSpectrumRenderBench());
 	results.push_back(RunNewSpectrumRenderOptimizedBench());
 	results.push_back(RunNaiveWaveformUpdateStreamBench());

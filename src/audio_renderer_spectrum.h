@@ -40,13 +40,8 @@
 #include "audio_renderer.h"
 #include "audio_mix_policy.h"
 
-#ifdef WITH_FFTW3
-#include <fftw3.h>
-#endif
-
 class AudioColorScheme;
-class AudioSpectrumCache;
-struct AudioSpectrumCacheBlockFactory;
+class AudioSpectrumAnalysisCache;
 
 /// @class AudioSpectrumRenderer
 /// @brief Render frequency-power spectrum graphs for audio data.
@@ -54,10 +49,7 @@ struct AudioSpectrumCacheBlockFactory;
 /// Renders frequency-power spectrum graphs of PCM audio data using a derivation function
 /// such as the fast fourier transform.
 class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
-	friend struct AudioSpectrumCacheBlockFactory;
-
-	/// Internal cache management for the spectrum
-	std::unique_ptr<AudioSpectrumCache> cache;
+	std::unique_ptr<AudioSpectrumAnalysisCache> analysis_cache;
 
 	/// Colour tables used for rendering
 	std::vector<AudioColorScheme> colors;
@@ -80,29 +72,7 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 	/// e.g. new audio provider or new resolution.
 	void RecreateCache();
 
-	/// @brief Fill a block with frequency-power data for a time range
-	/// @param      block_index Index of the block to fill data for
-	/// @param[out] block       Address to write the data to
-	void FillBlock(size_t block_index, float *block);
-
-#ifdef WITH_FFTW3
-	/// FFTW plan data
-	fftw_plan dft_plan = nullptr;
-	/// Pre-allocated input array for FFTW
-	double *dft_input = nullptr;
-	/// Pre-allocated output array for FFTW
-	fftw_complex *dft_output = nullptr;
-#else
-	/// Pre-allocated scratch area for doing FFT derivations
-	std::vector<float> fft_scratch;
-#endif
-
-	/// Pre-allocated scratch area for storing raw audio data
-	std::vector<float> audio_scratch;
-	std::vector<float> mono_scratch;
 	AudioMixPolicy mix_policy = AudioMixPolicy::MonoAverage;
-	bool rolling_window_valid = false;
-	size_t rolling_window_block_index = 0;
 	std::vector<int> render_band_a;
 	std::vector<int> render_band_b;
 	std::vector<float> render_band_frac;

@@ -282,8 +282,7 @@ void ResampleResolution(AssFile *ass, ResampleSettings settings) {
 	for (auto& line : ass->Events)
 		resample_line(&state, line);
 
-	ass->SetScriptInfo("PlayResX", std::to_string(settings.dest_x));
-	ass->SetScriptInfo("PlayResY", std::to_string(settings.dest_y));
+	ass->SetResolution(ScriptResolutionType::None, settings.dest_x, settings.dest_y);
 	if (resample_colors)
 		ass->SetScriptInfo("YCbCr Matrix", MatrixToString(settings.dest_matrix));
 

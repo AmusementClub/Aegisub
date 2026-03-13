@@ -194,6 +194,8 @@ void Video(wxTreebook *book, Preferences *parent) {
 		p->OptionAdd(resolution, _("Default width"), "Subtitle/Default Resolution/Width"));
 	p->DisableIfChecked(autocb,
 		p->OptionAdd(resolution, _("Default height"), "Subtitle/Default Resolution/Height"));
+	p->OptionAdd(resolution, _("Prefer PlayRes over LayoutRes"), "Subtitle/Resolution/Prefer PlayRes");
+	p->CellSkip(resolution);
 
 	const wxString cres_arr[] = {_("Never"), _("Ask"), _("Always set"), _("Always resample")};
 	wxArrayString choice_res(4, cres_arr);

@@ -31,6 +31,33 @@
 #include <unordered_map>
 #include <unordered_set>
 
+namespace {
+std::pair<char const*, char const*> resolution_keys(ScriptResolutionType type) {
+	switch (type) {
+	case ScriptResolutionType::PlayRes:
+		return {"PlayResX", "PlayResY"};
+	case ScriptResolutionType::LayoutRes:
+		return {"LayoutResX", "LayoutResY"};
+	case ScriptResolutionType::None:
+		break;
+	}
+	return {"", ""};
+}
+
+bool get_resolution(AssFile const& file, ScriptResolutionType type, int &sw, int &sh) {
+	auto keys = resolution_keys(type);
+	sw = file.GetScriptInfoAsInt(keys.first);
+	sh = file.GetScriptInfoAsInt(keys.second);
+	if (sw == 0 && sh == 0)
+		return false;
+	if (sw == 0)
+		sw = sh == 1024 ? 1280 : sh * 4 / 3;
+	else if (sh == 0)
+		sh = sw == 1280 ? 1024 : sw * 3 / 4;
+	return true;
+}
+}
+
 AssFile::AssFile() { }
 
 AssFile::~AssFile() {
@@ -44,8 +71,9 @@ void AssFile::LoadDefault(bool include_dialogue_line, std::string const& style_c
 	Info.emplace_back("WrapStyle", "0");
 	Info.emplace_back("ScaledBorderAndShadow", "yes");
 	if (!OPT_GET("Subtitle/Default Resolution/Auto")->GetBool()) {
-		Info.emplace_back("PlayResX", std::to_string(OPT_GET("Subtitle/Default Resolution/Width")->GetInt()));
-		Info.emplace_back("PlayResY", std::to_string(OPT_GET("Subtitle/Default Resolution/Height")->GetInt()));
+		SetResolution(ScriptResolutionType::None,
+			OPT_GET("Subtitle/Default Resolution/Width")->GetInt(),
+			OPT_GET("Subtitle/Default Resolution/Height")->GetInt());
 	}
 	Info.emplace_back("YCbCr Matrix", "None");
 
@@ -137,20 +165,42 @@ void AssFile::SetScriptInfo(std::string const& key, std::string const& value) {
 }
 
 void AssFile::GetResolution(int &sw, int &sh) const {
-	sw = GetScriptInfoAsInt("PlayResX");
-	sh = GetScriptInfoAsInt("PlayResY");
+	GetResolutionType(sw, sh);
+}
 
-	// Gabest logic: default is 384x288, assume 1280x1024 if either height or
-	// width are that, otherwise assume 4:3 if only heigh or width are set.
-	// Why 1280x1024? Who the fuck knows. Clearly just Gabest trolling everyone.
-	if (sw == 0 && sh == 0) {
-		sw = 384;
-		sh = 288;
+ScriptResolutionType AssFile::GetResolutionType(int &sw, int &sh) const {
+	auto primary = GetPreferredResolutionType();
+	if (get_resolution(*this, primary, sw, sh))
+		return primary;
+
+	auto secondary = primary == ScriptResolutionType::PlayRes ? ScriptResolutionType::LayoutRes : ScriptResolutionType::PlayRes;
+	if (get_resolution(*this, secondary, sw, sh))
+		return secondary;
+
+	sw = 384;
+	sh = 288;
+	return ScriptResolutionType::None;
+}
+
+ScriptResolutionType AssFile::GetResolutionType() const {
+	int sw, sh;
+	return GetResolutionType(sw, sh);
+}
+
+ScriptResolutionType AssFile::GetPreferredResolutionType() const {
+	return OPT_GET("Subtitle/Resolution/Prefer PlayRes")->GetBool()
+		? ScriptResolutionType::PlayRes
+		: ScriptResolutionType::LayoutRes;
+}
+
+void AssFile::SetResolution(ScriptResolutionType type, int w, int h) {
+	(void)type;
+
+	for (auto resolution_type : { ScriptResolutionType::PlayRes, ScriptResolutionType::LayoutRes }) {
+		auto keys = resolution_keys(resolution_type);
+		SetScriptInfo(keys.first, std::to_string(w));
+		SetScriptInfo(keys.second, std::to_string(h));
 	}
-	else if (sw == 0)
-		sw = sh == 1024 ? 1280 : sh * 4 / 3;
-	else if (sh == 0)
-		sh = sw == 1280 ? 1024 : sw * 3 / 4;
 }
 
 std::vector<std::string> AssFile::GetStyles() const {

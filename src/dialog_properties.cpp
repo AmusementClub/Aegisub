@@ -57,15 +57,18 @@ class DialogProperties {
 
 	// Things that effect rendering
 	wxComboBox *WrapStyle;   ///< Wrapping style for long lines
-	wxTextCtrl *ResX;        ///< Script x resolution
-	wxTextCtrl *ResY;        ///< Script y resolution
+	wxTextCtrl *PlayResX;
+	wxTextCtrl *PlayResY;
+	wxTextCtrl *LayoutResX;
+	wxTextCtrl *LayoutResY;
+	wxStaticText *EffectiveResolution;
 	wxCheckBox *ScaleBorder; ///< If script resolution != video resolution how should borders be handled
 	wxComboBox *YCbCrMatrix;
 
 	/// OK button handler
 	void OnOK(wxCommandEvent &event);
-	/// Set script resolution to video resolution button
-	void OnSetFromVideo(wxCommandEvent &event);
+	void OnSetPlayResFromVideo(wxCommandEvent &event);
+	void OnSetLayoutResFromVideo(wxCommandEvent &event);
 	/// Set a script info field
 	/// @param key Name of field
 	/// @param value New value
@@ -82,6 +85,7 @@ public:
 	/// Constructor
 	/// @param c Project context
 	DialogProperties(agi::Context *c);
+	wxString GetEffectiveResolutionText() const;
 	void ShowModal() { d.ShowModal(); }
 };
 
@@ -116,20 +120,37 @@ DialogProperties::DialogProperties(agi::Context *c)
 	TopSizer->Add(TopSizerGrid,1,wxALL | wxEXPAND,0);
 
 	// Resolution box
-	ResX = new wxTextCtrl(&d,-1,"",wxDefaultPosition,wxDefaultSize,0,IntValidator(c->ass->GetScriptInfoAsInt("PlayResX")));
-	ResY = new wxTextCtrl(&d,-1,"",wxDefaultPosition,wxDefaultSize,0,IntValidator(c->ass->GetScriptInfoAsInt("PlayResY")));
+	PlayResX = new wxTextCtrl(&d,-1,"",wxDefaultPosition,wxDefaultSize,0,IntValidator(c->ass->GetScriptInfoAsInt("PlayResX")));
+	PlayResY = new wxTextCtrl(&d,-1,"",wxDefaultPosition,wxDefaultSize,0,IntValidator(c->ass->GetScriptInfoAsInt("PlayResY")));
+	LayoutResX = new wxTextCtrl(&d,-1,"",wxDefaultPosition,wxDefaultSize,0,IntValidator(c->ass->GetScriptInfoAsInt("LayoutResX")));
+	LayoutResY = new wxTextCtrl(&d,-1,"",wxDefaultPosition,wxDefaultSize,0,IntValidator(c->ass->GetScriptInfoAsInt("LayoutResY")));
 
-	wxButton *FromVideo = new wxButton(&d,-1,_("From &video"));
-	if (!c->project->VideoProvider())
-		FromVideo->Enable(false);
-	else
-		FromVideo->Bind(wxEVT_BUTTON, &DialogProperties::OnSetFromVideo, this);
+	wxButton *PlayResFromVideo = new wxButton(&d,-1,_("From &video"));
+	wxButton *LayoutResFromVideo = new wxButton(&d,-1,_("From v&ideo"));
+	if (!c->project->VideoProvider()) {
+		PlayResFromVideo->Enable(false);
+		LayoutResFromVideo->Enable(false);
+	}
+	else {
+		PlayResFromVideo->Bind(wxEVT_BUTTON, &DialogProperties::OnSetPlayResFromVideo, this);
+		LayoutResFromVideo->Bind(wxEVT_BUTTON, &DialogProperties::OnSetLayoutResFromVideo, this);
+	}
 
-	auto res_sizer = new wxBoxSizer(wxHORIZONTAL);
-	res_sizer->Add(ResX, 1, wxRIGHT | wxALIGN_CENTER_VERTICAL, 5);
-	res_sizer->Add(new wxStaticText(&d, -1, "x"), 0, wxALIGN_CENTER | wxRIGHT, 5);
-	res_sizer->Add(ResY, 1, wxRIGHT | wxALIGN_CENTER_VERTICAL, 5);
-	res_sizer->Add(FromVideo, 1, 0, 0);
+	auto resolution_grid = new wxFlexGridSizer(2, 5, 5, 5);
+	resolution_grid->Add(new wxStaticText(&d, -1, "PlayRes:"), 0, wxALIGN_CENTER_VERTICAL);
+	resolution_grid->Add(PlayResX, 1, wxEXPAND);
+	resolution_grid->Add(new wxStaticText(&d, -1, "x"), 0, wxALIGN_CENTER);
+	resolution_grid->Add(PlayResY, 1, wxEXPAND);
+	resolution_grid->Add(PlayResFromVideo, 0, wxEXPAND);
+	resolution_grid->Add(new wxStaticText(&d, -1, "LayoutRes:"), 0, wxALIGN_CENTER_VERTICAL);
+	resolution_grid->Add(LayoutResX, 1, wxEXPAND);
+	resolution_grid->Add(new wxStaticText(&d, -1, "x"), 0, wxALIGN_CENTER);
+	resolution_grid->Add(LayoutResY, 1, wxEXPAND);
+	resolution_grid->Add(LayoutResFromVideo, 0, wxEXPAND);
+	resolution_grid->AddGrowableCol(1, 1);
+	resolution_grid->AddGrowableCol(3, 1);
+
+	EffectiveResolution = new wxStaticText(&d, -1, GetEffectiveResolutionText());
 
 	YCbCrMatrix = new wxComboBox(&d, -1, to_wx(c->ass->GetScriptInfo("YCbCr Matrix")),
 		 wxDefaultPosition, wxDefaultSize, to_wx(MatrixNames()), wxCB_READONLY);
@@ -139,7 +160,8 @@ DialogProperties::DialogProperties(agi::Context *c)
 	matrix_sizer->Add(YCbCrMatrix, wxSizerFlags(1).Expand().Border(wxLEFT));
 
 	auto res_box = new wxStaticBoxSizer(wxVERTICAL, &d, _("Resolution"));
-	res_box->Add(res_sizer, wxSizerFlags().Expand());
+	res_box->Add(resolution_grid, wxSizerFlags().Expand());
+	res_box->Add(EffectiveResolution, wxSizerFlags().Border(wxTOP).Expand());
 	res_box->Add(matrix_sizer, wxSizerFlags().Border(wxTOP).Expand());
 
 	// Options
@@ -187,8 +209,10 @@ void DialogProperties::OnOK(wxCommandEvent &) {
 	for (auto const& prop : properties)
 		count += SetInfoIfDifferent(prop.first, from_wx(prop.second->GetValue()));
 
-	count += SetInfoIfDifferent("PlayResX", from_wx(ResX->GetValue()));
-	count += SetInfoIfDifferent("PlayResY", from_wx(ResY->GetValue()));
+	count += SetInfoIfDifferent("PlayResX", from_wx(PlayResX->GetValue()));
+	count += SetInfoIfDifferent("PlayResY", from_wx(PlayResY->GetValue()));
+	count += SetInfoIfDifferent("LayoutResX", from_wx(LayoutResX->GetValue()));
+	count += SetInfoIfDifferent("LayoutResY", from_wx(LayoutResY->GetValue()));
 	count += SetInfoIfDifferent("WrapStyle", std::to_string(WrapStyle->GetSelection()));
 	count += SetInfoIfDifferent("ScaledBorderAndShadow", ScaleBorder->GetValue() ? "yes" : "no");
 	count += SetInfoIfDifferent("YCbCr Matrix", from_wx(YCbCrMatrix->GetValue()));
@@ -206,9 +230,25 @@ int DialogProperties::SetInfoIfDifferent(std::string const& key, std::string con
 	return 0;
 }
 
-void DialogProperties::OnSetFromVideo(wxCommandEvent &) {
-	ResX->SetValue(std::to_wstring(c->project->VideoProvider()->GetWidth()));
-	ResY->SetValue(std::to_wstring(c->project->VideoProvider()->GetHeight()));
+wxString DialogProperties::GetEffectiveResolutionText() const {
+	int width, height;
+	auto type = c->ass->GetResolutionType(width, height);
+	wxString source = "Fallback";
+	if (type == ScriptResolutionType::PlayRes)
+		source = "PlayRes";
+	else if (type == ScriptResolutionType::LayoutRes)
+		source = "LayoutRes";
+	return wxString::Format(_("Current effective resolution: %s %d x %d"), source, width, height);
+}
+
+void DialogProperties::OnSetPlayResFromVideo(wxCommandEvent &) {
+	PlayResX->SetValue(std::to_wstring(c->project->VideoProvider()->GetWidth()));
+	PlayResY->SetValue(std::to_wstring(c->project->VideoProvider()->GetHeight()));
+}
+
+void DialogProperties::OnSetLayoutResFromVideo(wxCommandEvent &) {
+	LayoutResX->SetValue(std::to_wstring(c->project->VideoProvider()->GetWidth()));
+	LayoutResY->SetValue(std::to_wstring(c->project->VideoProvider()->GetHeight()));
 }
 }
 

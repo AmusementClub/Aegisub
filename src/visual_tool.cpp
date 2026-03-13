@@ -50,13 +50,18 @@ VisualToolBase::VisualToolBase(VideoDisplay *parent, agi::Context *context)
 , shaded_area_alpha_opt(OPT_GET("Colour/Visual Tools/Shaded Area Alpha"))
 , file_changed_connection(c->ass->AddCommitListener(&VisualToolBase::OnCommit, this))
 {
-	int script_w, script_h;
-	c->ass->GetResolution(script_w, script_h);
-	script_res = Vector2D(script_w, script_h);
+	UpdateScriptResolution();
 	active_line = GetActiveDialogueLine();
 	connections.push_back(c->selectionController->AddActiveLineListener(&VisualToolBase::OnActiveLineChanged, this));
 	connections.push_back(c->videoController->AddSeekListener(&VisualToolBase::OnSeek, this));
+	connections.push_back(OPT_SUB("Subtitle/Resolution/Prefer PlayRes", &VisualToolBase::OnResolutionPolicyChanged, this));
 	parent->Bind(wxEVT_MOUSE_CAPTURE_LOST, &VisualToolBase::OnMouseCaptureLost, this);
+}
+
+void VisualToolBase::UpdateScriptResolution() {
+	int script_w, script_h;
+	c->ass->GetResolution(script_w, script_h);
+	script_res = Vector2D(script_w, script_h);
 }
 
 void VisualToolBase::OnCommit(int type) {
@@ -64,9 +69,7 @@ void VisualToolBase::OnCommit(int type) {
 	dragging = false;
 
 	if (type == AssFile::COMMIT_NEW || type & AssFile::COMMIT_SCRIPTINFO) {
-		int script_w, script_h;
-		c->ass->GetResolution(script_w, script_h);
-		script_res = Vector2D(script_w, script_h);
+		UpdateScriptResolution();
 		OnCoordinateSystemsChanged();
 	}
 
@@ -106,6 +109,16 @@ void VisualToolBase::OnActiveLineChanged(AssDialogue *new_line) {
 		OnLineChanged();
 		parent->Render();
 	}
+}
+
+void VisualToolBase::OnResolutionPolicyChanged(agi::OptionValue const&) {
+	holding = false;
+	dragging = false;
+	if (parent->HasCapture())
+		parent->ReleaseMouse();
+	UpdateScriptResolution();
+	OnCoordinateSystemsChanged();
+	parent->Render();
 }
 
 bool VisualToolBase::IsDisplayed(AssDialogue *line) const {

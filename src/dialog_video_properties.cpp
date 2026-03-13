@@ -95,16 +95,15 @@ bool update_video_properties(AssFile *file, const AsyncVideoProvider *new_provid
 	}
 
 	// Check that the script resolution matches the video resolution
-	int sx = file->GetScriptInfoAsInt("PlayResX");
-	int sy = file->GetScriptInfoAsInt("PlayResY");
+	int sx, sy;
+	auto resolution_type = file->GetResolutionType(sx, sy);
 	int vx = new_provider->GetWidth();
 	int vy = new_provider->GetHeight();
 
 	// If the script resolution hasn't been set at all just force it to the
 	// video resolution
-	if (sx == 0 && sy == 0) {
-		file->SetScriptInfo("PlayResX", std::to_string(vx));
-		file->SetScriptInfo("PlayResY", std::to_string(vy));
+	if (resolution_type == ScriptResolutionType::None) {
+		file->SetResolution(ScriptResolutionType::None, vx, vy);
 		return true;
 	}
 
@@ -126,8 +125,7 @@ bool update_video_properties(AssFile *file, const AsyncVideoProvider *new_provid
 		return commit_subs;
 
 	case MISMATCH_SET:
-		file->SetScriptInfo("PlayResX", std::to_string(vx));
-		file->SetScriptInfo("PlayResY", std::to_string(vy));
+		file->SetResolution(ScriptResolutionType::None, vx, vy);
 		return true;
 
 	case MISMATCH_RESAMPLE:

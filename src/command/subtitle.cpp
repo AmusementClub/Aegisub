@@ -448,6 +448,23 @@ struct subtitle_spellcheck final : public Command {
 		ShowSpellcheckerDialog(c);
 	}
 };
+
+struct subtitle_opt_prefer_playres final : public Command {
+	CMD_NAME("subtitle/opt/prefer_playres")
+	STR_MENU("Prefer PlayRes over LayoutRes")
+	STR_DISP("Prefer PlayRes over LayoutRes")
+	STR_HELP("Toggle whether Aegisub prefers PlayRes over LayoutRes for internal coordinate handling")
+	CMD_TYPE(COMMAND_TOGGLE)
+
+	bool IsActive(const agi::Context *) override {
+		return OPT_GET("Subtitle/Resolution/Prefer PlayRes")->GetBool();
+	}
+
+	void operator()(agi::Context *) override {
+		auto option = OPT_SET("Subtitle/Resolution/Prefer PlayRes");
+		option->SetBool(!option->GetBool());
+	}
+};
 }
 
 namespace cmd {
@@ -465,6 +482,7 @@ namespace cmd {
 		reg(agi::make_unique<subtitle_open_autosave>());
 		reg(agi::make_unique<subtitle_open_charset>());
 		reg(agi::make_unique<subtitle_open_video>());
+		reg(agi::make_unique<subtitle_opt_prefer_playres>());
 		reg(agi::make_unique<subtitle_properties>());
 		reg(agi::make_unique<subtitle_save>());
 		reg(agi::make_unique<subtitle_save_as>());

@@ -18,6 +18,7 @@
 #include <vector>
 
 class AssFile;
+enum class ScriptResolutionType : int;
 
 enum class ResampleARMode {
 	Stretch,

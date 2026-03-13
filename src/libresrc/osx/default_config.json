@@ -390,6 +390,9 @@
 			"Syntax" : true
 		},
 		"Provider" : "libass",
+		"Resolution" : {
+			"Prefer PlayRes" : false
+		},
 		"Show Original": false,
 		"Time Edit" : {
 			"Insert Mode" : true

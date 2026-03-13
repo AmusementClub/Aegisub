@@ -152,6 +152,8 @@ void SubtitlesPreview::OnSize(wxSizeEvent &evt) {
 
 	sub_file->SetScriptInfo("PlayResX", std::to_string(w));
 	sub_file->SetScriptInfo("PlayResY", std::to_string(h));
+	sub_file->SetScriptInfo("LayoutResX", std::to_string(w));
+	sub_file->SetScriptInfo("LayoutResY", std::to_string(h));
 
 	UpdateBitmap();
 }

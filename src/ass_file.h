@@ -78,6 +78,12 @@ struct ProjectProperties {
 	int video_position = 0;
 };
 
+enum class ScriptResolutionType : int {
+	PlayRes,
+	LayoutRes,
+	None
+};
+
 class AssFile {
 	/// A set of changes has been committed to the file (AssFile::COMMITType)
 	agi::signal::Signal<int, const AssDialogue*> AnnounceCommit;
@@ -119,6 +125,10 @@ public:
 	/// @param[out] w Width
 	/// @param[in] h Height
 	void GetResolution(int &w,int &h) const;
+	ScriptResolutionType GetResolutionType(int &w, int &h) const;
+	ScriptResolutionType GetResolutionType() const;
+	ScriptResolutionType GetPreferredResolutionType() const;
+	void SetResolution(ScriptResolutionType type, int w, int h);
 	/// Get the value in a [Script Info] key as int, or 0 if it is not present
 	int GetScriptInfoAsInt(std::string const& key) const;
 	/// Get the value in a [Script Info] key as string.

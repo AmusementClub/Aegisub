@@ -8,6 +8,9 @@
 #ifdef _WIN32
 #include <libaegisub/charset_conv_win.h>
 #include <windows.h>
+#ifdef GetMessage
+#undef GetMessage
+#endif
 #else
 #include <dlfcn.h>
 #if defined(__APPLE__)
@@ -22,7 +25,7 @@
 #include <string>
 #include <vector>
 
-namespace fs = std::filesystem;
+namespace stdfs = std::filesystem;
 
 namespace agi { namespace native {
 
@@ -58,57 +61,74 @@ namespace {
 #endif
 	}
 
-	bool HasDirectorySeparator(std::string const& name) {
+	bool HasDirectorySeparator(std::string_view name) {
 		return name.find('/') != std::string::npos || name.find('\\') != std::string::npos;
 	}
 
-	bool EndsWithCaseInsensitive(std::string const& value, std::string const& suffix) {
+	bool EndsWithCaseInsensitive(std::string_view value, std::string_view suffix) {
 		if (suffix.size() > value.size()) return false;
 		return std::equal(suffix.rbegin(), suffix.rend(), value.rbegin(), [](char left, char right) {
 			return std::tolower(static_cast<unsigned char>(left)) == std::tolower(static_cast<unsigned char>(right));
 		});
 	}
 
-	void AddCandidate(std::vector<std::string>& candidates, std::string const& candidate) {
+	void AddCandidate(std::vector<std::string>& candidates, std::string_view candidate) {
 		if (candidate.empty()) return;
 		if (std::find(candidates.begin(), candidates.end(), candidate) == candidates.end())
-			candidates.push_back(candidate);
+			candidates.emplace_back(candidate);
 	}
 
-	std::vector<std::string> BuildCandidateVariations(std::string const& library_name) {
+	std::string Concat(std::string_view left, std::string_view right) {
+		std::string result;
+		result.reserve(left.size() + right.size());
+		result.append(left);
+		result.append(right);
+		return result;
+	}
+
+	std::string Concat(std::string_view left, std::string_view middle, std::string_view right) {
+		std::string result;
+		result.reserve(left.size() + middle.size() + right.size());
+		result.append(left);
+		result.append(middle);
+		result.append(right);
+		return result;
+	}
+
+	std::vector<std::string> BuildCandidateVariations(std::string_view library_name) {
 		std::vector<std::string> candidates;
-		fs::path path(library_name);
+		stdfs::path path{std::string(library_name)};
 		if (path.is_absolute()) {
 			AddCandidate(candidates, library_name);
 			return candidates;
 		}
 
 		bool has_separator = HasDirectorySeparator(library_name);
-		std::string filename = path.filename().string();
-		bool has_lib_prefix = filename.rfind("lib", 0) == 0;
+		auto filename = path.filename().string();
+		bool has_lib_prefix = std::string_view(filename).starts_with("lib");
 
 #ifdef _WIN32
 		AddCandidate(candidates, library_name);
 		if (!EndsWithCaseInsensitive(library_name, ".dll") && !EndsWithCaseInsensitive(library_name, ".exe"))
-			AddCandidate(candidates, library_name + ".dll");
+			AddCandidate(candidates, Concat(library_name, ".dll"));
 #elif defined(__APPLE__)
-		AddCandidate(candidates, library_name + ".dylib");
-		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, "lib" + library_name + ".dylib");
+		AddCandidate(candidates, Concat(library_name, ".dylib"));
+		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name, ".dylib"));
 		AddCandidate(candidates, library_name);
-		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, "lib" + library_name);
+		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
 #else
 		bool has_so_name = library_name.find(".so") != std::string::npos;
 		if (has_so_name) {
 			AddCandidate(candidates, library_name);
-			if (!has_separator && !has_lib_prefix) AddCandidate(candidates, "lib" + library_name);
-			AddCandidate(candidates, library_name + ".so");
-			if (!has_separator && !has_lib_prefix) AddCandidate(candidates, "lib" + library_name + ".so");
+			if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
+			AddCandidate(candidates, Concat(library_name, ".so"));
+			if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name, ".so"));
 		}
 		else {
-			AddCandidate(candidates, library_name + ".so");
-			if (!has_separator && !has_lib_prefix) AddCandidate(candidates, "lib" + library_name + ".so");
+			AddCandidate(candidates, Concat(library_name, ".so"));
+			if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name, ".so"));
 			AddCandidate(candidates, library_name);
-			if (!has_separator && !has_lib_prefix) AddCandidate(candidates, "lib" + library_name);
+			if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
 		}
 #endif
 
@@ -121,20 +141,20 @@ namespace {
 		auto len = GetModuleFileNameW(nullptr, &path[0], static_cast<DWORD>(path.size()));
 		if (!len) return {};
 		path.resize(len);
-		return fs::path(agi::charset::ConvertW(path)).parent_path().string();
+		return stdfs::path(agi::charset::ConvertW(path)).parent_path().string();
 #elif defined(__APPLE__)
 		uint32_t size = 0;
 		_NSGetExecutablePath(nullptr, &size);
 		std::string path(size, '\0');
 		if (_NSGetExecutablePath(path.data(), &size) != 0)
 			return {};
-		return fs::path(path.c_str()).parent_path().string();
+		return stdfs::path(path.c_str()).parent_path().string();
 #else
 		std::vector<char> buffer(4096, '\0');
 		auto len = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
 		if (len <= 0) return {};
 		buffer[static_cast<size_t>(len)] = '\0';
-		return fs::path(buffer.data()).parent_path().string();
+		return stdfs::path(buffer.data()).parent_path().string();
 #endif
 	}
 
@@ -146,15 +166,15 @@ namespace {
 #endif
 	}
 
-	std::string GetLoadedLibraryPath(NativeHandle handle, std::string const& attempted_path) {
+	std::string GetLoadedLibraryPath(NativeHandle handle, std::string_view attempted_path) {
 #ifdef _WIN32
 		std::wstring path(32768, L'\0');
 		auto len = GetModuleFileNameW(handle, &path[0], static_cast<DWORD>(path.size()));
-		if (!len) return attempted_path;
+		if (!len) return std::string(attempted_path);
 		path.resize(len);
 		return agi::charset::ConvertW(path);
 #else
-		return attempted_path;
+		return std::string(attempted_path);
 #endif
 	}
 }
@@ -198,8 +218,8 @@ void Library::Reset() {
 	loaded_path.clear();
 }
 
-Library Library::Load(std::string const& library_name) {
-	fs::path requested_path(library_name);
+Library Library::Load(std::string_view library_name) {
+	stdfs::path requested_path{std::string(library_name)};
 	auto candidates = BuildCandidateVariations(library_name);
 	std::string app_dir = requested_path.is_absolute() ? std::string() : GetExecutableDirectory();
 	std::string attempted;
@@ -210,14 +230,14 @@ Library Library::Load(std::string const& library_name) {
 			attempted += probe;
 			auto native = TryLoadLibrary(probe);
 			if (native)
-				return Library(reinterpret_cast<void*>(native), library_name, GetLoadedLibraryPath(native, probe));
+				return Library(reinterpret_cast<void*>(native), std::string(library_name), GetLoadedLibraryPath(native, probe));
 			auto reason = GetLoadFailureReason();
 			if (!reason.empty()) attempted += " (" + reason + ")";
 			return {};
 		};
 
 		if (!requested_path.is_absolute() && !app_dir.empty()) {
-			auto app_probe = (fs::path(app_dir) / fs::path(candidate)).string();
+			auto app_probe = (stdfs::path(app_dir) / stdfs::path(candidate)).string();
 			auto loaded = try_candidate(app_probe);
 			if (loaded.handle) return loaded;
 		}
@@ -226,21 +246,21 @@ Library Library::Load(std::string const& library_name) {
 		if (loaded.handle) return loaded;
 	}
 
-	throw agi::EnvironmentError("Could not load native library '" + library_name + "'. Tried: " + attempted);
+	throw agi::EnvironmentError("Could not load native library '" + std::string(library_name) + "'. Tried: " + attempted);
 }
 
-void* Library::ResolveSymbolRaw(const char *symbol) {
+void* Library::ResolveSymbolRaw(std::string_view symbol) {
 	if (!handle)
 		throw agi::EnvironmentError("Native library is not loaded.");
 
 #ifdef _WIN32
-	auto result = reinterpret_cast<void*>(GetProcAddress(ToNativeHandle(handle), symbol));
+	auto result = reinterpret_cast<void*>(GetProcAddress(ToNativeHandle(handle), std::string(symbol).c_str()));
 #else
 	dlerror();
-	auto result = dlsym(ToNativeHandle(handle), symbol);
+	auto result = dlsym(ToNativeHandle(handle), std::string(symbol).c_str());
 #endif
 	if (!result)
-		throw agi::EnvironmentError(std::string("Failed to resolve native symbol ") + symbol + ": " + GetLoadFailureReason());
+		throw agi::EnvironmentError(std::string("Failed to resolve native symbol ") + std::string(symbol) + ": " + GetLoadFailureReason());
 
 #ifndef _WIN32
 	if (loaded_path.empty()) {
@@ -253,9 +273,9 @@ void* Library::ResolveSymbolRaw(const char *symbol) {
 	return result;
 }
 
-CachedLibrary::CachedLibrary(std::string library_name, const char *display_name, const char *log_tag,
+CachedLibrary::CachedLibrary(std::string_view library_name, std::string_view display_name, std::string_view log_tag,
 	InitializeFunction initialize, DetailFunction detail)
-	: library_name(std::move(library_name))
+	: library_name(library_name)
 	, display_name(display_name)
 	, log_tag(log_tag)
 	, initialize(std::move(initialize))
@@ -277,13 +297,13 @@ Library& CachedLibrary::EnsureLoaded() {
 		library = std::move(loaded);
 		load_error.clear();
 		load_complete = true;
-		std::string message = std::string("Loaded ") + display_name + " from " + library->GetLoadedPath();
+		std::string message = std::string("Loaded ") + display_name + " from " + std::string(library->GetLoadedPath());
 		if (detail) {
 			auto suffix = detail();
 			if (!suffix.empty())
 				message += " (" + suffix + ")";
 		}
-		LOG_I(log_tag) << message;
+		LOG_I(log_tag.c_str()) << message;
 		return *library;
 	}
 	catch (agi::EnvironmentError const& err) {
@@ -293,7 +313,7 @@ Library& CachedLibrary::EnsureLoaded() {
 			if (!suffix.empty())
 				load_error += " (" + suffix + ")";
 		}
-		LOG_W(log_tag) << load_error;
+		LOG_W(log_tag.c_str()) << load_error;
 		throw;
 	}
 }
@@ -315,7 +335,7 @@ std::string CachedLibrary::GetLoadError() const {
 
 std::string CachedLibrary::GetLoadedLibrary() const {
 	std::lock_guard<std::mutex> lock(mutex);
-	return library ? library->GetLoadedPath() : std::string();
+	return library ? std::string(library->GetLoadedPath()) : std::string();
 }
 
 void CachedLibrary::Reset() {

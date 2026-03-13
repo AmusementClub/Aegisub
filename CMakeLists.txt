@@ -536,6 +536,10 @@ add_executable(Aegisub WIN32
     src/video_slider.cpp
     src/visual_feature.cpp
 )
+set_source_files_properties(src/native_library.cpp PROPERTIES
+    SKIP_PRECOMPILE_HEADERS ON
+    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/std:c++20>;$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-std=c++20>"
+)
 target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} libaegisub luajit)
 target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
 if(LUASOCKET)

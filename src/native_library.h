@@ -6,6 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 
 namespace agi { namespace native {
 
@@ -14,7 +15,7 @@ class Library {
 	std::string requested_name;
 	std::string loaded_path;
 
-	void* ResolveSymbolRaw(const char *symbol);
+	void* ResolveSymbolRaw(std::string_view symbol);
 
 public:
 	Library() = default;
@@ -26,15 +27,15 @@ public:
 	Library(Library&& other) noexcept;
 	Library& operator=(Library&& other) noexcept;
 
-	static Library Load(std::string const& library_name);
+	static Library Load(std::string_view library_name);
 
 	template <typename T>
-	T ResolveSymbol(const char *symbol) {
+	T ResolveSymbol(std::string_view symbol) {
 		return reinterpret_cast<T>(ResolveSymbolRaw(symbol));
 	}
 
-	std::string const& GetRequestedName() const { return requested_name; }
-	std::string const& GetLoadedPath() const { return loaded_path; }
+	std::string_view GetRequestedName() const { return requested_name; }
+	std::string_view GetLoadedPath() const { return loaded_path; }
 	void Reset();
 };
 
@@ -45,8 +46,8 @@ public:
 
 private:
 	std::string library_name;
-	const char *display_name;
-	const char *log_tag;
+	std::string display_name;
+	std::string log_tag;
 	InitializeFunction initialize;
 	DetailFunction detail;
 	mutable std::mutex mutex;
@@ -56,7 +57,7 @@ private:
 	bool load_complete = false;
 
 public:
-	CachedLibrary(std::string library_name, const char *display_name, const char *log_tag,
+	CachedLibrary(std::string_view library_name, std::string_view display_name, std::string_view log_tag,
 		InitializeFunction initialize = InitializeFunction(), DetailFunction detail = DetailFunction());
 
 	Library& EnsureLoaded();

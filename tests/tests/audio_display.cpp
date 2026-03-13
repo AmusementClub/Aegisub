@@ -216,3 +216,20 @@ TEST(lagi_audio_display, spectrum_analysis_cache_metrics_count_hits_and_misses) 
 	EXPECT_EQ(1u, metrics.cache_hits);
 	EXPECT_EQ(1u, metrics.visible_builds);
 }
+
+TEST(lagi_audio_display, spectrum_analysis_cache_prefetch_records_metrics) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(9, 7);
+
+	cache.Get(0);
+	cache.Prefetch(1, 2);
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	cache.Get(1);
+	auto metrics = cache.GetMetricsSnapshot();
+	EXPECT_GE(metrics.prefetch_requests, 2u);
+	EXPECT_GE(metrics.prefetch_builds, 1u);
+}

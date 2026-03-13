@@ -371,6 +371,30 @@ BenchResult RunSpectrumAnalysisCacheHotBench() {
 	return { "spectrum_analysis_cache_hot", iterations, total_ms, total_ms / iterations, 0.0 };
 }
 
+BenchResult RunSpectrumSequentialPrefetchBench() {
+	constexpr int blocks = 64;
+	SyntheticInt16StereoProvider provider(1 << 18);
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(9, 7);
+	volatile float sink = 0.f;
+
+	auto t0 = clock_type::now();
+	for (int i = 0; i < blocks; ++i) {
+		const float *block = cache.Get(i);
+		sink += block[0];
+		cache.Prefetch(static_cast<size_t>(i + 1), static_cast<size_t>(i + 2));
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	auto t1 = clock_type::now();
+	(void)sink;
+
+	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	return { "spectrum_sequential_prefetch", blocks, total_ms, total_ms / blocks, 0.0 };
+}
+
 float RunOldSpectrumRenderKernel(const std::vector<std::vector<float>> &blocks, int imgheight, int derivation_size, float amplitude_scale) {
 	float sink = 0.f;
 	int maxband = 1 << derivation_size;
@@ -586,6 +610,7 @@ int main(int argc, char **argv) {
 	results.push_back(RunNewSpectrumBench());
 	results.push_back(RunSpectrumAnalysisCacheColdBench());
 	results.push_back(RunSpectrumAnalysisCacheHotBench());
+	results.push_back(RunSpectrumSequentialPrefetchBench());
 	results.push_back(RunOldSpectrumRenderBench());
 	results.push_back(RunNewSpectrumRenderOptimizedBench());
 	results.push_back(RunNaiveWaveformUpdateStreamBench());

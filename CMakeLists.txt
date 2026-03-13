@@ -453,6 +453,7 @@ add_executable(Aegisub WIN32
     src/audio_colorscheme.cpp
     src/audio_controller.cpp
     src/audio_display_analysis.cpp
+    src/audio_latest_range_scheduler.cpp
     src/audio_display.cpp
     src/audio_display_source.cpp
     src/audio_karaoke.cpp
@@ -929,6 +930,12 @@ set(WITH_BENCH OFF CACHE BOOL "Enable audio display benchmarks")
 if(WITH_BENCH)
     include("CMakeLists.bench.txt")
 endif()
+
+set_source_files_properties(
+    src/audio_latest_range_scheduler.cpp
+    PROPERTIES
+    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/std:c++20>;$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-std=c++20>"
+)
 
 message(STATUS "\n"
     "Configure settings\n"

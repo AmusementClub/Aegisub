@@ -33,6 +33,7 @@ src_OBJ := \
 	$(d)audio_colorscheme.o \
 	$(d)audio_controller.o \
 	$(d)audio_display_analysis.o \
+	$(d)audio_latest_range_scheduler.o \
 	$(d)audio_display.o \
 	$(d)audio_display_source.o \
 	$(d)audio_karaoke.o \

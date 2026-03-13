@@ -142,9 +142,9 @@ TEST(lagi_audio_display, waveform_summary_cache_reuses_hot_block) {
 	cache.SetMillisecondsPerPixel(20.0);
 	cache.SetMixPolicy(AudioMixPolicy::MonoMaxAbs);
 
-	const auto &first = cache.Get(0);
+	auto first = cache.Get(0);
 	int calls_after_first = provider.fill_calls;
-	const auto &second = cache.Get(0);
+	auto second = cache.Get(0);
 
 	EXPECT_EQ(1, calls_after_first);
 	EXPECT_EQ(calls_after_first, provider.fill_calls);
@@ -165,4 +165,20 @@ TEST(lagi_audio_display, waveform_summary_cache_invalidates_on_zoom_change) {
 	cache.Get(0);
 
 	EXPECT_GT(provider.fill_calls, calls_after_first);
+}
+
+TEST(lagi_audio_display, waveform_summary_cache_metrics_count_hits_and_misses) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioWaveformSummaryCache cache;
+	cache.SetSource(source.get());
+	cache.SetMillisecondsPerPixel(20.0);
+	cache.SetMixPolicy(AudioMixPolicy::MonoMaxAbs);
+
+	cache.Get(0);
+	cache.Get(0);
+	auto metrics = cache.GetMetricsSnapshot();
+	EXPECT_EQ(1u, metrics.cache_misses);
+	EXPECT_EQ(1u, metrics.cache_hits);
+	EXPECT_EQ(1u, metrics.visible_builds);
 }

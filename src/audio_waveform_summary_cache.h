@@ -1,49 +1,75 @@
 #pragma once
 
 #include <array>
-#include <cassert>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 #include "audio_display_analysis.h"
 #include "audio_display_source.h"
+#include "audio_latest_range_scheduler.h"
 #include "audio_mix_policy.h"
-#include "block_cache.h"
 
 struct AudioWaveformSummaryBlock {
 	static constexpr size_t width = 32;
 	std::array<AudioWaveformSummary, width> summaries;
 };
 
-class AudioWaveformSummaryCache;
-
-class AudioWaveformSummaryCacheBlockFactory {
-	AudioWaveformSummaryCache *cache;
-
-public:
-	typedef std::unique_ptr<AudioWaveformSummaryBlock> BlockType;
-
-	AudioWaveformSummaryCacheBlockFactory(AudioWaveformSummaryCache *cache = nullptr);
-	std::unique_ptr<AudioWaveformSummaryBlock> ProduceBlock(size_t i);
-	size_t GetBlockSize() const;
+struct AudioWaveformSummaryCacheMetrics {
+	uint64_t generation = 0;
+	uint64_t cache_hits = 0;
+	uint64_t cache_misses = 0;
+	uint64_t visible_builds = 0;
+	uint64_t prefetch_requests = 0;
+	uint64_t prefetch_builds = 0;
+	uint64_t stale_drops = 0;
+	uint64_t evictions = 0;
+	size_t cache_entries = 0;
+	size_t cache_bytes = 0;
 };
 
 class AudioWaveformSummaryCache {
-	friend class AudioWaveformSummaryCacheBlockFactory;
-
 	AudioDisplaySource *source = nullptr;
 	double pixel_ms = 0.0;
 	AudioMixPolicy mix_policy = AudioMixPolicy::MonoMaxAbs;
-	std::vector<float> audio_buffer;
+	size_t block_count = 0;
+	size_t max_cache_bytes = 4 * 1024 * 1024;
+	size_t current_cache_bytes = 0;
+	uint64_t touch_counter = 0;
 
-	using Cache = DataBlockCache<AudioWaveformSummaryBlock, 8, AudioWaveformSummaryCacheBlockFactory>;
-	std::unique_ptr<Cache> cache;
+	mutable std::mutex cache_mutex;
+	std::vector<std::unique_ptr<AudioWaveformSummaryBlock>> cache_blocks;
+	std::vector<uint64_t> cache_touch;
+
+	std::mutex ready_mutex;
+	std::vector<std::pair<size_t, std::unique_ptr<AudioWaveformSummaryBlock>>> ready_blocks;
+	std::atomic<bool> has_ready_blocks{false};
+
+	std::unique_ptr<AudioLatestRangeScheduler> scheduler;
+ 	mutable std::mutex scheduler_mutex;
+
+	std::atomic<uint64_t> metrics_generation{0};
+	std::atomic<uint64_t> metrics_cache_hits{0};
+	std::atomic<uint64_t> metrics_cache_misses{0};
+	std::atomic<uint64_t> metrics_visible_builds{0};
+	std::atomic<uint64_t> metrics_prefetch_requests{0};
+	std::atomic<uint64_t> metrics_prefetch_builds{0};
+	std::atomic<uint64_t> metrics_stale_drops{0};
+	std::atomic<uint64_t> metrics_evictions{0};
 
 	void RecreateCache();
-	void FillBlock(size_t block_index, AudioWaveformSummaryBlock &block);
+	std::unique_ptr<AudioWaveformSummaryBlock> BuildBlock(size_t block_index) const;
+	void TouchLocked(size_t block_index);
+	void TrimLocked();
+	void DrainReady();
+	void ProcessPrefetch(size_t first_block, size_t last_block, uint64_t generation);
 
 public:
 	AudioWaveformSummaryCache();
+	~AudioWaveformSummaryCache();
 
 	void SetSource(AudioDisplaySource *new_source);
 	void SetMillisecondsPerPixel(double new_pixel_ms);
@@ -51,4 +77,6 @@ public:
 	void Age(size_t max_size);
 	bool IsReady() const;
 	const AudioWaveformSummaryBlock& Get(size_t block_index);
+	void Prefetch(size_t first_block, size_t last_block);
+	AudioWaveformSummaryCacheMetrics GetMetricsSnapshot() const;
 };

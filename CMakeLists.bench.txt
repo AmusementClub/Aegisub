@@ -1,6 +1,7 @@
 add_executable(audio-display-bench EXCLUDE_FROM_ALL
     tools/audio_display_bench_main.cpp
     src/audio_display_analysis.cpp
+    src/audio_latest_range_scheduler.cpp
     src/audio_display_source.cpp
     src/audio_mix_policy.cpp
     src/audio_waveform_summary_cache.cpp
@@ -17,6 +18,7 @@ if(benchmark_FOUND)
     add_executable(audio-micro-bench EXCLUDE_FROM_ALL
         tools/audio_micro_bench_main.cpp
         src/audio_display_analysis.cpp
+        src/audio_latest_range_scheduler.cpp
         src/audio_display_source.cpp
         src/audio_mix_policy.cpp
         src/audio_waveform_summary_cache.cpp

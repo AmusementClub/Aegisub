@@ -35,6 +35,8 @@
 #include "audio_renderer_spectrum.h"
 
 #include "audio_colorscheme.h"
+#include "audio_display_source.h"
+#include "audio_mix_policy.h"
 #ifndef WITH_FFTW3
 #include "fft.h"
 #endif
@@ -157,24 +159,26 @@ void AudioSpectrumRenderer::SetResolution(size_t _derivation_size, size_t _deriv
 	}
 }
 
-template<class T>
-void AudioSpectrumRenderer::ConvertToFloat(size_t count, T *dest) {
-	for (size_t si = 0; si < count; ++si)
-	{
-		dest[si] = (T)(audio_scratch[si]) / 32768.0;
-	}
-}
-
 void AudioSpectrumRenderer::FillBlock(size_t block_index, float *block)
 {
 	assert(cache);
 	assert(block);
+	assert(display_source);
 
+	const int channels = std::max(1, display_source->GetChannels());
+	const size_t sample_count = static_cast<size_t>(2) << derivation_size;
 	int64_t first_sample = (((int64_t)block_index) << derivation_dist) - ((int64_t)1 << derivation_size);
-	provider->GetInt16MonoAudio(audio_scratch.data(), first_sample, 2 << derivation_size);
+	audio_scratch.resize(sample_count * channels);
+	mono_scratch.resize(sample_count);
+	display_source->GetFloatAudio(audio_scratch.data(), first_sample, sample_count);
+	if (channels == 1)
+		std::copy(audio_scratch.begin(), audio_scratch.begin() + sample_count, mono_scratch.begin());
+	else
+		MixAudioToMono(mix_policy, audio_scratch.data(), static_cast<int>(sample_count), channels, mono_scratch.data());
 
 #ifdef WITH_FFTW3
-	ConvertToFloat(2 << derivation_size, dft_input);
+	for (size_t i = 0; i < sample_count; ++i)
+		dft_input[i] = mono_scratch[i];
 
 	fftw_execute(dft_plan);
 
@@ -187,7 +191,7 @@ void AudioSpectrumRenderer::FillBlock(size_t block_index, float *block)
 		o++;
 	}
 #else
-	ConvertToFloat(2 << derivation_size, &fft_scratch[0]);
+	std::copy(mono_scratch.begin(), mono_scratch.begin() + sample_count, &fft_scratch[0]);
 
 	float *fft_input = &fft_scratch[0];
 	float *fft_real = &fft_scratch[0] + (2 << derivation_size);

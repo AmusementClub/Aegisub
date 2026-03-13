@@ -452,8 +452,11 @@ add_executable(Aegisub WIN32
     src/audio_box.cpp
     src/audio_colorscheme.cpp
     src/audio_controller.cpp
+    src/audio_display_analysis.cpp
     src/audio_display.cpp
+    src/audio_display_source.cpp
     src/audio_karaoke.cpp
+    src/audio_mix_policy.cpp
     src/audio_marker.cpp
     src/audio_player.cpp
     src/audio_provider_factory.cpp
@@ -911,6 +914,11 @@ endif()
 set(WITH_TEST OFF CACHE BOOL "Enable unit tests")
 if(WITH_TEST)
     include("CMakeLists.test.txt")
+endif()
+
+set(WITH_BENCH OFF CACHE BOOL "Enable audio display benchmarks")
+if(WITH_BENCH)
+    include("CMakeLists.bench.txt")
 endif()
 
 message(STATUS "\n"

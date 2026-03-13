@@ -29,12 +29,13 @@
 
 #include "audio_renderer_waveform.h"
 
+#include "audio_display_analysis.h"
+#include "audio_display_source.h"
 #include "audio_colorscheme.h"
 #include "options.h"
 
-#include <libaegisub/audio/provider.h>
-
 #include <algorithm>
+#include <cmath>
 #include <wx/dcmemory.h>
 
 enum {
@@ -63,7 +64,12 @@ void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 
 	const AudioColorScheme *pal = &colors[style];
 
-	double pixel_samples = pixel_ms * provider->GetSampleRate() / 1000.0;
+	if (!display_source)
+		return;
+
+	int channels = std::max(1, display_source->GetChannels());
+	double pixel_samples = pixel_ms * display_source->GetSampleRate() / 1000.0;
+	int samples_per_pixel = std::max(1, static_cast<int>(pixel_samples));
 
 	// Fill the background
 	dc.SetBrush(wxBrush(pal->get(0.0f)));
@@ -71,12 +77,7 @@ void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 	dc.DrawRectangle(rect);
 
 	// Make sure we've got a buffer to fill with audio data
-	if (!audio_buffer)
-	{
-		// Buffer for one pixel strip of audio
-		size_t buffer_needed = pixel_samples * provider->GetChannels() * provider->GetBytesPerSample();
-		audio_buffer.reset(new char[buffer_needed]);
-	}
+	audio_buffer.resize(static_cast<size_t>(samples_per_pixel) * channels);
 
 	double cur_sample = start * pixel_samples;
 
@@ -85,31 +86,16 @@ void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 
 	for (int x = 0; x < rect.width; ++x)
 	{
-		provider->GetInt16MonoAudio(reinterpret_cast<int16_t*>(audio_buffer.get()), (int64_t)cur_sample, (int64_t)pixel_samples);
+		display_source->GetFloatAudio(audio_buffer.data(), static_cast<int64_t>(cur_sample), samples_per_pixel);
 		cur_sample += pixel_samples;
 
-		int peak_min = 0, peak_max = 0;
-		int64_t avg_min_accum = 0, avg_max_accum = 0;
-		auto aud = reinterpret_cast<const int16_t *>(audio_buffer.get());
-		for (int si = pixel_samples; si > 0; --si, ++aud)
-		{
-			if (*aud > 0)
-			{
-				peak_max = std::max(peak_max, (int)*aud);
-				avg_max_accum += *aud;
-			}
-			else
-			{
-				peak_min = std::min(peak_min, (int)*aud);
-				avg_min_accum += *aud;
-			}
-		}
+		const auto summary = AnalyzeWaveformInterleaved(audio_buffer.data(), samples_per_pixel, channels, mix_policy);
 
 		// midpoint is half height
-		peak_min = std::max((int)(peak_min * amplitude_scale * midpoint) / 0x8000, -midpoint);
-		peak_max = std::min((int)(peak_max * amplitude_scale * midpoint) / 0x8000, midpoint);
-		int avg_min = std::max((int)(avg_min_accum * amplitude_scale * midpoint / pixel_samples) / 0x8000, -midpoint);
-		int avg_max = std::min((int)(avg_max_accum * amplitude_scale * midpoint / pixel_samples) / 0x8000, midpoint);
+		int peak_min = std::max(static_cast<int>(std::floor(summary.peak_min * amplitude_scale * midpoint)), -midpoint);
+		int peak_max = std::min(static_cast<int>(std::ceil(summary.peak_max * amplitude_scale * midpoint)), midpoint);
+		int avg_min = std::max(static_cast<int>(std::floor(summary.avg_min * amplitude_scale * midpoint)), -midpoint);
+		int avg_max = std::min(static_cast<int>(std::ceil(summary.avg_max * amplitude_scale * midpoint)), midpoint);
 
 		dc.SetPen(pen_peaks);
 		dc.DrawLine(x, midpoint - peak_max, x, midpoint - peak_min);

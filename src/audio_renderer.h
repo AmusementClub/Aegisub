@@ -34,6 +34,7 @@
 
 #include <wx/gdicmn.h>
 
+#include "audio_display_source.h"
 #include "audio_rendering_style.h"
 #include "block_cache.h"
 
@@ -104,6 +105,7 @@ class AudioRenderer {
 
 	/// Audio provider to use as source
 	agi::AudioProvider *provider = nullptr;
+	std::unique_ptr<AudioDisplaySource> display_source;
 
 	/// @brief Make sure bitmap index i is in cache
 	/// @param i     Index of bitmap to get into cache
@@ -225,6 +227,8 @@ class AudioRendererBitmapProvider {
 protected:
 	/// Audio provider to use for rendering
 	agi::AudioProvider *provider;
+	/// Display source to use for rendering
+	AudioDisplaySource *display_source;
 	/// Horizontal zoom in milliseconds per pixel
 	double pixel_ms;
 	/// Vertical zoom/amplitude scale factor
@@ -247,7 +251,7 @@ protected:
 
 public:
 	/// @brief Constructor
-	AudioRendererBitmapProvider() : provider(nullptr), pixel_ms(0), amplitude_scale(0) { };
+	AudioRendererBitmapProvider() : provider(nullptr), display_source(nullptr), pixel_ms(0), amplitude_scale(0) { };
 
 	/// @brief Destructor
 	virtual ~AudioRendererBitmapProvider() = default;
@@ -273,6 +277,7 @@ public:
 	/// @brief Change audio provider
 	/// @param provider Audio provider to change to
 	void SetProvider(agi::AudioProvider *provider);
+	void SetDisplaySource(AudioDisplaySource *source);
 
 	/// @brief Change horizontal zoom
 	/// @param pixel_ms Milliseconds per pixel to zoom to

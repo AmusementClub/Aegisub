@@ -33,6 +33,8 @@
 
 #include "audio_renderer.h"
 
+#include "audio_display_source.h"
+
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/make_unique.h>
 
@@ -116,6 +118,8 @@ void AudioRenderer::SetRenderer(AudioRendererBitmapProvider *const _renderer)
 
 		if (renderer)
 		{
+			display_source = CreateAudioDisplaySource(provider);
+			renderer->SetDisplaySource(display_source.get());
 			renderer->SetProvider(provider);
 			renderer->SetAmplitudeScale(amplitude_scale);
 			renderer->SetMillisecondsPerPixel(pixel_ms);
@@ -128,6 +132,10 @@ void AudioRenderer::SetAudioProvider(agi::AudioProvider *const _provider)
 	if (compare_and_set(provider, _provider))
 	{
 		Invalidate();
+		display_source = CreateAudioDisplaySource(provider);
+
+		if (renderer)
+			renderer->SetDisplaySource(display_source.get());
 
 		if (renderer)
 			renderer->SetProvider(provider);
@@ -230,6 +238,11 @@ void AudioRendererBitmapProvider::SetProvider(agi::AudioProvider *const _provide
 {
 	if (compare_and_set(provider, _provider))
 		OnSetProvider();
+}
+
+void AudioRendererBitmapProvider::SetDisplaySource(AudioDisplaySource *const source)
+{
+	display_source = source;
 }
 
 void AudioRendererBitmapProvider::SetMillisecondsPerPixel(const double new_pixel_ms)

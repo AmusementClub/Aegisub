@@ -38,6 +38,7 @@
 #include <vector>
 
 #include "audio_renderer.h"
+#include "audio_mix_policy.h"
 
 #ifdef WITH_FFTW3
 #include <fftw3.h>
@@ -84,12 +85,6 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 	/// @param[out] block       Address to write the data to
 	void FillBlock(size_t block_index, float *block);
 
-	/// @brief Convert audio data to float range [-1;+1)
-	/// @param count Samples to convert
-	/// @param dest Buffer to fill
-	template<class T>
-	void ConvertToFloat(size_t count, T *dest);
-
 #ifdef WITH_FFTW3
 	/// FFTW plan data
 	fftw_plan dft_plan = nullptr;
@@ -103,7 +98,9 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 #endif
 
 	/// Pre-allocated scratch area for storing raw audio data
-	std::vector<int16_t> audio_scratch;
+	std::vector<float> audio_scratch;
+	std::vector<float> mono_scratch;
+	AudioMixPolicy mix_policy = AudioMixPolicy::MonoAverage;
 
 public:
 	/// @brief Constructor

@@ -18,6 +18,10 @@ if(GTEST_FOUND)
     add_executable(gtest-run EXCLUDE_FROM_ALL
         tests/tests/access.cpp
         tests/tests/audio.cpp
+        tests/tests/audio_display.cpp
+        src/audio_display_analysis.cpp
+        src/audio_display_source.cpp
+        src/audio_mix_policy.cpp
         tests/tests/cajun.cpp
         tests/tests/calltip_provider.cpp
         tests/tests/character_count.cpp

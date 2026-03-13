@@ -19,6 +19,9 @@
 #include "factory_manager.h"
 #include "options.h"
 #include "utils.h"
+#ifdef WITH_FFMS2
+#include "ffmpegsource_common.h"
+#endif
 
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/fs.h>
@@ -36,17 +39,24 @@ namespace {
 struct factory {
 	const char *name;
 	std::unique_ptr<AudioProvider> (*create)(fs::path const&, BackgroundRunner *);
+	bool (*is_available)();
 	bool hidden;
 };
 
-const factory providers[] = {
-	{"Dummy", CreateDummyAudioProvider, true},
-	{"PCM", CreatePCMAudioProvider, true},
 #ifdef WITH_FFMS2
-	{"FFmpegSource", CreateFFmpegSourceAudioProvider, false},
+bool IsFFmpegSourceAvailable() {
+	return ffms::IsAvailable();
+}
+#endif
+
+const factory providers[] = {
+	{"Dummy", CreateDummyAudioProvider, nullptr, true},
+	{"PCM", CreatePCMAudioProvider, nullptr, true},
+#ifdef WITH_FFMS2
+	{"FFmpegSource", CreateFFmpegSourceAudioProvider, IsFFmpegSourceAvailable, false},
 #endif
 #ifdef WITH_AVISYNTH
-	{"Avisynth", CreateAvisynthAudioProvider, false},
+	{"Avisynth", CreateAvisynthAudioProvider, nullptr, false},
 #endif
 };
 }
@@ -68,6 +78,13 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 	std::string msg_partial; // error messages from providers that could partially load the file (knows container, missing codec)
 
 	for (auto const& factory : sorted) {
+		if (factory->is_available && !factory->is_available()) {
+			std::string err = std::string(factory->name) + ": runtime library is unavailable.";
+			LOG_D("audio_provider") << err;
+			msg_all += err + "\n";
+			continue;
+		}
+
 		try {
 			provider = factory->create(filename, br);
 			if (!provider) continue;

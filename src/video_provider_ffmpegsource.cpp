@@ -93,9 +93,9 @@ public:
 #if FFMS_VERSION >= ((2 << 24) | (17 << 16) | (1 << 8) | 0)
 		if (matrix == ColorSpace) return;
 		if (matrix == RealColorSpace)
-			FFMS_SetInputFormatV(VideoSource, CS, CR, FFMS_GetPixFmt(""), nullptr);
+			ffms::SetInputFormatV(VideoSource, CS, CR, ffms::GetPixFmt(""), nullptr);
 		else if (matrix == "TV.601")
-			FFMS_SetInputFormatV(VideoSource, AGI_CS_BT470BG, CR, FFMS_GetPixFmt(""), nullptr);
+			ffms::SetInputFormatV(VideoSource, AGI_CS_BT470BG, CR, ffms::GetPixFmt(""), nullptr);
 		else
 			return;
 		ColorSpace = matrix;
@@ -146,7 +146,7 @@ std::string colormatrix_description(int cs, int cr) {
 
 FFmpegSourceVideoProvider::FFmpegSourceVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br) try
 : FFmpegSourceProvider(br)
-, VideoSource(nullptr, FFMS_DestroyVideoSource)
+, VideoSource(nullptr, ffms::DestroyVideoSource)
 {
 	ErrInfo.Buffer		= FFMSErrMsg;
 	ErrInfo.BufferSize	= sizeof(FFMSErrMsg);
@@ -162,7 +162,7 @@ catch (agi::EnvironmentError const& err) {
 }
 
 void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::string const& colormatrix) {
-	FFMS_Indexer *Indexer = FFMS_CreateIndexer(filename.string().c_str(), &ErrInfo);
+	FFMS_Indexer *Indexer = ffms::CreateIndexer(filename.string().c_str(), &ErrInfo);
 	if (!Indexer) {
 		if (ErrInfo.SubType == FFMS_ERROR_FILE_READ)
 			throw agi::fs::FileNotFound(std::string(ErrInfo.Buffer));
@@ -187,17 +187,17 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 
 	// try to read index
 	agi::scoped_holder<FFMS_Index*, void (FFMS_CC*)(FFMS_Index*)>
-		Index(FFMS_ReadIndex(CacheName.string().c_str(), &ErrInfo), FFMS_DestroyIndex);
+		Index(ffms::ReadIndex(CacheName.string().c_str(), &ErrInfo), ffms::DestroyIndex);
 
-	if (Index && FFMS_IndexBelongsToFile(Index, filename.string().c_str(), &ErrInfo))
+	if (Index && ffms::IndexBelongsToFile(Index, filename.string().c_str(), &ErrInfo))
 		Index = nullptr;
 
 	// time to examine the index and check if the track we want is indexed
 	// technically this isn't really needed since all video tracks should always be indexed,
 	// but a bit of sanity checking never hurt anyone
 	if (Index && TrackNumber >= 0) {
-		FFMS_Track *TempTrackData = FFMS_GetTrackFromIndex(Index, TrackNumber);
-		if (FFMS_GetNumFrames(TempTrackData) <= 0)
+		FFMS_Track *TempTrackData = ffms::GetTrackFromIndex(Index, TrackNumber);
+		if (ffms::GetNumFrames(TempTrackData) <= 0)
 			Index = nullptr;
 	}
 
@@ -209,7 +209,7 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 		Index = DoIndexing(Indexer, CacheName, TrackMask, GetErrorHandlingMode());
 	}
 	else {
-		FFMS_CancelIndexing(Indexer);
+		ffms::CancelIndexing(Indexer);
 	}
 
 	// update access time of index file so it won't get cleaned away
@@ -221,18 +221,18 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 	// track number still not set?
 	if (TrackNumber < 0) {
 		// just grab the first track
-		TrackNumber = FFMS_GetFirstIndexedTrackOfType(Index, FFMS_TYPE_VIDEO, &ErrInfo);
+		TrackNumber = ffms::GetFirstIndexedTrackOfType(Index, FFMS_TYPE_VIDEO, &ErrInfo);
 		if (TrackNumber < 0)
 			throw VideoNotSupported(std::string("Couldn't find any video tracks: ") + ErrInfo.Buffer);
 	}
 
 	// Check if there's an audio track
-	has_audio = FFMS_GetFirstTrackOfType(Index, FFMS_TYPE_AUDIO, nullptr) != -1;
+	has_audio = ffms::GetFirstTrackOfType(Index, FFMS_TYPE_AUDIO, nullptr) != -1;
 
 	// set thread count
 	int Threads = OPT_GET("Provider/Video/FFmpegSource/Decoding Threads")->GetInt();
 #if FFMS_VERSION < ((2 << 24) | (17 << 16) | (2 << 8) | 1)
-	if (FFMS_GetSourceType(Index) == FFMS_SOURCE_LAVF)
+	if (ffms::GetSourceType(Index) == FFMS_SOURCE_LAVF)
 		Threads = 1;
 #endif
 
@@ -244,14 +244,14 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 	else
 		SeekMode = FFMS_SEEK_NORMAL;
 
-	VideoSource = FFMS_CreateVideoSource(filename.string().c_str(), TrackNumber, Index, Threads, SeekMode, &ErrInfo);
+	VideoSource = ffms::CreateVideoSource(filename.string().c_str(), TrackNumber, Index, Threads, SeekMode, &ErrInfo);
 	if (!VideoSource)
 		throw VideoOpenError(std::string("Failed to open video track: ") + ErrInfo.Buffer);
 
 	// load video properties
-	VideoInfo = FFMS_GetVideoProperties(VideoSource);
+	VideoInfo = ffms::GetVideoProperties(VideoSource);
 
-	const FFMS_Frame *TempFrame = FFMS_GetFrame(VideoSource, 0, &ErrInfo);
+	const FFMS_Frame *TempFrame = ffms::GetFrame(VideoSource, 0, &ErrInfo);
 	if (!TempFrame)
 		throw VideoOpenError(std::string("Failed to decode first frame: ") + ErrInfo.Buffer);
 
@@ -276,27 +276,27 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 	}
 
 	if (CS != VideoCS) {
-		if (FFMS_SetInputFormatV(VideoSource, CS, CR, FFMS_GetPixFmt(""), &ErrInfo))
+		if (ffms::SetInputFormatV(VideoSource, CS, CR, ffms::GetPixFmt(""), &ErrInfo))
 			throw VideoOpenError(std::string("Failed to set input format: ") + ErrInfo.Buffer);
 	}
 #endif
 
-	const int TargetFormat[] = { FFMS_GetPixFmt("bgra"), -1 };
-	if (FFMS_SetOutputFormatV2(VideoSource, TargetFormat, Width, Height, FFMS_RESIZER_BICUBIC, &ErrInfo))
+	const int TargetFormat[] = { ffms::GetPixFmt("bgra"), -1 };
+	if (ffms::SetOutputFormatV2(VideoSource, TargetFormat, Width, Height, FFMS_RESIZER_BICUBIC, &ErrInfo))
 		throw VideoOpenError(std::string("Failed to set output format: ") + ErrInfo.Buffer);
 
 	// get frame info data
-	FFMS_Track *FrameData = FFMS_GetTrackFromVideo(VideoSource);
+	FFMS_Track *FrameData = ffms::GetTrackFromVideo(VideoSource);
 	if (FrameData == nullptr)
 		throw VideoOpenError("failed to get frame data");
-	const FFMS_TrackTimeBase *TimeBase = FFMS_GetTimeBase(FrameData);
+	const FFMS_TrackTimeBase *TimeBase = ffms::GetTimeBase(FrameData);
 	if (TimeBase == nullptr)
 		throw VideoOpenError("failed to get track time base");
 
 	// build list of keyframes and timecodes
 	std::vector<int> TimecodesVector;
 	for (int CurFrameNum = 0; CurFrameNum < VideoInfo->NumFrames; CurFrameNum++) {
-		const FFMS_FrameInfo *CurFrameData = FFMS_GetFrameInfo(FrameData, CurFrameNum);
+		const FFMS_FrameInfo *CurFrameData = ffms::GetFrameInfo(FrameData, CurFrameNum);
 		if (!CurFrameData)
 			throw VideoOpenError("Couldn't get info about frame " + std::to_string(CurFrameNum));
 
@@ -317,7 +317,7 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
 	n = mid(0, n, GetFrameCount() - 1);
 
-	auto frame = FFMS_GetFrame(VideoSource, n, &ErrInfo);
+	auto frame = ffms::GetFrame(VideoSource, n, &ErrInfo);
 	if (!frame)
 		throw VideoDecodeError(std::string("Failed to retrieve frame: ") +  ErrInfo.Buffer);
 

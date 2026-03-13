@@ -41,14 +41,32 @@
 #include "utils.h"
 
 #include <libaegisub/background_runner.h>
+#include <libaegisub/log.h>
+#include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/path.h>
+
+#ifdef _WIN32
+#include <libaegisub/charset_conv_win.h>
+#include <libaegisub/util.h>
+#endif
 
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/crc.hpp>
 #include <boost/filesystem/path.hpp>
+#include <mutex>
+#include <string>
+#include <vector>
 #include <wx/intl.h>
 #include <wx/choicdlg.h>
+
+#ifdef WITH_FFMS2_RUNTIME_LOADING
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
+#endif
 
 #if FFMS_VERSION < ((2 << 24) | (22 << 16) | (0 << 8) | 0)
 enum {
@@ -64,10 +82,205 @@ enum {
 };
 #endif
 
+namespace ffms {
+#ifdef WITH_FFMS2_RUNTIME_LOADING
+	#define AGI_FFMS2_FN(name) decltype(&FFMS_##name) name = nullptr;
+	#include "ffms2_functions.inc"
+	#undef AGI_FFMS2_FN
+
+namespace {
+	std::once_flag load_once;
+	std::string load_error;
+	std::string loaded_library;
+	int loaded_version = -1;
+	bool load_complete = false;
+
+#ifdef _WIN32
+	using LibraryHandle = HMODULE;
+#else
+	using LibraryHandle = void *;
+#endif
+
+	LibraryHandle library_handle = nullptr;
+	std::string loaded_candidate;
+
+	std::string FormatFFMSVersion(int version) {
+		if (version < 0)
+			return "unknown";
+		return agi::format("%d.%d.%d.%d",
+			(version >> 24) & 0xFF,
+			(version >> 16) & 0xFF,
+			(version >> 8) & 0xFF,
+			version & 0xFF);
+	}
+
+	std::string GetVersionContext() {
+		return agi::format("headers=%s, dll=%s", FormatFFMSVersion(FFMS_VERSION), FormatFFMSVersion(loaded_version));
+	}
+
+	std::string GetLoadFailureReason() {
+#ifdef _WIN32
+		return agi::util::ErrorString(GetLastError());
+#else
+		auto err = dlerror();
+		return err ? err : "unknown error";
+#endif
+	}
+
+	std::string GetLoadedLibraryPath() {
+#ifdef _WIN32
+		std::wstring path(32768, L'\0');
+		auto len = GetModuleFileNameW(library_handle, &path[0], static_cast<DWORD>(path.size()));
+		if (!len)
+			return loaded_candidate;
+		path.resize(len);
+		return agi::charset::ConvertW(path);
+#else
+		Dl_info info{};
+		if (ffms::CreateIndexer && dladdr(reinterpret_cast<void *>(ffms::CreateIndexer), &info) && info.dli_fname)
+			return info.dli_fname;
+		return loaded_candidate;
+#endif
+	}
+
+	template <typename T>
+	void LoadSymbol(T& target, const char *name) {
+#ifdef _WIN32
+		target = reinterpret_cast<T>(GetProcAddress(library_handle, name));
+#else
+		dlerror();
+		target = reinterpret_cast<T>(dlsym(library_handle, name));
+#endif
+		if (!target)
+			throw agi::EnvironmentError(std::string("Failed to resolve FFMS2 symbol ") + name + ": " + GetLoadFailureReason());
+	}
+
+	void ResolveSymbols() {
+		#define AGI_FFMS2_FN(name) LoadSymbol(ffms::name, "FFMS_" #name);
+		#include "ffms2_functions.inc"
+		#undef AGI_FFMS2_FN
+	}
+
+	std::vector<std::string> GetLibraryCandidates() {
+		std::vector<std::string> candidates;
+#ifdef FFMS2_SO
+		candidates.emplace_back(FFMS2_SO);
+#endif
+#ifdef _WIN32
+		candidates.emplace_back("ffms2.dll");
+#elif defined(__APPLE__)
+		candidates.emplace_back("libffms2.dylib");
+		candidates.emplace_back("ffms2.dylib");
+#else
+		candidates.emplace_back("libffms2.so");
+		candidates.emplace_back("libffms2.so.2");
+		candidates.emplace_back("ffms2.so");
+#endif
+		return candidates;
+	}
+
+	void OpenLibrary() {
+		std::string attempted;
+		for (auto const& candidate : GetLibraryCandidates()) {
+			if (!attempted.empty()) attempted += ", ";
+			attempted += candidate;
+#ifdef _WIN32
+			library_handle = LoadLibraryA(candidate.c_str());
+#else
+			library_handle = dlopen(candidate.c_str(), RTLD_LAZY | RTLD_LOCAL);
+#endif
+			if (library_handle) {
+				loaded_candidate = candidate;
+				return;
+			}
+			auto reason = GetLoadFailureReason();
+			if (!reason.empty())
+				attempted += " (" + reason + ")";
+		}
+		throw agi::EnvironmentError("Could not load FFMS2 runtime library. Tried: " + attempted);
+	}
+
+	void CloseLibrary() {
+		if (!library_handle)
+			return;
+#ifdef _WIN32
+		FreeLibrary(library_handle);
+#else
+		dlclose(library_handle);
+#endif
+		library_handle = nullptr;
+		loaded_library.clear();
+		loaded_candidate.clear();
+	}
+
+	void LoadImpl() {
+		OpenLibrary();
+		try {
+			auto get_version = reinterpret_cast<int (FFMS_CC*)()>(
+#ifdef _WIN32
+				GetProcAddress(library_handle, "FFMS_GetVersion")
+#else
+				dlsym(library_handle, "FFMS_GetVersion")
+#endif
+			);
+			if (get_version)
+				loaded_version = get_version();
+			ResolveSymbols();
+			loaded_library = GetLoadedLibraryPath();
+		}
+		catch (...) {
+			CloseLibrary();
+			throw;
+		}
+	}
+}
+
+	void EnsureLoaded() {
+		std::call_once(load_once, [] {
+			try {
+				LoadImpl();
+				load_complete = true;
+				LOG_I("provider/ffms2/runtime") << "Loaded FFMS2 from " << (loaded_library.empty() ? loaded_candidate : loaded_library) << " (" << GetVersionContext() << ')';
+				if (loaded_version >= 0 && loaded_version != FFMS_VERSION)
+					LOG_W("provider/ffms2/runtime") << "FFMS2 header/DLL version mismatch: " << GetVersionContext();
+			}
+			catch (agi::EnvironmentError const& err) {
+				load_error = err.GetMessage();
+				if (!loaded_candidate.empty() || loaded_version >= 0)
+					load_error += " (" + GetVersionContext() + ")";
+				LOG_W("provider/ffms2/runtime") << load_error;
+			}
+		});
+
+		if (!load_complete)
+			throw agi::EnvironmentError(load_error.empty() ? "Failed to load FFMS2 runtime library." : load_error);
+	}
+
+	bool IsAvailable() noexcept {
+		try {
+			EnsureLoaded();
+			return true;
+		}
+		catch (...) {
+			return false;
+		}
+	}
+
+	std::string GetLoadError() {
+		return load_error;
+	}
+
+	std::string GetLoadedLibrary() {
+		return loaded_library;
+	}
+#endif
+}
+
 FFmpegSourceProvider::FFmpegSourceProvider(agi::BackgroundRunner *br)
 : br(br)
 {
-	FFMS_Init(0, 0);
+	ffms::EnsureLoaded();
+	ffms::Init(0, 0);
 }
 
 /// @brief Does indexing of a source file
@@ -97,18 +310,18 @@ FFMS_Index *FFmpegSourceProvider::DoIndexing(FFMS_Indexer *Indexer,
 		};
 #if FFMS_VERSION >= ((2 << 24) | (21 << 16) | (0 << 8) | 0)
 		if (Track == TrackSelection::All)
-			FFMS_TrackTypeIndexSettings(Indexer, FFMS_TYPE_AUDIO, 1, 0);
+			ffms::TrackTypeIndexSettings(Indexer, FFMS_TYPE_AUDIO, 1, 0);
 		else if (Track != TrackSelection::None)
-			FFMS_TrackIndexSettings(Indexer, static_cast<int>(Track), 1, 0);
-		FFMS_SetProgressCallback(Indexer, callback, ps);
-		Index = FFMS_DoIndexing2(Indexer, IndexEH, &ErrInfo);
+			ffms::TrackIndexSettings(Indexer, static_cast<int>(Track), 1, 0);
+		ffms::SetProgressCallback(Indexer, callback, ps);
+		Index = ffms::DoIndexing2(Indexer, IndexEH, &ErrInfo);
 #else
 		int Trackmask = 0;
 		if (Track == TrackSelection::All)
 			Trackmask = std::numeric_limits<int>::max();
 		else if (Track != TrackSelection::None)
 			Trackmask = 1 << static_cast<int>(Track);
-		Index = FFMS_DoIndexing(Indexer, Trackmask, 0,
+		Index = ffms::DoIndexing(Indexer, Trackmask, 0,
 			nullptr, nullptr, IndexEH, callback, ps, &ErrInfo);
 #endif
 	});
@@ -117,7 +330,7 @@ FFMS_Index *FFmpegSourceProvider::DoIndexing(FFMS_Indexer *Indexer,
 		throw agi::EnvironmentError(std::string("Failed to index: ") + ErrInfo.Buffer);
 
 	// write index to disk for later use
-	FFMS_WriteIndex(CacheName.string().c_str(), Index, &ErrInfo);
+	ffms::WriteIndex(CacheName.string().c_str(), Index, &ErrInfo);
 
 	return Index;
 }
@@ -128,7 +341,7 @@ FFMS_Index *FFmpegSourceProvider::DoIndexing(FFMS_Indexer *Indexer,
 /// @return			Returns a std::map with the track numbers as keys and the codec names as values.
 std::map<int, std::string> FFmpegSourceProvider::GetTracksOfType(FFMS_Indexer *Indexer, FFMS_TrackType Type) {
 	std::map<int,std::string> TrackList;
-	int NumTracks = FFMS_GetNumTracksI(Indexer);
+	int NumTracks = ffms::GetNumTracksI(Indexer);
 
 	// older versions of ffms2 can't index audio tracks past 31
 #if FFMS_VERSION < ((2 << 24) | (21 << 16) | (0 << 8) | 0)
@@ -137,8 +350,8 @@ std::map<int, std::string> FFmpegSourceProvider::GetTracksOfType(FFMS_Indexer *I
 #endif
 
 	for (int i=0; i<NumTracks; i++) {
-		if (FFMS_GetTrackTypeI(Indexer, i) == Type) {
-			if (auto CodecName = FFMS_GetCodecNameI(Indexer, i))
+		if (ffms::GetTrackTypeI(Indexer, i) == Type) {
+			if (auto CodecName = ffms::GetCodecNameI(Indexer, i))
 				TrackList[i] = CodecName;
 		}
 	}
@@ -172,21 +385,21 @@ void FFmpegSourceProvider::SetLogLevel() {
 	boost::to_lower(LogLevel);
 
 	if (LogLevel == "panic")
-		FFMS_SetLogLevel(FFMS_LOG_PANIC);
+		ffms::SetLogLevel(FFMS_LOG_PANIC);
 	else if (LogLevel == "fatal")
-		FFMS_SetLogLevel(FFMS_LOG_FATAL);
+		ffms::SetLogLevel(FFMS_LOG_FATAL);
 	else if (LogLevel == "error")
-		FFMS_SetLogLevel(FFMS_LOG_ERROR);
+		ffms::SetLogLevel(FFMS_LOG_ERROR);
 	else if (LogLevel == "warning")
-		FFMS_SetLogLevel(FFMS_LOG_WARNING);
+		ffms::SetLogLevel(FFMS_LOG_WARNING);
 	else if (LogLevel == "info")
-		FFMS_SetLogLevel(FFMS_LOG_INFO);
+		ffms::SetLogLevel(FFMS_LOG_INFO);
 	else if (LogLevel == "verbose")
-		FFMS_SetLogLevel(FFMS_LOG_VERBOSE);
+		ffms::SetLogLevel(FFMS_LOG_VERBOSE);
 	else if (LogLevel == "debug")
-		FFMS_SetLogLevel(FFMS_LOG_DEBUG);
+		ffms::SetLogLevel(FFMS_LOG_DEBUG);
 	else
-		FFMS_SetLogLevel(FFMS_LOG_QUIET);
+		ffms::SetLogLevel(FFMS_LOG_QUIET);
 }
 
 FFMS_IndexErrorHandling FFmpegSourceProvider::GetErrorHandlingMode() {

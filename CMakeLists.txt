@@ -720,11 +720,25 @@ endif()
 
 find_package(FFMS2)
 option(WITH_FFMS2 "Enable FFMS2 support" ${FFMS2_FOUND})
+option(WITH_FFMS2_RUNTIME_LOADING "Load FFMS2 dynamically at runtime" ON)
 if(WITH_FFMS2)
     find_package(FFMS2 REQUIRED)
     target_compile_definitions(Aegisub PRIVATE "WITH_FFMS2")
     target_include_directories(Aegisub PRIVATE ${FFMS2_INCLUDE_DIRS})
-    target_link_libraries(Aegisub LINK_PRIVATE ${FFMS2_LIBRARIES})
+    target_include_directories(Aegisub PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vendor/ffms2")
+    if(WITH_FFMS2_RUNTIME_LOADING)
+        target_compile_definitions(Aegisub PRIVATE "WITH_FFMS2_RUNTIME_LOADING")
+        list(GET FFMS2_LIBRARIES 0 FFMS2_PRIMARY_LIBRARY)
+        get_filename_component(FFMS2_LIBRARY_NAME "${FFMS2_PRIMARY_LIBRARY}" NAME)
+        if(WIN32)
+            string(REGEX REPLACE "\\.lib$" ".dll" FFMS2_LIBRARY_NAME "${FFMS2_LIBRARY_NAME}")
+        endif()
+        if(FFMS2_LIBRARY_NAME)
+            target_compile_definitions(Aegisub PRIVATE "FFMS2_SO=\"${FFMS2_LIBRARY_NAME}\"")
+        endif()
+    else()
+        target_link_libraries(Aegisub LINK_PRIVATE ${FFMS2_LIBRARIES})
+    endif()
     target_sources(Aegisub PRIVATE src/audio_provider_ffmpegsource.cpp src/ffmpegsource_common.cpp src/video_provider_ffmpegsource.cpp)
 else()
     message(WARNING
@@ -946,6 +960,7 @@ message(STATUS "\n"
     "  AviSynth:              ${WITH_AVISYNTH}\n"
     "  CSRI:                  ${WITH_CSRI}\n"
     "  FFMS2:                 ${WITH_FFMS2}\n"
+    "  FFMS2 runtime loading: ${WITH_FFMS2_RUNTIME_LOADING}\n"
     "  FFTW3:                 ${WITH_FFTW3}\n"
     "  Hunspell:              ${WITH_HUNSPELL}\n"
     "  uchardet:              ${WITH_UCHARDET}\n"

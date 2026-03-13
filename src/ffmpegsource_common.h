@@ -42,6 +42,24 @@
 
 namespace agi { class BackgroundRunner; }
 
+namespace ffms {
+#ifdef WITH_FFMS2_RUNTIME_LOADING
+	void EnsureLoaded();
+	bool IsAvailable() noexcept;
+
+	#define AGI_FFMS2_FN(name) extern decltype(&FFMS_##name) name;
+	#include "ffms2_functions.inc"
+	#undef AGI_FFMS2_FN
+#else
+	inline void EnsureLoaded() {}
+	inline bool IsAvailable() noexcept { return true; }
+
+	#define AGI_FFMS2_FN(name) constexpr auto name = &FFMS_##name;
+	#include "ffms2_functions.inc"
+	#undef AGI_FFMS2_FN
+#endif
+}
+
 /// @class FFmpegSourceProvider
 /// @brief Base class for FFMS2 source providers; contains common functions etc
 class FFmpegSourceProvider {

@@ -19,6 +19,9 @@
 #include "factory_manager.h"
 #include "include/aegisub/video_provider.h"
 #include "options.h"
+#ifdef WITH_FFMS2
+#include "ffmpegsource_common.h"
+#endif
 
 #include <libaegisub/fs.h>
 #include <libaegisub/log.h>
@@ -36,17 +39,24 @@ namespace {
 	struct factory {
 		const char *name;
 		std::unique_ptr<VideoProvider> (*create)(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
+		bool (*is_available)();
 		bool hidden;
 	};
 
-	const factory providers[] = {
-		{"Dummy", CreateDummyVideoProvider, true},
-		{"YUV4MPEG", CreateYUV4MPEGVideoProvider, true},
 #ifdef WITH_FFMS2
-		{"FFmpegSource", CreateFFmpegSourceVideoProvider, false},
+	bool IsFFmpegSourceAvailable() {
+		return ffms::IsAvailable();
+	}
+#endif
+
+	const factory providers[] = {
+		{"Dummy", CreateDummyVideoProvider, nullptr, true},
+		{"YUV4MPEG", CreateYUV4MPEGVideoProvider, nullptr, true},
+#ifdef WITH_FFMS2
+		{"FFmpegSource", CreateFFmpegSourceVideoProvider, IsFFmpegSourceAvailable, false},
 #endif
 #ifdef WITH_AVISYNTH
-		{"Avisynth", CreateAvisynthVideoProvider, false},
+		{"Avisynth", CreateAvisynthVideoProvider, nullptr, false},
 #endif
 	};
 }
@@ -66,6 +76,13 @@ std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path c
 
 	for (auto factory : sorted) {
 		std::string err;
+		if (factory->is_available && !factory->is_available()) {
+			err = "runtime library is unavailable.";
+			errors += std::string(factory->name) + ": " + err + "\n";
+			LOG_D("manager/video/provider") << factory->name << ": " << err;
+			continue;
+		}
+
 		try {
 			auto provider = factory->create(filename, colormatrix, br);
 			if (!provider) continue;

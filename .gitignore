@@ -89,6 +89,5 @@ vendor/luajit/src/luajit
 
 .vs
 /build-*
-/vendor
 /tools
 CMakePresets.json

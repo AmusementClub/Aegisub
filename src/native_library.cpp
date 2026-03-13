@@ -3,6 +3,7 @@
 #include "native_library.h"
 
 #include <libaegisub/exception.h>
+#include <libaegisub/log.h>
 
 #ifdef _WIN32
 #include <libaegisub/charset_conv_win.h>
@@ -252,5 +253,77 @@ void* Library::ResolveSymbolRaw(const char *symbol) {
 	return result;
 }
 
-} }
+CachedLibrary::CachedLibrary(std::string library_name, const char *display_name, const char *log_tag,
+	InitializeFunction initialize, DetailFunction detail)
+	: library_name(std::move(library_name))
+	, display_name(display_name)
+	, log_tag(log_tag)
+	, initialize(std::move(initialize))
+	, detail(std::move(detail)) {
+}
 
+Library& CachedLibrary::EnsureLoaded() {
+	std::lock_guard<std::mutex> lock(mutex);
+	if (load_complete)
+		return *library;
+	if (load_attempted)
+		throw agi::EnvironmentError(load_error.empty() ? "Failed to load native library." : load_error);
+	load_attempted = true;
+
+	try {
+		std::unique_ptr<Library> loaded(new Library(Library::Load(library_name)));
+		if (initialize)
+			initialize(*loaded);
+		library = std::move(loaded);
+		load_error.clear();
+		load_complete = true;
+		std::string message = std::string("Loaded ") + display_name + " from " + library->GetLoadedPath();
+		if (detail) {
+			auto suffix = detail();
+			if (!suffix.empty())
+				message += " (" + suffix + ")";
+		}
+		LOG_I(log_tag) << message;
+		return *library;
+	}
+	catch (agi::EnvironmentError const& err) {
+		load_error = err.GetMessage();
+		if (detail) {
+			auto suffix = detail();
+			if (!suffix.empty())
+				load_error += " (" + suffix + ")";
+		}
+		LOG_W(log_tag) << load_error;
+		throw;
+	}
+}
+
+bool CachedLibrary::IsAvailable() noexcept {
+	try {
+		EnsureLoaded();
+		return true;
+	}
+	catch (...) {
+		return false;
+	}
+}
+
+std::string CachedLibrary::GetLoadError() const {
+	std::lock_guard<std::mutex> lock(mutex);
+	return load_error;
+}
+
+std::string CachedLibrary::GetLoadedLibrary() const {
+	std::lock_guard<std::mutex> lock(mutex);
+	return library ? library->GetLoadedPath() : std::string();
+}
+
+void CachedLibrary::Reset() {
+	std::lock_guard<std::mutex> lock(mutex);
+	library.reset();
+	load_error.clear();
+	load_attempted = false;
+	load_complete = false;
+}
+
+} }

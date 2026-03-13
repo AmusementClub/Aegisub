@@ -63,12 +63,7 @@ namespace {
 	int avs_refcount = 0;
 	IScriptEnvironment *env = nullptr;
 	std::mutex AviSynthMutex;
-	std::unique_ptr<agi::native::Library> runtime_library;
 	FUNC* CreateScriptEnv = nullptr;
-	std::string load_error;
-	std::string loaded_library;
-	bool load_attempted = false;
-	bool load_complete = false;
 
 	std::string GetLibraryName() {
 #ifdef AVISYNTH_SO
@@ -78,49 +73,34 @@ namespace {
 #endif
 	}
 
-	void EnsureAvisynthRuntimeLoaded() {
-		if (load_complete)
-			return;
-		if (load_attempted)
-			throw AvisynthError(load_error.c_str());
-		load_attempted = true;
+	void InitializeAvisynthRuntime(agi::native::Library& library) {
+		CreateScriptEnv = library.ResolveSymbol<FUNC*>("CreateScriptEnvironment");
+	}
 
+	agi::native::CachedLibrary runtime_library(GetLibraryName(), "Avisynth", "provider/avisynth/runtime",
+		InitializeAvisynthRuntime);
+
+	void EnsureAvisynthRuntimeLoaded() {
 		try {
-			runtime_library = std::make_unique<agi::native::Library>(agi::native::Library::Load(GetLibraryName()));
-			CreateScriptEnv = runtime_library->ResolveSymbol<FUNC*>("CreateScriptEnvironment");
-			loaded_library = runtime_library->GetLoadedPath();
-			load_error.clear();
-			load_complete = true;
-			LOG_I("provider/avisynth/runtime") << "Loaded Avisynth from " << loaded_library;
+			runtime_library.EnsureLoaded();
 		}
 		catch (agi::EnvironmentError const& err) {
-			load_error = err.GetMessage();
-			LOG_W("provider/avisynth/runtime") << load_error;
-			throw AvisynthError(load_error.c_str());
+			throw AvisynthError(err.GetMessage().c_str());
 		}
 	}
 }
 
 namespace avisynth {
 	bool IsAvailable() noexcept {
-		std::lock_guard<std::mutex> lock(AviSynthMutex);
-		try {
-			EnsureAvisynthRuntimeLoaded();
-			return true;
-		}
-		catch (...) {
-			return false;
-		}
+		return runtime_library.IsAvailable();
 	}
 
 	std::string GetLoadError() {
-		std::lock_guard<std::mutex> lock(AviSynthMutex);
-		return load_error;
+		return runtime_library.GetLoadError();
 	}
 
 	std::string GetLoadedLibrary() {
-		std::lock_guard<std::mutex> lock(AviSynthMutex);
-		return loaded_library;
+		return runtime_library.GetLoadedLibrary();
 	}
 }
 
@@ -151,7 +131,7 @@ AviSynthWrapper::~AviSynthWrapper() {
 	if (!--avs_refcount) {
 		delete env;
 		env = nullptr;
-		runtime_library.reset();
+		runtime_library.Reset();
 		CreateScriptEnv = nullptr;
 	}
 }

@@ -78,12 +78,7 @@ namespace ffms {
 	#undef AGI_FFMS2_FN
 
 namespace {
-	std::once_flag load_once;
-	std::string load_error;
-	std::string loaded_library;
 	int loaded_version = -1;
-	bool load_complete = false;
-	std::unique_ptr<agi::native::Library> library;
 
 	std::string GetLibraryName() {
 #ifdef FFMS2_SO
@@ -107,74 +102,46 @@ namespace {
 		return agi::format("headers=%s, dll=%s", FormatFFMSVersion(FFMS_VERSION), FormatFFMSVersion(loaded_version));
 	}
 
-	template <typename T>
-	void LoadSymbol(T& target, const char *name) {
-		target = library->ResolveSymbol<T>(name);
+	std::string GetVersionContextForCache() {
+		return loaded_version >= 0 ? GetVersionContext() : std::string();
 	}
 
-	void ResolveSymbols() {
-		#define AGI_FFMS2_FN(name) LoadSymbol(ffms::name, "FFMS_" #name);
+	template <typename T>
+	void LoadSymbol(agi::native::Library& library, T& target, const char *name) {
+		target = library.ResolveSymbol<T>(name);
+	}
+
+	void ResolveSymbols(agi::native::Library& library) {
+		#define AGI_FFMS2_FN(name) LoadSymbol(library, ffms::name, "FFMS_" #name);
 		#include "ffms2_functions.inc"
 		#undef AGI_FFMS2_FN
 	}
 
-	void CloseLibrary() {
-		library.reset();
-		loaded_library.clear();
-		loaded_version = -1;
+	void InitializeFFMS2Runtime(agi::native::Library& library) {
+		loaded_version = library.ResolveSymbol<int (FFMS_CC*)()>("FFMS_GetVersion")();
+		ResolveSymbols(library);
 	}
 
-	void LoadImpl() {
-		library = std::make_unique<agi::native::Library>(agi::native::Library::Load(GetLibraryName()));
-		try {
-			loaded_version = library->ResolveSymbol<int (FFMS_CC*)()>("FFMS_GetVersion")();
-			ResolveSymbols();
-			loaded_library = library->GetLoadedPath();
-		}
-		catch (...) {
-			CloseLibrary();
-			throw;
-		}
-	}
+	agi::native::CachedLibrary runtime_library(GetLibraryName(), "FFMS2", "provider/ffms2/runtime",
+		InitializeFFMS2Runtime, GetVersionContextForCache);
 }
 
 	void EnsureLoaded() {
-		std::call_once(load_once, [] {
-			try {
-				LoadImpl();
-				load_complete = true;
-				LOG_I("provider/ffms2/runtime") << "Loaded FFMS2 from " << loaded_library << " (" << GetVersionContext() << ')';
-				if (loaded_version >= 0 && loaded_version != FFMS_VERSION)
-					LOG_W("provider/ffms2/runtime") << "FFMS2 header/DLL version mismatch: " << GetVersionContext();
-			}
-			catch (agi::EnvironmentError const& err) {
-				load_error = err.GetMessage();
-				if (loaded_version >= 0)
-					load_error += " (" + GetVersionContext() + ")";
-				LOG_W("provider/ffms2/runtime") << load_error;
-			}
-		});
-
-		if (!load_complete)
-			throw agi::EnvironmentError(load_error.empty() ? "Failed to load FFMS2 runtime library." : load_error);
+		runtime_library.EnsureLoaded();
+		if (loaded_version >= 0 && loaded_version != FFMS_VERSION)
+			LOG_W("provider/ffms2/runtime") << "FFMS2 header/DLL version mismatch: " << GetVersionContext();
 	}
 
 	bool IsAvailable() noexcept {
-		try {
-			EnsureLoaded();
-			return true;
-		}
-		catch (...) {
-			return false;
-		}
+		return runtime_library.IsAvailable();
 	}
 
 	std::string GetLoadError() {
-		return load_error;
+		return runtime_library.GetLoadError();
 	}
 
 	std::string GetLoadedLibrary() {
-		return loaded_library;
+		return runtime_library.GetLoadedLibrary();
 	}
 #endif
 }

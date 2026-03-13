@@ -2,6 +2,9 @@
 
 #pragma once
 
+#include <functional>
+#include <memory>
+#include <mutex>
 #include <string>
 
 namespace agi { namespace native {
@@ -35,5 +38,32 @@ public:
 	void Reset();
 };
 
-} }
+class CachedLibrary {
+public:
+	typedef std::function<void(Library&)> InitializeFunction;
+	typedef std::function<std::string()> DetailFunction;
 
+private:
+	std::string library_name;
+	const char *display_name;
+	const char *log_tag;
+	InitializeFunction initialize;
+	DetailFunction detail;
+	mutable std::mutex mutex;
+	std::unique_ptr<Library> library;
+	std::string load_error;
+	bool load_attempted = false;
+	bool load_complete = false;
+
+public:
+	CachedLibrary(std::string library_name, const char *display_name, const char *log_tag,
+		InitializeFunction initialize = InitializeFunction(), DetailFunction detail = DetailFunction());
+
+	Library& EnsureLoaded();
+	bool IsAvailable() noexcept;
+	std::string GetLoadError() const;
+	std::string GetLoadedLibrary() const;
+	void Reset();
+};
+
+} }

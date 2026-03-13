@@ -36,21 +36,14 @@
 #include "avisynth_wrap.h"
 
 #include <avisynth.h>
+#include "native_library.h"
 #include "options.h"
 
 #include <libaegisub/log.h>
 
-#ifdef _WIN32
-#include <libaegisub/charset_conv_win.h>
-#include <libaegisub/util.h>
-#endif
-
 #include <mutex>
+#include <memory>
 #include <string>
-
-#ifndef _WIN32
-#include <dlfcn.h>
-#endif
 
 #ifndef AVISYNTH_SO
 // Fallback definition
@@ -68,41 +61,20 @@ typedef IScriptEnvironment* __stdcall FUNC(int);
 // Allocate storage for and initialise static members
 namespace {
 	int avs_refcount = 0;
-#ifdef _WIN32
-	HINSTANCE hLib = nullptr;
-#else
-	void* hLib = nullptr;
-#endif
 	IScriptEnvironment *env = nullptr;
 	std::mutex AviSynthMutex;
+	std::unique_ptr<agi::native::Library> runtime_library;
 	FUNC* CreateScriptEnv = nullptr;
 	std::string load_error;
 	std::string loaded_library;
 	bool load_attempted = false;
 	bool load_complete = false;
 
-	std::string GetLoadFailureReason() {
-#ifdef _WIN32
-		return agi::util::ErrorString(GetLastError());
-#else
-		auto err = dlerror();
-		return err ? err : "unknown error";
-#endif
-	}
-
-	std::string GetLoadedLibraryPath() {
-#ifdef _WIN32
-		std::wstring path(32768, L'\0');
-		auto len = GetModuleFileNameW(hLib, &path[0], static_cast<DWORD>(path.size()));
-		if (!len)
-			return AVISYNTH_SO;
-		path.resize(len);
-		return agi::charset::ConvertW(path);
-#else
-		Dl_info info{};
-		if (CreateScriptEnv && dladdr(reinterpret_cast<void *>(CreateScriptEnv), &info) && info.dli_fname)
-			return info.dli_fname;
+	std::string GetLibraryName() {
+#ifdef AVISYNTH_SO
 		return AVISYNTH_SO;
+#else
+		return "AviSynth";
 #endif
 	}
 
@@ -113,38 +85,19 @@ namespace {
 			throw AvisynthError(load_error.c_str());
 		load_attempted = true;
 
-#ifdef _WIN32
-#define CONCATENATE(x, y) x ## y
-#define _Lstr(x) CONCATENATE(L, x)
-		hLib = LoadLibraryW(_Lstr(AVISYNTH_SO));
-#undef _Lstr
-#undef CONCATENATE
-#else
-		hLib = dlopen(AVISYNTH_SO, RTLD_LAZY | RTLD_LOCAL | RTLD_DEEPBIND);
-#endif
-
-		if (!hLib) {
-			load_error = std::string("Could not load Avisynth runtime library '") + AVISYNTH_SO + "': " + GetLoadFailureReason();
+		try {
+			runtime_library = std::make_unique<agi::native::Library>(agi::native::Library::Load(GetLibraryName()));
+			CreateScriptEnv = runtime_library->ResolveSymbol<FUNC*>("CreateScriptEnvironment");
+			loaded_library = runtime_library->GetLoadedPath();
+			load_error.clear();
+			load_complete = true;
+			LOG_I("provider/avisynth/runtime") << "Loaded Avisynth from " << loaded_library;
+		}
+		catch (agi::EnvironmentError const& err) {
+			load_error = err.GetMessage();
 			LOG_W("provider/avisynth/runtime") << load_error;
 			throw AvisynthError(load_error.c_str());
 		}
-
-#ifdef _WIN32
-		CreateScriptEnv = reinterpret_cast<FUNC*>(GetProcAddress(hLib, "CreateScriptEnvironment"));
-#else
-		dlerror();
-		CreateScriptEnv = reinterpret_cast<FUNC*>(dlsym(hLib, "CreateScriptEnvironment"));
-#endif
-		if (!CreateScriptEnv) {
-			load_error = std::string("Failed to resolve Avisynth symbol CreateScriptEnvironment: ") + GetLoadFailureReason();
-			LOG_W("provider/avisynth/runtime") << load_error;
-			throw AvisynthError(load_error.c_str());
-		}
-
-		loaded_library = GetLoadedLibraryPath();
-		load_error.clear();
-		load_complete = true;
-		LOG_I("provider/avisynth/runtime") << "Loaded Avisynth from " << loaded_library;
 	}
 }
 
@@ -198,6 +151,8 @@ AviSynthWrapper::~AviSynthWrapper() {
 	if (!--avs_refcount) {
 		delete env;
 		env = nullptr;
+		runtime_library.reset();
+		CreateScriptEnv = nullptr;
 	}
 }
 

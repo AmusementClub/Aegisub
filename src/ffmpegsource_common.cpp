@@ -37,6 +37,7 @@
 
 #include "compat.h"
 #include "format.h"
+#include "native_library.h"
 #include "options.h"
 #include "utils.h"
 
@@ -46,27 +47,15 @@
 #include <libaegisub/fs.h>
 #include <libaegisub/path.h>
 
-#ifdef _WIN32
-#include <libaegisub/charset_conv_win.h>
-#include <libaegisub/util.h>
-#endif
-
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/crc.hpp>
 #include <boost/filesystem/path.hpp>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
 #include <wx/intl.h>
 #include <wx/choicdlg.h>
-
-#ifdef WITH_FFMS2_RUNTIME_LOADING
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <dlfcn.h>
-#endif
-#endif
 
 #if FFMS_VERSION < ((2 << 24) | (22 << 16) | (0 << 8) | 0)
 enum {
@@ -94,15 +83,15 @@ namespace {
 	std::string loaded_library;
 	int loaded_version = -1;
 	bool load_complete = false;
+	std::unique_ptr<agi::native::Library> library;
 
-#ifdef _WIN32
-	using LibraryHandle = HMODULE;
+	std::string GetLibraryName() {
+#ifdef FFMS2_SO
+		return FFMS2_SO;
 #else
-	using LibraryHandle = void *;
+		return "ffms2";
 #endif
-
-	LibraryHandle library_handle = nullptr;
-	std::string loaded_candidate;
+	}
 
 	std::string FormatFFMSVersion(int version) {
 		if (version < 0)
@@ -118,41 +107,9 @@ namespace {
 		return agi::format("headers=%s, dll=%s", FormatFFMSVersion(FFMS_VERSION), FormatFFMSVersion(loaded_version));
 	}
 
-	std::string GetLoadFailureReason() {
-#ifdef _WIN32
-		return agi::util::ErrorString(GetLastError());
-#else
-		auto err = dlerror();
-		return err ? err : "unknown error";
-#endif
-	}
-
-	std::string GetLoadedLibraryPath() {
-#ifdef _WIN32
-		std::wstring path(32768, L'\0');
-		auto len = GetModuleFileNameW(library_handle, &path[0], static_cast<DWORD>(path.size()));
-		if (!len)
-			return loaded_candidate;
-		path.resize(len);
-		return agi::charset::ConvertW(path);
-#else
-		Dl_info info{};
-		if (ffms::CreateIndexer && dladdr(reinterpret_cast<void *>(ffms::CreateIndexer), &info) && info.dli_fname)
-			return info.dli_fname;
-		return loaded_candidate;
-#endif
-	}
-
 	template <typename T>
 	void LoadSymbol(T& target, const char *name) {
-#ifdef _WIN32
-		target = reinterpret_cast<T>(GetProcAddress(library_handle, name));
-#else
-		dlerror();
-		target = reinterpret_cast<T>(dlsym(library_handle, name));
-#endif
-		if (!target)
-			throw agi::EnvironmentError(std::string("Failed to resolve FFMS2 symbol ") + name + ": " + GetLoadFailureReason());
+		target = library->ResolveSymbol<T>(name);
 	}
 
 	void ResolveSymbols() {
@@ -161,72 +118,18 @@ namespace {
 		#undef AGI_FFMS2_FN
 	}
 
-	std::vector<std::string> GetLibraryCandidates() {
-		std::vector<std::string> candidates;
-#ifdef FFMS2_SO
-		candidates.emplace_back(FFMS2_SO);
-#endif
-#ifdef _WIN32
-		candidates.emplace_back("ffms2.dll");
-#elif defined(__APPLE__)
-		candidates.emplace_back("libffms2.dylib");
-		candidates.emplace_back("ffms2.dylib");
-#else
-		candidates.emplace_back("libffms2.so");
-		candidates.emplace_back("libffms2.so.2");
-		candidates.emplace_back("ffms2.so");
-#endif
-		return candidates;
-	}
-
-	void OpenLibrary() {
-		std::string attempted;
-		for (auto const& candidate : GetLibraryCandidates()) {
-			if (!attempted.empty()) attempted += ", ";
-			attempted += candidate;
-#ifdef _WIN32
-			library_handle = LoadLibraryA(candidate.c_str());
-#else
-			library_handle = dlopen(candidate.c_str(), RTLD_LAZY | RTLD_LOCAL);
-#endif
-			if (library_handle) {
-				loaded_candidate = candidate;
-				return;
-			}
-			auto reason = GetLoadFailureReason();
-			if (!reason.empty())
-				attempted += " (" + reason + ")";
-		}
-		throw agi::EnvironmentError("Could not load FFMS2 runtime library. Tried: " + attempted);
-	}
-
 	void CloseLibrary() {
-		if (!library_handle)
-			return;
-#ifdef _WIN32
-		FreeLibrary(library_handle);
-#else
-		dlclose(library_handle);
-#endif
-		library_handle = nullptr;
+		library.reset();
 		loaded_library.clear();
-		loaded_candidate.clear();
+		loaded_version = -1;
 	}
 
 	void LoadImpl() {
-		OpenLibrary();
+		library = std::make_unique<agi::native::Library>(agi::native::Library::Load(GetLibraryName()));
 		try {
-			auto get_version = reinterpret_cast<int (FFMS_CC*)()>(
-#ifdef _WIN32
-				GetProcAddress(library_handle, "FFMS_GetVersion")
-#else
-				dlsym(library_handle, "FFMS_GetVersion")
-#endif
-			);
-			if (get_version)
-				loaded_version = get_version();
+			loaded_version = library->ResolveSymbol<int (FFMS_CC*)()>("FFMS_GetVersion")();
 			ResolveSymbols();
-			loaded_library = GetLoadedLibraryPath();
+			loaded_library = library->GetLoadedPath();
 		}
 		catch (...) {
 			CloseLibrary();
@@ -240,13 +143,13 @@ namespace {
 			try {
 				LoadImpl();
 				load_complete = true;
-				LOG_I("provider/ffms2/runtime") << "Loaded FFMS2 from " << (loaded_library.empty() ? loaded_candidate : loaded_library) << " (" << GetVersionContext() << ')';
+				LOG_I("provider/ffms2/runtime") << "Loaded FFMS2 from " << loaded_library << " (" << GetVersionContext() << ')';
 				if (loaded_version >= 0 && loaded_version != FFMS_VERSION)
 					LOG_W("provider/ffms2/runtime") << "FFMS2 header/DLL version mismatch: " << GetVersionContext();
 			}
 			catch (agi::EnvironmentError const& err) {
 				load_error = err.GetMessage();
-				if (!loaded_candidate.empty() || loaded_version >= 0)
+				if (loaded_version >= 0)
 					load_error += " (" + GetVersionContext() + ")";
 				LOG_W("provider/ffms2/runtime") << load_error;
 			}

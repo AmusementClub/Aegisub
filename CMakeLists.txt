@@ -493,6 +493,7 @@ add_executable(Aegisub WIN32
     src/main.cpp
     src/menu.cpp
     src/mkv_wrap.cpp
+    src/native_library.cpp
     src/pen.cpp
     src/persist_location.cpp
     src/preferences.cpp

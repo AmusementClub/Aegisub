@@ -15,7 +15,15 @@ AudioSpectrumAnalysisCache::AudioSpectrumAnalysisCache() {
 	});
 }
 
-AudioSpectrumAnalysisCache::~AudioSpectrumAnalysisCache() = default;
+AudioSpectrumAnalysisCache::~AudioSpectrumAnalysisCache() {
+#ifdef WITH_FFTW3
+	if (dft_plan) {
+		fftw_destroy_plan(dft_plan);
+		fftw_free(dft_input);
+		fftw_free(dft_output);
+	}
+#endif
+}
 
 void AudioSpectrumAnalysisCache::RecreateCache() {
 	std::lock_guard<std::mutex> lock(cache_mutex);
@@ -24,6 +32,16 @@ void AudioSpectrumAnalysisCache::RecreateCache() {
 	current_cache_bytes = 0;
 	touch_counter = 0;
 	rolling_window_valid = false;
+#ifdef WITH_FFTW3
+	if (dft_plan) {
+		fftw_destroy_plan(dft_plan);
+		fftw_free(dft_input);
+		fftw_free(dft_output);
+		dft_plan = nullptr;
+		dft_input = nullptr;
+		dft_output = nullptr;
+	}
+#endif
 	{
 		std::lock_guard<std::mutex> ready_lock(ready_mutex);
 		ready_blocks.clear();
@@ -41,6 +59,19 @@ void AudioSpectrumAnalysisCache::RecreateCache() {
 		block_count = 1;
 	cache_blocks.resize(block_count);
 	cache_touch.resize(block_count);
+
+#ifdef WITH_FFTW3
+	dft_input = fftw_alloc_real(2 << derivation_size);
+	dft_output = fftw_alloc_complex(2 << derivation_size);
+	dft_plan = fftw_plan_dft_r2c_1d(
+		2 << derivation_size,
+		dft_input,
+		dft_output,
+		FFTW_MEASURE);
+#else
+	fft_scratch.resize(6 << derivation_size);
+#endif
+
 	metrics_generation.fetch_add(1, std::memory_order_relaxed);
 	scheduler->Invalidate();
 }
@@ -80,7 +111,17 @@ std::unique_ptr<float[]> AudioSpectrumAnalysisCache::BuildBlock(size_t block_ind
 	rolling_window_valid = true;
 	rolling_window_block_index = block_index;
 
-	std::vector<float> fft_scratch(3 * sample_count);
+#ifdef WITH_FFTW3
+	for (size_t i = 0; i < sample_count; ++i)
+		dft_input[i] = mono_scratch[i];
+
+	fftw_execute(dft_plan);
+
+	double scale_factor = 9 / std::sqrt(2 << (derivation_size + 1));
+	fftw_complex *o = dft_output;
+	for (size_t i = 0; i < (static_cast<size_t>(1) << derivation_size); ++i, ++o)
+		block[i] = std::log10(std::sqrt(static_cast<float>(o[0][0] * o[0][0] + o[0][1] * o[0][1])) * static_cast<float>(scale_factor) + 1.f);
+#else
 	float *fft_input = fft_scratch.data();
 	float *fft_real = fft_scratch.data() + sample_count;
 	float *fft_imag = fft_scratch.data() + sample_count * 2;
@@ -93,6 +134,7 @@ std::unique_ptr<float[]> AudioSpectrumAnalysisCache::BuildBlock(size_t block_ind
 		float power = std::sqrt(fft_real[i] * fft_real[i] + fft_imag[i] * fft_imag[i]) * scale_factor;
 		block[i] = std::log10(power + 1.f);
 	}
+#endif
 	return block;
 }
 

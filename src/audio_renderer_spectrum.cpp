@@ -173,6 +173,7 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 			power = last_power;
 		else {
 			power = analysis_cache->Get(block_index);
+			analysis_cache->Prefetch(block_index + 1, block_index + 2);
 			last_block_index = block_index;
 			last_power = power;
 		}

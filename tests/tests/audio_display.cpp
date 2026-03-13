@@ -5,6 +5,7 @@
 #include "../../src/audio_display_analysis.h"
 #include "../../src/audio_display_source.h"
 #include "../../src/audio_mix_policy.h"
+#include "../../src/audio_spectrum_analysis_cache.h"
 #include "../../src/audio_waveform_summary_cache.h"
 
 #include <libaegisub/audio/provider.h>
@@ -174,6 +175,39 @@ TEST(lagi_audio_display, waveform_summary_cache_metrics_count_hits_and_misses) {
 	cache.SetSource(source.get());
 	cache.SetMillisecondsPerPixel(20.0);
 	cache.SetMixPolicy(AudioMixPolicy::MonoMaxAbs);
+
+	cache.Get(0);
+	cache.Get(0);
+	auto metrics = cache.GetMetricsSnapshot();
+	EXPECT_EQ(1u, metrics.cache_misses);
+	EXPECT_EQ(1u, metrics.cache_hits);
+	EXPECT_EQ(1u, metrics.visible_builds);
+}
+
+TEST(lagi_audio_display, spectrum_analysis_cache_reuses_hot_block) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(9, 7);
+
+	const float *first = cache.Get(0);
+	int calls_after_first = provider.fill_calls;
+	const float *second = cache.Get(0);
+
+	EXPECT_GT(calls_after_first, 0);
+	EXPECT_EQ(calls_after_first, provider.fill_calls);
+	EXPECT_EQ(first[0], second[0]);
+}
+
+TEST(lagi_audio_display, spectrum_analysis_cache_metrics_count_hits_and_misses) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(9, 7);
 
 	cache.Get(0);
 	cache.Get(0);

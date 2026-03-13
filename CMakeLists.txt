@@ -935,6 +935,7 @@ endif()
 set_source_files_properties(
     src/audio_latest_range_scheduler.cpp
     PROPERTIES
+    SKIP_PRECOMPILE_HEADERS ON
     COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/std:c++20>;$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-std=c++20>"
 )
 

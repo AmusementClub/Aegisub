@@ -11,6 +11,10 @@
 #include "audio_latest_range_scheduler.h"
 #include "audio_mix_policy.h"
 
+#ifdef WITH_FFTW3
+#include <fftw3.h>
+#endif
+
 struct AudioSpectrumAnalysisCacheMetrics {
 	uint64_t generation = 0;
 	uint64_t cache_hits = 0;
@@ -48,6 +52,14 @@ class AudioSpectrumAnalysisCache {
 	std::vector<float> mono_scratch;
 	bool rolling_window_valid = false;
 	size_t rolling_window_block_index = 0;
+
+#ifdef WITH_FFTW3
+	fftw_plan dft_plan = nullptr;
+	double *dft_input = nullptr;
+	fftw_complex *dft_output = nullptr;
+#else
+	std::vector<float> fft_scratch;
+#endif
 
 	std::atomic<uint64_t> metrics_generation{0};
 	std::atomic<uint64_t> metrics_cache_hits{0};

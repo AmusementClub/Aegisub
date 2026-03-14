@@ -47,6 +47,7 @@
 #include <libaegisub/make_unique.h>
 
 #include <algorithm>
+#include <cmath>
 #include <sstream>
 
 #include <wx/image.h>
@@ -60,36 +61,95 @@ AudioSpectrumRenderer::AudioSpectrumRenderer(std::string const& color_scheme_nam
 	analysis_cache = std::make_unique<AudioSpectrumAnalysisCache>();
 }
 
+void AudioSpectrumRenderer::SetFrequencyReferencePosition(float position) {
+	frequency_reference_position = mid(0.001f, position, 0.999f);
+}
+
 void AudioSpectrumRenderer::EnsureRenderScaleCache(int imgheight) {
+	const int sample_rate = provider ? provider->GetSampleRate() : 0;
 	bool interpolated = imgheight > 1 << derivation_size;
 	if (render_scale_cache_height == imgheight
 		&& render_scale_cache_derivation_size == derivation_size
-		&& render_scale_cache_interpolated == interpolated)
+		&& render_scale_cache_interpolated == interpolated
+		&& render_scale_cache_sample_rate == sample_rate
+		&& render_scale_cache_mode == static_cast<int>(computation_mode)
+		&& render_scale_cache_reference_position == frequency_reference_position)
 		return;
 
 	render_scale_cache_height = imgheight;
 	render_scale_cache_derivation_size = derivation_size;
 	render_scale_cache_interpolated = interpolated;
+	render_scale_cache_sample_rate = sample_rate;
+	render_scale_cache_mode = static_cast<int>(computation_mode);
+	render_scale_cache_reference_position = frequency_reference_position;
 
 	render_band_a.resize(imgheight);
 	render_band_b.resize(imgheight);
 	render_band_frac.resize(interpolated ? imgheight : 0);
 
-	const int maxband = 1 << derivation_size;
+	if (computation_mode == AudioSpectrumComputationMode::LegacyLinear || !provider || sample_rate <= 0) {
+		const int maxband = 1 << derivation_size;
+		if (interpolated) {
+			for (int y = 0; y < imgheight; ++y) {
+				double ideal = static_cast<double>(y + 1.) / imgheight * maxband;
+				int lower = std::max(0, std::min(maxband - 1, static_cast<int>(std::floor(ideal))));
+				int upper = std::max(0, std::min(maxband - 1, static_cast<int>(std::ceil(ideal))));
+				render_band_a[y] = lower;
+				render_band_b[y] = upper;
+				render_band_frac[y] = static_cast<float>(ideal - std::floor(ideal));
+			}
+		}
+		else {
+			for (int y = 0; y < imgheight; ++y) {
+				int sample1 = std::max(0, maxband * y / imgheight);
+				int sample2 = std::min(maxband - 1, maxband * (y + 1) / imgheight);
+				render_band_a[y] = sample1;
+				render_band_b[y] = sample2;
+			}
+		}
+		return;
+	}
+
+	const int nbr_bins = 1 << derivation_size;
+	const int minband = 1;
+	int maxband = std::min(nbr_bins, static_cast<int>(std::floor(nbr_bins * 20000.0f / (sample_rate * 0.5f))));
+	if (maxband <= minband + 1)
+		maxband = std::min(nbr_bins, minband + 2);
+
+	const float scale_log = std::log(static_cast<float>(maxband) / minband);
+	const float b_fref = mid(1.0f, nbr_bins * 1000.0f / (sample_rate * 0.5f), static_cast<float>(maxband - 1));
+	const float b_lin_fref = minband + (maxband - minband) * frequency_reference_position;
+	const float b_log_fref = minband * std::exp(frequency_reference_position * scale_log);
+	float log_ratio = (b_fref - b_lin_fref) / (b_log_fref - b_lin_fref);
+	log_ratio = mid(0.0f, log_ratio, 1.0f);
+
+	auto mapped_bin = [&](float pos_rel) {
+		float b_lin = minband + pos_rel * (maxband - minband);
+		float b_log = minband * std::exp(pos_rel * scale_log);
+		float bin = b_lin + log_ratio * (b_log - b_lin);
+		return mid(static_cast<float>(minband), bin, static_cast<float>(maxband - 1));
+	};
+
 	if (interpolated) {
 		for (int y = 0; y < imgheight; ++y) {
-			double ideal = static_cast<double>(y + 1.) / imgheight * maxband;
-			int lower = std::max(0, std::min(maxband - 1, static_cast<int>(std::floor(ideal))));
-			int upper = std::max(0, std::min(maxband - 1, static_cast<int>(std::ceil(ideal))));
+			float bin = mapped_bin(static_cast<float>(y + 1) / imgheight);
+			int lower = std::max(0, std::min(nbr_bins - 1, static_cast<int>(std::floor(bin))));
+			int upper = std::max(0, std::min(nbr_bins - 1, static_cast<int>(std::ceil(bin))));
 			render_band_a[y] = lower;
 			render_band_b[y] = upper;
-			render_band_frac[y] = static_cast<float>(ideal - std::floor(ideal));
+			render_band_frac[y] = bin - std::floor(bin);
 		}
 	}
 	else {
 		for (int y = 0; y < imgheight; ++y) {
-			int sample1 = std::max(0, maxband * y / imgheight);
-			int sample2 = std::min(maxband - 1, maxband * (y + 1) / imgheight);
+			float bin_prev = y == 0 ? static_cast<float>(minband) : mapped_bin(static_cast<float>(y) / imgheight);
+			float bin_cur = mapped_bin(static_cast<float>(y + 1) / imgheight);
+			float bin_next = y + 2 <= imgheight ? mapped_bin(static_cast<float>(y + 2) / imgheight) : static_cast<float>(maxband);
+
+			int sample1 = static_cast<int>(std::floor((bin_prev + bin_cur) * 0.5f));
+			int sample2 = static_cast<int>(std::floor((bin_cur + bin_next) * 0.5f));
+			sample1 = std::max(0, std::min(nbr_bins - 2, sample1));
+			sample2 = std::max(sample1 + 1, std::min(nbr_bins - 1, sample2));
 			render_band_a[y] = sample1;
 			render_band_b[y] = sample2;
 		}
@@ -122,6 +182,25 @@ void AudioSpectrumRenderer::SetResolution(size_t _derivation_size, size_t _deriv
 	if (derivation_size != _derivation_size)
 		derivation_size = _derivation_size;
 	RecreateCache();
+}
+
+void AudioSpectrumRenderer::SetComputationMode(AudioSpectrumComputationMode mode) {
+	if (computation_mode == mode)
+		return;
+	computation_mode = mode;
+	render_scale_cache_height = 0;
+	AgeCache(0);
+}
+
+void AudioSpectrumRenderer::SetFrequencyCurvePreset(int preset) {
+	preset = mid(0, preset, 4);
+	if (frequency_curve_preset == preset)
+		return;
+	frequency_curve_preset = preset;
+	const float fref_pos[] = {0.001f, 0.125f, 0.333f, 0.425f, 0.999f};
+	SetFrequencyReferencePosition(fref_pos[preset]);
+	render_scale_cache_height = 0;
+	AgeCache(0);
 }
 
 void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
@@ -203,6 +282,8 @@ std::vector<std::string> AudioSpectrumRenderer::GetDebugInfo() const {
 	line1 << "SP gen=" << metrics.generation
 		<< " hits=" << metrics.cache_hits
 		<< " miss=" << metrics.cache_misses
+		<< " mode=" << static_cast<int>(computation_mode)
+		<< " curve=" << frequency_curve_preset
 		<< " vis=" << metrics.visible_builds
 		<< " lock=" << metrics.visible_lock_contention
 		<< " pf_req=" << metrics.prefetch_requests

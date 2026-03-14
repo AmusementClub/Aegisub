@@ -70,7 +70,9 @@
 		"Provider" : "ffmpegsource",
 		"Renderer" : {
 			"Spectrum" : {
+				"Computation Mode" : 0,
 				"Cutoff" : 0,
+				"FreqCurve" : 2,
 				"Memory Max" : 128,
 				"Quality" : 1
 			}

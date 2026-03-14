@@ -43,6 +43,11 @@
 class AudioColorScheme;
 class AudioSpectrumAnalysisCache;
 
+enum class AudioSpectrumComputationMode {
+	LegacyLinear = 0,
+	FrequencyCurve = 1,
+};
+
 /// @class AudioSpectrumRenderer
 /// @brief Render frequency-power spectrum graphs for audio data.
 ///
@@ -73,13 +78,20 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 	void RecreateCache();
 
 	AudioMixPolicy mix_policy = AudioMixPolicy::MonoAverage;
+	AudioSpectrumComputationMode computation_mode = AudioSpectrumComputationMode::LegacyLinear;
+	float frequency_reference_position = 1.0f / 3.0f;
+	int frequency_curve_preset = 2;
 	std::vector<int> render_band_a;
 	std::vector<int> render_band_b;
 	std::vector<float> render_band_frac;
 	int render_scale_cache_height = 0;
 	size_t render_scale_cache_derivation_size = 0;
 	bool render_scale_cache_interpolated = false;
+	int render_scale_cache_sample_rate = 0;
+	int render_scale_cache_mode = -1;
+	float render_scale_cache_reference_position = 0.0f;
 	void EnsureRenderScaleCache(int imgheight);
+	void SetFrequencyReferencePosition(float position);
 
 public:
 	/// @brief Constructor
@@ -108,6 +120,8 @@ public:
 	/// The derivation distance must be smaller than or equal to the size. If the distance
 	/// is specified too large, it will be clamped to the size.
 	void SetResolution(size_t derivation_size, size_t derivation_dist);
+	void SetComputationMode(AudioSpectrumComputationMode mode);
+	void SetFrequencyCurvePreset(int preset);
 
 	/// @brief Cleans up the cache
 	/// @param max_size Maximum size in bytes for the cache

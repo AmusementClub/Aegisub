@@ -683,6 +683,12 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 	if (pixel_position < 0)
 		pixel_position = 0;
 
+	if (pixel_position == scroll_left) {
+		if (track_cursor_pos >= 0)
+			RefreshTrackCursorOverlay();
+		return;
+	}
+
 	scroll_left = pixel_position;
 	scrollbar->SetPosition(scroll_left);
 	timeline->SetPosition(scroll_left);
@@ -690,6 +696,9 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 		QueueHighFrequencyRefresh(nullptr, true);
 	else
 		Refresh();
+
+	if (track_cursor_pos >= 0)
+		RefreshTrackCursorOverlay();
 }
 
 void AudioDisplay::ScrollTimeRangeInView(const TimeRange &range)
@@ -758,6 +767,8 @@ void AudioDisplay::SetZoomLevel(int new_zoom_level)
 	ScrollPixelToLeft(AbsoluteXFromTime(cursor_time) - cursor_pos);
 	if (track_cursor_pos >= 0)
 		track_cursor_pos = AbsoluteXFromTime(cursor_time);
+	if (track_cursor_pos >= 0)
+		RefreshTrackCursorOverlay();
 	Refresh();
 }
 

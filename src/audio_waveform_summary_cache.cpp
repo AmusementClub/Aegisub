@@ -15,6 +15,7 @@ void AudioWaveformSummaryCache::RecreateCache() {
 	std::lock_guard<std::mutex> lock(cache_mutex);
 	cache_blocks.clear();
 	cache_touch.clear();
+	touch_heap = {};
 	current_cache_bytes = 0;
 	touch_counter = 0;
 	{
@@ -67,20 +68,25 @@ std::unique_ptr<AudioWaveformSummaryBlock> AudioWaveformSummaryCache::BuildBlock
 }
 
 void AudioWaveformSummaryCache::TouchLocked(size_t block_index) {
-	cache_touch[block_index] = ++touch_counter;
+	const uint64_t touch = ++touch_counter;
+	cache_touch[block_index] = touch;
+	touch_heap.push(TouchEntry{ touch, block_index });
 }
 
 void AudioWaveformSummaryCache::TrimLocked() {
 	while (current_cache_bytes > max_cache_bytes) {
 		size_t victim = block_count;
-		uint64_t oldest = UINT64_MAX;
-		for (size_t i = 0; i < cache_blocks.size(); ++i) {
-			if (!cache_blocks[i])
+		while (!touch_heap.empty()) {
+			const auto candidate = touch_heap.top();
+			touch_heap.pop();
+			if (candidate.index >= cache_blocks.size())
 				continue;
-			if (cache_touch[i] < oldest) {
-				oldest = cache_touch[i];
-				victim = i;
-			}
+			if (!cache_blocks[candidate.index])
+				continue;
+			if (cache_touch[candidate.index] != candidate.touch)
+				continue;
+			victim = candidate.index;
+			break;
 		}
 		if (victim == block_count)
 			break;
@@ -179,6 +185,23 @@ const AudioWaveformSummaryBlock& AudioWaveformSummaryCache::Get(size_t block_ind
 void AudioWaveformSummaryCache::Prefetch(size_t first_block, size_t last_block) {
 	if (!IsReady() || last_block < first_block)
 		return;
+	if (first_block >= block_count)
+		return;
+	last_block = std::min(last_block, block_count - 1);
+
+	{
+		std::lock_guard<std::mutex> lock(cache_mutex);
+		bool has_missing = false;
+		for (size_t i = first_block; i <= last_block; ++i) {
+			if (!cache_blocks[i]) {
+				has_missing = true;
+				break;
+			}
+		}
+		if (!has_missing)
+			return;
+	}
+
 	if (!scheduler) {
 		std::lock_guard<std::mutex> lock(scheduler_mutex);
 		if (!scheduler) {

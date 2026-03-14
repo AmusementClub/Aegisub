@@ -29,6 +29,7 @@ void AudioSpectrumAnalysisCache::RecreateCache() {
 	std::lock_guard<std::mutex> lock(cache_mutex);
 	cache_blocks.clear();
 	cache_touch.clear();
+	touch_heap = {};
 	current_cache_bytes = 0;
 	touch_counter = 0;
 	rolling_window_valid = false;
@@ -76,7 +77,7 @@ void AudioSpectrumAnalysisCache::RecreateCache() {
 	scheduler->Invalidate();
 }
 
-std::unique_ptr<float[]> AudioSpectrumAnalysisCache::BuildBlock(size_t block_index) {
+std::unique_ptr<float[]> AudioSpectrumAnalysisCache::BuildBlockUnlocked(size_t block_index) {
 	const int channels = std::max(1, source->GetChannels());
 	const size_t sample_count = static_cast<size_t>(2) << derivation_size;
 	const size_t hop_samples = static_cast<size_t>(1) << derivation_dist;
@@ -139,21 +140,26 @@ std::unique_ptr<float[]> AudioSpectrumAnalysisCache::BuildBlock(size_t block_ind
 }
 
 void AudioSpectrumAnalysisCache::TouchLocked(size_t block_index) {
-	cache_touch[block_index] = ++touch_counter;
+	const uint64_t touch = ++touch_counter;
+	cache_touch[block_index] = touch;
+	touch_heap.push(TouchEntry{ touch, block_index });
 }
 
 void AudioSpectrumAnalysisCache::TrimLocked() {
 	const size_t block_bytes = (sizeof(float) << derivation_size);
 	while (current_cache_bytes > max_cache_bytes) {
 		size_t victim = block_count;
-		uint64_t oldest = UINT64_MAX;
-		for (size_t i = 0; i < cache_blocks.size(); ++i) {
-			if (!cache_blocks[i])
+		while (!touch_heap.empty()) {
+			const auto candidate = touch_heap.top();
+			touch_heap.pop();
+			if (candidate.index >= cache_blocks.size())
 				continue;
-			if (cache_touch[i] < oldest) {
-				oldest = cache_touch[i];
-				victim = i;
-			}
+			if (!cache_blocks[candidate.index])
+				continue;
+			if (cache_touch[candidate.index] != candidate.touch)
+				continue;
+			victim = candidate.index;
+			break;
 		}
 		if (victim == block_count)
 			break;
@@ -235,7 +241,12 @@ const float* AudioSpectrumAnalysisCache::Get(size_t block_index) {
 	}
 
 	metrics_cache_misses.fetch_add(1, std::memory_order_relaxed);
-	auto built = BuildBlock(block_index);
+	std::unique_lock<std::mutex> build_lock(build_mutex, std::try_to_lock);
+	if (!build_lock.owns_lock()) {
+		metrics_visible_lock_contention.fetch_add(1, std::memory_order_relaxed);
+		build_lock.lock();
+	}
+	auto built = BuildBlockUnlocked(block_index);
 	metrics_visible_builds.fetch_add(1, std::memory_order_relaxed);
 
 	const size_t block_bytes = (sizeof(float) << derivation_size);
@@ -253,10 +264,35 @@ const float* AudioSpectrumAnalysisCache::Get(size_t block_index) {
 }
 
 void AudioSpectrumAnalysisCache::Prefetch(size_t first_block, size_t last_block) {
+	if (!prefetch_enabled.load(std::memory_order_relaxed))
+		return;
 	if (!IsReady() || last_block < first_block)
 		return;
+	if (first_block >= block_count)
+		return;
+	last_block = std::min(last_block, block_count - 1);
+
+	{
+		std::lock_guard<std::mutex> lock(cache_mutex);
+		bool has_missing = false;
+		for (size_t i = first_block; i <= last_block; ++i) {
+			if (!cache_blocks[i]) {
+				has_missing = true;
+				break;
+			}
+		}
+		if (!has_missing)
+			return;
+	}
+
 	metrics_prefetch_requests.fetch_add(last_block - first_block + 1, std::memory_order_relaxed);
 	scheduler->Request(first_block, last_block);
+}
+
+void AudioSpectrumAnalysisCache::SetPrefetchEnabled(bool enabled) {
+	prefetch_enabled.store(enabled, std::memory_order_relaxed);
+	if (!enabled && scheduler)
+		scheduler->Invalidate();
 }
 
 void AudioSpectrumAnalysisCache::ProcessPrefetch(size_t first_block, size_t last_block, uint64_t generation) {
@@ -270,7 +306,12 @@ void AudioSpectrumAnalysisCache::ProcessPrefetch(size_t first_block, size_t last
 			if (block_index < cache_blocks.size() && cache_blocks[block_index])
 				continue;
 		}
-		auto built = BuildBlock(block_index);
+		std::unique_lock<std::mutex> build_lock(build_mutex, std::try_to_lock);
+		if (!build_lock.owns_lock()) {
+			metrics_prefetch_busy_skips.fetch_add(1, std::memory_order_relaxed);
+			break;
+		}
+		auto built = BuildBlockUnlocked(block_index);
 		if (!scheduler->IsCurrent(generation)) {
 			metrics_stale_drops.fetch_add(1, std::memory_order_relaxed);
 			break;
@@ -289,8 +330,11 @@ AudioSpectrumAnalysisCacheMetrics AudioSpectrumAnalysisCache::GetMetricsSnapshot
 	m.cache_hits = metrics_cache_hits.load(std::memory_order_relaxed);
 	m.cache_misses = metrics_cache_misses.load(std::memory_order_relaxed);
 	m.visible_builds = metrics_visible_builds.load(std::memory_order_relaxed);
+	m.visible_lock_contention = metrics_visible_lock_contention.load(std::memory_order_relaxed);
 	m.prefetch_requests = metrics_prefetch_requests.load(std::memory_order_relaxed);
 	m.prefetch_builds = metrics_prefetch_builds.load(std::memory_order_relaxed);
+	m.prefetch_busy_skips = metrics_prefetch_busy_skips.load(std::memory_order_relaxed);
+	m.prefetch_enabled = prefetch_enabled.load(std::memory_order_relaxed);
 	m.stale_drops = metrics_stale_drops.load(std::memory_order_relaxed);
 	m.evictions = metrics_evictions.load(std::memory_order_relaxed);
 	m.cache_entries = std::count_if(cache_blocks.begin(), cache_blocks.end(), [](auto const& block) { return !!block; });

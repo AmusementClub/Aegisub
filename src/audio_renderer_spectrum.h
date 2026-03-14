@@ -112,5 +112,6 @@ public:
 	/// @brief Cleans up the cache
 	/// @param max_size Maximum size in bytes for the cache
 	void AgeCache(size_t max_size) override;
+	void SetInteractivePrefetchEnabled(bool enabled) override;
 	std::vector<std::string> GetDebugInfo() const override;
 };

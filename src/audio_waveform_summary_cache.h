@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <vector>
 
 #include "audio_display_analysis.h"
@@ -32,6 +33,14 @@ struct AudioWaveformSummaryCacheMetrics {
 };
 
 class AudioWaveformSummaryCache {
+	struct TouchEntry {
+		uint64_t touch = 0;
+		size_t index = 0;
+		bool operator>(const TouchEntry &other) const {
+			return touch > other.touch;
+		}
+	};
+
 	AudioDisplaySource *source = nullptr;
 	double pixel_ms = 0.0;
 	AudioMixPolicy mix_policy = AudioMixPolicy::MonoMaxAbs;
@@ -43,6 +52,7 @@ class AudioWaveformSummaryCache {
 	mutable std::mutex cache_mutex;
 	std::vector<std::unique_ptr<AudioWaveformSummaryBlock>> cache_blocks;
 	std::vector<uint64_t> cache_touch;
+	std::priority_queue<TouchEntry, std::vector<TouchEntry>, std::greater<TouchEntry>> touch_heap;
 
 	std::mutex ready_mutex;
 	std::vector<std::pair<size_t, std::unique_ptr<AudioWaveformSummaryBlock>>> ready_blocks;

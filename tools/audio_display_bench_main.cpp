@@ -268,6 +268,30 @@ BenchResult RunWaveformSummaryCacheHotBench() {
 	return { "waveform_summary_cache_hot", iterations, total_ms, total_ms / iterations, 0.0 };
 }
 
+BenchResult RunWaveformSequentialPrefetchBench() {
+	constexpr int blocks = 64;
+	SyntheticInt16StereoProvider provider(1 << 22);
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioWaveformSummaryCache cache;
+	cache.SetSource(source.get());
+	cache.SetMillisecondsPerPixel(20.0);
+	cache.SetMixPolicy(AudioMixPolicy::MonoMaxAbs);
+	volatile float sink = 0.f;
+
+	auto t0 = clock_type::now();
+	for (int i = 0; i < blocks; ++i) {
+		auto const& block = cache.Get(i);
+		sink += block.summaries[0].peak_max;
+		cache.Prefetch(static_cast<size_t>(i + 1), static_cast<size_t>(i + 2));
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+	auto t1 = clock_type::now();
+	(void)sink;
+
+	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	return { "waveform_sequential_prefetch", blocks, total_ms, total_ms / blocks, 0.0 };
+}
+
 BenchResult RunOldSpectrumBench() {
 	constexpr int fft_size = 1024;
 	constexpr int iterations = 2000;
@@ -463,6 +487,65 @@ float RunNewSpectrumRenderKernel(const std::vector<std::vector<float>> &unique_b
 	return sink;
 }
 
+float RunSpectrumVerticalZoomDragKernel(const std::vector<std::vector<float>> &unique_blocks, const std::vector<size_t> &block_indices, int imgheight, int derivation_size, const std::vector<float> &amplitude_scales, bool reuse_bands) {
+	float sink = 0.f;
+	const bool interpolated = imgheight > (1 << derivation_size);
+	const int maxband = 1 << derivation_size;
+	std::vector<int> a;
+	std::vector<int> b;
+	std::vector<float> frac;
+
+	a.resize(imgheight);
+	b.resize(imgheight);
+	if (interpolated)
+		frac.resize(imgheight);
+
+	auto build_bands = [&]() {
+		if (interpolated) {
+			for (int y = 0; y < imgheight; ++y) {
+				double ideal = static_cast<double>(y + 1.) / imgheight * maxband;
+				a[y] = std::max(0, std::min(maxband - 1, static_cast<int>(std::floor(ideal))));
+				b[y] = std::max(0, std::min(maxband - 1, static_cast<int>(std::ceil(ideal))));
+				frac[y] = static_cast<float>(ideal - std::floor(ideal));
+			}
+		}
+		else {
+			for (int y = 0; y < imgheight; ++y) {
+				a[y] = std::max(0, maxband * y / imgheight);
+				b[y] = std::min(maxband - 1, maxband * (y + 1) / imgheight);
+			}
+		}
+	};
+
+	if (reuse_bands)
+		build_bands();
+
+	for (float amplitude_scale : amplitude_scales) {
+		if (!reuse_bands)
+			build_bands();
+
+		size_t last_index = static_cast<size_t>(-1);
+		const float *power = nullptr;
+		for (size_t ax = 0; ax < block_indices.size(); ++ax) {
+			size_t idx = block_indices[ax];
+			if (idx != last_index) {
+				power = unique_blocks[idx].data();
+				last_index = idx;
+			}
+			if (interpolated) {
+				for (int y = 0; y < imgheight; ++y)
+					sink += ((1 - frac[y]) * power[a[y]] + frac[y] * power[b[y]]) * amplitude_scale;
+			}
+			else {
+				for (int y = 0; y < imgheight; ++y)
+					sink += *std::max_element(&power[a[y]], &power[b[y] + 1]) * amplitude_scale;
+			}
+		}
+	}
+
+	return sink;
+}
+
 BenchResult RunOldSpectrumRenderBench() {
 	constexpr int iterations = 5000;
 	constexpr int imgheight = 256;
@@ -507,6 +590,141 @@ BenchResult RunNewSpectrumRenderOptimizedBench() {
 
 	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 	return { "new_spectrum_render_kernel", iterations, total_ms, total_ms / iterations, 0.0 };
+}
+
+BenchResult RunSpectrumVerticalZoomDragBench(bool reuse_bands, const char *name) {
+	constexpr int iterations = 1000;
+	constexpr int imgheight = 256;
+	constexpr int derivation_size = 9;
+	constexpr int unique_count = 8;
+	constexpr int columns = 320;
+	std::vector<std::vector<float>> unique_blocks(unique_count, std::vector<float>(1 << derivation_size));
+	for (int c = 0; c < unique_count; ++c)
+		for (int i = 0; i < (1 << derivation_size); ++i)
+			unique_blocks[c][i] = static_cast<float>((i + c * 3) % 101) / 101.0f;
+	std::vector<size_t> block_indices(columns);
+	for (int i = 0; i < columns; ++i)
+		block_indices[i] = static_cast<size_t>((i / 4) % unique_count);
+	std::vector<float> amplitude_scales = {0.4f, 0.6f, 0.8f, 1.0f, 1.3f, 1.6f, 1.9f, 2.2f};
+	volatile float sink = 0.f;
+
+	auto t0 = clock_type::now();
+	for (int i = 0; i < iterations; ++i)
+		sink += RunSpectrumVerticalZoomDragKernel(unique_blocks, block_indices, imgheight, derivation_size, amplitude_scales, reuse_bands);
+	auto t1 = clock_type::now();
+	(void)sink;
+
+	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	return { name, iterations, total_ms, total_ms / iterations, 0.0 };
+}
+
+BenchResult RunNaiveSpectrumVerticalZoomStreamBench() {
+	constexpr int events = 300;
+	constexpr int imgheight = 256;
+	constexpr int derivation_size = 9;
+	constexpr int unique_count = 8;
+	constexpr int columns = 320;
+	std::vector<std::vector<float>> unique_blocks(unique_count, std::vector<float>(1 << derivation_size));
+	for (int c = 0; c < unique_count; ++c)
+		for (int i = 0; i < (1 << derivation_size); ++i)
+			unique_blocks[c][i] = static_cast<float>((i + c * 5) % 101) / 101.0f;
+	std::vector<size_t> block_indices(columns);
+	for (int i = 0; i < columns; ++i)
+		block_indices[i] = static_cast<size_t>((i / 4) % unique_count);
+	volatile float sink = 0.f;
+
+	auto t0 = clock_type::now();
+	for (int i = 0; i < events; ++i) {
+		std::vector<float> scales = { 0.4f + static_cast<float>(i % 12) * 0.1f };
+		sink += RunSpectrumVerticalZoomDragKernel(unique_blocks, block_indices, imgheight, derivation_size, scales, true);
+	}
+	auto t1 = clock_type::now();
+	(void)sink;
+
+	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	return { "naive_spectrum_vertical_zoom_stream", events, total_ms, total_ms / events, 0.0 };
+}
+
+BenchResult RunCoalescedSpectrumVerticalZoomStreamBench() {
+	constexpr int events = 300;
+	constexpr int imgheight = 256;
+	constexpr int derivation_size = 9;
+	constexpr int unique_count = 8;
+	constexpr int columns = 320;
+	constexpr int interval_ms = 33;
+	constexpr int event_spacing_ms = 6;
+	std::vector<std::vector<float>> unique_blocks(unique_count, std::vector<float>(1 << derivation_size));
+	for (int c = 0; c < unique_count; ++c)
+		for (int i = 0; i < (1 << derivation_size); ++i)
+			unique_blocks[c][i] = static_cast<float>((i + c * 5) % 101) / 101.0f;
+	std::vector<size_t> block_indices(columns);
+	for (int i = 0; i < columns; ++i)
+		block_indices[i] = static_cast<size_t>((i / 4) % unique_count);
+	volatile float sink = 0.f;
+
+	int next_flush_ms = interval_ms;
+	bool pending = false;
+	float pending_scale = 1.0f;
+	int executed = 0;
+	auto t0 = clock_type::now();
+	for (int i = 0; i < events; ++i) {
+		int now_ms = i * event_spacing_ms;
+		pending_scale = 0.4f + static_cast<float>(i % 12) * 0.1f;
+		pending = true;
+		while (now_ms >= next_flush_ms) {
+			if (pending) {
+				std::vector<float> scales = { pending_scale };
+				sink += RunSpectrumVerticalZoomDragKernel(unique_blocks, block_indices, imgheight, derivation_size, scales, true);
+				pending = false;
+				++executed;
+			}
+			next_flush_ms += interval_ms;
+		}
+	}
+	if (pending) {
+		std::vector<float> scales = { pending_scale };
+		sink += RunSpectrumVerticalZoomDragKernel(unique_blocks, block_indices, imgheight, derivation_size, scales, true);
+		++executed;
+	}
+	auto t1 = clock_type::now();
+	(void)sink;
+
+	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	return { "coalesced_spectrum_vertical_zoom_stream", executed, total_ms, executed ? total_ms / executed : 0.0, 0.0 };
+}
+
+BenchResult RunSpectrumSeekDragStreamBench() {
+	constexpr int events = 2000;
+	constexpr size_t viewport_blocks = 12;
+	SyntheticInt16StereoProvider provider(1 << 24);
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(9, 7);
+
+	const size_t max_block = static_cast<size_t>(provider.GetNumSamples()) >> 7;
+	size_t block = 0;
+	volatile float sink = 0.f;
+
+	auto t0 = clock_type::now();
+	for (int i = 0; i < events; ++i) {
+		if (i % 180 == 0)
+			block = (block + 4000) % std::max<size_t>(1, max_block - viewport_blocks - 16);
+		else
+			block = (block + ((i & 1) ? 1 : 3)) % std::max<size_t>(1, max_block - viewport_blocks - 16);
+
+		for (size_t b = block; b < block + viewport_blocks; ++b) {
+			const float *p = cache.Get(b);
+			sink += p[0];
+		}
+		cache.Prefetch(block + viewport_blocks, block + viewport_blocks + 8);
+	}
+	auto t1 = clock_type::now();
+	(void)sink;
+
+	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	return { "spectrum_seek_drag_stream", events, total_ms, total_ms / events, 0.0 };
 }
 
 BenchResult RunNaiveWaveformUpdateStreamBench() {
@@ -605,6 +823,7 @@ int main(int argc, char **argv) {
 	results.push_back(RunNewWaveformMaxAbsBench());
 	results.push_back(RunWaveformSummaryCacheColdBench());
 	results.push_back(RunWaveformSummaryCacheHotBench());
+	results.push_back(RunWaveformSequentialPrefetchBench());
 	results.push_back(RunWaveformBench());
 	results.push_back(RunOldSpectrumBench());
 	results.push_back(RunNewSpectrumBench());
@@ -613,6 +832,11 @@ int main(int argc, char **argv) {
 	results.push_back(RunSpectrumSequentialPrefetchBench());
 	results.push_back(RunOldSpectrumRenderBench());
 	results.push_back(RunNewSpectrumRenderOptimizedBench());
+	results.push_back(RunSpectrumVerticalZoomDragBench(false, "spectrum_vertical_zoom_drag_uncached_bands"));
+	results.push_back(RunSpectrumVerticalZoomDragBench(true, "spectrum_vertical_zoom_drag_cached_bands"));
+	results.push_back(RunNaiveSpectrumVerticalZoomStreamBench());
+	results.push_back(RunCoalescedSpectrumVerticalZoomStreamBench());
+	results.push_back(RunSpectrumSeekDragStreamBench());
 	results.push_back(RunNaiveWaveformUpdateStreamBench());
 	results.push_back(RunCoalescedWaveformUpdateStreamBench());
 

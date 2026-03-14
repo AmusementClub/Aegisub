@@ -3,6 +3,7 @@
 #include <main.h>
 
 #include "../../src/audio_display_analysis.h"
+#include "../../src/audio_latest_range_scheduler.h"
 #include "../../src/audio_display_source.h"
 #include "../../src/audio_mix_policy.h"
 #include "../../src/audio_spectrum_analysis_cache.h"
@@ -184,6 +185,46 @@ TEST(lagi_audio_display, waveform_summary_cache_metrics_count_hits_and_misses) {
 	EXPECT_EQ(1u, metrics.visible_builds);
 }
 
+TEST(lagi_audio_display, waveform_summary_cache_prefetch_records_metrics) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioWaveformSummaryCache cache;
+	cache.SetSource(source.get());
+	cache.SetMillisecondsPerPixel(20.0);
+	cache.SetMixPolicy(AudioMixPolicy::MonoMaxAbs);
+
+	cache.Get(0);
+	cache.Prefetch(1, 2);
+	std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	cache.Get(1);
+	auto metrics = cache.GetMetricsSnapshot();
+	EXPECT_GE(metrics.prefetch_requests, 1u);
+	EXPECT_GE(metrics.prefetch_builds, 1u);
+}
+
+TEST(lagi_audio_display, latest_range_scheduler_request_increments_generation) {
+	AudioLatestRangeScheduler scheduler([](size_t, size_t, uint64_t) {});
+	const uint64_t before = scheduler.CurrentGeneration();
+	scheduler.Request(0, 1);
+	const uint64_t after = scheduler.CurrentGeneration();
+
+	EXPECT_GT(after, before);
+	EXPECT_TRUE(scheduler.IsCurrent(after));
+	EXPECT_FALSE(scheduler.IsCurrent(before));
+}
+
+TEST(lagi_audio_display, latest_range_scheduler_invalidate_bumps_generation) {
+	AudioLatestRangeScheduler scheduler([](size_t, size_t, uint64_t) {});
+	scheduler.Request(2, 3);
+	const uint64_t after_request = scheduler.CurrentGeneration();
+	scheduler.Invalidate();
+	const uint64_t after_invalidate = scheduler.CurrentGeneration();
+
+	EXPECT_GT(after_invalidate, after_request);
+	EXPECT_TRUE(scheduler.IsCurrent(after_invalidate));
+	EXPECT_FALSE(scheduler.IsCurrent(after_request));
+}
+
 TEST(lagi_audio_display, spectrum_analysis_cache_reuses_hot_block) {
 	CountingStereoProvider provider;
 	auto source = CreateAudioDisplaySource(&provider);
@@ -232,4 +273,21 @@ TEST(lagi_audio_display, spectrum_analysis_cache_prefetch_records_metrics) {
 	auto metrics = cache.GetMetricsSnapshot();
 	EXPECT_GE(metrics.prefetch_requests, 2u);
 	EXPECT_GE(metrics.prefetch_builds, 1u);
+}
+
+TEST(lagi_audio_display, spectrum_analysis_cache_stays_finite_with_prefetch_interleaving) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(9, 7);
+
+	for (size_t i = 0; i < 32; ++i) {
+		cache.Prefetch(i + 1, i + 4);
+		const float *block = cache.Get(i);
+		for (size_t b = 0; b < 32; ++b) {
+			EXPECT_TRUE(std::isfinite(block[b]));
+		}
+	}
 }

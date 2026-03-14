@@ -47,6 +47,8 @@ class AudioController;
 class AudioRenderer;
 class AudioRendererBitmapProvider;
 class TimeRange;
+class AudioTileCompositor;
+struct AudioViewportRequest;
 
 class AudioDisplayInteractionObject;
 class AudioMarkerInteractionObject;
@@ -68,6 +70,7 @@ class AudioDisplay: public wxWindow {
 
 	/// The current audio renderer
 	std::unique_ptr<AudioRendererBitmapProvider> audio_renderer_provider;
+	std::unique_ptr<AudioTileCompositor> audio_tile_compositor;
 
 	/// The controller managing us
 	AudioController *controller = nullptr;
@@ -164,11 +167,12 @@ class AudioDisplay: public wxWindow {
 	/// in Options and need to be reloaded to take effect.
 	void ReloadRenderingSettings();
 
-	/// Paint the audio data for a time range
+	AudioViewportRequest BuildViewportRequest(const wxRect &update_rect) const;
+
+	/// Paint the audio data for the viewport request
 	/// @param dc DC to paint to
-	/// @param updtime Time range to repaint
-	/// @param updrect Pixel range to repaint
-	void PaintAudio(wxDC &dc, TimeRange updtime, wxRect updrect);
+	/// @param viewport Viewport request to repaint
+	void PaintAudio(wxDC &dc, const AudioViewportRequest &viewport);
 
 	/// Paint the markers in a time range
 	/// @param dc DC to paint to
@@ -297,6 +301,7 @@ public:
 	/// @brief Set amplitude scale factor
 	/// @param scale New amplitude scale factor, 1.0 is no scaling
 	void SetAmplitudeScale(float scale);
+	void SetInteractivePrefetchEnabled(bool enabled);
 
 	/// Get a time in milliseconds from an X coordinate relative to current scroll
 	int TimeFromRelativeX(int x) const { return int((scroll_left + x) * ms_per_pixel); }

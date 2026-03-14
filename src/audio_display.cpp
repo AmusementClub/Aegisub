@@ -34,6 +34,7 @@
 #include "audio_renderer.h"
 #include "audio_renderer_spectrum.h"
 #include "audio_renderer_waveform.h"
+#include "audio_tile_compositor.h"
 #include "audio_timing.h"
 #include "compat.h"
 #include "format.h"
@@ -587,6 +588,7 @@ AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::C
 , audio_open_connection(context->project->AddAudioProviderListener(&AudioDisplay::OnAudioOpen, this))
 , context(context)
 , audio_renderer(agi::make_unique<AudioRenderer>())
+, audio_tile_compositor(agi::make_unique<AudioTileCompositor>())
 , controller(controller)
 , scrollbar(agi::make_unique<AudioDisplayScrollbar>(this))
 , timeline(agi::make_unique<AudioDisplayTimeline>(this))
@@ -796,6 +798,11 @@ void AudioDisplay::SetAmplitudeScale(float scale)
 	Refresh();
 }
 
+void AudioDisplay::SetInteractivePrefetchEnabled(bool enabled) {
+	if (audio_renderer_provider)
+		audio_renderer_provider->SetInteractivePrefetchEnabled(enabled);
+}
+
 void AudioDisplay::ReloadRenderingSettings()
 {
 	std::string colour_scheme_name;
@@ -891,15 +898,13 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 
 			bool redraw_scrollbar = scrollbar->GetBounds().Intersects(rect);
 			bool redraw_timeline = timeline->GetBounds().Intersects(rect);
-			int foot_size = FromDIP(6);
 			wxRect audio_bounds(0, audio_top, GetClientSize().GetWidth(), audio_height);
 			if (audio_bounds.Intersects(rect)) {
-				TimeRange updtime(
-					std::max(0, TimeFromRelativeX(rect.x - foot_size)),
-					std::max(0, TimeFromRelativeX(rect.x + rect.width + foot_size)));
-				PaintAudio(dc, updtime, rect);
-				PaintMarkers(dc, updtime);
-				PaintLabels(dc, updtime);
+				auto viewport = BuildViewportRequest(rect);
+				PaintAudio(dc, viewport);
+				TimeRange viewport_time(viewport.begin_ms, viewport.end_ms);
+				PaintMarkers(dc, viewport_time);
+				PaintLabels(dc, viewport_time);
 			}
 
 			if (redraw_scrollbar)
@@ -969,23 +974,27 @@ void AudioDisplay::DrawDebugInfo(wxDC &dc) {
 	}
 }
 
-void AudioDisplay::PaintAudio(wxDC &dc, const TimeRange updtime, const wxRect updrect)
-{
-	auto pt = begin(style_ranges), pe = end(style_ranges);
-	while (pt != pe && pt + 1 != pe && (pt + 1)->first < updtime.begin()) ++pt;
+AudioViewportRequest AudioDisplay::BuildViewportRequest(const wxRect &update_rect) const {
+	const int request_foot_size = FromDIP(foot_size);
+	const int begin_ms = std::max(0, TimeFromRelativeX(update_rect.x - request_foot_size));
+	const int end_ms = std::max(0, TimeFromRelativeX(update_rect.x + update_rect.width + request_foot_size));
 
-	while (pt != pe && pt->first < updtime.end())
-	{
-		const auto range_style = static_cast<AudioRenderingStyle>(pt->second);
-		const int range_x1 = std::max(updrect.x, RelativeXFromTime(pt->first));
-		int range_x2 = updrect.x + updrect.width;
-		if (++pt != pe)
-			range_x2 = std::min(range_x2, RelativeXFromTime(pt->first));
+	AudioViewportRequest viewport;
+	viewport.scroll_left = scroll_left;
+	viewport.ms_per_pixel = ms_per_pixel;
+	viewport.audio_top = audio_top;
+	viewport.audio_height = audio_height;
+	viewport.foot_size = request_foot_size;
+	viewport.update_rect = update_rect;
+	viewport.begin_ms = begin_ms;
+	viewport.end_ms = end_ms;
+	return viewport;
+}
 
-		if (range_x2 > range_x1)
-			audio_renderer->Render(dc, wxPoint(range_x1, audio_top),
-				range_x1 + scroll_left, range_x2 - range_x1, range_style);
-	}
+void AudioDisplay::PaintAudio(wxDC &dc, const AudioViewportRequest &viewport) {
+	if (!audio_tile_compositor || !audio_renderer)
+		return;
+	audio_tile_compositor->Compose(dc, *audio_renderer, viewport, style_ranges);
 }
 
 void AudioDisplay::PaintMarkers(wxDC &dc, TimeRange updtime)
@@ -1101,6 +1110,7 @@ void AudioDisplay::PaintTrackCursor(wxDC &dc) {
 void AudioDisplay::SetDraggedObject(AudioDisplayInteractionObject *new_obj)
 {
 	dragged_object = new_obj;
+	SetInteractivePrefetchEnabled(!dragged_object);
 
 	if (dragged_object && !HasCapture())
 		CaptureMouse();

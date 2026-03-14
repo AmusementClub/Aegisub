@@ -73,13 +73,19 @@ class AudioBox final : public wxSashWindow {
 	// Mouse wheel zoom accumulator
 	int mouse_zoom_accum = 0;
 	wxTimer zoom_preview_timer;
+	wxTimer spectrum_prefetch_resume_timer;
+	bool spectrum_prefetch_temporarily_disabled = false;
 	int pending_horizontal_zoom = 0;
 	int pending_vertical_zoom_pos = 0;
 	bool horizontal_zoom_pending = false;
 	bool vertical_zoom_pending = false;
 
 	static const int zoom_preview_interval_ms = 16;
+	static const int spectrum_vertical_zoom_preview_interval_ms = 33;
+	static const int spectrum_prefetch_resume_delay_ms = 120;
 
+	int GetZoomPreviewIntervalMs(bool vertical) const;
+	void DisableSpectrumPrefetchTemporarily();
 	void SetHorizontalZoom(int new_zoom);
 	void ApplyVerticalZoomPos(int pos);
 	void FlushPendingZoomPreview();
@@ -89,6 +95,7 @@ class AudioBox final : public wxSashWindow {
 	void OnSashDrag(wxSashEvent &event);
 	void OnVerticalLink(agi::OptionValue const& opt);
 	void OnZoomPreviewTimer(wxTimerEvent &event);
+	void OnSpectrumPrefetchResumeTimer(wxTimerEvent &event);
 	void OnVerticalZoom(wxScrollEvent &event);
 	void OnVolume(wxScrollEvent &event);
 

@@ -116,6 +116,7 @@ AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 
 	audioDisplay->Bind(wxEVT_MOUSEWHEEL, &AudioBox::OnMouseWheel, this);
 	zoom_preview_timer.Bind(wxEVT_TIMER, &AudioBox::OnZoomPreviewTimer, this);
+	spectrum_prefetch_resume_timer.Bind(wxEVT_TIMER, &AudioBox::OnSpectrumPrefetchResumeTimer, this);
 
 	audioDisplay->SetZoomLevel(-HorizontalZoom->GetValue());
 	audioDisplay->SetAmplitudeScale(pow(mid(1, VerticalZoom->GetValue(), 100) / 50.0, 3));
@@ -172,12 +173,13 @@ void AudioBox::OnHorizontalZoom(wxScrollEvent &event) {
 	// Negate the value since we want zoom out to be on bottom and zoom in on top,
 	// but the control doesn't want negative on bottom and positive on top.
 	int new_zoom = -event.GetPosition();
+	DisableSpectrumPrefetchTemporarily();
 	auto event_type = event.GetEventType();
 	if (event_type == wxEVT_SCROLL_THUMBTRACK) {
 		pending_horizontal_zoom = new_zoom;
 		horizontal_zoom_pending = true;
 		if (!zoom_preview_timer.IsRunning())
-			zoom_preview_timer.Start(zoom_preview_interval_ms, true);
+			zoom_preview_timer.Start(GetZoomPreviewIntervalMs(false), true);
 	}
 	else if (event_type == wxEVT_SCROLL_THUMBRELEASE || event_type == wxEVT_SCROLL_CHANGED) {
 		pending_horizontal_zoom = new_zoom;
@@ -188,6 +190,24 @@ void AudioBox::OnHorizontalZoom(wxScrollEvent &event) {
 		FlushPendingZoomPreview();
 		SetHorizontalZoom(new_zoom);
 	}
+}
+
+int AudioBox::GetZoomPreviewIntervalMs(bool vertical) const {
+	if (vertical && OPT_GET("Audio/Spectrum")->GetBool())
+		return spectrum_vertical_zoom_preview_interval_ms;
+	return zoom_preview_interval_ms;
+}
+
+void AudioBox::DisableSpectrumPrefetchTemporarily() {
+	if (!OPT_GET("Audio/Spectrum")->GetBool())
+		return;
+	if (!spectrum_prefetch_temporarily_disabled) {
+		audioDisplay->SetInteractivePrefetchEnabled(false);
+		spectrum_prefetch_temporarily_disabled = true;
+	}
+	if (spectrum_prefetch_resume_timer.IsRunning())
+		spectrum_prefetch_resume_timer.Stop();
+	spectrum_prefetch_resume_timer.Start(spectrum_prefetch_resume_delay_ms, true);
 }
 
 void AudioBox::SetHorizontalZoom(int new_zoom) {
@@ -224,9 +244,17 @@ void AudioBox::OnZoomPreviewTimer(wxTimerEvent &) {
 	FlushPendingZoomPreview();
 }
 
+void AudioBox::OnSpectrumPrefetchResumeTimer(wxTimerEvent &) {
+	if (spectrum_prefetch_temporarily_disabled) {
+		audioDisplay->SetInteractivePrefetchEnabled(true);
+		spectrum_prefetch_temporarily_disabled = false;
+	}
+}
+
 void AudioBox::OnVerticalZoom(wxScrollEvent &event) {
 	int pos = mid(1, event.GetPosition(), 100);
 	double value = pow(pos / 50.0, 3);
+	DisableSpectrumPrefetchTemporarily();
 	if (!VolumeBar->IsEnabled()) {
 		VolumeBar->SetValue(pos);
 		controller->SetVolume(value);
@@ -237,7 +265,7 @@ void AudioBox::OnVerticalZoom(wxScrollEvent &event) {
 		pending_vertical_zoom_pos = pos;
 		vertical_zoom_pending = true;
 		if (!zoom_preview_timer.IsRunning())
-			zoom_preview_timer.Start(zoom_preview_interval_ms, true);
+			zoom_preview_timer.Start(GetZoomPreviewIntervalMs(true), true);
 	}
 	else if (event_type == wxEVT_SCROLL_THUMBRELEASE || event_type == wxEVT_SCROLL_CHANGED) {
 		pending_vertical_zoom_pos = pos;
@@ -268,6 +296,8 @@ void AudioBox::OnVerticalLink(agi::OptionValue const& opt) {
 
 void AudioBox::OnAudioOpen() {
 	controller->SetVolume(pow(mid(1, VolumeBar->GetValue(), 100) / 50.0, 3));
+	audioDisplay->SetInteractivePrefetchEnabled(true);
+	spectrum_prefetch_temporarily_disabled = false;
 }
 
 void AudioBox::ShowKaraokeBar(bool show) {

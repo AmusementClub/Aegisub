@@ -30,6 +30,7 @@
 #include "audio_renderer_waveform.h"
 
 #include "audio_display_source.h"
+#include "audio_waveform_bitmap_tile_renderer.h"
 #include "audio_waveform_summary_cache.h"
 #include "audio_colorscheme.h"
 #include "options.h"
@@ -99,9 +100,6 @@ std::vector<std::string> AudioWaveformRenderer::GetDebugInfo() const {
 void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
 {
 	wxMemoryDC dc(bmp);
-	wxRect rect(wxPoint(0, 0), bmp.GetSize());
-	int midpoint = rect.height / 2;
-
 	const AudioColorScheme *pal = &colors[style];
 
 	if (!display_source || !summary_cache)
@@ -113,41 +111,11 @@ void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 	if (!summary_cache->IsReady())
 		return;
 
-	const auto &summary_block = summary_cache->Get(static_cast<size_t>(start / AudioWaveformSummaryBlock::width));
+	const size_t block_index = static_cast<size_t>(start / AudioWaveformSummaryBlock::width);
+	const auto &summary_block = summary_cache->Get(block_index);
+	summary_cache->Prefetch(block_index + 1, block_index + 2);
 
-	// Fill the background
-	dc.SetBrush(wxBrush(pal->get(0.0f)));
-	dc.SetPen(*wxTRANSPARENT_PEN);
-	dc.DrawRectangle(rect);
-
-	wxPen pen_peaks(wxPen(pal->get(0.4f)));
-	wxPen pen_avgs(wxPen(pal->get(0.7f)));
-
-	for (int x = 0; x < rect.width && x < static_cast<int>(AudioWaveformSummaryBlock::width); ++x)
-	{
-		const auto &summary = summary_block.summaries[x];
-
-		// midpoint is half height
-		int peak_min = std::max(static_cast<int>(summary.peak_min * amplitude_scale * midpoint), -midpoint);
-		int peak_max = std::min(static_cast<int>(summary.peak_max * amplitude_scale * midpoint), midpoint);
-		int avg_min = std::max(static_cast<int>(summary.avg_min * amplitude_scale * midpoint), -midpoint);
-		int avg_max = std::min(static_cast<int>(summary.avg_max * amplitude_scale * midpoint), midpoint);
-
-		dc.SetPen(pen_peaks);
-		dc.DrawLine(x, midpoint - peak_max, x, midpoint - peak_min);
-		if (render_averages) {
-			dc.SetPen(pen_avgs);
-			dc.DrawLine(x, midpoint - avg_max, x, midpoint - avg_min);
-		}
-	}
-
-	// Horizontal zero-point line
-	if (render_averages)
-		dc.SetPen(wxPen(pal->get(1.0f)));
-	else
-		dc.SetPen(pen_peaks);
-
-	dc.DrawLine(0, midpoint, rect.width, midpoint);
+	RenderWaveformSummaryBlockToBitmap(bmp, summary_block, *pal, render_averages, amplitude_scale);
 }
 
 void AudioWaveformRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style)

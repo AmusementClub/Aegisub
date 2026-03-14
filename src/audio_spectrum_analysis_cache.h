@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <queue>
 #include <vector>
 
 #include "audio_display_source.h"
@@ -20,8 +21,11 @@ struct AudioSpectrumAnalysisCacheMetrics {
 	uint64_t cache_hits = 0;
 	uint64_t cache_misses = 0;
 	uint64_t visible_builds = 0;
+	uint64_t visible_lock_contention = 0;
 	uint64_t prefetch_requests = 0;
 	uint64_t prefetch_builds = 0;
+	uint64_t prefetch_busy_skips = 0;
+	bool prefetch_enabled = true;
 	uint64_t stale_drops = 0;
 	uint64_t evictions = 0;
 	size_t cache_entries = 0;
@@ -29,6 +33,14 @@ struct AudioSpectrumAnalysisCacheMetrics {
 };
 
 class AudioSpectrumAnalysisCache {
+	struct TouchEntry {
+		uint64_t touch = 0;
+		size_t index = 0;
+		bool operator>(const TouchEntry &other) const {
+			return touch > other.touch;
+		}
+	};
+
 	AudioDisplaySource *source = nullptr;
 	AudioMixPolicy mix_policy = AudioMixPolicy::MonoAverage;
 	size_t derivation_size = 0;
@@ -41,12 +53,12 @@ class AudioSpectrumAnalysisCache {
 	mutable std::mutex cache_mutex;
 	std::vector<std::unique_ptr<float[]>> cache_blocks;
 	std::vector<uint64_t> cache_touch;
+	std::priority_queue<TouchEntry, std::vector<TouchEntry>, std::greater<TouchEntry>> touch_heap;
+	mutable std::mutex build_mutex;
 
 	std::mutex ready_mutex;
 	std::vector<std::pair<size_t, std::unique_ptr<float[]>>> ready_blocks;
 	std::atomic<bool> has_ready_blocks{false};
-
-	std::unique_ptr<AudioLatestRangeScheduler> scheduler;
 
 	std::vector<float> audio_scratch;
 	std::vector<float> mono_scratch;
@@ -65,13 +77,18 @@ class AudioSpectrumAnalysisCache {
 	std::atomic<uint64_t> metrics_cache_hits{0};
 	std::atomic<uint64_t> metrics_cache_misses{0};
 	std::atomic<uint64_t> metrics_visible_builds{0};
+	std::atomic<uint64_t> metrics_visible_lock_contention{0};
 	std::atomic<uint64_t> metrics_prefetch_requests{0};
 	std::atomic<uint64_t> metrics_prefetch_builds{0};
+	std::atomic<uint64_t> metrics_prefetch_busy_skips{0};
+	std::atomic<bool> prefetch_enabled{true};
 	std::atomic<uint64_t> metrics_stale_drops{0};
 	std::atomic<uint64_t> metrics_evictions{0};
 
+	std::unique_ptr<AudioLatestRangeScheduler> scheduler;
+
 	void RecreateCache();
-	std::unique_ptr<float[]> BuildBlock(size_t block_index);
+	std::unique_ptr<float[]> BuildBlockUnlocked(size_t block_index);
 	void TouchLocked(size_t block_index);
 	void TrimLocked();
 	void DrainReady();
@@ -88,5 +105,6 @@ public:
 	bool IsReady() const;
 	const float* Get(size_t block_index);
 	void Prefetch(size_t first_block, size_t last_block);
+	void SetPrefetchEnabled(bool enabled);
 	AudioSpectrumAnalysisCacheMetrics GetMetricsSnapshot() const;
 };

@@ -294,5 +294,6 @@ public:
 	/// Deriving classes should override this method if they implement any
 	/// kind of caching.
 	virtual void AgeCache(size_t max_size) { }
+	virtual void SetInteractivePrefetchEnabled(bool) { }
 	virtual std::vector<std::string> GetDebugInfo() const { return {}; }
 };

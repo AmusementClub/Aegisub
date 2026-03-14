@@ -35,6 +35,7 @@
 #include "audio_renderer_spectrum.h"
 
 #include "audio_spectrum_analysis_cache.h"
+#include "audio_spectrum_bitmap_tile_renderer.h"
 #include "audio_colorscheme.h"
 #include "audio_display_source.h"
 #include "audio_mix_policy.h"
@@ -50,17 +51,6 @@
 
 #include <wx/image.h>
 #include <wx/dcmemory.h>
-
-namespace {
-inline float max_inclusive_range(const float *values, int first, int last) {
-	float max_value = values[first];
-	for (int i = first + 1; i <= last; ++i) {
-		if (values[i] > max_value)
-			max_value = values[i];
-	}
-	return max_value;
-}
-}
 
 AudioSpectrumRenderer::AudioSpectrumRenderer(std::string const& color_scheme_name)
 {
@@ -146,75 +136,42 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 	assert(start >= 0);
 	assert(end >= start);
 
-	// Prepare an image buffer to write
-	wxImage img(bmp.GetSize());
-	unsigned char *imgdata = img.GetData();
-	ptrdiff_t stride = img.GetWidth()*3;
-	int imgheight = img.GetHeight();
-
 	const AudioColorScheme *pal = &colors[style];
-
-	/// @todo Make minband and maxband configurable
-	EnsureRenderScaleCache(imgheight);
-	const bool interpolated = imgheight > 1 << derivation_size;
 	const double samples_per_pixel = pixel_ms * display_source->GetSampleRate() / 1000.0;
+	EnsureRenderScaleCache(bmp.GetHeight());
+	const bool interpolated = bmp.GetHeight() > 1 << derivation_size;
+
+	std::vector<const float *> power_columns(static_cast<size_t>(bmp.GetWidth()));
 	size_t last_block_index = static_cast<size_t>(-1);
 	const float *last_power = nullptr;
-	const int *band_a = render_band_a.data();
-	const int *band_b = render_band_b.data();
-	const float *band_frac = interpolated ? render_band_frac.data() : nullptr;
 
-	// ax = absolute x, absolute to the virtual spectrum bitmap
-	for (int ax = start; ax < end; ++ax)
-	{
-		// Derived audio data
+	for (int ax = start; ax < end; ++ax) {
 		size_t block_index = static_cast<size_t>(ax * samples_per_pixel) >> derivation_dist;
-		const float *power;
-		if (block_index == last_block_index)
+		const float *power = nullptr;
+		if (block_index == last_block_index) {
 			power = last_power;
+		}
 		else {
 			power = analysis_cache->Get(block_index);
-			analysis_cache->Prefetch(block_index + 1, block_index + 2);
 			last_block_index = block_index;
 			last_power = power;
 		}
-
-		// Prepare bitmap writing
-		unsigned char *px = imgdata + (imgheight-1) * stride + (ax - start) * 3;
-
-		// Scale up or down vertically?
-		if (interpolated)
-		{
-			// Interpolate
-			for (int y = 0; y < imgheight; ++y)
-			{
-				assert(px >= imgdata);
-				assert(px < imgdata + imgheight*stride);
-				float sample1 = power[band_a[y]];
-				float sample2 = power[band_b[y]];
-				float frac = band_frac[y];
-				float val = (1-frac)*sample1 + frac*sample2;
-				pal->map(val*amplitude_scale, px);
-				px -= stride;
-			}
-		}
-		else
-		{
-			// Pick greatest
-			for (int y = 0; y < imgheight; ++y)
-			{
-				assert(px >= imgdata);
-				assert(px < imgdata + imgheight*stride);
-				float maxval = max_inclusive_range(power, band_a[y], band_b[y]);
-				pal->map(maxval*amplitude_scale, px);
-				px -= stride;
-			}
-		}
+		power_columns[static_cast<size_t>(ax - start)] = power;
 	}
 
-	wxBitmap tmpbmp(img);
-	wxMemoryDC targetdc(bmp);
-	targetdc.DrawBitmap(tmpbmp, 0, 0);
+	if (last_block_index != static_cast<size_t>(-1))
+		analysis_cache->Prefetch(last_block_index + 1, last_block_index + 8);
+
+	RenderSpectrumColumnsToBitmap(
+		bmp,
+		power_columns,
+		derivation_size,
+		render_band_a.data(),
+		render_band_b.data(),
+		interpolated ? render_band_frac.data() : nullptr,
+		interpolated,
+		amplitude_scale,
+		*pal);
 }
 
 void AudioSpectrumRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style)
@@ -232,6 +189,11 @@ void AudioSpectrumRenderer::AgeCache(size_t max_size)
 		analysis_cache->Age(max_size);
 }
 
+void AudioSpectrumRenderer::SetInteractivePrefetchEnabled(bool enabled) {
+	if (analysis_cache)
+		analysis_cache->SetPrefetchEnabled(enabled);
+}
+
 std::vector<std::string> AudioSpectrumRenderer::GetDebugInfo() const {
 	if (!analysis_cache)
 		return {};
@@ -242,8 +204,11 @@ std::vector<std::string> AudioSpectrumRenderer::GetDebugInfo() const {
 		<< " hits=" << metrics.cache_hits
 		<< " miss=" << metrics.cache_misses
 		<< " vis=" << metrics.visible_builds
+		<< " lock=" << metrics.visible_lock_contention
 		<< " pf_req=" << metrics.prefetch_requests
 		<< " pf_build=" << metrics.prefetch_builds
+		<< " pf_skip=" << metrics.prefetch_busy_skips
+		<< " pf_on=" << (metrics.prefetch_enabled ? 1 : 0)
 		<< " stale=" << metrics.stale_drops;
 	line2 << "SP cache entries=" << metrics.cache_entries
 		<< " bytes=" << metrics.cache_bytes

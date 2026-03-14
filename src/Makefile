@@ -41,9 +41,12 @@ src_OBJ := \
 	$(d)audio_marker.o \
 	$(d)audio_player.o \
 	$(d)audio_provider_factory.o \
+	$(d)audio_tile_compositor.o \
 	$(d)audio_renderer.o \
+	$(d)audio_spectrum_bitmap_tile_renderer.o \
 	$(d)audio_spectrum_analysis_cache.o \
 	$(d)audio_renderer_spectrum.o \
+	$(d)audio_waveform_bitmap_tile_renderer.o \
 	$(d)audio_renderer_waveform.o \
 	$(d)audio_waveform_summary_cache.o \
 	$(d)audio_timing_dialogue.o \

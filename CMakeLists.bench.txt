@@ -4,7 +4,9 @@ add_executable(audio-display-bench EXCLUDE_FROM_ALL
     src/audio_latest_range_scheduler.cpp
     src/audio_display_source.cpp
     src/audio_mix_policy.cpp
+    src/audio_spectrum_bitmap_tile_renderer.cpp
     src/audio_spectrum_analysis_cache.cpp
+    src/audio_waveform_bitmap_tile_renderer.cpp
     src/audio_waveform_summary_cache.cpp
     src/fft.cpp
 )
@@ -12,7 +14,7 @@ target_include_directories(audio-display-bench PRIVATE
     "${PROJECT_SOURCE_DIR}/src"
     "${PROJECT_SOURCE_DIR}/libaegisub/include"
 )
-target_link_libraries(audio-display-bench PRIVATE libaegisub)
+target_link_libraries(audio-display-bench PRIVATE libaegisub ${wxWidgets_LIBRARIES})
 
 find_package(benchmark CONFIG QUIET)
 if(benchmark_FOUND)
@@ -29,5 +31,5 @@ if(benchmark_FOUND)
         "${PROJECT_SOURCE_DIR}/src"
         "${PROJECT_SOURCE_DIR}/libaegisub/include"
     )
-    target_link_libraries(audio-micro-bench PRIVATE benchmark::benchmark libaegisub)
+    target_link_libraries(audio-micro-bench PRIVATE benchmark::benchmark libaegisub ${wxWidgets_LIBRARIES})
 endif()

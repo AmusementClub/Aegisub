@@ -93,8 +93,8 @@ void TXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename,
 		// Read actor data
 		if (!isComment && !separator.empty() && !value.empty()) {
 			if (value[0] != ' ' && value[0] != '\t') {
-				size_t pos = value.find(separator);
-				if (pos != std::string::npos) {
+				size_t pos = agi::util::strings::find(value, separator);
+				if (pos != agi::util::strings::npos) {
 					actor = value.substr(0, pos);
 					agi::util::strings::trim_inplace(actor);
 					value.erase(0, pos + 1);

@@ -26,6 +26,8 @@
 #include "subtitles_provider_csri.h"
 #include "subtitles_provider_libass.h"
 
+#include <libaegisub/string_utils.h>
+
 namespace {
 	struct factory {
 		std::string name;
@@ -61,8 +63,16 @@ std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(agi::Ba
 			if (provider) return provider;
 		}
 		catch (agi::UserCancelException const&) { throw; }
-		catch (agi::Exception const& err) { error += factory->name + ": " + err.GetMessage() + "\n"; }
-		catch (...) { error += factory->name + ": Unknown error\n"; }
+		catch (agi::Exception const& err) {
+			error.append(factory->name);
+			error.append(": ");
+			error.append(err.GetMessage());
+			error.push_back('\n');
+		}
+		catch (...) {
+			error.append(factory->name);
+			error.append(": Unknown error\n");
+		}
 	}
 
 	throw error;

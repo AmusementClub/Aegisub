@@ -109,7 +109,7 @@ std::unique_ptr<VideoProvider> CreateDummyVideoProvider(agi::fs::path const& fil
 		return {};
 
 	std::vector<std::string> toks;
-	auto const& fields = filename.string().substr(7);
+	auto const fields = filename.string().substr(7);
 	agi::Split(toks, fields, ':');
 	if (toks.size() != 8)
 		throw VideoOpenError("Too few fields in dummy video parameter list");

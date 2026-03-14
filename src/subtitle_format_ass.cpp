@@ -30,6 +30,7 @@
 
 #include <libaegisub/ass/uuencode.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/string_utils.h>
 
 DEFINE_EXCEPTION(AssParseError, SubtitleFormatParseError);
 
@@ -131,19 +132,20 @@ struct Writer {
 		file.WriteLineToFile("[Aegisub Extradata]");
 		for (auto const& edi : extradata) {
 			std::string line = "Data: ";
-			line += std::to_string(edi.id);
-			line += ",";
-			line += inline_string_encode(edi.key);
-			line += ",";
+			line.reserve(16 + edi.key.size() + edi.value.size());
+			line.append(std::to_string(edi.id));
+			line.push_back(',');
+			line.append(inline_string_encode(edi.key));
+			line.push_back(',');
 			std::string encoded_data = inline_string_encode(edi.value);
 			if (4*edi.value.size() < 3*encoded_data.size()) {
 				// the inline_string encoding grew the data by more than uuencoding would
 				// so base64 encode it instead
-				line += "u"; // marker for uuencoding
-				line += agi::ass::UUEncode(edi.value.c_str(), edi.value.c_str() + edi.value.size(), false);
+				line.push_back('u'); // marker for uuencoding
+				line.append(agi::ass::UUEncode(edi.value.c_str(), edi.value.c_str() + edi.value.size(), false));
 			} else {
-				line += "e"; // marker for inline_string encoding (escaping)
-				line += encoded_data;
+				line.push_back('e'); // marker for inline_string encoding (escaping)
+				line.append(encoded_data);
 			}
 			file.WriteLineToFile(line);
 		}

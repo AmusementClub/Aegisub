@@ -16,6 +16,32 @@ target_include_directories(audio-display-bench PRIVATE
 )
 target_link_libraries(audio-display-bench PRIVATE libaegisub ${wxWidgets_LIBRARIES})
 
+add_executable(string-concat-bench EXCLUDE_FROM_ALL
+    tools/string_concat_bench_main.cpp
+)
+target_compile_features(string-concat-bench PRIVATE cxx_std_20)
+target_include_directories(string-concat-bench PRIVATE
+    "${PROJECT_SOURCE_DIR}/libaegisub/include"
+)
+if(STRINGZILLA_INCLUDE_DIRS)
+    target_include_directories(string-concat-bench PRIVATE ${STRINGZILLA_INCLUDE_DIRS})
+    target_compile_definitions(string-concat-bench PRIVATE AEGISUB_USE_STRINGZILLA=1)
+endif()
+target_link_libraries(string-concat-bench PRIVATE "Boost::headers")
+
+add_executable(string-path-bench EXCLUDE_FROM_ALL
+    tools/string_path_bench_main.cpp
+)
+target_compile_features(string-path-bench PRIVATE cxx_std_20)
+target_include_directories(string-path-bench PRIVATE
+    "${PROJECT_SOURCE_DIR}/libaegisub/include"
+)
+if(STRINGZILLA_INCLUDE_DIRS)
+    target_include_directories(string-path-bench PRIVATE ${STRINGZILLA_INCLUDE_DIRS})
+    target_compile_definitions(string-path-bench PRIVATE AEGISUB_USE_STRINGZILLA=1)
+endif()
+target_link_libraries(string-path-bench PRIVATE "Boost::headers" "Boost::locale")
+
 find_package(benchmark CONFIG QUIET)
 if(benchmark_FOUND)
     add_executable(audio-micro-bench EXCLUDE_FROM_ALL

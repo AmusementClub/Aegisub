@@ -61,7 +61,7 @@ std::string AssAttachment::GetFileName(bool raw) const {
 	if (raw || !agi::util::strings::iends_with(filename.get(), ".ttf")) return filename;
 
 	// Remove stuff after last underscore if it's a font
-	std::string::size_type last_under = filename.get().rfind('_');
+	std::string::size_type last_under = filename.get().find_last_of('_');
 	if (last_under == std::string::npos)
 		return filename;
 

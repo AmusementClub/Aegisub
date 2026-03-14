@@ -38,6 +38,7 @@
 #include "string_codec.h"
 
 #include <libaegisub/format.h>
+#include <libaegisub/string_utils.h>
 
 std::string inline_string_encode(const std::string &input) {
 	std::string output;
@@ -58,8 +59,14 @@ std::string inline_string_decode(const std::string &input) {
 		if (input[i] != '#' || i + 2 > input.size())
 			output += input[i];
 		else {
-			output += (char)strtol(input.substr(i + 1, 2).c_str(), nullptr, 16);
-			i += 2;
+			unsigned char decoded = 0;
+			if (agi::util::strings::parse_hex_byte(agi::util::strings::subview(input, i + 1, 2), decoded)) {
+				output += static_cast<char>(decoded);
+				i += 2;
+			}
+			else {
+				output += input[i];
+			}
 		}
 	}
 	return output;

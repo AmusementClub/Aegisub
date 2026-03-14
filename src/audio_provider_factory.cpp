@@ -30,6 +30,7 @@
 #include <libaegisub/fs.h>
 #include <libaegisub/log.h>
 #include <libaegisub/path.h>
+#include <libaegisub/string_utils.h>
 
 #include <boost/range/iterator_range.hpp>
 
@@ -72,7 +73,7 @@ std::string GetAvisynthAvailabilityError() {
 std::string GetDisplayName(factory const& provider) {
 	std::string name = provider.name;
 	if (!provider.hidden && provider.is_available && !provider.is_available())
-		name += " (Unavailable)";
+		name.append(" (Unavailable)");
 	return name;
 }
 
@@ -115,9 +116,13 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 
 	for (auto const& factory : sorted) {
 		if (factory->is_available && !factory->is_available()) {
-			std::string err = std::string(factory->name) + ": " + (factory->availability_error ? factory->availability_error() : "runtime library is unavailable.");
+			std::string err;
+			err.append(factory->name);
+			err.append(": ");
+			err.append(factory->availability_error ? factory->availability_error() : "runtime library is unavailable.");
 			LOG_D("audio_provider") << err;
-			msg_all += err + "\n";
+			msg_all.append(err);
+			msg_all.push_back('\n');
 			continue;
 		}
 
@@ -129,20 +134,30 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 		}
 		catch (fs::FileNotFound const& err) {
 			LOG_D("audio_provider") << err.GetMessage();
-			msg_all += std::string(factory->name) + ": " + err.GetMessage() + " not found.\n";
+			msg_all.append(factory->name);
+			msg_all.append(": ");
+			msg_all.append(err.GetMessage());
+			msg_all.append(" not found.\n");
 		}
 		catch (AudioDataNotFound const& err) {
 			LOG_D("audio_provider") << err.GetMessage();
 			found_file = true;
-			msg_all += std::string(factory->name) + ": " + err.GetMessage() + "\n";
+			msg_all.append(factory->name);
+			msg_all.append(": ");
+			msg_all.append(err.GetMessage());
+			msg_all.push_back('\n');
 		}
 		catch (AudioProviderError const& err) {
 			LOG_D("audio_provider") << err.GetMessage();
 			found_audio = true;
 			found_file = true;
-			std::string thismsg = std::string(factory->name) + ": " + err.GetMessage() + "\n";
-			msg_all += thismsg;
-			msg_partial += thismsg;
+			std::string thismsg;
+			thismsg.append(factory->name);
+			thismsg.append(": ");
+			thismsg.append(err.GetMessage());
+			thismsg.push_back('\n');
+			msg_all.append(thismsg);
+			msg_partial.append(thismsg);
 		}
 	}
 

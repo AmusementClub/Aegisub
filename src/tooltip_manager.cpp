@@ -38,6 +38,7 @@
 #include "include/aegisub/hotkey.h"
 
 #include <libaegisub/hotkey.h>
+#include <libaegisub/string_utils.h>
 
 #include <list>
 #include <wx/weakref.h>
@@ -66,9 +67,10 @@ void ToolTipBinding::Update() {
 	std::vector<std::string> hotkeys = hotkey::get_hotkey_strs(context, command);
 
 	std::string str;
+	str.reserve(hotkeys.size() * 8);
 	for (size_t i = 0; i < hotkeys.size(); ++i) {
-		if (i > 0) str += "/";
-		str += hotkeys[i];
+		if (i > 0) str.push_back('/');
+		str.append(hotkeys[i]);
 	}
 	if (str.empty()) {
 		window->SetToolTip(toolTip);

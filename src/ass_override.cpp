@@ -343,7 +343,7 @@ std::vector<std::string> tokenize(const std::string &text) {
 			i++;
 		}
 		// i now points to the first character not member of this parameter
-		paramList.emplace_back(agi::util::strings::trim_copy(text.substr(start, i - start)));
+		paramList.emplace_back(agi::util::strings::trim_copy(agi::util::strings::subview(text, start, i - start)));
 	}
 
 	if (i+1 < textlen) {
@@ -394,7 +394,7 @@ void AssDialogueBlockOverride::ParseTags() {
 				--depth;
 		}
 		else if (text[i] == '\\') {
-			Tags.emplace_back(text.substr(start, i - start));
+			Tags.emplace_back(std::string(text.substr(start, i - start)));
 			start = i;
 		}
 		else if (text[i] == '(')
@@ -402,7 +402,7 @@ void AssDialogueBlockOverride::ParseTags() {
 	}
 
 	if (!text.empty())
-		Tags.emplace_back(text.substr(start));
+		Tags.emplace_back(std::string(text.substr(start)));
 }
 
 void AssDialogueBlockOverride::AddTag(std::string const& tag) {
@@ -444,7 +444,7 @@ void AssOverrideTag::SetText(const std::string &text) {
 	for (auto cur = proto.begin(); cur != proto.end(); ++cur) {
 		if (agi::util::strings::starts_with(text, cur->name)) {
 			Name = cur->name;
-			parse_parameters(this, text.substr(Name.size()), cur);
+			parse_parameters(this, std::string(text.substr(Name.size())), cur);
 			valid = true;
 			return;
 		}

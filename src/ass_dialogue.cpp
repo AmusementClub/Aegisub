@@ -151,22 +151,22 @@ void AssDialogue::Parse(std::string const& raw) {
 
 static void append_int(std::string &str, int v) {
 	boost::spirit::karma::generate(back_inserter(str), boost::spirit::karma::int_, v);
-	str += ',';
+	str.push_back(',');
 }
 
 static void append_str(std::string &out, std::string const& str) {
-	out += str;
-	out += ',';
+	out.append(str);
+	out.push_back(',');
 }
 
 static void append_unsafe_str(std::string &out, std::string const& str) {
 	for (auto c : str) {
 		if (c == ',')
-			out += ';';
+			out.push_back(';');
 		else
-			out += c;
+			out.push_back(c);
 	}
-	out += ',';
+	out.push_back(',');
 }
 
 std::string AssDialogue::GetEntryData() const {
@@ -183,17 +183,17 @@ std::string AssDialogue::GetEntryData() const {
 	append_unsafe_str(str, Effect);
 
 	if (ExtradataIds.get().size() > 0) {
-		str += '{';
+		str.push_back('{');
 		for (auto id : ExtradataIds.get()) {
-			str += '=';
+			str.push_back('=');
 			boost::spirit::karma::generate(back_inserter(str), boost::spirit::karma::int_, id);
 		}
-		str += '}';
+		str.push_back('}');
 	}
 
 	for (auto c : Text.get()) {
 		if (c != '\n' && c != '\r')
-			str += c;
+			str.push_back(c);
 	}
 
 	return str;
@@ -214,11 +214,11 @@ std::vector<std::unique_ptr<AssDialogueBlock>> AssDialogue::ParseTags() const {
 	for (size_t len = text.size(), cur = 0; cur < len; ) {
 		// Overrides block
 		if (text[cur] == '{') {
-			size_t end = text.find('}', cur);
+			size_t end = agi::util::strings::find(text, '}', cur);
 
 			// VSFilter requires that override blocks be closed, while libass
 			// does not. We match VSFilter here.
-			if (end == std::string::npos)
+			if (end == agi::util::strings::npos)
 				goto plain;
 
 			++cur;
@@ -226,7 +226,7 @@ std::vector<std::unique_ptr<AssDialogueBlock>> AssDialogue::ParseTags() const {
 			std::string work = text.substr(cur, end - cur);
 			cur = end + 1;
 
-			if (work.size() && work.find('\\') == std::string::npos) {
+			if (!work.empty() && agi::util::strings::find(work, '\\') == agi::util::strings::npos) {
 				//We've found an override block with no backslashes
 				//We're going to assume it's a comment and not consider it an override block
 				Blocks.push_back(agi::make_unique<AssDialogueBlockComment>(work));
@@ -250,8 +250,8 @@ std::vector<std::unique_ptr<AssDialogueBlock>> AssDialogue::ParseTags() const {
 		// Plain-text/drawing block
 plain:
 		std::string work;
-		size_t end = text.find('{', cur + 1);
-		if (end == std::string::npos) {
+		size_t end = agi::util::strings::find(text, '{', cur + 1);
+		if (end == agi::util::strings::npos) {
 			work = text.substr(cur);
 			cur = len;
 		}

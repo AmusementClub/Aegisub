@@ -549,7 +549,10 @@ target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
 target_compile_features(Aegisub PRIVATE cxx_std_20)
 option(AEGISUB_USE_STRINGZILLA "Use StringZilla in selected string-heavy code paths" ON)
 if(AEGISUB_USE_STRINGZILLA)
-    find_path(STRINGZILLA_INCLUDE_DIRS "stringzilla/stringzilla.hpp")
+    find_path(STRINGZILLA_INCLUDE_DIRS NAMES
+        "stringzilla/stringzilla.h"
+        "stringzilla/stringzilla.hpp"
+    )
     if(STRINGZILLA_INCLUDE_DIRS)
         target_include_directories(libaegisub PRIVATE ${STRINGZILLA_INCLUDE_DIRS})
         target_compile_definitions(libaegisub PRIVATE AEGISUB_USE_STRINGZILLA=1)
@@ -942,7 +945,7 @@ if(WITH_TEST)
     include("CMakeLists.test.txt")
 endif()
 
-set(WITH_BENCH OFF CACHE BOOL "Enable audio display benchmarks")
+set(WITH_BENCH OFF CACHE BOOL "Enable benchmark targets")
 if(WITH_BENCH)
     include("CMakeLists.bench.txt")
 endif()

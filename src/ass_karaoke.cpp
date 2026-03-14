@@ -29,11 +29,11 @@ std::string AssKaraoke::Syllable::GetText(bool k_tag) const {
 
 	size_t idx = 0;
 	for (auto const& ovr : ovr_tags) {
-		ret += text.substr(idx, ovr.first - idx);
-		ret += ovr.second;
+		ret.append(text, idx, ovr.first - idx);
+		ret.append(ovr.second);
 		idx = ovr.first;
 	}
-	ret += text.substr(idx);
+	ret.append(text, idx);
 	return ret;
 }
 
@@ -77,7 +77,7 @@ void AssKaraoke::SetLine(const AssDialogue *line, bool auto_split, bool normaliz
 	if (auto_split && syls.size() == 1) {
 		size_t pos;
 		no_announce = true;
-		while ((pos = syls.back().text.find(' ')) != std::string::npos)
+		while ((pos = agi::util::strings::find(syls.back().text, ' ')) != agi::util::strings::npos)
 			AddSplit(syls.size() - 1, pos + 1);
 		no_announce = false;
 	}
@@ -91,13 +91,13 @@ void AssKaraoke::ParseSyllables(const AssDialogue *line, Syllable &syl) {
 
 		switch (block->GetType()) {
 		case AssBlockType::PLAIN:
-			syl.text += text;
+			syl.text.append(text);
 			break;
 		case AssBlockType::COMMENT:
 		// drawings aren't override tags but they shouldn't show up in the
 		// stripped text so pretend they are
 		case AssBlockType::DRAWING:
-			syl.ovr_tags[syl.text.size()] += text;
+			syl.ovr_tags[syl.text.size()].append(text);
 			break;
 		case AssBlockType::OVERRIDE:
 			auto ovr = static_cast<AssDialogueBlockOverride*>(block.get());
@@ -105,7 +105,7 @@ void AssKaraoke::ParseSyllables(const AssDialogue *line, Syllable &syl) {
 			for (auto& tag : ovr->Tags) {
 				if (tag.IsValid() && agi::util::strings::istarts_with(tag.Name, "\\k")) {
 					if (in_tag) {
-						syl.ovr_tags[syl.text.size()] += "}";
+						syl.ovr_tags[syl.text.size()].push_back('}');
 						in_tag = false;
 					}
 
@@ -130,15 +130,15 @@ void AssKaraoke::ParseSyllables(const AssDialogue *line, Syllable &syl) {
 					while (!text.empty() && text.back() == '}')
 						text.pop_back();
 					if (!in_tag)
-						otext += "{";
+						otext.push_back('{');
 
 					in_tag = true;
-					otext += tag;
+					otext.append(static_cast<std::string>(tag));
 				}
 			}
 
 			if (in_tag)
-				syl.ovr_tags[syl.text.size()] += "}";
+				syl.ovr_tags[syl.text.size()].push_back('}');
 			break;
 		}
 	}
@@ -151,7 +151,7 @@ std::string AssKaraoke::GetText() const {
 	text.reserve(size() * 10);
 
 	for (auto const& syl : syls)
-		text += syl.GetText(true);
+		text.append(syl.GetText(true));
 
 	return text;
 }
@@ -218,7 +218,7 @@ void AssKaraoke::RemoveSplit(size_t syl_idx) {
 	prev.duration += syl.duration;
 	for (auto const& tag : syl.ovr_tags)
 		prev.ovr_tags[tag.first + prev.text.size()] = tag.second;
-	prev.text += syl.text;
+	prev.text.append(syl.text);
 
 	syls.erase(syls.begin() + syl_idx);
 

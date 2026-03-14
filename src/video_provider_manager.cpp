@@ -28,6 +28,7 @@
 
 #include <libaegisub/fs.h>
 #include <libaegisub/log.h>
+#include <libaegisub/string_utils.h>
 
 #include <boost/range/iterator_range.hpp>
 
@@ -69,12 +70,12 @@ namespace {
 	}
 #endif
 
-	std::string GetDisplayName(factory const& provider) {
-		std::string name = provider.name;
-		if (!provider.hidden && provider.is_available && !provider.is_available())
-			name += " (Unavailable)";
-		return name;
-	}
+std::string GetDisplayName(factory const& provider) {
+	std::string name = provider.name;
+	if (!provider.hidden && provider.is_available && !provider.is_available())
+		name.append(" (Unavailable)");
+	return name;
+}
 
 	const factory providers[] = {
 		{"Dummy", CreateDummyVideoProvider, nullptr, nullptr, true},
@@ -114,7 +115,10 @@ std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path c
 		std::string err;
 		if (factory->is_available && !factory->is_available()) {
 			err = factory->availability_error ? factory->availability_error() : "runtime library is unavailable.";
-			errors += std::string(factory->name) + ": " + err + "\n";
+			errors.append(factory->name);
+			errors.append(": ");
+			errors.append(err);
+			errors.push_back('\n');
 			LOG_D("manager/video/provider") << factory->name << ": " << err;
 			continue;
 		}
@@ -143,13 +147,19 @@ std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path c
 			err = ex.GetMessage();
 		}
 
-		errors += std::string(factory->name) + ": " + err + "\n";
+		errors.append(factory->name);
+		errors.append(": ");
+		errors.append(err);
+		errors.push_back('\n');
 		LOG_D("manager/video/provider") << factory->name << ": " << err;
 	}
 
 	// No provider could open the file
 	LOG_E("manager/video/provider") << "Could not open " << filename;
-	std::string msg = "Could not open " + filename.string() + ":\n" + errors;
+	std::string msg = "Could not open ";
+	msg.append(filename.string());
+	msg.append(":\n");
+	msg.append(errors);
 
 	if (!found) throw agi::fs::FileNotFound(filename.string());
 	if (!supported) throw VideoNotSupported(msg);

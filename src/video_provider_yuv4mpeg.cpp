@@ -266,7 +266,7 @@ void YUV4MPEGVideoProvider::ParseFileHeader(const std::vector<std::string>& tags
 				err = "invalid height";
 		}
 		else if (type == 'F') {
-			size_t pos = tag.find(':');
+			size_t pos = agi::util::strings::find(tag, ':');
 			if (pos == tag.npos)
 				err = "invalid framerate";
 

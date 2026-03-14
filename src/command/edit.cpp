@@ -243,7 +243,13 @@ struct parsed_line {
 		std::string insert(tag + value);
 		int shift = insert.size();
 		if (plain || blockn < 0) {
-			line->Text = line->Text.get().substr(0, orig_pos) + "{" + insert + "}" + line->Text.get().substr(orig_pos);
+			std::string new_text = line->Text.get();
+			std::string wrapped_insert;
+			wrapped_insert.push_back('{');
+			wrapped_insert.append(insert);
+			wrapped_insert.push_back('}');
+			agi::util::strings::replace_range_inplace(new_text, orig_pos, orig_pos, wrapped_insert);
+			line->Text = std::move(new_text);
 			shift += 2;
 			blocks = line->ParseTags();
 		}
@@ -1260,7 +1266,9 @@ struct edit_insert_original final : public Command {
 		int sel_start = c->textSelectionController->GetSelectionStart();
 		int sel_end = c->textSelectionController->GetSelectionEnd();
 
-		line->Text = line->Text.get().substr(0, sel_start) + c->initialLineState->GetInitialText() + line->Text.get().substr(sel_end);
+		std::string new_text = line->Text.get();
+		agi::util::strings::replace_range_inplace(new_text, sel_start, sel_end, c->initialLineState->GetInitialText());
+		line->Text = std::move(new_text);
 		c->ass->Commit(_("insert original"), AssFile::COMMIT_DIAG_TEXT, -1, line);
 		c->textSelectionController->SetSelection(sel_start, sel_start + c->initialLineState->GetInitialText().length());
 	}

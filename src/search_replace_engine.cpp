@@ -24,6 +24,7 @@
 #include "text_selection_controller.h"
 
 #include <libaegisub/exception.h>
+#include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 
 #include <boost/locale/conversion.hpp>
@@ -61,9 +62,14 @@ class noop_accessor {
 public:
 	noop_accessor(SearchReplaceSettings::Field f) : field(get_dialogue_field(f)) { }
 
-	std::string get(const AssDialogue *d, size_t s) {
+	agi::util::strings::view get_view(const AssDialogue *d, size_t s) {
 		start = s;
-		return get_normalized(d, field).substr(s);
+		auto const& value = get_normalized(d, field);
+		return agi::util::strings::subview(value, s);
+	}
+
+	std::string get_string(const AssDialogue *d, size_t s) {
+		return std::string(get_view(d, s));
 	}
 
 	MatchState make_match_state(size_t s, size_t e, boost::u32regex *r = nullptr) {
@@ -74,11 +80,17 @@ public:
 class skip_tags_accessor {
 	boost::flyweight<std::string> AssDialogueBase::*field;
 	agi::util::tagless_find_helper helper;
+	std::string stripped;
 
 public:
 	skip_tags_accessor(SearchReplaceSettings::Field f) : field(get_dialogue_field(f)) { }
 
-	std::string get(const AssDialogue *d, size_t s) {
+	agi::util::strings::view get_view(const AssDialogue *d, size_t s) {
+		stripped = helper.strip_tags(get_normalized(d, field), s);
+		return stripped;
+	}
+
+	std::string get_string(const AssDialogue *d, size_t s) {
 		return helper.strip_tags(get_normalized(d, field), s);
 	}
 
@@ -99,7 +111,7 @@ matcher get_matcher(SearchReplaceSettings const& settings, Accessor&& a) {
 
 		return [=](const AssDialogue *diag, size_t start) mutable -> MatchState {
 			boost::smatch result;
-			auto const& str = a.get(diag, start);
+			auto str = a.get_string(diag, start);
 			if (!u32regex_search(str, result, regex, start > 0 ? boost::match_not_bol : boost::match_default))
 				return bad_match;
 			return a.make_match_state(result.position(), result.position() + result.length(), &regex);
@@ -110,21 +122,42 @@ matcher get_matcher(SearchReplaceSettings const& settings, Accessor&& a) {
 	bool match_case = settings.match_case;
 	std::string look_for = settings.find;
 
-	if (!settings.match_case)
-		look_for = boost::locale::fold_case(look_for);
-
 	return [=](const AssDialogue *diag, size_t start) mutable -> MatchState {
-		const auto str = a.get(diag, start);
-		if (full_match_only && str.size() != look_for.size())
-			return bad_match;
+		const auto str = a.get_view(diag, start);
 
-		if (match_case) {
-			const auto pos = str.find(look_for);
-			return pos == std::string::npos ? bad_match : a.make_match_state(pos, pos + look_for.size());
+		if (full_match_only) {
+			if (match_case) {
+				return str == look_for
+					? a.make_match_state(0, str.size())
+					: bad_match;
+			}
+#ifdef AEGISUB_USE_STRINGZILLA
+			const auto match = agi::util::strings::utf8_find_icase(str, look_for);
+			return match && match.offset == 0 && match.length == str.size()
+				? a.make_match_state(0, str.size())
+				: bad_match;
+#else
+			const auto pos = agi::util::ifind(std::string(str), look_for);
+			return pos.first == 0 && pos.second == str.size()
+				? a.make_match_state(pos.first, pos.second)
+				: bad_match;
+#endif
 		}
 
-		const auto pos = agi::util::ifind(str, look_for);
+		if (match_case) {
+			const auto pos = agi::util::strings::find(str, look_for);
+			return pos == agi::util::strings::npos ? bad_match : a.make_match_state(pos, pos + look_for.size());
+		}
+
+#ifdef AEGISUB_USE_STRINGZILLA
+		const auto match = agi::util::strings::utf8_find_icase(str, look_for);
+		return match
+			? a.make_match_state(match.offset, match.offset + match.length)
+			: bad_match;
+#else
+		const auto pos = agi::util::ifind(std::string(str), look_for);
 		return pos.first == bad_pos ? bad_match : a.make_match_state(pos.first, pos.second);
+#endif
 	};
 }
 
@@ -159,7 +192,8 @@ void SearchReplaceEngine::Replace(AssDialogue *diag, MatchState &ms) {
 		replacement = u32regex_replace(to_replace, *ms.re, replacement, boost::format_first_only);
 	}
 
-	diag_field = text.substr(0, ms.start) + replacement + text.substr(ms.end);
+	agi::util::strings::replace_range_inplace(text, ms.start, ms.end, replacement);
+	diag_field = std::move(text);
 	ms.end = ms.start + replacement.size();
 }
 

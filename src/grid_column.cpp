@@ -24,6 +24,7 @@
 #include "video_controller.h"
 
 #include <libaegisub/character_count.h>
+#include <libaegisub/string_utils.h>
 
 #include <wx/dc.h>
 
@@ -376,15 +377,20 @@ public:
 		else {
 			auto const& text = d->Text.get();
 			str.reserve(text.size());
-			size_t start = 0, pos;
-			while ((pos = text.find('{', start)) != std::string::npos) {
+			size_t start = 0;
+			while (true) {
+				auto pos = agi::util::strings::find(text, '{', start);
+				if (pos == agi::util::strings::npos)
+					break;
 				str += to_wx(text.substr(start, pos - start));
 				if (mode == 1)
 					str += replace_char;
-				start = text.find('}', pos);
-				if (start != std::string::npos) ++start;
+				start = agi::util::strings::find(text, '}', pos);
+				if (start == agi::util::strings::npos)
+					break;
+				++start;
 			}
-			if (start != std::string::npos)
+			if (start != agi::util::strings::npos)
 				str += to_wx(text.substr(start));
 		}
 

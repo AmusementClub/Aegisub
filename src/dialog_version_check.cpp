@@ -44,6 +44,7 @@
 #include <libaegisub/line_iterator.h>
 #include <libaegisub/scoped_ptr.h>
 #include <libaegisub/split.h>
+#include <libaegisub/string_utils.h>
 
 #include <ctime>
 #include <boost/asio/ip/tcp.hpp>
@@ -305,7 +306,7 @@ void DoCheck(bool interactive) {
 	stream >> http_version;
 	int status_code;
 	stream >> status_code;
-	if (!stream || http_version.substr(0, 5) != "HTTP/")
+	if (!stream || !agi::util::strings::starts_with(http_version, "HTTP/"))
 		throw VersionCheckError(from_wx(_("Could not download from updates server.")));
 	if (status_code != 200)
 		throw VersionCheckError(agi::format(_("HTTP request failed, got HTTP response %d."), status_code));

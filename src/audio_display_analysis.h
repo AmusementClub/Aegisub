@@ -10,3 +10,4 @@ struct AudioWaveformSummary {
 };
 
 AudioWaveformSummary AnalyzeWaveformInterleaved(const float *samples, int frames, int channels, AudioMixPolicy policy);
+bool ShouldRefreshTrackCursorOverlay(int old_pos, int new_pos);

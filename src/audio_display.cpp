@@ -31,6 +31,7 @@
 #include "audio_display.h"
 
 #include "audio_controller.h"
+#include "audio_display_analysis.h"
 #include "audio_renderer.h"
 #include "audio_renderer_spectrum.h"
 #include "audio_renderer_waveform.h"
@@ -1188,7 +1189,8 @@ void AudioDisplay::SetDraggedObject(AudioDisplayInteractionObject *new_obj)
 
 void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 {
-	if (new_pos == track_cursor_pos) return;
+	if (!ShouldRefreshTrackCursorOverlay(track_cursor_pos, new_pos))
+		return;
 
 	track_cursor_pos = new_pos;
 

@@ -102,3 +102,9 @@ AudioWaveformSummary AnalyzeWaveformInterleaved(const float *samples, int frames
 	summary.avg_max = static_cast<float>(avg_max_accum / frames);
 	return summary;
 }
+
+bool ShouldRefreshTrackCursorOverlay(int old_pos, int new_pos) {
+	if (old_pos == new_pos)
+		return old_pos >= 0;
+	return old_pos >= 0 || new_pos >= 0;
+}

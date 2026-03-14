@@ -16,3 +16,4 @@ public:
 };
 
 std::unique_ptr<AudioDisplaySource> CreateAudioDisplaySource(agi::AudioProvider *provider);
+std::unique_ptr<AudioDisplaySource> CreateSingleChannelAudioDisplaySource(AudioDisplaySource *source, int channel);

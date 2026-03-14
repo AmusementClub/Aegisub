@@ -43,6 +43,7 @@ class AudioDisplay;
 class wxBitmapToggleButton;
 class wxButton;
 class wxCommandEvent;
+class wxMenuEvent;
 class wxPanel;
 class wxScrollEvent;
 class wxSizer;
@@ -69,6 +70,7 @@ class AudioBox final : public wxSashWindow {
 	wxSlider *HorizontalZoom;
 	wxSlider *VerticalZoom;
 	wxSlider *VolumeBar;
+	wxButton *spectrum_channel_btn = nullptr;
 
 	// Mouse wheel zoom accumulator
 	int mouse_zoom_accum = 0;
@@ -98,6 +100,8 @@ class AudioBox final : public wxSashWindow {
 	void OnSpectrumPrefetchResumeTimer(wxTimerEvent &event);
 	void OnVerticalZoom(wxScrollEvent &event);
 	void OnVolume(wxScrollEvent &event);
+	void OnSpectrumModeChange(agi::OptionValue const& opt);
+	void OnSpectrumChannelBtn(wxCommandEvent &event);
 
 public:
 	AudioBox(wxWindow *parent, agi::Context *context);

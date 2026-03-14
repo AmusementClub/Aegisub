@@ -10,9 +10,6 @@ constexpr float spectrum_eps = 1e-12f;
 }
 
 AudioSpectrumAnalysisCache::AudioSpectrumAnalysisCache() {
-	scheduler = std::make_unique<AudioLatestRangeScheduler>([this](size_t first, size_t last, uint64_t generation) {
-		ProcessPrefetch(first, last, generation);
-	});
 }
 
 AudioSpectrumAnalysisCache::~AudioSpectrumAnalysisCache() {
@@ -51,7 +48,8 @@ void AudioSpectrumAnalysisCache::RecreateCache() {
 	if (!source || source->GetSampleRate() <= 0 || source->GetNumSamples() <= 0 || derivation_size == 0) {
 		block_count = 0;
 		metrics_generation.fetch_add(1, std::memory_order_relaxed);
-		scheduler->Invalidate();
+		if (scheduler)
+			scheduler->Invalidate();
 		return;
 	}
 
@@ -74,7 +72,8 @@ void AudioSpectrumAnalysisCache::RecreateCache() {
 #endif
 
 	metrics_generation.fetch_add(1, std::memory_order_relaxed);
-	scheduler->Invalidate();
+	if (scheduler)
+		scheduler->Invalidate();
 }
 
 std::unique_ptr<float[]> AudioSpectrumAnalysisCache::BuildBlockUnlocked(size_t block_index) {
@@ -285,6 +284,15 @@ void AudioSpectrumAnalysisCache::Prefetch(size_t first_block, size_t last_block)
 			return;
 	}
 
+	if (!scheduler) {
+		std::lock_guard<std::mutex> lock(scheduler_mutex);
+		if (!scheduler) {
+			scheduler = std::make_unique<AudioLatestRangeScheduler>([this](size_t first, size_t last, uint64_t generation) {
+				ProcessPrefetch(first, last, generation);
+			});
+		}
+	}
+
 	metrics_prefetch_requests.fetch_add(last_block - first_block + 1, std::memory_order_relaxed);
 	scheduler->Request(first_block, last_block);
 }
@@ -296,6 +304,8 @@ void AudioSpectrumAnalysisCache::SetPrefetchEnabled(bool enabled) {
 }
 
 void AudioSpectrumAnalysisCache::ProcessPrefetch(size_t first_block, size_t last_block, uint64_t generation) {
+	if (!scheduler)
+		return;
 	for (size_t block_index = first_block; block_index <= last_block; ++block_index) {
 		if (!scheduler->IsCurrent(generation)) {
 			metrics_stale_drops.fetch_add(1, std::memory_order_relaxed);

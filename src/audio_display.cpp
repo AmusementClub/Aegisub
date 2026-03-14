@@ -803,6 +803,32 @@ void AudioDisplay::SetInteractivePrefetchEnabled(bool enabled) {
 		audio_renderer_provider->SetInteractivePrefetchEnabled(enabled);
 }
 
+void AudioDisplay::SetSpectrumChannelMode(AudioSpectrumChannelMode mode) {
+	spectrum_channel_mode_runtime = mode;
+	if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
+		spectrum->SetChannelMode(mode);
+		audio_renderer->Invalidate();
+		Refresh();
+	}
+}
+
+AudioSpectrumChannelMode AudioDisplay::GetSpectrumChannelMode() const {
+	return spectrum_channel_mode_runtime;
+}
+
+void AudioDisplay::SetSpectrumSelectedChannels(const std::vector<int> &channels) {
+	spectrum_selected_channels_runtime = channels;
+	if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
+		spectrum->SetSelectedChannels(spectrum_selected_channels_runtime);
+		audio_renderer->Invalidate();
+		Refresh();
+	}
+}
+
+int AudioDisplay::GetProviderChannels() const {
+	return provider ? std::max(1, provider->GetChannels()) : 1;
+}
+
 void AudioDisplay::ReloadRenderingSettings()
 {
 	std::string colour_scheme_name;
@@ -833,6 +859,8 @@ void AudioDisplay::ReloadRenderingSettings()
 
 		int64_t spectrum_freq_curve = OPT_GET("Audio/Renderer/Spectrum/FreqCurve")->GetInt();
 		audio_spectrum_renderer->SetFrequencyCurvePreset(static_cast<int>(spectrum_freq_curve));
+		audio_spectrum_renderer->SetChannelMode(spectrum_channel_mode_runtime);
+		audio_spectrum_renderer->SetSelectedChannels(spectrum_selected_channels_runtime);
 
 		audio_renderer_provider = std::move(audio_spectrum_renderer);
 	}
@@ -909,6 +937,36 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 			if (audio_bounds.Intersects(rect)) {
 				auto viewport = BuildViewportRequest(rect);
 				PaintAudio(dc, viewport);
+
+				// Overlay split-channel labels once, at the left edge of the visible area
+				if (spectrum_channel_mode_runtime == AudioSpectrumChannelMode::ChannelSplit) {
+					if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
+						const auto &labels = spectrum->GetActiveChannelLabels();
+						const int n = static_cast<int>(labels.size());
+						if (n > 0 && audio_height > 0) {
+							const int band_h = audio_height / n;
+							const int label_x = FromDIP(4);
+							wxFont label_font = dc.GetFont();
+							label_font.SetPointSize(std::max(7, label_font.GetPointSize() - 1));
+							label_font.SetWeight(wxFONTWEIGHT_BOLD);
+							dc.SetFont(label_font);
+							for (int i = 0; i < n; ++i) {
+								const wxString wx_label = wxString::FromUTF8(labels[i].c_str());
+								const int label_y = audio_top + i * band_h + FromDIP(2);
+								// Shadow pass
+								dc.SetTextForeground(wxColour(0, 0, 0));
+								for (int dy = -1; dy <= 1; ++dy)
+									for (int dx = -1; dx <= 1; ++dx)
+										if (dx || dy)
+											dc.DrawText(wx_label, label_x + dx, label_y + dy);
+								// Label pass
+								dc.SetTextForeground(wxColour(230, 230, 230));
+								dc.DrawText(wx_label, label_x, label_y);
+							}
+						}
+					}
+				}
+
 				TimeRange viewport_time(viewport.begin_ms, viewport.end_ms);
 				PaintMarkers(dc, viewport_time);
 				PaintLabels(dc, viewport_time);

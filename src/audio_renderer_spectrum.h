@@ -33,8 +33,11 @@
 ///
 /// Calculate and render a frequency-power spectrum for PCM audio data.
 
+#pragma once
+
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "audio_renderer.h"
@@ -46,6 +49,11 @@ class AudioSpectrumAnalysisCache;
 enum class AudioSpectrumComputationMode {
 	LegacyLinear = 0,
 	FrequencyCurve = 1,
+};
+
+enum class AudioSpectrumChannelMode {
+	MonoMix = 0,
+	ChannelSplit = 1,
 };
 
 /// @class AudioSpectrumRenderer
@@ -81,6 +89,7 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 	AudioSpectrumComputationMode computation_mode = AudioSpectrumComputationMode::LegacyLinear;
 	float frequency_reference_position = 1.0f / 3.0f;
 	int frequency_curve_preset = 2;
+	AudioSpectrumChannelMode channel_mode = AudioSpectrumChannelMode::MonoMix;
 	std::vector<int> render_band_a;
 	std::vector<int> render_band_b;
 	std::vector<float> render_band_frac;
@@ -92,6 +101,12 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 	float render_scale_cache_reference_position = 0.0f;
 	void EnsureRenderScaleCache(int imgheight);
 	void SetFrequencyReferencePosition(float position);
+	std::vector<std::unique_ptr<AudioDisplaySource>> per_channel_sources;
+	std::vector<std::unique_ptr<AudioSpectrumAnalysisCache>> per_channel_caches;
+	std::vector<int> active_channel_indices;
+	std::vector<std::string> active_channel_labels;
+	std::vector<int> selected_channels;
+	void EnsurePerChannelCaches();
 
 public:
 	/// @brief Constructor
@@ -122,6 +137,9 @@ public:
 	void SetResolution(size_t derivation_size, size_t derivation_dist);
 	void SetComputationMode(AudioSpectrumComputationMode mode);
 	void SetFrequencyCurvePreset(int preset);
+	void SetChannelMode(AudioSpectrumChannelMode mode);
+	void SetSelectedChannels(const std::vector<int> &channels);
+	const std::vector<std::string> &GetActiveChannelLabels() const { return active_channel_labels; }
 
 	/// @brief Cleans up the cache
 	/// @param max_size Maximum size in bytes for the cache

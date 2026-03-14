@@ -52,6 +52,27 @@
 
 #include <wx/image.h>
 #include <wx/dcmemory.h>
+#include <wx/string.h>
+
+namespace {
+std::string GetChannelLabel(int channel, int total_channels) {
+	if (total_channels == 1)
+		return "M";
+	if (total_channels == 2)
+		return channel == 0 ? "L" : "R";
+	if (total_channels == 6) {
+		static const char *labels[] = {"FL", "FR", "FC", "LFE", "SL", "SR"};
+		if (channel >= 0 && channel < 6)
+			return labels[channel];
+	}
+	if (total_channels == 8) {
+		static const char *labels[] = {"FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"};
+		if (channel >= 0 && channel < 8)
+			return labels[channel];
+	}
+	return "CH" + std::to_string(channel + 1);
+}
+}
 
 AudioSpectrumRenderer::AudioSpectrumRenderer(std::string const& color_scheme_name)
 {
@@ -59,6 +80,46 @@ AudioSpectrumRenderer::AudioSpectrumRenderer(std::string const& color_scheme_nam
 	for (int i = 0; i < AudioStyle_MAX; ++i)
 		colors.emplace_back(12, color_scheme_name, i);
 	analysis_cache = std::make_unique<AudioSpectrumAnalysisCache>();
+}
+
+void AudioSpectrumRenderer::EnsurePerChannelCaches() {
+	per_channel_sources.clear();
+	per_channel_caches.clear();
+	active_channel_indices.clear();
+	active_channel_labels.clear();
+
+	if (channel_mode != AudioSpectrumChannelMode::ChannelSplit || !display_source)
+		return;
+
+	const int total_channels = std::max(1, display_source->GetChannels());
+	std::vector<int> channels_to_use;
+	if (selected_channels.empty()) {
+		channels_to_use.reserve(total_channels);
+		for (int ch = 0; ch < total_channels; ++ch)
+			channels_to_use.push_back(ch);
+	}
+	else {
+		channels_to_use = selected_channels;
+		channels_to_use.erase(std::remove_if(channels_to_use.begin(), channels_to_use.end(),
+			[total_channels](int ch) { return ch < 0 || ch >= total_channels; }), channels_to_use.end());
+		std::sort(channels_to_use.begin(), channels_to_use.end());
+		channels_to_use.erase(std::unique(channels_to_use.begin(), channels_to_use.end()), channels_to_use.end());
+		if (channels_to_use.empty()) {
+			for (int ch = 0; ch < total_channels; ++ch)
+				channels_to_use.push_back(ch);
+		}
+	}
+
+	for (int ch : channels_to_use) {
+		per_channel_sources.push_back(CreateSingleChannelAudioDisplaySource(display_source, ch));
+		auto cache = std::make_unique<AudioSpectrumAnalysisCache>();
+		cache->SetSource(per_channel_sources.back().get());
+		cache->SetMixPolicy(mix_policy);
+		cache->SetResolution(derivation_size, derivation_dist);
+		per_channel_caches.push_back(std::move(cache));
+		active_channel_indices.push_back(ch);
+		active_channel_labels.push_back(GetChannelLabel(ch, total_channels));
+	}
 }
 
 void AudioSpectrumRenderer::SetFrequencyReferencePosition(float position) {
@@ -167,11 +228,18 @@ void AudioSpectrumRenderer::RecreateCache()
 		analysis_cache->SetMixPolicy(mix_policy);
 		analysis_cache->SetResolution(derivation_size, derivation_dist);
 	}
+	for (auto &cache : per_channel_caches) {
+		if (cache) {
+			cache->SetMixPolicy(mix_policy);
+			cache->SetResolution(derivation_size, derivation_dist);
+		}
+	}
 }
 
 void AudioSpectrumRenderer::OnSetProvider()
 {
 	RecreateCache();
+	EnsurePerChannelCaches();
 }
 
 void AudioSpectrumRenderer::SetResolution(size_t _derivation_size, size_t _derivation_dist)
@@ -203,8 +271,85 @@ void AudioSpectrumRenderer::SetFrequencyCurvePreset(int preset) {
 	AgeCache(0);
 }
 
+void AudioSpectrumRenderer::SetChannelMode(AudioSpectrumChannelMode mode) {
+	if (channel_mode == mode)
+		return;
+	channel_mode = mode;
+	EnsurePerChannelCaches();
+	render_scale_cache_height = 0;
+	AgeCache(0);
+}
+
+void AudioSpectrumRenderer::SetSelectedChannels(const std::vector<int> &channels) {
+	selected_channels = channels;
+	EnsurePerChannelCaches();
+	render_scale_cache_height = 0;
+	AgeCache(0);
+}
+
 void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
 {
+	// ChannelSplit path: render each channel into its own horizontal band
+	if (channel_mode == AudioSpectrumChannelMode::ChannelSplit && !per_channel_caches.empty()) {
+		const int channels = static_cast<int>(per_channel_caches.size());
+		const int total_height = bmp.GetHeight();
+		const int band_height = total_height / channels;
+
+		if (band_height >= 4 && bmp.GetWidth() > 0) {
+			const AudioColorScheme *pal = &colors[style];
+			const double samples_per_pixel = pixel_ms * display_source->GetSampleRate() / 1000.0;
+			const int end = start + bmp.GetWidth();
+			EnsureRenderScaleCache(band_height);
+			const bool ch_interpolated = band_height > 1 << derivation_size;
+			size_t last_visible_block = static_cast<size_t>(-1);
+
+			for (int ch = 0; ch < channels; ++ch) {
+				if (!per_channel_caches[ch] || !per_channel_caches[ch]->IsReady())
+					continue;
+
+				std::vector<const float *> ch_columns(static_cast<size_t>(bmp.GetWidth()));
+				size_t last_block = static_cast<size_t>(-1);
+				const float *last_power = nullptr;
+
+				for (int ax = start; ax < end; ++ax) {
+					size_t block_idx = static_cast<size_t>(ax * samples_per_pixel) >> derivation_dist;
+					if (block_idx == last_block) {
+						ch_columns[ax - start] = last_power;
+					} else {
+						last_power = per_channel_caches[ch]->Get(block_idx);
+						last_block = block_idx;
+						ch_columns[ax - start] = last_power;
+					}
+					last_visible_block = last_block;
+				}
+
+				wxBitmap sub_bmp(bmp.GetWidth(), band_height);
+				RenderSpectrumColumnsToBitmap(
+					sub_bmp, ch_columns, derivation_size,
+					render_band_a.data(), render_band_b.data(),
+					ch_interpolated ? render_band_frac.data() : nullptr,
+					ch_interpolated, amplitude_scale, *pal);
+
+				wxMemoryDC dst_dc(bmp);
+				dst_dc.DrawBitmap(sub_bmp, 0, ch * band_height);
+			}
+
+			// Draw dividers between channel bands
+			if (channels > 1) {
+				wxMemoryDC dst_dc(bmp);
+				dst_dc.SetPen(wxPen(wxColour(80, 80, 80), 1));
+				for (int ch = 1; ch < channels; ++ch)
+					dst_dc.DrawLine(0, ch * band_height, bmp.GetWidth(), ch * band_height);
+			}
+
+			if (last_visible_block != static_cast<size_t>(-1)) {
+				for (auto &cache : per_channel_caches)
+					cache->Prefetch(last_visible_block + 1, last_visible_block + 8);
+			}
+			return;
+		}
+	}
+
 	if (!analysis_cache || !analysis_cache->IsReady())
 		return;
 
@@ -264,13 +409,27 @@ void AudioSpectrumRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRende
 
 void AudioSpectrumRenderer::AgeCache(size_t max_size)
 {
-	if (analysis_cache)
-		analysis_cache->Age(max_size);
+	if (channel_mode == AudioSpectrumChannelMode::ChannelSplit && !per_channel_caches.empty()) {
+		if (analysis_cache)
+			analysis_cache->Age(0);
+		const size_t n = per_channel_caches.size();
+		const size_t ch_max = n > 0 ? max_size / n : 0;
+		for (auto &cache : per_channel_caches)
+			cache->Age(ch_max);
+	}
+	else {
+		if (analysis_cache)
+			analysis_cache->Age(max_size);
+		for (auto &cache : per_channel_caches)
+			cache->Age(0);
+	}
 }
 
 void AudioSpectrumRenderer::SetInteractivePrefetchEnabled(bool enabled) {
 	if (analysis_cache)
 		analysis_cache->SetPrefetchEnabled(enabled);
+	for (auto &cache : per_channel_caches)
+		cache->SetPrefetchEnabled(enabled);
 }
 
 std::vector<std::string> AudioSpectrumRenderer::GetDebugInfo() const {
@@ -284,6 +443,7 @@ std::vector<std::string> AudioSpectrumRenderer::GetDebugInfo() const {
 		<< " miss=" << metrics.cache_misses
 		<< " mode=" << static_cast<int>(computation_mode)
 		<< " curve=" << frequency_curve_preset
+		<< " ch=" << static_cast<int>(channel_mode)
 		<< " vis=" << metrics.visible_builds
 		<< " lock=" << metrics.visible_lock_contention
 		<< " pf_req=" << metrics.prefetch_requests

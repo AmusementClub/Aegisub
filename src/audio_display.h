@@ -40,6 +40,8 @@
 #include <wx/timer.h>
 #include <wx/window.h>
 
+#include "audio_renderer_spectrum.h"
+
 namespace agi { class AudioProvider; }
 namespace agi { struct Context; }
 
@@ -224,6 +226,9 @@ class AudioDisplay: public wxWindow {
 	void OnTimingController();
 	void OnMarkerMoved();
 
+	AudioSpectrumChannelMode spectrum_channel_mode_runtime = AudioSpectrumChannelMode::MonoMix;
+	std::vector<int> spectrum_selected_channels_runtime;
+
 public:
 	AudioDisplay(wxWindow *parent, AudioController *controller, agi::Context *context);
 	~AudioDisplay();
@@ -302,6 +307,11 @@ public:
 	/// @param scale New amplitude scale factor, 1.0 is no scaling
 	void SetAmplitudeScale(float scale);
 	void SetInteractivePrefetchEnabled(bool enabled);
+	void SetSpectrumChannelMode(AudioSpectrumChannelMode mode);
+	AudioSpectrumChannelMode GetSpectrumChannelMode() const;
+	void SetSpectrumSelectedChannels(const std::vector<int> &channels);
+	const std::vector<int>& GetSpectrumSelectedChannels() const { return spectrum_selected_channels_runtime; }
+	int GetProviderChannels() const;
 
 	/// Get a time in milliseconds from an X coordinate relative to current scroll
 	int TimeFromRelativeX(int x) const { return int((scroll_left + x) * ms_per_pixel); }

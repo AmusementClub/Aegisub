@@ -59,6 +59,7 @@ class AudioSpectrumAnalysisCache {
 	std::mutex ready_mutex;
 	std::vector<std::pair<size_t, std::unique_ptr<float[]>>> ready_blocks;
 	std::atomic<bool> has_ready_blocks{false};
+	mutable std::mutex scheduler_mutex;
 
 	std::vector<float> audio_scratch;
 	std::vector<float> mono_scratch;

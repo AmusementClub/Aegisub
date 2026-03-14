@@ -134,3 +134,31 @@ std::unique_ptr<AudioDisplaySource> CreateAudioDisplaySource(agi::AudioProvider 
 		return nullptr;
 	return agi::make_unique<AudioProviderDisplaySource>(provider);
 }
+
+namespace {
+class SingleChannelAudioDisplaySource final : public AudioDisplaySource {
+	AudioDisplaySource *core;
+	int channel;
+	int total_channels;
+	mutable std::vector<float> interleaved;
+public:
+	SingleChannelAudioDisplaySource(AudioDisplaySource *source, int ch)
+		: core(source), channel(ch), total_channels(std::max(1, source->GetChannels())) {}
+	int64_t GetNumSamples() const override { return core->GetNumSamples(); }
+	int GetChannels() const override { return 1; }
+	int GetSampleRate() const override { return core->GetSampleRate(); }
+	void GetFloatAudio(float *buf, int64_t start, int64_t count) const override {
+		if (!buf || count <= 0) return;
+		if (total_channels == 1) { core->GetFloatAudio(buf, start, count); return; }
+		interleaved.resize(static_cast<size_t>(count) * total_channels);
+		core->GetFloatAudio(interleaved.data(), start, count);
+		for (int64_t i = 0; i < count; ++i)
+			buf[i] = interleaved[i * total_channels + channel];
+	}
+};
+}
+
+std::unique_ptr<AudioDisplaySource> CreateSingleChannelAudioDisplaySource(AudioDisplaySource *source, int channel) {
+	if (!source) return nullptr;
+	return std::make_unique<SingleChannelAudioDisplaySource>(source, channel);
+}

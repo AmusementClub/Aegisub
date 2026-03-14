@@ -41,19 +41,44 @@
 #include "toggle_bitmap.h"
 #include "utils.h"
 
+#include <algorithm>
 #include <cmath>
+#include <string>
+#include <vector>
 #include <wx/panel.h>
 #include <wx/slider.h>
 #include <wx/scrolbar.h>
 #include <wx/sizer.h>
 #include <wx/slider.h>
 #include <wx/string.h>
+#include <wx/menu.h>
 #include <wx/toolbar.h>
+
+namespace {
+std::string GetSpectrumChannelLabel(int channel, int total_channels) {
+	if (total_channels == 1)
+		return "M";
+	if (total_channels == 2)
+		return channel == 0 ? "L" : "R";
+	if (total_channels == 6) {
+		static const char *labels[] = {"FL", "FR", "FC", "LFE", "SL", "SR"};
+		if (channel >= 0 && channel < 6)
+			return labels[channel];
+	}
+	if (total_channels == 8) {
+		static const char *labels[] = {"FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"};
+		if (channel >= 0 && channel < 8)
+			return labels[channel];
+	}
+	return "CH" + std::to_string(channel + 1);
+}
+}
 
 enum {
 	Audio_Horizontal_Zoom = 1600,
 	Audio_Vertical_Zoom,
-	Audio_Volume
+	Audio_Volume,
+	Audio_SpectrumChannel,
 };
 
 AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
@@ -92,6 +117,12 @@ AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 	VertVolArea->Add(link_btn, 0, wxRIGHT | wxEXPAND, 0);
 	OPT_SUB("Audio/Link", &AudioBox::OnVerticalLink, this);
 
+	spectrum_channel_btn = new wxButton(panel, Audio_SpectrumChannel, _("CH"), wxDefaultPosition, wxSize(20, -1), wxBU_EXACTFIT);
+	spectrum_channel_btn->SetToolTip(_("Spectrum channel display mode"));
+	spectrum_channel_btn->Enable(OPT_GET("Audio/Spectrum")->GetBool());
+	VertVolArea->Add(spectrum_channel_btn, 0, wxEXPAND, 0);
+	OPT_SUB("Audio/Spectrum", &AudioBox::OnSpectrumModeChange, this);
+
 	// Top sizer
 	wxSizer *TopSizer = new wxBoxSizer(wxHORIZONTAL);
 	TopSizer->Add(audioDisplay,1,wxEXPAND,0);
@@ -126,6 +157,7 @@ BEGIN_EVENT_TABLE(AudioBox,wxSashWindow)
 	EVT_COMMAND_SCROLL(Audio_Horizontal_Zoom, AudioBox::OnHorizontalZoom)
 	EVT_COMMAND_SCROLL(Audio_Vertical_Zoom, AudioBox::OnVerticalZoom)
 	EVT_COMMAND_SCROLL(Audio_Volume, AudioBox::OnVolume)
+	EVT_BUTTON(Audio_SpectrumChannel, AudioBox::OnSpectrumChannelBtn)
 END_EVENT_TABLE()
 
 void AudioBox::OnMouseWheel(wxMouseEvent &evt) {
@@ -298,6 +330,72 @@ void AudioBox::OnAudioOpen() {
 	controller->SetVolume(pow(mid(1, VolumeBar->GetValue(), 100) / 50.0, 3));
 	audioDisplay->SetInteractivePrefetchEnabled(true);
 	spectrum_prefetch_temporarily_disabled = false;
+	if (spectrum_channel_btn)
+		spectrum_channel_btn->Enable(OPT_GET("Audio/Spectrum")->GetBool());
+}
+
+void AudioBox::OnSpectrumModeChange(agi::OptionValue const& opt) {
+	if (spectrum_channel_btn)
+		spectrum_channel_btn->Enable(opt.GetBool());
+}
+
+void AudioBox::OnSpectrumChannelBtn(wxCommandEvent &) {
+	const auto current_mode = audioDisplay->GetSpectrumChannelMode();
+	const int channels = std::max(1, audioDisplay->GetProviderChannels());
+	std::vector<int> selected = audioDisplay->GetSpectrumSelectedChannels();
+	if (selected.empty()) {
+		selected.reserve(channels);
+		for (int ch = 0; ch < channels; ++ch)
+			selected.push_back(ch);
+	}
+
+	enum { ID_MONO = wxID_HIGHEST + 2000, ID_SPLIT, ID_CH_BASE = wxID_HIGHEST + 2100 };
+	wxMenu menu;
+	menu.AppendRadioItem(ID_MONO,  _("Mono mix"))->Check(current_mode == AudioSpectrumChannelMode::MonoMix);
+	menu.AppendRadioItem(ID_SPLIT, _("Split channels"))->Check(current_mode == AudioSpectrumChannelMode::ChannelSplit);
+
+	wxMenu *split_menu = new wxMenu();
+	for (int ch = 0; ch < channels; ++ch) {
+		const int id = ID_CH_BASE + ch;
+		const auto label = wxString::FromUTF8(GetSpectrumChannelLabel(ch, channels));
+		const bool checked = std::find(selected.begin(), selected.end(), ch) != selected.end();
+		split_menu->AppendCheckItem(id, label)->Check(checked);
+	}
+	menu.AppendSubMenu(split_menu, _("Split: visible channels"));
+
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		audioDisplay->SetSpectrumChannelMode(AudioSpectrumChannelMode::MonoMix);
+	}, ID_MONO);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		audioDisplay->SetSpectrumChannelMode(AudioSpectrumChannelMode::ChannelSplit);
+	}, ID_SPLIT);
+
+	for (int ch = 0; ch < channels; ++ch) {
+		const int id = ID_CH_BASE + ch;
+		menu.Bind(wxEVT_MENU, [this, ch, channels](wxCommandEvent &e) {
+			audioDisplay->SetSpectrumChannelMode(AudioSpectrumChannelMode::ChannelSplit);
+			auto cur = audioDisplay->GetSpectrumSelectedChannels();
+			if (cur.empty()) {
+				cur.reserve(channels);
+				for (int i = 0; i < channels; ++i)
+					cur.push_back(i);
+			}
+			auto it = std::find(cur.begin(), cur.end(), ch);
+			if (e.IsChecked()) {
+				if (it == cur.end())
+					cur.push_back(ch);
+			}
+			else if (it != cur.end()) {
+				cur.erase(it);
+			}
+			if (cur.empty())
+				cur.push_back(ch);
+			std::sort(cur.begin(), cur.end());
+			cur.erase(std::unique(cur.begin(), cur.end()), cur.end());
+			audioDisplay->SetSpectrumSelectedChannels(cur);
+		}, id);
+	}
+	PopupMenu(&menu);
 }
 
 void AudioBox::ShowKaraokeBar(bool show) {

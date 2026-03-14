@@ -36,8 +36,8 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/io.h>
 #include <libaegisub/line_wrap.h>
+#include <libaegisub/string_utils.h>
 
-#include <boost/algorithm/string/replace.hpp>
 #include <wx/utils.h>
 
 namespace
@@ -266,7 +266,7 @@ namespace
 					{
 						std::string text = b->GetText();
 
-						boost::replace_all(text, "\\t", " ");
+						agi::util::strings::replace_all_inplace(text, "\\t", " ");
 
 						size_t start = 0;
 						for (size_t i = 0; i < text.size(); ++i)
@@ -302,7 +302,7 @@ namespace
 
 						// convert \h to regular spaces
 						// done after parsing so that words aren't split on \h
-						boost::replace_all(cur_row->back().text, "\\h", " ");
+						agi::util::strings::replace_all_inplace(cur_row->back().text, "\\h", " ");
 					}
 					break;
 

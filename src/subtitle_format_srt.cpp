@@ -43,11 +43,8 @@
 
 #include <libaegisub/format.h>
 #include <libaegisub/of_type_adaptor.h>
+#include <libaegisub/string_utils.h>
 
-#include <boost/algorithm/string/case_conv.hpp>
-#include <boost/algorithm/string/predicate.hpp>
-#include <boost/algorithm/string/replace.hpp>
-#include <boost/algorithm/string/trim.hpp>
 #include <boost/regex.hpp>
 
 DEFINE_EXCEPTION(SRTParseError, SubtitleFormatParseError);
@@ -169,7 +166,7 @@ public:
 			// the text after the tag is the input for next iteration
 			srt = post_text;
 
-			boost::to_lower(tag_name);
+			agi::util::strings::to_lower_inplace(tag_name);
 			switch (type_from_name(tag_name))
 			{
 			case TagType::BOLD_OPEN:       bold.Open(ass);       break;
@@ -198,7 +195,7 @@ public:
 						std::string attr_value = result.str(2);
 
 						// clean them
-						boost::to_lower(attr_name);
+						agi::util::strings::to_lower_inplace(attr_name);
 						if (regex_match(attr_value, is_quoted))
 							attr_value = attr_value.substr(1, attr_value.size() - 2);
 
@@ -271,7 +268,7 @@ public:
 		}
 
 		// make it a little prettier, join tag groups
-		boost::replace_all(ass, "}{", "");
+		agi::util::strings::replace_all_inplace(ass, "}{", "");
 
 		return ass;
 	}
@@ -326,7 +323,7 @@ void SRTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename,
 	while (file.HasMoreLines()) {
 		std::string text_line = file.ReadLineFromFile();
 		++line_num;
-		boost::trim(text_line);
+		agi::util::strings::trim_inplace(text_line);
 
 		boost::smatch timestamp_match;
 		bool found_timestamps = false;
@@ -334,7 +331,7 @@ void SRTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename,
 			case ParseState::INITIAL:
 				// ignore leading blank lines
 				if (text_line.empty()) break;
-				if (all(text_line, boost::is_digit())) {
+				if (std::all_of(text_line.begin(), text_line.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; })) {
 					// found the line number, throw it away and hope for timestamps
 					state = ParseState::TIMESTAMP;
 					break;
@@ -381,7 +378,7 @@ void SRTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename,
 			case ParseState::LAST_WAS_BLANK:
 				++linebreak_debt;
 				if (text_line.empty()) break;
-				if (all(text_line, boost::is_digit())) {
+				if (std::all_of(text_line.begin(), text_line.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; })) {
 					// Hopefully it's the start of a new subtitle, and the
 					// previous blank line(s) were the gap between subtitles
 					state = ParseState::TIMESTAMP;

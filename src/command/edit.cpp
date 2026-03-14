@@ -53,9 +53,10 @@
 #include <libaegisub/address_of_adaptor.h>
 #include <libaegisub/of_type_adaptor.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/string_utils.h>
 
 #include <algorithm>
-#include <boost/algorithm/string.hpp>
+#include <boost/algorithm/string/join.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/indirected.hpp>
@@ -96,7 +97,7 @@ struct validate_sel_multiple : public Command {
 
 template<typename String>
 AssDialogue *get_dialogue(String data) {
-	boost::trim(data);
+	agi::util::strings::trim_inplace(data);
 	try {
 		// Try to interpret the line as an ASS line
 		return new AssDialogue(data);
@@ -815,13 +816,13 @@ struct edit_line_join_keep_first final : public validate_sel_multiple {
 
 static bool try_paste_lines(agi::Context *c) {
 	std::string data = GetClipboard();
-	boost::trim_left(data);
-	if (!boost::starts_with(data, "Dialogue:")) return false;
+	agi::util::strings::trim_left_inplace(data);
+	if (!agi::util::strings::starts_with(data, "Dialogue:")) return false;
 
 	EntryList<AssDialogue> parsed;
 	boost::char_separator<char> sep("\r\n");
 	for (auto curdata : boost::tokenizer<boost::char_separator<char>>(data, sep)) {
-		boost::trim(curdata);
+		agi::util::strings::trim_inplace(curdata);
 		try {
 			parsed.push_back(*new AssDialogue(curdata));
 		}
@@ -942,7 +943,7 @@ void expand_times(AssDialogue *src, AssDialogue *dst) {
 }
 
 bool check_start(AssDialogue *d1, AssDialogue *d2) {
-	if (boost::starts_with(d1->Text.get(), d2->Text.get())) {
+	if (agi::util::strings::starts_with(d1->Text.get(), d2->Text.get())) {
 		d1->Text = trim_text(d1->Text.get().substr(d2->Text.get().size()));
 		expand_times(d1, d2);
 		return true;
@@ -951,7 +952,7 @@ bool check_start(AssDialogue *d1, AssDialogue *d2) {
 }
 
 bool check_end(AssDialogue *d1, AssDialogue *d2) {
-	if (boost::ends_with(d1->Text.get(), d2->Text.get())) {
+	if (agi::util::strings::ends_with(d1->Text.get(), d2->Text.get())) {
 		d1->Text = trim_text(d1->Text.get().substr(0, d1->Text.get().size() - d2->Text.get().size()));
 		expand_times(d1, d2);
 		return true;
@@ -1094,8 +1095,8 @@ void split_lines(agi::Context *c, AssDialogue *&n1, AssDialogue *&n2) {
 	c->ass->Events.insert(++c->ass->iterator_to(*n1), *n2);
 
 	std::string orig = n1->Text;
-	n1->Text = boost::trim_right_copy(orig.substr(0, pos));
-	n2->Text = boost::trim_left_copy(orig.substr(pos));
+	n1->Text = agi::util::strings::trim_right_copy(orig.substr(0, pos));
+	n2->Text = agi::util::strings::trim_left_copy(orig.substr(pos));
 }
 
 template<typename Func>

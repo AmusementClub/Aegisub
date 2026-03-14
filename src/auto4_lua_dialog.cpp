@@ -43,6 +43,7 @@
 #include <libaegisub/lua/utils.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/split.h>
+#include <libaegisub/string_utils.h>
 
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/range/adaptor/map.hpp>
@@ -387,7 +388,7 @@ namespace Automation4 {
 				error(L, "bad control table entry");
 
 			std::string controlclass = get_field(L, "class");
-			boost::to_lower(controlclass);
+			agi::util::strings::to_lower_inplace(controlclass);
 
 			std::unique_ptr<LuaDialogControl> ctl;
 

@@ -42,8 +42,7 @@
 #include "text_file_writer.h"
 #include "version.h"
 
-#include <boost/algorithm/string/predicate.hpp>
-#include <boost/algorithm/string/trim.hpp>
+#include <libaegisub/string_utils.h>
 
 TXTSubtitleFormat::TXTSubtitleFormat()
 : SubtitleFormat("Plain-Text")
@@ -60,7 +59,8 @@ std::vector<std::string> TXTSubtitleFormat::GetWriteWildcards() const {
 
 bool TXTSubtitleFormat::CanWriteFile(agi::fs::path const& filename) const {
 	auto str = filename.string();
-	return boost::iends_with(str, ".txt") && !(boost::iends_with(str, ".encore.txt") || boost::iends_with(str, ".transtation.txt"));
+	return agi::util::strings::iends_with(str, ".txt")
+		&& !(agi::util::strings::iends_with(str, ".encore.txt") || agi::util::strings::iends_with(str, ".transtation.txt"));
 }
 
 void TXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding) const {
@@ -80,12 +80,12 @@ void TXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename,
 		if (value.empty() && !OPT_GET("Tool/Import/Text/Include Blank")->GetBool()) continue;
 
 		// Check if this isn't a timecodes file
-		if (boost::starts_with(value, "# timecode"))
+		if (agi::util::strings::starts_with(value, "# timecode"))
 			throw SubtitleFormatParseError("File is a timecode file, cannot load as subtitles.");
 
 		// Read comment data
 		bool isComment = false;
-		if (!comment.empty() && boost::starts_with(value, comment)) {
+		if (!comment.empty() && agi::util::strings::starts_with(value, comment)) {
 			isComment = true;
 			value.erase(0, comment.size());
 		}
@@ -96,14 +96,14 @@ void TXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename,
 				size_t pos = value.find(separator);
 				if (pos != std::string::npos) {
 					actor = value.substr(0, pos);
-					boost::trim(actor);
+					agi::util::strings::trim_inplace(actor);
 					value.erase(0, pos + 1);
 				}
 			}
 		}
 
 		// Trim spaces at start
-		boost::trim_left(value);
+		agi::util::strings::trim_left_inplace(value);
 
 		if (value.empty())
 			isComment = true;

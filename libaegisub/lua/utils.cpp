@@ -18,9 +18,9 @@
 
 #include "libaegisub/format.h"
 #include "libaegisub/log.h"
+#include "libaegisub/string_utils.h"
 
 #include <boost/algorithm/string/join.hpp>
-#include <boost/algorithm/string/predicate.hpp>
 #include <boost/range/adaptor/reversed.hpp>
 #include <boost/regex.hpp>
 
@@ -157,7 +157,7 @@ int add_stack_trace(lua_State *L) {
 			std::string file = ar.source;
 			if (file == "=[C]")
 				file = "<C function>";
-			else if (boost::ends_with(file, ".moon"))
+			else if (agi::util::strings::ends_with(file, ".moon"))
 				is_moon = true;
 
 			auto real_line = [&](int line) {

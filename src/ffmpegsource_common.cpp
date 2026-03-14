@@ -46,8 +46,8 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/path.h>
+#include <libaegisub/string_utils.h>
 
-#include <boost/algorithm/string/case_conv.hpp>
 #include <boost/crc.hpp>
 #include <boost/filesystem/path.hpp>
 #include <memory>
@@ -252,7 +252,7 @@ FFmpegSourceProvider::AskForTrackSelection(const std::map<int, std::string> &Tra
 /// @brief Set ffms2 log level according to setting in config.dat
 void FFmpegSourceProvider::SetLogLevel() {
 	auto LogLevel = OPT_GET("Provider/FFmpegSource/Log Level")->GetString();
-	boost::to_lower(LogLevel);
+	agi::util::strings::to_lower_inplace(LogLevel);
 
 	if (LogLevel == "panic")
 		ffms::SetLogLevel(FFMS_LOG_PANIC);
@@ -274,7 +274,7 @@ void FFmpegSourceProvider::SetLogLevel() {
 
 FFMS_IndexErrorHandling FFmpegSourceProvider::GetErrorHandlingMode() {
 	auto Mode = OPT_GET("Provider/Audio/FFmpegSource/Decode Error Handling")->GetString();
-	boost::to_lower(Mode);
+	agi::util::strings::to_lower_inplace(Mode);
 
 	if (Mode == "ignore")
 		return FFMS_IEH_IGNORE;

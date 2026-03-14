@@ -43,8 +43,7 @@
 #include <libaegisub/line_iterator.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
-
-#include <boost/algorithm/string/predicate.hpp>
+#include <libaegisub/string_utils.h>
 
 AssStyleStorage::~AssStyleStorage() { }
 void AssStyleStorage::clear() { style.clear(); }
@@ -99,7 +98,7 @@ std::vector<std::string> AssStyleStorage::GetNames() {
 
 AssStyle *AssStyleStorage::GetStyle(std::string const& name) {
 	for (auto& cur : style) {
-		if (boost::iequals(cur->name, name))
+		if (agi::util::strings::iequals(cur->name, name))
 			return cur.get();
 	}
 	return nullptr;

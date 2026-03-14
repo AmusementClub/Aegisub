@@ -19,9 +19,7 @@
 #include "ass_dialogue.h"
 
 #include <libaegisub/format.h>
-
-#include <boost/algorithm/string/predicate.hpp>
-#include <boost/algorithm/string/trim.hpp>
+#include <libaegisub/string_utils.h>
 
 std::string AssKaraoke::Syllable::GetText(bool k_tag) const {
 	std::string ret;
@@ -105,7 +103,7 @@ void AssKaraoke::ParseSyllables(const AssDialogue *line, Syllable &syl) {
 			auto ovr = static_cast<AssDialogueBlockOverride*>(block.get());
 			bool in_tag = false;
 			for (auto& tag : ovr->Tags) {
-				if (tag.IsValid() && boost::istarts_with(tag.Name, "\\k")) {
+				if (tag.IsValid() && agi::util::strings::istarts_with(tag.Name, "\\k")) {
 					if (in_tag) {
 						syl.ovr_tags[syl.text.size()] += "}";
 						in_tag = false;
@@ -129,7 +127,8 @@ void AssKaraoke::ParseSyllables(const AssDialogue *line, Syllable &syl) {
 				else {
 					std::string& otext = syl.ovr_tags[syl.text.size()];
 					// Merge adjacent override tags
-					boost::trim_right_if(text, [](char c) { return c == '}'; });
+					while (!text.empty() && text.back() == '}')
+						text.pop_back();
 					if (!in_tag)
 						otext += "{";
 

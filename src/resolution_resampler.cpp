@@ -24,6 +24,7 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/of_type_adaptor.h>
 #include <libaegisub/split.h>
+#include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 #include <libaegisub/ycbcr_conv.h>
 
@@ -157,7 +158,7 @@ namespace {
 	}
 
 	void resample_line(resample_state *state, AssDialogue &diag) {
-		if (diag.Comment && (boost::starts_with(diag.Effect.get(), "template") || boost::starts_with(diag.Effect.get(), "code")))
+		if (diag.Comment && (agi::util::strings::starts_with(diag.Effect.get(), "template") || agi::util::strings::starts_with(diag.Effect.get(), "code")))
 			return;
 
 		auto blocks = diag.ParseTags();

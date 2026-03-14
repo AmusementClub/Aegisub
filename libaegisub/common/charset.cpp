@@ -20,10 +20,10 @@
 
 #include "libaegisub/file_mapping.h"
 #include "libaegisub/scoped_ptr.h"
+#include "libaegisub/string_utils.h"
 
 #ifdef WITH_UCHARDET
 #include <uchardet/uchardet.h>
-#include <boost/algorithm/string/case_conv.hpp>
 #endif
 
 namespace agi { namespace charset {
@@ -63,7 +63,7 @@ std::string Detect(agi::fs::path const& file) {
 
 	// uchardet does not tell us the byte order of UTF-16 / UTF-32, so do it ourself
 	std::string encoding_lower{ encoding };
-	boost::to_lower(encoding_lower);
+	agi::util::strings::to_lower_inplace(encoding_lower);
 	if (encoding_lower == "utf-16") {
 		uint64_t le_score = 0, be_score = 0;
 		for (uint64_t offset = 0; offset < fp.size(); ) {

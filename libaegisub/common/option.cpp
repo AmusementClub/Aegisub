@@ -29,8 +29,8 @@
 #include "libaegisub/log.h"
 #include "libaegisub/option_value.h"
 #include "libaegisub/make_unique.h"
+#include "libaegisub/string_utils.h"
 
-#include <boost/algorithm/string/predicate.hpp>
 #include <boost/interprocess/streams/bufferstream.hpp>
 #include <cassert>
 #include <memory>
@@ -118,8 +118,8 @@ class ConfigVisitor final : public json::ConstVisitor {
 		size_t size = string.size();
 		if ((size == 4 && string[0] == '#') ||
 			(size == 7 && string[0] == '#') ||
-			(size >= 10 && boost::starts_with(string, "rgb(")) ||
-			((size == 9 || size == 10) && boost::starts_with(string, "&H")))
+			(size >= 10 && agi::util::strings::starts_with(string, "rgb(")) ||
+			((size == 9 || size == 10) && agi::util::strings::starts_with(string, "&H")))
 		{
 			values.push_back(agi::make_unique<OptionValueColor>(name, string));
 		} else {

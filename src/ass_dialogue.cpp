@@ -38,11 +38,9 @@
 #include <libaegisub/of_type_adaptor.h>
 #include <libaegisub/split.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/string_utils.h>
 
-#include <boost/algorithm/string/predicate.hpp>
 #include <boost/algorithm/string/join.hpp>
-#include <boost/algorithm/string/trim.hpp>
-#include <boost/lexical_cast.hpp>
 #include <boost/regex.hpp>
 #include <boost/spirit/include/karma_generate.hpp>
 #include <boost/spirit/include/karma_int.hpp>
@@ -85,16 +83,16 @@ public:
 	}
 
 	std::string next_str() { return agi::str(next_tok()); }
-	std::string next_str_trim() { return agi::str(boost::trim_copy(next_tok())); }
+	std::string next_str_trim() { return agi::util::strings::trim_copy(agi::str(next_tok())); }
 };
 
 void AssDialogue::Parse(std::string const& raw) {
 	agi::StringRange str;
-	if (boost::starts_with(raw, "Dialogue:")) {
+	if (agi::util::strings::starts_with(raw, "Dialogue:")) {
 		Comment = false;
 		str = agi::StringRange(raw.begin() + 10, raw.end());
 	}
-	else if (boost::starts_with(raw, "Comment:")) {
+	else if (agi::util::strings::starts_with(raw, "Comment:")) {
 		Comment = true;
 		str = agi::StringRange(raw.begin() + 9, raw.end());
 	}
@@ -105,20 +103,23 @@ void AssDialogue::Parse(std::string const& raw) {
 
 	// Get first token and see if it has "Marked=" in it
 	auto tmp = tkn.next_str_trim();
-	bool ssa = boost::istarts_with(tmp, "marked=");
+	bool ssa = agi::util::strings::istarts_with(tmp, "marked=");
 
 	// Get layer number
 	if (ssa)
 		Layer = 0;
-	else
-		Layer = boost::lexical_cast<int>(tmp);
+	else if (!agi::util::strings::parse_integer(tmp, Layer))
+		throw SubtitleFormatParseError("Failed parsing line: " + raw);
 
 	Start = tkn.next_str_trim();
 	End = tkn.next_str_trim();
 	Style = tkn.next_str_trim();
 	Actor = tkn.next_str_trim();
-	for (int& margin : Margin)
-		margin = mid(-9999, boost::lexical_cast<int>(tkn.next_str()), 99999);
+	for (int& margin : Margin) {
+		if (!agi::util::strings::parse_integer(tkn.next_str(), margin))
+			throw SubtitleFormatParseError("Failed parsing line: " + raw);
+		margin = mid(-9999, margin, 99999);
+	}
 	Effect = tkn.next_str_trim();
 
 	std::string text{tkn.next_tok().begin(), str.end()};
@@ -135,7 +136,9 @@ void AssDialogue::Parse(std::string const& raw) {
 			auto end = extradata_str.end();
 			std::vector<uint32_t> ids;
 			while (boost::regex_search(start, end, rematch, idmatcher)) {
-				auto id = boost::lexical_cast<uint32_t>(rematch.str(1));
+				uint32_t id = 0;
+				if (!agi::util::strings::parse_integer(rematch.str(1), id))
+					throw SubtitleFormatParseError("Failed parsing line: " + raw);
 				ids.push_back(id);
 				start = rematch.suffix().first;
 			}

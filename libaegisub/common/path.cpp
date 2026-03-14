@@ -17,8 +17,8 @@
 #include "libaegisub/path.h"
 
 #include "libaegisub/fs.h"
+#include "libaegisub/string_utils.h"
 
-#include <boost/algorithm/string/predicate.hpp>
 #include <boost/range/distance.hpp>
 
 namespace {
@@ -78,7 +78,7 @@ fs::path Path::MakeRelative(fs::path const& path, fs::path const& base) const {
 	if (path.empty() || base.empty()) return path;
 
 	const auto str = path.string();
-	if (boost::starts_with(str, "?dummy") || boost::starts_with(str, "dummy-audio:"))
+	if (agi::util::strings::starts_with(str, "?dummy") || agi::util::strings::starts_with(str, "dummy-audio:"))
 		return path;
 
 	// Paths on different volumes can't be made relative to each other
@@ -105,7 +105,7 @@ fs::path Path::MakeAbsolute(fs::path path, std::string const& token) const {
 
 	path.make_preferred();
 	const auto str = path.string();
-	if (boost::starts_with(str, "?dummy") || boost::starts_with(str, "dummy-audio:"))
+	if (agi::util::strings::starts_with(str, "?dummy") || agi::util::strings::starts_with(str, "dummy-audio:"))
 		return path;
 	return (paths[idx].empty() || path.is_absolute()) ? path : paths[idx]/path;
 }

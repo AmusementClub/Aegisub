@@ -43,10 +43,9 @@
 #include <libaegisub/fs.h>
 #include <libaegisub/path.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/string_utils.h>
 #include <libaegisub/split.h>
 
-#include <boost/algorithm/string/replace.hpp>
-#include <boost/algorithm/string/trim.hpp>
 #include <future>
 
 #include <wx/dcmemory.h>
@@ -373,7 +372,7 @@ namespace Automation4 {
 		auto autobasefn(OPT_GET("Path/Automation/Base")->GetString());
 
 		for (auto tok : agi::Split(local_scripts, '|')) {
-			tok = boost::trim_copy(tok);
+			tok = agi::util::strings::trim_copy(agi::str(tok));
 			if (boost::size(tok) == 0) continue;
 			char first_char = tok[0];
 			std::string trimmed(begin(tok) + 1, end(tok));
@@ -486,7 +485,7 @@ namespace Automation4 {
 				continue;
 
 			std::string filter(fact->GetFilenamePattern());
-			boost::replace_all(filter, ",", ";");
+			agi::util::strings::replace_all_inplace(filter, ",", ";");
 			fnfilter += agi::format("%s scripts (%s)|%s|", fact->GetEngineName(), fact->GetFilenamePattern(), filter);
 			catchall += filter + ";";
 		}

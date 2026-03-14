@@ -40,10 +40,10 @@
 #include <libaegisub/file_mapping.h>
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 #include <libaegisub/ycbcr_conv.h>
 
-#include <boost/algorithm/string/case_conv.hpp>
 #include <memory>
 #include <vector>
 
@@ -277,7 +277,7 @@ void YUV4MPEGVideoProvider::ParseFileHeader(const std::vector<std::string>& tags
 		else if (type == 'C') {
 			// technically this should probably be case sensitive,
 			// but being liberal in what you accept doesn't hurt
-			boost::to_lower(tag);
+			agi::util::strings::to_lower_inplace(tag);
 			if (tag == "420")			t_pixfmt = Y4M_PIXFMT_420JPEG; // is this really correct?
 			else if (tag == "420jpeg")	t_pixfmt = Y4M_PIXFMT_420JPEG;
 			else if (tag == "420mpeg2")	t_pixfmt = Y4M_PIXFMT_420MPEG2;
@@ -291,7 +291,7 @@ void YUV4MPEGVideoProvider::ParseFileHeader(const std::vector<std::string>& tags
 				err = "invalid or unknown colorspace";
 		}
 		else if (type == 'I') {
-			boost::to_lower(tag);
+			agi::util::strings::to_lower_inplace(tag);
 			if (tag == "p")			t_imode = Y4M_ILACE_PROGRESSIVE;
 			else if (tag == "t")	t_imode = Y4M_ILACE_TFF;
 			else if (tag == "b")	t_imode = Y4M_ILACE_BFF;

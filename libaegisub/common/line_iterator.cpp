@@ -14,8 +14,7 @@
 
 #include <libaegisub/line_iterator.h>
 #include <libaegisub/charset_conv.h>
-
-#include <boost/algorithm/string/case_conv.hpp>
+#include <libaegisub/string_utils.h>
 
 namespace agi {
 
@@ -23,7 +22,7 @@ line_iterator_base::line_iterator_base(std::istream &stream, std::string encodin
 : stream(&stream)
 {
 	std::string encoding_lower{ encoding };
-	boost::to_lower(encoding_lower);
+	agi::util::strings::to_lower_inplace(encoding_lower);
 	if (encoding_lower != "utf-8") {
 		agi::charset::IconvWrapper c("utf-8", encoding.c_str());
 		c.Convert("\r", 1, reinterpret_cast<char *>(&cr), sizeof(int));

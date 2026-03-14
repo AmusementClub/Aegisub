@@ -20,8 +20,8 @@
 #include "libaegisub/log.h"
 #include "libaegisub/lua/utils.h"
 #include "libaegisub/split.h"
+#include "libaegisub/string_utils.h"
 
-#include <boost/algorithm/string/replace.hpp>
 #include <lauxlib.h>
 
 namespace agi { namespace lua {
@@ -75,7 +75,7 @@ namespace agi { namespace lua {
 	static int module_loader(lua_State *L) {
 		int pretop = lua_gettop(L);
 		std::string module(check_string(L, -1));
-		boost::replace_all(module, ".", LUA_DIRSEP);
+		agi::util::strings::replace_all_inplace(module, ".", LUA_DIRSEP);
 
 		// Get the lua package include path (which the user may have modified)
 		lua_getglobal(L, "package");
@@ -84,8 +84,7 @@ namespace agi { namespace lua {
 		lua_pop(L, 2);
 
 		for (auto tok : agi::Split(package_paths, ';')) {
-			std::string filename;
-			boost::replace_all_copy(std::back_inserter(filename), tok, "?", module);
+			std::string filename = agi::util::strings::replace_all_copy(agi::str(tok), "?", module);
 
 			// If there's a .moon file at that path, load it instead of the
 			// .lua file

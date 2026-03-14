@@ -61,6 +61,7 @@
 #include <libaegisub/lua/utils.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
+#include <libaegisub/string_utils.h>
 
 #include <algorithm>
 #include <boost/algorithm/string/case_conv.hpp>
@@ -235,7 +236,7 @@ namespace {
 		{
 			lua_getfield(L, 1, "class");
 			std::string actual_class{lua_tostring(L, -1)};
-			boost::to_lower(actual_class);
+			agi::util::strings::to_lower_inplace(actual_class);
 			if (actual_class != "style")
 				return error(L, "Not a style entry");
 			lua_pop(L, 1);

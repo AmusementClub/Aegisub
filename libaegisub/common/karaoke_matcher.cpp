@@ -17,10 +17,9 @@
 #include "libaegisub/karaoke_matcher.h"
 
 #include "libaegisub/kana_table.h"
+#include "libaegisub/string_utils.h"
 #include "libaegisub/util.h"
 
-#include <boost/algorithm/string/case_conv.hpp>
-#include <boost/algorithm/string/predicate.hpp>
 #include <boost/locale/boundary.hpp>
 #include <boost/locale/collator.hpp>
 #include <boost/range/algorithm/copy.hpp>
@@ -62,11 +61,10 @@ karaoke_match_result auto_match_karaoke(std::vector<std::string> const& source_s
 	if (source_strings.empty()) return result;
 
 	using namespace boost::locale::boundary;
-	using boost::starts_with;
 
 	result.source_length = 1;
 	ssegment_index destination_characters(character, begin(dest_string), end(dest_string));
-	auto src = boost::to_lower_copy(source_strings[0]);
+	auto src = agi::util::strings::to_lower_copy(source_strings[0]);
 	auto dst = destination_characters.begin();
 	auto dst_end = destination_characters.end();
 
@@ -112,7 +110,7 @@ karaoke_match_result auto_match_karaoke(std::vector<std::string> const& source_s
 		}
 
 		auto check = [&](kana_pair const& kp) -> bool {
-			if (!starts_with(&*dst->begin(), kp.kana)) return false;
+			if (!agi::util::strings::starts_with(&*dst->begin(), kp.kana)) return false;
 
 			src = src.substr(strlen(kp.romaji));
 			for (size_t i = 0; kp.kana[i]; ) {
@@ -179,8 +177,8 @@ karaoke_match_result auto_match_karaoke(std::vector<std::string> const& source_s
 			if (++src_lookahead_pos == 1) continue;
 			if (src_lookahead_pos > src_lookahead_max) break;
 
-			std::string lsyl = boost::to_lower_copy(syl);
-			if (!(starts_with(syl, dst->str()) || util::any_of(translit, [&](const char *str) { return starts_with(lsyl, str); })))
+			std::string lsyl = agi::util::strings::to_lower_copy(syl);
+			if (!(agi::util::strings::starts_with(syl, dst->str()) || util::any_of(translit, [&](const char *str) { return agi::util::strings::starts_with(lsyl, str); })))
 				continue;
 
 			// The syllable immediately after the current one matched, so

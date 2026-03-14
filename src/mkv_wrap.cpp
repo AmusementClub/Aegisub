@@ -45,9 +45,9 @@
 #include <libaegisub/file_mapping.h>
 #include <libaegisub/format.h>
 #include <libaegisub/scoped_ptr.h>
+#include <libaegisub/string_utils.h>
 
 #include <algorithm>
-#include <boost/algorithm/string/replace.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/range/irange.hpp>
 #include <boost/tokenizer.hpp>
@@ -156,9 +156,9 @@ static void read_subtitles(agi::ProgressSink *ps, MatroskaFile *file, MkvStdIO *
 				, subStart.GetAssFormatted()
 				, subEnd.GetAssFormatted()
 				, str_range(readBuf, readBufEnd));
-			boost::replace_all(line, "\r\n", "\\N");
-			boost::replace_all(line, "\r", "\\N");
-			boost::replace_all(line, "\n", "\\N");
+			agi::util::strings::replace_all_inplace(line, "\r\n", "\\N");
+			agi::util::strings::replace_all_inplace(line, "\r", "\\N");
+			agi::util::strings::replace_all_inplace(line, "\n", "\\N");
 
 			subList.emplace_back(subList.size(), std::move(line));
 		}

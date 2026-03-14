@@ -42,10 +42,10 @@
 #include "video_controller.h"
 
 #include <libaegisub/make_unique.h>
+#include <libaegisub/string_utils.h>
 
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/predicate.hpp>
-#include <boost/algorithm/string/replace.hpp>
 
 #include <wx/checkbox.h>
 #include <wx/msgdlg.h>
@@ -314,9 +314,9 @@ void DialogTranslation::Commit(bool next) {
 #ifdef WITH_WXSTC
 	}
 #endif
-	boost::replace_all(new_value, "\r\n", "\\N");
-	boost::replace_all(new_value, "\r", "\\N");
-	boost::replace_all(new_value, "\n", "\\N");
+	agi::util::strings::replace_all_inplace(new_value, "\r\n", "\\N");
+	agi::util::strings::replace_all_inplace(new_value, "\r", "\\N");
+	agi::util::strings::replace_all_inplace(new_value, "\n", "\\N");
 	*blocks[cur_block] = AssDialogueBlockPlain(new_value);
 	active_line->UpdateText(blocks);
 

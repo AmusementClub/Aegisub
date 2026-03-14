@@ -40,9 +40,9 @@
 #include <libaegisub/color.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/split.h>
+#include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 
-#include <boost/algorithm/string/predicate.hpp>
 #include <boost/filesystem/path.hpp>
 #include <libaegisub/format.h>
 #if BOOST_VERSION >= 106900
@@ -105,7 +105,7 @@ void DummyVideoProvider::GetFrame(int, VideoFrame &frame) {
 
 namespace agi { class BackgroundRunner; }
 std::unique_ptr<VideoProvider> CreateDummyVideoProvider(agi::fs::path const& filename, std::string const&, agi::BackgroundRunner *) {
-	if (!boost::starts_with(filename.string(), "?dummy"))
+	if (!agi::util::strings::starts_with(filename.string(), "?dummy"))
 		return {};
 
 	std::vector<std::string> toks;

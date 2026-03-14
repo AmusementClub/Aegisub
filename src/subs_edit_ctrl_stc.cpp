@@ -46,9 +46,9 @@
 #include <libaegisub/character_count.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/spellchecker.h>
+#include <libaegisub/string_utils.h>
 
 #include <boost/algorithm/string/predicate.hpp>
-#include <boost/algorithm/string/replace.hpp>
 #include <functional>
 
 #include <wx/clipbrd.h>
@@ -273,7 +273,7 @@ void SubsStyledTextEditCtrl::SetStyles() {
 
 void SubsStyledTextEditCtrl::UpdateStyle() {
 	AssDialogue *diag = context ? context->selectionController->GetActiveLine() : nullptr;
-	bool template_line = diag && diag->Comment && boost::istarts_with(diag->Effect.get(), "template");
+	bool template_line = diag && diag->Comment && agi::util::strings::istarts_with(diag->Effect.get(), "template");
 
 	tokenized_line = agi::ass::TokenizeDialogueBody(line_text, template_line);
 	agi::ass::SplitWords(line_text, tokenized_line);
@@ -362,9 +362,9 @@ void SubsStyledTextEditCtrl::SetTextTo(std::string const& text) {
 void SubsStyledTextEditCtrl::Paste() {
 	std::string data = GetClipboard();
 
-	boost::replace_all(data, "\r\n", "\\N");
-	boost::replace_all(data, "\n", "\\N");
-	boost::replace_all(data, "\r", "\\N");
+	agi::util::strings::replace_all_inplace(data, "\r\n", "\\N");
+	agi::util::strings::replace_all_inplace(data, "\n", "\\N");
+	agi::util::strings::replace_all_inplace(data, "\r", "\\N");
 
 	wxCharBuffer old = GetTextRaw();
 	data.insert(0, old.data(), GetSelectionStart());

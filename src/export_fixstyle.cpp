@@ -39,7 +39,7 @@
 #include "compat.h"
 
 #include <algorithm>
-#include <boost/algorithm/string/case_conv.hpp>
+#include <libaegisub/string_utils.h>
 #include <wx/intl.h>
 
 AssFixStylesFilter::AssFixStylesFilter()
@@ -49,11 +49,11 @@ AssFixStylesFilter::AssFixStylesFilter()
 
 void AssFixStylesFilter::ProcessSubs(AssFile *subs) {
 	auto styles = subs->GetStyles();
-	for (auto& str : styles) boost::to_lower(str);
+	for (auto& str : styles) agi::util::strings::to_lower_inplace(str);
 	sort(begin(styles), end(styles));
 
 	for (auto& diag : subs->Events) {
-		if (!binary_search(begin(styles), end(styles), boost::to_lower_copy(diag.Style.get())))
+		if (!binary_search(begin(styles), end(styles), agi::util::strings::to_lower_copy(diag.Style.get())))
 			diag.Style = "Default";
 	}
 }

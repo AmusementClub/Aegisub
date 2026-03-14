@@ -34,7 +34,7 @@
 #include "options.h"
 #include "utils.h"
 
-#include <boost/algorithm/string/replace.hpp>
+#include <libaegisub/string_utils.h>
 
 // Maximum number of languages (locales)
 // It should be above 100 (at least 242) and probably not more than 1000
@@ -122,9 +122,9 @@ void SubsTextEditCtrl::SetStyles() {
 void SubsTextEditCtrl::Paste() {
 	std::string data = GetClipboard();
 
-	boost::replace_all(data, "\r\n", "\\N");
-	boost::replace_all(data, "\n", "\\N");
-	boost::replace_all(data, "\r", "\\N");
+	agi::util::strings::replace_all_inplace(data, "\r\n", "\\N");
+	agi::util::strings::replace_all_inplace(data, "\n", "\\N");
+	agi::util::strings::replace_all_inplace(data, "\r", "\\N");
 
 	long sel_start, sel_end;
 	GetSelection(&sel_start, &sel_end);

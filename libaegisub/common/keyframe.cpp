@@ -21,8 +21,8 @@
 
 #include "libaegisub/io.h"
 #include "libaegisub/line_iterator.h"
+#include "libaegisub/string_utils.h"
 
-#include <boost/algorithm/string/predicate.hpp>
 #include <boost/range/algorithm/copy.hpp>
 
 namespace {
@@ -87,11 +87,11 @@ std::vector<int> Load(agi::fs::path const& filename) {
 	getline(is, header);
 
 	if (header == "# keyframe format v1") return agi_keyframes(is);
-	if (boost::starts_with(header, "# XviD 2pass stat file")) return other_keyframes(is, xvid);
-	if (boost::starts_with(header, "# ffmpeg 2-pass log file, using xvid codec")) return other_keyframes(is, xvid);
-	if (boost::starts_with(header, "# avconv 2-pass log file, using xvid codec")) return other_keyframes(is, xvid);
-	if (boost::starts_with(header, "##map version")) return other_keyframes(is, divx);
-	if (boost::starts_with(header, "#options:")) return other_keyframes(is, x264);
+	if (agi::util::strings::starts_with(header, "# XviD 2pass stat file")) return other_keyframes(is, xvid);
+	if (agi::util::strings::starts_with(header, "# ffmpeg 2-pass log file, using xvid codec")) return other_keyframes(is, xvid);
+	if (agi::util::strings::starts_with(header, "# avconv 2-pass log file, using xvid codec")) return other_keyframes(is, xvid);
+	if (agi::util::strings::starts_with(header, "##map version")) return other_keyframes(is, divx);
+	if (agi::util::strings::starts_with(header, "#options:")) return other_keyframes(is, x264);
 
 	throw Error("Unknown keyframe format");
 }

@@ -37,7 +37,7 @@
 #include "resolution_resampler.h"
 #include "validators.h"
 
-#include <boost/algorithm/string/predicate.hpp>
+#include <libaegisub/string_utils.h>
 #include <vector>
 #include <wx/button.h>
 #include <wx/checkbox.h>
@@ -180,7 +180,7 @@ DialogProperties::DialogProperties(agi::Context *c)
 
 	ScaleBorder = new wxCheckBox(&d,-1,_("Scale Border and Shadow"));
 	ScaleBorder->SetToolTip(_("Scale border and shadow together with script/render resolution. If this is unchecked, relative border and shadow size will depend on renderer."));
-	ScaleBorder->SetValue(boost::iequals(c->ass->GetScriptInfo("ScaledBorderAndShadow"), "yes"));
+	ScaleBorder->SetValue(agi::util::strings::iequals(c->ass->GetScriptInfo("ScaledBorderAndShadow"), "yes"));
 	optionsGrid->AddSpacer(0);
 	optionsGrid->Add(ScaleBorder,1,wxEXPAND,0);
 	optionsGrid->AddGrowableCol(1,1);

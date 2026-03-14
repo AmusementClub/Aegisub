@@ -43,10 +43,10 @@
 #include <libaegisub/ass/time.h>
 #include <libaegisub/format.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 #include <libaegisub/vfr.h>
 
-#include <boost/algorithm/string/replace.hpp>
 #include <boost/lexical_cast.hpp>
 #include <boost/regex.hpp>
 
@@ -110,7 +110,7 @@ void MicroDVDSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& file
 		int f1 = boost::lexical_cast<int>(match[1]);
 		int f2 = boost::lexical_cast<int>(match[2]);
 
-		boost::replace_all(text, "|", "\\N");
+		agi::util::strings::replace_all_inplace(text, "|", "\\N");
 
 		auto diag = new AssDialogue;
 		diag->Start = fps.TimeAtFrame(f1, agi::vfr::START);
@@ -143,6 +143,6 @@ void MicroDVDSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& 
 		int start = fps.FrameAtTime(current.Start, agi::vfr::START);
 		int end = fps.FrameAtTime(current.End, agi::vfr::END);
 
-		file.WriteLineToFile(agi::format("{%i}{%i}%s", start, end, boost::replace_all_copy(current.Text.get(), "\\N", "|")));
+		file.WriteLineToFile(agi::format("{%i}{%i}%s", start, end, agi::util::strings::replace_all_copy(current.Text.get(), "\\N", "|")));
 	}
 }

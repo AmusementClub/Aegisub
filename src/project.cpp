@@ -44,6 +44,7 @@
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
+#include <libaegisub/string_utils.h>
 
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/filesystem/operations.hpp>
@@ -471,7 +472,7 @@ void Project::LoadList(std::vector<agi::fs::path> const& files) {
 		if (!agi::fs::FileExists(file)) continue;
 
 		auto ext = file.extension().string();
-		boost::to_lower(ext);
+		agi::util::strings::to_lower_inplace(ext);
 
 		// Could be subtitles, keyframes or timecodes, so try loading as each
 		if (ext == ".txt" || ext == ".log") {

@@ -24,10 +24,9 @@
 #include "options.h"
 
 #include <algorithm>
-#include <boost/algorithm/string/case_conv.hpp>
-#include <boost/algorithm/string/predicate.hpp>
 #include <boost/filesystem/path.hpp>
 #include <cassert>
+#include <libaegisub/string_utils.h>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -129,7 +128,7 @@ EntryList<AssDialogue>::iterator AssFile::iterator_to(AssDialogue& line) {
 void AssFile::InsertAttachment(agi::fs::path const& filename) {
 	AssEntryGroup group = AssEntryGroup::GRAPHIC;
 
-	auto ext = boost::to_lower_copy(filename.extension().string());
+	auto ext = agi::util::strings::to_lower_copy(filename.extension().string());
 	if (ext == ".ttf" || ext == ".ttc" || ext == ".pfb")
 		group = AssEntryGroup::FONT;
 
@@ -138,7 +137,7 @@ void AssFile::InsertAttachment(agi::fs::path const& filename) {
 
 std::string AssFile::GetScriptInfo(std::string const& key) const {
 	for (auto const& info : Info) {
-		if (boost::iequals(key, info.Key()))
+		if (agi::util::strings::iequals(key, info.Key()))
 			return info.Value();
 	}
 
@@ -151,7 +150,7 @@ int AssFile::GetScriptInfoAsInt(std::string const& key) const {
 
 void AssFile::SetScriptInfo(std::string const& key, std::string const& value) {
 	for (auto it = Info.begin(); it != Info.end(); ++it) {
-		if (boost::iequals(key, it->Key())) {
+		if (agi::util::strings::iequals(key, it->Key())) {
 			if (value.empty())
 				Info.erase(it);
 			else
@@ -212,7 +211,7 @@ std::vector<std::string> AssFile::GetStyles() const {
 
 AssStyle *AssFile::GetStyle(std::string const& name) {
 	for (auto& style : Styles) {
-		if (boost::iequals(style.name, name))
+		if (agi::util::strings::iequals(style.name, name))
 			return &style;
 	}
 	return nullptr;

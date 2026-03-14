@@ -29,9 +29,9 @@
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
+#include <libaegisub/string_utils.h>
 #include <libaegisub/thesaurus.h>
 
-#include <boost/algorithm/string/case_conv.hpp>
 #include <boost/range/algorithm.hpp>
 
 Thesaurus::Thesaurus()
@@ -47,7 +47,7 @@ Thesaurus::~Thesaurus() {
 
 std::vector<Thesaurus::Entry> Thesaurus::Lookup(std::string word) {
 	if (!impl) return {};
-	boost::to_lower(word);
+	agi::util::strings::to_lower_inplace(word);
 	return impl->Lookup(word);
 }
 

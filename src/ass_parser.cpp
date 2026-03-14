@@ -24,19 +24,16 @@
 
 #include <libaegisub/ass/uuencode.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 
 #include <algorithm>
-#include <boost/algorithm/string/case_conv.hpp>
-#include <boost/algorithm/string/predicate.hpp>
-#include <boost/algorithm/string/trim.hpp>
-#include <boost/lexical_cast.hpp>
 #include <boost/regex.hpp>
-#include <boost/variant.hpp>
 #include <unordered_map>
+#include <variant>
 
 class AssParser::HeaderToProperty {
-	using field = boost::variant<
+	using field = std::variant<
 		std::string ProjectProperties::*,
 		int ProjectProperties::*,
 		double ProjectProperties::*
@@ -72,20 +69,19 @@ public:
 	bool ProcessProperty(AssFile *target, std::string const& key, std::string const& value) {
 		auto it = fields.find(key);
 		if (it != end(fields)) {
-			using namespace agi::util;
-			struct {
-				using result_type = void;
-				ProjectProperties &obj;
-				std::string const& value;
-				void operator()(std::string ProjectProperties::*f) const { obj.*f = value; }
-				void operator()(int ProjectProperties::*f)         const { try_parse(value, &(obj.*f)); }
-				void operator()(double ProjectProperties::*f)      const { try_parse(value, &(obj.*f)); }
-			} visitor {target->Properties, value};
-			boost::apply_visitor(visitor, it->second);
+			std::visit([&](auto member) {
+				using member_type = decltype(member);
+				if constexpr (std::is_same_v<member_type, std::string ProjectProperties::*>) {
+					target->Properties.*member = value;
+				}
+				else {
+					agi::util::try_parse(value, &(target->Properties.*member));
+				}
+			}, it->second);
 			return true;
 		}
 
-		if (boost::starts_with(key, "Automation Settings ")) {
+		if (agi::util::strings::starts_with(key, "Automation Settings ")) {
 			target->Properties.automation_settings[key.substr(strlen("Automation Settings"))] = value;
 			return true;
 		}
@@ -106,7 +102,7 @@ AssParser::~AssParser() {
 }
 
 void AssParser::ParseAttachmentLine(std::string const& data) {
-	bool is_filename = boost::starts_with(data, "fontname: ") || boost::starts_with(data, "filename: ");
+	bool is_filename = agi::util::strings::starts_with(data, "fontname: ") || agi::util::strings::starts_with(data, "filename: ");
 
 	bool valid_data = data.size() > 0 && data.size() <= 80;
 	for (auto byte : data) {
@@ -131,16 +127,16 @@ void AssParser::ParseAttachmentLine(std::string const& data) {
 }
 
 void AssParser::ParseScriptInfoLine(std::string const& data) {
-	if (boost::starts_with(data, ";")) {
+	if (agi::util::strings::starts_with(data, ";")) {
 		// Skip stupid comments added by other programs
 		// Of course, we'll add our own in place later... ;)
 		return;
 	}
 
-	if (boost::starts_with(data, "ScriptType:")) {
+	if (agi::util::strings::starts_with(data, "ScriptType:")) {
 		std::string version_str = data.substr(11);
-		boost::trim(version_str);
-		boost::to_lower(version_str);
+		agi::util::strings::trim_inplace(version_str);
+		agi::util::strings::to_lower_inplace(version_str);
 		if (version_str == "v4.00")
 			version = 0;
 		else if (version_str == "v4.00+")
@@ -151,7 +147,7 @@ void AssParser::ParseScriptInfoLine(std::string const& data) {
 
 	// Nothing actually supports the Collisions property and malformed values
 	// crash VSFilter, so just remove it entirely
-	if (boost::starts_with(data, "Collisions:"))
+	if (agi::util::strings::starts_with(data, "Collisions:"))
 		return;
 
 	size_t pos = data.find(':');
@@ -159,7 +155,7 @@ void AssParser::ParseScriptInfoLine(std::string const& data) {
 
 	auto key = data.substr(0, pos);
 	auto value = data.substr(pos + 1);
-	boost::trim_left(value);
+	agi::util::strings::trim_left_inplace(value);
 
 	if (!property_handler->ProcessProperty(target, key, value))
 		target->Info.push_back(*new AssInfo(std::move(key), std::move(value)));
@@ -171,28 +167,28 @@ void AssParser::ParseMetadataLine(std::string const& data) {
 
 	auto key = data.substr(0, pos);
 	auto value = data.substr(pos + 1);
-	boost::trim_left(value);
+	agi::util::strings::trim_left_inplace(value);
 
 	property_handler->ProcessProperty(target, key, value);
 }
 
 void AssParser::ParseEventLine(std::string const& data) {
-	if (boost::starts_with(data, "Dialogue:") || boost::starts_with(data, "Comment:"))
+	if (agi::util::strings::starts_with(data, "Dialogue:") || agi::util::strings::starts_with(data, "Comment:"))
 		target->Events.push_back(*new AssDialogue(data));
 }
 
 void AssParser::ParseStyleLine(std::string const& data) {
-	if (boost::starts_with(data, "Style:"))
+	if (agi::util::strings::starts_with(data, "Style:"))
 		target->Styles.push_back(*new AssStyle(data, version));
 }
 
 void AssParser::ParseFontLine(std::string const& data) {
-	if (boost::starts_with(data, "fontname: "))
+	if (agi::util::strings::starts_with(data, "fontname: "))
 		attach = agi::make_unique<AssAttachment>(data, AssEntryGroup::FONT);
 }
 
 void AssParser::ParseGraphicsLine(std::string const& data) {
-	if (boost::starts_with(data, "filename: "))
+	if (agi::util::strings::starts_with(data, "filename: "))
 		attach = agi::make_unique<AssAttachment>(data, AssEntryGroup::GRAPHIC);
 }
 
@@ -201,7 +197,9 @@ void AssParser::ParseExtradataLine(std::string const &data) {
 	boost::match_results<std::string::const_iterator> mr;
 
 	if (boost::regex_match(data, mr, matcher)) {
-		auto id = boost::lexical_cast<uint32_t>(mr.str(1));
+		uint32_t id = 0;
+		if (!agi::util::strings::parse_integer(mr.str(1), id))
+			return;
 		auto key = inline_string_decode(mr.str(2));
 		auto valuetype = mr.str(3);
 		auto value = mr.str(4);
@@ -237,7 +235,7 @@ void AssParser::AddLine(std::string const& data) {
 	// Section header
 	if (data[0] == '[' && data.back() == ']') {
 		// Ugly hacks to allow intermixed v4 and v4+ style sections
-		const std::string low = boost::to_lower_copy(data);
+		const std::string low = agi::util::strings::to_lower_copy(data);
 		if (low == "[v4 styles]") {
 			version = 0;
 			state = &AssParser::ParseStyleLine;

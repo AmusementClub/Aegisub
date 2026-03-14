@@ -43,6 +43,8 @@
 #include "options.h"
 #include "persist_location.h"
 #include "selection_controller.h"
+
+#include <libaegisub/string_utils.h>
 #include "subtitle_format.h"
 
 #include <libaegisub/fs.h>
@@ -238,7 +240,7 @@ void add_styles(Func1 name_checker, Func2 style_adder) {
 	auto cb = GetClipboard();
 	int failed_to_parse = 0;
 	for (auto tok : agi::Split(cb, '\n')) {
-		tok = boost::trim_copy(tok);
+		tok = agi::util::strings::trim_copy(agi::str(tok));
 		if (tok.empty()) continue;
 		try {
 			AssStyle *s = new AssStyle(agi::str(tok));

@@ -51,11 +51,11 @@
 
 #include <libaegisub/fs.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/string_utils.h>
 #include <libaegisub/vfr.h>
 
 #include <algorithm>
 #include <boost/algorithm/string/join.hpp>
-#include <boost/algorithm/string/replace.hpp>
 #include <wx/choicdlg.h>
 
 namespace {
@@ -162,13 +162,13 @@ void SubtitleFormat::StripTags(AssFile &file) {
 void SubtitleFormat::ConvertNewlines(AssFile &file, std::string const& newline, bool mergeLineBreaks) {
 	for (auto& current : file.Events) {
 		std::string repl = current.Text;
-		boost::replace_all(repl, "\\h", " ");
-		boost::ireplace_all(repl, "\\n", newline);
+		agi::util::strings::replace_all_inplace(repl, "\\h", " ");
+		agi::util::strings::ireplace_all_ascii_inplace(repl, "\\n", newline);
 		if (mergeLineBreaks) {
 			std::string dbl(newline + newline);
 			size_t pos = 0;
 			while ((pos = repl.find(dbl, pos)) != std::string::npos)
-				boost::replace_all(repl, dbl, newline);
+				agi::util::strings::replace_all_inplace(repl, dbl, newline);
 		}
 		current.Text = repl;
 	}

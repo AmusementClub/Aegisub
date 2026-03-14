@@ -18,8 +18,8 @@
 
 #include "libaegisub/access.h"
 #include "libaegisub/log.h"
+#include "libaegisub/string_utils.h"
 
-#include <boost/algorithm/string/predicate.hpp>
 #define BOOST_NO_SCOPED_ENUMS
 #include <boost/filesystem/operations.hpp>
 #undef BOOST_NO_SCOPED_ENUMS
@@ -122,6 +122,6 @@ namespace {
 		auto filename = p.filename().string();
 		if (filename.size() < ext.size() + 1) return false;
 		if (filename[filename.size() - ext.size() - 1] != '.') return false;
-		return boost::iends_with(filename, ext);
+		return agi::util::strings::iends_with(filename, ext);
 	}
 } }

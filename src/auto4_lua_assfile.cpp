@@ -45,6 +45,7 @@
 #include <libaegisub/log.h>
 #include <libaegisub/lua/utils.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/string_utils.h>
 
 #include <algorithm>
 #include <boost/algorithm/string/case_conv.hpp>
@@ -251,7 +252,7 @@ namespace Automation4 {
 			error(L, "Table lacks 'class' field, can't convert to AssEntry");
 
 		std::string lclass(lua_tostring(L, -1));
-		boost::to_lower(lclass);
+		agi::util::strings::to_lower_inplace(lclass);
 		lua_pop(L, 1);
 
 		std::unique_ptr<AssEntry> result;

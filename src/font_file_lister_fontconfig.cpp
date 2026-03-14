@@ -18,8 +18,8 @@
 
 #include <libaegisub/charset_conv_win.h>
 #include <libaegisub/log.h>
+#include <libaegisub/string_utils.h>
 
-#include <boost/algorithm/string/case_conv.hpp>
 #include <boost/filesystem/path.hpp>
 #include <fontconfig/fontconfig.h>
 #include <wx/intl.h>
@@ -29,7 +29,7 @@ bool pattern_matches(FcPattern *pat, const char *field, std::string const& name)
 	FcChar8 *str;
 	for (int i = 0; FcPatternGetString(pat, field, i, &str) == FcResultMatch; ++i) {
 		std::string sstr((char *)str);
-		boost::to_lower(sstr);
+		agi::util::strings::to_lower_inplace(sstr);
 		if (sstr == name)
 			return true;
 	}
@@ -61,7 +61,7 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 	CollectionResult ret;
 
 	std::string family = facename[0] == '@' ? facename.substr(1) : facename;
-	boost::to_lower(family);
+	agi::util::strings::to_lower_inplace(family);
 
 	int weight = bold == 0 ? 80 :
 	             bold == 1 ? 200 :

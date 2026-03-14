@@ -36,10 +36,9 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/format.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/string_utils.h>
 
 #include <boost/algorithm/string/join.hpp>
-#include <boost/algorithm/string/predicate.hpp>
-#include <boost/algorithm/string/trim.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <functional>
@@ -58,8 +57,8 @@ template<> std::string AssOverrideParameter::Get<std::string>() const {
 	if (omitted) throw agi::InternalError("AssOverrideParameter::Get() called on omitted parameter");
 	if (block.get()) {
 		std::string str(block->GetText());
-		if (boost::starts_with(str, "{")) str.erase(begin(str));
-		if (boost::ends_with(str, "}")) str.erase(end(str) - 1);
+		if (agi::util::strings::starts_with(str, "{")) str.erase(begin(str));
+		if (agi::util::strings::ends_with(str, "}")) str.erase(end(str) - 1);
 		return str;
 	}
 	return value;
@@ -317,7 +316,7 @@ std::vector<std::string> tokenize(const std::string &text) {
 	if (text[0] != '(') {
 		// There's just one parameter (because there's no parentheses)
 		// This means text is all our parameters
-		paramList.emplace_back(boost::trim_copy(text));
+		paramList.emplace_back(agi::util::strings::trim_copy(text));
 		return paramList;
 	}
 
@@ -344,7 +343,7 @@ std::vector<std::string> tokenize(const std::string &text) {
 			i++;
 		}
 		// i now points to the first character not member of this parameter
-		paramList.emplace_back(boost::trim_copy(text.substr(start, i - start)));
+		paramList.emplace_back(agi::util::strings::trim_copy(text.substr(start, i - start)));
 	}
 
 	if (i+1 < textlen) {
@@ -443,7 +442,7 @@ void AssOverrideTag::Clear() {
 void AssOverrideTag::SetText(const std::string &text) {
 	load_protos();
 	for (auto cur = proto.begin(); cur != proto.end(); ++cur) {
-		if (boost::starts_with(text, cur->name)) {
+		if (agi::util::strings::starts_with(text, cur->name)) {
 			Name = cur->name;
 			parse_parameters(this, text.substr(Name.size()), cur);
 			valid = true;

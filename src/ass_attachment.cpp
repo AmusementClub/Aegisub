@@ -19,8 +19,7 @@
 #include <libaegisub/ass/uuencode.h>
 #include <libaegisub/file_mapping.h>
 #include <libaegisub/io.h>
-
-#include <boost/algorithm/string/predicate.hpp>
+#include <libaegisub/string_utils.h>
 
 // Out-of-line to anchor vtable
 AssEntryGroup AssAttachment::Group() const { return group; }
@@ -38,7 +37,7 @@ AssAttachment::AssAttachment(agi::fs::path const& name, AssEntryGroup group)
 {
 	// SSA stuffs some information about the font in the embedded filename, but
 	// nothing else uses it so just do the absolute minimum (0 is the encoding)
-	if (boost::iends_with(filename.get(), ".ttf"))
+	if (agi::util::strings::iends_with(filename.get(), ".ttf"))
 		filename = filename.get().substr(0, filename.get().size() - 4) + "_0" + filename.get().substr(filename.get().size() - 4);
 
 	agi::read_file_mapping file(name);
@@ -59,7 +58,7 @@ void AssAttachment::Extract(agi::fs::path const& filename) const {
 }
 
 std::string AssAttachment::GetFileName(bool raw) const {
-	if (raw || !boost::iends_with(filename.get(), ".ttf")) return filename;
+	if (raw || !agi::util::strings::iends_with(filename.get(), ".ttf")) return filename;
 
 	// Remove stuff after last underscore if it's a font
 	std::string::size_type last_under = filename.get().rfind('_');

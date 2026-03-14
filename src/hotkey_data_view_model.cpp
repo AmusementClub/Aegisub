@@ -24,9 +24,9 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/hotkey.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/string_utils.h>
 
 #include <algorithm>
-#include <boost/algorithm/string/case_conv.hpp>
 #include <list>
 #include <map>
 #include <vector>
@@ -68,8 +68,8 @@ public:
 	}
 
 	bool IsVisible(std::string const& filter) const {
-		return boost::to_lower_copy(cmd_name).find(filter) != std::string::npos
-			|| boost::to_lower_copy(cmd_str).find(filter) != std::string::npos;
+		return agi::util::strings::contains(agi::util::strings::to_lower_copy(cmd_name), filter)
+			|| agi::util::strings::contains(agi::util::strings::to_lower_copy(cmd_str), filter);
 	}
 
 	void Apply(Hotkey::HotkeyMap *hk_map) {
@@ -325,6 +325,6 @@ void HotkeyDataViewModel::Apply() {
 
 void HotkeyDataViewModel::SetFilter(wxString const& filter) {
 	auto str = from_wx(filter);
-	boost::to_lower(str);
+	agi::util::strings::to_lower_inplace(str);
 	root->SetFilter(str);
 }

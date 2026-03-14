@@ -290,7 +290,7 @@ add_library(libaegisub STATIC
     libaegisub/common/ycbcr_conv.cpp
     libaegisub/common/dispatch.cpp
 )
-target_compile_features(libaegisub PUBLIC cxx_std_11)
+target_compile_features(libaegisub PUBLIC cxx_std_20)
 if(UNIX)
     target_sources(libaegisub PRIVATE
         libaegisub/unix/access.cpp
@@ -543,10 +543,10 @@ add_executable(Aegisub WIN32
 )
 set_source_files_properties(src/native_library.cpp PROPERTIES
     SKIP_PRECOMPILE_HEADERS ON
-    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/std:c++20>;$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-std=c++20>"
 )
 target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} libaegisub luajit)
 target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
+target_compile_features(Aegisub PRIVATE cxx_std_20)
 option(AEGISUB_USE_STRINGZILLA "Use StringZilla in selected string-heavy code paths" ON)
 if(AEGISUB_USE_STRINGZILLA)
     find_path(STRINGZILLA_INCLUDE_DIRS "stringzilla/stringzilla.hpp")
@@ -951,7 +951,6 @@ set_source_files_properties(
     src/audio_latest_range_scheduler.cpp
     PROPERTIES
     SKIP_PRECOMPILE_HEADERS ON
-    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/std:c++20>;$<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-std=c++20>"
 )
 
 message(STATUS "\n"

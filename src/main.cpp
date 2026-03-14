@@ -91,7 +91,10 @@ static const char *LastStartupState = nullptr;
 #endif
 
 void AegisubApp::OnAssertFailure(const wxChar *file, int line, const wxChar *func, const wxChar *cond, const wxChar *msg) {
-	LOG_A("wx/assert") << file << ":" << line << ":" << func << "() " << cond << ": " << msg;
+	auto narrow = [](const wxChar *value) {
+		return value ? from_wx(wxString(value)) : std::string();
+	};
+	LOG_A("wx/assert") << narrow(file) << ":" << line << ":" << narrow(func) << "() " << narrow(cond) << ": " << narrow(msg);
 	wxApp::OnAssertFailure(file, line, func, cond, msg);
 }
 

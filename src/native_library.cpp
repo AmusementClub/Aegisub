@@ -4,6 +4,7 @@
 
 #include <libaegisub/exception.h>
 #include <libaegisub/log.h>
+#include <libaegisub/string_utils.h>
 
 #ifdef _WIN32
 #include <libaegisub/charset_conv_win.h>
@@ -62,7 +63,8 @@ namespace {
 	}
 
 	bool HasDirectorySeparator(std::string_view name) {
-		return name.find('/') != std::string::npos || name.find('\\') != std::string::npos;
+		return agi::util::strings::contains(name, '/') ||
+			agi::util::strings::contains(name, '\\');
 	}
 
 	bool EndsWithCaseInsensitive(std::string_view value, std::string_view suffix) {
@@ -105,7 +107,7 @@ namespace {
 
 		bool has_separator = HasDirectorySeparator(library_name);
 		auto filename = path.filename().string();
-		bool has_lib_prefix = std::string_view(filename).starts_with("lib");
+		bool has_lib_prefix = agi::util::strings::starts_with(filename, "lib");
 
 #ifdef _WIN32
 		AddCandidate(candidates, library_name);
@@ -117,7 +119,7 @@ namespace {
 		AddCandidate(candidates, library_name);
 		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
 #else
-		bool has_so_name = library_name.find(".so") != std::string::npos;
+		bool has_so_name = agi::util::strings::contains(library_name, ".so");
 		if (has_so_name) {
 			AddCandidate(candidates, library_name);
 			if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));

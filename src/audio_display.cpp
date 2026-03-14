@@ -692,7 +692,7 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 	scroll_left = pixel_position;
 	scrollbar->SetPosition(scroll_left);
 	timeline->SetPosition(scroll_left);
-	if (audio_marker)
+	if (dragged_object)
 		QueueHighFrequencyRefresh(nullptr, true);
 	else
 		Refresh();
@@ -982,6 +982,8 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 				TimeRange viewport_time(viewport.begin_ms, viewport.end_ms);
 				PaintMarkers(dc, viewport_time);
 				PaintLabels(dc, viewport_time);
+				if (track_cursor_pos >= 0)
+					PaintTrackCursor(dc);
 			}
 
 			if (redraw_scrollbar)
@@ -1200,6 +1202,9 @@ void AudioDisplay::SetDraggedObject(AudioDisplayInteractionObject *new_obj)
 
 void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 {
+	const int old_pos = track_cursor_pos;
+	const wxRect old_label_rect = track_cursor_label_rect;
+
 	if (!ShouldRefreshTrackCursorOverlay(track_cursor_pos, new_pos))
 		return;
 
@@ -1215,7 +1220,57 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 		track_cursor_label_rect.SetSize(wxSize(0,0));
 		track_cursor_label.Clear();
 	}
+
+	auto line_rect = [this](int pos) {
+		if (pos < 0)
+			return wxRect();
+		return wxRect(pos - scroll_left - 1, audio_top, 3, audio_height + 1);
+	};
+
+	auto calc_label_rect = [this]() {
+		if (track_cursor_pos < 0 || track_cursor_label.empty())
+			return wxRect();
+
+		wxClientDC dc(this);
+		wxFont font = dc.GetFont();
+		wxString face_name = FontFace("Audio/Track Cursor");
+		if (!face_name.empty())
+			font.SetFaceName(face_name);
+		font.SetWeight(wxFONTWEIGHT_BOLD);
+		dc.SetFont(font);
+
+		wxSize label_size(dc.GetTextExtent(track_cursor_label));
+		int label_margin = FromDIP(2);
+		wxPoint label_pos(track_cursor_pos - scroll_left - label_size.x/2, audio_top + label_margin);
+		label_pos.x = mid(label_margin, label_pos.x, GetClientSize().GetWidth() - label_size.x - label_margin);
+
+		label_pos.x -= label_margin;
+		label_pos.y -= label_margin;
+		label_size.IncBy(label_margin * 2, label_margin * 2);
+		return wxRect(label_pos, label_size);
+	};
+
+	const wxRect new_label_rect = calc_label_rect();
+	track_cursor_label_rect = new_label_rect;
 	RefreshTrackCursorOverlay();
+
+	// Overlay draw can occasionally be dropped by platform repaint timing,
+	// so queue a narrow repaint around old/new cursor and label regions as a fallback.
+	wxRect dirty = line_rect(old_pos);
+	if (dirty.IsEmpty())
+		dirty = line_rect(track_cursor_pos);
+	else
+		dirty.Union(line_rect(track_cursor_pos));
+	if (!old_label_rect.IsEmpty()) {
+		if (dirty.IsEmpty()) dirty = old_label_rect;
+		else dirty.Union(old_label_rect);
+	}
+	if (!new_label_rect.IsEmpty()) {
+		if (dirty.IsEmpty()) dirty = new_label_rect;
+		else dirty.Union(new_label_rect);
+	}
+	if (!dirty.IsEmpty())
+		QueueHighFrequencyRefresh(&dirty, true);
 }
 
 void AudioDisplay::RemoveTrackCursor()
@@ -1434,6 +1489,7 @@ void AudioDisplay::OnAudioOpen(agi::AudioProvider *provider)
 			connections = agi::signal::make_vector({
 				controller->AddPlaybackPositionListener(&AudioDisplay::OnPlaybackPosition, this),
 				controller->AddPlaybackStopListener(&AudioDisplay::RemoveTrackCursor, this),
+				context->videoController->AddSeekListener(&AudioDisplay::OnVideoSeek, this),
 				controller->AddTimingControllerListener(&AudioDisplay::OnTimingController, this),
 				OPT_SUB("Audio/Spectrum", &AudioDisplay::ReloadRenderingSettings, this),
 				OPT_SUB("Audio/Display/Waveform Style", &AudioDisplay::ReloadRenderingSettings, this),
@@ -1492,6 +1548,17 @@ void AudioDisplay::OnPlaybackPosition(int ms)
 			ScrollPixelToLeft(std::min(pixel_position - client_width + edge_size, pixel_audio_width - client_width - 1));
 		}
 	}
+}
+
+void AudioDisplay::OnVideoSeek(int frame)
+{
+	if (!provider || !context || !context->videoController)
+		return;
+
+	// Video playback/seek events can update the timing cursor even when audio playback
+	// callbacks are not active.
+	const int ms = context->videoController->TimeAtFrame(frame, agi::vfr::EXACT);
+	SetTrackCursor(AbsoluteXFromTime(ms), false);
 }
 
 void AudioDisplay::OnSelectionChanged()

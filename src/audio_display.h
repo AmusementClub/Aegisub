@@ -225,6 +225,7 @@ class AudioDisplay: public wxWindow {
 	void OnStyleRangesChanged();
 	void OnTimingController();
 	void OnMarkerMoved();
+	void OnVideoSeek(int frame);
 
 	AudioSpectrumChannelMode spectrum_channel_mode_runtime = AudioSpectrumChannelMode::MonoMix;
 	std::vector<int> spectrum_selected_channels_runtime;

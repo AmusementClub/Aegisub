@@ -46,11 +46,10 @@
 #include <libaegisub/format.h>
 #include <libaegisub/scoped_ptr.h>
 #include <libaegisub/string_utils.h>
+#include <libaegisub/util.h>
 
 #include <algorithm>
-#include <boost/lexical_cast.hpp>
 #include <boost/range/irange.hpp>
-#include <boost/tokenizer.hpp>
 #include <iterator>
 
 #include <wx/choicdlg.h> // Keep this last so wxUSE_CHOICEDLG is set.
@@ -142,10 +141,17 @@ static void read_subtitles(agi::ProgressSink *ps, MatroskaFile *file, MkvStdIO *
 			auto second = std::find(first + 1, readBufEnd, ',');
 			if (second == readBufEnd) continue;
 
+			int layer = 0;
+			int marked = 0;
+			if (!agi::util::strings::parse_integer(agi::util::strings::view(readBuf, first - readBuf), layer))
+				continue;
+			if (!agi::util::strings::parse_integer(agi::util::strings::view(first + 1, second - first - 1), marked))
+				continue;
+
 			subList.emplace_back(
-				boost::lexical_cast<int>(str_range(readBuf, first)),
+				layer,
 				agi::format("Dialogue: %d,%s,%s,%s"
-					, boost::lexical_cast<int>(str_range(first + 1, second))
+					, marked
 					, subStart.GetAssFormatted()
 					, subEnd.GetAssFormatted()
 					, str_range(second + 1, readBufEnd)));
@@ -232,9 +238,9 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 		std::string priv((const char *)trackInfo->CodecPrivate, trackInfo->CodecPrivateSize);
 
 		// Load into file
-		boost::char_separator<char> sep("\r\n");
-		for (auto const& cur : boost::tokenizer<boost::char_separator<char>>(priv, sep))
-			parser.AddLine(cur);
+		agi::util::strings::for_each_split_any(priv, "\r\n", [&](agi::util::strings::view line) {
+			parser.AddLine(std::string(line));
+		});
 	}
 	// Load default if it's SRT
 	else

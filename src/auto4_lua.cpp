@@ -65,9 +65,6 @@
 #include <libaegisub/string_utils.h>
 
 #include <algorithm>
-#include <boost/algorithm/string/case_conv.hpp>
-#include <boost/algorithm/string/classification.hpp>
-#include <boost/algorithm/string/predicate.hpp>
 #include <cassert>
 #include <mutex>
 #include <wx/clipbrd.h>
@@ -603,7 +600,7 @@ namespace {
 		agi::fs::path filepath;
 
 		// Relative or absolute path
-		if (!boost::all(filename, !boost::is_any_of("/\\")))
+		if (std::any_of(filename.begin(), filename.end(), [](char c) { return c == '/' || c == '\\'; }))
 			filepath = s->GetFilename().parent_path()/filename;
 		else { // Plain filename
 			for (auto const& dir : s->include_path) {

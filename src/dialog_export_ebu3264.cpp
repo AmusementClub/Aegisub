@@ -27,8 +27,8 @@
 
 #include <libaegisub/charset_conv.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/string_utils.h>
 
-#include <boost/lexical_cast.hpp>
 #include <boost/regex.hpp>
 
 #include <wx/checkbox.h>
@@ -68,10 +68,16 @@ namespace {
 			if (!regex_match(str, result, timecode_regex))
 				return false;
 
-			value->h = boost::lexical_cast<int>(result.str(1));
-			value->m = boost::lexical_cast<int>(result.str(2));
-			value->s = boost::lexical_cast<int>(result.str(3));
-			value->f = boost::lexical_cast<int>(result.str(4));
+			int h = 0, m = 0, s = 0, f = 0;
+			if (!agi::util::strings::parse_integer(result.str(1), h) ||
+				!agi::util::strings::parse_integer(result.str(2), m) ||
+				!agi::util::strings::parse_integer(result.str(3), s) ||
+				!agi::util::strings::parse_integer(result.str(4), f))
+				return false;
+			value->h = static_cast<uint8_t>(h);
+			value->m = static_cast<uint8_t>(m);
+			value->s = static_cast<uint8_t>(s);
+			value->f = static_cast<uint8_t>(f);
 
 			return true;
 		}

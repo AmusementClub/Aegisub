@@ -55,7 +55,6 @@
 #include <libaegisub/vfr.h>
 
 #include <algorithm>
-#include <boost/algorithm/string/join.hpp>
 #include <wx/choicdlg.h>
 
 namespace {
@@ -309,8 +308,8 @@ std::string SubtitleFormat::GetWildcards(int mode) {
 
 		for (auto& str : cur) str.insert(0, "*.");
 		all.insert(all.end(), begin(cur), end(cur));
-		final += "|" + format->GetName() + " (" + boost::join(cur, ",") + ")|" + boost::join(cur, ";");
+		final += "|" + format->GetName() + " (" + agi::util::strings::join(cur, ",") + ")|" + agi::util::strings::join(cur, ";");
 	}
 
-	return from_wx(_("All Supported Formats")) + " (" + boost::join(all, ",") + ")|" + boost::join(all, ";") + final;
+	return from_wx(_("All Supported Formats")) + " (" + agi::util::strings::join(all, ",") + ")|" + agi::util::strings::join(all, ";") + final;
 }

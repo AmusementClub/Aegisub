@@ -40,7 +40,6 @@
 #include <libaegisub/make_unique.h>
 #include <libaegisub/string_utils.h>
 
-#include <boost/algorithm/string/join.hpp>
 #include <boost/regex.hpp>
 #include <boost/spirit/include/karma_generate.hpp>
 #include <boost/spirit/include/karma_int.hpp>
@@ -273,10 +272,12 @@ void AssDialogue::StripTags() {
 	Text = GetStrippedText();
 }
 
-static std::string get_text(std::unique_ptr<AssDialogueBlock> &d) { return d->GetText(); }
 void AssDialogue::UpdateText(std::vector<std::unique_ptr<AssDialogueBlock>>& blocks) {
 	if (blocks.empty()) return;
-	Text = join(blocks | transformed(get_text), "");
+	std::string joined;
+	for (auto& block : blocks)
+		joined += block->GetText();
+	Text = std::move(joined);
 }
 
 bool AssDialogue::CollidesWith(const AssDialogue *target) const {
@@ -284,8 +285,10 @@ bool AssDialogue::CollidesWith(const AssDialogue *target) const {
 	return ((Start < target->Start) ? (target->Start < End) : (Start < target->End));
 }
 
-static std::string get_text_p(AssDialogueBlock *d) { return d->GetText(); }
 std::string AssDialogue::GetStrippedText() const {
 	auto blocks = ParseTags();
-	return join(blocks | agi::of_type<AssDialogueBlockPlain>() | transformed(get_text_p), "");
+	std::string joined;
+	for (auto* block : blocks | agi::of_type<AssDialogueBlockPlain>())
+		joined += block->GetText();
+	return joined;
 }

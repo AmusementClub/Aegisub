@@ -57,9 +57,6 @@
 #include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 
-#include <boost/algorithm/string/classification.hpp>
-#include <boost/algorithm/string/predicate.hpp>
-#include <boost/algorithm/string/split.hpp>
 #include <wx/msgdlg.h>
 #include <wx/textdlg.h>
 
@@ -123,8 +120,7 @@ struct video_aspect_custom final : public validator_video_loaded {
 			//Nothing to see here, move along
 		}
 		else {
-			std::vector<std::string> chunks;
-			split(chunks, value, boost::is_any_of(":/xX"));
+			auto chunks = agi::util::strings::split_any(value, ":/xX", false);
 			if (chunks.size() == 2) {
 				double num, den;
 				if (agi::util::try_parse(chunks[0], &num) && agi::util::try_parse(chunks[1], &den))

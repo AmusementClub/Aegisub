@@ -55,7 +55,6 @@
 #include <libaegisub/vfr.h>
 
 #include <algorithm>
-#include <boost/algorithm/string/trim.hpp>
 #include <functional>
 #include <future>
 #include <memory>

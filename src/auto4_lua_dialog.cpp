@@ -45,7 +45,6 @@
 #include <libaegisub/split.h>
 #include <libaegisub/string_utils.h>
 
-#include <boost/algorithm/string/case_conv.hpp>
 #include <boost/range/adaptor/map.hpp>
 #include <boost/range/algorithm.hpp>
 #include <cfloat>

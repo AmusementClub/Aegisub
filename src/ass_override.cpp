@@ -38,7 +38,6 @@
 #include <libaegisub/make_unique.h>
 #include <libaegisub/string_utils.h>
 
-#include <boost/algorithm/string/join.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <functional>
@@ -409,9 +408,11 @@ void AssDialogueBlockOverride::AddTag(std::string const& tag) {
 	Tags.emplace_back(tag);
 }
 
-static std::string tag_str(AssOverrideTag const& t) { return t; }
 std::string AssDialogueBlockOverride::GetText() {
-	text = "{" + join(Tags | transformed(tag_str), std::string()) + "}";
+	text = "{";
+	for (auto const& tag : Tags)
+		text += static_cast<std::string>(tag);
+	text += "}";
 	return text;
 }
 
@@ -455,7 +456,6 @@ void AssOverrideTag::SetText(const std::string &text) {
 	valid = false;
 }
 
-static std::string param_str(AssOverrideParameter const& p) { return p.Get<std::string>(); }
 AssOverrideTag::operator std::string() const {
 	std::string result = Name;
 
@@ -464,10 +464,14 @@ AssOverrideTag::operator std::string() const {
 	if (parentheses) result += "(";
 
 	// Add parameters
-	result += join(Params
-		| filtered([](AssOverrideParameter const& p) { return !p.omitted; } )
-		| transformed(param_str),
-		",");
+	bool first = true;
+	for (auto const& param : Params) {
+		if (param.omitted) continue;
+		if (!first)
+			result += ",";
+		result += param.Get<std::string>();
+		first = false;
+	}
 
 	if (parentheses) result += ")";
 	return result;

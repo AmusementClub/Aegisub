@@ -44,9 +44,7 @@
 #include <libaegisub/make_unique.h>
 #include <libaegisub/string_utils.h>
 
-#include <boost/algorithm/string/classification.hpp>
-#include <boost/algorithm/string/predicate.hpp>
-
+#include <algorithm>
 #include <wx/checkbox.h>
 #include <wx/msgdlg.h>
 #include <wx/sizer.h>
@@ -61,7 +59,7 @@ static void add_hotkey(wxSizer *sizer, wxWindow *parent, const char *command, wx
 
 // Skip over override blocks, comments, and whitespace between blocks
 static bool bad_block(std::unique_ptr<AssDialogueBlock> &block) {
-	bool is_whitespace = boost::all(block->GetText(), boost::is_space());
+	bool is_whitespace = std::all_of(block->GetText().begin(), block->GetText().end(), agi::util::strings::is_space);
 	return block->GetType() != AssBlockType::PLAIN || (is_whitespace && OPT_GET("Tool/Translation Assistant/Skip Whitespace")->GetBool());
 }
 

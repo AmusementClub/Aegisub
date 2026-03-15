@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include <libaegisub/util.h>
+#include <libaegisub/string_utils.h>
 
 #include <main.h>
 
@@ -40,6 +41,42 @@ TEST(lagi_util, try_parse_int) {
 
 	EXPECT_FALSE(util::try_parse("2.0", &i));
 	EXPECT_EQ(1.0, i);
+}
+
+TEST(lagi_util, split_any_skips_empty_segments) {
+	std::vector<std::string> parts;
+	util::strings::for_each_split_any("\r\nfirst\n\nsecond\rthird\r\n", "\r\n", [&](util::strings::view part) {
+		parts.emplace_back(part);
+	});
+
+	ASSERT_EQ(3u, parts.size());
+	EXPECT_EQ("first", parts[0]);
+	EXPECT_EQ("second", parts[1]);
+	EXPECT_EQ("third", parts[2]);
+}
+
+TEST(lagi_util, split_any_handles_no_delimiters) {
+	std::vector<std::string> parts;
+	util::strings::for_each_split_any("single", "\r\n", [&](util::strings::view part) {
+		parts.emplace_back(part);
+	});
+
+	ASSERT_EQ(1u, parts.size());
+	EXPECT_EQ("single", parts[0]);
+}
+
+TEST(lagi_util, split_any_preserves_empty_segments_when_requested) {
+	auto parts = util::strings::split_any("16::9", ":", false);
+	ASSERT_EQ(3u, parts.size());
+	EXPECT_EQ("16", parts[0]);
+	EXPECT_EQ("", parts[1]);
+	EXPECT_EQ("9", parts[2]);
+}
+
+TEST(lagi_util, join_strings) {
+	std::vector<std::string> parts = {"*.ass", "*.ssa", "*.srt"};
+	EXPECT_EQ("*.ass,*.ssa,*.srt", util::strings::join(parts, ","));
+	EXPECT_EQ("*.ass;*.ssa;*.srt", util::strings::join(parts, ";"));
 }
 
 }

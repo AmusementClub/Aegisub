@@ -56,7 +56,6 @@
 #include <libaegisub/string_utils.h>
 
 #include <algorithm>
-#include <boost/algorithm/string/join.hpp>
 #include <boost/range/algorithm.hpp>
 #include <boost/range/adaptor/filtered.hpp>
 #include <boost/range/adaptor/indirected.hpp>
@@ -64,7 +63,6 @@
 #include <boost/range/adaptor/sliced.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/regex.hpp>
-#include <boost/tokenizer.hpp>
 
 #include <wx/clipbrd.h>
 #include <wx/fontdlg.h>
@@ -119,17 +117,22 @@ void paste_lines(agi::Context *c, bool paste_over, Paster&& paste_line) {
 
 	AssDialogue *first = nullptr;
 	Selection newsel;
+	bool stop = false;
 
-	boost::char_separator<char> sep("\r\n");
-	for (auto curdata : boost::tokenizer<boost::char_separator<char>>(data, sep)) {
-		AssDialogue *inserted = paste_line(get_dialogue(curdata));
-		if (!inserted)
-			break;
+	agi::util::strings::for_each_split_any(data, "\r\n", [&](agi::util::strings::view line) {
+		if (stop)
+			return;
+
+		AssDialogue *inserted = paste_line(get_dialogue(std::string(line)));
+		if (!inserted) {
+			stop = true;
+			return;
+		}
 
 		newsel.insert(inserted);
 		if (!first)
 			first = inserted;
-	}
+	});
 
 	if (first) {
 		c->ass->Commit(_("paste"), paste_over ? AssFile::COMMIT_DIAG_FULL : AssFile::COMMIT_DIAG_ADDREM);
@@ -555,9 +558,12 @@ struct edit_find_replace final : public Command {
 };
 
 static void copy_lines(agi::Context *c) {
-	SetClipboard(join(c->selectionController->GetSortedSelection()
-		| transformed(static_cast<std::string(*)(AssDialogue*)>([](AssDialogue *d) { return d->GetEntryData(); })),
-		"\r\n"));
+	auto selection = c->selectionController->GetSortedSelection();
+	std::vector<std::string> lines;
+	lines.reserve(selection.size());
+	for (auto* dialogue : selection)
+		lines.push_back(dialogue->GetEntryData());
+	SetClipboard(agi::util::strings::join(lines, "\r\n"));
 }
 
 static void delete_lines(agi::Context *c, wxString const& commit_message) {
@@ -826,16 +832,15 @@ static bool try_paste_lines(agi::Context *c) {
 	if (!agi::util::strings::starts_with(data, "Dialogue:")) return false;
 
 	EntryList<AssDialogue> parsed;
-	boost::char_separator<char> sep("\r\n");
-	for (auto curdata : boost::tokenizer<boost::char_separator<char>>(data, sep)) {
-		agi::util::strings::trim_inplace(curdata);
-		try {
+	try {
+		agi::util::strings::for_each_split_any(data, "\r\n", [&](agi::util::strings::view line) {
+			auto curdata = agi::util::strings::trim_copy(line);
 			parsed.push_back(*new AssDialogue(curdata));
-		}
-		catch (...) {
-			parsed.clear_and_dispose([](AssDialogue *e) { delete e; });
-			return false;
-		}
+		});
+	}
+	catch (...) {
+		parsed.clear_and_dispose([](AssDialogue *e) { delete e; });
+		return false;
 	}
 
 	AssDialogue *new_active = &*parsed.begin();
@@ -1236,7 +1241,6 @@ struct edit_clear final : public Command {
 	}
 };
 
-std::string get_text(AssDialogueBlock &d) { return d.GetText(); }
 struct edit_clear_text final : public Command {
 	CMD_NAME("edit/clear/text")
 	STR_DISP("Clear Text")
@@ -1246,11 +1250,12 @@ struct edit_clear_text final : public Command {
 	void operator()(agi::Context *c) override {
 		AssDialogue *line = c->selectionController->GetActiveLine();
 		auto blocks = line->ParseTags();
-		line->Text = join(blocks
-			| indirected
-			| filtered([](AssDialogueBlock const& b) { return b.GetType() != AssBlockType::PLAIN; })
-			| transformed(get_text),
-			"");
+		std::string text;
+		for (auto const& block : blocks) {
+			if (block->GetType() != AssBlockType::PLAIN)
+				text += block->GetText();
+		}
+		line->Text = std::move(text);
 		c->ass->Commit(_("clear line"), AssFile::COMMIT_DIAG_TEXT, -1, line);
 	}
 };

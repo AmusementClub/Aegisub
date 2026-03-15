@@ -6,9 +6,12 @@
 #include <charconv>
 #include <cctype>
 #include <cstddef>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
+#include <vector>
 
 #ifdef AEGISUB_USE_STRINGZILLA
 #include <stringzilla/stringzilla.h>
@@ -42,6 +45,10 @@ inline bool ascii_iequals(char left, char right) {
 
 inline bool is_space(char value) {
 	return std::isspace(static_cast<unsigned char>(value)) != 0;
+}
+
+inline bool is_any_of(char value, view chars) {
+	return chars.find(value) != npos;
 }
 
 #ifdef AEGISUB_USE_STRINGZILLA
@@ -203,6 +210,90 @@ inline typename std::enable_if<std::is_integral<Integer>::value, bool>::type par
 	auto last = value.data() + value.size();
 	auto result = std::from_chars(first, last, out);
 	return result.ec == std::errc() && result.ptr == last;
+}
+
+template<typename Floating>
+inline typename std::enable_if<std::is_floating_point<Floating>::value, bool>::type parse_decimal(view value, Floating& out) {
+	std::string copy(value);
+	char* end = nullptr;
+	if constexpr (std::is_same<Floating, float>::value)
+		out = std::strtof(copy.c_str(), &end);
+	else if constexpr (std::is_same<Floating, long double>::value)
+		out = std::strtold(copy.c_str(), &end);
+	else
+		out = std::strtod(copy.c_str(), &end);
+	return end == copy.c_str() + copy.size();
+}
+
+template<typename Func>
+void for_each_split_any(view value, view delimiters, Func&& func) {
+	std::size_t pos = 0;
+	while (pos < value.size()) {
+		while (pos < value.size() && is_any_of(value[pos], delimiters))
+			++pos;
+		if (pos >= value.size())
+			return;
+
+		auto end = pos;
+		while (end < value.size() && !is_any_of(value[end], delimiters))
+			++end;
+
+		func(subview(value, pos, end - pos));
+		pos = end;
+	}
+}
+
+template<typename Func>
+void for_each_split_any(view value, view delimiters, bool skip_empty, Func&& func) {
+	if (skip_empty) {
+		for_each_split_any(value, delimiters, std::forward<Func>(func));
+		return;
+	}
+
+	std::size_t pos = 0;
+	while (pos <= value.size()) {
+		auto end = pos;
+		while (end < value.size() && !is_any_of(value[end], delimiters))
+			++end;
+
+		func(subview(value, pos, end - pos));
+		if (end == value.size())
+			return;
+		pos = end + 1;
+	}
+}
+
+inline std::vector<std::string> split_any(view value, view delimiters, bool skip_empty = true) {
+	std::vector<std::string> parts;
+	for_each_split_any(value, delimiters, skip_empty, [&](view part) {
+		parts.emplace_back(part);
+	});
+	return parts;
+}
+
+template<typename Range>
+std::string join(Range const& values, view delimiter) {
+	std::size_t total_size = 0;
+	bool first = true;
+	for (auto const& value : values) {
+		view part(value);
+		total_size += part.size();
+		if (!first)
+			total_size += delimiter.size();
+		first = false;
+	}
+
+	std::string result;
+	result.reserve(total_size);
+	first = true;
+	for (auto const& value : values) {
+		view part(value);
+		if (!first)
+			result.append(delimiter.data(), delimiter.size());
+		result.append(part.data(), part.size());
+		first = false;
+	}
+	return result;
 }
 
 inline bool parse_hex_byte(view value, unsigned char& out) {

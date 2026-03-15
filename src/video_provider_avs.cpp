@@ -40,7 +40,6 @@
 #include <libaegisub/path.h>
 #include <libaegisub/make_unique.h>
 
-#include <boost/algorithm/string/predicate.hpp>
 #include <mutex>
 
 #ifdef _WIN32

@@ -39,9 +39,9 @@
 
 #include <libaegisub/format.h>
 #include <libaegisub/split.h>
+#include <libaegisub/string_utils.h>
+#include <libaegisub/util.h>
 
-#include <boost/algorithm/string/trim.hpp>
-#include <boost/lexical_cast.hpp>
 #include <wx/intl.h>
 
 AssStyle::AssStyle() {
@@ -59,7 +59,7 @@ class parser {
 	std::string next_tok() {
 		if (pos.eof())
 			throw SubtitleFormatParseError("Malformed style: not enough fields");
-		return agi::str(trim_copy(*pos++));
+		return agi::util::strings::trim_copy(agi::str(*pos++));
 	}
 
 public:
@@ -78,21 +78,17 @@ public:
 	agi::Color next_color() { return next_tok(); }
 
 	int next_int() {
-		try {
-			return boost::lexical_cast<int>(next_tok());
-		}
-		catch (boost::bad_lexical_cast const&) {
+		int value = 0;
+		if (!agi::util::strings::parse_integer(next_tok(), value))
 			throw SubtitleFormatParseError("Malformed style: bad int field");
-		}
+		return value;
 	}
 
 	double next_double() {
-		try {
-			return boost::lexical_cast<double>(next_tok());
-		}
-		catch (boost::bad_lexical_cast const&) {
+		double value = 0.0;
+		if (!agi::util::try_parse(next_tok(), &value))
 			throw SubtitleFormatParseError("Malformed style: bad double field");
-		}
+		return value;
 	}
 
 	void skip_token() {

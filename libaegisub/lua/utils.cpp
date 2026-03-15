@@ -20,8 +20,6 @@
 #include "libaegisub/log.h"
 #include "libaegisub/string_utils.h"
 
-#include <boost/algorithm/string/join.hpp>
-#include <boost/range/adaptor/reversed.hpp>
 #include <boost/regex.hpp>
 
 #ifdef _MSC_VER
@@ -176,7 +174,8 @@ int add_stack_trace(lua_State *L) {
 		}
 	}
 
-	push_value(L, join(frames | boost::adaptors::reversed, "\n"));
+	std::reverse(frames.begin(), frames.end());
+	push_value(L, agi::util::strings::join(frames, "\n"));
 
 	return 1;
 }

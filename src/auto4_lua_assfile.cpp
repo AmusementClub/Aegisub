@@ -48,7 +48,6 @@
 #include <libaegisub/string_utils.h>
 
 #include <algorithm>
-#include <boost/algorithm/string/case_conv.hpp>
 #include <cassert>
 #include <memory>
 

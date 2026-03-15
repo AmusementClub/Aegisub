@@ -39,7 +39,6 @@
 #include <libaegisub/string_utils.h>
 
 #include <algorithm>
-#include <boost/algorithm/string/case_conv.hpp>
 #include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/locale/collator.hpp>
 #include <vector>

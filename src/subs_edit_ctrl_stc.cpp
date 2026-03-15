@@ -48,7 +48,6 @@
 #include <libaegisub/spellchecker.h>
 #include <libaegisub/string_utils.h>
 
-#include <boost/algorithm/string/predicate.hpp>
 #include <functional>
 
 #include <wx/clipbrd.h>

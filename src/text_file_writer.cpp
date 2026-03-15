@@ -28,8 +28,6 @@
 #include <libaegisub/charset_conv.h>
 #include <libaegisub/make_unique.h>
 
-#include <boost/algorithm/string/case_conv.hpp>
-
 TextFileWriter::TextFileWriter(agi::fs::path const& filename, std::string encoding)
 : file(new agi::io::Save(filename, true))
 {

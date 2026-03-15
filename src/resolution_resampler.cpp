@@ -29,7 +29,6 @@
 #include <libaegisub/ycbcr_conv.h>
 
 #include <algorithm>
-#include <boost/algorithm/string/predicate.hpp>
 #include <cmath>
 #include <wx/intl.h>
 

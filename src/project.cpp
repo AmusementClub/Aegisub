@@ -46,7 +46,6 @@
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
 
-#include <boost/algorithm/string/case_conv.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <wx/msgdlg.h>
 

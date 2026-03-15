@@ -61,13 +61,13 @@
 #include <libaegisub/lua/utils.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
+#include <libaegisub/scope_exit.h>
 #include <libaegisub/string_utils.h>
 
 #include <algorithm>
 #include <boost/algorithm/string/case_conv.hpp>
 #include <boost/algorithm/string/classification.hpp>
 #include <boost/algorithm/string/predicate.hpp>
-#include <boost/scope_exit.hpp>
 #include <cassert>
 #include <mutex>
 #include <wx/clipbrd.h>
@@ -434,7 +434,10 @@ namespace {
 		}
 
 		bool loaded = false;
-		BOOST_SCOPE_EXIT_ALL(&) { if (!loaded) Destroy(); };
+		auto cleanup_on_failure = agi::make_scope_exit([&] {
+			if (!loaded)
+				Destroy();
+		});
 		LuaStackcheck stackcheck(L);
 
 		// register standard libs

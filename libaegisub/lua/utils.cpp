@@ -181,7 +181,7 @@ int add_stack_trace(lua_State *L) {
 	return 1;
 }
 
-int BOOST_NORETURN error(lua_State *L, const char *fmt, ...) {
+[[noreturn]] int error(lua_State *L, const char *fmt, ...) {
 	va_list argp;
 	va_start(argp, fmt);
 	luaL_where(L, 1);
@@ -191,7 +191,7 @@ int BOOST_NORETURN error(lua_State *L, const char *fmt, ...) {
 	throw error_tag();
 }
 
-int BOOST_NORETURN argerror(lua_State *L, int narg, const char *extramsg) {
+[[noreturn]] int argerror(lua_State *L, int narg, const char *extramsg) {
 	lua_Debug ar;
 	if (!lua_getstack(L, 0, &ar))
 		error(L, "bad argument #%d (%s)", narg, extramsg);
@@ -203,7 +203,7 @@ int BOOST_NORETURN argerror(lua_State *L, int narg, const char *extramsg) {
 		narg, ar.name, extramsg);
 }
 
-int BOOST_NORETURN typerror(lua_State *L, int narg, const char *tname) {
+[[noreturn]] int typerror(lua_State *L, int narg, const char *tname) {
 	const char *msg = lua_pushfstring(L, "%s expected, got %s",
 		tname, luaL_typename(L, narg));
 	argerror(L, narg, msg);

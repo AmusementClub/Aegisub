@@ -43,10 +43,10 @@
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/scope_exit.h>
 
 #include <atomic>
 #include <algorithm>
-#include <boost/scope_exit.hpp>
 #include <chrono>
 #include <condition_variable>
 #include <alsa/asoundlib.h>
@@ -123,7 +123,7 @@ void AlsaPlayer::PlaybackThread()
 	if (snd_pcm_open(&pcm, device_name.c_str(), SND_PCM_STREAM_PLAYBACK, 0) != 0)
 		return;
 	LOG_D("audio/player/alsa") << "opened pcm";
-	BOOST_SCOPE_EXIT_ALL(&) { snd_pcm_close(pcm); };
+	auto close_pcm = agi::make_scope_exit([&] { snd_pcm_close(pcm); });
 
 do_setup:
 	snd_pcm_format_t pcm_format;
@@ -199,7 +199,7 @@ do_setup:
 
 		UpdatePlaybackPosition(pcm, position);
 		playing = true;
-		BOOST_SCOPE_EXIT_ALL(&) { playing = false; };
+		auto reset_playing = agi::make_scope_exit([&] { playing = false; });
 		while (true)
 		{
 			// Sleep a bit, or until an event

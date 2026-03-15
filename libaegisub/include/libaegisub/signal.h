@@ -14,7 +14,6 @@
 
 #pragma once
 
-#include <boost/config.hpp>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -63,10 +62,10 @@ class Connection {
 	std::unique_ptr<detail::ConnectionToken> token;
 public:
 	Connection() = default;
-	Connection(UnscopedConnection src) BOOST_NOEXCEPT : token(src.token) { token->claimed = true; }
-	Connection(Connection&& that) BOOST_NOEXCEPT : token(std::move(that.token)) { }
-	Connection(detail::ConnectionToken *token) BOOST_NOEXCEPT : token(token) { token->claimed = true; }
-	Connection& operator=(Connection&& that) BOOST_NOEXCEPT { token = std::move(that.token); return *this; }
+	Connection(UnscopedConnection src) noexcept : token(src.token) { token->claimed = true; }
+	Connection(Connection&& that) noexcept : token(std::move(that.token)) { }
+	Connection(detail::ConnectionToken *token) noexcept : token(token) { token->claimed = true; }
+	Connection& operator=(Connection&& that) noexcept { token = std::move(that.token); return *this; }
 
 	/// @brief End this connection
 	///

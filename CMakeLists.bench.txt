@@ -42,6 +42,15 @@ if(STRINGZILLA_INCLUDE_DIRS)
 endif()
 target_link_libraries(string-path-bench PRIVATE "Boost::headers" "Boost::locale")
 
+add_executable(phase1-low-cost-bench EXCLUDE_FROM_ALL
+    tools/phase1_low_cost_bench_main.cpp
+)
+target_compile_features(phase1-low-cost-bench PRIVATE cxx_std_20)
+target_include_directories(phase1-low-cost-bench PRIVATE
+    "${PROJECT_SOURCE_DIR}/libaegisub/include"
+)
+target_link_libraries(phase1-low-cost-bench PRIVATE "Boost::headers")
+
 find_package(benchmark CONFIG QUIET)
 if(benchmark_FOUND)
     add_executable(audio-micro-bench EXCLUDE_FROM_ALL

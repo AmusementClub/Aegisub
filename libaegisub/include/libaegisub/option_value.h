@@ -68,7 +68,7 @@ class OptionValue {
 protected:
 	void NotifyChanged() { ValueChanged(*this); }
 
-	OptionValue(std::string name) BOOST_NOEXCEPT : name(std::move(name)) { }
+	OptionValue(std::string name) noexcept : name(std::move(name)) { }
 
 public:
 	virtual ~OptionValue() = default;

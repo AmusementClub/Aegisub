@@ -30,6 +30,7 @@ if(GTEST_FOUND)
         tests/tests/calltip_provider.cpp
         tests/tests/character_count.cpp
         tests/tests/color.cpp
+        tests/tests/crc32.cpp
         tests/tests/dialogue_lexer.cpp
         tests/tests/format.cpp
         tests/tests/fs.cpp
@@ -41,8 +42,10 @@ if(GTEST_FOUND)
         tests/tests/line_iterator.cpp
         tests/tests/line_wrap.cpp
         tests/tests/mru.cpp
+        tests/tests/math_utils.cpp
         tests/tests/option.cpp
         tests/tests/path.cpp
+        tests/tests/scope_exit.cpp
         tests/tests/signals.cpp
         tests/tests/split.cpp
         tests/tests/syntax_highlight.cpp

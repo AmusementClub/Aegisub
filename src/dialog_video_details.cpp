@@ -34,8 +34,8 @@
 #include "project.h"
 
 #include <libaegisub/ass/time.h>
+#include <libaegisub/math_utils.h>
 
-#include <boost/rational.hpp>
 #include <wx/dialog.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
@@ -49,7 +49,7 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 	auto height = provider->GetHeight();
 	auto framecount = provider->GetFrameCount();
 	auto fps = provider->GetFPS();
-	boost::rational<int> ar(width, height);
+	auto [ar_width, ar_height] = agi::util::reduce_ratio(width, height);
 
 	auto fg = new wxFlexGridSizer(2, 5, 10);
 	auto make_field = [&](wxString const& name, wxString const& value) {
@@ -58,7 +58,7 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 	};
 	make_field(_("File name:"), c->project->VideoName().wstring());
 	make_field(_("FPS:"), fmt_wx("%.3f", fps.FPS()));
-	make_field(_("Resolution:"), fmt_wx("%dx%d (%d:%d)", width, height, ar.numerator(), ar.denominator()));
+	make_field(_("Resolution:"), fmt_wx("%dx%d (%d:%d)", width, height, ar_width, ar_height));
 	make_field(_("Length:"), fmt_plural(framecount, "1 frame", "%d frames (%s)",
 		framecount, agi::Time(fps.TimeAtFrame(framecount - 1)).GetAssFormatted(true)));
 	make_field(_("Decoder:"), to_wx(provider->GetDecoderName()));

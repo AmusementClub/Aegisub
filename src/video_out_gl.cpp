@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <utility>
 
+#include <libaegisub/compiler.h>
 #include <libaegisub/log.h>
 
 // These must be included before local headers.
@@ -37,7 +38,7 @@
 
 namespace {
 template<typename Exception>
-BOOST_NOINLINE void throw_error(GLenum err, const char *msg) {
+AGI_NOINLINE void throw_error(GLenum err, const char *msg) {
 	LOG_E("video/out/gl") << msg << " failed with error code " << err;
 	throw Exception(msg, err);
 }
@@ -47,7 +48,7 @@ BOOST_NOINLINE void throw_error(GLenum err, const char *msg) {
 	do { \
 		cmd; \
 		GLenum err = glGetError(); \
-		if (BOOST_UNLIKELY(err)) \
+		AGI_UNLIKELY_IF(err) \
 			throw_error<Exception>(err, msg); \
 	} while(0);
 #define CHECK_INIT_ERROR(cmd) DO_CHECK_ERROR(cmd, VideoOutInitException, #cmd)

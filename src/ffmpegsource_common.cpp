@@ -42,14 +42,15 @@
 #include "utils.h"
 
 #include <libaegisub/background_runner.h>
+#include <libaegisub/crc32.h>
 #include <libaegisub/log.h>
 #include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
 
-#include <boost/crc.hpp>
 #include <boost/filesystem/path.hpp>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -295,11 +296,10 @@ agi::fs::path FFmpegSourceProvider::GetCacheFilename(agi::fs::path const& filena
 	uintmax_t len = agi::fs::Size(filename);
 
 	// Get the hash of the filename
-	boost::crc_32_type hash;
-	hash.process_bytes(filename.string().c_str(), filename.string().size());
+	auto hash = agi::util::crc32(filename.string());
 
 	// Generate the filename
-	auto result = config::path->Decode("?local/ffms2cache/" + std::to_string(hash.checksum()) + "_" + std::to_string(len) + "_" + std::to_string(agi::fs::ModifiedTime(filename)) + ".ffindex");
+	auto result = config::path->Decode(std::string("?local/ffms2cache/") + std::to_string(hash) + "_" + std::to_string(len) + "_" + std::to_string(agi::fs::ModifiedTime(filename)) + ".ffindex");
 
 	// Ensure that folder exists
 	agi::fs::CreateDirectory(result.parent_path());

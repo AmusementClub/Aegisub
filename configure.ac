@@ -214,12 +214,10 @@ AS_IF([test x$build_darwin != xyes], [
 PKG_CHECK_MODULES(LIBASS, libass >= libass_required_version)
 
 AX_BOOST_BASE([boost_required_version])
-AX_BOOST_CHRONO
 AX_BOOST_FILESYSTEM
 AX_BOOST_LOCALE
 AX_BOOST_REGEX
 AX_BOOST_SYSTEM
-AX_BOOST_THREAD
 
 cppflags_bak="$CPPFLAGS"
 CPPFLAGS="$CPPFLAGS $BOOST_CPPFLAGS"

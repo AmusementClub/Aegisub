@@ -22,10 +22,10 @@
 #include <libaegisub/fs.h>
 #include <libaegisub/io.h>
 #include <libaegisub/log.h>
+#include <libaegisub/scope_exit.h>
 
 #include <vector>
 #include <ShlObj.h>
-#include <boost/scope_exit.hpp>
 #include <unicode/utf16.h>
 #include <Usp10.h>
 
@@ -71,7 +71,7 @@ std::vector<agi::fs::path> get_installed_fonts() {
 		HKEY key;
 		auto ret = RegOpenKeyExW(hKey, fonts_key_name, 0, KEY_QUERY_VALUE, &key);
 		if (ret != ERROR_SUCCESS) continue;
-		BOOST_SCOPE_EXIT_ALL(= ) { RegCloseKey(key); };
+		auto close_key = agi::make_scope_exit([=] { RegCloseKey(key); });
 
 		wchar_t fdir[MAX_PATH];
 		SHGetFolderPathW(NULL, CSIDL_FONTS, NULL, 0, fdir);
@@ -197,10 +197,10 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 	// Open the font and get the data for it to look up in the index
 	auto hfont = CreateFontIndirectW(&matches[0]);
 	SelectObject(dc, hfont);
-	BOOST_SCOPE_EXIT_ALL(=) {
+	auto release_font = agi::make_scope_exit([=] {
 		SelectObject(dc, nullptr);
 		DeleteObject(hfont);
-	};
+	});
 
 	get_font_data(buffer, dc);
 

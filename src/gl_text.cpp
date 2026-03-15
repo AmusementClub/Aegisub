@@ -38,14 +38,13 @@
 #include "utils.h"
 
 #include <libaegisub/color.h>
+#include <libaegisub/compiler.h>
 #include <libaegisub/exception.h>
 
 #include <wx/bitmap.h>
 #include <wx/dcmemory.h>
 
 #include <algorithm>
-#include <boost/noncopyable.hpp>
-
 #ifdef HAVE_OPENGL_GL_H
 #include <OpenGL/gl.h>
 #else
@@ -107,7 +106,7 @@ struct OpenGLText::OpenGLTextGlyph {
 
 /// @class OpenGLTextTexture
 /// @brief OpenGL texture which stores one or more glyphs as sprites
-class OpenGLText::OpenGLTextTexture final : boost::noncopyable {
+class OpenGLText::OpenGLTextTexture final {
 	int x = 0;      ///< Next x coordinate at which a glyph can be inserted
 	int y = 0;      ///< Next y coordinate at which a glyph can be inserted
 	int nextY = 0;  ///< Y coordinate of the next line; tracked due to that lines
@@ -155,6 +154,9 @@ class OpenGLText::OpenGLTextTexture final : boost::noncopyable {
 	}
 
 public:
+	OpenGLTextTexture(OpenGLTextTexture const&) = delete;
+	OpenGLTextTexture& operator=(OpenGLTextTexture const&) = delete;
+
 	OpenGLTextTexture(OpenGLTextGlyph &glyph)
 	: width(std::max(SmallestPowerOf2(glyph.w), 64))
 	, height(std::max(SmallestPowerOf2(glyph.h), 64))
@@ -178,7 +180,7 @@ public:
 		TryToInsert(glyph);
 	}
 
-	OpenGLTextTexture(OpenGLTextTexture&& rhs) BOOST_NOEXCEPT
+	OpenGLTextTexture(OpenGLTextTexture&& rhs) noexcept
 	: x(rhs.x)
 	, y(rhs.y)
 	, nextY(rhs.nextY)

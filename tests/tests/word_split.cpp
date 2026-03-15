@@ -75,7 +75,7 @@ TEST(lagi_word_split, two_words_newline) {
 }
 
 TEST(lagi_word_split, two_words_unicode) {
-	std::string text = u8"abc\u300adef";
+	std::string text = "abc\xe3\x80\x8a" "def";
 	std::vector<DialogueToken> tokens = {{dt::TEXT, 9}};
 
 	SplitWords(text, tokens);

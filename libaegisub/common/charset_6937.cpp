@@ -21,8 +21,6 @@
 #include <cerrno>
 #include <iconv.h>
 
-#include <boost/range/algorithm/lower_bound.hpp>
-
 namespace {
 
 // ISO-6937-2 values for the first 383 codepoints
@@ -159,7 +157,7 @@ int get_iso6937(int codepoint) {
 	if (static_cast<size_t>(codepoint) < countof(iso6937_codepoints))
 		return iso6937_codepoints[codepoint];
 
-	auto ext = boost::lower_bound(iso6937_extended_codepoints, codepoint);
+	auto ext = std::lower_bound(std::begin(iso6937_extended_codepoints), std::end(iso6937_extended_codepoints), codepoint);
 	if (ext == std::end(iso6937_extended_codepoints) || ext->codepoint != codepoint)
 		return 0;
 	return ext->value;

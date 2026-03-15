@@ -24,7 +24,6 @@
 
 #include <algorithm>
 #include <boost/interprocess/streams/bufferstream.hpp>
-#include <boost/range/algorithm.hpp>
 #include <cmath>
 #include <functional>
 #include <iterator>
@@ -49,7 +48,7 @@ void validate_timecodes(std::vector<int> const& timecodes) {
 /// @param timecodes List of timecodes to normalize
 void normalize_timecodes(std::vector<int> &timecodes) {
 	if (int front = timecodes.front())
-		boost::for_each(timecodes, [=](int &tc) { tc -= front; });
+		std::for_each(timecodes.begin(), timecodes.end(), [=](int &tc) { tc -= front; });
 }
 
 // A "start,end,fps" line in a v1 timecode file
@@ -197,7 +196,7 @@ void Framerate::Save(fs::path const& filename, int length) const {
 	auto &out = file.Get();
 
 	out << "# timecode format v2\n";
-	boost::copy(timecodes, std::ostream_iterator<int>(out, "\n"));
+	std::copy(timecodes.begin(), timecodes.end(), std::ostream_iterator<int>(out, "\n"));
 	for (int written = (int)timecodes.size(); written < length; ++written)
 		out << TimeAtFrame(written) << std::endl;
 }

@@ -22,7 +22,6 @@
 
 #include <boost/locale/boundary.hpp>
 #include <boost/locale/collator.hpp>
-#include <boost/range/algorithm/copy.hpp>
 #include <unicode/uchar.h>
 #include <unicode/utf8.h>
 
@@ -164,9 +163,12 @@ karaoke_match_result auto_match_karaoke(std::vector<std::string> const& source_s
 		// Transliterate this character if it's a known hiragana or katakana character
 		std::vector<const char *> translit;
 		auto next = std::next(dst);
-		if (next != dst_end)
-			boost::copy(kana_to_romaji(dst->str() + next->str()), back_inserter(translit));
-		boost::copy(kana_to_romaji(dst->str()), back_inserter(translit));
+		if (next != dst_end) {
+			auto next_translit = kana_to_romaji(dst->str() + next->str());
+			std::copy(next_translit.begin(), next_translit.end(), back_inserter(translit));
+		}
+		auto current_translit = kana_to_romaji(dst->str());
+		std::copy(current_translit.begin(), current_translit.end(), back_inserter(translit));
 
 		// Search for it and the transliterated version in the source
 		int src_lookahead_max = (lookahead + 1) * max_character_length;

@@ -19,7 +19,6 @@
 
 #include <boost/locale/boundary.hpp>
 #include <boost/locale/conversion.hpp>
-#include <boost/range/distance.hpp>
 #include <ctime>
 
 namespace {
@@ -96,8 +95,8 @@ std::pair<size_t, size_t> ifind(std::string const& haystack, std::string const& 
 	using namespace boost::locale::boundary;
 	const ssegment_index haystack_characters(character, begin(haystack), end(haystack));
 	const ssegment_index folded_characters(character, begin(folded_hs), end(folded_hs));
-	const size_t haystack_char_count = boost::distance(haystack_characters);
-	const size_t folded_char_count = boost::distance(folded_characters);
+	const size_t haystack_char_count = static_cast<size_t>(std::distance(begin(haystack_characters), end(haystack_characters)));
+	const size_t folded_char_count = static_cast<size_t>(std::distance(begin(folded_characters), end(folded_characters)));
 
 	// As of Unicode 6.2, case folding can never reduce the number of
 	// characters, and can only reduce the number of bytes with UTF-8 when

@@ -26,8 +26,6 @@
 #include <libaegisub/make_unique.h>
 
 #include <algorithm>
-#include <boost/range/algorithm/copy.hpp>
-#include <boost/range/algorithm/set_algorithm.hpp>
 #include <wx/toolbar.h>
 
 /// Button IDs
@@ -400,13 +398,13 @@ void VisualToolVectorClip::UpdateHold() {
 
 		// Keep track of which features were selected by the box selection so
 		// that only those are deselected if the user is holding ctrl
-		boost::set_difference(boxed_features, sel_features,
+		std::set_difference(boxed_features.begin(), boxed_features.end(), sel_features.begin(), sel_features.end(),
 			std::inserter(box_added, end(box_added)));
 
-		boost::copy(boxed_features, std::inserter(sel_features, end(sel_features)));
+		std::copy(boxed_features.begin(), boxed_features.end(), std::inserter(sel_features, end(sel_features)));
 
 		std::vector<Feature *> to_deselect;
-		boost::set_difference(box_added, boxed_features, std::back_inserter(to_deselect));
+		std::set_difference(box_added.begin(), box_added.end(), boxed_features.begin(), boxed_features.end(), std::back_inserter(to_deselect));
 		for (auto feature : to_deselect)
 			sel_features.erase(feature);
 

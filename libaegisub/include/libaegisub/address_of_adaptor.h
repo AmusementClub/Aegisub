@@ -14,35 +14,19 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
-#include <boost/range/adaptor/transformed.hpp>
+#include <memory>
+#include <ranges>
 
 namespace agi {
 namespace address_of_detail {
-	using namespace boost::adaptors;
-
 	// Tag type to select the operator| overload
 	struct address_of_tag_type { };
 
-	template<typename Iterator>
-	struct take_address_of {
-		using result_type = typename std::iterator_traits<Iterator>::pointer;
-		using input_type = typename std::iterator_traits<Iterator>::reference;
-
-		result_type operator()(input_type v) const { return &v; }
-	};
-
 	template<typename Rng>
-	auto operator|(Rng&& r, address_of_tag_type)
-		-> boost::transformed_range<take_address_of<typename Rng::iterator>, Rng>
-	{
-		return r | transformed(take_address_of<typename Rng::iterator>());
-	}
-
-	template<typename Rng>
-	auto operator|(Rng& r, address_of_tag_type)
-		-> boost::transformed_range<take_address_of<typename Rng::iterator>, Rng>
-	{
-		return r | transformed(take_address_of<typename Rng::iterator>());
+	auto operator|(Rng&& r, address_of_tag_type) {
+		return std::forward<Rng>(r) | std::views::transform([](auto& value) {
+			return std::addressof(value);
+		});
 	}
 }
 

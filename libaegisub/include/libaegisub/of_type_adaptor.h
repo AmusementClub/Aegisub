@@ -14,13 +14,11 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
-#include <boost/range/adaptor/filtered.hpp>
-#include <boost/range/adaptor/transformed.hpp>
+#include <memory>
+#include <ranges>
 
 namespace agi {
 	namespace of_type_detail {
-		using namespace boost::adaptors;
-
 		/// Tag type returned from of_type<T>() to select the operator| overload
 		template<class T> struct of_type_tag {};
 
@@ -46,27 +44,11 @@ namespace agi {
 			}
 		};
 
-		template<class Type>
-		inline bool not_null(Type *ptr) {
-			return !!ptr;
-		}
-
-		// Defined here for ADL reasons, since we don't want the tag type in
-		// the top-level agi namespace (and it lets us get away with the using
-		// namespace above)
 		template<class Rng, class Type>
-		inline auto operator|(Rng& r, of_type_tag<Type>)
-			-> decltype(r | transformed(cast_to<Type>()) | filtered(not_null<Type>))
-		{
-			return r | transformed(cast_to<Type>()) | filtered(not_null<Type>);
-		}
-
-		// const overload of the above
-		template<class Rng, class Type>
-		inline auto operator|(Rng const& r, of_type_tag<Type>)
-			-> decltype(r | transformed(cast_to<const Type>()) | filtered(not_null<const Type>))
-		{
-			return r | transformed(cast_to<const Type>()) | filtered(not_null<const Type>);
+		inline auto operator|(Rng&& r, of_type_tag<Type>) {
+			return std::forward<Rng>(r)
+				| std::views::transform([](auto& value) { return cast_to<Type>{}(value); })
+				| std::views::filter([](auto* ptr) { return ptr != nullptr; });
 		}
 	}
 

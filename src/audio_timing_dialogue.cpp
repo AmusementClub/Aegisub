@@ -42,7 +42,6 @@
 #include <libaegisub/ass/time.h>
 #include <libaegisub/make_unique.h>
 
-#include <boost/range/algorithm.hpp>
 #include <wx/pen.h>
 
 namespace {
@@ -439,9 +438,9 @@ void AudioTimingControllerDialogue::GetMarkers(const TimeRange &range, AudioMark
 	seconds_provider.GetMarkers(range, out_markers);
 
 	// Copy inactive line markers in the range
-	copy(
-		boost::lower_bound(markers, range.begin(), marker_ptr_cmp()),
-		boost::upper_bound(markers, range.end(), marker_ptr_cmp()),
+	std::copy(
+		std::lower_bound(markers.begin(), markers.end(), range.begin(), marker_ptr_cmp()),
+		std::upper_bound(markers.begin(), markers.end(), range.end(), marker_ptr_cmp()),
 		back_inserter(out_markers));
 
 	keyframes_provider.GetMarkers(range, out_markers);
@@ -488,7 +487,7 @@ void AudioTimingControllerDialogue::Next(NextMode mode)
 		// same marker gets set twice
 		active_line.GetRightMarker()->SetPosition(new_end_ms + default_duration);
 		active_line.GetLeftMarker()->SetPosition(new_end_ms);
-		boost::sort(markers, marker_ptr_cmp());
+		std::sort(markers.begin(), markers.end(), marker_ptr_cmp());
 		modified_lines.insert(&active_line);
 		UpdateSelection();
 	}
@@ -619,7 +618,7 @@ std::vector<AudioMarker*> AudioTimingControllerDialogue::OnLeftClick(int ms, boo
 	{
 		// The use of GetPosition here is important, as otherwise it'll start
 		// after lines ending at the same time as the active line begins
-		auto it = boost::lower_bound(markers, clicked->GetPosition(), marker_ptr_cmp());
+		auto it = std::lower_bound(markers.begin(), markers.end(), clicked->GetPosition(), marker_ptr_cmp());
 		for (; it != markers.end() && !(*clicked < **it); ++it)
 			ret.push_back(*it);
 	}
@@ -678,7 +677,7 @@ void AudioTimingControllerDialogue::SetMarkers(std::vector<AudioMarker*> const& 
 		}
 	}
 
-	auto begin = boost::lower_bound(markers, min_ms, marker_ptr_cmp());
+	auto begin = std::lower_bound(markers.begin(), markers.end(), min_ms, marker_ptr_cmp());
 	auto end = upper_bound(begin, markers.end(), max_ms, marker_ptr_cmp());
 
 	// Update the markers
@@ -801,7 +800,7 @@ void AudioTimingControllerDialogue::RegenerateMarkers()
 		line.GetMarkers(&markers);
 	for (auto const& line : inactive_lines)
 		line.GetMarkers(&markers);
-	boost::sort(markers, marker_ptr_cmp());
+	std::sort(markers.begin(), markers.end(), marker_ptr_cmp());
 
 	AnnounceMarkerMoved();
 }
@@ -853,7 +852,7 @@ int AudioTimingControllerDialogue::SnapMarkers(int snap_range, std::vector<Audio
 	{
 		if (!marker_range.contains(*m)) return;
 		if (!inactive_markers.empty() && inactive_markers.back() == *m) return;
-		if (check && boost::find(active, m) != end(active)) return;
+		if (check && std::find(active.begin(), active.end(), m) != end(active)) return;
 		inactive_markers.push_back(*m);
 	};
 
@@ -905,7 +904,7 @@ int AudioTimingControllerDialogue::SnapMarkers(int snap_range, std::vector<Audio
 			if (snap_distance == 0) return 0;
 		}
 
-		for (auto it = boost::lower_bound(inactive_markers, range.begin()); it != end(inactive_markers); ++it)
+		for (auto it = std::lower_bound(inactive_markers.begin(), inactive_markers.end(), range.begin()); it != end(inactive_markers); ++it)
 		{
 			check(*it, pos);
 			if (snap_distance == 0) return 0;

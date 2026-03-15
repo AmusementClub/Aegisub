@@ -30,8 +30,6 @@
 #include <libaegisub/log.h>
 #include <libaegisub/string_utils.h>
 
-#include <boost/range/iterator_range.hpp>
-
 std::unique_ptr<VideoProvider> CreateDummyVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
 std::unique_ptr<VideoProvider> CreateYUV4MPEGVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
 std::unique_ptr<VideoProvider> CreateFFmpegSourceVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
@@ -90,7 +88,7 @@ std::string GetDisplayName(factory const& provider) {
 }
 
 std::vector<std::string> VideoProviderFactory::GetClasses() {
-	return ::GetClasses(boost::make_iterator_range(std::begin(providers), std::end(providers)));
+	return ::GetClasses(providers);
 }
 
 std::vector<std::pair<std::string, std::string>> VideoProviderFactory::GetChoices() {
@@ -104,7 +102,7 @@ std::vector<std::pair<std::string, std::string>> VideoProviderFactory::GetChoice
 
 std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br) {
 	auto preferred = OPT_GET("Video/Provider")->GetString();
-	auto sorted = GetSorted(boost::make_iterator_range(std::begin(providers), std::end(providers)), preferred);
+	auto sorted = GetSorted(providers, preferred);
 
 	bool found = false;
 	bool supported = false;

@@ -32,8 +32,6 @@
 #include <libaegisub/string_utils.h>
 #include <libaegisub/thesaurus.h>
 
-#include <boost/range/algorithm.hpp>
-
 Thesaurus::Thesaurus()
 : lang_listener(OPT_SUB("Tool/Thesaurus/Language", &Thesaurus::OnLanguageChanged, this))
 , dict_path_listener(OPT_SUB("Path/Dictionary", &Thesaurus::OnPathChanged, this))
@@ -63,15 +61,18 @@ static std::vector<std::string> langs(const char *ext) {
 	// Drop extensions and the th_ prefix
 	for (auto& fn : paths) fn = fn.substr(3, fn.size() - filter.size() + 1);
 
-	boost::sort(paths);
+	std::sort(paths.begin(), paths.end());
 	paths.erase(unique(begin(paths), end(paths)), end(paths));
 
 	return paths;
 }
 
 std::vector<std::string> Thesaurus::GetLanguageList() const {
-	if (languages.empty())
-		boost::set_intersection(langs("idx"), langs("dat"), back_inserter(languages));
+	if (languages.empty()) {
+		auto idx_langs = langs("idx");
+		auto dat_langs = langs("dat");
+		std::set_intersection(idx_langs.begin(), idx_langs.end(), dat_langs.begin(), dat_langs.end(), back_inserter(languages));
+	}
 	return languages;
 }
 

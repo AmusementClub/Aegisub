@@ -24,7 +24,6 @@
 #include "resolution_resampler.h"
 #include "validators.h"
 
-#include <boost/range/size.hpp>
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
 #include <wx/dialog.h>
@@ -145,7 +144,7 @@ DialogResample::DialogResample(agi::Context *c, ResampleSettings &settings)
 
 	wxString ar_modes[] = {_("Stretch"), _("Add borders"), _("Remove borders"), _("Manual")};
 	ar_mode = new wxRadioBox(&d, -1, _("Aspect Ratio Handling"), wxDefaultPosition,
-		wxDefaultSize, boost::size(ar_modes), ar_modes, 1, 4, MakeEnumBinder(&settings.ar_mode));
+		wxDefaultSize, std::size(ar_modes), ar_modes, 1, 4, MakeEnumBinder(&settings.ar_mode));
 
 	// Position the controls
 	auto margin_sizer = new wxGridSizer(3, 3, 5, 5);

@@ -14,7 +14,7 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
-#include <boost/range/iterator_range_core.hpp>
+#include <libaegisub/split.h>
 #include <string>
 #include <vector>
 
@@ -27,5 +27,5 @@ namespace agi {
 	/// Transliterated romaji for the given kana, or nullptr if not applicable
 	std::vector<const char *> kana_to_romaji(std::string const& kana);
 
-	boost::iterator_range<const kana_pair *> romaji_to_kana(std::string const& romaji);
+	iterator_range<const kana_pair *> romaji_to_kana(std::string const& romaji);
 }

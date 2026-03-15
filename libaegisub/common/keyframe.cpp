@@ -23,8 +23,6 @@
 #include "libaegisub/line_iterator.h"
 #include "libaegisub/string_utils.h"
 
-#include <boost/range/algorithm/copy.hpp>
-
 namespace {
 std::vector<int> agi_keyframes(std::istream &file) {
 	double fps;
@@ -76,7 +74,7 @@ void Save(agi::fs::path const& filename, std::vector<int> const& keyframes) {
 	std::ostream& of = file.Get();
 	of << "# keyframe format v1" << std::endl;
 	of << "fps " << 0 << std::endl;
-	boost::copy(keyframes, std::ostream_iterator<int>(of, "\n"));
+	std::copy(keyframes.begin(), keyframes.end(), std::ostream_iterator<int>(of, "\n"));
 }
 
 std::vector<int> Load(agi::fs::path const& filename) {

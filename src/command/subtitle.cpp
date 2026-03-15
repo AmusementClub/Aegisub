@@ -53,7 +53,6 @@
 #include <libaegisub/charset_conv.h>
 #include <libaegisub/make_unique.h>
 
-#include <boost/range/algorithm/copy.hpp>
 #include <wx/msgdlg.h>
 #include <wx/choicdlg.h>
 
@@ -399,7 +398,8 @@ struct subtitle_select_all final : public Command {
 
 	void operator()(agi::Context *c) override {
 		Selection sel;
-		boost::copy(c->ass->Events | agi::address_of, inserter(sel, sel.end()));
+		for (auto& line : c->ass->Events)
+			sel.insert(&line);
 		c->selectionController->SetSelectedSet(std::move(sel));
 	}
 };

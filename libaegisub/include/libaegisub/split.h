@@ -14,10 +14,41 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
-#include <boost/range/iterator_range.hpp>
+#include <iterator>
+#include <string>
+#include <string_view>
 
 namespace agi {
-	typedef boost::iterator_range<std::string::const_iterator> StringRange;
+	template<typename Iterator>
+	class iterator_range {
+		Iterator first;
+		Iterator last;
+	public:
+		using iterator = Iterator;
+		using const_iterator = Iterator;
+
+		iterator_range() = default;
+		iterator_range(Iterator first, Iterator last) : first(first), last(last) { }
+
+		Iterator begin() const { return first; }
+		Iterator end() const { return last; }
+
+		bool empty() const { return first == last; }
+		auto size() const { return static_cast<std::size_t>(std::distance(first, last)); }
+		auto operator[](std::size_t idx) const -> decltype(*(first + idx)) { return *(first + idx); }
+	};
+
+	template<typename Iterator>
+	bool operator==(iterator_range<Iterator> const& left, std::string_view right) {
+		return left.size() == right.size() && std::equal(left.begin(), left.end(), right.begin());
+	}
+
+	template<typename Iterator>
+	bool operator==(std::string_view left, iterator_range<Iterator> const& right) {
+		return right == left;
+	}
+
+	typedef iterator_range<std::string::const_iterator> StringRange;
 
 	template<typename Iterator>
 	class split_iterator {
@@ -29,7 +60,7 @@ namespace agi {
 
 	public:
 		using iterator_category = std::forward_iterator_tag;
-		using value_type = boost::iterator_range<Iterator>;
+		using value_type = iterator_range<Iterator>;
 		using pointer = value_type*;
 		using reference = value_type&;
 		using difference_type = ptrdiff_t;
@@ -47,8 +78,8 @@ namespace agi {
 
 		bool eof() const { return is_end; }
 
-		boost::iterator_range<Iterator> operator*() const {
-			return boost::make_iterator_range(b, cur);
+		iterator_range<Iterator> operator*() const {
+			return iterator_range<Iterator>(b, cur);
 		}
 
 		bool operator==(split_iterator const& it) const {

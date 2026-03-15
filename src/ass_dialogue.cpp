@@ -44,8 +44,6 @@
 #include <boost/spirit/include/karma_generate.hpp>
 #include <boost/spirit/include/karma_int.hpp>
 
-using namespace boost::adaptors;
-
 static int next_id = 0;
 
 AssDialogue::AssDialogue() {

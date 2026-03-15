@@ -42,7 +42,6 @@
 #include "video_display.h"
 #include "video_slider.h"
 
-#include <boost/range/algorithm/binary_search.hpp>
 #include <wx/combobox.h>
 #include <wx/sizer.h>
 #include <wx/statline.h>
@@ -116,7 +115,7 @@ void VideoBox::UpdateTimeBoxes() {
 
 	// Set the text box for frame number and time
 	VideoPosition->SetValue(fmt_wx("%s - %d", agi::Time(time).GetAssFormatted(true), frame));
-	if (boost::binary_search(context->project->Keyframes(), frame)) {
+	if (std::binary_search(context->project->Keyframes().begin(), context->project->Keyframes().end(), frame)) {
 		// Set the background color to indicate this is a keyframe
 		VideoPosition->SetBackgroundColour(to_wx(OPT_GET("Colour/Subtitle Grid/Background/Selection")->GetColor()));
 		VideoPosition->SetForegroundColour(to_wx(OPT_GET("Colour/Subtitle Grid/Selection")->GetColor()));

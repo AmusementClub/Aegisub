@@ -21,7 +21,6 @@
 #include "libaegisub/log.h"
 
 #include <algorithm>
-#include <boost/range/algorithm/equal_range.hpp>
 #include <tuple>
 
 namespace agi { namespace hotkey {
@@ -110,8 +109,8 @@ void Hotkey::BuildHotkey(std::string const& context, json::Object const& hotkeys
 std::string Hotkey::Scan(std::string const& context, std::string const& str, bool always) const {
 	const std::string *local = nullptr, *dfault = nullptr;
 
-	std::vector<const Combo *>::const_iterator index, end;
-	for (std::tie(index, end) = boost::equal_range(str_map, str, combo_cmp()); index != end; ++index) {
+	std::vector<const Combo *>::const_iterator index, last;
+	for (std::tie(index, last) = std::equal_range(str_map.begin(), str_map.end(), str, combo_cmp()); index != last; ++index) {
 		std::string const& ctext = (*index)->Context();
 
 		if (always && ctext == "Always") {
@@ -137,8 +136,8 @@ std::string Hotkey::Scan(std::string const& context, std::string const& str, boo
 }
 
 bool Hotkey::HasHotkey(std::string const& context, std::string const& str) const {
-	std::vector<const Combo *>::const_iterator index, end;
-	for (std::tie(index, end) = boost::equal_range(str_map, str, combo_cmp()); index != end; ++index) {
+	std::vector<const Combo *>::const_iterator index, last;
+	for (std::tie(index, last) = std::equal_range(str_map.begin(), str_map.end(), str, combo_cmp()); index != last; ++index) {
 		if (context == (*index)->Context())
 			return true;
 	}

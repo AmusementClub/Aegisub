@@ -19,8 +19,6 @@
 #include "libaegisub/fs.h"
 #include "libaegisub/string_utils.h"
 
-#include <boost/range/distance.hpp>
-
 namespace {
 static const char *tokens[] = {
 	"?audio",
@@ -113,12 +111,12 @@ fs::path Path::MakeAbsolute(fs::path path, std::string const& token) const {
 std::string Path::Encode(fs::path const& path) const {
 	// Find the shortest encoding of path made relative to each token
 	std::string shortest = path.string();
-	size_t length = boost::distance(path);
+	size_t length = static_cast<size_t>(std::distance(path.begin(), path.end()));
 	for (size_t i = 0; i < paths.size(); ++i) {
 		if (paths[i].empty()) continue;
 
 		const auto p = MakeRelative(path, tokens[i]);
-		const size_t d = boost::distance(p);
+		const size_t d = static_cast<size_t>(std::distance(p.begin(), p.end()));
 		if (d < length) {
 			length = d;
 			shortest = (tokens[i]/p).string();

@@ -27,8 +27,6 @@
 #include "search_replace_engine.h"
 #include "selection_controller.h"
 
-#include <boost/range/algorithm/set_algorithm.hpp>
-
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
 #include <wx/dialog.h>
@@ -214,18 +212,18 @@ void DialogSelection::Process(wxCommandEvent& event) {
 			break;
 
 		case Action::ADD:
-			boost::set_union(old_sel, matches, inserter(new_sel, new_sel.begin()));
+			std::set_union(old_sel.begin(), old_sel.end(), matches.begin(), matches.end(), inserter(new_sel, new_sel.begin()));
 			message = (count = new_sel.size() - old_sel.size())
 				? fmt_plural(count, "One line was added to selection", "%u lines were added to selection", count)
 				: _("No lines were added to selection");
 			break;
 
 		case Action::SUB:
-			boost::set_difference(old_sel, matches, inserter(new_sel, new_sel.begin()));
+			std::set_difference(old_sel.begin(), old_sel.end(), matches.begin(), matches.end(), inserter(new_sel, new_sel.begin()));
 			goto sub_message;
 
 		case Action::INTERSECT:
-			boost::set_intersection(old_sel, matches, inserter(new_sel, new_sel.begin()));
+			std::set_intersection(old_sel.begin(), old_sel.end(), matches.begin(), matches.end(), inserter(new_sel, new_sel.begin()));
 			sub_message:
 			message = (count = old_sel.size() - new_sel.size())
 				? fmt_plural(count, "One line was removed from selection", "%u lines were removed from selection", count)

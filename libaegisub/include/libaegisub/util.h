@@ -13,7 +13,7 @@
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 #include <algorithm>
-#include <boost/range/irange.hpp>
+#include <ranges>
 #include <string>
 #include <vector>
 
@@ -68,7 +68,6 @@ namespace agi { namespace util {
 	/// elsewhere (because libstcc++ 4.7 is missing it).
 	void sleep_for(int ms);
 
-	// boost.range doesn't have wrappers for the C++11 stuff
 	template<typename Range, typename Predicate>
 	bool any_of(Range&& r, Predicate&& p) {
 		return std::any_of(std::begin(r), std::end(r), std::forward<Predicate>(p));
@@ -77,7 +76,7 @@ namespace agi { namespace util {
 	std::string ErrorString(int error);
 
 	template<typename Integer>
-	auto range(Integer end) -> decltype(boost::irange<Integer>(0, end)) {
-		return boost::irange<Integer>(0, end);
+	auto range(Integer end) {
+		return std::views::iota(Integer(0), end);
 	}
 } } // namespace agi::util

@@ -49,7 +49,6 @@
 #include <libaegisub/util.h>
 
 #include <algorithm>
-#include <boost/range/irange.hpp>
 #include <iterator>
 
 #include <wx/choicdlg.h> // Keep this last so wxUSE_CHOICEDLG is set.
@@ -82,7 +81,7 @@ struct MkvStdIO final : InputStream {
 		auto *self = static_cast<MkvStdIO*>(st);
 		try {
 			unsigned cmp = 0;
-			for (auto i : boost::irange(start, self->file.size())) {
+			for (size_t i = start; i < self->file.size(); ++i) {
 				int c = *self->file.read(i, 1);
 				cmp = ((cmp << 8) | c) & 0xffffffff;
 				if (cmp == signature)
@@ -132,8 +131,6 @@ static void read_subtitles(agi::ProgressSink *ps, MatroskaFile *file, MkvStdIO *
 		agi::Time subStart = startTime / timecodeScaleLow;
 		agi::Time subEnd = endTime / timecodeScaleLow;
 
-		using str_range = boost::iterator_range<const char *>;
-
 		// Process SSA/ASS
 		if (!srt) {
 			auto first = std::find(readBuf, readBufEnd, ',');
@@ -154,14 +151,14 @@ static void read_subtitles(agi::ProgressSink *ps, MatroskaFile *file, MkvStdIO *
 					, marked
 					, subStart.GetAssFormatted()
 					, subEnd.GetAssFormatted()
-					, str_range(second + 1, readBufEnd)));
+					, std::string_view(second + 1, static_cast<size_t>(readBufEnd - (second + 1)))));
 		}
 		// Process SRT
 		else {
 			auto line = agi::format("Dialogue: 0,%s,%s,Default,,0,0,0,,%s"
 				, subStart.GetAssFormatted()
 				, subEnd.GetAssFormatted()
-				, str_range(readBuf, readBufEnd));
+				, std::string_view(readBuf, static_cast<size_t>(readBufEnd - readBuf)));
 			agi::util::strings::replace_all_inplace(line, "\r\n", "\\N");
 			agi::util::strings::replace_all_inplace(line, "\r", "\\N");
 			agi::util::strings::replace_all_inplace(line, "\n", "\\N");
@@ -190,7 +187,7 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 	std::vector<std::string> tracksNames;
 
 	// Find tracks
-	for (auto track : boost::irange(0u, tracks)) {
+	for (unsigned track = 0; track < tracks; ++track) {
 		auto trackInfo = mkv_GetTrackInfo(file, track);
 		if (trackInfo->Type != 0x11 || trackInfo->CompEnabled) continue;
 
@@ -267,7 +264,7 @@ bool MatroskaWrapper::HasSubtitles(agi::fs::path const& filename) {
 
 		// Find tracks
 		auto tracks = mkv_GetNumTracks(file);
-		for (auto track : boost::irange(0u, tracks)) {
+		for (unsigned track = 0; track < tracks; ++track) {
 			auto trackInfo = mkv_GetTrackInfo(file, track);
 
 			if (trackInfo->Type == 0x11 && !trackInfo->CompEnabled) {

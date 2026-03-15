@@ -32,9 +32,6 @@
 
 #include <libaegisub/make_unique.h>
 
-#include <boost/range/algorithm/copy.hpp>
-#include <boost/range/adaptor/filtered.hpp>
-#include <boost/range/adaptor/sliced.hpp>
 #include <wx/intl.h>
 
 /// @class KaraokeMarker
@@ -412,8 +409,8 @@ void AudioTimingControllerKaraoke::OnMarkerDrag(std::vector<AudioMarker*> const&
 
 	if (m.size() > 1) {
 		int delta = m[0]->GetPosition() - old_position;
-		for (AudioMarker *marker : m | boost::adaptors::sliced(1, m.size()))
-			MoveMarker(static_cast<KaraokeMarker *>(marker), marker->GetPosition() + delta);
+		for (size_t i = 1; i < m.size(); ++i)
+			MoveMarker(static_cast<KaraokeMarker *>(m[i]), m[i]->GetPosition() + delta);
 		syl = cur_syl;
 	}
 
@@ -421,7 +418,8 @@ void AudioTimingControllerKaraoke::OnMarkerDrag(std::vector<AudioMarker*> const&
 }
 
 void AudioTimingControllerKaraoke::GetLabels(TimeRange const& range, std::vector<AudioLabel> &out) const {
-	copy(labels | boost::adaptors::filtered([&](AudioLabel const& l) {
-		return range.overlaps(l.range);
-	}), back_inserter(out));
+	for (auto const& label : labels) {
+		if (range.overlaps(label.range))
+			out.push_back(label);
+	}
 }

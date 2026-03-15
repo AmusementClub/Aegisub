@@ -44,9 +44,6 @@
 #include <libaegisub/ass/time.h>
 
 #include <algorithm>
-#include <boost/range/adaptor/filtered.hpp>
-#include <boost/range/algorithm.hpp>
-#include <boost/range/algorithm_ext/push_back.hpp>
 #include <functional>
 #include <vector>
 #include <wx/button.h>
@@ -60,8 +57,6 @@
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 #include <wx/valnum.h>
-
-using namespace boost::adaptors;
 
 namespace {
 /// @class DialogTimingProcessor
@@ -334,12 +329,18 @@ std::vector<AssDialogue*> DialogTimingProcessor::SortDialogues() {
 	std::vector<AssDialogue*> sorted;
 
 	auto valid_line = [&](const AssDialogue *d) { return !d->Comment && styles.count(d->Style); };
-	if (onlySelection->IsChecked())
-		boost::copy(c->selectionController->GetSelectedSet() | filtered(valid_line),
-		    back_inserter(sorted));
+	if (onlySelection->IsChecked()) {
+		for (auto* dialogue : c->selectionController->GetSelectedSet()) {
+			if (valid_line(dialogue))
+				sorted.push_back(dialogue);
+		}
+	}
 	else {
 		sorted.reserve(c->ass->Events.size());
-		boost::push_back(sorted, c->ass->Events | agi::address_of | filtered(valid_line));
+		for (auto& dialogue : c->ass->Events) {
+			if (valid_line(&dialogue))
+				sorted.push_back(&dialogue);
+		}
 	}
 
 	// Check if rows are valid
@@ -354,14 +355,14 @@ std::vector<AssDialogue*> DialogTimingProcessor::SortDialogues() {
 		}
 	}
 
-	boost::sort(sorted, [](const AssDialogue *a, const AssDialogue *b) {
+	std::sort(sorted.begin(), sorted.end(), [](const AssDialogue *a, const AssDialogue *b) {
 		return a->Start < b->Start;
 	});
 	return sorted;
 }
 
 static int get_closest_kf(std::vector<int> const& kf, int frame) {
-	const auto pos = boost::upper_bound(kf, frame);
+	const auto pos = std::upper_bound(kf.begin(), kf.end(), frame);
 	// Return last keyframe if this is after the last one
 	if (pos == end(kf)) return kf.back();
 	// *pos is greater than frame, and *(pos - 1) is less than or equal to frame

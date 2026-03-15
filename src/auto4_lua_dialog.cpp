@@ -45,8 +45,6 @@
 #include <libaegisub/split.h>
 #include <libaegisub/string_utils.h>
 
-#include <boost/range/adaptor/map.hpp>
-#include <boost/range/algorithm.hpp>
 #include <cfloat>
 #include <unordered_map>
 
@@ -431,7 +429,7 @@ namespace Automation4 {
 			lua_for_each(L, [&]{
 				int id = string_to_wx_id(check_string(L, -2));
 				std::string label = check_string(L, -1);
-				auto btn = boost::find_if(buttons,
+				auto btn = std::find_if(buttons.begin(), buttons.end(),
 					[&](std::pair<int, std::string>& btn) { return btn.second == label; });
 				if (btn == end(buttons))
 					error(L, "Invalid button for id %s", lua_tostring(L, -2));
@@ -480,7 +478,7 @@ namespace Automation4 {
 			return button;
 		};
 
-		if (boost::count(buttons | boost::adaptors::map_keys, -1) == 0) {
+		if (std::none_of(buttons.begin(), buttons.end(), [](std::pair<int, std::string> const& button) { return button.first == -1; })) {
 			for (size_t i = 0; i < buttons.size(); ++i)
 				bs->AddButton(make_button(buttons[i].first, i, buttons[i].second));
 			bs->Realize();

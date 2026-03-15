@@ -21,7 +21,6 @@
 
 #include <libaegisub/path.h>
 
-#include <boost/range/adaptor/map.hpp>
 #include <map>
 #include <string>
 #include <vector>
@@ -95,7 +94,7 @@ DialogAutosave::DialogAutosave(wxWindow *parent)
 	Populate(files_map, OPT_GET("Path/Auto/Backup")->GetString(), ".ORIGINAL.ass", _("%s [ORIGINAL BACKUP]"));
 	Populate(files_map, "?user/recovered", ".ass", _("%s [RECOVERED]"));
 
-	for (auto& file : files_map | boost::adaptors::map_values)
+	for (auto& [key, file] : files_map)
 		files.emplace_back(std::move(file));
 
 	for (auto& file : files) {

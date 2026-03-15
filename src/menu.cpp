@@ -39,7 +39,6 @@
 #include <libaegisub/string_utils.h>
 
 #include <algorithm>
-#include <boost/range/algorithm_ext/push_back.hpp>
 #include <boost/locale/collator.hpp>
 #include <vector>
 #include <wx/frame.h>
@@ -506,7 +505,7 @@ class AutomationMenu final : public wxMenu {
 			Delete(items[i]);
 
 		auto macros = config::global_scripts->GetMacros();
-		boost::push_back(macros, c->local_scripts->GetMacros());
+		macros.insert(macros.end(), c->local_scripts->GetMacros().begin(), c->local_scripts->GetMacros().end());
 		if (macros.empty()) {
 			Append(-1, _("No Automation macros loaded"))->Enable(false);
 			return;

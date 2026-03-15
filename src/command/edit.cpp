@@ -56,12 +56,6 @@
 #include <libaegisub/string_utils.h>
 
 #include <algorithm>
-#include <boost/range/algorithm.hpp>
-#include <boost/range/adaptor/filtered.hpp>
-#include <boost/range/adaptor/indirected.hpp>
-#include <boost/range/adaptor/reversed.hpp>
-#include <boost/range/adaptor/sliced.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 #include <boost/regex.hpp>
 
 #include <wx/clipbrd.h>
@@ -69,7 +63,6 @@
 #include <wx/textentry.h>
 
 namespace {
-	using namespace boost::adaptors;
 	using cmd::Command;
 
 struct validate_sel_nonempty : public Command {
@@ -171,10 +164,12 @@ struct parsed_line {
 	parsed_line(parsed_line&& r) = default;
 
 	const AssOverrideTag *find_tag(int blockn, std::string const& tag_name, std::string const& alt) const {
-		for (auto ovr : blocks | sliced(0, blockn + 1) | reversed | agi::of_type<AssDialogueBlockOverride>()) {
-			for (auto const& tag : ovr->Tags | reversed) {
-				if (tag.Name == tag_name || tag.Name == alt)
-					return &tag;
+		for (int i = blockn; i >= 0; --i) {
+			auto* ovr = dynamic_cast<AssDialogueBlockOverride*>(blocks[i].get());
+			if (!ovr) continue;
+			for (auto it = ovr->Tags.rbegin(); it != ovr->Tags.rend(); ++it) {
+				if (it->Name == tag_name || it->Name == alt)
+					return &*it;
 			}
 		}
 		return nullptr;
@@ -986,7 +981,7 @@ struct edit_line_recombine final : public validate_sel_multiple {
 		auto active_line = c->selectionController->GetActiveLine();
 
 		std::vector<AssDialogue*> sel(sel_set.begin(), sel_set.end());
-		boost::sort(sel, [](const AssDialogue *a, const AssDialogue *b) {
+		std::sort(sel.begin(), sel.end(), [](const AssDialogue *a, const AssDialogue *b) {
 			return a->Start < b->Start;
 		});
 
@@ -1036,8 +1031,9 @@ struct edit_line_recombine final : public validate_sel_multiple {
 
 		// Remove now non-existent lines from the selection
 		Selection lines, new_sel;
-		boost::copy(c->ass->Events | agi::address_of, inserter(lines, lines.begin()));
-		boost::set_intersection(lines, sel_set, inserter(new_sel, new_sel.begin()));
+		for (auto& line : c->ass->Events)
+			lines.insert(&line);
+		std::set_intersection(lines.begin(), lines.end(), sel_set.begin(), sel_set.end(), inserter(new_sel, new_sel.begin()));
 
 		if (new_sel.empty())
 			new_sel.insert(*lines.begin());

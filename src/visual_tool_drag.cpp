@@ -34,8 +34,6 @@
 #include <libaegisub/make_unique.h>
 
 #include <algorithm>
-#include <boost/range/algorithm/binary_search.hpp>
-
 #include <wx/toolbar.h>
 
 static const DraggableFeatureType DRAG_ORIGIN = DRAG_BIG_TRIANGLE;
@@ -170,8 +168,8 @@ void VisualToolDrag::OnSelectedSetChanged() {
 
 	bool any_changed = false;
 	for (auto it = features.begin(); it != features.end(); ) {
-		bool was_selected = boost::binary_search(selection, it->line);
-		bool is_selected = boost::binary_search(new_sel, it->line);
+		bool was_selected = std::binary_search(selection.begin(), selection.end(), it->line);
+		bool is_selected = std::binary_search(new_sel.begin(), new_sel.end(), it->line);
 		if (was_selected && !is_selected) {
 			sel_features.erase(&*it++);
 			any_changed = true;
@@ -248,7 +246,7 @@ void VisualToolDrag::MakeFeatures(AssDialogue *diag, feature_list::iterator pos)
 	feat->type = DRAG_START;
 	feat->line = diag;
 
-	if (boost::binary_search(selection, diag))
+	if (std::binary_search(selection.begin(), selection.end(), diag))
 		sel_features.insert(feat.get());
 	features.insert(pos, *feat.release());
 

@@ -372,10 +372,10 @@ namespace Automation4 {
 		auto autobasefn(OPT_GET("Path/Automation/Base")->GetString());
 
 		for (auto tok : agi::Split(local_scripts, '|')) {
-			tok = agi::util::strings::trim_copy(agi::str(tok));
-			if (boost::size(tok) == 0) continue;
-			char first_char = tok[0];
-			std::string trimmed(begin(tok) + 1, end(tok));
+			auto token = agi::util::strings::trim_copy(agi::str(tok));
+			if (token.empty()) continue;
+			char first_char = token[0];
+			std::string trimmed(token.begin() + 1, token.end());
 
 			agi::fs::path basepath;
 			if (first_char == '~') {

@@ -22,7 +22,6 @@
 #include <boost/filesystem/fstream.hpp>
 #include <boost/filesystem/operations.hpp>
 #include <boost/filesystem/path.hpp>
-#include <boost/range/algorithm/remove_if.hpp>
 #include <chrono>
 
 namespace agi { namespace log {
@@ -63,11 +62,11 @@ void LogSink::Subscribe(std::unique_ptr<Emitter> em) {
 }
 
 void LogSink::Unsubscribe(Emitter *em) {
-	queue->Sync([=] {
-		emitters.erase(
-			boost::remove_if(emitters, [=](std::unique_ptr<Emitter> const& e) { return e.get() == em; }),
-			emitters.end());
-	});
+		queue->Sync([=] {
+			emitters.erase(
+				std::remove_if(emitters.begin(), emitters.end(), [=](std::unique_ptr<Emitter> const& e) { return e.get() == em; }),
+				emitters.end());
+		});
 	LOG_D("agi/log/emitter/unsubscribe") << "Un-Subscribe: " << this;
 }
 

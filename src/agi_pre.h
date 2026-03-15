@@ -92,10 +92,6 @@
 #include <boost/container/list.hpp>
 #include <boost/flyweight.hpp>
 #include <boost/io/ios_state.hpp>
-#include <boost/range/adaptor/filtered.hpp>
-#include <boost/range/adaptor/transformed.hpp>
-#include <boost/range/algorithm.hpp>
-#include <boost/range/irange.hpp>
 #include <boost/regex.hpp>
 #include <boost/filesystem/path.hpp>
 #include <boost/interprocess/streams/bufferstream.hpp>

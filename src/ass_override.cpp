@@ -38,11 +38,7 @@
 #include <libaegisub/make_unique.h>
 #include <libaegisub/string_utils.h>
 
-#include <boost/range/adaptor/filtered.hpp>
-#include <boost/range/adaptor/transformed.hpp>
 #include <functional>
-
-using namespace boost::adaptors;
 
 AssOverrideParameter::AssOverrideParameter(VariableDataType type, AssParameterClass classification)
 : type(type)

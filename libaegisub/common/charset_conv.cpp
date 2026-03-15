@@ -20,8 +20,6 @@
 #include <cstdint>
 
 #include <cassert>
-#include <boost/range/algorithm.hpp>
-
 #include <libaegisub/charset_conv.h>
 #include <iconv.h>
 
@@ -53,12 +51,12 @@ namespace {
 		static bool init = false;
 		if (!init) {
 			init = true;
-			boost::sort(pretty_names, [](pair a, pair b) {
+			std::sort(std::begin(pretty_names), std::end(pretty_names), [](pair a, pair b) {
 				return strcmp(a.pretty, b.pretty) < 0;
 			});
 		}
 
-		auto enc = boost::lower_bound(pretty_names, name, [](pair a, const char *b) {
+		auto enc = std::lower_bound(std::begin(pretty_names), std::end(pretty_names), name, [](pair a, const char *b) {
 			return strcmp(a.pretty, b) < 0;
 		});
 

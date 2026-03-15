@@ -23,8 +23,6 @@
 
 #include <libaegisub/path.h>
 
-#include <boost/range/algorithm/find.hpp>
-#include <boost/range/iterator_range.hpp>
 #include <wx/intl.h>
 #include <wx/msgdlg.h>
 
@@ -88,33 +86,37 @@ void init() {
 
 	auto migrations = OPT_GET("App/Hotkey Migrations")->GetListString();
 
-	if (boost::find(migrations, "cj") == end(migrations)) {
+	if (std::find(begin(migrations), end(migrations), "cj") == end(migrations)) {
 		migrate_hotkeys(added_hotkeys_cj);
 		migrations.emplace_back("cj");
 	}
 
-	if (boost::find(migrations, "7035") == end(migrations)) {
+	if (std::find(begin(migrations), end(migrations), "7035") == end(migrations)) {
 		migrate_hotkeys(added_hotkeys_7035);
 		migrations.emplace_back("7035");
 	}
 
-	if (boost::find(migrations, "7070") == end(migrations)) {
+	if (std::find(begin(migrations), end(migrations), "7070") == end(migrations)) {
 		migrate_hotkeys(added_hotkeys_7070);
 		migrations.emplace_back("7070");
 	}
 
-	if (boost::find(migrations, "edit/line/duplicate/shift_back") == end(migrations)) {
+	if (std::find(begin(migrations), end(migrations), "edit/line/duplicate/shift_back") == end(migrations)) {
 		migrate_hotkeys(added_hotkeys_shift_back);
 		migrations.emplace_back("edit/line/duplicate/shift_back");
 	}
 
-	if (boost::find(migrations, "duplicate -> split") == end(migrations)) {
+	if (std::find(begin(migrations), end(migrations), "duplicate -> split") == end(migrations)) {
 		auto hk_map = hotkey::inst->GetHotkeyMap();
-		for (auto const& hotkey : boost::make_iterator_range(hk_map.equal_range("edit/line/duplicate/shift"))) {
+		auto shift_range = hk_map.equal_range("edit/line/duplicate/shift");
+		for (auto it = shift_range.first; it != shift_range.second; ++it) {
+			auto const& hotkey = *it;
 			auto combo = agi::hotkey::Combo(hotkey.second.Context(), "edit/line/split/before", hotkey.second.Str());
 			hk_map.insert({combo.CmdName(), combo});
 		}
-		for (auto const& hotkey : boost::make_iterator_range(hk_map.equal_range("edit/line/duplicate/shift_back"))) {
+		auto shift_back_range = hk_map.equal_range("edit/line/duplicate/shift_back");
+		for (auto it = shift_back_range.first; it != shift_back_range.second; ++it) {
+			auto const& hotkey = *it;
 			auto combo = agi::hotkey::Combo(hotkey.second.Context(), "edit/line/split/after", hotkey.second.Str());
 			hk_map.insert({combo.CmdName(), combo});
 		}
@@ -127,7 +129,7 @@ void init() {
 	}
 
 #ifdef __WXMAC__
-	if (boost::find(migrations, "app/minimize") == end(migrations)) {
+	if (std::find(begin(migrations), end(migrations), "app/minimize") == end(migrations)) {
 		migrate_hotkeys(added_hotkeys_minimize);
 		migrations.emplace_back("app/minimize");
 	}

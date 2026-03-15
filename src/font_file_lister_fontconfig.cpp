@@ -39,7 +39,8 @@ bool pattern_matches(FcPattern *pat, const char *field, std::string const& name)
 void find_font(FcFontSet *src, FcFontSet *dst, std::string const& family) {
 	if (!src) return;
 
-	for (FcPattern *pat : boost::make_iterator_range(&src->fonts[0], &src->fonts[src->nfont])) {
+	for (int i = 0; i < src->nfont; ++i) {
+		FcPattern *pat = src->fonts[i];
 		int val;
 		if (FcPatternGetBool(pat, FC_OUTLINE, 0, &val) != FcResultMatch || val != FcTrue) continue;
 

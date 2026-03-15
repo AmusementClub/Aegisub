@@ -40,7 +40,6 @@
 #include <libaegisub/signal.h>
 
 #include <algorithm>
-#include <boost/range/algorithm/transform.hpp>
 #include <vector>
 
 #include <wx/button.h>
@@ -280,10 +279,8 @@ void DialogAutomation::OnInfo(wxCommandEvent &)
 		local_manager->GetScripts().size()));
 
 	info.push_back(_("Scripting engines installed:"));
-	boost::transform(Automation4::ScriptFactory::GetFactories(), append_info,
-		[](std::unique_ptr<Automation4::ScriptFactory> const& f) {
-			return fmt_wx("- %s (%s)", f->GetEngineName(), f->GetFilenamePattern());
-		});
+	for (auto const& f : Automation4::ScriptFactory::GetFactories())
+		info.push_back(fmt_wx("- %s (%s)", f->GetEngineName(), f->GetFilenamePattern()));
 
 	if (ei) {
 		info.push_back(fmt_tl("\nScript info:\nName: %s\nDescription: %s\nAuthor: %s\nVersion: %s\nFull path: %s\nState: %s\n\nFeatures provided by script:",
@@ -294,12 +291,10 @@ void DialogAutomation::OnInfo(wxCommandEvent &)
 			ei->script->GetFilename().wstring(),
 			ei->script->GetLoadedState() ? _("Correctly loaded") : _("Failed to load")));
 
-		boost::transform(ei->script->GetMacros(), append_info, [=](const cmd::Command *f) {
-			return fmt_tl("    Macro: %s (%s)", f->StrDisplay(context), f->name());
-		});
-		boost::transform(ei->script->GetFilters(), append_info, [](const Automation4::ExportFilter* f) {
-			return fmt_tl("    Export filter: %s", f->GetName());
-		});
+		for (auto const* f : ei->script->GetMacros())
+			info.push_back(fmt_tl("    Macro: %s (%s)", f->StrDisplay(context), f->name()));
+		for (auto const* f : ei->script->GetFilters())
+			info.push_back(fmt_tl("    Export filter: %s", f->GetName()));
 	}
 
 	wxMessageBox(wxJoin(info, '\n', 0), _("Automation Script Info"));

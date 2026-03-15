@@ -239,10 +239,10 @@ void add_styles(Func1 name_checker, Func2 style_adder) {
 	auto cb = GetClipboard();
 	int failed_to_parse = 0;
 	for (auto tok : agi::Split(cb, '\n')) {
-		tok = agi::util::strings::trim_copy(agi::str(tok));
-		if (tok.empty()) continue;
+		auto text = agi::util::strings::trim_copy(agi::str(tok));
+		if (text.empty()) continue;
 		try {
-			AssStyle *s = new AssStyle(agi::str(tok));
+			AssStyle *s = new AssStyle(text);
 			s->name = unique_name(name_checker, s->name);
 			style_adder(s);
 		}

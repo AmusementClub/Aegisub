@@ -24,8 +24,6 @@
 #include <vector>
 
 // Boost
-#include <boost/range/algorithm.hpp>
-#include <boost/range/irange.hpp>
 #include <boost/regex.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/interprocess/streams/bufferstream.hpp>

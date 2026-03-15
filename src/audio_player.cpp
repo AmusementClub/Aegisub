@@ -38,8 +38,6 @@
 #include "factory_manager.h"
 #include "options.h"
 
-#include <boost/range/iterator_range.hpp>
-
 #ifdef WITH_ALSA
 std::unique_ptr<AudioPlayer> CreateAlsaPlayer(agi::AudioProvider *providers, wxWindow *window);
 #endif
@@ -103,7 +101,7 @@ namespace {
 }
 
 std::vector<std::string> AudioPlayerFactory::GetClasses() {
-	return ::GetClasses(boost::make_iterator_range(std::begin(factories), std::end(factories)));
+	return ::GetClasses(factories);
 }
 
 std::unique_ptr<AudioPlayer> AudioPlayerFactory::GetAudioPlayer(agi::AudioProvider *provider, wxWindow *window) {
@@ -111,7 +109,7 @@ std::unique_ptr<AudioPlayer> AudioPlayerFactory::GetAudioPlayer(agi::AudioProvid
 		throw AudioPlayerOpenError("No audio players are available.");
 
 	auto preferred = OPT_GET("Audio/Player")->GetString();
-	auto sorted = GetSorted(boost::make_iterator_range(std::begin(factories), std::end(factories)), preferred);
+	auto sorted = GetSorted(factories, preferred);
 
 	std::string error;
 	for (auto factory : sorted) {

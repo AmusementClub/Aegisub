@@ -27,8 +27,6 @@
 #include <libaegisub/path.h>
 #include <libaegisub/make_unique.h>
 
-#include <boost/range/algorithm.hpp>
-
 #include <hunspell.hxx>
 
 HunspellSpellChecker::HunspellSpellChecker()
@@ -179,15 +177,18 @@ static std::vector<std::string> langs(const char *filter) {
 	// Drop extensions
 	for (auto& fn : paths) fn.resize(fn.size() - 4);
 
-	boost::sort(paths);
+	std::sort(paths.begin(), paths.end());
 	paths.erase(unique(begin(paths), end(paths)), end(paths));
 
 	return paths;
 }
 
 std::vector<std::string> HunspellSpellChecker::GetLanguageList() {
-	if (languages.empty())
-		boost::set_intersection(langs("*.dic"), langs("*.aff"), back_inserter(languages));
+	if (languages.empty()) {
+		auto dic_langs = langs("*.dic");
+		auto aff_langs = langs("*.aff");
+		std::set_intersection(dic_langs.begin(), dic_langs.end(), aff_langs.begin(), aff_langs.end(), back_inserter(languages));
+	}
 	return languages;
 }
 

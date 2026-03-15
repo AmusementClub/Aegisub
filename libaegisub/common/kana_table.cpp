@@ -16,8 +16,6 @@
 
 #include "libaegisub/kana_table.h"
 
-#include <boost/range/algorithm.hpp>
-
 namespace {
 agi::kana_pair kana_to_romaji[] = {
 	{"\xE3\x81\x81", "a"},               // ぁ
@@ -602,19 +600,19 @@ struct cmp_romaji {
 namespace agi {
 std::vector<const char *> kana_to_romaji(std::string const& kana) {
 	std::vector<const char *> ret;
-	for (auto pair = boost::lower_bound(::kana_to_romaji, kana, cmp_kana);
+	for (auto pair = std::lower_bound(std::begin(::kana_to_romaji), std::end(::kana_to_romaji), kana, cmp_kana);
 		pair != std::end(::kana_to_romaji) && !strcmp(pair->kana, kana.c_str());
 		++pair)
 		ret.push_back(pair->romaji);
 	return ret;
 }
 
-boost::iterator_range<const kana_pair *> romaji_to_kana(std::string const& romaji) {
+iterator_range<const kana_pair *> romaji_to_kana(std::string const& romaji) {
 	for (size_t len = std::min<size_t>(3, romaji.size()); len > 0; --len) {
-		auto pair = boost::equal_range(::romaji_to_kana, romaji.substr(0, len).c_str(), cmp_romaji());
+		auto pair = std::equal_range(std::begin(::romaji_to_kana), std::end(::romaji_to_kana), romaji.substr(0, len).c_str(), cmp_romaji());
 		if (pair.first != pair.second)
-			return boost::make_iterator_range(pair.first, pair.second);
+			return iterator_range<const kana_pair *>(pair.first, pair.second);
 	}
-	return boost::make_iterator_range(::romaji_to_kana, ::romaji_to_kana);
+	return iterator_range<const kana_pair *>(std::begin(::romaji_to_kana), std::begin(::romaji_to_kana));
 }
 }

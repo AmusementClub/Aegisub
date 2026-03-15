@@ -255,7 +255,7 @@ void BaseGrid::OnSeek() {
 	lines = mid(0, lines, GetRows() - yPos);
 
 	auto it = begin(visible_rows);
-	for (int i : boost::irange(yPos, yPos + lines)) {
+	for (int i = yPos; i < yPos + lines; ++i) {
 		if (IsDisplayed(index_line_map[i])) {
 			if (it == end(visible_rows) || *it != i) {
 				Refresh(false);

@@ -1,0 +1,37 @@
+{
+  "name": "aegisub",
+  "version-string": "1.0.0",
+  "builtin-baseline": "58950f88544e4637524dbd6a01d0317cf4cb77fc",
+  "dependencies": [
+    "avisynthplus",
+    "boost-asio",
+    "boost-container",
+    "boost-filesystem",
+    "boost-flyweight",
+    "boost-gil",
+    "boost-interprocess",
+    {
+      "name": "boost-locale",
+      "features": [
+        "icu"
+      ]
+    },
+    {
+      "name": "boost-regex",
+      "features": [
+        "icu"
+      ]
+    },
+    "boost-spirit",
+    "fftw3",
+    "gtest",
+    "hunspell",
+    "icu",
+    "libass",
+    "libiconv",
+    "stringzilla",
+    "uchardet",
+    "wxwidgets",
+    "xaudio2redist"
+  ]
+}

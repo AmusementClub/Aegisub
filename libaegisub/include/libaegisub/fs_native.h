@@ -1,0 +1,24 @@
+#include <libaegisub/fs_fwd.h>
+
+#include <cstdint>
+#include <ctime>
+#include <system_error>
+
+namespace agi::fs::detail {
+
+enum class FileEntryType {
+	missing,
+	regular,
+	directory,
+	other
+};
+
+struct FileInfo {
+	FileEntryType type = FileEntryType::missing;
+	uintmax_t size = 0;
+	time_t modified_time = 0;
+};
+
+bool TryGetFileInfo(path const& path, FileInfo& out, std::error_code& ec);
+
+}

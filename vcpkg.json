@@ -6,7 +6,6 @@
     "avisynthplus",
     "boost-asio",
     "boost-container",
-    "boost-filesystem",
     "boost-flyweight",
     "boost-gil",
     "boost-interprocess",

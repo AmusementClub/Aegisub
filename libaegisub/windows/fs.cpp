@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "libaegisub/fs.h"
+#include "libaegisub/fs_native.h"
 
 #include "libaegisub/access.h"
 #include "libaegisub/charset_conv_win.h"
@@ -25,15 +26,61 @@
 using agi::charset::ConvertW;
 using agi::charset::ConvertLocal;
 
-#include <filesystem>
-namespace bfs = std::filesystem;
-
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
 #undef CreateDirectory
 
 namespace agi { namespace fs {
+namespace {
+std::wstring TrimQueryPath(path const& p) {
+	auto native = p.native();
+	auto const root_len = p.root_path().native().size();
+	while (native.size() > root_len) {
+		auto const ch = native.back();
+		if (ch != L'\\' && ch != L'/')
+			break;
+		native.pop_back();
+	}
+	return native;
+}
+
+time_t FileTimeToUnixTime(FILETIME const& ft) {
+	ULARGE_INTEGER value;
+	value.LowPart = ft.dwLowDateTime;
+	value.HighPart = ft.dwHighDateTime;
+	if (value.QuadPart < 116444736000000000ULL)
+		return 0;
+	return static_cast<time_t>((value.QuadPart - 116444736000000000ULL) / 10000000ULL);
+}
+}
+
+namespace detail {
+bool TryGetFileInfo(path const& p, FileInfo& out, std::error_code& ec) {
+	out = {};
+	ec.clear();
+
+	auto const query = TrimQueryPath(p);
+	if (query.empty()) {
+		ec = std::error_code(ERROR_FILE_NOT_FOUND, std::system_category());
+		return false;
+	}
+
+	WIN32_FILE_ATTRIBUTE_DATA data;
+	if (!GetFileAttributesExW(query.c_str(), GetFileExInfoStandard, &data)) {
+		ec = std::error_code(GetLastError(), std::system_category());
+		return false;
+	}
+
+	out.type = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+		? FileEntryType::directory
+		: FileEntryType::regular;
+	out.size = (static_cast<uintmax_t>(data.nFileSizeHigh) << 32) | data.nFileSizeLow;
+	out.modified_time = FileTimeToUnixTime(data.ftLastWriteTime);
+	return true;
+}
+}
+
 std::string ShortName(path const& p) {
 	std::wstring out(MAX_PATH + 1, 0);
 	DWORD len = GetShortPathName(p.c_str(), &out[0], out.size());

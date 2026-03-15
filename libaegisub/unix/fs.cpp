@@ -16,17 +16,64 @@
 
 #include "libaegisub/access.h"
 #include "libaegisub/fs.h"
+#include "libaegisub/fs_native.h"
 #include "libaegisub/io.h"
 
+#include <cerrno>
 #include <filesystem>
 #include <fcntl.h>
 #include <fnmatch.h>
 #include <istream>
+#include <sys/stat.h>
 #include <sys/time.h>
+#include <unistd.h>
 
 namespace bfs = std::filesystem;
 
 namespace agi { namespace fs {
+namespace {
+std::string TrimQueryPath(path const& p) {
+	auto native = p.native();
+	auto const root_len = p.root_path().native().size();
+	while (native.size() > root_len) {
+		auto const ch = native.back();
+		if (ch != '/' && ch != '\\')
+			break;
+		native.pop_back();
+	}
+	return native;
+}
+}
+
+namespace detail {
+bool TryGetFileInfo(path const& p, FileInfo& out, std::error_code& ec) {
+	out = {};
+	ec.clear();
+
+	auto const query = TrimQueryPath(p);
+	if (query.empty()) {
+		ec = std::make_error_code(std::errc::no_such_file_or_directory);
+		return false;
+	}
+
+	struct stat st;
+	if (stat(query.c_str(), &st) != 0) {
+		ec = std::error_code(errno, std::generic_category());
+		return false;
+	}
+
+	if (S_ISREG(st.st_mode))
+		out.type = FileEntryType::regular;
+	else if (S_ISDIR(st.st_mode))
+		out.type = FileEntryType::directory;
+	else
+		out.type = FileEntryType::other;
+	out.size = static_cast<uintmax_t>(st.st_size);
+	out.modified_time = st.st_mtime;
+	return true;
+}
+}
+
 std::string ShortName(path const& p) {
 	return p.string();
 }

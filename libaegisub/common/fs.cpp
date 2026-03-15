@@ -15,12 +15,12 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "libaegisub/fs.h"
+#include "libaegisub/fs_native.h"
 
 #include "libaegisub/access.h"
 #include "libaegisub/log.h"
 #include "libaegisub/string_utils.h"
 
-#include <chrono>
 #include <filesystem>
 #include <random>
 
@@ -97,6 +97,7 @@ namespace {
 		switch (ec.value()) {
 			case ERROR_SUCCESS: return;
 			case ERROR_FILE_NOT_FOUND: throw FileNotFound(src_path);
+			case ERROR_PATH_NOT_FOUND: throw FileNotFound(src_path);
 			case ERROR_DIRECTORY: throw NotADirectory(src_path);
 			case ERROR_DISK_FULL: throw DriveFull(dst_path);
 			case ERROR_ACCESS_DENIED:
@@ -130,19 +131,43 @@ namespace {
 
 	WRAP_BFS(file_size, SizeImpl)
 	WRAP_BFS(space, Space)
+
+	detail::FileInfo GetFileInfoOrThrow(path const& p) {
+		detail::FileInfo info;
+		std::error_code ec;
+		if (!detail::TryGetFileInfo(p, info, ec))
+			ThrowFileSystemError(ec, p, agi::fs::path());
+		return info;
+	}
 }
 
-	WRAP_BFS_IGNORE_ERROR(exists, Exists)
-	WRAP_BFS_IGNORE_ERROR(is_regular_file, FileExists)
-	WRAP_BFS_IGNORE_ERROR(is_directory, DirectoryExists)
 	WRAP_BFS(create_directories, CreateDirectory)
 	WRAP_BFS(remove, Remove)
 	WRAP_BFS(canonical, Canonicalize)
 
+	bool Exists(path const& p) {
+		detail::FileInfo info;
+		std::error_code ec;
+		return detail::TryGetFileInfo(p, info, ec);
+	}
+
+	bool FileExists(path const& p) {
+		detail::FileInfo info;
+		std::error_code ec;
+		return detail::TryGetFileInfo(p, info, ec) && info.type == detail::FileEntryType::regular;
+	}
+
+	bool DirectoryExists(path const& p) {
+		detail::FileInfo info;
+		std::error_code ec;
+		return detail::TryGetFileInfo(p, info, ec) && info.type == detail::FileEntryType::directory;
+	}
+
 	uintmax_t Size(path const& p) {
-		if (DirectoryExists(p))
+		auto const info = GetFileInfoOrThrow(p);
+		if (info.type == detail::FileEntryType::directory || info.type == detail::FileEntryType::other)
 			throw NotAFile(p);
-		return SizeImpl(p);
+		return info.size;
 	}
 
 	uintmax_t FreeSpace(path const& p) {
@@ -150,13 +175,7 @@ namespace {
 	}
 
 	time_t ModifiedTime(path const& p) {
-		std::error_code ec;
-		auto ret = bfs::last_write_time(p, ec);
-		if (ec)
-			ThrowFileSystemError(ec, p, agi::fs::path());
-		auto sys_time = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
-			ret - bfs::file_time_type::clock::now() + std::chrono::system_clock::now());
-		return std::chrono::system_clock::to_time_t(sys_time);
+		return GetFileInfoOrThrow(p).modified_time;
 	}
 
 	void Rename(const path& from, const path& to) {

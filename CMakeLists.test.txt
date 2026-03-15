@@ -37,6 +37,7 @@ if(GTEST_FOUND)
         tests/tests/hotkey.cpp
         tests/tests/iconv.cpp
         tests/tests/ifind.cpp
+        tests/tests/io.cpp
         tests/tests/karaoke_matcher.cpp
         tests/tests/keyframe.cpp
         tests/tests/line_iterator.cpp
@@ -61,7 +62,7 @@ if(GTEST_FOUND)
     )
     target_compile_definitions(gtest-run PRIVATE CMAKE_BUILD)
     target_include_directories(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
-    target_link_libraries(gtest-run PRIVATE libaegisub "Boost::filesystem" "GTest::GTest" "Iconv::Iconv")
+    target_link_libraries(gtest-run PRIVATE libaegisub "GTest::GTest" "Iconv::Iconv")
     if(MSVC)
         set_target_properties(gtest-run PROPERTIES COMPILE_FLAGS "/Yu${PROJECT_SOURCE_DIR}/tests/support/tests_pre.h" COMPILE_FLAGS "/FI${PROJECT_SOURCE_DIR}/tests/support/tests_pre.h")
     else()

@@ -17,12 +17,11 @@
 #include "libaegisub/cajun/elements.h"
 #include "libaegisub/cajun/writer.h"
 #include "libaegisub/dispatch.h"
+#include "libaegisub/fs.h"
 #include "libaegisub/util.h"
 
-#include <boost/filesystem/fstream.hpp>
-#include <boost/filesystem/operations.hpp>
-#include <boost/filesystem/path.hpp>
 #include <chrono>
+#include <fstream>
 
 namespace agi { namespace log {
 
@@ -104,7 +103,7 @@ Message::~Message() {
 }
 
 JsonEmitter::JsonEmitter(fs::path const& directory)
-: fp(new boost::filesystem::ofstream(unique_path(directory/util::strftime("%Y-%m-%d-%H-%M-%S-%%%%%%%%.json"))))
+: fp(new std::ofstream(fs::UniquePath(directory/util::strftime("%Y-%m-%d-%H-%M-%S-%%%%%%%%.json"))))
 {
 }
 

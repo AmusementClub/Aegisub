@@ -24,8 +24,9 @@
 #include <libaegisub/util.h>
 
 #include <atomic>
-#include <boost/filesystem/fstream.hpp>
+#include <filesystem>
 #include <condition_variable>
+#include <fstream>
 #include <mutex>
 #include <thread>
 
@@ -140,7 +141,7 @@ void Write() {
 }
 
 void Write(std::string const& error) {
-	boost::filesystem::ofstream file(crashlog_path, std::ios::app);
+	std::ofstream file(crashlog_path, std::ios::app);
 	if (file.is_open()) {
 		file << agi::util::strftime("--- %y-%m-%d %H:%M:%S ------------------\n");
 		agi::format(file, "VER - %s\n", GetAegisubLongVersionString());

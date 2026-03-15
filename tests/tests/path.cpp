@@ -18,7 +18,7 @@
 
 #include <main.h>
 
-#include <boost/filesystem.hpp>
+#include <filesystem>
 
 using agi::Path;
 
@@ -42,7 +42,7 @@ TEST(lagi_path, relative_path_clears_token) {
 	EXPECT_NO_THROW(p.SetToken("?video", "relative/path"));
 	EXPECT_STREQ("?video", p.Decode("?video").string().c_str());
 
-	EXPECT_NO_THROW(p.SetToken("?video", boost::filesystem::current_path()));
+	EXPECT_NO_THROW(p.SetToken("?video", std::filesystem::current_path()));
 	EXPECT_STRNE("?video", p.Decode("?video").string().c_str());
 
 	EXPECT_NO_THROW(p.SetToken("?video", "relative/path"));
@@ -52,7 +52,7 @@ TEST(lagi_path, relative_path_clears_token) {
 TEST(lagi_path, empty_path_clears_token) {
 	Path p;
 
-	EXPECT_NO_THROW(p.SetToken("?video", boost::filesystem::current_path()));
+	EXPECT_NO_THROW(p.SetToken("?video", std::filesystem::current_path()));
 	EXPECT_STRNE("?video", p.Decode("?video").string().c_str());
 
 	EXPECT_NO_THROW(p.SetToken("?video", ""));
@@ -62,10 +62,10 @@ TEST(lagi_path, empty_path_clears_token) {
 TEST(lagi_path, decode_sets_uses_right_slashes) {
 	Path p;
 
-	agi::fs::path expected = boost::filesystem::current_path()/"foo/bar.txt";
+	agi::fs::path expected = std::filesystem::current_path()/"foo/bar.txt";
 	expected.make_preferred();
 
-	EXPECT_NO_THROW(p.SetToken("?video", boost::filesystem::current_path()));
+	EXPECT_NO_THROW(p.SetToken("?video", std::filesystem::current_path()));
 
 	agi::fs::path decoded;
 	ASSERT_NO_THROW(decoded = p.Decode("?video/foo/bar.txt"));
@@ -75,10 +75,10 @@ TEST(lagi_path, decode_sets_uses_right_slashes) {
 TEST(lagi_path, trailing_slash_on_token_is_optional) {
 	Path p;
 
-	agi::fs::path expected = boost::filesystem::current_path()/"foo.txt";
+	agi::fs::path expected = std::filesystem::current_path()/"foo.txt";
 	expected.make_preferred();
 
-	EXPECT_NO_THROW(p.SetToken("?audio", boost::filesystem::current_path()));
+	EXPECT_NO_THROW(p.SetToken("?audio", std::filesystem::current_path()));
 
 	agi::fs::path decoded;
 	ASSERT_NO_THROW(decoded = p.Decode("?audiofoo.txt"));
@@ -88,14 +88,34 @@ TEST(lagi_path, trailing_slash_on_token_is_optional) {
 	EXPECT_STREQ(expected.string().c_str(), decoded.string().c_str());
 }
 
+TEST(lagi_path, decode_token_without_suffix_returns_token_root) {
+	Path p;
+	auto expected = std::filesystem::current_path();
+	expected.make_preferred();
+
+	EXPECT_NO_THROW(p.SetToken("?video", std::filesystem::current_path()));
+	EXPECT_STREQ(expected.string().c_str(), p.Decode("?video").string().c_str());
+}
+
+#ifdef _WIN32
+TEST(lagi_path, decode_leading_separator_after_token_stays_relative_to_token_root) {
+	Path p;
+	agi::fs::path expected = std::filesystem::current_path() / "foo" / "bar.txt";
+	expected.make_preferred();
+
+	EXPECT_NO_THROW(p.SetToken("?video", std::filesystem::current_path()));
+	EXPECT_STREQ(expected.string().c_str(), p.Decode("?video\\foo\\bar.txt").string().c_str());
+}
+#endif
+
 TEST(lagi_path, setting_token_to_file_sets_to_parent_directory_instead) {
 	Path p;
 
-	agi::fs::path file = boost::filesystem::system_complete("data/file");
+	agi::fs::path file = std::filesystem::absolute("data/file");
 	ASSERT_NO_THROW(p.SetToken("?script", file));
 	EXPECT_STREQ(file.parent_path().string().c_str(), p.Decode("?script").string().c_str());
 
-	file = boost::filesystem::system_complete("data/dir");
+	file = std::filesystem::absolute("data/dir");
 	ASSERT_NO_THROW(p.SetToken("?script", file));
 	EXPECT_STREQ(file.string().c_str(), p.Decode("?script").string().c_str());
 }

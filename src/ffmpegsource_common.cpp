@@ -49,7 +49,7 @@
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
 
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <cstdint>
 #include <memory>
 #include <mutex>

@@ -62,7 +62,14 @@ fs::path Path::Decode(std::string const& path) const {
 	int idx = find_token(path.c_str(), path.size());
 	if (idx == -1 || paths[idx].empty())
 		return fs::path(path).make_preferred();
-	return (paths[idx]/path.substr(strlen(tokens[idx]))).make_preferred();
+	auto suffix = path.substr(strlen(tokens[idx]));
+	if (suffix.empty()) {
+		auto result = paths[idx];
+		return result.make_preferred();
+	}
+	if (suffix[0] == '/' || suffix[0] == '\\')
+		suffix.erase(0, 1);
+	return (paths[idx] / suffix).make_preferred();
 }
 
 fs::path Path::MakeRelative(fs::path const& path, std::string const& token) const {

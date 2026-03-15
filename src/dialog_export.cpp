@@ -40,7 +40,7 @@
 #include <libaegisub/split.h>
 
 #include <algorithm>
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <wx/button.h>
 #include <wx/dialog.h>
 #include <wx/checklst.h>

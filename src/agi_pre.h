@@ -93,7 +93,7 @@
 #include <boost/flyweight.hpp>
 #include <boost/io/ios_state.hpp>
 #include <boost/regex.hpp>
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <boost/interprocess/streams/bufferstream.hpp>
 #include <boost/interprocess/streams/vectorstream.hpp>
 

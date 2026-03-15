@@ -20,7 +20,7 @@
 #include <libaegisub/log.h>
 #include <libaegisub/string_utils.h>
 
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <fontconfig/fontconfig.h>
 #include <wx/intl.h>
 

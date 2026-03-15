@@ -20,20 +20,19 @@
 #include "libaegisub/log.h"
 #include "libaegisub/string_utils.h"
 
-#define BOOST_NO_SCOPED_ENUMS
-#include <boost/filesystem/operations.hpp>
-#undef BOOST_NO_SCOPED_ENUMS
+#include <chrono>
+#include <filesystem>
+#include <random>
 
-namespace bfs = boost::filesystem;
-namespace ec = boost::system::errc;
+namespace bfs = std::filesystem;
 
-// boost::filesystem functions throw a single exception type for all
+// filesystem functions throw a single exception type for all
 // errors, which isn't really what we want, so do some crazy wrapper
 // shit to map error codes to more useful exceptions.
-#ifdef BOOST_WINDOWS_API
+#ifdef _WIN32
 #include <winerror.h>
 #define CHECKED_CALL(exp, src_path, dst_path) \
-	boost::system::error_code ec; \
+	std::error_code ec; \
 	exp; \
 	switch (ec.value()) {\
 		case ERROR_SUCCESS: break; \
@@ -52,23 +51,24 @@ namespace ec = boost::system::errc;
 	}
 #else
 #define CHECKED_CALL(exp, src_path, dst_path) \
-	boost::system::error_code ec; \
+	std::error_code ec; \
 	exp; \
-	switch (ec.value()) {\
-		case ec::success: break; \
-		case ec::no_such_file_or_directory: throw FileNotFound(src_path); \
-		case ec::is_a_directory: throw NotAFile(src_path); \
-		case ec::not_a_directory: throw NotADirectory(src_path); \
-		case ec::no_space_on_device: throw DriveFull(dst_path); \
-		case ec::permission_denied: \
+	if (!ec) { \
+	} \
+	else if (ec == std::errc::no_such_file_or_directory) throw FileNotFound(src_path); \
+	else if (ec == std::errc::is_a_directory) throw NotAFile(src_path); \
+	else if (ec == std::errc::not_a_directory) throw NotADirectory(src_path); \
+	else if (ec == std::errc::no_space_on_device) throw DriveFull(dst_path); \
+	else if (ec == std::errc::permission_denied) { \
 			if (!src_path.empty()) \
 				acs::CheckFileRead(src_path); \
 			if (!dst_path.empty()) \
 				acs::CheckFileWrite(dst_path); \
 			throw AccessDenied(src_path); \
-		default: \
-			LOG_D("filesystem") << "Unknown error when calling '" << #exp << "': " << ec << ": " << ec.message(); \
-			throw FileSystemUnknownError(ec.message()); \
+	} \
+	else { \
+		LOG_D("filesystem") << "Unknown error when calling '" << #exp << "': " << ec << ": " << ec.message(); \
+		throw FileSystemUnknownError(ec.message()); \
 	}
 #endif
 
@@ -83,7 +83,7 @@ namespace ec = boost::system::errc;
 
 #define WRAP_BFS_IGNORE_ERROR(bfs_name, agi_name) \
 	auto agi_name(path const& p) -> decltype(bfs::bfs_name(p)) { \
-		boost::system::error_code ec; \
+		std::error_code ec; \
 		return bfs::bfs_name(p, ec); \
 	}
 
@@ -92,6 +92,42 @@ namespace ec = boost::system::errc;
 
 namespace agi { namespace fs {
 namespace {
+	void ThrowFileSystemError(std::error_code const& ec, path const& src_path, path const& dst_path) {
+#ifdef _WIN32
+		switch (ec.value()) {
+			case ERROR_SUCCESS: return;
+			case ERROR_FILE_NOT_FOUND: throw FileNotFound(src_path);
+			case ERROR_DIRECTORY: throw NotADirectory(src_path);
+			case ERROR_DISK_FULL: throw DriveFull(dst_path);
+			case ERROR_ACCESS_DENIED:
+				if (!src_path.empty())
+					acs::CheckFileRead(src_path);
+				if (!dst_path.empty())
+					acs::CheckFileWrite(dst_path);
+				throw AccessDenied(src_path);
+			default:
+				LOG_D("filesystem") << "Unknown error: " << ec << ": " << ec.message();
+				throw FileSystemUnknownError(ec.message());
+		}
+#else
+		if (!ec)
+			return;
+		if (ec == std::errc::no_such_file_or_directory) throw FileNotFound(src_path);
+		if (ec == std::errc::is_a_directory) throw NotAFile(src_path);
+		if (ec == std::errc::not_a_directory) throw NotADirectory(src_path);
+		if (ec == std::errc::no_space_on_device) throw DriveFull(dst_path);
+		if (ec == std::errc::permission_denied) {
+			if (!src_path.empty())
+				acs::CheckFileRead(src_path);
+			if (!dst_path.empty())
+				acs::CheckFileWrite(dst_path);
+			throw AccessDenied(src_path);
+		}
+		LOG_D("filesystem") << "Unknown error: " << ec << ": " << ec.message();
+		throw FileSystemUnknownError(ec.message());
+#endif
+	}
+
 	WRAP_BFS(file_size, SizeImpl)
 	WRAP_BFS(space, Space)
 }
@@ -99,7 +135,6 @@ namespace {
 	WRAP_BFS_IGNORE_ERROR(exists, Exists)
 	WRAP_BFS_IGNORE_ERROR(is_regular_file, FileExists)
 	WRAP_BFS_IGNORE_ERROR(is_directory, DirectoryExists)
-	WRAP_BFS(last_write_time, ModifiedTime)
 	WRAP_BFS(create_directories, CreateDirectory)
 	WRAP_BFS(remove, Remove)
 	WRAP_BFS(canonical, Canonicalize)
@@ -114,8 +149,29 @@ namespace {
 		return Space(p).available;
 	}
 
+	time_t ModifiedTime(path const& p) {
+		std::error_code ec;
+		auto ret = bfs::last_write_time(p, ec);
+		if (ec)
+			ThrowFileSystemError(ec, p, agi::fs::path());
+		auto sys_time = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+			ret - bfs::file_time_type::clock::now() + std::chrono::system_clock::now());
+		return std::chrono::system_clock::to_time_t(sys_time);
+	}
+
 	void Rename(const path& from, const path& to) {
 		CHECKED_CALL(bfs::rename(from, to, ec), from, to);
+	}
+
+	path UniquePath(path const& model) {
+		static thread_local std::mt19937_64 rng(std::random_device{}());
+		static constexpr char hex[] = "0123456789abcdef";
+		auto result = model.native();
+		for (auto& ch : result) {
+			if (ch == path::value_type('%'))
+				ch = static_cast<path::value_type>(hex[rng() & 0xF]);
+		}
+		return path(result);
 	}
 
 	bool HasExtension(path const& p, std::string const& ext) {

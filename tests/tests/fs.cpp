@@ -19,6 +19,9 @@
 
 #include <libaegisub/fs.h>
 
+#include <filesystem>
+#include <set>
+
 using namespace agi::fs;
 
 TEST(lagi_fs, exists) {
@@ -131,6 +134,17 @@ TEST(lagi_fs, copy_overwrites) {
 }
 
 TEST(lagi_fs, copy_creates_path) {
+	int expected_value = util::write_rand("data/copy_in");
+	auto const nested_root = std::filesystem::path("data/copy_nested");
+	auto const nested_out = nested_root / "dir" / "copy_out";
+	std::filesystem::remove_all(nested_root);
+
+	ASSERT_NO_THROW(Copy("data/copy_in", nested_out));
+
+	EXPECT_TRUE(FileExists(nested_out));
+	EXPECT_EQ(expected_value, util::read_written_rand(nested_out.string().c_str()));
+
+	std::filesystem::remove_all(nested_root);
 }
 
 TEST(lagi_fs, has_extension) {
@@ -144,6 +158,33 @@ TEST(lagi_fs, has_extension) {
 	EXPECT_FALSE(HasExtension("footxt", "txt"));
 	EXPECT_FALSE(HasExtension("foo.txt/", "txt"));
 	EXPECT_FALSE(HasExtension("foo.tar.gz", "tar"));
+}
+
+TEST(lagi_fs, create_directory_creates_intermediate_directories) {
+	auto const root = std::filesystem::path("data/fs_nested");
+	auto const leaf = root / "alpha" / "beta" / "gamma";
+	std::filesystem::remove_all(root);
+
+	ASSERT_NO_THROW(CreateDirectory(leaf));
+	EXPECT_TRUE(DirectoryExists(leaf));
+
+	std::filesystem::remove_all(root);
+}
+
+TEST(lagi_fs, unique_path_replaces_placeholders_and_preserves_shape) {
+	path const model = "data/unique_%%%%%%%%.tmp";
+	std::set<std::string> seen;
+
+	for (int i = 0; i < 128; ++i) {
+		auto generated = UniquePath(model);
+		auto const generated_str = generated.string();
+		EXPECT_EQ(std::string::npos, generated_str.find('%'));
+		EXPECT_EQ(model.extension(), generated.extension());
+		EXPECT_EQ(model.parent_path(), generated.parent_path());
+		seen.insert(generated_str);
+	}
+
+	EXPECT_EQ(128u, seen.size());
 }
 
 TEST(lagi_fs, dir_iterator_bad_directory) {

@@ -43,7 +43,7 @@
 #include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <libaegisub/format.h>
 #if BOOST_VERSION >= 106900
 #include <boost/gil.hpp>

@@ -34,7 +34,7 @@
 
 #include <libaegisub/fs_fwd.h>
 
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>

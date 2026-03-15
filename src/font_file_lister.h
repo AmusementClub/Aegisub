@@ -17,7 +17,7 @@
 #include <libaegisub/fs_fwd.h>
 #include <libaegisub/scoped_ptr.h>
 
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <string>

@@ -48,7 +48,7 @@
 #include <libaegisub/format_path.h>
 #include <libaegisub/make_unique.h>
 
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 
 #include <wx/sizer.h>
 #include <wx/display.h> /// Must be included last.

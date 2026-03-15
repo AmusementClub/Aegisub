@@ -19,7 +19,7 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/util_osx.h>
 
-#include <boost/filesystem/operations.hpp>
+#include <filesystem>
 #include <pwd.h>
 
 namespace {
@@ -53,7 +53,7 @@ void Path::FillPlatformSpecificPaths() {
 	SetToken("?data", agi::util::GetBundleSharedSupportDirectory());
 	SetToken("?dictionary", agi::util::GetBundleSharedSupportDirectory() + "/dictionaries");
 #endif
-	SetToken("?temp", boost::filesystem::temp_directory_path());
+	SetToken("?temp", std::filesystem::temp_directory_path());
 }
 
 }

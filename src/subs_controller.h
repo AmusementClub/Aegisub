@@ -18,7 +18,7 @@
 #include <libaegisub/signal.h>
 
 #include <boost/container/list.hpp>
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <wx/timer.h>
 
 class SelectionController;

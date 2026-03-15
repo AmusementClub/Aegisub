@@ -19,7 +19,7 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/fs_fwd.h>
 
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <iosfwd>
 #include <memory>
 

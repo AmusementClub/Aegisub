@@ -13,7 +13,7 @@
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 #include <array>
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <vector>
 
 #include <libaegisub/exception.h>

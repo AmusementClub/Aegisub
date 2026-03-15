@@ -25,7 +25,7 @@
 #include <libaegisub/fs_fwd.h>
 #include <libaegisub/signal.h>
 
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <memory>
 #include <set>
 

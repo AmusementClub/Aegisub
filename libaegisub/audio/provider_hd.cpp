@@ -22,7 +22,7 @@
 #include <libaegisub/path.h>
 #include <libaegisub/make_unique.h>
 
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <boost/interprocess/detail/os_thread_functions.hpp>
 #include <ctime>
 #include <thread>

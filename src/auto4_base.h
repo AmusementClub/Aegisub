@@ -41,7 +41,7 @@
 
 #include "ass_export_filter.h"
 
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <memory>
 #include <vector>
 

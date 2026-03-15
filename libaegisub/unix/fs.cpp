@@ -18,14 +18,13 @@
 #include "libaegisub/fs.h"
 #include "libaegisub/io.h"
 
-#include <boost/filesystem/operations.hpp>
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <fcntl.h>
 #include <fnmatch.h>
 #include <istream>
 #include <sys/time.h>
 
-namespace bfs = boost::filesystem;
+namespace bfs = std::filesystem;
 
 namespace agi { namespace fs {
 std::string ShortName(path const& p) {
@@ -52,7 +51,7 @@ void Copy(fs::path const& from, fs::path const& to) {
 }
 
 struct DirectoryIterator::PrivData {
-	boost::system::error_code ec;
+	std::error_code ec;
 	bfs::directory_iterator it;
 	std::string filter;
 	PrivData(path const& p, std::string const& filter) : it(p, ec), filter(filter) { }

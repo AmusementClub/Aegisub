@@ -16,7 +16,7 @@
 
 #include <libaegisub/fs_fwd.h>
 
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 
 namespace agi {
 // Default version quotes the path

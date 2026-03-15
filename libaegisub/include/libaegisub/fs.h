@@ -17,7 +17,7 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/fs_fwd.h>
 
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <cstdint>
 #include <ctime>
 #include <iterator>
@@ -142,6 +142,7 @@ namespace agi {
 		bool HasExtension(path const& p, std::string const& ext);
 
 		agi::fs::path Canonicalize(agi::fs::path const& path);
+		agi::fs::path UniquePath(agi::fs::path const& model);
 
 		class DirectoryIterator {
 			struct PrivData;

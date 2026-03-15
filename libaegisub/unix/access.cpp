@@ -24,8 +24,6 @@
 #include <errno.h>
 #include <unistd.h>
 
-#include <boost/filesystem/path.hpp>
-
 namespace agi {
 	namespace acs {
 

@@ -46,7 +46,7 @@
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
 
-#include <boost/filesystem/operations.hpp>
+#include <filesystem>
 #include <wx/msgdlg.h>
 
 Project::Project(agi::Context *c) : context(c) {

@@ -17,7 +17,7 @@
 #include <libaegisub/fs_fwd.h>
 
 #include <array>
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 
 namespace agi {
 /// Class for handling everything path-related in Aegisub

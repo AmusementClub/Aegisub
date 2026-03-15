@@ -41,7 +41,7 @@
 #ifdef __UNIX__
 #include <unistd.h>
 #endif
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <map>
 #include <unicode/locid.h>
 #include <unicode/unistr.h>

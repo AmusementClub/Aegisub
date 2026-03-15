@@ -17,12 +17,11 @@
 #include "libaegisub/fs.h"
 #include "libaegisub/lua/ffi.h"
 
-#include <boost/filesystem/operations.hpp>
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 
 using namespace agi::fs;
 using namespace agi::lua;
-namespace bfs = boost::filesystem;
+namespace bfs = std::filesystem;
 
 namespace agi {
 AGI_DEFINE_TYPE_NAME(DirectoryIterator);
@@ -102,16 +101,15 @@ DirectoryIterator *dir_new(const char *path, char **err) {
 const char *get_mode(const char *path, char **err) {
 	return wrap(err, [=]() -> const char * {
 		switch (bfs::status(path).type()) {
-			case bfs::file_not_found: return nullptr;         break;
-			case bfs::regular_file:   return "file";          break;
-			case bfs::directory_file: return "directory";     break;
-			case bfs::symlink_file:   return "link";          break;
-			case bfs::block_file:     return "block device";  break;
-			case bfs::character_file: return "char device";   break;
-			case bfs::fifo_file:      return "fifo";          break;
-			case bfs::socket_file:    return "socket";        break;
-			case bfs::reparse_file:   return "reparse point"; break;
-			default:                  return "other";         break;
+			case bfs::file_type::not_found:  return nullptr;
+			case bfs::file_type::regular:    return "file";
+			case bfs::file_type::directory:  return "directory";
+			case bfs::file_type::symlink:    return "link";
+			case bfs::file_type::block:      return "block device";
+			case bfs::file_type::character:  return "char device";
+			case bfs::file_type::fifo:       return "fifo";
+			case bfs::file_type::socket:     return "socket";
+			default:                         return "other";
 		}
 	});
 }

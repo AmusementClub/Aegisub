@@ -24,7 +24,7 @@
 #include "options.h"
 
 #include <algorithm>
-#include <boost/filesystem/path.hpp>
+#include <filesystem>
 #include <cassert>
 #include <libaegisub/string_utils.h>
 #include <unordered_map>

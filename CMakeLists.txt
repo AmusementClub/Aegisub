@@ -636,10 +636,10 @@ find_package(ass REQUIRED)
 target_include_directories(Aegisub PRIVATE ${ass_INCLUDE_DIRS})
 target_link_libraries(Aegisub LINK_PRIVATE ${ass_LIBRARIES})
 
-find_package(Boost REQUIRED container filesystem locale regex spirit)
+find_package(Boost REQUIRED container locale regex spirit)
 target_link_libraries(libaegisub PRIVATE "Boost::locale")
-target_link_libraries(libaegisub PUBLIC "Boost::headers" "Boost::container" "Boost::filesystem")
-target_link_libraries(Aegisub PRIVATE "Boost::headers" "Boost::container" "Boost::filesystem" "Boost::locale")
+target_link_libraries(libaegisub PUBLIC "Boost::headers" "Boost::container")
+target_link_libraries(Aegisub PRIVATE "Boost::headers" "Boost::container" "Boost::locale")
 # Handle Boost::regex with icu support for Boost >= 1.76.0. https://github.com/boostorg/regex/issues/143
 if(TARGET Boost::regex_icu)
     target_link_libraries(libaegisub PRIVATE "Boost::regex_icu")

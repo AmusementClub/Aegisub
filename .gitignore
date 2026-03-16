@@ -47,24 +47,12 @@
 
 .lvimrc
 .syntastic_cpp_config
-/Makefile.inc
 BuildLog.htm
-acconf.h
-acconf.h.in
-aclocal.m4
-autom4te.cache
 automation/aegisub-lua
 conf.sh
-config.log
-config.status
 config_windows.h
-configure
 git_version.h
 git_version.xml
-packages/desktop/aegisub.desktop
-packages/desktop/aegisub.desktop.template
-packages/desktop/aegisub.appdata.xml
-packages/desktop/aegisub.appdata.xml.template
 src/aegisub
 src/libresrc/bitmap.cpp
 src/libresrc/bitmap.h
@@ -76,7 +64,6 @@ svn_revision
 tests/*.json
 tests/run
 tools/osx-bundle-restart-helper
-tools/osx-bundle.sed
 tools/repack-thes-dict
 tools/repack-thes-dict.dSYM
 vendor/fribidi

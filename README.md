@@ -12,19 +12,18 @@ Support is available on IRC ( irc://irc.rizon.net/aegisub , for upstream version
 
 ## Building Aegisub
 
-### autoconf / make (for linux and macOS)
+### CMake
 
-This is the recommended way of building Aegisub on linux and macOS. Currently AviSynth+ support is not included in autoconf project. If you need AviSynth+ support, see CMake instructions below.
+CMake is the supported build system for this fork. The repository now assumes bundled LuaJIT; the old Autotools entry points are no longer maintained.
 
 Aegisub has some required dependencies:
 * `libass`
-* `Boost`(with ICU support)
+* `Boost` (with ICU support)
 * `OpenGL`
 * `libicu`
 * `wxWidgets`
 * `zlib`
 * `fontconfig` (not needed on Windows)
-* `luajit` (or `lua`)
 
 and optional dependencies:
 * `ALSA`
@@ -35,24 +34,10 @@ and optional dependencies:
 * `uchardet`
 * `AviSynth+`
 
-You can use the package manager provided by your distro to install these dependencies. Package name varies by distro. Some useful references are:
+You can use the package manager provided by your distro to install these dependencies. Package names vary by distro. Some useful references are:
 
 * For ArchLinux, refer to [AUR](https://aur.archlinux.org/cgit/aur.git/tree/PKGBUILD?h=aegisub-git).
-* For Ubuntu, refer to [Travis](.travis.yml#L14-L32).
 * For macOS, see [Special notice for macOS](https://github.com/wangqr/Aegisub/wiki/Special-notice-for-macOS) on project Wiki.
-
-After installing the dependencies, you can clone and build Aegisub with:
-```sh
-git clone https://github.com/wangqr/Aegisub.git
-cd Aegisub
-./autogen.sh
-./configure
-make
-```
-
-### CMake (for Windows, linux and macOS)
-
-This fork also provides CMake build. Currently only x86 and x64 are supported due to limited support for building LuaJIT using CMake.
 
 You still need to install the dependencies above. To enable AviSynth+ support, it is also needed. Installing dependencies on Windows can be tricky, as Windows doesn't have a good package manager. Refer to [the Wiki page](https://github.com/wangqr/Aegisub/wiki/Compile-guide-for-Windows-(CMake,-MSVC)) on how to get all dependencies on Windows.
 
@@ -61,11 +46,24 @@ After installing the dependencies, you can clone and build Aegisub with:
 ```sh
 git clone https://github.com/wangqr/Aegisub.git
 cd Aegisub
-./build/version.sh .  # This will generate build/git_version.h
 mkdir build-dir
-cd build-dir
-cmake ..  # Or use cmake-gui / ccmake
-make
+cmake -S . -B build-dir  # Or use cmake-gui / ccmake
+cmake --build build-dir
+```
+
+On Windows, generate version metadata before configuring:
+
+```powershell
+bash.exe build/version.sh .
+cmake -S . -B build-dir
+cmake --build build-dir --config RelWithDebInfo
+```
+
+This repository also includes Visual Studio presets in `CMakePresets.json`. For example:
+
+```powershell
+cmake --preset relwithdebinfo-x64
+cmake --build --preset relwithdebinfo-x64
 ```
 
 Features can be turned on/off in CMake by toggling the `WITH_*` switches.

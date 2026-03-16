@@ -37,6 +37,7 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "options.h"
+#include "subtitle_format_microdvd_parser.h"
 #include "text_file_reader.h"
 #include "text_file_writer.h"
 
@@ -47,7 +48,6 @@
 #include <libaegisub/util.h>
 #include <libaegisub/vfr.h>
 
-#include <boost/lexical_cast.hpp>
 #include <boost/regex.hpp>
 
 MicroDVDSubtitleFormat::MicroDVDSubtitleFormat()
@@ -107,8 +107,14 @@ void MicroDVDSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& file
 			if (!fps.IsLoaded()) return;
 		}
 
-		int f1 = boost::lexical_cast<int>(match[1]);
-		int f2 = boost::lexical_cast<int>(match[2]);
+		int f1 = 0;
+		int f2 = 0;
+		if (!TryParseMicroDVDFrames(
+			match[1].str(),
+			match[2].str(),
+			f1, f2)) {
+			throw SubtitleFormatParseError("Malformed MicroDVD frame number: " + line);
+		}
 
 		agi::util::strings::replace_all_inplace(text, "|", "\\N");
 

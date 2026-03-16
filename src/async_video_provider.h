@@ -14,14 +14,17 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#pragma once
+
 #include "include/aegisub/video_provider.h"
 
 #include <libaegisub/exception.h>
 #include <libaegisub/fs_fwd.h>
 
 #include <atomic>
+#include <functional>
 #include <memory>
-#include <set>
+#include <mutex>
 #include <wx/event.h>
 
 class AssDialogue;
@@ -36,7 +39,12 @@ namespace agi {
 	namespace dispatch { class Queue; }
 }
 
-/// An asynchronous video decoding and subtitle rendering wrapper
+using AsyncVideoProviderEventSink = std::function<void(std::unique_ptr<wxEvent>)>;
+
+/// A latest-only asynchronous helper for seek/drag preview requests.
+///
+/// Frame stepping in the editor uses a synchronous path in VideoController
+/// because frame-by-frame inspection favors showing each intermediate result.
 class AsyncVideoProvider {
 	/// Asynchronous work queue
 	std::unique_ptr<agi::dispatch::Queue> worker;
@@ -45,8 +53,8 @@ class AsyncVideoProvider {
 	std::unique_ptr<SubtitlesProvider> subs_provider;
 	/// Video provider
 	std::unique_ptr<VideoProvider> source_provider;
-	/// Event handler to send FrameReady events to
-	wxEvtHandler *parent;
+	/// Event sink for frame-ready and error events
+	AsyncVideoProviderEventSink event_sink;
 
 	int frame_number = -1; ///< Last frame number requested
 	double time = -1.; ///< Time of the frame to pass to the subtitle renderer
@@ -69,14 +77,26 @@ class AsyncVideoProvider {
 
 	std::shared_ptr<VideoFrame> ProcFrame(int frame, double time, bool raw = false);
 
-	/// Produce a frame if req_version is still the current version
-	void ProcAsync(uint_fast32_t req_version, bool check_updated);
-
-	/// Monotonic counter used to drop frames when changes arrive faster than
-	/// they can be rendered
-	std::atomic<uint_fast32_t> version{ 0 };
+	/// Monotonic counter used to identify the latest seek/drag request.
+	std::atomic<uint_fast32_t> request_version{ 0 };
+	/// Monotonic counter used to invalidate frames when the rendered content changes.
+	std::atomic<uint_fast32_t> content_version{ 0 };
 
 	std::vector<std::shared_ptr<VideoFrame>> buffers;
+
+	std::mutex pending_mutex;
+	std::unique_ptr<AssFile> pending_subs;
+	bool pending_check_updated = false;
+	bool has_pending_frame = false;
+	int pending_frame_number = -1;
+	double pending_time = -1.;
+	bool has_pending_color_space = false;
+	std::string pending_color_space;
+	bool processing_scheduled = false;
+
+	void DeliverEvent(std::unique_ptr<wxEvent> evt);
+	void ScheduleProcessing();
+	bool ProcessPending();
 
 public:
 	/// @brief Load the passed subtitle file
@@ -94,12 +114,12 @@ public:
 	/// insertions or deletions.
 	void UpdateSubtitles(const AssFile *subs, const AssDialogue *changes) throw();
 
-	/// @brief Queue a request for a frame
+	/// @brief Queue a latest-only preview request for a frame
 	/// @brief frame Frame number
 	/// @brief time  Exact start time of the frame in seconds
 	///
-	/// This merely queues up a request and deletes any pending requests; there
-	/// is no guarantee that the requested frame will ever actually be produced
+	/// This is intended for seek/drag preview. Pending requests are replaced by
+	/// newer ones, so there is no guarantee that every requested frame is shown.
 	void RequestFrame(int frame, double time) throw();
 
 	/// @brief Synchronously get a frame
@@ -128,6 +148,7 @@ public:
 	/// @param videoFileName File to open
 	/// @param parent Event handler to send FrameReady events to
 	AsyncVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br);
+	AsyncVideoProvider(std::unique_ptr<VideoProvider> source_provider, std::unique_ptr<SubtitlesProvider> subs_provider, AsyncVideoProviderEventSink event_sink);
 	~AsyncVideoProvider();
 };
 

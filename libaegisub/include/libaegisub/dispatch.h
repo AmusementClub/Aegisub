@@ -19,10 +19,23 @@
 
 namespace agi {
 	namespace dispatch {
-		typedef std::function<void()> Thunk;
+		using Thunk = std::function<void()>;
 
-		class Queue {
-			virtual void DoInvoke(Thunk thunk)=0;
+		class Executor {
+			virtual void DoPost(Thunk thunk)=0;
+		protected:
+			virtual void DoDispatch(Thunk thunk);
+		public:
+			virtual ~Executor() { }
+
+			/// Post the thunk to this executor and return immediately
+			void Post(Thunk thunk);
+
+			/// Run the thunk on this executor and return only when it completes
+			void Dispatch(Thunk thunk);
+		};
+
+		class Queue : public Executor {
 		public:
 			virtual ~Queue() { }
 
@@ -37,6 +50,15 @@ namespace agi {
 		/// Initialize the dispatch thread pools
 		/// @param invoke_main A function which invokes the thunk on the GUI thread
 		void Init(std::function<void (Thunk)> invoke_main);
+
+		/// Get the main-thread executor
+		Executor& MainExecutor();
+
+		/// Get the generic background executor
+		Executor& BackgroundExecutor();
+
+		/// Create a new serial executor
+		std::unique_ptr<Executor> CreateExecutor();
 
 		/// Get the main queue, which runs on the GUI thread
 		Queue& Main();

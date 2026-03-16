@@ -23,58 +23,115 @@
 
 #include "libaegisub/util.h"
 
-#include <atomic>
-#include <boost/asio/executor_work_guard.hpp>
-#include <boost/asio/io_context.hpp>
-#include <boost/asio/post.hpp>
-#include <boost/asio/strand.hpp>
 #include <condition_variable>
+#include <deque>
+#include <exception>
+#include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 namespace {
-	boost::asio::io_context *service;
 	std::function<void (agi::dispatch::Thunk)> invoke_main;
-	std::atomic<uint_fast32_t> threads_running;
+
+	class ThreadPool {
+		std::mutex mutex;
+		std::condition_variable_any cv;
+		std::deque<agi::dispatch::Thunk> tasks;
+		std::vector<std::jthread> threads;
+
+		void WorkerLoop(std::stop_token stop_token) {
+			agi::util::SetThreadName("Dispatch Worker");
+			while (true) {
+				agi::dispatch::Thunk thunk;
+				{
+					std::unique_lock<std::mutex> lock(mutex);
+					cv.wait(lock, stop_token, [&] { return !tasks.empty(); });
+					if (stop_token.stop_requested())
+						return;
+					thunk = std::move(tasks.front());
+					tasks.pop_front();
+				}
+
+				thunk();
+			}
+		}
+
+	public:
+		ThreadPool() {
+			auto const worker_count = std::max<unsigned>(4, std::thread::hardware_concurrency());
+			threads.reserve(worker_count);
+			for (unsigned i = 0; i < worker_count; ++i)
+				threads.emplace_back([this](std::stop_token stop_token) { WorkerLoop(stop_token); });
+		}
+
+		void Post(agi::dispatch::Thunk thunk) {
+			{
+				std::lock_guard<std::mutex> lock(mutex);
+				tasks.emplace_back(std::move(thunk));
+			}
+			cv.notify_one();
+		}
+	};
+
+	ThreadPool& BackgroundPool() {
+		static ThreadPool pool;
+		return pool;
+	}
 
 	class MainQueue final : public agi::dispatch::Queue {
-		void DoInvoke(agi::dispatch::Thunk thunk) override {
-			invoke_main(thunk);
+		void DoPost(agi::dispatch::Thunk thunk) override {
+			invoke_main(std::move(thunk));
 		}
 	};
 
 	class BackgroundQueue final : public agi::dispatch::Queue {
-		void DoInvoke(agi::dispatch::Thunk thunk) override {
-			boost::asio::post(*service, thunk);
+		void DoPost(agi::dispatch::Thunk thunk) override {
+			BackgroundPool().Post(std::move(thunk));
 		}
 	};
 
 	class SerialQueue final : public agi::dispatch::Queue {
-		boost::asio::io_context::strand strand;
+		struct State {
+			std::mutex mutex;
+			std::deque<agi::dispatch::Thunk> tasks;
+			bool drain_scheduled = false;
 
-		void DoInvoke(agi::dispatch::Thunk thunk) override {
-			boost::asio::post(strand, thunk);
-		}
+			void Drain() {
+				agi::util::SetThreadName("Dispatch Serial");
+				while (true) {
+					agi::dispatch::Thunk thunk;
+					{
+						std::lock_guard<std::mutex> lock(mutex);
+						if (tasks.empty()) {
+							drain_scheduled = false;
+							return;
+						}
+						thunk = std::move(tasks.front());
+						tasks.pop_front();
+					}
+
+					thunk();
+				}
+			}
+		};
+
+		std::shared_ptr<State> state = std::make_shared<State>();
+
 	public:
-		SerialQueue() : strand(*service) { }
-	};
+		void DoPost(agi::dispatch::Thunk thunk) override {
+			bool should_schedule = false;
+			{
+				std::lock_guard<std::mutex> lock(state->mutex);
+				state->tasks.emplace_back(std::move(thunk));
+				if (!state->drain_scheduled) {
+					state->drain_scheduled = true;
+					should_schedule = true;
+				}
+			}
 
-	struct IOServiceThreadPool {
-		boost::asio::io_context io_service;
-		boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work;
-		std::vector<std::thread> threads;
-
-		IOServiceThreadPool() : work(boost::asio::make_work_guard(io_service)) { }
-		~IOServiceThreadPool() {
-			work.reset();
-#ifndef _WIN32
-			for (auto& thread : threads) thread.join();
-#else
-			// Calling join() after main() returns deadlocks
-			// https://connect.microsoft.com/VisualStudio/feedback/details/747145
-			for (auto& thread : threads) thread.detach();
-			while (threads_running) std::this_thread::yield();
-#endif
+			if (should_schedule)
+				BackgroundPool().Post([state = state] { state->Drain(); });
 		}
 	};
 }
@@ -82,41 +139,30 @@ namespace {
 namespace agi { namespace dispatch {
 
 void Init(std::function<void (Thunk)> invoke_main) {
-	static IOServiceThreadPool thread_pool;
-	::service = &thread_pool.io_service;
-	::invoke_main = invoke_main;
-
-	thread_pool.threads.reserve(std::max<unsigned>(4, std::thread::hardware_concurrency()));
-	for (size_t i = 0; i < thread_pool.threads.capacity(); ++i) {
-		thread_pool.threads.emplace_back([]{
-			++threads_running;
-			agi::util::SetThreadName("Dispatch Worker");
-			service->run();
-			--threads_running;
-		});
-	}
+	::invoke_main = std::move(invoke_main);
+	(void)BackgroundPool();
 }
 
-void Queue::Async(Thunk thunk) {
-	DoInvoke([=] {
+void Executor::Post(Thunk thunk) {
+	DoPost([thunk = std::move(thunk)]() mutable {
 		try {
 			thunk();
 		}
 		catch (...) {
 			auto e = std::current_exception();
-			invoke_main([=] { std::rethrow_exception(e); });
+			invoke_main([e] { std::rethrow_exception(e); });
 		}
 	});
 }
 
-void Queue::Sync(Thunk thunk) {
+void Executor::DoDispatch(Thunk thunk) {
 	std::mutex m;
 	std::condition_variable cv;
-	std::unique_lock<std::mutex> l(m);
+	std::unique_lock<std::mutex> lock(m);
 	std::exception_ptr e;
 	bool done = false;
-	DoInvoke([&]{
-		std::unique_lock<std::mutex> l(m);
+	DoPost([&] {
+		std::unique_lock<std::mutex> thunk_lock(m);
 		try {
 			thunk();
 		}
@@ -126,8 +172,28 @@ void Queue::Sync(Thunk thunk) {
 		done = true;
 		cv.notify_all();
 	});
-	cv.wait(l, [&]{ return done; });
+	cv.wait(lock, [&] { return done; });
 	if (e) std::rethrow_exception(e);
+}
+
+void Executor::Dispatch(Thunk thunk) {
+	DoDispatch(std::move(thunk));
+}
+
+void Queue::Async(Thunk thunk) {
+	Post(std::move(thunk));
+}
+
+void Queue::Sync(Thunk thunk) {
+	Dispatch(std::move(thunk));
+}
+
+Executor& MainExecutor() {
+	return Main();
+}
+
+Executor& BackgroundExecutor() {
+	return Background();
 }
 
 Queue& Main() {
@@ -138,6 +204,10 @@ Queue& Main() {
 Queue& Background() {
 	static BackgroundQueue q;
 	return q;
+}
+
+std::unique_ptr<Executor> CreateExecutor() {
+	return std::unique_ptr<Executor>(Create().release());
 }
 
 std::unique_ptr<Queue> Create() {

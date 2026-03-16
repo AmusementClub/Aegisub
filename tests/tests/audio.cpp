@@ -24,6 +24,9 @@
 
 #include <filesystem>
 #include <fstream>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
 
 TEST(lagi_audio, dummy_blank) {
 	auto provider = agi::CreateDummyAudioProvider("dummy-audio:", nullptr);
@@ -70,6 +73,68 @@ struct TestAudioProvider : agi::AudioProvider {
 		auto out = static_cast<Sample *>(buf);
 		for (int64_t end = start + count; start < end; ++start)
 			*out++ = (Sample)(start + bias);
+	}
+};
+
+struct BlockingSequenceAudioProvider : agi::AudioProvider {
+	mutable std::mutex mutex;
+	mutable std::condition_variable cv;
+	mutable bool block_reads = true;
+	mutable bool entered = false;
+
+	BlockingSequenceAudioProvider(int64_t duration = 90) {
+		channels = 1;
+		num_samples = duration * 48000;
+		decoded_samples = num_samples;
+		sample_rate = 48000;
+		bytes_per_sample = sizeof(uint16_t);
+		float_samples = false;
+	}
+
+	void Release() const {
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			block_reads = false;
+		}
+		cv.notify_all();
+	}
+
+	bool WaitUntilEntered() const {
+		std::unique_lock<std::mutex> lock(mutex);
+		return cv.wait_for(lock, std::chrono::seconds(2), [&] { return entered; });
+	}
+
+	void FillBuffer(void *buf, int64_t start, int64_t count) const override {
+		std::unique_lock<std::mutex> lock(mutex);
+		entered = true;
+		cv.notify_all();
+		cv.wait(lock, [&] { return !block_reads; });
+		lock.unlock();
+
+		auto out = static_cast<uint16_t *>(buf);
+		for (int64_t end = start + count; start < end; ++start)
+			*out++ = static_cast<uint16_t>(start);
+	}
+};
+
+struct SlowStopAudioProvider : agi::AudioProvider {
+	int sleep_ms;
+
+	SlowStopAudioProvider(int sleep_ms, int64_t duration = 5000)
+	: sleep_ms(sleep_ms) {
+		channels = 1;
+		num_samples = duration * 48000;
+		decoded_samples = num_samples;
+		sample_rate = 48000;
+		bytes_per_sample = sizeof(uint16_t);
+		float_samples = false;
+	}
+
+	void FillBuffer(void *buf, int64_t start, int64_t count) const override {
+		agi::util::sleep_for(sleep_ms);
+		auto out = static_cast<uint16_t *>(buf);
+		for (int64_t end = start + count; start < end; ++start)
+			*out++ = static_cast<uint16_t>(start);
 	}
 };
 
@@ -225,6 +290,60 @@ TEST(lagi_audio, hd_cache) {
 
 	for (size_t i = 0; i < 512; ++i)
 		ASSERT_EQ(static_cast<uint16_t>((1 << 22) - 256 + i), buff[i]);
+}
+
+TEST(lagi_audio, ram_cache_zero_fills_undecoded_tail) {
+	auto source = agi::make_unique<BlockingSequenceAudioProvider>();
+	auto *raw = source.get();
+	auto provider = agi::CreateRAMAudioProvider(std::move(source));
+
+	ASSERT_TRUE(raw->WaitUntilEntered());
+
+	uint16_t buff[32];
+	memset(buff, 0xFF, sizeof(buff));
+	provider->GetAudio(buff, provider->GetNumSamples() - 32, 32);
+
+	for (auto sample : buff)
+		EXPECT_EQ(0, sample);
+
+	raw->Release();
+}
+
+TEST(lagi_audio, hd_cache_zero_fills_undecoded_tail) {
+	auto source = agi::make_unique<BlockingSequenceAudioProvider>();
+	auto *raw = source.get();
+	auto provider = agi::CreateHDAudioProvider(std::move(source), agi::Path().Decode("?temp"));
+
+	ASSERT_TRUE(raw->WaitUntilEntered());
+
+	uint16_t buff[32];
+	memset(buff, 0xFF, sizeof(buff));
+	provider->GetAudio(buff, provider->GetNumSamples() - 32, 32);
+
+	for (auto sample : buff)
+		EXPECT_EQ(0, sample);
+
+	raw->Release();
+}
+
+TEST(lagi_audio, ram_cache_destructor_stops_background_decode_promptly) {
+	auto start = std::chrono::steady_clock::now();
+	{
+		auto provider = agi::CreateRAMAudioProvider(agi::make_unique<SlowStopAudioProvider>(30));
+		agi::util::sleep_for(5);
+	}
+	auto elapsed = std::chrono::steady_clock::now() - start;
+	EXPECT_LT(elapsed, std::chrono::milliseconds(500));
+}
+
+TEST(lagi_audio, hd_cache_destructor_stops_background_decode_promptly) {
+	auto start = std::chrono::steady_clock::now();
+	{
+		auto provider = agi::CreateHDAudioProvider(agi::make_unique<SlowStopAudioProvider>(30), agi::Path().Decode("?temp"));
+		agi::util::sleep_for(5);
+	}
+	auto elapsed = std::chrono::steady_clock::now() - start;
+	EXPECT_LT(elapsed, std::chrono::milliseconds(500));
 }
 
 TEST(lagi_audio, convert_8bit) {

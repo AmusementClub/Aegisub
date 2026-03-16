@@ -19,13 +19,25 @@ if(GTEST_FOUND)
         tests/tests/access.cpp
         tests/tests/audio.cpp
         tests/tests/audio_display.cpp
+        tests/tests/async_video_provider.cpp
+        tests/tests/dispatch.cpp
         src/audio_display_analysis.cpp
         src/audio_latest_range_scheduler.cpp
         src/audio_display_source.cpp
         src/audio_mix_policy.cpp
         src/audio_spectrum_analysis_cache.cpp
         src/audio_waveform_summary_cache.cpp
+        src/ass_attachment.cpp
+        src/ass_dialogue.cpp
+        src/ass_entry.cpp
+        src/ass_file.cpp
+        src/ass_override.cpp
+        src/ass_style.cpp
+        src/ass_style_storage.cpp
+        src/async_video_provider.cpp
+        src/compat.cpp
         src/fft.cpp
+        src/utils.cpp
         tests/tests/cajun.cpp
         tests/tests/calltip_provider.cpp
         tests/tests/character_count.cpp
@@ -46,6 +58,7 @@ if(GTEST_FOUND)
         tests/tests/math_utils.cpp
         tests/tests/option.cpp
         tests/tests/path.cpp
+        tests/tests/ready_flag.cpp
         tests/tests/scope_exit.cpp
         tests/tests/signals.cpp
         tests/tests/split.cpp
@@ -56,18 +69,17 @@ if(GTEST_FOUND)
         tests/tests/util.cpp
         tests/tests/uuencode.cpp
         tests/tests/vfr.cpp
+        tests/tests/video_cache.cpp
         tests/tests/word_split.cpp
         tests/support/main.cpp
+        tests/support/src_config_stubs.cpp
         tests/support/util.cpp
+        src/video_provider_cache.cpp
     )
     target_compile_definitions(gtest-run PRIVATE CMAKE_BUILD)
     target_include_directories(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
-    target_link_libraries(gtest-run PRIVATE libaegisub "GTest::GTest" "Iconv::Iconv")
-    if(MSVC)
-        set_target_properties(gtest-run PROPERTIES COMPILE_FLAGS "/Yu${PROJECT_SOURCE_DIR}/tests/support/tests_pre.h" COMPILE_FLAGS "/FI${PROJECT_SOURCE_DIR}/tests/support/tests_pre.h")
-    else()
-        target_compile_options(gtest-run PRIVATE -include "${PROJECT_SOURCE_DIR}/tests/support/tests_pre.h")
-    endif()
+    target_link_libraries(gtest-run PRIVATE libaegisub "GTest::GTest" "Iconv::Iconv" ${wxWidgets_LIBRARIES})
+    target_precompile_headers(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/tests/support/tests_pre.h")
     if(WIN32)
         add_custom_target(test-aegisub
             COMMAND "${PROJECT_SOURCE_DIR}/tests/setup.bat"

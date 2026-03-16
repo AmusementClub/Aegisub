@@ -17,6 +17,7 @@
 #include "libaegisub/dispatch.h"
 
 #include <dispatch/dispatch.h>
+#include <condition_variable>
 #include <mutex>
 
 namespace {
@@ -24,13 +25,13 @@ using namespace agi::dispatch;
 std::function<void (Thunk)> invoke_main;
 
 struct OSXQueue : Queue {
-    virtual void DoSync(Thunk thunk)=0;
+    virtual void DoDispatch(Thunk thunk) override = 0;
 };
 
 struct MainQueue final : OSXQueue {
-    void DoInvoke(Thunk thunk) override { invoke_main(thunk); }
+    void DoPost(Thunk thunk) override { invoke_main(std::move(thunk)); }
 
-    void DoSync(Thunk thunk) override {
+    void DoDispatch(Thunk thunk) override {
         std::mutex m;
         std::condition_variable cv;
         std::unique_lock<std::mutex> l(m);
@@ -57,7 +58,7 @@ struct GCDQueue final : OSXQueue {
     GCDQueue(dispatch_queue_t queue) : queue(queue) { }
     ~GCDQueue() { dispatch_release(queue); }
 
-    void DoInvoke(Thunk thunk) override {
+    void DoPost(Thunk thunk) override {
         dispatch_async(queue, ^{
             try {
                 thunk();
@@ -69,7 +70,7 @@ struct GCDQueue final : OSXQueue {
         });
     }
 
-    void DoSync(Thunk thunk) override {
+    void DoDispatch(Thunk thunk) override {
         std::exception_ptr e;
         std::exception_ptr *e_ptr = &e;
         dispatch_sync(queue, ^{
@@ -90,8 +91,27 @@ void Init(std::function<void (Thunk)> invoke_main) {
     ::invoke_main = std::move(invoke_main);
 }
 
-void Queue::Async(Thunk thunk) { DoInvoke(std::move(thunk)); }
-void Queue::Sync(Thunk thunk) { static_cast<OSXQueue *>(this)->DoSync(std::move(thunk)); }
+void Executor::Post(Thunk thunk) {
+    DoPost([thunk = std::move(thunk)]() mutable {
+        try {
+            thunk();
+        }
+        catch (...) {
+            auto e = std::current_exception();
+            invoke_main([e] { std::rethrow_exception(e); });
+        }
+    });
+}
+
+void Executor::Dispatch(Thunk thunk) {
+    static_cast<OSXQueue *>(this)->DoDispatch(std::move(thunk));
+}
+
+void Queue::Async(Thunk thunk) { Post(std::move(thunk)); }
+void Queue::Sync(Thunk thunk) { Dispatch(std::move(thunk)); }
+
+Executor& MainExecutor() { return Main(); }
+Executor& BackgroundExecutor() { return Background(); }
 
 Queue& Main() {
     static MainQueue q;
@@ -106,5 +126,9 @@ Queue& Background() {
 std::unique_ptr<Queue> Create() {
     return std::unique_ptr<Queue>(new GCDQueue(dispatch_queue_create("Aegisub worker queue",
                                                                      DISPATCH_QUEUE_SERIAL)));
+}
+
+std::unique_ptr<Executor> CreateExecutor() {
+    return std::unique_ptr<Executor>(Create().release());
 }
 } }

@@ -45,18 +45,30 @@ class VideoProviderCache final : public VideoProvider {
 	///
 	/// Note that this is a soft limit. The cache stops allocating new frames
 	/// once it has exceeded the limit, but it never tries to shrink
-	const size_t max_cache_size = OPT_GET("Provider/Video/Cache/Size")->GetInt() << 20; // convert MB to bytes
+	const size_t max_cache_size;
 
-	/// Cache of video frames with the most recently used ones at the front
+	/// Cache of video frames with the most recently used ones at the front.
 	std::list<CachedFrame> cache;
 
+	void ClearCache() {
+		cache.clear();
+	}
+
 public:
-	VideoProviderCache(std::unique_ptr<VideoProvider> master) : master(std::move(master)) { }
+	VideoProviderCache(std::unique_ptr<VideoProvider> master)
+	: master(std::move(master))
+	, max_cache_size(OPT_GET("Provider/Video/Cache/Size")->GetInt() << 20) {
+	}
+
+	VideoProviderCache(std::unique_ptr<VideoProvider> master, size_t max_cache_size)
+	: master(std::move(master))
+	, max_cache_size(max_cache_size) {
+	}
 
 	void GetFrame(int n, VideoFrame &frame) override;
 
 	void SetColorSpace(std::string const& m) override {
-		cache.clear();
+		ClearCache();
 		return master->SetColorSpace(m);
 	}
 
@@ -79,7 +91,7 @@ void VideoProviderCache::GetFrame(int n, VideoFrame &out) {
 
 	for (auto cur = cache.begin(); cur != cache.end(); ++cur) {
 		if (cur->frame_number == n) {
-			cache.splice(cache.begin(), cache, cur); // Move to front
+			cache.splice(cache.begin(), cache, cur);
 			out = cache.front().frame;
 			return;
 		}
@@ -89,16 +101,24 @@ void VideoProviderCache::GetFrame(int n, VideoFrame &out) {
 
 	master->GetFrame(n, out);
 
-	if (total_size >= max_cache_size) {
-		cache.splice(cache.begin(), cache, --cache.end()); // Move last to front
+	if (max_cache_size == 0)
+		return;
+
+	if (total_size >= max_cache_size && !cache.empty()) {
+		cache.splice(cache.begin(), cache, --cache.end());
 		cache.front().frame_number = n;
 		cache.front().frame = out;
 	}
-	else
+	else {
 		cache.emplace_front(out, n);
+	}
 }
 }
 
 std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoProvider> parent) {
 	return agi::make_unique<VideoProviderCache>(std::move(parent));
+}
+
+std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoProvider> parent, size_t max_cache_size_bytes) {
+	return agi::make_unique<VideoProviderCache>(std::move(parent), max_cache_size_bytes);
 }

@@ -36,6 +36,7 @@
 
 #include "compat.h"
 #include "include/aegisub/subtitles_provider.h"
+#include "ready_flag.h"
 #include "video_frame.h"
 
 #include <libaegisub/background_runner.h>
@@ -43,7 +44,6 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
-#include <libaegisub/util.h>
 
 #include <atomic>
 #if BOOST_VERSION >= 106900
@@ -51,6 +51,7 @@
 #else
 #include <boost/gil.hpp>
 #endif
+#include <chrono>
 #include <memory>
 #include <mutex>
 
@@ -84,7 +85,8 @@ void msg_callback(int level, const char *fmt, va_list args, void *) {
 // gets deleted before the cache finishing updating
 struct cache_thread_shared {
 	ASS_Renderer *renderer = nullptr;
-	std::atomic<bool> ready{false};
+	std::mutex mutex;
+	ReadyFlag ready;
 	~cache_thread_shared() { if (renderer) ass_renderer_done(renderer); }
 };
 
@@ -94,28 +96,31 @@ class LibassSubtitlesProvider final : public SubtitlesProvider {
 	ASS_Track* ass_track = nullptr;
 
 	ASS_Renderer *renderer() {
-		if (shared->ready)
-			return shared->renderer;
+		if (!shared->ready.IsReady()) {
+			auto wait_for_ready = [&] {
+				if (shared->ready.WaitFor(std::chrono::milliseconds(250)))
+					return;
 
-		auto block = [&] {
-			if (shared->ready)
-				return;
-			agi::util::sleep_for(250);
-			if (shared->ready)
-				return;
-			br->Run([=](agi::ProgressSink *ps) {
-				ps->SetTitle(from_wx(_("Updating font index")));
-				ps->SetMessage(from_wx(_("This may take several minutes")));
-				ps->SetIndeterminate();
-				while (!shared->ready && !ps->IsCancelled())
-					agi::util::sleep_for(250);
-			});
-		};
+				if (!br) {
+					shared->ready.Wait();
+					return;
+				}
 
-		if (wxThread::IsMain())
-			block();
-		else
-			agi::dispatch::Main().Sync(block);
+				br->Run([=](agi::ProgressSink *ps) {
+					ps->SetTitle(from_wx(_("Updating font index")));
+					ps->SetMessage(from_wx(_("This may take several minutes")));
+					ps->SetIndeterminate();
+					shared->ready.Wait();
+				});
+			};
+
+			if (wxThread::IsMain())
+				wait_for_ready();
+			else
+				agi::dispatch::Main().Sync(wait_for_ready);
+		}
+
+		std::lock_guard<std::mutex> lock(shared->mutex);
 		return shared->renderer;
 	}
 
@@ -133,9 +138,10 @@ public:
 
 	void Reinitialize() override {
 		// No need to reinit if we're not even done with the initial init
-		if (!shared->ready)
+		if (!shared->ready.IsReady())
 			return;
 
+		std::lock_guard<std::mutex> lock(shared->mutex);
 		ass_renderer_done(shared->renderer);
 		shared->renderer = ass_renderer_init(library);
 		ass_set_font_scale(shared->renderer, 1.);
@@ -154,8 +160,11 @@ LibassSubtitlesProvider::LibassSubtitlesProvider(agi::BackgroundRunner *br)
 			ass_set_font_scale(ass_renderer, 1.);
 			ass_set_fonts(ass_renderer, nullptr, "Sans", 1, nullptr, true);
 		}
-		state->renderer = ass_renderer;
-		state->ready = true;
+		{
+			std::lock_guard<std::mutex> lock(state->mutex);
+			state->renderer = ass_renderer;
+		}
+		state->ready.Signal();
 	});
 }
 

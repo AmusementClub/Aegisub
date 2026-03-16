@@ -16,6 +16,7 @@
 
 #include <libaegisub/fs_fwd.h>
 
+#include <cstddef>
 #include <memory>
 #include <string>
 #include <utility>
@@ -23,6 +24,9 @@
 
 class VideoProvider;
 namespace agi { class BackgroundRunner; }
+
+std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoProvider> parent);
+std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoProvider> parent, size_t max_cache_size_bytes);
 
 struct VideoProviderFactory {
 	static std::vector<std::string> GetClasses();

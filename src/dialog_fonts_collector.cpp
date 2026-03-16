@@ -92,7 +92,7 @@ wxDEFINE_EVENT(EVT_ADD_TEXT, ValueEvent<color_str_pair>);
 wxDEFINE_EVENT(EVT_COLLECTION_DONE, wxThreadEvent);
 
 void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMode oper, wxEvtHandler *collector) {
-	agi::dispatch::Background().Async([=]{
+	agi::dispatch::BackgroundExecutor().Post([=]{
 		auto AppendText = [&](wxString text, int colour) {
 			collector->AddPendingEvent(ValueEvent<color_str_pair>(EVT_ADD_TEXT, -1, {colour, text.Clone()}));
 		};

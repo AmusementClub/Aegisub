@@ -27,6 +27,8 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#pragma once
+
 #include <libaegisub/signal.h>
 #include <libaegisub/vfr.h>
 
@@ -109,6 +111,7 @@ class VideoController final : public wxEvtHandler {
 	void OnActiveLineChanged(AssDialogue *line);
 
 	void RequestFrame();
+	void RequestFrameImmediate();
 
 public:
 	VideoController(agi::Context *context);

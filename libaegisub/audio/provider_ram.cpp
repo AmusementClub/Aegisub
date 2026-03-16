@@ -34,8 +34,7 @@ class RAMAudioProvider final : public AudioProviderWrapper {
 #else
 	boost::container::stable_vector<std::array<char, CacheBlockSize>> blockcache;
 #endif
-	std::atomic<bool> cancelled = {false};
-	std::thread decoder;
+	std::jthread decoder;
 
 	void FillBuffer(void *buf, int64_t start, int64_t count) const override;
 
@@ -52,10 +51,10 @@ public:
 			throw AudioProviderError("Not enough memory available to cache in RAM");
 		}
 
-		decoder = std::thread([&] {
+		decoder = std::jthread([this](std::stop_token stop_token) {
 			int64_t readsize = CacheBlockSize / bytes_per_sample / channels;
 			for (size_t i = 0; i < blockcache.size(); i++) {
-				if (cancelled) break;
+				if (stop_token.stop_requested()) break;
 				auto actual_read = std::min<int64_t>(readsize, num_samples - i * readsize);
 				source->GetAudio(&blockcache[i][0], i * readsize, actual_read);
 				decoded_samples += actual_read;
@@ -63,10 +62,7 @@ public:
 		});
 	}
 
-	~RAMAudioProvider() {
-		cancelled = true;
-		decoder.join();
-	}
+	~RAMAudioProvider() = default;
 };
 
 void RAMAudioProvider::FillBuffer(void *buf, int64_t start, int64_t count) const {

@@ -24,6 +24,7 @@
 #include "video_provider_manager.h"
 
 #include <libaegisub/dispatch.h>
+#include <libaegisub/make_unique.h>
 
 enum {
 	NEW_SUBS_FILE = -1,
@@ -92,56 +93,64 @@ static std::unique_ptr<SubtitlesProvider> get_subs_provider(wxEvtHandler *evt_ha
 }
 
 AsyncVideoProvider::AsyncVideoProvider(agi::fs::path const& video_filename, std::string const& colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br)
+: AsyncVideoProvider(
+	VideoProviderFactory::GetProvider(video_filename, colormatrix, br),
+	get_subs_provider(parent, br),
+	[parent](std::unique_ptr<wxEvent> evt) {
+		if (parent)
+			parent->QueueEvent(evt.release());
+	})
+{
+}
+
+AsyncVideoProvider::AsyncVideoProvider(std::unique_ptr<VideoProvider> source_provider, std::unique_ptr<SubtitlesProvider> subs_provider, AsyncVideoProviderEventSink event_sink)
 : worker(agi::dispatch::Create())
-, subs_provider(get_subs_provider(parent, br))
-, source_provider(VideoProviderFactory::GetProvider(video_filename, colormatrix, br))
-, parent(parent)
+, subs_provider(std::move(subs_provider))
+, source_provider(std::move(source_provider))
+, event_sink(std::move(event_sink))
 {
 }
 
 AsyncVideoProvider::~AsyncVideoProvider() {
-	// Block until all currently queued jobs are complete
-	worker->Sync([]{});
+	worker->Sync([this] {
+		while (ProcessPending()) { }
+	});
 }
 
 void AsyncVideoProvider::LoadSubtitles(const AssFile *new_subs) throw() {
-	uint_fast32_t req_version = ++version;
-
-	auto copy = new AssFile(*new_subs);
-	worker->Async([=]{
-		subs.reset(copy);
-		single_frame = NEW_SUBS_FILE;
-		ProcAsync(req_version, false);
-	});
+	auto copy = agi::make_unique<AssFile>(*new_subs);
+	++content_version;
+	{
+		std::lock_guard<std::mutex> lock(pending_mutex);
+		pending_subs = std::move(copy);
+		pending_check_updated = false;
+	}
+	ScheduleProcessing();
 }
 
 void AsyncVideoProvider::UpdateSubtitles(const AssFile *new_subs, const AssDialogue *changed) throw() {
-	uint_fast32_t req_version = ++version;
-
-	// Copy just the line which were changed, then replace the line at the
-	// same index in the worker's copy of the file with the new entry
-	auto copy = new AssDialogue(*changed);
-	worker->Async([=]{
-		int i = 0;
-		auto it = subs->Events.begin();
-		std::advance(it, copy->Row - i);
-		i = copy->Row;
-		subs->Events.insert(it, *copy);
-		delete &*it--;
-
-		single_frame = NEW_SUBS_FILE;
-		ProcAsync(req_version, true);
-	});
+	(void)changed;
+	auto copy = agi::make_unique<AssFile>(*new_subs);
+	++content_version;
+	{
+		std::lock_guard<std::mutex> lock(pending_mutex);
+		pending_subs = std::move(copy);
+		if (!has_pending_frame)
+			pending_check_updated = true;
+	}
+	ScheduleProcessing();
 }
 
 void AsyncVideoProvider::RequestFrame(int new_frame, double new_time) throw() {
-	uint_fast32_t req_version = ++version;
-
-	worker->Async([=]{
-		time = new_time;
-		frame_number = new_frame;
-		ProcAsync(req_version, false);
-	});
+	++request_version;
+	{
+		std::lock_guard<std::mutex> lock(pending_mutex);
+		pending_time = new_time;
+		pending_frame_number = new_frame;
+		has_pending_frame = true;
+		pending_check_updated = false;
+	}
+	ScheduleProcessing();
 }
 
 bool AsyncVideoProvider::NeedUpdate(std::vector<AssDialogueBase const*> const& visible_lines) {
@@ -173,17 +182,98 @@ bool AsyncVideoProvider::NeedUpdate(std::vector<AssDialogueBase const*> const& v
 	return false;
 }
 
-void AsyncVideoProvider::ProcAsync(uint_fast32_t req_version, bool check_updated) {
-	// Only actually produce the frame if there's no queued changes waiting
-	if (req_version < version || frame_number < 0) return;
+void AsyncVideoProvider::DeliverEvent(std::unique_ptr<wxEvent> evt) {
+	if (event_sink)
+		event_sink(std::move(evt));
+}
 
-	std::vector<AssDialogueBase const*> visible_lines;
-	for (auto const& line : subs->Events) {
-		if (!line.Comment && !(line.Start > time || line.End <= time))
-			visible_lines.push_back(&line);
+void AsyncVideoProvider::ScheduleProcessing() {
+	bool should_schedule = false;
+	{
+		std::lock_guard<std::mutex> lock(pending_mutex);
+		if (!processing_scheduled) {
+			processing_scheduled = true;
+			should_schedule = true;
+		}
 	}
 
-	if (check_updated && !NeedUpdate(visible_lines)) return;
+	if (!should_schedule)
+		return;
+
+	worker->Async([this] {
+		while (ProcessPending()) { }
+	});
+}
+
+bool AsyncVideoProvider::ProcessPending() {
+	struct PendingWork {
+		std::unique_ptr<AssFile> subs;
+		bool check_updated = false;
+		bool has_frame = false;
+		int frame_number = -1;
+		double time = -1.;
+		bool has_color_space = false;
+		std::string color_space;
+		uint_fast32_t request_version = 0;
+		uint_fast32_t content_version = 0;
+	};
+
+	PendingWork work;
+	{
+		std::lock_guard<std::mutex> lock(pending_mutex);
+		if (!pending_subs && !has_pending_frame && !has_pending_color_space) {
+			processing_scheduled = false;
+			return false;
+		}
+
+		work.subs = std::move(pending_subs);
+		work.check_updated = pending_check_updated;
+		pending_check_updated = false;
+		if (has_pending_frame) {
+			work.has_frame = true;
+			work.frame_number = pending_frame_number;
+			work.time = pending_time;
+			has_pending_frame = false;
+		}
+		else if (work.subs && frame_number >= 0) {
+			work.has_frame = true;
+			work.frame_number = frame_number;
+			work.time = time;
+		}
+		if (has_pending_color_space) {
+			work.has_color_space = true;
+			work.color_space = pending_color_space;
+			has_pending_color_space = false;
+			pending_color_space.clear();
+		}
+		work.request_version = request_version.load(std::memory_order_relaxed);
+		work.content_version = content_version.load(std::memory_order_relaxed);
+	}
+
+	if (work.has_color_space)
+		source_provider->SetColorSpace(work.color_space);
+
+	if (work.subs) {
+		subs = std::move(work.subs);
+		single_frame = NEW_SUBS_FILE;
+	}
+
+	if (!work.has_frame)
+		return true;
+
+	frame_number = work.frame_number;
+	time = work.time;
+
+	std::vector<AssDialogueBase const*> visible_lines;
+	if (subs) {
+		for (auto const& line : subs->Events) {
+			if (!line.Comment && !(line.Start > time || line.End <= time))
+				visible_lines.push_back(&line);
+		}
+	}
+
+	if (work.check_updated && !NeedUpdate(visible_lines))
+		return true;
 
 	last_lines.clear();
 	last_lines.reserve(visible_lines.size());
@@ -192,24 +282,46 @@ void AsyncVideoProvider::ProcAsync(uint_fast32_t req_version, bool check_updated
 	last_rendered = frame_number;
 
 	try {
-		FrameReadyEvent *evt = new FrameReadyEvent(ProcFrame(frame_number, time), time);
+		auto evt = std::make_unique<FrameReadyEvent>(ProcFrame(frame_number, time), time);
 		evt->SetEventType(EVT_FRAME_READY);
-		parent->QueueEvent(evt);
+		auto current_content_version = content_version.load(std::memory_order_relaxed);
+		auto current_request_version = request_version.load(std::memory_order_relaxed);
+		bool should_deliver =
+			work.content_version == current_content_version &&
+			work.request_version == current_request_version;
+		if (should_deliver)
+			DeliverEvent(std::move(evt));
 	}
 	catch (wxEvent const& err) {
-		// Pass error back to parent thread
-		parent->QueueEvent(err.Clone());
+		auto current_content_version = content_version.load(std::memory_order_relaxed);
+		auto current_request_version = request_version.load(std::memory_order_relaxed);
+		bool should_deliver =
+			work.content_version == current_content_version &&
+			work.request_version == current_request_version;
+		if (should_deliver)
+			DeliverEvent(std::unique_ptr<wxEvent>(err.Clone()));
 	}
+
+	return true;
 }
 
 std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrame(int frame, double time, bool raw) {
 	std::shared_ptr<VideoFrame> ret;
-	worker->Sync([&]{ ret = ProcFrame(frame, time, raw); });
+	worker->Sync([&]{
+		while (ProcessPending()) { }
+		ret = ProcFrame(frame, time, raw);
+	});
 	return ret;
 }
 
 void AsyncVideoProvider::SetColorSpace(std::string const& matrix) {
-	worker->Async([=] { source_provider->SetColorSpace(matrix); });
+	++content_version;
+	{
+		std::lock_guard<std::mutex> lock(pending_mutex);
+		pending_color_space = matrix;
+		has_pending_color_space = true;
+	}
+	ScheduleProcessing();
 }
 
 wxDEFINE_EVENT(EVT_FRAME_READY, FrameReadyEvent);

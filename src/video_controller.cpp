@@ -94,6 +94,22 @@ void VideoController::RequestFrame() {
 	provider->RequestFrame(frame_n, TimeAtFrame(frame_n));
 }
 
+void VideoController::RequestFrameImmediate() {
+	context->ass->Properties.video_position = frame_n;
+	auto const frame_time = TimeAtFrame(frame_n);
+
+	try {
+		// Frame stepping favors deterministic per-step display over latest-only coalescing.
+		auto evt = FrameReadyEvent(provider->GetFrame(frame_n, frame_time), frame_time);
+		evt.SetEventType(EVT_FRAME_READY);
+		ProcessEvent(evt);
+	}
+	catch (wxEvent const& err) {
+		auto evt = std::unique_ptr<wxEvent>(err.Clone());
+		ProcessEvent(*evt);
+	}
+}
+
 void VideoController::JumpToFrame(int n) {
 	if (!provider) return;
 
@@ -117,7 +133,9 @@ void VideoController::NextFrame() {
 	if (!provider || IsPlaying() || frame_n == provider->GetFrameCount())
 		return;
 
-	JumpToFrame(frame_n + 1);
+	frame_n = mid(0, frame_n + 1, provider->GetFrameCount() - 1);
+	RequestFrameImmediate();
+	Seek(frame_n);
 	if (playAudioOnStep->GetBool())
 		context->audioController->PlayRange(TimeRange(TimeAtFrame(frame_n - 1), TimeAtFrame(frame_n)));
 }
@@ -126,7 +144,9 @@ void VideoController::PrevFrame() {
 	if (!provider || IsPlaying() || frame_n == 0)
 		return;
 
-	JumpToFrame(frame_n - 1);
+	frame_n = mid(0, frame_n - 1, provider->GetFrameCount() - 1);
+	RequestFrameImmediate();
+	Seek(frame_n);
 	if (playAudioOnStep->GetBool())
 		context->audioController->PlayRange(TimeRange(TimeAtFrame(frame_n), TimeAtFrame(frame_n + 1)));
 }

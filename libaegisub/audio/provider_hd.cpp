@@ -32,8 +32,7 @@ using namespace agi;
 
 class HDAudioProvider final : public AudioProviderWrapper {
 	mutable temp_file_mapping file;
-	std::atomic<bool> cancelled = {false};
-	std::thread decoder;
+	std::jthread decoder;
 
 	void FillBuffer(void *buf, int64_t start, int64_t count) const override {
 		auto missing = std::min(count, start + count - decoded_samples);
@@ -64,10 +63,10 @@ public:
 	, file(dir / CacheFilename(dir), num_samples * bytes_per_sample* channels)
 	{
 		decoded_samples = 0;
-		decoder = std::thread([&] {
+		decoder = std::jthread([this](std::stop_token stop_token) {
 			int64_t block = 65536;
 			for (int64_t i = 0; i < num_samples; i += block) {
-				if (cancelled) break;
+				if (stop_token.stop_requested()) break;
 				block = std::min(block, num_samples - i);
 				source->GetAudio(file.write(i * bytes_per_sample * channels, block * bytes_per_sample * channels), i, block);
 				decoded_samples += block;
@@ -75,10 +74,7 @@ public:
 		});
 	}
 
-	~HDAudioProvider() {
-		cancelled = true;
-		decoder.join();
-	}
+	~HDAudioProvider() = default;
 };
 }
 

@@ -25,8 +25,8 @@
 #include "compat.h"
 #include "include/aegisub/context.h"
 #include "libresrc/libresrc.h"
-#include "options.h"
 #include "selection_controller.h"
+#include "utils.h"
 #include "video_controller.h"
 #include "video_display.h"
 
@@ -40,12 +40,6 @@ static const DraggableFeatureType DRAG_ORIGIN = DRAG_BIG_TRIANGLE;
 static const DraggableFeatureType DRAG_START = DRAG_BIG_SQUARE;
 static const DraggableFeatureType DRAG_END = DRAG_BIG_CIRCLE;
 
-#ifdef __WXMSW__
-#define ICON(name) CMD_ICON_BUNDLE_GET(name, wxLayout_Default)
-#else
-#define ICON(name) wxBitmapBundle::FromBitmap(CMD_ICON_GET(name, wxLayout_Default, OPT_GET("App/Toolbar Icon Size")->GetInt()))
-#endif
-
 VisualToolDrag::VisualToolDrag(VideoDisplay *parent, agi::Context *context)
 : VisualTool<VisualToolDragDraggableFeature>(parent, context)
 {
@@ -58,10 +52,11 @@ void VisualToolDrag::SetToolbar(wxToolBar *tb) {
 	if (toolbar)
 		toolbar->Unbind(wxEVT_TOOL, &VisualToolDrag::OnSubTool, this);
 	toolbar = tb;
-	int icon_size = toolbar->FromDIP(16);
+	const int icon_size = GetVideoUiIconSize(toolbar);
 	toolbar->SetToolBitmapSize(wxSize(icon_size, icon_size));
 	toolbar->AddSeparator();
-	move_pos_button = toolbar->AddTool(-1, _("Toggle between \\move and \\pos"), ICON(visual_move_conv_move))->GetId();
+	move_pos_button = toolbar->AddTool(-1, _("Toggle between \\move and \\pos"),
+		wxBitmapBundle::FromBitmap(CMD_ICON_GET(visual_move_conv_move, wxLayout_Default, icon_size)))->GetId();
 	toolbar->Realize();
 	toolbar->Show(true);
 
@@ -80,7 +75,11 @@ void VisualToolDrag::UpdateToggleButtons() {
 
 	if (to_move == button_is_move) return;
 
-	toolbar->SetToolNormalBitmap(move_pos_button, to_move ? ICON(visual_move_conv_move) : ICON(visual_move_conv_pos));
+	const int icon_size = GetVideoUiIconSize(toolbar);
+	if (to_move)
+		toolbar->SetToolNormalBitmap(move_pos_button, wxBitmapBundle::FromBitmap(CMD_ICON_GET(visual_move_conv_move, wxLayout_Default, icon_size)));
+	else
+		toolbar->SetToolNormalBitmap(move_pos_button, wxBitmapBundle::FromBitmap(CMD_ICON_GET(visual_move_conv_pos, wxLayout_Default, icon_size)));
 	button_is_move = to_move;
 }
 

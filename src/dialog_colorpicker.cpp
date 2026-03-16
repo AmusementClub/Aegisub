@@ -242,11 +242,12 @@ public:
 	: wxControl(parent, -1, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE)
 	, x(-1)
 	, y(-1)
-	, arrow_size(parent->FromDIP(spectrum_horz_vert_arrow_size))
+	, arrow_size(0)
 	, background(nullptr)
 	, direction(direction)
 	{
-		size = parent->FromDIP(size);
+		arrow_size = FromDIP(spectrum_horz_vert_arrow_size);
+		size = FromDIP(size);
 		size.x += 2;
 		size.y += 2;
 
@@ -294,51 +295,54 @@ wxDEFINE_EVENT(EVT_RECENT_SELECT, ValueEvent<agi::Color>);
 /// @class ColorPickerRecent
 /// @brief A grid of recently used colors which can be selected by clicking on them
 #if wxCHECK_VERSION(3, 1, 0) && defined(__WXMAC__)
-class ColorPickerRecent final : public wxGenericStaticBitmap {
+class ColorPickerRecent final : public wxControl {
 #else
-class ColorPickerRecent final : public wxStaticBitmap {
+class ColorPickerRecent final : public wxControl {
 #endif
 	int rows;     ///< Number of rows of colors
 	int cols;     ///< Number of cols of colors
-	int cellsize; ///< Width/Height of each cell
+	int cellsize; ///< Width/Height of each cell in DIP
 
 	/// The colors currently displayed in the control
 	std::vector<agi::Color> colors;
+
+	void OnPaint(wxPaintEvent &) {
+		wxPaintDC dc(this);
+		wxSize sz = GetClientSize();
+
+		dc.SetPen(*wxTRANSPARENT_PEN);
+		for (int cy = 0; cy < rows; cy++) {
+			const int top = cy * sz.y / rows;
+			const int bottom = (cy + 1) * sz.y / rows;
+			for (int cx = 0; cx < cols; cx++) {
+				const int left = cx * sz.x / cols;
+				const int right = (cx + 1) * sz.x / cols;
+				dc.SetBrush(wxBrush(to_wx(colors[cy * cols + cx])));
+				dc.DrawRectangle(left, top, right - left, bottom - top);
+			}
+		}
+	}
 
 	void OnClick(wxMouseEvent &evt) {
 		wxSize cs = GetClientSize();
 		int cx = evt.GetX() * cols / cs.x;
 		int cy = evt.GetY() * rows / cs.y;
-		if (cx < 0 || cx > cols || cy < 0 || cy > rows) return;
+		if (cx < 0 || cx >= cols || cy < 0 || cy >= rows) return;
 		int i = cols*cy + cx;
 
 		if (i >= 0 && i < (int)colors.size())
 			AddPendingEvent(ValueEvent<agi::Color>(EVT_RECENT_SELECT, GetId(), colors[i]));
 	}
 
-	void UpdateBitmap() {
-		wxSize sz = GetClientSize();
+	void UpdateSize() {
+		const wxSize size = FromDIP(wxSize(cols * cellsize, rows * cellsize));
+		SetClientSize(size);
+		SetMinSize(size);
+		SetMaxSize(size);
+	}
 
-		wxBitmap background(sz.x, sz.y);
-		wxMemoryDC dc(background);
-
-		dc.SetPen(*wxTRANSPARENT_PEN);
-
-		for (int cy = 0; cy < rows; cy++) {
-			for (int cx = 0; cx < cols; cx++) {
-				int x = cx * cellsize;
-				int y = cy * cellsize;
-
-				dc.SetBrush(wxBrush(to_wx(colors[cy * cols + cx])));
-				dc.DrawRectangle(x, y, cellsize, cellsize);
-			}
-		}
-
-		{
-			wxEventBlocker blocker(this);
-			SetBitmap(background);
-		}
-
+	void UpdateDisplay() {
+		UpdateSize();
 		Refresh(false);
 	}
 
@@ -346,30 +350,25 @@ class ColorPickerRecent final : public wxStaticBitmap {
 
 public:
 	ColorPickerRecent(wxWindow *parent, int cols, int rows, int cellsize)
-#if wxCHECK_VERSION(3, 1, 0) && defined(__WXMAC__)
-	: wxGenericStaticBitmap(parent, -1, wxBitmap(), wxDefaultPosition, wxDefaultSize, STATIC_BORDER_FLAG)
-#else
-	: wxStaticBitmap(parent, -1, wxBitmap(), wxDefaultPosition, wxDefaultSize, STATIC_BORDER_FLAG)
-#endif
+	: wxControl(parent, -1, wxDefaultPosition, wxDefaultSize, STATIC_BORDER_FLAG)
 	, rows(rows)
 	, cols(cols)
 	, cellsize(cellsize)
 	{
 		colors.resize(rows * cols);
-		SetClientSize(cols*cellsize, rows*cellsize);
-		SetMinSize(GetSize());
-		SetMaxSize(GetSize());
+		SetBackgroundStyle(wxBG_STYLE_PAINT);
+		UpdateSize();
 		SetCursor(*wxCROSS_CURSOR);
 
+		Bind(wxEVT_PAINT, &ColorPickerRecent::OnPaint, this);
 		Bind(wxEVT_LEFT_DOWN, &ColorPickerRecent::OnClick, this);
-		Bind(wxEVT_SIZE, [=](wxSizeEvent&) { UpdateBitmap(); });
 	}
 
 	/// Load the colors to show
 	void Load(std::vector<agi::Color> const& recent_colors) {
 		colors = recent_colors;
 		colors.resize(rows * cols);
-		UpdateBitmap();
+		UpdateDisplay();
 	}
 
 	/// Get the list of recent colors
@@ -385,7 +384,7 @@ public:
 			colors.pop_back();
 		}
 
-		UpdateBitmap();
+		UpdateDisplay();
 	}
 };
 
@@ -606,7 +605,7 @@ DialogColorPicker::DialogColorPicker(wxWindow *parent, agi::Color initial_color,
 	const int gap = FromDIP(5);
 	const int border = FromDIP(3);
 	const wxSize preview_size = FromDIP(wxSize(40, 40));
-	const int recent_cell_size = FromDIP(16);
+	const int recent_cell_size = 16;
 	const int dropper_magnification = FromDIP(8);
 
 	// generate spectrum slider bar images

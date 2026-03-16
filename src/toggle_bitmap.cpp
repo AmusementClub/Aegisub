@@ -47,8 +47,8 @@ ToggleBitmap::ToggleBitmap(wxWindow *parent, agi::Context *context, const char *
 , command(*cmd::get(cmd_name))
 , img(command.IconBundle(parent->GetLayoutDirection()).GetBitmapFor(parent))
 {
-	int w = size.GetWidth() != -1 ? parent->FromDIP(size.GetWidth()) : img.GetWidth();
-	int h = size.GetHeight() != -1 ? parent->FromDIP(size.GetHeight()) : img.GetHeight();
+	int w = size.GetWidth() != -1 ? FromDIP(size.GetWidth()) : img.GetWidth();
+	int h = size.GetHeight() != -1 ? FromDIP(size.GetHeight()) : img.GetHeight();
 	SetClientSize(w, h);
 	GetSize(&w, &h);
 	SetSizeHints(w, h, w, h);

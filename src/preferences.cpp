@@ -155,8 +155,19 @@ void Audio(wxTreebook *book, Preferences *parent) {
 	p->OptionAdd(display, _("Video position"), "Audio/Display/Draw/Video Position");
 	p->OptionAdd(display, _("Seconds boundaries"), "Audio/Display/Draw/Seconds");
 	p->OptionAdd(display, _("Debug metrics"), "Audio/Display/Draw/Debug Metrics");
-	p->CellSkip(display);
 	p->OptionChoice(display, _("Waveform Style"), AudioWaveformRenderer::GetWaveformStyles(), "Audio/Display/Waveform Style");
+
+	const wxString sq_arr[4] = { _("Regular quality"), _("Better quality"), _("High quality"), _("Insane quality") };
+	wxArrayString sq_choice(4, sq_arr);
+	p->OptionChoice(display, _("Spectrum Quality"), sq_choice, "Audio/Renderer/Spectrum/Quality");
+
+	const wxString sm_arr[2] = { _("Legacy linear"), _("Frequency curve") };
+	wxArrayString sm_choice(2, sm_arr);
+	p->OptionChoice(display, _("Spectrum Computation Mode"), sm_choice, "Audio/Renderer/Spectrum/Computation Mode");
+
+	const wxString sc_arr[5] = { _("Linear"), _("Extended"), _("Medium"), _("Compressed"), _("Logarithmic") };
+	wxArrayString sc_choice(5, sc_arr);
+	p->OptionChoice(display, _("Spectrum Frequency Mapping"), sc_choice, "Audio/Renderer/Spectrum/FreqCurve");
 
 	auto label = p->PageSizer(_("Audio labels"));
 	p->OptionFont(label, "Audio/Karaoke/");
@@ -390,20 +401,7 @@ void Advanced_Audio(wxTreebook *book, Preferences *parent) {
 	p->OptionChoice(cache, _("Cache type"), ct_choice, "Audio/Cache/Type");
 	p->OptionBrowse(cache, _("Path"), "Audio/Cache/HD/Location");
 
-	auto spectrum = p->PageSizer(_("Spectrum"));
-
-	const wxString sq_arr[4] = { _("Regular quality"), _("Better quality"), _("High quality"), _("Insane quality") };
-	wxArrayString sq_choice(4, sq_arr);
-	p->OptionChoice(spectrum, _("Quality"), sq_choice, "Audio/Renderer/Spectrum/Quality");
-
-	const wxString sm_arr[2] = { _("Legacy linear"), _("Frequency curve") };
-	wxArrayString sm_choice(2, sm_arr);
-	p->OptionChoice(spectrum, _("Computation mode"), sm_choice, "Audio/Renderer/Spectrum/Computation Mode");
-
-	const wxString sc_arr[5] = { _("Linear"), _("Extended"), _("Medium"), _("Compressed"), _("Logarithmic") };
-	wxArrayString sc_choice(5, sc_arr);
-	p->OptionChoice(spectrum, _("Frequency mapping"), sc_choice, "Audio/Renderer/Spectrum/FreqCurve");
-
+	auto spectrum = p->PageSizer(_("Spectrum Cache"));
 	p->OptionAdd(spectrum, _("Cache memory max (MB)"), "Audio/Renderer/Spectrum/Memory Max", 2, 1024);
 
 #ifdef WITH_AVISYNTH

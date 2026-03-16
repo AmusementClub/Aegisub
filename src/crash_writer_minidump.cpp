@@ -23,7 +23,6 @@
 #include <libaegisub/make_unique.h>
 #include <libaegisub/util.h>
 
-#include <atomic>
 #include <filesystem>
 #include <condition_variable>
 #include <fstream>
@@ -52,16 +51,15 @@ struct dump_thread_state {
 	std::mutex start_mutex;
 	std::condition_variable start_cv;
 
-	std::atomic<bool> exit = false;
 	EXCEPTION_POINTERS *ep = nullptr;
 	DWORD thread_id = 0;
 
 	// Must be last so everything else is initialized before it
-	std::thread thread;
+	std::jthread thread;
 
-	dump_thread_state() : thread([&] { main(); }) { }
+	dump_thread_state() : thread([this](std::stop_token stop_token) { main(stop_token); }) { }
 
-	void main() {
+	void main(std::stop_token stop_token) {
 		auto module = LoadLibrary(L"dbghelp.dll");
 		if (!module) return;
 
@@ -72,13 +70,18 @@ struct dump_thread_state {
 		}
 
 		std::unique_lock<std::mutex> lock(start_mutex);
-		start_cv.wait(lock, [&] { return ep || exit; });
-		if (ep)
-			write_dump(fn);
+		start_cv.wait(lock, [&] { return ep || stop_token.stop_requested(); });
+		if (!ep)
+			return;
+
+		auto *exception_pointers = ep;
+		auto crash_thread_id = thread_id;
+		lock.unlock();
+		write_dump(fn, exception_pointers, crash_thread_id);
 		FreeLibrary(module);
 	}
 
-	void write_dump(MiniDumpWriteDump fn) {
+	void write_dump(MiniDumpWriteDump fn, EXCEPTION_POINTERS *exception_pointers, DWORD crash_thread_id) {
 		auto file = CreateFile(crash_dump_path,
 			GENERIC_WRITE,
 			0,  // no sharing
@@ -89,8 +92,8 @@ struct dump_thread_state {
 		if (file == INVALID_HANDLE_VALUE) return;
 
 		MINIDUMP_EXCEPTION_INFORMATION info;
-		info.ThreadId = thread_id;
-		info.ExceptionPointers = ep;
+		info.ThreadId = crash_thread_id;
+		info.ExceptionPointers = exception_pointers;
 		info.ClientPointers = FALSE;
 
 		fn(GetCurrentProcess(), GetCurrentProcessId(), file, MiniDumpNormal, &info, nullptr, nullptr);
@@ -126,15 +129,21 @@ void Initialize(agi::fs::path const& path) {
 }
 
 void Cleanup() {
-	dump_thread->exit = true;
+	if (!dump_thread)
+		return;
+	dump_thread->thread.request_stop();
 	dump_thread->start_cv.notify_all();
-	dump_thread->thread.join();
 	dump_thread.reset();
 }
 
 void Write() {
-	dump_thread->ep = wxGlobalSEInformation;
-	dump_thread->thread_id = GetCurrentThreadId();
+	if (!dump_thread)
+		return;
+	{
+		std::lock_guard<std::mutex> lock(dump_thread->start_mutex);
+		dump_thread->ep = wxGlobalSEInformation;
+		dump_thread->thread_id = GetCurrentThreadId();
+	}
 	dump_thread->start_cv.notify_all();
 	dump_thread->thread.join();
 	dump_thread.reset();

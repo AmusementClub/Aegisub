@@ -38,10 +38,28 @@ inline unsigned char* StorageRowPointer(SubtitleOverlayStorage& storage, int y) 
 	return storage.pixels.data() + static_cast<ptrdiff_t>(physical_y) * storage.pitch;
 }
 
+inline unsigned char const* StorageRowPointer(SubtitleOverlayStorage const& storage, int y) {
+	int physical_y = storage.flipped ? (storage.height - 1 - y) : y;
+	return storage.pixels.data() + static_cast<ptrdiff_t>(physical_y) * storage.pitch;
+}
+
 inline unsigned int AssR(std::uint32_t color) { return color >> 24; }
 inline unsigned int AssG(std::uint32_t color) { return (color >> 16) & 0xFF; }
 inline unsigned int AssB(std::uint32_t color) { return (color >> 8) & 0xFF; }
 inline unsigned int AssA(std::uint32_t color) { return color & 0xFF; }
+
+bool FramesAreComparable(VideoFrame const& source, VideoFrame const& composited) {
+	if (source.width != composited.width || source.height != composited.height || source.data.empty() || composited.data.empty())
+		return false;
+
+	size_t required_row_bytes = source.width * 4;
+	size_t required_source_bytes = source.pitch * source.height;
+	size_t required_composited_bytes = composited.pitch * composited.height;
+	return source.pitch >= required_row_bytes
+		&& composited.pitch >= required_row_bytes
+		&& source.data.size() >= required_source_bytes
+		&& composited.data.size() >= required_composited_bytes;
+}
 }
 
 void ClearBgraSubtitleTarget(BgraSubtitleTargetView target) {
@@ -108,16 +126,99 @@ void BlendLibassMaskIntoBgraTarget(
 	}
 }
 
-bool ExtractOpaqueBgraDifferenceOverlay(VideoFrame const& source, VideoFrame const& composited, SubtitleOverlayStorage& storage, SubtitleOverlay& overlay) {
-	if (source.width != composited.width || source.height != composited.height || source.data.empty() || composited.data.empty()) {
+bool BuildSparsePremultipliedCompatibilityOverlay(VideoFrame const& source, VideoFrame const& composited, SubtitleOverlayStorage& storage, SubtitleOverlay& overlay) {
+	if (!FramesAreComparable(source, composited)) {
 		overlay = { };
 		return false;
 	}
 
-	size_t required_row_bytes = source.width * 4;
-	size_t required_source_bytes = source.pitch * source.height;
-	size_t required_composited_bytes = composited.pitch * composited.height;
-	if (source.pitch < required_row_bytes || composited.pitch < required_row_bytes || source.data.size() < required_source_bytes || composited.data.size() < required_composited_bytes) {
+	int width = static_cast<int>(source.width);
+	int height = static_cast<int>(source.height);
+	storage.Reset(width, height, source.flipped);
+
+	for (int y = 0; y < height; ++y) {
+		auto const* src_row = RowPointer(source, y);
+		auto const* composited_row = RowPointer(composited, y);
+		if (std::memcmp(src_row, composited_row, static_cast<size_t>(width) * 4) == 0)
+			continue;
+
+		auto* dst_row = StorageRowPointer(storage, y);
+		for (int x = 0; x < width; ++x) {
+			auto pixel_offset = static_cast<ptrdiff_t>(x) * 4;
+			auto const* src = src_row + pixel_offset;
+			auto const* composited_pixel = composited_row + pixel_offset;
+			auto* dst = dst_row + pixel_offset;
+			if (std::memcmp(src, composited_pixel, 4) != 0) {
+				dst[0] = composited_pixel[0];
+				dst[1] = composited_pixel[1];
+				dst[2] = composited_pixel[2];
+				dst[3] = 255;
+				storage.has_visible_content = true;
+			}
+		}
+	}
+
+	overlay = storage.MakeView(true);
+	overlay.color_role = SubtitleOverlayColorRole::SubtitleVideoCompatibility;
+	return true;
+}
+
+bool BuildDirtyTileRectsForOverlay(SubtitleOverlayStorage const* previous, SubtitleOverlayStorage& current, int tile_width, int tile_height) {
+	current.dirty_rects.clear();
+	if (current.width <= 0 || current.height <= 0 || current.pitch == 0 || tile_width <= 0 || tile_height <= 0)
+		return false;
+
+	auto const has_previous =
+		previous &&
+		previous->width == current.width &&
+		previous->height == current.height &&
+		previous->pitch == current.pitch &&
+		previous->pixels.size() == current.pixels.size();
+
+	for (int y = 0; y < current.height; y += tile_height) {
+		int rect_height = std::min(tile_height, current.height - y);
+		int run_start_x = -1;
+		int run_width = 0;
+
+		auto flush_run = [&] {
+			if (run_start_x < 0)
+				return;
+			current.dirty_rects.push_back({ run_start_x, y, run_width, rect_height });
+			run_start_x = -1;
+			run_width = 0;
+		};
+
+		for (int x = 0; x < current.width; x += tile_width) {
+			int rect_width = std::min(tile_width, current.width - x);
+			bool dirty = !has_previous;
+
+			if (has_previous) {
+				for (int row = 0; row < rect_height && !dirty; ++row) {
+					auto const* current_row = StorageRowPointer(current, y + row) + static_cast<ptrdiff_t>(x) * 4;
+					auto const* previous_row = StorageRowPointer(*previous, y + row) + static_cast<ptrdiff_t>(x) * 4;
+					if (std::memcmp(current_row, previous_row, static_cast<size_t>(rect_width) * 4) != 0)
+						dirty = true;
+				}
+			}
+
+			if (!dirty) {
+				flush_run();
+				continue;
+			}
+
+			if (run_start_x < 0)
+				run_start_x = x;
+			run_width += rect_width;
+		}
+
+		flush_run();
+	}
+
+	return !current.dirty_rects.empty();
+}
+
+bool ExtractOpaqueBgraDifferenceOverlay(VideoFrame const& source, VideoFrame const& composited, SubtitleOverlayStorage& storage, SubtitleOverlay& overlay) {
+	if (!FramesAreComparable(source, composited)) {
 		overlay = { };
 		return false;
 	}

@@ -35,6 +35,8 @@ enum {
 };
 
 namespace {
+constexpr int kCompatibilityOverlayTileSize = 64;
+
 template<typename T>
 std::shared_ptr<T> acquire_buffer(std::vector<std::shared_ptr<T>>& buffers) {
 	for (auto& buffer : buffers) {
@@ -64,6 +66,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 	packet.time = time;
 
 	if (raw || !subs_provider || !subs) {
+		previous_compatibility_overlay.reset();
 		packet.composited_frame_storage = frame;
 		return packet;
 	}
@@ -113,10 +116,23 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 			subs_provider->DrawSubtitles(*composited, time / 1000.);
 			auto overlay_storage = acquire_buffer(subtitle_overlay_buffers);
 			SubtitleOverlay subtitle_overlay;
-			if (ExtractOpaqueBgraDifferenceOverlay(*frame, *composited, *overlay_storage, subtitle_overlay)) {
-				packet.subtitle_overlay_storage = overlay_storage;
-				packet.subtitle_overlay = subtitle_overlay;
-				packet.has_subtitle_overlay = true;
+			if (BuildSparsePremultipliedCompatibilityOverlay(*frame, *composited, *overlay_storage, subtitle_overlay)) {
+				BuildDirtyTileRectsForOverlay(previous_compatibility_overlay.get(), *overlay_storage, kCompatibilityOverlayTileSize, kCompatibilityOverlayTileSize);
+				bool should_emit_overlay =
+					overlay_storage->has_visible_content ||
+					(previous_compatibility_overlay && previous_compatibility_overlay->has_visible_content) ||
+					!overlay_storage->dirty_rects.empty();
+				if (should_emit_overlay) {
+					subtitle_overlay = overlay_storage->MakeView(true);
+					subtitle_overlay.color_role = SubtitleOverlayColorRole::SubtitleVideoCompatibility;
+					packet.subtitle_overlay_storage = overlay_storage;
+					packet.subtitle_overlay = subtitle_overlay;
+					packet.has_subtitle_overlay = true;
+				}
+				previous_compatibility_overlay = overlay_storage;
+			}
+			else {
+				previous_compatibility_overlay.reset();
 			}
 		}
 	}
@@ -163,6 +179,7 @@ AsyncVideoProvider::~AsyncVideoProvider() {
 void AsyncVideoProvider::LoadSubtitles(const AssFile *new_subs) throw() {
 	auto copy = agi::make_unique<AssFile>(*new_subs);
 	++content_version;
+	previous_compatibility_overlay.reset();
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_subs = std::move(copy);
@@ -175,6 +192,7 @@ void AsyncVideoProvider::UpdateSubtitles(const AssFile *new_subs, const AssDialo
 	(void)changed;
 	auto copy = agi::make_unique<AssFile>(*new_subs);
 	++content_version;
+	previous_compatibility_overlay.reset();
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_subs = std::move(copy);
@@ -368,6 +386,7 @@ VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bo
 
 void AsyncVideoProvider::SetColorSpace(std::string const& matrix) {
 	++content_version;
+	previous_compatibility_overlay.reset();
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_color_space = matrix;

@@ -45,6 +45,13 @@ struct SubtitleOverlayPlaneView {
 	int height = 0;
 };
 
+struct SubtitleOverlayDirtyRect {
+	int x = 0;
+	int y = 0;
+	int width = 0;
+	int height = 0;
+};
+
 struct SubtitleOverlay {
 	SubtitleOverlayPixelFormat pixel_format = SubtitleOverlayPixelFormat::Unknown;
 	int width = 0;
@@ -57,6 +64,8 @@ struct SubtitleOverlay {
 	bool premultiplied_alpha = false;
 	int plane_count = 0;
 	std::array<SubtitleOverlayPlaneView, 4> planes = { };
+	SubtitleOverlayDirtyRect const* dirty_rects = nullptr;
+	int dirty_rect_count = 0;
 	SubtitleOverlayColorRole color_role = SubtitleOverlayColorRole::SubtitleSdrOverlay;
 	SubtitleOverlayCompositionMode composition_mode = SubtitleOverlayCompositionMode::Unsupported;
 	std::string nominal_color_space = "BT.709";
@@ -79,18 +88,25 @@ struct SubtitleOverlay {
 
 struct SubtitleOverlayStorage {
 	std::vector<unsigned char> pixels;
+	std::vector<SubtitleOverlayDirtyRect> dirty_rects;
 	int width = 0;
 	int height = 0;
 	size_t pitch = 0;
 	bool flipped = false;
+	bool has_visible_content = false;
 
-	void Reset(int new_width, int new_height, bool new_flipped) {
+	void Reset(int new_width, int new_height, bool new_flipped, bool clear_pixels = true) {
+		bool size_changed = width != new_width || height != new_height;
 		width = new_width;
 		height = new_height;
 		flipped = new_flipped;
 		pitch = static_cast<size_t>(new_width) * 4;
-		pixels.resize(pitch * static_cast<size_t>(new_height));
-		std::fill(pixels.begin(), pixels.end(), 0);
+		if (size_changed)
+			pixels.resize(pitch * static_cast<size_t>(new_height));
+		if (clear_pixels)
+			std::fill(pixels.begin(), pixels.end(), 0);
+		dirty_rects.clear();
+		has_visible_content = false;
 	}
 
 	SubtitleOverlay MakeView(bool make_premultiplied_overlay = false) {
@@ -112,6 +128,8 @@ struct SubtitleOverlayStorage {
 			width,
 			height
 		};
+		overlay.dirty_rects = dirty_rects.empty() ? nullptr : dirty_rects.data();
+		overlay.dirty_rect_count = static_cast<int>(dirty_rects.size());
 		return overlay;
 	}
 };

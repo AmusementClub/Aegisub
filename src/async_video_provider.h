@@ -86,6 +86,7 @@ class AsyncVideoProvider {
 	std::vector<std::shared_ptr<VideoFrame>> source_buffers;
 	std::vector<std::shared_ptr<VideoFrame>> composited_buffers;
 	std::vector<std::shared_ptr<SubtitleOverlayStorage>> subtitle_overlay_buffers;
+	std::shared_ptr<SubtitleOverlayStorage> previous_compatibility_overlay;
 
 	std::mutex pending_mutex;
 	std::unique_ptr<AssFile> pending_subs;

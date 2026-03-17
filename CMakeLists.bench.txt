@@ -146,6 +146,17 @@ if(TARGET Boost::filesystem)
     target_link_libraries(phase2b-filesystem-bench PRIVATE "Boost::filesystem")
 endif()
 
+add_executable(csri-overlay-bench EXCLUDE_FROM_ALL
+    tools/csri_overlay_bench_main.cpp
+    src/subtitle_overlay_blend.cpp
+)
+target_compile_features(csri-overlay-bench PRIVATE cxx_std_20)
+target_include_directories(csri-overlay-bench PRIVATE
+    "${PROJECT_SOURCE_DIR}/src"
+    "${PROJECT_SOURCE_DIR}/libaegisub/include"
+)
+target_link_libraries(csri-overlay-bench PRIVATE "Boost::headers")
+
 find_package(benchmark CONFIG QUIET)
 if(benchmark_FOUND)
     add_executable(audio-micro-bench EXCLUDE_FROM_ALL

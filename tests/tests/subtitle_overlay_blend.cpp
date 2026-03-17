@@ -141,3 +141,53 @@ TEST(subtitle_overlay_blend, opaque_replace_overlay_copies_patch_to_target_rect)
 	EXPECT_EQ(3, frame.data[offset + 2]);
 	EXPECT_EQ(4, frame.data[offset + 3]);
 }
+
+TEST(subtitle_overlay_blend, sparse_compatibility_overlay_marks_only_changed_pixels) {
+	VideoFrame source;
+	source.width = 3;
+	source.height = 2;
+	source.pitch = 12;
+	source.flipped = false;
+	source.data.assign(24, 0);
+
+	VideoFrame composited = source;
+	composited.data[4] = 9;
+	composited.data[5] = 8;
+	composited.data[6] = 7;
+
+	SubtitleOverlayStorage storage;
+	SubtitleOverlay overlay;
+	ASSERT_TRUE(BuildSparsePremultipliedCompatibilityOverlay(source, composited, storage, overlay));
+	EXPECT_TRUE(storage.has_visible_content);
+	EXPECT_EQ(3, overlay.width);
+	EXPECT_EQ(2, overlay.height);
+	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, overlay.composition_mode);
+	EXPECT_EQ(0, overlay.planes[0].data[0]);
+	EXPECT_EQ(9, overlay.planes[0].data[4]);
+	EXPECT_EQ(8, overlay.planes[0].data[5]);
+	EXPECT_EQ(7, overlay.planes[0].data[6]);
+	EXPECT_EQ(255, overlay.planes[0].data[7]);
+}
+
+TEST(subtitle_overlay_blend, dirty_tile_rects_capture_changed_tiles_between_surfaces) {
+	SubtitleOverlayStorage previous;
+	previous.Reset(8, 4, false);
+	previous.has_visible_content = true;
+	previous.pixels[0] = 1;
+	previous.pixels[3] = 255;
+
+	SubtitleOverlayStorage current;
+	current.Reset(8, 4, false);
+	current.has_visible_content = true;
+	current.pixels[64] = 2;
+	current.pixels[67] = 255;
+
+	ASSERT_TRUE(BuildDirtyTileRectsForOverlay(&previous, current, 4, 2));
+	ASSERT_FALSE(current.dirty_rects.empty());
+	for (auto const& rect : current.dirty_rects) {
+		EXPECT_EQ(0, rect.x);
+		EXPECT_EQ(4, rect.width);
+		EXPECT_GE(rect.y, 0);
+		EXPECT_LE(rect.y + rect.height, 4);
+	}
+}

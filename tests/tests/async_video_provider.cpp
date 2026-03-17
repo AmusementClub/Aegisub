@@ -362,9 +362,36 @@ TEST(async_video_provider, compatibility_only_backend_uses_single_legacy_render)
 	EXPECT_EQ(1, extracted_overlay.height);
 
 	ASSERT_TRUE(packet.has_subtitle_overlay);
-	EXPECT_EQ(SubtitleOverlayCompositionMode::OpaqueReplace, packet.subtitle_overlay.composition_mode);
-	EXPECT_EQ(1, packet.subtitle_overlay.width);
-	EXPECT_EQ(1, packet.subtitle_overlay.height);
-	EXPECT_EQ(0, packet.subtitle_overlay.target_x);
-	EXPECT_EQ(0, packet.subtitle_overlay.target_y);
+	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, packet.subtitle_overlay.composition_mode);
+	EXPECT_TRUE(packet.subtitle_overlay.premultiplied_alpha);
+	EXPECT_EQ(2, packet.subtitle_overlay.width);
+	EXPECT_EQ(2, packet.subtitle_overlay.height);
+	ASSERT_EQ(1, packet.subtitle_overlay.dirty_rect_count);
+	EXPECT_EQ(0, packet.subtitle_overlay.dirty_rects[0].x);
+	EXPECT_EQ(0, packet.subtitle_overlay.dirty_rects[0].y);
+	EXPECT_EQ(2, packet.subtitle_overlay.dirty_rects[0].width);
+	EXPECT_EQ(2, packet.subtitle_overlay.dirty_rects[0].height);
+	EXPECT_EQ(255, packet.subtitle_overlay.planes[0].data[3]);
+}
+
+TEST(async_video_provider, compatibility_overlay_reuses_surface_when_content_is_stable) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto subtitle_file = MakeSubtitleFile("csri");
+	provider.LoadSubtitles(&subtitle_file);
+
+	auto first = provider.GetRenderPacket(5, 5000);
+	auto second = provider.GetRenderPacket(5, 5000);
+
+	ASSERT_TRUE(first.has_subtitle_overlay);
+	ASSERT_TRUE(second.has_subtitle_overlay);
+	EXPECT_GT(first.subtitle_overlay.dirty_rect_count, 0);
+	EXPECT_EQ(0, second.subtitle_overlay.dirty_rect_count);
 }

@@ -455,6 +455,45 @@ void ModernGLRenderer::UploadBgraLayer(LayerResources& layer, unsigned char cons
 	layer.has_content = true;
 }
 
+void ModernGLRenderer::UploadDirtyRects(LayerResources& layer, unsigned char const* data, ptrdiff_t pitch, SubtitleOverlayDirtyRect const* dirty_rects, int dirty_rect_count) {
+	if (!dirty_rects || dirty_rect_count <= 0)
+		return;
+
+	CHECK_RENDER_ERROR(glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(pitch / 4)));
+	for (int rect_index = 0; rect_index < dirty_rect_count; ++rect_index) {
+		auto const& rect = dirty_rects[rect_index];
+		if (rect.width <= 0 || rect.height <= 0)
+			continue;
+
+		int rect_x1 = rect.x + rect.width;
+		int rect_y1 = rect.y + rect.height;
+		for (size_t tile_index = 0; tile_index < layer.layout.tiles.size(); ++tile_index) {
+			auto const& tile = layer.layout.tiles[tile_index];
+			int overlap_x0 = std::max(rect.x, tile.source_x);
+			int overlap_y0 = std::max(rect.y, tile.source_y);
+			int overlap_x1 = std::min(rect_x1, tile.source_x + tile.source_w);
+			int overlap_y1 = std::min(rect_y1, tile.source_y + tile.source_h);
+			if (overlap_x0 >= overlap_x1 || overlap_y0 >= overlap_y1)
+				continue;
+
+			CHECK_RENDER_ERROR(glBindTexture(GL_TEXTURE_2D, layer.texture_ids[tile_index]));
+			CHECK_RENDER_ERROR(glTexSubImage2D(
+				GL_TEXTURE_2D,
+				0,
+				overlap_x0 - tile.source_x,
+				overlap_y0 - tile.source_y,
+				overlap_x1 - overlap_x0,
+				overlap_y1 - overlap_y0,
+				GL_BGRA_EXT,
+				GL_UNSIGNED_BYTE,
+				data + static_cast<ptrdiff_t>(overlap_y0) * pitch + static_cast<ptrdiff_t>(overlap_x0) * 4));
+		}
+	}
+	CHECK_RENDER_ERROR(glBindTexture(GL_TEXTURE_2D, 0));
+	CHECK_RENDER_ERROR(glPixelStorei(GL_UNPACK_ROW_LENGTH, 0));
+	layer.has_content = true;
+}
+
 void ModernGLRenderer::RenderLayer(LayerResources& layer) {
 	if (!layer.has_content || layer.layout.tiles.empty())
 		return;
@@ -517,18 +556,43 @@ void ModernGLRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 		return;
 	}
 
-	UploadBgraLayer(
+	bool layout_changed =
+		overlay_layer.layout.frame_width != overlay->width ||
+		overlay_layer.layout.frame_height != overlay->height ||
+		overlay_layer.layout.flipped != overlay->flipped ||
+		overlay_layer.texture_ids.size() != overlay_layer.layout.tiles.size() ||
+		overlay_layer.canvas_width != overlay->canvas_width ||
+		overlay_layer.canvas_height != overlay->canvas_height ||
+		overlay_layer.offset_x != overlay->target_x ||
+		overlay_layer.offset_y != overlay->target_y ||
+		overlay_layer.composition_mode != overlay->composition_mode ||
+		!overlay_layer.has_content;
+
+	if (layout_changed) {
+		UploadBgraLayer(
+			overlay_layer,
+			overlay->planes[0].data,
+			overlay->width,
+			overlay->height,
+			overlay->planes[0].stride,
+			overlay->flipped,
+			overlay->canvas_width,
+			overlay->canvas_height,
+			overlay->target_x,
+			overlay->target_y,
+			overlay->composition_mode);
+		return;
+	}
+
+	if (overlay->dirty_rect_count <= 0)
+		return;
+
+	UploadDirtyRects(
 		overlay_layer,
 		overlay->planes[0].data,
-		overlay->width,
-		overlay->height,
 		overlay->planes[0].stride,
-		overlay->flipped,
-		overlay->canvas_width,
-		overlay->canvas_height,
-		overlay->target_x,
-		overlay->target_y,
-		overlay->composition_mode);
+		overlay->dirty_rects,
+		overlay->dirty_rect_count);
 }
 
 void ModernGLRenderer::Render(RenderViewport const& viewport, int, int) {

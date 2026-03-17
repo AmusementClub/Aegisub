@@ -715,15 +715,23 @@ if(WITH_ALSA)
     target_sources(Aegisub PRIVATE src/audio_player_alsa.cpp)
 endif()
 
-set(HAVE_VENDORED_AVISYNTH_HEADER OFF)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/avisynth/avisynth.h")
-    set(HAVE_VENDORED_AVISYNTH_HEADER ON)
-endif()
-
-option(WITH_AVISYNTH "Enable AviSynth support" ${HAVE_VENDORED_AVISYNTH_HEADER})
+set(HAVE_AVISYNTH_HEADERS OFF)
+set(HAVE_AVISYNTH OFF)
+option(WITH_AVISYNTH "Enable AviSynth support" ON)
 if(WITH_AVISYNTH)
+    find_package(AviSynth QUIET)
+    if(NOT AviSynth_FOUND)
+        message(FATAL_ERROR
+            "WITH_AVISYNTH is ON, but AviSynth headers were not found.\n"
+            "Install AviSynth development headers or pass -DAviSynth_INCLUDE_DIR=/path/to/include.\n"
+            "Set -DWITH_AVISYNTH=OFF to configure without AviSynth."
+        )
+    endif()
+
+    set(HAVE_AVISYNTH_HEADERS ON)
+    set(HAVE_AVISYNTH ON)
     target_compile_definitions(Aegisub PRIVATE "WITH_AVISYNTH")
-    target_include_directories(Aegisub PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vendor/avisynth")
+    target_include_directories(Aegisub PRIVATE "${AviSynth_INCLUDE_DIR}")
     if(WIN32)
         target_link_libraries(Aegisub LINK_PRIVATE Vfw32)
         target_compile_definitions(Aegisub PRIVATE "AVISYNTH_SO=\"AviSynth.dll\"")
@@ -1021,7 +1029,8 @@ message(STATUS "\n"
     "  XAudio2:               ${WITH_XAUDIO2}\n"
     "\n"
     "Misc Packages\n"
-    "  AviSynth:              ${WITH_AVISYNTH}\n"
+    "  AviSynth headers:      ${HAVE_AVISYNTH_HEADERS}\n"
+    "  AviSynth:              ${HAVE_AVISYNTH}\n"
     "  CSRI:                  ${WITH_CSRI}\n"
     "  FFMS2 headers:         ${HAVE_FFMS2_HEADERS}\n"
     "  FFMS2:                 ${HAVE_FFMS2}\n"

@@ -58,6 +58,37 @@ struct closer {
 	void operator()(csri_inst *inst) { if (inst) csri_close(inst); }
 };
 
+bool RenderCsriBgraOverlay(csri_inst *instance, SubtitleOverlay& overlay, double time) {
+	if (!instance || !overlay.IsValid() || overlay.pixel_format != SubtitleOverlayPixelFormat::Bgra8)
+		return false;
+
+	csri_frame frame = { };
+	auto *data = overlay.planes[0].data;
+	auto stride = overlay.planes[0].stride;
+	if (!data || stride == 0)
+		return false;
+
+	if (overlay.flipped && stride > 0) {
+		data += (overlay.height - 1) * stride;
+		stride = -stride;
+	}
+
+	frame.planes[0] = data;
+	frame.strides[0] = stride;
+	frame.pixfmt = CSRI_F_BGR_;
+
+	csri_fmt format = {
+		frame.pixfmt,
+		static_cast<unsigned>(overlay.width),
+		static_cast<unsigned>(overlay.height)
+	};
+
+	std::lock_guard<std::mutex> lock(csri_mutex);
+	if (!csri_request_fmt(instance, &format))
+		csri_render(instance, &frame, time);
+	return true;
+}
+
 class CSRISubtitlesProvider final : public SubtitlesProvider {
 	std::unique_ptr<csri_inst, closer> instance;
 	csri_rend *renderer = nullptr;
@@ -70,6 +101,7 @@ class CSRISubtitlesProvider final : public SubtitlesProvider {
 public:
 	CSRISubtitlesProvider(std::string subType);
 
+	bool RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double time) override;
 	void DrawSubtitles(VideoFrame &dst, double time) override;
 };
 
@@ -86,25 +118,13 @@ CSRISubtitlesProvider::CSRISubtitlesProvider(std::string type) {
 		throw agi::InternalError("CSRI renderer vanished between initial list and creation?");
 }
 
+bool CSRISubtitlesProvider::RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double time) {
+	return RenderCsriBgraOverlay(instance.get(), overlay, time);
+}
+
 void CSRISubtitlesProvider::DrawSubtitles(VideoFrame &dst, double time) {
-	if (!instance) return;
-
-	csri_frame frame;
-	if (dst.flipped) {
-		frame.planes[0] = dst.data.data() + (dst.height-1) * dst.width * 4;
-		frame.strides[0] = -(ptrdiff_t)dst.width * 4;
-	}
-	else {
-		frame.planes[0] = dst.data.data();
-		frame.strides[0] = dst.width * 4;
-	}
-	frame.pixfmt = CSRI_F_BGR_;
-
-	csri_fmt format = { frame.pixfmt, (unsigned)dst.width, (unsigned)dst.height };
-
-	std::lock_guard<std::mutex> lock(csri_mutex);
-	if (!csri_request_fmt(instance.get(), &format))
-		csri_render(instance.get(), &frame, time);
+	auto overlay = MakeLegacyBgraSubtitleOverlayView(dst);
+	RenderCsriBgraOverlay(instance.get(), overlay, time);
 }
 }
 

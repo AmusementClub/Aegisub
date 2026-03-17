@@ -64,6 +64,7 @@ if(GTEST_FOUND)
         tests/tests/signals.cpp
         tests/tests/split.cpp
         tests/tests/source_frame_overlay.cpp
+        tests/tests/subtitle_overlay_blend.cpp
         tests/tests/subtitle_format_microdvd.cpp
         tests/tests/syntax_highlight.cpp
         tests/tests/thesaurus.cpp
@@ -77,6 +78,7 @@ if(GTEST_FOUND)
         tests/support/main.cpp
         tests/support/src_config_stubs.cpp
         tests/support/util.cpp
+        src/subtitle_overlay_blend.cpp
         src/modern_gl_renderer_tile.cpp
         src/video_provider_cache.cpp
     )

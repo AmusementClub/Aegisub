@@ -515,6 +515,7 @@ add_executable(Aegisub WIN32
     src/subs_edit_box.cpp
     src/subs_edit_ctrl.cpp
     src/subs_preview.cpp
+    src/subtitle_overlay_blend.cpp
     src/subtitles_provider.cpp
     src/subtitles_provider_libass.cpp
     src/text_file_reader.cpp

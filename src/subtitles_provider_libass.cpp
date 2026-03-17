@@ -37,6 +37,7 @@
 #include "compat.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "ready_flag.h"
+#include "subtitle_overlay_blend.h"
 #include "video_frame.h"
 
 #include <libaegisub/background_runner.h>
@@ -46,11 +47,6 @@
 #include <libaegisub/make_unique.h>
 
 #include <atomic>
-#if BOOST_VERSION >= 106900
-#include <boost/gil.hpp>
-#else
-#include <boost/gil.hpp>
-#endif
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -134,6 +130,7 @@ public:
 		if (!ass_track) throw agi::InternalError("libass failed to load subtitles.");
 	}
 
+	bool RenderOverlay(SourceFrame const& source, SubtitleOverlay& overlay, double time) override;
 	void DrawSubtitles(VideoFrame &dst, double time) override;
 
 	void Reinitialize() override {
@@ -172,48 +169,55 @@ LibassSubtitlesProvider::~LibassSubtitlesProvider() {
 	if (ass_track) ass_free_track(ass_track);
 }
 
-#define _r(c) ((c)>>24)
-#define _g(c) (((c)>>16)&0xFF)
-#define _b(c) (((c)>>8)&0xFF)
-#define _a(c) ((c)&0xFF)
+bool LibassSubtitlesProvider::RenderOverlay(SourceFrame const& source, SubtitleOverlay& overlay, double time) {
+	if (!overlay.IsValid() || overlay.pixel_format != SubtitleOverlayPixelFormat::Bgra8)
+		return false;
 
-void LibassSubtitlesProvider::DrawSubtitles(VideoFrame &frame,double time) {
-	ass_set_frame_size(renderer(), frame.width, frame.height);
-	// Note: this relies on Aegisub always rendering at video storage res
-	ass_set_storage_size(renderer(), frame.width, frame.height);
+	int render_width = overlay.width;
+	int render_height = overlay.height;
+	if (source.IsValid()) {
+		render_width = source.width;
+		render_height = source.height;
+	}
+
+	ass_set_frame_size(renderer(), render_width, render_height);
+	ass_set_storage_size(renderer(), render_width, render_height);
 
 	ASS_Image* img = ass_render_frame(renderer(), ass_track, int(time * 1000), nullptr);
+	BgraSubtitleTargetView target {
+		overlay.planes[0].data,
+		overlay.planes[0].stride,
+		overlay.width,
+		overlay.height,
+		overlay.flipped
+	};
 
-	// libass actually returns several alpha-masked monochrome images.
-	// Here, we loop through their linked list, get the colour of the current, and blend into the frame.
-	// This is repeated for all of them.
-
-	using namespace boost::gil;
-	auto dst = interleaved_view(frame.width, frame.height, (bgra8_pixel_t*)frame.data.data(), frame.width * 4);
-	if (frame.flipped)
-		dst = flipped_up_down_view(dst);
+	auto blend_mode = overlay.premultiplied_alpha
+		? SubtitleOverlayBlendMode::PremultipliedOverlay
+		: SubtitleOverlayBlendMode::LegacyBakeIn;
+	if (overlay.premultiplied_alpha)
+		ClearBgraSubtitleTarget(target);
 
 	for (; img; img = img->next) {
-		unsigned int opacity = 255 - ((unsigned int)_a(img->color));
-		unsigned int r = (unsigned int)_r(img->color);
-		unsigned int g = (unsigned int)_g(img->color);
-		unsigned int b = (unsigned int)_b(img->color);
-
-		auto srcview = interleaved_view(img->w, img->h, (gray8_pixel_t*)img->bitmap, img->stride);
-		auto dstview = subimage_view(dst, img->dst_x, img->dst_y, img->w, img->h);
-
-		transform_pixels(dstview, srcview, dstview, [=](const bgra8_pixel_t frame, const gray8_pixel_t src) -> bgra8_pixel_t {
-			unsigned int k = ((unsigned)src) * opacity / 255;
-			unsigned int ck = 255 - k;
-
-			bgra8_pixel_t ret;
-			ret[0] = (k * b + ck * frame[0]) / 255;
-			ret[1] = (k * g + ck * frame[1]) / 255;
-			ret[2] = (k * r + ck * frame[2]) / 255;
-			ret[3] = 0;
-			return ret;
-		});
+		BlendLibassMaskIntoBgraTarget(
+			target,
+			blend_mode,
+			img->dst_x,
+			img->dst_y,
+			img->w,
+			img->h,
+			img->bitmap,
+			img->stride,
+			static_cast<std::uint32_t>(img->color));
 	}
+
+	return true;
+}
+
+void LibassSubtitlesProvider::DrawSubtitles(VideoFrame &frame,double time) {
+	auto source = MakeSourceFrameView(frame);
+	auto overlay = MakeLegacyBgraSubtitleOverlayView(frame);
+	RenderOverlay(source, overlay, time);
 }
 }
 

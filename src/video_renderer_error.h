@@ -1,0 +1,39 @@
+// Copyright (c) 2026
+//
+// Permission to use, copy, modify, and distribute this software for any
+// purpose with or without fee is hereby granted, provided that the above
+// copyright notice and this permission notice appear in all copies.
+//
+// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+// ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+// ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+// OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+#pragma once
+
+#include <libaegisub/exception.h>
+
+#include <string>
+
+DEFINE_EXCEPTION(VideoOutException, agi::Exception);
+
+class VideoOutRenderException final : public VideoOutException {
+public:
+	VideoOutRenderException(const char *func, int err)
+	: VideoOutException(std::string(func) + " failed with error code " + std::to_string(err))
+	{ }
+};
+
+class VideoOutInitException final : public VideoOutException {
+public:
+	VideoOutInitException(const char *func, int err)
+	: VideoOutException(std::string(func) + " failed with error code " + std::to_string(err))
+	{ }
+
+	VideoOutInitException(const char *err)
+	: VideoOutException(err)
+	{ }
+};

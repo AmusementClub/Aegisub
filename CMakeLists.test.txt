@@ -54,8 +54,9 @@ if(GTEST_FOUND)
         tests/tests/keyframe.cpp
         tests/tests/line_iterator.cpp
         tests/tests/line_wrap.cpp
-        tests/tests/mru.cpp
         tests/tests/math_utils.cpp
+        tests/tests/modern_gl_renderer_tile.cpp
+        tests/tests/mru.cpp
         tests/tests/option.cpp
         tests/tests/path.cpp
         tests/tests/ready_flag.cpp
@@ -75,6 +76,7 @@ if(GTEST_FOUND)
         tests/support/main.cpp
         tests/support/src_config_stubs.cpp
         tests/support/util.cpp
+        src/modern_gl_renderer_tile.cpp
         src/video_provider_cache.cpp
     )
     target_compile_definitions(gtest-run PRIVATE CMAKE_BUILD)

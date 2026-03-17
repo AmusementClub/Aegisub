@@ -42,12 +42,13 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/hotkey.h"
 #include "include/aegisub/menu.h"
+#include "modern_gl_renderer.h"
 #include "options.h"
 #include "project.h"
 #include "retina_helper.h"
 #include "spline_curve.h"
 #include "utils.h"
-#include "video_out_gl.h"
+#include "video_renderer_error.h"
 #include "video_controller.h"
 #include "visual_tool.h"
 
@@ -177,18 +178,18 @@ void VideoDisplay::OnIdle(wxIdleEvent&) {
 void VideoDisplay::DoRender() try {
 	render_requested = false;
 
-	if (!con->project->VideoProvider() || !InitContext() || (!videoOut && !pending_frame))
+	if (!con->project->VideoProvider() || !InitContext() || (!videoRenderer && !pending_frame))
 		return;
 
-	if (!videoOut)
-		videoOut = agi::make_unique<VideoOutGL>();
+	if (!videoRenderer)
+		videoRenderer = agi::make_unique<ModernGLRenderer>();
 
 	if (!tool)
 		cmd::call("video/tool/cross", con);
 
 	try {
 		if (pending_frame) {
-			videoOut->UploadFrameData(*pending_frame);
+			videoRenderer->UploadFrame(*pending_frame);
 			pending_frame.reset();
 		}
 	}
@@ -215,7 +216,7 @@ void VideoDisplay::DoRender() try {
 	if (!viewport_height || !viewport_width)
 		PositionVideo();
 
-	videoOut->Render(viewport_left, viewport_bottom, viewport_width, viewport_height);
+	videoRenderer->Render({ viewport_left, viewport_bottom, viewport_width, viewport_height }, GetClientSize().GetWidth() * scale_factor, GetClientSize().GetHeight() * scale_factor);
 	E(glViewport(0, std::min(viewport_bottom, 0), videoSize.GetWidth(), videoSize.GetHeight()));
 
 	E(glMatrixMode(GL_PROJECTION));
@@ -478,7 +479,9 @@ void VideoDisplay::Unload() {
 	if (glContext) {
 		SetCurrent(*glContext);
 	}
-	videoOut.reset();
+	if (videoRenderer)
+		videoRenderer->Reset();
+	videoRenderer.reset();
 	tool.reset();
 	glContext.reset();
 	pending_frame.reset();

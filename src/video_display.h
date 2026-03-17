@@ -34,6 +34,8 @@
 
 #include <libaegisub/signal.h>
 
+#include "ivideo_renderer.h"
+
 #include "vector2d.h"
 
 #include <memory>
@@ -44,7 +46,6 @@
 // Prototypes
 class RetinaHelper;
 class VideoController;
-class VideoOutGL;
 class VisualToolBase;
 class wxComboBox;
 class wxTextCtrl;
@@ -88,7 +89,7 @@ class VideoDisplay final : public wxGLCanvas {
 	double zoomValue;
 
 	/// The video renderer
-	std::unique_ptr<VideoOutGL> videoOut;
+	std::unique_ptr<IVideoRenderer> videoRenderer;
 
 	/// The active visual typesetting tool
 	std::unique_ptr<VisualToolBase> tool;

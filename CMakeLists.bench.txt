@@ -51,6 +51,17 @@ target_include_directories(phase1-low-cost-bench PRIVATE
 )
 target_link_libraries(phase1-low-cost-bench PRIVATE "Boost::headers")
 
+add_executable(modern-gl-renderer-tile-bench EXCLUDE_FROM_ALL
+    tools/modern_gl_renderer_tile_bench_main.cpp
+    src/modern_gl_renderer_tile.cpp
+)
+target_compile_features(modern-gl-renderer-tile-bench PRIVATE cxx_std_20)
+target_include_directories(modern-gl-renderer-tile-bench PRIVATE
+    "${PROJECT_SOURCE_DIR}/src"
+    "${PROJECT_SOURCE_DIR}/libaegisub/include"
+)
+target_link_libraries(modern-gl-renderer-tile-bench PRIVATE "Boost::headers")
+
 add_executable(dispatch-micro-bench EXCLUDE_FROM_ALL
     tools/dispatch_micro_bench_main.cpp
 )

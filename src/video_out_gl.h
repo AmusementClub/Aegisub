@@ -19,7 +19,7 @@
 /// @ingroup video
 ///
 
-#include <libaegisub/exception.h>
+#include "video_renderer_error.h"
 
 #include <vector>
 
@@ -79,22 +79,3 @@ public:
 	~VideoOutGL();
 };
 
-/// Base class for all exceptions thrown by VideoOutGL
-DEFINE_EXCEPTION(VideoOutException, agi::Exception);
-
-/// An OpenGL error occurred while uploading or displaying a frame
-class VideoOutRenderException final : public VideoOutException {
-public:
-	VideoOutRenderException(const char *func, int err)
-	: VideoOutException(std::string(func) + " failed with error code " + std::to_string(err))
-	{ }
-};
-
-/// An OpenGL error occurred while setting up the video display
-class VideoOutInitException final : public VideoOutException {
-public:
-	VideoOutInitException(const char *func, int err)
-	: VideoOutException(std::string(func) + " failed with error code " + std::to_string(err))
-	{ }
-	VideoOutInitException(const char *err) : VideoOutException(err) { }
-};

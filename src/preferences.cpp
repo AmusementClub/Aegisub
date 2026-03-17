@@ -37,10 +37,6 @@
 #include "audio_player_portaudio.h"
 #endif
 
-#ifdef WITH_FFMS2
-#include <ffms.h>
-#endif
-
 #include <libaegisub/hotkey.h>
 
 #include <unordered_set>

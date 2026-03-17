@@ -775,18 +775,30 @@ else()
     set(WITH_COREAUDIO OFF)
 endif()
 
-set(HAVE_VENDORED_FFMS2_HEADER OFF)
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/ffms2/ffms.h")
-    set(HAVE_VENDORED_FFMS2_HEADER ON)
-endif()
-
-option(WITH_FFMS2 "Enable FFMS2 support" ${HAVE_VENDORED_FFMS2_HEADER})
+set(HAVE_FFMS2_HEADERS OFF)
+set(HAVE_FFMS2 OFF)
+option(WITH_FFMS2 "Enable FFMS2 support" ON)
 if(WITH_FFMS2)
-    target_compile_definitions(Aegisub PRIVATE "WITH_FFMS2")
-    target_include_directories(Aegisub PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/vendor/ffms2")
-    target_compile_definitions(Aegisub PRIVATE "WITH_FFMS2_RUNTIME_LOADING")
+    find_package(FFMS2 QUIET)
+
+    if(NOT FFMS2_FOUND)
+        message(FATAL_ERROR
+            "WITH_FFMS2 is ON, but FFMS2 headers were not found.\n"
+            "Install FFMS2 development headers or pass -DFFMS2_INCLUDE_DIR=/path/to/include.\n"
+            "Set -DWITH_FFMS2=OFF to configure without FFMS2."
+        )
+    endif()
+
+    set(HAVE_FFMS2_HEADERS ON)
+    set(HAVE_FFMS2 ON)
+    message(STATUS "Found FFMS2 headers: ${FFMS2_INCLUDE_DIR}")
+    target_compile_definitions(Aegisub PRIVATE "WITH_FFMS2" "WITH_FFMS2_RUNTIME_LOADING")
+    target_include_directories(Aegisub PRIVATE
+        "${FFMS2_INCLUDE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/ffms2"
+    )
     target_sources(Aegisub PRIVATE src/audio_provider_ffmpegsource.cpp src/ffmpegsource_common.cpp src/video_provider_ffmpegsource.cpp)
-else()
+elseif(NOT HAVE_FFMS2)
     message(WARNING
         "No supported video/audio reader interface was enabled.\n"
         "You will not be able to open any video or audio files in Aegisub unless you install a supported video/audio provider.\n"
@@ -1011,8 +1023,9 @@ message(STATUS "\n"
     "Misc Packages\n"
     "  AviSynth:              ${WITH_AVISYNTH}\n"
     "  CSRI:                  ${WITH_CSRI}\n"
-    "  FFMS2:                 ${WITH_FFMS2}\n"
-    "  FFMS2 runtime loading: ON\n"
+    "  FFMS2 headers:         ${HAVE_FFMS2_HEADERS}\n"
+    "  FFMS2:                 ${HAVE_FFMS2}\n"
+    "  FFMS2 runtime loading: runtime on demand\n"
     "  FFTW3:                 ${WITH_FFTW3}\n"
     "  Hunspell:              ${WITH_HUNSPELL}\n"
     "  libplacebo headers:    ${HAVE_LIBPLACEBO}\n"

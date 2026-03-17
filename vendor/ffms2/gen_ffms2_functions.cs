@@ -126,7 +126,7 @@ static class Tooling {
             return null;
 
         var content = File.ReadAllText(presetsPath, Encoding.UTF8);
-        var match = Regex.Match(content, @"""FFMS2_INCLUDE_DIRS""\s*:\s*""([^""]+)""");
+        var match = Regex.Match(content, @"""FFMS2_INCLUDE_DIR""\s*:\s*""([^""]+)""");
         if (!match.Success)
             return null;
 
@@ -144,7 +144,7 @@ static class Tooling {
         foreach (var cachePath in cachePaths) {
 
             foreach (var line in File.ReadLines(cachePath, Encoding.UTF8)) {
-                if (!line.StartsWith("FFMS2_INCLUDE_DIRS:", StringComparison.Ordinal))
+                if (!line.StartsWith("FFMS2_INCLUDE_DIR:", StringComparison.Ordinal))
                     continue;
 
                 var parts = line.Split('=', 2);

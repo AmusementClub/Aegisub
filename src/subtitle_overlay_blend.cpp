@@ -17,6 +17,10 @@
 #include <algorithm>
 #include <cstring>
 
+#if defined(_M_X64) || defined(_M_IX86) || defined(__SSE2__)
+#include <emmintrin.h>
+#endif
+
 namespace {
 inline unsigned char* RowPointer(BgraSubtitleTargetView target, int y) {
 	int physical_y = target.flipped ? (target.height - 1 - y) : y;
@@ -60,6 +64,57 @@ bool FramesAreComparable(VideoFrame const& source, VideoFrame const& composited)
 		&& source.data.size() >= required_source_bytes
 		&& composited.data.size() >= required_composited_bytes;
 }
+
+#if defined(_M_X64) || defined(_M_IX86) || defined(__SSE2__)
+bool BuildSparsePremultipliedCompatibilityOverlaySimd(VideoFrame const& source, VideoFrame const& composited, SubtitleOverlayStorage& storage) {
+	int width = static_cast<int>(source.width);
+	int height = static_cast<int>(source.height);
+	__m128i const all_ones = _mm_set1_epi32(-1);
+	__m128i const alpha_mask = _mm_set1_epi32(static_cast<int>(0xFF000000u));
+
+	for (int y = 0; y < height; ++y) {
+		auto const* src_row = RowPointer(source, y);
+		auto const* composited_row = RowPointer(composited, y);
+		if (std::memcmp(src_row, composited_row, static_cast<size_t>(width) * 4) == 0)
+			continue;
+
+		auto* dst_row = StorageRowPointer(storage, y);
+		int simd_width = width & ~3;
+		int x = 0;
+		for (; x < simd_width; x += 4) {
+			auto const* src = src_row + static_cast<ptrdiff_t>(x) * 4;
+			auto const* composited_pixel = composited_row + static_cast<ptrdiff_t>(x) * 4;
+			__m128i src_vec = _mm_loadu_si128(reinterpret_cast<__m128i const*>(src));
+			__m128i composited_vec = _mm_loadu_si128(reinterpret_cast<__m128i const*>(composited_pixel));
+			__m128i equal_mask = _mm_cmpeq_epi32(src_vec, composited_vec);
+			if (_mm_movemask_epi8(equal_mask) == 0xFFFF)
+				continue;
+
+			__m128i changed_mask = _mm_xor_si128(equal_mask, all_ones);
+			__m128i with_alpha = _mm_or_si128(composited_vec, alpha_mask);
+			__m128i sparse = _mm_and_si128(changed_mask, with_alpha);
+			_mm_storeu_si128(reinterpret_cast<__m128i*>(dst_row + static_cast<ptrdiff_t>(x) * 4), sparse);
+			storage.has_visible_content = true;
+		}
+
+		for (; x < width; ++x) {
+			auto pixel_offset = static_cast<ptrdiff_t>(x) * 4;
+			auto const* src = src_row + pixel_offset;
+			auto const* composited_pixel = composited_row + pixel_offset;
+			auto* dst = dst_row + pixel_offset;
+			if (std::memcmp(src, composited_pixel, 4) != 0) {
+				dst[0] = composited_pixel[0];
+				dst[1] = composited_pixel[1];
+				dst[2] = composited_pixel[2];
+				dst[3] = 255;
+				storage.has_visible_content = true;
+			}
+		}
+	}
+
+	return true;
+}
+#endif
 }
 
 void ClearBgraSubtitleTarget(BgraSubtitleTargetView target) {
@@ -136,6 +191,9 @@ bool BuildSparsePremultipliedCompatibilityOverlay(VideoFrame const& source, Vide
 	int height = static_cast<int>(source.height);
 	storage.Reset(width, height, source.flipped);
 
+#if defined(_M_X64) || defined(_M_IX86) || defined(__SSE2__)
+	BuildSparsePremultipliedCompatibilityOverlaySimd(source, composited, storage);
+#else
 	for (int y = 0; y < height; ++y) {
 		auto const* src_row = RowPointer(source, y);
 		auto const* composited_row = RowPointer(composited, y);
@@ -157,6 +215,7 @@ bool BuildSparsePremultipliedCompatibilityOverlay(VideoFrame const& source, Vide
 			}
 		}
 	}
+#endif
 
 	overlay = storage.MakeView(true);
 	overlay.color_role = SubtitleOverlayColorRole::SubtitleVideoCompatibility;

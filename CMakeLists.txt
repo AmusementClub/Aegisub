@@ -666,25 +666,29 @@ endif()
 option(WITH_LIBPLACEBO "Enable optional runtime-loaded libplacebo renderer support" ON)
 set(HAVE_LIBPLACEBO OFF)
 if(WITH_LIBPLACEBO)
-    find_path(LIBPLACEBO_INCLUDE_DIR NAMES libplacebo/config.h)
-    if(LIBPLACEBO_INCLUDE_DIR)
-        set(HAVE_LIBPLACEBO ON)
-        message(STATUS "Found libplacebo headers: ${LIBPLACEBO_INCLUDE_DIR}")
-        target_include_directories(Aegisub PRIVATE ${LIBPLACEBO_INCLUDE_DIR})
-        target_compile_definitions(Aegisub PRIVATE WITH_LIBPLACEBO WITH_LIBPLACEBO_RUNTIME_LOADING)
-        target_sources(Aegisub PRIVATE
-            src/video_renderer_placebo_gl.cpp
-            src/video_renderer_placebo_runtime.cpp
+    find_package(LibPlacebo QUIET)
+    if(NOT LibPlacebo_FOUND)
+        message(FATAL_ERROR
+            "WITH_LIBPLACEBO is ON, but libplacebo headers were not found.\n"
+            "Install libplacebo development headers or pass -DLibPlacebo_INCLUDE_DIR=/path/to/include.\n"
+            "Set -DWITH_LIBPLACEBO=OFF to configure without libplacebo."
         )
-        set_source_files_properties(
-            src/video_renderer_placebo_gl.cpp
-            src/video_renderer_placebo_runtime.cpp
-            PROPERTIES
-            SKIP_PRECOMPILE_HEADERS ON
-        )
-    else()
-        message(STATUS "libplacebo headers not found; continuing without optional runtime-loaded libplacebo renderer support.")
     endif()
+
+    set(HAVE_LIBPLACEBO ON)
+    message(STATUS "Found libplacebo headers: ${LibPlacebo_INCLUDE_DIR}")
+    target_include_directories(Aegisub PRIVATE ${LibPlacebo_INCLUDE_DIR})
+    target_compile_definitions(Aegisub PRIVATE WITH_LIBPLACEBO WITH_LIBPLACEBO_RUNTIME_LOADING)
+    target_sources(Aegisub PRIVATE
+        src/video_renderer_placebo_gl.cpp
+        src/video_renderer_placebo_runtime.cpp
+    )
+    set_source_files_properties(
+        src/video_renderer_placebo_gl.cpp
+        src/video_renderer_placebo_runtime.cpp
+        PROPERTIES
+        SKIP_PRECOMPILE_HEADERS ON
+    )
 endif()
 
 find_package(Iconv REQUIRED)
@@ -715,7 +719,6 @@ if(WITH_ALSA)
     target_sources(Aegisub PRIVATE src/audio_player_alsa.cpp)
 endif()
 
-set(HAVE_AVISYNTH_HEADERS OFF)
 set(HAVE_AVISYNTH OFF)
 option(WITH_AVISYNTH "Enable AviSynth support" ON)
 if(WITH_AVISYNTH)
@@ -728,7 +731,6 @@ if(WITH_AVISYNTH)
         )
     endif()
 
-    set(HAVE_AVISYNTH_HEADERS ON)
     set(HAVE_AVISYNTH ON)
     target_compile_definitions(Aegisub PRIVATE "WITH_AVISYNTH")
     target_include_directories(Aegisub PRIVATE "${AviSynth_INCLUDE_DIR}")
@@ -783,7 +785,6 @@ else()
     set(WITH_COREAUDIO OFF)
 endif()
 
-set(HAVE_FFMS2_HEADERS OFF)
 set(HAVE_FFMS2 OFF)
 option(WITH_FFMS2 "Enable FFMS2 support" ON)
 if(WITH_FFMS2)
@@ -797,7 +798,6 @@ if(WITH_FFMS2)
         )
     endif()
 
-    set(HAVE_FFMS2_HEADERS ON)
     set(HAVE_FFMS2 ON)
     message(STATUS "Found FFMS2 headers: ${FFMS2_INCLUDE_DIR}")
     target_compile_definitions(Aegisub PRIVATE "WITH_FFMS2" "WITH_FFMS2_RUNTIME_LOADING")
@@ -1029,19 +1029,16 @@ message(STATUS "\n"
     "  XAudio2:               ${WITH_XAUDIO2}\n"
     "\n"
     "Misc Packages\n"
-    "  AviSynth headers:      ${HAVE_AVISYNTH_HEADERS}\n"
     "  AviSynth:              ${HAVE_AVISYNTH}\n"
     "  CSRI:                  ${WITH_CSRI}\n"
-    "  FFMS2 headers:         ${HAVE_FFMS2_HEADERS}\n"
     "  FFMS2:                 ${HAVE_FFMS2}\n"
-    "  FFMS2 runtime loading: runtime on demand\n"
     "  FFTW3:                 ${WITH_FFTW3}\n"
     "  Hunspell:              ${WITH_HUNSPELL}\n"
-    "  libplacebo headers:    ${HAVE_LIBPLACEBO}\n"
-    "  libplacebo loading:    runtime on demand\n"
+    "  libplacebo:            ${HAVE_LIBPLACEBO}\n"
     "  uchardet:              ${WITH_UCHARDET}\n"
     "  wxStyledTextCtrl:      ${WITH_WXSTC}\n"
     "  LuaJIT:                bundled\n"
+    "  LuaSocket:             ${WITH_LUASOCKET}\n"
     "\n"
     "Options\n"
     "  Translations:          ${WITH_TRANSLATION}\n"

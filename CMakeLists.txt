@@ -535,7 +535,6 @@ add_executable(Aegisub WIN32
     src/video_frame.cpp
     src/modern_gl_renderer.cpp
     src/modern_gl_renderer_tile.cpp
-    src/video_out_gl.cpp
     src/video_provider_cache.cpp
     src/video_provider_dummy.cpp
     src/video_provider_manager.cpp

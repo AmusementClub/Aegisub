@@ -111,6 +111,13 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		}
 		else {
 			subs_provider->DrawSubtitles(*composited, time / 1000.);
+			auto overlay_storage = acquire_buffer(subtitle_overlay_buffers);
+			SubtitleOverlay subtitle_overlay;
+			if (ExtractOpaqueBgraDifferenceOverlay(*frame, *composited, *overlay_storage, subtitle_overlay)) {
+				packet.subtitle_overlay_storage = overlay_storage;
+				packet.subtitle_overlay = subtitle_overlay;
+				packet.has_subtitle_overlay = true;
+			}
 		}
 	}
 	catch (agi::UserCancelException const&) { }

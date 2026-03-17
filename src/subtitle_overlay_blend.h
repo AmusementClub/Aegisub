@@ -44,4 +44,6 @@ void BlendLibassMaskIntoBgraTarget(
 	unsigned char const* mask_data,
 	ptrdiff_t mask_stride,
 	std::uint32_t ass_color);
+bool ExtractOpaqueBgraDifferenceOverlay(VideoFrame const& source, VideoFrame const& composited, SubtitleOverlayStorage& storage, SubtitleOverlay& overlay);
+void CompositeOpaqueBgraOverlayOntoVideoFrame(VideoFrame& frame, SubtitleOverlay const& overlay);
 void CompositePremultipliedBgraOverlayOntoVideoFrame(VideoFrame& frame, SubtitleOverlay const& overlay);

@@ -341,10 +341,10 @@ void ModernGLRenderer::RebuildLayerGeometry(LayerResources& layer) {
 		auto const& tile = layer.layout.tiles[i];
 		GLuint base = static_cast<GLuint>(layer.vertices.size());
 
-		layer.vertices.push_back({ { tile.x1, tile.y1 }, { tile.u1, tile.v1 } });
-		layer.vertices.push_back({ { tile.x2, tile.y1 }, { tile.u2, tile.v1 } });
-		layer.vertices.push_back({ { tile.x2, tile.y2 }, { tile.u2, tile.v2 } });
-		layer.vertices.push_back({ { tile.x1, tile.y2 }, { tile.u1, tile.v2 } });
+		layer.vertices.push_back({ { tile.x1 + layer.offset_x, tile.y1 + layer.offset_y }, { tile.u1, tile.v1 } });
+		layer.vertices.push_back({ { tile.x2 + layer.offset_x, tile.y1 + layer.offset_y }, { tile.u2, tile.v1 } });
+		layer.vertices.push_back({ { tile.x2 + layer.offset_x, tile.y2 + layer.offset_y }, { tile.u2, tile.v2 } });
+		layer.vertices.push_back({ { tile.x1 + layer.offset_x, tile.y2 + layer.offset_y }, { tile.u1, tile.v2 } });
 
 		layer.indices.push_back(base + 0);
 		layer.indices.push_back(base + 1);
@@ -387,10 +387,15 @@ void ModernGLRenderer::ClearLayer(LayerResources& layer) noexcept {
 	layer.layout = { };
 	layer.vertices.clear();
 	layer.indices.clear();
+	layer.canvas_width = 0;
+	layer.canvas_height = 0;
+	layer.offset_x = 0;
+	layer.offset_y = 0;
+	layer.composition_mode = SubtitleOverlayCompositionMode::OpaqueReplace;
 	layer.has_content = false;
 }
 
-void ModernGLRenderer::UploadBgraLayer(LayerResources& layer, unsigned char const* data, int width, int height, ptrdiff_t pitch, bool flipped) {
+void ModernGLRenderer::UploadBgraLayer(LayerResources& layer, unsigned char const* data, int width, int height, ptrdiff_t pitch, bool flipped, int canvas_width, int canvas_height, int offset_x, int offset_y, SubtitleOverlayCompositionMode composition_mode) {
 	if (!data || width <= 0 || height <= 0 || pitch <= 0) {
 		ClearLayer(layer);
 		return;
@@ -398,12 +403,25 @@ void ModernGLRenderer::UploadBgraLayer(LayerResources& layer, unsigned char cons
 
 	EnsureInitialized();
 
-	bool layout_changed =
+	bool textures_changed =
 		layer.layout.frame_width != width ||
 		layer.layout.frame_height != height ||
 		layer.layout.flipped != flipped ||
 		layer.texture_ids.size() != layer.layout.tiles.size();
-	if (layout_changed) {
+	bool geometry_changed =
+		textures_changed ||
+		layer.canvas_width != canvas_width ||
+		layer.canvas_height != canvas_height ||
+		layer.offset_x != offset_x ||
+		layer.offset_y != offset_y;
+
+	layer.canvas_width = canvas_width;
+	layer.canvas_height = canvas_height;
+	layer.offset_x = offset_x;
+	layer.offset_y = offset_y;
+	layer.composition_mode = composition_mode;
+
+	if (textures_changed) {
 		layer.layout = BuildModernGLTileLayout(
 		width,
 		height,
@@ -412,9 +430,10 @@ void ModernGLRenderer::UploadBgraLayer(LayerResources& layer, unsigned char cons
 		supports_rectangular_textures,
 		flipped);
 		LOG_I("video/out/modern_gl") << "Layer size: " << layer.layout.frame_width << "x" << layer.layout.frame_height << ", tiles: " << layer.layout.tiles.size();
-		RebuildLayerGeometry(layer);
 		RecreateLayerTextures(layer);
 	}
+	if (geometry_changed)
+		RebuildLayerGeometry(layer);
 
 	CHECK_RENDER_ERROR(glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(pitch / 4)));
 	for (size_t i = 0; i < layer.layout.tiles.size(); ++i) {
@@ -436,13 +455,13 @@ void ModernGLRenderer::UploadBgraLayer(LayerResources& layer, unsigned char cons
 	layer.has_content = true;
 }
 
-void ModernGLRenderer::RenderLayer(LayerResources& layer, bool blend) {
+void ModernGLRenderer::RenderLayer(LayerResources& layer) {
 	if (!layer.has_content || layer.layout.tiles.empty())
 		return;
 	auto& gl = *functions;
-	auto projection_matrix = BuildModernGLOrthoMatrix(layer.layout.frame_width, layer.layout.frame_height, layer.layout.flipped);
+	auto projection_matrix = BuildModernGLOrthoMatrix(layer.canvas_width, layer.canvas_height, layer.layout.flipped);
 
-	if (blend) {
+	if (layer.composition_mode == SubtitleOverlayCompositionMode::PremultipliedAlpha) {
 		CHECK_RENDER_ERROR(glEnable(GL_BLEND));
 		CHECK_RENDER_ERROR(glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
 	}
@@ -484,11 +503,16 @@ void ModernGLRenderer::UploadFrame(SourceFrame const& frame) {
 		frame.width,
 		frame.height,
 		frame.planes[0].stride,
-		frame.flipped);
+		frame.flipped,
+		frame.width,
+		frame.height,
+		0,
+		0,
+		SubtitleOverlayCompositionMode::OpaqueReplace);
 }
 
 void ModernGLRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
-	if (!overlay || !overlay->IsValid() || overlay->pixel_format != SubtitleOverlayPixelFormat::Bgra8) {
+	if (!overlay || !overlay->IsValid() || !overlay->IsDirectRenderable() || overlay->pixel_format != SubtitleOverlayPixelFormat::Bgra8) {
 		ClearLayer(overlay_layer);
 		return;
 	}
@@ -499,7 +523,12 @@ void ModernGLRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 		overlay->width,
 		overlay->height,
 		overlay->planes[0].stride,
-		overlay->flipped);
+		overlay->flipped,
+		overlay->canvas_width,
+		overlay->canvas_height,
+		overlay->target_x,
+		overlay->target_y,
+		overlay->composition_mode);
 }
 
 void ModernGLRenderer::Render(RenderViewport const& viewport, int, int) {
@@ -517,6 +546,6 @@ void ModernGLRenderer::Render(RenderViewport const& viewport, int, int) {
 	CHECK_RENDER_ERROR(glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT));
 	CHECK_RENDER_ERROR(glViewport(viewport.x, viewport.y, viewport.width, viewport.height));
 
-	RenderLayer(video_layer, false);
-	RenderLayer(overlay_layer, true);
+	RenderLayer(video_layer);
+	RenderLayer(overlay_layer);
 }

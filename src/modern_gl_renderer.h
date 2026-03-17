@@ -37,6 +37,11 @@ class ModernGLRenderer final : public IVideoRenderer {
 		std::vector<GLuint> indices;
 		GLuint vertex_buffer = 0;
 		GLuint element_buffer = 0;
+		int canvas_width = 0;
+		int canvas_height = 0;
+		int offset_x = 0;
+		int offset_y = 0;
+		SubtitleOverlayCompositionMode composition_mode = SubtitleOverlayCompositionMode::OpaqueReplace;
 		bool has_content = false;
 	};
 
@@ -59,9 +64,9 @@ class ModernGLRenderer final : public IVideoRenderer {
 	void CreateLayerBuffers(LayerResources& layer);
 	void RebuildLayerGeometry(LayerResources& layer);
 	void RecreateLayerTextures(LayerResources& layer);
-	void UploadBgraLayer(LayerResources& layer, unsigned char const* data, int width, int height, ptrdiff_t pitch, bool flipped);
+	void UploadBgraLayer(LayerResources& layer, unsigned char const* data, int width, int height, ptrdiff_t pitch, bool flipped, int canvas_width, int canvas_height, int offset_x, int offset_y, SubtitleOverlayCompositionMode composition_mode);
 	void ClearLayer(LayerResources& layer) noexcept;
-	void RenderLayer(LayerResources& layer, bool blend);
+	void RenderLayer(LayerResources& layer);
 	void DestroyResources() noexcept;
 	void DeleteLayerTextures(LayerResources& layer) noexcept;
 

@@ -196,6 +196,9 @@ bool LibassSubtitlesProvider::RenderOverlay(SourceFrame const& source, SubtitleO
 	auto blend_mode = overlay.premultiplied_alpha
 		? SubtitleOverlayBlendMode::PremultipliedOverlay
 		: SubtitleOverlayBlendMode::LegacyBakeIn;
+	overlay.composition_mode = overlay.premultiplied_alpha
+		? SubtitleOverlayCompositionMode::PremultipliedAlpha
+		: SubtitleOverlayCompositionMode::Unsupported;
 	if (overlay.premultiplied_alpha)
 		ClearBgraSubtitleTarget(target);
 

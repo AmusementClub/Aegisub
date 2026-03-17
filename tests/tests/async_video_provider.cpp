@@ -5,6 +5,7 @@
 #include "../../src/async_video_provider.h"
 #include "../../src/export_fixstyle.h"
 #include "../../src/include/aegisub/subtitles_provider.h"
+#include "../../src/subtitle_overlay_blend.h"
 #include "../../src/include/aegisub/video_provider.h"
 #include "../../src/video_frame.h"
 #include "../../src/video_provider_manager.h"
@@ -57,16 +58,8 @@ public:
 		frame.height = 2;
 		frame.pitch = 8;
 		frame.flipped = false;
-		frame.data = {
-			static_cast<unsigned char>(n),
-			0,
-			0,
-			0,
-			0,
-			0,
-			0,
-			0
-		};
+		frame.data.assign(16, 0);
+		frame.data[0] = static_cast<unsigned char>(n);
 	}
 
 	void SetColorSpace(std::string const&) override { }
@@ -333,6 +326,7 @@ TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 	EXPECT_TRUE(packet.source_frame.IsValid());
 	EXPECT_TRUE(packet.subtitle_overlay.IsValid());
 	EXPECT_TRUE(packet.subtitle_overlay.premultiplied_alpha);
+	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, packet.subtitle_overlay.composition_mode);
 	EXPECT_EQ(9, packet.source_frame_storage->data[0]);
 	EXPECT_GT(packet.composited_frame_storage->data[0], packet.source_frame_storage->data[0]);
 	EXPECT_GT(packet.composited_frame_storage->data[1], packet.source_frame_storage->data[1]);
@@ -356,9 +350,21 @@ TEST(async_video_provider, compatibility_only_backend_uses_single_legacy_render)
 	auto packet = provider.GetRenderPacket(5, 5000);
 	ASSERT_TRUE(packet.source_frame_storage);
 	ASSERT_TRUE(packet.composited_frame_storage);
-	EXPECT_FALSE(packet.has_subtitle_overlay);
 	EXPECT_EQ(0, subs->render_overlay_calls);
 	EXPECT_EQ(1, subs->draw_calls);
 	EXPECT_EQ(5, packet.source_frame_storage->data[0]);
 	EXPECT_EQ(11, packet.composited_frame_storage->data[1]);
+
+	SubtitleOverlayStorage storage;
+	SubtitleOverlay extracted_overlay;
+	EXPECT_TRUE(ExtractOpaqueBgraDifferenceOverlay(*packet.source_frame_storage, *packet.composited_frame_storage, storage, extracted_overlay));
+	EXPECT_EQ(1, extracted_overlay.width);
+	EXPECT_EQ(1, extracted_overlay.height);
+
+	ASSERT_TRUE(packet.has_subtitle_overlay);
+	EXPECT_EQ(SubtitleOverlayCompositionMode::OpaqueReplace, packet.subtitle_overlay.composition_mode);
+	EXPECT_EQ(1, packet.subtitle_overlay.width);
+	EXPECT_EQ(1, packet.subtitle_overlay.height);
+	EXPECT_EQ(0, packet.subtitle_overlay.target_x);
+	EXPECT_EQ(0, packet.subtitle_overlay.target_y);
 }

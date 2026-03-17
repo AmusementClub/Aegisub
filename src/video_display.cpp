@@ -190,7 +190,7 @@ void VideoDisplay::DoRender() try {
 
 	try {
 		if (has_pending_packet) {
-			if (pending_packet.has_subtitle_overlay && pending_packet.subtitle_overlay.premultiplied_alpha) {
+			if (pending_packet.has_subtitle_overlay && pending_packet.subtitle_overlay.IsDirectRenderable()) {
 				videoRenderer->UploadFrame(pending_packet.source_frame);
 				videoRenderer->UploadOverlay(&pending_packet.subtitle_overlay);
 			}

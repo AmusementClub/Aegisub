@@ -18,43 +18,7 @@
 #include "subtitle_overlay.h"
 #include "video_frame.h"
 
-#include <algorithm>
 #include <memory>
-#include <vector>
-
-struct SubtitleOverlayStorage {
-	std::vector<unsigned char> pixels;
-	int width = 0;
-	int height = 0;
-	size_t pitch = 0;
-	bool flipped = false;
-
-	void Reset(int new_width, int new_height, bool new_flipped) {
-		width = new_width;
-		height = new_height;
-		flipped = new_flipped;
-		pitch = static_cast<size_t>(new_width) * 4;
-		pixels.resize(pitch * static_cast<size_t>(new_height));
-		std::fill(pixels.begin(), pixels.end(), 0);
-	}
-
-	SubtitleOverlay MakeView(bool premultiplied_alpha = false) {
-		SubtitleOverlay overlay;
-		overlay.pixel_format = SubtitleOverlayPixelFormat::Bgra8;
-		overlay.width = width;
-		overlay.height = height;
-		overlay.flipped = flipped;
-		overlay.premultiplied_alpha = premultiplied_alpha;
-		overlay.plane_count = 1;
-		overlay.planes[0] = {
-			pixels.data(),
-			static_cast<ptrdiff_t>(pitch),
-			width,
-			height
-		};
-		return overlay;
-	}
-};
 
 struct VideoRenderPacket {
 	std::shared_ptr<VideoFrame> source_frame_storage;

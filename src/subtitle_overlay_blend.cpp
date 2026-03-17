@@ -28,6 +28,16 @@ inline unsigned char const* RowPointer(SubtitleOverlay const& overlay, int y) {
 	return overlay.planes[0].data + static_cast<ptrdiff_t>(physical_y) * overlay.planes[0].stride;
 }
 
+inline unsigned char const* RowPointer(VideoFrame const& frame, int y) {
+	int physical_y = frame.flipped ? (static_cast<int>(frame.height) - 1 - y) : y;
+	return frame.data.data() + static_cast<ptrdiff_t>(physical_y) * frame.pitch;
+}
+
+inline unsigned char* StorageRowPointer(SubtitleOverlayStorage& storage, int y) {
+	int physical_y = storage.flipped ? (storage.height - 1 - y) : y;
+	return storage.pixels.data() + static_cast<ptrdiff_t>(physical_y) * storage.pitch;
+}
+
 inline unsigned int AssR(std::uint32_t color) { return color >> 24; }
 inline unsigned int AssG(std::uint32_t color) { return (color >> 16) & 0xFF; }
 inline unsigned int AssB(std::uint32_t color) { return (color >> 8) & 0xFF; }
@@ -98,22 +108,108 @@ void BlendLibassMaskIntoBgraTarget(
 	}
 }
 
+bool ExtractOpaqueBgraDifferenceOverlay(VideoFrame const& source, VideoFrame const& composited, SubtitleOverlayStorage& storage, SubtitleOverlay& overlay) {
+	if (source.width != composited.width || source.height != composited.height || source.data.empty() || composited.data.empty()) {
+		overlay = { };
+		return false;
+	}
+
+	size_t required_row_bytes = source.width * 4;
+	size_t required_source_bytes = source.pitch * source.height;
+	size_t required_composited_bytes = composited.pitch * composited.height;
+	if (source.pitch < required_row_bytes || composited.pitch < required_row_bytes || source.data.size() < required_source_bytes || composited.data.size() < required_composited_bytes) {
+		overlay = { };
+		return false;
+	}
+
+	int width = static_cast<int>(source.width);
+	int height = static_cast<int>(source.height);
+	int min_x = width;
+	int min_y = height;
+	int max_x = -1;
+	int max_y = -1;
+
+	for (int y = 0; y < height; ++y) {
+		auto const* src_row = RowPointer(source, y);
+		auto const* composited_row = RowPointer(composited, y);
+		if (std::memcmp(src_row, composited_row, static_cast<size_t>(width) * 4) == 0)
+			continue;
+
+		min_y = std::min(min_y, y);
+		max_y = y;
+		for (int x = 0; x < width; ++x) {
+			auto pixel_offset = static_cast<ptrdiff_t>(x) * 4;
+			if (std::memcmp(src_row + pixel_offset, composited_row + pixel_offset, 4) != 0) {
+				min_x = std::min(min_x, x);
+				max_x = std::max(max_x, x);
+			}
+		}
+	}
+
+	if (max_x < min_x || max_y < min_y) {
+		overlay = { };
+		return false;
+	}
+
+	int patch_width = max_x - min_x + 1;
+	int patch_height = max_y - min_y + 1;
+	storage.Reset(patch_width, patch_height, source.flipped);
+
+	for (int y = 0; y < patch_height; ++y) {
+		auto const* src_row = RowPointer(composited, min_y + y) + static_cast<ptrdiff_t>(min_x) * 4;
+		auto* dst_row = StorageRowPointer(storage, y);
+		std::memcpy(dst_row, src_row, static_cast<size_t>(patch_width) * 4);
+	}
+
+	overlay = storage.MakeView(false);
+	overlay.canvas_width = width;
+	overlay.canvas_height = height;
+	overlay.target_x = min_x;
+	overlay.target_y = source.flipped ? (height - max_y - 1) : min_y;
+	overlay.color_role = SubtitleOverlayColorRole::SubtitleVideoCompatibility;
+	overlay.composition_mode = SubtitleOverlayCompositionMode::OpaqueReplace;
+	return true;
+}
+
+void CompositeOpaqueBgraOverlayOntoVideoFrame(VideoFrame& frame, SubtitleOverlay const& overlay) {
+	if (!overlay.IsValid() || overlay.pixel_format != SubtitleOverlayPixelFormat::Bgra8 || overlay.composition_mode != SubtitleOverlayCompositionMode::OpaqueReplace)
+		return;
+
+	int x0 = std::max(0, overlay.target_x);
+	int y0 = std::max(0, overlay.target_y);
+	int x1 = std::min(static_cast<int>(frame.width), overlay.target_x + overlay.width);
+	int y1 = std::min(static_cast<int>(frame.height), overlay.target_y + overlay.height);
+	if (x0 >= x1 || y0 >= y1)
+		return;
+
+	for (int y = y0; y < y1; ++y) {
+		int overlay_y = y - overlay.target_y;
+		int dst_y = frame.flipped ? (static_cast<int>(frame.height) - 1 - y) : y;
+		auto* dst_row = frame.data.data() + static_cast<ptrdiff_t>(dst_y) * frame.pitch + static_cast<ptrdiff_t>(x0) * 4;
+		auto const* src_row = RowPointer(overlay, overlay_y) + static_cast<ptrdiff_t>(x0 - overlay.target_x) * 4;
+		std::memcpy(dst_row, src_row, static_cast<size_t>(x1 - x0) * 4);
+	}
+}
+
 void CompositePremultipliedBgraOverlayOntoVideoFrame(VideoFrame& frame, SubtitleOverlay const& overlay) {
 	if (!overlay.IsValid() || !overlay.premultiplied_alpha || overlay.pixel_format != SubtitleOverlayPixelFormat::Bgra8)
 		return;
 
-	int width = std::min(static_cast<int>(frame.width), overlay.width);
-	int height = std::min(static_cast<int>(frame.height), overlay.height);
-	if (width <= 0 || height <= 0)
+	int x0 = std::max(0, overlay.target_x);
+	int y0 = std::max(0, overlay.target_y);
+	int x1 = std::min(static_cast<int>(frame.width), overlay.target_x + overlay.width);
+	int y1 = std::min(static_cast<int>(frame.height), overlay.target_y + overlay.height);
+	if (x0 >= x1 || y0 >= y1)
 		return;
 
-	for (int y = 0; y < height; ++y) {
-		int dst_y = frame.flipped ? (height - 1 - y) : y;
+	for (int y = y0; y < y1; ++y) {
+		int overlay_y = y - overlay.target_y;
+		int dst_y = frame.flipped ? (static_cast<int>(frame.height) - 1 - y) : y;
 		auto* dst_row = frame.data.data() + static_cast<ptrdiff_t>(dst_y) * frame.pitch;
-		auto const* src_row = RowPointer(overlay, y);
+		auto const* src_row = RowPointer(overlay, overlay_y);
 
-		for (int x = 0; x < width; ++x) {
-			auto const* src = src_row + static_cast<ptrdiff_t>(x) * 4;
+		for (int x = x0; x < x1; ++x) {
+			auto const* src = src_row + static_cast<ptrdiff_t>(x - overlay.target_x) * 4;
 			auto* dst = dst_row + static_cast<ptrdiff_t>(x) * 4;
 			unsigned int src_alpha = src[3];
 			if (!src_alpha)

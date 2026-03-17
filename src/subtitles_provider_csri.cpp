@@ -121,6 +121,7 @@ CSRISubtitlesProvider::CSRISubtitlesProvider(std::string type) {
 
 bool CSRISubtitlesProvider::RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double time) {
 	overlay.premultiplied_alpha = false;
+	overlay.composition_mode = SubtitleOverlayCompositionMode::Unsupported;
 	return RenderCsriBgraOverlay(instance.get(), overlay, time);
 }
 

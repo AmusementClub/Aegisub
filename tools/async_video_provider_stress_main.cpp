@@ -15,6 +15,7 @@
 
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -84,6 +85,43 @@ class NoopSubtitlesProvider final : public SubtitlesProvider {
 	void DrawSubtitles(VideoFrame &, double) override { }
 };
 
+class CompatibilityOverlaySubtitlesProvider final : public SubtitlesProvider {
+	void LoadSubtitles(const char *, size_t) override { }
+
+public:
+	SubtitleRenderMode GetRenderMode() const override {
+		return SubtitleRenderMode::CompatibilityFrameOnly;
+	}
+
+	void DrawSubtitles(VideoFrame &dst, double) override {
+		if (dst.data.size() < 2)
+			dst.data.resize(2);
+		dst.data[1] = 42;
+	}
+};
+
+class OverlayVideoProvider final : public VideoProvider {
+public:
+	void GetFrame(int n, VideoFrame &frame) override {
+		frame.width = 2;
+		frame.height = 2;
+		frame.pitch = 8;
+		frame.flipped = false;
+		frame.data.assign(16, 0);
+		frame.data[0] = static_cast<unsigned char>(n);
+	}
+
+	void SetColorSpace(std::string const&) override { }
+	int GetFrameCount() const override { return 10000; }
+	int GetWidth() const override { return 2; }
+	int GetHeight() const override { return 2; }
+	double GetDAR() const override { return 1.0; }
+	agi::vfr::Framerate GetFPS() const override { return agi::vfr::Framerate(24.0); }
+	std::vector<int> GetKeyFrames() const override { return {}; }
+	std::string GetColorSpace() const override { return "BT.709"; }
+	std::string GetDecoderName() const override { return "overlay"; }
+};
+
 struct ScenarioResult {
 	std::string name;
 	int requests = 0;
@@ -93,6 +131,16 @@ struct ScenarioResult {
 	bool latest_delivered = false;
 	bool saw_stale_delivery = false;
 	double latest_latency_ms = -1.0;
+};
+
+struct OverlayRetentionResult {
+	std::string name;
+	int requests = 0;
+	int held_packets = 0;
+	int unique_storages = 0;
+	int overflow_hits = 0;
+	double overflow_ratio = 0.0;
+	double ns_per_packet = 0.0;
 };
 
 AssFile MakeSubtitleFile() {
@@ -183,6 +231,50 @@ ScenarioResult run_scenario(char const *name, int requests, int decode_ms, int r
 	};
 }
 
+OverlayRetentionResult run_overlay_retention_scenario(char const *name, int requests, int held_packets) {
+	AsyncVideoProvider provider(
+		agi::make_unique<OverlayVideoProvider>(),
+		agi::make_unique<CompatibilityOverlaySubtitlesProvider>(),
+		[](std::unique_ptr<wxEvent>) { });
+
+	auto subs = MakeSubtitleFile();
+	provider.LoadSubtitles(&subs);
+
+	std::deque<VideoRenderPacket> held;
+	std::vector<void*> unique_storages;
+	void* preferred_slot_0 = nullptr;
+	void* preferred_slot_1 = nullptr;
+	int overflow_hits = 0;
+
+	auto start = std::chrono::steady_clock::now();
+	for (int i = 0; i < requests; ++i) {
+		auto packet = provider.GetRenderPacket(77, 5000.0);
+		void* storage = packet.subtitle_overlay_storage.get();
+		if (storage && std::find(unique_storages.begin(), unique_storages.end(), storage) == unique_storages.end())
+			unique_storages.push_back(storage);
+		if (storage) {
+			if (!preferred_slot_0) preferred_slot_0 = storage;
+			else if (storage != preferred_slot_0 && !preferred_slot_1) preferred_slot_1 = storage;
+			else if (storage != preferred_slot_0 && storage != preferred_slot_1) ++overflow_hits;
+		}
+
+		held.push_back(std::move(packet));
+		while (static_cast<int>(held.size()) > held_packets)
+			held.pop_front();
+	}
+	auto end = std::chrono::steady_clock::now();
+
+	return {
+		name,
+		requests,
+		held_packets,
+		static_cast<int>(unique_storages.size()),
+		overflow_hits,
+		requests > 0 ? static_cast<double>(overflow_hits) / requests : 0.0,
+		std::chrono::duration<double, std::nano>(end - start).count() / requests
+	};
+}
+
 int main() {
 	agi::dispatch::Init([](agi::dispatch::Thunk thunk) { thunk(); });
 
@@ -195,6 +287,12 @@ int main() {
 		run_scenario("small_window_3ms", 800, 3, 0, [](int i) { return 200 + (i % 12); }),
 		run_scenario("same_frame_3ms", 500, 3, 0, [](int) { return 777; }),
 		run_scenario("seek_subs_5ms", 600, 5, 0, [](int i) { return i; }, 20),
+	};
+	auto overlay_results = std::vector<OverlayRetentionResult>{
+		run_overlay_retention_scenario("overlay_hold0", 500, 0),
+		run_overlay_retention_scenario("overlay_hold1", 500, 1),
+		run_overlay_retention_scenario("overlay_hold2", 500, 2),
+		run_overlay_retention_scenario("overlay_hold4", 500, 4),
 	};
 
 	std::cout << "Async video provider stress\n";
@@ -216,6 +314,26 @@ int main() {
 			<< std::setw(12) << (result.latest_delivered ? "true" : "false")
 			<< std::setw(12) << (result.saw_stale_delivery ? "true" : "false")
 			<< std::setw(16) << std::fixed << std::setprecision(2) << result.latest_latency_ms
+			<< "\n";
+	}
+
+	std::cout << "\nCompatibility overlay retention\n";
+	std::cout << std::left << std::setw(18) << "scenario"
+		<< std::right << std::setw(10) << "requests"
+		<< std::setw(10) << "held"
+		<< std::setw(12) << "storages"
+		<< std::setw(12) << "overflow"
+		<< std::setw(14) << "overflow%"
+		<< std::setw(16) << "ns/packet"
+		<< "\n";
+	for (auto const& result : overlay_results) {
+		std::cout << std::left << std::setw(18) << result.name
+			<< std::right << std::setw(10) << result.requests
+			<< std::setw(10) << result.held_packets
+			<< std::setw(12) << result.unique_storages
+			<< std::setw(12) << result.overflow_hits
+			<< std::setw(14) << std::fixed << std::setprecision(2) << (result.overflow_ratio * 100.0)
+			<< std::setw(16) << std::fixed << std::setprecision(2) << result.ns_per_packet
 			<< "\n";
 	}
 	return 0;

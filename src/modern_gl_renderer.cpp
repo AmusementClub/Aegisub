@@ -14,6 +14,7 @@
 
 #include "modern_gl_renderer.h"
 
+#include "modern_gl_overlay_upload_plan.h"
 #include "video_renderer_error.h"
 
 #include <libaegisub/compiler.h>
@@ -395,6 +396,10 @@ void ModernGLRenderer::ClearLayer(LayerResources& layer) noexcept {
 	layer.has_content = false;
 }
 
+void ModernGLRenderer::HideLayer(LayerResources& layer) noexcept {
+	layer.has_content = false;
+}
+
 void ModernGLRenderer::UploadBgraLayer(LayerResources& layer, unsigned char const* data, int width, int height, ptrdiff_t pitch, bool flipped, int canvas_width, int canvas_height, int offset_x, int offset_y, SubtitleOverlayCompositionMode composition_mode) {
 	if (!data || width <= 0 || height <= 0 || pitch <= 0) {
 		ClearLayer(layer);
@@ -551,24 +556,24 @@ void ModernGLRenderer::UploadFrame(SourceFrame const& frame) {
 }
 
 void ModernGLRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
-	if (!overlay || !overlay->IsValid() || !overlay->IsDirectRenderable() || overlay->pixel_format != SubtitleOverlayPixelFormat::Bgra8) {
-		ClearLayer(overlay_layer);
+	ModernGLOverlayLayerState state;
+	state.width = overlay_layer.layout.frame_width;
+	state.height = overlay_layer.layout.frame_height;
+	state.canvas_width = overlay_layer.canvas_width;
+	state.canvas_height = overlay_layer.canvas_height;
+	state.offset_x = overlay_layer.offset_x;
+	state.offset_y = overlay_layer.offset_y;
+	state.flipped = overlay_layer.layout.flipped;
+	state.has_allocated_resources = !overlay_layer.texture_ids.empty() && overlay_layer.texture_ids.size() == overlay_layer.layout.tiles.size();
+	state.has_visible_content = overlay_layer.has_content;
+	state.composition_mode = overlay_layer.composition_mode;
+
+	auto plan = DecideModernGLOverlayUploadPlan(state, overlay);
+	if (plan.action == ModernGLOverlayUploadAction::HideKeepResources) {
+		HideLayer(overlay_layer);
 		return;
 	}
-
-	bool layout_changed =
-		overlay_layer.layout.frame_width != overlay->width ||
-		overlay_layer.layout.frame_height != overlay->height ||
-		overlay_layer.layout.flipped != overlay->flipped ||
-		overlay_layer.texture_ids.size() != overlay_layer.layout.tiles.size() ||
-		overlay_layer.canvas_width != overlay->canvas_width ||
-		overlay_layer.canvas_height != overlay->canvas_height ||
-		overlay_layer.offset_x != overlay->target_x ||
-		overlay_layer.offset_y != overlay->target_y ||
-		overlay_layer.composition_mode != overlay->composition_mode ||
-		!overlay_layer.has_content;
-
-	if (layout_changed) {
+	if (plan.action == ModernGLOverlayUploadAction::FullUpload) {
 		UploadBgraLayer(
 			overlay_layer,
 			overlay->planes[0].data,
@@ -583,16 +588,17 @@ void ModernGLRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 			overlay->composition_mode);
 		return;
 	}
-
-	if (overlay->dirty_rect_count <= 0)
+	if (plan.action == ModernGLOverlayUploadAction::DirtyUpload) {
+		UploadDirtyRects(
+			overlay_layer,
+			overlay->planes[0].data,
+			overlay->planes[0].stride,
+			overlay->dirty_rects,
+			overlay->dirty_rect_count);
 		return;
+	}
 
-	UploadDirtyRects(
-		overlay_layer,
-		overlay->planes[0].data,
-		overlay->planes[0].stride,
-		overlay->dirty_rects,
-		overlay->dirty_rect_count);
+	overlay_layer.has_content = true;
 }
 
 void ModernGLRenderer::Render(RenderViewport const& viewport, int, int) {

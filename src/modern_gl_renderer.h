@@ -67,6 +67,7 @@ class ModernGLRenderer final : public IVideoRenderer {
 	void UploadBgraLayer(LayerResources& layer, unsigned char const* data, int width, int height, ptrdiff_t pitch, bool flipped, int canvas_width, int canvas_height, int offset_x, int offset_y, SubtitleOverlayCompositionMode composition_mode);
 	void UploadDirtyRects(LayerResources& layer, unsigned char const* data, ptrdiff_t pitch, SubtitleOverlayDirtyRect const* dirty_rects, int dirty_rect_count);
 	void ClearLayer(LayerResources& layer) noexcept;
+	void HideLayer(LayerResources& layer) noexcept;
 	void RenderLayer(LayerResources& layer);
 	void DestroyResources() noexcept;
 	void DeleteLayerTextures(LayerResources& layer) noexcept;

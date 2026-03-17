@@ -55,6 +55,7 @@ if(GTEST_FOUND)
         tests/tests/line_iterator.cpp
         tests/tests/line_wrap.cpp
         tests/tests/math_utils.cpp
+        tests/tests/modern_gl_overlay_upload_plan.cpp
         tests/tests/modern_gl_renderer_tile.cpp
         tests/tests/mru.cpp
         tests/tests/option.cpp

@@ -315,6 +315,8 @@ bool BuildSparsePremultipliedCompatibilityOverlaySimd(
 			if (!previous_range.IsEmpty())
 				std::memset(dst_row, 0, row_bytes);
 			storage.row_ranges[static_cast<size_t>(y)] = kEmptyRowRange;
+			if (previous && dirty_tiles && tile_width > 0 && tile_height > 0)
+				MarkDirtyTilesForRow(storage, *previous, y, tile_width, tile_height, tiles_x, *dirty_tiles);
 			continue;
 		}
 

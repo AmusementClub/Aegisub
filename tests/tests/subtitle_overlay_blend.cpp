@@ -46,6 +46,62 @@ void fill_box(VideoFrame& frame, int x0, int y0, int width, int height, unsigned
 		}
 	}
 }
+
+void expect_rects_equal(
+	std::vector<SubtitleOverlayDirtyRect> const& expected,
+	std::vector<SubtitleOverlayDirtyRect> const& actual) {
+	ASSERT_EQ(expected.size(), actual.size());
+	for (size_t i = 0; i < expected.size(); ++i) {
+		EXPECT_EQ(expected[i].x, actual[i].x);
+		EXPECT_EQ(expected[i].y, actual[i].y);
+		EXPECT_EQ(expected[i].width, actual[i].width);
+		EXPECT_EQ(expected[i].height, actual[i].height);
+	}
+}
+
+void expect_fused_matches_two_pass(
+	VideoFrame const& previous_source,
+	VideoFrame const& previous_composited,
+	VideoFrame const& current_source,
+	VideoFrame const& current_composited,
+	int tile_width,
+	int tile_height) {
+	SubtitleOverlayStorage previous_storage;
+	SubtitleOverlay previous_overlay;
+	ASSERT_TRUE(BuildSparsePremultipliedCompatibilityOverlay(
+		previous_source,
+		previous_composited,
+		previous_storage,
+		previous_overlay));
+	ASSERT_TRUE(BuildDirtyTileRectsForOverlay(nullptr, previous_storage, tile_width, tile_height));
+
+	SubtitleOverlayStorage two_pass_storage;
+	SubtitleOverlay two_pass_overlay;
+	ASSERT_TRUE(BuildSparsePremultipliedCompatibilityOverlay(
+		current_source,
+		current_composited,
+		two_pass_storage,
+		two_pass_overlay));
+	ASSERT_TRUE(BuildDirtyTileRectsForOverlay(&previous_storage, two_pass_storage, tile_width, tile_height));
+
+	SubtitleOverlayStorage fused_storage;
+	SubtitleOverlay fused_overlay;
+	ASSERT_TRUE(BuildSparsePremultipliedCompatibilityOverlayWithDirtyTiles(
+		current_source,
+		current_composited,
+		&previous_storage,
+		fused_storage,
+		fused_overlay,
+		tile_width,
+		tile_height));
+
+	EXPECT_EQ(two_pass_storage.pixels, fused_storage.pixels);
+	expect_rects_equal(two_pass_storage.dirty_rects, fused_storage.dirty_rects);
+
+	apply_dirty_rects(fused_storage, previous_storage);
+	auto reconstructed = composite_overlay(current_source, previous_storage);
+	EXPECT_EQ(current_composited.data, reconstructed.data);
+}
 }
 
 TEST(subtitle_overlay_blend, legacy_bake_in_blends_against_existing_background) {
@@ -424,15 +480,67 @@ TEST(subtitle_overlay_blend, fused_sparse_overlay_matches_two_pass_dirty_diff) {
 		2));
 
 	EXPECT_EQ(two_pass_storage.pixels, fused_storage.pixels);
-	EXPECT_EQ(two_pass_storage.dirty_rects.size(), fused_storage.dirty_rects.size());
-	for (size_t i = 0; i < two_pass_storage.dirty_rects.size(); ++i) {
-		EXPECT_EQ(two_pass_storage.dirty_rects[i].x, fused_storage.dirty_rects[i].x);
-		EXPECT_EQ(two_pass_storage.dirty_rects[i].y, fused_storage.dirty_rects[i].y);
-		EXPECT_EQ(two_pass_storage.dirty_rects[i].width, fused_storage.dirty_rects[i].width);
-		EXPECT_EQ(two_pass_storage.dirty_rects[i].height, fused_storage.dirty_rects[i].height);
-	}
+	expect_rects_equal(two_pass_storage.dirty_rects, fused_storage.dirty_rects);
 
 	apply_dirty_rects(fused_storage, previous_storage);
 	auto reconstructed = composite_overlay(current_source, previous_storage);
 	EXPECT_EQ(current_composited.data, reconstructed.data);
+}
+
+TEST(subtitle_overlay_blend, fused_sparse_overlay_matches_two_pass_when_subtitle_disappears) {
+	auto previous_source = make_frame(16, 6);
+	auto previous_composited = previous_source;
+	fill_box(previous_composited, 2, 1, 5, 1, 220, 220, 220);
+	fill_box(previous_composited, 9, 3, 4, 1, 180, 210, 255);
+
+	auto current_source = make_frame(16, 6);
+	auto current_composited = current_source;
+
+	expect_fused_matches_two_pass(
+		previous_source,
+		previous_composited,
+		current_source,
+		current_composited,
+		4,
+		2);
+}
+
+TEST(subtitle_overlay_blend, fused_sparse_overlay_matches_two_pass_for_karaoke_progression) {
+	auto previous_source = make_frame(24, 8);
+	auto previous_composited = previous_source;
+	fill_box(previous_composited, 2, 5, 18, 2, 210, 210, 210);
+	fill_box(previous_composited, 2, 5, 6, 2, 40, 180, 255);
+
+	auto current_source = make_frame(24, 8);
+	auto current_composited = current_source;
+	fill_box(current_composited, 2, 5, 18, 2, 210, 210, 210);
+	fill_box(current_composited, 2, 5, 11, 2, 40, 180, 255);
+
+	expect_fused_matches_two_pass(
+		previous_source,
+		previous_composited,
+		current_source,
+		current_composited,
+		4,
+		2);
+}
+
+TEST(subtitle_overlay_blend, fused_sparse_overlay_matches_two_pass_for_scrolling_banner) {
+	auto previous_source = make_frame(28, 8);
+	auto previous_composited = previous_source;
+	fill_box(previous_composited, 1, 2, 16, 1, 240, 240, 240);
+	fill_box(previous_composited, 1, 3, 16, 1, 120, 160, 220);
+
+	auto current_source = make_frame(28, 8);
+	auto current_composited = current_source;
+	fill_box(current_composited, 5, 2, 16, 1, 240, 240, 240);
+	fill_box(current_composited, 5, 3, 16, 1, 120, 160, 220);
+
+	expect_fused_matches_two_pass(
+		previous_source,
+		previous_composited,
+		current_source,
+		current_composited,
+		4,
+		2);
 }

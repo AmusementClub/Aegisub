@@ -17,6 +17,7 @@
 #pragma once
 
 #include "include/aegisub/video_provider.h"
+#include "video_render_packet.h"
 
 #include <libaegisub/exception.h>
 #include <libaegisub/fs_fwd.h>
@@ -75,14 +76,16 @@ class AsyncVideoProvider {
 	/// lines have actually changed
 	bool NeedUpdate(std::vector<AssDialogueBase const*> const& visible_lines);
 
-	std::shared_ptr<VideoFrame> ProcFrame(int frame, double time, bool raw = false);
+	VideoRenderPacket ProcRenderPacket(int frame, double time, bool raw = false);
 
 	/// Monotonic counter used to identify the latest seek/drag request.
 	std::atomic<uint_fast32_t> request_version{ 0 };
 	/// Monotonic counter used to invalidate frames when the rendered content changes.
 	std::atomic<uint_fast32_t> content_version{ 0 };
 
-	std::vector<std::shared_ptr<VideoFrame>> buffers;
+	std::vector<std::shared_ptr<VideoFrame>> source_buffers;
+	std::vector<std::shared_ptr<VideoFrame>> composited_buffers;
+	std::vector<std::shared_ptr<SubtitleOverlayStorage>> subtitle_overlay_buffers;
 
 	std::mutex pending_mutex;
 	std::unique_ptr<AssFile> pending_subs;
@@ -127,6 +130,7 @@ public:
 	/// @brief time  Exact start time of the frame in seconds
 	/// @brief raw   Get raw frame without subtitles
 	std::shared_ptr<VideoFrame> GetFrame(int frame, double time, bool raw = false);
+	VideoRenderPacket GetRenderPacket(int frame, double time, bool raw = false);
 
 	/// Ask the video provider to change YCbCr matricies
 	void SetColorSpace(std::string const& matrix);
@@ -154,13 +158,14 @@ public:
 
 /// Event which signals that a requested frame is ready
 struct FrameReadyEvent final : public wxEvent {
+	VideoRenderPacket packet;
 	/// Frame which is ready
 	std::shared_ptr<VideoFrame> frame;
 	/// Time which was used for subtitle rendering
 	double time;
 	wxEvent *Clone() const override { return new FrameReadyEvent(*this); };
-	FrameReadyEvent(std::shared_ptr<VideoFrame> frame, double time)
-	: frame(std::move(frame)), time(time) { }
+	FrameReadyEvent(VideoRenderPacket packet, double time)
+	: packet(std::move(packet)), frame(this->packet.DisplayFrame()), time(time) { }
 };
 
 // These exceptions are wxEvents so that they can be passed directly back to

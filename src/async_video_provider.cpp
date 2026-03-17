@@ -22,6 +22,7 @@
 #include "include/aegisub/subtitles_provider.h"
 #include "source_frame.h"
 #include "subtitle_overlay.h"
+#include "subtitle_overlay_blend.h"
 #include "video_frame.h"
 #include "video_provider_manager.h"
 
@@ -33,27 +34,39 @@ enum {
 	SUBS_FILE_ALREADY_LOADED = -2
 };
 
-std::shared_ptr<VideoFrame> AsyncVideoProvider::ProcFrame(int frame_number, double time, bool raw) {
-	// Find an unused buffer to use or allocate a new one if needed
-	std::shared_ptr<VideoFrame> frame;
+namespace {
+template<typename T>
+std::shared_ptr<T> acquire_buffer(std::vector<std::shared_ptr<T>>& buffers) {
 	for (auto& buffer : buffers) {
-		if (buffer.use_count() == 1) {
-			frame = buffer;
-			break;
-		}
+		if (buffer.use_count() == 1)
+			return buffer;
 	}
 
-	if (!frame) {
-		frame = std::make_shared<VideoFrame>();
-		buffers.push_back(frame);
-	}
+	auto buffer = std::make_shared<T>();
+	buffers.push_back(buffer);
+	return buffer;
+}
+}
+
+VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double time, bool raw) {
+	VideoRenderPacket packet;
+
+	std::shared_ptr<VideoFrame> frame;
+	frame = acquire_buffer(source_buffers);
 
 	try {
 		source_provider->GetFrame(frame_number, *frame);
 	}
 	catch (VideoProviderError const& err) { throw VideoProviderErrorEvent(err); }
 
-	if (raw || !subs_provider || !subs) return frame;
+	packet.source_frame_storage = frame;
+	packet.source_frame = MakeSourceFrameView(*frame, source_provider->GetColorSpace());
+	packet.time = time;
+
+	if (raw || !subs_provider || !subs) {
+		packet.composited_frame_storage = frame;
+		return packet;
+	}
 
 	try {
 		if (single_frame != frame_number && single_frame != SUBS_FILE_ALREADY_LOADED) {
@@ -77,14 +90,31 @@ std::shared_ptr<VideoFrame> AsyncVideoProvider::ProcFrame(int frame_number, doub
 	catch (agi::Exception const& err) { throw SubtitlesProviderErrorEvent(err.GetMessage()); }
 
 	try {
-		auto source_frame = MakeSourceFrameView(*frame, source_provider->GetColorSpace());
-		auto subtitle_overlay = MakeLegacyBgraSubtitleOverlayView(*frame);
-		if (!subs_provider->RenderOverlay(source_frame, subtitle_overlay, time / 1000.))
-			subs_provider->DrawSubtitles(*frame, time / 1000.);
+		auto composited = acquire_buffer(composited_buffers);
+		*composited = *frame;
+		packet.composited_frame_storage = composited;
+
+		auto overlay_storage = acquire_buffer(subtitle_overlay_buffers);
+		overlay_storage->Reset(static_cast<int>(frame->width), static_cast<int>(frame->height), frame->flipped);
+		auto subtitle_overlay = overlay_storage->MakeView(true);
+
+		if (subs_provider->RenderOverlay(packet.source_frame, subtitle_overlay, time / 1000.)) {
+			packet.subtitle_overlay_storage = overlay_storage;
+			packet.subtitle_overlay = subtitle_overlay;
+			packet.has_subtitle_overlay = true;
+
+			if (subtitle_overlay.premultiplied_alpha)
+				CompositePremultipliedBgraOverlayOntoVideoFrame(*composited, subtitle_overlay);
+			else
+				subs_provider->DrawSubtitles(*composited, time / 1000.);
+		}
+		else {
+			subs_provider->DrawSubtitles(*composited, time / 1000.);
+		}
 	}
 	catch (agi::UserCancelException const&) { }
 
-	return frame;
+	return packet;
 }
 
 static std::unique_ptr<SubtitlesProvider> get_subs_provider(wxEvtHandler *evt_handler, agi::BackgroundRunner *br) {
@@ -287,7 +317,7 @@ bool AsyncVideoProvider::ProcessPending() {
 	last_rendered = frame_number;
 
 	try {
-		auto evt = std::make_unique<FrameReadyEvent>(ProcFrame(frame_number, time), time);
+		auto evt = std::make_unique<FrameReadyEvent>(ProcRenderPacket(frame_number, time), time);
 		evt->SetEventType(EVT_FRAME_READY);
 		auto current_content_version = content_version.load(std::memory_order_relaxed);
 		auto current_request_version = request_version.load(std::memory_order_relaxed);
@@ -314,7 +344,16 @@ std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrame(int frame, double time,
 	std::shared_ptr<VideoFrame> ret;
 	worker->Sync([&]{
 		while (ProcessPending()) { }
-		ret = ProcFrame(frame, time, raw);
+		ret = ProcRenderPacket(frame, time, raw).DisplayFrame();
+	});
+	return ret;
+}
+
+VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bool raw) {
+	VideoRenderPacket ret;
+	worker->Sync([&]{
+		while (ProcessPending()) { }
+		ret = ProcRenderPacket(frame, time, raw);
 	});
 	return ret;
 }

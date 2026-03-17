@@ -100,7 +100,7 @@ void VideoController::RequestFrameImmediate() {
 
 	try {
 		// Frame stepping favors deterministic per-step display over latest-only coalescing.
-		auto evt = FrameReadyEvent(provider->GetFrame(frame_n, frame_time), frame_time);
+		auto evt = FrameReadyEvent(provider->GetRenderPacket(frame_n, frame_time), frame_time);
 		evt.SetEventType(EVT_FRAME_READY);
 		ProcessEvent(evt);
 	}

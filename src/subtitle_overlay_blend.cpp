@@ -23,6 +23,11 @@ inline unsigned char* RowPointer(BgraSubtitleTargetView target, int y) {
 	return target.data + static_cast<ptrdiff_t>(physical_y) * target.stride;
 }
 
+inline unsigned char const* RowPointer(SubtitleOverlay const& overlay, int y) {
+	int physical_y = overlay.flipped ? (overlay.height - 1 - y) : y;
+	return overlay.planes[0].data + static_cast<ptrdiff_t>(physical_y) * overlay.planes[0].stride;
+}
+
 inline unsigned int AssR(std::uint32_t color) { return color >> 24; }
 inline unsigned int AssG(std::uint32_t color) { return (color >> 16) & 0xFF; }
 inline unsigned int AssB(std::uint32_t color) { return (color >> 8) & 0xFF; }
@@ -89,6 +94,36 @@ void BlendLibassMaskIntoBgraTarget(
 				dst[2] = static_cast<unsigned char>(src_r + dst[2] * inv_alpha / 255);
 				dst[3] = static_cast<unsigned char>(src_alpha + dst[3] * inv_alpha / 255);
 			}
+		}
+	}
+}
+
+void CompositePremultipliedBgraOverlayOntoVideoFrame(VideoFrame& frame, SubtitleOverlay const& overlay) {
+	if (!overlay.IsValid() || !overlay.premultiplied_alpha || overlay.pixel_format != SubtitleOverlayPixelFormat::Bgra8)
+		return;
+
+	int width = std::min(static_cast<int>(frame.width), overlay.width);
+	int height = std::min(static_cast<int>(frame.height), overlay.height);
+	if (width <= 0 || height <= 0)
+		return;
+
+	for (int y = 0; y < height; ++y) {
+		int dst_y = frame.flipped ? (height - 1 - y) : y;
+		auto* dst_row = frame.data.data() + static_cast<ptrdiff_t>(dst_y) * frame.pitch;
+		auto const* src_row = RowPointer(overlay, y);
+
+		for (int x = 0; x < width; ++x) {
+			auto const* src = src_row + static_cast<ptrdiff_t>(x) * 4;
+			auto* dst = dst_row + static_cast<ptrdiff_t>(x) * 4;
+			unsigned int src_alpha = src[3];
+			if (!src_alpha)
+				continue;
+
+			unsigned int inv_alpha = 255 - src_alpha;
+			dst[0] = static_cast<unsigned char>(src[0] + dst[0] * inv_alpha / 255);
+			dst[1] = static_cast<unsigned char>(src[1] + dst[1] * inv_alpha / 255);
+			dst[2] = static_cast<unsigned char>(src[2] + dst[2] * inv_alpha / 255);
+			dst[3] = 0;
 		}
 	}
 }

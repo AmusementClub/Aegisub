@@ -14,6 +14,9 @@
 
 #pragma once
 
+#include "subtitle_overlay.h"
+#include "video_frame.h"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -41,3 +44,4 @@ void BlendLibassMaskIntoBgraTarget(
 	unsigned char const* mask_data,
 	ptrdiff_t mask_stride,
 	std::uint32_t ass_color);
+void CompositePremultipliedBgraOverlayOntoVideoFrame(VideoFrame& frame, SubtitleOverlay const& overlay);

@@ -97,6 +97,31 @@ public:
 	}
 };
 
+class FakeOverlaySubtitlesProvider final : public SubtitlesProvider {
+public:
+	int load_calls = 0;
+
+private:
+	void LoadSubtitles(const char *, size_t) override {
+		++load_calls;
+	}
+
+public:
+	bool RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double) override {
+		overlay.premultiplied_alpha = true;
+		auto *pixel = overlay.planes[0].data;
+		pixel[0] = 10;
+		pixel[1] = 20;
+		pixel[2] = 30;
+		pixel[3] = 128;
+		return true;
+	}
+
+	void DrawSubtitles(VideoFrame &, double) override {
+		FAIL() << "legacy subtitle path should not be used";
+	}
+};
+
 struct RecordedFrame {
 	int frame_number = -1;
 	int subtitle_generation = -1;
@@ -252,4 +277,31 @@ TEST(async_video_provider, get_frame_flushes_pending_subtitle_state) {
 	ASSERT_GE(frame->data.size(), 2u);
 	EXPECT_EQ(7, frame->data[0]);
 	EXPECT_EQ(1, frame->data[1]);
+}
+
+TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto subtitle_file = MakeSubtitleFile("overlay");
+	provider.LoadSubtitles(&subtitle_file);
+
+	auto packet = provider.GetRenderPacket(9, 9000);
+	ASSERT_TRUE(packet.source_frame_storage);
+	ASSERT_TRUE(packet.composited_frame_storage);
+	ASSERT_TRUE(packet.has_subtitle_overlay);
+	EXPECT_TRUE(packet.source_frame.IsValid());
+	EXPECT_TRUE(packet.subtitle_overlay.IsValid());
+	EXPECT_TRUE(packet.subtitle_overlay.premultiplied_alpha);
+	EXPECT_EQ(9, packet.source_frame_storage->data[0]);
+	EXPECT_GT(packet.composited_frame_storage->data[0], packet.source_frame_storage->data[0]);
+	EXPECT_GT(packet.composited_frame_storage->data[1], packet.source_frame_storage->data[1]);
+	EXPECT_GT(packet.composited_frame_storage->data[2], packet.source_frame_storage->data[2]);
+	EXPECT_EQ(128, packet.subtitle_overlay.planes[0].data[3]);
 }

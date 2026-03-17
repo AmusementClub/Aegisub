@@ -234,15 +234,30 @@ bool BuildDirtyTileRectsForOverlay(SubtitleOverlayStorage const* previous, Subti
 		previous->pitch == current.pitch &&
 		previous->pixels.size() == current.pixels.size();
 
+	std::vector<SubtitleOverlayDirtyRect> merged_rects;
+
 	for (int y = 0; y < current.height; y += tile_height) {
 		int rect_height = std::min(tile_height, current.height - y);
 		int run_start_x = -1;
 		int run_width = 0;
 
-		auto flush_run = [&] {
+		auto flush_run = [&]() {
 			if (run_start_x < 0)
 				return;
-			current.dirty_rects.push_back({ run_start_x, y, run_width, rect_height });
+
+			if (!merged_rects.empty()) {
+				auto& prev_rect = merged_rects.back();
+				if (prev_rect.x == run_start_x
+					&& prev_rect.width == run_width
+					&& prev_rect.y + prev_rect.height == y) {
+					prev_rect.height += rect_height;
+					run_start_x = -1;
+					run_width = 0;
+					return;
+				}
+			}
+
+			merged_rects.push_back({ run_start_x, y, run_width, rect_height });
 			run_start_x = -1;
 			run_width = 0;
 		};
@@ -273,6 +288,7 @@ bool BuildDirtyTileRectsForOverlay(SubtitleOverlayStorage const* previous, Subti
 		flush_run();
 	}
 
+	current.dirty_rects = std::move(merged_rects);
 	return !current.dirty_rects.empty();
 }
 

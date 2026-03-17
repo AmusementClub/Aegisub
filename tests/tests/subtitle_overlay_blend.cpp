@@ -2,6 +2,29 @@
 
 #include "../../src/subtitle_overlay_blend.h"
 
+#include <cstring>
+
+namespace {
+void apply_dirty_rects(SubtitleOverlayStorage const& src, SubtitleOverlayStorage& dst) {
+	for (auto const& rect : src.dirty_rects) {
+		for (int y = 0; y < rect.height; ++y) {
+			auto const* src_row = src.pixels.data() + static_cast<std::ptrdiff_t>(rect.y + y) * src.pitch + static_cast<std::ptrdiff_t>(rect.x) * 4;
+			auto* dst_row = dst.pixels.data() + static_cast<std::ptrdiff_t>(rect.y + y) * dst.pitch + static_cast<std::ptrdiff_t>(rect.x) * 4;
+			std::memcpy(dst_row, src_row, static_cast<size_t>(rect.width) * 4);
+		}
+	}
+	dst.has_visible_content = src.has_visible_content;
+}
+
+VideoFrame composite_overlay(VideoFrame const& source, SubtitleOverlayStorage const& storage) {
+	VideoFrame result = source;
+	auto overlay = const_cast<SubtitleOverlayStorage&>(storage).MakeView(true);
+	overlay.color_role = SubtitleOverlayColorRole::SubtitleVideoCompatibility;
+	CompositePremultipliedBgraOverlayOntoVideoFrame(result, overlay);
+	return result;
+}
+}
+
 TEST(subtitle_overlay_blend, legacy_bake_in_blends_against_existing_background) {
 	unsigned char pixels[] = {
 		10, 20, 30, 0
@@ -190,4 +213,68 @@ TEST(subtitle_overlay_blend, dirty_tile_rects_capture_changed_tiles_between_surf
 		EXPECT_GE(rect.y, 0);
 		EXPECT_LE(rect.y + rect.height, 4);
 	}
+}
+
+TEST(subtitle_overlay_blend, dirty_tile_updates_roundtrip_to_current_composited_frame) {
+	VideoFrame source;
+	source.width = 8;
+	source.height = 4;
+	source.pitch = 32;
+	source.flipped = false;
+	source.data.assign(128, 0);
+
+	VideoFrame previous_composited = source;
+	previous_composited.data[0] = 1;
+	previous_composited.data[3] = 255;
+	previous_composited.data[76] = 5;
+	previous_composited.data[79] = 255;
+
+	VideoFrame current_composited = source;
+	current_composited.data[16] = 2;
+	current_composited.data[19] = 255;
+	current_composited.data[108] = 9;
+	current_composited.data[111] = 255;
+
+	SubtitleOverlayStorage previous_storage;
+	SubtitleOverlay previous_overlay;
+	ASSERT_TRUE(BuildSparsePremultipliedCompatibilityOverlay(source, previous_composited, previous_storage, previous_overlay));
+	ASSERT_TRUE(BuildDirtyTileRectsForOverlay(nullptr, previous_storage, 4, 2));
+
+	SubtitleOverlayStorage current_storage;
+	SubtitleOverlay current_overlay;
+	ASSERT_TRUE(BuildSparsePremultipliedCompatibilityOverlay(source, current_composited, current_storage, current_overlay));
+	ASSERT_TRUE(BuildDirtyTileRectsForOverlay(&previous_storage, current_storage, 4, 2));
+
+	apply_dirty_rects(current_storage, previous_storage);
+	auto reconstructed = composite_overlay(source, previous_storage);
+	EXPECT_EQ(current_composited.data, reconstructed.data);
+}
+
+TEST(subtitle_overlay_blend, dirty_tile_updates_can_clear_previous_subtitle_pixels) {
+	VideoFrame source;
+	source.width = 8;
+	source.height = 4;
+	source.pitch = 32;
+	source.flipped = false;
+	source.data.assign(128, 0);
+
+	VideoFrame previous_composited = source;
+	previous_composited.data[32] = 4;
+	previous_composited.data[35] = 255;
+
+	VideoFrame current_composited = source;
+
+	SubtitleOverlayStorage previous_storage;
+	SubtitleOverlay previous_overlay;
+	ASSERT_TRUE(BuildSparsePremultipliedCompatibilityOverlay(source, previous_composited, previous_storage, previous_overlay));
+	ASSERT_TRUE(BuildDirtyTileRectsForOverlay(nullptr, previous_storage, 4, 2));
+
+	SubtitleOverlayStorage current_storage;
+	SubtitleOverlay current_overlay;
+	ASSERT_TRUE(BuildSparsePremultipliedCompatibilityOverlay(source, current_composited, current_storage, current_overlay));
+	ASSERT_TRUE(BuildDirtyTileRectsForOverlay(&previous_storage, current_storage, 4, 2));
+
+	apply_dirty_rects(current_storage, previous_storage);
+	auto reconstructed = composite_overlay(source, previous_storage);
+	EXPECT_EQ(current_composited.data, reconstructed.data);
 }

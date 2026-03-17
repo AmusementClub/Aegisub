@@ -35,6 +35,7 @@
 #include <libaegisub/signal.h>
 
 #include "ivideo_renderer.h"
+#include "video_render_packet.h"
 
 #include "vector2d.h"
 
@@ -51,7 +52,6 @@ class wxComboBox;
 class wxTextCtrl;
 class wxToolBar;
 struct FrameReadyEvent;
-struct VideoFrame;
 
 namespace agi {
 	struct Context;
@@ -105,8 +105,9 @@ class VideoDisplay final : public wxGLCanvas {
 	/// Whether the display can be freely resized by the user
 	bool freeSize;
 
-	/// Frame which will replace the currently visible frame on the next render
-	std::shared_ptr<VideoFrame> pending_frame;
+	/// Render packet which will replace the currently visible frame on the next render
+	VideoRenderPacket pending_packet;
+	bool has_pending_packet = false;
 
 	std::unique_ptr<RetinaHelper> retina_helper;
 	int scale_factor;

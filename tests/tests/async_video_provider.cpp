@@ -139,9 +139,10 @@ public:
 			return;
 
 		auto *frame_evt = static_cast<FrameReadyEvent *>(evt.get());
+		auto display_frame = frame_evt->packet.DisplayFrame();
 		RecordedFrame frame;
-		frame.frame_number = frame_evt->frame && !frame_evt->frame->data.empty() ? frame_evt->frame->data[0] : -1;
-		frame.subtitle_generation = frame_evt->frame && frame_evt->frame->data.size() > 1 ? frame_evt->frame->data[1] : -1;
+		frame.frame_number = display_frame && !display_frame->data.empty() ? display_frame->data[0] : -1;
+		frame.subtitle_generation = display_frame && display_frame->data.size() > 1 ? display_frame->data[1] : -1;
 		frame.time = frame_evt->time;
 
 		{

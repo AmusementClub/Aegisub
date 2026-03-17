@@ -14,7 +14,6 @@
 
 #include "modern_gl_renderer.h"
 
-#include "video_frame.h"
 #include "video_renderer_error.h"
 
 #include <libaegisub/compiler.h>
@@ -267,16 +266,16 @@ void ModernGLRenderer::CreateProgram() {
 	gl.UseProgram(0);
 }
 
-void ModernGLRenderer::CreateBuffers() {
-	if (vertex_buffer && element_buffer)
+void ModernGLRenderer::CreateLayerBuffers(LayerResources& layer) {
+	if (layer.vertex_buffer && layer.element_buffer)
 		return;
 
 	auto& gl = *functions;
-	if (!vertex_buffer)
-		gl.GenBuffers(1, &vertex_buffer);
-	if (!element_buffer)
-		gl.GenBuffers(1, &element_buffer);
-	if (!vertex_buffer || !element_buffer)
+	if (!layer.vertex_buffer)
+		gl.GenBuffers(1, &layer.vertex_buffer);
+	if (!layer.element_buffer)
+		gl.GenBuffers(1, &layer.element_buffer);
+	if (!layer.vertex_buffer || !layer.element_buffer)
 		throw_message<VideoOutInitException>("Failed to create video vertex/index buffers.");
 }
 
@@ -284,23 +283,30 @@ void ModernGLRenderer::EnsureInitialized() {
 	LoadFunctions();
 	DetectOpenGLCapabilities();
 	CreateProgram();
-	CreateBuffers();
+	CreateLayerBuffers(video_layer);
+	CreateLayerBuffers(overlay_layer);
 }
 
-void ModernGLRenderer::DeleteTextures() noexcept {
-	if (!texture_ids.empty()) {
-		glDeleteTextures(static_cast<GLsizei>(texture_ids.size()), texture_ids.data());
-		texture_ids.clear();
+void ModernGLRenderer::DeleteLayerTextures(LayerResources& layer) noexcept {
+	if (!layer.texture_ids.empty()) {
+		glDeleteTextures(static_cast<GLsizei>(layer.texture_ids.size()), layer.texture_ids.data());
+		layer.texture_ids.clear();
 	}
 }
 
 void ModernGLRenderer::DestroyResources() noexcept {
 	if (functions) {
-		if (vertex_buffer || element_buffer) {
-			GLuint buffers[] = { vertex_buffer, element_buffer };
+		if (video_layer.vertex_buffer || video_layer.element_buffer) {
+			GLuint buffers[] = { video_layer.vertex_buffer, video_layer.element_buffer };
 			functions->DeleteBuffers(2, buffers);
-			vertex_buffer = 0;
-			element_buffer = 0;
+			video_layer.vertex_buffer = 0;
+			video_layer.element_buffer = 0;
+		}
+		if (overlay_layer.vertex_buffer || overlay_layer.element_buffer) {
+			GLuint buffers[] = { overlay_layer.vertex_buffer, overlay_layer.element_buffer };
+			functions->DeleteBuffers(2, buffers);
+			overlay_layer.vertex_buffer = 0;
+			overlay_layer.element_buffer = 0;
 		}
 		if (program) {
 			functions->DeleteProgram(program);
@@ -308,13 +314,12 @@ void ModernGLRenderer::DestroyResources() noexcept {
 		}
 	}
 
-	DeleteTextures();
+	DeleteLayerTextures(video_layer);
+	DeleteLayerTextures(overlay_layer);
 	projection_matrix_uniform = -1;
 	texture_uniform = -1;
-	has_frame = false;
-	layout = { };
-	vertices.clear();
-	indices.clear();
+	video_layer = { };
+	overlay_layer = { };
 }
 
 void ModernGLRenderer::Reset() {
@@ -325,49 +330,49 @@ void ModernGLRenderer::Reset() {
 	internal_format = 0;
 }
 
-void ModernGLRenderer::RebuildGeometry() {
-	vertices.clear();
-	indices.clear();
+void ModernGLRenderer::RebuildLayerGeometry(LayerResources& layer) {
+	layer.vertices.clear();
+	layer.indices.clear();
 
-	vertices.reserve(layout.tiles.size() * 4);
-	indices.reserve(layout.tiles.size() * 6);
+	layer.vertices.reserve(layer.layout.tiles.size() * 4);
+	layer.indices.reserve(layer.layout.tiles.size() * 6);
 
-	for (size_t i = 0; i < layout.tiles.size(); ++i) {
-		auto const& tile = layout.tiles[i];
-		GLuint base = static_cast<GLuint>(vertices.size());
+	for (size_t i = 0; i < layer.layout.tiles.size(); ++i) {
+		auto const& tile = layer.layout.tiles[i];
+		GLuint base = static_cast<GLuint>(layer.vertices.size());
 
-		vertices.push_back({ { tile.x1, tile.y1 }, { tile.u1, tile.v1 } });
-		vertices.push_back({ { tile.x2, tile.y1 }, { tile.u2, tile.v1 } });
-		vertices.push_back({ { tile.x2, tile.y2 }, { tile.u2, tile.v2 } });
-		vertices.push_back({ { tile.x1, tile.y2 }, { tile.u1, tile.v2 } });
+		layer.vertices.push_back({ { tile.x1, tile.y1 }, { tile.u1, tile.v1 } });
+		layer.vertices.push_back({ { tile.x2, tile.y1 }, { tile.u2, tile.v1 } });
+		layer.vertices.push_back({ { tile.x2, tile.y2 }, { tile.u2, tile.v2 } });
+		layer.vertices.push_back({ { tile.x1, tile.y2 }, { tile.u1, tile.v2 } });
 
-		indices.push_back(base + 0);
-		indices.push_back(base + 1);
-		indices.push_back(base + 2);
-		indices.push_back(base + 0);
-		indices.push_back(base + 2);
-		indices.push_back(base + 3);
+		layer.indices.push_back(base + 0);
+		layer.indices.push_back(base + 1);
+		layer.indices.push_back(base + 2);
+		layer.indices.push_back(base + 0);
+		layer.indices.push_back(base + 2);
+		layer.indices.push_back(base + 3);
 	}
 
 	auto& gl = *functions;
-	gl.BindBuffer(GL_ARRAY_BUFFER, vertex_buffer);
-	gl.BufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(Vertex)), vertices.data(), GL_STATIC_DRAW);
-	gl.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, element_buffer);
-	gl.BufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(indices.size() * sizeof(GLuint)), indices.data(), GL_STATIC_DRAW);
+	gl.BindBuffer(GL_ARRAY_BUFFER, layer.vertex_buffer);
+	gl.BufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(layer.vertices.size() * sizeof(Vertex)), layer.vertices.data(), GL_STATIC_DRAW);
+	gl.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, layer.element_buffer);
+	gl.BufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(layer.indices.size() * sizeof(GLuint)), layer.indices.data(), GL_STATIC_DRAW);
 	gl.BindBuffer(GL_ARRAY_BUFFER, 0);
 	gl.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 }
 
-void ModernGLRenderer::RecreateTextures() {
-	DeleteTextures();
-	texture_ids.resize(layout.tiles.size());
-	if (texture_ids.empty())
+void ModernGLRenderer::RecreateLayerTextures(LayerResources& layer) {
+	DeleteLayerTextures(layer);
+	layer.texture_ids.resize(layer.layout.tiles.size());
+	if (layer.texture_ids.empty())
 		return;
 
-	CHECK_INIT_ERROR(glGenTextures(static_cast<GLsizei>(texture_ids.size()), texture_ids.data()));
-	for (size_t i = 0; i < layout.tiles.size(); ++i) {
-		auto const& tile = layout.tiles[i];
-		CHECK_INIT_ERROR(glBindTexture(GL_TEXTURE_2D, texture_ids[i]));
+	CHECK_INIT_ERROR(glGenTextures(static_cast<GLsizei>(layer.texture_ids.size()), layer.texture_ids.data()));
+	for (size_t i = 0; i < layer.layout.tiles.size(); ++i) {
+		auto const& tile = layer.layout.tiles[i];
+		CHECK_INIT_ERROR(glBindTexture(GL_TEXTURE_2D, layer.texture_ids[i]));
 		CHECK_INIT_ERROR(glTexImage2D(GL_TEXTURE_2D, 0, internal_format, tile.texture_w, tile.texture_h, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, nullptr));
 		CHECK_INIT_ERROR(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR));
 		CHECK_INIT_ERROR(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
@@ -377,40 +382,44 @@ void ModernGLRenderer::RecreateTextures() {
 	CHECK_INIT_ERROR(glBindTexture(GL_TEXTURE_2D, 0));
 }
 
-void ModernGLRenderer::RebuildLayout(VideoFrame const& frame) {
-	ModernGLTileLayout next_layout = BuildModernGLTileLayout(
-		static_cast<int>(frame.width),
-		static_cast<int>(frame.height),
-		4,
-		max_texture_size,
-		supports_rectangular_textures,
-		frame.flipped);
-
-	layout = std::move(next_layout);
-	LOG_I("video/out/modern_gl") << "Video size: " << layout.frame_width << "x" << layout.frame_height << ", tiles: " << layout.tiles.size();
-	RebuildGeometry();
-	RecreateTextures();
+void ModernGLRenderer::ClearLayer(LayerResources& layer) noexcept {
+	DeleteLayerTextures(layer);
+	layer.layout = { };
+	layer.vertices.clear();
+	layer.indices.clear();
+	layer.has_content = false;
 }
 
-void ModernGLRenderer::UploadFrame(VideoFrame const& frame) {
-	if (frame.width == 0 || frame.height == 0) {
-		has_frame = false;
+void ModernGLRenderer::UploadBgraLayer(LayerResources& layer, unsigned char const* data, int width, int height, ptrdiff_t pitch, bool flipped) {
+	if (!data || width <= 0 || height <= 0 || pitch <= 0) {
+		ClearLayer(layer);
 		return;
 	}
 
 	EnsureInitialized();
 
-	if (layout.frame_width != static_cast<int>(frame.width)
-		|| layout.frame_height != static_cast<int>(frame.height)
-		|| layout.flipped != frame.flipped
-		|| texture_ids.size() != layout.tiles.size()) {
-		RebuildLayout(frame);
+	bool layout_changed =
+		layer.layout.frame_width != width ||
+		layer.layout.frame_height != height ||
+		layer.layout.flipped != flipped ||
+		layer.texture_ids.size() != layer.layout.tiles.size();
+	if (layout_changed) {
+		layer.layout = BuildModernGLTileLayout(
+		width,
+		height,
+		4,
+		max_texture_size,
+		supports_rectangular_textures,
+		flipped);
+		LOG_I("video/out/modern_gl") << "Layer size: " << layer.layout.frame_width << "x" << layer.layout.frame_height << ", tiles: " << layer.layout.tiles.size();
+		RebuildLayerGeometry(layer);
+		RecreateLayerTextures(layer);
 	}
 
-	CHECK_RENDER_ERROR(glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(frame.pitch / 4)));
-	for (size_t i = 0; i < layout.tiles.size(); ++i) {
-		auto const& tile = layout.tiles[i];
-		CHECK_RENDER_ERROR(glBindTexture(GL_TEXTURE_2D, texture_ids[i]));
+	CHECK_RENDER_ERROR(glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(pitch / 4)));
+	for (size_t i = 0; i < layer.layout.tiles.size(); ++i) {
+		auto const& tile = layer.layout.tiles[i];
+		CHECK_RENDER_ERROR(glBindTexture(GL_TEXTURE_2D, layer.texture_ids[i]));
 		CHECK_RENDER_ERROR(glTexSubImage2D(
 			GL_TEXTURE_2D,
 			0,
@@ -420,43 +429,38 @@ void ModernGLRenderer::UploadFrame(VideoFrame const& frame) {
 			tile.source_h,
 			GL_BGRA_EXT,
 			GL_UNSIGNED_BYTE,
-			frame.data.data() + tile.data_offset));
+			data + tile.data_offset));
 	}
 	CHECK_RENDER_ERROR(glBindTexture(GL_TEXTURE_2D, 0));
 	CHECK_RENDER_ERROR(glPixelStorei(GL_UNPACK_ROW_LENGTH, 0));
-	has_frame = true;
+	layer.has_content = true;
 }
 
-void ModernGLRenderer::Render(RenderViewport const& viewport, int, int) {
-	if (!has_frame || viewport.width <= 0 || viewport.height <= 0 || layout.tiles.empty())
+void ModernGLRenderer::RenderLayer(LayerResources& layer, bool blend) {
+	if (!layer.has_content || layer.layout.tiles.empty())
 		return;
-
-	EnsureInitialized();
-
 	auto& gl = *functions;
-	auto projection_matrix = BuildModernGLOrthoMatrix(layout.frame_width, layout.frame_height, layout.flipped);
+	auto projection_matrix = BuildModernGLOrthoMatrix(layer.layout.frame_width, layer.layout.frame_height, layer.layout.flipped);
 
-	CHECK_RENDER_ERROR(glDisable(GL_SCISSOR_TEST));
-	CHECK_RENDER_ERROR(glDisable(GL_STENCIL_TEST));
-	CHECK_RENDER_ERROR(glDisable(GL_CULL_FACE));
-	CHECK_RENDER_ERROR(glDisable(GL_BLEND));
-	CHECK_RENDER_ERROR(glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE));
-	CHECK_RENDER_ERROR(glClearColor(0.0f, 0.0f, 0.0f, 0.0f));
-	CHECK_RENDER_ERROR(glClearStencil(0));
-	CHECK_RENDER_ERROR(glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT));
-	CHECK_RENDER_ERROR(glViewport(viewport.x, viewport.y, viewport.width, viewport.height));
+	if (blend) {
+		CHECK_RENDER_ERROR(glEnable(GL_BLEND));
+		CHECK_RENDER_ERROR(glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
+	}
+	else {
+		CHECK_RENDER_ERROR(glDisable(GL_BLEND));
+	}
 
 	gl.UseProgram(program);
 	gl.UniformMatrix4fv(projection_matrix_uniform, 1, GL_FALSE, projection_matrix.data());
-	gl.BindBuffer(GL_ARRAY_BUFFER, vertex_buffer);
-	gl.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, element_buffer);
+	gl.BindBuffer(GL_ARRAY_BUFFER, layer.vertex_buffer);
+	gl.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, layer.element_buffer);
 	gl.EnableVertexAttribArray(0);
 	gl.EnableVertexAttribArray(1);
 	gl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, position)));
 	gl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), reinterpret_cast<void *>(offsetof(Vertex, texcoord)));
 
-	for (size_t i = 0; i < texture_ids.size(); ++i) {
-		CHECK_RENDER_ERROR(glBindTexture(GL_TEXTURE_2D, texture_ids[i]));
+	for (size_t i = 0; i < layer.texture_ids.size(); ++i) {
+		CHECK_RENDER_ERROR(glBindTexture(GL_TEXTURE_2D, layer.texture_ids[i]));
 		CHECK_RENDER_ERROR(glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, reinterpret_cast<void *>(i * 6 * sizeof(GLuint))));
 	}
 
@@ -466,4 +470,53 @@ void ModernGLRenderer::Render(RenderViewport const& viewport, int, int) {
 	gl.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 	CHECK_RENDER_ERROR(glBindTexture(GL_TEXTURE_2D, 0));
 	gl.UseProgram(0);
+}
+
+void ModernGLRenderer::UploadFrame(SourceFrame const& frame) {
+	if (!frame.IsValid() || frame.pixel_format != SourceFramePixelFormat::Bgra8) {
+		video_layer.has_content = false;
+		return;
+	}
+
+	UploadBgraLayer(
+		video_layer,
+		frame.planes[0].data,
+		frame.width,
+		frame.height,
+		frame.planes[0].stride,
+		frame.flipped);
+}
+
+void ModernGLRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
+	if (!overlay || !overlay->IsValid() || overlay->pixel_format != SubtitleOverlayPixelFormat::Bgra8) {
+		ClearLayer(overlay_layer);
+		return;
+	}
+
+	UploadBgraLayer(
+		overlay_layer,
+		overlay->planes[0].data,
+		overlay->width,
+		overlay->height,
+		overlay->planes[0].stride,
+		overlay->flipped);
+}
+
+void ModernGLRenderer::Render(RenderViewport const& viewport, int, int) {
+	if (!video_layer.has_content || viewport.width <= 0 || viewport.height <= 0 || video_layer.layout.tiles.empty())
+		return;
+
+	EnsureInitialized();
+
+	CHECK_RENDER_ERROR(glDisable(GL_SCISSOR_TEST));
+	CHECK_RENDER_ERROR(glDisable(GL_STENCIL_TEST));
+	CHECK_RENDER_ERROR(glDisable(GL_CULL_FACE));
+	CHECK_RENDER_ERROR(glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE));
+	CHECK_RENDER_ERROR(glClearColor(0.0f, 0.0f, 0.0f, 0.0f));
+	CHECK_RENDER_ERROR(glClearStencil(0));
+	CHECK_RENDER_ERROR(glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT));
+	CHECK_RENDER_ERROR(glViewport(viewport.x, viewport.y, viewport.width, viewport.height));
+
+	RenderLayer(video_layer, false);
+	RenderLayer(overlay_layer, true);
 }

@@ -16,13 +16,15 @@
 
 #include "render_types.h"
 
-struct VideoFrame;
+struct SourceFrame;
+struct SubtitleOverlay;
 
 class IVideoRenderer {
 public:
 	virtual ~IVideoRenderer() = default;
 
 	virtual void Reset() = 0;
-	virtual void UploadFrame(VideoFrame const& frame) = 0;
+	virtual void UploadFrame(SourceFrame const& frame) = 0;
+	virtual void UploadOverlay(SubtitleOverlay const* overlay) = 0;
 	virtual void Render(RenderViewport const& viewport, int canvas_width, int canvas_height) = 0;
 };

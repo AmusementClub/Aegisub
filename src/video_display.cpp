@@ -160,7 +160,8 @@ bool VideoDisplay::InitContext() {
 }
 
 void VideoDisplay::UploadFrameData(FrameReadyEvent &evt) {
-	pending_frame = evt.frame;
+	pending_packet = std::move(evt.packet);
+	has_pending_packet = true;
 
 	// Instead of calling Render(), we force a render here to minimize delay
 	DoRender();
@@ -178,7 +179,7 @@ void VideoDisplay::OnIdle(wxIdleEvent&) {
 void VideoDisplay::DoRender() try {
 	render_requested = false;
 
-	if (!con->project->VideoProvider() || !InitContext() || (!videoRenderer && !pending_frame))
+	if (!con->project->VideoProvider() || !InitContext() || (!videoRenderer && !has_pending_packet))
 		return;
 
 	if (!videoRenderer)
@@ -188,9 +189,18 @@ void VideoDisplay::DoRender() try {
 		cmd::call("video/tool/cross", con);
 
 	try {
-		if (pending_frame) {
-			videoRenderer->UploadFrame(*pending_frame);
-			pending_frame.reset();
+		if (has_pending_packet) {
+			if (pending_packet.has_subtitle_overlay && pending_packet.subtitle_overlay.premultiplied_alpha) {
+				videoRenderer->UploadFrame(pending_packet.source_frame);
+				videoRenderer->UploadOverlay(&pending_packet.subtitle_overlay);
+			}
+			else {
+				auto display_frame = pending_packet.DisplayFrame();
+				videoRenderer->UploadFrame(MakeSourceFrameView(*display_frame));
+				videoRenderer->UploadOverlay(nullptr);
+			}
+			pending_packet = { };
+			has_pending_packet = false;
 		}
 	}
 	catch (const VideoOutInitException& err) {
@@ -484,5 +494,6 @@ void VideoDisplay::Unload() {
 	videoRenderer.reset();
 	tool.reset();
 	glContext.reset();
-	pending_frame.reset();
+	pending_packet = { };
+	has_pending_packet = false;
 }

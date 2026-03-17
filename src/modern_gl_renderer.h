@@ -16,6 +16,8 @@
 
 #include "ivideo_renderer.h"
 #include "modern_gl_renderer_tile.h"
+#include "source_frame.h"
+#include "subtitle_overlay.h"
 
 #include <memory>
 #include <vector>
@@ -28,39 +30,47 @@ class ModernGLRenderer final : public IVideoRenderer {
 		float texcoord[2];
 	};
 
+	struct LayerResources {
+		ModernGLTileLayout layout;
+		std::vector<GLuint> texture_ids;
+		std::vector<Vertex> vertices;
+		std::vector<GLuint> indices;
+		GLuint vertex_buffer = 0;
+		GLuint element_buffer = 0;
+		bool has_content = false;
+	};
+
 	std::unique_ptr<Functions> functions;
-	ModernGLTileLayout layout;
-	std::vector<GLuint> texture_ids;
-	std::vector<Vertex> vertices;
-	std::vector<GLuint> indices;
+	LayerResources video_layer;
+	LayerResources overlay_layer;
 
 	GLuint program = 0;
-	GLuint vertex_buffer = 0;
-	GLuint element_buffer = 0;
 	GLint projection_matrix_uniform = -1;
 	GLint texture_uniform = -1;
 
 	int max_texture_size = 0;
 	bool supports_rectangular_textures = false;
 	GLint internal_format = 0;
-	bool has_frame = false;
 
 	void EnsureInitialized();
 	void LoadFunctions();
 	void DetectOpenGLCapabilities();
 	void CreateProgram();
-	void CreateBuffers();
-	void RebuildLayout(VideoFrame const& frame);
-	void RebuildGeometry();
-	void RecreateTextures();
+	void CreateLayerBuffers(LayerResources& layer);
+	void RebuildLayerGeometry(LayerResources& layer);
+	void RecreateLayerTextures(LayerResources& layer);
+	void UploadBgraLayer(LayerResources& layer, unsigned char const* data, int width, int height, ptrdiff_t pitch, bool flipped);
+	void ClearLayer(LayerResources& layer) noexcept;
+	void RenderLayer(LayerResources& layer, bool blend);
 	void DestroyResources() noexcept;
-	void DeleteTextures() noexcept;
+	void DeleteLayerTextures(LayerResources& layer) noexcept;
 
 public:
 	ModernGLRenderer();
 	~ModernGLRenderer();
 
 	void Reset() override;
-	void UploadFrame(VideoFrame const& frame) override;
+	void UploadFrame(SourceFrame const& frame) override;
+	void UploadOverlay(SubtitleOverlay const* overlay) override;
 	void Render(RenderViewport const& viewport, int canvas_width, int canvas_height) override;
 };

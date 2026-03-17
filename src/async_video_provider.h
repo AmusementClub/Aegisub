@@ -159,13 +159,11 @@ public:
 /// Event which signals that a requested frame is ready
 struct FrameReadyEvent final : public wxEvent {
 	VideoRenderPacket packet;
-	/// Frame which is ready
-	std::shared_ptr<VideoFrame> frame;
 	/// Time which was used for subtitle rendering
 	double time;
 	wxEvent *Clone() const override { return new FrameReadyEvent(*this); };
 	FrameReadyEvent(VideoRenderPacket packet, double time)
-	: packet(std::move(packet)), frame(this->packet.DisplayFrame()), time(time) { }
+	: packet(std::move(packet)), time(time) { }
 };
 
 // These exceptions are wxEvents so that they can be passed directly back to

@@ -12,9 +12,9 @@
 // ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-#include "modern_gl_renderer.h"
+#include "video_renderer_opengl.h"
 
-#include "modern_gl_overlay_upload_plan.h"
+#include "video_renderer_opengl_overlay_upload_plan.h"
 #include "video_renderer_error.h"
 
 #include <libaegisub/compiler.h>
@@ -39,13 +39,13 @@
 namespace {
 template<typename Exception>
 AGI_NOINLINE void throw_error(GLenum err, const char *msg) {
-	LOG_E("video/out/modern_gl") << msg << " failed with error code " << err;
+	LOG_E("video/out/opengl") << msg << " failed with error code " << err;
 	throw Exception(msg, err);
 }
 
 template<typename Exception>
 AGI_NOINLINE void throw_message(char const *msg) {
-	LOG_E("video/out/modern_gl") << msg;
+	LOG_E("video/out/opengl") << msg;
 	throw Exception(msg);
 }
 }
@@ -61,7 +61,7 @@ AGI_NOINLINE void throw_message(char const *msg) {
 #define CHECK_INIT_ERROR(cmd) DO_CHECK_ERROR(cmd, VideoOutInitException, #cmd)
 #define CHECK_RENDER_ERROR(cmd) DO_CHECK_ERROR(cmd, VideoOutRenderException, #cmd)
 
-struct ModernGLRenderer::Functions {
+struct OpenGLVideoRenderer::Functions {
 	PFNGLATTACHSHADERPROC AttachShader = nullptr;
 	PFNGLBINDATTRIBLOCATIONPROC BindAttribLocation = nullptr;
 	PFNGLBINDBUFFERPROC BindBuffer = nullptr;
@@ -111,7 +111,7 @@ void LoadProc(Proc& proc, char const *name) {
 
 template<typename Exception>
 AGI_NOINLINE void throw_shader_message(char const *label, std::string const& log) {
-	LOG_E("video/out/modern_gl") << label << ": " << log;
+	LOG_E("video/out/opengl") << label << ": " << log;
 	throw Exception(label);
 }
 
@@ -119,18 +119,18 @@ bool TestTexture(int width, int height, GLint format) {
 	glTexImage2D(GL_PROXY_TEXTURE_2D, 0, format, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
 	glGetTexLevelParameteriv(GL_PROXY_TEXTURE_2D, 0, GL_TEXTURE_INTERNAL_FORMAT, &format);
 	while (glGetError()) { }
-	LOG_I("video/out/modern_gl") << "ModernGLRenderer::TestTexture " << width << "x" << height;
+	LOG_I("video/out/opengl") << "OpenGLVideoRenderer::TestTexture " << width << "x" << height;
 	return format != 0;
 }
 }
 
-ModernGLRenderer::ModernGLRenderer() = default;
+OpenGLVideoRenderer::OpenGLVideoRenderer() = default;
 
-ModernGLRenderer::~ModernGLRenderer() {
+OpenGLVideoRenderer::~OpenGLVideoRenderer() {
 	DestroyResources();
 }
 
-void ModernGLRenderer::LoadFunctions() {
+void OpenGLVideoRenderer::LoadFunctions() {
 	if (functions)
 		return;
 
@@ -161,7 +161,7 @@ void ModernGLRenderer::LoadFunctions() {
 	LoadProc(functions->VertexAttribPointer, "glVertexAttribPointer");
 }
 
-void ModernGLRenderer::DetectOpenGLCapabilities() {
+void OpenGLVideoRenderer::DetectOpenGLCapabilities() {
 	if (max_texture_size != 0)
 		return;
 
@@ -176,11 +176,11 @@ void ModernGLRenderer::DetectOpenGLCapabilities() {
 		throw_message<VideoOutInitException>("Could not determine a valid maximum texture size.");
 
 	supports_rectangular_textures = TestTexture(max_texture_size, max_texture_size >> 1, internal_format);
-	LOG_I("video/out/modern_gl") << "Maximum texture size is " << max_texture_size << "x" << max_texture_size;
-	LOG_I("video/out/modern_gl") << "Rectangular textures supported: " << supports_rectangular_textures;
+	LOG_I("video/out/opengl") << "Maximum texture size is " << max_texture_size << "x" << max_texture_size;
+	LOG_I("video/out/opengl") << "Rectangular textures supported: " << supports_rectangular_textures;
 }
 
-void ModernGLRenderer::CreateProgram() {
+void OpenGLVideoRenderer::CreateProgram() {
 	if (program)
 		return;
 
@@ -267,7 +267,7 @@ void ModernGLRenderer::CreateProgram() {
 	gl.UseProgram(0);
 }
 
-void ModernGLRenderer::CreateLayerBuffers(LayerResources& layer) {
+void OpenGLVideoRenderer::CreateLayerBuffers(LayerResources& layer) {
 	if (layer.vertex_buffer && layer.element_buffer)
 		return;
 
@@ -280,7 +280,7 @@ void ModernGLRenderer::CreateLayerBuffers(LayerResources& layer) {
 		throw_message<VideoOutInitException>("Failed to create video vertex/index buffers.");
 }
 
-void ModernGLRenderer::EnsureInitialized() {
+void OpenGLVideoRenderer::EnsureInitialized() {
 	LoadFunctions();
 	DetectOpenGLCapabilities();
 	CreateProgram();
@@ -288,14 +288,14 @@ void ModernGLRenderer::EnsureInitialized() {
 	CreateLayerBuffers(overlay_layer);
 }
 
-void ModernGLRenderer::DeleteLayerTextures(LayerResources& layer) noexcept {
+void OpenGLVideoRenderer::DeleteLayerTextures(LayerResources& layer) noexcept {
 	if (!layer.texture_ids.empty()) {
 		glDeleteTextures(static_cast<GLsizei>(layer.texture_ids.size()), layer.texture_ids.data());
 		layer.texture_ids.clear();
 	}
 }
 
-void ModernGLRenderer::DestroyResources() noexcept {
+void OpenGLVideoRenderer::DestroyResources() noexcept {
 	if (functions) {
 		if (video_layer.vertex_buffer || video_layer.element_buffer) {
 			GLuint buffers[] = { video_layer.vertex_buffer, video_layer.element_buffer };
@@ -323,7 +323,7 @@ void ModernGLRenderer::DestroyResources() noexcept {
 	overlay_layer = { };
 }
 
-void ModernGLRenderer::Reset() {
+void OpenGLVideoRenderer::Reset() {
 	DestroyResources();
 	functions.reset();
 	max_texture_size = 0;
@@ -331,7 +331,7 @@ void ModernGLRenderer::Reset() {
 	internal_format = 0;
 }
 
-void ModernGLRenderer::RebuildLayerGeometry(LayerResources& layer) {
+void OpenGLVideoRenderer::RebuildLayerGeometry(LayerResources& layer) {
 	layer.vertices.clear();
 	layer.indices.clear();
 
@@ -364,7 +364,7 @@ void ModernGLRenderer::RebuildLayerGeometry(LayerResources& layer) {
 	gl.BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
 }
 
-void ModernGLRenderer::RecreateLayerTextures(LayerResources& layer) {
+void OpenGLVideoRenderer::RecreateLayerTextures(LayerResources& layer) {
 	DeleteLayerTextures(layer);
 	layer.texture_ids.resize(layer.layout.tiles.size());
 	if (layer.texture_ids.empty())
@@ -383,7 +383,7 @@ void ModernGLRenderer::RecreateLayerTextures(LayerResources& layer) {
 	CHECK_INIT_ERROR(glBindTexture(GL_TEXTURE_2D, 0));
 }
 
-void ModernGLRenderer::ClearLayer(LayerResources& layer) noexcept {
+void OpenGLVideoRenderer::ClearLayer(LayerResources& layer) noexcept {
 	DeleteLayerTextures(layer);
 	layer.layout = { };
 	layer.vertices.clear();
@@ -396,11 +396,11 @@ void ModernGLRenderer::ClearLayer(LayerResources& layer) noexcept {
 	layer.has_content = false;
 }
 
-void ModernGLRenderer::HideLayer(LayerResources& layer) noexcept {
+void OpenGLVideoRenderer::HideLayer(LayerResources& layer) noexcept {
 	layer.has_content = false;
 }
 
-void ModernGLRenderer::UploadBgraLayer(LayerResources& layer, unsigned char const* data, int width, int height, ptrdiff_t pitch, bool flipped, int canvas_width, int canvas_height, int offset_x, int offset_y, SubtitleOverlayCompositionMode composition_mode) {
+void OpenGLVideoRenderer::UploadBgraLayer(LayerResources& layer, unsigned char const* data, int width, int height, ptrdiff_t pitch, bool flipped, int canvas_width, int canvas_height, int offset_x, int offset_y, SubtitleOverlayCompositionMode composition_mode) {
 	if (!data || width <= 0 || height <= 0 || pitch <= 0) {
 		ClearLayer(layer);
 		return;
@@ -427,14 +427,14 @@ void ModernGLRenderer::UploadBgraLayer(LayerResources& layer, unsigned char cons
 	layer.composition_mode = composition_mode;
 
 	if (textures_changed) {
-		layer.layout = BuildModernGLTileLayout(
+		layer.layout = BuildOpenGLVideoRendererTileLayout(
 		width,
 		height,
 		4,
 		max_texture_size,
 		supports_rectangular_textures,
 		flipped);
-		LOG_I("video/out/modern_gl") << "Layer size: " << layer.layout.frame_width << "x" << layer.layout.frame_height << ", tiles: " << layer.layout.tiles.size();
+		LOG_I("video/out/opengl") << "Layer size: " << layer.layout.frame_width << "x" << layer.layout.frame_height << ", tiles: " << layer.layout.tiles.size();
 		RecreateLayerTextures(layer);
 	}
 	if (geometry_changed)
@@ -460,7 +460,7 @@ void ModernGLRenderer::UploadBgraLayer(LayerResources& layer, unsigned char cons
 	layer.has_content = true;
 }
 
-void ModernGLRenderer::UploadDirtyRects(LayerResources& layer, unsigned char const* data, ptrdiff_t pitch, SubtitleOverlayDirtyRect const* dirty_rects, int dirty_rect_count) {
+void OpenGLVideoRenderer::UploadDirtyRects(LayerResources& layer, unsigned char const* data, ptrdiff_t pitch, SubtitleOverlayDirtyRect const* dirty_rects, int dirty_rect_count) {
 	if (!dirty_rects || dirty_rect_count <= 0)
 		return;
 
@@ -499,11 +499,11 @@ void ModernGLRenderer::UploadDirtyRects(LayerResources& layer, unsigned char con
 	layer.has_content = true;
 }
 
-void ModernGLRenderer::RenderLayer(LayerResources& layer) {
+void OpenGLVideoRenderer::RenderLayer(LayerResources& layer) {
 	if (!layer.has_content || layer.layout.tiles.empty())
 		return;
 	auto& gl = *functions;
-	auto projection_matrix = BuildModernGLOrthoMatrix(layer.canvas_width, layer.canvas_height, layer.layout.flipped);
+	auto projection_matrix = BuildOpenGLVideoRendererOrthoMatrix(layer.canvas_width, layer.canvas_height, layer.layout.flipped);
 
 	if (layer.composition_mode == SubtitleOverlayCompositionMode::PremultipliedAlpha) {
 		CHECK_RENDER_ERROR(glEnable(GL_BLEND));
@@ -535,7 +535,7 @@ void ModernGLRenderer::RenderLayer(LayerResources& layer) {
 	gl.UseProgram(0);
 }
 
-void ModernGLRenderer::UploadFrame(SourceFrame const& frame) {
+void OpenGLVideoRenderer::UploadFrame(SourceFrame const& frame) {
 	if (!frame.IsValid() || frame.pixel_format != SourceFramePixelFormat::Bgra8) {
 		video_layer.has_content = false;
 		return;
@@ -555,8 +555,8 @@ void ModernGLRenderer::UploadFrame(SourceFrame const& frame) {
 		SubtitleOverlayCompositionMode::OpaqueReplace);
 }
 
-void ModernGLRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
-	ModernGLOverlayLayerState state;
+void OpenGLVideoRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
+	OpenGLVideoRendererOverlayLayerState state;
 	state.width = overlay_layer.layout.frame_width;
 	state.height = overlay_layer.layout.frame_height;
 	state.canvas_width = overlay_layer.canvas_width;
@@ -568,12 +568,12 @@ void ModernGLRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 	state.has_visible_content = overlay_layer.has_content;
 	state.composition_mode = overlay_layer.composition_mode;
 
-	auto plan = DecideModernGLOverlayUploadPlan(state, overlay);
-	if (plan.action == ModernGLOverlayUploadAction::HideKeepResources) {
+	auto plan = DecideOpenGLVideoRendererOverlayUploadPlan(state, overlay);
+	if (plan.action == OpenGLVideoRendererOverlayUploadAction::HideKeepResources) {
 		HideLayer(overlay_layer);
 		return;
 	}
-	if (plan.action == ModernGLOverlayUploadAction::FullUpload) {
+	if (plan.action == OpenGLVideoRendererOverlayUploadAction::FullUpload) {
 		UploadBgraLayer(
 			overlay_layer,
 			overlay->planes[0].data,
@@ -588,7 +588,7 @@ void ModernGLRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 			overlay->composition_mode);
 		return;
 	}
-	if (plan.action == ModernGLOverlayUploadAction::DirtyUpload) {
+	if (plan.action == OpenGLVideoRendererOverlayUploadAction::DirtyUpload) {
 		UploadDirtyRects(
 			overlay_layer,
 			overlay->planes[0].data,
@@ -601,7 +601,7 @@ void ModernGLRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 	overlay_layer.has_content = true;
 }
 
-void ModernGLRenderer::Render(RenderViewport const& viewport, int, int) {
+void OpenGLVideoRenderer::Render(RenderViewport const& viewport, int, int) {
 	if (!video_layer.has_content || viewport.width <= 0 || viewport.height <= 0 || video_layer.layout.tiles.empty())
 		return;
 

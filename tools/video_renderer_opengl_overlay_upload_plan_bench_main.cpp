@@ -1,4 +1,4 @@
-#include "../src/modern_gl_overlay_upload_plan.h"
+#include "../src/video_renderer_opengl_overlay_upload_plan.h"
 #include "../src/subtitle_overlay.h"
 
 #include <chrono>
@@ -12,7 +12,7 @@ using clock_type = std::chrono::steady_clock;
 
 struct BenchCase {
 	std::string name;
-	ModernGLOverlayLayerState initial_state;
+	OpenGLVideoRendererOverlayLayerState initial_state;
 	SubtitleOverlayStorage storage;
 	SubtitleOverlay overlay = { };
 };
@@ -52,10 +52,10 @@ BenchCase make_case(char const* name, int width, int height, bool hidden, bool w
 	return bench_case;
 }
 
-ModernGLOverlayUploadPlan LegacyOverlayPlan(ModernGLOverlayLayerState state, SubtitleOverlay const* overlay) {
-	if (!IsValidDirectRenderableOverlayForModernGL(overlay)) {
+OpenGLVideoRendererOverlayUploadPlan LegacyOverlayPlan(OpenGLVideoRendererOverlayLayerState state, SubtitleOverlay const* overlay) {
+	if (!IsValidDirectRenderableOverlayForOpenGLVideoRenderer(overlay)) {
 		state = { };
-		return { ModernGLOverlayUploadAction::HideKeepResources, state };
+		return { OpenGLVideoRendererOverlayUploadAction::HideKeepResources, state };
 	}
 
 	bool layout_changed =
@@ -81,26 +81,26 @@ ModernGLOverlayUploadPlan LegacyOverlayPlan(ModernGLOverlayLayerState state, Sub
 		state.composition_mode = overlay->composition_mode;
 		state.has_allocated_resources = true;
 		state.has_visible_content = true;
-		return { ModernGLOverlayUploadAction::FullUpload, state };
+		return { OpenGLVideoRendererOverlayUploadAction::FullUpload, state };
 	}
 
 	if (overlay->dirty_rect_count > 0 && overlay->dirty_rects) {
 		state.has_visible_content = true;
-		return { ModernGLOverlayUploadAction::DirtyUpload, state };
+		return { OpenGLVideoRendererOverlayUploadAction::DirtyUpload, state };
 	}
 
 	state.has_visible_content = true;
-	return { ModernGLOverlayUploadAction::ReuseExistingContent, state };
+	return { OpenGLVideoRendererOverlayUploadAction::ReuseExistingContent, state };
 }
 
-std::size_t upload_bytes_for_plan(ModernGLOverlayUploadPlan const& plan, SubtitleOverlay const& overlay) {
+std::size_t upload_bytes_for_plan(OpenGLVideoRendererOverlayUploadPlan const& plan, SubtitleOverlay const& overlay) {
 	switch (plan.action) {
-	case ModernGLOverlayUploadAction::FullUpload:
+	case OpenGLVideoRendererOverlayUploadAction::FullUpload:
 		return full_upload_bytes(overlay);
-	case ModernGLOverlayUploadAction::DirtyUpload:
+	case OpenGLVideoRendererOverlayUploadAction::DirtyUpload:
 		return dirty_upload_bytes(overlay);
-	case ModernGLOverlayUploadAction::HideKeepResources:
-	case ModernGLOverlayUploadAction::ReuseExistingContent:
+	case OpenGLVideoRendererOverlayUploadAction::HideKeepResources:
+	case OpenGLVideoRendererOverlayUploadAction::ReuseExistingContent:
 	default:
 		return 0;
 	}
@@ -127,7 +127,7 @@ int main() {
 	auto hidden_dirty = make_case("hide_then_dirty_reappear", 1920, 1080, true, true);
 	auto visible_stable = make_case("visible_stable_noop", 1920, 1080, false, false);
 
-	std::cout << "Modern GL overlay reactivation plan benchmark\n";
+	std::cout << "OpenGL video renderer overlay reactivation plan benchmark\n";
 	std::cout << std::left << std::setw(26) << "scenario"
 		<< std::right << std::setw(14) << "legacy ns"
 		<< std::setw(14) << "new ns"
@@ -137,12 +137,12 @@ int main() {
 
 	for (auto const* bench_case : { &hidden_same, &hidden_dirty, &visible_stable }) {
 		auto legacy = LegacyOverlayPlan(bench_case->initial_state, &bench_case->overlay);
-		auto current = DecideModernGLOverlayUploadPlan(bench_case->initial_state, &bench_case->overlay);
+		auto current = DecideOpenGLVideoRendererOverlayUploadPlan(bench_case->initial_state, &bench_case->overlay);
 		double legacy_ns = bench_ns_per_op([&] {
 			return static_cast<std::uint64_t>(upload_bytes_for_plan(LegacyOverlayPlan(bench_case->initial_state, &bench_case->overlay), bench_case->overlay));
 		});
 		double current_ns = bench_ns_per_op([&] {
-			return static_cast<std::uint64_t>(upload_bytes_for_plan(DecideModernGLOverlayUploadPlan(bench_case->initial_state, &bench_case->overlay), bench_case->overlay));
+			return static_cast<std::uint64_t>(upload_bytes_for_plan(DecideOpenGLVideoRendererOverlayUploadPlan(bench_case->initial_state, &bench_case->overlay), bench_case->overlay));
 		});
 
 		std::cout << std::left << std::setw(26) << bench_case->name

@@ -15,14 +15,14 @@
 #pragma once
 
 #include "ivideo_renderer.h"
-#include "modern_gl_renderer_tile.h"
+#include "video_renderer_opengl_tile.h"
 #include "source_frame.h"
 #include "subtitle_overlay.h"
 
 #include <memory>
 #include <vector>
 
-class ModernGLRenderer final : public IVideoRenderer {
+class OpenGLVideoRenderer final : public IVideoRenderer {
 	struct Functions;
 
 	struct Vertex {
@@ -31,7 +31,7 @@ class ModernGLRenderer final : public IVideoRenderer {
 	};
 
 	struct LayerResources {
-		ModernGLTileLayout layout;
+		OpenGLVideoRendererTileLayout layout;
 		std::vector<GLuint> texture_ids;
 		std::vector<Vertex> vertices;
 		std::vector<GLuint> indices;
@@ -73,8 +73,8 @@ class ModernGLRenderer final : public IVideoRenderer {
 	void DeleteLayerTextures(LayerResources& layer) noexcept;
 
 public:
-	ModernGLRenderer();
-	~ModernGLRenderer();
+	OpenGLVideoRenderer();
+	~OpenGLVideoRenderer();
 
 	void Reset() override;
 	void UploadFrame(SourceFrame const& frame) override;

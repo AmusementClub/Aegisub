@@ -52,8 +52,8 @@ target_include_directories(phase1-low-cost-bench PRIVATE
 target_link_libraries(phase1-low-cost-bench PRIVATE "Boost::headers")
 
 add_executable(modern-gl-renderer-tile-bench EXCLUDE_FROM_ALL
-    tools/modern_gl_renderer_tile_bench_main.cpp
-    src/modern_gl_renderer_tile.cpp
+    tools/video_renderer_opengl_tile_bench_main.cpp
+    src/video_renderer_opengl_tile.cpp
 )
 target_compile_features(modern-gl-renderer-tile-bench PRIVATE cxx_std_20)
 target_include_directories(modern-gl-renderer-tile-bench PRIVATE
@@ -63,7 +63,7 @@ target_include_directories(modern-gl-renderer-tile-bench PRIVATE
 target_link_libraries(modern-gl-renderer-tile-bench PRIVATE "Boost::headers")
 
 add_executable(modern-gl-overlay-plan-bench EXCLUDE_FROM_ALL
-    tools/modern_gl_overlay_upload_plan_bench_main.cpp
+    tools/video_renderer_opengl_overlay_upload_plan_bench_main.cpp
 )
 target_compile_features(modern-gl-overlay-plan-bench PRIVATE cxx_std_20)
 target_include_directories(modern-gl-overlay-plan-bench PRIVATE

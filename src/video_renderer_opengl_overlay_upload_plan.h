@@ -16,14 +16,14 @@
 
 #include "subtitle_overlay.h"
 
-enum class ModernGLOverlayUploadAction {
+enum class OpenGLVideoRendererOverlayUploadAction {
 	HideKeepResources,
 	FullUpload,
 	DirtyUpload,
 	ReuseExistingContent
 };
 
-struct ModernGLOverlayLayerState {
+struct OpenGLVideoRendererOverlayLayerState {
 	int width = 0;
 	int height = 0;
 	int canvas_width = 0;
@@ -36,26 +36,26 @@ struct ModernGLOverlayLayerState {
 	SubtitleOverlayCompositionMode composition_mode = SubtitleOverlayCompositionMode::OpaqueReplace;
 };
 
-struct ModernGLOverlayUploadPlan {
-	ModernGLOverlayUploadAction action = ModernGLOverlayUploadAction::HideKeepResources;
-	ModernGLOverlayLayerState next_state = { };
+struct OpenGLVideoRendererOverlayUploadPlan {
+	OpenGLVideoRendererOverlayUploadAction action = OpenGLVideoRendererOverlayUploadAction::HideKeepResources;
+	OpenGLVideoRendererOverlayLayerState next_state = { };
 };
 
-inline bool IsValidDirectRenderableOverlayForModernGL(SubtitleOverlay const* overlay) {
+inline bool IsValidDirectRenderableOverlayForOpenGLVideoRenderer(SubtitleOverlay const* overlay) {
 	return overlay &&
 		overlay->IsValid() &&
 		overlay->IsDirectRenderable() &&
 		overlay->pixel_format == SubtitleOverlayPixelFormat::Bgra8;
 }
 
-inline ModernGLOverlayUploadPlan DecideModernGLOverlayUploadPlan(
-	ModernGLOverlayLayerState const& state,
+inline OpenGLVideoRendererOverlayUploadPlan DecideOpenGLVideoRendererOverlayUploadPlan(
+	OpenGLVideoRendererOverlayLayerState const& state,
 	SubtitleOverlay const* overlay) {
-	ModernGLOverlayUploadPlan plan;
+	OpenGLVideoRendererOverlayUploadPlan plan;
 	plan.next_state = state;
 
-	if (!IsValidDirectRenderableOverlayForModernGL(overlay)) {
-		plan.action = ModernGLOverlayUploadAction::HideKeepResources;
+	if (!IsValidDirectRenderableOverlayForOpenGLVideoRenderer(overlay)) {
+		plan.action = OpenGLVideoRendererOverlayUploadAction::HideKeepResources;
 		plan.next_state.has_visible_content = false;
 		return plan;
 	}
@@ -83,21 +83,21 @@ inline ModernGLOverlayUploadPlan DecideModernGLOverlayUploadPlan(
 	plan.next_state.has_visible_content = true;
 
 	if (overlay->force_full_upload) {
-		plan.action = ModernGLOverlayUploadAction::FullUpload;
+		plan.action = OpenGLVideoRendererOverlayUploadAction::FullUpload;
 		return plan;
 	}
 
 	if (!layout_matches) {
-		plan.action = ModernGLOverlayUploadAction::FullUpload;
+		plan.action = OpenGLVideoRendererOverlayUploadAction::FullUpload;
 		return plan;
 	}
 
 	if (overlay->dirty_rect_count > 0 && overlay->dirty_rects) {
-		plan.action = ModernGLOverlayUploadAction::DirtyUpload;
+		plan.action = OpenGLVideoRendererOverlayUploadAction::DirtyUpload;
 		return plan;
 	}
 
 	// Current overlay providers use an empty dirty-rect set to mean pixel content is unchanged.
-	plan.action = ModernGLOverlayUploadAction::ReuseExistingContent;
+	plan.action = OpenGLVideoRendererOverlayUploadAction::ReuseExistingContent;
 	return plan;
 }

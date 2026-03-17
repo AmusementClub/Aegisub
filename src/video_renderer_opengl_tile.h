@@ -17,7 +17,7 @@
 #include <array>
 #include <vector>
 
-struct ModernGLTile {
+struct OpenGLVideoRendererTile {
 	int data_offset = 0;
 	int source_x = 0;
 	int source_y = 0;
@@ -35,14 +35,14 @@ struct ModernGLTile {
 	float v2 = 0.0f;
 };
 
-struct ModernGLTileLayout {
+struct OpenGLVideoRendererTileLayout {
 	int frame_width = 0;
 	int frame_height = 0;
 	int texture_rows = 0;
 	int texture_cols = 0;
 	bool flipped = false;
-	std::vector<ModernGLTile> tiles;
+	std::vector<OpenGLVideoRendererTile> tiles;
 };
 
-ModernGLTileLayout BuildModernGLTileLayout(int frame_width, int frame_height, int bytes_per_pixel, int max_texture_size, bool supports_rectangular_textures, bool flipped);
-std::array<float, 16> BuildModernGLOrthoMatrix(int width, int height, bool flipped);
+OpenGLVideoRendererTileLayout BuildOpenGLVideoRendererTileLayout(int frame_width, int frame_height, int bytes_per_pixel, int max_texture_size, bool supports_rectangular_textures, bool flipped);
+std::array<float, 16> BuildOpenGLVideoRendererOrthoMatrix(int width, int height, bool flipped);

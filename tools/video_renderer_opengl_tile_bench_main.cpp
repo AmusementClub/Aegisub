@@ -1,4 +1,4 @@
-#include "../src/modern_gl_renderer_tile.h"
+#include "../src/video_renderer_opengl_tile.h"
 
 #include <chrono>
 #include <cstdint>
@@ -34,7 +34,7 @@ BenchResult run_bench(char const* name, std::size_t iterations, Func&& func) {
 std::uint64_t bench_layout(int width, int height, int max_texture_size, bool supports_rectangles) {
 	std::uint64_t sum = 0;
 	for (int flipped = 0; flipped < 2; ++flipped) {
-		auto layout = BuildModernGLTileLayout(width, height, 4, max_texture_size, supports_rectangles, flipped != 0);
+		auto layout = BuildOpenGLVideoRendererTileLayout(width, height, 4, max_texture_size, supports_rectangles, flipped != 0);
 		sum += static_cast<std::uint64_t>(layout.tiles.size()) * 17;
 		for (auto const& tile : layout.tiles) {
 			sum += static_cast<std::uint64_t>(tile.texture_w);
@@ -48,7 +48,7 @@ std::uint64_t bench_layout(int width, int height, int max_texture_size, bool sup
 std::uint64_t bench_matrix(int width, int height) {
 	std::uint64_t sum = 0;
 	for (int flipped = 0; flipped < 2; ++flipped) {
-		auto matrix = BuildModernGLOrthoMatrix(width, height, flipped != 0);
+		auto matrix = BuildOpenGLVideoRendererOrthoMatrix(width, height, flipped != 0);
 		for (float value : matrix)
 			sum += static_cast<std::uint64_t>((value + 4.0f) * 1000000.0f);
 	}
@@ -63,7 +63,7 @@ int main() {
 	results.push_back(run_bench("layout_4k_square", 10000, [] { return bench_layout(3840, 2160, 2048, false); }));
 	results.push_back(run_bench("matrix_4k", 500000, [] { return bench_matrix(3840, 2160); }));
 
-	std::cout << "Modern GL renderer tile benchmark\n";
+	std::cout << "OpenGL video renderer tile benchmark\n";
 	std::cout << std::left << std::setw(24) << "name"
 		<< std::right << std::setw(14) << "ns/op"
 		<< "\n";

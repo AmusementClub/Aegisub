@@ -12,7 +12,7 @@
 // ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-#include "modern_gl_renderer_tile.h"
+#include "video_renderer_opengl_tile.h"
 
 #include <cmath>
 
@@ -31,8 +31,8 @@ int SmallestPowerOf2Local(int x) {
 }
 }
 
-ModernGLTileLayout BuildModernGLTileLayout(int frame_width, int frame_height, int bytes_per_pixel, int max_texture_size, bool supports_rectangular_textures, bool flipped) {
-	ModernGLTileLayout layout;
+OpenGLVideoRendererTileLayout BuildOpenGLVideoRendererTileLayout(int frame_width, int frame_height, int bytes_per_pixel, int max_texture_size, bool supports_rectangular_textures, bool flipped) {
+	OpenGLVideoRendererTileLayout layout;
 	layout.frame_width = frame_width;
 	layout.frame_height = frame_height;
 	layout.flipped = flipped;
@@ -49,7 +49,7 @@ ModernGLTileLayout BuildModernGLTileLayout(int frame_width, int frame_height, in
 	int last_col = layout.texture_cols - 1;
 	for (int row = 0; row < layout.texture_rows; ++row) {
 		for (int col = 0; col < layout.texture_cols; ++col) {
-			ModernGLTile tile;
+			OpenGLVideoRendererTile tile;
 			tile.source_x = col * texture_area;
 			tile.source_y = row * texture_area;
 			tile.source_w = std::min(frame_width - tile.source_x, max_texture_size);
@@ -78,7 +78,7 @@ ModernGLTileLayout BuildModernGLTileLayout(int frame_width, int frame_height, in
 	return layout;
 }
 
-std::array<float, 16> BuildModernGLOrthoMatrix(int width, int height, bool flipped) {
+std::array<float, 16> BuildOpenGLVideoRendererOrthoMatrix(int width, int height, bool flipped) {
 	std::array<float, 16> matrix = { };
 	if (width <= 0 || height <= 0)
 		return matrix;

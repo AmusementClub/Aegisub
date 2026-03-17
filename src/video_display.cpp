@@ -42,7 +42,7 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/hotkey.h"
 #include "include/aegisub/menu.h"
-#include "modern_gl_renderer.h"
+#include "video_renderer_opengl.h"
 #include "options.h"
 #include "project.h"
 #include "retina_helper.h"
@@ -183,7 +183,7 @@ void VideoDisplay::DoRender() try {
 		return;
 
 	if (!videoRenderer)
-		videoRenderer = agi::make_unique<ModernGLRenderer>();
+		videoRenderer = agi::make_unique<OpenGLVideoRenderer>();
 
 	if (!tool)
 		cmd::call("video/tool/cross", con);

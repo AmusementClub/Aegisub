@@ -42,12 +42,12 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/hotkey.h"
 #include "include/aegisub/menu.h"
-#include "video_renderer_opengl.h"
 #include "options.h"
 #include "project.h"
 #include "retina_helper.h"
 #include "spline_curve.h"
 #include "utils.h"
+#include "video_renderer_factory.h"
 #include "video_renderer_error.h"
 #include "video_controller.h"
 #include "visual_tool.h"
@@ -182,8 +182,10 @@ void VideoDisplay::DoRender() try {
 	if (!con->project->VideoProvider() || !InitContext() || (!videoRenderer && !has_pending_packet))
 		return;
 
-	if (!videoRenderer)
-		videoRenderer = agi::make_unique<OpenGLVideoRenderer>();
+	if (!videoRenderer) {
+		auto renderer_result = CreateConfiguredVideoRenderer();
+		videoRenderer = std::move(renderer_result.renderer);
+	}
 
 	if (!tool)
 		cmd::call("video/tool/cross", con);

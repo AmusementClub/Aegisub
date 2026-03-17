@@ -76,12 +76,14 @@ if(GTEST_FOUND)
         tests/tests/uuencode.cpp
         tests/tests/vfr.cpp
         tests/tests/video_cache.cpp
+        tests/tests/video_renderer_backend.cpp
         tests/tests/word_split.cpp
         tests/support/main.cpp
         tests/support/src_config_stubs.cpp
         tests/support/util.cpp
         src/subtitle_overlay_blend.cpp
         src/video_renderer_opengl_tile.cpp
+        src/video_renderer_backend.cpp
         src/video_provider_cache.cpp
     )
     target_compile_definitions(gtest-run PRIVATE CMAKE_BUILD)

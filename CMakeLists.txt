@@ -533,6 +533,8 @@ add_executable(Aegisub WIN32
     src/video_box.cpp
     src/video_controller.cpp
     src/video_display.cpp
+    src/video_renderer_backend.cpp
+    src/video_renderer_factory.cpp
     src/video_frame.cpp
     src/video_renderer_opengl.cpp
     src/video_renderer_opengl_tile.cpp
@@ -659,6 +661,30 @@ target_link_libraries(Aegisub PRIVATE "OpenGL::GL")
 check_include_files(OpenGL/gl.h HAVE_OPENGL_GL_H)
 if(HAVE_OPENGL_GL_H)
     target_compile_definitions(Aegisub PRIVATE "HAVE_OPENGL_GL_H")
+endif()
+
+option(WITH_LIBPLACEBO "Enable optional runtime-loaded libplacebo renderer support" ON)
+set(HAVE_LIBPLACEBO OFF)
+if(WITH_LIBPLACEBO)
+    find_path(LIBPLACEBO_INCLUDE_DIR NAMES libplacebo/config.h)
+    if(LIBPLACEBO_INCLUDE_DIR)
+        set(HAVE_LIBPLACEBO ON)
+        message(STATUS "Found libplacebo headers: ${LIBPLACEBO_INCLUDE_DIR}")
+        target_include_directories(Aegisub PRIVATE ${LIBPLACEBO_INCLUDE_DIR})
+        target_compile_definitions(Aegisub PRIVATE WITH_LIBPLACEBO WITH_LIBPLACEBO_RUNTIME_LOADING)
+        target_sources(Aegisub PRIVATE
+            src/video_renderer_placebo_gl.cpp
+            src/video_renderer_placebo_runtime.cpp
+        )
+        set_source_files_properties(
+            src/video_renderer_placebo_gl.cpp
+            src/video_renderer_placebo_runtime.cpp
+            PROPERTIES
+            SKIP_PRECOMPILE_HEADERS ON
+        )
+    else()
+        message(STATUS "libplacebo headers not found; continuing without optional runtime-loaded libplacebo renderer support.")
+    endif()
 endif()
 
 find_package(Iconv REQUIRED)
@@ -989,6 +1015,8 @@ message(STATUS "\n"
     "  FFMS2 runtime loading: ON\n"
     "  FFTW3:                 ${WITH_FFTW3}\n"
     "  Hunspell:              ${WITH_HUNSPELL}\n"
+    "  libplacebo headers:    ${HAVE_LIBPLACEBO}\n"
+    "  libplacebo loading:    runtime on demand\n"
     "  uchardet:              ${WITH_UCHARDET}\n"
     "  wxStyledTextCtrl:      ${WITH_WXSTC}\n"
     "  LuaJIT:                bundled\n"

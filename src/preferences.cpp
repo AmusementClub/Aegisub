@@ -455,6 +455,12 @@ void Advanced_Video(wxTreebook *book, Preferences *parent) {
 	auto expert = p->PageSizer(_("Expert"));
 
 	p->OptionChoice(expert, _("Video provider"), VideoProviderFactory::GetChoices(), "Video/Provider");
+	wxArrayString renderer_choices;
+	renderer_choices.Add("opengl");
+#ifdef WITH_LIBPLACEBO
+	renderer_choices.Add("libplacebo");
+#endif
+	p->OptionChoice(expert, _("Video renderer"), renderer_choices, "Video/Renderer/Backend");
 
 	wxArrayString sp_choice = to_wx(SubtitlesProviderFactory::GetClasses());
 	p->OptionChoice(expert, _("Subtitles provider"), sp_choice, "Subtitle/Provider");

@@ -94,19 +94,20 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		*composited = *frame;
 		packet.composited_frame_storage = composited;
 
-		auto overlay_storage = acquire_buffer(subtitle_overlay_buffers);
-		overlay_storage->Reset(static_cast<int>(frame->width), static_cast<int>(frame->height), frame->flipped);
-		auto subtitle_overlay = overlay_storage->MakeView(true);
+		if (subs_provider->GetRenderMode() == SubtitleRenderMode::PremultipliedOverlay) {
+			auto overlay_storage = acquire_buffer(subtitle_overlay_buffers);
+			overlay_storage->Reset(static_cast<int>(frame->width), static_cast<int>(frame->height), frame->flipped);
+			auto subtitle_overlay = overlay_storage->MakeView(true);
 
-		if (subs_provider->RenderOverlay(packet.source_frame, subtitle_overlay, time / 1000.)) {
-			packet.subtitle_overlay_storage = overlay_storage;
-			packet.subtitle_overlay = subtitle_overlay;
-			packet.has_subtitle_overlay = true;
-
-			if (subtitle_overlay.premultiplied_alpha)
+			if (subs_provider->RenderOverlay(packet.source_frame, subtitle_overlay, time / 1000.)) {
+				packet.subtitle_overlay_storage = overlay_storage;
+				packet.subtitle_overlay = subtitle_overlay;
+				packet.has_subtitle_overlay = true;
 				CompositePremultipliedBgraOverlayOntoVideoFrame(*composited, subtitle_overlay);
-			else
+			}
+			else {
 				subs_provider->DrawSubtitles(*composited, time / 1000.);
+			}
 		}
 		else {
 			subs_provider->DrawSubtitles(*composited, time / 1000.);

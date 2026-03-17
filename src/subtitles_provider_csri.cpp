@@ -101,6 +101,7 @@ class CSRISubtitlesProvider final : public SubtitlesProvider {
 public:
 	CSRISubtitlesProvider(std::string subType);
 
+	SubtitleRenderMode GetRenderMode() const override { return SubtitleRenderMode::CompatibilityFrameOnly; }
 	bool RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double time) override;
 	void DrawSubtitles(VideoFrame &dst, double time) override;
 };

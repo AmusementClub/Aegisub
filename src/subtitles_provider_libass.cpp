@@ -130,6 +130,7 @@ public:
 		if (!ass_track) throw agi::InternalError("libass failed to load subtitles.");
 	}
 
+	SubtitleRenderMode GetRenderMode() const override { return SubtitleRenderMode::PremultipliedOverlay; }
 	bool RenderOverlay(SourceFrame const& source, SubtitleOverlay& overlay, double time) override;
 	void DrawSubtitles(VideoFrame &dst, double time) override;
 

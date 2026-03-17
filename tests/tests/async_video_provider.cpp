@@ -107,6 +107,10 @@ private:
 	}
 
 public:
+	SubtitleRenderMode GetRenderMode() const override {
+		return SubtitleRenderMode::PremultipliedOverlay;
+	}
+
 	bool RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double) override {
 		overlay.premultiplied_alpha = true;
 		auto *pixel = overlay.planes[0].data;
@@ -119,6 +123,35 @@ public:
 
 	void DrawSubtitles(VideoFrame &, double) override {
 		FAIL() << "legacy subtitle path should not be used";
+	}
+};
+
+class FakeCompatibilityOnlySubtitlesProvider final : public SubtitlesProvider {
+public:
+	int load_calls = 0;
+	int render_overlay_calls = 0;
+	int draw_calls = 0;
+
+private:
+	void LoadSubtitles(const char *, size_t) override {
+		++load_calls;
+	}
+
+public:
+	SubtitleRenderMode GetRenderMode() const override {
+		return SubtitleRenderMode::CompatibilityFrameOnly;
+	}
+
+	bool RenderOverlay(SourceFrame const&, SubtitleOverlay&, double) override {
+		++render_overlay_calls;
+		return true;
+	}
+
+	void DrawSubtitles(VideoFrame &dst, double) override {
+		++draw_calls;
+		if (dst.data.size() < 2)
+			dst.data.resize(2);
+		dst.data[1] = static_cast<unsigned char>(10 + load_calls);
 	}
 };
 
@@ -305,4 +338,27 @@ TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 	EXPECT_GT(packet.composited_frame_storage->data[1], packet.source_frame_storage->data[1]);
 	EXPECT_GT(packet.composited_frame_storage->data[2], packet.source_frame_storage->data[2]);
 	EXPECT_EQ(128, packet.subtitle_overlay.planes[0].data[3]);
+}
+
+TEST(async_video_provider, compatibility_only_backend_uses_single_legacy_render) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto subtitle_file = MakeSubtitleFile("csri");
+	provider.LoadSubtitles(&subtitle_file);
+
+	auto packet = provider.GetRenderPacket(5, 5000);
+	ASSERT_TRUE(packet.source_frame_storage);
+	ASSERT_TRUE(packet.composited_frame_storage);
+	EXPECT_FALSE(packet.has_subtitle_overlay);
+	EXPECT_EQ(0, subs->render_overlay_calls);
+	EXPECT_EQ(1, subs->draw_calls);
+	EXPECT_EQ(5, packet.source_frame_storage->data[0]);
+	EXPECT_EQ(11, packet.composited_frame_storage->data[1]);
 }

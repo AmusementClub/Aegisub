@@ -44,6 +44,11 @@
 class AssFile;
 struct VideoFrame;
 
+enum class SubtitleRenderMode {
+	CompatibilityFrameOnly,
+	PremultipliedOverlay
+};
+
 class SubtitlesProvider {
 	std::vector<char> buffer;
 	virtual void LoadSubtitles(const char *data, size_t len)=0;
@@ -51,6 +56,7 @@ class SubtitlesProvider {
 public:
 	virtual ~SubtitlesProvider() = default;
 	void LoadSubtitles(AssFile *subs, int time = -1);
+	virtual SubtitleRenderMode GetRenderMode() const { return SubtitleRenderMode::CompatibilityFrameOnly; }
 	virtual bool RenderOverlay(SourceFrame const&, SubtitleOverlay&, double) { return false; }
 	virtual void DrawSubtitles(VideoFrame &dst, double time)=0;
 	virtual void Reinitialize() { }

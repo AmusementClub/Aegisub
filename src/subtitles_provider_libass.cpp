@@ -131,6 +131,7 @@ public:
 	}
 
 	SubtitleRenderMode GetRenderMode() const override { return SubtitleRenderMode::PremultipliedOverlay; }
+	bool RenderOverlayClearsTarget() const override { return true; }
 	bool RenderOverlay(SourceFrame const& source, SubtitleOverlay& overlay, double time) override;
 	void DrawSubtitles(VideoFrame &dst, double time) override;
 

@@ -15,6 +15,7 @@
 #include <libaegisub/vfr.h>
 
 #include <chrono>
+#include <cstring>
 #include <condition_variable>
 #include <mutex>
 
@@ -104,8 +105,14 @@ public:
 		return SubtitleRenderMode::PremultipliedOverlay;
 	}
 
+	bool RenderOverlayClearsTarget() const override {
+		return true;
+	}
+
 	bool RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double) override {
 		overlay.premultiplied_alpha = true;
+		for (int y = 0; y < overlay.height; ++y)
+			std::memset(overlay.planes[0].data + static_cast<std::ptrdiff_t>(y) * overlay.planes[0].stride, 0, static_cast<size_t>(overlay.width) * 4);
 		auto *pixel = overlay.planes[0].data;
 		pixel[0] = 10;
 		pixel[1] = 20;

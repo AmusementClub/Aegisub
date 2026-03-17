@@ -22,6 +22,8 @@
 #endif
 
 namespace {
+constexpr SubtitleOverlayRowRange kEmptyRowRange { 0, 0 };
+
 inline unsigned char* RowPointer(BgraSubtitleTargetView target, int y) {
 	int physical_y = target.flipped ? (target.height - 1 - y) : y;
 	return target.data + static_cast<ptrdiff_t>(physical_y) * target.stride;
@@ -65,20 +67,124 @@ bool FramesAreComparable(VideoFrame const& source, VideoFrame const& composited)
 		&& composited.data.size() >= required_composited_bytes;
 }
 
-#if defined(_M_X64) || defined(_M_IX86) || defined(__SSE2__)
-bool BuildSparsePremultipliedCompatibilityOverlaySimd(VideoFrame const& source, VideoFrame const& composited, SubtitleOverlayStorage& storage) {
+int FirstSetBit4(unsigned int mask) {
+	switch (mask & 0xF) {
+	case 0x1: case 0x3: case 0x5: case 0x7: case 0x9: case 0xB: case 0xD: case 0xF: return 0;
+	case 0x2: case 0x6: case 0xA: case 0xE: return 1;
+	case 0x4: case 0xC: return 2;
+	case 0x8: return 3;
+	default: return 0;
+	}
+}
+
+int LastSetBit4(unsigned int mask) {
+	switch (mask & 0xF) {
+	case 0x8: case 0xC: case 0xA: case 0xE: case 0x9: case 0xD: case 0xB: case 0xF: return 3;
+	case 0x4: case 0x6: case 0x5: case 0x7: return 2;
+	case 0x2: case 0x3: return 1;
+	case 0x1: return 0;
+	default: return 0;
+	}
+}
+
+bool RowBandIntersectsActivity(SubtitleOverlayStorage const& storage, int y, int height) {
+	return storage.active_row_begin < y + height && storage.active_row_end > y;
+}
+
+SubtitleOverlayRowRange ClipRowRange(SubtitleOverlayRowRange const& range, int x0, int x1) {
+	if (range.IsEmpty())
+		return kEmptyRowRange;
+
+	int clipped_x0 = std::max(range.x0, x0);
+	int clipped_x1 = std::min(range.x1, x1);
+	if (clipped_x0 >= clipped_x1)
+		return kEmptyRowRange;
+
+	return { clipped_x0, clipped_x1 };
+}
+
+bool BuildSparsePremultipliedCompatibilityOverlayScalar(VideoFrame const& source, VideoFrame const& composited, SubtitleOverlayStorage& storage) {
 	int width = static_cast<int>(source.width);
 	int height = static_cast<int>(source.height);
-	__m128i const all_ones = _mm_set1_epi32(-1);
-	__m128i const alpha_mask = _mm_set1_epi32(static_cast<int>(0xFF000000u));
+	size_t row_bytes = static_cast<size_t>(width) * 4;
+	storage.active_row_begin = height;
+	storage.active_row_end = 0;
 
 	for (int y = 0; y < height; ++y) {
 		auto const* src_row = RowPointer(source, y);
 		auto const* composited_row = RowPointer(composited, y);
-		if (std::memcmp(src_row, composited_row, static_cast<size_t>(width) * 4) == 0)
-			continue;
-
+		auto previous_range = storage.row_ranges[static_cast<size_t>(y)];
 		auto* dst_row = StorageRowPointer(storage, y);
+
+		if (std::memcmp(src_row, composited_row, row_bytes) == 0) {
+			if (!previous_range.IsEmpty())
+				std::memset(dst_row, 0, row_bytes);
+			storage.row_ranges[static_cast<size_t>(y)] = kEmptyRowRange;
+			continue;
+		}
+
+		if (!previous_range.IsEmpty())
+			std::memset(dst_row, 0, row_bytes);
+
+		int row_x0 = width;
+		int row_x1 = 0;
+		for (int x = 0; x < width; ++x) {
+			auto pixel_offset = static_cast<ptrdiff_t>(x) * 4;
+			auto const* src = src_row + pixel_offset;
+			auto const* composited_pixel = composited_row + pixel_offset;
+			auto* dst = dst_row + pixel_offset;
+			if (std::memcmp(src, composited_pixel, 4) != 0) {
+				dst[0] = composited_pixel[0];
+				dst[1] = composited_pixel[1];
+				dst[2] = composited_pixel[2];
+				dst[3] = 255;
+				row_x0 = std::min(row_x0, x);
+				row_x1 = x + 1;
+				storage.has_visible_content = true;
+			}
+		}
+
+		if (row_x0 < row_x1) {
+			storage.row_ranges[static_cast<size_t>(y)] = { row_x0, row_x1 };
+			storage.active_row_begin = std::min(storage.active_row_begin, y);
+			storage.active_row_end = y + 1;
+		}
+		else {
+			storage.row_ranges[static_cast<size_t>(y)] = kEmptyRowRange;
+		}
+	}
+
+	return true;
+}
+
+#if defined(_M_X64) || defined(_M_IX86) || defined(__SSE2__)
+bool BuildSparsePremultipliedCompatibilityOverlaySimd(VideoFrame const& source, VideoFrame const& composited, SubtitleOverlayStorage& storage) {
+	int width = static_cast<int>(source.width);
+	int height = static_cast<int>(source.height);
+	size_t row_bytes = static_cast<size_t>(width) * 4;
+	__m128i const all_ones = _mm_set1_epi32(-1);
+	__m128i const alpha_mask = _mm_set1_epi32(static_cast<int>(0xFF000000u));
+	storage.active_row_begin = height;
+	storage.active_row_end = 0;
+
+	for (int y = 0; y < height; ++y) {
+		auto const* src_row = RowPointer(source, y);
+		auto const* composited_row = RowPointer(composited, y);
+		auto previous_range = storage.row_ranges[static_cast<size_t>(y)];
+		auto* dst_row = StorageRowPointer(storage, y);
+
+		if (std::memcmp(src_row, composited_row, row_bytes) == 0) {
+			if (!previous_range.IsEmpty())
+				std::memset(dst_row, 0, row_bytes);
+			storage.row_ranges[static_cast<size_t>(y)] = kEmptyRowRange;
+			continue;
+		}
+
+		if (!previous_range.IsEmpty())
+			std::memset(dst_row, 0, row_bytes);
+
+		int row_x0 = width;
+		int row_x1 = 0;
 		int simd_width = width & ~3;
 		int x = 0;
 		for (; x < simd_width; x += 4) {
@@ -90,10 +196,13 @@ bool BuildSparsePremultipliedCompatibilityOverlaySimd(VideoFrame const& source, 
 			if (_mm_movemask_epi8(equal_mask) == 0xFFFF)
 				continue;
 
+			unsigned int changed_lanes = static_cast<unsigned int>(~_mm_movemask_ps(_mm_castsi128_ps(equal_mask))) & 0xF;
 			__m128i changed_mask = _mm_xor_si128(equal_mask, all_ones);
 			__m128i with_alpha = _mm_or_si128(composited_vec, alpha_mask);
 			__m128i sparse = _mm_and_si128(changed_mask, with_alpha);
 			_mm_storeu_si128(reinterpret_cast<__m128i*>(dst_row + static_cast<ptrdiff_t>(x) * 4), sparse);
+			row_x0 = std::min(row_x0, x + FirstSetBit4(changed_lanes));
+			row_x1 = std::max(row_x1, x + LastSetBit4(changed_lanes) + 1);
 			storage.has_visible_content = true;
 		}
 
@@ -107,14 +216,26 @@ bool BuildSparsePremultipliedCompatibilityOverlaySimd(VideoFrame const& source, 
 				dst[1] = composited_pixel[1];
 				dst[2] = composited_pixel[2];
 				dst[3] = 255;
+				row_x0 = std::min(row_x0, x);
+				row_x1 = x + 1;
 				storage.has_visible_content = true;
 			}
+		}
+
+		if (row_x0 < row_x1) {
+			storage.row_ranges[static_cast<size_t>(y)] = { row_x0, row_x1 };
+			storage.active_row_begin = std::min(storage.active_row_begin, y);
+			storage.active_row_end = y + 1;
+		}
+		else {
+			storage.row_ranges[static_cast<size_t>(y)] = kEmptyRowRange;
 		}
 	}
 
 	return true;
 }
 #endif
+
 }
 
 void ClearBgraSubtitleTarget(BgraSubtitleTargetView target) {
@@ -189,32 +310,24 @@ bool BuildSparsePremultipliedCompatibilityOverlay(VideoFrame const& source, Vide
 
 	int width = static_cast<int>(source.width);
 	int height = static_cast<int>(source.height);
-	storage.Reset(width, height, source.flipped);
+	bool reusable =
+		storage.width == width &&
+		storage.height == height &&
+		storage.flipped == source.flipped &&
+		storage.pitch == static_cast<size_t>(width) * 4 &&
+		storage.pixels.size() == static_cast<size_t>(width) * height * 4 &&
+		storage.row_ranges.size() == static_cast<size_t>(height);
+	if (!reusable)
+		storage.Reset(width, height, source.flipped);
+	else {
+		storage.dirty_rects.clear();
+		storage.has_visible_content = false;
+	}
 
 #if defined(_M_X64) || defined(_M_IX86) || defined(__SSE2__)
 	BuildSparsePremultipliedCompatibilityOverlaySimd(source, composited, storage);
 #else
-	for (int y = 0; y < height; ++y) {
-		auto const* src_row = RowPointer(source, y);
-		auto const* composited_row = RowPointer(composited, y);
-		if (std::memcmp(src_row, composited_row, static_cast<size_t>(width) * 4) == 0)
-			continue;
-
-		auto* dst_row = StorageRowPointer(storage, y);
-		for (int x = 0; x < width; ++x) {
-			auto pixel_offset = static_cast<ptrdiff_t>(x) * 4;
-			auto const* src = src_row + pixel_offset;
-			auto const* composited_pixel = composited_row + pixel_offset;
-			auto* dst = dst_row + pixel_offset;
-			if (std::memcmp(src, composited_pixel, 4) != 0) {
-				dst[0] = composited_pixel[0];
-				dst[1] = composited_pixel[1];
-				dst[2] = composited_pixel[2];
-				dst[3] = 255;
-				storage.has_visible_content = true;
-			}
-		}
-	}
+	BuildSparsePremultipliedCompatibilityOverlayScalar(source, composited, storage);
 #endif
 
 	overlay = storage.MakeView(true);
@@ -232,12 +345,16 @@ bool BuildDirtyTileRectsForOverlay(SubtitleOverlayStorage const* previous, Subti
 		previous->width == current.width &&
 		previous->height == current.height &&
 		previous->pitch == current.pitch &&
-		previous->pixels.size() == current.pixels.size();
+		previous->pixels.size() == current.pixels.size() &&
+		previous->row_ranges.size() == current.row_ranges.size();
 
 	std::vector<SubtitleOverlayDirtyRect> merged_rects;
 
 	for (int y = 0; y < current.height; y += tile_height) {
 		int rect_height = std::min(tile_height, current.height - y);
+		if (has_previous && !RowBandIntersectsActivity(current, y, rect_height) && !RowBandIntersectsActivity(*previous, y, rect_height))
+			continue;
+
 		int run_start_x = -1;
 		int run_width = 0;
 
@@ -267,10 +384,20 @@ bool BuildDirtyTileRectsForOverlay(SubtitleOverlayStorage const* previous, Subti
 			bool dirty = !has_previous;
 
 			if (has_previous) {
+				int rect_x1 = x + rect_width;
 				for (int row = 0; row < rect_height && !dirty; ++row) {
-					auto const* current_row = StorageRowPointer(current, y + row) + static_cast<ptrdiff_t>(x) * 4;
-					auto const* previous_row = StorageRowPointer(*previous, y + row) + static_cast<ptrdiff_t>(x) * 4;
-					if (std::memcmp(current_row, previous_row, static_cast<size_t>(rect_width) * 4) != 0)
+					auto current_range = ClipRowRange(current.row_ranges[static_cast<size_t>(y + row)], x, rect_x1);
+					auto previous_range = ClipRowRange(previous->row_ranges[static_cast<size_t>(y + row)], x, rect_x1);
+					if (current_range.IsEmpty() && previous_range.IsEmpty())
+						continue;
+					if (current_range.x0 != previous_range.x0 || current_range.x1 != previous_range.x1) {
+						dirty = true;
+						break;
+					}
+
+					auto const* current_row = StorageRowPointer(current, y + row) + static_cast<ptrdiff_t>(current_range.x0) * 4;
+					auto const* previous_row = StorageRowPointer(*previous, y + row) + static_cast<ptrdiff_t>(previous_range.x0) * 4;
+					if (std::memcmp(current_row, previous_row, static_cast<size_t>(current_range.x1 - current_range.x0) * 4) != 0)
 						dirty = true;
 				}
 			}

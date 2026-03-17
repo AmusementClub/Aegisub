@@ -52,6 +52,15 @@ struct SubtitleOverlayDirtyRect {
 	int height = 0;
 };
 
+struct SubtitleOverlayRowRange {
+	int x0 = 0;
+	int x1 = 0;
+
+	bool IsEmpty() const {
+		return x0 >= x1;
+	}
+};
+
 struct SubtitleOverlay {
 	SubtitleOverlayPixelFormat pixel_format = SubtitleOverlayPixelFormat::Unknown;
 	int width = 0;
@@ -89,24 +98,32 @@ struct SubtitleOverlay {
 struct SubtitleOverlayStorage {
 	std::vector<unsigned char> pixels;
 	std::vector<SubtitleOverlayDirtyRect> dirty_rects;
+	std::vector<SubtitleOverlayRowRange> row_ranges;
 	int width = 0;
 	int height = 0;
 	size_t pitch = 0;
 	bool flipped = false;
 	bool has_visible_content = false;
+	int active_row_begin = 0;
+	int active_row_end = 0;
 
 	void Reset(int new_width, int new_height, bool new_flipped, bool clear_pixels = true) {
-		bool size_changed = width != new_width || height != new_height;
+		bool geometry_changed = width != new_width || height != new_height || flipped != new_flipped;
 		width = new_width;
 		height = new_height;
 		flipped = new_flipped;
 		pitch = static_cast<size_t>(new_width) * 4;
-		if (size_changed)
+		if (geometry_changed) {
 			pixels.resize(pitch * static_cast<size_t>(new_height));
+			row_ranges.resize(static_cast<size_t>(new_height));
+		}
 		if (clear_pixels)
 			std::fill(pixels.begin(), pixels.end(), 0);
+		std::fill(row_ranges.begin(), row_ranges.end(), SubtitleOverlayRowRange{});
 		dirty_rects.clear();
 		has_visible_content = false;
+		active_row_begin = new_height;
+		active_row_end = 0;
 	}
 
 	SubtitleOverlay MakeView(bool make_premultiplied_overlay = false) {

@@ -99,7 +99,11 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 
 		if (subs_provider->GetRenderMode() == SubtitleRenderMode::PremultipliedOverlay) {
 			auto overlay_storage = acquire_buffer(subtitle_overlay_buffers);
-			overlay_storage->Reset(static_cast<int>(frame->width), static_cast<int>(frame->height), frame->flipped);
+			overlay_storage->Reset(
+				static_cast<int>(frame->width),
+				static_cast<int>(frame->height),
+				frame->flipped,
+				!subs_provider->RenderOverlayClearsTarget());
 			auto subtitle_overlay = overlay_storage->MakeView(true);
 
 			if (subs_provider->RenderOverlay(packet.source_frame, subtitle_overlay, time / 1000.)) {

@@ -107,6 +107,27 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 			auto subtitle_overlay = overlay_storage->MakeView(true);
 
 			if (subs_provider->RenderOverlay(packet.source_frame, subtitle_overlay, time / 1000.)) {
+				if (subs_provider->SupportsOverlayDirtyRects()) {
+					if (subtitle_overlay.dirty_rects && subtitle_overlay.dirty_rect_count > 0) {
+						overlay_storage->dirty_rects.assign(
+							subtitle_overlay.dirty_rects,
+							subtitle_overlay.dirty_rects + subtitle_overlay.dirty_rect_count);
+					}
+					else {
+						overlay_storage->dirty_rects.clear();
+					}
+				}
+				else {
+					overlay_storage->dirty_rects = {
+						{
+							0,
+							0,
+							static_cast<int>(frame->width),
+							static_cast<int>(frame->height)
+						}
+					};
+				}
+				subtitle_overlay = overlay_storage->MakeView(true);
 				packet.subtitle_overlay_storage = overlay_storage;
 				packet.subtitle_overlay = subtitle_overlay;
 				packet.has_subtitle_overlay = true;
@@ -120,8 +141,14 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 			subs_provider->DrawSubtitles(*composited, time / 1000.);
 			auto overlay_storage = acquire_buffer(subtitle_overlay_buffers);
 			SubtitleOverlay subtitle_overlay;
-			if (BuildSparsePremultipliedCompatibilityOverlay(*frame, *composited, *overlay_storage, subtitle_overlay)) {
-				BuildDirtyTileRectsForOverlay(previous_compatibility_overlay.get(), *overlay_storage, kCompatibilityOverlayTileSize, kCompatibilityOverlayTileSize);
+			if (BuildSparsePremultipliedCompatibilityOverlayWithDirtyTiles(
+				*frame,
+				*composited,
+				previous_compatibility_overlay.get(),
+				*overlay_storage,
+				subtitle_overlay,
+				kCompatibilityOverlayTileSize,
+				kCompatibilityOverlayTileSize)) {
 				bool should_emit_overlay =
 					overlay_storage->has_visible_content ||
 					(previous_compatibility_overlay && previous_compatibility_overlay->has_visible_content) ||

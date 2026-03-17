@@ -389,3 +389,50 @@ TEST(subtitle_overlay_blend, sparse_compatibility_overlay_reuses_surface_and_cle
 	auto reconstructed = composite_overlay(source, storage);
 	EXPECT_EQ(current_composited.data, reconstructed.data);
 }
+
+TEST(subtitle_overlay_blend, fused_sparse_overlay_matches_two_pass_dirty_diff) {
+	auto previous_source = make_frame(12, 6);
+	auto previous_composited = previous_source;
+	fill_box(previous_composited, 1, 1, 3, 1, 80, 90, 100);
+	fill_box(previous_composited, 8, 4, 2, 1, 30, 40, 50);
+
+	auto current_source = make_frame(12, 6);
+	fill_box(current_source, 1, 1, 3, 1, 5, 6, 7);
+	auto current_composited = current_source;
+	fill_box(current_composited, 2, 1, 3, 1, 100, 120, 140);
+	fill_box(current_composited, 6, 4, 3, 1, 60, 70, 90);
+
+	SubtitleOverlayStorage previous_storage;
+	SubtitleOverlay previous_overlay;
+	ASSERT_TRUE(BuildSparsePremultipliedCompatibilityOverlay(previous_source, previous_composited, previous_storage, previous_overlay));
+	ASSERT_TRUE(BuildDirtyTileRectsForOverlay(nullptr, previous_storage, 4, 2));
+
+	SubtitleOverlayStorage two_pass_storage;
+	SubtitleOverlay two_pass_overlay;
+	ASSERT_TRUE(BuildSparsePremultipliedCompatibilityOverlay(current_source, current_composited, two_pass_storage, two_pass_overlay));
+	ASSERT_TRUE(BuildDirtyTileRectsForOverlay(&previous_storage, two_pass_storage, 4, 2));
+
+	SubtitleOverlayStorage fused_storage;
+	SubtitleOverlay fused_overlay;
+	ASSERT_TRUE(BuildSparsePremultipliedCompatibilityOverlayWithDirtyTiles(
+		current_source,
+		current_composited,
+		&previous_storage,
+		fused_storage,
+		fused_overlay,
+		4,
+		2));
+
+	EXPECT_EQ(two_pass_storage.pixels, fused_storage.pixels);
+	EXPECT_EQ(two_pass_storage.dirty_rects.size(), fused_storage.dirty_rects.size());
+	for (size_t i = 0; i < two_pass_storage.dirty_rects.size(); ++i) {
+		EXPECT_EQ(two_pass_storage.dirty_rects[i].x, fused_storage.dirty_rects[i].x);
+		EXPECT_EQ(two_pass_storage.dirty_rects[i].y, fused_storage.dirty_rects[i].y);
+		EXPECT_EQ(two_pass_storage.dirty_rects[i].width, fused_storage.dirty_rects[i].width);
+		EXPECT_EQ(two_pass_storage.dirty_rects[i].height, fused_storage.dirty_rects[i].height);
+	}
+
+	apply_dirty_rects(fused_storage, previous_storage);
+	auto reconstructed = composite_overlay(current_source, previous_storage);
+	EXPECT_EQ(current_composited.data, reconstructed.data);
+}

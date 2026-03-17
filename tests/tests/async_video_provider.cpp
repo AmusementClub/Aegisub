@@ -126,6 +126,49 @@ public:
 	}
 };
 
+class FakeDirtyRectOverlaySubtitlesProvider final : public SubtitlesProvider {
+	std::vector<SubtitleOverlayDirtyRect> dirty_rects;
+	int render_calls = 0;
+
+private:
+	void LoadSubtitles(const char *, size_t) override {
+	}
+
+public:
+	SubtitleRenderMode GetRenderMode() const override {
+		return SubtitleRenderMode::PremultipliedOverlay;
+	}
+
+	bool SupportsOverlayDirtyRects() const override {
+		return true;
+	}
+
+	bool RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double) override {
+		++render_calls;
+		overlay.premultiplied_alpha = true;
+		for (int y = 0; y < overlay.height; ++y)
+			std::memset(overlay.planes[0].data + static_cast<std::ptrdiff_t>(y) * overlay.planes[0].stride, 0, static_cast<size_t>(overlay.width) * 4);
+
+		auto* pixel = overlay.planes[0].data + 4;
+		pixel[0] = 5;
+		pixel[1] = 6;
+		pixel[2] = 7;
+		pixel[3] = 255;
+
+		dirty_rects.clear();
+		if (render_calls == 1)
+			dirty_rects.push_back({ 1, 0, 1, 1 });
+
+		overlay.dirty_rects = dirty_rects.empty() ? nullptr : dirty_rects.data();
+		overlay.dirty_rect_count = static_cast<int>(dirty_rects.size());
+		return true;
+	}
+
+	void DrawSubtitles(VideoFrame &, double) override {
+		FAIL() << "legacy subtitle path should not be used";
+	}
+};
+
 class FakeCompatibilityOnlySubtitlesProvider final : public SubtitlesProvider {
 public:
 	int load_calls = 0;
@@ -339,6 +382,37 @@ TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 	EXPECT_GT(packet.composited_frame_storage->data[1], packet.source_frame_storage->data[1]);
 	EXPECT_GT(packet.composited_frame_storage->data[2], packet.source_frame_storage->data[2]);
 	EXPECT_EQ(128, packet.subtitle_overlay.planes[0].data[3]);
+	ASSERT_EQ(1, packet.subtitle_overlay.dirty_rect_count);
+	EXPECT_EQ(0, packet.subtitle_overlay.dirty_rects[0].x);
+	EXPECT_EQ(0, packet.subtitle_overlay.dirty_rects[0].y);
+	EXPECT_EQ(2, packet.subtitle_overlay.dirty_rects[0].width);
+	EXPECT_EQ(2, packet.subtitle_overlay.dirty_rects[0].height);
+}
+
+TEST(async_video_provider, premultiplied_overlay_provider_can_supply_dirty_rects) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeDirtyRectOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto subtitle_file = MakeSubtitleFile("overlay");
+	provider.LoadSubtitles(&subtitle_file);
+
+	auto first = provider.GetRenderPacket(9, 9000);
+	auto second = provider.GetRenderPacket(9, 9000);
+
+	ASSERT_TRUE(first.has_subtitle_overlay);
+	ASSERT_TRUE(second.has_subtitle_overlay);
+	ASSERT_EQ(1, first.subtitle_overlay.dirty_rect_count);
+	EXPECT_EQ(1, first.subtitle_overlay.dirty_rects[0].x);
+	EXPECT_EQ(0, first.subtitle_overlay.dirty_rects[0].y);
+	EXPECT_EQ(1, first.subtitle_overlay.dirty_rects[0].width);
+	EXPECT_EQ(1, first.subtitle_overlay.dirty_rects[0].height);
+	EXPECT_EQ(0, second.subtitle_overlay.dirty_rect_count);
 }
 
 TEST(async_video_provider, compatibility_only_backend_uses_single_legacy_render) {

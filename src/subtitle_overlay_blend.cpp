@@ -67,6 +67,31 @@ bool FramesAreComparable(VideoFrame const& source, VideoFrame const& composited)
 		&& composited.data.size() >= required_composited_bytes;
 }
 
+void PrepareSparseOverlayStorage(SubtitleOverlayStorage& storage, int width, int height, bool flipped) {
+	bool reusable =
+		storage.width == width &&
+		storage.height == height &&
+		storage.flipped == flipped &&
+		storage.pitch == static_cast<size_t>(width) * 4 &&
+		storage.pixels.size() == static_cast<size_t>(width) * height * 4 &&
+		storage.row_ranges.size() == static_cast<size_t>(height);
+	if (!reusable)
+		storage.Reset(width, height, flipped);
+	else {
+		storage.dirty_rects.clear();
+		storage.has_visible_content = false;
+	}
+}
+
+bool PreviousOverlayComparable(SubtitleOverlayStorage const* previous, SubtitleOverlayStorage const& current) {
+	return previous &&
+		previous->width == current.width &&
+		previous->height == current.height &&
+		previous->pitch == current.pitch &&
+		previous->pixels.size() == current.pixels.size() &&
+		previous->row_ranges.size() == current.row_ranges.size();
+}
+
 int FirstSetBit4(unsigned int mask) {
 	switch (mask & 0xF) {
 	case 0x1: case 0x3: case 0x5: case 0x7: case 0x9: case 0xB: case 0xD: case 0xF: return 0;
@@ -101,6 +126,111 @@ SubtitleOverlayRowRange ClipRowRange(SubtitleOverlayRowRange const& range, int x
 		return kEmptyRowRange;
 
 	return { clipped_x0, clipped_x1 };
+}
+
+void MarkDirtyTilesForRow(
+	SubtitleOverlayStorage const& current,
+	SubtitleOverlayStorage const& previous,
+	int y,
+	int tile_width,
+	int tile_height,
+	int tiles_x,
+	std::vector<unsigned char>& dirty_tiles) {
+	auto current_range = current.row_ranges[static_cast<size_t>(y)];
+	auto previous_range = previous.row_ranges[static_cast<size_t>(y)];
+	if (current_range.IsEmpty() && previous_range.IsEmpty())
+		return;
+
+	int min_x = current.width;
+	int max_x = 0;
+	if (!current_range.IsEmpty()) {
+		min_x = std::min(min_x, current_range.x0);
+		max_x = std::max(max_x, current_range.x1);
+	}
+	if (!previous_range.IsEmpty()) {
+		min_x = std::min(min_x, previous_range.x0);
+		max_x = std::max(max_x, previous_range.x1);
+	}
+	if (min_x >= max_x)
+		return;
+
+	int tile_y = y / tile_height;
+	int tile_begin = min_x / tile_width;
+	int tile_end = (max_x - 1) / tile_width;
+	for (int tile_x = tile_begin; tile_x <= tile_end; ++tile_x) {
+		int rect_x0 = tile_x * tile_width;
+		int rect_x1 = std::min(current.width, rect_x0 + tile_width);
+		auto clipped_current = ClipRowRange(current_range, rect_x0, rect_x1);
+		auto clipped_previous = ClipRowRange(previous_range, rect_x0, rect_x1);
+		if (clipped_current.IsEmpty() && clipped_previous.IsEmpty())
+			continue;
+
+		if (clipped_current.x0 != clipped_previous.x0 || clipped_current.x1 != clipped_previous.x1) {
+			dirty_tiles[static_cast<size_t>(tile_y) * tiles_x + tile_x] = 1;
+			continue;
+		}
+
+		auto const* current_row = StorageRowPointer(current, y) + static_cast<ptrdiff_t>(clipped_current.x0) * 4;
+		auto const* previous_row = StorageRowPointer(previous, y) + static_cast<ptrdiff_t>(clipped_previous.x0) * 4;
+		if (std::memcmp(current_row, previous_row, static_cast<size_t>(clipped_current.x1 - clipped_current.x0) * 4) != 0)
+			dirty_tiles[static_cast<size_t>(tile_y) * tiles_x + tile_x] = 1;
+	}
+}
+
+bool BuildDirtyRectsFromTileMask(SubtitleOverlayStorage& current, std::vector<unsigned char> const& dirty_tiles, int tile_width, int tile_height) {
+	current.dirty_rects.clear();
+	if (current.width <= 0 || current.height <= 0 || tile_width <= 0 || tile_height <= 0)
+		return false;
+
+	int tiles_x = (current.width + tile_width - 1) / tile_width;
+	int tiles_y = (current.height + tile_height - 1) / tile_height;
+	std::vector<SubtitleOverlayDirtyRect> merged_rects;
+
+	for (int tile_y = 0; tile_y < tiles_y; ++tile_y) {
+		int y = tile_y * tile_height;
+		int rect_height = std::min(tile_height, current.height - y);
+		int run_start_x = -1;
+		int run_width = 0;
+
+		auto flush_run = [&]() {
+			if (run_start_x < 0)
+				return;
+
+			if (!merged_rects.empty()) {
+				auto& prev_rect = merged_rects.back();
+				if (prev_rect.x == run_start_x
+					&& prev_rect.width == run_width
+					&& prev_rect.y + prev_rect.height == y) {
+					prev_rect.height += rect_height;
+					run_start_x = -1;
+					run_width = 0;
+					return;
+				}
+			}
+
+			merged_rects.push_back({ run_start_x, y, run_width, rect_height });
+			run_start_x = -1;
+			run_width = 0;
+		};
+
+		for (int tile_x = 0; tile_x < tiles_x; ++tile_x) {
+			if (!dirty_tiles[static_cast<size_t>(tile_y) * tiles_x + tile_x]) {
+				flush_run();
+				continue;
+			}
+
+			int rect_x = tile_x * tile_width;
+			int rect_width = std::min(tile_width, current.width - rect_x);
+			if (run_start_x < 0)
+				run_start_x = rect_x;
+			run_width += rect_width;
+		}
+
+		flush_run();
+	}
+
+	current.dirty_rects = std::move(merged_rects);
+	return !current.dirty_rects.empty();
 }
 
 bool BuildSparsePremultipliedCompatibilityOverlayScalar(VideoFrame const& source, VideoFrame const& composited, SubtitleOverlayStorage& storage) {
@@ -158,12 +288,20 @@ bool BuildSparsePremultipliedCompatibilityOverlayScalar(VideoFrame const& source
 }
 
 #if defined(_M_X64) || defined(_M_IX86) || defined(__SSE2__)
-bool BuildSparsePremultipliedCompatibilityOverlaySimd(VideoFrame const& source, VideoFrame const& composited, SubtitleOverlayStorage& storage) {
+bool BuildSparsePremultipliedCompatibilityOverlaySimd(
+	VideoFrame const& source,
+	VideoFrame const& composited,
+	SubtitleOverlayStorage& storage,
+	SubtitleOverlayStorage const* previous = nullptr,
+	int tile_width = 0,
+	int tile_height = 0,
+	std::vector<unsigned char>* dirty_tiles = nullptr) {
 	int width = static_cast<int>(source.width);
 	int height = static_cast<int>(source.height);
 	size_t row_bytes = static_cast<size_t>(width) * 4;
 	__m128i const all_ones = _mm_set1_epi32(-1);
 	__m128i const alpha_mask = _mm_set1_epi32(static_cast<int>(0xFF000000u));
+	int tiles_x = (tile_width > 0) ? (width + tile_width - 1) / tile_width : 0;
 	storage.active_row_begin = height;
 	storage.active_row_end = 0;
 
@@ -230,6 +368,9 @@ bool BuildSparsePremultipliedCompatibilityOverlaySimd(VideoFrame const& source, 
 		else {
 			storage.row_ranges[static_cast<size_t>(y)] = kEmptyRowRange;
 		}
+
+		if (previous && dirty_tiles && tile_width > 0 && tile_height > 0)
+			MarkDirtyTilesForRow(storage, *previous, y, tile_width, tile_height, tiles_x, *dirty_tiles);
 	}
 
 	return true;
@@ -310,19 +451,7 @@ bool BuildSparsePremultipliedCompatibilityOverlay(VideoFrame const& source, Vide
 
 	int width = static_cast<int>(source.width);
 	int height = static_cast<int>(source.height);
-	bool reusable =
-		storage.width == width &&
-		storage.height == height &&
-		storage.flipped == source.flipped &&
-		storage.pitch == static_cast<size_t>(width) * 4 &&
-		storage.pixels.size() == static_cast<size_t>(width) * height * 4 &&
-		storage.row_ranges.size() == static_cast<size_t>(height);
-	if (!reusable)
-		storage.Reset(width, height, source.flipped);
-	else {
-		storage.dirty_rects.clear();
-		storage.has_visible_content = false;
-	}
+	PrepareSparseOverlayStorage(storage, width, height, source.flipped);
 
 #if defined(_M_X64) || defined(_M_IX86) || defined(__SSE2__)
 	BuildSparsePremultipliedCompatibilityOverlaySimd(source, composited, storage);
@@ -335,18 +464,57 @@ bool BuildSparsePremultipliedCompatibilityOverlay(VideoFrame const& source, Vide
 	return true;
 }
 
+bool BuildSparsePremultipliedCompatibilityOverlayWithDirtyTiles(
+	VideoFrame const& source,
+	VideoFrame const& composited,
+	SubtitleOverlayStorage const* previous,
+	SubtitleOverlayStorage& storage,
+	SubtitleOverlay& overlay,
+	int tile_width,
+	int tile_height) {
+	if (!FramesAreComparable(source, composited) || tile_width <= 0 || tile_height <= 0) {
+		overlay = { };
+		return false;
+	}
+
+	int width = static_cast<int>(source.width);
+	int height = static_cast<int>(source.height);
+	PrepareSparseOverlayStorage(storage, width, height, source.flipped);
+
+	auto const has_previous = PreviousOverlayComparable(previous, storage);
+	if (!has_previous) {
+		if (!BuildSparsePremultipliedCompatibilityOverlay(source, composited, storage, overlay))
+			return false;
+		BuildDirtyTileRectsForOverlay(previous, storage, tile_width, tile_height);
+		overlay = storage.MakeView(true);
+		overlay.color_role = SubtitleOverlayColorRole::SubtitleVideoCompatibility;
+		return true;
+	}
+
+	int tiles_x = (width + tile_width - 1) / tile_width;
+	int tiles_y = (height + tile_height - 1) / tile_height;
+	std::vector<unsigned char> dirty_tiles(static_cast<size_t>(tiles_x) * tiles_y, 0);
+
+#if defined(_M_X64) || defined(_M_IX86) || defined(__SSE2__)
+	BuildSparsePremultipliedCompatibilityOverlaySimd(source, composited, storage, previous, tile_width, tile_height, &dirty_tiles);
+#else
+	BuildSparsePremultipliedCompatibilityOverlayScalar(source, composited, storage);
+	for (int y = 0; y < height; ++y)
+		MarkDirtyTilesForRow(storage, *previous, y, tile_width, tile_height, tiles_x, dirty_tiles);
+#endif
+
+	BuildDirtyRectsFromTileMask(storage, dirty_tiles, tile_width, tile_height);
+	overlay = storage.MakeView(true);
+	overlay.color_role = SubtitleOverlayColorRole::SubtitleVideoCompatibility;
+	return true;
+}
+
 bool BuildDirtyTileRectsForOverlay(SubtitleOverlayStorage const* previous, SubtitleOverlayStorage& current, int tile_width, int tile_height) {
 	current.dirty_rects.clear();
 	if (current.width <= 0 || current.height <= 0 || current.pitch == 0 || tile_width <= 0 || tile_height <= 0)
 		return false;
 
-	auto const has_previous =
-		previous &&
-		previous->width == current.width &&
-		previous->height == current.height &&
-		previous->pitch == current.pitch &&
-		previous->pixels.size() == current.pixels.size() &&
-		previous->row_ranges.size() == current.row_ranges.size();
+	auto const has_previous = PreviousOverlayComparable(previous, current);
 
 	std::vector<SubtitleOverlayDirtyRect> merged_rects;
 

@@ -50,6 +50,8 @@
 #include <chrono>
 #include <memory>
 #include <mutex>
+#include <utility>
+#include <vector>
 
 #include <wx/intl.h>
 #include <wx/thread.h>
@@ -86,10 +88,57 @@ struct cache_thread_shared {
 	~cache_thread_shared() { if (renderer) ass_renderer_done(renderer); }
 };
 
+bool RectsTouchOrOverlap(SubtitleOverlayDirtyRect const& a, SubtitleOverlayDirtyRect const& b) {
+	return a.x <= b.x + b.width
+		&& b.x <= a.x + a.width
+		&& a.y <= b.y + b.height
+		&& b.y <= a.y + a.height;
+}
+
+SubtitleOverlayDirtyRect MergeRects(SubtitleOverlayDirtyRect const& a, SubtitleOverlayDirtyRect const& b) {
+	int x0 = std::min(a.x, b.x);
+	int y0 = std::min(a.y, b.y);
+	int x1 = std::max(a.x + a.width, b.x + b.width);
+	int y1 = std::max(a.y + a.height, b.y + b.height);
+	return { x0, y0, x1 - x0, y1 - y0 };
+}
+
+std::vector<SubtitleOverlayDirtyRect> MergeDirtyRects(std::vector<SubtitleOverlayDirtyRect> rects) {
+	std::vector<SubtitleOverlayDirtyRect> merged;
+	for (auto const& rect : rects) {
+		if (rect.width <= 0 || rect.height <= 0)
+			continue;
+
+		SubtitleOverlayDirtyRect current = rect;
+		bool merged_any = true;
+		while (merged_any) {
+			merged_any = false;
+			for (auto it = merged.begin(); it != merged.end(); ++it) {
+				if (!RectsTouchOrOverlap(*it, current))
+					continue;
+
+				current = MergeRects(*it, current);
+				merged.erase(it);
+				merged_any = true;
+				break;
+			}
+		}
+		merged.push_back(current);
+	}
+	return merged;
+}
+
 class LibassSubtitlesProvider final : public SubtitlesProvider {
 	agi::BackgroundRunner *br;
 	std::shared_ptr<cache_thread_shared> shared;
 	ASS_Track* ass_track = nullptr;
+	std::vector<SubtitleOverlayDirtyRect> dirty_rects;
+	std::vector<SubtitleOverlayDirtyRect> visible_rects;
+	unsigned char* last_overlay_data = nullptr;
+	ptrdiff_t last_overlay_stride = 0;
+	int last_overlay_width = 0;
+	int last_overlay_height = 0;
+	bool last_overlay_flipped = false;
 
 	ASS_Renderer *renderer() {
 		if (!shared->ready.IsReady()) {
@@ -128,10 +177,18 @@ public:
 		if (ass_track) ass_free_track(ass_track);
 		ass_track = ass_read_memory(library, const_cast<char *>(data), len, nullptr);
 		if (!ass_track) throw agi::InternalError("libass failed to load subtitles.");
+		dirty_rects.clear();
+		visible_rects.clear();
+		last_overlay_data = nullptr;
+		last_overlay_stride = 0;
+		last_overlay_width = 0;
+		last_overlay_height = 0;
+		last_overlay_flipped = false;
 	}
 
 	SubtitleRenderMode GetRenderMode() const override { return SubtitleRenderMode::PremultipliedOverlay; }
 	bool RenderOverlayClearsTarget() const override { return true; }
+	bool SupportsOverlayDirtyRects() const override { return true; }
 	bool RenderOverlay(SourceFrame const& source, SubtitleOverlay& overlay, double time) override;
 	void DrawSubtitles(VideoFrame &dst, double time) override;
 
@@ -185,7 +242,8 @@ bool LibassSubtitlesProvider::RenderOverlay(SourceFrame const& source, SubtitleO
 	ass_set_frame_size(renderer(), render_width, render_height);
 	ass_set_storage_size(renderer(), render_width, render_height);
 
-	ASS_Image* img = ass_render_frame(renderer(), ass_track, int(time * 1000), nullptr);
+	int detect_change = 0;
+	ASS_Image* img = ass_render_frame(renderer(), ass_track, int(time * 1000), &detect_change);
 	BgraSubtitleTargetView target {
 		overlay.planes[0].data,
 		overlay.planes[0].stride,
@@ -200,10 +258,28 @@ bool LibassSubtitlesProvider::RenderOverlay(SourceFrame const& source, SubtitleO
 	overlay.composition_mode = overlay.premultiplied_alpha
 		? SubtitleOverlayCompositionMode::PremultipliedAlpha
 		: SubtitleOverlayCompositionMode::Unsupported;
-	if (overlay.premultiplied_alpha)
+
+	bool same_overlay_target =
+		overlay.premultiplied_alpha &&
+		last_overlay_data == overlay.planes[0].data &&
+		last_overlay_stride == overlay.planes[0].stride &&
+		last_overlay_width == overlay.width &&
+		last_overlay_height == overlay.height &&
+		last_overlay_flipped == overlay.flipped;
+	bool needs_raster =
+		!overlay.premultiplied_alpha ||
+		detect_change != 0 ||
+		!same_overlay_target;
+
+	if (overlay.premultiplied_alpha && needs_raster)
 		ClearBgraSubtitleTarget(target);
 
+	std::vector<SubtitleOverlayDirtyRect> current_visible_rects;
 	for (; img; img = img->next) {
+		current_visible_rects.push_back({ img->dst_x, img->dst_y, img->w, img->h });
+		if (!needs_raster)
+			continue;
+
 		BlendLibassMaskIntoBgraTarget(
 			target,
 			blend_mode,
@@ -214,6 +290,26 @@ bool LibassSubtitlesProvider::RenderOverlay(SourceFrame const& source, SubtitleO
 			img->bitmap,
 			img->stride,
 			static_cast<std::uint32_t>(img->color));
+	}
+
+	if (overlay.premultiplied_alpha) {
+		if (detect_change != 0) {
+			dirty_rects = visible_rects;
+			dirty_rects.insert(dirty_rects.end(), current_visible_rects.begin(), current_visible_rects.end());
+			dirty_rects = MergeDirtyRects(std::move(dirty_rects));
+			visible_rects = MergeDirtyRects(std::move(current_visible_rects));
+		}
+		else {
+			dirty_rects.clear();
+		}
+
+		overlay.dirty_rects = dirty_rects.empty() ? nullptr : dirty_rects.data();
+		overlay.dirty_rect_count = static_cast<int>(dirty_rects.size());
+		last_overlay_data = overlay.planes[0].data;
+		last_overlay_stride = overlay.planes[0].stride;
+		last_overlay_width = overlay.width;
+		last_overlay_height = overlay.height;
+		last_overlay_flipped = overlay.flipped;
 	}
 
 	return true;

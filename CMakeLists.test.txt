@@ -63,6 +63,7 @@ if(GTEST_FOUND)
         tests/tests/scope_exit.cpp
         tests/tests/signals.cpp
         tests/tests/split.cpp
+        tests/tests/source_frame_overlay.cpp
         tests/tests/subtitle_format_microdvd.cpp
         tests/tests/syntax_highlight.cpp
         tests/tests/thesaurus.cpp

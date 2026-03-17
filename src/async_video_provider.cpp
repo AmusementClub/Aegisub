@@ -20,6 +20,8 @@
 #include "ass_file.h"
 #include "export_fixstyle.h"
 #include "include/aegisub/subtitles_provider.h"
+#include "source_frame.h"
+#include "subtitle_overlay.h"
 #include "video_frame.h"
 #include "video_provider_manager.h"
 
@@ -75,7 +77,10 @@ std::shared_ptr<VideoFrame> AsyncVideoProvider::ProcFrame(int frame_number, doub
 	catch (agi::Exception const& err) { throw SubtitlesProviderErrorEvent(err.GetMessage()); }
 
 	try {
-		subs_provider->DrawSubtitles(*frame, time / 1000.);
+		auto source_frame = MakeSourceFrameView(*frame, source_provider->GetColorSpace());
+		auto subtitle_overlay = MakeLegacyBgraSubtitleOverlayView(*frame);
+		if (!subs_provider->RenderOverlay(source_frame, subtitle_overlay, time / 1000.))
+			subs_provider->DrawSubtitles(*frame, time / 1000.);
 	}
 	catch (agi::UserCancelException const&) { }
 

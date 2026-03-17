@@ -34,6 +34,9 @@
 
 #pragma once
 
+#include "../../source_frame.h"
+#include "../../subtitle_overlay.h"
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -48,6 +51,7 @@ class SubtitlesProvider {
 public:
 	virtual ~SubtitlesProvider() = default;
 	void LoadSubtitles(AssFile *subs, int time = -1);
+	virtual bool RenderOverlay(SourceFrame const&, SubtitleOverlay&, double) { return false; }
 	virtual void DrawSubtitles(VideoFrame &dst, double time)=0;
 	virtual void Reinitialize() { }
 };

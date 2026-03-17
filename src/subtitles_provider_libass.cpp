@@ -189,6 +189,15 @@ public:
 	SubtitleRenderMode GetRenderMode() const override { return SubtitleRenderMode::PremultipliedOverlay; }
 	bool RenderOverlayClearsTarget() const override { return true; }
 	bool SupportsOverlayDirtyRects() const override { return true; }
+	void InvalidateOverlayState() override {
+		dirty_rects.clear();
+		visible_rects.clear();
+		last_overlay_data = nullptr;
+		last_overlay_stride = 0;
+		last_overlay_width = 0;
+		last_overlay_height = 0;
+		last_overlay_flipped = false;
+	}
 	bool RenderOverlay(SourceFrame const& source, SubtitleOverlay& overlay, double time) override;
 	void DrawSubtitles(VideoFrame &dst, double time) override;
 

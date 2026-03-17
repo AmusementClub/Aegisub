@@ -169,6 +169,49 @@ public:
 	}
 };
 
+class FakeDropSensitiveOverlaySubtitlesProvider final : public SubtitlesProvider {
+	std::vector<SubtitleOverlayDirtyRect> dirty_rects;
+	int render_calls = 0;
+
+private:
+	void LoadSubtitles(const char *, size_t) override {
+	}
+
+public:
+	SubtitleRenderMode GetRenderMode() const override {
+		return SubtitleRenderMode::PremultipliedOverlay;
+	}
+
+	bool SupportsOverlayDirtyRects() const override {
+		return true;
+	}
+
+	bool RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double) override {
+		++render_calls;
+		overlay.premultiplied_alpha = true;
+		for (int y = 0; y < overlay.height; ++y)
+			std::memset(overlay.planes[0].data + static_cast<std::ptrdiff_t>(y) * overlay.planes[0].stride, 0, static_cast<size_t>(overlay.width) * 4);
+
+		auto* pixel = overlay.planes[0].data + 4;
+		pixel[0] = static_cast<unsigned char>(10 + render_calls);
+		pixel[1] = 20;
+		pixel[2] = 30;
+		pixel[3] = 255;
+
+		dirty_rects.clear();
+		if (render_calls == 1)
+			dirty_rects.push_back({ 0, 0, overlay.width, overlay.height });
+
+		overlay.dirty_rects = dirty_rects.empty() ? nullptr : dirty_rects.data();
+		overlay.dirty_rect_count = static_cast<int>(dirty_rects.size());
+		return true;
+	}
+
+	void DrawSubtitles(VideoFrame &, double) override {
+		FAIL() << "legacy subtitle path should not be used";
+	}
+};
+
 class FakeCompatibilityOnlySubtitlesProvider final : public SubtitlesProvider {
 public:
 	int load_calls = 0;
@@ -202,6 +245,9 @@ struct RecordedFrame {
 	int frame_number = -1;
 	int subtitle_generation = -1;
 	double time = 0.0;
+	bool has_overlay = false;
+	int overlay_dirty_rect_count = 0;
+	bool overlay_force_full_upload = false;
 };
 
 class EventRecorder {
@@ -220,6 +266,9 @@ public:
 		frame.frame_number = display_frame && !display_frame->data.empty() ? display_frame->data[0] : -1;
 		frame.subtitle_generation = display_frame && display_frame->data.size() > 1 ? display_frame->data[1] : -1;
 		frame.time = frame_evt->time;
+		frame.has_overlay = frame_evt->packet.has_subtitle_overlay;
+		frame.overlay_dirty_rect_count = frame_evt->packet.subtitle_overlay.dirty_rect_count;
+		frame.overlay_force_full_upload = frame_evt->packet.subtitle_overlay.force_full_upload;
 
 		{
 			std::lock_guard<std::mutex> lock(mutex);
@@ -542,4 +591,40 @@ TEST(async_video_provider, compatibility_overlay_uses_overflow_only_when_two_slo
 	auto* fourth_storage = fourth.subtitle_overlay_storage.get();
 	ASSERT_TRUE(fourth_storage);
 	EXPECT_EQ(second_storage, fourth_storage);
+}
+
+TEST(async_video_provider, dropped_packet_forces_full_overlay_upload_on_next_delivered_event) {
+	auto state = std::make_shared<VideoProviderState>();
+	state->block_next = true;
+	auto *subs = new FakeDropSensitiveOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto subtitle_file = MakeSubtitleFile("overlay");
+	provider.LoadSubtitles(&subtitle_file);
+
+	provider.RequestFrame(1, 1000);
+	{
+		std::unique_lock<std::mutex> lock(state->mutex);
+		ASSERT_TRUE(state->cv.wait_for(lock, std::chrono::seconds(2), [&] { return state->entered; }));
+	}
+
+	provider.RequestFrame(2, 2000);
+
+	{
+		std::lock_guard<std::mutex> lock(state->mutex);
+		state->released = true;
+	}
+	state->cv.notify_all();
+
+	ASSERT_TRUE(recorder.WaitForCount(1));
+	auto frames = recorder.Snapshot();
+	ASSERT_EQ(1u, frames.size());
+	EXPECT_EQ(2, frames.back().frame_number);
+	EXPECT_TRUE(frames.back().has_overlay);
+	EXPECT_TRUE(frames.back().overlay_force_full_upload);
 }

@@ -82,6 +82,11 @@ inline ModernGLOverlayUploadPlan DecideModernGLOverlayUploadPlan(
 	plan.next_state.has_allocated_resources = true;
 	plan.next_state.has_visible_content = true;
 
+	if (overlay->force_full_upload) {
+		plan.action = ModernGLOverlayUploadAction::FullUpload;
+		return plan;
+	}
+
 	if (!layout_matches) {
 		plan.action = ModernGLOverlayUploadAction::FullUpload;
 		return plan;

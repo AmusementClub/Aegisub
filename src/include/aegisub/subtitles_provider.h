@@ -59,6 +59,7 @@ public:
 	virtual SubtitleRenderMode GetRenderMode() const { return SubtitleRenderMode::CompatibilityFrameOnly; }
 	virtual bool RenderOverlayClearsTarget() const { return false; }
 	virtual bool SupportsOverlayDirtyRects() const { return false; }
+	virtual void InvalidateOverlayState() { }
 	virtual bool RenderOverlay(SourceFrame const&, SubtitleOverlay&, double) { return false; }
 	virtual void DrawSubtitles(VideoFrame &dst, double time)=0;
 	virtual void Reinitialize() { }

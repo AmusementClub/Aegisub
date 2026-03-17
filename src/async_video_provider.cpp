@@ -77,6 +77,15 @@ std::shared_ptr<SubtitleOverlayStorage> acquire_compatibility_overlay_buffer(
 }
 }
 
+void AsyncVideoProvider::InvalidateOverlayPipelineState(bool force_full_upload) {
+	previous_compatibility_overlay.reset();
+	next_compatibility_overlay_buffer = 0;
+	if (subs_provider)
+		subs_provider->InvalidateOverlayState();
+	if (force_full_upload)
+		force_next_overlay_full_upload = true;
+}
+
 VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double time, bool raw) {
 	VideoRenderPacket packet;
 
@@ -93,8 +102,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 	packet.time = time;
 
 	if (raw || !subs_provider || !subs) {
-		previous_compatibility_overlay.reset();
-		next_compatibility_overlay_buffer = 0;
+		InvalidateOverlayPipelineState(false);
 		packet.composited_frame_storage = frame;
 		return packet;
 	}
@@ -156,6 +164,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 					};
 				}
 				subtitle_overlay = overlay_storage->MakeView(true);
+				subtitle_overlay.force_full_upload = force_next_overlay_full_upload;
 				packet.subtitle_overlay_storage = overlay_storage;
 				packet.subtitle_overlay = subtitle_overlay;
 				packet.has_subtitle_overlay = true;
@@ -188,6 +197,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 				if (should_emit_overlay) {
 					subtitle_overlay = overlay_storage->MakeView(true);
 					subtitle_overlay.color_role = SubtitleOverlayColorRole::SubtitleVideoCompatibility;
+					subtitle_overlay.force_full_upload = force_next_overlay_full_upload;
 					packet.subtitle_overlay_storage = overlay_storage;
 					packet.subtitle_overlay = subtitle_overlay;
 					packet.has_subtitle_overlay = true;
@@ -242,8 +252,7 @@ AsyncVideoProvider::~AsyncVideoProvider() {
 void AsyncVideoProvider::LoadSubtitles(const AssFile *new_subs) throw() {
 	auto copy = agi::make_unique<AssFile>(*new_subs);
 	++content_version;
-	previous_compatibility_overlay.reset();
-	next_compatibility_overlay_buffer = 0;
+	InvalidateOverlayPipelineState(false);
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_subs = std::move(copy);
@@ -256,8 +265,7 @@ void AsyncVideoProvider::UpdateSubtitles(const AssFile *new_subs, const AssDialo
 	(void)changed;
 	auto copy = agi::make_unique<AssFile>(*new_subs);
 	++content_version;
-	previous_compatibility_overlay.reset();
-	next_compatibility_overlay_buffer = 0;
+	InvalidateOverlayPipelineState(false);
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_subs = std::move(copy);
@@ -415,8 +423,13 @@ bool AsyncVideoProvider::ProcessPending() {
 		bool should_deliver =
 			work.content_version == current_content_version &&
 			work.request_version == current_request_version;
-		if (should_deliver)
+		if (should_deliver) {
 			DeliverEvent(std::move(evt));
+			force_next_overlay_full_upload = false;
+		}
+		else {
+			InvalidateOverlayPipelineState(true);
+		}
 	}
 	catch (wxEvent const& err) {
 		auto current_content_version = content_version.load(std::memory_order_relaxed);
@@ -426,6 +439,8 @@ bool AsyncVideoProvider::ProcessPending() {
 			work.request_version == current_request_version;
 		if (should_deliver)
 			DeliverEvent(std::unique_ptr<wxEvent>(err.Clone()));
+		else
+			InvalidateOverlayPipelineState(true);
 	}
 
 	return true;
@@ -451,8 +466,7 @@ VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bo
 
 void AsyncVideoProvider::SetColorSpace(std::string const& matrix) {
 	++content_version;
-	previous_compatibility_overlay.reset();
-	next_compatibility_overlay_buffer = 0;
+	InvalidateOverlayPipelineState(false);
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_color_space = matrix;

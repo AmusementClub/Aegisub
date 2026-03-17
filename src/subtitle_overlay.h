@@ -75,6 +75,7 @@ struct SubtitleOverlay {
 	std::array<SubtitleOverlayPlaneView, 4> planes = { };
 	SubtitleOverlayDirtyRect const* dirty_rects = nullptr;
 	int dirty_rect_count = 0;
+	bool force_full_upload = false;
 	SubtitleOverlayColorRole color_role = SubtitleOverlayColorRole::SubtitleSdrOverlay;
 	SubtitleOverlayCompositionMode composition_mode = SubtitleOverlayCompositionMode::Unsupported;
 	std::string nominal_color_space = "BT.709";

@@ -132,3 +132,25 @@ TEST(modern_gl_overlay_upload_plan, composition_mode_change_forces_full_upload) 
 	EXPECT_EQ(ModernGLOverlayUploadAction::FullUpload, plan.action);
 	EXPECT_TRUE(plan.next_state.has_visible_content);
 }
+
+TEST(modern_gl_overlay_upload_plan, force_full_upload_overrides_reuse_path) {
+	auto storage = make_storage(1920, 1080);
+	auto overlay = storage.MakeView(true);
+	overlay.canvas_width = 1920;
+	overlay.canvas_height = 1080;
+	overlay.composition_mode = SubtitleOverlayCompositionMode::PremultipliedAlpha;
+	overlay.force_full_upload = true;
+
+	ModernGLOverlayLayerState state;
+	state.width = 1920;
+	state.height = 1080;
+	state.canvas_width = 1920;
+	state.canvas_height = 1080;
+	state.has_allocated_resources = true;
+	state.has_visible_content = true;
+	state.composition_mode = SubtitleOverlayCompositionMode::PremultipliedAlpha;
+
+	auto plan = DecideModernGLOverlayUploadPlan(state, &overlay);
+	EXPECT_EQ(ModernGLOverlayUploadAction::FullUpload, plan.action);
+	EXPECT_TRUE(plan.next_state.has_visible_content);
+}

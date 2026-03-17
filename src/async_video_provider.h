@@ -90,6 +90,7 @@ class AsyncVideoProvider {
 	std::array<std::shared_ptr<SubtitleOverlayStorage>, 2> compatibility_overlay_buffers = { };
 	int next_compatibility_overlay_buffer = 0;
 	std::shared_ptr<SubtitleOverlayStorage> previous_compatibility_overlay;
+	bool force_next_overlay_full_upload = false;
 
 	std::mutex pending_mutex;
 	std::unique_ptr<AssFile> pending_subs;
@@ -102,6 +103,7 @@ class AsyncVideoProvider {
 	bool processing_scheduled = false;
 
 	void DeliverEvent(std::unique_ptr<wxEvent> evt);
+	void InvalidateOverlayPipelineState(bool force_full_upload);
 	void ScheduleProcessing();
 	bool ProcessPending();
 

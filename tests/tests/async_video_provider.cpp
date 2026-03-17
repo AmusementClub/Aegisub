@@ -476,3 +476,34 @@ TEST(async_video_provider, compatibility_overlay_reuses_surface_when_content_is_
 	EXPECT_GT(first.subtitle_overlay.dirty_rect_count, 0);
 	EXPECT_EQ(0, second.subtitle_overlay.dirty_rect_count);
 }
+
+TEST(async_video_provider, compatibility_overlay_common_path_cycles_between_two_storage_slots) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto subtitle_file = MakeSubtitleFile("csri");
+	provider.LoadSubtitles(&subtitle_file);
+
+	auto first = provider.GetRenderPacket(5, 5000);
+	auto* first_storage = first.subtitle_overlay_storage.get();
+	ASSERT_TRUE(first_storage);
+
+	auto second = provider.GetRenderPacket(5, 5000);
+	auto* second_storage = second.subtitle_overlay_storage.get();
+	ASSERT_TRUE(second_storage);
+
+	first = { };
+
+	auto third = provider.GetRenderPacket(5, 5000);
+	auto* third_storage = third.subtitle_overlay_storage.get();
+	ASSERT_TRUE(third_storage);
+
+	EXPECT_NE(first_storage, second_storage);
+	EXPECT_EQ(first_storage, third_storage);
+}

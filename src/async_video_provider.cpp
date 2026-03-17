@@ -19,6 +19,7 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "export_fixstyle.h"
+#include "compatibility_overlay_buffer_plan.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "source_frame.h"
 #include "subtitle_overlay.h"
@@ -48,6 +49,32 @@ std::shared_ptr<T> acquire_buffer(std::vector<std::shared_ptr<T>>& buffers) {
 	buffers.push_back(buffer);
 	return buffer;
 }
+
+std::shared_ptr<SubtitleOverlayStorage> acquire_compatibility_overlay_buffer(
+	std::array<std::shared_ptr<SubtitleOverlayStorage>, 2>& preferred_buffers,
+	std::vector<std::shared_ptr<SubtitleOverlayStorage>>& overflow_buffers,
+	std::shared_ptr<SubtitleOverlayStorage> const& previous_overlay,
+	int& next_preferred_slot) {
+	std::array<CompatibilityOverlayBufferSlotState, 2> slot_states = { };
+	for (size_t i = 0; i < preferred_buffers.size(); ++i) {
+		auto const& slot = preferred_buffers[i];
+		slot_states[i].allocated = static_cast<bool>(slot);
+		slot_states[i].reusable = slot && slot.use_count() == 1;
+		slot_states[i].holds_previous = slot && slot.get() == previous_overlay.get();
+	}
+
+	auto plan = DecideCompatibilityOverlayBufferPlan(next_preferred_slot, slot_states);
+	next_preferred_slot = plan.next_preferred_slot;
+
+	if (plan.action == CompatibilityOverlayBufferPlanAction::UseOverflowPool)
+		return acquire_buffer(overflow_buffers);
+
+	size_t slot_index = plan.action == CompatibilityOverlayBufferPlanAction::UseSlot0 ? 0u : 1u;
+	auto& slot = preferred_buffers[slot_index];
+	if (!slot)
+		slot = std::make_shared<SubtitleOverlayStorage>();
+	return slot;
+}
 }
 
 VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double time, bool raw) {
@@ -67,6 +94,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 
 	if (raw || !subs_provider || !subs) {
 		previous_compatibility_overlay.reset();
+		next_compatibility_overlay_buffer = 0;
 		packet.composited_frame_storage = frame;
 		return packet;
 	}
@@ -139,7 +167,11 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		}
 		else {
 			subs_provider->DrawSubtitles(*composited, time / 1000.);
-			auto overlay_storage = acquire_buffer(subtitle_overlay_buffers);
+			auto overlay_storage = acquire_compatibility_overlay_buffer(
+				compatibility_overlay_buffers,
+				subtitle_overlay_buffers,
+				previous_compatibility_overlay,
+				next_compatibility_overlay_buffer);
 			SubtitleOverlay subtitle_overlay;
 			if (BuildSparsePremultipliedCompatibilityOverlayWithDirtyTiles(
 				*frame,
@@ -211,6 +243,7 @@ void AsyncVideoProvider::LoadSubtitles(const AssFile *new_subs) throw() {
 	auto copy = agi::make_unique<AssFile>(*new_subs);
 	++content_version;
 	previous_compatibility_overlay.reset();
+	next_compatibility_overlay_buffer = 0;
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_subs = std::move(copy);
@@ -224,6 +257,7 @@ void AsyncVideoProvider::UpdateSubtitles(const AssFile *new_subs, const AssDialo
 	auto copy = agi::make_unique<AssFile>(*new_subs);
 	++content_version;
 	previous_compatibility_overlay.reset();
+	next_compatibility_overlay_buffer = 0;
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_subs = std::move(copy);
@@ -418,6 +452,7 @@ VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bo
 void AsyncVideoProvider::SetColorSpace(std::string const& matrix) {
 	++content_version;
 	previous_compatibility_overlay.reset();
+	next_compatibility_overlay_buffer = 0;
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_color_space = matrix;

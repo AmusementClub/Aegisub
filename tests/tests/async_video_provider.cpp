@@ -36,8 +36,8 @@ class FakeVideoProvider final : public VideoProvider {
 public:
 	std::string color_space = "BT.709";
 	std::string real_color_space = "BT.709";
-	std::vector<SourceFramePixelFormat> available_formats = { SourceFramePixelFormat::Bgra8 };
-	SourceFramePixelFormat output_format = SourceFramePixelFormat::Bgra8;
+	std::vector<SourceFrameOutputMode> available_modes = { SourceFrameOutputMode::Bgra8 };
+	SourceFrameOutputMode output_mode = SourceFrameOutputMode::Bgra8;
 
 	explicit FakeVideoProvider(std::shared_ptr<VideoProviderState> state)
 	: state(std::move(state)) {
@@ -78,11 +78,11 @@ public:
 	std::vector<int> GetKeyFrames() const override { return {}; }
 	std::string GetColorSpace() const override { return color_space; }
 	std::string GetRealColorSpace() const override { return real_color_space; }
-	std::vector<SourceFramePixelFormat> GetAvailableSourceFormats() const override { return available_formats; }
-	bool SetOutputFormat(SourceFramePixelFormat format) override {
-		if (std::find(available_formats.begin(), available_formats.end(), format) == available_formats.end())
+	std::vector<SourceFrameOutputMode> GetAvailableSourceModes() const override { return available_modes; }
+	bool SetOutputMode(SourceFrameOutputMode mode) override {
+		if (std::find(available_modes.begin(), available_modes.end(), mode) == available_modes.end())
 			return false;
-		output_format = format;
+		output_mode = mode;
 		return true;
 	}
 	std::string GetDecoderName() const override { return "fake"; }
@@ -508,10 +508,10 @@ TEST(async_video_provider, color_space_override_updates_effective_source_frame_m
 	EXPECT_EQ(SourceFrameColorRange::Full, packet.source_frame.color.range);
 }
 
-TEST(async_video_provider, preferred_source_formats_choose_first_supported_raw_format_for_overlay_path) {
+TEST(async_video_provider, preferred_source_modes_choose_native_for_overlay_path) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *video = new FakeVideoProvider(state);
-	video->available_formats = { SourceFramePixelFormat::YCbCr420P10, SourceFramePixelFormat::Bgra8 };
+	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
 	auto *subs = new FakeOverlaySubtitlesProvider;
 	EventRecorder recorder;
 
@@ -520,15 +520,15 @@ TEST(async_video_provider, preferred_source_formats_choose_first_supported_raw_f
 		std::unique_ptr<SubtitlesProvider>(subs),
 		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
 
-	EXPECT_TRUE(provider.SetPreferredSourceFormats({ SourceFramePixelFormat::YCbCr420P10, SourceFramePixelFormat::Bgra8 }));
-	EXPECT_EQ(SourceFramePixelFormat::YCbCr420P10, provider.GetSelectedSourceFormat());
-	EXPECT_EQ(SourceFramePixelFormat::YCbCr420P10, video->output_format);
+	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
+	EXPECT_EQ(SourceFrameOutputMode::Native, provider.GetSelectedSourceMode());
+	EXPECT_EQ(SourceFrameOutputMode::Native, video->output_mode);
 }
 
-TEST(async_video_provider, compatibility_subtitle_mode_forces_bgra8_output_format) {
+TEST(async_video_provider, compatibility_subtitle_mode_forces_bgra8_output_mode) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *video = new FakeVideoProvider(state);
-	video->available_formats = { SourceFramePixelFormat::YCbCr420P10, SourceFramePixelFormat::Bgra8 };
+	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
 	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
 	EventRecorder recorder;
 
@@ -537,9 +537,9 @@ TEST(async_video_provider, compatibility_subtitle_mode_forces_bgra8_output_forma
 		std::unique_ptr<SubtitlesProvider>(subs),
 		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
 
-	EXPECT_FALSE(provider.SetPreferredSourceFormats({ SourceFramePixelFormat::YCbCr420P10, SourceFramePixelFormat::Bgra8 }));
-	EXPECT_EQ(SourceFramePixelFormat::Bgra8, provider.GetSelectedSourceFormat());
-	EXPECT_EQ(SourceFramePixelFormat::Bgra8, video->output_format);
+	EXPECT_FALSE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
+	EXPECT_EQ(SourceFrameOutputMode::Bgra8, provider.GetSelectedSourceMode());
+	EXPECT_EQ(SourceFrameOutputMode::Bgra8, video->output_mode);
 }
 
 TEST(async_video_provider, premultiplied_overlay_provider_can_supply_dirty_rects) {

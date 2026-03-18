@@ -102,12 +102,12 @@ class AsyncVideoProvider {
 	bool has_pending_color_space = false;
 	std::string pending_color_space;
 	bool processing_scheduled = false;
-	std::vector<SourceFramePixelFormat> preferred_source_formats = { SourceFramePixelFormat::Bgra8 };
-	SourceFramePixelFormat selected_source_format = SourceFramePixelFormat::Bgra8;
+	std::vector<SourceFrameOutputMode> preferred_source_modes = { SourceFrameOutputMode::Bgra8 };
+	SourceFrameOutputMode selected_source_mode = SourceFrameOutputMode::Bgra8;
 
 	void DeliverEvent(std::unique_ptr<wxEvent> evt);
 	void InvalidateOverlayPipelineState(bool force_full_upload);
-	bool ReconfigureSourceOutputFormat();
+	bool ReconfigureSourceOutputMode();
 	void ScheduleProcessing();
 	bool ProcessPending();
 
@@ -144,9 +144,9 @@ public:
 
 	/// Ask the video provider to change YCbCr matricies
 	void SetColorSpace(std::string const& matrix);
-	bool SetPreferredSourceFormats(std::vector<SourceFramePixelFormat> formats);
+	bool SetPreferredSourceModes(std::vector<SourceFrameOutputMode> modes);
 	void ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider> provider);
-	SourceFramePixelFormat GetSelectedSourceFormat() const { return selected_source_format; }
+	SourceFrameOutputMode GetSelectedSourceMode() const { return selected_source_mode; }
 
 	int GetFrameCount() const             { return source_provider->GetFrameCount(); }
 	int GetWidth() const                  { return source_provider->GetWidth(); }

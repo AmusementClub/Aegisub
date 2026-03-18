@@ -26,8 +26,8 @@ public:
 	virtual ~IVideoRenderer() = default;
 
 	virtual bool SupportsDirectOverlay() const noexcept { return true; }
-	virtual std::vector<SourceFramePixelFormat> GetPreferredSourceFormats() const {
-		return { SourceFramePixelFormat::Bgra8 };
+	virtual std::vector<SourceFrameOutputMode> GetPreferredSourceModes() const {
+		return { SourceFrameOutputMode::Bgra8 };
 	}
 	virtual void Reset() = 0;
 	virtual void UploadFrame(SourceFrame const& frame) = 0;

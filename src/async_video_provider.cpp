@@ -244,7 +244,7 @@ AsyncVideoProvider::AsyncVideoProvider(std::unique_ptr<VideoProvider> source_pro
 , source_provider(std::move(source_provider))
 , event_sink(std::move(event_sink))
 {
-	ReconfigureSourceOutputFormat();
+	ReconfigureSourceOutputMode();
 }
 
 AsyncVideoProvider::~AsyncVideoProvider() {
@@ -461,25 +461,25 @@ std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrame(int frame, double time,
 	return ret;
 }
 
-bool AsyncVideoProvider::ReconfigureSourceOutputFormat() {
+bool AsyncVideoProvider::ReconfigureSourceOutputMode() {
 	auto const compatibility_requires_bgra8 =
 		subs_provider && subs_provider->GetRenderMode() == SubtitleRenderMode::CompatibilityFrameOnly;
-	auto const selected = SelectPreferredSourceFrameFormat(
-		preferred_source_formats,
-		source_provider->GetAvailableSourceFormats(),
+	auto const selected = SelectPreferredSourceFrameOutputMode(
+		preferred_source_modes,
+		source_provider->GetAvailableSourceModes(),
 		compatibility_requires_bgra8);
 
 	auto applied = selected;
-	if (!source_provider->SetOutputFormat(applied)) {
-		applied = SourceFramePixelFormat::Bgra8;
-		if (!source_provider->SetOutputFormat(applied))
+	if (!source_provider->SetOutputMode(applied)) {
+		applied = SourceFrameOutputMode::Bgra8;
+		if (!source_provider->SetOutputMode(applied))
 			return false;
 	}
 
-	if (selected_source_format == applied)
+	if (selected_source_mode == applied)
 		return false;
 
-	selected_source_format = applied;
+	selected_source_mode = applied;
 	++content_version;
 	last_rendered = -1;
 	last_lines.clear();
@@ -507,15 +507,15 @@ void AsyncVideoProvider::SetColorSpace(std::string const& matrix) {
 	ScheduleProcessing();
 }
 
-bool AsyncVideoProvider::SetPreferredSourceFormats(std::vector<SourceFramePixelFormat> formats) {
-	if (formats.empty())
-		formats.push_back(SourceFramePixelFormat::Bgra8);
+bool AsyncVideoProvider::SetPreferredSourceModes(std::vector<SourceFrameOutputMode> modes) {
+	if (modes.empty())
+		modes.push_back(SourceFrameOutputMode::Bgra8);
 
 	bool changed = false;
 	worker->Sync([&] {
 		while (ProcessPending()) { }
-		preferred_source_formats = std::move(formats);
-		changed = ReconfigureSourceOutputFormat();
+		preferred_source_modes = std::move(modes);
+		changed = ReconfigureSourceOutputMode();
 	});
 	return changed;
 }
@@ -524,7 +524,7 @@ void AsyncVideoProvider::ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvi
 	worker->Sync([&] {
 		while (ProcessPending()) { }
 		subs_provider = std::move(provider);
-		ReconfigureSourceOutputFormat();
+		ReconfigureSourceOutputMode();
 		single_frame = NEW_SUBS_FILE;
 		last_rendered = -1;
 		last_lines.clear();

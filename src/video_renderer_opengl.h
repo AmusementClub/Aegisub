@@ -80,8 +80,8 @@ public:
 	~OpenGLVideoRenderer();
 
 	bool SupportsDirectOverlay() const noexcept override { return render_overlay_layer; }
-	std::vector<SourceFramePixelFormat> GetPreferredSourceFormats() const override {
-		return { SourceFramePixelFormat::Bgra8 };
+	std::vector<SourceFrameOutputMode> GetPreferredSourceModes() const override {
+		return { SourceFrameOutputMode::Bgra8 };
 	}
 	void Reset() override;
 	void UploadFrame(SourceFrame const& frame) override;

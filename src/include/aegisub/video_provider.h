@@ -79,11 +79,11 @@ public:
 			GetRealColorMetadata(),
 			SourceFrameColorMetadataFromLegacyColorSpace(GetColorSpace()));
 	}
-	virtual std::vector<SourceFramePixelFormat> GetAvailableSourceFormats() const {
-		return { SourceFramePixelFormat::Bgra8 };
+	virtual std::vector<SourceFrameOutputMode> GetAvailableSourceModes() const {
+		return { SourceFrameOutputMode::Bgra8 };
 	}
-	virtual bool SetOutputFormat(SourceFramePixelFormat format) {
-		return format == SourceFramePixelFormat::Bgra8;
+	virtual bool SetOutputMode(SourceFrameOutputMode mode) {
+		return mode == SourceFrameOutputMode::Bgra8;
 	}
 
 	/// @brief Use this to set any post-loading warnings, such as "being loaded with unreliable seeking"

@@ -19,29 +19,29 @@
 #include <algorithm>
 #include <vector>
 
-inline bool ContainsSourceFrameFormat(
-	std::vector<SourceFramePixelFormat> const& formats,
-	SourceFramePixelFormat format) {
-	return std::find(formats.begin(), formats.end(), format) != formats.end();
+inline bool ContainsSourceFrameOutputMode(
+	std::vector<SourceFrameOutputMode> const& modes,
+	SourceFrameOutputMode mode) {
+	return std::find(modes.begin(), modes.end(), mode) != modes.end();
 }
 
-inline SourceFramePixelFormat SelectPreferredSourceFrameFormat(
-	std::vector<SourceFramePixelFormat> preferred_formats,
-	std::vector<SourceFramePixelFormat> const& available_formats,
+inline SourceFrameOutputMode SelectPreferredSourceFrameOutputMode(
+	std::vector<SourceFrameOutputMode> preferred_modes,
+	std::vector<SourceFrameOutputMode> const& available_modes,
 	bool compatibility_requires_bgra8) {
 	if (compatibility_requires_bgra8)
-		return SourceFramePixelFormat::Bgra8;
+		return SourceFrameOutputMode::Bgra8;
 
-	if (!ContainsSourceFrameFormat(preferred_formats, SourceFramePixelFormat::Bgra8))
-		preferred_formats.push_back(SourceFramePixelFormat::Bgra8);
+	if (!ContainsSourceFrameOutputMode(preferred_modes, SourceFrameOutputMode::Bgra8))
+		preferred_modes.push_back(SourceFrameOutputMode::Bgra8);
 
-	for (auto format : preferred_formats) {
-		if (ContainsSourceFrameFormat(available_formats, format))
-			return format;
+	for (auto mode : preferred_modes) {
+		if (ContainsSourceFrameOutputMode(available_modes, mode))
+			return mode;
 	}
 
-	if (!available_formats.empty())
-		return available_formats.front();
+	if (!available_modes.empty())
+		return available_modes.front();
 
-	return SourceFramePixelFormat::Bgra8;
+	return SourceFrameOutputMode::Bgra8;
 }

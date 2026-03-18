@@ -62,6 +62,7 @@ TEST(source_frame_overlay, source_frame_view_reflects_video_frame) {
 	EXPECT_EQ(4, source.width);
 	EXPECT_EQ(3, source.height);
 	EXPECT_TRUE(source.flipped);
+	EXPECT_EQ(SourceFrameOutputMode::Bgra8, source.output_mode);
 	EXPECT_EQ(1, source.plane_count);
 	EXPECT_EQ(frame.data.data(), source.planes[0].data);
 	EXPECT_EQ(16, source.planes[0].stride);
@@ -101,13 +102,13 @@ TEST(source_frame_overlay, source_frame_view_preserves_full_color_metadata) {
 }
 
 TEST(source_frame_overlay, source_frame_format_info_reports_semiplanar_and_planar_layouts) {
-	auto nv12 = GetSourceFrameFormatInfo(SourceFramePixelFormat::Nv12);
+	auto nv12 = MakeSemiplanar420SourceFrameFormatInfo(8, 1, 2);
 	EXPECT_EQ(SourceFrameColorFamily::YCbCr, nv12.color_family);
 	EXPECT_EQ(2, nv12.plane_count);
 	EXPECT_EQ(2, nv12.planes[1].components_per_sample);
 	EXPECT_EQ(2, nv12.planes[1].bytes_per_sample);
 
-	auto ycbcr420p10 = GetSourceFrameFormatInfo(SourceFramePixelFormat::YCbCr420P10);
+	auto ycbcr420p10 = MakePlanarYCbCrSourceFrameFormatInfo(2, 2, 10, 2);
 	EXPECT_EQ(SourceFrameColorFamily::YCbCr, ycbcr420p10.color_family);
 	EXPECT_EQ(3, ycbcr420p10.plane_count);
 	EXPECT_EQ(2, ycbcr420p10.planes[0].bytes_per_sample);
@@ -120,17 +121,19 @@ TEST(source_frame_overlay, planar_ycbcr_frame_validation_uses_format_geometry) {
 	unsigned char v[8] = { };
 
 	SourceFrame source;
-	source.pixel_format = SourceFramePixelFormat::YCbCr420P10;
+	source.output_mode = SourceFrameOutputMode::Native;
+	source.native_format = { SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, 123 };
+	source.format_info = MakePlanarYCbCrSourceFrameFormatInfo(2, 2, 10, 2);
 	source.width = 4;
 	source.height = 4;
-	source.plane_count = 3;
+	source.plane_count = source.format_info.plane_count;
 	source.planes[0] = { y, 8, 4, 4 };
 	source.planes[1] = { u, 4, 2, 2 };
 	source.planes[2] = { v, 4, 2, 2 };
 
 	EXPECT_TRUE(source.IsValid());
-	EXPECT_EQ(2, GetSourceFramePlaneWidth(source.pixel_format, source.width, 1));
-	EXPECT_EQ(2, GetSourceFramePlaneHeight(source.pixel_format, source.height, 1));
+	EXPECT_EQ(2, GetSourceFramePlaneWidth(source.format_info, source.width, 1));
+	EXPECT_EQ(2, GetSourceFramePlaneHeight(source.format_info, source.height, 1));
 }
 
 TEST(source_frame_overlay, planar_ycbcr_frame_rejects_mismatched_plane_geometry) {
@@ -139,10 +142,12 @@ TEST(source_frame_overlay, planar_ycbcr_frame_rejects_mismatched_plane_geometry)
 	unsigned char v[8] = { };
 
 	SourceFrame source;
-	source.pixel_format = SourceFramePixelFormat::YCbCr420P10;
+	source.output_mode = SourceFrameOutputMode::Native;
+	source.native_format = { SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, 123 };
+	source.format_info = MakePlanarYCbCrSourceFrameFormatInfo(2, 2, 10, 2);
 	source.width = 4;
 	source.height = 4;
-	source.plane_count = 3;
+	source.plane_count = source.format_info.plane_count;
 	source.planes[0] = { y, 8, 4, 4 };
 	source.planes[1] = { u, 4, 4, 2 };
 	source.planes[2] = { v, 4, 2, 2 };

@@ -175,12 +175,12 @@ void VideoDisplay::ResetRenderers() {
 	subtitleOverlayRenderer.reset();
 }
 
-bool VideoDisplay::ApplyRendererSourceFormatPreference() {
+bool VideoDisplay::ApplyRendererSourceModePreference() {
 	auto* provider = con->project->VideoProvider();
 	if (!provider || !videoRenderer)
 		return false;
 
-	return provider->SetPreferredSourceFormats(videoRenderer->GetPreferredSourceFormats());
+	return provider->SetPreferredSourceModes(videoRenderer->GetPreferredSourceModes());
 }
 
 void VideoDisplay::OnRendererBackendChanged(agi::OptionValue const&) {
@@ -237,7 +237,7 @@ void VideoDisplay::DoRender() try {
 	if (!videoRenderer) {
 		auto renderer_result = CreateConfiguredVideoRenderer();
 		videoRenderer = std::move(renderer_result.renderer);
-		if (ApplyRendererSourceFormatPreference()) {
+		if (ApplyRendererSourceModePreference()) {
 			pending_packet = { };
 			has_pending_packet = false;
 			displayed_packet = { };

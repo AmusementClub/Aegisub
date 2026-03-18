@@ -137,7 +137,7 @@ class VideoDisplay final : public wxGLCanvas {
 	/// @return Could the context be set?
 	bool InitContext();
 	void ResetRenderers();
-	bool ApplyRendererSourceFormatPreference();
+	bool ApplyRendererSourceModePreference();
 	void OnRendererBackendChanged(agi::OptionValue const&);
 	void OnVideoProviderChanged(AsyncVideoProvider *provider);
 

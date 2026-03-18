@@ -140,6 +140,7 @@ public:
 
 	/// Ask the video provider to change YCbCr matricies
 	void SetColorSpace(std::string const& matrix);
+	void ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider> provider);
 
 	int GetFrameCount() const             { return source_provider->GetFrameCount(); }
 	int GetWidth() const                  { return source_provider->GetWidth(); }

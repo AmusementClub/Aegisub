@@ -480,6 +480,17 @@ void AsyncVideoProvider::SetColorSpace(std::string const& matrix) {
 	ScheduleProcessing();
 }
 
+void AsyncVideoProvider::ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider> provider) {
+	worker->Sync([&] {
+		while (ProcessPending()) { }
+		subs_provider = std::move(provider);
+		single_frame = NEW_SUBS_FILE;
+		last_rendered = -1;
+		last_lines.clear();
+		InvalidateOverlayPipelineState(true);
+	});
+}
+
 wxDEFINE_EVENT(EVT_FRAME_READY, FrameReadyEvent);
 wxDEFINE_EVENT(EVT_VIDEO_ERROR, VideoProviderErrorEvent);
 wxDEFINE_EVENT(EVT_SUBTITLES_ERROR, SubtitlesProviderErrorEvent);

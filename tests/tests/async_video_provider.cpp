@@ -680,3 +680,35 @@ TEST(async_video_provider, dropped_packet_forces_full_overlay_upload_on_next_del
 	EXPECT_TRUE(frames.back().has_overlay);
 	EXPECT_TRUE(frames.back().overlay_force_full_upload);
 }
+
+TEST(async_video_provider, replacing_subtitles_provider_reuses_video_provider_and_refreshes_overlay_mode) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *compat_subs = new FakeCompatibilityOnlySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(compat_subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto subtitle_file = MakeSubtitleFile("swap");
+	provider.LoadSubtitles(&subtitle_file);
+
+	auto first = provider.GetRenderPacket(5, 5000);
+	ASSERT_TRUE(first.source_frame_storage);
+	EXPECT_EQ(5, first.source_frame_storage->data[0]);
+	ASSERT_TRUE(first.has_subtitle_overlay);
+	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, first.subtitle_overlay.composition_mode);
+
+	auto *overlay_subs = new FakeOverlaySubtitlesProvider;
+	provider.ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider>(overlay_subs));
+	provider.LoadSubtitles(&subtitle_file);
+
+	auto second = provider.GetRenderPacket(5, 5000);
+	ASSERT_TRUE(second.source_frame_storage);
+	EXPECT_EQ(5, second.source_frame_storage->data[0]);
+	ASSERT_TRUE(second.has_subtitle_overlay);
+	EXPECT_TRUE(second.subtitle_overlay.premultiplied_alpha);
+	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, second.subtitle_overlay.composition_mode);
+	EXPECT_EQ(128, second.subtitle_overlay.planes[0].data[3]);
+}

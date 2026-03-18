@@ -33,6 +33,7 @@
 #include "options.h"
 #include "selection_controller.h"
 #include "subs_controller.h"
+#include "include/aegisub/subtitles_provider.h"
 #include "utils.h"
 #include "video_controller.h"
 #include "video_display.h"
@@ -58,7 +59,7 @@ Project::Project(agi::Context *c) : context(c) {
 	OPT_SUB("Provider/Avisynth/Memory Max", &Project::ReloadVideo, this);
 	OPT_SUB("Provider/Video/FFmpegSource/Decoding Threads", &Project::ReloadVideo, this);
 	OPT_SUB("Provider/Video/FFmpegSource/Unsafe Seeking", &Project::ReloadVideo, this);
-	OPT_SUB("Subtitle/Provider", &Project::ReloadVideo, this);
+	OPT_SUB("Subtitle/Provider", &Project::ReloadSubtitlesProvider, this);
 	OPT_SUB("Video/Provider", &Project::ReloadVideo, this);
 }
 
@@ -74,6 +75,28 @@ void Project::UpdateRelativePaths() {
 void Project::ReloadAudio() {
 	if (audio_provider)
 		LoadAudio(audio_file);
+}
+
+void Project::ReloadSubtitlesProvider() {
+	if (!video_provider)
+		return;
+
+	try {
+		video_provider->ReplaceSubtitlesProvider(SubtitlesProviderFactory::GetProvider(progress));
+		video_provider->LoadSubtitles(context->ass.get());
+		context->videoController->JumpToFrame(context->videoController->GetFrameN());
+	}
+	catch (agi::UserCancelException const&) {
+	}
+	catch (std::string const& err) {
+		ShowError(err);
+	}
+	catch (agi::Exception const& err) {
+		ShowError(err.GetMessage());
+	}
+	catch (...) {
+		ShowError(std::string("Failed to reload subtitles provider."));
+	}
 }
 
 void Project::ReloadVideo() {

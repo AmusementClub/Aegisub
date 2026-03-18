@@ -61,6 +61,7 @@ class Project {
 	void LoadUnloadFiles(ProjectProperties properties);
 	void UpdateRelativePaths();
 	void ReloadAudio();
+	void ReloadSubtitlesProvider();
 	void ReloadVideo();
 
 	void SetPath(agi::fs::path& var, const char *token, const char *mru, agi::fs::path const& value);

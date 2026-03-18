@@ -1,0 +1,169 @@
+// Copyright (c) 2026
+//
+// Permission to use, copy, modify, and distribute this software for any
+// purpose with or without fee is hereby granted, provided that the above
+// copyright notice and this permission notice appear in all copies.
+//
+// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+// ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+// ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+// OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+#pragma once
+
+#include "source_frame.h"
+
+#include <libplacebo/colorspace.h>
+#include <libplacebo/utils/upload.h>
+
+#include <algorithm>
+#include <cctype>
+#include <string>
+
+inline std::string NormalizePlaceboColorToken(std::string value) {
+	std::string normalized;
+	normalized.reserve(value.size());
+	for (unsigned char ch : value) {
+		if (std::isalnum(ch))
+			normalized.push_back(static_cast<char>(std::toupper(ch)));
+	}
+	return normalized;
+}
+
+inline bool PlaceboColorContainsToken(std::string const& value, char const *token) {
+	return value.find(token) != std::string::npos;
+}
+
+inline enum pl_color_primaries InferPlaceboPrimaries(SourceFrameColorMetadata const& color) {
+	auto token = NormalizePlaceboColorToken(color.primaries);
+	if (PlaceboColorContainsToken(token, "2020"))
+		return PL_COLOR_PRIM_BT_2020;
+	if (PlaceboColorContainsToken(token, "470M"))
+		return PL_COLOR_PRIM_BT_470M;
+	if (PlaceboColorContainsToken(token, "601525") || PlaceboColorContainsToken(token, "170M") || PlaceboColorContainsToken(token, "240M"))
+		return PL_COLOR_PRIM_BT_601_525;
+	if (PlaceboColorContainsToken(token, "601625") || PlaceboColorContainsToken(token, "470BG") || PlaceboColorContainsToken(token, "BT601"))
+		return PL_COLOR_PRIM_BT_601_625;
+	if (PlaceboColorContainsToken(token, "DISPLAYP3"))
+		return PL_COLOR_PRIM_DISPLAY_P3;
+	if (PlaceboColorContainsToken(token, "DCIP3"))
+		return PL_COLOR_PRIM_DCI_P3;
+	return PL_COLOR_PRIM_BT_709;
+}
+
+inline enum pl_color_transfer InferPlaceboTransfer(SourceFrameColorMetadata const& color) {
+	auto token = NormalizePlaceboColorToken(color.transfer);
+	if (PlaceboColorContainsToken(token, "LINEAR"))
+		return PL_COLOR_TRC_LINEAR;
+	if (PlaceboColorContainsToken(token, "SRGB"))
+		return PL_COLOR_TRC_SRGB;
+	if (PlaceboColorContainsToken(token, "PQ") || PlaceboColorContainsToken(token, "2084"))
+		return PL_COLOR_TRC_PQ;
+	if (PlaceboColorContainsToken(token, "HLG"))
+		return PL_COLOR_TRC_HLG;
+	return PL_COLOR_TRC_BT_1886;
+}
+
+inline enum pl_color_levels InferPlaceboLevels(SourceFrameColorMetadata const& color) {
+	if (color.range == SourceFrameColorRange::Limited)
+		return PL_COLOR_LEVELS_LIMITED;
+	return PL_COLOR_LEVELS_FULL;
+}
+
+inline enum pl_color_system InferPlaceboColorSystem(SourceFrame const& frame) {
+	if (frame.output_mode == SourceFrameOutputMode::Bgra8 || frame.format_info.color_family == SourceFrameColorFamily::Rgb)
+		return PL_COLOR_SYSTEM_RGB;
+
+	auto token = NormalizePlaceboColorToken(frame.color.matrix);
+	if (PlaceboColorContainsToken(token, "2020CL"))
+		return PL_COLOR_SYSTEM_BT_2020_C;
+	if (PlaceboColorContainsToken(token, "2020"))
+		return PL_COLOR_SYSTEM_BT_2020_NC;
+	if (PlaceboColorContainsToken(token, "240M"))
+		return PL_COLOR_SYSTEM_SMPTE_240M;
+	if (PlaceboColorContainsToken(token, "601") || PlaceboColorContainsToken(token, "470BG") || PlaceboColorContainsToken(token, "170M"))
+		return PL_COLOR_SYSTEM_BT_601;
+	if (PlaceboColorContainsToken(token, "NONE") || PlaceboColorContainsToken(token, "RGB"))
+		return PL_COLOR_SYSTEM_RGB;
+	return PL_COLOR_SYSTEM_BT_709;
+}
+
+inline struct pl_color_repr BuildPlaceboSourceFrameRepr(SourceFrame const& frame) {
+	struct pl_color_repr repr = {};
+	repr.sys = InferPlaceboColorSystem(frame);
+	repr.levels = InferPlaceboLevels(frame.color);
+	repr.alpha = PL_ALPHA_NONE;
+
+	if (frame.output_mode == SourceFrameOutputMode::Bgra8) {
+		repr.bits = { 8, 8, 0 };
+		return repr;
+	}
+
+	auto const& first_plane = frame.format_info.planes[0];
+	int bytes_per_component = std::max(1, first_plane.bytes_per_sample / std::max(1, first_plane.components_per_sample));
+	repr.bits = {
+		bytes_per_component * 8,
+		first_plane.bits_per_component,
+		first_plane.component_shift[0]
+	};
+	return repr;
+}
+
+inline struct pl_color_space BuildPlaceboSourceFrameColorSpace(SourceFrame const& frame) {
+	struct pl_color_space space = {};
+	space.primaries = InferPlaceboPrimaries(frame.color);
+	space.transfer = InferPlaceboTransfer(frame.color);
+	return space;
+}
+
+inline bool BuildPlaceboNativePlaneData(SourceFrame const& frame, int plane_index, struct pl_plane_data& data) {
+	if (!frame.IsValid()
+		|| frame.output_mode != SourceFrameOutputMode::Native
+		|| plane_index < 0
+		|| plane_index >= frame.plane_count)
+		return false;
+
+	auto const& plane = frame.planes[static_cast<size_t>(plane_index)];
+	auto const& plane_info = frame.format_info.planes[static_cast<size_t>(plane_index)];
+	auto* pixels = plane.data;
+	ptrdiff_t stride = plane.stride;
+	size_t row_stride = static_cast<size_t>(stride < 0 ? -stride : stride);
+	if (!pixels || row_stride == 0)
+		return false;
+	if (stride < 0)
+		pixels += static_cast<ptrdiff_t>(plane.height - 1) * row_stride;
+
+	data = {};
+	data.type = PL_FMT_UNORM;
+	data.width = plane.width;
+	data.height = plane.height;
+	data.pixel_stride = plane_info.bytes_per_sample;
+	data.row_stride = row_stride;
+	data.pixels = pixels;
+	for (int i = 0; i < plane_info.components_per_sample; ++i) {
+		data.component_size[i] = plane_info.bits_per_component;
+		data.component_pad[i] = plane_info.component_shift[static_cast<size_t>(i)];
+	}
+
+	if (plane_index == 0) {
+		data.component_map[0] = PL_CHANNEL_Y;
+	}
+	else if (plane_info.components_per_sample == 2) {
+		data.component_map[0] = PL_CHANNEL_CB;
+		data.component_map[1] = PL_CHANNEL_CR;
+	}
+	else if (plane_index == 1) {
+		data.component_map[0] = PL_CHANNEL_CB;
+	}
+	else if (plane_index == 2) {
+		data.component_map[0] = PL_CHANNEL_CR;
+	}
+	else {
+		data.component_map[0] = PL_CHANNEL_NONE;
+	}
+
+	return true;
+}

@@ -123,12 +123,25 @@ TEST(source_frame_overlay, source_frame_format_info_reports_semiplanar_and_plana
 	EXPECT_EQ(2, nv12.plane_count);
 	EXPECT_EQ(2, nv12.planes[1].components_per_sample);
 	EXPECT_EQ(2, nv12.planes[1].bytes_per_sample);
+	EXPECT_EQ(0, nv12.planes[1].component_shift[0]);
+	EXPECT_EQ(8, nv12.planes[1].component_shift[1]);
 
 	auto ycbcr420p10 = MakePlanarYCbCrSourceFrameFormatInfo(2, 2, 10, 2);
 	EXPECT_EQ(SourceFrameColorFamily::YCbCr, ycbcr420p10.color_family);
 	EXPECT_EQ(3, ycbcr420p10.plane_count);
 	EXPECT_EQ(2, ycbcr420p10.planes[0].bytes_per_sample);
 	EXPECT_EQ(10, ycbcr420p10.planes[2].bits_per_component);
+	EXPECT_EQ(0, ycbcr420p10.planes[0].component_shift[0]);
+
+	auto p010 = MakeSemiplanar420SourceFrameFormatInfo(
+		10,
+		2,
+		4,
+		{ { 6, 0, 0, 0 } },
+		{ { 6, 22, 0, 0 } });
+	EXPECT_EQ(6, p010.planes[0].component_shift[0]);
+	EXPECT_EQ(6, p010.planes[1].component_shift[0]);
+	EXPECT_EQ(22, p010.planes[1].component_shift[1]);
 }
 
 TEST(source_frame_overlay, planar_ycbcr_frame_validation_uses_format_geometry) {

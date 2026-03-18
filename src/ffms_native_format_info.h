@@ -39,7 +39,12 @@ inline bool TryGetFFMSNativeSourceFrameFormatInfo(
 		return true;
 	}
 	if (pixfmt == ids.p010le) {
-		info = MakeSemiplanar420SourceFrameFormatInfo(10, 2, 4);
+		info = MakeSemiplanar420SourceFrameFormatInfo(
+			10,
+			2,
+			4,
+			{ { 6, 0, 0, 0 } },
+			{ { 6, 22, 0, 0 } });
 		return true;
 	}
 	if (pixfmt == ids.yuv420p) {

@@ -54,6 +54,7 @@ struct SourceFramePlaneFormatInfo {
 	int components_per_sample = 1;
 	int bytes_per_sample = 1;
 	int bits_per_component = 8;
+	std::array<int, 4> component_shift = { { 0, 0, 0, 0 } };
 };
 
 struct SourceFrameFormatInfo {
@@ -82,7 +83,8 @@ inline bool SourceFramePlaneFormatInfoEquals(
 		&& lhs.height_divisor == rhs.height_divisor
 		&& lhs.components_per_sample == rhs.components_per_sample
 		&& lhs.bytes_per_sample == rhs.bytes_per_sample
-		&& lhs.bits_per_component == rhs.bits_per_component;
+		&& lhs.bits_per_component == rhs.bits_per_component
+		&& lhs.component_shift == rhs.component_shift;
 }
 
 inline bool SourceFrameFormatInfoEquals(
@@ -120,17 +122,19 @@ inline bool IsValidSourceFrameFormatInfo(SourceFrameFormatInfo const& info) {
 
 inline SourceFrameFormatInfo MakeBgra8SourceFrameFormatInfo() {
 	return { SourceFrameColorFamily::Rgb, 1, { {
-		{ 1, 1, 4, 4, 8 }, { }, { }, { }
+		{ 1, 1, 4, 4, 8, { { 16, 8, 0, 24 } } }, { }, { }, { }
 	} } };
 }
 
 inline SourceFrameFormatInfo MakeSemiplanar420SourceFrameFormatInfo(
 	int bits_per_component,
 	int luma_bytes_per_sample,
-	int chroma_bytes_per_sample) {
+	int chroma_bytes_per_sample,
+	std::array<int, 4> luma_component_shift = { { 0, 0, 0, 0 } },
+	std::array<int, 4> chroma_component_shift = { { 0, 8, 0, 0 } }) {
 	return { SourceFrameColorFamily::YCbCr, 2, { {
-		{ 1, 1, 1, luma_bytes_per_sample, bits_per_component },
-		{ 2, 2, 2, chroma_bytes_per_sample, bits_per_component },
+		{ 1, 1, 1, luma_bytes_per_sample, bits_per_component, luma_component_shift },
+		{ 2, 2, 2, chroma_bytes_per_sample, bits_per_component, chroma_component_shift },
 		{ }, { }
 	} } };
 }
@@ -139,11 +143,12 @@ inline SourceFrameFormatInfo MakePlanarYCbCrSourceFrameFormatInfo(
 	int chroma_width_divisor,
 	int chroma_height_divisor,
 	int bits_per_component,
-	int bytes_per_sample) {
+	int bytes_per_sample,
+	int component_shift = 0) {
 	return { SourceFrameColorFamily::YCbCr, 3, { {
-		{ 1, 1, 1, bytes_per_sample, bits_per_component },
-		{ chroma_width_divisor, chroma_height_divisor, 1, bytes_per_sample, bits_per_component },
-		{ chroma_width_divisor, chroma_height_divisor, 1, bytes_per_sample, bits_per_component },
+		{ 1, 1, 1, bytes_per_sample, bits_per_component, { { component_shift, 0, 0, 0 } } },
+		{ chroma_width_divisor, chroma_height_divisor, 1, bytes_per_sample, bits_per_component, { { component_shift, 0, 0, 0 } } },
+		{ chroma_width_divisor, chroma_height_divisor, 1, bytes_per_sample, bits_per_component, { { component_shift, 0, 0, 0 } } },
 		{ }
 	} } };
 }

@@ -232,10 +232,10 @@ if(APPLE)
 endif()
 
 add_subdirectory(vendor/luabins)
-option(LUASOCKET "Enable LuaSocket support" OFF)
+option(LUA_WITH_LUASOCKET "Enable LuaSocket support" OFF)
 set(AEGISUB_LUASOCKET_ROOT "${PROJECT_SOURCE_DIR}/vendor/luasocket" CACHE PATH "Path to a LuaSocket source checkout")
 
-if(LUASOCKET)
+if(LUA_WITH_LUASOCKET)
     include(LuaSocket)
     aegisub_add_luasocket_target()
 endif()
@@ -335,8 +335,8 @@ else()
     target_precompile_headers(libaegisub PRIVATE "libaegisub/lagi_pre.h")
 endif()
 target_link_libraries(libaegisub PRIVATE luajit luabins)
-if(LUASOCKET)
-    target_compile_definitions(libaegisub PRIVATE WITH_LUASOCKET)
+if(LUA_WITH_LUASOCKET)
+    target_compile_definitions(libaegisub PRIVATE LUA_WITH_LUASOCKET)
     target_link_libraries(libaegisub PRIVATE luasocket)
 endif()
 
@@ -566,8 +566,8 @@ if(AEGISUB_USE_STRINGZILLA)
         message(WARNING "StringZilla headers not found; continuing without StringZilla.")
     endif()
 endif()
-if(LUASOCKET)
-    target_compile_definitions(Aegisub PRIVATE WITH_LUASOCKET)
+if(LUA_WITH_LUASOCKET)
+    target_compile_definitions(Aegisub PRIVATE LUA_WITH_LUASOCKET)
 endif()
 if(WIN32 AND AEGISUB_LUAJIT_SHARED)
     target_compile_definitions(Aegisub PRIVATE LUA_BUILD_AS_DLL)
@@ -1038,7 +1038,8 @@ message(STATUS "\n"
     "  uchardet:              ${WITH_UCHARDET}\n"
     "  wxStyledTextCtrl:      ${WITH_WXSTC}\n"
     "  LuaJIT:                bundled\n"
-    "  LuaSocket:             ${WITH_LUASOCKET}\n"
+    "  LuaJIT Shared:         ${AEGISUB_LUAJIT_SHARED}\n"
+    "  LuaSocket:             ${LUA_WITH_LUASOCKET}\n"
     "\n"
     "Options\n"
     "  Translations:          ${WITH_TRANSLATION}\n"

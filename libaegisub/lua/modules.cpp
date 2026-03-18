@@ -24,7 +24,7 @@ extern "C" int luaopen_re_impl(lua_State *L);
 extern "C" int luaopen_unicode_impl(lua_State *L);
 extern "C" int luaopen_lfs_impl(lua_State *L);
 extern "C" int luaopen_lpeg(lua_State *L);
-#ifdef WITH_LUASOCKET
+#ifdef LUA_WITH_LUASOCKET
 extern "C" int luaopen_socket_core(lua_State *L);
 extern "C" int luaopen_mime_core(lua_State *L);
 #endif
@@ -43,7 +43,7 @@ void preload_modules(lua_State *L) {
 	set_field(L, "aegisub.__lfs_impl", luaopen_lfs_impl);
 	set_field(L, "lpeg", luaopen_lpeg);
 	set_field(L, "luabins", luaopen_luabins);
-	#ifdef WITH_LUASOCKET
+	#ifdef LUA_WITH_LUASOCKET
 	set_field(L, "socket.core", luaopen_socket_core);
 	set_field(L, "mime.core", luaopen_mime_core);
 	#endif

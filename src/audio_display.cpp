@@ -683,11 +683,8 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 	if (pixel_position < 0)
 		pixel_position = 0;
 
-	if (pixel_position == scroll_left) {
-		if (track_cursor_pos >= 0)
-			RefreshTrackCursorOverlay();
+	if (pixel_position == scroll_left)
 		return;
-	}
 
 	scroll_left = pixel_position;
 	scrollbar->SetPosition(scroll_left);
@@ -696,9 +693,6 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 		QueueHighFrequencyRefresh(nullptr, true);
 	else
 		Refresh();
-
-	if (track_cursor_pos >= 0)
-		RefreshTrackCursorOverlay();
 }
 
 void AudioDisplay::ScrollTimeRangeInView(const TimeRange &range)
@@ -767,8 +761,6 @@ void AudioDisplay::SetZoomLevel(int new_zoom_level)
 	ScrollPixelToLeft(AbsoluteXFromTime(cursor_time) - cursor_pos);
 	if (track_cursor_pos >= 0)
 		track_cursor_pos = AbsoluteXFromTime(cursor_time);
-	if (track_cursor_pos >= 0)
-		RefreshTrackCursorOverlay();
 	Refresh();
 }
 
@@ -998,22 +990,12 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 			DrawDebugInfo(dc);
 	}
 
-	if (track_cursor_pos >= 0)
-		RefreshTrackCursorOverlay();
 }
 
 void AudioDisplay::EnsurePaintBitmap() {
 	wxSize cs = GetClientSize();
 	if (!paint_bitmap.IsOk() || paint_bitmap.GetWidth() != cs.x || paint_bitmap.GetHeight() != cs.y)
 		paint_bitmap = wxBitmap(cs.x, cs.y, wxBITMAP_SCREEN_DEPTH);
-}
-
-void AudioDisplay::RefreshTrackCursorOverlay() {
-	wxClientDC dc(this);
-	wxDCOverlay overlaydc(track_cursor_overlay, &dc);
-	overlaydc.Clear();
-	if (track_cursor_pos >= 0)
-		PaintTrackCursor(dc);
 }
 
 void AudioDisplay::DrawDebugInfo(wxDC &dc) {
@@ -1205,7 +1187,7 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 	const int old_pos = track_cursor_pos;
 	const wxRect old_label_rect = track_cursor_label_rect;
 
-	if (!ShouldRefreshTrackCursorOverlay(track_cursor_pos, new_pos))
+	if (!ShouldRefreshTrackCursor(track_cursor_pos, new_pos))
 		return;
 
 	track_cursor_pos = new_pos;
@@ -1252,10 +1234,9 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 
 	const wxRect new_label_rect = calc_label_rect();
 	track_cursor_label_rect = new_label_rect;
-	RefreshTrackCursorOverlay();
 
-	// Overlay draw can occasionally be dropped by platform repaint timing,
-	// so queue a narrow repaint around old/new cursor and label regions as a fallback.
+	// Queue a narrow repaint around old/new cursor and label regions to keep
+	// cursor updates smooth without repainting the entire audio display.
 	wxRect dirty = line_rect(old_pos);
 	if (dirty.IsEmpty())
 		dirty = line_rect(track_cursor_pos);
@@ -1421,7 +1402,6 @@ void AudioDisplay::OnKeyDown(wxKeyEvent& event)
 
 void AudioDisplay::OnSize(wxSizeEvent &)
 {
-	track_cursor_overlay.Reset();
 	if (high_frequency_refresh_timer.IsRunning())
 		high_frequency_refresh_timer.Stop();
 	pending_high_frequency_full_refresh = false;

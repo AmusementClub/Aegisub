@@ -143,6 +143,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 			auto subtitle_overlay = overlay_storage->MakeView(true);
 
 			if (subs_provider->RenderOverlay(packet.source_frame, subtitle_overlay, time / 1000.)) {
+				overlay_storage->has_visible_content = subtitle_overlay.has_visible_content;
 				if (subs_provider->SupportsOverlayDirtyRects()) {
 					if (subtitle_overlay.dirty_rects && subtitle_overlay.dirty_rect_count > 0) {
 						overlay_storage->dirty_rects.assign(
@@ -165,10 +166,12 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 				}
 				subtitle_overlay = overlay_storage->MakeView(true);
 				subtitle_overlay.force_full_upload = force_next_overlay_full_upload;
-				packet.subtitle_overlay_storage = overlay_storage;
-				packet.subtitle_overlay = subtitle_overlay;
-				packet.has_subtitle_overlay = true;
-				CompositePremultipliedBgraOverlayOntoVideoFrame(*composited, subtitle_overlay);
+				if (subtitle_overlay.has_visible_content) {
+					packet.subtitle_overlay_storage = overlay_storage;
+					packet.subtitle_overlay = subtitle_overlay;
+					packet.has_subtitle_overlay = true;
+					CompositePremultipliedBgraOverlayOntoVideoFrame(*composited, subtitle_overlay);
+				}
 			}
 			else {
 				subs_provider->DrawSubtitles(*composited, time / 1000.);
@@ -418,6 +421,7 @@ bool AsyncVideoProvider::ProcessPending() {
 	try {
 		auto evt = std::make_unique<FrameReadyEvent>(ProcRenderPacket(frame_number, time), time);
 		evt->SetEventType(EVT_FRAME_READY);
+		bool const delivered_overlay = evt->packet.has_subtitle_overlay;
 		auto current_content_version = content_version.load(std::memory_order_relaxed);
 		auto current_request_version = request_version.load(std::memory_order_relaxed);
 		bool should_deliver =
@@ -425,7 +429,8 @@ bool AsyncVideoProvider::ProcessPending() {
 			work.request_version == current_request_version;
 		if (should_deliver) {
 			DeliverEvent(std::move(evt));
-			force_next_overlay_full_upload = false;
+			if (delivered_overlay)
+				force_next_overlay_full_upload = false;
 		}
 		else {
 			InvalidateOverlayPipelineState(true);

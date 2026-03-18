@@ -60,6 +60,12 @@ inline OpenGLVideoRendererOverlayUploadPlan DecideOpenGLVideoRendererOverlayUplo
 		return plan;
 	}
 
+	if (!overlay->has_visible_content) {
+		plan.action = OpenGLVideoRendererOverlayUploadAction::HideKeepResources;
+		plan.next_state.has_visible_content = false;
+		return plan;
+	}
+
 	bool layout_matches =
 		state.has_allocated_resources &&
 		state.width == overlay->width &&
@@ -88,6 +94,15 @@ inline OpenGLVideoRendererOverlayUploadPlan DecideOpenGLVideoRendererOverlayUplo
 	}
 
 	if (!layout_matches) {
+		plan.action = OpenGLVideoRendererOverlayUploadAction::FullUpload;
+		return plan;
+	}
+
+	// Once a layer has been hidden, the currently allocated GPU texture is no
+	// longer guaranteed to match the logical subtitle state seen by the user.
+	// Reactivating it must rebuild the full surface rather than reusing stale
+	// preserved contents.
+	if (!state.has_visible_content) {
 		plan.action = OpenGLVideoRendererOverlayUploadAction::FullUpload;
 		return plan;
 	}

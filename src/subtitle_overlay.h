@@ -75,6 +75,7 @@ struct SubtitleOverlay {
 	std::array<SubtitleOverlayPlaneView, 4> planes = { };
 	SubtitleOverlayDirtyRect const* dirty_rects = nullptr;
 	int dirty_rect_count = 0;
+	bool has_visible_content = false;
 	bool force_full_upload = false;
 	SubtitleOverlayColorRole color_role = SubtitleOverlayColorRole::SubtitleSdrOverlay;
 	SubtitleOverlayCompositionMode composition_mode = SubtitleOverlayCompositionMode::Unsupported;
@@ -148,6 +149,7 @@ struct SubtitleOverlayStorage {
 		};
 		overlay.dirty_rects = dirty_rects.empty() ? nullptr : dirty_rects.data();
 		overlay.dirty_rect_count = static_cast<int>(dirty_rects.size());
+		overlay.has_visible_content = has_visible_content;
 		return overlay;
 	}
 };

@@ -314,6 +314,7 @@ bool LibassSubtitlesProvider::RenderOverlay(SourceFrame const& source, SubtitleO
 
 		overlay.dirty_rects = dirty_rects.empty() ? nullptr : dirty_rects.data();
 		overlay.dirty_rect_count = static_cast<int>(dirty_rects.size());
+		overlay.has_visible_content = !visible_rects.empty();
 		last_overlay_data = overlay.planes[0].data;
 		last_overlay_stride = overlay.planes[0].stride;
 		last_overlay_width = overlay.width;

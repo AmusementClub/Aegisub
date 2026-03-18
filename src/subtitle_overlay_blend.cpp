@@ -633,6 +633,7 @@ bool ExtractOpaqueBgraDifferenceOverlay(VideoFrame const& source, VideoFrame con
 		auto* dst_row = StorageRowPointer(storage, y);
 		std::memcpy(dst_row, src_row, static_cast<size_t>(patch_width) * 4);
 	}
+	storage.has_visible_content = true;
 
 	overlay = storage.MakeView(false);
 	overlay.canvas_width = width;

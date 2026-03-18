@@ -101,6 +101,7 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 	RefreshVideoScale();
 }))
 , dpi_scale_option_connection(OPT_SUB("Video/Scale with DPI", [=](agi::OptionValue const&) { RefreshVideoScale(); }))
+, renderer_backend_option_connection(OPT_SUB("Video/Renderer/Backend", &VideoDisplay::OnRendererBackendChanged, this))
 {
 	zoomBox->SetValue(fmt_wx("%g%%", zoomValue * 100.));
 	zoomBox->Bind(wxEVT_COMBOBOX, &VideoDisplay::SetZoomFromBox, this);
@@ -108,7 +109,7 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 
 	con->videoController->Bind(EVT_FRAME_READY, &VideoDisplay::UploadFrameData, this);
 	connections = agi::signal::make_vector({
-		con->project->AddVideoProviderListener(&VideoDisplay::UpdateSize, this),
+		con->project->AddVideoProviderListener(&VideoDisplay::OnVideoProviderChanged, this),
 		con->videoController->AddARChangeListener(&VideoDisplay::UpdateSize, this),
 	});
 
@@ -159,6 +160,47 @@ bool VideoDisplay::InitContext() {
 
 	SetCurrent(*glContext);
 	return true;
+}
+
+void VideoDisplay::ResetRenderers() {
+	if (glContext)
+		SetCurrent(*glContext);
+
+	if (videoRenderer)
+		videoRenderer->Reset();
+	videoRenderer.reset();
+
+	if (subtitleOverlayRenderer)
+		subtitleOverlayRenderer->Reset();
+	subtitleOverlayRenderer.reset();
+}
+
+void VideoDisplay::OnRendererBackendChanged(agi::OptionValue const&) {
+	if (!con->project->VideoProvider())
+		return;
+
+	if (!has_pending_packet && has_displayed_packet) {
+		pending_packet = displayed_packet;
+		has_pending_packet = true;
+	}
+
+	ResetRenderers();
+
+	if (has_pending_packet)
+		DoRender();
+}
+
+void VideoDisplay::OnVideoProviderChanged(AsyncVideoProvider *provider) {
+	pending_packet = { };
+	has_pending_packet = false;
+	displayed_packet = { };
+	has_displayed_packet = false;
+	ResetRenderers();
+
+	if (!provider)
+		return;
+
+	UpdateSize();
 }
 
 void VideoDisplay::UploadFrameData(FrameReadyEvent &evt) {
@@ -224,6 +266,8 @@ void VideoDisplay::DoRender() try {
 				if (subtitleOverlayRenderer)
 					subtitleOverlayRenderer->UploadOverlay(nullptr);
 			}
+			displayed_packet = pending_packet;
+			has_displayed_packet = true;
 			pending_packet = { };
 			has_pending_packet = false;
 		}
@@ -513,17 +557,11 @@ Vector2D VideoDisplay::GetMousePosition() const {
 }
 
 void VideoDisplay::Unload() {
-	if (glContext) {
-		SetCurrent(*glContext);
-	}
-	if (videoRenderer)
-		videoRenderer->Reset();
-	videoRenderer.reset();
-	if (subtitleOverlayRenderer)
-		subtitleOverlayRenderer->Reset();
-	subtitleOverlayRenderer.reset();
+	ResetRenderers();
 	tool.reset();
 	glContext.reset();
 	pending_packet = { };
 	has_pending_packet = false;
+	displayed_packet = { };
+	has_displayed_packet = false;
 }

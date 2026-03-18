@@ -46,6 +46,7 @@
 
 // Prototypes
 class RetinaHelper;
+class AsyncVideoProvider;
 class VideoController;
 class VisualToolBase;
 class wxComboBox;
@@ -110,11 +111,15 @@ class VideoDisplay final : public wxGLCanvas {
 	/// Render packet which will replace the currently visible frame on the next render
 	VideoRenderPacket pending_packet;
 	bool has_pending_packet = false;
+	/// Last packet successfully uploaded to the current renderer set; reused across backend reloads.
+	VideoRenderPacket displayed_packet;
+	bool has_displayed_packet = false;
 
 	std::unique_ptr<RetinaHelper> retina_helper;
 	int scale_factor;
 	agi::signal::Connection scale_factor_connection;
 	agi::signal::Connection dpi_scale_option_connection;
+	agi::signal::Connection renderer_backend_option_connection;
 
 	bool render_requested;
 
@@ -131,6 +136,9 @@ class VideoDisplay final : public wxGLCanvas {
 	/// @brief Initialize the gl context and set the active context to this one
 	/// @return Could the context be set?
 	bool InitContext();
+	void ResetRenderers();
+	void OnRendererBackendChanged(agi::OptionValue const&);
+	void OnVideoProviderChanged(AsyncVideoProvider *provider);
 
 	/// @brief Set the size of the display based on the current zoom and video resolution
 	void UpdateSize();

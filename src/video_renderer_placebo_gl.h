@@ -60,6 +60,9 @@ public:
 	~PlaceboRendererGL() override;
 
 	bool SupportsDirectOverlay() const noexcept override { return false; }
+	std::vector<SourceFramePixelFormat> GetPreferredSourceFormats() const override {
+		return { SourceFramePixelFormat::Bgra8 };
+	}
 	void Reset() override;
 	void UploadFrame(SourceFrame const& frame) override;
 	void UploadOverlay(SubtitleOverlay const* overlay) override;

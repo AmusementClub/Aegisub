@@ -244,6 +244,7 @@ AsyncVideoProvider::AsyncVideoProvider(std::unique_ptr<VideoProvider> source_pro
 , source_provider(std::move(source_provider))
 , event_sink(std::move(event_sink))
 {
+	ReconfigureSourceOutputFormat();
 }
 
 AsyncVideoProvider::~AsyncVideoProvider() {
@@ -460,6 +461,32 @@ std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrame(int frame, double time,
 	return ret;
 }
 
+bool AsyncVideoProvider::ReconfigureSourceOutputFormat() {
+	auto const compatibility_requires_bgra8 =
+		subs_provider && subs_provider->GetRenderMode() == SubtitleRenderMode::CompatibilityFrameOnly;
+	auto const selected = SelectPreferredSourceFrameFormat(
+		preferred_source_formats,
+		source_provider->GetAvailableSourceFormats(),
+		compatibility_requires_bgra8);
+
+	auto applied = selected;
+	if (!source_provider->SetOutputFormat(applied)) {
+		applied = SourceFramePixelFormat::Bgra8;
+		if (!source_provider->SetOutputFormat(applied))
+			return false;
+	}
+
+	if (selected_source_format == applied)
+		return false;
+
+	selected_source_format = applied;
+	++content_version;
+	last_rendered = -1;
+	last_lines.clear();
+	InvalidateOverlayPipelineState(true);
+	return true;
+}
+
 VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bool raw) {
 	VideoRenderPacket ret;
 	worker->Sync([&]{
@@ -480,10 +507,24 @@ void AsyncVideoProvider::SetColorSpace(std::string const& matrix) {
 	ScheduleProcessing();
 }
 
+bool AsyncVideoProvider::SetPreferredSourceFormats(std::vector<SourceFramePixelFormat> formats) {
+	if (formats.empty())
+		formats.push_back(SourceFramePixelFormat::Bgra8);
+
+	bool changed = false;
+	worker->Sync([&] {
+		while (ProcessPending()) { }
+		preferred_source_formats = std::move(formats);
+		changed = ReconfigureSourceOutputFormat();
+	});
+	return changed;
+}
+
 void AsyncVideoProvider::ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider> provider) {
 	worker->Sync([&] {
 		while (ProcessPending()) { }
 		subs_provider = std::move(provider);
+		ReconfigureSourceOutputFormat();
 		single_frame = NEW_SUBS_FILE;
 		last_rendered = -1;
 		last_lines.clear();

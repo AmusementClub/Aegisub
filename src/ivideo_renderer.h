@@ -15,8 +15,10 @@
 #pragma once
 
 #include "render_types.h"
+#include "source_frame.h"
 
-struct SourceFrame;
+#include <vector>
+
 struct SubtitleOverlay;
 
 class IVideoRenderer {
@@ -24,6 +26,9 @@ public:
 	virtual ~IVideoRenderer() = default;
 
 	virtual bool SupportsDirectOverlay() const noexcept { return true; }
+	virtual std::vector<SourceFramePixelFormat> GetPreferredSourceFormats() const {
+		return { SourceFramePixelFormat::Bgra8 };
+	}
 	virtual void Reset() = 0;
 	virtual void UploadFrame(SourceFrame const& frame) = 0;
 	virtual void UploadOverlay(SubtitleOverlay const* overlay) = 0;

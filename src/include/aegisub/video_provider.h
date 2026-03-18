@@ -34,12 +34,14 @@
 
 #pragma once
 
+#include "../../source_frame.h"
 #include "video_color_metadata.h"
 
 #include <libaegisub/exception.h>
 #include <libaegisub/vfr.h>
 
 #include <string>
+#include <vector>
 
 struct VideoFrame;
 
@@ -76,6 +78,12 @@ public:
 		return MergeSourceFrameColorMetadata(
 			GetRealColorMetadata(),
 			SourceFrameColorMetadataFromLegacyColorSpace(GetColorSpace()));
+	}
+	virtual std::vector<SourceFramePixelFormat> GetAvailableSourceFormats() const {
+		return { SourceFramePixelFormat::Bgra8 };
+	}
+	virtual bool SetOutputFormat(SourceFramePixelFormat format) {
+		return format == SourceFramePixelFormat::Bgra8;
 	}
 
 	/// @brief Use this to set any post-loading warnings, such as "being loaded with unreliable seeking"

@@ -84,6 +84,11 @@ public:
 	std::string GetRealColorSpace() const override { return master->GetRealColorSpace(); }
 	SourceFrameColorMetadata GetColorMetadata() const override { return master->GetColorMetadata(); }
 	SourceFrameColorMetadata GetRealColorMetadata() const override { return master->GetRealColorMetadata(); }
+	std::vector<SourceFramePixelFormat> GetAvailableSourceFormats() const override { return master->GetAvailableSourceFormats(); }
+	bool SetOutputFormat(SourceFramePixelFormat format) override {
+		ClearCache();
+		return master->SetOutputFormat(format);
+	}
 	bool ShouldSetVideoProperties() const override { return master->ShouldSetVideoProperties(); }
 	bool HasAudio() const override                 { return master->HasAudio(); }
 };

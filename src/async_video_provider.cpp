@@ -90,16 +90,28 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 	VideoRenderPacket packet;
 
 	std::shared_ptr<VideoFrame> frame;
-	frame = acquire_buffer(source_buffers);
-
-	try {
-		source_provider->GetFrame(frame_number, *frame);
+	if (selected_source_mode == SourceFrameOutputMode::Native) {
+		try {
+			if (!source_provider->GetNativeFrame(frame_number, packet.source_frame, packet.source_frame_owner))
+				throw VideoDecodeError("Selected native source mode but provider did not return a native frame.");
+		}
+		catch (VideoProviderError const& err) { throw VideoProviderErrorEvent(err); }
+		if (!packet.source_frame.IsValid())
+			throw VideoProviderErrorEvent(VideoDecodeError("Provider returned an invalid native source frame."));
 	}
-	catch (VideoProviderError const& err) { throw VideoProviderErrorEvent(err); }
+	else {
+		frame = acquire_buffer(source_buffers);
 
-	packet.source_frame_storage = frame;
-	packet.source_frame = MakeSourceFrameView(*frame, source_provider->GetColorMetadata());
-	packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
+		try {
+			source_provider->GetFrame(frame_number, *frame);
+		}
+		catch (VideoProviderError const& err) { throw VideoProviderErrorEvent(err); }
+
+		packet.source_frame_storage = frame;
+		packet.source_frame_owner = frame;
+		packet.source_frame = MakeSourceFrameView(*frame, source_provider->GetColorMetadata());
+		packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
+	}
 	packet.time = time;
 
 	if (raw || !subs_provider || !subs) {
@@ -130,16 +142,19 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 	catch (agi::Exception const& err) { throw SubtitlesProviderErrorEvent(err.GetMessage()); }
 
 	try {
-		auto composited = acquire_buffer(composited_buffers);
-		*composited = *frame;
-		packet.composited_frame_storage = composited;
+		std::shared_ptr<VideoFrame> composited;
+		if (frame) {
+			composited = acquire_buffer(composited_buffers);
+			*composited = *frame;
+			packet.composited_frame_storage = composited;
+		}
 
 		if (subs_provider->GetRenderMode() == SubtitleRenderMode::PremultipliedOverlay) {
 			auto overlay_storage = acquire_buffer(subtitle_overlay_buffers);
 			overlay_storage->Reset(
-				static_cast<int>(frame->width),
-				static_cast<int>(frame->height),
-				frame->flipped,
+				packet.source_frame.width,
+				packet.source_frame.height,
+				packet.source_frame.flipped,
 				!subs_provider->RenderOverlayClearsTarget());
 			auto subtitle_overlay = overlay_storage->MakeView(true);
 
@@ -171,10 +186,13 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 					packet.subtitle_overlay_storage = overlay_storage;
 					packet.subtitle_overlay = subtitle_overlay;
 					packet.has_subtitle_overlay = true;
-					CompositePremultipliedBgraOverlayOntoVideoFrame(*composited, subtitle_overlay);
+					if (composited)
+						CompositePremultipliedBgraOverlayOntoVideoFrame(*composited, subtitle_overlay);
 				}
 			}
 			else {
+				if (!composited)
+					throw SubtitlesProviderErrorEvent("Subtitle provider cannot bake subtitles into native source frames.");
 				subs_provider->DrawSubtitles(*composited, time / 1000.);
 			}
 		}

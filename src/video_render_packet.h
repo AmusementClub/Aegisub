@@ -22,6 +22,7 @@
 
 struct VideoRenderPacket {
 	std::shared_ptr<VideoFrame> source_frame_storage;
+	std::shared_ptr<void> source_frame_owner;
 	std::shared_ptr<VideoFrame> composited_frame_storage;
 	std::shared_ptr<SubtitleOverlayStorage> subtitle_overlay_storage;
 

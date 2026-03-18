@@ -30,6 +30,11 @@ struct VideoProviderState {
 	bool released = false;
 };
 
+struct FakeNativeFrameStorage {
+	std::vector<unsigned char> plane0;
+	std::vector<unsigned char> plane1;
+};
+
 class FakeVideoProvider final : public VideoProvider {
 	std::shared_ptr<VideoProviderState> state;
 
@@ -80,6 +85,32 @@ public:
 	std::string GetColorSpace() const override { return color_space; }
 	std::string GetRealColorSpace() const override { return real_color_space; }
 	SourceFrameNativeFormatIdentity GetNativeFormatIdentity() const override { return native_format; }
+	bool GetNativeFrame(int n, SourceFrame& frame, std::shared_ptr<void>& owner) override {
+		if (output_mode != SourceFrameOutputMode::Native)
+			return false;
+
+		auto storage = std::make_shared<FakeNativeFrameStorage>();
+		storage->plane0.resize(4, 0);
+		storage->plane1.resize(4, 0);
+		storage->plane0[0] = static_cast<unsigned char>(n);
+		storage->plane1[0] = static_cast<unsigned char>(n + 1);
+
+		frame = { };
+		frame.output_mode = SourceFrameOutputMode::Native;
+		frame.native_format = native_format.IsValid()
+			? native_format
+			: SourceFrameNativeFormatIdentity{ SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, 7 };
+		frame.format_info = MakeSemiplanar420SourceFrameFormatInfo(8, 1, 2);
+		frame.width = 2;
+		frame.height = 2;
+		frame.flipped = false;
+		frame.plane_count = frame.format_info.plane_count;
+		frame.color = SourceFrameColorMetadataFromLegacyColorSpace(color_space);
+		frame.planes[0] = { storage->plane0.data(), 2, 2, 2 };
+		frame.planes[1] = { storage->plane1.data(), 4, 1, 1 };
+		owner = storage;
+		return true;
+	}
 	std::vector<SourceFrameOutputMode> GetAvailableSourceModes() const override { return available_modes; }
 	bool SetOutputMode(SourceFrameOutputMode mode) override {
 		if (std::find(available_modes.begin(), available_modes.end(), mode) == available_modes.end())
@@ -526,6 +557,30 @@ TEST(async_video_provider, bgra_source_frame_preserves_upstream_native_format_id
 	EXPECT_EQ(SourceFrameOutputMode::Bgra8, packet.source_frame.output_mode);
 	EXPECT_EQ(SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, packet.source_frame.native_format.format_namespace);
 	EXPECT_EQ(42, packet.source_frame.native_format.format_id);
+}
+
+TEST(async_video_provider, native_source_mode_returns_native_source_frame_packet) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->native_format = { SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, 99 };
+	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
+	auto packet = provider.GetRenderPacket(5, 5000, true);
+	EXPECT_EQ(SourceFrameOutputMode::Native, packet.source_frame.output_mode);
+	EXPECT_EQ(SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, packet.source_frame.native_format.format_namespace);
+	EXPECT_EQ(99, packet.source_frame.native_format.format_id);
+	EXPECT_TRUE(packet.source_frame.IsValid());
+	EXPECT_TRUE(static_cast<bool>(packet.source_frame_owner));
+	EXPECT_FALSE(static_cast<bool>(packet.source_frame_storage));
+	EXPECT_FALSE(static_cast<bool>(packet.composited_frame_storage));
+	EXPECT_FALSE(packet.has_subtitle_overlay);
 }
 
 TEST(async_video_provider, preferred_source_modes_choose_native_for_overlay_path) {

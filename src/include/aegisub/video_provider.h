@@ -40,6 +40,7 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/vfr.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -51,6 +52,12 @@ public:
 
 	/// Override this method to actually get frames
 	virtual void GetFrame(int n, VideoFrame &frame)=0;
+	virtual bool GetNativeFrame(int n, SourceFrame& frame, std::shared_ptr<void>& owner) {
+		(void)n;
+		frame = { };
+		owner.reset();
+		return false;
+	}
 
 	/// Set the YCbCr matrix to the specified one
 	///

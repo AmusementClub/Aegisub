@@ -69,6 +69,37 @@ TEST(source_frame_overlay, source_frame_view_reflects_video_frame) {
 	EXPECT_EQ(99, source.planes[0].data[5]);
 }
 
+TEST(source_frame_overlay, legacy_color_space_parser_infers_renderer_facing_metadata) {
+	auto color = SourceFrameColorMetadataFromLegacyColorSpace("TV.601");
+
+	EXPECT_EQ("TV.601", color.matrix);
+	EXPECT_EQ("BT.601", color.primaries);
+	EXPECT_TRUE(color.transfer.empty());
+	EXPECT_EQ(SourceFrameColorRange::Full, color.range);
+}
+
+TEST(source_frame_overlay, source_frame_view_preserves_full_color_metadata) {
+	VideoFrame frame;
+	frame.width = 4;
+	frame.height = 3;
+	frame.pitch = 16;
+	frame.flipped = false;
+	frame.data.resize(48);
+
+	SourceFrameColorMetadata color;
+	color.matrix = "TV.709";
+	color.primaries = "BT.2020";
+	color.transfer = "PQ";
+	color.range = SourceFrameColorRange::Full;
+
+	auto source = MakeSourceFrameView(frame, color);
+
+	EXPECT_EQ("TV.709", source.color.matrix);
+	EXPECT_EQ("BT.2020", source.color.primaries);
+	EXPECT_EQ("PQ", source.color.transfer);
+	EXPECT_EQ(SourceFrameColorRange::Full, source.color.range);
+}
+
 TEST(source_frame_overlay, legacy_overlay_view_reflects_video_frame) {
 	VideoFrame frame;
 	frame.width = 2;

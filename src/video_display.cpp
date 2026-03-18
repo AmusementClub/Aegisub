@@ -261,7 +261,7 @@ void VideoDisplay::DoRender() try {
 			}
 			else {
 				auto display_frame = pending_packet.DisplayFrame();
-				videoRenderer->UploadFrame(MakeSourceFrameView(*display_frame, pending_packet.source_frame.color.matrix));
+				videoRenderer->UploadFrame(MakeSourceFrameView(*display_frame, pending_packet.source_frame.color));
 				videoRenderer->UploadOverlay(nullptr);
 				if (subtitleOverlayRenderer)
 					subtitleOverlayRenderer->UploadOverlay(nullptr);

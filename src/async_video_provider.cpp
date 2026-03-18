@@ -98,7 +98,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 	catch (VideoProviderError const& err) { throw VideoProviderErrorEvent(err); }
 
 	packet.source_frame_storage = frame;
-	packet.source_frame = MakeSourceFrameView(*frame, source_provider->GetColorSpace());
+	packet.source_frame = MakeSourceFrameView(*frame, source_provider->GetColorMetadata());
 	packet.time = time;
 
 	if (raw || !subs_provider || !subs) {

@@ -31,6 +31,8 @@ struct VideoProviderState {
 
 class FakeVideoProvider final : public VideoProvider {
 	std::shared_ptr<VideoProviderState> state;
+	std::string color_space = "BT.709";
+	std::string real_color_space = "BT.709";
 
 public:
 	explicit FakeVideoProvider(std::shared_ptr<VideoProviderState> state)
@@ -63,14 +65,15 @@ public:
 		frame.data[0] = static_cast<unsigned char>(n);
 	}
 
-	void SetColorSpace(std::string const&) override { }
+	void SetColorSpace(std::string const& matrix) override { color_space = matrix; }
 	int GetFrameCount() const override { return 100; }
 	int GetWidth() const override { return 2; }
 	int GetHeight() const override { return 2; }
 	double GetDAR() const override { return 1.0; }
 	agi::vfr::Framerate GetFPS() const override { return agi::vfr::Framerate(24.0); }
 	std::vector<int> GetKeyFrames() const override { return {}; }
-	std::string GetColorSpace() const override { return "BT.709"; }
+	std::string GetColorSpace() const override { return color_space; }
+	std::string GetRealColorSpace() const override { return real_color_space; }
 	std::string GetDecoderName() const override { return "fake"; }
 };
 
@@ -459,6 +462,9 @@ TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 	ASSERT_TRUE(packet.has_subtitle_overlay);
 	EXPECT_TRUE(packet.source_frame.IsValid());
 	EXPECT_TRUE(packet.subtitle_overlay.IsValid());
+	EXPECT_EQ("BT.709", packet.source_frame.color.matrix);
+	EXPECT_EQ("BT.709", packet.source_frame.color.primaries);
+	EXPECT_EQ(SourceFrameColorRange::Full, packet.source_frame.color.range);
 	EXPECT_TRUE(packet.subtitle_overlay.premultiplied_alpha);
 	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, packet.subtitle_overlay.composition_mode);
 	EXPECT_EQ(9, packet.source_frame_storage->data[0]);
@@ -471,6 +477,24 @@ TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 	EXPECT_EQ(0, packet.subtitle_overlay.dirty_rects[0].y);
 	EXPECT_EQ(2, packet.subtitle_overlay.dirty_rects[0].width);
 	EXPECT_EQ(2, packet.subtitle_overlay.dirty_rects[0].height);
+}
+
+TEST(async_video_provider, color_space_override_updates_effective_source_frame_metadata) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	provider.SetColorSpace("TV.601");
+	auto packet = provider.GetRenderPacket(3, 3000);
+
+	EXPECT_EQ("TV.601", packet.source_frame.color.matrix);
+	EXPECT_EQ("BT.601", packet.source_frame.color.primaries);
+	EXPECT_EQ(SourceFrameColorRange::Full, packet.source_frame.color.range);
 }
 
 TEST(async_video_provider, premultiplied_overlay_provider_can_supply_dirty_rects) {

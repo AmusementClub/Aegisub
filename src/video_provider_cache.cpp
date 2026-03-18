@@ -82,6 +82,8 @@ public:
 	std::string GetDecoderName() const override    { return master->GetDecoderName(); }
 	std::string GetColorSpace() const override     { return master->GetColorSpace(); }
 	std::string GetRealColorSpace() const override { return master->GetRealColorSpace(); }
+	SourceFrameColorMetadata GetColorMetadata() const override { return master->GetColorMetadata(); }
+	SourceFrameColorMetadata GetRealColorMetadata() const override { return master->GetRealColorMetadata(); }
 	bool ShouldSetVideoProperties() const override { return master->ShouldSetVideoProperties(); }
 	bool HasAudio() const override                 { return master->HasAudio(); }
 };

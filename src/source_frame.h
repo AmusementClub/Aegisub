@@ -14,21 +14,15 @@
 
 #pragma once
 
+#include "include/aegisub/video_color_metadata.h"
 #include "video_frame.h"
 
 #include <array>
 #include <cstddef>
-#include <string>
 
 enum class SourceFramePixelFormat {
 	Unknown,
 	Bgra8
-};
-
-enum class SourceFrameColorRange {
-	Unknown,
-	Limited,
-	Full
 };
 
 struct SourceFramePlaneView {
@@ -36,13 +30,6 @@ struct SourceFramePlaneView {
 	ptrdiff_t stride = 0;
 	int width = 0;
 	int height = 0;
-};
-
-struct SourceFrameColorMetadata {
-	std::string matrix;
-	std::string primaries;
-	std::string transfer;
-	SourceFrameColorRange range = SourceFrameColorRange::Unknown;
 };
 
 struct SourceFrame {
@@ -63,7 +50,7 @@ struct SourceFrame {
 	}
 };
 
-inline SourceFrame MakeSourceFrameView(VideoFrame const& frame, std::string matrix = {}) {
+inline SourceFrame MakeSourceFrameView(VideoFrame const& frame, SourceFrameColorMetadata color = {}) {
 	SourceFrame view;
 	view.pixel_format = SourceFramePixelFormat::Bgra8;
 	view.width = static_cast<int>(frame.width);
@@ -76,6 +63,10 @@ inline SourceFrame MakeSourceFrameView(VideoFrame const& frame, std::string matr
 		static_cast<int>(frame.width),
 		static_cast<int>(frame.height)
 	};
-	view.color.matrix = std::move(matrix);
+	view.color = std::move(color);
 	return view;
+}
+
+inline SourceFrame MakeSourceFrameView(VideoFrame const& frame, std::string matrix) {
+	return MakeSourceFrameView(frame, SourceFrameColorMetadataFromLegacyColorSpace(std::move(matrix)));
 }

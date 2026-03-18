@@ -34,6 +34,8 @@
 
 #pragma once
 
+#include "video_color_metadata.h"
+
 #include <libaegisub/exception.h>
 #include <libaegisub/vfr.h>
 
@@ -67,6 +69,14 @@ public:
 	///         unknown or meaningless
 	virtual std::string GetColorSpace() const = 0;
 	virtual std::string GetRealColorSpace() const { return GetColorSpace(); }
+	virtual SourceFrameColorMetadata GetRealColorMetadata() const {
+		return SourceFrameColorMetadataFromLegacyColorSpace(GetRealColorSpace());
+	}
+	virtual SourceFrameColorMetadata GetColorMetadata() const {
+		return MergeSourceFrameColorMetadata(
+			GetRealColorMetadata(),
+			SourceFrameColorMetadataFromLegacyColorSpace(GetColorSpace()));
+	}
 
 	/// @brief Use this to set any post-loading warnings, such as "being loaded with unreliable seeking"
 	virtual std::string GetWarning() const { return ""; }

@@ -99,6 +99,12 @@ enum pl_color_primaries InferPrimaries(SourceFrameColorMetadata const& color) {
 	auto token = NormalizeColorToken(color.primaries);
 	if (ContainsToken(token, "2020"))
 		return PL_COLOR_PRIM_BT_2020;
+	if (ContainsToken(token, "470M"))
+		return PL_COLOR_PRIM_BT_470M;
+	if (ContainsToken(token, "601525") || ContainsToken(token, "170M") || ContainsToken(token, "240M"))
+		return PL_COLOR_PRIM_BT_601_525;
+	if (ContainsToken(token, "601625") || ContainsToken(token, "470BG") || ContainsToken(token, "BT601"))
+		return PL_COLOR_PRIM_BT_601_625;
 	if (ContainsToken(token, "DISPLAYP3"))
 		return PL_COLOR_PRIM_DISPLAY_P3;
 	if (ContainsToken(token, "DCIP3"))

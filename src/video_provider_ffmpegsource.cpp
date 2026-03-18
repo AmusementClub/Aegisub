@@ -72,6 +72,8 @@ class FFmpegSourceVideoProvider final : public VideoProvider, FFmpegSourceProvid
 	int Height = -1;                ///< height in pixels
 	int CS = -1;                    ///< Reported colorspace of first frame
 	int CR = -1;                    ///< Reported colorrange of first frame
+	int RealCS = -1;                ///< Original colorspace before any matrix override
+	int RealCR = -1;                ///< Original colorrange before conversion to RGB
 	double DAR;                     ///< display aspect ratio
 	std::vector<int> KeyFramesList; ///< list of keyframes
 	agi::vfr::Framerate Timecodes;  ///< vfr object
@@ -117,6 +119,8 @@ public:
 	agi::vfr::Framerate GetFPS() const override    { return Timecodes; }
 	std::string GetColorSpace() const override     { return ColorSpace; }
 	std::string GetRealColorSpace() const override { return RealColorSpace; }
+	SourceFrameColorMetadata GetColorMetadata() const override;
+	SourceFrameColorMetadata GetRealColorMetadata() const override;
 	std::vector<int> GetKeyFrames() const override { return KeyFramesList; };
 	std::string GetDecoderName() const override    { return "FFmpegSource"; }
 	bool WantsCaching() const override             { return true; }
@@ -141,6 +145,37 @@ std::string colormatrix_description(int cs, int cr) {
 			return str + ".240M";
 		default:
 			throw VideoOpenError("Unknown video color space");
+	}
+}
+
+SourceFrameColorMetadata ffms_color_metadata(int cs, int cr, std::string const& matrix) {
+	auto color = SourceFrameColorMetadataFromLegacyColorSpace(matrix);
+	color.range = SourceFrameColorRange::Full;
+
+	switch (cs) {
+		case AGI_CS_RGB:
+			color.matrix = "None";
+			color.primaries.clear();
+			return color;
+		case AGI_CS_BT709:
+			color.primaries = "BT.709";
+			return color;
+		case AGI_CS_BT470BG:
+			color.primaries = "BT.601-625";
+			return color;
+		case AGI_CS_SMPTE170M:
+			color.primaries = "BT.601-525";
+			return color;
+		case AGI_CS_SMPTE240M:
+			color.primaries = "SMPTE-240M";
+			return color;
+		case AGI_CS_BT2020_NCL:
+		case AGI_CS_BT2020_CL:
+			color.primaries = "BT.2020";
+			return color;
+		default:
+			(void)cr;
+			return color;
 	}
 }
 
@@ -264,6 +299,8 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 
 	int VideoCS = CS = TempFrame->ColorSpace;
 	CR = TempFrame->ColorRange;
+	RealCS = VideoCS;
+	RealCR = CR;
 
 	if (CS == AGI_CS_UNSPECIFIED)
 		CS = Width > 1024 || Height >= 600 ? AGI_CS_BT709 : AGI_CS_BT470BG;
@@ -374,6 +411,14 @@ void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
 		out.pitch = 4 * Height;
 	}
 #endif
+}
+
+SourceFrameColorMetadata FFmpegSourceVideoProvider::GetColorMetadata() const {
+	return ffms_color_metadata(CS, CR, ColorSpace);
+}
+
+SourceFrameColorMetadata FFmpegSourceVideoProvider::GetRealColorMetadata() const {
+	return ffms_color_metadata(RealCS, RealCR, RealColorSpace);
 }
 }
 

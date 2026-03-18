@@ -293,9 +293,9 @@ TEST(lagi_audio_display, spectrum_analysis_cache_stays_finite_with_prefetch_inte
 }
 
 TEST(lagi_audio_display, track_cursor_overlay_refresh_policy_handles_same_pixel_updates) {
-	EXPECT_FALSE(ShouldRefreshTrackCursorOverlay(-1, -1));
-	EXPECT_TRUE(ShouldRefreshTrackCursorOverlay(-1, 120));
-	EXPECT_TRUE(ShouldRefreshTrackCursorOverlay(120, -1));
-	EXPECT_TRUE(ShouldRefreshTrackCursorOverlay(120, 120));
-	EXPECT_TRUE(ShouldRefreshTrackCursorOverlay(120, 121));
+	EXPECT_FALSE(ShouldRefreshTrackCursor(-1, -1));
+	EXPECT_TRUE(ShouldRefreshTrackCursor(-1, 120));
+	EXPECT_TRUE(ShouldRefreshTrackCursor(120, -1));
+	EXPECT_TRUE(ShouldRefreshTrackCursor(120, 120));
+	EXPECT_TRUE(ShouldRefreshTrackCursor(120, 121));
 }

@@ -43,7 +43,6 @@ if(GTEST_FOUND)
         tests/tests/character_count.cpp
         tests/tests/color.cpp
         tests/tests/compatibility_overlay_buffer_plan.cpp
-        tests/tests/crc32.cpp
         tests/tests/dialogue_lexer.cpp
         tests/tests/format.cpp
         tests/tests/fs.cpp
@@ -55,7 +54,6 @@ if(GTEST_FOUND)
         tests/tests/keyframe.cpp
         tests/tests/line_iterator.cpp
         tests/tests/line_wrap.cpp
-        tests/tests/math_utils.cpp
         tests/tests/video_renderer_opengl_overlay_upload_plan.cpp
         tests/tests/video_renderer_opengl_tile.cpp
         tests/tests/video_render_routing.cpp

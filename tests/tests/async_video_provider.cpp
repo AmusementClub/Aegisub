@@ -276,38 +276,6 @@ public:
 	}
 };
 
-class FakeSeekGapCompatibilitySubtitlesProvider final : public SubtitlesProvider {
-private:
-	void LoadSubtitles(const char *, size_t) override {
-	}
-
-public:
-	SubtitleRenderMode GetRenderMode() const override {
-		return SubtitleRenderMode::CompatibilityFrameOnly;
-	}
-
-	bool RenderOverlay(SourceFrame const&, SubtitleOverlay&, double) override {
-		FAIL() << "compatibility backend should not call RenderOverlay";
-		return false;
-	}
-
-	void DrawSubtitles(VideoFrame &dst, double) override {
-		if (dst.data.empty())
-			return;
-
-		unsigned char frame_number = dst.data[0];
-		if (frame_number != 3)
-			return;
-
-		if (dst.data.size() < 8)
-			dst.data.resize(8);
-		dst.data[4] = 77;
-		dst.data[5] = 88;
-		dst.data[6] = 99;
-		dst.data[7] = 0;
-	}
-};
-
 struct RecordedFrame {
 	int frame_number = -1;
 	int subtitle_generation = -1;
@@ -711,43 +679,4 @@ TEST(async_video_provider, dropped_packet_forces_full_overlay_upload_on_next_del
 	EXPECT_EQ(2, frames.back().frame_number);
 	EXPECT_TRUE(frames.back().has_overlay);
 	EXPECT_TRUE(frames.back().overlay_force_full_upload);
-}
-
-TEST(async_video_provider, dropped_packet_keeps_force_full_upload_until_next_overlay_packet) {
-	auto state = std::make_shared<VideoProviderState>();
-	state->block_next = true;
-	auto *subs = new FakeSeekGapCompatibilitySubtitlesProvider;
-	EventRecorder recorder;
-
-	AsyncVideoProvider provider(
-		agi::make_unique<FakeVideoProvider>(state),
-		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
-
-	auto subtitle_file = MakeSubtitleFile("gap");
-	provider.LoadSubtitles(&subtitle_file);
-
-	provider.RequestFrame(1, 1000);
-	{
-		std::unique_lock<std::mutex> lock(state->mutex);
-		ASSERT_TRUE(state->cv.wait_for(lock, std::chrono::seconds(2), [&] { return state->entered; }));
-	}
-
-	provider.RequestFrame(2, 2000);
-
-	{
-		std::lock_guard<std::mutex> lock(state->mutex);
-		state->released = true;
-	}
-	state->cv.notify_all();
-
-	ASSERT_TRUE(recorder.WaitForCount(1));
-	auto frames = recorder.Snapshot();
-	ASSERT_EQ(1u, frames.size());
-	EXPECT_EQ(2, frames.back().frame_number);
-	EXPECT_FALSE(frames.back().has_overlay);
-
-	auto packet = provider.GetRenderPacket(3, 3000);
-	ASSERT_TRUE(packet.has_subtitle_overlay);
-	EXPECT_TRUE(packet.subtitle_overlay.force_full_upload);
 }

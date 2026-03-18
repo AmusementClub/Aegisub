@@ -94,4 +94,26 @@ TEST(video_renderer_placebo_source_frame, native_planar_420_uses_ycbcr_channel_m
 	EXPECT_EQ(PL_CHANNEL_CR, v_plane.component_map[0]);
 }
 
+TEST(video_renderer_placebo_source_frame, native_rgb_plane_uses_rgb_channel_mapping) {
+	unsigned char rgba[16] = { };
+
+	SourceFrame source;
+	source.output_mode = SourceFrameOutputMode::Native;
+	source.native_format = { SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, 99 };
+	source.format_info = { SourceFrameColorFamily::Rgb, 1, { {
+		{ 1, 1, 4, 4, 8, { { 16, 8, 0, 24 } } }, { }, { }, { }
+	} } };
+	source.width = 2;
+	source.height = 2;
+	source.plane_count = source.format_info.plane_count;
+	source.planes[0] = { rgba, 8, 2, 2 };
+
+	struct pl_plane_data plane = {};
+	ASSERT_TRUE(BuildPlaceboNativePlaneData(source, 0, plane));
+	EXPECT_EQ(PL_CHANNEL_R, plane.component_map[0]);
+	EXPECT_EQ(PL_CHANNEL_G, plane.component_map[1]);
+	EXPECT_EQ(PL_CHANNEL_B, plane.component_map[2]);
+	EXPECT_EQ(PL_CHANNEL_A, plane.component_map[3]);
+}
+
 #endif

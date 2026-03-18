@@ -17,12 +17,11 @@
 #include "subtitle_overlay.h"
 #include "video_renderer_error.h"
 #include "video_renderer_placebo_runtime.h"
+#include "video_renderer_placebo_source_frame.h"
 
 #include <libaegisub/log.h>
 
-#include <algorithm>
 #include <array>
-#include <cctype>
 #include <string>
 
 #ifdef _WIN32
@@ -81,72 +80,6 @@ void PlaceboLogCallback(void *, enum pl_log_level level, const char *msg) {
 	}
 }
 
-std::string NormalizeColorToken(std::string value) {
-	std::string normalized;
-	normalized.reserve(value.size());
-	for (unsigned char ch : value) {
-		if (std::isalnum(ch))
-			normalized.push_back(static_cast<char>(std::toupper(ch)));
-	}
-	return normalized;
-}
-
-bool ContainsToken(std::string const& value, char const *token) {
-	return value.find(token) != std::string::npos;
-}
-
-enum pl_color_primaries InferPrimaries(SourceFrameColorMetadata const& color) {
-	auto token = NormalizeColorToken(color.primaries);
-	if (ContainsToken(token, "2020"))
-		return PL_COLOR_PRIM_BT_2020;
-	if (ContainsToken(token, "470M"))
-		return PL_COLOR_PRIM_BT_470M;
-	if (ContainsToken(token, "601525") || ContainsToken(token, "170M") || ContainsToken(token, "240M"))
-		return PL_COLOR_PRIM_BT_601_525;
-	if (ContainsToken(token, "601625") || ContainsToken(token, "470BG") || ContainsToken(token, "BT601"))
-		return PL_COLOR_PRIM_BT_601_625;
-	if (ContainsToken(token, "DISPLAYP3"))
-		return PL_COLOR_PRIM_DISPLAY_P3;
-	if (ContainsToken(token, "DCIP3"))
-		return PL_COLOR_PRIM_DCI_P3;
-	return PL_COLOR_PRIM_BT_709;
-}
-
-enum pl_color_transfer InferTransfer(SourceFrameColorMetadata const& color) {
-	auto token = NormalizeColorToken(color.transfer);
-	if (ContainsToken(token, "LINEAR"))
-		return PL_COLOR_TRC_LINEAR;
-	if (ContainsToken(token, "SRGB"))
-		return PL_COLOR_TRC_SRGB;
-	if (ContainsToken(token, "PQ") || ContainsToken(token, "2084"))
-		return PL_COLOR_TRC_PQ;
-	if (ContainsToken(token, "HLG"))
-		return PL_COLOR_TRC_HLG;
-	return PL_COLOR_TRC_BT_1886;
-}
-
-enum pl_color_levels InferLevels(SourceFrameColorMetadata const& color) {
-	if (color.range == SourceFrameColorRange::Limited)
-		return PL_COLOR_LEVELS_LIMITED;
-	return PL_COLOR_LEVELS_FULL;
-}
-
-struct pl_color_repr BuildImageRepr(SourceFrameColorMetadata const& color) {
-	struct pl_color_repr repr = {};
-	repr.sys = PL_COLOR_SYSTEM_RGB;
-	repr.levels = InferLevels(color);
-	repr.alpha = PL_ALPHA_NONE;
-	repr.bits = { 8, 8, 0 };
-	return repr;
-}
-
-struct pl_color_space BuildImageColorSpace(SourceFrameColorMetadata const& color) {
-	struct pl_color_space space = {};
-	space.primaries = InferPrimaries(color);
-	space.transfer = InferTransfer(color);
-	return space;
-}
-
 pl_rect2df FullRect(int width, int height) {
 	return { 0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height) };
 }
@@ -184,6 +117,38 @@ Proc LoadOptionalProc(char const *name, char const *fallback_name = nullptr) {
 			return reinterpret_cast<Proc>(proc);
 	}
 	return nullptr;
+}
+
+bool BuildBgra8PlaneData(placebo::runtime::Api const& api, SourceFrame const& frame, struct pl_plane_data& data) {
+	if (!frame.IsValid()
+		|| frame.output_mode != SourceFrameOutputMode::Bgra8
+		|| frame.pixel_format != SourceFramePixelFormat::Bgra8)
+		return false;
+
+	auto const& plane = frame.planes[0];
+	auto* pixels = plane.data;
+	ptrdiff_t stride = plane.stride;
+	size_t row_stride = static_cast<size_t>(stride < 0 ? -stride : stride);
+	if (!pixels || row_stride == 0)
+		return false;
+	if (stride < 0)
+		pixels += static_cast<ptrdiff_t>(plane.height - 1) * row_stride;
+
+	data = {};
+	data.type = PL_FMT_UNORM;
+	data.width = frame.width;
+	data.height = frame.height;
+	data.pixel_stride = 4;
+	data.row_stride = row_stride;
+	data.pixels = pixels;
+	uint64_t masks[4] = {
+		kBgra8Masks[0],
+		kBgra8Masks[1],
+		kBgra8Masks[2],
+		kBgra8Masks[3]
+	};
+	api.plane_data_from_mask(&data, masks);
+	return true;
 }
 }
 
@@ -245,14 +210,16 @@ void PlaceboRendererGL::EnsureInitialized() {
 }
 
 void PlaceboRendererGL::DestroyImageResources() noexcept {
-	if (api && opengl && image_texture)
-		api->tex_destroy(opengl->gpu, &image_texture);
-	image_texture = nullptr;
+	for (auto& plane : image_planes) {
+		if (api && opengl && plane.texture)
+			api->tex_destroy(opengl->gpu, &plane.texture);
+		plane = {};
+	}
 	image_width = 0;
 	image_height = 0;
-	image_components = 0;
-	image_component_mapping = { { -1, -1, -1, -1 } };
-	image_flipped = false;
+	image_plane_count = 0;
+	image_output_mode = SourceFrameOutputMode::Bgra8;
+	image_format_info = {};
 	image_color = {};
 	has_frame = false;
 }
@@ -312,41 +279,52 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 		DestroyImageResources();
 		return;
 	}
-	if (frame.pixel_format != SourceFramePixelFormat::Bgra8)
-		throw VideoOutRenderException("PlaceboRendererGL currently only supports BGRA8 source frames.");
 
 	EnsureInitialized();
 
-	struct pl_plane_data data = {};
-	data.type = PL_FMT_UNORM;
-	data.width = frame.width;
-	data.height = frame.height;
-	data.pixel_stride = 4;
-	data.row_stride = static_cast<size_t>(frame.planes[0].stride);
-	data.pixels = frame.planes[0].data;
-	uint64_t masks[4] = {
-		kBgra8Masks[0],
-		kBgra8Masks[1],
-		kBgra8Masks[2],
-		kBgra8Masks[3]
-	};
-	api->plane_data_from_mask(&data, masks);
-
-	struct pl_plane plane = {};
-	if (!api->upload_plane(opengl->gpu, &plane, &image_texture, &data)) {
-		DestroyImageResources();
-		throw VideoOutRenderException("libplacebo failed to upload the BGRA source frame.");
+	int const next_plane_count = frame.output_mode == SourceFrameOutputMode::Native ? frame.plane_count : 1;
+	for (int i = next_plane_count; i < image_plane_count; ++i) {
+		auto& plane = image_planes[static_cast<size_t>(i)];
+		if (plane.texture)
+			api->tex_destroy(opengl->gpu, &plane.texture);
+		plane = {};
 	}
 
-	plane.flipped = frame.flipped;
-	plane.address_mode = PL_TEX_ADDRESS_CLAMP;
+	for (int i = 0; i < next_plane_count; ++i) {
+		struct pl_plane_data data = {};
+		bool built = frame.output_mode == SourceFrameOutputMode::Bgra8
+			? BuildBgra8PlaneData(*api, frame, data)
+			: BuildPlaceboNativePlaneData(frame, i, data);
+		if (!built) {
+			DestroyImageResources();
+			throw VideoOutRenderException("libplacebo could not describe the source frame for upload.");
+		}
+
+		struct pl_plane uploaded_plane = {};
+		auto& plane_state = image_planes[static_cast<size_t>(i)];
+		if (!api->upload_plane(opengl->gpu, &uploaded_plane, &plane_state.texture, &data)) {
+			DestroyImageResources();
+			throw VideoOutRenderException("libplacebo failed to upload the source frame.");
+		}
+
+		uploaded_plane.flipped = frame.flipped;
+		uploaded_plane.address_mode = PL_TEX_ADDRESS_CLAMP;
+
+		plane_state.texture = uploaded_plane.texture;
+		plane_state.components = uploaded_plane.components;
+		plane_state.flipped = uploaded_plane.flipped;
+		plane_state.shift_x = uploaded_plane.shift_x;
+		plane_state.shift_y = uploaded_plane.shift_y;
+		for (int component = 0; component < 4; ++component)
+			plane_state.component_mapping[static_cast<size_t>(component)] =
+				uploaded_plane.component_mapping[component];
+	}
 
 	image_width = frame.width;
 	image_height = frame.height;
-	image_components = plane.components;
-	for (int i = 0; i < 4; ++i)
-		image_component_mapping[static_cast<size_t>(i)] = plane.component_mapping[i];
-	image_flipped = plane.flipped;
+	image_plane_count = next_plane_count;
+	image_output_mode = frame.output_mode;
+	image_format_info = frame.format_info;
 	image_color = frame.color;
 	has_frame = true;
 }
@@ -380,19 +358,27 @@ void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width,
 	glClearStencil(0);
 	glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
-	struct pl_plane image_plane = {};
-	image_plane.texture = image_texture;
-	image_plane.flipped = image_flipped;
-	image_plane.address_mode = PL_TEX_ADDRESS_CLAMP;
-	image_plane.components = image_components;
-	for (int i = 0; i < 4; ++i)
-		image_plane.component_mapping[i] = image_component_mapping[static_cast<size_t>(i)];
+	SourceFrame frame_description;
+	frame_description.output_mode = image_output_mode;
+	frame_description.format_info = image_format_info;
+	frame_description.color = image_color;
 
 	struct pl_frame image = {};
-	image.num_planes = 1;
-	image.planes[0] = image_plane;
-	image.repr = BuildImageRepr(image_color);
-	image.color = BuildImageColorSpace(image_color);
+	image.num_planes = image_plane_count;
+	for (int i = 0; i < image_plane_count; ++i) {
+		auto const& plane_state = image_planes[static_cast<size_t>(i)];
+		auto& plane = image.planes[static_cast<size_t>(i)];
+		plane.texture = plane_state.texture;
+		plane.address_mode = PL_TEX_ADDRESS_CLAMP;
+		plane.flipped = plane_state.flipped;
+		plane.components = plane_state.components;
+		plane.shift_x = plane_state.shift_x;
+		plane.shift_y = plane_state.shift_y;
+		for (int component = 0; component < 4; ++component)
+			plane.component_mapping[component] = plane_state.component_mapping[static_cast<size_t>(component)];
+	}
+	image.repr = BuildPlaceboSourceFrameRepr(frame_description);
+	image.color = BuildPlaceboSourceFrameColorSpace(frame_description);
 	image.crop = FullRect(image_width, image_height);
 	image.rotation = PL_ROTATION_0;
 
@@ -409,7 +395,7 @@ void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width,
 	struct pl_frame target = {};
 	target.num_planes = 1;
 	target.planes[0] = target_plane;
-	target.repr = image.repr;
+	target.repr = BuildPlaceboRenderTargetRepr();
 	target.color = image.color;
 	target.crop = ViewportRect(viewport, canvas_width, canvas_height);
 	target.rotation = PL_ROTATION_0;

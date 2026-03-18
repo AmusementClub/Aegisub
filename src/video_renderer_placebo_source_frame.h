@@ -119,6 +119,15 @@ inline struct pl_color_space BuildPlaceboSourceFrameColorSpace(SourceFrame const
 	return space;
 }
 
+inline struct pl_color_repr BuildPlaceboRenderTargetRepr() {
+	struct pl_color_repr repr = {};
+	repr.sys = PL_COLOR_SYSTEM_RGB;
+	repr.levels = PL_COLOR_LEVELS_FULL;
+	repr.alpha = PL_ALPHA_NONE;
+	repr.bits = { 8, 8, 0 };
+	return repr;
+}
+
 inline bool BuildPlaceboNativePlaneData(SourceFrame const& frame, int plane_index, struct pl_plane_data& data) {
 	if (!frame.IsValid()
 		|| frame.output_mode != SourceFrameOutputMode::Native
@@ -148,7 +157,17 @@ inline bool BuildPlaceboNativePlaneData(SourceFrame const& frame, int plane_inde
 		data.component_pad[i] = plane_info.component_shift[static_cast<size_t>(i)];
 	}
 
-	if (plane_index == 0) {
+	if (frame.format_info.color_family == SourceFrameColorFamily::Rgb) {
+		static constexpr int rgb_channels[4] = {
+			PL_CHANNEL_R,
+			PL_CHANNEL_G,
+			PL_CHANNEL_B,
+			PL_CHANNEL_A
+		};
+		for (int i = 0; i < plane_info.components_per_sample; ++i)
+			data.component_map[i] = rgb_channels[i];
+	}
+	else if (plane_index == 0) {
 		data.component_map[0] = PL_CHANNEL_Y;
 	}
 	else if (plane_info.components_per_sample == 2) {

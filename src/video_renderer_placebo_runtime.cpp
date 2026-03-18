@@ -33,12 +33,23 @@ namespace {
 constexpr char kPlaceboLogTag[] = "video/out/placebo/runtime";
 constexpr char kLogCreateSymbol[] = "pl_log_create_" AGI_PL_STRINGIFY(PL_API_VER);
 
+void LogInfo(std::string const& message) {
+	if (agi::log::log)
+		LOG_I(kPlaceboLogTag) << message;
+}
+
+void LogWarning(std::string const& message) {
+	if (agi::log::log)
+		LOG_W(kPlaceboLogTag) << message;
+}
+
 struct RuntimeState {
 	std::unique_ptr<agi::native::Library> library;
 	Api api;
 	std::string load_error;
 	std::string loaded_library;
 	std::string loaded_version;
+	uint32_t loaded_fix_version = 0;
 	bool load_attempted = false;
 	bool load_complete = false;
 };
@@ -97,14 +108,16 @@ void EnsureLoadedLocked() {
 			ResolveSymbols(*library, runtime_state.api);
 			runtime_state.loaded_library = std::string(library->GetLoadedPath());
 			runtime_state.loaded_version = runtime_state.api.version ? runtime_state.api.version() : std::string();
+			runtime_state.loaded_fix_version = runtime_state.api.fix_ver ? static_cast<uint32_t>(runtime_state.api.fix_ver()) : 0;
 			runtime_state.library = std::move(library);
 			runtime_state.load_complete = true;
 			runtime_state.load_error.clear();
 
-			LOG_I(kPlaceboLogTag) << "Loaded libplacebo runtime from " << runtime_state.loaded_library
-				<< " (headers API v" << PL_API_VER
-				<< ", runtime " << (runtime_state.loaded_version.empty() ? "unknown" : runtime_state.loaded_version)
-				<< ")";
+			LogInfo("Loaded libplacebo runtime from " + runtime_state.loaded_library
+				+ " (headers API v" + std::to_string(PL_API_VER)
+				+ ", runtime " + (runtime_state.loaded_version.empty() ? std::string("unknown") : runtime_state.loaded_version)
+				+ ", fix " + std::to_string(runtime_state.loaded_fix_version)
+				+ ")");
 			return;
 		}
 		catch (agi::EnvironmentError const& err) {
@@ -117,7 +130,7 @@ void EnsureLoadedLocked() {
 	}
 
 	runtime_state.load_error = "Could not load a compatible libplacebo runtime. " + combined_errors;
-	LOG_W(kPlaceboLogTag) << runtime_state.load_error;
+	LogWarning(runtime_state.load_error);
 	ThrowCachedLoadError(runtime_state);
 }
 }
@@ -150,6 +163,11 @@ std::string GetLoadedLibrary() {
 std::string GetLoadedVersion() {
 	std::lock_guard<std::mutex> lock(runtime_mutex);
 	return runtime_state.loaded_version;
+}
+
+uint32_t GetLoadedFixVersion() noexcept {
+	std::lock_guard<std::mutex> lock(runtime_mutex);
+	return runtime_state.loaded_fix_version;
 }
 
 Api const& GetApi() {

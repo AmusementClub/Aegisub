@@ -23,6 +23,7 @@
 #include <libplacebo/renderer.h>
 #include <libplacebo/utils/upload.h>
 
+#include <cstdint>
 #include <string>
 
 namespace placebo { namespace runtime {
@@ -51,6 +52,7 @@ bool IsAvailable() noexcept;
 std::string GetLoadError();
 std::string GetLoadedLibrary();
 std::string GetLoadedVersion();
+uint32_t GetLoadedFixVersion() noexcept;
 Api const& GetApi();
 
 } }

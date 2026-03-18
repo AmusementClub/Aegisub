@@ -192,7 +192,11 @@ void VideoDisplay::DoRender() try {
 
 	try {
 		if (has_pending_packet) {
-			if (pending_packet.has_subtitle_overlay && pending_packet.subtitle_overlay.IsDirectRenderable()) {
+			if (!pending_packet.has_subtitle_overlay) {
+				videoRenderer->UploadFrame(pending_packet.source_frame);
+				videoRenderer->UploadOverlay(nullptr);
+			}
+			else if (pending_packet.subtitle_overlay.IsDirectRenderable() && videoRenderer->SupportsDirectOverlay()) {
 				videoRenderer->UploadFrame(pending_packet.source_frame);
 				videoRenderer->UploadOverlay(&pending_packet.subtitle_overlay);
 			}

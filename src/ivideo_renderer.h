@@ -23,6 +23,7 @@ class IVideoRenderer {
 public:
 	virtual ~IVideoRenderer() = default;
 
+	virtual bool SupportsDirectOverlay() const noexcept { return true; }
 	virtual void Reset() = 0;
 	virtual void UploadFrame(SourceFrame const& frame) = 0;
 	virtual void UploadOverlay(SubtitleOverlay const* overlay) = 0;

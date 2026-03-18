@@ -25,6 +25,10 @@ public:
 	VideoOutRenderException(const char *func, int err)
 	: VideoOutException(std::string(func) + " failed with error code " + std::to_string(err))
 	{ }
+
+	VideoOutRenderException(const char *err)
+	: VideoOutException(err)
+	{ }
 };
 
 class VideoOutInitException final : public VideoOutException {

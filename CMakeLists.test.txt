@@ -86,6 +86,15 @@ if(GTEST_FOUND)
         src/video_renderer_backend.cpp
         src/video_provider_cache.cpp
     )
+    if(WITH_LIBPLACEBO)
+        target_sources(gtest-run PRIVATE
+            tests/tests/video_renderer_placebo_runtime.cpp
+            src/native_library.cpp
+            src/video_renderer_placebo_runtime.cpp
+        )
+        target_compile_definitions(gtest-run PRIVATE WITH_LIBPLACEBO)
+        target_include_directories(gtest-run PRIVATE ${LibPlacebo_INCLUDE_DIR})
+    endif()
     target_compile_definitions(gtest-run PRIVATE CMAKE_BUILD)
     target_include_directories(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     target_link_libraries(gtest-run PRIVATE libaegisub "GTest::GTest" "Iconv::Iconv" ${wxWidgets_LIBRARIES})
@@ -105,6 +114,17 @@ if(GTEST_FOUND)
     endif()
 else()
     add_custom_target(test-aegisub)
+endif()
+
+if(WITH_LIBPLACEBO)
+    add_executable(placebo-runtime-smoke EXCLUDE_FROM_ALL
+        tests/smoke/placebo_runtime_smoke.cpp
+        src/native_library.cpp
+        src/video_renderer_placebo_runtime.cpp
+    )
+    target_compile_definitions(placebo-runtime-smoke PRIVATE CMAKE_BUILD WITH_LIBPLACEBO)
+    target_include_directories(placebo-runtime-smoke PRIVATE ${LibPlacebo_INCLUDE_DIR})
+    target_link_libraries(placebo-runtime-smoke PRIVATE libaegisub)
 endif()
 
 add_custom_target(test DEPENDS test-automation test-aegisub)

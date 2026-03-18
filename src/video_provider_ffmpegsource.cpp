@@ -33,12 +33,16 @@
 ///
 
 #ifdef WITH_FFMS2
+#include "ffms_native_format_info.h"
 #include "ffmpegsource_common.h"
 #include "include/aegisub/video_provider.h"
 
 #include "options.h"
 #include "utils.h"
 #include "video_frame.h"
+
+#include <array>
+#include <cstring>
 
 #include <libaegisub/fs.h>
 #include <libaegisub/make_unique.h>
@@ -75,6 +79,8 @@ class FFmpegSourceVideoProvider final : public VideoProvider, FFmpegSourceProvid
 	int RealCS = -1;                ///< Original colorspace before any matrix override
 	int RealCR = -1;                ///< Original colorrange before conversion to RGB
 	int NativePixelFormat = -1;     ///< Original FFmpeg AVPixelFormat reported by FFMS2
+	SourceFrameOutputMode OutputMode = SourceFrameOutputMode::Bgra8;
+	bool NativeOutputSupported = false;
 	double DAR;                     ///< display aspect ratio
 	std::vector<int> KeyFramesList; ///< list of keyframes
 	agi::vfr::Framerate Timecodes;  ///< vfr object
@@ -85,12 +91,14 @@ class FFmpegSourceVideoProvider final : public VideoProvider, FFmpegSourceProvid
 	FFMS_ErrorInfo ErrInfo;         ///< FFMS error codes/messages
 	bool has_audio = false;
 
+	bool ConfigureOutputMode(SourceFrameOutputMode mode);
 	void LoadVideo(agi::fs::path const& filename, std::string const& colormatrix);
 
 public:
 	FFmpegSourceVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br);
 
 	void GetFrame(int n, VideoFrame &out) override;
+	bool GetNativeFrame(int n, SourceFrame& frame, std::shared_ptr<void>& owner) override;
 
 	void SetColorSpace(std::string const& matrix) override {
 #if FFMS_VERSION >= ((2 << 24) | (17 << 16) | (1 << 8) | 0)
@@ -123,6 +131,8 @@ public:
 	SourceFrameColorMetadata GetColorMetadata() const override;
 	SourceFrameColorMetadata GetRealColorMetadata() const override;
 	SourceFrameNativeFormatIdentity GetNativeFormatIdentity() const override;
+	std::vector<SourceFrameOutputMode> GetAvailableSourceModes() const override;
+	bool SetOutputMode(SourceFrameOutputMode mode) override { return ConfigureOutputMode(mode); }
 	std::vector<int> GetKeyFrames() const override { return KeyFramesList; };
 	std::string GetDecoderName() const override    { return "FFmpegSource"; }
 	bool WantsCaching() const override             { return true; }
@@ -152,7 +162,9 @@ std::string colormatrix_description(int cs, int cr) {
 
 SourceFrameColorMetadata ffms_color_metadata(int cs, int cr, std::string const& matrix) {
 	auto color = SourceFrameColorMetadataFromLegacyColorSpace(matrix);
-	color.range = SourceFrameColorRange::Full;
+	color.range = cr == FFMS_CR_JPEG
+		? SourceFrameColorRange::Full
+		: SourceFrameColorRange::Limited;
 
 	switch (cs) {
 		case AGI_CS_RGB:
@@ -179,6 +191,24 @@ SourceFrameColorMetadata ffms_color_metadata(int cs, int cr, std::string const& 
 			(void)cr;
 			return color;
 	}
+}
+
+FFMSNativeFormatIds ResolveFFMSNativeFormatIds() {
+	return {
+		ffms::GetPixFmt("nv12"),
+		ffms::GetPixFmt("p010le"),
+		ffms::GetPixFmt("yuv420p"),
+		ffms::GetPixFmt("yuv420p10le"),
+		ffms::GetPixFmt("yuv422p"),
+		ffms::GetPixFmt("yuv422p10le"),
+		ffms::GetPixFmt("yuv444p"),
+		ffms::GetPixFmt("yuv444p10le")
+	};
+}
+
+FFMSNativeFormatIds const& GetFFMSNativeFormatIds() {
+	static FFMSNativeFormatIds const ids = ResolveFFMSNativeFormatIds();
+	return ids;
 }
 
 FFmpegSourceVideoProvider::FFmpegSourceVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br) try
@@ -306,6 +336,11 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 	NativePixelFormat = TempFrame->EncodedPixelFormat >= 0
 		? TempFrame->EncodedPixelFormat
 		: TempFrame->ConvertedPixelFormat;
+	SourceFrameFormatInfo native_format_info;
+	NativeOutputSupported = TryGetFFMSNativeSourceFrameFormatInfo(
+		NativePixelFormat,
+		GetFFMSNativeFormatIds(),
+		native_format_info);
 
 	if (CS == AGI_CS_UNSPECIFIED)
 		CS = Width > 1024 || Height >= 600 ? AGI_CS_BT709 : AGI_CS_BT470BG;
@@ -323,8 +358,7 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 	}
 #endif
 
-	const int TargetFormat[] = { ffms::GetPixFmt("bgra"), -1 };
-	if (ffms::SetOutputFormatV2(VideoSource, TargetFormat, Width, Height, FFMS_RESIZER_BICUBIC, &ErrInfo))
+	if (!ConfigureOutputMode(SourceFrameOutputMode::Bgra8))
 		throw VideoOpenError(std::string("Failed to set output format: ") + ErrInfo.Buffer);
 
 	// get frame info data
@@ -354,6 +388,27 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 		Timecodes = 25.0;
 	else
 		Timecodes = agi::vfr::Framerate(TimecodesVector);
+}
+
+bool FFmpegSourceVideoProvider::ConfigureOutputMode(SourceFrameOutputMode mode) {
+	int target_format = -1;
+	if (mode == SourceFrameOutputMode::Native) {
+		if (!NativeOutputSupported || NativePixelFormat < 0)
+			return false;
+		target_format = NativePixelFormat;
+	}
+	else {
+		target_format = ffms::GetPixFmt("bgra");
+		if (target_format < 0)
+			return false;
+	}
+
+	const int target_formats[] = { target_format, -1 };
+	if (ffms::SetOutputFormatV2(VideoSource, target_formats, Width, Height, FFMS_RESIZER_BICUBIC, &ErrInfo))
+		return false;
+
+	OutputMode = mode;
+	return true;
 }
 
 void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
@@ -418,12 +473,86 @@ void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
 #endif
 }
 
+bool FFmpegSourceVideoProvider::GetNativeFrame(int n, SourceFrame& out, std::shared_ptr<void>& owner) {
+	if (OutputMode != SourceFrameOutputMode::Native)
+		return false;
+
+	n = mid(0, n, GetFrameCount() - 1);
+
+	auto frame = ffms::GetFrame(VideoSource, n, &ErrInfo);
+	if (!frame)
+		throw VideoDecodeError(std::string("Failed to retrieve frame: ") + ErrInfo.Buffer);
+
+	int output_pixfmt = frame->ConvertedPixelFormat >= 0
+		? frame->ConvertedPixelFormat
+		: frame->EncodedPixelFormat;
+	SourceFrameFormatInfo format_info;
+	if (!TryGetFFMSNativeSourceFrameFormatInfo(output_pixfmt, GetFFMSNativeFormatIds(), format_info))
+		return false;
+
+	struct NativeFrameStorage {
+		std::array<std::vector<unsigned char>, 4> planes;
+	};
+
+	auto storage = std::make_shared<NativeFrameStorage>();
+	int frame_width = frame->ScaledWidth > 0 ? frame->ScaledWidth : Width;
+	int frame_height = frame->ScaledHeight > 0 ? frame->ScaledHeight : Height;
+
+	out = { };
+	out.output_mode = SourceFrameOutputMode::Native;
+	out.native_format = { SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, output_pixfmt };
+	out.format_info = format_info;
+	out.width = frame_width;
+	out.height = frame_height;
+	out.flipped = false;
+	out.plane_count = format_info.plane_count;
+	out.color = GetColorMetadata();
+
+	for (int i = 0; i < out.plane_count; ++i) {
+		int plane_width = GetSourceFramePlaneWidth(format_info, frame_width, i);
+		int plane_height = GetSourceFramePlaneHeight(format_info, frame_height, i);
+		auto const& plane_info = format_info.planes[static_cast<size_t>(i)];
+		size_t row_bytes = static_cast<size_t>(plane_width) * plane_info.bytes_per_sample;
+		storage->planes[static_cast<size_t>(i)].resize(row_bytes * plane_height);
+
+		auto* src = frame->Data[i];
+		ptrdiff_t src_stride = frame->Linesize[i];
+		if (!src || src_stride == 0)
+			return false;
+		if (src_stride < 0)
+			src += static_cast<ptrdiff_t>(plane_height - 1) * (-src_stride);
+
+		for (int y = 0; y < plane_height; ++y) {
+			std::memcpy(
+				storage->planes[static_cast<size_t>(i)].data() + row_bytes * y,
+				src + static_cast<ptrdiff_t>(y) * src_stride,
+				row_bytes);
+		}
+
+		out.planes[static_cast<size_t>(i)] = {
+			storage->planes[static_cast<size_t>(i)].data(),
+			static_cast<ptrdiff_t>(row_bytes),
+			plane_width,
+			plane_height
+		};
+	}
+
+	owner = storage;
+	return true;
+}
+
 SourceFrameColorMetadata FFmpegSourceVideoProvider::GetColorMetadata() const {
-	return ffms_color_metadata(CS, CR, ColorSpace);
+	auto color = ffms_color_metadata(CS, CR, ColorSpace);
+	if (OutputMode == SourceFrameOutputMode::Bgra8)
+		color.range = SourceFrameColorRange::Full;
+	return color;
 }
 
 SourceFrameColorMetadata FFmpegSourceVideoProvider::GetRealColorMetadata() const {
-	return ffms_color_metadata(RealCS, RealCR, RealColorSpace);
+	auto color = ffms_color_metadata(RealCS, RealCR, RealColorSpace);
+	if (OutputMode == SourceFrameOutputMode::Bgra8)
+		color.range = SourceFrameColorRange::Full;
+	return color;
 }
 
 SourceFrameNativeFormatIdentity FFmpegSourceVideoProvider::GetNativeFormatIdentity() const {
@@ -433,6 +562,12 @@ SourceFrameNativeFormatIdentity FFmpegSourceVideoProvider::GetNativeFormatIdenti
 		SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat,
 		NativePixelFormat
 	};
+}
+
+std::vector<SourceFrameOutputMode> FFmpegSourceVideoProvider::GetAvailableSourceModes() const {
+	if (NativeOutputSupported)
+		return { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
+	return { SourceFrameOutputMode::Bgra8 };
 }
 }
 

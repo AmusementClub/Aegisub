@@ -44,6 +44,7 @@ if(GTEST_FOUND)
         tests/tests/color.cpp
         tests/tests/compatibility_overlay_buffer_plan.cpp
         tests/tests/dialogue_lexer.cpp
+        tests/tests/ffms_native_format_info.cpp
         tests/tests/format.cpp
         tests/tests/fs.cpp
         tests/tests/hotkey.cpp

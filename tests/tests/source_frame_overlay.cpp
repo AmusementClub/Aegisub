@@ -100,6 +100,56 @@ TEST(source_frame_overlay, source_frame_view_preserves_full_color_metadata) {
 	EXPECT_EQ(SourceFrameColorRange::Full, source.color.range);
 }
 
+TEST(source_frame_overlay, source_frame_format_info_reports_semiplanar_and_planar_layouts) {
+	auto nv12 = GetSourceFrameFormatInfo(SourceFramePixelFormat::Nv12);
+	EXPECT_EQ(SourceFrameColorFamily::YCbCr, nv12.color_family);
+	EXPECT_EQ(2, nv12.plane_count);
+	EXPECT_EQ(2, nv12.planes[1].components_per_sample);
+	EXPECT_EQ(2, nv12.planes[1].bytes_per_sample);
+
+	auto ycbcr420p10 = GetSourceFrameFormatInfo(SourceFramePixelFormat::YCbCr420P10);
+	EXPECT_EQ(SourceFrameColorFamily::YCbCr, ycbcr420p10.color_family);
+	EXPECT_EQ(3, ycbcr420p10.plane_count);
+	EXPECT_EQ(2, ycbcr420p10.planes[0].bytes_per_sample);
+	EXPECT_EQ(10, ycbcr420p10.planes[2].bits_per_component);
+}
+
+TEST(source_frame_overlay, planar_ycbcr_frame_validation_uses_format_geometry) {
+	unsigned char y[32] = { };
+	unsigned char u[8] = { };
+	unsigned char v[8] = { };
+
+	SourceFrame source;
+	source.pixel_format = SourceFramePixelFormat::YCbCr420P10;
+	source.width = 4;
+	source.height = 4;
+	source.plane_count = 3;
+	source.planes[0] = { y, 8, 4, 4 };
+	source.planes[1] = { u, 4, 2, 2 };
+	source.planes[2] = { v, 4, 2, 2 };
+
+	EXPECT_TRUE(source.IsValid());
+	EXPECT_EQ(2, GetSourceFramePlaneWidth(source.pixel_format, source.width, 1));
+	EXPECT_EQ(2, GetSourceFramePlaneHeight(source.pixel_format, source.height, 1));
+}
+
+TEST(source_frame_overlay, planar_ycbcr_frame_rejects_mismatched_plane_geometry) {
+	unsigned char y[32] = { };
+	unsigned char u[8] = { };
+	unsigned char v[8] = { };
+
+	SourceFrame source;
+	source.pixel_format = SourceFramePixelFormat::YCbCr420P10;
+	source.width = 4;
+	source.height = 4;
+	source.plane_count = 3;
+	source.planes[0] = { y, 8, 4, 4 };
+	source.planes[1] = { u, 4, 4, 2 };
+	source.planes[2] = { v, 4, 2, 2 };
+
+	EXPECT_FALSE(source.IsValid());
+}
+
 TEST(source_frame_overlay, legacy_overlay_view_reflects_video_frame) {
 	VideoFrame frame;
 	frame.width = 2;

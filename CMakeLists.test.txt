@@ -58,6 +58,7 @@ if(GTEST_FOUND)
         tests/tests/math_utils.cpp
         tests/tests/video_renderer_opengl_overlay_upload_plan.cpp
         tests/tests/video_renderer_opengl_tile.cpp
+        tests/tests/video_render_routing.cpp
         tests/tests/mru.cpp
         tests/tests/option.cpp
         tests/tests/path.cpp

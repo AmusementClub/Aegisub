@@ -124,7 +124,11 @@ bool TestTexture(int width, int height, GLint format) {
 }
 }
 
-OpenGLVideoRenderer::OpenGLVideoRenderer() = default;
+OpenGLVideoRenderer::OpenGLVideoRenderer(bool render_video, bool render_overlay, bool clear_before_render)
+	: render_video_layer(render_video)
+	, render_overlay_layer(render_overlay)
+	, clear_before_render(clear_before_render) {
+}
 
 OpenGLVideoRenderer::~OpenGLVideoRenderer() {
 	DestroyResources();
@@ -284,8 +288,10 @@ void OpenGLVideoRenderer::EnsureInitialized() {
 	LoadFunctions();
 	DetectOpenGLCapabilities();
 	CreateProgram();
-	CreateLayerBuffers(video_layer);
-	CreateLayerBuffers(overlay_layer);
+	if (render_video_layer)
+		CreateLayerBuffers(video_layer);
+	if (render_overlay_layer)
+		CreateLayerBuffers(overlay_layer);
 }
 
 void OpenGLVideoRenderer::DeleteLayerTextures(LayerResources& layer) noexcept {
@@ -536,6 +542,9 @@ void OpenGLVideoRenderer::RenderLayer(LayerResources& layer) {
 }
 
 void OpenGLVideoRenderer::UploadFrame(SourceFrame const& frame) {
+	if (!render_video_layer)
+		return;
+
 	if (!frame.IsValid() || frame.pixel_format != SourceFramePixelFormat::Bgra8) {
 		video_layer.has_content = false;
 		return;
@@ -556,6 +565,9 @@ void OpenGLVideoRenderer::UploadFrame(SourceFrame const& frame) {
 }
 
 void OpenGLVideoRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
+	if (!render_overlay_layer)
+		return;
+
 	OpenGLVideoRendererOverlayLayerState state;
 	state.width = overlay_layer.layout.frame_width;
 	state.height = overlay_layer.layout.frame_height;
@@ -602,7 +614,9 @@ void OpenGLVideoRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 }
 
 void OpenGLVideoRenderer::Render(RenderViewport const& viewport, int, int) {
-	if (!video_layer.has_content || viewport.width <= 0 || viewport.height <= 0 || video_layer.layout.tiles.empty())
+	bool const has_video = render_video_layer && video_layer.has_content && !video_layer.layout.tiles.empty();
+	bool const has_overlay = render_overlay_layer && overlay_layer.has_content && !overlay_layer.layout.tiles.empty();
+	if ((!has_video && !has_overlay) || viewport.width <= 0 || viewport.height <= 0)
 		return;
 
 	EnsureInitialized();
@@ -611,11 +625,15 @@ void OpenGLVideoRenderer::Render(RenderViewport const& viewport, int, int) {
 	CHECK_RENDER_ERROR(glDisable(GL_STENCIL_TEST));
 	CHECK_RENDER_ERROR(glDisable(GL_CULL_FACE));
 	CHECK_RENDER_ERROR(glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE));
-	CHECK_RENDER_ERROR(glClearColor(0.0f, 0.0f, 0.0f, 0.0f));
-	CHECK_RENDER_ERROR(glClearStencil(0));
-	CHECK_RENDER_ERROR(glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT));
+	if (clear_before_render) {
+		CHECK_RENDER_ERROR(glClearColor(0.0f, 0.0f, 0.0f, 0.0f));
+		CHECK_RENDER_ERROR(glClearStencil(0));
+		CHECK_RENDER_ERROR(glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT));
+	}
 	CHECK_RENDER_ERROR(glViewport(viewport.x, viewport.y, viewport.width, viewport.height));
 
-	RenderLayer(video_layer);
-	RenderLayer(overlay_layer);
+	if (has_video)
+		RenderLayer(video_layer);
+	if (has_overlay)
+		RenderLayer(overlay_layer);
 }

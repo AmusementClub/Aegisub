@@ -120,9 +120,11 @@ CSRISubtitlesProvider::CSRISubtitlesProvider(std::string type) {
 }
 
 bool CSRISubtitlesProvider::RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double time) {
-	overlay.premultiplied_alpha = false;
-	overlay.composition_mode = SubtitleOverlayCompositionMode::Unsupported;
-	return RenderCsriBgraOverlay(instance.get(), overlay, time);
+	(void)overlay;
+	(void)time;
+	// CSRI remains a compatibility-only backend. The explicit overlay shown by
+	// modern renderers is extracted downstream from source/composited frames.
+	return false;
 }
 
 void CSRISubtitlesProvider::DrawSubtitles(VideoFrame &dst, double time) {

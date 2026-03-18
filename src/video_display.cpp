@@ -49,6 +49,8 @@
 #include "utils.h"
 #include "video_renderer_factory.h"
 #include "video_renderer_error.h"
+#include "video_renderer_opengl.h"
+#include "video_render_routing.h"
 #include "video_controller.h"
 #include "visual_tool.h"
 
@@ -192,18 +194,35 @@ void VideoDisplay::DoRender() try {
 
 	try {
 		if (has_pending_packet) {
-			if (!pending_packet.has_subtitle_overlay) {
+			auto const routing = DecideVideoRenderRouting(
+				pending_packet,
+				videoRenderer->SupportsDirectOverlay());
+
+			if (routing == VideoRenderRoutingMode::SourceFrameOnly) {
 				videoRenderer->UploadFrame(pending_packet.source_frame);
 				videoRenderer->UploadOverlay(nullptr);
+				if (subtitleOverlayRenderer)
+					subtitleOverlayRenderer->UploadOverlay(nullptr);
 			}
-			else if (pending_packet.subtitle_overlay.IsDirectRenderable() && videoRenderer->SupportsDirectOverlay()) {
+			else if (routing == VideoRenderRoutingMode::PrimaryRendererDirectOverlay) {
 				videoRenderer->UploadFrame(pending_packet.source_frame);
 				videoRenderer->UploadOverlay(&pending_packet.subtitle_overlay);
+				if (subtitleOverlayRenderer)
+					subtitleOverlayRenderer->UploadOverlay(nullptr);
+			}
+			else if (routing == VideoRenderRoutingMode::SecondaryRendererDirectOverlay) {
+				videoRenderer->UploadFrame(pending_packet.source_frame);
+				videoRenderer->UploadOverlay(nullptr);
+				if (!subtitleOverlayRenderer)
+					subtitleOverlayRenderer = agi::make_unique<OpenGLVideoRenderer>(false, true, false);
+				subtitleOverlayRenderer->UploadOverlay(&pending_packet.subtitle_overlay);
 			}
 			else {
 				auto display_frame = pending_packet.DisplayFrame();
-				videoRenderer->UploadFrame(MakeSourceFrameView(*display_frame));
+				videoRenderer->UploadFrame(MakeSourceFrameView(*display_frame, pending_packet.source_frame.color.matrix));
 				videoRenderer->UploadOverlay(nullptr);
+				if (subtitleOverlayRenderer)
+					subtitleOverlayRenderer->UploadOverlay(nullptr);
 			}
 			pending_packet = { };
 			has_pending_packet = false;
@@ -233,6 +252,8 @@ void VideoDisplay::DoRender() try {
 		PositionVideo();
 
 	videoRenderer->Render({ viewport_left, viewport_bottom, viewport_width, viewport_height }, GetClientSize().GetWidth() * scale_factor, GetClientSize().GetHeight() * scale_factor);
+	if (subtitleOverlayRenderer)
+		subtitleOverlayRenderer->Render({ viewport_left, viewport_bottom, viewport_width, viewport_height }, GetClientSize().GetWidth() * scale_factor, GetClientSize().GetHeight() * scale_factor);
 	E(glViewport(0, std::min(viewport_bottom, 0), videoSize.GetWidth(), videoSize.GetHeight()));
 
 	E(glMatrixMode(GL_PROJECTION));
@@ -498,6 +519,9 @@ void VideoDisplay::Unload() {
 	if (videoRenderer)
 		videoRenderer->Reset();
 	videoRenderer.reset();
+	if (subtitleOverlayRenderer)
+		subtitleOverlayRenderer->Reset();
+	subtitleOverlayRenderer.reset();
 	tool.reset();
 	glContext.reset();
 	pending_packet = { };

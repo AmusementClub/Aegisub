@@ -90,6 +90,8 @@ class VideoDisplay final : public wxGLCanvas {
 
 	/// The video renderer
 	std::unique_ptr<IVideoRenderer> videoRenderer;
+	/// Optional secondary renderer used to keep direct subtitle overlays on a separate GL pass
+	std::unique_ptr<IVideoRenderer> subtitleOverlayRenderer;
 
 	/// The active visual typesetting tool
 	std::unique_ptr<VisualToolBase> tool;

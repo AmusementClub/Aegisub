@@ -101,6 +101,22 @@ TEST(source_frame_overlay, source_frame_view_preserves_full_color_metadata) {
 	EXPECT_EQ(SourceFrameColorRange::Full, source.color.range);
 }
 
+TEST(source_frame_overlay, bgra_source_frame_can_carry_upstream_native_format_identity) {
+	VideoFrame frame;
+	frame.width = 4;
+	frame.height = 3;
+	frame.pitch = 16;
+	frame.flipped = false;
+	frame.data.resize(48);
+
+	auto source = MakeSourceFrameView(frame);
+	source.native_format = { SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, 24 };
+
+	EXPECT_TRUE(source.IsValid());
+	EXPECT_EQ(SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, source.native_format.format_namespace);
+	EXPECT_EQ(24, source.native_format.format_id);
+}
+
 TEST(source_frame_overlay, source_frame_format_info_reports_semiplanar_and_planar_layouts) {
 	auto nv12 = MakeSemiplanar420SourceFrameFormatInfo(8, 1, 2);
 	EXPECT_EQ(SourceFrameColorFamily::YCbCr, nv12.color_family);

@@ -74,6 +74,7 @@ class FFmpegSourceVideoProvider final : public VideoProvider, FFmpegSourceProvid
 	int CR = -1;                    ///< Reported colorrange of first frame
 	int RealCS = -1;                ///< Original colorspace before any matrix override
 	int RealCR = -1;                ///< Original colorrange before conversion to RGB
+	int NativePixelFormat = -1;     ///< Original FFmpeg AVPixelFormat reported by FFMS2
 	double DAR;                     ///< display aspect ratio
 	std::vector<int> KeyFramesList; ///< list of keyframes
 	agi::vfr::Framerate Timecodes;  ///< vfr object
@@ -121,6 +122,7 @@ public:
 	std::string GetRealColorSpace() const override { return RealColorSpace; }
 	SourceFrameColorMetadata GetColorMetadata() const override;
 	SourceFrameColorMetadata GetRealColorMetadata() const override;
+	SourceFrameNativeFormatIdentity GetNativeFormatIdentity() const override;
 	std::vector<int> GetKeyFrames() const override { return KeyFramesList; };
 	std::string GetDecoderName() const override    { return "FFmpegSource"; }
 	bool WantsCaching() const override             { return true; }
@@ -301,6 +303,9 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 	CR = TempFrame->ColorRange;
 	RealCS = VideoCS;
 	RealCR = CR;
+	NativePixelFormat = TempFrame->EncodedPixelFormat >= 0
+		? TempFrame->EncodedPixelFormat
+		: TempFrame->ConvertedPixelFormat;
 
 	if (CS == AGI_CS_UNSPECIFIED)
 		CS = Width > 1024 || Height >= 600 ? AGI_CS_BT709 : AGI_CS_BT470BG;
@@ -419,6 +424,15 @@ SourceFrameColorMetadata FFmpegSourceVideoProvider::GetColorMetadata() const {
 
 SourceFrameColorMetadata FFmpegSourceVideoProvider::GetRealColorMetadata() const {
 	return ffms_color_metadata(RealCS, RealCR, RealColorSpace);
+}
+
+SourceFrameNativeFormatIdentity FFmpegSourceVideoProvider::GetNativeFormatIdentity() const {
+	if (NativePixelFormat < 0)
+		return { };
+	return {
+		SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat,
+		NativePixelFormat
+	};
 }
 }
 

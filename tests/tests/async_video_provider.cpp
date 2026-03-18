@@ -36,6 +36,7 @@ class FakeVideoProvider final : public VideoProvider {
 public:
 	std::string color_space = "BT.709";
 	std::string real_color_space = "BT.709";
+	SourceFrameNativeFormatIdentity native_format = { };
 	std::vector<SourceFrameOutputMode> available_modes = { SourceFrameOutputMode::Bgra8 };
 	SourceFrameOutputMode output_mode = SourceFrameOutputMode::Bgra8;
 
@@ -78,6 +79,7 @@ public:
 	std::vector<int> GetKeyFrames() const override { return {}; }
 	std::string GetColorSpace() const override { return color_space; }
 	std::string GetRealColorSpace() const override { return real_color_space; }
+	SourceFrameNativeFormatIdentity GetNativeFormatIdentity() const override { return native_format; }
 	std::vector<SourceFrameOutputMode> GetAvailableSourceModes() const override { return available_modes; }
 	bool SetOutputMode(SourceFrameOutputMode mode) override {
 		if (std::find(available_modes.begin(), available_modes.end(), mode) == available_modes.end())
@@ -506,6 +508,24 @@ TEST(async_video_provider, color_space_override_updates_effective_source_frame_m
 	EXPECT_EQ("TV.601", packet.source_frame.color.matrix);
 	EXPECT_EQ("BT.601", packet.source_frame.color.primaries);
 	EXPECT_EQ(SourceFrameColorRange::Full, packet.source_frame.color.range);
+}
+
+TEST(async_video_provider, bgra_source_frame_preserves_upstream_native_format_identity) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->native_format = { SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, 42 };
+	auto *subs = new FakeOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto packet = provider.GetRenderPacket(3, 3000);
+	EXPECT_EQ(SourceFrameOutputMode::Bgra8, packet.source_frame.output_mode);
+	EXPECT_EQ(SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, packet.source_frame.native_format.format_namespace);
+	EXPECT_EQ(42, packet.source_frame.native_format.format_id);
 }
 
 TEST(async_video_provider, preferred_source_modes_choose_native_for_overlay_path) {

@@ -79,6 +79,9 @@ public:
 			GetRealColorMetadata(),
 			SourceFrameColorMetadataFromLegacyColorSpace(GetColorSpace()));
 	}
+	virtual SourceFrameNativeFormatIdentity GetNativeFormatIdentity() const {
+		return { };
+	}
 	virtual std::vector<SourceFrameOutputMode> GetAvailableSourceModes() const {
 		return { SourceFrameOutputMode::Bgra8 };
 	}

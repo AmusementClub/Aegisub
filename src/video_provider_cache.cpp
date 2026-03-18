@@ -84,6 +84,7 @@ public:
 	std::string GetRealColorSpace() const override { return master->GetRealColorSpace(); }
 	SourceFrameColorMetadata GetColorMetadata() const override { return master->GetColorMetadata(); }
 	SourceFrameColorMetadata GetRealColorMetadata() const override { return master->GetRealColorMetadata(); }
+	SourceFrameNativeFormatIdentity GetNativeFormatIdentity() const override { return master->GetNativeFormatIdentity(); }
 	std::vector<SourceFrameOutputMode> GetAvailableSourceModes() const override { return master->GetAvailableSourceModes(); }
 	bool SetOutputMode(SourceFrameOutputMode mode) override {
 		ClearCache();

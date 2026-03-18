@@ -99,6 +99,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 
 	packet.source_frame_storage = frame;
 	packet.source_frame = MakeSourceFrameView(*frame, source_provider->GetColorMetadata());
+	packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
 	packet.time = time;
 
 	if (raw || !subs_provider || !subs) {

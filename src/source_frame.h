@@ -192,7 +192,6 @@ struct SourceFrame {
 			return false;
 		if (output_mode == SourceFrameOutputMode::Bgra8) {
 			if (pixel_format != SourceFramePixelFormat::Bgra8
-				|| native_format.IsValid()
 				|| !SourceFrameFormatInfoEquals(format_info, MakeBgra8SourceFrameFormatInfo()))
 				return false;
 		}

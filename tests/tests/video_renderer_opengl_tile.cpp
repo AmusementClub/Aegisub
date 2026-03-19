@@ -52,6 +52,25 @@ TEST(video_renderer_opengl_tile, falls_back_to_square_textures_when_needed) {
 	EXPECT_FLOAT_EQ(18.0f / 32.0f, layout.tiles[1].u2);
 }
 
+TEST(video_renderer_opengl_tile, tiny_last_tile_uses_source_extent_not_texture_padding) {
+	auto layout = BuildOpenGLVideoRendererTileLayout(65, 65, 4, 64, true, false);
+
+	ASSERT_EQ(4u, layout.tiles.size());
+	auto const& last = layout.tiles[3];
+	EXPECT_EQ(62, last.source_x);
+	EXPECT_EQ(62, last.source_y);
+	EXPECT_EQ(3, last.source_w);
+	EXPECT_EQ(3, last.source_h);
+	EXPECT_EQ(4, last.texture_w);
+	EXPECT_EQ(4, last.texture_h);
+	EXPECT_FLOAT_EQ(63.0f, last.x1);
+	EXPECT_FLOAT_EQ(63.0f, last.y1);
+	EXPECT_FLOAT_EQ(65.0f, last.x2);
+	EXPECT_FLOAT_EQ(65.0f, last.y2);
+	EXPECT_FLOAT_EQ(3.0f / 4.0f, last.u2);
+	EXPECT_FLOAT_EQ(3.0f / 4.0f, last.v2);
+}
+
 TEST(video_renderer_opengl_tile, builds_non_flipped_ortho_matrix) {
 	auto matrix = BuildOpenGLVideoRendererOrthoMatrix(320, 240, false);
 

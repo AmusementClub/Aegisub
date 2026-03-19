@@ -88,6 +88,22 @@ struct ActiveBounds {
 	int non_zero_alpha_pixels = 0;
 };
 
+struct SecondaryOverlayScenario {
+	std::string name;
+	int source_width = 0;
+	int source_height = 0;
+	SourceFrameGeometry geometry = { };
+	SourceFrameRect patch_rect = { };
+	Rgba8 color = { 32, 255, 32, 255 };
+};
+
+struct EquivalentOverlayPair {
+	SubtitleOverlayStorage storage_overlay_storage;
+	SubtitleOverlayStorage visible_overlay_storage;
+	SubtitleOverlay storage_overlay;
+	SubtitleOverlay visible_overlay;
+};
+
 class HiddenGLWindow {
 	HWND hwnd = nullptr;
 	HDC dc = nullptr;
@@ -449,67 +465,124 @@ SourceFrame MakeNativeNv12SourceFrame(
 	return frame;
 }
 
-std::vector<unsigned char> RenderSecondaryOverlayScenario(SubtitleOverlay const& overlay) {
-	HiddenGLWindow window(6, 8);
+EquivalentOverlayPair BuildEquivalentOverlayPair(SecondaryOverlayScenario const& scenario) {
+	auto const visible = GetSourceFrameVisibleRect(
+		scenario.geometry,
+		scenario.source_width,
+		scenario.source_height);
+	int const patch_x0 = scenario.patch_rect.x;
+	int const patch_y0 = scenario.patch_rect.y;
+	int const patch_x1 = scenario.patch_rect.x + scenario.patch_rect.width;
+	int const patch_y1 = scenario.patch_rect.y + scenario.patch_rect.height;
+	int const clip_x0 = std::max(patch_x0, visible.x);
+	int const clip_y0 = std::max(patch_y0, visible.y);
+	int const clip_x1 = std::min(patch_x1, visible.x + visible.width);
+	int const clip_y1 = std::min(patch_y1, visible.y + visible.height);
+	if (clip_x0 >= clip_x1 || clip_y0 >= clip_y1)
+		throw std::runtime_error("Secondary overlay scenario does not intersect visible rect: " + scenario.name);
+
+	EquivalentOverlayPair overlays;
+	overlays.storage_overlay_storage = MakeSolidOverlayStorage(
+		scenario.patch_rect.width,
+		scenario.patch_rect.height,
+		scenario.color);
+	overlays.storage_overlay = overlays.storage_overlay_storage.MakeView(true);
+	overlays.storage_overlay.canvas_width = scenario.source_width;
+	overlays.storage_overlay.canvas_height = scenario.source_height;
+	overlays.storage_overlay.target_x = scenario.patch_rect.x;
+	overlays.storage_overlay.target_y = scenario.patch_rect.y;
+	overlays.storage_overlay.coordinate_space = SubtitleOverlayCoordinateSpace::SourceStorage;
+	overlays.storage_overlay.composition_mode = SubtitleOverlayCompositionMode::PremultipliedAlpha;
+
+	overlays.visible_overlay_storage = MakeSolidOverlayStorage(
+		clip_x1 - clip_x0,
+		clip_y1 - clip_y0,
+		scenario.color);
+	overlays.visible_overlay = overlays.visible_overlay_storage.MakeView(true);
+	overlays.visible_overlay.canvas_width = visible.width;
+	overlays.visible_overlay.canvas_height = visible.height;
+	overlays.visible_overlay.target_x = clip_x0 - visible.x;
+	overlays.visible_overlay.target_y = clip_y0 - visible.y;
+	overlays.visible_overlay.coordinate_space = SubtitleOverlayCoordinateSpace::SourceVisible;
+	overlays.visible_overlay.composition_mode = SubtitleOverlayCompositionMode::PremultipliedAlpha;
+
+	return overlays;
+}
+
+SubtitleOverlay BuildStorageOverlay(SecondaryOverlayScenario const& scenario, SubtitleOverlayStorage& storage) {
+	storage = MakeSolidOverlayStorage(
+		scenario.patch_rect.width,
+		scenario.patch_rect.height,
+		scenario.color);
+	auto overlay = storage.MakeView(true);
+	overlay.canvas_width = scenario.source_width;
+	overlay.canvas_height = scenario.source_height;
+	overlay.target_x = scenario.patch_rect.x;
+	overlay.target_y = scenario.patch_rect.y;
+	overlay.coordinate_space = SubtitleOverlayCoordinateSpace::SourceStorage;
+	overlay.composition_mode = SubtitleOverlayCompositionMode::PremultipliedAlpha;
+	return overlay;
+}
+
+std::vector<unsigned char> RenderSecondaryOverlayScenario(
+	SecondaryOverlayScenario const& scenario,
+	SubtitleOverlay const* overlay) {
+	auto const display_rect = GetSourceFrameDisplayOutputRect(scenario.geometry);
+	if (display_rect.width <= 0 || display_rect.height <= 0)
+		throw std::runtime_error("Invalid display rect for secondary overlay scenario: " + scenario.name);
+
+	HiddenGLWindow window(display_rect.width, display_rect.height);
 	OpenGLVideoRenderer renderer(false, true, true);
 	window.MakeCurrent();
 
 	NativeFrameStorage native_storage;
-	SourceFrameGeometry geometry = MakeDefaultSourceFrameGeometry(12, 10);
-	geometry.visible_rect = { 2, 1, 8, 6 };
-	geometry.rotation = 90;
-	geometry.display_vflip = true;
-	auto source = MakeNativeNv12SourceFrame(12, 10, geometry, native_storage);
+	auto source = MakeNativeNv12SourceFrame(
+		scenario.source_width,
+		scenario.source_height,
+		scenario.geometry,
+		native_storage);
 
 	renderer.UploadFrame(source);
-	renderer.UploadOverlay(&overlay);
-	renderer.Render({ 0, 0, 6, 8 }, 6, 8);
+	renderer.UploadOverlay(overlay);
+	renderer.Render(
+		{ 0, 0, display_rect.width, display_rect.height },
+		display_rect.width,
+		display_rect.height);
 	auto result = window.ReadBackRgbaTopLeft();
 	window.MakeCurrent();
 	renderer.Reset();
 	return result;
 }
 
-bool RunSecondaryOverlayTransformValidation() {
-	std::cout << "Validation for OpenGL secondary overlay transform\n";
+bool ValidateEquivalentOverlayScenario(SecondaryOverlayScenario const& scenario) {
+	std::cout << "Validation for OpenGL secondary overlay transform: " << scenario.name << "\n";
 
-	auto storage_overlay_storage = MakeSolidOverlayStorage(9, 5, { 32, 255, 32, 255 });
-	auto storage_overlay = storage_overlay_storage.MakeView(true);
-	storage_overlay.canvas_width = 12;
-	storage_overlay.canvas_height = 10;
-	storage_overlay.target_x = 1;
-	storage_overlay.target_y = 2;
-	storage_overlay.coordinate_space = SubtitleOverlayCoordinateSpace::SourceStorage;
-	storage_overlay.composition_mode = SubtitleOverlayCompositionMode::PremultipliedAlpha;
-
-	auto visible_overlay_storage = MakeSolidOverlayStorage(8, 5, { 32, 255, 32, 255 });
-	auto visible_overlay = visible_overlay_storage.MakeView(true);
-	visible_overlay.canvas_width = 8;
-	visible_overlay.canvas_height = 6;
-	visible_overlay.target_x = 0;
-	visible_overlay.target_y = 1;
-	visible_overlay.coordinate_space = SubtitleOverlayCoordinateSpace::SourceVisible;
-	visible_overlay.composition_mode = SubtitleOverlayCompositionMode::PremultipliedAlpha;
-
-	auto actual_storage = RenderSecondaryOverlayScenario(storage_overlay);
-	auto actual_visible = RenderSecondaryOverlayScenario(visible_overlay);
-	auto storage_bounds = FindActiveBounds(actual_storage, 6, 8);
-	auto visible_bounds = FindActiveBounds(actual_visible, 6, 8);
-	auto full_parity_result = CompareRgbaImages("secondary/parity/full", actual_storage, actual_visible, 6, 8);
+	auto overlays = BuildEquivalentOverlayPair(scenario);
+	auto const display_rect = GetSourceFrameDisplayOutputRect(scenario.geometry);
+	auto actual_storage = RenderSecondaryOverlayScenario(scenario, &overlays.storage_overlay);
+	auto actual_visible = RenderSecondaryOverlayScenario(scenario, &overlays.visible_overlay);
+	auto storage_bounds = FindActiveBounds(actual_storage, display_rect.width, display_rect.height);
+	auto visible_bounds = FindActiveBounds(actual_visible, display_rect.width, display_rect.height);
+	auto full_parity_result = CompareRgbaImages(
+		scenario.name + "/parity/full",
+		actual_storage,
+		actual_visible,
+		display_rect.width,
+		display_rect.height);
 	auto stable_parity_result = CompareRgbaImagesOnStableMask(
-		"secondary/parity/stable",
+		scenario.name + "/parity/stable",
 		actual_storage,
 		actual_storage,
 		actual_visible,
-		6,
-		8);
+		display_rect.width,
+		display_rect.height);
 	std::cout
-		<< "secondary/storage bounds="
+		<< scenario.name << "/storage bounds="
 		<< storage_bounds.x0 << "," << storage_bounds.y0 << " -> "
 		<< storage_bounds.x1 << "," << storage_bounds.y1
 		<< " alpha_pixels=" << storage_bounds.non_zero_alpha_pixels << "\n";
 	std::cout
-		<< "secondary/visible bounds="
+		<< scenario.name << "/visible bounds="
 		<< visible_bounds.x0 << "," << visible_bounds.y0 << " -> "
 		<< visible_bounds.x1 << "," << visible_bounds.y1
 		<< " alpha_pixels=" << visible_bounds.non_zero_alpha_pixels << "\n";
@@ -524,6 +597,100 @@ bool RunSecondaryOverlayTransformValidation() {
 		&& storage_bounds.non_zero_alpha_pixels == visible_bounds.non_zero_alpha_pixels
 		&& stable_parity_result.compared_pixels > 0
 		&& stable_parity_result.max_abs_error == 0;
+}
+
+bool ValidateHiddenOutsideVisibleScenario() {
+	SecondaryOverlayScenario scenario;
+	scenario.name = "secondary/outside_hidden";
+	scenario.source_width = 15;
+	scenario.source_height = 11;
+	scenario.geometry = MakeDefaultSourceFrameGeometry(15, 11);
+	scenario.geometry.visible_rect = { 4, 3, 9, 6 };
+	scenario.geometry.rotation = 90;
+	scenario.patch_rect = { 0, 0, 3, 2 };
+
+	std::cout << "Validation for OpenGL secondary overlay transform: " << scenario.name << "\n";
+	SubtitleOverlayStorage storage_overlay_storage;
+	auto storage_overlay = BuildStorageOverlay(scenario, storage_overlay_storage);
+	auto const display_rect = GetSourceFrameDisplayOutputRect(scenario.geometry);
+	auto actual_hidden = RenderSecondaryOverlayScenario(scenario, &storage_overlay);
+	auto actual_none = RenderSecondaryOverlayScenario(scenario, nullptr);
+	auto hidden_bounds = FindActiveBounds(actual_hidden, display_rect.width, display_rect.height);
+	auto none_bounds = FindActiveBounds(actual_none, display_rect.width, display_rect.height);
+	auto parity = CompareRgbaImages(
+		scenario.name + "/hidden/full",
+		actual_none,
+		actual_hidden,
+		display_rect.width,
+		display_rect.height);
+	std::cout
+		<< scenario.name << "/hidden bounds="
+		<< hidden_bounds.x0 << "," << hidden_bounds.y0 << " -> "
+		<< hidden_bounds.x1 << "," << hidden_bounds.y1
+		<< " alpha_pixels=" << hidden_bounds.non_zero_alpha_pixels << "\n";
+	PrintValidationResult(parity);
+	return !hidden_bounds.valid
+		&& !none_bounds.valid
+		&& parity.max_abs_error == 0;
+}
+
+bool RunSecondaryOverlayTransformValidation() {
+	std::vector<SecondaryOverlayScenario> scenarios;
+
+	SecondaryOverlayScenario full_identity;
+	full_identity.name = "secondary/full_identity";
+	full_identity.source_width = 11;
+	full_identity.source_height = 9;
+	full_identity.geometry = MakeDefaultSourceFrameGeometry(11, 9);
+	full_identity.patch_rect = { 2, 2, 5, 3 };
+	scenarios.push_back(full_identity);
+
+	SecondaryOverlayScenario cropped_odd;
+	cropped_odd.name = "secondary/crop_odd";
+	cropped_odd.source_width = 13;
+	cropped_odd.source_height = 11;
+	cropped_odd.geometry = MakeDefaultSourceFrameGeometry(13, 11);
+	cropped_odd.geometry.visible_rect = { 2, 1, 9, 7 };
+	cropped_odd.patch_rect = { 1, 2, 7, 5 };
+	scenarios.push_back(cropped_odd);
+
+	SecondaryOverlayScenario rotate90;
+	rotate90.name = "secondary/rotate90_crop";
+	rotate90.source_width = 12;
+	rotate90.source_height = 10;
+	rotate90.geometry = MakeDefaultSourceFrameGeometry(12, 10);
+	rotate90.geometry.visible_rect = { 2, 1, 8, 6 };
+	rotate90.geometry.rotation = 90;
+	rotate90.patch_rect = { 1, 2, 9, 5 };
+	scenarios.push_back(rotate90);
+
+	SecondaryOverlayScenario rotate270_vflip;
+	rotate270_vflip.name = "secondary/rotate270_vflip_crop";
+	rotate270_vflip.source_width = 17;
+	rotate270_vflip.source_height = 13;
+	rotate270_vflip.geometry = MakeDefaultSourceFrameGeometry(17, 13);
+	rotate270_vflip.geometry.visible_rect = { 3, 2, 11, 7 };
+	rotate270_vflip.geometry.rotation = 270;
+	rotate270_vflip.geometry.display_vflip = true;
+	rotate270_vflip.patch_rect = { 2, 3, 8, 5 };
+	scenarios.push_back(rotate270_vflip);
+
+	SecondaryOverlayScenario rotate180_vflip;
+	rotate180_vflip.name = "secondary/rotate180_vflip_crop";
+	rotate180_vflip.source_width = 14;
+	rotate180_vflip.source_height = 10;
+	rotate180_vflip.geometry = MakeDefaultSourceFrameGeometry(14, 10);
+	rotate180_vflip.geometry.visible_rect = { 1, 1, 11, 7 };
+	rotate180_vflip.geometry.rotation = 180;
+	rotate180_vflip.geometry.display_vflip = true;
+	rotate180_vflip.patch_rect = { 0, 2, 8, 4 };
+	scenarios.push_back(rotate180_vflip);
+
+	bool passed = true;
+	for (auto const& scenario : scenarios)
+		passed = ValidateEquivalentOverlayScenario(scenario) && passed;
+	passed = ValidateHiddenOutsideVisibleScenario() && passed;
+	return passed;
 }
 }
 

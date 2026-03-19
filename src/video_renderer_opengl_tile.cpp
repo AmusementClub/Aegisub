@@ -65,12 +65,12 @@ OpenGLVideoRendererTileLayout BuildOpenGLVideoRendererTileLayout(int frame_width
 			tile.texture_h = texture_height;
 			tile.x1 = static_cast<float>(tile.source_x + (col != 0));
 			tile.y1 = static_cast<float>(tile.source_y + (row != 0));
-			tile.x2 = static_cast<float>(tile.source_x + texture_width - (col != last_col));
-			tile.y2 = static_cast<float>(tile.source_y + texture_height - (row != last_row));
+			tile.x2 = static_cast<float>(tile.source_x + tile.source_w - (col != last_col));
+			tile.y2 = static_cast<float>(tile.source_y + tile.source_h - (row != last_row));
 			tile.u1 = col == 0 ? 0.0f : 1.0f / texture_width;
 			tile.v1 = row == 0 ? 0.0f : 1.0f / texture_height;
-			tile.u2 = col == last_col ? 1.0f : 1.0f - 1.0f / texture_width;
-			tile.v2 = row == last_row ? 1.0f : 1.0f - 1.0f / texture_height;
+			tile.u2 = static_cast<float>(col == last_col ? tile.source_w : tile.source_w - 1) / texture_width;
+			tile.v2 = static_cast<float>(row == last_row ? tile.source_h : tile.source_h - 1) / texture_height;
 			layout.tiles.emplace_back(tile);
 		}
 	}

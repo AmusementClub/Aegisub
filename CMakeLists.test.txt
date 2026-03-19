@@ -167,6 +167,39 @@ if(WIN32)
     )
     target_compile_definitions(opengl-overlay-bench PRIVATE CMAKE_BUILD)
     target_link_libraries(opengl-overlay-bench PRIVATE libaegisub OpenGL::GL Psapi)
+
+    if(WITH_FFMS2 AND WITH_LIBPLACEBO)
+        add_executable(video-geometry-compare EXCLUDE_FROM_ALL
+            tests/smoke/video_geometry_compare.cpp
+            src/compat.cpp
+            src/utils.cpp
+            src/ffmpegsource_common.cpp
+            src/video_provider_ffmpegsource.cpp
+            src/video_renderer_opengl.cpp
+            src/video_renderer_opengl_tile.cpp
+            src/native_library.cpp
+            src/video_renderer_placebo_gl.cpp
+            src/video_renderer_placebo_runtime.cpp
+        )
+        target_compile_definitions(video-geometry-compare PRIVATE
+            CMAKE_BUILD
+            WITH_FFMS2
+            WITH_FFMS2_RUNTIME_LOADING
+            WITH_LIBPLACEBO
+            WIN32_LEAN_AND_MEAN
+            NOMINMAX
+        )
+        target_include_directories(video-geometry-compare PRIVATE
+            ${FFMS2_INCLUDE_DIR}
+            ${LibPlacebo_INCLUDE_DIR}
+            "${PROJECT_SOURCE_DIR}/vendor/ffms2"
+        )
+        target_link_libraries(video-geometry-compare PRIVATE
+            libaegisub
+            OpenGL::GL
+            ${wxWidgets_LIBRARIES}
+        )
+    endif()
 endif()
 
 add_custom_target(test DEPENDS test-automation test-aegisub)

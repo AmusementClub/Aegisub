@@ -58,6 +58,10 @@
 #include <wx/intl.h>
 #include <wx/choicdlg.h>
 
+#ifdef CreateDirectory
+#undef CreateDirectory
+#endif
+
 #if FFMS_VERSION < ((2 << 24) | (22 << 16) | (0 << 8) | 0)
 enum {
 	FFMS_LOG_QUIET = -8,

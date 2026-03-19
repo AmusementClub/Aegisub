@@ -67,6 +67,11 @@ typedef enum AGI_ColorSpaces {
 	AGI_CS_ICTCP = 14
 } AGI_ColorSpaces;
 
+bool IsQuarterTurn(int rotation);
+bool IsHalfTurn(int rotation);
+bool IsClockwiseQuarterTurn(int rotation);
+bool IsCounterClockwiseQuarterTurn(int rotation);
+
 /// @class FFmpegSourceVideoProvider
 /// @brief Implements video loading through the FFMS library.
 class FFmpegSourceVideoProvider final : public VideoProvider, FFmpegSourceProvider {
@@ -85,6 +90,8 @@ class FFmpegSourceVideoProvider final : public VideoProvider, FFmpegSourceProvid
 	int RealCP = -1;                ///< Original color primaries before any override
 	int RealTC = -1;                ///< Original transfer characteristics before any override
 	int NativePixelFormat = -1;     ///< Original FFmpeg AVPixelFormat reported by FFMS2
+	int Rotation = 0;               ///< Rotation metadata from FFMS2 when runtime/header support it
+	int Flip = 0;                   ///< Flip metadata from FFMS2 when runtime/header support it
 	SourceFrameOutputMode OutputMode = SourceFrameOutputMode::Bgra8;
 	bool NativeOutputSupported = false;
 	double DAR;                     ///< display aspect ratio
@@ -120,16 +127,9 @@ public:
 	}
 
 	int GetFrameCount() const override             { return VideoInfo->NumFrames; }
-
-#if FFMS_VERSION >= ((2 << 24) | (24 << 16) | (0 << 8) | 0)
-	int GetWidth() const override  { return (VideoInfo->Rotation % 180 == 90 || VideoInfo->Rotation % 180 == -90) ? Height : Width; }
-	int GetHeight() const override { return (VideoInfo->Rotation % 180 == 90 || VideoInfo->Rotation % 180 == -90) ? Width : Height; }
-	double GetDAR() const override { return (VideoInfo->Rotation % 180 == 90 || VideoInfo->Rotation % 180 == -90) ? 1 / DAR : DAR; }
-#else
-	int GetWidth() const override                  { return Width; }
-	int GetHeight() const override                 { return Height; }
-	double GetDAR() const override                 { return DAR; }
-#endif
+	int GetWidth() const override                  { return IsQuarterTurn(Rotation) ? Height : Width; }
+	int GetHeight() const override                 { return IsQuarterTurn(Rotation) ? Width : Height; }
+	double GetDAR() const override                 { return IsQuarterTurn(Rotation) ? 1 / DAR : DAR; }
 
 	agi::vfr::Framerate GetFPS() const override    { return Timecodes; }
 	std::string GetColorSpace() const override     { return ColorSpace; }
@@ -186,6 +186,22 @@ FFMSNativeFormatIds ResolveFFMSNativeFormatIds() {
 FFMSNativeFormatIds const& GetFFMSNativeFormatIds() {
 	static FFMSNativeFormatIds const ids = ResolveFFMSNativeFormatIds();
 	return ids;
+}
+
+bool IsQuarterTurn(int rotation) {
+	return rotation % 180 == 90 || rotation % 180 == -90;
+}
+
+bool IsHalfTurn(int rotation) {
+	return rotation % 360 == 180 || rotation % 360 == -180;
+}
+
+bool IsClockwiseQuarterTurn(int rotation) {
+	return rotation % 360 == 90 || rotation % 360 == -270;
+}
+
+bool IsCounterClockwiseQuarterTurn(int rotation) {
+	return rotation % 360 == 270 || rotation % 360 == -90;
 }
 
 FFmpegSourceVideoProvider::FFmpegSourceVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br) try
@@ -305,11 +321,13 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 		DAR = double(Width) * VideoInfo->SARNum / ((double)Height * VideoInfo->SARDen);
 	else
 		DAR = double(Width) / Height;
+	Rotation = ffms::GetVideoRotation(VideoInfo);
+	Flip = ffms::GetVideoFlip(VideoInfo);
 
 	int VideoCS = CS = TempFrame->ColorSpace;
 	CR = TempFrame->ColorRange;
-	CP = TempFrame->ColorPrimaries;
-	TC = TempFrame->TransferCharateristics;
+	CP = ffms::GetFrameColorPrimaries(TempFrame);
+	TC = ffms::GetFrameTransferCharacteristics(TempFrame);
 	RealCS = VideoCS;
 	RealCR = CR;
 	RealCP = CP;
@@ -404,23 +422,21 @@ void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
 	out.width = Width;
 	out.height = Height;
 	out.pitch = frame->Linesize[0];
-#if FFMS_VERSION >= ((2 << 24) | (31 << 16) | (0 << 8) | 0)
 	// Handle flip
-	if (VideoInfo->Flip > 0)
+	if (Flip > 0)
 		for (int x = 0; x < Height; ++x)
 			for (int y = 0; y < Width / 2; ++y)
 				for (int ch = 0; ch < 4; ++ch)
 					std::swap(out.data[frame->Linesize[0] * x + 4 * y + ch], out.data[frame->Linesize[0] * x + 4 * (Width - 1 - y) + ch]);
 
-	else if (VideoInfo->Flip < 0)
+	else if (Flip < 0)
 		for (int x = 0; x < Height / 2; ++x)
 			for (int y = 0; y < Width; ++y)
 				for (int ch = 0; ch < 4; ++ch)
 					std::swap(out.data[frame->Linesize[0] * x + 4 * y + ch], out.data[frame->Linesize[0] * (Height - 1 - x) + 4 * y + ch]);
-#endif
-#if FFMS_VERSION >= ((2 << 24) | (24 << 16) | (0 << 8) | 0)
+
 	// Handle rotation
-	if (VideoInfo->Rotation % 360 == 180 || VideoInfo->Rotation % 360 == -180) {
+	if (IsHalfTurn(Rotation)) {
 		std::vector<unsigned char> data(std::move(out.data));
 		out.data.resize(Width * Height * 4);
 		for (int x = 0; x < Height; ++x)
@@ -429,7 +445,7 @@ void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
 					out.data[4 * (Width * x + y) + ch] = data[frame->Linesize[0] * (Height - 1 - x) + 4 * (Width - 1 - y) + ch];
 		out.pitch = 4 * Width;
 	}
-	else if (VideoInfo->Rotation % 360 == 90 || VideoInfo->Rotation % 360 == -270) {
+	else if (IsClockwiseQuarterTurn(Rotation)) {
 		std::vector<unsigned char> data(std::move(out.data));
 		out.data.resize(Width * Height * 4);
 		for (int x = 0; x < Width; ++x)
@@ -440,7 +456,7 @@ void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
 		out.height = Width;
 		out.pitch = 4 * Height;
 	}
-	else if (VideoInfo->Rotation % 360 == 270 || VideoInfo->Rotation % 360 == -90) {
+	else if (IsCounterClockwiseQuarterTurn(Rotation)) {
 		std::vector<unsigned char> data(std::move(out.data));
 		out.data.resize(Width * Height * 4);
 		for (int x = 0; x < Width; ++x)
@@ -451,7 +467,6 @@ void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
 		out.height = Width;
 		out.pitch = 4 * Height;
 	}
-#endif
 }
 
 bool FFmpegSourceVideoProvider::GetNativeFrame(int n, SourceFrame& out, std::shared_ptr<void>& owner) {
@@ -490,10 +505,10 @@ bool FFmpegSourceVideoProvider::GetNativeFrame(int n, SourceFrame& out, std::sha
 	out.color = ffms_color_metadata(
 		frame->ColorSpace >= 0 ? frame->ColorSpace : CS,
 		frame->ColorRange >= 0 ? frame->ColorRange : CR,
-		frame->ColorPrimaries >= 0 ? frame->ColorPrimaries : CP,
-		frame->TransferCharateristics >= 0 ? frame->TransferCharateristics : TC,
+		ffms::GetFrameColorPrimaries(frame, CP),
+		ffms::GetFrameTransferCharacteristics(frame, TC),
 		ColorSpace);
-	out.chroma_location = ffms::MapChromaLocation(frame->ChromaLocation);
+	out.chroma_location = ffms::MapChromaLocation(ffms::GetFrameChromaLocation(frame));
 
 	for (int i = 0; i < out.plane_count; ++i) {
 		int plane_width = GetSourceFramePlaneWidth(format_info, frame_width, i);

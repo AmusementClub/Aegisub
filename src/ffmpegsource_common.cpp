@@ -137,6 +137,10 @@ namespace {
 		return runtime_library.IsAvailable();
 	}
 
+	int GetLoadedVersionNumber() noexcept {
+		return loaded_version;
+	}
+
 	std::string GetLoadError() {
 		return runtime_library.GetLoadError();
 	}

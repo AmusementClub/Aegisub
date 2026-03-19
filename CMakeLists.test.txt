@@ -47,6 +47,7 @@ if(GTEST_FOUND)
         tests/tests/ffms_color_metadata.cpp
         tests/tests/ffms_chroma_location.cpp
         tests/tests/ffms_native_format_info.cpp
+        tests/tests/ffms_version.cpp
         tests/tests/format.cpp
         tests/tests/fs.cpp
         tests/tests/hotkey.cpp
@@ -101,6 +102,11 @@ if(GTEST_FOUND)
     endif()
     target_compile_definitions(gtest-run PRIVATE CMAKE_BUILD)
     target_include_directories(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
+    if(WITH_FFMS2)
+        target_include_directories(gtest-run PRIVATE
+            "${FFMS2_INCLUDE_DIR}"
+        )
+    endif()
     target_link_libraries(gtest-run PRIVATE libaegisub "GTest::GTest" "Iconv::Iconv" ${wxWidgets_LIBRARIES})
     target_precompile_headers(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/tests/support/tests_pre.h")
     if(WIN32)

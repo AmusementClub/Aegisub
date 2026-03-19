@@ -36,7 +36,7 @@
 #include <map>
 #include <string>
 
-#include <ffms.h>
+#include "ffms_version.h"
 
 #include <libaegisub/fs_fwd.h>
 #include <libaegisub/scoped_ptr.h>

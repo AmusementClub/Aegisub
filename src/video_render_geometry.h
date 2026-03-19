@@ -38,6 +38,13 @@ struct VideoRenderPoint {
 	float y = 0.0f;
 };
 
+struct VideoRenderQuad {
+	VideoRenderPoint p0;
+	VideoRenderPoint p1;
+	VideoRenderPoint p2;
+	VideoRenderPoint p3;
+};
+
 inline VideoRenderCanvasLayout BuildVideoRenderCanvasLayout(SourceFrame const& frame) {
 	auto const visible = GetSourceFrameVisibleRect(frame);
 	return {
@@ -112,6 +119,20 @@ inline VideoRenderPoint TransformVideoRenderPoint(
 	return { x, y };
 }
 
+inline VideoRenderQuad TransformVideoRenderQuad(
+	VideoRenderOutputLayout const& layout,
+	float x1,
+	float y1,
+	float x2,
+	float y2) {
+	return {
+		TransformVideoRenderPoint(layout, x1, y1),
+		TransformVideoRenderPoint(layout, x2, y1),
+		TransformVideoRenderPoint(layout, x2, y2),
+		TransformVideoRenderPoint(layout, x1, y2)
+	};
+}
+
 inline SubtitleOverlay AdjustSubtitleOverlayForSourceGeometry(
 	SubtitleOverlay const& overlay,
 	SourceFrameGeometry const& geometry) {
@@ -122,10 +143,62 @@ inline SubtitleOverlay AdjustSubtitleOverlayForSourceGeometry(
 	if (!visible.IsValid())
 		return overlay;
 
+	int const overlay_x0 = overlay.target_x;
+	int const overlay_y0 = overlay.target_y;
+	int const overlay_x1 = overlay.target_x + overlay.width;
+	int const overlay_y1 = overlay.target_y + overlay.height;
+	int const clip_x0 = std::max(overlay_x0, visible.x);
+	int const clip_y0 = std::max(overlay_y0, visible.y);
+	int const clip_x1 = std::min(overlay_x1, visible.x + visible.width);
+	int const clip_y1 = std::min(overlay_y1, visible.y + visible.height);
+
+	if (clip_x0 >= clip_x1 || clip_y0 >= clip_y1) {
+		auto hidden = overlay;
+		hidden.has_visible_content = false;
+		hidden.dirty_rects = nullptr;
+		hidden.dirty_rect_count = 0;
+		return hidden;
+	}
+
 	auto adjusted = overlay;
 	adjusted.canvas_width = visible.width;
 	adjusted.canvas_height = visible.height;
-	adjusted.target_x -= visible.x;
-	adjusted.target_y -= visible.y;
+
+	bool const fully_inside_visible =
+		clip_x0 == overlay_x0 &&
+		clip_y0 == overlay_y0 &&
+		clip_x1 == overlay_x1 &&
+		clip_y1 == overlay_y1;
+	if (fully_inside_visible) {
+		adjusted.target_x -= visible.x;
+		adjusted.target_y -= visible.y;
+		return adjusted;
+	}
+
+	// Direct-renderable overlays currently use a single BGRA plane, so we can
+	// cheaply crop by rebasing the view without allocating a temporary surface.
+	if (adjusted.pixel_format != SubtitleOverlayPixelFormat::Bgra8
+		|| adjusted.plane_count <= 0
+		|| !adjusted.planes[0].data) {
+		adjusted.has_visible_content = false;
+		adjusted.dirty_rects = nullptr;
+		adjusted.dirty_rect_count = 0;
+		return adjusted;
+	}
+
+	adjusted.target_x = clip_x0 - visible.x;
+	adjusted.target_y = clip_y0 - visible.y;
+	adjusted.width = clip_x1 - clip_x0;
+	adjusted.height = clip_y1 - clip_y0;
+	adjusted.planes[0].data +=
+		static_cast<ptrdiff_t>(clip_y0 - overlay_y0) * adjusted.planes[0].stride +
+		static_cast<ptrdiff_t>(clip_x0 - overlay_x0) * 4;
+	adjusted.planes[0].width = adjusted.width;
+	adjusted.planes[0].height = adjusted.height;
+	if (adjusted.dirty_rect_count > 0 && adjusted.dirty_rects) {
+		adjusted.dirty_rects = nullptr;
+		adjusted.dirty_rect_count = 0;
+		adjusted.force_full_upload = true;
+	}
 	return adjusted;
 }

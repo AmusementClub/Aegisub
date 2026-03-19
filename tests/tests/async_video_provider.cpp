@@ -6,6 +6,7 @@
 #include "../../src/export_fixstyle.h"
 #include "../../src/include/aegisub/subtitles_provider.h"
 #include "../../src/subtitle_overlay_blend.h"
+#include "../../src/video_render_geometry.h"
 #include "../../src/include/aegisub/video_provider.h"
 #include "../../src/video_frame.h"
 #include "../../src/video_provider_manager.h"
@@ -39,6 +40,8 @@ class FakeVideoProvider final : public VideoProvider {
 	std::shared_ptr<VideoProviderState> state;
 
 public:
+	int frame_width = 2;
+	int frame_height = 2;
 	std::string color_space = "BT.709";
 	std::string real_color_space = "BT.709";
 	SourceFrameNativeFormatIdentity native_format = { };
@@ -69,18 +72,18 @@ public:
 		}
 		lock.unlock();
 
-		frame.width = 2;
-		frame.height = 2;
-		frame.pitch = 8;
+		frame.width = frame_width;
+		frame.height = frame_height;
+		frame.pitch = static_cast<size_t>(frame_width) * 4;
 		frame.flipped = false;
-		frame.data.assign(16, 0);
+		frame.data.assign(frame.pitch * frame.height, 0);
 		frame.data[0] = static_cast<unsigned char>(n);
 	}
 
 	void SetColorSpace(std::string const& matrix) override { color_space = matrix; }
 	int GetFrameCount() const override { return 100; }
-	int GetWidth() const override { return 2; }
-	int GetHeight() const override { return 2; }
+	int GetWidth() const override { return frame_width; }
+	int GetHeight() const override { return frame_height; }
 	double GetDAR() const override { return 1.0; }
 	agi::vfr::Framerate GetFPS() const override { return agi::vfr::Framerate(24.0); }
 	std::vector<int> GetKeyFrames() const override { return {}; }
@@ -91,9 +94,16 @@ public:
 		if (output_mode != SourceFrameOutputMode::Native)
 			return false;
 
+		int native_width = frame_width;
+		int native_height = frame_height;
+		auto format_info = MakeSemiplanar420SourceFrameFormatInfo(8, 1, 2);
 		auto storage = std::make_shared<FakeNativeFrameStorage>();
-		storage->plane0.resize(4, 0);
-		storage->plane1.resize(4, 0);
+		storage->plane0.resize(static_cast<size_t>(native_width) * native_height, 0);
+		storage->plane1.resize(
+			static_cast<size_t>(GetSourceFramePlaneWidth(format_info, native_width, 1))
+			* GetSourceFramePlaneHeight(format_info, native_height, 1)
+			* format_info.planes[1].bytes_per_sample,
+			0);
 		storage->plane0[0] = static_cast<unsigned char>(n);
 		storage->plane1[0] = static_cast<unsigned char>(n + 1);
 
@@ -102,16 +112,26 @@ public:
 		frame.native_format = native_format.IsValid()
 			? native_format
 			: SourceFrameNativeFormatIdentity{ SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, 7 };
-		frame.format_info = MakeSemiplanar420SourceFrameFormatInfo(8, 1, 2);
-		frame.width = 2;
-		frame.height = 2;
+		frame.format_info = format_info;
+		frame.width = native_width;
+		frame.height = native_height;
 		frame.flipped = false;
 		frame.plane_count = frame.format_info.plane_count;
 		frame.geometry = native_geometry;
 		frame.color = SourceFrameColorMetadataFromLegacyColorSpace(color_space);
 		frame.chroma_location = native_chroma_location;
-		frame.planes[0] = { storage->plane0.data(), 2, 2, 2 };
-		frame.planes[1] = { storage->plane1.data(), 4, 1, 1 };
+		frame.planes[0] = {
+			storage->plane0.data(),
+			native_width,
+			native_width,
+			native_height
+		};
+		frame.planes[1] = {
+			storage->plane1.data(),
+			GetSourceFramePlaneWidth(format_info, native_width, 1) * format_info.planes[1].bytes_per_sample,
+			GetSourceFramePlaneWidth(format_info, native_width, 1),
+			GetSourceFramePlaneHeight(format_info, native_height, 1)
+		};
 		owner = storage;
 		return true;
 	}
@@ -170,6 +190,70 @@ public:
 		pixel[1] = 20;
 		pixel[2] = 30;
 		pixel[3] = 128;
+		return true;
+	}
+
+	void DrawSubtitles(VideoFrame &, double) override {
+		FAIL() << "legacy subtitle path should not be used";
+	}
+};
+
+class FakeGeometryAwareOverlaySubtitlesProvider final : public SubtitlesProvider {
+public:
+	int load_calls = 0;
+	int render_overlay_calls = 0;
+	SourceFrameGeometry last_source_geometry = { };
+	int last_overlay_target_x = 0;
+	int last_overlay_target_y = 0;
+	int last_overlay_width = 0;
+	int last_overlay_height = 0;
+
+private:
+	void LoadSubtitles(const char *, size_t) override {
+		++load_calls;
+	}
+
+public:
+	SubtitleRenderMode GetRenderMode() const override {
+		return SubtitleRenderMode::PremultipliedOverlay;
+	}
+
+	bool RenderOverlayClearsTarget() const override {
+		return true;
+	}
+
+	bool RenderOverlay(SourceFrame const& source, SubtitleOverlay& overlay, double) override {
+		++render_overlay_calls;
+		last_source_geometry = source.geometry;
+
+		overlay.premultiplied_alpha = true;
+		overlay.has_visible_content = true;
+		overlay.canvas_width = source.geometry.storage_width;
+		overlay.canvas_height = source.geometry.storage_height;
+		overlay.target_x = 1;
+		overlay.target_y = 2;
+		overlay.width = 4;
+		overlay.height = 2;
+		last_overlay_target_x = overlay.target_x;
+		last_overlay_target_y = overlay.target_y;
+		last_overlay_width = overlay.width;
+		last_overlay_height = overlay.height;
+		overlay.planes[0].data +=
+			static_cast<std::ptrdiff_t>(overlay.target_y) * overlay.planes[0].stride +
+			static_cast<std::ptrdiff_t>(overlay.target_x) * 4;
+		overlay.planes[0].width = overlay.width;
+		overlay.planes[0].height = overlay.height;
+
+		for (int y = 0; y < overlay.height; ++y) {
+			auto* row = overlay.planes[0].data + static_cast<std::ptrdiff_t>(y) * overlay.planes[0].stride;
+			for (int x = 0; x < overlay.width; ++x) {
+				auto* pixel = row + static_cast<std::ptrdiff_t>(x) * 4;
+				pixel[0] = 10;
+				pixel[1] = 20;
+				pixel[2] = 30;
+				pixel[3] = 200;
+			}
+		}
 		return true;
 	}
 
@@ -334,6 +418,7 @@ struct RecordedFrame {
 	bool has_overlay = false;
 	int overlay_dirty_rect_count = 0;
 	bool overlay_force_full_upload = false;
+	SourceFrameRect source_visible_rect = { };
 };
 
 class EventRecorder {
@@ -355,6 +440,7 @@ public:
 		frame.has_overlay = frame_evt->packet.has_subtitle_overlay;
 		frame.overlay_dirty_rect_count = frame_evt->packet.subtitle_overlay.dirty_rect_count;
 		frame.overlay_force_full_upload = frame_evt->packet.subtitle_overlay.force_full_upload;
+		frame.source_visible_rect = GetSourceFrameVisibleRect(frame_evt->packet.source_frame);
 
 		{
 			std::lock_guard<std::mutex> lock(mutex);
@@ -731,6 +817,99 @@ TEST(async_video_provider, native_source_mode_keeps_native_frame_for_rotation_pl
 	EXPECT_TRUE(packet.source_frame.geometry.display_vflip);
 	EXPECT_DOUBLE_EQ(1.25, packet.source_frame.geometry.pixel_aspect_ratio);
 	EXPECT_TRUE(packet.has_subtitle_overlay);
+}
+
+TEST(async_video_provider, native_source_mode_propagates_non_full_visible_rect_to_overlay_contract) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 8;
+	video->frame_height = 6;
+	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
+	video->native_geometry = MakeDefaultSourceFrameGeometry(8, 6);
+	video->native_geometry.visible_rect = { 2, 1, 4, 3 };
+	auto *subs = new FakeGeometryAwareOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto subtitle_file = MakeSubtitleFile("overlay");
+	provider.LoadSubtitles(&subtitle_file);
+
+	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
+	auto packet = provider.GetRenderPacket(5, 5000);
+	ASSERT_TRUE(packet.has_subtitle_overlay);
+	EXPECT_EQ(SourceFrameOutputMode::Native, packet.source_frame.output_mode);
+	EXPECT_EQ(2, packet.source_frame.geometry.visible_rect.x);
+	EXPECT_EQ(1, packet.source_frame.geometry.visible_rect.y);
+	EXPECT_EQ(4, packet.source_frame.geometry.visible_rect.width);
+	EXPECT_EQ(3, packet.source_frame.geometry.visible_rect.height);
+	EXPECT_EQ(2, subs->last_source_geometry.visible_rect.x);
+	EXPECT_EQ(1, subs->last_source_geometry.visible_rect.y);
+	EXPECT_EQ(4, subs->last_source_geometry.visible_rect.width);
+	EXPECT_EQ(3, subs->last_source_geometry.visible_rect.height);
+	EXPECT_EQ(1, subs->last_overlay_target_x);
+	EXPECT_EQ(2, subs->last_overlay_target_y);
+	EXPECT_EQ(4, subs->last_overlay_width);
+	EXPECT_EQ(2, subs->last_overlay_height);
+	EXPECT_EQ(1, packet.subtitle_overlay.target_x);
+	EXPECT_EQ(2, packet.subtitle_overlay.target_y);
+	EXPECT_EQ(4, packet.subtitle_overlay.width);
+	EXPECT_EQ(2, packet.subtitle_overlay.height);
+	EXPECT_EQ(8, packet.subtitle_overlay.canvas_width);
+	EXPECT_EQ(6, packet.subtitle_overlay.canvas_height);
+	ASSERT_EQ(1, packet.subtitle_overlay.dirty_rect_count);
+	EXPECT_EQ(1, packet.subtitle_overlay.dirty_rects[0].x);
+	EXPECT_EQ(2, packet.subtitle_overlay.dirty_rects[0].y);
+	EXPECT_EQ(4, packet.subtitle_overlay.dirty_rects[0].width);
+	EXPECT_EQ(2, packet.subtitle_overlay.dirty_rects[0].height);
+
+	auto adjusted = AdjustSubtitleOverlayForSourceGeometry(
+		packet.subtitle_overlay,
+		packet.source_frame.geometry);
+	EXPECT_EQ(4, adjusted.canvas_width);
+	EXPECT_EQ(3, adjusted.canvas_height);
+	EXPECT_EQ(0, adjusted.target_x);
+	EXPECT_EQ(1, adjusted.target_y);
+	EXPECT_EQ(3, adjusted.width);
+	EXPECT_EQ(2, adjusted.height);
+	EXPECT_EQ(packet.subtitle_overlay.planes[0].data + 4, adjusted.planes[0].data);
+	EXPECT_TRUE(adjusted.force_full_upload);
+	EXPECT_EQ(nullptr, adjusted.dirty_rects);
+	EXPECT_EQ(0, adjusted.dirty_rect_count);
+}
+
+TEST(async_video_provider, request_frame_event_preserves_non_full_visible_rect_metadata) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 8;
+	video->frame_height = 6;
+	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
+	video->native_geometry = MakeDefaultSourceFrameGeometry(8, 6);
+	video->native_geometry.visible_rect = { 2, 1, 4, 3 };
+	auto *subs = new FakeGeometryAwareOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto subtitle_file = MakeSubtitleFile("overlay");
+	provider.LoadSubtitles(&subtitle_file);
+	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
+
+	provider.RequestFrame(5, 5000);
+	ASSERT_TRUE(recorder.WaitForCount(1));
+	auto frames = recorder.Snapshot();
+	ASSERT_EQ(1u, frames.size());
+	EXPECT_TRUE(frames.back().has_overlay);
+	EXPECT_EQ(2, frames.back().source_visible_rect.x);
+	EXPECT_EQ(1, frames.back().source_visible_rect.y);
+	EXPECT_EQ(4, frames.back().source_visible_rect.width);
+	EXPECT_EQ(3, frames.back().source_visible_rect.height);
 }
 
 TEST(async_video_provider, native_source_mode_keeps_native_frame_for_display_vflip_source_only_display_path) {

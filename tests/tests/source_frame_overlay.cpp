@@ -208,15 +208,96 @@ TEST(source_frame_overlay, render_output_point_transform_applies_display_vflip_i
 	EXPECT_FLOAT_EQ(0.0f, point.y);
 }
 
-TEST(source_frame_overlay, source_storage_overlay_adjusts_to_visible_rect_canvas) {
-	VideoFrame frame;
-	frame.width = 4;
-	frame.height = 3;
-	frame.pitch = 16;
-	frame.flipped = false;
-	frame.data.resize(48);
+TEST(source_frame_overlay, render_output_quad_transform_matches_rotation_and_display_vflip) {
+	auto layout = BuildVideoRenderOutputLayout(4, 3, 90);
+	layout.display_vflip = true;
 
-	auto overlay = MakeLegacyBgraSubtitleOverlayView(frame);
+	auto quad = TransformVideoRenderQuad(layout, 1.0f, 1.0f, 3.0f, 2.0f);
+	EXPECT_FLOAT_EQ(2.0f, quad.p0.x);
+	EXPECT_FLOAT_EQ(3.0f, quad.p0.y);
+	EXPECT_FLOAT_EQ(2.0f, quad.p1.x);
+	EXPECT_FLOAT_EQ(1.0f, quad.p1.y);
+	EXPECT_FLOAT_EQ(1.0f, quad.p2.x);
+	EXPECT_FLOAT_EQ(1.0f, quad.p2.y);
+	EXPECT_FLOAT_EQ(1.0f, quad.p3.x);
+	EXPECT_FLOAT_EQ(3.0f, quad.p3.y);
+}
+
+TEST(source_frame_overlay, source_storage_and_source_visible_overlay_quads_match_after_crop_rotation_and_vflip) {
+	SubtitleOverlayStorage storage;
+	storage.Reset(2, 1, false);
+	storage.has_visible_content = true;
+
+	auto storage_overlay = storage.MakeView(true);
+	storage_overlay.canvas_width = 8;
+	storage_overlay.canvas_height = 6;
+	storage_overlay.target_x = 3;
+	storage_overlay.target_y = 2;
+	storage_overlay.coordinate_space = SubtitleOverlayCoordinateSpace::SourceStorage;
+
+	auto visible_overlay = storage_overlay;
+	visible_overlay.canvas_width = 4;
+	visible_overlay.canvas_height = 3;
+	visible_overlay.target_x = 1;
+	visible_overlay.target_y = 1;
+	visible_overlay.coordinate_space = SubtitleOverlayCoordinateSpace::SourceVisible;
+
+	SourceFrameGeometry geometry = MakeDefaultSourceFrameGeometry(8, 6);
+	geometry.visible_rect = { 2, 1, 4, 3 };
+	geometry.rotation = 90;
+	geometry.display_vflip = true;
+
+	auto adjusted_storage = AdjustSubtitleOverlayForSourceGeometry(storage_overlay, geometry);
+	auto adjusted_visible = AdjustSubtitleOverlayForSourceGeometry(visible_overlay, geometry);
+
+	EXPECT_EQ(4, adjusted_storage.canvas_width);
+	EXPECT_EQ(3, adjusted_storage.canvas_height);
+	EXPECT_EQ(1, adjusted_storage.target_x);
+	EXPECT_EQ(1, adjusted_storage.target_y);
+	EXPECT_EQ(4, adjusted_visible.canvas_width);
+	EXPECT_EQ(3, adjusted_visible.canvas_height);
+	EXPECT_EQ(1, adjusted_visible.target_x);
+	EXPECT_EQ(1, adjusted_visible.target_y);
+
+	auto storage_layout = BuildVideoRenderOutputLayout(
+		adjusted_storage.canvas_width,
+		adjusted_storage.canvas_height,
+		geometry);
+	auto visible_layout = BuildVideoRenderOutputLayout(
+		adjusted_visible.canvas_width,
+		adjusted_visible.canvas_height,
+		geometry);
+	auto storage_quad = TransformVideoRenderQuad(
+		storage_layout,
+		static_cast<float>(adjusted_storage.target_x),
+		static_cast<float>(adjusted_storage.target_y),
+		static_cast<float>(adjusted_storage.target_x + adjusted_storage.width),
+		static_cast<float>(adjusted_storage.target_y + adjusted_storage.height));
+	auto visible_quad = TransformVideoRenderQuad(
+		visible_layout,
+		static_cast<float>(adjusted_visible.target_x),
+		static_cast<float>(adjusted_visible.target_y),
+		static_cast<float>(adjusted_visible.target_x + adjusted_visible.width),
+		static_cast<float>(adjusted_visible.target_y + adjusted_visible.height));
+
+	EXPECT_EQ(3, storage_layout.output_width);
+	EXPECT_EQ(4, storage_layout.output_height);
+	EXPECT_FLOAT_EQ(storage_quad.p0.x, visible_quad.p0.x);
+	EXPECT_FLOAT_EQ(storage_quad.p0.y, visible_quad.p0.y);
+	EXPECT_FLOAT_EQ(storage_quad.p1.x, visible_quad.p1.x);
+	EXPECT_FLOAT_EQ(storage_quad.p1.y, visible_quad.p1.y);
+	EXPECT_FLOAT_EQ(storage_quad.p2.x, visible_quad.p2.x);
+	EXPECT_FLOAT_EQ(storage_quad.p2.y, visible_quad.p2.y);
+	EXPECT_FLOAT_EQ(storage_quad.p3.x, visible_quad.p3.x);
+	EXPECT_FLOAT_EQ(storage_quad.p3.y, visible_quad.p3.y);
+}
+
+TEST(source_frame_overlay, source_storage_overlay_adjusts_to_visible_rect_canvas) {
+	SubtitleOverlayStorage storage;
+	storage.Reset(1, 1, false);
+	storage.has_visible_content = true;
+
+	auto overlay = storage.MakeView(true);
 	overlay.canvas_width = 4;
 	overlay.canvas_height = 3;
 	overlay.target_x = 2;
@@ -230,6 +311,10 @@ TEST(source_frame_overlay, source_storage_overlay_adjusts_to_visible_rect_canvas
 	EXPECT_EQ(2, adjusted.canvas_height);
 	EXPECT_EQ(1, adjusted.target_x);
 	EXPECT_EQ(0, adjusted.target_y);
+	EXPECT_EQ(1, adjusted.width);
+	EXPECT_EQ(1, adjusted.height);
+	EXPECT_EQ(1, adjusted.planes[0].width);
+	EXPECT_EQ(1, adjusted.planes[0].height);
 }
 
 TEST(source_frame_overlay, source_visible_overlay_keeps_original_canvas_mapping) {
@@ -255,6 +340,121 @@ TEST(source_frame_overlay, source_visible_overlay_keeps_original_canvas_mapping)
 	EXPECT_EQ(3, adjusted.canvas_height);
 	EXPECT_EQ(2, adjusted.target_x);
 	EXPECT_EQ(1, adjusted.target_y);
+}
+
+TEST(source_frame_overlay, source_storage_overlay_partial_crop_rebases_bgra_view_without_allocation) {
+	SubtitleOverlayStorage storage;
+	storage.Reset(4, 2, false);
+	storage.has_visible_content = true;
+	storage.dirty_rects.push_back({ 0, 0, 2, 2 });
+	for (size_t i = 0; i < storage.pixels.size(); ++i)
+		storage.pixels[i] = static_cast<unsigned char>(i & 0xFF);
+
+	auto overlay = storage.MakeView(true);
+	overlay.canvas_width = 8;
+	overlay.canvas_height = 6;
+	overlay.target_x = 1;
+	overlay.target_y = 2;
+
+	SourceFrameGeometry geometry = MakeDefaultSourceFrameGeometry(8, 6);
+	geometry.visible_rect = { 2, 1, 4, 3 };
+
+	auto adjusted = AdjustSubtitleOverlayForSourceGeometry(overlay, geometry);
+	ASSERT_TRUE(adjusted.IsValid());
+	EXPECT_EQ(4, adjusted.canvas_width);
+	EXPECT_EQ(3, adjusted.canvas_height);
+	EXPECT_EQ(0, adjusted.target_x);
+	EXPECT_EQ(1, adjusted.target_y);
+	EXPECT_EQ(3, adjusted.width);
+	EXPECT_EQ(2, adjusted.height);
+	EXPECT_EQ(storage.pixels.data() + 4, adjusted.planes[0].data);
+	EXPECT_EQ(3, adjusted.planes[0].width);
+	EXPECT_EQ(2, adjusted.planes[0].height);
+	EXPECT_TRUE(adjusted.force_full_upload);
+	EXPECT_EQ(nullptr, adjusted.dirty_rects);
+	EXPECT_EQ(0, adjusted.dirty_rect_count);
+}
+
+TEST(source_frame_overlay, source_storage_overlay_outside_visible_rect_becomes_hidden) {
+	SubtitleOverlayStorage storage;
+	storage.Reset(2, 1, false);
+	storage.has_visible_content = true;
+
+	auto overlay = storage.MakeView(true);
+	overlay.canvas_width = 8;
+	overlay.canvas_height = 6;
+	overlay.target_x = 0;
+	overlay.target_y = 0;
+
+	SourceFrameGeometry geometry = MakeDefaultSourceFrameGeometry(8, 6);
+	geometry.visible_rect = { 3, 2, 4, 3 };
+
+	auto adjusted = AdjustSubtitleOverlayForSourceGeometry(overlay, geometry);
+	EXPECT_FALSE(adjusted.has_visible_content);
+	EXPECT_EQ(nullptr, adjusted.dirty_rects);
+	EXPECT_EQ(0, adjusted.dirty_rect_count);
+}
+
+TEST(source_frame_overlay, partial_crop_source_storage_and_source_visible_overlay_quads_match_after_rotation_and_vflip) {
+	SubtitleOverlayStorage storage;
+	storage.Reset(4, 2, false);
+	storage.has_visible_content = true;
+
+	auto storage_overlay = storage.MakeView(true);
+	storage_overlay.canvas_width = 8;
+	storage_overlay.canvas_height = 6;
+	storage_overlay.target_x = 1;
+	storage_overlay.target_y = 2;
+	storage_overlay.coordinate_space = SubtitleOverlayCoordinateSpace::SourceStorage;
+
+	auto visible_overlay = storage_overlay;
+	visible_overlay.width = 3;
+	visible_overlay.height = 2;
+	visible_overlay.canvas_width = 4;
+	visible_overlay.canvas_height = 3;
+	visible_overlay.target_x = 0;
+	visible_overlay.target_y = 1;
+	visible_overlay.coordinate_space = SubtitleOverlayCoordinateSpace::SourceVisible;
+
+	SourceFrameGeometry geometry = MakeDefaultSourceFrameGeometry(8, 6);
+	geometry.visible_rect = { 2, 1, 4, 3 };
+	geometry.rotation = 270;
+	geometry.display_vflip = true;
+
+	auto adjusted_storage = AdjustSubtitleOverlayForSourceGeometry(storage_overlay, geometry);
+	auto adjusted_visible = AdjustSubtitleOverlayForSourceGeometry(visible_overlay, geometry);
+
+	auto storage_layout = BuildVideoRenderOutputLayout(
+		adjusted_storage.canvas_width,
+		adjusted_storage.canvas_height,
+		geometry);
+	auto visible_layout = BuildVideoRenderOutputLayout(
+		adjusted_visible.canvas_width,
+		adjusted_visible.canvas_height,
+		geometry);
+	auto storage_quad = TransformVideoRenderQuad(
+		storage_layout,
+		static_cast<float>(adjusted_storage.target_x),
+		static_cast<float>(adjusted_storage.target_y),
+		static_cast<float>(adjusted_storage.target_x + adjusted_storage.width),
+		static_cast<float>(adjusted_storage.target_y + adjusted_storage.height));
+	auto visible_quad = TransformVideoRenderQuad(
+		visible_layout,
+		static_cast<float>(adjusted_visible.target_x),
+		static_cast<float>(adjusted_visible.target_y),
+		static_cast<float>(adjusted_visible.target_x + adjusted_visible.width),
+		static_cast<float>(adjusted_visible.target_y + adjusted_visible.height));
+
+	EXPECT_EQ(3, storage_layout.output_width);
+	EXPECT_EQ(4, storage_layout.output_height);
+	EXPECT_FLOAT_EQ(storage_quad.p0.x, visible_quad.p0.x);
+	EXPECT_FLOAT_EQ(storage_quad.p0.y, visible_quad.p0.y);
+	EXPECT_FLOAT_EQ(storage_quad.p1.x, visible_quad.p1.x);
+	EXPECT_FLOAT_EQ(storage_quad.p1.y, visible_quad.p1.y);
+	EXPECT_FLOAT_EQ(storage_quad.p2.x, visible_quad.p2.x);
+	EXPECT_FLOAT_EQ(storage_quad.p2.y, visible_quad.p2.y);
+	EXPECT_FLOAT_EQ(storage_quad.p3.x, visible_quad.p3.x);
+	EXPECT_FLOAT_EQ(storage_quad.p3.y, visible_quad.p3.y);
 }
 
 TEST(source_frame_overlay, legacy_color_space_parser_infers_renderer_facing_metadata) {

@@ -20,16 +20,12 @@
 #include <libaegisub/compiler.h>
 #include <libaegisub/log.h>
 
+#ifdef _WIN32
 #ifdef HAVE_OPENGL_GL_H
-#include <OpenGL/gl.h>
 #include <OpenGL/glext.h>
 #else
-#include <GL/gl.h>
 #include <GL/glext.h>
 #endif
-
-#ifdef __WIN32__
-#include <windows.h>
 #elif !defined(__APPLE__)
 #include <GL/glx.h>
 #else
@@ -90,7 +86,7 @@ struct OpenGLVideoRenderer::Functions {
 
 namespace {
 void *GetGLProcAddress(char const *name) {
-#ifdef __WIN32__
+#ifdef _WIN32
 	void *proc = reinterpret_cast<void *>(wglGetProcAddress(name));
 	if (proc == nullptr || proc == reinterpret_cast<void *>(0x1) || proc == reinterpret_cast<void *>(0x2) || proc == reinterpret_cast<void *>(0x3) || proc == reinterpret_cast<void *>(-1))
 		return nullptr;
@@ -381,27 +377,17 @@ void OpenGLVideoRenderer::RebuildLayerGeometry(LayerResources& layer) {
 	for (size_t i = 0; i < layer.layout.tiles.size(); ++i) {
 		auto const& tile = layer.layout.tiles[i];
 		GLuint base = static_cast<GLuint>(layer.vertices.size());
-		auto const p0 = TransformVideoRenderPoint(
+		auto const quad = TransformVideoRenderQuad(
 			layer.render_output_layout,
 			tile.x1 + layer.offset_x,
-			tile.y1 + layer.offset_y);
-		auto const p1 = TransformVideoRenderPoint(
-			layer.render_output_layout,
+			tile.y1 + layer.offset_y,
 			tile.x2 + layer.offset_x,
-			tile.y1 + layer.offset_y);
-		auto const p2 = TransformVideoRenderPoint(
-			layer.render_output_layout,
-			tile.x2 + layer.offset_x,
-			tile.y2 + layer.offset_y);
-		auto const p3 = TransformVideoRenderPoint(
-			layer.render_output_layout,
-			tile.x1 + layer.offset_x,
 			tile.y2 + layer.offset_y);
 
-		layer.vertices.push_back({ { p0.x, p0.y }, { tile.u1, tile.v1 } });
-		layer.vertices.push_back({ { p1.x, p1.y }, { tile.u2, tile.v1 } });
-		layer.vertices.push_back({ { p2.x, p2.y }, { tile.u2, tile.v2 } });
-		layer.vertices.push_back({ { p3.x, p3.y }, { tile.u1, tile.v2 } });
+		layer.vertices.push_back({ { quad.p0.x, quad.p0.y }, { tile.u1, tile.v1 } });
+		layer.vertices.push_back({ { quad.p1.x, quad.p1.y }, { tile.u2, tile.v1 } });
+		layer.vertices.push_back({ { quad.p2.x, quad.p2.y }, { tile.u2, tile.v2 } });
+		layer.vertices.push_back({ { quad.p3.x, quad.p3.y }, { tile.u1, tile.v2 } });
 
 		layer.indices.push_back(base + 0);
 		layer.indices.push_back(base + 1);

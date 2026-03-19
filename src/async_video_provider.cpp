@@ -188,16 +188,22 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 					}
 				}
 				else {
-					overlay_storage->dirty_rects = {
-						{
-							0,
-							0,
-							packet.source_frame.width,
-							packet.source_frame.height
-						}
-					};
+					overlay_storage->dirty_rects.clear();
+					if (subtitle_overlay.has_visible_content
+						&& subtitle_overlay.width > 0
+						&& subtitle_overlay.height > 0) {
+						overlay_storage->dirty_rects.push_back({
+							subtitle_overlay.target_x,
+							subtitle_overlay.target_y,
+							subtitle_overlay.width,
+							subtitle_overlay.height
+						});
+					}
 				}
-				subtitle_overlay = overlay_storage->MakeView(true);
+				subtitle_overlay.dirty_rects = overlay_storage->dirty_rects.empty()
+					? nullptr
+					: overlay_storage->dirty_rects.data();
+				subtitle_overlay.dirty_rect_count = static_cast<int>(overlay_storage->dirty_rects.size());
 				subtitle_overlay.force_full_upload = force_next_overlay_full_upload;
 				if (subtitle_overlay.has_visible_content) {
 					packet.subtitle_overlay_storage = overlay_storage;

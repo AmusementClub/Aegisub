@@ -20,6 +20,16 @@
 #include "source_frame.h"
 #include "subtitle_overlay.h"
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
+#ifdef HAVE_OPENGL_GL_H
+#include <OpenGL/gl.h>
+#else
+#include <GL/gl.h>
+#endif
+
 #include <memory>
 #include <vector>
 

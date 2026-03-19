@@ -150,4 +150,14 @@ if(WITH_LIBPLACEBO)
     endif()
 endif()
 
+if(WIN32)
+    add_executable(opengl-overlay-smoke EXCLUDE_FROM_ALL
+        tests/smoke/opengl_overlay_smoke.cpp
+        src/video_renderer_opengl.cpp
+        src/video_renderer_opengl_tile.cpp
+    )
+    target_compile_definitions(opengl-overlay-smoke PRIVATE CMAKE_BUILD)
+    target_link_libraries(opengl-overlay-smoke PRIVATE libaegisub OpenGL::GL)
+endif()
+
 add_custom_target(test DEPENDS test-automation test-aegisub)

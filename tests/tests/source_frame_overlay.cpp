@@ -3,6 +3,7 @@
 #include "../../src/include/aegisub/subtitles_provider.h"
 #include "../../src/source_frame.h"
 #include "../../src/subtitle_overlay.h"
+#include "../../src/video_render_geometry.h"
 #include "../../src/video_frame.h"
 
 namespace {
@@ -79,6 +80,84 @@ TEST(source_frame_overlay, source_frame_view_reflects_video_frame) {
 	EXPECT_EQ(0, source.geometry.rotation);
 	EXPECT_FALSE(source.geometry.display_vflip);
 	EXPECT_DOUBLE_EQ(1.0, source.geometry.pixel_aspect_ratio);
+}
+
+TEST(source_frame_overlay, visible_rect_helper_clamps_invalid_geometry_back_to_full_frame) {
+	SourceFrameGeometry geometry = MakeDefaultSourceFrameGeometry(4, 3);
+	geometry.visible_rect = { 4, 0, 2, 3 };
+
+	auto visible = GetSourceFrameVisibleRect(geometry, 4, 3);
+	EXPECT_EQ(0, visible.x);
+	EXPECT_EQ(0, visible.y);
+	EXPECT_EQ(4, visible.width);
+	EXPECT_EQ(3, visible.height);
+}
+
+TEST(source_frame_overlay, render_canvas_layout_uses_visible_rect_as_output_canvas) {
+	VideoFrame frame;
+	frame.width = 4;
+	frame.height = 3;
+	frame.pitch = 16;
+	frame.flipped = false;
+	frame.data.resize(48);
+
+	auto source = MakeSourceFrameView(frame);
+	source.geometry.visible_rect = { 1, 1, 2, 2 };
+
+	auto layout = BuildVideoRenderCanvasLayout(source);
+	EXPECT_EQ(2, layout.canvas_width);
+	EXPECT_EQ(2, layout.canvas_height);
+	EXPECT_EQ(-1, layout.offset_x);
+	EXPECT_EQ(-1, layout.offset_y);
+}
+
+TEST(source_frame_overlay, source_storage_overlay_adjusts_to_visible_rect_canvas) {
+	VideoFrame frame;
+	frame.width = 4;
+	frame.height = 3;
+	frame.pitch = 16;
+	frame.flipped = false;
+	frame.data.resize(48);
+
+	auto overlay = MakeLegacyBgraSubtitleOverlayView(frame);
+	overlay.canvas_width = 4;
+	overlay.canvas_height = 3;
+	overlay.target_x = 2;
+	overlay.target_y = 1;
+
+	SourceFrameGeometry geometry = MakeDefaultSourceFrameGeometry(4, 3);
+	geometry.visible_rect = { 1, 1, 2, 2 };
+
+	auto adjusted = AdjustSubtitleOverlayForSourceGeometry(overlay, geometry);
+	EXPECT_EQ(2, adjusted.canvas_width);
+	EXPECT_EQ(2, adjusted.canvas_height);
+	EXPECT_EQ(1, adjusted.target_x);
+	EXPECT_EQ(0, adjusted.target_y);
+}
+
+TEST(source_frame_overlay, source_visible_overlay_keeps_original_canvas_mapping) {
+	VideoFrame frame;
+	frame.width = 4;
+	frame.height = 3;
+	frame.pitch = 16;
+	frame.flipped = false;
+	frame.data.resize(48);
+
+	auto overlay = MakeLegacyBgraSubtitleOverlayView(frame);
+	overlay.canvas_width = 4;
+	overlay.canvas_height = 3;
+	overlay.target_x = 2;
+	overlay.target_y = 1;
+	overlay.coordinate_space = SubtitleOverlayCoordinateSpace::SourceVisible;
+
+	SourceFrameGeometry geometry = MakeDefaultSourceFrameGeometry(4, 3);
+	geometry.visible_rect = { 1, 1, 2, 2 };
+
+	auto adjusted = AdjustSubtitleOverlayForSourceGeometry(overlay, geometry);
+	EXPECT_EQ(4, adjusted.canvas_width);
+	EXPECT_EQ(3, adjusted.canvas_height);
+	EXPECT_EQ(2, adjusted.target_x);
+	EXPECT_EQ(1, adjusted.target_y);
 }
 
 TEST(source_frame_overlay, legacy_color_space_parser_infers_renderer_facing_metadata) {

@@ -273,6 +273,7 @@ void VideoDisplay::DoRender() try {
 				videoRenderer->UploadOverlay(nullptr);
 				if (!subtitleOverlayRenderer)
 					subtitleOverlayRenderer = agi::make_unique<OpenGLVideoRenderer>(false, true, false);
+				subtitleOverlayRenderer->UploadFrame(pending_packet.source_frame);
 				subtitleOverlayRenderer->UploadOverlay(&pending_packet.subtitle_overlay);
 			}
 			else {

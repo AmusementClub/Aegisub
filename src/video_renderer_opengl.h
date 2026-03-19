@@ -16,6 +16,7 @@
 
 #include "ivideo_renderer.h"
 #include "video_renderer_opengl_tile.h"
+#include "video_render_geometry.h"
 #include "source_frame.h"
 #include "subtitle_overlay.h"
 
@@ -59,6 +60,8 @@ class OpenGLVideoRenderer final : public IVideoRenderer {
 	bool render_video_layer = true;
 	bool render_overlay_layer = true;
 	bool clear_before_render = true;
+	SourceFrameGeometry source_geometry;
+	bool has_source_geometry = false;
 
 	void EnsureInitialized();
 	void LoadFunctions();

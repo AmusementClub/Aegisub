@@ -17,6 +17,7 @@
 #include "include/aegisub/video_color_metadata.h"
 #include "video_frame.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 
@@ -231,6 +232,26 @@ inline SourceFrameGeometry MakeDefaultSourceFrameGeometry(int width, int height)
 	return geometry;
 }
 
+inline SourceFrameRect GetSourceFrameVisibleRect(SourceFrameGeometry const& geometry, int fallback_width, int fallback_height) {
+	int storage_width = geometry.storage_width > 0 ? geometry.storage_width : fallback_width;
+	int storage_height = geometry.storage_height > 0 ? geometry.storage_height : fallback_height;
+	if (storage_width <= 0 || storage_height <= 0)
+		return { };
+
+	SourceFrameRect full_rect = { 0, 0, storage_width, storage_height };
+	if (!geometry.visible_rect.IsValid())
+		return full_rect;
+
+	int x0 = std::clamp(geometry.visible_rect.x, 0, storage_width);
+	int y0 = std::clamp(geometry.visible_rect.y, 0, storage_height);
+	int x1 = std::clamp(geometry.visible_rect.x + geometry.visible_rect.width, 0, storage_width);
+	int y1 = std::clamp(geometry.visible_rect.y + geometry.visible_rect.height, 0, storage_height);
+	if (x0 >= x1 || y0 >= y1)
+		return full_rect;
+
+	return { x0, y0, x1 - x0, y1 - y0 };
+}
+
 struct SourceFrame {
 	SourceFramePixelFormat pixel_format = SourceFramePixelFormat::Unknown;
 	SourceFrameOutputMode output_mode = SourceFrameOutputMode::Bgra8;
@@ -283,6 +304,10 @@ struct SourceFrame {
 		return true;
 	}
 };
+
+inline SourceFrameRect GetSourceFrameVisibleRect(SourceFrame const& frame) {
+	return GetSourceFrameVisibleRect(frame.geometry, frame.width, frame.height);
+}
 
 inline bool SourceFrameHasSubsampledChroma(SourceFrame const& frame) {
 	return SourceFrameHasSubsampledChroma(frame.format_info);

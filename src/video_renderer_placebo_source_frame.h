@@ -137,22 +137,15 @@ inline struct pl_rect2df BuildPlaceboSourceFrameCropRect(SourceFrame const& fram
 	if (frame.width <= 0 || frame.height <= 0)
 		return full;
 
-	auto const& visible = frame.geometry.visible_rect;
+	auto const visible = GetSourceFrameVisibleRect(frame);
 	if (!visible.IsValid())
 		return full;
 
-	int x0 = std::clamp(visible.x, 0, frame.width);
-	int y0 = std::clamp(visible.y, 0, frame.height);
-	int x1 = std::clamp(visible.x + visible.width, 0, frame.width);
-	int y1 = std::clamp(visible.y + visible.height, 0, frame.height);
-	if (x0 >= x1 || y0 >= y1)
-		return full;
-
 	return {
-		static_cast<float>(x0),
-		static_cast<float>(y0),
-		static_cast<float>(x1),
-		static_cast<float>(y1)
+		static_cast<float>(visible.x),
+		static_cast<float>(visible.y),
+		static_cast<float>(visible.x + visible.width),
+		static_cast<float>(visible.y + visible.height)
 	};
 }
 

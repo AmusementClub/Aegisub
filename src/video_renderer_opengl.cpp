@@ -335,6 +335,8 @@ void OpenGLVideoRenderer::Reset() {
 	max_texture_size = 0;
 	supports_rectangular_textures = false;
 	internal_format = 0;
+	source_geometry = {};
+	has_source_geometry = false;
 }
 
 void OpenGLVideoRenderer::RebuildLayerGeometry(LayerResources& layer) {
@@ -542,14 +544,25 @@ void OpenGLVideoRenderer::RenderLayer(LayerResources& layer) {
 }
 
 void OpenGLVideoRenderer::UploadFrame(SourceFrame const& frame) {
+	if (!frame.IsValid()) {
+		has_source_geometry = false;
+		if (render_video_layer)
+			video_layer.has_content = false;
+		return;
+	}
+
+	source_geometry = frame.geometry;
+	has_source_geometry = true;
+
 	if (!render_video_layer)
 		return;
 
-	if (!frame.IsValid() || frame.pixel_format != SourceFramePixelFormat::Bgra8) {
+	if (frame.pixel_format != SourceFramePixelFormat::Bgra8) {
 		video_layer.has_content = false;
 		return;
 	}
 
+	auto const layout = BuildVideoRenderCanvasLayout(frame);
 	UploadBgraLayer(
 		video_layer,
 		frame.planes[0].data,
@@ -557,10 +570,10 @@ void OpenGLVideoRenderer::UploadFrame(SourceFrame const& frame) {
 		frame.height,
 		frame.planes[0].stride,
 		frame.flipped,
-		frame.width,
-		frame.height,
-		0,
-		0,
+		layout.canvas_width,
+		layout.canvas_height,
+		layout.offset_x,
+		layout.offset_y,
 		SubtitleOverlayCompositionMode::OpaqueReplace);
 }
 
@@ -580,7 +593,14 @@ void OpenGLVideoRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 	state.has_visible_content = overlay_layer.has_content;
 	state.composition_mode = overlay_layer.composition_mode;
 
-	auto plan = DecideOpenGLVideoRendererOverlayUploadPlan(state, overlay);
+	SubtitleOverlay adjusted_overlay;
+	if (overlay)
+		adjusted_overlay = has_source_geometry
+			? AdjustSubtitleOverlayForSourceGeometry(*overlay, source_geometry)
+			: *overlay;
+	auto const* render_overlay = overlay ? &adjusted_overlay : nullptr;
+
+	auto plan = DecideOpenGLVideoRendererOverlayUploadPlan(state, render_overlay);
 	if (plan.action == OpenGLVideoRendererOverlayUploadAction::HideKeepResources) {
 		HideLayer(overlay_layer);
 		return;
@@ -588,25 +608,25 @@ void OpenGLVideoRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 	if (plan.action == OpenGLVideoRendererOverlayUploadAction::FullUpload) {
 		UploadBgraLayer(
 			overlay_layer,
-			overlay->planes[0].data,
-			overlay->width,
-			overlay->height,
-			overlay->planes[0].stride,
-			overlay->flipped,
-			overlay->canvas_width,
-			overlay->canvas_height,
-			overlay->target_x,
-			overlay->target_y,
-			overlay->composition_mode);
+			render_overlay->planes[0].data,
+			render_overlay->width,
+			render_overlay->height,
+			render_overlay->planes[0].stride,
+			render_overlay->flipped,
+			render_overlay->canvas_width,
+			render_overlay->canvas_height,
+			render_overlay->target_x,
+			render_overlay->target_y,
+			render_overlay->composition_mode);
 		return;
 	}
 	if (plan.action == OpenGLVideoRendererOverlayUploadAction::DirtyUpload) {
 		UploadDirtyRects(
 			overlay_layer,
-			overlay->planes[0].data,
-			overlay->planes[0].stride,
-			overlay->dirty_rects,
-			overlay->dirty_rect_count);
+			render_overlay->planes[0].data,
+			render_overlay->planes[0].stride,
+			render_overlay->dirty_rects,
+			render_overlay->dirty_rect_count);
 		return;
 	}
 

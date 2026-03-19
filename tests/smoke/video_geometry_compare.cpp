@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -98,6 +99,13 @@ struct SourceGeometryExpectation {
 	double pixel_aspect_ratio = 1.0;
 };
 
+struct SampleInput {
+	std::string sample_name;
+	std::filesystem::path file_path;
+	bool has_geometry_expectation = false;
+	SourceGeometryExpectation geometry_expectation = { };
+};
+
 struct ImageCompareResult {
 	int max_abs = 0;
 	double mean_abs = 0.0;
@@ -134,7 +142,9 @@ struct SampleResult {
 	ActiveBounds overlay_storage_bounds = { };
 	ActiveBounds overlay_visible_bounds = { };
 
+	bool has_geometry_expectation = false;
 	bool geometry_matches_expectation = false;
+	bool provider_display_contract_ok = false;
 	bool video_compare_ok = false;
 	bool overlay_compare_ok = false;
 	bool overlay_bounds_match = false;
@@ -364,6 +374,72 @@ std::array<SourceGeometryExpectation, 7> BuildSampleSpecs() {
 		{ "crop_rotate90_sar_4_3", "crop_rotate90_sar_4_3.mp4", { 0, 0, 308, 182 }, 0, false, 4.0 / 3.0 },
 		{ "rotate90_vflip", "rotate90_vflip.mp4", { 0, 0, 320, 180 }, 0, false, 1.0 }
 	}};
+}
+
+std::vector<SampleInput> BuildBuiltInSampleInputs(std::filesystem::path const& samples_dir) {
+	auto const specs = BuildSampleSpecs();
+	std::vector<SampleInput> inputs;
+	inputs.reserve(specs.size());
+	for (auto const& spec : specs) {
+		SampleInput input;
+		input.sample_name = spec.sample_name;
+		input.file_path = samples_dir / spec.file_name;
+		input.has_geometry_expectation = true;
+		input.geometry_expectation = spec;
+		inputs.push_back(std::move(input));
+	}
+	return inputs;
+}
+
+std::string TrimAscii(std::string value) {
+	auto is_space = [](unsigned char ch) { return std::isspace(ch) != 0; };
+	while (!value.empty() && is_space(static_cast<unsigned char>(value.front())))
+		value.erase(value.begin());
+	while (!value.empty() && is_space(static_cast<unsigned char>(value.back())))
+		value.pop_back();
+	return value;
+}
+
+std::vector<SampleInput> LoadSampleManifest(std::filesystem::path const& manifest_path) {
+	std::ifstream in(manifest_path, std::ios::binary);
+	if (!in)
+		throw std::runtime_error("Failed to open sample manifest: " + manifest_path.string());
+
+	std::vector<SampleInput> inputs;
+	std::string line;
+	int line_number = 0;
+	while (std::getline(in, line)) {
+		++line_number;
+		if (!line.empty() && line.back() == '\r')
+			line.pop_back();
+
+		auto const trimmed = TrimAscii(line);
+		if (trimmed.empty() || trimmed[0] == '#')
+			continue;
+
+		auto const separator = trimmed.find('|');
+		if (separator == std::string::npos)
+			throw std::runtime_error("Invalid manifest line " + std::to_string(line_number) + ": expected 'name|path'.");
+
+		auto const name = TrimAscii(trimmed.substr(0, separator));
+		auto const path_text = TrimAscii(trimmed.substr(separator + 1));
+		if (name.empty() || path_text.empty())
+			throw std::runtime_error("Invalid manifest line " + std::to_string(line_number) + ": empty name or path.");
+
+		std::filesystem::path file_path = path_text;
+		if (file_path.is_relative())
+			file_path = manifest_path.parent_path() / file_path;
+
+		SampleInput input;
+		input.sample_name = name;
+		input.file_path = file_path.lexically_normal();
+		inputs.push_back(std::move(input));
+	}
+
+	if (inputs.empty())
+		throw std::runtime_error("Sample manifest did not contain any usable lines: " + manifest_path.string());
+
+	return inputs;
 }
 
 bool IsStablePixel(
@@ -672,7 +748,9 @@ void WriteReport(std::filesystem::path const& report_path, std::vector<SampleRes
 		out << "      \"display_output_rect\": [" << sample.display_output_rect.x << ", " << sample.display_output_rect.y << ", " << sample.display_output_rect.width << ", " << sample.display_output_rect.height << "],\n";
 		out << "      \"display_aspect_ratio\": " << std::setprecision(12) << sample.display_aspect_ratio << ",\n";
 		out << "      \"viewport_400\": [" << sample.viewport_400.viewport_left << ", " << sample.viewport_400.viewport_top << ", " << sample.viewport_400.viewport_width << ", " << sample.viewport_400.viewport_height << "],\n";
+		out << "      \"has_geometry_expectation\": " << (sample.has_geometry_expectation ? "true" : "false") << ",\n";
 		out << "      \"geometry_matches_expectation\": " << (sample.geometry_matches_expectation ? "true" : "false") << ",\n";
+		out << "      \"provider_display_contract_ok\": " << (sample.provider_display_contract_ok ? "true" : "false") << ",\n";
 		out << "      \"video_compare\": {\n";
 		out << "        \"full_max_abs\": " << sample.video_compare_full.max_abs << ",\n";
 		out << "        \"full_mean_abs\": " << std::setprecision(6) << sample.video_compare_full.mean_abs << ",\n";
@@ -699,12 +777,12 @@ void WriteReport(std::filesystem::path const& report_path, std::vector<SampleRes
 }
 
 SampleResult RunSample(
-	std::filesystem::path const& samples_dir,
-	SourceGeometryExpectation const& spec,
+	SampleInput const& input,
 	InlineBackgroundRunner& runner) {
 	SampleResult result;
-	result.sample_name = spec.sample_name;
-	result.file_path = (samples_dir / spec.file_name).string();
+	result.sample_name = input.sample_name;
+	result.file_path = input.file_path.string();
+	result.has_geometry_expectation = input.has_geometry_expectation;
 
 	auto provider = CreateFFmpegSourceVideoProvider(result.file_path, "TV.709", &runner);
 	if (!provider)
@@ -725,10 +803,13 @@ SampleResult RunSample(
 		result.provider_height,
 		true,
 		result.provider_dar > 0.0 ? result.provider_dar : 0.0);
-	result.geometry_matches_expectation = GeometryMatchesExpectation(native.geometry, spec)
-		&& result.provider_width == result.display_output_rect.width
-		&& result.provider_height == result.display_output_rect.height
-		&& NearlyEqual(result.provider_dar, result.display_aspect_ratio, 1e-4);
+	result.provider_display_contract_ok =
+		result.provider_width == result.display_output_rect.width &&
+		result.provider_height == result.display_output_rect.height &&
+		NearlyEqual(result.provider_dar, result.display_aspect_ratio, 1e-4);
+	result.geometry_matches_expectation =
+		!input.has_geometry_expectation ||
+		GeometryMatchesExpectation(native.geometry, input.geometry_expectation);
 
 	VideoFrame bgra_storage;
 	auto bgra = MakeBgraSourceFrame(*provider, 0, bgra_storage);
@@ -763,8 +844,20 @@ SampleResult RunSample(
 		result.overlay_compare_stable.compared_pixels > 0 &&
 		result.overlay_compare_stable.max_abs == 0;
 
-	result.passed = result.geometry_matches_expectation && result.video_compare_ok && result.overlay_compare_ok;
+	result.passed =
+		result.provider_display_contract_ok &&
+		result.geometry_matches_expectation &&
+		result.video_compare_ok &&
+		result.overlay_compare_ok;
 	return result;
+}
+
+char const* GeometryStatusLabel(SampleResult const& result) {
+	if (!result.provider_display_contract_ok)
+		return "bad";
+	if (!result.has_geometry_expectation)
+		return "observed";
+	return result.geometry_matches_expectation ? "ok" : "bad";
 }
 }
 
@@ -777,39 +870,60 @@ int main(int argc, char** argv) try {
 		throw std::runtime_error("Failed to initialize wxWidgets for geometry compare harness.");
 
 	std::filesystem::path samples_dir;
+	std::filesystem::path manifest_path;
 	std::filesystem::path report_path;
 	for (int i = 1; i < argc; ++i) {
 		std::string arg = argv[i];
 		if (arg == "--samples-dir" && i + 1 < argc)
 			samples_dir = argv[++i];
+		else if (arg == "--manifest" && i + 1 < argc)
+			manifest_path = argv[++i];
 		else if (arg == "--report" && i + 1 < argc)
 			report_path = argv[++i];
 	}
 
-	if (samples_dir.empty())
-		throw std::runtime_error("Usage: video-geometry-compare --samples-dir <dir> [--report <json>]");
+	if (samples_dir.empty() == manifest_path.empty())
+		throw std::runtime_error("Usage: video-geometry-compare (--samples-dir <dir> | --manifest <file>) [--report <json>]");
 
-	std::filesystem::create_directories(samples_dir);
+	if (!samples_dir.empty())
+		samples_dir = std::filesystem::absolute(samples_dir);
+	if (!manifest_path.empty())
+		manifest_path = std::filesystem::absolute(manifest_path);
+	if (!report_path.empty())
+		report_path = std::filesystem::absolute(report_path);
+
 	if (!report_path.empty())
 		std::filesystem::create_directories(report_path.parent_path());
 
 	agi::log::log = new agi::log::LogSink;
-	ScopedConfigContext config_context(samples_dir);
+	std::filesystem::path work_root;
+	std::vector<SampleInput> sample_inputs;
+	if (!manifest_path.empty()) {
+		work_root = manifest_path.parent_path();
+		sample_inputs = LoadSampleManifest(manifest_path);
+	}
+	else {
+		std::filesystem::create_directories(samples_dir);
+		work_root = samples_dir;
+		sample_inputs = BuildBuiltInSampleInputs(samples_dir);
+	}
+	if (work_root.empty())
+		work_root = std::filesystem::current_path();
+
+	ScopedConfigContext config_context(work_root);
 	InlineBackgroundRunner runner;
-	auto specs = BuildSampleSpecs();
 	std::vector<SampleResult> results;
-	results.reserve(specs.size());
+	results.reserve(sample_inputs.size());
 
 	bool passed = true;
-	for (auto const& spec : specs) {
-		auto file_path = samples_dir / spec.file_name;
-		if (!std::filesystem::exists(file_path))
-			throw std::runtime_error("Missing sample file: " + file_path.string());
+	for (auto const& input : sample_inputs) {
+		if (!std::filesystem::exists(input.file_path))
+			throw std::runtime_error("Missing sample file: " + input.file_path.string());
 
-		auto result = RunSample(samples_dir, spec, runner);
+		auto result = RunSample(input, runner);
 		std::cout
-			<< spec.sample_name
-			<< " geometry=" << (result.geometry_matches_expectation ? "ok" : "bad")
+			<< input.sample_name
+			<< " geometry=" << GeometryStatusLabel(result)
 			<< " native=[storage=" << result.native_geometry.storage_width << "x" << result.native_geometry.storage_height
 			<< " visible=" << result.native_geometry.visible_rect.x << "," << result.native_geometry.visible_rect.y
 			<< "," << result.native_geometry.visible_rect.width << "x" << result.native_geometry.visible_rect.height
@@ -834,6 +948,10 @@ int main(int argc, char** argv) try {
 }
 catch (std::exception const& err) {
 	std::cerr << "video-geometry-compare failed: " << err.what() << std::endl;
+	return 2;
+}
+catch (agi::Exception const& err) {
+	std::cerr << "video-geometry-compare failed: " << err.GetMessage() << std::endl;
 	return 2;
 }
 catch (...) {

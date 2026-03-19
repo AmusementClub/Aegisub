@@ -1,0 +1,12 @@
+# Copy this file to obj/ or another local-only directory and replace the
+# placeholder paths with your own sample files.
+#
+# Format:
+#   sample_name|path_to_video_file
+#
+# Relative paths are resolved against the manifest file's parent directory.
+#
+# Example:
+# phone_rotate|..\generated\real-samples\phone_rotate.mov
+# anamorphic_sar|..\real-samples\anamorphic_sar.mp4
+# clean_aperture|..\real-samples\clean_aperture.mov

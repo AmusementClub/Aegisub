@@ -308,6 +308,14 @@ inline SourceFrame MakeSourceFrameView(VideoFrame const& frame, SourceFrameColor
 	return view;
 }
 
+inline SourceFrame MakeSourceFrameView(VideoFrame const& frame, SourceFrame const& reference) {
+	auto view = MakeSourceFrameView(frame, reference.color);
+	view.native_format = reference.native_format;
+	view.chroma_location = reference.chroma_location;
+	view.geometry = reference.geometry;
+	return view;
+}
+
 inline SourceFrame MakeSourceFrameView(VideoFrame const& frame, std::string matrix) {
 	return MakeSourceFrameView(frame, SourceFrameColorMetadataFromLegacyColorSpace(std::move(matrix)));
 }

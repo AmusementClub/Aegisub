@@ -128,6 +128,39 @@ TEST(source_frame_overlay, bgra_source_frame_can_carry_upstream_native_format_id
 	EXPECT_EQ(24, source.native_format.format_id);
 }
 
+TEST(source_frame_overlay, bgra_fallback_view_preserves_reference_metadata) {
+	VideoFrame source_storage;
+	source_storage.width = 4;
+	source_storage.height = 3;
+	source_storage.pitch = 16;
+	source_storage.flipped = false;
+	source_storage.data.resize(48);
+
+	auto reference = MakeSourceFrameView(source_storage, "TV.709");
+	reference.native_format = { SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, 42 };
+	reference.chroma_location = SourceFrameChromaLocation::TopCenter;
+	reference.geometry.storage_width = 6;
+	reference.geometry.storage_height = 5;
+	reference.geometry.visible_rect = { 1, 1, 3, 2 };
+	reference.geometry.pixel_aspect_ratio = 1.5;
+
+	VideoFrame composited = source_storage;
+	auto fallback = MakeSourceFrameView(composited, reference);
+
+	EXPECT_EQ(SourceFrameOutputMode::Bgra8, fallback.output_mode);
+	EXPECT_EQ("TV.709", fallback.color.matrix);
+	EXPECT_EQ(SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, fallback.native_format.format_namespace);
+	EXPECT_EQ(42, fallback.native_format.format_id);
+	EXPECT_EQ(SourceFrameChromaLocation::TopCenter, fallback.chroma_location);
+	EXPECT_EQ(6, fallback.geometry.storage_width);
+	EXPECT_EQ(5, fallback.geometry.storage_height);
+	EXPECT_EQ(1, fallback.geometry.visible_rect.x);
+	EXPECT_EQ(1, fallback.geometry.visible_rect.y);
+	EXPECT_EQ(3, fallback.geometry.visible_rect.width);
+	EXPECT_EQ(2, fallback.geometry.visible_rect.height);
+	EXPECT_DOUBLE_EQ(1.5, fallback.geometry.pixel_aspect_ratio);
+}
+
 TEST(source_frame_overlay, source_frame_format_info_reports_semiplanar_and_planar_layouts) {
 	auto nv12 = MakeSemiplanar420SourceFrameFormatInfo(8, 1, 2);
 	EXPECT_EQ(SourceFrameColorFamily::YCbCr, nv12.color_family);

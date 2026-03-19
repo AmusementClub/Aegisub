@@ -126,6 +126,36 @@ inline struct pl_color_repr BuildPlaceboSourceFrameRepr(SourceFrame const& frame
 	return repr;
 }
 
+inline struct pl_rect2df BuildPlaceboSourceFrameCropRect(SourceFrame const& frame) {
+	struct pl_rect2df full = {
+		0.0f,
+		0.0f,
+		static_cast<float>(frame.width),
+		static_cast<float>(frame.height)
+	};
+
+	if (frame.width <= 0 || frame.height <= 0)
+		return full;
+
+	auto const& visible = frame.geometry.visible_rect;
+	if (!visible.IsValid())
+		return full;
+
+	int x0 = std::clamp(visible.x, 0, frame.width);
+	int y0 = std::clamp(visible.y, 0, frame.height);
+	int x1 = std::clamp(visible.x + visible.width, 0, frame.width);
+	int y1 = std::clamp(visible.y + visible.height, 0, frame.height);
+	if (x0 >= x1 || y0 >= y1)
+		return full;
+
+	return {
+		static_cast<float>(x0),
+		static_cast<float>(y0),
+		static_cast<float>(x1),
+		static_cast<float>(y1)
+	};
+}
+
 inline struct pl_color_space BuildPlaceboSourceFrameColorSpace(SourceFrame const& frame) {
 	struct pl_color_space space = {};
 	space.primaries = InferPlaceboPrimaries(frame.color);

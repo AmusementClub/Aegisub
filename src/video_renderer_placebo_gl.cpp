@@ -80,10 +80,6 @@ void PlaceboLogCallback(void *, enum pl_log_level level, const char *msg) {
 	}
 }
 
-pl_rect2df FullRect(int width, int height) {
-	return { 0.0f, 0.0f, static_cast<float>(width), static_cast<float>(height) };
-}
-
 pl_rect2df ViewportRect(RenderViewport const& viewport, int canvas_width, int canvas_height) {
 	float const top = static_cast<float>(canvas_height - viewport.y - viewport.height);
 	return {
@@ -222,6 +218,7 @@ void PlaceboRendererGL::DestroyImageResources() noexcept {
 	image_format_info = {};
 	image_color = {};
 	image_chroma_location = SourceFrameChromaLocation::Unknown;
+	image_geometry = {};
 	has_frame = false;
 }
 
@@ -332,6 +329,7 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 	image_format_info = frame.format_info;
 	image_color = frame.color;
 	image_chroma_location = frame.chroma_location;
+	image_geometry = frame.geometry;
 	has_frame = true;
 }
 
@@ -369,6 +367,9 @@ void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width,
 	frame_description.format_info = image_format_info;
 	frame_description.color = image_color;
 	frame_description.chroma_location = image_chroma_location;
+	frame_description.width = image_width;
+	frame_description.height = image_height;
+	frame_description.geometry = image_geometry;
 
 	struct pl_frame image = {};
 	image.num_planes = image_plane_count;
@@ -386,7 +387,7 @@ void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width,
 	}
 	image.repr = BuildPlaceboSourceFrameRepr(frame_description);
 	image.color = BuildPlaceboSourceFrameColorSpace(frame_description);
-	image.crop = FullRect(image_width, image_height);
+	image.crop = BuildPlaceboSourceFrameCropRect(frame_description);
 	image.rotation = PL_ROTATION_0;
 	if (api->frame_set_chroma_location && PlaceboSourceFrameNeedsExplicitChromaLocation(frame_description))
 		api->frame_set_chroma_location(&image, ResolvePlaceboChromaLocation(frame_description));

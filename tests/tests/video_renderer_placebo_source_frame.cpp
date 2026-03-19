@@ -24,6 +24,42 @@ TEST(video_renderer_placebo_source_frame, bgra_repr_stays_rgb_full_range) {
 	EXPECT_EQ(0, repr.bits.bit_shift);
 }
 
+TEST(video_renderer_placebo_source_frame, visible_rect_maps_to_placebo_crop_rect) {
+	VideoFrame frame;
+	frame.width = 4;
+	frame.height = 3;
+	frame.pitch = 16;
+	frame.flipped = false;
+	frame.data.resize(48);
+
+	auto source = MakeSourceFrameView(frame, "BT.709");
+	source.geometry.visible_rect = { 1, 1, 2, 2 };
+
+	auto crop = BuildPlaceboSourceFrameCropRect(source);
+	EXPECT_FLOAT_EQ(1.0f, crop.x0);
+	EXPECT_FLOAT_EQ(1.0f, crop.y0);
+	EXPECT_FLOAT_EQ(3.0f, crop.x1);
+	EXPECT_FLOAT_EQ(3.0f, crop.y1);
+}
+
+TEST(video_renderer_placebo_source_frame, invalid_visible_rect_falls_back_to_full_crop_rect) {
+	VideoFrame frame;
+	frame.width = 4;
+	frame.height = 3;
+	frame.pitch = 16;
+	frame.flipped = false;
+	frame.data.resize(48);
+
+	auto source = MakeSourceFrameView(frame, "BT.709");
+	source.geometry.visible_rect = { 4, 0, 1, 3 };
+
+	auto crop = BuildPlaceboSourceFrameCropRect(source);
+	EXPECT_FLOAT_EQ(0.0f, crop.x0);
+	EXPECT_FLOAT_EQ(0.0f, crop.y0);
+	EXPECT_FLOAT_EQ(4.0f, crop.x1);
+	EXPECT_FLOAT_EQ(3.0f, crop.y1);
+}
+
 TEST(video_renderer_placebo_source_frame, native_p010_repr_and_plane_data_preserve_bit_shift) {
 	unsigned char y[8] = { };
 	unsigned char uv[8] = { };

@@ -53,6 +53,7 @@ class PlaceboRendererGL final : public IVideoRenderer {
 	SourceFrameFormatInfo image_format_info;
 	SourceFrameColorMetadata image_color;
 	SourceFrameChromaLocation image_chroma_location = SourceFrameChromaLocation::Unknown;
+	SourceFrameGeometry image_geometry;
 	int target_width = 0;
 	int target_height = 0;
 	bool has_frame = false;

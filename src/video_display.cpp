@@ -51,6 +51,7 @@
 #include "video_renderer_error.h"
 #include "video_renderer_opengl.h"
 #include "video_render_routing.h"
+#include "video_display_layout.h"
 #include "video_controller.h"
 #include "visual_tool.h"
 
@@ -392,33 +393,25 @@ void VideoDisplay::PositionVideo() {
 	auto provider = con->project->VideoProvider();
 	if (!provider || !IsShownOnScreen()) return;
 
-	viewport_left = 0;
-	viewport_bottom = GetClientSize().GetHeight() * scale_factor - videoSize.GetHeight();
-	viewport_top = 0;
-	viewport_width = videoSize.GetWidth();
-	viewport_height = videoSize.GetHeight();
-
+	AspectRatio arType = con->videoController->GetAspectRatioType();
+	double target_aspect_ratio = 0.0;
 	if (freeSize) {
-		int vidW = provider->GetWidth();
-		int vidH = provider->GetHeight();
-
-		AspectRatio arType = con->videoController->GetAspectRatioType();
-		double displayAr = double(viewport_width) / viewport_height;
-		double videoAr = arType == AspectRatio::Default ? double(vidW) / vidH : con->videoController->GetAspectRatioValue();
-
-		// Window is wider than video, blackbox left/right
-		if (displayAr - videoAr > 0.01) {
-			int delta = viewport_width - videoAr * viewport_height;
-			viewport_left = delta / 2;
-			viewport_width -= delta;
-		}
-		// Video is wider than window, blackbox top/bottom
-		else if (videoAr - displayAr > 0.01) {
-			int delta = viewport_height - viewport_width / videoAr;
-			viewport_top = viewport_bottom = delta / 2;
-			viewport_height -= delta;
-		}
+		target_aspect_ratio = arType == AspectRatio::Default
+			? static_cast<double>(provider->GetWidth()) / provider->GetHeight()
+			: con->videoController->GetAspectRatioValue();
 	}
+	auto layout = BuildVideoDisplayViewportLayout(
+		GetClientSize().GetWidth() * scale_factor,
+		GetClientSize().GetHeight() * scale_factor,
+		videoSize.GetWidth(),
+		videoSize.GetHeight(),
+		freeSize,
+		target_aspect_ratio);
+	viewport_left = layout.viewport_left;
+	viewport_width = layout.viewport_width;
+	viewport_bottom = layout.viewport_bottom;
+	viewport_top = layout.viewport_top;
+	viewport_height = layout.viewport_height;
 
 	if (tool)
 		tool->SetDisplayArea(viewport_left / scale_factor, viewport_top / scale_factor,

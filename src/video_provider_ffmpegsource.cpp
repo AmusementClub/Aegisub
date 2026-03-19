@@ -425,23 +425,17 @@ SourceFrameGeometry FFmpegSourceVideoProvider::GetFrameGeometry() const {
 }
 
 int FFmpegSourceVideoProvider::GetWidth() const {
-	auto const geometry = BakeSourceFrameGeometry(GetUnbakedFrameGeometry());
-	return geometry.visible_rect.IsValid() ? geometry.visible_rect.width : geometry.storage_width;
+	auto const display = GetSourceFrameDisplayOutputRect(GetUnbakedFrameGeometry());
+	return display.width;
 }
 
 int FFmpegSourceVideoProvider::GetHeight() const {
-	auto const geometry = BakeSourceFrameGeometry(GetUnbakedFrameGeometry());
-	return geometry.visible_rect.IsValid() ? geometry.visible_rect.height : geometry.storage_height;
+	auto const display = GetSourceFrameDisplayOutputRect(GetUnbakedFrameGeometry());
+	return display.height;
 }
 
 double FFmpegSourceVideoProvider::GetDAR() const {
-	auto const geometry = BakeSourceFrameGeometry(GetUnbakedFrameGeometry());
-	auto const visible = geometry.visible_rect.IsValid()
-		? geometry.visible_rect
-		: SourceFrameRect{ 0, 0, geometry.storage_width, geometry.storage_height };
-	if (visible.width <= 0 || visible.height <= 0)
-		return 0.0;
-	return static_cast<double>(visible.width) * geometry.pixel_aspect_ratio / visible.height;
+	return GetSourceFrameDisplayAspectRatio(GetUnbakedFrameGeometry());
 }
 
 void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {

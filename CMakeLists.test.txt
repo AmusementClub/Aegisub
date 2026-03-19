@@ -81,6 +81,7 @@ if(GTEST_FOUND)
         tests/tests/uuencode.cpp
         tests/tests/vfr.cpp
         tests/tests/video_cache.cpp
+        tests/tests/video_display_layout.cpp
         tests/tests/video_renderer_backend.cpp
         tests/tests/word_split.cpp
         tests/support/main.cpp

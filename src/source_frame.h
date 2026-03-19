@@ -418,6 +418,23 @@ inline SourceFrameGeometry BakeSourceFrameGeometry(SourceFrameGeometry const& ge
 	return baked;
 }
 
+inline SourceFrameRect GetSourceFrameDisplayOutputRect(SourceFrameGeometry const& geometry) {
+	auto baked = BakeSourceFrameGeometry(geometry);
+	auto visible = GetSourceFrameVisibleRect(baked, baked.storage_width, baked.storage_height);
+	if (visible.IsValid())
+		return visible;
+	return { 0, 0, baked.storage_width, baked.storage_height };
+}
+
+inline double GetSourceFrameDisplayAspectRatio(SourceFrameGeometry const& geometry) {
+	auto baked = BakeSourceFrameGeometry(geometry);
+	auto visible = GetSourceFrameDisplayOutputRect(geometry);
+	if (visible.width <= 0 || visible.height <= 0)
+		return 0.0;
+	double pixel_aspect_ratio = baked.pixel_aspect_ratio > 0.0 ? baked.pixel_aspect_ratio : 1.0;
+	return static_cast<double>(visible.width) * pixel_aspect_ratio / visible.height;
+}
+
 inline bool SourceFrameHasSupportedQuarterTurnRotation(SourceFrameGeometry const& geometry) {
 	switch (NormalizeSourceFrameRotationDegrees(geometry.rotation)) {
 		case 0:

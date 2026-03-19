@@ -25,3 +25,27 @@ TEST(ffms_version, header_version_predicate_matches_compiled_header) {
 	EXPECT_EQ(FFMS_VERSION >= ffms::api_version::kVideoRotation,
 		ffms::HeaderVersionAtLeast(ffms::api_version::kVideoRotation));
 }
+
+TEST(ffms_version, visible_rect_helper_clamps_crop_metadata_to_full_frame) {
+	FFMS_VideoProperties props = { };
+	props.CropLeft = 2;
+	props.CropTop = 1;
+	props.CropRight = 3;
+	props.CropBottom = 2;
+
+	auto visible = ffms::GetVideoVisibleRect(&props, 16, 9);
+	EXPECT_EQ(2, visible.x);
+	EXPECT_EQ(1, visible.y);
+	EXPECT_EQ(11, visible.width);
+	EXPECT_EQ(6, visible.height);
+
+	props.CropLeft = 20;
+	props.CropRight = 20;
+	props.CropTop = 10;
+	props.CropBottom = 10;
+	visible = ffms::GetVideoVisibleRect(&props, 16, 9);
+	EXPECT_EQ(0, visible.x);
+	EXPECT_EQ(0, visible.y);
+	EXPECT_EQ(16, visible.width);
+	EXPECT_EQ(9, visible.height);
+}

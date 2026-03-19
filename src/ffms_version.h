@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include "source_frame.h"
+
 #include <ffms.h>
 
 namespace ffms {
@@ -81,6 +83,23 @@ inline int GetVideoFlip(FFMS_VideoProperties const* properties) noexcept {
 	(void)properties;
 #endif
 	return 0;
+}
+
+inline SourceFrameRect GetVideoVisibleRect(FFMS_VideoProperties const* properties, int width, int height) noexcept {
+	SourceFrameRect full = { 0, 0, width, height };
+	if (!properties || width <= 0 || height <= 0)
+		return full;
+
+	int left = std::clamp(properties->CropLeft, 0, width);
+	int top = std::clamp(properties->CropTop, 0, height);
+	int right = std::clamp(properties->CropRight, 0, width - left);
+	int bottom = std::clamp(properties->CropBottom, 0, height - top);
+	int visible_width = width - left - right;
+	int visible_height = height - top - bottom;
+	if (visible_width <= 0 || visible_height <= 0)
+		return full;
+
+	return { left, top, visible_width, visible_height };
 }
 
 inline int GetFrameColorPrimaries(FFMS_Frame const* frame, int fallback = -1) noexcept {

@@ -66,6 +66,9 @@ public:
 	}
 
 	void GetFrame(int n, VideoFrame &frame) override;
+	bool GetNativeFrame(int n, SourceFrame& frame, std::shared_ptr<void>& owner) override {
+		return master->GetNativeFrame(n, frame, owner);
+	}
 
 	void SetColorSpace(std::string const& m) override {
 		ClearCache();
@@ -84,6 +87,7 @@ public:
 	std::string GetRealColorSpace() const override { return master->GetRealColorSpace(); }
 	SourceFrameColorMetadata GetColorMetadata() const override { return master->GetColorMetadata(); }
 	SourceFrameColorMetadata GetRealColorMetadata() const override { return master->GetRealColorMetadata(); }
+	SourceFrameGeometry GetFrameGeometry() const override { return master->GetFrameGeometry(); }
 	SourceFrameNativeFormatIdentity GetNativeFormatIdentity() const override { return master->GetNativeFormatIdentity(); }
 	std::vector<SourceFrameOutputMode> GetAvailableSourceModes() const override { return master->GetAvailableSourceModes(); }
 	bool SetOutputMode(SourceFrameOutputMode mode) override {

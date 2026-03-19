@@ -158,6 +158,14 @@ if(WIN32)
     )
     target_compile_definitions(opengl-overlay-smoke PRIVATE CMAKE_BUILD)
     target_link_libraries(opengl-overlay-smoke PRIVATE libaegisub OpenGL::GL)
+
+    add_executable(opengl-overlay-bench EXCLUDE_FROM_ALL
+        tests/smoke/opengl_overlay_bench.cpp
+        src/video_renderer_opengl.cpp
+        src/video_renderer_opengl_tile.cpp
+    )
+    target_compile_definitions(opengl-overlay-bench PRIVATE CMAKE_BUILD)
+    target_link_libraries(opengl-overlay-bench PRIVATE libaegisub OpenGL::GL Psapi)
 endif()
 
 add_custom_target(test DEPENDS test-automation test-aegisub)

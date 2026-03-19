@@ -93,6 +93,14 @@ TEST(source_frame_overlay, visible_rect_helper_clamps_invalid_geometry_back_to_f
 	EXPECT_EQ(3, visible.height);
 }
 
+TEST(source_frame_overlay, rect_clamp_helper_preserves_partial_overlap) {
+	auto clamped = ClampSourceFrameRectToBounds({ -2, 1, 5, 3 }, 4, 3);
+	EXPECT_EQ(0, clamped.x);
+	EXPECT_EQ(1, clamped.y);
+	EXPECT_EQ(3, clamped.width);
+	EXPECT_EQ(2, clamped.height);
+}
+
 TEST(source_frame_overlay, render_canvas_layout_uses_visible_rect_as_output_canvas) {
 	VideoFrame frame;
 	frame.width = 4;
@@ -221,6 +229,33 @@ TEST(source_frame_overlay, render_output_quad_transform_matches_rotation_and_dis
 	EXPECT_FLOAT_EQ(1.0f, quad.p2.y);
 	EXPECT_FLOAT_EQ(1.0f, quad.p3.x);
 	EXPECT_FLOAT_EQ(3.0f, quad.p3.y);
+}
+
+TEST(source_frame_overlay, rect_transform_to_display_space_matches_rotation_and_vflip) {
+	auto transformed = TransformSourceFrameRectToDisplaySpace({ 1, 1, 3, 2 }, 6, 5, 90, true);
+	EXPECT_EQ(2, transformed.x);
+	EXPECT_EQ(2, transformed.y);
+	EXPECT_EQ(2, transformed.width);
+	EXPECT_EQ(3, transformed.height);
+}
+
+TEST(source_frame_overlay, baked_geometry_transforms_visible_rect_and_inverts_par_on_quarter_turn) {
+	SourceFrameGeometry geometry = MakeDefaultSourceFrameGeometry(6, 5);
+	geometry.visible_rect = { 1, 1, 3, 2 };
+	geometry.rotation = 90;
+	geometry.display_vflip = true;
+	geometry.pixel_aspect_ratio = 1.5;
+
+	auto baked = BakeSourceFrameGeometry(geometry);
+	EXPECT_EQ(5, baked.storage_width);
+	EXPECT_EQ(6, baked.storage_height);
+	EXPECT_EQ(2, baked.visible_rect.x);
+	EXPECT_EQ(2, baked.visible_rect.y);
+	EXPECT_EQ(2, baked.visible_rect.width);
+	EXPECT_EQ(3, baked.visible_rect.height);
+	EXPECT_EQ(0, baked.rotation);
+	EXPECT_FALSE(baked.display_vflip);
+	EXPECT_DOUBLE_EQ(1.0 / 1.5, baked.pixel_aspect_ratio);
 }
 
 TEST(source_frame_overlay, source_storage_and_source_visible_overlay_quads_match_after_crop_rotation_and_vflip) {
@@ -522,7 +557,12 @@ TEST(source_frame_overlay, baked_bgra_view_preserves_reference_identity_but_norm
 	reference.geometry.visible_rect = { 1, 1, 3, 2 };
 	reference.geometry.pixel_aspect_ratio = 1.5;
 
-	VideoFrame composited = source_storage;
+	VideoFrame composited;
+	composited.width = 5;
+	composited.height = 6;
+	composited.pitch = 20;
+	composited.flipped = false;
+	composited.data.resize(120);
 	auto fallback = MakeBakedSourceFrameView(composited, reference);
 
 	EXPECT_EQ(SourceFrameOutputMode::Bgra8, fallback.output_mode);
@@ -530,15 +570,15 @@ TEST(source_frame_overlay, baked_bgra_view_preserves_reference_identity_but_norm
 	EXPECT_EQ(SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, fallback.native_format.format_namespace);
 	EXPECT_EQ(42, fallback.native_format.format_id);
 	EXPECT_EQ(SourceFrameChromaLocation::TopCenter, fallback.chroma_location);
-	EXPECT_EQ(4, fallback.geometry.storage_width);
-	EXPECT_EQ(3, fallback.geometry.storage_height);
-	EXPECT_EQ(0, fallback.geometry.visible_rect.x);
-	EXPECT_EQ(0, fallback.geometry.visible_rect.y);
-	EXPECT_EQ(4, fallback.geometry.visible_rect.width);
+	EXPECT_EQ(5, fallback.geometry.storage_width);
+	EXPECT_EQ(6, fallback.geometry.storage_height);
+	EXPECT_EQ(2, fallback.geometry.visible_rect.x);
+	EXPECT_EQ(2, fallback.geometry.visible_rect.y);
+	EXPECT_EQ(2, fallback.geometry.visible_rect.width);
 	EXPECT_EQ(3, fallback.geometry.visible_rect.height);
 	EXPECT_EQ(0, fallback.geometry.rotation);
 	EXPECT_FALSE(fallback.geometry.display_vflip);
-	EXPECT_DOUBLE_EQ(1.5, fallback.geometry.pixel_aspect_ratio);
+	EXPECT_DOUBLE_EQ(1.0 / 1.5, fallback.geometry.pixel_aspect_ratio);
 }
 
 TEST(source_frame_overlay, source_frame_format_info_reports_semiplanar_and_planar_layouts) {

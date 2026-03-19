@@ -86,6 +86,9 @@ public:
 			GetRealColorMetadata(),
 			SourceFrameColorMetadataFromLegacyColorSpace(GetColorSpace()));
 	}
+	virtual SourceFrameGeometry GetFrameGeometry() const {
+		return MakeDefaultSourceFrameGeometry(GetWidth(), GetHeight());
+	}
 	virtual SourceFrameNativeFormatIdentity GetNativeFormatIdentity() const {
 		return { };
 	}

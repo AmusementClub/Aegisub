@@ -46,6 +46,7 @@ public:
 	std::string real_color_space = "BT.709";
 	SourceFrameNativeFormatIdentity native_format = { };
 	SourceFrameChromaLocation native_chroma_location = SourceFrameChromaLocation::Unknown;
+	SourceFrameGeometry bgra_geometry = { };
 	SourceFrameGeometry native_geometry = MakeDefaultSourceFrameGeometry(2, 2);
 	std::vector<SourceFrameOutputMode> available_modes = { SourceFrameOutputMode::Bgra8 };
 	SourceFrameOutputMode output_mode = SourceFrameOutputMode::Bgra8;
@@ -89,6 +90,13 @@ public:
 	std::vector<int> GetKeyFrames() const override { return {}; }
 	std::string GetColorSpace() const override { return color_space; }
 	std::string GetRealColorSpace() const override { return real_color_space; }
+	SourceFrameGeometry GetFrameGeometry() const override {
+		if (output_mode == SourceFrameOutputMode::Native)
+			return native_geometry;
+		if (bgra_geometry.storage_width > 0 && bgra_geometry.storage_height > 0)
+			return bgra_geometry;
+		return MakeDefaultSourceFrameGeometry(frame_width, frame_height);
+	}
 	SourceFrameNativeFormatIdentity GetNativeFormatIdentity() const override { return native_format; }
 	bool GetNativeFrame(int n, SourceFrame& frame, std::shared_ptr<void>& owner) override {
 		if (output_mode != SourceFrameOutputMode::Native)
@@ -656,6 +664,40 @@ TEST(async_video_provider, bgra_source_frame_preserves_upstream_native_format_id
 	EXPECT_EQ(42, packet.source_frame.native_format.format_id);
 	EXPECT_EQ(packet.source_frame.width, packet.source_frame.geometry.storage_width);
 	EXPECT_EQ(packet.source_frame.height, packet.source_frame.geometry.storage_height);
+}
+
+TEST(async_video_provider, bgra_source_mode_propagates_provider_geometry_to_overlay_contract) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 5;
+	video->frame_height = 6;
+	video->bgra_geometry = MakeDefaultSourceFrameGeometry(5, 6);
+	video->bgra_geometry.visible_rect = { 1, 2, 3, 2 };
+	video->bgra_geometry.pixel_aspect_ratio = 1.25;
+	auto *subs = new FakeGeometryAwareOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto subtitle_file = MakeSubtitleFile("overlay");
+	provider.LoadSubtitles(&subtitle_file);
+
+	auto packet = provider.GetRenderPacket(5, 5000);
+	ASSERT_TRUE(packet.has_subtitle_overlay);
+	EXPECT_EQ(SourceFrameOutputMode::Bgra8, packet.source_frame.output_mode);
+	EXPECT_EQ(1, packet.source_frame.geometry.visible_rect.x);
+	EXPECT_EQ(2, packet.source_frame.geometry.visible_rect.y);
+	EXPECT_EQ(3, packet.source_frame.geometry.visible_rect.width);
+	EXPECT_EQ(2, packet.source_frame.geometry.visible_rect.height);
+	EXPECT_DOUBLE_EQ(1.25, packet.source_frame.geometry.pixel_aspect_ratio);
+	EXPECT_EQ(1, subs->last_source_geometry.visible_rect.x);
+	EXPECT_EQ(2, subs->last_source_geometry.visible_rect.y);
+	EXPECT_EQ(3, subs->last_source_geometry.visible_rect.width);
+	EXPECT_EQ(2, subs->last_source_geometry.visible_rect.height);
+	EXPECT_DOUBLE_EQ(1.25, subs->last_source_geometry.pixel_aspect_ratio);
 }
 
 TEST(async_video_provider, native_source_mode_returns_native_source_frame_packet) {

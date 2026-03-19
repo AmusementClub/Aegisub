@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <utility>
 
 enum class SourceFramePixelFormat {
 	Unknown,
@@ -232,6 +233,20 @@ inline SourceFrameGeometry MakeDefaultSourceFrameGeometry(int width, int height)
 	return geometry;
 }
 
+inline SourceFrameRect ClampSourceFrameRectToBounds(SourceFrameRect const& rect, int width, int height) {
+	if (width <= 0 || height <= 0)
+		return { };
+
+	int x0 = std::clamp(rect.x, 0, width);
+	int y0 = std::clamp(rect.y, 0, height);
+	int x1 = std::clamp(rect.x + rect.width, 0, width);
+	int y1 = std::clamp(rect.y + rect.height, 0, height);
+	if (x0 >= x1 || y0 >= y1)
+		return { };
+
+	return { x0, y0, x1 - x0, y1 - y0 };
+}
+
 inline SourceFrameRect GetSourceFrameVisibleRect(SourceFrameGeometry const& geometry, int fallback_width, int fallback_height) {
 	int storage_width = geometry.storage_width > 0 ? geometry.storage_width : fallback_width;
 	int storage_height = geometry.storage_height > 0 ? geometry.storage_height : fallback_height;
@@ -242,14 +257,10 @@ inline SourceFrameRect GetSourceFrameVisibleRect(SourceFrameGeometry const& geom
 	if (!geometry.visible_rect.IsValid())
 		return full_rect;
 
-	int x0 = std::clamp(geometry.visible_rect.x, 0, storage_width);
-	int y0 = std::clamp(geometry.visible_rect.y, 0, storage_height);
-	int x1 = std::clamp(geometry.visible_rect.x + geometry.visible_rect.width, 0, storage_width);
-	int y1 = std::clamp(geometry.visible_rect.y + geometry.visible_rect.height, 0, storage_height);
-	if (x0 >= x1 || y0 >= y1)
+	auto clamped = ClampSourceFrameRectToBounds(geometry.visible_rect, storage_width, storage_height);
+	if (!clamped.IsValid())
 		return full_rect;
-
-	return { x0, y0, x1 - x0, y1 - y0 };
+	return clamped;
 }
 
 struct SourceFrame {
@@ -316,6 +327,97 @@ inline int NormalizeSourceFrameRotationDegrees(int rotation) {
 	return normalized;
 }
 
+inline SourceFrameRect TransformSourceFrameRectToDisplaySpace(
+	SourceFrameRect const& rect,
+	int source_width,
+	int source_height,
+	int rotation,
+	bool display_vflip) {
+	auto clamped = ClampSourceFrameRectToBounds(rect, source_width, source_height);
+	if (!clamped.IsValid())
+		return { };
+
+	int normalized = NormalizeSourceFrameRotationDegrees(rotation);
+	int output_width = (normalized == 90 || normalized == 270) ? source_height : source_width;
+	int output_height = (normalized == 90 || normalized == 270) ? source_width : source_height;
+
+	auto transform_point = [&](int x, int y) -> std::pair<int, int> {
+		switch (normalized) {
+			case 90:
+			{
+				int original_x = x;
+				x = source_height - y;
+				y = original_x;
+				break;
+			}
+			case 180:
+				x = source_width - x;
+				y = source_height - y;
+				break;
+			case 270:
+			{
+				int original_x = x;
+				x = y;
+				y = source_width - original_x;
+				break;
+			}
+			default:
+				break;
+		}
+
+		if (display_vflip)
+			y = output_height - y;
+
+		return { x, y };
+	};
+
+	int x0 = clamped.x;
+	int y0 = clamped.y;
+	int x1 = clamped.x + clamped.width;
+	int y1 = clamped.y + clamped.height;
+
+	auto p0 = transform_point(x0, y0);
+	auto p1 = transform_point(x1, y0);
+	auto p2 = transform_point(x1, y1);
+	auto p3 = transform_point(x0, y1);
+
+	int out_x0 = std::min(std::min(p0.first, p1.first), std::min(p2.first, p3.first));
+	int out_y0 = std::min(std::min(p0.second, p1.second), std::min(p2.second, p3.second));
+	int out_x1 = std::max(std::max(p0.first, p1.first), std::max(p2.first, p3.first));
+	int out_y1 = std::max(std::max(p0.second, p1.second), std::max(p2.second, p3.second));
+	return { out_x0, out_y0, out_x1 - out_x0, out_y1 - out_y0 };
+}
+
+inline SourceFrameGeometry BakeSourceFrameGeometry(SourceFrameGeometry const& geometry) {
+	int storage_width = geometry.storage_width;
+	int storage_height = geometry.storage_height;
+	if (storage_width <= 0 || storage_height <= 0)
+		return geometry;
+
+	SourceFrameGeometry baked;
+	int normalized = NormalizeSourceFrameRotationDegrees(geometry.rotation);
+	bool swap_axes = normalized == 90 || normalized == 270;
+	baked.storage_width = swap_axes ? storage_height : storage_width;
+	baked.storage_height = swap_axes ? storage_width : storage_height;
+	baked.visible_rect = TransformSourceFrameRectToDisplaySpace(
+		GetSourceFrameVisibleRect(geometry, storage_width, storage_height),
+		storage_width,
+		storage_height,
+		geometry.rotation,
+		geometry.display_vflip);
+	if (!baked.visible_rect.IsValid())
+		baked.visible_rect = { 0, 0, baked.storage_width, baked.storage_height };
+	baked.rotation = 0;
+	baked.display_vflip = false;
+
+	double pixel_aspect_ratio = geometry.pixel_aspect_ratio > 0.0 ? geometry.pixel_aspect_ratio : 1.0;
+	if (swap_axes && pixel_aspect_ratio != 0.0)
+		baked.pixel_aspect_ratio = 1.0 / pixel_aspect_ratio;
+	else
+		baked.pixel_aspect_ratio = pixel_aspect_ratio;
+	return baked;
+}
+
 inline bool SourceFrameHasSupportedQuarterTurnRotation(SourceFrameGeometry const& geometry) {
 	switch (NormalizeSourceFrameRotationDegrees(geometry.rotation)) {
 		case 0:
@@ -376,7 +478,7 @@ inline SourceFrame MakeBakedSourceFrameView(VideoFrame const& frame, SourceFrame
 	auto view = MakeSourceFrameView(frame, reference.color);
 	view.native_format = reference.native_format;
 	view.chroma_location = reference.chroma_location;
-	view.geometry.pixel_aspect_ratio = reference.geometry.pixel_aspect_ratio;
+	view.geometry = BakeSourceFrameGeometry(reference.geometry);
 	return view;
 }
 

@@ -94,7 +94,6 @@ class FFmpegSourceVideoProvider final : public VideoProvider, FFmpegSourceProvid
 	int Flip = 0;                   ///< Flip metadata from FFMS2 when runtime/header support it
 	SourceFrameOutputMode OutputMode = SourceFrameOutputMode::Bgra8;
 	bool NativeOutputSupported = false;
-	double DAR;                     ///< display aspect ratio
 	std::vector<int> KeyFramesList; ///< list of keyframes
 	agi::vfr::Framerate Timecodes;  ///< vfr object
 	std::string ColorSpace;         ///< Colorspace name
@@ -105,6 +104,7 @@ class FFmpegSourceVideoProvider final : public VideoProvider, FFmpegSourceProvid
 	bool has_audio = false;
 
 	bool ConfigureOutputMode(SourceFrameOutputMode mode);
+	SourceFrameGeometry GetUnbakedFrameGeometry() const;
 	void LoadVideo(agi::fs::path const& filename, std::string const& colormatrix);
 
 public:
@@ -127,15 +127,16 @@ public:
 	}
 
 	int GetFrameCount() const override             { return VideoInfo->NumFrames; }
-	int GetWidth() const override                  { return IsQuarterTurn(Rotation) ? Height : Width; }
-	int GetHeight() const override                 { return IsQuarterTurn(Rotation) ? Width : Height; }
-	double GetDAR() const override                 { return IsQuarterTurn(Rotation) ? 1 / DAR : DAR; }
+	int GetWidth() const override;
+	int GetHeight() const override;
+	double GetDAR() const override;
 
 	agi::vfr::Framerate GetFPS() const override    { return Timecodes; }
 	std::string GetColorSpace() const override     { return ColorSpace; }
 	std::string GetRealColorSpace() const override { return RealColorSpace; }
 	SourceFrameColorMetadata GetColorMetadata() const override;
 	SourceFrameColorMetadata GetRealColorMetadata() const override;
+	SourceFrameGeometry GetFrameGeometry() const override;
 	SourceFrameNativeFormatIdentity GetNativeFormatIdentity() const override;
 	std::vector<SourceFrameOutputMode> GetAvailableSourceModes() const override;
 	bool SetOutputMode(SourceFrameOutputMode mode) override { return ConfigureOutputMode(mode); }
@@ -317,10 +318,6 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 
 	Width  = TempFrame->EncodedWidth;
 	Height = TempFrame->EncodedHeight;
-	if (VideoInfo->SARDen > 0 && VideoInfo->SARNum > 0)
-		DAR = double(Width) * VideoInfo->SARNum / ((double)Height * VideoInfo->SARDen);
-	else
-		DAR = double(Width) / Height;
 	Rotation = ffms::GetVideoRotation(VideoInfo);
 	Flip = ffms::GetVideoFlip(VideoInfo);
 
@@ -408,6 +405,43 @@ bool FFmpegSourceVideoProvider::ConfigureOutputMode(SourceFrameOutputMode mode) 
 
 	OutputMode = mode;
 	return true;
+}
+
+SourceFrameGeometry FFmpegSourceVideoProvider::GetUnbakedFrameGeometry() const {
+	auto geometry = MakeDefaultSourceFrameGeometry(Width, Height);
+	geometry.visible_rect = ffms::GetVideoVisibleRect(VideoInfo, Width, Height);
+	geometry.rotation = Rotation;
+	geometry.display_vflip = Flip < 0;
+	if (VideoInfo && VideoInfo->SARNum > 0 && VideoInfo->SARDen > 0)
+		geometry.pixel_aspect_ratio = static_cast<double>(VideoInfo->SARNum) / VideoInfo->SARDen;
+	return geometry;
+}
+
+SourceFrameGeometry FFmpegSourceVideoProvider::GetFrameGeometry() const {
+	auto geometry = GetUnbakedFrameGeometry();
+	if (OutputMode == SourceFrameOutputMode::Native)
+		return geometry;
+	return BakeSourceFrameGeometry(geometry);
+}
+
+int FFmpegSourceVideoProvider::GetWidth() const {
+	auto const geometry = BakeSourceFrameGeometry(GetUnbakedFrameGeometry());
+	return geometry.visible_rect.IsValid() ? geometry.visible_rect.width : geometry.storage_width;
+}
+
+int FFmpegSourceVideoProvider::GetHeight() const {
+	auto const geometry = BakeSourceFrameGeometry(GetUnbakedFrameGeometry());
+	return geometry.visible_rect.IsValid() ? geometry.visible_rect.height : geometry.storage_height;
+}
+
+double FFmpegSourceVideoProvider::GetDAR() const {
+	auto const geometry = BakeSourceFrameGeometry(GetUnbakedFrameGeometry());
+	auto const visible = geometry.visible_rect.IsValid()
+		? geometry.visible_rect
+		: SourceFrameRect{ 0, 0, geometry.storage_width, geometry.storage_height };
+	if (visible.width <= 0 || visible.height <= 0)
+		return 0.0;
+	return static_cast<double>(visible.width) * geometry.pixel_aspect_ratio / visible.height;
 }
 
 void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
@@ -502,10 +536,7 @@ bool FFmpegSourceVideoProvider::GetNativeFrame(int n, SourceFrame& out, std::sha
 	out.height = frame_height;
 	out.flipped = false;
 	out.plane_count = format_info.plane_count;
-	out.geometry = MakeDefaultSourceFrameGeometry(frame_width, frame_height);
-	out.geometry.rotation = Rotation;
-	if (VideoInfo->SARNum > 0 && VideoInfo->SARDen > 0)
-		out.geometry.pixel_aspect_ratio = static_cast<double>(VideoInfo->SARNum) / VideoInfo->SARDen;
+	out.geometry = GetFrameGeometry();
 	out.color = ffms_color_metadata(
 		frame->ColorSpace >= 0 ? frame->ColorSpace : CS,
 		frame->ColorRange >= 0 ? frame->ColorRange : CR,

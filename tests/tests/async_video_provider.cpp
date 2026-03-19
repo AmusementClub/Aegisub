@@ -106,6 +106,7 @@ public:
 		frame.height = 2;
 		frame.flipped = false;
 		frame.plane_count = frame.format_info.plane_count;
+		frame.geometry = MakeDefaultSourceFrameGeometry(frame.width, frame.height);
 		frame.color = SourceFrameColorMetadataFromLegacyColorSpace(color_space);
 		frame.chroma_location = native_chroma_location;
 		frame.planes[0] = { storage->plane0.data(), 2, 2, 2 };
@@ -511,8 +512,15 @@ TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 	EXPECT_EQ("BT.709", packet.source_frame.color.matrix);
 	EXPECT_EQ("BT.709", packet.source_frame.color.primaries);
 	EXPECT_EQ(SourceFrameColorRange::Full, packet.source_frame.color.range);
+	EXPECT_EQ(packet.source_frame.width, packet.source_frame.geometry.storage_width);
+	EXPECT_EQ(packet.source_frame.height, packet.source_frame.geometry.storage_height);
+	EXPECT_EQ(0, packet.source_frame.geometry.visible_rect.x);
+	EXPECT_EQ(0, packet.source_frame.geometry.visible_rect.y);
+	EXPECT_EQ(packet.source_frame.width, packet.source_frame.geometry.visible_rect.width);
+	EXPECT_EQ(packet.source_frame.height, packet.source_frame.geometry.visible_rect.height);
 	EXPECT_TRUE(packet.subtitle_overlay.premultiplied_alpha);
 	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, packet.subtitle_overlay.composition_mode);
+	EXPECT_EQ(SubtitleOverlayCoordinateSpace::SourceStorage, packet.subtitle_overlay.coordinate_space);
 	EXPECT_EQ(9, packet.source_frame_storage->data[0]);
 	EXPECT_GT(packet.composited_frame_storage->data[0], packet.source_frame_storage->data[0]);
 	EXPECT_GT(packet.composited_frame_storage->data[1], packet.source_frame_storage->data[1]);
@@ -559,6 +567,8 @@ TEST(async_video_provider, bgra_source_frame_preserves_upstream_native_format_id
 	EXPECT_EQ(SourceFrameOutputMode::Bgra8, packet.source_frame.output_mode);
 	EXPECT_EQ(SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, packet.source_frame.native_format.format_namespace);
 	EXPECT_EQ(42, packet.source_frame.native_format.format_id);
+	EXPECT_EQ(packet.source_frame.width, packet.source_frame.geometry.storage_width);
+	EXPECT_EQ(packet.source_frame.height, packet.source_frame.geometry.storage_height);
 }
 
 TEST(async_video_provider, native_source_mode_returns_native_source_frame_packet) {
@@ -581,6 +591,10 @@ TEST(async_video_provider, native_source_mode_returns_native_source_frame_packet
 	EXPECT_EQ(99, packet.source_frame.native_format.format_id);
 	EXPECT_EQ(SourceFrameChromaLocation::TopCenter, packet.source_frame.chroma_location);
 	EXPECT_TRUE(packet.source_frame.IsValid());
+	EXPECT_EQ(packet.source_frame.width, packet.source_frame.geometry.storage_width);
+	EXPECT_EQ(packet.source_frame.height, packet.source_frame.geometry.storage_height);
+	EXPECT_EQ(packet.source_frame.width, packet.source_frame.geometry.visible_rect.width);
+	EXPECT_EQ(packet.source_frame.height, packet.source_frame.geometry.visible_rect.height);
 	EXPECT_TRUE(static_cast<bool>(packet.source_frame_owner));
 	EXPECT_FALSE(static_cast<bool>(packet.source_frame_storage));
 	EXPECT_FALSE(static_cast<bool>(packet.composited_frame_storage));
@@ -694,6 +708,7 @@ TEST(async_video_provider, compatibility_only_backend_uses_single_legacy_render)
 	ASSERT_TRUE(packet.has_subtitle_overlay);
 	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, packet.subtitle_overlay.composition_mode);
 	EXPECT_TRUE(packet.subtitle_overlay.premultiplied_alpha);
+	EXPECT_EQ(SubtitleOverlayCoordinateSpace::SourceStorage, packet.subtitle_overlay.coordinate_space);
 	EXPECT_EQ(2, packet.subtitle_overlay.width);
 	EXPECT_EQ(2, packet.subtitle_overlay.height);
 	ASSERT_EQ(1, packet.subtitle_overlay.dirty_rect_count);

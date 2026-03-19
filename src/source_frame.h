@@ -58,6 +58,26 @@ struct SourceFramePlaneView {
 	int height = 0;
 };
 
+struct SourceFrameRect {
+	int x = 0;
+	int y = 0;
+	int width = 0;
+	int height = 0;
+
+	bool IsValid() const {
+		return width > 0 && height > 0;
+	}
+};
+
+struct SourceFrameGeometry {
+	int storage_width = 0;
+	int storage_height = 0;
+	SourceFrameRect visible_rect;
+	int rotation = 0;
+	bool display_vflip = false;
+	double pixel_aspect_ratio = 1.0;
+};
+
 struct SourceFramePlaneFormatInfo {
 	int width_divisor = 1;
 	int height_divisor = 1;
@@ -203,6 +223,14 @@ inline char const *SourceFrameOutputModeName(SourceFrameOutputMode mode) {
 	}
 }
 
+inline SourceFrameGeometry MakeDefaultSourceFrameGeometry(int width, int height) {
+	SourceFrameGeometry geometry;
+	geometry.storage_width = width;
+	geometry.storage_height = height;
+	geometry.visible_rect = { 0, 0, width, height };
+	return geometry;
+}
+
 struct SourceFrame {
 	SourceFramePixelFormat pixel_format = SourceFramePixelFormat::Unknown;
 	SourceFrameOutputMode output_mode = SourceFrameOutputMode::Bgra8;
@@ -215,6 +243,7 @@ struct SourceFrame {
 	std::array<SourceFramePlaneView, 4> planes = { };
 	SourceFrameColorMetadata color;
 	SourceFrameChromaLocation chroma_location = SourceFrameChromaLocation::Unknown;
+	SourceFrameGeometry geometry;
 
 	bool IsValid() const {
 		if (pixel_format == SourceFramePixelFormat::Unknown && output_mode != SourceFrameOutputMode::Native)
@@ -268,6 +297,7 @@ inline SourceFrame MakeSourceFrameView(VideoFrame const& frame, SourceFrameColor
 	view.height = static_cast<int>(frame.height);
 	view.flipped = frame.flipped;
 	view.plane_count = view.format_info.plane_count;
+	view.geometry = MakeDefaultSourceFrameGeometry(view.width, view.height);
 	view.planes[0] = {
 		frame.data.data(),
 		static_cast<ptrdiff_t>(frame.pitch),

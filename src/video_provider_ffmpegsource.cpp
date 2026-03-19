@@ -502,6 +502,10 @@ bool FFmpegSourceVideoProvider::GetNativeFrame(int n, SourceFrame& out, std::sha
 	out.height = frame_height;
 	out.flipped = false;
 	out.plane_count = format_info.plane_count;
+	out.geometry = MakeDefaultSourceFrameGeometry(frame_width, frame_height);
+	out.geometry.rotation = Rotation;
+	if (VideoInfo->SARNum > 0 && VideoInfo->SARDen > 0)
+		out.geometry.pixel_aspect_ratio = static_cast<double>(VideoInfo->SARNum) / VideoInfo->SARDen;
 	out.color = ffms_color_metadata(
 		frame->ColorSpace >= 0 ? frame->ColorSpace : CS,
 		frame->ColorRange >= 0 ? frame->ColorRange : CR,

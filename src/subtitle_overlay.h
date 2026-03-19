@@ -38,6 +38,11 @@ enum class SubtitleOverlayCompositionMode {
 	OpaqueReplace
 };
 
+enum class SubtitleOverlayCoordinateSpace {
+	SourceStorage,
+	SourceVisible
+};
+
 struct SubtitleOverlayPlaneView {
 	unsigned char* data = nullptr;
 	ptrdiff_t stride = 0;
@@ -79,6 +84,7 @@ struct SubtitleOverlay {
 	bool force_full_upload = false;
 	SubtitleOverlayColorRole color_role = SubtitleOverlayColorRole::SubtitleSdrOverlay;
 	SubtitleOverlayCompositionMode composition_mode = SubtitleOverlayCompositionMode::Unsupported;
+	SubtitleOverlayCoordinateSpace coordinate_space = SubtitleOverlayCoordinateSpace::SourceStorage;
 	std::string nominal_color_space = "BT.709";
 
 	bool IsValid() const {
@@ -140,6 +146,7 @@ struct SubtitleOverlayStorage {
 		overlay.composition_mode = make_premultiplied_overlay
 			? SubtitleOverlayCompositionMode::PremultipliedAlpha
 			: SubtitleOverlayCompositionMode::Unsupported;
+		overlay.coordinate_space = SubtitleOverlayCoordinateSpace::SourceStorage;
 		overlay.plane_count = 1;
 		overlay.planes[0] = {
 			pixels.data(),
@@ -162,6 +169,7 @@ inline SubtitleOverlay MakeLegacyBgraSubtitleOverlayView(VideoFrame& frame) {
 	overlay.canvas_width = static_cast<int>(frame.width);
 	overlay.canvas_height = static_cast<int>(frame.height);
 	overlay.flipped = frame.flipped;
+	overlay.coordinate_space = SubtitleOverlayCoordinateSpace::SourceStorage;
 	overlay.plane_count = 1;
 	overlay.planes[0] = {
 		frame.data.data(),

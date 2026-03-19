@@ -70,6 +70,15 @@ TEST(source_frame_overlay, source_frame_view_reflects_video_frame) {
 	EXPECT_EQ(SourceFrameChromaLocation::Unknown, source.chroma_location);
 	EXPECT_FALSE(SourceFrameHasSubsampledChroma(source));
 	EXPECT_EQ(99, source.planes[0].data[5]);
+	EXPECT_EQ(4, source.geometry.storage_width);
+	EXPECT_EQ(3, source.geometry.storage_height);
+	EXPECT_EQ(0, source.geometry.visible_rect.x);
+	EXPECT_EQ(0, source.geometry.visible_rect.y);
+	EXPECT_EQ(4, source.geometry.visible_rect.width);
+	EXPECT_EQ(3, source.geometry.visible_rect.height);
+	EXPECT_EQ(0, source.geometry.rotation);
+	EXPECT_FALSE(source.geometry.display_vflip);
+	EXPECT_DOUBLE_EQ(1.0, source.geometry.pixel_aspect_ratio);
 }
 
 TEST(source_frame_overlay, legacy_color_space_parser_infers_renderer_facing_metadata) {
@@ -199,6 +208,7 @@ TEST(source_frame_overlay, legacy_overlay_view_reflects_video_frame) {
 	auto overlay = MakeLegacyBgraSubtitleOverlayView(frame);
 	ASSERT_TRUE(overlay.IsValid());
 	EXPECT_EQ(frame.data.data(), overlay.planes[0].data);
+	EXPECT_EQ(SubtitleOverlayCoordinateSpace::SourceStorage, overlay.coordinate_space);
 	overlay.planes[0].data[3] = 11;
 	EXPECT_EQ(11, frame.data[3]);
 }

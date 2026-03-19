@@ -425,6 +425,20 @@ std::vector<unsigned char> MakeExpectedRgbaImage(int width, int height) {
 	return pixels;
 }
 
+std::vector<unsigned char> FlipRgbaTopLeftVertically(
+	std::vector<unsigned char> const& pixels,
+	int width,
+	int height) {
+	std::vector<unsigned char> flipped(pixels.size());
+	std::size_t row_bytes = static_cast<std::size_t>(width) * 4;
+	for (int y = 0; y < height; ++y) {
+		auto const* src = pixels.data() + static_cast<std::size_t>(y) * row_bytes;
+		auto* dst = flipped.data() + static_cast<std::size_t>(height - 1 - y) * row_bytes;
+		std::memcpy(dst, src, row_bytes);
+	}
+	return flipped;
+}
+
 FrameScenario MakeYuv420p8Scenario(int width, int height) {
 	FrameScenario scenario;
 	scenario.name = "yuv420p8";
@@ -775,6 +789,60 @@ bool RunChromaLocationValidation() {
 		&& full_center_unknown.mean_abs_error == 0.0;
 }
 
+bool RunDisplayTransformValidation() {
+	std::cout << "\nValidation for display_vflip transform\n";
+
+	auto yuv420p8_unflipped = MakeYuv420p8Scenario(128, 72);
+	auto yuv420p10_unflipped = MakeYuv420p10Scenario(128, 72);
+	auto bgra = MakeBgraScenario(128, 72);
+	bgra.frame.geometry.display_vflip = true;
+	auto yuv420p8 = MakeYuv420p8Scenario(128, 72);
+	yuv420p8.frame.geometry.display_vflip = true;
+	auto yuv420p10 = MakeYuv420p10Scenario(128, 72);
+	yuv420p10.frame.geometry.display_vflip = true;
+	auto expected_bgra_pixels = MakeExpectedRgbaImage(128, 72);
+
+	HiddenGLWindow window(128, 72);
+	PlaceboRendererGL renderer;
+
+	auto yuv420p8_unflipped_pixels = RenderFrameToRgbaTopLeft(
+		window, renderer, yuv420p8_unflipped.frame, yuv420p8_unflipped.width, yuv420p8_unflipped.height);
+	std::cout << "  rendered yuv420p8 baseline sample\n";
+	auto yuv420p10_unflipped_pixels = RenderFrameToRgbaTopLeft(
+		window, renderer, yuv420p10_unflipped.frame, yuv420p10_unflipped.width, yuv420p10_unflipped.height);
+	std::cout << "  rendered yuv420p10 baseline sample\n";
+	auto bgra_pixels = RenderFrameToRgbaTopLeft(window, renderer, bgra.frame, bgra.width, bgra.height);
+	std::cout << "  rendered bgra8 baked-display sample\n";
+	auto yuv420p8_pixels = RenderFrameToRgbaTopLeft(window, renderer, yuv420p8.frame, yuv420p8.width, yuv420p8.height);
+	std::cout << "  rendered yuv420p8 display-vflip sample\n";
+	auto yuv420p10_pixels = RenderFrameToRgbaTopLeft(window, renderer, yuv420p10.frame, yuv420p10.width, yuv420p10.height);
+	std::cout << "  rendered yuv420p10 display-vflip sample\n";
+	// Subsampled YUV cannot be validated against a vertically flipped "ideal RGB"
+	// image because flipping after reconstruction shifts the effective chroma
+	// sampling contract. Compare against the same-format unflipped render
+	// baseline, then flip that resolved output in output space instead.
+	auto expected_yuv420p8_flipped = FlipRgbaTopLeftVertically(yuv420p8_unflipped_pixels, 128, 72);
+	auto expected_yuv420p10_flipped = FlipRgbaTopLeftVertically(yuv420p10_unflipped_pixels, 128, 72);
+
+	std::array<ValidationResult, 3> results = {{
+		// Legacy BGRA frames are already display-oriented before upload. Their
+		// display geometry may still carry reference metadata, but placebo should
+		// not apply rotation/vflip a second time on this path.
+		CompareRgbImages("bgra8/baked", expected_bgra_pixels, bgra_pixels, 128, 72),
+		CompareRgbImages("yuv420p8/vf", expected_yuv420p8_flipped, yuv420p8_pixels, 128, 72, true),
+		CompareRgbImages("yuv420p10/vf", expected_yuv420p10_flipped, yuv420p10_pixels, 128, 72, true)
+	}};
+
+	bool passed = true;
+	for (auto const& result : results) {
+		PrintValidationResult(result);
+		if (result.max_abs_error > 4 || result.mean_abs_error > 1.0)
+			passed = false;
+	}
+
+	return passed;
+}
+
 enum class BenchPhase {
 	UploadOnly,
 	RenderOnly,
@@ -948,6 +1016,10 @@ int main() try {
 	if (!RunChromaLocationValidation()) {
 		std::cerr << "\nValidation failed: chroma siting propagation did not match expected libplacebo behavior.\n";
 		return 4;
+	}
+	if (!RunDisplayTransformValidation()) {
+		std::cerr << "\nValidation failed: display_vflip render output drifted from vertically flipped baseline.\n";
+		return 5;
 	}
 
 	std::cout << "\nPlacebo renderer benchmark\n";

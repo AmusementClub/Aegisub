@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include "render_types.h"
 #include "source_frame.h"
 
 #include <libplacebo/colorspace.h>
@@ -149,10 +150,24 @@ inline struct pl_rect2df BuildPlaceboSourceFrameCropRect(SourceFrame const& fram
 	};
 }
 
+inline struct pl_rect2df BuildPlaceboRenderTargetCropRect(
+	RenderViewport const& viewport,
+	int canvas_width,
+	int canvas_height) {
+	float const top = static_cast<float>(canvas_height - viewport.y - viewport.height);
+	return {
+		static_cast<float>(viewport.x),
+		top,
+		static_cast<float>(viewport.x + viewport.width),
+		top + static_cast<float>(viewport.height)
+	};
+}
+
 inline pl_rotation BuildPlaceboSourceFrameRotation(SourceFrame const& frame) {
-	int normalized = frame.geometry.rotation % 360;
-	if (normalized < 0)
-		normalized += 360;
+	if (!SourceFrameHasUnbakedDisplayTransform(frame))
+		return static_cast<pl_rotation>(PL_ROTATION_0);
+
+	int normalized = NormalizeSourceFrameRotationDegrees(frame.geometry.rotation);
 
 	// SourceFrame.rotation currently follows container/display-metadata style
 	// degrees. To match the legacy BGRA path and FFmpeg/libplacebo conventions,
@@ -233,8 +248,10 @@ inline bool BuildPlaceboNativePlaneData(SourceFrame const& frame, int plane_inde
 	size_t row_stride = static_cast<size_t>(stride < 0 ? -stride : stride);
 	if (!pixels || row_stride == 0)
 		return false;
+	// libplacebo upload descriptors use a positive row stride, so negative-stride
+	// source views need to be rebased back to the logical top row first.
 	if (stride < 0)
-		pixels += static_cast<ptrdiff_t>(plane.height - 1) * row_stride;
+		pixels += static_cast<ptrdiff_t>(plane.height - 1) * stride;
 
 	data = {};
 	data.type = PL_FMT_UNORM;

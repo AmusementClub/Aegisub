@@ -80,16 +80,6 @@ void PlaceboLogCallback(void *, enum pl_log_level level, const char *msg) {
 	}
 }
 
-pl_rect2df ViewportRect(RenderViewport const& viewport, int canvas_width, int canvas_height) {
-	float const top = static_cast<float>(canvas_height - viewport.y - viewport.height);
-	return {
-		static_cast<float>(viewport.x),
-		top,
-		static_cast<float>(viewport.x + viewport.width),
-		top + static_cast<float>(viewport.height)
-	};
-}
-
 void *GetGLProcAddress(char const *name) {
 #ifdef _WIN32
 	void *proc = reinterpret_cast<void *>(wglGetProcAddress(name));
@@ -128,7 +118,7 @@ bool BuildBgra8PlaneData(placebo::runtime::Api const& api, SourceFrame const& fr
 	if (!pixels || row_stride == 0)
 		return false;
 	if (stride < 0)
-		pixels += static_cast<ptrdiff_t>(plane.height - 1) * row_stride;
+		pixels += static_cast<ptrdiff_t>(plane.height - 1) * stride;
 
 	data = {};
 	data.type = PL_FMT_UNORM;
@@ -280,7 +270,28 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 
 	EnsureInitialized();
 
-	int const next_plane_count = frame.output_mode == SourceFrameOutputMode::Native ? frame.plane_count : 1;
+	SourceFrame const* upload_frame = &frame;
+	SourceFrame transformed_frame;
+	std::array<SourceFramePlaneView, 4> transformed_planes = { };
+	if (SourceFrameHasUnbakedDisplayTransform(frame) && frame.geometry.display_vflip) {
+		// Preserve native chroma siting by expressing display_vflip as a
+		// negative-stride source view before upload instead of flipping the
+		// reconstructed RGB target after sampling.
+		transformed_frame = frame;
+		transformed_planes = frame.planes;
+		transformed_frame.geometry.display_vflip = false;
+		for (int i = 0; i < frame.plane_count; ++i) {
+			auto& plane = transformed_planes[static_cast<size_t>(i)];
+			if (!plane.data || plane.height <= 0 || plane.stride == 0)
+				continue;
+			plane.data += static_cast<ptrdiff_t>(plane.height - 1) * plane.stride;
+			plane.stride = -plane.stride;
+		}
+		transformed_frame.planes = transformed_planes;
+		upload_frame = &transformed_frame;
+	}
+
+	int const next_plane_count = upload_frame->output_mode == SourceFrameOutputMode::Native ? upload_frame->plane_count : 1;
 	for (int i = next_plane_count; i < image_plane_count; ++i) {
 		auto& plane = image_planes[static_cast<size_t>(i)];
 		if (plane.texture)
@@ -290,14 +301,14 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 
 	for (int i = 0; i < next_plane_count; ++i) {
 		struct pl_plane_data data = {};
-		bool built = frame.output_mode == SourceFrameOutputMode::Bgra8
-			? BuildBgra8PlaneData(*api, frame, data)
-			: BuildPlaceboNativePlaneData(frame, i, data);
+		bool built = upload_frame->output_mode == SourceFrameOutputMode::Bgra8
+			? BuildBgra8PlaneData(*api, *upload_frame, data)
+			: BuildPlaceboNativePlaneData(*upload_frame, i, data);
 		if (!built) {
 			DestroyImageResources();
 			throw VideoOutRenderException("libplacebo could not describe the source frame for upload.");
 		}
-		if (frame.output_mode == SourceFrameOutputMode::Native && api->plane_data_align) {
+		if (upload_frame->output_mode == SourceFrameOutputMode::Native && api->plane_data_align) {
 			struct pl_bit_encoding ignored_bits = {};
 			api->plane_data_align(&data, &ignored_bits);
 		}
@@ -309,7 +320,8 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 			throw VideoOutRenderException("libplacebo failed to upload the source frame.");
 		}
 
-		uploaded_plane.flipped = frame.flipped;
+		uploaded_plane.flipped =
+			(upload_frame->planes[static_cast<size_t>(i)].stride < 0) ^ upload_frame->flipped;
 		uploaded_plane.address_mode = PL_TEX_ADDRESS_CLAMP;
 
 		plane_state.texture = uploaded_plane.texture;
@@ -322,14 +334,14 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 				uploaded_plane.component_mapping[component];
 	}
 
-	image_width = frame.width;
-	image_height = frame.height;
+	image_width = upload_frame->width;
+	image_height = upload_frame->height;
 	image_plane_count = next_plane_count;
-	image_output_mode = frame.output_mode;
-	image_format_info = frame.format_info;
-	image_color = frame.color;
-	image_chroma_location = frame.chroma_location;
-	image_geometry = frame.geometry;
+	image_output_mode = upload_frame->output_mode;
+	image_format_info = upload_frame->format_info;
+	image_color = upload_frame->color;
+	image_chroma_location = upload_frame->chroma_location;
+	image_geometry = upload_frame->geometry;
 	has_frame = true;
 }
 
@@ -407,7 +419,7 @@ void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width,
 	target.planes[0] = target_plane;
 	target.repr = BuildPlaceboRenderTargetRepr();
 	target.color = image.color;
-	target.crop = ViewportRect(viewport, canvas_width, canvas_height);
+	target.crop = BuildPlaceboRenderTargetCropRect(viewport, canvas_width, canvas_height);
 	target.rotation = PL_ROTATION_0;
 
 	struct pl_render_params params = {};

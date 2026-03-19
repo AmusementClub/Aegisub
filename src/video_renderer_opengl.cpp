@@ -336,7 +336,39 @@ void OpenGLVideoRenderer::Reset() {
 	supports_rectangular_textures = false;
 	internal_format = 0;
 	source_geometry = {};
+	source_output_mode = SourceFrameOutputMode::Bgra8;
 	has_source_geometry = false;
+}
+
+VideoRenderOutputLayout OpenGLVideoRenderer::ResolveLayerRenderOutputLayout(
+	bool apply_source_display_transform,
+	int canvas_width,
+	int canvas_height) const {
+	if (apply_source_display_transform && has_source_geometry)
+		return BuildVideoRenderOutputLayout(canvas_width, canvas_height, source_geometry);
+	return BuildVideoRenderOutputLayout(canvas_width, canvas_height);
+}
+
+bool OpenGLVideoRenderer::UpdateLayerRenderOutputLayout(
+	LayerResources& layer,
+	bool apply_source_display_transform) {
+	auto const next_layout = ResolveLayerRenderOutputLayout(
+		apply_source_display_transform,
+		layer.canvas_width,
+		layer.canvas_height);
+	bool const changed =
+		layer.apply_source_display_transform != apply_source_display_transform ||
+		layer.render_output_layout.source_width != next_layout.source_width ||
+		layer.render_output_layout.source_height != next_layout.source_height ||
+		layer.render_output_layout.output_width != next_layout.output_width ||
+		layer.render_output_layout.output_height != next_layout.output_height ||
+		layer.render_output_layout.rotation != next_layout.rotation ||
+		layer.render_output_layout.display_vflip != next_layout.display_vflip;
+	if (changed) {
+		layer.apply_source_display_transform = apply_source_display_transform;
+		layer.render_output_layout = next_layout;
+	}
+	return changed;
 }
 
 void OpenGLVideoRenderer::RebuildLayerGeometry(LayerResources& layer) {
@@ -349,11 +381,27 @@ void OpenGLVideoRenderer::RebuildLayerGeometry(LayerResources& layer) {
 	for (size_t i = 0; i < layer.layout.tiles.size(); ++i) {
 		auto const& tile = layer.layout.tiles[i];
 		GLuint base = static_cast<GLuint>(layer.vertices.size());
+		auto const p0 = TransformVideoRenderPoint(
+			layer.render_output_layout,
+			tile.x1 + layer.offset_x,
+			tile.y1 + layer.offset_y);
+		auto const p1 = TransformVideoRenderPoint(
+			layer.render_output_layout,
+			tile.x2 + layer.offset_x,
+			tile.y1 + layer.offset_y);
+		auto const p2 = TransformVideoRenderPoint(
+			layer.render_output_layout,
+			tile.x2 + layer.offset_x,
+			tile.y2 + layer.offset_y);
+		auto const p3 = TransformVideoRenderPoint(
+			layer.render_output_layout,
+			tile.x1 + layer.offset_x,
+			tile.y2 + layer.offset_y);
 
-		layer.vertices.push_back({ { tile.x1 + layer.offset_x, tile.y1 + layer.offset_y }, { tile.u1, tile.v1 } });
-		layer.vertices.push_back({ { tile.x2 + layer.offset_x, tile.y1 + layer.offset_y }, { tile.u2, tile.v1 } });
-		layer.vertices.push_back({ { tile.x2 + layer.offset_x, tile.y2 + layer.offset_y }, { tile.u2, tile.v2 } });
-		layer.vertices.push_back({ { tile.x1 + layer.offset_x, tile.y2 + layer.offset_y }, { tile.u1, tile.v2 } });
+		layer.vertices.push_back({ { p0.x, p0.y }, { tile.u1, tile.v1 } });
+		layer.vertices.push_back({ { p1.x, p1.y }, { tile.u2, tile.v1 } });
+		layer.vertices.push_back({ { p2.x, p2.y }, { tile.u2, tile.v2 } });
+		layer.vertices.push_back({ { p3.x, p3.y }, { tile.u1, tile.v2 } });
 
 		layer.indices.push_back(base + 0);
 		layer.indices.push_back(base + 1);
@@ -400,6 +448,8 @@ void OpenGLVideoRenderer::ClearLayer(LayerResources& layer) noexcept {
 	layer.canvas_height = 0;
 	layer.offset_x = 0;
 	layer.offset_y = 0;
+	layer.render_output_layout = { };
+	layer.apply_source_display_transform = false;
 	layer.composition_mode = SubtitleOverlayCompositionMode::OpaqueReplace;
 	layer.has_content = false;
 }
@@ -408,7 +458,7 @@ void OpenGLVideoRenderer::HideLayer(LayerResources& layer) noexcept {
 	layer.has_content = false;
 }
 
-void OpenGLVideoRenderer::UploadBgraLayer(LayerResources& layer, unsigned char const* data, int width, int height, ptrdiff_t pitch, bool flipped, int canvas_width, int canvas_height, int offset_x, int offset_y, SubtitleOverlayCompositionMode composition_mode) {
+void OpenGLVideoRenderer::UploadBgraLayer(LayerResources& layer, unsigned char const* data, int width, int height, ptrdiff_t pitch, bool flipped, int canvas_width, int canvas_height, int offset_x, int offset_y, SubtitleOverlayCompositionMode composition_mode, bool apply_source_display_transform) {
 	if (!data || width <= 0 || height <= 0 || pitch <= 0) {
 		ClearLayer(layer);
 		return;
@@ -422,7 +472,6 @@ void OpenGLVideoRenderer::UploadBgraLayer(LayerResources& layer, unsigned char c
 		layer.layout.flipped != flipped ||
 		layer.texture_ids.size() != layer.layout.tiles.size();
 	bool geometry_changed =
-		textures_changed ||
 		layer.canvas_width != canvas_width ||
 		layer.canvas_height != canvas_height ||
 		layer.offset_x != offset_x ||
@@ -433,19 +482,20 @@ void OpenGLVideoRenderer::UploadBgraLayer(LayerResources& layer, unsigned char c
 	layer.offset_x = offset_x;
 	layer.offset_y = offset_y;
 	layer.composition_mode = composition_mode;
+	geometry_changed = geometry_changed || UpdateLayerRenderOutputLayout(layer, apply_source_display_transform);
 
 	if (textures_changed) {
 		layer.layout = BuildOpenGLVideoRendererTileLayout(
-		width,
-		height,
-		4,
-		max_texture_size,
-		supports_rectangular_textures,
-		flipped);
+			width,
+			height,
+			4,
+			max_texture_size,
+			supports_rectangular_textures,
+			flipped);
 		LOG_I("video/out/opengl") << "Layer size: " << layer.layout.frame_width << "x" << layer.layout.frame_height << ", tiles: " << layer.layout.tiles.size();
 		RecreateLayerTextures(layer);
 	}
-	if (geometry_changed)
+	if (textures_changed || geometry_changed)
 		RebuildLayerGeometry(layer);
 
 	CHECK_RENDER_ERROR(glPixelStorei(GL_UNPACK_ROW_LENGTH, static_cast<GLint>(pitch / 4)));
@@ -511,7 +561,13 @@ void OpenGLVideoRenderer::RenderLayer(LayerResources& layer) {
 	if (!layer.has_content || layer.layout.tiles.empty())
 		return;
 	auto& gl = *functions;
-	auto projection_matrix = BuildOpenGLVideoRendererOrthoMatrix(layer.canvas_width, layer.canvas_height, layer.layout.flipped);
+	int const render_width = layer.render_output_layout.output_width > 0
+		? layer.render_output_layout.output_width
+		: layer.canvas_width;
+	int const render_height = layer.render_output_layout.output_height > 0
+		? layer.render_output_layout.output_height
+		: layer.canvas_height;
+	auto projection_matrix = BuildOpenGLVideoRendererOrthoMatrix(render_width, render_height, layer.layout.flipped);
 
 	if (layer.composition_mode == SubtitleOverlayCompositionMode::PremultipliedAlpha) {
 		CHECK_RENDER_ERROR(glEnable(GL_BLEND));
@@ -545,6 +601,7 @@ void OpenGLVideoRenderer::RenderLayer(LayerResources& layer) {
 
 void OpenGLVideoRenderer::UploadFrame(SourceFrame const& frame) {
 	if (!frame.IsValid()) {
+		source_output_mode = SourceFrameOutputMode::Bgra8;
 		has_source_geometry = false;
 		if (render_video_layer)
 			video_layer.has_content = false;
@@ -552,6 +609,7 @@ void OpenGLVideoRenderer::UploadFrame(SourceFrame const& frame) {
 	}
 
 	source_geometry = frame.geometry;
+	source_output_mode = frame.output_mode;
 	has_source_geometry = true;
 
 	if (!render_video_layer)
@@ -574,7 +632,8 @@ void OpenGLVideoRenderer::UploadFrame(SourceFrame const& frame) {
 		layout.canvas_height,
 		layout.offset_x,
 		layout.offset_y,
-		SubtitleOverlayCompositionMode::OpaqueReplace);
+		SubtitleOverlayCompositionMode::OpaqueReplace,
+		false);
 }
 
 void OpenGLVideoRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
@@ -601,6 +660,8 @@ void OpenGLVideoRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 	auto const* render_overlay = overlay ? &adjusted_overlay : nullptr;
 
 	auto plan = DecideOpenGLVideoRendererOverlayUploadPlan(state, render_overlay);
+	bool const apply_source_display_transform =
+		has_source_geometry && source_output_mode == SourceFrameOutputMode::Native;
 	if (plan.action == OpenGLVideoRendererOverlayUploadAction::HideKeepResources) {
 		HideLayer(overlay_layer);
 		return;
@@ -617,9 +678,12 @@ void OpenGLVideoRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 			render_overlay->canvas_height,
 			render_overlay->target_x,
 			render_overlay->target_y,
-			render_overlay->composition_mode);
+			render_overlay->composition_mode,
+			apply_source_display_transform);
 		return;
 	}
+	if (UpdateLayerRenderOutputLayout(overlay_layer, apply_source_display_transform))
+		RebuildLayerGeometry(overlay_layer);
 	if (plan.action == OpenGLVideoRendererOverlayUploadAction::DirtyUpload) {
 		UploadDirtyRects(
 			overlay_layer,

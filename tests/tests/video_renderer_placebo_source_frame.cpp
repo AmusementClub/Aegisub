@@ -71,6 +71,11 @@ TEST(video_renderer_placebo_source_frame, source_rotation_maps_to_placebo_rotati
 	auto source = MakeSourceFrameView(frame, "BT.709");
 
 	source.geometry.rotation = 90;
+	EXPECT_EQ(PL_ROTATION_0, BuildPlaceboSourceFrameRotation(source));
+
+	source.output_mode = SourceFrameOutputMode::Native;
+	source.native_format = { SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, 3 };
+	source.pixel_format = SourceFramePixelFormat::Unknown;
 	EXPECT_EQ(PL_ROTATION_270, BuildPlaceboSourceFrameRotation(source));
 
 	source.geometry.rotation = 180;
@@ -173,6 +178,31 @@ TEST(video_renderer_placebo_source_frame, native_planar_10bit_preserves_raw_comp
 	ASSERT_TRUE(BuildPlaceboNativePlaneData(source, 0, plane));
 	EXPECT_EQ(10, plane.component_size[0]);
 	EXPECT_EQ(0, plane.component_pad[0]);
+}
+
+TEST(video_renderer_placebo_source_frame, native_negative_stride_plane_rebases_to_top_left_for_upload) {
+	unsigned char rgba[24] = { };
+
+	SourceFrame source;
+	source.output_mode = SourceFrameOutputMode::Native;
+	source.native_format = { SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, 99 };
+	source.format_info = { SourceFrameColorFamily::Rgb, 1, { {
+		{ 1, 1, 4, 4, 8, { { 16, 8, 0, 24 } } }, { }, { }, { }
+	} } };
+	source.width = 2;
+	source.height = 3;
+	source.plane_count = source.format_info.plane_count;
+	source.planes[0] = { rgba + 16, -8, 2, 3 };
+
+	struct pl_plane_data plane = {};
+	ASSERT_TRUE(BuildPlaceboNativePlaneData(source, 0, plane));
+	EXPECT_EQ(static_cast<void const*>(rgba), plane.pixels);
+	EXPECT_EQ(8u, plane.row_stride);
+	EXPECT_EQ(4u, plane.pixel_stride);
+	EXPECT_EQ(PL_CHANNEL_R, plane.component_map[0]);
+	EXPECT_EQ(PL_CHANNEL_G, plane.component_map[1]);
+	EXPECT_EQ(PL_CHANNEL_B, plane.component_map[2]);
+	EXPECT_EQ(PL_CHANNEL_A, plane.component_map[3]);
 }
 
 TEST(video_renderer_placebo_source_frame, source_chroma_location_maps_to_placebo_enum) {

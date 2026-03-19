@@ -42,6 +42,8 @@ class OpenGLVideoRenderer final : public IVideoRenderer {
 		int canvas_height = 0;
 		int offset_x = 0;
 		int offset_y = 0;
+		VideoRenderOutputLayout render_output_layout;
+		bool apply_source_display_transform = false;
 		SubtitleOverlayCompositionMode composition_mode = SubtitleOverlayCompositionMode::OpaqueReplace;
 		bool has_content = false;
 	};
@@ -61,6 +63,7 @@ class OpenGLVideoRenderer final : public IVideoRenderer {
 	bool render_overlay_layer = true;
 	bool clear_before_render = true;
 	SourceFrameGeometry source_geometry;
+	SourceFrameOutputMode source_output_mode = SourceFrameOutputMode::Bgra8;
 	bool has_source_geometry = false;
 
 	void EnsureInitialized();
@@ -69,8 +72,10 @@ class OpenGLVideoRenderer final : public IVideoRenderer {
 	void CreateProgram();
 	void CreateLayerBuffers(LayerResources& layer);
 	void RebuildLayerGeometry(LayerResources& layer);
+	VideoRenderOutputLayout ResolveLayerRenderOutputLayout(bool apply_source_display_transform, int canvas_width, int canvas_height) const;
+	bool UpdateLayerRenderOutputLayout(LayerResources& layer, bool apply_source_display_transform);
 	void RecreateLayerTextures(LayerResources& layer);
-	void UploadBgraLayer(LayerResources& layer, unsigned char const* data, int width, int height, ptrdiff_t pitch, bool flipped, int canvas_width, int canvas_height, int offset_x, int offset_y, SubtitleOverlayCompositionMode composition_mode);
+	void UploadBgraLayer(LayerResources& layer, unsigned char const* data, int width, int height, ptrdiff_t pitch, bool flipped, int canvas_width, int canvas_height, int offset_x, int offset_y, SubtitleOverlayCompositionMode composition_mode, bool apply_source_display_transform);
 	void UploadDirtyRects(LayerResources& layer, unsigned char const* data, ptrdiff_t pitch, SubtitleOverlayDirtyRect const* dirty_rects, int dirty_rect_count);
 	void ClearLayer(LayerResources& layer) noexcept;
 	void HideLayer(LayerResources& layer) noexcept;

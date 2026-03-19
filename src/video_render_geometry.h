@@ -24,6 +24,20 @@ struct VideoRenderCanvasLayout {
 	int offset_y = 0;
 };
 
+struct VideoRenderOutputLayout {
+	int source_width = 0;
+	int source_height = 0;
+	int output_width = 0;
+	int output_height = 0;
+	int rotation = 0;
+	bool display_vflip = false;
+};
+
+struct VideoRenderPoint {
+	float x = 0.0f;
+	float y = 0.0f;
+};
+
 inline VideoRenderCanvasLayout BuildVideoRenderCanvasLayout(SourceFrame const& frame) {
 	auto const visible = GetSourceFrameVisibleRect(frame);
 	return {
@@ -32,6 +46,70 @@ inline VideoRenderCanvasLayout BuildVideoRenderCanvasLayout(SourceFrame const& f
 		-visible.x,
 		-visible.y
 	};
+}
+
+inline VideoRenderOutputLayout BuildVideoRenderOutputLayout(
+	int source_width,
+	int source_height,
+	int rotation_degrees = 0) {
+	auto const rotation = NormalizeSourceFrameRotationDegrees(rotation_degrees);
+	bool const swap_axes = rotation == 90 || rotation == 270;
+	return {
+		source_width,
+		source_height,
+		swap_axes ? source_height : source_width,
+		swap_axes ? source_width : source_height,
+		rotation,
+		false
+	};
+}
+
+inline VideoRenderOutputLayout BuildVideoRenderOutputLayout(
+	int source_width,
+	int source_height,
+	SourceFrameGeometry const& geometry) {
+	auto layout = BuildVideoRenderOutputLayout(source_width, source_height, geometry.rotation);
+	layout.display_vflip = geometry.display_vflip;
+	return layout;
+}
+
+inline VideoRenderOutputLayout BuildVideoRenderOutputLayout(
+	VideoRenderCanvasLayout const& canvas,
+	SourceFrameGeometry const& geometry) {
+	return BuildVideoRenderOutputLayout(canvas.canvas_width, canvas.canvas_height, geometry);
+}
+
+inline VideoRenderPoint TransformVideoRenderPoint(
+	VideoRenderOutputLayout const& layout,
+	float x,
+	float y) {
+	switch (layout.rotation) {
+		case 90:
+		{
+			float original_x = x;
+			x = static_cast<float>(layout.source_height) - y;
+			y = original_x;
+			break;
+		}
+		case 180:
+			x = static_cast<float>(layout.source_width) - x;
+			y = static_cast<float>(layout.source_height) - y;
+			break;
+		case 270:
+		{
+			float original_x = x;
+			x = y;
+			y = static_cast<float>(layout.source_width) - original_x;
+			break;
+		}
+		default:
+			break;
+	}
+
+	if (layout.display_vflip)
+		y = static_cast<float>(layout.output_height) - y;
+
+	return { x, y };
 }
 
 inline SubtitleOverlay AdjustSubtitleOverlayForSourceGeometry(

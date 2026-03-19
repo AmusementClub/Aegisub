@@ -626,7 +626,29 @@ TEST(async_video_provider, native_source_mode_keeps_native_frame_for_source_only
 	EXPECT_EQ(packet.source_frame.height, packet.source_frame.geometry.storage_height);
 }
 
-TEST(async_video_provider, native_source_mode_falls_back_to_bgra_when_subtitle_path_cannot_yet_follow_rotation) {
+TEST(async_video_provider, native_source_mode_keeps_native_frame_for_source_only_display_vflip_path) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
+	video->native_geometry = MakeDefaultSourceFrameGeometry(2, 2);
+	video->native_geometry.display_vflip = true;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
+	auto packet = provider.GetRenderPacket(5, 5000, true);
+	EXPECT_EQ(SourceFrameOutputMode::Native, packet.source_frame.output_mode);
+	EXPECT_EQ(SourceFramePixelFormat::Unknown, packet.source_frame.pixel_format);
+	EXPECT_FALSE(static_cast<bool>(packet.source_frame_storage));
+	EXPECT_TRUE(static_cast<bool>(packet.source_frame_owner));
+	EXPECT_TRUE(packet.source_frame.geometry.display_vflip);
+}
+
+TEST(async_video_provider, native_source_mode_keeps_native_frame_for_rotated_subtitle_overlay_path) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *video = new FakeVideoProvider(state);
 	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
@@ -645,11 +667,95 @@ TEST(async_video_provider, native_source_mode_falls_back_to_bgra_when_subtitle_p
 
 	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
 	auto packet = provider.GetRenderPacket(5, 5000);
+	EXPECT_EQ(SourceFrameOutputMode::Native, packet.source_frame.output_mode);
+	EXPECT_EQ(SourceFramePixelFormat::Unknown, packet.source_frame.pixel_format);
+	EXPECT_FALSE(static_cast<bool>(packet.source_frame_storage));
+	EXPECT_TRUE(static_cast<bool>(packet.source_frame_owner));
+	EXPECT_TRUE(packet.has_subtitle_overlay);
+	EXPECT_EQ(90, packet.source_frame.geometry.rotation);
+}
+
+TEST(async_video_provider, native_source_mode_keeps_native_frame_for_display_vflip_overlay_path) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
+	video->native_geometry = MakeDefaultSourceFrameGeometry(2, 2);
+	video->native_geometry.display_vflip = true;
+	auto *subs = new FakeOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto subtitle_file = MakeSubtitleFile("overlay");
+	provider.LoadSubtitles(&subtitle_file);
+
+	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
+	auto packet = provider.GetRenderPacket(5, 5000);
+	EXPECT_EQ(SourceFrameOutputMode::Native, packet.source_frame.output_mode);
+	EXPECT_EQ(SourceFramePixelFormat::Unknown, packet.source_frame.pixel_format);
+	EXPECT_FALSE(static_cast<bool>(packet.source_frame_storage));
+	EXPECT_TRUE(static_cast<bool>(packet.source_frame_owner));
+	EXPECT_TRUE(packet.has_subtitle_overlay);
+	EXPECT_TRUE(packet.source_frame.geometry.display_vflip);
+}
+
+TEST(async_video_provider, native_source_mode_still_falls_back_to_bgra_for_rotation_plus_display_vflip_overlay_path) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
+	video->native_geometry = MakeDefaultSourceFrameGeometry(2, 2);
+	video->native_geometry.rotation = 90;
+	video->native_geometry.display_vflip = true;
+	video->native_geometry.pixel_aspect_ratio = 1.25;
+	auto *subs = new FakeOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto subtitle_file = MakeSubtitleFile("overlay");
+	provider.LoadSubtitles(&subtitle_file);
+
+	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
+	auto packet = provider.GetRenderPacket(5, 5000);
 	EXPECT_EQ(SourceFrameOutputMode::Bgra8, packet.source_frame.output_mode);
 	EXPECT_EQ(SourceFramePixelFormat::Bgra8, packet.source_frame.pixel_format);
 	EXPECT_TRUE(static_cast<bool>(packet.source_frame_storage));
 	EXPECT_EQ(packet.source_frame.width, packet.source_frame.geometry.storage_width);
 	EXPECT_EQ(packet.source_frame.height, packet.source_frame.geometry.storage_height);
+	EXPECT_EQ(packet.source_frame.width, packet.source_frame.geometry.visible_rect.width);
+	EXPECT_EQ(packet.source_frame.height, packet.source_frame.geometry.visible_rect.height);
+	EXPECT_EQ(0, packet.source_frame.geometry.rotation);
+	EXPECT_FALSE(packet.source_frame.geometry.display_vflip);
+	EXPECT_DOUBLE_EQ(1.25, packet.source_frame.geometry.pixel_aspect_ratio);
+	EXPECT_TRUE(packet.has_subtitle_overlay);
+}
+
+TEST(async_video_provider, native_source_mode_keeps_native_frame_for_display_vflip_source_only_display_path) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
+	video->native_geometry = MakeDefaultSourceFrameGeometry(2, 2);
+	video->native_geometry.display_vflip = true;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
+	auto packet = provider.GetRenderPacket(5, 5000);
+	EXPECT_EQ(SourceFrameOutputMode::Native, packet.source_frame.output_mode);
+	EXPECT_EQ(SourceFramePixelFormat::Unknown, packet.source_frame.pixel_format);
+	EXPECT_FALSE(static_cast<bool>(packet.source_frame_storage));
+	EXPECT_TRUE(static_cast<bool>(packet.source_frame_owner));
+	EXPECT_TRUE(packet.source_frame.geometry.display_vflip);
 }
 
 TEST(async_video_provider, preferred_source_modes_choose_native_for_overlay_path) {

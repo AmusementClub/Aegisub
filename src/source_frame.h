@@ -309,8 +309,37 @@ inline SourceFrameRect GetSourceFrameVisibleRect(SourceFrame const& frame) {
 	return GetSourceFrameVisibleRect(frame.geometry, frame.width, frame.height);
 }
 
+inline int NormalizeSourceFrameRotationDegrees(int rotation) {
+	int normalized = rotation % 360;
+	if (normalized < 0)
+		normalized += 360;
+	return normalized;
+}
+
+inline bool SourceFrameHasSupportedQuarterTurnRotation(SourceFrameGeometry const& geometry) {
+	switch (NormalizeSourceFrameRotationDegrees(geometry.rotation)) {
+		case 0:
+		case 90:
+		case 180:
+		case 270:
+			return true;
+		default:
+			return false;
+	}
+}
+
+inline bool SourceFrameHasSupportedQuarterTurnRotation(SourceFrame const& frame) {
+	return SourceFrameHasSupportedQuarterTurnRotation(frame.geometry);
+}
+
+inline bool SourceFrameHasUnbakedDisplayTransform(SourceFrame const& frame) {
+	return frame.output_mode == SourceFrameOutputMode::Native;
+}
+
 inline bool SourceFrameNeedsDisplayTransformFallback(SourceFrame const& frame) {
-	return frame.geometry.rotation != 0 || frame.geometry.display_vflip;
+	return !SourceFrameHasSupportedQuarterTurnRotation(frame)
+		|| (frame.geometry.display_vflip
+			&& NormalizeSourceFrameRotationDegrees(frame.geometry.rotation) != 0);
 }
 
 inline bool SourceFrameHasSubsampledChroma(SourceFrame const& frame) {
@@ -342,6 +371,14 @@ inline SourceFrame MakeSourceFrameView(VideoFrame const& frame, SourceFrame cons
 	view.native_format = reference.native_format;
 	view.chroma_location = reference.chroma_location;
 	view.geometry = reference.geometry;
+	return view;
+}
+
+inline SourceFrame MakeBakedSourceFrameView(VideoFrame const& frame, SourceFrame const& reference) {
+	auto view = MakeSourceFrameView(frame, reference.color);
+	view.native_format = reference.native_format;
+	view.chroma_location = reference.chroma_location;
+	view.geometry.pixel_aspect_ratio = reference.geometry.pixel_aspect_ratio;
 	return view;
 }
 

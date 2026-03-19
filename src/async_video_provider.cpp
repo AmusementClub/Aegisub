@@ -117,7 +117,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 	}
 	packet.time = time;
 
-	if (native_frame_needs_display_transform_fallback && !(raw || !subs_provider || !subs)) {
+	if (native_frame_needs_display_transform_fallback && !raw && subs_provider && subs) {
 		frame = acquire_buffer(source_buffers);
 
 		try {
@@ -127,7 +127,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 
 		packet.source_frame_storage = frame;
 		packet.source_frame_owner = frame;
-		packet.source_frame = MakeSourceFrameView(*frame, source_provider->GetColorMetadata());
+		packet.source_frame = MakeBakedSourceFrameView(*frame, packet.source_frame);
 		packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
 	}
 
@@ -192,8 +192,8 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 						{
 							0,
 							0,
-							static_cast<int>(frame->width),
-							static_cast<int>(frame->height)
+							packet.source_frame.width,
+							packet.source_frame.height
 						}
 					};
 				}

@@ -111,6 +111,103 @@ TEST(source_frame_overlay, render_canvas_layout_uses_visible_rect_as_output_canv
 	EXPECT_EQ(-1, layout.offset_y);
 }
 
+TEST(source_frame_overlay, source_frame_rotation_helpers_normalize_to_supported_display_turns) {
+	EXPECT_EQ(0, NormalizeSourceFrameRotationDegrees(0));
+	EXPECT_EQ(90, NormalizeSourceFrameRotationDegrees(450));
+	EXPECT_EQ(270, NormalizeSourceFrameRotationDegrees(-90));
+
+	SourceFrameGeometry geometry = MakeDefaultSourceFrameGeometry(4, 3);
+	geometry.rotation = 270;
+	EXPECT_TRUE(SourceFrameHasSupportedQuarterTurnRotation(geometry));
+	geometry.rotation = 45;
+	EXPECT_FALSE(SourceFrameHasSupportedQuarterTurnRotation(geometry));
+}
+
+TEST(source_frame_overlay, display_transform_fallback_only_triggers_for_unsupported_rotation_or_vflip) {
+	VideoFrame frame;
+	frame.width = 4;
+	frame.height = 3;
+	frame.pitch = 16;
+	frame.flipped = false;
+	frame.data.resize(48);
+
+	auto source = MakeSourceFrameView(frame);
+	EXPECT_FALSE(SourceFrameNeedsDisplayTransformFallback(source));
+
+	source.geometry.rotation = 90;
+	EXPECT_FALSE(SourceFrameNeedsDisplayTransformFallback(source));
+
+	source.geometry.rotation = 45;
+	EXPECT_TRUE(SourceFrameNeedsDisplayTransformFallback(source));
+
+	source.geometry.rotation = 0;
+	source.geometry.display_vflip = true;
+	EXPECT_FALSE(SourceFrameNeedsDisplayTransformFallback(source));
+
+	source.geometry.rotation = 90;
+	EXPECT_TRUE(SourceFrameNeedsDisplayTransformFallback(source));
+}
+
+TEST(source_frame_overlay, render_output_layout_swaps_canvas_for_quarter_turn_rotation) {
+	SourceFrameGeometry geometry = MakeDefaultSourceFrameGeometry(4, 3);
+	geometry.rotation = 90;
+
+	auto layout = BuildVideoRenderOutputLayout(4, 3, geometry);
+	EXPECT_EQ(4, layout.source_width);
+	EXPECT_EQ(3, layout.source_height);
+	EXPECT_EQ(3, layout.output_width);
+	EXPECT_EQ(4, layout.output_height);
+	EXPECT_EQ(90, layout.rotation);
+	EXPECT_FALSE(layout.display_vflip);
+
+	geometry.rotation = 180;
+	geometry.display_vflip = true;
+	layout = BuildVideoRenderOutputLayout(4, 3, geometry);
+	EXPECT_EQ(4, layout.output_width);
+	EXPECT_EQ(3, layout.output_height);
+	EXPECT_EQ(180, layout.rotation);
+	EXPECT_TRUE(layout.display_vflip);
+}
+
+TEST(source_frame_overlay, render_output_point_transform_matches_ffms_compatible_rotation_direction) {
+	auto clockwise = BuildVideoRenderOutputLayout(4, 3, 90);
+	auto point = TransformVideoRenderPoint(clockwise, 0.0f, 0.0f);
+	EXPECT_FLOAT_EQ(3.0f, point.x);
+	EXPECT_FLOAT_EQ(0.0f, point.y);
+	point = TransformVideoRenderPoint(clockwise, 4.0f, 3.0f);
+	EXPECT_FLOAT_EQ(0.0f, point.x);
+	EXPECT_FLOAT_EQ(4.0f, point.y);
+
+	auto counter_clockwise = BuildVideoRenderOutputLayout(4, 3, 270);
+	point = TransformVideoRenderPoint(counter_clockwise, 0.0f, 0.0f);
+	EXPECT_FLOAT_EQ(0.0f, point.x);
+	EXPECT_FLOAT_EQ(4.0f, point.y);
+	point = TransformVideoRenderPoint(counter_clockwise, 4.0f, 3.0f);
+	EXPECT_FLOAT_EQ(3.0f, point.x);
+	EXPECT_FLOAT_EQ(0.0f, point.y);
+}
+
+TEST(source_frame_overlay, render_output_point_transform_applies_display_vflip_in_output_space) {
+	auto vflipped = BuildVideoRenderOutputLayout(4, 3);
+	vflipped.display_vflip = true;
+
+	auto point = TransformVideoRenderPoint(vflipped, 0.0f, 0.0f);
+	EXPECT_FLOAT_EQ(0.0f, point.x);
+	EXPECT_FLOAT_EQ(3.0f, point.y);
+	point = TransformVideoRenderPoint(vflipped, 4.0f, 3.0f);
+	EXPECT_FLOAT_EQ(4.0f, point.x);
+	EXPECT_FLOAT_EQ(0.0f, point.y);
+
+	auto rotated = BuildVideoRenderOutputLayout(4, 3, 90);
+	rotated.display_vflip = true;
+	point = TransformVideoRenderPoint(rotated, 0.0f, 0.0f);
+	EXPECT_FLOAT_EQ(3.0f, point.x);
+	EXPECT_FLOAT_EQ(4.0f, point.y);
+	point = TransformVideoRenderPoint(rotated, 4.0f, 3.0f);
+	EXPECT_FLOAT_EQ(0.0f, point.x);
+	EXPECT_FLOAT_EQ(0.0f, point.y);
+}
+
 TEST(source_frame_overlay, source_storage_overlay_adjusts_to_visible_rect_canvas) {
 	VideoFrame frame;
 	frame.width = 4;
@@ -207,7 +304,7 @@ TEST(source_frame_overlay, bgra_source_frame_can_carry_upstream_native_format_id
 	EXPECT_EQ(24, source.native_format.format_id);
 }
 
-TEST(source_frame_overlay, bgra_fallback_view_preserves_reference_metadata) {
+TEST(source_frame_overlay, baked_bgra_view_preserves_reference_identity_but_normalizes_display_geometry) {
 	VideoFrame source_storage;
 	source_storage.width = 4;
 	source_storage.height = 3;
@@ -218,25 +315,29 @@ TEST(source_frame_overlay, bgra_fallback_view_preserves_reference_metadata) {
 	auto reference = MakeSourceFrameView(source_storage, "TV.709");
 	reference.native_format = { SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, 42 };
 	reference.chroma_location = SourceFrameChromaLocation::TopCenter;
+	reference.geometry.rotation = 90;
+	reference.geometry.display_vflip = true;
 	reference.geometry.storage_width = 6;
 	reference.geometry.storage_height = 5;
 	reference.geometry.visible_rect = { 1, 1, 3, 2 };
 	reference.geometry.pixel_aspect_ratio = 1.5;
 
 	VideoFrame composited = source_storage;
-	auto fallback = MakeSourceFrameView(composited, reference);
+	auto fallback = MakeBakedSourceFrameView(composited, reference);
 
 	EXPECT_EQ(SourceFrameOutputMode::Bgra8, fallback.output_mode);
 	EXPECT_EQ("TV.709", fallback.color.matrix);
 	EXPECT_EQ(SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, fallback.native_format.format_namespace);
 	EXPECT_EQ(42, fallback.native_format.format_id);
 	EXPECT_EQ(SourceFrameChromaLocation::TopCenter, fallback.chroma_location);
-	EXPECT_EQ(6, fallback.geometry.storage_width);
-	EXPECT_EQ(5, fallback.geometry.storage_height);
-	EXPECT_EQ(1, fallback.geometry.visible_rect.x);
-	EXPECT_EQ(1, fallback.geometry.visible_rect.y);
-	EXPECT_EQ(3, fallback.geometry.visible_rect.width);
-	EXPECT_EQ(2, fallback.geometry.visible_rect.height);
+	EXPECT_EQ(4, fallback.geometry.storage_width);
+	EXPECT_EQ(3, fallback.geometry.storage_height);
+	EXPECT_EQ(0, fallback.geometry.visible_rect.x);
+	EXPECT_EQ(0, fallback.geometry.visible_rect.y);
+	EXPECT_EQ(4, fallback.geometry.visible_rect.width);
+	EXPECT_EQ(3, fallback.geometry.visible_rect.height);
+	EXPECT_EQ(0, fallback.geometry.rotation);
+	EXPECT_FALSE(fallback.geometry.display_vflip);
 	EXPECT_DOUBLE_EQ(1.5, fallback.geometry.pixel_aspect_ratio);
 }
 

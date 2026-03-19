@@ -43,6 +43,7 @@ public:
 	std::string real_color_space = "BT.709";
 	SourceFrameNativeFormatIdentity native_format = { };
 	SourceFrameChromaLocation native_chroma_location = SourceFrameChromaLocation::Unknown;
+	SourceFrameGeometry native_geometry = MakeDefaultSourceFrameGeometry(2, 2);
 	std::vector<SourceFrameOutputMode> available_modes = { SourceFrameOutputMode::Bgra8 };
 	SourceFrameOutputMode output_mode = SourceFrameOutputMode::Bgra8;
 
@@ -106,7 +107,7 @@ public:
 		frame.height = 2;
 		frame.flipped = false;
 		frame.plane_count = frame.format_info.plane_count;
-		frame.geometry = MakeDefaultSourceFrameGeometry(frame.width, frame.height);
+		frame.geometry = native_geometry;
 		frame.color = SourceFrameColorMetadataFromLegacyColorSpace(color_space);
 		frame.chroma_location = native_chroma_location;
 		frame.planes[0] = { storage->plane0.data(), 2, 2, 2 };
@@ -599,6 +600,28 @@ TEST(async_video_provider, native_source_mode_returns_native_source_frame_packet
 	EXPECT_FALSE(static_cast<bool>(packet.source_frame_storage));
 	EXPECT_FALSE(static_cast<bool>(packet.composited_frame_storage));
 	EXPECT_FALSE(packet.has_subtitle_overlay);
+}
+
+TEST(async_video_provider, native_source_mode_falls_back_to_bgra_when_display_transform_is_not_yet_supported) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
+	video->native_geometry = MakeDefaultSourceFrameGeometry(2, 2);
+	video->native_geometry.rotation = 90;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
+	auto packet = provider.GetRenderPacket(5, 5000, true);
+	EXPECT_EQ(SourceFrameOutputMode::Bgra8, packet.source_frame.output_mode);
+	EXPECT_EQ(SourceFramePixelFormat::Bgra8, packet.source_frame.pixel_format);
+	EXPECT_TRUE(static_cast<bool>(packet.source_frame_storage));
+	EXPECT_EQ(packet.source_frame.width, packet.source_frame.geometry.storage_width);
+	EXPECT_EQ(packet.source_frame.height, packet.source_frame.geometry.storage_height);
 }
 
 TEST(async_video_provider, preferred_source_modes_choose_native_for_overlay_path) {

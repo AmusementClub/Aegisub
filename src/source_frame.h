@@ -309,6 +309,10 @@ inline SourceFrameRect GetSourceFrameVisibleRect(SourceFrame const& frame) {
 	return GetSourceFrameVisibleRect(frame.geometry, frame.width, frame.height);
 }
 
+inline bool SourceFrameNeedsDisplayTransformFallback(SourceFrame const& frame) {
+	return frame.geometry.rotation != 0 || frame.geometry.display_vflip;
+}
+
 inline bool SourceFrameHasSubsampledChroma(SourceFrame const& frame) {
 	return SourceFrameHasSubsampledChroma(frame.format_info);
 }

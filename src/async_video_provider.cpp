@@ -98,6 +98,19 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		catch (VideoProviderError const& err) { throw VideoProviderErrorEvent(err); }
 		if (!packet.source_frame.IsValid())
 			throw VideoProviderErrorEvent(VideoDecodeError("Provider returned an invalid native source frame."));
+		if (SourceFrameNeedsDisplayTransformFallback(packet.source_frame)) {
+			frame = acquire_buffer(source_buffers);
+
+			try {
+				source_provider->GetFrame(frame_number, *frame);
+			}
+			catch (VideoProviderError const& err) { throw VideoProviderErrorEvent(err); }
+
+			packet.source_frame_storage = frame;
+			packet.source_frame_owner = frame;
+			packet.source_frame = MakeSourceFrameView(*frame, source_provider->GetColorMetadata());
+			packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
+		}
 	}
 	else {
 		frame = acquire_buffer(source_buffers);

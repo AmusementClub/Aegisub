@@ -41,6 +41,8 @@ inline enum pl_color_primaries InferPlaceboPrimaries(SourceFrameColorMetadata co
 	auto token = NormalizePlaceboColorToken(color.primaries);
 	if (PlaceboColorContainsToken(token, "2020"))
 		return PL_COLOR_PRIM_BT_2020;
+	if (PlaceboColorContainsToken(token, "FILM"))
+		return PL_COLOR_PRIM_FILM_C;
 	if (PlaceboColorContainsToken(token, "470M"))
 		return PL_COLOR_PRIM_BT_470M;
 	if (PlaceboColorContainsToken(token, "601525") || PlaceboColorContainsToken(token, "170M") || PlaceboColorContainsToken(token, "240M"))
@@ -60,6 +62,18 @@ inline enum pl_color_transfer InferPlaceboTransfer(SourceFrameColorMetadata cons
 		return PL_COLOR_TRC_LINEAR;
 	if (PlaceboColorContainsToken(token, "SRGB"))
 		return PL_COLOR_TRC_SRGB;
+	if (PlaceboColorContainsToken(token, "GAMMA18"))
+		return PL_COLOR_TRC_GAMMA18;
+	if (PlaceboColorContainsToken(token, "GAMMA20"))
+		return PL_COLOR_TRC_GAMMA20;
+	if (PlaceboColorContainsToken(token, "GAMMA22"))
+		return PL_COLOR_TRC_GAMMA22;
+	if (PlaceboColorContainsToken(token, "GAMMA24"))
+		return PL_COLOR_TRC_GAMMA24;
+	if (PlaceboColorContainsToken(token, "GAMMA26"))
+		return PL_COLOR_TRC_GAMMA26;
+	if (PlaceboColorContainsToken(token, "GAMMA28"))
+		return PL_COLOR_TRC_GAMMA28;
 	if (PlaceboColorContainsToken(token, "PQ") || PlaceboColorContainsToken(token, "2084"))
 		return PL_COLOR_TRC_PQ;
 	if (PlaceboColorContainsToken(token, "HLG"))
@@ -117,6 +131,44 @@ inline struct pl_color_space BuildPlaceboSourceFrameColorSpace(SourceFrame const
 	space.primaries = InferPlaceboPrimaries(frame.color);
 	space.transfer = InferPlaceboTransfer(frame.color);
 	return space;
+}
+
+inline enum pl_chroma_location InferPlaceboChromaLocation(SourceFrameChromaLocation chroma_location) {
+	switch (chroma_location) {
+		case SourceFrameChromaLocation::Left:
+			return PL_CHROMA_LEFT;
+		case SourceFrameChromaLocation::Center:
+			return PL_CHROMA_CENTER;
+		case SourceFrameChromaLocation::TopLeft:
+			return PL_CHROMA_TOP_LEFT;
+		case SourceFrameChromaLocation::TopCenter:
+			return PL_CHROMA_TOP_CENTER;
+		case SourceFrameChromaLocation::BottomLeft:
+			return PL_CHROMA_BOTTOM_LEFT;
+		case SourceFrameChromaLocation::BottomCenter:
+			return PL_CHROMA_BOTTOM_CENTER;
+		case SourceFrameChromaLocation::Unknown:
+		default:
+			return PL_CHROMA_UNKNOWN;
+	}
+}
+
+inline enum pl_chroma_location ResolvePlaceboChromaLocation(SourceFrame const& frame) {
+	if (frame.chroma_location != SourceFrameChromaLocation::Unknown)
+		return InferPlaceboChromaLocation(frame.chroma_location);
+
+	if (!SourceFrameHasSubsampledChroma(frame))
+		return PL_CHROMA_CENTER;
+
+	return frame.color.range == SourceFrameColorRange::Full
+		? PL_CHROMA_CENTER
+		: PL_CHROMA_LEFT;
+}
+
+inline bool PlaceboSourceFrameNeedsExplicitChromaLocation(SourceFrame const& frame) {
+	return frame.output_mode == SourceFrameOutputMode::Native
+		&& frame.format_info.color_family == SourceFrameColorFamily::YCbCr
+		&& SourceFrameHasSubsampledChroma(frame);
 }
 
 inline struct pl_color_repr BuildPlaceboRenderTargetRepr() {

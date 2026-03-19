@@ -221,6 +221,7 @@ void PlaceboRendererGL::DestroyImageResources() noexcept {
 	image_output_mode = SourceFrameOutputMode::Bgra8;
 	image_format_info = {};
 	image_color = {};
+	image_chroma_location = SourceFrameChromaLocation::Unknown;
 	has_frame = false;
 }
 
@@ -299,6 +300,10 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 			DestroyImageResources();
 			throw VideoOutRenderException("libplacebo could not describe the source frame for upload.");
 		}
+		if (frame.output_mode == SourceFrameOutputMode::Native && api->plane_data_align) {
+			struct pl_bit_encoding ignored_bits = {};
+			api->plane_data_align(&data, &ignored_bits);
+		}
 
 		struct pl_plane uploaded_plane = {};
 		auto& plane_state = image_planes[static_cast<size_t>(i)];
@@ -326,6 +331,7 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 	image_output_mode = frame.output_mode;
 	image_format_info = frame.format_info;
 	image_color = frame.color;
+	image_chroma_location = frame.chroma_location;
 	has_frame = true;
 }
 
@@ -362,6 +368,7 @@ void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width,
 	frame_description.output_mode = image_output_mode;
 	frame_description.format_info = image_format_info;
 	frame_description.color = image_color;
+	frame_description.chroma_location = image_chroma_location;
 
 	struct pl_frame image = {};
 	image.num_planes = image_plane_count;
@@ -381,6 +388,8 @@ void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width,
 	image.color = BuildPlaceboSourceFrameColorSpace(frame_description);
 	image.crop = FullRect(image_width, image_height);
 	image.rotation = PL_ROTATION_0;
+	if (api->frame_set_chroma_location && PlaceboSourceFrameNeedsExplicitChromaLocation(frame_description))
+		api->frame_set_chroma_location(&image, ResolvePlaceboChromaLocation(frame_description));
 
 	struct pl_plane target_plane = {};
 	target_plane.texture = target_texture;

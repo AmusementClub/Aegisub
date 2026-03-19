@@ -42,6 +42,7 @@ public:
 	std::string color_space = "BT.709";
 	std::string real_color_space = "BT.709";
 	SourceFrameNativeFormatIdentity native_format = { };
+	SourceFrameChromaLocation native_chroma_location = SourceFrameChromaLocation::Unknown;
 	std::vector<SourceFrameOutputMode> available_modes = { SourceFrameOutputMode::Bgra8 };
 	SourceFrameOutputMode output_mode = SourceFrameOutputMode::Bgra8;
 
@@ -106,6 +107,7 @@ public:
 		frame.flipped = false;
 		frame.plane_count = frame.format_info.plane_count;
 		frame.color = SourceFrameColorMetadataFromLegacyColorSpace(color_space);
+		frame.chroma_location = native_chroma_location;
 		frame.planes[0] = { storage->plane0.data(), 2, 2, 2 };
 		frame.planes[1] = { storage->plane1.data(), 4, 1, 1 };
 		owner = storage;
@@ -563,6 +565,7 @@ TEST(async_video_provider, native_source_mode_returns_native_source_frame_packet
 	auto state = std::make_shared<VideoProviderState>();
 	auto *video = new FakeVideoProvider(state);
 	video->native_format = { SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, 99 };
+	video->native_chroma_location = SourceFrameChromaLocation::TopCenter;
 	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
 	EventRecorder recorder;
 
@@ -576,6 +579,7 @@ TEST(async_video_provider, native_source_mode_returns_native_source_frame_packet
 	EXPECT_EQ(SourceFrameOutputMode::Native, packet.source_frame.output_mode);
 	EXPECT_EQ(SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat, packet.source_frame.native_format.format_namespace);
 	EXPECT_EQ(99, packet.source_frame.native_format.format_id);
+	EXPECT_EQ(SourceFrameChromaLocation::TopCenter, packet.source_frame.chroma_location);
 	EXPECT_TRUE(packet.source_frame.IsValid());
 	EXPECT_TRUE(static_cast<bool>(packet.source_frame_owner));
 	EXPECT_FALSE(static_cast<bool>(packet.source_frame_storage));

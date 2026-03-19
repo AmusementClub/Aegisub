@@ -83,8 +83,10 @@ void ResolveSymbols(agi::native::Library& library, Api& api) {
 	ResolveSymbol(library, api.renderer_flush_cache, "pl_renderer_flush_cache");
 	ResolveSymbol(library, api.opengl_wrap, "pl_opengl_wrap");
 	ResolveSymbol(library, api.plane_data_from_mask, "pl_plane_data_from_mask");
+	ResolveSymbol(library, api.plane_data_align, "pl_plane_data_align");
 	ResolveSymbol(library, api.upload_plane, "pl_upload_plane");
 	ResolveSymbol(library, api.tex_destroy, "pl_tex_destroy");
+	ResolveSymbol(library, api.frame_set_chroma_location, "pl_frame_set_chroma_location");
 	ResolveSymbol(library, api.render_image, "pl_render_image");
 }
 

@@ -44,6 +44,8 @@ if(GTEST_FOUND)
         tests/tests/color.cpp
         tests/tests/compatibility_overlay_buffer_plan.cpp
         tests/tests/dialogue_lexer.cpp
+        tests/tests/ffms_color_metadata.cpp
+        tests/tests/ffms_chroma_location.cpp
         tests/tests/ffms_native_format_info.cpp
         tests/tests/format.cpp
         tests/tests/fs.cpp
@@ -127,6 +129,19 @@ if(WITH_LIBPLACEBO)
     target_compile_definitions(placebo-runtime-smoke PRIVATE CMAKE_BUILD WITH_LIBPLACEBO)
     target_include_directories(placebo-runtime-smoke PRIVATE ${LibPlacebo_INCLUDE_DIR})
     target_link_libraries(placebo-runtime-smoke PRIVATE libaegisub)
+
+    add_executable(placebo-render-bench EXCLUDE_FROM_ALL
+        tests/smoke/placebo_render_bench.cpp
+        src/native_library.cpp
+        src/video_renderer_placebo_gl.cpp
+        src/video_renderer_placebo_runtime.cpp
+    )
+    target_compile_definitions(placebo-render-bench PRIVATE CMAKE_BUILD WITH_LIBPLACEBO)
+    target_include_directories(placebo-render-bench PRIVATE ${LibPlacebo_INCLUDE_DIR})
+    target_link_libraries(placebo-render-bench PRIVATE libaegisub OpenGL::GL)
+    if(WIN32)
+        target_link_libraries(placebo-render-bench PRIVATE Psapi)
+    endif()
 endif()
 
 add_custom_target(test DEPENDS test-automation test-aegisub)

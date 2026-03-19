@@ -33,6 +33,8 @@
 ///
 
 #ifdef WITH_FFMS2
+#include "ffms_color_metadata.h"
+#include "ffms_chroma_location.h"
 #include "ffms_native_format_info.h"
 #include "ffmpegsource_common.h"
 #include "include/aegisub/video_provider.h"
@@ -76,8 +78,12 @@ class FFmpegSourceVideoProvider final : public VideoProvider, FFmpegSourceProvid
 	int Height = -1;                ///< height in pixels
 	int CS = -1;                    ///< Reported colorspace of first frame
 	int CR = -1;                    ///< Reported colorrange of first frame
+	int CP = -1;                    ///< Reported color primaries of first frame
+	int TC = -1;                    ///< Reported transfer characteristics of first frame
 	int RealCS = -1;                ///< Original colorspace before any matrix override
 	int RealCR = -1;                ///< Original colorrange before conversion to RGB
+	int RealCP = -1;                ///< Original color primaries before any override
+	int RealTC = -1;                ///< Original transfer characteristics before any override
 	int NativePixelFormat = -1;     ///< Original FFmpeg AVPixelFormat reported by FFMS2
 	SourceFrameOutputMode OutputMode = SourceFrameOutputMode::Bgra8;
 	bool NativeOutputSupported = false;
@@ -160,37 +166,8 @@ std::string colormatrix_description(int cs, int cr) {
 	}
 }
 
-SourceFrameColorMetadata ffms_color_metadata(int cs, int cr, std::string const& matrix) {
-	auto color = SourceFrameColorMetadataFromLegacyColorSpace(matrix);
-	color.range = cr == FFMS_CR_JPEG
-		? SourceFrameColorRange::Full
-		: SourceFrameColorRange::Limited;
-
-	switch (cs) {
-		case AGI_CS_RGB:
-			color.matrix = "None";
-			color.primaries.clear();
-			return color;
-		case AGI_CS_BT709:
-			color.primaries = "BT.709";
-			return color;
-		case AGI_CS_BT470BG:
-			color.primaries = "BT.601-625";
-			return color;
-		case AGI_CS_SMPTE170M:
-			color.primaries = "BT.601-525";
-			return color;
-		case AGI_CS_SMPTE240M:
-			color.primaries = "SMPTE-240M";
-			return color;
-		case AGI_CS_BT2020_NCL:
-		case AGI_CS_BT2020_CL:
-			color.primaries = "BT.2020";
-			return color;
-		default:
-			(void)cr;
-			return color;
-	}
+SourceFrameColorMetadata ffms_color_metadata(int cs, int cr, int cp, int tc, std::string const& matrix) {
+	return ffms::MapColorMetadata(cs, cr, cp, tc, matrix);
 }
 
 FFMSNativeFormatIds ResolveFFMSNativeFormatIds() {
@@ -331,8 +308,12 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 
 	int VideoCS = CS = TempFrame->ColorSpace;
 	CR = TempFrame->ColorRange;
+	CP = TempFrame->ColorPrimaries;
+	TC = TempFrame->TransferCharateristics;
 	RealCS = VideoCS;
 	RealCR = CR;
+	RealCP = CP;
+	RealTC = TC;
 	NativePixelFormat = TempFrame->EncodedPixelFormat >= 0
 		? TempFrame->EncodedPixelFormat
 		: TempFrame->ConvertedPixelFormat;
@@ -506,7 +487,13 @@ bool FFmpegSourceVideoProvider::GetNativeFrame(int n, SourceFrame& out, std::sha
 	out.height = frame_height;
 	out.flipped = false;
 	out.plane_count = format_info.plane_count;
-	out.color = GetColorMetadata();
+	out.color = ffms_color_metadata(
+		frame->ColorSpace >= 0 ? frame->ColorSpace : CS,
+		frame->ColorRange >= 0 ? frame->ColorRange : CR,
+		frame->ColorPrimaries >= 0 ? frame->ColorPrimaries : CP,
+		frame->TransferCharateristics >= 0 ? frame->TransferCharateristics : TC,
+		ColorSpace);
+	out.chroma_location = ffms::MapChromaLocation(frame->ChromaLocation);
 
 	for (int i = 0; i < out.plane_count; ++i) {
 		int plane_width = GetSourceFramePlaneWidth(format_info, frame_width, i);
@@ -542,14 +529,14 @@ bool FFmpegSourceVideoProvider::GetNativeFrame(int n, SourceFrame& out, std::sha
 }
 
 SourceFrameColorMetadata FFmpegSourceVideoProvider::GetColorMetadata() const {
-	auto color = ffms_color_metadata(CS, CR, ColorSpace);
+	auto color = ffms_color_metadata(CS, CR, CP, TC, ColorSpace);
 	if (OutputMode == SourceFrameOutputMode::Bgra8)
 		color.range = SourceFrameColorRange::Full;
 	return color;
 }
 
 SourceFrameColorMetadata FFmpegSourceVideoProvider::GetRealColorMetadata() const {
-	auto color = ffms_color_metadata(RealCS, RealCR, RealColorSpace);
+	auto color = ffms_color_metadata(RealCS, RealCR, RealCP, RealTC, RealColorSpace);
 	if (OutputMode == SourceFrameOutputMode::Bgra8)
 		color.range = SourceFrameColorRange::Full;
 	return color;

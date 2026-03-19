@@ -42,8 +42,10 @@ struct Api {
 	decltype(&pl_renderer_flush_cache) renderer_flush_cache = nullptr;
 	decltype(&pl_opengl_wrap) opengl_wrap = nullptr;
 	decltype(&pl_plane_data_from_mask) plane_data_from_mask = nullptr;
+	decltype(&pl_plane_data_align) plane_data_align = nullptr;
 	decltype(&pl_upload_plane) upload_plane = nullptr;
 	decltype(&pl_tex_destroy) tex_destroy = nullptr;
+	decltype(&pl_frame_set_chroma_location) frame_set_chroma_location = nullptr;
 	decltype(&pl_render_image) render_image = nullptr;
 };
 

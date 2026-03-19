@@ -67,6 +67,8 @@ TEST(source_frame_overlay, source_frame_view_reflects_video_frame) {
 	EXPECT_EQ(frame.data.data(), source.planes[0].data);
 	EXPECT_EQ(16, source.planes[0].stride);
 	EXPECT_EQ("BT.709", source.color.matrix);
+	EXPECT_EQ(SourceFrameChromaLocation::Unknown, source.chroma_location);
+	EXPECT_FALSE(SourceFrameHasSubsampledChroma(source));
 	EXPECT_EQ(99, source.planes[0].data[5]);
 }
 
@@ -121,6 +123,7 @@ TEST(source_frame_overlay, source_frame_format_info_reports_semiplanar_and_plana
 	auto nv12 = MakeSemiplanar420SourceFrameFormatInfo(8, 1, 2);
 	EXPECT_EQ(SourceFrameColorFamily::YCbCr, nv12.color_family);
 	EXPECT_EQ(2, nv12.plane_count);
+	EXPECT_TRUE(SourceFrameHasSubsampledChroma(nv12));
 	EXPECT_EQ(2, nv12.planes[1].components_per_sample);
 	EXPECT_EQ(2, nv12.planes[1].bytes_per_sample);
 	EXPECT_EQ(0, nv12.planes[1].component_shift[0]);
@@ -129,6 +132,7 @@ TEST(source_frame_overlay, source_frame_format_info_reports_semiplanar_and_plana
 	auto ycbcr420p10 = MakePlanarYCbCrSourceFrameFormatInfo(2, 2, 10, 2);
 	EXPECT_EQ(SourceFrameColorFamily::YCbCr, ycbcr420p10.color_family);
 	EXPECT_EQ(3, ycbcr420p10.plane_count);
+	EXPECT_TRUE(SourceFrameHasSubsampledChroma(ycbcr420p10));
 	EXPECT_EQ(2, ycbcr420p10.planes[0].bytes_per_sample);
 	EXPECT_EQ(10, ycbcr420p10.planes[2].bits_per_component);
 	EXPECT_EQ(0, ycbcr420p10.planes[0].component_shift[0]);

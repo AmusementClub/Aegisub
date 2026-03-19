@@ -41,6 +41,16 @@ enum class SourceFrameColorFamily {
 	YCbCr
 };
 
+enum class SourceFrameChromaLocation {
+	Unknown,
+	Left,
+	Center,
+	TopLeft,
+	TopCenter,
+	BottomLeft,
+	BottomCenter
+};
+
 struct SourceFramePlaneView {
 	unsigned char const* data = nullptr;
 	ptrdiff_t stride = 0;
@@ -120,6 +130,19 @@ inline bool IsValidSourceFrameFormatInfo(SourceFrameFormatInfo const& info) {
 	return true;
 }
 
+inline bool SourceFrameHasSubsampledChroma(SourceFrameFormatInfo const& info) {
+	if (info.color_family != SourceFrameColorFamily::YCbCr || info.plane_count <= 1)
+		return false;
+
+	for (int i = 1; i < info.plane_count; ++i) {
+		auto const& plane = info.planes[static_cast<size_t>(i)];
+		if (plane.width_divisor > 1 || plane.height_divisor > 1)
+			return true;
+	}
+
+	return false;
+}
+
 inline SourceFrameFormatInfo MakeBgra8SourceFrameFormatInfo() {
 	return { SourceFrameColorFamily::Rgb, 1, { {
 		{ 1, 1, 4, 4, 8, { { 16, 8, 0, 24 } } }, { }, { }, { }
@@ -191,6 +214,7 @@ struct SourceFrame {
 	int plane_count = 0;
 	std::array<SourceFramePlaneView, 4> planes = { };
 	SourceFrameColorMetadata color;
+	SourceFrameChromaLocation chroma_location = SourceFrameChromaLocation::Unknown;
 
 	bool IsValid() const {
 		if (pixel_format == SourceFramePixelFormat::Unknown && output_mode != SourceFrameOutputMode::Native)
@@ -230,6 +254,10 @@ struct SourceFrame {
 		return true;
 	}
 };
+
+inline bool SourceFrameHasSubsampledChroma(SourceFrame const& frame) {
+	return SourceFrameHasSubsampledChroma(frame.format_info);
+}
 
 inline SourceFrame MakeSourceFrameView(VideoFrame const& frame, SourceFrameColorMetadata color = {}) {
 	SourceFrame view;

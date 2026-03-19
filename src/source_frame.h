@@ -337,9 +337,7 @@ inline bool SourceFrameHasUnbakedDisplayTransform(SourceFrame const& frame) {
 }
 
 inline bool SourceFrameNeedsDisplayTransformFallback(SourceFrame const& frame) {
-	return !SourceFrameHasSupportedQuarterTurnRotation(frame)
-		|| (frame.geometry.display_vflip
-			&& NormalizeSourceFrameRotationDegrees(frame.geometry.rotation) != 0);
+	return !SourceFrameHasSupportedQuarterTurnRotation(frame);
 }
 
 inline bool SourceFrameHasSubsampledChroma(SourceFrame const& frame) {

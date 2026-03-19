@@ -145,7 +145,7 @@ TEST(source_frame_overlay, display_transform_fallback_only_triggers_for_unsuppor
 	EXPECT_FALSE(SourceFrameNeedsDisplayTransformFallback(source));
 
 	source.geometry.rotation = 90;
-	EXPECT_TRUE(SourceFrameNeedsDisplayTransformFallback(source));
+	EXPECT_FALSE(SourceFrameNeedsDisplayTransformFallback(source));
 }
 
 TEST(source_frame_overlay, render_output_layout_swaps_canvas_for_quarter_turn_rotation) {

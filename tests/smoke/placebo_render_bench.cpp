@@ -439,6 +439,54 @@ std::vector<unsigned char> FlipRgbaTopLeftVertically(
 	return flipped;
 }
 
+std::vector<unsigned char> TransformRgbaTopLeftDisplay(
+	std::vector<unsigned char> const& pixels,
+	int width,
+	int height,
+	int rotation_degrees,
+	bool display_vflip) {
+	int rotation = NormalizeSourceFrameRotationDegrees(rotation_degrees);
+	int out_width = (rotation == 90 || rotation == 270) ? height : width;
+	int out_height = (rotation == 90 || rotation == 270) ? width : height;
+	std::vector<unsigned char> transformed(static_cast<std::size_t>(out_width) * out_height * 4, 0);
+
+	auto copy_pixel = [&](int src_x, int src_y, int dst_x, int dst_y) {
+		auto const* src = pixels.data() + (static_cast<std::size_t>(src_y) * width + src_x) * 4;
+		auto* dst = transformed.data() + (static_cast<std::size_t>(dst_y) * out_width + dst_x) * 4;
+		std::memcpy(dst, src, 4);
+	};
+
+	for (int src_y = 0; src_y < height; ++src_y) {
+		for (int src_x = 0; src_x < width; ++src_x) {
+			int dst_x = src_x;
+			int dst_y = src_y;
+			switch (rotation) {
+				case 90:
+					dst_x = height - 1 - src_y;
+					dst_y = src_x;
+					break;
+				case 180:
+					dst_x = width - 1 - src_x;
+					dst_y = height - 1 - src_y;
+					break;
+				case 270:
+					dst_x = src_y;
+					dst_y = width - 1 - src_x;
+					break;
+				default:
+					break;
+			}
+
+			if (display_vflip)
+				dst_y = out_height - 1 - dst_y;
+
+			copy_pixel(src_x, src_y, dst_x, dst_y);
+		}
+	}
+
+	return transformed;
+}
+
 FrameScenario MakeYuv420p8Scenario(int width, int height) {
 	FrameScenario scenario;
 	scenario.name = "yuv420p8";
@@ -800,9 +848,16 @@ bool RunDisplayTransformValidation() {
 	yuv420p8.frame.geometry.display_vflip = true;
 	auto yuv420p10 = MakeYuv420p10Scenario(128, 72);
 	yuv420p10.frame.geometry.display_vflip = true;
+	auto yuv420p8_rotated_vflipped = MakeYuv420p8Scenario(128, 72);
+	yuv420p8_rotated_vflipped.frame.geometry.rotation = 90;
+	yuv420p8_rotated_vflipped.frame.geometry.display_vflip = true;
+	auto yuv420p10_rotated_vflipped = MakeYuv420p10Scenario(128, 72);
+	yuv420p10_rotated_vflipped.frame.geometry.rotation = 90;
+	yuv420p10_rotated_vflipped.frame.geometry.display_vflip = true;
 	auto expected_bgra_pixels = MakeExpectedRgbaImage(128, 72);
 
 	HiddenGLWindow window(128, 72);
+	HiddenGLWindow rotated_window(72, 128);
 	PlaceboRendererGL renderer;
 
 	auto yuv420p8_unflipped_pixels = RenderFrameToRgbaTopLeft(
@@ -817,20 +872,48 @@ bool RunDisplayTransformValidation() {
 	std::cout << "  rendered yuv420p8 display-vflip sample\n";
 	auto yuv420p10_pixels = RenderFrameToRgbaTopLeft(window, renderer, yuv420p10.frame, yuv420p10.width, yuv420p10.height);
 	std::cout << "  rendered yuv420p10 display-vflip sample\n";
+	auto yuv420p8_rotated_vflipped_pixels = RenderFrameToRgbaTopLeft(
+		rotated_window,
+		renderer,
+		yuv420p8_rotated_vflipped.frame,
+		yuv420p8_rotated_vflipped.height,
+		yuv420p8_rotated_vflipped.width);
+	std::cout << "  rendered yuv420p8 rotation+display-vflip sample\n";
+	auto yuv420p10_rotated_vflipped_pixels = RenderFrameToRgbaTopLeft(
+		rotated_window,
+		renderer,
+		yuv420p10_rotated_vflipped.frame,
+		yuv420p10_rotated_vflipped.height,
+		yuv420p10_rotated_vflipped.width);
+	std::cout << "  rendered yuv420p10 rotation+display-vflip sample\n";
 	// Subsampled YUV cannot be validated against a vertically flipped "ideal RGB"
 	// image because flipping after reconstruction shifts the effective chroma
 	// sampling contract. Compare against the same-format unflipped render
 	// baseline, then flip that resolved output in output space instead.
 	auto expected_yuv420p8_flipped = FlipRgbaTopLeftVertically(yuv420p8_unflipped_pixels, 128, 72);
 	auto expected_yuv420p10_flipped = FlipRgbaTopLeftVertically(yuv420p10_unflipped_pixels, 128, 72);
+	auto expected_yuv420p8_rotated_vflipped = TransformRgbaTopLeftDisplay(
+		yuv420p8_unflipped_pixels,
+		128,
+		72,
+		90,
+		true);
+	auto expected_yuv420p10_rotated_vflipped = TransformRgbaTopLeftDisplay(
+		yuv420p10_unflipped_pixels,
+		128,
+		72,
+		90,
+		true);
 
-	std::array<ValidationResult, 3> results = {{
+	std::array<ValidationResult, 5> results = {{
 		// Legacy BGRA frames are already display-oriented before upload. Their
 		// display geometry may still carry reference metadata, but placebo should
 		// not apply rotation/vflip a second time on this path.
 		CompareRgbImages("bgra8/baked", expected_bgra_pixels, bgra_pixels, 128, 72),
 		CompareRgbImages("yuv420p8/vf", expected_yuv420p8_flipped, yuv420p8_pixels, 128, 72, true),
-		CompareRgbImages("yuv420p10/vf", expected_yuv420p10_flipped, yuv420p10_pixels, 128, 72, true)
+		CompareRgbImages("yuv420p10/vf", expected_yuv420p10_flipped, yuv420p10_pixels, 128, 72, true),
+		CompareRgbImages("yuv420p8/r90vf", expected_yuv420p8_rotated_vflipped, yuv420p8_rotated_vflipped_pixels, 72, 128, true),
+		CompareRgbImages("yuv420p10/r90vf", expected_yuv420p10_rotated_vflipped, yuv420p10_rotated_vflipped_pixels, 72, 128, true)
 	}};
 
 	bool passed = true;

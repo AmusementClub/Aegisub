@@ -702,7 +702,7 @@ TEST(async_video_provider, native_source_mode_keeps_native_frame_for_display_vfl
 	EXPECT_TRUE(packet.source_frame.geometry.display_vflip);
 }
 
-TEST(async_video_provider, native_source_mode_still_falls_back_to_bgra_for_rotation_plus_display_vflip_overlay_path) {
+TEST(async_video_provider, native_source_mode_keeps_native_frame_for_rotation_plus_display_vflip_overlay_path) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *video = new FakeVideoProvider(state);
 	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
@@ -723,15 +723,12 @@ TEST(async_video_provider, native_source_mode_still_falls_back_to_bgra_for_rotat
 
 	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
 	auto packet = provider.GetRenderPacket(5, 5000);
-	EXPECT_EQ(SourceFrameOutputMode::Bgra8, packet.source_frame.output_mode);
-	EXPECT_EQ(SourceFramePixelFormat::Bgra8, packet.source_frame.pixel_format);
-	EXPECT_TRUE(static_cast<bool>(packet.source_frame_storage));
-	EXPECT_EQ(packet.source_frame.width, packet.source_frame.geometry.storage_width);
-	EXPECT_EQ(packet.source_frame.height, packet.source_frame.geometry.storage_height);
-	EXPECT_EQ(packet.source_frame.width, packet.source_frame.geometry.visible_rect.width);
-	EXPECT_EQ(packet.source_frame.height, packet.source_frame.geometry.visible_rect.height);
-	EXPECT_EQ(0, packet.source_frame.geometry.rotation);
-	EXPECT_FALSE(packet.source_frame.geometry.display_vflip);
+	EXPECT_EQ(SourceFrameOutputMode::Native, packet.source_frame.output_mode);
+	EXPECT_EQ(SourceFramePixelFormat::Unknown, packet.source_frame.pixel_format);
+	EXPECT_FALSE(static_cast<bool>(packet.source_frame_storage));
+	EXPECT_TRUE(static_cast<bool>(packet.source_frame_owner));
+	EXPECT_EQ(90, packet.source_frame.geometry.rotation);
+	EXPECT_TRUE(packet.source_frame.geometry.display_vflip);
 	EXPECT_DOUBLE_EQ(1.25, packet.source_frame.geometry.pixel_aspect_ratio);
 	EXPECT_TRUE(packet.has_subtitle_overlay);
 }

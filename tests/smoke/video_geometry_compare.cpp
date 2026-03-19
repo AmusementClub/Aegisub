@@ -709,6 +709,14 @@ bool GeometryMatchesExpectation(SourceFrameGeometry const& geometry, SourceGeome
 		&& NearlyEqual(geometry.pixel_aspect_ratio, expected.pixel_aspect_ratio);
 }
 
+char const* GeometryStatusLabel(SampleResult const& result) {
+	if (!result.provider_display_contract_ok)
+		return "bad";
+	if (!result.has_geometry_expectation)
+		return "observed";
+	return result.geometry_matches_expectation ? "ok" : "bad";
+}
+
 std::string JsonEscape(std::string const& value) {
 	std::string escaped;
 	escaped.reserve(value.size());
@@ -723,6 +731,12 @@ std::string JsonEscape(std::string const& value) {
 		}
 	}
 	return escaped;
+}
+
+std::string FormatDouble(double value, int precision = 6) {
+	std::ostringstream out;
+	out << std::setprecision(precision) << value;
+	return out.str();
 }
 
 void WriteReport(std::filesystem::path const& report_path, std::vector<SampleResult> const& results) {
@@ -749,6 +763,7 @@ void WriteReport(std::filesystem::path const& report_path, std::vector<SampleRes
 		out << "      \"display_aspect_ratio\": " << std::setprecision(12) << sample.display_aspect_ratio << ",\n";
 		out << "      \"viewport_400\": [" << sample.viewport_400.viewport_left << ", " << sample.viewport_400.viewport_top << ", " << sample.viewport_400.viewport_width << ", " << sample.viewport_400.viewport_height << "],\n";
 		out << "      \"has_geometry_expectation\": " << (sample.has_geometry_expectation ? "true" : "false") << ",\n";
+		out << "      \"geometry_status\": \"" << GeometryStatusLabel(sample) << "\",\n";
 		out << "      \"geometry_matches_expectation\": " << (sample.geometry_matches_expectation ? "true" : "false") << ",\n";
 		out << "      \"provider_display_contract_ok\": " << (sample.provider_display_contract_ok ? "true" : "false") << ",\n";
 		out << "      \"video_compare\": {\n";
@@ -774,6 +789,29 @@ void WriteReport(std::filesystem::path const& report_path, std::vector<SampleRes
 		out << "    }" << (i + 1 == results.size() ? "\n" : ",\n");
 	}
 	out << "  ]\n}\n";
+}
+
+void WriteMatrix(std::filesystem::path const& matrix_path, std::vector<SampleResult> const& results) {
+	std::ofstream out(matrix_path, std::ios::binary | std::ios::trunc);
+	out << "# Video Geometry Compare Matrix\n\n";
+	out << "| Sample | Geometry | Provider | DAR | Visible Rect | Rot | VFlip | PAR | Video Stable Max | Overlay Stable Max | Overlay Bounds | Result |\n";
+	out << "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n";
+	for (auto const& sample : results) {
+		out
+			<< "| " << sample.sample_name
+			<< " | " << GeometryStatusLabel(sample)
+			<< " | " << sample.provider_width << "x" << sample.provider_height
+			<< " | " << FormatDouble(sample.provider_dar)
+			<< " | " << sample.native_geometry.visible_rect.x << "," << sample.native_geometry.visible_rect.y << "," << sample.native_geometry.visible_rect.width << "," << sample.native_geometry.visible_rect.height
+			<< " | " << sample.native_geometry.rotation
+			<< " | " << (sample.native_geometry.display_vflip ? "true" : "false")
+			<< " | " << FormatDouble(sample.native_geometry.pixel_aspect_ratio)
+			<< " | " << sample.video_compare_stable.max_abs
+			<< " | " << sample.overlay_compare_stable.max_abs
+			<< " | " << (sample.overlay_bounds_match ? "match" : "mismatch")
+			<< " | " << (sample.passed ? "PASS" : "FAIL")
+			<< " |\n";
+	}
 }
 
 SampleResult RunSample(
@@ -851,14 +889,6 @@ SampleResult RunSample(
 		result.overlay_compare_ok;
 	return result;
 }
-
-char const* GeometryStatusLabel(SampleResult const& result) {
-	if (!result.provider_display_contract_ok)
-		return "bad";
-	if (!result.has_geometry_expectation)
-		return "observed";
-	return result.geometry_matches_expectation ? "ok" : "bad";
-}
 }
 
 int main(int argc, char** argv) try {
@@ -872,6 +902,7 @@ int main(int argc, char** argv) try {
 	std::filesystem::path samples_dir;
 	std::filesystem::path manifest_path;
 	std::filesystem::path report_path;
+	std::filesystem::path matrix_path;
 	for (int i = 1; i < argc; ++i) {
 		std::string arg = argv[i];
 		if (arg == "--samples-dir" && i + 1 < argc)
@@ -880,10 +911,12 @@ int main(int argc, char** argv) try {
 			manifest_path = argv[++i];
 		else if (arg == "--report" && i + 1 < argc)
 			report_path = argv[++i];
+		else if (arg == "--matrix" && i + 1 < argc)
+			matrix_path = argv[++i];
 	}
 
 	if (samples_dir.empty() == manifest_path.empty())
-		throw std::runtime_error("Usage: video-geometry-compare (--samples-dir <dir> | --manifest <file>) [--report <json>]");
+		throw std::runtime_error("Usage: video-geometry-compare (--samples-dir <dir> | --manifest <file>) [--report <json>] [--matrix <md>]");
 
 	if (!samples_dir.empty())
 		samples_dir = std::filesystem::absolute(samples_dir);
@@ -891,9 +924,13 @@ int main(int argc, char** argv) try {
 		manifest_path = std::filesystem::absolute(manifest_path);
 	if (!report_path.empty())
 		report_path = std::filesystem::absolute(report_path);
+	if (!matrix_path.empty())
+		matrix_path = std::filesystem::absolute(matrix_path);
 
 	if (!report_path.empty())
 		std::filesystem::create_directories(report_path.parent_path());
+	if (!matrix_path.empty())
+		std::filesystem::create_directories(matrix_path.parent_path());
 
 	agi::log::log = new agi::log::LogSink;
 	std::filesystem::path work_root;
@@ -941,6 +978,8 @@ int main(int argc, char** argv) try {
 
 	if (!report_path.empty())
 		WriteReport(report_path, results);
+	if (!matrix_path.empty())
+		WriteMatrix(matrix_path, results);
 
 	delete agi::log::log;
 	agi::log::log = nullptr;

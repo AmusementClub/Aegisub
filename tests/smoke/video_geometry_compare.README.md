@@ -3,10 +3,10 @@
 `video-geometry-compare` now supports two input modes:
 
 1. Built-in generated sample mode
-   - `video-geometry-compare --samples-dir <dir> --report <json>`
+   - `video-geometry-compare --samples-dir <dir> --report <json> --matrix <md>`
    - Uses the repository's built-in synthetic sample set and pinned expectations.
 2. Local manifest mode
-   - `video-geometry-compare --manifest <txt> --report <json>`
+   - `video-geometry-compare --manifest <txt> --report <json> --matrix <md>`
    - Uses a local text manifest of real sample files.
 
 ## Manifest format
@@ -26,5 +26,7 @@ Use [video_geometry_compare_manifest.example.txt](video_geometry_compare_manifes
   - provider width/height/DAR against computed display output
   - BGRA vs native video parity
   - `SourceStorage` vs `SourceVisible` overlay parity
+- `--report` writes full JSON diagnostics.
+- `--matrix` writes a compact Markdown behavior matrix suitable for freezing observed real-sample behavior in a local `obj/` analysis directory.
 
 That makes manifest mode suitable for collecting and freezing real-world FFMS/provider behavior before changing geometry consumption logic.

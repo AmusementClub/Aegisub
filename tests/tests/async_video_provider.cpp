@@ -602,7 +602,7 @@ TEST(async_video_provider, native_source_mode_returns_native_source_frame_packet
 	EXPECT_FALSE(packet.has_subtitle_overlay);
 }
 
-TEST(async_video_provider, native_source_mode_falls_back_to_bgra_when_display_transform_is_not_yet_supported) {
+TEST(async_video_provider, native_source_mode_keeps_native_frame_for_source_only_rotation_path) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *video = new FakeVideoProvider(state);
 	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
@@ -617,6 +617,34 @@ TEST(async_video_provider, native_source_mode_falls_back_to_bgra_when_display_tr
 
 	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
 	auto packet = provider.GetRenderPacket(5, 5000, true);
+	EXPECT_EQ(SourceFrameOutputMode::Native, packet.source_frame.output_mode);
+	EXPECT_EQ(SourceFramePixelFormat::Unknown, packet.source_frame.pixel_format);
+	EXPECT_FALSE(static_cast<bool>(packet.source_frame_storage));
+	EXPECT_TRUE(static_cast<bool>(packet.source_frame_owner));
+	EXPECT_EQ(90, packet.source_frame.geometry.rotation);
+	EXPECT_EQ(packet.source_frame.width, packet.source_frame.geometry.storage_width);
+	EXPECT_EQ(packet.source_frame.height, packet.source_frame.geometry.storage_height);
+}
+
+TEST(async_video_provider, native_source_mode_falls_back_to_bgra_when_subtitle_path_cannot_yet_follow_rotation) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
+	video->native_geometry = MakeDefaultSourceFrameGeometry(2, 2);
+	video->native_geometry.rotation = 90;
+	auto *subs = new FakeOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto subtitle_file = MakeSubtitleFile("overlay");
+	provider.LoadSubtitles(&subtitle_file);
+
+	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
+	auto packet = provider.GetRenderPacket(5, 5000);
 	EXPECT_EQ(SourceFrameOutputMode::Bgra8, packet.source_frame.output_mode);
 	EXPECT_EQ(SourceFramePixelFormat::Bgra8, packet.source_frame.pixel_format);
 	EXPECT_TRUE(static_cast<bool>(packet.source_frame_storage));

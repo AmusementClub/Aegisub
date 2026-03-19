@@ -388,7 +388,7 @@ void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width,
 	image.repr = BuildPlaceboSourceFrameRepr(frame_description);
 	image.color = BuildPlaceboSourceFrameColorSpace(frame_description);
 	image.crop = BuildPlaceboSourceFrameCropRect(frame_description);
-	image.rotation = PL_ROTATION_0;
+	image.rotation = BuildPlaceboSourceFrameRotation(frame_description);
 	if (api->frame_set_chroma_location && PlaceboSourceFrameNeedsExplicitChromaLocation(frame_description))
 		api->frame_set_chroma_location(&image, ResolvePlaceboChromaLocation(frame_description));
 

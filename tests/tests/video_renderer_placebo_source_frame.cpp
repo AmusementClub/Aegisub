@@ -60,6 +60,29 @@ TEST(video_renderer_placebo_source_frame, invalid_visible_rect_falls_back_to_ful
 	EXPECT_FLOAT_EQ(3.0f, crop.y1);
 }
 
+TEST(video_renderer_placebo_source_frame, source_rotation_maps_to_placebo_rotation) {
+	VideoFrame frame;
+	frame.width = 4;
+	frame.height = 3;
+	frame.pitch = 16;
+	frame.flipped = false;
+	frame.data.resize(48);
+
+	auto source = MakeSourceFrameView(frame, "BT.709");
+
+	source.geometry.rotation = 90;
+	EXPECT_EQ(PL_ROTATION_270, BuildPlaceboSourceFrameRotation(source));
+
+	source.geometry.rotation = 180;
+	EXPECT_EQ(PL_ROTATION_180, BuildPlaceboSourceFrameRotation(source));
+
+	source.geometry.rotation = 270;
+	EXPECT_EQ(PL_ROTATION_90, BuildPlaceboSourceFrameRotation(source));
+
+	source.geometry.rotation = -90;
+	EXPECT_EQ(PL_ROTATION_90, BuildPlaceboSourceFrameRotation(source));
+}
+
 TEST(video_renderer_placebo_source_frame, native_p010_repr_and_plane_data_preserve_bit_shift) {
 	unsigned char y[8] = { };
 	unsigned char uv[8] = { };

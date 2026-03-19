@@ -90,6 +90,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 	VideoRenderPacket packet;
 
 	std::shared_ptr<VideoFrame> frame;
+	bool native_frame_needs_display_transform_fallback = false;
 	if (selected_source_mode == SourceFrameOutputMode::Native) {
 		try {
 			if (!source_provider->GetNativeFrame(frame_number, packet.source_frame, packet.source_frame_owner))
@@ -98,19 +99,8 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		catch (VideoProviderError const& err) { throw VideoProviderErrorEvent(err); }
 		if (!packet.source_frame.IsValid())
 			throw VideoProviderErrorEvent(VideoDecodeError("Provider returned an invalid native source frame."));
-		if (SourceFrameNeedsDisplayTransformFallback(packet.source_frame)) {
-			frame = acquire_buffer(source_buffers);
-
-			try {
-				source_provider->GetFrame(frame_number, *frame);
-			}
-			catch (VideoProviderError const& err) { throw VideoProviderErrorEvent(err); }
-
-			packet.source_frame_storage = frame;
-			packet.source_frame_owner = frame;
-			packet.source_frame = MakeSourceFrameView(*frame, source_provider->GetColorMetadata());
-			packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
-		}
+		native_frame_needs_display_transform_fallback =
+			SourceFrameNeedsDisplayTransformFallback(packet.source_frame);
 	}
 	else {
 		frame = acquire_buffer(source_buffers);
@@ -126,6 +116,20 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
 	}
 	packet.time = time;
+
+	if (native_frame_needs_display_transform_fallback && !(raw || !subs_provider || !subs)) {
+		frame = acquire_buffer(source_buffers);
+
+		try {
+			source_provider->GetFrame(frame_number, *frame);
+		}
+		catch (VideoProviderError const& err) { throw VideoProviderErrorEvent(err); }
+
+		packet.source_frame_storage = frame;
+		packet.source_frame_owner = frame;
+		packet.source_frame = MakeSourceFrameView(*frame, source_provider->GetColorMetadata());
+		packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
+	}
 
 	if (raw || !subs_provider || !subs) {
 		InvalidateOverlayPipelineState(false);

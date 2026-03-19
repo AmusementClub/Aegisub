@@ -149,6 +149,22 @@ inline struct pl_rect2df BuildPlaceboSourceFrameCropRect(SourceFrame const& fram
 	};
 }
 
+inline pl_rotation BuildPlaceboSourceFrameRotation(SourceFrame const& frame) {
+	int normalized = frame.geometry.rotation % 360;
+	if (normalized < 0)
+		normalized += 360;
+
+	// SourceFrame.rotation currently follows container/display-metadata style
+	// degrees. To match the legacy BGRA path and FFmpeg/libplacebo conventions,
+	// positive 90 degrees maps to a 270-degree image rotation here.
+	switch (normalized) {
+		case 90: return static_cast<pl_rotation>(PL_ROTATION_270);
+		case 180: return static_cast<pl_rotation>(PL_ROTATION_180);
+		case 270: return static_cast<pl_rotation>(PL_ROTATION_90);
+		default: return static_cast<pl_rotation>(PL_ROTATION_0);
+	}
+}
+
 inline struct pl_color_space BuildPlaceboSourceFrameColorSpace(SourceFrame const& frame) {
 	struct pl_color_space space = {};
 	space.primaries = InferPlaceboPrimaries(frame.color);

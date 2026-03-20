@@ -157,6 +157,8 @@ public:
 	std::vector<int> GetKeyFrames() const { return source_provider->GetKeyFrames(); }
 	std::string GetColorSpace() const     { return source_provider->GetColorSpace(); }
 	std::string GetRealColorSpace() const { return source_provider->GetRealColorSpace(); }
+	SourceFrameColorMetadata GetColorMetadata() const { return source_provider->GetColorMetadata(); }
+	SourceFrameColorMetadata GetRealColorMetadata() const { return source_provider->GetRealColorMetadata(); }
 	std::string GetWarning() const        { return source_provider->GetWarning(); }
 	std::string GetDecoderName() const    { return source_provider->GetDecoderName(); }
 	std::string GetNativeFormatDescription() const { return source_provider->GetNativeFormatDescription(); }

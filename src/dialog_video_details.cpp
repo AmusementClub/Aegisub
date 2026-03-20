@@ -41,6 +41,28 @@
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 
+namespace {
+wxString FormatColorRange(SourceFrameColorRange range) {
+	switch (range) {
+		case SourceFrameColorRange::Limited:
+			return _("Limited");
+		case SourceFrameColorRange::Full:
+			return _("Full");
+		default:
+			return _("Unknown");
+	}
+}
+
+wxString FormatColorMetadata(SourceFrameColorMetadata const& color) {
+	wxArrayString parts;
+	parts.push_back(fmt_wx("matrix=%s", to_wx(color.matrix.empty() ? std::string("Unknown") : color.matrix)));
+	parts.push_back(fmt_wx("primaries=%s", to_wx(color.primaries.empty() ? std::string("Unknown") : color.primaries)));
+	parts.push_back(fmt_wx("transfer=%s", to_wx(color.transfer.empty() ? std::string("Unknown") : color.transfer)));
+	parts.push_back(fmt_wx("range=%s", FormatColorRange(color.range)));
+	return wxJoin(parts, ',');
+}
+}
+
 void ShowVideoDetailsDialog(agi::Context *c) {
 	wxDialog d(c->parent, -1, _("Video Details"));
 
@@ -63,11 +85,15 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 		framecount, agi::Time(fps.TimeAtFrame(framecount - 1)).GetAssFormatted(true)));
 	make_field(_("Decoder:"), to_wx(provider->GetDecoderName()));
 	make_field(_("Source output mode:"), to_wx(SourceFrameOutputModeName(provider->GetSelectedSourceMode())));
-	auto native_format = provider->GetNativeFormatDescription();
-	make_field(_("Native format:"), native_format.empty() ? _("Unavailable") : to_wx(native_format));
-	make_field(_("Color space:"), to_wx(provider->GetColorSpace()));
-	if (provider->GetRealColorSpace() != provider->GetColorSpace())
-		make_field(_("Source color space:"), to_wx(provider->GetRealColorSpace()));
+	auto source_format = provider->GetNativeFormatDescription();
+	make_field(_("Source format:"), source_format.empty() ? _("Unavailable") : to_wx(source_format));
+	make_field(_("Render color metadata:"), FormatColorMetadata(provider->GetColorMetadata()));
+	make_field(_("Source color metadata:"), FormatColorMetadata(provider->GetRealColorMetadata()));
+	if (provider->GetColorSpace() != provider->GetRealColorSpace()) {
+		make_field(_("Matrix override:"), fmt_wx("%s -> %s",
+			provider->GetRealColorSpace(),
+			provider->GetColorSpace()));
+	}
 	if (!provider->GetWarning().empty())
 		make_field(_("Warning:"), to_wx(provider->GetWarning()));
 

@@ -259,6 +259,7 @@ public:
 	SourceFrameColorMetadata GetRealColorMetadata() const override { return master->GetRealColorMetadata(); }
 	SourceFrameGeometry GetFrameGeometry() const override { return master->GetFrameGeometry(); }
 	SourceFrameNativeFormatIdentity GetNativeFormatIdentity() const override { return master->GetNativeFormatIdentity(); }
+	std::string GetNativeFormatDescription() const override { return master->GetNativeFormatDescription(); }
 	std::vector<SourceFrameOutputMode> GetAvailableSourceModes() const override { return master->GetAvailableSourceModes(); }
 	bool SetOutputMode(SourceFrameOutputMode mode) override {
 		ClearCache();

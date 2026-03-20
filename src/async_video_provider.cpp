@@ -51,6 +51,28 @@ std::string FormatSourceModeList(std::vector<SourceFrameOutputMode> const& modes
 	return value;
 }
 
+char const *SourceFrameColorRangeName(SourceFrameColorRange range) {
+	switch (range) {
+		case SourceFrameColorRange::Limited:
+			return "Limited";
+		case SourceFrameColorRange::Full:
+			return "Full";
+		default:
+			return "Unknown";
+	}
+}
+
+std::string FormatColorMetadata(SourceFrameColorMetadata const& color) {
+	return std::string("matrix=")
+		+ (color.matrix.empty() ? "Unknown" : color.matrix)
+		+ ", primaries="
+		+ (color.primaries.empty() ? "Unknown" : color.primaries)
+		+ ", transfer="
+		+ (color.transfer.empty() ? "Unknown" : color.transfer)
+		+ ", range="
+		+ SourceFrameColorRangeName(color.range);
+}
+
 template<typename T>
 std::shared_ptr<T> acquire_buffer(std::vector<std::shared_ptr<T>>& buffers) {
 	for (auto& buffer : buffers) {
@@ -535,14 +557,18 @@ bool AsyncVideoProvider::ReconfigureSourceOutputMode() {
 
 	bool const mode_changed = selected_source_mode != applied;
 	if (!has_logged_source_mode || mode_changed) {
-		auto native_format = source_provider->GetNativeFormatDescription();
+		auto source_format = source_provider->GetNativeFormatDescription();
+		auto render_color = source_provider->GetColorMetadata();
+		auto source_color = source_provider->GetRealColorMetadata();
 		LOG_I(kSourceModeLogTag)
 			<< source_provider->GetDecoderName()
 			<< ": preferred=" << FormatSourceModeList(preferred_source_modes)
 			<< ", available=" << FormatSourceModeList(available_modes)
 			<< ", selected=" << SourceFrameOutputModeName(selected)
 			<< ", applied=" << SourceFrameOutputModeName(applied)
-			<< ", native_format=" << (native_format.empty() ? "none" : native_format)
+			<< ", source_format=" << (source_format.empty() ? "none" : source_format)
+			<< ", render_color={" << FormatColorMetadata(render_color) << "}"
+			<< ", source_color={" << FormatColorMetadata(source_color) << "}"
 			<< (compatibility_requires_bgra8 ? ", compatibility_requires_bgra8=true" : "");
 		has_logged_source_mode = true;
 	}

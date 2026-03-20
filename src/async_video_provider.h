@@ -104,6 +104,7 @@ class AsyncVideoProvider {
 	bool processing_scheduled = false;
 	std::vector<SourceFrameOutputMode> preferred_source_modes = { SourceFrameOutputMode::Bgra8 };
 	SourceFrameOutputMode selected_source_mode = SourceFrameOutputMode::Bgra8;
+	bool has_logged_source_mode = false;
 
 	void DeliverEvent(std::unique_ptr<wxEvent> evt);
 	void InvalidateOverlayPipelineState(bool force_full_upload);

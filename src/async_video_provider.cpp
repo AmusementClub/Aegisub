@@ -28,6 +28,7 @@
 #include "video_provider_manager.h"
 
 #include <libaegisub/dispatch.h>
+#include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 
 enum {
@@ -37,6 +38,33 @@ enum {
 
 namespace {
 constexpr int kCompatibilityOverlayTileSize = 64;
+constexpr char const *kSourceModeLogTag = "video/source/mode";
+
+std::string FormatSourceModeList(std::vector<SourceFrameOutputMode> const& modes) {
+	std::string value = "[";
+	for (size_t i = 0; i < modes.size(); ++i) {
+		if (i)
+			value.append(", ");
+		value.append(SourceFrameOutputModeName(modes[i]));
+	}
+	value.push_back(']');
+	return value;
+}
+
+std::string FormatNativeFormatIdentity(SourceFrameNativeFormatIdentity const& identity) {
+	if (!identity.IsValid())
+		return "none";
+
+	switch (identity.format_namespace) {
+		case SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat:
+			return std::string("ffmpeg:") + std::to_string(identity.format_id);
+		default:
+			return std::string("ns")
+				+ std::to_string(static_cast<int>(identity.format_namespace))
+				+ ":"
+				+ std::to_string(identity.format_id);
+	}
+}
 
 template<typename T>
 std::shared_ptr<T> acquire_buffer(std::vector<std::shared_ptr<T>>& buffers) {
@@ -507,9 +535,10 @@ std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrame(int frame, double time,
 bool AsyncVideoProvider::ReconfigureSourceOutputMode() {
 	auto const compatibility_requires_bgra8 =
 		subs_provider && subs_provider->GetRenderMode() == SubtitleRenderMode::CompatibilityFrameOnly;
+	auto const available_modes = source_provider->GetAvailableSourceModes();
 	auto const selected = SelectPreferredSourceFrameOutputMode(
 		preferred_source_modes,
-		source_provider->GetAvailableSourceModes(),
+		available_modes,
 		compatibility_requires_bgra8);
 
 	auto applied = selected;
@@ -519,7 +548,21 @@ bool AsyncVideoProvider::ReconfigureSourceOutputMode() {
 			return false;
 	}
 
-	if (selected_source_mode == applied)
+	bool const mode_changed = selected_source_mode != applied;
+	if (!has_logged_source_mode || mode_changed) {
+		auto native_format = source_provider->GetNativeFormatIdentity();
+		LOG_I(kSourceModeLogTag)
+			<< source_provider->GetDecoderName()
+			<< ": preferred=" << FormatSourceModeList(preferred_source_modes)
+			<< ", available=" << FormatSourceModeList(available_modes)
+			<< ", selected=" << SourceFrameOutputModeName(selected)
+			<< ", applied=" << SourceFrameOutputModeName(applied)
+			<< ", native_format=" << FormatNativeFormatIdentity(native_format)
+			<< (compatibility_requires_bgra8 ? ", compatibility_requires_bgra8=true" : "");
+		has_logged_source_mode = true;
+	}
+
+	if (!mode_changed)
 		return false;
 
 	selected_source_mode = applied;

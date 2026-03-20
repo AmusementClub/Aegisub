@@ -276,27 +276,22 @@ AVSValue AvisynthVideoProvider::Open(agi::fs::path const& filename) {
 	}
 
 	// Try loading DirectShowSource2
-	if (!env->FunctionExists("dss2")) {
-		auto dss2path(config::path->Decode("?data/avss.dll"));
-		if (agi::fs::FileExists(dss2path))
-			env->Invoke("LoadPlugin", env->SaveString(agi::fs::ShortName(dss2path).c_str()));
-	}
-
 	// If DSS2 loaded properly, try using it
-	if (env->FunctionExists("dss2")) {
+	if (avs.EnsurePluginLoaded("dss2", {
+		"?user/runtimes/avs-plugins/avss.dll",
+		"?data/runtimes/avs-plugins/avss.dll",
+	})) {
 		LOG_I("avisynth/video") << "Opening file with DSS2";
 		decoder_name = "Avisynth/DSS2";
 		return env->Invoke("DSS2", videoFilename);
 	}
 
 	// Try DirectShowSource
-	// Load DirectShowSource.dll from app dir if it exists
-	auto dsspath(config::path->Decode("?data/DirectShowSource.dll"));
-	if (agi::fs::FileExists(dsspath))
-		env->Invoke("LoadPlugin", env->SaveString(agi::fs::ShortName(dsspath).c_str()));
-
 	// Then try using DSS
-	if (env->FunctionExists("DirectShowSource")) {
+	if (avs.EnsurePluginLoaded("DirectShowSource", {
+		"?user/runtimes/avs-plugins/DirectShowSource.dll",
+		"?data/runtimes/avs-plugins/DirectShowSource.dll",
+	})) {
 		const char *argnames[3] = { 0, "video", "audio" };
 		AVSValue args[3] = { videoFilename, true, false };
 		decoder_name = "Avisynth/DirectShowSource";

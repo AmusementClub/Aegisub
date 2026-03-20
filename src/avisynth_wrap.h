@@ -36,6 +36,7 @@
 
 #include <libaegisub/exception.h>
 
+#include <initializer_list>
 #include <string>
 
 class IScriptEnvironment;
@@ -52,6 +53,7 @@ class AviSynthWrapper {
 public:
 	std::mutex& GetMutex() const;
 	IScriptEnvironment *GetEnv() const;
+	bool EnsurePluginLoaded(char const *function_name, std::initializer_list<char const *> candidate_token_paths) const;
 
 	AviSynthWrapper();
 	~AviSynthWrapper();

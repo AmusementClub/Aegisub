@@ -40,12 +40,15 @@
 #include "native_library.h"
 #include "options.h"
 
+#include <libaegisub/fs.h>
 #include <libaegisub/log.h>
 #include <libaegisub/path.h>
 
+#include <algorithm>
 #include <mutex>
 #include <memory>
 #include <string>
+#include <vector>
 
 const AVS_Linkage* AVS_linkage;
 
@@ -53,12 +56,18 @@ typedef IScriptEnvironment* __stdcall FUNC(int);
 
 // Allocate storage for and initialise static members
 namespace {
+	constexpr char kAvisynthPluginLogTag[] = "provider/avisynth/plugins";
 	int avs_refcount = 0;
 	IScriptEnvironment *env = nullptr;
 	std::mutex AviSynthMutex;
 	FUNC* CreateScriptEnv = nullptr;
 	std::unique_ptr<agi::native::CachedLibrary> runtime_library;
 	avisynth::RuntimeLoadRequest runtime_request;
+	bool plugin_autoload_dirs_configured = false;
+
+	bool UsesAppLocalPluginLoading() {
+		return avisynth::UsesAppLocalRuntime(OPT_GET("Provider/Avisynth/Runtime Path")->GetString());
+	}
 
 	void InitializeAvisynthRuntime(agi::native::Library& library) {
 		CreateScriptEnv = library.ResolveSymbol<FUNC*>("CreateScriptEnvironment");
@@ -89,6 +98,72 @@ namespace {
 			runtime_request = std::move(requested);
 		}
 		return *runtime_library;
+	}
+
+	std::vector<agi::fs::path> GetAppPluginAutoloadDirectories() {
+		std::vector<agi::fs::path> directories;
+		if (!config::path)
+			return directories;
+
+		auto append_if_exists = [&](char const *token_path) {
+			auto path = config::path->Decode(token_path);
+			if (agi::fs::DirectoryExists(path))
+				directories.push_back(std::move(path));
+		};
+
+		append_if_exists("?user/runtimes/avs-plugins");
+		append_if_exists("?data/runtimes/avs-plugins");
+		return directories;
+	}
+
+	void ConfigurePluginAutoloadDirectories() {
+		if (plugin_autoload_dirs_configured || !env)
+			return;
+		plugin_autoload_dirs_configured = true;
+
+		if (!UsesAppLocalPluginLoading()) {
+			LOG_D(kAvisynthPluginLogTag) << "Skipping app-local Avisynth plugin autoload because an explicit runtime path is configured.";
+			return;
+		}
+
+		PNeoEnv neo_env(env);
+		if (!neo_env) {
+			LOG_D(kAvisynthPluginLogTag) << "Avisynth runtime does not expose INeoEnv autoload APIs; keeping explicit plugin fallback only.";
+			return;
+		}
+
+		auto directories = GetAppPluginAutoloadDirectories();
+		if (directories.empty()) {
+			LOG_D(kAvisynthPluginLogTag) << "No app-local Avisynth autoload directories found.";
+			return;
+		}
+
+		for (auto it = directories.rbegin(); it != directories.rend(); ++it) {
+			LOG_I(kAvisynthPluginLogTag) << "Registering Avisynth autoload dir: " << it->string();
+			neo_env->AddAutoloadDir(env->SaveString(agi::fs::ShortName(*it).c_str()), true);
+		}
+		neo_env->AutoloadPlugins();
+
+		if (char *dirs = neo_env->ListAutoloadDirs(); dirs && *dirs)
+			LOG_I(kAvisynthPluginLogTag) << "Avisynth autoload dirs: " << dirs;
+	}
+
+	bool TryLoadPluginFallback(char const *token_path) {
+		if (!env)
+			return false;
+		auto path = config::path ? config::path->Decode(token_path) : agi::fs::path(token_path);
+		if (!agi::fs::FileExists(path))
+			return false;
+
+		try {
+			LOG_I(kAvisynthPluginLogTag) << "Falling back to explicit Avisynth LoadPlugin for " << path.string();
+			env->Invoke("LoadPlugin", env->SaveString(agi::fs::ShortName(path).c_str()));
+			return true;
+		}
+		catch (AvisynthError const& err) {
+			LOG_W(kAvisynthPluginLogTag) << "Avisynth LoadPlugin failed for " << path.string() << ": " << err.msg;
+			return false;
+		}
 	}
 
 	void EnsureAvisynthRuntimeLoaded() {
@@ -132,6 +207,7 @@ AviSynthWrapper::AviSynthWrapper() {
 		if (!env)
 			throw AvisynthError("Failed to create a new avisynth script environment. Avisynth is too old?");
 		AVS_linkage = env->GetAVSLinkage();
+		ConfigurePluginAutoloadDirectories();
 
 		// Set memory limit
 		const int memoryMax = OPT_GET("Provider/Avisynth/Memory Max")->GetInt();
@@ -147,6 +223,7 @@ AviSynthWrapper::~AviSynthWrapper() {
 		env = nullptr;
 		if (runtime_library)
 			runtime_library->Reset();
+		plugin_autoload_dirs_configured = false;
 		CreateScriptEnv = nullptr;
 	}
 }
@@ -157,6 +234,28 @@ std::mutex& AviSynthWrapper::GetMutex() const {
 
 IScriptEnvironment *AviSynthWrapper::GetEnv() const {
 	return env;
+}
+
+bool AviSynthWrapper::EnsurePluginLoaded(char const *function_name, std::initializer_list<char const *> candidate_token_paths) const {
+	if (!env || !function_name || !*function_name)
+		return false;
+	if (env->FunctionExists(function_name))
+		return true;
+
+	ConfigurePluginAutoloadDirectories();
+	if (env->FunctionExists(function_name))
+		return true;
+	if (!UsesAppLocalPluginLoading())
+		return false;
+
+	for (auto const *candidate : candidate_token_paths) {
+		if (!candidate || !*candidate)
+			continue;
+		if (TryLoadPluginFallback(candidate) && env->FunctionExists(function_name))
+			return true;
+	}
+
+	return env->FunctionExists(function_name);
 }
 
 #endif

@@ -79,17 +79,15 @@ AvisynthAudioProvider::AvisynthAudioProvider(agi::fs::path const& filename) try 
 			const char * argnames[3] = { 0, "video", "audio" };
 			AVSValue args[3] = { env->SaveString(agi::fs::ShortName(filename).c_str()), false, true };
 
-			// Load DirectShowSource.dll from app dir if it exists
-			agi::fs::path dsspath(config::path->Decode("?data/DirectShowSource.dll"));
-			if (agi::fs::FileExists(dsspath))
-				env->Invoke("LoadPlugin", env->SaveString(agi::fs::ShortName(dsspath).c_str()));
-
 			// Load audio with DSS if it exists
-			if (env->FunctionExists("DirectShowSource"))
+			if (avs_wrapper.EnsurePluginLoaded("DirectShowSource", {
+				"?user/runtimes/avs-plugins/DirectShowSource.dll",
+				"?data/runtimes/avs-plugins/DirectShowSource.dll",
+			}))
 				LoadFromClip(env->Invoke("DirectShowSource", AVSValue(args, 3), argnames));
 			// Otherwise fail
 			else
-				throw agi::AudioProviderError("No suitable audio source filter found. Try placing DirectShowSource.dll in the Aegisub application directory.");
+				throw agi::AudioProviderError("No suitable audio source filter found. Try placing DirectShowSource.dll in the Aegisub runtimes/avs-plugins directory.");
 		}
 	}
 	catch (AvisynthError &err) {

@@ -31,6 +31,10 @@ inline std::string GetDefaultRuntimeLibraryName() {
 
 using RuntimePathResolver = std::function<std::string(std::string_view)>;
 
+inline bool UsesAppLocalRuntime(std::string_view configured_runtime_path) {
+	return configured_runtime_path.empty();
+}
+
 inline std::string ResolveConfiguredRuntimePath(std::string_view configured_runtime_path, RuntimePathResolver const& path_resolver = RuntimePathResolver()) {
 	if (configured_runtime_path.empty())
 		return {};

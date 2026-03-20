@@ -111,6 +111,10 @@ namespace {
 		return loaded_version >= 0 ? GetVersionContext() : std::string();
 	}
 
+	agi::native::LibraryLoadOptions GetRuntimeLoadOptions() {
+		return agi::native::DefaultAppLocalLoadOptions(false);
+	}
+
 	template <typename T>
 	void LoadSymbol(agi::native::Library& library, T& target, const char *name) {
 		target = library.ResolveSymbol<T>(name);
@@ -128,7 +132,7 @@ namespace {
 	}
 
 	agi::native::CachedLibrary runtime_library(GetLibraryName(), "FFMS2", "provider/ffms2/runtime",
-		InitializeFFMS2Runtime, GetVersionContextForCache);
+		InitializeFFMS2Runtime, GetVersionContextForCache, GetRuntimeLoadOptions());
 }
 
 	void EnsureLoaded() {

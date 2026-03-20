@@ -32,6 +32,8 @@
 #include <wx/combobox.h>
 #include <wx/dirdlg.h>
 #include <wx/event.h>
+#include <wx/filedlg.h>
+#include <wx/filename.h>
 #include <wx/fontdlg.h>
 #include <wx/listctrl.h>
 #include <wx/sizer.h>
@@ -66,6 +68,40 @@ static void browse_button(wxTextCtrl *ctrl) {
 		wxString dir = dlg.GetPath();
 		if (!dir.empty())
 			ctrl->SetValue(dir);
+	}
+}
+
+static void browse_file_button(wxWindow *parent, wxTextCtrl *ctrl, wxString const& wildcard) {
+	auto current_path = config::path
+		? config::path->Decode(from_wx(ctrl->GetValue()))
+		: std::filesystem::path(from_wx(ctrl->GetValue()));
+	wxFileName current(current_path.wstring());
+	wxString dir;
+	wxString file;
+	if (current.IsOk()) {
+		dir = current.GetPath();
+		file = current.GetFullName();
+	}
+
+	wxFileDialog dlg(parent, _("Please choose the file:"), dir, file, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+	if (dlg.ShowModal() == wxID_OK) {
+		wxString path = dlg.GetPath();
+		if (!path.empty())
+			ctrl->SetValue(path);
+	}
+}
+
+static void configure_browse_widgets(OptionPage *page, wxTextCtrl *text, wxButton *browse, wxControl *enabler, bool do_enable) {
+	if (!enabler)
+		return;
+
+	if (do_enable) {
+		page->EnableIfChecked(enabler, text);
+		page->EnableIfChecked(enabler, browse);
+	}
+	else {
+		page->DisableIfChecked(enabler, text);
+		page->DisableIfChecked(enabler, browse);
 	}
 }
 
@@ -241,7 +277,7 @@ wxFlexGridSizer* OptionPage::PageSizer(wxString name) {
 	return flex;
 }
 
-void OptionPage::OptionBrowse(wxFlexGridSizer *flex, const wxString &name, const char *opt_name, wxControl *enabler, bool do_enable) {
+void OptionPage::OptionBrowse(wxFlexGridSizer *flex, const wxString &name, const char *opt_name, wxControl *enabler, bool do_enable, int min_width) {
 	parent->AddChangeableOption(opt_name);
 	const auto opt = OPT_GET(opt_name);
 
@@ -249,7 +285,7 @@ void OptionPage::OptionBrowse(wxFlexGridSizer *flex, const wxString &name, const
 		throw agi::InternalError("Option must be agi::OptionType::String for BrowseButton.");
 
 	auto text = new wxTextCtrl(this, -1 , to_wx(opt->GetString()));
-	text->SetMinSize(wxSize(FromDIP(160), -1));
+	text->SetMinSize(wxSize(FromDIP(min_width), -1));
 	text->Bind(wxEVT_TEXT, StringUpdater(opt_name, parent));
 
 	auto browse = new wxButton(this, -1, _("Browse..."));
@@ -261,16 +297,32 @@ void OptionPage::OptionBrowse(wxFlexGridSizer *flex, const wxString &name, const
 
 	Add(flex, name, button_sizer);
 
-	if (enabler) {
-		if (do_enable) {
-			EnableIfChecked(enabler, text);
-			EnableIfChecked(enabler, browse);
-		}
-		else {
-			DisableIfChecked(enabler, text);
-			DisableIfChecked(enabler, browse);
-		}
-	}
+	configure_browse_widgets(this, text, browse, enabler, do_enable);
+}
+
+void OptionPage::OptionBrowseFile(wxFlexGridSizer *flex, const wxString &name, const char *opt_name, const wxString &wildcard, wxControl *enabler, bool do_enable, int min_width) {
+	parent->AddChangeableOption(opt_name);
+	const auto opt = OPT_GET(opt_name);
+
+	if (opt->GetType() != agi::OptionType::String)
+		throw agi::InternalError("Option must be agi::OptionType::String for BrowseButton.");
+
+	auto text = new wxTextCtrl(this, -1, to_wx(opt->GetString()));
+	text->SetMinSize(wxSize(FromDIP(min_width), -1));
+	text->Bind(wxEVT_TEXT, StringUpdater(opt_name, parent));
+
+	auto browse = new wxButton(this, -1, _("Browse..."));
+	browse->Bind(wxEVT_BUTTON, [this, text, wildcard](wxCommandEvent&) {
+		browse_file_button(this, text, wildcard);
+	});
+
+	auto button_sizer = new wxBoxSizer(wxHORIZONTAL);
+	button_sizer->Add(text, wxSizerFlags(1).Expand());
+	button_sizer->Add(browse, wxSizerFlags().Expand());
+
+	Add(flex, name, button_sizer);
+
+	configure_browse_widgets(this, text, browse, enabler, do_enable);
 }
 
 void OptionPage::OptionFont(wxSizer *sizer, std::string opt_prefix) {

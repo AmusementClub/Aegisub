@@ -18,6 +18,7 @@ if(GTEST_FOUND)
     add_executable(gtest-run EXCLUDE_FROM_ALL
         tests/tests/access.cpp
         tests/tests/audio.cpp
+        tests/tests/avisynth_runtime_policy.cpp
         tests/tests/audio_display.cpp
         tests/tests/async_video_provider.cpp
         tests/tests/dispatch.cpp
@@ -36,6 +37,7 @@ if(GTEST_FOUND)
         src/ass_style_storage.cpp
         src/async_video_provider.cpp
         src/compat.cpp
+        src/csri_renderer_discovery.cpp
         src/fft.cpp
         src/native_library.cpp
         src/utils.cpp
@@ -44,6 +46,7 @@ if(GTEST_FOUND)
         tests/tests/character_count.cpp
         tests/tests/color.cpp
         tests/tests/compatibility_overlay_buffer_plan.cpp
+        tests/tests/csri_renderer_discovery.cpp
         tests/tests/dialogue_lexer.cpp
         tests/tests/ffms_color_metadata.cpp
         tests/tests/ffms_chroma_location.cpp

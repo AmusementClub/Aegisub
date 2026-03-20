@@ -36,23 +36,16 @@
 #include "avisynth_wrap.h"
 
 #include <avisynth.h>
+#include "avisynth_runtime_policy.h"
 #include "native_library.h"
 #include "options.h"
 
 #include <libaegisub/log.h>
+#include <libaegisub/path.h>
 
 #include <mutex>
 #include <memory>
 #include <string>
-
-#ifndef AVISYNTH_SO
-// Fallback definition
-#ifdef _WIN32
-#define AVISYNTH_SO "AviSynth.dll"
-#else
-#define AVISYNTH_SO "libavisynth.so"
-#endif
-#endif
 
 const AVS_Linkage* AVS_linkage;
 
@@ -64,25 +57,43 @@ namespace {
 	IScriptEnvironment *env = nullptr;
 	std::mutex AviSynthMutex;
 	FUNC* CreateScriptEnv = nullptr;
-
-	std::string GetLibraryName() {
-#ifdef AVISYNTH_SO
-		return AVISYNTH_SO;
-#else
-		return "AviSynth";
-#endif
-	}
+	std::unique_ptr<agi::native::CachedLibrary> runtime_library;
+	avisynth::RuntimeLoadRequest runtime_request;
 
 	void InitializeAvisynthRuntime(agi::native::Library& library) {
 		CreateScriptEnv = library.ResolveSymbol<FUNC*>("CreateScriptEnvironment");
 	}
 
-	agi::native::CachedLibrary runtime_library(GetLibraryName(), "Avisynth", "provider/avisynth/runtime",
-		InitializeAvisynthRuntime);
+	avisynth::RuntimeLoadRequest GetConfiguredRuntimeRequest() {
+		return avisynth::BuildRuntimeLoadRequest(
+			OPT_GET("Provider/Avisynth/Runtime Path")->GetString(),
+			[](std::string_view configured_runtime_path) {
+				return config::path
+					? config::path->Decode(std::string(configured_runtime_path)).string()
+					: std::string(configured_runtime_path);
+			});
+	}
+
+	agi::native::CachedLibrary& GetRuntimeLibrary() {
+		auto requested = GetConfiguredRuntimeRequest();
+		// The Avisynth environment is process-global in this wrapper, so only
+		// switch runtimes when no clip is actively holding the current one.
+		if (!runtime_library || (avs_refcount == 0 && requested != runtime_request)) {
+			runtime_library = std::make_unique<agi::native::CachedLibrary>(
+				requested.library_name,
+				"Avisynth",
+				"provider/avisynth/runtime",
+				InitializeAvisynthRuntime,
+				agi::native::CachedLibrary::DetailFunction(),
+				requested.load_options);
+			runtime_request = std::move(requested);
+		}
+		return *runtime_library;
+	}
 
 	void EnsureAvisynthRuntimeLoaded() {
 		try {
-			runtime_library.EnsureLoaded();
+			GetRuntimeLibrary().EnsureLoaded();
 		}
 		catch (agi::EnvironmentError const& err) {
 			throw AvisynthError(err.GetMessage().c_str());
@@ -92,15 +103,18 @@ namespace {
 
 namespace avisynth {
 	bool IsAvailable() noexcept {
-		return runtime_library.IsAvailable();
+		std::lock_guard<std::mutex> lock(AviSynthMutex);
+		return GetRuntimeLibrary().IsAvailable();
 	}
 
 	std::string GetLoadError() {
-		return runtime_library.GetLoadError();
+		std::lock_guard<std::mutex> lock(AviSynthMutex);
+		return GetRuntimeLibrary().GetLoadError();
 	}
 
 	std::string GetLoadedLibrary() {
-		return runtime_library.GetLoadedLibrary();
+		std::lock_guard<std::mutex> lock(AviSynthMutex);
+		return GetRuntimeLibrary().GetLoadedLibrary();
 	}
 }
 
@@ -131,7 +145,8 @@ AviSynthWrapper::~AviSynthWrapper() {
 	if (!--avs_refcount) {
 		delete env;
 		env = nullptr;
-		runtime_library.Reset();
+		if (runtime_library)
+			runtime_library->Reset();
 		CreateScriptEnv = nullptr;
 	}
 }

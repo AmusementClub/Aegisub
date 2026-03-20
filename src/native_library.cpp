@@ -32,6 +32,8 @@ namespace stdfs = std::filesystem;
 namespace agi { namespace native {
 
 namespace {
+constexpr char kRuntimesSearchDir[] = "runtimes";
+
 #ifdef _WIN32
 	using NativeHandle = HMODULE;
 #else
@@ -75,10 +77,36 @@ namespace {
 		});
 	}
 
+	bool ContainsCaseInsensitive(std::string_view value, std::string_view needle) {
+		if (needle.empty()) return true;
+		if (needle.size() > value.size()) return false;
+		for (size_t i = 0; i + needle.size() <= value.size(); ++i) {
+			auto probe = value.substr(i, needle.size());
+			if (std::equal(probe.begin(), probe.end(), needle.begin(), [](char left, char right) {
+				return std::tolower(static_cast<unsigned char>(left)) == std::tolower(static_cast<unsigned char>(right));
+			}))
+				return true;
+		}
+		return false;
+	}
+
 	void AddCandidate(std::vector<std::string>& candidates, std::string_view candidate) {
 		if (candidate.empty()) return;
 		if (std::find(candidates.begin(), candidates.end(), candidate) == candidates.end())
 			candidates.emplace_back(candidate);
+	}
+
+	template <typename Range>
+	std::string JoinCandidates(Range const& candidates) {
+		std::string result;
+		bool first = true;
+		for (auto const& candidate : candidates) {
+			if (!first)
+				result += ", ";
+			first = false;
+			result += candidate;
+		}
+		return result;
 	}
 
 	std::string Concat(std::string_view left, std::string_view right) {
@@ -140,6 +168,42 @@ namespace {
 		return std::string(attempted_path);
 #endif
 	}
+
+	bool IsExecutableRelativePathAllowed(stdfs::path const& path) {
+		if (path.empty() || path.is_absolute() || path.has_root_name() || path.has_root_directory())
+			return false;
+
+		for (auto const& component : path) {
+			auto part = component.generic_string();
+			if (part.empty() || part == ".")
+				continue;
+			if (part == "..")
+				return false;
+		}
+
+		return true;
+	}
+
+	bool LooksLikeDynamicLibrary(stdfs::path const& path) {
+		if (!path.has_filename())
+			return false;
+
+		auto const filename = path.filename().string();
+#ifdef _WIN32
+		return EndsWithCaseInsensitive(filename, ".dll");
+#elif defined(__APPLE__)
+		return EndsWithCaseInsensitive(filename, ".dylib");
+#else
+		return ContainsCaseInsensitive(filename, ".so");
+#endif
+	}
+}
+
+LibraryLoadOptions DefaultAppLocalLoadOptions(bool allow_system_fallback) {
+	LibraryLoadOptions options;
+	options.executable_relative_search_dirs.emplace_back(kRuntimesSearchDir);
+	options.allow_system_fallback = allow_system_fallback;
+	return options;
 }
 
 std::vector<std::string> BuildLibraryNameVariations(std::string_view library_name) {
@@ -159,29 +223,122 @@ std::vector<std::string> BuildLibraryNameVariations(std::string_view library_nam
 	if (!EndsWithCaseInsensitive(library_name, ".dll") && !EndsWithCaseInsensitive(library_name, ".exe"))
 		AddCandidate(candidates, Concat(library_name, ".dll"));
 #elif defined(__APPLE__)
-	// Match .NET LibraryImport/DllImport name variation rules on macOS.
+	if (EndsWithCaseInsensitive(filename, ".dylib")) {
+		AddCandidate(candidates, library_name);
+		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
+		return candidates;
+	}
+
+	// Match app-local probing expectations on macOS without duplicating explicit suffixes.
 	AddCandidate(candidates, Concat(library_name, ".dylib"));
 	if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name, ".dylib"));
 	AddCandidate(candidates, library_name);
 	if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
 #else
-	// Match .NET LibraryImport/DllImport name variation rules on Linux.
-	bool has_so_name = agi::util::strings::contains(library_name, ".so");
+	bool has_so_name = ContainsCaseInsensitive(filename, ".so");
 	if (has_so_name) {
 		AddCandidate(candidates, library_name);
 		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
-		AddCandidate(candidates, Concat(library_name, ".so"));
-		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name, ".so"));
+		return candidates;
 	}
-	else {
-		AddCandidate(candidates, Concat(library_name, ".so"));
-		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name, ".so"));
-		AddCandidate(candidates, library_name);
-		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
-	}
+
+	AddCandidate(candidates, Concat(library_name, ".so"));
+	if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name, ".so"));
+	AddCandidate(candidates, library_name);
+	if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
 #endif
 
 	return candidates;
+}
+
+std::vector<std::string> BuildLibraryLoadProbes(
+	std::string_view library_name,
+	std::string_view executable_directory,
+	LibraryLoadOptions const& options) {
+	std::vector<std::string> probes;
+	stdfs::path requested_path{std::string(library_name)};
+	if (requested_path.is_absolute()) {
+		AddCandidate(probes, requested_path.string());
+		return probes;
+	}
+
+	if (requested_path.has_parent_path()) {
+		auto normalized = requested_path.lexically_normal();
+		if (!IsExecutableRelativePathAllowed(normalized))
+			return probes;
+		normalized.make_preferred();
+
+		auto const candidates = BuildLibraryNameVariations(normalized.string());
+		stdfs::path exe_dir{std::string(executable_directory)};
+		for (auto const& candidate : candidates)
+			AddCandidate(probes, (exe_dir / stdfs::path(candidate)).string());
+		return probes;
+	}
+
+	auto const candidates = BuildLibraryNameVariations(library_name);
+	stdfs::path exe_dir{std::string(executable_directory)};
+	for (auto const& relative_dir : options.executable_relative_search_dirs) {
+		if (relative_dir.empty())
+			continue;
+
+		stdfs::path relative_path(relative_dir);
+		auto normalized = relative_path.lexically_normal();
+		if (!IsExecutableRelativePathAllowed(normalized))
+			continue;
+		normalized.make_preferred();
+
+		for (auto const& candidate : candidates)
+			AddCandidate(probes, (exe_dir / normalized / stdfs::path(candidate)).string());
+	}
+
+	for (auto const& candidate : candidates)
+		AddCandidate(probes, (exe_dir / stdfs::path(candidate)).string());
+
+	if (options.allow_system_fallback) {
+		for (auto const& candidate : candidates)
+			AddCandidate(probes, candidate);
+	}
+
+	return probes;
+}
+
+std::vector<std::string> BuildLibraryLoadProbes(
+	std::string_view library_name,
+	LibraryLoadOptions const& options) {
+	return BuildLibraryLoadProbes(library_name, GetExecutableDirectory(), options);
+}
+
+std::vector<std::string> EnumerateLibrariesInExecutableRelativeDirectory(
+	std::string_view relative_directory,
+	std::string_view executable_directory) {
+	std::vector<std::string> libraries;
+	stdfs::path relative_path{std::string(relative_directory)};
+	auto normalized = relative_path.lexically_normal();
+	if (!IsExecutableRelativePathAllowed(normalized))
+		return libraries;
+	normalized.make_preferred();
+
+	stdfs::path directory = stdfs::path(std::string(executable_directory)) / normalized;
+	std::error_code ec;
+	if (!stdfs::exists(directory, ec) || !stdfs::is_directory(directory, ec))
+		return libraries;
+
+	for (auto const& entry : stdfs::directory_iterator(directory, ec)) {
+		if (ec)
+			break;
+		if (!entry.is_regular_file(ec) || ec)
+			continue;
+		if (!LooksLikeDynamicLibrary(entry.path()))
+			continue;
+		libraries.emplace_back(entry.path().string());
+	}
+
+	std::sort(libraries.begin(), libraries.end());
+	return libraries;
+}
+
+std::vector<std::string> EnumerateLibrariesInExecutableRelativeDirectory(std::string_view relative_directory) {
+	return EnumerateLibrariesInExecutableRelativeDirectory(relative_directory, GetExecutableDirectory());
 }
 
 Library::Library(void *handle, std::string requested_name, std::string loaded_path)
@@ -223,32 +380,28 @@ void Library::Reset() {
 	loaded_path.clear();
 }
 
-Library Library::Load(std::string_view library_name) {
+Library Library::Load(std::string_view library_name, LibraryLoadOptions const& options) {
 	stdfs::path requested_path{std::string(library_name)};
-	auto candidates = BuildLibraryNameVariations(library_name);
-	std::string app_dir = requested_path.is_absolute() ? std::string() : GetExecutableDirectory();
+	auto probes = BuildLibraryLoadProbes(library_name, requested_path.is_absolute() ? std::string() : GetExecutableDirectory(), options);
+	if (agi::log::log) {
+		if (!probes.empty())
+			LOG_I("native/library") << "Probing native library '" << library_name << "' using: " << JoinCandidates(probes);
+		else
+			LOG_W("native/library") << "No valid probe paths generated for native library '" << library_name << "'";
+	}
 	std::string attempted;
 
-	for (auto const& candidate : candidates) {
-		auto try_candidate = [&](std::string const& probe) -> Library {
-			if (!attempted.empty()) attempted += ", ";
-			attempted += probe;
-			auto native = TryLoadLibrary(probe);
-			if (native)
-				return Library(reinterpret_cast<void*>(native), std::string(library_name), GetLoadedLibraryPath(native, probe));
-			auto reason = GetLoadFailureReason();
-			if (!reason.empty()) attempted += " (" + reason + ")";
-			return {};
-		};
+	if (probes.empty())
+		throw agi::EnvironmentError("Could not load native library '" + std::string(library_name) + "'. No valid load probes were generated.");
 
-		if (!requested_path.is_absolute() && !app_dir.empty()) {
-			auto app_probe = (stdfs::path(app_dir) / stdfs::path(candidate)).string();
-			auto loaded = try_candidate(app_probe);
-			if (loaded.handle) return loaded;
-		}
-
-		auto loaded = try_candidate(candidate);
-		if (loaded.handle) return loaded;
+	for (auto const& probe : probes) {
+		if (!attempted.empty()) attempted += ", ";
+		attempted += probe;
+		auto native = TryLoadLibrary(probe);
+		if (native)
+			return Library(reinterpret_cast<void*>(native), std::string(library_name), GetLoadedLibraryPath(native, probe));
+		auto reason = GetLoadFailureReason();
+		if (!reason.empty()) attempted += " (" + reason + ")";
 	}
 
 	throw agi::EnvironmentError("Could not load native library '" + std::string(library_name) + "'. Tried: " + attempted);
@@ -278,11 +431,33 @@ void* Library::ResolveSymbolRaw(std::string_view symbol) {
 	return result;
 }
 
+void* Library::TryResolveSymbolRaw(std::string_view symbol) noexcept {
+	if (!handle)
+		return nullptr;
+
+#ifdef _WIN32
+	return reinterpret_cast<void*>(GetProcAddress(ToNativeHandle(handle), std::string(symbol).c_str()));
+#else
+	dlerror();
+	auto result = dlsym(ToNativeHandle(handle), std::string(symbol).c_str());
+	return dlerror() ? nullptr : result;
+#endif
+}
+
+void* Library::ReleaseHandle() {
+	auto detached = handle;
+	handle = nullptr;
+	requested_name.clear();
+	loaded_path.clear();
+	return detached;
+}
+
 CachedLibrary::CachedLibrary(std::string_view library_name, std::string_view display_name, std::string_view log_tag,
-	InitializeFunction initialize, DetailFunction detail)
+	InitializeFunction initialize, DetailFunction detail, LibraryLoadOptions options)
 	: library_name(library_name)
 	, display_name(display_name)
 	, log_tag(log_tag)
+	, options(std::move(options))
 	, initialize(std::move(initialize))
 	, detail(std::move(detail)) {
 }
@@ -296,7 +471,7 @@ Library& CachedLibrary::EnsureLoaded() {
 	load_attempted = true;
 
 	try {
-		std::unique_ptr<Library> loaded(new Library(Library::Load(library_name)));
+		std::unique_ptr<Library> loaded(new Library(Library::Load(library_name, options)));
 		if (initialize)
 			initialize(*loaded);
 		library = std::move(loaded);

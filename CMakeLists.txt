@@ -361,6 +361,8 @@ add_custom_command(
 )
 
 add_subdirectory("vendor/csri")
+target_sources(csri PRIVATE src/csri_native_library_bridge.cpp)
+target_compile_features(csri PRIVATE cxx_std_20)
 
 ## Aegisub
 add_executable(Aegisub WIN32
@@ -498,6 +500,7 @@ add_executable(Aegisub WIN32
     src/main.cpp
     src/menu.cpp
     src/mkv_wrap.cpp
+    src/csri_renderer_discovery.cpp
     src/native_library.cpp
     src/pen.cpp
     src/persist_location.cpp

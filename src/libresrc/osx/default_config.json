@@ -340,7 +340,8 @@
 		},
 		"Avisynth" : {
 			"Allow Ancient" : false,
-			"Memory Max" : 64
+			"Memory Max" : 64,
+			"Runtime Path" : ""
 		},
 		"FFmpegSource" : {
 			"Cache" : {

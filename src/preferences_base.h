@@ -49,7 +49,8 @@ public:
 	wxControl *OptionAdd(wxFlexGridSizer *flex, const wxString &name, const char *opt_name, double min=0, double max=INT_MAX, double inc=1);
 	void OptionChoice(wxFlexGridSizer *flex, const wxString &name, const wxArrayString &choices, const char *opt_name);
 	void OptionChoice(wxFlexGridSizer *flex, const wxString &name, const std::vector<std::pair<std::string, std::string>> &choices, const char *opt_name);
-	void OptionBrowse(wxFlexGridSizer *flex, const wxString &name, const char *opt_name, wxControl *enabler = nullptr, bool do_enable = false);
+	void OptionBrowse(wxFlexGridSizer *flex, const wxString &name, const char *opt_name, wxControl *enabler = nullptr, bool do_enable = false, int min_width = 160);
+	void OptionBrowseFile(wxFlexGridSizer *flex, const wxString &name, const char *opt_name, const wxString &wildcard, wxControl *enabler = nullptr, bool do_enable = false, int min_width = 160);
 	void OptionFont(wxSizer *sizer, std::string opt_prefix);
 
 	/// Enable ctrl only when cbx is checked

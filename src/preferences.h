@@ -32,8 +32,8 @@ class Preferences final : public wxDialog {
 public:
 	typedef std::function<void ()> Thunk;
 private:
-	wxTreebook *book;
-	wxButton *applyButton;
+	wxTreebook *book = nullptr;
+	wxButton *applyButton = nullptr;
 
 	std::map<std::string, std::unique_ptr<agi::OptionValue>> pending_changes;
 	std::vector<Thunk> pending_callbacks;

@@ -465,6 +465,15 @@ void Advanced_Video(wxTreebook *book, Preferences *parent) {
 	auto avisynth = p->PageSizer("Avisynth");
 	p->OptionAdd(avisynth, _("Allow pre-2.56a Avisynth"), "Provider/Avisynth/Allow Ancient");
 	p->CellSkip(avisynth);
+	p->OptionBrowseFile(avisynth, _("Avisynth runtime library path"), "Provider/Avisynth/Runtime Path",
+#ifdef _WIN32
+		_("Dynamic libraries (*.dll)|*.dll|All files (*.*)|*.*")
+#elif defined(__APPLE__)
+		_("Dynamic libraries (*.dylib)|*.dylib|All files (*.*)|*.*")
+#else
+		_("Shared objects (*.so;*.so.*)|*.so;*.so.*|All files (*.*)|*.*")
+#endif
+	);
 	p->OptionAdd(avisynth, _("Avisynth memory limit"), "Provider/Avisynth/Memory Max");
 #endif
 
@@ -690,12 +699,14 @@ void Interface_Hotkeys::OnUpdateFilter(wxCommandEvent&) {
 
 void Preferences::SetOption(std::unique_ptr<agi::OptionValue> new_value) {
 	pending_changes[new_value->GetName()] = std::move(new_value);
-	applyButton->Enable(true);
+	if (applyButton)
+		applyButton->Enable(true);
 }
 
 void Preferences::AddPendingChange(Thunk const& callback) {
 	pending_callbacks.push_back(callback);
-	applyButton->Enable(true);
+	if (applyButton)
+		applyButton->Enable(true);
 }
 
 void Preferences::AddChangeableOption(std::string const& name) {

@@ -56,7 +56,11 @@ Project::Project(agi::Context *c) : context(c) {
 	OPT_SUB("Provider/Audio/FFmpegSource/Decode Error Handling", &Project::ReloadAudio, this);
 	OPT_SUB("Provider/Audio/FFmpegSource/Downmix", &Project::ReloadAudio, this);
 	OPT_SUB("Provider/Avisynth/Allow Ancient", &Project::ReloadVideo, this);
+	OPT_SUB("Provider/Avisynth/Allow Ancient", &Project::ReloadAudio, this);
 	OPT_SUB("Provider/Avisynth/Memory Max", &Project::ReloadVideo, this);
+	OPT_SUB("Provider/Avisynth/Memory Max", &Project::ReloadAudio, this);
+	OPT_SUB("Provider/Avisynth/Runtime Path", &Project::ReloadVideo, this);
+	OPT_SUB("Provider/Avisynth/Runtime Path", &Project::ReloadAudio, this);
 	OPT_SUB("Provider/Video/FFmpegSource/Decoding Threads", &Project::ReloadVideo, this);
 	OPT_SUB("Provider/Video/FFmpegSource/Unsafe Seeking", &Project::ReloadVideo, this);
 	OPT_SUB("Subtitle/Provider", &Project::ReloadSubtitlesProvider, this);

@@ -326,6 +326,11 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 		return false;
 	}
 
+	timecodes_file.clear();
+	keyframes_file.clear();
+	// Video-open listeners read Project::VideoName(), so publish the new path first.
+	SetPath(video_file, "?video", "Video", path);
+
 	AnnounceVideoProviderModified(video_provider.get());
 
 	UpdateVideoProperties(context->ass.get(), video_provider.get(), context->parent);
@@ -333,10 +338,6 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 
 	timecodes = video_provider->GetFPS();
 	keyframes = video_provider->GetKeyFrames();
-
-	timecodes_file.clear();
-	keyframes_file.clear();
-	SetPath(video_file, "?video", "Video", path);
 
 	std::string warning = video_provider->GetWarning();
 	if (!warning.empty())

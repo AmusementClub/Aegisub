@@ -22,7 +22,6 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <vector>
 
 #define AGI_PL_STRINGIFY_INNER(x) #x
 #define AGI_PL_STRINGIFY(x) AGI_PL_STRINGIFY_INNER(x)
@@ -31,6 +30,7 @@ namespace placebo { namespace runtime {
 
 namespace {
 constexpr char kPlaceboLogTag[] = "video/out/placebo/runtime";
+constexpr char kPlaceboLibraryName[] = "libplacebo";
 constexpr char kLogCreateSymbol[] = "pl_log_create_" AGI_PL_STRINGIFY(PL_API_VER);
 
 void LogInfo(std::string const& message) {
@@ -56,15 +56,6 @@ struct RuntimeState {
 
 RuntimeState runtime_state;
 std::mutex runtime_mutex;
-
-std::vector<std::string> CandidateLibraryNames() {
-	std::vector<std::string> candidates;
-	candidates.emplace_back("libplacebo-" AGI_PL_STRINGIFY(PL_API_VER));
-	candidates.emplace_back("libplacebo");
-	candidates.emplace_back("placebo-" AGI_PL_STRINGIFY(PL_API_VER));
-	candidates.emplace_back("placebo");
-	return candidates;
-}
 
 template <typename T>
 void ResolveSymbol(agi::native::Library& library, T& out, char const *name) {
@@ -103,37 +94,29 @@ void EnsureLoadedLocked() {
 		ThrowCachedLoadError(runtime_state);
 
 	runtime_state.load_attempted = true;
-	std::string combined_errors;
-	for (auto const& candidate : CandidateLibraryNames()) {
-		try {
-			std::unique_ptr<agi::native::Library> library(new agi::native::Library(agi::native::Library::Load(candidate)));
-			ResolveSymbols(*library, runtime_state.api);
-			runtime_state.loaded_library = std::string(library->GetLoadedPath());
-			runtime_state.loaded_version = runtime_state.api.version ? runtime_state.api.version() : std::string();
-			runtime_state.loaded_fix_version = runtime_state.api.fix_ver ? static_cast<uint32_t>(runtime_state.api.fix_ver()) : 0;
-			runtime_state.library = std::move(library);
-			runtime_state.load_complete = true;
-			runtime_state.load_error.clear();
+	try {
+		std::unique_ptr<agi::native::Library> library(new agi::native::Library(agi::native::Library::Load(kPlaceboLibraryName)));
+		ResolveSymbols(*library, runtime_state.api);
+		runtime_state.loaded_library = std::string(library->GetLoadedPath());
+		runtime_state.loaded_version = runtime_state.api.version ? runtime_state.api.version() : std::string();
+		runtime_state.loaded_fix_version = runtime_state.api.fix_ver ? static_cast<uint32_t>(runtime_state.api.fix_ver()) : 0;
+		runtime_state.library = std::move(library);
+		runtime_state.load_complete = true;
+		runtime_state.load_error.clear();
 
-			LogInfo("Loaded libplacebo runtime from " + runtime_state.loaded_library
-				+ " (headers API v" + std::to_string(PL_API_VER)
-				+ ", runtime " + (runtime_state.loaded_version.empty() ? std::string("unknown") : runtime_state.loaded_version)
-				+ ", fix " + std::to_string(runtime_state.loaded_fix_version)
-				+ ")");
-			return;
-		}
-		catch (agi::EnvironmentError const& err) {
-			if (!combined_errors.empty())
-				combined_errors += " | ";
-			combined_errors += candidate;
-			combined_errors += ": ";
-			combined_errors += err.GetMessage();
-		}
+		LogInfo("Loaded libplacebo runtime from " + runtime_state.loaded_library
+			+ " (headers API v" + std::to_string(PL_API_VER)
+			+ ", runtime " + (runtime_state.loaded_version.empty() ? std::string("unknown") : runtime_state.loaded_version)
+			+ ", fix " + std::to_string(runtime_state.loaded_fix_version)
+			+ ")");
+		return;
 	}
-
-	runtime_state.load_error = "Could not load a compatible libplacebo runtime. " + combined_errors;
-	LogWarning(runtime_state.load_error);
-	ThrowCachedLoadError(runtime_state);
+	catch (agi::EnvironmentError const& err) {
+		runtime_state.load_error = "Could not load a compatible libplacebo runtime '" + std::string(kPlaceboLibraryName) + "'. "
+			+ err.GetMessage();
+		LogWarning(runtime_state.load_error);
+		ThrowCachedLoadError(runtime_state);
+	}
 }
 }
 

@@ -37,6 +37,7 @@ if(GTEST_FOUND)
         src/async_video_provider.cpp
         src/compat.cpp
         src/fft.cpp
+        src/native_library.cpp
         src/utils.cpp
         tests/tests/cajun.cpp
         tests/tests/calltip_provider.cpp
@@ -58,6 +59,7 @@ if(GTEST_FOUND)
         tests/tests/keyframe.cpp
         tests/tests/line_iterator.cpp
         tests/tests/line_wrap.cpp
+        tests/tests/native_library.cpp
         tests/tests/video_renderer_opengl_overlay_upload_plan.cpp
         tests/tests/video_renderer_opengl_tile.cpp
         tests/tests/video_render_routing.cpp
@@ -95,7 +97,6 @@ if(GTEST_FOUND)
     if(WITH_LIBPLACEBO)
         target_sources(gtest-run PRIVATE
             tests/tests/video_renderer_placebo_runtime.cpp
-            src/native_library.cpp
             src/video_renderer_placebo_runtime.cpp
         )
         target_compile_definitions(gtest-run PRIVATE WITH_LIBPLACEBO)

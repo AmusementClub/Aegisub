@@ -7,8 +7,11 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace agi { namespace native {
+
+std::vector<std::string> BuildLibraryNameVariations(std::string_view library_name);
 
 class Library {
 	void *handle = nullptr;

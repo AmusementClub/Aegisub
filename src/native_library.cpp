@@ -22,6 +22,7 @@
 #endif
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -97,46 +98,6 @@ namespace {
 		return result;
 	}
 
-	std::vector<std::string> BuildCandidateVariations(std::string_view library_name) {
-		std::vector<std::string> candidates;
-		stdfs::path path{std::string(library_name)};
-		if (path.is_absolute()) {
-			AddCandidate(candidates, library_name);
-			return candidates;
-		}
-
-		bool has_separator = HasDirectorySeparator(library_name);
-		auto filename = path.filename().string();
-		bool has_lib_prefix = agi::util::strings::starts_with(filename, "lib");
-
-#ifdef _WIN32
-		AddCandidate(candidates, library_name);
-		if (!EndsWithCaseInsensitive(library_name, ".dll") && !EndsWithCaseInsensitive(library_name, ".exe"))
-			AddCandidate(candidates, Concat(library_name, ".dll"));
-#elif defined(__APPLE__)
-		AddCandidate(candidates, Concat(library_name, ".dylib"));
-		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name, ".dylib"));
-		AddCandidate(candidates, library_name);
-		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
-#else
-		bool has_so_name = agi::util::strings::contains(library_name, ".so");
-		if (has_so_name) {
-			AddCandidate(candidates, library_name);
-			if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
-			AddCandidate(candidates, Concat(library_name, ".so"));
-			if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name, ".so"));
-		}
-		else {
-			AddCandidate(candidates, Concat(library_name, ".so"));
-			if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name, ".so"));
-			AddCandidate(candidates, library_name);
-			if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
-		}
-#endif
-
-		return candidates;
-	}
-
 	std::string GetExecutableDirectory() {
 #ifdef _WIN32
 		std::wstring path(32768, L'\0');
@@ -181,6 +142,48 @@ namespace {
 	}
 }
 
+std::vector<std::string> BuildLibraryNameVariations(std::string_view library_name) {
+	std::vector<std::string> candidates;
+	stdfs::path path{std::string(library_name)};
+	if (path.is_absolute()) {
+		AddCandidate(candidates, library_name);
+		return candidates;
+	}
+
+	bool has_separator = HasDirectorySeparator(library_name);
+	auto filename = path.filename().string();
+	bool has_lib_prefix = agi::util::strings::starts_with(filename, "lib");
+
+#ifdef _WIN32
+	AddCandidate(candidates, library_name);
+	if (!EndsWithCaseInsensitive(library_name, ".dll") && !EndsWithCaseInsensitive(library_name, ".exe"))
+		AddCandidate(candidates, Concat(library_name, ".dll"));
+#elif defined(__APPLE__)
+	// Match .NET LibraryImport/DllImport name variation rules on macOS.
+	AddCandidate(candidates, Concat(library_name, ".dylib"));
+	if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name, ".dylib"));
+	AddCandidate(candidates, library_name);
+	if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
+#else
+	// Match .NET LibraryImport/DllImport name variation rules on Linux.
+	bool has_so_name = agi::util::strings::contains(library_name, ".so");
+	if (has_so_name) {
+		AddCandidate(candidates, library_name);
+		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
+		AddCandidate(candidates, Concat(library_name, ".so"));
+		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name, ".so"));
+	}
+	else {
+		AddCandidate(candidates, Concat(library_name, ".so"));
+		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name, ".so"));
+		AddCandidate(candidates, library_name);
+		if (!has_separator && !has_lib_prefix) AddCandidate(candidates, Concat("lib", library_name));
+	}
+#endif
+
+	return candidates;
+}
+
 Library::Library(void *handle, std::string requested_name, std::string loaded_path)
 	: handle(handle)
 	, requested_name(std::move(requested_name))
@@ -222,7 +225,7 @@ void Library::Reset() {
 
 Library Library::Load(std::string_view library_name) {
 	stdfs::path requested_path{std::string(library_name)};
-	auto candidates = BuildCandidateVariations(library_name);
+	auto candidates = BuildLibraryNameVariations(library_name);
 	std::string app_dir = requested_path.is_absolute() ? std::string() : GetExecutableDirectory();
 	std::string attempted;
 

@@ -14,6 +14,7 @@
 
 #include "video_renderer_opengl.h"
 
+#include "video_render_opengl_proc_loader.h"
 #include "video_renderer_opengl_overlay_upload_plan.h"
 #include "video_renderer_error.h"
 
@@ -26,10 +27,6 @@
 #else
 #include <GL/glext.h>
 #endif
-#elif !defined(__APPLE__)
-#include <GL/glx.h>
-#else
-#include <dlfcn.h>
 #endif
 
 namespace {
@@ -85,22 +82,9 @@ struct OpenGLVideoRenderer::Functions {
 };
 
 namespace {
-void *GetGLProcAddress(char const *name) {
-#ifdef _WIN32
-	void *proc = reinterpret_cast<void *>(wglGetProcAddress(name));
-	if (proc == nullptr || proc == reinterpret_cast<void *>(0x1) || proc == reinterpret_cast<void *>(0x2) || proc == reinterpret_cast<void *>(0x3) || proc == reinterpret_cast<void *>(-1))
-		return nullptr;
-	return proc;
-#elif defined(__APPLE__)
-	return dlsym(RTLD_DEFAULT, name);
-#else
-	return reinterpret_cast<void *>(glXGetProcAddress(reinterpret_cast<GLubyte const *>(name)));
-#endif
-}
-
 template<typename Proc>
 void LoadProc(Proc& proc, char const *name) {
-	proc = reinterpret_cast<Proc>(GetGLProcAddress(name));
+	proc = reinterpret_cast<Proc>(opengl::GetProcAddress(name));
 	if (!proc)
 		throw_message<VideoOutInitException>(name);
 }

@@ -14,6 +14,7 @@
 
 #include "video_renderer_placebo_gl.h"
 
+#include "video_render_opengl_proc_loader.h"
 #include "subtitle_overlay.h"
 #include "video_renderer_error.h"
 #include "video_renderer_placebo_runtime.h"
@@ -34,12 +35,6 @@
 #else
 #include <GL/gl.h>
 #include <GL/glext.h>
-#endif
-
-#if !defined(_WIN32) && !defined(__APPLE__)
-#include <GL/glx.h>
-#elif !defined(_WIN32)
-#include <dlfcn.h>
 #endif
 
 namespace {
@@ -80,26 +75,12 @@ void PlaceboLogCallback(void *, enum pl_log_level level, const char *msg) {
 	}
 }
 
-void *GetGLProcAddress(char const *name) {
-#ifdef _WIN32
-	void *proc = reinterpret_cast<void *>(wglGetProcAddress(name));
-	if (proc == nullptr || proc == reinterpret_cast<void *>(0x1) || proc == reinterpret_cast<void *>(0x2)
-		|| proc == reinterpret_cast<void *>(0x3) || proc == reinterpret_cast<void *>(-1))
-		return nullptr;
-	return proc;
-#elif defined(__APPLE__)
-	return dlsym(RTLD_DEFAULT, name);
-#else
-	return reinterpret_cast<void *>(glXGetProcAddress(reinterpret_cast<GLubyte const *>(name)));
-#endif
-}
-
 template <typename Proc>
 Proc LoadOptionalProc(char const *name, char const *fallback_name = nullptr) {
-	if (auto *proc = GetGLProcAddress(name))
+	if (auto *proc = opengl::GetProcAddress(name))
 		return reinterpret_cast<Proc>(proc);
 	if (fallback_name) {
-		if (auto *proc = GetGLProcAddress(fallback_name))
+		if (auto *proc = opengl::GetProcAddress(fallback_name))
 			return reinterpret_cast<Proc>(proc);
 	}
 	return nullptr;

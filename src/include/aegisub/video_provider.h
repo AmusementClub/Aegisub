@@ -92,6 +92,20 @@ public:
 	virtual SourceFrameNativeFormatIdentity GetNativeFormatIdentity() const {
 		return { };
 	}
+	virtual std::string GetNativeFormatDescription() const {
+		auto identity = GetNativeFormatIdentity();
+		if (!identity.IsValid())
+			return {};
+		switch (identity.format_namespace) {
+			case SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat:
+				return std::string("ffmpeg:") + std::to_string(identity.format_id);
+			default:
+				return std::string("ns")
+					+ std::to_string(static_cast<int>(identity.format_namespace))
+					+ ":"
+					+ std::to_string(identity.format_id);
+		}
+	}
 	virtual std::vector<SourceFrameOutputMode> GetAvailableSourceModes() const {
 		return { SourceFrameOutputMode::Bgra8 };
 	}

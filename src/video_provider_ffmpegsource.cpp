@@ -138,6 +138,7 @@ public:
 	SourceFrameColorMetadata GetRealColorMetadata() const override;
 	SourceFrameGeometry GetFrameGeometry() const override;
 	SourceFrameNativeFormatIdentity GetNativeFormatIdentity() const override;
+	std::string GetNativeFormatDescription() const override;
 	std::vector<SourceFrameOutputMode> GetAvailableSourceModes() const override;
 	bool SetOutputMode(SourceFrameOutputMode mode) override { return ConfigureOutputMode(mode); }
 	std::vector<int> GetKeyFrames() const override { return KeyFramesList; };
@@ -165,6 +166,40 @@ std::string colormatrix_description(int cs, int cr) {
 		default:
 			throw VideoOpenError("Unknown video color space");
 	}
+}
+
+std::string FormatFFMSPixelFormatId(int pixfmt) {
+	return std::string("ffmpeg:") + std::to_string(pixfmt);
+}
+
+std::string DescribeFFMSPixelFormat(int pixfmt) {
+	if (pixfmt < 0)
+		return {};
+
+	static const std::array<const char *, 15> names = {{
+		"bgra",
+		"nv12",
+		"p010le",
+		"yuv420p",
+		"yuv420p10le",
+		"yuv422p",
+		"yuv422p10le",
+		"yuv444p",
+		"yuv444p10le",
+		"rgb24",
+		"rgba",
+		"gbrp",
+		"gbrp10le",
+		"gray",
+		"gray10le"
+	}};
+
+	for (auto const* name : names) {
+		if (ffms::GetPixFmt(name) == pixfmt)
+			return std::string(name) + " (" + FormatFFMSPixelFormatId(pixfmt) + ")";
+	}
+
+	return FormatFFMSPixelFormatId(pixfmt);
 }
 
 SourceFrameColorMetadata ffms_color_metadata(int cs, int cr, int cp, int tc, std::string const& matrix) {
@@ -593,6 +628,10 @@ SourceFrameNativeFormatIdentity FFmpegSourceVideoProvider::GetNativeFormatIdenti
 		SourceFrameNativeFormatNamespace::FFmpegAVPixelFormat,
 		NativePixelFormat
 	};
+}
+
+std::string FFmpegSourceVideoProvider::GetNativeFormatDescription() const {
+	return DescribeFFMSPixelFormat(NativePixelFormat);
 }
 
 std::vector<SourceFrameOutputMode> FFmpegSourceVideoProvider::GetAvailableSourceModes() const {

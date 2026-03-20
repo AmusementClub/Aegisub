@@ -62,6 +62,14 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 	make_field(_("Length:"), fmt_plural(framecount, "1 frame", "%d frames (%s)",
 		framecount, agi::Time(fps.TimeAtFrame(framecount - 1)).GetAssFormatted(true)));
 	make_field(_("Decoder:"), to_wx(provider->GetDecoderName()));
+	make_field(_("Source output mode:"), to_wx(SourceFrameOutputModeName(provider->GetSelectedSourceMode())));
+	auto native_format = provider->GetNativeFormatDescription();
+	make_field(_("Native format:"), native_format.empty() ? _("Unavailable") : to_wx(native_format));
+	make_field(_("Color space:"), to_wx(provider->GetColorSpace()));
+	if (provider->GetRealColorSpace() != provider->GetColorSpace())
+		make_field(_("Source color space:"), to_wx(provider->GetRealColorSpace()));
+	if (!provider->GetWarning().empty())
+		make_field(_("Warning:"), to_wx(provider->GetWarning()));
 
 	auto video_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, _("Video"));
 	video_sizer->Add(fg);

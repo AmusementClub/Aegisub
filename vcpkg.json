@@ -27,6 +27,7 @@
     "icu",
     "libass",
     "libiconv",
+    "matroska",
     "stringzilla",
     "uchardet",
     "wxwidgets",

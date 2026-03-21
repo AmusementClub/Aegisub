@@ -437,7 +437,6 @@ add_executable(Aegisub WIN32
     src/visual_tool_rotatez.cpp
     src/visual_tool_scale.cpp
     src/visual_tool_vector_clip.cpp
-    src/MatroskaParser.c
     src/aegisublocale.cpp
     src/ass_attachment.cpp
     src/ass_dialogue.cpp
@@ -499,7 +498,6 @@ add_executable(Aegisub WIN32
     src/initial_line_state.cpp
     src/main.cpp
     src/menu.cpp
-    src/mkv_wrap.cpp
     src/csri_renderer_discovery.cpp
     src/native_library.cpp
     src/pen.cpp
@@ -554,6 +552,18 @@ set_source_files_properties(src/native_library.cpp PROPERTIES
 target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} libaegisub luajit)
 target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
 target_compile_features(Aegisub PRIVATE cxx_std_20)
+option(AEGISUB_MATROSKA_PARSING "Enable MKV subtitle parsing via libebml/libmatroska" ON)
+target_sources(Aegisub PRIVATE src/mkv_wrap_common.cpp)
+if(AEGISUB_MATROSKA_PARSING)
+    find_package(EBML REQUIRED CONFIG)
+    find_package(Matroska REQUIRED CONFIG)
+    target_link_libraries(Aegisub PRIVATE "EBML::ebml" "Matroska::matroska")
+    target_compile_definitions(Aegisub PRIVATE AEGISUB_MATROSKA_PARSING=1)
+    target_sources(Aegisub PRIVATE src/mkv_wrap_libmatroska.cpp)
+else()
+    target_compile_definitions(Aegisub PRIVATE AEGISUB_MATROSKA_PARSING=0)
+    target_sources(Aegisub PRIVATE src/MatroskaParser.c src/mkv_wrap.cpp)
+endif()
 option(AEGISUB_USE_STRINGZILLA "Use StringZilla in selected string-heavy code paths" ON)
 if(AEGISUB_USE_STRINGZILLA)
     find_path(STRINGZILLA_INCLUDE_DIRS NAMES

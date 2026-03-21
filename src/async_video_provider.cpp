@@ -295,9 +295,9 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 	return packet;
 }
 
-static std::unique_ptr<SubtitlesProvider> get_subs_provider(wxEvtHandler *evt_handler, agi::BackgroundRunner *br) {
+static std::unique_ptr<SubtitlesProvider> get_subs_provider(wxEvtHandler *evt_handler, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts) {
 	try {
-		return SubtitlesProviderFactory::GetProvider(br);
+		return SubtitlesProviderFactory::GetProvider({ br, std::move(transient_fonts) });
 	}
 	catch (agi::Exception const& err) {
 		evt_handler->AddPendingEvent(SubtitlesProviderErrorEvent(err.GetMessage()));
@@ -305,10 +305,10 @@ static std::unique_ptr<SubtitlesProvider> get_subs_provider(wxEvtHandler *evt_ha
 	}
 }
 
-AsyncVideoProvider::AsyncVideoProvider(agi::fs::path const& video_filename, std::string const& colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br)
+AsyncVideoProvider::AsyncVideoProvider(agi::fs::path const& video_filename, std::string const& colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts)
 : AsyncVideoProvider(
 	VideoProviderFactory::GetProvider(video_filename, colormatrix, br),
-	get_subs_provider(parent, br),
+	get_subs_provider(parent, br, std::move(transient_fonts)),
 	[parent](std::unique_ptr<wxEvent> evt) {
 		if (parent)
 			parent->QueueEvent(evt.release());
@@ -322,6 +322,8 @@ AsyncVideoProvider::AsyncVideoProvider(std::unique_ptr<VideoProvider> source_pro
 , source_provider(std::move(source_provider))
 , event_sink(std::move(event_sink))
 {
+	if (this->subs_provider)
+		this->subs_provider->OnActivated();
 	ReconfigureSourceOutputMode();
 }
 
@@ -620,7 +622,11 @@ bool AsyncVideoProvider::SetPreferredSourceModes(std::vector<SourceFrameOutputMo
 void AsyncVideoProvider::ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider> provider) {
 	worker->Sync([&] {
 		while (ProcessPending()) { }
+		auto old_provider = std::move(subs_provider);
 		subs_provider = std::move(provider);
+		if (subs_provider)
+			subs_provider->OnActivated();
+		old_provider.reset();
 		ReconfigureSourceOutputMode();
 		single_frame = NEW_SUBS_FILE;
 		last_rendered = -1;

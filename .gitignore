@@ -79,3 +79,4 @@ vendor/luajit/src/luajit
 /tools
 CMakePresets.json
 *.ps1
+/data

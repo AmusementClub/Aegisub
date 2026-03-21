@@ -1,4 +1,4 @@
-// Copyright (c) 2014, Thomas Goyne <plorkyeran@aegisub.org>
+// Copyright (c) 2026, Aegisub Project
 //
 // Permission to use, copy, modify, and distribute this software for any
 // purpose with or without fee is hereby granted, provided that the above
@@ -11,16 +11,23 @@
 // WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 // ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-//
-// Aegisub Project http://www.aegisub.org/
 
-#include <memory>
+#pragma once
+
+#include <cstdint>
 #include <string>
+#include <vector>
 
-class SubtitlesProvider;
-struct SubtitleRenderEnvironment;
+struct TransientFontData {
+	std::string original_name;
+	std::string mime_type;
+	std::vector<char> bytes;
+};
 
-namespace libass {
-	std::unique_ptr<SubtitlesProvider> Create(std::string const&, SubtitleRenderEnvironment const& env);
-	void CacheFonts();
-}
+class TransientFontSet {
+public:
+	uint64_t generation = 0;
+	std::vector<TransientFontData> fonts;
+
+	bool empty() const noexcept { return fonts.empty(); }
+};

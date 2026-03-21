@@ -118,7 +118,12 @@ void ShowAboutDialog(wxWindow *parent) {
 # endif
 #endif
 		"    libass - Copyright (c) Evgeniy Stepanov, Grigori Goronzy;\n"
+#if AEGISUB_MATROSKA_PARSING
+		"    libebml - Copyright (c) Steve Lhomme;\n"
+		"    libmatroska - Copyright (c) Steve Lhomme;\n"
+#else
 		"    Matroska Parser - Copyright (c) Mike Matsnev;\n"
+#endif
 		"    Freetype - Copyright (c) David Turner, Robert Wilhelm, Werner Lemberg;\n"
 		"    Fontconfig - Copyright (c) Keith Packard et al;\n"
 #ifdef WITH_FFTW3

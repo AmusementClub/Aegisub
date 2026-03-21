@@ -18,7 +18,11 @@
 #include <libaegisub/format.h>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
+#include <limits>
+
+#include <zlib.h>
 
 namespace {
 bool parse_int(std::string_view text, int &value) {
@@ -51,6 +55,56 @@ std::string escape_srt_payload(std::string_view payload) {
 	}
 
 	return escaped;
+}
+
+bool applies_to_target(MkvContentEncoding const& encoding, MkvContentEncodingTarget target) {
+	auto const mask = target == MkvContentEncodingTarget::Block
+		? kMkvContentEncodingScopeBlock
+		: kMkvContentEncodingScopePrivate;
+	return (encoding.scope & mask) != 0;
+}
+
+std::optional<std::string> inflate_zlib(std::string_view input, std::string *error) {
+	if (input.empty())
+		return std::string();
+	if (input.size() > std::numeric_limits<uInt>::max()) {
+		if (error)
+			*error = "zlib input is too large";
+		return std::nullopt;
+	}
+
+	z_stream stream{};
+	if (inflateInit(&stream) != Z_OK) {
+		if (error)
+			*error = "inflateInit failed";
+		return std::nullopt;
+	}
+
+	stream.next_in = reinterpret_cast<Bytef *>(const_cast<char *>(input.data()));
+	stream.avail_in = static_cast<uInt>(input.size());
+
+	std::string output;
+	std::array<char, 4096> chunk;
+
+	for (;;) {
+		stream.next_out = reinterpret_cast<Bytef *>(chunk.data());
+		stream.avail_out = static_cast<uInt>(chunk.size());
+
+		auto const code = inflate(&stream, Z_NO_FLUSH);
+		if (code != Z_OK && code != Z_STREAM_END) {
+			inflateEnd(&stream);
+			if (error)
+				*error = "inflate failed";
+			return std::nullopt;
+		}
+
+		output.append(chunk.data(), chunk.size() - stream.avail_out);
+		if (code == Z_STREAM_END)
+			break;
+	}
+
+	inflateEnd(&stream);
+	return output;
 }
 }
 
@@ -136,4 +190,45 @@ std::optional<MkvTextSubtitleLine> ParseMkvTextSubtitlePacket(MkvTextSubtitleCod
 	}
 
 	return std::nullopt;
+}
+
+std::optional<std::string> DecodeMkvContentEncodedData(std::string_view data, std::vector<MkvContentEncoding> const& encodings, MkvContentEncodingTarget target, std::string *error) {
+	if (error)
+		error->clear();
+
+	std::vector<MkvContentEncoding const*> applicable;
+	applicable.reserve(encodings.size());
+	for (auto const& encoding : encodings) {
+		if (applies_to_target(encoding, target))
+			applicable.push_back(&encoding);
+	}
+
+	if (applicable.empty())
+		return std::string(data);
+
+	std::stable_sort(applicable.begin(), applicable.end(), [](auto const* left, auto const* right) {
+		return left->order > right->order;
+	});
+
+	std::string current(data);
+	for (auto const* encoding : applicable) {
+		switch (encoding->algorithm) {
+		case MkvContentEncodingAlgorithm::Zlib: {
+			auto decoded = inflate_zlib(current, error);
+			if (!decoded)
+				return std::nullopt;
+			current = std::move(*decoded);
+			break;
+		}
+		case MkvContentEncodingAlgorithm::HeaderStripping:
+			current.insert(0, encoding->settings);
+			break;
+		case MkvContentEncodingAlgorithm::Unsupported:
+			if (error)
+				*error = "unsupported content encoding algorithm";
+			return std::nullopt;
+		}
+	}
+
+	return current;
 }

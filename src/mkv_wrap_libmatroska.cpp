@@ -82,9 +82,10 @@ struct ParsedSubtitleTrack {
 	std::string language = "eng";
 	std::string name;
 	std::string codec_private;
+	std::vector<MkvContentEncoding> content_encodings;
 	MkvTextSubtitleCodec codec = MkvTextSubtitleCodec::Unsupported;
 	bool is_subtitle_track = false;
-	bool has_content_encoding = false;
+	std::string unsupported_content_encoding_reason;
 };
 
 struct ScanResult {
@@ -161,6 +162,62 @@ std::string describe_track(ParsedSubtitleTrack const& track) {
 	return label;
 }
 
+char const* describe_content_encoding_algorithm(MkvContentEncodingAlgorithm algorithm) {
+	switch (algorithm) {
+	case MkvContentEncodingAlgorithm::Zlib:
+		return "zlib";
+	case MkvContentEncodingAlgorithm::HeaderStripping:
+		return "header-stripping";
+	case MkvContentEncodingAlgorithm::Unsupported:
+		break;
+	}
+	return "unsupported";
+}
+
+std::string describe_content_encoding_target(uint64_t scope) {
+	std::vector<std::string> parts;
+	if (scope & kMkvContentEncodingScopeBlock)
+		parts.emplace_back("block");
+	if (scope & kMkvContentEncodingScopePrivate)
+		parts.emplace_back("private");
+	if (scope & kMkvContentEncodingScopeNext)
+		parts.emplace_back("next");
+	if (parts.empty())
+		return "none";
+
+	std::string joined = parts.front();
+	for (size_t i = 1; i < parts.size(); ++i) {
+		joined += "+";
+		joined += parts[i];
+	}
+	return joined;
+}
+
+std::string describe_content_encodings(std::vector<MkvContentEncoding> const& encodings) {
+	if (encodings.empty())
+		return "none";
+
+	std::string joined;
+	for (size_t i = 0; i < encodings.size(); ++i) {
+		if (i)
+			joined += ", ";
+		joined += agi::format("#%u %s[%s]",
+			static_cast<unsigned>(encodings[i].order),
+			describe_content_encoding_algorithm(encodings[i].algorithm),
+			describe_content_encoding_target(encodings[i].scope));
+	}
+	return joined;
+}
+
+bool has_content_encoding_target(std::vector<MkvContentEncoding> const& encodings, MkvContentEncodingTarget target) {
+	auto const mask = target == MkvContentEncodingTarget::Block
+		? kMkvContentEncodingScopeBlock
+		: kMkvContentEncodingScopePrivate;
+	return std::any_of(encodings.begin(), encodings.end(), [&](auto const& encoding) {
+		return (encoding.scope & mask) != 0;
+	});
+}
+
 void append_block_lines(ParsedSubtitleTrack const& track, RawBlockPayload const& raw_block, bool have_duration, uint64_t duration_units, std::vector<std::pair<int, std::string>> &lines, int &fallback_sort_key, uint64_t segment_timecode_scale) {
 	if (raw_block.packets.empty())
 		return;
@@ -220,9 +277,124 @@ std::optional<RawBlockPayload> read_selected_block(EbmlStream &stream, libmatros
 	payload.packets.reserve(block.NumberFrames());
 	for (unsigned int i = 0; i < block.NumberFrames(); ++i) {
 		auto &buffer = block.GetBuffer(i);
-		payload.packets.emplace_back(reinterpret_cast<char const*>(buffer.Buffer()), buffer.Size());
+		std::string decoded_error;
+		auto decoded = DecodeMkvContentEncodedData(
+			std::string_view(reinterpret_cast<char const*>(buffer.Buffer()), buffer.Size()),
+			track.content_encodings,
+			MkvContentEncodingTarget::Block,
+			&decoded_error);
+		if (!decoded) {
+			throw MatroskaException(agi::format(
+				"Failed to decode MKV subtitle block for track %u: %s",
+				static_cast<unsigned>(track.track_number),
+				decoded_error));
+		}
+		payload.packets.emplace_back(std::move(*decoded));
 	}
 	return payload;
+}
+
+Cursor parse_content_compression(EbmlStream &stream, EbmlElement &compression_element, MkvContentEncoding &encoding, std::string &error) {
+	auto const& compression_context = EBML_CONTEXT(&compression_element);
+	auto cursor = next_child(stream, compression_context);
+
+	while (cursor.element && cursor.upper <= 0) {
+		auto &child = *cursor.element;
+
+		if (EbmlId(child) == EBML_ID(libmatroska::KaxContentCompAlgo)) {
+			auto &value = *static_cast<libmatroska::KaxContentCompAlgo*>(cursor.element.get());
+			value.ReadData(stream.I_O());
+			switch (value.GetValue()) {
+			case libmatroska::MATROSKA_TRACK_ENCODING_COMP_ZLIB:
+				encoding.algorithm = MkvContentEncodingAlgorithm::Zlib;
+				break;
+			case libmatroska::MATROSKA_TRACK_ENCODING_COMP_HEADERSTRIP:
+				encoding.algorithm = MkvContentEncodingAlgorithm::HeaderStripping;
+				break;
+			default:
+				error = agi::format("unsupported compression algorithm %u", static_cast<unsigned>(value.GetValue()));
+				break;
+			}
+		}
+		else if (EbmlId(child) == EBML_ID(libmatroska::KaxContentCompSettings)) {
+			auto &value = *static_cast<libmatroska::KaxContentCompSettings*>(cursor.element.get());
+			value.ReadData(stream.I_O());
+			encoding.settings.assign(reinterpret_cast<char const*>(value.GetBuffer()), value.GetSize());
+		}
+		else {
+			child.SkipData(stream, EBML_CONTEXT(&child));
+		}
+
+		cursor = next_child(stream, compression_context);
+	}
+
+	return cursor;
+}
+
+Cursor parse_content_encoding(EbmlStream &stream, EbmlElement &encoding_element, MkvContentEncoding &encoding, std::string &error) {
+	auto const& encoding_context = EBML_CONTEXT(&encoding_element);
+	auto cursor = next_child(stream, encoding_context);
+
+	while (cursor.element && cursor.upper <= 0) {
+		auto &child = *cursor.element;
+
+		if (EbmlId(child) == EBML_ID(libmatroska::KaxContentEncodingOrder)) {
+			auto &value = *static_cast<libmatroska::KaxContentEncodingOrder*>(cursor.element.get());
+			value.ReadData(stream.I_O());
+			encoding.order = value.GetValue();
+		}
+		else if (EbmlId(child) == EBML_ID(libmatroska::KaxContentEncodingScope)) {
+			auto &value = *static_cast<libmatroska::KaxContentEncodingScope*>(cursor.element.get());
+			value.ReadData(stream.I_O());
+			encoding.scope = value.GetValue();
+		}
+		else if (EbmlId(child) == EBML_ID(libmatroska::KaxContentEncodingType)) {
+			auto &value = *static_cast<libmatroska::KaxContentEncodingType*>(cursor.element.get());
+			value.ReadData(stream.I_O());
+			if (value.GetValue() != libmatroska::MATROSKA_CONTENTENCODINGTYPE_COMPRESSION)
+				error = "encryption content encodings are not supported";
+		}
+		else if (EbmlId(child) == EBML_ID(libmatroska::KaxContentCompression)) {
+			auto nested = parse_content_compression(stream, *cursor.element, encoding, error);
+			cursor = continue_after_nested(stream, encoding_context, std::move(nested));
+			continue;
+		}
+		else {
+			child.SkipData(stream, EBML_CONTEXT(&child));
+		}
+
+		cursor = next_child(stream, encoding_context);
+	}
+
+	return cursor;
+}
+
+Cursor parse_content_encodings(EbmlStream &stream, EbmlElement &encodings_element, ParsedSubtitleTrack &track) {
+	auto const& encodings_context = EBML_CONTEXT(&encodings_element);
+	auto cursor = next_child(stream, encodings_context);
+
+	while (cursor.element && cursor.upper <= 0) {
+		if (EbmlId(*cursor.element) == EBML_ID(libmatroska::KaxContentEncoding)) {
+			MkvContentEncoding encoding;
+			std::string error;
+			auto nested = parse_content_encoding(stream, *cursor.element, encoding, error);
+			if (!error.empty() && track.unsupported_content_encoding_reason.empty())
+				track.unsupported_content_encoding_reason = error;
+			else if (track.unsupported_content_encoding_reason.empty())
+				track.content_encodings.emplace_back(std::move(encoding));
+			cursor = continue_after_nested(stream, encodings_context, std::move(nested));
+		}
+		else {
+			cursor.element->SkipData(stream, EBML_CONTEXT(cursor.element.get()));
+			cursor = next_child(stream, encodings_context);
+		}
+	}
+
+	std::stable_sort(track.content_encodings.begin(), track.content_encodings.end(), [](auto const& left, auto const& right) {
+		return left.order > right.order;
+	});
+
+	return cursor;
 }
 
 Cursor parse_track_entry(EbmlStream &stream, EbmlElement &entry_element, ParsedSubtitleTrack &track) {
@@ -274,8 +446,9 @@ Cursor parse_track_entry(EbmlStream &stream, EbmlElement &entry_element, ParsedS
 			track.codec_private.assign(reinterpret_cast<char const*>(value.GetBuffer()), value.GetSize());
 		}
 		else if (EbmlId(child) == EBML_ID(libmatroska::KaxContentEncodings)) {
-			track.has_content_encoding = true;
-			child.SkipData(stream, EBML_CONTEXT(&child));
+			auto nested = parse_content_encodings(stream, child, track);
+			cursor = continue_after_nested(stream, entry_context, std::move(nested));
+			continue;
 		}
 		else {
 			child.SkipData(stream, EBML_CONTEXT(&child));
@@ -300,10 +473,10 @@ Cursor parse_tracks(EbmlStream &stream, EbmlElement &tracks_element, ScanResult 
 			}
 			else if (!track.codec_id.empty() && track.codec == MkvTextSubtitleCodec::Unsupported)
 				LOG_I(kMkvLogSection) << "Skipping MKV subtitle track " << track.track_number << " with unsupported codec " << track.codec_id;
-			else if (track.has_content_encoding)
-				LOG_I(kMkvLogSection) << "Skipping MKV subtitle track " << track.track_number << " (" << track.codec_id << ") because content encodings are not supported yet.";
+			else if (!track.unsupported_content_encoding_reason.empty())
+				LOG_I(kMkvLogSection) << "Skipping MKV subtitle track " << track.track_number << " (" << track.codec_id << ") because content encodings are unsupported: " << track.unsupported_content_encoding_reason;
 			else if (track.codec != MkvTextSubtitleCodec::Unsupported) {
-				LOG_I(kMkvLogSection) << "Found importable MKV subtitle track " << track.track_number << " (" << track.codec_id << ")";
+				LOG_I(kMkvLogSection) << "Found importable MKV subtitle track " << track.track_number << " (" << track.codec_id << "), content encodings: " << describe_content_encodings(track.content_encodings);
 				result.tracks.emplace_back(std::move(track));
 			}
 
@@ -496,13 +669,30 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 	}
 
 	LOG_I(kMkvLogSection) << "Importing MKV subtitle track " << selected_track->track_number << " (" << selected_track->codec_id << ") from " << filename.string();
+	if (!selected_track->content_encodings.empty())
+		LOG_I(kMkvLogSection) << "Decoding MKV content encodings for track " << selected_track->track_number << ": " << describe_content_encodings(selected_track->content_encodings);
 
 	AssParser parser(target, selected_track->codec != MkvTextSubtitleCodec::Ssa);
 	if (selected_track->codec == MkvTextSubtitleCodec::Utf8) {
 		target->LoadDefault(false, OPT_GET("Subtitle Format/SRT/Default Style Catalog")->GetString());
 	}
 	else {
-		for (auto const& line : SplitMkvCodecPrivateLines(selected_track->codec_private))
+		std::string decoded_error;
+		auto decoded_codec_private = DecodeMkvContentEncodedData(
+			selected_track->codec_private,
+			selected_track->content_encodings,
+			MkvContentEncodingTarget::Private,
+			&decoded_error);
+		if (!decoded_codec_private) {
+			throw MatroskaException(agi::format(
+				"Failed to decode MKV CodecPrivate for track %u: %s",
+				static_cast<unsigned>(selected_track->track_number),
+				decoded_error));
+		}
+		if (has_content_encoding_target(selected_track->content_encodings, MkvContentEncodingTarget::Private)) {
+			LOG_I(kMkvLogSection) << "Decoded MKV CodecPrivate for track " << selected_track->track_number;
+		}
+		for (auto const& line : SplitMkvCodecPrivateLines(*decoded_codec_private))
 			parser.AddLine(line);
 	}
 	parser.AddLine("[Events]");

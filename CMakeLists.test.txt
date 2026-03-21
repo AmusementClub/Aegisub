@@ -115,7 +115,7 @@ if(GTEST_FOUND)
             "${FFMS2_INCLUDE_DIR}"
         )
     endif()
-    target_link_libraries(gtest-run PRIVATE libaegisub "GTest::GTest" "Iconv::Iconv" ${wxWidgets_LIBRARIES})
+    target_link_libraries(gtest-run PRIVATE libaegisub "GTest::GTest" "Iconv::Iconv" "ZLIB::ZLIB" ${wxWidgets_LIBRARIES})
     target_precompile_headers(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/tests/support/tests_pre.h")
     if(WIN32)
         add_custom_target(test-aegisub

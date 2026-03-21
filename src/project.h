@@ -60,6 +60,7 @@ class Project {
 
 	void LoadUnloadFiles(ProjectProperties properties);
 	void UpdateRelativePaths();
+	void RefreshSubtitlesProvider(bool recreate_provider);
 	void ReloadAudio();
 	void ReloadSubtitlesProvider();
 	void ReloadVideo();

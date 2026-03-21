@@ -33,6 +33,7 @@
 #include "options.h"
 #include "selection_controller.h"
 #include "subs_controller.h"
+#include "transient_font_set.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "utils.h"
 #include "video_controller.h"
@@ -49,6 +50,22 @@
 
 #include <filesystem>
 #include <wx/msgdlg.h>
+
+namespace {
+bool transient_font_environment_matches(std::shared_ptr<const TransientFontSet> const& left, std::shared_ptr<const TransientFontSet> const& right) {
+	if (left == right)
+		return true;
+
+	auto const is_empty = [](std::shared_ptr<const TransientFontSet> const& fonts) {
+		return !fonts || fonts->empty();
+	};
+	if (is_empty(left) && is_empty(right))
+		return true;
+	if (!left || !right)
+		return false;
+	return left->generation != 0 && left->generation == right->generation;
+}
+}
 
 Project::Project(agi::Context *c) : context(c) {
 	OPT_SUB("Audio/Cache/Type", &Project::ReloadAudio, this);
@@ -81,12 +98,17 @@ void Project::ReloadAudio() {
 		LoadAudio(audio_file);
 }
 
-void Project::ReloadSubtitlesProvider() {
+void Project::RefreshSubtitlesProvider(bool recreate_provider) {
 	if (!video_provider)
 		return;
 
 	try {
-		video_provider->ReplaceSubtitlesProvider(SubtitlesProviderFactory::GetProvider({ progress, context->ass->GetTransientFonts() }));
+		if (recreate_provider) {
+			video_provider->ReplaceSubtitlesProvider(SubtitlesProviderFactory::GetProvider({
+				progress,
+				context->ass->GetTransientFonts()
+			}));
+		}
 		video_provider->LoadSubtitles(context->ass.get());
 		context->videoController->JumpToFrame(context->videoController->GetFrameN());
 	}
@@ -101,6 +123,10 @@ void Project::ReloadSubtitlesProvider() {
 	catch (...) {
 		ShowError(std::string("Failed to reload subtitles provider."));
 	}
+}
+
+void Project::ReloadSubtitlesProvider() {
+	RefreshSubtitlesProvider(true);
 }
 
 void Project::ReloadVideo() {
@@ -128,6 +154,8 @@ void Project::SetPath(agi::fs::path& var, const char *token, const char *mru, ag
 }
 
 bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, ProjectProperties &properties) {
+	auto const previous_transient_fonts = context->ass->GetTransientFonts();
+
 	try {
 		if (encoding.empty())
 			encoding = CharSetDetect::GetEncoding(path);
@@ -183,7 +211,7 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 	context->subsGrid->ScrollTo(properties.scroll_position);
 
 	if (video_provider)
-		ReloadSubtitlesProvider();
+		RefreshSubtitlesProvider(!transient_font_environment_matches(previous_transient_fonts, context->ass->GetTransientFonts()));
 
 	return true;
 }
@@ -195,13 +223,15 @@ void Project::LoadSubtitles(agi::fs::path path, std::string encoding, bool load_
 }
 
 void Project::CloseSubtitles() {
+	auto const previous_transient_fonts = context->ass->GetTransientFonts();
+
 	context->subsController->Close();
 	context->path->SetToken("?script", "");
 	LoadUnloadFiles(context->ass->Properties);
 	auto line = &*context->ass->Events.begin();
 	context->selectionController->SetSelectionAndActive({line}, line);
 	if (video_provider)
-		ReloadSubtitlesProvider();
+		RefreshSubtitlesProvider(!transient_font_environment_matches(previous_transient_fonts, context->ass->GetTransientFonts()));
 }
 
 void Project::LoadUnloadFiles(ProjectProperties properties) {

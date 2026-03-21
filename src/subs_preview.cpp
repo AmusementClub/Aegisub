@@ -47,11 +47,12 @@
 #include <wx/dcclient.h>
 #include <wx/msgdlg.h>
 
-SubtitlesPreview::SubtitlesPreview(wxWindow *parent, wxSize size, int winStyle, agi::Color col)
+SubtitlesPreview::SubtitlesPreview(wxWindow *parent, wxSize size, int winStyle, agi::Color col, std::shared_ptr<const TransientFontSet> transient_fonts)
 : wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, winStyle)
 , style(new AssStyle)
 , back_color(col)
 , sub_file(agi::make_unique<AssFile>())
+, transient_fonts(std::move(transient_fonts))
 , line(new AssDialogue)
 {
 	line->Text = "{\\q2}preview";
@@ -60,6 +61,7 @@ SubtitlesPreview::SubtitlesPreview(wxWindow *parent, wxSize size, int winStyle, 
 	SetStyle(*style);
 
 	sub_file->LoadDefault();
+	sub_file->SetTransientFonts(this->transient_fonts);
 	sub_file->Styles.push_back(*style);
 	sub_file->Events.push_back(*line);
 
@@ -141,7 +143,7 @@ void SubtitlesPreview::OnSize(wxSizeEvent &evt) {
 		if (!progress)
 			progress = agi::make_unique<DialogProgress>(this);
 		if (!provider) {
-			provider = SubtitlesProviderFactory::GetProvider({ progress.get(), {} });
+			provider = SubtitlesProviderFactory::GetProvider({ progress.get(), transient_fonts });
 			if (provider)
 				provider->OnActivated();
 		}

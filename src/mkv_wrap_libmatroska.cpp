@@ -29,7 +29,7 @@
 #include "options.h"
 #include "transient_font_set.h"
 
-#include <libaegisub/file_mapping.h>
+#include <libaegisub/exception.h>
 #include <libaegisub/format.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/log.h>
@@ -194,6 +194,11 @@ std::shared_ptr<TransientFontSet> ensure_transient_font_set(std::shared_ptr<Tran
 		fonts->generation = next_transient_font_generation.fetch_add(1, std::memory_order_relaxed);
 	}
 	return fonts;
+}
+
+void throw_if_cancelled(agi::ProgressSink *ps) {
+	if (ps && ps->IsCancelled())
+		throw agi::UserCancelException("Cancelled by user");
 }
 
 char const* describe_content_encoding_algorithm(MkvContentEncodingAlgorithm algorithm) {
@@ -438,6 +443,13 @@ Cursor parse_attached_file(EbmlStream &stream, EbmlElement &attached_element, st
 	std::string file_name;
 	std::string mime_type;
 	std::vector<char> data;
+	std::optional<bool> supported_font;
+
+	auto update_supported_font = [&] {
+		if (file_name.empty() && mime_type.empty())
+			return;
+		supported_font = is_supported_font_attachment(file_name, mime_type);
+	};
 
 	while (cursor.element && cursor.upper <= 0) {
 		auto &child = *cursor.element;
@@ -446,16 +458,23 @@ Cursor parse_attached_file(EbmlStream &stream, EbmlElement &attached_element, st
 			auto &value = *static_cast<libmatroska::KaxFileName*>(cursor.element.get());
 			value.ReadData(stream.I_O());
 			file_name = value.GetValueUTF8();
+			update_supported_font();
 		}
 		else if (EbmlId(child) == EBML_ID(libmatroska::KaxMimeType)) {
 			auto &value = *static_cast<libmatroska::KaxMimeType*>(cursor.element.get());
 			value.ReadData(stream.I_O());
 			mime_type = value.GetValue();
+			update_supported_font();
 		}
 		else if (EbmlId(child) == EBML_ID(libmatroska::KaxFileData)) {
-			auto &value = *static_cast<libmatroska::KaxFileData*>(cursor.element.get());
-			value.ReadData(stream.I_O());
-			data.assign(reinterpret_cast<char const*>(value.GetBuffer()), reinterpret_cast<char const*>(value.GetBuffer()) + value.GetSize());
+			if (supported_font && !*supported_font) {
+				child.SkipData(stream, EBML_CONTEXT(&child));
+			}
+			else {
+				auto &value = *static_cast<libmatroska::KaxFileData*>(cursor.element.get());
+				value.ReadData(stream.I_O());
+				data.assign(reinterpret_cast<char const*>(value.GetBuffer()), reinterpret_cast<char const*>(value.GetBuffer()) + value.GetSize());
+			}
 		}
 		else {
 			child.SkipData(stream, EBML_CONTEXT(&child));
@@ -464,8 +483,9 @@ Cursor parse_attached_file(EbmlStream &stream, EbmlElement &attached_element, st
 		cursor = next_child(stream, attached_context);
 	}
 
+	auto const attachment_is_supported = supported_font.value_or(is_supported_font_attachment(file_name, mime_type));
 	if (!file_name.empty() && !data.empty()) {
-		if (is_supported_font_attachment(file_name, mime_type)) {
+		if (attachment_is_supported) {
 			auto font_set = ensure_transient_font_set(fonts);
 			font_set->fonts.push_back({ file_name, mime_type, std::move(data) });
 			LOG_I(kMkvLogSection) << "Collected MKV font attachment: " << file_name
@@ -474,6 +494,9 @@ Cursor parse_attached_file(EbmlStream &stream, EbmlElement &attached_element, st
 		else {
 			LOG_D(kMkvLogSection) << "Ignoring non-font MKV attachment: " << file_name;
 		}
+	}
+	else if (!file_name.empty() && !attachment_is_supported) {
+		LOG_D(kMkvLogSection) << "Ignoring non-font MKV attachment: " << file_name;
 	}
 
 	return cursor;
@@ -674,21 +697,19 @@ Cursor parse_block_group(EbmlStream &stream, EbmlElement &group_element, libmatr
 }
 
 void import_track(agi::fs::path const& filename, ParsedSubtitleTrack const& track, uint64_t segment_timecode_scale, agi::ProgressSink *ps, std::vector<std::pair<int, std::string>> &lines, std::shared_ptr<TransientFontSet>& transient_fonts) {
-	agi::read_file_mapping mapping(filename);
 	StdIOCallback input(open_path_for_ebml(filename).c_str(), MODE_READ);
 	EbmlStream stream(input);
 	auto segment = open_segment(stream);
 	if (!segment)
 		throw MatroskaException("File is not a Matroska file.");
 
-	auto const file_size = std::max<uint64_t>(mapping.size(), 1);
+	auto const file_size = std::max<uint64_t>(agi::fs::Size(filename), 1);
 	auto const& segment_context = EBML_CONTEXT(segment.get());
 	auto cursor = next_child(stream, segment_context);
 	int fallback_sort_key = 0;
 
 	while (cursor.element && cursor.upper <= 0) {
-		if (ps && ps->IsCancelled())
-			return;
+		throw_if_cancelled(ps);
 
 		if (track.codec != MkvTextSubtitleCodec::Utf8 && EbmlId(*cursor.element) == EBML_ID(libmatroska::KaxAttachments)) {
 			cursor = continue_after_nested(stream, segment_context, parse_attachments(stream, *cursor.element, transient_fonts));
@@ -700,8 +721,7 @@ void import_track(agi::fs::path const& filename, ParsedSubtitleTrack const& trac
 			bool cluster_initialized = false;
 
 			while (child.element && child.upper <= 0) {
-				if (ps && ps->IsCancelled())
-					return;
+				throw_if_cancelled(ps);
 
 				if (EbmlId(*child.element) == EBML_ID(libmatroska::KaxClusterTimecode)) {
 					auto &timestamp = *static_cast<libmatroska::KaxClusterTimecode*>(child.element.get());
@@ -809,6 +829,9 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 	progress.Run([&](agi::ProgressSink *ps) {
 		try {
 			import_track(filename, *selected_track, scan.segment_timecode_scale, ps, lines, transient_fonts);
+		}
+		catch (agi::UserCancelException const&) {
+			throw;
 		}
 		catch (agi::Exception const& e) {
 			error = e.GetMessage();

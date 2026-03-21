@@ -86,7 +86,7 @@ void Project::ReloadSubtitlesProvider() {
 		return;
 
 	try {
-		video_provider->ReplaceSubtitlesProvider(SubtitlesProviderFactory::GetProvider(progress));
+		video_provider->ReplaceSubtitlesProvider(SubtitlesProviderFactory::GetProvider({ progress, {} }));
 		video_provider->LoadSubtitles(context->ass.get());
 		context->videoController->JumpToFrame(context->videoController->GetFrameN());
 	}

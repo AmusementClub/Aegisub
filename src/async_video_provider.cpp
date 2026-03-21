@@ -297,7 +297,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 
 static std::unique_ptr<SubtitlesProvider> get_subs_provider(wxEvtHandler *evt_handler, agi::BackgroundRunner *br) {
 	try {
-		return SubtitlesProviderFactory::GetProvider(br);
+		return SubtitlesProviderFactory::GetProvider({ br, {} });
 	}
 	catch (agi::Exception const& err) {
 		evt_handler->AddPendingEvent(SubtitlesProviderErrorEvent(err.GetMessage()));

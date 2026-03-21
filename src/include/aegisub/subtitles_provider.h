@@ -42,6 +42,7 @@
 #include <vector>
 
 class AssFile;
+class TransientFontSet;
 struct VideoFrame;
 
 enum class SubtitleRenderMode {
@@ -67,7 +68,12 @@ public:
 
 namespace agi { class BackgroundRunner; }
 
+struct SubtitleRenderEnvironment {
+	agi::BackgroundRunner *background_runner = nullptr;
+	std::shared_ptr<const TransientFontSet> transient_fonts;
+};
+
 struct SubtitlesProviderFactory {
-	static std::unique_ptr<SubtitlesProvider> GetProvider(agi::BackgroundRunner *br);
+	static std::unique_ptr<SubtitlesProvider> GetProvider(SubtitleRenderEnvironment const& env);
 	static std::vector<std::string> GetClasses();
 };

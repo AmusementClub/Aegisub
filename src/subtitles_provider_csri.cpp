@@ -146,7 +146,7 @@ std::vector<std::string> List() {
 	return final;
 }
 
-std::unique_ptr<SubtitlesProvider> Create(std::string const& name, agi::BackgroundRunner *) {
+std::unique_ptr<SubtitlesProvider> Create(std::string const& name, SubtitleRenderEnvironment const&) {
 	return agi::make_unique<CSRISubtitlesProvider>(name);
 }
 }

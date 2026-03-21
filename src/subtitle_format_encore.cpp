@@ -72,4 +72,5 @@ void EncoreSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& fi
 	TextFileWriter file(filename, "UTF-8");
 	for (auto const& current : copy.Events)
 		file.WriteLineToFile(agi::format("%i %s %s %s", ++i, ft.ToSMPTE(current.Start), ft.ToSMPTE(current.End), current.Text));
+	file.Close();
 }

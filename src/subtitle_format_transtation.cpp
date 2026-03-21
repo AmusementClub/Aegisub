@@ -78,6 +78,7 @@ void TranStationSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path cons
 
 	// Every file must end with this line
 	file.WriteLineToFile("SUB[");
+	file.Close();
 }
 
 std::string TranStationSubtitleFormat::ConvertLine(AssFile *file, const AssDialogue *current, agi::vfr::Framerate const& fps, agi::SmpteFormatter const& ft, int nextl_start) const {

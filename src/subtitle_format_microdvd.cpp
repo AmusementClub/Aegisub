@@ -151,4 +151,5 @@ void MicroDVDSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& 
 
 		file.WriteLineToFile(agi::format("{%i}{%i}%s", start, end, agi::util::strings::replace_all_copy(current.Text.get(), "\\N", "|")));
 	}
+	file.Close();
 }

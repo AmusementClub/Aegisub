@@ -26,6 +26,7 @@
 #include <libaegisub/io.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/charset_conv.h>
+#include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 
 TextFileWriter::TextFileWriter(agi::fs::path const& filename, std::string encoding)
@@ -48,20 +49,23 @@ TextFileWriter::TextFileWriter(agi::fs::path const& filename, std::string encodi
 }
 
 TextFileWriter::~TextFileWriter() {
+	if (close_attempted)
+		return;
+	close_attempted = true;
+
 	try {
 		file->Close();
 	}
-	catch (agi::fs::FileSystemError const&e) {
-#if wxCHECK_VERSION (3, 1, 0)
-		wxString m = wxString::FromUTF8(e.GetMessage());
-#else
-		wxString m = wxString::FromUTF8(e.GetMessage().c_str(), e.GetMessage().size());
-#endif
-		if (!m.empty())
-			wxMessageBox(m, "Exception in agi::io::Save", wxOK | wxCENTRE | wxICON_ERROR);
-		else
-			wxMessageBox(e.GetMessage(), "Exception in agi::io::Save", wxOK | wxCENTRE | wxICON_ERROR);
+	catch (agi::fs::FileSystemError const& e) {
+		LOG_E("text_file_writer") << "Failed to close text output stream: " << e.GetMessage();
 	}
+}
+
+void TextFileWriter::Close() {
+	if (close_attempted)
+		return;
+	close_attempted = true;
+	file->Close();
 }
 
 void TextFileWriter::WriteLineToFile(std::string const& line, bool addLineBreak) {

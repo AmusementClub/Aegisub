@@ -17,6 +17,7 @@ find_package(GTest)
 if(GTEST_FOUND)
     add_executable(gtest-run EXCLUDE_FROM_ALL
         tests/tests/access.cpp
+        tests/tests/ass_file_extradata.cpp
         tests/tests/audio.cpp
         tests/tests/avisynth_runtime_policy.cpp
         tests/tests/audio_display.cpp
@@ -41,6 +42,7 @@ if(GTEST_FOUND)
         src/fft.cpp
         src/mkv_wrap_common.cpp
         src/native_library.cpp
+        src/text_file_writer.cpp
         src/utils.cpp
         tests/tests/cajun.cpp
         tests/tests/calltip_provider.cpp
@@ -66,6 +68,7 @@ if(GTEST_FOUND)
         tests/tests/mkv_wrap_common.cpp
         tests/tests/media_load_precheck.cpp
         tests/tests/native_library.cpp
+        tests/tests/text_file_writer.cpp
         tests/tests/video_renderer_opengl_overlay_upload_plan.cpp
         tests/tests/video_renderer_opengl_tile.cpp
         tests/tests/video_render_routing.cpp

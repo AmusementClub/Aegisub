@@ -202,6 +202,7 @@ void SubsController::Save(agi::fs::path const& filename, std::string const& enco
 	if (!writer)
 		throw agi::InvalidInputException("Unknown file type.");
 
+	auto old_filename = this->filename;
 	int old_autosaved_commit_id = autosaved_commit_id, old_saved_commit_id = saved_commit_id;
 	try {
 		autosaved_commit_id = saved_commit_id = commit_id;
@@ -211,11 +212,20 @@ void SubsController::Save(agi::fs::path const& filename, std::string const& enco
 		this->filename = filename;
 		context->path->SetToken("?script", filename.parent_path());
 
-		context->ass->CleanExtradata();
-		writer->WriteFile(context->ass.get(), filename, 0, encoding);
+		const AssFile *save_source = context->ass.get();
+		std::unique_ptr<AssFile> save_copy;
+		if (!context->ass->Extradata.empty()) {
+			save_copy.reset(new AssFile(*context->ass));
+			save_copy->CleanExtradata();
+			save_source = save_copy.get();
+		}
+
+		writer->WriteFile(save_source, filename, 0, encoding);
 		FileSave();
 	}
 	catch (...) {
+		this->filename = old_filename;
+		context->path->SetToken("?script", old_filename.parent_path());
 		autosaved_commit_id = old_autosaved_commit_id;
 		saved_commit_id = old_saved_commit_id;
 		throw;

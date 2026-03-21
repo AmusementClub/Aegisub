@@ -87,4 +87,5 @@ void SsaSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filen
 			, line.Margin[0], line.Margin[1], line.Margin[2]
 			, replace_commas(line.Effect)
 			, strip_newlines(line.Text)));
+	file.Close();
 }

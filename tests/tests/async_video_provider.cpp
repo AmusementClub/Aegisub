@@ -484,7 +484,7 @@ std::vector<std::string> VideoProviderFactory::GetClasses() { return {}; }
 std::vector<std::pair<std::string, std::string>> VideoProviderFactory::GetChoices() { return {}; }
 std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *) { return nullptr; }
 std::vector<std::string> SubtitlesProviderFactory::GetClasses() { return {}; }
-std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(agi::BackgroundRunner *) { return nullptr; }
+std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(SubtitleRenderEnvironment const&) { return nullptr; }
 void SubtitlesProvider::LoadSubtitles(AssFile *, int) {
 	static const char payload[] = "test";
 	LoadSubtitles(payload, sizeof(payload) - 1);

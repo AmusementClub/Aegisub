@@ -90,6 +90,21 @@ agi::dispatch::Queue& GetCacheQueue() {
 	return *cache_queue;
 }
 
+void LogTransientLibassFontsDebug(char const* action, std::shared_ptr<const TransientFontSet> const& fonts) {
+	if (!fonts || fonts->empty())
+		return;
+
+	for (size_t i = 0; i < fonts->fonts.size(); ++i) {
+		auto const& font = fonts->fonts[i];
+		LOG_D("subtitle/provider/libass") << action << ": " << font.original_name
+			<< agi::format(" (%u/%u, %u bytes, generation %u)",
+				static_cast<unsigned>(i + 1),
+				static_cast<unsigned>(fonts->fonts.size()),
+				static_cast<unsigned>(font.bytes.size()),
+				static_cast<unsigned>(fonts->generation));
+	}
+}
+
 void ConfigureRenderer(ASS_Renderer *renderer) {
 	ass_set_font_scale(renderer, 1.);
 	ass_set_fonts(renderer, nullptr, "Sans", 1, nullptr, true);
@@ -278,10 +293,17 @@ LibassSubtitlesProvider::LibassSubtitlesProvider(SubtitleRenderEnvironment const
 			ass_set_extract_fonts(library, 0);
 			if (fonts && !fonts->empty()) {
 				size_t loaded = 0;
-				for (auto const& font : fonts->fonts) {
+				for (size_t i = 0; i < fonts->fonts.size(); ++i) {
+					auto const& font = fonts->fonts[i];
 					if (font.bytes.empty() || font.bytes.size() > INT_MAX)
 						continue;
 					ass_add_font(library, font.original_name.c_str(), font.bytes.data(), static_cast<int>(font.bytes.size()));
+					LOG_D("subtitle/provider/libass") << "Registered transient libass font: " << font.original_name
+						<< agi::format(" (%u/%u, %u bytes, generation %u)",
+							static_cast<unsigned>(i + 1),
+							static_cast<unsigned>(fonts->fonts.size()),
+							static_cast<unsigned>(font.bytes.size()),
+							static_cast<unsigned>(fonts->generation));
 					++loaded;
 				}
 				LOG_I("subtitle/provider/libass") << "Registered " << loaded << " transient font(s) with libass"
@@ -315,6 +337,7 @@ LibassSubtitlesProvider::~LibassSubtitlesProvider() {
 			<< agi::format(" (%u font(s), generation %u)",
 				static_cast<unsigned>(transient_fonts->fonts.size()),
 				static_cast<unsigned>(transient_fonts->generation));
+		LogTransientLibassFontsDebug("Released transient libass font", transient_fonts);
 	}
 }
 

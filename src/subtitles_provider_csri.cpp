@@ -82,6 +82,21 @@ struct CsriTransientFontRegistry {
 	std::unordered_map<uint64_t, LoadedCsriFontSet> active_generations;
 	std::unordered_map<void const*, uint64_t> active_leases;
 
+	void LogFontsDebug(char const* action, std::shared_ptr<const TransientFontSet> const& fonts) {
+		if (!fonts || fonts->empty())
+			return;
+
+		for (size_t i = 0; i < fonts->fonts.size(); ++i) {
+			auto const& font = fonts->fonts[i];
+			LOG_D("subtitle/provider/csri") << action << ": " << font.original_name
+				<< agi::format(" (%u/%u, %u bytes, generation %u)",
+					static_cast<unsigned>(i + 1),
+					static_cast<unsigned>(fonts->fonts.size()),
+					static_cast<unsigned>(font.bytes.size()),
+					static_cast<unsigned>(fonts->generation));
+		}
+	}
+
 	void UnloadGenerationLocked(uint64_t generation, LoadedCsriFontSet& entry) {
 		if (entry.loaded_fonts.empty() && !entry.fonts)
 			return;
@@ -90,6 +105,11 @@ struct CsriTransientFontRegistry {
 		for (auto const& font : entry.loaded_fonts) {
 			if (!font.handle)
 				continue;
+
+			LOG_D("subtitle/provider/csri") << "Removing transient CSRI font resource: " << font.original_name
+				<< agi::format(" (%u face(s), generation %u)",
+					static_cast<unsigned>(font.face_count),
+					static_cast<unsigned>(generation));
 
 			if (RemoveFontMemResourceEx(font.handle))
 				++removed;
@@ -150,6 +170,7 @@ struct CsriTransientFontRegistry {
 					static_cast<unsigned>(loaded_generation->second.loaded_fonts.size()),
 					static_cast<unsigned>(generation),
 					static_cast<unsigned>(loaded_generation->second.ref_count));
+			LogFontsDebug("Reused transient CSRI font", loaded_generation->second.fonts);
 			return;
 		}
 
@@ -177,6 +198,13 @@ struct CsriTransientFontRegistry {
 			}
 
 			entry.loaded_fonts.push_back({ handle, font.original_name, face_count });
+			LOG_D("subtitle/provider/csri") << "Loaded transient CSRI font resource: " << font.original_name
+				<< agi::format(" (%u/%u, %u bytes, %u face(s), generation %u)",
+					static_cast<unsigned>(loaded_count + 1),
+					static_cast<unsigned>(entry.fonts->fonts.size()),
+					static_cast<unsigned>(font.bytes.size()),
+					static_cast<unsigned>(face_count),
+					static_cast<unsigned>(generation));
 			++loaded_count;
 		}
 
@@ -185,6 +213,7 @@ struct CsriTransientFontRegistry {
 				static_cast<unsigned>(loaded_count),
 				static_cast<unsigned>(entry.fonts->fonts.size()),
 				static_cast<unsigned>(generation));
+		LogFontsDebug("Transient CSRI font set", entry.fonts);
 
 		active_leases[owner] = generation;
 		active_generations.emplace(generation, std::move(entry));

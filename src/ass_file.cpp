@@ -58,6 +58,23 @@ bool get_resolution(AssFile const& file, ScriptResolutionType type, int &sw, int
 		sh = sw == 1280 ? 1024 : sw * 3 / 4;
 	return true;
 }
+
+void LogTransientFontSetDebug(char const* action, std::shared_ptr<const TransientFontSet> const& set) {
+	if (!set || set->empty())
+		return;
+
+	for (size_t i = 0; i < set->fonts.size(); ++i) {
+		auto const& font = set->fonts[i];
+		LOG_D("subtitle/fonts/transient") << action << ": " << font.original_name
+			<< agi::format(" (%u/%u, %u bytes%s%s, generation %u)",
+				static_cast<unsigned>(i + 1),
+				static_cast<unsigned>(set->fonts.size()),
+				static_cast<unsigned>(font.bytes.size()),
+				font.mime_type.empty() ? "" : ", mime=",
+				font.mime_type.empty() ? "" : font.mime_type.c_str(),
+				static_cast<unsigned>(set->generation));
+	}
+}
 }
 
 AssFile::AssFile() { }
@@ -157,12 +174,16 @@ void AssFile::SetTransientFonts(std::shared_ptr<const TransientFontSet> fonts) {
 	if (transient_fonts && fonts) {
 		LOG_I("subtitle/fonts/transient") << "Replacing transient font set: "
 			<< describe(transient_fonts) << " -> " << describe(fonts);
+		LogTransientFontSetDebug("Previous transient font", transient_fonts);
+		LogTransientFontSetDebug("New transient font", fonts);
 	}
 	else if (fonts) {
 		LOG_I("subtitle/fonts/transient") << "Installing transient font set: " << describe(fonts);
+		LogTransientFontSetDebug("Installed transient font", fonts);
 	}
 	else if (transient_fonts) {
 		LOG_I("subtitle/fonts/transient") << "Clearing transient font set: " << describe(transient_fonts);
+		LogTransientFontSetDebug("Cleared transient font", transient_fonts);
 	}
 
 	transient_fonts = std::move(fonts);

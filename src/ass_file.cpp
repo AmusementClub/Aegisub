@@ -22,10 +22,13 @@
 #include "ass_style.h"
 #include "ass_style_storage.h"
 #include "options.h"
+#include "transient_font_set.h"
 
 #include <algorithm>
 #include <filesystem>
 #include <cassert>
+#include <libaegisub/format.h>
+#include <libaegisub/log.h>
 #include <libaegisub/string_utils.h>
 #include <unordered_map>
 #include <unordered_set>
@@ -65,6 +68,8 @@ AssFile::~AssFile() {
 }
 
 void AssFile::LoadDefault(bool include_dialogue_line, std::string const& style_catalog) {
+	transient_fonts.reset();
+
 	Info.emplace_back("Title", "Default Aegisub file");
 	Info.emplace_back("ScriptType", "v4.00+");
 	Info.emplace_back("WrapStyle", "0");
@@ -94,6 +99,7 @@ AssFile::AssFile(const AssFile &from)
 : Info(from.Info)
 , Attachments(from.Attachments)
 , Extradata(from.Extradata)
+, transient_fonts(from.transient_fonts)
 , next_extradata_id(from.next_extradata_id)
 {
 	Styles.clone_from(from.Styles,
@@ -111,6 +117,7 @@ void AssFile::swap(AssFile& from) throw() {
 	Attachments.swap(from.Attachments);
 	Extradata.swap(from.Extradata);
 	std::swap(Properties, from.Properties);
+	std::swap(transient_fonts, from.transient_fonts);
 	std::swap(next_extradata_id, from.next_extradata_id);
 }
 
@@ -133,6 +140,32 @@ void AssFile::InsertAttachment(agi::fs::path const& filename) {
 		group = AssEntryGroup::FONT;
 
 	Attachments.emplace_back(filename, group);
+}
+
+void AssFile::SetTransientFonts(std::shared_ptr<const TransientFontSet> fonts) {
+	if (transient_fonts == fonts)
+		return;
+
+	auto describe = [](std::shared_ptr<const TransientFontSet> const& set) {
+		if (!set)
+			return std::string("none");
+		return agi::format("%u font(s), generation %u",
+			static_cast<unsigned>(set->fonts.size()),
+			static_cast<unsigned>(set->generation));
+	};
+
+	if (transient_fonts && fonts) {
+		LOG_I("subtitle/fonts/transient") << "Replacing transient font set: "
+			<< describe(transient_fonts) << " -> " << describe(fonts);
+	}
+	else if (fonts) {
+		LOG_I("subtitle/fonts/transient") << "Installing transient font set: " << describe(fonts);
+	}
+	else if (transient_fonts) {
+		LOG_I("subtitle/fonts/transient") << "Clearing transient font set: " << describe(transient_fonts);
+	}
+
+	transient_fonts = std::move(fonts);
 }
 
 std::string AssFile::GetScriptInfo(std::string const& key) const {

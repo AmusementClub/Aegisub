@@ -195,6 +195,7 @@ static void read_subtitles(agi::ProgressSink *ps, MatroskaFile *file, MkvStdIO *
 
 void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target) {
 	LogMkvParserBackendOnce();
+	target->SetTransientFonts({});
 
 	MkvStdIO input(filename);
 	char err[2048];

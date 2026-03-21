@@ -6,6 +6,7 @@
 #include "../../src/export_fixstyle.h"
 #include "../../src/include/aegisub/subtitles_provider.h"
 #include "../../src/subtitle_overlay_blend.h"
+#include "../../src/transient_font_set.h"
 #include "../../src/video_render_geometry.h"
 #include "../../src/include/aegisub/video_provider.h"
 #include "../../src/video_frame.h"
@@ -478,18 +479,86 @@ AssFile MakeSubtitleFile(std::string const& text) {
 	file.Events.push_back(*line);
 	return file;
 }
+
+std::function<std::unique_ptr<VideoProvider>()> g_video_provider_factory;
+std::function<std::unique_ptr<SubtitlesProvider>(SubtitleRenderEnvironment const&)> g_subtitles_provider_factory;
+std::shared_ptr<const TransientFontSet> g_last_factory_transient_fonts;
+agi::BackgroundRunner *g_last_factory_background_runner = nullptr;
+
+struct ScopedFactoryOverride final {
+	~ScopedFactoryOverride() {
+		g_video_provider_factory = nullptr;
+		g_subtitles_provider_factory = nullptr;
+		g_last_factory_transient_fonts.reset();
+		g_last_factory_background_runner = nullptr;
+	}
+};
 }
 
 std::vector<std::string> VideoProviderFactory::GetClasses() { return {}; }
 std::vector<std::pair<std::string, std::string>> VideoProviderFactory::GetChoices() { return {}; }
-std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *) { return nullptr; }
+std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *) {
+	if (g_video_provider_factory)
+		return g_video_provider_factory();
+	return nullptr;
+}
 std::vector<std::string> SubtitlesProviderFactory::GetClasses() { return {}; }
-std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(SubtitleRenderEnvironment const&) { return nullptr; }
+std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(SubtitleRenderEnvironment const& env) {
+	g_last_factory_background_runner = env.background_runner;
+	g_last_factory_transient_fonts = env.transient_fonts;
+	if (g_subtitles_provider_factory)
+		return g_subtitles_provider_factory(env);
+	return nullptr;
+}
 void SubtitlesProvider::LoadSubtitles(AssFile *, int) {
 	static const char payload[] = "test";
 	LoadSubtitles(payload, sizeof(payload) - 1);
 }
 void AssFixStylesFilter::ProcessSubs(AssFile *) { }
+
+TEST(ass_file_transient_fonts, copy_assignment_and_swap_preserve_shared_state) {
+	auto primary_fonts = std::make_shared<TransientFontSet>();
+	primary_fonts->generation = 17;
+	primary_fonts->fonts.push_back({ "primary.ttf", "font/ttf", { 'a', 'b', 'c' } });
+
+	auto secondary_fonts = std::make_shared<TransientFontSet>();
+	secondary_fonts->generation = 23;
+	secondary_fonts->fonts.push_back({ "secondary.otf", "font/otf", { 'x', 'y' } });
+
+	AssFile original;
+	original.SetTransientFonts(primary_fonts);
+
+	AssFile copied(original);
+	ASSERT_TRUE(copied.GetTransientFonts());
+	EXPECT_EQ(primary_fonts, copied.GetTransientFonts());
+	EXPECT_EQ(17u, copied.GetTransientFonts()->generation);
+	ASSERT_EQ(1u, copied.GetTransientFonts()->fonts.size());
+	EXPECT_EQ("primary.ttf", copied.GetTransientFonts()->fonts.front().original_name);
+
+	AssFile assigned;
+	assigned = original;
+	ASSERT_TRUE(assigned.GetTransientFonts());
+	EXPECT_EQ(primary_fonts, assigned.GetTransientFonts());
+
+	AssFile other;
+	other.SetTransientFonts(secondary_fonts);
+	original.swap(other);
+	EXPECT_EQ(secondary_fonts, original.GetTransientFonts());
+	EXPECT_EQ(primary_fonts, other.GetTransientFonts());
+}
+
+TEST(ass_file_transient_fonts, explicit_reset_clears_transient_fonts) {
+	auto fonts = std::make_shared<TransientFontSet>();
+	fonts->generation = 5;
+	fonts->fonts.push_back({ "font.ttf", "font/ttf", { '1' } });
+
+	AssFile file;
+	file.SetTransientFonts(fonts);
+	ASSERT_EQ(fonts, file.GetTransientFonts());
+
+	file.SetTransientFonts({});
+	EXPECT_FALSE(file.GetTransientFonts());
+}
 
 TEST(async_video_provider, request_frame_keeps_only_latest_pending_render) {
 	auto state = std::make_shared<VideoProviderState>();
@@ -1249,4 +1318,39 @@ TEST(async_video_provider, replacing_subtitles_provider_reuses_video_provider_an
 	EXPECT_TRUE(second.subtitle_overlay.premultiplied_alpha);
 	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, second.subtitle_overlay.composition_mode);
 	EXPECT_EQ(128, second.subtitle_overlay.planes[0].data[3]);
+}
+
+TEST(async_video_provider, filename_constructor_forwards_transient_fonts_to_factory) {
+	ScopedFactoryOverride scope;
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeSubtitlesProvider;
+
+	g_video_provider_factory = [state] {
+		return agi::make_unique<FakeVideoProvider>(state);
+	};
+	g_subtitles_provider_factory = [subs](SubtitleRenderEnvironment const&) {
+		return std::unique_ptr<SubtitlesProvider>(subs);
+	};
+
+	auto fonts = std::make_shared<TransientFontSet>();
+	fonts->generation = 42;
+	fonts->fonts.push_back({ "embedded.ttf", "font/ttf", { 'f', 'o', 'n', 't' } });
+
+	wxEvtHandler parent;
+	AsyncVideoProvider provider(agi::fs::path("dummy.mkv"), "", &parent, nullptr, fonts);
+
+	ASSERT_TRUE(g_last_factory_transient_fonts);
+	EXPECT_EQ(fonts, g_last_factory_transient_fonts);
+	EXPECT_EQ(nullptr, g_last_factory_background_runner);
+	EXPECT_EQ(42u, g_last_factory_transient_fonts->generation);
+	ASSERT_EQ(1u, g_last_factory_transient_fonts->fonts.size());
+	EXPECT_EQ("embedded.ttf", g_last_factory_transient_fonts->fonts.front().original_name);
+
+	auto subtitle_file = MakeSubtitleFile("embedded");
+	provider.LoadSubtitles(&subtitle_file);
+	auto frame = provider.GetFrame(3, 3000);
+	ASSERT_TRUE(frame);
+	ASSERT_GE(frame->data.size(), 2u);
+	EXPECT_EQ(3, frame->data[0]);
+	EXPECT_EQ(1, frame->data[1]);
 }

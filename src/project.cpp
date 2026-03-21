@@ -86,7 +86,7 @@ void Project::ReloadSubtitlesProvider() {
 		return;
 
 	try {
-		video_provider->ReplaceSubtitlesProvider(SubtitlesProviderFactory::GetProvider({ progress, {} }));
+		video_provider->ReplaceSubtitlesProvider(SubtitlesProviderFactory::GetProvider({ progress, context->ass->GetTransientFonts() }));
 		video_provider->LoadSubtitles(context->ass.get());
 		context->videoController->JumpToFrame(context->videoController->GetFrameN());
 	}
@@ -182,6 +182,9 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 	context->selectionController->SetSelectionAndActive(std::move(sel), active_line);
 	context->subsGrid->ScrollTo(properties.scroll_position);
 
+	if (video_provider)
+		ReloadSubtitlesProvider();
+
 	return true;
 }
 
@@ -197,6 +200,8 @@ void Project::CloseSubtitles() {
 	LoadUnloadFiles(context->ass->Properties);
 	auto line = &*context->ass->Events.begin();
 	context->selectionController->SetSelectionAndActive({line}, line);
+	if (video_provider)
+		ReloadSubtitlesProvider();
 }
 
 void Project::LoadUnloadFiles(ProjectProperties properties) {
@@ -317,7 +322,7 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 
 	try {
 		auto old_matrix = context->ass->GetScriptInfo("YCbCr Matrix");
-		video_provider = agi::make_unique<AsyncVideoProvider>(path, old_matrix, context->videoController.get(), progress);
+		video_provider = agi::make_unique<AsyncVideoProvider>(path, old_matrix, context->videoController.get(), progress, context->ass->GetTransientFonts());
 	}
 	catch (agi::UserCancelException const&) { return false; }
 	catch (agi::fs::FileSystemError const& err) {

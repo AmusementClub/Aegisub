@@ -38,15 +38,18 @@
 #include "include/aegisub/subtitles_provider.h"
 #include "ready_flag.h"
 #include "subtitle_overlay_blend.h"
+#include "transient_font_set.h"
 #include "video_frame.h"
 
 #include <libaegisub/background_runner.h>
 #include <libaegisub/dispatch.h>
 #include <libaegisub/exception.h>
+#include <libaegisub/format.h>
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 
 #include <atomic>
+#include <climits>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -147,6 +150,7 @@ std::vector<SubtitleOverlayDirtyRect> MergeDirtyRects(std::vector<SubtitleOverla
 class LibassSubtitlesProvider final : public SubtitlesProvider {
 	agi::BackgroundRunner *br;
 	std::shared_ptr<cache_thread_shared> shared;
+	std::shared_ptr<const TransientFontSet> transient_fonts;
 	ASS_Track* ass_track = nullptr;
 	std::vector<SubtitleOverlayDirtyRect> dirty_rects;
 	std::vector<SubtitleOverlayDirtyRect> visible_rects;
@@ -256,10 +260,12 @@ public:
 
 LibassSubtitlesProvider::LibassSubtitlesProvider(SubtitleRenderEnvironment const& env)
 : br(env.background_runner)
+, transient_fonts(env.transient_fonts)
 , shared(std::make_shared<cache_thread_shared>())
 {
 	auto state = shared;
-	GetCacheQueue().Async([state] {
+	auto fonts = transient_fonts;
+	GetCacheQueue().Async([state, fonts] {
 		ASS_Library *library = nullptr;
 		ASS_Renderer *renderer = nullptr;
 		std::string error;
@@ -269,6 +275,18 @@ LibassSubtitlesProvider::LibassSubtitlesProvider(SubtitleRenderEnvironment const
 			error = "libass failed to initialize.";
 		else {
 			ass_set_message_cb(library, msg_callback, nullptr);
+			ass_set_extract_fonts(library, 0);
+			if (fonts && !fonts->empty()) {
+				size_t loaded = 0;
+				for (auto const& font : fonts->fonts) {
+					if (font.bytes.empty() || font.bytes.size() > INT_MAX)
+						continue;
+					ass_add_font(library, font.original_name.c_str(), font.bytes.data(), static_cast<int>(font.bytes.size()));
+					++loaded;
+				}
+				LOG_I("subtitle/provider/libass") << "Registered " << loaded << " transient font(s) with libass"
+					<< (fonts->generation ? agi::format(" (generation %u)", static_cast<unsigned>(fonts->generation)) : "");
+			}
 			renderer = ass_renderer_init(library);
 			if (!renderer) {
 				error = "libass failed to initialize the renderer.";
@@ -292,6 +310,12 @@ LibassSubtitlesProvider::LibassSubtitlesProvider(SubtitleRenderEnvironment const
 
 LibassSubtitlesProvider::~LibassSubtitlesProvider() {
 	if (ass_track) ass_free_track(ass_track);
+	if (transient_fonts && !transient_fonts->empty()) {
+		LOG_I("subtitle/provider/libass") << "Releasing transient font registration from libass"
+			<< agi::format(" (%u font(s), generation %u)",
+				static_cast<unsigned>(transient_fonts->fonts.size()),
+				static_cast<unsigned>(transient_fonts->generation));
+	}
 }
 
 bool LibassSubtitlesProvider::RenderOverlay(SourceFrame const& source, SubtitleOverlay& overlay, double time) {

@@ -27,16 +27,20 @@
 #include "dialog_progress.h"
 #include "mkv_wrap_common.h"
 #include "options.h"
+#include "transient_font_set.h"
 
 #include <libaegisub/file_mapping.h>
 #include <libaegisub/format.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/log.h>
+#include <libaegisub/string_utils.h>
 
 #include <ebml/EbmlHead.h>
 #include <ebml/EbmlStream.h>
 #include <ebml/StdIOCallback.h>
 
+#include <matroska/KaxAttached.h>
+#include <matroska/KaxAttachments.h>
 #include <matroska/KaxBlock.h>
 #include <matroska/KaxCluster.h>
 #include <matroska/KaxSemantic.h>
@@ -44,6 +48,7 @@
 #include <matroska/KaxTracks.h>
 
 #include <algorithm>
+#include <atomic>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -61,6 +66,7 @@ using libebml::StdIOCallback;
 
 char constexpr kMkvLogSection[] = "subtitle/mkv";
 uint64_t constexpr kDefaultSegmentTimecodeScale = 1000000;
+std::atomic<uint64_t> next_transient_font_generation{1};
 
 void LogMkvParserBackendOnce() {
 	static std::once_flag once;
@@ -160,6 +166,34 @@ std::string describe_track(ParsedSubtitleTrack const& track) {
 		label += track.name;
 	}
 	return label;
+}
+
+std::string to_lower_copy(std::string value) {
+	agi::util::strings::to_lower_inplace(value);
+	return value;
+}
+
+bool looks_like_font_mime_type(std::string const& mime_type) {
+	auto const lowered = to_lower_copy(mime_type);
+	return agi::util::strings::starts_with(lowered, "font/")
+		|| agi::util::strings::contains(lowered, "truetype")
+		|| agi::util::strings::contains(lowered, "opentype")
+		|| agi::util::strings::contains(lowered, "sfnt");
+}
+
+bool is_supported_font_attachment(std::string const& file_name, std::string const& mime_type) {
+	auto const ext = to_lower_copy(agi::fs::path(file_name).extension().string());
+	if (ext == ".ttf" || ext == ".ttc" || ext == ".otf" || ext == ".otc" || ext == ".pfb")
+		return true;
+	return !mime_type.empty() && looks_like_font_mime_type(mime_type);
+}
+
+std::shared_ptr<TransientFontSet> ensure_transient_font_set(std::shared_ptr<TransientFontSet>& fonts) {
+	if (!fonts) {
+		fonts = std::make_shared<TransientFontSet>();
+		fonts->generation = next_transient_font_generation.fetch_add(1, std::memory_order_relaxed);
+	}
+	return fonts;
 }
 
 char const* describe_content_encoding_algorithm(MkvContentEncodingAlgorithm algorithm) {
@@ -397,6 +431,72 @@ Cursor parse_content_encodings(EbmlStream &stream, EbmlElement &encodings_elemen
 	return cursor;
 }
 
+Cursor parse_attached_file(EbmlStream &stream, EbmlElement &attached_element, std::shared_ptr<TransientFontSet>& fonts) {
+	auto const& attached_context = EBML_CONTEXT(&attached_element);
+	auto cursor = next_child(stream, attached_context);
+
+	std::string file_name;
+	std::string mime_type;
+	std::vector<char> data;
+
+	while (cursor.element && cursor.upper <= 0) {
+		auto &child = *cursor.element;
+
+		if (EbmlId(child) == EBML_ID(libmatroska::KaxFileName)) {
+			auto &value = *static_cast<libmatroska::KaxFileName*>(cursor.element.get());
+			value.ReadData(stream.I_O());
+			file_name = value.GetValueUTF8();
+		}
+		else if (EbmlId(child) == EBML_ID(libmatroska::KaxMimeType)) {
+			auto &value = *static_cast<libmatroska::KaxMimeType*>(cursor.element.get());
+			value.ReadData(stream.I_O());
+			mime_type = value.GetValue();
+		}
+		else if (EbmlId(child) == EBML_ID(libmatroska::KaxFileData)) {
+			auto &value = *static_cast<libmatroska::KaxFileData*>(cursor.element.get());
+			value.ReadData(stream.I_O());
+			data.assign(reinterpret_cast<char const*>(value.GetBuffer()), reinterpret_cast<char const*>(value.GetBuffer()) + value.GetSize());
+		}
+		else {
+			child.SkipData(stream, EBML_CONTEXT(&child));
+		}
+
+		cursor = next_child(stream, attached_context);
+	}
+
+	if (!file_name.empty() && !data.empty()) {
+		if (is_supported_font_attachment(file_name, mime_type)) {
+			auto font_set = ensure_transient_font_set(fonts);
+			font_set->fonts.push_back({ file_name, mime_type, std::move(data) });
+			LOG_I(kMkvLogSection) << "Collected MKV font attachment: " << file_name
+				<< (mime_type.empty() ? "" : agi::format(" (%s)", mime_type));
+		}
+		else {
+			LOG_D(kMkvLogSection) << "Ignoring non-font MKV attachment: " << file_name;
+		}
+	}
+
+	return cursor;
+}
+
+Cursor parse_attachments(EbmlStream &stream, EbmlElement &attachments_element, std::shared_ptr<TransientFontSet>& fonts) {
+	auto const& attachments_context = EBML_CONTEXT(&attachments_element);
+	auto cursor = next_child(stream, attachments_context);
+
+	while (cursor.element && cursor.upper <= 0) {
+		if (EbmlId(*cursor.element) == EBML_ID(libmatroska::KaxAttached)) {
+			auto nested = parse_attached_file(stream, *cursor.element, fonts);
+			cursor = continue_after_nested(stream, attachments_context, std::move(nested));
+		}
+		else {
+			cursor.element->SkipData(stream, EBML_CONTEXT(cursor.element.get()));
+			cursor = next_child(stream, attachments_context);
+		}
+	}
+
+	return cursor;
+}
+
 Cursor parse_track_entry(EbmlStream &stream, EbmlElement &entry_element, ParsedSubtitleTrack &track) {
 	auto const& entry_context = EBML_CONTEXT(&entry_element);
 	auto cursor = next_child(stream, entry_context);
@@ -573,7 +673,7 @@ Cursor parse_block_group(EbmlStream &stream, EbmlElement &group_element, libmatr
 	return cursor;
 }
 
-void import_track(agi::fs::path const& filename, ParsedSubtitleTrack const& track, uint64_t segment_timecode_scale, agi::ProgressSink *ps, std::vector<std::pair<int, std::string>> &lines) {
+void import_track(agi::fs::path const& filename, ParsedSubtitleTrack const& track, uint64_t segment_timecode_scale, agi::ProgressSink *ps, std::vector<std::pair<int, std::string>> &lines, std::shared_ptr<TransientFontSet>& transient_fonts) {
 	agi::read_file_mapping mapping(filename);
 	StdIOCallback input(open_path_for_ebml(filename).c_str(), MODE_READ);
 	EbmlStream stream(input);
@@ -590,7 +690,10 @@ void import_track(agi::fs::path const& filename, ParsedSubtitleTrack const& trac
 		if (ps && ps->IsCancelled())
 			return;
 
-		if (EbmlId(*cursor.element) == EBML_ID(libmatroska::KaxCluster)) {
+		if (track.codec != MkvTextSubtitleCodec::Utf8 && EbmlId(*cursor.element) == EBML_ID(libmatroska::KaxAttachments)) {
+			cursor = continue_after_nested(stream, segment_context, parse_attachments(stream, *cursor.element, transient_fonts));
+		}
+		else if (EbmlId(*cursor.element) == EBML_ID(libmatroska::KaxCluster)) {
 			auto &cluster = *static_cast<libmatroska::KaxCluster*>(cursor.element.get());
 			auto const& cluster_context = EBML_CONTEXT(cursor.element.get());
 			auto child = next_child(stream, cluster_context);
@@ -649,6 +752,7 @@ void import_track(agi::fs::path const& filename, ParsedSubtitleTrack const& trac
 
 void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target) {
 	LogMkvParserBackendOnce();
+	target->SetTransientFonts({});
 
 	auto scan = scan_tracks(filename);
 	if (scan.tracks.empty())
@@ -698,12 +802,13 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 	parser.AddLine("[Events]");
 
 	std::vector<std::pair<int, std::string>> lines;
+	std::shared_ptr<TransientFontSet> transient_fonts;
 	std::string error;
 
 	DialogProgress progress(nullptr, _("Parsing Matroska"), _("Reading subtitles from Matroska file."));
 	progress.Run([&](agi::ProgressSink *ps) {
 		try {
-			import_track(filename, *selected_track, scan.segment_timecode_scale, ps, lines);
+			import_track(filename, *selected_track, scan.segment_timecode_scale, ps, lines, transient_fonts);
 		}
 		catch (agi::Exception const& e) {
 			error = e.GetMessage();
@@ -728,6 +833,13 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 
 	for (auto &line : lines)
 		parser.AddLine(line.second);
+
+	target->SetTransientFonts(transient_fonts);
+	if (transient_fonts && !transient_fonts->empty()) {
+		LOG_I(kMkvLogSection) << "Collected " << transient_fonts->fonts.size()
+			<< " transient MKV font attachment(s) for track " << selected_track->track_number
+			<< ", generation " << transient_fonts->generation;
+	}
 
 	LOG_I(kMkvLogSection) << "Imported " << lines.size() << " subtitle lines from MKV track " << selected_track->track_number;
 }

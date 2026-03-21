@@ -34,6 +34,7 @@
 
 #include <boost/intrusive/list.hpp>
 #include <map>
+#include <memory>
 #include <set>
 #include <vector>
 
@@ -41,6 +42,7 @@ class AssAttachment;
 class AssDialogue;
 class AssInfo;
 class AssStyle;
+class TransientFontSet;
 class wxString;
 
 template<typename T>
@@ -96,6 +98,7 @@ public:
 	std::vector<AssAttachment> Attachments;
 	std::vector<ExtradataEntry> Extradata;
 	ProjectProperties Properties;
+	std::shared_ptr<const TransientFontSet> transient_fonts;
 
 	uint32_t next_extradata_id = 0;
 
@@ -112,6 +115,8 @@ public:
 	void LoadDefault(bool defline = true, std::string const& style_catalog = std::string());
 	/// Attach a file to the ass file
 	void InsertAttachment(agi::fs::path const& filename);
+	void SetTransientFonts(std::shared_ptr<const TransientFontSet> fonts);
+	std::shared_ptr<const TransientFontSet> GetTransientFonts() const { return transient_fonts; }
 	/// Get the names of all of the styles available
 	std::vector<std::string> GetStyles() const;
 	/// @brief Get a style by name

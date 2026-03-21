@@ -9,6 +9,7 @@ if(PORT STREQUAL "libass"
    OR PORT STREQUAL "hunspell"
    OR PORT STREQUAL "icu"
    OR PORT STREQUAL "iconv"
+   OR PORT STREQUAL "matroska"
    OR PORT STREQUAL "uchardet"
    OR PORT STREQUAL "wxwidgets" 
    OR PORT STREQUAL "xaudio2redist")

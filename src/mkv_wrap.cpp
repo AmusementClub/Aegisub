@@ -44,14 +44,27 @@
 #include <libaegisub/ass/time.h>
 #include <libaegisub/file_mapping.h>
 #include <libaegisub/format.h>
+#include <libaegisub/log.h>
 #include <libaegisub/scoped_ptr.h>
 #include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 
 #include <algorithm>
 #include <iterator>
+#include <mutex>
 
 #include <wx/choicdlg.h> // Keep this last so wxUSE_CHOICEDLG is set.
+
+namespace {
+char constexpr kMkvLogSection[] = "subtitle/mkv";
+
+void LogMkvParserBackendOnce() {
+	static std::once_flag once;
+	std::call_once(once, [] {
+		LOG_I(kMkvLogSection) << "Using MKV parser backend: legacy MatroskaParser";
+	});
+}
+}
 
 struct MkvStdIO final : InputStream {
 	agi::read_file_mapping file;
@@ -181,6 +194,8 @@ static void read_subtitles(agi::ProgressSink *ps, MatroskaFile *file, MkvStdIO *
 }
 
 void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target) {
+	LogMkvParserBackendOnce();
+
 	MkvStdIO input(filename);
 	char err[2048];
 	agi::scoped_holder<MatroskaFile*, decltype(&mkv_Close)> file(mkv_Open(&input, err, sizeof(err)), mkv_Close);
@@ -261,6 +276,8 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 }
 
 bool MatroskaWrapper::HasSubtitles(agi::fs::path const& filename) {
+	LogMkvParserBackendOnce();
+
 	char err[2048];
 	try {
 		MkvStdIO input(filename);

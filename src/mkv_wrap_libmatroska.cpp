@@ -46,6 +46,7 @@
 #include <algorithm>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <utility>
@@ -60,6 +61,13 @@ using libebml::StdIOCallback;
 
 char constexpr kMkvLogSection[] = "subtitle/mkv";
 uint64_t constexpr kDefaultSegmentTimecodeScale = 1000000;
+
+void LogMkvParserBackendOnce() {
+	static std::once_flag once;
+	std::call_once(once, [] {
+		LOG_I(kMkvLogSection) << "Using MKV parser backend: libmatroska/libebml";
+	});
+}
 
 struct Cursor {
 	std::unique_ptr<EbmlElement> element;
@@ -467,6 +475,8 @@ void import_track(agi::fs::path const& filename, ParsedSubtitleTrack const& trac
 }
 
 void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target) {
+	LogMkvParserBackendOnce();
+
 	auto scan = scan_tracks(filename);
 	if (scan.tracks.empty())
 		throw MatroskaException("File has no recognised subtitle tracks.");
@@ -533,6 +543,8 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 }
 
 bool MatroskaWrapper::HasSubtitles(agi::fs::path const& filename) {
+	LogMkvParserBackendOnce();
+
 	try {
 		return !scan_tracks(filename).tracks.empty();
 	}

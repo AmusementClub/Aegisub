@@ -52,6 +52,7 @@
 #include "video_renderer_opengl.h"
 #include "video_render_routing.h"
 #include "video_display_layout.h"
+#include "video_zoom.h"
 #include "video_controller.h"
 #include "visual_tool.h"
 
@@ -492,8 +493,13 @@ void VideoDisplay::OnMouseLeave(wxMouseEvent& event) {
 
 void VideoDisplay::OnMouseWheel(wxMouseEvent& event) {
 	if (int wheel = event.GetWheelRotation()) {
-		if (ForwardMouseWheelEvent(this, event))
-			SetZoom(zoomValue + .125 * (wheel / event.GetWheelDelta()));
+		if (ForwardMouseWheelEvent(this, event)) {
+			int wheel_steps = wheel / event.GetWheelDelta();
+			if (freeSize)
+				SetZoom(AdvanceDetachedVideoZoomByWheel(zoomValue, wheel_steps, zoomBox->GetCount()));
+			else
+				SetZoom(zoomValue + kVideoZoomStep * wheel_steps);
+		}
 	}
 }
 

@@ -140,8 +140,11 @@ void SubtitlesPreview::OnSize(wxSizeEvent &evt) {
 	try {
 		if (!progress)
 			progress = agi::make_unique<DialogProgress>(this);
-		if (!provider)
+		if (!provider) {
 			provider = SubtitlesProviderFactory::GetProvider({ progress.get(), {} });
+			if (provider)
+				provider->OnActivated();
+		}
 	}
 	catch (...) {
 		wxMessageBox(

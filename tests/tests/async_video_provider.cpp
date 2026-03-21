@@ -420,6 +420,50 @@ public:
 	}
 };
 
+class FakeActivationAwareSubtitlesProvider final : public SubtitlesProvider {
+public:
+	int activation_calls = 0;
+
+private:
+	void LoadSubtitles(const char *, size_t) override {
+	}
+
+public:
+	void OnActivated() override {
+		++activation_calls;
+	}
+
+	void DrawSubtitles(VideoFrame &, double) override {
+	}
+};
+
+class FakeActivationOrderSubtitlesProvider final : public SubtitlesProvider {
+	int *destruction_count = nullptr;
+
+private:
+	void LoadSubtitles(const char *, size_t) override {
+	}
+
+public:
+	int destroyed_before_activation = -1;
+
+	explicit FakeActivationOrderSubtitlesProvider(int *destruction_count)
+	: destruction_count(destruction_count) {
+	}
+
+	~FakeActivationOrderSubtitlesProvider() override {
+		if (destruction_count)
+			++*destruction_count;
+	}
+
+	void OnActivated() override {
+		destroyed_before_activation = destruction_count ? *destruction_count : -1;
+	}
+
+	void DrawSubtitles(VideoFrame &, double) override {
+	}
+};
+
 struct RecordedFrame {
 	int frame_number = -1;
 	int subtitle_generation = -1;
@@ -1318,6 +1362,44 @@ TEST(async_video_provider, replacing_subtitles_provider_reuses_video_provider_an
 	EXPECT_TRUE(second.subtitle_overlay.premultiplied_alpha);
 	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, second.subtitle_overlay.composition_mode);
 	EXPECT_EQ(128, second.subtitle_overlay.planes[0].data[3]);
+}
+
+TEST(async_video_provider, provider_activation_runs_on_initial_create_and_replace) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *first_subs = new FakeActivationAwareSubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(first_subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	EXPECT_EQ(1, first_subs->activation_calls);
+
+	auto *second_subs = new FakeActivationAwareSubtitlesProvider;
+	provider.ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider>(second_subs));
+	EXPECT_EQ(1, second_subs->activation_calls);
+}
+
+TEST(async_video_provider, replacement_activates_new_provider_before_old_is_destroyed) {
+	auto state = std::make_shared<VideoProviderState>();
+	int destruction_count = 0;
+	auto *first_subs = new FakeActivationOrderSubtitlesProvider(&destruction_count);
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(first_subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	EXPECT_EQ(0, first_subs->destroyed_before_activation);
+	EXPECT_EQ(0, destruction_count);
+
+	auto *second_subs = new FakeActivationOrderSubtitlesProvider(&destruction_count);
+	provider.ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider>(second_subs));
+
+	EXPECT_EQ(0, second_subs->destroyed_before_activation);
+	EXPECT_EQ(1, destruction_count);
 }
 
 TEST(async_video_provider, filename_constructor_forwards_transient_fonts_to_factory) {

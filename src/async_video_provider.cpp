@@ -322,6 +322,8 @@ AsyncVideoProvider::AsyncVideoProvider(std::unique_ptr<VideoProvider> source_pro
 , source_provider(std::move(source_provider))
 , event_sink(std::move(event_sink))
 {
+	if (this->subs_provider)
+		this->subs_provider->OnActivated();
 	ReconfigureSourceOutputMode();
 }
 
@@ -620,7 +622,11 @@ bool AsyncVideoProvider::SetPreferredSourceModes(std::vector<SourceFrameOutputMo
 void AsyncVideoProvider::ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider> provider) {
 	worker->Sync([&] {
 		while (ProcessPending()) { }
+		auto old_provider = std::move(subs_provider);
 		subs_provider = std::move(provider);
+		if (subs_provider)
+			subs_provider->OnActivated();
+		old_provider.reset();
 		ReconfigureSourceOutputMode();
 		single_frame = NEW_SUBS_FILE;
 		last_rendered = -1;

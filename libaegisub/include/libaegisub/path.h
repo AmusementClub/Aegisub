@@ -20,6 +20,9 @@
 #include <filesystem>
 
 namespace agi {
+/// Return true for media URIs which should not be treated as filesystem paths.
+bool IsNonFilesystemMediaPath(fs::path const& path);
+
 /// Class for handling everything path-related in Aegisub
 class Path {
 	/// Token -> Path map

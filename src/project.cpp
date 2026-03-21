@@ -40,6 +40,7 @@
 #include "video_display.h"
 
 #include <libaegisub/audio/provider.h>
+#include <libaegisub/access.h>
 #include <libaegisub/format_path.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/keyframe.h>
@@ -64,6 +65,21 @@ bool transient_font_environment_matches(std::shared_ptr<const TransientFontSet> 
 	if (!left || !right)
 		return false;
 	return left->generation != 0 && left->generation == right->generation;
+}
+
+bool try_check_readable_media_path(agi::fs::path const& path, std::string& error) {
+	error.clear();
+	if (agi::IsNonFilesystemMediaPath(path))
+		return true;
+
+	try {
+		agi::acs::CheckFileRead(path);
+		return true;
+	}
+	catch (agi::fs::FileSystemError const& err) {
+		error = err.GetMessage();
+		return false;
+	}
 }
 }
 
@@ -271,19 +287,27 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 	}
 
 	bool loaded_video = false;
+	bool skip_duplicate_audio_error = false;
 	if (video != video_file) {
 		if (video.empty())
 			CloseVideo();
-		else if ((loaded_video = DoLoadVideo(video))) {
-			auto vc = context->videoController.get();
-			vc->JumpToFrame(properties.video_position);
+		else {
+			loaded_video = DoLoadVideo(video);
+			if (loaded_video) {
+				auto vc = context->videoController.get();
+				vc->JumpToFrame(properties.video_position);
 
-			auto ar_mode = static_cast<AspectRatio>(properties.ar_mode);
-			if (ar_mode == AspectRatio::Custom)
-				vc->SetAspectRatio(properties.ar_value);
-			else
-				vc->SetAspectRatio(ar_mode);
-			context->videoDisplay->SetZoom(properties.video_zoom);
+				auto ar_mode = static_cast<AspectRatio>(properties.ar_mode);
+				if (ar_mode == AspectRatio::Custom)
+					vc->SetAspectRatio(properties.ar_value);
+				else
+					vc->SetAspectRatio(ar_mode);
+				context->videoDisplay->SetZoom(properties.video_zoom);
+			}
+			else if (audio == video) {
+				std::string ignored_error;
+				skip_duplicate_audio_error = !try_check_readable_media_path(video, ignored_error);
+			}
 		}
 	}
 
@@ -293,7 +317,7 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 	if (audio != audio_file) {
 		if (audio.empty())
 			CloseAudio();
-		else
+		else if (!skip_duplicate_audio_error)
 			DoLoadAudio(audio, false);
 	}
 	else if (loaded_video && OPT_GET("Video/Open Audio")->GetBool() && audio_file != video_file && video_provider->HasAudio())
@@ -301,6 +325,12 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 }
 
 void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
+	std::string access_error;
+	if (!try_check_readable_media_path(path, access_error)) {
+		config::mru->Remove("Audio", path);
+		return ShowError(_("The audio file was not found: ") + to_wx(access_error));
+	}
+
 	if (!progress)
 		progress = new DialogProgress(context->parent);
 
@@ -347,6 +377,13 @@ void Project::CloseAudio() {
 }
 
 bool Project::DoLoadVideo(agi::fs::path const& path) {
+	std::string access_error;
+	if (!try_check_readable_media_path(path, access_error)) {
+		config::mru->Remove("Video", path);
+		ShowError(to_wx(access_error));
+		return false;
+	}
+
 	if (!progress)
 		progress = new DialogProgress(context->parent);
 

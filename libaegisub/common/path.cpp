@@ -52,6 +52,12 @@ int find_token(const char *str, size_t len) {
 
 namespace agi {
 
+bool IsNonFilesystemMediaPath(fs::path const& path) {
+	auto const str = path.string();
+	return util::strings::starts_with(str, "?dummy")
+		|| util::strings::starts_with(str, "dummy-audio:");
+}
+
 Path::Path() {
 	static_assert(sizeof(paths) / sizeof(paths[0]) == sizeof(tokens) / sizeof(tokens[0]),
 		"Token and path arrays need to be the same size");
@@ -82,8 +88,7 @@ fs::path Path::MakeRelative(fs::path const& path, std::string const& token) cons
 fs::path Path::MakeRelative(fs::path const& path, fs::path const& base) const {
 	if (path.empty() || base.empty()) return path;
 
-	const auto str = path.string();
-	if (agi::util::strings::starts_with(str, "?dummy") || agi::util::strings::starts_with(str, "dummy-audio:"))
+	if (IsNonFilesystemMediaPath(path))
 		return path;
 
 	// Paths on different volumes can't be made relative to each other
@@ -109,8 +114,7 @@ fs::path Path::MakeAbsolute(fs::path path, std::string const& token) const {
 	if (idx == -1) throw agi::InternalError("Bad token: " + token);
 
 	path.make_preferred();
-	const auto str = path.string();
-	if (agi::util::strings::starts_with(str, "?dummy") || agi::util::strings::starts_with(str, "dummy-audio:"))
+	if (IsNonFilesystemMediaPath(path))
 		return path;
 	return (paths[idx].empty() || path.is_absolute()) ? path : paths[idx]/path;
 }

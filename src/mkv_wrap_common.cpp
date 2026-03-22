@@ -179,15 +179,7 @@ std::string DescribeMkvTrack(MkvTrackInfo const& track) {
 std::string FormatMkvAudioChannelCount(std::optional<int> channels) {
 	if (!channels || *channels <= 0)
 		return {};
-
-	switch (*channels) {
-	case 1:
-		return "1.0";
-	case 2:
-		return "2.0";
-	default:
-		return agi::format("%d ch", *channels);
-	}
+	return agi::format("%d ch", *channels);
 }
 
 std::vector<std::string> SplitMkvCodecPrivateLines(std::string_view codec_private) {

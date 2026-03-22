@@ -808,6 +808,8 @@ void AudioDisplay::SetInteractivePrefetchEnabled(bool enabled) {
 }
 
 void AudioDisplay::SetSpectrumChannelMode(AudioSpectrumChannelMode mode) {
+	if (spectrum_channel_mode_runtime == mode)
+		return;
 	spectrum_channel_mode_runtime = mode;
 	if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
 		spectrum->SetChannelMode(mode);
@@ -820,7 +822,47 @@ AudioSpectrumChannelMode AudioDisplay::GetSpectrumChannelMode() const {
 	return spectrum_channel_mode_runtime;
 }
 
+void AudioDisplay::SetSpectrumMonoMixMode(AudioSpectrumMonoMixMode mode) {
+	if (spectrum_mono_mix_mode_runtime == mode)
+		return;
+	spectrum_mono_mix_mode_runtime = mode;
+	if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
+		spectrum->SetMonoMixMode(mode);
+		audio_renderer->Invalidate();
+		Refresh();
+	}
+}
+
+AudioSpectrumMonoMixMode AudioDisplay::GetSpectrumMonoMixMode() const {
+	return spectrum_mono_mix_mode_runtime;
+}
+
+void AudioDisplay::OnSpectrumMonoMixModeChanged(agi::OptionValue const& opt) {
+	auto mode = static_cast<AudioSpectrumMonoMixMode>(mid<int64_t>(0, opt.GetInt(), 2));
+	SetSpectrumMonoMixMode(mode);
+}
+
+void AudioDisplay::OnSpectrumComputationModeChanged(agi::OptionValue const& opt) {
+	auto mode = static_cast<AudioSpectrumComputationMode>(mid<int64_t>(0, opt.GetInt(), 1));
+	if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
+		spectrum->SetComputationMode(mode);
+		audio_renderer->Invalidate();
+		Refresh();
+	}
+}
+
+void AudioDisplay::OnSpectrumFrequencyCurveChanged(agi::OptionValue const& opt) {
+	auto preset = static_cast<int>(mid<int64_t>(0, opt.GetInt(), 4));
+	if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
+		spectrum->SetFrequencyCurvePreset(preset);
+		audio_renderer->Invalidate();
+		Refresh();
+	}
+}
+
 void AudioDisplay::SetSpectrumSelectedChannels(const std::vector<int> &channels) {
+	if (spectrum_selected_channels_runtime == channels)
+		return;
 	spectrum_selected_channels_runtime = channels;
 	if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
 		spectrum->SetSelectedChannels(spectrum_selected_channels_runtime);
@@ -841,6 +883,8 @@ void AudioDisplay::ReloadRenderingSettings()
 	{
 		colour_scheme_name = OPT_GET("Colour/Audio Display/Spectrum")->GetString();
 		auto audio_spectrum_renderer = agi::make_unique<AudioSpectrumRenderer>(colour_scheme_name);
+		spectrum_mono_mix_mode_runtime = static_cast<AudioSpectrumMonoMixMode>(
+			mid<int64_t>(0, OPT_GET("Audio/Renderer/Spectrum/Mono Mix Mode")->GetInt(), 2));
 
 		int64_t spectrum_quality = OPT_GET("Audio/Renderer/Spectrum/Quality")->GetInt();
 #ifdef WITH_FFTW3
@@ -864,6 +908,7 @@ void AudioDisplay::ReloadRenderingSettings()
 		int64_t spectrum_freq_curve = OPT_GET("Audio/Renderer/Spectrum/FreqCurve")->GetInt();
 		audio_spectrum_renderer->SetFrequencyCurvePreset(static_cast<int>(spectrum_freq_curve));
 		audio_spectrum_renderer->SetChannelMode(spectrum_channel_mode_runtime);
+		audio_spectrum_renderer->SetMonoMixMode(spectrum_mono_mix_mode_runtime);
 		audio_spectrum_renderer->SetSelectedChannels(spectrum_selected_channels_runtime);
 
 		audio_renderer_provider = std::move(audio_spectrum_renderer);
@@ -1476,8 +1521,9 @@ void AudioDisplay::OnAudioOpen(agi::AudioProvider *provider)
 				OPT_SUB("Colour/Audio Display/Spectrum", &AudioDisplay::ReloadRenderingSettings, this),
 				OPT_SUB("Colour/Audio Display/Waveform", &AudioDisplay::ReloadRenderingSettings, this),
 				OPT_SUB("Audio/Renderer/Spectrum/Quality", &AudioDisplay::ReloadRenderingSettings, this),
-				OPT_SUB("Audio/Renderer/Spectrum/Computation Mode", &AudioDisplay::ReloadRenderingSettings, this),
-				OPT_SUB("Audio/Renderer/Spectrum/FreqCurve", &AudioDisplay::ReloadRenderingSettings, this),
+				OPT_SUB("Audio/Renderer/Spectrum/Computation Mode", &AudioDisplay::OnSpectrumComputationModeChanged, this),
+				OPT_SUB("Audio/Renderer/Spectrum/FreqCurve", &AudioDisplay::OnSpectrumFrequencyCurveChanged, this),
+				OPT_SUB("Audio/Renderer/Spectrum/Mono Mix Mode", &AudioDisplay::OnSpectrumMonoMixModeChanged, this),
 			});
 			OnTimingController();
 		}

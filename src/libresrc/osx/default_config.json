@@ -74,6 +74,7 @@
 				"Cutoff" : 0,
 				"FreqCurve" : 2,
 				"Memory Max" : 128,
+				"Mono Mix Mode" : 0,
 				"Quality" : 1
 			}
 		},

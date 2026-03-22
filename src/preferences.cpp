@@ -161,6 +161,14 @@ void Audio(wxTreebook *book, Preferences *parent) {
 	wxArrayString sm_choice(2, sm_arr);
 	p->OptionChoice(display, _("Spectrum Computation Mode"), sm_choice, "Audio/Renderer/Spectrum/Computation Mode");
 
+	const wxString smm_arr[3] = {
+		_("Time-domain downmix"),
+		_("Strongest channel per frequency bin"),
+		_("Average channel energy per frequency bin")
+	};
+	wxArrayString smm_choice(3, smm_arr);
+	p->OptionChoice(display, _("Spectrum mono mix method"), smm_choice, "Audio/Renderer/Spectrum/Mono Mix Mode");
+
 	const wxString sc_arr[5] = { _("Linear"), _("Extended"), _("Medium"), _("Compressed"), _("Logarithmic") };
 	wxArrayString sc_choice(5, sc_arr);
 	p->OptionChoice(display, _("Spectrum Frequency Mapping"), sc_choice, "Audio/Renderer/Spectrum/FreqCurve");

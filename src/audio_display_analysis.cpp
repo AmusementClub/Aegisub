@@ -1,5 +1,6 @@
 #include "audio_display_analysis.h"
 
+#include <algorithm>
 #include <cmath>
 
 AudioWaveformSummary AnalyzeWaveformInterleaved(const float *samples, int frames, int channels, AudioMixPolicy policy) {
@@ -101,6 +102,54 @@ AudioWaveformSummary AnalyzeWaveformInterleaved(const float *samples, int frames
 	summary.avg_min = static_cast<float>(avg_min_accum / frames);
 	summary.avg_max = static_cast<float>(avg_max_accum / frames);
 	return summary;
+}
+
+void MergeSpectrumPowerBinsMax(const std::vector<const float *> &channels, size_t bin_count, float *dst) {
+	if (!dst || bin_count == 0)
+		return;
+
+	const float *seed = nullptr;
+	for (const float *channel : channels) {
+		if (channel) {
+			seed = channel;
+			break;
+		}
+	}
+
+	if (!seed) {
+		std::fill(dst, dst + bin_count, 0.f);
+		return;
+	}
+
+	std::copy(seed, seed + bin_count, dst);
+	for (const float *channel : channels) {
+		if (!channel || channel == seed)
+			continue;
+		for (size_t i = 0; i < bin_count; ++i)
+			dst[i] = std::max(dst[i], channel[i]);
+	}
+}
+
+void MergeSpectrumPowerBinsAverage(const std::vector<const float *> &channels, size_t bin_count, float *dst) {
+	if (!dst || bin_count == 0)
+		return;
+
+	std::fill(dst, dst + bin_count, 0.f);
+	size_t valid_channels = 0;
+	for (const float *channel : channels) {
+		if (!channel)
+			continue;
+		++valid_channels;
+		for (size_t i = 0; i < bin_count; ++i)
+			dst[i] += channel[i];
+	}
+
+	if (valid_channels == 0)
+		return;
+
+	const float scale = 1.0f / static_cast<float>(valid_channels);
+	for (size_t i = 0; i < bin_count; ++i)
+		dst[i] *= scale;
 }
 
 bool ShouldRefreshTrackCursor(int old_pos, int new_pos) {

@@ -118,7 +118,7 @@ AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 	OPT_SUB("Audio/Link", &AudioBox::OnVerticalLink, this);
 
 	spectrum_channel_btn = new wxButton(panel, Audio_SpectrumChannel, _("CH"), wxDefaultPosition, wxSize(20, -1), wxBU_EXACTFIT);
-	spectrum_channel_btn->SetToolTip(_("Spectrum channel display mode"));
+	spectrum_channel_btn->SetToolTip(_("Spectrum display options"));
 	spectrum_channel_btn->Enable(OPT_GET("Audio/Spectrum")->GetBool());
 	VertVolArea->Add(spectrum_channel_btn, 0, wxEXPAND, 0);
 	OPT_SUB("Audio/Spectrum", &AudioBox::OnSpectrumModeChange, this);
@@ -341,6 +341,9 @@ void AudioBox::OnSpectrumModeChange(agi::OptionValue const& opt) {
 
 void AudioBox::OnSpectrumChannelBtn(wxCommandEvent &) {
 	const auto current_mode = audioDisplay->GetSpectrumChannelMode();
+	const auto current_mono_mode = audioDisplay->GetSpectrumMonoMixMode();
+	const int current_computation_mode = mid<int>(0, OPT_GET("Audio/Renderer/Spectrum/Computation Mode")->GetInt(), 1);
+	const int current_freq_curve = mid<int>(0, OPT_GET("Audio/Renderer/Spectrum/FreqCurve")->GetInt(), 4);
 	const int channels = std::max(1, audioDisplay->GetProviderChannels());
 	std::vector<int> selected = audioDisplay->GetSpectrumSelectedChannels();
 	if (selected.empty()) {
@@ -349,10 +352,44 @@ void AudioBox::OnSpectrumChannelBtn(wxCommandEvent &) {
 			selected.push_back(ch);
 	}
 
-	enum { ID_MONO = wxID_HIGHEST + 2000, ID_SPLIT, ID_CH_BASE = wxID_HIGHEST + 2100 };
+	enum {
+		ID_MONO = wxID_HIGHEST + 2000,
+		ID_SPLIT,
+		ID_MONO_AVG,
+		ID_MONO_BIN_MAX,
+		ID_MONO_BIN_AVG,
+		ID_COMP_LEGACY,
+		ID_COMP_CURVE,
+		ID_CURVE_LINEAR,
+		ID_CURVE_EXTENDED,
+		ID_CURVE_MEDIUM,
+		ID_CURVE_COMPRESSED,
+		ID_CURVE_LOG,
+		ID_CH_BASE = wxID_HIGHEST + 2100
+	};
 	wxMenu menu;
 	menu.AppendRadioItem(ID_MONO,  _("Mono mix"))->Check(current_mode == AudioSpectrumChannelMode::MonoMix);
 	menu.AppendRadioItem(ID_SPLIT, _("Split channels"))->Check(current_mode == AudioSpectrumChannelMode::ChannelSplit);
+
+	wxMenu *mono_menu = new wxMenu();
+	mono_menu->AppendRadioItem(ID_MONO_AVG, _("Time-domain downmix"))->Check(current_mono_mode == AudioSpectrumMonoMixMode::MonoAverage);
+	mono_menu->AppendRadioItem(ID_MONO_BIN_MAX, _("Strongest channel per frequency bin"))->Check(current_mono_mode == AudioSpectrumMonoMixMode::PerBinMaxPower);
+	mono_menu->AppendRadioItem(ID_MONO_BIN_AVG, _("Average channel energy per frequency bin"))->Check(current_mono_mode == AudioSpectrumMonoMixMode::PerBinAveragePower);
+	menu.AppendSubMenu(mono_menu, _("Mono mix method"));
+
+	wxMenu *computation_menu = new wxMenu();
+	computation_menu->AppendRadioItem(ID_COMP_LEGACY, _("Legacy linear"))->Check(current_computation_mode == 0);
+	computation_menu->AppendRadioItem(ID_COMP_CURVE, _("Frequency curve"))->Check(current_computation_mode == 1);
+	menu.AppendSubMenu(computation_menu, _("Spectrum computation mode"));
+
+	wxMenu *curve_menu = new wxMenu();
+	curve_menu->AppendRadioItem(ID_CURVE_LINEAR, _("Linear"))->Check(current_freq_curve == 0);
+	curve_menu->AppendRadioItem(ID_CURVE_EXTENDED, _("Extended"))->Check(current_freq_curve == 1);
+	curve_menu->AppendRadioItem(ID_CURVE_MEDIUM, _("Medium"))->Check(current_freq_curve == 2);
+	curve_menu->AppendRadioItem(ID_CURVE_COMPRESSED, _("Compressed"))->Check(current_freq_curve == 3);
+	curve_menu->AppendRadioItem(ID_CURVE_LOG, _("Logarithmic"))->Check(current_freq_curve == 4);
+	auto *curve_menu_item = menu.AppendSubMenu(curve_menu, _("Spectrum frequency mapping"));
+	curve_menu_item->Enable(current_computation_mode == 1);
 
 	wxMenu *split_menu = new wxMenu();
 	for (int ch = 0; ch < channels; ++ch) {
@@ -369,6 +406,39 @@ void AudioBox::OnSpectrumChannelBtn(wxCommandEvent &) {
 	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
 		audioDisplay->SetSpectrumChannelMode(AudioSpectrumChannelMode::ChannelSplit);
 	}, ID_SPLIT);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		audioDisplay->SetSpectrumChannelMode(AudioSpectrumChannelMode::MonoMix);
+		OPT_SET("Audio/Renderer/Spectrum/Mono Mix Mode")->SetInt(static_cast<int>(AudioSpectrumMonoMixMode::MonoAverage));
+	}, ID_MONO_AVG);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		audioDisplay->SetSpectrumChannelMode(AudioSpectrumChannelMode::MonoMix);
+		OPT_SET("Audio/Renderer/Spectrum/Mono Mix Mode")->SetInt(static_cast<int>(AudioSpectrumMonoMixMode::PerBinMaxPower));
+	}, ID_MONO_BIN_MAX);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		audioDisplay->SetSpectrumChannelMode(AudioSpectrumChannelMode::MonoMix);
+		OPT_SET("Audio/Renderer/Spectrum/Mono Mix Mode")->SetInt(static_cast<int>(AudioSpectrumMonoMixMode::PerBinAveragePower));
+	}, ID_MONO_BIN_AVG);
+	menu.Bind(wxEVT_MENU, [](wxCommandEvent &) {
+		OPT_SET("Audio/Renderer/Spectrum/Computation Mode")->SetInt(0);
+	}, ID_COMP_LEGACY);
+	menu.Bind(wxEVT_MENU, [](wxCommandEvent &) {
+		OPT_SET("Audio/Renderer/Spectrum/Computation Mode")->SetInt(1);
+	}, ID_COMP_CURVE);
+	menu.Bind(wxEVT_MENU, [](wxCommandEvent &) {
+		OPT_SET("Audio/Renderer/Spectrum/FreqCurve")->SetInt(0);
+	}, ID_CURVE_LINEAR);
+	menu.Bind(wxEVT_MENU, [](wxCommandEvent &) {
+		OPT_SET("Audio/Renderer/Spectrum/FreqCurve")->SetInt(1);
+	}, ID_CURVE_EXTENDED);
+	menu.Bind(wxEVT_MENU, [](wxCommandEvent &) {
+		OPT_SET("Audio/Renderer/Spectrum/FreqCurve")->SetInt(2);
+	}, ID_CURVE_MEDIUM);
+	menu.Bind(wxEVT_MENU, [](wxCommandEvent &) {
+		OPT_SET("Audio/Renderer/Spectrum/FreqCurve")->SetInt(3);
+	}, ID_CURVE_COMPRESSED);
+	menu.Bind(wxEVT_MENU, [](wxCommandEvent &) {
+		OPT_SET("Audio/Renderer/Spectrum/FreqCurve")->SetInt(4);
+	}, ID_CURVE_LOG);
 
 	for (int ch = 0; ch < channels; ++ch) {
 		const int id = ID_CH_BASE + ch;

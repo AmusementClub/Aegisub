@@ -34,6 +34,7 @@
 
 #include "audio_renderer_spectrum.h"
 
+#include "audio_display_analysis.h"
 #include "audio_spectrum_analysis_cache.h"
 #include "audio_spectrum_bitmap_tile_renderer.h"
 #include "audio_colorscheme.h"
@@ -82,18 +83,39 @@ AudioSpectrumRenderer::AudioSpectrumRenderer(std::string const& color_scheme_nam
 	analysis_cache = std::make_unique<AudioSpectrumAnalysisCache>();
 }
 
+bool AudioSpectrumRenderer::UsesAnalysisCache() const {
+	return channel_mode == AudioSpectrumChannelMode::MonoMix
+		&& mono_mix_mode == AudioSpectrumMonoMixMode::MonoAverage;
+}
+
+bool AudioSpectrumRenderer::UsesPerChannelCaches() const {
+	if (!display_source)
+		return false;
+	const int total_channels = std::max(1, display_source->GetChannels());
+	if (total_channels <= 1)
+		return false;
+	return channel_mode == AudioSpectrumChannelMode::ChannelSplit
+		|| mono_mix_mode != AudioSpectrumMonoMixMode::MonoAverage;
+}
+
+bool AudioSpectrumRenderer::UsesPerChannelMonoAggregation() const {
+	return channel_mode == AudioSpectrumChannelMode::MonoMix
+		&& mono_mix_mode != AudioSpectrumMonoMixMode::MonoAverage
+		&& UsesPerChannelCaches();
+}
+
 void AudioSpectrumRenderer::EnsurePerChannelCaches() {
 	per_channel_sources.clear();
 	per_channel_caches.clear();
 	active_channel_indices.clear();
 	active_channel_labels.clear();
 
-	if (channel_mode != AudioSpectrumChannelMode::ChannelSplit || !display_source)
+	if (!UsesPerChannelCaches())
 		return;
 
 	const int total_channels = std::max(1, display_source->GetChannels());
 	std::vector<int> channels_to_use;
-	if (selected_channels.empty()) {
+	if (channel_mode != AudioSpectrumChannelMode::ChannelSplit || selected_channels.empty()) {
 		channels_to_use.reserve(total_channels);
 		for (int ch = 0; ch < total_channels; ++ch)
 			channels_to_use.push_back(ch);
@@ -116,6 +138,7 @@ void AudioSpectrumRenderer::EnsurePerChannelCaches() {
 		cache->SetSource(per_channel_sources.back().get());
 		cache->SetMixPolicy(mix_policy);
 		cache->SetResolution(derivation_size, derivation_dist);
+		cache->SetPrefetchEnabled(interactive_prefetch_enabled);
 		per_channel_caches.push_back(std::move(cache));
 		active_channel_indices.push_back(ch);
 		active_channel_labels.push_back(GetChannelLabel(ch, total_channels));
@@ -224,14 +247,21 @@ AudioSpectrumRenderer::~AudioSpectrumRenderer()
 void AudioSpectrumRenderer::RecreateCache()
 {
 	if (analysis_cache) {
-		analysis_cache->SetSource(display_source);
-		analysis_cache->SetMixPolicy(mix_policy);
-		analysis_cache->SetResolution(derivation_size, derivation_dist);
+		if (UsesAnalysisCache()) {
+			analysis_cache->SetSource(display_source);
+			analysis_cache->SetMixPolicy(mix_policy);
+			analysis_cache->SetResolution(derivation_size, derivation_dist);
+			analysis_cache->SetPrefetchEnabled(interactive_prefetch_enabled);
+		}
+		else {
+			analysis_cache->SetSource(nullptr);
+		}
 	}
 	for (auto &cache : per_channel_caches) {
 		if (cache) {
 			cache->SetMixPolicy(mix_policy);
 			cache->SetResolution(derivation_size, derivation_dist);
+			cache->SetPrefetchEnabled(interactive_prefetch_enabled);
 		}
 	}
 }
@@ -275,9 +305,25 @@ void AudioSpectrumRenderer::SetChannelMode(AudioSpectrumChannelMode mode) {
 	if (channel_mode == mode)
 		return;
 	channel_mode = mode;
+	RecreateCache();
 	EnsurePerChannelCaches();
 	render_scale_cache_height = 0;
 	AgeCache(0);
+}
+
+void AudioSpectrumRenderer::SetMonoMixMode(AudioSpectrumMonoMixMode mode) {
+	if (mono_mix_mode == mode)
+		return;
+	const bool old_uses_analysis = UsesAnalysisCache();
+	const bool old_uses_per_channel = UsesPerChannelCaches();
+	mono_mix_mode = mode;
+	const bool new_uses_analysis = UsesAnalysisCache();
+	const bool new_uses_per_channel = UsesPerChannelCaches();
+	if (old_uses_analysis != new_uses_analysis || old_uses_per_channel != new_uses_per_channel) {
+		RecreateCache();
+		EnsurePerChannelCaches();
+		AgeCache(0);
+	}
 }
 
 void AudioSpectrumRenderer::SetSelectedChannels(const std::vector<int> &channels) {
@@ -350,6 +396,71 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 		}
 	}
 
+	if (UsesPerChannelMonoAggregation() && !per_channel_caches.empty()) {
+		const bool caches_ready = std::all_of(per_channel_caches.begin(), per_channel_caches.end(),
+			[](const auto &cache) { return cache && cache->IsReady(); });
+		if (!caches_ready)
+			return;
+
+		assert(bmp.IsOk());
+
+		const int end = start + bmp.GetWidth();
+		const AudioColorScheme *pal = &colors[style];
+		const double samples_per_pixel = pixel_ms * display_source->GetSampleRate() / 1000.0;
+		EnsureRenderScaleCache(bmp.GetHeight());
+		const bool interpolated = bmp.GetHeight() > 1 << derivation_size;
+		const size_t bin_count = static_cast<size_t>(1) << derivation_size;
+
+		combined_power_columns.resize(static_cast<size_t>(bmp.GetWidth()));
+		combined_power_scratch.resize(static_cast<size_t>(bmp.GetWidth()) * bin_count);
+		channel_power_inputs.resize(per_channel_caches.size());
+
+		size_t last_block_index = static_cast<size_t>(-1);
+		const float *last_power = nullptr;
+		size_t combined_block_count = 0;
+
+		for (int ax = start; ax < end; ++ax) {
+			size_t block_index = static_cast<size_t>(ax * samples_per_pixel) >> derivation_dist;
+			const float *power = nullptr;
+			if (block_index == last_block_index) {
+				power = last_power;
+			}
+			else {
+				for (size_t ch = 0; ch < per_channel_caches.size(); ++ch)
+					channel_power_inputs[ch] = per_channel_caches[ch]->Get(block_index);
+
+				float *dst = combined_power_scratch.data() + combined_block_count * bin_count;
+				if (mono_mix_mode == AudioSpectrumMonoMixMode::PerBinMaxPower)
+					MergeSpectrumPowerBinsMax(channel_power_inputs, bin_count, dst);
+				else
+					MergeSpectrumPowerBinsAverage(channel_power_inputs, bin_count, dst);
+
+				power = dst;
+				last_block_index = block_index;
+				last_power = power;
+				++combined_block_count;
+			}
+			combined_power_columns[static_cast<size_t>(ax - start)] = power;
+		}
+
+		if (last_block_index != static_cast<size_t>(-1)) {
+			for (auto &cache : per_channel_caches)
+				cache->Prefetch(last_block_index + 1, last_block_index + 8);
+		}
+
+		RenderSpectrumColumnsToBitmap(
+			bmp,
+			combined_power_columns,
+			derivation_size,
+			render_band_a.data(),
+			render_band_b.data(),
+			interpolated ? render_band_frac.data() : nullptr,
+			interpolated,
+			amplitude_scale,
+			*pal);
+		return;
+	}
+
 	if (!analysis_cache || !analysis_cache->IsReady())
 		return;
 
@@ -409,7 +520,7 @@ void AudioSpectrumRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRende
 
 void AudioSpectrumRenderer::AgeCache(size_t max_size)
 {
-	if (channel_mode == AudioSpectrumChannelMode::ChannelSplit && !per_channel_caches.empty()) {
+	if (UsesPerChannelCaches() && !per_channel_caches.empty()) {
 		if (analysis_cache)
 			analysis_cache->Age(0);
 		const size_t n = per_channel_caches.size();
@@ -426,6 +537,7 @@ void AudioSpectrumRenderer::AgeCache(size_t max_size)
 }
 
 void AudioSpectrumRenderer::SetInteractivePrefetchEnabled(bool enabled) {
+	interactive_prefetch_enabled = enabled;
 	if (analysis_cache)
 		analysis_cache->SetPrefetchEnabled(enabled);
 	for (auto &cache : per_channel_caches)
@@ -433,9 +545,12 @@ void AudioSpectrumRenderer::SetInteractivePrefetchEnabled(bool enabled) {
 }
 
 std::vector<std::string> AudioSpectrumRenderer::GetDebugInfo() const {
-	if (!analysis_cache)
+	const AudioSpectrumAnalysisCache *metrics_cache = analysis_cache.get();
+	if (UsesPerChannelCaches() && !per_channel_caches.empty() && per_channel_caches.front())
+		metrics_cache = per_channel_caches.front().get();
+	if (!metrics_cache)
 		return {};
-	auto metrics = analysis_cache->GetMetricsSnapshot();
+	auto metrics = metrics_cache->GetMetricsSnapshot();
 	std::ostringstream line1;
 	std::ostringstream line2;
 	line1 << "SP gen=" << metrics.generation
@@ -444,6 +559,7 @@ std::vector<std::string> AudioSpectrumRenderer::GetDebugInfo() const {
 		<< " mode=" << static_cast<int>(computation_mode)
 		<< " curve=" << frequency_curve_preset
 		<< " ch=" << static_cast<int>(channel_mode)
+		<< " mono=" << static_cast<int>(mono_mix_mode)
 		<< " vis=" << metrics.visible_builds
 		<< " lock=" << metrics.visible_lock_contention
 		<< " pf_req=" << metrics.prefetch_requests

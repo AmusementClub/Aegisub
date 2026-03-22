@@ -56,6 +56,12 @@ enum class AudioSpectrumChannelMode {
 	ChannelSplit = 1,
 };
 
+enum class AudioSpectrumMonoMixMode {
+	MonoAverage = 0,
+	PerBinMaxPower = 1,
+	PerBinAveragePower = 2,
+};
+
 /// @class AudioSpectrumRenderer
 /// @brief Render frequency-power spectrum graphs for audio data.
 ///
@@ -90,6 +96,8 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 	float frequency_reference_position = 1.0f / 3.0f;
 	int frequency_curve_preset = 2;
 	AudioSpectrumChannelMode channel_mode = AudioSpectrumChannelMode::MonoMix;
+	AudioSpectrumMonoMixMode mono_mix_mode = AudioSpectrumMonoMixMode::MonoAverage;
+	bool interactive_prefetch_enabled = true;
 	std::vector<int> render_band_a;
 	std::vector<int> render_band_b;
 	std::vector<float> render_band_frac;
@@ -106,7 +114,13 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 	std::vector<int> active_channel_indices;
 	std::vector<std::string> active_channel_labels;
 	std::vector<int> selected_channels;
+	std::vector<const float *> channel_power_inputs;
+	std::vector<const float *> combined_power_columns;
+	std::vector<float> combined_power_scratch;
 	void EnsurePerChannelCaches();
+	bool UsesAnalysisCache() const;
+	bool UsesPerChannelCaches() const;
+	bool UsesPerChannelMonoAggregation() const;
 
 public:
 	/// @brief Constructor
@@ -138,6 +152,7 @@ public:
 	void SetComputationMode(AudioSpectrumComputationMode mode);
 	void SetFrequencyCurvePreset(int preset);
 	void SetChannelMode(AudioSpectrumChannelMode mode);
+	void SetMonoMixMode(AudioSpectrumMonoMixMode mode);
 	void SetSelectedChannels(const std::vector<int> &channels);
 	const std::vector<std::string> &GetActiveChannelLabels() const { return active_channel_labels; }
 

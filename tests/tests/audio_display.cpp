@@ -136,6 +136,35 @@ TEST(lagi_audio_display, waveform_analysis_uses_requested_mix_policy) {
 	EXPECT_NEAR(0.5f, maxabs.peak_max, 1e-6f);
 }
 
+TEST(lagi_audio_display, spectrum_power_merge_max_uses_strongest_channel_per_bin) {
+	const float left[] = { 0.10f, 0.80f, 0.30f, 0.20f };
+	const float right[] = { 0.50f, 0.20f, 0.70f, 0.40f };
+	const std::vector<const float *> channels = { left, right };
+	float merged[4] = { 0.f, 0.f, 0.f, 0.f };
+
+	MergeSpectrumPowerBinsMax(channels, 4, merged);
+
+	EXPECT_NEAR(0.50f, merged[0], 1e-6f);
+	EXPECT_NEAR(0.80f, merged[1], 1e-6f);
+	EXPECT_NEAR(0.70f, merged[2], 1e-6f);
+	EXPECT_NEAR(0.40f, merged[3], 1e-6f);
+}
+
+TEST(lagi_audio_display, spectrum_power_merge_average_averages_each_bin) {
+	const float left[] = { 0.10f, 0.80f, 0.30f, 0.20f };
+	const float right[] = { 0.50f, 0.20f, 0.70f, 0.40f };
+	const float center[] = { 0.40f, 0.10f, 0.20f, 0.90f };
+	const std::vector<const float *> channels = { left, right, center };
+	float merged[4] = { 0.f, 0.f, 0.f, 0.f };
+
+	MergeSpectrumPowerBinsAverage(channels, 4, merged);
+
+	EXPECT_NEAR((0.10f + 0.50f + 0.40f) / 3.0f, merged[0], 1e-6f);
+	EXPECT_NEAR((0.80f + 0.20f + 0.10f) / 3.0f, merged[1], 1e-6f);
+	EXPECT_NEAR((0.30f + 0.70f + 0.20f) / 3.0f, merged[2], 1e-6f);
+	EXPECT_NEAR((0.20f + 0.40f + 0.90f) / 3.0f, merged[3], 1e-6f);
+}
+
 TEST(lagi_audio_display, waveform_summary_cache_reuses_hot_block) {
 	CountingStereoProvider provider;
 	auto source = CreateAudioDisplaySource(&provider);

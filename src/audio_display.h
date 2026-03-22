@@ -43,6 +43,7 @@
 
 namespace agi { class AudioProvider; }
 namespace agi { struct Context; }
+namespace agi { class OptionValue; }
 
 class AudioController;
 class AudioRenderer;
@@ -223,8 +224,12 @@ class AudioDisplay: public wxWindow {
 	void OnTimingController();
 	void OnMarkerMoved();
 	void OnVideoSeek(int frame);
+	void OnSpectrumMonoMixModeChanged(agi::OptionValue const& opt);
+	void OnSpectrumComputationModeChanged(agi::OptionValue const& opt);
+	void OnSpectrumFrequencyCurveChanged(agi::OptionValue const& opt);
 
 	AudioSpectrumChannelMode spectrum_channel_mode_runtime = AudioSpectrumChannelMode::MonoMix;
+	AudioSpectrumMonoMixMode spectrum_mono_mix_mode_runtime = AudioSpectrumMonoMixMode::MonoAverage;
 	std::vector<int> spectrum_selected_channels_runtime;
 
 public:
@@ -307,6 +312,8 @@ public:
 	void SetInteractivePrefetchEnabled(bool enabled);
 	void SetSpectrumChannelMode(AudioSpectrumChannelMode mode);
 	AudioSpectrumChannelMode GetSpectrumChannelMode() const;
+	void SetSpectrumMonoMixMode(AudioSpectrumMonoMixMode mode);
+	AudioSpectrumMonoMixMode GetSpectrumMonoMixMode() const;
 	void SetSpectrumSelectedChannels(const std::vector<int> &channels);
 	const std::vector<int>& GetSpectrumSelectedChannels() const { return spectrum_selected_channels_runtime; }
 	int GetProviderChannels() const;

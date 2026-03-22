@@ -36,6 +36,7 @@
 #include "avisynth_wrap.h"
 
 #include <avisynth.h>
+#include "avisynth_path_helper.h"
 #include "avisynth_runtime_policy.h"
 #include "native_library.h"
 #include "options.h"
@@ -140,7 +141,12 @@ namespace {
 
 		for (auto it = directories.rbegin(); it != directories.rend(); ++it) {
 			LOG_I(kAvisynthPluginLogTag) << "Registering Avisynth autoload dir: " << agi::fs::PathToString(*it);
-			neo_env->AddAutoloadDir(env->SaveString(agi::fs::ShortName(*it).c_str()), true);
+			try {
+				avisynth::InvokeUtf8PathFunction(env, "AddAutoloadDir", *it, { true });
+			}
+			catch (AvisynthError const&) {
+				neo_env->AddAutoloadDir(env->SaveString(agi::fs::ShortName(*it).c_str()), true);
+			}
 		}
 		neo_env->AutoloadPlugins();
 
@@ -157,7 +163,7 @@ namespace {
 
 		try {
 			LOG_I(kAvisynthPluginLogTag) << "Falling back to explicit Avisynth LoadPlugin for " << agi::fs::PathToString(path);
-			env->Invoke("LoadPlugin", env->SaveString(agi::fs::ShortName(path).c_str()));
+			avisynth::InvokeUtf8PathFunction(env, "LoadPlugin", path);
 			return true;
 		}
 		catch (AvisynthError const& err) {

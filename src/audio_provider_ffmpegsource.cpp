@@ -82,7 +82,8 @@ catch (agi::EnvironmentError const& err) {
 }
 
 void FFmpegSourceAudioProvider::LoadAudio(agi::fs::path const& filename) {
-	FFMS_Indexer *Indexer = ffms::CreateIndexer(filename.string().c_str(), &ErrInfo);
+	auto const filename_utf8 = agi::fs::PathToString(filename);
+	FFMS_Indexer *Indexer = ffms::CreateIndexer(filename_utf8.c_str(), &ErrInfo);
 	if (!Indexer) {
 		if (ErrInfo.SubType == FFMS_ERROR_FILE_READ)
 			throw agi::fs::FileNotFound(std::string(ErrInfo.Buffer));
@@ -110,10 +111,11 @@ void FFmpegSourceAudioProvider::LoadAudio(agi::fs::path const& filename) {
 	agi::fs::path CacheName = GetCacheFilename(filename);
 
 	// try to read index
+	auto const cache_name_utf8 = agi::fs::PathToString(CacheName);
 	agi::scoped_holder<FFMS_Index*, void (FFMS_CC*)(FFMS_Index*)>
-		Index(ffms::ReadIndex(CacheName.string().c_str(), &ErrInfo), ffms::DestroyIndex);
+		Index(ffms::ReadIndex(cache_name_utf8.c_str(), &ErrInfo), ffms::DestroyIndex);
 
-	if (Index && ffms::IndexBelongsToFile(Index, filename.string().c_str(), &ErrInfo))
+	if (Index && ffms::IndexBelongsToFile(Index, filename_utf8.c_str(), &ErrInfo))
 		Index = nullptr;
 
 	if (Index) {
@@ -144,7 +146,7 @@ void FFmpegSourceAudioProvider::LoadAudio(agi::fs::path const& filename) {
 	// update access time of index file so it won't get cleaned away
 	agi::fs::Touch(CacheName);
 
-	AudioSource = ffms::CreateAudioSource(filename.string().c_str(), TrackNumber, Index, FFMS_DELAY_FIRST_VIDEO_TRACK, &ErrInfo);
+	AudioSource = ffms::CreateAudioSource(filename_utf8.c_str(), TrackNumber, Index, FFMS_DELAY_FIRST_VIDEO_TRACK, &ErrInfo);
 	if (!AudioSource)
 		throw agi::AudioProviderError(std::string("Failed to open audio track: ") + ErrInfo.Buffer);
 

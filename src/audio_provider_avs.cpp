@@ -36,6 +36,7 @@
 #include <libaegisub/audio/provider.h>
 
 #include "avisynth.h"
+#include "avisynth_path_helper.h"
 #include "avisynth_wrap.h"
 #include "audio_controller.h"
 #include "options.h"
@@ -73,18 +74,15 @@ AvisynthAudioProvider::AvisynthAudioProvider(agi::fs::path const& filename) try 
 
 		// Include
 		if (agi::fs::HasExtension(filename, "avs"))
-			LoadFromClip(env->Invoke("Import", env->SaveString(agi::fs::ShortName(filename).c_str())));
+			LoadFromClip(avisynth::InvokeUtf8PathFunction(env, "Import", filename));
 		// Use DirectShowSource
 		else {
-			const char * argnames[3] = { 0, "video", "audio" };
-			AVSValue args[3] = { env->SaveString(agi::fs::ShortName(filename).c_str()), false, true };
-
 			// Load audio with DSS if it exists
 			if (avs_wrapper.EnsurePluginLoaded("DirectShowSource", {
 				"?user/runtimes/avs-plugins/DirectShowSource.dll",
 				"?data/runtimes/avs-plugins/DirectShowSource.dll",
 			}))
-				LoadFromClip(env->Invoke("DirectShowSource", AVSValue(args, 3), argnames));
+				LoadFromClip(avisynth::InvokeUtf8PathFunction(env, "DirectShowSource", filename, { false, true }, { "video", "audio" }));
 			// Otherwise fail
 			else
 				throw agi::AudioProviderError("No suitable audio source filter found. Try placing DirectShowSource.dll in the Aegisub runtimes/avs-plugins directory.");

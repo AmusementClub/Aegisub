@@ -258,7 +258,8 @@ catch (agi::EnvironmentError const& err) {
 }
 
 void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::string const& colormatrix) {
-	FFMS_Indexer *Indexer = ffms::CreateIndexer(filename.string().c_str(), &ErrInfo);
+	auto const filename_utf8 = agi::fs::PathToString(filename);
+	FFMS_Indexer *Indexer = ffms::CreateIndexer(filename_utf8.c_str(), &ErrInfo);
 	if (!Indexer) {
 		if (ErrInfo.SubType == FFMS_ERROR_FILE_READ)
 			throw agi::fs::FileNotFound(std::string(ErrInfo.Buffer));
@@ -282,10 +283,11 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 	auto CacheName = GetCacheFilename(filename);
 
 	// try to read index
+	auto const cache_name_utf8 = agi::fs::PathToString(CacheName);
 	agi::scoped_holder<FFMS_Index*, void (FFMS_CC*)(FFMS_Index*)>
-		Index(ffms::ReadIndex(CacheName.string().c_str(), &ErrInfo), ffms::DestroyIndex);
+		Index(ffms::ReadIndex(cache_name_utf8.c_str(), &ErrInfo), ffms::DestroyIndex);
 
-	if (Index && ffms::IndexBelongsToFile(Index, filename.string().c_str(), &ErrInfo))
+	if (Index && ffms::IndexBelongsToFile(Index, filename_utf8.c_str(), &ErrInfo))
 		Index = nullptr;
 
 	// time to examine the index and check if the track we want is indexed
@@ -340,7 +342,7 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 	else
 		SeekMode = FFMS_SEEK_NORMAL;
 
-	VideoSource = ffms::CreateVideoSource(filename.string().c_str(), TrackNumber, Index, Threads, SeekMode, &ErrInfo);
+	VideoSource = ffms::CreateVideoSource(filename_utf8.c_str(), TrackNumber, Index, Threads, SeekMode, &ErrInfo);
 	if (!VideoSource)
 		throw VideoOpenError(std::string("Failed to open video track: ") + ErrInfo.Buffer);
 

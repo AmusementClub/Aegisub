@@ -37,7 +37,7 @@
 
 #include <ebml/EbmlHead.h>
 #include <ebml/EbmlStream.h>
-#include <ebml/StdIOCallback.h>
+#include <ebml/IOCallback.h>
 
 #include <matroska/KaxAttached.h>
 #include <matroska/KaxAttachments.h>
@@ -49,11 +49,16 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
+#include <cstdio>
+#include <ios>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -62,7 +67,6 @@
 namespace {
 using libebml::EbmlElement;
 using libebml::EbmlStream;
-using libebml::StdIOCallback;
 
 char constexpr kMkvLogSection[] = "subtitle/mkv";
 std::atomic<uint64_t> next_transient_font_generation{1};
@@ -99,9 +103,86 @@ Cursor continue_after_nested(EbmlStream &stream, libebml::EbmlSemanticContext co
 	return cursor;
 }
 
-std::string open_path_for_ebml(agi::fs::path const& filename) {
-	return agi::fs::ShortName(filename);
-}
+class PathIOCallback final : public libebml::IOCallback {
+	FILE *file = nullptr;
+	uint64_t current_position = 0;
+
+#ifdef _WIN32
+	static int seek_file(FILE *file, int64_t offset, libebml::seek_mode mode) {
+		return _fseeki64(file, offset, mode);
+	}
+
+	static int64_t tell_file(FILE *file) {
+		return _ftelli64(file);
+	}
+#else
+	static int seek_file(FILE *file, int64_t offset, libebml::seek_mode mode) {
+		return fseeko(file, static_cast<off_t>(offset), mode);
+	}
+
+	static int64_t tell_file(FILE *file) {
+		return ftello(file);
+	}
+#endif
+
+public:
+	explicit PathIOCallback(agi::fs::path const& filename) {
+		auto const *mode_text = "rb";
+#ifdef _WIN32
+		file = _wfopen(filename.c_str(), L"rb");
+#else
+		auto const filename_text = agi::fs::PathToString(filename);
+		file = fopen(filename_text.c_str(), mode_text);
+#endif
+		if (!file) {
+			std::stringstream msg;
+			msg << "Can't open MKV file \"" << agi::fs::PathToString(filename) << "\" in mode \"" << mode_text << "\"";
+			throw std::ios_base::failure(msg.str(), std::error_code(errno, std::system_category()));
+		}
+	}
+
+	~PathIOCallback() noexcept override {
+		if (file && fclose(file) == 0)
+			file = nullptr;
+	}
+
+	uint32 read(void *buffer, size_t size) override {
+		auto const result = fread(buffer, 1, size, file);
+		current_position += result;
+		return static_cast<uint32>(result);
+	}
+
+	void setFilePointer(int64 offset, libebml::seek_mode mode = libebml::seek_beginning) override {
+		if (seek_file(file, offset, mode) != 0) {
+			std::ostringstream msg;
+			msg << "Failed to seek MKV file handle to offset " << offset << " in mode " << mode;
+			throw std::ios_base::failure(msg.str(), std::error_code(errno, std::system_category()));
+		}
+
+		auto const position = tell_file(file);
+		if (position < 0)
+			throw std::ios_base::failure("Failed to query MKV file position.", std::error_code(errno, std::system_category()));
+		current_position = static_cast<uint64_t>(position);
+	}
+
+	size_t write(void const *buffer, size_t size) override {
+		auto const result = fwrite(buffer, 1, size, file);
+		current_position += result;
+		return result;
+	}
+
+	uint64 getFilePointer() override {
+		return current_position;
+	}
+
+	void close() override {
+		if (!file)
+			return;
+		if (fclose(file) != 0)
+			throw std::ios_base::failure("Can't close MKV file handle.", std::error_code(errno, std::system_category()));
+		file = nullptr;
+	}
+};
 
 void skip_ebml_head(EbmlStream &stream) {
 	std::unique_ptr<EbmlElement> head(stream.FindNextID(EBML_INFO(libebml::EbmlHead), std::numeric_limits<uint64_t>::max()));
@@ -648,7 +729,7 @@ Cursor parse_info(EbmlStream &stream, EbmlElement &info_element, MkvTrackScanRes
 }
 
 MkvTrackScanResult scan_tracks(agi::fs::path const& filename) {
-	StdIOCallback input(open_path_for_ebml(filename).c_str(), MODE_READ);
+	PathIOCallback input(filename);
 	EbmlStream stream(input);
 	auto segment = open_segment(stream);
 	if (!segment)
@@ -740,7 +821,7 @@ Cursor parse_block_group(EbmlStream &stream, EbmlElement &group_element, libmatr
 }
 
 void import_track(agi::fs::path const& filename, MkvTrackInfo const& track, uint64_t segment_timecode_scale, agi::ProgressSink *ps, std::vector<std::pair<int, std::string>> &lines, std::shared_ptr<TransientFontSet>& transient_fonts) {
-	StdIOCallback input(open_path_for_ebml(filename).c_str(), MODE_READ);
+	PathIOCallback input(filename);
 	EbmlStream stream(input);
 	auto segment = open_segment(stream);
 	if (!segment)

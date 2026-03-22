@@ -49,6 +49,7 @@
 #define VideoFrame AVSVideoFrame
 #include "avisynth.h"
 #undef VideoFrame
+#include "avisynth_path_helper.h"
 #include "avisynth_wrap.h"
 
 namespace {
@@ -214,23 +215,20 @@ void AvisynthVideoProvider::Init(std::string const& colormatrix) {
 
 AVSValue AvisynthVideoProvider::Open(agi::fs::path const& filename) {
 	IScriptEnvironment *env = avs.GetEnv();
-	char *videoFilename = env->SaveString(agi::fs::ShortName(filename).c_str());
 
 	// Avisynth file, just import it
 	if (agi::fs::HasExtension(filename, "avs")) {
 		LOG_I("avisynth/video") << "Opening .avs file with Import";
 		decoder_name = "Avisynth/Import";
-		return env->Invoke("Import", videoFilename);
+		return avisynth::InvokeUtf8PathFunction(env, "Import", filename);
 	}
 
 	// Open avi file with AviSource
 	if (agi::fs::HasExtension(filename, "avi")) {
 		LOG_I("avisynth/video") << "Opening .avi file with AviSource";
 		try {
-			const char *argnames[2] = { 0, "audio" };
-			AVSValue args[2] = { videoFilename, false };
 			decoder_name = "Avisynth/AviSource";
-			return env->Invoke("AviSource", AVSValue(args,2), argnames);
+			return avisynth::InvokeUtf8PathFunction(env, "AviSource", filename, { false }, { "audio" });
 		}
 		// On Failure, fallback to DSS
 		catch (AvisynthError &err) {
@@ -242,7 +240,7 @@ AVSValue AvisynthVideoProvider::Open(agi::fs::path const& filename) {
 	// Open d2v with mpeg2dec3
 	if (agi::fs::HasExtension(filename, "d2v") && env->FunctionExists("Mpeg2Dec3_Mpeg2Source")) {
 		LOG_I("avisynth/video") << "Opening .d2v file with Mpeg2Dec3_Mpeg2Source";
-		auto script = env->Invoke("Mpeg2Dec3_Mpeg2Source", videoFilename);
+		auto script = avisynth::InvokeUtf8BytesPathFunction(env, "Mpeg2Dec3_Mpeg2Source", filename);
 		decoder_name = "Avisynth/Mpeg2Dec3_Mpeg2Source";
 
 		//if avisynth is 2.5.7 beta 2 or newer old mpeg2decs will crash without this
@@ -257,7 +255,7 @@ AVSValue AvisynthVideoProvider::Open(agi::fs::path const& filename) {
 	if (agi::fs::HasExtension(filename, "d2v") && env->FunctionExists("DGDecode_Mpeg2Source")) {
 		LOG_I("avisynth/video") << "Opening .d2v file with DGDecode_Mpeg2Source";
 		decoder_name = "DGDecode_Mpeg2Source";
-		return env->Invoke("Avisynth/Mpeg2Source", videoFilename);
+		return avisynth::InvokeUtf8BytesPathFunction(env, "Avisynth/Mpeg2Source", filename);
 
 		//note that DGDecode will also have issues like if the version is too
 		// ancient but no sane person would use that anyway
@@ -265,7 +263,7 @@ AVSValue AvisynthVideoProvider::Open(agi::fs::path const& filename) {
 
 	if (agi::fs::HasExtension(filename, "d2v") && env->FunctionExists("Mpeg2Source")) {
 		LOG_I("avisynth/video") << "Opening .d2v file with other Mpeg2Source";
-		AVSValue script = env->Invoke("Mpeg2Source", videoFilename);
+		AVSValue script = avisynth::InvokeUtf8BytesPathFunction(env, "Mpeg2Source", filename);
 		decoder_name = "Avisynth/Mpeg2Source";
 
 		//if avisynth is 2.5.7 beta 2 or newer old mpeg2decs will crash without this
@@ -283,7 +281,7 @@ AVSValue AvisynthVideoProvider::Open(agi::fs::path const& filename) {
 	})) {
 		LOG_I("avisynth/video") << "Opening file with DSS2";
 		decoder_name = "Avisynth/DSS2";
-		return env->Invoke("DSS2", videoFilename);
+		return avisynth::InvokeUtf8BytesPathFunction(env, "DSS2", filename);
 	}
 
 	// Try DirectShowSource
@@ -292,12 +290,10 @@ AVSValue AvisynthVideoProvider::Open(agi::fs::path const& filename) {
 		"?user/runtimes/avs-plugins/DirectShowSource.dll",
 		"?data/runtimes/avs-plugins/DirectShowSource.dll",
 	})) {
-		const char *argnames[3] = { 0, "video", "audio" };
-		AVSValue args[3] = { videoFilename, true, false };
 		decoder_name = "Avisynth/DirectShowSource";
 		warning = "Warning! The file is being opened using Avisynth's DirectShowSource, which has unreliable seeking. Frame numbers might not match the real number. PROCEED AT YOUR OWN RISK!";
 		LOG_I("avisynth/video") << "Opening file with DirectShowSource";
-		return env->Invoke("DirectShowSource", AVSValue(args,3), argnames);
+		return avisynth::InvokeUtf8PathFunction(env, "DirectShowSource", filename, { true, false }, { "video", "audio" });
 	}
 
 	// Failed to find a suitable function

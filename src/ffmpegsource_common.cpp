@@ -335,7 +335,8 @@ FFMS_Index *FFmpegSourceProvider::DoIndexing(FFMS_Indexer *Indexer,
 		throw agi::EnvironmentError(std::string("Failed to index: ") + ErrInfo.Buffer);
 
 	// write index to disk for later use
-	ffms::WriteIndex(CacheName.string().c_str(), Index, &ErrInfo);
+	auto const cache_name_utf8 = agi::fs::PathToString(CacheName);
+	ffms::WriteIndex(cache_name_utf8.c_str(), Index, &ErrInfo);
 
 	return Index;
 }

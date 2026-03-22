@@ -90,7 +90,7 @@ void FFmpegSourceAudioProvider::LoadAudio(agi::fs::path const& filename) {
 			throw agi::AudioDataNotFound(ErrInfo.Buffer);
 	}
 
-	std::map<int, std::string> TrackList = GetTracksOfType(Indexer, FFMS_TYPE_AUDIO);
+	auto TrackList = GetTracksOfType(filename, Indexer, FFMS_TYPE_AUDIO);
 
 	// initialize the track number to an invalid value so we can detect later on
 	// whether the user actually had to choose a track or not
@@ -102,7 +102,7 @@ void FFmpegSourceAudioProvider::LoadAudio(agi::fs::path const& filename) {
 		TrackNumber = static_cast<int>(Selection);
 	}
 	else if (TrackList.size() == 1)
-		TrackNumber = TrackList.begin()->first;
+		TrackNumber = TrackList.front().ffms_track_index;
 	else
 		throw agi::AudioDataNotFound("no audio tracks found");
 

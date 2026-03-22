@@ -37,6 +37,7 @@
 
 #include "compat.h"
 #include "format.h"
+#include "mkv_wrap.h"
 #include "native_library.h"
 #include "options.h"
 #include "utils.h"
@@ -166,6 +167,127 @@ FFmpegSourceProvider::FFmpegSourceProvider(agi::BackgroundRunner *br)
 	ffms::Init(0, 0);
 }
 
+namespace {
+std::string FormatTrackLabel(int ffms_track_index, std::string const& codec_name, std::string const& channels = {}, std::string const& language = {}, std::string const& title = {}) {
+	std::string label = from_wx(agi::wxformat(_("Track %02d: %s"), ffms_track_index, codec_name));
+	if (!channels.empty()) {
+		label += ", ";
+		label += channels;
+	}
+	if (!language.empty()) {
+		label += ", ";
+		label += language;
+	}
+	if (!title.empty()) {
+		label += ": ";
+		label += title;
+	}
+	return label;
+}
+
+bool IsMatroskaLikePath(agi::fs::path const& filename) {
+	return agi::fs::HasExtension(filename, "mkv")
+		|| agi::fs::HasExtension(filename, "mka")
+		|| agi::fs::HasExtension(filename, "mks")
+		|| agi::fs::HasExtension(filename, "mk3d")
+		|| agi::fs::HasExtension(filename, "webm");
+}
+
+std::string to_lower_copy(std::string value) {
+	agi::util::strings::to_lower_inplace(value);
+	return value;
+}
+
+std::string NormalizeMkvAudioCodecId(std::string_view codec_id) {
+	if (codec_id.empty())
+		return {};
+	if (codec_id == "A_AAC" || agi::util::strings::starts_with(codec_id, "A_AAC/"))
+		return "aac";
+	if (codec_id == "A_AC3")
+		return "ac3";
+	if (codec_id == "A_EAC3")
+		return "eac3";
+	if (codec_id == "A_OPUS")
+		return "opus";
+	if (codec_id == "A_FLAC")
+		return "flac";
+	if (codec_id == "A_VORBIS")
+		return "vorbis";
+	if (codec_id == "A_MPEG/L3")
+		return "mp3";
+	if (codec_id == "A_MPEG/L2")
+		return "mp2";
+	if (codec_id == "A_TRUEHD")
+		return "truehd";
+	if (codec_id == "A_DTS")
+		return "dts";
+	if (codec_id == "A_PCM/INT/LIT")
+		return "pcm_s16le";
+	if (codec_id == "A_PCM/INT/BIG")
+		return "pcm_s16be";
+	return {};
+}
+
+bool CodecNamesSeemCompatible(std::string const& ffms_codec_name, std::string_view mkv_codec_id) {
+	auto const normalized_mkv = NormalizeMkvAudioCodecId(mkv_codec_id);
+	if (normalized_mkv.empty())
+		return true;
+	return normalized_mkv == to_lower_copy(ffms_codec_name);
+}
+
+void TryEnrichAudioTracksFromMkv(agi::fs::path const& filename, std::vector<FFmpegSourceProvider::TrackChoice> &track_list) {
+#if AEGISUB_MATROSKA_PARSING
+	if (track_list.empty() || !IsMatroskaLikePath(filename))
+		return;
+
+	try {
+		auto scan = MatroskaWrapper::ScanTracks(filename);
+		std::vector<MkvTrackInfo const*> mkv_audio_tracks;
+		mkv_audio_tracks.reserve(scan.tracks.size());
+		for (auto const& track : scan.tracks) {
+			if (track.type == MkvTrackType::Audio)
+				mkv_audio_tracks.push_back(&track);
+		}
+
+		if (mkv_audio_tracks.size() != track_list.size()) {
+			LOG_D("provider/ffms2/mkv") << "Skipping MKV audio metadata enrichment for " << filename.string()
+				<< ": FFMS audio tracks=" << track_list.size() << ", MKV audio tracks=" << mkv_audio_tracks.size();
+			return;
+		}
+
+		for (size_t i = 0; i < track_list.size(); ++i) {
+			if (!CodecNamesSeemCompatible(track_list[i].codec_name, mkv_audio_tracks[i]->codec_id)) {
+				LOG_D("provider/ffms2/mkv") << "Skipping MKV audio metadata enrichment for " << filename.string()
+					<< ": codec mismatch at audio ordinal " << i
+					<< " (ffms=" << track_list[i].codec_name
+					<< ", mkv=" << mkv_audio_tracks[i]->codec_id << ")";
+				return;
+			}
+		}
+
+		for (size_t i = 0; i < track_list.size(); ++i) {
+			auto const& mkv_track = *mkv_audio_tracks[i];
+			track_list[i].display_name = FormatTrackLabel(
+				track_list[i].ffms_track_index,
+				track_list[i].codec_name,
+				FormatMkvAudioChannelCount(mkv_track.audio_channels),
+				GetPreferredMkvTrackLanguage(mkv_track),
+				mkv_track.name);
+		}
+	}
+	catch (agi::Exception const& e) {
+		LOG_D("provider/ffms2/mkv") << "Failed to enrich MKV audio track metadata for " << filename.string() << ": " << e.GetMessage();
+	}
+	catch (std::exception const& e) {
+		LOG_D("provider/ffms2/mkv") << "Failed to enrich MKV audio track metadata for " << filename.string() << ": " << e.what();
+	}
+#else
+	(void)filename;
+	(void)track_list;
+#endif
+}
+}
+
 /// @brief Does indexing of a source file
 /// @param Indexer		A pointer to the indexer object representing the file to be indexed
 /// @param CacheName    The filename of the output index file
@@ -218,12 +340,11 @@ FFMS_Index *FFmpegSourceProvider::DoIndexing(FFMS_Indexer *Indexer,
 	return Index;
 }
 
-/// @brief Finds all tracks of the given type and return their track numbers and respective codec names
+/// @brief Finds all tracks of the given type and return their FFMS indices and display strings
 /// @param Indexer	The indexer object representing the source file
 /// @param Type		The track type to look for
-/// @return			Returns a std::map with the track numbers as keys and the codec names as values.
-std::map<int, std::string> FFmpegSourceProvider::GetTracksOfType(FFMS_Indexer *Indexer, FFMS_TrackType Type) {
-	std::map<int,std::string> TrackList;
+std::vector<FFmpegSourceProvider::TrackChoice> FFmpegSourceProvider::GetTracksOfType(agi::fs::path const& filename, FFMS_Indexer *Indexer, FFMS_TrackType Type) {
+	std::vector<TrackChoice> TrackList;
 	int NumTracks = ffms::GetNumTracksI(Indexer);
 
 	// older versions of ffms2 can't index audio tracks past 31
@@ -232,24 +353,33 @@ std::map<int, std::string> FFmpegSourceProvider::GetTracksOfType(FFMS_Indexer *I
 		NumTracks = std::min(NumTracks, std::numeric_limits<int>::digits);
 #endif
 
-	for (int i=0; i<NumTracks; i++) {
+	for (int i = 0; i < NumTracks; i++) {
 		if (ffms::GetTrackTypeI(Indexer, i) == Type) {
-			if (auto CodecName = ffms::GetCodecNameI(Indexer, i))
-				TrackList[i] = CodecName;
+			if (auto CodecName = ffms::GetCodecNameI(Indexer, i)) {
+				TrackChoice choice;
+				choice.ffms_track_index = i;
+				choice.codec_name = CodecName;
+				choice.display_name = FormatTrackLabel(i, choice.codec_name);
+				TrackList.emplace_back(std::move(choice));
+			}
 		}
 	}
+
+	if (Type == FFMS_TYPE_AUDIO)
+		TryEnrichAudioTracksFromMkv(filename, TrackList);
+
 	return TrackList;
 }
 
 FFmpegSourceProvider::TrackSelection
-FFmpegSourceProvider::AskForTrackSelection(const std::map<int, std::string> &TrackList,
+FFmpegSourceProvider::AskForTrackSelection(std::vector<TrackChoice> const& TrackList,
                                            FFMS_TrackType Type) {
 	std::vector<int> TrackNumbers;
 	wxArrayString Choices;
 
 	for (auto const& track : TrackList) {
-		Choices.Add(agi::wxformat(_("Track %02d: %s"), track.first, track.second));
-		TrackNumbers.push_back(track.first);
+		Choices.Add(to_wx(track.display_name));
+		TrackNumbers.push_back(track.ffms_track_index);
 	}
 
 	int Choice = wxGetSingleChoiceIndex(

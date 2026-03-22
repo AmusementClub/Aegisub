@@ -266,7 +266,7 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 			throw VideoNotSupported(ErrInfo.Buffer);
 	}
 
-	std::map<int, std::string> TrackList = GetTracksOfType(Indexer, FFMS_TYPE_VIDEO);
+	auto TrackList = GetTracksOfType(filename, Indexer, FFMS_TYPE_VIDEO);
 	if (TrackList.size() <= 0)
 		throw VideoNotSupported("no video tracks found");
 

@@ -34,7 +34,9 @@
 
 #ifdef WITH_FFMS2
 #include <map>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "ffms_version.h"
 
@@ -82,13 +84,19 @@ public:
 		All = -2
 	};
 
+	struct TrackChoice {
+		int ffms_track_index = -1;
+		std::string codec_name;
+		std::string display_name;
+	};
+
 	void CleanCache();
 
 	FFMS_Index *DoIndexing(FFMS_Indexer *Indexer, agi::fs::path const& Cachename,
 		                   TrackSelection Track,
 		                   FFMS_IndexErrorHandling IndexEH);
-	std::map<int, std::string> GetTracksOfType(FFMS_Indexer *Indexer, FFMS_TrackType Type);
-	TrackSelection AskForTrackSelection(const std::map<int, std::string>& TrackList, FFMS_TrackType Type);
+	std::vector<TrackChoice> GetTracksOfType(agi::fs::path const& filename, FFMS_Indexer *Indexer, FFMS_TrackType Type);
+	TrackSelection AskForTrackSelection(std::vector<TrackChoice> const& TrackList, FFMS_TrackType Type);
 	agi::fs::path GetCacheFilename(agi::fs::path const& filename);
 	void SetLogLevel();
 	FFMS_IndexErrorHandling GetErrorHandlingMode();

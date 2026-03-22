@@ -27,6 +27,13 @@ enum class MkvTextSubtitleCodec {
 	Utf8,
 };
 
+enum class MkvTrackType {
+	Other,
+	Video,
+	Audio,
+	Subtitle,
+};
+
 struct MkvTextSubtitleLine {
 	int sort_key = 0;
 	std::string line;
@@ -54,8 +61,38 @@ struct MkvContentEncoding {
 	std::string settings;
 };
 
+inline constexpr uint64_t kDefaultSegmentTimecodeScale = 1000000;
+
+struct MkvTrackInfo {
+	int global_ordinal = -1;
+	int type_ordinal = -1;
+	MkvTrackType type = MkvTrackType::Other;
+	uint64_t track_number = 0;
+	uint64_t default_duration = 0;
+	double timecode_scale = 1.0;
+	std::string codec_id;
+	std::string language = "eng";
+	std::string language_ietf;
+	std::string name;
+	std::string codec_private;
+	std::vector<MkvContentEncoding> content_encodings;
+	MkvTextSubtitleCodec subtitle_codec = MkvTextSubtitleCodec::Unsupported;
+	std::optional<int> audio_channels;
+	std::string unsupported_content_encoding_reason;
+};
+
+struct MkvTrackScanResult {
+	uint64_t segment_timecode_scale = kDefaultSegmentTimecodeScale;
+	std::vector<MkvTrackInfo> tracks;
+};
+
+MkvTrackType ClassifyMkvTrackType(uint64_t track_type);
 MkvTextSubtitleCodec ClassifyMkvTextSubtitleCodec(std::string_view codec_id);
 bool IsSupportedMkvTextSubtitleCodec(std::string_view codec_id);
+bool IsImportableMkvSubtitleTrack(MkvTrackInfo const& track);
+std::string GetPreferredMkvTrackLanguage(MkvTrackInfo const& track);
+std::string DescribeMkvTrack(MkvTrackInfo const& track);
+std::string FormatMkvAudioChannelCount(std::optional<int> channels);
 std::vector<std::string> SplitMkvCodecPrivateLines(std::string_view codec_private);
 std::optional<MkvTextSubtitleLine> ParseMkvTextSubtitlePacket(MkvTextSubtitleCodec codec, std::string_view packet, int start_ms, int end_ms, int fallback_sort_key);
 std::optional<std::string> DecodeMkvContentEncodedData(std::string_view data, std::vector<MkvContentEncoding> const& encodings, MkvContentEncodingTarget target, std::string *error = nullptr);

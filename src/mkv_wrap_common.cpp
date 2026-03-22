@@ -108,6 +108,21 @@ std::optional<std::string> inflate_zlib(std::string_view input, std::string *err
 }
 }
 
+MkvTrackType ClassifyMkvTrackType(uint64_t track_type) {
+	switch (track_type) {
+	case 0x1:
+		return MkvTrackType::Video;
+	case 0x2:
+		return MkvTrackType::Audio;
+	case 0x11:
+		return MkvTrackType::Subtitle;
+	default:
+		break;
+	}
+
+	return MkvTrackType::Other;
+}
+
 MkvTextSubtitleCodec ClassifyMkvTextSubtitleCodec(std::string_view codec_id) {
 	if (codec_id == "S_TEXT/ASS")
 		return MkvTextSubtitleCodec::Ass;
@@ -120,6 +135,59 @@ MkvTextSubtitleCodec ClassifyMkvTextSubtitleCodec(std::string_view codec_id) {
 
 bool IsSupportedMkvTextSubtitleCodec(std::string_view codec_id) {
 	return ClassifyMkvTextSubtitleCodec(codec_id) != MkvTextSubtitleCodec::Unsupported;
+}
+
+bool IsImportableMkvSubtitleTrack(MkvTrackInfo const& track) {
+	return track.type == MkvTrackType::Subtitle
+		&& track.subtitle_codec != MkvTextSubtitleCodec::Unsupported
+		&& track.unsupported_content_encoding_reason.empty();
+}
+
+std::string GetPreferredMkvTrackLanguage(MkvTrackInfo const& track) {
+	if (!track.language_ietf.empty())
+		return track.language_ietf;
+	return track.language;
+}
+
+std::string DescribeMkvTrack(MkvTrackInfo const& track) {
+	std::vector<std::string> parts;
+	if (!track.codec_id.empty())
+		parts.emplace_back(track.codec_id);
+	auto language = GetPreferredMkvTrackLanguage(track);
+	if (!language.empty())
+		parts.emplace_back(language);
+
+	std::string label = std::to_string(track.track_number);
+	if (!parts.empty()) {
+		label += " (";
+		label += parts.front();
+		for (size_t i = 1; i < parts.size(); ++i) {
+			label += " ";
+			label += parts[i];
+		}
+		label += ")";
+	}
+
+	if (!track.name.empty()) {
+		label += ": ";
+		label += track.name;
+	}
+
+	return label;
+}
+
+std::string FormatMkvAudioChannelCount(std::optional<int> channels) {
+	if (!channels || *channels <= 0)
+		return {};
+
+	switch (*channels) {
+	case 1:
+		return "1.0";
+	case 2:
+		return "2.0";
+	default:
+		return agi::format("%d ch", *channels);
+	}
 }
 
 std::vector<std::string> SplitMkvCodecPrivateLines(std::string_view codec_private) {

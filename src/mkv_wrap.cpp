@@ -276,6 +276,11 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 	progress.Run([&](agi::ProgressSink *ps) { read_subtitles(ps, file, &input, srt, totalTime, &parser); });
 }
 
+MkvTrackScanResult MatroskaWrapper::ScanTracks(agi::fs::path const&) {
+	LogMkvParserBackendOnce();
+	throw MatroskaException("Track scanning is unavailable with the legacy Matroska parser backend.");
+}
+
 bool MatroskaWrapper::HasSubtitles(agi::fs::path const& filename) {
 	LogMkvParserBackendOnce();
 

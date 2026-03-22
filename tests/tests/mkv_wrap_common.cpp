@@ -51,6 +51,53 @@ TEST(mkv_wrap_common, classify_supported_codecs) {
 	EXPECT_EQ(MkvTextSubtitleCodec::Unsupported, ClassifyMkvTextSubtitleCodec("S_TEXT/WEBVTT"));
 }
 
+TEST(mkv_wrap_common, classify_track_types) {
+	EXPECT_EQ(MkvTrackType::Video, ClassifyMkvTrackType(0x1));
+	EXPECT_EQ(MkvTrackType::Audio, ClassifyMkvTrackType(0x2));
+	EXPECT_EQ(MkvTrackType::Subtitle, ClassifyMkvTrackType(0x11));
+	EXPECT_EQ(MkvTrackType::Other, ClassifyMkvTrackType(0x20));
+}
+
+TEST(mkv_wrap_common, subtitle_track_importability_requires_supported_codec_and_encodings) {
+	MkvTrackInfo track;
+	track.type = MkvTrackType::Subtitle;
+	track.subtitle_codec = MkvTextSubtitleCodec::Ass;
+	EXPECT_TRUE(IsImportableMkvSubtitleTrack(track));
+
+	track.subtitle_codec = MkvTextSubtitleCodec::Unsupported;
+	EXPECT_FALSE(IsImportableMkvSubtitleTrack(track));
+
+	track.subtitle_codec = MkvTextSubtitleCodec::Utf8;
+	track.unsupported_content_encoding_reason = "encrypted";
+	EXPECT_FALSE(IsImportableMkvSubtitleTrack(track));
+}
+
+TEST(mkv_wrap_common, preferred_language_uses_ietf_when_available) {
+	MkvTrackInfo track;
+	track.language = "eng";
+	EXPECT_EQ("eng", GetPreferredMkvTrackLanguage(track));
+
+	track.language_ietf = "en-US";
+	EXPECT_EQ("en-US", GetPreferredMkvTrackLanguage(track));
+}
+
+TEST(mkv_wrap_common, describe_track_includes_codec_language_and_name) {
+	MkvTrackInfo track;
+	track.track_number = 7;
+	track.codec_id = "A_OPUS";
+	track.language_ietf = "es-419";
+	track.name = "Spanish, Latin America";
+
+	EXPECT_EQ("7 (A_OPUS es-419): Spanish, Latin America", DescribeMkvTrack(track));
+}
+
+TEST(mkv_wrap_common, format_audio_channel_count_formats_basic_common_cases) {
+	EXPECT_EQ("", FormatMkvAudioChannelCount(std::nullopt));
+	EXPECT_EQ("1.0", FormatMkvAudioChannelCount(1));
+	EXPECT_EQ("2.0", FormatMkvAudioChannelCount(2));
+	EXPECT_EQ("6 ch", FormatMkvAudioChannelCount(6));
+}
+
 TEST(mkv_wrap_common, split_codec_private_lines_on_crlf_and_lf) {
 	auto const lines = SplitMkvCodecPrivateLines("[Script Info]\r\nTitle: Test\n\n[V4+ Styles]\r\n");
 

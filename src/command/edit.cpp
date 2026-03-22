@@ -51,6 +51,7 @@
 #include "../video_controller.h"
 
 #include <libaegisub/address_of_adaptor.h>
+#include <libaegisub/character_count.h>
 #include <libaegisub/of_type_adaptor.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/string_utils.h>
@@ -297,6 +298,47 @@ int normalize_pos(std::string const& text, int pos) {
 	return plain_len;
 }
 
+int denormalize_pos(std::string const& text, int pos) {
+	if (pos <= 0)
+		return 0;
+
+	int plain_len = 0;
+	bool in_block = false;
+
+	for (int i = 0, max = text.size(); i < max; ++i) {
+		if (text[i] == '{') {
+			in_block = true;
+			continue;
+		}
+		if (text[i] == '}' && in_block) {
+			in_block = false;
+			continue;
+		}
+		if (!in_block) {
+			if (plain_len >= pos)
+				return i;
+			++plain_len;
+		}
+	}
+
+	return text.size();
+}
+
+size_t character_pos(std::string const& text, int pos) {
+	auto clamped = std::max(0, std::min<int>(pos, static_cast<int>(text.size())));
+	return agi::CharacterCount(text.begin(), text.begin() + clamped, agi::IGNORE_BLOCKS);
+}
+
+struct selection_pos {
+	int raw;
+	int plain;
+};
+
+selection_pos remap_pos_for_line(AssDialogue *line, size_t chars) {
+	int plain = static_cast<int>(agi::IndexOfCharacter(line->GetStrippedText(), chars));
+	return { denormalize_pos(line->Text, plain), plain };
+}
+
 template<typename Func>
 void update_lines(const agi::Context *c, wxString const& undo_msg, Func&& f) {
 	const auto active_line = c->selectionController->GetActiveLine();
@@ -304,10 +346,25 @@ void update_lines(const agi::Context *c, wxString const& undo_msg, Func&& f) {
 	const int sel_end = c->textSelectionController->GetSelectionEnd();
 	const int norm_sel_start = normalize_pos(active_line->Text, sel_start);
 	const int norm_sel_end = normalize_pos(active_line->Text, sel_end);
+	const size_t sel_start_chars = character_pos(active_line->Text, sel_start);
+	const size_t sel_end_chars = character_pos(active_line->Text, sel_end);
 	int active_sel_shift = 0;
 
 	for (const auto line : c->selectionController->GetSelectedSet()) {
-		int shift = f(line, sel_start, sel_end, norm_sel_start, norm_sel_end);
+		int line_sel_start = sel_start;
+		int line_sel_end = sel_end;
+		int line_norm_sel_start = norm_sel_start;
+		int line_norm_sel_end = norm_sel_end;
+		if (line != active_line) {
+			auto start = remap_pos_for_line(line, sel_start_chars);
+			auto end = remap_pos_for_line(line, sel_end_chars);
+			line_sel_start = start.raw;
+			line_sel_end = end.raw;
+			line_norm_sel_start = start.plain;
+			line_norm_sel_end = end.plain;
+		}
+
+		int shift = f(line, line_sel_start, line_sel_end, line_norm_sel_start, line_norm_sel_end);
 		if (line == active_line)
 			active_sel_shift = shift;
 	}
@@ -339,18 +396,32 @@ void show_color_picker(const agi::Context *c, agi::Color (AssStyle::*field), con
 	agi::Color initial_color;
 	const auto active_line = c->selectionController->GetActiveLine();
 	const int sel_start = c->textSelectionController->GetSelectionStart();
-	const int sel_end = c->textSelectionController->GetSelectionStart();
+	const int sel_end = c->textSelectionController->GetSelectionEnd();
 	const int norm_sel_start = normalize_pos(active_line->Text, sel_start);
+	const size_t sel_start_chars = character_pos(active_line->Text, sel_start);
 
 	auto const& sel = c->selectionController->GetSelectedSet();
-	using line_info = std::pair<agi::Color, parsed_line>;
+	struct line_info {
+		agi::Color color;
+		parsed_line parsed;
+		int sel_start;
+		int norm_sel_start;
+	};
 	std::vector<line_info> lines;
 	for (auto line : sel) {
+		int line_sel_start = sel_start;
+		int line_norm_sel_start = norm_sel_start;
+		if (line != active_line) {
+			auto start = remap_pos_for_line(line, sel_start_chars);
+			line_sel_start = start.raw;
+			line_norm_sel_start = start.plain;
+		}
+
 		AssStyle const* const style = c->ass->GetStyle(line->Style);
 		agi::Color color = (style ? style->*field : AssStyle().*field);
 
 		parsed_line parsed(line);
-		int blockn = parsed.block_at_pos(norm_sel_start);
+		int blockn = parsed.block_at_pos(line_norm_sel_start);
 
 		int a = parsed.get_value(blockn, (int)color.a, alpha, "\\alpha");
 		color = parsed.get_value(blockn, color, tag, alt);
@@ -359,20 +430,20 @@ void show_color_picker(const agi::Context *c, agi::Color (AssStyle::*field), con
 		if (line == active_line)
 			initial_color = color;
 
-		lines.emplace_back(color, std::move(parsed));
+		lines.push_back({ color, std::move(parsed), line_sel_start, line_norm_sel_start });
 	}
 
 	int active_shift = 0;
 	int commit_id = -1;
 	bool ok = GetColorFromUser(c->parent, initial_color, true, [&](agi::Color new_color) {
 		for (auto& line : lines) {
-			int shift = line.second.set_tag(tag, new_color.GetAssOverrideFormatted(), norm_sel_start, sel_start);
-			if (new_color.a != line.first.a) {
-				shift += line.second.set_tag(alpha, agi::format("&H%02X&", (int)new_color.a), norm_sel_start, sel_start + shift);
-				line.first.a = new_color.a;
+			int shift = line.parsed.set_tag(tag, new_color.GetAssOverrideFormatted(), line.norm_sel_start, line.sel_start);
+			if (new_color.a != line.color.a) {
+				shift += line.parsed.set_tag(alpha, agi::format("&H%02X&", (int)new_color.a), line.norm_sel_start, line.sel_start + shift);
+				line.color.a = new_color.a;
 			}
 
-			if (line.second.line == active_line)
+			if (line.parsed.line == active_line)
 				active_shift = shift;
 		}
 
@@ -492,9 +563,10 @@ struct edit_font final : public Command {
 
 	void operator()(agi::Context *c) override {
 		const parsed_line active(c->selectionController->GetActiveLine());
-		const int insertion_point = normalize_pos(active.line->Text, c->textSelectionController->GetInsertionPoint());
+		const int active_insertion_point = normalize_pos(active.line->Text, c->textSelectionController->GetInsertionPoint());
+		const size_t insertion_chars = character_pos(active.line->Text, c->textSelectionController->GetInsertionPoint());
 
-		auto font_for_line = [&](parsed_line const& line) -> wxFont {
+		auto font_for_line = [&](parsed_line const& line, int insertion_point) -> wxFont {
 			const int blockn = line.block_at_pos(insertion_point);
 
 			const AssStyle *style = c->ass->GetStyle(line.line->Style);
@@ -511,13 +583,17 @@ struct edit_font final : public Command {
 				to_wx(line.get_value(blockn, style->font, "\\fn")));
 		};
 
-		const wxFont initial = font_for_line(active);
+		const wxFont initial = font_for_line(active, active_insertion_point);
 		const wxFont font = wxGetFontFromUser(c->parent, initial);
 		if (!font.Ok() || font == initial) return;
 
 		update_lines(c, _("set font"), [&](AssDialogue *line, int sel_start, int sel_end, int norm_sel_start, int norm_sel_end) {
 			parsed_line parsed(line);
-			const wxFont startfont = font_for_line(parsed);
+			int line_insertion_point = active_insertion_point;
+			if (line != active.line)
+				line_insertion_point = remap_pos_for_line(line, insertion_chars).plain;
+
+			const wxFont startfont = font_for_line(parsed, line_insertion_point);
 			int shift = 0;
 			auto do_set_tag = [&](const char *tag_name, std::string const& value) {
 				shift += parsed.set_tag(tag_name, value, norm_sel_start, sel_start + shift);
@@ -532,7 +608,7 @@ struct edit_font final : public Command {
 			if (font.GetStyle() != startfont.GetStyle())
 				do_set_tag("\\i", std::to_string(font.GetStyle() == wxFONTSTYLE_ITALIC));
 			if (font.GetUnderlined() != startfont.GetUnderlined())
-				do_set_tag("\\i", std::to_string(font.GetUnderlined()));
+				do_set_tag("\\u", std::to_string(font.GetUnderlined()));
 
 			return shift;
 		});

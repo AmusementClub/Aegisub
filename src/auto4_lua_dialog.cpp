@@ -282,6 +282,14 @@ namespace Automation4 {
 					max = DBL_MAX;
 					min = -DBL_MAX;
 				}
+				// wxSpinCtrlDouble sizes itself to fit the full range. For
+				// step-based float edits with unspecified bounds, use wx's
+				// practical defaults instead of +/- DBL_MAX to avoid absurdly
+				// wide controls on wx 3.1.4+.
+				if (step != 0.0) {
+					min = min == -DBL_MAX ? 0.0 : min;
+					max = max == DBL_MAX ? 100.0 : max;
+				}
 			}
 
 			bool CanSerialiseValue() const override { return true; }

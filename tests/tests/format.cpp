@@ -137,4 +137,7 @@ TEST(lagi_format, wchar_t) {
 TEST(lagi_format, path) {
 	EXPECT_EQ("/usr/bin", agi::format("%s", agi::fs::path("/usr/bin")));
 	EXPECT_EQ(L"/usr/bin", agi::format(L"%s", agi::fs::path("/usr/bin")));
+
+	auto const utf8_path = "\xE4\xB8\xAD\xE6\x96\x87""-format.ass";
+	EXPECT_EQ(utf8_path, agi::format("%s", agi::fs::PathFromString(utf8_path)));
 }

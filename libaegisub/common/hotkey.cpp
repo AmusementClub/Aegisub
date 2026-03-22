@@ -186,8 +186,10 @@ void Hotkey::Flush() {
 		combo_array.push_back(keys);
 	}
 
-	if (backup_config_file && fs::FileExists(config_file) && !fs::FileExists(config_file.string() + ".3_1"))
-		fs::Copy(config_file, config_file.string() + ".3_1");
+	auto backup_file = config_file;
+	backup_file += ".3_1";
+	if (backup_config_file && fs::FileExists(config_file) && !fs::FileExists(backup_file))
+		fs::Copy(config_file, backup_file);
 
 	io::Save file(config_file);
 	JsonWriter::Write(root, file.Get());

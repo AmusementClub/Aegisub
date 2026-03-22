@@ -117,7 +117,7 @@ void MRUManager::Flush() {
 	for (size_t i = 0; i < mru.size(); ++i) {
 		json::Array &array = out[mru_names[i]];
 		for (auto const& p : mru[i])
-			array.push_back(p.string());
+			array.push_back(fs::PathToString(p));
 	}
 
 	agi::JsonWriter::Write(out, io::Save(config_name).Get());
@@ -140,7 +140,7 @@ void MRUManager::Load(const char *key, const json::Array& array) {
 	try {
 		mru[idx].reserve(array.size());
 		for (std::string const& str : array)
-			mru[idx].push_back(str);
+			mru[idx].push_back(fs::PathFromString(str));
 	}
 	catch (json::Exception const&) {
 		// Out of date MRU file; just discard the data and skip it

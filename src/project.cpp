@@ -103,10 +103,10 @@ Project::Project(agi::Context *c) : context(c) {
 Project::~Project() { }
 
 void Project::UpdateRelativePaths() {
-	context->ass->Properties.audio_file     = context->path->MakeRelative(audio_file, "?script").generic_string();
-	context->ass->Properties.video_file     = context->path->MakeRelative(video_file, "?script").generic_string();
-	context->ass->Properties.timecodes_file = context->path->MakeRelative(timecodes_file, "?script").generic_string();
-	context->ass->Properties.keyframes_file = context->path->MakeRelative(keyframes_file, "?script").generic_string();
+	context->ass->Properties.audio_file     = agi::fs::PathToGenericString(context->path->MakeRelative(audio_file, "?script"));
+	context->ass->Properties.video_file     = agi::fs::PathToGenericString(context->path->MakeRelative(video_file, "?script"));
+	context->ass->Properties.timecodes_file = agi::fs::PathToGenericString(context->path->MakeRelative(timecodes_file, "?script"));
+	context->ass->Properties.keyframes_file = agi::fs::PathToGenericString(context->path->MakeRelative(keyframes_file, "?script"));
 }
 
 void Project::ReloadAudio() {
@@ -181,7 +181,7 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 	}
 	catch (agi::fs::FileNotFound const&) {
 		config::mru->Remove("Subtitle", path);
-		ShowError(path.string() + " not found.");
+		ShowError(agi::format("%s not found.", path));
 		return false;
 	}
 
@@ -200,7 +200,7 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 	catch (agi::UserCancelException const&) { return false; }
 	catch (agi::fs::FileNotFound const&) {
 		config::mru->Remove("Subtitle", path);
-		ShowError(path.string() + " not found.");
+		ShowError(agi::format("%s not found.", path));
 		return false;
 	}
 	catch (agi::Exception const& e) {

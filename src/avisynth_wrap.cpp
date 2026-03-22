@@ -78,7 +78,7 @@ namespace {
 			OPT_GET("Provider/Avisynth/Runtime Path")->GetString(),
 			[](std::string_view configured_runtime_path) {
 				return config::path
-					? config::path->Decode(std::string(configured_runtime_path)).string()
+					? agi::fs::PathToString(config::path->Decode(std::string(configured_runtime_path)))
 					: std::string(configured_runtime_path);
 			});
 	}
@@ -139,7 +139,7 @@ namespace {
 		}
 
 		for (auto it = directories.rbegin(); it != directories.rend(); ++it) {
-			LOG_I(kAvisynthPluginLogTag) << "Registering Avisynth autoload dir: " << it->string();
+			LOG_I(kAvisynthPluginLogTag) << "Registering Avisynth autoload dir: " << agi::fs::PathToString(*it);
 			neo_env->AddAutoloadDir(env->SaveString(agi::fs::ShortName(*it).c_str()), true);
 		}
 		neo_env->AutoloadPlugins();
@@ -156,12 +156,12 @@ namespace {
 			return false;
 
 		try {
-			LOG_I(kAvisynthPluginLogTag) << "Falling back to explicit Avisynth LoadPlugin for " << path.string();
+			LOG_I(kAvisynthPluginLogTag) << "Falling back to explicit Avisynth LoadPlugin for " << agi::fs::PathToString(path);
 			env->Invoke("LoadPlugin", env->SaveString(agi::fs::ShortName(path).c_str()));
 			return true;
 		}
 		catch (AvisynthError const& err) {
-			LOG_W(kAvisynthPluginLogTag) << "Avisynth LoadPlugin failed for " << path.string() << ": " << err.msg;
+			LOG_W(kAvisynthPluginLogTag) << "Avisynth LoadPlugin failed for " << agi::fs::PathToString(path) << ": " << err.msg;
 			return false;
 		}
 	}

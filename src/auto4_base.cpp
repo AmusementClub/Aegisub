@@ -327,7 +327,7 @@ namespace Automation4 {
 
 			for (auto filename : agi::fs::DirectoryIterator(dirname, "*.*"))
 				script_futures.emplace_back(std::async(std::launch::async, [=] {
-					return ScriptFactory::CreateFromFile(dirname/filename, false, false);
+					return ScriptFactory::CreateFromFile(dirname / agi::fs::PathFromString(filename), false, false);
 				}));
 		}
 
@@ -388,7 +388,7 @@ namespace Automation4 {
 					first_char, to_wx(trimmed));
 				continue;
 			}
-			auto sfname = basepath/trimmed;
+			auto sfname = basepath / agi::fs::PathFromString(trimmed);
 			if (agi::fs::FileExists(sfname))
 				scripts.emplace_back(Automation4::ScriptFactory::CreateFromFile(sfname, true));
 			else {
@@ -415,19 +415,20 @@ namespace Automation4 {
 			if (!scripts_string.empty())
 				scripts_string += "|";
 
-			auto scriptfn(script->GetFilename().string());
-			auto autobase_rel = context->path->MakeRelative(scriptfn, autobasefn);
-			auto assfile_rel = context->path->MakeRelative(scriptfn, "?script");
+			auto const scriptfn = script->GetFilename();
+			auto const scriptfn_str = agi::fs::PathToString(scriptfn);
+			auto const autobase_rel = context->path->MakeRelative(scriptfn, autobasefn);
+			auto const assfile_rel = context->path->MakeRelative(scriptfn, "?script");
+			auto const autobase_rel_str = agi::fs::PathToGenericString(autobase_rel);
+			auto const assfile_rel_str = agi::fs::PathToGenericString(assfile_rel);
 
-			if (autobase_rel.string().size() <= scriptfn.size() && autobase_rel.string().size() <= assfile_rel.string().size()) {
-				scriptfn = "$" + autobase_rel.generic_string();
-			} else if (assfile_rel.string().size() <= scriptfn.size() && assfile_rel.string().size() <= autobase_rel.string().size()) {
-				scriptfn = "~" + assfile_rel.generic_string();
+			if (autobase_rel_str.size() <= scriptfn_str.size() && autobase_rel_str.size() <= assfile_rel_str.size()) {
+				scripts_string += "$" + autobase_rel_str;
+			} else if (assfile_rel_str.size() <= scriptfn_str.size() && assfile_rel_str.size() <= autobase_rel_str.size()) {
+				scripts_string += "~" + assfile_rel_str;
 			} else {
-				scriptfn = "/" + script->GetFilename().generic_string();
+				scripts_string += "/" + agi::fs::PathToGenericString(scriptfn);
 			}
-
-			scripts_string += scriptfn;
 		}
 		context->ass->Properties.automation_scripts = std::move(scripts_string);
 	}

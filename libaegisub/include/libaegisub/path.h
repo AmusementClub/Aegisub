@@ -46,6 +46,8 @@ public:
 	/// @return Absolute path if `path` is absolute or `token` is set, `path` otherwise
 	/// @throws InternalError if `token` is not a valid token name
 	fs::path MakeAbsolute(fs::path path, std::string const& token) const;
+	fs::path MakeAbsolute(std::string const& path, std::string const& token) const { return MakeAbsolute(fs::PathFromString(path), token); }
+	fs::path MakeAbsolute(char const* path, std::string const& token) const { return MakeAbsolute(fs::PathFromString(path), token); }
 
 	/// If `token` is set, make `path` relative to it
 	/// @param path An absolute path
@@ -71,6 +73,8 @@ public:
 	/// @param token_value An absolute path to a directory or file
 	/// @throws InternalError if `token` is not a valid token name
 	void SetToken(const char *token_name, fs::path const& token_value);
+	void SetToken(const char *token_name, std::string const& token_value) { SetToken(token_name, fs::PathFromString(token_value)); }
+	void SetToken(const char *token_name, char const* token_value) { SetToken(token_name, fs::PathFromString(token_value)); }
 };
 
 }

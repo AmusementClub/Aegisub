@@ -250,14 +250,14 @@ void TryEnrichAudioTracksFromMkv(agi::fs::path const& filename, std::vector<FFmp
 		}
 
 		if (mkv_audio_tracks.size() != track_list.size()) {
-			LOG_D("provider/ffms2/mkv") << "Skipping MKV audio metadata enrichment for " << filename.string()
+			LOG_D("provider/ffms2/mkv") << "Skipping MKV audio metadata enrichment for " << agi::fs::PathToString(filename)
 				<< ": FFMS audio tracks=" << track_list.size() << ", MKV audio tracks=" << mkv_audio_tracks.size();
 			return;
 		}
 
 		for (size_t i = 0; i < track_list.size(); ++i) {
 			if (!CodecNamesSeemCompatible(track_list[i].codec_name, mkv_audio_tracks[i]->codec_id)) {
-				LOG_D("provider/ffms2/mkv") << "Skipping MKV audio metadata enrichment for " << filename.string()
+				LOG_D("provider/ffms2/mkv") << "Skipping MKV audio metadata enrichment for " << agi::fs::PathToString(filename)
 					<< ": codec mismatch at audio ordinal " << i
 					<< " (ffms=" << track_list[i].codec_name
 					<< ", mkv=" << mkv_audio_tracks[i]->codec_id << ")";
@@ -276,10 +276,10 @@ void TryEnrichAudioTracksFromMkv(agi::fs::path const& filename, std::vector<FFmp
 		}
 	}
 	catch (agi::Exception const& e) {
-		LOG_D("provider/ffms2/mkv") << "Failed to enrich MKV audio track metadata for " << filename.string() << ": " << e.GetMessage();
+		LOG_D("provider/ffms2/mkv") << "Failed to enrich MKV audio track metadata for " << agi::fs::PathToString(filename) << ": " << e.GetMessage();
 	}
 	catch (std::exception const& e) {
-		LOG_D("provider/ffms2/mkv") << "Failed to enrich MKV audio track metadata for " << filename.string() << ": " << e.what();
+		LOG_D("provider/ffms2/mkv") << "Failed to enrich MKV audio track metadata for " << agi::fs::PathToString(filename) << ": " << e.what();
 	}
 #else
 	(void)filename;
@@ -438,7 +438,7 @@ agi::fs::path FFmpegSourceProvider::GetCacheFilename(agi::fs::path const& filena
 	uintmax_t len = agi::fs::Size(filename);
 
 	// Get the hash of the filename
-	auto hash = agi::util::crc32(filename.string());
+	auto hash = agi::util::crc32(agi::fs::PathToString(filename));
 
 	// Generate the filename
 	auto result = config::path->Decode(std::string("?local/ffms2cache/") + std::to_string(hash) + "_" + std::to_string(len) + "_" + std::to_string(agi::fs::ModifiedTime(filename)) + ".ffindex");

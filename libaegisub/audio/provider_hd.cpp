@@ -51,7 +51,7 @@ class HDAudioProvider final : public AudioProviderWrapper {
 	fs::path CacheFilename(fs::path const& dir) {
 		// Check free space
 		if ((uint64_t)num_samples * bytes_per_sample * channels > fs::FreeSpace(dir))
-			throw AudioProviderError("Not enough free disk space in " + dir.string() + " to cache the audio");
+			throw AudioProviderError("Not enough free disk space in " + fs::PathToString(dir) + " to cache the audio");
 
 		return format("audio-%lld-%lld", time(nullptr),
 		              boost::interprocess::ipcdetail::get_current_process_id());

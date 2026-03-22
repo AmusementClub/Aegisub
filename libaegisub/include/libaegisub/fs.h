@@ -28,6 +28,11 @@
 
 namespace agi {
 	namespace fs {
+		std::string PathToString(path const& value);
+		std::string PathToGenericString(path const& value);
+		path PathFromString(std::string const& value);
+		path PathFromString(char const* value);
+
 		/// Define a filesystem error which takes a path or a string
 #define DEFINE_FS_EXCEPTION(type, base, message) \
 		struct type : public base { \

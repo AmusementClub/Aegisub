@@ -320,7 +320,7 @@ void DialogFontsCollector::OnStart(wxCommandEvent &) {
 	}
 
 	if (mode != FcMode::CheckFontsOnly)
-		OPT_SET("Path/Fonts Collector Destination")->SetString(dest.string());
+		OPT_SET("Path/Fonts Collector Destination")->SetString(agi::fs::PathToString(dest));
 
 	// Disable the UI while it runs as we don't support canceling
 	EnableCloseButton(false);

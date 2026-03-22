@@ -3,6 +3,7 @@
 #include "native_library.h"
 
 #include <libaegisub/exception.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/log.h>
 #include <libaegisub/string_utils.h>
 
@@ -132,20 +133,20 @@ constexpr char kRuntimesSearchDir[] = "runtimes";
 		auto len = GetModuleFileNameW(nullptr, &path[0], static_cast<DWORD>(path.size()));
 		if (!len) return {};
 		path.resize(len);
-		return stdfs::path(agi::charset::ConvertW(path)).parent_path().string();
+		return agi::fs::PathToString(stdfs::path(path).parent_path());
 #elif defined(__APPLE__)
 		uint32_t size = 0;
 		_NSGetExecutablePath(nullptr, &size);
 		std::string path(size, '\0');
 		if (_NSGetExecutablePath(path.data(), &size) != 0)
 			return {};
-		return stdfs::path(path.c_str()).parent_path().string();
+		return agi::fs::PathToString(stdfs::path(path.c_str()).parent_path());
 #else
 		std::vector<char> buffer(4096, '\0');
 		auto len = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
 		if (len <= 0) return {};
 		buffer[static_cast<size_t>(len)] = '\0';
-		return stdfs::path(buffer.data()).parent_path().string();
+		return agi::fs::PathToString(stdfs::path(buffer.data()).parent_path());
 #endif
 	}
 
@@ -174,7 +175,7 @@ constexpr char kRuntimesSearchDir[] = "runtimes";
 			return false;
 
 		for (auto const& component : path) {
-			auto part = component.generic_string();
+			auto part = agi::fs::PathToGenericString(component);
 			if (part.empty() || part == ".")
 				continue;
 			if (part == "..")
@@ -188,7 +189,7 @@ constexpr char kRuntimesSearchDir[] = "runtimes";
 		if (!path.has_filename())
 			return false;
 
-		auto const filename = path.filename().string();
+		auto const filename = agi::fs::PathToString(path.filename());
 #ifdef _WIN32
 		return EndsWithCaseInsensitive(filename, ".dll");
 #elif defined(__APPLE__)
@@ -208,14 +209,14 @@ LibraryLoadOptions DefaultAppLocalLoadOptions(bool allow_system_fallback) {
 
 std::vector<std::string> BuildLibraryNameVariations(std::string_view library_name) {
 	std::vector<std::string> candidates;
-	stdfs::path path{std::string(library_name)};
+	stdfs::path path = agi::fs::PathFromString(std::string(library_name));
 	if (path.is_absolute()) {
 		AddCandidate(candidates, library_name);
 		return candidates;
 	}
 
 	bool has_separator = HasDirectorySeparator(library_name);
-	auto filename = path.filename().string();
+	auto filename = agi::fs::PathToString(path.filename());
 	bool has_lib_prefix = agi::util::strings::starts_with(filename, "lib");
 
 #ifdef _WIN32
@@ -256,9 +257,9 @@ std::vector<std::string> BuildLibraryLoadProbes(
 	std::string_view executable_directory,
 	LibraryLoadOptions const& options) {
 	std::vector<std::string> probes;
-	stdfs::path requested_path{std::string(library_name)};
+	stdfs::path requested_path = agi::fs::PathFromString(std::string(library_name));
 	if (requested_path.is_absolute()) {
-		AddCandidate(probes, requested_path.string());
+		AddCandidate(probes, agi::fs::PathToString(requested_path));
 		return probes;
 	}
 
@@ -268,15 +269,15 @@ std::vector<std::string> BuildLibraryLoadProbes(
 			return probes;
 		normalized.make_preferred();
 
-		auto const candidates = BuildLibraryNameVariations(normalized.string());
-		stdfs::path exe_dir{std::string(executable_directory)};
+		auto const candidates = BuildLibraryNameVariations(agi::fs::PathToString(normalized));
+		stdfs::path exe_dir = agi::fs::PathFromString(std::string(executable_directory));
 		for (auto const& candidate : candidates)
-			AddCandidate(probes, (exe_dir / stdfs::path(candidate)).string());
+			AddCandidate(probes, agi::fs::PathToString(exe_dir / agi::fs::PathFromString(candidate)));
 		return probes;
 	}
 
 	auto const candidates = BuildLibraryNameVariations(library_name);
-	stdfs::path exe_dir{std::string(executable_directory)};
+	stdfs::path exe_dir = agi::fs::PathFromString(std::string(executable_directory));
 	for (auto const& relative_dir : options.executable_relative_search_dirs) {
 		if (relative_dir.empty())
 			continue;
@@ -288,11 +289,11 @@ std::vector<std::string> BuildLibraryLoadProbes(
 		normalized.make_preferred();
 
 		for (auto const& candidate : candidates)
-			AddCandidate(probes, (exe_dir / normalized / stdfs::path(candidate)).string());
+			AddCandidate(probes, agi::fs::PathToString(exe_dir / normalized / agi::fs::PathFromString(candidate)));
 	}
 
 	for (auto const& candidate : candidates)
-		AddCandidate(probes, (exe_dir / stdfs::path(candidate)).string());
+		AddCandidate(probes, agi::fs::PathToString(exe_dir / agi::fs::PathFromString(candidate)));
 
 	if (options.allow_system_fallback) {
 		for (auto const& candidate : candidates)
@@ -312,13 +313,13 @@ std::vector<std::string> EnumerateLibrariesInExecutableRelativeDirectory(
 	std::string_view relative_directory,
 	std::string_view executable_directory) {
 	std::vector<std::string> libraries;
-	stdfs::path relative_path{std::string(relative_directory)};
+	stdfs::path relative_path = agi::fs::PathFromString(std::string(relative_directory));
 	auto normalized = relative_path.lexically_normal();
 	if (!IsExecutableRelativePathAllowed(normalized))
 		return libraries;
 	normalized.make_preferred();
 
-	stdfs::path directory = stdfs::path(std::string(executable_directory)) / normalized;
+	stdfs::path directory = agi::fs::PathFromString(std::string(executable_directory)) / normalized;
 	std::error_code ec;
 	if (!stdfs::exists(directory, ec) || !stdfs::is_directory(directory, ec))
 		return libraries;
@@ -330,7 +331,7 @@ std::vector<std::string> EnumerateLibrariesInExecutableRelativeDirectory(
 			continue;
 		if (!LooksLikeDynamicLibrary(entry.path()))
 			continue;
-		libraries.emplace_back(entry.path().string());
+		libraries.emplace_back(agi::fs::PathToString(entry.path()));
 	}
 
 	std::sort(libraries.begin(), libraries.end());

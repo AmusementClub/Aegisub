@@ -15,5 +15,13 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include <filesystem>
+#include <string>
 
-namespace agi { namespace fs { using path = std::filesystem::path; } }
+namespace agi { namespace fs {
+	using path = std::filesystem::path;
+
+	std::string PathToString(path const& value);
+	std::string PathToGenericString(path const& value);
+	path PathFromString(std::string const& value);
+	path PathFromString(char const* value);
+} }

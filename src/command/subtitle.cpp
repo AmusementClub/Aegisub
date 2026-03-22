@@ -51,6 +51,7 @@
 
 #include <libaegisub/address_of_adaptor.h>
 #include <libaegisub/charset_conv.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/make_unique.h>
 
 #include <wx/msgdlg.h>
@@ -345,7 +346,7 @@ static void save_subtitles(agi::Context *c, agi::fs::path filename) {
 	if (filename.empty()) {
 		c->videoController->Stop();
 		filename = SaveFileSelector(_("Save subtitles file"), "Path/Last/Subtitles",
-			c->subsController->Filename().stem().string() + ".ass", "ass",
+			agi::fs::PathToString(c->subsController->Filename().stem()) + ".ass", "ass",
 			"Advanced Substation Alpha (*.ass)|*.ass", c->parent);
 		if (filename.empty()) return;
 	}

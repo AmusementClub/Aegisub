@@ -22,6 +22,12 @@
 
 using agi::Path;
 
+namespace {
+std::string utf8_path_sample() {
+	return "\xE4\xB8\xAD\xE6\x96\x87""-path.ass";
+}
+}
+
 #ifdef _WIN32
 #define DS "\\"
 #else
@@ -95,6 +101,19 @@ TEST(lagi_path, decode_token_without_suffix_returns_token_root) {
 
 	EXPECT_NO_THROW(p.SetToken("?video", std::filesystem::current_path()));
 	EXPECT_STREQ(expected.string().c_str(), p.Decode("?video").string().c_str());
+}
+
+TEST(lagi_path, decode_utf8_suffix_uses_utf8) {
+	Path p;
+	auto expected_root = std::filesystem::current_path();
+	expected_root.make_preferred();
+
+	ASSERT_NO_THROW(p.SetToken("?video", expected_root));
+
+	auto expected = expected_root / agi::fs::PathFromString(utf8_path_sample());
+	expected.make_preferred();
+
+	EXPECT_EQ(agi::fs::PathToString(expected), agi::fs::PathToString(p.Decode("?video/" + utf8_path_sample())));
 }
 
 #ifdef _WIN32

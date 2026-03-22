@@ -116,7 +116,7 @@ void Copy(fs::path const& from, fs::path const& to) {
 		case ERROR_FILE_NOT_FOUND:
 			throw FileNotFound(from);
 		case ERROR_ACCESS_DENIED:
-			throw fs::WriteDenied("Could not overwrite " + to.string());
+			throw fs::WriteDenied("Could not overwrite " + PathToString(to));
 		default:
 			throw fs::WriteDenied("Could not copy: " + util::ErrorString(GetLastError()));
 		}

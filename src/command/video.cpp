@@ -458,7 +458,7 @@ static void save_snapshot(agi::Context *c, bool raw) {
 	agi::fs::path basepath;
 
 	auto videoname = c->project->VideoName();
-	bool is_dummy = agi::util::strings::starts_with(videoname.string(), "?dummy");
+	bool is_dummy = agi::util::strings::starts_with(agi::fs::PathToString(videoname), "?dummy");
 
 	// Is it a path specifier and not an actual fixed path?
 	if (option[0] == '?') {
@@ -483,12 +483,14 @@ static void save_snapshot(agi::Context *c, bool raw) {
 
 	// Get full path
 	int session_shot_count = 1;
-	std::string path;
+	agi::fs::path path;
+	auto const base_dir = basepath.parent_path();
+	auto const base_name = agi::fs::PathToString(basepath.filename());
 	do {
-		path = agi::format("%s_%03d_%d.png", basepath.string(), session_shot_count++, c->videoController->GetFrameN());
+		path = base_dir / agi::fs::PathFromString(agi::format("%s_%03d_%d.png", base_name, session_shot_count++, c->videoController->GetFrameN()));
 	} while (agi::fs::FileExists(path));
 
-	get_image(c, raw).SaveFile(to_wx(path), wxBITMAP_TYPE_PNG);
+	get_image(c, raw).SaveFile(path.wstring(), wxBITMAP_TYPE_PNG);
 }
 
 struct video_frame_save final : public validator_video_loaded {

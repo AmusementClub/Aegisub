@@ -38,6 +38,7 @@
 #include "video_frame.h"
 
 #include <libaegisub/color.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/split.h>
 #include <libaegisub/string_utils.h>
@@ -105,11 +106,12 @@ void DummyVideoProvider::GetFrame(int, VideoFrame &frame) {
 
 namespace agi { class BackgroundRunner; }
 std::unique_ptr<VideoProvider> CreateDummyVideoProvider(agi::fs::path const& filename, std::string const&, agi::BackgroundRunner *) {
-	if (!agi::util::strings::starts_with(filename.string(), "?dummy"))
+	auto const filename_utf8 = agi::fs::PathToString(filename);
+	if (!agi::util::strings::starts_with(filename_utf8, "?dummy"))
 		return {};
 
 	std::vector<std::string> toks;
-	auto const fields = filename.string().substr(7);
+	auto const fields = filename_utf8.substr(7);
 	agi::Split(toks, fields, ':');
 	if (toks.size() != 8)
 		throw VideoOpenError("Too few fields in dummy video parameter list");

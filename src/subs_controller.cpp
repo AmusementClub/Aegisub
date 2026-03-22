@@ -190,7 +190,7 @@ ProjectProperties SubsController::Load(agi::fs::path const& filename, std::strin
 		else
 			path = context->path->Decode(path_str);
 		agi::fs::CreateDirectory(path);
-		agi::fs::Copy(filename, path/(filename.stem().string() + ".ORIGINAL" + filename.extension().string()));
+		agi::fs::Copy(filename, path / agi::fs::PathFromString(agi::fs::PathToString(filename.stem()) + ".ORIGINAL" + agi::fs::PathToString(filename.extension())));
 	}
 
 	FileOpen(filename);
@@ -283,8 +283,9 @@ void SubsController::AutoSave() {
 
 		try {
 			agi::fs::CreateDirectory(directory);
-			auto path = directory /  agi::format("%s.%s.AUTOSAVE.ass", name.string(),
-			                                     agi::util::strftime("%Y-%m-%d-%H-%M-%S"));
+			auto path = directory / agi::fs::PathFromString(agi::format("%s.%s.AUTOSAVE.ass",
+				agi::fs::PathToString(name),
+				agi::util::strftime("%Y-%m-%d-%H-%M-%S")));
 			SubtitleFormat::GetWriter(path)->WriteFile(subs.get(), path, 0);
 			msg = fmt_tl("File backup saved as \"%s\".", path);
 		}
@@ -314,7 +315,7 @@ void SubsController::SetFileName(agi::fs::path const& path) {
 	filename = path;
 	context->path->SetToken("?script", path.parent_path());
 	config::mru->Add("Subtitle", path);
-	OPT_SET("Path/Last/Subtitles")->SetString(filename.parent_path().string());
+	OPT_SET("Path/Last/Subtitles")->SetString(agi::fs::PathToString(filename.parent_path()));
 }
 
 void SubsController::OnCommit(AssFileCommit c) {

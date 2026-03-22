@@ -23,7 +23,7 @@ namespace agi {
 template<>
 struct writer<char, agi::fs::path> {
 	static void write(std::basic_ostream<char>& out, int max_len, agi::fs::path const& value) {
-		out << value.string();
+		out << agi::fs::PathToString(value);
 	}
 };
 

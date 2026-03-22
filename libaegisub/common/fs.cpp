@@ -30,6 +30,7 @@ namespace bfs = std::filesystem;
 // errors, which isn't really what we want, so do some crazy wrapper
 // shit to map error codes to more useful exceptions.
 #ifdef _WIN32
+#include "libaegisub/charset_conv_win.h"
 #include <winerror.h>
 #define CHECKED_CALL(exp, src_path, dst_path) \
 	std::error_code ec; \
@@ -141,6 +142,34 @@ namespace {
 	}
 }
 
+	std::string PathToString(path const& value) {
+#ifdef _WIN32
+		return charset::ConvertW(value.native());
+#else
+		return value.string();
+#endif
+	}
+
+	std::string PathToGenericString(path const& value) {
+#ifdef _WIN32
+		return charset::ConvertW(value.generic_wstring());
+#else
+		return value.generic_string();
+#endif
+	}
+
+	path PathFromString(std::string const& value) {
+#ifdef _WIN32
+		return path(charset::ConvertW(value));
+#else
+		return path(value);
+#endif
+	}
+
+	path PathFromString(char const* value) {
+		return PathFromString(value ? std::string(value) : std::string());
+	}
+
 	WRAP_BFS(create_directories, CreateDirectory)
 	WRAP_BFS(remove, Remove)
 	WRAP_BFS(canonical, Canonicalize)
@@ -194,7 +223,7 @@ namespace {
 	}
 
 	bool HasExtension(path const& p, std::string const& ext) {
-		auto filename = p.filename().string();
+		auto filename = PathToString(p.filename());
 		if (filename.size() < ext.size() + 1) return false;
 		if (filename[filename.size() - ext.size() - 1] != '.') return false;
 		return agi::util::strings::iends_with(filename, ext);

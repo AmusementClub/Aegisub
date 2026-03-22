@@ -155,11 +155,11 @@ std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path c
 	// No provider could open the file
 	LOG_E("manager/video/provider") << "Could not open " << filename;
 	std::string msg = "Could not open ";
-	msg.append(filename.string());
+	msg.append(agi::fs::PathToString(filename));
 	msg.append(":\n");
 	msg.append(errors);
 
-	if (!found) throw agi::fs::FileNotFound(filename.string());
+	if (!found) throw agi::fs::FileNotFound(filename);
 	if (!supported) throw VideoNotSupported(msg);
 	throw VideoOpenError(msg);
 }

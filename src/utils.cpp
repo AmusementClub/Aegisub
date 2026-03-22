@@ -280,7 +280,7 @@ static agi::fs::path FileSelector(wxString const& message, std::string const& op
 		path = to_wx(OPT_GET(option_name)->GetString());
 	agi::fs::path filename = wxFileSelector(message, path, to_wx(default_filename), to_wx(default_extension), to_wx(wildcard), flags, parent).wx_str();
 	if (!filename.empty() && !option_name.empty())
-		OPT_SET(option_name)->SetString(filename.parent_path().string());
+		OPT_SET(option_name)->SetString(agi::fs::PathToString(filename.parent_path()));
 	return filename;
 }
 

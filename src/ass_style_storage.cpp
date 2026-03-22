@@ -107,7 +107,7 @@ AssStyle *AssStyleStorage::GetStyle(std::string const& name) {
 std::vector<std::string> AssStyleStorage::GetCatalogs() {
 	std::vector<std::string> catalogs;
 	for (auto const& file : agi::fs::DirectoryIterator(config::path->Decode("?user/catalog/"), "*.sty"))
-		catalogs.push_back(agi::fs::path(file).stem().string());
+		catalogs.push_back(agi::fs::PathToString(agi::fs::PathFromString(file).stem()));
 	return catalogs;
 }
 

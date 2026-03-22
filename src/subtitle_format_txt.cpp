@@ -42,6 +42,7 @@
 #include "text_file_writer.h"
 #include "version.h"
 
+#include <libaegisub/fs.h>
 #include <libaegisub/string_utils.h>
 
 TXTSubtitleFormat::TXTSubtitleFormat()
@@ -58,7 +59,7 @@ std::vector<std::string> TXTSubtitleFormat::GetWriteWildcards() const {
 }
 
 bool TXTSubtitleFormat::CanWriteFile(agi::fs::path const& filename) const {
-	auto str = filename.string();
+	auto str = agi::fs::PathToString(filename.filename());
 	return agi::util::strings::iends_with(str, ".txt")
 		&& !(agi::util::strings::iends_with(str, ".encore.txt") || agi::util::strings::iends_with(str, ".transtation.txt"));
 }

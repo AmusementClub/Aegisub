@@ -279,7 +279,7 @@ namespace Automation4 {
 
 		void Reload() override { }
 
-		std::string GetName() const override { return GetFilename().stem().string(); }
+		std::string GetName() const override { return agi::fs::PathToString(GetFilename().stem()); }
 		std::string GetDescription() const override;
 		std::string GetAuthor() const override { return ""; }
 		std::string GetVersion() const override { return ""; }

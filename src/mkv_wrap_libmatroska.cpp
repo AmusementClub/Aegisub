@@ -153,7 +153,7 @@ bool looks_like_font_mime_type(std::string const& mime_type) {
 }
 
 bool is_supported_font_attachment(std::string const& file_name, std::string const& mime_type) {
-	auto const ext = to_lower_copy(agi::fs::path(file_name).extension().string());
+	auto const ext = to_lower_copy(agi::fs::PathToString(agi::fs::PathFromString(file_name).extension()));
 	if (ext == ".ttf" || ext == ".ttc" || ext == ".otf" || ext == ".otc" || ext == ".pfb")
 		return true;
 	return !mime_type.empty() && looks_like_font_mime_type(mime_type);
@@ -841,7 +841,7 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 		selected_track = subtitle_tracks[choice];
 	}
 
-	LOG_I(kMkvLogSection) << "Importing MKV subtitle track " << selected_track->track_number << " (" << selected_track->codec_id << ") from " << filename.string();
+	LOG_I(kMkvLogSection) << "Importing MKV subtitle track " << selected_track->track_number << " (" << selected_track->codec_id << ") from " << agi::fs::PathToString(filename);
 	if (!selected_track->content_encodings.empty())
 		LOG_I(kMkvLogSection) << "Decoding MKV content encodings for track " << selected_track->track_number << ": " << describe_content_encodings(selected_track->content_encodings);
 

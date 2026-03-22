@@ -23,6 +23,12 @@
 static const char default_mru[] = "{\"Video\" : []}";
 static const char conf_ok[] = "data/mru_ok.json";
 
+namespace {
+std::string utf8_path_sample() {
+	return "\xE4\xB8\xAD\xE6\x96\x87""-mru.ass";
+}
+}
+
 TEST(lagi_mru, load_from_file) {
 	ASSERT_NO_THROW(agi::MRUManager mru(conf_ok, default_mru));
 	agi::MRUManager mru(conf_ok, default_mru);
@@ -125,6 +131,17 @@ TEST(lagi_mru, prune_obeys_option) {
 	ASSERT_NO_THROW(mru.Add("Audio", "2"));
 
 	EXPECT_EQ(1, mru.Get("Audio")->size());
+}
+
+TEST(lagi_mru, utf8_entries_round_trip) {
+	auto const entry = utf8_path_sample();
+
+	agi::fs::Remove("data/mru_tmp");
+	agi::MRUManager mru("data/mru_tmp", default_mru);
+	ASSERT_NO_THROW(mru.Add("Video", agi::fs::PathFromString(entry)));
+
+	agi::MRUManager reloaded("data/mru_tmp", default_mru);
+	EXPECT_EQ(entry, agi::fs::PathToString(reloaded.GetEntry("Video", 0)));
 }
 
 // Check to make sure an entry is really removed.  This was fixed in

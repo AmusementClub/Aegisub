@@ -312,7 +312,7 @@ void DialogShiftTimes::OnHistoryClick(wxCommandEvent &evt) {
 
 void DialogShiftTimes::SaveHistory(json::Array shifted_blocks) {
 	json::Object new_entry;
-	new_entry["filename"] = context->subsController->Filename().filename().string();
+	new_entry["filename"] = agi::fs::PathToString(context->subsController->Filename().filename());
 	new_entry["is by time"] = shift_by_time->GetValue();
 	new_entry["is backward"] = shift_backward->GetValue();
 	new_entry["amount"] = from_wx(shift_by_time->GetValue() ? shift_time->GetValue() : shift_frames->GetValue());

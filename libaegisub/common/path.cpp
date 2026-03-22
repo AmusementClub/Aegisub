@@ -53,7 +53,7 @@ int find_token(const char *str, size_t len) {
 namespace agi {
 
 bool IsNonFilesystemMediaPath(fs::path const& path) {
-	auto const str = path.string();
+	auto const str = fs::PathToString(path);
 	return util::strings::starts_with(str, "?dummy")
 		|| util::strings::starts_with(str, "dummy-audio:");
 }
@@ -67,7 +67,7 @@ Path::Path() {
 fs::path Path::Decode(std::string const& path) const {
 	int idx = find_token(path.c_str(), path.size());
 	if (idx == -1 || paths[idx].empty())
-		return fs::path(path).make_preferred();
+		return fs::PathFromString(path).make_preferred();
 	auto suffix = path.substr(strlen(tokens[idx]));
 	if (suffix.empty()) {
 		auto result = paths[idx];
@@ -75,7 +75,7 @@ fs::path Path::Decode(std::string const& path) const {
 	}
 	if (suffix[0] == '/' || suffix[0] == '\\')
 		suffix.erase(0, 1);
-	return (paths[idx] / suffix).make_preferred();
+	return (paths[idx] / fs::PathFromString(suffix)).make_preferred();
 }
 
 fs::path Path::MakeRelative(fs::path const& path, std::string const& token) const {
@@ -93,7 +93,7 @@ fs::path Path::MakeRelative(fs::path const& path, fs::path const& base) const {
 
 	// Paths on different volumes can't be made relative to each other
 	if (path.has_root_name() && path.root_name() != base.root_name())
-		return path.string();
+		return path;
 
 	auto path_it = path.begin();
 	auto ref_it = base.begin();
@@ -121,7 +121,7 @@ fs::path Path::MakeAbsolute(fs::path path, std::string const& token) const {
 
 std::string Path::Encode(fs::path const& path) const {
 	// Find the shortest encoding of path made relative to each token
-	std::string shortest = path.string();
+	std::string shortest = fs::PathToString(path);
 	size_t length = static_cast<size_t>(std::distance(path.begin(), path.end()));
 	for (size_t i = 0; i < paths.size(); ++i) {
 		if (paths[i].empty()) continue;
@@ -130,7 +130,7 @@ std::string Path::Encode(fs::path const& path) const {
 		const size_t d = static_cast<size_t>(std::distance(p.begin(), p.end()));
 		if (d < length) {
 			length = d;
-			shortest = (tokens[i]/p).string();
+			shortest = fs::PathToString(fs::PathFromString(tokens[i]) / p);
 		}
 	}
 

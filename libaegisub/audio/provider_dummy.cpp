@@ -61,7 +61,7 @@ class DummyAudioProvider final : public AudioProvider {
 
 public:
 	DummyAudioProvider(agi::fs::path const& uri) {
-		noise = agi::util::strings::contains(uri.string(), ":noise?");
+		noise = agi::util::strings::contains(agi::fs::PathToString(uri), ":noise?");
 		channels = 1;
 		sample_rate = 44100;
 		bytes_per_sample = 2;
@@ -73,7 +73,7 @@ public:
 
 namespace agi {
 std::unique_ptr<AudioProvider> CreateDummyAudioProvider(agi::fs::path const& file, agi::BackgroundRunner *) {
-	if (!agi::util::strings::starts_with(file.string(), "dummy-audio:"))
+	if (!agi::util::strings::starts_with(fs::PathToString(file), "dummy-audio:"))
 		return {};
 	return agi::make_unique<DummyAudioProvider>(file);
 }

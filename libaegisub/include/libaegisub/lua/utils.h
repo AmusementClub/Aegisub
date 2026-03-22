@@ -45,7 +45,8 @@ push_value(lua_State *L, Integer value) {
 }
 
 inline void push_value(lua_State *L, fs::path const& value) {
-	lua_pushstring(L, value.string().c_str());
+	auto utf8 = fs::PathToString(value);
+	lua_pushlstring(L, utf8.c_str(), utf8.size());
 }
 
 inline void push_value(lua_State *L, std::string const& value) {

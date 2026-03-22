@@ -17,6 +17,7 @@
 #include "ass_attachment.h"
 
 #include <libaegisub/ass/uuencode.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/file_mapping.h>
 #include <libaegisub/io.h>
 #include <libaegisub/string_utils.h>
@@ -32,7 +33,7 @@ AssAttachment::AssAttachment(std::string const& header, AssEntryGroup group)
 }
 
 AssAttachment::AssAttachment(agi::fs::path const& name, AssEntryGroup group)
-: filename(name.filename().string())
+: filename(agi::fs::PathToString(name.filename()))
 , group(group)
 {
 	// SSA stuffs some information about the font in the embedded filename, but

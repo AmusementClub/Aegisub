@@ -44,8 +44,9 @@ namespace agi { namespace lua {
 			size -= 3;
 		}
 
+		auto const filename_utf8 = agi::fs::PathToString(filename);
 		if (!agi::fs::HasExtension(filename, "moon"))
-			return luaL_loadbuffer(L, buff, size, filename.string().c_str()) == 0;
+			return luaL_loadbuffer(L, buff, size, filename_utf8.c_str()) == 0;
 
 		// We have a MoonScript file, so we need to load it with that
 		// It might be nice to have a dedicated lua state for compiling
@@ -56,7 +57,7 @@ namespace agi { namespace lua {
 		// error handling
 		lua_pushlstring(L, buff, size);
 		lua_pushvalue(L, -1);
-		lua_setfield(L, LUA_REGISTRYINDEX, ("raw moonscript: " + filename.string()).c_str());
+		lua_setfield(L, LUA_REGISTRYINDEX, ("raw moonscript: " + filename_utf8).c_str());
 
 		push_value(L, filename);
 		if (lua_pcall(L, 2, 2, 0))
@@ -88,7 +89,7 @@ namespace agi { namespace lua {
 
 			// If there's a .moon file at that path, load it instead of the
 			// .lua file
-			agi::fs::path path = filename;
+			agi::fs::path path = agi::fs::PathFromString(filename);
 			if (agi::fs::HasExtension(path, "lua")) {
 				agi::fs::path moonpath = path;
 				moonpath.replace_extension("moon");
@@ -100,8 +101,9 @@ namespace agi { namespace lua {
 				continue;
 
 			try {
+				auto const path_utf8 = agi::fs::PathToString(path);
 				if (!LoadFile(L, path))
-					return error(L, "Error loading Lua module \"%s\":\n%s", path.string().c_str(), check_string(L, 1).c_str());
+					return error(L, "Error loading Lua module \"%s\":\n%s", path_utf8.c_str(), check_string(L, 1).c_str());
 				break;
 			}
 			catch (agi::fs::FileNotFound const&) {
@@ -111,7 +113,8 @@ namespace agi { namespace lua {
 				// Not an error so swallow and continue on
 			}
 			catch (agi::Exception const& e) {
-				return error(L, "Error loading Lua module \"%s\":\n%s", path.string().c_str(), e.GetMessage().c_str());
+				auto const path_utf8 = agi::fs::PathToString(path);
+				return error(L, "Error loading Lua module \"%s\":\n%s", path_utf8.c_str(), e.GetMessage().c_str());
 			}
 		}
 
@@ -125,7 +128,8 @@ namespace agi { namespace lua {
 
 		push_value(L, "");
 		for (auto const& path : include_path) {
-			lua_pushfstring(L, "%s/?.lua;%s/?/init.lua;", path.string().c_str(), path.string().c_str());
+			auto utf8 = agi::fs::PathToString(path);
+			lua_pushfstring(L, "%s/?.lua;%s/?/init.lua;", utf8.c_str(), utf8.c_str());
 			lua_concat(L, 2);
 		}
 

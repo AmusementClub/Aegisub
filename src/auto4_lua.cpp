@@ -421,7 +421,7 @@ namespace {
 	{
 		Destroy();
 
-		name = GetPrettyFilename().string();
+		name = agi::fs::PathToString(GetPrettyFilename());
 
 		// create lua environment
 		L = luaL_newstate();
@@ -511,7 +511,7 @@ namespace {
 		// this is where features are registered
 		if (lua_pcall(L, 0, 0, -2)) {
 			// error occurred, assumed to be on top of Lua stack
-			description = agi::format("Error initialising Lua script \"%s\":\n\n%s", GetPrettyFilename().string(), get_string_or_default(L, -1));
+			description = agi::format("Error initialising Lua script \"%s\":\n\n%s", agi::fs::PathToString(GetPrettyFilename()), get_string_or_default(L, -1));
 			lua_pop(L, 2); // error + error handler
 			return;
 		}
@@ -531,7 +531,7 @@ namespace {
 		version = get_global_string(L, "script_version");
 
 		if (name.empty())
-			name = GetPrettyFilename().string();
+			name = agi::fs::PathToString(GetPrettyFilename());
 
 		lua_pop(L, 1);
 		// if we got this far, the script should be ready

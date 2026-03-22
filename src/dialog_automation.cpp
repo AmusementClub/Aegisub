@@ -37,6 +37,7 @@
 #include "libresrc/libresrc.h"
 #include "options.h"
 
+#include <libaegisub/fs.h>
 #include <libaegisub/signal.h>
 
 #include <algorithm>
@@ -231,7 +232,7 @@ void DialogAutomation::OnAdd(wxCommandEvent &)
 
 	for (auto const& fname : fnames) {
 		agi::fs::path fnpath(fname.wx_str());
-		OPT_SET("Path/Last/Automation")->SetString(fnpath.parent_path().string());
+		OPT_SET("Path/Last/Automation")->SetString(agi::fs::PathToString(fnpath.parent_path()));
 
 		if (has_file(local_manager->GetScripts(), fnpath) || has_file(global_manager->GetScripts(), fnpath)) {
 			wxLogError("Script '%s' is already loaded", fname);

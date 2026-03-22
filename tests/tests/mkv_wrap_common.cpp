@@ -93,8 +93,8 @@ TEST(mkv_wrap_common, describe_track_includes_codec_language_and_name) {
 
 TEST(mkv_wrap_common, format_audio_channel_count_formats_basic_common_cases) {
 	EXPECT_EQ("", FormatMkvAudioChannelCount(std::nullopt));
-	EXPECT_EQ("1.0", FormatMkvAudioChannelCount(1));
-	EXPECT_EQ("2.0", FormatMkvAudioChannelCount(2));
+	EXPECT_EQ("1 ch", FormatMkvAudioChannelCount(1));
+	EXPECT_EQ("2 ch", FormatMkvAudioChannelCount(2));
 	EXPECT_EQ("6 ch", FormatMkvAudioChannelCount(6));
 }
 

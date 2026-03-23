@@ -90,6 +90,7 @@ if(GTEST_FOUND)
         tests/tests/time.cpp
         tests/tests/type_name.cpp
         tests/tests/ui_dispatch.cpp
+        tests/tests/ui_services.cpp
         tests/tests/util.cpp
         tests/tests/uuencode.cpp
         tests/tests/vfr.cpp

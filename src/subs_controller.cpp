@@ -32,6 +32,7 @@
 #include "status_sink.h"
 #include "subtitle_format.h"
 #include "text_selection_controller.h"
+#include "ui_services.h"
 
 #include <libaegisub/dispatch.h>
 #include <libaegisub/format_path.h>
@@ -48,6 +49,20 @@ namespace {
 			timer->Start(freq * 1000);
 		else
 			timer->Stop();
+	}
+
+	int interaction_result_to_wx(agi::InteractionResult result) {
+		switch (result) {
+		case agi::InteractionResult::Ok:
+			return wxOK;
+		case agi::InteractionResult::Cancel:
+			return wxCANCEL;
+		case agi::InteractionResult::Yes:
+			return wxYES;
+		case agi::InteractionResult::No:
+			return wxNO;
+		}
+		return wxCANCEL;
 	}
 }
 
@@ -251,10 +266,13 @@ int SubsController::TryToClose(bool allow_cancel) const {
 	if (!IsModified())
 		return wxYES;
 
-	int flags = wxYES_NO;
-	if (allow_cancel)
-		flags |= wxCANCEL;
-	int result = wxMessageBox(fmt_tl("Do you want to save changes to %s?", Filename()), _("Unsaved changes"), flags, context->parent);
+	auto buttons = allow_cancel ? agi::InteractionButtons::YesNoCancel : agi::InteractionButtons::YesNo;
+	int result = interaction_result_to_wx(context->RequestInteraction({
+		from_wx(_("Unsaved changes")),
+		from_wx(fmt_tl("Do you want to save changes to %s?", Filename())),
+		buttons,
+		agi::InteractionIcon::Question
+	}));
 	if (result == wxYES) {
 		cmd::call("subtitle/save", context);
 		// If it fails saving, return cancel anyway

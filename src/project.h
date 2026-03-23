@@ -23,9 +23,9 @@
 #include <vector>
 
 class AsyncVideoProvider;
-class DialogProgress;
 class wxString;
 namespace agi { class AudioProvider; }
+namespace agi { class BackgroundRunner; }
 namespace agi { struct Context; }
 struct ProjectProperties;
 
@@ -46,11 +46,13 @@ class Project {
 	agi::signal::Signal<std::vector<int> const&> AnnounceKeyframesModified;
 
 	bool video_has_subtitles = false;
-	DialogProgress *progress = nullptr;
+	std::unique_ptr<agi::BackgroundRunner> progress_runner;
 	agi::Context *context = nullptr;
 
-	void ShowError(wxString const& message);
-	void ShowError(std::string const& message);
+	agi::BackgroundRunner *GetProgressRunner(std::string const& title = "", std::string const& message = "");
+	void ShowError(wxString const& message, std::string const& title = "Error loading file");
+	void ShowError(std::string const& message, std::string const& title = "Error loading file");
+	void ShowWarning(std::string const& message, std::string const& title = "Warning");
 
 	bool DoLoadSubtitles(agi::fs::path const& path, std::string encoding, ProjectProperties &properties);
 	void DoLoadAudio(agi::fs::path const& path, bool quiet);

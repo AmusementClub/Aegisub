@@ -21,6 +21,7 @@
 #include "options.h"
 #include "ui_services.h"
 #include "utils.h"
+#include "wx_ui_services.h"
 #ifdef WITH_FFMS2
 #include "ffmpegsource_common.h"
 #endif
@@ -196,7 +197,7 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 			if (notification_sink)
 				notification_sink->ShowError(from_wx(_("Out of Memory")), message);
 			else
-				wxMessageBox(to_wx(message), _("Out of Memory"), wxICON_ERROR | wxOK | wxCENTRE);
+				agi::WxMessageBoxNotificationSink().ShowError(from_wx(_("Out of Memory")), message);
 			cache = 2;
 		}
 		else

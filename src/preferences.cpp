@@ -32,6 +32,7 @@
 #include "options.h"
 #include "preferences_base.h"
 #include "video_provider_manager.h"
+#include "wx_ui_services.h"
 
 #ifdef WITH_PORTAUDIO
 #include "audio_player_portaudio.h"
@@ -45,7 +46,6 @@
 #include <wx/combobox.h>
 #include <wx/event.h>
 #include <wx/listctrl.h>
-#include <wx/msgdlg.h>
 #include <wx/srchctrl.h>
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
@@ -740,7 +740,13 @@ void Preferences::OnApply(wxCommandEvent &) {
 }
 
 void Preferences::OnResetDefault(wxCommandEvent&) {
-	if (wxYES != wxMessageBox(_("Are you sure that you want to restore the defaults? All your settings will be overridden."), _("Restore defaults?"), wxYES_NO))
+	auto interaction = agi::MakeWindowInteractionSink(this);
+	if (interaction->Request({
+		from_wx(_("Restore defaults?")),
+		from_wx(_("Are you sure that you want to restore the defaults? All your settings will be overridden.")),
+		agi::InteractionButtons::YesNo,
+		agi::InteractionIcon::Question
+	}) != agi::InteractionResult::Yes)
 		return;
 
 	for (auto const& opt_name : option_names) {

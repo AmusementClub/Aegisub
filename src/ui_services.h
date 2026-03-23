@@ -46,6 +46,20 @@ enum class InteractionResult : int {
 	No
 };
 
+inline InteractionResult DefaultInteractionResult(InteractionButtons buttons) {
+	switch (buttons) {
+	case InteractionButtons::Ok:
+		return InteractionResult::Ok;
+	case InteractionButtons::OkCancel:
+		return InteractionResult::Cancel;
+	case InteractionButtons::YesNo:
+		return InteractionResult::No;
+	case InteractionButtons::YesNoCancel:
+		return InteractionResult::Cancel;
+	}
+	return InteractionResult::Cancel;
+}
+
 struct InteractionRequest {
 	std::string title;
 	std::string message;
@@ -62,17 +76,7 @@ public:
 class NullInteractionSink final : public InteractionSink {
 public:
 	InteractionResult Request(InteractionRequest const& request) override {
-		switch (request.buttons) {
-		case InteractionButtons::Ok:
-			return InteractionResult::Ok;
-		case InteractionButtons::OkCancel:
-			return InteractionResult::Cancel;
-		case InteractionButtons::YesNo:
-			return InteractionResult::No;
-		case InteractionButtons::YesNoCancel:
-			return InteractionResult::Cancel;
-		}
-		return InteractionResult::Cancel;
+		return DefaultInteractionResult(request.buttons);
 	}
 };
 

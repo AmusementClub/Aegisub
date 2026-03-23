@@ -39,6 +39,7 @@
 #include "dialog_progress.h"
 #include "ui_services.h"
 #include "subs_preview.h"
+#include "wx_ui_services.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "video_frame.h"
 #include "video_provider_dummy.h"
@@ -158,9 +159,7 @@ void SubtitlesPreview::OnSize(wxSizeEvent &evt) {
 		if (notification_sink)
 			notification_sink->ShowError("No subtitles provider", message);
 		else
-			wxMessageBox(
-				to_wx(message),
-				"No subtitles provider", wxOK | wxICON_ERROR | wxCENTER);
+			agi::WxMessageBoxNotificationSink(this).ShowError("No subtitles provider", message);
 	}
 
 	sub_file->SetScriptInfo("PlayResX", std::to_string(w));

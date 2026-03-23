@@ -819,6 +819,51 @@ TEST(async_video_provider, find_key_point_range_respects_flipped_frame_coordinat
 	EXPECT_EQ(4, result.right);
 }
 
+TEST(async_video_provider, find_key_point_range_refines_coarse_scan_boundaries) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 4;
+	video->frame_height = 4;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		auto set_pixel = [&](int x, int y, unsigned char b, unsigned char g, unsigned char r) {
+			size_t base = static_cast<size_t>(y) * frame.pitch + static_cast<size_t>(x) * 4;
+			frame.data[base + 0] = b;
+			frame.data[base + 1] = g;
+			frame.data[base + 2] = r;
+			frame.data[base + 3] = 255;
+		};
+
+		if (n >= 4 && n <= 11) {
+			set_pixel(2, 1, 12, 64, 128);
+			set_pixel(1, 1, 12, 64, 128);
+			set_pixel(3, 1, 12, 64, 128);
+		}
+	};
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto result = provider.FindKeyPointRange({
+		7,
+		2,
+		1,
+		128,
+		64,
+		12,
+		0,
+		4,
+		0
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_EQ(4, result.left);
+	EXPECT_EQ(11, result.right);
+	EXPECT_EQ((std::vector<int>{ 7, 3, 6, 5, 4, 11, 15, 12 }), state->requested_frames);
+}
+
 TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *subs = new FakeOverlaySubtitlesProvider;

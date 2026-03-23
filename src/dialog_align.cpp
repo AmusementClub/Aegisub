@@ -51,6 +51,8 @@
 #include <wx/textctrl.h>
 
 namespace {
+	constexpr int kKeyPointCoarseScanStep = 8;
+
 	class DialogAlignToVideo final : public wxDialog {
 		agi::Context* context;
 		AsyncVideoProvider* provider;
@@ -186,7 +188,7 @@ namespace {
 			g,
 			b,
 			tolerance,
-			2,
+			kKeyPointCoarseScanStep,
 			5
 		});
 		if (scan.status == KeyPointRangeScanStatus::FrameUnavailable) {

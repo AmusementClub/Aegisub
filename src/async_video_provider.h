@@ -82,6 +82,7 @@ class AsyncVideoProvider {
 	bool NeedUpdate(std::vector<AssDialogueBase const*> const& visible_lines);
 
 	VideoRenderPacket ProcRenderPacket(int frame, double time, bool raw = false);
+	VideoRenderPacket ProcRenderPacket(int frame, double time, bool raw, bool force_bgra_frame);
 
 	/// Monotonic counter used to identify the latest seek/drag request.
 	std::atomic<uint_fast32_t> request_version{ 0 };
@@ -146,6 +147,11 @@ public:
 	/// @brief time  Exact start time of the frame in seconds
 	/// @brief raw   Get raw frame without subtitles
 	std::shared_ptr<VideoFrame> GetFrame(int frame, double time, bool raw = false);
+	/// @brief Synchronously get a CPU-readable BGRA frame regardless of display source mode
+	/// @brief frame Frame number
+	/// @brief time  Exact start time of the frame in seconds
+	/// @brief raw   Get raw frame without subtitles
+	std::shared_ptr<VideoFrame> GetFrameBgra(int frame, double time, bool raw = false);
 	VideoRenderPacket GetRenderPacket(int frame, double time, bool raw = false);
 
 	/// Ask the video provider to change YCbCr matricies

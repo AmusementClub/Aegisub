@@ -48,6 +48,7 @@
 
 #include <libaegisub/fs.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/scope_exit.h>
 
 namespace {
 typedef enum AGI_ColorSpaces {
@@ -478,6 +479,15 @@ double FFmpegSourceVideoProvider::GetDAR() const {
 void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
 	n = mid(0, n, GetFrameCount() - 1);
 
+	SourceFrameOutputMode const previous_mode = OutputMode;
+	bool restore_output_mode = previous_mode != SourceFrameOutputMode::Bgra8;
+	if (restore_output_mode && !ConfigureOutputMode(SourceFrameOutputMode::Bgra8))
+		throw VideoDecodeError(std::string("Failed to switch FFmpegSource output to BGRA: ") + ErrInfo.Buffer);
+	auto restore_mode = agi::make_scope_exit([&] {
+		if (restore_output_mode)
+			ConfigureOutputMode(previous_mode);
+	});
+
 	auto frame = ffms::GetFrame(VideoSource, n, &ErrInfo);
 	if (!frame)
 		throw VideoDecodeError(std::string("Failed to retrieve frame: ") +  ErrInfo.Buffer);
@@ -532,6 +542,10 @@ void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
 		out.height = Width;
 		out.pitch = 4 * Height;
 	}
+
+	if (restore_output_mode && !ConfigureOutputMode(previous_mode))
+		throw VideoDecodeError(std::string("Failed to restore FFmpegSource output mode after BGRA readback: ") + ErrInfo.Buffer);
+	restore_output_mode = false;
 }
 
 bool FFmpegSourceVideoProvider::GetNativeFrame(int n, SourceFrame& out, std::shared_ptr<void>& owner) {

@@ -130,11 +130,15 @@ void AsyncVideoProvider::InvalidateProviderOverlayState() {
 }
 
 VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double time, bool raw) {
+	return ProcRenderPacket(frame_number, time, raw, false);
+}
+
+VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double time, bool raw, bool force_bgra_frame) {
 	VideoRenderPacket packet;
 
 	std::shared_ptr<VideoFrame> frame;
 	bool native_frame_needs_display_transform_fallback = false;
-	if (selected_source_mode == SourceFrameOutputMode::Native) {
+	if (selected_source_mode == SourceFrameOutputMode::Native && !force_bgra_frame) {
 		try {
 			if (!source_provider->GetNativeFrame(frame_number, packet.source_frame, packet.source_frame_owner))
 				throw VideoDecodeError("Selected native source mode but provider did not return a native frame.");
@@ -553,6 +557,15 @@ std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrame(int frame, double time,
 	worker->Sync([&]{
 		while (ProcessPending()) { }
 		ret = ProcRenderPacket(frame, time, raw).DisplayFrame();
+	});
+	return ret;
+}
+
+std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrameBgra(int frame, double time, bool raw) {
+	std::shared_ptr<VideoFrame> ret;
+	worker->Sync([&] {
+		while (ProcessPending()) { }
+		ret = ProcRenderPacket(frame, time, raw, true).DisplayFrame();
 	});
 	return ret;
 }

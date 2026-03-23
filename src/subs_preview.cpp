@@ -35,7 +35,9 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_style.h"
+#include "compat.h"
 #include "dialog_progress.h"
+#include "ui_services.h"
 #include "subs_preview.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "video_frame.h"
@@ -47,12 +49,13 @@
 #include <wx/dcclient.h>
 #include <wx/msgdlg.h>
 
-SubtitlesPreview::SubtitlesPreview(wxWindow *parent, wxSize size, int winStyle, agi::Color col, std::shared_ptr<const TransientFontSet> transient_fonts)
+SubtitlesPreview::SubtitlesPreview(wxWindow *parent, wxSize size, int winStyle, agi::Color col, std::shared_ptr<const TransientFontSet> transient_fonts, std::shared_ptr<agi::NotificationSink> notification_sink)
 : wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, winStyle)
 , style(new AssStyle)
 , back_color(col)
 , sub_file(agi::make_unique<AssFile>())
 , transient_fonts(std::move(transient_fonts))
+, notification_sink(std::move(notification_sink))
 , line(new AssDialogue)
 {
 	line->Text = "{\\q2}preview";
@@ -149,10 +152,15 @@ void SubtitlesPreview::OnSize(wxSizeEvent &evt) {
 		}
 	}
 	catch (...) {
-		wxMessageBox(
+		auto message = std::string(
 			"Could not get any subtitles provider for the preview box. Make "
-			"sure that you have a provider installed.",
-			"No subtitles provider", wxOK | wxICON_ERROR | wxCENTER);
+			"sure that you have a provider installed.");
+		if (notification_sink)
+			notification_sink->ShowError("No subtitles provider", message);
+		else
+			wxMessageBox(
+				to_wx(message),
+				"No subtitles provider", wxOK | wxICON_ERROR | wxCENTER);
 	}
 
 	sub_file->SetScriptInfo("PlayResX", std::to_string(w));

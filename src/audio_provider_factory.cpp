@@ -16,8 +16,10 @@
 
 #include "audio_provider_factory.h"
 
+#include "compat.h"
 #include "factory_manager.h"
 #include "options.h"
+#include "ui_services.h"
 #include "utils.h"
 #ifdef WITH_FFMS2
 #include "ffmpegsource_common.h"
@@ -31,6 +33,8 @@
 #include <libaegisub/log.h>
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
+
+#include <wx/msgdlg.h>
 
 using namespace agi;
 
@@ -102,7 +106,8 @@ std::vector<std::pair<std::string, std::string>> GetAudioProviderChoices() {
 
 std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
                                                      Path const& path_helper,
-                                                     BackgroundRunner *br) {
+                                                     BackgroundRunner *br,
+                                                     NotificationSink *notification_sink) {
 	auto preferred = OPT_GET("Audio/Provider")->GetString();
 	auto sorted = GetSorted(providers, preferred);
 
@@ -181,13 +186,17 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 	// Convert to RAM
 	if (cache == 1) {
 		if (sizeof(void*) == 4 && (provider->GetNumSamples() * provider->GetChannels() * provider->GetBytesPerSample() >= (1 << 30))) {
-			wxMessageBox(_(
+			auto message = from_wx(_(
 				"Unable to create RAM audio cache: 32-bit memory limit exceeded. Fallback to hard disk cache.\n\n"
 				"Possible solutions:\n"
 				"- Use 64-bit version\n"
 				"- Turn off cache or switch to hard disk cache in Preferences -> Advanced -> Audio -> Cache -> Cache type\n"
 				"- Enable channel downmix in Preferences -> Advanced -> Audio"
-			), _("Out of Memory"), wxICON_ERROR | wxOK | wxCENTRE);
+			));
+			if (notification_sink)
+				notification_sink->ShowError(from_wx(_("Out of Memory")), message);
+			else
+				wxMessageBox(to_wx(message), _("Out of Memory"), wxICON_ERROR | wxOK | wxCENTRE);
 			cache = 2;
 		}
 		else

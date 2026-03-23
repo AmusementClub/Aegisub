@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -81,6 +82,10 @@ struct SubtitleOverlay {
 	SubtitleOverlayDirtyRect const* dirty_rects = nullptr;
 	int dirty_rect_count = 0;
 	bool has_visible_content = false;
+	// Dirty rects are only reusable against a previously uploaded surface from
+	// the same continuity generation. A generation change requires a full
+	// surface rebuild before incremental uploads may resume.
+	uint64_t continuity_generation = 1;
 	bool force_full_upload = false;
 	SubtitleOverlayColorRole color_role = SubtitleOverlayColorRole::SubtitleSdrOverlay;
 	SubtitleOverlayCompositionMode composition_mode = SubtitleOverlayCompositionMode::Unsupported;

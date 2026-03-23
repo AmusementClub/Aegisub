@@ -30,6 +30,7 @@
 #include <GL/gl.h>
 #endif
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -54,6 +55,7 @@ class OpenGLVideoRenderer final : public IVideoRenderer {
 		int offset_y = 0;
 		VideoRenderOutputLayout render_output_layout;
 		bool apply_source_display_transform = false;
+		uint64_t continuity_generation = 0;
 		SubtitleOverlayCompositionMode composition_mode = SubtitleOverlayCompositionMode::OpaqueReplace;
 		bool has_content = false;
 	};

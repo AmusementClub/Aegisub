@@ -26,6 +26,7 @@
 
 #include <atomic>
 #include <array>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -93,7 +94,7 @@ class AsyncVideoProvider {
 	std::array<std::shared_ptr<SubtitleOverlayStorage>, 2> compatibility_overlay_buffers = { };
 	int next_compatibility_overlay_buffer = 0;
 	std::shared_ptr<SubtitleOverlayStorage> previous_compatibility_overlay;
-	bool force_next_overlay_full_upload = false;
+	uint64_t overlay_continuity_generation = 1;
 
 	std::mutex pending_mutex;
 	std::unique_ptr<AssFile> pending_subs;
@@ -109,7 +110,9 @@ class AsyncVideoProvider {
 	bool has_logged_source_mode = false;
 
 	void DeliverEvent(std::unique_ptr<wxEvent> evt);
-	void InvalidateOverlayPipelineState(bool force_full_upload);
+	void ResetCompatibilityOverlayState();
+	void AdvanceOverlayContinuityGeneration();
+	void InvalidateProviderOverlayState();
 	bool ReconfigureSourceOutputMode();
 	void ScheduleProcessing();
 	bool ProcessPending();

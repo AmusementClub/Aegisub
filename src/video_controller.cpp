@@ -48,15 +48,18 @@
 VideoController::VideoController(agi::Context *c)
 : context(c)
 , playAudioOnStep(OPT_GET("Audio/Plays When Stepping Video"))
-, connections(agi::signal::make_vector({
-	context->ass->AddCommitListener(&VideoController::OnSubtitlesCommit, this),
-	context->project->AddVideoProviderListener(&VideoController::OnNewVideoProvider, this),
-	context->selectionController->AddActiveLineListener(&VideoController::OnActiveLineChanged, this),
-}))
 {
+	ui_activation.AddConnections(
+		context->ass->AddCommitListener(&VideoController::OnSubtitlesCommit, this),
+		context->project->AddVideoProviderListener(&VideoController::OnNewVideoProvider, this),
+		context->selectionController->AddActiveLineListener(&VideoController::OnActiveLineChanged, this));
 	Bind(EVT_VIDEO_ERROR, &VideoController::OnVideoError, this);
 	Bind(EVT_SUBTITLES_ERROR, &VideoController::OnSubtitlesError, this);
 	playback.Bind(wxEVT_TIMER, &VideoController::OnPlayTimer, this);
+}
+
+VideoController::~VideoController() {
+	ui_activation.Deactivate();
 }
 
 void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {

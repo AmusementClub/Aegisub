@@ -29,6 +29,7 @@
 #include "options.h"
 #include "project.h"
 #include "selection_controller.h"
+#include "status_sink.h"
 #include "subtitle_format.h"
 #include "text_selection_controller.h"
 
@@ -275,9 +276,9 @@ void SubsController::AutoSave() {
 		name = "Untitled";
 
 	autosaved_commit_id = commit_id;
-	auto frame = context->frame;
+	auto status_sink = context->GetStatusSink();
 	auto subs_copy = new AssFile(*context->ass);
-	autosave_queue->Async([subs_copy, name, directory, frame] {
+	autosave_queue->Async([subs_copy, name, directory, status_sink] {
 		wxString msg;
 		std::unique_ptr<AssFile> subs(subs_copy);
 
@@ -296,9 +297,8 @@ void SubsController::AutoSave() {
 			msg = "Unhandled exception when attempting to autosave file.";
 		}
 
-		agi::dispatch::Main().Async([frame, msg] {
-			frame->StatusTimeout(msg);
-		});
+		if (status_sink)
+			status_sink->ShowStatus(from_wx(msg));
 	});
 }
 

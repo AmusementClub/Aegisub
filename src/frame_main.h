@@ -31,6 +31,8 @@
 #include <wx/frame.h>
 #include <wx/timer.h>
 
+#include "ui_dispatch.h"
+
 class AegisubApp;
 class AsyncVideoProvider;
 class AudioBox;
@@ -42,6 +44,7 @@ class FrameMain : public wxFrame {
 	friend class AegisubApp;
 
 	std::unique_ptr<agi::Context> context;
+	agi::ui::UiActivationScope ui_activation;
 
     // XXX: Make Freeze()/Thaw() noops on GTK, this seems to be buggy
 #ifdef __WXGTK__
@@ -93,6 +96,7 @@ public:
 
 	bool IsVideoShown() const { return showVideo; }
 	bool IsAudioShown() const { return showAudio; }
+	agi::ui::WeakLifetime GetAsyncUiLifetime() const { return ui_activation.GetLifetime(); }
 
 	DECLARE_EVENT_TABLE()
 };

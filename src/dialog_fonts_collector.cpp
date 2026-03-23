@@ -23,6 +23,7 @@
 #include "include/aegisub/context.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
+#include "ui_dispatch.h"
 #include "utils.h"
 #include "value_event.h"
 
@@ -60,6 +61,7 @@ class DialogFontsCollector final : public wxDialog {
 	AssFile *subs;
 	agi::Path &path;
 	FcMode mode = FcMode::CheckFontsOnly;
+	agi::ui::UiActivationScope ui_activation;
 
 	wxStyledTextCtrl *collection_log;
 	wxButton *close_btn;
@@ -85,28 +87,36 @@ class DialogFontsCollector final : public wxDialog {
 
 public:
 	DialogFontsCollector(agi::Context *c);
+	~DialogFontsCollector() override { ui_activation.Deactivate(); }
+	agi::ui::WeakLifetime GetAsyncUiLifetime() const { return ui_activation.GetLifetime(); }
 };
 
 using color_str_pair = std::pair<int, wxString>;
 wxDEFINE_EVENT(EVT_ADD_TEXT, ValueEvent<color_str_pair>);
 wxDEFINE_EVENT(EVT_COLLECTION_DONE, wxThreadEvent);
 
-void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMode oper, wxEvtHandler *collector) {
+void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMode oper, wxEvtHandler *collector, agi::ui::WeakLifetime lifetime) {
 	agi::dispatch::BackgroundExecutor().Post([=]{
 		auto AppendText = [&](wxString text, int colour) {
-			collector->AddPendingEvent(ValueEvent<color_str_pair>(EVT_ADD_TEXT, -1, {colour, text.Clone()}));
+			agi::ui::MainAsyncIfAlive(lifetime, [collector, colour, text = text.Clone()] {
+				collector->AddPendingEvent(ValueEvent<color_str_pair>(EVT_ADD_TEXT, -1, {colour, text.Clone()}));
+			});
 		};
 
 		auto paths = FontCollector(AppendText).GetFontPaths(subs);
 		if (paths.empty()) {
-			collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
+			agi::ui::MainAsyncIfAlive(lifetime, [collector] {
+				collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
+			});
 			return;
 		}
 
 		// Copy fonts
 		switch (oper) {
 			case FcMode::CheckFontsOnly:
-				collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
+				agi::ui::MainAsyncIfAlive(lifetime, [collector] {
+					collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
+				});
 				return;
 			case FcMode::SymlinkToFolder:
 				AppendText(_("Symlinking fonts to folder...\n"), 0);
@@ -130,7 +140,9 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 			catch (agi::fs::FileSystemError const& e) {
 				AppendText(fmt_tl("* Failed to create directory '%s': %s.\n",
 					destination.parent_path().wstring(), to_wx(e.GetMessage())), 2);
-				collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
+				agi::ui::MainAsyncIfAlive(lifetime, [collector] {
+					collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
+				});
 				return;
 			}
 
@@ -140,7 +152,9 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 
 			if (!out->IsOk() || !zip || !zip->IsOk()) {
 				AppendText(fmt_tl("* Failed to open %s.\n", destination), 2);
-				collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
+				agi::ui::MainAsyncIfAlive(lifetime, [collector] {
+					collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
+				});
 				return;
 			}
 		}
@@ -215,7 +229,9 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 
 		AppendText("\n", 0);
 
-		collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
+		agi::ui::MainAsyncIfAlive(lifetime, [collector] {
+			collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
+		});
 	});
 }
 
@@ -331,7 +347,7 @@ void DialogFontsCollector::OnStart(wxCommandEvent &) {
 	collection_mode->Enable(false);
 	dest_label->Enable(false);
 
-	FontsCollectorThread(subs, dest, mode, GetEventHandler());
+	FontsCollectorThread(subs, dest, mode, GetEventHandler(), GetAsyncUiLifetime());
 }
 
 void DialogFontsCollector::OnBrowse(wxCommandEvent &) {

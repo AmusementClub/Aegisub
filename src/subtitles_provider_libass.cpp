@@ -39,6 +39,7 @@
 #include "ready_flag.h"
 #include "subtitle_overlay_blend.h"
 #include "transient_font_set.h"
+#include "ui_dispatch.h"
 #include "video_frame.h"
 
 #include <libaegisub/background_runner.h>
@@ -57,7 +58,6 @@
 #include <vector>
 
 #include <wx/intl.h>
-#include <wx/thread.h>
 
 extern "C" {
 #include <ass/ass.h>
@@ -194,10 +194,7 @@ class LibassSubtitlesProvider final : public SubtitlesProvider {
 				});
 			};
 
-			if (wxThread::IsMain())
-				wait_for_ready();
-			else
-				agi::dispatch::Main().Sync(wait_for_ready);
+			agi::ui::MainInvoke(wait_for_ready);
 		}
 
 		std::lock_guard<std::mutex> lock(shared->mutex);

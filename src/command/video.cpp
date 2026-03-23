@@ -229,7 +229,7 @@ struct video_cycle_subtitles_provider final : public cmd::Command {
 		if (it == end(providers)) it = begin(providers);
 
 		OPT_SET("Subtitle/Provider")->SetString(*it);
-		c->frame->StatusTimeout(fmt_tl("Subtitles provider set to %s", *it), 5000);
+		c->ShowStatus(from_wx(fmt_tl("Subtitles provider set to %s", *it)), 5000);
 	}
 };
 

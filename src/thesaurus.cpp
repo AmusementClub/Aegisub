@@ -40,7 +40,9 @@ Thesaurus::Thesaurus()
 }
 
 Thesaurus::~Thesaurus() {
-	if (cancel_load) *cancel_load = true;
+	ui_activation.Deactivate();
+	if (cancel_load)
+		cancel_load->store(true, std::memory_order_relaxed);
 }
 
 std::vector<Thesaurus::Entry> Thesaurus::Lookup(std::string word) {
@@ -99,18 +101,20 @@ void Thesaurus::OnLanguageChanged() {
 
 	LOG_I("thesaurus/file") << "Using thesaurus: " << dat;
 
-	if (cancel_load) *cancel_load = true;
-	cancel_load = new bool{false};
-	auto cancel = cancel_load; // Needed to avoid capturing via `this`
+	if (cancel_load)
+		cancel_load->store(true, std::memory_order_relaxed);
+	cancel_load = std::make_shared<std::atomic_bool>(false);
+	auto cancel = cancel_load;
+	auto lifetime = GetAsyncUiLifetime();
 	agi::dispatch::Background().Async([=]{
 		try {
 			auto thes = agi::make_unique<agi::Thesaurus>(dat, idx);
-			agi::dispatch::Main().Sync([&thes, cancel, this]{
-				if (!*cancel) {
+			agi::ui::MainSyncIfAlive(lifetime, [&thes, cancel, this]{
+				if (!cancel->load(std::memory_order_relaxed)) {
 					impl = std::move(thes);
-					cancel_load = nullptr;
+					if (cancel_load == cancel)
+						cancel_load.reset();
 				}
-				delete cancel;
 			});
 		}
 		catch (agi::Exception const& e) {

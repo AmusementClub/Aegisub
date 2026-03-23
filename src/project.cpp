@@ -389,7 +389,13 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 
 	try {
 		auto old_matrix = context->ass->GetScriptInfo("YCbCr Matrix");
-		video_provider = agi::make_unique<AsyncVideoProvider>(path, old_matrix, context->videoController.get(), progress, context->ass->GetTransientFonts());
+		video_provider = agi::make_unique<AsyncVideoProvider>(
+			path,
+			old_matrix,
+			context->videoController.get(),
+			progress,
+			context->ass->GetTransientFonts(),
+			context->videoController->GetAsyncUiLifetime());
 	}
 	catch (agi::UserCancelException const&) { return false; }
 	catch (agi::fs::FileSystemError const& err) {

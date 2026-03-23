@@ -26,6 +26,7 @@
 #include "options.h"
 #include "search_replace_engine.h"
 #include "selection_controller.h"
+#include "utils.h"
 
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
@@ -234,7 +235,7 @@ void DialogSelection::Process(wxCommandEvent& event) {
 	if (count == 0)
 		wxMessageBox(message, _("Selection"), wxOK | wxCENTER, this);
 	else
-		con->frame->StatusTimeout(message);
+		con->ShowStatus(from_wx(message));
 
 	AssDialogue *new_active = con->selectionController->GetActiveLine();
 	if (new_sel.size() && !new_sel.count(new_active))

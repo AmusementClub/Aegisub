@@ -72,30 +72,43 @@ namespace {
 
 class DialogProgressSink final : public agi::ProgressSink {
 	DialogProgress *dialog;
+	agi::ui::WeakLifetime lifetime;
 	std::atomic<bool> cancelled{false};
 	int progress = 0;
 
 public:
-	DialogProgressSink(DialogProgress *dialog) : dialog(dialog) { }
+	DialogProgressSink(DialogProgress *dialog, agi::ui::WeakLifetime lifetime)
+	: dialog(dialog)
+	, lifetime(std::move(lifetime))
+	{
+	}
 
 	void SetTitle(std::string const& title) override {
-		Main().Async([=]{ dialog->title->SetLabelText(to_wx(title)); });
+		agi::ui::MainAsyncIfAlive(lifetime, [dialog = dialog, title] {
+			dialog->title->SetLabelText(to_wx(title));
+		});
 	}
 
 	void SetMessage(std::string const& msg) override {
-		Main().Async([=]{ dialog->text->SetLabelText(to_wx(msg)); });
+		agi::ui::MainAsyncIfAlive(lifetime, [dialog = dialog, msg] {
+			dialog->text->SetLabelText(to_wx(msg));
+		});
 	}
 
 	void SetProgress(int64_t cur, int64_t max) override {
 		int new_progress = mid<int>(0, double(cur) / max * 300, 300);
 		if (new_progress != progress) {
 			progress = new_progress;
-			Main().Async([=]{ dialog->SetProgress(new_progress); });
+			agi::ui::MainAsyncIfAlive(lifetime, [dialog = dialog, new_progress] {
+				dialog->SetProgress(new_progress);
+			});
 		}
 	}
 
 	void Log(std::string const& str) override {
-		Main().Async([=]{ dialog->pending_log += to_wx(str); });
+		agi::ui::MainAsyncIfAlive(lifetime, [dialog = dialog, str] {
+			dialog->pending_log += to_wx(str);
+		});
 	}
 
 	bool IsCancelled() override {
@@ -107,7 +120,9 @@ public:
 	}
 
 	void SetIndeterminate() override {
-		Main().Async([=]{ dialog->pulse_timer.Start(1000); });
+		agi::ui::MainAsyncIfAlive(lifetime, [dialog = dialog] {
+			dialog->pulse_timer.Start(1000);
+		});
 	}
 };
 
@@ -144,7 +159,8 @@ DialogProgress::DialogProgress(wxWindow *parent, wxString const& title_text, wxS
 }
 
 void DialogProgress::Run(std::function<void(agi::ProgressSink*)> task) {
-	DialogProgressSink ps(this);
+	auto lifetime = GetAsyncUiLifetime();
+	DialogProgressSink ps(this, lifetime);
 	this->ps = &ps;
 
 	auto current_title = from_wx(title->GetLabelText());
@@ -157,7 +173,7 @@ void DialogProgress::Run(std::function<void(agi::ProgressSink*)> task) {
 			this->ps->Log(e.GetMessage());
 		}
 
-		Main().Async([this]{
+		agi::ui::MainAsyncIfAlive(lifetime, [this]{
 			pulse_timer.Stop();
 			Unbind(wxEVT_IDLE, &DialogProgress::OnIdle, this);
 
@@ -183,7 +199,9 @@ void DialogProgress::Run(std::function<void(agi::ProgressSink*)> task) {
 		});
 	});
 
-	if (!ShowModal())
+	bool ok = ShowModal();
+	this->ps = nullptr;
+	if (!ok)
 		throw agi::UserCancelException("Cancelled by user");
 }
 

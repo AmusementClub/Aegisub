@@ -35,6 +35,7 @@
 
 #include "compat.h"
 #include "format.h"
+#include "main.h"
 #include "options.h"
 #include "string_codec.h"
 #include "version.h"
@@ -167,7 +168,8 @@ DEFINE_EXCEPTION(VersionCheckError, agi::Exception);
 
 void PostErrorEvent(bool interactive, wxString const& error_text) {
 	if (interactive) {
-		agi::dispatch::Main().Async([=]{
+		auto app_lifetime = wxGetApp().GetAsyncUiLifetime();
+		agi::ui::MainAsyncIfAlive(app_lifetime, [error_text]{
 			new VersionCheckerResultDialog(error_text, {});
 		});
 	}
@@ -337,7 +339,8 @@ void DoCheck(bool interactive) {
 	}
 
 	if (!results.empty() || interactive) {
-		agi::dispatch::Main().Async([=]{
+		auto app_lifetime = wxGetApp().GetAsyncUiLifetime();
+		agi::ui::MainAsyncIfAlive(app_lifetime, [results, interactive]{
 			wxString text;
 			if (results.size() == 1)
 				text = _("An update to Aegisub was found.");
@@ -381,7 +384,8 @@ void PerformVersionCheck(bool interactive) {
 
 		VersionCheckLock.unlock();
 
-		agi::dispatch::Main().Async([]{
+		auto app_lifetime = wxGetApp().GetAsyncUiLifetime();
+		agi::ui::MainAsyncIfAlive(app_lifetime, []{
 			time_t new_next_check_time = time(nullptr) + 60*60; // in one hour
 			OPT_SET("Version/Next Check")->SetInt(new_next_check_time);
 		});

@@ -51,6 +51,7 @@
 #include "main.h"
 #include "options.h"
 #include "project.h"
+#include "status_sink.h"
 #include "subs_controller.h"
 #include "subs_edit_box.h"
 #include "utils.h"
@@ -79,16 +80,42 @@ enum {
 #define StartupLog(a) LOG_I("frame_main/init") << a
 #endif
 
+namespace {
+class FrameMainStatusSink final : public agi::StatusSink {
+	FrameMain *frame = nullptr;
+	agi::ui::WeakLifetime lifetime;
+
+public:
+	FrameMainStatusSink(FrameMain *frame, agi::ui::WeakLifetime lifetime)
+	: frame(frame)
+	, lifetime(std::move(lifetime))
+	{
+	}
+
+	void ShowStatus(std::string const& message, int timeout_ms) override {
+		agi::ui::MainAsyncIfAlive(lifetime, [frame = frame, message, timeout_ms] {
+			frame->StatusTimeout(to_wx(message), timeout_ms);
+		});
+	}
+};
+}
+
 /// Handle files drag and dropped onto Aegisub
 class AegisubFileDropTarget final : public wxFileDropTarget {
 	agi::Context *context;
+	agi::ui::WeakLifetime lifetime;
 public:
-	AegisubFileDropTarget(agi::Context *context) : context(context) { }
+	AegisubFileDropTarget(agi::Context *context, agi::ui::WeakLifetime lifetime)
+	: context(context)
+	, lifetime(std::move(lifetime)) {
+	}
 	bool OnDropFiles(wxCoord, wxCoord, wxArrayString const& filenames) override {
 		std::vector<agi::fs::path> files;
 		for (wxString const& fn : filenames)
 			files.push_back(from_wx(fn));
-		agi::dispatch::Main().Async([=] { context->project->LoadList(files); });
+		agi::ui::MainAsyncIfAlive(lifetime, [context = context, files = std::move(files)] {
+			context->project->LoadList(files);
+		});
 		return true;
 	}
 };
@@ -110,15 +137,17 @@ FrameMain::FrameMain()
 #endif
 
 	StartupLog("Initializing context controls");
-	context->ass->AddCommitListener(&FrameMain::UpdateTitle, this);
-	context->subsController->AddFileOpenListener(&FrameMain::OnSubtitlesOpen, this);
-	context->subsController->AddFileSaveListener(&FrameMain::UpdateTitle, this);
-	context->project->AddAudioProviderListener(&FrameMain::OnAudioOpen, this);
-	context->project->AddVideoProviderListener(&FrameMain::OnVideoOpen, this);
+	ui_activation.AddConnections(
+		context->ass->AddCommitListener(&FrameMain::UpdateTitle, this),
+		context->subsController->AddFileOpenListener(&FrameMain::OnSubtitlesOpen, this),
+		context->subsController->AddFileSaveListener(&FrameMain::UpdateTitle, this),
+		context->project->AddAudioProviderListener(&FrameMain::OnAudioOpen, this),
+		context->project->AddVideoProviderListener(&FrameMain::OnVideoOpen, this));
 
 	StartupLog("Initializing context frames");
 	context->parent = this;
 	context->frame = this;
+	context->statusSink = std::make_shared<FrameMainStatusSink>(this, GetAsyncUiLifetime());
 
 	StartupLog("Apply saved Maximized state");
 	if (OPT_GET("App/Maximized")->GetBool()) Maximize(true);
@@ -148,7 +177,7 @@ FrameMain::FrameMain()
 	OPT_SUB("Video/Detached/Enabled", &FrameMain::OnVideoDetach, this);
 
 	StartupLog("Set up drag/drop target");
-	SetDropTarget(new AegisubFileDropTarget(context.get()));
+	SetDropTarget(new AegisubFileDropTarget(context.get(), GetAsyncUiLifetime()));
 
 	StartupLog("Load default file");
 	context->project->CloseSubtitles();
@@ -162,6 +191,7 @@ FrameMain::FrameMain()
 }
 
 FrameMain::~FrameMain () {
+	ui_activation.Deactivate();
 	context->project->CloseAudio();
 	context->project->CloseVideo();
 

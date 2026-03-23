@@ -35,6 +35,8 @@
 #include <chrono>
 #include <set>
 
+#include "ui_dispatch.h"
+
 #include <wx/timer.h>
 
 class AssDialogue;
@@ -63,6 +65,7 @@ class VideoController final : public wxEvtHandler {
 	agi::signal::Signal<AspectRatio, double> ARChange;
 
 	agi::Context *context;
+	agi::ui::UiActivationScope ui_activation;
 
 	/// The video provider owned by the threaded frame source, or nullptr if no
 	/// video is open
@@ -99,8 +102,6 @@ class VideoController final : public wxEvtHandler {
 	/// Cached option for audio playing when frame stepping
 	const agi::OptionValue* playAudioOnStep;
 
-	std::vector<agi::signal::Connection> connections;
-
 	void OnPlayTimer(wxTimerEvent &event);
 
 	void OnVideoError(VideoProviderErrorEvent const& err);
@@ -115,6 +116,7 @@ class VideoController final : public wxEvtHandler {
 
 public:
 	VideoController(agi::Context *context);
+	~VideoController();
 
 	/// Is the video currently playing?
 	bool IsPlaying() const { return playback.IsRunning(); }
@@ -159,6 +161,7 @@ public:
 
 	DEFINE_SIGNAL_ADDERS(Seek, AddSeekListener)
 	DEFINE_SIGNAL_ADDERS(ARChange, AddARChangeListener)
+	agi::ui::WeakLifetime GetAsyncUiLifetime() const { return ui_activation.GetLifetime(); }
 
 	int TimeAtFrame(int frame, agi::vfr::Time type = agi::vfr::EXACT) const;
 	int FrameAtTime(int time, agi::vfr::Time type = agi::vfr::EXACT) const;

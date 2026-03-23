@@ -31,8 +31,8 @@
 #include "dialog_manager.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "ui_dispatch.h"
 
-#include <libaegisub/dispatch.h>
 #include <libaegisub/log.h>
 
 #include <algorithm>
@@ -120,26 +120,26 @@ enum class SearchMode {
 
 class EmitLog final : public agi::log::Emitter {
 	std::function<void(agi::log::SinkMessage const&)> append_message;
-	std::shared_ptr<bool> alive;
+	agi::ui::WeakLifetime lifetime;
 
 public:
-	EmitLog(std::function<void(agi::log::SinkMessage const&)> append_message, std::shared_ptr<bool> alive)
+	EmitLog(std::function<void(agi::log::SinkMessage const&)> append_message, agi::ui::WeakLifetime lifetime)
 	: append_message(std::move(append_message))
-	, alive(std::move(alive))
+	, lifetime(std::move(lifetime))
 	{
 	}
 
 	void log(agi::log::SinkMessage const& sm) override {
-		if (wxIsMainThread()) {
+		if (agi::ui::CheckAccess()) {
+			if (!lifetime.lock())
+				return;
 			append_message(sm);
 			return;
 		}
 
 		auto append = append_message;
-		auto keep_alive = alive;
-		agi::dispatch::Main().Async([append, keep_alive, sm] {
-			if (*keep_alive)
-				append(sm);
+		agi::ui::MainAsyncIfAlive(lifetime, [append, sm] {
+			append(sm);
 		});
 	}
 };
@@ -157,7 +157,7 @@ class LogWindow : public wxDialog {
 	wxTextAttr active_match_text_style;
 	size_t visible_entries = 0;
 	size_t active_match = 0;
-	std::shared_ptr<bool> alive = std::make_shared<bool>(true);
+	agi::ui::UiActivationScope ui_activation;
 
 	void AddMessage(agi::log::SinkMessage const& sm);
 	void AppendVisibleEntry(LogEntry const& entry);
@@ -176,6 +176,7 @@ class LogWindow : public wxDialog {
 public:
 	LogWindow(agi::Context *c);
 	~LogWindow();
+	agi::ui::WeakLifetime GetAsyncUiLifetime() const { return ui_activation.GetLifetime(); }
 };
 
 LogWindow::LogWindow(agi::Context *c)
@@ -245,11 +246,11 @@ LogWindow::LogWindow(agi::Context *c)
 
 	agi::log::log->Subscribe(std::unique_ptr<agi::log::Emitter>(emit_log = new EmitLog([this](agi::log::SinkMessage const& sm) {
 		AddMessage(sm);
-	}, alive)));
+	}, GetAsyncUiLifetime())));
 }
 
 LogWindow::~LogWindow() {
-	*alive = false;
+	ui_activation.Deactivate();
 	agi::log::log->Unsubscribe(emit_log);
 }
 

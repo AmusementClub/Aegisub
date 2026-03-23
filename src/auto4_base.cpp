@@ -37,8 +37,8 @@
 #include "options.h"
 #include "string_codec.h"
 #include "subs_controller.h"
+#include "ui_dispatch.h"
 
-#include <libaegisub/dispatch.h>
 #include <libaegisub/format.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/path.h>
@@ -207,7 +207,7 @@ namespace Automation4 {
 
 	void ProgressSink::ShowDialog(ScriptDialog *config_dialog)
 	{
-		agi::dispatch::Main().Sync([=] {
+		agi::ui::MainInvoke([=] {
 			wxDialog w; // container dialog box
 			w.SetExtraStyle(wxWS_EX_VALIDATE_RECURSIVELY);
 			w.Create(bsr->GetParentWindow(), -1, to_wx(bsr->GetTitle()));
@@ -222,9 +222,7 @@ namespace Automation4 {
 
 	int ProgressSink::ShowDialog(wxDialog *dialog)
 	{
-		int ret = 0;
-		agi::dispatch::Main().Sync([&] { ret = dialog->ShowModal(); });
-		return ret;
+		return agi::ui::MainInvoke([dialog] { return dialog->ShowModal(); });
 	}
 
 	BackgroundScriptRunner::BackgroundScriptRunner(wxWindow *parent, std::string const& title)

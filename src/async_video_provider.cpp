@@ -295,23 +295,30 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 	return packet;
 }
 
-static std::unique_ptr<SubtitlesProvider> get_subs_provider(wxEvtHandler *evt_handler, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts) {
+static std::unique_ptr<SubtitlesProvider> get_subs_provider(wxEvtHandler *evt_handler, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts, agi::ui::WeakLifetime event_lifetime) {
 	try {
 		return SubtitlesProviderFactory::GetProvider({ br, std::move(transient_fonts) });
 	}
 	catch (agi::Exception const& err) {
-		evt_handler->AddPendingEvent(SubtitlesProviderErrorEvent(err.GetMessage()));
+		if (!evt_handler)
+			return nullptr;
+		agi::ui::MainAsyncIfAlive(event_lifetime, [evt_handler, message = err.GetMessage()] {
+			evt_handler->AddPendingEvent(SubtitlesProviderErrorEvent(message));
+		});
 		return nullptr;
 	}
 }
 
-AsyncVideoProvider::AsyncVideoProvider(agi::fs::path const& video_filename, std::string const& colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts)
+AsyncVideoProvider::AsyncVideoProvider(agi::fs::path const& video_filename, std::string const& colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts, agi::ui::WeakLifetime event_lifetime)
 : AsyncVideoProvider(
 	VideoProviderFactory::GetProvider(video_filename, colormatrix, br),
-	get_subs_provider(parent, br, std::move(transient_fonts)),
-	[parent](std::unique_ptr<wxEvent> evt) {
-		if (parent)
+	get_subs_provider(parent, br, std::move(transient_fonts), event_lifetime),
+	[parent, event_lifetime](std::unique_ptr<wxEvent> evt) mutable {
+		if (!parent)
+			return;
+		agi::ui::MainAsyncIfAlive(event_lifetime, [parent, evt = std::move(evt)]() mutable {
 			parent->QueueEvent(evt.release());
+		});
 	})
 {
 }

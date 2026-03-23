@@ -18,6 +18,9 @@
 ///
 
 #include <chrono>
+
+#include "ui_dispatch.h"
+
 #include <wx/dialog.h>
 #include <wx/timer.h>
 
@@ -42,6 +45,7 @@ class DialogProgress final : public wxDialog, public agi::BackgroundRunner {
 	wxTextCtrl *log_output;
 
 	wxTimer pulse_timer;
+	agi::ui::UiActivationScope ui_activation;
 
 	wxString pending_log;
 	int progress_anim_start_value = 0;
@@ -62,7 +66,9 @@ public:
 	/// @param title Initial title of the dialog
 	/// @param message Initial message of the dialog
 	DialogProgress(wxWindow *parent, wxString const& title="", wxString const& message="");
+	~DialogProgress() override { ui_activation.Deactivate(); }
 
 	/// BackgroundWorker implementation
 	void Run(std::function<void(agi::ProgressSink *)> task) override;
+	agi::ui::WeakLifetime GetAsyncUiLifetime() const { return ui_activation.GetLifetime(); }
 };

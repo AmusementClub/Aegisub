@@ -14,6 +14,9 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#pragma once
+
+#include <cstddef>
 #include <functional>
 #include <memory>
 
@@ -49,7 +52,17 @@ namespace agi {
 
 		/// Initialize the dispatch thread pools
 		/// @param invoke_main A function which invokes the thunk on the GUI thread
-		void Init(std::function<void (Thunk)> invoke_main);
+		void Init(
+			std::function<void (Thunk)> invoke_main,
+			std::function<bool ()> is_main_thread = {},
+			std::function<std::size_t ()> flush_main_jobs = {});
+
+		/// Returns true if the current thread is the configured main thread
+		bool IsMainThread();
+
+		/// Flush queued main-thread jobs in test/headless environments
+		/// @return number of jobs executed
+		std::size_t RunMainJobsForTests();
 
 		/// Get the main-thread executor
 		Executor& MainExecutor();

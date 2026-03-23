@@ -14,11 +14,14 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#include <atomic>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include <libaegisub/signal.h>
+
+#include "ui_dispatch.h"
 
 namespace agi { class Thesaurus; }
 
@@ -40,7 +43,8 @@ class Thesaurus {
 	/// Thesaurus path change handler
 	void OnPathChanged();
 
-	bool *cancel_load = nullptr;
+	std::shared_ptr<std::atomic_bool> cancel_load;
+	agi::ui::UiActivationScope ui_activation;
 
 public:
 	/// A pair of a word and synonyms for that word
@@ -55,4 +59,6 @@ public:
 
 	/// Get a list of language codes which thesauri are available for
 	std::vector<std::string> GetLanguageList() const;
+
+	agi::ui::WeakLifetime GetAsyncUiLifetime() const { return ui_activation.GetLifetime(); }
 };

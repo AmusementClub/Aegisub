@@ -30,6 +30,7 @@
 #include <wx/app.h>
 
 #include "aegisublocale.h"
+#include "ui_dispatch.h"
 
 #ifndef wxUSE_EXCEPTIONS
 #error wxWidgets is compiled without exceptions support. Aegisub requires exceptions support in wxWidgets to run safely.
@@ -58,12 +59,14 @@ class AegisubApp : public wxApp {
 	void OpenFiles(wxArrayStringsAdapter filenames);
 
 	std::vector<FrameMain *> frames;
+	agi::ui::UiActivationScope ui_activation;
 public:
 	AegisubApp();
 	AegisubLocale locale;
 
 	agi::Context& NewProjectContext();
 	void CloseAll();
+	agi::ui::WeakLifetime GetAsyncUiLifetime() const { return ui_activation.GetLifetime(); }
 
 	// Apple events
 	void MacOpenFiles(wxArrayString const& filenames)

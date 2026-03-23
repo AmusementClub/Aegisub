@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include <memory>
+#include <string>
 
 class AssFile;
 class AudioBox;
@@ -34,6 +35,7 @@ class VideoController;
 class VideoDisplay;
 class wxWindow;
 namespace Automation4 { class ScriptManager; }
+namespace agi { class StatusSink; }
 
 namespace agi {
 class Path;
@@ -52,6 +54,7 @@ struct Context {
 	std::unique_ptr<InitialLineState> initialLineState;
 	std::unique_ptr<SearchReplaceEngine> search;
 	std::unique_ptr<Path> path;
+	std::shared_ptr<StatusSink> statusSink;
 
 	// Things that should probably be in some sort of UI-context-model
 	wxWindow *parent = nullptr;
@@ -68,6 +71,9 @@ struct Context {
 
 	Context();
 	~Context();
+
+	std::shared_ptr<StatusSink> GetStatusSink() const;
+	void ShowStatus(std::string const& message, int timeout_ms = 10000) const;
 };
 
 }

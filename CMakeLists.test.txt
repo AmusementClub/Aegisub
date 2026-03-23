@@ -89,6 +89,7 @@ if(GTEST_FOUND)
         tests/tests/thesaurus.cpp
         tests/tests/time.cpp
         tests/tests/type_name.cpp
+        tests/tests/ui_dispatch.cpp
         tests/tests/util.cpp
         tests/tests/uuencode.cpp
         tests/tests/vfr.cpp

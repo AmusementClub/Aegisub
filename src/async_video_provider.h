@@ -18,6 +18,7 @@
 
 #include "include/aegisub/video_provider.h"
 #include "source_frame_format_selection.h"
+#include "ui_dispatch.h"
 #include "video_render_packet.h"
 
 #include <libaegisub/exception.h>
@@ -169,7 +170,7 @@ public:
 	/// @brief Constructor
 	/// @param videoFileName File to open
 	/// @param parent Event handler to send FrameReady events to
-	AsyncVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts = {});
+	AsyncVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts = {}, agi::ui::WeakLifetime event_lifetime = {});
 	AsyncVideoProvider(std::unique_ptr<VideoProvider> source_provider, std::unique_ptr<SubtitlesProvider> subs_provider, AsyncVideoProviderEventSink event_sink);
 	~AsyncVideoProvider();
 };

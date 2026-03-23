@@ -25,6 +25,7 @@
 #include "project.h"
 #include "search_replace_engine.h"
 #include "selection_controller.h"
+#include "status_sink.h"
 #include "subs_controller.h"
 #include "text_selection_controller.h"
 #include "video_controller.h"
@@ -45,10 +46,20 @@ Context::Context()
 , initialLineState(make_unique<InitialLineState>(this))
 , search(make_unique<SearchReplaceEngine>(this))
 , path(make_unique<Path>(*config::path))
+, statusSink(std::make_shared<NullStatusSink>())
 , dialog(make_unique<DialogManager>())
 {
 	subsController->SetSelectionController(selectionController.get());
 }
 
 Context::~Context() = default;
+
+std::shared_ptr<StatusSink> Context::GetStatusSink() const {
+	return statusSink;
+}
+
+void Context::ShowStatus(std::string const& message, int timeout_ms) const {
+	if (statusSink)
+		statusSink->ShowStatus(message, timeout_ms);
+}
 }

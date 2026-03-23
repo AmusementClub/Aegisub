@@ -71,6 +71,7 @@
 #include <wx/clipbrd.h>
 #include <wx/msgdlg.h>
 #include <wx/stackwalk.h>
+#include <wx/thread.h>
 #include <wx/utils.h>
 
 namespace config {
@@ -156,6 +157,8 @@ bool AegisubApp::OnInit() {
 #endif
 		auto evt = new ValueEvent<agi::dispatch::Thunk>(EVT_CALL_THUNK, -1, std::move(f));
 		wxTheApp->QueueEvent(evt);
+	}, [] {
+		return wxIsMainThread();
 	});
 
 	wxTheApp->Bind(EVT_CALL_THUNK, [this](ValueEvent<agi::dispatch::Thunk>& evt) {
@@ -349,6 +352,8 @@ bool AegisubApp::OnInit() {
 }
 
 int AegisubApp::OnExit() {
+	ui_activation.Deactivate();
+
 	for (auto frame : frames)
 		delete frame;
 	frames.clear();

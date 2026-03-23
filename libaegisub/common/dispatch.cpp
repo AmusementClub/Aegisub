@@ -33,6 +33,8 @@
 
 namespace {
 	std::function<void (agi::dispatch::Thunk)> invoke_main;
+	std::function<bool ()> is_main_thread;
+	std::function<std::size_t ()> flush_main_jobs;
 
 	class ThreadPool {
 		std::mutex mutex;
@@ -138,9 +140,26 @@ namespace {
 
 namespace agi { namespace dispatch {
 
-void Init(std::function<void (Thunk)> invoke_main) {
+void Init(
+	std::function<void (Thunk)> invoke_main,
+	std::function<bool ()> is_main_thread,
+	std::function<std::size_t ()> flush_main_jobs) {
 	::invoke_main = std::move(invoke_main);
+	::is_main_thread = is_main_thread
+		? std::move(is_main_thread)
+		: [] { return false; };
+	::flush_main_jobs = flush_main_jobs
+		? std::move(flush_main_jobs)
+		: [] { return std::size_t{0}; };
 	(void)BackgroundPool();
+}
+
+bool IsMainThread() {
+	return is_main_thread && is_main_thread();
+}
+
+std::size_t RunMainJobsForTests() {
+	return flush_main_jobs ? flush_main_jobs() : 0;
 }
 
 void Executor::Post(Thunk thunk) {

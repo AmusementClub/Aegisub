@@ -32,6 +32,7 @@
 #include "command.h"
 
 #include "../auto4_base.h"
+#include "../compat.h"
 #include "../dialogs.h"
 #include "../frame_main.h"
 #include "../include/aegisub/context.h"
@@ -52,7 +53,7 @@ struct reload_all final : public Command {
 	void operator()(agi::Context *c) override {
 		config::global_scripts->Reload();
 		c->local_scripts->Reload();
-		c->frame->StatusTimeout(_("Reloaded all Automation scripts"));
+		c->ShowStatus(from_wx(_("Reloaded all Automation scripts")));
 	}
 };
 
@@ -64,7 +65,7 @@ struct reload_autoload final : public Command {
 
 	void operator()(agi::Context *c) override {
 		config::global_scripts->Reload();
-		c->frame->StatusTimeout(_("Reloaded autoload Automation scripts"));
+		c->ShowStatus(from_wx(_("Reloaded autoload Automation scripts")));
 	}
 };
 

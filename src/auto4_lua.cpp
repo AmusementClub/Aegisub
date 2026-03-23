@@ -273,13 +273,13 @@ namespace {
 	int lua_set_status_text(lua_State *L)
 	{
 		const agi::Context *c = get_context(L);
-		if (!c || !c->frame) {
+		if (!c) {
 			lua_pushnil(L);
 			return 1;
 		}
 		std::string text = check_string(L, 1);
 		lua_pop(L, 1);
-		agi::dispatch::Main().Async([=] { c->frame->StatusTimeout(to_wx(text)); });
+		c->ShowStatus(text);
 		return 0;
 	}
 

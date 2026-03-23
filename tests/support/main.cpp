@@ -22,9 +22,44 @@
 #include <boost/locale/generator.hpp>
 #include <cstdlib>
 #include <ctime>
+#include <deque>
+#include <mutex>
+#include <thread>
+
+namespace {
+std::mutex main_queue_mutex;
+std::deque<agi::dispatch::Thunk> main_queue;
+std::thread::id main_thread_id;
+
+std::size_t FlushMainQueue() {
+	std::size_t executed = 0;
+	while (true) {
+		agi::dispatch::Thunk thunk;
+		{
+			std::lock_guard<std::mutex> lock(main_queue_mutex);
+			if (main_queue.empty())
+				return executed;
+
+			thunk = std::move(main_queue.front());
+			main_queue.pop_front();
+		}
+
+		++executed;
+		thunk();
+	}
+}
+}
 
 int main(int argc, char **argv) {
-	agi::dispatch::Init([](agi::dispatch::Thunk f) { });
+	main_thread_id = std::this_thread::get_id();
+	agi::dispatch::Init([](agi::dispatch::Thunk f) {
+		std::lock_guard<std::mutex> lock(main_queue_mutex);
+		main_queue.emplace_back(std::move(f));
+	}, [] {
+		return std::this_thread::get_id() == main_thread_id;
+	}, [] {
+		return FlushMainQueue();
+	});
 	std::locale::global(boost::locale::generator().generate(""));
 
 	int retval;

@@ -55,6 +55,7 @@
 #include "utils.h"
 #include "value_event.h"
 #include "version.h"
+#include "wx_ui_services.h"
 
 #include <libaegisub/dispatch.h>
 #include <libaegisub/format_path.h>
@@ -106,6 +107,16 @@ AegisubApp::AegisubApp() {
 
 namespace {
 wxDEFINE_EVENT(EVT_CALL_THUNK, ValueEvent<agi::dispatch::Thunk>);
+
+agi::WxMessageBoxNotificationSink& AppNotificationSink() {
+	static agi::WxMessageBoxNotificationSink sink(nullptr);
+	return sink;
+}
+
+agi::WxMessageBoxInteractionSink& AppInteractionSink() {
+	static agi::WxMessageBoxInteractionSink sink(nullptr);
+	return sink;
+}
 }
 
 /// Message displayed when an exception has occurred.
@@ -217,7 +228,8 @@ bool AegisubApp::OnInit() {
 		config::opt->ConfigUser();
 	}
 	catch (agi::Exception const& err) {
-		wxMessageBox("Configuration file is invalid. Error reported:\n" + to_wx(err.GetMessage()), "Error");
+		AppNotificationSink().ShowError("Error",
+			from_wx("Configuration file is invalid. Error reported:\n" + to_wx(err.GetMessage())));
 	}
 
 #ifdef _WIN32
@@ -308,13 +320,18 @@ bool AegisubApp::OnInit() {
 		if (OPT_GET("App/First Start")->GetBool()) {
 			OPT_SET("App/First Start")->SetBool(false);
 #ifdef WITH_UPDATE_CHECKER
-			int result = wxMessageBox(_("Do you want Aegisub to check for updates whenever it starts? You can still do it manually via the Help menu."),_("Check for updates?"), wxYES_NO | wxCENTER);
-			OPT_SET("App/Auto/Check For Updates")->SetBool(result == wxYES);
+			auto result = AppInteractionSink().Request({
+				from_wx(_("Check for updates?")),
+				from_wx(_("Do you want Aegisub to check for updates whenever it starts? You can still do it manually via the Help menu.")),
+				agi::InteractionButtons::YesNo,
+				agi::InteractionIcon::Question
+			});
+			OPT_SET("App/Auto/Check For Updates")->SetBool(result == agi::InteractionResult::Yes);
 			try {
 				config::opt->Flush();
 			}
 			catch (agi::fs::FileSystemError const& e) {
-				wxMessageBox(to_wx(e.GetMessage()), "Error saving config file", wxOK | wxICON_ERROR | wxCENTER);
+				AppNotificationSink().ShowError("Error saving config file", e.GetMessage());
 			}
 #endif
 		}
@@ -330,16 +347,16 @@ bool AegisubApp::OnInit() {
 			OpenFiles(wxArrayStringsAdapter(args.size() - 1, &args[1]));
 	}
 	catch (agi::Exception const& e) {
-		wxMessageBox(to_wx(e.GetMessage()), "Fatal error while initializing");
+		AppNotificationSink().ShowError("Fatal error while initializing", e.GetMessage());
 		return false;
 	}
 	catch (std::exception const& e) {
-		wxMessageBox(to_wx(e.what()), "Fatal error while initializing");
+		AppNotificationSink().ShowError("Fatal error while initializing", e.what());
 		return false;
 	}
 #ifndef _DEBUG
 	catch (...) {
-		wxMessageBox("Unhandled exception","Fatal error while initializing");
+		AppNotificationSink().ShowError("Fatal error while initializing", "Unhandled exception");
 		return false;
 	}
 #endif
@@ -427,10 +444,11 @@ void AegisubApp::UnhandledException(bool stackWalk) {
 
 	if (any) {
 		// Inform user of crash.
-		wxMessageBox(agi::wxformat(exception_message, path), _("Program error"), wxOK | wxICON_ERROR | wxCENTER, nullptr);
+		AppNotificationSink().ShowError(from_wx(_("Program error")), from_wx(agi::wxformat(exception_message, path)));
 	}
 	else if (LastStartupState) {
-		wxMessageBox(fmt_wx("Aegisub has crashed while starting up!\n\nThe last startup step attempted was: %s.", LastStartupState), _("Program error"), wxOK | wxICON_ERROR | wxCENTER);
+		AppNotificationSink().ShowError(from_wx(_("Program error")),
+			from_wx(fmt_wx("Aegisub has crashed while starting up!\n\nThe last startup step attempted was: %s.", LastStartupState)));
 	}
 #endif
 }
@@ -443,26 +461,24 @@ void AegisubApp::OnFatalException() {
 	UnhandledException(true);
 }
 
-#define SHOW_EXCEPTION(str) \
-	wxMessageBox(fmt_tl("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s", str), \
-				"Exception in event handler", wxOK | wxICON_ERROR | wxCENTER | wxSTAY_ON_TOP)
 bool AegisubApp::OnExceptionInMainLoop() {
 	try {
 		throw;
 	}
 	catch (const agi::Exception &e) {
-		SHOW_EXCEPTION(to_wx(e.GetMessage()));
+		AppNotificationSink().ShowError("Exception in event handler",
+			from_wx(fmt_tl("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s", to_wx(e.GetMessage()))));
 	}
 	catch (const std::exception &e) {
-		SHOW_EXCEPTION(to_wx(e.what()));
+		AppNotificationSink().ShowError("Exception in event handler",
+			from_wx(fmt_tl("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s", to_wx(e.what()))));
 	}
 	catch (...) {
-		SHOW_EXCEPTION("Unknown error");
+		AppNotificationSink().ShowError("Exception in event handler",
+			from_wx(fmt_tl("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s", "Unknown error")));
 	}
 	return true;
 }
-
-#undef SHOW_EXCEPTION
 
 int AegisubApp::OnRun() {
 	std::string error;

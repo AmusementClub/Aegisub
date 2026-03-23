@@ -41,8 +41,6 @@
 
 #include <libaegisub/make_unique.h>
 
-#include <wx/msgdlg.h>
-
 namespace {
 	using cmd::Command;
 
@@ -101,7 +99,7 @@ struct timecode_save final : public Command {
 			config::mru->Add("Timecodes", filename);
 		}
 		catch (agi::Exception const& err) {
-			wxMessageBox(to_wx(err.GetMessage()), "Error saving timecodes", wxOK | wxICON_ERROR | wxCENTER, c->parent);
+			c->ShowError(err.GetMessage(), "Error saving timecodes");
 		}
 	}
 };

@@ -178,14 +178,20 @@ public:
 	{
 	}
 
+	void ShowInfo(std::string const& title, std::string const& message) override {
+		agi::ui::MainInvokeIfAlive(lifetime, [frame = frame, title, message] {
+			wxMessageBox(to_wx(message), to_wx(title), wxOK | wxICON_INFORMATION | wxCENTER, frame);
+		});
+	}
+
 	void ShowError(std::string const& title, std::string const& message) override {
-		agi::ui::MainAsyncIfAlive(lifetime, [frame = frame, title, message] {
+		agi::ui::MainInvokeIfAlive(lifetime, [frame = frame, title, message] {
 			wxMessageBox(to_wx(message), to_wx(title), wxOK | wxICON_ERROR | wxCENTER, frame);
 		});
 	}
 
 	void ShowWarning(std::string const& title, std::string const& message) override {
-		agi::ui::MainAsyncIfAlive(lifetime, [frame = frame, title, message] {
+		agi::ui::MainInvokeIfAlive(lifetime, [frame = frame, title, message] {
 			wxMessageBox(to_wx(message), to_wx(title), wxOK | wxICON_WARNING | wxCENTER, frame);
 		});
 	}

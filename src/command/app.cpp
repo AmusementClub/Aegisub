@@ -29,8 +29,6 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
-#include <wx/msgdlg.h>
-
 #include "command.h"
 
 #include <libaegisub/log.h>
@@ -46,6 +44,7 @@
 #include "../main.h"
 #include "../options.h"
 #include "../project.h"
+#include "../ui_services.h"
 #include "../utils.h"
 
 namespace {
@@ -165,8 +164,13 @@ struct app_language final : public Command {
 		OPT_SET("App/Language")->SetString(new_language);
 
 		// Ask to restart program
-		int result = wxMessageBox("Aegisub needs to be restarted so that the new language can be applied. Restart now?", "Restart Aegisub?", wxYES_NO | wxICON_QUESTION |  wxCENTER);
-		if (result == wxYES) {
+		auto result = c->RequestInteraction({
+			"Restart Aegisub?",
+			"Aegisub needs to be restarted so that the new language can be applied. Restart now?",
+			agi::InteractionButtons::YesNo,
+			agi::InteractionIcon::Question
+		});
+		if (result == agi::InteractionResult::Yes) {
 			// Restart Aegisub
 			if (c->frame->Close()) {
 				RestartAegisub();

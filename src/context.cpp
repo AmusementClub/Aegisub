@@ -71,6 +71,11 @@ std::shared_ptr<NotificationSink> Context::GetNotificationSink() const {
 	return notificationSink;
 }
 
+void Context::ShowInfo(std::string const& message, std::string const& title) const {
+	if (notificationSink)
+		notificationSink->ShowInfo(title, message);
+}
+
 void Context::ShowError(std::string const& message, std::string const& title) const {
 	if (notificationSink)
 		notificationSink->ShowError(title, message);

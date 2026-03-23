@@ -57,7 +57,6 @@
 #include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 
-#include <wx/msgdlg.h>
 #include <wx/textdlg.h>
 
 namespace {
@@ -129,7 +128,7 @@ struct video_aspect_custom final : public validator_video_loaded {
 		}
 
 		if (numval < 0.5 || numval > 5.0)
-			wxMessageBox(_("Invalid value! Aspect ratio must be between 0.5 and 5.0."),_("Invalid Aspect Ratio"),wxOK | wxICON_ERROR | wxCENTER);
+			c->ShowError(from_wx(_("Invalid value! Aspect ratio must be between 0.5 and 5.0.")), "Invalid Aspect Ratio");
 		else {
 			c->videoController->SetAspectRatio(numval);
 			c->frame->SetDisplayMode(1,-1);

@@ -47,6 +47,7 @@
 #include "retina_helper.h"
 #include "spline_curve.h"
 #include "utils.h"
+#include "video_render_opengl_proc_loader.h"
 #include "video_renderer_factory.h"
 #include "video_renderer_error.h"
 #include "video_renderer_opengl.h"
@@ -54,20 +55,25 @@
 #include "video_display_layout.h"
 #include "video_zoom.h"
 #include "video_controller.h"
+#include "video_frame.h"
 #include "visual_tool.h"
 
 #include <libaegisub/make_unique.h>
+#include <libaegisub/scope_exit.h>
 
 #include <algorithm>
 #include <wx/combobox.h>
+#include <wx/image.h>
 #include <wx/menu.h>
 #include <wx/textctrl.h>
 #include <wx/toolbar.h>
 
 #ifdef HAVE_OPENGL_GL_H
 #include <OpenGL/gl.h>
+#include <OpenGL/glext.h>
 #else
 #include <GL/gl.h>
+#include <GL/glext.h>
 #endif
 
 /// Attribute list for gl canvases; set the canvases to doublebuffered rgba with an 8 bit stencil buffer
@@ -87,6 +93,45 @@ public:
 };
 
 #define E(cmd) cmd; if (GLenum err = glGetError()) throw OpenGlException(#cmd, err)
+
+namespace {
+template <typename Proc>
+Proc LoadOptionalProc(char const *name, char const *fallback_name = nullptr) {
+	if (auto *proc = opengl::GetProcAddress(name))
+		return reinterpret_cast<Proc>(proc);
+	if (fallback_name) {
+		if (auto *proc = opengl::GetProcAddress(fallback_name))
+			return reinterpret_cast<Proc>(proc);
+	}
+	return nullptr;
+}
+
+struct CaptureFramebufferFunctions {
+	PFNGLBINDFRAMEBUFFERPROC BindFramebuffer = nullptr;
+	PFNGLDELETEFRAMEBUFFERSPROC DeleteFramebuffers = nullptr;
+	PFNGLGENFRAMEBUFFERSPROC GenFramebuffers = nullptr;
+	PFNGLFRAMEBUFFERTEXTURE2DPROC FramebufferTexture2D = nullptr;
+	PFNGLCHECKFRAMEBUFFERSTATUSPROC CheckFramebufferStatus = nullptr;
+};
+
+CaptureFramebufferFunctions const& GetCaptureFramebufferFunctions() {
+	static const CaptureFramebufferFunctions functions = {
+		LoadOptionalProc<PFNGLBINDFRAMEBUFFERPROC>("glBindFramebuffer", "glBindFramebufferEXT"),
+		LoadOptionalProc<PFNGLDELETEFRAMEBUFFERSPROC>("glDeleteFramebuffers", "glDeleteFramebuffersEXT"),
+		LoadOptionalProc<PFNGLGENFRAMEBUFFERSPROC>("glGenFramebuffers", "glGenFramebuffersEXT"),
+		LoadOptionalProc<PFNGLFRAMEBUFFERTEXTURE2DPROC>("glFramebufferTexture2D", "glFramebufferTexture2DEXT"),
+		LoadOptionalProc<PFNGLCHECKFRAMEBUFFERSTATUSPROC>("glCheckFramebufferStatus", "glCheckFramebufferStatusEXT"),
+	};
+	return functions;
+}
+
+wxImage GetBgraFallbackImage(agi::Context *context, int frame_number, double frame_time, bool raw) {
+	auto frame = context->project->VideoProvider()->GetFrameBgra(frame_number, frame_time, raw);
+	if (!frame || frame->data.empty())
+		return {};
+	return GetImage(*frame);
+}
+}
 
 VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBox, wxWindow *parent, agi::Context *c)
 : wxGLCanvas(parent, -1, attribList)
@@ -223,6 +268,207 @@ void VideoDisplay::UploadFrameData(FrameReadyEvent &evt) {
 
 void VideoDisplay::Render() {
 	render_requested = true;
+}
+
+wxImage VideoDisplay::CapturePacketImage(VideoRenderPacket const& packet) {
+	auto* provider = con->project->VideoProvider();
+	if (!provider || !packet.source_frame.IsValid())
+		return {};
+
+	int const width = provider->GetWidth();
+	int const height = provider->GetHeight();
+	if (width <= 0 || height <= 0)
+		return {};
+
+	auto const& gl = GetCaptureFramebufferFunctions();
+	if (!gl.BindFramebuffer
+		|| !gl.DeleteFramebuffers
+		|| !gl.GenFramebuffers
+		|| !gl.FramebufferTexture2D
+		|| !gl.CheckFramebufferStatus) {
+		return {};
+	}
+
+	GLint previous_framebuffer = 0;
+	E(glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &previous_framebuffer));
+
+	GLuint framebuffer = 0;
+	GLuint texture = 0;
+	auto cleanup = agi::make_scope_exit([&] {
+		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(previous_framebuffer));
+		if (texture)
+			glDeleteTextures(1, &texture);
+		if (framebuffer)
+			gl.DeleteFramebuffers(1, &framebuffer);
+	});
+
+	gl.GenFramebuffers(1, &framebuffer);
+	if (GLenum err = glGetError())
+		throw OpenGlException("glGenFramebuffers", err);
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, framebuffer);
+	if (GLenum err = glGetError())
+		throw OpenGlException("glBindFramebuffer", err);
+	E(glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT));
+	E(glReadBuffer(GL_COLOR_ATTACHMENT0_EXT));
+	E(glGenTextures(1, &texture));
+	E(glBindTexture(GL_TEXTURE_2D, texture));
+	E(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR));
+	E(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
+	E(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr));
+	gl.FramebufferTexture2D(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, texture, 0);
+	if (GLenum err = glGetError())
+		throw OpenGlException("glFramebufferTexture2D", err);
+	if (gl.CheckFramebufferStatus(GL_FRAMEBUFFER_EXT) != GL_FRAMEBUFFER_COMPLETE_EXT)
+		throw agi::InternalError("Failed to create an offscreen framebuffer for video capture.");
+
+	auto renderer_result = CreateConfiguredVideoRenderer();
+	auto capture_renderer = std::move(renderer_result.renderer);
+	std::unique_ptr<IVideoRenderer> capture_overlay_renderer;
+
+	auto const routing = DecideVideoRenderRouting(packet, capture_renderer->SupportsDirectOverlay());
+	if (routing == VideoRenderRoutingMode::SourceFrameOnly) {
+		capture_renderer->UploadFrame(packet.source_frame);
+		capture_renderer->UploadOverlay(nullptr);
+	}
+	else if (routing == VideoRenderRoutingMode::PrimaryRendererDirectOverlay) {
+		capture_renderer->UploadFrame(packet.source_frame);
+		capture_renderer->UploadOverlay(&packet.subtitle_overlay);
+	}
+	else if (routing == VideoRenderRoutingMode::SecondaryRendererDirectOverlay) {
+		capture_renderer->UploadFrame(packet.source_frame);
+		capture_renderer->UploadOverlay(nullptr);
+		capture_overlay_renderer = agi::make_unique<OpenGLVideoRenderer>(false, true, false);
+		capture_overlay_renderer->UploadFrame(packet.source_frame);
+		capture_overlay_renderer->UploadOverlay(&packet.subtitle_overlay);
+	}
+	else {
+		auto display_frame = packet.DisplayFrame();
+		if (!display_frame || display_frame->data.empty())
+			throw agi::InternalError("Video capture needs a composited BGRA frame for fallback routing.");
+		capture_renderer->UploadFrame(MakeBakedSourceFrameView(*display_frame, packet.source_frame));
+		capture_renderer->UploadOverlay(nullptr);
+	}
+
+	capture_renderer->Render({ 0, 0, width, height }, width, height);
+	if (capture_overlay_renderer)
+		capture_overlay_renderer->Render({ 0, 0, width, height }, width, height);
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, framebuffer);
+	if (GLenum err = glGetError())
+		throw OpenGlException("glBindFramebuffer", err);
+	E(glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT));
+	E(glReadBuffer(GL_COLOR_ATTACHMENT0_EXT));
+	E(glViewport(0, 0, width, height));
+	E(glFlush());
+
+	VideoFrame frame;
+	frame.width = width;
+	frame.height = height;
+	frame.pitch = static_cast<size_t>(width) * 4;
+	frame.flipped = true;
+	frame.data.resize(frame.pitch * frame.height);
+	E(glReadPixels(0, 0, width, height, GL_BGRA_EXT, GL_UNSIGNED_BYTE, frame.data.data()));
+	return GetImage(frame);
+}
+
+wxImage VideoDisplay::CaptureCurrentRenderersImage() {
+	auto* provider = con->project->VideoProvider();
+	if (!provider || !videoRenderer)
+		return {};
+
+	int const width = provider->GetWidth();
+	int const height = provider->GetHeight();
+	if (width <= 0 || height <= 0)
+		return {};
+
+	auto const& gl = GetCaptureFramebufferFunctions();
+	if (!gl.BindFramebuffer
+		|| !gl.DeleteFramebuffers
+		|| !gl.GenFramebuffers
+		|| !gl.FramebufferTexture2D
+		|| !gl.CheckFramebufferStatus) {
+		return {};
+	}
+
+	GLint previous_framebuffer = 0;
+	E(glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &previous_framebuffer));
+
+	GLuint framebuffer = 0;
+	GLuint texture = 0;
+	auto cleanup = agi::make_scope_exit([&] {
+		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(previous_framebuffer));
+		if (texture)
+			glDeleteTextures(1, &texture);
+		if (framebuffer)
+			gl.DeleteFramebuffers(1, &framebuffer);
+	});
+
+	gl.GenFramebuffers(1, &framebuffer);
+	if (GLenum err = glGetError())
+		throw OpenGlException("glGenFramebuffers", err);
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, framebuffer);
+	if (GLenum err = glGetError())
+		throw OpenGlException("glBindFramebuffer", err);
+	E(glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT));
+	E(glReadBuffer(GL_COLOR_ATTACHMENT0_EXT));
+	E(glGenTextures(1, &texture));
+	E(glBindTexture(GL_TEXTURE_2D, texture));
+	E(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR));
+	E(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
+	E(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr));
+	gl.FramebufferTexture2D(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, texture, 0);
+	if (GLenum err = glGetError())
+		throw OpenGlException("glFramebufferTexture2D", err);
+	if (gl.CheckFramebufferStatus(GL_FRAMEBUFFER_EXT) != GL_FRAMEBUFFER_COMPLETE_EXT)
+		throw agi::InternalError("Failed to create an offscreen framebuffer for video capture.");
+
+	videoRenderer->Render({ 0, 0, width, height }, width, height);
+	if (subtitleOverlayRenderer)
+		subtitleOverlayRenderer->Render({ 0, 0, width, height }, width, height);
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, framebuffer);
+	if (GLenum err = glGetError())
+		throw OpenGlException("glBindFramebuffer", err);
+	E(glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT));
+	E(glReadBuffer(GL_COLOR_ATTACHMENT0_EXT));
+	E(glViewport(0, 0, width, height));
+	E(glFlush());
+
+	VideoFrame frame;
+	frame.width = width;
+	frame.height = height;
+	frame.pitch = static_cast<size_t>(width) * 4;
+	frame.flipped = true;
+	frame.data.resize(frame.pitch * frame.height);
+	E(glReadPixels(0, 0, width, height, GL_BGRA_EXT, GL_UNSIGNED_BYTE, frame.data.data()));
+	return GetImage(frame);
+}
+
+wxImage VideoDisplay::GetFrameImage(bool raw) {
+	auto* provider = con->project->VideoProvider();
+	if (!provider)
+		return {};
+
+	int const frame_number = con->videoController->GetFrameN();
+	double const frame_time = con->project->Timecodes().TimeAtFrame(frame_number);
+	if (!InitContext())
+		return GetBgraFallbackImage(con, frame_number, frame_time, raw);
+
+	VideoRenderPacket packet;
+	if (!raw && has_displayed_packet) {
+		packet = displayed_packet;
+	}
+	else {
+		packet = provider->GetRenderPacket(frame_number, frame_time, raw);
+	}
+
+	try {
+		auto image = CapturePacketImage(packet);
+		if (image.IsOk())
+			return image;
+	}
+	catch (agi::Exception const&) {
+	}
+
+	return GetBgraFallbackImage(con, frame_number, frame_time, raw);
 }
 
 void VideoDisplay::OnIdle(wxIdleEvent&) {

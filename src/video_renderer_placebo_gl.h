@@ -56,6 +56,7 @@ class PlaceboRendererGL final : public IVideoRenderer {
 	SourceFrameGeometry image_geometry;
 	int target_width = 0;
 	int target_height = 0;
+	unsigned int target_framebuffer = 0;
 	bool has_frame = false;
 
 	void EnsureInitialized();

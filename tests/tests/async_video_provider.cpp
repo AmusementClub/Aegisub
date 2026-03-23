@@ -18,6 +18,7 @@
 
 #include <chrono>
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <condition_variable>
 #include <mutex>
@@ -470,7 +471,7 @@ struct RecordedFrame {
 	double time = 0.0;
 	bool has_overlay = false;
 	int overlay_dirty_rect_count = 0;
-	bool overlay_force_full_upload = false;
+	uint64_t overlay_continuity_generation = 0;
 	SourceFrameRect source_visible_rect = { };
 };
 
@@ -492,7 +493,7 @@ public:
 		frame.time = frame_evt->time;
 		frame.has_overlay = frame_evt->packet.has_subtitle_overlay;
 		frame.overlay_dirty_rect_count = frame_evt->packet.subtitle_overlay.dirty_rect_count;
-		frame.overlay_force_full_upload = frame_evt->packet.subtitle_overlay.force_full_upload;
+		frame.overlay_continuity_generation = frame_evt->packet.subtitle_overlay.continuity_generation;
 		frame.source_visible_rect = GetSourceFrameVisibleRect(frame_evt->packet.source_frame);
 
 		{
@@ -729,6 +730,7 @@ TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 	EXPECT_TRUE(packet.subtitle_overlay.premultiplied_alpha);
 	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, packet.subtitle_overlay.composition_mode);
 	EXPECT_EQ(SubtitleOverlayCoordinateSpace::SourceStorage, packet.subtitle_overlay.coordinate_space);
+	EXPECT_GT(packet.subtitle_overlay.continuity_generation, 0u);
 	EXPECT_EQ(9, packet.source_frame_storage->data[0]);
 	EXPECT_GT(packet.composited_frame_storage->data[0], packet.source_frame_storage->data[0]);
 	EXPECT_GT(packet.composited_frame_storage->data[1], packet.source_frame_storage->data[1]);
@@ -739,6 +741,31 @@ TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 	EXPECT_EQ(0, packet.subtitle_overlay.dirty_rects[0].y);
 	EXPECT_EQ(2, packet.subtitle_overlay.dirty_rects[0].width);
 	EXPECT_EQ(2, packet.subtitle_overlay.dirty_rects[0].height);
+}
+
+TEST(async_video_provider, update_subtitles_advances_overlay_continuity_generation_for_direct_overlay) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto initial = MakeSubtitleFile("overlay-1");
+	provider.LoadSubtitles(&initial);
+
+	auto first = provider.GetRenderPacket(5, 5000);
+	ASSERT_TRUE(first.has_subtitle_overlay);
+	auto const first_generation = first.subtitle_overlay.continuity_generation;
+
+	auto updated = MakeSubtitleFile("overlay-2");
+	provider.UpdateSubtitles(&updated, &updated.Events.front());
+
+	auto second = provider.GetRenderPacket(5, 5000);
+	ASSERT_TRUE(second.has_subtitle_overlay);
+	EXPECT_GT(second.subtitle_overlay.continuity_generation, first_generation);
 }
 
 TEST(async_video_provider, color_space_override_updates_effective_source_frame_metadata) {
@@ -757,6 +784,29 @@ TEST(async_video_provider, color_space_override_updates_effective_source_frame_m
 	EXPECT_EQ("TV.601", packet.source_frame.color.matrix);
 	EXPECT_EQ("BT.601", packet.source_frame.color.primaries);
 	EXPECT_EQ(SourceFrameColorRange::Full, packet.source_frame.color.range);
+}
+
+TEST(async_video_provider, direct_overlay_color_space_override_preserves_overlay_continuity_generation) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto subtitle_file = MakeSubtitleFile("overlay");
+	provider.LoadSubtitles(&subtitle_file);
+
+	auto first = provider.GetRenderPacket(3, 3000);
+	ASSERT_TRUE(first.has_subtitle_overlay);
+	auto const first_generation = first.subtitle_overlay.continuity_generation;
+
+	provider.SetColorSpace("TV.601");
+	auto second = provider.GetRenderPacket(3, 3000);
+	ASSERT_TRUE(second.has_subtitle_overlay);
+	EXPECT_EQ(first_generation, second.subtitle_overlay.continuity_generation);
 }
 
 TEST(async_video_provider, bgra_source_frame_preserves_upstream_native_format_identity) {
@@ -1296,9 +1346,8 @@ TEST(async_video_provider, compatibility_overlay_uses_overflow_only_when_two_slo
 	EXPECT_EQ(second_storage, fourth_storage);
 }
 
-TEST(async_video_provider, dropped_packet_forces_full_overlay_upload_on_next_delivered_event) {
+TEST(async_video_provider, dropped_packet_advances_overlay_continuity_generation_on_next_delivered_event) {
 	auto state = std::make_shared<VideoProviderState>();
-	state->block_next = true;
 	auto *subs = new FakeDropSensitiveOverlaySubtitlesProvider;
 	EventRecorder recorder;
 
@@ -1309,6 +1358,11 @@ TEST(async_video_provider, dropped_packet_forces_full_overlay_upload_on_next_del
 
 	auto subtitle_file = MakeSubtitleFile("overlay");
 	provider.LoadSubtitles(&subtitle_file);
+
+	auto baseline = provider.GetRenderPacket(0, 0);
+	ASSERT_TRUE(baseline.has_subtitle_overlay);
+	auto const baseline_generation = baseline.subtitle_overlay.continuity_generation;
+	state->block_next = true;
 
 	provider.RequestFrame(1, 1000);
 	{
@@ -1329,7 +1383,7 @@ TEST(async_video_provider, dropped_packet_forces_full_overlay_upload_on_next_del
 	ASSERT_EQ(1u, frames.size());
 	EXPECT_EQ(2, frames.back().frame_number);
 	EXPECT_TRUE(frames.back().has_overlay);
-	EXPECT_TRUE(frames.back().overlay_force_full_upload);
+	EXPECT_GT(frames.back().overlay_continuity_generation, baseline_generation);
 }
 
 TEST(async_video_provider, replacing_subtitles_provider_reuses_video_provider_and_refreshes_overlay_mode) {

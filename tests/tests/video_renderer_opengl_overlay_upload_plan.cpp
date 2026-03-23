@@ -158,6 +158,77 @@ TEST(video_renderer_opengl_overlay_upload_plan, force_full_upload_overrides_reus
 	EXPECT_TRUE(plan.next_state.has_visible_content);
 }
 
+TEST(video_renderer_opengl_overlay_upload_plan, matching_generation_and_dirty_rects_use_dirty_upload) {
+	auto storage = make_storage(1920, 1080);
+	storage.dirty_rects.push_back({ 100, 200, 300, 50 });
+	auto overlay = storage.MakeView(true);
+	overlay.canvas_width = 1920;
+	overlay.canvas_height = 1080;
+	overlay.composition_mode = SubtitleOverlayCompositionMode::PremultipliedAlpha;
+	overlay.continuity_generation = 7;
+
+	OpenGLVideoRendererOverlayLayerState state;
+	state.width = 1920;
+	state.height = 1080;
+	state.canvas_width = 1920;
+	state.canvas_height = 1080;
+	state.has_allocated_resources = true;
+	state.has_visible_content = true;
+	state.continuity_generation = overlay.continuity_generation;
+	state.composition_mode = SubtitleOverlayCompositionMode::PremultipliedAlpha;
+
+	auto plan = DecideOpenGLVideoRendererOverlayUploadPlan(state, &overlay);
+	EXPECT_EQ(OpenGLVideoRendererOverlayUploadAction::DirtyUpload, plan.action);
+	EXPECT_TRUE(plan.next_state.has_visible_content);
+}
+
+TEST(video_renderer_opengl_overlay_upload_plan, matching_generation_and_empty_dirty_rects_reuse_existing_content) {
+	auto storage = make_storage(1920, 1080);
+	auto overlay = storage.MakeView(true);
+	overlay.canvas_width = 1920;
+	overlay.canvas_height = 1080;
+	overlay.composition_mode = SubtitleOverlayCompositionMode::PremultipliedAlpha;
+	overlay.continuity_generation = 11;
+
+	OpenGLVideoRendererOverlayLayerState state;
+	state.width = 1920;
+	state.height = 1080;
+	state.canvas_width = 1920;
+	state.canvas_height = 1080;
+	state.has_allocated_resources = true;
+	state.has_visible_content = true;
+	state.continuity_generation = overlay.continuity_generation;
+	state.composition_mode = SubtitleOverlayCompositionMode::PremultipliedAlpha;
+
+	auto plan = DecideOpenGLVideoRendererOverlayUploadPlan(state, &overlay);
+	EXPECT_EQ(OpenGLVideoRendererOverlayUploadAction::ReuseExistingContent, plan.action);
+	EXPECT_TRUE(plan.next_state.has_visible_content);
+}
+
+TEST(video_renderer_opengl_overlay_upload_plan, continuity_generation_change_forces_full_upload) {
+	auto storage = make_storage(1920, 1080);
+	storage.dirty_rects.push_back({ 100, 200, 300, 50 });
+	auto overlay = storage.MakeView(true);
+	overlay.canvas_width = 1920;
+	overlay.canvas_height = 1080;
+	overlay.composition_mode = SubtitleOverlayCompositionMode::PremultipliedAlpha;
+	overlay.continuity_generation = 12;
+
+	OpenGLVideoRendererOverlayLayerState state;
+	state.width = 1920;
+	state.height = 1080;
+	state.canvas_width = 1920;
+	state.canvas_height = 1080;
+	state.has_allocated_resources = true;
+	state.has_visible_content = true;
+	state.continuity_generation = 9;
+	state.composition_mode = SubtitleOverlayCompositionMode::PremultipliedAlpha;
+
+	auto plan = DecideOpenGLVideoRendererOverlayUploadPlan(state, &overlay);
+	EXPECT_EQ(OpenGLVideoRendererOverlayUploadAction::FullUpload, plan.action);
+	EXPECT_TRUE(plan.next_state.has_visible_content);
+}
+
 TEST(video_renderer_opengl_overlay_upload_plan, invisible_overlay_hides_layer_instead_of_reusing_old_texture) {
 	auto storage = make_storage(1920, 1080);
 	storage.has_visible_content = false;

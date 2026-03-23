@@ -16,6 +16,8 @@
 
 #include "subtitle_overlay.h"
 
+#include <cstdint>
+
 enum class OpenGLVideoRendererOverlayUploadAction {
 	HideKeepResources,
 	FullUpload,
@@ -33,6 +35,7 @@ struct OpenGLVideoRendererOverlayLayerState {
 	bool flipped = false;
 	bool has_allocated_resources = false;
 	bool has_visible_content = false;
+	uint64_t continuity_generation = 0;
 	SubtitleOverlayCompositionMode composition_mode = SubtitleOverlayCompositionMode::OpaqueReplace;
 };
 
@@ -87,6 +90,7 @@ inline OpenGLVideoRendererOverlayUploadPlan DecideOpenGLVideoRendererOverlayUplo
 	plan.next_state.composition_mode = overlay->composition_mode;
 	plan.next_state.has_allocated_resources = true;
 	plan.next_state.has_visible_content = true;
+	plan.next_state.continuity_generation = overlay->continuity_generation;
 
 	if (overlay->force_full_upload) {
 		plan.action = OpenGLVideoRendererOverlayUploadAction::FullUpload;
@@ -94,6 +98,11 @@ inline OpenGLVideoRendererOverlayUploadPlan DecideOpenGLVideoRendererOverlayUplo
 	}
 
 	if (!layout_matches) {
+		plan.action = OpenGLVideoRendererOverlayUploadAction::FullUpload;
+		return plan;
+	}
+
+	if (state.continuity_generation != overlay->continuity_generation) {
 		plan.action = OpenGLVideoRendererOverlayUploadAction::FullUpload;
 		return plan;
 	}

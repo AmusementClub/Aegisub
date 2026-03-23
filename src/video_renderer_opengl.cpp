@@ -420,6 +420,7 @@ void OpenGLVideoRenderer::ClearLayer(LayerResources& layer) noexcept {
 	layer.offset_y = 0;
 	layer.render_output_layout = { };
 	layer.apply_source_display_transform = false;
+	layer.continuity_generation = 0;
 	layer.composition_mode = SubtitleOverlayCompositionMode::OpaqueReplace;
 	layer.has_content = false;
 }
@@ -620,6 +621,7 @@ void OpenGLVideoRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 	state.flipped = overlay_layer.layout.flipped;
 	state.has_allocated_resources = !overlay_layer.texture_ids.empty() && overlay_layer.texture_ids.size() == overlay_layer.layout.tiles.size();
 	state.has_visible_content = overlay_layer.has_content;
+	state.continuity_generation = overlay_layer.continuity_generation;
 	state.composition_mode = overlay_layer.composition_mode;
 
 	SubtitleOverlay adjusted_overlay;
@@ -650,6 +652,7 @@ void OpenGLVideoRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 			render_overlay->target_y,
 			render_overlay->composition_mode,
 			apply_source_display_transform);
+		overlay_layer.continuity_generation = render_overlay->continuity_generation;
 		return;
 	}
 	if (UpdateLayerRenderOutputLayout(overlay_layer, apply_source_display_transform))
@@ -661,9 +664,11 @@ void OpenGLVideoRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 			render_overlay->planes[0].stride,
 			render_overlay->dirty_rects,
 			render_overlay->dirty_rect_count);
+		overlay_layer.continuity_generation = render_overlay->continuity_generation;
 		return;
 	}
 
+	overlay_layer.continuity_generation = render_overlay->continuity_generation;
 	overlay_layer.has_content = true;
 }
 

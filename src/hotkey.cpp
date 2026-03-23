@@ -19,13 +19,12 @@
 #include "libresrc/libresrc.h"
 #include "command/command.h"
 #include "compat.h"
+#include "include/aegisub/context.h"
 #include "options.h"
 
 #include <libaegisub/path.h>
 
 #include <wx/intl.h>
-#include <wx/msgdlg.h>
-
 namespace {
 	const char* added_hotkeys_cj[][3] = {
 		{"time/align", "Video", "KP_TAB"},
@@ -270,8 +269,7 @@ bool check(std::string const& context, agi::Context *c, wxKeyEvent &evt) {
 		return true;
 	}
 	catch (cmd::CommandNotFound const& e) {
-		wxMessageBox(to_wx(e.GetMessage()), _("Invalid command name for hotkey"),
-			wxOK | wxICON_ERROR | wxCENTER | wxSTAY_ON_TOP);
+		c->ShowError(e.GetMessage(), from_wx(_("Invalid command name for hotkey")));
 		return true;
 	}
 }

@@ -42,6 +42,7 @@ class DialogProgress;
 class SubtitlesProvider;
 class TransientFontSet;
 class VideoProvider;
+namespace agi { class NotificationSink; }
 
 /// Preview window to show a short string with a given ass style
 class SubtitlesPreview final : public wxWindow {
@@ -59,6 +60,7 @@ class SubtitlesPreview final : public wxWindow {
 	std::unique_ptr<AssFile> sub_file;
 	/// Transient font environment inherited from the active script, if any
 	std::shared_ptr<const TransientFontSet> transient_fonts;
+	std::shared_ptr<agi::NotificationSink> notification_sink;
 	/// Line used to render the specified text
 	AssDialogue* line;
 
@@ -79,6 +81,6 @@ public:
 	/// Set the background color
 	void SetColour(agi::Color col);
 
-	SubtitlesPreview(wxWindow *parent, wxSize size, int style, agi::Color colour, std::shared_ptr<const TransientFontSet> transient_fonts = {});
+	SubtitlesPreview(wxWindow *parent, wxSize size, int style, agi::Color colour, std::shared_ptr<const TransientFontSet> transient_fonts = {}, std::shared_ptr<agi::NotificationSink> notification_sink = {});
 	~SubtitlesPreview();
 };

@@ -24,11 +24,13 @@
 namespace agi {
 	class AudioProvider;
 	class BackgroundRunner;
+	class NotificationSink;
 	class Path;
 }
 
 std::unique_ptr<agi::AudioProvider> GetAudioProvider(agi::fs::path const& filename,
                                                      agi::Path const& path_helper,
-                                                     agi::BackgroundRunner *br);
+                                                     agi::BackgroundRunner *br,
+                                                     agi::NotificationSink *notification_sink = nullptr);
 std::vector<std::string> GetAudioProviderNames();
 std::vector<std::pair<std::string, std::string>> GetAudioProviderChoices();

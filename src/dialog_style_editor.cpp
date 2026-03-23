@@ -335,7 +335,8 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 		wxSize(100, 60),
 		wxSUNKEN_BORDER,
 		OPT_GET("Colour/Style Editor/Background/Preview")->GetColor(),
-		c ? c->ass->GetTransientFonts() : std::shared_ptr<const TransientFontSet>());
+		c ? c->ass->GetTransientFonts() : std::shared_ptr<const TransientFontSet>(),
+		c ? c->GetNotificationSink() : std::shared_ptr<agi::NotificationSink>());
 
 	SubsPreview->SetToolTip(_("Preview of current style"));
 	SubsPreview->SetStyle(*style);

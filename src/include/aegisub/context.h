@@ -35,7 +35,13 @@ class VideoController;
 class VideoDisplay;
 class wxWindow;
 namespace Automation4 { class ScriptManager; }
+namespace agi { class BackgroundRunner; }
 namespace agi { class StatusSink; }
+namespace agi { class NotificationSink; }
+namespace agi { class InteractionSink; }
+namespace agi { class BackgroundRunnerFactory; }
+namespace agi { struct InteractionRequest; }
+namespace agi { enum class InteractionResult : int; }
 
 namespace agi {
 class Path;
@@ -55,6 +61,9 @@ struct Context {
 	std::unique_ptr<SearchReplaceEngine> search;
 	std::unique_ptr<Path> path;
 	std::shared_ptr<StatusSink> statusSink;
+	std::shared_ptr<NotificationSink> notificationSink;
+	std::shared_ptr<InteractionSink> interactionSink;
+	std::shared_ptr<BackgroundRunnerFactory> backgroundRunnerFactory;
 
 	// Things that should probably be in some sort of UI-context-model
 	wxWindow *parent = nullptr;
@@ -74,6 +83,12 @@ struct Context {
 
 	std::shared_ptr<StatusSink> GetStatusSink() const;
 	void ShowStatus(std::string const& message, int timeout_ms = 10000) const;
+	std::shared_ptr<NotificationSink> GetNotificationSink() const;
+	void ShowError(std::string const& message, std::string const& title = "Error") const;
+	void ShowWarning(std::string const& message, std::string const& title = "Warning") const;
+	std::shared_ptr<InteractionSink> GetInteractionSink() const;
+	InteractionResult RequestInteraction(InteractionRequest const& request) const;
+	std::unique_ptr<BackgroundRunner> CreateBackgroundRunner(std::string const& title = "", std::string const& message = "") const;
 };
 
 }

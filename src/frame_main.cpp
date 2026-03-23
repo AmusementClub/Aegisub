@@ -47,6 +47,7 @@
 #include "command/command.h"
 #include "dialog_detached_video.h"
 #include "dialog_manager.h"
+#include "dialog_progress.h"
 #include "libresrc/libresrc.h"
 #include "main.h"
 #include "options.h"
@@ -54,6 +55,7 @@
 #include "status_sink.h"
 #include "subs_controller.h"
 #include "subs_edit_box.h"
+#include "ui_services.h"
 #include "utils.h"
 #include "version.h"
 #include "video_box.h"
@@ -81,6 +83,72 @@ enum {
 #endif
 
 namespace {
+int to_wx_flags(agi::InteractionButtons buttons, agi::InteractionIcon icon) {
+	int flags = 0;
+	switch (buttons) {
+	case agi::InteractionButtons::Ok:
+		flags |= wxOK;
+		break;
+	case agi::InteractionButtons::OkCancel:
+		flags |= wxOK | wxCANCEL;
+		break;
+	case agi::InteractionButtons::YesNo:
+		flags |= wxYES_NO;
+		break;
+	case agi::InteractionButtons::YesNoCancel:
+		flags |= wxYES_NO | wxCANCEL;
+		break;
+	}
+
+	switch (icon) {
+	case agi::InteractionIcon::None:
+		break;
+	case agi::InteractionIcon::Info:
+		flags |= wxICON_INFORMATION;
+		break;
+	case agi::InteractionIcon::Warning:
+		flags |= wxICON_WARNING;
+		break;
+	case agi::InteractionIcon::Error:
+		flags |= wxICON_ERROR;
+		break;
+	case agi::InteractionIcon::Question:
+		flags |= wxICON_QUESTION;
+		break;
+	}
+
+	return flags | wxCENTER;
+}
+
+agi::InteractionResult from_wx_result(int result) {
+	switch (result) {
+	case wxOK:
+		return agi::InteractionResult::Ok;
+	case wxCANCEL:
+		return agi::InteractionResult::Cancel;
+	case wxYES:
+		return agi::InteractionResult::Yes;
+	case wxNO:
+		return agi::InteractionResult::No;
+	default:
+		return agi::InteractionResult::Cancel;
+	}
+}
+
+agi::InteractionResult safe_result(agi::InteractionButtons buttons) {
+	switch (buttons) {
+	case agi::InteractionButtons::Ok:
+		return agi::InteractionResult::Ok;
+	case agi::InteractionButtons::OkCancel:
+		return agi::InteractionResult::Cancel;
+	case agi::InteractionButtons::YesNo:
+		return agi::InteractionResult::No;
+	case agi::InteractionButtons::YesNoCancel:
+		return agi::InteractionResult::Cancel;
+	}
+	return agi::InteractionResult::Cancel;
+}
+
 class FrameMainStatusSink final : public agi::StatusSink {
 	FrameMain *frame = nullptr;
 	agi::ui::WeakLifetime lifetime;
@@ -96,6 +164,100 @@ public:
 		agi::ui::MainAsyncIfAlive(lifetime, [frame = frame, message, timeout_ms] {
 			frame->StatusTimeout(to_wx(message), timeout_ms);
 		});
+	}
+};
+
+class FrameMainNotificationSink final : public agi::NotificationSink {
+	FrameMain *frame = nullptr;
+	agi::ui::WeakLifetime lifetime;
+
+public:
+	FrameMainNotificationSink(FrameMain *frame, agi::ui::WeakLifetime lifetime)
+	: frame(frame)
+	, lifetime(std::move(lifetime))
+	{
+	}
+
+	void ShowError(std::string const& title, std::string const& message) override {
+		agi::ui::MainAsyncIfAlive(lifetime, [frame = frame, title, message] {
+			wxMessageBox(to_wx(message), to_wx(title), wxOK | wxICON_ERROR | wxCENTER, frame);
+		});
+	}
+
+	void ShowWarning(std::string const& title, std::string const& message) override {
+		agi::ui::MainAsyncIfAlive(lifetime, [frame = frame, title, message] {
+			wxMessageBox(to_wx(message), to_wx(title), wxOK | wxICON_WARNING | wxCENTER, frame);
+		});
+	}
+};
+
+class FrameMainInteractionSink final : public agi::InteractionSink {
+	FrameMain *frame = nullptr;
+	agi::ui::WeakLifetime lifetime;
+
+public:
+	FrameMainInteractionSink(FrameMain *frame, agi::ui::WeakLifetime lifetime)
+	: frame(frame)
+	, lifetime(std::move(lifetime))
+	{
+	}
+
+	agi::InteractionResult Request(agi::InteractionRequest const& request) override {
+		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, request] {
+			if (!lifetime.lock())
+				return safe_result(request.buttons);
+
+			return from_wx_result(wxMessageBox(
+				to_wx(request.message),
+				to_wx(request.title),
+				to_wx_flags(request.buttons, request.icon),
+				frame));
+		});
+	}
+};
+
+class FrameMainBackgroundRunner final : public agi::BackgroundRunner {
+	FrameMain *frame = nullptr;
+	agi::ui::WeakLifetime lifetime;
+	std::string title;
+	std::string message;
+
+public:
+	FrameMainBackgroundRunner(FrameMain *frame, agi::ui::WeakLifetime lifetime, std::string title, std::string message)
+	: frame(frame)
+	, lifetime(std::move(lifetime))
+	, title(std::move(title))
+	, message(std::move(message))
+	{
+	}
+
+	void Run(std::function<void(agi::ProgressSink *)> task) override {
+		agi::ui::MainInvoke([this, task = std::move(task)]() mutable {
+			if (!lifetime.lock()) {
+				agi::detail::InlineBackgroundRunner fallback;
+				fallback.Run(std::move(task));
+				return;
+			}
+
+			DialogProgress dialog(frame, to_wx(title), to_wx(message));
+			dialog.Run(std::move(task));
+		});
+	}
+};
+
+class FrameMainBackgroundRunnerFactory final : public agi::BackgroundRunnerFactory {
+	FrameMain *frame = nullptr;
+	agi::ui::WeakLifetime lifetime;
+
+public:
+	FrameMainBackgroundRunnerFactory(FrameMain *frame, agi::ui::WeakLifetime lifetime)
+	: frame(frame)
+	, lifetime(std::move(lifetime))
+	{
+	}
+
+	std::unique_ptr<agi::BackgroundRunner> Create(std::string const& title, std::string const& message) override {
+		return agi::make_unique<FrameMainBackgroundRunner>(frame, lifetime, title, message);
 	}
 };
 }
@@ -148,6 +310,9 @@ FrameMain::FrameMain()
 	context->parent = this;
 	context->frame = this;
 	context->statusSink = std::make_shared<FrameMainStatusSink>(this, GetAsyncUiLifetime());
+	context->notificationSink = std::make_shared<FrameMainNotificationSink>(this, GetAsyncUiLifetime());
+	context->interactionSink = std::make_shared<FrameMainInteractionSink>(this, GetAsyncUiLifetime());
+	context->backgroundRunnerFactory = std::make_shared<FrameMainBackgroundRunnerFactory>(this, GetAsyncUiLifetime());
 
 	StartupLog("Apply saved Maximized state");
 	if (OPT_GET("App/Maximized")->GetBool()) Maximize(true);

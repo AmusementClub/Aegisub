@@ -24,7 +24,6 @@
 #include "base_grid.h"
 #include "charset_detect.h"
 #include "compat.h"
-#include "dialog_progress.h"
 #include "dialogs.h"
 #include "format.h"
 #include "include/aegisub/context.h"
@@ -34,6 +33,7 @@
 #include "selection_controller.h"
 #include "subs_controller.h"
 #include "transient_font_set.h"
+#include "ui_services.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "utils.h"
 #include "video_controller.h"
@@ -50,7 +50,6 @@
 #include <libaegisub/string_utils.h>
 
 #include <filesystem>
-#include <wx/msgdlg.h>
 
 namespace {
 bool transient_font_environment_matches(std::shared_ptr<const TransientFontSet> const& left, std::shared_ptr<const TransientFontSet> const& right) {
@@ -121,7 +120,7 @@ void Project::RefreshSubtitlesProvider(bool recreate_provider) {
 	try {
 		if (recreate_provider) {
 			video_provider->ReplaceSubtitlesProvider(SubtitlesProviderFactory::GetProvider({
-				progress,
+				GetProgressRunner(),
 				context->ass->GetTransientFonts()
 			}));
 		}
@@ -152,12 +151,22 @@ void Project::ReloadVideo() {
 	}
 }
 
-void Project::ShowError(wxString const& message) {
-	wxMessageBox(message, "Error loading file", wxOK | wxICON_ERROR | wxCENTER, context->parent);
+agi::BackgroundRunner *Project::GetProgressRunner(std::string const& title, std::string const& message) {
+	if (!progress_runner)
+		progress_runner = context->CreateBackgroundRunner(title, message);
+	return progress_runner.get();
 }
 
-void Project::ShowError(std::string const& message) {
-	ShowError(to_wx(message));
+void Project::ShowError(wxString const& message, std::string const& title) {
+	context->ShowError(from_wx(message), title);
+}
+
+void Project::ShowError(std::string const& message, std::string const& title) {
+	context->ShowError(message, title);
+}
+
+void Project::ShowWarning(std::string const& message, std::string const& title) {
+	context->ShowWarning(message, title);
 }
 
 void Project::SetPath(agi::fs::path& var, const char *token, const char *mru, agi::fs::path const& value) {
@@ -282,7 +291,12 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 		if (keyframes != keyframes_file)
 			append_file(keyframes, _("Unload keyframes"), _("Load keyframes file: %s"));
 
-		if (wxMessageBox(str, _("(Un)Load files?"), wxYES_NO | wxCENTRE, context->parent) != wxYES)
+		if (context->RequestInteraction({
+			from_wx(_("(Un)Load files?")),
+			from_wx(str),
+			agi::InteractionButtons::YesNo,
+			agi::InteractionIcon::Question
+		}) != agi::InteractionResult::Yes)
 			return;
 	}
 
@@ -331,12 +345,9 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 		return ShowError(_("The audio file was not found: ") + to_wx(access_error));
 	}
 
-	if (!progress)
-		progress = new DialogProgress(context->parent);
-
 	try {
 		try {
-			audio_provider = GetAudioProvider(path, *context->path, progress);
+			audio_provider = GetAudioProvider(path, *context->path, GetProgressRunner());
 		}
 		catch (agi::UserCancelException const&) { return; }
 		catch (...) {
@@ -384,16 +395,13 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 		return false;
 	}
 
-	if (!progress)
-		progress = new DialogProgress(context->parent);
-
 	try {
 		auto old_matrix = context->ass->GetScriptInfo("YCbCr Matrix");
 		video_provider = agi::make_unique<AsyncVideoProvider>(
 			path,
 			old_matrix,
 			context->videoController.get(),
-			progress,
+			GetProgressRunner(),
 			context->ass->GetTransientFonts(),
 			context->videoController->GetAsyncUiLifetime());
 	}
@@ -423,7 +431,7 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 
 	std::string warning = video_provider->GetWarning();
 	if (!warning.empty())
-		wxMessageBox(to_wx(warning), "Warning", wxICON_WARNING | wxOK);
+		ShowWarning(warning, "Warning");
 
 	video_has_subtitles = false;
 	if (agi::fs::HasExtension(path, "mkv"))

@@ -28,6 +28,7 @@
 #include "status_sink.h"
 #include "subs_controller.h"
 #include "text_selection_controller.h"
+#include "ui_services.h"
 #include "video_controller.h"
 
 #include <libaegisub/make_unique.h>
@@ -47,6 +48,9 @@ Context::Context()
 , search(make_unique<SearchReplaceEngine>(this))
 , path(make_unique<Path>(*config::path))
 , statusSink(std::make_shared<NullStatusSink>())
+, notificationSink(std::make_shared<NullNotificationSink>())
+, interactionSink(std::make_shared<NullInteractionSink>())
+, backgroundRunnerFactory(std::make_shared<InlineBackgroundRunnerFactory>())
 , dialog(make_unique<DialogManager>())
 {
 	subsController->SetSelectionController(selectionController.get());
@@ -61,5 +65,35 @@ std::shared_ptr<StatusSink> Context::GetStatusSink() const {
 void Context::ShowStatus(std::string const& message, int timeout_ms) const {
 	if (statusSink)
 		statusSink->ShowStatus(message, timeout_ms);
+}
+
+std::shared_ptr<NotificationSink> Context::GetNotificationSink() const {
+	return notificationSink;
+}
+
+void Context::ShowError(std::string const& message, std::string const& title) const {
+	if (notificationSink)
+		notificationSink->ShowError(title, message);
+}
+
+void Context::ShowWarning(std::string const& message, std::string const& title) const {
+	if (notificationSink)
+		notificationSink->ShowWarning(title, message);
+}
+
+std::shared_ptr<InteractionSink> Context::GetInteractionSink() const {
+	return interactionSink;
+}
+
+InteractionResult Context::RequestInteraction(InteractionRequest const& request) const {
+	if (interactionSink)
+		return interactionSink->Request(request);
+	return InteractionResult::Cancel;
+}
+
+std::unique_ptr<BackgroundRunner> Context::CreateBackgroundRunner(std::string const& title, std::string const& message) const {
+	if (backgroundRunnerFactory)
+		return backgroundRunnerFactory->Create(title, message);
+	return std::make_unique<detail::InlineBackgroundRunner>();
 }
 }

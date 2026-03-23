@@ -54,7 +54,6 @@
 #include <libaegisub/fs.h>
 #include <libaegisub/make_unique.h>
 
-#include <wx/msgdlg.h>
 #include <wx/choicdlg.h>
 
 namespace {
@@ -355,10 +354,10 @@ static void save_subtitles(agi::Context *c, agi::fs::path filename) {
 		c->subsController->Save(filename);
 	}
 	catch (const agi::Exception& err) {
-		wxMessageBox(to_wx(err.GetMessage()), "Error", wxOK | wxICON_ERROR | wxCENTER, c->parent);
+		c->ShowError(err.GetMessage());
 	}
 	catch (...) {
-		wxMessageBox("Unknown error", "Error", wxOK | wxICON_ERROR | wxCENTER, c->parent);
+		c->ShowError("Unknown error");
 	}
 }
 

@@ -12,12 +12,14 @@ namespace agi {
 class NotificationSink {
 public:
 	virtual ~NotificationSink() = default;
+	virtual void ShowInfo(std::string const& title, std::string const& message) = 0;
 	virtual void ShowError(std::string const& title, std::string const& message) = 0;
 	virtual void ShowWarning(std::string const& title, std::string const& message) = 0;
 };
 
 class NullNotificationSink final : public NotificationSink {
 public:
+	void ShowInfo(std::string const&, std::string const&) override { }
 	void ShowError(std::string const&, std::string const&) override { }
 	void ShowWarning(std::string const&, std::string const&) override { }
 };

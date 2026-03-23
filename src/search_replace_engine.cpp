@@ -18,6 +18,7 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "compat.h"
 #include "format.h"
 #include "include/aegisub/context.h"
 #include "selection_controller.h"
@@ -28,8 +29,6 @@
 #include <libaegisub/util.h>
 
 #include <boost/locale/conversion.hpp>
-
-#include <wx/msgdlg.h>
 
 namespace {
 static const size_t bad_pos = -1;
@@ -305,10 +304,10 @@ bool SearchReplaceEngine::ReplaceAll() {
 
 	if (count > 0) {
 		context->ass->Commit(_("replace"), AssFile::COMMIT_DIAG_TEXT);
-		wxMessageBox(fmt_plural(count, "One match was replaced.", "%d matches were replaced.", (int)count));
+		context->ShowInfo(from_wx(fmt_plural(count, "One match was replaced.", "%d matches were replaced.", (int)count)));
 	}
 	else {
-		wxMessageBox(_("No matches found."));
+		context->ShowInfo(from_wx(_("No matches found.")));
 	}
 
 	return true;

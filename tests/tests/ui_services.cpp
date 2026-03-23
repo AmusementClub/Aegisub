@@ -28,3 +28,11 @@ TEST(ui_services, inline_background_runner_executes_task) {
 
 	EXPECT_TRUE(ran);
 }
+
+TEST(ui_services, null_notification_sink_accepts_all_levels) {
+	agi::NullNotificationSink sink;
+
+	sink.ShowInfo("title", "message");
+	sink.ShowWarning("title", "message");
+	sink.ShowError("title", "message");
+}

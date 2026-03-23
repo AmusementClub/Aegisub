@@ -84,6 +84,7 @@ struct Context {
 	std::shared_ptr<StatusSink> GetStatusSink() const;
 	void ShowStatus(std::string const& message, int timeout_ms = 10000) const;
 	std::shared_ptr<NotificationSink> GetNotificationSink() const;
+	void ShowInfo(std::string const& message, std::string const& title = "Information") const;
 	void ShowError(std::string const& message, std::string const& title = "Error") const;
 	void ShowWarning(std::string const& message, std::string const& title = "Warning") const;
 	std::shared_ptr<InteractionSink> GetInteractionSink() const;

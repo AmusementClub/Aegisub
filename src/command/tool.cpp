@@ -46,7 +46,6 @@
 #include <libaegisub/path.h>
 #include <libaegisub/make_unique.h>
 
-#include <wx/msgdlg.h>
 #include <wx/utils.h>
 
 namespace {
@@ -210,7 +209,7 @@ struct tool_translation_assistant final : public Command {
 			c->dialog->ShowModal<DialogTranslation>(c);
 		}
 		catch (DialogTranslation::NothingToTranslate const&) {
-			wxMessageBox(_("There is nothing to translate in the file."));
+			c->ShowInfo(from_wx(_("There is nothing to translate in the file.")));
 		}
 	}
 };

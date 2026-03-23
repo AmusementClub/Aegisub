@@ -699,6 +699,29 @@ TEST(async_video_provider, get_frame_flushes_pending_subtitle_state) {
 	EXPECT_EQ(1, frame->data[1]);
 }
 
+TEST(async_video_provider, get_frame_bgra_returns_cpu_frame_when_native_mode_selected) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
+	ASSERT_EQ(SourceFrameOutputMode::Native, provider.GetSelectedSourceMode());
+	ASSERT_EQ(SourceFrameOutputMode::Native, video->output_mode);
+
+	auto frame = provider.GetFrameBgra(7, 7000, true);
+	ASSERT_TRUE(frame);
+	ASSERT_GE(frame->data.size(), 1u);
+	EXPECT_EQ(7, frame->data[0]);
+	EXPECT_EQ(SourceFrameOutputMode::Native, provider.GetSelectedSourceMode());
+	EXPECT_EQ(SourceFrameOutputMode::Native, video->output_mode);
+}
+
 TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *subs = new FakeOverlaySubtitlesProvider;

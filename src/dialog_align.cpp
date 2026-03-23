@@ -63,7 +63,6 @@ namespace {
 		AsyncVideoProvider* provider;
 
 		wxImage preview_image;
-		VideoFrame current_frame;
 		int current_n_frame;
 
 		ImagePositionPicker* preview_frame;
@@ -95,8 +94,13 @@ namespace {
 		auto maximized = OPT_GET("Tool/Align to Video/Maximized")->GetBool();
 
 		current_n_frame = context->videoController->GetFrameN();
-		current_frame = *context->project->VideoProvider()->GetFrame(current_n_frame, 0, true);
-		preview_image = GetImage(current_frame);
+		auto frame = provider->GetFrameBgra(
+			current_n_frame,
+			context->project->Timecodes().TimeAtFrame(current_n_frame),
+			true);
+		if (!frame || frame->data.empty())
+			throw agi::InternalError("Could not retrieve a BGRA preview frame for key-point alignment.");
+		preview_image = GetImage(*frame);
 
 		preview_frame = new ImagePositionPicker(this, preview_image, [&](int x, int y, unsigned char r, unsigned char g, unsigned char b) -> void {
 			selected_x->ChangeValue(wxString::Format(wxT("%i"), x));
@@ -286,10 +290,14 @@ namespace {
 		rgb2lab(r, g, b, lab);
 
 		int pos = current_n_frame;
-		auto frame = provider->GetFrame(pos, -1, true);
+		auto frame = provider->GetFrameBgra(pos, -1, true);
+		if (!frame || frame->data.empty()) {
+			wxMessageBox(_("Could not retrieve a CPU-readable frame for key-point alignment."));
+			return;
+		}
 		auto view = interleaved_view(frame->width, frame->height, reinterpret_cast<boost::gil::bgra8_pixel_t*>(frame->data.data()), frame->pitch);
 		if (frame->flipped)
-			y = frame->height - y;
+			y = frame->height - 1 - y;
 
 		// Ensure selected color and position match
 		if(!check_point(*view.at(x,y), lab, tolerance))
@@ -330,10 +338,12 @@ namespace {
 
 	bool DialogAlignToVideo::check_exists(int pos, int x, int y, int* lrud, double* orig, unsigned char tolerance)
 	{
-		auto frame = provider->GetFrame(pos, -1, true);
+		auto frame = provider->GetFrameBgra(pos, -1, true);
+		if (!frame || frame->data.empty())
+			return false;
 		auto view = interleaved_view(frame->width, frame->height, reinterpret_cast<boost::gil::bgra8_pixel_t*>(frame->data.data()), frame->pitch);
 		if (frame->flipped)
-			y = frame->height - y;
+			y = frame->height - 1 - y;
 		int actual[4];
 		if (!calculate_point(view, x, y, orig, tolerance, actual)) return false;
 		int dl = abs(actual[0] - lrud[0]);

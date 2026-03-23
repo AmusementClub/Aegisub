@@ -152,7 +152,7 @@ TEST(lagi_fs, has_extension) {
 	EXPECT_TRUE(HasExtension("foo.TXT", "txt"));
 	EXPECT_TRUE(HasExtension("foo.tar.gz", "gz"));
 	EXPECT_TRUE(HasExtension("foo.tar.gz", "tar.gz"));
-	EXPECT_TRUE(HasExtension("foo.\xC3\x9F", "\xC3\x9F")); // sharp s
+	EXPECT_TRUE(HasExtension(PathFromString("foo.\xC3\x9F"), "\xC3\x9F")); // sharp s
 
 	EXPECT_FALSE(HasExtension("foo.tx", "txt"));
 	EXPECT_FALSE(HasExtension("footxt", "txt"));

@@ -41,6 +41,11 @@ jobs:
       with:
         dotnet-version: 10.0.x
 
+    - name: prepare dependencies
+      shell: pwsh
+      run: |
+        dotnet build/package-win-portable.cs -- --mode prepare-dependency --cache-dir .cache/package-win-portable
+
     - name: restore vcpkg installed cache
       id: restore-vcpkg-installed
       uses: actions/cache/restore@v5
@@ -50,33 +55,16 @@ jobs:
         restore-keys: |
           windows-vcpkg-installed-x64-windows-release-
 
-    - name: cache portable dependencies
-      uses: actions/cache@v5
-      with:
-        path: .cache/package-win-portable
-        key: portable-deps-${{ runner.os }}-${{ hashFiles('build/package-win-portable.cs', 'build/package-win-portable.thirdparty.json') }}
-        restore-keys: |
-          portable-deps-${{ runner.os }}-
-
     - name: bootstrap vcpkg
       shell: pwsh
       run: |
         & "$env:PROJECT_VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
 
-    - name: install vcpkg dependencies
+    - name: build
+      id: build
       shell: pwsh
       run: |
-        New-Item -ItemType Directory -Force -Path $env:PROJECT_VCPKG_INSTALLED_ROOT | Out-Null
-        & "$env:PROJECT_VCPKG_ROOT\vcpkg.exe" install `
-          --triplet $env:VCPKG_DEFAULT_TRIPLET `
-          --clean-after-build `
-          --x-install-root "$env:PROJECT_VCPKG_INSTALLED_ROOT" `
-          --x-manifest-root "$env:GITHUB_WORKSPACE"
-
-    - name: prepare portable dependencies
-      shell: pwsh
-      run: |
-        dotnet build/package-win-portable.cs -- --mode prepare-dependency --cache-dir .cache/package-win-portable
+        ./build/build-win-vcpkg.ps1 -Mode build -VcpkgRoot $env:PROJECT_VCPKG_ROOT -VcpkgInstalledRoot $env:PROJECT_VCPKG_INSTALLED_ROOT
 
     - name: save vcpkg installed cache
       if: success() && steps.restore-vcpkg-installed.outputs.cache-hit != 'true'
@@ -84,12 +72,6 @@ jobs:
       with:
         path: ${{ env.PROJECT_VCPKG_INSTALLED_ROOT }}
         key: ${{ steps.restore-vcpkg-installed.outputs.cache-primary-key }}
-
-    - name: build
-      id: build
-      shell: pwsh
-      run: |
-        ./build/build-win-vcpkg.ps1 -Mode build -VcpkgRoot $env:PROJECT_VCPKG_ROOT -VcpkgInstalledRoot $env:PROJECT_VCPKG_INSTALLED_ROOT
 
     - name: test
       id: test

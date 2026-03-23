@@ -31,6 +31,8 @@
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 
+#include <cmath>
+
 enum {
 	NEW_SUBS_FILE = -1,
 	SUBS_FILE_ALREADY_LOADED = -2
@@ -109,6 +111,123 @@ std::shared_ptr<SubtitleOverlayStorage> acquire_compatibility_overlay_buffer(
 	if (!slot)
 		slot = std::make_shared<SubtitleOverlayStorage>();
 	return slot;
+}
+
+struct KeyPointLabColor {
+	double l = 0.0;
+	double a = 0.0;
+	double b = 0.0;
+};
+
+struct KeyPointBounds {
+	int left = 0;
+	int right = 0;
+	int up = 0;
+	int down = 0;
+};
+
+void BgrToLab(unsigned char b, unsigned char g, unsigned char r, KeyPointLabColor& lab) {
+	double X = (0.412453 * r + 0.357580 * g + 0.180423 * b) / 255.0;
+	double Y = (0.212671 * r + 0.715160 * g + 0.072169 * b) / 255.0;
+	double Z = (0.019334 * r + 0.119193 * g + 0.950227 * b) / 255.0;
+	double xr = X / 0.950456;
+	double yr = Y / 1.000;
+	double zr = Z / 1.088854;
+
+	if (yr > 0.008856)
+		lab.l = 116.0 * std::pow(yr, 1.0 / 3.0) - 16.0;
+	else
+		lab.l = 903.3 * yr;
+
+	double fxr = xr > 0.008856 ? std::pow(xr, 1.0 / 3.0) : 7.787 * xr + 16.0 / 116.0;
+	double fyr = yr > 0.008856 ? std::pow(yr, 1.0 / 3.0) : 7.787 * yr + 16.0 / 116.0;
+	double fzr = zr > 0.008856 ? std::pow(zr, 1.0 / 3.0) : 7.787 * zr + 16.0 / 116.0;
+
+	lab.a = 500.0 * (fxr - fyr);
+	lab.b = 200.0 * (fyr - fzr);
+}
+
+bool NormalizeFrameY(VideoFrame const& frame, int y, int& normalized_y) {
+	int const height = static_cast<int>(frame.height);
+	if (y < 0 || y >= height)
+		return false;
+
+	normalized_y = frame.flipped ? height - 1 - y : y;
+	return normalized_y >= 0 && normalized_y < height;
+}
+
+unsigned char const* GetFramePixel(VideoFrame const& frame, int x, int y) {
+	return frame.data.data()
+		+ static_cast<size_t>(y) * frame.pitch
+		+ static_cast<size_t>(x) * 4;
+}
+
+bool KeyPointPixelMatches(
+	VideoFrame const& frame,
+	int x,
+	int y,
+	KeyPointLabColor const& reference,
+	unsigned char tolerance) {
+	auto const* pixel = GetFramePixel(frame, x, y);
+	KeyPointLabColor lab;
+	BgrToLab(pixel[0], pixel[1], pixel[2], lab);
+	double const delta_l = lab.l - reference.l;
+	double const delta_a = lab.a - reference.a;
+	double const delta_b = lab.b - reference.b;
+	double const distance = std::sqrt(
+		delta_l * delta_l
+		+ delta_a * delta_a
+		+ delta_b * delta_b);
+	return distance <= tolerance;
+}
+
+bool CalculateKeyPointBounds(
+	VideoFrame const& frame,
+	int x,
+	int y,
+	KeyPointLabColor const& reference,
+	unsigned char tolerance,
+	KeyPointBounds& bounds) {
+	int const width = static_cast<int>(frame.width);
+	int const height = static_cast<int>(frame.height);
+	if (x < 0 || x >= width)
+		return false;
+
+	int normalized_y = 0;
+	if (!NormalizeFrameY(frame, y, normalized_y))
+		return false;
+
+	if (!KeyPointPixelMatches(frame, x, normalized_y, reference, tolerance))
+		return false;
+
+	int left = x;
+	while (left > 0 && KeyPointPixelMatches(frame, left - 1, normalized_y, reference, tolerance))
+		--left;
+
+	int right = x;
+	while (right + 1 < width && KeyPointPixelMatches(frame, right + 1, normalized_y, reference, tolerance))
+		++right;
+
+	int up = normalized_y;
+	while (up > 0 && KeyPointPixelMatches(frame, x, up - 1, reference, tolerance))
+		--up;
+
+	int down = normalized_y;
+	while (down + 1 < height && KeyPointPixelMatches(frame, x, down + 1, reference, tolerance))
+		++down;
+
+	bounds = { left, right, up, down };
+	return true;
+}
+
+bool BoundsWithinTolerance(
+	KeyPointBounds const& lhs,
+	KeyPointBounds const& rhs,
+	int tolerance) {
+	return std::abs(lhs.left - rhs.left) <= tolerance
+		&& std::abs(lhs.right - rhs.right) <= tolerance
+		&& std::abs(lhs.up - rhs.up) <= tolerance
+		&& std::abs(lhs.down - rhs.down) <= tolerance;
 }
 }
 
@@ -568,6 +687,118 @@ std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrameBgra(int frame, double t
 		ret = ProcRenderPacket(frame, time, raw, true).DisplayFrame();
 	});
 	return ret;
+}
+
+KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanRequest const& request) {
+	KeyPointRangeScanResult result;
+	worker->Sync([&] {
+		while (ProcessPending()) { }
+
+		int const frame_count = source_provider->GetFrameCount();
+		int const width = source_provider->GetWidth();
+		int const height = source_provider->GetHeight();
+		if (request.frame < 0
+			|| request.frame >= frame_count
+			|| request.x < 0
+			|| request.x >= width
+			|| request.y < 0
+			|| request.y >= height
+			|| request.scan_step <= 0
+			|| request.bounds_tolerance < 0) {
+			result.status = KeyPointRangeScanStatus::InvalidRequest;
+			return;
+		}
+
+		KeyPointLabColor reference;
+		BgrToLab(request.b, request.g, request.r, reference);
+
+		VideoFrame frame;
+		auto probe_frame = [&](int frame_number, KeyPointBounds& bounds) -> KeyPointRangeScanStatus {
+			try {
+				source_provider->GetFrame(frame_number, frame);
+			}
+			catch (VideoProviderError const&) {
+				return KeyPointRangeScanStatus::FrameUnavailable;
+			}
+
+			if (frame.data.empty()
+				|| frame.width == 0
+				|| frame.height == 0
+				|| frame.pitch < frame.width * 4
+				|| frame.data.size() < frame.pitch * frame.height) {
+				return KeyPointRangeScanStatus::FrameUnavailable;
+			}
+
+			return CalculateKeyPointBounds(frame, request.x, request.y, reference, request.tolerance, bounds)
+				? KeyPointRangeScanStatus::Success
+				: KeyPointRangeScanStatus::AnchorMismatch;
+		};
+
+		KeyPointBounds anchor_bounds;
+		result.status = probe_frame(request.frame, anchor_bounds);
+		if (result.status != KeyPointRangeScanStatus::Success)
+			return;
+
+		int left = request.frame;
+		int right = request.frame;
+
+		int missing_left = -1;
+		for (int pos = request.frame - request.scan_step; pos >= 0; pos -= request.scan_step) {
+			KeyPointBounds bounds;
+			auto const status = probe_frame(pos, bounds);
+			if (status != KeyPointRangeScanStatus::Success
+				|| !BoundsWithinTolerance(bounds, anchor_bounds, request.bounds_tolerance)) {
+				if (status == KeyPointRangeScanStatus::FrameUnavailable) {
+					result.status = status;
+					return;
+				}
+				missing_left = pos;
+				break;
+			}
+			left = pos;
+		}
+		if (request.scan_step == 2 && missing_left >= 0) {
+			int const candidate = left - 1;
+			if (candidate > missing_left) {
+				KeyPointBounds bounds;
+				if (probe_frame(candidate, bounds) == KeyPointRangeScanStatus::Success
+					&& BoundsWithinTolerance(bounds, anchor_bounds, request.bounds_tolerance)) {
+					left = candidate;
+				}
+			}
+		}
+
+		int missing_right = -1;
+		for (int pos = request.frame + request.scan_step; pos < frame_count; pos += request.scan_step) {
+			KeyPointBounds bounds;
+			auto const status = probe_frame(pos, bounds);
+			if (status != KeyPointRangeScanStatus::Success
+				|| !BoundsWithinTolerance(bounds, anchor_bounds, request.bounds_tolerance)) {
+				if (status == KeyPointRangeScanStatus::FrameUnavailable) {
+					result.status = status;
+					return;
+				}
+				missing_right = pos;
+				break;
+			}
+			right = pos;
+		}
+		if (request.scan_step == 2 && missing_right >= 0) {
+			int const candidate = right + 1;
+			if (candidate < missing_right && candidate < frame_count) {
+				KeyPointBounds bounds;
+				if (probe_frame(candidate, bounds) == KeyPointRangeScanStatus::Success
+					&& BoundsWithinTolerance(bounds, anchor_bounds, request.bounds_tolerance)) {
+					right = candidate;
+				}
+			}
+		}
+
+		result.status = KeyPointRangeScanStatus::Success;
+		result.left = left;
+		result.right = right;
+	});
+	return result;
 }
 
 bool AsyncVideoProvider::ReconfigureSourceOutputMode() {

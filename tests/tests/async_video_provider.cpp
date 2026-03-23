@@ -21,6 +21,7 @@
 #include <cstdint>
 #include <cstring>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 
 namespace {
@@ -44,6 +45,7 @@ class FakeVideoProvider final : public VideoProvider {
 public:
 	int frame_width = 2;
 	int frame_height = 2;
+	bool bgra_flipped = false;
 	std::string color_space = "BT.709";
 	std::string real_color_space = "BT.709";
 	SourceFrameNativeFormatIdentity native_format = { };
@@ -52,6 +54,7 @@ public:
 	SourceFrameGeometry native_geometry = MakeDefaultSourceFrameGeometry(2, 2);
 	std::vector<SourceFrameOutputMode> available_modes = { SourceFrameOutputMode::Bgra8 };
 	SourceFrameOutputMode output_mode = SourceFrameOutputMode::Bgra8;
+	std::function<void(int, VideoFrame&)> fill_frame;
 
 	explicit FakeVideoProvider(std::shared_ptr<VideoProviderState> state)
 	: state(std::move(state)) {
@@ -78,9 +81,11 @@ public:
 		frame.width = frame_width;
 		frame.height = frame_height;
 		frame.pitch = static_cast<size_t>(frame_width) * 4;
-		frame.flipped = false;
+		frame.flipped = bgra_flipped;
 		frame.data.assign(frame.pitch * frame.height, 0);
 		frame.data[0] = static_cast<unsigned char>(n);
+		if (fill_frame)
+			fill_frame(n, frame);
 	}
 
 	void SetColorSpace(std::string const& matrix) override { color_space = matrix; }
@@ -720,6 +725,98 @@ TEST(async_video_provider, get_frame_bgra_returns_cpu_frame_when_native_mode_sel
 	EXPECT_EQ(7, frame->data[0]);
 	EXPECT_EQ(SourceFrameOutputMode::Native, provider.GetSelectedSourceMode());
 	EXPECT_EQ(SourceFrameOutputMode::Native, video->output_mode);
+}
+
+TEST(async_video_provider, find_key_point_range_scans_frames_inside_worker) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 4;
+	video->frame_height = 4;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		auto set_pixel = [&](int x, int y, unsigned char b, unsigned char g, unsigned char r) {
+			size_t base = static_cast<size_t>(y) * frame.pitch + static_cast<size_t>(x) * 4;
+			frame.data[base + 0] = b;
+			frame.data[base + 1] = g;
+			frame.data[base + 2] = r;
+			frame.data[base + 3] = 255;
+		};
+
+		if (n >= 4 && n <= 8) {
+			set_pixel(1, 1, 40, 80, 120);
+			set_pixel(0, 1, 40, 80, 120);
+			set_pixel(2, 1, 40, 80, 120);
+			set_pixel(1, 0, 40, 80, 120);
+			set_pixel(1, 2, 40, 80, 120);
+		}
+	};
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto result = provider.FindKeyPointRange({
+		5,
+		1,
+		1,
+		120,
+		80,
+		40,
+		0,
+		2,
+		0
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_EQ(4, result.left);
+	EXPECT_EQ(8, result.right);
+	EXPECT_EQ((std::vector<int>{ 5, 3, 4, 7, 9, 8 }), state->requested_frames);
+}
+
+TEST(async_video_provider, find_key_point_range_respects_flipped_frame_coordinates) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 3;
+	video->frame_height = 3;
+	video->bgra_flipped = true;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		auto set_pixel = [&](int x, int y, unsigned char b, unsigned char g, unsigned char r) {
+			size_t base = static_cast<size_t>(y) * frame.pitch + static_cast<size_t>(x) * 4;
+			frame.data[base + 0] = b;
+			frame.data[base + 1] = g;
+			frame.data[base + 2] = r;
+			frame.data[base + 3] = 255;
+		};
+
+		if (n >= 2 && n <= 4) {
+			set_pixel(1, 2, 10, 30, 90);
+			set_pixel(0, 2, 10, 30, 90);
+			set_pixel(2, 2, 10, 30, 90);
+		}
+	};
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto result = provider.FindKeyPointRange({
+		3,
+		1,
+		0,
+		90,
+		30,
+		10,
+		0,
+		2,
+		0
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_EQ(2, result.left);
+	EXPECT_EQ(4, result.right);
 }
 
 TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {

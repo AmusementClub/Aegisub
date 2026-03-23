@@ -43,19 +43,12 @@
 #include "colour_button.h"
 #include "image_position_picker.h"
 
-#include <cmath>
-
 #include <libaegisub/ass/time.h>
 #include <libaegisub/vfr.h>
 
 #include <wx/dialog.h>
 #include <wx/sizer.h>
 #include <wx/textctrl.h>
-#if BOOST_VERSION >= 106900
-#include <boost/gil.hpp>
-#else
-#include <boost/gil.hpp>
-#endif
 
 namespace {
 	class DialogAlignToVideo final : public wxDialog {
@@ -74,7 +67,6 @@ namespace {
 		void update_from_textbox();
 		void update_from_textbox(wxCommandEvent&);
 
-		bool check_exists(int pos, int x, int y, int* lrud, double* orig, unsigned char tolerance);
 		void process(wxEvent&);
 	public:
 		DialogAlignToVideo(agi::Context* context);
@@ -158,108 +150,8 @@ namespace {
 		OPT_SET("Tool/Align to Video/Tolerance")->SetInt(lt);
 	}
 
-	void rgb2lab(unsigned char r, unsigned char g, unsigned char b, double* lab)
-	{
-		double X = (0.412453 * r + 0.357580 * g + 0.180423 * b) / 255.0;
-		double Y = (0.212671 * r + 0.715160 * g + 0.072169 * b) / 255.0;
-		double Z = (0.019334 * r + 0.119193 * g + 0.950227 * b) / 255.0;
-		double xr = X / 0.950456, yr = Y / 1.000, zr = Z / 1.088854;
-
-		if (yr > 0.008856) {
-			lab[0] = 116.0 * pow(yr, 1.0 / 3.0) - 16.0;
-		}
-		else {
-			lab[0] = 903.3 * yr;
-		}
-
-		double fxr, fyr, fzr;
-		if (xr > 0.008856)
-			fxr = pow(xr, 1.0 / 3.0);
-		else
-			fxr = 7.787 * xr + 16.0 / 116.0;
-
-		if (yr > 0.008856)
-			fyr = pow(yr, 1.0 / 3.0);
-		else
-			fyr = 7.787 * yr + 16.0 / 116.0;
-
-		if (zr > 0.008856)
-			fzr = pow(zr, 1.0 / 3.0);
-		else
-			fzr = 7.787 * zr + 16.0 / 116.0;
-
-		lab[1] = 500.0 * (fxr - fyr);
-		lab[2] = 200.0 * (fyr - fzr);
-	}
-
-	template<typename T>
-	bool check_point(boost::gil::pixel<unsigned char, T> & pixel, double orig[3], unsigned char tolerance)
-	{
-		double lab[3];
-		// in pixel: B,G,R
-		rgb2lab(pixel[2], pixel[1], pixel[0], lab);
-		auto diff = sqrt(pow(lab[0] - orig[0], 2) + pow(lab[1] - orig[1], 2) + pow(lab[2] - orig[2], 2));
-		return diff <= tolerance;
-	}
-
-	template<typename T>
-	bool calculate_point(boost::gil::image_view<T> view, int x, int y, double orig[3], unsigned char tolerance, int* ret)
-	{
-		auto origin = *view.at(x, y);
-		if (!check_point(origin, orig, tolerance))
-			return false;
-		auto w = view.width();
-		auto h = view.height();
-		int l = x, r = x, u = y, d = y;
-		for (int i = x + 1; i < w; i++)
-		{
-			auto p = *view.at(i, y);
-			if (!check_point(p, orig, tolerance))
-			{
-				r = i;
-				break;
-			}
-		}
-
-		for (int i = x - 1; i >= 0; i--)
-		{
-			auto p = *view.at(i, y);
-			if (!check_point(p, orig, tolerance))
-			{
-				l = i;
-				break;
-			}
-		}
-
-		for (int i = y + 1; i < h; i++)
-		{
-			auto p = *view.at(x, i);
-			if (!check_point(p, orig, tolerance))
-			{
-				d = i;
-				break;
-			}
-		}
-
-		for (int i = y - 1; i >= 0; i--)
-		{
-			auto p = *view.at(x, i);
-			if (!check_point(p, orig, tolerance))
-			{
-				u = i;
-				break;
-			}
-		}
-		ret[0] = l;
-		ret[1] = r;
-		ret[2] = u;
-		ret[3] = d;
-		return true;
-	}
-
 	void DialogAlignToVideo::process(wxEvent &)
 	{
-		auto n_frames = provider->GetFrameCount();
 		auto w = provider->GetWidth();
 		auto h = provider->GetHeight();
 
@@ -286,72 +178,40 @@ namespace {
 		auto r = color.r;
 		auto b = color.b;
 		auto g = color.g;
-		double lab[3];
-		rgb2lab(r, g, b, lab);
-
-		int pos = current_n_frame;
-		auto frame = provider->GetFrameBgra(pos, -1, true);
-		if (!frame || frame->data.empty()) {
+		auto scan = provider->FindKeyPointRange({
+			current_n_frame,
+			x,
+			y,
+			r,
+			g,
+			b,
+			tolerance,
+			2,
+			5
+		});
+		if (scan.status == KeyPointRangeScanStatus::FrameUnavailable) {
 			wxMessageBox(_("Could not retrieve a CPU-readable frame for key-point alignment."));
 			return;
 		}
-		auto view = interleaved_view(frame->width, frame->height, reinterpret_cast<boost::gil::bgra8_pixel_t*>(frame->data.data()), frame->pitch);
-		if (frame->flipped)
-			y = frame->height - 1 - y;
-
-		// Ensure selected color and position match
-		if(!check_point(*view.at(x,y), lab, tolerance))
-		{
+		if (scan.status == KeyPointRangeScanStatus::AnchorMismatch) {
 			wxMessageBox(_("Selected position and color are not within tolerance!"));
 			return;
 		}
-
-		int lrud[4];
-		calculate_point(view, x, y, lab, tolerance, lrud);
-
-		// find forward
-#define CHECK_EXISTS_POS check_exists(pos, x, y, lrud, lab, tolerance)
-		do {
-			pos -= 2;
-		} while (pos >= 0 && CHECK_EXISTS_POS);
-		pos++;
-		pos = std::max(0, pos);
-		auto left = CHECK_EXISTS_POS ? pos : pos + 1;
-
-		pos = current_n_frame;
-		do {
-			pos += 2;
-		} while (pos < n_frames && CHECK_EXISTS_POS);
-		pos--;
-		pos = std::min(pos, n_frames - 1);
-		auto right = CHECK_EXISTS_POS ? pos : pos - 1;
+		if (scan.status != KeyPointRangeScanStatus::Success) {
+			wxMessageBox(_("Could not scan the requested key point range."));
+			return;
+		}
 
 		auto timecode = context->project->Timecodes();
 		auto line = context->selectionController->GetActiveLine();
-		line->Start = timecode.TimeAtFrame(left, agi::vfr::Time::START);
-		line->End = timecode.TimeAtFrame(right, agi::vfr::Time::END); // exclusive
+		if (!line) {
+			wxMessageBox(_("No active subtitle line is selected."));
+			return;
+		}
+		line->Start = timecode.TimeAtFrame(scan.left, agi::vfr::Time::START);
+		line->End = timecode.TimeAtFrame(scan.right, agi::vfr::Time::END); // exclusive
 		context->ass->Commit(_("Align to video by key point"), AssFile::COMMIT_DIAG_TIME);
 		Close();
-	}
-
-
-
-	bool DialogAlignToVideo::check_exists(int pos, int x, int y, int* lrud, double* orig, unsigned char tolerance)
-	{
-		auto frame = provider->GetFrameBgra(pos, -1, true);
-		if (!frame || frame->data.empty())
-			return false;
-		auto view = interleaved_view(frame->width, frame->height, reinterpret_cast<boost::gil::bgra8_pixel_t*>(frame->data.data()), frame->pitch);
-		if (frame->flipped)
-			y = frame->height - 1 - y;
-		int actual[4];
-		if (!calculate_point(view, x, y, orig, tolerance, actual)) return false;
-		int dl = abs(actual[0] - lrud[0]);
-		int dr = abs(actual[1] - lrud[1]);
-		int du = abs(actual[2] - lrud[2]);
-		int dd = abs(actual[3] - lrud[3]);
-
-		return dl <= 5 && dr <= 5 && du <= 5 && dd <= 5;
 	}
 
 	void DialogAlignToVideo::update_from_textbox()

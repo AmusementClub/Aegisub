@@ -199,6 +199,7 @@ void PlaceboRendererGL::DestroyTargetResources() noexcept {
 	target_texture = nullptr;
 	target_width = 0;
 	target_height = 0;
+	target_framebuffer = 0;
 }
 
 void PlaceboRendererGL::DestroyResources() noexcept {
@@ -226,13 +227,19 @@ void PlaceboRendererGL::Reset() {
 }
 
 void PlaceboRendererGL::RecreateTargetTexture(int canvas_width, int canvas_height) {
-	if (target_texture && target_width == canvas_width && target_height == canvas_height)
+	GLint framebuffer = 0;
+	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &framebuffer);
+	auto const framebuffer_id = static_cast<unsigned int>(framebuffer);
+	if (target_texture
+		&& target_width == canvas_width
+		&& target_height == canvas_height
+		&& target_framebuffer == framebuffer_id)
 		return;
 
 	DestroyTargetResources();
 
 	struct pl_opengl_wrap_params params = {};
-	params.framebuffer = 0;
+	params.framebuffer = framebuffer_id;
 	params.width = canvas_width;
 	params.height = canvas_height;
 	target_texture = api->opengl_wrap(opengl->gpu, &params);
@@ -241,6 +248,7 @@ void PlaceboRendererGL::RecreateTargetTexture(int canvas_width, int canvas_heigh
 
 	target_width = canvas_width;
 	target_height = canvas_height;
+	target_framebuffer = framebuffer_id;
 }
 
 void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
@@ -334,7 +342,7 @@ void PlaceboRendererGL::RestoreCompatibilityState() noexcept {
 		if (functions->UseProgram)
 			functions->UseProgram(0);
 		if (functions->BindFramebuffer)
-			functions->BindFramebuffer(GL_FRAMEBUFFER, 0);
+			functions->BindFramebuffer(GL_FRAMEBUFFER, target_framebuffer);
 	}
 	glBindTexture(GL_TEXTURE_2D, 0);
 }

@@ -1,6 +1,7 @@
 #ifdef WITH_LIBPLACEBO
 
 #include "../../src/source_frame.h"
+#include "../../src/video_render_opengl_proc_loader.h"
 #include "../../src/video_renderer_placebo_gl.h"
 
 #include <libaegisub/exception.h>
@@ -32,8 +33,14 @@
 
 #ifdef HAVE_OPENGL_GL_H
 #include <OpenGL/gl.h>
+#include <OpenGL/glext.h>
 #else
 #include <GL/gl.h>
+#include <GL/glext.h>
+#endif
+
+#ifdef GetMessage
+#undef GetMessage
 #endif
 
 #ifndef WGL_CONTEXT_MAJOR_VERSION_ARB
@@ -252,6 +259,72 @@ public:
 		return flipped;
 	}
 };
+
+struct FramebufferFunctions {
+	PFNGLBINDFRAMEBUFFERPROC BindFramebuffer = nullptr;
+	PFNGLCHECKFRAMEBUFFERSTATUSPROC CheckFramebufferStatus = nullptr;
+	PFNGLDELETEFRAMEBUFFERSPROC DeleteFramebuffers = nullptr;
+	PFNGLFRAMEBUFFERTEXTURE2DPROC FramebufferTexture2D = nullptr;
+	PFNGLGENFRAMEBUFFERSPROC GenFramebuffers = nullptr;
+};
+
+FramebufferFunctions LoadFramebufferFunctions() {
+	FramebufferFunctions functions;
+	functions.BindFramebuffer = reinterpret_cast<PFNGLBINDFRAMEBUFFERPROC>(
+		opengl::GetProcAddress("glBindFramebuffer"));
+	if (!functions.BindFramebuffer) {
+		functions.BindFramebuffer = reinterpret_cast<PFNGLBINDFRAMEBUFFERPROC>(
+			opengl::GetProcAddress("glBindFramebufferEXT"));
+	}
+
+	functions.CheckFramebufferStatus = reinterpret_cast<PFNGLCHECKFRAMEBUFFERSTATUSPROC>(
+		opengl::GetProcAddress("glCheckFramebufferStatus"));
+	if (!functions.CheckFramebufferStatus) {
+		functions.CheckFramebufferStatus = reinterpret_cast<PFNGLCHECKFRAMEBUFFERSTATUSPROC>(
+			opengl::GetProcAddress("glCheckFramebufferStatusEXT"));
+	}
+
+	functions.DeleteFramebuffers = reinterpret_cast<PFNGLDELETEFRAMEBUFFERSPROC>(
+		opengl::GetProcAddress("glDeleteFramebuffers"));
+	if (!functions.DeleteFramebuffers) {
+		functions.DeleteFramebuffers = reinterpret_cast<PFNGLDELETEFRAMEBUFFERSPROC>(
+			opengl::GetProcAddress("glDeleteFramebuffersEXT"));
+	}
+
+	functions.FramebufferTexture2D = reinterpret_cast<PFNGLFRAMEBUFFERTEXTURE2DPROC>(
+		opengl::GetProcAddress("glFramebufferTexture2D"));
+	if (!functions.FramebufferTexture2D) {
+		functions.FramebufferTexture2D = reinterpret_cast<PFNGLFRAMEBUFFERTEXTURE2DPROC>(
+			opengl::GetProcAddress("glFramebufferTexture2DEXT"));
+	}
+
+	functions.GenFramebuffers = reinterpret_cast<PFNGLGENFRAMEBUFFERSPROC>(
+		opengl::GetProcAddress("glGenFramebuffers"));
+	if (!functions.GenFramebuffers) {
+		functions.GenFramebuffers = reinterpret_cast<PFNGLGENFRAMEBUFFERSPROC>(
+			opengl::GetProcAddress("glGenFramebuffersEXT"));
+	}
+
+	return functions;
+}
+
+std::vector<unsigned char> ReadBackCurrentFramebufferRgbaTopLeft(int width, int height) {
+	glFinish();
+	glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+	std::vector<unsigned char> raw(static_cast<std::size_t>(width) * height * 4);
+	std::vector<unsigned char> flipped(static_cast<std::size_t>(width) * height * 4);
+	glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, raw.data());
+
+	std::size_t row_bytes = static_cast<std::size_t>(width) * 4;
+	for (int y = 0; y < height; ++y) {
+		auto const* src = raw.data() + static_cast<std::size_t>(height - 1 - y) * row_bytes;
+		auto* dst = flipped.data() + static_cast<std::size_t>(y) * row_bytes;
+		std::memcpy(dst, src, row_bytes);
+	}
+
+	return flipped;
+}
 
 struct FrameScenario {
 	std::string name;
@@ -699,6 +772,62 @@ std::vector<unsigned char> RenderFrameToRgbaTopLeft(
 	return window.ReadBackRgbaTopLeft();
 }
 
+std::vector<unsigned char> RenderFrameToRgbaTopLeftOffscreen(
+	HiddenGLWindow& window,
+	PlaceboRendererGL& renderer,
+	SourceFrame const& frame,
+	int width,
+	int height) {
+	window.MakeCurrent();
+
+	auto const functions = LoadFramebufferFunctions();
+	if (!functions.BindFramebuffer
+		|| !functions.CheckFramebufferStatus
+		|| !functions.DeleteFramebuffers
+		|| !functions.FramebufferTexture2D
+		|| !functions.GenFramebuffers) {
+		throw std::runtime_error("Required framebuffer functions are unavailable.");
+	}
+
+	GLint previous_framebuffer = 0;
+	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous_framebuffer);
+
+	GLuint framebuffer = 0;
+	GLuint texture = 0;
+	functions.GenFramebuffers(1, &framebuffer);
+	glGenTextures(1, &texture);
+
+	auto cleanup = [&] {
+		functions.BindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previous_framebuffer));
+		if (texture)
+			glDeleteTextures(1, &texture);
+		if (framebuffer)
+			functions.DeleteFramebuffers(1, &framebuffer);
+	};
+
+	functions.BindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+	glDrawBuffer(GL_COLOR_ATTACHMENT0);
+	glReadBuffer(GL_COLOR_ATTACHMENT0);
+	glBindTexture(GL_TEXTURE_2D, texture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+	functions.FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+	if (functions.CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
+		cleanup();
+		throw std::runtime_error("Offscreen framebuffer is incomplete.");
+	}
+
+	glViewport(0, 0, width, height);
+	renderer.UploadFrame(frame);
+	renderer.UploadOverlay(nullptr);
+	renderer.Render({ 0, 0, width, height }, width, height);
+	glReadBuffer(GL_COLOR_ATTACHMENT0);
+	auto pixels = ReadBackCurrentFramebufferRgbaTopLeft(width, height);
+	cleanup();
+	return pixels;
+}
+
 ValidationResult CompareRgbImages(
 	std::string name,
 	std::vector<unsigned char> const& reference,
@@ -780,6 +909,39 @@ bool RunValidationSuite() {
 		CompareRgbImages("bgra8/full", expected_pixels, bgra_pixels, 128, 72),
 		CompareRgbImages("yuv420p8/in", expected_pixels, yuv420p8_pixels, 128, 72, true),
 		CompareRgbImages("yuv420p10/in", expected_pixels, yuv420p10_pixels, 128, 72, true)
+	}};
+
+	bool passed = true;
+	for (auto const& result : results) {
+		PrintValidationResult(result);
+		if (result.max_abs_error > 4 || result.mean_abs_error > 1.0)
+			passed = false;
+	}
+
+	return passed;
+}
+
+bool RunOffscreenCaptureValidation() {
+	std::cout << "\nValidation for offscreen framebuffer capture\n";
+
+	auto bgra = MakeBgraScenario(128, 72);
+	auto yuv420p8 = MakeYuv420p8Scenario(128, 72);
+
+	HiddenGLWindow window(128, 72);
+	PlaceboRendererGL renderer;
+
+	auto bgra_default = RenderFrameToRgbaTopLeft(window, renderer, bgra.frame, bgra.width, bgra.height);
+	std::cout << "  rendered bgra8 to default framebuffer\n";
+	auto bgra_offscreen = RenderFrameToRgbaTopLeftOffscreen(window, renderer, bgra.frame, bgra.width, bgra.height);
+	std::cout << "  rendered bgra8 to offscreen framebuffer\n";
+	auto yuv420p8_default = RenderFrameToRgbaTopLeft(window, renderer, yuv420p8.frame, yuv420p8.width, yuv420p8.height);
+	std::cout << "  rendered yuv420p8 to default framebuffer\n";
+	auto yuv420p8_offscreen = RenderFrameToRgbaTopLeftOffscreen(window, renderer, yuv420p8.frame, yuv420p8.width, yuv420p8.height);
+	std::cout << "  rendered yuv420p8 to offscreen framebuffer\n";
+
+	std::array<ValidationResult, 2> results = {{
+		CompareRgbImages("bgra8/fbo", bgra_default, bgra_offscreen, 128, 72),
+		CompareRgbImages("yuv420p8/fbo", yuv420p8_default, yuv420p8_offscreen, 128, 72, true)
 	}};
 
 	bool passed = true;
@@ -1096,6 +1258,10 @@ int main() try {
 		std::cerr << "\nValidation failed: native render output drifted too far from rendered BGRA8 baseline.\n";
 		return 3;
 	}
+	if (!RunOffscreenCaptureValidation()) {
+		std::cerr << "\nValidation failed: offscreen framebuffer capture drifted from default framebuffer rendering.\n";
+		return 6;
+	}
 	if (!RunChromaLocationValidation()) {
 		std::cerr << "\nValidation failed: chroma siting propagation did not match expected libplacebo behavior.\n";
 		return 4;
@@ -1125,8 +1291,8 @@ catch (std::exception const& err) {
 	std::cerr << "placebo-render-bench failed: " << err.what() << std::endl;
 	return 2;
 }
-catch (agi::Exception const& err) {
-	std::cerr << "placebo-render-bench failed: " << err.GetMessage() << std::endl;
+catch (agi::Exception const&) {
+	std::cerr << "placebo-render-bench failed: agi::Exception" << std::endl;
 	return 2;
 }
 catch (...) {

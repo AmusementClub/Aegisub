@@ -52,6 +52,7 @@ class VisualToolBase;
 class wxComboBox;
 class wxTextCtrl;
 class wxToolBar;
+class wxImage;
 struct FrameReadyEvent;
 
 namespace agi {
@@ -140,6 +141,8 @@ class VideoDisplay final : public wxGLCanvas {
 	bool ApplyRendererSourceModePreference();
 	void OnRendererBackendChanged(agi::OptionValue const&);
 	void OnVideoProviderChanged(AsyncVideoProvider *provider);
+	wxImage CaptureCurrentRenderersImage();
+	wxImage CapturePacketImage(VideoRenderPacket const& packet);
 
 	/// @brief Set the size of the display based on the current zoom and video resolution
 	void UpdateSize();
@@ -174,6 +177,7 @@ public:
 
 	/// @brief Render the currently visible frame
 	void Render();
+	wxImage GetFrameImage(bool raw);
 
 	/// @brief Set the zoom level
 	/// @param value The new zoom level

@@ -57,6 +57,7 @@
 #include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 
+#include <wx/filedlg.h>
 #include <wx/textdlg.h>
 
 namespace {
@@ -284,8 +285,26 @@ struct video_focus_seek final : public validator_video_loaded {
 };
 
 wxImage get_image(agi::Context *c, bool raw) {
+	if (c->videoDisplay) {
+		auto image = c->videoDisplay->GetFrameImage(raw);
+		if (image.IsOk())
+			return image;
+	}
+
 	auto frame = c->videoController->GetFrameN();
-	return GetImage(*c->project->VideoProvider()->GetFrame(frame, c->project->Timecodes().TimeAtFrame(frame), raw));
+	auto bgra = c->project->VideoProvider()->GetFrameBgra(
+		frame,
+		c->project->Timecodes().TimeAtFrame(frame),
+		raw);
+	return bgra ? GetImage(*bgra) : wxImage();
+}
+
+bool require_image(agi::Context *c, bool raw, wxImage &image, char const *title) {
+	image = get_image(c, raw);
+	if (image.IsOk())
+		return true;
+	c->ShowError(from_wx(_("Could not capture the requested video frame.")), title);
+	return false;
 }
 
 struct video_frame_copy final : public validator_video_loaded {
@@ -295,7 +314,10 @@ struct video_frame_copy final : public validator_video_loaded {
 	STR_HELP("Copy the currently displayed frame to the clipboard")
 
 	void operator()(agi::Context *c) override {
-		SetClipboard(wxBitmap(get_image(c, false), 24));
+		wxImage image;
+		if (!require_image(c, false, image, "Copy Image"))
+			return;
+		SetClipboard(wxBitmap(image, 24));
 	}
 };
 
@@ -306,7 +328,10 @@ struct video_frame_copy_raw final : public validator_video_loaded {
 	STR_HELP("Copy the currently displayed frame to the clipboard, without the subtitles")
 
 	void operator()(agi::Context *c) override {
-		SetClipboard(wxBitmap(get_image(c, true), 24));
+		wxImage image;
+		if (!require_image(c, true, image, "Copy Image"))
+			return;
+		SetClipboard(wxBitmap(image, 24));
 	}
 };
 
@@ -489,7 +514,28 @@ static void save_snapshot(agi::Context *c, bool raw) {
 		path = base_dir / agi::fs::PathFromString(agi::format("%s_%03d_%d.png", base_name, session_shot_count++, c->videoController->GetFrameN()));
 	} while (agi::fs::FileExists(path));
 
-	get_image(c, raw).SaveFile(path.wstring(), wxBITMAP_TYPE_PNG);
+	wxFileDialog dialog(
+		c->parent,
+		raw ? _("Save PNG snapshot (no subtitles)") : _("Save PNG snapshot"),
+		base_dir.wstring(),
+		path.filename().wstring(),
+		_("PNG images (*.png)|*.png"),
+		wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+	if (dialog.ShowModal() != wxID_OK)
+		return;
+
+	path = agi::fs::path(dialog.GetPath().ToStdWstring());
+	if (path.extension().empty())
+		path += ".png";
+
+	wxImage image;
+	if (!require_image(c, raw, image, "Save Snapshot"))
+		return;
+	if (!image.SaveFile(path.wstring(), wxBITMAP_TYPE_PNG)) {
+		c->ShowError(agi::format("Could not save snapshot to %s.", agi::fs::PathToString(path)), "Save Snapshot");
+		return;
+	}
+	c->ShowStatus(agi::format("Saved snapshot to %s", agi::fs::PathToString(path)), 5000);
 }
 
 struct video_frame_save final : public validator_video_loaded {

@@ -17,6 +17,7 @@ find_package(GTest)
 if(GTEST_FOUND)
     add_executable(gtest-run EXCLUDE_FROM_ALL
         tests/tests/access.cpp
+        tests/tests/aegisublocale_compat.cpp
         tests/tests/ass_file_extradata.cpp
         tests/tests/audio.cpp
         tests/tests/avisynth_runtime_policy.cpp

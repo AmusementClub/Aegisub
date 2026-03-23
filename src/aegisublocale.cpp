@@ -33,6 +33,7 @@
 ///
 
 #include "aegisublocale.h"
+#include "aegisublocale_compat.h"
 
 #include "compat.h"
 #include "options.h"
@@ -76,13 +77,15 @@ bool AegisubLocale::HasLanguage(std::string const& language) {
 }
 
 std::string AegisubLocale::PickLanguage() {
+	auto available = GetTranslations()->GetAvailableTranslations(AEGISUB_CATALOG);
+
 	if (active_language.empty()) {
-		wxString os_ui_language = GetTranslations()->GetBestTranslation(AEGISUB_CATALOG);
+		wxString os_ui_language = aegisub::locale::FindPreferredTranslation(available);
 		if (!os_ui_language.empty())
 			return from_wx(os_ui_language);
 	}
 
-	wxArrayString langs = GetTranslations()->GetAvailableTranslations(AEGISUB_CATALOG);
+	wxArrayString langs = available;
 
 	// No translations available, so don't bother asking the user
 	if (langs.empty() && active_language.empty())
@@ -91,9 +94,8 @@ std::string AegisubLocale::PickLanguage() {
 	langs.insert(langs.begin(), "en_US");
 
 	// Check if user local language is available, if so, make it first
-	const wxLanguageInfo *info = wxLocale::GetLanguageInfo(wxLocale::GetSystemLanguage());
-	if (info) {
-		auto it = std::find(langs.begin(), langs.end(), info->CanonicalName);
+	if (auto preferred = aegisub::locale::FindPreferredTranslation(langs); !preferred.empty()) {
+		auto it = std::find(langs.begin(), langs.end(), preferred);
 		if (it != langs.end())
 			std::rotate(langs.begin(), it, it + 1);
 	}

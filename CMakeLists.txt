@@ -599,19 +599,18 @@ else()
 endif()
 
 if(WIN32)
-    if(NOT EXISTS "${PROJECT_SOURCE_DIR}/build/git_version.h")
-        message(SEND_ERROR
-            "build/git_version.h not found.\n"
-            "Automatic generation of build/git_version.h is not supported on Windows. Please run\n"
-            "    build/version.sh .\n"
-            "at the source directory from an environment with bash and git. You may use WSL, msys (git bash), or Cygwin."
-        )
-    else()
-        target_include_directories(Aegisub PRIVATE "build")
-    endif()
+    find_program(POWERSHELL_EXECUTABLE NAMES pwsh powershell REQUIRED)
+    add_custom_target(git_version
+        COMMAND "${POWERSHELL_EXECUTABLE}" -NoProfile -ExecutionPolicy Bypass -File "${PROJECT_SOURCE_DIR}/build/version.ps1" -RepoRoot .
+        BYPRODUCTS "${PROJECT_SOURCE_DIR}/build/git_version.h"
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        VERBATIM
+    )
+    add_dependencies(Aegisub git_version)
+    target_include_directories(Aegisub PRIVATE "build")
 else()
     add_custom_target(git_version build/version.sh .
-        BYPRODUCTS "${PROJECT_SOURCE_DIR}/build/git_version.h" "${PROJECT_SOURCE_DIR}/build/git_version.xml"
+        BYPRODUCTS "${PROJECT_SOURCE_DIR}/build/git_version.h"
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
     )
     add_dependencies(Aegisub git_version)

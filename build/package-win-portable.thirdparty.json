@@ -1,0 +1,176 @@
+{
+  "dependency": [
+    {
+      "sourceType": "archive",
+      "name": "avisynth",
+      "url": "https://github.com/AviSynth/AviSynthPlus/releases/download/v3.7.5/AviSynthPlus_3.7.5_20250420-filesonly.7z",
+      "path": [
+        {
+          "source": "AviSynthPlus_3.7.5_20250420-filesonly/arm64/include/avisynth/*",
+          "target": "include/avisynth/*"
+        }
+      ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "ffms2",
+      "url": "https://github.com/FFMS/ffms2/releases/download/5.0/ffms2-5.0-msvc.7z",
+      "path": [
+        {
+          "source": "ffms2-5.0-msvc/include/*",
+          "target": "include/ffms2/*"
+        }
+      ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "libplacebo",
+      "url": "https://github.com/MIRIMIRIM/build-libplacebo/releases/download/v7.360.1-20260318/libplacebo-v7.360.1-windows-x64-clangcl-binary.zip",
+      "path": [
+        {
+          "source": "include/libplacebo/*",
+          "target": "include/libplacebo/*"
+        }
+      ]
+    }
+  ],
+  "package": [
+    {
+      "sourceType": "build",
+      "path": [
+        {
+          "source": "Aegisub.exe",
+          "target": "Aegisub.exe",
+          "required": true
+        },
+        {
+          "source": "*.dll",
+          "target": "*.dll"
+        }
+      ]
+    },
+    {
+      "sourceType": "repo",
+      "path": [
+        {
+          "source": "packages/win_installer/portable/config.json",
+          "target": "config.json"
+        },
+        {
+          "source": "LICENCE",
+          "target": "licenses/Aegisub-LICENCE.txt"
+        },
+        {
+          "source": "automation/autoload/*",
+          "target": "automation/autoload/*"
+        },
+        {
+          "source": "automation/demos/*",
+          "target": "automation/demos/*"
+        },
+        {
+          "source": "automation/include/*",
+          "target": "automation/include/*"
+        }
+      ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "aegisub9212",
+      "url": "https://github.com/AmusementClub/Aegisub/releases/download/artifacts/aegisub-win64-cmake-20210713-r9212.zip",
+      "path": [
+        {
+          "source": "AssDraw3.exe",
+          "target": "AssDraw3.exe"
+        },
+        {
+          "source": "AssDraw3.chm",
+          "target": "AssDraw3.chm"
+        },
+        {
+          "source": "csri/VSFilter.dll",
+          "target": "csri/VSFilter.dll"
+        },
+        {
+          "source": "locale/*",
+          "target": "locale/*"
+        },
+        {
+          "source": "dictionaries/*",
+          "target": "dictionaries/*"
+        },
+        {
+          "source": "licenses/*",
+          "target": "licenses/*"
+        }
+      ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "assrender",
+      "url": "https://github.com/AmusementClub/assrender/releases/download/0.38.3/assrender_win-x64_v0.38.3.zip",
+      "path": [
+        {
+          "source": "Release/assrender.dll",
+          "target": "csri/assrender.dll"
+        }
+      ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "xy-vsfilter",
+      "url": "https://github.com/pinterf/xy-VSFilter/releases/download/3.2.0.810/xyVSFilterSubFilter-pfmod-3.2.0.810.7z",
+      "path": [
+        {
+          "source": "x64/VSFilter.dll",
+          "target": "csri/xy-VSFilter.dll"
+        }
+      ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "vsfiltermod",
+      "url": "https://github.com/AmusementClub/VSFilterMod/releases/download/r5.2.7-beta-2/VSFilterMod_bin.zip",
+      "path": [
+        {
+          "source": "x64/VSFilterMod.dll",
+          "target": "csri/VSFilterMod.dll"
+        }
+      ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "avisynth",
+      "path": [
+        {
+          "source": "AviSynthPlus_3.7.5_20250420-filesonly/x64/Avisynth.dll",
+          "target": "runtimes/AviSynth.dll"
+        },
+        {
+          "source": "AviSynthPlus_3.7.5_20250420-filesonly/x64/plugins/DirectShowSource.dll",
+          "target": "runtimes/avs-plugins/DirectShowSource.dll"
+        }
+      ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "ffms2",
+      "path": [
+        {
+          "source": "ffms2-5.0-msvc/x64/ffms2.dll",
+          "target": "runtimes/ffms2.dll"
+        }
+      ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "libplacebo",
+      "path": [
+        {
+          "source": "bin/libplacebo.dll",
+          "target": "runtimes/libplacebo.dll"
+        }
+      ]
+    }
+  ]
+}

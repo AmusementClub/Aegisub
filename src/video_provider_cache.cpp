@@ -62,7 +62,7 @@ struct CachedFrame {
 struct StepWarmState {
 	CachedFrameKey last_key;
 	bool has_last_request = false;
-	int last_direction = 0;
+	int last_delta = 0;
 };
 
 size_t EstimateNativeFrameSize(SourceFrame const& frame) {
@@ -141,34 +141,33 @@ class VideoProviderCache final : public VideoProvider {
 	}
 
 	int UpdateStepWarmState(CachedFrameKey const& key) {
-		int warm_direction = 0;
+		int warm_delta = 0;
 		if (step_warm.has_last_request && step_warm.last_key.kind == key.kind) {
 			int delta = key.frame_number - step_warm.last_key.frame_number;
-			if (delta == 1 || delta == -1) {
-				int direction = delta > 0 ? 1 : -1;
-				if (step_warm.last_direction == 0 || step_warm.last_direction == direction)
-					warm_direction = direction;
-				step_warm.last_direction = direction;
+			if (delta != 0) {
+				if (step_warm.last_delta == 0 || step_warm.last_delta == delta)
+					warm_delta = delta;
+				step_warm.last_delta = delta;
 			}
 			else {
-				step_warm.last_direction = 0;
+				step_warm.last_delta = 0;
 			}
 		}
 		else {
-			step_warm.last_direction = 0;
+			step_warm.last_delta = 0;
 		}
 
 		step_warm.last_key = key;
 		step_warm.has_last_request = true;
-		return warm_direction;
+		return warm_delta;
 	}
 
 	void WarmBgraNeighbor(CachedFrameKey const& key, size_t frame_size_bytes) {
-		int const direction = UpdateStepWarmState(key);
-		if (direction == 0 || !CanWarmNeighbor(frame_size_bytes))
+		int const delta = UpdateStepWarmState(key);
+		if (delta == 0 || !CanWarmNeighbor(frame_size_bytes))
 			return;
 
-		int const target_frame = key.frame_number + direction;
+		int const target_frame = key.frame_number + delta;
 		if (target_frame < 0 || target_frame >= GetFrameCount())
 			return;
 
@@ -193,11 +192,11 @@ class VideoProviderCache final : public VideoProvider {
 	}
 
 	void WarmNativeNeighbor(CachedFrameKey const& key, size_t frame_size_bytes) {
-		int const direction = UpdateStepWarmState(key);
-		if (direction == 0 || !CanWarmNeighbor(frame_size_bytes))
+		int const delta = UpdateStepWarmState(key);
+		if (delta == 0 || !CanWarmNeighbor(frame_size_bytes))
 			return;
 
-		int const target_frame = key.frame_number + direction;
+		int const target_frame = key.frame_number + delta;
 		if (target_frame < 0 || target_frame >= GetFrameCount())
 			return;
 

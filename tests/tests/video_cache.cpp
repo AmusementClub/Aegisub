@@ -124,6 +124,20 @@ TEST(video_cache, sequential_reverse_access_warms_next_bgra_frame) {
 	EXPECT_EQ((std::vector<int>{10, 9, 8, 7}), raw->frame_requests);
 }
 
+TEST(video_cache, fixed_step_forward_access_warms_matching_bgra_frame) {
+	auto raw = new CountingVideoProvider;
+	raw->frame_bytes = 8;
+	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 32);
+	VideoFrame frame;
+
+	cache->GetFrame(2, frame);
+	cache->GetFrame(4, frame);
+	EXPECT_EQ((std::vector<int>{2, 4, 6}), raw->frame_requests);
+
+	cache->GetFrame(6, frame);
+	EXPECT_EQ((std::vector<int>{2, 4, 6, 8}), raw->frame_requests);
+}
+
 TEST(video_cache, step_warm_resets_when_direction_changes) {
 	auto raw = new CountingVideoProvider;
 	raw->frame_bytes = 8;
@@ -135,6 +149,19 @@ TEST(video_cache, step_warm_resets_when_direction_changes) {
 	cache->GetFrame(10, frame);
 
 	EXPECT_EQ((std::vector<int>{10, 9, 8}), raw->frame_requests);
+}
+
+TEST(video_cache, step_warm_resets_when_delta_changes) {
+	auto raw = new CountingVideoProvider;
+	raw->frame_bytes = 8;
+	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 32);
+	VideoFrame frame;
+
+	cache->GetFrame(2, frame);
+	cache->GetFrame(4, frame);
+	cache->GetFrame(7, frame);
+
+	EXPECT_EQ((std::vector<int>{2, 4, 6, 7}), raw->frame_requests);
 }
 
 TEST(video_cache, step_warm_is_disabled_when_cache_cannot_hold_two_frames) {
@@ -245,4 +272,19 @@ TEST(video_cache, sequential_reverse_access_warms_next_native_frame) {
 
 	cache->GetNativeFrame(8, frame, owner);
 	EXPECT_EQ((std::vector<int>{10, 9, 8, 7}), raw->native_frame_requests);
+}
+
+TEST(video_cache, fixed_step_forward_access_warms_matching_native_frame) {
+	auto raw = new CountingVideoProvider;
+	raw->provide_native_owner = true;
+	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 64);
+	SourceFrame frame;
+	std::shared_ptr<void> owner;
+
+	cache->GetNativeFrame(2, frame, owner);
+	cache->GetNativeFrame(4, frame, owner);
+	EXPECT_EQ((std::vector<int>{2, 4, 6}), raw->native_frame_requests);
+
+	cache->GetNativeFrame(6, frame, owner);
+	EXPECT_EQ((std::vector<int>{2, 4, 6, 8}), raw->native_frame_requests);
 }

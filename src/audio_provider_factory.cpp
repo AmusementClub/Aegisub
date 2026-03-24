@@ -127,9 +127,6 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 	auto preferred = OPT_GET("Audio/Provider")->GetString();
 	auto sorted = GetSorted(providers, preferred);
 
-	if (!choice_sink)
-		choice_sink = MakeWindowSingleChoiceInteractionSink(nullptr);
-
 	std::unique_ptr<AudioProvider> provider;
 	bool found_file = false;
 	bool found_audio = false;

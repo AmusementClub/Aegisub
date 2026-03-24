@@ -48,7 +48,7 @@
 #include "subtitle_format_transtation.h"
 #include "subtitle_format_ttxt.h"
 #include "subtitle_format_txt.h"
-#include "wx_ui_services.h"
+#include "ui_services.h"
 
 #include <libaegisub/fs.h>
 #include <libaegisub/make_unique.h>
@@ -56,6 +56,8 @@
 #include <libaegisub/vfr.h>
 
 #include <algorithm>
+#include <wx/intl.h>
+#include <wx/utils.h>
 
 namespace {
 	std::vector<std::unique_ptr<SubtitleFormat>> formats;
@@ -94,7 +96,7 @@ bool SubtitleFormat::CanSave(const AssFile *subs) const {
 agi::vfr::Framerate SubtitleFormat::AskForFPS(bool allow_vfr, bool show_smpte, agi::vfr::Framerate const& fps, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
 	auto model = BuildSubtitleFpsChoiceModel(allow_vfr, show_smpte, fps);
 	if (!choice_sink)
-		choice_sink = agi::MakeWindowSingleChoiceInteractionSink(nullptr);
+		return agi::vfr::Framerate();
 
 	bool was_busy = wxIsBusy();
 	if (was_busy) wxEndBusyCursor();

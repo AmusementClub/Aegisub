@@ -26,7 +26,6 @@
 #include "subtitle_overlay_blend.h"
 #include "video_frame.h"
 #include "video_provider_manager.h"
-#include "wx_ui_services.h"
 
 #include <libaegisub/dispatch.h>
 #include <libaegisub/log.h>
@@ -327,7 +326,7 @@ AsyncVideoProvider::AsyncVideoProvider(agi::fs::path const& video_filename, std:
 		video_filename,
 		colormatrix,
 		br,
-		choice_sink ? std::move(choice_sink) : agi::MakeWindowSingleChoiceInteractionSink(nullptr)),
+		std::move(choice_sink)),
 	get_subs_provider(parent, br, std::move(transient_fonts), event_lifetime),
 	[parent, event_lifetime](std::unique_ptr<wxEvent> evt) mutable {
 		if (!parent)

@@ -35,8 +35,6 @@
 #include "charset_detect.h"
 
 #include "charset_choice.h"
-#include "compat.h"
-#include "wx_ui_services.h"
 
 #include <libaegisub/charset.h>
 #include <libaegisub/charset_conv.h>
@@ -45,7 +43,7 @@ namespace CharSetDetect {
 
 std::optional<std::string> PromptForEncodingChoice(std::vector<std::string> const& choices, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
 	if (!choice_sink)
-		choice_sink = agi::MakeWindowSingleChoiceInteractionSink(nullptr);
+		return std::nullopt;
 	return aegisub::charset_choice::ResolveSelection(
 		choices,
 		choice_sink->RequestSingleChoice(aegisub::charset_choice::BuildRequest(choices)));

@@ -916,7 +916,7 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 			choices.emplace_back(DescribeMkvTrack(*track));
 
 		if (!choice_sink)
-			choice_sink = agi::MakeWindowSingleChoiceInteractionSink(nullptr);
+			throw agi::UserCancelException("canceled");
 		auto choice = choice_sink->RequestSingleChoice(
 			aegisub::track_choice::BuildRequest(aegisub::track_choice::DialogKind::Subtitle, choices));
 		auto resolved = aegisub::track_choice::ResolveSelection(subtitle_tracks.size(), choice);

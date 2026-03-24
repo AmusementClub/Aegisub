@@ -1537,3 +1537,21 @@ TEST(async_video_provider, filename_constructor_forwards_choice_sink_to_video_fa
 	ASSERT_TRUE(g_last_factory_choice_sink);
 	EXPECT_EQ(choice_sink, g_last_factory_choice_sink);
 }
+
+TEST(async_video_provider, filename_constructor_does_not_create_default_choice_sink) {
+	ScopedFactoryOverride scope;
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeSubtitlesProvider;
+
+	g_video_provider_factory = [state] {
+		return agi::make_unique<FakeVideoProvider>(state);
+	};
+	g_subtitles_provider_factory = [subs](SubtitleRenderEnvironment const&) {
+		return std::unique_ptr<SubtitlesProvider>(subs);
+	};
+
+	wxEvtHandler parent;
+	AsyncVideoProvider provider(agi::fs::path("dummy.mkv"), "", &parent, nullptr);
+
+	EXPECT_EQ(nullptr, g_last_factory_choice_sink);
+}

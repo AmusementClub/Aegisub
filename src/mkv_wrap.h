@@ -24,9 +24,12 @@
 
 #include "mkv_wrap_common.h"
 
+#include <memory>
+
 DEFINE_EXCEPTION(MatroskaException, agi::Exception);
 
 class AssFile;
+namespace agi { class SingleChoiceInteractionSink; }
 
 class MatroskaWrapper {
 public:
@@ -35,5 +38,5 @@ public:
 	/// Scan all tracks in a Matroska file and return their metadata
 	static MkvTrackScanResult ScanTracks(agi::fs::path const& filename);
 	/// Load subtitles from a matroska file
-	static void GetSubtitles(agi::fs::path const& filename, AssFile *target);
+	static void GetSubtitles(agi::fs::path const& filename, AssFile *target, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});
 };

@@ -32,7 +32,7 @@
 
 std::unique_ptr<VideoProvider> CreateDummyVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
 std::unique_ptr<VideoProvider> CreateYUV4MPEGVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
-std::unique_ptr<VideoProvider> CreateFFmpegSourceVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
+std::unique_ptr<VideoProvider> CreateFFmpegSourceVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 std::unique_ptr<VideoProvider> CreateAvisynthVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
 
 std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoProvider>);
@@ -40,11 +40,25 @@ std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoPro
 namespace {
 	struct factory {
 		const char *name;
-		std::unique_ptr<VideoProvider> (*create)(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
+		std::unique_ptr<VideoProvider> (*create)(agi::fs::path const&, std::string const&, agi::BackgroundRunner *, std::shared_ptr<agi::SingleChoiceInteractionSink>);
 		bool (*is_available)();
 		std::string (*availability_error)();
 		bool hidden;
 	};
+
+	std::unique_ptr<VideoProvider> CreateDummyVideoProviderWithChoice(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink>) {
+		return CreateDummyVideoProvider(filename, colormatrix, br);
+	}
+
+	std::unique_ptr<VideoProvider> CreateYUV4MPEGVideoProviderWithChoice(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink>) {
+		return CreateYUV4MPEGVideoProvider(filename, colormatrix, br);
+	}
+
+#ifdef WITH_AVISYNTH
+	std::unique_ptr<VideoProvider> CreateAvisynthVideoProviderWithChoice(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink>) {
+		return CreateAvisynthVideoProvider(filename, colormatrix, br);
+	}
+#endif
 
 #ifdef WITH_FFMS2
 	bool IsFFmpegSourceAvailable() {
@@ -76,13 +90,13 @@ std::string GetDisplayName(factory const& provider) {
 }
 
 	const factory providers[] = {
-		{"Dummy", CreateDummyVideoProvider, nullptr, nullptr, true},
-		{"YUV4MPEG", CreateYUV4MPEGVideoProvider, nullptr, nullptr, true},
+		{"Dummy", CreateDummyVideoProviderWithChoice, nullptr, nullptr, true},
+		{"YUV4MPEG", CreateYUV4MPEGVideoProviderWithChoice, nullptr, nullptr, true},
 #ifdef WITH_FFMS2
 		{"FFmpegSource", CreateFFmpegSourceVideoProvider, IsFFmpegSourceAvailable, GetFFmpegSourceAvailabilityError, false},
 #endif
 #ifdef WITH_AVISYNTH
-		{"Avisynth", CreateAvisynthVideoProvider, IsAvisynthAvailable, GetAvisynthAvailabilityError, false},
+		{"Avisynth", CreateAvisynthVideoProviderWithChoice, IsAvisynthAvailable, GetAvisynthAvailabilityError, false},
 #endif
 	};
 }
@@ -100,7 +114,7 @@ std::vector<std::pair<std::string, std::string>> VideoProviderFactory::GetChoice
 	return choices;
 }
 
-std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br) {
+std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
 	auto preferred = OPT_GET("Video/Provider")->GetString();
 	auto sorted = GetSorted(providers, preferred);
 
@@ -122,7 +136,7 @@ std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path c
 		}
 
 		try {
-			auto provider = factory->create(filename, colormatrix, br);
+			auto provider = factory->create(filename, colormatrix, br, choice_sink);
 			if (!provider) continue;
 			LOG_I("manager/video/provider") << factory->name << ": opened " << filename;
 			return provider->WantsCaching() ? CreateCacheVideoProvider(std::move(provider)) : std::move(provider);

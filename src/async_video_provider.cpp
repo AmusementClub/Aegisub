@@ -26,6 +26,7 @@
 #include "subtitle_overlay_blend.h"
 #include "video_frame.h"
 #include "video_provider_manager.h"
+#include "wx_ui_services.h"
 
 #include <libaegisub/dispatch.h>
 #include <libaegisub/log.h>
@@ -320,9 +321,13 @@ static std::unique_ptr<SubtitlesProvider> get_subs_provider(wxEvtHandler *evt_ha
 	}
 }
 
-AsyncVideoProvider::AsyncVideoProvider(agi::fs::path const& video_filename, std::string const& colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts, agi::ui::WeakLifetime event_lifetime)
+AsyncVideoProvider::AsyncVideoProvider(agi::fs::path const& video_filename, std::string const& colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts, agi::ui::WeakLifetime event_lifetime, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink)
 : AsyncVideoProvider(
-	VideoProviderFactory::GetProvider(video_filename, colormatrix, br),
+	VideoProviderFactory::GetProvider(
+		video_filename,
+		colormatrix,
+		br,
+		choice_sink ? std::move(choice_sink) : agi::MakeWindowSingleChoiceInteractionSink(nullptr)),
 	get_subs_provider(parent, br, std::move(transient_fonts), event_lifetime),
 	[parent, event_lifetime](std::unique_ptr<wxEvent> evt) mutable {
 		if (!parent)

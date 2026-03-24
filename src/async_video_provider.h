@@ -42,6 +42,7 @@ struct AssDialogueBase;
 struct VideoFrame;
 namespace agi {
 	class BackgroundRunner;
+	class SingleChoiceInteractionSink;
 	namespace dispatch { class Queue; }
 }
 
@@ -179,7 +180,7 @@ public:
 	/// @brief Constructor
 	/// @param videoFileName File to open
 	/// @param parent Event handler to send FrameReady events to
-	AsyncVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts = {}, agi::ui::WeakLifetime event_lifetime = {});
+	AsyncVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts = {}, agi::ui::WeakLifetime event_lifetime = {}, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});
 	AsyncVideoProvider(std::unique_ptr<VideoProvider> source_provider, std::unique_ptr<SubtitlesProvider> subs_provider, AsyncVideoProviderEventSink event_sink);
 	~AsyncVideoProvider();
 };

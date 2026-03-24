@@ -34,6 +34,7 @@
 
 #ifdef WITH_FFMS2
 #include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -43,7 +44,10 @@
 #include <libaegisub/fs_fwd.h>
 #include <libaegisub/scoped_ptr.h>
 
-namespace agi { class BackgroundRunner; }
+namespace agi {
+	class BackgroundRunner;
+	class SingleChoiceInteractionSink;
+}
 
 namespace ffms {
 #ifdef WITH_FFMS2_RUNTIME_LOADING
@@ -72,9 +76,10 @@ namespace ffms {
 class FFmpegSourceProvider {
 	friend class FFmpegSourceCacheCleaner;
 	agi::BackgroundRunner *br;
+	std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink;
 
 public:
-	FFmpegSourceProvider(agi::BackgroundRunner *br);
+	FFmpegSourceProvider(agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});
 
 	// X11 is wonderful
 #undef None

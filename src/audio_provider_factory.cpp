@@ -40,16 +40,30 @@
 using namespace agi;
 
 std::unique_ptr<AudioProvider> CreateAvisynthAudioProvider(fs::path const& filename, BackgroundRunner *);
-std::unique_ptr<AudioProvider> CreateFFmpegSourceAudioProvider(fs::path const& filename, BackgroundRunner *);
+std::unique_ptr<AudioProvider> CreateFFmpegSourceAudioProvider(fs::path const& filename, BackgroundRunner *, std::shared_ptr<SingleChoiceInteractionSink> choice_sink);
 
 namespace {
 struct factory {
 	const char *name;
-	std::unique_ptr<AudioProvider> (*create)(fs::path const&, BackgroundRunner *);
+	std::unique_ptr<AudioProvider> (*create)(fs::path const&, BackgroundRunner *, std::shared_ptr<SingleChoiceInteractionSink>);
 	bool (*is_available)();
 	std::string (*availability_error)();
 	bool hidden;
 };
+
+std::unique_ptr<AudioProvider> CreateDummyAudioProviderWithChoice(fs::path const& filename, BackgroundRunner *br, std::shared_ptr<SingleChoiceInteractionSink>) {
+	return CreateDummyAudioProvider(filename, br);
+}
+
+std::unique_ptr<AudioProvider> CreatePCMAudioProviderWithChoice(fs::path const& filename, BackgroundRunner *br, std::shared_ptr<SingleChoiceInteractionSink>) {
+	return CreatePCMAudioProvider(filename, br);
+}
+
+#ifdef WITH_AVISYNTH
+std::unique_ptr<AudioProvider> CreateAvisynthAudioProviderWithChoice(fs::path const& filename, BackgroundRunner *br, std::shared_ptr<SingleChoiceInteractionSink>) {
+	return CreateAvisynthAudioProvider(filename, br);
+}
+#endif
 
 #ifdef WITH_FFMS2
 bool IsFFmpegSourceAvailable() {
@@ -81,13 +95,13 @@ std::string GetDisplayName(factory const& provider) {
 }
 
 const factory providers[] = {
-	{"Dummy", CreateDummyAudioProvider, nullptr, nullptr, true},
-	{"PCM", CreatePCMAudioProvider, nullptr, nullptr, true},
+	{"Dummy", CreateDummyAudioProviderWithChoice, nullptr, nullptr, true},
+	{"PCM", CreatePCMAudioProviderWithChoice, nullptr, nullptr, true},
 #ifdef WITH_FFMS2
 	{"FFmpegSource", CreateFFmpegSourceAudioProvider, IsFFmpegSourceAvailable, GetFFmpegSourceAvailabilityError, false},
 #endif
 #ifdef WITH_AVISYNTH
-	{"Avisynth", CreateAvisynthAudioProvider, IsAvisynthAvailable, GetAvisynthAvailabilityError, false},
+	{"Avisynth", CreateAvisynthAudioProviderWithChoice, IsAvisynthAvailable, GetAvisynthAvailabilityError, false},
 #endif
 };
 }
@@ -108,9 +122,13 @@ std::vector<std::pair<std::string, std::string>> GetAudioProviderChoices() {
 std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
                                                      Path const& path_helper,
                                                      BackgroundRunner *br,
-                                                     NotificationSink *notification_sink) {
+                                                     NotificationSink *notification_sink,
+                                                     std::shared_ptr<SingleChoiceInteractionSink> choice_sink) {
 	auto preferred = OPT_GET("Audio/Provider")->GetString();
 	auto sorted = GetSorted(providers, preferred);
+
+	if (!choice_sink)
+		choice_sink = MakeWindowSingleChoiceInteractionSink(nullptr);
 
 	std::unique_ptr<AudioProvider> provider;
 	bool found_file = false;
@@ -131,7 +149,7 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 		}
 
 		try {
-			provider = factory->create(filename, br);
+			provider = factory->create(filename, br, choice_sink);
 			if (!provider) continue;
 			LOG_I("audio_provider") << "Using audio provider: " << factory->name;
 			break;

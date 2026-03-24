@@ -542,7 +542,7 @@ struct ScopedFactoryOverride final {
 
 std::vector<std::string> VideoProviderFactory::GetClasses() { return {}; }
 std::vector<std::pair<std::string, std::string>> VideoProviderFactory::GetChoices() { return {}; }
-std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *) {
+std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *, std::shared_ptr<agi::SingleChoiceInteractionSink>) {
 	if (g_video_provider_factory)
 		return g_video_provider_factory();
 	return nullptr;

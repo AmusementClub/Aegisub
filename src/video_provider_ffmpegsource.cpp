@@ -109,7 +109,7 @@ class FFmpegSourceVideoProvider final : public VideoProvider, FFmpegSourceProvid
 	void LoadVideo(agi::fs::path const& filename, std::string const& colormatrix);
 
 public:
-	FFmpegSourceVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br);
+	FFmpegSourceVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 
 	void GetFrame(int n, VideoFrame &out) override;
 	bool GetNativeFrame(int n, SourceFrame& frame, std::shared_ptr<void>& owner) override;
@@ -241,8 +241,8 @@ bool IsCounterClockwiseQuarterTurn(int rotation) {
 	return rotation % 360 == 270 || rotation % 360 == -90;
 }
 
-FFmpegSourceVideoProvider::FFmpegSourceVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br) try
-: FFmpegSourceProvider(br)
+FFmpegSourceVideoProvider::FFmpegSourceVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) try
+: FFmpegSourceProvider(br, std::move(choice_sink))
 , VideoSource(nullptr, ffms::DestroyVideoSource)
 {
 	ErrInfo.Buffer		= FFMSErrMsg;
@@ -657,8 +657,8 @@ std::vector<SourceFrameOutputMode> FFmpegSourceVideoProvider::GetAvailableSource
 }
 }
 
-std::unique_ptr<VideoProvider> CreateFFmpegSourceVideoProvider(agi::fs::path const& path, std::string const& colormatrix, agi::BackgroundRunner *br) {
-	return agi::make_unique<FFmpegSourceVideoProvider>(path, colormatrix, br);
+std::unique_ptr<VideoProvider> CreateFFmpegSourceVideoProvider(agi::fs::path const& path, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
+	return agi::make_unique<FFmpegSourceVideoProvider>(path, colormatrix, br, std::move(choice_sink));
 }
 
 #endif /* WITH_FFMS2 */

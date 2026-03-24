@@ -41,8 +41,8 @@
 #include "native_library.h"
 #include "options.h"
 #include "track_choice.h"
+#include "ui_services.h"
 #include "utils.h"
-#include "wx_ui_services.h"
 
 #include <libaegisub/background_runner.h>
 #include <libaegisub/crc32.h>
@@ -161,8 +161,9 @@ namespace {
 #endif
 }
 
-FFmpegSourceProvider::FFmpegSourceProvider(agi::BackgroundRunner *br)
+FFmpegSourceProvider::FFmpegSourceProvider(agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink)
 : br(br)
+, choice_sink(std::move(choice_sink))
 {
 	ffms::EnsureLoaded();
 	ffms::Init(0, 0);
@@ -382,7 +383,9 @@ FFmpegSourceProvider::AskForTrackSelection(std::vector<TrackChoice> const& Track
 		choices.push_back(track.display_name);
 	}
 
-	auto choice_sink = agi::MakeWindowSingleChoiceInteractionSink(nullptr);
+	if (!choice_sink)
+		return TrackSelection::None;
+
 	auto choice = choice_sink->RequestSingleChoice(aegisub::track_choice::BuildRequest(
 		Type == FFMS_TYPE_VIDEO ? aegisub::track_choice::DialogKind::Video : aegisub::track_choice::DialogKind::Audio,
 		choices));

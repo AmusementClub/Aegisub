@@ -196,7 +196,7 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 
 	try {
 		if (encoding.empty())
-			encoding = CharSetDetect::GetEncoding(path);
+			encoding = CharSetDetect::GetEncoding(path, context->GetSingleChoiceInteractionSink());
 	}
 	catch (agi::UserCancelException const&) {
 		return false;
@@ -364,7 +364,7 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 	try {
 		try {
 			auto core = context->GetCore();
-			audio_provider = GetAudioProvider(path, *core.path, GetProgressRunner(), context->GetNotificationSink().get());
+			audio_provider = GetAudioProvider(path, *core.path, GetProgressRunner(), context->GetNotificationSink().get(), context->GetSingleChoiceInteractionSink());
 		}
 		catch (agi::UserCancelException const&) { return; }
 		catch (...) {
@@ -421,7 +421,8 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 			core.videoController.get(),
 			GetProgressRunner(),
 			core.ass->GetTransientFonts(),
-			core.videoController->GetAsyncUiLifetime());
+			core.videoController->GetAsyncUiLifetime(),
+			context->GetSingleChoiceInteractionSink());
 	}
 	catch (agi::UserCancelException const&) { return false; }
 	catch (agi::fs::FileSystemError const& err) {

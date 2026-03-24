@@ -193,7 +193,7 @@ static void read_subtitles(agi::ProgressSink *ps, MatroskaFile *file, MkvStdIO *
 		parser->AddLine(order_value_pair.second);
 }
 
-void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target) {
+void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
 	LogMkvParserBackendOnce();
 	target->SetTransientFonts({});
 
@@ -234,7 +234,8 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 		trackToRead = tracksFound[0];
 	// Pick a track
 	else {
-		auto choice_sink = agi::MakeWindowSingleChoiceInteractionSink(nullptr);
+		if (!choice_sink)
+			choice_sink = agi::MakeWindowSingleChoiceInteractionSink(nullptr);
 		auto choice = choice_sink->RequestSingleChoice(
 			aegisub::track_choice::BuildRequest(aegisub::track_choice::DialogKind::Subtitle, tracksNames));
 		auto resolved = aegisub::track_choice::ResolveSelection(tracksFound.size(), choice);

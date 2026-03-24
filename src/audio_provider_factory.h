@@ -32,7 +32,7 @@ namespace agi {
 std::unique_ptr<agi::AudioProvider> GetAudioProvider(agi::fs::path const& filename,
                                                      agi::Path const& path_helper,
                                                      agi::BackgroundRunner *br,
-                                                     agi::NotificationSink *notification_sink,
+                                                     agi::NotificationSink& notification_sink,
                                                      std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 std::vector<std::string> GetAudioProviderNames();
 std::vector<std::pair<std::string, std::string>> GetAudioProviderChoices();

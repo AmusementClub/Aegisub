@@ -364,7 +364,7 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 	try {
 		try {
 			auto core = context->GetCore();
-			audio_provider = GetAudioProvider(path, *core.path, GetProgressRunner(), context->GetNotificationSink().get(), context->GetSingleChoiceInteractionSink());
+			audio_provider = GetAudioProvider(path, *core.path, GetProgressRunner(), *context->GetNotificationSink(), context->GetSingleChoiceInteractionSink());
 		}
 		catch (agi::UserCancelException const&) { return; }
 		catch (...) {

@@ -21,7 +21,6 @@
 #include "options.h"
 #include "ui_services.h"
 #include "utils.h"
-#include "wx_ui_services.h"
 #ifdef WITH_FFMS2
 #include "ffmpegsource_common.h"
 #endif
@@ -34,8 +33,6 @@
 #include <libaegisub/log.h>
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
-
-#include <wx/msgdlg.h>
 
 using namespace agi;
 
@@ -122,7 +119,7 @@ std::vector<std::pair<std::string, std::string>> GetAudioProviderChoices() {
 std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
                                                      Path const& path_helper,
                                                      BackgroundRunner *br,
-                                                     NotificationSink *notification_sink,
+                                                     NotificationSink& notification_sink,
                                                      std::shared_ptr<SingleChoiceInteractionSink> choice_sink) {
 	auto preferred = OPT_GET("Audio/Provider")->GetString();
 	auto sorted = GetSorted(providers, preferred);
@@ -209,10 +206,7 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 				"- Turn off cache or switch to hard disk cache in Preferences -> Advanced -> Audio -> Cache -> Cache type\n"
 				"- Enable channel downmix in Preferences -> Advanced -> Audio"
 			));
-			if (notification_sink)
-				notification_sink->ShowError(from_wx(_("Out of Memory")), message);
-			else
-				agi::WxMessageBoxNotificationSink().ShowError(from_wx(_("Out of Memory")), message);
+			notification_sink.ShowError(from_wx(_("Out of Memory")), message);
 			cache = 2;
 		}
 		else

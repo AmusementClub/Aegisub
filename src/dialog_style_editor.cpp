@@ -49,6 +49,7 @@
 #include "subs_preview.h"
 #include "utils.h"
 #include "validators.h"
+#include "wx_ui_services.h"
 
 #include <libaegisub/of_type_adaptor.h>
 #include <libaegisub/make_unique.h>
@@ -361,7 +362,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 		wxSUNKEN_BORDER,
 		OPT_GET("Colour/Style Editor/Background/Preview")->GetColor(),
 		c ? c->ass->GetTransientFonts() : std::shared_ptr<const TransientFontSet>(),
-		c ? c->GetNotificationSink() : std::shared_ptr<agi::NotificationSink>());
+		c ? c->GetNotificationSink() : agi::MakeWindowNotificationSink(this));
 
 	SubsPreview->SetToolTip(_("Preview of current style"));
 	SubsPreview->SetStyle(*style);

@@ -81,6 +81,6 @@ public:
 	/// Set the background color
 	void SetColour(agi::Color col);
 
-	SubtitlesPreview(wxWindow *parent, wxSize size, int style, agi::Color colour, std::shared_ptr<const TransientFontSet> transient_fonts = {}, std::shared_ptr<agi::NotificationSink> notification_sink = {});
+	SubtitlesPreview(wxWindow *parent, wxSize size, int style, agi::Color colour, std::shared_ptr<const TransientFontSet> transient_fonts = {}, std::shared_ptr<agi::NotificationSink> notification_sink = nullptr);
 	~SubtitlesPreview();
 };

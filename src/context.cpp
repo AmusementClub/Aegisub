@@ -50,6 +50,7 @@ ContextCoreSession::ContextCoreSession(Context& context)
 , statusSink(context.statusSink)
 , notificationSink(context.notificationSink)
 , interactionSink(context.interactionSink)
+, singleChoiceInteractionSink(context.singleChoiceInteractionSink)
 , backgroundRunnerFactory(context.backgroundRunnerFactory) {
 }
 
@@ -68,6 +69,7 @@ ConstContextCoreSession::ConstContextCoreSession(Context const& context)
 , statusSink(context.statusSink)
 , notificationSink(context.notificationSink)
 , interactionSink(context.interactionSink)
+, singleChoiceInteractionSink(context.singleChoiceInteractionSink)
 , backgroundRunnerFactory(context.backgroundRunnerFactory) {
 }
 
@@ -110,6 +112,7 @@ Context::Context()
 , statusSink(std::make_shared<NullStatusSink>())
 , notificationSink(std::make_shared<NullNotificationSink>())
 , interactionSink(std::make_shared<NullInteractionSink>())
+, singleChoiceInteractionSink(std::make_shared<NullSingleChoiceInteractionSink>())
 , backgroundRunnerFactory(std::make_shared<InlineBackgroundRunnerFactory>())
 , dialog(make_unique<DialogManager>())
 {
@@ -154,6 +157,16 @@ InteractionResult Context::RequestInteraction(InteractionRequest const& request)
 	if (interactionSink)
 		return interactionSink->Request(request);
 	return InteractionResult::Cancel;
+}
+
+std::shared_ptr<SingleChoiceInteractionSink> Context::GetSingleChoiceInteractionSink() const {
+	return singleChoiceInteractionSink;
+}
+
+std::optional<int> Context::RequestSingleChoice(SingleChoiceInteractionRequest const& request) const {
+	if (singleChoiceInteractionSink)
+		return singleChoiceInteractionSink->RequestSingleChoice(request);
+	return std::nullopt;
 }
 
 std::unique_ptr<BackgroundRunner> Context::CreateBackgroundRunner(std::string const& title, std::string const& message) const {

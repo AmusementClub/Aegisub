@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include <memory>
+#include <optional>
 #include <string>
 
 class AssFile;
@@ -39,8 +40,10 @@ namespace agi { class BackgroundRunner; }
 namespace agi { class StatusSink; }
 namespace agi { class NotificationSink; }
 namespace agi { class InteractionSink; }
+namespace agi { class SingleChoiceInteractionSink; }
 namespace agi { class BackgroundRunnerFactory; }
 namespace agi { struct InteractionRequest; }
+namespace agi { struct SingleChoiceInteractionRequest; }
 namespace agi { enum class InteractionResult : int; }
 
 namespace agi {
@@ -62,6 +65,7 @@ struct ContextCoreSession {
 	std::shared_ptr<StatusSink>& statusSink;
 	std::shared_ptr<NotificationSink>& notificationSink;
 	std::shared_ptr<InteractionSink>& interactionSink;
+	std::shared_ptr<SingleChoiceInteractionSink>& singleChoiceInteractionSink;
 	std::shared_ptr<BackgroundRunnerFactory>& backgroundRunnerFactory;
 
 	explicit ContextCoreSession(Context& context);
@@ -82,6 +86,7 @@ struct ConstContextCoreSession {
 	std::shared_ptr<StatusSink> const& statusSink;
 	std::shared_ptr<NotificationSink> const& notificationSink;
 	std::shared_ptr<InteractionSink> const& interactionSink;
+	std::shared_ptr<SingleChoiceInteractionSink> const& singleChoiceInteractionSink;
 	std::shared_ptr<BackgroundRunnerFactory> const& backgroundRunnerFactory;
 
 	explicit ConstContextCoreSession(Context const& context);
@@ -132,6 +137,7 @@ struct Context {
 	std::shared_ptr<StatusSink> statusSink;
 	std::shared_ptr<NotificationSink> notificationSink;
 	std::shared_ptr<InteractionSink> interactionSink;
+	std::shared_ptr<SingleChoiceInteractionSink> singleChoiceInteractionSink;
 	std::shared_ptr<BackgroundRunnerFactory> backgroundRunnerFactory;
 
 	// Things that should probably be in some sort of UI-context-model
@@ -158,6 +164,8 @@ struct Context {
 	void ShowWarning(std::string const& message, std::string const& title = "Warning") const;
 	std::shared_ptr<InteractionSink> GetInteractionSink() const;
 	InteractionResult RequestInteraction(InteractionRequest const& request) const;
+	std::shared_ptr<SingleChoiceInteractionSink> GetSingleChoiceInteractionSink() const;
+	std::optional<int> RequestSingleChoice(SingleChoiceInteractionRequest const& request) const;
 	std::unique_ptr<BackgroundRunner> CreateBackgroundRunner(std::string const& title = "", std::string const& message = "") const;
 
 	// Returned on demand to avoid making Context subobject construction depend

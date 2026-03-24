@@ -5,7 +5,9 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace agi {
 
@@ -77,6 +79,27 @@ class NullInteractionSink final : public InteractionSink {
 public:
 	InteractionResult Request(InteractionRequest const& request) override {
 		return DefaultInteractionResult(request.buttons);
+	}
+};
+
+struct SingleChoiceInteractionRequest {
+	std::string title;
+	std::string message;
+	std::vector<std::string> choices;
+	int default_choice = 0;
+	std::string help_page;
+};
+
+class SingleChoiceInteractionSink {
+public:
+	virtual ~SingleChoiceInteractionSink() = default;
+	virtual std::optional<int> RequestSingleChoice(SingleChoiceInteractionRequest const& request) = 0;
+};
+
+class NullSingleChoiceInteractionSink final : public SingleChoiceInteractionSink {
+public:
+	std::optional<int> RequestSingleChoice(SingleChoiceInteractionRequest const&) override {
+		return std::nullopt;
 	}
 };
 

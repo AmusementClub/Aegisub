@@ -61,6 +61,7 @@
 #include "video_box.h"
 #include "video_controller.h"
 #include "video_display.h"
+#include "wx_ui_services.h"
 
 #include <libaegisub/dispatch.h>
 #include <libaegisub/log.h>
@@ -222,6 +223,26 @@ public:
 	}
 };
 
+class FrameMainSingleChoiceInteractionSink final : public agi::SingleChoiceInteractionSink {
+	FrameMain *frame = nullptr;
+	agi::ui::WeakLifetime lifetime;
+
+public:
+	FrameMainSingleChoiceInteractionSink(FrameMain *frame, agi::ui::WeakLifetime lifetime)
+	: frame(frame)
+	, lifetime(std::move(lifetime))
+	{
+	}
+
+	std::optional<int> RequestSingleChoice(agi::SingleChoiceInteractionRequest const& request) override {
+		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, request] {
+			if (!lifetime.lock())
+				return std::optional<int>();
+			return agi::ShowSingleChoiceDialog(frame, request);
+		});
+	}
+};
+
 class FrameMainBackgroundRunner final : public agi::BackgroundRunner {
 	FrameMain *frame = nullptr;
 	agi::ui::WeakLifetime lifetime;
@@ -320,6 +341,7 @@ FrameMain::FrameMain()
 	core.statusSink = std::make_shared<FrameMainStatusSink>(this, GetAsyncUiLifetime());
 	core.notificationSink = std::make_shared<FrameMainNotificationSink>(this, GetAsyncUiLifetime());
 	core.interactionSink = std::make_shared<FrameMainInteractionSink>(this, GetAsyncUiLifetime());
+	core.singleChoiceInteractionSink = std::make_shared<FrameMainSingleChoiceInteractionSink>(this, GetAsyncUiLifetime());
 	core.backgroundRunnerFactory = std::make_shared<FrameMainBackgroundRunnerFactory>(this, GetAsyncUiLifetime());
 
 	StartupLog("Apply saved Maximized state");

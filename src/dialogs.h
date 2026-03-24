@@ -50,7 +50,7 @@ void PerformVersionCheck(bool interactive);
 bool PromptForResampleSettings(agi::Context *c, ResampleSettings &settings);
 
 /// Update the video properties for a newly opened video, possibly prompting the user about what to do
-void UpdateVideoProperties(AssFile *file, const AsyncVideoProvider *new_provider, wxWindow *parent);
+void UpdateVideoProperties(agi::Context *context, AssFile *file, const AsyncVideoProvider *new_provider);
 
 int GetSelectedChoices(wxWindow *parent, wxArrayInt& selections, wxString const& message, wxString const& caption, wxArrayString const& choices);
 

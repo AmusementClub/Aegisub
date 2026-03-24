@@ -11,6 +11,17 @@ TEST(ui_services, null_interaction_sink_uses_safe_defaults) {
 	EXPECT_EQ(agi::InteractionResult::Cancel, sink.Request({"title", "message", agi::InteractionButtons::YesNoCancel}));
 }
 
+TEST(ui_services, null_single_choice_interaction_sink_cancels) {
+	agi::NullSingleChoiceInteractionSink sink;
+
+	EXPECT_EQ(std::nullopt, sink.RequestSingleChoice({
+		"title",
+		"message",
+		{"first", "second"},
+		0
+	}));
+}
+
 TEST(ui_services, inline_background_runner_executes_task) {
 	agi::InlineBackgroundRunnerFactory factory;
 	auto runner = factory.Create("title", "message");

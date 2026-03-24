@@ -67,7 +67,7 @@ public:
 	/// Prompt the user for a frame rate to use
 	/// @param allow_vfr Include video frame rate as an option even if it's vfr
 	/// @param show_smpte Show SMPTE drop frame option
-	static agi::vfr::Framerate AskForFPS(bool allow_vfr, bool show_smpte, agi::vfr::Framerate const& fps, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});
+	static agi::vfr::Framerate AskForFPS(bool allow_vfr, bool show_smpte, agi::vfr::Framerate const& fps, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 
 	/// Constructor
 	/// @param Subtitle format name
@@ -100,7 +100,7 @@ public:
 	/// @param[out] target Destination to read lines into
 	/// @param filename File to load
 	/// @param encoding Encoding to use. May be ignored by the reader.
-	virtual void ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {}) const { }
+	virtual void ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const { }
 
 	/// Save a subtitle file
 	/// @param src Data to write

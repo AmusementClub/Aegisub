@@ -43,9 +43,9 @@
 namespace agi { class SingleChoiceInteractionSink; }
 
 namespace CharSetDetect {
-	std::optional<std::string> PromptForEncodingChoice(std::vector<std::string> const& choices, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});
+	std::optional<std::string> PromptForEncodingChoice(std::vector<std::string> const& choices, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 	/// @brief Get character set name.
 	/// @param filename File to check
 	/// @return Character set name
-	std::string GetEncoding(agi::fs::path const& filename, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});
+	std::string GetEncoding(agi::fs::path const& filename, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 }

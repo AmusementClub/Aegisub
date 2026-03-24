@@ -79,7 +79,7 @@ class FFmpegSourceProvider {
 	std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink;
 
 public:
-	FFmpegSourceProvider(agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});
+	FFmpegSourceProvider(agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 
 	// X11 is wonderful
 #undef None

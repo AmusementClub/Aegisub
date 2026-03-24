@@ -34,5 +34,5 @@ std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoPro
 struct VideoProviderFactory {
 	static std::vector<std::string> GetClasses();
 	static std::vector<std::pair<std::string, std::string>> GetChoices();
-	static std::unique_ptr<VideoProvider> GetProvider(agi::fs::path const& video_file, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});
+	static std::unique_ptr<VideoProvider> GetProvider(agi::fs::path const& video_file, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 };

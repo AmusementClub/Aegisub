@@ -121,7 +121,8 @@ void TXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename,
 	}
 }
 
-void TXTSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding) const {
+void TXTSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
+	(void)choice_sink;
 	size_t num_actor_names = 0, num_dialogue_lines = 0;
 
 	// Detect number of lines with Actor field filled out

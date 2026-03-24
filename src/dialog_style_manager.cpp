@@ -681,7 +681,7 @@ void DialogStyleManager::OnCurrentImport() {
 
 	std::string charset;
 	try {
-		charset = CharSetDetect::GetEncoding(filename);
+		charset = CharSetDetect::GetEncoding(filename, c->GetSingleChoiceInteractionSink());
 	}
 	catch (agi::UserCancelException const&) {
 		return;
@@ -693,7 +693,7 @@ void DialogStyleManager::OnCurrentImport() {
 		if (!reader)
 			wxMessageBox(wxS("Unsupported subtitle format"), wxS("Error"), wxOK | wxICON_ERROR | wxCENTER, this);
 		else
-			reader->ReadFile(&temp, filename, 0, charset);
+			reader->ReadFile(&temp, filename, 0, charset, c->GetSingleChoiceInteractionSink());
 	}
 	catch (agi::Exception const& err) {
 		wxMessageBox(to_wx(err.GetMessage()), wxS("Error"), wxOK | wxICON_ERROR | wxCENTER, this);

@@ -47,8 +47,8 @@ std::vector<std::string> TranStationSubtitleFormat::GetWriteWildcards() const {
 	return {"transtation.txt"};
 }
 
-void TranStationSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& vfps, std::string const& encoding) const {
-	auto fps = AskForFPS(false, true, vfps);
+void TranStationSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& vfps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
+	auto fps = AskForFPS(false, true, vfps, choice_sink);
 	if (!fps.IsLoaded()) return;
 
 	// Convert to TranStation

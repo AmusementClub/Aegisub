@@ -158,7 +158,8 @@ struct Writer {
 };
 }
 
-void AssSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding) const {
+void AssSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
+	(void)choice_sink;
 	Writer writer(filename, encoding);
 	writer.Write(src->Info);
 	writer.Write(src->Properties);
@@ -169,7 +170,8 @@ void AssSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filen
 	writer.Close();
 }
 
-void AssSubtitleFormat::ExportFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding) const {
+void AssSubtitleFormat::ExportFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
+	(void)choice_sink;
 	Writer writer(filename, encoding);
 	writer.Write(src->Info);
 	writer.Write(src->Styles);

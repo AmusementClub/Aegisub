@@ -156,7 +156,8 @@ void TTXTSubtitleFormat::ProcessHeader(wxXmlNode *node) const {
 	// TODO
 }
 
-void TTXTSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding) const {
+void TTXTSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
+	(void)choice_sink;
 	// Convert to TTXT
 	AssFile copy(*src);
 	ConvertToTTXT(copy);

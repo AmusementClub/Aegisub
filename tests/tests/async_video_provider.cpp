@@ -6,6 +6,7 @@
 #include "../../src/export_fixstyle.h"
 #include "../../src/include/aegisub/subtitles_provider.h"
 #include "../../src/subtitle_overlay_blend.h"
+#include "../../src/ui_services.h"
 #include "../../src/transient_font_set.h"
 #include "../../src/video_render_geometry.h"
 #include "../../src/include/aegisub/video_provider.h"
@@ -528,6 +529,7 @@ AssFile MakeSubtitleFile(std::string const& text) {
 std::function<std::unique_ptr<VideoProvider>()> g_video_provider_factory;
 std::function<std::unique_ptr<SubtitlesProvider>(SubtitleRenderEnvironment const&)> g_subtitles_provider_factory;
 std::shared_ptr<const TransientFontSet> g_last_factory_transient_fonts;
+std::shared_ptr<agi::SingleChoiceInteractionSink> g_last_factory_choice_sink;
 agi::BackgroundRunner *g_last_factory_background_runner = nullptr;
 
 struct ScopedFactoryOverride final {
@@ -535,6 +537,7 @@ struct ScopedFactoryOverride final {
 		g_video_provider_factory = nullptr;
 		g_subtitles_provider_factory = nullptr;
 		g_last_factory_transient_fonts.reset();
+		g_last_factory_choice_sink.reset();
 		g_last_factory_background_runner = nullptr;
 	}
 };
@@ -542,7 +545,8 @@ struct ScopedFactoryOverride final {
 
 std::vector<std::string> VideoProviderFactory::GetClasses() { return {}; }
 std::vector<std::pair<std::string, std::string>> VideoProviderFactory::GetChoices() { return {}; }
-std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *, std::shared_ptr<agi::SingleChoiceInteractionSink>) {
+std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
+	g_last_factory_choice_sink = std::move(choice_sink);
 	if (g_video_provider_factory)
 		return g_video_provider_factory();
 	return nullptr;
@@ -1512,4 +1516,24 @@ TEST(async_video_provider, filename_constructor_forwards_transient_fonts_to_fact
 	ASSERT_GE(frame->data.size(), 2u);
 	EXPECT_EQ(3, frame->data[0]);
 	EXPECT_EQ(1, frame->data[1]);
+}
+
+TEST(async_video_provider, filename_constructor_forwards_choice_sink_to_video_factory) {
+	ScopedFactoryOverride scope;
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeSubtitlesProvider;
+
+	g_video_provider_factory = [state] {
+		return agi::make_unique<FakeVideoProvider>(state);
+	};
+	g_subtitles_provider_factory = [subs](SubtitleRenderEnvironment const&) {
+		return std::unique_ptr<SubtitlesProvider>(subs);
+	};
+
+	auto choice_sink = std::make_shared<agi::NullSingleChoiceInteractionSink>();
+	wxEvtHandler parent;
+	AsyncVideoProvider provider(agi::fs::path("dummy.mkv"), "", &parent, nullptr, {}, {}, choice_sink);
+
+	ASSERT_TRUE(g_last_factory_choice_sink);
+	EXPECT_EQ(choice_sink, g_last_factory_choice_sink);
 }

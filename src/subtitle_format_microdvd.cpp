@@ -126,8 +126,8 @@ void MicroDVDSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& file
 	}
 }
 
-void MicroDVDSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& vfps, std::string const& encoding) const {
-	agi::vfr::Framerate fps = AskForFPS(true, false, vfps);
+void MicroDVDSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& vfps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
+	agi::vfr::Framerate fps = AskForFPS(true, false, vfps, choice_sink);
 	if (!fps.IsLoaded()) return;
 
 	AssFile copy(*src);

@@ -43,6 +43,7 @@ if(GTEST_FOUND)
         src/fft.cpp
         src/mkv_wrap_common.cpp
         src/native_library.cpp
+        src/perf_trace.cpp
         src/text_file_writer.cpp
         src/utils.cpp
         tests/tests/cajun.cpp
@@ -52,10 +53,6 @@ if(GTEST_FOUND)
         tests/tests/compatibility_overlay_buffer_plan.cpp
         tests/tests/csri_renderer_discovery.cpp
         tests/tests/dialogue_lexer.cpp
-        tests/tests/ffms_color_metadata.cpp
-        tests/tests/ffms_chroma_location.cpp
-        tests/tests/ffms_native_format_info.cpp
-        tests/tests/ffms_version.cpp
         tests/tests/format.cpp
         tests/tests/fs.cpp
         tests/tests/hotkey.cpp
@@ -77,6 +74,7 @@ if(GTEST_FOUND)
         tests/tests/mru.cpp
         tests/tests/option.cpp
         tests/tests/path.cpp
+        tests/tests/perf_trace.cpp
         tests/tests/ready_flag.cpp
         tests/tests/scope_exit.cpp
         tests/tests/signals.cpp
@@ -118,6 +116,12 @@ if(GTEST_FOUND)
     target_compile_definitions(gtest-run PRIVATE CMAKE_BUILD)
     target_include_directories(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     if(WITH_FFMS2)
+        target_sources(gtest-run PRIVATE
+            tests/tests/ffms_color_metadata.cpp
+            tests/tests/ffms_chroma_location.cpp
+            tests/tests/ffms_native_format_info.cpp
+            tests/tests/ffms_version.cpp
+        )
         target_include_directories(gtest-run PRIVATE
             "${FFMS2_INCLUDE_DIR}"
         )

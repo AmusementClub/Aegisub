@@ -33,6 +33,7 @@
 #include "include/aegisub/audio_player.h"
 #include "include/aegisub/context.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "project.h"
 
 #include <libaegisub/audio/provider.h>
@@ -73,7 +74,9 @@ void AudioController::OnPlaybackTimer(wxTimerEvent &)
 	}
 	else
 	{
-		AnnouncePlaybackPosition(MillisecondsFromSamples(pos));
+		auto const position_ms = MillisecondsFromSamples(pos);
+		perf_trace::ObserveAudioPlaybackPosition(position_ms);
+		AnnouncePlaybackPosition(position_ms);
 	}
 }
 
@@ -136,6 +139,7 @@ void AudioController::PlayRange(const TimeRange &range)
 {
 	if (!player) return;
 
+	perf_trace::ResetAudioPlaybackInterval();
 	player->Play(SamplesFromMilliseconds(range.begin()), SamplesFromMilliseconds(range.length()));
 	playback_mode = PM_Range;
 	playback_timer.Start(20);
@@ -162,6 +166,7 @@ void AudioController::PlayToEnd(int start_ms)
 	if (!player) return;
 
 	int64_t start_sample = SamplesFromMilliseconds(start_ms);
+	perf_trace::ResetAudioPlaybackInterval();
 	player->Play(start_sample, provider->GetNumSamples()-start_sample);
 	playback_mode = PM_ToEnd;
 	playback_timer.Start(20);
@@ -176,6 +181,7 @@ void AudioController::Stop()
 	player->Stop();
 	playback_mode = PM_NotPlaying;
 	playback_timer.Stop();
+	perf_trace::ResetAudioPlaybackInterval();
 
 	AnnouncePlaybackStop();
 }

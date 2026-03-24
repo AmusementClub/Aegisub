@@ -36,6 +36,7 @@
 
 #include "colour_button.h"
 #include "compat.h"
+#include "perf_trace.h"
 #include "string_codec.h"
 #include "validators.h"
 
@@ -456,6 +457,7 @@ namespace Automation4 {
 
 		if (!use_buttons) {
 			window->SetSizerAndFit(s);
+			perf_trace::TraceLuaDialogOpenEnd(static_cast<int>(controls.size()), 0, -1.0, true);
 			return window;
 		}
 
@@ -500,6 +502,7 @@ namespace Automation4 {
 		ms->Add(s, 0, wxBOTTOM, 5);
 		ms->Add(bs);
 		window->SetSizerAndFit(ms);
+		perf_trace::TraceLuaDialogOpenEnd(static_cast<int>(controls.size()), static_cast<int>(buttons.size()), -1.0, true);
 
 		return window;
 	}

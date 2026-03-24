@@ -49,6 +49,7 @@
 #include "include/aegisub/context.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "project.h"
 #include "subs_controller.h"
 #include "subtitles_provider_libass.h"
@@ -209,6 +210,7 @@ bool AegisubApp::OnInit() {
 #endif
 
 	StartupLog("Create log writer");
+	perf_trace::Initialize(GetAegisubLongVersionString());
 	auto path_log = config::path->Decode("?user/log/");
 	agi::fs::CreateDirectory(path_log);
 	agi::log::log->Subscribe(agi::make_unique<agi::log::JsonEmitter>(path_log));
@@ -388,6 +390,8 @@ int AegisubApp::OnExit() {
 	delete config::global_scripts;
 
 	AssExportFilterChain::Clear();
+
+	perf_trace::Shutdown();
 
 	// Keep this last!
 	delete agi::log::log;

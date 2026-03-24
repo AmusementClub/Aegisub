@@ -30,6 +30,7 @@
 #include "include/aegisub/video_provider.h"
 #include "mkv_wrap.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "selection_controller.h"
 #include "subs_controller.h"
 #include "transient_font_set.h"
@@ -49,6 +50,7 @@
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
 
+#include <chrono>
 #include <filesystem>
 
 namespace {
@@ -395,6 +397,7 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 		return false;
 	}
 
+	auto const load_started = std::chrono::steady_clock::now();
 	try {
 		auto old_matrix = context->ass->GetScriptInfo("YCbCr Matrix");
 		video_provider = agi::make_unique<AsyncVideoProvider>(
@@ -439,6 +442,8 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 
 	AnnounceKeyframesModified(keyframes);
 	AnnounceTimecodesModified(timecodes);
+	auto const duration_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - load_started).count();
+	perf_trace::TraceVideoOpen(path, video_provider->GetWidth(), video_provider->GetHeight(), video_provider->GetFrameCount(), video_provider->HasAudio(), video_provider->GetDecoderName(), duration_ms);
 	return true;
 }
 

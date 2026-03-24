@@ -26,6 +26,7 @@
 #include "subtitle_overlay_blend.h"
 #include "video_frame.h"
 #include "video_provider_manager.h"
+#include "perf_trace.h"
 
 #include <libaegisub/dispatch.h>
 #include <libaegisub/log.h>
@@ -646,6 +647,7 @@ bool AsyncVideoProvider::ProcessPending() {
 		bool should_deliver =
 			work.content_version == current_content_version &&
 			work.request_version == current_request_version;
+		perf_trace::ObserveFrameResult(frame_number, time, should_deliver, false);
 		if (should_deliver) {
 			DeliverEvent(std::move(evt));
 		}

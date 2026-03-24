@@ -35,6 +35,7 @@
 #include "auto4_lua.h"
 
 #include "compat.h"
+#include "perf_trace.h"
 
 #include <libaegisub/lua/utils.h>
 
@@ -187,12 +188,19 @@ namespace Automation4 {
 	int LuaProgressSink::LuaDisplayDialog(lua_State *L)
 	{
 		ProgressSink *ps = GetObjPointer(L, lua_upvalueindex(1));
+		perf_trace::TraceLuaDialogOpenBegin();
 
-		LuaDialog dlg(L, true); // magically creates the config dialog structure etc
-		ps->ShowDialog(&dlg);
+		try {
+			LuaDialog dlg(L, true); // magically creates the config dialog structure etc
+			ps->ShowDialog(&dlg);
 
-		// more magic: puts two values on stack: button pushed and table with control results
-		return dlg.LuaReadBack(L);
+			// more magic: puts two values on stack: button pushed and table with control results
+			return dlg.LuaReadBack(L);
+		}
+		catch (...) {
+			perf_trace::TraceLuaDialogOpenEnd(-1, -1, -1.0, false);
+			throw;
+		}
 	}
 
 	int LuaProgressSink::LuaDisplayOpenDialog(lua_State *L)

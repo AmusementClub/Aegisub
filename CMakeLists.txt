@@ -501,6 +501,7 @@ add_executable(Aegisub WIN32
     src/csri_renderer_discovery.cpp
     src/native_library.cpp
     src/pen.cpp
+    src/perf_trace.cpp
     src/persist_location.cpp
     src/preferences.cpp
     src/preferences_base.cpp

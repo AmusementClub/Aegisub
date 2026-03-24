@@ -21,6 +21,7 @@
 
 #include <libaegisub/make_unique.h>
 
+#include <array>
 #include <list>
 #include <unordered_map>
 
@@ -65,6 +66,10 @@ struct StepWarmState {
 	int last_delta = 0;
 };
 
+constexpr size_t StepWarmStateIndex(CachedFrameKind kind) {
+	return static_cast<size_t>(kind);
+}
+
 size_t EstimateNativeFrameSize(SourceFrame const& frame) {
 	size_t total_size = 0;
 	for (int i = 0; i < frame.plane_count; ++i) {
@@ -91,7 +96,7 @@ class VideoProviderCache final : public VideoProvider {
 	std::list<CachedFrame> cache;
 	std::unordered_map<CachedFrameKey, std::list<CachedFrame>::iterator, CachedFrameKeyHash> cache_index;
 	size_t total_cache_size = 0;
-	StepWarmState step_warm;
+	std::array<StepWarmState, 2> step_warm = { };
 
 	void ClearCache() {
 		cache_index.clear();
@@ -141,24 +146,22 @@ class VideoProviderCache final : public VideoProvider {
 	}
 
 	int UpdateStepWarmState(CachedFrameKey const& key) {
+		auto& warm_state = step_warm[StepWarmStateIndex(key.kind)];
 		int warm_delta = 0;
-		if (step_warm.has_last_request && step_warm.last_key.kind == key.kind) {
-			int delta = key.frame_number - step_warm.last_key.frame_number;
+		if (warm_state.has_last_request) {
+			int delta = key.frame_number - warm_state.last_key.frame_number;
 			if (delta != 0) {
-				if (step_warm.last_delta == 0 || step_warm.last_delta == delta)
+				if (warm_state.last_delta == 0 || warm_state.last_delta == delta)
 					warm_delta = delta;
-				step_warm.last_delta = delta;
+				warm_state.last_delta = delta;
 			}
 			else {
-				step_warm.last_delta = 0;
+				warm_state.last_delta = 0;
 			}
 		}
-		else {
-			step_warm.last_delta = 0;
-		}
 
-		step_warm.last_key = key;
-		step_warm.has_last_request = true;
+		warm_state.last_key = key;
+		warm_state.has_last_request = true;
 		return warm_delta;
 	}
 

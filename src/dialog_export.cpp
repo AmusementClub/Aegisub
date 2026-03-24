@@ -45,7 +45,6 @@
 #include <wx/dialog.h>
 #include <wx/checklst.h>
 #include <wx/choice.h>
-#include <wx/msgdlg.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
@@ -201,13 +200,13 @@ void DialogExport::OnProcess(wxCommandEvent &) {
 	}
 	catch (agi::UserCancelException const&) { }
 	catch (agi::Exception const& err) {
-		wxMessageBox(to_wx(err.GetMessage()), wxS("Error exporting subtitles"), wxOK | wxICON_ERROR | wxCENTER, &d);
+		c->ShowError(err.GetMessage(), "Error exporting subtitles");
 	}
 	catch (std::exception const& err) {
-		wxMessageBox(to_wx(err.what()), wxS("Error exporting subtitles"), wxOK | wxICON_ERROR | wxCENTER, &d);
+		c->ShowError(err.what(), "Error exporting subtitles");
 	}
 	catch (...) {
-		wxMessageBox(wxS("Unknown error"), wxS("Error exporting subtitles"), wxOK | wxICON_ERROR | wxCENTER, &d);
+		c->ShowError("Unknown error", "Error exporting subtitles");
 	}
 
 	d.EndModal(0);

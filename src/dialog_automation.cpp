@@ -48,7 +48,6 @@
 #include <wx/filedlg.h>
 #include <wx/listctrl.h>
 #include <wx/log.h>
-#include <wx/msgdlg.h>
 #include <wx/sizer.h>
 
 namespace {
@@ -298,7 +297,7 @@ void DialogAutomation::OnInfo(wxCommandEvent &)
 			info.push_back(fmt_tl("    Export filter: %s", f->GetName()));
 	}
 
-	wxMessageBox(wxJoin(info, '\n', 0), _("Automation Script Info"));
+	context->ShowInfo(from_wx(wxJoin(info, '\n', 0)), from_wx(_("Automation Script Info")));
 }
 
 void DialogAutomation::OnReloadAutoload(wxCommandEvent &)

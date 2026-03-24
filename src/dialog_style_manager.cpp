@@ -43,6 +43,7 @@
 #include "options.h"
 #include "persist_location.h"
 #include "selection_controller.h"
+#include "ui_services.h"
 
 #include <libaegisub/string_utils.h>
 #include "subtitle_format.h"
@@ -68,7 +69,6 @@
 #include <wx/fontenum.h>
 #include <wx/intl.h>
 #include <wx/listbox.h>
-#include <wx/msgdlg.h>
 #include <wx/radiobox.h>
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
@@ -235,7 +235,7 @@ std::string unique_name(Func name_checker, std::string const& source_name) {
 }
 
 template<class Func1, class Func2>
-void add_styles(Func1 name_checker, Func2 style_adder) {
+int add_styles(Func1 name_checker, Func2 style_adder) {
 	auto cb = GetClipboard();
 	int failed_to_parse = 0;
 	for (auto tok : agi::Split(cb, '\n')) {
@@ -250,14 +250,24 @@ void add_styles(Func1 name_checker, Func2 style_adder) {
 			++failed_to_parse;
 		}
 	}
-	if (failed_to_parse)
-		wxMessageBox(_("Could not parse style"), _("Could not parse style"), wxOK | wxICON_EXCLAMATION);
+	return failed_to_parse;
 }
 
-int confirm_delete(int n, wxWindow *parent, wxString const& title) {
-	return wxMessageBox(
+bool confirm_action(agi::Context *context, wxString const& title, wxString const& message, agi::InteractionIcon icon = agi::InteractionIcon::Question) {
+	return context->RequestInteraction({
+		from_wx(title),
+		from_wx(message),
+		agi::InteractionButtons::YesNo,
+		icon
+	}) == agi::InteractionResult::Yes;
+}
+
+bool confirm_delete(int n, agi::Context *context, wxString const& title) {
+	return confirm_action(
+		context,
+		title,
 		fmt_plural(n, "Are you sure you want to delete this style?", "Are you sure you want to delete these %d styles?", n),
-		title, wxYES_NO | wxICON_EXCLAMATION, parent);
+		agi::InteractionIcon::Warning);
 }
 
 int get_single_sel(wxListBox *lb) {
@@ -477,15 +487,17 @@ void DialogStyleManager::OnCatalogNew() {
 
 	// Make sure that there is no storage with the same name (case insensitive search since Windows filenames are case insensitive)
 	if (CatalogList->FindString(name, false) != wxNOT_FOUND) {
-		wxMessageBox(_("A catalog with that name already exists."), _("Catalog name conflict"), wxOK | wxICON_ERROR | wxCENTER);
+		c->ShowError(
+			from_wx(_("A catalog with that name already exists.")),
+			from_wx(_("Catalog name conflict")));
 		return;
 	}
 
 	// Warn about bad characters
 	if (badchars_removed) {
-		wxMessageBox(
-			fmt_tl("The specified catalog name contains one or more illegal characters. They have been replaced with underscores instead.\nThe catalog has been renamed to \"%s\".", name),
-			_("Invalid characters"));
+		c->ShowWarning(
+			from_wx(fmt_tl("The specified catalog name contains one or more illegal characters. They have been replaced with underscores instead.\nThe catalog has been renamed to \"%s\".", name)),
+			from_wx(_("Invalid characters")));
 	}
 
 	// Add to list of storages
@@ -499,8 +511,7 @@ void DialogStyleManager::OnCatalogDelete() {
 
 	wxString name = CatalogList->GetStringSelection();
 	wxString message = fmt_tl("Are you sure you want to delete the storage \"%s\" from the catalog?", name);
-	int option = wxMessageBox(message, _("Confirm delete"), wxYES_NO | wxICON_EXCLAMATION , this);
-	if (option == wxYES) {
+	if (confirm_action(c, _("Confirm delete"), message, agi::InteractionIcon::Warning)) {
 		agi::fs::Remove(config::path->Decode("?user/catalog/" + from_wx(name) + ".sty"));
 		CatalogList->Delete(CatalogList->GetSelection());
 		CatalogList->SetSelection(0);
@@ -517,7 +528,7 @@ void DialogStyleManager::OnCopyToStorage() {
 		wxString styleName = CurrentList->GetString(selections[i]);
 
 		if (AssStyle *style = Store.GetStyle(from_wx(styleName))) {
-			if (wxYES == wxMessageBox(fmt_tl("There is already a style with the name \"%s\" in the current storage. Overwrite?", styleName), _("Style name collision"), wxYES_NO)) {
+			if (confirm_action(c, _("Style name collision"), fmt_tl("There is already a style with the name \"%s\" in the current storage. Overwrite?", styleName))) {
 				*style = *styleMap.at(selections[i]);
 				copied.push_back(styleName);
 			}
@@ -544,7 +555,7 @@ void DialogStyleManager::OnCopyToCurrent() {
 		wxString styleName = StorageList->GetString(selections[i]);
 
 		if (AssStyle *style = c->ass->GetStyle(from_wx(styleName))) {
-			if (wxYES == wxMessageBox(fmt_tl("There is already a style with the name \"%s\" in the current script. Overwrite?", styleName), _("Style name collision"), wxYES_NO)) {
+			if (confirm_action(c, _("Style name collision"), fmt_tl("There is already a style with the name \"%s\" in the current script. Overwrite?", styleName))) {
 				*style = *Store[selections[i]];
 				copied.push_back(styleName);
 			}
@@ -580,17 +591,21 @@ void DialogStyleManager::CopyToClipboard(wxListBox *list, T const& v) {
 }
 
 void DialogStyleManager::PasteToCurrent() {
-	add_styles(
+	auto failed_to_parse = add_styles(
 		[=](std::string const& str) { return c->ass->GetStyle(str); },
 		[=](AssStyle *s) { c->ass->Styles.push_back(*s); });
+	if (failed_to_parse)
+		c->ShowWarning(from_wx(_("Could not parse style")), from_wx(_("Could not parse style")));
 
 	c->ass->Commit(from_wx(_("style paste")), AssFile::COMMIT_STYLES);
 }
 
 void DialogStyleManager::PasteToStorage() {
-	add_styles(
+	auto failed_to_parse = add_styles(
 		[=](std::string const& str) { return Store.GetStyle(str); },
 		[=](AssStyle *s) { Store.push_back(std::unique_ptr<AssStyle>(s)); });
+	if (failed_to_parse)
+		c->ShowWarning(from_wx(_("Could not parse style")), from_wx(_("Could not parse style")));
 
 	UpdateStorage();
 	StorageList->SetStringSelection(to_wx(Store.back()->name));
@@ -628,7 +643,7 @@ void DialogStyleManager::OnStorageDelete() {
 	wxArrayInt selections;
 	int n = StorageList->GetSelections(selections);
 
-	if (confirm_delete(n, this, _("Confirm delete from storage")) == wxYES) {
+	if (confirm_delete(n, c, _("Confirm delete from storage"))) {
 		for (int i = 0; i < n; i++)
 			Store.Delete(selections[i] - i);
 		UpdateStorage();
@@ -667,7 +682,7 @@ void DialogStyleManager::OnCurrentDelete() {
 	wxArrayInt selections;
 	int n = CurrentList->GetSelections(selections);
 
-	if (confirm_delete(n, this, _("Confirm delete from current")) == wxYES) {
+	if (confirm_delete(n, c, _("Confirm delete from current"))) {
 		for (int i = 0; i < n; i++) {
 			delete styleMap.at(selections[i]);
 		}
@@ -690,23 +705,25 @@ void DialogStyleManager::OnCurrentImport() {
 	AssFile temp;
 	try {
 		auto reader = SubtitleFormat::GetReader(filename, charset);
-		if (!reader)
-			wxMessageBox(wxS("Unsupported subtitle format"), wxS("Error"), wxOK | wxICON_ERROR | wxCENTER, this);
-		else
-			reader->ReadFile(&temp, filename, 0, charset, c->GetSingleChoiceInteractionSink());
+		if (!reader) {
+			c->ShowError("Unsupported subtitle format");
+			return;
+		}
+		reader->ReadFile(&temp, filename, 0, charset, c->GetSingleChoiceInteractionSink());
 	}
 	catch (agi::Exception const& err) {
-		wxMessageBox(to_wx(err.GetMessage()), wxS("Error"), wxOK | wxICON_ERROR | wxCENTER, this);
+		c->ShowError(err.GetMessage());
+		return;
 	}
 	catch (...) {
-		wxMessageBox(wxS("Unknown error"), wxS("Error"), wxOK | wxICON_ERROR | wxCENTER, this);
+		c->ShowError("Unknown error");
 		return;
 	}
 
 	// Get styles
 	auto styles = temp.GetStyles();
 	if (styles.empty()) {
-		wxMessageBox(_("The selected file has no available styles."), _("Error Importing Styles"));
+		c->ShowError(from_wx(_("The selected file has no available styles.")), from_wx(_("Error Importing Styles")));
 		return;
 	}
 
@@ -720,11 +737,7 @@ void DialogStyleManager::OnCurrentImport() {
 	for (auto const& sel : selections) {
 		// Check if there is already a style with that name
 		if (AssStyle *existing = c->ass->GetStyle(styles[sel])) {
-			int answer = wxMessageBox(
-				fmt_tl("There is already a style with the name \"%s\" in the current script. Overwrite?", styles[sel]),
-				_("Style name collision"),
-				wxYES_NO);
-			if (answer == wxYES) {
+			if (confirm_action(c, _("Style name collision"), fmt_tl("There is already a style with the name \"%s\" in the current script. Overwrite?", styles[sel]))) {
 				modified = true;
 				*existing = *temp.GetStyle(styles[sel]);
 			}
@@ -814,7 +827,7 @@ struct cmp_name {
 };
 
 template<class Cont>
-static void do_move(Cont& styls, int type, int& first, int& last, bool storage) {
+static void do_move(Cont& styls, int type, int& first, int& last, bool storage, agi::Context *context) {
 	auto begin = styls.begin();
 
 	// Move up
@@ -846,10 +859,8 @@ static void do_move(Cont& styls, int type, int& first, int& last, bool storage) 
 	// Sort
 	else if (type == 4) {
 		// Get confirmation
-		if (storage) {
-			int res = wxMessageBox(_("Are you sure? This cannot be undone!"), _("Sort styles"), wxYES_NO | wxCENTER);
-			if (res == wxNO) return;
-		}
+		if (storage && !confirm_action(context, _("Sort styles"), _("Are you sure? This cannot be undone!"), agi::InteractionIcon::Warning))
+			return;
 
 		sort(styls.begin(), styls.end(), cmp_name());
 
@@ -873,11 +884,11 @@ void DialogStyleManager::MoveStyles(bool storage, int type) {
 	}
 
 	if (storage) {
-		do_move(Store, type, first, last, true);
+		do_move(Store, type, first, last, true, c);
 		UpdateStorage();
 	}
 	else {
-		do_move(styleMap, type, first, last, false);
+		do_move(styleMap, type, first, last, false, c);
 
 		// Replace styles
 		size_t curn = 0;

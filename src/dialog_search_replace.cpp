@@ -36,7 +36,6 @@
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
 #include <wx/radiobox.h>
-#include <wx/msgdlg.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
@@ -142,7 +141,7 @@ void DialogSearchReplace::FindReplace(bool (SearchReplaceEngine::*func)()) {
 		((*c->search).*func)();
 	}
 	catch (std::exception const& e) {
-		wxMessageBox(to_wx(e.what()), wxS("Error"), wxOK | wxICON_ERROR | wxCENTER, this);
+		c->ShowError(e.what());
 		return;
 	}
 

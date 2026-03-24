@@ -46,7 +46,6 @@
 
 #include <algorithm>
 #include <wx/checkbox.h>
-#include <wx/msgdlg.h>
 #include <wx/sizer.h>
 #include <wx/settings.h>
 #include <wx/stattext.h>
@@ -200,7 +199,7 @@ void DialogTranslation::OnActiveLineChanged(AssDialogue *new_line) {
 	cur_block = 0;
 
 	if (bad_block(blocks[cur_block]) && !NextBlock()) {
-		wxMessageBox(_("No more lines to translate."));
+		c->ShowInfo(from_wx(_("No more lines to translate.")));
 		EndModal(1);
 	}
 }
@@ -324,7 +323,7 @@ void DialogTranslation::Commit(bool next) {
 
 	if (next) {
 		if (!NextBlock()) {
-			wxMessageBox(_("No more lines to translate."));
+			c->ShowInfo(from_wx(_("No more lines to translate.")));
 			EndModal(1);
 		}
 	}

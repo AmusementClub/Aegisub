@@ -441,6 +441,9 @@ std::string DialogStyleEditor::GetStyleName() const {
 
 void DialogStyleEditor::Apply(bool apply, bool close) {
 	if (apply) {
+		auto notification_sink = c ? c->GetNotificationSink() : agi::MakeWindowNotificationSink(this);
+		auto interaction_sink = c ? c->GetInteractionSink() : agi::MakeWindowInteractionSink(this);
+
 		std::string new_name = from_wx(StyleName->GetValue());
 		std::replace(new_name.begin(), new_name.end(), ',', ';');
 
@@ -450,7 +453,9 @@ void DialogStyleEditor::Apply(bool apply, bool close) {
 		// Check if style name is unique
 		AssStyle *existing = store ? store->GetStyle(new_name) : c->ass->GetStyle(new_name);
 		if (existing && existing != style) {
-			wxMessageBox(_("There is already a style with this name. Please choose another name."), _("Style name conflict"), wxOK | wxICON_ERROR | wxCENTER);
+			notification_sink->ShowError(
+				from_wx(_("Style name conflict")),
+				from_wx(_("There is already a style with this name. Please choose another name.")));
 			return;
 		}
 
@@ -461,14 +466,16 @@ void DialogStyleEditor::Apply(bool apply, bool close) {
 				StyleRenamer renamer(c, work->name, new_name);
 				if (renamer.NeedsReplace()) {
 					// See if user wants to update style name through script
-					int answer = wxMessageBox(
-						_("Do you want to change all instances of this style in the script to this new name?"),
-						_("Update script?"),
-						wxYES_NO | wxCANCEL);
+					auto answer = interaction_sink->Request({
+						from_wx(_("Update script?")),
+						from_wx(_("Do you want to change all instances of this style in the script to this new name?")),
+						agi::InteractionButtons::YesNoCancel,
+						agi::InteractionIcon::Question
+					});
 
-					if (answer == wxCANCEL) return;
+					if (answer == agi::InteractionResult::Cancel) return;
 
-					if (answer == wxYES) {
+					if (answer == agi::InteractionResult::Yes) {
 						did_rename = true;
 						renamer.Replace();
 					}

@@ -31,7 +31,6 @@
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
 #include <wx/dialog.h>
-#include <wx/msgdlg.h>
 #include <wx/radiobox.h>
 #include <wx/radiobut.h>
 #include <wx/sizer.h>
@@ -233,7 +232,7 @@ void DialogSelection::Process(wxCommandEvent& event) {
 	}
 
 	if (count == 0)
-		wxMessageBox(message, _("Selection"), wxOK | wxCENTER, this);
+		con->ShowInfo(from_wx(message), from_wx(_("Selection")));
 	else
 		con->ShowStatus(from_wx(message));
 

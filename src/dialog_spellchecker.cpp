@@ -40,7 +40,6 @@
 #include <wx/dialog.h>
 #include <wx/intl.h>
 #include <wx/listbox.h>
-#include <wx/msgdlg.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
@@ -140,13 +139,13 @@ DialogSpellChecker::DialogSpellChecker(agi::Context *context)
 	// List of supported spellchecker languages
 	{
 		if (!spellchecker) {
-			wxMessageBox(wxS("No spellchecker available."), wxS("Error"), wxOK | wxICON_ERROR | wxCENTER);
+			context->ShowError("No spellchecker available.");
 			throw agi::UserCancelException("No spellchecker available");
 		}
 
 		dictionary_lang_codes = to_wx(spellchecker->GetLanguageList());
 		if (dictionary_lang_codes.empty()) {
-			wxMessageBox(wxS("No spellchecker dictionaries available."), wxS("Error"), wxOK | wxICON_ERROR | wxCENTER);
+			context->ShowError("No spellchecker dictionaries available.");
 			throw agi::UserCancelException("No spellchecker dictionaries available");
 		}
 
@@ -276,11 +275,15 @@ bool DialogSpellChecker::FindNext() {
 	}
 
 	if (IsShown()) {
-		wxMessageBox(_("Aegisub has finished checking spelling of this script."), _("Spell checking complete."));
+		context->ShowInfo(
+			from_wx(_("Aegisub has finished checking spelling of this script.")),
+			from_wx(_("Spell checking complete.")));
 		Close();
 	}
 	else {
-		wxMessageBox(_("Aegisub has found no spelling mistakes in this script."), _("Spell checking complete."));
+		context->ShowInfo(
+			from_wx(_("Aegisub has found no spelling mistakes in this script.")),
+			from_wx(_("Spell checking complete.")));
 		throw agi::UserCancelException("No spelling mistakes");
 	}
 

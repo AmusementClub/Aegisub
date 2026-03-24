@@ -117,9 +117,6 @@ class AsyncVideoProvider {
 	std::vector<std::shared_ptr<VideoFrame>> source_buffers;
 	std::vector<std::shared_ptr<VideoFrame>> composited_buffers;
 	std::vector<std::shared_ptr<SubtitleOverlayStorage>> subtitle_overlay_buffers;
-	std::array<std::shared_ptr<SubtitleOverlayStorage>, 2> compatibility_overlay_buffers = { };
-	int next_compatibility_overlay_buffer = 0;
-	std::shared_ptr<SubtitleOverlayStorage> previous_compatibility_overlay;
 	uint64_t overlay_continuity_generation = 1;
 
 	std::mutex pending_mutex;
@@ -136,7 +133,6 @@ class AsyncVideoProvider {
 	bool has_logged_source_mode = false;
 
 	void DeliverEvent(std::unique_ptr<wxEvent> evt);
-	void ResetCompatibilityOverlayState();
 	void AdvanceOverlayContinuityGeneration();
 	void InvalidateProviderOverlayState();
 	bool ReconfigureSourceOutputMode();

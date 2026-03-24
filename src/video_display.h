@@ -35,6 +35,7 @@
 #include <libaegisub/signal.h>
 
 #include "ivideo_renderer.h"
+#include "video_memory_stats.h"
 #include "video_render_packet.h"
 
 #include "vector2d.h"
@@ -178,6 +179,7 @@ public:
 	/// @brief Render the currently visible frame
 	void Render();
 	wxImage GetFrameImage(bool raw);
+	VideoDisplayMemoryStats CollectMemoryStats() const;
 
 	/// @brief Set the zoom level
 	/// @param value The new zoom level

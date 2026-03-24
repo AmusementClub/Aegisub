@@ -43,6 +43,7 @@
 #include "include/aegisub/hotkey.h"
 #include "include/aegisub/menu.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "project.h"
 #include "retina_helper.h"
 #include "spline_curve.h"
@@ -53,6 +54,7 @@
 #include "video_renderer_opengl.h"
 #include "video_render_routing.h"
 #include "video_display_layout.h"
+#include "video_memory_stats.h"
 #include "video_zoom.h"
 #include "video_controller.h"
 #include "video_frame.h"
@@ -130,6 +132,18 @@ wxImage GetBgraFallbackImage(agi::Context *context, int frame_number, double fra
 	if (!frame || frame->data.empty())
 		return {};
 	return GetImage(*frame);
+}
+
+VideoMemorySnapshot BuildVideoMemorySnapshot(agi::Context *context, VideoDisplay const* display) {
+	VideoMemorySnapshot snapshot;
+	if (!context || !context->project)
+		return snapshot;
+
+	if (auto* provider = context->project->VideoProvider())
+		snapshot.async = provider->CollectMemoryStats();
+	if (display)
+		snapshot.display = display->CollectMemoryStats();
+	return snapshot;
 }
 }
 
@@ -264,6 +278,23 @@ void VideoDisplay::UploadFrameData(FrameReadyEvent &evt) {
 
 	// Instead of calling Render(), we force a render here to minimize delay
 	DoRender();
+}
+
+VideoDisplayMemoryStats VideoDisplay::CollectMemoryStats() const {
+	VideoDisplayMemoryStats stats;
+	if (has_pending_packet)
+		stats.pending_packet_ref_bytes = EstimateVideoRenderPacketReferencedBytes(pending_packet);
+	if (has_displayed_packet)
+		stats.displayed_packet_ref_bytes = EstimateVideoRenderPacketReferencedBytes(displayed_packet);
+	if (videoRenderer) {
+		stats.primary_renderer_name = videoRenderer->GetDebugName();
+		stats.primary_renderer_texture_bytes = videoRenderer->EstimateTextureBytes();
+	}
+	if (subtitleOverlayRenderer) {
+		stats.secondary_renderer_name = subtitleOverlayRenderer->GetDebugName();
+		stats.secondary_renderer_texture_bytes = subtitleOverlayRenderer->EstimateTextureBytes();
+	}
+	return stats;
 }
 
 void VideoDisplay::Render() {
@@ -535,6 +566,10 @@ void VideoDisplay::DoRender() try {
 			has_displayed_packet = true;
 			pending_packet = { };
 			has_pending_packet = false;
+			if (perf_trace::ShouldSampleVideoMemory()) {
+				auto snapshot = BuildVideoMemorySnapshot(con, this);
+				perf_trace::ObserveVideoMemorySnapshot("frame_presented", snapshot);
+			}
 		}
 	}
 	catch (const VideoOutInitException& err) {

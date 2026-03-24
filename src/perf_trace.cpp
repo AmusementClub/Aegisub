@@ -41,6 +41,12 @@
 #include <string_view>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <psapi.h>
+#undef CreateDirectory
+#endif
+
 namespace perf_trace {
 namespace {
 
@@ -49,6 +55,7 @@ using Clock = std::chrono::steady_clock;
 constexpr size_t kBufferedEntryLimit = 64;
 constexpr size_t kBufferedByteLimit = 64 * 1024;
 constexpr auto kBufferedFlushInterval = std::chrono::milliseconds(250);
+constexpr auto kVideoMemorySampleInterval = std::chrono::milliseconds(500);
 constexpr double kAudioPlaybackTargetMs = 20.0;
 constexpr double kVideoPlaybackTargetMs = 10.0;
 
@@ -240,8 +247,21 @@ struct Summary {
 	uint64_t frame_dropped = 0;
 	uint64_t lua_dialog_success = 0;
 	uint64_t lua_dialog_failure = 0;
+	uint64_t video_memory_samples = 0;
 	std::array<uint64_t, 5> log_counts = { 0, 0, 0, 0, 0 };
 	std::map<std::string, uint64_t> op_counts;
+	size_t process_working_set_max_bytes = 0;
+	size_t process_private_max_bytes = 0;
+	size_t provider_cache_bgra_max_bytes = 0;
+	size_t provider_cache_native_max_bytes = 0;
+	size_t async_source_pool_max_bytes = 0;
+	size_t async_composited_pool_max_bytes = 0;
+	size_t async_overlay_pool_max_bytes = 0;
+	size_t async_compatibility_overlay_pool_max_bytes = 0;
+	size_t display_pending_packet_ref_max_bytes = 0;
+	size_t display_displayed_packet_ref_max_bytes = 0;
+	size_t renderer_primary_texture_max_bytes = 0;
+	size_t renderer_secondary_texture_max_bytes = 0;
 	IntervalSummary audio_playback_interval;
 	IntervalSummary video_playback_tick_interval;
 	DurationSummary lua_dialog_duration;
@@ -258,6 +278,7 @@ struct Session {
 	bool closing = false;
 	bool has_pending_lua_dialog_open = false;
 	int64_t pending_lua_dialog_open_started_ns = 0;
+	int64_t last_video_memory_sample_ns = 0;
 	agi::fs::path directory;
 	std::ofstream trace_stream;
 	std::vector<std::string> buffered_lines;
@@ -399,6 +420,7 @@ void WriteSummaryLocked(Session const& session) {
 	write_int("frame.dropped.total", session.summary.frame_dropped);
 	write_int("lua_dialog.success", session.summary.lua_dialog_success);
 	write_int("lua_dialog.failure", session.summary.lua_dialog_failure);
+	write_int("video_memory.samples", session.summary.video_memory_samples);
 	write_int("log.exception", session.summary.log_counts[agi::log::Exception]);
 	write_int("log.assert", session.summary.log_counts[agi::log::Assert]);
 	write_int("log.warning", session.summary.log_counts[agi::log::Warning]);
@@ -421,6 +443,18 @@ void WriteSummaryLocked(Session const& session) {
 	write_double("lua_dialog_duration.min_ms", session.summary.lua_dialog_duration.min_ms);
 	write_double("lua_dialog_duration.max_ms", session.summary.lua_dialog_duration.max_ms);
 	write_mean("lua_dialog_duration.mean_ms", session.summary.lua_dialog_duration.total_ms, session.summary.lua_dialog_duration.count);
+	write_int("process_working_set.max_bytes", session.summary.process_working_set_max_bytes);
+	write_int("process_private.max_bytes", session.summary.process_private_max_bytes);
+	write_int("provider_cache_bgra.max_bytes", session.summary.provider_cache_bgra_max_bytes);
+	write_int("provider_cache_native.max_bytes", session.summary.provider_cache_native_max_bytes);
+	write_int("async_source_pool.max_bytes", session.summary.async_source_pool_max_bytes);
+	write_int("async_composited_pool.max_bytes", session.summary.async_composited_pool_max_bytes);
+	write_int("async_overlay_pool.max_bytes", session.summary.async_overlay_pool_max_bytes);
+	write_int("async_compatibility_overlay_pool.max_bytes", session.summary.async_compatibility_overlay_pool_max_bytes);
+	write_int("display_pending_packet_ref.max_bytes", session.summary.display_pending_packet_ref_max_bytes);
+	write_int("display_displayed_packet_ref.max_bytes", session.summary.display_displayed_packet_ref_max_bytes);
+	write_int("renderer_primary_texture.max_bytes", session.summary.renderer_primary_texture_max_bytes);
+	write_int("renderer_secondary_texture.max_bytes", session.summary.renderer_secondary_texture_max_bytes);
 
 	for (auto const& [name, count] : session.summary.op_counts)
 		out << "op." << name << "=" << count << "\n";
@@ -461,6 +495,21 @@ void TraceLogEmitter::log(agi::log::SinkMessage const& sm) {
 
 bool IsEnabled() {
 	return trace_active.load(std::memory_order_relaxed);
+}
+
+bool ShouldSampleVideoMemory(bool force) {
+	if (!trace_active.load(std::memory_order_relaxed))
+		return false;
+
+	auto const timestamp_ns = NowNs();
+	auto& session = GetSession();
+	std::lock_guard<std::mutex> lock(session.mutex);
+	if (!session.enabled || session.closing)
+		return false;
+	if (force)
+		return true;
+	return timestamp_ns - session.last_video_memory_sample_ns
+		>= std::chrono::duration_cast<std::chrono::nanoseconds>(kVideoMemorySampleInterval).count();
 }
 
 agi::fs::path GetSessionDirectory() {
@@ -506,6 +555,7 @@ void InitializeAt(agi::fs::path const& session_dir, std::string const& build_lab
 		session.last_flush = Clock::now();
 		session.has_pending_lua_dialog_open = false;
 		session.pending_lua_dialog_open_started_ns = 0;
+		session.last_video_memory_sample_ns = 0;
 		session.session_id = session_dir.filename().string();
 		session.build_label = build_label;
 		session.source_tag = source_tag.empty() ? "manual" : source_tag;
@@ -744,6 +794,72 @@ void TraceLuaDialogOpenEnd(int control_count, int button_count, double duration_
 	metric_payload.AddDouble("duration_ms", duration_ms);
 	metric_payload.AddBool("succeeded", succeeded);
 	AppendEntryLocked(session, "metric", "lua_dialog_open_duration", metric_payload.Finish(), false, timestamp_ns);
+}
+
+void ObserveVideoMemorySnapshot(char const* reason, VideoMemorySnapshot const& snapshot_in, bool force) {
+	if (!trace_active.load(std::memory_order_relaxed))
+		return;
+
+	auto snapshot = snapshot_in;
+	auto const timestamp_ns = NowNs();
+	auto& session = GetSession();
+	std::lock_guard<std::mutex> lock(session.mutex);
+	if (!session.enabled || session.closing)
+		return;
+
+	auto const sample_interval_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(kVideoMemorySampleInterval).count();
+	if (!force && timestamp_ns - session.last_video_memory_sample_ns < sample_interval_ns)
+		return;
+	session.last_video_memory_sample_ns = timestamp_ns;
+
+#ifdef _WIN32
+	PROCESS_MEMORY_COUNTERS_EX counters = { };
+	if (GetProcessMemoryInfo(GetCurrentProcess(), reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&counters), sizeof(counters))) {
+		snapshot.process_working_set_bytes = static_cast<size_t>(counters.WorkingSetSize);
+		snapshot.process_private_bytes = static_cast<size_t>(counters.PrivateUsage);
+	}
+#endif
+
+	++session.summary.video_memory_samples;
+	session.summary.process_working_set_max_bytes = std::max(session.summary.process_working_set_max_bytes, snapshot.process_working_set_bytes);
+	session.summary.process_private_max_bytes = std::max(session.summary.process_private_max_bytes, snapshot.process_private_bytes);
+	session.summary.provider_cache_bgra_max_bytes = std::max(session.summary.provider_cache_bgra_max_bytes, snapshot.async.provider.cache_bgra_bytes);
+	session.summary.provider_cache_native_max_bytes = std::max(session.summary.provider_cache_native_max_bytes, snapshot.async.provider.cache_native_bytes);
+	session.summary.async_source_pool_max_bytes = std::max(session.summary.async_source_pool_max_bytes, snapshot.async.source_pool_bytes);
+	session.summary.async_composited_pool_max_bytes = std::max(session.summary.async_composited_pool_max_bytes, snapshot.async.composited_pool_bytes);
+	session.summary.async_overlay_pool_max_bytes = std::max(session.summary.async_overlay_pool_max_bytes, snapshot.async.subtitle_overlay_pool_bytes);
+	session.summary.async_compatibility_overlay_pool_max_bytes = std::max(session.summary.async_compatibility_overlay_pool_max_bytes, snapshot.async.compatibility_overlay_pool_bytes);
+	session.summary.display_pending_packet_ref_max_bytes = std::max(session.summary.display_pending_packet_ref_max_bytes, snapshot.display.pending_packet_ref_bytes);
+	session.summary.display_displayed_packet_ref_max_bytes = std::max(session.summary.display_displayed_packet_ref_max_bytes, snapshot.display.displayed_packet_ref_bytes);
+	session.summary.renderer_primary_texture_max_bytes = std::max(session.summary.renderer_primary_texture_max_bytes, snapshot.display.primary_renderer_texture_bytes);
+	session.summary.renderer_secondary_texture_max_bytes = std::max(session.summary.renderer_secondary_texture_max_bytes, snapshot.display.secondary_renderer_texture_bytes);
+
+	JsonObjectBuilder payload;
+	payload.AddString("reason", reason ? reason : "video_memory");
+	payload.AddInt("process_working_set_bytes", static_cast<int64_t>(snapshot.process_working_set_bytes));
+	payload.AddInt("process_private_bytes", static_cast<int64_t>(snapshot.process_private_bytes));
+	payload.AddInt("provider_cache_total_bytes", static_cast<int64_t>(snapshot.async.provider.cache_total_bytes));
+	payload.AddInt("provider_cache_bgra_bytes", static_cast<int64_t>(snapshot.async.provider.cache_bgra_bytes));
+	payload.AddInt("provider_cache_native_bytes", static_cast<int64_t>(snapshot.async.provider.cache_native_bytes));
+	payload.AddInt("provider_cache_bgra_frames", snapshot.async.provider.cache_bgra_frames);
+	payload.AddInt("provider_cache_native_frames", snapshot.async.provider.cache_native_frames);
+	payload.AddInt("async_source_pool_bytes", static_cast<int64_t>(snapshot.async.source_pool_bytes));
+	payload.AddInt("async_source_pool_buffers", snapshot.async.source_pool_buffers);
+	payload.AddInt("async_composited_pool_bytes", static_cast<int64_t>(snapshot.async.composited_pool_bytes));
+	payload.AddInt("async_composited_pool_buffers", snapshot.async.composited_pool_buffers);
+	payload.AddInt("async_subtitle_overlay_pool_bytes", static_cast<int64_t>(snapshot.async.subtitle_overlay_pool_bytes));
+	payload.AddInt("async_subtitle_overlay_pool_buffers", snapshot.async.subtitle_overlay_pool_buffers);
+	payload.AddInt("async_compatibility_overlay_pool_bytes", static_cast<int64_t>(snapshot.async.compatibility_overlay_pool_bytes));
+	payload.AddInt("async_compatibility_overlay_pool_buffers", snapshot.async.compatibility_overlay_pool_buffers);
+	payload.AddString("source_mode", SourceFrameOutputModeName(snapshot.async.selected_source_mode));
+	payload.AddString("decoder", snapshot.async.decoder_name);
+	payload.AddInt("display_pending_packet_ref_bytes", static_cast<int64_t>(snapshot.display.pending_packet_ref_bytes));
+	payload.AddInt("display_displayed_packet_ref_bytes", static_cast<int64_t>(snapshot.display.displayed_packet_ref_bytes));
+	payload.AddInt("renderer_primary_texture_bytes", static_cast<int64_t>(snapshot.display.primary_renderer_texture_bytes));
+	payload.AddString("renderer_primary", snapshot.display.primary_renderer_name);
+	payload.AddInt("renderer_secondary_texture_bytes", static_cast<int64_t>(snapshot.display.secondary_renderer_texture_bytes));
+	payload.AddString("renderer_secondary", snapshot.display.secondary_renderer_name);
+	AppendEntryLocked(session, "metric", "video_memory_snapshot", payload.Finish(), false, timestamp_ns);
 }
 
 } // namespace perf_trace

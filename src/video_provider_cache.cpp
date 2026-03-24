@@ -17,6 +17,7 @@
 #include "include/aegisub/video_provider.h"
 
 #include "options.h"
+#include "video_memory_stats.h"
 #include "video_frame.h"
 
 #include <libaegisub/make_unique.h>
@@ -269,6 +270,7 @@ public:
 	}
 	bool ShouldSetVideoProperties() const override { return master->ShouldSetVideoProperties(); }
 	bool HasAudio() const override                 { return master->HasAudio(); }
+	VideoProviderMemoryStats GetMemoryStats() const override;
 };
 
 void VideoProviderCache::GetFrame(int n, VideoFrame &out) {
@@ -323,6 +325,22 @@ bool VideoProviderCache::GetNativeFrame(int n, SourceFrame& out, std::shared_ptr
 		});
 	WarmNativeNeighbor({ n, CachedFrameKind::Native }, frame_size);
 	return true;
+}
+
+VideoProviderMemoryStats VideoProviderCache::GetMemoryStats() const {
+	VideoProviderMemoryStats stats = master->GetMemoryStats();
+	for (auto const& cached : cache) {
+		stats.cache_total_bytes += cached.size_bytes;
+		if (cached.key.kind == CachedFrameKind::Native) {
+			stats.cache_native_bytes += cached.size_bytes;
+			++stats.cache_native_frames;
+		}
+		else {
+			stats.cache_bgra_bytes += cached.size_bytes;
+			++stats.cache_bgra_frames;
+		}
+	}
+	return stats;
 }
 }
 

@@ -46,6 +46,14 @@
 
 struct VideoFrame;
 
+struct VideoProviderMemoryStats {
+	size_t cache_total_bytes = 0;
+	size_t cache_bgra_bytes = 0;
+	size_t cache_native_bytes = 0;
+	int cache_bgra_frames = 0;
+	int cache_native_frames = 0;
+};
+
 class VideoProvider {
 public:
 	virtual ~VideoProvider() = default;
@@ -122,6 +130,7 @@ public:
 	/// @brief Does this provider want Aegisub to cache video frames?
 	/// @return Returns true if caching is desired, false otherwise.
 	virtual bool WantsCaching() const { return false; }
+	virtual VideoProviderMemoryStats GetMemoryStats() const { return { }; }
 
 	/// Should the video properties in the script be set to this video's property if they already have values?
 	virtual bool ShouldSetVideoProperties() const { return true; }

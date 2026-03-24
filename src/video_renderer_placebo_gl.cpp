@@ -200,6 +200,7 @@ void PlaceboRendererGL::DestroyTargetResources() noexcept {
 	target_width = 0;
 	target_height = 0;
 	target_framebuffer = 0;
+	target_texture_estimated_bytes = 0;
 }
 
 void PlaceboRendererGL::DestroyResources() noexcept {
@@ -249,6 +250,7 @@ void PlaceboRendererGL::RecreateTargetTexture(int canvas_width, int canvas_heigh
 	target_width = canvas_width;
 	target_height = canvas_height;
 	target_framebuffer = framebuffer_id;
+	target_texture_estimated_bytes = static_cast<size_t>(canvas_width) * static_cast<size_t>(canvas_height) * 4;
 }
 
 void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
@@ -318,6 +320,7 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 		plane_state.flipped = uploaded_plane.flipped;
 		plane_state.shift_x = uploaded_plane.shift_x;
 		plane_state.shift_y = uploaded_plane.shift_y;
+		plane_state.estimated_bytes = static_cast<size_t>(data.row_stride) * static_cast<size_t>(data.height);
 		for (int component = 0; component < 4; ++component)
 			plane_state.component_mapping[static_cast<size_t>(component)] =
 				uploaded_plane.component_mapping[component];
@@ -332,6 +335,13 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 	image_chroma_location = upload_frame->chroma_location;
 	image_geometry = upload_frame->geometry;
 	has_frame = true;
+}
+
+size_t PlaceboRendererGL::EstimateTextureBytes() const noexcept {
+	size_t total_bytes = target_texture_estimated_bytes;
+	for (auto const& plane : image_planes)
+		total_bytes += plane.estimated_bytes;
+	return total_bytes;
 }
 
 void PlaceboRendererGL::UploadOverlay(SubtitleOverlay const*) {

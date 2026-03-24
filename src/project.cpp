@@ -37,6 +37,7 @@
 #include "ui_services.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "utils.h"
+#include "video_memory_stats.h"
 #include "video_controller.h"
 #include "video_display.h"
 
@@ -444,6 +445,11 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 	AnnounceTimecodesModified(timecodes);
 	auto const duration_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - load_started).count();
 	perf_trace::TraceVideoOpen(path, video_provider->GetWidth(), video_provider->GetHeight(), video_provider->GetFrameCount(), video_provider->HasAudio(), video_provider->GetDecoderName(), duration_ms);
+	if (perf_trace::ShouldSampleVideoMemory(true)) {
+		VideoMemorySnapshot snapshot;
+		snapshot.async = video_provider->CollectMemoryStats();
+		perf_trace::ObserveVideoMemorySnapshot("video_open", snapshot, true);
+	}
 	return true;
 }
 

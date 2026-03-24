@@ -19,6 +19,7 @@
 #include "include/aegisub/video_provider.h"
 #include "source_frame_format_selection.h"
 #include "ui_dispatch.h"
+#include "video_memory_stats.h"
 #include "video_render_packet.h"
 
 #include <libaegisub/exception.h>
@@ -185,6 +186,7 @@ public:
 	bool SetPreferredSourceModes(std::vector<SourceFrameOutputMode> modes);
 	void ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider> provider);
 	SourceFrameOutputMode GetSelectedSourceMode() const { return selected_source_mode; }
+	AsyncVideoProviderMemoryStats CollectMemoryStats();
 
 	int GetFrameCount() const             { return source_provider->GetFrameCount(); }
 	int GetWidth() const                  { return source_provider->GetWidth(); }

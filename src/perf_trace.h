@@ -2,11 +2,14 @@
 
 #include <libaegisub/fs_fwd.h>
 
+#include "video_memory_stats.h"
+
 #include <string>
 
 namespace perf_trace {
 
 bool IsEnabled();
+bool ShouldSampleVideoMemory(bool force = false);
 agi::fs::path GetSessionDirectory();
 
 void Initialize(std::string const& build_label = {});
@@ -28,5 +31,6 @@ void ObserveVideoPlaybackTick(int frame);
 
 void TraceLuaDialogOpenBegin();
 void TraceLuaDialogOpenEnd(int control_count, int button_count, double duration_ms, bool succeeded);
+void ObserveVideoMemorySnapshot(char const* reason, VideoMemorySnapshot const& snapshot, bool force = false);
 
 }

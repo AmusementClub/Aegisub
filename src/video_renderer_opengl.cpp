@@ -264,6 +264,15 @@ void OpenGLVideoRenderer::CreateLayerBuffers(LayerResources& layer) {
 		throw_message<VideoOutInitException>("Failed to create video vertex/index buffers.");
 }
 
+size_t OpenGLVideoRenderer::EstimateTextureBytes() const noexcept {
+	size_t total_bytes = 0;
+	for (auto const& tile : video_layer.layout.tiles)
+		total_bytes += static_cast<size_t>(tile.texture_w) * static_cast<size_t>(tile.texture_h) * 4;
+	for (auto const& tile : overlay_layer.layout.tiles)
+		total_bytes += static_cast<size_t>(tile.texture_w) * static_cast<size_t>(tile.texture_h) * 4;
+	return total_bytes;
+}
+
 void OpenGLVideoRenderer::EnsureInitialized() {
 	LoadFunctions();
 	DetectOpenGLCapabilities();

@@ -25,6 +25,7 @@
 #include "subtitle_overlay.h"
 #include "subtitle_overlay_blend.h"
 #include "video_frame.h"
+#include "video_memory_stats.h"
 #include "video_provider_manager.h"
 #include "perf_trace.h"
 
@@ -469,6 +470,41 @@ AsyncVideoProvider::~AsyncVideoProvider() {
 	worker->Sync([this] {
 		while (ProcessPending()) { }
 	});
+}
+
+AsyncVideoProviderMemoryStats AsyncVideoProvider::CollectMemoryStats() {
+	AsyncVideoProviderMemoryStats stats;
+	worker->Sync([&] {
+		stats.provider = source_provider->GetMemoryStats();
+		stats.selected_source_mode = selected_source_mode;
+		stats.decoder_name = source_provider->GetDecoderName();
+
+		stats.source_pool_buffers = static_cast<int>(source_buffers.size());
+		for (auto const& buffer : source_buffers) {
+			if (buffer)
+				stats.source_pool_bytes += EstimateVideoFrameStorageBytes(*buffer);
+		}
+
+		stats.composited_pool_buffers = static_cast<int>(composited_buffers.size());
+		for (auto const& buffer : composited_buffers) {
+			if (buffer)
+				stats.composited_pool_bytes += EstimateVideoFrameStorageBytes(*buffer);
+		}
+
+		stats.subtitle_overlay_pool_buffers = static_cast<int>(subtitle_overlay_buffers.size());
+		for (auto const& overlay : subtitle_overlay_buffers) {
+			if (overlay)
+				stats.subtitle_overlay_pool_bytes += EstimateSubtitleOverlayStorageBytes(*overlay);
+		}
+
+		for (auto const& overlay : compatibility_overlay_buffers) {
+			if (!overlay)
+				continue;
+			stats.compatibility_overlay_pool_bytes += EstimateSubtitleOverlayStorageBytes(*overlay);
+			++stats.compatibility_overlay_pool_buffers;
+		}
+	});
+	return stats;
 }
 
 void AsyncVideoProvider::LoadSubtitles(const AssFile *new_subs) throw() {

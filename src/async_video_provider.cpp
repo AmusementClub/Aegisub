@@ -761,7 +761,7 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 			}
 			left = pos;
 		}
-		if (missing_left >= 0 && left_boundary_status != KeyPointRangeScanStatus::FrameUnavailable) {
+		if (left_boundary_status != KeyPointRangeScanStatus::FrameUnavailable) {
 			for (int pos = left - 1; pos > missing_left; --pos) {
 				KeyPointBounds bounds;
 				auto const status = probe_frame(pos, bounds);
@@ -794,8 +794,9 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 			}
 			right = pos;
 		}
-		if (missing_right >= 0 && right_boundary_status != KeyPointRangeScanStatus::FrameUnavailable) {
-			for (int pos = right + 1; pos < missing_right; ++pos) {
+		int const right_refine_end = missing_right >= 0 ? missing_right : frame_count;
+		if (right_boundary_status != KeyPointRangeScanStatus::FrameUnavailable) {
+			for (int pos = right + 1; pos < right_refine_end; ++pos) {
 				KeyPointBounds bounds;
 				auto const status = probe_frame(pos, bounds);
 				if (status == KeyPointRangeScanStatus::FrameUnavailable) {

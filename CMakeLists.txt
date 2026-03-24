@@ -478,6 +478,7 @@ add_executable(Aegisub WIN32
     src/auto4_lua_dialog.cpp
     src/auto4_lua_progresssink.cpp
     src/base_grid.cpp
+    src/charset_choice.cpp
     src/charset_detect.cpp
     src/colorspace.cpp
     src/colour_button.cpp
@@ -516,7 +517,9 @@ add_executable(Aegisub WIN32
     src/subs_edit_box.cpp
     src/subs_edit_ctrl.cpp
     src/subs_preview.cpp
+    src/subtitle_fps_choice.cpp
     src/subtitle_overlay_blend.cpp
+    src/track_choice.cpp
     src/subtitles_provider.cpp
     src/subtitles_provider_libass.cpp
     src/text_file_reader.cpp

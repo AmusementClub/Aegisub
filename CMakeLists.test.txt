@@ -38,6 +38,7 @@ if(GTEST_FOUND)
         src/ass_style.cpp
         src/ass_style_storage.cpp
         src/async_video_provider.cpp
+        src/charset_choice.cpp
         src/compat.cpp
         src/csri_renderer_discovery.cpp
         src/fft.cpp
@@ -49,6 +50,7 @@ if(GTEST_FOUND)
         src/video_property_update.cpp
         tests/tests/cajun.cpp
         tests/tests/calltip_provider.cpp
+        tests/tests/charset_choice.cpp
         tests/tests/character_count.cpp
         tests/tests/compat.cpp
         tests/tests/color.cpp
@@ -87,10 +89,12 @@ if(GTEST_FOUND)
         tests/tests/source_frame_format_selection.cpp
         tests/tests/source_frame_overlay.cpp
         tests/tests/subtitle_overlay_blend.cpp
+        tests/tests/subtitle_fps_choice.cpp
         tests/tests/subtitle_format_microdvd.cpp
         tests/tests/syntax_highlight.cpp
         tests/tests/thesaurus.cpp
         tests/tests/time.cpp
+        tests/tests/track_choice.cpp
         tests/tests/type_name.cpp
         tests/tests/ui_dispatch.cpp
         tests/tests/ui_services.cpp
@@ -106,7 +110,9 @@ if(GTEST_FOUND)
         tests/support/main.cpp
         tests/support/src_config_stubs.cpp
         tests/support/util.cpp
+        src/subtitle_fps_choice.cpp
         src/subtitle_overlay_blend.cpp
+        src/track_choice.cpp
         src/video_renderer_opengl_tile.cpp
         src/video_renderer_backend.cpp
         src/video_provider_cache.cpp

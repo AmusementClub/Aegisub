@@ -33,6 +33,7 @@
 
 #include "../ass_dialogue.h"
 #include "../ass_file.h"
+#include "../charset_detect.h"
 #include "../compat.h"
 #include "../dialog_search_replace.h"
 #include "../dialogs.h"
@@ -53,8 +54,6 @@
 #include <libaegisub/charset_conv.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/make_unique.h>
-
-#include <wx/choicdlg.h>
 
 namespace {
 	using cmd::Command;
@@ -304,10 +303,12 @@ struct subtitle_open_charset final : public Command {
 		auto filename = OpenFileSelector(_("Open subtitles file"), "Path/Last/Subtitles", "","", SubtitleFormat::GetWildcards(0), c->parent);
 		if (filename.empty()) return;
 
-		wxString charset = wxGetSingleChoice(_("Choose charset code:"), _("Charset"), to_wx(agi::charset::GetEncodingsList<std::vector<std::string>>()), c->parent, -1, -1, true, 250, 200);
-		if (charset.empty()) return;
+		auto charset = CharSetDetect::PromptForEncodingChoice(
+			agi::charset::GetEncodingsList<std::vector<std::string>>(),
+			c->GetSingleChoiceInteractionSink());
+		if (!charset) return;
 
-		load_subtitles(c, filename, from_wx(charset));
+		load_subtitles(c, filename, *charset);
 	}
 };
 

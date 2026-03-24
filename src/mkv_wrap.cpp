@@ -40,6 +40,8 @@
 #include "dialog_progress.h"
 #include "MatroskaParser.h"
 #include "options.h"
+#include "track_choice.h"
+#include "wx_ui_services.h"
 
 #include <libaegisub/ass/time.h>
 #include <libaegisub/file_mapping.h>
@@ -52,8 +54,6 @@
 #include <algorithm>
 #include <iterator>
 #include <mutex>
-
-#include <wx/choicdlg.h> // Keep this last so wxUSE_CHOICEDLG is set.
 
 namespace {
 char constexpr kMkvLogSection[] = "subtitle/mkv";
@@ -234,11 +234,14 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 		trackToRead = tracksFound[0];
 	// Pick a track
 	else {
-		int choice = wxGetSingleChoiceIndex(_("Choose which track to read:"), _("Multiple subtitle tracks found"), to_wx(tracksNames));
-		if (choice == -1)
+		auto choice_sink = agi::MakeWindowSingleChoiceInteractionSink(nullptr);
+		auto choice = choice_sink->RequestSingleChoice(
+			aegisub::track_choice::BuildRequest(aegisub::track_choice::DialogKind::Subtitle, tracksNames));
+		auto resolved = aegisub::track_choice::ResolveSelection(tracksFound.size(), choice);
+		if (!resolved)
 			throw agi::UserCancelException("canceled");
 
-		trackToRead = tracksFound[choice];
+		trackToRead = tracksFound[*resolved];
 	}
 
 	// Picked track

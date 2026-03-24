@@ -32,11 +32,13 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/fs_fwd.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 class AssFile;
 namespace agi { namespace vfr { class Framerate; } }
+namespace agi { class SingleChoiceInteractionSink; }
 
 class SubtitleFormat {
 	std::string name;
@@ -65,7 +67,7 @@ public:
 	/// Prompt the user for a frame rate to use
 	/// @param allow_vfr Include video frame rate as an option even if it's vfr
 	/// @param show_smpte Show SMPTE drop frame option
-	static agi::vfr::Framerate AskForFPS(bool allow_vfr, bool show_smpte, agi::vfr::Framerate const& fps);
+	static agi::vfr::Framerate AskForFPS(bool allow_vfr, bool show_smpte, agi::vfr::Framerate const& fps, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});
 
 	/// Constructor
 	/// @param Subtitle format name

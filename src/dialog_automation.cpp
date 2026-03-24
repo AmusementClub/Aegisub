@@ -130,7 +130,7 @@ DialogAutomation::DialogAutomation(agi::Context *c)
 	reload_autoload_button->Bind(wxEVT_BUTTON, &DialogAutomation::OnReloadAutoload, this);
 
 	// add headers to list view
-	list->InsertColumn(0, "", wxLIST_FORMAT_CENTER, 20);
+	list->InsertColumn(0, wxEmptyString, wxLIST_FORMAT_CENTER, 20);
 	list->InsertColumn(1, _("Name"), wxLIST_FORMAT_LEFT, 140);
 	list->InsertColumn(2, _("Filename"), wxLIST_FORMAT_LEFT, 90);
 	list->InsertColumn(3, _("Description"), wxLIST_FORMAT_LEFT, 330);
@@ -194,7 +194,7 @@ void DialogAutomation::AddScript(Automation4::Script *script, bool is_global)
 	script_info.push_back(ei);
 
 	wxListItem itm;
-	itm.SetText(is_global ? "G" : "L");
+	itm.SetText(is_global ? wxS("G") : wxS("L"));
 	itm.SetData((int)script_info.size()-1);
 	itm.SetId(list->GetItemCount());
 	SetScriptInfo(list->InsertItem(itm), script);
@@ -221,7 +221,7 @@ void DialogAutomation::OnAdd(wxCommandEvent &)
 	wxFileDialog diag(this,
 		_("Add Automation script"),
 		to_wx(OPT_GET("Path/Last/Automation")->GetString()),
-		"",
+		wxEmptyString,
 		to_wx(Automation4::ScriptFactory::GetWildcardStr()),
 		wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE);
 
@@ -235,7 +235,7 @@ void DialogAutomation::OnAdd(wxCommandEvent &)
 		OPT_SET("Path/Last/Automation")->SetString(agi::fs::PathToString(fnpath.parent_path()));
 
 		if (has_file(local_manager->GetScripts(), fnpath) || has_file(global_manager->GetScripts(), fnpath)) {
-			wxLogError("Script '%s' is already loaded", fname);
+			wxLogError(wxS("Script '%s' is already loaded"), fname);
 			continue;
 		}
 

@@ -220,7 +220,7 @@ namespace Automation4 {
 
 			// Same serialisation interface as single-line edit
 			wxControl *Create(wxWindow *parent) override {
-				cw = new wxTextCtrl(parent, -1, "", wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE, StringBinder(&text));
+				cw = new wxTextCtrl(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE, StringBinder(&text));
 				cw->SetMinSize(wxSize(0, parent->FromDIP(30)));
 				cw->SetToolTip(to_wx(hint));
 				return cw;
@@ -251,7 +251,7 @@ namespace Automation4 {
 			void UnserialiseValue(const std::string &serialised) override { value = atoi(serialised.c_str()); }
 
 			wxControl *Create(wxWindow *parent) override {
-				cw = new wxSpinCtrl(parent, -1, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, value);
+				cw = new wxSpinCtrl(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, value);
 				cw->SetValidator(wxGenericValidator(&value));
 				cw->SetToolTip(to_wx(hint));
 				return cw;
@@ -298,14 +298,14 @@ namespace Automation4 {
 
 			wxControl *Create(wxWindow *parent) override {
 				if (step > 0) {
-					scd = new wxSpinCtrlDouble(parent, -1, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, value, step);
+					scd = new wxSpinCtrlDouble(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, value, step);
 					scd->SetValidator(DoubleSpinValidator(&value));
 					scd->SetToolTip(to_wx(hint));
 					return scd;
 				}
 
 				DoubleValidator val(&value, min, max);
-				cw = new wxTextCtrl(parent, -1, "", wxDefaultPosition, wxDefaultSize, 0, val);
+				cw = new wxTextCtrl(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0, val);
 				cw->SetToolTip(to_wx(hint));
 				return cw;
 			}

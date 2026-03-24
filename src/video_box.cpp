@@ -57,16 +57,16 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 
 	auto mainToolbar = toolbar::GetToolbar(this, "video", context, "Video", false);
 
-	VideoPosition = new wxTextCtrl(this, -1, "", wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
+	VideoPosition = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
 	VideoPosition->SetToolTip(_("Current frame time and number"));
 
-	VideoSubsPos = new wxTextCtrl(this, -1, "", wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
+	VideoSubsPos = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
 	VideoSubsPos->SetToolTip(_("Time of this frame relative to start and end of current subs"));
 
 	wxArrayString choices;
 	for (int i = 1; i <= 24; ++i)
 		choices.Add(fmt_wx("%g%%", i * 12.5));
-	auto zoomBox = new wxComboBox(this, -1, "75%", wxDefaultPosition, wxDefaultSize, choices, wxCB_DROPDOWN | wxTE_PROCESS_ENTER);
+	auto zoomBox = new wxComboBox(this, -1, wxS("75%"), wxDefaultPosition, wxDefaultSize, choices, wxCB_DROPDOWN | wxTE_PROCESS_ENTER);
 
 	auto visualToolBar = toolbar::GetToolbar(this, "visual_tools", context, "Video", true);
 	auto visualSubToolBar = new wxToolBar(this, -1, wxDefaultPosition, wxDefaultSize, wxTB_VERTICAL | wxTB_BOTTOM | wxTB_NODIVIDER | wxTB_FLAT);
@@ -127,7 +127,7 @@ void VideoBox::UpdateTimeBoxes() {
 
 	AssDialogue *active_line = context->selectionController->GetActiveLine();
 	if (!active_line)
-		VideoSubsPos->SetValue("");
+		VideoSubsPos->SetValue(wxString());
 	else {
 		VideoSubsPos->SetValue(fmt_wx(
 			"%+dms; %+dms; %dms",

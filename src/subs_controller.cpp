@@ -67,7 +67,7 @@ namespace {
 }
 
 struct SubsController::UndoInfo {
-	wxString undo_description;
+	std::string undo_description;
 	int commit_id;
 
 	std::vector<std::pair<std::string, std::string>> script_info;
@@ -80,21 +80,22 @@ struct SubsController::UndoInfo {
 	int active_line_id = 0;
 	int pos = 0, sel_start = 0, sel_end = 0;
 
-	UndoInfo(const agi::Context *c, wxString const& d, int commit_id)
+	UndoInfo(const agi::Context *c, std::string const& d, int commit_id)
 	: undo_description(d)
 	, commit_id(commit_id)
-	, attachments(c->ass->Attachments)
-	, extradata(c->ass->Extradata)
+	, attachments(c->GetCore().ass->Attachments)
+	, extradata(c->GetCore().ass->Extradata)
 	{
-		script_info.reserve(c->ass->Info.size());
-		for (auto const& info : c->ass->Info)
+		auto core = c->GetCore();
+		script_info.reserve(core.ass->Info.size());
+		for (auto const& info : core.ass->Info)
 			script_info.emplace_back(info.Key(), info.Value());
 
-		styles.reserve(c->ass->Styles.size());
-		styles.assign(c->ass->Styles.begin(), c->ass->Styles.end());
+		styles.reserve(core.ass->Styles.size());
+		styles.assign(core.ass->Styles.begin(), core.ass->Styles.end());
 
-		events.reserve(c->ass->Events.size());
-		events.assign(c->ass->Events.begin(), c->ass->Events.end());
+		events.reserve(core.ass->Events.size());
+		events.assign(core.ass->Events.begin(), core.ass->Events.end());
 
 		UpdateActiveLine(c);
 		UpdateSelection(c);
@@ -102,14 +103,15 @@ struct SubsController::UndoInfo {
 	}
 
 	void Apply(agi::Context *c) const {
+		auto core = c->GetCore();
 		// Keep old dialogue lines alive until after the commit is complete
 		// since a bunch of stuff holds references to them
 		AssFile old;
-		old.Events.swap(c->ass->Events);
-		c->ass->Info.clear();
-		c->ass->Attachments.clear();
-		c->ass->Styles.clear();
-		c->ass->Extradata.clear();
+		old.Events.swap(core.ass->Events);
+		core.ass->Info.clear();
+		core.ass->Attachments.clear();
+		core.ass->Styles.clear();
+		core.ass->Extradata.clear();
 
 		sort(begin(selection), end(selection));
 
@@ -117,35 +119,37 @@ struct SubsController::UndoInfo {
 		Selection new_sel;
 
 		for (auto const& info : script_info)
-			c->ass->Info.push_back(*new AssInfo(info.first, info.second));
+			core.ass->Info.push_back(*new AssInfo(info.first, info.second));
 		for (auto const& style : styles)
-			c->ass->Styles.push_back(*new AssStyle(style));
-		c->ass->Attachments = attachments;
+			core.ass->Styles.push_back(*new AssStyle(style));
+		core.ass->Attachments = attachments;
 		for (auto const& event : events) {
 			auto copy = new AssDialogue(event);
-			c->ass->Events.push_back(*copy);
+			core.ass->Events.push_back(*copy);
 			if (copy->Id == active_line_id)
 				active_line = copy;
 			if (binary_search(begin(selection), end(selection), copy->Id))
 				new_sel.insert(copy);
 		}
-		c->ass->Extradata = extradata;
+		core.ass->Extradata = extradata;
 
-		c->ass->Commit("", AssFile::COMMIT_NEW);
-		c->selectionController->SetSelectionAndActive(std::move(new_sel), active_line);
+		core.ass->Commit("", AssFile::COMMIT_NEW);
+		core.selectionController->SetSelectionAndActive(std::move(new_sel), active_line);
 
-		c->textSelectionController->SetInsertionPoint(pos);
-		c->textSelectionController->SetSelection(sel_start, sel_end);
+		core.textSelectionController->SetInsertionPoint(pos);
+		core.textSelectionController->SetSelection(sel_start, sel_end);
 	}
 
 	void UpdateActiveLine(const agi::Context *c) {
-		auto line = c->selectionController->GetActiveLine();
+		auto core = c->GetCore();
+		auto line = core.selectionController->GetActiveLine();
 		if (line)
 			active_line_id = line->Id;
 	}
 
 	void UpdateSelection(const agi::Context *c) {
-		auto const& sel = c->selectionController->GetSelectedSet();
+		auto core = c->GetCore();
+		auto const& sel = core.selectionController->GetSelectedSet();
 		selection.clear();
 		selection.reserve(sel.size());
 		for (const auto diag : sel)
@@ -153,9 +157,10 @@ struct SubsController::UndoInfo {
 	}
 
 	void UpdateTextSelection(const agi::Context *c) {
-		pos = c->textSelectionController->GetInsertionPoint();
-		sel_start = c->textSelectionController->GetSelectionStart();
-		sel_end = c->textSelectionController->GetSelectionEnd();
+		auto core = c->GetCore();
+		pos = core.textSelectionController->GetInsertionPoint();
+		sel_start = core.textSelectionController->GetSelectionStart();
+		sel_end = core.textSelectionController->GetSelectionEnd();
 	}
 };
 
@@ -177,17 +182,19 @@ SubsController::~SubsController() {
 }
 
 void SubsController::SetSelectionController(SelectionController *selection_controller) {
-	active_line_connection = context->selectionController->AddActiveLineListener(&SubsController::OnActiveLineChanged, this);
-	selection_connection = context->selectionController->AddSelectionListener(&SubsController::OnSelectionChanged, this);
+	auto core = context->GetCore();
+	active_line_connection = core.selectionController->AddActiveLineListener(&SubsController::OnActiveLineChanged, this);
+	selection_connection = core.selectionController->AddSelectionListener(&SubsController::OnSelectionChanged, this);
 }
 
 ProjectProperties SubsController::Load(agi::fs::path const& filename, std::string charset) {
 	AssFile temp;
+	auto core = context->GetCore();
 
-	SubtitleFormat::GetReader(filename, charset)->ReadFile(&temp, filename, context->project->Timecodes(), charset);
+	SubtitleFormat::GetReader(filename, charset)->ReadFile(&temp, filename, core.project->Timecodes(), charset);
 
-	context->ass->swap(temp);
-	auto props = context->ass->Properties;
+	core.ass->swap(temp);
+	auto props = core.ass->Properties;
 
 	SetFileName(filename);
 
@@ -195,7 +202,7 @@ ProjectProperties SubsController::Load(agi::fs::path const& filename, std::strin
 	undo_stack.clear();
 	redo_stack.clear();
 	autosaved_commit_id = saved_commit_id = commit_id + 1;
-	context->ass->Commit("", AssFile::COMMIT_NEW);
+	core.ass->Commit("", AssFile::COMMIT_NEW);
 
 	// Save backup of file
 	if (CanSave() && OPT_GET("App/Auto/Backup")->GetBool()) {
@@ -204,7 +211,7 @@ ProjectProperties SubsController::Load(agi::fs::path const& filename, std::strin
 		if (path_str.empty())
 			path = filename.parent_path();
 		else
-			path = context->path->Decode(path_str);
+			path = core.path->Decode(path_str);
 		agi::fs::CreateDirectory(path);
 		agi::fs::Copy(filename, path / agi::fs::PathFromString(agi::fs::PathToString(filename.stem()) + ".ORIGINAL" + agi::fs::PathToString(filename.extension())));
 	}
@@ -220,18 +227,19 @@ void SubsController::Save(agi::fs::path const& filename, std::string const& enco
 
 	auto old_filename = this->filename;
 	int old_autosaved_commit_id = autosaved_commit_id, old_saved_commit_id = saved_commit_id;
+	auto core = context->GetCore();
 	try {
 		autosaved_commit_id = saved_commit_id = commit_id;
 
 		// Have to set this now for the sake of things that want to save paths
 		// relative to the script in the header
 		this->filename = filename;
-		context->path->SetToken("?script", filename.parent_path());
+		core.path->SetToken("?script", filename.parent_path());
 
-		const AssFile *save_source = context->ass.get();
+		const AssFile *save_source = core.ass.get();
 		std::unique_ptr<AssFile> save_copy;
-		if (!context->ass->Extradata.empty()) {
-			save_copy.reset(new AssFile(*context->ass));
+		if (!core.ass->Extradata.empty()) {
+			save_copy.reset(new AssFile(*core.ass));
 			save_copy->CleanExtradata();
 			save_source = save_copy.get();
 		}
@@ -241,7 +249,7 @@ void SubsController::Save(agi::fs::path const& filename, std::string const& enco
 	}
 	catch (...) {
 		this->filename = old_filename;
-		context->path->SetToken("?script", old_filename.parent_path());
+		core.path->SetToken("?script", old_filename.parent_path());
 		autosaved_commit_id = old_autosaved_commit_id;
 		saved_commit_id = old_saved_commit_id;
 		throw;
@@ -256,9 +264,10 @@ void SubsController::Close() {
 	autosaved_commit_id = saved_commit_id = commit_id + 1;
 	filename.clear();
 	AssFile blank;
-	blank.swap(*context->ass);
-	context->ass->LoadDefault(true, OPT_GET("Subtitle Format/ASS/Default Style Catalog")->GetString());
-	context->ass->Commit("", AssFile::COMMIT_NEW);
+	auto core = context->GetCore();
+	blank.swap(*core.ass);
+	core.ass->LoadDefault(true, OPT_GET("Subtitle Format/ASS/Default Style Catalog")->GetString());
+	core.ass->Commit("", AssFile::COMMIT_NEW);
 	FileOpen(filename);
 }
 
@@ -285,17 +294,18 @@ void SubsController::AutoSave() {
 	if (commit_id == autosaved_commit_id)
 		return;
 
-	auto directory = context->path->Decode(OPT_GET("Path/Auto/Save")->GetString());
+	auto core = context->GetCore();
+	auto directory = core.path->Decode(OPT_GET("Path/Auto/Save")->GetString());
 	if (directory.empty())
 		directory = filename.parent_path();
 
 	auto name = filename.filename();
 	if (name.empty())
-		name = "Untitled";
+		name = agi::fs::PathFromString("Untitled");
 
 	autosaved_commit_id = commit_id;
 	auto status_sink = context->GetStatusSink();
-	auto subs_copy = new AssFile(*context->ass);
+	auto subs_copy = new AssFile(*core.ass);
 	autosave_queue->Async([subs_copy, name, directory, status_sink] {
 		wxString msg;
 		std::unique_ptr<AssFile> subs(subs_copy);
@@ -312,7 +322,7 @@ void SubsController::AutoSave() {
 			msg = to_wx("Exception when attempting to autosave file: " + err.GetMessage());
 		}
 		catch (...) {
-			msg = "Unhandled exception when attempting to autosave file.";
+			msg = wxS("Unhandled exception when attempting to autosave file.");
 		}
 
 		if (status_sink)
@@ -322,7 +332,8 @@ void SubsController::AutoSave() {
 
 bool SubsController::CanSave() const {
 	try {
-		return SubtitleFormat::GetWriter(filename)->CanSave(context->ass.get());
+		auto core = context->GetCore();
+		return SubtitleFormat::GetWriter(filename)->CanSave(core.ass.get());
 	}
 	catch (...) {
 		return false;
@@ -331,7 +342,7 @@ bool SubsController::CanSave() const {
 
 void SubsController::SetFileName(agi::fs::path const& path) {
 	filename = path;
-	context->path->SetToken("?script", path.parent_path());
+	context->GetCore().path->SetToken("?script", path.parent_path());
 	config::mru->Add("Subtitle", path);
 	OPT_SET("Path/Last/Subtitles")->SetString(agi::fs::PathToString(filename.parent_path()));
 }
@@ -359,11 +370,12 @@ void SubsController::OnCommit(AssFileCommit c) {
 	}
 
 	// Make sure the file has at least one style and one dialogue line
-	if (context->ass->Styles.empty())
-		context->ass->Styles.push_back(*new AssStyle);
-	if (context->ass->Events.empty()) {
-		context->ass->Events.push_back(*new AssDialogue);
-		context->ass->Events.back().Row = 0;
+	auto core = context->GetCore();
+	if (core.ass->Styles.empty())
+		core.ass->Styles.push_back(*new AssStyle);
+	if (core.ass->Events.empty()) {
+		core.ass->Events.push_back(*new AssDialogue);
+		core.ass->Events.back().Row = 0;
 	}
 
 	redo_stack.clear();
@@ -417,12 +429,12 @@ void SubsController::Redo() {
 	text_selection_connection.Unblock();
 }
 
-wxString SubsController::GetUndoDescription() const {
-	return IsUndoStackEmpty() ? wxString() : undo_stack.back().undo_description;
+std::string SubsController::GetUndoDescription() const {
+	return IsUndoStackEmpty() ? std::string() : undo_stack.back().undo_description;
 }
 
-wxString SubsController::GetRedoDescription() const {
-	return IsRedoStackEmpty() ? wxString() : redo_stack.back().undo_description;
+std::string SubsController::GetRedoDescription() const {
+	return IsRedoStackEmpty() ? std::string() : redo_stack.back().undo_description;
 }
 
 agi::fs::path SubsController::Filename() const {

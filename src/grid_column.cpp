@@ -396,7 +396,7 @@ public:
 
 		// Cap length and set text
 		if (str.size() > 512)
-			str = str.Left(512) + "...";
+			str = str.Left(512) + wxS("...");
 		return str;
 	}
 

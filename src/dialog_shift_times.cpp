@@ -124,7 +124,7 @@ static wxString get_history_string(json::Object &obj) {
 			else
 				lines += fmt_wx("%d-%d", beg, end);
 			if (it + 1 != sel.end())
-				lines += ";";
+				lines += wxS(";");
 		}
 	}
 
@@ -408,7 +408,7 @@ void DialogShiftTimes::Process(wxCommandEvent &) {
 			line.End = Shift(line.End, shift, by_time, agi::vfr::END);
 	}
 
-	context->ass->Commit(_("shifting"), AssFile::COMMIT_DIAG_TIME);
+	context->ass->Commit(from_wx(_("shifting")), AssFile::COMMIT_DIAG_TIME);
 
 	if (block_start) {
 		json::Object block;

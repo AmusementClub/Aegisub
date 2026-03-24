@@ -73,8 +73,8 @@ struct keyframe_open final : public Command {
 			_("Open keyframes file"),
 			"Path/Last/Keyframes", "" ,".txt",
 			from_wx(_("All Supported Formats") +
-				" (*.txt, *.pass, *.stats, *.log)|*.txt;*.pass;*.stats;*.log|" +
-				_("All Files") + " (*.*)|*.*"),
+				wxS(" (*.txt, *.pass, *.stats, *.log)|*.txt;*.pass;*.stats;*.log|") +
+				_("All Files") + wxS(" (*.*)|*.*")),
 			c->parent);
 
 		if (!filename.empty())

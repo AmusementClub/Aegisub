@@ -62,6 +62,32 @@
 #include <wx/spinctrl.h>
 #include <wx/stattext.h>
 
+namespace {
+wxArrayString GetStyleEncodingStrings() {
+	wxArrayString encoding_strings;
+	encoding_strings.Add(wxS("0 - ") + _("ANSI"));
+	encoding_strings.Add(wxS("1 - ") + _("Default"));
+	encoding_strings.Add(wxS("2 - ") + _("Symbol"));
+	encoding_strings.Add(wxS("77 - ") + _("Mac"));
+	encoding_strings.Add(wxS("128 - ") + _("Shift_JIS"));
+	encoding_strings.Add(wxS("129 - ") + _("Hangeul"));
+	encoding_strings.Add(wxS("130 - ") + _("Johab"));
+	encoding_strings.Add(wxS("134 - ") + _("GB2312"));
+	encoding_strings.Add(wxS("136 - ") + _("Chinese BIG5"));
+	encoding_strings.Add(wxS("161 - ") + _("Greek"));
+	encoding_strings.Add(wxS("162 - ") + _("Turkish"));
+	encoding_strings.Add(wxS("163 - ") + _("Vietnamese"));
+	encoding_strings.Add(wxS("177 - ") + _("Hebrew"));
+	encoding_strings.Add(wxS("178 - ") + _("Arabic"));
+	encoding_strings.Add(wxS("186 - ") + _("Baltic"));
+	encoding_strings.Add(wxS("204 - ") + _("Russian"));
+	encoding_strings.Add(wxS("222 - ") + _("Thai"));
+	encoding_strings.Add(wxS("238 - ") + _("East European"));
+	encoding_strings.Add(wxS("255 - ") + _("OEM"));
+	return encoding_strings;
+}
+}
+
 /// Style rename helper that walks a file searching for a style and optionally
 /// updating references to it
 class StyleRenamer {
@@ -150,7 +176,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	};
 
 	auto num_text_ctrl = [&](double *value, double min, double max, double step) -> wxSpinCtrlDouble * {
-		auto scd = new wxSpinCtrlDouble(this, -1, "", wxDefaultPosition,
+		auto scd = new wxSpinCtrlDouble(this, -1, wxEmptyString, wxDefaultPosition,
 			wxDefaultSize, wxSP_ARROW_KEYS, min, max, *value, step);
 		scd->SetValidator(DoubleSpinValidator(value));
 		scd->Bind(wxEVT_SPINCTRLDOUBLE, [=](wxSpinDoubleEvent &evt) {
@@ -168,11 +194,10 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 
 	// Prepare control values
 	wxString EncodingValue = std::to_wstring(style->encoding);
-	wxString alignValues[9] = { "7", "8", "9", "4", "5", "6", "1", "2", "3" };
+	wxString alignValues[9] = { wxS("7"), wxS("8"), wxS("9"), wxS("4"), wxS("5"), wxS("6"), wxS("1"), wxS("2"), wxS("3") };
 
 	// Encoding options
-	wxArrayString encodingStrings;
-	AssStyle::GetEncodings(encodingStrings);
+	wxArrayString encodingStrings = GetStyleEncodingStrings();
 
 	// Create sizers
 	wxSizer *NameSizer = new wxStaticBoxSizer(wxHORIZONTAL, this, _("Style Name"));
@@ -216,7 +241,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	auto ScaleY = num_text_ctrl(&work->scaley, 0.0, 10000.0, 1.0);
 	auto Angle = num_text_ctrl(&work->angle, -360.0, 360.0, 1.0);
 	auto Spacing = num_text_ctrl(&work->spacing, 0.0, 1000.0, 0.1);
-	Encoding = new wxComboBox(this, -1, "", wxDefaultPosition, wxDefaultSize, encodingStrings, wxCB_READONLY);
+	Encoding = new wxComboBox(this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, encodingStrings, wxCB_READONLY);
 
 	// Set control tooltips
 	StyleName->SetToolTip(_("Style name"));
@@ -464,7 +489,7 @@ void DialogStyleEditor::Apply(bool apply, bool close) {
 			is_new = false;
 		}
 		if (!store)
-			c->ass->Commit(_("style change"), AssFile::COMMIT_STYLES | (did_rename ? AssFile::COMMIT_DIAG_FULL : 0));
+			c->ass->Commit(from_wx(_("style change")), AssFile::COMMIT_STYLES | (did_rename ? AssFile::COMMIT_DIAG_FULL : 0));
 
 		// Update preview
 		if (!close) SubsPreview->SetStyle(*style);

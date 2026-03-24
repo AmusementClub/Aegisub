@@ -78,7 +78,7 @@ DialogStyling::DialogStyling(agi::Context *context)
 	wxSizer *right_sizer = new wxBoxSizer(wxVERTICAL);
 	{
 		wxSizer *style_text_box = new wxStaticBoxSizer(wxHORIZONTAL, this, _("Set style"));
-		style_name = new wxTextCtrl(this, -1, "", wxDefaultPosition, wxSize(180, -1), wxTE_PROCESS_ENTER);
+		style_name = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxSize(180, -1), wxTE_PROCESS_ENTER);
 		style_text_box->Add(style_name, 1, wxEXPAND);
 		right_sizer->Add(style_text_box, 0, wxEXPAND | wxBOTTOM, 5);
 	}
@@ -172,7 +172,7 @@ void DialogStyling::Commit(bool next) {
 	if (!c->ass->GetStyle(from_wx(style_name->GetValue()))) return;
 
 	active_line->Style = from_wx(style_name->GetValue());
-	c->ass->Commit(_("styling assistant"), AssFile::COMMIT_DIAG_META);
+	c->ass->Commit(from_wx(_("styling assistant")), AssFile::COMMIT_DIAG_META);
 
 	if (next) cmd::call("grid/line/next", c);
 }

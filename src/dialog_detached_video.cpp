@@ -54,7 +54,7 @@
 #include <wx/display.h> /// Must be included last.
 
 DialogDetachedVideo::DialogDetachedVideo(agi::Context *context)
-: wxDialog(context->parent, -1, "Detached Video", wxDefaultPosition, wxSize(400,300), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX | wxMINIMIZE_BOX | wxWANTS_CHARS)
+: wxDialog(context->parent, -1, wxS("Detached Video"), wxDefaultPosition, wxSize(400,300), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX | wxMINIMIZE_BOX | wxWANTS_CHARS)
 , context(context)
 , old_display(context->videoDisplay)
 , old_slider(context->videoSlider)

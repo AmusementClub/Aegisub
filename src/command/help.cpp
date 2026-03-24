@@ -57,7 +57,7 @@ struct help_bugs final : public Command {
 				throw c->parent;
 			}
 		}
-		wxLaunchDefaultBrowser("https://github.com/Aegisub/Aegisub/issues", wxBROWSER_NEW_WINDOW);
+		wxLaunchDefaultBrowser(wxS("https://github.com/Aegisub/Aegisub/issues"), wxBROWSER_NEW_WINDOW);
 	}
 };
 
@@ -81,7 +81,7 @@ struct help_irc final : public Command {
 	STR_HELP("Visit Aegisub's official IRC channel")
 
 	void operator()(agi::Context *) override {
-		wxLaunchDefaultBrowser("irc://irc.rizon.net/aegisub", wxBROWSER_NEW_WINDOW);
+		wxLaunchDefaultBrowser(wxS("irc://irc.rizon.net/aegisub"), wxBROWSER_NEW_WINDOW);
 	}
 };
 
@@ -105,7 +105,7 @@ struct help_website final : public Command {
 	STR_HELP("Visit Aegisub's official website")
 
 	void operator()(agi::Context *) override {
-		wxLaunchDefaultBrowser("http://www.aegisub.org/", wxBROWSER_NEW_WINDOW);
+		wxLaunchDefaultBrowser(wxS("http://www.aegisub.org/"), wxBROWSER_NEW_WINDOW);
 	}
 };
 }

@@ -62,13 +62,13 @@ DialogSearchReplace::DialogSearchReplace(agi::Context* c, bool replace)
 	settings->exact_match = false;
 
 	auto find_sizer = new wxFlexGridSizer(2, 2, 5, 15);
-	find_edit = new wxComboBox(this, -1, "", wxDefaultPosition, wxSize(300, -1), recent_find, wxCB_DROPDOWN | wxTE_PROCESS_ENTER, StringBinder(&settings->find));
+	find_edit = new wxComboBox(this, -1, wxEmptyString, wxDefaultPosition, wxSize(300, -1), recent_find, wxCB_DROPDOWN | wxTE_PROCESS_ENTER, StringBinder(&settings->find));
 	find_edit->SetMaxLength(0);
 	find_sizer->Add(new wxStaticText(this, -1, _("Find what:")), wxSizerFlags().Center().Left());
 	find_sizer->Add(find_edit);
 
 	if (has_replace) {
-		replace_edit = new wxComboBox(this, -1, "", wxDefaultPosition, wxSize(300, -1), lagi_MRU_wxAS("Replace"), wxCB_DROPDOWN | wxTE_PROCESS_ENTER, StringBinder(&settings->replace_with));
+		replace_edit = new wxComboBox(this, -1, wxEmptyString, wxDefaultPosition, wxSize(300, -1), lagi_MRU_wxAS("Replace"), wxCB_DROPDOWN | wxTE_PROCESS_ENTER, StringBinder(&settings->replace_with));
 		replace_edit->SetMaxLength(0);
 		find_sizer->Add(new wxStaticText(this, -1, _("Replace with:")), wxSizerFlags().Center().Left());
 		find_sizer->Add(replace_edit);
@@ -142,7 +142,7 @@ void DialogSearchReplace::FindReplace(bool (SearchReplaceEngine::*func)()) {
 		((*c->search).*func)();
 	}
 	catch (std::exception const& e) {
-		wxMessageBox(to_wx(e.what()), "Error", wxOK | wxICON_ERROR | wxCENTER, this);
+		wxMessageBox(to_wx(e.what()), wxS("Error"), wxOK | wxICON_ERROR | wxCENTER, this);
 		return;
 	}
 

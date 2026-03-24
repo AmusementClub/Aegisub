@@ -103,7 +103,7 @@ struct DialogTimingProcessor {
 wxTextCtrl *make_ctrl(wxWindow *parent, wxSizer *sizer, wxString const& desc, int *value, wxCheckBox *cb, wxString const& tooltip) {
 	wxIntegerValidator<int> validator(value);
 	validator.SetMin(0);
-	wxTextCtrl *ctrl = new wxTextCtrl(parent, -1, "", wxDefaultPosition, wxSize(60,-1), 0, validator);
+	wxTextCtrl *ctrl = new wxTextCtrl(parent, -1, wxEmptyString, wxDefaultPosition, wxSize(60,-1), 0, validator);
 	ctrl->SetToolTip(tooltip);
 	if (!desc.empty())
 		sizer->Add(new wxStaticText(parent, -1, desc), wxSizerFlags().Center().Border(wxRIGHT));
@@ -171,12 +171,12 @@ DialogTimingProcessor::DialogTimingProcessor(agi::Context *c)
 	hasLeadIn = make_check(LeadSizer, _("Add lead &in:"),
 		"Tool/Timing Post Processor/Enable/Lead/IN",
 		_("Enable adding of lead-ins to lines"));
-	make_ctrl(LeadSizer, "", &leadIn, hasLeadIn, _("Lead in to be added, in milliseconds"));
+	make_ctrl(LeadSizer, wxEmptyString, &leadIn, hasLeadIn, _("Lead in to be added, in milliseconds"));
 
 	hasLeadOut = make_check(LeadSizer, _("Add lead &out:"),
 		"Tool/Timing Post Processor/Enable/Lead/OUT",
 		_("Enable adding of lead-outs to lines"));
-	make_ctrl(LeadSizer, "", &leadOut, hasLeadOut, _("Lead out to be added, in milliseconds"));
+	make_ctrl(LeadSizer, wxEmptyString, &leadOut, hasLeadOut, _("Lead out to be added, in milliseconds"));
 
 	LeadSizer->AddStretchSpacer(1);
 
@@ -446,7 +446,7 @@ void DialogTimingProcessor::Process() {
 		}
 	}
 
-	c->ass->Commit(_("timing processor"), AssFile::COMMIT_DIAG_TIME);
+	c->ass->Commit(from_wx(_("timing processor")), AssFile::COMMIT_DIAG_TIME);
 }
 }
 

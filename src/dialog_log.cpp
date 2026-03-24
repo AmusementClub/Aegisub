@@ -200,7 +200,7 @@ LogWindow::LogWindow(agi::Context *c)
 	search_mode_choice = new wxChoice(this, -1, wxDefaultPosition, wxDefaultSize, 2, search_mode_labels);
 	search_mode_choice->SetSelection(1);
 
-	search_ctrl = new wxTextCtrl(this, -1, "", wxDefaultPosition, wxDefaultSize, wxTE_PROCESS_ENTER);
+	search_ctrl = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_PROCESS_ENTER);
 
 	auto filters = new wxBoxSizer(wxHORIZONTAL);
 	filters->Add(new wxStaticText(this, -1, _("Level:")), wxSizerFlags().Center().Border(wxRIGHT));
@@ -214,7 +214,7 @@ LogWindow::LogWindow(agi::Context *c)
 #ifdef __WXMSW__
 	text_style |= wxTE_RICH2;
 #endif
-	text_ctrl = new wxTextCtrl(this, -1, "", wxDefaultPosition, FromDIP(wxSize(700, 320)), text_style);
+	text_ctrl = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, FromDIP(wxSize(700, 320)), text_style);
 
 	auto mono_font = wxFont(8, wxFONTFAMILY_MODERN, wxFONTSTYLE_NORMAL, wxFONTWEIGHT_NORMAL);
 	match_text_style = wxTextAttr(text_ctrl->GetForegroundColour(), wxColour(255, 245, 157), mono_font);

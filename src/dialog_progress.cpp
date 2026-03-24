@@ -134,7 +134,7 @@ DialogProgress::DialogProgress(wxWindow *parent, wxString const& title_text, wxS
 	gauge = new wxGauge(this, -1, 300, wxDefaultPosition, FromDIP(wxSize(300, 20)));
 	text = new wxStaticText(this, -1, message, wxDefaultPosition, wxDefaultSize, wxALIGN_CENTRE | wxST_NO_AUTORESIZE);
 	cancel_button = new wxButton(this, wxID_CANCEL);
-	log_output = new wxTextCtrl(this, -1, "", wxDefaultPosition, FromDIP(wxSize(600, 240)), wxTE_MULTILINE | wxTE_READONLY);
+	log_output = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, FromDIP(wxSize(600, 240)), wxTE_MULTILINE | wxTE_READONLY);
 
 	// make the title a slightly larger font
 	wxFont title_font = title->GetFont();

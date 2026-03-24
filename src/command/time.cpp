@@ -36,6 +36,7 @@
 #include "../async_video_provider.h"
 #include "../audio_controller.h"
 #include "../audio_timing.h"
+#include "../compat.h"
 #include "../dialogs.h"
 #include "../include/aegisub/context.h"
 #include "../libresrc/libresrc.h"
@@ -98,7 +99,7 @@ void adjoin_lines(agi::Context *c, bool set_start) {
 		prev_sel = cur_sel;
 	}
 
-	c->ass->Commit(_("adjoin"), AssFile::COMMIT_DIAG_TIME);
+	c->ass->Commit(from_wx(_("adjoin")), AssFile::COMMIT_DIAG_TIME);
 }
 
 struct time_continuous_end final : public validate_adjoinable {
@@ -144,7 +145,7 @@ struct time_frame_current final : public validate_video_loaded {
 			line->End = line->End + shift_by;
 		}
 
-		c->ass->Commit(_("shift to frame"), AssFile::COMMIT_DIAG_TIME);
+		c->ass->Commit(from_wx(_("shift to frame")), AssFile::COMMIT_DIAG_TIME);
 	}
 };
 
@@ -174,7 +175,7 @@ static void snap_subs_video(agi::Context *c, bool set_start) {
 			line->End = end;
 	}
 
-	c->ass->Commit(_("timing"), AssFile::COMMIT_DIAG_TIME);
+	c->ass->Commit(from_wx(_("timing")), AssFile::COMMIT_DIAG_TIME);
 }
 
 struct time_snap_end_video final : public validate_video_loaded {
@@ -231,7 +232,7 @@ struct time_snap_scene final : public validate_video_loaded {
 			line->End = end_ms;
 		}
 
-		c->ass->Commit(_("snap to scene"), AssFile::COMMIT_DIAG_TIME);
+		c->ass->Commit(from_wx(_("snap to scene")), AssFile::COMMIT_DIAG_TIME);
 	}
 };
 

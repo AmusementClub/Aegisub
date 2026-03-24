@@ -247,13 +247,13 @@ int VideoController::FrameAtTime(int time, agi::vfr::Time type) const {
 
 void VideoController::OnVideoError(VideoProviderErrorEvent const& err) {
 	wxLogError(
-		"Failed seeking video. The video file may be corrupt or incomplete.\n"
-		"Error message reported: %s",
+		wxS("Failed seeking video. The video file may be corrupt or incomplete.\n"
+		    "Error message reported: %s"),
 		to_wx(err.GetMessage()));
 }
 
 void VideoController::OnSubtitlesError(SubtitlesProviderErrorEvent const& err) {
 	wxLogError(
-		"Failed rendering subtitles. Error message reported: %s",
+		wxS("Failed rendering subtitles. Error message reported: %s"),
 		to_wx(err.GetMessage()));
 }

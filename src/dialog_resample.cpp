@@ -111,7 +111,7 @@ DialogResample::DialogResample(agi::Context *c, ResampleSettings &settings)
 
 	// Create all controls and set validators
 	for (size_t i = 0; i < 4; ++i) {
-		margin_ctrl[i] = new wxSpinCtrl(&d, -1, "0", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, -9999, 9999, 0);
+		margin_ctrl[i] = new wxSpinCtrl(&d, -1, wxS("0"), wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, -9999, 9999, 0);
 		margin_ctrl[i]->SetValidator(wxGenericValidator(&settings.margin[i]));
 	}
 
@@ -121,13 +121,13 @@ DialogResample::DialogResample(agi::Context *c, ResampleSettings &settings)
 	margin_ctrl[RIGHT]->Enable(false);
 	margin_ctrl[BOTTOM]->Enable(false);
 
-	source_x = new wxSpinCtrl(&d, -1, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, INT_MAX);
-	source_y = new wxSpinCtrl(&d, -1, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, INT_MAX);
-	source_matrix = new wxComboBox(&d, -1, "", wxDefaultPosition,
+	source_x = new wxSpinCtrl(&d, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, INT_MAX);
+	source_y = new wxSpinCtrl(&d, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, INT_MAX);
+	source_matrix = new wxComboBox(&d, -1, wxEmptyString, wxDefaultPosition,
 		wxDefaultSize, to_wx(MatrixNames()), wxCB_READONLY);
-	dest_x = new wxSpinCtrl(&d, -1, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, INT_MAX);
-	dest_y = new wxSpinCtrl(&d, -1, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, INT_MAX);
-	dest_matrix = new wxComboBox(&d, -1, "", wxDefaultPosition, wxDefaultSize,
+	dest_x = new wxSpinCtrl(&d, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, INT_MAX);
+	dest_y = new wxSpinCtrl(&d, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, 1, INT_MAX);
+	dest_matrix = new wxComboBox(&d, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize,
 		to_wx(MatrixNames()), wxCB_READONLY);
 
 	source_x->SetValidator(wxGenericValidator(&settings.source_x));

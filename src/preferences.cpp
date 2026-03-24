@@ -193,13 +193,18 @@ void Video(wxTreebook *book, Preferences *parent) {
 	p->OptionAdd(general, _("Automatically open audio when opening video"), "Video/Open Audio");
 	p->CellSkip(general);
 
-	const wxString czoom_arr[24] = { "12.5%", "25%", "37.5%", "50%", "62.5%", "75%", "87.5%", "100%", "112.5%", "125%", "137.5%", "150%", "162.5%", "175%", "187.5%", "200%", "212.5%", "225%", "237.5%", "250%", "262.5%", "275%", "287.5%", "300%" };
+	const wxString czoom_arr[24] = {
+		wxS("12.5%"), wxS("25%"), wxS("37.5%"), wxS("50%"), wxS("62.5%"), wxS("75%"),
+		wxS("87.5%"), wxS("100%"), wxS("112.5%"), wxS("125%"), wxS("137.5%"), wxS("150%"),
+		wxS("162.5%"), wxS("175%"), wxS("187.5%"), wxS("200%"), wxS("212.5%"), wxS("225%"),
+		wxS("237.5%"), wxS("250%"), wxS("262.5%"), wxS("275%"), wxS("287.5%"), wxS("300%")
+	};
 	wxArrayString choice_zoom(24, czoom_arr);
 	p->OptionChoice(general, _("Default Zoom"), choice_zoom, "Video/Default Zoom");
 
 	p->OptionAdd(general, _("Fast jump step in frames"), "Video/Slider/Fast Jump Step");
 
-	const wxString cscr_arr[3] = { "?video", "?script", "." };
+	const wxString cscr_arr[3] = { wxS("?video"), wxS("?script"), wxS(".") };
 	wxArrayString scr_res(3, cscr_arr);
 	p->OptionChoice(general, _("Screenshot save path"), scr_res, "Path/Screenshot");
 
@@ -409,15 +414,15 @@ void Advanced_Audio(wxTreebook *book, Preferences *parent) {
 	p->OptionAdd(spectrum, _("Cache memory max (MB)"), "Audio/Renderer/Spectrum/Memory Max", 2, 1024);
 
 #ifdef WITH_AVISYNTH
-	auto avisynth = p->PageSizer("Avisynth");
-	const wxString adm_arr[4] = { "None", "ConvertToMono", "GetLeftChannel", "GetRightChannel" };
+	auto avisynth = p->PageSizer(wxS("Avisynth"));
+	const wxString adm_arr[4] = { wxS("None"), wxS("ConvertToMono"), wxS("GetLeftChannel"), wxS("GetRightChannel") };
 	wxArrayString adm_choice(4, adm_arr);
 	p->OptionChoice(avisynth, _("Avisynth down-mixer"), adm_choice, "Audio/Downmixer");
 	p->OptionAdd(avisynth, _("Force sample rate"), "Provider/Audio/AVS/Sample Rate");
 #endif
 
 #ifdef WITH_FFMS2
-	auto ffms = p->PageSizer("FFmpegSource");
+	auto ffms = p->PageSizer(wxS("FFmpegSource"));
 
 	const wxString error_modes[] = { _("Ignore"), _("Clear"), _("Stop"), _("Abort") };
 	wxArrayString error_modes_choice(4, error_modes);
@@ -428,21 +433,21 @@ void Advanced_Audio(wxTreebook *book, Preferences *parent) {
 #endif
 
 #ifdef WITH_PORTAUDIO
-	auto portaudio = p->PageSizer("Portaudio");
+	auto portaudio = p->PageSizer(wxS("Portaudio"));
 	p->OptionChoice(portaudio, _("Portaudio device"), PortAudioPlayer::GetOutputDevices(), "Player/Audio/PortAudio/Device Name");
 #endif
 
 #ifdef WITH_OSS
-	auto oss = p->PageSizer("OSS");
+	auto oss = p->PageSizer(wxS("OSS"));
 	p->OptionBrowse(oss, _("OSS Device"), "Player/Audio/OSS/Device");
 #endif
 
 #if defined(WITH_DIRECTSOUND) && defined(WITH_XAUDIO2)
-	auto dsound = p->PageSizer("DirectSound / XAudio2");
+	auto dsound = p->PageSizer(wxS("DirectSound / XAudio2"));
 #elif defined(WITH_DIRECTSOUND)
-	auto dsound = p->PageSizer("DirectSound");
+	auto dsound = p->PageSizer(wxS("DirectSound"));
 #elif defined(WITH_XAUDIO2)
-	auto dsound = p->PageSizer("XAudio2");
+	auto dsound = p->PageSizer(wxS("XAudio2"));
 #endif
 #if defined(WITH_DIRECTSOUND) || defined(WITH_XAUDIO2)
 	p->OptionAdd(dsound, _("Buffer latency"), "Player/Audio/DirectSound/Buffer Latency", 1, 1000);
@@ -460,9 +465,9 @@ void Advanced_Video(wxTreebook *book, Preferences *parent) {
 
 	p->OptionChoice(expert, _("Video provider"), VideoProviderFactory::GetChoices(), "Video/Provider");
 	wxArrayString renderer_choices;
-	renderer_choices.Add("opengl");
+	renderer_choices.Add(wxS("opengl"));
 #ifdef WITH_LIBPLACEBO
-	renderer_choices.Add("libplacebo");
+	renderer_choices.Add(wxS("libplacebo"));
 #endif
 	p->OptionChoice(expert, _("Video renderer"), renderer_choices, "Video/Renderer/Backend");
 
@@ -470,7 +475,7 @@ void Advanced_Video(wxTreebook *book, Preferences *parent) {
 	p->OptionChoice(expert, _("Subtitles provider"), sp_choice, "Subtitle/Provider");
 
 #ifdef WITH_AVISYNTH
-	auto avisynth = p->PageSizer("Avisynth");
+	auto avisynth = p->PageSizer(wxS("Avisynth"));
 	p->OptionAdd(avisynth, _("Allow pre-2.56a Avisynth"), "Provider/Avisynth/Allow Ancient");
 	p->CellSkip(avisynth);
 	p->OptionBrowseFile(avisynth, _("Avisynth runtime library path"), "Provider/Avisynth/Runtime Path",
@@ -486,9 +491,9 @@ void Advanced_Video(wxTreebook *book, Preferences *parent) {
 #endif
 
 #ifdef WITH_FFMS2
-	auto ffms = p->PageSizer("FFmpegSource");
+	auto ffms = p->PageSizer(wxS("FFmpegSource"));
 
-	const wxString log_levels[] = { "Quiet", "Panic", "Fatal", "Error", "Warning", "Info", "Verbose", "Debug" };
+	const wxString log_levels[] = { wxS("Quiet"), wxS("Panic"), wxS("Fatal"), wxS("Error"), wxS("Warning"), wxS("Info"), wxS("Verbose"), wxS("Debug") };
 	wxArrayString log_levels_choice(8, log_levels);
 	p->OptionChoice(ffms, _("Debug log verbosity"), log_levels_choice, "Provider/FFmpegSource/Log Level");
 
@@ -517,7 +522,7 @@ class CommandRenderer final : public wxDataViewCustomRenderer {
 
 public:
 	CommandRenderer()
-	: wxDataViewCustomRenderer("wxDataViewIconText", wxDATAVIEW_CELL_EDITABLE)
+	: wxDataViewCustomRenderer(wxS("wxDataViewIconText"), wxDATAVIEW_CELL_EDITABLE)
 	, autocomplete(to_wx(cmd::get_registered_commands()))
 	{
 	}
@@ -587,7 +592,7 @@ class HotkeyRenderer final : public wxDataViewCustomRenderer {
 
 public:
 	HotkeyRenderer()
-	: wxDataViewCustomRenderer("string", wxDATAVIEW_CELL_EDITABLE)
+	: wxDataViewCustomRenderer(wxS("string"), wxDATAVIEW_CELL_EDITABLE)
 	{ }
 
 	wxWindow *CreateEditorCtrl(wxWindow *parent, wxRect label_rect, wxVariant const& var) override {
@@ -652,20 +657,20 @@ Interface_Hotkeys::Interface_Hotkeys(wxTreebook *book, Preferences *parent)
 	delete_button->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { model->Delete(dvc->GetSelection()); });
 
 	quick_search->Bind(wxEVT_TEXT, &Interface_Hotkeys::OnUpdateFilter, this);
-	quick_search->Bind(wxEVT_SEARCHCTRL_CANCEL_BTN, [=](wxCommandEvent&) { quick_search->SetValue(""); });
+	quick_search->Bind(wxEVT_SEARCHCTRL_CANCEL_BTN, [=](wxCommandEvent&) { quick_search->SetValue(wxEmptyString); });
 
 	dvc = new wxDataViewCtrl(this, -1);
 	dvc->AssociateModel(model.get());
 #ifndef __APPLE__
-	dvc->AppendColumn(new wxDataViewColumn("Hotkey", new HotkeyRenderer, 0, 125, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE));
-	dvc->AppendColumn(new wxDataViewColumn("Command", new CommandRenderer, 1, 250, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE));
+	dvc->AppendColumn(new wxDataViewColumn(wxS("Hotkey"), new HotkeyRenderer, 0, 125, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE));
+	dvc->AppendColumn(new wxDataViewColumn(wxS("Command"), new CommandRenderer, 1, 250, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE));
 #else
-	auto col = new wxDataViewColumn("Hotkey", new wxDataViewTextRenderer("string", wxDATAVIEW_CELL_EDITABLE), 0, 150, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE);
+	auto col = new wxDataViewColumn(wxS("Hotkey"), new wxDataViewTextRenderer(wxS("string"), wxDATAVIEW_CELL_EDITABLE), 0, 150, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE);
 	col->SetMinWidth(150);
 	dvc->AppendColumn(col);
-	dvc->AppendColumn(new wxDataViewColumn("Command", new wxDataViewIconTextRenderer("wxDataViewIconText", wxDATAVIEW_CELL_EDITABLE), 1, 250, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE));
+	dvc->AppendColumn(new wxDataViewColumn(wxS("Command"), new wxDataViewIconTextRenderer(wxS("wxDataViewIconText"), wxDATAVIEW_CELL_EDITABLE), 1, 250, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE));
 #endif
-	dvc->AppendTextColumn("Description", 2, wxDATAVIEW_CELL_INERT, 300, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE);
+	dvc->AppendTextColumn(wxS("Description"), 2, wxDATAVIEW_CELL_INERT, 300, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE);
 
 	wxSizer *buttons = new wxBoxSizer(wxHORIZONTAL);
 	buttons->Add(quick_search, wxSizerFlags().Border());

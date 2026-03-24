@@ -35,6 +35,66 @@
 #include <libaegisub/path.h>
 
 namespace agi {
+ContextCoreSession::ContextCoreSession(Context& context)
+: ass(context.ass)
+, textSelectionController(context.textSelectionController)
+, subsController(context.subsController)
+, project(context.project)
+, local_scripts(context.local_scripts)
+, selectionController(context.selectionController)
+, videoController(context.videoController)
+, audioController(context.audioController)
+, initialLineState(context.initialLineState)
+, search(context.search)
+, path(context.path)
+, statusSink(context.statusSink)
+, notificationSink(context.notificationSink)
+, interactionSink(context.interactionSink)
+, backgroundRunnerFactory(context.backgroundRunnerFactory) {
+}
+
+ConstContextCoreSession::ConstContextCoreSession(Context const& context)
+: ass(context.ass)
+, textSelectionController(context.textSelectionController)
+, subsController(context.subsController)
+, project(context.project)
+, local_scripts(context.local_scripts)
+, selectionController(context.selectionController)
+, videoController(context.videoController)
+, audioController(context.audioController)
+, initialLineState(context.initialLineState)
+, search(context.search)
+, path(context.path)
+, statusSink(context.statusSink)
+, notificationSink(context.notificationSink)
+, interactionSink(context.interactionSink)
+, backgroundRunnerFactory(context.backgroundRunnerFactory) {
+}
+
+ContextUiSession::ContextUiSession(Context& context)
+: parent(context.parent)
+, previousFocus(context.previousFocus)
+, videoSlider(context.videoSlider)
+, audioBox(context.audioBox)
+, karaoke(context.karaoke)
+, subsGrid(context.subsGrid)
+, dialog(context.dialog)
+, frame(context.frame)
+, videoDisplay(context.videoDisplay) {
+}
+
+ConstContextUiSession::ConstContextUiSession(Context const& context)
+: parent(context.parent)
+, previousFocus(context.previousFocus)
+, videoSlider(context.videoSlider)
+, audioBox(context.audioBox)
+, karaoke(context.karaoke)
+, subsGrid(context.subsGrid)
+, dialog(context.dialog)
+, frame(context.frame)
+, videoDisplay(context.videoDisplay) {
+}
+
 Context::Context()
 : ass(make_unique<AssFile>())
 , textSelectionController(make_unique<TextSelectionController>())

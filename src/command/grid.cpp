@@ -80,7 +80,7 @@ struct grid_line_next_create final : public Command {
 
 			auto pos = c->ass->iterator_to(*cur);
 			c->ass->Events.insert(++pos, *newline);
-			c->ass->Commit(_("line insertion"), AssFile::COMMIT_DIAG_ADDREM);
+			c->ass->Commit(from_wx(_("line insertion")), AssFile::COMMIT_DIAG_ADDREM);
 			c->selectionController->NextLine();
 		}
 	}
@@ -105,7 +105,7 @@ struct grid_sort_actor final : public Command {
 
 	void operator()(agi::Context *c) override {
 		c->ass->Sort(AssFile::CompActor);
-		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+		c->ass->Commit(from_wx(_("sort")), AssFile::COMMIT_ORDER);
 	}
 };
 
@@ -125,7 +125,7 @@ struct grid_sort_actor_selected final : public validate_sel_multiple {
 
 	void operator()(agi::Context *c) override {
 		c->ass->Sort(AssFile::CompActor, c->selectionController->GetSelectedSet());
-		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+		c->ass->Commit(from_wx(_("sort")), AssFile::COMMIT_ORDER);
 	}
 };
 
@@ -137,7 +137,7 @@ struct grid_sort_effect final : public Command {
 
 	void operator()(agi::Context *c) override {
 		c->ass->Sort(AssFile::CompEffect);
-		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+		c->ass->Commit(from_wx(_("sort")), AssFile::COMMIT_ORDER);
 	}
 };
 
@@ -149,7 +149,7 @@ struct grid_sort_effect_selected final : public validate_sel_multiple {
 
 	void operator()(agi::Context *c) override {
 		c->ass->Sort(AssFile::CompEffect, c->selectionController->GetSelectedSet());
-		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+		c->ass->Commit(from_wx(_("sort")), AssFile::COMMIT_ORDER);
 	}
 };
 
@@ -161,7 +161,7 @@ struct grid_sort_end final : public Command {
 
 	void operator()(agi::Context *c) override {
 		c->ass->Sort(AssFile::CompEnd);
-		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+		c->ass->Commit(from_wx(_("sort")), AssFile::COMMIT_ORDER);
 	}
 };
 
@@ -173,7 +173,7 @@ struct grid_sort_end_selected final : public validate_sel_multiple {
 
 	void operator()(agi::Context *c) override {
 		c->ass->Sort(AssFile::CompEnd, c->selectionController->GetSelectedSet());
-		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+		c->ass->Commit(from_wx(_("sort")), AssFile::COMMIT_ORDER);
 	}
 };
 
@@ -185,7 +185,7 @@ struct grid_sort_layer final : public Command {
 
 	void operator()(agi::Context *c) override {
 		c->ass->Sort(AssFile::CompLayer);
-		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+		c->ass->Commit(from_wx(_("sort")), AssFile::COMMIT_ORDER);
 	}
 };
 
@@ -197,7 +197,7 @@ struct grid_sort_layer_selected final : public validate_sel_multiple {
 
 	void operator()(agi::Context *c) override {
 		c->ass->Sort(AssFile::CompLayer, c->selectionController->GetSelectedSet());
-		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+		c->ass->Commit(from_wx(_("sort")), AssFile::COMMIT_ORDER);
 	}
 };
 
@@ -209,7 +209,7 @@ struct grid_sort_start final : public Command {
 
 	void operator()(agi::Context *c) override {
 		c->ass->Sort();
-		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+		c->ass->Commit(from_wx(_("sort")), AssFile::COMMIT_ORDER);
 	}
 };
 
@@ -221,7 +221,7 @@ struct grid_sort_start_selected final : public validate_sel_multiple {
 
 	void operator()(agi::Context *c) override {
 		c->ass->Sort(AssFile::CompStart, c->selectionController->GetSelectedSet());
-		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+		c->ass->Commit(from_wx(_("sort")), AssFile::COMMIT_ORDER);
 	}
 };
 
@@ -233,7 +233,7 @@ struct grid_sort_style final : public Command {
 
 	void operator()(agi::Context *c) override {
 		c->ass->Sort(AssFile::CompStyle);
-		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+		c->ass->Commit(from_wx(_("sort")), AssFile::COMMIT_ORDER);
 	}
 };
 
@@ -245,7 +245,7 @@ struct grid_sort_style_selected final : public validate_sel_multiple {
 
 	void operator()(agi::Context *c) override {
 		c->ass->Sort(AssFile::CompStyle, c->selectionController->GetSelectedSet());
-		c->ass->Commit(_("sort"), AssFile::COMMIT_ORDER);
+		c->ass->Commit(from_wx(_("sort")), AssFile::COMMIT_ORDER);
 	}
 };
 
@@ -357,7 +357,7 @@ struct grid_move_up final : public Command {
 
 	void operator()(agi::Context *c) override {
 		if (move_one(c->ass->Events.begin(), c->ass->Events.end(), c->selectionController->GetSelectedSet(), false))
-			c->ass->Commit(_("move lines"), AssFile::COMMIT_ORDER);
+			c->ass->Commit(from_wx(_("move lines")), AssFile::COMMIT_ORDER);
 	}
 };
 
@@ -374,7 +374,7 @@ struct grid_move_down final : public Command {
 
 	void operator()(agi::Context *c) override {
 		if (move_one(c->ass->Events.rbegin(), c->ass->Events.rend(), c->selectionController->GetSelectedSet(), true))
-			c->ass->Commit(_("move lines"), AssFile::COMMIT_ORDER);
+			c->ass->Commit(from_wx(_("move lines")), AssFile::COMMIT_ORDER);
 	}
 };
 
@@ -394,7 +394,7 @@ struct grid_swap final : public Command {
 		auto const& sel = c->selectionController->GetSelectedSet();
 		if (sel.size() == 2) {
 			(*sel.begin())->swap_nodes(**sel.rbegin());
-			c->ass->Commit(_("swap lines"), AssFile::COMMIT_ORDER);
+			c->ass->Commit(from_wx(_("swap lines")), AssFile::COMMIT_ORDER);
 		}
 	}
 };

@@ -16,6 +16,7 @@
 
 #include "ass_file.h"
 #include "async_video_provider.h"
+#include "compat.h"
 #include "format.h"
 #include "help_button.h"
 #include "options.h"
@@ -56,14 +57,14 @@ int prompt(wxWindow *parent, bool ar_changed, int sx, int sy, int vx, int vy) {
 			_("Resample script (add borders)"),
 			_("Resample script (remove borders)")
 		};
-		rb = new wxRadioBox(&d, -1, "", wxDefaultPosition, wxDefaultSize, 4, choices, 1);
+		rb = new wxRadioBox(&d, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, 4, choices, 1);
 	}
 	else {
 		wxString choices[] = {
 			_("Set to video resolution"),
 			_("Resample script"),
 		};
-		rb = new wxRadioBox(&d, -1, "", wxDefaultPosition, wxDefaultSize, 2, choices, 1);
+		rb = new wxRadioBox(&d, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, 2, choices, 1);
 	}
 	sizer->Add(rb, wxSizerFlags().Border(wxALL & ~wxTOP).Expand());
 	sizer->Add(d.CreateStdDialogButtonSizer(wxOK | wxCANCEL | wxHELP), wxSizerFlags().Border().Expand());
@@ -159,5 +160,5 @@ bool update_video_properties(AssFile *file, const AsyncVideoProvider *new_provid
 
 void UpdateVideoProperties(AssFile *file, const AsyncVideoProvider *new_provider, wxWindow *parent) {
 	if (update_video_properties(file, new_provider, parent))
-		file->Commit(_("change script resolution"), AssFile::COMMIT_SCRIPTINFO);
+		file->Commit(from_wx(_("change script resolution")), AssFile::COMMIT_SCRIPTINFO);
 }

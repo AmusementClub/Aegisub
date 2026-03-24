@@ -43,7 +43,7 @@ class Placeholder final : public BaseCtrl {
 		evt.Skip();
 
 		if (is_placeholder) {
-			BaseCtrl::ChangeValue("");
+			BaseCtrl::ChangeValue(wxString());
 			BaseCtrl::SetForegroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT));
 		}
 	}
@@ -97,7 +97,7 @@ public:
 	/// Override GetValue to return empty when in placeholder mode rather than the placeholder text
 	wxString GetValue() const {
 		if (is_placeholder && !this->HasFocus())
-			return "";
+			return wxString();
 		return BaseCtrl::GetValue();
 	}
 #else
@@ -113,5 +113,5 @@ public:
 };
 
 template<> inline void Placeholder<wxComboBox>::Create(wxWindow *parent, wxSize const& size, long style) {
-	wxComboBox::Create(parent, -1, "", wxDefaultPosition, size, 0, nullptr, style);
+	wxComboBox::Create(parent, -1, wxEmptyString, wxDefaultPosition, size, 0, nullptr, style);
 }

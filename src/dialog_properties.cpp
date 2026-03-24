@@ -120,10 +120,10 @@ DialogProperties::DialogProperties(agi::Context *c)
 	TopSizer->Add(TopSizerGrid,1,wxALL | wxEXPAND,0);
 
 	// Resolution box
-	PlayResX = new wxTextCtrl(&d,-1,"",wxDefaultPosition,wxDefaultSize,0,IntValidator(c->ass->GetScriptInfoAsInt("PlayResX")));
-	PlayResY = new wxTextCtrl(&d,-1,"",wxDefaultPosition,wxDefaultSize,0,IntValidator(c->ass->GetScriptInfoAsInt("PlayResY")));
-	LayoutResX = new wxTextCtrl(&d,-1,"",wxDefaultPosition,wxDefaultSize,0,IntValidator(c->ass->GetScriptInfoAsInt("LayoutResX")));
-	LayoutResY = new wxTextCtrl(&d,-1,"",wxDefaultPosition,wxDefaultSize,0,IntValidator(c->ass->GetScriptInfoAsInt("LayoutResY")));
+	PlayResX = new wxTextCtrl(&d,-1,wxEmptyString,wxDefaultPosition,wxDefaultSize,0,IntValidator(c->ass->GetScriptInfoAsInt("PlayResX")));
+	PlayResY = new wxTextCtrl(&d,-1,wxEmptyString,wxDefaultPosition,wxDefaultSize,0,IntValidator(c->ass->GetScriptInfoAsInt("PlayResY")));
+	LayoutResX = new wxTextCtrl(&d,-1,wxEmptyString,wxDefaultPosition,wxDefaultSize,0,IntValidator(c->ass->GetScriptInfoAsInt("LayoutResX")));
+	LayoutResY = new wxTextCtrl(&d,-1,wxEmptyString,wxDefaultPosition,wxDefaultSize,0,IntValidator(c->ass->GetScriptInfoAsInt("LayoutResY")));
 
 	wxButton *PlayResFromVideo = new wxButton(&d,-1,_("From &video"));
 	wxButton *LayoutResFromVideo = new wxButton(&d,-1,_("From v&ideo"));
@@ -137,14 +137,14 @@ DialogProperties::DialogProperties(agi::Context *c)
 	}
 
 	auto resolution_grid = new wxFlexGridSizer(2, 5, 5, 5);
-	resolution_grid->Add(new wxStaticText(&d, -1, "PlayRes:"), 0, wxALIGN_CENTER_VERTICAL);
+	resolution_grid->Add(new wxStaticText(&d, -1, wxS("PlayRes:")), 0, wxALIGN_CENTER_VERTICAL);
 	resolution_grid->Add(PlayResX, 1, wxEXPAND);
-	resolution_grid->Add(new wxStaticText(&d, -1, "x"), 0, wxALIGN_CENTER);
+	resolution_grid->Add(new wxStaticText(&d, -1, wxS("x")), 0, wxALIGN_CENTER);
 	resolution_grid->Add(PlayResY, 1, wxEXPAND);
 	resolution_grid->Add(PlayResFromVideo, 0, wxEXPAND);
-	resolution_grid->Add(new wxStaticText(&d, -1, "LayoutRes:"), 0, wxALIGN_CENTER_VERTICAL);
+	resolution_grid->Add(new wxStaticText(&d, -1, wxS("LayoutRes:")), 0, wxALIGN_CENTER_VERTICAL);
 	resolution_grid->Add(LayoutResX, 1, wxEXPAND);
-	resolution_grid->Add(new wxStaticText(&d, -1, "x"), 0, wxALIGN_CENTER);
+	resolution_grid->Add(new wxStaticText(&d, -1, wxS("x")), 0, wxALIGN_CENTER);
 	resolution_grid->Add(LayoutResY, 1, wxEXPAND);
 	resolution_grid->Add(LayoutResFromVideo, 0, wxEXPAND);
 	resolution_grid->AddGrowableCol(1, 1);
@@ -156,7 +156,7 @@ DialogProperties::DialogProperties(agi::Context *c)
 		 wxDefaultPosition, wxDefaultSize, to_wx(MatrixNames()), wxCB_READONLY);
 
 	auto matrix_sizer = new wxBoxSizer(wxHORIZONTAL);
-	matrix_sizer->Add(new wxStaticText(&d, -1, "YCbCr Matrix:"), wxSizerFlags().Center());
+	matrix_sizer->Add(new wxStaticText(&d, -1, wxS("YCbCr Matrix:")), wxSizerFlags().Center());
 	matrix_sizer->Add(YCbCrMatrix, wxSizerFlags(1).Expand().Border(wxLEFT));
 
 	auto res_box = new wxStaticBoxSizer(wxVERTICAL, &d, _("Resolution"));
@@ -173,7 +173,7 @@ DialogProperties::DialogProperties(agi::Context *c)
 		_("2: No word wrapping, both \\n and \\N break"),
 		_("3: Smart wrapping, bottom line is wider")
 	};
-	WrapStyle = new wxComboBox(&d, -1, "", wxDefaultPosition, wxDefaultSize, 4, wrap_opts, wxCB_READONLY);
+	WrapStyle = new wxComboBox(&d, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, 4, wrap_opts, wxCB_READONLY);
 	WrapStyle->SetSelection(c->ass->GetScriptInfoAsInt("WrapStyle"));
 	optionsGrid->Add(new wxStaticText(&d,-1,_("Wrap Style: ")),0,wxALIGN_CENTER_VERTICAL,0);
 	optionsGrid->Add(WrapStyle,1,wxEXPAND,0);
@@ -217,7 +217,7 @@ void DialogProperties::OnOK(wxCommandEvent &) {
 	count += SetInfoIfDifferent("ScaledBorderAndShadow", ScaleBorder->GetValue() ? "yes" : "no");
 	count += SetInfoIfDifferent("YCbCr Matrix", from_wx(YCbCrMatrix->GetValue()));
 
-	if (count) c->ass->Commit(_("property changes"), AssFile::COMMIT_SCRIPTINFO);
+	if (count) c->ass->Commit(from_wx(_("property changes")), AssFile::COMMIT_SCRIPTINFO);
 
 	d.EndModal(!!count);
 }
@@ -233,11 +233,11 @@ int DialogProperties::SetInfoIfDifferent(std::string const& key, std::string con
 wxString DialogProperties::GetEffectiveResolutionText() const {
 	int width, height;
 	auto type = c->ass->GetResolutionType(width, height);
-	wxString source = "Fallback";
+	wxString source = wxS("Fallback");
 	if (type == ScriptResolutionType::PlayRes)
-		source = "PlayRes";
+		source = wxS("PlayRes");
 	else if (type == ScriptResolutionType::LayoutRes)
-		source = "LayoutRes";
+		source = wxS("LayoutRes");
 	return wxString::Format(_("Current effective resolution: %s %d x %d"), source, width, height);
 }
 

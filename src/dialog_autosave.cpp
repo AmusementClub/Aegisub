@@ -90,9 +90,9 @@ DialogAutosave::DialogAutosave(wxWindow *parent)
 	d.SetSizer(main_sizer);
 
 	std::map<wxString, AutosaveFile> files_map;
-	Populate(files_map, OPT_GET("Path/Auto/Save")->GetString(), ".AUTOSAVE.ass", "%s");
-	Populate(files_map, OPT_GET("Path/Auto/Backup")->GetString(), ".ORIGINAL.ass", _("%s [ORIGINAL BACKUP]"));
-	Populate(files_map, "?user/recovered", ".ass", _("%s [RECOVERED]"));
+	Populate(files_map, OPT_GET("Path/Auto/Save")->GetString(), wxS(".AUTOSAVE.ass"), wxS("%s"));
+	Populate(files_map, OPT_GET("Path/Auto/Backup")->GetString(), wxS(".ORIGINAL.ass"), _("%s [ORIGINAL BACKUP]"));
+	Populate(files_map, "?user/recovered", wxS(".ass"), _("%s [RECOVERED]"));
 
 	for (auto& [key, file] : files_map)
 		files.emplace_back(std::move(file));
@@ -124,19 +124,19 @@ void DialogAutosave::Populate(std::map<wxString, AutosaveFile> &files_map, std::
 	if (!dir.Open(directory)) return;
 
 	wxString fn;
-	if (!dir.GetFirst(&fn, "*" + filter, wxDIR_FILES))
+	if (!dir.GetFirst(&fn, wxS("*") + filter, wxDIR_FILES))
 		return;
 
 	do {
 		wxDateTime date;
 
 		wxString date_str;
-		wxString name = fn.Left(fn.size() - filter.size()).BeforeLast('.', &date_str);
+		wxString name = fn.Left(fn.size() - filter.size()).BeforeLast(wxS('.'), &date_str);
 		if (!name)
 			name = date_str;
 		else {
-			if (!date.ParseFormat(date_str, "%Y-%m-%d-%H-%M-%S"))
-				name += "." + date_str;
+			if (!date.ParseFormat(date_str, wxS("%Y-%m-%d-%H-%M-%S")))
+				name += wxS(".") + date_str;
 		}
 		if (!date.IsValid())
 			date = wxFileName(directory, fn).GetModificationTime();

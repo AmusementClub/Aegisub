@@ -149,7 +149,7 @@ int DrawBoxedText(wxDC &dc, wxString const& txt, int x, int y)
 		// Empty string gets special handling:
 		// The box is drawn in shorter width, to emphasize it's empty
 		// GetTextExtent has to be called with a non-empty string, otherwise it returns the wrong height
-		dc.GetTextExtent(" ", &tw, &th);
+		dc.GetTextExtent(wxS(" "), &tw, &th);
 		dc.DrawRectangle(x, y-2, 4, th+4);
 		return 3;
 	}
@@ -488,8 +488,8 @@ DialogKanjiTimer::DialogKanjiTimer(agi::Context *c)
 	Interpolate->SetValue(OPT_GET("Tool/Kanji Timer/Interpolation")->GetBool());
 
 	wxArrayString styles = to_wx(subs->GetStyles());
-	SourceStyle = new wxComboBox(this, -1, "", wxDefaultPosition, wxSize(160, -1), styles, wxCB_READONLY);
-	DestStyle = new wxComboBox(this, -1, "", wxDefaultPosition, wxSize(160, -1), styles, wxCB_READONLY);
+	SourceStyle = new wxComboBox(this, -1, wxEmptyString, wxDefaultPosition, wxSize(160, -1), styles, wxCB_READONLY);
+	DestStyle = new wxComboBox(this, -1, wxEmptyString, wxDefaultPosition, wxSize(160, -1), styles, wxCB_READONLY);
 
 	wxStaticText *ShortcutKeys = new wxStaticText(this,-1,_("When the destination textbox has focus, use the following keys:\n\nRight Arrow: Increase dest. selection length\nLeft Arrow: Decrease dest. selection length\nUp Arrow: Increase source selection length\nDown Arrow: Decrease source selection length\nEnter: Link, accept line when done\nBackspace: Unlink last"));
 
@@ -563,7 +563,7 @@ void DialogKanjiTimer::OnClose(wxCommandEvent &) {
 		line.first->Text = line.second;
 
 	if (LinesToChange.size()) {
-		subs->Commit(_("kanji timing"), AssFile::COMMIT_DIAG_TEXT);
+		subs->Commit(from_wx(_("kanji timing")), AssFile::COMMIT_DIAG_TEXT);
 		LinesToChange.clear();
 	}
 	Close();

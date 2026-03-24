@@ -50,7 +50,7 @@ std::string GetEncoding(agi::fs::path const& filename) {
 	if (!encoding.empty())
 		return encoding;
 
-	auto choices = agi::charset::GetEncodingsList<wxArrayString>();
+	auto choices = to_wx(agi::charset::GetEncodingsList<std::vector<std::string>>());
 	int choice = wxGetSingleChoiceIndex(
 		_("Aegisub could not narrow down the character set to a single one.\nPlease pick one below:"),
 		_("Choose character set"),

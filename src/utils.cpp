@@ -57,7 +57,10 @@
 
 /// @brief There shall be no kiB, MiB stuff here Pretty reading of size
 wxString PrettySize(int bytes) {
-	const char *suffix[] = { "", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB" };
+	const wxString suffix[] = {
+		wxEmptyString, wxS("kB"), wxS("MB"), wxS("GB"), wxS("TB"),
+		wxS("PB"), wxS("EB"), wxS("ZB"), wxS("YB")
+	};
 
 	// Set size
 	size_t i = 0;
@@ -68,12 +71,12 @@ wxString PrettySize(int bytes) {
 	}
 
 	// Set number of decimal places
-	const char *fmt = "%.0f";
+	wxString fmt = wxS("%.0f");
 	if (size < 10)
-		fmt = "%.2f";
+		fmt = wxS("%.2f");
 	else if (size < 100)
-		fmt = "%1.f";
-	return agi::wxformat(fmt, size) + " " + suffix[i];
+		fmt = wxS("%1.f");
+	return agi::wxformat(fmt, size) + wxS(" ") + suffix[i];
 }
 
 std::string float_to_string(double val) {
@@ -100,7 +103,7 @@ void RestartAegisub() {
 	config::opt->Flush();
 
 #if defined(__WXMSW__)
-	wxExecute("\"" + wxStandardPaths::Get().GetExecutablePath() + "\"");
+	wxExecute(wxS("\"") + wxStandardPaths::Get().GetExecutablePath() + wxS("\""));
 #else
 	wxExecute(wxStandardPaths::Get().GetExecutablePath());
 #endif
@@ -293,7 +296,7 @@ agi::fs::path SaveFileSelector(wxString const& message, std::string const& optio
 }
 
 wxString LocalizedLanguageName(wxString const& lang) {
-	icu::Locale iculoc(lang.c_str());
+	icu::Locale iculoc(lang.utf8_string().c_str());
 	if (!iculoc.isBogus()) {
 		icu::UnicodeString ustr;
 		iculoc.getDisplayName(iculoc, ustr);

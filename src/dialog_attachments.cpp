@@ -128,7 +128,7 @@ void DialogAttachments::AttachFile(wxFileDialog &diag, wxString const& commit_ms
 	for (auto const& fn : paths)
 		ass->InsertAttachment(agi::fs::path(fn.wx_str()));
 
-	ass->Commit(commit_msg, AssFile::COMMIT_ATTACHMENT);
+	ass->Commit(from_wx(commit_msg), AssFile::COMMIT_ATTACHMENT);
 
 	UpdateList();
 }
@@ -136,7 +136,7 @@ void DialogAttachments::AttachFile(wxFileDialog &diag, wxString const& commit_ms
 void DialogAttachments::OnAttachFont(wxCommandEvent &) {
 	wxFileDialog diag(&d,
 		_("Choose file to be attached"),
-		to_wx(OPT_GET("Path/Fonts Collector Destination")->GetString()), "", "Font Files (*.ttf)|*.ttf",
+		to_wx(OPT_GET("Path/Fonts Collector Destination")->GetString()), wxEmptyString, wxS("Font Files (*.ttf)|*.ttf"),
 		wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE);
 
 	AttachFile(diag, _("attach font file"));
@@ -145,8 +145,8 @@ void DialogAttachments::OnAttachFont(wxCommandEvent &) {
 void DialogAttachments::OnAttachGraphics(wxCommandEvent &) {
 	wxFileDialog diag(&d,
 		_("Choose file to be attached"),
-		"", "",
-		"Graphic Files (*.bmp, *.gif, *.jpg, *.ico, *.wmf)|*.bmp;*.gif;*.jpg;*.ico;*.wmf",
+		wxEmptyString, wxEmptyString,
+		wxS("Graphic Files (*.bmp, *.gif, *.jpg, *.ico, *.wmf)|*.bmp;*.gif;*.jpg;*.ico;*.wmf"),
 		wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE);
 
 	AttachFile(diag, _("attach graphics file"));
@@ -186,7 +186,7 @@ void DialogAttachments::OnDelete(wxCommandEvent &) {
 	for (auto i = listView->GetFirstSelected(); i != -1; i = listView->GetNextSelected(i))
 		ass->Attachments.erase(ass->Attachments.begin() + i - removed++);
 
-	ass->Commit(_("remove attachment"), AssFile::COMMIT_ATTACHMENT);
+	ass->Commit(from_wx(_("remove attachment")), AssFile::COMMIT_ATTACHMENT);
 
 	UpdateList();
 	extractButton->Enable(false);

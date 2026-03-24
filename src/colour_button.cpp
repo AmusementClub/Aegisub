@@ -39,7 +39,7 @@ wxSize ScaleButtonSize(wxWindow *parent, wxSize const& size) {
 }
 
 ColourButton::ColourButton(wxWindow *parent, wxSize const& size, bool alpha, agi::Color col, wxValidator const& validator)
-: wxButton(parent, -1, "", wxDefaultPosition, ScaleButtonSize(parent, size), 0, validator)
+: wxButton(parent, -1, wxEmptyString, wxDefaultPosition, ScaleButtonSize(parent, size), 0, validator)
 , bmp(ScaleBitmapSize(parent, size))
 , colour(std::move(col))
 {

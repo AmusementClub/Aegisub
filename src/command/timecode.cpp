@@ -69,7 +69,7 @@ struct timecode_open final : public Command {
 	STR_HELP("Open a VFR timecodes v1 or v2 file")
 
 	void operator()(agi::Context *c) override {
-		auto str = from_wx(_("All Supported Formats") + " (*.txt)|*.txt|" + _("All Files") + " (*.*)|*.*");
+		auto str = from_wx(_("All Supported Formats") + wxS(" (*.txt)|*.txt|") + _("All Files") + wxS(" (*.*)|*.*"));
 		auto filename = OpenFileSelector(_("Open Timecodes File"), "Path/Last/Timecodes", "", "", str, c->parent);
 		if (!filename.empty())
 			c->project->LoadTimecodes(filename);
@@ -89,7 +89,7 @@ struct timecode_save final : public Command {
 	}
 
 	void operator()(agi::Context *c) override {
-		auto str = from_wx(_("All Supported Formats") + " (*.txt)|*.txt|" + _("All Files") + " (*.*)|*.*");
+		auto str = from_wx(_("All Supported Formats") + wxS(" (*.txt)|*.txt|") + _("All Files") + wxS(" (*.*)|*.*"));
 		auto filename = SaveFileSelector(_("Save Timecodes File"), "Path/Last/Timecodes", "", "", str, c->parent);
 		if (filename.empty()) return;
 

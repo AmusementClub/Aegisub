@@ -110,9 +110,9 @@ namespace {
 			});
 		selected_color = new ColourButton(this, wxSize(55, 16), true, agi::Color("FFFFFF"));
 		selected_color->SetToolTip(_("The key color to be followed"));
-		selected_x = new wxTextCtrl(this, -1, "0");
+		selected_x = new wxTextCtrl(this, -1, wxS("0"));
 		selected_x->SetToolTip(_("The x coord of the key point"));
-		selected_y = new wxTextCtrl(this, -1, "0");
+		selected_y = new wxTextCtrl(this, -1, wxS("0"));
 		selected_y->SetToolTip(_("The y coord of the key point"));
 		selected_tolerance = new wxTextCtrl(this, -1, wxString::Format(wxT("%i"), int(tolerance)));
 		selected_tolerance->SetToolTip(_("Max tolerance of the color"));
@@ -330,7 +330,7 @@ namespace {
 		auto line = context->selectionController->GetActiveLine();
 		line->Start = timecode.TimeAtFrame(left, agi::vfr::Time::START);
 		line->End = timecode.TimeAtFrame(right, agi::vfr::Time::END); // exclusive
-		context->ass->Commit(_("Align to video by key point"), AssFile::COMMIT_DIAG_TIME);
+		context->ass->Commit(from_wx(_("Align to video by key point")), AssFile::COMMIT_DIAG_TIME);
 		Close();
 	}
 

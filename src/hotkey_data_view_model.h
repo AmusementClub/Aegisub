@@ -48,7 +48,7 @@ public:
 	void SetFilter(wxString const& filter);
 
 	unsigned int GetColumnCount() const override { return 3; }
-	wxString GetColumnType(unsigned int) const override { return "string"; }
+	wxString GetColumnType(unsigned int) const override { return wxS("string"); }
 
 	unsigned int GetChildren(wxDataViewItem const& item, wxDataViewItemArray &children) const override;
 	wxDataViewItem GetParent(wxDataViewItem const& item) const override;

@@ -106,7 +106,7 @@ const auto AssDialogue_Effect = &AssDialogue::Effect;
 }
 
 SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
-: wxPanel(parent, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxRAISED_BORDER, "SubsEditBox")
+: wxPanel(parent, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxRAISED_BORDER, wxS("SubsEditBox"))
 , c(context)
 , undo_timer(GetEventHandler())
 #ifdef WITH_WXSTC
@@ -126,14 +126,14 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 #endif
 	top_sizer->Add(comment_box, wxSizerFlags().Expand().Border(wxRIGHT, 5));
 
-	style_box = MakeComboBox("Default", wxCB_READONLY, &SubsEditBox::OnStyleChange, _("Style for this line"));
+	style_box = MakeComboBox(wxS("Default"), wxCB_READONLY, &SubsEditBox::OnStyleChange, _("Style for this line"));
 
 	style_edit_button = new wxButton(this, -1, _("Edit"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
 	style_edit_button->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) {
 		if (active_style) {
 			wxArrayString font_list = wxFontEnumerator::GetFacenames();
 			font_list.Sort();
-			DialogStyleEditor(this, active_style, c, nullptr, "", font_list).ShowModal();
+			DialogStyleEditor(this, active_style, c, nullptr, std::string(), font_list).ShowModal();
 		}
 	});
 	top_sizer->Add(style_edit_button, wxSizerFlags().Expand().Border(wxRIGHT));
@@ -148,7 +148,7 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 	Bind(wxEVT_COMBOBOX, &SubsEditBox::OnEffectChange, this, effect_box->GetId());
 	top_sizer->Add(effect_box, wxSizerFlags(3).Expand());
 
-	char_count = new wxTextCtrl(this, -1, "0", wxDefaultPosition, wxDefaultSize, wxTE_READONLY | wxTE_CENTER);
+	char_count = new wxTextCtrl(this, -1, wxS("0"), wxDefaultPosition, wxDefaultSize, wxTE_READONLY | wxTE_CENTER);
 #if wxCHECK_VERSION(3, 1, 3)
 	char_count->SetInitialSize(char_count->GetSizeFromText(wxS("000")));
 #else
@@ -160,7 +160,7 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 	// Middle controls
 	middle_left_sizer = new wxBoxSizer(wxHORIZONTAL);
 
-	layer = new wxSpinCtrl(this,-1,"",wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS | wxTE_PROCESS_ENTER,0,0x7FFFFFFF,0);
+	layer = new wxSpinCtrl(this,-1,wxEmptyString,wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS | wxTE_PROCESS_ENTER,0,0x7FFFFFFF,0);
 #ifdef __WXGTK3__
 	// GTK3 has a bug that we cannot shrink the size of a widget, so do nothing here. See:
 	//  http://gtk.10911.n7.nabble.com/gtk-widget-set-size-request-stopped-working-with-GTK3-td26274.html
@@ -320,7 +320,7 @@ SubsEditBox::~SubsEditBox() {
 }
 
 wxTextCtrl *SubsEditBox::MakeMarginCtrl(wxString const& tooltip, int margin, wxString const& commit_msg) {
-	wxTextCtrl *ctrl = new wxTextCtrl(this, -1, "", wxDefaultPosition, wxDefaultSize, wxTE_CENTRE | wxTE_PROCESS_ENTER, IntValidator(0, true));
+	wxTextCtrl *ctrl = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_CENTRE | wxTE_PROCESS_ENTER, IntValidator(0, true));
 #if wxCHECK_VERSION(3, 1, 3)
 	ctrl->SetInitialSize(ctrl->GetSizeFromText(wxS("00000")));
 #else
@@ -340,7 +340,7 @@ wxTextCtrl *SubsEditBox::MakeMarginCtrl(wxString const& tooltip, int margin, wxS
 }
 
 TimeEdit *SubsEditBox::MakeTimeCtrl(wxString const& tooltip, TimeField field) {
-	TimeEdit *ctrl = new TimeEdit(this, -1, c, "", wxDefaultSize, field == TIME_END);
+	TimeEdit *ctrl = new TimeEdit(this, -1, c, std::string(), wxDefaultSize, field == TIME_END);
 #if wxCHECK_VERSION(3, 1, 3)
 	ctrl->SetInitialSize(ctrl->GetSizeFromText(wxS("0:00:00.000")));
 #else
@@ -377,7 +377,7 @@ wxButton *SubsEditBox::MakeBottomButton(const char *cmd_name) {
 }
 
 wxComboBox *SubsEditBox::MakeComboBox(wxString const& initial_text, int style, void (SubsEditBox::*handler)(wxCommandEvent&), wxString const& tooltip) {
-	wxString styles[] = { "Default" };
+	wxString styles[] = { wxS("Default") };
 	wxComboBox *ctrl = new wxComboBox(this, -1, initial_text, wxDefaultPosition, wxDefaultSize, 1, styles, style | wxTE_PROCESS_ENTER);
 	ctrl->SetToolTip(tooltip);
 	top_sizer->Add(ctrl, wxSizerFlags(2).Expand().Border(wxRIGHT));
@@ -546,7 +546,7 @@ void SubsEditBox::OnChangeTc(wxCommandEvent& event) {
 
 void SubsEditBox::Commit(wxString const& desc, int type, bool amend, AssDialogue *line) {
 	file_changed_slot.Block();
-	commit_id = c->ass->Commit(desc, type, (amend && desc == last_commit_type) ? commit_id : -1, line);
+	commit_id = c->ass->Commit(from_wx(desc), type, (amend && desc == last_commit_type) ? commit_id : -1, line);
 	file_changed_slot.Unblock();
 	last_commit_type = desc;
 	last_time_commit_type = -1;
@@ -626,7 +626,7 @@ void SubsEditBox::CommitTimes(TimeField field) {
 
 	last_time_commit_type = field;
 	file_changed_slot.Block();
-	commit_id = c->ass->Commit(_("modify times"), AssFile::COMMIT_DIAG_TIME, commit_id, sel.size() == 1 ? *sel.begin() : nullptr);
+	commit_id = c->ass->Commit(from_wx(_("modify times")), AssFile::COMMIT_DIAG_TIME, commit_id, sel.size() == 1 ? *sel.begin() : nullptr);
 	file_changed_slot.Unblock();
 }
 
@@ -684,7 +684,7 @@ void SubsEditBox::SetControlsState(bool state) {
 		wxEventBlocker blocker(this);
 #ifdef WITH_WXSTC
 		if (use_stc) {
-			edit_ctrl_stc->SetTextTo("");
+			edit_ctrl_stc->SetTextTo(std::string());
 		}
 		else {
 #endif

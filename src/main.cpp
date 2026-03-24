@@ -102,7 +102,7 @@ void AegisubApp::OnAssertFailure(const wxChar *file, int line, const wxChar *fun
 
 AegisubApp::AegisubApp() {
 	// http://trac.wxwidgets.org/ticket/14302
-	wxSetEnv("UBUNTU_MENUPROXY", "0");
+	wxSetEnv(wxS("UBUNTU_MENUPROXY"), wxS("0"));
 }
 
 namespace {
@@ -120,16 +120,16 @@ agi::WxMessageBoxInteractionSink& AppInteractionSink() {
 }
 
 /// Message displayed when an exception has occurred.
-static wxString exception_message = "Oops, Aegisub has crashed!\n\nAn attempt has been made to save a copy of your file to:\n\n%s\n\nAegisub will now close.";
+static wxString exception_message = wxS("Oops, Aegisub has crashed!\n\nAn attempt has been made to save a copy of your file to:\n\n%s\n\nAegisub will now close.");
 
 /// @brief Gets called when application starts.
 /// @return bool
 bool AegisubApp::OnInit() {
 	// App name (yeah, this is a little weird to get rid of an odd warning)
 #if defined(__WXMSW__) || defined(__WXMAC__)
-	SetAppName("Aegisub");
+	SetAppName(wxS("Aegisub"));
 #else
-	SetAppName("aegisub");
+	SetAppName(wxS("aegisub"));
 #endif
 
 	// The logger isn't created on demand on background threads, so force it to
@@ -229,7 +229,7 @@ bool AegisubApp::OnInit() {
 	}
 	catch (agi::Exception const& err) {
 		AppNotificationSink().ShowError("Error",
-			from_wx("Configuration file is invalid. Error reported:\n" + to_wx(err.GetMessage())));
+			from_wx(wxS("Configuration file is invalid. Error reported:\n") + to_wx(err.GetMessage())));
 	}
 
 #ifdef _WIN32
@@ -426,15 +426,18 @@ void AegisubApp::UnhandledException(bool stackWalk) {
 	agi::fs::path path;
 	for (auto& frame : frames) {
 		auto c = frame->context.get();
-		if (!c || !c->ass || !c->subsController) continue;
+		if (!c) continue;
+
+		auto core = c->GetCore();
+		if (!core.ass || !core.subsController) continue;
 
 		path = config::path->Decode("?user/recovered");
 		agi::fs::CreateDirectory(path);
 
-		auto filename = c->subsController->Filename().stem();
+		auto filename = core.subsController->Filename().stem();
 		filename.replace_extension(agi::format("%s.ass", agi::util::strftime("%Y-%m-%d-%H-%M-%S")));
 		path /= filename;
-		c->subsController->Save(path);
+		core.subsController->Save(path);
 
 		any = true;
 	}
@@ -448,7 +451,7 @@ void AegisubApp::UnhandledException(bool stackWalk) {
 	}
 	else if (LastStartupState) {
 		AppNotificationSink().ShowError(from_wx(_("Program error")),
-			from_wx(fmt_wx("Aegisub has crashed while starting up!\n\nThe last startup step attempted was: %s.", LastStartupState)));
+			from_wx(fmt_wx("Aegisub has crashed while starting up!\n\nThe last startup step attempted was: %s.", to_wx(LastStartupState))));
 	}
 #endif
 }
@@ -475,7 +478,7 @@ bool AegisubApp::OnExceptionInMainLoop() {
 	}
 	catch (...) {
 		AppNotificationSink().ShowError("Exception in event handler",
-			from_wx(fmt_tl("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s", "Unknown error")));
+			from_wx(fmt_tl("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s", wxS("Unknown error"))));
 	}
 	return true;
 }
@@ -509,5 +512,5 @@ void AegisubApp::OpenFiles(wxArrayStringsAdapter filenames) {
 	for (size_t i = 0; i < filenames.GetCount(); ++i)
 		files.push_back(from_wx(filenames[i]));
 	if (!files.empty())
-		frames[0]->context->project->LoadList(files);
+		frames[0]->context->GetCore().project->LoadList(files);
 }

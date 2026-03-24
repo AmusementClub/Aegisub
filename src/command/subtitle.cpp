@@ -124,7 +124,7 @@ static void insert_subtitle_at_video(agi::Context *c, bool after) {
 	if (after) ++pos;
 
 	c->ass->Events.insert(pos, *def);
-	c->ass->Commit(_("line insertion"), AssFile::COMMIT_DIAG_ADDREM);
+	c->ass->Commit(from_wx(_("line insertion")), AssFile::COMMIT_DIAG_ADDREM);
 
 	c->selectionController->SetSelectionAndActive({ def }, def);
 }
@@ -158,7 +158,7 @@ struct subtitle_insert_after final : public validate_nonempty_selection {
 			}
 		}
 
-		c->ass->Commit(_("line insertion"), AssFile::COMMIT_DIAG_ADDREM);
+		c->ass->Commit(from_wx(_("line insertion")), AssFile::COMMIT_DIAG_ADDREM);
 		c->selectionController->SetSelectionAndActive({ new_line }, new_line);
 	}
 };
@@ -200,7 +200,7 @@ struct subtitle_insert_before final : public validate_nonempty_selection {
 				c->ass->Events.insert(it, *new_line);
 		}
 
-		c->ass->Commit(_("line insertion"), AssFile::COMMIT_DIAG_ADDREM);
+		c->ass->Commit(from_wx(_("line insertion")), AssFile::COMMIT_DIAG_ADDREM);
 		c->selectionController->SetSelectionAndActive({ new_line }, new_line);
 	}
 };
@@ -304,7 +304,7 @@ struct subtitle_open_charset final : public Command {
 		auto filename = OpenFileSelector(_("Open subtitles file"), "Path/Last/Subtitles", "","", SubtitleFormat::GetWildcards(0), c->parent);
 		if (filename.empty()) return;
 
-		wxString charset = wxGetSingleChoice(_("Choose charset code:"), _("Charset"), agi::charset::GetEncodingsList<wxArrayString>(), c->parent, -1, -1, true, 250, 200);
+		wxString charset = wxGetSingleChoice(_("Choose charset code:"), _("Charset"), to_wx(agi::charset::GetEncodingsList<std::vector<std::string>>()), c->parent, -1, -1, true, 250, 200);
 		if (charset.empty()) return;
 
 		load_subtitles(c, filename, from_wx(charset));

@@ -132,7 +132,7 @@ public:
 	/// Check if redo stack is empty
 	bool IsRedoStackEmpty() const { return redo_stack.empty(); };
 	/// Get the description of the first undoable change
-	wxString GetUndoDescription() const;
+	std::string GetUndoDescription() const;
 	/// Get the description of the first redoable change
-	wxString GetRedoDescription() const;
+	std::string GetRedoDescription() const;
 };

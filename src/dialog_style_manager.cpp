@@ -282,7 +282,7 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 
 	// Catalog
 	wxSizer *CatalogBox = new wxStaticBoxSizer(wxHORIZONTAL,this,_("Catalog of available storages"));
-	CatalogList = new wxComboBox(this,-1, "", wxDefaultPosition, wxSize(-1,-1), 0, nullptr, wxCB_READONLY);
+	CatalogList = new wxComboBox(this,-1, wxEmptyString, wxDefaultPosition, wxSize(-1,-1), 0, nullptr, wxCB_READONLY);
 	wxButton *CatalogNew = new wxButton(this, -1, _("New"));
 	CatalogDelete = new wxButton(this, -1, _("Delete"));
 	CatalogBox->Add(CatalogList,1,wxEXPAND | wxRIGHT,5);
@@ -447,7 +447,7 @@ void DialogStyleManager::LoadCatalog() {
 		Store.LoadCatalog("Default");
 		Store.push_back(agi::make_unique<AssStyle>());
 		Store.Save();
-		CatalogList->Append("Default");
+		CatalogList->Append(wxS("Default"));
 	}
 
 	// Set to default if available
@@ -462,7 +462,7 @@ void DialogStyleManager::LoadCatalog() {
 }
 
 void DialogStyleManager::OnCatalogNew() {
-	wxString name = wxGetTextFromUser(_("New storage name:"), _("New catalog entry"), "", this);
+	wxString name = wxGetTextFromUser(_("New storage name:"), _("New catalog entry"), wxEmptyString, this);
 	if (!name) return;
 
 	// Remove bad characters from the name
@@ -555,7 +555,7 @@ void DialogStyleManager::OnCopyToCurrent() {
 		}
 	}
 
-	c->ass->Commit(_("style copy"), AssFile::COMMIT_STYLES);
+	c->ass->Commit(from_wx(_("style copy")), AssFile::COMMIT_STYLES);
 
 	CurrentList->DeselectAll();
 	for (auto const& style_name : copied)
@@ -584,7 +584,7 @@ void DialogStyleManager::PasteToCurrent() {
 		[=](std::string const& str) { return c->ass->GetStyle(str); },
 		[=](AssStyle *s) { c->ass->Styles.push_back(*s); });
 
-	c->ass->Commit(_("style paste"), AssFile::COMMIT_STYLES);
+	c->ass->Commit(from_wx(_("style paste")), AssFile::COMMIT_STYLES);
 }
 
 void DialogStyleManager::PasteToStorage() {
@@ -671,7 +671,7 @@ void DialogStyleManager::OnCurrentDelete() {
 		for (int i = 0; i < n; i++) {
 			delete styleMap.at(selections[i]);
 		}
-		c->ass->Commit(_("style delete"), AssFile::COMMIT_STYLES);
+		c->ass->Commit(from_wx(_("style delete")), AssFile::COMMIT_STYLES);
 	}
 }
 
@@ -691,15 +691,15 @@ void DialogStyleManager::OnCurrentImport() {
 	try {
 		auto reader = SubtitleFormat::GetReader(filename, charset);
 		if (!reader)
-			wxMessageBox("Unsupported subtitle format", "Error", wxOK | wxICON_ERROR | wxCENTER, this);
+			wxMessageBox(wxS("Unsupported subtitle format"), wxS("Error"), wxOK | wxICON_ERROR | wxCENTER, this);
 		else
 			reader->ReadFile(&temp, filename, 0, charset);
 	}
 	catch (agi::Exception const& err) {
-		wxMessageBox(to_wx(err.GetMessage()), "Error", wxOK | wxICON_ERROR | wxCENTER, this);
+		wxMessageBox(to_wx(err.GetMessage()), wxS("Error"), wxOK | wxICON_ERROR | wxCENTER, this);
 	}
 	catch (...) {
-		wxMessageBox("Unknown error", "Error", wxOK | wxICON_ERROR | wxCENTER, this);
+		wxMessageBox(wxS("Unknown error"), wxS("Error"), wxOK | wxICON_ERROR | wxCENTER, this);
 		return;
 	}
 
@@ -738,7 +738,7 @@ void DialogStyleManager::OnCurrentImport() {
 
 	// Update
 	if (modified)
-		c->ass->Commit(_("style import"), AssFile::COMMIT_STYLES);
+		c->ass->Commit(from_wx(_("style import")), AssFile::COMMIT_STYLES);
 }
 
 void DialogStyleManager::UpdateButtons() {
@@ -888,7 +888,7 @@ void DialogStyleManager::MoveStyles(bool storage, int type) {
 			it = new_style_at_pos;
 		}
 
-		c->ass->Commit(_("style move"), AssFile::COMMIT_STYLES);
+		c->ass->Commit(from_wx(_("style move")), AssFile::COMMIT_STYLES);
 	}
 
 	for (int i = 0 ; i < (int)list->GetCount(); ++i) {

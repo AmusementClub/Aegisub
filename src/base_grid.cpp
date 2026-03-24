@@ -67,7 +67,7 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 , context(context)
 , columns(GetGridColumns())
 , columns_visible(OPT_GET("Subtitle/Grid/Column")->GetListBool())
-, seek_listener(context->videoController->AddSeekListener(&BaseGrid::OnSeek, this))
+, seek_listener(context->GetCore().videoController->AddSeekListener(&BaseGrid::OnSeek, this))
 {
 	scrollBar->SetScrollbar(0,10,100,10);
 
@@ -87,11 +87,12 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 	UpdateStyle();
 	OnHighlightVisibleChange(*OPT_GET("Subtitle/Grid/Highlight Subtitles in Frame"));
 
+	auto core = context->GetCore();
 	connections = agi::signal::make_vector({
-		context->ass->AddCommitListener(&BaseGrid::OnSubtitlesCommit, this),
+		core.ass->AddCommitListener(&BaseGrid::OnSubtitlesCommit, this),
 
-		context->selectionController->AddActiveLineListener(&BaseGrid::OnActiveLineChanged, this),
-		context->selectionController->AddSelectionListener([&]{ Refresh(false); }),
+		core.selectionController->AddActiveLineListener(&BaseGrid::OnActiveLineChanged, this),
+		core.selectionController->AddSelectionListener([&]{ Refresh(false); }),
 
 		OPT_SUB("Subtitle/Grid/Font Face", &BaseGrid::UpdateStyle, this),
 		OPT_SUB("Subtitle/Grid/Font Size", &BaseGrid::UpdateStyle, this),
@@ -172,7 +173,7 @@ void BaseGrid::OnHighlightVisibleChange(agi::OptionValue const& opt) {
 
 void BaseGrid::UpdateStyle() {
 	wxString fontname = FontFace("Subtitle/Grid");
-	if (fontname.empty()) fontname = "Tahoma";
+	if (fontname.empty()) fontname = wxS("Tahoma");
 	font.SetFaceName(fontname);
 	font.SetPointSize(OPT_GET("Subtitle/Grid/Font Size")->GetInt());
 	font.SetWeight(wxFONTWEIGHT_NORMAL);
@@ -201,7 +202,8 @@ void BaseGrid::UpdateStyle() {
 void BaseGrid::UpdateMaps() {
 	index_line_map.clear();
 
-	for (auto& curdiag : context->ass->Events)
+	auto core = context->GetCore();
+	for (auto& curdiag : core.ass->Events)
 		index_line_map.push_back(&curdiag);
 
 	SetColumnWidths();
@@ -233,20 +235,21 @@ void BaseGrid::SelectRow(int row, bool addToSelected, bool select) {
 	if (row < 0 || (size_t)row >= index_line_map.size()) return;
 
 	AssDialogue *line = index_line_map[row];
+	auto core = context->GetCore();
 
 	if (!addToSelected) {
-		context->selectionController->SetSelectedSet(Selection{line});
+		core.selectionController->SetSelectedSet(Selection{line});
 		return;
 	}
 
-	bool selected = !!context->selectionController->GetSelectedSet().count(line);
+	bool selected = !!core.selectionController->GetSelectedSet().count(line);
 	if (select != selected) {
-		auto selection = context->selectionController->GetSelectedSet();
+		auto selection = core.selectionController->GetSelectedSet();
 		if (select)
 			selection.insert(line);
 		else
 			selection.erase(line);
-		context->selectionController->SetSelectedSet(std::move(selection));
+		core.selectionController->SetSelectedSet(std::move(selection));
 	}
 }
 
@@ -354,8 +357,9 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 	const int nDraw = mid(0, drawPerScreen, GetRows() - yPos);
 	const int grid_x = columns[0]->Width();
 
-	const auto active_line = context->selectionController->GetActiveLine();
-	auto const& selection = context->selectionController->GetSelectedSet();
+	auto core = context->GetCore();
+	const auto active_line = core.selectionController->GetActiveLine();
+	auto const& selection = core.selectionController->GetSelectedSet();
 	visible_rows.clear();
 
 	for (int i : agi::util::range(nDraw)) {
@@ -434,7 +438,7 @@ void BaseGrid::OnSize(wxSizeEvent &) {
 void BaseGrid::OnScroll(wxScrollEvent &event) {
 	int newPos = event.GetPosition();
 	if (yPos != newPos) {
-		context->ass->Properties.scroll_position = yPos = newPos;
+		context->GetCore().ass->Properties.scroll_position = yPos = newPos;
 		Refresh(false);
 	}
 }
@@ -444,6 +448,8 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 	bool shift = event.ShiftDown();
 	bool alt = event.AltDown();
 	bool ctrl = event.CmdDown();
+	auto core = context->GetCore();
+	auto ui = context->GetUI();
 
 	// Row that mouse is over
 	bool click = event.LeftDown();
@@ -490,11 +496,11 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 		// but we don't want to scroll until the mouse moves or the button is
 		// released, to avoid selecting multiple lines on a click
 		int old_y_pos = yPos;
-		context->selectionController->SetActiveLine(dlg);
+		core.selectionController->SetActiveLine(dlg);
 		ScrollTo(old_y_pos);
 		extendRow = row;
 
-		auto const& selection = context->selectionController->GetSelectedSet();
+		auto const& selection = core.selectionController->GetSelectedSet();
 
 		// Toggle selected
 		if (click && ctrl && !shift && !alt) {
@@ -507,8 +513,8 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 		// Normal click
 		if ((click || dclick) && !shift && !ctrl && !alt) {
 			if (dclick) {
-				context->audioBox->ScrollToActiveLine();
-				context->videoController->JumpToTime(dlg->Start);
+				ui.audioBox->ScrollToActiveLine();
+				core.videoController->JumpToTime(dlg->Start);
 			}
 			SelectRow(row, false);
 			return;
@@ -532,7 +538,7 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 			if (ctrl) newsel = selection;
 			for (int i = i1; i <= i2; i++)
 				newsel.insert(GetDialogue(i));
-			context->selectionController->SetSelectedSet(std::move(newsel));
+			core.selectionController->SetSelectedSet(std::move(newsel));
 			return;
 		}
 
@@ -561,7 +567,7 @@ void BaseGrid::OnContextMenu(wxContextMenuEvent &evt) {
 		wxMenu menu;
 		for (size_t i : agi::util::range(columns.size())) {
 			if (columns[i]->CanHide())
-				menu.Append(MENU_SHOW_COL + i, columns[i]->Description(), "", wxITEM_CHECK)->Check(columns[i]->Visible());
+				menu.Append(MENU_SHOW_COL + i, columns[i]->Description(), wxEmptyString, wxITEM_CHECK)->Check(columns[i]->Visible());
 		}
 		PopupMenu(&menu);
 	}
@@ -570,7 +576,7 @@ void BaseGrid::OnContextMenu(wxContextMenuEvent &evt) {
 void BaseGrid::ScrollTo(int y) {
 	int nextY = mid(0, y, GetRows() - 1);
 	if (yPos != nextY) {
-		context->ass->Properties.scroll_position = yPos = nextY;
+		context->GetCore().ass->Properties.scroll_position = yPos = nextY;
 		scrollBar->SetThumbPosition(yPos);
 		Refresh(false);
 	}
@@ -596,7 +602,7 @@ void BaseGrid::AdjustScrollbar() {
 	int drawPerScreen = clientSize.GetHeight() / lineHeight;
 	int rows = GetRows();
 
-	context->ass->Properties.scroll_position = yPos = mid(0, yPos, rows - 1);
+	context->GetCore().ass->Properties.scroll_position = yPos = mid(0, yPos, rows - 1);
 
 	scrollBar->SetScrollbar(yPos, drawPerScreen, rows + drawPerScreen - 1, drawPerScreen - 2, true);
 	scrollBar->Thaw();
@@ -632,10 +638,11 @@ AssDialogue *BaseGrid::GetDialogue(int n) const {
 }
 
 bool BaseGrid::IsDisplayed(const AssDialogue *line) const {
-	if (!context->project->VideoProvider()) return false;
-	int frame = context->videoController->GetFrameN();
-	return context->project->Timecodes().FrameAtTime(line->Start, agi::vfr::START) <= frame
-		&& context->project->Timecodes().FrameAtTime(line->End, agi::vfr::END) >= frame;
+	auto core = context->GetCore();
+	if (!core.project->VideoProvider()) return false;
+	int frame = core.videoController->GetFrameN();
+	return core.project->Timecodes().FrameAtTime(line->Start, agi::vfr::START) <= frame
+		&& core.project->Timecodes().FrameAtTime(line->End, agi::vfr::END) >= frame;
 }
 
 void BaseGrid::OnCharHook(wxKeyEvent &event) {
@@ -690,10 +697,11 @@ void BaseGrid::OnKeyDown(wxKeyEvent &event) {
 		return;
 	}
 
-	auto active_line = context->selectionController->GetActiveLine();
+	auto core = context->GetCore();
+	auto active_line = core.selectionController->GetActiveLine();
 	int old_extend = extendRow;
 	int next = mid(0, (active_line ? active_line->Row : 0) + dir * step, GetRows() - 1);
-	context->selectionController->SetActiveLine(GetDialogue(next));
+	core.selectionController->SetActiveLine(GetDialogue(next));
 
 	// Move selection
 	if (!ctrl && !shift && !alt) {
@@ -719,7 +727,7 @@ void BaseGrid::OnKeyDown(wxKeyEvent &event) {
 		for (int i = begin; i <= end; i++)
 			newsel.insert(GetDialogue(i));
 
-		context->selectionController->SetSelectedSet(std::move(newsel));
+		core.selectionController->SetSelectedSet(std::move(newsel));
 
 		MakeRowVisible(next);
 		return;

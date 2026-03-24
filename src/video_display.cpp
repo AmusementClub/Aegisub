@@ -539,18 +539,18 @@ void VideoDisplay::DoRender() try {
 	}
 	catch (const VideoOutInitException& err) {
 		wxLogError(
-			"Failed to initialize video display. Closing other running "
-			"programs and updating your video card drivers may fix this.\n"
-			"Error message reported: %s",
-			err.GetMessage());
+			wxS("Failed to initialize video display. Closing other running "
+			    "programs and updating your video card drivers may fix this.\n"
+			    "Error message reported: %s"),
+			to_wx(err.GetMessage()));
 		con->project->CloseVideo();
 		return;
 	}
 	catch (const VideoOutRenderException& err) {
 		wxLogError(
-			"Could not upload video frame to graphics card.\n"
-			"Error message reported: %s",
-			err.GetMessage());
+			wxS("Could not upload video frame to graphics card.\n"
+			    "Error message reported: %s"),
+			to_wx(err.GetMessage()));
 		return;
 	}
 
@@ -592,9 +592,9 @@ void VideoDisplay::DoRender() try {
 }
 catch (const agi::Exception &err) {
 	wxLogError(
-		"An error occurred trying to render the video frame on the screen.\n"
-		"Error message reported: %s",
-		err.GetMessage());
+		wxS("An error occurred trying to render the video frame on the screen.\n"
+		    "Error message reported: %s"),
+		to_wx(err.GetMessage()));
 	con->project->CloseVideo();
 }
 
@@ -781,7 +781,7 @@ void VideoDisplay::SetZoomFromBox(wxCommandEvent &) {
 
 void VideoDisplay::SetZoomFromBoxText(wxCommandEvent &) {
 	wxString strValue = zoomBox->GetValue();
-	if (strValue.EndsWith("%"))
+	if (strValue.EndsWith(wxS("%")))
 		strValue.RemoveLast();
 
 	double value;

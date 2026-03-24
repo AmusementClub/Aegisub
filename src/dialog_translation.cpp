@@ -82,7 +82,7 @@ DialogTranslation::DialogTranslation(agi::Context *c)
 	{
 		wxSizer *original_box = new wxStaticBoxSizer(wxVERTICAL, this, _("Original"));
 
-		line_number_display = new wxStaticText(this, -1, "");
+		line_number_display = new wxStaticText(this, -1, wxEmptyString);
 		original_box->Add(line_number_display, 0, wxBOTTOM, 5);
 
 		original_text = new wxStyledTextCtrl(this, -1, wxDefaultPosition, FromDIP(wxSize(320, 80)));
@@ -319,7 +319,7 @@ void DialogTranslation::Commit(bool next) {
 	active_line->UpdateText(blocks);
 
 	file_change_connection.Block();
-	c->ass->Commit(_("translation assistant"), AssFile::COMMIT_DIAG_TEXT);
+	c->ass->Commit(from_wx(_("translation assistant")), AssFile::COMMIT_DIAG_TEXT);
 	file_change_connection.Unblock();
 
 	if (next) {

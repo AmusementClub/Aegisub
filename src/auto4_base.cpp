@@ -183,7 +183,8 @@ namespace Automation4 {
 		config_dialog = GenerateConfigDialog(parent, c);
 
 		if (config_dialog) {
-			std::string const& val = c->ass->Properties.automation_settings[GetScriptSettingsIdentifier()];
+			auto core = c->GetCore();
+			std::string const& val = core.ass->Properties.automation_settings[GetScriptSettingsIdentifier()];
 			if (!val.empty())
 				config_dialog->Unserialise(val);
 			return config_dialog->CreateWindow(parent);
@@ -194,7 +195,7 @@ namespace Automation4 {
 
 	void ExportFilter::LoadSettings(bool is_default, agi::Context *c) {
 		if (config_dialog)
-			c->ass->Properties.automation_settings[GetScriptSettingsIdentifier()] = config_dialog->Serialise();
+			c->GetCore().ass->Properties.automation_settings[GetScriptSettingsIdentifier()] = config_dialog->Serialise();
 	}
 
 	// ProgressSink
@@ -339,10 +340,10 @@ namespace Automation4 {
 		}
 
 		if (error_count == 1) {
-			wxLogWarning("A script in the Automation autoload directory failed to load.\nPlease review the errors, fix them and use the Rescan Autoload Dir button in Automation Manager to load the scripts again.");
+			wxLogWarning(wxS("A script in the Automation autoload directory failed to load.\nPlease review the errors, fix them and use the Rescan Autoload Dir button in Automation Manager to load the scripts again."));
 		}
 		else if (error_count > 1) {
-			wxLogWarning("Multiple scripts in the Automation autoload directory failed to load.\nPlease review the errors, fix them and use the Rescan Autoload Dir button in Automation Manager to load the scripts again.");
+			wxLogWarning(wxS("Multiple scripts in the Automation autoload directory failed to load.\nPlease review the errors, fix them and use the Rescan Autoload Dir button in Automation Manager to load the scripts again."));
 		}
 
 		ScriptsChanged();
@@ -360,7 +361,8 @@ namespace Automation4 {
 		bool was_empty = scripts.empty();
 		scripts.clear();
 
-		auto const& local_scripts = context->ass->Properties.automation_scripts;
+		auto core = context->GetCore();
+		auto const& local_scripts = core.ass->Properties.automation_scripts;
 		if (local_scripts.empty()) {
 			if (!was_empty)
 				ScriptsChanged();
@@ -377,12 +379,12 @@ namespace Automation4 {
 
 			agi::fs::path basepath;
 			if (first_char == '~') {
-				basepath = context->subsController->Filename().parent_path();
+				basepath = core.subsController->Filename().parent_path();
 			} else if (first_char == '$') {
 				basepath = autobasefn;
 			} else if (first_char == '/') {
 			} else {
-				wxLogWarning("Automation Script referenced with unknown location specifier character.\nLocation specifier found: %c\nFilename specified: %s",
+				wxLogWarning(wxS("Automation Script referenced with unknown location specifier character.\nLocation specifier found: %c\nFilename specified: %s"),
 					first_char, to_wx(trimmed));
 				continue;
 			}
@@ -390,7 +392,7 @@ namespace Automation4 {
 			if (agi::fs::FileExists(sfname))
 				scripts.emplace_back(Automation4::ScriptFactory::CreateFromFile(sfname, true));
 			else {
-				wxLogWarning("Automation Script referenced could not be found.\nFilename specified: %c%s\nSearched relative to: %s\nResolved filename: %s",
+				wxLogWarning(wxS("Automation Script referenced could not be found.\nFilename specified: %c%s\nSearched relative to: %s\nResolved filename: %s"),
 					first_char, to_wx(trimmed), basepath.wstring(), sfname.wstring());
 			}
 		}
@@ -408,6 +410,7 @@ namespace Automation4 {
 		// 4. Otherwise, use path relative to ass ("~")
 		std::string scripts_string;
 		agi::fs::path autobasefn(OPT_GET("Path/Automation/Base")->GetString());
+		auto core = context->GetCore();
 
 		for (auto& script : GetScripts()) {
 			if (!scripts_string.empty())
@@ -415,8 +418,8 @@ namespace Automation4 {
 
 			auto const scriptfn = script->GetFilename();
 			auto const scriptfn_str = agi::fs::PathToString(scriptfn);
-			auto const autobase_rel = context->path->MakeRelative(scriptfn, autobasefn);
-			auto const assfile_rel = context->path->MakeRelative(scriptfn, "?script");
+			auto const autobase_rel = core.path->MakeRelative(scriptfn, autobasefn);
+			auto const assfile_rel = core.path->MakeRelative(scriptfn, "?script");
 			auto const autobase_rel_str = agi::fs::PathToGenericString(autobase_rel);
 			auto const assfile_rel_str = agi::fs::PathToGenericString(assfile_rel);
 
@@ -428,7 +431,7 @@ namespace Automation4 {
 				scripts_string += "/" + agi::fs::PathToGenericString(scriptfn);
 			}
 		}
-		context->ass->Properties.automation_scripts = std::move(scripts_string);
+		core.ass->Properties.automation_scripts = std::move(scripts_string);
 	}
 
 	// ScriptFactory
@@ -452,7 +455,7 @@ namespace Automation4 {
 			auto s = factory->Produce(filename);
 			if (s) {
 				if (!s->GetLoadedState()) {
-					wxLogError(_("Failed to load Automation script '%s':\n%s"), filename.wstring(), s->GetDescription());
+					wxLogError(_("Failed to load Automation script '%s':\n%s"), filename.wstring(), to_wx(s->GetDescription()));
 				}
 				return s;
 			}

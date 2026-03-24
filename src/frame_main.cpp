@@ -77,7 +77,7 @@ enum {
 };
 
 #ifdef WITH_STARTUPLOG
-#define StartupLog(a) wxMessageBox(a, "Aegisub startup log")
+#define StartupLog(a) wxMessageBox(wxS(a), wxS("Aegisub startup log"))
 #else
 #define StartupLog(a) LOG_I("frame_main/init") << a
 #endif
@@ -282,14 +282,14 @@ public:
 		for (wxString const& fn : filenames)
 			files.push_back(from_wx(fn));
 		agi::ui::MainAsyncIfAlive(lifetime, [context = context, files = std::move(files)] {
-			context->project->LoadList(files);
+			context->GetCore().project->LoadList(files);
 		});
 		return true;
 	}
 };
 
 FrameMain::FrameMain()
-: wxFrame(nullptr, -1, "", wxDefaultPosition, wxSize(920,700), wxDEFAULT_FRAME_STYLE | wxCLIP_CHILDREN)
+: wxFrame(nullptr, -1, wxEmptyString, wxDefaultPosition, wxSize(920,700), wxDEFAULT_FRAME_STYLE | wxCLIP_CHILDREN)
 , context(agi::make_unique<agi::Context>())
 {
 	SetSize(FromDIP(wxSize(920, 700)));
@@ -305,26 +305,28 @@ FrameMain::FrameMain()
 #endif
 
 	StartupLog("Initializing context controls");
+	auto core = context->GetCore();
+	auto ui = context->GetUI();
 	ui_activation.AddConnections(
-		context->ass->AddCommitListener(&FrameMain::UpdateTitle, this),
-		context->subsController->AddFileOpenListener(&FrameMain::OnSubtitlesOpen, this),
-		context->subsController->AddFileSaveListener(&FrameMain::UpdateTitle, this),
-		context->project->AddAudioProviderListener(&FrameMain::OnAudioOpen, this),
-		context->project->AddVideoProviderListener(&FrameMain::OnVideoOpen, this));
+		core.ass->AddCommitListener(&FrameMain::UpdateTitle, this),
+		core.subsController->AddFileOpenListener(&FrameMain::OnSubtitlesOpen, this),
+		core.subsController->AddFileSaveListener(&FrameMain::UpdateTitle, this),
+		core.project->AddAudioProviderListener(&FrameMain::OnAudioOpen, this),
+		core.project->AddVideoProviderListener(&FrameMain::OnVideoOpen, this));
 
 	StartupLog("Initializing context frames");
-	context->parent = this;
-	context->frame = this;
-	context->statusSink = std::make_shared<FrameMainStatusSink>(this, GetAsyncUiLifetime());
-	context->notificationSink = std::make_shared<FrameMainNotificationSink>(this, GetAsyncUiLifetime());
-	context->interactionSink = std::make_shared<FrameMainInteractionSink>(this, GetAsyncUiLifetime());
-	context->backgroundRunnerFactory = std::make_shared<FrameMainBackgroundRunnerFactory>(this, GetAsyncUiLifetime());
+	ui.parent = this;
+	ui.frame = this;
+	core.statusSink = std::make_shared<FrameMainStatusSink>(this, GetAsyncUiLifetime());
+	core.notificationSink = std::make_shared<FrameMainNotificationSink>(this, GetAsyncUiLifetime());
+	core.interactionSink = std::make_shared<FrameMainInteractionSink>(this, GetAsyncUiLifetime());
+	core.backgroundRunnerFactory = std::make_shared<FrameMainBackgroundRunnerFactory>(this, GetAsyncUiLifetime());
 
 	StartupLog("Apply saved Maximized state");
 	if (OPT_GET("App/Maximized")->GetBool()) Maximize(true);
 
 	StartupLog("Initialize toolbar");
-	wxSystemOptions::SetOption("msw.remap", 0);
+	wxSystemOptions::SetOption(wxS("msw.remap"), 0);
 	OPT_SUB("App/Show Toolbar", &FrameMain::EnableToolBar, this);
 	EnableToolBar(*OPT_GET("App/Show Toolbar"));
 
@@ -351,7 +353,7 @@ FrameMain::FrameMain()
 	SetDropTarget(new AegisubFileDropTarget(context.get(), GetAsyncUiLifetime()));
 
 	StartupLog("Load default file");
-	context->project->CloseSubtitles();
+	core.project->CloseSubtitles();
 
 	StartupLog("Display main window");
 	AddFullScreenButton(this);
@@ -363,8 +365,9 @@ FrameMain::FrameMain()
 
 FrameMain::~FrameMain () {
 	ui_activation.Deactivate();
-	context->project->CloseAudio();
-	context->project->CloseVideo();
+	auto core = context->GetCore();
+	core.project->CloseAudio();
+	core.project->CloseVideo();
 
 	DestroyChildren();
 }
@@ -388,13 +391,14 @@ void FrameMain::InitContents() {
 	auto Panel = new wxPanel(this, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxCLIP_CHILDREN);
 
 	StartupLog("Create subtitles grid");
-	context->subsGrid = new BaseGrid(Panel, context.get());
+	auto ui = context->GetUI();
+	ui.subsGrid = new BaseGrid(Panel, context.get());
 
 	StartupLog("Create video box");
 	videoBox = new VideoBox(Panel, false, context.get());
 
 	StartupLog("Create audio box");
-	context->audioBox = audioBox = new AudioBox(Panel, context.get());
+	ui.audioBox = audioBox = new AudioBox(Panel, context.get());
 
 	StartupLog("Create subtitle editing box");
 	auto EditBox = new SubsEditBox(Panel, context.get());
@@ -409,7 +413,7 @@ void FrameMain::InitContents() {
 	MainSizer = new wxBoxSizer(wxVERTICAL);
 	MainSizer->Add(new wxStaticLine(Panel),0,wxEXPAND | wxALL,0);
 	MainSizer->Add(TopSizer,0,wxEXPAND | wxALL,0);
-	MainSizer->Add(context->subsGrid,1,wxEXPAND | wxALL,0);
+	MainSizer->Add(ui.subsGrid,1,wxEXPAND | wxALL,0);
 	Panel->SetSizer(MainSizer);
 
 	StartupLog("Perform layout");
@@ -421,12 +425,14 @@ void FrameMain::SetDisplayMode(int video, int audio) {
 	if (!IsShownOnScreen()) return;
 
 	bool sv = false, sa = false;
+	auto core = context->GetCore();
+	auto ui = context->GetUI();
 
 	if (video == -1) sv = showVideo;
-	else if (video)  sv = context->project->VideoProvider() && !context->dialog->Get<DialogDetachedVideo>();
+	else if (video)  sv = core.project->VideoProvider() && !ui.dialog->Get<DialogDetachedVideo>();
 
 	if (audio == -1) sa = showAudio;
-	else if (audio)  sa = !!context->project->AudioProvider();
+	else if (audio)  sa = !!core.project->AudioProvider();
 
 	// See if anything changed
 	if (sv == showVideo && sa == showAudio) return;
@@ -437,7 +443,7 @@ void FrameMain::SetDisplayMode(int video, int audio) {
 	bool didFreeze = !IsFrozen();
 	if (didFreeze) Freeze();
 
-	context->videoController->Stop();
+	core.videoController->Stop();
 
 	TopSizer->Show(videoBox, showVideo, true);
 	ToolsSizer->Show(audioBox, showAudio, true);
@@ -450,16 +456,17 @@ void FrameMain::SetDisplayMode(int video, int audio) {
 
 void FrameMain::UpdateTitle() {
 	wxString newTitle;
-	if (context->subsController->IsModified()) newTitle << "* ";
-	newTitle << context->subsController->Filename().filename().wstring();
+	auto core = context->GetCore();
+	if (core.subsController->IsModified()) newTitle << wxS("* ");
+	newTitle << core.subsController->Filename().filename().wstring();
 
 #ifndef __WXMAC__
-	newTitle << " - Aegisub " << GetAegisubLongVersionString();
+	newTitle << wxS(" - Aegisub ") << wxString::FromUTF8(GetAegisubLongVersionString());
 #endif
 
 #if defined(__WXMAC__)
 	// On Mac, set the mark in the close button
-	OSXSetModified(context->subsController->IsModified());
+	OSXSetModified(core.subsController->IsModified());
 #endif
 
 	if (GetTitle() != newTitle) SetTitle(newTitle);
@@ -473,26 +480,28 @@ void FrameMain::OnVideoOpen(AsyncVideoProvider *provider) {
 
 	Freeze();
 	int vidx = provider->GetWidth(), vidy = provider->GetHeight();
+	auto ui = context->GetUI();
 
 	// Set zoom level based on video resolution and window size
-	double zoom = context->videoDisplay->GetZoom();
+	double zoom = ui.videoDisplay->GetZoom();
 	wxSize windowSize = GetSize();
 	if (vidx*3*zoom > windowSize.GetX()*4 || vidy*4*zoom > windowSize.GetY()*6)
-		context->videoDisplay->SetZoom(zoom * .25);
+		ui.videoDisplay->SetZoom(zoom * .25);
 	else if (vidx*3*zoom > windowSize.GetX()*2 || vidy*4*zoom > windowSize.GetY()*3)
-		context->videoDisplay->SetZoom(zoom * .5);
+		ui.videoDisplay->SetZoom(zoom * .5);
 
 	SetDisplayMode(1,-1);
 
-	if (OPT_GET("Video/Detached/Enabled")->GetBool() && !context->dialog->Get<DialogDetachedVideo>())
+	if (OPT_GET("Video/Detached/Enabled")->GetBool() && !ui.dialog->Get<DialogDetachedVideo>())
 		cmd::call("video/detach", context.get());
 	Thaw();
 }
 
 void FrameMain::OnVideoDetach(agi::OptionValue const& opt) {
+	auto core = context->GetCore();
 	if (opt.GetBool())
 		SetDisplayMode(0, -1);
-	else if (context->project->VideoProvider())
+	else if (core.project->VideoProvider())
 		SetDisplayMode(1, -1);
 }
 
@@ -511,17 +520,19 @@ END_EVENT_TABLE()
 
 void FrameMain::OnCloseWindow(wxCloseEvent &event) {
 	wxEventBlocker blocker(this, wxEVT_CLOSE_WINDOW);
+	auto core = context->GetCore();
+	auto ui = context->GetUI();
 
-	context->videoController->Stop();
-	context->audioController->Stop();
+	core.videoController->Stop();
+	core.audioController->Stop();
 
 	// Ask user if he wants to save first
-	if (context->subsController->TryToClose(event.CanVeto()) == wxCANCEL) {
+	if (core.subsController->TryToClose(event.CanVeto()) == wxCANCEL) {
 		event.Veto();
 		return;
 	}
 
-	context->dialog.reset();
+	ui.dialog.reset();
 
 	// Store maximization state
 	OPT_SET("App/Maximized")->SetBool(IsMaximized());
@@ -530,7 +541,7 @@ void FrameMain::OnCloseWindow(wxCloseEvent &event) {
 }
 
 void FrameMain::OnStatusClear(wxTimerEvent &) {
-	SetStatusText("",1);
+	SetStatusText(wxString(),1);
 }
 
 void FrameMain::OnAudioOpen(agi::AudioProvider *provider) {

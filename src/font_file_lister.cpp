@@ -45,7 +45,7 @@ wxString format_missing(wxString const& str) {
 			if (len != 0 && U_SUCCESS(ec))
 				unprintable += to_wx(buf);
 			if (c.GetValue() == 0xA0)
-				unprintable += " (\\h)";
+				unprintable += wxS(" (\\h)");
 		}
 	}
 
@@ -193,9 +193,9 @@ void FontCollector::PrintUsage(UsageData const& data) {
 		status_callback(_("Used on lines:"), 2);
 		for (int line : data.lines)
 			status_callback(fmt_wx(" %d", line), 2);
-		status_callback("\n", 2);
+		status_callback(wxS("\n"), 2);
 	}
-	status_callback("\n", 2);
+	status_callback(wxS("\n"), 2);
 }
 
 std::vector<agi::fs::path> FontCollector::GetFontPaths(const AssFile *file) {

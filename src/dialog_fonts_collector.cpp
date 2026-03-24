@@ -227,7 +227,7 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 		if (total_size > 32 * 1024 * 1024)
 			AppendText(_("\nOver 32 MB of fonts were copied. Some of the fonts may not be loaded by the player if they are all attached to a Matroska file."), 2);
 
-		AppendText("\n", 0);
+		AppendText(wxS("\n"), 0);
 
 		agi::ui::MainAsyncIfAlive(lifetime, [collector] {
 			collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
@@ -261,7 +261,7 @@ DialogFontsCollector::DialogFontsCollector(agi::Context *c)
 
 	wxStaticBoxSizer *destination_box = new wxStaticBoxSizer(wxVERTICAL, this, _("Destination"));
 
-	dest_label = new wxStaticText(this, -1, " ");
+	dest_label = new wxStaticText(this, -1, wxS(" "));
 	dest_ctrl = new wxTextCtrl(this, -1, c->path->Decode(OPT_GET("Path/Fonts Collector Destination")->GetString()).wstring());
 	dest_browse_button = new wxButton(this, -1, _("&Browse..."));
 
@@ -357,7 +357,7 @@ void DialogFontsCollector::OnBrowse(wxCommandEvent &) {
 			_("Select archive file name"),
 			dest_ctrl->GetValue(),
 			wxFileName(dest_ctrl->GetValue()).GetFullName(),
-			".zip", "Zip Archives (*.zip)|*.zip",
+			wxS(".zip"), wxS("Zip Archives (*.zip)|*.zip"),
 			wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
 	}
 	else
@@ -391,16 +391,16 @@ void DialogFontsCollector::UpdateControls() {
 			dest_label->SetLabel(_("Choose the folder where the fonts will be collected to. It will be created if it doesn't exist."));
 
 			// Remove filename from browse box
-			if (dst.Right(4) == ".zip")
+			if (dst.Right(4) == wxS(".zip"))
 				dest_ctrl->SetValue(wxFileName(dst).GetPath());
 		}
 		else {
 			dest_label->SetLabel(_("Enter the name of the destination zip file to collect the fonts to. If a folder is entered, a default name will be used."));
 
 			// Add filename to browse box
-			if (!dst.EndsWith(".zip")) {
-				wxFileName fn(dst + "//");
-				fn.SetFullName("fonts.zip");
+			if (!dst.EndsWith(wxS(".zip"))) {
+				wxFileName fn(dst + wxS("//"));
+				fn.SetFullName(wxS("fonts.zip"));
 				dest_ctrl->SetValue(fn.GetFullPath());
 			}
 		}

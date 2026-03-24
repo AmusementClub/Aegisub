@@ -316,7 +316,7 @@ public:
 	: display(display)
 	{
 		int width, height;
-		display->GetTextExtent("0123456789:.", &width, &height);
+		display->GetTextExtent(wxS("0123456789:."), &width, &height);
 		bounds.height = height + display->FromDIP(4);
 	}
 

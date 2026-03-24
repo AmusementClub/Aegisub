@@ -75,7 +75,7 @@ wxWindow *AssTransformFramerateFilter::GetConfigDialogWindow(wxWindow *parent, a
 		});
 	}
 	else {
-		initialInput = "23.976";
+		initialInput = wxS("23.976");
 		FromVideo->Enable(false);
 	}
 	InputFramerate = new wxTextCtrl(base,-1,initialInput);

@@ -134,7 +134,7 @@ void VisualToolBase::Commit(wxString message) {
 	if (message.empty())
 		message = _("visual typesetting");
 
-	commit_id = c->ass->Commit(message, AssFile::COMMIT_DIAG_TEXT, commit_id);
+	commit_id = c->ass->Commit(from_wx(message), AssFile::COMMIT_DIAG_TEXT, commit_id);
 	file_changed_connection.Unblock();
 }
 

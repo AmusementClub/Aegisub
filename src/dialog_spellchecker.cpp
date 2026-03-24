@@ -123,9 +123,9 @@ DialogSpellChecker::DialogSpellChecker(agi::Context *context)
 	// Misspelled word and currently selected correction
 	current_word_sizer->AddGrowableCol(1, 1);
 	current_word_sizer->Add(new wxStaticText(this, -1, _("Misspelled word:")), 0, wxALIGN_CENTER_VERTICAL);
-	current_word_sizer->Add(orig_word = new wxTextCtrl(this, -1, "", wxDefaultPosition, wxDefaultSize, wxTE_READONLY), wxSizerFlags(1).Expand());
+	current_word_sizer->Add(orig_word = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_READONLY), wxSizerFlags(1).Expand());
 	current_word_sizer->Add(new wxStaticText(this, -1, _("Replace with:")), 0, wxALIGN_CENTER_VERTICAL);
-	current_word_sizer->Add(replace_word = new wxTextCtrl(this, -1, ""), wxSizerFlags(1).Expand());
+	current_word_sizer->Add(replace_word = new wxTextCtrl(this, -1, wxEmptyString), wxSizerFlags(1).Expand());
 
 	replace_word->Bind(wxEVT_TEXT, [=](wxCommandEvent&) {
 		remove_button->Enable(spellchecker->CanRemoveWord(from_wx(replace_word->GetValue())));
@@ -140,13 +140,13 @@ DialogSpellChecker::DialogSpellChecker(agi::Context *context)
 	// List of supported spellchecker languages
 	{
 		if (!spellchecker) {
-			wxMessageBox("No spellchecker available.", "Error", wxOK | wxICON_ERROR | wxCENTER);
+			wxMessageBox(wxS("No spellchecker available."), wxS("Error"), wxOK | wxICON_ERROR | wxCENTER);
 			throw agi::UserCancelException("No spellchecker available");
 		}
 
 		dictionary_lang_codes = to_wx(spellchecker->GetLanguageList());
 		if (dictionary_lang_codes.empty()) {
-			wxMessageBox("No spellchecker dictionaries available.", "Error", wxOK | wxICON_ERROR | wxCENTER);
+			wxMessageBox(wxS("No spellchecker dictionaries available."), wxS("Error"), wxOK | wxICON_ERROR | wxCENTER);
 			throw agi::UserCancelException("No spellchecker dictionaries available");
 		}
 
@@ -156,11 +156,11 @@ DialogSpellChecker::DialogSpellChecker(agi::Context *context)
 				language_names[i] = info->Description;
 		}
 
-		language = new wxComboBox(this, -1, "", wxDefaultPosition, wxDefaultSize, language_names, wxCB_DROPDOWN | wxCB_READONLY);
+		language = new wxComboBox(this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, language_names, wxCB_DROPDOWN | wxCB_READONLY);
 		wxString cur_lang = to_wx(OPT_GET("Tool/Spell Checker/Language")->GetString());
 		int cur_lang_index = dictionary_lang_codes.Index(cur_lang);
-		if (cur_lang_index == wxNOT_FOUND) cur_lang_index = dictionary_lang_codes.Index("en");
-		if (cur_lang_index == wxNOT_FOUND) cur_lang_index = dictionary_lang_codes.Index("en_US");
+		if (cur_lang_index == wxNOT_FOUND) cur_lang_index = dictionary_lang_codes.Index(wxS("en"));
+		if (cur_lang_index == wxNOT_FOUND) cur_lang_index = dictionary_lang_codes.Index(wxS("en_US"));
 		if (cur_lang_index == wxNOT_FOUND) cur_lang_index = 0;
 		language->SetSelection(cur_lang_index);
 		language->Bind(wxEVT_COMBOBOX, &DialogSpellChecker::OnChangeLanguage, this);
@@ -326,7 +326,7 @@ bool DialogSpellChecker::CheckLine(AssDialogue *active_line, int start_pos, int 
 
 		text.replace(word_start, word_len, auto_rep->second);
 		active_line->Text = text;
-		*commit_id = context->ass->Commit(_("spell check replace"), AssFile::COMMIT_DIAG_TEXT, *commit_id);
+		*commit_id = context->ass->Commit(from_wx(_("spell check replace")), AssFile::COMMIT_DIAG_TEXT, *commit_id);
 		word_start += auto_rep->second.size();
 	}
 	return false;
@@ -340,7 +340,7 @@ void DialogSpellChecker::Replace() {
 		std::string text = active_line->Text;
 		text.replace(word_start, word_len, from_wx(replace_word->GetValue()));
 		active_line->Text = text;
-		context->ass->Commit(_("spell check replace"), AssFile::COMMIT_DIAG_TEXT);
+		context->ass->Commit(from_wx(_("spell check replace")), AssFile::COMMIT_DIAG_TEXT);
 		context->textSelectionController->SetInsertionPoint(word_start + replace_word->GetValue().size());
 	}
 }

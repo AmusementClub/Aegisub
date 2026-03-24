@@ -136,16 +136,16 @@ DialogExport::DialogExport(agi::Context *c)
 	top_buttons->Add(btn_all, wxSizerFlags(1).Expand());
 	top_buttons->Add(btn_none, wxSizerFlags(1).Expand());
 
-	filter_description = new wxTextCtrl(&d, -1, "", wxDefaultPosition, d.FromDIP(wxSize(200, 60)), wxTE_MULTILINE | wxTE_READONLY);
+	filter_description = new wxTextCtrl(&d, -1, wxEmptyString, wxDefaultPosition, d.FromDIP(wxSize(200, 60)), wxTE_MULTILINE | wxTE_READONLY);
 
 	// Charset dropdown list
 	wxStaticText *charset_list_label = new wxStaticText(&d, -1, _("Text encoding:"));
-	charset_list = new wxChoice(&d, -1, wxDefaultPosition, wxDefaultSize, agi::charset::GetEncodingsList<wxArrayString>());
+	charset_list = new wxChoice(&d, -1, wxDefaultPosition, wxDefaultSize, to_wx(agi::charset::GetEncodingsList<std::vector<std::string>>()));
 	wxSizer *charset_list_sizer = new wxBoxSizer(wxHORIZONTAL);
 	charset_list_sizer->Add(charset_list_label, wxSizerFlags().Center().Border(wxRIGHT));
 	charset_list_sizer->Add(charset_list, wxSizerFlags(1).Expand());
 	if (!charset_list->SetStringSelection(to_wx(c->ass->Properties.export_encoding)))
-		charset_list->SetStringSelection("Unicode (UTF-8)");
+		charset_list->SetStringSelection(wxS("Unicode (UTF-8)"));
 
 	wxSizer *top_sizer = new wxStaticBoxSizer(wxVERTICAL, &d, _("Filters"));
 	top_sizer->Add(filter_list, wxSizerFlags(1).Expand());
@@ -201,13 +201,13 @@ void DialogExport::OnProcess(wxCommandEvent &) {
 	}
 	catch (agi::UserCancelException const&) { }
 	catch (agi::Exception const& err) {
-		wxMessageBox(to_wx(err.GetMessage()), "Error exporting subtitles", wxOK | wxICON_ERROR | wxCENTER, &d);
+		wxMessageBox(to_wx(err.GetMessage()), wxS("Error exporting subtitles"), wxOK | wxICON_ERROR | wxCENTER, &d);
 	}
 	catch (std::exception const& err) {
-		wxMessageBox(to_wx(err.what()), "Error exporting subtitles", wxOK | wxICON_ERROR | wxCENTER, &d);
+		wxMessageBox(to_wx(err.what()), wxS("Error exporting subtitles"), wxOK | wxICON_ERROR | wxCENTER, &d);
 	}
 	catch (...) {
-		wxMessageBox("Unknown error", "Error exporting subtitles", wxOK | wxICON_ERROR | wxCENTER, &d);
+		wxMessageBox(wxS("Unknown error"), wxS("Error exporting subtitles"), wxOK | wxICON_ERROR | wxCENTER, &d);
 	}
 
 	d.EndModal(0);

@@ -115,7 +115,7 @@ int ShowEbuExportConfigurationDialog(wxWindow *owner, EbuExportSettings &s) {
 	};
 	wxRadioBox *tv_standard_box = new wxRadioBox(&d, -1, _("TV standard"), wxDefaultPosition, wxDefaultSize, 6, tv_standards, 0, wxRA_SPECIFY_ROWS);
 
-	wxTextCtrl *timecode_offset_entry = new wxTextCtrl(&d, -1, "00:00:00:00");
+	wxTextCtrl *timecode_offset_entry = new wxTextCtrl(&d, -1, wxS("00:00:00:00"));
 #if wxCHECK_VERSION(3, 1, 3)
 	timecode_offset_entry->SetInitialSize(timecode_offset_entry->GetSizeFromText(wxS("00:00:00:00")));
 #else
@@ -157,7 +157,7 @@ int ShowEbuExportConfigurationDialog(wxWindow *owner, EbuExportSettings &s) {
 		_("Level-2 teletext")
 	};
 
-	wxComboBox *display_standard_ctrl = new wxComboBox(&d, -1, "", wxDefaultPosition, wxDefaultSize, 2, display_standards, wxCB_DROPDOWN | wxCB_READONLY);
+	wxComboBox *display_standard_ctrl = new wxComboBox(&d, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, 2, display_standards, wxCB_DROPDOWN | wxCB_READONLY);
 
 	wxSizer *max_line_length_labelled = new wxBoxSizer(wxHORIZONTAL);
 	max_line_length_labelled->Add(new wxStaticText(&d, -1, _("Max. line length:")), 1, wxALIGN_CENTRE|wxRIGHT, 12);
@@ -194,7 +194,7 @@ int ShowEbuExportConfigurationDialog(wxWindow *owner, EbuExportSettings &s) {
 
 	wxSizer *buttons_sizer = new wxBoxSizer(wxHORIZONTAL);
 	// Developers are requested to leave &d message in! Intentionally not translatable.
-	wxStaticText *sponsor_label = new wxStaticText(&d, -1, "EBU STL format writing sponsored by Bandai");
+	wxStaticText *sponsor_label = new wxStaticText(&d, -1, wxS("EBU STL format writing sponsored by Bandai"));
 	sponsor_label->Enable(false);
 	buttons_sizer->Add(sponsor_label, 1, wxALIGN_BOTTOM, 0);
 	buttons_sizer->Add(d.CreateStdDialogButtonSizer(wxOK | wxCANCEL), 0, wxLEFT, 6);

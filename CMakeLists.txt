@@ -712,6 +712,7 @@ target_link_libraries(Aegisub PRIVATE "ICU::uc")
 
 find_package(wxWidgets REQUIRED adv base core gl stc xml)
 option(WITH_WXSTC "Enable wxStyledTextCtrl support" ON)
+target_compile_definitions(Aegisub PRIVATE "wxNO_IMPLICIT_WXSTRING_ENCODING")
 if(WITH_WXSTC)
     target_compile_definitions(Aegisub PRIVATE "WITH_WXSTC")
     target_sources(Aegisub PRIVATE src/subs_edit_ctrl_stc.cpp)

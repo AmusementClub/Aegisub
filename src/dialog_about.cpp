@@ -44,11 +44,14 @@ void ShowAboutDialog(wxWindow *parent) {
 	wxDialog d(parent, -1, _("About Aegisub"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX);
 
 	wxString translatorCredit = _("Translated into LANGUAGE by PERSON\n");
-	if (translatorCredit == "Translated into LANGUAGE by PERSON\n")
+	if (translatorCredit == wxS("Translated into LANGUAGE by PERSON\n"))
 		translatorCredit.clear();
 
 	// Generate about string
-	wxString aboutString = wxString("Aegisub ") + GetAegisubShortVersionString() + ".\n"
+	wxString aboutString = wxS("Aegisub ");
+	aboutString += wxString::FromUTF8(GetAegisubShortVersionString());
+	aboutString += wxS(
+		".\n"
 		"Copyright (c) 2005-2020 Rodrigo Braz Monteiro, Niels Martin Hansen, Thomas Goyne et al.\n\n"
 		"Programmers:\n"
 		"    Alysson Souza e Silva\n"
@@ -83,8 +86,10 @@ void ShowAboutDialog(wxWindow *parent) {
 		"    Mentar\n"
 		"    Sigurd Tao Lyngse\n"
 		"    Everyone in the Aegisub IRC channel\n"
-		"    Everyone who ever reported a bug\n"
-		+ translatorCredit + "\n"
+		"    Everyone who ever reported a bug\n");
+	aboutString += translatorCredit;
+	aboutString += wxS(
+		"\n"
 		"Aegisub includes portions from the following other projects:\n"
 		"    wxWidgets - Copyright (c) Julian Smart, Robert Roebling et al;\n"
 		"    wxStyledTextCtrl - Copyright (c) Robin Dunn, Neil Hodgson;\n"
@@ -94,50 +99,52 @@ void ShowAboutDialog(wxWindow *parent) {
 		"    ICU - Copyright (c) International Business Machines Corp.;\n"
 		"    Lua - Copyright (c) Lua.org, PUC-Rio;\n"
 		"    LuaJIT - Copyright (c) Mike Pall;\n"
-		"    luabins - Copyright (c) Alexander Gladysh;\n"
+		"    luabins - Copyright (c) Alexander Gladysh;\n");
 #ifdef LUA_WITH_LUASOCKET
-		"    LuaSocket - Copyright (c) Diego Nehab;\n"
+	aboutString += wxS("    LuaSocket - Copyright (c) Diego Nehab;\n");
 #endif
 #ifdef WITH_HUNSPELL
-		"    Hunspell - Copyright (c) Kevin Hendricks;\n"
+	aboutString += wxS("    Hunspell - Copyright (c) Kevin Hendricks;\n");
 #endif
 #ifdef WITH_PORTAUDIO
-		"    PortAudio - Copyright (c) Ross Bencina, Phil Burk;\n"
+	aboutString += wxS("    PortAudio - Copyright (c) Ross Bencina, Phil Burk;\n");
 #endif
 #ifdef WITH_FFMS2
+	aboutString += wxS(
 		"    FFmpeg - Copyright (c) Fabrice Bellard;\n"
-		"    FFMS2 - Copyright (c) Fredrik Mellbin;\n"
+		"    FFMS2 - Copyright (c) Fredrik Mellbin;\n");
 #endif
 #ifdef WITH_AVISYNTH
-		"    Avisynth 2.5 - Copyright (c) Ben Rudiak-Gould et al;\n"
+	aboutString += wxS("    Avisynth 2.5 - Copyright (c) Ben Rudiak-Gould et al;\n");
 #endif
 #ifdef WITH_CSRI
-		"    csri - Copyright (c) David Lamparter;\n"
+	aboutString += wxS("    csri - Copyright (c) David Lamparter;\n");
 # ifdef __WINDOWS__
-		"    vsfilter - Copyright (c) Gabest et al;\n"
+	aboutString += wxS("    vsfilter - Copyright (c) Gabest et al;\n");
 # endif
 #endif
-		"    libass - Copyright (c) Evgeniy Stepanov, Grigori Goronzy;\n"
+	aboutString += wxS("    libass - Copyright (c) Evgeniy Stepanov, Grigori Goronzy;\n");
 #if AEGISUB_MATROSKA_PARSING
+	aboutString += wxS(
 		"    libebml - Copyright (c) Steve Lhomme;\n"
-		"    libmatroska - Copyright (c) Steve Lhomme;\n"
+		"    libmatroska - Copyright (c) Steve Lhomme;\n");
 #else
-		"    Matroska Parser - Copyright (c) Mike Matsnev;\n"
+	aboutString += wxS("    Matroska Parser - Copyright (c) Mike Matsnev;\n");
 #endif
+	aboutString += wxS(
 		"    Freetype - Copyright (c) David Turner, Robert Wilhelm, Werner Lemberg;\n"
-		"    Fontconfig - Copyright (c) Keith Packard et al;\n"
+		"    Fontconfig - Copyright (c) Keith Packard et al;\n");
 #ifdef WITH_FFTW3
-		"    FFTW - Copyright (c) Matteo Frigo, Massachusetts Institute of Technology;\n"
+	aboutString += wxS("    FFTW - Copyright (c) Matteo Frigo, Massachusetts Institute of Technology;\n");
 #endif
-		+ _("\nSee the help file for full credits.\n")
+	aboutString += _("\nSee the help file for full credits.\n");
 #ifdef BUILD_CREDIT
-		+ fmt_tl("Built by %s on %s.", GetAegisubBuildCredit(), GetAegisubBuildTime())
+	aboutString += fmt_tl("Built by %s on %s.", GetAegisubBuildCredit(), GetAegisubBuildTime());
 #endif
-		;
 
 	// Replace copyright symbol
 	wxChar copySymbol = 0xA9;
-	aboutString.Replace("(c)", wxString(copySymbol));
+	aboutString.Replace(wxS("(c)"), wxString(copySymbol));
 
 	wxTextCtrl *textctrl = new wxTextCtrl(&d, -1, aboutString, wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE | wxTE_READONLY | wxBORDER_NONE);
 #if defined(__WXGTK__) && !wxCHECK_VERSION(3, 1, 3)

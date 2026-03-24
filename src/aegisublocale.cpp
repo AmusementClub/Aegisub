@@ -63,7 +63,7 @@ wxTranslations *AegisubLocale::GetTranslations() {
 void AegisubLocale::Init(std::string const& language) {
 	wxTranslations *translations = GetTranslations();
 	translations->SetLanguage(to_wx(language));
-	translations->AddCatalog(AEGISUB_CATALOG);
+	translations->AddCatalog(wxString::FromUTF8(AEGISUB_CATALOG));
 	translations->AddStdCatalog();
 
 	setlocale(LC_NUMERIC, "C");
@@ -72,12 +72,12 @@ void AegisubLocale::Init(std::string const& language) {
 }
 
 bool AegisubLocale::HasLanguage(std::string const& language) {
-	auto langs = GetTranslations()->GetAvailableTranslations(AEGISUB_CATALOG);
+	auto langs = GetTranslations()->GetAvailableTranslations(wxString::FromUTF8(AEGISUB_CATALOG));
 	return std::find(langs.begin(), langs.end(), to_wx(language)) != langs.end();
 }
 
 std::string AegisubLocale::PickLanguage() {
-	auto available = GetTranslations()->GetAvailableTranslations(AEGISUB_CATALOG);
+	auto available = GetTranslations()->GetAvailableTranslations(wxString::FromUTF8(AEGISUB_CATALOG));
 
 	if (active_language.empty()) {
 		wxString os_ui_language = aegisub::locale::FindPreferredTranslation(available);
@@ -91,7 +91,7 @@ std::string AegisubLocale::PickLanguage() {
 	if (langs.empty() && active_language.empty())
 		return "en_US";
 
-	langs.insert(langs.begin(), "en_US");
+	langs.insert(langs.begin(), wxS("en_US"));
 
 	// Check if user local language is available, if so, make it first
 	if (auto preferred = aegisub::locale::FindPreferredTranslation(langs); !preferred.empty()) {
@@ -109,7 +109,7 @@ std::string AegisubLocale::PickLanguage() {
 	if (!active_language.empty())
 		style |= wxCANCEL;
 
-	wxSingleChoiceDialog dialog(nullptr, "Please choose a language:", "Language", langNames,
+	wxSingleChoiceDialog dialog(nullptr, wxS("Please choose a language:"), wxS("Language"), langNames,
 			(void **)nullptr,
 			style);
 	if (dialog.ShowModal() == wxID_OK) {

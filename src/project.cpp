@@ -102,10 +102,11 @@ Project::Project(agi::Context *c) : context(c) {
 Project::~Project() { }
 
 void Project::UpdateRelativePaths() {
-	context->ass->Properties.audio_file     = agi::fs::PathToGenericString(context->path->MakeRelative(audio_file, "?script"));
-	context->ass->Properties.video_file     = agi::fs::PathToGenericString(context->path->MakeRelative(video_file, "?script"));
-	context->ass->Properties.timecodes_file = agi::fs::PathToGenericString(context->path->MakeRelative(timecodes_file, "?script"));
-	context->ass->Properties.keyframes_file = agi::fs::PathToGenericString(context->path->MakeRelative(keyframes_file, "?script"));
+	auto core = context->GetCore();
+	core.ass->Properties.audio_file     = agi::fs::PathToGenericString(core.path->MakeRelative(audio_file, "?script"));
+	core.ass->Properties.video_file     = agi::fs::PathToGenericString(core.path->MakeRelative(video_file, "?script"));
+	core.ass->Properties.timecodes_file = agi::fs::PathToGenericString(core.path->MakeRelative(timecodes_file, "?script"));
+	core.ass->Properties.keyframes_file = agi::fs::PathToGenericString(core.path->MakeRelative(keyframes_file, "?script"));
 }
 
 void Project::ReloadAudio() {
@@ -117,15 +118,16 @@ void Project::RefreshSubtitlesProvider(bool recreate_provider) {
 	if (!video_provider)
 		return;
 
+	auto core = context->GetCore();
 	try {
 		if (recreate_provider) {
 			video_provider->ReplaceSubtitlesProvider(SubtitlesProviderFactory::GetProvider({
 				GetProgressRunner(),
-				context->ass->GetTransientFonts()
+				core.ass->GetTransientFonts()
 			}));
 		}
-		video_provider->LoadSubtitles(context->ass.get());
-		context->videoController->JumpToFrame(context->videoController->GetFrameN());
+		video_provider->LoadSubtitles(core.ass.get());
+		core.videoController->JumpToFrame(core.videoController->GetFrameN());
 	}
 	catch (agi::UserCancelException const&) {
 	}
@@ -147,7 +149,8 @@ void Project::ReloadSubtitlesProvider() {
 void Project::ReloadVideo() {
 	if (video_provider) {
 		DoLoadVideo(video_file);
-		context->videoController->JumpToFrame(context->videoController->GetFrameN());
+		auto core = context->GetCore();
+		core.videoController->JumpToFrame(core.videoController->GetFrameN());
 	}
 }
 
@@ -170,16 +173,19 @@ void Project::ShowWarning(std::string const& message, std::string const& title) 
 }
 
 void Project::SetPath(agi::fs::path& var, const char *token, const char *mru, agi::fs::path const& value) {
+	auto core = context->GetCore();
 	var = value;
 	if (*token)
-		context->path->SetToken(token, value);
+		core.path->SetToken(token, value);
 	if (*mru)
 		config::mru->Add(mru, value);
 	UpdateRelativePaths();
 }
 
 bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, ProjectProperties &properties) {
-	auto const previous_transient_fonts = context->ass->GetTransientFonts();
+	auto core = context->GetCore();
+	auto ui = context->GetUI();
+	auto const previous_transient_fonts = core.ass->GetTransientFonts();
 
 	try {
 		if (encoding.empty())
@@ -204,7 +210,7 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 	}
 
 	try {
-		properties = context->subsController->Load(path, encoding);
+		properties = core.subsController->Load(path, encoding);
 	}
 	catch (agi::UserCancelException const&) { return false; }
 	catch (agi::fs::FileNotFound const&) {
@@ -221,22 +227,22 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 		return false;
 	}
 	catch (...) {
-		ShowError(wxString("Unknown error"));
+		ShowError(wxS("Unknown error"));
 		return false;
 	}
 
 	Selection sel;
 	AssDialogue *active_line = nullptr;
-	if (!context->ass->Events.empty()) {
-		int row = mid<int>(0, properties.active_row, context->ass->Events.size() - 1);
-		active_line = &*std::next(context->ass->Events.begin(), row);
+	if (!core.ass->Events.empty()) {
+		int row = mid<int>(0, properties.active_row, core.ass->Events.size() - 1);
+		active_line = &*std::next(core.ass->Events.begin(), row);
 		sel.insert(active_line);
 	}
-	context->selectionController->SetSelectionAndActive(std::move(sel), active_line);
-	context->subsGrid->ScrollTo(properties.scroll_position);
+	core.selectionController->SetSelectionAndActive(std::move(sel), active_line);
+	ui.subsGrid->ScrollTo(properties.scroll_position);
 
 	if (video_provider)
-		RefreshSubtitlesProvider(!transient_font_environment_matches(previous_transient_fonts, context->ass->GetTransientFonts()));
+		RefreshSubtitlesProvider(!transient_font_environment_matches(previous_transient_fonts, core.ass->GetTransientFonts()));
 
 	return true;
 }
@@ -248,38 +254,41 @@ void Project::LoadSubtitles(agi::fs::path path, std::string encoding, bool load_
 }
 
 void Project::CloseSubtitles() {
-	auto const previous_transient_fonts = context->ass->GetTransientFonts();
+	auto core = context->GetCore();
+	auto const previous_transient_fonts = core.ass->GetTransientFonts();
 
-	context->subsController->Close();
-	context->path->SetToken("?script", "");
-	LoadUnloadFiles(context->ass->Properties);
-	auto line = &*context->ass->Events.begin();
-	context->selectionController->SetSelectionAndActive({line}, line);
+	core.subsController->Close();
+	core.path->SetToken("?script", "");
+	LoadUnloadFiles(core.ass->Properties);
+	auto line = &*core.ass->Events.begin();
+	core.selectionController->SetSelectionAndActive({line}, line);
 	if (video_provider)
-		RefreshSubtitlesProvider(!transient_font_environment_matches(previous_transient_fonts, context->ass->GetTransientFonts()));
+		RefreshSubtitlesProvider(!transient_font_environment_matches(previous_transient_fonts, core.ass->GetTransientFonts()));
 }
 
 void Project::LoadUnloadFiles(ProjectProperties properties) {
 	auto load_linked = OPT_GET("App/Auto/Load Linked Files")->GetInt();
 	if (!load_linked) return;
 
-	auto audio     = context->path->MakeAbsolute(properties.audio_file, "?script");
-	auto video     = context->path->MakeAbsolute(properties.video_file, "?script");
-	auto timecodes = context->path->MakeAbsolute(properties.timecodes_file, "?script");
-	auto keyframes = context->path->MakeAbsolute(properties.keyframes_file, "?script");
+	auto core = context->GetCore();
+	auto ui = context->GetUI();
+	auto audio     = core.path->MakeAbsolute(properties.audio_file, "?script");
+	auto video     = core.path->MakeAbsolute(properties.video_file, "?script");
+	auto timecodes = core.path->MakeAbsolute(properties.timecodes_file, "?script");
+	auto keyframes = core.path->MakeAbsolute(properties.keyframes_file, "?script");
 
 	if (video == video_file && audio == audio_file && keyframes == keyframes_file && timecodes == timecodes_file)
 		return;
 
 	if (load_linked == 2) {
 		wxString str = _("Do you want to load/unload the associated files?");
-		str += "\n";
+		str += wxS("\n");
 
 		auto append_file = [&](agi::fs::path const& p, wxString const& unload, wxString const& load) {
 			if (p.empty())
-				str += "\n" + unload;
+				str += wxS("\n") + unload;
 			else
-				str += "\n" + agi::wxformat(load, p);
+				str += wxS("\n") + agi::wxformat(load, p);
 		};
 
 		if (audio != audio_file)
@@ -308,7 +317,7 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 		else {
 			loaded_video = DoLoadVideo(video);
 			if (loaded_video) {
-				auto vc = context->videoController.get();
+				auto vc = core.videoController.get();
 				vc->JumpToFrame(properties.video_position);
 
 				auto ar_mode = static_cast<AspectRatio>(properties.ar_mode);
@@ -316,7 +325,7 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 					vc->SetAspectRatio(properties.ar_value);
 				else
 					vc->SetAspectRatio(ar_mode);
-				context->videoDisplay->SetZoom(properties.video_zoom);
+				ui.videoDisplay->SetZoom(properties.video_zoom);
 			}
 			else if (audio == video) {
 				std::string ignored_error;
@@ -347,7 +356,8 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 
 	try {
 		try {
-			audio_provider = GetAudioProvider(path, *context->path, GetProgressRunner(), context->GetNotificationSink().get());
+			auto core = context->GetCore();
+			audio_provider = GetAudioProvider(path, *core.path, GetProgressRunner(), context->GetNotificationSink().get());
 		}
 		catch (agi::UserCancelException const&) { return; }
 		catch (...) {
@@ -396,14 +406,15 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 	}
 
 	try {
-		auto old_matrix = context->ass->GetScriptInfo("YCbCr Matrix");
+		auto core = context->GetCore();
+		auto old_matrix = core.ass->GetScriptInfo("YCbCr Matrix");
 		video_provider = agi::make_unique<AsyncVideoProvider>(
 			path,
 			old_matrix,
-			context->videoController.get(),
+			core.videoController.get(),
 			GetProgressRunner(),
-			context->ass->GetTransientFonts(),
-			context->videoController->GetAsyncUiLifetime());
+			core.ass->GetTransientFonts(),
+			core.videoController->GetAsyncUiLifetime());
 	}
 	catch (agi::UserCancelException const&) { return false; }
 	catch (agi::fs::FileSystemError const& err) {
@@ -423,8 +434,10 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 
 	AnnounceVideoProviderModified(video_provider.get());
 
-	UpdateVideoProperties(context->ass.get(), video_provider.get(), context->parent);
-	video_provider->LoadSubtitles(context->ass.get());
+	auto core = context->GetCore();
+	auto ui = context->GetUI();
+	UpdateVideoProperties(core.ass.get(), video_provider.get(), ui.parent);
+	video_provider->LoadSubtitles(core.ass.get());
 
 	timecodes = video_provider->GetFPS();
 	keyframes = video_provider->GetKeyFrames();
@@ -448,22 +461,24 @@ void Project::LoadVideo(agi::fs::path path) {
 	if (OPT_GET("Video/Open Audio")->GetBool() && audio_file != video_file && video_provider->HasAudio())
 		DoLoadAudio(video_file, true);
 
+	auto core = context->GetCore();
 	double dar = video_provider->GetDAR();
 	if (dar > 0)
-		context->videoController->SetAspectRatio(dar);
+		core.videoController->SetAspectRatio(dar);
 	else
-		context->videoController->SetAspectRatio(AspectRatio::Default);
-	context->videoController->JumpToFrame(0);
+		core.videoController->SetAspectRatio(AspectRatio::Default);
+	core.videoController->JumpToFrame(0);
 }
 
 void Project::CloseVideo() {
+	auto core = context->GetCore();
 	AnnounceVideoProviderModified(nullptr);
 	video_provider.reset();
 	SetPath(video_file, "?video", "", "");
 	video_has_subtitles = false;
-	context->ass->Properties.ar_mode = 0;
-	context->ass->Properties.ar_value = 0.0;
-	context->ass->Properties.video_position = 0;
+	core.ass->Properties.ar_mode = 0;
+	core.ass->Properties.ar_value = 0.0;
+	core.ass->Properties.video_position = 0;
 }
 
 void Project::DoLoadTimecodes(agi::fs::path const& path) {
@@ -481,7 +496,7 @@ void Project::LoadTimecodes(agi::fs::path path) {
 		config::mru->Remove("Timecodes", path);
 	}
 	catch (agi::vfr::Error const& e) {
-		ShowError("Failed to parse timecodes file: " + e.GetMessage());
+		ShowError(wxS("Failed to parse timecodes file: ") + to_wx(e.GetMessage()));
 		config::mru->Remove("Timecodes", path);
 	}
 }
@@ -507,7 +522,7 @@ void Project::LoadKeyframes(agi::fs::path path) {
 		config::mru->Remove("Keyframes", path);
 	}
 	catch (agi::keyframe::Error const& e) {
-		ShowError("Failed to parse keyframes file: " + e.GetMessage());
+		ShowError(wxS("Failed to parse keyframes file: ") + to_wx(e.GetMessage()));
 		config::mru->Remove("Keyframes", path);
 	}
 }
@@ -628,12 +643,13 @@ void Project::LoadList(std::vector<agi::fs::path> const& files) {
 		DoLoadAudio(audio, false);
 
 	if (!video.empty() && DoLoadVideo(video)) {
+		auto core = context->GetCore();
 		double dar = video_provider->GetDAR();
 		if (dar > 0)
-			context->videoController->SetAspectRatio(dar);
+			core.videoController->SetAspectRatio(dar);
 		else
-			context->videoController->SetAspectRatio(AspectRatio::Default);
-		context->videoController->JumpToFrame(0);
+			core.videoController->SetAspectRatio(AspectRatio::Default);
+		core.videoController->JumpToFrame(0);
 
 		// We loaded these earlier, but loading video unloaded them
 		// Non-Do version of Load in case they've vanished or changed between

@@ -28,6 +28,7 @@
 #include "ass_karaoke.h"
 #include "audio_box.h"
 #include "audio_controller.h"
+#include "compat.h"
 #include "audio_timing.h"
 #include "compat.h"
 #include "libresrc/libresrc.h"
@@ -429,7 +430,7 @@ void AudioKaraoke::CancelSplit() {
 void AudioKaraoke::AcceptSplit() {
 	active_line->Text = kara->GetText();
 	file_changed.Block();
-	c->ass->Commit(_("karaoke split"), AssFile::COMMIT_DIAG_TEXT);
+	c->ass->Commit(from_wx(_("karaoke split")), AssFile::COMMIT_DIAG_TEXT);
 	file_changed.Unblock();
 
 	accept_button->Enable(false);

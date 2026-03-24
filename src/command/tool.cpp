@@ -59,9 +59,9 @@ struct tool_assdraw final : public Command {
 	STR_HELP("Launch the ASSDraw3 tool for vector drawing")
 
 	void operator()(agi::Context *) override {
-		wxString command("\"");
+		wxString command(wxS("\""));
 		command += config::path->Decode("?data/ASSDraw3.exe").wstring();
-		command += "\"";
+		command += wxS("\"");
 		wxExecute(command);
 	}
 };

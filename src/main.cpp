@@ -229,7 +229,7 @@ bool AegisubApp::OnInit() {
 	}
 	catch (agi::Exception const& err) {
 		AppNotificationSink().ShowError("Error",
-			from_wx(wxS("Configuration file is invalid. Error reported:\n") + to_wx(err.GetMessage())));
+			agi::format("Configuration file is invalid. Error reported:\n%s", err.GetMessage()));
 	}
 
 #ifdef _WIN32
@@ -447,11 +447,11 @@ void AegisubApp::UnhandledException(bool stackWalk) {
 
 	if (any) {
 		// Inform user of crash.
-		AppNotificationSink().ShowError(from_wx(_("Program error")), from_wx(agi::wxformat(exception_message, path)));
+		AppNotificationSink().ShowError(from_wx(_("Program error")), agi::format(exception_message, path));
 	}
 	else if (LastStartupState) {
 		AppNotificationSink().ShowError(from_wx(_("Program error")),
-			from_wx(fmt_wx("Aegisub has crashed while starting up!\n\nThe last startup step attempted was: %s.", to_wx(LastStartupState))));
+			agi::format("Aegisub has crashed while starting up!\n\nThe last startup step attempted was: %s.", LastStartupState));
 	}
 #endif
 }
@@ -470,15 +470,15 @@ bool AegisubApp::OnExceptionInMainLoop() {
 	}
 	catch (const agi::Exception &e) {
 		AppNotificationSink().ShowError("Exception in event handler",
-			from_wx(fmt_tl("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s", to_wx(e.GetMessage()))));
+			agi::format(_("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s"), e.GetMessage()));
 	}
 	catch (const std::exception &e) {
 		AppNotificationSink().ShowError("Exception in event handler",
-			from_wx(fmt_tl("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s", to_wx(e.what()))));
+			agi::format(_("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s"), e.what()));
 	}
 	catch (...) {
 		AppNotificationSink().ShowError("Exception in event handler",
-			from_wx(fmt_tl("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s", wxS("Unknown error"))));
+			agi::format(_("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s"), "Unknown error"));
 	}
 	return true;
 }

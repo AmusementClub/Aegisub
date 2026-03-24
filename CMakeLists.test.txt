@@ -48,6 +48,7 @@ if(GTEST_FOUND)
         tests/tests/cajun.cpp
         tests/tests/calltip_provider.cpp
         tests/tests/character_count.cpp
+        tests/tests/compat.cpp
         tests/tests/color.cpp
         tests/tests/compatibility_overlay_buffer_plan.cpp
         tests/tests/csri_renderer_discovery.cpp
@@ -116,6 +117,7 @@ if(GTEST_FOUND)
         target_include_directories(gtest-run PRIVATE ${LibPlacebo_INCLUDE_DIR})
     endif()
     target_compile_definitions(gtest-run PRIVATE CMAKE_BUILD)
+    aegisub_enable_wx_utf8_guard(gtest-run)
     target_include_directories(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     if(WITH_FFMS2)
         target_include_directories(gtest-run PRIVATE
@@ -208,6 +210,7 @@ if(WIN32)
             ${LibPlacebo_INCLUDE_DIR}
             "${PROJECT_SOURCE_DIR}/vendor/ffms2"
         )
+        aegisub_enable_wx_utf8_guard(video-geometry-compare)
         target_link_libraries(video-geometry-compare PRIVATE
             libaegisub
             OpenGL::GL

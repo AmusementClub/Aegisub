@@ -80,6 +80,18 @@ bool try_check_readable_media_path(agi::fs::path const& path, std::string& error
 		return false;
 	}
 }
+
+void RestoreSubtitleUiState(agi::Context *context, ProjectProperties const& properties) {
+	auto ui = context->GetUI();
+	if (ui.subsGrid)
+		ui.subsGrid->ScrollTo(properties.scroll_position);
+}
+
+void RestoreVideoUiState(agi::Context *context, ProjectProperties const& properties) {
+	auto ui = context->GetUI();
+	if (ui.videoDisplay)
+		ui.videoDisplay->SetZoom(properties.video_zoom);
+}
 }
 
 Project::Project(agi::Context *c) : context(c) {
@@ -160,10 +172,6 @@ agi::BackgroundRunner *Project::GetProgressRunner(std::string const& title, std:
 	return progress_runner.get();
 }
 
-void Project::ShowError(wxString const& message, std::string const& title) {
-	context->ShowError(from_wx(message), title);
-}
-
 void Project::ShowError(std::string const& message, std::string const& title) {
 	context->ShowError(message, title);
 }
@@ -184,7 +192,6 @@ void Project::SetPath(agi::fs::path& var, const char *token, const char *mru, ag
 
 bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, ProjectProperties &properties) {
 	auto core = context->GetCore();
-	auto ui = context->GetUI();
 	auto const previous_transient_fonts = core.ass->GetTransientFonts();
 
 	try {
@@ -227,7 +234,7 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 		return false;
 	}
 	catch (...) {
-		ShowError(wxS("Unknown error"));
+		ShowError("Unknown error");
 		return false;
 	}
 
@@ -239,7 +246,7 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 		sel.insert(active_line);
 	}
 	core.selectionController->SetSelectionAndActive(std::move(sel), active_line);
-	ui.subsGrid->ScrollTo(properties.scroll_position);
+	RestoreSubtitleUiState(context, properties);
 
 	if (video_provider)
 		RefreshSubtitlesProvider(!transient_font_environment_matches(previous_transient_fonts, core.ass->GetTransientFonts()));
@@ -271,7 +278,6 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 	if (!load_linked) return;
 
 	auto core = context->GetCore();
-	auto ui = context->GetUI();
 	auto audio     = core.path->MakeAbsolute(properties.audio_file, "?script");
 	auto video     = core.path->MakeAbsolute(properties.video_file, "?script");
 	auto timecodes = core.path->MakeAbsolute(properties.timecodes_file, "?script");
@@ -281,14 +287,15 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 		return;
 
 	if (load_linked == 2) {
-		wxString str = _("Do you want to load/unload the associated files?");
-		str += wxS("\n");
+		std::string message = from_wx(_("Do you want to load/unload the associated files?"));
+		message += "\n";
 
 		auto append_file = [&](agi::fs::path const& p, wxString const& unload, wxString const& load) {
+			message += "\n";
 			if (p.empty())
-				str += wxS("\n") + unload;
+				message += from_wx(unload);
 			else
-				str += wxS("\n") + agi::wxformat(load, p);
+				message += agi::format(load, p);
 		};
 
 		if (audio != audio_file)
@@ -302,7 +309,7 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 
 		if (context->RequestInteraction({
 			from_wx(_("(Un)Load files?")),
-			from_wx(str),
+			message,
 			agi::InteractionButtons::YesNo,
 			agi::InteractionIcon::Question
 		}) != agi::InteractionResult::Yes)
@@ -325,7 +332,7 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 					vc->SetAspectRatio(properties.ar_value);
 				else
 					vc->SetAspectRatio(ar_mode);
-				ui.videoDisplay->SetZoom(properties.video_zoom);
+				RestoreVideoUiState(context, properties);
 			}
 			else if (audio == video) {
 				std::string ignored_error;
@@ -351,7 +358,7 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 	std::string access_error;
 	if (!try_check_readable_media_path(path, access_error)) {
 		config::mru->Remove("Audio", path);
-		return ShowError(_("The audio file was not found: ") + to_wx(access_error));
+		return ShowError(agi::format(_("The audio file was not found: %s"), access_error));
 	}
 
 	try {
@@ -366,7 +373,7 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 		}
 	}
 	catch (agi::fs::FileNotFound const& e) {
-		return ShowError(_("The audio file was not found: ") + to_wx(e.GetMessage()));
+		return ShowError(agi::format(_("The audio file was not found: %s"), e.GetMessage()));
 	}
 	catch (agi::AudioDataNotFound const& e) {
 		if (quiet) {
@@ -374,10 +381,10 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 			return;
 		}
 		else
-			return ShowError(_("None of the available audio providers recognised the selected file as containing audio data.\n\nThe following providers were tried:\n") + to_wx(e.GetMessage()));
+			return ShowError(agi::format(_("None of the available audio providers recognised the selected file as containing audio data.\n\nThe following providers were tried:\n%s"), e.GetMessage()));
 	}
 	catch (agi::AudioProviderError const& e) {
-		return ShowError(_("None of the available audio providers have a codec available to handle the selected file.\n\nThe following providers were tried:\n") + to_wx(e.GetMessage()));
+		return ShowError(agi::format(_("None of the available audio providers have a codec available to handle the selected file.\n\nThe following providers were tried:\n%s"), e.GetMessage()));
 	}
 	catch (agi::Exception const& e) {
 		return ShowError(e.GetMessage());
@@ -401,7 +408,7 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 	std::string access_error;
 	if (!try_check_readable_media_path(path, access_error)) {
 		config::mru->Remove("Video", path);
-		ShowError(to_wx(access_error));
+		ShowError(access_error);
 		return false;
 	}
 
@@ -419,11 +426,11 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 	catch (agi::UserCancelException const&) { return false; }
 	catch (agi::fs::FileSystemError const& err) {
 		config::mru->Remove("Video", path);
-		ShowError(to_wx(err.GetMessage()));
+		ShowError(err.GetMessage());
 		return false;
 	}
 	catch (VideoProviderError const& err) {
-		ShowError(to_wx(err.GetMessage()));
+		ShowError(err.GetMessage());
 		return false;
 	}
 
@@ -435,8 +442,7 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 	AnnounceVideoProviderModified(video_provider.get());
 
 	auto core = context->GetCore();
-	auto ui = context->GetUI();
-	UpdateVideoProperties(core.ass.get(), video_provider.get(), ui.parent);
+	UpdateVideoProperties(core.ass.get(), video_provider.get(), context->GetUI().parent);
 	video_provider->LoadSubtitles(core.ass.get());
 
 	timecodes = video_provider->GetFPS();
@@ -496,7 +502,7 @@ void Project::LoadTimecodes(agi::fs::path path) {
 		config::mru->Remove("Timecodes", path);
 	}
 	catch (agi::vfr::Error const& e) {
-		ShowError(wxS("Failed to parse timecodes file: ") + to_wx(e.GetMessage()));
+		ShowError(agi::format("Failed to parse timecodes file: %s", e.GetMessage()));
 		config::mru->Remove("Timecodes", path);
 	}
 }
@@ -522,7 +528,7 @@ void Project::LoadKeyframes(agi::fs::path path) {
 		config::mru->Remove("Keyframes", path);
 	}
 	catch (agi::keyframe::Error const& e) {
-		ShowError(wxS("Failed to parse keyframes file: ") + to_wx(e.GetMessage()));
+		ShowError(agi::format("Failed to parse keyframes file: %s", e.GetMessage()));
 		config::mru->Remove("Keyframes", path);
 	}
 }

@@ -49,6 +49,7 @@
 #include <future>
 
 #include <wx/dcmemory.h>
+#include <wx/filedlg.h>
 #include <wx/log.h>
 #include <wx/sizer.h>
 
@@ -224,6 +225,58 @@ namespace Automation4 {
 	int ProgressSink::ShowDialog(wxDialog *dialog)
 	{
 		return agi::ui::MainInvoke([dialog] { return dialog->ShowModal(); });
+	}
+
+	std::vector<agi::fs::path> ProgressSink::RequestOpenFiles(AutomationOpenFileDialogRequest const& request)
+	{
+		return agi::ui::MainInvoke([request] {
+			int flags = wxFD_OPEN;
+			if (request.multiple)
+				flags |= wxFD_MULTIPLE;
+			if (request.must_exist)
+				flags |= wxFD_FILE_MUST_EXIST;
+
+			wxFileDialog dialog(
+				nullptr,
+				to_wx(request.message),
+				to_wx(request.dir),
+				to_wx(request.file),
+				to_wx(request.wildcard),
+				flags);
+			if (dialog.ShowModal() == wxID_CANCEL)
+				return std::vector<agi::fs::path>();
+
+			wxArrayString files;
+			dialog.GetPaths(files);
+
+			std::vector<agi::fs::path> paths;
+			paths.reserve(files.size());
+			for (auto const& file : files)
+				paths.emplace_back(file.ToStdWstring());
+			return paths;
+		});
+	}
+
+	agi::fs::path ProgressSink::RequestSaveFile(AutomationSaveFileDialogRequest const& request)
+	{
+		auto *parent = GetParentWindow();
+		return agi::ui::MainInvoke([parent, request] {
+			int flags = wxFD_SAVE;
+			if (request.prompt_overwrite)
+				flags |= wxFD_OVERWRITE_PROMPT;
+
+			wxFileDialog dialog(
+				parent,
+				to_wx(request.message),
+				to_wx(request.dir),
+				to_wx(request.file),
+				to_wx(request.wildcard),
+				flags);
+			if (dialog.ShowModal() == wxID_CANCEL)
+				return agi::fs::path();
+
+			return agi::fs::path(dialog.GetPath().ToStdWstring());
+		});
 	}
 
 	BackgroundScriptRunner::BackgroundScriptRunner(wxWindow *parent, std::string const& title)

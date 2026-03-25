@@ -43,6 +43,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <vector>
 
 class AssStyle;
@@ -102,6 +103,23 @@ namespace Automation4 {
 
 	class ProgressSink;
 
+	struct AutomationOpenFileDialogRequest {
+		std::string message;
+		std::string dir;
+		std::string file;
+		std::string wildcard;
+		bool multiple = false;
+		bool must_exist = true;
+	};
+
+	struct AutomationSaveFileDialogRequest {
+		std::string message;
+		std::string dir;
+		std::string file;
+		std::string wildcard;
+		bool prompt_overwrite = true;
+	};
+
 	class BackgroundScriptRunner {
 		std::unique_ptr<DialogProgress> impl;
 
@@ -133,6 +151,8 @@ namespace Automation4 {
 		/// thread until it closes
 		void ShowDialog(ScriptDialog *config_dialog);
 		int ShowDialog(wxDialog *dialog);
+		std::vector<agi::fs::path> RequestOpenFiles(AutomationOpenFileDialogRequest const& request);
+		agi::fs::path RequestSaveFile(AutomationSaveFileDialogRequest const& request);
 		wxWindow *GetParentWindow() const { return bsr->GetParentWindow(); }
 
 		/// Get the current automation trace level

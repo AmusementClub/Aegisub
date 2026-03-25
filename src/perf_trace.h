@@ -31,6 +31,7 @@ void ObserveVideoPlaybackTick(int frame);
 
 void TraceLuaDialogOpenBegin();
 void ObserveLuaDialogPhase(char const* phase, int control_count, int button_count, double duration_ms);
+void ObserveLuaDialogControlTypeSummary(char const* control_type, int control_count, int button_count, int instance_count, int item_count_total, int item_count_max, double duration_ms);
 void TraceLuaDialogOpenEnd(int control_count, int button_count, double duration_ms, bool succeeded);
 void ObserveVideoMemorySnapshot(char const* reason, VideoMemorySnapshot const& snapshot, bool force = false);
 

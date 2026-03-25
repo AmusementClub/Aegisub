@@ -156,6 +156,7 @@ namespace Automation4 {
 
 	/// Base class for controls in dialogs
 	class LuaDialogControl {
+		char const* trace_type;
 	public:
 		/// Name of this control in the output table
 		std::string name;
@@ -172,6 +173,9 @@ namespace Automation4 {
 		/// Get the default flags to use when inserting this control into a sizer
 		virtual int GetSizerFlags() const { return wxEXPAND; }
 
+		char const* GetTraceType() const { return trace_type; }
+		virtual int GetTraceItemCount() const { return 0; }
+
 		/// Push the current value of the control onto the lua stack. Must not
 		/// touch the GUI as this may be called on a background thread.
 		virtual void LuaReadBack(lua_State *L) = 0;
@@ -186,7 +190,7 @@ namespace Automation4 {
 		/// Restore the control's value from a saved value in the script
 		virtual void UnserialiseValue(const std::string &serialised) { }
 
-		LuaDialogControl(lua_State *L);
+		LuaDialogControl(lua_State *L, char const* trace_type);
 
 		/// Virtual destructor so this can safely be inherited from
 		virtual ~LuaDialogControl() = default;

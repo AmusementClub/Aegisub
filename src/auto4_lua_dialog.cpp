@@ -48,6 +48,7 @@
 
 #include <chrono>
 #include <cfloat>
+#include <map>
 #include <unordered_map>
 
 #include <wx/button.h>
@@ -62,6 +63,13 @@
 
 using namespace agi::lua;
 namespace {
+	struct ControlCreateSummary {
+		int instance_count = 0;
+		int item_count_total = 0;
+		int item_count_max = 0;
+		double duration_ms = 0.0;
+	};
+
 	inline void get_if_right_type(lua_State *L, std::string &def) {
 		if (lua_isstring(L, -1))
 			def = lua_tostring(L, -1);
@@ -131,9 +139,10 @@ namespace {
 
 namespace Automation4 {
 	// LuaDialogControl
-	LuaDialogControl::LuaDialogControl(lua_State *L)
+	LuaDialogControl::LuaDialogControl(lua_State *L, char const* trace_type)
 	// Assume top of stack is a control table (don't do checking)
-	: name(get_field(L, "name"))
+	: trace_type(trace_type)
+	, name(get_field(L, "name"))
 	, hint(get_field(L, "hint"))
 	, hint_wx(hint.empty() ? wxString{} : to_wx(hint))
 	, x(get_field(L, "x", 0))
@@ -148,7 +157,7 @@ namespace Automation4 {
 		class Label final : public LuaDialogControl {
 			std::string label;
 		public:
-			Label(lua_State *L) : LuaDialogControl(L), label(get_field(L, "label")) { }
+			Label(lua_State *L) : LuaDialogControl(L, "label"), label(get_field(L, "label")) { }
 
 			wxControl *Create(wxWindow *parent) override {
 				return new wxStaticText(parent, -1, to_wx(label));
@@ -169,8 +178,8 @@ namespace Automation4 {
 			wxTextCtrl *cw = nullptr;
 
 		public:
-			Edit(lua_State *L)
-			: LuaDialogControl(L)
+			Edit(lua_State *L, char const* trace_type = "edit")
+			: LuaDialogControl(L, trace_type)
 			, text(get_field(L, "value"))
 			{
 				// Undocumented behaviour, 'value' is also accepted as key for text,
@@ -203,7 +212,7 @@ namespace Automation4 {
 
 		public:
 			Color(lua_State *L, bool alpha)
-			: LuaDialogControl(L)
+			: LuaDialogControl(L, alpha ? "coloralpha" : "color")
 			, color(get_field(L, "value"))
 			, alpha(alpha)
 			{
@@ -227,7 +236,7 @@ namespace Automation4 {
 		/// A multiline text edit control
 		class Textbox final : public Edit {
 		public:
-			Textbox(lua_State *L) : Edit(L) { }
+			Textbox(lua_State *L) : Edit(L, "textbox") { }
 
 			// Same serialisation interface as single-line edit
 			wxControl *Create(wxWindow *parent) override {
@@ -246,7 +255,7 @@ namespace Automation4 {
 
 		public:
 			IntEdit(lua_State *L)
-			: Edit(L)
+			: Edit(L, "intedit")
 			, value(get_field(L, "value", 0))
 			, min(get_field(L, "min", INT_MIN))
 			, max(get_field(L, "max", INT_MAX))
@@ -283,7 +292,7 @@ namespace Automation4 {
 
 		public:
 			FloatEdit(lua_State *L)
-			: Edit(L)
+			: Edit(L, "floatedit")
 			, value(get_field(L, "value", 0.0))
 			, min(get_field(L, "min", -DBL_MAX))
 			, max(get_field(L, "max", DBL_MAX))
@@ -334,12 +343,14 @@ namespace Automation4 {
 
 		public:
 			Dropdown(lua_State *L)
-			: LuaDialogControl(L)
+			: LuaDialogControl(L, "dropdown")
 			, value(get_field(L, "value"))
 			{
 				lua_getfield(L, -1, "items");
 				read_string_array(L, items);
 			}
+
+			int GetTraceItemCount() const override { return static_cast<int>(items.size()); }
 
 			bool CanSerialiseValue() const override { return true; }
 			std::string SerialiseValue() const override { return inline_string_encode(value); }
@@ -363,7 +374,7 @@ namespace Automation4 {
 
 		public:
 			Checkbox(lua_State *L)
-			: LuaDialogControl(L)
+			: LuaDialogControl(L, "checkbox")
 			, label(get_field(L, "label"))
 			, value(get_field(L, "value", false))
 			{
@@ -476,9 +487,33 @@ namespace Automation4 {
 
 		auto s = new wxGridBagSizer(4, 4);
 		auto const create_controls_started = std::chrono::steady_clock::now();
-		for (auto& c : controls)
-			s->Add(c->Create(window), wxGBPosition(c->y, c->x),
+		std::map<std::string, ControlCreateSummary> control_summaries;
+		for (auto& c : controls) {
+			auto const control_started = std::chrono::steady_clock::now();
+			auto* created_control = c->Create(window);
+			auto const control_duration_ms = DurationMs(std::chrono::steady_clock::now() - control_started);
+
+			auto& summary = control_summaries[c->GetTraceType()];
+			++summary.instance_count;
+			summary.duration_ms += control_duration_ms;
+
+			auto const item_count = c->GetTraceItemCount();
+			summary.item_count_total += item_count;
+			summary.item_count_max = std::max(summary.item_count_max, item_count);
+
+			s->Add(created_control, wxGBPosition(c->y, c->x),
 				wxGBSpan(c->height, c->width), c->GetSizerFlags());
+		}
+		for (auto const& [control_type, summary] : control_summaries) {
+			perf_trace::ObserveLuaDialogControlTypeSummary(
+				control_type.c_str(),
+				static_cast<int>(controls.size()),
+				static_cast<int>(buttons.size()),
+				summary.instance_count,
+				summary.item_count_total,
+				summary.item_count_max,
+				summary.duration_ms);
+		}
 		perf_trace::ObserveLuaDialogPhase(
 			"create_controls",
 			static_cast<int>(controls.size()),

@@ -277,10 +277,10 @@ int get_single_sel(wxListBox *lb) {
 }
 
 DialogStyleManager::DialogStyleManager(agi::Context *context)
-: wxDialog(context->parent, -1, _("Styles Manager"))
+: wxDialog(context->GetUI().parent, -1, _("Styles Manager"))
 , c(context)
-, commit_connection(c->ass->AddCommitListener(&DialogStyleManager::LoadCurrentStyles, this))
-, active_line_connection(c->selectionController->AddActiveLineListener(&DialogStyleManager::OnActiveLineChanged, this))
+, commit_connection(context->GetCore().ass->AddCommitListener(&DialogStyleManager::LoadCurrentStyles, this))
+, active_line_connection(context->GetCore().selectionController->AddActiveLineListener(&DialogStyleManager::OnActiveLineChanged, this))
 , font_list(std::async(std::launch::async, []() -> wxArrayString {
 	wxArrayString fontList = wxFontEnumerator::GetFacenames();
 	fontList.Sort();
@@ -398,18 +398,20 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 }
 
 void DialogStyleManager::LoadCurrentStyles(int commit_type) {
+	auto core = c->GetCore();
+
 	if (commit_type & AssFile::COMMIT_STYLES || commit_type == AssFile::COMMIT_NEW) {
 		CurrentList->Clear();
 		styleMap.clear();
 
-		for (auto& style : c->ass->Styles) {
+		for (auto& style : core.ass->Styles) {
 			CurrentList->Append(to_wx(style.name));
 			styleMap.push_back(&style);
 		}
 	}
 
 	if (commit_type & AssFile::COMMIT_DIAG_META) {
-		AssDialogue *dia = c->selectionController->GetActiveLine();
+		AssDialogue *dia = core.selectionController->GetActiveLine();
 		CurrentList->DeselectAll();
 		if (dia && commit_type != AssFile::COMMIT_NEW)
 			CurrentList->SetStringSelection(to_wx(dia->Style));
@@ -438,8 +440,9 @@ void DialogStyleManager::UpdateStorage() {
 }
 
 void DialogStyleManager::OnChangeCatalog() {
+	auto core = c->GetCore();
 	std::string catalog(from_wx(CatalogList->GetStringSelection()));
-	c->ass->Properties.style_storage = catalog;
+	core.ass->Properties.style_storage = catalog;
 	Store.LoadCatalog(catalog);
 	UpdateStorage();
 }
@@ -461,7 +464,7 @@ void DialogStyleManager::LoadCatalog() {
 	}
 
 	// Set to default if available
-	std::string pickStyle = c->ass->Properties.style_storage;
+	std::string pickStyle = c->GetCore().ass->Properties.style_storage;
 	if (pickStyle.empty())
 		pickStyle = "Default";
 
@@ -547,6 +550,7 @@ void DialogStyleManager::OnCopyToStorage() {
 }
 
 void DialogStyleManager::OnCopyToCurrent() {
+	auto core = c->GetCore();
 	wxArrayInt selections;
 	int n = StorageList->GetSelections(selections);
 	wxArrayString copied;
@@ -554,19 +558,19 @@ void DialogStyleManager::OnCopyToCurrent() {
 	for (int i = 0; i < n; i++) {
 		wxString styleName = StorageList->GetString(selections[i]);
 
-		if (AssStyle *style = c->ass->GetStyle(from_wx(styleName))) {
+		if (AssStyle *style = core.ass->GetStyle(from_wx(styleName))) {
 			if (confirm_action(c, _("Style name collision"), fmt_tl("There is already a style with the name \"%s\" in the current script. Overwrite?", styleName))) {
 				*style = *Store[selections[i]];
 				copied.push_back(styleName);
 			}
 		}
 		else {
-			c->ass->Styles.push_back(*new AssStyle(*Store[selections[i]]));
+			core.ass->Styles.push_back(*new AssStyle(*Store[selections[i]]));
 			copied.push_back(styleName);
 		}
 	}
 
-	c->ass->Commit(from_wx(_("style copy")), AssFile::COMMIT_STYLES);
+	core.ass->Commit(from_wx(_("style copy")), AssFile::COMMIT_STYLES);
 
 	CurrentList->DeselectAll();
 	for (auto const& style_name : copied)
@@ -591,13 +595,14 @@ void DialogStyleManager::CopyToClipboard(wxListBox *list, T const& v) {
 }
 
 void DialogStyleManager::PasteToCurrent() {
+	auto core = c->GetCore();
 	auto failed_to_parse = add_styles(
-		[=](std::string const& str) { return c->ass->GetStyle(str); },
-		[=](AssStyle *s) { c->ass->Styles.push_back(*s); });
+		[=](std::string const& str) { return core.ass->GetStyle(str); },
+		[=](AssStyle *s) { core.ass->Styles.push_back(*s); });
 	if (failed_to_parse)
 		c->ShowWarning(from_wx(_("Could not parse style")), from_wx(_("Could not parse style")));
 
-	c->ass->Commit(from_wx(_("style paste")), AssFile::COMMIT_STYLES);
+	core.ass->Commit(from_wx(_("style paste")), AssFile::COMMIT_STYLES);
 }
 
 void DialogStyleManager::PasteToStorage() {
@@ -670,15 +675,17 @@ void DialogStyleManager::OnCurrentEdit() {
 }
 
 void DialogStyleManager::OnCurrentCopy() {
+	auto core = c->GetCore();
 	int sel = get_single_sel(CurrentList);
 	if (sel == -1) return;
 
 	ShowCurrentEditor(styleMap[sel], unique_name(
-		[=](std::string const& str) { return c->ass->GetStyle(str); },
+		[=](std::string const& str) { return core.ass->GetStyle(str); },
 		styleMap[sel]->name));
 }
 
 void DialogStyleManager::OnCurrentDelete() {
+	auto core = c->GetCore();
 	wxArrayInt selections;
 	int n = CurrentList->GetSelections(selections);
 
@@ -686,11 +693,12 @@ void DialogStyleManager::OnCurrentDelete() {
 		for (int i = 0; i < n; i++) {
 			delete styleMap.at(selections[i]);
 		}
-		c->ass->Commit(from_wx(_("style delete")), AssFile::COMMIT_STYLES);
+		core.ass->Commit(from_wx(_("style delete")), AssFile::COMMIT_STYLES);
 	}
 }
 
 void DialogStyleManager::OnCurrentImport() {
+	auto core = c->GetCore();
 	auto filename = c->RequestOpenFile({
 		from_wx(_("Open subtitles file")),
 		"Path/Last/Subtitles",
@@ -742,7 +750,7 @@ void DialogStyleManager::OnCurrentImport() {
 	// Loop through selection
 	for (auto const& sel : selections) {
 		// Check if there is already a style with that name
-		if (AssStyle *existing = c->ass->GetStyle(styles[sel])) {
+		if (AssStyle *existing = core.ass->GetStyle(styles[sel])) {
 			if (confirm_action(c, _("Style name collision"), fmt_tl("There is already a style with the name \"%s\" in the current script. Overwrite?", styles[sel]))) {
 				modified = true;
 				*existing = *temp.GetStyle(styles[sel]);
@@ -752,12 +760,12 @@ void DialogStyleManager::OnCurrentImport() {
 
 		// Copy
 		modified = true;
-		c->ass->Styles.push_back(*new AssStyle(*temp.GetStyle(styles[sel])));
+		core.ass->Styles.push_back(*new AssStyle(*temp.GetStyle(styles[sel])));
 	}
 
 	// Update
 	if (modified)
-		c->ass->Commit(from_wx(_("style import")), AssFile::COMMIT_STYLES);
+		core.ass->Commit(from_wx(_("style import")), AssFile::COMMIT_STYLES);
 }
 
 void DialogStyleManager::UpdateButtons() {
@@ -894,18 +902,19 @@ void DialogStyleManager::MoveStyles(bool storage, int type) {
 		UpdateStorage();
 	}
 	else {
+		auto core = c->GetCore();
 		do_move(styleMap, type, first, last, false, c);
 
 		// Replace styles
 		size_t curn = 0;
-		for (auto it = c->ass->Styles.begin(); it != c->ass->Styles.end(); ++it) {
-			auto new_style_at_pos = c->ass->Styles.iterator_to(*styleMap[curn]);
+		for (auto it = core.ass->Styles.begin(); it != core.ass->Styles.end(); ++it) {
+			auto new_style_at_pos = core.ass->Styles.iterator_to(*styleMap[curn]);
 			EntryList<AssStyle>::node_algorithms::swap_nodes(it.pointed_node(), new_style_at_pos.pointed_node());
 			if (++curn == styleMap.size()) break;
 			it = new_style_at_pos;
 		}
 
-		c->ass->Commit(from_wx(_("style move")), AssFile::COMMIT_STYLES);
+		core.ass->Commit(from_wx(_("style move")), AssFile::COMMIT_STYLES);
 	}
 
 	for (int i = 0 ; i < (int)list->GetCount(); ++i) {
@@ -956,5 +965,5 @@ void DialogStyleManager::OnKeyDown(wxKeyEvent &event) {
 }
 
 void ShowStyleManagerDialog(agi::Context *c) {
-	c->dialog->Show<DialogStyleManager>(c);
+	c->GetUI().dialog->Show<DialogStyleManager>(c);
 }

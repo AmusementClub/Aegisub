@@ -44,6 +44,7 @@
 #include <xaudio2redist.h>
 #endif
 
+#include <algorithm>
 #include <chrono>
 
 namespace {
@@ -379,6 +380,10 @@ void XAudio2Thread::Run() {
 	std::vector<std::vector<BYTE> > buff(buffer_length);
 	for (auto& i : buff)
 		i.resize(wanted_latency_bytes);
+	auto reset_queued_buffers = [&] {
+		std::fill(buffer_occupied.begin(), buffer_occupied.end(), false);
+		ResetEvent(event_buffer_end);
+	};
 
 	while (running) {
 		DWORD wait_result = WaitForMultipleObjects(sizeof(events_to_wait) / sizeof(HANDLE), events_to_wait, FALSE, INFINITE);
@@ -388,6 +393,7 @@ void XAudio2Thread::Run() {
 			// Start or restart playback
 			pSourceVoice->Stop();
 			pSourceVoice->FlushSourceBuffers();
+			reset_queued_buffers();
 
 			next_input_frame = start_frame;
 			playback_should_be_running = true;
@@ -401,6 +407,7 @@ void XAudio2Thread::Run() {
 			ResetEvent(is_playing);
 			pSourceVoice->Stop();
 			pSourceVoice->FlushSourceBuffers();
+			reset_queued_buffers();
 			playback_should_be_running = false;
 			break;
 
@@ -478,6 +485,7 @@ void XAudio2Thread::Run() {
 			running = false;
 			pXAudio2->Release();
 			ResetEvent(is_playing);
+			reset_queued_buffers();
 			playback_should_be_running = false;
 			break;
 

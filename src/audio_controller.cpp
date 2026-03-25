@@ -40,6 +40,11 @@
 
 #include <algorithm>
 
+namespace {
+constexpr int64_t kPlaybackAheadMs = 8000;
+constexpr int64_t kPlaybackBehindMs = 2000;
+}
+
 AudioController::AudioController(agi::Context *context)
 : context(context)
 , playback_timer(this)
@@ -74,6 +79,12 @@ void AudioController::OnPlaybackTimer(wxTimerEvent &)
 	}
 	else
 	{
+		if (provider) {
+			provider->SetPlaybackWindow(
+				pos,
+				SamplesFromMilliseconds(kPlaybackAheadMs),
+				SamplesFromMilliseconds(kPlaybackBehindMs));
+		}
 		auto const position_ms = MillisecondsFromSamples(pos);
 		perf_trace::ObserveAudioPlaybackPosition(position_ms);
 		AnnouncePlaybackPosition(position_ms);
@@ -139,8 +150,15 @@ void AudioController::PlayRange(const TimeRange &range)
 {
 	if (!player) return;
 
+	auto const start_sample = SamplesFromMilliseconds(range.begin());
+	if (provider) {
+		provider->SetPlaybackWindow(
+			start_sample,
+			SamplesFromMilliseconds(kPlaybackAheadMs),
+			SamplesFromMilliseconds(kPlaybackBehindMs));
+	}
 	perf_trace::ResetAudioPlaybackInterval();
-	player->Play(SamplesFromMilliseconds(range.begin()), SamplesFromMilliseconds(range.length()));
+	player->Play(start_sample, SamplesFromMilliseconds(range.length()));
 	playback_mode = PM_Range;
 	playback_timer.Start(20);
 
@@ -166,6 +184,12 @@ void AudioController::PlayToEnd(int start_ms)
 	if (!player) return;
 
 	int64_t start_sample = SamplesFromMilliseconds(start_ms);
+	if (provider) {
+		provider->SetPlaybackWindow(
+			start_sample,
+			SamplesFromMilliseconds(kPlaybackAheadMs),
+			SamplesFromMilliseconds(kPlaybackBehindMs));
+	}
 	perf_trace::ResetAudioPlaybackInterval();
 	player->Play(start_sample, provider->GetNumSamples()-start_sample);
 	playback_mode = PM_ToEnd;
@@ -182,6 +206,8 @@ void AudioController::Stop()
 	playback_mode = PM_NotPlaying;
 	playback_timer.Stop();
 	perf_trace::ResetAudioPlaybackInterval();
+	if (provider)
+		provider->ClearPlaybackWindow();
 
 	AnnouncePlaybackStop();
 }

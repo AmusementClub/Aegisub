@@ -189,6 +189,13 @@ void AudioWaveformSummaryCache::Prefetch(size_t first_block, size_t last_block) 
 		return;
 	last_block = std::min(last_block, block_count - 1);
 
+	const double pixel_samples = pixel_ms * source->GetSampleRate() / 1000.0;
+	const int samples_per_pixel = std::max(1, static_cast<int>(pixel_samples));
+	const int64_t block_frames = static_cast<int64_t>(AudioWaveformSummaryBlock::width) * samples_per_pixel;
+	const int64_t start_frame = static_cast<int64_t>(first_block * AudioWaveformSummaryBlock::width * pixel_samples);
+	const int64_t end_frame = static_cast<int64_t>(last_block * AudioWaveformSummaryBlock::width * pixel_samples) + block_frames;
+	source->HintFloatAudio(start_frame, end_frame - start_frame);
+
 	{
 		std::lock_guard<std::mutex> lock(cache_mutex);
 		bool has_missing = false;

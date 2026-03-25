@@ -265,6 +265,14 @@ struct Summary {
 	size_t audio_storage_max_bytes = 0;
 	size_t audio_logical_max_bytes = 0;
 	size_t audio_decoded_max_bytes = 0;
+	size_t audio_page_size_bytes = 0;
+	size_t audio_loading_max_bytes = 0;
+	size_t audio_pinned_max_bytes = 0;
+	size_t audio_free_max_bytes = 0;
+	int64_t audio_resident_pages_max = 0;
+	int64_t audio_loading_pages_max = 0;
+	int64_t audio_pinned_pages_max = 0;
+	int64_t audio_free_pages_max = 0;
 	std::string audio_provider_name;
 	std::string audio_storage_kind;
 	IntervalSummary audio_playback_interval;
@@ -463,6 +471,14 @@ void WriteSummaryLocked(Session const& session) {
 	write_int("audio_storage.max_bytes", session.summary.audio_storage_max_bytes);
 	write_int("audio_logical.max_bytes", session.summary.audio_logical_max_bytes);
 	write_int("audio_decoded.max_bytes", session.summary.audio_decoded_max_bytes);
+	write_int("audio_cache.page_size_bytes", session.summary.audio_page_size_bytes);
+	write_int("audio_cache.loading.max_bytes", session.summary.audio_loading_max_bytes);
+	write_int("audio_cache.pinned.max_bytes", session.summary.audio_pinned_max_bytes);
+	write_int("audio_cache.free.max_bytes", session.summary.audio_free_max_bytes);
+	write_int("audio_cache.resident_pages.max", static_cast<uint64_t>(session.summary.audio_resident_pages_max));
+	write_int("audio_cache.loading_pages.max", static_cast<uint64_t>(session.summary.audio_loading_pages_max));
+	write_int("audio_cache.pinned_pages.max", static_cast<uint64_t>(session.summary.audio_pinned_pages_max));
+	write_int("audio_cache.free_pages.max", static_cast<uint64_t>(session.summary.audio_free_pages_max));
 	out << "audio_provider=" << session.summary.audio_provider_name << "\n";
 	out << "audio_storage_kind=" << session.summary.audio_storage_kind << "\n";
 
@@ -846,6 +862,14 @@ void ObserveVideoMemorySnapshot(char const* reason, VideoMemorySnapshot const& s
 	session.summary.audio_storage_max_bytes = std::max(session.summary.audio_storage_max_bytes, snapshot.audio.storage_bytes);
 	session.summary.audio_logical_max_bytes = std::max(session.summary.audio_logical_max_bytes, snapshot.audio.logical_bytes);
 	session.summary.audio_decoded_max_bytes = std::max(session.summary.audio_decoded_max_bytes, snapshot.audio.decoded_bytes);
+	session.summary.audio_page_size_bytes = std::max(session.summary.audio_page_size_bytes, snapshot.audio.page_size_bytes);
+	session.summary.audio_loading_max_bytes = std::max(session.summary.audio_loading_max_bytes, snapshot.audio.loading_bytes);
+	session.summary.audio_pinned_max_bytes = std::max(session.summary.audio_pinned_max_bytes, snapshot.audio.pinned_bytes);
+	session.summary.audio_free_max_bytes = std::max(session.summary.audio_free_max_bytes, snapshot.audio.free_bytes);
+	session.summary.audio_resident_pages_max = std::max(session.summary.audio_resident_pages_max, snapshot.audio.resident_pages);
+	session.summary.audio_loading_pages_max = std::max(session.summary.audio_loading_pages_max, snapshot.audio.loading_pages);
+	session.summary.audio_pinned_pages_max = std::max(session.summary.audio_pinned_pages_max, snapshot.audio.pinned_pages);
+	session.summary.audio_free_pages_max = std::max(session.summary.audio_free_pages_max, snapshot.audio.free_pages);
 	if (!snapshot.audio.provider_name.empty())
 		session.summary.audio_provider_name = snapshot.audio.provider_name;
 	if (!snapshot.audio.storage_kind.empty())
@@ -881,8 +905,16 @@ void ObserveVideoMemorySnapshot(char const* reason, VideoMemorySnapshot const& s
 	payload.AddInt("audio_storage_bytes", static_cast<int64_t>(snapshot.audio.storage_bytes));
 	payload.AddInt("audio_logical_bytes", static_cast<int64_t>(snapshot.audio.logical_bytes));
 	payload.AddInt("audio_decoded_bytes", static_cast<int64_t>(snapshot.audio.decoded_bytes));
+	payload.AddInt("audio_page_size_bytes", static_cast<int64_t>(snapshot.audio.page_size_bytes));
+	payload.AddInt("audio_loading_bytes", static_cast<int64_t>(snapshot.audio.loading_bytes));
+	payload.AddInt("audio_pinned_bytes", static_cast<int64_t>(snapshot.audio.pinned_bytes));
+	payload.AddInt("audio_free_bytes", static_cast<int64_t>(snapshot.audio.free_bytes));
 	payload.AddInt("audio_num_samples", snapshot.audio.num_samples);
 	payload.AddInt("audio_decoded_samples", snapshot.audio.decoded_samples);
+	payload.AddInt("audio_resident_pages", snapshot.audio.resident_pages);
+	payload.AddInt("audio_loading_pages", snapshot.audio.loading_pages);
+	payload.AddInt("audio_pinned_pages", snapshot.audio.pinned_pages);
+	payload.AddInt("audio_free_pages", snapshot.audio.free_pages);
 	payload.AddInt("audio_sample_rate", snapshot.audio.sample_rate);
 	payload.AddInt("audio_bytes_per_sample", snapshot.audio.bytes_per_sample);
 	payload.AddInt("audio_channels", snapshot.audio.channels);

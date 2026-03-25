@@ -1100,6 +1100,14 @@ AudioViewportRequest AudioDisplay::BuildViewportRequest(const wxRect &update_rec
 void AudioDisplay::PaintAudio(wxDC &dc, const AudioViewportRequest &viewport) {
 	if (!audio_tile_compositor || !audio_renderer)
 		return;
+	if (provider && ms_per_pixel > 0.0) {
+		auto const client_width = std::max(0, GetClientSize().GetWidth());
+		auto const begin_ms = std::max(0, TimeFromAbsoluteX(scroll_left));
+		auto const end_ms = std::max(begin_ms, TimeFromAbsoluteX(scroll_left + client_width));
+		auto const start_frame = static_cast<int64_t>(begin_ms) * provider->GetSampleRate() / 1000;
+		auto const end_frame = static_cast<int64_t>(end_ms) * provider->GetSampleRate() / 1000;
+		provider->HintVisibleRange(start_frame, end_frame - start_frame);
+	}
 	audio_tile_compositor->Compose(dc, *audio_renderer, viewport, style_ranges);
 }
 

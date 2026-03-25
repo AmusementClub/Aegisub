@@ -318,15 +318,25 @@ namespace Automation4 {
 			void UnserialiseValue(const std::string &serialised) override { value = atof(serialised.c_str()); }
 
 			wxControl *Create(wxWindow *parent) override {
+				create_trace = {};
+
 				if (step > 0) {
+					auto const construct_started = std::chrono::steady_clock::now();
 					scd = new wxSpinCtrlDouble(parent, -1, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, value, step);
+					create_trace.floatedit_spin_construct_with_value_ms = DurationMs(std::chrono::steady_clock::now() - construct_started);
+
+					auto const validator_bind_started = std::chrono::steady_clock::now();
 					scd->SetValidator(DoubleSpinValidator(&value));
+					create_trace.floatedit_spin_validator_bind_ms = DurationMs(std::chrono::steady_clock::now() - validator_bind_started);
+
 					SetTooltipIfPresent(scd, hint_wx);
 					return scd;
 				}
 
 				DoubleValidator val(&value, min, max);
+				auto const construct_started = std::chrono::steady_clock::now();
 				cw = new wxTextCtrl(parent, -1, "", wxDefaultPosition, wxDefaultSize, 0, val);
+				create_trace.floatedit_text_construct_with_validator_ms = DurationMs(std::chrono::steady_clock::now() - construct_started);
 				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}
@@ -538,6 +548,9 @@ namespace Automation4 {
 			accumulate_step("native_construct", create_trace.native_construct_ms);
 			accumulate_step("validator_bind", create_trace.validator_bind_ms);
 			accumulate_step("initial_value_set", create_trace.initial_value_set_ms);
+			accumulate_step("floatedit_spin_construct_with_value", create_trace.floatedit_spin_construct_with_value_ms);
+			accumulate_step("floatedit_spin_validator_bind", create_trace.floatedit_spin_validator_bind_ms);
+			accumulate_step("floatedit_text_construct_with_validator", create_trace.floatedit_text_construct_with_validator_ms);
 
 			s->Add(created_control, wxGBPosition(c->y, c->x),
 				wxGBSpan(c->height, c->width), c->GetSizerFlags());

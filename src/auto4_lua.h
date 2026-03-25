@@ -43,6 +43,9 @@ namespace Automation4 {
 		double native_construct_ms = 0.0;
 		double validator_bind_ms = 0.0;
 		double initial_value_set_ms = 0.0;
+		double floatedit_spin_construct_with_value_ms = 0.0;
+		double floatedit_spin_validator_bind_ms = 0.0;
+		double floatedit_text_construct_with_validator_ms = 0.0;
 	};
 
 	/// @class LuaAssFile

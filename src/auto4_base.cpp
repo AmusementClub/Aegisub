@@ -35,6 +35,7 @@
 #include "dialog_progress.h"
 #include "include/aegisub/context.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "string_codec.h"
 #include "subs_controller.h"
 #include "ui_dispatch.h"
@@ -46,6 +47,7 @@
 #include <libaegisub/string_utils.h>
 #include <libaegisub/split.h>
 
+#include <chrono>
 #include <future>
 
 #include <wx/dcmemory.h>
@@ -208,14 +210,25 @@ namespace Automation4 {
 	void ProgressSink::ShowDialog(ScriptDialog *config_dialog)
 	{
 		agi::ui::MainInvoke([=] {
+			auto duration_ms = [](auto const& started) {
+				return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+			};
+
 			wxDialog w; // container dialog box
 			w.SetExtraStyle(wxWS_EX_VALIDATE_RECURSIVELY);
 			w.Create(bsr->GetParentWindow(), -1, to_wx(bsr->GetTitle()));
 			auto s = new wxBoxSizer(wxHORIZONTAL); // sizer for putting contents in
 			wxWindow *ww = config_dialog->CreateWindow(&w); // generate actual dialog contents
 			s->Add(ww, 0, wxALL, 5); // add contents to dialog
+
+			auto const outer_fit_started = std::chrono::steady_clock::now();
 			w.SetSizerAndFit(s);
+			perf_trace::ObserveLuaDialogPhase("outer_dialog_fit", -1, -1, duration_ms(outer_fit_started));
+
+			auto const center_started = std::chrono::steady_clock::now();
 			w.CenterOnParent();
+			perf_trace::ObserveLuaDialogPhase("outer_dialog_center", -1, -1, duration_ms(center_started));
+
 			w.ShowModal();
 		});
 	}

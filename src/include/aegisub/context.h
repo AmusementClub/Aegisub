@@ -49,6 +49,8 @@ namespace agi { class VideoSourceRequestService; }
 namespace agi { class BackgroundRunnerFactory; }
 namespace agi { class ProjectUiStateSink; }
 namespace agi { class AudioPlayerFactoryService; }
+namespace Automation4 { class AutomationBackgroundScriptRunnerFactory; }
+namespace Automation4 { class BackgroundScriptRunner; }
 namespace agi { struct InteractionRequest; }
 namespace agi { struct SingleChoiceInteractionRequest; }
 namespace agi { struct OpenFileDialogRequest; }
@@ -82,6 +84,7 @@ struct ContextCoreSession {
 	std::shared_ptr<BackgroundRunnerFactory>& backgroundRunnerFactory;
 	std::shared_ptr<ProjectUiStateSink>& projectUiStateSink;
 	std::shared_ptr<AudioPlayerFactoryService>& audioPlayerFactoryService;
+	std::shared_ptr<Automation4::AutomationBackgroundScriptRunnerFactory>& automationBackgroundScriptRunnerFactory;
 
 	explicit ContextCoreSession(Context& context);
 };
@@ -107,6 +110,7 @@ struct ConstContextCoreSession {
 	std::shared_ptr<BackgroundRunnerFactory> const& backgroundRunnerFactory;
 	std::shared_ptr<ProjectUiStateSink> const& projectUiStateSink;
 	std::shared_ptr<AudioPlayerFactoryService> const& audioPlayerFactoryService;
+	std::shared_ptr<Automation4::AutomationBackgroundScriptRunnerFactory> const& automationBackgroundScriptRunnerFactory;
 
 	explicit ConstContextCoreSession(Context const& context);
 };
@@ -162,6 +166,7 @@ struct Context {
 	std::shared_ptr<BackgroundRunnerFactory> backgroundRunnerFactory;
 	std::shared_ptr<ProjectUiStateSink> projectUiStateSink;
 	std::shared_ptr<AudioPlayerFactoryService> audioPlayerFactoryService;
+	std::shared_ptr<Automation4::AutomationBackgroundScriptRunnerFactory> automationBackgroundScriptRunnerFactory;
 
 	// Things that should probably be in some sort of UI-context-model
 	wxWindow *parent = nullptr;
@@ -199,6 +204,7 @@ struct Context {
 	std::unique_ptr<BackgroundRunner> CreateBackgroundRunner(std::string const& title = "", std::string const& message = "") const;
 	std::shared_ptr<ProjectUiStateSink> GetProjectUiStateSink() const;
 	std::shared_ptr<AudioPlayerFactoryService> GetAudioPlayerFactoryService() const;
+	std::unique_ptr<Automation4::BackgroundScriptRunner> CreateAutomationBackgroundScriptRunner(std::string const& title) const;
 
 	// Returned on demand to avoid making Context subobject construction depend
 	// on the bridge members themselves having already been initialized.

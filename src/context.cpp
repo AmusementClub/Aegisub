@@ -55,7 +55,8 @@ ContextCoreSession::ContextCoreSession(Context& context)
 , videoSourceRequestService(context.videoSourceRequestService)
 , backgroundRunnerFactory(context.backgroundRunnerFactory)
 , projectUiStateSink(context.projectUiStateSink)
-, audioPlayerFactoryService(context.audioPlayerFactoryService) {
+, audioPlayerFactoryService(context.audioPlayerFactoryService)
+, automationBackgroundScriptRunnerFactory(context.automationBackgroundScriptRunnerFactory) {
 }
 
 ConstContextCoreSession::ConstContextCoreSession(Context const& context)
@@ -78,7 +79,8 @@ ConstContextCoreSession::ConstContextCoreSession(Context const& context)
 , videoSourceRequestService(context.videoSourceRequestService)
 , backgroundRunnerFactory(context.backgroundRunnerFactory)
 , projectUiStateSink(context.projectUiStateSink)
-, audioPlayerFactoryService(context.audioPlayerFactoryService) {
+, audioPlayerFactoryService(context.audioPlayerFactoryService)
+, automationBackgroundScriptRunnerFactory(context.automationBackgroundScriptRunnerFactory) {
 }
 
 ContextUiSession::ContextUiSession(Context& context)
@@ -126,6 +128,7 @@ Context::Context()
 , backgroundRunnerFactory(std::make_shared<InlineBackgroundRunnerFactory>())
 , projectUiStateSink(std::make_shared<NullProjectUiStateSink>())
 , audioPlayerFactoryService(std::make_shared<NullAudioPlayerFactoryService>())
+, automationBackgroundScriptRunnerFactory(std::make_shared<Automation4::NullAutomationBackgroundScriptRunnerFactory>())
 , dialog(make_unique<DialogManager>())
 {
 	subsController->SetSelectionController(selectionController.get());
@@ -231,5 +234,11 @@ std::shared_ptr<ProjectUiStateSink> Context::GetProjectUiStateSink() const {
 
 std::shared_ptr<AudioPlayerFactoryService> Context::GetAudioPlayerFactoryService() const {
 	return audioPlayerFactoryService;
+}
+
+std::unique_ptr<Automation4::BackgroundScriptRunner> Context::CreateAutomationBackgroundScriptRunner(std::string const& title) const {
+	if (automationBackgroundScriptRunnerFactory)
+		return automationBackgroundScriptRunnerFactory->Create(title);
+	return {};
 }
 }

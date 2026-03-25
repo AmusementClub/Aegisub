@@ -327,11 +327,10 @@ namespace {
 	/// @param L Lua state
 	/// @param nargs Number of arguments the function takes
 	/// @param nresults Number of values the function returns
-	/// @param title Title to use for the progress dialog
-	/// @param parent Parent window for the progress dialog
+	/// @param bsr Background script runner to use for the progress dialog
 	/// @param can_open_config Can the function open its own dialogs?
 	/// @throws agi::UserCancelException if the function fails to run to completion (either due to cancelling or errors)
-	void LuaThreadedCall(lua_State *L, int nargs, int nresults, std::string const& title, wxWindow *parent, bool can_open_config);
+	void LuaThreadedCall(lua_State *L, int nargs, int nresults, BackgroundScriptRunner &bsr, bool can_open_config);
 
 	class LuaCommand final : public cmd::Command, private LuaFeature {
 		std::string cmd_name;
@@ -621,10 +620,9 @@ namespace {
 		return lua_gettop(L) - pretop;
 	}
 
-	void LuaThreadedCall(lua_State *L, int nargs, int nresults, std::string const& title, wxWindow *parent, bool can_open_config)
+	void LuaThreadedCall(lua_State *L, int nargs, int nresults, BackgroundScriptRunner &bsr, bool can_open_config)
 	{
 		bool failed = false;
-		BackgroundScriptRunner bsr(parent, title);
 		bsr.Run([&](ProgressSink *ps) {
 			LuaProgressSink lps(L, ps, can_open_config);
 
@@ -803,8 +801,12 @@ namespace {
 		push_value(L, original_sel);
 		push_value(L, original_active);
 
+		auto runner = c->CreateAutomationBackgroundScriptRunner(from_wx(StrDisplay(c)));
+		if (!runner)
+			throw AutomationError("Automation background runner unavailable");
+
 		try {
-			LuaThreadedCall(L, 3, 2, from_wx(StrDisplay(c)), c->parent, true);
+			LuaThreadedCall(L, 3, 2, *runner, true);
 		}
 		catch (agi::UserCancelException const&) {
 			subsobj->Cancel();
@@ -984,8 +986,9 @@ namespace {
 		assert(lua_istable(L, -1));
 		stackcheck.check_stack(3);
 
+		BackgroundScriptRunner runner(export_dialog, GetName());
 		try {
-			LuaThreadedCall(L, 2, 0, GetName(), export_dialog, false);
+			LuaThreadedCall(L, 2, 0, runner, false);
 			stackcheck.check_stack(0);
 			subsobj->ProcessingComplete();
 		}

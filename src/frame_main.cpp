@@ -41,6 +41,7 @@
 
 #include "ass_file.h"
 #include "async_video_provider.h"
+#include "auto4_base.h"
 #include "audio_controller.h"
 #include "audio_box.h"
 #include "base_grid.h"
@@ -420,6 +421,26 @@ public:
 		});
 	}
 };
+
+class FrameMainAutomationBackgroundScriptRunnerFactory final : public Automation4::AutomationBackgroundScriptRunnerFactory {
+	FrameMain *frame = nullptr;
+	agi::ui::WeakLifetime lifetime;
+
+public:
+	FrameMainAutomationBackgroundScriptRunnerFactory(FrameMain *frame, agi::ui::WeakLifetime lifetime)
+	: frame(frame)
+	, lifetime(std::move(lifetime))
+	{
+	}
+
+	std::unique_ptr<Automation4::BackgroundScriptRunner> Create(std::string const& title) override {
+		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, title] {
+			if (!lifetime.lock())
+				return std::unique_ptr<Automation4::BackgroundScriptRunner>();
+			return agi::make_unique<Automation4::BackgroundScriptRunner>(frame, title);
+		});
+	}
+};
 }
 
 /// Handle files drag and dropped onto Aegisub
@@ -480,6 +501,7 @@ FrameMain::FrameMain()
 	core.backgroundRunnerFactory = std::make_shared<FrameMainBackgroundRunnerFactory>(this, GetAsyncUiLifetime());
 	core.projectUiStateSink = std::make_shared<FrameMainProjectUiStateSink>(context.get(), GetAsyncUiLifetime());
 	core.audioPlayerFactoryService = std::make_shared<FrameMainAudioPlayerFactoryService>(this, GetAsyncUiLifetime());
+	core.automationBackgroundScriptRunnerFactory = std::make_shared<FrameMainAutomationBackgroundScriptRunnerFactory>(this, GetAsyncUiLifetime());
 
 	StartupLog("Apply saved Maximized state");
 	if (OPT_GET("App/Maximized")->GetBool()) Maximize(true);

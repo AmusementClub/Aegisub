@@ -133,6 +133,19 @@ namespace Automation4 {
 		~BackgroundScriptRunner();
 	};
 
+	class AutomationBackgroundScriptRunnerFactory {
+	public:
+		virtual ~AutomationBackgroundScriptRunnerFactory() = default;
+		virtual std::unique_ptr<BackgroundScriptRunner> Create(std::string const& title) = 0;
+	};
+
+	class NullAutomationBackgroundScriptRunnerFactory final : public AutomationBackgroundScriptRunnerFactory {
+	public:
+		std::unique_ptr<BackgroundScriptRunner> Create(std::string const&) override {
+			return {};
+		}
+	};
+
 	/// A wrapper around agi::ProgressSink which adds the ability to open
 	/// dialogs on the GUI thread
 	class ProgressSink final : public agi::ProgressSink {

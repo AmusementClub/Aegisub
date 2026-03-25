@@ -436,6 +436,7 @@ add_executable(Aegisub WIN32
     src/subtitle_timing_ops.cpp
     src/video_aspect_ratio_ops.cpp
     src/video_navigation_ops.cpp
+    src/video_session_ops.cpp
     src/video_snapshot_ops.cpp
     src/visual_tool.cpp
     src/visual_tool_clip.cpp

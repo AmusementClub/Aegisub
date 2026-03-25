@@ -26,6 +26,7 @@ class AsyncVideoProvider;
 namespace agi { class AudioProvider; }
 namespace agi { class BackgroundRunner; }
 namespace agi { struct Context; }
+namespace aegisub::video_session_ops { struct OpenedVideoSummary; }
 struct ProjectProperties;
 
 class Project {
@@ -54,7 +55,7 @@ class Project {
 
 	bool DoLoadSubtitles(agi::fs::path const& path, std::string encoding, ProjectProperties &properties);
 	void DoLoadAudio(agi::fs::path const& path, bool quiet);
-	bool DoLoadVideo(agi::fs::path const& path);
+	bool DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops::OpenedVideoSummary* summary = nullptr);
 	void DoLoadTimecodes(agi::fs::path const& path);
 	void DoLoadKeyframes(agi::fs::path const& path);
 

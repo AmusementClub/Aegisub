@@ -38,6 +38,7 @@
 #include "utils.h"
 #include "video_controller.h"
 #include "video_display.h"
+#include "video_session_ops.h"
 
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/access.h>
@@ -91,6 +92,15 @@ void RestoreVideoUiState(agi::Context *context, ProjectProperties const& propert
 	auto ui = context->GetUI();
 	if (ui.videoDisplay)
 		ui.videoDisplay->SetZoom(properties.video_zoom);
+}
+
+void ApplyPostOpenVideoPlan(agi::Context *context, aegisub::video_session_ops::PostOpenPlan const& plan) {
+	auto video_controller = context->GetCore().videoController.get();
+	if (plan.display_aspect_ratio_override)
+		video_controller->SetAspectRatio(*plan.display_aspect_ratio_override);
+	else
+		video_controller->SetAspectRatio(AspectRatio::Default);
+	video_controller->JumpToFrame(plan.initial_frame);
 }
 }
 
@@ -317,12 +327,13 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 	}
 
 	bool loaded_video = false;
+	aegisub::video_session_ops::OpenedVideoSummary opened_video_summary;
 	bool skip_duplicate_audio_error = false;
 	if (video != video_file) {
 		if (video.empty())
 			CloseVideo();
 		else {
-			loaded_video = DoLoadVideo(video);
+			loaded_video = DoLoadVideo(video, &opened_video_summary);
 			if (loaded_video) {
 				auto vc = core.videoController.get();
 				vc->JumpToFrame(properties.video_position);
@@ -350,7 +361,11 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 		else if (!skip_duplicate_audio_error)
 			DoLoadAudio(audio, false);
 	}
-	else if (loaded_video && OPT_GET("Video/Open Audio")->GetBool() && audio_file != video_file && video_provider->HasAudio())
+	else if (loaded_video && aegisub::video_session_ops::PlanPostOpen(
+		opened_video_summary,
+		OPT_GET("Video/Open Audio")->GetBool(),
+		audio_file,
+		video_file).auto_load_linked_audio)
 		DoLoadAudio(video, true);
 }
 
@@ -404,7 +419,7 @@ void Project::CloseAudio() {
 	SetPath(audio_file, "?audio", "", "");
 }
 
-bool Project::DoLoadVideo(agi::fs::path const& path) {
+bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops::OpenedVideoSummary* summary) {
 	std::string access_error;
 	if (!try_check_readable_media_path(path, access_error)) {
 		config::mru->Remove("Video", path);
@@ -435,6 +450,13 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 		return false;
 	}
 
+	auto opened_video = aegisub::video_session_ops::BuildOpenedVideoSummary(
+		*video_provider,
+		path,
+		[](agi::fs::path const& candidate) {
+			return MatroskaWrapper::HasSubtitles(candidate);
+		});
+
 	timecodes_file.clear();
 	keyframes_file.clear();
 	// Video-open listeners read Project::VideoName(), so publish the new path first.
@@ -446,16 +468,16 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 	UpdateVideoProperties(context, core.ass.get(), video_provider.get());
 	video_provider->LoadSubtitles(core.ass.get());
 
-	timecodes = video_provider->GetFPS();
-	keyframes = video_provider->GetKeyFrames();
+	timecodes = opened_video.timecodes;
+	keyframes = opened_video.keyframes;
 
-	std::string warning = video_provider->GetWarning();
+	std::string warning = opened_video.warning;
 	if (!warning.empty())
 		ShowWarning(warning, "Warning");
 
-	video_has_subtitles = false;
-	if (agi::fs::HasExtension(path, "mkv"))
-		video_has_subtitles = MatroskaWrapper::HasSubtitles(path);
+	video_has_subtitles = opened_video.has_subtitles;
+	if (summary)
+		*summary = opened_video;
 
 	AnnounceKeyframesModified(keyframes);
 	AnnounceTimecodesModified(timecodes);
@@ -464,17 +486,16 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 
 void Project::LoadVideo(agi::fs::path path) {
 	if (path.empty()) return;
-	if (!DoLoadVideo(path)) return;
-	if (OPT_GET("Video/Open Audio")->GetBool() && audio_file != video_file && video_provider->HasAudio())
+	aegisub::video_session_ops::OpenedVideoSummary opened_video;
+	if (!DoLoadVideo(path, &opened_video)) return;
+	auto plan = aegisub::video_session_ops::PlanPostOpen(
+		opened_video,
+		OPT_GET("Video/Open Audio")->GetBool(),
+		audio_file,
+		video_file);
+	if (plan.auto_load_linked_audio)
 		DoLoadAudio(video_file, true);
-
-	auto core = context->GetCore();
-	double dar = video_provider->GetDAR();
-	if (dar > 0)
-		core.videoController->SetAspectRatio(dar);
-	else
-		core.videoController->SetAspectRatio(AspectRatio::Default);
-	core.videoController->JumpToFrame(0);
+	ApplyPostOpenVideoPlan(context, plan);
 }
 
 void Project::CloseVideo() {
@@ -649,14 +670,14 @@ void Project::LoadList(std::vector<agi::fs::path> const& files) {
 	if (!audio.empty())
 		DoLoadAudio(audio, false);
 
-	if (!video.empty() && DoLoadVideo(video)) {
-		auto core = context->GetCore();
-		double dar = video_provider->GetDAR();
-		if (dar > 0)
-			core.videoController->SetAspectRatio(dar);
-		else
-			core.videoController->SetAspectRatio(AspectRatio::Default);
-		core.videoController->JumpToFrame(0);
+	aegisub::video_session_ops::OpenedVideoSummary opened_video;
+	if (!video.empty() && DoLoadVideo(video, &opened_video)) {
+		auto plan = aegisub::video_session_ops::PlanPostOpen(
+			opened_video,
+			OPT_GET("Video/Open Audio")->GetBool(),
+			audio_file,
+			video_file);
+		ApplyPostOpenVideoPlan(context, plan);
 
 		// We loaded these earlier, but loading video unloaded them
 		// Non-Do version of Load in case they've vanished or changed between
@@ -667,7 +688,7 @@ void Project::LoadList(std::vector<agi::fs::path> const& files) {
 			LoadKeyframes(keyframes);
 
 		// Load audio from video
-		if (audio.empty() && OPT_GET("Video/Open Audio")->GetBool() && audio_file != video_file)
+		if (audio.empty() && plan.auto_load_linked_audio)
 			DoLoadAudio(video_file, true);
 	}
 

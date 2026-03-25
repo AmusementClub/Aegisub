@@ -54,6 +54,7 @@ if(GTEST_FOUND)
         src/video_property_update.cpp
         src/video_aspect_ratio_ops.cpp
         src/video_navigation_ops.cpp
+        src/video_session_ops.cpp
         src/video_snapshot_ops.cpp
         src/subtitle_timing_ops.cpp
         tests/tests/cajun.cpp
@@ -117,6 +118,7 @@ if(GTEST_FOUND)
         tests/tests/video_property_update.cpp
         tests/tests/video_aspect_ratio_ops.cpp
         tests/tests/video_navigation_ops.cpp
+        tests/tests/video_session_ops.cpp
         tests/tests/video_snapshot_ops.cpp
         tests/tests/video_cache.cpp
         tests/tests/video_display_layout.cpp

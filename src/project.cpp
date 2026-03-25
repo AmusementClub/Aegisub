@@ -422,15 +422,21 @@ void Project::CloseAudio() {
 bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops::OpenedVideoSummary* summary) {
 	std::string access_error;
 	if (!try_check_readable_media_path(path, access_error)) {
-		config::mru->Remove("Video", path);
-		ShowError(access_error);
-		return false;
+		return aegisub::video_session_ops::HandleUnreadableVideoOpenPath(
+			path,
+			access_error,
+			*context->GetNotificationSink(),
+			[](char const* category, agi::fs::path const& candidate) {
+				config::mru->Remove(category, candidate);
+			});
 	}
 
-	try {
+	video_provider = aegisub::video_session_ops::CreateVideoProviderWithErrorHandling(
+		path,
+		[&] {
 		auto core = context->GetCore();
 		auto old_matrix = core.ass->GetScriptInfo("YCbCr Matrix");
-		video_provider = agi::make_unique<AsyncVideoProvider>(
+			return agi::make_unique<AsyncVideoProvider>(
 			path,
 			old_matrix,
 			core.videoController.get(),
@@ -438,17 +444,13 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 			core.ass->GetTransientFonts(),
 			core.videoController->GetAsyncUiLifetime(),
 			context->GetSingleChoiceInteractionSink());
-	}
-	catch (agi::UserCancelException const&) { return false; }
-	catch (agi::fs::FileSystemError const& err) {
-		config::mru->Remove("Video", path);
-		ShowError(err.GetMessage());
+		},
+		*context->GetNotificationSink(),
+		[](char const* category, agi::fs::path const& candidate) {
+			config::mru->Remove(category, candidate);
+		});
+	if (!video_provider)
 		return false;
-	}
-	catch (VideoProviderError const& err) {
-		ShowError(err.GetMessage());
-		return false;
-	}
 
 	auto opened_video = aegisub::video_session_ops::BuildOpenedVideoSummary(
 		*video_provider,

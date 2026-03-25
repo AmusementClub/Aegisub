@@ -3,6 +3,7 @@
 #include "../../src/async_video_provider.h"
 #include "../../src/include/aegisub/subtitles_provider.h"
 #include "../../src/include/aegisub/video_provider.h"
+#include "../../src/ui_services.h"
 #include "../../src/video_frame.h"
 #include "../../src/video_session_ops.h"
 
@@ -10,6 +11,16 @@
 #include <libaegisub/make_unique.h>
 
 namespace {
+
+struct capture_notification_sink final : agi::NotificationSink {
+	std::vector<std::pair<std::string, std::string>> errors;
+
+	void ShowInfo(std::string const&, std::string const&) override { }
+	void ShowError(std::string const& title, std::string const& message) override {
+		errors.emplace_back(title, message);
+	}
+	void ShowWarning(std::string const&, std::string const&) override { }
+};
 
 class FakeVideoProvider final : public VideoProvider {
 public:
@@ -93,6 +104,94 @@ TEST(video_session_ops, build_opened_video_summary_skips_subtitle_probe_for_non_
 	EXPECT_FALSE(summary.display_aspect_ratio_override.has_value());
 	EXPECT_FALSE(summary.has_subtitles);
 	EXPECT_EQ(0, subtitle_probe_count);
+}
+
+TEST(video_session_ops, unreadable_video_open_path_reports_error_and_removes_mru) {
+	capture_notification_sink sink;
+	std::vector<std::pair<std::string, agi::fs::path>> removed;
+
+	EXPECT_FALSE(aegisub::video_session_ops::HandleUnreadableVideoOpenPath(
+		agi::fs::PathFromString("missing.mkv"),
+		"not readable",
+		sink,
+		[&](char const* category, agi::fs::path const& path) {
+			removed.emplace_back(category, path);
+		}));
+
+	ASSERT_EQ(1u, sink.errors.size());
+	EXPECT_EQ("Error loading file", sink.errors[0].first);
+	EXPECT_EQ("not readable", sink.errors[0].second);
+	ASSERT_EQ(1u, removed.size());
+	EXPECT_EQ("Video", removed[0].first);
+	EXPECT_EQ(agi::fs::PathFromString("missing.mkv"), removed[0].second);
+}
+
+TEST(video_session_ops, create_video_provider_with_error_handling_returns_provider_without_notifications) {
+	capture_notification_sink sink;
+
+	auto provider = aegisub::video_session_ops::CreateVideoProviderWithErrorHandling(
+		agi::fs::PathFromString("ok.mkv"),
+		[] {
+			return agi::make_unique<AsyncVideoProvider>(
+				agi::make_unique<FakeVideoProvider>(),
+				agi::make_unique<FakeSubtitlesProvider>(),
+				[](std::unique_ptr<wxEvent>) { });
+		},
+		sink);
+
+	ASSERT_TRUE(provider);
+	EXPECT_TRUE(sink.errors.empty());
+}
+
+TEST(video_session_ops, create_video_provider_with_error_handling_swallows_cancel_without_error) {
+	capture_notification_sink sink;
+
+	auto provider = aegisub::video_session_ops::CreateVideoProviderWithErrorHandling(
+		agi::fs::PathFromString("cancel.mkv"),
+		[]() -> std::unique_ptr<AsyncVideoProvider> {
+			throw agi::UserCancelException("cancelled");
+		},
+		sink);
+
+	EXPECT_FALSE(provider);
+	EXPECT_TRUE(sink.errors.empty());
+}
+
+TEST(video_session_ops, create_video_provider_with_error_handling_reports_provider_and_fs_errors) {
+	capture_notification_sink sink;
+	std::vector<std::pair<std::string, agi::fs::path>> removed;
+
+	auto provider_error = aegisub::video_session_ops::CreateVideoProviderWithErrorHandling(
+		agi::fs::PathFromString("broken.mkv"),
+		[]() -> std::unique_ptr<AsyncVideoProvider> {
+			throw VideoOpenError("decoder failed");
+		},
+		sink,
+		[&](char const* category, agi::fs::path const& path) {
+			removed.emplace_back(category, path);
+		});
+
+	EXPECT_FALSE(provider_error);
+	ASSERT_EQ(1u, sink.errors.size());
+	EXPECT_EQ("decoder failed", sink.errors[0].second);
+	EXPECT_TRUE(removed.empty());
+
+	auto fs_error = aegisub::video_session_ops::CreateVideoProviderWithErrorHandling(
+		agi::fs::PathFromString("missing.mkv"),
+		[]() -> std::unique_ptr<AsyncVideoProvider> {
+			throw agi::fs::FileNotFound(agi::fs::PathFromString("missing.mkv"));
+		},
+		sink,
+		[&](char const* category, agi::fs::path const& path) {
+			removed.emplace_back(category, path);
+		});
+
+	EXPECT_FALSE(fs_error);
+	ASSERT_EQ(2u, sink.errors.size());
+	EXPECT_EQ("Error loading file", sink.errors[1].first);
+	ASSERT_EQ(1u, removed.size());
+	EXPECT_EQ("Video", removed[0].first);
+	EXPECT_EQ(agi::fs::PathFromString("missing.mkv"), removed[0].second);
 }
 
 TEST(video_session_ops, plan_post_open_uses_aspect_override_and_audio_capability) {

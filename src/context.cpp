@@ -51,6 +51,7 @@ ContextCoreSession::ContextCoreSession(Context& context)
 , notificationSink(context.notificationSink)
 , interactionSink(context.interactionSink)
 , singleChoiceInteractionSink(context.singleChoiceInteractionSink)
+, videoSourceRequestService(context.videoSourceRequestService)
 , backgroundRunnerFactory(context.backgroundRunnerFactory) {
 }
 
@@ -70,6 +71,7 @@ ConstContextCoreSession::ConstContextCoreSession(Context const& context)
 , notificationSink(context.notificationSink)
 , interactionSink(context.interactionSink)
 , singleChoiceInteractionSink(context.singleChoiceInteractionSink)
+, videoSourceRequestService(context.videoSourceRequestService)
 , backgroundRunnerFactory(context.backgroundRunnerFactory) {
 }
 
@@ -113,6 +115,7 @@ Context::Context()
 , notificationSink(std::make_shared<NullNotificationSink>())
 , interactionSink(std::make_shared<NullInteractionSink>())
 , singleChoiceInteractionSink(std::make_shared<NullSingleChoiceInteractionSink>())
+, videoSourceRequestService(std::make_shared<NullVideoSourceRequestService>())
 , backgroundRunnerFactory(std::make_shared<InlineBackgroundRunnerFactory>())
 , dialog(make_unique<DialogManager>())
 {
@@ -167,6 +170,22 @@ std::optional<int> Context::RequestSingleChoice(SingleChoiceInteractionRequest c
 	if (singleChoiceInteractionSink)
 		return singleChoiceInteractionSink->RequestSingleChoice(request);
 	return std::nullopt;
+}
+
+std::shared_ptr<VideoSourceRequestService> Context::GetVideoSourceRequestService() const {
+	return videoSourceRequestService;
+}
+
+agi::fs::path Context::RequestOpenVideoFile(OpenFileDialogRequest const& request) const {
+	if (videoSourceRequestService)
+		return videoSourceRequestService->RequestOpenVideoFile(request);
+	return {};
+}
+
+std::string Context::RequestDummyVideoPath() const {
+	if (videoSourceRequestService)
+		return videoSourceRequestService->RequestDummyVideoPath();
+	return {};
 }
 
 std::unique_ptr<BackgroundRunner> Context::CreateBackgroundRunner(std::string const& title, std::string const& message) const {

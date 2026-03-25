@@ -22,6 +22,19 @@ TEST(ui_services, null_single_choice_interaction_sink_cancels) {
 	}));
 }
 
+TEST(ui_services, null_video_source_request_service_cancels) {
+	agi::NullVideoSourceRequestService sink;
+
+	EXPECT_TRUE(sink.RequestOpenVideoFile({
+		"Open video file",
+		"Path/Last/Video",
+		"",
+		"",
+		"Video Files|*.mkv"
+	}).empty());
+	EXPECT_TRUE(sink.RequestDummyVideoPath().empty());
+}
+
 TEST(ui_services, inline_background_runner_executes_task) {
 	agi::InlineBackgroundRunnerFactory factory;
 	auto runner = factory.Create("title", "message");

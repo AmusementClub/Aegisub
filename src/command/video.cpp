@@ -46,6 +46,7 @@
 #include "../options.h"
 #include "../project.h"
 #include "../selection_controller.h"
+#include "../ui_services.h"
 #include "../utils.h"
 #include "../video_controller.h"
 #include "../video_display.h"
@@ -68,6 +69,17 @@
 
 namespace {
 	using cmd::Command;
+
+agi::OpenFileDialogRequest make_open_video_file_request() {
+	return {
+		from_wx(_("Open video file")),
+		"Path/Last/Video",
+		"",
+		"",
+		from_wx(_("Video Formats") + wxS(" (*.asf,*.avi,*.avs,*.d2v,*.h264,*.hevc,*.m2ts,*.m4v,*.mkv,*.mov,*.mp4,*.mpeg,*.mpg,*.ogm,*.webm,*.wmv,*.ts,*.y4m,*.yuv)|*.asf;*.avi;*.avs;*.d2v;*.h264;*.hevc;*.m2ts;*.m4v;*.mkv;*.mov;*.mp4;*.mpeg;*.mpg;*.ogm;*.webm;*.wmv;*.ts;*.y4m;*.yuv|")
+		        + _("All Files") + wxS(" (*.*)|*.*"))
+	};
+}
 
 struct validator_video_loaded : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
@@ -618,9 +630,7 @@ struct video_open final : public Command {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		auto str = from_wx(_("Video Formats") + wxS(" (*.asf,*.avi,*.avs,*.d2v,*.h264,*.hevc,*.m2ts,*.m4v,*.mkv,*.mov,*.mp4,*.mpeg,*.mpg,*.ogm,*.webm,*.wmv,*.ts,*.y4m,*.yuv)|*.asf;*.avi;*.avs;*.d2v;*.h264;*.hevc;*.m2ts;*.m4v;*.mkv;*.mov;*.mp4;*.mpeg;*.mpg;*.ogm;*.webm;*.wmv;*.ts;*.y4m;*.yuv|")
-		         + _("All Files") + wxS(" (*.*)|*.*"));
-		auto filename = OpenFileSelector(_("Open video file"), "Path/Last/Video", "", "", str, c->GetUI().parent);
+		auto filename = c->RequestOpenVideoFile(make_open_video_file_request());
 		if (!filename.empty())
 			core.project->LoadVideo(filename);
 	}
@@ -635,7 +645,7 @@ struct video_open_dummy final : public Command {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		std::string fn = CreateDummyVideo(c->GetUI().parent);
+		std::string fn = c->RequestDummyVideoPath();
 		if (!fn.empty())
 			core.project->LoadVideo(fn);
 	}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <libaegisub/background_runner.h>
+#include <libaegisub/fs_fwd.h>
 
 #include <cstdint>
 #include <functional>
@@ -100,6 +101,32 @@ class NullSingleChoiceInteractionSink final : public SingleChoiceInteractionSink
 public:
 	std::optional<int> RequestSingleChoice(SingleChoiceInteractionRequest const&) override {
 		return std::nullopt;
+	}
+};
+
+struct OpenFileDialogRequest {
+	std::string title;
+	std::string option_name;
+	std::string default_filename;
+	std::string default_extension;
+	std::string wildcard;
+};
+
+class VideoSourceRequestService {
+public:
+	virtual ~VideoSourceRequestService() = default;
+	virtual agi::fs::path RequestOpenVideoFile(OpenFileDialogRequest const& request) = 0;
+	virtual std::string RequestDummyVideoPath() = 0;
+};
+
+class NullVideoSourceRequestService final : public VideoSourceRequestService {
+public:
+	agi::fs::path RequestOpenVideoFile(OpenFileDialogRequest const&) override {
+		return {};
+	}
+
+	std::string RequestDummyVideoPath() override {
+		return {};
 	}
 };
 

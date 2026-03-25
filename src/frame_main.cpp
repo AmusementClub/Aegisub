@@ -48,6 +48,7 @@
 #include "dialog_detached_video.h"
 #include "dialog_manager.h"
 #include "dialog_progress.h"
+#include "dialogs.h"
 #include "libresrc/libresrc.h"
 #include "main.h"
 #include "options.h"
@@ -243,6 +244,40 @@ public:
 	}
 };
 
+class FrameMainVideoSourceRequestService final : public agi::VideoSourceRequestService {
+	FrameMain *frame = nullptr;
+	agi::ui::WeakLifetime lifetime;
+
+public:
+	FrameMainVideoSourceRequestService(FrameMain *frame, agi::ui::WeakLifetime lifetime)
+	: frame(frame)
+	, lifetime(std::move(lifetime))
+	{
+	}
+
+	agi::fs::path RequestOpenVideoFile(agi::OpenFileDialogRequest const& request) override {
+		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, request] {
+			if (!lifetime.lock())
+				return agi::fs::path();
+			return OpenFileSelector(
+				to_wx(request.title),
+				request.option_name,
+				request.default_filename,
+				request.default_extension,
+				request.wildcard,
+				frame);
+		});
+	}
+
+	std::string RequestDummyVideoPath() override {
+		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime] {
+			if (!lifetime.lock())
+				return std::string();
+			return CreateDummyVideo(frame);
+		});
+	}
+};
+
 class FrameMainBackgroundRunner final : public agi::BackgroundRunner {
 	FrameMain *frame = nullptr;
 	agi::ui::WeakLifetime lifetime;
@@ -342,6 +377,7 @@ FrameMain::FrameMain()
 	core.notificationSink = std::make_shared<FrameMainNotificationSink>(this, GetAsyncUiLifetime());
 	core.interactionSink = std::make_shared<FrameMainInteractionSink>(this, GetAsyncUiLifetime());
 	core.singleChoiceInteractionSink = std::make_shared<FrameMainSingleChoiceInteractionSink>(this, GetAsyncUiLifetime());
+	core.videoSourceRequestService = std::make_shared<FrameMainVideoSourceRequestService>(this, GetAsyncUiLifetime());
 	core.backgroundRunnerFactory = std::make_shared<FrameMainBackgroundRunnerFactory>(this, GetAsyncUiLifetime());
 
 	StartupLog("Apply saved Maximized state");

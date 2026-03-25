@@ -4,11 +4,13 @@
 #include <libaegisub/vfr.h>
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 class AsyncVideoProvider;
+namespace agi { class NotificationSink; }
 
 namespace aegisub::video_session_ops {
 
@@ -22,10 +24,22 @@ struct OpenedVideoSummary {
 };
 
 using HasSubtitlesProbe = std::function<bool(agi::fs::path const&)>;
+using MruRemoveAction = std::function<void(char const*, agi::fs::path const&)>;
 
 OpenedVideoSummary BuildOpenedVideoSummary(AsyncVideoProvider const& provider,
                                            agi::fs::path const& path,
                                            HasSubtitlesProbe const& has_subtitles_probe = {});
+
+bool HandleUnreadableVideoOpenPath(agi::fs::path const& path,
+                                   std::string const& access_error,
+                                   agi::NotificationSink& notification_sink,
+                                   MruRemoveAction const& remove_mru = {});
+
+using CreateVideoProviderAction = std::function<std::unique_ptr<AsyncVideoProvider>()>;
+std::unique_ptr<AsyncVideoProvider> CreateVideoProviderWithErrorHandling(agi::fs::path const& path,
+                                                                         CreateVideoProviderAction const& create_provider,
+                                                                         agi::NotificationSink& notification_sink,
+                                                                         MruRemoveAction const& remove_mru = {});
 
 struct PostOpenPlan {
 	std::optional<double> display_aspect_ratio_override;

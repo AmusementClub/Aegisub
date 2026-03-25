@@ -415,7 +415,7 @@ void XAudio2Thread::Run() {
 			pSourceVoice->SetVolume(volume);
 			break;
 
-		case WAIT_OBJECT_0 + 4:
+		case WAIT_OBJECT_0 + 4: {
 			// Buffer end
 		do_fill_buffer:
 			// Time to fill more into buffer
@@ -471,6 +471,7 @@ void XAudio2Thread::Run() {
 					emit_audio_output("fill", static_cast<int>(state_after.BuffersQueued), submitted_buffers, submitted_frames, submitted_bytes, fill_duration_ms, low_water, starved, recovered, end_of_stream);
 			}
 			break;
+		}
 
 		case WAIT_OBJECT_0 + 5:
 			// Perform suicide

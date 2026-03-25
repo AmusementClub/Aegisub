@@ -45,10 +45,30 @@
 #endif
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 
 namespace {
 class XAudio2Thread;
+
+constexpr unsigned kBufferContextSlotBits = 8;
+constexpr uintptr_t kBufferContextSlotMask = (static_cast<uintptr_t>(1) << kBufferContextSlotBits) - 1;
+static_assert(XAUDIO2_MAX_QUEUED_BUFFERS <= (1u << kBufferContextSlotBits), "XAudio2 queue slot mask is too small");
+
+uintptr_t MakeBufferContext(uint32_t generation, size_t slot) {
+	return (static_cast<uintptr_t>(generation) << kBufferContextSlotBits) | static_cast<uintptr_t>(slot);
+}
+
+size_t BufferSlotFromContext(void* context) {
+	auto const token = reinterpret_cast<uintptr_t>(context);
+	return static_cast<size_t>(token & kBufferContextSlotMask);
+}
+
+uint32_t BufferGenerationFromContext(void* context) {
+	auto const token = reinterpret_cast<uintptr_t>(context);
+	return static_cast<uint32_t>(token >> kBufferContextSlotBits);
+}
 
 /// @class XAudio2Player
 /// @brief XAudio2-based audio player
@@ -213,8 +233,9 @@ class XAudio2Thread :public IXAudio2VoiceCallback {
 	/// Audio provider to take sample data from
 	agi::AudioProvider* provider;
 
-	/// Buffer occupied indicator
-	std::vector<bool> buffer_occupied;
+	/// Generation number of the queued buffer occupying each slot. Zero means free.
+	std::vector<std::atomic<uint32_t>> buffer_generation;
+	std::atomic<uint32_t> queue_generation{ 1 };
 
 public:
 	/// @brief Constructor, creates and starts playback thread
@@ -231,9 +252,14 @@ public:
 	void STDMETHODCALLTYPE OnStreamEnd() override {}
 	void STDMETHODCALLTYPE OnBufferStart(void* pBufferContext) override {}
 	void STDMETHODCALLTYPE OnBufferEnd(void* pBufferContext) override {
-		intptr_t i = reinterpret_cast<intptr_t>(pBufferContext);
-		buffer_occupied[i] = false;
-		SetEvent(event_buffer_end);
+		auto const slot = BufferSlotFromContext(pBufferContext);
+		auto const generation = BufferGenerationFromContext(pBufferContext);
+		if (slot >= buffer_generation.size())
+			return;
+
+		uint32_t expected = generation;
+		if (buffer_generation[slot].compare_exchange_strong(expected, 0, std::memory_order_acq_rel))
+			SetEvent(event_buffer_end);
 	}
 	void STDMETHODCALLTYPE OnLoopEnd(void* pBufferContext) override {}
 	void STDMETHODCALLTYPE OnVoiceError(void* pBufferContext, HRESULT Error) override {}
@@ -380,8 +406,20 @@ void XAudio2Thread::Run() {
 	std::vector<std::vector<BYTE> > buff(buffer_length);
 	for (auto& i : buff)
 		i.resize(wanted_latency_bytes);
+	auto count_queued_buffers = [&] {
+		int queued = 0;
+		for (auto const& generation : buffer_generation) {
+			if (generation.load(std::memory_order_acquire) != 0)
+				++queued;
+		}
+		return queued;
+	};
 	auto reset_queued_buffers = [&] {
-		std::fill(buffer_occupied.begin(), buffer_occupied.end(), false);
+		auto next_generation = queue_generation.fetch_add(1, std::memory_order_acq_rel) + 1;
+		if (!next_generation)
+			queue_generation.store(1, std::memory_order_release);
+		for (auto& generation : buffer_generation)
+			generation.store(0, std::memory_order_release);
 		ResetEvent(event_buffer_end);
 	};
 
@@ -429,53 +467,60 @@ void XAudio2Thread::Run() {
 			if (!playback_should_be_running)
 				break;
 
-			XAUDIO2_VOICE_STATE state_before = { };
-			pSourceVoice->GetState(&state_before);
+			int const queued_buffers_before_fill = count_queued_buffers();
 			bool const starved = wait_result == WAIT_OBJECT_0 + 4
-				&& state_before.BuffersQueued == 0
+				&& queued_buffers_before_fill == 0
 				&& next_input_frame < end_frame;
 			auto const fill_started = trace_audio_output ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 			int submitted_buffers = 0;
 			int64_t submitted_frames = 0;
 			int64_t submitted_bytes = 0;
+			uint32_t generation = queue_generation.load(std::memory_order_acquire);
+			if (!generation) {
+				generation = 1;
+				queue_generation.store(generation, std::memory_order_release);
+			}
 			for (int i = 0; i < buffer_length; ++i) {
-				if (!buffer_occupied[i]) {
-					int fill_len = std::min<int>(end_frame - next_input_frame, wanted_frames);
-					if (fill_len <= 0)
-						break;
-					buffer_occupied[i] = true;
-					if (original)
-						provider->GetAudio(buff[i].data(), next_input_frame, fill_len);
-					else
-						provider->GetInt16MonoAudio(reinterpret_cast<int16_t*>(buff[i].data()), next_input_frame, fill_len);
-					next_input_frame += fill_len;
-					++submitted_buffers;
-					submitted_frames += fill_len;
-					submitted_bytes += fill_len * wfx.nBlockAlign;
-					XAUDIO2_BUFFER xbf;
-					xbf.Flags = fill_len + next_input_frame == end_frame ? XAUDIO2_END_OF_STREAM : 0;
-					xbf.AudioBytes = fill_len * wfx.nBlockAlign;
-					xbf.pAudioData = buff[i].data();
-					xbf.PlayBegin = 0;
-					xbf.PlayLength = 0;
-					xbf.LoopBegin = 0;
-					xbf.LoopLength = 0;
-					xbf.LoopCount = 0;
-					xbf.pContext = reinterpret_cast<void*>(static_cast<intptr_t>(i));
-					if (FAILED(hr = pSourceVoice->SubmitSourceBuffer(&xbf))) {
-						REPORT_ERROR("Failed initializing Submit Buffer")
-					}
+				uint32_t expected = 0;
+				if (!buffer_generation[i].compare_exchange_strong(expected, generation, std::memory_order_acq_rel))
+					continue;
+
+				int fill_len = std::min<int>(end_frame - next_input_frame, wanted_frames);
+				if (fill_len <= 0) {
+					buffer_generation[i].store(0, std::memory_order_release);
+					break;
+				}
+				if (original)
+					provider->GetAudio(buff[i].data(), next_input_frame, fill_len);
+				else
+					provider->GetInt16MonoAudio(reinterpret_cast<int16_t*>(buff[i].data()), next_input_frame, fill_len);
+				next_input_frame += fill_len;
+				++submitted_buffers;
+				submitted_frames += fill_len;
+				submitted_bytes += fill_len * wfx.nBlockAlign;
+				XAUDIO2_BUFFER xbf;
+				xbf.Flags = fill_len + next_input_frame == end_frame ? XAUDIO2_END_OF_STREAM : 0;
+				xbf.AudioBytes = fill_len * wfx.nBlockAlign;
+				xbf.pAudioData = buff[i].data();
+				xbf.PlayBegin = 0;
+				xbf.PlayLength = 0;
+				xbf.LoopBegin = 0;
+				xbf.LoopLength = 0;
+				xbf.LoopCount = 0;
+				xbf.pContext = reinterpret_cast<void*>(MakeBufferContext(generation, static_cast<size_t>(i)));
+				if (FAILED(hr = pSourceVoice->SubmitSourceBuffer(&xbf))) {
+					buffer_generation[i].store(0, std::memory_order_release);
+					REPORT_ERROR("Failed initializing Submit Buffer")
 				}
 			}
 			if (trace_audio_output) {
-				XAUDIO2_VOICE_STATE state_after = { };
-				pSourceVoice->GetState(&state_after);
+				int const queued_buffers_after_fill = count_queued_buffers();
 				double const fill_duration_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - fill_started).count()) / 1000.0;
-				bool const end_of_stream = next_input_frame >= end_frame && state_after.BuffersQueued == 0;
-				bool const recovered = starved && state_after.BuffersQueued > 0;
-				bool const low_water = next_input_frame < end_frame && state_after.BuffersQueued <= 1;
+				bool const end_of_stream = next_input_frame >= end_frame && queued_buffers_after_fill == 0;
+				bool const recovered = starved && queued_buffers_after_fill > 0;
+				bool const low_water = next_input_frame < end_frame && queued_buffers_after_fill <= 1;
 				if (submitted_buffers > 0 || starved || low_water || end_of_stream)
-					emit_audio_output("fill", static_cast<int>(state_after.BuffersQueued), submitted_buffers, submitted_frames, submitted_bytes, fill_duration_ms, low_water, starved, recovered, end_of_stream);
+					emit_audio_output("fill", queued_buffers_after_fill, submitted_buffers, submitted_frames, submitted_bytes, fill_duration_ms, low_water, starved, recovered, end_of_stream);
 			}
 			break;
 		}
@@ -537,8 +582,11 @@ XAudio2Thread::XAudio2Thread(agi::AudioProvider* provider, int WantedLatency, in
 	, wanted_latency(WantedLatency)
 	, buffer_length(BufferLength < XAUDIO2_MAX_QUEUED_BUFFERS ? BufferLength : XAUDIO2_MAX_QUEUED_BUFFERS)
 	, provider(provider)
-	, buffer_occupied(BufferLength)
+	, buffer_generation(BufferLength)
 {
+	for (auto& generation : buffer_generation)
+		generation.store(0, std::memory_order_relaxed);
+
 	if (!(thread_handle = (HANDLE)_beginthreadex(0, 0, ThreadProc, this, 0, 0))) {
 		throw AudioPlayerOpenError("Failed creating playback thread in XAudio2Player. This is bad.");
 	}

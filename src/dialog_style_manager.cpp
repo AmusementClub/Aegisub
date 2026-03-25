@@ -41,6 +41,7 @@
 #include "include/aegisub/context.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "persist_location.h"
 #include "selection_controller.h"
 
@@ -55,6 +56,7 @@
 #include <libaegisub/vfr.h>
 
 #include <algorithm>
+#include <chrono>
 #include <functional>
 #include <future>
 #include <memory>
@@ -278,7 +280,16 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 }))
 {
 	using std::bind;
+	auto duration_ms = [](auto const& started) {
+		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+	};
+	auto observe_phase = [&](char const* phase, auto&& callback) {
+		auto const started = std::chrono::steady_clock::now();
+		callback();
+		perf_trace::ObserveWindowOpenPhase("style_manager", phase, duration_ms(started));
+	};
 	SetIcon(GETICON(style_toolbutton_16));
+	auto const create_controls_started = std::chrono::steady_clock::now();
 
 	// Catalog
 	wxSizer *CatalogBox = new wxStaticBoxSizer(wxHORIZONTAL,this,_("Catalog of available storages"));
@@ -334,49 +345,61 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 	MainSizer->Add(StylesSizer,1,wxEXPAND | wxALL,5);
 	MainSizer->Add(buttonSizer,0,wxBOTTOM | wxEXPAND,5);
 
-	SetSizerAndFit(MainSizer);
+	perf_trace::ObserveWindowOpenPhase("style_manager", "create_controls", duration_ms(create_controls_started));
+
+	observe_phase("dialog_fit", [&] {
+		SetSizerAndFit(MainSizer);
+	});
 
 	// Position window
-	persist = agi::make_unique<PersistLocation>(this, "Tool/Style Manager");
+	observe_phase("persist_location", [&] {
+		persist = agi::make_unique<PersistLocation>(this, "Tool/Style Manager");
+	});
 
 	// Populate lists
-	LoadCatalog();
-	LoadCurrentStyles(AssFile::COMMIT_STYLES | AssFile::COMMIT_DIAG_META);
+	observe_phase("load_catalog", [&] {
+		LoadCatalog();
+	});
+	observe_phase("load_current_styles", [&] {
+		LoadCurrentStyles(AssFile::COMMIT_STYLES | AssFile::COMMIT_DIAG_META);
+	});
 
 	//Set key handlers for lists
-	CatalogList->Bind(wxEVT_KEY_DOWN, &DialogStyleManager::OnKeyDown, this);
-	StorageList->Bind(wxEVT_KEY_DOWN, &DialogStyleManager::OnKeyDown, this);
-	CurrentList->Bind(wxEVT_KEY_DOWN, &DialogStyleManager::OnKeyDown, this);
+	observe_phase("bind_events", [&] {
+		CatalogList->Bind(wxEVT_KEY_DOWN, &DialogStyleManager::OnKeyDown, this);
+		StorageList->Bind(wxEVT_KEY_DOWN, &DialogStyleManager::OnKeyDown, this);
+		CurrentList->Bind(wxEVT_KEY_DOWN, &DialogStyleManager::OnKeyDown, this);
 
-	StorageMoveUp->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(true, 0); });
-	StorageMoveTop->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(true, 1); });
-	StorageMoveDown->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(true, 2); });
-	StorageMoveBottom->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(true, 3); });
-	StorageSort->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(true, 4); });
+		StorageMoveUp->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(true, 0); });
+		StorageMoveTop->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(true, 1); });
+		StorageMoveDown->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(true, 2); });
+		StorageMoveBottom->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(true, 3); });
+		StorageSort->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(true, 4); });
 
-	CurrentMoveUp->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(false, 0); });
-	CurrentMoveTop->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(false, 1); });
-	CurrentMoveDown->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(false, 2); });
-	CurrentMoveBottom->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(false, 3); });
-	CurrentSort->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(false, 4); });
+		CurrentMoveUp->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(false, 0); });
+		CurrentMoveTop->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(false, 1); });
+		CurrentMoveDown->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(false, 2); });
+		CurrentMoveBottom->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(false, 3); });
+		CurrentSort->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { MoveStyles(false, 4); });
 
-	CatalogNew->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCatalogNew(); });
-	CatalogDelete->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCatalogDelete(); });
+		CatalogNew->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCatalogNew(); });
+		CatalogDelete->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCatalogDelete(); });
 
-	StorageNew->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnStorageNew(); });
-	StorageEdit->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnStorageEdit(); });
-	StorageCopy->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnStorageCopy(); });
-	StorageDelete->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnStorageDelete(); });
+		StorageNew->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnStorageNew(); });
+		StorageEdit->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnStorageEdit(); });
+		StorageCopy->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnStorageCopy(); });
+		StorageDelete->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnStorageDelete(); });
 
-	CurrentNew->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCurrentNew(); });
-	CurrentEdit->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCurrentEdit(); });
-	CurrentCopy->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCurrentCopy(); });
-	CurrentDelete->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCurrentDelete(); });
+		CurrentNew->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCurrentNew(); });
+		CurrentEdit->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCurrentEdit(); });
+		CurrentCopy->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCurrentCopy(); });
+		CurrentDelete->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCurrentDelete(); });
 
-	CurrentImport->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCurrentImport(); });
+		CurrentImport->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCurrentImport(); });
 
-	MoveToLocal->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCopyToCurrent(); });
-	MoveToStorage->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCopyToStorage(); });
+		MoveToLocal->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCopyToCurrent(); });
+		MoveToStorage->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCopyToStorage(); });
+	});
 
 	CatalogList->Bind(wxEVT_COMBOBOX, [=](wxCommandEvent&) { OnChangeCatalog(); });
 
@@ -939,5 +962,16 @@ void DialogStyleManager::OnKeyDown(wxKeyEvent &event) {
 }
 
 void ShowStyleManagerDialog(agi::Context *c) {
-	c->dialog->Show<DialogStyleManager>(c);
+	auto const open_started = std::chrono::steady_clock::now();
+	perf_trace::TraceWindowOpenBegin("style_manager");
+	try {
+		c->dialog->Show<DialogStyleManager>(c);
+		auto const duration_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - open_started).count();
+		perf_trace::TraceWindowOpenEnd("style_manager", duration_ms, true);
+	}
+	catch (...) {
+		auto const duration_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - open_started).count();
+		perf_trace::TraceWindowOpenEnd("style_manager", duration_ms, false);
+		throw;
+	}
 }

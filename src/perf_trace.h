@@ -14,6 +14,7 @@ enum class Category {
 	Video,
 	Audio,
 	Memory,
+	UiWindow,
 	LuaDialog,
 	Log,
 };
@@ -56,6 +57,10 @@ void ObserveFrameResult(int frame, double time, bool delivered, bool immediate);
 void ObserveAudioUiTimerPosition(int ms);
 void ObserveAudioOutputSnapshot(AudioOutputSnapshot const& snapshot);
 void ObserveVideoPlaybackTick(int frame);
+
+void TraceWindowOpenBegin(char const* window_kind);
+void ObserveWindowOpenPhase(char const* window_kind, char const* phase, double duration_ms);
+void TraceWindowOpenEnd(char const* window_kind, double duration_ms, bool succeeded);
 
 void TraceLuaDialogOpenBegin();
 void ObserveLuaDialogPhase(char const* phase, int control_count, int button_count, double duration_ms);

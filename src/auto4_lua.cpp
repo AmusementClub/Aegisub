@@ -107,8 +107,13 @@ namespace {
 	int get_file_name(lua_State *L)
 	{
 		const agi::Context *c = get_context(L);
-		if (c && !c->subsController->Filename().empty())
-			push_value(L, c->subsController->Filename().filename());
+		if (!c) {
+			lua_pushnil(L);
+			return 1;
+		}
+		auto core = c->GetCore();
+		if (!core.subsController->Filename().empty())
+			push_value(L, core.subsController->Filename().filename());
 		else
 			lua_pushnil(L);
 		return 1;
@@ -160,8 +165,13 @@ namespace {
 		const agi::Context *c = get_context(L);
 		int ms = lua_tointeger(L, -1);
 		lua_pop(L, 1);
-		if (c && c->project->Timecodes().IsLoaded())
-			push_value(L, c->videoController->FrameAtTime(ms, agi::vfr::START));
+		if (!c) {
+			lua_pushnil(L);
+			return 1;
+		}
+		auto core = c->GetCore();
+		if (core.project->Timecodes().IsLoaded())
+			push_value(L, core.videoController->FrameAtTime(ms, agi::vfr::START));
 		else
 			lua_pushnil(L);
 
@@ -173,8 +183,13 @@ namespace {
 		const agi::Context *c = get_context(L);
 		int frame = lua_tointeger(L, -1);
 		lua_pop(L, 1);
-		if (c && c->project->Timecodes().IsLoaded())
-			push_value(L, c->videoController->TimeAtFrame(frame, agi::vfr::START));
+		if (!c) {
+			lua_pushnil(L);
+			return 1;
+		}
+		auto core = c->GetCore();
+		if (core.project->Timecodes().IsLoaded())
+			push_value(L, core.videoController->TimeAtFrame(frame, agi::vfr::START));
 		else
 			lua_pushnil(L);
 		return 1;
@@ -183,24 +198,26 @@ namespace {
 	int video_size(lua_State *L)
 	{
 		const agi::Context *c = get_context(L);
-		if (c && c->project->VideoProvider()) {
-			auto provider = c->project->VideoProvider();
-			push_value(L, provider->GetWidth());
-			push_value(L, provider->GetHeight());
-			push_value(L, c->videoController->GetAspectRatioValue());
-			push_value(L, (int)c->videoController->GetAspectRatioType());
-			return 4;
+		if (c) {
+			auto core = c->GetCore();
+			if (auto provider = core.project->VideoProvider()) {
+				push_value(L, provider->GetWidth());
+				push_value(L, provider->GetHeight());
+				push_value(L, core.videoController->GetAspectRatioValue());
+				push_value(L, (int)core.videoController->GetAspectRatioType());
+				return 4;
+			}
 		}
-		else {
-			lua_pushnil(L);
-			return 1;
-		}
+		lua_pushnil(L);
+		return 1;
 	}
 
 	int get_keyframes(lua_State *L)
 	{
-		if (const agi::Context *c = get_context(L))
-			push_value(L, c->project->Keyframes());
+		if (const agi::Context *c = get_context(L)) {
+			auto core = c->GetCore();
+			push_value(L, core.project->Keyframes());
+		}
 		else
 			lua_pushnil(L);
 		return 1;
@@ -210,8 +227,10 @@ namespace {
 	{
 		std::string path = check_string(L, 1);
 		lua_pop(L, 1);
-		if (const agi::Context *c = get_context(L))
-			push_value(L, c->path->Decode(path));
+		if (const agi::Context *c = get_context(L)) {
+			auto core = c->GetCore();
+			push_value(L, core.path->Decode(path));
+		}
 		else
 			push_value(L, config::path->Decode(path));
 		return 1;
@@ -260,11 +279,16 @@ namespace {
 	int lua_get_audio_selection(lua_State *L)
 	{
 		const agi::Context *c = get_context(L);
-		if (!c || !c->audioController || !c->audioController->GetTimingController()) {
+		if (!c) {
 			lua_pushnil(L);
 			return 1;
 		}
-		const TimeRange range = c->audioController->GetTimingController()->GetActiveLineRange();
+		auto core = c->GetCore();
+		if (!core.audioController || !core.audioController->GetTimingController()) {
+			lua_pushnil(L);
+			return 1;
+		}
+		const TimeRange range = core.audioController->GetTimingController()->GetActiveLineRange();
 		push_value(L, range.begin());
 		push_value(L, range.end());
 		return 2;
@@ -289,8 +313,9 @@ namespace {
 		if (!c)
 			lua_pushnil(L);
 		else {
+			auto core = c->GetCore();
 			lua_createtable(L, 0, 14);
-#define PUSH_FIELD(name) set_field(L, #name, c->ass->Properties.name)
+#define PUSH_FIELD(name) set_field(L, #name, core.ass->Properties.name)
 			PUSH_FIELD(automation_scripts);
 			PUSH_FIELD(export_filters);
 			PUSH_FIELD(export_encoding);
@@ -302,10 +327,10 @@ namespace {
 			PUSH_FIELD(ar_mode);
 			PUSH_FIELD(video_position);
 #undef PUSH_FIELD
-			set_field(L, "audio_file", c->path->MakeAbsolute(c->ass->Properties.audio_file, "?script"));
-			set_field(L, "video_file", c->path->MakeAbsolute(c->ass->Properties.video_file, "?script"));
-			set_field(L, "timecodes_file", c->path->MakeAbsolute(c->ass->Properties.timecodes_file, "?script"));
-			set_field(L, "keyframes_file", c->path->MakeAbsolute(c->ass->Properties.keyframes_file, "?script"));
+			set_field(L, "audio_file", core.path->MakeAbsolute(core.ass->Properties.audio_file, "?script"));
+			set_field(L, "video_file", core.path->MakeAbsolute(core.ass->Properties.video_file, "?script"));
+			set_field(L, "timecodes_file", core.path->MakeAbsolute(core.ass->Properties.timecodes_file, "?script"));
+			set_field(L, "keyframes_file", core.path->MakeAbsolute(core.ass->Properties.keyframes_file, "?script"));
 		}
 		return 1;
 	}
@@ -733,8 +758,9 @@ namespace {
 
 	static std::vector<int> selected_rows(const agi::Context *c)
 	{
-		auto const& sel = c->selectionController->GetSelectedSet();
-		int offset = c->ass->Info.size() + c->ass->Styles.size();
+		auto core = c->GetCore();
+		auto const& sel = core.selectionController->GetSelectedSet();
+		int offset = core.ass->Info.size() + core.ass->Styles.size();
 		std::vector<int> rows;
 		rows.reserve(sel.size());
 		for (auto line : sel)
@@ -746,6 +772,7 @@ namespace {
 	bool LuaCommand::Validate(const agi::Context *c)
 	{
 		if (!(cmd_type & cmd::COMMAND_VALIDATE)) return true;
+		auto core = c->GetCore();
 
 		set_context(L, c);
 
@@ -753,11 +780,11 @@ namespace {
 		lua_pushcclosure(L, add_stack_trace, 0);
 
 		GetFeatureFunction("validate");
-		auto subsobj = new LuaAssFile(L, c->ass.get());
+		auto subsobj = new LuaAssFile(L, core.ass.get());
 
 		push_value(L, selected_rows(c));
-		if (auto active_line = c->selectionController->GetActiveLine())
-			push_value(L, active_line->Row + c->ass->Info.size() + c->ass->Styles.size() + 1);
+		if (auto active_line = core.selectionController->GetActiveLine())
+			push_value(L, active_line->Row + core.ass->Info.size() + core.ass->Styles.size() + 1);
 		else
 			lua_pushnil(L);
 
@@ -786,16 +813,17 @@ namespace {
 	void LuaCommand::operator()(agi::Context *c)
 	{
 		LuaStackcheck stackcheck(L);
+		auto core = c->GetCore();
 		set_context(L, c);
 		stackcheck.check_stack(0);
 
 		GetFeatureFunction("run");
-		auto subsobj = new LuaAssFile(L, c->ass.get(), true, true);
+		auto subsobj = new LuaAssFile(L, core.ass.get(), true, true);
 
-		int original_offset = c->ass->Info.size() + c->ass->Styles.size() + 1;
+		int original_offset = core.ass->Info.size() + core.ass->Styles.size() + 1;
 		auto original_sel = selected_rows(c);
 		int original_active = 0;
-		if (auto active_line = c->selectionController->GetActiveLine())
+		if (auto active_line = core.selectionController->GetActiveLine())
 			original_active = active_line->Row + original_offset;
 
 		push_value(L, original_sel);
@@ -854,12 +882,12 @@ namespace {
 					active_line = diag;
 			});
 
-			AssDialogue *new_active = c->selectionController->GetActiveLine();
+			AssDialogue *new_active = core.selectionController->GetActiveLine();
 			if (active_line && (active_idx > 0 || !sel.count(new_active)))
 				new_active = active_line;
 			if (sel.empty())
 				sel.insert(new_active);
-			c->selectionController->SetSelectionAndActive(std::move(sel), new_active);
+			core.selectionController->SetSelectionAndActive(std::move(sel), new_active);
 		}
 		else {
 			lua_pop(L, 1);
@@ -868,23 +896,23 @@ namespace {
 			AssDialogue *new_active = nullptr;
 
 			int prev = original_offset;
-			auto it = c->ass->Events.begin();
+			auto it = core.ass->Events.begin();
 			for (int row : original_sel) {
-				while (row > prev && it != c->ass->Events.end()) {
+				while (row > prev && it != core.ass->Events.end()) {
 					++prev;
 					++it;
 				}
-				if (it == c->ass->Events.end()) break;
+				if (it == core.ass->Events.end()) break;
 				new_sel.insert(&*it);
 				if (row == original_active)
 					new_active = &*it;
 			}
 
-			if (new_sel.empty() && !c->ass->Events.empty())
-				new_sel.insert(&c->ass->Events.front());
+			if (new_sel.empty() && !core.ass->Events.empty())
+				new_sel.insert(&core.ass->Events.front());
 			if (!new_sel.count(new_active))
 				new_active = *new_sel.begin();
-			c->selectionController->SetSelectionAndActive(std::move(new_sel), new_active);
+			core.selectionController->SetSelectionAndActive(std::move(new_sel), new_active);
 		}
 
 		stackcheck.check_stack(0);
@@ -893,6 +921,7 @@ namespace {
 	bool LuaCommand::IsActive(const agi::Context *c)
 	{
 		if (!(cmd_type & cmd::COMMAND_TOGGLE)) return false;
+		auto core = c->GetCore();
 
 		LuaStackcheck stackcheck(L);
 
@@ -900,10 +929,10 @@ namespace {
 		stackcheck.check_stack(0);
 
 		GetFeatureFunction("isactive");
-		auto subsobj = new LuaAssFile(L, c->ass.get());
+		auto subsobj = new LuaAssFile(L, core.ass.get());
 		push_value(L, selected_rows(c));
-		if (auto active_line = c->selectionController->GetActiveLine())
-			push_value(L, active_line->Row + c->ass->Info.size() + c->ass->Styles.size() + 1);
+		if (auto active_line = core.selectionController->GetActiveLine())
+			push_value(L, active_line->Row + core.ass->Info.size() + core.ass->Styles.size() + 1);
 
 		int err = lua_pcall(L, 3, 1, 0);
 		subsobj->ProcessingComplete();
@@ -1002,13 +1031,14 @@ namespace {
 	{
 		if (!has_config)
 			return nullptr;
+		auto core = c->GetCore();
 
 		set_context(L, c);
 
 		GetFeatureFunction("config");
 
 		// prepare function call
-		auto subsobj = new LuaAssFile(L, c->ass.get());
+		auto subsobj = new LuaAssFile(L, core.ass.get());
 		// stored options
 		lua_newtable(L); // TODO, nothing for now
 

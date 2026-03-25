@@ -237,10 +237,11 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 }
 
 DialogFontsCollector::DialogFontsCollector(agi::Context *c)
-: wxDialog(c->parent, -1, _("Fonts Collector"))
-, subs(c->ass.get())
-, path(*c->path)
+: wxDialog(c->GetUI().parent, -1, _("Fonts Collector"))
+, subs(c->GetCore().ass.get())
+, path(*c->GetCore().path)
 {
+	auto core = c->GetCore();
 	SetIcon(GETICON(font_collector_button_16));
 
 	wxString modes[] = {
@@ -257,13 +258,13 @@ DialogFontsCollector::DialogFontsCollector(agi::Context *c)
 	collection_mode = new wxRadioBox(this, -1, _("Action"), wxDefaultPosition, wxDefaultSize, countof(modes), modes, 1);
 	collection_mode->SetSelection(static_cast<int>(mode));
 
-	if (c->path->Decode("?script") == "?script")
+	if (core.path->Decode("?script") == "?script")
 		collection_mode->Enable(2, false);
 
 	wxStaticBoxSizer *destination_box = new wxStaticBoxSizer(wxVERTICAL, this, _("Destination"));
 
 	dest_label = new wxStaticText(this, -1, wxS(" "));
-	dest_ctrl = new wxTextCtrl(this, -1, c->path->Decode(OPT_GET("Path/Fonts Collector Destination")->GetString()).wstring());
+	dest_ctrl = new wxTextCtrl(this, -1, core.path->Decode(OPT_GET("Path/Fonts Collector Destination")->GetString()).wstring());
 	dest_browse_button = new wxButton(this, -1, _("&Browse..."));
 
 	wxSizer *dest_browse_sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -459,5 +460,5 @@ void DialogFontsCollector::OnIdle(wxIdleEvent&) {
 }
 
 void ShowFontsCollectorDialog(agi::Context *c) {
-	c->dialog->Show<DialogFontsCollector>(c);
+	c->GetUI().dialog->Show<DialogFontsCollector>(c);
 }

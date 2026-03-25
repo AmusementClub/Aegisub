@@ -102,9 +102,9 @@ public:
 };
 
 DialogAutomation::DialogAutomation(agi::Context *c)
-: wxDialog(c->parent, -1, _("Automation Manager"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
+: wxDialog(c->GetUI().parent, -1, _("Automation Manager"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 , context(c)
-, local_manager(c->local_scripts.get())
+, local_manager(c->GetCore().local_scripts.get())
 , local_scripts_changed(local_manager->AddScriptChangeListener(&DialogAutomation::RebuildList, this))
 , global_manager(config::global_scripts)
 , global_scripts_changed(global_manager->AddScriptChangeListener(&DialogAutomation::RebuildList, this))
@@ -306,5 +306,5 @@ void DialogAutomation::OnReloadAutoload(wxCommandEvent &)
 }
 
 void ShowAutomationDialog(agi::Context *c) {
-	c->dialog->Show<DialogAutomation>(c);
+	c->GetUI().dialog->Show<DialogAutomation>(c);
 }

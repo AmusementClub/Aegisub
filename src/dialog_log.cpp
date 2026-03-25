@@ -180,7 +180,7 @@ public:
 };
 
 LogWindow::LogWindow(agi::Context *c)
-: wxDialog(c->parent, -1, _("Log window"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
+: wxDialog(c->GetUI().parent, -1, _("Log window"), wxDefaultPosition, wxDefaultSize, wxCAPTION | wxCLOSE_BOX | wxRESIZE_BORDER)
 {
 	const wxString level_labels[] = {
 		_("All"),
@@ -445,5 +445,5 @@ void LogWindow::UpdateStatus() {
 }
 
 void ShowLogWindow(agi::Context *c) {
-	c->dialog->Show<LogWindow>(c);
+	c->GetUI().dialog->Show<LogWindow>(c);
 }

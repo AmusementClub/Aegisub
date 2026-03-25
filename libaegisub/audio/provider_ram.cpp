@@ -63,6 +63,9 @@ public:
 	}
 
 	~RAMAudioProvider() = default;
+	AudioProviderMemoryStats GetMemoryStats() const override {
+		return BuildMemoryStats("RAM", "memory", blockcache.size() * CacheBlockSize);
+	}
 };
 
 void RAMAudioProvider::FillBuffer(void *buf, int64_t start, int64_t count) const {

@@ -43,6 +43,11 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	memory_snapshot.display.displayed_packet_ref_bytes = 1024;
 	memory_snapshot.display.primary_renderer_texture_bytes = 8192;
 	memory_snapshot.display.primary_renderer_name = "libplacebo";
+	memory_snapshot.audio.provider_name = "RAM";
+	memory_snapshot.audio.storage_kind = "memory";
+	memory_snapshot.audio.storage_bytes = 16384;
+	memory_snapshot.audio.logical_bytes = 12288;
+	memory_snapshot.audio.decoded_bytes = 8192;
 	perf_trace::ObserveVideoMemorySnapshot("unit_test", memory_snapshot, true);
 	perf_trace::TraceLuaDialogOpenBegin();
 	perf_trace::TraceLuaDialogOpenEnd(3, 2, 12.5, true);
@@ -72,6 +77,8 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, summary.find("lua_dialog.success=1"));
 	EXPECT_NE(std::string::npos, summary.find("video_memory.samples=1"));
 	EXPECT_NE(std::string::npos, summary.find("provider_cache_native.max_bytes=4096"));
+	EXPECT_NE(std::string::npos, summary.find("audio_storage.max_bytes=16384"));
+	EXPECT_NE(std::string::npos, summary.find("audio_provider=RAM"));
 	EXPECT_NE(std::string::npos, summary.find("op.seek=1"));
 	EXPECT_NE(std::string::npos, summary.find("log.warning=1"));
 

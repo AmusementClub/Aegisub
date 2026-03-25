@@ -262,6 +262,11 @@ struct Summary {
 	size_t display_displayed_packet_ref_max_bytes = 0;
 	size_t renderer_primary_texture_max_bytes = 0;
 	size_t renderer_secondary_texture_max_bytes = 0;
+	size_t audio_storage_max_bytes = 0;
+	size_t audio_logical_max_bytes = 0;
+	size_t audio_decoded_max_bytes = 0;
+	std::string audio_provider_name;
+	std::string audio_storage_kind;
 	IntervalSummary audio_playback_interval;
 	IntervalSummary video_playback_tick_interval;
 	DurationSummary lua_dialog_duration;
@@ -455,6 +460,11 @@ void WriteSummaryLocked(Session const& session) {
 	write_int("display_displayed_packet_ref.max_bytes", session.summary.display_displayed_packet_ref_max_bytes);
 	write_int("renderer_primary_texture.max_bytes", session.summary.renderer_primary_texture_max_bytes);
 	write_int("renderer_secondary_texture.max_bytes", session.summary.renderer_secondary_texture_max_bytes);
+	write_int("audio_storage.max_bytes", session.summary.audio_storage_max_bytes);
+	write_int("audio_logical.max_bytes", session.summary.audio_logical_max_bytes);
+	write_int("audio_decoded.max_bytes", session.summary.audio_decoded_max_bytes);
+	out << "audio_provider=" << session.summary.audio_provider_name << "\n";
+	out << "audio_storage_kind=" << session.summary.audio_storage_kind << "\n";
 
 	for (auto const& [name, count] : session.summary.op_counts)
 		out << "op." << name << "=" << count << "\n";
@@ -833,6 +843,13 @@ void ObserveVideoMemorySnapshot(char const* reason, VideoMemorySnapshot const& s
 	session.summary.display_displayed_packet_ref_max_bytes = std::max(session.summary.display_displayed_packet_ref_max_bytes, snapshot.display.displayed_packet_ref_bytes);
 	session.summary.renderer_primary_texture_max_bytes = std::max(session.summary.renderer_primary_texture_max_bytes, snapshot.display.primary_renderer_texture_bytes);
 	session.summary.renderer_secondary_texture_max_bytes = std::max(session.summary.renderer_secondary_texture_max_bytes, snapshot.display.secondary_renderer_texture_bytes);
+	session.summary.audio_storage_max_bytes = std::max(session.summary.audio_storage_max_bytes, snapshot.audio.storage_bytes);
+	session.summary.audio_logical_max_bytes = std::max(session.summary.audio_logical_max_bytes, snapshot.audio.logical_bytes);
+	session.summary.audio_decoded_max_bytes = std::max(session.summary.audio_decoded_max_bytes, snapshot.audio.decoded_bytes);
+	if (!snapshot.audio.provider_name.empty())
+		session.summary.audio_provider_name = snapshot.audio.provider_name;
+	if (!snapshot.audio.storage_kind.empty())
+		session.summary.audio_storage_kind = snapshot.audio.storage_kind;
 
 	JsonObjectBuilder payload;
 	payload.AddString("reason", reason ? reason : "video_memory");
@@ -859,7 +876,18 @@ void ObserveVideoMemorySnapshot(char const* reason, VideoMemorySnapshot const& s
 	payload.AddString("renderer_primary", snapshot.display.primary_renderer_name);
 	payload.AddInt("renderer_secondary_texture_bytes", static_cast<int64_t>(snapshot.display.secondary_renderer_texture_bytes));
 	payload.AddString("renderer_secondary", snapshot.display.secondary_renderer_name);
-	AppendEntryLocked(session, "metric", "video_memory_snapshot", payload.Finish(), false, timestamp_ns);
+	payload.AddString("audio_provider", snapshot.audio.provider_name);
+	payload.AddString("audio_storage_kind", snapshot.audio.storage_kind);
+	payload.AddInt("audio_storage_bytes", static_cast<int64_t>(snapshot.audio.storage_bytes));
+	payload.AddInt("audio_logical_bytes", static_cast<int64_t>(snapshot.audio.logical_bytes));
+	payload.AddInt("audio_decoded_bytes", static_cast<int64_t>(snapshot.audio.decoded_bytes));
+	payload.AddInt("audio_num_samples", snapshot.audio.num_samples);
+	payload.AddInt("audio_decoded_samples", snapshot.audio.decoded_samples);
+	payload.AddInt("audio_sample_rate", snapshot.audio.sample_rate);
+	payload.AddInt("audio_bytes_per_sample", snapshot.audio.bytes_per_sample);
+	payload.AddInt("audio_channels", snapshot.audio.channels);
+	payload.AddBool("audio_float_samples", snapshot.audio.float_samples);
+	AppendEntryLocked(session, "metric", "video_memory_snapshot", payload.Finish(), force, timestamp_ns);
 }
 
 } // namespace perf_trace

@@ -141,6 +141,8 @@ VideoMemorySnapshot BuildVideoMemorySnapshot(agi::Context *context, VideoDisplay
 
 	if (auto* provider = context->project->VideoProvider())
 		snapshot.async = provider->CollectMemoryStats();
+	if (auto* audio_provider = context->project->AudioProvider())
+		snapshot.audio = audio_provider->GetMemoryStats();
 	if (display)
 		snapshot.display = display->CollectMemoryStats();
 	return snapshot;

@@ -378,6 +378,15 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 
 	SetPath(audio_file, "?audio", "Audio", path);
 	AnnounceAudioProviderModified(audio_provider.get());
+	if (perf_trace::ShouldSampleVideoMemory(true)) {
+		VideoMemorySnapshot snapshot;
+		if (video_provider)
+			snapshot.async = video_provider->CollectMemoryStats();
+		if (context->videoDisplay)
+			snapshot.display = context->videoDisplay->CollectMemoryStats();
+		snapshot.audio = audio_provider->GetMemoryStats();
+		perf_trace::ObserveVideoMemorySnapshot("audio_open", snapshot, true);
+	}
 }
 
 void Project::LoadAudio(agi::fs::path path) {
@@ -448,6 +457,8 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 	if (perf_trace::ShouldSampleVideoMemory(true)) {
 		VideoMemorySnapshot snapshot;
 		snapshot.async = video_provider->CollectMemoryStats();
+		if (audio_provider)
+			snapshot.audio = audio_provider->GetMemoryStats();
 		perf_trace::ObserveVideoMemorySnapshot("video_open", snapshot, true);
 	}
 	return true;

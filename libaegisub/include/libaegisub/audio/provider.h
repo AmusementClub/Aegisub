@@ -19,10 +19,27 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/fs_fwd.h>
 
+#include <cstddef>
 #include <atomic>
+#include <memory>
+#include <string>
 #include <vector>
 
 namespace agi {
+struct AudioProviderMemoryStats {
+	std::string provider_name;
+	std::string storage_kind;
+	size_t storage_bytes = 0;
+	size_t logical_bytes = 0;
+	size_t decoded_bytes = 0;
+	int64_t num_samples = 0;
+	int64_t decoded_samples = 0;
+	int sample_rate = 0;
+	int bytes_per_sample = 0;
+	int channels = 0;
+	bool float_samples = false;
+};
+
 class AudioProvider {
 protected:
 	int channels = 0;
@@ -39,6 +56,7 @@ protected:
 	virtual void FillBufferInt16Mono(int16_t* buf, int64_t start, int64_t count) const;
 
 	void ZeroFill(void *buf, int64_t count) const;
+	AudioProviderMemoryStats BuildMemoryStats(std::string provider_name = {}, std::string storage_kind = {}, size_t storage_bytes = 0) const;
 
 public:
 	virtual ~AudioProvider() = default;
@@ -53,6 +71,7 @@ public:
 	int     GetBytesPerSample() const { return bytes_per_sample; }
 	int     GetChannels()       const { return channels; }
 	bool    AreSamplesFloat()   const { return float_samples; }
+	virtual AudioProviderMemoryStats GetMemoryStats() const;
 
 	/// Does this provider benefit from external caching?
 	virtual bool NeedsCache() const { return false; }
@@ -73,6 +92,8 @@ public:
 		bytes_per_sample = source->GetBytesPerSample();
 		float_samples = source->AreSamplesFloat();
 	}
+
+	AudioProviderMemoryStats GetMemoryStats() const override;
 };
 
 DEFINE_EXCEPTION(AudioProviderError, Exception);

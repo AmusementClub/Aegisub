@@ -281,6 +281,21 @@ TEST(lagi_audio, ram_cache) {
 		ASSERT_EQ(static_cast<uint16_t>((1 << 22) - 256 + i), buff[i]);
 }
 
+TEST(lagi_audio, ram_cache_reports_memory_stats) {
+	auto provider = agi::CreateRAMAudioProvider(agi::make_unique<TestAudioProvider<>>());
+	while (provider->GetDecodedSamples() != provider->GetNumSamples()) agi::util::sleep_for(0);
+
+	auto const stats = provider->GetMemoryStats();
+	EXPECT_EQ("RAM", stats.provider_name);
+	EXPECT_EQ("memory", stats.storage_kind);
+	EXPECT_EQ(static_cast<size_t>(3) * static_cast<size_t>(1 << 22), stats.storage_bytes);
+	EXPECT_EQ(static_cast<size_t>(90) * 48000 * sizeof(uint16_t), stats.logical_bytes);
+	EXPECT_EQ(stats.logical_bytes, stats.decoded_bytes);
+	EXPECT_EQ(1, stats.channels);
+	EXPECT_EQ(2, stats.bytes_per_sample);
+	EXPECT_EQ(48000, stats.sample_rate);
+}
+
 TEST(lagi_audio, hd_cache) {
 	auto provider = agi::CreateHDAudioProvider(agi::make_unique<TestAudioProvider<>>(), agi::Path().Decode("?temp"));
 	while (provider->GetDecodedSamples() != provider->GetNumSamples()) agi::util::sleep_for(0);
@@ -290,6 +305,18 @@ TEST(lagi_audio, hd_cache) {
 
 	for (size_t i = 0; i < 512; ++i)
 		ASSERT_EQ(static_cast<uint16_t>((1 << 22) - 256 + i), buff[i]);
+}
+
+TEST(lagi_audio, hd_cache_reports_memory_stats) {
+	auto provider = agi::CreateHDAudioProvider(agi::make_unique<TestAudioProvider<>>(), agi::Path().Decode("?temp"));
+	while (provider->GetDecodedSamples() != provider->GetNumSamples()) agi::util::sleep_for(0);
+
+	auto const stats = provider->GetMemoryStats();
+	EXPECT_EQ("HD", stats.provider_name);
+	EXPECT_EQ("disk", stats.storage_kind);
+	EXPECT_EQ(static_cast<size_t>(90) * 48000 * sizeof(uint16_t), stats.storage_bytes);
+	EXPECT_EQ(stats.storage_bytes, stats.logical_bytes);
+	EXPECT_EQ(stats.logical_bytes, stats.decoded_bytes);
 }
 
 TEST(lagi_audio, ram_cache_zero_fills_undecoded_tail) {
@@ -353,6 +380,35 @@ TEST(lagi_audio, convert_8bit) {
 	provider->GetInt16MonoAudio(data, 0, 256);
 	for (int i = 0; i < 256; ++i)
 		ASSERT_EQ((i - 128) * 256, data[i]);
+}
+
+TEST(lagi_audio, sample_doubling_reports_output_memory_shape) {
+	struct AudioProvider : agi::AudioProvider {
+		AudioProvider() {
+			channels = 1;
+			num_samples = 90 * 20000;
+			decoded_samples = num_samples;
+			sample_rate = 20000;
+			bytes_per_sample = 2;
+			float_samples = false;
+		}
+
+		void FillBuffer(void *buf, int64_t start, int64_t count) const override {
+			auto out = static_cast<int16_t *>(buf);
+			for (int64_t end = start + count; start < end; ++start)
+				*out++ = static_cast<int16_t>(start * 2);
+		}
+	};
+
+	auto provider = agi::CreateConvertAudioProvider(agi::make_unique<AudioProvider>());
+
+	auto const stats = provider->GetMemoryStats();
+	EXPECT_EQ(static_cast<size_t>(90) * 40000 * sizeof(int16_t), stats.logical_bytes);
+	EXPECT_EQ(stats.logical_bytes, stats.decoded_bytes);
+	EXPECT_EQ(40000, stats.sample_rate);
+	EXPECT_EQ(2, stats.bytes_per_sample);
+	EXPECT_EQ(1, stats.channels);
+	EXPECT_FALSE(stats.float_samples);
 }
 
 TEST(lagi_audio, convert_32bit) {

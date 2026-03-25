@@ -18,6 +18,8 @@
 #include "subtitle_overlay.h"
 #include "video_render_packet.h"
 
+#include <libaegisub/audio/provider.h>
+
 #include <cstddef>
 #include <string>
 
@@ -86,6 +88,7 @@ struct VideoDisplayMemoryStats {
 struct VideoMemorySnapshot {
 	AsyncVideoProviderMemoryStats async;
 	VideoDisplayMemoryStats display;
+	agi::AudioProviderMemoryStats audio;
 	size_t process_working_set_bytes = 0;
 	size_t process_private_bytes = 0;
 };

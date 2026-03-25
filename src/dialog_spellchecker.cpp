@@ -99,7 +99,7 @@ public:
 };
 
 DialogSpellChecker::DialogSpellChecker(agi::Context *context)
-: wxDialog(context->parent, -1, _("Spell Checker"))
+: wxDialog(context->GetUI().parent, -1, _("Spell Checker"))
 , context(context)
 , spellchecker(SpellCheckerFactory::GetSpellChecker())
 {
@@ -243,7 +243,8 @@ void DialogSpellChecker::OnChangeSuggestion(wxCommandEvent&) {
 }
 
 bool DialogSpellChecker::FindNext() {
-	AssDialogue *real_active_line = context->selectionController->GetActiveLine();
+	auto core = context->GetCore();
+	AssDialogue *real_active_line = core.selectionController->GetActiveLine();
 	// User has changed the active line; restart search from this position
 	if (real_active_line != active_line) {
 		active_line = real_active_line;
@@ -251,21 +252,21 @@ bool DialogSpellChecker::FindNext() {
 		start_line = active_line;
 	}
 
-	int start_pos = context->textSelectionController->GetInsertionPoint();
+	int start_pos = core.textSelectionController->GetInsertionPoint();
 	int commit_id = -1;
 
 	if (CheckLine(active_line, start_pos, &commit_id))
 		return true;
 
-	auto it = context->ass->iterator_to(*active_line);
+	auto it = core.ass->iterator_to(*active_line);
 
 	// Note that it is deliberate that the start line is checked twice, as if
 	// the cursor is past the first misspelled word in the current line, that
 	// word should be hit last
 	while(!has_looped || active_line != start_line) {
 		// Wrap around to the beginning if we hit the end
-		if (++it == context->ass->Events.end()) {
-			it = context->ass->Events.begin();
+		if (++it == core.ass->Events.end()) {
+			it = core.ass->Events.begin();
 			has_looped = true;
 		}
 
@@ -322,29 +323,30 @@ bool DialogSpellChecker::CheckLine(AssDialogue *active_line, int start_pos, int 
 			replace_word->Remove(0, -1);
 #endif
 
-			context->selectionController->SetSelectionAndActive({ active_line }, active_line);
+			context->GetCore().selectionController->SetSelectionAndActive({ active_line }, active_line);
 			SetWord(word);
 			return true;
 		}
 
 		text.replace(word_start, word_len, auto_rep->second);
 		active_line->Text = text;
-		*commit_id = context->ass->Commit(from_wx(_("spell check replace")), AssFile::COMMIT_DIAG_TEXT, *commit_id);
+		*commit_id = context->GetCore().ass->Commit(from_wx(_("spell check replace")), AssFile::COMMIT_DIAG_TEXT, *commit_id);
 		word_start += auto_rep->second.size();
 	}
 	return false;
 }
 
 void DialogSpellChecker::Replace() {
-	AssDialogue *active_line = context->selectionController->GetActiveLine();
+	auto core = context->GetCore();
+	AssDialogue *active_line = core.selectionController->GetActiveLine();
 
 	// Only replace if the user hasn't changed the selection to something else
 	if (to_wx(active_line->Text.get().substr(word_start, word_len)) == orig_word->GetValue()) {
 		std::string text = active_line->Text;
 		text.replace(word_start, word_len, from_wx(replace_word->GetValue()));
 		active_line->Text = text;
-		context->ass->Commit(from_wx(_("spell check replace")), AssFile::COMMIT_DIAG_TEXT);
-		context->textSelectionController->SetInsertionPoint(word_start + replace_word->GetValue().size());
+		core.ass->Commit(from_wx(_("spell check replace")), AssFile::COMMIT_DIAG_TEXT);
+		core.textSelectionController->SetInsertionPoint(word_start + replace_word->GetValue().size());
 	}
 }
 
@@ -356,13 +358,14 @@ void DialogSpellChecker::SetWord(std::string const& word) {
 	suggest_list->Clear();
 	suggest_list->Append(suggestions);
 
-	context->textSelectionController->SetSelection(word_start, word_start + word_len);
-	context->textSelectionController->SetInsertionPoint(word_start + word_len);
+	auto core = context->GetCore();
+	core.textSelectionController->SetSelection(word_start, word_start + word_len);
+	core.textSelectionController->SetInsertionPoint(word_start + word_len);
 
 	add_button->Enable(spellchecker->CanAddWord(word));
 }
 }
 
 void ShowSpellcheckerDialog(agi::Context *c) {
-	c->dialog->Show<DialogSpellChecker>(c);
+	c->GetUI().dialog->Show<DialogSpellChecker>(c);
 }

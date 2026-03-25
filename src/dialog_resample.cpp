@@ -86,18 +86,19 @@ enum {
 };
 
 DialogResample::DialogResample(agi::Context *c, ResampleSettings &settings)
-: d(c->parent, -1, _("Resample Resolution"))
+: d(c->GetUI().parent, -1, _("Resample Resolution"))
 , c(c)
 {
+	auto core = c->GetCore();
 	d.SetIcon(GETICON(resample_toolbutton_16));
 
 	memset(&settings, 0, sizeof(settings));
-	c->ass->GetResolution(script_w, script_h);
+	core.ass->GetResolution(script_w, script_h);
 	settings.source_x = script_w;
 	settings.source_y = script_h;
-	settings.source_matrix = script_mat = MatrixFromString(c->ass->GetScriptInfo("YCbCr Matrix"));
+	settings.source_matrix = script_mat = MatrixFromString(core.ass->GetScriptInfo("YCbCr Matrix"));
 
-	if (auto provider = c->project->VideoProvider()) {
+	if (auto provider = core.project->VideoProvider()) {
 		settings.dest_x = video_w = provider->GetWidth();
 		settings.dest_y = video_h = provider->GetHeight();
 		settings.dest_matrix = video_mat = MatrixFromString(provider->GetRealColorSpace());
@@ -226,7 +227,8 @@ void DialogResample::SetSourceFromScript(wxCommandEvent&) {
 }
 
 void DialogResample::UpdateButtons() {
-	from_video->Enable(c->project->VideoProvider() &&
+	auto core = c->GetCore();
+	from_video->Enable(core.project->VideoProvider() &&
 		(dest_x->GetValue() != video_w || dest_y->GetValue() != video_h));
 	from_script->Enable(source_x->GetValue() != script_w || source_y->GetValue() != script_h);
 

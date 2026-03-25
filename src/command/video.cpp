@@ -414,9 +414,9 @@ struct video_frame_next_large final : public validator_video_loaded {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		core.videoController->JumpToFrame(
-			core.videoController->GetFrameN() +
-			OPT_GET("Video/Slider/Fast Jump Step")->GetInt());
+		core.videoController->JumpToFrame(aegisub::video_navigation_ops::ComputeRelativeFrameJump(
+			core.videoController->GetFrameN(),
+			OPT_GET("Video/Slider/Fast Jump Step")->GetInt()));
 	}
 };
 
@@ -478,9 +478,9 @@ struct video_frame_prev_large final : public validator_video_loaded {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		core.videoController->JumpToFrame(
-			core.videoController->GetFrameN() -
-			OPT_GET("Video/Slider/Fast Jump Step")->GetInt());
+		core.videoController->JumpToFrame(aegisub::video_navigation_ops::ComputeRelativeFrameJump(
+			core.videoController->GetFrameN(),
+			-OPT_GET("Video/Slider/Fast Jump Step")->GetInt()));
 	}
 };
 
@@ -580,8 +580,13 @@ struct video_jump_end final : public validator_video_loaded {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		if (auto active_line = core.selectionController->GetActiveLine())
-			core.videoController->JumpToTime(active_line->End, agi::vfr::END);
+		auto active_line = core.selectionController->GetActiveLine();
+		execute_jump_target(
+			c,
+			aegisub::video_navigation_ops::PlanLineBoundaryJump(
+				active_line ? std::optional<int>(active_line->End) : std::nullopt,
+				agi::vfr::END),
+			nullptr);
 	}
 };
 
@@ -594,8 +599,13 @@ struct video_jump_start final : public validator_video_loaded {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		if (auto active_line = core.selectionController->GetActiveLine())
-			core.videoController->JumpToTime(active_line->Start);
+		auto active_line = core.selectionController->GetActiveLine();
+		execute_jump_target(
+			c,
+			aegisub::video_navigation_ops::PlanLineBoundaryJump(
+				active_line ? std::optional<int>(active_line->Start) : std::nullopt,
+				agi::vfr::START),
+			nullptr);
 	}
 };
 

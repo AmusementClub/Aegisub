@@ -4,6 +4,12 @@
 
 namespace aegisub::video_navigation_ops {
 
+JumpTarget PlanLineBoundaryJump(std::optional<int> line_time_ms, agi::vfr::Time time_mode) {
+	if (!line_time_ms)
+		return {};
+	return {JumpTargetKind::Time, *line_time_ms, time_mode, false};
+}
+
 JumpTarget PlanNextBoundaryJump(int current_frame, int active_start_frame, int active_end_frame, std::optional<int> next_line_start_ms) {
 	if (active_start_frame > current_frame)
 		return {JumpTargetKind::Frame, active_start_frame, agi::vfr::START, false};
@@ -28,6 +34,10 @@ JumpTarget PlanPreviousBoundaryJump(int current_frame, int active_start_frame, i
 		return {JumpTargetKind::Time, *previous_line_end_ms, agi::vfr::END, true};
 
 	return {};
+}
+
+int ComputeRelativeFrameJump(int current_frame, int delta_frames) {
+	return current_frame + delta_frames;
 }
 
 int ComputeNextKeyframe(std::vector<int> const& keyframes, int current_frame, int last_frame) {

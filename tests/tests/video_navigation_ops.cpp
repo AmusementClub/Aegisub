@@ -42,6 +42,30 @@ TEST(video_navigation_ops, previous_boundary_prefers_active_end_then_start_then_
 	EXPECT_TRUE(previous_line.change_active_line);
 }
 
+TEST(video_navigation_ops, line_boundary_jump_uses_requested_time_mode_or_noop_when_missing) {
+	using aegisub::video_navigation_ops::JumpTargetKind;
+
+	auto none = aegisub::video_navigation_ops::PlanLineBoundaryJump(std::nullopt, agi::vfr::START);
+	EXPECT_EQ(JumpTargetKind::None, none.kind);
+
+	auto start = aegisub::video_navigation_ops::PlanLineBoundaryJump(1200, agi::vfr::START);
+	EXPECT_EQ(JumpTargetKind::Time, start.kind);
+	EXPECT_EQ(1200, start.value);
+	EXPECT_EQ(agi::vfr::START, start.time_mode);
+	EXPECT_FALSE(start.change_active_line);
+
+	auto end = aegisub::video_navigation_ops::PlanLineBoundaryJump(2400, agi::vfr::END);
+	EXPECT_EQ(JumpTargetKind::Time, end.kind);
+	EXPECT_EQ(2400, end.value);
+	EXPECT_EQ(agi::vfr::END, end.time_mode);
+	EXPECT_FALSE(end.change_active_line);
+}
+
+TEST(video_navigation_ops, relative_frame_jump_applies_signed_delta) {
+	EXPECT_EQ(115, aegisub::video_navigation_ops::ComputeRelativeFrameJump(100, 15));
+	EXPECT_EQ(85, aegisub::video_navigation_ops::ComputeRelativeFrameJump(100, -15));
+}
+
 TEST(video_navigation_ops, next_keyframe_uses_last_frame_when_there_is_no_later_keyframe) {
 	std::vector<int> keyframes = {10, 20, 30};
 

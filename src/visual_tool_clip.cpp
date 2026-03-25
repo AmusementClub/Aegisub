@@ -111,7 +111,8 @@ void VisualToolClip::UpdateHold() {
 void VisualToolClip::CommitHold() {
 	std::string value = agi::format("(%s,%s)", ToScriptCoords(cur_1.Min(cur_2)).Str(), ToScriptCoords(cur_1.Max(cur_2)).Str());
 
-	for (auto line : c->selectionController->GetSelectedSet()) {
+	auto core = c->GetCore();
+	for (auto line : core.selectionController->GetSelectedSet()) {
 		// This check is technically not correct as it could be outside of an
 		// override block... but that's rather unlikely
 		bool has_iclip = line->Text.get().find("\\iclip") != std::string::npos;

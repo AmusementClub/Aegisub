@@ -132,11 +132,11 @@ static wxString get_history_string(json::Object &obj) {
 }
 
 DialogShiftTimes::DialogShiftTimes(agi::Context *context)
-: wxDialog(context->parent, -1, _("Shift Times"))
+: wxDialog(context->GetUI().parent, -1, _("Shift Times"))
 , context(context)
 , history_filename(config::path->Decode("?user/shift_history.json"))
-, timecodes_loaded_slot(context->project->AddTimecodesListener(&DialogShiftTimes::OnTimecodesLoaded, this))
-, selected_set_changed_slot(context->selectionController->AddSelectionListener(&DialogShiftTimes::OnSelectedSetChanged, this))
+, timecodes_loaded_slot(context->GetCore().project->AddTimecodesListener(&DialogShiftTimes::OnTimecodesLoaded, this))
+, selected_set_changed_slot(context->GetCore().selectionController->AddSelectionListener(&DialogShiftTimes::OnSelectedSetChanged, this))
 {
 	SetIcon(GETICON(shift_times_toolbutton_16));
 
@@ -173,7 +173,7 @@ DialogShiftTimes::DialogShiftTimes(agi::Context *context)
 	clear_button->Bind(wxEVT_BUTTON, &DialogShiftTimes::OnClear, this);
 
 	// Set initial control states
-	OnTimecodesLoaded(context->project->Timecodes());
+	OnTimecodesLoaded(context->GetCore().project->Timecodes());
 	OnSelectedSetChanged();
 	LoadHistory();
 
@@ -256,7 +256,8 @@ void DialogShiftTimes::OnTimecodesLoaded(agi::vfr::Framerate const& new_fps) {
 }
 
 void DialogShiftTimes::OnSelectedSetChanged() {
-	if (context->selectionController->GetSelectedSet().empty()) {
+	auto core = context->GetCore();
+	if (core.selectionController->GetSelectedSet().empty()) {
 		selection_mode->Enable(1, false);
 		selection_mode->Enable(2, false);
 		selection_mode->SetSelection(0);
@@ -311,8 +312,9 @@ void DialogShiftTimes::OnHistoryClick(wxCommandEvent &evt) {
 }
 
 void DialogShiftTimes::SaveHistory(json::Array shifted_blocks) {
+	auto core = context->GetCore();
 	json::Object new_entry;
-	new_entry["filename"] = agi::fs::PathToString(context->subsController->Filename().filename());
+	new_entry["filename"] = agi::fs::PathToString(core.subsController->Filename().filename());
 	new_entry["is by time"] = shift_by_time->GetValue();
 	new_entry["is backward"] = shift_backward->GetValue();
 	new_entry["amount"] = from_wx(shift_by_time->GetValue() ? shift_time->GetValue() : shift_frames->GetValue());
@@ -359,6 +361,7 @@ void DialogShiftTimes::LoadHistory() {
 }
 
 void DialogShiftTimes::Process(wxCommandEvent &) {
+	auto core = context->GetCore();
 	int mode = selection_mode->GetSelection();
 	int type = time_fields->GetSelection();
 	bool reverse = shift_backward->GetValue();
@@ -367,7 +370,7 @@ void DialogShiftTimes::Process(wxCommandEvent &) {
 	bool start = type != 2;
 	bool end = type != 1;
 
-	auto const& sel = context->selectionController->GetSelectedSet();
+	auto const& sel = core.selectionController->GetSelectedSet();
 
 	long shift;
 	if (by_time) {
@@ -387,7 +390,7 @@ void DialogShiftTimes::Process(wxCommandEvent &) {
 	int block_start = 0;
 	json::Array shifted_blocks;
 
-	for (auto& line : context->ass->Events) {
+	for (auto& line : core.ass->Events) {
 		if (!sel.count(&line)) {
 			if (block_start) {
 				json::Object block;
@@ -408,12 +411,12 @@ void DialogShiftTimes::Process(wxCommandEvent &) {
 			line.End = Shift(line.End, shift, by_time, agi::vfr::END);
 	}
 
-	context->ass->Commit(from_wx(_("shifting")), AssFile::COMMIT_DIAG_TIME);
+	core.ass->Commit(from_wx(_("shifting")), AssFile::COMMIT_DIAG_TIME);
 
 	if (block_start) {
 		json::Object block;
 		block["start"] = block_start;
-		block["end"] = context->ass->Events.back().Row + 1;
+		block["end"] = core.ass->Events.back().Row + 1;
 		shifted_blocks.push_back(std::move(block));
 	}
 
@@ -430,5 +433,5 @@ int DialogShiftTimes::Shift(int initial_time, int shift, bool by_time, agi::vfr:
 }
 
 void ShowShiftTimesDialog(agi::Context *c) {
-	c->dialog->Show<DialogShiftTimes>(c);
+	c->GetUI().dialog->Show<DialogShiftTimes>(c);
 }

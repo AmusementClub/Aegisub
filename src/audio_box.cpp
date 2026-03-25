@@ -83,11 +83,11 @@ enum {
 
 AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 : wxSashWindow(parent, -1, wxDefaultPosition, wxDefaultSize, wxSW_3D | wxCLIP_CHILDREN)
-, controller(context->audioController.get())
+, controller(context->GetCore().audioController.get())
 , context(context)
-, audio_open_connection(context->audioController->AddAudioPlayerOpenListener(&AudioBox::OnAudioOpen, this))
+, audio_open_connection(context->GetCore().audioController->AddAudioPlayerOpenListener(&AudioBox::OnAudioOpen, this))
 , panel(new wxPanel(this, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxBORDER_RAISED))
-, audioDisplay(new AudioDisplay(panel, context->audioController.get(), context))
+, audioDisplay(new AudioDisplay(panel, context->GetCore().audioController.get(), context))
 , HorizontalZoom(new wxSlider(panel, Audio_Horizontal_Zoom, -OPT_GET("Audio/Zoom/Horizontal")->GetInt(), -50, 30, wxDefaultPosition, wxDefaultSize, wxSL_VERTICAL|wxSL_BOTH))
 , VerticalZoom(new wxSlider(panel, Audio_Vertical_Zoom, OPT_GET("Audio/Zoom/Vertical")->GetInt(), 0, 100, wxDefaultPosition, wxDefaultSize, wxSL_VERTICAL|wxSL_BOTH|wxSL_INVERSE))
 , VolumeBar(new wxSlider(panel, Audio_Volume, OPT_GET("Audio/Volume")->GetInt(), 0, 100, wxDefaultPosition, wxDefaultSize, wxSL_VERTICAL|wxSL_BOTH|wxSL_INVERSE))
@@ -129,14 +129,14 @@ AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 	TopSizer->Add(HorizontalZoom,0,wxEXPAND,0);
 	TopSizer->Add(VertVolArea,0,wxEXPAND,0);
 
-	context->karaoke = new AudioKaraoke(panel, context);
+	context->GetUI().karaoke = new AudioKaraoke(panel, context);
 
 	// Main sizer
 	auto MainSizer = new wxBoxSizer(wxVERTICAL);
 	MainSizer->Add(TopSizer,1,wxEXPAND|wxALL,3);
 	MainSizer->Add(toolbar::GetToolbar(panel, "audio", context, "Audio"),0,wxEXPAND|wxLEFT|wxRIGHT,3);
-	MainSizer->Add(context->karaoke,0,wxEXPAND|wxALL,3);
-	MainSizer->Show(context->karaoke, false);
+	MainSizer->Add(context->GetUI().karaoke,0,wxEXPAND|wxALL,3);
+	MainSizer->Show(context->GetUI().karaoke, false);
 	panel->SetSizer(MainSizer);
 
 	wxSizer *audioSashSizer = new wxBoxSizer(wxHORIZONTAL);
@@ -195,8 +195,9 @@ void AudioBox::OnSashDrag(wxSashEvent &event) {
 
 	// Karaoke mode is always disabled when the audio box is first opened, so
 	// the initial height shouldn't include it
-	if (context->karaoke->IsEnabled())
-		new_height -= context->karaoke->GetSize().GetHeight() + 6;
+	auto karaoke = context->GetUI().karaoke;
+	if (karaoke->IsEnabled())
+		new_height -= karaoke->GetSize().GetHeight() + 6;
 
 	OPT_SET("Audio/Display Height")->SetInt(new_height);
 }
@@ -470,17 +471,18 @@ void AudioBox::OnSpectrumChannelBtn(wxCommandEvent &) {
 
 void AudioBox::ShowKaraokeBar(bool show) {
 	wxSizer *panel_sizer = panel->GetSizer();
-	if (panel_sizer->IsShown(context->karaoke) == show) return;
+	auto karaoke = context->GetUI().karaoke;
+	if (panel_sizer->IsShown(karaoke) == show) return;
 
 	int new_height = GetSize().GetHeight();
-	int kara_height = context->karaoke->GetSize().GetHeight() + 6;
+	int kara_height = karaoke->GetSize().GetHeight() + 6;
 
 	if (show)
 		new_height += kara_height;
 	else
 		new_height -= kara_height;
 
-	panel_sizer->Show(context->karaoke, show);
+	panel_sizer->Show(karaoke, show);
 	SetMinSize(wxSize(-1, new_height));
 	GetParent()->Layout();
 }

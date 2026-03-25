@@ -64,18 +64,19 @@ struct DialogJumpTo {
 };
 
 DialogJumpTo::DialogJumpTo(agi::Context *c)
-: d(c->parent, -1, _("Jump to"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxWANTS_CHARS)
+: d(c->GetUI().parent, -1, _("Jump to"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxWANTS_CHARS)
 , c(c)
-, jumpframe(c->videoController->GetFrameN())
+, jumpframe(c->GetCore().videoController->GetFrameN())
 {
+	auto core = c->GetCore();
 	d.SetIcon(GETICON(jumpto_button_16));
 
 	auto LabelFrame = new wxStaticText(&d, -1, _("Frame: "));
 	auto LabelTime = new wxStaticText(&d, -1, _("Time: "));
 
 	JumpFrame = new wxTextCtrl(&d,-1,wxEmptyString,wxDefaultPosition,wxSize(-1,-1),wxTE_PROCESS_ENTER, IntValidator((int)jumpframe));
-	JumpFrame->SetMaxLength(std::to_string(c->project->VideoProvider()->GetFrameCount() - 1).size());
-	JumpTime = new TimeEdit(&d, -1, c, agi::Time(c->videoController->TimeAtFrame(jumpframe)).GetAssFormatted(), wxSize(-1,-1));
+	JumpFrame->SetMaxLength(std::to_string(core.project->VideoProvider()->GetFrameCount() - 1).size());
+	JumpTime = new TimeEdit(&d, -1, c, agi::Time(core.videoController->TimeAtFrame(jumpframe)).GetAssFormatted(), wxSize(-1,-1));
 
 	auto TimesSizer = new wxGridSizer(2, 5, 5);
 
@@ -112,11 +113,11 @@ void DialogJumpTo::OnInitDialog(wxInitDialogEvent&) {
 
 void DialogJumpTo::OnOK(wxCommandEvent &) {
 	d.EndModal(0);
-	c->videoController->JumpToFrame(jumpframe);
+	c->GetCore().videoController->JumpToFrame(jumpframe);
 }
 
 void DialogJumpTo::OnEditTime (wxCommandEvent &) {
-	long newframe = c->videoController->FrameAtTime(JumpTime->GetTime());
+	long newframe = c->GetCore().videoController->FrameAtTime(JumpTime->GetTime());
 	if (jumpframe != newframe) {
 		jumpframe = newframe;
 		JumpFrame->ChangeValue(fmt_wx("%d", jumpframe));
@@ -125,7 +126,7 @@ void DialogJumpTo::OnEditTime (wxCommandEvent &) {
 
 void DialogJumpTo::OnEditFrame (wxCommandEvent &event) {
 	JumpFrame->GetValue().ToLong(&jumpframe);
-	JumpTime->SetTime(c->videoController->TimeAtFrame(jumpframe));
+	JumpTime->SetTime(c->GetCore().videoController->TimeAtFrame(jumpframe));
 }
 }
 

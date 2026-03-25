@@ -62,7 +62,6 @@
 #include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 
-#include <wx/filedlg.h>
 #include <wx/textdlg.h>
 
 #include <optional>
@@ -519,19 +518,16 @@ static void save_snapshot(agi::Context *c, bool raw) {
 		[](agi::fs::path const& candidate) {
 			return agi::fs::FileExists(candidate);
 		});
-	auto const base_dir = path.parent_path();
-
-	wxFileDialog dialog(
-		ui.parent,
-		raw ? _("Save PNG snapshot (no subtitles)") : _("Save PNG snapshot"),
-		base_dir.wstring(),
-		path.filename().wstring(),
-		_("PNG images (*.png)|*.png"),
-		wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
-	if (dialog.ShowModal() != wxID_OK)
+	path = c->RequestSaveFile({
+		from_wx(raw ? _("Save PNG snapshot (no subtitles)") : _("Save PNG snapshot")),
+		"",
+		agi::fs::PathToString(path.filename()),
+		".png",
+		from_wx(_("PNG images (*.png)|*.png")),
+		agi::fs::PathToString(path.parent_path())
+	});
+	if (path.empty())
 		return;
-
-	path = agi::fs::path(dialog.GetPath().ToStdWstring());
 	if (path.extension().empty())
 		path += ".png";
 

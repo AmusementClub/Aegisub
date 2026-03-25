@@ -113,6 +113,15 @@ struct OpenFileDialogRequest {
 	std::string default_path;
 };
 
+struct OpenFilesDialogRequest {
+	std::string title;
+	std::string option_name;
+	std::string default_filename;
+	std::string default_extension;
+	std::string wildcard;
+	std::string default_path;
+};
+
 struct SaveFileDialogRequest {
 	std::string title;
 	std::string option_name;
@@ -131,6 +140,7 @@ class FileDialogService {
 public:
 	virtual ~FileDialogService() = default;
 	virtual agi::fs::path RequestOpenFile(OpenFileDialogRequest const& request) = 0;
+	virtual std::vector<agi::fs::path> RequestOpenFiles(OpenFilesDialogRequest const& request) = 0;
 	virtual agi::fs::path RequestSaveFile(SaveFileDialogRequest const& request) = 0;
 	virtual agi::fs::path RequestSelectDirectory(SelectDirectoryDialogRequest const& request) = 0;
 };
@@ -138,6 +148,10 @@ public:
 class NullFileDialogService final : public FileDialogService {
 public:
 	agi::fs::path RequestOpenFile(OpenFileDialogRequest const&) override {
+		return {};
+	}
+
+	std::vector<agi::fs::path> RequestOpenFiles(OpenFilesDialogRequest const&) override {
 		return {};
 	}
 

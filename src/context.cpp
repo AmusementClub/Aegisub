@@ -185,6 +185,12 @@ agi::fs::path Context::RequestOpenFile(OpenFileDialogRequest const& request) con
 	return {};
 }
 
+std::vector<agi::fs::path> Context::RequestOpenFiles(OpenFilesDialogRequest const& request) const {
+	if (fileDialogService)
+		return fileDialogService->RequestOpenFiles(request);
+	return {};
+}
+
 agi::fs::path Context::RequestSaveFile(SaveFileDialogRequest const& request) const {
 	if (fileDialogService)
 		return fileDialogService->RequestSaveFile(request);

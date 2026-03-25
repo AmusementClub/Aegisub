@@ -175,6 +175,19 @@ public:
 		});
 	}
 
+	std::vector<agi::fs::path> RequestOpenFiles(OpenFilesDialogRequest const& request) override {
+		return agi::ui::MainInvoke([parent = parent, request] {
+			return OpenFilesSelector(
+				to_wx(request.title),
+				request.option_name,
+				request.default_path,
+				request.default_filename,
+				request.default_extension,
+				request.wildcard,
+				parent);
+		});
+	}
+
 	agi::fs::path RequestSaveFile(SaveFileDialogRequest const& request) override {
 		return agi::ui::MainInvoke([parent = parent, request] {
 			return SaveFileSelector(

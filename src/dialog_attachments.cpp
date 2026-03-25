@@ -38,8 +38,6 @@
 
 #include <wx/button.h>
 #include <wx/dialog.h>
-#include <wx/filedlg.h>
-#include <wx/dirdlg.h>
 #include <wx/listctrl.h>
 #include <wx/sizer.h>
 
@@ -59,7 +57,7 @@ struct DialogAttachments {
 	void OnListClick(wxListEvent &event);
 
 	void UpdateList();
-	void AttachFile(wxFileDialog &diag, wxString const& commit_msg);
+	void AttachFiles(std::vector<agi::fs::path> const& paths, wxString const& commit_msg);
 
 public:
 	DialogAttachments(wxWindow *parent, AssFile *ass);
@@ -120,14 +118,12 @@ void DialogAttachments::UpdateList() {
 	}
 }
 
-void DialogAttachments::AttachFile(wxFileDialog &diag, wxString const& commit_msg) {
-	if (diag.ShowModal() == wxID_CANCEL) return;
+void DialogAttachments::AttachFiles(std::vector<agi::fs::path> const& paths, wxString const& commit_msg) {
+	if (paths.empty())
+		return;
 
-	wxArrayString paths;
-	diag.GetPaths(paths);
-
-	for (auto const& fn : paths)
-		ass->InsertAttachment(agi::fs::path(fn.wx_str()));
+	for (auto const& path : paths)
+		ass->InsertAttachment(path);
 
 	ass->Commit(from_wx(commit_msg), AssFile::COMMIT_ATTACHMENT);
 
@@ -135,22 +131,26 @@ void DialogAttachments::AttachFile(wxFileDialog &diag, wxString const& commit_ms
 }
 
 void DialogAttachments::OnAttachFont(wxCommandEvent &) {
-	wxFileDialog diag(&d,
-		_("Choose file to be attached"),
-		to_wx(OPT_GET("Path/Fonts Collector Destination")->GetString()), wxEmptyString, wxS("Font Files (*.ttf)|*.ttf"),
-		wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE);
-
-	AttachFile(diag, _("attach font file"));
+	auto file_dialogs = agi::MakeWindowFileDialogService(&d);
+	AttachFiles(file_dialogs->RequestOpenFiles({
+		from_wx(_("Choose file to be attached")),
+		"",
+		"",
+		"",
+		"Font Files (*.ttf)|*.ttf",
+		OPT_GET("Path/Fonts Collector Destination")->GetString()
+	}), _("attach font file"));
 }
 
 void DialogAttachments::OnAttachGraphics(wxCommandEvent &) {
-	wxFileDialog diag(&d,
-		_("Choose file to be attached"),
-		wxEmptyString, wxEmptyString,
-		wxS("Graphic Files (*.bmp, *.gif, *.jpg, *.ico, *.wmf)|*.bmp;*.gif;*.jpg;*.ico;*.wmf"),
-		wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE);
-
-	AttachFile(diag, _("attach graphics file"));
+	auto file_dialogs = agi::MakeWindowFileDialogService(&d);
+	AttachFiles(file_dialogs->RequestOpenFiles({
+		from_wx(_("Choose file to be attached")),
+		"",
+		"",
+		"",
+		"Graphic Files (*.bmp, *.gif, *.jpg, *.ico, *.wmf)|*.bmp;*.gif;*.jpg;*.ico;*.wmf"
+	}), _("attach graphics file"));
 }
 
 void DialogAttachments::OnExtract(wxCommandEvent &) {

@@ -36,6 +36,7 @@
 #include "include/aegisub/context.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
+#include "wx_ui_services.h"
 
 #include <libaegisub/fs.h>
 #include <libaegisub/signal.h>
@@ -45,7 +46,6 @@
 
 #include <wx/button.h>
 #include <wx/dialog.h>
-#include <wx/filedlg.h>
 #include <wx/listctrl.h>
 #include <wx/log.h>
 #include <wx/sizer.h>
@@ -217,24 +217,23 @@ static bool has_file(Container const& c, agi::fs::path const& fn)
 
 void DialogAutomation::OnAdd(wxCommandEvent &)
 {
-	wxFileDialog diag(this,
-		_("Add Automation script"),
-		to_wx(OPT_GET("Path/Last/Automation")->GetString()),
-		wxEmptyString,
-		to_wx(Automation4::ScriptFactory::GetWildcardStr()),
-		wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE);
+	auto file_dialogs = agi::MakeWindowFileDialogService(this);
+	auto fnames = file_dialogs->RequestOpenFiles({
+		from_wx(_("Add Automation script")),
+		"",
+		"",
+		"",
+		Automation4::ScriptFactory::GetWildcardStr(),
+		OPT_GET("Path/Last/Automation")->GetString()
+	});
+	if (fnames.empty())
+		return;
 
-	if (diag.ShowModal() == wxID_CANCEL) return;
-
-	wxArrayString fnames;
-	diag.GetPaths(fnames);
-
-	for (auto const& fname : fnames) {
-		agi::fs::path fnpath(fname.wx_str());
+	for (auto const& fnpath : fnames) {
 		OPT_SET("Path/Last/Automation")->SetString(agi::fs::PathToString(fnpath.parent_path()));
 
 		if (has_file(local_manager->GetScripts(), fnpath) || has_file(global_manager->GetScripts(), fnpath)) {
-			wxLogError(wxS("Script '%s' is already loaded"), fname);
+			wxLogError(wxS("Script '%s' is already loaded"), to_wx(agi::fs::PathToString(fnpath)));
 			continue;
 		}
 

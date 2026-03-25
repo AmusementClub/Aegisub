@@ -22,17 +22,17 @@
 #include "compat.h"
 #include "options.h"
 #include "preferences.h"
+#include "wx_ui_services.h"
 
 #include <libaegisub/exception.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/path.h>
 #include <libaegisub/make_unique.h>
 
 #include <wx/checkbox.h>
 #include <wx/clntdata.h>
 #include <wx/combobox.h>
-#include <wx/dirdlg.h>
 #include <wx/event.h>
-#include <wx/filedlg.h>
 #include <wx/filename.h>
 #include <wx/fontdlg.h>
 #include <wx/listctrl.h>
@@ -63,12 +63,13 @@ OPTION_UPDATER(BoolUpdater, wxCommandEvent, OptionValueBool, !!evt.GetInt());
 OPTION_UPDATER(ColourUpdater, ValueEvent<agi::Color>, OptionValueColor, evt.Get());
 
 static void browse_button(wxTextCtrl *ctrl) {
-	wxDirDialog dlg(nullptr, _("Please choose the folder:"), config::path->Decode(from_wx(ctrl->GetValue())).wstring());
-	if (dlg.ShowModal() == wxID_OK) {
-		wxString dir = dlg.GetPath();
-		if (!dir.empty())
-			ctrl->SetValue(dir);
-	}
+	auto file_dialogs = agi::MakeWindowFileDialogService(ctrl);
+	auto path = file_dialogs->RequestSelectDirectory({
+		from_wx(_("Please choose the folder:")),
+		agi::fs::PathToString(config::path->Decode(from_wx(ctrl->GetValue())))
+	});
+	if (!path.empty())
+		ctrl->SetValue(to_wx(agi::fs::PathToString(path)));
 }
 
 static void browse_file_button(wxWindow *parent, wxTextCtrl *ctrl, wxString const& wildcard) {
@@ -83,12 +84,17 @@ static void browse_file_button(wxWindow *parent, wxTextCtrl *ctrl, wxString cons
 		file = current.GetFullName();
 	}
 
-	wxFileDialog dlg(parent, _("Please choose the file:"), dir, file, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST);
-	if (dlg.ShowModal() == wxID_OK) {
-		wxString path = dlg.GetPath();
-		if (!path.empty())
-			ctrl->SetValue(path);
-	}
+	auto file_dialogs = agi::MakeWindowFileDialogService(parent);
+	auto path = file_dialogs->RequestOpenFile({
+		from_wx(_("Please choose the file:")),
+		"",
+		from_wx(file),
+		"",
+		from_wx(wildcard),
+		from_wx(dir)
+	});
+	if (!path.empty())
+		ctrl->SetValue(to_wx(agi::fs::PathToString(path)));
 }
 
 static void configure_browse_widgets(OptionPage *page, wxTextCtrl *text, wxButton *browse, wxControl *enabler, bool do_enable) {

@@ -32,6 +32,13 @@ TEST(ui_services, null_file_dialog_service_cancels) {
 		"",
 		"Video Files|*.mkv"
 	}).empty());
+	EXPECT_TRUE(sink.RequestOpenFiles({
+		"Open video files",
+		"Path/Last/Video",
+		"",
+		"",
+		"Video Files|*.mkv"
+	}).empty());
 	EXPECT_TRUE(sink.RequestSaveFile({
 		"Save video file",
 		"Path/Last/Video",

@@ -270,6 +270,21 @@ public:
 		});
 	}
 
+	std::vector<agi::fs::path> RequestOpenFiles(agi::OpenFilesDialogRequest const& request) override {
+		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, request] {
+			if (!lifetime.lock())
+				return std::vector<agi::fs::path>();
+			return OpenFilesSelector(
+				to_wx(request.title),
+				request.option_name,
+				request.default_path,
+				request.default_filename,
+				request.default_extension,
+				request.wildcard,
+				frame);
+		});
+	}
+
 	agi::fs::path RequestSaveFile(agi::SaveFileDialogRequest const& request) override {
 		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, request] {
 			if (!lifetime.lock())

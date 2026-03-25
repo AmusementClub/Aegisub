@@ -278,20 +278,51 @@ wxString FontFace(std::string opt_prefix) {
 	return to_wx(value);
 }
 
-static agi::fs::path FileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, int flags, wxWindow *parent) {
+static wxString ResolveFileDialogPath(std::string const& option_name, std::string const& default_path) {
 	wxString path;
 	if (!default_path.empty())
 		path = to_wx(default_path);
 	else if (!option_name.empty())
 		path = to_wx(OPT_GET(option_name)->GetString());
-	agi::fs::path filename = wxFileSelector(message, path, to_wx(default_filename), to_wx(default_extension), to_wx(wildcard), flags, parent).wx_str();
+	return path;
+}
+
+static void UpdateFileDialogOption(std::string const& option_name, agi::fs::path const& filename) {
 	if (!filename.empty() && !option_name.empty())
 		OPT_SET(option_name)->SetString(agi::fs::PathToString(filename.parent_path()));
+}
+
+static agi::fs::path FileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, int flags, wxWindow *parent) {
+	auto path = ResolveFileDialogPath(option_name, default_path);
+	agi::fs::path filename = wxFileSelector(message, path, to_wx(default_filename), to_wx(default_extension), to_wx(wildcard), flags, parent).wx_str();
+	UpdateFileDialogOption(option_name, filename);
 	return filename;
+}
+
+static std::vector<agi::fs::path> FilesSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, int flags, wxWindow *parent) {
+	wxFileDialog dialog(parent, message, ResolveFileDialogPath(option_name, default_path), to_wx(default_filename), to_wx(wildcard), flags);
+	if (dialog.ShowModal() == wxID_CANCEL)
+		return {};
+
+	wxArrayString selections;
+	dialog.GetPaths(selections);
+
+	std::vector<agi::fs::path> paths;
+	paths.reserve(selections.size());
+	for (auto const& selection : selections)
+		paths.emplace_back(selection.wx_str());
+
+	if (!paths.empty())
+		UpdateFileDialogOption(option_name, paths.front());
+	return paths;
 }
 
 agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
 	return FileSelector(message, option_name, "", default_filename, default_extension, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST, parent);
+}
+
+std::vector<agi::fs::path> OpenFilesSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
+	return FilesSelector(message, option_name, "", default_filename, default_extension, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE, parent);
 }
 
 agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
@@ -300,6 +331,10 @@ agi::fs::path SaveFileSelector(wxString const& message, std::string const& optio
 
 agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
 	return FileSelector(message, option_name, default_path, default_filename, default_extension, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST, parent);
+}
+
+std::vector<agi::fs::path> OpenFilesSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
+	return FilesSelector(message, option_name, default_path, default_filename, default_extension, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE, parent);
 }
 
 agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {

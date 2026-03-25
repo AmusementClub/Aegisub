@@ -17,6 +17,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <libaegisub/fs_fwd.h>
 
@@ -49,6 +50,7 @@ namespace agi { class BackgroundRunnerFactory; }
 namespace agi { struct InteractionRequest; }
 namespace agi { struct SingleChoiceInteractionRequest; }
 namespace agi { struct OpenFileDialogRequest; }
+namespace agi { struct OpenFilesDialogRequest; }
 namespace agi { struct SaveFileDialogRequest; }
 namespace agi { struct SelectDirectoryDialogRequest; }
 namespace agi { enum class InteractionResult : int; }
@@ -181,6 +183,7 @@ struct Context {
 	std::optional<int> RequestSingleChoice(SingleChoiceInteractionRequest const& request) const;
 	std::shared_ptr<FileDialogService> GetFileDialogService() const;
 	agi::fs::path RequestOpenFile(OpenFileDialogRequest const& request) const;
+	std::vector<agi::fs::path> RequestOpenFiles(OpenFilesDialogRequest const& request) const;
 	agi::fs::path RequestSaveFile(SaveFileDialogRequest const& request) const;
 	agi::fs::path RequestSelectDirectory(SelectDirectoryDialogRequest const& request) const;
 	std::shared_ptr<VideoSourceRequestService> GetVideoSourceRequestService() const;

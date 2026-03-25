@@ -1121,7 +1121,7 @@ void TraceLuaDialogOpenBegin() {
 }
 
 void ObserveLuaDialogPhase(char const* phase, int control_count, int button_count, double duration_ms) {
-	RecordEntry("metric", "lua_dialog_phase_duration", false, [&](JsonObjectBuilder& payload) {
+	RecordEntry(TraceCategory::LuaDialog, "metric", "lua_dialog_phase_duration", false, [&](JsonObjectBuilder& payload) {
 		payload.AddString("phase", phase ? phase : "");
 		payload.AddInt("control_count", control_count);
 		payload.AddInt("button_count", button_count);
@@ -1130,7 +1130,7 @@ void ObserveLuaDialogPhase(char const* phase, int control_count, int button_coun
 }
 
 void ObserveLuaDialogControlTypeSummary(char const* control_type, int control_count, int button_count, int instance_count, int item_count_total, int item_count_max, double duration_ms) {
-	RecordEntry("metric", "lua_dialog_control_type_duration", false, [&](JsonObjectBuilder& payload) {
+	RecordEntry(TraceCategory::LuaDialog, "metric", "lua_dialog_control_type_duration", false, [&](JsonObjectBuilder& payload) {
 		payload.AddString("phase", "create_controls");
 		payload.AddString("control_type", control_type ? control_type : "");
 		payload.AddInt("control_count", control_count);
@@ -1143,7 +1143,7 @@ void ObserveLuaDialogControlTypeSummary(char const* control_type, int control_co
 }
 
 void ObserveLuaDialogControlStepSummary(char const* control_type, char const* step, int control_count, int button_count, int instance_count, int item_count_total, int item_count_max, double duration_ms) {
-	RecordEntry("metric", "lua_dialog_control_step_duration", false, [&](JsonObjectBuilder& payload) {
+	RecordEntry(TraceCategory::LuaDialog, "metric", "lua_dialog_control_step_duration", false, [&](JsonObjectBuilder& payload) {
 		payload.AddString("phase", "create_controls");
 		payload.AddString("control_type", control_type ? control_type : "");
 		payload.AddString("step", step ? step : "");

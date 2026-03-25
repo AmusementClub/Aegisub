@@ -43,6 +43,7 @@
 namespace {
 constexpr int64_t kPlaybackAheadMs = 8000;
 constexpr int64_t kPlaybackBehindMs = 2000;
+constexpr int kAudioUiTimerRequestedMs = 20;
 }
 
 AudioController::AudioController(agi::Context *context)
@@ -160,7 +161,9 @@ void AudioController::PlayRange(const TimeRange &range)
 	perf_trace::ResetAudioUiTimerInterval();
 	player->Play(start_sample, SamplesFromMilliseconds(range.length()));
 	playback_mode = PM_Range;
-	playback_timer.Start(20);
+	// This is a UI refresh timer, not the device clock. On Windows the observed
+	// wake-up cadence often lands closer to ~31 ms unless timer resolution is raised.
+	playback_timer.Start(kAudioUiTimerRequestedMs);
 
 	AnnouncePlaybackPosition(range.begin());
 }
@@ -193,7 +196,9 @@ void AudioController::PlayToEnd(int start_ms)
 	perf_trace::ResetAudioUiTimerInterval();
 	player->Play(start_sample, provider->GetNumSamples()-start_sample);
 	playback_mode = PM_ToEnd;
-	playback_timer.Start(20);
+	// This is a UI refresh timer, not the device clock. On Windows the observed
+	// wake-up cadence often lands closer to ~31 ms unless timer resolution is raised.
+	playback_timer.Start(kAudioUiTimerRequestedMs);
 
 	AnnouncePlaybackPosition(start_ms);
 }

@@ -92,6 +92,8 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, summary.find("video_memory.samples=1"));
 	EXPECT_NE(std::string::npos, summary.find("provider_cache_native.max_bytes=4096"));
 	EXPECT_NE(std::string::npos, summary.find("audio_storage.max_bytes=16384"));
+	EXPECT_NE(std::string::npos, summary.find("audio_ui_timer_interval.requested_ms=20"));
+	EXPECT_NE(std::string::npos, summary.find("audio_ui_timer_interval.jitter_target_ms="));
 	EXPECT_NE(std::string::npos, summary.find("audio_ui_timer_interval.count=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output.samples=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output.low_water.count=1"));

@@ -57,7 +57,15 @@ constexpr size_t kBufferedEntryLimit = 64;
 constexpr size_t kBufferedByteLimit = 64 * 1024;
 constexpr auto kBufferedFlushInterval = std::chrono::milliseconds(250);
 constexpr auto kVideoMemorySampleInterval = std::chrono::milliseconds(500);
-constexpr double kAudioUiTimerTargetMs = 20.0;
+constexpr double kAudioUiTimerRequestedMs = 20.0;
+#ifdef _WIN32
+// wxTimer(20 ms) on Windows commonly wakes on a coarser cadence unless the
+// process opts into a higher timer resolution. Use a more realistic baseline
+// for mean_abs_jitter so the summary reflects normal WM_TIMER behavior.
+constexpr double kAudioUiTimerJitterTargetMs = 31.25;
+#else
+constexpr double kAudioUiTimerJitterTargetMs = kAudioUiTimerRequestedMs;
+#endif
 constexpr double kVideoPlaybackTargetMs = 10.0;
 
 enum class TraceCategory : uint32_t {
@@ -657,6 +665,8 @@ void WriteSummaryLocked(Session const& session) {
 	write_int("log.info", session.summary.log_counts[agi::log::Info]);
 	write_int("log.debug", session.summary.log_counts[agi::log::Debug]);
 
+	write_double("audio_ui_timer_interval.requested_ms", kAudioUiTimerRequestedMs);
+	write_double("audio_ui_timer_interval.jitter_target_ms", kAudioUiTimerJitterTargetMs);
 	write_int("audio_ui_timer_interval.count", session.summary.audio_ui_timer_interval.count);
 	write_double("audio_ui_timer_interval.min_ms", session.summary.audio_ui_timer_interval.min_ms);
 	write_double("audio_ui_timer_interval.max_ms", session.summary.audio_ui_timer_interval.max_ms);
@@ -992,7 +1002,7 @@ void ObserveAudioUiTimerPosition(int ms) {
 		return;
 
 	double interval_ms = 0.0;
-	if (!session.summary.audio_ui_timer_interval.Observe(timestamp_ns, kAudioUiTimerTargetMs, interval_ms))
+	if (!session.summary.audio_ui_timer_interval.Observe(timestamp_ns, kAudioUiTimerJitterTargetMs, interval_ms))
 		return;
 
 	JsonObjectBuilder payload;

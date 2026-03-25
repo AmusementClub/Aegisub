@@ -53,7 +53,9 @@ ContextCoreSession::ContextCoreSession(Context& context)
 , singleChoiceInteractionSink(context.singleChoiceInteractionSink)
 , fileDialogService(context.fileDialogService)
 , videoSourceRequestService(context.videoSourceRequestService)
-, backgroundRunnerFactory(context.backgroundRunnerFactory) {
+, backgroundRunnerFactory(context.backgroundRunnerFactory)
+, projectUiStateSink(context.projectUiStateSink)
+, audioPlayerFactoryService(context.audioPlayerFactoryService) {
 }
 
 ConstContextCoreSession::ConstContextCoreSession(Context const& context)
@@ -74,7 +76,9 @@ ConstContextCoreSession::ConstContextCoreSession(Context const& context)
 , singleChoiceInteractionSink(context.singleChoiceInteractionSink)
 , fileDialogService(context.fileDialogService)
 , videoSourceRequestService(context.videoSourceRequestService)
-, backgroundRunnerFactory(context.backgroundRunnerFactory) {
+, backgroundRunnerFactory(context.backgroundRunnerFactory)
+, projectUiStateSink(context.projectUiStateSink)
+, audioPlayerFactoryService(context.audioPlayerFactoryService) {
 }
 
 ContextUiSession::ContextUiSession(Context& context)
@@ -120,6 +124,8 @@ Context::Context()
 , fileDialogService(std::make_shared<NullFileDialogService>())
 , videoSourceRequestService(std::make_shared<NullVideoSourceRequestService>())
 , backgroundRunnerFactory(std::make_shared<InlineBackgroundRunnerFactory>())
+, projectUiStateSink(std::make_shared<NullProjectUiStateSink>())
+, audioPlayerFactoryService(std::make_shared<NullAudioPlayerFactoryService>())
 , dialog(make_unique<DialogManager>())
 {
 	subsController->SetSelectionController(selectionController.get());
@@ -217,5 +223,13 @@ std::unique_ptr<BackgroundRunner> Context::CreateBackgroundRunner(std::string co
 	if (backgroundRunnerFactory)
 		return backgroundRunnerFactory->Create(title, message);
 	return std::make_unique<detail::InlineBackgroundRunner>();
+}
+
+std::shared_ptr<ProjectUiStateSink> Context::GetProjectUiStateSink() const {
+	return projectUiStateSink;
+}
+
+std::shared_ptr<AudioPlayerFactoryService> Context::GetAudioPlayerFactoryService() const {
+	return audioPlayerFactoryService;
 }
 }

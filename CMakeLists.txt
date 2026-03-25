@@ -540,6 +540,7 @@ add_executable(Aegisub WIN32
     src/toolbar.cpp
     src/tooltip_manager.cpp
     src/utils.cpp
+    src/ui_services.cpp
     src/validators.cpp
     src/vector2d.cpp
     src/version.cpp

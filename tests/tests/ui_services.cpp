@@ -1,6 +1,7 @@
 #include <main.h>
 
 #include "../../src/ui_services.h"
+#include "../../src/include/aegisub/audio_player.h"
 
 TEST(ui_services, null_interaction_sink_uses_safe_defaults) {
 	agi::NullInteractionSink sink;
@@ -82,4 +83,17 @@ TEST(ui_services, null_notification_sink_accepts_all_levels) {
 	sink.ShowInfo("title", "message");
 	sink.ShowWarning("title", "message");
 	sink.ShowError("title", "message");
+}
+
+TEST(ui_services, null_project_ui_state_sink_accepts_restores) {
+	agi::NullProjectUiStateSink sink;
+
+	sink.RestoreSubtitleScrollPosition(123);
+	sink.RestoreVideoZoom(1.5);
+}
+
+TEST(ui_services, null_audio_player_factory_service_returns_null_player) {
+	agi::NullAudioPlayerFactoryService sink;
+
+	EXPECT_FALSE(sink.CreateAudioPlayer(nullptr));
 }

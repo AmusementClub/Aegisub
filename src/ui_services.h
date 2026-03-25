@@ -10,7 +10,10 @@
 #include <string>
 #include <vector>
 
+class AudioPlayer;
+
 namespace agi {
+class AudioProvider;
 
 class NotificationSink {
 public:
@@ -181,6 +184,30 @@ class BackgroundRunnerFactory {
 public:
 	virtual ~BackgroundRunnerFactory() = default;
 	virtual std::unique_ptr<BackgroundRunner> Create(std::string const& title, std::string const& message) = 0;
+};
+
+class ProjectUiStateSink {
+public:
+	virtual ~ProjectUiStateSink() = default;
+	virtual void RestoreSubtitleScrollPosition(int scroll_position) = 0;
+	virtual void RestoreVideoZoom(double zoom) = 0;
+};
+
+class NullProjectUiStateSink final : public ProjectUiStateSink {
+public:
+	void RestoreSubtitleScrollPosition(int) override { }
+	void RestoreVideoZoom(double) override { }
+};
+
+class AudioPlayerFactoryService {
+public:
+	virtual ~AudioPlayerFactoryService() = default;
+	virtual std::unique_ptr<::AudioPlayer> CreateAudioPlayer(AudioProvider *provider) = 0;
+};
+
+class NullAudioPlayerFactoryService final : public AudioPlayerFactoryService {
+public:
+	std::unique_ptr<::AudioPlayer> CreateAudioPlayer(AudioProvider *) override;
 };
 
 namespace detail {

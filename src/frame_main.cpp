@@ -33,6 +33,7 @@
 
 #include "frame_main.h"
 
+#include "include/aegisub/audio_player.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/menu.h"
 #include "include/aegisub/toolbar.h"
@@ -373,6 +374,52 @@ public:
 		return agi::make_unique<FrameMainBackgroundRunner>(frame, lifetime, title, message);
 	}
 };
+
+class FrameMainProjectUiStateSink final : public agi::ProjectUiStateSink {
+	agi::Context *context = nullptr;
+	agi::ui::WeakLifetime lifetime;
+
+public:
+	FrameMainProjectUiStateSink(agi::Context *context, agi::ui::WeakLifetime lifetime)
+	: context(context)
+	, lifetime(std::move(lifetime))
+	{
+	}
+
+	void RestoreSubtitleScrollPosition(int scroll_position) override {
+		agi::ui::MainInvokeIfAlive(lifetime, [context = context, scroll_position] {
+			if (auto subs_grid = context->GetUI().subsGrid)
+				subs_grid->ScrollTo(scroll_position);
+		});
+	}
+
+	void RestoreVideoZoom(double zoom) override {
+		agi::ui::MainInvokeIfAlive(lifetime, [context = context, zoom] {
+			if (auto video_display = context->GetUI().videoDisplay)
+				video_display->SetZoom(zoom);
+		});
+	}
+};
+
+class FrameMainAudioPlayerFactoryService final : public agi::AudioPlayerFactoryService {
+	FrameMain *frame = nullptr;
+	agi::ui::WeakLifetime lifetime;
+
+public:
+	FrameMainAudioPlayerFactoryService(FrameMain *frame, agi::ui::WeakLifetime lifetime)
+	: frame(frame)
+	, lifetime(std::move(lifetime))
+	{
+	}
+
+	std::unique_ptr<AudioPlayer> CreateAudioPlayer(agi::AudioProvider *provider) override {
+		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, provider] {
+			if (!lifetime.lock())
+				return std::unique_ptr<AudioPlayer>();
+			return AudioPlayerFactory::GetAudioPlayer(provider, frame);
+		});
+	}
+};
 }
 
 /// Handle files drag and dropped onto Aegisub
@@ -431,6 +478,8 @@ FrameMain::FrameMain()
 	core.fileDialogService = std::make_shared<FrameMainFileDialogService>(this, GetAsyncUiLifetime());
 	core.videoSourceRequestService = std::make_shared<FrameMainVideoSourceRequestService>(this, GetAsyncUiLifetime());
 	core.backgroundRunnerFactory = std::make_shared<FrameMainBackgroundRunnerFactory>(this, GetAsyncUiLifetime());
+	core.projectUiStateSink = std::make_shared<FrameMainProjectUiStateSink>(context.get(), GetAsyncUiLifetime());
+	core.audioPlayerFactoryService = std::make_shared<FrameMainAudioPlayerFactoryService>(this, GetAsyncUiLifetime());
 
 	StartupLog("Apply saved Maximized state");
 	if (OPT_GET("App/Maximized")->GetBool()) Maximize(true);

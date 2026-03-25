@@ -34,6 +34,7 @@
 #include "include/aegisub/context.h"
 #include "options.h"
 #include "project.h"
+#include "ui_services.h"
 
 #include <libaegisub/audio/provider.h>
 
@@ -99,12 +100,18 @@ void AudioController::OnAudioPlayerChanged()
 
 	try
 	{
-		player = AudioPlayerFactory::GetAudioPlayer(provider, context->parent);
+		auto core = context->GetCore();
+		if (core.audioPlayerFactoryService)
+			player = core.audioPlayerFactoryService->CreateAudioPlayer(provider);
 	}
 	catch (...)
 	{
 		/// @todo This really shouldn't be just swallowing all audio player open errors
 		context->project->CloseAudio();
+	}
+	if (!player) {
+		context->project->CloseAudio();
+		return;
 	}
 	AnnounceAudioPlayerOpened();
 }

@@ -47,6 +47,7 @@ if(GTEST_FOUND)
         src/resolution_resampler.cpp
         src/text_file_writer.cpp
         src/utils.cpp
+        src/ui_services.cpp
         src/project_session_ops.cpp
         src/subtitle_edit_ops.cpp
         src/subtitle_editor_ops.cpp

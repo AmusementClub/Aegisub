@@ -21,7 +21,6 @@
 #include "async_video_provider.h"
 #include "audio_controller.h"
 #include "audio_provider_factory.h"
-#include "base_grid.h"
 #include "charset_detect.h"
 #include "compat.h"
 #include "dialogs.h"
@@ -38,7 +37,6 @@
 #include "include/aegisub/subtitles_provider.h"
 #include "utils.h"
 #include "video_controller.h"
-#include "video_display.h"
 #include "video_session_ops.h"
 
 #include <libaegisub/audio/provider.h>
@@ -84,15 +82,13 @@ bool try_check_readable_media_path(agi::fs::path const& path, std::string& error
 }
 
 void RestoreSubtitleUiState(agi::Context *context, ProjectProperties const& properties) {
-	auto ui = context->GetUI();
-	if (ui.subsGrid)
-		ui.subsGrid->ScrollTo(properties.scroll_position);
+	if (auto sink = context->GetProjectUiStateSink())
+		sink->RestoreSubtitleScrollPosition(properties.scroll_position);
 }
 
 void RestoreVideoUiState(agi::Context *context, ProjectProperties const& properties) {
-	auto ui = context->GetUI();
-	if (ui.videoDisplay)
-		ui.videoDisplay->SetZoom(properties.video_zoom);
+	if (auto sink = context->GetProjectUiStateSink())
+		sink->RestoreVideoZoom(properties.video_zoom);
 }
 
 void ApplyPostOpenVideoPlan(agi::Context *context, aegisub::video_session_ops::PostOpenPlan const& plan) {

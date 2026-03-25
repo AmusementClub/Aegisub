@@ -47,6 +47,8 @@ namespace agi { class SingleChoiceInteractionSink; }
 namespace agi { class FileDialogService; }
 namespace agi { class VideoSourceRequestService; }
 namespace agi { class BackgroundRunnerFactory; }
+namespace agi { class ProjectUiStateSink; }
+namespace agi { class AudioPlayerFactoryService; }
 namespace agi { struct InteractionRequest; }
 namespace agi { struct SingleChoiceInteractionRequest; }
 namespace agi { struct OpenFileDialogRequest; }
@@ -78,6 +80,8 @@ struct ContextCoreSession {
 	std::shared_ptr<FileDialogService>& fileDialogService;
 	std::shared_ptr<VideoSourceRequestService>& videoSourceRequestService;
 	std::shared_ptr<BackgroundRunnerFactory>& backgroundRunnerFactory;
+	std::shared_ptr<ProjectUiStateSink>& projectUiStateSink;
+	std::shared_ptr<AudioPlayerFactoryService>& audioPlayerFactoryService;
 
 	explicit ContextCoreSession(Context& context);
 };
@@ -101,6 +105,8 @@ struct ConstContextCoreSession {
 	std::shared_ptr<FileDialogService> const& fileDialogService;
 	std::shared_ptr<VideoSourceRequestService> const& videoSourceRequestService;
 	std::shared_ptr<BackgroundRunnerFactory> const& backgroundRunnerFactory;
+	std::shared_ptr<ProjectUiStateSink> const& projectUiStateSink;
+	std::shared_ptr<AudioPlayerFactoryService> const& audioPlayerFactoryService;
 
 	explicit ConstContextCoreSession(Context const& context);
 };
@@ -154,6 +160,8 @@ struct Context {
 	std::shared_ptr<FileDialogService> fileDialogService;
 	std::shared_ptr<VideoSourceRequestService> videoSourceRequestService;
 	std::shared_ptr<BackgroundRunnerFactory> backgroundRunnerFactory;
+	std::shared_ptr<ProjectUiStateSink> projectUiStateSink;
+	std::shared_ptr<AudioPlayerFactoryService> audioPlayerFactoryService;
 
 	// Things that should probably be in some sort of UI-context-model
 	wxWindow *parent = nullptr;
@@ -189,6 +197,8 @@ struct Context {
 	std::shared_ptr<VideoSourceRequestService> GetVideoSourceRequestService() const;
 	std::string RequestDummyVideoPath() const;
 	std::unique_ptr<BackgroundRunner> CreateBackgroundRunner(std::string const& title = "", std::string const& message = "") const;
+	std::shared_ptr<ProjectUiStateSink> GetProjectUiStateSink() const;
+	std::shared_ptr<AudioPlayerFactoryService> GetAudioPlayerFactoryService() const;
 
 	// Returned on demand to avoid making Context subobject construction depend
 	// on the bridge members themselves having already been initialized.

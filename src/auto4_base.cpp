@@ -404,7 +404,7 @@ namespace Automation4 {
 
 	LocalScriptManager::LocalScriptManager(agi::Context *c)
 	: context(c)
-	, file_open_connection(c->subsController->AddFileOpenListener(&LocalScriptManager::Reload, this))
+	, file_open_connection(c->GetCore().subsController->AddFileOpenListener(&LocalScriptManager::Reload, this))
 	{
 		AddScriptChangeListener(&LocalScriptManager::SaveLoadedList, this);
 	}

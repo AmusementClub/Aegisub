@@ -80,7 +80,8 @@ std::vector<std::string> AssExporter::GetAllFilterNames() const {
 }
 
 void AssExporter::Export(agi::fs::path const& filename, std::string const& charset, wxWindow *export_dialog) {
-	AssFile subs(*c->ass);
+	auto core = c->GetCore();
+	AssFile subs(*core.ass);
 
 	for (auto filter : filters) {
 		filter->LoadSettings(is_default, c);
@@ -91,7 +92,7 @@ void AssExporter::Export(agi::fs::path const& filename, std::string const& chars
 	if (!writer)
 		throw agi::InvalidInputException("Unknown file type.");
 
-	writer->ExportFile(&subs, filename, c->project->Timecodes(), charset, c->GetSingleChoiceInteractionSink());
+	writer->ExportFile(&subs, filename, core.project->Timecodes(), charset, c->GetSingleChoiceInteractionSink());
 }
 
 wxSizer *AssExporter::GetSettingsSizer(std::string const& name) {

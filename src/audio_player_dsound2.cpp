@@ -38,6 +38,7 @@
 #include "audio_controller.h"
 #include "frame_main.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "utils.h"
 
 #include <libaegisub/audio/provider.h>
@@ -49,6 +50,8 @@
 #include <process.h>
 #include <dsound.h>
 #include <cguid.h>
+
+#include <chrono>
 
 namespace {
 class DirectSoundPlayer2Thread;
@@ -373,6 +376,29 @@ void DirectSoundPlayer2Thread::Run()
 	bool playback_should_be_running = false;
 	int current_latency = wanted_latency;
 	const DWORD wanted_latency_bytes = wanted_latency*waveFormat.nSamplesPerSec* /*provider->GetBytesPerSample()*/ sizeof(int16_t)/1000;
+	bool const trace_audio_output = perf_trace::IsCategoryEnabled(perf_trace::Category::Audio);
+	auto const bytes_to_ms = [bytes_per_second = static_cast<double>(waveFormat.nAvgBytesPerSec)](int64_t bytes) {
+		return bytes_per_second > 0.0 ? static_cast<double>(bytes) * 1000.0 / bytes_per_second : 0.0;
+	};
+	auto emit_audio_output = [&](char const* reason, double queued_ms, int64_t submitted_frames, int64_t submitted_bytes, double fill_duration_ms, bool low_water, bool starved, bool recovered, bool end_of_stream) {
+		if (!trace_audio_output)
+			return;
+
+		perf_trace::AudioOutputSnapshot snapshot;
+		snapshot.backend_name = "directsound2";
+		snapshot.reason = reason ? reason : "";
+		snapshot.queued_ms = queued_ms;
+		snapshot.submitted_buffers = submitted_bytes > 0 ? 1 : 0;
+		snapshot.submitted_frames = submitted_frames;
+		snapshot.submitted_bytes = submitted_bytes;
+		snapshot.submitted_ms = submitted_bytes >= 0 ? bytes_to_ms(submitted_bytes) : -1.0;
+		snapshot.fill_duration_ms = fill_duration_ms;
+		snapshot.low_water = low_water;
+		snapshot.starved = starved;
+		snapshot.recovered = recovered;
+		snapshot.end_of_stream = end_of_stream;
+		perf_trace::ObserveAudioOutputSnapshot(snapshot);
+	};
 
 	while (running)
 	{
@@ -415,9 +441,28 @@ void DirectSoundPlayer2Thread::Run()
 				// Clear the buffer in case we can't fill it completely
 				memset(buf, 0, buf_size);
 
+				auto const fill_started = trace_audio_output ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 				DWORD bytes_filled = FillAndUnlockBuffers(buf, buf_size, 0, 0, next_input_frame, bfr.get());
+				double const fill_duration_ms = trace_audio_output
+					? static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - fill_started).count()) / 1000.0
+					: -1.0;
 				buffer_offset += bytes_filled;
 				if (buffer_offset >= bufSize) buffer_offset -= bufSize;
+
+				bool const low_water = bytes_filled < wanted_latency_bytes && next_input_frame < end_frame;
+				bool const end_of_stream = next_input_frame >= end_frame;
+				if (bytes_filled > 0 || low_water || end_of_stream) {
+					emit_audio_output(
+						"start",
+						bytes_to_ms(bytes_filled),
+						bytes_filled / sizeof(int16_t),
+						bytes_filled,
+						fill_duration_ms,
+						low_water,
+						false,
+						false,
+						end_of_stream);
+				}
 
 				if (FAILED(bfr->SetCurrentPosition(0)))
 					REPORT_ERROR("Could not reset playback buffer cursor before playback.")
@@ -499,6 +544,7 @@ do_fill_buffer:
 
 				int bytes_needed = (int)play_cursor - (int)buffer_offset;
 				if (bytes_needed < 0) bytes_needed += (int)bufSize;
+				bool const starved = bytes_needed == static_cast<int>(bufSize) && next_input_frame < end_frame;
 
 				// Requesting zero buffer makes Windows cry, and zero buffer seemed to be
 				// a common request on Windows 7. (Maybe related to the new timer coalescing?)
@@ -543,9 +589,29 @@ do_fill_buffer:
 					break;
 				}
 
+				auto const fill_started = trace_audio_output ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 				DWORD bytes_filled = FillAndUnlockBuffers(buf1, buf1sz, buf2, buf2sz, next_input_frame, bfr.get());
+				double const fill_duration_ms = trace_audio_output
+					? static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - fill_started).count()) / 1000.0
+					: -1.0;
 				buffer_offset += bytes_filled;
 				if (buffer_offset >= bufSize) buffer_offset -= bufSize;
+				double const queued_ms = bytes_to_ms((bufSize - bytes_needed) + bytes_filled);
+				bool const low_water = queued_ms < wanted_latency && next_input_frame < end_frame;
+				bool const end_of_stream = next_input_frame >= end_frame;
+				bool const recovered = starved && bytes_filled > 0;
+				if (bytes_filled > 0 || starved || low_water || end_of_stream) {
+					emit_audio_output(
+						"fill",
+						queued_ms,
+						bytes_filled / sizeof(int16_t),
+						bytes_filled,
+						fill_duration_ms,
+						low_water,
+						starved,
+						recovered,
+						end_of_stream);
+				}
 
 				if (bytes_filled < 1024)
 				{

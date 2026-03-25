@@ -70,6 +70,11 @@ public:
 		return provider ? provider->GetSampleRate() : 0;
 	}
 
+	void HintFloatAudio(int64_t start, int64_t count) const override {
+		if (provider && count > 0)
+			provider->HintVisibleRange(start, count);
+	}
+
 	void GetFloatAudio(float *buf, int64_t start, int64_t count) const override {
 		if (!provider || !buf || count <= 0)
 			return;
@@ -147,6 +152,9 @@ public:
 	int64_t GetNumSamples() const override { return core->GetNumSamples(); }
 	int GetChannels() const override { return 1; }
 	int GetSampleRate() const override { return core->GetSampleRate(); }
+	void HintFloatAudio(int64_t start, int64_t count) const override {
+		core->HintFloatAudio(start, count);
+	}
 	void GetFloatAudio(float *buf, int64_t start, int64_t count) const override {
 		if (!buf || count <= 0) return;
 		if (total_channels == 1) { core->GetFloatAudio(buf, start, count); return; }

@@ -13,6 +13,7 @@ public:
 	virtual int GetChannels() const = 0;
 	virtual int GetSampleRate() const = 0;
 	virtual void GetFloatAudio(float *buf, int64_t start, int64_t count) const = 0;
+	virtual void HintFloatAudio(int64_t start, int64_t count) const { }
 };
 
 std::unique_ptr<AudioDisplaySource> CreateAudioDisplaySource(agi::AudioProvider *provider);

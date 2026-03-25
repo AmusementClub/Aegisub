@@ -62,9 +62,9 @@ static inline size_t last_lt_or_eq(Container const& c, Value const& v) {
 AudioKaraoke::AudioKaraoke(wxWindow *parent, agi::Context *c)
 : wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxBORDER_SUNKEN)
 , c(c)
-, file_changed(c->ass->AddCommitListener(&AudioKaraoke::OnFileChanged, this))
-, audio_opened(c->project->AddAudioProviderListener(&AudioKaraoke::OnAudioOpened, this))
-, active_line_changed(c->selectionController->AddActiveLineListener(&AudioKaraoke::OnActiveLineChanged, this))
+, file_changed(c->GetCore().ass->AddCommitListener(&AudioKaraoke::OnFileChanged, this))
+, audio_opened(c->GetCore().project->AddAudioProviderListener(&AudioKaraoke::OnAudioOpened, this))
+, active_line_changed(c->GetCore().selectionController->AddActiveLineListener(&AudioKaraoke::OnActiveLineChanged, this))
 , kara(agi::make_unique<AssKaraoke>())
 {
 	using std::bind;
@@ -132,20 +132,21 @@ void AudioKaraoke::OnAudioOpened(agi::AudioProvider *provider) {
 	if (provider)
 		SetEnabled(enabled);
 	else
-		c->audioController->SetTimingController(nullptr);
+		c->GetCore().audioController->SetTimingController(nullptr);
 }
 
 void AudioKaraoke::SetEnabled(bool en) {
 	enabled = en;
+	auto core = c->GetCore();
 
 	c->audioBox->ShowKaraokeBar(enabled);
 	if (enabled) {
 		LoadFromLine();
-		c->audioController->SetTimingController(CreateKaraokeTimingController(c, kara.get(), file_changed));
+		core.audioController->SetTimingController(CreateKaraokeTimingController(c, kara.get(), file_changed));
 		Refresh(false);
 	}
 	else {
-		c->audioController->SetTimingController(CreateDialogueTimingController(c));
+		core.audioController->SetTimingController(CreateDialogueTimingController(c));
 	}
 }
 
@@ -430,7 +431,7 @@ void AudioKaraoke::CancelSplit() {
 void AudioKaraoke::AcceptSplit() {
 	active_line->Text = kara->GetText();
 	file_changed.Block();
-	c->ass->Commit(from_wx(_("karaoke split")), AssFile::COMMIT_DIAG_TEXT);
+	c->GetCore().ass->Commit(from_wx(_("karaoke split")), AssFile::COMMIT_DIAG_TEXT);
 	file_changed.Unblock();
 
 	accept_button->Enable(false);

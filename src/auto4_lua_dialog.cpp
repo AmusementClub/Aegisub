@@ -339,6 +339,8 @@ namespace Automation4 {
 		class Dropdown final : public LuaDialogControl {
 			std::vector<std::string> items;
 			std::string value;
+			wxArrayString items_wx;
+			wxString value_wx;
 			wxComboBox *cw = nullptr;
 
 		public:
@@ -348,16 +350,21 @@ namespace Automation4 {
 			{
 				lua_getfield(L, -1, "items");
 				read_string_array(L, items);
+				items_wx = to_wx(items);
+				value_wx = to_wx(value);
 			}
 
 			int GetTraceItemCount() const override { return static_cast<int>(items.size()); }
 
 			bool CanSerialiseValue() const override { return true; }
 			std::string SerialiseValue() const override { return inline_string_encode(value); }
-			void UnserialiseValue(const std::string &serialised) override { value = inline_string_decode(serialised); }
+			void UnserialiseValue(const std::string &serialised) override {
+				value = inline_string_decode(serialised);
+				value_wx = to_wx(value);
+			}
 
 			wxControl *Create(wxWindow *parent) override {
-				cw = new wxComboBox(parent, -1, to_wx(value), wxDefaultPosition, wxDefaultSize, to_wx(items), wxCB_READONLY, StringBinder(&value));
+				cw = new wxComboBox(parent, -1, value_wx, wxDefaultPosition, wxDefaultSize, items_wx, wxCB_READONLY, StringBinder(&value));
 				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}

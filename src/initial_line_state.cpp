@@ -19,9 +19,9 @@
 #include "selection_controller.h"
 
 InitialLineState::InitialLineState(agi::Context *c)
-: active_line_connection(c->selectionController->AddActiveLineListener(&InitialLineState::OnActiveLineChanged, this))
+: active_line_connection(c->GetCore().selectionController->AddActiveLineListener(&InitialLineState::OnActiveLineChanged, this))
 {
-	OnActiveLineChanged(c->selectionController->GetActiveLine());
+	OnActiveLineChanged(c->GetCore().selectionController->GetActiveLine());
 }
 
 void InitialLineState::OnActiveLineChanged(AssDialogue *new_line) {

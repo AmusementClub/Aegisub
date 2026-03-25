@@ -49,10 +49,11 @@ VideoController::VideoController(agi::Context *c)
 : context(c)
 , playAudioOnStep(OPT_GET("Audio/Plays When Stepping Video"))
 {
+	auto core = context->GetCore();
 	ui_activation.AddConnections(
-		context->ass->AddCommitListener(&VideoController::OnSubtitlesCommit, this),
-		context->project->AddVideoProviderListener(&VideoController::OnNewVideoProvider, this),
-		context->selectionController->AddActiveLineListener(&VideoController::OnActiveLineChanged, this));
+		core.ass->AddCommitListener(&VideoController::OnSubtitlesCommit, this),
+		core.project->AddVideoProviderListener(&VideoController::OnNewVideoProvider, this),
+		core.selectionController->AddActiveLineListener(&VideoController::OnActiveLineChanged, this));
 	Bind(EVT_VIDEO_ERROR, &VideoController::OnVideoError, this);
 	Bind(EVT_SUBTITLES_ERROR, &VideoController::OnSubtitlesError, this);
 	playback.Bind(wxEVT_TIMER, &VideoController::OnPlayTimer, this);
@@ -70,9 +71,10 @@ void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 
 void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
 	if (!provider) return;
+	auto core = context->GetCore();
 
 	if ((type & AssFile::COMMIT_SCRIPTINFO) || type == AssFile::COMMIT_NEW) {
-		auto new_matrix = context->ass->GetScriptInfo("YCbCr Matrix");
+		auto new_matrix = core.ass->GetScriptInfo("YCbCr Matrix");
 		if (!new_matrix.empty() && new_matrix != color_matrix) {
 			color_matrix = new_matrix;
 			provider->SetColorSpace(new_matrix);
@@ -80,9 +82,9 @@ void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
 	}
 
 	if (!changed)
-		provider->LoadSubtitles(context->ass.get());
+		provider->LoadSubtitles(core.ass.get());
 	else
-		provider->UpdateSubtitles(context->ass.get(), changed);
+		provider->UpdateSubtitles(core.ass.get(), changed);
 }
 
 void VideoController::OnActiveLineChanged(AssDialogue *line) {
@@ -93,12 +95,14 @@ void VideoController::OnActiveLineChanged(AssDialogue *line) {
 }
 
 void VideoController::RequestFrame() {
-	context->ass->Properties.video_position = frame_n;
+	auto core = context->GetCore();
+	core.ass->Properties.video_position = frame_n;
 	provider->RequestFrame(frame_n, TimeAtFrame(frame_n));
 }
 
 void VideoController::RequestFrameImmediate() {
-	context->ass->Properties.video_position = frame_n;
+	auto core = context->GetCore();
+	core.ass->Properties.video_position = frame_n;
 	auto const frame_time = TimeAtFrame(frame_n);
 
 	try {
@@ -139,8 +143,10 @@ void VideoController::NextFrame() {
 	frame_n = mid(0, frame_n + 1, provider->GetFrameCount() - 1);
 	RequestFrameImmediate();
 	Seek(frame_n);
-	if (playAudioOnStep->GetBool())
-		context->audioController->PlayRange(TimeRange(TimeAtFrame(frame_n - 1), TimeAtFrame(frame_n)));
+	if (playAudioOnStep->GetBool()) {
+		auto core = context->GetCore();
+		core.audioController->PlayRange(TimeRange(TimeAtFrame(frame_n - 1), TimeAtFrame(frame_n)));
+	}
 }
 
 void VideoController::PrevFrame() {
@@ -150,8 +156,10 @@ void VideoController::PrevFrame() {
 	frame_n = mid(0, frame_n - 1, provider->GetFrameCount() - 1);
 	RequestFrameImmediate();
 	Seek(frame_n);
-	if (playAudioOnStep->GetBool())
-		context->audioController->PlayRange(TimeRange(TimeAtFrame(frame_n), TimeAtFrame(frame_n + 1)));
+	if (playAudioOnStep->GetBool()) {
+		auto core = context->GetCore();
+		core.audioController->PlayRange(TimeRange(TimeAtFrame(frame_n), TimeAtFrame(frame_n + 1)));
+	}
 }
 
 void VideoController::Play() {
@@ -161,11 +169,12 @@ void VideoController::Play() {
 	}
 
 	if (!provider) return;
+	auto core = context->GetCore();
 
 	start_ms = TimeAtFrame(frame_n);
 	end_frame = provider->GetFrameCount() - 1;
 
-	context->audioController->PlayToEnd(start_ms);
+	core.audioController->PlayToEnd(start_ms);
 
 	playback_start_time = std::chrono::steady_clock::now();
 	playback.Start(10);
@@ -173,16 +182,17 @@ void VideoController::Play() {
 
 void VideoController::PlayLine() {
 	Stop();
+	auto core = context->GetCore();
 
-	AssDialogue *curline = context->selectionController->GetActiveLine();
+	AssDialogue *curline = core.selectionController->GetActiveLine();
 	if (!curline) return;
 
-	context->audioController->PlayRange(TimeRange(curline->Start, curline->End));
+	core.audioController->PlayRange(TimeRange(curline->Start, curline->End));
 
 	// Round-trip conversion to convert start to exact
-	int startFrame = FrameAtTime(context->selectionController->GetActiveLine()->Start, agi::vfr::START);
+	int startFrame = FrameAtTime(core.selectionController->GetActiveLine()->Start, agi::vfr::START);
 	start_ms = TimeAtFrame(startFrame);
-	end_frame = FrameAtTime(context->selectionController->GetActiveLine()->End, agi::vfr::END) + 1;
+	end_frame = FrameAtTime(core.selectionController->GetActiveLine()->End, agi::vfr::END) + 1;
 
 	JumpToFrame(startFrame);
 
@@ -193,7 +203,8 @@ void VideoController::PlayLine() {
 void VideoController::Stop() {
 	if (IsPlaying()) {
 		playback.Stop();
-		context->audioController->Stop();
+		auto core = context->GetCore();
+		core.audioController->Stop();
 	}
 }
 
@@ -224,25 +235,29 @@ double VideoController::GetARFromType(AspectRatio type) const {
 void VideoController::SetAspectRatio(double value) {
 	ar_type = AspectRatio::Custom;
 	ar_value = mid(.5, value, 5.);
-	context->ass->Properties.ar_mode = (int)ar_type;
-	context->ass->Properties.ar_value = ar_value;
+	auto core = context->GetCore();
+	core.ass->Properties.ar_mode = (int)ar_type;
+	core.ass->Properties.ar_value = ar_value;
 	ARChange(ar_type, ar_value);
 }
 
 void VideoController::SetAspectRatio(AspectRatio type) {
 	ar_value = mid(.5, GetARFromType(type), 5.);
 	ar_type = type;
-	context->ass->Properties.ar_mode = (int)ar_type;
-	context->ass->Properties.ar_value = ar_value;
+	auto core = context->GetCore();
+	core.ass->Properties.ar_mode = (int)ar_type;
+	core.ass->Properties.ar_value = ar_value;
 	ARChange(ar_type, ar_value);
 }
 
 int VideoController::TimeAtFrame(int frame, agi::vfr::Time type) const {
-	return context->project->Timecodes().TimeAtFrame(frame, type);
+	auto core = context->GetCore();
+	return core.project->Timecodes().TimeAtFrame(frame, type);
 }
 
 int VideoController::FrameAtTime(int time, agi::vfr::Time type) const {
-	return context->project->Timecodes().FrameAtTime(time, type);
+	auto core = context->GetCore();
+	return core.project->Timecodes().FrameAtTime(time, type);
 }
 
 void VideoController::OnVideoError(VideoProviderErrorEvent const& err) {

@@ -166,8 +166,8 @@ struct SubsController::UndoInfo {
 
 SubsController::SubsController(agi::Context *context)
 : context(context)
-, undo_connection(context->ass->AddUndoManager(&SubsController::OnCommit, this))
-, text_selection_connection(context->textSelectionController->AddSelectionListener(&SubsController::OnTextSelectionChanged, this))
+, undo_connection(context->GetCore().ass->AddUndoManager(&SubsController::OnCommit, this))
+, text_selection_connection(context->GetCore().textSelectionController->AddSelectionListener(&SubsController::OnTextSelectionChanged, this))
 , autosave_queue(agi::dispatch::Create())
 {
 	autosave_timer_changed(&autosave_timer);

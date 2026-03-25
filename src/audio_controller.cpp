@@ -43,7 +43,7 @@
 AudioController::AudioController(agi::Context *context)
 : context(context)
 , playback_timer(this)
-, provider_connection(context->project->AddAudioProviderListener(&AudioController::OnAudioProvider, this))
+, provider_connection(context->GetCore().project->AddAudioProviderListener(&AudioController::OnAudioProvider, this))
 {
 	Bind(wxEVT_TIMER, &AudioController::OnPlaybackTimer, this, playback_timer.GetId());
 
@@ -97,20 +97,20 @@ void AudioController::OnAudioPlayerChanged()
 
 	Stop();
 	player.reset();
+	auto core = context->GetCore();
 
 	try
 	{
-		auto core = context->GetCore();
 		if (core.audioPlayerFactoryService)
 			player = core.audioPlayerFactoryService->CreateAudioPlayer(provider);
 	}
 	catch (...)
 	{
 		/// @todo This really shouldn't be just swallowing all audio player open errors
-		context->project->CloseAudio();
+		core.project->CloseAudio();
 	}
 	if (!player) {
-		context->project->CloseAudio();
+		core.project->CloseAudio();
 		return;
 	}
 	AnnounceAudioPlayerOpened();

@@ -33,8 +33,10 @@ void SelectionController::SetSelectedSet(Selection new_selection) {
 void SelectionController::SetActiveLine(AssDialogue *new_line) {
 	if (new_line != active_line) {
 		active_line = new_line;
-		if (active_line)
-			context->ass->Properties.active_row = active_line->Row;
+		if (active_line) {
+			auto core = context->GetCore();
+			core.ass->Properties.active_row = active_line->Row;
+		}
 		AnnounceActiveLineChanged(new_line);
 	}
 }
@@ -43,8 +45,10 @@ void SelectionController::SetSelectionAndActive(Selection new_selection, AssDial
 	bool active_line_changed = new_line != active_line;
 	selection = std::move(new_selection);
 	active_line = new_line;
-	if (active_line)
-		context->ass->Properties.active_row = active_line->Row;
+	if (active_line) {
+		auto core = context->GetCore();
+		core.ass->Properties.active_row = active_line->Row;
+	}
 
 	AnnounceSelectedSetChanged();
 	if (active_line_changed)
@@ -59,8 +63,9 @@ std::vector<AssDialogue *> SelectionController::GetSortedSelection() const {
 
 void SelectionController::PrevLine() {
 	if (!active_line) return;
-	auto it = context->ass->iterator_to(*active_line);
-	if (it != context->ass->Events.begin()) {
+	auto core = context->GetCore();
+	auto it = core.ass->iterator_to(*active_line);
+	if (it != core.ass->Events.begin()) {
 		--it;
 		SetSelectionAndActive({&*it}, &*it);
 	}
@@ -68,7 +73,8 @@ void SelectionController::PrevLine() {
 
 void SelectionController::NextLine() {
 	if (!active_line) return;
-	auto it = context->ass->iterator_to(*active_line);
-	if (++it != context->ass->Events.end())
+	auto core = context->GetCore();
+	auto it = core.ass->iterator_to(*active_line);
+	if (++it != core.ass->Events.end())
 		SetSelectionAndActive({&*it}, &*it);
 }

@@ -52,7 +52,7 @@ struct reload_all final : public Command {
 
 	void operator()(agi::Context *c) override {
 		config::global_scripts->Reload();
-		c->local_scripts->Reload();
+		c->GetCore().local_scripts->Reload();
 		c->ShowStatus(from_wx(_("Reloaded all Automation scripts")));
 	}
 };

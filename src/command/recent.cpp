@@ -54,7 +54,7 @@ struct recent_audio_entry : public Command {
 	STR_HELP("Open recent audio")
 
 	void operator()(agi::Context *c, int id) {
-		c->project->LoadAudio(config::mru->GetEntry("Audio", id));
+		c->GetCore().project->LoadAudio(config::mru->GetEntry("Audio", id));
 	}
 };
 
@@ -65,7 +65,7 @@ struct recent_keyframes_entry : public Command {
 	STR_HELP("Open recent keyframes")
 
 	void operator()(agi::Context *c, int id) {
-		c->project->LoadKeyframes(config::mru->GetEntry("Keyframes", id));
+		c->GetCore().project->LoadKeyframes(config::mru->GetEntry("Keyframes", id));
 	}
 };
 
@@ -77,10 +77,11 @@ struct recent_subtitle_entry : public Command {
 
 	void operator()(agi::Context *c, int id) {
 #ifdef __APPLE__
-		wxGetApp().NewProjectContext().project->LoadSubtitles(config::mru->GetEntry("Subtitle", id));
+		wxGetApp().NewProjectContext().GetCore().project->LoadSubtitles(config::mru->GetEntry("Subtitle", id));
 #else
-		if (c->subsController->TryToClose() == wxCANCEL) return;
-		c->project->LoadSubtitles(config::mru->GetEntry("Subtitle", id));
+		auto core = c->GetCore();
+		if (core.subsController->TryToClose() == wxCANCEL) return;
+		core.project->LoadSubtitles(config::mru->GetEntry("Subtitle", id));
 #endif
 	}
 };
@@ -92,7 +93,7 @@ struct recent_timecodes_entry : public Command {
 	STR_HELP("Open recent timecodes")
 
 	void operator()(agi::Context *c, int id) {
-		c->project->LoadTimecodes(config::mru->GetEntry("Timecodes", id));
+		c->GetCore().project->LoadTimecodes(config::mru->GetEntry("Timecodes", id));
 	}
 };
 
@@ -103,7 +104,7 @@ struct recent_video_entry : public Command {
 	STR_HELP("Open recent videos")
 
 	void operator()(agi::Context *c, int id) {
-		c->project->LoadVideo(config::mru->GetEntry("Video", id));
+		c->GetCore().project->LoadVideo(config::mru->GetEntry("Video", id));
 	}
 };
 

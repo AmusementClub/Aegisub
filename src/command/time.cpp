@@ -42,6 +42,7 @@
 #include "../libresrc/libresrc.h"
 #include "../project.h"
 #include "../selection_controller.h"
+#include "../subtitle_timing_ops.h"
 #include "../video_controller.h"
 
 #include <libaegisub/make_unique.h>
@@ -54,52 +55,29 @@ using cmd::Command;
 struct validate_video_loaded : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 	bool Validate(const agi::Context *c) override {
-		return !!c->project->VideoProvider();
+		return !!c->GetCore().project->VideoProvider();
 	}
 };
 
 struct validate_adjoinable : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 	bool Validate(const agi::Context *c) override {
-		size_t sel_size = c->selectionController->GetSelectedSet().size();
-		if (sel_size == 0) return false;
-		if (sel_size == 1 || sel_size == c->ass->Events.size()) return true;
-
-		auto sel = c->selectionController->GetSortedSelection();
-		for (size_t i = 1; i < sel_size; ++i) {
-			if (sel[i]->Row != sel[i - 1]->Row + 1)
-				return false;
-		}
-		return true;
+		auto core = c->GetCore();
+		return aegisub::subtitle_timing_ops::IsAdjoinableSelection(
+			core.selectionController->GetSortedSelection(),
+			core.ass->Events.size());
 	}
 };
 
 void adjoin_lines(agi::Context *c, bool set_start) {
-	auto const& sel = c->selectionController->GetSelectedSet();
-	AssDialogue *prev = nullptr;
-	size_t seen = 0;
-	bool prev_sel = false;
-	for (auto& diag : c->ass->Events) {
-		bool cur_sel = !!sel.count(&diag);
-		if (prev) {
-			// One row selections act as if the previous or next line was selected
-			if (set_start && cur_sel && (sel.size() == 1 || prev_sel))
-				diag.Start = prev->End;
-			else if (!set_start && prev_sel && (cur_sel || sel.size() == 1))
-				prev->End = diag.Start;
-		}
-
-		if (seen == sel.size())
-			break;
-
-		if (cur_sel)
-			++seen;
-
-		prev = &diag;
-		prev_sel = cur_sel;
-	}
-
-	c->ass->Commit(from_wx(_("adjoin")), AssFile::COMMIT_DIAG_TIME);
+	auto core = c->GetCore();
+	std::vector<AssDialogue *> ordered_events;
+	ordered_events.reserve(core.ass->Events.size());
+	for (auto& diag : core.ass->Events)
+		ordered_events.push_back(&diag);
+	if (!aegisub::subtitle_timing_ops::AdjoinSelection(ordered_events, core.selectionController->GetSelectedSet(), set_start))
+		return;
+	core.ass->Commit(from_wx(_("adjoin")), AssFile::COMMIT_DIAG_TIME);
 }
 
 struct time_continuous_end final : public validate_adjoinable {
@@ -132,20 +110,14 @@ struct time_frame_current final : public validate_video_loaded {
 	STR_HELP("Shift selection so that the active line starts at current frame")
 
 	void operator()(agi::Context *c) override {
-		auto const& sel = c->selectionController->GetSelectedSet();
-		const auto active_line = c->selectionController->GetActiveLine();
+		auto core = c->GetCore();
+		const auto active_line = core.selectionController->GetActiveLine();
 
-		if (sel.empty() || !active_line) return;
+		int target_start = std::max(0, core.videoController->TimeAtFrame(core.videoController->GetFrameN(), agi::vfr::START));
+		if (!aegisub::subtitle_timing_ops::ShiftSelectionToStartTime(core.selectionController->GetSelectedSet(), active_line, target_start))
+			return;
 
-		int target_start = std::max(0, c->videoController->TimeAtFrame(c->videoController->GetFrameN(), agi::vfr::START));
-		int shift_by = target_start - active_line->Start;
-
-		for (auto line : sel) {
-			line->Start = line->Start + shift_by;
-			line->End = line->End + shift_by;
-		}
-
-		c->ass->Commit(from_wx(_("shift to frame")), AssFile::COMMIT_DIAG_TIME);
+		core.ass->Commit(from_wx(_("shift to frame")), AssFile::COMMIT_DIAG_TIME);
 	}
 };
 
@@ -162,20 +134,13 @@ struct time_shift final : public Command {
 };
 
 static void snap_subs_video(agi::Context *c, bool set_start) {
-	auto const& sel = c->selectionController->GetSelectedSet();
-	if (sel.empty()) return;
+	auto core = c->GetCore();
+	int start = core.videoController->TimeAtFrame(core.videoController->GetFrameN(), agi::vfr::START);
+	int end = core.videoController->TimeAtFrame(core.videoController->GetFrameN(), agi::vfr::END);
+	if (!aegisub::subtitle_timing_ops::SnapSelectionToVideoRange(core.selectionController->GetSelectedSet(), start, end, set_start))
+		return;
 
-	int start = c->videoController->TimeAtFrame(c->videoController->GetFrameN(), agi::vfr::START);
-	int end = c->videoController->TimeAtFrame(c->videoController->GetFrameN(), agi::vfr::END);
-
-	for (auto line : sel) {
-		if (set_start || line->Start > start)
-			line->Start = start;
-		if (!set_start || line->End < end)
-			line->End = end;
-	}
-
-	c->ass->Commit(from_wx(_("timing")), AssFile::COMMIT_DIAG_TIME);
+	core.ass->Commit(from_wx(_("timing")), AssFile::COMMIT_DIAG_TIME);
 }
 
 struct time_snap_end_video final : public validate_video_loaded {
@@ -198,41 +163,20 @@ struct time_snap_scene final : public validate_video_loaded {
 	STR_HELP("Set start and end of subtitles to the keyframes around current video frame")
 
 	void operator()(agi::Context *c) override {
-		auto const& keyframes = c->project->Keyframes();
-		if (keyframes.empty()) return;
+		auto core = c->GetCore();
+		VideoController *con = core.videoController.get();
+		auto range = aegisub::subtitle_timing_ops::ComputeSceneSnapFrameRange(
+			core.project->Keyframes(),
+			con->GetFrameN(),
+			core.project->VideoProvider()->GetFrameCount());
+		if (!range) return;
 
-		VideoController *con = c->videoController.get();
-		int curFrame = con->GetFrameN();
-		int prev = 0;
-		int next = 0;
+		int start_ms = con->TimeAtFrame(range->start_frame, agi::vfr::START);
+		int end_ms = con->TimeAtFrame(range->one_past_end_frame - 1, agi::vfr::END);
+		if (!aegisub::subtitle_timing_ops::ApplyTimeRangeToSelection(core.selectionController->GetSelectedSet(), start_ms, end_ms))
+			return;
 
-		if (curFrame < keyframes.front())
-			next = keyframes.front();
-		else if (curFrame >= keyframes.back()) {
-			prev = keyframes.back();
-			next = c->project->VideoProvider()->GetFrameCount();
-		}
-		else {
-			auto kf = std::lower_bound(keyframes.begin(), keyframes.end(), curFrame);
-			if (*kf == curFrame) {
-				prev = *kf;
-				next = *(kf + 1);
-			}
-			else {
-				prev = *(kf - 1);
-				next = *kf;
-			}
-		}
-
-		int start_ms = con->TimeAtFrame(prev,agi::vfr::START);
-		int end_ms = con->TimeAtFrame(next-1,agi::vfr::END);
-
-		for (auto line : c->selectionController->GetSelectedSet()) {
-			line->Start = start_ms;
-			line->End = end_ms;
-		}
-
-		c->ass->Commit(from_wx(_("snap to scene")), AssFile::COMMIT_DIAG_TIME);
+		core.ass->Commit(from_wx(_("snap to scene")), AssFile::COMMIT_DIAG_TIME);
 	}
 };
 
@@ -243,7 +187,7 @@ struct time_align_subtitle_to_point final : public validate_video_loaded {
 	STR_DISP("Align subtitle to video")
 	STR_HELP("Align subtitle to video by key points")
 	void operator()(agi::Context* c) override {
-		c->videoController->Stop();
+		c->GetCore().videoController->Stop();
 		ShowAlignToVideoDialog(c);
 	}
 };
@@ -254,7 +198,7 @@ struct time_add_lead_both final : public Command {
 	STR_DISP("Add lead in and out")
 	STR_HELP("Add both lead in and out to the selected lines")
 	void operator()(agi::Context *c) override {
-		if (AudioTimingController *tc = c->audioController->GetTimingController()) {
+		if (AudioTimingController *tc = c->GetCore().audioController->GetTimingController()) {
 			tc->AddLeadIn();
 			tc->AddLeadOut();
 		}
@@ -268,8 +212,8 @@ struct time_add_lead_in final : public Command {
 	STR_DISP("Add lead in")
 	STR_HELP("Add the lead in time to the selected lines")
 	void operator()(agi::Context *c) override {
-		if (c->audioController->GetTimingController())
-			c->audioController->GetTimingController()->AddLeadIn();
+		if (auto *tc = c->GetCore().audioController->GetTimingController())
+			tc->AddLeadIn();
 	}
 };
 
@@ -280,8 +224,8 @@ struct time_add_lead_out final : public Command {
 	STR_DISP("Add lead out")
 	STR_HELP("Add the lead out time to the selected lines")
 	void operator()(agi::Context *c) override {
-		if (c->audioController->GetTimingController())
-			c->audioController->GetTimingController()->AddLeadOut();
+		if (auto *tc = c->GetCore().audioController->GetTimingController())
+			tc->AddLeadOut();
 	}
 };
 
@@ -291,8 +235,8 @@ struct time_length_increase final : public Command {
 	STR_DISP("Increase length")
 	STR_HELP("Increase the length of the current timing unit")
 	void operator()(agi::Context *c) override {
-		if (c->audioController->GetTimingController())
-			c->audioController->GetTimingController()->ModifyLength(1, false);
+		if (auto *tc = c->GetCore().audioController->GetTimingController())
+			tc->ModifyLength(1, false);
 	}
 };
 
@@ -302,8 +246,8 @@ struct time_length_increase_shift final : public Command {
 	STR_DISP("Increase length and shift")
 	STR_HELP("Increase the length of the current timing unit and shift the following items")
 	void operator()(agi::Context *c) override {
-		if (c->audioController->GetTimingController())
-			c->audioController->GetTimingController()->ModifyLength(1, true);
+		if (auto *tc = c->GetCore().audioController->GetTimingController())
+			tc->ModifyLength(1, true);
 	}
 };
 
@@ -313,8 +257,8 @@ struct time_length_decrease final : public Command {
 	STR_DISP("Decrease length")
 	STR_HELP("Decrease the length of the current timing unit")
 	void operator()(agi::Context *c) override {
-		if (c->audioController->GetTimingController())
-			c->audioController->GetTimingController()->ModifyLength(-1, false);
+		if (auto *tc = c->GetCore().audioController->GetTimingController())
+			tc->ModifyLength(-1, false);
 	}
 };
 
@@ -324,8 +268,8 @@ struct time_length_decrease_shift final : public Command {
 	STR_DISP("Decrease length and shift")
 	STR_HELP("Decrease the length of the current timing unit and shift the following items")
 	void operator()(agi::Context *c) override {
-		if (c->audioController->GetTimingController())
-			c->audioController->GetTimingController()->ModifyLength(-1, true);
+		if (auto *tc = c->GetCore().audioController->GetTimingController())
+			tc->ModifyLength(-1, true);
 	}
 };
 
@@ -335,8 +279,8 @@ struct time_start_increase final : public Command {
 	STR_DISP("Shift start time forward")
 	STR_HELP("Shift the start time of the current timing unit forward")
 	void operator()(agi::Context *c) override {
-		if (c->audioController->GetTimingController())
-			c->audioController->GetTimingController()->ModifyStart(1);
+		if (auto *tc = c->GetCore().audioController->GetTimingController())
+			tc->ModifyStart(1);
 	}
 };
 
@@ -346,8 +290,8 @@ struct time_start_decrease final : public Command {
 	STR_DISP("Shift start time backward")
 	STR_HELP("Shift the start time of the current timing unit backward")
 	void operator()(agi::Context *c) override {
-		if (c->audioController->GetTimingController())
-			c->audioController->GetTimingController()->ModifyStart(-1);
+		if (auto *tc = c->GetCore().audioController->GetTimingController())
+			tc->ModifyStart(-1);
 	}
 };
 
@@ -370,8 +314,8 @@ struct time_next final : public Command {
 	STR_DISP("Next Line")
 	STR_HELP("Next line or syllable")
 	void operator()(agi::Context *c) override {
-		if (c->audioController->GetTimingController())
-			c->audioController->GetTimingController()->Next(AudioTimingController::TIMING_UNIT);
+		if (auto *tc = c->GetCore().audioController->GetTimingController())
+			tc->Next(AudioTimingController::TIMING_UNIT);
 	}
 };
 
@@ -382,8 +326,8 @@ struct time_prev final : public Command {
 	STR_DISP("Previous Line")
 	STR_HELP("Previous line or syllable")
 	void operator()(agi::Context *c) override {
-		if (c->audioController->GetTimingController())
-			c->audioController->GetTimingController()->Prev();
+		if (auto *tc = c->GetCore().audioController->GetTimingController())
+			tc->Prev();
 	}
 };
 }

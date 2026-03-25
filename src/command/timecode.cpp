@@ -53,11 +53,11 @@ struct timecode_close final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	bool Validate(const agi::Context *c) override {
-		return c->project->CanCloseTimecodes();
+		return c->GetCore().project->CanCloseTimecodes();
 	}
 
 	void operator()(agi::Context *c) override {
-		c->project->CloseTimecodes();
+		c->GetCore().project->CloseTimecodes();
 	}
 };
 
@@ -69,10 +69,12 @@ struct timecode_open final : public Command {
 	STR_HELP("Open a VFR timecodes v1 or v2 file")
 
 	void operator()(agi::Context *c) override {
+		auto core = c->GetCore();
+		auto ui = c->GetUI();
 		auto str = from_wx(_("All Supported Formats") + wxS(" (*.txt)|*.txt|") + _("All Files") + wxS(" (*.*)|*.*"));
-		auto filename = OpenFileSelector(_("Open Timecodes File"), "Path/Last/Timecodes", "", "", str, c->parent);
+		auto filename = OpenFileSelector(_("Open Timecodes File"), "Path/Last/Timecodes", "", "", str, ui.parent);
 		if (!filename.empty())
-			c->project->LoadTimecodes(filename);
+			core.project->LoadTimecodes(filename);
 	}
 };
 
@@ -85,17 +87,19 @@ struct timecode_save final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	bool Validate(const agi::Context *c) override {
-		return c->project->Timecodes().IsLoaded();
+		return c->GetCore().project->Timecodes().IsLoaded();
 	}
 
 	void operator()(agi::Context *c) override {
+		auto core = c->GetCore();
+		auto ui = c->GetUI();
 		auto str = from_wx(_("All Supported Formats") + wxS(" (*.txt)|*.txt|") + _("All Files") + wxS(" (*.*)|*.*"));
-		auto filename = SaveFileSelector(_("Save Timecodes File"), "Path/Last/Timecodes", "", "", str, c->parent);
+		auto filename = SaveFileSelector(_("Save Timecodes File"), "Path/Last/Timecodes", "", "", str, ui.parent);
 		if (filename.empty()) return;
 
 		try {
-			auto provider = c->project->VideoProvider();
-			c->project->Timecodes().Save(filename, provider ? provider->GetFrameCount() : -1);
+			auto provider = core.project->VideoProvider();
+			core.project->Timecodes().Save(filename, provider ? provider->GetFrameCount() : -1);
 			config::mru->Add("Timecodes", filename);
 		}
 		catch (agi::Exception const& err) {

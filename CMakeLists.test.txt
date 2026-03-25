@@ -47,7 +47,10 @@ if(GTEST_FOUND)
         src/resolution_resampler.cpp
         src/text_file_writer.cpp
         src/utils.cpp
+        src/subtitle_edit_ops.cpp
+        src/subtitle_grid_ops.cpp
         src/video_property_update.cpp
+        src/subtitle_timing_ops.cpp
         tests/tests/cajun.cpp
         tests/tests/calltip_provider.cpp
         tests/tests/charset_choice.cpp
@@ -91,6 +94,9 @@ if(GTEST_FOUND)
         tests/tests/subtitle_overlay_blend.cpp
         tests/tests/subtitle_fps_choice.cpp
         tests/tests/subtitle_format_microdvd.cpp
+        tests/tests/subtitle_edit_ops.cpp
+        tests/tests/subtitle_grid_ops.cpp
+        tests/tests/subtitle_timing_ops.cpp
         tests/tests/syntax_highlight.cpp
         tests/tests/thesaurus.cpp
         tests/tests/time.cpp

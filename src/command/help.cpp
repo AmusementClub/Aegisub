@@ -54,7 +54,7 @@ struct help_bugs final : public Command {
 				for (char *foo = (char*)nullptr;;) *foo++ = 42;
 			} else {
 				c->ShowInfo("Now crashing with an unhandled exception...");
-				throw c->parent;
+				throw c->GetUI().parent;
 			}
 		}
 		wxLaunchDefaultBrowser(wxS("https://github.com/Aegisub/Aegisub/issues"), wxBROWSER_NEW_WINDOW);

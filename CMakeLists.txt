@@ -429,6 +429,9 @@ add_executable(Aegisub WIN32
     src/subtitle_format_transtation.cpp
     src/subtitle_format_ttxt.cpp
     src/subtitle_format_txt.cpp
+    src/subtitle_edit_ops.cpp
+    src/subtitle_grid_ops.cpp
+    src/subtitle_timing_ops.cpp
     src/visual_tool.cpp
     src/visual_tool_clip.cpp
     src/visual_tool_cross.cpp

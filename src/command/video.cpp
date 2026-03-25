@@ -66,14 +66,16 @@ namespace {
 struct validator_video_loaded : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 	bool Validate(const agi::Context *c) override {
-		return !!c->project->VideoProvider();
+		return !!c->GetCore().project->VideoProvider();
 	}
 };
 
 struct validator_video_attached : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 	bool Validate(const agi::Context *c) override {
-		return !!c->project->VideoProvider() && !c->dialog->Get<DialogDetachedVideo>();
+		auto core = c->GetCore();
+		auto ui = c->GetUI();
+		return !!core.project->VideoProvider() && !ui.dialog->Get<DialogDetachedVideo>();
 	}
 };
 
@@ -85,13 +87,14 @@ struct video_aspect_cinematic final : public validator_video_loaded {
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	bool IsActive(const agi::Context *c) override {
-		return c->videoController->GetAspectRatioType() == AspectRatio::Cinematic;
+		return c->GetCore().videoController->GetAspectRatioType() == AspectRatio::Cinematic;
 	}
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		c->videoController->SetAspectRatio(AspectRatio::Cinematic);
-		c->frame->SetDisplayMode(1,-1);
+		auto core = c->GetCore();
+		core.videoController->Stop();
+		core.videoController->SetAspectRatio(AspectRatio::Cinematic);
+		c->GetUI().frame->SetDisplayMode(1,-1);
 	}
 };
 
@@ -103,16 +106,17 @@ struct video_aspect_custom final : public validator_video_loaded {
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	bool IsActive(const agi::Context *c) override {
-		return c->videoController->GetAspectRatioType() == AspectRatio::Custom;
+		return c->GetCore().videoController->GetAspectRatioType() == AspectRatio::Custom;
 	}
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
+		auto core = c->GetCore();
+		core.videoController->Stop();
 
 		std::string value = from_wx(wxGetTextFromUser(
 			_("Enter aspect ratio in either:\n  decimal (e.g. 2.35)\n  fractional (e.g. 16:9)\n  specific resolution (e.g. 853x480)"),
 			_("Enter aspect ratio"),
-			std::to_wstring(c->videoController->GetAspectRatioValue())));
+			std::to_wstring(core.videoController->GetAspectRatioValue())));
 		if (value.empty()) return;
 
 		double numval = 0;
@@ -131,8 +135,8 @@ struct video_aspect_custom final : public validator_video_loaded {
 		if (numval < 0.5 || numval > 5.0)
 			c->ShowError(from_wx(_("Invalid value! Aspect ratio must be between 0.5 and 5.0.")), "Invalid Aspect Ratio");
 		else {
-			c->videoController->SetAspectRatio(numval);
-			c->frame->SetDisplayMode(1,-1);
+			core.videoController->SetAspectRatio(numval);
+			c->GetUI().frame->SetDisplayMode(1,-1);
 		}
 	}
 };
@@ -145,13 +149,14 @@ struct video_aspect_default final : public validator_video_loaded {
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	bool IsActive(const agi::Context *c) override {
-		return c->videoController->GetAspectRatioType() == AspectRatio::Default;
+		return c->GetCore().videoController->GetAspectRatioType() == AspectRatio::Default;
 	}
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		c->videoController->SetAspectRatio(AspectRatio::Default);
-		c->frame->SetDisplayMode(1,-1);
+		auto core = c->GetCore();
+		core.videoController->Stop();
+		core.videoController->SetAspectRatio(AspectRatio::Default);
+		c->GetUI().frame->SetDisplayMode(1,-1);
 	}
 };
 
@@ -163,13 +168,14 @@ struct video_aspect_full final : public validator_video_loaded {
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	bool IsActive(const agi::Context *c) override {
-		return c->videoController->GetAspectRatioType() == AspectRatio::Fullscreen;
+		return c->GetCore().videoController->GetAspectRatioType() == AspectRatio::Fullscreen;
 	}
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		c->videoController->SetAspectRatio(AspectRatio::Fullscreen);
-		c->frame->SetDisplayMode(1,-1);
+		auto core = c->GetCore();
+		core.videoController->Stop();
+		core.videoController->SetAspectRatio(AspectRatio::Fullscreen);
+		c->GetUI().frame->SetDisplayMode(1,-1);
 	}
 };
 
@@ -181,13 +187,14 @@ struct video_aspect_wide final : public validator_video_loaded {
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	bool IsActive(const agi::Context *c) override {
-		return c->videoController->GetAspectRatioType() == AspectRatio::Widescreen;
+		return c->GetCore().videoController->GetAspectRatioType() == AspectRatio::Widescreen;
 	}
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		c->videoController->SetAspectRatio(AspectRatio::Widescreen);
-		c->frame->SetDisplayMode(1,-1);
+		auto core = c->GetCore();
+		core.videoController->Stop();
+		core.videoController->SetAspectRatio(AspectRatio::Widescreen);
+		c->GetUI().frame->SetDisplayMode(1,-1);
 	}
 };
 
@@ -199,7 +206,7 @@ struct video_close final : public validator_video_loaded {
 	STR_HELP("Close the currently open video file")
 
 	void operator()(agi::Context *c) override {
-		c->project->CloseVideo();
+		c->GetCore().project->CloseVideo();
 	}
 };
 
@@ -210,7 +217,7 @@ struct video_copy_coordinates final : public validator_video_loaded {
 	STR_HELP("Copy the current coordinates of the mouse over the video to the clipboard")
 
 	void operator()(agi::Context *c) override {
-		SetClipboard(c->videoDisplay->GetMousePosition().Str());
+		SetClipboard(c->GetUI().videoDisplay->GetMousePosition().Str());
 	}
 };
 
@@ -242,14 +249,15 @@ struct video_detach final : public validator_video_loaded {
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
 
 	bool IsActive(const agi::Context *c) override {
-		return !!c->dialog->Get<DialogDetachedVideo>();
+		return !!c->GetUI().dialog->Get<DialogDetachedVideo>();
 	}
 
 	void operator()(agi::Context *c) override {
-		if (DialogDetachedVideo *d = c->dialog->Get<DialogDetachedVideo>())
+		auto ui = c->GetUI();
+		if (DialogDetachedVideo *d = ui.dialog->Get<DialogDetachedVideo>())
 			d->Close();
 		else
-			c->dialog->Show<DialogDetachedVideo>(c);
+			ui.dialog->Show<DialogDetachedVideo>(c);
 	}
 };
 
@@ -261,7 +269,7 @@ struct video_details final : public validator_video_loaded {
 	STR_HELP("Show video details")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
+		c->GetCore().videoController->Stop();
 		ShowVideoDetailsDialog(c);
 	}
 };
@@ -273,28 +281,31 @@ struct video_focus_seek final : public validator_video_loaded {
 	STR_HELP("Toggle focus between the video slider and the previous thing to have focus")
 
 	void operator()(agi::Context *c) override {
+		auto ui = c->GetUI();
 		wxWindow *curFocus = wxWindow::FindFocus();
-		if (curFocus == c->videoSlider) {
-			if (c->previousFocus) c->previousFocus->SetFocus();
+		if (curFocus == ui.videoSlider) {
+			if (ui.previousFocus) ui.previousFocus->SetFocus();
 		}
 		else {
-			c->previousFocus = curFocus;
-			c->videoSlider->SetFocus();
+			ui.previousFocus = curFocus;
+			ui.videoSlider->SetFocus();
 		}
 	}
 };
 
 wxImage get_image(agi::Context *c, bool raw) {
-	if (c->videoDisplay) {
-		auto image = c->videoDisplay->GetFrameImage(raw);
+	auto core = c->GetCore();
+	auto ui = c->GetUI();
+	if (ui.videoDisplay) {
+		auto image = ui.videoDisplay->GetFrameImage(raw);
 		if (image.IsOk())
 			return image;
 	}
 
-	auto frame = c->videoController->GetFrameN();
-	auto bgra = c->project->VideoProvider()->GetFrameBgra(
+	auto frame = core.videoController->GetFrameN();
+	auto bgra = core.project->VideoProvider()->GetFrameBgra(
 		frame,
-		c->project->Timecodes().TimeAtFrame(frame),
+		core.project->Timecodes().TimeAtFrame(frame),
 		raw);
 	return bgra ? GetImage(*bgra) : wxImage();
 }
@@ -342,7 +353,7 @@ struct video_frame_next final : public validator_video_loaded {
 	STR_HELP("Seek to the next frame")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->NextFrame();
+		c->GetCore().videoController->NextFrame();
 	}
 };
 
@@ -353,25 +364,26 @@ struct video_frame_next_boundary final : public validator_video_loaded {
 	STR_HELP("Seek to the next beginning or end of a subtitle")
 
 	void operator()(agi::Context *c) override {
-		AssDialogue *active_line = c->selectionController->GetActiveLine();
+		auto core = c->GetCore();
+		AssDialogue *active_line = core.selectionController->GetActiveLine();
 		if (!active_line) return;
 
-		int target = c->videoController->FrameAtTime(active_line->Start, agi::vfr::START);
-		if (target > c->videoController->GetFrameN()) {
-			c->videoController->JumpToFrame(target);
+		int target = core.videoController->FrameAtTime(active_line->Start, agi::vfr::START);
+		if (target > core.videoController->GetFrameN()) {
+			core.videoController->JumpToFrame(target);
 			return;
 		}
 
-		target = c->videoController->FrameAtTime(active_line->End, agi::vfr::END);
-		if (target > c->videoController->GetFrameN()) {
-			c->videoController->JumpToFrame(target);
+		target = core.videoController->FrameAtTime(active_line->End, agi::vfr::END);
+		if (target > core.videoController->GetFrameN()) {
+			core.videoController->JumpToFrame(target);
 			return;
 		}
 
-		c->selectionController->NextLine();
-		AssDialogue *new_line = c->selectionController->GetActiveLine();
+		core.selectionController->NextLine();
+		AssDialogue *new_line = core.selectionController->GetActiveLine();
 		if (new_line != active_line)
-		c->videoController->JumpToTime(new_line->Start);
+			core.videoController->JumpToTime(new_line->Start);
 	}
 };
 
@@ -382,10 +394,11 @@ struct video_frame_next_keyframe final : public validator_video_loaded {
 	STR_HELP("Seek to the next keyframe")
 
 	void operator()(agi::Context *c) override {
-		auto const& kf = c->project->Keyframes();
-		auto pos = lower_bound(kf.begin(), kf.end(), c->videoController->GetFrameN() + 1);
+		auto core = c->GetCore();
+		auto const& kf = core.project->Keyframes();
+		auto pos = lower_bound(kf.begin(), kf.end(), core.videoController->GetFrameN() + 1);
 
-		c->videoController->JumpToFrame(pos == kf.end() ? c->project->VideoProvider()->GetFrameCount() - 1 : *pos);
+		core.videoController->JumpToFrame(pos == kf.end() ? core.project->VideoProvider()->GetFrameCount() - 1 : *pos);
 	}
 };
 
@@ -396,8 +409,9 @@ struct video_frame_next_large final : public validator_video_loaded {
 	STR_HELP("Fast jump forward")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->JumpToFrame(
-			c->videoController->GetFrameN() +
+		auto core = c->GetCore();
+		core.videoController->JumpToFrame(
+			core.videoController->GetFrameN() +
 			OPT_GET("Video/Slider/Fast Jump Step")->GetInt());
 	}
 };
@@ -409,7 +423,7 @@ struct video_frame_prev final : public validator_video_loaded {
 	STR_HELP("Seek to the previous frame")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->PrevFrame();
+		c->GetCore().videoController->PrevFrame();
 	}
 };
 
@@ -420,25 +434,26 @@ struct video_frame_prev_boundary final : public validator_video_loaded {
 	STR_HELP("Seek to the previous beginning or end of a subtitle")
 
 	void operator()(agi::Context *c) override {
-		AssDialogue *active_line = c->selectionController->GetActiveLine();
+		auto core = c->GetCore();
+		AssDialogue *active_line = core.selectionController->GetActiveLine();
 		if (!active_line) return;
 
-		int target = c->videoController->FrameAtTime(active_line->End, agi::vfr::END);
-		if (target < c->videoController->GetFrameN()) {
-			c->videoController->JumpToFrame(target);
+		int target = core.videoController->FrameAtTime(active_line->End, agi::vfr::END);
+		if (target < core.videoController->GetFrameN()) {
+			core.videoController->JumpToFrame(target);
 			return;
 		}
 
-		target = c->videoController->FrameAtTime(active_line->Start, agi::vfr::START);
-		if (target < c->videoController->GetFrameN()) {
-			c->videoController->JumpToFrame(target);
+		target = core.videoController->FrameAtTime(active_line->Start, agi::vfr::START);
+		if (target < core.videoController->GetFrameN()) {
+			core.videoController->JumpToFrame(target);
 			return;
 		}
 
-		c->selectionController->PrevLine();
-		AssDialogue *new_line = c->selectionController->GetActiveLine();
+		core.selectionController->PrevLine();
+		AssDialogue *new_line = core.selectionController->GetActiveLine();
 		if (new_line != active_line)
-			c->videoController->JumpToTime(new_line->End, agi::vfr::END);
+			core.videoController->JumpToTime(new_line->End, agi::vfr::END);
 	}
 };
 
@@ -449,18 +464,19 @@ struct video_frame_prev_keyframe final : public validator_video_loaded {
 	STR_HELP("Seek to the previous keyframe")
 
 	void operator()(agi::Context *c) override {
-		auto const& kf = c->project->Keyframes();
+		auto core = c->GetCore();
+		auto const& kf = core.project->Keyframes();
 		if (kf.empty()) {
-			c->videoController->JumpToFrame(0);
+			core.videoController->JumpToFrame(0);
 			return;
 		}
 
-		auto pos = lower_bound(kf.begin(), kf.end(), c->videoController->GetFrameN());
+		auto pos = lower_bound(kf.begin(), kf.end(), core.videoController->GetFrameN());
 
 		if (pos != kf.begin())
 			--pos;
 
-		c->videoController->JumpToFrame(*pos);
+		core.videoController->JumpToFrame(*pos);
 	}
 };
 
@@ -471,17 +487,20 @@ struct video_frame_prev_large final : public validator_video_loaded {
 	STR_HELP("Fast jump backwards")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->JumpToFrame(
-			c->videoController->GetFrameN() -
+		auto core = c->GetCore();
+		core.videoController->JumpToFrame(
+			core.videoController->GetFrameN() -
 			OPT_GET("Video/Slider/Fast Jump Step")->GetInt());
 	}
 };
 
 static void save_snapshot(agi::Context *c, bool raw) {
+	auto core = c->GetCore();
+	auto ui = c->GetUI();
 	auto option = OPT_GET("Path/Screenshot")->GetString();
 	agi::fs::path basepath;
 
-	auto videoname = c->project->VideoName();
+	auto videoname = core.project->VideoName();
 	bool is_dummy = agi::util::strings::starts_with(agi::fs::PathToString(videoname), "?dummy");
 
 	// Is it a path specifier and not an actual fixed path?
@@ -492,7 +511,7 @@ static void save_snapshot(agi::Context *c, bool raw) {
 			option = "?script";
 		}
 		// Find out where the ?specifier points to
-		basepath = c->path->Decode(option);
+		basepath = core.path->Decode(option);
 		// If where ever that is isn't defined, we can't save there
 		if ((basepath == "\\") || (basepath == "/")) {
 			// So save to the current user's home dir instead
@@ -501,7 +520,7 @@ static void save_snapshot(agi::Context *c, bool raw) {
 	}
 	// Actual fixed (possibly relative) path, decode it
 	else
-		basepath = c->path->MakeAbsolute(option, "?user/");
+		basepath = core.path->MakeAbsolute(option, "?user/");
 
 	basepath /= is_dummy ? "dummy" : videoname.stem();
 
@@ -511,11 +530,11 @@ static void save_snapshot(agi::Context *c, bool raw) {
 	auto const base_dir = basepath.parent_path();
 	auto const base_name = agi::fs::PathToString(basepath.filename());
 	do {
-		path = base_dir / agi::fs::PathFromString(agi::format("%s_%03d_%d.png", base_name, session_shot_count++, c->videoController->GetFrameN()));
+		path = base_dir / agi::fs::PathFromString(agi::format("%s_%03d_%d.png", base_name, session_shot_count++, core.videoController->GetFrameN()));
 	} while (agi::fs::FileExists(path));
 
 	wxFileDialog dialog(
-		c->parent,
+		ui.parent,
 		raw ? _("Save PNG snapshot (no subtitles)") : _("Save PNG snapshot"),
 		base_dir.wstring(),
 		path.filename().wstring(),
@@ -568,9 +587,11 @@ struct video_jump final : public validator_video_loaded {
 	STR_HELP("Jump to frame or time")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
+		auto core = c->GetCore();
+		auto ui = c->GetUI();
+		core.videoController->Stop();
 		ShowJumpToDialog(c);
-		c->videoSlider->SetFocus();
+		ui.videoSlider->SetFocus();
 	}
 };
 
@@ -582,8 +603,9 @@ struct video_jump_end final : public validator_video_loaded {
 	STR_HELP("Jump the video to the end frame of current subtitle")
 
 	void operator()(agi::Context *c) override {
-		if (auto active_line = c->selectionController->GetActiveLine())
-			c->videoController->JumpToTime(active_line->End, agi::vfr::END);
+		auto core = c->GetCore();
+		if (auto active_line = core.selectionController->GetActiveLine())
+			core.videoController->JumpToTime(active_line->End, agi::vfr::END);
 	}
 };
 
@@ -595,8 +617,9 @@ struct video_jump_start final : public validator_video_loaded {
 	STR_HELP("Jump the video to the start frame of current subtitle")
 
 	void operator()(agi::Context *c) override {
-		if (auto active_line = c->selectionController->GetActiveLine())
-			c->videoController->JumpToTime(active_line->Start);
+		auto core = c->GetCore();
+		if (auto active_line = core.selectionController->GetActiveLine())
+			core.videoController->JumpToTime(active_line->Start);
 	}
 };
 
@@ -608,11 +631,12 @@ struct video_open final : public Command {
 	STR_HELP("Open a video file")
 
 	void operator()(agi::Context *c) override {
+		auto core = c->GetCore();
 		auto str = from_wx(_("Video Formats") + wxS(" (*.asf,*.avi,*.avs,*.d2v,*.h264,*.hevc,*.m2ts,*.m4v,*.mkv,*.mov,*.mp4,*.mpeg,*.mpg,*.ogm,*.webm,*.wmv,*.ts,*.y4m,*.yuv)|*.asf;*.avi;*.avs;*.d2v;*.h264;*.hevc;*.m2ts;*.m4v;*.mkv;*.mov;*.mp4;*.mpeg;*.mpg;*.ogm;*.webm;*.wmv;*.ts;*.y4m;*.yuv|")
 		         + _("All Files") + wxS(" (*.*)|*.*"));
-		auto filename = OpenFileSelector(_("Open video file"), "Path/Last/Video", "", "", str, c->parent);
+		auto filename = OpenFileSelector(_("Open video file"), "Path/Last/Video", "", "", str, c->GetUI().parent);
 		if (!filename.empty())
-			c->project->LoadVideo(filename);
+			core.project->LoadVideo(filename);
 	}
 };
 
@@ -624,9 +648,10 @@ struct video_open_dummy final : public Command {
 	STR_HELP("Open a placeholder video clip with solid color")
 
 	void operator()(agi::Context *c) override {
-		std::string fn = CreateDummyVideo(c->parent);
+		auto core = c->GetCore();
+		std::string fn = CreateDummyVideo(c->GetUI().parent);
 		if (!fn.empty())
-			c->project->LoadVideo(fn);
+			core.project->LoadVideo(fn);
 	}
 };
 
@@ -659,8 +684,9 @@ struct video_opt_scale_with_dpi final : public Command {
 	}
 
 	void operator()(agi::Context *c) override {
+		auto video_display = c->GetUI().videoDisplay;
 		OPT_SET("Video/Scale with DPI")->SetBool(!OPT_GET("Video/Scale with DPI")->GetBool());
-		c->videoDisplay->SetZoom(c->videoDisplay->GetZoom());
+		video_display->SetZoom(video_display->GetZoom());
 	}
 };
 
@@ -672,7 +698,7 @@ struct video_play final : public validator_video_loaded {
 	STR_HELP("Play video starting on this position")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Play();
+		c->GetCore().videoController->Play();
 	}
 };
 
@@ -684,7 +710,7 @@ struct video_play_line final : public validator_video_loaded {
 	STR_HELP("Play current line")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->PlayLine();
+		c->GetCore().videoController->PlayLine();
 	}
 };
 
@@ -701,7 +727,7 @@ struct video_show_overscan final : public validator_video_loaded {
 
 	void operator()(agi::Context *c) override {
 		OPT_SET("Video/Overscan Mask")->SetBool(!OPT_GET("Video/Overscan Mask")->GetBool());
-		c->videoDisplay->Render();
+		c->GetUI().videoDisplay->Render();
 	}
 };
 
@@ -714,12 +740,14 @@ public:
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	bool IsActive(const agi::Context *c) override {
-		return c->videoDisplay->GetZoom() == 1.;
+		return c->GetUI().videoDisplay->GetZoom() == 1.;
 	}
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		c->videoDisplay->SetZoom(1.);
+		auto core = c->GetCore();
+		auto video_display = c->GetUI().videoDisplay;
+		core.videoController->Stop();
+		video_display->SetZoom(1.);
 	}
 };
 
@@ -732,7 +760,7 @@ public:
 	STR_HELP("Stop video playback")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
+		c->GetCore().videoController->Stop();
 	}
 };
 
@@ -745,12 +773,14 @@ public:
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	bool IsActive(const agi::Context *c) override {
-		return c->videoDisplay->GetZoom() == 2.;
+		return c->GetUI().videoDisplay->GetZoom() == 2.;
 	}
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		c->videoDisplay->SetZoom(2.);
+		auto core = c->GetCore();
+		auto video_display = c->GetUI().videoDisplay;
+		core.videoController->Stop();
+		video_display->SetZoom(2.);
 	}
 };
 
@@ -763,12 +793,14 @@ public:
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	bool IsActive(const agi::Context *c) override {
-		return c->videoDisplay->GetZoom() == .5;
+		return c->GetUI().videoDisplay->GetZoom() == .5;
 	}
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		c->videoDisplay->SetZoom(.5);
+		auto core = c->GetCore();
+		auto video_display = c->GetUI().videoDisplay;
+		core.videoController->Stop();
+		video_display->SetZoom(.5);
 	}
 };
 
@@ -780,7 +812,8 @@ struct video_zoom_in final : public validator_video_attached {
 	STR_HELP("Zoom video in")
 
 	void operator()(agi::Context *c) override {
-		c->videoDisplay->SetZoom(c->videoDisplay->GetZoom() + .125);
+		auto video_display = c->GetUI().videoDisplay;
+		video_display->SetZoom(video_display->GetZoom() + .125);
 	}
 };
 
@@ -792,7 +825,8 @@ struct video_zoom_out final : public validator_video_attached {
 	STR_HELP("Zoom video out")
 
 	void operator()(agi::Context *c) override {
-		c->videoDisplay->SetZoom(c->videoDisplay->GetZoom() - .125);
+		auto video_display = c->GetUI().videoDisplay;
+		video_display->SetZoom(video_display->GetZoom() - .125);
 	}
 };
 }

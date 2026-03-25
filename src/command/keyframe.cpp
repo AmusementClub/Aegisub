@@ -53,11 +53,11 @@ struct keyframe_close final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	bool Validate(const agi::Context *c) override {
-		return c->project->CanCloseKeyframes();
+		return c->GetCore().project->CanCloseKeyframes();
 	}
 
 	void operator()(agi::Context *c) override {
-		c->project->CloseKeyframes();
+		c->GetCore().project->CloseKeyframes();
 	}
 };
 
@@ -69,16 +69,18 @@ struct keyframe_open final : public Command {
 	STR_HELP("Open a keyframe list file")
 
 	void operator()(agi::Context *c) override {
+		auto core = c->GetCore();
+		auto ui = c->GetUI();
 		auto filename = OpenFileSelector(
 			_("Open keyframes file"),
 			"Path/Last/Keyframes", "" ,".txt",
 			from_wx(_("All Supported Formats") +
 				wxS(" (*.txt, *.pass, *.stats, *.log)|*.txt;*.pass;*.stats;*.log|") +
 				_("All Files") + wxS(" (*.*)|*.*")),
-			c->parent);
+			ui.parent);
 
 		if (!filename.empty())
-			c->project->LoadKeyframes(filename);
+			core.project->LoadKeyframes(filename);
 	}
 };
 
@@ -91,14 +93,16 @@ struct keyframe_save final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	bool Validate(const agi::Context *c) override {
-		return !c->project->Keyframes().empty();
+		return !c->GetCore().project->Keyframes().empty();
 	}
 
 	void operator()(agi::Context *c) override {
-		auto filename = SaveFileSelector(_("Save keyframes file"), "Path/Last/Keyframes", "", "*.key.txt", "Text files (*.txt)|*.txt", c->parent);
+		auto core = c->GetCore();
+		auto ui = c->GetUI();
+		auto filename = SaveFileSelector(_("Save keyframes file"), "Path/Last/Keyframes", "", "*.key.txt", "Text files (*.txt)|*.txt", ui.parent);
 		if (filename.empty()) return;
 
-		agi::keyframe::Save(filename, c->project->Keyframes());
+		agi::keyframe::Save(filename, core.project->Keyframes());
 		config::mru->Add("Keyframes", filename);
 	}
 };

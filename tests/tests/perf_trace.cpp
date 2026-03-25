@@ -29,9 +29,9 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	perf_trace::ObserveFrameRequest(12, 0.5, false);
 	perf_trace::ObserveFrameResult(12, 0.5, true, false);
 	perf_trace::ObserveFrameResult(11, 0.458333, false, false);
-	perf_trace::ResetAudioPlaybackInterval();
-	perf_trace::ObserveAudioPlaybackPosition(100);
-	perf_trace::ObserveAudioPlaybackPosition(120);
+	perf_trace::ResetAudioUiTimerInterval();
+	perf_trace::ObserveAudioUiTimerPosition(100);
+	perf_trace::ObserveAudioUiTimerPosition(120);
 	perf_trace::AudioOutputSnapshot output_snapshot;
 	output_snapshot.backend_name = "xaudio2";
 	output_snapshot.reason = "unit_test";
@@ -79,6 +79,7 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_frame_request\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_frame_delivered\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_frame_dropped\""));
+	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_ui_timer_interval\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_output_snapshot\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_memory_snapshot\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"lua_dialog_open_duration\""));
@@ -91,6 +92,7 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, summary.find("video_memory.samples=1"));
 	EXPECT_NE(std::string::npos, summary.find("provider_cache_native.max_bytes=4096"));
 	EXPECT_NE(std::string::npos, summary.find("audio_storage.max_bytes=16384"));
+	EXPECT_NE(std::string::npos, summary.find("audio_ui_timer_interval.count=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output.samples=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output.low_water.count=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output_backend=xaudio2"));

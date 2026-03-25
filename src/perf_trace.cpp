@@ -57,7 +57,7 @@ constexpr size_t kBufferedEntryLimit = 64;
 constexpr size_t kBufferedByteLimit = 64 * 1024;
 constexpr auto kBufferedFlushInterval = std::chrono::milliseconds(250);
 constexpr auto kVideoMemorySampleInterval = std::chrono::milliseconds(500);
-constexpr double kAudioPlaybackTargetMs = 20.0;
+constexpr double kAudioUiTimerTargetMs = 20.0;
 constexpr double kVideoPlaybackTargetMs = 10.0;
 
 enum class TraceCategory : uint32_t {
@@ -472,7 +472,7 @@ struct Summary {
 	std::string audio_provider_name;
 	std::string audio_storage_kind;
 	std::string audio_output_backend;
-	IntervalSummary audio_playback_interval;
+	IntervalSummary audio_ui_timer_interval;
 	IntervalSummary video_playback_tick_interval;
 	DurationSummary lua_dialog_duration;
 	DurationSummary audio_output_fill_duration;
@@ -657,11 +657,11 @@ void WriteSummaryLocked(Session const& session) {
 	write_int("log.info", session.summary.log_counts[agi::log::Info]);
 	write_int("log.debug", session.summary.log_counts[agi::log::Debug]);
 
-	write_int("audio_playback_interval.count", session.summary.audio_playback_interval.count);
-	write_double("audio_playback_interval.min_ms", session.summary.audio_playback_interval.min_ms);
-	write_double("audio_playback_interval.max_ms", session.summary.audio_playback_interval.max_ms);
-	write_mean("audio_playback_interval.mean_ms", session.summary.audio_playback_interval.total_ms, session.summary.audio_playback_interval.count);
-	write_mean("audio_playback_interval.mean_abs_jitter_ms", session.summary.audio_playback_interval.total_abs_jitter_ms, session.summary.audio_playback_interval.count);
+	write_int("audio_ui_timer_interval.count", session.summary.audio_ui_timer_interval.count);
+	write_double("audio_ui_timer_interval.min_ms", session.summary.audio_ui_timer_interval.min_ms);
+	write_double("audio_ui_timer_interval.max_ms", session.summary.audio_ui_timer_interval.max_ms);
+	write_mean("audio_ui_timer_interval.mean_ms", session.summary.audio_ui_timer_interval.total_ms, session.summary.audio_ui_timer_interval.count);
+	write_mean("audio_ui_timer_interval.mean_abs_jitter_ms", session.summary.audio_ui_timer_interval.total_abs_jitter_ms, session.summary.audio_ui_timer_interval.count);
 
 	write_int("video_playback_tick_interval.count", session.summary.video_playback_tick_interval.count);
 	write_double("video_playback_tick_interval.min_ms", session.summary.video_playback_tick_interval.min_ms);
@@ -884,14 +884,14 @@ void Shutdown() {
 	trace_active.store(false, std::memory_order_relaxed);
 }
 
-void ResetAudioPlaybackInterval() {
+void ResetAudioUiTimerInterval() {
 	if (!trace_active.load(std::memory_order_relaxed))
 		return;
 	auto& session = GetSession();
 	std::lock_guard<std::mutex> lock(session.mutex);
 	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::Audio))
 		return;
-	session.summary.audio_playback_interval.Reset();
+	session.summary.audio_ui_timer_interval.Reset();
 }
 
 void ResetVideoPlaybackInterval() {
@@ -981,7 +981,7 @@ void ObserveFrameResult(int frame, double time, bool delivered, bool immediate) 
 	AppendEntryLocked(session, "metric", delivered ? "video_frame_delivered" : "video_frame_dropped", payload.Finish(), false, NowNs());
 }
 
-void ObserveAudioPlaybackPosition(int ms) {
+void ObserveAudioUiTimerPosition(int ms) {
 	if (!trace_active.load(std::memory_order_relaxed))
 		return;
 
@@ -992,13 +992,13 @@ void ObserveAudioPlaybackPosition(int ms) {
 		return;
 
 	double interval_ms = 0.0;
-	if (!session.summary.audio_playback_interval.Observe(timestamp_ns, kAudioPlaybackTargetMs, interval_ms))
+	if (!session.summary.audio_ui_timer_interval.Observe(timestamp_ns, kAudioUiTimerTargetMs, interval_ms))
 		return;
 
 	JsonObjectBuilder payload;
 	payload.AddInt("position_ms", ms);
 	payload.AddDouble("delta_ms", interval_ms);
-	AppendEntryLocked(session, "metric", "audio_playback_interval", payload.Finish(), false, timestamp_ns);
+	AppendEntryLocked(session, "metric", "audio_ui_timer_interval", payload.Finish(), false, timestamp_ns);
 }
 
 void ObserveAudioOutputSnapshot(AudioOutputSnapshot const& snapshot) {

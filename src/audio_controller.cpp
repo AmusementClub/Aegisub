@@ -86,7 +86,7 @@ void AudioController::OnPlaybackTimer(wxTimerEvent &)
 				SamplesFromMilliseconds(kPlaybackBehindMs));
 		}
 		auto const position_ms = MillisecondsFromSamples(pos);
-		perf_trace::ObserveAudioPlaybackPosition(position_ms);
+		perf_trace::ObserveAudioUiTimerPosition(position_ms);
 		AnnouncePlaybackPosition(position_ms);
 	}
 }
@@ -157,7 +157,7 @@ void AudioController::PlayRange(const TimeRange &range)
 			SamplesFromMilliseconds(kPlaybackAheadMs),
 			SamplesFromMilliseconds(kPlaybackBehindMs));
 	}
-	perf_trace::ResetAudioPlaybackInterval();
+	perf_trace::ResetAudioUiTimerInterval();
 	player->Play(start_sample, SamplesFromMilliseconds(range.length()));
 	playback_mode = PM_Range;
 	playback_timer.Start(20);
@@ -190,7 +190,7 @@ void AudioController::PlayToEnd(int start_ms)
 			SamplesFromMilliseconds(kPlaybackAheadMs),
 			SamplesFromMilliseconds(kPlaybackBehindMs));
 	}
-	perf_trace::ResetAudioPlaybackInterval();
+	perf_trace::ResetAudioUiTimerInterval();
 	player->Play(start_sample, provider->GetNumSamples()-start_sample);
 	playback_mode = PM_ToEnd;
 	playback_timer.Start(20);
@@ -205,7 +205,7 @@ void AudioController::Stop()
 	player->Stop();
 	playback_mode = PM_NotPlaying;
 	playback_timer.Stop();
-	perf_trace::ResetAudioPlaybackInterval();
+	perf_trace::ResetAudioUiTimerInterval();
 	if (provider)
 		provider->ClearPlaybackWindow();
 

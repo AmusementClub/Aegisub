@@ -287,22 +287,24 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 	wxSizeEvent evt;
 	OnSize(evt);
 
-	file_changed_slot = c->ass->AddCommitListener(&SubsEditBox::OnCommit, this);
+	auto core = context->GetCore();
+
+	file_changed_slot = core.ass->AddCommitListener(&SubsEditBox::OnCommit, this);
 	connections = agi::signal::make_vector({
-		context->project->AddTimecodesListener(&SubsEditBox::UpdateFrameTiming, this),
-		context->selectionController->AddActiveLineListener(&SubsEditBox::OnActiveLineChanged, this),
-		context->selectionController->AddSelectionListener(&SubsEditBox::OnSelectedSetChanged, this),
-		context->initialLineState->AddChangeListener(&SubsEditBox::OnLineInitialTextChanged, this),
+		core.project->AddTimecodesListener(&SubsEditBox::UpdateFrameTiming, this),
+		core.selectionController->AddActiveLineListener(&SubsEditBox::OnActiveLineChanged, this),
+		core.selectionController->AddSelectionListener(&SubsEditBox::OnSelectedSetChanged, this),
+		core.initialLineState->AddChangeListener(&SubsEditBox::OnLineInitialTextChanged, this),
 	 });
 
 #ifdef WITH_WXSTC
 	if (use_stc) {
-		context->textSelectionController->SetControl(edit_ctrl_stc);
+		core.textSelectionController->SetControl(edit_ctrl_stc);
 		edit_ctrl_stc->SetFocus();
 	}
 	else {
 #endif
-		context->textSelectionController->SetControl(edit_ctrl_tc);
+		core.textSelectionController->SetControl(edit_ctrl_tc);
 		edit_ctrl_tc->SetFocus();
 #ifdef WITH_WXSTC
 	}
@@ -316,7 +318,7 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 }
 
 SubsEditBox::~SubsEditBox() {
-	c->textSelectionController->SetControl((wxTextCtrl*)nullptr);
+	c->GetCore().textSelectionController->SetControl((wxTextCtrl*)nullptr);
 }
 
 wxTextCtrl *SubsEditBox::MakeMarginCtrl(wxString const& tooltip, int margin, wxString const& commit_msg) {
@@ -395,6 +397,7 @@ wxRadioButton *SubsEditBox::MakeRadio(wxString const& text, bool start, wxString
 }
 
 void SubsEditBox::OnCommit(int type) {
+	auto core = c->GetCore();
 	wxEventBlocker blocker(this);
 
 	initial_times.clear();
@@ -402,9 +405,9 @@ void SubsEditBox::OnCommit(int type) {
 	if (type == AssFile::COMMIT_NEW || type & AssFile::COMMIT_STYLES) {
 		wxString style = style_box->GetValue();
 		style_box->Clear();
-		style_box->Append(to_wx(c->ass->GetStyles()));
+		style_box->Append(to_wx(core.ass->GetStyles()));
 		style_box->Select(style_box->FindString(style));
-		active_style = line ? c->ass->GetStyle(line->Style) : nullptr;
+		active_style = line ? core.ass->GetStyle(line->Style) : nullptr;
 	}
 
 	if (type == AssFile::COMMIT_NEW) {
@@ -445,12 +448,13 @@ void SubsEditBox::UpdateFields(int type, bool repopulate_lists) {
 	}
 
 	if (type & AssFile::COMMIT_DIAG_META) {
+		auto core = c->GetCore();
 		layer->SetValue(line->Layer);
 		for (size_t i = 0; i < margin.size(); ++i)
 			change_value(margin[i], std::to_wstring(line->Margin[i]));
 		comment_box->SetValue(line->Comment);
 		style_box->Select(style_box->FindString(to_wx(line->Style)));
-		active_style = line ? c->ass->GetStyle(line->Style) : nullptr;
+		active_style = line ? core.ass->GetStyle(line->Style) : nullptr;
 		style_edit_button->Enable(active_style != nullptr);
 
 		if (repopulate_lists) PopulateList(effect_box, AssDialogue_Effect);
@@ -464,10 +468,11 @@ void SubsEditBox::UpdateFields(int type, bool repopulate_lists) {
 }
 
 void SubsEditBox::PopulateList(wxComboBox *combo, boost::flyweight<std::string> AssDialogue::*field) {
+	auto core = c->GetCore();
 	wxEventBlocker blocker(this);
 
 	std::unordered_set<boost::flyweight<std::string>> values;
-	for (auto const& line : c->ass->Events) {
+	for (auto const& line : core.ass->Events) {
 		auto const& value = line.*field;
 		if (!value.get().empty())
 			values.insert(value);
@@ -518,7 +523,7 @@ void SubsEditBox::UpdateFrameTiming(agi::vfr::Framerate const& fps) {
 		start_time->SetByFrame(false);
 		end_time->SetByFrame(false);
 		duration->SetByFrame(false);
-		c->subsGrid->SetByFrame(false);
+		c->GetUI().subsGrid->SetByFrame(false);
 	}
 }
 
@@ -545,8 +550,9 @@ void SubsEditBox::OnChangeTc(wxCommandEvent& event) {
 }
 
 void SubsEditBox::Commit(wxString const& desc, int type, bool amend, AssDialogue *line) {
+	auto core = c->GetCore();
 	file_changed_slot.Block();
-	commit_id = c->ass->Commit(from_wx(desc), type, (amend && desc == last_commit_type) ? commit_id : -1, line);
+	commit_id = core.ass->Commit(from_wx(desc), type, (amend && desc == last_commit_type) ? commit_id : -1, line);
 	file_changed_slot.Unblock();
 	last_commit_type = desc;
 	last_time_commit_type = -1;
@@ -556,7 +562,7 @@ void SubsEditBox::Commit(wxString const& desc, int type, bool amend, AssDialogue
 
 template<class setter>
 void SubsEditBox::SetSelectedRows(setter set, wxString const& desc, int type, bool amend) {
-	auto const& sel = c->selectionController->GetSelectedSet();
+	auto const& sel = c->GetCore().selectionController->GetSelectedSet();
 	for_each(sel.begin(), sel.end(), set);
 	Commit(desc, type, amend, sel.size() == 1 ? *sel.begin() : nullptr);
 }
@@ -587,7 +593,8 @@ void SubsEditBox::CommitText(wxString const& desc) {
 }
 
 void SubsEditBox::CommitTimes(TimeField field) {
-	auto const& sel = c->selectionController->GetSelectedSet();
+	auto core = c->GetCore();
+	auto const& sel = core.selectionController->GetSelectedSet();
 	for (AssDialogue *d : sel) {
 		if (!initial_times.count(d))
 			initial_times[d] = {d->Start, d->End};
@@ -605,7 +612,7 @@ void SubsEditBox::CommitTimes(TimeField field) {
 
 			case TIME_DURATION:
 				if (by_frame->GetValue()) {
-					auto const& fps = c->project->Timecodes();
+					auto const& fps = core.project->Timecodes();
 					d->End = fps.TimeAtFrame(fps.FrameAtTime(d->Start, agi::vfr::START) + duration->GetFrame() - 1, agi::vfr::END);
 				}
 				else
@@ -626,7 +633,7 @@ void SubsEditBox::CommitTimes(TimeField field) {
 
 	last_time_commit_type = field;
 	file_changed_slot.Block();
-	commit_id = c->ass->Commit(from_wx(_("modify times")), AssFile::COMMIT_DIAG_TIME, commit_id, sel.size() == 1 ? *sel.begin() : nullptr);
+	commit_id = core.ass->Commit(from_wx(_("modify times")), AssFile::COMMIT_DIAG_TIME, commit_id, sel.size() == 1 ? *sel.begin() : nullptr);
 	file_changed_slot.Unblock();
 }
 
@@ -670,7 +677,7 @@ void SubsEditBox::OnFrameTimeRadio(wxCommandEvent &event) {
 	start_time->SetByFrame(byFrame);
 	end_time->SetByFrame(byFrame);
 	duration->SetByFrame(byFrame);
-	c->subsGrid->SetByFrame(byFrame);
+	c->GetUI().subsGrid->SetByFrame(byFrame);
 
 	SetDurationField();
 }
@@ -712,12 +719,12 @@ void SubsEditBox::DoOnSplit(bool show_original) {
 	Thaw();
 
 	if (show_original)
-		secondary_editor->SetValue(to_wx(c->initialLineState->GetInitialText()));
+		secondary_editor->SetValue(to_wx(c->GetCore().initialLineState->GetInitialText()));
 }
 
 void SubsEditBox::OnStyleChange(wxCommandEvent &evt) {
 	SetSelectedRows(&AssDialogue::Style, new_value(style_box, evt), _("style change"), AssFile::COMMIT_DIAG_META);
-	active_style = c->ass->GetStyle(line->Style);
+	active_style = c->GetCore().ass->GetStyle(line->Style);
 }
 
 void SubsEditBox::OnActorChange(wxCommandEvent &evt) {

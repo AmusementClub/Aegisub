@@ -32,6 +32,7 @@
 #include "command.h"
 
 #include "../ass_dialogue.h"
+#include "../ass_file.h"
 #include "../async_video_provider.h"
 #include "../compat.h"
 #include "../dialog_detached_video.h"
@@ -49,6 +50,8 @@
 #include "../video_controller.h"
 #include "../video_display.h"
 #include "../video_frame.h"
+#include "../video_navigation_ops.h"
+#include "../video_snapshot_ops.h"
 
 #include <libaegisub/ass/time.h>
 #include <libaegisub/fs.h>
@@ -59,6 +62,8 @@
 
 #include <wx/filedlg.h>
 #include <wx/textdlg.h>
+
+#include <optional>
 
 namespace {
 	using cmd::Command;
@@ -318,6 +323,20 @@ bool require_image(agi::Context *c, bool raw, wxImage &image, char const *title)
 	return false;
 }
 
+void execute_jump_target(agi::Context *c, aegisub::video_navigation_ops::JumpTarget const& target, void (SelectionController::*change_line)()) {
+	auto core = c->GetCore();
+	if (target.kind == aegisub::video_navigation_ops::JumpTargetKind::None)
+		return;
+
+	if (target.change_active_line && change_line)
+		(core.selectionController.get()->*change_line)();
+
+	if (target.kind == aegisub::video_navigation_ops::JumpTargetKind::Frame)
+		core.videoController->JumpToFrame(target.value);
+	else if (target.kind == aegisub::video_navigation_ops::JumpTargetKind::Time)
+		core.videoController->JumpToTime(target.value, target.time_mode);
+}
+
 struct video_frame_copy final : public validator_video_loaded {
 	CMD_NAME("video/frame/copy")
 	STR_MENU("Copy image to Clipboard")
@@ -367,23 +386,18 @@ struct video_frame_next_boundary final : public validator_video_loaded {
 		auto core = c->GetCore();
 		AssDialogue *active_line = core.selectionController->GetActiveLine();
 		if (!active_line) return;
+		auto current_frame = core.videoController->GetFrameN();
+		AssDialogue *next_line = nullptr;
+		auto line_it = core.ass->iterator_to(*active_line);
+		if (++line_it != core.ass->Events.end())
+			next_line = &*line_it;
 
-		int target = core.videoController->FrameAtTime(active_line->Start, agi::vfr::START);
-		if (target > core.videoController->GetFrameN()) {
-			core.videoController->JumpToFrame(target);
-			return;
-		}
-
-		target = core.videoController->FrameAtTime(active_line->End, agi::vfr::END);
-		if (target > core.videoController->GetFrameN()) {
-			core.videoController->JumpToFrame(target);
-			return;
-		}
-
-		core.selectionController->NextLine();
-		AssDialogue *new_line = core.selectionController->GetActiveLine();
-		if (new_line != active_line)
-			core.videoController->JumpToTime(new_line->Start);
+		auto target = aegisub::video_navigation_ops::PlanNextBoundaryJump(
+			current_frame,
+			core.videoController->FrameAtTime(active_line->Start, agi::vfr::START),
+			core.videoController->FrameAtTime(active_line->End, agi::vfr::END),
+			next_line ? std::optional<int>(next_line->Start) : std::nullopt);
+		execute_jump_target(c, target, &SelectionController::NextLine);
 	}
 };
 
@@ -396,9 +410,10 @@ struct video_frame_next_keyframe final : public validator_video_loaded {
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
 		auto const& kf = core.project->Keyframes();
-		auto pos = lower_bound(kf.begin(), kf.end(), core.videoController->GetFrameN() + 1);
-
-		core.videoController->JumpToFrame(pos == kf.end() ? core.project->VideoProvider()->GetFrameCount() - 1 : *pos);
+		core.videoController->JumpToFrame(aegisub::video_navigation_ops::ComputeNextKeyframe(
+			kf,
+			core.videoController->GetFrameN(),
+			core.project->VideoProvider()->GetFrameCount() - 1));
 	}
 };
 
@@ -437,23 +452,18 @@ struct video_frame_prev_boundary final : public validator_video_loaded {
 		auto core = c->GetCore();
 		AssDialogue *active_line = core.selectionController->GetActiveLine();
 		if (!active_line) return;
+		auto current_frame = core.videoController->GetFrameN();
+		AssDialogue *previous_line = nullptr;
+		auto line_it = core.ass->iterator_to(*active_line);
+		if (line_it != core.ass->Events.begin())
+			previous_line = &*--line_it;
 
-		int target = core.videoController->FrameAtTime(active_line->End, agi::vfr::END);
-		if (target < core.videoController->GetFrameN()) {
-			core.videoController->JumpToFrame(target);
-			return;
-		}
-
-		target = core.videoController->FrameAtTime(active_line->Start, agi::vfr::START);
-		if (target < core.videoController->GetFrameN()) {
-			core.videoController->JumpToFrame(target);
-			return;
-		}
-
-		core.selectionController->PrevLine();
-		AssDialogue *new_line = core.selectionController->GetActiveLine();
-		if (new_line != active_line)
-			core.videoController->JumpToTime(new_line->End, agi::vfr::END);
+		auto target = aegisub::video_navigation_ops::PlanPreviousBoundaryJump(
+			current_frame,
+			core.videoController->FrameAtTime(active_line->Start, agi::vfr::START),
+			core.videoController->FrameAtTime(active_line->End, agi::vfr::END),
+			previous_line ? std::optional<int>(previous_line->End) : std::nullopt);
+		execute_jump_target(c, target, &SelectionController::PrevLine);
 	}
 };
 
@@ -465,18 +475,9 @@ struct video_frame_prev_keyframe final : public validator_video_loaded {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		auto const& kf = core.project->Keyframes();
-		if (kf.empty()) {
-			core.videoController->JumpToFrame(0);
-			return;
-		}
-
-		auto pos = lower_bound(kf.begin(), kf.end(), core.videoController->GetFrameN());
-
-		if (pos != kf.begin())
-			--pos;
-
-		core.videoController->JumpToFrame(*pos);
+		core.videoController->JumpToFrame(aegisub::video_navigation_ops::ComputePreviousKeyframe(
+			core.project->Keyframes(),
+			core.videoController->GetFrameN()));
 	}
 };
 
@@ -498,40 +499,26 @@ static void save_snapshot(agi::Context *c, bool raw) {
 	auto core = c->GetCore();
 	auto ui = c->GetUI();
 	auto option = OPT_GET("Path/Screenshot")->GetString();
-	agi::fs::path basepath;
 
 	auto videoname = core.project->VideoName();
 	bool is_dummy = agi::util::strings::starts_with(agi::fs::PathToString(videoname), "?dummy");
+	agi::fs::path root_path;
 
-	// Is it a path specifier and not an actual fixed path?
-	if (option[0] == '?') {
-		// If dummy video is loaded, we can't save to the video location
-		if (agi::util::strings::starts_with(option, "?video") && is_dummy) {
-			// So try the script location instead
-			option = "?script";
-		}
-		// Find out where the ?specifier points to
-		basepath = core.path->Decode(option);
-		// If where ever that is isn't defined, we can't save there
-		if ((basepath == "\\") || (basepath == "/")) {
-			// So save to the current user's home dir instead
-			basepath = from_wx(wxGetHomeDir());
-		}
-	}
-	// Actual fixed (possibly relative) path, decode it
+	if (aegisub::video_snapshot_ops::UsesPathToken(option))
+		root_path = core.path->Decode(aegisub::video_snapshot_ops::ResolvePathToken(option, is_dummy));
 	else
-		basepath = core.path->MakeAbsolute(option, "?user/");
+		root_path = core.path->MakeAbsolute(option, "?user/");
 
-	basepath /= is_dummy ? "dummy" : videoname.stem();
+	root_path = aegisub::video_snapshot_ops::NormalizeRootDirectory(root_path, from_wx(wxGetHomeDir()));
+	auto basepath = aegisub::video_snapshot_ops::BuildSnapshotBasePath(root_path, videoname, is_dummy);
 
-	// Get full path
-	int session_shot_count = 1;
-	agi::fs::path path;
-	auto const base_dir = basepath.parent_path();
-	auto const base_name = agi::fs::PathToString(basepath.filename());
-	do {
-		path = base_dir / agi::fs::PathFromString(agi::format("%s_%03d_%d.png", base_name, session_shot_count++, core.videoController->GetFrameN()));
-	} while (agi::fs::FileExists(path));
+	auto path = aegisub::video_snapshot_ops::BuildNextSnapshotPath(
+		basepath,
+		core.videoController->GetFrameN(),
+		[](agi::fs::path const& candidate) {
+			return agi::fs::FileExists(candidate);
+		});
+	auto const base_dir = path.parent_path();
 
 	wxFileDialog dialog(
 		ui.parent,

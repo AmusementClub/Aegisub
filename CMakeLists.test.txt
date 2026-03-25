@@ -52,6 +52,8 @@ if(GTEST_FOUND)
         src/subtitle_editor_ops.cpp
         src/subtitle_grid_ops.cpp
         src/video_property_update.cpp
+        src/video_navigation_ops.cpp
+        src/video_snapshot_ops.cpp
         src/subtitle_timing_ops.cpp
         tests/tests/cajun.cpp
         tests/tests/calltip_provider.cpp
@@ -112,6 +114,8 @@ if(GTEST_FOUND)
         tests/tests/uuencode.cpp
         tests/tests/vfr.cpp
         tests/tests/video_property_update.cpp
+        tests/tests/video_navigation_ops.cpp
+        tests/tests/video_snapshot_ops.cpp
         tests/tests/video_cache.cpp
         tests/tests/video_display_layout.cpp
         tests/tests/video_zoom.cpp

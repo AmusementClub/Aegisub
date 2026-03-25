@@ -51,6 +51,17 @@ function Get-CMake {
     return $vsCMake
 }
 
+function Get-PowerShellExecutable {
+    foreach ($candidate in @('pwsh.exe', 'powershell.exe')) {
+        $command = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($command) {
+            return $command.Source
+        }
+    }
+
+    return 'powershell.exe'
+}
+
 function Resolve-RepoPath([string]$PathValue) {
     if ([string]::IsNullOrWhiteSpace($PathValue)) {
         return ''
@@ -96,6 +107,7 @@ function Configure-CMake([string]$CMakePath, [string]$GeneratorName) {
         '-DWITH_LIBPLACEBO=ON',
         "-DLibPlacebo_INCLUDE_DIR=$resolvedLibPlaceboIncludeDir",
         '-DAEGISUB_MATROSKA_PARSING=ON',
+        "-DZ_VCPKG_POWERSHELL_PATH:FILEPATH=$resolvedPowerShellExecutable",
         "-DCMAKE_CXX_FLAGS=$CMakeCxxFlags",
         "-DCMAKE_C_FLAGS=$CMakeCFlags",
         '-DWITH_TEST=ON'
@@ -169,6 +181,7 @@ $resolvedLibPlaceboIncludeDir = Resolve-RepoPath $LibPlaceboIncludeDir
 
 $cmake = Get-CMake
 $generator = Get-VsGenerator
+$resolvedPowerShellExecutable = Get-PowerShellExecutable
 
 switch ($Mode) {
     'build' {

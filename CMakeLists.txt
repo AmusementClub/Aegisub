@@ -434,6 +434,8 @@ add_executable(Aegisub WIN32
     src/subtitle_editor_ops.cpp
     src/subtitle_grid_ops.cpp
     src/subtitle_timing_ops.cpp
+    src/video_navigation_ops.cpp
+    src/video_snapshot_ops.cpp
     src/visual_tool.cpp
     src/visual_tool_clip.cpp
     src/visual_tool_cross.cpp
@@ -608,9 +610,8 @@ else()
 endif()
 
 if(WIN32)
-    find_program(POWERSHELL_EXECUTABLE NAMES pwsh powershell REQUIRED)
     add_custom_target(git_version
-        COMMAND "${POWERSHELL_EXECUTABLE}" -NoProfile -ExecutionPolicy Bypass -File "${PROJECT_SOURCE_DIR}/build/version.ps1" -RepoRoot .
+        COMMAND "${PROJECT_SOURCE_DIR}/build/version.cmd" .
         BYPRODUCTS "${PROJECT_SOURCE_DIR}/build/git_version.h"
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
         VERBATIM

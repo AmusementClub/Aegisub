@@ -29,6 +29,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -59,7 +60,50 @@ constexpr auto kVideoMemorySampleInterval = std::chrono::milliseconds(500);
 constexpr double kAudioPlaybackTargetMs = 20.0;
 constexpr double kVideoPlaybackTargetMs = 10.0;
 
+enum class TraceCategory : uint32_t {
+	None = 0,
+	Ops = 1u << 0,
+	Video = 1u << 1,
+	Audio = 1u << 2,
+	Memory = 1u << 3,
+	LuaDialog = 1u << 4,
+	Log = 1u << 5,
+	All = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4) | (1u << 5),
+};
+
+TraceCategory operator|(TraceCategory left, TraceCategory right) {
+	return static_cast<TraceCategory>(static_cast<uint32_t>(left) | static_cast<uint32_t>(right));
+}
+
+TraceCategory& operator|=(TraceCategory& left, TraceCategory right) {
+	left = left | right;
+	return left;
+}
+
+bool HasAnyCategory(TraceCategory value, TraceCategory wanted) {
+	return (static_cast<uint32_t>(value) & static_cast<uint32_t>(wanted)) != 0;
+}
+
+TraceCategory ToTraceCategory(Category category) {
+	switch (category) {
+		case Category::Ops: return TraceCategory::Ops;
+		case Category::Video: return TraceCategory::Video;
+		case Category::Audio: return TraceCategory::Audio;
+		case Category::Memory: return TraceCategory::Memory;
+		case Category::LuaDialog: return TraceCategory::LuaDialog;
+		case Category::Log: return TraceCategory::Log;
+	}
+	return TraceCategory::None;
+}
+
 std::atomic<bool> trace_active{ false };
+
+struct TraceSelection {
+	bool enabled = false;
+	TraceCategory categories = TraceCategory::None;
+	std::string source_tag;
+	std::string selection_tag;
+};
 
 int64_t NowNs() {
 	using namespace std::chrono;
@@ -82,10 +126,148 @@ std::string ToLower(std::string value) {
 	return value;
 }
 
-bool IsTruthyEnvValue(std::string const& value) {
+bool IsFalseyToken(std::string const& value) {
+	auto lowered = ToLower(Trim(value));
+	if (lowered.empty()) return true;
+	return lowered == "0" || lowered == "false" || lowered == "off" || lowered == "no";
+}
+
+bool IsTruthyToken(std::string const& value) {
 	auto lowered = ToLower(Trim(value));
 	if (lowered.empty()) return false;
-	return lowered != "0" && lowered != "false" && lowered != "off" && lowered != "no";
+	return lowered == "1" || lowered == "true" || lowered == "on" || lowered == "yes";
+}
+
+void AppendUnique(std::vector<std::string>& values, std::string value) {
+	if (value.empty())
+		return;
+	if (std::find(values.begin(), values.end(), value) == values.end())
+		values.emplace_back(std::move(value));
+}
+
+std::vector<std::string> SplitTraceTokens(std::string const& value) {
+	std::vector<std::string> tokens;
+	std::string current;
+	for (char ch : value) {
+		switch (ch) {
+			case ',':
+			case ';':
+			case '|':
+			case '+':
+			case ' ':
+			case '\t':
+			case '\r':
+			case '\n':
+				AppendUnique(tokens, ToLower(Trim(current)));
+				current.clear();
+				break;
+			default:
+				current.push_back(ch);
+				break;
+		}
+	}
+	AppendUnique(tokens, ToLower(Trim(current)));
+	return tokens;
+}
+
+std::string JoinTokens(std::vector<std::string> const& tokens) {
+	std::string joined;
+	for (auto const& token : tokens) {
+		if (!joined.empty())
+			joined += ",";
+		joined += token;
+	}
+	return joined;
+}
+
+bool ApplyCategoryToken(std::string const& token, TraceCategory& categories, std::vector<std::string>& normalized_tokens) {
+	if (token == "all" || token == "default" || IsTruthyToken(token)) {
+		categories = TraceCategory::All;
+		AppendUnique(normalized_tokens, "all");
+		return true;
+	}
+	if (token == "audio") {
+		categories |= TraceCategory::Audio;
+		AppendUnique(normalized_tokens, "audio");
+		return true;
+	}
+	if (token == "video") {
+		categories |= TraceCategory::Video;
+		AppendUnique(normalized_tokens, "video");
+		return true;
+	}
+	if (token == "memory" || token == "mem" || token == "video-memory") {
+		categories |= TraceCategory::Memory;
+		AppendUnique(normalized_tokens, "memory");
+		return true;
+	}
+	if (token == "lua-dialog" || token == "lua_dialog" || token == "lua") {
+		categories |= TraceCategory::LuaDialog;
+		AppendUnique(normalized_tokens, "lua-dialog");
+		return true;
+	}
+	if (token == "log" || token == "logs") {
+		categories |= TraceCategory::Log;
+		AppendUnique(normalized_tokens, "log");
+		return true;
+	}
+	if (token == "ops" || token == "op" || token == "playback") {
+		categories |= TraceCategory::Ops;
+		AppendUnique(normalized_tokens, "ops");
+		return true;
+	}
+	return false;
+}
+
+std::string SelectionTagFromCategories(TraceCategory categories) {
+	if (categories == TraceCategory::All)
+		return "all";
+
+	std::vector<std::string> tokens;
+	if (HasAnyCategory(categories, TraceCategory::Audio))
+		tokens.emplace_back("audio");
+	if (HasAnyCategory(categories, TraceCategory::Video))
+		tokens.emplace_back("video");
+	if (HasAnyCategory(categories, TraceCategory::Memory))
+		tokens.emplace_back("memory");
+	if (HasAnyCategory(categories, TraceCategory::LuaDialog))
+		tokens.emplace_back("lua-dialog");
+	if (HasAnyCategory(categories, TraceCategory::Log))
+		tokens.emplace_back("log");
+	if (HasAnyCategory(categories, TraceCategory::Ops))
+		tokens.emplace_back("ops");
+	return JoinTokens(tokens);
+}
+
+TraceSelection ParseTraceSelection(std::string const& value) {
+	TraceSelection selection;
+	auto const tokens = SplitTraceTokens(value);
+	if (tokens.empty())
+		return selection;
+
+	std::vector<std::string> normalized_tokens;
+	bool recognized_any = false;
+	for (auto const& token : tokens) {
+		if (IsFalseyToken(token))
+			continue;
+		if (ApplyCategoryToken(token, selection.categories, normalized_tokens)) {
+			recognized_any = true;
+			continue;
+		}
+		AppendUnique(normalized_tokens, token);
+	}
+
+	if (selection.categories == TraceCategory::None) {
+		if (!recognized_any && !normalized_tokens.empty())
+			selection.categories = TraceCategory::All;
+		else
+			return selection;
+	}
+
+	selection.enabled = true;
+	selection.source_tag = normalized_tokens.empty() ? SelectionTagFromCategories(selection.categories) : JoinTokens(normalized_tokens);
+	selection.selection_tag = SelectionTagFromCategories(selection.categories);
+	return selection;
 }
 
 std::string ReadEnvValue(char const* name) {
@@ -273,11 +455,27 @@ struct Summary {
 	int64_t audio_loading_pages_max = 0;
 	int64_t audio_pinned_pages_max = 0;
 	int64_t audio_free_pages_max = 0;
+	uint64_t audio_output_samples = 0;
+	uint64_t audio_output_low_water = 0;
+	uint64_t audio_output_starved = 0;
+	uint64_t audio_output_recovered = 0;
+	uint64_t audio_output_end_of_stream = 0;
+	int64_t audio_output_queue_max_buffers = 0;
+	double audio_output_queue_max_ms = 0.0;
+	uint64_t audio_output_submitted_total_buffers = 0;
+	uint64_t audio_output_submitted_total_frames = 0;
+	uint64_t audio_output_submitted_total_bytes = 0;
+	int64_t audio_output_submitted_max_buffers = 0;
+	int64_t audio_output_submitted_max_frames = 0;
+	int64_t audio_output_submitted_max_bytes = 0;
+	double audio_output_submitted_max_ms = 0.0;
 	std::string audio_provider_name;
 	std::string audio_storage_kind;
+	std::string audio_output_backend;
 	IntervalSummary audio_playback_interval;
 	IntervalSummary video_playback_tick_interval;
 	DurationSummary lua_dialog_duration;
+	DurationSummary audio_output_fill_duration;
 };
 
 class TraceLogEmitter final : public agi::log::Emitter {
@@ -289,6 +487,7 @@ struct Session {
 	std::mutex mutex;
 	bool enabled = false;
 	bool closing = false;
+	TraceCategory categories = TraceCategory::All;
 	bool has_pending_lua_dialog_open = false;
 	int64_t pending_lua_dialog_open_started_ns = 0;
 	int64_t last_video_memory_sample_ns = 0;
@@ -300,6 +499,7 @@ struct Session {
 	std::string session_id;
 	std::string build_label;
 	std::string source_tag;
+	std::string selection_tag;
 	std::string started_local;
 	TraceLogEmitter* log_emitter = nullptr;
 	Summary summary;
@@ -319,6 +519,21 @@ char const* SeverityName(agi::log::Severity severity) {
 		case agi::log::Debug: return "debug";
 	}
 	return "unknown";
+}
+
+bool IsCategoryEnabledLocked(Session const& session, TraceCategory categories) {
+	return HasAnyCategory(session.categories, categories);
+}
+
+void UpdateObservedName(std::string& current, std::string const& value) {
+	if (value.empty())
+		return;
+	if (current.empty()) {
+		current = value;
+		return;
+	}
+	if (current != value)
+		current = "multiple";
 }
 
 void FlushLocked(Session& session, bool immediate) {
@@ -369,13 +584,13 @@ void AppendEntryLocked(Session& session, char const* kind, std::string const& na
 }
 
 template <typename PayloadBuilder>
-void RecordEntry(char const* kind, std::string const& name, bool immediate, PayloadBuilder&& fill_payload, int64_t timestamp_ns = NowNs()) {
+void RecordEntry(TraceCategory categories, char const* kind, std::string const& name, bool immediate, PayloadBuilder&& fill_payload, int64_t timestamp_ns = NowNs()) {
 	if (!trace_active.load(std::memory_order_relaxed))
 		return;
 
 	auto& session = GetSession();
 	std::lock_guard<std::mutex> lock(session.mutex);
-	if (!session.enabled || session.closing)
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, categories))
 		return;
 
 	if (kind[0] == 'o')
@@ -395,6 +610,7 @@ void WriteManifest(Session const& session) {
 	out << "session=" << session.session_id << "\n";
 	out << "build=" << session.build_label << "\n";
 	out << "source=" << session.source_tag << "\n";
+	out << "trace_selection=" << session.selection_tag << "\n";
 	out << "started_local=" << session.started_local << "\n";
 	out << "pid=" << wxGetProcessId() << "\n";
 	out << "platform=" << wxGetOsDescription().ToStdString() << "\n";
@@ -423,6 +639,7 @@ void WriteSummaryLocked(Session const& session) {
 	out.imbue(std::locale::classic());
 	out << "session=" << session.session_id << "\n";
 	out << "build=" << session.build_label << "\n";
+	out << "trace.selection=" << session.selection_tag << "\n";
 	write_int("trace.entries", session.summary.trace_entries);
 	write_int("trace.flushes.buffered", session.summary.buffered_flushes);
 	write_int("trace.flushes.immediate", session.summary.immediate_flushes);
@@ -479,8 +696,27 @@ void WriteSummaryLocked(Session const& session) {
 	write_int("audio_cache.loading_pages.max", static_cast<uint64_t>(session.summary.audio_loading_pages_max));
 	write_int("audio_cache.pinned_pages.max", static_cast<uint64_t>(session.summary.audio_pinned_pages_max));
 	write_int("audio_cache.free_pages.max", static_cast<uint64_t>(session.summary.audio_free_pages_max));
+	write_int("audio_output.samples", session.summary.audio_output_samples);
+	write_int("audio_output.low_water.count", session.summary.audio_output_low_water);
+	write_int("audio_output.starved.count", session.summary.audio_output_starved);
+	write_int("audio_output.recovered.count", session.summary.audio_output_recovered);
+	write_int("audio_output.end_of_stream.count", session.summary.audio_output_end_of_stream);
+	write_int("audio_output.queue.max_buffers", static_cast<uint64_t>(session.summary.audio_output_queue_max_buffers));
+	write_double("audio_output.queue.max_ms", session.summary.audio_output_queue_max_ms);
+	write_int("audio_output.submitted.total_buffers", session.summary.audio_output_submitted_total_buffers);
+	write_int("audio_output.submitted.total_frames", session.summary.audio_output_submitted_total_frames);
+	write_int("audio_output.submitted.total_bytes", session.summary.audio_output_submitted_total_bytes);
+	write_int("audio_output.submitted.max_buffers", static_cast<uint64_t>(session.summary.audio_output_submitted_max_buffers));
+	write_int("audio_output.submitted.max_frames", static_cast<uint64_t>(session.summary.audio_output_submitted_max_frames));
+	write_int("audio_output.submitted.max_bytes", static_cast<uint64_t>(session.summary.audio_output_submitted_max_bytes));
+	write_double("audio_output.submitted.max_ms", session.summary.audio_output_submitted_max_ms);
+	write_int("audio_output.fill_duration.count", session.summary.audio_output_fill_duration.count);
+	write_double("audio_output.fill_duration.min_ms", session.summary.audio_output_fill_duration.min_ms);
+	write_double("audio_output.fill_duration.max_ms", session.summary.audio_output_fill_duration.max_ms);
+	write_mean("audio_output.fill_duration.mean_ms", session.summary.audio_output_fill_duration.total_ms, session.summary.audio_output_fill_duration.count);
 	out << "audio_provider=" << session.summary.audio_provider_name << "\n";
 	out << "audio_storage_kind=" << session.summary.audio_storage_kind << "\n";
+	out << "audio_output_backend=" << session.summary.audio_output_backend << "\n";
 
 	for (auto const& [name, count] : session.summary.op_counts)
 		out << "op." << name << "=" << count << "\n";
@@ -494,7 +730,7 @@ void TraceLogEntry(agi::log::SinkMessage const& sm) {
 
 	auto& session = GetSession();
 	std::lock_guard<std::mutex> lock(session.mutex);
-	if (!session.enabled || session.closing)
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::Log))
 		return;
 
 	++session.summary.log_counts[sm.severity];
@@ -523,6 +759,17 @@ bool IsEnabled() {
 	return trace_active.load(std::memory_order_relaxed);
 }
 
+bool IsCategoryEnabled(Category category) {
+	if (!trace_active.load(std::memory_order_relaxed))
+		return false;
+
+	auto& session = GetSession();
+	std::lock_guard<std::mutex> lock(session.mutex);
+	if (!session.enabled || session.closing)
+		return false;
+	return IsCategoryEnabledLocked(session, ToTraceCategory(category));
+}
+
 bool ShouldSampleVideoMemory(bool force) {
 	if (!trace_active.load(std::memory_order_relaxed))
 		return false;
@@ -530,7 +777,8 @@ bool ShouldSampleVideoMemory(bool force) {
 	auto const timestamp_ns = NowNs();
 	auto& session = GetSession();
 	std::lock_guard<std::mutex> lock(session.mutex);
-	if (!session.enabled || session.closing)
+	if (!session.enabled || session.closing
+		|| !IsCategoryEnabledLocked(session, TraceCategory::Memory | TraceCategory::Audio | TraceCategory::Video))
 		return false;
 	if (force)
 		return true;
@@ -546,18 +794,26 @@ agi::fs::path GetSessionDirectory() {
 
 void Initialize(std::string const& build_label) {
 	auto const env_value = ReadEnvValue("AEGISUB_PERF_TRACE");
-	if (!IsTruthyEnvValue(env_value) || !config::path)
+	auto const selection = ParseTraceSelection(env_value);
+	if (!selection.enabled || !config::path)
 		return;
 
 	auto const root = config::path->Decode("?user/perf-sessions");
 	auto const session_name = agi::util::strftime("%Y-%m-%d-%H-%M-%S") + "-" + ToString(static_cast<long long>(wxGetProcessId())) + "-%%%%%%%%";
-	InitializeAt(agi::fs::UniquePath(root / session_name), build_label, env_value);
+	InitializeAt(agi::fs::UniquePath(root / session_name), build_label, selection.source_tag);
 }
 
 void InitializeAt(agi::fs::path const& session_dir, std::string const& build_label, std::string const& source_tag) {
 	Shutdown();
 
 	auto& session = GetSession();
+	auto selection = ParseTraceSelection(source_tag);
+	if (!selection.enabled) {
+		selection.enabled = true;
+		selection.categories = TraceCategory::All;
+		selection.source_tag = source_tag.empty() ? "manual" : Trim(source_tag);
+		selection.selection_tag = "all";
+	}
 	try {
 		agi::fs::CreateDirectory(session_dir);
 		std::ofstream trace_stream(session_dir / "trace.ndjson", std::ios::out | std::ios::trunc);
@@ -584,7 +840,9 @@ void InitializeAt(agi::fs::path const& session_dir, std::string const& build_lab
 		session.last_video_memory_sample_ns = 0;
 		session.session_id = session_dir.filename().string();
 		session.build_label = build_label;
-		session.source_tag = source_tag.empty() ? "manual" : source_tag;
+		session.source_tag = selection.source_tag.empty() ? "manual" : selection.source_tag;
+		session.selection_tag = selection.selection_tag.empty() ? "all" : selection.selection_tag;
+		session.categories = selection.categories;
 		session.started_local = agi::util::strftime("%Y-%m-%d %H:%M:%S");
 		session.log_emitter = emitter_ptr;
 		session.summary = Summary{};
@@ -631,7 +889,7 @@ void ResetAudioPlaybackInterval() {
 		return;
 	auto& session = GetSession();
 	std::lock_guard<std::mutex> lock(session.mutex);
-	if (!session.enabled || session.closing)
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::Audio))
 		return;
 	session.summary.audio_playback_interval.Reset();
 }
@@ -641,13 +899,13 @@ void ResetVideoPlaybackInterval() {
 		return;
 	auto& session = GetSession();
 	std::lock_guard<std::mutex> lock(session.mutex);
-	if (!session.enabled || session.closing)
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::Video))
 		return;
 	session.summary.video_playback_tick_interval.Reset();
 }
 
 void TraceVideoOpen(agi::fs::path const& path, int width, int height, int frame_count, bool has_audio, std::string const& decoder_name, double duration_ms) {
-	RecordEntry("op", "video_open", true, [&](JsonObjectBuilder& payload) {
+	RecordEntry(TraceCategory::Video | TraceCategory::Ops, "op", "video_open", true, [&](JsonObjectBuilder& payload) {
 		payload.AddString("path", agi::fs::PathToString(path));
 		payload.AddInt("width", width);
 		payload.AddInt("height", height);
@@ -659,20 +917,20 @@ void TraceVideoOpen(agi::fs::path const& path, int width, int height, int frame_
 }
 
 void TracePlayStart(int frame, int start_ms) {
-	RecordEntry("op", "play_start", true, [&](JsonObjectBuilder& payload) {
+	RecordEntry(TraceCategory::Audio | TraceCategory::Video | TraceCategory::Ops, "op", "play_start", true, [&](JsonObjectBuilder& payload) {
 		payload.AddInt("frame", frame);
 		payload.AddInt("start_ms", start_ms);
 	});
 }
 
 void TracePlayStop(int frame) {
-	RecordEntry("op", "play_stop", true, [&](JsonObjectBuilder& payload) {
+	RecordEntry(TraceCategory::Audio | TraceCategory::Video | TraceCategory::Ops, "op", "play_stop", true, [&](JsonObjectBuilder& payload) {
 		payload.AddInt("frame", frame);
 	});
 }
 
 void TraceSeek(int frame, bool was_playing) {
-	RecordEntry("op", "seek", true, [&](JsonObjectBuilder& payload) {
+	RecordEntry(TraceCategory::Audio | TraceCategory::Video | TraceCategory::Ops, "op", "seek", true, [&](JsonObjectBuilder& payload) {
 		payload.AddInt("frame", frame);
 		payload.AddBool("was_playing", was_playing);
 	});
@@ -684,7 +942,7 @@ void ObserveFrameRequest(int frame, double time, bool immediate) {
 
 	auto& session = GetSession();
 	std::lock_guard<std::mutex> lock(session.mutex);
-	if (!session.enabled || session.closing)
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::Video))
 		return;
 
 	++session.summary.frame_requests;
@@ -704,7 +962,7 @@ void ObserveFrameResult(int frame, double time, bool delivered, bool immediate) 
 
 	auto& session = GetSession();
 	std::lock_guard<std::mutex> lock(session.mutex);
-	if (!session.enabled || session.closing)
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::Video))
 		return;
 
 	if (delivered) {
@@ -730,7 +988,7 @@ void ObserveAudioPlaybackPosition(int ms) {
 	auto const timestamp_ns = NowNs();
 	auto& session = GetSession();
 	std::lock_guard<std::mutex> lock(session.mutex);
-	if (!session.enabled || session.closing)
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::Audio))
 		return;
 
 	double interval_ms = 0.0;
@@ -743,6 +1001,77 @@ void ObserveAudioPlaybackPosition(int ms) {
 	AppendEntryLocked(session, "metric", "audio_playback_interval", payload.Finish(), false, timestamp_ns);
 }
 
+void ObserveAudioOutputSnapshot(AudioOutputSnapshot const& snapshot) {
+	if (!trace_active.load(std::memory_order_relaxed))
+		return;
+
+	auto const timestamp_ns = NowNs();
+	auto& session = GetSession();
+	std::lock_guard<std::mutex> lock(session.mutex);
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::Audio))
+		return;
+
+	++session.summary.audio_output_samples;
+	if (snapshot.low_water)
+		++session.summary.audio_output_low_water;
+	if (snapshot.starved)
+		++session.summary.audio_output_starved;
+	if (snapshot.recovered)
+		++session.summary.audio_output_recovered;
+	if (snapshot.end_of_stream)
+		++session.summary.audio_output_end_of_stream;
+	if (snapshot.queued_buffers >= 0)
+		session.summary.audio_output_queue_max_buffers = std::max(session.summary.audio_output_queue_max_buffers, snapshot.queued_buffers);
+	if (snapshot.queued_ms >= 0.0)
+		session.summary.audio_output_queue_max_ms = std::max(session.summary.audio_output_queue_max_ms, snapshot.queued_ms);
+	if (snapshot.submitted_buffers >= 0) {
+		session.summary.audio_output_submitted_total_buffers += static_cast<uint64_t>(snapshot.submitted_buffers);
+		session.summary.audio_output_submitted_max_buffers = std::max(session.summary.audio_output_submitted_max_buffers, snapshot.submitted_buffers);
+	}
+	if (snapshot.submitted_frames >= 0) {
+		session.summary.audio_output_submitted_total_frames += static_cast<uint64_t>(snapshot.submitted_frames);
+		session.summary.audio_output_submitted_max_frames = std::max(session.summary.audio_output_submitted_max_frames, snapshot.submitted_frames);
+	}
+	if (snapshot.submitted_bytes >= 0) {
+		session.summary.audio_output_submitted_total_bytes += static_cast<uint64_t>(snapshot.submitted_bytes);
+		session.summary.audio_output_submitted_max_bytes = std::max(session.summary.audio_output_submitted_max_bytes, snapshot.submitted_bytes);
+	}
+	if (snapshot.submitted_ms >= 0.0)
+		session.summary.audio_output_submitted_max_ms = std::max(session.summary.audio_output_submitted_max_ms, snapshot.submitted_ms);
+	if (snapshot.fill_duration_ms >= 0.0)
+		session.summary.audio_output_fill_duration.Observe(snapshot.fill_duration_ms);
+	UpdateObservedName(session.summary.audio_output_backend, snapshot.backend_name);
+
+	JsonObjectBuilder payload;
+	payload.AddString("backend", snapshot.backend_name);
+	payload.AddString("reason", snapshot.reason);
+	if (snapshot.queued_buffers >= 0)
+		payload.AddInt("queued_buffers", snapshot.queued_buffers);
+	if (snapshot.queued_ms >= 0.0)
+		payload.AddDouble("queued_ms", snapshot.queued_ms);
+	if (snapshot.submitted_buffers >= 0)
+		payload.AddInt("submitted_buffers", snapshot.submitted_buffers);
+	if (snapshot.submitted_frames >= 0)
+		payload.AddInt("submitted_frames", snapshot.submitted_frames);
+	if (snapshot.submitted_bytes >= 0)
+		payload.AddInt("submitted_bytes", snapshot.submitted_bytes);
+	if (snapshot.submitted_ms >= 0.0)
+		payload.AddDouble("submitted_ms", snapshot.submitted_ms);
+	if (snapshot.fill_duration_ms >= 0.0)
+		payload.AddDouble("fill_duration_ms", snapshot.fill_duration_ms);
+	payload.AddBool("low_water", snapshot.low_water);
+	payload.AddBool("starved", snapshot.starved);
+	payload.AddBool("recovered", snapshot.recovered);
+	payload.AddBool("end_of_stream", snapshot.end_of_stream);
+	AppendEntryLocked(
+		session,
+		"metric",
+		"audio_output_snapshot",
+		payload.Finish(),
+		snapshot.starved || snapshot.recovered || snapshot.end_of_stream,
+		timestamp_ns);
+}
+
 void ObserveVideoPlaybackTick(int frame) {
 	if (!trace_active.load(std::memory_order_relaxed))
 		return;
@@ -750,7 +1079,7 @@ void ObserveVideoPlaybackTick(int frame) {
 	auto const timestamp_ns = NowNs();
 	auto& session = GetSession();
 	std::lock_guard<std::mutex> lock(session.mutex);
-	if (!session.enabled || session.closing)
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::Video))
 		return;
 
 	double interval_ms = 0.0;
@@ -770,7 +1099,7 @@ void TraceLuaDialogOpenBegin() {
 
 	auto& session = GetSession();
 	std::lock_guard<std::mutex> lock(session.mutex);
-	if (!session.enabled || session.closing)
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::LuaDialog))
 		return;
 
 	session.has_pending_lua_dialog_open = true;
@@ -788,7 +1117,7 @@ void TraceLuaDialogOpenEnd(int control_count, int button_count, double duration_
 	auto const timestamp_ns = NowNs();
 	auto& session = GetSession();
 	std::lock_guard<std::mutex> lock(session.mutex);
-	if (!session.enabled || session.closing)
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::LuaDialog))
 		return;
 
 	if (!session.has_pending_lua_dialog_open && duration_ms < 0.0)
@@ -830,7 +1159,8 @@ void ObserveVideoMemorySnapshot(char const* reason, VideoMemorySnapshot const& s
 	auto const timestamp_ns = NowNs();
 	auto& session = GetSession();
 	std::lock_guard<std::mutex> lock(session.mutex);
-	if (!session.enabled || session.closing)
+	if (!session.enabled || session.closing
+		|| !IsCategoryEnabledLocked(session, TraceCategory::Memory | TraceCategory::Audio | TraceCategory::Video))
 		return;
 
 	auto const sample_interval_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(kVideoMemorySampleInterval).count();

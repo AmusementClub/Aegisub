@@ -31,6 +31,7 @@
 #include "include/aegisub/audio_player.h"
 
 #include "options.h"
+#include "perf_trace.h"
 
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/scoped_ptr.h>
@@ -42,6 +43,8 @@
 #else
 #include <xaudio2redist.h>
 #endif
+
+#include <chrono>
 
 namespace {
 class XAudio2Thread;
@@ -349,6 +352,30 @@ void XAudio2Thread::Run() {
 	int current_latency = wanted_latency;
 	const int wanted_frames = wanted_latency * wfx.nSamplesPerSec / 1000;
 	const DWORD wanted_latency_bytes = wanted_frames * wfx.nBlockAlign;
+	bool const trace_audio_output = perf_trace::IsCategoryEnabled(perf_trace::Category::Audio);
+	auto const bytes_to_ms = [bytes_per_second = static_cast<double>(wfx.nAvgBytesPerSec)](int64_t bytes) {
+		return bytes_per_second > 0.0 ? static_cast<double>(bytes) * 1000.0 / bytes_per_second : 0.0;
+	};
+	auto emit_audio_output = [&](char const* reason, int queued_buffers, int submitted_buffers, int64_t submitted_frames, int64_t submitted_bytes, double fill_duration_ms, bool low_water, bool starved, bool recovered, bool end_of_stream) {
+		if (!trace_audio_output)
+			return;
+
+		perf_trace::AudioOutputSnapshot snapshot;
+		snapshot.backend_name = "xaudio2";
+		snapshot.reason = reason ? reason : "";
+		snapshot.queued_buffers = queued_buffers;
+		snapshot.queued_ms = queued_buffers >= 0 ? queued_buffers * static_cast<double>(wanted_latency) : -1.0;
+		snapshot.submitted_buffers = submitted_buffers;
+		snapshot.submitted_frames = submitted_frames;
+		snapshot.submitted_bytes = submitted_bytes;
+		snapshot.submitted_ms = submitted_bytes >= 0 ? bytes_to_ms(submitted_bytes) : -1.0;
+		snapshot.fill_duration_ms = fill_duration_ms;
+		snapshot.low_water = low_water;
+		snapshot.starved = starved;
+		snapshot.recovered = recovered;
+		snapshot.end_of_stream = end_of_stream;
+		perf_trace::ObserveAudioOutputSnapshot(snapshot);
+	};
 	std::vector<std::vector<BYTE> > buff(buffer_length);
 	for (auto& i : buff)
 		i.resize(wanted_latency_bytes);
@@ -395,6 +422,15 @@ void XAudio2Thread::Run() {
 			if (!playback_should_be_running)
 				break;
 
+			XAUDIO2_VOICE_STATE state_before = { };
+			pSourceVoice->GetState(&state_before);
+			bool const starved = wait_result == WAIT_OBJECT_0 + 4
+				&& state_before.BuffersQueued == 0
+				&& next_input_frame < end_frame;
+			auto const fill_started = trace_audio_output ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+			int submitted_buffers = 0;
+			int64_t submitted_frames = 0;
+			int64_t submitted_bytes = 0;
 			for (int i = 0; i < buffer_length; ++i) {
 				if (!buffer_occupied[i]) {
 					int fill_len = std::min<int>(end_frame - next_input_frame, wanted_frames);
@@ -406,6 +442,9 @@ void XAudio2Thread::Run() {
 					else
 						provider->GetInt16MonoAudio(reinterpret_cast<int16_t*>(buff[i].data()), next_input_frame, fill_len);
 					next_input_frame += fill_len;
+					++submitted_buffers;
+					submitted_frames += fill_len;
+					submitted_bytes += fill_len * wfx.nBlockAlign;
 					XAUDIO2_BUFFER xbf;
 					xbf.Flags = fill_len + next_input_frame == end_frame ? XAUDIO2_END_OF_STREAM : 0;
 					xbf.AudioBytes = fill_len * wfx.nBlockAlign;
@@ -420,6 +459,16 @@ void XAudio2Thread::Run() {
 						REPORT_ERROR("Failed initializing Submit Buffer")
 					}
 				}
+			}
+			if (trace_audio_output) {
+				XAUDIO2_VOICE_STATE state_after = { };
+				pSourceVoice->GetState(&state_after);
+				double const fill_duration_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - fill_started).count()) / 1000.0;
+				bool const end_of_stream = next_input_frame >= end_frame && state_after.BuffersQueued == 0;
+				bool const recovered = starved && state_after.BuffersQueued > 0;
+				bool const low_water = next_input_frame < end_frame && state_after.BuffersQueued <= 1;
+				if (submitted_buffers > 0 || starved || low_water || end_of_stream)
+					emit_audio_output("fill", static_cast<int>(state_after.BuffersQueued), submitted_buffers, submitted_frames, submitted_bytes, fill_duration_ms, low_water, starved, recovered, end_of_stream);
 			}
 			break;
 

@@ -30,6 +30,7 @@
 #include "include/aegisub/subtitles_provider.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "preferences_base.h"
 #include "video_provider_manager.h"
 #include "wx_ui_services.h"
@@ -41,6 +42,7 @@
 #include <libaegisub/hotkey.h>
 
 #include <unordered_set>
+#include <chrono>
 
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
@@ -54,9 +56,7 @@
 
 namespace {
 /// General preferences page
-void General(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("General"));
-
+void BuildGeneralPage(OptionPage *p) {
 	auto general = p->PageSizer(_("General"));
 	p->OptionAdd(general, _("Check for updates on startup"), "App/Auto/Check For Updates");
 	p->OptionAdd(general, _("Show main toolbar"), "App/Show Toolbar");
@@ -78,9 +78,7 @@ void General(wxTreebook *book, Preferences *parent) {
 	p->SetSizerAndFit(p->sizer);
 }
 
-void General_DefaultStyles(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Default styles"), OptionPage::PAGE_SUB);
-
+void BuildGeneralDefaultStylesPage(OptionPage *p) {
 	auto staticbox = new wxStaticBoxSizer(wxVERTICAL, p, _("Default style catalogs"));
 	p->sizer->Add(staticbox, 0, wxEXPAND, 5);
 	p->sizer->AddSpacer(8);
@@ -120,9 +118,7 @@ void General_DefaultStyles(wxTreebook *book, Preferences *parent) {
 }
 
 /// Audio preferences page
-void Audio(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Audio"));
-
+void BuildAudioPage(OptionPage *p) {
 	auto general = p->PageSizer(_("Options"));
 	p->OptionAdd(general, _("Default mouse wheel to zoom"), "Audio/Wheel Default to Zoom");
 	p->OptionAdd(general, _("Lock scroll on cursor"), "Audio/Lock Scroll on Cursor");
@@ -180,9 +176,7 @@ void Audio(wxTreebook *book, Preferences *parent) {
 }
 
 /// Video preferences page
-void Video(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Video"));
-
+void BuildVideoPage(OptionPage *p) {
 	auto general = p->PageSizer(_("Options"));
 	p->OptionAdd(general, _("Show keyframes in slider"), "Video/Slider/Show Keyframes");
 	p->CellSkip(general);
@@ -221,9 +215,7 @@ void Video(wxTreebook *book, Preferences *parent) {
 }
 
 /// Interface preferences page
-void Interface(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Interface"));
-
+void BuildInterfacePage(OptionPage *p) {
 	auto edit_box = p->PageSizer(_("Edit Box"));
 #ifdef WITH_WXSTC
 	p->OptionAdd(edit_box, _("Use styled edit box"), "Subtitle/Use STC");
@@ -259,9 +251,7 @@ void Interface(wxTreebook *book, Preferences *parent) {
 }
 
 /// Interface Colours preferences subpage
-void Interface_Colours(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Colors"), OptionPage::PAGE_SCROLL|OptionPage::PAGE_SUB);
-
+void BuildInterfaceColoursPage(OptionPage *p) {
 	delete p->sizer;
 	wxSizer *main_sizer = new wxBoxSizer(wxHORIZONTAL);
 
@@ -333,9 +323,7 @@ void Interface_Colours(wxTreebook *book, Preferences *parent) {
 }
 
 /// Backup preferences page
-void Backup(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Backup"));
-
+void BuildBackupPage(OptionPage *p) {
 	auto save = p->PageSizer(_("Automatic Save"));
 	wxControl *cb = p->OptionAdd(save, _("Enable"), "App/Auto/Save");
 	p->CellSkip(save);
@@ -353,9 +341,7 @@ void Backup(wxTreebook *book, Preferences *parent) {
 }
 
 /// Automation preferences page
-void Automation(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Automation"));
-
+void BuildAutomationPage(OptionPage *p) {
 	auto general = p->PageSizer(_("General"));
 
 	p->OptionAdd(general, _("Base path"), "Path/Automation/Base");
@@ -374,9 +360,7 @@ void Automation(wxTreebook *book, Preferences *parent) {
 }
 
 /// Advanced preferences page
-void Advanced(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Advanced"));
-
+void BuildAdvancedPage(OptionPage *p) {
 	auto general = p->PageSizer(_("General"));
 
 	auto warning = new wxStaticText(p, wxID_ANY ,_("Changing these settings might result in bugs and/or crashes.  Do not touch these unless you know what you're doing."));
@@ -389,9 +373,7 @@ void Advanced(wxTreebook *book, Preferences *parent) {
 }
 
 /// Advanced Audio preferences subpage
-void Advanced_Audio(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Audio"), OptionPage::PAGE_SUB);
-
+void BuildAdvancedAudioPage(OptionPage *p) {
 	auto expert = p->PageSizer(_("Expert"));
 
 	p->OptionChoice(expert, _("Audio provider"), GetAudioProviderChoices(), "Audio/Provider");
@@ -453,9 +435,7 @@ void Advanced_Audio(wxTreebook *book, Preferences *parent) {
 }
 
 /// Advanced Video preferences subpage
-void Advanced_Video(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Video"), OptionPage::PAGE_SUB);
-
+void BuildAdvancedVideoPage(OptionPage *p) {
 	auto expert = p->PageSizer(_("Expert"));
 
 	p->OptionChoice(expert, _("Video provider"), VideoProviderFactory::GetChoices(), "Video/Provider");
@@ -705,6 +685,48 @@ void Interface_Hotkeys::OnUpdateFilter(wxCommandEvent&) {
 }
 }
 
+void Preferences::RegisterDeferredPageBuilder(Thunk builder, bool built) {
+	deferred_page_builders.push_back(std::move(builder));
+	deferred_page_built.push_back(built);
+}
+
+void Preferences::EnsureDeferredPageBuilt(int page) {
+	if (page < 0 || page >= static_cast<int>(deferred_page_builders.size()))
+		return;
+	if (deferred_page_built[page])
+		return;
+
+	bool const should_freeze = IsShownOnScreen();
+	bool const is_current_page = book && book->GetSelection() == page;
+	wxSize const old_size = GetSize();
+	if (should_freeze)
+		Freeze();
+
+	deferred_page_builders[page]();
+	deferred_page_built[page] = true;
+
+	book->InvalidateBestSize();
+	book->Layout();
+	if (auto* sizer = GetSizer())
+		sizer->Layout();
+	Layout();
+	if (is_current_page) {
+		if (auto* sizer = GetSizer()) {
+			sizer->Fit(this);
+			auto const fitted_size = GetSize();
+			SetSize(std::max(old_size.x, fitted_size.x), std::max(old_size.y, fitted_size.y));
+		}
+	}
+
+	if (should_freeze)
+		Thaw();
+}
+
+void Preferences::EnsureAllDeferredPagesBuilt() {
+	for (int page = 0; page < static_cast<int>(deferred_page_builders.size()); ++page)
+		EnsureDeferredPageBuilt(page);
+}
+
 void Preferences::SetOption(std::unique_ptr<agi::OptionValue> new_value) {
 	pending_changes[new_value->GetName()] = std::move(new_value);
 	if (applyButton)
@@ -749,6 +771,8 @@ void Preferences::OnResetDefault(wxCommandEvent&) {
 	}) != agi::InteractionResult::Yes)
 		return;
 
+	EnsureAllDeferredPagesBuilt();
+
 	for (auto const& opt_name : option_names) {
 		agi::OptionValue *opt = OPT_SET(opt_name);
 		if (!opt->IsDefault())
@@ -767,43 +791,81 @@ void Preferences::OnResetDefault(wxCommandEvent&) {
 Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"), wxDefaultPosition, wxSize(-1, -1), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER) {
 	SetIcon(GETICON(options_button_16));
 
-	book = new wxTreebook(this, -1, wxDefaultPosition, wxDefaultSize);
-	General(book, this);
-	General_DefaultStyles(book, this);
-	Audio(book, this);
-	Video(book, this);
-	Interface(book, this);
-	Interface_Colours(book, this);
-	new Interface_Hotkeys(book, this);
-	Backup(book, this);
-	Automation(book, this);
-	Advanced(book, this);
-	Advanced_Audio(book, this);
-	Advanced_Video(book, this);
+	auto duration_ms = [](auto const& started) {
+		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+	};
+	auto observe_phase = [&](char const* phase, auto&& callback) {
+		auto const started = std::chrono::steady_clock::now();
+		callback();
+		perf_trace::ObserveWindowOpenPhase("preferences", phase, duration_ms(started));
+	};
 
-	book->Fit();
-
-	book->ChangeSelection(OPT_GET("Tool/Preferences/Page")->GetInt());
-	book->Bind(wxEVT_TREEBOOK_PAGE_CHANGED, [](wxBookCtrlEvent &evt) {
-		OPT_SET("Tool/Preferences/Page")->SetInt(evt.GetSelection());
+	observe_phase("treebook_create", [&] {
+		book = new wxTreebook(this, -1, wxDefaultPosition, wxDefaultSize);
 	});
 
-	// Bottom Buttons
-	auto stdButtonSizer = CreateStdDialogButtonSizer(wxOK | wxCANCEL | wxAPPLY | wxHELP);
-	applyButton = stdButtonSizer->GetApplyButton();
-	wxSizer *buttonSizer = new wxBoxSizer(wxHORIZONTAL);
-	auto defaultButton = new wxButton(this, -1, _("&Restore Defaults"));
-	buttonSizer->Add(defaultButton, wxSizerFlags(0).Expand());
-	buttonSizer->AddStretchSpacer(1);
-	buttonSizer->Add(stdButtonSizer, wxSizerFlags(0).Expand());
+	auto register_deferred_page = [&](char const* phase, wxString const& name, int style, auto builder) {
+		auto* page = new OptionPage(book, this, name, style);
+		RegisterDeferredPageBuilder([&, page, phase, builder] {
+			auto const started = std::chrono::steady_clock::now();
+			builder(page);
+			perf_trace::ObserveWindowOpenPhase("preferences", phase, duration_ms(started));
+		});
+	};
 
-	// Main Sizer
-	wxSizer *mainSizer = new wxBoxSizer(wxVERTICAL);
-	mainSizer->Add(book, wxSizerFlags(1).Expand().Border());
-	mainSizer->Add(buttonSizer, wxSizerFlags(0).Expand().Border(wxALL & ~wxTOP));
+	register_deferred_page("page_general", _("General"), OptionPage::PAGE_DEFAULT, BuildGeneralPage);
+	register_deferred_page("page_default_styles", _("Default styles"), OptionPage::PAGE_SUB, BuildGeneralDefaultStylesPage);
+	register_deferred_page("page_audio", _("Audio"), OptionPage::PAGE_DEFAULT, BuildAudioPage);
+	register_deferred_page("page_video", _("Video"), OptionPage::PAGE_DEFAULT, BuildVideoPage);
+	register_deferred_page("page_interface", _("Interface"), OptionPage::PAGE_DEFAULT, BuildInterfacePage);
+	register_deferred_page("page_interface_colours", _("Colors"), OptionPage::PAGE_SCROLL | OptionPage::PAGE_SUB, BuildInterfaceColoursPage);
+	observe_phase("page_hotkeys", [&] { new Interface_Hotkeys(book, this); });
+	RegisterDeferredPageBuilder({}, true);
+	register_deferred_page("page_backup", _("Backup"), OptionPage::PAGE_DEFAULT, BuildBackupPage);
+	register_deferred_page("page_automation", _("Automation"), OptionPage::PAGE_DEFAULT, BuildAutomationPage);
+	register_deferred_page("page_advanced", _("Advanced"), OptionPage::PAGE_DEFAULT, BuildAdvancedPage);
+	register_deferred_page("page_advanced_audio", _("Audio"), OptionPage::PAGE_SUB, BuildAdvancedAudioPage);
+	register_deferred_page("page_advanced_video", _("Video"), OptionPage::PAGE_SUB, BuildAdvancedVideoPage);
 
-	SetSizerAndFit(mainSizer);
-	CenterOnParent();
+	int initial_page = OPT_GET("Tool/Preferences/Page")->GetInt();
+	if (initial_page < 0 || initial_page >= static_cast<int>(deferred_page_builders.size()))
+		initial_page = 0;
+	book->ChangeSelection(initial_page);
+	EnsureDeferredPageBuilt(initial_page);
+
+	observe_phase("book_fit", [&] {
+		book->Fit();
+	});
+
+	wxSizer *mainSizer = nullptr;
+	wxButton *defaultButton = nullptr;
+	observe_phase("dialog_chrome", [&] {
+		book->Bind(wxEVT_TREEBOOK_PAGE_CHANGED, [this](wxBookCtrlEvent &evt) {
+			EnsureDeferredPageBuilt(evt.GetSelection());
+			OPT_SET("Tool/Preferences/Page")->SetInt(evt.GetSelection());
+		});
+
+		// Bottom Buttons
+		auto stdButtonSizer = CreateStdDialogButtonSizer(wxOK | wxCANCEL | wxAPPLY | wxHELP);
+		applyButton = stdButtonSizer->GetApplyButton();
+		wxSizer *buttonSizer = new wxBoxSizer(wxHORIZONTAL);
+		defaultButton = new wxButton(this, -1, _("&Restore Defaults"));
+		buttonSizer->Add(defaultButton, wxSizerFlags(0).Expand());
+		buttonSizer->AddStretchSpacer(1);
+		buttonSizer->Add(stdButtonSizer, wxSizerFlags(0).Expand());
+
+		// Main Sizer
+		mainSizer = new wxBoxSizer(wxVERTICAL);
+		mainSizer->Add(book, wxSizerFlags(1).Expand().Border());
+		mainSizer->Add(buttonSizer, wxSizerFlags(0).Expand().Border(wxALL & ~wxTOP));
+	});
+
+	observe_phase("dialog_fit", [&] {
+		SetSizerAndFit(mainSizer);
+	});
+	observe_phase("dialog_center", [&] {
+		CenterOnParent();
+	});
 
 	applyButton->Enable(false);
 
@@ -814,5 +876,20 @@ Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"
 }
 
 void ShowPreferences(wxWindow *parent) {
-	while (Preferences(parent).ShowModal() < 0);
+	while (true) {
+		auto const open_started = std::chrono::steady_clock::now();
+		perf_trace::TraceWindowOpenBegin("preferences");
+		try {
+			Preferences dialog(parent);
+			auto const duration_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - open_started).count();
+			perf_trace::TraceWindowOpenEnd("preferences", duration_ms, true);
+			if (dialog.ShowModal() >= 0)
+				break;
+		}
+		catch (...) {
+			auto const duration_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - open_started).count();
+			perf_trace::TraceWindowOpenEnd("preferences", duration_ms, false);
+			throw;
+		}
+	}
 }

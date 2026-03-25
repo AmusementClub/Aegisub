@@ -43,9 +43,11 @@
 #include "../main.h"
 #include "../options.h"
 #include "../project.h"
+#include "../project_session_ops.h"
 #include "../search_replace_engine.h"
 #include "../selection_controller.h"
 #include "../subs_controller.h"
+#include "../subtitle_editor_ops.h"
 #include "../subtitle_format.h"
 #include "../utils.h"
 #include "../video_controller.h"
@@ -115,21 +117,56 @@ struct subtitle_find_next final : public Command {
 	}
 };
 
+static aegisub::project_session_ops::SubtitleSessionTarget resolve_subtitle_session_target(agi::Context *c) {
+#ifdef __APPLE__
+	(void)c;
+	return aegisub::project_session_ops::ResolveSubtitleSessionTarget(true, false);
+#else
+	return aegisub::project_session_ops::ResolveSubtitleSessionTarget(
+		false,
+		c->GetCore().subsController->TryToClose() == wxCANCEL);
+#endif
+}
+
+static bool execute_subtitle_load(agi::Context *c,
+                                  aegisub::project_session_ops::SubtitleSessionTarget target,
+                                  agi::fs::path const& path,
+                                  std::string const& encoding = "",
+                                  bool load_linked = true) {
+	return aegisub::project_session_ops::ExecuteSubtitleLoad(
+		target,
+		path,
+		[&](agi::fs::path const& filename, std::string const& file_encoding, bool linked) {
+			c->GetCore().project->LoadSubtitles(filename, file_encoding, linked);
+		},
+#ifdef __APPLE__
+		[&](agi::fs::path const& filename, std::string const& file_encoding, bool linked) {
+			wxGetApp().NewProjectContext().GetCore().project->LoadSubtitles(filename, file_encoding, linked);
+		},
+#else
+		aegisub::project_session_ops::SubtitleLoadAction{},
+#endif
+		encoding,
+		load_linked);
+}
+
 static void insert_subtitle_at_video(agi::Context *c, bool after) {
 	auto core = c->GetCore();
-	auto def = new AssDialogue;
+	int default_duration = OPT_GET("Timing/Default Duration")->GetInt();
 	int video_ms = core.videoController->TimeAtFrame(core.videoController->GetFrameN(), agi::vfr::START);
-	def->Start = video_ms;
-	def->End = video_ms + OPT_GET("Timing/Default Duration")->GetInt();
-	def->Style = core.selectionController->GetActiveLine()->Style;
+	auto new_line = aegisub::subtitle_editor_ops::CreateLineAtVideoTime(
+		*core.selectionController->GetActiveLine(),
+		video_ms,
+		default_duration);
 
+	AssDialogue *inserted = new_line.get();
 	auto pos = core.ass->iterator_to(*core.selectionController->GetActiveLine());
 	if (after) ++pos;
 
-	core.ass->Events.insert(pos, *def);
+	core.ass->Events.insert(pos, *new_line.release());
 	core.ass->Commit(from_wx(_("line insertion")), AssFile::COMMIT_DIAG_ADDREM);
 
-	core.selectionController->SetSelectionAndActive({ def }, def);
+	core.selectionController->SetSelectionAndActive({ inserted }, inserted);
 }
 
 struct subtitle_insert_after final : public validate_nonempty_selection {
@@ -141,29 +178,16 @@ struct subtitle_insert_after final : public validate_nonempty_selection {
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
 		AssDialogue *active_line = core.selectionController->GetActiveLine();
-
-		auto new_line = new AssDialogue;
-		new_line->Style = active_line->Style;
-		new_line->Start = active_line->End;
-		new_line->End = new_line->Start + OPT_GET("Timing/Default Duration")->GetInt();
-
-		for (auto it = core.ass->Events.begin(); it != core.ass->Events.end(); ++it) {
-			AssDialogue *diag = &*it;
-
-			// Limit the line to the available time
-			if (diag->Start >= new_line->Start)
-				new_line->End = std::min(new_line->End, diag->Start);
-
-			// If we just hit the active line, insert the new line after it
-			if (diag == active_line) {
-				++it;
-				core.ass->Events.insert(it, *new_line);
-				--it;
-			}
-		}
+		auto new_line = aegisub::subtitle_editor_ops::CreateLineAfterActive(
+			*active_line,
+			core.ass->Events,
+			OPT_GET("Timing/Default Duration")->GetInt());
+		AssDialogue *inserted = new_line.get();
+		auto pos = core.ass->iterator_to(*active_line);
+		core.ass->Events.insert(++pos, *new_line.release());
 
 		core.ass->Commit(from_wx(_("line insertion")), AssFile::COMMIT_DIAG_ADDREM);
-		core.selectionController->SetSelectionAndActive({ new_line }, new_line);
+		core.selectionController->SetSelectionAndActive({ inserted }, inserted);
 	}
 };
 
@@ -187,26 +211,15 @@ struct subtitle_insert_before final : public validate_nonempty_selection {
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
 		AssDialogue *active_line = core.selectionController->GetActiveLine();
-
-		auto new_line = new AssDialogue;
-		new_line->Style = active_line->Style;
-		new_line->End = active_line->Start;
-		new_line->Start = new_line->End - OPT_GET("Timing/Default Duration")->GetInt();
-
-		for (auto it = core.ass->Events.begin(); it != core.ass->Events.end(); ++it) {
-			auto diag = &*it;
-
-			// Limit the line to the available time
-			if (diag->End <= new_line->End)
-				new_line->Start = std::max(new_line->Start, diag->End);
-
-			// If we just hit the active line, insert the new line before it
-			if (diag == active_line)
-				core.ass->Events.insert(it, *new_line);
-		}
+		auto new_line = aegisub::subtitle_editor_ops::CreateLineBeforeActive(
+			*active_line,
+			core.ass->Events,
+			OPT_GET("Timing/Default Duration")->GetInt());
+		AssDialogue *inserted = new_line.get();
+		core.ass->Events.insert(core.ass->iterator_to(*active_line), *new_line.release());
 
 		core.ass->Commit(from_wx(_("line insertion")), AssFile::COMMIT_DIAG_ADDREM);
-		core.selectionController->SetSelectionAndActive({ new_line }, new_line);
+		core.selectionController->SetSelectionAndActive({ inserted }, inserted);
 	}
 };
 
@@ -221,22 +234,6 @@ struct subtitle_insert_before_videotime final : public validate_nonempty_selecti
 	}
 };
 
-bool is_okay_to_close_subtitles(agi::Context *c) {
-#ifdef __APPLE__
-	return true;
-#else
-	return c->GetCore().subsController->TryToClose() != wxCANCEL;
-#endif
-}
-
-void load_subtitles(agi::Context *c, agi::fs::path const& path, std::string const& encoding="") {
-#ifdef __APPLE__
-	wxGetApp().NewProjectContext().GetCore().project->LoadSubtitles(path, encoding);
-#else
-	c->GetCore().project->LoadSubtitles(path, encoding);
-#endif
-}
-
 struct subtitle_new final : public Command {
 	CMD_NAME("subtitle/new")
 	CMD_ICON(new_toolbutton)
@@ -245,12 +242,10 @@ struct subtitle_new final : public Command {
 	STR_HELP("New subtitles")
 
 	void operator()(agi::Context *c) override {
-#ifdef __APPLE__
-		wxGetApp().NewProjectContext();
-#else
-		if (is_okay_to_close_subtitles(c))
-			c->GetCore().project->CloseSubtitles();
-#endif
+		aegisub::project_session_ops::ExecuteSubtitleSessionAction(
+			resolve_subtitle_session_target(c),
+			[&] { c->GetCore().project->CloseSubtitles(); },
+			[&] { wxGetApp().NewProjectContext(); });
 	}
 };
 
@@ -274,11 +269,11 @@ struct subtitle_open final : public Command {
 	STR_HELP("Open a subtitles file")
 
 	void operator()(agi::Context *c) override {
-		if (!is_okay_to_close_subtitles(c)) return;
+		auto target = resolve_subtitle_session_target(c);
+		if (target == aegisub::project_session_ops::SubtitleSessionTarget::Cancel) return;
 
 		auto filename = OpenFileSelector(_("Open subtitles file"), "Path/Last/Subtitles", "","", SubtitleFormat::GetWildcards(0), c->GetUI().parent);
-		if (!filename.empty())
-			load_subtitles(c, filename);
+		execute_subtitle_load(c, target, filename);
 	}
 };
 
@@ -289,10 +284,11 @@ struct subtitle_open_autosave final : public Command {
 	STR_HELP("Open a previous version of a file which was autosaved by Aegisub")
 
 	void operator()(agi::Context *c) override {
-		if (!is_okay_to_close_subtitles(c)) return;
+		auto target = resolve_subtitle_session_target(c);
+		if (target == aegisub::project_session_ops::SubtitleSessionTarget::Cancel) return;
+
 		auto filename = PickAutosaveFile(c->GetUI().parent);
-		if (!filename.empty())
-			load_subtitles(c, filename);
+		execute_subtitle_load(c, target, filename);
 	}
 };
 
@@ -304,7 +300,8 @@ struct subtitle_open_charset final : public Command {
 	STR_HELP("Open a subtitles file with a specific file encoding")
 
 	void operator()(agi::Context *c) override {
-		if (!is_okay_to_close_subtitles(c)) return;
+		auto target = resolve_subtitle_session_target(c);
+		if (target == aegisub::project_session_ops::SubtitleSessionTarget::Cancel) return;
 
 		auto filename = OpenFileSelector(_("Open subtitles file"), "Path/Last/Subtitles", "","", SubtitleFormat::GetWildcards(0), c->GetUI().parent);
 		if (filename.empty()) return;
@@ -314,7 +311,7 @@ struct subtitle_open_charset final : public Command {
 			c->GetSingleChoiceInteractionSink());
 		if (!charset) return;
 
-		load_subtitles(c, filename, *charset);
+		execute_subtitle_load(c, target, filename, *charset);
 	}
 };
 
@@ -427,18 +424,15 @@ struct subtitle_select_visible final : public Command {
 		auto core = c->GetCore();
 		core.videoController->Stop();
 
-		Selection new_selection;
 		int frame = core.videoController->GetFrameN();
+		auto visible = aegisub::subtitle_editor_ops::SelectMatchingLines(core.ass->Events, [&](AssDialogue const& diag) {
+			return core.videoController->FrameAtTime(diag.Start, agi::vfr::START) <= frame
+				&& core.videoController->FrameAtTime(diag.End, agi::vfr::END) >= frame;
+		});
 
-		for (auto& diag : core.ass->Events) {
-			if (core.videoController->FrameAtTime(diag.Start, agi::vfr::START) <= frame &&
-				core.videoController->FrameAtTime(diag.End, agi::vfr::END) >= frame)
-			{
-				if (new_selection.empty())
-					core.selectionController->SetActiveLine(&diag);
-				new_selection.insert(&diag);
-			}
-		}
+		Selection new_selection(visible.ordered_lines.begin(), visible.ordered_lines.end());
+		if (visible.active_line)
+			core.selectionController->SetActiveLine(visible.active_line);
 
 		core.selectionController->SetSelectedSet(std::move(new_selection));
 	}

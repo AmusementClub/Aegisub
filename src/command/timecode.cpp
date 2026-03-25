@@ -37,6 +37,7 @@
 #include "../libresrc/libresrc.h"
 #include "../options.h"
 #include "../project.h"
+#include "../project_session_ops.h"
 #include "../utils.h"
 
 #include <libaegisub/make_unique.h>
@@ -97,14 +98,17 @@ struct timecode_save final : public Command {
 		auto filename = SaveFileSelector(_("Save Timecodes File"), "Path/Last/Timecodes", "", "", str, ui.parent);
 		if (filename.empty()) return;
 
-		try {
-			auto provider = core.project->VideoProvider();
-			core.project->Timecodes().Save(filename, provider ? provider->GetFrameCount() : -1);
-			config::mru->Add("Timecodes", filename);
-		}
-		catch (agi::Exception const& err) {
-			c->ShowError(err.GetMessage(), "Error saving timecodes");
-		}
+		auto provider = core.project->VideoProvider();
+		aegisub::project_session_ops::SaveTimecodesToPath(
+			filename,
+			provider ? provider->GetFrameCount() : -1,
+			[&](agi::fs::path const& path, int frame_count) {
+				core.project->Timecodes().Save(path, frame_count);
+			},
+			*c->GetNotificationSink(),
+			[](char const* category, agi::fs::path const& path) {
+				config::mru->Add(category, path);
+			});
 	}
 };
 }

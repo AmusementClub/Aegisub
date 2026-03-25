@@ -34,6 +34,7 @@
 #include "../main.h"
 #include "../options.h"
 #include "../project.h"
+#include "../project_session_ops.h"
 #include "../subs_controller.h"
 
 #include <libaegisub/make_unique.h>
@@ -76,13 +77,33 @@ struct recent_subtitle_entry : public Command {
 	STR_HELP("Open recent subtitles")
 
 	void operator()(agi::Context *c, int id) {
+		auto path = config::mru->GetEntry("Subtitle", id);
+		auto target = aegisub::project_session_ops::ResolveSubtitleSessionTarget(
 #ifdef __APPLE__
-		wxGetApp().NewProjectContext().GetCore().project->LoadSubtitles(config::mru->GetEntry("Subtitle", id));
+			true,
+			false
 #else
-		auto core = c->GetCore();
-		if (core.subsController->TryToClose() == wxCANCEL) return;
-		core.project->LoadSubtitles(config::mru->GetEntry("Subtitle", id));
+			false,
+			c->GetCore().subsController->TryToClose() == wxCANCEL
 #endif
+		);
+		if (target == aegisub::project_session_ops::SubtitleSessionTarget::Cancel)
+			return;
+
+		aegisub::project_session_ops::ExecuteSubtitleLoad(
+			target,
+			path,
+			[&](agi::fs::path const& filename, std::string const& encoding, bool load_linked) {
+				c->GetCore().project->LoadSubtitles(filename, encoding, load_linked);
+			},
+#ifdef __APPLE__
+			[&](agi::fs::path const& filename, std::string const& encoding, bool load_linked) {
+				wxGetApp().NewProjectContext().GetCore().project->LoadSubtitles(filename, encoding, load_linked);
+			}
+#else
+			aegisub::project_session_ops::SubtitleLoadAction{}
+#endif
+		);
 	}
 };
 

@@ -47,7 +47,9 @@ if(GTEST_FOUND)
         src/resolution_resampler.cpp
         src/text_file_writer.cpp
         src/utils.cpp
+        src/project_session_ops.cpp
         src/subtitle_edit_ops.cpp
+        src/subtitle_editor_ops.cpp
         src/subtitle_grid_ops.cpp
         src/video_property_update.cpp
         src/subtitle_timing_ops.cpp
@@ -85,6 +87,7 @@ if(GTEST_FOUND)
         tests/tests/mru.cpp
         tests/tests/option.cpp
         tests/tests/path.cpp
+        tests/tests/project_session_ops.cpp
         tests/tests/ready_flag.cpp
         tests/tests/scope_exit.cpp
         tests/tests/signals.cpp
@@ -95,6 +98,7 @@ if(GTEST_FOUND)
         tests/tests/subtitle_fps_choice.cpp
         tests/tests/subtitle_format_microdvd.cpp
         tests/tests/subtitle_edit_ops.cpp
+        tests/tests/subtitle_editor_ops.cpp
         tests/tests/subtitle_grid_ops.cpp
         tests/tests/subtitle_timing_ops.cpp
         tests/tests/syntax_highlight.cpp

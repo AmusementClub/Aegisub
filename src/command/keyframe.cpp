@@ -36,6 +36,7 @@
 #include "../libresrc/libresrc.h"
 #include "../options.h"
 #include "../project.h"
+#include "../project_session_ops.h"
 #include "../utils.h"
 
 #include <libaegisub/keyframe.h>
@@ -102,8 +103,15 @@ struct keyframe_save final : public Command {
 		auto filename = SaveFileSelector(_("Save keyframes file"), "Path/Last/Keyframes", "", "*.key.txt", "Text files (*.txt)|*.txt", ui.parent);
 		if (filename.empty()) return;
 
-		agi::keyframe::Save(filename, core.project->Keyframes());
-		config::mru->Add("Keyframes", filename);
+		aegisub::project_session_ops::SaveKeyframesToPath(
+			filename,
+			[&](agi::fs::path const& path) {
+				agi::keyframe::Save(path, core.project->Keyframes());
+			},
+			*c->GetNotificationSink(),
+			[](char const* category, agi::fs::path const& path) {
+				config::mru->Add(category, path);
+			});
 	}
 };
 }

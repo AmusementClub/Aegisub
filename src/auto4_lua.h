@@ -162,6 +162,7 @@ namespace Automation4 {
 
 		/// Tooltip of this control
 		std::string hint;
+		wxString hint_wx;
 
 		int x, y, width, height;
 

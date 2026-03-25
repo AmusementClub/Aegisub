@@ -765,6 +765,15 @@ void TraceLuaDialogOpenBegin() {
 	AppendEntryLocked(session, "op", "lua_dialog_open_begin", payload.Finish(), true, timestamp_ns);
 }
 
+void ObserveLuaDialogPhase(char const* phase, int control_count, int button_count, double duration_ms) {
+	RecordEntry("metric", "lua_dialog_phase_duration", false, [&](JsonObjectBuilder& payload) {
+		payload.AddString("phase", phase ? phase : "");
+		payload.AddInt("control_count", control_count);
+		payload.AddInt("button_count", button_count);
+		payload.AddDouble("duration_ms", duration_ms);
+	});
+}
+
 void TraceLuaDialogOpenEnd(int control_count, int button_count, double duration_ms, bool succeeded) {
 	if (!trace_active.load(std::memory_order_relaxed))
 		return;

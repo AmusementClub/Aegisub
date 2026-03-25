@@ -50,6 +50,7 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	memory_snapshot.audio.decoded_bytes = 8192;
 	perf_trace::ObserveVideoMemorySnapshot("unit_test", memory_snapshot, true);
 	perf_trace::TraceLuaDialogOpenBegin();
+	perf_trace::ObserveLuaDialogPhase("build_model", 3, 2, 4.5);
 	perf_trace::TraceLuaDialogOpenEnd(3, 2, 12.5, true);
 	LOG_W("perf_trace/test") << "warning event";
 	perf_trace::Shutdown();
@@ -68,6 +69,7 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_frame_delivered\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_frame_dropped\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_memory_snapshot\""));
+	EXPECT_NE(std::string::npos, trace.find("\"name\":\"lua_dialog_phase_duration\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"lua_dialog_open_duration\""));
 	EXPECT_NE(std::string::npos, trace.find("\"kind\":\"log\""));
 

@@ -46,6 +46,7 @@
 #include <libaegisub/split.h>
 #include <libaegisub/string_utils.h>
 
+#include <chrono>
 #include <cfloat>
 #include <unordered_map>
 
@@ -117,6 +118,15 @@ namespace {
 		auto it = ids.find(str);
 		return it == end(ids) ? -1 : it->second;
 	}
+
+	double DurationMs(std::chrono::steady_clock::duration duration) {
+		return std::chrono::duration<double, std::milli>(duration).count();
+	}
+
+	void SetTooltipIfPresent(wxControl* control, wxString const& hint) {
+		if (!hint.empty())
+			control->SetToolTip(hint);
+	}
 }
 
 namespace Automation4 {
@@ -125,12 +135,12 @@ namespace Automation4 {
 	// Assume top of stack is a control table (don't do checking)
 	: name(get_field(L, "name"))
 	, hint(get_field(L, "hint"))
+	, hint_wx(hint.empty() ? wxString{} : to_wx(hint))
 	, x(get_field(L, "x", 0))
 	, y(get_field(L, "y", 0))
 	, width(get_field(L, "width", 1))
 	, height(get_field(L, "height", 1))
 	{
-		LOG_D("automation/lua/dialog") << "created control: '" << name << "', (" << x << "," << y << ")(" << width << "," << height << "), " << hint;
 	}
 
 	namespace LuaControl {
@@ -177,7 +187,7 @@ namespace Automation4 {
 				cw = new wxTextCtrl(parent, -1, to_wx(text));
 				cw->SetMaxLength(0);
 				cw->SetValidator(StringBinder(&text));
-				cw->SetToolTip(to_wx(hint));
+				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}
 
@@ -205,7 +215,7 @@ namespace Automation4 {
 
 			wxControl *Create(wxWindow *parent) override {
 				wxControl *cw = new ColourButton(parent, wxSize(50*width,10*height), alpha, color, ColorValidator(&color));
-				cw->SetToolTip(to_wx(hint));
+				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}
 
@@ -223,7 +233,7 @@ namespace Automation4 {
 			wxControl *Create(wxWindow *parent) override {
 				cw = new wxTextCtrl(parent, -1, "", wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE, StringBinder(&text));
 				cw->SetMinSize(wxSize(0, parent->FromDIP(30)));
-				cw->SetToolTip(to_wx(hint));
+				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}
 		};
@@ -254,7 +264,7 @@ namespace Automation4 {
 			wxControl *Create(wxWindow *parent) override {
 				cw = new wxSpinCtrl(parent, -1, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, value);
 				cw->SetValidator(wxGenericValidator(&value));
-				cw->SetToolTip(to_wx(hint));
+				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}
 
@@ -301,13 +311,13 @@ namespace Automation4 {
 				if (step > 0) {
 					scd = new wxSpinCtrlDouble(parent, -1, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, value, step);
 					scd->SetValidator(DoubleSpinValidator(&value));
-					scd->SetToolTip(to_wx(hint));
+					SetTooltipIfPresent(scd, hint_wx);
 					return scd;
 				}
 
 				DoubleValidator val(&value, min, max);
 				cw = new wxTextCtrl(parent, -1, "", wxDefaultPosition, wxDefaultSize, 0, val);
-				cw->SetToolTip(to_wx(hint));
+				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}
 
@@ -337,7 +347,7 @@ namespace Automation4 {
 
 			wxControl *Create(wxWindow *parent) override {
 				cw = new wxComboBox(parent, -1, to_wx(value), wxDefaultPosition, wxDefaultSize, to_wx(items), wxCB_READONLY, StringBinder(&value));
-				cw->SetToolTip(to_wx(hint));
+				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}
 
@@ -366,7 +376,7 @@ namespace Automation4 {
 			wxControl *Create(wxWindow *parent) override {
 				cw = new wxCheckBox(parent, -1, to_wx(label));
 				cw->SetValidator(wxGenericValidator(&value));
-				cw->SetToolTip(to_wx(hint));
+				SetTooltipIfPresent(cw, hint_wx);
 				cw->SetValue(value);
 				return cw;
 			}
@@ -381,6 +391,7 @@ namespace Automation4 {
 	LuaDialog::LuaDialog(lua_State *L, bool include_buttons)
 	: use_buttons(include_buttons)
 	{
+		auto const build_model_started = std::chrono::steady_clock::now();
 		LOG_D("automation/lua/dialog") << "creating LuaDialoug, addr: " << this;
 
 		// assume top of stack now contains a dialog table
@@ -388,6 +399,7 @@ namespace Automation4 {
 			error(L, "Cannot create config dialog from something non-table");
 
 		// Ok, so there is a table with controls
+		controls.reserve(static_cast<size_t>(lua_objlen(L, 1)));
 		lua_pushvalue(L, 1);
 		lua_for_each(L, [&] {
 			if (!lua_istable(L, -1))
@@ -427,6 +439,7 @@ namespace Automation4 {
 		});
 
 		if (include_buttons && lua_istable(L, 2)) {
+			buttons.reserve(static_cast<size_t>(lua_objlen(L, 2)));
 			lua_pushvalue(L, 2);
 			lua_for_each(L, [&]{
 				buttons.emplace_back(-1, check_string(L, -1));
@@ -434,33 +447,59 @@ namespace Automation4 {
 		}
 
 		if (include_buttons && lua_istable(L, 3)) {
+			std::unordered_map<std::string, size_t> button_indices;
+			button_indices.reserve(buttons.size());
+			for (size_t i = 0; i < buttons.size(); ++i)
+				button_indices.emplace(buttons[i].second, i);
+
 			lua_pushvalue(L, 3);
 			lua_for_each(L, [&]{
 				int id = string_to_wx_id(check_string(L, -2));
 				std::string label = check_string(L, -1);
-				auto btn = std::find_if(buttons.begin(), buttons.end(),
-					[&](std::pair<int, std::string>& btn) { return btn.second == label; });
-				if (btn == end(buttons))
+				auto const btn = button_indices.find(label);
+				if (btn == end(button_indices))
 					error(L, "Invalid button for id %s", lua_tostring(L, -2));
-				btn->first = id;
+				buttons[btn->second].first = id;
 			});
 		}
+
+		perf_trace::ObserveLuaDialogPhase(
+			"build_model",
+			static_cast<int>(controls.size()),
+			static_cast<int>(buttons.size()),
+			DurationMs(std::chrono::steady_clock::now() - build_model_started));
 	}
 
 	wxWindow* LuaDialog::CreateWindow(wxWindow *parent) {
+		auto const create_window_started = std::chrono::steady_clock::now();
 		window = new wxPanel(parent);
 
 		auto s = new wxGridBagSizer(4, 4);
+		auto const create_controls_started = std::chrono::steady_clock::now();
 		for (auto& c : controls)
 			s->Add(c->Create(window), wxGBPosition(c->y, c->x),
 				wxGBSpan(c->height, c->width), c->GetSizerFlags());
+		perf_trace::ObserveLuaDialogPhase(
+			"create_controls",
+			static_cast<int>(controls.size()),
+			static_cast<int>(buttons.size()),
+			DurationMs(std::chrono::steady_clock::now() - create_controls_started));
 
 		if (!use_buttons) {
+			auto const layout_started = std::chrono::steady_clock::now();
 			window->SetSizerAndFit(s);
+			auto const layout_duration_ms = DurationMs(std::chrono::steady_clock::now() - layout_started);
+			perf_trace::ObserveLuaDialogPhase("layout_window", static_cast<int>(controls.size()), 0, layout_duration_ms);
+			perf_trace::ObserveLuaDialogPhase(
+				"create_window_total",
+				static_cast<int>(controls.size()),
+				0,
+				DurationMs(std::chrono::steady_clock::now() - create_window_started));
 			perf_trace::TraceLuaDialogOpenEnd(static_cast<int>(controls.size()), 0, -1.0, true);
 			return window;
 		}
 
+		auto const create_buttons_started = std::chrono::steady_clock::now();
 		if (buttons.size() == 0) {
 			buttons.emplace_back(wxID_OK, "");
 			buttons.emplace_back(wxID_CANCEL, "");
@@ -497,11 +536,28 @@ namespace Automation4 {
 			for (size_t i = 0; i < buttons.size(); ++i)
 				bs->Add(make_button(buttons[i].first, i, buttons[i].second));
 		}
+		perf_trace::ObserveLuaDialogPhase(
+			"create_buttons",
+			static_cast<int>(controls.size()),
+			static_cast<int>(buttons.size()),
+			DurationMs(std::chrono::steady_clock::now() - create_buttons_started));
 
+		auto const layout_started = std::chrono::steady_clock::now();
 		auto ms = new wxBoxSizer(wxVERTICAL);
 		ms->Add(s, 0, wxBOTTOM, 5);
 		ms->Add(bs);
 		window->SetSizerAndFit(ms);
+		auto const layout_duration_ms = DurationMs(std::chrono::steady_clock::now() - layout_started);
+		perf_trace::ObserveLuaDialogPhase(
+			"layout_window",
+			static_cast<int>(controls.size()),
+			static_cast<int>(buttons.size()),
+			layout_duration_ms);
+		perf_trace::ObserveLuaDialogPhase(
+			"create_window_total",
+			static_cast<int>(controls.size()),
+			static_cast<int>(buttons.size()),
+			DurationMs(std::chrono::steady_clock::now() - create_window_started));
 		perf_trace::TraceLuaDialogOpenEnd(static_cast<int>(controls.size()), static_cast<int>(buttons.size()), -1.0, true);
 
 		return window;

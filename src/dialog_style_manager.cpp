@@ -691,7 +691,13 @@ void DialogStyleManager::OnCurrentDelete() {
 }
 
 void DialogStyleManager::OnCurrentImport() {
-	auto filename = OpenFileSelector(_("Open subtitles file"), "Path/Last/Subtitles", "", "", SubtitleFormat::GetWildcards(0), this);
+	auto filename = c->RequestOpenFile({
+		from_wx(_("Open subtitles file")),
+		"Path/Last/Subtitles",
+		"",
+		"",
+		SubtitleFormat::GetWildcards(0)
+	});
 	if (filename.empty()) return;
 
 	std::string charset;

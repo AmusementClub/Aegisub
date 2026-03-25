@@ -191,6 +191,12 @@ agi::fs::path Context::RequestSaveFile(SaveFileDialogRequest const& request) con
 	return {};
 }
 
+agi::fs::path Context::RequestSelectDirectory(SelectDirectoryDialogRequest const& request) const {
+	if (fileDialogService)
+		return fileDialogService->RequestSelectDirectory(request);
+	return {};
+}
+
 std::shared_ptr<VideoSourceRequestService> Context::GetVideoSourceRequestService() const {
 	return videoSourceRequestService;
 }

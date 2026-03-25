@@ -33,6 +33,7 @@
 #include "help_button.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
+#include "wx_ui_services.h"
 #include "utils.h"
 
 #include <wx/button.h>
@@ -158,17 +159,22 @@ void DialogAttachments::OnExtract(wxCommandEvent &) {
 
 	agi::fs::path path;
 	bool fullPath = false;
+	auto file_dialogs = agi::MakeWindowFileDialogService(&d);
 
 	// Multiple or single?
 	if (listView->GetNextSelected(i) != -1)
-		path = from_wx(wxDirSelector(_("Select the path to save the files to:"), to_wx(OPT_GET("Path/Fonts Collector Destination")->GetString())));
+		path = file_dialogs->RequestSelectDirectory({
+			from_wx(_("Select the path to save the files to:")),
+			OPT_GET("Path/Fonts Collector Destination")->GetString()
+		});
 	else {
-		path = SaveFileSelector(
-			_("Select the path to save the file to:"),
+		path = file_dialogs->RequestSaveFile({
+			from_wx(_("Select the path to save the file to:")),
 			"Path/Fonts Collector Destination",
 			ass->Attachments[i].GetFileName(),
-			".ttf", "Font Files (*.ttf)|*.ttf",
-			&d);
+			".ttf",
+			"Font Files (*.ttf)|*.ttf"
+		});
 		fullPath = true;
 	}
 	if (path.empty()) return;

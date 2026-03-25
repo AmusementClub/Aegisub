@@ -46,6 +46,7 @@
 #include <unicode/locid.h>
 #include <unicode/unistr.h>
 #include <wx/clipbrd.h>
+#include <wx/dirdlg.h>
 #include <wx/filedlg.h>
 #include <wx/stdpaths.h>
 #include <wx/window.h>
@@ -277,9 +278,11 @@ wxString FontFace(std::string opt_prefix) {
 	return to_wx(value);
 }
 
-static agi::fs::path FileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, int flags, wxWindow *parent) {
+static agi::fs::path FileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, int flags, wxWindow *parent) {
 	wxString path;
-	if (!option_name.empty())
+	if (!default_path.empty())
+		path = to_wx(default_path);
+	else if (!option_name.empty())
 		path = to_wx(OPT_GET(option_name)->GetString());
 	agi::fs::path filename = wxFileSelector(message, path, to_wx(default_filename), to_wx(default_extension), to_wx(wildcard), flags, parent).wx_str();
 	if (!filename.empty() && !option_name.empty())
@@ -288,11 +291,23 @@ static agi::fs::path FileSelector(wxString const& message, std::string const& op
 }
 
 agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
-	return FileSelector(message, option_name, default_filename, default_extension, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST, parent);
+	return FileSelector(message, option_name, "", default_filename, default_extension, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST, parent);
 }
 
 agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
-	return FileSelector(message, option_name, default_filename, default_extension, wildcard, wxFD_SAVE | wxFD_OVERWRITE_PROMPT, parent);
+	return FileSelector(message, option_name, "", default_filename, default_extension, wildcard, wxFD_SAVE | wxFD_OVERWRITE_PROMPT, parent);
+}
+
+agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
+	return FileSelector(message, option_name, default_path, default_filename, default_extension, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST, parent);
+}
+
+agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
+	return FileSelector(message, option_name, default_path, default_filename, default_extension, wildcard, wxFD_SAVE | wxFD_OVERWRITE_PROMPT, parent);
+}
+
+agi::fs::path SelectDirectorySelector(wxString const& message, std::string const& default_path, wxWindow *parent) {
+	return from_wx(wxDirSelector(message, to_wx(default_path), 0, wxDefaultPosition, parent));
 }
 
 wxString LocalizedLanguageName(wxString const& lang) {

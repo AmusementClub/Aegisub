@@ -262,6 +262,7 @@ public:
 			return OpenFileSelector(
 				to_wx(request.title),
 				request.option_name,
+				request.default_path,
 				request.default_filename,
 				request.default_extension,
 				request.wildcard,
@@ -276,10 +277,19 @@ public:
 			return SaveFileSelector(
 				to_wx(request.title),
 				request.option_name,
+				request.default_path,
 				request.default_filename,
 				request.default_extension,
 				request.wildcard,
 				frame);
+		});
+	}
+
+	agi::fs::path RequestSelectDirectory(agi::SelectDirectoryDialogRequest const& request) override {
+		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, request] {
+			if (!lifetime.lock())
+				return agi::fs::path();
+			return SelectDirectorySelector(to_wx(request.title), request.default_path, frame);
 		});
 	}
 };

@@ -2,6 +2,7 @@
 
 #include "../../src/project_session_ops.h"
 
+#include <libaegisub/audio/provider.h>
 #include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
 
@@ -27,6 +28,19 @@ struct capture_notification_sink final : agi::NotificationSink {
 
 	void ShowWarning(std::string const& title, std::string const& message) override {
 		warnings.emplace_back(title, message);
+	}
+};
+
+class FakeAudioProvider final : public agi::AudioProvider {
+	void FillBuffer(void*, int64_t, int64_t) const override { }
+
+public:
+	FakeAudioProvider() {
+		channels = 2;
+		num_samples = 100;
+		sample_rate = 48000;
+		bytes_per_sample = 2;
+		float_samples = false;
 	}
 };
 
@@ -110,6 +124,250 @@ TEST(project_session_ops, execute_subtitle_load_forwards_path_encoding_and_linke
 	EXPECT_EQ(agi::fs::path("new.ass"), new_path);
 	EXPECT_EQ("shift-jis", new_encoding);
 	EXPECT_TRUE(new_load_linked);
+}
+
+TEST(project_session_ops, resolve_subtitle_encoding_uses_existing_value_or_detector_result) {
+	capture_notification_sink sink;
+	bool called = false;
+
+	auto existing = aegisub::project_session_ops::ResolveSubtitleEncoding(
+		agi::fs::path("subtitles.ass"),
+		"utf-8",
+		[&]() {
+			called = true;
+			return std::string("shift-jis");
+		},
+		sink);
+
+	ASSERT_TRUE(existing.has_value());
+	EXPECT_EQ("utf-8", *existing);
+	EXPECT_FALSE(called);
+
+	auto detected = aegisub::project_session_ops::ResolveSubtitleEncoding(
+		agi::fs::path("subtitles.ass"),
+		"",
+		[&]() {
+			called = true;
+			return std::string("shift-jis");
+		},
+		sink);
+
+	ASSERT_TRUE(detected.has_value());
+	EXPECT_EQ("shift-jis", *detected);
+	EXPECT_TRUE(called);
+	EXPECT_TRUE(sink.errors.empty());
+}
+
+TEST(project_session_ops, resolve_subtitle_encoding_handles_cancel_and_missing_files) {
+	capture_notification_sink sink;
+	std::vector<std::pair<std::string, agi::fs::path>> removed;
+
+	auto cancelled = aegisub::project_session_ops::ResolveSubtitleEncoding(
+		agi::fs::path("cancel.ass"),
+		"",
+		[]() -> std::string {
+			throw agi::UserCancelException("cancelled");
+		},
+		sink,
+		[&](char const* category, agi::fs::path const& path) {
+			removed.emplace_back(category, path);
+		});
+
+	EXPECT_FALSE(cancelled.has_value());
+	EXPECT_TRUE(sink.errors.empty());
+	EXPECT_TRUE(removed.empty());
+
+	auto missing = aegisub::project_session_ops::ResolveSubtitleEncoding(
+		agi::fs::path("missing.ass"),
+		"",
+		[]() -> std::string {
+			throw agi::fs::FileNotFound(agi::fs::path("missing.ass"));
+		},
+		sink,
+		[&](char const* category, agi::fs::path const& path) {
+			removed.emplace_back(category, path);
+		});
+
+	EXPECT_FALSE(missing.has_value());
+	ASSERT_EQ(1u, sink.errors.size());
+	EXPECT_EQ("Error loading file", sink.errors[0].first);
+	EXPECT_EQ("missing.ass not found.", sink.errors[0].second);
+	ASSERT_EQ(1u, removed.size());
+	EXPECT_EQ("Subtitle", removed[0].first);
+	EXPECT_EQ(agi::fs::path("missing.ass"), removed[0].second);
+}
+
+TEST(project_session_ops, load_subtitles_with_error_handling_reports_expected_failures) {
+	capture_notification_sink sink;
+	std::vector<std::pair<std::string, agi::fs::path>> removed;
+	bool loaded = false;
+
+	EXPECT_TRUE(aegisub::project_session_ops::LoadSubtitlesWithErrorHandling(
+		agi::fs::path("ok.ass"),
+		[&] { loaded = true; },
+		sink));
+	EXPECT_TRUE(loaded);
+	EXPECT_TRUE(sink.errors.empty());
+
+	EXPECT_FALSE(aegisub::project_session_ops::LoadSubtitlesWithErrorHandling(
+		agi::fs::path("missing.ass"),
+		[] { throw agi::fs::FileNotFound(agi::fs::path("missing.ass")); },
+		sink,
+		[&](char const* category, agi::fs::path const& path) {
+			removed.emplace_back(category, path);
+		}));
+	EXPECT_FALSE(aegisub::project_session_ops::LoadSubtitlesWithErrorHandling(
+		agi::fs::path("broken.ass"),
+		[] { throw agi::InternalError("parse failed"); },
+		sink));
+	EXPECT_FALSE(aegisub::project_session_ops::LoadSubtitlesWithErrorHandling(
+		agi::fs::path("runtime.ass"),
+		[] { throw std::runtime_error("runtime failed"); },
+		sink));
+	EXPECT_FALSE(aegisub::project_session_ops::LoadSubtitlesWithErrorHandling(
+		agi::fs::path("unknown.ass"),
+		[] { throw 42; },
+		sink));
+
+	ASSERT_EQ(4u, sink.errors.size());
+	EXPECT_EQ("missing.ass not found.", sink.errors[0].second);
+	EXPECT_EQ("parse failed", sink.errors[1].second);
+	EXPECT_EQ("runtime failed", sink.errors[2].second);
+	EXPECT_EQ("Unknown error", sink.errors[3].second);
+	ASSERT_EQ(1u, removed.size());
+	EXPECT_EQ("Subtitle", removed[0].first);
+	EXPECT_EQ(agi::fs::path("missing.ass"), removed[0].second);
+}
+
+TEST(project_session_ops, unreadable_audio_open_path_reports_error_and_removes_mru) {
+	capture_notification_sink sink;
+	std::vector<std::pair<std::string, agi::fs::path>> removed;
+
+	EXPECT_FALSE(aegisub::project_session_ops::HandleUnreadableAudioOpenPath(
+		agi::fs::path("broken.wav"),
+		"access denied",
+		sink,
+		[&](char const* category, agi::fs::path const& path) {
+			removed.emplace_back(category, path);
+		}));
+
+	ASSERT_EQ(1u, sink.errors.size());
+	EXPECT_EQ("Error loading file", sink.errors[0].first);
+	EXPECT_EQ("The audio file was not found: access denied", sink.errors[0].second);
+	ASSERT_EQ(1u, removed.size());
+	EXPECT_EQ("Audio", removed[0].first);
+	EXPECT_EQ(agi::fs::path("broken.wav"), removed[0].second);
+}
+
+TEST(project_session_ops, create_audio_provider_with_error_handling_returns_provider_and_swallows_cancel) {
+	capture_notification_sink sink;
+	std::vector<std::pair<std::string, agi::fs::path>> removed;
+
+	auto provider = aegisub::project_session_ops::CreateAudioProviderWithErrorHandling(
+		agi::fs::path("ok.wav"),
+		false,
+		[]() -> std::unique_ptr<agi::AudioProvider> {
+			return std::make_unique<FakeAudioProvider>();
+		},
+		sink,
+		{},
+		[&](char const* category, agi::fs::path const& path) {
+			removed.emplace_back(category, path);
+		});
+
+	ASSERT_TRUE(provider);
+	EXPECT_TRUE(sink.errors.empty());
+	EXPECT_TRUE(removed.empty());
+
+	auto cancelled = aegisub::project_session_ops::CreateAudioProviderWithErrorHandling(
+		agi::fs::path("cancel.wav"),
+		false,
+		[]() -> std::unique_ptr<agi::AudioProvider> {
+			throw agi::UserCancelException("cancelled");
+		},
+		sink,
+		{},
+		[&](char const* category, agi::fs::path const& path) {
+			removed.emplace_back(category, path);
+		});
+
+	EXPECT_FALSE(cancelled);
+	EXPECT_TRUE(sink.errors.empty());
+	EXPECT_TRUE(removed.empty());
+}
+
+TEST(project_session_ops, create_audio_provider_with_error_handling_reports_expected_errors) {
+	capture_notification_sink sink;
+	std::vector<std::pair<std::string, agi::fs::path>> removed;
+	std::string quiet_message;
+
+	auto quiet = aegisub::project_session_ops::CreateAudioProviderWithErrorHandling(
+		agi::fs::path("quiet.wav"),
+		true,
+		[]() -> std::unique_ptr<agi::AudioProvider> {
+			throw agi::AudioDataNotFound("No audio found.");
+		},
+		sink,
+		[&](std::string const& message) {
+			quiet_message = message;
+		},
+		[&](char const* category, agi::fs::path const& path) {
+			removed.emplace_back(category, path);
+		});
+	EXPECT_FALSE(quiet);
+	EXPECT_EQ("No audio found.", quiet_message);
+	EXPECT_TRUE(sink.errors.empty());
+
+	auto loud = aegisub::project_session_ops::CreateAudioProviderWithErrorHandling(
+		agi::fs::path("loud.wav"),
+		false,
+		[]() -> std::unique_ptr<agi::AudioProvider> {
+			throw agi::AudioDataNotFound("ProviderA\nProviderB");
+		},
+		sink,
+		{},
+		[&](char const* category, agi::fs::path const& path) {
+			removed.emplace_back(category, path);
+		});
+	EXPECT_FALSE(loud);
+
+	auto codec = aegisub::project_session_ops::CreateAudioProviderWithErrorHandling(
+		agi::fs::path("codec.wav"),
+		false,
+		[]() -> std::unique_ptr<agi::AudioProvider> {
+			throw agi::AudioProviderError("CodecA");
+		},
+		sink,
+		{},
+		[&](char const* category, agi::fs::path const& path) {
+			removed.emplace_back(category, path);
+		});
+	EXPECT_FALSE(codec);
+
+	auto internal = aegisub::project_session_ops::CreateAudioProviderWithErrorHandling(
+		agi::fs::path("internal.wav"),
+		false,
+		[]() -> std::unique_ptr<agi::AudioProvider> {
+			throw agi::InternalError("internal failure");
+		},
+		sink,
+		{},
+		[&](char const* category, agi::fs::path const& path) {
+			removed.emplace_back(category, path);
+		});
+	EXPECT_FALSE(internal);
+
+	ASSERT_EQ(3u, sink.errors.size());
+	EXPECT_EQ("Error loading file", sink.errors[0].first);
+	EXPECT_EQ("None of the available audio providers recognised the selected file as containing audio data.\n\nThe following providers were tried:\nProviderA\nProviderB", sink.errors[0].second);
+	EXPECT_EQ("None of the available audio providers have a codec available to handle the selected file.\n\nThe following providers were tried:\nCodecA", sink.errors[1].second);
+	EXPECT_EQ("internal failure", sink.errors[2].second);
+	ASSERT_EQ(4u, removed.size());
+	EXPECT_EQ("Audio", removed[0].first);
+	EXPECT_EQ(agi::fs::path("quiet.wav"), removed[0].second);
+	EXPECT_EQ(agi::fs::path("loud.wav"), removed[1].second);
+	EXPECT_EQ(agi::fs::path("codec.wav"), removed[2].second);
+	EXPECT_EQ(agi::fs::path("internal.wav"), removed[3].second);
 }
 
 TEST(project_session_ops, save_timecodes_to_path_records_mru_after_success) {

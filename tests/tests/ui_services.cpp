@@ -39,6 +39,10 @@ TEST(ui_services, null_file_dialog_service_cancels) {
 		"mkv",
 		"Video Files|*.mkv"
 	}).empty());
+	EXPECT_TRUE(sink.RequestSelectDirectory({
+		"Select export directory",
+		"C:/temp"
+	}).empty());
 }
 
 TEST(ui_services, null_video_source_request_service_cancels) {

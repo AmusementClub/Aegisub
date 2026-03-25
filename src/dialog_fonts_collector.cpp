@@ -24,6 +24,7 @@
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "ui_dispatch.h"
+#include "wx_ui_services.h"
 #include "utils.h"
 #include "value_event.h"
 
@@ -351,20 +352,27 @@ void DialogFontsCollector::OnStart(wxCommandEvent &) {
 }
 
 void DialogFontsCollector::OnBrowse(wxCommandEvent &) {
-	wxString dest;
+	auto file_dialogs = agi::MakeWindowFileDialogService(this);
+	agi::fs::path dest;
 	if (mode == FcMode::CopyToZip) {
-		dest = wxFileSelector(
-			_("Select archive file name"),
-			dest_ctrl->GetValue(),
-			wxFileName(dest_ctrl->GetValue()).GetFullName(),
-			wxS(".zip"), wxS("Zip Archives (*.zip)|*.zip"),
-			wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
+		auto current_path = wxFileName(dest_ctrl->GetValue());
+		dest = file_dialogs->RequestSaveFile({
+			from_wx(_("Select archive file name")),
+			"",
+			from_wx(current_path.GetFullName()),
+			".zip",
+			"Zip Archives (*.zip)|*.zip",
+			from_wx(current_path.GetPath())
+		});
 	}
 	else
-		dest = wxDirSelector(_("Select folder to save fonts on"), dest_ctrl->GetValue(), 0);
+		dest = file_dialogs->RequestSelectDirectory({
+			from_wx(_("Select folder to save fonts on")),
+			from_wx(dest_ctrl->GetValue())
+		});
 
 	if (!dest.empty())
-		dest_ctrl->SetValue(dest);
+		dest_ctrl->SetValue(to_wx(agi::fs::PathToString(dest)));
 }
 
 void DialogFontsCollector::OnRadio(wxCommandEvent &evt) {

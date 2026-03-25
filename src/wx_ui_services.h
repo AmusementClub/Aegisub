@@ -3,8 +3,10 @@
 #include "compat.h"
 #include "ui_dispatch.h"
 #include "ui_services.h"
+#include "utils.h"
 
 #include <algorithm>
+#include <wx/dirdlg.h>
 #include <wx/dialog.h>
 #include <wx/msgdlg.h>
 #include <wx/radiobox.h>
@@ -152,6 +154,47 @@ public:
 	}
 };
 
+class WxWindowFileDialogService final : public FileDialogService {
+	wxWindow *parent = nullptr;
+
+public:
+	explicit WxWindowFileDialogService(wxWindow *parent = nullptr)
+	: parent(parent) {
+	}
+
+	agi::fs::path RequestOpenFile(OpenFileDialogRequest const& request) override {
+		return agi::ui::MainInvoke([parent = parent, request] {
+			return OpenFileSelector(
+				to_wx(request.title),
+				request.option_name,
+				request.default_path,
+				request.default_filename,
+				request.default_extension,
+				request.wildcard,
+				parent);
+		});
+	}
+
+	agi::fs::path RequestSaveFile(SaveFileDialogRequest const& request) override {
+		return agi::ui::MainInvoke([parent = parent, request] {
+			return SaveFileSelector(
+				to_wx(request.title),
+				request.option_name,
+				request.default_path,
+				request.default_filename,
+				request.default_extension,
+				request.wildcard,
+				parent);
+		});
+	}
+
+	agi::fs::path RequestSelectDirectory(SelectDirectoryDialogRequest const& request) override {
+		return agi::ui::MainInvoke([parent = parent, request] {
+			return SelectDirectorySelector(to_wx(request.title), request.default_path, parent);
+		});
+	}
+};
+
 inline std::shared_ptr<NotificationSink> MakeWindowNotificationSink(wxWindow *parent = nullptr) {
 	return std::make_shared<WxMessageBoxNotificationSink>(parent);
 }
@@ -162,6 +205,10 @@ inline std::shared_ptr<InteractionSink> MakeWindowInteractionSink(wxWindow *pare
 
 inline std::shared_ptr<SingleChoiceInteractionSink> MakeWindowSingleChoiceInteractionSink(wxWindow *parent = nullptr) {
 	return std::make_shared<WxSingleChoiceInteractionSink>(parent);
+}
+
+inline std::shared_ptr<FileDialogService> MakeWindowFileDialogService(wxWindow *parent = nullptr) {
+	return std::make_shared<WxWindowFileDialogService>(parent);
 }
 
 }

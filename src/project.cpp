@@ -30,6 +30,7 @@
 #include "include/aegisub/video_provider.h"
 #include "mkv_wrap.h"
 #include "options.h"
+#include "project_session_ops.h"
 #include "selection_controller.h"
 #include "subs_controller.h"
 #include "transient_font_set.h"
@@ -203,19 +204,19 @@ void Project::SetPath(agi::fs::path& var, const char *token, const char *mru, ag
 bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, ProjectProperties &properties) {
 	auto core = context->GetCore();
 	auto const previous_transient_fonts = core.ass->GetTransientFonts();
+	auto remove_mru = [](char const* category, agi::fs::path const& candidate) {
+		config::mru->Remove(category, candidate);
+	};
 
-	try {
-		if (encoding.empty())
-			encoding = CharSetDetect::GetEncoding(path, context->GetSingleChoiceInteractionSink());
-	}
-	catch (agi::UserCancelException const&) {
+	auto resolved_encoding = aegisub::project_session_ops::ResolveSubtitleEncoding(
+		path,
+		std::move(encoding),
+		[&] { return CharSetDetect::GetEncoding(path, context->GetSingleChoiceInteractionSink()); },
+		*context->GetNotificationSink(),
+		remove_mru);
+	if (!resolved_encoding)
 		return false;
-	}
-	catch (agi::fs::FileNotFound const&) {
-		config::mru->Remove("Subtitle", path);
-		ShowError(agi::format("%s not found.", path));
-		return false;
-	}
+	encoding = *resolved_encoding;
 
 	if (encoding != "binary") {
 		// Try loading as timecodes and keyframes first since we can't
@@ -226,25 +227,11 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 		try { DoLoadKeyframes(path); return false; } catch (...) { }
 	}
 
-	try {
-		properties = core.subsController->Load(path, encoding);
-	}
-	catch (agi::UserCancelException const&) { return false; }
-	catch (agi::fs::FileNotFound const&) {
-		config::mru->Remove("Subtitle", path);
-		ShowError(agi::format("%s not found.", path));
-		return false;
-	}
-	catch (agi::Exception const& e) {
-		ShowError(e.GetMessage());
-		return false;
-	}
-	catch (std::exception const& e) {
-		ShowError(std::string(e.what()));
-		return false;
-	}
-	catch (...) {
-		ShowError("Unknown error");
+	if (!aegisub::project_session_ops::LoadSubtitlesWithErrorHandling(
+		path,
+		[&] { properties = core.subsController->Load(path, encoding); },
+		*context->GetNotificationSink(),
+		remove_mru)) {
 		return false;
 	}
 
@@ -370,40 +357,34 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 }
 
 void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
+	auto remove_mru = [](char const* category, agi::fs::path const& candidate) {
+		config::mru->Remove(category, candidate);
+	};
+
 	std::string access_error;
 	if (!try_check_readable_media_path(path, access_error)) {
-		config::mru->Remove("Audio", path);
-		return ShowError(agi::format(_("The audio file was not found: %s"), access_error));
+		aegisub::project_session_ops::HandleUnreadableAudioOpenPath(
+			path,
+			access_error,
+			*context->GetNotificationSink(),
+			remove_mru);
+		return;
 	}
 
-	try {
-		try {
+	audio_provider = aegisub::project_session_ops::CreateAudioProviderWithErrorHandling(
+		path,
+		quiet,
+		[&]() {
 			auto core = context->GetCore();
-			audio_provider = GetAudioProvider(path, *core.path, GetProgressRunner(), *context->GetNotificationSink(), context->GetSingleChoiceInteractionSink());
-		}
-		catch (agi::UserCancelException const&) { return; }
-		catch (...) {
-			config::mru->Remove("Audio", path);
-			throw;
-		}
-	}
-	catch (agi::fs::FileNotFound const& e) {
-		return ShowError(agi::format(_("The audio file was not found: %s"), e.GetMessage()));
-	}
-	catch (agi::AudioDataNotFound const& e) {
-		if (quiet) {
-			LOG_D("video/open/audio") << "File " << video_file << " has no audio data: " << e.GetMessage();
-			return;
-		}
-		else
-			return ShowError(agi::format(_("None of the available audio providers recognised the selected file as containing audio data.\n\nThe following providers were tried:\n%s"), e.GetMessage()));
-	}
-	catch (agi::AudioProviderError const& e) {
-		return ShowError(agi::format(_("None of the available audio providers have a codec available to handle the selected file.\n\nThe following providers were tried:\n%s"), e.GetMessage()));
-	}
-	catch (agi::Exception const& e) {
-		return ShowError(e.GetMessage());
-	}
+			return GetAudioProvider(path, *core.path, GetProgressRunner(), *context->GetNotificationSink(), context->GetSingleChoiceInteractionSink());
+		},
+		*context->GetNotificationSink(),
+		[&](std::string const& error) {
+			LOG_D("video/open/audio") << "File " << video_file << " has no audio data: " << error;
+		},
+		remove_mru);
+	if (!audio_provider)
+		return;
 
 	SetPath(audio_file, "?audio", "Audio", path);
 	AnnounceAudioProviderModified(audio_provider.get());

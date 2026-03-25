@@ -50,6 +50,7 @@ namespace agi { struct InteractionRequest; }
 namespace agi { struct SingleChoiceInteractionRequest; }
 namespace agi { struct OpenFileDialogRequest; }
 namespace agi { struct SaveFileDialogRequest; }
+namespace agi { struct SelectDirectoryDialogRequest; }
 namespace agi { enum class InteractionResult : int; }
 
 namespace agi {
@@ -181,6 +182,7 @@ struct Context {
 	std::shared_ptr<FileDialogService> GetFileDialogService() const;
 	agi::fs::path RequestOpenFile(OpenFileDialogRequest const& request) const;
 	agi::fs::path RequestSaveFile(SaveFileDialogRequest const& request) const;
+	agi::fs::path RequestSelectDirectory(SelectDirectoryDialogRequest const& request) const;
 	std::shared_ptr<VideoSourceRequestService> GetVideoSourceRequestService() const;
 	std::string RequestDummyVideoPath() const;
 	std::unique_ptr<BackgroundRunner> CreateBackgroundRunner(std::string const& title = "", std::string const& message = "") const;

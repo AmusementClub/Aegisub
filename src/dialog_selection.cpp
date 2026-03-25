@@ -101,7 +101,7 @@ std::set<AssDialogue*> process(std::string const& match_text, bool match_case, M
 }
 
 DialogSelection::DialogSelection(agi::Context *c) :
-wxDialog (c->parent, -1, _("Select"), wxDefaultPosition, wxDefaultSize, wxCAPTION)
+wxDialog (c->GetUI().parent, -1, _("Select"), wxDefaultPosition, wxDefaultSize, wxCAPTION)
 , con(c)
 {
 	SetIcon(GETICON(select_lines_button_16));
@@ -181,6 +181,7 @@ DialogSelection::~DialogSelection() {
 }
 
 void DialogSelection::Process(wxCommandEvent& event) {
+	auto core = con->GetCore();
 	std::set<AssDialogue*> matches;
 
 	try {
@@ -188,7 +189,7 @@ void DialogSelection::Process(wxCommandEvent& event) {
 			from_wx(match_text->GetValue()), case_sensitive->IsChecked(),
 			static_cast<Mode>(match_mode->GetSelection()), select_unmatching_lines->GetValue(),
 			apply_to_comments->IsChecked(), apply_to_dialogue->IsChecked(),
-			dialogue_field->GetSelection(), con->ass.get());
+			dialogue_field->GetSelection(), core.ass.get());
 	}
 	catch (agi::Exception const&) {
 		if (event.GetId() == wxID_OK) Close();
@@ -199,7 +200,7 @@ void DialogSelection::Process(wxCommandEvent& event) {
 
 	Selection old_sel, new_sel;
 	if (action != Action::SET)
-		old_sel = con->selectionController->GetSelectedSet();
+		old_sel = core.selectionController->GetSelectedSet();
 
 	wxString message;
 	size_t count = 0;
@@ -236,10 +237,10 @@ void DialogSelection::Process(wxCommandEvent& event) {
 	else
 		con->ShowStatus(from_wx(message));
 
-	AssDialogue *new_active = con->selectionController->GetActiveLine();
+	AssDialogue *new_active = core.selectionController->GetActiveLine();
 	if (new_sel.size() && !new_sel.count(new_active))
 		new_active = *new_sel.begin();
-	con->selectionController->SetSelectionAndActive(std::move(new_sel), new_active);
+	core.selectionController->SetSelectionAndActive(std::move(new_sel), new_active);
 
 	if (event.GetId() == wxID_OK) Close();
 }
@@ -251,5 +252,5 @@ void DialogSelection::OnDialogueCheckbox(wxCheckBox *chk) {
 }
 
 void ShowSelectLinesDialog(agi::Context *c) {
-	c->dialog->Show<DialogSelection>(c);
+	c->GetUI().dialog->Show<DialogSelection>(c);
 }

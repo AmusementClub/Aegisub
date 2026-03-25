@@ -42,7 +42,7 @@
 #include <wx/valgen.h>
 
 DialogSearchReplace::DialogSearchReplace(agi::Context* c, bool replace)
-: wxDialog(c->parent, -1, replace ? _("Replace") : _("Find"))
+: wxDialog(c->GetUI().parent, -1, replace ? _("Replace") : _("Find"))
 , c(c)
 , settings(agi::make_unique<SearchReplaceSettings>())
 , has_replace(replace)
@@ -136,9 +136,10 @@ void DialogSearchReplace::FindReplace(bool (SearchReplaceEngine::*func)()) {
 	if (settings->find.empty())
 		return;
 
-	c->search->Configure(*settings);
+	auto core = c->GetCore();
+	core.search->Configure(*settings);
 	try {
-		((*c->search).*func)();
+		((*core.search).*func)();
 	}
 	catch (std::exception const& e) {
 		c->ShowError(e.what());

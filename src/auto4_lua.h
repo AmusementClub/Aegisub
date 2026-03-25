@@ -173,7 +173,7 @@ namespace Automation4 {
 		/// Get the default flags to use when inserting this control into a sizer
 		virtual int GetSizerFlags() const { return wxEXPAND; }
 
-		char const* GetTraceType() const { return trace_type; }
+		virtual char const* GetTraceType() const { return trace_type; }
 		virtual int GetTraceItemCount() const { return 0; }
 
 		/// Push the current value of the control onto the lua stack. Must not

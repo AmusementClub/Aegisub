@@ -97,25 +97,27 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 
 	UpdateTimeBoxes();
 
+	auto core = context->GetCore();
 	connections = agi::signal::make_vector({
-		context->ass->AddCommitListener(&VideoBox::UpdateTimeBoxes, this),
-		context->project->AddKeyframesListener(&VideoBox::UpdateTimeBoxes, this),
-		context->project->AddTimecodesListener(&VideoBox::UpdateTimeBoxes, this),
-		context->project->AddVideoProviderListener(&VideoBox::UpdateTimeBoxes, this),
-		context->selectionController->AddSelectionListener(&VideoBox::UpdateTimeBoxes, this),
-		context->videoController->AddSeekListener(&VideoBox::UpdateTimeBoxes, this),
+		core.ass->AddCommitListener(&VideoBox::UpdateTimeBoxes, this),
+		core.project->AddKeyframesListener(&VideoBox::UpdateTimeBoxes, this),
+		core.project->AddTimecodesListener(&VideoBox::UpdateTimeBoxes, this),
+		core.project->AddVideoProviderListener(&VideoBox::UpdateTimeBoxes, this),
+		core.selectionController->AddSelectionListener(&VideoBox::UpdateTimeBoxes, this),
+		core.videoController->AddSeekListener(&VideoBox::UpdateTimeBoxes, this),
 	});
 }
 
 void VideoBox::UpdateTimeBoxes() {
-	if (!context->project->VideoProvider()) return;
+	auto core = context->GetCore();
+	if (!core.project->VideoProvider()) return;
 
-	int frame = context->videoController->GetFrameN();
-	int time = context->videoController->TimeAtFrame(frame, agi::vfr::EXACT);
+	int frame = core.videoController->GetFrameN();
+	int time = core.videoController->TimeAtFrame(frame, agi::vfr::EXACT);
 
 	// Set the text box for frame number and time
 	VideoPosition->SetValue(fmt_wx("%s - %d", agi::Time(time).GetAssFormatted(true), frame));
-	if (std::binary_search(context->project->Keyframes().begin(), context->project->Keyframes().end(), frame)) {
+	if (std::binary_search(core.project->Keyframes().begin(), core.project->Keyframes().end(), frame)) {
 		// Set the background color to indicate this is a keyframe
 		VideoPosition->SetBackgroundColour(to_wx(OPT_GET("Colour/Subtitle Grid/Background/Selection")->GetColor()));
 		VideoPosition->SetForegroundColour(to_wx(OPT_GET("Colour/Subtitle Grid/Selection")->GetColor()));
@@ -125,7 +127,7 @@ void VideoBox::UpdateTimeBoxes() {
 		VideoPosition->SetForegroundColour(wxNullColour);
 	}
 
-	AssDialogue *active_line = context->selectionController->GetActiveLine();
+	AssDialogue *active_line = core.selectionController->GetActiveLine();
 	if (!active_line)
 		VideoSubsPos->SetValue(wxString());
 	else {

@@ -82,9 +82,10 @@ namespace {
 	};
 
 	DialogAlignToVideo::DialogAlignToVideo(agi::Context* context)
-		: wxDialog(context->parent, -1, _("Align subtitle to video by key point"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxMAXIMIZE_BOX | wxRESIZE_BORDER)
-		, context(context), provider(context->project->VideoProvider())
+		: wxDialog(context->GetUI().parent, -1, _("Align subtitle to video by key point"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxMAXIMIZE_BOX | wxRESIZE_BORDER)
+		, context(context), provider(context->GetCore().project->VideoProvider())
 	{
+		auto core = context->GetCore();
 		auto add_with_label = [&](wxSizer * sizer, wxString const& label, wxWindow * ctrl) {
 			sizer->Add(new wxStaticText(this, -1, label), 0, wxLEFT | wxRIGHT | wxCENTER, 3);
 			sizer->Add(ctrl, 1, wxLEFT);
@@ -93,10 +94,10 @@ namespace {
 		auto tolerance = OPT_GET("Tool/Align to Video/Tolerance")->GetInt();
 		auto maximized = OPT_GET("Tool/Align to Video/Maximized")->GetBool();
 
-		current_n_frame = context->videoController->GetFrameN();
+		current_n_frame = core.videoController->GetFrameN();
 		auto frame = provider->GetFrameBgra(
 			current_n_frame,
-			context->project->Timecodes().TimeAtFrame(current_n_frame),
+			core.project->Timecodes().TimeAtFrame(current_n_frame),
 			true);
 		if (!frame || frame->data.empty())
 			throw agi::InternalError("Could not retrieve a BGRA preview frame for key-point alignment.");
@@ -259,6 +260,7 @@ namespace {
 
 	void DialogAlignToVideo::process(wxEvent &)
 	{
+		auto core = context->GetCore();
 		auto n_frames = provider->GetFrameCount();
 		auto w = provider->GetWidth();
 		auto h = provider->GetHeight();
@@ -326,11 +328,11 @@ namespace {
 		pos = std::min(pos, n_frames - 1);
 		auto right = CHECK_EXISTS_POS ? pos : pos - 1;
 
-		auto timecode = context->project->Timecodes();
-		auto line = context->selectionController->GetActiveLine();
+		auto timecode = core.project->Timecodes();
+		auto line = core.selectionController->GetActiveLine();
 		line->Start = timecode.TimeAtFrame(left, agi::vfr::Time::START);
 		line->End = timecode.TimeAtFrame(right, agi::vfr::Time::END); // exclusive
-		context->ass->Commit(from_wx(_("Align to video by key point")), AssFile::COMMIT_DIAG_TIME);
+		core.ass->Commit(from_wx(_("Align to video by key point")), AssFile::COMMIT_DIAG_TIME);
 		Close();
 	}
 
@@ -381,5 +383,5 @@ namespace {
 
 void ShowAlignToVideoDialog(agi::Context * c)
 {
-	c->dialog->Show<DialogAlignToVideo>(c);
+	c->GetUI().dialog->Show<DialogAlignToVideo>(c);
 }

@@ -42,25 +42,27 @@
 VisualToolBase::VisualToolBase(VideoDisplay *parent, agi::Context *context)
 : c(context)
 , parent(parent)
-, frame_number(c->videoController->GetFrameN())
+, frame_number(c->GetCore().videoController->GetFrameN())
 , highlight_color_primary_opt(OPT_GET("Colour/Visual Tools/Highlight Primary"))
 , highlight_color_secondary_opt(OPT_GET("Colour/Visual Tools/Highlight Secondary"))
 , line_color_primary_opt(OPT_GET("Colour/Visual Tools/Lines Primary"))
 , line_color_secondary_opt(OPT_GET("Colour/Visual Tools/Lines Secondary"))
 , shaded_area_alpha_opt(OPT_GET("Colour/Visual Tools/Shaded Area Alpha"))
-, file_changed_connection(c->ass->AddCommitListener(&VisualToolBase::OnCommit, this))
+, file_changed_connection(c->GetCore().ass->AddCommitListener(&VisualToolBase::OnCommit, this))
 {
+	auto core = c->GetCore();
 	UpdateScriptResolution();
 	active_line = GetActiveDialogueLine();
-	connections.push_back(c->selectionController->AddActiveLineListener(&VisualToolBase::OnActiveLineChanged, this));
-	connections.push_back(c->videoController->AddSeekListener(&VisualToolBase::OnSeek, this));
+	connections.push_back(core.selectionController->AddActiveLineListener(&VisualToolBase::OnActiveLineChanged, this));
+	connections.push_back(core.videoController->AddSeekListener(&VisualToolBase::OnSeek, this));
 	connections.push_back(OPT_SUB("Subtitle/Resolution/Prefer PlayRes", &VisualToolBase::OnResolutionPolicyChanged, this));
 	parent->Bind(wxEVT_MOUSE_CAPTURE_LOST, &VisualToolBase::OnMouseCaptureLost, this);
 }
 
 void VisualToolBase::UpdateScriptResolution() {
 	int script_w, script_h;
-	c->ass->GetResolution(script_w, script_h);
+	auto core = c->GetCore();
+	core.ass->GetResolution(script_w, script_h);
 	script_res = Vector2D(script_w, script_h);
 }
 
@@ -122,11 +124,12 @@ void VisualToolBase::OnResolutionPolicyChanged(agi::OptionValue const&) {
 }
 
 bool VisualToolBase::IsDisplayed(AssDialogue *line) const {
-	int frame = c->videoController->GetFrameN();
+	auto core = c->GetCore();
+	int frame = core.videoController->GetFrameN();
 	return line
 		&& !line->Comment
-		&& c->videoController->FrameAtTime(line->Start, agi::vfr::START) <= frame
-		&& c->videoController->FrameAtTime(line->End, agi::vfr::END) >= frame;
+		&& core.videoController->FrameAtTime(line->Start, agi::vfr::START) <= frame
+		&& core.videoController->FrameAtTime(line->End, agi::vfr::END) >= frame;
 }
 
 void VisualToolBase::Commit(wxString message) {
@@ -134,12 +137,14 @@ void VisualToolBase::Commit(wxString message) {
 	if (message.empty())
 		message = _("visual typesetting");
 
-	commit_id = c->ass->Commit(from_wx(message), AssFile::COMMIT_DIAG_TEXT, commit_id);
+	auto core = c->GetCore();
+	commit_id = core.ass->Commit(from_wx(message), AssFile::COMMIT_DIAG_TEXT, commit_id);
 	file_changed_connection.Unblock();
 }
 
 AssDialogue* VisualToolBase::GetActiveDialogueLine() {
-	AssDialogue *diag = c->selectionController->GetActiveLine();
+	auto core = c->GetCore();
+	AssDialogue *diag = core.selectionController->GetActiveLine();
 	if (IsDisplayed(diag))
 		return diag;
 	return nullptr;
@@ -242,6 +247,7 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 	}
 	else if (left_click) {
 		drag_start = mouse_pos;
+		auto core = c->GetCore();
 
 		// start drag
 		if (active_feature) {
@@ -253,7 +259,7 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 				sel_changed = false;
 
 			if (active_feature->line)
-				c->selectionController->SetActiveLine(active_feature->line);
+				core.selectionController->SetActiveLine(active_feature->line);
 
 			if (InitializeDrag(active_feature)) {
 				for (auto sel : sel_features) sel->StartDrag();
@@ -265,7 +271,7 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 		else {
 			if (!alt_down && features.size() > 1) {
 				sel_features.clear();
-				c->selectionController->SetSelectedSet({ c->selectionController->GetActiveLine() });
+				core.selectionController->SetSelectedSet({ core.selectionController->GetActiveLine() });
 			}
 			if (active_line && InitializeHold()) {
 				holding = true;
@@ -308,11 +314,12 @@ void VisualTool<FeatureType>::SetSelection(FeatureType *feat, bool clear) {
 		sel_features.clear();
 
 	if (sel_features.insert(feat).second && feat->line) {
+		auto core = c->GetCore();
 		Selection sel;
 		if (!clear)
-			sel = c->selectionController->GetSelectedSet();
+			sel = core.selectionController->GetSelectedSet();
 		if (sel.insert(feat->line).second)
-			c->selectionController->SetSelectedSet(std::move(sel));
+			core.selectionController->SetSelectedSet(std::move(sel));
 	}
 }
 
@@ -322,7 +329,8 @@ void VisualTool<FeatureType>::RemoveSelection(FeatureType *feat) {
 	for (auto sel : sel_features)
 		if (sel->line == feat->line) return;
 
-	auto sel = c->selectionController->GetSelectedSet();
+	auto core = c->GetCore();
+	auto sel = core.selectionController->GetSelectedSet();
 
 	// Don't deselect the only selected line
 	if (sel.size() <= 1) return;
@@ -331,11 +339,11 @@ void VisualTool<FeatureType>::RemoveSelection(FeatureType *feat) {
 
 	// Set the active line to an arbitrary selected line if we just
 	// deselected the active line
-	AssDialogue *new_active = c->selectionController->GetActiveLine();
+	AssDialogue *new_active = core.selectionController->GetActiveLine();
 	if (feat->line == new_active)
 		new_active = *sel.begin();
 
-	c->selectionController->SetSelectionAndActive(std::move(sel), new_active);
+	core.selectionController->SetSelectionAndActive(std::move(sel), new_active);
 }
 
 //////// PARSERS
@@ -375,7 +383,8 @@ Vector2D VisualToolBase::GetLinePosition(AssDialogue *diag) {
 	auto margin = diag->Margin;
 	int align = 2;
 
-	if (AssStyle *style = c->ass->GetStyle(diag->Style)) {
+	auto core = c->GetCore();
+	if (AssStyle *style = core.ass->GetStyle(diag->Style)) {
 		align = style->alignment;
 		for (int i = 0; i < 3; i++) {
 			if (margin[i] == 0)
@@ -440,7 +449,8 @@ bool VisualToolBase::GetLineMove(AssDialogue *diag, Vector2D &p1, Vector2D &p2, 
 void VisualToolBase::GetLineRotation(AssDialogue *diag, float &rx, float &ry, float &rz) {
 	rx = ry = rz = 0.f;
 
-	if (AssStyle *style = c->ass->GetStyle(diag->Style))
+	auto core = c->GetCore();
+	if (AssStyle *style = core.ass->GetStyle(diag->Style))
 		rz = style->angle;
 
 	auto blocks = diag->ParseTags();
@@ -469,7 +479,8 @@ void VisualToolBase::GetLineShear(AssDialogue *diag, float& fax, float& fay) {
 void VisualToolBase::GetLineScale(AssDialogue *diag, Vector2D &scale) {
 	float x = 100.f, y = 100.f;
 
-	if (AssStyle *style = c->ass->GetStyle(diag->Style)) {
+	auto core = c->GetCore();
+	if (AssStyle *style = core.ass->GetStyle(diag->Style)) {
 		x = style->scalex;
 		y = style->scaley;
 	}
@@ -532,7 +543,8 @@ std::string VisualToolBase::GetLineVectorClip(AssDialogue *diag, int &scale, boo
 }
 
 void VisualToolBase::SetSelectedOverride(std::string const& tag, std::string const& value) {
-	for (auto line : c->selectionController->GetSelectedSet())
+	auto core = c->GetCore();
+	for (auto line : core.selectionController->GetSelectedSet())
 		SetOverride(line, tag, value);
 }
 

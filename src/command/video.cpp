@@ -50,6 +50,7 @@
 #include "../video_controller.h"
 #include "../video_display.h"
 #include "../video_frame.h"
+#include "../video_aspect_ratio_ops.h"
 #include "../video_navigation_ops.h"
 #include "../video_snapshot_ops.h"
 
@@ -124,23 +125,11 @@ struct video_aspect_custom final : public validator_video_loaded {
 			std::to_wstring(core.videoController->GetAspectRatioValue())));
 		if (value.empty()) return;
 
-		double numval = 0;
-		if (agi::util::try_parse(value, &numval)) {
-			//Nothing to see here, move along
-		}
-		else {
-			auto chunks = agi::util::strings::split_any(value, ":/xX", false);
-			if (chunks.size() == 2) {
-				double num, den;
-				if (agi::util::try_parse(chunks[0], &num) && agi::util::try_parse(chunks[1], &den))
-					numval = num / den;
-			}
-		}
-
-		if (numval < 0.5 || numval > 5.0)
+		auto parsed = aegisub::video_aspect_ratio_ops::ParseCustomAspectRatio(value);
+		if (!parsed)
 			c->ShowError(from_wx(_("Invalid value! Aspect ratio must be between 0.5 and 5.0.")), "Invalid Aspect Ratio");
 		else {
-			core.videoController->SetAspectRatio(numval);
+			core.videoController->SetAspectRatio(parsed.value);
 			c->GetUI().frame->SetDisplayMode(1,-1);
 		}
 	}

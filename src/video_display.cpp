@@ -531,6 +531,7 @@ void VideoDisplay::DoRender() try {
 
 	try {
 		if (has_pending_packet) {
+			bool const first_presented_frame = !has_displayed_packet;
 			auto const routing = DecideVideoRenderRouting(
 				pending_packet,
 				videoRenderer->SupportsDirectOverlay());
@@ -566,9 +567,9 @@ void VideoDisplay::DoRender() try {
 			has_displayed_packet = true;
 			pending_packet = { };
 			has_pending_packet = false;
-			if (perf_trace::ShouldSampleVideoMemory()) {
+			if (perf_trace::ShouldSampleVideoMemory(first_presented_frame)) {
 				auto snapshot = BuildVideoMemorySnapshot(con, this);
-				perf_trace::ObserveVideoMemorySnapshot("frame_presented", snapshot);
+				perf_trace::ObserveVideoMemorySnapshot("frame_presented", snapshot, first_presented_frame);
 			}
 		}
 	}

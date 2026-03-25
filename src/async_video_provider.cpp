@@ -432,13 +432,6 @@ AsyncVideoProviderMemoryStats AsyncVideoProvider::CollectMemoryStats() {
 			if (overlay)
 				stats.subtitle_overlay_pool_bytes += EstimateSubtitleOverlayStorageBytes(*overlay);
 		}
-
-		for (auto const& overlay : compatibility_overlay_buffers) {
-			if (!overlay)
-				continue;
-			stats.compatibility_overlay_pool_bytes += EstimateSubtitleOverlayStorageBytes(*overlay);
-			++stats.compatibility_overlay_pool_buffers;
-		}
 	});
 	return stats;
 }

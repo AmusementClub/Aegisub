@@ -43,6 +43,7 @@
 #include "../options.h"
 #include "../project.h"
 #include "../selection_controller.h"
+#include "../ui_services.h"
 #include "../utils.h"
 #include "../video_controller.h"
 
@@ -52,6 +53,28 @@
 
 namespace {
 	using cmd::Command;
+
+agi::OpenFileDialogRequest make_open_audio_file_request() {
+	return {
+		from_wx(_("Open Audio File")),
+		"Path/Last/Audio",
+		"",
+		"",
+		from_wx(_("Audio Formats") + wxS(" (*.aac,*.ac3,*.ape,*.dts,*.eac3,*.flac,*.m4a,*.mka,*.mp3,*.mp4,*.ogg,*.opus,*.w64,*.wav,*.wma)|*.aac;*.ac3;*.ape;*.dts;*.eac3;*.flac;*.m4a;*.mka;*.mp3;*.mp4;*.ogg;*.opus;*.w64;*.wav;*.wma|")
+			+ _("Video Formats") + wxS(" (*.asf,*.avi,*.avs,*.d2v,*.m2ts,*.m4v,*.mkv,*.mov,*.mp4,*.mpeg,*.mpg,*.ogm,*.webm,*.wmv,*.ts)|*.asf;*.avi;*.avs;*.d2v;*.m2ts;*.m4v;*.mkv;*.mov;*.mp4;*.mpeg;*.mpg;*.ogm;*.webm;*.wmv;*.ts|")
+			+ _("All Files") + wxS(" (*.*)|*.*"))
+	};
+}
+
+agi::SaveFileDialogRequest make_save_audio_clip_request() {
+	return {
+		from_wx(_("Save audio clip")),
+		"",
+		"",
+		"wav",
+		""
+	};
+}
 
 	struct validate_audio_open : public Command {
 		CMD_TYPE(COMMAND_VALIDATE)
@@ -81,10 +104,7 @@ struct audio_open final : public Command {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		auto str = from_wx(_("Audio Formats") + wxS(" (*.aac,*.ac3,*.ape,*.dts,*.eac3,*.flac,*.m4a,*.mka,*.mp3,*.mp4,*.ogg,*.opus,*.w64,*.wav,*.wma)|*.aac;*.ac3;*.ape;*.dts;*.eac3;*.flac;*.m4a;*.mka;*.mp3;*.mp4;*.ogg;*.opus;*.w64;*.wav;*.wma|")
-					+ _("Video Formats") + wxS(" (*.asf,*.avi,*.avs,*.d2v,*.m2ts,*.m4v,*.mkv,*.mov,*.mp4,*.mpeg,*.mpg,*.ogm,*.webm,*.wmv,*.ts)|*.asf;*.avi;*.avs;*.d2v;*.m2ts;*.m4v;*.mkv;*.mov;*.mp4;*.mpeg;*.mpg;*.ogm;*.webm;*.wmv;*.ts|")
-					+ _("All Files") + wxS(" (*.*)|*.*"));
-		auto filename = OpenFileSelector(_("Open Audio File"), "Path/Last/Audio", "", "", str, c->GetUI().parent);
+		auto filename = c->RequestOpenFile(make_open_audio_file_request());
 		if (!filename.empty())
 			core.project->LoadAudio(filename);
 	}
@@ -180,7 +200,7 @@ struct audio_save_clip final : public Command {
 		auto const& sel = core.selectionController->GetSelectedSet();
 		if (sel.empty()) return;
 
-		auto filename = SaveFileSelector(_("Save audio clip"), "", "", "wav", "", c->GetUI().parent);
+		auto filename = c->RequestSaveFile(make_save_audio_clip_request());
 		if (filename.empty()) return;
 
 		agi::Time start = INT_MAX, end = 0;

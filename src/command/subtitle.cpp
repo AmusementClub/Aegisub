@@ -49,6 +49,7 @@
 #include "../subs_controller.h"
 #include "../subtitle_editor_ops.h"
 #include "../subtitle_format.h"
+#include "../ui_services.h"
 #include "../utils.h"
 #include "../video_controller.h"
 
@@ -59,6 +60,26 @@
 
 namespace {
 	using cmd::Command;
+
+agi::OpenFileDialogRequest make_open_subtitles_file_request() {
+	return {
+		from_wx(_("Open subtitles file")),
+		"Path/Last/Subtitles",
+		"",
+		"",
+		SubtitleFormat::GetWildcards(0)
+	};
+}
+
+agi::SaveFileDialogRequest make_save_subtitles_file_request(std::string const& default_filename) {
+	return {
+		from_wx(_("Save subtitles file")),
+		"Path/Last/Subtitles",
+		default_filename,
+		"ass",
+		"Advanced Substation Alpha (*.ass)|*.ass"
+	};
+}
 
 struct validate_nonempty_selection : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
@@ -272,7 +293,7 @@ struct subtitle_open final : public Command {
 		auto target = resolve_subtitle_session_target(c);
 		if (target == aegisub::project_session_ops::SubtitleSessionTarget::Cancel) return;
 
-		auto filename = OpenFileSelector(_("Open subtitles file"), "Path/Last/Subtitles", "","", SubtitleFormat::GetWildcards(0), c->GetUI().parent);
+		auto filename = c->RequestOpenFile(make_open_subtitles_file_request());
 		execute_subtitle_load(c, target, filename);
 	}
 };
@@ -303,7 +324,7 @@ struct subtitle_open_charset final : public Command {
 		auto target = resolve_subtitle_session_target(c);
 		if (target == aegisub::project_session_ops::SubtitleSessionTarget::Cancel) return;
 
-		auto filename = OpenFileSelector(_("Open subtitles file"), "Path/Last/Subtitles", "","", SubtitleFormat::GetWildcards(0), c->GetUI().parent);
+		auto filename = c->RequestOpenFile(make_open_subtitles_file_request());
 		if (filename.empty()) return;
 
 		auto charset = CharSetDetect::PromptForEncodingChoice(
@@ -350,9 +371,8 @@ static void save_subtitles(agi::Context *c, agi::fs::path filename) {
 	auto core = c->GetCore();
 	if (filename.empty()) {
 		core.videoController->Stop();
-		filename = SaveFileSelector(_("Save subtitles file"), "Path/Last/Subtitles",
-			agi::fs::PathToString(core.subsController->Filename().stem()) + ".ass", "ass",
-			"Advanced Substation Alpha (*.ass)|*.ass", c->GetUI().parent);
+		filename = c->RequestSaveFile(make_save_subtitles_file_request(
+			agi::fs::PathToString(core.subsController->Filename().stem()) + ".ass"));
 		if (filename.empty()) return;
 	}
 

@@ -37,6 +37,7 @@
 #include "../options.h"
 #include "../project.h"
 #include "../project_session_ops.h"
+#include "../ui_services.h"
 #include "../utils.h"
 
 #include <libaegisub/keyframe.h>
@@ -44,6 +45,28 @@
 
 namespace {
 	using cmd::Command;
+
+agi::OpenFileDialogRequest make_open_keyframes_file_request() {
+	return {
+		from_wx(_("Open keyframes file")),
+		"Path/Last/Keyframes",
+		"",
+		".txt",
+		from_wx(_("All Supported Formats")
+			+ wxS(" (*.txt, *.pass, *.stats, *.log)|*.txt;*.pass;*.stats;*.log|")
+			+ _("All Files") + wxS(" (*.*)|*.*"))
+	};
+}
+
+agi::SaveFileDialogRequest make_save_keyframes_file_request() {
+	return {
+		from_wx(_("Save keyframes file")),
+		"Path/Last/Keyframes",
+		"",
+		"*.key.txt",
+		"Text files (*.txt)|*.txt"
+	};
+}
 
 struct keyframe_close final : public Command {
 	CMD_NAME("keyframe/close")
@@ -71,14 +94,7 @@ struct keyframe_open final : public Command {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		auto ui = c->GetUI();
-		auto filename = OpenFileSelector(
-			_("Open keyframes file"),
-			"Path/Last/Keyframes", "" ,".txt",
-			from_wx(_("All Supported Formats") +
-				wxS(" (*.txt, *.pass, *.stats, *.log)|*.txt;*.pass;*.stats;*.log|") +
-				_("All Files") + wxS(" (*.*)|*.*")),
-			ui.parent);
+		auto filename = c->RequestOpenFile(make_open_keyframes_file_request());
 
 		if (!filename.empty())
 			core.project->LoadKeyframes(filename);
@@ -99,8 +115,7 @@ struct keyframe_save final : public Command {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		auto ui = c->GetUI();
-		auto filename = SaveFileSelector(_("Save keyframes file"), "Path/Last/Keyframes", "", "*.key.txt", "Text files (*.txt)|*.txt", ui.parent);
+		auto filename = c->RequestSaveFile(make_save_keyframes_file_request());
 		if (filename.empty()) return;
 
 		aegisub::project_session_ops::SaveKeyframesToPath(

@@ -22,16 +22,28 @@ TEST(ui_services, null_single_choice_interaction_sink_cancels) {
 	}));
 }
 
-TEST(ui_services, null_video_source_request_service_cancels) {
-	agi::NullVideoSourceRequestService sink;
+TEST(ui_services, null_file_dialog_service_cancels) {
+	agi::NullFileDialogService sink;
 
-	EXPECT_TRUE(sink.RequestOpenVideoFile({
+	EXPECT_TRUE(sink.RequestOpenFile({
 		"Open video file",
 		"Path/Last/Video",
 		"",
 		"",
 		"Video Files|*.mkv"
 	}).empty());
+	EXPECT_TRUE(sink.RequestSaveFile({
+		"Save video file",
+		"Path/Last/Video",
+		"clip.mkv",
+		"mkv",
+		"Video Files|*.mkv"
+	}).empty());
+}
+
+TEST(ui_services, null_video_source_request_service_cancels) {
+	agi::NullVideoSourceRequestService sink;
+
 	EXPECT_TRUE(sink.RequestDummyVideoPath().empty());
 }
 

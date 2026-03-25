@@ -51,6 +51,7 @@ ContextCoreSession::ContextCoreSession(Context& context)
 , notificationSink(context.notificationSink)
 , interactionSink(context.interactionSink)
 , singleChoiceInteractionSink(context.singleChoiceInteractionSink)
+, fileDialogService(context.fileDialogService)
 , videoSourceRequestService(context.videoSourceRequestService)
 , backgroundRunnerFactory(context.backgroundRunnerFactory) {
 }
@@ -71,6 +72,7 @@ ConstContextCoreSession::ConstContextCoreSession(Context const& context)
 , notificationSink(context.notificationSink)
 , interactionSink(context.interactionSink)
 , singleChoiceInteractionSink(context.singleChoiceInteractionSink)
+, fileDialogService(context.fileDialogService)
 , videoSourceRequestService(context.videoSourceRequestService)
 , backgroundRunnerFactory(context.backgroundRunnerFactory) {
 }
@@ -115,6 +117,7 @@ Context::Context()
 , notificationSink(std::make_shared<NullNotificationSink>())
 , interactionSink(std::make_shared<NullInteractionSink>())
 , singleChoiceInteractionSink(std::make_shared<NullSingleChoiceInteractionSink>())
+, fileDialogService(std::make_shared<NullFileDialogService>())
 , videoSourceRequestService(std::make_shared<NullVideoSourceRequestService>())
 , backgroundRunnerFactory(std::make_shared<InlineBackgroundRunnerFactory>())
 , dialog(make_unique<DialogManager>())
@@ -172,14 +175,24 @@ std::optional<int> Context::RequestSingleChoice(SingleChoiceInteractionRequest c
 	return std::nullopt;
 }
 
-std::shared_ptr<VideoSourceRequestService> Context::GetVideoSourceRequestService() const {
-	return videoSourceRequestService;
+std::shared_ptr<FileDialogService> Context::GetFileDialogService() const {
+	return fileDialogService;
 }
 
-agi::fs::path Context::RequestOpenVideoFile(OpenFileDialogRequest const& request) const {
-	if (videoSourceRequestService)
-		return videoSourceRequestService->RequestOpenVideoFile(request);
+agi::fs::path Context::RequestOpenFile(OpenFileDialogRequest const& request) const {
+	if (fileDialogService)
+		return fileDialogService->RequestOpenFile(request);
 	return {};
+}
+
+agi::fs::path Context::RequestSaveFile(SaveFileDialogRequest const& request) const {
+	if (fileDialogService)
+		return fileDialogService->RequestSaveFile(request);
+	return {};
+}
+
+std::shared_ptr<VideoSourceRequestService> Context::GetVideoSourceRequestService() const {
+	return videoSourceRequestService;
 }
 
 std::string Context::RequestDummyVideoPath() const {

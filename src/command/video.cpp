@@ -630,7 +630,7 @@ struct video_open final : public Command {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		auto filename = c->RequestOpenVideoFile(make_open_video_file_request());
+		auto filename = c->RequestOpenFile(make_open_video_file_request());
 		if (!filename.empty())
 			core.project->LoadVideo(filename);
 	}

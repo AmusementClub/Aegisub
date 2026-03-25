@@ -43,11 +43,13 @@ namespace agi { class StatusSink; }
 namespace agi { class NotificationSink; }
 namespace agi { class InteractionSink; }
 namespace agi { class SingleChoiceInteractionSink; }
+namespace agi { class FileDialogService; }
 namespace agi { class VideoSourceRequestService; }
 namespace agi { class BackgroundRunnerFactory; }
 namespace agi { struct InteractionRequest; }
 namespace agi { struct SingleChoiceInteractionRequest; }
 namespace agi { struct OpenFileDialogRequest; }
+namespace agi { struct SaveFileDialogRequest; }
 namespace agi { enum class InteractionResult : int; }
 
 namespace agi {
@@ -70,6 +72,7 @@ struct ContextCoreSession {
 	std::shared_ptr<NotificationSink>& notificationSink;
 	std::shared_ptr<InteractionSink>& interactionSink;
 	std::shared_ptr<SingleChoiceInteractionSink>& singleChoiceInteractionSink;
+	std::shared_ptr<FileDialogService>& fileDialogService;
 	std::shared_ptr<VideoSourceRequestService>& videoSourceRequestService;
 	std::shared_ptr<BackgroundRunnerFactory>& backgroundRunnerFactory;
 
@@ -92,6 +95,7 @@ struct ConstContextCoreSession {
 	std::shared_ptr<NotificationSink> const& notificationSink;
 	std::shared_ptr<InteractionSink> const& interactionSink;
 	std::shared_ptr<SingleChoiceInteractionSink> const& singleChoiceInteractionSink;
+	std::shared_ptr<FileDialogService> const& fileDialogService;
 	std::shared_ptr<VideoSourceRequestService> const& videoSourceRequestService;
 	std::shared_ptr<BackgroundRunnerFactory> const& backgroundRunnerFactory;
 
@@ -144,6 +148,7 @@ struct Context {
 	std::shared_ptr<NotificationSink> notificationSink;
 	std::shared_ptr<InteractionSink> interactionSink;
 	std::shared_ptr<SingleChoiceInteractionSink> singleChoiceInteractionSink;
+	std::shared_ptr<FileDialogService> fileDialogService;
 	std::shared_ptr<VideoSourceRequestService> videoSourceRequestService;
 	std::shared_ptr<BackgroundRunnerFactory> backgroundRunnerFactory;
 
@@ -173,8 +178,10 @@ struct Context {
 	InteractionResult RequestInteraction(InteractionRequest const& request) const;
 	std::shared_ptr<SingleChoiceInteractionSink> GetSingleChoiceInteractionSink() const;
 	std::optional<int> RequestSingleChoice(SingleChoiceInteractionRequest const& request) const;
+	std::shared_ptr<FileDialogService> GetFileDialogService() const;
+	agi::fs::path RequestOpenFile(OpenFileDialogRequest const& request) const;
+	agi::fs::path RequestSaveFile(SaveFileDialogRequest const& request) const;
 	std::shared_ptr<VideoSourceRequestService> GetVideoSourceRequestService() const;
-	agi::fs::path RequestOpenVideoFile(OpenFileDialogRequest const& request) const;
 	std::string RequestDummyVideoPath() const;
 	std::unique_ptr<BackgroundRunner> CreateBackgroundRunner(std::string const& title = "", std::string const& message = "") const;
 

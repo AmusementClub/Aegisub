@@ -244,18 +244,18 @@ public:
 	}
 };
 
-class FrameMainVideoSourceRequestService final : public agi::VideoSourceRequestService {
+class FrameMainFileDialogService final : public agi::FileDialogService {
 	FrameMain *frame = nullptr;
 	agi::ui::WeakLifetime lifetime;
 
 public:
-	FrameMainVideoSourceRequestService(FrameMain *frame, agi::ui::WeakLifetime lifetime)
+	FrameMainFileDialogService(FrameMain *frame, agi::ui::WeakLifetime lifetime)
 	: frame(frame)
 	, lifetime(std::move(lifetime))
 	{
 	}
 
-	agi::fs::path RequestOpenVideoFile(agi::OpenFileDialogRequest const& request) override {
+	agi::fs::path RequestOpenFile(agi::OpenFileDialogRequest const& request) override {
 		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, request] {
 			if (!lifetime.lock())
 				return agi::fs::path();
@@ -267,6 +267,32 @@ public:
 				request.wildcard,
 				frame);
 		});
+	}
+
+	agi::fs::path RequestSaveFile(agi::SaveFileDialogRequest const& request) override {
+		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, request] {
+			if (!lifetime.lock())
+				return agi::fs::path();
+			return SaveFileSelector(
+				to_wx(request.title),
+				request.option_name,
+				request.default_filename,
+				request.default_extension,
+				request.wildcard,
+				frame);
+		});
+	}
+};
+
+class FrameMainVideoSourceRequestService final : public agi::VideoSourceRequestService {
+	FrameMain *frame = nullptr;
+	agi::ui::WeakLifetime lifetime;
+
+public:
+	FrameMainVideoSourceRequestService(FrameMain *frame, agi::ui::WeakLifetime lifetime)
+	: frame(frame)
+	, lifetime(std::move(lifetime))
+	{
 	}
 
 	std::string RequestDummyVideoPath() override {
@@ -377,6 +403,7 @@ FrameMain::FrameMain()
 	core.notificationSink = std::make_shared<FrameMainNotificationSink>(this, GetAsyncUiLifetime());
 	core.interactionSink = std::make_shared<FrameMainInteractionSink>(this, GetAsyncUiLifetime());
 	core.singleChoiceInteractionSink = std::make_shared<FrameMainSingleChoiceInteractionSink>(this, GetAsyncUiLifetime());
+	core.fileDialogService = std::make_shared<FrameMainFileDialogService>(this, GetAsyncUiLifetime());
 	core.videoSourceRequestService = std::make_shared<FrameMainVideoSourceRequestService>(this, GetAsyncUiLifetime());
 	core.backgroundRunnerFactory = std::make_shared<FrameMainBackgroundRunnerFactory>(this, GetAsyncUiLifetime());
 

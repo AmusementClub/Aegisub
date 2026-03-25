@@ -38,12 +38,33 @@
 #include "../options.h"
 #include "../project.h"
 #include "../project_session_ops.h"
+#include "../ui_services.h"
 #include "../utils.h"
 
 #include <libaegisub/make_unique.h>
 
 namespace {
 	using cmd::Command;
+
+agi::OpenFileDialogRequest make_open_timecodes_file_request() {
+	return {
+		from_wx(_("Open Timecodes File")),
+		"Path/Last/Timecodes",
+		"",
+		"",
+		from_wx(_("All Supported Formats") + wxS(" (*.txt)|*.txt|") + _("All Files") + wxS(" (*.*)|*.*"))
+	};
+}
+
+agi::SaveFileDialogRequest make_save_timecodes_file_request() {
+	return {
+		from_wx(_("Save Timecodes File")),
+		"Path/Last/Timecodes",
+		"",
+		"",
+		from_wx(_("All Supported Formats") + wxS(" (*.txt)|*.txt|") + _("All Files") + wxS(" (*.*)|*.*"))
+	};
+}
 
 struct timecode_close final : public Command {
 	CMD_NAME("timecode/close")
@@ -71,9 +92,7 @@ struct timecode_open final : public Command {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		auto ui = c->GetUI();
-		auto str = from_wx(_("All Supported Formats") + wxS(" (*.txt)|*.txt|") + _("All Files") + wxS(" (*.*)|*.*"));
-		auto filename = OpenFileSelector(_("Open Timecodes File"), "Path/Last/Timecodes", "", "", str, ui.parent);
+		auto filename = c->RequestOpenFile(make_open_timecodes_file_request());
 		if (!filename.empty())
 			core.project->LoadTimecodes(filename);
 	}
@@ -93,9 +112,7 @@ struct timecode_save final : public Command {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		auto ui = c->GetUI();
-		auto str = from_wx(_("All Supported Formats") + wxS(" (*.txt)|*.txt|") + _("All Files") + wxS(" (*.*)|*.*"));
-		auto filename = SaveFileSelector(_("Save Timecodes File"), "Path/Last/Timecodes", "", "", str, ui.parent);
+		auto filename = c->RequestSaveFile(make_save_timecodes_file_request());
 		if (filename.empty()) return;
 
 		auto provider = core.project->VideoProvider();

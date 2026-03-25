@@ -112,19 +112,40 @@ struct OpenFileDialogRequest {
 	std::string wildcard;
 };
 
+struct SaveFileDialogRequest {
+	std::string title;
+	std::string option_name;
+	std::string default_filename;
+	std::string default_extension;
+	std::string wildcard;
+};
+
+class FileDialogService {
+public:
+	virtual ~FileDialogService() = default;
+	virtual agi::fs::path RequestOpenFile(OpenFileDialogRequest const& request) = 0;
+	virtual agi::fs::path RequestSaveFile(SaveFileDialogRequest const& request) = 0;
+};
+
+class NullFileDialogService final : public FileDialogService {
+public:
+	agi::fs::path RequestOpenFile(OpenFileDialogRequest const&) override {
+		return {};
+	}
+
+	agi::fs::path RequestSaveFile(SaveFileDialogRequest const&) override {
+		return {};
+	}
+};
+
 class VideoSourceRequestService {
 public:
 	virtual ~VideoSourceRequestService() = default;
-	virtual agi::fs::path RequestOpenVideoFile(OpenFileDialogRequest const& request) = 0;
 	virtual std::string RequestDummyVideoPath() = 0;
 };
 
 class NullVideoSourceRequestService final : public VideoSourceRequestService {
 public:
-	agi::fs::path RequestOpenVideoFile(OpenFileDialogRequest const&) override {
-		return {};
-	}
-
 	std::string RequestDummyVideoPath() override {
 		return {};
 	}

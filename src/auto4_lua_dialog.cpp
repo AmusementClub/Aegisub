@@ -56,6 +56,7 @@
 #include <wx/combobox.h>
 #include <wx/dialog.h>
 #include <wx/gbsizer.h>
+#include <wx/odcombo.h>
 #include <wx/panel.h>
 #include <wx/spinctrl.h>
 #include <wx/stattext.h>
@@ -341,11 +342,11 @@ namespace Automation4 {
 			std::string value;
 			wxArrayString items_wx;
 			wxString value_wx;
-			wxComboBox *cw = nullptr;
+			wxOwnerDrawnComboBox *cw = nullptr;
 
 		public:
 			Dropdown(lua_State *L)
-			: LuaDialogControl(L, "dropdown")
+			: LuaDialogControl(L, "dropdown_odcombo")
 			, value(get_field(L, "value"))
 			{
 				lua_getfield(L, -1, "items");
@@ -364,7 +365,20 @@ namespace Automation4 {
 			}
 
 			wxControl *Create(wxWindow *parent) override {
-				cw = new wxComboBox(parent, -1, value_wx, wxDefaultPosition, wxDefaultSize, items_wx, wxCB_READONLY, StringBinder(&value));
+				create_trace = {};
+
+				auto const native_construct_started = std::chrono::steady_clock::now();
+				cw = new wxOwnerDrawnComboBox(parent, -1, "", wxDefaultPosition, wxDefaultSize, items_wx, wxCB_READONLY | wxODCB_STD_CONTROL_PAINT);
+				create_trace.native_construct_ms = DurationMs(std::chrono::steady_clock::now() - native_construct_started);
+
+				auto const validator_bind_started = std::chrono::steady_clock::now();
+				cw->SetValidator(StringBinder(&value));
+				create_trace.validator_bind_ms = DurationMs(std::chrono::steady_clock::now() - validator_bind_started);
+
+				auto const initial_value_started = std::chrono::steady_clock::now();
+				cw->SetStringSelection(value_wx);
+				create_trace.initial_value_set_ms = DurationMs(std::chrono::steady_clock::now() - initial_value_started);
+
 				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}
@@ -495,6 +509,7 @@ namespace Automation4 {
 		auto s = new wxGridBagSizer(4, 4);
 		auto const create_controls_started = std::chrono::steady_clock::now();
 		std::map<std::string, ControlCreateSummary> control_summaries;
+		std::map<std::string, std::map<std::string, ControlCreateSummary>> control_step_summaries;
 		for (auto& c : controls) {
 			auto const control_started = std::chrono::steady_clock::now();
 			auto* created_control = c->Create(window);
@@ -508,6 +523,22 @@ namespace Automation4 {
 			summary.item_count_total += item_count;
 			summary.item_count_max = std::max(summary.item_count_max, item_count);
 
+			auto accumulate_step = [&](char const* step, double duration_ms) {
+				if (duration_ms <= 0.0)
+					return;
+
+				auto& step_summary = control_step_summaries[c->GetTraceType()][step];
+				++step_summary.instance_count;
+				step_summary.duration_ms += duration_ms;
+				step_summary.item_count_total += item_count;
+				step_summary.item_count_max = std::max(step_summary.item_count_max, item_count);
+			};
+
+			auto const& create_trace = c->GetCreateTrace();
+			accumulate_step("native_construct", create_trace.native_construct_ms);
+			accumulate_step("validator_bind", create_trace.validator_bind_ms);
+			accumulate_step("initial_value_set", create_trace.initial_value_set_ms);
+
 			s->Add(created_control, wxGBPosition(c->y, c->x),
 				wxGBSpan(c->height, c->width), c->GetSizerFlags());
 		}
@@ -520,6 +551,19 @@ namespace Automation4 {
 				summary.item_count_total,
 				summary.item_count_max,
 				summary.duration_ms);
+		}
+		for (auto const& [control_type, step_summaries] : control_step_summaries) {
+			for (auto const& [step, summary] : step_summaries) {
+				perf_trace::ObserveLuaDialogControlStepSummary(
+					control_type.c_str(),
+					step.c_str(),
+					static_cast<int>(controls.size()),
+					static_cast<int>(buttons.size()),
+					summary.instance_count,
+					summary.item_count_total,
+					summary.item_count_max,
+					summary.duration_ms);
+			}
 		}
 		perf_trace::ObserveLuaDialogPhase(
 			"create_controls",

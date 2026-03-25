@@ -39,6 +39,12 @@ class wxWindow;
 struct lua_State;
 
 namespace Automation4 {
+	struct LuaDialogControlCreateTrace {
+		double native_construct_ms = 0.0;
+		double validator_bind_ms = 0.0;
+		double initial_value_set_ms = 0.0;
+	};
+
 	/// @class LuaAssFile
 	/// @brief Object wrapping an AssFile object for modification through Lua
 	class LuaAssFile {
@@ -157,6 +163,8 @@ namespace Automation4 {
 	/// Base class for controls in dialogs
 	class LuaDialogControl {
 		char const* trace_type;
+	protected:
+		LuaDialogControlCreateTrace create_trace;
 	public:
 		/// Name of this control in the output table
 		std::string name;
@@ -175,6 +183,7 @@ namespace Automation4 {
 
 		char const* GetTraceType() const { return trace_type; }
 		virtual int GetTraceItemCount() const { return 0; }
+		LuaDialogControlCreateTrace const& GetCreateTrace() const { return create_trace; }
 
 		/// Push the current value of the control onto the lua stack. Must not
 		/// touch the GUI as this may be called on a background thread.

@@ -52,6 +52,7 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	perf_trace::TraceLuaDialogOpenBegin();
 	perf_trace::ObserveLuaDialogPhase("build_model", 3, 2, 4.5);
 	perf_trace::ObserveLuaDialogControlTypeSummary("dropdown", 3, 2, 1, 18, 18, 2.75);
+	perf_trace::ObserveLuaDialogControlStepSummary("dropdown", "native_construct", 3, 2, 1, 18, 18, 1.25);
 	perf_trace::TraceLuaDialogOpenEnd(3, 2, 12.5, true);
 	LOG_W("perf_trace/test") << "warning event";
 	perf_trace::Shutdown();
@@ -72,6 +73,7 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_memory_snapshot\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"lua_dialog_phase_duration\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"lua_dialog_control_type_duration\""));
+	EXPECT_NE(std::string::npos, trace.find("\"name\":\"lua_dialog_control_step_duration\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"lua_dialog_open_duration\""));
 	EXPECT_NE(std::string::npos, trace.find("\"kind\":\"log\""));
 

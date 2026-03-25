@@ -787,6 +787,20 @@ void ObserveLuaDialogControlTypeSummary(char const* control_type, int control_co
 	});
 }
 
+void ObserveLuaDialogControlStepSummary(char const* control_type, char const* step, int control_count, int button_count, int instance_count, int item_count_total, int item_count_max, double duration_ms) {
+	RecordEntry("metric", "lua_dialog_control_step_duration", false, [&](JsonObjectBuilder& payload) {
+		payload.AddString("phase", "create_controls");
+		payload.AddString("control_type", control_type ? control_type : "");
+		payload.AddString("step", step ? step : "");
+		payload.AddInt("control_count", control_count);
+		payload.AddInt("button_count", button_count);
+		payload.AddInt("instance_count", instance_count);
+		payload.AddInt("item_count_total", item_count_total);
+		payload.AddInt("item_count_max", item_count_max);
+		payload.AddDouble("duration_ms", duration_ms);
+	});
+}
+
 void TraceLuaDialogOpenEnd(int control_count, int button_count, double duration_ms, bool succeeded) {
 	if (!trace_active.load(std::memory_order_relaxed))
 		return;

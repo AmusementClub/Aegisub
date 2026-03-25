@@ -53,7 +53,6 @@
 
 #include <wx/button.h>
 #include <wx/checkbox.h>
-#include <wx/choice.h>
 #include <wx/combobox.h>
 #include <wx/dialog.h>
 #include <wx/gbsizer.h>
@@ -342,15 +341,7 @@ namespace Automation4 {
 			std::string value;
 			wxArrayString items_wx;
 			wxString value_wx;
-			int selected_index = wxNOT_FOUND;
-			bool use_choice = false;
-			wxChoice *choice = nullptr;
 			wxComboBox *cw = nullptr;
-
-			void RefreshChoiceMode() {
-				selected_index = items_wx.Index(value_wx, false);
-				use_choice = selected_index != wxNOT_FOUND;
-			}
 
 		public:
 			Dropdown(lua_State *L)
@@ -361,11 +352,6 @@ namespace Automation4 {
 				read_string_array(L, items);
 				items_wx = to_wx(items);
 				value_wx = to_wx(value);
-				RefreshChoiceMode();
-			}
-
-			char const* GetTraceType() const override {
-				return use_choice ? "dropdown_choice" : "dropdown_combobox";
 			}
 
 			int GetTraceItemCount() const override { return static_cast<int>(items.size()); }
@@ -375,17 +361,9 @@ namespace Automation4 {
 			void UnserialiseValue(const std::string &serialised) override {
 				value = inline_string_decode(serialised);
 				value_wx = to_wx(value);
-				RefreshChoiceMode();
 			}
 
 			wxControl *Create(wxWindow *parent) override {
-				if (use_choice) {
-					choice = new wxChoice(parent, -1, wxDefaultPosition, wxDefaultSize, items_wx, 0, StringBinder(&value));
-					choice->SetSelection(selected_index);
-					SetTooltipIfPresent(choice, hint_wx);
-					return choice;
-				}
-
 				cw = new wxComboBox(parent, -1, value_wx, wxDefaultPosition, wxDefaultSize, items_wx, wxCB_READONLY, StringBinder(&value));
 				SetTooltipIfPresent(cw, hint_wx);
 				return cw;

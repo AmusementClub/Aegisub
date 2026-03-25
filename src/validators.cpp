@@ -21,7 +21,6 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/util.h>
 
-#include <wx/choice.h>
 #include <wx/combobox.h>
 #include <wx/spinctrl.h>
 #include <wx/textctrl.h>
@@ -192,8 +191,6 @@ bool StringBinder::TransferFromWindow() {
 	wxWindow *window = GetWindow();
 	if (wxTextCtrl *ctrl = dynamic_cast<wxTextCtrl*>(window))
 		*value = from_wx(ctrl->GetValue());
-	else if (wxChoice *ctrl = dynamic_cast<wxChoice*>(window))
-		*value = from_wx(ctrl->GetStringSelection());
 	else if (wxComboBox *ctrl = dynamic_cast<wxComboBox*>(window))
 		*value = from_wx(ctrl->GetValue());
 	else
@@ -205,8 +202,6 @@ bool StringBinder::TransferToWindow() {
 	wxWindow *window = GetWindow();
 	if (wxTextCtrl *ctrl = dynamic_cast<wxTextCtrl*>(window))
 		ctrl->SetValue(to_wx(*value));
-	else if (wxChoice *ctrl = dynamic_cast<wxChoice*>(window))
-		ctrl->SetStringSelection(to_wx(*value));
 	else if (wxComboBox *ctrl = dynamic_cast<wxComboBox*>(window))
 		ctrl->SetValue(to_wx(*value));
 	else

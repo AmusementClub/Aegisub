@@ -71,7 +71,7 @@ wxWindow *AssTransformFramerateFilter::GetConfigDialogWindow(wxWindow *parent, a
 	if (Input.IsLoaded()) {
 		initialInput = fmt_wx("%2.3f", Input.FPS());
 		FromVideo->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) {
-			InputFramerate->SetValue(fmt_wx("%g", c->project->Timecodes().FPS()));
+			InputFramerate->SetValue(fmt_wx("%g", c->GetCore().project->Timecodes().FPS()));
 		});
 	}
 	else {
@@ -128,8 +128,9 @@ void AssTransformFramerateFilter::LoadSettings(bool is_default, agi::Context *c)
 	this->c = c;
 
 	if (is_default) {
-		auto provider = c->project->VideoProvider();
-		Output = c->project->Timecodes();
+		auto core = c->GetCore();
+		auto provider = core.project->VideoProvider();
+		Output = core.project->Timecodes();
 		Input = provider ? provider->GetFPS() : Output;
 	}
 	else {
@@ -140,7 +141,7 @@ void AssTransformFramerateFilter::LoadSettings(bool is_default, agi::Context *c)
 			OutputFramerate->GetValue().ToDouble(&temp);
 			Output = temp;
 		}
-		else Output = c->project->Timecodes();
+		else Output = c->GetCore().project->Timecodes();
 
 		if (Reverse->IsChecked())
 			std::swap(Input, Output);

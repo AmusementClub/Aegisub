@@ -498,37 +498,40 @@ void BuildVideoPage(OptionPage *p) {
 
 /// Interface preferences page
 void BuildInterfacePage(OptionPage *p) {
-	auto edit_box = p->PageSizer(_("Edit Box"));
+	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
+	auto *grid = binder->GetGrid();
+	binder->BindEvents(binder);
+
+	binder->AddCategory(_("Edit Box"));
 #ifdef WITH_WXSTC
-	p->OptionAdd(edit_box, _("Use styled edit box"), "Subtitle/Use STC");
-	p->OptionAdd(edit_box, _("Enable call tips"), "App/Call Tips");
+	binder->AddBool(_("Use styled edit box"), "Subtitle/Use STC");
+	binder->AddBool(_("Enable call tips"), "App/Call Tips");
 #endif
-	p->OptionAdd(edit_box, _("Overwrite in time boxes"), "Subtitle/Time Edit/Insert Mode");
+	binder->AddBool(_("Overwrite in time boxes"), "Subtitle/Time Edit/Insert Mode");
 #ifdef WITH_WXSTC
-	p->OptionAdd(edit_box, _("Enable syntax highlighting"), "Subtitle/Highlight/Syntax");
-#else
-	// Pad number of options to even
-	p->CellSkip(edit_box);
+	binder->AddBool(_("Enable syntax highlighting"), "Subtitle/Highlight/Syntax");
 #endif
-	p->OptionBrowse(edit_box, _("Dictionaries path"), "Path/Dictionary");
-	p->OptionFont(edit_box, "Subtitle/Edit Box/");
+	binder->AddDirectory(_("Dictionaries path"), "Path/Dictionary");
+	binder->AddFont(_("Font"), "Subtitle/Edit Box/");
 
-	auto character_count = p->PageSizer(_("Character Counter"));
-	p->OptionAdd(character_count, _("Maximum characters per line"), "Subtitle/Character Limit", 0, 1000);
-	p->OptionAdd(character_count, _("Characters Per Second Warning Threshold"), "Subtitle/Character Counter/CPS Warning Threshold", 0, 1000);
-	p->OptionAdd(character_count, _("Characters Per Second Error Threshold"), "Subtitle/Character Counter/CPS Error Threshold", 0, 1000);
-	p->OptionAdd(character_count, _("Ignore whitespace"), "Subtitle/Character Counter/Ignore Whitespace");
-	p->OptionAdd(character_count, _("Ignore punctuation"), "Subtitle/Character Counter/Ignore Punctuation");
+	binder->AddCategory(_("Character Counter"));
+	binder->AddInt(_("Maximum characters per line"), "Subtitle/Character Limit", 0, 1000);
+	binder->AddInt(_("Characters Per Second Warning Threshold"), "Subtitle/Character Counter/CPS Warning Threshold", 0, 1000);
+	binder->AddInt(_("Characters Per Second Error Threshold"), "Subtitle/Character Counter/CPS Error Threshold", 0, 1000);
+	binder->AddBool(_("Ignore whitespace"), "Subtitle/Character Counter/Ignore Whitespace");
+	binder->AddBool(_("Ignore punctuation"), "Subtitle/Character Counter/Ignore Punctuation");
 
-	auto grid = p->PageSizer(_("Grid"));
-	p->OptionAdd(grid, _("Focus grid on click"), "Subtitle/Grid/Focus Allow");
-	p->OptionAdd(grid, _("Highlight visible subtitles"), "Subtitle/Grid/Highlight Subtitles in Frame");
-	p->OptionAdd(grid, _("Hide overrides symbol"), "Subtitle/Grid/Hide Overrides Char");
-	p->OptionFont(grid, "Subtitle/Grid/");
+	binder->AddCategory(_("Grid"));
+	binder->AddBool(_("Focus grid on click"), "Subtitle/Grid/Focus Allow");
+	binder->AddBool(_("Highlight visible subtitles"), "Subtitle/Grid/Highlight Subtitles in Frame");
+	auto *hide_overrides_char = binder->AddString(_("Hide overrides symbol"), "Subtitle/Grid/Hide Overrides Char");
+	grid->SetPropertyMaxLength(hide_overrides_char, 1);
+	binder->AddFont(_("Font"), "Subtitle/Grid/");
 
-	auto tl_assistant = p->PageSizer(_("Translation Assistant"));
-	p->OptionAdd(tl_assistant, _("Skip over whitespace"), "Tool/Translation Assistant/Skip Whitespace");
+	binder->AddCategory(_("Translation Assistant"));
+	binder->AddBool(_("Skip over whitespace"), "Tool/Translation Assistant/Skip Whitespace");
 
+	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
 }
 
@@ -1113,7 +1116,17 @@ Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"
 	if (initial_page < 0 || initial_page >= static_cast<int>(deferred_page_builders.size()))
 		initial_page = 0;
 	book->ChangeSelection(initial_page);
-	EnsureDeferredPageBuilt(initial_page);
+	try {
+		EnsureDeferredPageBuilt(initial_page);
+	}
+	catch (...) {
+		if (initial_page == 0)
+			throw;
+		initial_page = 0;
+		OPT_SET("Tool/Preferences/Page")->SetInt(initial_page);
+		book->ChangeSelection(initial_page);
+		EnsureDeferredPageBuilt(initial_page);
+	}
 
 	observe_phase("book_fit", [&] {
 		book->Fit();

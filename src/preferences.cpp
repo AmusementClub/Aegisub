@@ -31,6 +31,7 @@
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "perf_trace.h"
+#include "persist_location.h"
 #include "preferences_base.h"
 #include "video_provider_manager.h"
 #include "wx_ui_services.h"
@@ -58,6 +59,7 @@
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
 #include <wx/stattext.h>
+#include <wx/treectrl.h>
 #include <wx/treebook.h>
 
 namespace {
@@ -111,11 +113,6 @@ class PropertyGridOptionBinder {
 		grid->SetSelectionBackgroundColour(highlight);
 		grid->SetSelectionTextColour(highlight_text);
 		grid->SetVerticalSpacing(page->FromDIP(2));
-	}
-
-	void ApplyChoiceAffordance(wxPGProperty *prop) {
-		grid->SetPropertyImage(prop, wxBitmapBundle::FromBitmap(GETIMAGE(arrow_down_24)));
-		grid->SetPropertyHelpString(prop, _("Click to choose from list"));
 	}
 
 public:
@@ -204,7 +201,6 @@ public:
 		int const selected = ClampChoiceSelection(opt->GetInt(), choices.size());
 		auto pg_choices = MakeChoices(choices);
 		auto *prop = grid->Append(new wxEnumProperty(label, opt_name, pg_choices, selected));
-		ApplyChoiceAffordance(prop);
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
@@ -227,7 +223,6 @@ public:
 			selected = ClampChoiceSelection(opt->GetInt(), choices.size());
 
 		auto *prop = grid->Append(new wxEnumProperty(label, opt_name, pg_choices, selected));
-		ApplyChoiceAffordance(prop);
 		if (opt->GetType() == agi::OptionType::Int) {
 			std::string name = opt_name;
 			updaters.emplace(prop, [this, name](wxVariant const& value) {
@@ -1001,6 +996,9 @@ Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"
 
 	observe_phase("treebook_create", [&] {
 		book = new wxTreebook(this, -1, wxDefaultPosition, wxDefaultSize);
+		book->SetDoubleBuffered(true);
+		if (auto *tree = book->GetTreeCtrl())
+			tree->SetDoubleBuffered(true);
 	});
 
 	auto register_deferred_page = [&](char const* phase, wxString const& name, int style, auto builder) {
@@ -1063,9 +1061,12 @@ Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"
 
 	observe_phase("dialog_fit", [&] {
 		SetSizerAndFit(mainSizer);
+		wxSize const fitted = GetSize();
+		SetMinSize(fitted);
+		SetSize(std::max(fitted.x, FromDIP(520)), std::max(fitted.y, FromDIP(720)));
 	});
 	observe_phase("dialog_center", [&] {
-		CenterOnParent();
+		persist = agi::make_unique<PersistLocation>(this, "Tool/Preferences", true);
 	});
 
 	applyButton->Enable(false);

@@ -46,6 +46,7 @@
 #include "export_framerate.h"
 #include "format.h"
 #include "frame_main.h"
+#include "headless_playback_probe.h"
 #include "include/aegisub/context.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
@@ -69,6 +70,7 @@
 
 #include <boost/interprocess/streams/bufferstream.hpp>
 #include <boost/locale.hpp>
+#include <iostream>
 #include <locale>
 #include <wx/clipbrd.h>
 #include <wx/msgdlg.h>
@@ -314,6 +316,26 @@ bool AegisubApp::OnInit() {
 		StartupLog("Install PNG handler");
 		wxImage::AddHandler(new wxPNGHandler);
 
+		auto probe_parse = headless_playback_probe::Parse(argv.GetArguments());
+		if (probe_parse.requested) {
+			headless_probe_mode = true;
+			if (!probe_parse.options) {
+				headless_probe_exit_code = 64;
+				std::cerr << probe_parse.error << std::endl;
+				CallAfter([this] { ExitMainLoop(); });
+				return true;
+			}
+
+			auto probe_options = *probe_parse.options;
+			CallAfter([this, probe_options = std::move(probe_options)]() mutable {
+				headless_playback_probe::RunAsync(std::move(probe_options), [this](int exit_code) {
+					headless_probe_exit_code = exit_code;
+					ExitMainLoop();
+				});
+			});
+			return true;
+		}
+
 		// Open main frame
 		StartupLog("Create main window");
 		NewProjectContext();
@@ -492,7 +514,10 @@ int AegisubApp::OnRun() {
 	std::string error;
 
 	try {
-		return MainLoop();
+		auto exit_code = MainLoop();
+		if (headless_probe_mode)
+			return headless_probe_exit_code;
+		return exit_code;
 	}
 	catch (const std::exception &e) { error = std::string("std::exception: ") + e.what(); }
 	catch (const agi::Exception &e) { error = "agi::exception: " + e.GetMessage(); }

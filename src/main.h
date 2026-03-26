@@ -32,6 +32,8 @@
 #include "aegisublocale.h"
 #include "ui_dispatch.h"
 
+#include <string>
+
 #ifndef wxUSE_EXCEPTIONS
 #error wxWidgets is compiled without exceptions support. Aegisub requires exceptions support in wxWidgets to run safely.
 #endif
@@ -60,6 +62,8 @@ class AegisubApp : public wxApp {
 
 	std::vector<FrameMain *> frames;
 	agi::ui::UiActivationScope ui_activation;
+	bool headless_probe_mode = false;
+	int headless_probe_exit_code = 1;
 public:
 	AegisubApp();
 	AegisubLocale locale;

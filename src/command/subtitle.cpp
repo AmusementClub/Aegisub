@@ -58,6 +58,7 @@
 #include <libaegisub/fs.h>
 #include <libaegisub/make_unique.h>
 
+#include <wx/choicdlg.h>
 namespace {
 	using cmd::Command;
 

@@ -33,12 +33,19 @@
 #include "include/aegisub/audio_player.h"
 #include "include/aegisub/context.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "project.h"
 #include "ui_services.h"
 
 #include <libaegisub/audio/provider.h>
 
 #include <algorithm>
+
+namespace {
+constexpr int64_t kPlaybackAheadMs = 8000;
+constexpr int64_t kPlaybackBehindMs = 2000;
+constexpr int kAudioUiTimerRequestedMs = 20;
+}
 
 AudioController::AudioController(agi::Context *context)
 : context(context)
@@ -74,7 +81,15 @@ void AudioController::OnPlaybackTimer(wxTimerEvent &)
 	}
 	else
 	{
-		AnnouncePlaybackPosition(MillisecondsFromSamples(pos));
+		if (provider) {
+			provider->SetPlaybackWindow(
+				pos,
+				SamplesFromMilliseconds(kPlaybackAheadMs),
+				SamplesFromMilliseconds(kPlaybackBehindMs));
+		}
+		auto const position_ms = MillisecondsFromSamples(pos);
+		perf_trace::ObserveAudioUiTimerPosition(position_ms);
+		AnnouncePlaybackPosition(position_ms);
 	}
 }
 
@@ -143,9 +158,19 @@ void AudioController::PlayRange(const TimeRange &range)
 {
 	if (!player) return;
 
-	player->Play(SamplesFromMilliseconds(range.begin()), SamplesFromMilliseconds(range.length()));
+	auto const start_sample = SamplesFromMilliseconds(range.begin());
+	if (provider) {
+		provider->SetPlaybackWindow(
+			start_sample,
+			SamplesFromMilliseconds(kPlaybackAheadMs),
+			SamplesFromMilliseconds(kPlaybackBehindMs));
+	}
+	perf_trace::ResetAudioUiTimerInterval();
+	player->Play(start_sample, SamplesFromMilliseconds(range.length()));
 	playback_mode = PM_Range;
-	playback_timer.Start(20);
+	// This is a UI refresh timer, not the device clock. On Windows the observed
+	// wake-up cadence often lands closer to ~31 ms unless timer resolution is raised.
+	playback_timer.Start(kAudioUiTimerRequestedMs);
 
 	AnnouncePlaybackPosition(range.begin());
 }
@@ -169,9 +194,18 @@ void AudioController::PlayToEnd(int start_ms)
 	if (!player) return;
 
 	int64_t start_sample = SamplesFromMilliseconds(start_ms);
+	if (provider) {
+		provider->SetPlaybackWindow(
+			start_sample,
+			SamplesFromMilliseconds(kPlaybackAheadMs),
+			SamplesFromMilliseconds(kPlaybackBehindMs));
+	}
+	perf_trace::ResetAudioUiTimerInterval();
 	player->Play(start_sample, provider->GetNumSamples()-start_sample);
 	playback_mode = PM_ToEnd;
-	playback_timer.Start(20);
+	// This is a UI refresh timer, not the device clock. On Windows the observed
+	// wake-up cadence often lands closer to ~31 ms unless timer resolution is raised.
+	playback_timer.Start(kAudioUiTimerRequestedMs);
 
 	AnnouncePlaybackPosition(start_ms);
 }
@@ -183,6 +217,9 @@ void AudioController::Stop()
 	player->Stop();
 	playback_mode = PM_NotPlaying;
 	playback_timer.Stop();
+	perf_trace::ResetAudioUiTimerInterval();
+	if (provider)
+		provider->ClearPlaybackWindow();
 
 	AnnouncePlaybackStop();
 }

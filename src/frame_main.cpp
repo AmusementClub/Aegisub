@@ -331,6 +331,7 @@ public:
 	}
 };
 
+
 class FrameMainBackgroundRunner final : public agi::BackgroundRunner {
 	FrameMain *frame = nullptr;
 	agi::ui::WeakLifetime lifetime;
@@ -441,6 +442,7 @@ public:
 		});
 	}
 };
+
 }
 
 /// Handle files drag and dropped onto Aegisub

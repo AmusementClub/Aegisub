@@ -26,6 +26,7 @@
 
 class wxButton;
 class wxTreebook;
+class PersistLocation;
 namespace agi { class OptionValue; }
 
 class Preferences final : public wxDialog {
@@ -34,10 +35,17 @@ public:
 private:
 	wxTreebook *book = nullptr;
 	wxButton *applyButton = nullptr;
+	std::unique_ptr<PersistLocation> persist;
 
 	std::map<std::string, std::unique_ptr<agi::OptionValue>> pending_changes;
 	std::vector<Thunk> pending_callbacks;
 	std::vector<std::string> option_names;
+	std::vector<Thunk> deferred_page_builders;
+	std::vector<bool> deferred_page_built;
+
+	void RegisterDeferredPageBuilder(Thunk builder, bool built = false);
+	void EnsureDeferredPageBuilt(int page);
+	void EnsureAllDeferredPagesBuilt();
 
 	void OnOK(wxCommandEvent &);
 	void OnCancel(wxCommandEvent &);

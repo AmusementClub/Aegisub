@@ -17,10 +17,12 @@
 #include "include/aegisub/video_provider.h"
 
 #include "options.h"
+#include "video_memory_stats.h"
 #include "video_frame.h"
 
 #include <libaegisub/make_unique.h>
 
+#include <array>
 #include <list>
 #include <unordered_map>
 
@@ -62,8 +64,12 @@ struct CachedFrame {
 struct StepWarmState {
 	CachedFrameKey last_key;
 	bool has_last_request = false;
-	int last_direction = 0;
+	int last_delta = 0;
 };
+
+constexpr size_t StepWarmStateIndex(CachedFrameKind kind) {
+	return static_cast<size_t>(kind);
+}
 
 size_t EstimateNativeFrameSize(SourceFrame const& frame) {
 	size_t total_size = 0;
@@ -91,7 +97,7 @@ class VideoProviderCache final : public VideoProvider {
 	std::list<CachedFrame> cache;
 	std::unordered_map<CachedFrameKey, std::list<CachedFrame>::iterator, CachedFrameKeyHash> cache_index;
 	size_t total_cache_size = 0;
-	StepWarmState step_warm;
+	std::array<StepWarmState, 2> step_warm = { };
 
 	void ClearCache() {
 		cache_index.clear();
@@ -141,34 +147,31 @@ class VideoProviderCache final : public VideoProvider {
 	}
 
 	int UpdateStepWarmState(CachedFrameKey const& key) {
-		int warm_direction = 0;
-		if (step_warm.has_last_request && step_warm.last_key.kind == key.kind) {
-			int delta = key.frame_number - step_warm.last_key.frame_number;
-			if (delta == 1 || delta == -1) {
-				int direction = delta > 0 ? 1 : -1;
-				if (step_warm.last_direction == 0 || step_warm.last_direction == direction)
-					warm_direction = direction;
-				step_warm.last_direction = direction;
+		auto& warm_state = step_warm[StepWarmStateIndex(key.kind)];
+		int warm_delta = 0;
+		if (warm_state.has_last_request) {
+			int delta = key.frame_number - warm_state.last_key.frame_number;
+			if (delta != 0) {
+				if (warm_state.last_delta == 0 || warm_state.last_delta == delta)
+					warm_delta = delta;
+				warm_state.last_delta = delta;
 			}
 			else {
-				step_warm.last_direction = 0;
+				warm_state.last_delta = 0;
 			}
 		}
-		else {
-			step_warm.last_direction = 0;
-		}
 
-		step_warm.last_key = key;
-		step_warm.has_last_request = true;
-		return warm_direction;
+		warm_state.last_key = key;
+		warm_state.has_last_request = true;
+		return warm_delta;
 	}
 
 	void WarmBgraNeighbor(CachedFrameKey const& key, size_t frame_size_bytes) {
-		int const direction = UpdateStepWarmState(key);
-		if (direction == 0 || !CanWarmNeighbor(frame_size_bytes))
+		int const delta = UpdateStepWarmState(key);
+		if (delta == 0 || !CanWarmNeighbor(frame_size_bytes))
 			return;
 
-		int const target_frame = key.frame_number + direction;
+		int const target_frame = key.frame_number + delta;
 		if (target_frame < 0 || target_frame >= GetFrameCount())
 			return;
 
@@ -193,11 +196,11 @@ class VideoProviderCache final : public VideoProvider {
 	}
 
 	void WarmNativeNeighbor(CachedFrameKey const& key, size_t frame_size_bytes) {
-		int const direction = UpdateStepWarmState(key);
-		if (direction == 0 || !CanWarmNeighbor(frame_size_bytes))
+		int const delta = UpdateStepWarmState(key);
+		if (delta == 0 || !CanWarmNeighbor(frame_size_bytes))
 			return;
 
-		int const target_frame = key.frame_number + direction;
+		int const target_frame = key.frame_number + delta;
 		if (target_frame < 0 || target_frame >= GetFrameCount())
 			return;
 
@@ -267,6 +270,7 @@ public:
 	}
 	bool ShouldSetVideoProperties() const override { return master->ShouldSetVideoProperties(); }
 	bool HasAudio() const override                 { return master->HasAudio(); }
+	VideoProviderMemoryStats GetMemoryStats() const override;
 };
 
 void VideoProviderCache::GetFrame(int n, VideoFrame &out) {
@@ -321,6 +325,22 @@ bool VideoProviderCache::GetNativeFrame(int n, SourceFrame& out, std::shared_ptr
 		});
 	WarmNativeNeighbor({ n, CachedFrameKind::Native }, frame_size);
 	return true;
+}
+
+VideoProviderMemoryStats VideoProviderCache::GetMemoryStats() const {
+	VideoProviderMemoryStats stats = master->GetMemoryStats();
+	for (auto const& cached : cache) {
+		stats.cache_total_bytes += cached.size_bytes;
+		if (cached.key.kind == CachedFrameKind::Native) {
+			stats.cache_native_bytes += cached.size_bytes;
+			++stats.cache_native_frames;
+		}
+		else {
+			stats.cache_bgra_bytes += cached.size_bytes;
+			++stats.cache_bgra_frames;
+		}
+	}
+	return stats;
 }
 }
 

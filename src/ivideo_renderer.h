@@ -17,6 +17,7 @@
 #include "render_types.h"
 #include "source_frame.h"
 
+#include <cstddef>
 #include <vector>
 
 struct SubtitleOverlay;
@@ -26,6 +27,8 @@ public:
 	virtual ~IVideoRenderer() = default;
 
 	virtual bool SupportsDirectOverlay() const noexcept { return true; }
+	virtual char const* GetDebugName() const noexcept { return "Unknown"; }
+	virtual size_t EstimateTextureBytes() const noexcept { return 0; }
 	virtual std::vector<SourceFrameOutputMode> GetPreferredSourceModes() const {
 		return { SourceFrameOutputMode::Bgra8 };
 	}

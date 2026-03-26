@@ -37,6 +37,7 @@
 #include "ass_style.h"
 #include "compat.h"
 #include "dialog_progress.h"
+#include "ui_services.h"
 #include "subs_preview.h"
 #include "ui_services.h"
 #include "include/aegisub/subtitles_provider.h"

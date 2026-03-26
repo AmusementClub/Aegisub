@@ -35,6 +35,7 @@
 #include "compat.h"
 #include "include/aegisub/context.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "project.h"
 #include "selection_controller.h"
 #include "time_range.h"
@@ -97,18 +98,22 @@ void VideoController::OnActiveLineChanged(AssDialogue *line) {
 void VideoController::RequestFrame() {
 	auto core = context->GetCore();
 	core.ass->Properties.video_position = frame_n;
-	provider->RequestFrame(frame_n, TimeAtFrame(frame_n));
+	auto const frame_time = TimeAtFrame(frame_n);
+	perf_trace::ObserveFrameRequest(frame_n, frame_time, false);
+	provider->RequestFrame(frame_n, frame_time);
 }
 
 void VideoController::RequestFrameImmediate() {
 	auto core = context->GetCore();
 	core.ass->Properties.video_position = frame_n;
 	auto const frame_time = TimeAtFrame(frame_n);
+	perf_trace::ObserveFrameRequest(frame_n, frame_time, true);
 
 	try {
 		// Frame stepping favors deterministic per-step display over latest-only coalescing.
 		auto evt = FrameReadyEvent(provider->GetRenderPacket(frame_n, frame_time), frame_time);
 		evt.SetEventType(EVT_FRAME_READY);
+		perf_trace::ObserveFrameResult(frame_n, frame_time, true, true);
 		ProcessEvent(evt);
 	}
 	catch (wxEvent const& err) {
@@ -125,6 +130,7 @@ void VideoController::JumpToFrame(int n) {
 		Stop();
 
 	frame_n = mid(0, n, provider->GetFrameCount() - 1);
+	perf_trace::TraceSeek(frame_n, was_playing);
 	RequestFrame();
 	Seek(frame_n);
 
@@ -141,6 +147,7 @@ void VideoController::NextFrame() {
 		return;
 
 	frame_n = mid(0, frame_n + 1, provider->GetFrameCount() - 1);
+	perf_trace::TraceSeek(frame_n, false);
 	RequestFrameImmediate();
 	Seek(frame_n);
 	if (playAudioOnStep->GetBool()) {
@@ -154,6 +161,7 @@ void VideoController::PrevFrame() {
 		return;
 
 	frame_n = mid(0, frame_n - 1, provider->GetFrameCount() - 1);
+	perf_trace::TraceSeek(frame_n, false);
 	RequestFrameImmediate();
 	Seek(frame_n);
 	if (playAudioOnStep->GetBool()) {
@@ -177,6 +185,8 @@ void VideoController::Play() {
 	core.audioController->PlayToEnd(start_ms);
 
 	playback_start_time = std::chrono::steady_clock::now();
+	perf_trace::ResetVideoPlaybackInterval();
+	perf_trace::TracePlayStart(frame_n, start_ms);
 	playback.Start(10);
 }
 
@@ -197,11 +207,15 @@ void VideoController::PlayLine() {
 	JumpToFrame(startFrame);
 
 	playback_start_time = std::chrono::steady_clock::now();
+	perf_trace::ResetVideoPlaybackInterval();
+	perf_trace::TracePlayStart(frame_n, start_ms);
 	playback.Start(10);
 }
 
 void VideoController::Stop() {
 	if (IsPlaying()) {
+		perf_trace::TracePlayStop(frame_n);
+		perf_trace::ResetVideoPlaybackInterval();
 		playback.Stop();
 		auto core = context->GetCore();
 		core.audioController->Stop();
@@ -211,6 +225,7 @@ void VideoController::Stop() {
 void VideoController::OnPlayTimer(wxTimerEvent &) {
 	using namespace std::chrono;
 	int next_frame = FrameAtTime(start_ms + duration_cast<milliseconds>(steady_clock::now() - playback_start_time).count());
+	perf_trace::ObserveVideoPlaybackTick(next_frame);
 	if (next_frame == frame_n) return;
 
 	if (next_frame >= end_frame)

@@ -29,6 +29,7 @@
 #include "include/aegisub/video_provider.h"
 #include "mkv_wrap.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "project_session_ops.h"
 #include "selection_controller.h"
 #include "subs_controller.h"
@@ -36,6 +37,7 @@
 #include "ui_services.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "utils.h"
+#include "video_memory_stats.h"
 #include "video_controller.h"
 #include "video_session_ops.h"
 
@@ -49,6 +51,7 @@
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
 
+#include <chrono>
 #include <filesystem>
 
 namespace {
@@ -177,6 +180,10 @@ agi::BackgroundRunner *Project::GetProgressRunner(std::string const& title, std:
 	if (!progress_runner)
 		progress_runner = context->CreateBackgroundRunner(title, message);
 	return progress_runner.get();
+}
+
+void Project::ShowError(wxString const& message, std::string const& title) {
+	context->ShowError(from_wx(message), title);
 }
 
 void Project::ShowError(std::string const& message, std::string const& title) {
@@ -383,6 +390,15 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 		return;
 
 	SetPath(audio_file, "?audio", "Audio", path);
+	if (perf_trace::ShouldSampleVideoMemory(true)) {
+		VideoMemorySnapshot snapshot;
+		if (video_provider)
+			snapshot.async = video_provider->CollectMemoryStats();
+		if (context->videoDisplay)
+			snapshot.display = context->videoDisplay->CollectMemoryStats();
+		snapshot.audio = audio_provider->GetMemoryStats();
+		perf_trace::ObserveVideoMemorySnapshot("audio_open", snapshot, true);
+	}
 	AnnounceAudioProviderModified(audio_provider.get());
 }
 
@@ -408,6 +424,7 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 			});
 	}
 
+	auto const load_started = std::chrono::steady_clock::now();
 	video_provider = aegisub::video_session_ops::CreateVideoProviderWithErrorHandling(
 		path,
 		[&] {
@@ -460,6 +477,15 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 
 	AnnounceKeyframesModified(keyframes);
 	AnnounceTimecodesModified(timecodes);
+	auto const duration_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - load_started).count();
+	perf_trace::TraceVideoOpen(path, video_provider->GetWidth(), video_provider->GetHeight(), video_provider->GetFrameCount(), video_provider->HasAudio(), video_provider->GetDecoderName(), duration_ms);
+	if (perf_trace::ShouldSampleVideoMemory(true)) {
+		VideoMemorySnapshot snapshot;
+		snapshot.async = video_provider->CollectMemoryStats();
+		if (audio_provider)
+			snapshot.audio = audio_provider->GetMemoryStats();
+		perf_trace::ObserveVideoMemorySnapshot("video_open", snapshot, true);
+	}
 	return true;
 }
 

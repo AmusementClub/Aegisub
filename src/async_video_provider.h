@@ -19,6 +19,7 @@
 #include "include/aegisub/video_provider.h"
 #include "source_frame_format_selection.h"
 #include "ui_dispatch.h"
+#include "video_memory_stats.h"
 #include "video_render_packet.h"
 
 #include <libaegisub/exception.h>
@@ -47,6 +48,31 @@ namespace agi {
 }
 
 using AsyncVideoProviderEventSink = std::function<void(std::unique_ptr<wxEvent>)>;
+
+enum class KeyPointRangeScanStatus {
+	Success,
+	InvalidRequest,
+	FrameUnavailable,
+	AnchorMismatch
+};
+
+struct KeyPointRangeScanRequest {
+	int frame = -1;
+	int x = 0;
+	int y = 0;
+	unsigned char r = 0;
+	unsigned char g = 0;
+	unsigned char b = 0;
+	unsigned char tolerance = 0;
+	int scan_step = 2;
+	int bounds_tolerance = 5;
+};
+
+struct KeyPointRangeScanResult {
+	KeyPointRangeScanStatus status = KeyPointRangeScanStatus::InvalidRequest;
+	int left = -1;
+	int right = -1;
+};
 
 /// A latest-only asynchronous helper for seek/drag preview requests.
 ///
@@ -153,6 +179,7 @@ public:
 	/// @brief time  Exact start time of the frame in seconds
 	/// @brief raw   Get raw frame without subtitles
 	std::shared_ptr<VideoFrame> GetFrameBgra(int frame, double time, bool raw = false);
+	KeyPointRangeScanResult FindKeyPointRange(KeyPointRangeScanRequest const& request);
 	VideoRenderPacket GetRenderPacket(int frame, double time, bool raw = false);
 
 	/// Ask the video provider to change YCbCr matricies
@@ -160,6 +187,7 @@ public:
 	bool SetPreferredSourceModes(std::vector<SourceFrameOutputMode> modes);
 	void ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider> provider);
 	SourceFrameOutputMode GetSelectedSourceMode() const { return selected_source_mode; }
+	AsyncVideoProviderMemoryStats CollectMemoryStats();
 
 	int GetFrameCount() const             { return source_provider->GetFrameCount(); }
 	int GetWidth() const                  { return source_provider->GetWidth(); }

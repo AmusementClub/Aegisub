@@ -30,6 +30,8 @@
 #include "include/aegisub/subtitles_provider.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
+#include "perf_trace.h"
+#include "persist_location.h"
 #include "preferences_base.h"
 #include "video_provider_manager.h"
 #include "wx_ui_services.h"
@@ -39,24 +41,382 @@
 #endif
 
 #include <libaegisub/hotkey.h>
+#include <libaegisub/fs_fwd.h>
+#include <libaegisub/make_unique.h>
+#include <libaegisub/path.h>
 
+#include <algorithm>
 #include <unordered_set>
+#include <unordered_map>
+#include <chrono>
 
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
+#include <wx/dirdlg.h>
 #include <wx/event.h>
+#include <wx/filedlg.h>
+#include <wx/filename.h>
 #include <wx/listctrl.h>
+#include <wx/propgrid/advprops.h>
+#include <wx/propgrid/propgrid.h>
+#include <wx/settings.h>
 #include <wx/srchctrl.h>
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
 #include <wx/stattext.h>
+#include <wx/treectrl.h>
 #include <wx/treebook.h>
 
 namespace {
-/// General preferences page
-void General(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("General"));
+wxColour BlendColour(wxColour const& base, wxColour const& accent, int accent_percent) {
+	int const base_percent = 100 - accent_percent;
+	return wxColour(
+		(base.Red() * base_percent + accent.Red() * accent_percent) / 100,
+		(base.Green() * base_percent + accent.Green() * accent_percent) / 100,
+		(base.Blue() * base_percent + accent.Blue() * accent_percent) / 100);
+}
 
+agi::fs::path FindExistingDialogDirectory(agi::fs::path path) {
+	if (path.empty())
+		return {};
+
+	if (std::filesystem::exists(path) && std::filesystem::is_directory(path))
+		return path;
+
+	if (std::filesystem::exists(path) && std::filesystem::is_regular_file(path))
+		path = path.parent_path();
+	else if (!path.has_extension())
+		path = path.parent_path().empty() ? path : path;
+	else
+		path = path.parent_path();
+
+	while (!path.empty() && !std::filesystem::exists(path))
+		path = path.parent_path();
+
+	return path;
+}
+
+class TokenizedDirProperty final : public wxLongStringProperty {
+public:
+	TokenizedDirProperty(wxString const& label, wxString const& name, wxString const& value)
+	: wxLongStringProperty(label, name, value) { }
+
+protected:
+	bool DisplayEditorDialog(wxPropertyGrid *pg, wxVariant& value) override {
+		auto const token_path = from_wx(value.GetString());
+		auto const current_path = config::path
+			? config::path->Decode(token_path)
+			: agi::fs::PathFromString(token_path);
+		wxDirDialog dlg(pg, _("Please choose the folder:"), FindExistingDialogDirectory(current_path).wstring());
+		if (dlg.ShowModal() != wxID_OK)
+			return false;
+
+		wxString selected = dlg.GetPath();
+		if (selected.empty())
+			return false;
+
+		auto const encoded = config::path
+			? config::path->Encode(agi::fs::PathFromString(from_wx(selected)))
+			: from_wx(selected);
+		value = to_wx(encoded);
+		return true;
+	}
+};
+
+class TokenizedFileProperty final : public wxLongStringProperty {
+	wxString wildcard;
+public:
+	TokenizedFileProperty(wxString const& label, wxString const& name, wxString const& value, wxString const& wildcard)
+	: wxLongStringProperty(label, name, value)
+	, wildcard(wildcard) { }
+
+protected:
+	bool DisplayEditorDialog(wxPropertyGrid *pg, wxVariant& value) override {
+		auto const token_path = from_wx(value.GetString());
+		auto const current_path = config::path
+			? config::path->Decode(token_path)
+			: agi::fs::PathFromString(token_path);
+		wxFileName current(current_path.wstring());
+		wxString dir;
+		wxString file;
+		auto const existing_dir = FindExistingDialogDirectory(current_path);
+		if (!existing_dir.empty())
+			dir = existing_dir.wstring();
+		if (current.IsOk()) {
+			file = current.GetFullName();
+		}
+
+		wxFileDialog dlg(pg, _("Please choose the file:"), dir, file, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+		if (dlg.ShowModal() != wxID_OK)
+			return false;
+
+		wxString selected = dlg.GetPath();
+		if (selected.empty())
+			return false;
+
+		auto const encoded = config::path
+			? config::path->Encode(agi::fs::PathFromString(from_wx(selected)))
+			: from_wx(selected);
+		value = to_wx(encoded);
+		return true;
+	}
+};
+
+class PropertyGridOptionBinder {
+	Preferences *prefs;
+	wxPropertyGrid *grid;
+	std::unordered_map<wxPGProperty *, std::function<void(wxVariant const&)>> updaters;
+
+	template<typename OptionValue, typename Value>
+	void QueueOptionChange(std::string const& name, Value value) {
+		prefs->SetOption(agi::make_unique<OptionValue>(name, std::move(value)));
+	}
+
+	wxPGChoices MakeChoices(wxArrayString const& choices) const {
+		wxPGChoices pg_choices;
+		for (unsigned i = 0; i < choices.size(); ++i)
+			pg_choices.Add(choices[i], i);
+		return pg_choices;
+	}
+
+	int ClampChoiceSelection(int selected, size_t count) const {
+		return count ? std::clamp<int>(selected, 0, static_cast<int>(count) - 1) : 0;
+	}
+
+	void ApplyTheme(wxWindow *page) {
+		auto const window = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
+		auto const window_text = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+		auto const button = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
+		auto const button_text = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNTEXT);
+		auto const highlight = wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT);
+		auto const highlight_text = wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT);
+		auto const gray_text = wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
+
+		grid->SetBackgroundColour(window);
+		grid->SetEmptySpaceColour(window);
+		grid->SetCellBackgroundColour(window);
+		grid->SetCellTextColour(window_text);
+		grid->SetCellDisabledTextColour(gray_text);
+		grid->SetMarginColour(BlendColour(button, window, 35));
+		grid->SetLineColour(BlendColour(button, window_text, 12));
+		grid->SetCaptionBackgroundColour(BlendColour(button, highlight, 10));
+		grid->SetCaptionTextColour(button_text);
+		grid->SetSelectionBackgroundColour(highlight);
+		grid->SetSelectionTextColour(highlight_text);
+		grid->SetVerticalSpacing(page->FromDIP(2));
+	}
+
+public:
+	explicit PropertyGridOptionBinder(OptionPage *page)
+	: prefs(page->parent)
+	{
+		static bool editors_registered = false;
+		if (!editors_registered) {
+			wxPropertyGrid::RegisterAdditionalEditors();
+			editors_registered = true;
+		}
+
+		grid = new wxPropertyGrid(
+			page,
+			wxID_ANY,
+			wxDefaultPosition,
+			wxDefaultSize,
+			wxPG_BOLD_MODIFIED | wxPG_SPLITTER_AUTO_CENTER | wxPG_TOOLTIPS);
+		grid->SetExtraStyle(wxPG_EX_HELP_AS_TOOLTIPS);
+		grid->SetMinSize(page->FromDIP(wxSize(520, 360)));
+		ApplyTheme(page);
+	}
+
+	void BindEvents(std::shared_ptr<PropertyGridOptionBinder> self) {
+		grid->Bind(wxEVT_PG_CHANGED, [self = std::move(self)](wxPropertyGridEvent& evt) {
+			auto it = self->updaters.find(evt.GetProperty());
+			if (it != self->updaters.end())
+				it->second(evt.GetPropertyValue());
+			evt.Skip();
+		});
+	}
+
+	wxPropertyGrid *GetGrid() const { return grid; }
+
+	wxPGProperty *AddCategory(wxString const& label) {
+		return grid->Append(new wxPropertyCategory(label));
+	}
+
+	wxPGProperty *AddBool(wxString const& label, const char *opt_name) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		auto *prop = grid->Append(new wxBoolProperty(label, opt_name, opt->GetBool()));
+		prop->SetAttribute(wxPG_BOOL_USE_CHECKBOX, true);
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			QueueOptionChange<agi::OptionValueBool>(name, value.GetBool());
+		});
+		return prop;
+	}
+
+	wxPGProperty *AddInt(wxString const& label, const char *opt_name, int min, int max) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		auto *prop = grid->Append(new wxIntProperty(label, opt_name, opt->GetInt()));
+		prop->SetAttribute(wxPG_ATTR_MIN, static_cast<long>(min));
+		prop->SetAttribute(wxPG_ATTR_MAX, static_cast<long>(max));
+		prop->SetAttribute(wxPG_ATTR_SPINCTRL_STEP, 1L);
+		prop->SetEditor("SpinCtrl");
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
+		});
+		return prop;
+	}
+
+	wxPGProperty *AddDouble(wxString const& label, const char *opt_name, double min, double max, double step, int precision = 2) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		auto *prop = grid->Append(new wxFloatProperty(label, opt_name, opt->GetDouble()));
+		prop->SetAttribute(wxPG_ATTR_MIN, min);
+		prop->SetAttribute(wxPG_ATTR_MAX, max);
+		prop->SetAttribute(wxPG_ATTR_SPINCTRL_STEP, step);
+		prop->SetAttribute(wxPG_FLOAT_PRECISION, precision);
+		prop->SetEditor("SpinCtrl");
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			QueueOptionChange<agi::OptionValueDouble>(name, value.GetDouble());
+		});
+		return prop;
+	}
+
+	wxPGProperty *AddString(wxString const& label, const char *opt_name) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		auto *prop = grid->Append(new wxStringProperty(label, opt_name, to_wx(opt->GetString())));
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
+		});
+		return prop;
+	}
+
+	wxPGProperty *AddFont(wxString const& label, std::string const& opt_prefix) {
+		auto const face_name = opt_prefix + "Font Face";
+		auto const font_size = opt_prefix + "Font Size";
+		prefs->AddChangeableOption(face_name);
+		prefs->AddChangeableOption(font_size);
+
+		wxFont font;
+		auto const face_opt = OPT_GET(face_name);
+		auto const size_opt = OPT_GET(font_size);
+		if (!face_opt->GetString().empty())
+			font.SetFaceName(to_wx(face_opt->GetString()));
+		if (size_opt->GetInt() > 0)
+			font.SetPointSize(static_cast<int>(size_opt->GetInt()));
+
+		auto *prop = grid->Append(new wxFontProperty(label, opt_prefix, font));
+		updaters.emplace(prop, [this, face_name, font_size](wxVariant const& value) {
+			wxFont font;
+			font << value;
+			QueueOptionChange<agi::OptionValueString>(face_name, from_wx(font.GetFaceName()));
+			QueueOptionChange<agi::OptionValueInt>(font_size, font.GetPointSize());
+		});
+		return prop;
+	}
+
+	wxPGProperty *AddDirectory(wxString const& label, const char *opt_name) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		auto *prop = grid->Append(new TokenizedDirProperty(label, opt_name, to_wx(opt->GetString())));
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
+		});
+		return prop;
+	}
+
+	wxPGProperty *AddColour(wxString const& label, const char *opt_name) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		auto *prop = grid->Append(new wxColourProperty(label, opt_name, to_wx(opt->GetColor())));
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			wxColourPropertyValue colour;
+			colour << value;
+			QueueOptionChange<agi::OptionValueColor>(name, from_wx(colour.m_colour));
+		});
+		return prop;
+	}
+
+	wxPGProperty *AddFile(wxString const& label, const char *opt_name, wxString const& wildcard) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		auto *prop = grid->Append(new TokenizedFileProperty(label, opt_name, to_wx(opt->GetString()), wildcard));
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
+		});
+		return prop;
+	}
+
+	wxPGProperty *AddChoice(wxString const& label, wxArrayString const& choices, const char *opt_name) {
+		auto opt = OPT_GET(opt_name);
+		if (opt->GetType() == agi::OptionType::String) {
+			std::vector<std::pair<std::string, std::string>> mapped_choices;
+			mapped_choices.reserve(choices.size());
+			for (auto const& choice : choices)
+				mapped_choices.emplace_back(from_wx(choice), from_wx(choice));
+			return AddChoice(label, mapped_choices, opt_name);
+		}
+
+		prefs->AddChangeableOption(opt_name);
+		int const selected = ClampChoiceSelection(opt->GetInt(), choices.size());
+		auto pg_choices = MakeChoices(choices);
+		auto *prop = grid->Append(new wxEnumProperty(label, opt_name, pg_choices, selected));
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
+		});
+		return prop;
+	}
+
+	wxPGProperty *AddChoice(wxString const& label, std::vector<std::pair<std::string, std::string>> const& choices, const char *opt_name) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		wxPGChoices pg_choices;
+		int selected = 0;
+
+		for (unsigned i = 0; i < choices.size(); ++i) {
+			pg_choices.Add(to_wx(choices[i].first), i);
+			if (opt->GetType() == agi::OptionType::String && choices[i].second == opt->GetString())
+				selected = i;
+		}
+
+		if (opt->GetType() == agi::OptionType::Int)
+			selected = ClampChoiceSelection(opt->GetInt(), choices.size());
+
+		auto *prop = grid->Append(new wxEnumProperty(label, opt_name, pg_choices, selected));
+		if (opt->GetType() == agi::OptionType::Int) {
+			std::string name = opt_name;
+			updaters.emplace(prop, [this, name](wxVariant const& value) {
+				QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
+			});
+			return prop;
+		}
+
+		std::string name = opt_name;
+		std::vector<std::string> values;
+		values.reserve(choices.size());
+		for (auto const& choice : choices)
+			values.push_back(choice.second);
+		updaters.emplace(prop, [this, name, values = std::move(values)](wxVariant const& value) {
+			int const index = static_cast<int>(value.GetLong());
+			if (index < 0 || index >= static_cast<int>(values.size()))
+				return;
+			QueueOptionChange<agi::OptionValueString>(name, values[index]);
+		});
+		return prop;
+	}
+};
+
+/// General preferences page
+void BuildGeneralPage(OptionPage *p) {
 	auto general = p->PageSizer(_("General"));
 	p->OptionAdd(general, _("Check for updates on startup"), "App/Auto/Check For Updates");
 	p->OptionAdd(general, _("Show main toolbar"), "App/Show Toolbar");
@@ -78,9 +438,7 @@ void General(wxTreebook *book, Preferences *parent) {
 	p->SetSizerAndFit(p->sizer);
 }
 
-void General_DefaultStyles(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Default styles"), OptionPage::PAGE_SUB);
-
+void BuildGeneralDefaultStylesPage(OptionPage *p) {
 	auto staticbox = new wxStaticBoxSizer(wxVERTICAL, p, _("Default style catalogs"));
 	p->sizer->Add(staticbox, 0, wxEXPAND, 5);
 	p->sizer->AddSpacer(8);
@@ -120,46 +478,47 @@ void General_DefaultStyles(wxTreebook *book, Preferences *parent) {
 }
 
 /// Audio preferences page
-void Audio(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Audio"));
+void BuildAudioPage(OptionPage *p) {
+	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
+	auto *grid = binder->GetGrid();
+	binder->BindEvents(binder);
 
-	auto general = p->PageSizer(_("Options"));
-	p->OptionAdd(general, _("Default mouse wheel to zoom"), "Audio/Wheel Default to Zoom");
-	p->OptionAdd(general, _("Lock scroll on cursor"), "Audio/Lock Scroll on Cursor");
-	p->OptionAdd(general, _("Snap markers by default"), "Audio/Snap/Enable");
-	p->OptionAdd(general, _("Auto-focus on mouse over"), "Audio/Auto/Focus");
-	p->OptionAdd(general, _("Play audio when stepping in video"), "Audio/Plays When Stepping Video");
-	p->OptionAdd(general, _("Left-click-drag moves end marker"), "Audio/Drag Timing");
-	p->OptionAdd(general, _("Default timing length (ms)"), "Timing/Default Duration", 0, 36000);
-	p->OptionAdd(general, _("Default lead-in length (ms)"), "Audio/Lead/IN", 0, 36000);
-	p->OptionAdd(general, _("Default lead-out length (ms)"), "Audio/Lead/OUT", 0, 36000);
+	binder->AddCategory(_("Options"));
+	binder->AddBool(_("Default mouse wheel to zoom"), "Audio/Wheel Default to Zoom");
+	binder->AddBool(_("Lock scroll on cursor"), "Audio/Lock Scroll on Cursor");
+	binder->AddBool(_("Snap markers by default"), "Audio/Snap/Enable");
+	binder->AddBool(_("Auto-focus on mouse over"), "Audio/Auto/Focus");
+	binder->AddBool(_("Play audio when stepping in video"), "Audio/Plays When Stepping Video");
+	binder->AddBool(_("Left-click-drag moves end marker"), "Audio/Drag Timing");
+	binder->AddInt(_("Default timing length (ms)"), "Timing/Default Duration", 0, 36000);
+	binder->AddInt(_("Default lead-in length (ms)"), "Audio/Lead/IN", 0, 36000);
+	binder->AddInt(_("Default lead-out length (ms)"), "Audio/Lead/OUT", 0, 36000);
 
-	p->OptionAdd(general, _("Marker drag-start sensitivity (px)"), "Audio/Start Drag Sensitivity", 1, 15);
-	p->OptionAdd(general, _("Line boundary thickness (px)"), "Audio/Line Boundaries Thickness", 1, 5);
-	p->OptionAdd(general, _("Maximum snap distance (px)"), "Audio/Snap/Distance", 0, 25);
+	binder->AddInt(_("Marker drag-start sensitivity (px)"), "Audio/Start Drag Sensitivity", 1, 15);
+	binder->AddInt(_("Line boundary thickness (px)"), "Audio/Line Boundaries Thickness", 1, 5);
+	binder->AddInt(_("Maximum snap distance (px)"), "Audio/Snap/Distance", 0, 25);
 
 	const wxString dtl_arr[] = { _("Don't show"), _("Show previous"), _("Show previous and next"), _("Show all") };
 	wxArrayString choice_dtl(4, dtl_arr);
-	p->OptionChoice(general, _("Show inactive lines"), choice_dtl, "Audio/Inactive Lines Display Mode");
-	p->CellSkip(general);
-	p->OptionAdd(general, _("Include commented inactive lines"), "Audio/Display/Draw/Inactive Comments");
+	binder->AddChoice(_("Show inactive lines"), choice_dtl, "Audio/Inactive Lines Display Mode");
+	binder->AddBool(_("Include commented inactive lines"), "Audio/Display/Draw/Inactive Comments");
 
-	auto display = p->PageSizer(_("Display Visual Options"));
-	p->OptionAdd(display, _("Keyframes in dialogue mode"), "Audio/Display/Draw/Keyframes in Dialogue Mode");
-	p->OptionAdd(display, _("Keyframes in karaoke mode"), "Audio/Display/Draw/Keyframes in Karaoke Mode");
-	p->OptionAdd(display, _("Cursor time"), "Audio/Display/Draw/Cursor Time");
-	p->OptionAdd(display, _("Video position"), "Audio/Display/Draw/Video Position");
-	p->OptionAdd(display, _("Seconds boundaries"), "Audio/Display/Draw/Seconds");
-	p->OptionAdd(display, _("Debug metrics"), "Audio/Display/Draw/Debug Metrics");
-	p->OptionChoice(display, _("Waveform Style"), AudioWaveformRenderer::GetWaveformStyles(), "Audio/Display/Waveform Style");
+	binder->AddCategory(_("Display Visual Options"));
+	binder->AddBool(_("Keyframes in dialogue mode"), "Audio/Display/Draw/Keyframes in Dialogue Mode");
+	binder->AddBool(_("Keyframes in karaoke mode"), "Audio/Display/Draw/Keyframes in Karaoke Mode");
+	binder->AddBool(_("Cursor time"), "Audio/Display/Draw/Cursor Time");
+	binder->AddBool(_("Video position"), "Audio/Display/Draw/Video Position");
+	binder->AddBool(_("Seconds boundaries"), "Audio/Display/Draw/Seconds");
+	binder->AddBool(_("Debug metrics"), "Audio/Display/Draw/Debug Metrics");
+	binder->AddChoice(_("Waveform Style"), AudioWaveformRenderer::GetWaveformStyles(), "Audio/Display/Waveform Style");
 
 	const wxString sq_arr[4] = { _("Regular quality"), _("Better quality"), _("High quality"), _("Insane quality") };
 	wxArrayString sq_choice(4, sq_arr);
-	p->OptionChoice(display, _("Spectrum Quality"), sq_choice, "Audio/Renderer/Spectrum/Quality");
+	binder->AddChoice(_("Spectrum Quality"), sq_choice, "Audio/Renderer/Spectrum/Quality");
 
 	const wxString sm_arr[2] = { _("Legacy linear"), _("Frequency curve") };
 	wxArrayString sm_choice(2, sm_arr);
-	p->OptionChoice(display, _("Spectrum Computation Mode"), sm_choice, "Audio/Renderer/Spectrum/Computation Mode");
+	binder->AddChoice(_("Spectrum Computation Mode"), sm_choice, "Audio/Renderer/Spectrum/Computation Mode");
 
 	const wxString smm_arr[3] = {
 		_("Time-domain downmix"),
@@ -167,31 +526,30 @@ void Audio(wxTreebook *book, Preferences *parent) {
 		_("Average channel energy per frequency bin")
 	};
 	wxArrayString smm_choice(3, smm_arr);
-	p->OptionChoice(display, _("Spectrum mono mix method"), smm_choice, "Audio/Renderer/Spectrum/Mono Mix Mode");
+	binder->AddChoice(_("Spectrum mono mix method"), smm_choice, "Audio/Renderer/Spectrum/Mono Mix Mode");
 
 	const wxString sc_arr[5] = { _("Linear"), _("Extended"), _("Medium"), _("Compressed"), _("Logarithmic") };
 	wxArrayString sc_choice(5, sc_arr);
-	p->OptionChoice(display, _("Spectrum Frequency Mapping"), sc_choice, "Audio/Renderer/Spectrum/FreqCurve");
+	binder->AddChoice(_("Spectrum Frequency Mapping"), sc_choice, "Audio/Renderer/Spectrum/FreqCurve");
 
-	auto label = p->PageSizer(_("Audio labels"));
-	p->OptionFont(label, "Audio/Karaoke/");
+	binder->AddCategory(_("Audio labels"));
+	binder->AddFont(_("Font"), "Audio/Karaoke/");
 
+	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
 }
 
 /// Video preferences page
-void Video(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Video"));
+void BuildVideoPage(OptionPage *p) {
+	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
+	auto *grid = binder->GetGrid();
+	binder->BindEvents(binder);
 
-	auto general = p->PageSizer(_("Options"));
-	p->OptionAdd(general, _("Show keyframes in slider"), "Video/Slider/Show Keyframes");
-	p->CellSkip(general);
-	p->OptionAdd(general, _("Only show visual tools when mouse is over video"), "Tool/Visual/Autohide");
-	p->CellSkip(general);
-	p->OptionAdd(general, _("Seek video to line start on selection change"), "Video/Subtitle Sync");
-	p->CellSkip(general);
-	p->OptionAdd(general, _("Automatically open audio when opening video"), "Video/Open Audio");
-	p->CellSkip(general);
+	binder->AddCategory(_("Options"));
+	binder->AddBool(_("Show keyframes in slider"), "Video/Slider/Show Keyframes");
+	binder->AddBool(_("Only show visual tools when mouse is over video"), "Tool/Visual/Autohide");
+	binder->AddBool(_("Seek video to line start on selection change"), "Video/Subtitle Sync");
+	binder->AddBool(_("Automatically open audio when opening video"), "Video/Open Audio");
 
 	const wxString czoom_arr[24] = {
 		wxS("12.5%"), wxS("25%"), wxS("37.5%"), wxS("50%"), wxS("62.5%"), wxS("75%"),
@@ -200,147 +558,142 @@ void Video(wxTreebook *book, Preferences *parent) {
 		wxS("237.5%"), wxS("250%"), wxS("262.5%"), wxS("275%"), wxS("287.5%"), wxS("300%")
 	};
 	wxArrayString choice_zoom(24, czoom_arr);
-	p->OptionChoice(general, _("Default Zoom"), choice_zoom, "Video/Default Zoom");
+	binder->AddChoice(_("Default Zoom"), choice_zoom, "Video/Default Zoom");
 
-	p->OptionAdd(general, _("Fast jump step in frames"), "Video/Slider/Fast Jump Step");
+	binder->AddInt(_("Fast jump step in frames"), "Video/Slider/Fast Jump Step", 0, INT_MAX);
 
 	const wxString cscr_arr[3] = { wxS("?video"), wxS("?script"), wxS(".") };
 	wxArrayString scr_res(3, cscr_arr);
-	p->OptionChoice(general, _("Screenshot save path"), scr_res, "Path/Screenshot");
+	binder->AddChoice(_("Screenshot save path"), scr_res, "Path/Screenshot");
 
-	auto resolution = p->PageSizer(_("Script Resolution"));
-	wxControl *autocb = p->OptionAdd(resolution, _("Use resolution of first video opened"), "Subtitle/Default Resolution/Auto");
-	p->CellSkip(resolution);
-	p->DisableIfChecked(autocb,
-		p->OptionAdd(resolution, _("Default width"), "Subtitle/Default Resolution/Width"));
-	p->DisableIfChecked(autocb,
-		p->OptionAdd(resolution, _("Default height"), "Subtitle/Default Resolution/Height"));
-	p->OptionAdd(resolution, _("Prefer PlayRes over LayoutRes"), "Subtitle/Resolution/Prefer PlayRes");
-	p->CellSkip(resolution);
+	binder->AddCategory(_("Script Resolution"));
+	auto *auto_prop = binder->AddBool(_("Use resolution of first video opened"), "Subtitle/Default Resolution/Auto");
+	auto *width_prop = binder->AddInt(_("Default width"), "Subtitle/Default Resolution/Width", 0, INT_MAX);
+	auto *height_prop = binder->AddInt(_("Default height"), "Subtitle/Default Resolution/Height", 0, INT_MAX);
+	binder->AddBool(_("Prefer PlayRes over LayoutRes"), "Subtitle/Resolution/Prefer PlayRes");
+	auto update_resolution_enable = [grid, width_prop, height_prop]() {
+		bool const auto_enabled = OPT_GET("Subtitle/Default Resolution/Auto")->GetBool();
+		grid->EnableProperty(width_prop, !auto_enabled);
+		grid->EnableProperty(height_prop, !auto_enabled);
+	};
+	update_resolution_enable();
+	grid->Bind(wxEVT_PG_CHANGED, [auto_prop, update_resolution_enable](wxPropertyGridEvent& evt) {
+		if (evt.GetProperty() == auto_prop)
+			update_resolution_enable();
+		evt.Skip();
+	});
 
 	const wxString cres_arr[] = {_("Never"), _("Ask"), _("Always set"), _("Always resample")};
 	wxArrayString choice_res(4, cres_arr);
-	p->OptionChoice(resolution, _("Match video resolution on open"), choice_res, "Video/Script Resolution Mismatch");
+	binder->AddChoice(_("Match video resolution on open"), choice_res, "Video/Script Resolution Mismatch");
 
+	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
 }
 
 /// Interface preferences page
-void Interface(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Interface"));
+void BuildInterfacePage(OptionPage *p) {
+	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
+	auto *grid = binder->GetGrid();
+	binder->BindEvents(binder);
 
-	auto edit_box = p->PageSizer(_("Edit Box"));
+	binder->AddCategory(_("Edit Box"));
 #ifdef WITH_WXSTC
-	p->OptionAdd(edit_box, _("Use styled edit box"), "Subtitle/Use STC");
-	p->OptionAdd(edit_box, _("Enable call tips"), "App/Call Tips");
+	binder->AddBool(_("Use styled edit box"), "Subtitle/Use STC");
+	binder->AddBool(_("Enable call tips"), "App/Call Tips");
 #endif
-	p->OptionAdd(edit_box, _("Overwrite in time boxes"), "Subtitle/Time Edit/Insert Mode");
+	binder->AddBool(_("Overwrite in time boxes"), "Subtitle/Time Edit/Insert Mode");
 #ifdef WITH_WXSTC
-	p->OptionAdd(edit_box, _("Enable syntax highlighting"), "Subtitle/Highlight/Syntax");
-#else
-	// Pad number of options to even
-	p->CellSkip(edit_box);
+	binder->AddBool(_("Enable syntax highlighting"), "Subtitle/Highlight/Syntax");
 #endif
-	p->OptionBrowse(edit_box, _("Dictionaries path"), "Path/Dictionary");
-	p->OptionFont(edit_box, "Subtitle/Edit Box/");
+	binder->AddDirectory(_("Dictionaries path"), "Path/Dictionary");
+	binder->AddFont(_("Font"), "Subtitle/Edit Box/");
 
-	auto character_count = p->PageSizer(_("Character Counter"));
-	p->OptionAdd(character_count, _("Maximum characters per line"), "Subtitle/Character Limit", 0, 1000);
-	p->OptionAdd(character_count, _("Characters Per Second Warning Threshold"), "Subtitle/Character Counter/CPS Warning Threshold", 0, 1000);
-	p->OptionAdd(character_count, _("Characters Per Second Error Threshold"), "Subtitle/Character Counter/CPS Error Threshold", 0, 1000);
-	p->OptionAdd(character_count, _("Ignore whitespace"), "Subtitle/Character Counter/Ignore Whitespace");
-	p->OptionAdd(character_count, _("Ignore punctuation"), "Subtitle/Character Counter/Ignore Punctuation");
+	binder->AddCategory(_("Character Counter"));
+	binder->AddInt(_("Maximum characters per line"), "Subtitle/Character Limit", 0, 1000);
+	binder->AddInt(_("Characters Per Second Warning Threshold"), "Subtitle/Character Counter/CPS Warning Threshold", 0, 1000);
+	binder->AddInt(_("Characters Per Second Error Threshold"), "Subtitle/Character Counter/CPS Error Threshold", 0, 1000);
+	binder->AddBool(_("Ignore whitespace"), "Subtitle/Character Counter/Ignore Whitespace");
+	binder->AddBool(_("Ignore punctuation"), "Subtitle/Character Counter/Ignore Punctuation");
 
-	auto grid = p->PageSizer(_("Grid"));
-	p->OptionAdd(grid, _("Focus grid on click"), "Subtitle/Grid/Focus Allow");
-	p->OptionAdd(grid, _("Highlight visible subtitles"), "Subtitle/Grid/Highlight Subtitles in Frame");
-	p->OptionAdd(grid, _("Hide overrides symbol"), "Subtitle/Grid/Hide Overrides Char");
-	p->OptionFont(grid, "Subtitle/Grid/");
+	binder->AddCategory(_("Grid"));
+	binder->AddBool(_("Focus grid on click"), "Subtitle/Grid/Focus Allow");
+	binder->AddBool(_("Highlight visible subtitles"), "Subtitle/Grid/Highlight Subtitles in Frame");
+	auto *hide_overrides_char = binder->AddString(_("Hide overrides symbol"), "Subtitle/Grid/Hide Overrides Char");
+	grid->SetPropertyMaxLength(hide_overrides_char, 1);
+	binder->AddFont(_("Font"), "Subtitle/Grid/");
 
-	auto tl_assistant = p->PageSizer(_("Translation Assistant"));
-	p->OptionAdd(tl_assistant, _("Skip over whitespace"), "Tool/Translation Assistant/Skip Whitespace");
+	binder->AddCategory(_("Translation Assistant"));
+	binder->AddBool(_("Skip over whitespace"), "Tool/Translation Assistant/Skip Whitespace");
 
+	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
 }
 
 /// Interface Colours preferences subpage
-void Interface_Colours(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Colors"), OptionPage::PAGE_SCROLL|OptionPage::PAGE_SUB);
+void BuildInterfaceColoursPage(OptionPage *p) {
+	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
+	auto *grid = binder->GetGrid();
+	binder->BindEvents(binder);
 
-	delete p->sizer;
-	wxSizer *main_sizer = new wxBoxSizer(wxHORIZONTAL);
+	binder->AddCategory(_("Audio Display"));
+	binder->AddColour(_("Play cursor"), "Colour/Audio Display/Play Cursor");
+	binder->AddColour(_("Line boundary start"), "Colour/Audio Display/Line boundary Start");
+	binder->AddColour(_("Line boundary end"), "Colour/Audio Display/Line boundary End");
+	binder->AddColour(_("Line boundary inactive line"), "Colour/Audio Display/Line Boundary Inactive Line");
+	binder->AddColour(_("Syllable boundaries"), "Colour/Audio Display/Syllable Boundaries");
+	binder->AddColour(_("Seconds boundaries"), "Colour/Audio Display/Seconds Line");
 
-	p->sizer = new wxBoxSizer(wxVERTICAL);
-	main_sizer->Add(p->sizer, wxEXPAND);
-
-	auto audio = p->PageSizer(_("Audio Display"));
-	p->OptionAdd(audio, _("Play cursor"), "Colour/Audio Display/Play Cursor");
-	p->OptionAdd(audio, _("Line boundary start"), "Colour/Audio Display/Line boundary Start");
-	p->OptionAdd(audio, _("Line boundary end"), "Colour/Audio Display/Line boundary End");
-	p->OptionAdd(audio, _("Line boundary inactive line"), "Colour/Audio Display/Line Boundary Inactive Line");
-	p->OptionAdd(audio, _("Syllable boundaries"), "Colour/Audio Display/Syllable Boundaries");
-	p->OptionAdd(audio, _("Seconds boundaries"), "Colour/Audio Display/Seconds Line");
-
-	auto syntax = p->PageSizer(_("Syntax Highlighting"));
-	p->OptionAdd(syntax, _("Background"), "Colour/Subtitle/Background");
-	p->OptionAdd(syntax, _("Normal"), "Colour/Subtitle/Syntax/Normal");
+	binder->AddCategory(_("Syntax Highlighting"));
+	binder->AddColour(_("Background"), "Colour/Subtitle/Background");
+	binder->AddColour(_("Normal"), "Colour/Subtitle/Syntax/Normal");
 #ifdef WITH_WXSTC
-	p->OptionAdd(syntax, _("Comments"), "Colour/Subtitle/Syntax/Comment");
-	p->OptionAdd(syntax, _("Drawings"), "Colour/Subtitle/Syntax/Drawing");
-	p->OptionAdd(syntax, _("Brackets"), "Colour/Subtitle/Syntax/Brackets");
-	p->OptionAdd(syntax, _("Slashes and Parentheses"), "Colour/Subtitle/Syntax/Slashes");
-	p->OptionAdd(syntax, _("Tags"), "Colour/Subtitle/Syntax/Tags");
-	p->OptionAdd(syntax, _("Parameters"), "Colour/Subtitle/Syntax/Parameters");
-	p->OptionAdd(syntax, _("Error"), "Colour/Subtitle/Syntax/Error");
-	p->OptionAdd(syntax, _("Error Background"), "Colour/Subtitle/Syntax/Background/Error");
-	p->OptionAdd(syntax, _("Line Break"), "Colour/Subtitle/Syntax/Line Break");
-	p->OptionAdd(syntax, _("Karaoke templates"), "Colour/Subtitle/Syntax/Karaoke Template");
-	p->OptionAdd(syntax, _("Karaoke variables"), "Colour/Subtitle/Syntax/Karaoke Variable");
+	binder->AddColour(_("Comments"), "Colour/Subtitle/Syntax/Comment");
+	binder->AddColour(_("Drawings"), "Colour/Subtitle/Syntax/Drawing");
+	binder->AddColour(_("Brackets"), "Colour/Subtitle/Syntax/Brackets");
+	binder->AddColour(_("Slashes and Parentheses"), "Colour/Subtitle/Syntax/Slashes");
+	binder->AddColour(_("Tags"), "Colour/Subtitle/Syntax/Tags");
+	binder->AddColour(_("Parameters"), "Colour/Subtitle/Syntax/Parameters");
+	binder->AddColour(_("Error"), "Colour/Subtitle/Syntax/Error");
+	binder->AddColour(_("Error Background"), "Colour/Subtitle/Syntax/Background/Error");
+	binder->AddColour(_("Line Break"), "Colour/Subtitle/Syntax/Line Break");
+	binder->AddColour(_("Karaoke templates"), "Colour/Subtitle/Syntax/Karaoke Template");
+	binder->AddColour(_("Karaoke variables"), "Colour/Subtitle/Syntax/Karaoke Variable");
 #endif
 
-	p->sizer = new wxBoxSizer(wxVERTICAL);
-	main_sizer->AddSpacer(5);
-	main_sizer->Add(p->sizer, wxEXPAND);
-
-	auto color_schemes = p->PageSizer(_("Audio Color Schemes"));
+	binder->AddCategory(_("Audio Color Schemes"));
 	wxArrayString schemes = to_wx(OPT_GET("Audio/Colour Schemes")->GetListString());
-	p->OptionChoice(color_schemes, _("Spectrum"), schemes, "Colour/Audio Display/Spectrum");
-	p->OptionChoice(color_schemes, _("Waveform"), schemes, "Colour/Audio Display/Waveform");
+	binder->AddChoice(_("Spectrum"), schemes, "Colour/Audio Display/Spectrum");
+	binder->AddChoice(_("Waveform"), schemes, "Colour/Audio Display/Waveform");
 
-	auto grid = p->PageSizer(_("Subtitle Grid"));
-	p->OptionAdd(grid, _("Standard foreground"), "Colour/Subtitle Grid/Standard");
-	p->OptionAdd(grid, _("Standard background"), "Colour/Subtitle Grid/Background/Background");
-	p->OptionAdd(grid, _("Selection foreground"), "Colour/Subtitle Grid/Selection");
-	p->OptionAdd(grid, _("Selection background"), "Colour/Subtitle Grid/Background/Selection");
-	p->OptionAdd(grid, _("Collision foreground"), "Colour/Subtitle Grid/Collision");
-	p->OptionAdd(grid, _("In frame background"), "Colour/Subtitle Grid/Background/Inframe");
-	p->OptionAdd(grid, _("Comment background"), "Colour/Subtitle Grid/Background/Comment");
-	p->OptionAdd(grid, _("Selected comment background"), "Colour/Subtitle Grid/Background/Selected Comment");
-	p->OptionAdd(grid, _("Header background"), "Colour/Subtitle Grid/Header");
-	p->OptionAdd(grid, _("Left Column"), "Colour/Subtitle Grid/Left Column");
-	p->OptionAdd(grid, _("Active Line Border"), "Colour/Subtitle Grid/Active Border");
-	p->OptionAdd(grid, _("Lines"), "Colour/Subtitle Grid/Lines");
-	p->OptionAdd(grid, _("CPS Error"), "Colour/Subtitle Grid/CPS Error");
+	binder->AddCategory(_("Subtitle Grid"));
+	binder->AddColour(_("Standard foreground"), "Colour/Subtitle Grid/Standard");
+	binder->AddColour(_("Standard background"), "Colour/Subtitle Grid/Background/Background");
+	binder->AddColour(_("Selection foreground"), "Colour/Subtitle Grid/Selection");
+	binder->AddColour(_("Selection background"), "Colour/Subtitle Grid/Background/Selection");
+	binder->AddColour(_("Collision foreground"), "Colour/Subtitle Grid/Collision");
+	binder->AddColour(_("In frame background"), "Colour/Subtitle Grid/Background/Inframe");
+	binder->AddColour(_("Comment background"), "Colour/Subtitle Grid/Background/Comment");
+	binder->AddColour(_("Selected comment background"), "Colour/Subtitle Grid/Background/Selected Comment");
+	binder->AddColour(_("Header background"), "Colour/Subtitle Grid/Header");
+	binder->AddColour(_("Left Column"), "Colour/Subtitle Grid/Left Column");
+	binder->AddColour(_("Active Line Border"), "Colour/Subtitle Grid/Active Border");
+	binder->AddColour(_("Lines"), "Colour/Subtitle Grid/Lines");
+	binder->AddColour(_("CPS Error"), "Colour/Subtitle Grid/CPS Error");
 
-	auto visual_tools = p->PageSizer(_("Visual Typesetting Tools"));
-	p->OptionAdd(visual_tools, _("Primary Lines"), "Colour/Visual Tools/Lines Primary");
-	p->OptionAdd(visual_tools, _("Secondary Lines"), "Colour/Visual Tools/Lines Secondary");
-	p->OptionAdd(visual_tools, _("Primary Highlight"), "Colour/Visual Tools/Highlight Primary");
-	p->OptionAdd(visual_tools, _("Secondary Highlight"), "Colour/Visual Tools/Highlight Secondary");
+	binder->AddCategory(_("Visual Typesetting Tools"));
+	binder->AddColour(_("Primary Lines"), "Colour/Visual Tools/Lines Primary");
+	binder->AddColour(_("Secondary Lines"), "Colour/Visual Tools/Lines Secondary");
+	binder->AddColour(_("Primary Highlight"), "Colour/Visual Tools/Highlight Primary");
+	binder->AddColour(_("Secondary Highlight"), "Colour/Visual Tools/Highlight Secondary");
+	binder->AddDouble(_("Shaded Area"), "Colour/Visual Tools/Shaded Area Alpha", 0.0, 1.0, 0.1, 2);
 
-	// Separate sizer to prevent the colors in the visual tools section from getting resized
-	auto visual_tools_alpha = p->PageSizer(_("Visual Typesetting Tools Alpha"));
-	p->OptionAdd(visual_tools_alpha, _("Shaded Area"), "Colour/Visual Tools/Shaded Area Alpha", 0, 1, 0.1);
-
-	p->sizer = main_sizer;
-
+	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
 }
 
 /// Backup preferences page
-void Backup(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Backup"));
-
+void BuildBackupPage(OptionPage *p) {
 	auto save = p->PageSizer(_("Automatic Save"));
 	wxControl *cb = p->OptionAdd(save, _("Enable"), "App/Auto/Save");
 	p->CellSkip(save);
@@ -358,9 +711,7 @@ void Backup(wxTreebook *book, Preferences *parent) {
 }
 
 /// Automation preferences page
-void Automation(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Automation"));
-
+void BuildAutomationPage(OptionPage *p) {
 	auto general = p->PageSizer(_("General"));
 
 	p->OptionAdd(general, _("Base path"), "Path/Automation/Base");
@@ -379,9 +730,7 @@ void Automation(wxTreebook *book, Preferences *parent) {
 }
 
 /// Advanced preferences page
-void Advanced(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Advanced"));
-
+void BuildAdvancedPage(OptionPage *p) {
 	auto general = p->PageSizer(_("General"));
 
 	auto warning = new wxStaticText(p, wxID_ANY ,_("Changing these settings might result in bugs and/or crashes.  Do not touch these unless you know what you're doing."));
@@ -394,91 +743,93 @@ void Advanced(wxTreebook *book, Preferences *parent) {
 }
 
 /// Advanced Audio preferences subpage
-void Advanced_Audio(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Audio"), OptionPage::PAGE_SUB);
+void BuildAdvancedAudioPage(OptionPage *p) {
+	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
+	auto *grid = binder->GetGrid();
+	binder->BindEvents(binder);
 
-	auto expert = p->PageSizer(_("Expert"));
-
-	p->OptionChoice(expert, _("Audio provider"), GetAudioProviderChoices(), "Audio/Provider");
+	binder->AddCategory(_("Expert"));
+	binder->AddChoice(_("Audio provider"), GetAudioProviderChoices(), "Audio/Provider");
 
 	wxArrayString apl_choice = to_wx(AudioPlayerFactory::GetClasses());
-	p->OptionChoice(expert, _("Audio player"), apl_choice, "Audio/Player");
+	binder->AddChoice(_("Audio player"), apl_choice, "Audio/Player");
 
-	auto cache = p->PageSizer(_("Cache"));
+	binder->AddCategory(_("Cache"));
 	const wxString ct_arr[3] = { _("None (Not recommended with Avisynth)"), _("RAM"), _("Hard Disk") };
 	wxArrayString ct_choice(3, ct_arr);
-	p->OptionChoice(cache, _("Cache type"), ct_choice, "Audio/Cache/Type");
-	p->OptionBrowse(cache, _("Path"), "Audio/Cache/HD/Location");
+	binder->AddChoice(_("Cache type"), ct_choice, "Audio/Cache/Type");
+	binder->AddDirectory(_("Path"), "Audio/Cache/HD/Location");
 
-	auto spectrum = p->PageSizer(_("Spectrum Cache"));
-	p->OptionAdd(spectrum, _("Cache memory max (MB)"), "Audio/Renderer/Spectrum/Memory Max", 2, 1024);
+	binder->AddCategory(_("Spectrum Cache"));
+	binder->AddInt(_("Cache memory max (MB)"), "Audio/Renderer/Spectrum/Memory Max", 2, 1024);
 
 #ifdef WITH_AVISYNTH
-	auto avisynth = p->PageSizer(wxS("Avisynth"));
-	const wxString adm_arr[4] = { wxS("None"), wxS("ConvertToMono"), wxS("GetLeftChannel"), wxS("GetRightChannel") };
+	binder->AddCategory("Avisynth");
+	const wxString adm_arr[4] = { "None", "ConvertToMono", "GetLeftChannel", "GetRightChannel" };
 	wxArrayString adm_choice(4, adm_arr);
-	p->OptionChoice(avisynth, _("Avisynth down-mixer"), adm_choice, "Audio/Downmixer");
-	p->OptionAdd(avisynth, _("Force sample rate"), "Provider/Audio/AVS/Sample Rate");
+	binder->AddChoice(_("Avisynth down-mixer"), adm_choice, "Audio/Downmixer");
+	binder->AddInt(_("Force sample rate"), "Provider/Audio/AVS/Sample Rate", 0, INT_MAX);
 #endif
 
 #ifdef WITH_FFMS2
-	auto ffms = p->PageSizer(wxS("FFmpegSource"));
+	binder->AddCategory("FFmpegSource");
 
 	const wxString error_modes[] = { _("Ignore"), _("Clear"), _("Stop"), _("Abort") };
 	wxArrayString error_modes_choice(4, error_modes);
-	p->OptionChoice(ffms, _("Audio indexing error handling mode"), error_modes_choice, "Provider/Audio/FFmpegSource/Decode Error Handling");
+	binder->AddChoice(_("Audio indexing error handling mode"), error_modes_choice, "Provider/Audio/FFmpegSource/Decode Error Handling");
 
-	p->OptionAdd(ffms, _("Always index all audio tracks"), "Provider/FFmpegSource/Index All Tracks");
-	p->OptionAdd(ffms, _("Downmix to 16bit mono audio"), "Provider/Audio/FFmpegSource/Downmix");
+	binder->AddBool(_("Always index all audio tracks"), "Provider/FFmpegSource/Index All Tracks");
+	binder->AddBool(_("Downmix to 16bit mono audio"), "Provider/Audio/FFmpegSource/Downmix");
 #endif
 
 #ifdef WITH_PORTAUDIO
-	auto portaudio = p->PageSizer(wxS("Portaudio"));
-	p->OptionChoice(portaudio, _("Portaudio device"), PortAudioPlayer::GetOutputDevices(), "Player/Audio/PortAudio/Device Name");
+	binder->AddCategory("Portaudio");
+	binder->AddChoice(_("Portaudio device"), PortAudioPlayer::GetOutputDevices(), "Player/Audio/PortAudio/Device Name");
 #endif
 
 #ifdef WITH_OSS
-	auto oss = p->PageSizer(wxS("OSS"));
-	p->OptionBrowse(oss, _("OSS Device"), "Player/Audio/OSS/Device");
+	binder->AddCategory("OSS");
+	binder->AddDirectory(_("OSS Device"), "Player/Audio/OSS/Device");
 #endif
 
 #if defined(WITH_DIRECTSOUND) && defined(WITH_XAUDIO2)
-	auto dsound = p->PageSizer(wxS("DirectSound / XAudio2"));
+	binder->AddCategory("DirectSound / XAudio2");
 #elif defined(WITH_DIRECTSOUND)
-	auto dsound = p->PageSizer(wxS("DirectSound"));
+	binder->AddCategory("DirectSound");
 #elif defined(WITH_XAUDIO2)
-	auto dsound = p->PageSizer(wxS("XAudio2"));
+	binder->AddCategory("XAudio2");
 #endif
 #if defined(WITH_DIRECTSOUND) || defined(WITH_XAUDIO2)
-	p->OptionAdd(dsound, _("Buffer latency"), "Player/Audio/DirectSound/Buffer Latency", 1, 1000);
-	p->OptionAdd(dsound, _("Buffer length"), "Player/Audio/DirectSound/Buffer Length", 1, 100);
+	binder->AddInt(_("Buffer latency"), "Player/Audio/DirectSound/Buffer Latency", 1, 1000);
+	binder->AddInt(_("Buffer length"), "Player/Audio/DirectSound/Buffer Length", 1, 100);
 #endif
 
+	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
 }
 
 /// Advanced Video preferences subpage
-void Advanced_Video(wxTreebook *book, Preferences *parent) {
-	auto p = new OptionPage(book, parent, _("Video"), OptionPage::PAGE_SUB);
+void BuildAdvancedVideoPage(OptionPage *p) {
+	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
+	auto *grid = binder->GetGrid();
+	binder->BindEvents(binder);
 
-	auto expert = p->PageSizer(_("Expert"));
-
-	p->OptionChoice(expert, _("Video provider"), VideoProviderFactory::GetChoices(), "Video/Provider");
+	binder->AddCategory(_("Expert"));
+	binder->AddChoice(_("Video provider"), VideoProviderFactory::GetChoices(), "Video/Provider");
 	wxArrayString renderer_choices;
 	renderer_choices.Add(wxS("opengl"));
 #ifdef WITH_LIBPLACEBO
 	renderer_choices.Add(wxS("libplacebo"));
 #endif
-	p->OptionChoice(expert, _("Video renderer"), renderer_choices, "Video/Renderer/Backend");
+	binder->AddChoice(_("Video renderer"), renderer_choices, "Video/Renderer/Backend");
 
 	wxArrayString sp_choice = to_wx(SubtitlesProviderFactory::GetClasses());
-	p->OptionChoice(expert, _("Subtitles provider"), sp_choice, "Subtitle/Provider");
+	binder->AddChoice(_("Subtitles provider"), sp_choice, "Subtitle/Provider");
 
 #ifdef WITH_AVISYNTH
-	auto avisynth = p->PageSizer(wxS("Avisynth"));
-	p->OptionAdd(avisynth, _("Allow pre-2.56a Avisynth"), "Provider/Avisynth/Allow Ancient");
-	p->CellSkip(avisynth);
-	p->OptionBrowseFile(avisynth, _("Avisynth runtime library path"), "Provider/Avisynth/Runtime Path",
+	binder->AddCategory("Avisynth");
+	binder->AddBool(_("Allow pre-2.56a Avisynth"), "Provider/Avisynth/Allow Ancient");
+	binder->AddFile(_("Avisynth runtime library path"), "Provider/Avisynth/Runtime Path",
 #ifdef _WIN32
 		_("Dynamic libraries (*.dll)|*.dll|All files (*.*)|*.*")
 #elif defined(__APPLE__)
@@ -487,20 +838,21 @@ void Advanced_Video(wxTreebook *book, Preferences *parent) {
 		_("Shared objects (*.so;*.so.*)|*.so;*.so.*|All files (*.*)|*.*")
 #endif
 	);
-	p->OptionAdd(avisynth, _("Avisynth memory limit"), "Provider/Avisynth/Memory Max");
+	binder->AddInt(_("Avisynth memory limit"), "Provider/Avisynth/Memory Max", 0, INT_MAX);
 #endif
 
 #ifdef WITH_FFMS2
-	auto ffms = p->PageSizer(wxS("FFmpegSource"));
+	binder->AddCategory("FFmpegSource");
 
 	const wxString log_levels[] = { wxS("Quiet"), wxS("Panic"), wxS("Fatal"), wxS("Error"), wxS("Warning"), wxS("Info"), wxS("Verbose"), wxS("Debug") };
 	wxArrayString log_levels_choice(8, log_levels);
-	p->OptionChoice(ffms, _("Debug log verbosity"), log_levels_choice, "Provider/FFmpegSource/Log Level");
+	binder->AddChoice(_("Debug log verbosity"), log_levels_choice, "Provider/FFmpegSource/Log Level");
 
-	p->OptionAdd(ffms, _("Decoding threads"), "Provider/Video/FFmpegSource/Decoding Threads", -1);
-	p->OptionAdd(ffms, _("Enable unsafe seeking"), "Provider/Video/FFmpegSource/Unsafe Seeking");
+	binder->AddInt(_("Decoding threads"), "Provider/Video/FFmpegSource/Decoding Threads", -1, INT_MAX);
+	binder->AddBool(_("Enable unsafe seeking"), "Provider/Video/FFmpegSource/Unsafe Seeking");
 #endif
 
+	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
 }
 
@@ -710,6 +1062,48 @@ void Interface_Hotkeys::OnUpdateFilter(wxCommandEvent&) {
 }
 }
 
+void Preferences::RegisterDeferredPageBuilder(Thunk builder, bool built) {
+	deferred_page_builders.push_back(std::move(builder));
+	deferred_page_built.push_back(built);
+}
+
+void Preferences::EnsureDeferredPageBuilt(int page) {
+	if (page < 0 || page >= static_cast<int>(deferred_page_builders.size()))
+		return;
+	if (deferred_page_built[page])
+		return;
+
+	bool const should_freeze = IsShownOnScreen();
+	bool const is_current_page = book && book->GetSelection() == page;
+	wxSize const old_size = GetSize();
+	if (should_freeze)
+		Freeze();
+
+	deferred_page_builders[page]();
+	deferred_page_built[page] = true;
+
+	book->InvalidateBestSize();
+	book->Layout();
+	if (auto* sizer = GetSizer())
+		sizer->Layout();
+	Layout();
+	if (is_current_page) {
+		if (auto* sizer = GetSizer()) {
+			sizer->Fit(this);
+			auto const fitted_size = GetSize();
+			SetSize(std::max(old_size.x, fitted_size.x), std::max(old_size.y, fitted_size.y));
+		}
+	}
+
+	if (should_freeze)
+		Thaw();
+}
+
+void Preferences::EnsureAllDeferredPagesBuilt() {
+	for (int page = 0; page < static_cast<int>(deferred_page_builders.size()); ++page)
+		EnsureDeferredPageBuilt(page);
+}
+
 void Preferences::SetOption(std::unique_ptr<agi::OptionValue> new_value) {
 	pending_changes[new_value->GetName()] = std::move(new_value);
 	if (applyButton)
@@ -754,6 +1148,8 @@ void Preferences::OnResetDefault(wxCommandEvent&) {
 	}) != agi::InteractionResult::Yes)
 		return;
 
+	EnsureAllDeferredPagesBuilt();
+
 	for (auto const& opt_name : option_names) {
 		agi::OptionValue *opt = OPT_SET(opt_name);
 		if (!opt->IsDefault())
@@ -772,43 +1168,99 @@ void Preferences::OnResetDefault(wxCommandEvent&) {
 Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"), wxDefaultPosition, wxSize(-1, -1), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER) {
 	SetIcon(GETICON(options_button_16));
 
-	book = new wxTreebook(this, -1, wxDefaultPosition, wxDefaultSize);
-	General(book, this);
-	General_DefaultStyles(book, this);
-	Audio(book, this);
-	Video(book, this);
-	Interface(book, this);
-	Interface_Colours(book, this);
-	new Interface_Hotkeys(book, this);
-	Backup(book, this);
-	Automation(book, this);
-	Advanced(book, this);
-	Advanced_Audio(book, this);
-	Advanced_Video(book, this);
+	auto duration_ms = [](auto const& started) {
+		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+	};
+	auto observe_phase = [&](char const* phase, auto&& callback) {
+		auto const started = std::chrono::steady_clock::now();
+		callback();
+		perf_trace::ObserveWindowOpenPhase("preferences", phase, duration_ms(started));
+	};
 
-	book->Fit();
-
-	book->ChangeSelection(OPT_GET("Tool/Preferences/Page")->GetInt());
-	book->Bind(wxEVT_TREEBOOK_PAGE_CHANGED, [](wxBookCtrlEvent &evt) {
-		OPT_SET("Tool/Preferences/Page")->SetInt(evt.GetSelection());
+	observe_phase("treebook_create", [&] {
+		book = new wxTreebook(this, -1, wxDefaultPosition, wxDefaultSize);
+		book->SetDoubleBuffered(true);
+		if (auto *tree = book->GetTreeCtrl())
+			tree->SetDoubleBuffered(true);
 	});
 
-	// Bottom Buttons
-	auto stdButtonSizer = CreateStdDialogButtonSizer(wxOK | wxCANCEL | wxAPPLY | wxHELP);
-	applyButton = stdButtonSizer->GetApplyButton();
-	wxSizer *buttonSizer = new wxBoxSizer(wxHORIZONTAL);
-	auto defaultButton = new wxButton(this, -1, _("&Restore Defaults"));
-	buttonSizer->Add(defaultButton, wxSizerFlags(0).Expand());
-	buttonSizer->AddStretchSpacer(1);
-	buttonSizer->Add(stdButtonSizer, wxSizerFlags(0).Expand());
+	auto register_deferred_page = [&](char const* phase, wxString const& name, int style, auto builder) {
+		auto* page = new OptionPage(book, this, name, style);
+		RegisterDeferredPageBuilder([&, page, phase, builder] {
+			auto const started = std::chrono::steady_clock::now();
+			builder(page);
+			perf_trace::ObserveWindowOpenPhase("preferences", phase, duration_ms(started));
+		});
+	};
 
-	// Main Sizer
-	wxSizer *mainSizer = new wxBoxSizer(wxVERTICAL);
-	mainSizer->Add(book, wxSizerFlags(1).Expand().Border());
-	mainSizer->Add(buttonSizer, wxSizerFlags(0).Expand().Border(wxALL & ~wxTOP));
+	register_deferred_page("page_general", _("General"), OptionPage::PAGE_DEFAULT, BuildGeneralPage);
+	register_deferred_page("page_default_styles", _("Default styles"), OptionPage::PAGE_SUB, BuildGeneralDefaultStylesPage);
+	register_deferred_page("page_audio", _("Audio"), OptionPage::PAGE_DEFAULT, BuildAudioPage);
+	register_deferred_page("page_video", _("Video"), OptionPage::PAGE_DEFAULT, BuildVideoPage);
+	register_deferred_page("page_interface", _("Interface"), OptionPage::PAGE_DEFAULT, BuildInterfacePage);
+	register_deferred_page("page_interface_colours", _("Colors"), OptionPage::PAGE_SCROLL | OptionPage::PAGE_SUB, BuildInterfaceColoursPage);
+	observe_phase("page_hotkeys", [&] { new Interface_Hotkeys(book, this); });
+	RegisterDeferredPageBuilder({}, true);
+	register_deferred_page("page_backup", _("Backup"), OptionPage::PAGE_DEFAULT, BuildBackupPage);
+	register_deferred_page("page_automation", _("Automation"), OptionPage::PAGE_DEFAULT, BuildAutomationPage);
+	register_deferred_page("page_advanced", _("Advanced"), OptionPage::PAGE_DEFAULT, BuildAdvancedPage);
+	register_deferred_page("page_advanced_audio", _("Audio"), OptionPage::PAGE_SUB, BuildAdvancedAudioPage);
+	register_deferred_page("page_advanced_video", _("Video"), OptionPage::PAGE_SUB, BuildAdvancedVideoPage);
 
-	SetSizerAndFit(mainSizer);
-	CenterOnParent();
+	int initial_page = OPT_GET("Tool/Preferences/Page")->GetInt();
+	if (initial_page < 0 || initial_page >= static_cast<int>(deferred_page_builders.size()))
+		initial_page = 0;
+	book->ChangeSelection(initial_page);
+	try {
+		EnsureDeferredPageBuilt(initial_page);
+	}
+	catch (...) {
+		if (initial_page == 0)
+			throw;
+		initial_page = 0;
+		OPT_SET("Tool/Preferences/Page")->SetInt(initial_page);
+		book->ChangeSelection(initial_page);
+		EnsureDeferredPageBuilt(initial_page);
+	}
+
+	observe_phase("book_fit", [&] {
+		book->Fit();
+	});
+
+	wxSizer *mainSizer = nullptr;
+	wxButton *defaultButton = nullptr;
+	observe_phase("dialog_chrome", [&] {
+		book->Bind(wxEVT_TREEBOOK_PAGE_CHANGING, [this](wxBookCtrlEvent &evt) {
+			EnsureDeferredPageBuilt(evt.GetSelection());
+		});
+		book->Bind(wxEVT_TREEBOOK_PAGE_CHANGED, [this](wxBookCtrlEvent &evt) {
+			OPT_SET("Tool/Preferences/Page")->SetInt(evt.GetSelection());
+		});
+
+		// Bottom Buttons
+		auto stdButtonSizer = CreateStdDialogButtonSizer(wxOK | wxCANCEL | wxAPPLY | wxHELP);
+		applyButton = stdButtonSizer->GetApplyButton();
+		wxSizer *buttonSizer = new wxBoxSizer(wxHORIZONTAL);
+		defaultButton = new wxButton(this, -1, _("&Restore Defaults"));
+		buttonSizer->Add(defaultButton, wxSizerFlags(0).Expand());
+		buttonSizer->AddStretchSpacer(1);
+		buttonSizer->Add(stdButtonSizer, wxSizerFlags(0).Expand());
+
+		// Main Sizer
+		mainSizer = new wxBoxSizer(wxVERTICAL);
+		mainSizer->Add(book, wxSizerFlags(1).Expand().Border());
+		mainSizer->Add(buttonSizer, wxSizerFlags(0).Expand().Border(wxALL & ~wxTOP));
+	});
+
+	observe_phase("dialog_fit", [&] {
+		SetSizerAndFit(mainSizer);
+		wxSize const fitted = GetSize();
+		SetMinSize(fitted);
+		SetSize(std::max(fitted.x, FromDIP(520)), std::max(fitted.y, FromDIP(720)));
+	});
+	observe_phase("dialog_center", [&] {
+		persist = agi::make_unique<PersistLocation>(this, "Tool/Preferences", true);
+	});
 
 	applyButton->Enable(false);
 
@@ -819,5 +1271,20 @@ Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"
 }
 
 void ShowPreferences(wxWindow *parent) {
-	while (Preferences(parent).ShowModal() < 0);
+	while (true) {
+		auto const open_started = std::chrono::steady_clock::now();
+		perf_trace::TraceWindowOpenBegin("preferences");
+		try {
+			Preferences dialog(parent);
+			auto const duration_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - open_started).count();
+			perf_trace::TraceWindowOpenEnd("preferences", duration_ms, true);
+			if (dialog.ShowModal() >= 0)
+				break;
+		}
+		catch (...) {
+			auto const duration_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - open_started).count();
+			perf_trace::TraceWindowOpenEnd("preferences", duration_ms, false);
+			throw;
+		}
+	}
 }

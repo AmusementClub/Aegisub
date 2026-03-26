@@ -511,6 +511,7 @@ add_executable(Aegisub WIN32
     src/csri_renderer_discovery.cpp
     src/native_library.cpp
     src/pen.cpp
+    src/perf_trace.cpp
     src/persist_location.cpp
     src/preferences.cpp
     src/preferences_base.cpp
@@ -641,6 +642,7 @@ endif()
 if(MSVC)
     add_definitions("/DNOMINMAX /DINITGUID")
     target_link_libraries(Aegisub LINK_PRIVATE Usp10)
+    target_link_libraries(Aegisub PRIVATE Psapi)
     #target_sources(Aegisub PRIVATE src/res/res.rc src/res/strings.rc src/crash_writer_minidump.cpp)
     target_sources(Aegisub PRIVATE src/res/res.rc src/res/strings.rc src/crash_writer.cpp src/dpi_aware.manifest)
     set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT Aegisub)
@@ -723,7 +725,7 @@ find_package(ICU REQUIRED uc)
 target_link_libraries(libaegisub PRIVATE "ICU::uc")
 target_link_libraries(Aegisub PRIVATE "ICU::uc")
 
-find_package(wxWidgets REQUIRED adv base core gl stc xml)
+find_package(wxWidgets REQUIRED adv base core gl propgrid stc xml)
 option(WITH_WXSTC "Enable wxStyledTextCtrl support" ON)
 function(aegisub_enable_wx_utf8_guard target_name)
     if(TARGET ${target_name})

@@ -65,7 +65,7 @@ public:
 	/// @param parent Parent window of the dialog
 	/// @param title Initial title of the dialog
 	/// @param message Initial message of the dialog
-	DialogProgress(wxWindow *parent, wxString const& title=wxString(), wxString const& message=wxString());
+	DialogProgress(wxWindow *parent, wxString const& title="", wxString const& message="");
 	~DialogProgress() override { ui_activation.Deactivate(); }
 
 	/// BackgroundWorker implementation

@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <condition_variable>
+#include <functional>
 #include <mutex>
 
 namespace {
@@ -45,6 +46,7 @@ class FakeVideoProvider final : public VideoProvider {
 public:
 	int frame_width = 2;
 	int frame_height = 2;
+	bool bgra_flipped = false;
 	std::string color_space = "BT.709";
 	std::string real_color_space = "BT.709";
 	SourceFrameNativeFormatIdentity native_format = { };
@@ -53,6 +55,7 @@ public:
 	SourceFrameGeometry native_geometry = MakeDefaultSourceFrameGeometry(2, 2);
 	std::vector<SourceFrameOutputMode> available_modes = { SourceFrameOutputMode::Bgra8 };
 	SourceFrameOutputMode output_mode = SourceFrameOutputMode::Bgra8;
+	std::function<void(int, VideoFrame&)> fill_frame;
 
 	explicit FakeVideoProvider(std::shared_ptr<VideoProviderState> state)
 	: state(std::move(state)) {
@@ -79,9 +82,11 @@ public:
 		frame.width = frame_width;
 		frame.height = frame_height;
 		frame.pitch = static_cast<size_t>(frame_width) * 4;
-		frame.flipped = false;
+		frame.flipped = bgra_flipped;
 		frame.data.assign(frame.pitch * frame.height, 0);
 		frame.data[0] = static_cast<unsigned char>(n);
+		if (fill_frame)
+			fill_frame(n, frame);
 	}
 
 	void SetColorSpace(std::string const& matrix) override { color_space = matrix; }
@@ -726,6 +731,233 @@ TEST(async_video_provider, get_frame_bgra_returns_cpu_frame_when_native_mode_sel
 	EXPECT_EQ(SourceFrameOutputMode::Native, video->output_mode);
 }
 
+TEST(async_video_provider, find_key_point_range_scans_frames_inside_worker) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 4;
+	video->frame_height = 4;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		auto set_pixel = [&](int x, int y, unsigned char b, unsigned char g, unsigned char r) {
+			size_t base = static_cast<size_t>(y) * frame.pitch + static_cast<size_t>(x) * 4;
+			frame.data[base + 0] = b;
+			frame.data[base + 1] = g;
+			frame.data[base + 2] = r;
+			frame.data[base + 3] = 255;
+		};
+
+		if (n >= 4 && n <= 8) {
+			set_pixel(1, 1, 40, 80, 120);
+			set_pixel(0, 1, 40, 80, 120);
+			set_pixel(2, 1, 40, 80, 120);
+			set_pixel(1, 0, 40, 80, 120);
+			set_pixel(1, 2, 40, 80, 120);
+		}
+	};
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto result = provider.FindKeyPointRange({
+		5,
+		1,
+		1,
+		120,
+		80,
+		40,
+		0,
+		2,
+		0
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_EQ(4, result.left);
+	EXPECT_EQ(8, result.right);
+	EXPECT_EQ((std::vector<int>{ 5, 3, 4, 7, 9, 8 }), state->requested_frames);
+}
+
+TEST(async_video_provider, find_key_point_range_respects_flipped_frame_coordinates) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 3;
+	video->frame_height = 3;
+	video->bgra_flipped = true;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		auto set_pixel = [&](int x, int y, unsigned char b, unsigned char g, unsigned char r) {
+			size_t base = static_cast<size_t>(y) * frame.pitch + static_cast<size_t>(x) * 4;
+			frame.data[base + 0] = b;
+			frame.data[base + 1] = g;
+			frame.data[base + 2] = r;
+			frame.data[base + 3] = 255;
+		};
+
+		if (n >= 2 && n <= 4) {
+			set_pixel(1, 2, 10, 30, 90);
+			set_pixel(0, 2, 10, 30, 90);
+			set_pixel(2, 2, 10, 30, 90);
+		}
+	};
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto result = provider.FindKeyPointRange({
+		3,
+		1,
+		0,
+		90,
+		30,
+		10,
+		0,
+		2,
+		0
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_EQ(2, result.left);
+	EXPECT_EQ(4, result.right);
+}
+
+TEST(async_video_provider, find_key_point_range_refines_coarse_scan_boundaries) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 4;
+	video->frame_height = 4;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		auto set_pixel = [&](int x, int y, unsigned char b, unsigned char g, unsigned char r) {
+			size_t base = static_cast<size_t>(y) * frame.pitch + static_cast<size_t>(x) * 4;
+			frame.data[base + 0] = b;
+			frame.data[base + 1] = g;
+			frame.data[base + 2] = r;
+			frame.data[base + 3] = 255;
+		};
+
+		if (n >= 4 && n <= 11) {
+			set_pixel(2, 1, 12, 64, 128);
+			set_pixel(1, 1, 12, 64, 128);
+			set_pixel(3, 1, 12, 64, 128);
+		}
+	};
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto result = provider.FindKeyPointRange({
+		7,
+		2,
+		1,
+		128,
+		64,
+		12,
+		0,
+		4,
+		0
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_EQ(4, result.left);
+	EXPECT_EQ(11, result.right);
+	EXPECT_EQ((std::vector<int>{ 7, 3, 6, 5, 4, 11, 15, 12 }), state->requested_frames);
+}
+
+TEST(async_video_provider, find_key_point_range_refines_to_boundary_when_coarse_scan_has_no_probe) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 3;
+	video->frame_height = 3;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		auto set_pixel = [&](int x, int y, unsigned char b, unsigned char g, unsigned char r) {
+			size_t base = static_cast<size_t>(y) * frame.pitch + static_cast<size_t>(x) * 4;
+			frame.data[base + 0] = b;
+			frame.data[base + 1] = g;
+			frame.data[base + 2] = r;
+			frame.data[base + 3] = 255;
+		};
+
+		if (n <= 6) {
+			set_pixel(1, 1, 16, 48, 96);
+			set_pixel(0, 1, 16, 48, 96);
+			set_pixel(2, 1, 16, 48, 96);
+		}
+	};
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto result = provider.FindKeyPointRange({
+		3,
+		1,
+		1,
+		96,
+		48,
+		16,
+		0,
+		8,
+		0
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_EQ(0, result.left);
+	EXPECT_EQ(6, result.right);
+	EXPECT_EQ((std::vector<int>{ 3, 2, 1, 0, 11, 4, 5, 6, 7 }), state->requested_frames);
+}
+
+TEST(async_video_provider, find_key_point_range_refines_to_boundary_after_coarse_hit) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 3;
+	video->frame_height = 3;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		auto set_pixel = [&](int x, int y, unsigned char b, unsigned char g, unsigned char r) {
+			size_t base = static_cast<size_t>(y) * frame.pitch + static_cast<size_t>(x) * 4;
+			frame.data[base + 0] = b;
+			frame.data[base + 1] = g;
+			frame.data[base + 2] = r;
+			frame.data[base + 3] = 255;
+		};
+
+		if (n <= 12) {
+			set_pixel(1, 1, 24, 72, 144);
+			set_pixel(0, 1, 24, 72, 144);
+			set_pixel(2, 1, 24, 72, 144);
+		}
+	};
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+
+	auto result = provider.FindKeyPointRange({
+		12,
+		1,
+		1,
+		144,
+		72,
+		24,
+		0,
+		8,
+		0
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_EQ(0, result.left);
+	EXPECT_EQ(12, result.right);
+	EXPECT_EQ((std::vector<int>{ 12, 4, 3, 2, 1, 0, 20, 13 }), state->requested_frames);
+}
+
 TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *subs = new FakeOverlaySubtitlesProvider;
@@ -1270,21 +1502,12 @@ TEST(async_video_provider, compatibility_only_backend_uses_single_legacy_render)
 	EXPECT_EQ(1, extracted_overlay.width);
 	EXPECT_EQ(1, extracted_overlay.height);
 
-	ASSERT_TRUE(packet.has_subtitle_overlay);
-	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, packet.subtitle_overlay.composition_mode);
-	EXPECT_TRUE(packet.subtitle_overlay.premultiplied_alpha);
-	EXPECT_EQ(SubtitleOverlayCoordinateSpace::SourceStorage, packet.subtitle_overlay.coordinate_space);
-	EXPECT_EQ(2, packet.subtitle_overlay.width);
-	EXPECT_EQ(2, packet.subtitle_overlay.height);
-	ASSERT_EQ(1, packet.subtitle_overlay.dirty_rect_count);
-	EXPECT_EQ(0, packet.subtitle_overlay.dirty_rects[0].x);
-	EXPECT_EQ(0, packet.subtitle_overlay.dirty_rects[0].y);
-	EXPECT_EQ(2, packet.subtitle_overlay.dirty_rects[0].width);
-	EXPECT_EQ(2, packet.subtitle_overlay.dirty_rects[0].height);
-	EXPECT_EQ(255, packet.subtitle_overlay.planes[0].data[3]);
+	EXPECT_FALSE(packet.has_subtitle_overlay);
+	EXPECT_FALSE(static_cast<bool>(packet.subtitle_overlay_storage));
+	EXPECT_FALSE(packet.subtitle_overlay.IsValid());
 }
 
-TEST(async_video_provider, compatibility_overlay_reuses_surface_when_content_is_stable) {
+TEST(async_video_provider, compatibility_backend_keeps_using_baked_composited_frames_when_content_is_stable) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
 	EventRecorder recorder;
@@ -1300,13 +1523,14 @@ TEST(async_video_provider, compatibility_overlay_reuses_surface_when_content_is_
 	auto first = provider.GetRenderPacket(5, 5000);
 	auto second = provider.GetRenderPacket(5, 5000);
 
-	ASSERT_TRUE(first.has_subtitle_overlay);
-	ASSERT_TRUE(second.has_subtitle_overlay);
-	EXPECT_GT(first.subtitle_overlay.dirty_rect_count, 0);
-	EXPECT_EQ(0, second.subtitle_overlay.dirty_rect_count);
+	EXPECT_FALSE(first.has_subtitle_overlay);
+	EXPECT_FALSE(second.has_subtitle_overlay);
+	ASSERT_TRUE(first.composited_frame_storage);
+	ASSERT_TRUE(second.composited_frame_storage);
+	EXPECT_EQ(first.composited_frame_storage->data, second.composited_frame_storage->data);
 }
 
-TEST(async_video_provider, compatibility_overlay_common_path_cycles_between_two_storage_slots) {
+TEST(async_video_provider, compatibility_backend_does_not_allocate_explicit_overlay_storage) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
 	EventRecorder recorder;
@@ -1320,24 +1544,14 @@ TEST(async_video_provider, compatibility_overlay_common_path_cycles_between_two_
 	provider.LoadSubtitles(&subtitle_file);
 
 	auto first = provider.GetRenderPacket(5, 5000);
-	auto* first_storage = first.subtitle_overlay_storage.get();
-	ASSERT_TRUE(first_storage);
-
 	auto second = provider.GetRenderPacket(5, 5000);
-	auto* second_storage = second.subtitle_overlay_storage.get();
-	ASSERT_TRUE(second_storage);
-
-	first = { };
-
-	auto third = provider.GetRenderPacket(5, 5000);
-	auto* third_storage = third.subtitle_overlay_storage.get();
-	ASSERT_TRUE(third_storage);
-
-	EXPECT_NE(first_storage, second_storage);
-	EXPECT_EQ(first_storage, third_storage);
+	EXPECT_FALSE(first.has_subtitle_overlay);
+	EXPECT_FALSE(second.has_subtitle_overlay);
+	EXPECT_FALSE(static_cast<bool>(first.subtitle_overlay_storage));
+	EXPECT_FALSE(static_cast<bool>(second.subtitle_overlay_storage));
 }
 
-TEST(async_video_provider, compatibility_overlay_uses_overflow_only_when_two_slots_are_held) {
+TEST(async_video_provider, dropped_packet_recycles_compatibility_overlay_buffer) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
 	EventRecorder recorder;
@@ -1375,6 +1589,7 @@ TEST(async_video_provider, compatibility_overlay_uses_overflow_only_when_two_slo
 
 TEST(async_video_provider, dropped_packet_advances_overlay_continuity_generation_on_next_delivered_event) {
 	auto state = std::make_shared<VideoProviderState>();
+
 	auto *subs = new FakeDropSensitiveOverlaySubtitlesProvider;
 	EventRecorder recorder;
 
@@ -1429,8 +1644,7 @@ TEST(async_video_provider, replacing_subtitles_provider_reuses_video_provider_an
 	auto first = provider.GetRenderPacket(5, 5000);
 	ASSERT_TRUE(first.source_frame_storage);
 	EXPECT_EQ(5, first.source_frame_storage->data[0]);
-	ASSERT_TRUE(first.has_subtitle_overlay);
-	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, first.subtitle_overlay.composition_mode);
+	EXPECT_FALSE(first.has_subtitle_overlay);
 
 	auto *overlay_subs = new FakeOverlaySubtitlesProvider;
 	provider.ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider>(overlay_subs));

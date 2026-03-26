@@ -100,6 +100,8 @@ public:
 	~OpenGLVideoRenderer();
 
 	bool SupportsDirectOverlay() const noexcept override { return render_overlay_layer; }
+	char const* GetDebugName() const noexcept override { return "OpenGL"; }
+	size_t EstimateTextureBytes() const noexcept override;
 	std::vector<SourceFrameOutputMode> GetPreferredSourceModes() const override {
 		return { SourceFrameOutputMode::Bgra8 };
 	}

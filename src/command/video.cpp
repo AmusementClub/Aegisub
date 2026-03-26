@@ -62,6 +62,7 @@
 #include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 
+#include <wx/filedlg.h>
 #include <wx/textdlg.h>
 
 #include <optional>

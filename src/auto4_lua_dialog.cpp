@@ -36,6 +36,7 @@
 
 #include "colour_button.h"
 #include "compat.h"
+#include "perf_trace.h"
 #include "string_codec.h"
 #include "validators.h"
 
@@ -45,7 +46,9 @@
 #include <libaegisub/split.h>
 #include <libaegisub/string_utils.h>
 
+#include <chrono>
 #include <cfloat>
+#include <map>
 #include <unordered_map>
 
 #include <wx/button.h>
@@ -53,6 +56,7 @@
 #include <wx/combobox.h>
 #include <wx/dialog.h>
 #include <wx/gbsizer.h>
+#include <wx/odcombo.h>
 #include <wx/panel.h>
 #include <wx/spinctrl.h>
 #include <wx/stattext.h>
@@ -60,6 +64,13 @@
 
 using namespace agi::lua;
 namespace {
+	struct ControlCreateSummary {
+		int instance_count = 0;
+		int item_count_total = 0;
+		int item_count_max = 0;
+		double duration_ms = 0.0;
+	};
+
 	inline void get_if_right_type(lua_State *L, std::string &def) {
 		if (lua_isstring(L, -1))
 			def = lua_tostring(L, -1);
@@ -116,20 +127,30 @@ namespace {
 		auto it = ids.find(str);
 		return it == end(ids) ? -1 : it->second;
 	}
+
+	double DurationMs(std::chrono::steady_clock::duration duration) {
+		return std::chrono::duration<double, std::milli>(duration).count();
+	}
+
+	void SetTooltipIfPresent(wxControl* control, wxString const& hint) {
+		if (!hint.empty())
+			control->SetToolTip(hint);
+	}
 }
 
 namespace Automation4 {
 	// LuaDialogControl
-	LuaDialogControl::LuaDialogControl(lua_State *L)
+	LuaDialogControl::LuaDialogControl(lua_State *L, char const* trace_type)
 	// Assume top of stack is a control table (don't do checking)
-	: name(get_field(L, "name"))
+	: trace_type(trace_type)
+	, name(get_field(L, "name"))
 	, hint(get_field(L, "hint"))
+	, hint_wx(hint.empty() ? wxString{} : to_wx(hint))
 	, x(get_field(L, "x", 0))
 	, y(get_field(L, "y", 0))
 	, width(get_field(L, "width", 1))
 	, height(get_field(L, "height", 1))
 	{
-		LOG_D("automation/lua/dialog") << "created control: '" << name << "', (" << x << "," << y << ")(" << width << "," << height << "), " << hint;
 	}
 
 	namespace LuaControl {
@@ -137,7 +158,7 @@ namespace Automation4 {
 		class Label final : public LuaDialogControl {
 			std::string label;
 		public:
-			Label(lua_State *L) : LuaDialogControl(L), label(get_field(L, "label")) { }
+			Label(lua_State *L) : LuaDialogControl(L, "label"), label(get_field(L, "label")) { }
 
 			wxControl *Create(wxWindow *parent) override {
 				return new wxStaticText(parent, -1, to_wx(label));
@@ -158,8 +179,8 @@ namespace Automation4 {
 			wxTextCtrl *cw = nullptr;
 
 		public:
-			Edit(lua_State *L)
-			: LuaDialogControl(L)
+			Edit(lua_State *L, char const* trace_type = "edit")
+			: LuaDialogControl(L, trace_type)
 			, text(get_field(L, "value"))
 			{
 				// Undocumented behaviour, 'value' is also accepted as key for text,
@@ -176,7 +197,7 @@ namespace Automation4 {
 				cw = new wxTextCtrl(parent, -1, to_wx(text));
 				cw->SetMaxLength(0);
 				cw->SetValidator(StringBinder(&text));
-				cw->SetToolTip(to_wx(hint));
+				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}
 
@@ -192,7 +213,7 @@ namespace Automation4 {
 
 		public:
 			Color(lua_State *L, bool alpha)
-			: LuaDialogControl(L)
+			: LuaDialogControl(L, alpha ? "coloralpha" : "color")
 			, color(get_field(L, "value"))
 			, alpha(alpha)
 			{
@@ -204,7 +225,7 @@ namespace Automation4 {
 
 			wxControl *Create(wxWindow *parent) override {
 				wxControl *cw = new ColourButton(parent, wxSize(50*width,10*height), alpha, color, ColorValidator(&color));
-				cw->SetToolTip(to_wx(hint));
+				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}
 
@@ -216,13 +237,13 @@ namespace Automation4 {
 		/// A multiline text edit control
 		class Textbox final : public Edit {
 		public:
-			Textbox(lua_State *L) : Edit(L) { }
+			Textbox(lua_State *L) : Edit(L, "textbox") { }
 
 			// Same serialisation interface as single-line edit
 			wxControl *Create(wxWindow *parent) override {
 				cw = new wxTextCtrl(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE, StringBinder(&text));
 				cw->SetMinSize(wxSize(0, parent->FromDIP(30)));
-				cw->SetToolTip(to_wx(hint));
+				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}
 		};
@@ -235,7 +256,7 @@ namespace Automation4 {
 
 		public:
 			IntEdit(lua_State *L)
-			: Edit(L)
+			: Edit(L, "intedit")
 			, value(get_field(L, "value", 0))
 			, min(get_field(L, "min", INT_MIN))
 			, max(get_field(L, "max", INT_MAX))
@@ -253,7 +274,7 @@ namespace Automation4 {
 			wxControl *Create(wxWindow *parent) override {
 				cw = new wxSpinCtrl(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, value);
 				cw->SetValidator(wxGenericValidator(&value));
-				cw->SetToolTip(to_wx(hint));
+				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}
 
@@ -272,7 +293,7 @@ namespace Automation4 {
 
 		public:
 			FloatEdit(lua_State *L)
-			: Edit(L)
+			: Edit(L, "floatedit")
 			, value(get_field(L, "value", 0.0))
 			, min(get_field(L, "min", -DBL_MAX))
 			, max(get_field(L, "max", DBL_MAX))
@@ -297,16 +318,26 @@ namespace Automation4 {
 			void UnserialiseValue(const std::string &serialised) override { value = atof(serialised.c_str()); }
 
 			wxControl *Create(wxWindow *parent) override {
+				create_trace = {};
+
 				if (step > 0) {
+					auto const construct_started = std::chrono::steady_clock::now();
 					scd = new wxSpinCtrlDouble(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, value, step);
+					create_trace.floatedit_spin_construct_with_value_ms = DurationMs(std::chrono::steady_clock::now() - construct_started);
+
+					auto const validator_bind_started = std::chrono::steady_clock::now();
 					scd->SetValidator(DoubleSpinValidator(&value));
-					scd->SetToolTip(to_wx(hint));
+					create_trace.floatedit_spin_validator_bind_ms = DurationMs(std::chrono::steady_clock::now() - validator_bind_started);
+
+					SetTooltipIfPresent(scd, hint_wx);
 					return scd;
 				}
 
 				DoubleValidator val(&value, min, max);
+				auto const construct_started = std::chrono::steady_clock::now();
 				cw = new wxTextCtrl(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0, val);
-				cw->SetToolTip(to_wx(hint));
+				create_trace.floatedit_text_construct_with_validator_ms = DurationMs(std::chrono::steady_clock::now() - construct_started);
+				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}
 
@@ -319,24 +350,46 @@ namespace Automation4 {
 		class Dropdown final : public LuaDialogControl {
 			std::vector<std::string> items;
 			std::string value;
-			wxComboBox *cw = nullptr;
+			wxArrayString items_wx;
+			wxString value_wx;
+			wxOwnerDrawnComboBox *cw = nullptr;
 
 		public:
 			Dropdown(lua_State *L)
-			: LuaDialogControl(L)
+			: LuaDialogControl(L, "dropdown_odcombo")
 			, value(get_field(L, "value"))
 			{
 				lua_getfield(L, -1, "items");
 				read_string_array(L, items);
+				items_wx = to_wx(items);
+				value_wx = to_wx(value);
 			}
+
+			int GetTraceItemCount() const override { return static_cast<int>(items.size()); }
 
 			bool CanSerialiseValue() const override { return true; }
 			std::string SerialiseValue() const override { return inline_string_encode(value); }
-			void UnserialiseValue(const std::string &serialised) override { value = inline_string_decode(serialised); }
+			void UnserialiseValue(const std::string &serialised) override {
+				value = inline_string_decode(serialised);
+				value_wx = to_wx(value);
+			}
 
 			wxControl *Create(wxWindow *parent) override {
-				cw = new wxComboBox(parent, -1, to_wx(value), wxDefaultPosition, wxDefaultSize, to_wx(items), wxCB_READONLY, StringBinder(&value));
-				cw->SetToolTip(to_wx(hint));
+				create_trace = {};
+
+				auto const native_construct_started = std::chrono::steady_clock::now();
+				cw = new wxOwnerDrawnComboBox(parent, -1, "", wxDefaultPosition, wxDefaultSize, items_wx, wxCB_READONLY | wxODCB_STD_CONTROL_PAINT);
+				create_trace.native_construct_ms = DurationMs(std::chrono::steady_clock::now() - native_construct_started);
+
+				auto const validator_bind_started = std::chrono::steady_clock::now();
+				cw->SetValidator(StringBinder(&value));
+				create_trace.validator_bind_ms = DurationMs(std::chrono::steady_clock::now() - validator_bind_started);
+
+				auto const initial_value_started = std::chrono::steady_clock::now();
+				cw->SetStringSelection(value_wx);
+				create_trace.initial_value_set_ms = DurationMs(std::chrono::steady_clock::now() - initial_value_started);
+
+				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
 			}
 
@@ -352,7 +405,7 @@ namespace Automation4 {
 
 		public:
 			Checkbox(lua_State *L)
-			: LuaDialogControl(L)
+			: LuaDialogControl(L, "checkbox")
 			, label(get_field(L, "label"))
 			, value(get_field(L, "value", false))
 			{
@@ -365,7 +418,7 @@ namespace Automation4 {
 			wxControl *Create(wxWindow *parent) override {
 				cw = new wxCheckBox(parent, -1, to_wx(label));
 				cw->SetValidator(wxGenericValidator(&value));
-				cw->SetToolTip(to_wx(hint));
+				SetTooltipIfPresent(cw, hint_wx);
 				cw->SetValue(value);
 				return cw;
 			}
@@ -380,6 +433,7 @@ namespace Automation4 {
 	LuaDialog::LuaDialog(lua_State *L, bool include_buttons)
 	: use_buttons(include_buttons)
 	{
+		auto const build_model_started = std::chrono::steady_clock::now();
 		LOG_D("automation/lua/dialog") << "creating LuaDialoug, addr: " << this;
 
 		// assume top of stack now contains a dialog table
@@ -387,6 +441,7 @@ namespace Automation4 {
 			error(L, "Cannot create config dialog from something non-table");
 
 		// Ok, so there is a table with controls
+		controls.reserve(static_cast<size_t>(lua_objlen(L, 1)));
 		lua_pushvalue(L, 1);
 		lua_for_each(L, [&] {
 			if (!lua_istable(L, -1))
@@ -426,6 +481,7 @@ namespace Automation4 {
 		});
 
 		if (include_buttons && lua_istable(L, 2)) {
+			buttons.reserve(static_cast<size_t>(lua_objlen(L, 2)));
 			lua_pushvalue(L, 2);
 			lua_for_each(L, [&]{
 				buttons.emplace_back(-1, check_string(L, -1));
@@ -433,32 +489,116 @@ namespace Automation4 {
 		}
 
 		if (include_buttons && lua_istable(L, 3)) {
+			std::unordered_map<std::string, size_t> button_indices;
+			button_indices.reserve(buttons.size());
+			for (size_t i = 0; i < buttons.size(); ++i)
+				button_indices.emplace(buttons[i].second, i);
+
 			lua_pushvalue(L, 3);
 			lua_for_each(L, [&]{
 				int id = string_to_wx_id(check_string(L, -2));
 				std::string label = check_string(L, -1);
-				auto btn = std::find_if(buttons.begin(), buttons.end(),
-					[&](std::pair<int, std::string>& btn) { return btn.second == label; });
-				if (btn == end(buttons))
+				auto const btn = button_indices.find(label);
+				if (btn == end(button_indices))
 					error(L, "Invalid button for id %s", lua_tostring(L, -2));
-				btn->first = id;
+				buttons[btn->second].first = id;
 			});
 		}
+
+		perf_trace::ObserveLuaDialogPhase(
+			"build_model",
+			static_cast<int>(controls.size()),
+			static_cast<int>(buttons.size()),
+			DurationMs(std::chrono::steady_clock::now() - build_model_started));
 	}
 
 	wxWindow* LuaDialog::CreateWindow(wxWindow *parent) {
+		auto const create_window_started = std::chrono::steady_clock::now();
 		window = new wxPanel(parent);
 
 		auto s = new wxGridBagSizer(4, 4);
-		for (auto& c : controls)
-			s->Add(c->Create(window), wxGBPosition(c->y, c->x),
+		auto const create_controls_started = std::chrono::steady_clock::now();
+		std::map<std::string, ControlCreateSummary> control_summaries;
+		std::map<std::string, std::map<std::string, ControlCreateSummary>> control_step_summaries;
+		for (auto& c : controls) {
+			auto const control_started = std::chrono::steady_clock::now();
+			auto* created_control = c->Create(window);
+			auto const control_duration_ms = DurationMs(std::chrono::steady_clock::now() - control_started);
+
+			auto& summary = control_summaries[c->GetTraceType()];
+			++summary.instance_count;
+			summary.duration_ms += control_duration_ms;
+
+			auto const item_count = c->GetTraceItemCount();
+			summary.item_count_total += item_count;
+			summary.item_count_max = std::max(summary.item_count_max, item_count);
+
+			auto accumulate_step = [&](char const* step, double duration_ms) {
+				if (duration_ms <= 0.0)
+					return;
+
+				auto& step_summary = control_step_summaries[c->GetTraceType()][step];
+				++step_summary.instance_count;
+				step_summary.duration_ms += duration_ms;
+				step_summary.item_count_total += item_count;
+				step_summary.item_count_max = std::max(step_summary.item_count_max, item_count);
+			};
+
+			auto const& create_trace = c->GetCreateTrace();
+			accumulate_step("native_construct", create_trace.native_construct_ms);
+			accumulate_step("validator_bind", create_trace.validator_bind_ms);
+			accumulate_step("initial_value_set", create_trace.initial_value_set_ms);
+			accumulate_step("floatedit_spin_construct_with_value", create_trace.floatedit_spin_construct_with_value_ms);
+			accumulate_step("floatedit_spin_validator_bind", create_trace.floatedit_spin_validator_bind_ms);
+			accumulate_step("floatedit_text_construct_with_validator", create_trace.floatedit_text_construct_with_validator_ms);
+
+			s->Add(created_control, wxGBPosition(c->y, c->x),
 				wxGBSpan(c->height, c->width), c->GetSizerFlags());
+		}
+		for (auto const& [control_type, summary] : control_summaries) {
+			perf_trace::ObserveLuaDialogControlTypeSummary(
+				control_type.c_str(),
+				static_cast<int>(controls.size()),
+				static_cast<int>(buttons.size()),
+				summary.instance_count,
+				summary.item_count_total,
+				summary.item_count_max,
+				summary.duration_ms);
+		}
+		for (auto const& [control_type, step_summaries] : control_step_summaries) {
+			for (auto const& [step, summary] : step_summaries) {
+				perf_trace::ObserveLuaDialogControlStepSummary(
+					control_type.c_str(),
+					step.c_str(),
+					static_cast<int>(controls.size()),
+					static_cast<int>(buttons.size()),
+					summary.instance_count,
+					summary.item_count_total,
+					summary.item_count_max,
+					summary.duration_ms);
+			}
+		}
+		perf_trace::ObserveLuaDialogPhase(
+			"create_controls",
+			static_cast<int>(controls.size()),
+			static_cast<int>(buttons.size()),
+			DurationMs(std::chrono::steady_clock::now() - create_controls_started));
 
 		if (!use_buttons) {
+			auto const layout_started = std::chrono::steady_clock::now();
 			window->SetSizerAndFit(s);
+			auto const layout_duration_ms = DurationMs(std::chrono::steady_clock::now() - layout_started);
+			perf_trace::ObserveLuaDialogPhase("layout_window", static_cast<int>(controls.size()), 0, layout_duration_ms);
+			perf_trace::ObserveLuaDialogPhase(
+				"create_window_total",
+				static_cast<int>(controls.size()),
+				0,
+				DurationMs(std::chrono::steady_clock::now() - create_window_started));
+			perf_trace::TraceLuaDialogOpenEnd(static_cast<int>(controls.size()), 0, -1.0, true);
 			return window;
 		}
 
+		auto const create_buttons_started = std::chrono::steady_clock::now();
 		if (buttons.size() == 0) {
 			buttons.emplace_back(wxID_OK, "");
 			buttons.emplace_back(wxID_CANCEL, "");
@@ -495,11 +635,29 @@ namespace Automation4 {
 			for (size_t i = 0; i < buttons.size(); ++i)
 				bs->Add(make_button(buttons[i].first, i, buttons[i].second));
 		}
+		perf_trace::ObserveLuaDialogPhase(
+			"create_buttons",
+			static_cast<int>(controls.size()),
+			static_cast<int>(buttons.size()),
+			DurationMs(std::chrono::steady_clock::now() - create_buttons_started));
 
+		auto const layout_started = std::chrono::steady_clock::now();
 		auto ms = new wxBoxSizer(wxVERTICAL);
 		ms->Add(s, 0, wxBOTTOM, 5);
 		ms->Add(bs);
 		window->SetSizerAndFit(ms);
+		auto const layout_duration_ms = DurationMs(std::chrono::steady_clock::now() - layout_started);
+		perf_trace::ObserveLuaDialogPhase(
+			"layout_window",
+			static_cast<int>(controls.size()),
+			static_cast<int>(buttons.size()),
+			layout_duration_ms);
+		perf_trace::ObserveLuaDialogPhase(
+			"create_window_total",
+			static_cast<int>(controls.size()),
+			static_cast<int>(buttons.size()),
+			DurationMs(std::chrono::steady_clock::now() - create_window_started));
+		perf_trace::TraceLuaDialogOpenEnd(static_cast<int>(controls.size()), static_cast<int>(buttons.size()), -1.0, true);
 
 		return window;
 	}

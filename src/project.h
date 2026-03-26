@@ -23,6 +23,7 @@
 #include <vector>
 
 class AsyncVideoProvider;
+class wxString;
 namespace agi { class AudioProvider; }
 namespace agi { class BackgroundRunner; }
 namespace agi { struct Context; }
@@ -50,6 +51,7 @@ class Project {
 	agi::Context *context = nullptr;
 
 	agi::BackgroundRunner *GetProgressRunner(std::string const& title = "", std::string const& message = "");
+	void ShowError(wxString const& message, std::string const& title = "Error loading file");
 	void ShowError(std::string const& message, std::string const& title = "Error loading file");
 	void ShowWarning(std::string const& message, std::string const& title = "Warning");
 

@@ -75,6 +75,14 @@ public:
 	}
 
 	~HDAudioProvider() = default;
+	AudioProviderMemoryStats GetMemoryStats() const override {
+		return BuildMemoryStats(
+			"HD",
+			"disk",
+			static_cast<size_t>(num_samples)
+				* static_cast<size_t>(bytes_per_sample)
+				* static_cast<size_t>(channels));
+	}
 };
 }
 

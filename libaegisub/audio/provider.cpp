@@ -22,6 +22,14 @@
 #include "libaegisub/util.h"
 
 namespace {
+size_t EstimateAudioBytes(int64_t sample_count, int bytes_per_sample, int channels) {
+	if (sample_count <= 0 || bytes_per_sample <= 0 || channels <= 0)
+		return 0;
+
+	return static_cast<size_t>(sample_count)
+		* static_cast<size_t>(bytes_per_sample)
+		* static_cast<size_t>(channels);
+}
 
 template<typename Source>
 class ConvertFloatToInt16 {
@@ -73,6 +81,39 @@ public:
 }
 
 namespace agi {
+AudioProviderMemoryStats AudioProvider::BuildMemoryStats(std::string provider_name, std::string storage_kind, size_t storage_bytes) const {
+	AudioProviderMemoryStats stats;
+	stats.provider_name = std::move(provider_name);
+	stats.storage_kind = std::move(storage_kind);
+	stats.storage_bytes = storage_bytes;
+	stats.logical_bytes = EstimateAudioBytes(num_samples, bytes_per_sample, channels);
+	stats.decoded_bytes = EstimateAudioBytes(decoded_samples.load(), bytes_per_sample, channels);
+	stats.num_samples = num_samples;
+	stats.decoded_samples = decoded_samples.load();
+	stats.sample_rate = sample_rate;
+	stats.bytes_per_sample = bytes_per_sample;
+	stats.channels = channels;
+	stats.float_samples = float_samples;
+	return stats;
+}
+
+AudioProviderMemoryStats AudioProvider::GetMemoryStats() const {
+	return BuildMemoryStats();
+}
+
+AudioProviderMemoryStats AudioProviderWrapper::GetMemoryStats() const {
+	auto stats = source ? source->GetMemoryStats() : AudioProvider::GetMemoryStats();
+	stats.logical_bytes = EstimateAudioBytes(num_samples, bytes_per_sample, channels);
+	stats.decoded_bytes = EstimateAudioBytes(decoded_samples.load(), bytes_per_sample, channels);
+	stats.num_samples = num_samples;
+	stats.decoded_samples = decoded_samples.load();
+	stats.sample_rate = sample_rate;
+	stats.bytes_per_sample = bytes_per_sample;
+	stats.channels = channels;
+	stats.float_samples = float_samples;
+	return stats;
+}
+
 void AudioProvider::FillBufferInt16Mono(int16_t* buf, int64_t start, int64_t count) const {
 	if (!float_samples && bytes_per_sample == 2 && channels == 1) {
 		FillBuffer(buf, start, count);

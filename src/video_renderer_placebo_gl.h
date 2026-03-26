@@ -37,6 +37,7 @@ class PlaceboRendererGL final : public IVideoRenderer {
 		bool flipped = false;
 		float shift_x = 0.0f;
 		float shift_y = 0.0f;
+		size_t estimated_bytes = 0;
 	};
 
 	placebo::runtime::Api const* api = nullptr;
@@ -57,6 +58,7 @@ class PlaceboRendererGL final : public IVideoRenderer {
 	int target_width = 0;
 	int target_height = 0;
 	unsigned int target_framebuffer = 0;
+	size_t target_texture_estimated_bytes = 0;
 	bool has_frame = false;
 
 	void EnsureInitialized();
@@ -71,6 +73,8 @@ public:
 	~PlaceboRendererGL() override;
 
 	bool SupportsDirectOverlay() const noexcept override { return false; }
+	char const* GetDebugName() const noexcept override { return "libplacebo"; }
+	size_t EstimateTextureBytes() const noexcept override;
 	std::vector<SourceFrameOutputMode> GetPreferredSourceModes() const override {
 		return { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
 	}

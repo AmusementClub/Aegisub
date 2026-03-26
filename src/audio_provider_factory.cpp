@@ -21,6 +21,7 @@
 #include "options.h"
 #include "ui_services.h"
 #include "utils.h"
+#include "wx_ui_services.h"
 #ifdef WITH_FFMS2
 #include "ffmpegsource_common.h"
 #endif
@@ -33,6 +34,8 @@
 #include <libaegisub/log.h>
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
+
+#include <wx/msgdlg.h>
 
 using namespace agi;
 

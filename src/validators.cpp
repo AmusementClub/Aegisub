@@ -21,6 +21,7 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/util.h>
 
+#include <wx/combo.h>
 #include <wx/combobox.h>
 #include <wx/spinctrl.h>
 #include <wx/textctrl.h>
@@ -193,6 +194,8 @@ bool StringBinder::TransferFromWindow() {
 		*value = from_wx(ctrl->GetValue());
 	else if (wxComboBox *ctrl = dynamic_cast<wxComboBox*>(window))
 		*value = from_wx(ctrl->GetValue());
+	else if (wxComboCtrl *ctrl = dynamic_cast<wxComboCtrl*>(window))
+		*value = from_wx(ctrl->GetValue());
 	else
 		throw agi::InternalError("Unsupported control type");
 	return true;
@@ -203,6 +206,8 @@ bool StringBinder::TransferToWindow() {
 	if (wxTextCtrl *ctrl = dynamic_cast<wxTextCtrl*>(window))
 		ctrl->SetValue(to_wx(*value));
 	else if (wxComboBox *ctrl = dynamic_cast<wxComboBox*>(window))
+		ctrl->SetValue(to_wx(*value));
+	else if (wxComboCtrl *ctrl = dynamic_cast<wxComboCtrl*>(window))
 		ctrl->SetValue(to_wx(*value));
 	else
 		throw agi::InternalError("Unsupported control type");

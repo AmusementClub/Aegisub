@@ -41,7 +41,9 @@
 #endif
 
 #include <libaegisub/hotkey.h>
+#include <libaegisub/fs_fwd.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/path.h>
 
 #include <algorithm>
 #include <unordered_set>
@@ -50,7 +52,10 @@
 
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
+#include <wx/dirdlg.h>
 #include <wx/event.h>
+#include <wx/filedlg.h>
+#include <wx/filename.h>
 #include <wx/listctrl.h>
 #include <wx/propgrid/advprops.h>
 #include <wx/propgrid/propgrid.h>
@@ -70,6 +75,92 @@ wxColour BlendColour(wxColour const& base, wxColour const& accent, int accent_pe
 		(base.Green() * base_percent + accent.Green() * accent_percent) / 100,
 		(base.Blue() * base_percent + accent.Blue() * accent_percent) / 100);
 }
+
+agi::fs::path FindExistingDialogDirectory(agi::fs::path path) {
+	if (path.empty())
+		return {};
+
+	if (std::filesystem::exists(path) && std::filesystem::is_directory(path))
+		return path;
+
+	if (std::filesystem::exists(path) && std::filesystem::is_regular_file(path))
+		path = path.parent_path();
+	else if (!path.has_extension())
+		path = path.parent_path().empty() ? path : path;
+	else
+		path = path.parent_path();
+
+	while (!path.empty() && !std::filesystem::exists(path))
+		path = path.parent_path();
+
+	return path;
+}
+
+class TokenizedDirProperty final : public wxLongStringProperty {
+public:
+	TokenizedDirProperty(wxString const& label, wxString const& name, wxString const& value)
+	: wxLongStringProperty(label, name, value) { }
+
+protected:
+	bool DisplayEditorDialog(wxPropertyGrid *pg, wxVariant& value) override {
+		auto const token_path = from_wx(value.GetString());
+		auto const current_path = config::path
+			? config::path->Decode(token_path)
+			: agi::fs::PathFromString(token_path);
+		wxDirDialog dlg(pg, _("Please choose the folder:"), FindExistingDialogDirectory(current_path).wstring());
+		if (dlg.ShowModal() != wxID_OK)
+			return false;
+
+		wxString selected = dlg.GetPath();
+		if (selected.empty())
+			return false;
+
+		auto const encoded = config::path
+			? config::path->Encode(agi::fs::PathFromString(from_wx(selected)))
+			: from_wx(selected);
+		value = to_wx(encoded);
+		return true;
+	}
+};
+
+class TokenizedFileProperty final : public wxLongStringProperty {
+	wxString wildcard;
+public:
+	TokenizedFileProperty(wxString const& label, wxString const& name, wxString const& value, wxString const& wildcard)
+	: wxLongStringProperty(label, name, value)
+	, wildcard(wildcard) { }
+
+protected:
+	bool DisplayEditorDialog(wxPropertyGrid *pg, wxVariant& value) override {
+		auto const token_path = from_wx(value.GetString());
+		auto const current_path = config::path
+			? config::path->Decode(token_path)
+			: agi::fs::PathFromString(token_path);
+		wxFileName current(current_path.wstring());
+		wxString dir;
+		wxString file;
+		auto const existing_dir = FindExistingDialogDirectory(current_path);
+		if (!existing_dir.empty())
+			dir = existing_dir.wstring();
+		if (current.IsOk()) {
+			file = current.GetFullName();
+		}
+
+		wxFileDialog dlg(pg, _("Please choose the file:"), dir, file, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST);
+		if (dlg.ShowModal() != wxID_OK)
+			return false;
+
+		wxString selected = dlg.GetPath();
+		if (selected.empty())
+			return false;
+
+		auto const encoded = config::path
+			? config::path->Encode(agi::fs::PathFromString(from_wx(selected)))
+			: from_wx(selected);
+		value = to_wx(encoded);
+		return true;
+	}
+};
 
 class PropertyGridOptionBinder {
 	Preferences *prefs;
@@ -232,7 +323,7 @@ public:
 	wxPGProperty *AddDirectory(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new wxDirProperty(label, opt_name, to_wx(opt->GetString())));
+		auto *prop = grid->Append(new TokenizedDirProperty(label, opt_name, to_wx(opt->GetString())));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
@@ -256,8 +347,7 @@ public:
 	wxPGProperty *AddFile(wxString const& label, const char *opt_name, wxString const& wildcard) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new wxFileProperty(label, opt_name, to_wx(opt->GetString())));
-		prop->SetAttribute(wxPG_FILE_WILDCARD, wildcard);
+		auto *prop = grid->Append(new TokenizedFileProperty(label, opt_name, to_wx(opt->GetString()), wildcard));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));

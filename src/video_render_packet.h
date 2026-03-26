@@ -26,6 +26,7 @@ struct VideoRenderPacket {
 	std::shared_ptr<VideoFrame> composited_frame_storage;
 	std::shared_ptr<SubtitleOverlayStorage> subtitle_overlay_storage;
 
+	int frame_number = -1;
 	SourceFrame source_frame;
 	SubtitleOverlay subtitle_overlay;
 	bool has_subtitle_overlay = false;

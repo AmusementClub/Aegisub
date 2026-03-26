@@ -257,6 +257,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 
 VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double time, bool raw, bool force_bgra_frame) {
 	VideoRenderPacket packet;
+	packet.frame_number = frame_number;
 
 	std::shared_ptr<VideoFrame> frame;
 	bool native_frame_needs_display_transform_fallback = false;

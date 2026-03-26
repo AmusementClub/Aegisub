@@ -570,6 +570,9 @@ void VideoDisplay::DoRender() try {
 			has_displayed_packet = true;
 			pending_packet = { };
 			has_pending_packet = false;
+			FramePresented(displayed_packet.frame_number);
+			auto ui = con->GetUI();
+			ui.videoFramePresented(displayed_packet.frame_number);
 			if (perf_trace::ShouldSampleVideoMemory(first_presented_frame)) {
 				auto snapshot = BuildVideoMemorySnapshot(con, this);
 				perf_trace::ObserveVideoMemorySnapshot("frame_presented", snapshot, first_presented_frame);

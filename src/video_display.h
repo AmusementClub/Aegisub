@@ -64,6 +64,7 @@ namespace agi {
 class VideoDisplay final : public wxGLCanvas {
 	/// Signals the display is connected to
 	std::vector<agi::signal::Connection> connections;
+	agi::signal::Signal<int> FramePresented;
 
 	const agi::OptionValue* autohideTools;
 
@@ -180,6 +181,7 @@ public:
 	void Render();
 	wxImage GetFrameImage(bool raw);
 	VideoDisplayMemoryStats CollectMemoryStats() const;
+	DEFINE_SIGNAL_ADDERS(FramePresented, AddFramePresentedListener)
 
 	/// @brief Set the zoom level
 	/// @param value The new zoom level

@@ -20,6 +20,7 @@
 #include <vector>
 
 #include <libaegisub/fs_fwd.h>
+#include <libaegisub/signal.h>
 
 class AssFile;
 class AudioBox;
@@ -125,8 +126,11 @@ struct ContextUiSession {
 	std::unique_ptr<DialogManager>& dialog;
 	FrameMain *&frame;
 	VideoDisplay *&videoDisplay;
+	agi::signal::Signal<int>& videoFramePresented;
 
 	explicit ContextUiSession(Context& context);
+
+	DEFINE_SIGNAL_ADDERS(videoFramePresented, AddVideoFramePresentedListener)
 };
 
 struct ConstContextUiSession {
@@ -139,6 +143,7 @@ struct ConstContextUiSession {
 	std::unique_ptr<DialogManager> const& dialog;
 	FrameMain *const& frame;
 	VideoDisplay *const& videoDisplay;
+	agi::signal::Signal<int> const& videoFramePresented;
 
 	explicit ConstContextUiSession(Context const& context);
 };
@@ -180,6 +185,7 @@ struct Context {
 	std::unique_ptr<DialogManager> dialog;
 	FrameMain *frame = nullptr;
 	VideoDisplay *videoDisplay = nullptr;
+	agi::signal::Signal<int> videoFramePresented;
 
 	Context();
 	~Context();

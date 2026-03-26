@@ -176,6 +176,21 @@ public:
 		});
 	}
 
+	void AddDouble(wxString const& label, const char *opt_name, double min, double max, double step, int precision = 2) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		auto *prop = grid->Append(new wxFloatProperty(label, opt_name, opt->GetDouble()));
+		prop->SetAttribute(wxPG_ATTR_MIN, min);
+		prop->SetAttribute(wxPG_ATTR_MAX, max);
+		prop->SetAttribute(wxPG_ATTR_SPINCTRL_STEP, step);
+		prop->SetAttribute(wxPG_FLOAT_PRECISION, precision);
+		prop->SetEditor("SpinCtrl");
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			QueueOptionChange<agi::OptionValueDouble>(name, value.GetDouble());
+		});
+	}
+
 	void AddDirectory(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
@@ -183,6 +198,18 @@ public:
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
+		});
+	}
+
+	void AddColour(wxString const& label, const char *opt_name) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		auto *prop = grid->Append(new wxColourProperty(label, opt_name, to_wx(opt->GetColor())));
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			wxColourPropertyValue colour;
+			colour << value;
+			QueueOptionChange<agi::OptionValueColor>(name, from_wx(colour.m_colour));
 		});
 	}
 
@@ -453,73 +480,63 @@ void BuildInterfacePage(OptionPage *p) {
 
 /// Interface Colours preferences subpage
 void BuildInterfaceColoursPage(OptionPage *p) {
-	delete p->sizer;
-	wxSizer *main_sizer = new wxBoxSizer(wxHORIZONTAL);
+	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
+	auto *grid = binder->GetGrid();
+	binder->BindEvents(binder);
 
-	p->sizer = new wxBoxSizer(wxVERTICAL);
-	main_sizer->Add(p->sizer, wxEXPAND);
+	binder->AddCategory(_("Audio Display"));
+	binder->AddColour(_("Play cursor"), "Colour/Audio Display/Play Cursor");
+	binder->AddColour(_("Line boundary start"), "Colour/Audio Display/Line boundary Start");
+	binder->AddColour(_("Line boundary end"), "Colour/Audio Display/Line boundary End");
+	binder->AddColour(_("Line boundary inactive line"), "Colour/Audio Display/Line Boundary Inactive Line");
+	binder->AddColour(_("Syllable boundaries"), "Colour/Audio Display/Syllable Boundaries");
+	binder->AddColour(_("Seconds boundaries"), "Colour/Audio Display/Seconds Line");
 
-	auto audio = p->PageSizer(_("Audio Display"));
-	p->OptionAdd(audio, _("Play cursor"), "Colour/Audio Display/Play Cursor");
-	p->OptionAdd(audio, _("Line boundary start"), "Colour/Audio Display/Line boundary Start");
-	p->OptionAdd(audio, _("Line boundary end"), "Colour/Audio Display/Line boundary End");
-	p->OptionAdd(audio, _("Line boundary inactive line"), "Colour/Audio Display/Line Boundary Inactive Line");
-	p->OptionAdd(audio, _("Syllable boundaries"), "Colour/Audio Display/Syllable Boundaries");
-	p->OptionAdd(audio, _("Seconds boundaries"), "Colour/Audio Display/Seconds Line");
-
-	auto syntax = p->PageSizer(_("Syntax Highlighting"));
-	p->OptionAdd(syntax, _("Background"), "Colour/Subtitle/Background");
-	p->OptionAdd(syntax, _("Normal"), "Colour/Subtitle/Syntax/Normal");
+	binder->AddCategory(_("Syntax Highlighting"));
+	binder->AddColour(_("Background"), "Colour/Subtitle/Background");
+	binder->AddColour(_("Normal"), "Colour/Subtitle/Syntax/Normal");
 #ifdef WITH_WXSTC
-	p->OptionAdd(syntax, _("Comments"), "Colour/Subtitle/Syntax/Comment");
-	p->OptionAdd(syntax, _("Drawings"), "Colour/Subtitle/Syntax/Drawing");
-	p->OptionAdd(syntax, _("Brackets"), "Colour/Subtitle/Syntax/Brackets");
-	p->OptionAdd(syntax, _("Slashes and Parentheses"), "Colour/Subtitle/Syntax/Slashes");
-	p->OptionAdd(syntax, _("Tags"), "Colour/Subtitle/Syntax/Tags");
-	p->OptionAdd(syntax, _("Parameters"), "Colour/Subtitle/Syntax/Parameters");
-	p->OptionAdd(syntax, _("Error"), "Colour/Subtitle/Syntax/Error");
-	p->OptionAdd(syntax, _("Error Background"), "Colour/Subtitle/Syntax/Background/Error");
-	p->OptionAdd(syntax, _("Line Break"), "Colour/Subtitle/Syntax/Line Break");
-	p->OptionAdd(syntax, _("Karaoke templates"), "Colour/Subtitle/Syntax/Karaoke Template");
-	p->OptionAdd(syntax, _("Karaoke variables"), "Colour/Subtitle/Syntax/Karaoke Variable");
+	binder->AddColour(_("Comments"), "Colour/Subtitle/Syntax/Comment");
+	binder->AddColour(_("Drawings"), "Colour/Subtitle/Syntax/Drawing");
+	binder->AddColour(_("Brackets"), "Colour/Subtitle/Syntax/Brackets");
+	binder->AddColour(_("Slashes and Parentheses"), "Colour/Subtitle/Syntax/Slashes");
+	binder->AddColour(_("Tags"), "Colour/Subtitle/Syntax/Tags");
+	binder->AddColour(_("Parameters"), "Colour/Subtitle/Syntax/Parameters");
+	binder->AddColour(_("Error"), "Colour/Subtitle/Syntax/Error");
+	binder->AddColour(_("Error Background"), "Colour/Subtitle/Syntax/Background/Error");
+	binder->AddColour(_("Line Break"), "Colour/Subtitle/Syntax/Line Break");
+	binder->AddColour(_("Karaoke templates"), "Colour/Subtitle/Syntax/Karaoke Template");
+	binder->AddColour(_("Karaoke variables"), "Colour/Subtitle/Syntax/Karaoke Variable");
 #endif
 
-	p->sizer = new wxBoxSizer(wxVERTICAL);
-	main_sizer->AddSpacer(5);
-	main_sizer->Add(p->sizer, wxEXPAND);
-
-	auto color_schemes = p->PageSizer(_("Audio Color Schemes"));
+	binder->AddCategory(_("Audio Color Schemes"));
 	wxArrayString schemes = to_wx(OPT_GET("Audio/Colour Schemes")->GetListString());
-	p->OptionChoice(color_schemes, _("Spectrum"), schemes, "Colour/Audio Display/Spectrum");
-	p->OptionChoice(color_schemes, _("Waveform"), schemes, "Colour/Audio Display/Waveform");
+	binder->AddChoice(_("Spectrum"), schemes, "Colour/Audio Display/Spectrum");
+	binder->AddChoice(_("Waveform"), schemes, "Colour/Audio Display/Waveform");
 
-	auto grid = p->PageSizer(_("Subtitle Grid"));
-	p->OptionAdd(grid, _("Standard foreground"), "Colour/Subtitle Grid/Standard");
-	p->OptionAdd(grid, _("Standard background"), "Colour/Subtitle Grid/Background/Background");
-	p->OptionAdd(grid, _("Selection foreground"), "Colour/Subtitle Grid/Selection");
-	p->OptionAdd(grid, _("Selection background"), "Colour/Subtitle Grid/Background/Selection");
-	p->OptionAdd(grid, _("Collision foreground"), "Colour/Subtitle Grid/Collision");
-	p->OptionAdd(grid, _("In frame background"), "Colour/Subtitle Grid/Background/Inframe");
-	p->OptionAdd(grid, _("Comment background"), "Colour/Subtitle Grid/Background/Comment");
-	p->OptionAdd(grid, _("Selected comment background"), "Colour/Subtitle Grid/Background/Selected Comment");
-	p->OptionAdd(grid, _("Header background"), "Colour/Subtitle Grid/Header");
-	p->OptionAdd(grid, _("Left Column"), "Colour/Subtitle Grid/Left Column");
-	p->OptionAdd(grid, _("Active Line Border"), "Colour/Subtitle Grid/Active Border");
-	p->OptionAdd(grid, _("Lines"), "Colour/Subtitle Grid/Lines");
-	p->OptionAdd(grid, _("CPS Error"), "Colour/Subtitle Grid/CPS Error");
+	binder->AddCategory(_("Subtitle Grid"));
+	binder->AddColour(_("Standard foreground"), "Colour/Subtitle Grid/Standard");
+	binder->AddColour(_("Standard background"), "Colour/Subtitle Grid/Background/Background");
+	binder->AddColour(_("Selection foreground"), "Colour/Subtitle Grid/Selection");
+	binder->AddColour(_("Selection background"), "Colour/Subtitle Grid/Background/Selection");
+	binder->AddColour(_("Collision foreground"), "Colour/Subtitle Grid/Collision");
+	binder->AddColour(_("In frame background"), "Colour/Subtitle Grid/Background/Inframe");
+	binder->AddColour(_("Comment background"), "Colour/Subtitle Grid/Background/Comment");
+	binder->AddColour(_("Selected comment background"), "Colour/Subtitle Grid/Background/Selected Comment");
+	binder->AddColour(_("Header background"), "Colour/Subtitle Grid/Header");
+	binder->AddColour(_("Left Column"), "Colour/Subtitle Grid/Left Column");
+	binder->AddColour(_("Active Line Border"), "Colour/Subtitle Grid/Active Border");
+	binder->AddColour(_("Lines"), "Colour/Subtitle Grid/Lines");
+	binder->AddColour(_("CPS Error"), "Colour/Subtitle Grid/CPS Error");
 
-	auto visual_tools = p->PageSizer(_("Visual Typesetting Tools"));
-	p->OptionAdd(visual_tools, _("Primary Lines"), "Colour/Visual Tools/Lines Primary");
-	p->OptionAdd(visual_tools, _("Secondary Lines"), "Colour/Visual Tools/Lines Secondary");
-	p->OptionAdd(visual_tools, _("Primary Highlight"), "Colour/Visual Tools/Highlight Primary");
-	p->OptionAdd(visual_tools, _("Secondary Highlight"), "Colour/Visual Tools/Highlight Secondary");
+	binder->AddCategory(_("Visual Typesetting Tools"));
+	binder->AddColour(_("Primary Lines"), "Colour/Visual Tools/Lines Primary");
+	binder->AddColour(_("Secondary Lines"), "Colour/Visual Tools/Lines Secondary");
+	binder->AddColour(_("Primary Highlight"), "Colour/Visual Tools/Highlight Primary");
+	binder->AddColour(_("Secondary Highlight"), "Colour/Visual Tools/Highlight Secondary");
+	binder->AddDouble(_("Shaded Area"), "Colour/Visual Tools/Shaded Area Alpha", 0.0, 1.0, 0.1, 2);
 
-	// Separate sizer to prevent the colors in the visual tools section from getting resized
-	auto visual_tools_alpha = p->PageSizer(_("Visual Typesetting Tools Alpha"));
-	p->OptionAdd(visual_tools_alpha, _("Shaded Area"), "Colour/Visual Tools/Shaded Area Alpha", 0, 1, 0.1);
-
-	p->sizer = main_sizer;
-
+	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
 }
 

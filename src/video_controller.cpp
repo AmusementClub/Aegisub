@@ -68,6 +68,7 @@ void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 	Stop();
 	provider = new_provider;
 	color_matrix = provider ? provider->GetColorSpace() : "";
+	playback_uses_audio_authority = false;
 }
 
 void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
@@ -183,6 +184,7 @@ void VideoController::Play() {
 	end_frame = provider->GetFrameCount() - 1;
 
 	core.audioController->PlayToEnd(start_ms);
+	playback_uses_audio_authority = core.audioController->IsPlaying();
 
 	playback_start_time = std::chrono::steady_clock::now();
 	perf_trace::ResetVideoPlaybackInterval();
@@ -198,6 +200,7 @@ void VideoController::PlayLine() {
 	if (!curline) return;
 
 	core.audioController->PlayRange(TimeRange(curline->Start, curline->End));
+	playback_uses_audio_authority = core.audioController->IsPlaying();
 
 	// Round-trip conversion to convert start to exact
 	int startFrame = FrameAtTime(core.selectionController->GetActiveLine()->Start, agi::vfr::START);
@@ -217,6 +220,7 @@ void VideoController::Stop() {
 		perf_trace::TracePlayStop(frame_n);
 		perf_trace::ResetVideoPlaybackInterval();
 		playback.Stop();
+		playback_uses_audio_authority = false;
 		auto core = context->GetCore();
 		core.audioController->Stop();
 	}
@@ -224,7 +228,18 @@ void VideoController::Stop() {
 
 void VideoController::OnPlayTimer(wxTimerEvent &) {
 	using namespace std::chrono;
-	int next_frame = FrameAtTime(start_ms + duration_cast<milliseconds>(steady_clock::now() - playback_start_time).count());
+	auto core = context->GetCore();
+
+	int authority_time_ms = start_ms + duration_cast<milliseconds>(steady_clock::now() - playback_start_time).count();
+	if (playback_uses_audio_authority) {
+		if (!core.audioController->IsPlaying()) {
+			Stop();
+			return;
+		}
+		authority_time_ms = core.audioController->GetPlaybackPosition();
+	}
+
+	int next_frame = FrameAtTime(authority_time_ms);
 	perf_trace::ObserveVideoPlaybackTick(next_frame);
 	if (next_frame == frame_n) return;
 

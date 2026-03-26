@@ -87,6 +87,7 @@ class VideoController final : public wxEvtHandler {
 
 	/// The last frame to play if video is currently playing
 	int end_frame = 0;
+	bool playback_uses_audio_authority = false;
 
 	/// The frame number which was last requested from the video provider,
 	/// which may not be the same thing as the currently displayed frame

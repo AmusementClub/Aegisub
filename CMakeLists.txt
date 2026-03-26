@@ -712,7 +712,7 @@ find_package(ICU REQUIRED uc)
 target_link_libraries(libaegisub PRIVATE "ICU::uc")
 target_link_libraries(Aegisub PRIVATE "ICU::uc")
 
-find_package(wxWidgets REQUIRED adv base core gl stc xml)
+find_package(wxWidgets REQUIRED adv base core gl propgrid stc xml)
 option(WITH_WXSTC "Enable wxStyledTextCtrl support" ON)
 if(WITH_WXSTC)
     target_compile_definitions(Aegisub PRIVATE "WITH_WXSTC")

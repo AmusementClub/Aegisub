@@ -40,14 +40,19 @@
 #endif
 
 #include <libaegisub/hotkey.h>
+#include <libaegisub/make_unique.h>
 
+#include <algorithm>
 #include <unordered_set>
+#include <unordered_map>
 #include <chrono>
 
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
 #include <wx/event.h>
 #include <wx/listctrl.h>
+#include <wx/propgrid/advprops.h>
+#include <wx/propgrid/propgrid.h>
 #include <wx/srchctrl.h>
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
@@ -55,6 +60,153 @@
 #include <wx/treebook.h>
 
 namespace {
+class PropertyGridOptionBinder {
+	Preferences *prefs;
+	wxPropertyGrid *grid;
+	std::unordered_map<wxPGProperty *, std::function<void(wxVariant const&)>> updaters;
+
+	template<typename OptionValue, typename Value>
+	void QueueOptionChange(std::string const& name, Value value) {
+		prefs->SetOption(agi::make_unique<OptionValue>(name, std::move(value)));
+	}
+
+	wxPGChoices MakeChoices(wxArrayString const& choices) const {
+		wxPGChoices pg_choices;
+		for (unsigned i = 0; i < choices.size(); ++i)
+			pg_choices.Add(choices[i], i);
+		return pg_choices;
+	}
+
+	int ClampChoiceSelection(int selected, size_t count) const {
+		return count ? std::clamp<int>(selected, 0, static_cast<int>(count) - 1) : 0;
+	}
+
+public:
+	explicit PropertyGridOptionBinder(OptionPage *page)
+	: prefs(page->parent)
+	{
+		static bool editors_registered = false;
+		if (!editors_registered) {
+			wxPropertyGrid::RegisterAdditionalEditors();
+			editors_registered = true;
+		}
+
+		grid = new wxPropertyGrid(
+			page,
+			wxID_ANY,
+			wxDefaultPosition,
+			wxDefaultSize,
+			wxPG_BOLD_MODIFIED | wxPG_SPLITTER_AUTO_CENTER | wxPG_TOOLTIPS);
+		grid->SetExtraStyle(wxPG_EX_HELP_AS_TOOLTIPS);
+		grid->SetMinSize(page->FromDIP(wxSize(520, 360)));
+		grid->Bind(wxEVT_PG_CHANGED, [this](wxPropertyGridEvent& evt) {
+			auto it = updaters.find(evt.GetProperty());
+			if (it != updaters.end())
+				it->second(evt.GetPropertyValue());
+			evt.Skip();
+		});
+	}
+
+	wxPropertyGrid *GetGrid() const { return grid; }
+
+	void AddCategory(wxString const& label) {
+		grid->Append(new wxPropertyCategory(label));
+	}
+
+	void AddBool(wxString const& label, const char *opt_name) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		auto *prop = grid->Append(new wxBoolProperty(label, opt_name, opt->GetBool()));
+		prop->SetAttribute(wxPG_BOOL_USE_CHECKBOX, true);
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			QueueOptionChange<agi::OptionValueBool>(name, value.GetBool());
+		});
+	}
+
+	void AddInt(wxString const& label, const char *opt_name, int min, int max) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		auto *prop = grid->Append(new wxIntProperty(label, opt_name, opt->GetInt()));
+		prop->SetAttribute(wxPG_ATTR_MIN, static_cast<long>(min));
+		prop->SetAttribute(wxPG_ATTR_MAX, static_cast<long>(max));
+		prop->SetAttribute(wxPG_ATTR_SPINCTRL_STEP, 1L);
+		prop->SetEditor("SpinCtrl");
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
+		});
+	}
+
+	void AddDirectory(wxString const& label, const char *opt_name) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		auto *prop = grid->Append(new wxDirProperty(label, opt_name, to_wx(opt->GetString())));
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
+		});
+	}
+
+	void AddChoice(wxString const& label, wxArrayString const& choices, const char *opt_name) {
+		auto opt = OPT_GET(opt_name);
+		if (opt->GetType() == agi::OptionType::String) {
+			std::vector<std::pair<std::string, std::string>> mapped_choices;
+			mapped_choices.reserve(choices.size());
+			for (auto const& choice : choices)
+				mapped_choices.emplace_back(from_wx(choice), from_wx(choice));
+			AddChoice(label, mapped_choices, opt_name);
+			return;
+		}
+
+		prefs->AddChangeableOption(opt_name);
+		int const selected = ClampChoiceSelection(opt->GetInt(), choices.size());
+		auto pg_choices = MakeChoices(choices);
+		auto *prop = grid->Append(new wxEnumProperty(label, opt_name, pg_choices, selected));
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
+		});
+	}
+
+	void AddChoice(wxString const& label, std::vector<std::pair<std::string, std::string>> const& choices, const char *opt_name) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		wxPGChoices pg_choices;
+		int selected = 0;
+
+		for (unsigned i = 0; i < choices.size(); ++i) {
+			pg_choices.Add(to_wx(choices[i].first), i);
+			if (opt->GetType() == agi::OptionType::String && choices[i].second == opt->GetString())
+				selected = i;
+		}
+
+		if (opt->GetType() == agi::OptionType::Int)
+			selected = ClampChoiceSelection(opt->GetInt(), choices.size());
+
+		auto *prop = grid->Append(new wxEnumProperty(label, opt_name, pg_choices, selected));
+		if (opt->GetType() == agi::OptionType::Int) {
+			std::string name = opt_name;
+			updaters.emplace(prop, [this, name](wxVariant const& value) {
+				QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
+			});
+			return;
+		}
+
+		std::string name = opt_name;
+		std::vector<std::string> values;
+		values.reserve(choices.size());
+		for (auto const& choice : choices)
+			values.push_back(choice.second);
+		updaters.emplace(prop, [this, name, values = std::move(values)](wxVariant const& value) {
+			int const index = static_cast<int>(value.GetLong());
+			if (index < 0 || index >= static_cast<int>(values.size()))
+				return;
+			QueueOptionChange<agi::OptionValueString>(name, values[index]);
+		});
+	}
+};
+
 /// General preferences page
 void BuildGeneralPage(OptionPage *p) {
 	auto general = p->PageSizer(_("General"));
@@ -374,63 +526,66 @@ void BuildAdvancedPage(OptionPage *p) {
 
 /// Advanced Audio preferences subpage
 void BuildAdvancedAudioPage(OptionPage *p) {
-	auto expert = p->PageSizer(_("Expert"));
+	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
+	auto *grid = binder->GetGrid();
 
-	p->OptionChoice(expert, _("Audio provider"), GetAudioProviderChoices(), "Audio/Provider");
+	binder->AddCategory(_("Expert"));
+	binder->AddChoice(_("Audio provider"), GetAudioProviderChoices(), "Audio/Provider");
 
 	wxArrayString apl_choice = to_wx(AudioPlayerFactory::GetClasses());
-	p->OptionChoice(expert, _("Audio player"), apl_choice, "Audio/Player");
+	binder->AddChoice(_("Audio player"), apl_choice, "Audio/Player");
 
-	auto cache = p->PageSizer(_("Cache"));
+	binder->AddCategory(_("Cache"));
 	const wxString ct_arr[3] = { _("None (Not recommended with Avisynth)"), _("RAM"), _("Hard Disk") };
 	wxArrayString ct_choice(3, ct_arr);
-	p->OptionChoice(cache, _("Cache type"), ct_choice, "Audio/Cache/Type");
-	p->OptionBrowse(cache, _("Path"), "Audio/Cache/HD/Location");
+	binder->AddChoice(_("Cache type"), ct_choice, "Audio/Cache/Type");
+	binder->AddDirectory(_("Path"), "Audio/Cache/HD/Location");
 
-	auto spectrum = p->PageSizer(_("Spectrum Cache"));
-	p->OptionAdd(spectrum, _("Cache memory max (MB)"), "Audio/Renderer/Spectrum/Memory Max", 2, 1024);
+	binder->AddCategory(_("Spectrum Cache"));
+	binder->AddInt(_("Cache memory max (MB)"), "Audio/Renderer/Spectrum/Memory Max", 2, 1024);
 
 #ifdef WITH_AVISYNTH
-	auto avisynth = p->PageSizer("Avisynth");
+	binder->AddCategory("Avisynth");
 	const wxString adm_arr[4] = { "None", "ConvertToMono", "GetLeftChannel", "GetRightChannel" };
 	wxArrayString adm_choice(4, adm_arr);
-	p->OptionChoice(avisynth, _("Avisynth down-mixer"), adm_choice, "Audio/Downmixer");
-	p->OptionAdd(avisynth, _("Force sample rate"), "Provider/Audio/AVS/Sample Rate");
+	binder->AddChoice(_("Avisynth down-mixer"), adm_choice, "Audio/Downmixer");
+	binder->AddInt(_("Force sample rate"), "Provider/Audio/AVS/Sample Rate", 0, INT_MAX);
 #endif
 
 #ifdef WITH_FFMS2
-	auto ffms = p->PageSizer("FFmpegSource");
+	binder->AddCategory("FFmpegSource");
 
 	const wxString error_modes[] = { _("Ignore"), _("Clear"), _("Stop"), _("Abort") };
 	wxArrayString error_modes_choice(4, error_modes);
-	p->OptionChoice(ffms, _("Audio indexing error handling mode"), error_modes_choice, "Provider/Audio/FFmpegSource/Decode Error Handling");
+	binder->AddChoice(_("Audio indexing error handling mode"), error_modes_choice, "Provider/Audio/FFmpegSource/Decode Error Handling");
 
-	p->OptionAdd(ffms, _("Always index all audio tracks"), "Provider/FFmpegSource/Index All Tracks");
-	p->OptionAdd(ffms, _("Downmix to 16bit mono audio"), "Provider/Audio/FFmpegSource/Downmix");
+	binder->AddBool(_("Always index all audio tracks"), "Provider/FFmpegSource/Index All Tracks");
+	binder->AddBool(_("Downmix to 16bit mono audio"), "Provider/Audio/FFmpegSource/Downmix");
 #endif
 
 #ifdef WITH_PORTAUDIO
-	auto portaudio = p->PageSizer("Portaudio");
-	p->OptionChoice(portaudio, _("Portaudio device"), PortAudioPlayer::GetOutputDevices(), "Player/Audio/PortAudio/Device Name");
+	binder->AddCategory("Portaudio");
+	binder->AddChoice(_("Portaudio device"), PortAudioPlayer::GetOutputDevices(), "Player/Audio/PortAudio/Device Name");
 #endif
 
 #ifdef WITH_OSS
-	auto oss = p->PageSizer("OSS");
-	p->OptionBrowse(oss, _("OSS Device"), "Player/Audio/OSS/Device");
+	binder->AddCategory("OSS");
+	binder->AddDirectory(_("OSS Device"), "Player/Audio/OSS/Device");
 #endif
 
 #if defined(WITH_DIRECTSOUND) && defined(WITH_XAUDIO2)
-	auto dsound = p->PageSizer("DirectSound / XAudio2");
+	binder->AddCategory("DirectSound / XAudio2");
 #elif defined(WITH_DIRECTSOUND)
-	auto dsound = p->PageSizer("DirectSound");
+	binder->AddCategory("DirectSound");
 #elif defined(WITH_XAUDIO2)
-	auto dsound = p->PageSizer("XAudio2");
+	binder->AddCategory("XAudio2");
 #endif
 #if defined(WITH_DIRECTSOUND) || defined(WITH_XAUDIO2)
-	p->OptionAdd(dsound, _("Buffer latency"), "Player/Audio/DirectSound/Buffer Latency", 1, 1000);
-	p->OptionAdd(dsound, _("Buffer length"), "Player/Audio/DirectSound/Buffer Length", 1, 100);
+	binder->AddInt(_("Buffer latency"), "Player/Audio/DirectSound/Buffer Latency", 1, 1000);
+	binder->AddInt(_("Buffer length"), "Player/Audio/DirectSound/Buffer Length", 1, 100);
 #endif
 
+	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
 }
 

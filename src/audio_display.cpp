@@ -1519,10 +1519,11 @@ void AudioDisplay::OnAudioOpen(agi::AudioProvider *provider)
 	{
 		if (connections.empty())
 		{
+			auto core = context->GetCore();
 			connections = agi::signal::make_vector({
 				controller->AddPlaybackPositionListener(&AudioDisplay::OnPlaybackPosition, this),
 				controller->AddPlaybackStopListener(&AudioDisplay::RemoveTrackCursor, this),
-				context->videoController->AddSeekListener(&AudioDisplay::OnVideoSeek, this),
+				core.videoController->AddSeekListener(&AudioDisplay::OnVideoSeek, this),
 				controller->AddTimingControllerListener(&AudioDisplay::OnTimingController, this),
 				OPT_SUB("Audio/Spectrum", &AudioDisplay::ReloadRenderingSettings, this),
 				OPT_SUB("Audio/Display/Waveform Style", &AudioDisplay::ReloadRenderingSettings, this),
@@ -1586,12 +1587,16 @@ void AudioDisplay::OnPlaybackPosition(int ms)
 
 void AudioDisplay::OnVideoSeek(int frame)
 {
-	if (!provider || !context || !context->videoController)
+	if (!provider || !context || controller->IsPlaying())
 		return;
 
-	// Video playback/seek events can update the timing cursor even when audio playback
-	// callbacks are not active.
-	const int ms = context->videoController->TimeAtFrame(frame, agi::vfr::EXACT);
+	auto core = context->GetCore();
+	if (!core.project->VideoProvider())
+		return;
+
+	// During continuous playback, the audio transport owns the main track cursor.
+	// Video seek only drives paused-state navigation feedback.
+	const int ms = core.videoController->TimeAtFrame(frame, agi::vfr::EXACT);
 	SetTrackCursor(AbsoluteXFromTime(ms), false);
 }
 

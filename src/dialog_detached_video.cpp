@@ -54,23 +54,26 @@
 #include <wx/display.h> /// Must be included last.
 
 DialogDetachedVideo::DialogDetachedVideo(agi::Context *context)
-: wxDialog(context->parent, -1, wxS("Detached Video"), wxDefaultPosition, wxSize(400,300), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX | wxMINIMIZE_BOX | wxWANTS_CHARS)
+: wxDialog(context->GetUI().parent, -1, wxS("Detached Video"), wxDefaultPosition, wxSize(400,300), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX | wxMINIMIZE_BOX | wxWANTS_CHARS)
 , context(context)
-, old_display(context->videoDisplay)
-, old_slider(context->videoSlider)
-, video_open(context->project->AddVideoProviderListener(&DialogDetachedVideo::OnVideoOpen, this))
+, old_display(context->GetUI().videoDisplay)
+, old_slider(context->GetUI().videoSlider)
+, video_open(context->GetCore().project->AddVideoProviderListener(&DialogDetachedVideo::OnVideoOpen, this))
 {
+	auto core = context->GetCore();
+	auto ui = context->GetUI();
+
 	SetSize(FromDIP(wxSize(400, 300)));
 	// Set obscure stuff
 	SetExtraStyle((GetExtraStyle() & ~wxWS_EX_BLOCK_EVENTS) | wxWS_EX_PROCESS_UI_UPDATES);
 
-	SetTitle(fmt_tl("Video: %s", context->project->VideoName().filename()));
+	SetTitle(fmt_tl("Video: %s", core.project->VideoName().filename()));
 
 	old_display->Unload();
 
 	// Video area;
 	auto videoBox = new VideoBox(this, true, context);
-	context->videoDisplay->SetMinClientSize(old_display->GetClientSize());
+	ui.videoDisplay->SetMinClientSize(old_display->GetClientSize());
 	videoBox->Layout();
 
 	// Set sizer
@@ -79,7 +82,7 @@ DialogDetachedVideo::DialogDetachedVideo(agi::Context *context)
 	SetSizerAndFit(mainSizer);
 
 	// Ensure we can grow smaller, without these the window is locked to at least the initial size
-	context->videoDisplay->SetMinSize(wxSize(1,1));
+	ui.videoDisplay->SetMinSize(wxSize(1,1));
 	videoBox->SetMinSize(wxSize(1,1));
 	SetMinSize(wxSize(1,1));
 
@@ -105,14 +108,17 @@ DialogDetachedVideo::DialogDetachedVideo(agi::Context *context)
 DialogDetachedVideo::~DialogDetachedVideo() { }
 
 void DialogDetachedVideo::OnClose(wxCloseEvent &evt) {
-	context->videoDisplay->Destroy();
+	auto core = context->GetCore();
+	auto ui = context->GetUI();
 
-	context->videoDisplay = old_display;
-	context->videoSlider = old_slider;
+	ui.videoDisplay->Destroy();
+
+	ui.videoDisplay = old_display;
+	ui.videoSlider = old_slider;
 
 	OPT_SET("Video/Detached/Enabled")->SetBool(false);
 
-	context->videoController->JumpToFrame(context->videoController->GetFrameN());
+	core.videoController->JumpToFrame(core.videoController->GetFrameN());
 
 	evt.Skip();
 }
@@ -131,8 +137,10 @@ void DialogDetachedVideo::OnKeyDown(wxKeyEvent &evt) {
 }
 
 void DialogDetachedVideo::OnVideoOpen(AsyncVideoProvider *new_provider) {
+	auto core = context->GetCore();
+
 	if (new_provider)
-		SetTitle(fmt_tl("Video: %s", context->project->VideoName().filename()));
+		SetTitle(fmt_tl("Video: %s", core.project->VideoName().filename()));
 	else {
 		Close();
 		OPT_SET("Video/Detached/Enabled")->SetBool(true);

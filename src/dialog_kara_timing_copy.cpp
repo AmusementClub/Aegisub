@@ -467,8 +467,8 @@ public:
 };
 
 DialogKanjiTimer::DialogKanjiTimer(agi::Context *c)
-: wxDialog(c->parent, -1, _("Kanji timing"))
-, subs(c->ass.get())
+: wxDialog(c->GetUI().parent, -1, _("Kanji timing"))
+, subs(c->GetCore().ass.get())
 {
 	SetIcon(GETICON(kara_timing_copier_16));
 

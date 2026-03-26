@@ -186,6 +186,17 @@ public:
 		});
 	}
 
+	void AddFile(wxString const& label, const char *opt_name, wxString const& wildcard) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		auto *prop = grid->Append(new wxFileProperty(label, opt_name, to_wx(opt->GetString())));
+		prop->SetAttribute(wxPG_FILE_WILDCARD, wildcard);
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
+		});
+	}
+
 	void AddChoice(wxString const& label, wxArrayString const& choices, const char *opt_name) {
 		auto opt = OPT_GET(opt_name);
 		if (opt->GetType() == agi::OptionType::String) {
@@ -630,24 +641,26 @@ void BuildAdvancedAudioPage(OptionPage *p) {
 
 /// Advanced Video preferences subpage
 void BuildAdvancedVideoPage(OptionPage *p) {
-	auto expert = p->PageSizer(_("Expert"));
+	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
+	auto *grid = binder->GetGrid();
+	binder->BindEvents(binder);
 
-	p->OptionChoice(expert, _("Video provider"), VideoProviderFactory::GetChoices(), "Video/Provider");
+	binder->AddCategory(_("Expert"));
+	binder->AddChoice(_("Video provider"), VideoProviderFactory::GetChoices(), "Video/Provider");
 	wxArrayString renderer_choices;
 	renderer_choices.Add("opengl");
 #ifdef WITH_LIBPLACEBO
 	renderer_choices.Add("libplacebo");
 #endif
-	p->OptionChoice(expert, _("Video renderer"), renderer_choices, "Video/Renderer/Backend");
+	binder->AddChoice(_("Video renderer"), renderer_choices, "Video/Renderer/Backend");
 
 	wxArrayString sp_choice = to_wx(SubtitlesProviderFactory::GetClasses());
-	p->OptionChoice(expert, _("Subtitles provider"), sp_choice, "Subtitle/Provider");
+	binder->AddChoice(_("Subtitles provider"), sp_choice, "Subtitle/Provider");
 
 #ifdef WITH_AVISYNTH
-	auto avisynth = p->PageSizer("Avisynth");
-	p->OptionAdd(avisynth, _("Allow pre-2.56a Avisynth"), "Provider/Avisynth/Allow Ancient");
-	p->CellSkip(avisynth);
-	p->OptionBrowseFile(avisynth, _("Avisynth runtime library path"), "Provider/Avisynth/Runtime Path",
+	binder->AddCategory("Avisynth");
+	binder->AddBool(_("Allow pre-2.56a Avisynth"), "Provider/Avisynth/Allow Ancient");
+	binder->AddFile(_("Avisynth runtime library path"), "Provider/Avisynth/Runtime Path",
 #ifdef _WIN32
 		_("Dynamic libraries (*.dll)|*.dll|All files (*.*)|*.*")
 #elif defined(__APPLE__)
@@ -656,20 +669,21 @@ void BuildAdvancedVideoPage(OptionPage *p) {
 		_("Shared objects (*.so;*.so.*)|*.so;*.so.*|All files (*.*)|*.*")
 #endif
 	);
-	p->OptionAdd(avisynth, _("Avisynth memory limit"), "Provider/Avisynth/Memory Max");
+	binder->AddInt(_("Avisynth memory limit"), "Provider/Avisynth/Memory Max", 0, INT_MAX);
 #endif
 
 #ifdef WITH_FFMS2
-	auto ffms = p->PageSizer("FFmpegSource");
+	binder->AddCategory("FFmpegSource");
 
 	const wxString log_levels[] = { "Quiet", "Panic", "Fatal", "Error", "Warning", "Info", "Verbose", "Debug" };
 	wxArrayString log_levels_choice(8, log_levels);
-	p->OptionChoice(ffms, _("Debug log verbosity"), log_levels_choice, "Provider/FFmpegSource/Log Level");
+	binder->AddChoice(_("Debug log verbosity"), log_levels_choice, "Provider/FFmpegSource/Log Level");
 
-	p->OptionAdd(ffms, _("Decoding threads"), "Provider/Video/FFmpegSource/Decoding Threads", -1);
-	p->OptionAdd(ffms, _("Enable unsafe seeking"), "Provider/Video/FFmpegSource/Unsafe Seeking");
+	binder->AddInt(_("Decoding threads"), "Provider/Video/FFmpegSource/Decoding Threads", -1, INT_MAX);
+	binder->AddBool(_("Enable unsafe seeking"), "Provider/Video/FFmpegSource/Unsafe Seeking");
 #endif
 
+	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
 }
 

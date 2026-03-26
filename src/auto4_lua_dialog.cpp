@@ -378,7 +378,7 @@ namespace Automation4 {
 				create_trace = {};
 
 				auto const native_construct_started = std::chrono::steady_clock::now();
-				cw = new wxOwnerDrawnComboBox(parent, -1, "", wxDefaultPosition, wxDefaultSize, items_wx, wxCB_READONLY | wxODCB_STD_CONTROL_PAINT);
+				cw = new wxOwnerDrawnComboBox(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, items_wx, wxCB_READONLY | wxODCB_STD_CONTROL_PAINT);
 				create_trace.native_construct_ms = DurationMs(std::chrono::steady_clock::now() - native_construct_started);
 
 				auto const validator_bind_started = std::chrono::steady_clock::now();

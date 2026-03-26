@@ -245,7 +245,7 @@ public:
 	wxPGProperty *AddBool(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new wxBoolProperty(label, opt_name, opt->GetBool()));
+		auto *prop = grid->Append(new wxBoolProperty(label, to_wx(opt_name), opt->GetBool()));
 		prop->SetAttribute(wxPG_BOOL_USE_CHECKBOX, true);
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
@@ -257,11 +257,11 @@ public:
 	wxPGProperty *AddInt(wxString const& label, const char *opt_name, int min, int max) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new wxIntProperty(label, opt_name, opt->GetInt()));
+		auto *prop = grid->Append(new wxIntProperty(label, to_wx(opt_name), opt->GetInt()));
 		prop->SetAttribute(wxPG_ATTR_MIN, static_cast<long>(min));
 		prop->SetAttribute(wxPG_ATTR_MAX, static_cast<long>(max));
 		prop->SetAttribute(wxPG_ATTR_SPINCTRL_STEP, 1L);
-		prop->SetEditor("SpinCtrl");
+		prop->SetEditor(wxS("SpinCtrl"));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
@@ -272,12 +272,12 @@ public:
 	wxPGProperty *AddDouble(wxString const& label, const char *opt_name, double min, double max, double step, int precision = 2) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new wxFloatProperty(label, opt_name, opt->GetDouble()));
+		auto *prop = grid->Append(new wxFloatProperty(label, to_wx(opt_name), opt->GetDouble()));
 		prop->SetAttribute(wxPG_ATTR_MIN, min);
 		prop->SetAttribute(wxPG_ATTR_MAX, max);
 		prop->SetAttribute(wxPG_ATTR_SPINCTRL_STEP, step);
 		prop->SetAttribute(wxPG_FLOAT_PRECISION, precision);
-		prop->SetEditor("SpinCtrl");
+		prop->SetEditor(wxS("SpinCtrl"));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueDouble>(name, value.GetDouble());
@@ -288,7 +288,7 @@ public:
 	wxPGProperty *AddString(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new wxStringProperty(label, opt_name, to_wx(opt->GetString())));
+		auto *prop = grid->Append(new wxStringProperty(label, to_wx(opt_name), to_wx(opt->GetString())));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
@@ -310,7 +310,7 @@ public:
 		if (size_opt->GetInt() > 0)
 			font.SetPointSize(static_cast<int>(size_opt->GetInt()));
 
-		auto *prop = grid->Append(new wxFontProperty(label, opt_prefix, font));
+		auto *prop = grid->Append(new wxFontProperty(label, to_wx(opt_prefix), font));
 		updaters.emplace(prop, [this, face_name, font_size](wxVariant const& value) {
 			wxFont font;
 			font << value;
@@ -323,7 +323,7 @@ public:
 	wxPGProperty *AddDirectory(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new TokenizedDirProperty(label, opt_name, to_wx(opt->GetString())));
+		auto *prop = grid->Append(new TokenizedDirProperty(label, to_wx(opt_name), to_wx(opt->GetString())));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
@@ -334,7 +334,7 @@ public:
 	wxPGProperty *AddColour(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new wxColourProperty(label, opt_name, to_wx(opt->GetColor())));
+		auto *prop = grid->Append(new wxColourProperty(label, to_wx(opt_name), to_wx(opt->GetColor())));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			wxColourPropertyValue colour;
@@ -347,7 +347,7 @@ public:
 	wxPGProperty *AddFile(wxString const& label, const char *opt_name, wxString const& wildcard) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new TokenizedFileProperty(label, opt_name, to_wx(opt->GetString()), wildcard));
+		auto *prop = grid->Append(new TokenizedFileProperty(label, to_wx(opt_name), to_wx(opt->GetString()), wildcard));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
@@ -368,7 +368,7 @@ public:
 		prefs->AddChangeableOption(opt_name);
 		int const selected = ClampChoiceSelection(opt->GetInt(), choices.size());
 		auto pg_choices = MakeChoices(choices);
-		auto *prop = grid->Append(new wxEnumProperty(label, opt_name, pg_choices, selected));
+		auto *prop = grid->Append(new wxEnumProperty(label, to_wx(opt_name), pg_choices, selected));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
@@ -391,7 +391,7 @@ public:
 		if (opt->GetType() == agi::OptionType::Int)
 			selected = ClampChoiceSelection(opt->GetInt(), choices.size());
 
-		auto *prop = grid->Append(new wxEnumProperty(label, opt_name, pg_choices, selected));
+		auto *prop = grid->Append(new wxEnumProperty(label, to_wx(opt_name), pg_choices, selected));
 		if (opt->GetType() == agi::OptionType::Int) {
 			std::string name = opt_name;
 			updaters.emplace(prop, [this, name](wxVariant const& value) {
@@ -764,15 +764,15 @@ void BuildAdvancedAudioPage(OptionPage *p) {
 	binder->AddInt(_("Cache memory max (MB)"), "Audio/Renderer/Spectrum/Memory Max", 2, 1024);
 
 #ifdef WITH_AVISYNTH
-	binder->AddCategory("Avisynth");
-	const wxString adm_arr[4] = { "None", "ConvertToMono", "GetLeftChannel", "GetRightChannel" };
+	binder->AddCategory(wxS("Avisynth"));
+	const wxString adm_arr[4] = { wxS("None"), wxS("ConvertToMono"), wxS("GetLeftChannel"), wxS("GetRightChannel") };
 	wxArrayString adm_choice(4, adm_arr);
 	binder->AddChoice(_("Avisynth down-mixer"), adm_choice, "Audio/Downmixer");
 	binder->AddInt(_("Force sample rate"), "Provider/Audio/AVS/Sample Rate", 0, INT_MAX);
 #endif
 
 #ifdef WITH_FFMS2
-	binder->AddCategory("FFmpegSource");
+	binder->AddCategory(wxS("FFmpegSource"));
 
 	const wxString error_modes[] = { _("Ignore"), _("Clear"), _("Stop"), _("Abort") };
 	wxArrayString error_modes_choice(4, error_modes);
@@ -783,21 +783,21 @@ void BuildAdvancedAudioPage(OptionPage *p) {
 #endif
 
 #ifdef WITH_PORTAUDIO
-	binder->AddCategory("Portaudio");
+	binder->AddCategory(wxS("Portaudio"));
 	binder->AddChoice(_("Portaudio device"), PortAudioPlayer::GetOutputDevices(), "Player/Audio/PortAudio/Device Name");
 #endif
 
 #ifdef WITH_OSS
-	binder->AddCategory("OSS");
+	binder->AddCategory(wxS("OSS"));
 	binder->AddDirectory(_("OSS Device"), "Player/Audio/OSS/Device");
 #endif
 
 #if defined(WITH_DIRECTSOUND) && defined(WITH_XAUDIO2)
-	binder->AddCategory("DirectSound / XAudio2");
+	binder->AddCategory(wxS("DirectSound / XAudio2"));
 #elif defined(WITH_DIRECTSOUND)
-	binder->AddCategory("DirectSound");
+	binder->AddCategory(wxS("DirectSound"));
 #elif defined(WITH_XAUDIO2)
-	binder->AddCategory("XAudio2");
+	binder->AddCategory(wxS("XAudio2"));
 #endif
 #if defined(WITH_DIRECTSOUND) || defined(WITH_XAUDIO2)
 	binder->AddInt(_("Buffer latency"), "Player/Audio/DirectSound/Buffer Latency", 1, 1000);
@@ -827,7 +827,7 @@ void BuildAdvancedVideoPage(OptionPage *p) {
 	binder->AddChoice(_("Subtitles provider"), sp_choice, "Subtitle/Provider");
 
 #ifdef WITH_AVISYNTH
-	binder->AddCategory("Avisynth");
+	binder->AddCategory(wxS("Avisynth"));
 	binder->AddBool(_("Allow pre-2.56a Avisynth"), "Provider/Avisynth/Allow Ancient");
 	binder->AddFile(_("Avisynth runtime library path"), "Provider/Avisynth/Runtime Path",
 #ifdef _WIN32
@@ -842,7 +842,7 @@ void BuildAdvancedVideoPage(OptionPage *p) {
 #endif
 
 #ifdef WITH_FFMS2
-	binder->AddCategory("FFmpegSource");
+	binder->AddCategory(wxS("FFmpegSource"));
 
 	const wxString log_levels[] = { wxS("Quiet"), wxS("Panic"), wxS("Fatal"), wxS("Error"), wxS("Warning"), wxS("Info"), wxS("Verbose"), wxS("Debug") };
 	wxArrayString log_levels_choice(8, log_levels);

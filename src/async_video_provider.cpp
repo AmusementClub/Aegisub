@@ -18,6 +18,7 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "compatibility_overlay_buffer_plan.h"
 #include "export_fixstyle.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "source_frame.h"
@@ -41,6 +42,7 @@ enum {
 
 namespace {
 constexpr char const *kSourceModeLogTag = "video/source/mode";
+constexpr int kCompatibilityOverlayTileSize = 64;
 
 std::string FormatSourceModeList(std::vector<SourceFrameOutputMode> const& modes) {
 	std::string value = "[";
@@ -85,6 +87,32 @@ std::shared_ptr<T> acquire_buffer(std::vector<std::shared_ptr<T>>& buffers) {
 	auto buffer = std::make_shared<T>();
 	buffers.push_back(buffer);
 	return buffer;
+}
+
+std::shared_ptr<SubtitleOverlayStorage> acquire_compatibility_overlay_buffer(
+	std::array<std::shared_ptr<SubtitleOverlayStorage>, 2>& preferred_buffers,
+	std::vector<std::shared_ptr<SubtitleOverlayStorage>>& overflow_buffers,
+	std::shared_ptr<SubtitleOverlayStorage> const& previous_overlay,
+	int& next_preferred_slot) {
+	std::array<CompatibilityOverlayBufferSlotState, 2> slot_states = { };
+	for (size_t i = 0; i < preferred_buffers.size(); ++i) {
+		auto const& slot = preferred_buffers[i];
+		slot_states[i].allocated = static_cast<bool>(slot);
+		slot_states[i].reusable = slot && slot.use_count() == 1;
+		slot_states[i].holds_previous = slot && slot.get() == previous_overlay.get();
+	}
+
+	auto plan = DecideCompatibilityOverlayBufferPlan(next_preferred_slot, slot_states);
+	next_preferred_slot = plan.next_preferred_slot;
+
+	if (plan.action == CompatibilityOverlayBufferPlanAction::UseOverflowPool)
+		return acquire_buffer(overflow_buffers);
+
+	size_t slot_index = plan.action == CompatibilityOverlayBufferPlanAction::UseSlot0 ? 0u : 1u;
+	auto& slot = preferred_buffers[slot_index];
+	if (!slot)
+		slot = std::make_shared<SubtitleOverlayStorage>();
+	return slot;
 }
 
 struct KeyPointLabColor {

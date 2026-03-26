@@ -39,6 +39,7 @@
 #include "utils.h"
 #include "video_memory_stats.h"
 #include "video_controller.h"
+#include "video_display.h"
 #include "video_session_ops.h"
 
 #include <libaegisub/audio/provider.h>

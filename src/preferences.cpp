@@ -840,8 +840,10 @@ Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"
 	wxSizer *mainSizer = nullptr;
 	wxButton *defaultButton = nullptr;
 	observe_phase("dialog_chrome", [&] {
-		book->Bind(wxEVT_TREEBOOK_PAGE_CHANGED, [this](wxBookCtrlEvent &evt) {
+		book->Bind(wxEVT_TREEBOOK_PAGE_CHANGING, [this](wxBookCtrlEvent &evt) {
 			EnsureDeferredPageBuilt(evt.GetSelection());
+		});
+		book->Bind(wxEVT_TREEBOOK_PAGE_CHANGED, [this](wxBookCtrlEvent &evt) {
 			OPT_SET("Tool/Preferences/Page")->SetInt(evt.GetSelection());
 		});
 

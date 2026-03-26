@@ -99,9 +99,12 @@ public:
 			wxPG_BOLD_MODIFIED | wxPG_SPLITTER_AUTO_CENTER | wxPG_TOOLTIPS);
 		grid->SetExtraStyle(wxPG_EX_HELP_AS_TOOLTIPS);
 		grid->SetMinSize(page->FromDIP(wxSize(520, 360)));
-		grid->Bind(wxEVT_PG_CHANGED, [this](wxPropertyGridEvent& evt) {
-			auto it = updaters.find(evt.GetProperty());
-			if (it != updaters.end())
+	}
+
+	void BindEvents(std::shared_ptr<PropertyGridOptionBinder> self) {
+		grid->Bind(wxEVT_PG_CHANGED, [self = std::move(self)](wxPropertyGridEvent& evt) {
+			auto it = self->updaters.find(evt.GetProperty());
+			if (it != self->updaters.end())
 				it->second(evt.GetPropertyValue());
 			evt.Skip();
 		});
@@ -528,6 +531,7 @@ void BuildAdvancedPage(OptionPage *p) {
 void BuildAdvancedAudioPage(OptionPage *p) {
 	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
 	auto *grid = binder->GetGrid();
+	binder->BindEvents(binder);
 
 	binder->AddCategory(_("Expert"));
 	binder->AddChoice(_("Audio provider"), GetAudioProviderChoices(), "Audio/Provider");

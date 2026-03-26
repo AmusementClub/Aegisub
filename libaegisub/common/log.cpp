@@ -22,8 +22,68 @@
 
 #include <chrono>
 #include <fstream>
+#include <mutex>
+#include <string_view>
 
 namespace agi { namespace log {
+namespace {
+constexpr size_t kBufferedLogEntryLimit = 64;
+constexpr size_t kBufferedLogByteLimit = 64 * 1024;
+constexpr int64_t kBufferedLogFlushIntervalNs = 250000000;
+std::mutex current_log_file_mutex;
+fs::path current_log_file_path;
+
+void append_json_string(std::string& out, std::string_view value) {
+	out.push_back('"');
+	for (unsigned char ch : value) {
+		switch (ch) {
+			case '\\': out += "\\\\"; break;
+			case '"': out += "\\\""; break;
+			case '\b': out += "\\b"; break;
+			case '\f': out += "\\f"; break;
+			case '\n': out += "\\n"; break;
+			case '\r': out += "\\r"; break;
+			case '\t': out += "\\t"; break;
+			default:
+				if (ch < 0x20) {
+					char buffer[7];
+					snprintf(buffer, sizeof(buffer), "\\u%04x", ch);
+					out += buffer;
+				}
+				else {
+					out.push_back(static_cast<char>(ch));
+				}
+				break;
+		}
+	}
+	out.push_back('"');
+}
+
+std::string make_ndjson_line(SinkMessage const& sm) {
+	std::string line;
+	line.reserve(sm.message.size() + 192);
+	line += "{\"sec\":";
+	line += std::to_string(sm.time / 1000000000);
+	line += ",\"usec\":";
+	line += std::to_string(sm.time % 1000000000);
+	line += ",\"severity\":";
+	line += std::to_string(sm.severity);
+	line += ",\"section\":";
+	append_json_string(line, sm.section ? sm.section : "");
+#ifdef LOG_WITH_FILE
+	line += ",\"file\":";
+	append_json_string(line, sm.file ? sm.file : "");
+#endif
+	line += ",\"func\":";
+	append_json_string(line, sm.func ? sm.func : "");
+	line += ",\"line\":";
+	line += std::to_string(sm.line);
+	line += ",\"message\":";
+	append_json_string(line, sm.message);
+	line += "}\n";
+	return line;
+}
+}
 
 /// Global log sink.
 LogSink *log;
@@ -103,24 +163,53 @@ Message::~Message() {
 }
 
 JsonEmitter::JsonEmitter(fs::path const& directory)
-: fp(new std::ofstream(fs::UniquePath(directory/util::strftime("%Y-%m-%d-%H-%M-%S-%%%%%%%%.json"))))
+: path(fs::UniquePath(directory/util::strftime("%Y-%m-%d-%H-%M-%S-%%%%%%%%.ndjson")))
+, fp(new std::ofstream(path))
 {
+	std::lock_guard<std::mutex> lock(current_log_file_mutex);
+	current_log_file_path = path;
+}
+
+JsonEmitter::~JsonEmitter() {
+	Flush();
+	std::lock_guard<std::mutex> lock(current_log_file_mutex);
+	if (current_log_file_path == path)
+		current_log_file_path.clear();
+}
+
+void JsonEmitter::Flush() {
+	if (!fp || buffer.empty())
+		return;
+
+	(*fp) << buffer;
+	fp->flush();
+	buffer.clear();
+	buffered_count = 0;
 }
 
 void JsonEmitter::log(SinkMessage const& sm) {
-	json::Object entry;
-	entry["sec"]      = sm.time / 1000000000;
-	entry["usec"]     = sm.time % 1000000000;
-	entry["severity"] = sm.severity;
-	entry["section"]  = sm.section;
-#ifdef LOG_WITH_FILE
-	entry["file"]     = sm.file;
-#endif
-	entry["func"]     = sm.func;
-	entry["line"]     = sm.line;
-	entry["message"]  = sm.message;
-	agi::JsonWriter::Write(entry, *fp);
-	fp->flush();
+	if (!fp)
+		return;
+
+	buffer += make_ndjson_line(sm);
+	++buffered_count;
+
+	bool const flush_immediately = sm.severity <= Warning;
+	if (last_flush_time == 0)
+		last_flush_time = sm.time;
+
+	if (flush_immediately
+		|| buffered_count >= kBufferedLogEntryLimit
+		|| buffer.size() >= kBufferedLogByteLimit
+		|| sm.time - last_flush_time >= kBufferedLogFlushIntervalNs) {
+		Flush();
+		last_flush_time = sm.time;
+	}
+}
+
+fs::path GetSessionLogFile() {
+	std::lock_guard<std::mutex> lock(current_log_file_mutex);
+	return current_log_file_path;
 }
 
 } }

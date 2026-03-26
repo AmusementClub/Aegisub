@@ -112,8 +112,9 @@ class StyleRenamer {
 	void Walk(bool replace) {
 		found_any = false;
 		do_replace = replace;
+		auto core = c->GetCore();
 
-		for (auto& diag : c->ass->Events) {
+		for (auto& diag : core.ass->Events) {
 			if (diag.Style == source_name) {
 				if (replace)
 					diag.Style = new_name;
@@ -361,7 +362,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 		wxSize(100, 60),
 		wxSUNKEN_BORDER,
 		OPT_GET("Colour/Style Editor/Background/Preview")->GetColor(),
-		c ? c->ass->GetTransientFonts() : std::shared_ptr<const TransientFontSet>(),
+		c ? c->GetCore().ass->GetTransientFonts() : std::shared_ptr<const TransientFontSet>(),
 		c ? c->GetNotificationSink() : agi::MakeWindowNotificationSink(this));
 
 	SubsPreview->SetToolTip(_("Preview of current style"));
@@ -448,10 +449,10 @@ void DialogStyleEditor::Apply(bool apply, bool close) {
 		std::replace(new_name.begin(), new_name.end(), ',', ';');
 
 		// Get list of existing styles
-		std::vector<std::string> styles = store ? store->GetNames() : c->ass->GetStyles();
+		std::vector<std::string> styles = store ? store->GetNames() : c->GetCore().ass->GetStyles();
 
 		// Check if style name is unique
-		AssStyle *existing = store ? store->GetStyle(new_name) : c->ass->GetStyle(new_name);
+		AssStyle *existing = store ? store->GetStyle(new_name) : c->GetCore().ass->GetStyle(new_name);
 		if (existing && existing != style) {
 			notification_sink->ShowError(
 				from_wx(_("Style name conflict")),
@@ -493,11 +494,11 @@ void DialogStyleEditor::Apply(bool apply, bool close) {
 			if (store)
 				store->push_back(std::unique_ptr<AssStyle>(style));
 			else
-				c->ass->Styles.push_back(*style);
+				c->GetCore().ass->Styles.push_back(*style);
 			is_new = false;
 		}
 		if (!store)
-			c->ass->Commit(from_wx(_("style change")), AssFile::COMMIT_STYLES | (did_rename ? AssFile::COMMIT_DIAG_FULL : 0));
+			c->GetCore().ass->Commit(from_wx(_("style change")), AssFile::COMMIT_STYLES | (did_rename ? AssFile::COMMIT_DIAG_FULL : 0));
 
 		// Update preview
 		if (!close) SubsPreview->SetStyle(*style);

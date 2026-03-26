@@ -194,6 +194,41 @@ public:
 		return prop;
 	}
 
+	wxPGProperty *AddString(wxString const& label, const char *opt_name) {
+		prefs->AddChangeableOption(opt_name);
+		auto opt = OPT_GET(opt_name);
+		auto *prop = grid->Append(new wxStringProperty(label, opt_name, to_wx(opt->GetString())));
+		std::string name = opt_name;
+		updaters.emplace(prop, [this, name](wxVariant const& value) {
+			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
+		});
+		return prop;
+	}
+
+	wxPGProperty *AddFont(wxString const& label, std::string const& opt_prefix) {
+		auto const face_name = opt_prefix + "Font Face";
+		auto const font_size = opt_prefix + "Font Size";
+		prefs->AddChangeableOption(face_name);
+		prefs->AddChangeableOption(font_size);
+
+		wxFont font;
+		auto const face_opt = OPT_GET(face_name);
+		auto const size_opt = OPT_GET(font_size);
+		if (!face_opt->GetString().empty())
+			font.SetFaceName(to_wx(face_opt->GetString()));
+		if (size_opt->GetInt() > 0)
+			font.SetPointSize(static_cast<int>(size_opt->GetInt()));
+
+		auto *prop = grid->Append(new wxFontProperty(label, opt_prefix, font));
+		updaters.emplace(prop, [this, face_name, font_size](wxVariant const& value) {
+			wxFont font;
+			font << value;
+			QueueOptionChange<agi::OptionValueString>(face_name, from_wx(font.GetFaceName()));
+			QueueOptionChange<agi::OptionValueInt>(font_size, font.GetPointSize());
+		});
+		return prop;
+	}
+
 	wxPGProperty *AddDirectory(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
@@ -354,43 +389,46 @@ void BuildGeneralDefaultStylesPage(OptionPage *p) {
 
 /// Audio preferences page
 void BuildAudioPage(OptionPage *p) {
-	auto general = p->PageSizer(_("Options"));
-	p->OptionAdd(general, _("Default mouse wheel to zoom"), "Audio/Wheel Default to Zoom");
-	p->OptionAdd(general, _("Lock scroll on cursor"), "Audio/Lock Scroll on Cursor");
-	p->OptionAdd(general, _("Snap markers by default"), "Audio/Snap/Enable");
-	p->OptionAdd(general, _("Auto-focus on mouse over"), "Audio/Auto/Focus");
-	p->OptionAdd(general, _("Play audio when stepping in video"), "Audio/Plays When Stepping Video");
-	p->OptionAdd(general, _("Left-click-drag moves end marker"), "Audio/Drag Timing");
-	p->OptionAdd(general, _("Default timing length (ms)"), "Timing/Default Duration", 0, 36000);
-	p->OptionAdd(general, _("Default lead-in length (ms)"), "Audio/Lead/IN", 0, 36000);
-	p->OptionAdd(general, _("Default lead-out length (ms)"), "Audio/Lead/OUT", 0, 36000);
+	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
+	auto *grid = binder->GetGrid();
+	binder->BindEvents(binder);
 
-	p->OptionAdd(general, _("Marker drag-start sensitivity (px)"), "Audio/Start Drag Sensitivity", 1, 15);
-	p->OptionAdd(general, _("Line boundary thickness (px)"), "Audio/Line Boundaries Thickness", 1, 5);
-	p->OptionAdd(general, _("Maximum snap distance (px)"), "Audio/Snap/Distance", 0, 25);
+	binder->AddCategory(_("Options"));
+	binder->AddBool(_("Default mouse wheel to zoom"), "Audio/Wheel Default to Zoom");
+	binder->AddBool(_("Lock scroll on cursor"), "Audio/Lock Scroll on Cursor");
+	binder->AddBool(_("Snap markers by default"), "Audio/Snap/Enable");
+	binder->AddBool(_("Auto-focus on mouse over"), "Audio/Auto/Focus");
+	binder->AddBool(_("Play audio when stepping in video"), "Audio/Plays When Stepping Video");
+	binder->AddBool(_("Left-click-drag moves end marker"), "Audio/Drag Timing");
+	binder->AddInt(_("Default timing length (ms)"), "Timing/Default Duration", 0, 36000);
+	binder->AddInt(_("Default lead-in length (ms)"), "Audio/Lead/IN", 0, 36000);
+	binder->AddInt(_("Default lead-out length (ms)"), "Audio/Lead/OUT", 0, 36000);
+
+	binder->AddInt(_("Marker drag-start sensitivity (px)"), "Audio/Start Drag Sensitivity", 1, 15);
+	binder->AddInt(_("Line boundary thickness (px)"), "Audio/Line Boundaries Thickness", 1, 5);
+	binder->AddInt(_("Maximum snap distance (px)"), "Audio/Snap/Distance", 0, 25);
 
 	const wxString dtl_arr[] = { _("Don't show"), _("Show previous"), _("Show previous and next"), _("Show all") };
 	wxArrayString choice_dtl(4, dtl_arr);
-	p->OptionChoice(general, _("Show inactive lines"), choice_dtl, "Audio/Inactive Lines Display Mode");
-	p->CellSkip(general);
-	p->OptionAdd(general, _("Include commented inactive lines"), "Audio/Display/Draw/Inactive Comments");
+	binder->AddChoice(_("Show inactive lines"), choice_dtl, "Audio/Inactive Lines Display Mode");
+	binder->AddBool(_("Include commented inactive lines"), "Audio/Display/Draw/Inactive Comments");
 
-	auto display = p->PageSizer(_("Display Visual Options"));
-	p->OptionAdd(display, _("Keyframes in dialogue mode"), "Audio/Display/Draw/Keyframes in Dialogue Mode");
-	p->OptionAdd(display, _("Keyframes in karaoke mode"), "Audio/Display/Draw/Keyframes in Karaoke Mode");
-	p->OptionAdd(display, _("Cursor time"), "Audio/Display/Draw/Cursor Time");
-	p->OptionAdd(display, _("Video position"), "Audio/Display/Draw/Video Position");
-	p->OptionAdd(display, _("Seconds boundaries"), "Audio/Display/Draw/Seconds");
-	p->OptionAdd(display, _("Debug metrics"), "Audio/Display/Draw/Debug Metrics");
-	p->OptionChoice(display, _("Waveform Style"), AudioWaveformRenderer::GetWaveformStyles(), "Audio/Display/Waveform Style");
+	binder->AddCategory(_("Display Visual Options"));
+	binder->AddBool(_("Keyframes in dialogue mode"), "Audio/Display/Draw/Keyframes in Dialogue Mode");
+	binder->AddBool(_("Keyframes in karaoke mode"), "Audio/Display/Draw/Keyframes in Karaoke Mode");
+	binder->AddBool(_("Cursor time"), "Audio/Display/Draw/Cursor Time");
+	binder->AddBool(_("Video position"), "Audio/Display/Draw/Video Position");
+	binder->AddBool(_("Seconds boundaries"), "Audio/Display/Draw/Seconds");
+	binder->AddBool(_("Debug metrics"), "Audio/Display/Draw/Debug Metrics");
+	binder->AddChoice(_("Waveform Style"), AudioWaveformRenderer::GetWaveformStyles(), "Audio/Display/Waveform Style");
 
 	const wxString sq_arr[4] = { _("Regular quality"), _("Better quality"), _("High quality"), _("Insane quality") };
 	wxArrayString sq_choice(4, sq_arr);
-	p->OptionChoice(display, _("Spectrum Quality"), sq_choice, "Audio/Renderer/Spectrum/Quality");
+	binder->AddChoice(_("Spectrum Quality"), sq_choice, "Audio/Renderer/Spectrum/Quality");
 
 	const wxString sm_arr[2] = { _("Legacy linear"), _("Frequency curve") };
 	wxArrayString sm_choice(2, sm_arr);
-	p->OptionChoice(display, _("Spectrum Computation Mode"), sm_choice, "Audio/Renderer/Spectrum/Computation Mode");
+	binder->AddChoice(_("Spectrum Computation Mode"), sm_choice, "Audio/Renderer/Spectrum/Computation Mode");
 
 	const wxString smm_arr[3] = {
 		_("Time-domain downmix"),
@@ -398,15 +436,16 @@ void BuildAudioPage(OptionPage *p) {
 		_("Average channel energy per frequency bin")
 	};
 	wxArrayString smm_choice(3, smm_arr);
-	p->OptionChoice(display, _("Spectrum mono mix method"), smm_choice, "Audio/Renderer/Spectrum/Mono Mix Mode");
+	binder->AddChoice(_("Spectrum mono mix method"), smm_choice, "Audio/Renderer/Spectrum/Mono Mix Mode");
 
 	const wxString sc_arr[5] = { _("Linear"), _("Extended"), _("Medium"), _("Compressed"), _("Logarithmic") };
 	wxArrayString sc_choice(5, sc_arr);
-	p->OptionChoice(display, _("Spectrum Frequency Mapping"), sc_choice, "Audio/Renderer/Spectrum/FreqCurve");
+	binder->AddChoice(_("Spectrum Frequency Mapping"), sc_choice, "Audio/Renderer/Spectrum/FreqCurve");
 
-	auto label = p->PageSizer(_("Audio labels"));
-	p->OptionFont(label, "Audio/Karaoke/");
+	binder->AddCategory(_("Audio labels"));
+	binder->AddFont(_("Font"), "Audio/Karaoke/");
 
+	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
 }
 

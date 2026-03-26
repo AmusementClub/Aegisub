@@ -147,11 +147,11 @@ public:
 
 	wxPropertyGrid *GetGrid() const { return grid; }
 
-	void AddCategory(wxString const& label) {
-		grid->Append(new wxPropertyCategory(label));
+	wxPGProperty *AddCategory(wxString const& label) {
+		return grid->Append(new wxPropertyCategory(label));
 	}
 
-	void AddBool(wxString const& label, const char *opt_name) {
+	wxPGProperty *AddBool(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
 		auto *prop = grid->Append(new wxBoolProperty(label, opt_name, opt->GetBool()));
@@ -160,9 +160,10 @@ public:
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueBool>(name, value.GetBool());
 		});
+		return prop;
 	}
 
-	void AddInt(wxString const& label, const char *opt_name, int min, int max) {
+	wxPGProperty *AddInt(wxString const& label, const char *opt_name, int min, int max) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
 		auto *prop = grid->Append(new wxIntProperty(label, opt_name, opt->GetInt()));
@@ -174,9 +175,10 @@ public:
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
 		});
+		return prop;
 	}
 
-	void AddDouble(wxString const& label, const char *opt_name, double min, double max, double step, int precision = 2) {
+	wxPGProperty *AddDouble(wxString const& label, const char *opt_name, double min, double max, double step, int precision = 2) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
 		auto *prop = grid->Append(new wxFloatProperty(label, opt_name, opt->GetDouble()));
@@ -189,9 +191,10 @@ public:
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueDouble>(name, value.GetDouble());
 		});
+		return prop;
 	}
 
-	void AddDirectory(wxString const& label, const char *opt_name) {
+	wxPGProperty *AddDirectory(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
 		auto *prop = grid->Append(new wxDirProperty(label, opt_name, to_wx(opt->GetString())));
@@ -199,9 +202,10 @@ public:
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
 		});
+		return prop;
 	}
 
-	void AddColour(wxString const& label, const char *opt_name) {
+	wxPGProperty *AddColour(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
 		auto *prop = grid->Append(new wxColourProperty(label, opt_name, to_wx(opt->GetColor())));
@@ -211,9 +215,10 @@ public:
 			colour << value;
 			QueueOptionChange<agi::OptionValueColor>(name, from_wx(colour.m_colour));
 		});
+		return prop;
 	}
 
-	void AddFile(wxString const& label, const char *opt_name, wxString const& wildcard) {
+	wxPGProperty *AddFile(wxString const& label, const char *opt_name, wxString const& wildcard) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
 		auto *prop = grid->Append(new wxFileProperty(label, opt_name, to_wx(opt->GetString())));
@@ -222,17 +227,17 @@ public:
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
 		});
+		return prop;
 	}
 
-	void AddChoice(wxString const& label, wxArrayString const& choices, const char *opt_name) {
+	wxPGProperty *AddChoice(wxString const& label, wxArrayString const& choices, const char *opt_name) {
 		auto opt = OPT_GET(opt_name);
 		if (opt->GetType() == agi::OptionType::String) {
 			std::vector<std::pair<std::string, std::string>> mapped_choices;
 			mapped_choices.reserve(choices.size());
 			for (auto const& choice : choices)
 				mapped_choices.emplace_back(from_wx(choice), from_wx(choice));
-			AddChoice(label, mapped_choices, opt_name);
-			return;
+			return AddChoice(label, mapped_choices, opt_name);
 		}
 
 		prefs->AddChangeableOption(opt_name);
@@ -243,9 +248,10 @@ public:
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
 		});
+		return prop;
 	}
 
-	void AddChoice(wxString const& label, std::vector<std::pair<std::string, std::string>> const& choices, const char *opt_name) {
+	wxPGProperty *AddChoice(wxString const& label, std::vector<std::pair<std::string, std::string>> const& choices, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
 		wxPGChoices pg_choices;
@@ -266,7 +272,7 @@ public:
 			updaters.emplace(prop, [this, name](wxVariant const& value) {
 				QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
 			});
-			return;
+			return prop;
 		}
 
 		std::string name = opt_name;
@@ -280,6 +286,7 @@ public:
 				return;
 			QueueOptionChange<agi::OptionValueString>(name, values[index]);
 		});
+		return prop;
 	}
 };
 
@@ -405,40 +412,48 @@ void BuildAudioPage(OptionPage *p) {
 
 /// Video preferences page
 void BuildVideoPage(OptionPage *p) {
-	auto general = p->PageSizer(_("Options"));
-	p->OptionAdd(general, _("Show keyframes in slider"), "Video/Slider/Show Keyframes");
-	p->CellSkip(general);
-	p->OptionAdd(general, _("Only show visual tools when mouse is over video"), "Tool/Visual/Autohide");
-	p->CellSkip(general);
-	p->OptionAdd(general, _("Seek video to line start on selection change"), "Video/Subtitle Sync");
-	p->CellSkip(general);
-	p->OptionAdd(general, _("Automatically open audio when opening video"), "Video/Open Audio");
-	p->CellSkip(general);
+	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
+	auto *grid = binder->GetGrid();
+	binder->BindEvents(binder);
+
+	binder->AddCategory(_("Options"));
+	binder->AddBool(_("Show keyframes in slider"), "Video/Slider/Show Keyframes");
+	binder->AddBool(_("Only show visual tools when mouse is over video"), "Tool/Visual/Autohide");
+	binder->AddBool(_("Seek video to line start on selection change"), "Video/Subtitle Sync");
+	binder->AddBool(_("Automatically open audio when opening video"), "Video/Open Audio");
 
 	const wxString czoom_arr[24] = { "12.5%", "25%", "37.5%", "50%", "62.5%", "75%", "87.5%", "100%", "112.5%", "125%", "137.5%", "150%", "162.5%", "175%", "187.5%", "200%", "212.5%", "225%", "237.5%", "250%", "262.5%", "275%", "287.5%", "300%" };
 	wxArrayString choice_zoom(24, czoom_arr);
-	p->OptionChoice(general, _("Default Zoom"), choice_zoom, "Video/Default Zoom");
+	binder->AddChoice(_("Default Zoom"), choice_zoom, "Video/Default Zoom");
 
-	p->OptionAdd(general, _("Fast jump step in frames"), "Video/Slider/Fast Jump Step");
+	binder->AddInt(_("Fast jump step in frames"), "Video/Slider/Fast Jump Step", 0, INT_MAX);
 
 	const wxString cscr_arr[3] = { "?video", "?script", "." };
 	wxArrayString scr_res(3, cscr_arr);
-	p->OptionChoice(general, _("Screenshot save path"), scr_res, "Path/Screenshot");
+	binder->AddChoice(_("Screenshot save path"), scr_res, "Path/Screenshot");
 
-	auto resolution = p->PageSizer(_("Script Resolution"));
-	wxControl *autocb = p->OptionAdd(resolution, _("Use resolution of first video opened"), "Subtitle/Default Resolution/Auto");
-	p->CellSkip(resolution);
-	p->DisableIfChecked(autocb,
-		p->OptionAdd(resolution, _("Default width"), "Subtitle/Default Resolution/Width"));
-	p->DisableIfChecked(autocb,
-		p->OptionAdd(resolution, _("Default height"), "Subtitle/Default Resolution/Height"));
-	p->OptionAdd(resolution, _("Prefer PlayRes over LayoutRes"), "Subtitle/Resolution/Prefer PlayRes");
-	p->CellSkip(resolution);
+	binder->AddCategory(_("Script Resolution"));
+	auto *auto_prop = binder->AddBool(_("Use resolution of first video opened"), "Subtitle/Default Resolution/Auto");
+	auto *width_prop = binder->AddInt(_("Default width"), "Subtitle/Default Resolution/Width", 0, INT_MAX);
+	auto *height_prop = binder->AddInt(_("Default height"), "Subtitle/Default Resolution/Height", 0, INT_MAX);
+	binder->AddBool(_("Prefer PlayRes over LayoutRes"), "Subtitle/Resolution/Prefer PlayRes");
+	auto update_resolution_enable = [grid, width_prop, height_prop]() {
+		bool const auto_enabled = OPT_GET("Subtitle/Default Resolution/Auto")->GetBool();
+		grid->EnableProperty(width_prop, !auto_enabled);
+		grid->EnableProperty(height_prop, !auto_enabled);
+	};
+	update_resolution_enable();
+	grid->Bind(wxEVT_PG_CHANGED, [auto_prop, update_resolution_enable](wxPropertyGridEvent& evt) {
+		if (evt.GetProperty() == auto_prop)
+			update_resolution_enable();
+		evt.Skip();
+	});
 
 	const wxString cres_arr[] = {_("Never"), _("Ask"), _("Always set"), _("Always resample")};
 	wxArrayString choice_res(4, cres_arr);
-	p->OptionChoice(resolution, _("Match video resolution on open"), choice_res, "Video/Script Resolution Mismatch");
+	binder->AddChoice(_("Match video resolution on open"), choice_res, "Video/Script Resolution Mismatch");
 
+	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
 }
 

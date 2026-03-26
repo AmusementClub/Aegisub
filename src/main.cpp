@@ -214,6 +214,7 @@ bool AegisubApp::OnInit() {
 	auto path_log = config::path->Decode("?user/log/");
 	agi::fs::CreateDirectory(path_log);
 	agi::log::log->Subscribe(agi::make_unique<agi::log::JsonEmitter>(path_log));
+	CleanCache(path_log, "*.ndjson", 10, 100);
 	CleanCache(path_log, "*.json", 10, 100);
 
 	StartupLog("Load user configuration");

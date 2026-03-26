@@ -17,6 +17,7 @@
 #include <boost/interprocess/streams/bufferstream.hpp>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 // These macros below aren't a perm solution, it will depend on how annoying they are through
@@ -112,17 +113,28 @@ public:
 	virtual void log(SinkMessage const& sm)=0;
 };
 
-/// A simple emitter which writes the log to a file in json format
+/// A buffered emitter which writes the log to a file in NDJSON format
 class JsonEmitter final : public Emitter {
 	std::unique_ptr<std::ostream> fp;
+	fs::path path;
+	std::string buffer;
+	size_t buffered_count = 0;
+	int64_t last_flush_time = 0;
 
 public:
 	/// Constructor
 	/// @param directory Directory to write the log file in
 	JsonEmitter(fs::path const& directory);
+	~JsonEmitter();
 
 	void log(SinkMessage const&) override;
+
+private:
+	void Flush();
 };
+
+/// Path to the current process log file, if file logging is enabled.
+fs::path GetSessionLogFile();
 
 /// Generates a message and submits it to the log sink.
 class Message {

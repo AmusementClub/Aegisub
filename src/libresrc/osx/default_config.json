@@ -489,6 +489,13 @@
 			]
 		},
 		"Preferences" : {
+			"Last" : {
+				"Height" : -1,
+				"Width" : -1,
+				"X" : -1,
+				"Y" : -1
+			},
+			"Maximized" : false,
 			"Page" : 0
 		},
 		"Search Replace" : {

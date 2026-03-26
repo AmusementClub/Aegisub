@@ -74,9 +74,10 @@ enum class TraceCategory : uint32_t {
 	Video = 1u << 1,
 	Audio = 1u << 2,
 	Memory = 1u << 3,
-	LuaDialog = 1u << 4,
-	Log = 1u << 5,
-	All = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4) | (1u << 5),
+	UiWindow = 1u << 4,
+	LuaDialog = 1u << 5,
+	Log = 1u << 6,
+	All = (1u << 0) | (1u << 1) | (1u << 2) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 6),
 };
 
 TraceCategory operator|(TraceCategory left, TraceCategory right) {
@@ -98,6 +99,7 @@ TraceCategory ToTraceCategory(Category category) {
 		case Category::Video: return TraceCategory::Video;
 		case Category::Audio: return TraceCategory::Audio;
 		case Category::Memory: return TraceCategory::Memory;
+		case Category::UiWindow: return TraceCategory::UiWindow;
 		case Category::LuaDialog: return TraceCategory::LuaDialog;
 		case Category::Log: return TraceCategory::Log;
 	}
@@ -209,6 +211,11 @@ bool ApplyCategoryToken(std::string const& token, TraceCategory& categories, std
 		AppendUnique(normalized_tokens, "memory");
 		return true;
 	}
+	if (token == "ui-window" || token == "ui_window" || token == "window" || token == "window-open") {
+		categories |= TraceCategory::UiWindow;
+		AppendUnique(normalized_tokens, "ui-window");
+		return true;
+	}
 	if (token == "lua-dialog" || token == "lua_dialog" || token == "lua") {
 		categories |= TraceCategory::LuaDialog;
 		AppendUnique(normalized_tokens, "lua-dialog");
@@ -238,6 +245,8 @@ std::string SelectionTagFromCategories(TraceCategory categories) {
 		tokens.emplace_back("video");
 	if (HasAnyCategory(categories, TraceCategory::Memory))
 		tokens.emplace_back("memory");
+	if (HasAnyCategory(categories, TraceCategory::UiWindow))
+		tokens.emplace_back("ui-window");
 	if (HasAnyCategory(categories, TraceCategory::LuaDialog))
 		tokens.emplace_back("lua-dialog");
 	if (HasAnyCategory(categories, TraceCategory::Log))
@@ -435,6 +444,8 @@ struct Summary {
 	uint64_t frame_delivered = 0;
 	uint64_t frame_delivered_immediate = 0;
 	uint64_t frame_dropped = 0;
+	uint64_t window_open_success = 0;
+	uint64_t window_open_failure = 0;
 	uint64_t lua_dialog_success = 0;
 	uint64_t lua_dialog_failure = 0;
 	uint64_t video_memory_samples = 0;
@@ -482,6 +493,7 @@ struct Summary {
 	std::string audio_output_backend;
 	IntervalSummary audio_ui_timer_interval;
 	IntervalSummary video_playback_tick_interval;
+	DurationSummary window_open_duration;
 	DurationSummary lua_dialog_duration;
 	DurationSummary audio_output_fill_duration;
 };
@@ -656,6 +668,8 @@ void WriteSummaryLocked(Session const& session) {
 	write_int("frame.delivered.total", session.summary.frame_delivered);
 	write_int("frame.delivered.immediate", session.summary.frame_delivered_immediate);
 	write_int("frame.dropped.total", session.summary.frame_dropped);
+	write_int("window_open.success", session.summary.window_open_success);
+	write_int("window_open.failure", session.summary.window_open_failure);
 	write_int("lua_dialog.success", session.summary.lua_dialog_success);
 	write_int("lua_dialog.failure", session.summary.lua_dialog_failure);
 	write_int("video_memory.samples", session.summary.video_memory_samples);
@@ -678,6 +692,11 @@ void WriteSummaryLocked(Session const& session) {
 	write_double("video_playback_tick_interval.max_ms", session.summary.video_playback_tick_interval.max_ms);
 	write_mean("video_playback_tick_interval.mean_ms", session.summary.video_playback_tick_interval.total_ms, session.summary.video_playback_tick_interval.count);
 	write_mean("video_playback_tick_interval.mean_abs_jitter_ms", session.summary.video_playback_tick_interval.total_abs_jitter_ms, session.summary.video_playback_tick_interval.count);
+
+	write_int("window_open_duration.count", session.summary.window_open_duration.count);
+	write_double("window_open_duration.min_ms", session.summary.window_open_duration.min_ms);
+	write_double("window_open_duration.max_ms", session.summary.window_open_duration.max_ms);
+	write_mean("window_open_duration.mean_ms", session.summary.window_open_duration.total_ms, session.summary.window_open_duration.count);
 
 	write_int("lua_dialog_duration.count", session.summary.lua_dialog_duration.count);
 	write_double("lua_dialog_duration.min_ms", session.summary.lua_dialog_duration.min_ms);
@@ -1100,6 +1119,49 @@ void ObserveVideoPlaybackTick(int frame) {
 	payload.AddInt("frame", frame);
 	payload.AddDouble("delta_ms", interval_ms);
 	AppendEntryLocked(session, "metric", "video_playback_tick_interval", payload.Finish(), false, timestamp_ns);
+}
+
+void TraceWindowOpenBegin(char const* window_kind) {
+	RecordEntry(TraceCategory::UiWindow, "op", "window_open_begin", true, [&](JsonObjectBuilder& payload) {
+		payload.AddString("window_kind", window_kind ? window_kind : "");
+	});
+}
+
+void ObserveWindowOpenPhase(char const* window_kind, char const* phase, double duration_ms) {
+	RecordEntry(TraceCategory::UiWindow, "metric", "window_open_phase_duration", false, [&](JsonObjectBuilder& payload) {
+		payload.AddString("window_kind", window_kind ? window_kind : "");
+		payload.AddString("phase", phase ? phase : "");
+		payload.AddDouble("duration_ms", duration_ms);
+	});
+}
+
+void TraceWindowOpenEnd(char const* window_kind, double duration_ms, bool succeeded) {
+	RecordEntry(TraceCategory::UiWindow, "op", "window_open_end", true, [&](JsonObjectBuilder& payload) {
+		payload.AddString("window_kind", window_kind ? window_kind : "");
+		payload.AddDouble("duration_ms", duration_ms);
+		payload.AddBool("succeeded", succeeded);
+	});
+
+	RecordEntry(TraceCategory::UiWindow, "metric", "window_open_duration", false, [&](JsonObjectBuilder& payload) {
+		payload.AddString("window_kind", window_kind ? window_kind : "");
+		payload.AddDouble("duration_ms", duration_ms);
+		payload.AddBool("succeeded", succeeded);
+	});
+
+	if (!trace_active.load(std::memory_order_relaxed))
+		return;
+
+	auto& session = GetSession();
+	std::lock_guard<std::mutex> lock(session.mutex);
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::UiWindow))
+		return;
+
+	if (succeeded)
+		++session.summary.window_open_success;
+	else
+		++session.summary.window_open_failure;
+	if (duration_ms >= 0.0)
+		session.summary.window_open_duration.Observe(duration_ms);
 }
 
 void TraceLuaDialogOpenBegin() {

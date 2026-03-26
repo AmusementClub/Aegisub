@@ -65,9 +65,9 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 : wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, wxWANTS_CHARS | wxSUNKEN_BORDER)
 , scrollBar(new wxScrollBar(this, GRID_SCROLLBAR, wxDefaultPosition, wxDefaultSize, wxSB_VERTICAL))
 , context(context)
+, displayed_frame(context->GetCore().videoController->GetFrameN())
 , columns(GetGridColumns())
 , columns_visible(OPT_GET("Subtitle/Grid/Column")->GetListBool())
-, seek_listener(context->GetCore().videoController->AddSeekListener(&BaseGrid::OnSeek, this))
 {
 	scrollBar->SetScrollbar(0,10,100,10);
 
@@ -93,6 +93,8 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 
 		core.selectionController->AddActiveLineListener(&BaseGrid::OnActiveLineChanged, this),
 		core.selectionController->AddSelectionListener([&]{ Refresh(false); }),
+		core.project->AddVideoProviderListener(&BaseGrid::OnVideoProviderChanged, this),
+		context->GetUI().AddVideoFramePresentedListener(&BaseGrid::OnFramePresented, this),
 
 		OPT_SUB("Subtitle/Grid/Font Face", &BaseGrid::UpdateStyle, this),
 		OPT_SUB("Subtitle/Grid/Font Size", &BaseGrid::UpdateStyle, this),
@@ -165,10 +167,8 @@ void BaseGrid::OnShowColMenu(wxCommandEvent &event) {
 }
 
 void BaseGrid::OnHighlightVisibleChange(agi::OptionValue const& opt) {
-	if (opt.GetBool())
-		seek_listener.Unblock();
-	else
-		seek_listener.Block();
+	(void)opt;
+	Refresh(false);
 }
 
 void BaseGrid::UpdateStyle() {
@@ -253,7 +253,11 @@ void BaseGrid::SelectRow(int row, bool addToSelected, bool select) {
 	}
 }
 
-void BaseGrid::OnSeek() {
+void BaseGrid::OnFramePresented(int frame_number) {
+	displayed_frame = frame_number;
+	if (!OPT_GET("Subtitle/Grid/Highlight Subtitles in Frame")->GetBool())
+		return;
+
 	int lines = GetClientSize().GetHeight() / lineHeight + 1;
 	lines = mid(0, lines, GetRows() - yPos);
 
@@ -269,6 +273,12 @@ void BaseGrid::OnSeek() {
 	}
 	if (it != end(visible_rows))
 		Refresh(false);
+}
+
+void BaseGrid::OnVideoProviderChanged() {
+	auto core = context->GetCore();
+	displayed_frame = core.project->VideoProvider() ? core.videoController->GetFrameN() : -1;
+	Refresh(false);
 }
 
 void BaseGrid::OnIdle(wxIdleEvent&) {
@@ -639,10 +649,10 @@ AssDialogue *BaseGrid::GetDialogue(int n) const {
 
 bool BaseGrid::IsDisplayed(const AssDialogue *line) const {
 	auto core = context->GetCore();
-	if (!core.project->VideoProvider()) return false;
-	int frame = core.videoController->GetFrameN();
-	return core.project->Timecodes().FrameAtTime(line->Start, agi::vfr::START) <= frame
-		&& core.project->Timecodes().FrameAtTime(line->End, agi::vfr::END) >= frame;
+	if (!core.project->VideoProvider() || displayed_frame < 0)
+		return false;
+	return core.project->Timecodes().FrameAtTime(line->Start, agi::vfr::START) <= displayed_frame
+		&& core.project->Timecodes().FrameAtTime(line->End, agi::vfr::END) >= displayed_frame;
 }
 
 void BaseGrid::OnCharHook(wxKeyEvent &event) {

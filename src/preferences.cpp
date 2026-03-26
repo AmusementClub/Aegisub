@@ -53,6 +53,7 @@
 #include <wx/listctrl.h>
 #include <wx/propgrid/advprops.h>
 #include <wx/propgrid/propgrid.h>
+#include <wx/settings.h>
 #include <wx/srchctrl.h>
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
@@ -60,6 +61,14 @@
 #include <wx/treebook.h>
 
 namespace {
+wxColour BlendColour(wxColour const& base, wxColour const& accent, int accent_percent) {
+	int const base_percent = 100 - accent_percent;
+	return wxColour(
+		(base.Red() * base_percent + accent.Red() * accent_percent) / 100,
+		(base.Green() * base_percent + accent.Green() * accent_percent) / 100,
+		(base.Blue() * base_percent + accent.Blue() * accent_percent) / 100);
+}
+
 class PropertyGridOptionBinder {
 	Preferences *prefs;
 	wxPropertyGrid *grid;
@@ -81,6 +90,34 @@ class PropertyGridOptionBinder {
 		return count ? std::clamp<int>(selected, 0, static_cast<int>(count) - 1) : 0;
 	}
 
+	void ApplyTheme(wxWindow *page) {
+		auto const window = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOW);
+		auto const window_text = wxSystemSettings::GetColour(wxSYS_COLOUR_WINDOWTEXT);
+		auto const button = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
+		auto const button_text = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNTEXT);
+		auto const highlight = wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHT);
+		auto const highlight_text = wxSystemSettings::GetColour(wxSYS_COLOUR_HIGHLIGHTTEXT);
+		auto const gray_text = wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
+
+		grid->SetBackgroundColour(window);
+		grid->SetEmptySpaceColour(window);
+		grid->SetCellBackgroundColour(window);
+		grid->SetCellTextColour(window_text);
+		grid->SetCellDisabledTextColour(gray_text);
+		grid->SetMarginColour(BlendColour(button, window, 35));
+		grid->SetLineColour(BlendColour(button, window_text, 12));
+		grid->SetCaptionBackgroundColour(BlendColour(button, highlight, 10));
+		grid->SetCaptionTextColour(button_text);
+		grid->SetSelectionBackgroundColour(highlight);
+		grid->SetSelectionTextColour(highlight_text);
+		grid->SetVerticalSpacing(page->FromDIP(2));
+	}
+
+	void ApplyChoiceAffordance(wxPGProperty *prop) {
+		grid->SetPropertyImage(prop, wxBitmapBundle::FromBitmap(GETIMAGE(arrow_down_24)));
+		grid->SetPropertyHelpString(prop, _("Click to choose from list"));
+	}
+
 public:
 	explicit PropertyGridOptionBinder(OptionPage *page)
 	: prefs(page->parent)
@@ -99,6 +136,7 @@ public:
 			wxPG_BOLD_MODIFIED | wxPG_SPLITTER_AUTO_CENTER | wxPG_TOOLTIPS);
 		grid->SetExtraStyle(wxPG_EX_HELP_AS_TOOLTIPS);
 		grid->SetMinSize(page->FromDIP(wxSize(520, 360)));
+		ApplyTheme(page);
 	}
 
 	void BindEvents(std::shared_ptr<PropertyGridOptionBinder> self) {
@@ -166,6 +204,7 @@ public:
 		int const selected = ClampChoiceSelection(opt->GetInt(), choices.size());
 		auto pg_choices = MakeChoices(choices);
 		auto *prop = grid->Append(new wxEnumProperty(label, opt_name, pg_choices, selected));
+		ApplyChoiceAffordance(prop);
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
@@ -188,6 +227,7 @@ public:
 			selected = ClampChoiceSelection(opt->GetInt(), choices.size());
 
 		auto *prop = grid->Append(new wxEnumProperty(label, opt_name, pg_choices, selected));
+		ApplyChoiceAffordance(prop);
 		if (opt->GetType() == agi::OptionType::Int) {
 			std::string name = opt_name;
 			updaters.emplace(prop, [this, name](wxVariant const& value) {

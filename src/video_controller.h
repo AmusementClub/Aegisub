@@ -59,8 +59,10 @@ enum class AspectRatio {
 
 /// Manage stuff related to video playback
 class VideoController final : public wxEvtHandler {
-	/// Current frame number changed (new frame number)
+	/// Navigation target frame changed (new frame number)
 	agi::signal::Signal<int> Seek;
+	/// Continuous playback advanced to a new frame (new frame number)
+	agi::signal::Signal<int> PlaybackFrameAdvanced;
 	/// Aspect ratio was changed (type, value)
 	agi::signal::Signal<AspectRatio, double> ARChange;
 
@@ -122,6 +124,9 @@ class VideoController final : public wxEvtHandler {
 	void RequestFrame();
 	void RequestFrameImmediate();
 	void StartPlayback(PlaybackMode mode, int range_end_ms = 0);
+	bool PreparePlayback(PlaybackMode mode, int start_frame, int range_end_ms = 0);
+	void StartPlaybackTimer();
+	void ResetPlaybackState();
 
 public:
 	VideoController(agi::Context *context);
@@ -169,6 +174,7 @@ public:
 	void Stop();
 
 	DEFINE_SIGNAL_ADDERS(Seek, AddSeekListener)
+	DEFINE_SIGNAL_ADDERS(PlaybackFrameAdvanced, AddPlaybackFrameAdvancedListener)
 	DEFINE_SIGNAL_ADDERS(ARChange, AddARChangeListener)
 	agi::ui::WeakLifetime GetAsyncUiLifetime() const { return ui_activation.GetLifetime(); }
 

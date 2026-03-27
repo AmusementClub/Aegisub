@@ -54,6 +54,7 @@ VideoSlider::VideoSlider (wxWindow* parent, agi::Context *c)
 	OPT_SUB("Video/Slider/Show Keyframes", [=] { Refresh(false); }),
 	OPT_SUB("Video/Scale with DPI", [=](agi::OptionValue const&) { UpdateScale(); }),
 	c->GetCore().videoController->AddSeekListener(&VideoSlider::SetValue, this),
+	c->GetUI().AddVideoFramePresentedListener(&VideoSlider::SetValue, this),
 	c->GetCore().project->AddVideoProviderListener(&VideoSlider::VideoOpened, this),
 	c->GetCore().project->AddKeyframesListener(&VideoSlider::KeyframesChanged, this),
 }))

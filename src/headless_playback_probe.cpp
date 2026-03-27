@@ -525,7 +525,7 @@ class Runner final : public wxEvtHandler {
 		++audio_timer_samples;
 	}
 
-	void OnVideoSeek(int frame) {
+	void OnPlaybackFrameAdvanced(int frame) {
 		if (!probe_started || finished)
 			return;
 
@@ -689,7 +689,7 @@ public:
 		InstallProbeLine(options.line_start_ms, playable_duration_ms);
 
 		connections = agi::signal::make_vector({
-			core.videoController->AddSeekListener(&Runner::OnVideoSeek, this),
+			core.videoController->AddPlaybackFrameAdvancedListener(&Runner::OnPlaybackFrameAdvanced, this),
 			core.audioController->AddPlaybackPositionListener(&Runner::OnAudioPlaybackPosition, this),
 		});
 

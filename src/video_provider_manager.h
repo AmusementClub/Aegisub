@@ -14,6 +14,8 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#include "provider_selection_diagnostics.h"
+
 #include <libaegisub/fs_fwd.h>
 
 #include <cstddef>
@@ -36,3 +38,6 @@ struct VideoProviderFactory {
 	static std::vector<std::pair<std::string, std::string>> GetChoices();
 	static std::unique_ptr<VideoProvider> GetProvider(agi::fs::path const& video_file, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 };
+
+aegisub::provider_selection_diagnostics::SelectionReport GetLastVideoProviderSelectionReport();
+void ClearLastVideoProviderSelectionReport();

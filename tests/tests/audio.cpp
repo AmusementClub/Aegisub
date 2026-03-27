@@ -16,6 +16,7 @@
 
 #include <main.h>
 
+#include "../../src/provider_selection_diagnostics.h"
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/make_unique.h>
@@ -97,6 +98,35 @@ struct NamedTestAudioProvider : TestAudioProvider<Sample> {
 		return this->BuildMemoryStats("TestSource");
 	}
 };
+
+TEST(provider_selection_diagnostics, reports_fallback_reason_from_preferred_attempt) {
+	aegisub::provider_selection_diagnostics::SelectionReport report;
+	report.preferred_provider = "Avisynth";
+	report.selected_provider = "FFmpegSource";
+	report.attempts = {
+		{"Avisynth", "error", "Avisynth error:\nmissing plugin"},
+		{"FFmpegSource", "opened", ""}
+	};
+
+	EXPECT_TRUE(aegisub::provider_selection_diagnostics::UsedFallback(report));
+	EXPECT_EQ("error: Avisynth error: missing plugin", aegisub::provider_selection_diagnostics::DescribeFallbackReason(report));
+	EXPECT_EQ(
+		"Avisynth:error (Avisynth error: missing plugin) | FFmpegSource:opened",
+		aegisub::provider_selection_diagnostics::FormatAttempts(report));
+}
+
+TEST(provider_selection_diagnostics, does_not_report_fallback_when_preferred_opens) {
+	aegisub::provider_selection_diagnostics::SelectionReport report;
+	report.preferred_provider = "FFmpegSource";
+	report.selected_provider = "FFmpegSource";
+	report.attempts = {
+		{"FFmpegSource", "opened", ""}
+	};
+
+	EXPECT_FALSE(aegisub::provider_selection_diagnostics::UsedFallback(report));
+	EXPECT_TRUE(aegisub::provider_selection_diagnostics::DescribeFallbackReason(report).empty());
+	EXPECT_EQ("FFmpegSource:opened", aegisub::provider_selection_diagnostics::FormatAttempts(report));
+}
 
 struct BlockingSequenceAudioProvider : agi::AudioProvider {
 	mutable std::mutex mutex;

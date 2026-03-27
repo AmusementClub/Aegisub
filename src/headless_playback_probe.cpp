@@ -18,6 +18,7 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "async_video_provider.h"
+#include "audio_provider_factory.h"
 #include "audio_controller.h"
 #include "include/aegisub/audio_player.h"
 #include "include/aegisub/context.h"
@@ -30,6 +31,7 @@
 #include "ui_services.h"
 #include "version.h"
 #include "video_controller.h"
+#include "video_provider_manager.h"
 
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/fs.h>
@@ -323,6 +325,24 @@ std::string GetSummaryValue(std::map<std::string, std::string> const& summary, c
 	return it == summary.end() ? std::string() : it->second;
 }
 
+std::string BoolString(bool value) {
+	return value ? "true" : "false";
+}
+
+using ProviderSelectionReport = aegisub::provider_selection_diagnostics::SelectionReport;
+
+bool UsedProviderFallback(ProviderSelectionReport const& report) {
+	return aegisub::provider_selection_diagnostics::UsedFallback(report);
+}
+
+std::string FormatProviderAttempts(ProviderSelectionReport const& report) {
+	return aegisub::provider_selection_diagnostics::FormatAttempts(report);
+}
+
+std::string DescribeProviderFallback(ProviderSelectionReport const& report) {
+	return aegisub::provider_selection_diagnostics::DescribeFallbackReason(report);
+}
+
 class Runner final : public wxEvtHandler {
 	Options options;
 	std::function<void(int)> on_done;
@@ -351,8 +371,43 @@ class Runner final : public wxEvtHandler {
 	int max_abs_delta_ms = 0;
 	std::string selected_video_provider;
 	std::string selected_audio_provider;
+	ProviderSelectionReport video_provider_report;
+	ProviderSelectionReport audio_provider_report;
+	std::string actual_video_provider;
 	std::string actual_video_decoder;
+	std::string actual_audio_provider_factory;
 	std::string actual_audio_provider;
+
+	void AppendProbeSummary(int exit_code, std::string const& message, double mean_abs_delta_ms) const {
+		std::ofstream out(trace_dir / "summary.txt", std::ios::out | std::ios::app);
+		if (!out)
+			return;
+
+		auto write_value = [&](char const* key, std::string const& value) {
+			out << key << "=" << aegisub::provider_selection_diagnostics::SanitizeText(value) << "\n";
+		};
+		auto write_bool = [&](char const* key, bool value) {
+			out << key << "=" << BoolString(value) << "\n";
+		};
+
+		write_value("probe.selected.video_provider", selected_video_provider);
+		write_value("probe.actual.video_provider", actual_video_provider);
+		write_value("probe.actual.video_decoder", actual_video_decoder);
+		write_bool("probe.video.provider_fallback", UsedProviderFallback(video_provider_report));
+		write_value("probe.video.provider_fallback_reason", DescribeProviderFallback(video_provider_report));
+		write_value("probe.video.provider_attempts", FormatProviderAttempts(video_provider_report));
+		write_value("probe.selected.audio_provider", selected_audio_provider);
+		write_value("probe.actual.audio_provider_factory", actual_audio_provider_factory);
+		write_value("probe.actual.audio_provider", actual_audio_provider);
+		write_bool("probe.audio.provider_fallback", UsedProviderFallback(audio_provider_report));
+		write_value("probe.audio.provider_fallback_reason", DescribeProviderFallback(audio_provider_report));
+		write_value("probe.audio.provider_attempts", FormatProviderAttempts(audio_provider_report));
+		out << "probe.performed_seeks=" << performed_seeks << "\n";
+		out << "probe.seek.max_abs_delta_ms=" << max_abs_delta_ms << "\n";
+		out << "probe.seek.mean_abs_delta_ms=" << mean_abs_delta_ms << "\n";
+		out << "probe.result=" << (exit_code == 0 ? "PASS" : "FAIL") << "\n";
+		write_value("probe.message", message);
+	}
 
 	void InstallProbeLine(int start_ms, int duration_ms) {
 		auto core = context->GetCore();
@@ -403,8 +458,16 @@ class Runner final : public wxEvtHandler {
 		std::cout << "performed_seeks=" << performed_seeks << "\n";
 		std::cout << "selected.video_provider=" << selected_video_provider << "\n";
 		std::cout << "selected.audio_provider=" << selected_audio_provider << "\n";
+		std::cout << "actual.video_provider=" << actual_video_provider << "\n";
 		std::cout << "actual.video_decoder=" << actual_video_decoder << "\n";
+		std::cout << "video.provider_fallback=" << BoolString(UsedProviderFallback(video_provider_report)) << "\n";
+		std::cout << "video.provider_fallback_reason=" << DescribeProviderFallback(video_provider_report) << "\n";
+		std::cout << "video.provider_attempts=" << FormatProviderAttempts(video_provider_report) << "\n";
+		std::cout << "actual.audio_provider_factory=" << actual_audio_provider_factory << "\n";
 		std::cout << "actual.audio_provider=" << actual_audio_provider << "\n";
+		std::cout << "audio.provider_fallback=" << BoolString(UsedProviderFallback(audio_provider_report)) << "\n";
+		std::cout << "audio.provider_fallback_reason=" << DescribeProviderFallback(audio_provider_report) << "\n";
+		std::cout << "audio.provider_attempts=" << FormatProviderAttempts(audio_provider_report) << "\n";
 		std::cout << "duration_ms=" << options.duration_ms << "\n";
 		std::cout << "audio_rate_scale=" << options.audio_rate_scale << "\n";
 		std::cout << "audio_quantum_ms=" << options.audio_quantum_ms << "\n";
@@ -445,6 +508,8 @@ class Runner final : public wxEvtHandler {
 		temporary_video_provider.reset();
 
 		perf_trace::Shutdown();
+		double mean_abs_delta_ms = seek_samples ? total_abs_delta_ms / seek_samples : 0.0;
+		AppendProbeSummary(exit_code, message, mean_abs_delta_ms);
 		PrintReport(exit_code, message);
 		context.reset();
 		temporary_mru.reset();
@@ -592,7 +657,10 @@ public:
 		selected_video_provider = OPT_GET("Video/Provider")->GetString();
 		selected_audio_provider = options.skip_audio ? std::string() : OPT_GET("Audio/Provider")->GetString();
 
+		ClearLastVideoProviderSelectionReport();
 		core.project->LoadVideo(options.video_path);
+		video_provider_report = GetLastVideoProviderSelectionReport();
+		actual_video_provider = video_provider_report.selected_provider;
 		if (!core.project->VideoProvider()) {
 			Finish(6, "failed to load video");
 			return;
@@ -600,7 +668,10 @@ public:
 		actual_video_decoder = core.project->VideoProvider()->GetDecoderName();
 
 		if (!options.skip_audio) {
+			ClearLastAudioProviderSelectionReport();
 			core.project->LoadAudio(options.audio_path);
+			audio_provider_report = GetLastAudioProviderSelectionReport();
+			actual_audio_provider_factory = audio_provider_report.selected_provider;
 			if (!core.project->AudioProvider()) {
 				Finish(7, "failed to load audio");
 				return;

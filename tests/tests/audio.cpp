@@ -89,6 +89,15 @@ struct TestAudioProvider : agi::AudioProvider {
 	}
 };
 
+template<typename Sample=uint16_t>
+struct NamedTestAudioProvider : TestAudioProvider<Sample> {
+	using TestAudioProvider<Sample>::TestAudioProvider;
+
+	agi::AudioProviderMemoryStats GetMemoryStats() const override {
+		return this->BuildMemoryStats("TestSource");
+	}
+};
+
 struct BlockingSequenceAudioProvider : agi::AudioProvider {
 	mutable std::mutex mutex;
 	mutable std::condition_variable cv;
@@ -340,6 +349,13 @@ TEST(lagi_audio, ram_cache_reports_memory_stats) {
 	EXPECT_EQ(1, warm_stats.resident_pages);
 }
 
+TEST(lagi_audio, ram_cache_preserves_wrapped_provider_name) {
+	auto provider = agi::CreateRAMAudioProvider(agi::make_unique<NamedTestAudioProvider<>>());
+
+	auto const stats = provider->GetMemoryStats();
+	EXPECT_EQ("RAM Paged (TestSource)", stats.provider_name);
+}
+
 TEST(lagi_audio, hd_cache) {
 	auto provider = agi::CreateHDAudioProvider(agi::make_unique<TestAudioProvider<>>(), agi::Path().Decode("?temp"));
 	while (provider->GetDecodedSamples() != provider->GetNumSamples()) agi::util::sleep_for(0);
@@ -361,6 +377,13 @@ TEST(lagi_audio, hd_cache_reports_memory_stats) {
 	EXPECT_EQ(static_cast<size_t>(90) * 48000 * sizeof(uint16_t), stats.storage_bytes);
 	EXPECT_EQ(stats.storage_bytes, stats.logical_bytes);
 	EXPECT_EQ(stats.logical_bytes, stats.decoded_bytes);
+}
+
+TEST(lagi_audio, hd_cache_preserves_wrapped_provider_name) {
+	auto provider = agi::CreateHDAudioProvider(agi::make_unique<NamedTestAudioProvider<>>(), agi::Path().Decode("?temp"));
+
+	auto const stats = provider->GetMemoryStats();
+	EXPECT_EQ("HD (TestSource)", stats.provider_name);
 }
 
 TEST(lagi_audio, ram_cache_does_not_decode_until_requested) {

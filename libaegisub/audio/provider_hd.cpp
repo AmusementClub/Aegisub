@@ -30,6 +30,21 @@
 namespace {
 using namespace agi;
 
+std::string FormatWrappedProviderName(char const* wrapper_name, AudioProvider const* source) {
+	std::string name = wrapper_name;
+	if (!source)
+		return name;
+
+	auto const source_name = source->GetMemoryStats().provider_name;
+	if (source_name.empty())
+		return name;
+
+	name += " (";
+	name += source_name;
+	name += ")";
+	return name;
+}
+
 class HDAudioProvider final : public AudioProviderWrapper {
 	mutable temp_file_mapping file;
 	std::jthread decoder;
@@ -77,7 +92,7 @@ public:
 	~HDAudioProvider() = default;
 	AudioProviderMemoryStats GetMemoryStats() const override {
 		return BuildMemoryStats(
-			"HD",
+			FormatWrappedProviderName("HD", source.get()),
 			"disk",
 			static_cast<size_t>(num_samples)
 				* static_cast<size_t>(bytes_per_sample)

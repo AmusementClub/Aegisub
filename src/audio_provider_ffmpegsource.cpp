@@ -61,6 +61,7 @@ public:
 	FFmpegSourceAudioProvider(agi::fs::path const& filename, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 
 	bool NeedsCache() const override { return true; }
+	agi::AudioProviderMemoryStats GetMemoryStats() const override { return BuildMemoryStats("FFmpegSource"); }
 };
 
 /// @brief Constructor

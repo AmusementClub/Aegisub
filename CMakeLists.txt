@@ -514,6 +514,7 @@ add_executable(Aegisub WIN32
     src/native_library.cpp
     src/pen.cpp
     src/perf_trace.cpp
+    src/playback_probe_service.cpp
     src/playback_query_service.cpp
     src/persist_location.cpp
     src/preferences.cpp

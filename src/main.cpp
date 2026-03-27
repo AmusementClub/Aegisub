@@ -48,6 +48,7 @@
 #include "frame_main.h"
 #include "headless_cli.h"
 #include "headless_playback_probe.h"
+#include "playback_probe_service.h"
 #include "include/aegisub/context.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
@@ -340,7 +341,7 @@ bool AegisubApp::OnInit() {
 			if (auto *probe = std::get_if<headless_cli::ProbePlaybackCommand>(&*cli_parse.command)) {
 				auto probe_request = probe->request;
 				CallAfter([this, probe_request = std::move(probe_request)]() mutable {
-					headless_playback_probe::RunAsync(std::move(probe_request), [this](headless_playback_probe::PlaybackProbeResult result) {
+					aegisub::playback_probe_service::RunAsync(std::move(probe_request), [this](headless_playback_probe::PlaybackProbeResult result) {
 						headless_cli_exit_code = result.exit_code;
 						ExitMainLoop();
 					});
@@ -388,7 +389,7 @@ bool AegisubApp::OnInit() {
 
 			auto probe_request = *probe_parse.request;
 			CallAfter([this, probe_request = std::move(probe_request)]() mutable {
-				headless_playback_probe::RunAsync(std::move(probe_request), [this](headless_playback_probe::PlaybackProbeResult result) {
+				aegisub::playback_probe_service::RunAsync(std::move(probe_request), [this](headless_playback_probe::PlaybackProbeResult result) {
 					headless_cli_exit_code = result.exit_code;
 					ExitMainLoop();
 				});

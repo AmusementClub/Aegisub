@@ -14,6 +14,8 @@
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 #include "headless_cli.h"
+#include "playback_probe_service.h"
+#include "trace_inspect_service.h"
 
 #include <libaegisub/fs.h>
 #include <libaegisub/exception.h>
@@ -127,19 +129,6 @@ void AppendJsonTypedValue(std::ostringstream& out, std::string const& value) {
 	out << '"' << JsonEscape(value) << '"';
 }
 
-std::map<std::string, std::string> ReadKeyValueFile(agi::fs::path const& path) {
-	std::map<std::string, std::string> values;
-	std::ifstream in(path, std::ios::in);
-	std::string line;
-	while (std::getline(in, line)) {
-		auto split = line.find('=');
-		if (split == std::string::npos)
-			continue;
-		values.emplace(line.substr(0, split), line.substr(split + 1));
-	}
-	return values;
-}
-
 std::string KeyValueMapToJson(std::map<std::string, std::string> const& values, int indent) {
 	std::ostringstream out;
 	std::string padding(indent, ' ');
@@ -168,22 +157,12 @@ std::optional<std::string> RequireValue(std::vector<std::string> const& args, si
 	return args[index];
 }
 
-agi::fs::path ResolveSessionDirectory(agi::fs::path path) {
-	if (agi::fs::DirectoryExists(path))
-		return path;
-
-	auto filename = path.filename().string();
-	if (filename == "summary.txt" || filename == "manifest.txt" || filename == "trace.ndjson")
-		return path.parent_path();
-	return {};
-}
-
-std::string BuildTraceInspectJson(agi::fs::path const& session_dir, std::map<std::string, std::string> const& manifest, std::map<std::string, std::string> const& summary) {
+std::string BuildTraceInspectJson(aegisub::trace_inspect_service::TraceSessionSummary const& session) {
 	std::ostringstream out;
 	out << "{\n";
-	out << "  \"session_dir\": \"" << JsonEscape(ToGenericString(session_dir)) << "\",\n";
-	out << "  \"manifest\": " << KeyValueMapToJson(manifest, 2) << ",\n";
-	out << "  \"summary\": " << KeyValueMapToJson(summary, 2) << "\n";
+	out << "  \"session_dir\": \"" << JsonEscape(ToGenericString(session.session_dir)) << "\",\n";
+	out << "  \"manifest\": " << KeyValueMapToJson(session.manifest, 2) << ",\n";
+	out << "  \"summary\": " << KeyValueMapToJson(session.summary, 2) << "\n";
 	out << "}\n";
 	return out.str();
 }
@@ -367,7 +346,7 @@ class BatchPlaybackProbeRunner final {
 			}
 			probe_request.trace_dir = trace_dir;
 
-			headless_playback_probe::RunAsync(std::move(probe_request), [this, index, spec](headless_playback_probe::PlaybackProbeResult probe_result) mutable {
+			aegisub::playback_probe_service::RunAsync(std::move(probe_request), [this, index, spec](headless_playback_probe::PlaybackProbeResult probe_result) mutable {
 				results.push_back(BatchCaseResult{
 					index,
 					std::move(spec),
@@ -541,29 +520,13 @@ ParseResult ParseCommandLine(std::vector<std::string> const& args) {
 
 TraceInspectResult RunInspectTrace(TraceInspectRequest const& request) {
 	TraceInspectResult result;
-	auto session_dir = ResolveSessionDirectory(request.input_path);
-	if (session_dir.empty()) {
+	auto service_result = aegisub::trace_inspect_service::Inspect(request);
+	if (!service_result.session) {
 		result.exit_code = 2;
-		result.error = "could not resolve trace session directory from: " + ToGenericString(request.input_path);
+		result.error = service_result.error;
 		return result;
 	}
-
-	auto manifest_path = session_dir / "manifest.txt";
-	auto summary_path = session_dir / "summary.txt";
-	if (!agi::fs::FileExists(manifest_path)) {
-		result.exit_code = 2;
-		result.error = "trace inspect missing manifest.txt in: " + ToGenericString(session_dir);
-		return result;
-	}
-	if (!agi::fs::FileExists(summary_path)) {
-		result.exit_code = 2;
-		result.error = "trace inspect missing summary.txt in: " + ToGenericString(session_dir);
-		return result;
-	}
-
-	auto manifest = ReadKeyValueFile(manifest_path);
-	auto summary = ReadKeyValueFile(summary_path);
-	result.output = BuildTraceInspectJson(session_dir, manifest, summary);
+	result.output = BuildTraceInspectJson(*service_result.session);
 	return result;
 }
 

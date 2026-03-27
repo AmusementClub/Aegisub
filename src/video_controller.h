@@ -134,6 +134,7 @@ public:
 
 	/// Is the video currently playing?
 	bool IsPlaying() const { return playback.IsRunning(); }
+	bool PlaybackUsesAudioAuthority() const { return playback_uses_audio_authority; }
 
 	/// Get the current frame number
 	int GetFrameN() const { return frame_n; }

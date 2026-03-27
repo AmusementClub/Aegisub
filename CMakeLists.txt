@@ -514,10 +514,12 @@ add_executable(Aegisub WIN32
     src/native_library.cpp
     src/pen.cpp
     src/perf_trace.cpp
+    src/playback_query_service.cpp
     src/persist_location.cpp
     src/preferences.cpp
     src/preferences_base.cpp
     src/project.cpp
+    src/project_open_service.cpp
     src/resolution_resampler.cpp
     src/search_replace_engine.cpp
     src/selection_controller.cpp
@@ -542,6 +544,7 @@ add_executable(Aegisub WIN32
     src/toggle_bitmap.cpp
     src/toolbar.cpp
     src/tooltip_manager.cpp
+    src/trace_inspect_service.cpp
     src/utils.cpp
     src/ui_services.cpp
     src/validators.cpp

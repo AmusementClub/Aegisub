@@ -25,6 +25,8 @@
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "perf_trace.h"
+#include "playback_query_service.h"
+#include "project_open_service.h"
 #include "project.h"
 #include "selection_controller.h"
 #include "status_sink.h"
@@ -681,26 +683,28 @@ public:
 		selected_audio_provider = request.skip_audio ? std::string() : OPT_GET("Audio/Provider")->GetString();
 
 		ClearLastVideoProviderSelectionReport();
-		core.project->LoadVideo(request.video_path);
+		if (!request.skip_audio)
+			ClearLastAudioProviderSelectionReport();
+
+		auto open_result = aegisub::project_open_service::Open(*context, {
+			request.video_path,
+			request.skip_audio ? std::optional<agi::fs::path>{} : std::make_optional(request.audio_path),
+			request.skip_audio
+		});
+
 		video_provider_report = GetLastVideoProviderSelectionReport();
 		actual_video_provider = video_provider_report.selected_provider;
-		if (!core.project->VideoProvider()) {
-			Finish(6, "failed to load video");
-			return;
-		}
-		actual_video_decoder = core.project->VideoProvider()->GetDecoderName();
-
 		if (!request.skip_audio) {
-			ClearLastAudioProviderSelectionReport();
-			core.project->LoadAudio(request.audio_path);
 			audio_provider_report = GetLastAudioProviderSelectionReport();
 			actual_audio_provider_factory = audio_provider_report.selected_provider;
-			if (!core.project->AudioProvider()) {
-				Finish(7, "failed to load audio");
-				return;
-			}
-			actual_audio_provider = core.project->AudioProvider()->GetMemoryStats().provider_name;
 		}
+		if (!open_result.opened) {
+			Finish(open_result.error_code ? open_result.error_code : 8,
+				open_result.error.empty() ? "failed to open project media" : open_result.error);
+			return;
+		}
+		actual_video_decoder = open_result.media.video_decoder_name;
+		actual_audio_provider = open_result.media.audio_provider_name;
 
 		int playable_duration_ms = ComputePlayableDurationMs();
 		if (playable_duration_ms <= 0) {

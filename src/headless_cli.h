@@ -1,6 +1,7 @@
 #pragma once
 
 #include "headless_playback_probe.h"
+#include "trace_inspect_service.h"
 
 #include <libaegisub/fs_fwd.h>
 
@@ -12,9 +13,7 @@
 
 namespace headless_cli {
 
-struct TraceInspectRequest {
-	agi::fs::path input_path;
-};
+using TraceInspectRequest = aegisub::trace_inspect_service::TraceInspectRequest;
 
 struct TraceInspectResult {
 	int exit_code = 0;

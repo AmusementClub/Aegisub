@@ -501,6 +501,7 @@ add_executable(Aegisub WIN32
     src/gl_text.cpp
     src/gl_wrap.cpp
     src/grid_column.cpp
+    src/headless_cli.cpp
     src/headless_playback_probe.cpp
     src/help_button.cpp
     src/hotkey.cpp

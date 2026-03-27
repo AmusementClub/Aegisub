@@ -62,8 +62,8 @@ class AegisubApp : public wxApp {
 
 	std::vector<FrameMain *> frames;
 	agi::ui::UiActivationScope ui_activation;
-	bool headless_probe_mode = false;
-	int headless_probe_exit_code = 1;
+	bool headless_cli_mode = false;
+	int headless_cli_exit_code = 1;
 public:
 	AegisubApp();
 	AegisubLocale locale;

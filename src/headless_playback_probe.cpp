@@ -525,8 +525,6 @@ class Runner final : public wxEvtHandler {
 			core.project->CloseAudio();
 			core.project->CloseVideo();
 		}
-		temporary_audio_provider.reset();
-		temporary_video_provider.reset();
 
 		perf_trace::Shutdown();
 		double mean_abs_delta_ms = seek_samples ? total_abs_delta_ms / seek_samples : 0.0;
@@ -534,6 +532,8 @@ class Runner final : public wxEvtHandler {
 		AppendProbeSummary(result);
 		PrintReport(result);
 		context.reset();
+		temporary_audio_provider.reset();
+		temporary_video_provider.reset();
 		temporary_mru.reset();
 
 		if (on_done)
@@ -662,6 +662,7 @@ public:
 
 		trace_dir = request.trace_dir.value_or(UniqueProbeTraceDir());
 		agi::fs::CreateDirectory(trace_dir.parent_path());
+		agi::fs::CreateDirectory(trace_dir);
 		temporary_mru.emplace(trace_dir / "probe_mru.json");
 		temporary_video_provider.emplace("Video/Provider", request.video_provider);
 		if (!request.skip_audio)
@@ -742,12 +743,8 @@ bool IsRequested(std::vector<std::string> const& args) {
 
 } // namespace
 
-CommandLineParseResult ParseCommandLine(std::vector<std::string> const& args) {
-	CommandLineParseResult result;
-	result.requested = IsRequested(args);
-	if (!result.requested)
-		return result;
-
+RequestParseResult ParseRequestArguments(std::vector<std::string> const& args, bool require_video) {
+	RequestParseResult result;
 	PlaybackProbeRequest request;
 	bool have_video = false;
 
@@ -917,7 +914,7 @@ CommandLineParseResult ParseCommandLine(std::vector<std::string> const& args) {
 		return result;
 	}
 
-	if (!have_video) {
+	if (require_video && !have_video) {
 		result.error = "--headless-playback-probe requires --probe-video\n" + Usage();
 		return result;
 	}
@@ -929,6 +926,26 @@ CommandLineParseResult ParseCommandLine(std::vector<std::string> const& args) {
 		request.audio_path = request.video_path;
 
 	result.request = std::move(request);
+	return result;
+}
+
+CommandLineParseResult ParseCommandLine(std::vector<std::string> const& args) {
+	CommandLineParseResult result;
+	result.requested = IsRequested(args);
+	if (!result.requested)
+		return result;
+
+	std::vector<std::string> probe_args;
+	probe_args.reserve(args.size());
+	probe_args.emplace_back(args.empty() ? "Aegisub.exe" : args.front());
+	for (size_t i = 1; i < args.size(); ++i) {
+		if (args[i] != "--headless-playback-probe")
+			probe_args.emplace_back(args[i]);
+	}
+
+	auto parsed = ParseRequestArguments(probe_args, true);
+	result.request = std::move(parsed.request);
+	result.error = std::move(parsed.error);
 	return result;
 }
 

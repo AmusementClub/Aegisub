@@ -45,6 +45,7 @@ class Project {
 	agi::signal::Signal<AsyncVideoProvider *> AnnounceVideoProviderModified;
 	agi::signal::Signal<agi::vfr::Framerate const&> AnnounceTimecodesModified;
 	agi::signal::Signal<std::vector<int> const&> AnnounceKeyframesModified;
+	std::vector<agi::signal::Connection> option_connections;
 
 	bool video_has_subtitles = false;
 	std::unique_ptr<agi::BackgroundRunner> progress_runner;

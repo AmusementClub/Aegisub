@@ -46,6 +46,7 @@
 #include "export_framerate.h"
 #include "format.h"
 #include "frame_main.h"
+#include "headless_cli.h"
 #include "headless_playback_probe.h"
 #include "include/aegisub/context.h"
 #include "libresrc/libresrc.h"
@@ -326,11 +327,60 @@ bool AegisubApp::OnInit() {
 		StartupLog("Install PNG handler");
 		wxImage::AddHandler(new wxPNGHandler);
 
+		auto cli_parse = headless_cli::ParseCommandLine(ToUtf8Args(argv.GetArguments()));
+		if (cli_parse.requested) {
+			headless_cli_mode = true;
+			if (!cli_parse.command) {
+				headless_cli_exit_code = 64;
+				std::cerr << cli_parse.error << std::endl;
+				CallAfter([this] { ExitMainLoop(); });
+				return true;
+			}
+
+			if (auto *probe = std::get_if<headless_cli::ProbePlaybackCommand>(&*cli_parse.command)) {
+				auto probe_request = probe->request;
+				CallAfter([this, probe_request = std::move(probe_request)]() mutable {
+					headless_playback_probe::RunAsync(std::move(probe_request), [this](headless_playback_probe::PlaybackProbeResult result) {
+						headless_cli_exit_code = result.exit_code;
+						ExitMainLoop();
+					});
+				});
+				return true;
+			}
+
+			if (auto *inspect = std::get_if<headless_cli::InspectTraceCommand>(&*cli_parse.command)) {
+				auto inspect_result = headless_cli::RunInspectTrace(inspect->request);
+				headless_cli_exit_code = inspect_result.exit_code;
+				if (!inspect_result.output.empty())
+					std::cout << inspect_result.output;
+				if (!inspect_result.error.empty())
+					std::cerr << inspect_result.error << std::endl;
+				CallAfter([this] { ExitMainLoop(); });
+				return true;
+			}
+
+			if (auto *batch = std::get_if<headless_cli::BatchPlaybackProbeCommand>(&*cli_parse.command)) {
+				auto batch_request = batch->request;
+				CallAfter([this, batch_request = std::move(batch_request)]() mutable {
+					headless_cli::RunBatchPlaybackProbeAsync(std::move(batch_request), [this](headless_cli::BatchPlaybackProbeResult result) {
+						headless_cli_exit_code = result.exit_code;
+						ExitMainLoop();
+					});
+				});
+				return true;
+			}
+
+			headless_cli_exit_code = 64;
+			std::cerr << "unhandled CLI command" << std::endl;
+			CallAfter([this] { ExitMainLoop(); });
+			return true;
+		}
+
 		auto probe_parse = headless_playback_probe::ParseCommandLine(ToUtf8Args(argv.GetArguments()));
 		if (probe_parse.requested) {
-			headless_probe_mode = true;
+			headless_cli_mode = true;
 			if (!probe_parse.request) {
-				headless_probe_exit_code = 64;
+				headless_cli_exit_code = 64;
 				std::cerr << probe_parse.error << std::endl;
 				CallAfter([this] { ExitMainLoop(); });
 				return true;
@@ -339,7 +389,7 @@ bool AegisubApp::OnInit() {
 			auto probe_request = *probe_parse.request;
 			CallAfter([this, probe_request = std::move(probe_request)]() mutable {
 				headless_playback_probe::RunAsync(std::move(probe_request), [this](headless_playback_probe::PlaybackProbeResult result) {
-					headless_probe_exit_code = result.exit_code;
+					headless_cli_exit_code = result.exit_code;
 					ExitMainLoop();
 				});
 			});
@@ -525,8 +575,8 @@ int AegisubApp::OnRun() {
 
 	try {
 		auto exit_code = MainLoop();
-		if (headless_probe_mode)
-			return headless_probe_exit_code;
+		if (headless_cli_mode)
+			return headless_cli_exit_code;
 		return exit_code;
 	}
 	catch (const std::exception &e) { error = std::string("std::exception: ") + e.what(); }

@@ -58,6 +58,12 @@ struct CommandLineParseResult {
 	std::string error;
 };
 
+struct RequestParseResult {
+	std::optional<PlaybackProbeRequest> request;
+	std::string error;
+};
+
+RequestParseResult ParseRequestArguments(std::vector<std::string> const& args, bool require_video);
 CommandLineParseResult ParseCommandLine(std::vector<std::string> const& args);
 void RunAsync(PlaybackProbeRequest request, std::function<void(PlaybackProbeResult)> on_done);
 std::string Usage();

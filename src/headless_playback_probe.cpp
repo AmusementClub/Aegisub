@@ -338,10 +338,13 @@ class Runner final : public wxEvtHandler {
 	wxTimer timeout_timer{this};
 	wxTimer completion_timer{this};
 	wxTimer restart_timer{this};
+	wxTimer seek_timer{this};
 	agi::fs::path trace_dir;
 	bool probe_started = false;
 	bool finished = false;
+	bool playback_stop_handled = false;
 	int completed_playbacks = 0;
+	int performed_seeks = 0;
 	int audio_timer_samples = 0;
 	int seek_samples = 0;
 	double total_abs_delta_ms = 0.0;
@@ -395,6 +398,9 @@ class Runner final : public wxEvtHandler {
 		std::cout << "line_start_ms=" << options.line_start_ms << "\n";
 		std::cout << "repeat_count=" << options.repeat_count << "\n";
 		std::cout << "repeat_gap_ms=" << options.repeat_gap_ms << "\n";
+		std::cout << "seek_after_ms=" << (options.seek_after_ms ? std::to_string(*options.seek_after_ms) : std::string()) << "\n";
+		std::cout << "seek_target_offset_ms=" << (options.seek_target_offset_ms ? std::to_string(*options.seek_target_offset_ms) : std::string()) << "\n";
+		std::cout << "performed_seeks=" << performed_seeks << "\n";
 		std::cout << "selected.video_provider=" << selected_video_provider << "\n";
 		std::cout << "selected.audio_provider=" << selected_audio_provider << "\n";
 		std::cout << "actual.video_decoder=" << actual_video_decoder << "\n";
@@ -425,6 +431,7 @@ class Runner final : public wxEvtHandler {
 		timeout_timer.Stop();
 		completion_timer.Stop();
 		restart_timer.Stop();
+		seek_timer.Stop();
 		connections.clear();
 
 		if (context) {
@@ -457,11 +464,17 @@ class Runner final : public wxEvtHandler {
 		if (!probe_started || finished)
 			return;
 
-		++seek_samples;
 		if (options.skip_audio)
+		{
+			++seek_samples;
 			return;
+		}
 
 		auto core = context->GetCore();
+		if (!core.audioController->IsPlaying())
+			return;
+
+		++seek_samples;
 		int frame_time_ms = core.videoController->TimeAtFrame(frame, agi::vfr::EXACT);
 		int audio_time_ms = fake_audio_state->GetCurrentPositionMs();
 		int abs_delta_ms = std::abs(frame_time_ms - audio_time_ms);
@@ -506,6 +519,13 @@ class Runner final : public wxEvtHandler {
 			return;
 
 		auto core = context->GetCore();
+		if (core.videoController->IsPlaying()) {
+			playback_stop_handled = false;
+			return;
+		}
+		if (playback_stop_handled)
+			return;
+		playback_stop_handled = true;
 		if (!core.videoController->IsPlaying())
 			OnPlaybackStopped();
 	}
@@ -515,9 +535,28 @@ class Runner final : public wxEvtHandler {
 			return;
 
 		auto core = context->GetCore();
+		playback_stop_handled = false;
 		core.videoController->PlayLine();
 		if (!core.videoController->IsPlaying())
 			Finish(10, "playback probe could not restart playback");
+		ArmSeekTimer();
+	}
+
+	void OnSeekTimer(wxTimerEvent&) {
+		if (finished || !probe_started || !context || !options.seek_target_offset_ms)
+			return;
+
+		auto core = context->GetCore();
+		++performed_seeks;
+		core.videoController->JumpToTime(options.line_start_ms + *options.seek_target_offset_ms);
+		if (!core.videoController->IsPlaying())
+			Finish(11, "playback probe lost playback after scheduled seek");
+	}
+
+	void ArmSeekTimer() {
+		seek_timer.Stop();
+		if (options.seek_after_ms)
+			seek_timer.StartOnce(*options.seek_after_ms);
 	}
 
 public:
@@ -532,6 +571,7 @@ public:
 		Bind(wxEVT_TIMER, &Runner::OnTimeout, this, timeout_timer.GetId());
 		Bind(wxEVT_TIMER, &Runner::OnCompletionPoll, this, completion_timer.GetId());
 		Bind(wxEVT_TIMER, &Runner::OnRestartTimer, this, restart_timer.GetId());
+		Bind(wxEVT_TIMER, &Runner::OnSeekTimer, this, seek_timer.GetId());
 
 		trace_dir = options.trace_dir.value_or(UniqueProbeTraceDir());
 		agi::fs::CreateDirectory(trace_dir.parent_path());
@@ -580,7 +620,6 @@ public:
 		connections = agi::signal::make_vector({
 			core.videoController->AddSeekListener(&Runner::OnVideoSeek, this),
 			core.audioController->AddPlaybackPositionListener(&Runner::OnAudioPlaybackPosition, this),
-			core.audioController->AddPlaybackStopListener(&Runner::OnPlaybackStopped, this),
 		});
 
 		int timeout_ms = static_cast<int>(std::ceil(playable_duration_ms / std::max(options.audio_rate_scale, 0.1))) * std::max(options.repeat_count, 1)
@@ -590,11 +629,13 @@ public:
 		completion_timer.Start(20);
 
 		probe_started = true;
+		playback_stop_handled = false;
 		core.videoController->PlayLine();
 		if (!core.videoController->IsPlaying()) {
 			Finish(9, "video controller did not enter playback");
 			return;
 		}
+		ArmSeekTimer();
 	}
 };
 
@@ -685,6 +726,30 @@ ParseResult Parse(wxArrayString const& args) {
 			options.repeat_gap_ms = *parsed;
 			continue;
 		}
+		if (arg == "--probe-seek-after-ms") {
+			auto value = require_value(i, "--probe-seek-after-ms");
+			if (!value)
+				return result;
+			auto parsed = ParseInt(*value);
+			if (!parsed || *parsed < 0) {
+				result.error = "--probe-seek-after-ms must be a non-negative integer\n" + Usage();
+				return result;
+			}
+			options.seek_after_ms = *parsed;
+			continue;
+		}
+		if (arg == "--probe-seek-target-offset-ms") {
+			auto value = require_value(i, "--probe-seek-target-offset-ms");
+			if (!value)
+				return result;
+			auto parsed = ParseInt(*value);
+			if (!parsed || *parsed < 0) {
+				result.error = "--probe-seek-target-offset-ms must be a non-negative integer\n" + Usage();
+				return result;
+			}
+			options.seek_target_offset_ms = *parsed;
+			continue;
+		}
 		if (arg == "--probe-video-provider") {
 			auto value = require_value(i, "--probe-video-provider");
 			if (!value)
@@ -763,6 +828,10 @@ ParseResult Parse(wxArrayString const& args) {
 		result.error = "--headless-playback-probe requires --probe-video\n" + Usage();
 		return result;
 	}
+	if (options.seek_after_ms.has_value() != options.seek_target_offset_ms.has_value()) {
+		result.error = "--probe-seek-after-ms and --probe-seek-target-offset-ms must be used together\n" + Usage();
+		return result;
+	}
 	if (!options.skip_audio && options.audio_path.empty())
 		options.audio_path = options.video_path;
 
@@ -780,6 +849,7 @@ std::string Usage() {
 		"Usage: Aegisub.exe --headless-playback-probe --probe-video <path> "
 		"[--probe-audio <path>] [--probe-skip-audio] [--probe-line-start-ms <ms>] "
 		"[--probe-repeat-count <count>] [--probe-repeat-gap-ms <ms>] "
+		"[--probe-seek-after-ms <ms>] [--probe-seek-target-offset-ms <ms>] "
 		"[--probe-video-provider <name>] [--probe-audio-provider <name>] "
 		"[--probe-duration-ms <ms>] "
 		"[--probe-audio-rate-scale <scale>] [--probe-audio-quantum-ms <ms>] "

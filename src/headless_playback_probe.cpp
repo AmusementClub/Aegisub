@@ -337,9 +337,11 @@ class Runner final : public wxEvtHandler {
 	std::optional<ScopedTemporaryStringOption> temporary_audio_provider;
 	wxTimer timeout_timer{this};
 	wxTimer completion_timer{this};
+	wxTimer restart_timer{this};
 	agi::fs::path trace_dir;
 	bool probe_started = false;
 	bool finished = false;
+	int completed_playbacks = 0;
 	int audio_timer_samples = 0;
 	int seek_samples = 0;
 	double total_abs_delta_ms = 0.0;
@@ -349,14 +351,14 @@ class Runner final : public wxEvtHandler {
 	std::string actual_video_decoder;
 	std::string actual_audio_provider;
 
-	void InstallProbeLine(int duration_ms) {
+	void InstallProbeLine(int start_ms, int duration_ms) {
 		auto core = context->GetCore();
 		core.ass->Events.clear_and_dispose([](AssDialogue *line) { delete line; });
 
 		auto *line = new AssDialogue;
 		line->Row = 0;
-		line->Start = 0;
-		line->End = duration_ms;
+		line->Start = start_ms;
+		line->End = start_ms + duration_ms;
 		line->Text = "headless playback probe";
 		core.ass->Events.push_back(*line);
 		core.selectionController->SetSelectionAndActive({line}, line);
@@ -371,13 +373,15 @@ class Runner final : public wxEvtHandler {
 			return 0;
 
 		int video_duration_ms = core.videoController->TimeAtFrame(video_provider->GetFrameCount() - 1, agi::vfr::END);
+		int remaining_video_ms = std::max(0, video_duration_ms - options.line_start_ms);
 		if (!audio_provider)
-			return std::max(0, std::min(options.duration_ms, video_duration_ms));
+			return std::max(0, std::min(options.duration_ms, remaining_video_ms));
 
 		int audio_duration_ms = static_cast<int>(
 			(audio_provider->GetNumSamples() * 1000 + audio_provider->GetSampleRate() - 1)
 			/ audio_provider->GetSampleRate());
-		return std::max(0, std::min({options.duration_ms, video_duration_ms, audio_duration_ms}));
+		int remaining_audio_ms = std::max(0, audio_duration_ms - options.line_start_ms);
+		return std::max(0, std::min({options.duration_ms, remaining_video_ms, remaining_audio_ms}));
 	}
 
 	void PrintReport(int exit_code, std::string const& message) {
@@ -388,6 +392,9 @@ class Runner final : public wxEvtHandler {
 		std::cout << "video=" << options.video_path.string() << "\n";
 		std::cout << "audio=" << options.audio_path.string() << "\n";
 		std::cout << "skip_audio=" << (options.skip_audio ? "true" : "false") << "\n";
+		std::cout << "line_start_ms=" << options.line_start_ms << "\n";
+		std::cout << "repeat_count=" << options.repeat_count << "\n";
+		std::cout << "repeat_gap_ms=" << options.repeat_gap_ms << "\n";
 		std::cout << "selected.video_provider=" << selected_video_provider << "\n";
 		std::cout << "selected.audio_provider=" << selected_audio_provider << "\n";
 		std::cout << "actual.video_decoder=" << actual_video_decoder << "\n";
@@ -417,6 +424,7 @@ class Runner final : public wxEvtHandler {
 		finished = true;
 		timeout_timer.Stop();
 		completion_timer.Stop();
+		restart_timer.Stop();
 		connections.clear();
 
 		if (context) {
@@ -465,6 +473,12 @@ class Runner final : public wxEvtHandler {
 		if (finished || !probe_started)
 			return;
 
+		++completed_playbacks;
+		if (completed_playbacks < options.repeat_count) {
+			restart_timer.StartOnce(options.repeat_gap_ms);
+			return;
+		}
+
 		int exit_code = 0;
 		std::string message;
 		if (!options.skip_audio && audio_timer_samples == 0) {
@@ -496,6 +510,16 @@ class Runner final : public wxEvtHandler {
 			OnPlaybackStopped();
 	}
 
+	void OnRestartTimer(wxTimerEvent&) {
+		if (finished || !probe_started || !context)
+			return;
+
+		auto core = context->GetCore();
+		core.videoController->PlayLine();
+		if (!core.videoController->IsPlaying())
+			Finish(10, "playback probe could not restart playback");
+	}
+
 public:
 	Runner(Options options, std::function<void(int)> on_done)
 	: options(std::move(options))
@@ -507,6 +531,7 @@ public:
 	void Start() {
 		Bind(wxEVT_TIMER, &Runner::OnTimeout, this, timeout_timer.GetId());
 		Bind(wxEVT_TIMER, &Runner::OnCompletionPoll, this, completion_timer.GetId());
+		Bind(wxEVT_TIMER, &Runner::OnRestartTimer, this, restart_timer.GetId());
 
 		trace_dir = options.trace_dir.value_or(UniqueProbeTraceDir());
 		agi::fs::CreateDirectory(trace_dir.parent_path());
@@ -550,7 +575,7 @@ public:
 		}
 
 		options.duration_ms = playable_duration_ms;
-		InstallProbeLine(playable_duration_ms);
+		InstallProbeLine(options.line_start_ms, playable_duration_ms);
 
 		connections = agi::signal::make_vector({
 			core.videoController->AddSeekListener(&Runner::OnVideoSeek, this),
@@ -558,7 +583,9 @@ public:
 			core.audioController->AddPlaybackStopListener(&Runner::OnPlaybackStopped, this),
 		});
 
-		int timeout_ms = static_cast<int>(std::ceil(playable_duration_ms / std::max(options.audio_rate_scale, 0.1))) + 3000;
+		int timeout_ms = static_cast<int>(std::ceil(playable_duration_ms / std::max(options.audio_rate_scale, 0.1))) * std::max(options.repeat_count, 1)
+			+ std::max(0, options.repeat_count - 1) * options.repeat_gap_ms
+			+ 3000;
 		timeout_timer.Start(timeout_ms, true);
 		completion_timer.Start(20);
 
@@ -620,6 +647,42 @@ ParseResult Parse(wxArrayString const& args) {
 		}
 		if (arg == "--probe-skip-audio") {
 			options.skip_audio = true;
+			continue;
+		}
+		if (arg == "--probe-line-start-ms") {
+			auto value = require_value(i, "--probe-line-start-ms");
+			if (!value)
+				return result;
+			auto parsed = ParseInt(*value);
+			if (!parsed || *parsed < 0) {
+				result.error = "--probe-line-start-ms must be a non-negative integer\n" + Usage();
+				return result;
+			}
+			options.line_start_ms = *parsed;
+			continue;
+		}
+		if (arg == "--probe-repeat-count") {
+			auto value = require_value(i, "--probe-repeat-count");
+			if (!value)
+				return result;
+			auto parsed = ParseInt(*value);
+			if (!parsed || *parsed <= 0) {
+				result.error = "--probe-repeat-count must be a positive integer\n" + Usage();
+				return result;
+			}
+			options.repeat_count = *parsed;
+			continue;
+		}
+		if (arg == "--probe-repeat-gap-ms") {
+			auto value = require_value(i, "--probe-repeat-gap-ms");
+			if (!value)
+				return result;
+			auto parsed = ParseInt(*value);
+			if (!parsed || *parsed < 0) {
+				result.error = "--probe-repeat-gap-ms must be a non-negative integer\n" + Usage();
+				return result;
+			}
+			options.repeat_gap_ms = *parsed;
 			continue;
 		}
 		if (arg == "--probe-video-provider") {
@@ -715,7 +778,9 @@ void RunAsync(Options options, std::function<void(int)> on_done) {
 std::string Usage() {
 	return
 		"Usage: Aegisub.exe --headless-playback-probe --probe-video <path> "
-		"[--probe-audio <path>] [--probe-skip-audio] [--probe-video-provider <name>] [--probe-audio-provider <name>] "
+		"[--probe-audio <path>] [--probe-skip-audio] [--probe-line-start-ms <ms>] "
+		"[--probe-repeat-count <count>] [--probe-repeat-gap-ms <ms>] "
+		"[--probe-video-provider <name>] [--probe-audio-provider <name>] "
 		"[--probe-duration-ms <ms>] "
 		"[--probe-audio-rate-scale <scale>] [--probe-audio-quantum-ms <ms>] "
 		"[--probe-max-abs-delta-ms <ms>] [--probe-trace-dir <path>]";

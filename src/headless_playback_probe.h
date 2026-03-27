@@ -16,6 +16,9 @@ struct Options {
 	std::optional<std::string> video_provider;
 	std::optional<std::string> audio_provider;
 	bool skip_audio = false;
+	int line_start_ms = 0;
+	int repeat_count = 1;
+	int repeat_gap_ms = 0;
 	int duration_ms = 2000;
 	double audio_rate_scale = 0.9;
 	int audio_quantum_ms = 0;

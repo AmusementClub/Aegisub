@@ -68,6 +68,8 @@ void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 	Stop();
 	provider = new_provider;
 	color_matrix = provider ? provider->GetColorSpace() : "";
+	playback_mode = PlaybackMode::None;
+	playback_end_ms = 0;
 	playback_uses_audio_authority = false;
 }
 
@@ -127,6 +129,8 @@ void VideoController::JumpToFrame(int n) {
 	if (!provider) return;
 
 	bool was_playing = IsPlaying();
+	auto resume_mode = playback_mode;
+	auto resume_end_ms = playback_end_ms;
 	if (was_playing)
 		Stop();
 
@@ -136,7 +140,7 @@ void VideoController::JumpToFrame(int n) {
 	Seek(frame_n);
 
 	if (was_playing)
-		Play();
+		StartPlayback(resume_mode, resume_end_ms);
 }
 
 void VideoController::JumpToTime(int ms, agi::vfr::Time end) {
@@ -171,25 +175,41 @@ void VideoController::PrevFrame() {
 	}
 }
 
-void VideoController::Play() {
-	if (IsPlaying()) {
-		Stop();
-		return;
-	}
-
-	if (!provider) return;
+void VideoController::StartPlayback(PlaybackMode mode, int range_end_ms) {
+	if (!provider || mode == PlaybackMode::None) return;
 	auto core = context->GetCore();
-
 	start_ms = TimeAtFrame(frame_n);
-	end_frame = provider->GetFrameCount() - 1;
-
-	core.audioController->PlayToEnd(start_ms);
+	playback_mode = mode;
+	playback_end_ms = range_end_ms;
+	if (mode == PlaybackMode::LineRange) {
+		end_frame = FrameAtTime(playback_end_ms, agi::vfr::END) + 1;
+		if (start_ms >= playback_end_ms) {
+			playback_mode = PlaybackMode::None;
+			playback_end_ms = 0;
+			playback_uses_audio_authority = false;
+			return;
+		}
+		core.audioController->PlayRange(TimeRange(start_ms, playback_end_ms));
+	}
+	else {
+		end_frame = provider->GetFrameCount() - 1;
+		core.audioController->PlayToEnd(start_ms);
+	}
 	playback_uses_audio_authority = core.audioController->IsPlaying();
 
 	playback_start_time = std::chrono::steady_clock::now();
 	perf_trace::ResetVideoPlaybackInterval();
 	perf_trace::TracePlayStart(frame_n, start_ms);
 	playback.Start(10);
+}
+
+void VideoController::Play() {
+	if (IsPlaying()) {
+		Stop();
+		return;
+	}
+
+	StartPlayback(PlaybackMode::ToEnd);
 }
 
 void VideoController::PlayLine() {
@@ -201,12 +221,13 @@ void VideoController::PlayLine() {
 
 	core.audioController->PlayRange(TimeRange(curline->Start, curline->End));
 	playback_uses_audio_authority = core.audioController->IsPlaying();
+	playback_mode = PlaybackMode::LineRange;
+	playback_end_ms = curline->End;
 
 	// Round-trip conversion to convert start to exact
-	int startFrame = FrameAtTime(core.selectionController->GetActiveLine()->Start, agi::vfr::START);
+	int startFrame = FrameAtTime(curline->Start, agi::vfr::START);
 	start_ms = TimeAtFrame(startFrame);
-	end_frame = FrameAtTime(core.selectionController->GetActiveLine()->End, agi::vfr::END) + 1;
-
+	end_frame = FrameAtTime(curline->End, agi::vfr::END) + 1;
 	JumpToFrame(startFrame);
 
 	playback_start_time = std::chrono::steady_clock::now();
@@ -224,6 +245,8 @@ void VideoController::Stop() {
 		auto core = context->GetCore();
 		core.audioController->Stop();
 	}
+	playback_mode = PlaybackMode::None;
+	playback_end_ms = 0;
 }
 
 void VideoController::OnPlayTimer(wxTimerEvent &) {

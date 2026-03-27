@@ -87,6 +87,13 @@ class VideoController final : public wxEvtHandler {
 
 	/// The last frame to play if video is currently playing
 	int end_frame = 0;
+	enum class PlaybackMode {
+		None,
+		ToEnd,
+		LineRange
+	};
+	PlaybackMode playback_mode = PlaybackMode::None;
+	int playback_end_ms = 0;
 	bool playback_uses_audio_authority = false;
 
 	/// The frame number which was last requested from the video provider,
@@ -114,6 +121,7 @@ class VideoController final : public wxEvtHandler {
 
 	void RequestFrame();
 	void RequestFrameImmediate();
+	void StartPlayback(PlaybackMode mode, int range_end_ms = 0);
 
 public:
 	VideoController(agi::Context *context);

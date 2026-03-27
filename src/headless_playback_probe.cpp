@@ -255,6 +255,30 @@ public:
 	}
 };
 
+class ScopedTemporaryStringOption final {
+	std::string option_name;
+	std::string previous_value;
+	bool active = false;
+
+public:
+	ScopedTemporaryStringOption(char const* option_name, std::optional<std::string> const& temporary_value)
+	: option_name(option_name) {
+		if (!temporary_value)
+			return;
+
+		auto *option = OPT_SET(this->option_name);
+		previous_value = option->GetString();
+		option->SetString(*temporary_value);
+		active = true;
+	}
+
+	~ScopedTemporaryStringOption() {
+		if (!active)
+			return;
+		OPT_SET(option_name)->SetString(previous_value);
+	}
+};
+
 std::optional<int> ParseInt(std::string const& text) {
 	try {
 		size_t consumed = 0;
@@ -309,6 +333,8 @@ class Runner final : public wxEvtHandler {
 	std::shared_ptr<ConsoleNotificationSink> notification_sink = std::make_shared<ConsoleNotificationSink>();
 	std::shared_ptr<ConsoleStatusSink> status_sink = std::make_shared<ConsoleStatusSink>();
 	std::optional<ScopedTemporaryMru> temporary_mru;
+	std::optional<ScopedTemporaryStringOption> temporary_video_provider;
+	std::optional<ScopedTemporaryStringOption> temporary_audio_provider;
 	wxTimer timeout_timer{this};
 	agi::fs::path trace_dir;
 	bool probe_started = false;
@@ -317,6 +343,10 @@ class Runner final : public wxEvtHandler {
 	int seek_samples = 0;
 	double total_abs_delta_ms = 0.0;
 	int max_abs_delta_ms = 0;
+	std::string selected_video_provider;
+	std::string selected_audio_provider;
+	std::string actual_video_decoder;
+	std::string actual_audio_provider;
 
 	void InstallProbeLine(int duration_ms) {
 		auto core = context->GetCore();
@@ -353,6 +383,10 @@ class Runner final : public wxEvtHandler {
 		std::cout << "headless-playback-probe\n";
 		std::cout << "video=" << options.video_path.string() << "\n";
 		std::cout << "audio=" << options.audio_path.string() << "\n";
+		std::cout << "selected.video_provider=" << selected_video_provider << "\n";
+		std::cout << "selected.audio_provider=" << selected_audio_provider << "\n";
+		std::cout << "actual.video_decoder=" << actual_video_decoder << "\n";
+		std::cout << "actual.audio_provider=" << actual_audio_provider << "\n";
 		std::cout << "duration_ms=" << options.duration_ms << "\n";
 		std::cout << "audio_rate_scale=" << options.audio_rate_scale << "\n";
 		std::cout << "audio_quantum_ms=" << options.audio_quantum_ms << "\n";
@@ -386,6 +420,8 @@ class Runner final : public wxEvtHandler {
 			core.project->CloseAudio();
 			core.project->CloseVideo();
 		}
+		temporary_audio_provider.reset();
+		temporary_video_provider.reset();
 
 		perf_trace::Shutdown();
 		PrintReport(exit_code, message);
@@ -456,6 +492,8 @@ public:
 		trace_dir = options.trace_dir.value_or(UniqueProbeTraceDir());
 		agi::fs::CreateDirectory(trace_dir.parent_path());
 		temporary_mru.emplace(trace_dir / "probe_mru.json");
+		temporary_video_provider.emplace("Video/Provider", options.video_provider);
+		temporary_audio_provider.emplace("Audio/Provider", options.audio_provider);
 
 		perf_trace::InitializeAt(trace_dir, GetAegisubLongVersionString(), "audio,video,ops");
 
@@ -466,18 +504,22 @@ public:
 
 		core.ass->LoadDefault(false);
 		OPT_SET("Video/Open Audio")->SetBool(false);
+		selected_video_provider = OPT_GET("Video/Provider")->GetString();
+		selected_audio_provider = OPT_GET("Audio/Provider")->GetString();
 
 		core.project->LoadVideo(options.video_path);
 		if (!core.project->VideoProvider()) {
 			Finish(6, "failed to load video");
 			return;
 		}
+		actual_video_decoder = core.project->VideoProvider()->GetDecoderName();
 
 		core.project->LoadAudio(options.audio_path);
 		if (!core.project->AudioProvider()) {
 			Finish(7, "failed to load audio");
 			return;
 		}
+		actual_audio_provider = core.project->AudioProvider()->GetMemoryStats().provider_name;
 
 		int playable_duration_ms = ComputePlayableDurationMs();
 		if (playable_duration_ms <= 0) {
@@ -551,6 +593,20 @@ ParseResult Parse(wxArrayString const& args) {
 			if (!value)
 				return result;
 			options.audio_path = *value;
+			continue;
+		}
+		if (arg == "--probe-video-provider") {
+			auto value = require_value(i, "--probe-video-provider");
+			if (!value)
+				return result;
+			options.video_provider = *value;
+			continue;
+		}
+		if (arg == "--probe-audio-provider") {
+			auto value = require_value(i, "--probe-audio-provider");
+			if (!value)
+				return result;
+			options.audio_provider = *value;
 			continue;
 		}
 		if (arg == "--probe-duration-ms") {
@@ -632,7 +688,8 @@ void RunAsync(Options options, std::function<void(int)> on_done) {
 std::string Usage() {
 	return
 		"Usage: Aegisub.exe --headless-playback-probe --probe-video <path> "
-		"[--probe-audio <path>] [--probe-duration-ms <ms>] "
+		"[--probe-audio <path>] [--probe-video-provider <name>] [--probe-audio-provider <name>] "
+		"[--probe-duration-ms <ms>] "
 		"[--probe-audio-rate-scale <scale>] [--probe-audio-quantum-ms <ms>] "
 		"[--probe-max-abs-delta-ms <ms>] [--probe-trace-dir <path>]";
 }

@@ -51,6 +51,7 @@
 VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 : wxPanel(parent, -1)
 , context(context)
+, displayed_frame(context->GetCore().videoController->GetFrameN())
 {
 	auto videoSlider = new VideoSlider(this, context);
 	videoSlider->SetToolTip(_("Seek video"));
@@ -104,7 +105,7 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 		core.project->AddTimecodesListener(&VideoBox::UpdateTimeBoxes, this),
 		core.project->AddVideoProviderListener(&VideoBox::UpdateTimeBoxes, this),
 		core.selectionController->AddSelectionListener(&VideoBox::UpdateTimeBoxes, this),
-		core.videoController->AddSeekListener(&VideoBox::UpdateTimeBoxes, this),
+		context->GetUI().AddVideoFramePresentedListener(&VideoBox::OnFramePresented, this),
 	});
 }
 
@@ -112,7 +113,7 @@ void VideoBox::UpdateTimeBoxes() {
 	auto core = context->GetCore();
 	if (!core.project->VideoProvider()) return;
 
-	int frame = core.videoController->GetFrameN();
+	int frame = displayed_frame >= 0 ? displayed_frame : core.videoController->GetFrameN();
 	int time = core.videoController->TimeAtFrame(frame, agi::vfr::EXACT);
 
 	// Set the text box for frame number and time
@@ -136,4 +137,9 @@ void VideoBox::UpdateTimeBoxes() {
 			time - active_line->Start,
 			time - active_line->End, active_line->End - active_line->Start));
 	}
+}
+
+void VideoBox::OnFramePresented(int frame_number) {
+	displayed_frame = frame_number;
+	UpdateTimeBoxes();
 }

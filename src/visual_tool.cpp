@@ -54,7 +54,7 @@ VisualToolBase::VisualToolBase(VideoDisplay *parent, agi::Context *context)
 	UpdateScriptResolution();
 	active_line = GetActiveDialogueLine();
 	connections.push_back(core.selectionController->AddActiveLineListener(&VisualToolBase::OnActiveLineChanged, this));
-	connections.push_back(core.videoController->AddSeekListener(&VisualToolBase::OnSeek, this));
+	connections.push_back(c->GetUI().AddVideoFramePresentedListener(&VisualToolBase::OnFramePresented, this));
 	connections.push_back(OPT_SUB("Subtitle/Resolution/Prefer PlayRes", &VisualToolBase::OnResolutionPolicyChanged, this));
 	parent->Bind(wxEVT_MOUSE_CAPTURE_LOST, &VisualToolBase::OnMouseCaptureLost, this);
 }
@@ -81,7 +81,7 @@ void VisualToolBase::OnCommit(int type) {
 	}
 }
 
-void VisualToolBase::OnSeek(int new_frame) {
+void VisualToolBase::OnFramePresented(int new_frame) {
 	if (frame_number == new_frame) return;
 
 	frame_number = new_frame;
@@ -124,8 +124,10 @@ void VisualToolBase::OnResolutionPolicyChanged(agi::OptionValue const&) {
 }
 
 bool VisualToolBase::IsDisplayed(AssDialogue *line) const {
+	int frame = frame_number;
+	if (frame < 0)
+		frame = c->GetCore().videoController->GetFrameN();
 	auto core = c->GetCore();
-	int frame = core.videoController->GetFrameN();
 	return line
 		&& !line->Comment
 		&& core.videoController->FrameAtTime(line->Start, agi::vfr::START) <= frame

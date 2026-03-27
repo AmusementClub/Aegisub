@@ -5,8 +5,7 @@
 #include <functional>
 #include <optional>
 #include <string>
-
-class wxArrayString;
+#include <vector>
 
 namespace headless_playback_probe {
 
@@ -34,7 +33,7 @@ struct ParseResult {
 	std::string error;
 };
 
-ParseResult Parse(wxArrayString const& args);
+ParseResult Parse(std::vector<std::string> const& args);
 void RunAsync(Options options, std::function<void(int)> on_done);
 std::string Usage();
 

@@ -72,6 +72,8 @@
 #include <boost/locale.hpp>
 #include <iostream>
 #include <locale>
+#include <vector>
+#include <wx/arrstr.h>
 #include <wx/clipbrd.h>
 #include <wx/msgdlg.h>
 #include <wx/stackwalk.h>
@@ -110,6 +112,14 @@ AegisubApp::AegisubApp() {
 
 namespace {
 wxDEFINE_EVENT(EVT_CALL_THUNK, ValueEvent<agi::dispatch::Thunk>);
+
+std::vector<std::string> ToUtf8Args(wxArrayString const& args) {
+	std::vector<std::string> values;
+	values.reserve(args.size());
+	for (auto const& arg : args)
+		values.emplace_back(arg.ToStdString(wxConvUTF8));
+	return values;
+}
 
 agi::WxMessageBoxNotificationSink& AppNotificationSink() {
 	static agi::WxMessageBoxNotificationSink sink(nullptr);
@@ -316,7 +326,7 @@ bool AegisubApp::OnInit() {
 		StartupLog("Install PNG handler");
 		wxImage::AddHandler(new wxPNGHandler);
 
-		auto probe_parse = headless_playback_probe::Parse(argv.GetArguments());
+		auto probe_parse = headless_playback_probe::Parse(ToUtf8Args(argv.GetArguments()));
 		if (probe_parse.requested) {
 			headless_probe_mode = true;
 			if (!probe_parse.options) {

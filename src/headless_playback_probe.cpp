@@ -38,7 +38,6 @@
 #include <libaegisub/path.h>
 
 #include <wx/app.h>
-#include <wx/arrstr.h>
 #include <wx/string.h>
 #include <wx/timer.h>
 
@@ -59,10 +58,6 @@ namespace headless_playback_probe {
 namespace {
 
 using Clock = std::chrono::steady_clock;
-
-std::string ToNarrow(wxString const& value) {
-	return value.ToStdString(wxConvUTF8);
-}
 
 agi::fs::path UniqueProbeTraceDir() {
 	auto root = config::path->Decode("?temp");
@@ -710,9 +705,9 @@ public:
 	}
 };
 
-bool IsRequested(wxArrayString const& args) {
+bool IsRequested(std::vector<std::string> const& args) {
 	for (size_t i = 1; i < args.size(); ++i) {
-		if (ToNarrow(args[i]) == "--headless-playback-probe")
+		if (args[i] == "--headless-playback-probe")
 			return true;
 	}
 	return false;
@@ -720,7 +715,7 @@ bool IsRequested(wxArrayString const& args) {
 
 } // namespace
 
-ParseResult Parse(wxArrayString const& args) {
+ParseResult Parse(std::vector<std::string> const& args) {
 	ParseResult result;
 	result.requested = IsRequested(args);
 	if (!result.requested)
@@ -735,11 +730,11 @@ ParseResult Parse(wxArrayString const& args) {
 			return std::nullopt;
 		}
 		++index;
-		return ToNarrow(args[index]);
+		return args[index];
 	};
 
 	for (size_t i = 1; i < args.size(); ++i) {
-		auto arg = ToNarrow(args[i]);
+		auto const& arg = args[i];
 		if (arg == "--headless-playback-probe")
 			continue;
 		if (arg == "--probe-video") {

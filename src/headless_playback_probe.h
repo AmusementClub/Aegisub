@@ -9,7 +9,7 @@
 
 namespace headless_playback_probe {
 
-struct Options {
+struct PlaybackProbeRequest {
 	agi::fs::path video_path;
 	agi::fs::path audio_path;
 	std::optional<std::string> video_provider;
@@ -27,14 +27,39 @@ struct Options {
 	std::optional<agi::fs::path> trace_dir;
 };
 
-struct ParseResult {
+struct PlaybackProbeResult {
+	int exit_code = 0;
+	bool passed = false;
+	bool skip_audio = false;
+	int performed_seeks = 0;
+	int audio_timer_samples = 0;
+	int seek_samples = 0;
+	int max_abs_delta_ms = 0;
+	double mean_abs_delta_ms = 0.0;
+	agi::fs::path trace_dir;
+	std::string message;
+	std::string selected_video_provider;
+	std::string selected_audio_provider;
+	std::string actual_video_provider;
+	std::string actual_video_decoder;
+	bool video_provider_fallback = false;
+	std::string video_provider_fallback_reason;
+	std::string video_provider_attempts;
+	std::string actual_audio_provider_factory;
+	std::string actual_audio_provider;
+	bool audio_provider_fallback = false;
+	std::string audio_provider_fallback_reason;
+	std::string audio_provider_attempts;
+};
+
+struct CommandLineParseResult {
 	bool requested = false;
-	std::optional<Options> options;
+	std::optional<PlaybackProbeRequest> request;
 	std::string error;
 };
 
-ParseResult Parse(std::vector<std::string> const& args);
-void RunAsync(Options options, std::function<void(int)> on_done);
+CommandLineParseResult ParseCommandLine(std::vector<std::string> const& args);
+void RunAsync(PlaybackProbeRequest request, std::function<void(PlaybackProbeResult)> on_done);
 std::string Usage();
 
 }

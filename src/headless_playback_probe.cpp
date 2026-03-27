@@ -339,8 +339,8 @@ std::string DescribeProviderFallback(ProviderSelectionReport const& report) {
 }
 
 class Runner final : public wxEvtHandler {
-	Options options;
-	std::function<void(int)> on_done;
+	PlaybackProbeRequest request;
+	std::function<void(PlaybackProbeResult)> on_done;
 	std::unique_ptr<agi::Context> context = std::make_unique<agi::Context>();
 	std::vector<agi::signal::Connection> connections;
 	std::shared_ptr<FakeAudioClockState> fake_audio_state;
@@ -373,7 +373,7 @@ class Runner final : public wxEvtHandler {
 	std::string actual_audio_provider_factory;
 	std::string actual_audio_provider;
 
-	void AppendProbeSummary(int exit_code, std::string const& message, double mean_abs_delta_ms) const {
+	void AppendProbeSummary(PlaybackProbeResult const& result) const {
 		std::ofstream out(trace_dir / "summary.txt", std::ios::out | std::ios::app);
 		if (!out)
 			return;
@@ -385,23 +385,23 @@ class Runner final : public wxEvtHandler {
 			out << key << "=" << BoolString(value) << "\n";
 		};
 
-		write_value("probe.selected.video_provider", selected_video_provider);
-		write_value("probe.actual.video_provider", actual_video_provider);
-		write_value("probe.actual.video_decoder", actual_video_decoder);
-		write_bool("probe.video.provider_fallback", UsedProviderFallback(video_provider_report));
-		write_value("probe.video.provider_fallback_reason", DescribeProviderFallback(video_provider_report));
-		write_value("probe.video.provider_attempts", FormatProviderAttempts(video_provider_report));
-		write_value("probe.selected.audio_provider", selected_audio_provider);
-		write_value("probe.actual.audio_provider_factory", actual_audio_provider_factory);
-		write_value("probe.actual.audio_provider", actual_audio_provider);
-		write_bool("probe.audio.provider_fallback", UsedProviderFallback(audio_provider_report));
-		write_value("probe.audio.provider_fallback_reason", DescribeProviderFallback(audio_provider_report));
-		write_value("probe.audio.provider_attempts", FormatProviderAttempts(audio_provider_report));
-		out << "probe.performed_seeks=" << performed_seeks << "\n";
-		out << "probe.seek.max_abs_delta_ms=" << max_abs_delta_ms << "\n";
-		out << "probe.seek.mean_abs_delta_ms=" << mean_abs_delta_ms << "\n";
-		out << "probe.result=" << (exit_code == 0 ? "PASS" : "FAIL") << "\n";
-		write_value("probe.message", message);
+		write_value("probe.selected.video_provider", result.selected_video_provider);
+		write_value("probe.actual.video_provider", result.actual_video_provider);
+		write_value("probe.actual.video_decoder", result.actual_video_decoder);
+		write_bool("probe.video.provider_fallback", result.video_provider_fallback);
+		write_value("probe.video.provider_fallback_reason", result.video_provider_fallback_reason);
+		write_value("probe.video.provider_attempts", result.video_provider_attempts);
+		write_value("probe.selected.audio_provider", result.selected_audio_provider);
+		write_value("probe.actual.audio_provider_factory", result.actual_audio_provider_factory);
+		write_value("probe.actual.audio_provider", result.actual_audio_provider);
+		write_bool("probe.audio.provider_fallback", result.audio_provider_fallback);
+		write_value("probe.audio.provider_fallback_reason", result.audio_provider_fallback_reason);
+		write_value("probe.audio.provider_attempts", result.audio_provider_attempts);
+		out << "probe.performed_seeks=" << result.performed_seeks << "\n";
+		out << "probe.seek.max_abs_delta_ms=" << result.max_abs_delta_ms << "\n";
+		out << "probe.seek.mean_abs_delta_ms=" << result.mean_abs_delta_ms << "\n";
+		out << "probe.result=" << (result.passed ? "PASS" : "FAIL") << "\n";
+		write_value("probe.message", result.message);
 	}
 
 	void InstallProbeLine(int start_ms, int duration_ms) {
@@ -426,60 +426,86 @@ class Runner final : public wxEvtHandler {
 			return 0;
 
 		int video_duration_ms = core.videoController->TimeAtFrame(video_provider->GetFrameCount() - 1, agi::vfr::END);
-		int remaining_video_ms = std::max(0, video_duration_ms - options.line_start_ms);
+		int remaining_video_ms = std::max(0, video_duration_ms - request.line_start_ms);
 		if (!audio_provider)
-			return std::max(0, std::min(options.duration_ms, remaining_video_ms));
+			return std::max(0, std::min(request.duration_ms, remaining_video_ms));
 
 		int audio_duration_ms = static_cast<int>(
 			(audio_provider->GetNumSamples() * 1000 + audio_provider->GetSampleRate() - 1)
 			/ audio_provider->GetSampleRate());
-		int remaining_audio_ms = std::max(0, audio_duration_ms - options.line_start_ms);
-		return std::max(0, std::min({options.duration_ms, remaining_video_ms, remaining_audio_ms}));
+		int remaining_audio_ms = std::max(0, audio_duration_ms - request.line_start_ms);
+		return std::max(0, std::min({request.duration_ms, remaining_video_ms, remaining_audio_ms}));
 	}
 
-	void PrintReport(int exit_code, std::string const& message) {
+	void PrintReport(PlaybackProbeResult const& result) {
 		auto const summary = ReadSummaryFile(trace_dir / "summary.txt");
-		double mean_abs_delta_ms = seek_samples ? total_abs_delta_ms / seek_samples : 0.0;
 
 		std::cout << "headless-playback-probe\n";
-		std::cout << "video=" << options.video_path.string() << "\n";
-		std::cout << "audio=" << options.audio_path.string() << "\n";
-		std::cout << "skip_audio=" << (options.skip_audio ? "true" : "false") << "\n";
-		std::cout << "line_start_ms=" << options.line_start_ms << "\n";
-		std::cout << "repeat_count=" << options.repeat_count << "\n";
-		std::cout << "repeat_gap_ms=" << options.repeat_gap_ms << "\n";
-		std::cout << "seek_after_ms=" << (options.seek_after_ms ? std::to_string(*options.seek_after_ms) : std::string()) << "\n";
-		std::cout << "seek_target_offset_ms=" << (options.seek_target_offset_ms ? std::to_string(*options.seek_target_offset_ms) : std::string()) << "\n";
-		std::cout << "performed_seeks=" << performed_seeks << "\n";
-		std::cout << "selected.video_provider=" << selected_video_provider << "\n";
-		std::cout << "selected.audio_provider=" << selected_audio_provider << "\n";
-		std::cout << "actual.video_provider=" << actual_video_provider << "\n";
-		std::cout << "actual.video_decoder=" << actual_video_decoder << "\n";
-		std::cout << "video.provider_fallback=" << BoolString(UsedProviderFallback(video_provider_report)) << "\n";
-		std::cout << "video.provider_fallback_reason=" << DescribeProviderFallback(video_provider_report) << "\n";
-		std::cout << "video.provider_attempts=" << FormatProviderAttempts(video_provider_report) << "\n";
-		std::cout << "actual.audio_provider_factory=" << actual_audio_provider_factory << "\n";
-		std::cout << "actual.audio_provider=" << actual_audio_provider << "\n";
-		std::cout << "audio.provider_fallback=" << BoolString(UsedProviderFallback(audio_provider_report)) << "\n";
-		std::cout << "audio.provider_fallback_reason=" << DescribeProviderFallback(audio_provider_report) << "\n";
-		std::cout << "audio.provider_attempts=" << FormatProviderAttempts(audio_provider_report) << "\n";
-		std::cout << "duration_ms=" << options.duration_ms << "\n";
-		std::cout << "audio_rate_scale=" << options.audio_rate_scale << "\n";
-		std::cout << "audio_quantum_ms=" << options.audio_quantum_ms << "\n";
-		std::cout << "trace_dir=" << trace_dir.string() << "\n";
-		std::cout << "seek.samples=" << seek_samples << "\n";
-		std::cout << "seek.max_abs_delta_ms=" << max_abs_delta_ms << "\n";
-		std::cout << "seek.mean_abs_delta_ms=" << mean_abs_delta_ms << "\n";
-		std::cout << "audio_timer_samples=" << audio_timer_samples << "\n";
+		std::cout << "video=" << request.video_path.string() << "\n";
+		std::cout << "audio=" << request.audio_path.string() << "\n";
+		std::cout << "skip_audio=" << BoolString(result.skip_audio) << "\n";
+		std::cout << "line_start_ms=" << request.line_start_ms << "\n";
+		std::cout << "repeat_count=" << request.repeat_count << "\n";
+		std::cout << "repeat_gap_ms=" << request.repeat_gap_ms << "\n";
+		std::cout << "seek_after_ms=" << (request.seek_after_ms ? std::to_string(*request.seek_after_ms) : std::string()) << "\n";
+		std::cout << "seek_target_offset_ms=" << (request.seek_target_offset_ms ? std::to_string(*request.seek_target_offset_ms) : std::string()) << "\n";
+		std::cout << "performed_seeks=" << result.performed_seeks << "\n";
+		std::cout << "selected.video_provider=" << result.selected_video_provider << "\n";
+		std::cout << "selected.audio_provider=" << result.selected_audio_provider << "\n";
+		std::cout << "actual.video_provider=" << result.actual_video_provider << "\n";
+		std::cout << "actual.video_decoder=" << result.actual_video_decoder << "\n";
+		std::cout << "video.provider_fallback=" << BoolString(result.video_provider_fallback) << "\n";
+		std::cout << "video.provider_fallback_reason=" << result.video_provider_fallback_reason << "\n";
+		std::cout << "video.provider_attempts=" << result.video_provider_attempts << "\n";
+		std::cout << "actual.audio_provider_factory=" << result.actual_audio_provider_factory << "\n";
+		std::cout << "actual.audio_provider=" << result.actual_audio_provider << "\n";
+		std::cout << "audio.provider_fallback=" << BoolString(result.audio_provider_fallback) << "\n";
+		std::cout << "audio.provider_fallback_reason=" << result.audio_provider_fallback_reason << "\n";
+		std::cout << "audio.provider_attempts=" << result.audio_provider_attempts << "\n";
+		std::cout << "duration_ms=" << request.duration_ms << "\n";
+		std::cout << "audio_rate_scale=" << request.audio_rate_scale << "\n";
+		std::cout << "audio_quantum_ms=" << request.audio_quantum_ms << "\n";
+		std::cout << "trace_dir=" << result.trace_dir.string() << "\n";
+		std::cout << "seek.samples=" << result.seek_samples << "\n";
+		std::cout << "seek.max_abs_delta_ms=" << result.max_abs_delta_ms << "\n";
+		std::cout << "seek.mean_abs_delta_ms=" << result.mean_abs_delta_ms << "\n";
+		std::cout << "audio_timer_samples=" << result.audio_timer_samples << "\n";
 		std::cout << "summary.frame.request.total=" << GetSummaryValue(summary, "frame.request.total") << "\n";
 		std::cout << "summary.frame.delivered.total=" << GetSummaryValue(summary, "frame.delivered.total") << "\n";
 		std::cout << "summary.frame.dropped.total=" << GetSummaryValue(summary, "frame.dropped.total") << "\n";
 		std::cout << "summary.audio_ui_timer_interval.count=" << GetSummaryValue(summary, "audio_ui_timer_interval.count") << "\n";
 		std::cout << "summary.video_playback_tick_interval.count=" << GetSummaryValue(summary, "video_playback_tick_interval.count") << "\n";
 		std::cout << "summary.audio_output_backend=" << GetSummaryValue(summary, "audio_output_backend") << "\n";
-		std::cout << "result=" << (exit_code == 0 ? "PASS" : "FAIL") << "\n";
-		if (!message.empty())
-			std::cout << "message=" << message << "\n";
+		std::cout << "result=" << (result.passed ? "PASS" : "FAIL") << "\n";
+		if (!result.message.empty())
+			std::cout << "message=" << result.message << "\n";
+	}
+
+	PlaybackProbeResult BuildResult(int exit_code, std::string const& message, double mean_abs_delta_ms) const {
+		PlaybackProbeResult result;
+		result.exit_code = exit_code;
+		result.passed = exit_code == 0;
+		result.skip_audio = request.skip_audio;
+		result.performed_seeks = performed_seeks;
+		result.audio_timer_samples = audio_timer_samples;
+		result.seek_samples = seek_samples;
+		result.max_abs_delta_ms = max_abs_delta_ms;
+		result.mean_abs_delta_ms = mean_abs_delta_ms;
+		result.trace_dir = trace_dir;
+		result.message = message;
+		result.selected_video_provider = selected_video_provider;
+		result.selected_audio_provider = selected_audio_provider;
+		result.actual_video_provider = actual_video_provider;
+		result.actual_video_decoder = actual_video_decoder;
+		result.video_provider_fallback = UsedProviderFallback(video_provider_report);
+		result.video_provider_fallback_reason = DescribeProviderFallback(video_provider_report);
+		result.video_provider_attempts = FormatProviderAttempts(video_provider_report);
+		result.actual_audio_provider_factory = actual_audio_provider_factory;
+		result.actual_audio_provider = actual_audio_provider;
+		result.audio_provider_fallback = UsedProviderFallback(audio_provider_report);
+		result.audio_provider_fallback_reason = DescribeProviderFallback(audio_provider_report);
+		result.audio_provider_attempts = FormatProviderAttempts(audio_provider_report);
+		return result;
 	}
 
 	void Finish(int exit_code, std::string const& message) {
@@ -504,13 +530,14 @@ class Runner final : public wxEvtHandler {
 
 		perf_trace::Shutdown();
 		double mean_abs_delta_ms = seek_samples ? total_abs_delta_ms / seek_samples : 0.0;
-		AppendProbeSummary(exit_code, message, mean_abs_delta_ms);
-		PrintReport(exit_code, message);
+		auto result = BuildResult(exit_code, message, mean_abs_delta_ms);
+		AppendProbeSummary(result);
+		PrintReport(result);
 		context.reset();
 		temporary_mru.reset();
 
 		if (on_done)
-			on_done(exit_code);
+			on_done(std::move(result));
 		delete this;
 	}
 
@@ -524,7 +551,7 @@ class Runner final : public wxEvtHandler {
 		if (!probe_started || finished)
 			return;
 
-		if (options.skip_audio)
+		if (request.skip_audio)
 		{
 			++seek_samples;
 			return;
@@ -547,14 +574,14 @@ class Runner final : public wxEvtHandler {
 			return;
 
 		++completed_playbacks;
-		if (completed_playbacks < options.repeat_count) {
-			restart_timer.StartOnce(options.repeat_gap_ms);
+		if (completed_playbacks < request.repeat_count) {
+			restart_timer.StartOnce(request.repeat_gap_ms);
 			return;
 		}
 
 		int exit_code = 0;
 		std::string message;
-		if (!options.skip_audio && audio_timer_samples == 0) {
+		if (!request.skip_audio && audio_timer_samples == 0) {
 			exit_code = 2;
 			message = "audio controller did not emit playback timer samples";
 		}
@@ -562,7 +589,7 @@ class Runner final : public wxEvtHandler {
 			exit_code = 3;
 			message = "video controller did not emit playback seek samples";
 		}
-		else if (!options.skip_audio && max_abs_delta_ms > options.max_allowed_abs_delta_ms) {
+		else if (!request.skip_audio && max_abs_delta_ms > request.max_allowed_abs_delta_ms) {
 			exit_code = 4;
 			message = "video seek drift exceeded threshold";
 		}
@@ -603,27 +630,27 @@ class Runner final : public wxEvtHandler {
 	}
 
 	void OnSeekTimer(wxTimerEvent&) {
-		if (finished || !probe_started || !context || !options.seek_target_offset_ms)
+		if (finished || !probe_started || !context || !request.seek_target_offset_ms)
 			return;
 
 		auto core = context->GetCore();
 		++performed_seeks;
-		core.videoController->JumpToTime(options.line_start_ms + *options.seek_target_offset_ms);
+		core.videoController->JumpToTime(request.line_start_ms + *request.seek_target_offset_ms);
 		if (!core.videoController->IsPlaying())
 			Finish(11, "playback probe lost playback after scheduled seek");
 	}
 
 	void ArmSeekTimer() {
 		seek_timer.Stop();
-		if (options.seek_after_ms)
-			seek_timer.StartOnce(*options.seek_after_ms);
+		if (request.seek_after_ms)
+			seek_timer.StartOnce(*request.seek_after_ms);
 	}
 
 public:
-	Runner(Options options, std::function<void(int)> on_done)
-	: options(std::move(options))
+	Runner(PlaybackProbeRequest request, std::function<void(PlaybackProbeResult)> on_done)
+	: request(std::move(request))
 	, on_done(std::move(on_done))
-	, fake_audio_state(std::make_shared<FakeAudioClockState>(this->options.audio_rate_scale, this->options.audio_quantum_ms))
+	, fake_audio_state(std::make_shared<FakeAudioClockState>(this->request.audio_rate_scale, this->request.audio_quantum_ms))
 	, fake_audio_service(std::make_shared<HeadlessFakeAudioPlayerFactoryService>(fake_audio_state)) {
 	}
 
@@ -633,12 +660,12 @@ public:
 		Bind(wxEVT_TIMER, &Runner::OnRestartTimer, this, restart_timer.GetId());
 		Bind(wxEVT_TIMER, &Runner::OnSeekTimer, this, seek_timer.GetId());
 
-		trace_dir = options.trace_dir.value_or(UniqueProbeTraceDir());
+		trace_dir = request.trace_dir.value_or(UniqueProbeTraceDir());
 		agi::fs::CreateDirectory(trace_dir.parent_path());
 		temporary_mru.emplace(trace_dir / "probe_mru.json");
-		temporary_video_provider.emplace("Video/Provider", options.video_provider);
-		if (!options.skip_audio)
-			temporary_audio_provider.emplace("Audio/Provider", options.audio_provider);
+		temporary_video_provider.emplace("Video/Provider", request.video_provider);
+		if (!request.skip_audio)
+			temporary_audio_provider.emplace("Audio/Provider", request.audio_provider);
 
 		perf_trace::InitializeAt(trace_dir, GetAegisubLongVersionString(), "audio,video,ops");
 
@@ -650,10 +677,10 @@ public:
 		core.ass->LoadDefault(false);
 		OPT_SET("Video/Open Audio")->SetBool(false);
 		selected_video_provider = OPT_GET("Video/Provider")->GetString();
-		selected_audio_provider = options.skip_audio ? std::string() : OPT_GET("Audio/Provider")->GetString();
+		selected_audio_provider = request.skip_audio ? std::string() : OPT_GET("Audio/Provider")->GetString();
 
 		ClearLastVideoProviderSelectionReport();
-		core.project->LoadVideo(options.video_path);
+		core.project->LoadVideo(request.video_path);
 		video_provider_report = GetLastVideoProviderSelectionReport();
 		actual_video_provider = video_provider_report.selected_provider;
 		if (!core.project->VideoProvider()) {
@@ -662,9 +689,9 @@ public:
 		}
 		actual_video_decoder = core.project->VideoProvider()->GetDecoderName();
 
-		if (!options.skip_audio) {
+		if (!request.skip_audio) {
 			ClearLastAudioProviderSelectionReport();
-			core.project->LoadAudio(options.audio_path);
+			core.project->LoadAudio(request.audio_path);
 			audio_provider_report = GetLastAudioProviderSelectionReport();
 			actual_audio_provider_factory = audio_provider_report.selected_provider;
 			if (!core.project->AudioProvider()) {
@@ -680,16 +707,16 @@ public:
 			return;
 		}
 
-		options.duration_ms = playable_duration_ms;
-		InstallProbeLine(options.line_start_ms, playable_duration_ms);
+		request.duration_ms = playable_duration_ms;
+		InstallProbeLine(request.line_start_ms, playable_duration_ms);
 
 		connections = agi::signal::make_vector({
 			core.videoController->AddPlaybackFrameAdvancedListener(&Runner::OnPlaybackFrameAdvanced, this),
 			core.audioController->AddPlaybackPositionListener(&Runner::OnAudioPlaybackPosition, this),
 		});
 
-		int timeout_ms = static_cast<int>(std::ceil(playable_duration_ms / std::max(options.audio_rate_scale, 0.1))) * std::max(options.repeat_count, 1)
-			+ std::max(0, options.repeat_count - 1) * options.repeat_gap_ms
+		int timeout_ms = static_cast<int>(std::ceil(playable_duration_ms / std::max(request.audio_rate_scale, 0.1))) * std::max(request.repeat_count, 1)
+			+ std::max(0, request.repeat_count - 1) * request.repeat_gap_ms
 			+ 3000;
 		timeout_timer.Start(timeout_ms, true);
 		completion_timer.Start(20);
@@ -715,13 +742,13 @@ bool IsRequested(std::vector<std::string> const& args) {
 
 } // namespace
 
-ParseResult Parse(std::vector<std::string> const& args) {
-	ParseResult result;
+CommandLineParseResult ParseCommandLine(std::vector<std::string> const& args) {
+	CommandLineParseResult result;
 	result.requested = IsRequested(args);
 	if (!result.requested)
 		return result;
 
-	Options options;
+	PlaybackProbeRequest request;
 	bool have_video = false;
 
 	auto require_value = [&](size_t& index, char const* flag) -> std::optional<std::string> {
@@ -741,7 +768,7 @@ ParseResult Parse(std::vector<std::string> const& args) {
 			auto value = require_value(i, "--probe-video");
 			if (!value)
 				return result;
-			options.video_path = *value;
+			request.video_path = *value;
 			have_video = true;
 			continue;
 		}
@@ -749,11 +776,11 @@ ParseResult Parse(std::vector<std::string> const& args) {
 			auto value = require_value(i, "--probe-audio");
 			if (!value)
 				return result;
-			options.audio_path = *value;
+			request.audio_path = *value;
 			continue;
 		}
 		if (arg == "--probe-skip-audio") {
-			options.skip_audio = true;
+			request.skip_audio = true;
 			continue;
 		}
 		if (arg == "--probe-line-start-ms") {
@@ -765,7 +792,7 @@ ParseResult Parse(std::vector<std::string> const& args) {
 				result.error = "--probe-line-start-ms must be a non-negative integer\n" + Usage();
 				return result;
 			}
-			options.line_start_ms = *parsed;
+			request.line_start_ms = *parsed;
 			continue;
 		}
 		if (arg == "--probe-repeat-count") {
@@ -777,7 +804,7 @@ ParseResult Parse(std::vector<std::string> const& args) {
 				result.error = "--probe-repeat-count must be a positive integer\n" + Usage();
 				return result;
 			}
-			options.repeat_count = *parsed;
+			request.repeat_count = *parsed;
 			continue;
 		}
 		if (arg == "--probe-repeat-gap-ms") {
@@ -789,7 +816,7 @@ ParseResult Parse(std::vector<std::string> const& args) {
 				result.error = "--probe-repeat-gap-ms must be a non-negative integer\n" + Usage();
 				return result;
 			}
-			options.repeat_gap_ms = *parsed;
+			request.repeat_gap_ms = *parsed;
 			continue;
 		}
 		if (arg == "--probe-seek-after-ms") {
@@ -801,7 +828,7 @@ ParseResult Parse(std::vector<std::string> const& args) {
 				result.error = "--probe-seek-after-ms must be a non-negative integer\n" + Usage();
 				return result;
 			}
-			options.seek_after_ms = *parsed;
+			request.seek_after_ms = *parsed;
 			continue;
 		}
 		if (arg == "--probe-seek-target-offset-ms") {
@@ -813,21 +840,21 @@ ParseResult Parse(std::vector<std::string> const& args) {
 				result.error = "--probe-seek-target-offset-ms must be a non-negative integer\n" + Usage();
 				return result;
 			}
-			options.seek_target_offset_ms = *parsed;
+			request.seek_target_offset_ms = *parsed;
 			continue;
 		}
 		if (arg == "--probe-video-provider") {
 			auto value = require_value(i, "--probe-video-provider");
 			if (!value)
 				return result;
-			options.video_provider = *value;
+			request.video_provider = *value;
 			continue;
 		}
 		if (arg == "--probe-audio-provider") {
 			auto value = require_value(i, "--probe-audio-provider");
 			if (!value)
 				return result;
-			options.audio_provider = *value;
+			request.audio_provider = *value;
 			continue;
 		}
 		if (arg == "--probe-duration-ms") {
@@ -839,7 +866,7 @@ ParseResult Parse(std::vector<std::string> const& args) {
 				result.error = "--probe-duration-ms must be a positive integer\n" + Usage();
 				return result;
 			}
-			options.duration_ms = *parsed;
+			request.duration_ms = *parsed;
 			continue;
 		}
 		if (arg == "--probe-audio-rate-scale") {
@@ -851,7 +878,7 @@ ParseResult Parse(std::vector<std::string> const& args) {
 				result.error = "--probe-audio-rate-scale must be a positive number\n" + Usage();
 				return result;
 			}
-			options.audio_rate_scale = *parsed;
+			request.audio_rate_scale = *parsed;
 			continue;
 		}
 		if (arg == "--probe-audio-quantum-ms") {
@@ -863,7 +890,7 @@ ParseResult Parse(std::vector<std::string> const& args) {
 				result.error = "--probe-audio-quantum-ms must be a non-negative integer\n" + Usage();
 				return result;
 			}
-			options.audio_quantum_ms = *parsed;
+			request.audio_quantum_ms = *parsed;
 			continue;
 		}
 		if (arg == "--probe-max-abs-delta-ms") {
@@ -875,14 +902,14 @@ ParseResult Parse(std::vector<std::string> const& args) {
 				result.error = "--probe-max-abs-delta-ms must be a positive integer\n" + Usage();
 				return result;
 			}
-			options.max_allowed_abs_delta_ms = *parsed;
+			request.max_allowed_abs_delta_ms = *parsed;
 			continue;
 		}
 		if (arg == "--probe-trace-dir") {
 			auto value = require_value(i, "--probe-trace-dir");
 			if (!value)
 				return result;
-			options.trace_dir = agi::fs::path(*value);
+			request.trace_dir = agi::fs::path(*value);
 			continue;
 		}
 
@@ -894,19 +921,19 @@ ParseResult Parse(std::vector<std::string> const& args) {
 		result.error = "--headless-playback-probe requires --probe-video\n" + Usage();
 		return result;
 	}
-	if (options.seek_after_ms.has_value() != options.seek_target_offset_ms.has_value()) {
+	if (request.seek_after_ms.has_value() != request.seek_target_offset_ms.has_value()) {
 		result.error = "--probe-seek-after-ms and --probe-seek-target-offset-ms must be used together\n" + Usage();
 		return result;
 	}
-	if (!options.skip_audio && options.audio_path.empty())
-		options.audio_path = options.video_path;
+	if (!request.skip_audio && request.audio_path.empty())
+		request.audio_path = request.video_path;
 
-	result.options = std::move(options);
+	result.request = std::move(request);
 	return result;
 }
 
-void RunAsync(Options options, std::function<void(int)> on_done) {
-	auto *runner = new Runner(std::move(options), std::move(on_done));
+void RunAsync(PlaybackProbeRequest request, std::function<void(PlaybackProbeResult)> on_done) {
+	auto *runner = new Runner(std::move(request), std::move(on_done));
 	runner->Start();
 }
 

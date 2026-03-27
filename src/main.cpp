@@ -326,20 +326,20 @@ bool AegisubApp::OnInit() {
 		StartupLog("Install PNG handler");
 		wxImage::AddHandler(new wxPNGHandler);
 
-		auto probe_parse = headless_playback_probe::Parse(ToUtf8Args(argv.GetArguments()));
+		auto probe_parse = headless_playback_probe::ParseCommandLine(ToUtf8Args(argv.GetArguments()));
 		if (probe_parse.requested) {
 			headless_probe_mode = true;
-			if (!probe_parse.options) {
+			if (!probe_parse.request) {
 				headless_probe_exit_code = 64;
 				std::cerr << probe_parse.error << std::endl;
 				CallAfter([this] { ExitMainLoop(); });
 				return true;
 			}
 
-			auto probe_options = *probe_parse.options;
-			CallAfter([this, probe_options = std::move(probe_options)]() mutable {
-				headless_playback_probe::RunAsync(std::move(probe_options), [this](int exit_code) {
-					headless_probe_exit_code = exit_code;
+			auto probe_request = *probe_parse.request;
+			CallAfter([this, probe_request = std::move(probe_request)]() mutable {
+				headless_playback_probe::RunAsync(std::move(probe_request), [this](headless_playback_probe::PlaybackProbeResult result) {
+					headless_probe_exit_code = result.exit_code;
 					ExitMainLoop();
 				});
 			});

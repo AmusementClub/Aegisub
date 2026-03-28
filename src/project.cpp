@@ -19,6 +19,7 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "async_video_provider.h"
+#include "async_video_provider_host.h"
 #include "audio_controller.h"
 #include "audio_provider_factory.h"
 #include "charset_detect.h"
@@ -439,16 +440,18 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 	video_provider = aegisub::video_session_ops::CreateVideoProviderWithErrorHandling(
 		path,
 		[&] {
-		auto core = context->GetCore();
-		auto old_matrix = core.ass->GetScriptInfo("YCbCr Matrix");
+			auto core = context->GetCore();
+			auto old_matrix = core.ass->GetScriptInfo("YCbCr Matrix");
+			auto event_sink = CreateAsyncVideoProviderWxEventSink(
+				core.videoController.get(),
+				core.videoController->GetAsyncUiLifetime());
 			return agi::make_unique<AsyncVideoProvider>(
-			path,
-			old_matrix,
-			core.videoController.get(),
-			GetProgressRunner(),
-			core.ass->GetTransientFonts(),
-			core.videoController->GetAsyncUiLifetime(),
-			context->GetSingleChoiceInteractionSink());
+				path,
+				old_matrix,
+				std::move(event_sink),
+				GetProgressRunner(),
+				core.ass->GetTransientFonts(),
+				context->GetSingleChoiceInteractionSink());
 		},
 		*context->GetNotificationSink(),
 		[](char const* category, agi::fs::path const& candidate) {

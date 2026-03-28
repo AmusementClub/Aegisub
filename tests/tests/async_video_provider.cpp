@@ -1713,8 +1713,7 @@ TEST(async_video_provider, filename_constructor_forwards_transient_fonts_to_fact
 	fonts->generation = 42;
 	fonts->fonts.push_back({ "embedded.ttf", "font/ttf", { 'f', 'o', 'n', 't' } });
 
-	wxEvtHandler parent;
-	AsyncVideoProvider provider(agi::fs::path("dummy.mkv"), "", &parent, nullptr, fonts);
+	AsyncVideoProvider provider(agi::fs::path("dummy.mkv"), "", [](std::unique_ptr<wxEvent>) { }, nullptr, fonts);
 
 	ASSERT_TRUE(g_last_factory_transient_fonts);
 	EXPECT_EQ(fonts, g_last_factory_transient_fonts);
@@ -1745,8 +1744,7 @@ TEST(async_video_provider, filename_constructor_forwards_choice_sink_to_video_fa
 	};
 
 	auto choice_sink = std::make_shared<agi::NullSingleChoiceInteractionSink>();
-	wxEvtHandler parent;
-	AsyncVideoProvider provider(agi::fs::path("dummy.mkv"), "", &parent, nullptr, {}, {}, choice_sink);
+	AsyncVideoProvider provider(agi::fs::path("dummy.mkv"), "", [](std::unique_ptr<wxEvent>) { }, nullptr, {}, choice_sink);
 
 	ASSERT_TRUE(g_last_factory_choice_sink);
 	EXPECT_EQ(choice_sink, g_last_factory_choice_sink);
@@ -1764,8 +1762,7 @@ TEST(async_video_provider, filename_constructor_does_not_create_default_choice_s
 		return std::unique_ptr<SubtitlesProvider>(subs);
 	};
 
-	wxEvtHandler parent;
-	AsyncVideoProvider provider(agi::fs::path("dummy.mkv"), "", &parent, nullptr);
+	AsyncVideoProvider provider(agi::fs::path("dummy.mkv"), "", [](std::unique_ptr<wxEvent>) { }, nullptr);
 
 	EXPECT_EQ(nullptr, g_last_factory_choice_sink);
 }

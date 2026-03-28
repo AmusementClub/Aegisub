@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "async_video_provider_host.h"
 #include "include/aegisub/video_provider.h"
 #include "source_frame_format_selection.h"
 #include "ui_dispatch.h"
@@ -46,8 +47,6 @@ namespace agi {
 	class SingleChoiceInteractionSink;
 	namespace dispatch { class Queue; }
 }
-
-using AsyncVideoProviderEventSink = std::function<void(std::unique_ptr<wxEvent>)>;
 
 enum class KeyPointRangeScanStatus {
 	Success,
@@ -207,8 +206,8 @@ public:
 
 	/// @brief Constructor
 	/// @param videoFileName File to open
-	/// @param parent Event handler to send FrameReady events to
-	AsyncVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts = {}, agi::ui::WeakLifetime event_lifetime = {}, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});
+	/// @param event_sink Event sink to receive FrameReady and error events
+	AsyncVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, AsyncVideoProviderEventSink event_sink, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts = {}, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});
 	AsyncVideoProvider(std::unique_ptr<VideoProvider> source_provider, std::unique_ptr<SubtitlesProvider> subs_provider, AsyncVideoProviderEventSink event_sink);
 	~AsyncVideoProvider();
 };

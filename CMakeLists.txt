@@ -460,6 +460,7 @@ add_executable(Aegisub WIN32
     src/ass_style.cpp
     src/ass_style_storage.cpp
     src/async_video_provider.cpp
+    src/async_video_provider_host.cpp
     src/audio_box.cpp
     src/audio_colorscheme.cpp
     src/audio_controller.cpp

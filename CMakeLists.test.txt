@@ -38,6 +38,7 @@ if(GTEST_FOUND)
         src/ass_style.cpp
         src/ass_style_storage.cpp
         src/async_video_provider.cpp
+        src/async_video_provider_host.cpp
         src/charset_choice.cpp
         src/compat.cpp
         src/csri_renderer_discovery.cpp

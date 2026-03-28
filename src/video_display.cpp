@@ -172,8 +172,8 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 	zoomBox->Bind(wxEVT_COMBOBOX, &VideoDisplay::SetZoomFromBox, this);
 	zoomBox->Bind(wxEVT_TEXT_ENTER, &VideoDisplay::SetZoomFromBoxText, this);
 
-	con->videoController->Bind(EVT_FRAME_READY, &VideoDisplay::UploadFrameData, this);
 	connections = agi::signal::make_vector({
+		con->videoController->AddFrameReadyListener(&VideoDisplay::UploadFrameData, this),
 		con->project->AddVideoProviderListener(&VideoDisplay::OnVideoProviderChanged, this),
 		con->videoController->AddARChangeListener(&VideoDisplay::UpdateSize, this),
 	});
@@ -202,7 +202,6 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 
 VideoDisplay::~VideoDisplay () {
 	Unload();
-	con->videoController->Unbind(EVT_FRAME_READY, &VideoDisplay::UploadFrameData, this);
 }
 
 double VideoDisplay::GetVideoScaleFactor() const {
@@ -276,8 +275,8 @@ void VideoDisplay::OnVideoProviderChanged(AsyncVideoProvider *provider) {
 	UpdateSize();
 }
 
-void VideoDisplay::UploadFrameData(FrameReadyEvent &evt) {
-	pending_packet = std::move(evt.packet);
+void VideoDisplay::UploadFrameData(VideoRenderPacket const& packet, double) {
+	pending_packet = packet;
 	has_pending_packet = true;
 
 	// Instead of calling Render(), we force a render here to minimize delay

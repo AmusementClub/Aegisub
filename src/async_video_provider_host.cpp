@@ -17,14 +17,37 @@
 
 #include <utility>
 
-AsyncVideoProviderEventSink CreateAsyncVideoProviderWxEventSink(
-	wxEvtHandler *parent,
-	agi::ui::WeakLifetime event_lifetime) {
-	return [parent, event_lifetime](std::unique_ptr<wxEvent> evt) mutable {
-		if (!parent)
-			return;
-		agi::ui::MainAsyncIfAlive(event_lifetime, [parent, evt = std::move(evt)]() mutable {
-			parent->QueueEvent(evt.release());
-		});
-	};
+AsyncVideoProviderEventSink CreateAsyncVideoProviderMainThreadSink(
+	agi::ui::WeakLifetime event_lifetime,
+	AsyncVideoProviderEventSink sink) {
+	AsyncVideoProviderEventSink main_thread_sink;
+
+	if (sink.on_frame_ready) {
+		main_thread_sink.on_frame_ready =
+			[event_lifetime, callback = std::move(sink.on_frame_ready)](VideoRenderPacket packet, double time) mutable {
+				agi::ui::MainAsyncIfAlive(event_lifetime, [callback, packet = std::move(packet), time]() mutable {
+					callback(std::move(packet), time);
+				});
+			};
+	}
+
+	if (sink.on_video_error) {
+		main_thread_sink.on_video_error =
+			[event_lifetime, callback = std::move(sink.on_video_error)](std::string const& message) mutable {
+				agi::ui::MainAsyncIfAlive(event_lifetime, [callback, message]() mutable {
+					callback(message);
+				});
+			};
+	}
+
+	if (sink.on_subtitles_error) {
+		main_thread_sink.on_subtitles_error =
+			[event_lifetime, callback = std::move(sink.on_subtitles_error)](std::string const& message) mutable {
+				agi::ui::MainAsyncIfAlive(event_lifetime, [callback, message]() mutable {
+					callback(message);
+				});
+			};
+	}
+
+	return main_thread_sink;
 }

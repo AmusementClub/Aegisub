@@ -563,7 +563,6 @@ add_executable(Aegisub WIN32
     src/version.cpp
     src/video_box.cpp
     src/video_controller.cpp
-    src/video_controller_error_host.cpp
     src/video_controller_timer_host.cpp
     src/video_display.cpp
     src/video_renderer_backend.cpp

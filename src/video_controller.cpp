@@ -42,7 +42,6 @@
 #include "time_range.h"
 #include "async_video_provider.h"
 #include "utils.h"
-#include "video_controller_error_host.h"
 #include "video_controller_timer_host.h"
 
 #include <libaegisub/ass/time.h>
@@ -52,10 +51,6 @@
 VideoController::VideoController(agi::Context *c)
 : context(c)
 , playback_timer(CreateVideoControllerTimerHost([this] { OnPlayTimer(); }))
-, error_host(CreateVideoControllerErrorHost(
-	this,
-	[this](std::string const& message) { HandleVideoError(message); },
-	[this](std::string const& message) { HandleSubtitlesError(message); }))
 , playAudioOnStep(OPT_GET("Audio/Plays When Stepping Video"))
 {
 	auto core = context->GetCore();
@@ -123,14 +118,15 @@ void VideoController::RequestFrameImmediate() {
 
 	try {
 		// Frame stepping favors deterministic per-step display over latest-only coalescing.
-		auto evt = FrameReadyEvent(provider->GetRenderPacket(frame_n, frame_time), frame_time);
-		evt.SetEventType(EVT_FRAME_READY);
+		auto packet = provider->GetRenderPacket(frame_n, frame_time);
 		perf_trace::ObserveFrameResult(frame_n, frame_time, true, true);
-		ProcessEvent(evt);
+		DeliverFrameReady(std::move(packet), frame_time);
 	}
-	catch (wxEvent const& err) {
-		auto evt = std::unique_ptr<wxEvent>(err.Clone());
-		ProcessEvent(*evt);
+	catch (AsyncVideoProviderVideoError const& err) {
+		HandleVideoError(err.GetMessage());
+	}
+	catch (AsyncVideoProviderSubtitlesError const& err) {
+		HandleSubtitlesError(err.GetMessage());
 	}
 }
 
@@ -338,4 +334,24 @@ void VideoController::HandleSubtitlesError(std::string const& message) {
 	wxLogError(
 		wxS("Failed rendering subtitles. Error message reported: %s"),
 		to_wx(message));
+}
+
+void VideoController::DeliverFrameReady(VideoRenderPacket packet, double time) {
+	FrameReady(packet, time);
+}
+
+AsyncVideoProviderEventSink VideoController::CreateAsyncVideoProviderEventSink() {
+	return CreateAsyncVideoProviderMainThreadSink(
+		GetAsyncUiLifetime(),
+		{
+			[this](VideoRenderPacket packet, double time) {
+				DeliverFrameReady(std::move(packet), time);
+			},
+			[this](std::string const& message) {
+				HandleVideoError(message);
+			},
+			[this](std::string const& message) {
+				HandleSubtitlesError(message);
+			}
+		});
 }

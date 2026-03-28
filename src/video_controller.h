@@ -29,6 +29,9 @@
 
 #pragma once
 
+#include "async_video_provider_host.h"
+#include "video_render_packet.h"
+
 #include <libaegisub/signal.h>
 #include <libaegisub/vfr.h>
 
@@ -39,11 +42,8 @@
 
 #include "ui_dispatch.h"
 
-#include <wx/event.h>
-
 class AssDialogue;
 class AsyncVideoProvider;
-class VideoControllerErrorHost;
 class VideoControllerTimerHost;
 
 namespace agi {
@@ -60,11 +60,13 @@ enum class AspectRatio {
 };
 
 /// Manage stuff related to video playback
-class VideoController final : public wxEvtHandler {
+class VideoController final {
 	/// Navigation target frame changed (new frame number)
 	agi::signal::Signal<int> Seek;
 	/// Continuous playback advanced to a new frame (new frame number)
 	agi::signal::Signal<int> PlaybackFrameAdvanced;
+	/// A render packet is ready to be presented.
+	agi::signal::Signal<VideoRenderPacket const&, double> FrameReady;
 	/// Aspect ratio was changed (type, value)
 	agi::signal::Signal<AspectRatio, double> ARChange;
 
@@ -81,7 +83,6 @@ class VideoController final : public wxEvtHandler {
 	/// Playback timer used to periodically check if we should go to the next
 	/// frame while playing video
 	std::unique_ptr<VideoControllerTimerHost> playback_timer;
-	std::unique_ptr<VideoControllerErrorHost> error_host;
 
 	/// Time when playback was last started
 	std::chrono::steady_clock::time_point playback_start_time;
@@ -119,6 +120,7 @@ class VideoController final : public wxEvtHandler {
 
 	void HandleVideoError(std::string const& message);
 	void HandleSubtitlesError(std::string const& message);
+	void DeliverFrameReady(VideoRenderPacket packet, double time);
 
 	void OnSubtitlesCommit(int type, const AssDialogue *changed);
 	void OnNewVideoProvider(AsyncVideoProvider *provider);
@@ -179,8 +181,10 @@ public:
 
 	DEFINE_SIGNAL_ADDERS(Seek, AddSeekListener)
 	DEFINE_SIGNAL_ADDERS(PlaybackFrameAdvanced, AddPlaybackFrameAdvancedListener)
+	DEFINE_SIGNAL_ADDERS(FrameReady, AddFrameReadyListener)
 	DEFINE_SIGNAL_ADDERS(ARChange, AddARChangeListener)
 	agi::ui::WeakLifetime GetAsyncUiLifetime() const { return ui_activation.GetLifetime(); }
+	AsyncVideoProviderEventSink CreateAsyncVideoProviderEventSink();
 
 	int TimeAtFrame(int frame, agi::vfr::Time type = agi::vfr::EXACT) const;
 	int FrameAtTime(int time, agi::vfr::Time type = agi::vfr::EXACT) const;

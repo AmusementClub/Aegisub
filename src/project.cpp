@@ -19,7 +19,6 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "async_video_provider.h"
-#include "async_video_provider_host.h"
 #include "audio_controller.h"
 #include "audio_provider_factory.h"
 #include "charset_detect.h"
@@ -442,9 +441,7 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 		[&] {
 			auto core = context->GetCore();
 			auto old_matrix = core.ass->GetScriptInfo("YCbCr Matrix");
-			auto event_sink = CreateAsyncVideoProviderWxEventSink(
-				core.videoController.get(),
-				core.videoController->GetAsyncUiLifetime());
+			auto event_sink = core.videoController->CreateAsyncVideoProviderEventSink();
 			return agi::make_unique<AsyncVideoProvider>(
 				path,
 				old_matrix,

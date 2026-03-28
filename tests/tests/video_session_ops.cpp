@@ -64,7 +64,7 @@ TEST(video_session_ops, build_opened_video_summary_collects_provider_metadata) {
 	AsyncVideoProvider async_provider(
 		std::move(provider),
 		agi::make_unique<FakeSubtitlesProvider>(),
-		[](std::unique_ptr<wxEvent>) { });
+		AsyncVideoProviderEventSink{});
 	int subtitle_probe_count = 0;
 	auto summary = aegisub::video_session_ops::BuildOpenedVideoSummary(
 		async_provider,
@@ -91,7 +91,7 @@ TEST(video_session_ops, build_opened_video_summary_skips_subtitle_probe_for_non_
 	AsyncVideoProvider async_provider(
 		std::move(provider),
 		agi::make_unique<FakeSubtitlesProvider>(),
-		[](std::unique_ptr<wxEvent>) { });
+		AsyncVideoProviderEventSink{});
 	int subtitle_probe_count = 0;
 	auto summary = aegisub::video_session_ops::BuildOpenedVideoSummary(
 		async_provider,
@@ -135,7 +135,7 @@ TEST(video_session_ops, create_video_provider_with_error_handling_returns_provid
 			return agi::make_unique<AsyncVideoProvider>(
 				agi::make_unique<FakeVideoProvider>(),
 				agi::make_unique<FakeSubtitlesProvider>(),
-				[](std::unique_ptr<wxEvent>) { });
+				AsyncVideoProviderEventSink{});
 		},
 		sink);
 

@@ -32,7 +32,6 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <wx/event.h>
 
 class AssDialogue;
 class AssFile;
@@ -136,7 +135,9 @@ class AsyncVideoProvider {
 	SourceFrameOutputMode selected_source_mode = SourceFrameOutputMode::Bgra8;
 	bool has_logged_source_mode = false;
 
-	void DeliverEvent(std::unique_ptr<wxEvent> evt);
+	void DeliverFrameReady(VideoRenderPacket packet, double time);
+	void DeliverVideoError(std::string const& message);
+	void DeliverSubtitlesError(std::string const& message);
 	void ResetCompatibilityOverlayState();
 	void AdvanceOverlayContinuityGeneration();
 	void InvalidateProviderOverlayState();
@@ -206,34 +207,11 @@ public:
 
 	/// @brief Constructor
 	/// @param videoFileName File to open
-	/// @param event_sink Event sink to receive FrameReady and error events
+	/// @param event_sink Callback sink to receive frame-ready and error notifications
 	AsyncVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, AsyncVideoProviderEventSink event_sink, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts = {}, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});
 	AsyncVideoProvider(std::unique_ptr<VideoProvider> source_provider, std::unique_ptr<SubtitlesProvider> subs_provider, AsyncVideoProviderEventSink event_sink);
 	~AsyncVideoProvider();
 };
 
-/// Event which signals that a requested frame is ready
-struct FrameReadyEvent final : public wxEvent {
-	VideoRenderPacket packet;
-	/// Time which was used for subtitle rendering
-	double time;
-	wxEvent *Clone() const override { return new FrameReadyEvent(*this); };
-	FrameReadyEvent(VideoRenderPacket packet, double time)
-	: packet(std::move(packet)), time(time) { }
-};
-
-// These exceptions are wxEvents so that they can be passed directly back to
-// the parent thread as events
-struct VideoProviderErrorEvent final : public wxEvent, public agi::Exception {
-	wxEvent *Clone() const override { return new VideoProviderErrorEvent(*this); };
-	VideoProviderErrorEvent(VideoProviderError const& err);
-};
-
-struct SubtitlesProviderErrorEvent final : public wxEvent, public agi::Exception {
-	wxEvent *Clone() const override { return new SubtitlesProviderErrorEvent(*this); };
-	SubtitlesProviderErrorEvent(std::string const& msg);
-};
-
-wxDECLARE_EVENT(EVT_FRAME_READY, FrameReadyEvent);
-wxDECLARE_EVENT(EVT_VIDEO_ERROR, VideoProviderErrorEvent);
-wxDECLARE_EVENT(EVT_SUBTITLES_ERROR, SubtitlesProviderErrorEvent);
+DEFINE_EXCEPTION(AsyncVideoProviderVideoError, agi::Exception);
+DEFINE_EXCEPTION(AsyncVideoProviderSubtitlesError, agi::Exception);

@@ -448,6 +448,7 @@ add_executable(Aegisub WIN32
     src/visual_tool_vector_clip.cpp
     src/aegisublocale.cpp
     src/ass_attachment.cpp
+    src/ass_info_service.cpp
     src/ass_dialogue.cpp
     src/ass_entry.cpp
     src/ass_export_filter.cpp
@@ -510,6 +511,7 @@ add_executable(Aegisub WIN32
     src/image_position_picker.cpp
     src/initial_line_state.cpp
     src/main.cpp
+    src/media_inspect_service.cpp
     src/menu.cpp
     src/csri_renderer_discovery.cpp
     src/native_library.cpp
@@ -549,6 +551,7 @@ add_executable(Aegisub WIN32
     src/toolbar.cpp
     src/tooltip_manager.cpp
     src/trace_inspect_service.cpp
+    src/trace_summary_service.cpp
     src/utils.cpp
     src/ui_services.cpp
     src/validators.cpp

@@ -372,6 +372,26 @@ bool AegisubApp::OnInit() {
 				return true;
 			}
 
+			if (auto *inspect = std::get_if<headless_cli::InspectMediaCommand>(&*cli_parse.command)) {
+				auto inspect_result = headless_cli::RunInspectMedia(inspect->request);
+				headless_cli_exit_code = inspect_result.exit_code;
+				std::cout << headless_cli::BuildMediaInspectJson(inspect_result);
+				if (inspect_result.exit_code != 0 && !inspect_result.message.empty())
+					std::cerr << inspect_result.message << std::endl;
+				CallAfter([this] { ExitMainLoop(); });
+				return true;
+			}
+
+			if (auto *inspect = std::get_if<headless_cli::InspectAssInfoCommand>(&*cli_parse.command)) {
+				auto inspect_result = headless_cli::RunInspectAssInfo(inspect->request);
+				headless_cli_exit_code = inspect_result.snapshot ? 0 : 2;
+				std::cout << headless_cli::BuildAssInfoJson(inspect_result);
+				if (!inspect_result.snapshot && !inspect_result.error.empty())
+					std::cerr << inspect_result.error << std::endl;
+				CallAfter([this] { ExitMainLoop(); });
+				return true;
+			}
+
 			if (auto *batch = std::get_if<headless_cli::BatchPlaybackProbeCommand>(&*cli_parse.command)) {
 				auto batch_request = batch->request;
 				CallAfter([this, batch_request = std::move(batch_request)]() mutable {
@@ -380,6 +400,24 @@ bool AegisubApp::OnInit() {
 						ExitMainLoop();
 					});
 				});
+				return true;
+			}
+
+			if (auto *batch = std::get_if<headless_cli::BatchTraceSummarizeCommand>(&*cli_parse.command)) {
+				auto batch_result = headless_cli::RunBatchTraceSummarize(batch->request);
+				headless_cli_exit_code = batch_result.exit_code;
+				if (!batch_result.message.empty())
+					std::cout << batch_result.message << std::endl;
+				CallAfter([this] { ExitMainLoop(); });
+				return true;
+			}
+
+			if (auto *batch = std::get_if<headless_cli::BatchAssInfoCommand>(&*cli_parse.command)) {
+				auto batch_result = headless_cli::RunBatchAssInfo(batch->request);
+				headless_cli_exit_code = batch_result.exit_code;
+				if (!batch_result.message.empty())
+					std::cout << batch_result.message << std::endl;
+				CallAfter([this] { ExitMainLoop(); });
 				return true;
 			}
 

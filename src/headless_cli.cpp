@@ -14,7 +14,10 @@
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 #include "headless_cli.h"
+#include "ass_info_service.h"
+#include "media_inspect_service.h"
 #include "playback_probe_service.h"
+#include "trace_summary_service.h"
 #include "trace_inspect_service.h"
 
 #include <libaegisub/fs.h>
@@ -525,6 +528,339 @@ std::optional<PlaybackSessionRequest> ParseSessionPlaybackRequest(std::vector<st
 	return request;
 }
 
+std::vector<agi::fs::path> ReadPathListFile(agi::fs::path const& list_file) {
+	std::ifstream in(list_file, std::ios::in);
+	std::vector<agi::fs::path> paths;
+	std::string line;
+	while (std::getline(in, line)) {
+		if (!line.empty() && line.back() == '\r')
+			line.pop_back();
+		line = Trim(line);
+		if (line.empty() || line[0] == '#')
+			continue;
+		paths.emplace_back(line);
+	}
+	return paths;
+}
+
+std::vector<agi::fs::path> ResolveBatchInputs(std::vector<agi::fs::path> direct_inputs, agi::fs::path const& list_file) {
+	if (!list_file.empty()) {
+		auto listed = ReadPathListFile(list_file);
+		direct_inputs.insert(direct_inputs.end(), listed.begin(), listed.end());
+	}
+	return direct_inputs;
+}
+
+std::optional<MediaInspectRequest> ParseInspectMediaRequest(std::vector<std::string> const& args, std::string& error) {
+	MediaInspectRequest request;
+
+	if (args.size() == 5 && !args[4].empty() && args[4][0] != '-') {
+		request.video_path = agi::fs::path(args[4]);
+		request.audio_path = request.video_path;
+		return request;
+	}
+
+	for (size_t i = 4; i < args.size(); ++i) {
+		auto const& arg = args[i];
+		if (arg == "--video" || arg == "--probe-video") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.video_path = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--audio" || arg == "--probe-audio") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.audio_path = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--skip-audio" || arg == "--probe-skip-audio") {
+			request.skip_audio = true;
+			continue;
+		}
+		if (arg == "--video-provider" || arg == "--probe-video-provider") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.video_provider = *value;
+			continue;
+		}
+		if (arg == "--audio-provider" || arg == "--probe-audio-provider") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.audio_provider = *value;
+			continue;
+		}
+		if (arg == "--trace-dir" || arg == "--probe-trace-dir") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.trace_dir = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--audio-rate-scale" || arg == "--probe-audio-rate-scale") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			try {
+				request.audio_rate_scale = std::stod(*value);
+			}
+			catch (...) {
+				error = arg + " requires a positive number\n" + Usage();
+				return std::nullopt;
+			}
+			if (request.audio_rate_scale <= 0.0) {
+				error = arg + " requires a positive number\n" + Usage();
+				return std::nullopt;
+			}
+			continue;
+		}
+		if (arg == "--audio-quantum-ms" || arg == "--probe-audio-quantum-ms") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto parsed = ParseIntegerValue(*value);
+			if (!parsed || *parsed < 0) {
+				error = arg + " requires a non-negative integer\n" + Usage();
+				return std::nullopt;
+			}
+			request.audio_quantum_ms = *parsed;
+			continue;
+		}
+		error = "unrecognized inspect media argument: " + arg + "\n" + Usage();
+		return std::nullopt;
+	}
+
+	if (request.video_path.empty() && request.audio_path.empty()) {
+		error = "inspect media requires --video or --audio\n" + Usage();
+		return std::nullopt;
+	}
+	if (!request.skip_audio && request.audio_path.empty())
+		request.audio_path = request.video_path;
+	return request;
+}
+
+std::optional<AssInfoInspectRequest> ParseInspectAssInfoRequest(std::vector<std::string> const& args, std::string& error) {
+	AssInfoInspectRequest request;
+
+	if (args.size() == 5 && !args[4].empty() && args[4][0] != '-') {
+		request.subtitle_path = agi::fs::path(args[4]);
+		return request;
+	}
+
+	for (size_t i = 4; i < args.size(); ++i) {
+		auto const& arg = args[i];
+		if (arg == "--input" || arg == "--subtitle" || arg == "--file") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.subtitle_path = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--encoding") {
+			auto value = RequireValue(args, i, "--encoding", error);
+			if (!value)
+				return std::nullopt;
+			request.encoding = *value;
+			continue;
+		}
+		error = "unrecognized inspect ass-info argument: " + arg + "\n" + Usage();
+		return std::nullopt;
+	}
+
+	if (request.subtitle_path.empty()) {
+		error = "inspect ass-info requires a subtitle path\n" + Usage();
+		return std::nullopt;
+	}
+	return request;
+}
+
+std::optional<BatchTraceSummarizeRequest> ParseBatchTraceSummarizeRequest(std::vector<std::string> const& args, std::string& error) {
+	BatchTraceSummarizeRequest request;
+	agi::fs::path list_file;
+
+	for (size_t i = 4; i < args.size(); ++i) {
+		auto const& arg = args[i];
+		if (arg == "--output-dir") {
+			auto value = RequireValue(args, i, "--output-dir", error);
+			if (!value)
+				return std::nullopt;
+			request.output_dir = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--list-file") {
+			auto value = RequireValue(args, i, "--list-file", error);
+			if (!value)
+				return std::nullopt;
+			list_file = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--input") {
+			auto value = RequireValue(args, i, "--input", error);
+			if (!value)
+				return std::nullopt;
+			request.inputs.emplace_back(*value);
+			continue;
+		}
+		request.inputs.emplace_back(arg);
+	}
+
+	if (request.output_dir.empty()) {
+		error = "--cli batch trace-summarize requires --output-dir\n" + Usage();
+		return std::nullopt;
+	}
+	if (!list_file.empty() && !agi::fs::FileExists(list_file)) {
+		error = "trace-summarize list file does not exist: " + ToGenericString(list_file);
+		return std::nullopt;
+	}
+	request.inputs = ResolveBatchInputs(std::move(request.inputs), list_file);
+	if (request.inputs.empty()) {
+		error = "--cli batch trace-summarize requires at least one input path\n" + Usage();
+		return std::nullopt;
+	}
+	return request;
+}
+
+std::optional<BatchAssInfoRequest> ParseBatchAssInfoRequest(std::vector<std::string> const& args, std::string& error) {
+	BatchAssInfoRequest request;
+	agi::fs::path list_file;
+
+	for (size_t i = 4; i < args.size(); ++i) {
+		auto const& arg = args[i];
+		if (arg == "--output-dir") {
+			auto value = RequireValue(args, i, "--output-dir", error);
+			if (!value)
+				return std::nullopt;
+			request.output_dir = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--list-file") {
+			auto value = RequireValue(args, i, "--list-file", error);
+			if (!value)
+				return std::nullopt;
+			list_file = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--input") {
+			auto value = RequireValue(args, i, "--input", error);
+			if (!value)
+				return std::nullopt;
+			request.inputs.emplace_back(*value);
+			continue;
+		}
+		if (arg == "--encoding") {
+			auto value = RequireValue(args, i, "--encoding", error);
+			if (!value)
+				return std::nullopt;
+			request.encoding = *value;
+			continue;
+		}
+		request.inputs.emplace_back(arg);
+	}
+
+	if (request.output_dir.empty()) {
+		error = "--cli batch ass-info requires --output-dir\n" + Usage();
+		return std::nullopt;
+	}
+	if (!list_file.empty() && !agi::fs::FileExists(list_file)) {
+		error = "ass-info list file does not exist: " + ToGenericString(list_file);
+		return std::nullopt;
+	}
+	request.inputs = ResolveBatchInputs(std::move(request.inputs), list_file);
+	if (request.inputs.empty()) {
+		error = "--cli batch ass-info requires at least one input path\n" + Usage();
+		return std::nullopt;
+	}
+	return request;
+}
+
+std::string BuildMediaInspectJsonImpl(MediaInspectResult const& result) {
+	std::ostringstream out;
+	out << "{\n";
+	out << "  \"opened\": " << std::boolalpha << result.opened << ",\n";
+	out << "  \"exit_code\": " << result.exit_code << ",\n";
+	out << "  \"trace_dir\": \"" << JsonEscape(ToGenericString(result.trace_dir)) << "\",\n";
+	out << "  \"message\": \"" << JsonEscape(result.message) << "\",\n";
+	out << "  \"selected_video_provider\": \"" << JsonEscape(result.selected_video_provider) << "\",\n";
+	out << "  \"selected_audio_provider\": \"" << JsonEscape(result.selected_audio_provider) << "\",\n";
+	out << "  \"actual_video_provider\": \"" << JsonEscape(result.actual_video_provider) << "\",\n";
+	out << "  \"actual_video_decoder\": \"" << JsonEscape(result.actual_video_decoder) << "\",\n";
+	out << "  \"video_provider_fallback\": " << result.video_provider_fallback << ",\n";
+	out << "  \"video_provider_fallback_reason\": \"" << JsonEscape(result.video_provider_fallback_reason) << "\",\n";
+	out << "  \"video_provider_attempts\": \"" << JsonEscape(result.video_provider_attempts) << "\",\n";
+	out << "  \"actual_audio_provider_factory\": \"" << JsonEscape(result.actual_audio_provider_factory) << "\",\n";
+	out << "  \"actual_audio_provider\": \"" << JsonEscape(result.actual_audio_provider) << "\",\n";
+	out << "  \"audio_provider_fallback\": " << result.audio_provider_fallback << ",\n";
+	out << "  \"audio_provider_fallback_reason\": \"" << JsonEscape(result.audio_provider_fallback_reason) << "\",\n";
+	out << "  \"audio_provider_attempts\": \"" << JsonEscape(result.audio_provider_attempts) << "\",\n";
+	out << "  \"media\": {\n";
+	out << "    \"video_path\": \"" << JsonEscape(ToGenericString(result.media.video_path)) << "\",\n";
+	out << "    \"audio_path\": \"" << JsonEscape(ToGenericString(result.media.audio_path)) << "\",\n";
+	out << "    \"has_video\": " << result.media.has_video << ",\n";
+	out << "    \"has_audio\": " << result.media.has_audio << ",\n";
+	out << "    \"can_load_subtitles_from_video\": " << result.media.can_load_subtitles_from_video << ",\n";
+	out << "    \"video_width\": " << result.media.video_width << ",\n";
+	out << "    \"video_height\": " << result.media.video_height << ",\n";
+	out << "    \"video_frame_count\": " << result.media.video_frame_count << ",\n";
+	out << "    \"video_duration_ms\": " << result.media.video_duration_ms << ",\n";
+	out << "    \"video_decoder_name\": \"" << JsonEscape(result.media.video_decoder_name) << "\",\n";
+	out << "    \"audio_sample_rate\": " << result.media.audio_sample_rate << ",\n";
+	out << "    \"audio_num_samples\": " << result.media.audio_num_samples << ",\n";
+	out << "    \"audio_duration_ms\": " << result.media.audio_duration_ms << ",\n";
+	out << "    \"audio_provider_name\": \"" << JsonEscape(result.media.audio_provider_name) << "\"\n";
+	out << "  },\n";
+	out << "  \"playback\": {\n";
+	out << "    \"has_video\": " << result.playback.has_video << ",\n";
+	out << "    \"has_audio\": " << result.playback.has_audio << ",\n";
+	out << "    \"video_playing\": " << result.playback.video_playing << ",\n";
+	out << "    \"audio_playing\": " << result.playback.audio_playing << ",\n";
+	out << "    \"playback_uses_audio_authority\": " << result.playback.playback_uses_audio_authority << ",\n";
+	out << "    \"current_frame\": " << result.playback.current_frame << ",\n";
+	out << "    \"current_video_time_ms\": " << result.playback.current_video_time_ms << ",\n";
+	out << "    \"current_audio_time_ms\": " << result.playback.current_audio_time_ms << ",\n";
+	out << "    \"primary_playback_begin_ms\": " << result.playback.primary_playback_begin_ms << ",\n";
+	out << "    \"primary_playback_end_ms\": " << result.playback.primary_playback_end_ms << "\n";
+	out << "  }\n";
+	out << "}\n";
+	return out.str();
+}
+
+std::string BuildAssInfoJsonImpl(AssInfoInspectResult const& result) {
+	if (!result.snapshot) {
+		return std::string("{\n  \"error\": \"") + JsonEscape(result.error) + "\"\n}\n";
+	}
+
+	auto const& snapshot = *result.snapshot;
+	std::ostringstream out;
+	out << "{\n";
+	out << "  \"subtitle_path\": \"" << JsonEscape(ToGenericString(snapshot.subtitle_path)) << "\",\n";
+	out << "  \"format_name\": \"" << JsonEscape(snapshot.format_name) << "\",\n";
+	out << "  \"title\": \"" << JsonEscape(snapshot.title) << "\",\n";
+	out << "  \"script_type\": \"" << JsonEscape(snapshot.script_type) << "\",\n";
+	out << "  \"wrap_style\": \"" << JsonEscape(snapshot.wrap_style) << "\",\n";
+	out << "  \"scaled_border_and_shadow\": \"" << JsonEscape(snapshot.scaled_border_and_shadow) << "\",\n";
+	out << "  \"play_res_x\": " << snapshot.play_res_x << ",\n";
+	out << "  \"play_res_y\": " << snapshot.play_res_y << ",\n";
+	out << "  \"layout_res_x\": " << snapshot.layout_res_x << ",\n";
+	out << "  \"layout_res_y\": " << snapshot.layout_res_y << ",\n";
+	out << "  \"info_count\": " << snapshot.info_count << ",\n";
+	out << "  \"style_count\": " << snapshot.style_count << ",\n";
+	out << "  \"event_count\": " << snapshot.event_count << ",\n";
+	out << "  \"dialogue_count\": " << snapshot.dialogue_count << ",\n";
+	out << "  \"comment_count\": " << snapshot.comment_count << ",\n";
+	out << "  \"attachment_count\": " << snapshot.attachment_count << ",\n";
+	out << "  \"extradata_count\": " << snapshot.extradata_count << ",\n";
+	out << "  \"project_audio_file\": \"" << JsonEscape(snapshot.project_audio_file) << "\",\n";
+	out << "  \"project_video_file\": \"" << JsonEscape(snapshot.project_video_file) << "\",\n";
+	out << "  \"project_timecodes_file\": \"" << JsonEscape(snapshot.project_timecodes_file) << "\",\n";
+	out << "  \"project_keyframes_file\": \"" << JsonEscape(snapshot.project_keyframes_file) << "\"\n";
+	out << "}\n";
+	return out.str();
+}
+
 void WriteBatchResultsCsv(agi::fs::path const& output_dir, std::vector<BatchCaseResult> const& results) {
 	std::ofstream out(output_dir / "results.csv", std::ios::out | std::ios::trunc);
 	out << "index,passed,exit_code,video_path,audio_path,performed_seeks,seek_samples,audio_timer_samples,seek_max_abs_delta_ms,seek_mean_abs_delta_ms,actual_video_decoder,actual_audio_provider,trace_dir,message\n";
@@ -728,6 +1064,178 @@ public:
 	}
 };
 
+void WriteBatchTraceSummariesCsv(agi::fs::path const& output_dir, std::vector<aegisub::trace_summary_service::TraceSummaryRow> const& rows) {
+	std::ofstream out(output_dir / "results.csv", std::ios::out | std::ios::trunc);
+	out << "index,command,result,input_path,session_dir,build,video_path,audio_path,selected_video_provider,selected_audio_provider,actual_video_provider,actual_video_decoder,actual_audio_provider_factory,actual_audio_provider,video_provider_fallback,audio_provider_fallback,probe_performed_seeks,probe_seek_max_abs_delta_ms,probe_seek_mean_abs_delta_ms,session_open_count,session_reopen_count,session_close_count,session_query_count,session_play_count,session_playline_count,session_stop_count,session_jump_time_count,session_jump_frame_count,session_final_playback_uses_audio_authority\n";
+	for (size_t i = 0; i < rows.size(); ++i) {
+		auto const& row = rows[i];
+		out
+			<< (i + 1) << ','
+			<< CsvEscape(row.command) << ','
+			<< CsvEscape(row.result) << ','
+			<< CsvEscape(ToGenericString(row.input_path)) << ','
+			<< CsvEscape(ToGenericString(row.session_dir)) << ','
+			<< CsvEscape(row.build) << ','
+			<< CsvEscape(row.video_path) << ','
+			<< CsvEscape(row.audio_path) << ','
+			<< CsvEscape(row.selected_video_provider) << ','
+			<< CsvEscape(row.selected_audio_provider) << ','
+			<< CsvEscape(row.actual_video_provider) << ','
+			<< CsvEscape(row.actual_video_decoder) << ','
+			<< CsvEscape(row.actual_audio_provider_factory) << ','
+			<< CsvEscape(row.actual_audio_provider) << ','
+			<< (row.video_provider_fallback ? "true" : "false") << ','
+			<< (row.audio_provider_fallback ? "true" : "false") << ','
+			<< row.probe_performed_seeks << ','
+			<< row.probe_seek_max_abs_delta_ms << ','
+			<< row.probe_seek_mean_abs_delta_ms << ','
+			<< row.session_open_count << ','
+			<< row.session_reopen_count << ','
+			<< row.session_close_count << ','
+			<< row.session_query_count << ','
+			<< row.session_play_count << ','
+			<< row.session_playline_count << ','
+			<< row.session_stop_count << ','
+			<< row.session_jump_time_count << ','
+			<< row.session_jump_frame_count << ','
+			<< (row.session_final_playback_uses_audio_authority ? "true" : "false")
+			<< "\n";
+	}
+}
+
+void WriteBatchTraceSummariesText(agi::fs::path const& output_dir, std::vector<aegisub::trace_summary_service::TraceSummaryRow> const& rows, BatchTraceSummarizeResult const& result) {
+	std::ofstream out(output_dir / "summary.txt", std::ios::out | std::ios::trunc);
+	out << "command=batch trace-summarize\n";
+	out << "output_dir=" << ToGenericString(result.output_dir) << "\n";
+	out << "total_sessions=" << result.total_sessions << "\n";
+	out << "passed_sessions=" << result.passed_sessions << "\n";
+	out << "failed_sessions=" << result.failed_sessions << "\n";
+	out << "result=" << (result.exit_code == 0 ? "PASS" : "FAIL") << "\n";
+	out << "message=" << result.message << "\n";
+	for (size_t i = 0; i < rows.size(); ++i)
+		out << "input_" << (i + 1) << "=" << ToGenericString(rows[i].input_path) << "\n";
+}
+
+void WriteBatchTraceSummariesManifest(agi::fs::path const& output_dir, std::vector<aegisub::trace_summary_service::TraceSummaryRow> const& rows, BatchTraceSummarizeResult const& result) {
+	std::ofstream out(output_dir / "manifest.json", std::ios::out | std::ios::trunc);
+	out << "{\n";
+	out << "  \"command\": \"batch trace-summarize\",\n";
+	out << "  \"output_dir\": \"" << JsonEscape(ToGenericString(result.output_dir)) << "\",\n";
+	out << "  \"total_sessions\": " << result.total_sessions << ",\n";
+	out << "  \"passed_sessions\": " << result.passed_sessions << ",\n";
+	out << "  \"failed_sessions\": " << result.failed_sessions << ",\n";
+	out << "  \"result\": \"" << (result.exit_code == 0 ? "PASS" : "FAIL") << "\",\n";
+	out << "  \"message\": \"" << JsonEscape(result.message) << "\",\n";
+	out << "  \"sessions\": [\n";
+	out << std::boolalpha;
+	for (size_t i = 0; i < rows.size(); ++i) {
+		auto const& row = rows[i];
+		if (i)
+			out << ",\n";
+		out << "    {\n";
+		out << "      \"index\": " << (i + 1) << ",\n";
+		out << "      \"command\": \"" << JsonEscape(row.command) << "\",\n";
+		out << "      \"result\": \"" << JsonEscape(row.result) << "\",\n";
+		out << "      \"input_path\": \"" << JsonEscape(ToGenericString(row.input_path)) << "\",\n";
+		out << "      \"session_dir\": \"" << JsonEscape(ToGenericString(row.session_dir)) << "\",\n";
+		out << "      \"build\": \"" << JsonEscape(row.build) << "\",\n";
+		out << "      \"actual_video_decoder\": \"" << JsonEscape(row.actual_video_decoder) << "\",\n";
+		out << "      \"actual_audio_provider\": \"" << JsonEscape(row.actual_audio_provider) << "\"\n";
+		out << "    }";
+	}
+	out << "\n  ]\n";
+	out << "}\n";
+}
+
+void WriteBatchAssInfoCsv(agi::fs::path const& output_dir, std::vector<std::pair<agi::fs::path, AssInfoInspectResult>> const& rows) {
+	std::ofstream out(output_dir / "results.csv", std::ios::out | std::ios::trunc);
+	out << "index,passed,subtitle_path,format_name,title,script_type,wrap_style,scaled_border_and_shadow,play_res_x,play_res_y,layout_res_x,layout_res_y,info_count,style_count,event_count,dialogue_count,comment_count,attachment_count,extradata_count,project_audio_file,project_video_file,project_timecodes_file,project_keyframes_file,error\n";
+	for (size_t i = 0; i < rows.size(); ++i) {
+		auto const& [path, inspect] = rows[i];
+		auto passed = inspect.snapshot.has_value();
+		out << (i + 1) << ','
+			<< (passed ? "true" : "false") << ','
+			<< CsvEscape(ToGenericString(path)) << ',';
+		if (!passed) {
+			out << ",,,,,,,,,,,,,,,,,,,,"
+				<< CsvEscape(inspect.error) << "\n";
+			continue;
+		}
+		auto const& snapshot = *inspect.snapshot;
+		out
+			<< CsvEscape(snapshot.format_name) << ','
+			<< CsvEscape(snapshot.title) << ','
+			<< CsvEscape(snapshot.script_type) << ','
+			<< CsvEscape(snapshot.wrap_style) << ','
+			<< CsvEscape(snapshot.scaled_border_and_shadow) << ','
+			<< snapshot.play_res_x << ','
+			<< snapshot.play_res_y << ','
+			<< snapshot.layout_res_x << ','
+			<< snapshot.layout_res_y << ','
+			<< snapshot.info_count << ','
+			<< snapshot.style_count << ','
+			<< snapshot.event_count << ','
+			<< snapshot.dialogue_count << ','
+			<< snapshot.comment_count << ','
+			<< snapshot.attachment_count << ','
+			<< snapshot.extradata_count << ','
+			<< CsvEscape(snapshot.project_audio_file) << ','
+			<< CsvEscape(snapshot.project_video_file) << ','
+			<< CsvEscape(snapshot.project_timecodes_file) << ','
+			<< CsvEscape(snapshot.project_keyframes_file) << ','
+			<< CsvEscape(inspect.error)
+			<< "\n";
+	}
+}
+
+void WriteBatchAssInfoText(agi::fs::path const& output_dir, std::vector<std::pair<agi::fs::path, AssInfoInspectResult>> const& rows, BatchAssInfoResult const& result) {
+	std::ofstream out(output_dir / "summary.txt", std::ios::out | std::ios::trunc);
+	out << "command=batch ass-info\n";
+	out << "output_dir=" << ToGenericString(result.output_dir) << "\n";
+	out << "total_files=" << result.total_files << "\n";
+	out << "passed_files=" << result.passed_files << "\n";
+	out << "failed_files=" << result.failed_files << "\n";
+	out << "result=" << (result.exit_code == 0 ? "PASS" : "FAIL") << "\n";
+	out << "message=" << result.message << "\n";
+	for (size_t i = 0; i < rows.size(); ++i)
+		out << "input_" << (i + 1) << "=" << ToGenericString(rows[i].first) << "\n";
+}
+
+void WriteBatchAssInfoManifest(agi::fs::path const& output_dir, std::vector<std::pair<agi::fs::path, AssInfoInspectResult>> const& rows, BatchAssInfoResult const& result) {
+	std::ofstream out(output_dir / "manifest.json", std::ios::out | std::ios::trunc);
+	out << "{\n";
+	out << "  \"command\": \"batch ass-info\",\n";
+	out << "  \"output_dir\": \"" << JsonEscape(ToGenericString(result.output_dir)) << "\",\n";
+	out << "  \"total_files\": " << result.total_files << ",\n";
+	out << "  \"passed_files\": " << result.passed_files << ",\n";
+	out << "  \"failed_files\": " << result.failed_files << ",\n";
+	out << "  \"result\": \"" << (result.exit_code == 0 ? "PASS" : "FAIL") << "\",\n";
+	out << "  \"message\": \"" << JsonEscape(result.message) << "\",\n";
+	out << "  \"files\": [\n";
+	for (size_t i = 0; i < rows.size(); ++i) {
+		auto const& [path, inspect] = rows[i];
+		if (i)
+			out << ",\n";
+		out << "    {\n";
+		out << "      \"index\": " << (i + 1) << ",\n";
+		out << "      \"subtitle_path\": \"" << JsonEscape(ToGenericString(path)) << "\",\n";
+		out << "      \"passed\": " << (inspect.snapshot ? "true" : "false") << ",\n";
+		out << "      \"error\": \"" << JsonEscape(inspect.error) << "\"";
+		if (inspect.snapshot) {
+			out << ",\n";
+			out << "      \"format_name\": \"" << JsonEscape(inspect.snapshot->format_name) << "\",\n";
+			out << "      \"title\": \"" << JsonEscape(inspect.snapshot->title) << "\",\n";
+			out << "      \"dialogue_count\": " << inspect.snapshot->dialogue_count << "\n";
+		}
+		else {
+			out << "\n";
+		}
+		out << "    }";
+	}
+	out << "\n  ]\n";
+	out << "}\n";
+}
+
 }
 
 ParseResult ParseCommandLine(std::vector<std::string> const& args) {
@@ -766,6 +1274,28 @@ ParseResult ParseCommandLine(std::vector<std::string> const& args) {
 			return result;
 		}
 		result.command.emplace(SessionPlaybackCommand{std::move(*request)});
+		return result;
+	}
+
+	if (command == "inspect" && subcommand == "media") {
+		auto request = ParseInspectMediaRequest(args, result.error);
+		if (!request) {
+			if (result.error.empty())
+				result.error = Usage();
+			return result;
+		}
+		result.command.emplace(InspectMediaCommand{std::move(*request)});
+		return result;
+	}
+
+	if (command == "inspect" && subcommand == "ass-info") {
+		auto request = ParseInspectAssInfoRequest(args, result.error);
+		if (!request) {
+			if (result.error.empty())
+				result.error = Usage();
+			return result;
+		}
+		result.command.emplace(InspectAssInfoCommand{std::move(*request)});
 		return result;
 	}
 
@@ -850,6 +1380,28 @@ ParseResult ParseCommandLine(std::vector<std::string> const& args) {
 		return result;
 	}
 
+	if (command == "batch" && subcommand == "trace-summarize") {
+		auto request = ParseBatchTraceSummarizeRequest(args, result.error);
+		if (!request) {
+			if (result.error.empty())
+				result.error = Usage();
+			return result;
+		}
+		result.command.emplace(BatchTraceSummarizeCommand{std::move(*request)});
+		return result;
+	}
+
+	if (command == "batch" && subcommand == "ass-info") {
+		auto request = ParseBatchAssInfoRequest(args, result.error);
+		if (!request) {
+			if (result.error.empty())
+				result.error = Usage();
+			return result;
+		}
+		result.command.emplace(BatchAssInfoCommand{std::move(*request)});
+		return result;
+	}
+
 	result.error = "unrecognized CLI command: " + command + " " + subcommand + "\n" + Usage();
 	return result;
 }
@@ -866,6 +1418,22 @@ TraceInspectResult RunInspectTrace(TraceInspectRequest const& request) {
 	return result;
 }
 
+MediaInspectResult RunInspectMedia(MediaInspectRequest const& request) {
+	return aegisub::media_inspect_service::Inspect(request);
+}
+
+AssInfoInspectResult RunInspectAssInfo(AssInfoInspectRequest const& request) {
+	return aegisub::ass_info_service::Inspect(request);
+}
+
+std::string BuildMediaInspectJson(MediaInspectResult const& result) {
+	return BuildMediaInspectJsonImpl(result);
+}
+
+std::string BuildAssInfoJson(AssInfoInspectResult const& result) {
+	return BuildAssInfoJsonImpl(result);
+}
+
 void RunSessionPlaybackAsync(PlaybackSessionRequest request, std::function<void(PlaybackSessionResult)> on_done) {
 	aegisub::playback_session_service::RunAsync(std::move(request), std::move(on_done));
 }
@@ -875,13 +1443,85 @@ void RunBatchPlaybackProbeAsync(BatchPlaybackProbeRequest request, std::function
 	runner->Start();
 }
 
+BatchTraceSummarizeResult RunBatchTraceSummarize(BatchTraceSummarizeRequest const& request) {
+	BatchTraceSummarizeResult result;
+	result.output_dir = request.output_dir;
+	try {
+		agi::fs::CreateDirectory(request.output_dir);
+		auto summary = aegisub::trace_summary_service::Summarize(request.inputs);
+		if (!summary.error.empty()) {
+			result.exit_code = 2;
+			result.message = summary.error;
+			return result;
+		}
+
+		result.total_sessions = summary.rows.size();
+		for (auto const& row : summary.rows) {
+			if (row.result == "PASS")
+				++result.passed_sessions;
+			else
+				++result.failed_sessions;
+		}
+		result.exit_code = result.failed_sessions == 0 ? 0 : 1;
+		result.message = result.exit_code == 0
+			? "batch trace summarize completed"
+			: "batch trace summarize completed with failures";
+
+		WriteBatchTraceSummariesCsv(request.output_dir, summary.rows);
+		WriteBatchTraceSummariesText(request.output_dir, summary.rows, result);
+		WriteBatchTraceSummariesManifest(request.output_dir, summary.rows, result);
+	}
+	catch (std::exception const& error) {
+		result.exit_code = 2;
+		result.message = error.what();
+	}
+	return result;
+}
+
+BatchAssInfoResult RunBatchAssInfo(BatchAssInfoRequest const& request) {
+	BatchAssInfoResult result;
+	result.output_dir = request.output_dir;
+	try {
+		agi::fs::CreateDirectory(request.output_dir);
+		std::vector<std::pair<agi::fs::path, AssInfoInspectResult>> rows;
+		rows.reserve(request.inputs.size());
+		for (auto const& input : request.inputs)
+			rows.emplace_back(input, aegisub::ass_info_service::Inspect({input, request.encoding}));
+
+		result.total_files = rows.size();
+		for (auto const& row : rows) {
+			if (row.second.snapshot)
+				++result.passed_files;
+			else
+				++result.failed_files;
+		}
+		result.exit_code = result.failed_files == 0 ? 0 : 1;
+		result.message = result.exit_code == 0
+			? "batch ass-info completed"
+			: "batch ass-info completed with failures";
+
+		WriteBatchAssInfoCsv(request.output_dir, rows);
+		WriteBatchAssInfoText(request.output_dir, rows, result);
+		WriteBatchAssInfoManifest(request.output_dir, rows, result);
+	}
+	catch (std::exception const& error) {
+		result.exit_code = 2;
+		result.message = error.what();
+	}
+	return result;
+}
+
 std::string Usage() {
 	return std::string(
 		"Usage:\n"
 		"  Aegisub.exe --cli probe playback [probe flags...]\n"
 		"  Aegisub.exe --cli session playback --script-file <path> --video <path> [session flags...]\n"
+		"  Aegisub.exe --cli inspect media --video <path> [media flags...]\n"
+		"  Aegisub.exe --cli inspect ass-info <path> [--encoding <name>]\n"
 		"  Aegisub.exe --cli inspect trace <session-dir|manifest.txt|summary.txt|trace.ndjson>\n"
 		"  Aegisub.exe --cli batch playback-probe --list-file <path> --output-dir <dir> [probe flags...]\n"
+		"  Aegisub.exe --cli batch trace-summarize --output-dir <dir> [--list-file <path>|--input <path>...]\n"
+		"  Aegisub.exe --cli batch ass-info --output-dir <dir> [--list-file <path>|--input <path>...] [--encoding <name>]\n"
 		"\n"
 		"Session script steps:\n"
 		"  open | reopen | close | install-playline <start_ms> <duration_ms> | play | playline | stop\n"
@@ -894,8 +1534,13 @@ std::string Usage() {
 		"  [--video-provider <name>] [--audio-provider <name>] [--trace-dir <path>]\n"
 		"  [--audio-rate-scale <scale>] [--audio-quantum-ms <ms>]\n"
 		"\n"
+		"Inspect media flags:\n"
+		"  --video <path> [--audio <path>] [--skip-audio]\n"
+		"  [--video-provider <name>] [--audio-provider <name>] [--trace-dir <path>]\n"
+		"  [--audio-rate-scale <scale>] [--audio-quantum-ms <ms>]\n"
+		"\n"
 		"Batch list file syntax:\n"
-		"  one video path per line, or video<TAB>audio per line\n"
+		"  one path per line, or for playback-probe one video<TAB>audio per line\n"
 		"\n"
 		"Playback probe flags:\n"
 		"  ") + headless_playback_probe::Usage();

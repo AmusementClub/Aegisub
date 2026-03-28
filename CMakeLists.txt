@@ -521,6 +521,7 @@ add_executable(Aegisub WIN32
     src/playback_probe_timer_host.cpp
     src/playback_query_service.cpp
     src/playback_session_service.cpp
+    src/playback_session_timer_host.cpp
     src/persist_location.cpp
     src/preferences.cpp
     src/preferences_base.cpp

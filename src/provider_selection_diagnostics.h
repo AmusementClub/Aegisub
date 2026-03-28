@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cctype>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -18,10 +19,44 @@ struct SelectionReport {
 	std::vector<Attempt> attempts;
 };
 
+inline std::string NormalizeProviderToken(std::string_view value) {
+	std::string normalized;
+	normalized.reserve(value.size());
+	for (unsigned char ch : value) {
+		if (std::isalnum(ch))
+			normalized.push_back(static_cast<char>(std::tolower(ch)));
+	}
+	return normalized;
+}
+
+inline std::string CanonicalizeProviderName(std::string_view value) {
+	if (value.empty())
+		return {};
+
+	auto const normalized = NormalizeProviderToken(value);
+	if (normalized == "ffms2" || normalized == "ffmpegsource" || normalized == "ffmpegsource2")
+		return "FFmpegSource";
+	if (normalized == "avisynth" || normalized == "avs")
+		return "Avisynth";
+	if (normalized == "yuv4mpeg" || normalized == "y4m")
+		return "YUV4MPEG";
+	if (normalized == "dummy")
+		return "Dummy";
+	if (normalized == "pcm")
+		return "PCM";
+	return std::string(value);
+}
+
+inline bool SameProviderName(std::string_view left, std::string_view right) {
+	return !left.empty()
+		&& !right.empty()
+		&& CanonicalizeProviderName(left) == CanonicalizeProviderName(right);
+}
+
 inline bool UsedFallback(SelectionReport const& report) {
 	return !report.preferred_provider.empty()
 		&& !report.selected_provider.empty()
-		&& report.preferred_provider != report.selected_provider;
+		&& !SameProviderName(report.preferred_provider, report.selected_provider);
 }
 
 inline std::string SanitizeText(std::string_view value) {
@@ -72,7 +107,7 @@ inline std::string DescribeFallbackReason(SelectionReport const& report) {
 		return {};
 
 	for (auto const& attempt : report.attempts) {
-		if (attempt.provider_name != report.preferred_provider || attempt.outcome == "opened")
+		if (!SameProviderName(attempt.provider_name, report.preferred_provider) || attempt.outcome == "opened")
 			continue;
 
 		auto const detail = SanitizeText(attempt.detail);

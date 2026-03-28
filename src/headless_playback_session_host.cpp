@@ -253,7 +253,7 @@ public:
 
 		auto* option = OPT_SET(this->option_name);
 		previous_value = option->GetString();
-		option->SetString(*temporary_value);
+		option->SetString(provider_selection_diagnostics::CanonicalizeProviderName(*temporary_value));
 		active = true;
 	}
 
@@ -356,8 +356,10 @@ public:
 		last_open_options = options;
 		CloseMedia();
 
-		selected_video_provider = OPT_GET("Video/Provider")->GetString();
-		selected_audio_provider = options.skip_audio ? std::string() : OPT_GET("Audio/Provider")->GetString();
+		selected_video_provider = provider_selection_diagnostics::CanonicalizeProviderName(OPT_GET("Video/Provider")->GetString());
+		selected_audio_provider = options.skip_audio
+			? std::string()
+			: provider_selection_diagnostics::CanonicalizeProviderName(OPT_GET("Audio/Provider")->GetString());
 		video_provider_report = {};
 		audio_provider_report = {};
 		actual_video_provider.clear();

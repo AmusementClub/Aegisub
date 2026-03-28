@@ -88,8 +88,10 @@ TEST(ui_services, null_notification_sink_accepts_all_levels) {
 TEST(ui_services, null_project_ui_state_sink_accepts_restores) {
 	agi::NullProjectUiStateSink sink;
 
-	sink.RestoreSubtitleScrollPosition(123);
-	sink.RestoreVideoZoom(1.5);
+	sink.RestoreProjectUiState({
+		123,
+		1.5,
+	});
 }
 
 TEST(ui_services, null_audio_player_factory_service_returns_null_player) {

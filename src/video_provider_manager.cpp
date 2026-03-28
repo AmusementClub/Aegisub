@@ -124,7 +124,7 @@ std::vector<std::pair<std::string, std::string>> VideoProviderFactory::GetChoice
 }
 
 std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
-	auto preferred = OPT_GET("Video/Provider")->GetString();
+	auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(OPT_GET("Video/Provider")->GetString());
 	auto sorted = GetSorted(providers, preferred);
 	aegisub::provider_selection_diagnostics::SelectionReport diagnostics;
 	diagnostics.preferred_provider = preferred;

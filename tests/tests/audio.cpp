@@ -128,6 +128,25 @@ TEST(provider_selection_diagnostics, does_not_report_fallback_when_preferred_ope
 	EXPECT_EQ("FFmpegSource:opened", aegisub::provider_selection_diagnostics::FormatAttempts(report));
 }
 
+TEST(provider_selection_diagnostics, canonicalizes_common_aliases) {
+	EXPECT_EQ("FFmpegSource", aegisub::provider_selection_diagnostics::CanonicalizeProviderName("ffms2"));
+	EXPECT_EQ("FFmpegSource", aegisub::provider_selection_diagnostics::CanonicalizeProviderName("ffmpegsource"));
+	EXPECT_EQ("Avisynth", aegisub::provider_selection_diagnostics::CanonicalizeProviderName("avs"));
+	EXPECT_EQ("YUV4MPEG", aegisub::provider_selection_diagnostics::CanonicalizeProviderName("y4m"));
+}
+
+TEST(provider_selection_diagnostics, does_not_report_fallback_for_equivalent_aliases) {
+	aegisub::provider_selection_diagnostics::SelectionReport report;
+	report.preferred_provider = "ffms2";
+	report.selected_provider = "FFmpegSource";
+	report.attempts = {
+		{"FFmpegSource", "opened", ""}
+	};
+
+	EXPECT_FALSE(aegisub::provider_selection_diagnostics::UsedFallback(report));
+	EXPECT_TRUE(aegisub::provider_selection_diagnostics::DescribeFallbackReason(report).empty());
+}
+
 struct BlockingSequenceAudioProvider : agi::AudioProvider {
 	mutable std::mutex mutex;
 	mutable std::condition_variable cv;

@@ -21,7 +21,6 @@
 #include "options.h"
 #include "ui_services.h"
 #include "utils.h"
-#include "wx_ui_services.h"
 #ifdef WITH_FFMS2
 #include "ffmpegsource_common.h"
 #endif
@@ -34,8 +33,6 @@
 #include <libaegisub/log.h>
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
-
-#include <wx/msgdlg.h>
 
 using namespace agi;
 
@@ -133,7 +130,7 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
                                                      BackgroundRunner *br,
                                                      NotificationSink& notification_sink,
                                                      std::shared_ptr<SingleChoiceInteractionSink> choice_sink) {
-	auto preferred = OPT_GET("Audio/Provider")->GetString();
+	auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(OPT_GET("Audio/Provider")->GetString());
 	auto sorted = GetSorted(providers, preferred);
 	aegisub::provider_selection_diagnostics::SelectionReport diagnostics;
 	diagnostics.preferred_provider = preferred;

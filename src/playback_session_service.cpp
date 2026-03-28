@@ -20,6 +20,7 @@
 #include "audio_controller.h"
 #include "headless_playback_session_host.h"
 #include "include/aegisub/context.h"
+#include "playback_session_timer_host.h"
 #include "project_open_service.h"
 #include "selection_controller.h"
 #include "video_controller.h"
@@ -32,8 +33,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-
-#include <wx/timer.h>
 
 namespace aegisub::playback_session_service {
 namespace {
@@ -88,12 +87,11 @@ std::string Sanitize(std::string const& value) {
 	return provider_selection_diagnostics::SanitizeText(value);
 }
 
-class Runner final : public wxEvtHandler {
+class Runner final {
 	PlaybackSessionRequest request;
 	std::function<void(PlaybackSessionResult)> on_done;
 	PlaybackSessionHost runtime;
-	wxTimer delay_timer{this};
-	wxTimer wait_timer{this};
+	std::unique_ptr<PlaybackSessionTimerHost> timer_host;
 	std::chrono::steady_clock::time_point wait_deadline = std::chrono::steady_clock::now();
 	size_t next_step = 0;
 	bool finished = false;
@@ -352,8 +350,7 @@ class Runner final : public wxEvtHandler {
 		if (finished)
 			return;
 		finished = true;
-		delay_timer.Stop();
-		wait_timer.Stop();
+		timer_host->StopAll();
 
 		auto result = BuildResult(exit_code, std::move(message));
 		runtime.CloseMedia();
@@ -447,13 +444,13 @@ class Runner final : public wxEvtHandler {
 			return true;
 		}
 		case PlaybackSessionStepKind::Sleep:
-			delay_timer.StartOnce(step.primary_value);
+			timer_host->StartDelayOnce(step.primary_value);
 			return false;
 		case PlaybackSessionStepKind::WaitPlaybackStop:
 			if (!IsPlaybackActive())
 				return true;
 			wait_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(step.primary_value);
-			wait_timer.Start(20);
+			timer_host->StartWaitPolling(20);
 			return false;
 		case PlaybackSessionStepKind::JumpToTime: {
 			auto core = runtime.GetCore();
@@ -534,22 +531,22 @@ class Runner final : public wxEvtHandler {
 			Finish(0, {});
 	}
 
-	void OnDelayTimer(wxTimerEvent&) {
+	void OnDelayTimer() {
 		if (finished)
 			return;
 		Advance();
 	}
 
-	void OnWaitTimer(wxTimerEvent&) {
+	void OnWaitTimer() {
 		if (finished)
 			return;
 		if (!IsPlaybackActive()) {
-			wait_timer.Stop();
+			timer_host->StopWaitPolling();
 			Advance();
 			return;
 		}
 		if (std::chrono::steady_clock::now() >= wait_deadline) {
-			wait_timer.Stop();
+			timer_host->StopWaitPolling();
 			auto const& step = request.steps[next_step - 1];
 			FailStep(next_step, step, "timed out waiting for playback stop");
 		}
@@ -566,9 +563,10 @@ public:
 		this->request.audio_rate_scale,
 		this->request.audio_quantum_ms,
 		"headless-playback-session-%%%%%%%%",
-	}) {
-		Bind(wxEVT_TIMER, &Runner::OnDelayTimer, this, delay_timer.GetId());
-		Bind(wxEVT_TIMER, &Runner::OnWaitTimer, this, wait_timer.GetId());
+	})
+	, timer_host(CreatePlaybackSessionTimerHost(
+		[this] { OnDelayTimer(); },
+		[this] { OnWaitTimer(); })) {
 	}
 
 	void Start() {

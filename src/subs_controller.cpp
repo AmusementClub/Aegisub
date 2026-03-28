@@ -192,7 +192,7 @@ ProjectProperties SubsController::Load(agi::fs::path const& filename, std::strin
 	AssFile temp;
 	auto core = context->GetCore();
 
-	SubtitleFormat::GetReader(filename, charset)->ReadFile(&temp, filename, core.project->Timecodes(), charset, context->GetSingleChoiceInteractionSink());
+	SubtitleFormat::GetReader(filename, charset)->ReadFile(&temp, filename, core.project->Timecodes(), charset, context->GetSingleChoiceInteractionSink(), core.backgroundRunnerFactory);
 
 	core.ass->swap(temp);
 	auto props = core.ass->Properties;

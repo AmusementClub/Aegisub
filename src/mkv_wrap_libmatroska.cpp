@@ -24,12 +24,11 @@
 #include "ass_file.h"
 #include "ass_parser.h"
 #include "compat.h"
-#include "dialog_progress.h"
 #include "mkv_wrap_common.h"
 #include "options.h"
 #include "track_choice.h"
 #include "transient_font_set.h"
-#include "wx_ui_services.h"
+#include "ui_services.h"
 
 #include <libaegisub/exception.h>
 #include <libaegisub/format.h>
@@ -899,7 +898,7 @@ MkvTrackScanResult MatroskaWrapper::ScanTracks(agi::fs::path const& filename) {
 	return scan_tracks(filename);
 }
 
-void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
+void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory) {
 	LogMkvParserBackendOnce();
 	target->SetTransientFonts({});
 
@@ -959,8 +958,9 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 	std::shared_ptr<TransientFontSet> transient_fonts;
 	std::string error;
 
-	DialogProgress progress(nullptr, _("Parsing Matroska"), _("Reading subtitles from Matroska file."));
-	progress.Run([&](agi::ProgressSink *ps) {
+	auto runner_factory = background_runner_factory ? std::move(background_runner_factory) : std::make_shared<agi::InlineBackgroundRunnerFactory>();
+	auto runner = runner_factory->Create(from_wx(_("Parsing Matroska")), from_wx(_("Reading subtitles from Matroska file.")));
+	runner->Run([&](agi::ProgressSink *ps) {
 		try {
 			import_track(filename, *selected_track, scan.segment_timecode_scale, ps, lines, transient_fonts);
 		}

@@ -12,6 +12,7 @@
 #include <wx/radiobox.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
+#include <wx/utils.h>
 #include <wx/window.h>
 
 namespace agi {
@@ -149,7 +150,15 @@ public:
 
 	std::optional<int> RequestSingleChoice(SingleChoiceInteractionRequest const& request) override {
 		return agi::ui::MainInvoke([parent = parent, request] {
-			return ShowSingleChoiceDialog(parent, request);
+			bool was_busy = wxIsBusy();
+			if (was_busy)
+				wxEndBusyCursor();
+
+			auto result = ShowSingleChoiceDialog(parent, request);
+
+			if (was_busy)
+				wxBeginBusyCursor();
+			return result;
 		});
 	}
 };

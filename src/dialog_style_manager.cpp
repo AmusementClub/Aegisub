@@ -747,7 +747,7 @@ void DialogStyleManager::OnCurrentImport() {
 			c->ShowError("Unsupported subtitle format");
 			return;
 		}
-		reader->ReadFile(&temp, filename, 0, charset, c->GetSingleChoiceInteractionSink());
+		reader->ReadFile(&temp, filename, 0, charset, c->GetSingleChoiceInteractionSink(), core.backgroundRunnerFactory);
 	}
 	catch (agi::Exception const& err) {
 		c->ShowError(err.GetMessage());

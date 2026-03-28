@@ -36,6 +36,9 @@
 
 #include "mkv_wrap.h"
 
+// MKV import can report progress through the caller-provided background runner
+// factory, while still falling back to an inline runner for headless/service use.
+
 MKVSubtitleFormat::MKVSubtitleFormat()
 : SubtitleFormat("Matroska")
 {
@@ -49,6 +52,6 @@ std::vector<std::string> MKVSubtitleFormat::GetReadWildcards() const {
 	return formats;
 }
 
-void MKVSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const&, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
-	MatroskaWrapper::GetSubtitles(filename, target, std::move(choice_sink));
+void MKVSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const&, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory) const {
+	MatroskaWrapper::GetSubtitles(filename, target, std::move(choice_sink), std::move(background_runner_factory));
 }

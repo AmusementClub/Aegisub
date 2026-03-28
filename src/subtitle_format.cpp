@@ -57,7 +57,6 @@
 
 #include <algorithm>
 #include <wx/intl.h>
-#include <wx/utils.h>
 
 namespace {
 	std::vector<std::unique_ptr<SubtitleFormat>> formats;
@@ -98,14 +97,11 @@ agi::vfr::Framerate SubtitleFormat::AskForFPS(bool allow_vfr, bool show_smpte, a
 	if (!choice_sink)
 		return agi::vfr::Framerate();
 
-	bool was_busy = wxIsBusy();
-	if (was_busy) wxEndBusyCursor();
 	auto choice = choice_sink->RequestSingleChoice({
 		from_wx(_("FPS")),
 		from_wx(_("Please choose the appropriate FPS for the subtitles:")),
 		model.choices
 	});
-	if (was_busy) wxBeginBusyCursor();
 	if (!choice)
 		return agi::vfr::Framerate();
 	return ResolveSubtitleFpsChoiceSelection(model, *choice, fps);

@@ -64,7 +64,7 @@ bool TXTSubtitleFormat::CanWriteFile(agi::fs::path const& filename) const {
 		&& !(agi::util::strings::iends_with(str, ".encore.txt") || agi::util::strings::iends_with(str, ".transtation.txt"));
 }
 
-void TXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
+void TXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory>) const {
 	(void)choice_sink;
 	if (!ShowPlainTextImportDialog()) return;
 

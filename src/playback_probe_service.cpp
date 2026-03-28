@@ -310,11 +310,8 @@ std::string DescribeProviderFallback(ProviderSelectionReport const& report) {
 	return provider_selection_diagnostics::DescribeFallbackReason(report);
 }
 
-class Runner final : public wxEvtHandler {
-	PlaybackProbeRequest request;
-	std::function<void(PlaybackProbeResult)> on_done;
+class PlaybackProbeRuntime final {
 	std::unique_ptr<agi::Context> context = std::make_unique<agi::Context>();
-	std::vector<agi::signal::Connection> connections;
 	std::shared_ptr<FakeAudioClockState> fake_audio_state;
 	std::shared_ptr<HeadlessFakeAudioPlayerFactoryService> fake_audio_service;
 	std::shared_ptr<ConsoleNotificationSink> notification_sink = std::make_shared<ConsoleNotificationSink>();
@@ -322,20 +319,8 @@ class Runner final : public wxEvtHandler {
 	std::optional<ScopedTemporaryMru> temporary_mru;
 	std::optional<ScopedTemporaryStringOption> temporary_video_provider;
 	std::optional<ScopedTemporaryStringOption> temporary_audio_provider;
-	wxTimer timeout_timer{this};
-	wxTimer completion_timer{this};
-	wxTimer restart_timer{this};
-	wxTimer seek_timer{this};
 	agi::fs::path trace_dir;
-	bool probe_started = false;
-	bool finished = false;
-	bool playback_stop_handled = false;
-	int completed_playbacks = 0;
-	int performed_seeks = 0;
-	int audio_timer_samples = 0;
-	int seek_samples = 0;
-	double total_abs_delta_ms = 0.0;
-	int max_abs_delta_ms = 0;
+	bool perf_trace_initialized = false;
 	std::string selected_video_provider;
 	std::string selected_audio_provider;
 	ProviderSelectionReport video_provider_report;
@@ -345,8 +330,155 @@ class Runner final : public wxEvtHandler {
 	std::string actual_audio_provider_factory;
 	std::string actual_audio_provider;
 
+public:
+	explicit PlaybackProbeRuntime(PlaybackProbeRequest const& request)
+	: fake_audio_state(std::make_shared<FakeAudioClockState>(request.audio_rate_scale, request.audio_quantum_ms))
+	, fake_audio_service(std::make_shared<HeadlessFakeAudioPlayerFactoryService>(fake_audio_state)) {
+	}
+
+	agi::ContextCoreSession GetCore() {
+		return context->GetCore();
+	}
+
+	agi::ConstContextCoreSession GetCore() const {
+		return static_cast<agi::Context const&>(*context).GetCore();
+	}
+
+	int GetCurrentAudioPositionMs() {
+		return fake_audio_state->GetCurrentPositionMs();
+	}
+
+	agi::fs::path const& TraceDir() const {
+		return trace_dir;
+	}
+
+	std::string const& SelectedVideoProvider() const {
+		return selected_video_provider;
+	}
+
+	std::string const& SelectedAudioProvider() const {
+		return selected_audio_provider;
+	}
+
+	std::string const& ActualVideoProvider() const {
+		return actual_video_provider;
+	}
+
+	std::string const& ActualVideoDecoder() const {
+		return actual_video_decoder;
+	}
+
+	std::string const& ActualAudioProviderFactory() const {
+		return actual_audio_provider_factory;
+	}
+
+	std::string const& ActualAudioProvider() const {
+		return actual_audio_provider;
+	}
+
+	ProviderSelectionReport const& VideoProviderReport() const {
+		return video_provider_report;
+	}
+
+	ProviderSelectionReport const& AudioProviderReport() const {
+		return audio_provider_report;
+	}
+
+	bool StartSession(PlaybackProbeRequest const& request, int& error_code, std::string& error_message) {
+		trace_dir = request.trace_dir.value_or(UniqueProbeTraceDir());
+		agi::fs::CreateDirectory(trace_dir.parent_path());
+		agi::fs::CreateDirectory(trace_dir);
+		temporary_mru.emplace(trace_dir / "probe_mru.json");
+		temporary_video_provider.emplace("Video/Provider", request.video_provider);
+		if (!request.skip_audio)
+			temporary_audio_provider.emplace("Audio/Provider", request.audio_provider);
+
+		perf_trace::InitializeAt(trace_dir, GetAegisubLongVersionString(), "audio,video,ops");
+		perf_trace_initialized = true;
+
+		auto core = GetCore();
+		core.statusSink = status_sink;
+		core.notificationSink = notification_sink;
+		core.audioPlayerFactoryService = fake_audio_service;
+
+		core.ass->LoadDefault(false);
+		OPT_SET("Video/Open Audio")->SetBool(false);
+		selected_video_provider = OPT_GET("Video/Provider")->GetString();
+		selected_audio_provider = request.skip_audio ? std::string() : OPT_GET("Audio/Provider")->GetString();
+
+		ClearLastVideoProviderSelectionReport();
+		if (!request.skip_audio)
+			ClearLastAudioProviderSelectionReport();
+
+		auto open_result = project_open_service::Open(*context, {
+			request.video_path,
+			request.skip_audio ? std::optional<agi::fs::path>{} : std::make_optional(request.audio_path),
+			request.skip_audio
+		});
+
+		video_provider_report = GetLastVideoProviderSelectionReport();
+		actual_video_provider = video_provider_report.selected_provider;
+		if (!request.skip_audio) {
+			audio_provider_report = GetLastAudioProviderSelectionReport();
+			actual_audio_provider_factory = audio_provider_report.selected_provider;
+		}
+		if (!open_result.opened) {
+			error_code = open_result.error_code ? open_result.error_code : 8;
+			error_message = open_result.error.empty() ? "failed to open project media" : open_result.error;
+			return false;
+		}
+		actual_video_decoder = open_result.media.video_decoder_name;
+		actual_audio_provider = open_result.media.audio_provider_name;
+		return true;
+	}
+
+	void CloseMedia() {
+		if (!context)
+			return;
+
+		auto core = GetCore();
+		if (core.videoController->IsPlaying())
+			core.videoController->Stop();
+		core.project->CloseAudio();
+		core.project->CloseVideo();
+	}
+
+	void ShutdownTrace() {
+		if (!perf_trace_initialized)
+			return;
+		perf_trace::Shutdown();
+		perf_trace_initialized = false;
+	}
+
+	void ReleaseResources() {
+		context.reset();
+		temporary_audio_provider.reset();
+		temporary_video_provider.reset();
+		temporary_mru.reset();
+	}
+};
+
+class Runner final : public wxEvtHandler {
+	PlaybackProbeRequest request;
+	std::function<void(PlaybackProbeResult)> on_done;
+	PlaybackProbeRuntime runtime;
+	std::vector<agi::signal::Connection> connections;
+	wxTimer timeout_timer{this};
+	wxTimer completion_timer{this};
+	wxTimer restart_timer{this};
+	wxTimer seek_timer{this};
+	bool probe_started = false;
+	bool finished = false;
+	bool playback_stop_handled = false;
+	int completed_playbacks = 0;
+	int performed_seeks = 0;
+	int audio_timer_samples = 0;
+	int seek_samples = 0;
+	double total_abs_delta_ms = 0.0;
+	int max_abs_delta_ms = 0;
+
 	void AppendProbeSummary(PlaybackProbeResult const& result) const {
-		std::ofstream out(trace_dir / "summary.txt", std::ios::out | std::ios::app);
+		std::ofstream out(runtime.TraceDir() / "summary.txt", std::ios::out | std::ios::app);
 		if (!out)
 			return;
 
@@ -377,7 +509,7 @@ class Runner final : public wxEvtHandler {
 	}
 
 	void InstallProbeLine(int start_ms, int duration_ms) {
-		auto core = context->GetCore();
+		auto core = runtime.GetCore();
 		core.ass->Events.clear_and_dispose([](AssDialogue* line) { delete line; });
 
 		auto* line = new AssDialogue;
@@ -391,7 +523,7 @@ class Runner final : public wxEvtHandler {
 	}
 
 	int ComputePlayableDurationMs() const {
-		auto core = context->GetCore();
+		auto core = runtime.GetCore();
 		auto* video_provider = core.project->VideoProvider();
 		auto* audio_provider = core.project->AudioProvider();
 		if (!video_provider)
@@ -410,7 +542,7 @@ class Runner final : public wxEvtHandler {
 	}
 
 	void PrintReport(PlaybackProbeResult const& result) {
-		auto const summary = ReadSummaryFile(trace_dir / "summary.txt");
+		auto const summary = ReadSummaryFile(runtime.TraceDir() / "summary.txt");
 
 		std::cout << "headless-playback-probe\n";
 		std::cout << "video=" << request.video_path.string() << "\n";
@@ -463,20 +595,20 @@ class Runner final : public wxEvtHandler {
 		result.seek_samples = seek_samples;
 		result.max_abs_delta_ms = max_abs_delta_ms;
 		result.mean_abs_delta_ms = mean_abs_delta_ms;
-		result.trace_dir = trace_dir;
+		result.trace_dir = runtime.TraceDir();
 		result.message = message;
-		result.selected_video_provider = selected_video_provider;
-		result.selected_audio_provider = selected_audio_provider;
-		result.actual_video_provider = actual_video_provider;
-		result.actual_video_decoder = actual_video_decoder;
-		result.video_provider_fallback = UsedProviderFallback(video_provider_report);
-		result.video_provider_fallback_reason = DescribeProviderFallback(video_provider_report);
-		result.video_provider_attempts = FormatProviderAttempts(video_provider_report);
-		result.actual_audio_provider_factory = actual_audio_provider_factory;
-		result.actual_audio_provider = actual_audio_provider;
-		result.audio_provider_fallback = UsedProviderFallback(audio_provider_report);
-		result.audio_provider_fallback_reason = DescribeProviderFallback(audio_provider_report);
-		result.audio_provider_attempts = FormatProviderAttempts(audio_provider_report);
+		result.selected_video_provider = runtime.SelectedVideoProvider();
+		result.selected_audio_provider = runtime.SelectedAudioProvider();
+		result.actual_video_provider = runtime.ActualVideoProvider();
+		result.actual_video_decoder = runtime.ActualVideoDecoder();
+		result.video_provider_fallback = UsedProviderFallback(runtime.VideoProviderReport());
+		result.video_provider_fallback_reason = DescribeProviderFallback(runtime.VideoProviderReport());
+		result.video_provider_attempts = FormatProviderAttempts(runtime.VideoProviderReport());
+		result.actual_audio_provider_factory = runtime.ActualAudioProviderFactory();
+		result.actual_audio_provider = runtime.ActualAudioProvider();
+		result.audio_provider_fallback = UsedProviderFallback(runtime.AudioProviderReport());
+		result.audio_provider_fallback_reason = DescribeProviderFallback(runtime.AudioProviderReport());
+		result.audio_provider_attempts = FormatProviderAttempts(runtime.AudioProviderReport());
 		return result;
 	}
 
@@ -490,23 +622,13 @@ class Runner final : public wxEvtHandler {
 		seek_timer.Stop();
 		connections.clear();
 
-		if (context) {
-			auto core = context->GetCore();
-			if (core.videoController->IsPlaying())
-				core.videoController->Stop();
-			core.project->CloseAudio();
-			core.project->CloseVideo();
-		}
-
-		perf_trace::Shutdown();
+		runtime.CloseMedia();
+		runtime.ShutdownTrace();
 		double mean_abs_delta_ms = seek_samples ? total_abs_delta_ms / seek_samples : 0.0;
 		auto result = BuildResult(exit_code, message, mean_abs_delta_ms);
 		AppendProbeSummary(result);
 		PrintReport(result);
-		context.reset();
-		temporary_audio_provider.reset();
-		temporary_video_provider.reset();
-		temporary_mru.reset();
+		runtime.ReleaseResources();
 
 		if (on_done)
 			on_done(std::move(result));
@@ -528,13 +650,13 @@ class Runner final : public wxEvtHandler {
 			return;
 		}
 
-		auto core = context->GetCore();
+		auto core = runtime.GetCore();
 		if (!core.audioController->IsPlaying())
 			return;
 
 		++seek_samples;
 		int frame_time_ms = core.videoController->TimeAtFrame(frame, agi::vfr::EXACT);
-		int audio_time_ms = fake_audio_state->GetCurrentPositionMs();
+		int audio_time_ms = runtime.GetCurrentAudioPositionMs();
 		int abs_delta_ms = std::abs(frame_time_ms - audio_time_ms);
 		total_abs_delta_ms += abs_delta_ms;
 		max_abs_delta_ms = std::max(max_abs_delta_ms, abs_delta_ms);
@@ -573,10 +695,10 @@ class Runner final : public wxEvtHandler {
 	}
 
 	void OnCompletionPoll(wxTimerEvent&) {
-		if (finished || !probe_started || !context)
+		if (finished || !probe_started)
 			return;
 
-		auto core = context->GetCore();
+		auto core = runtime.GetCore();
 		if (core.videoController->IsPlaying()) {
 			playback_stop_handled = false;
 			return;
@@ -589,10 +711,10 @@ class Runner final : public wxEvtHandler {
 	}
 
 	void OnRestartTimer(wxTimerEvent&) {
-		if (finished || !probe_started || !context)
+		if (finished || !probe_started)
 			return;
 
-		auto core = context->GetCore();
+		auto core = runtime.GetCore();
 		playback_stop_handled = false;
 		core.videoController->PlayLine();
 		if (!core.videoController->IsPlaying())
@@ -601,10 +723,10 @@ class Runner final : public wxEvtHandler {
 	}
 
 	void OnSeekTimer(wxTimerEvent&) {
-		if (finished || !probe_started || !context || !request.seek_target_offset_ms)
+		if (finished || !probe_started || !request.seek_target_offset_ms)
 			return;
 
-		auto core = context->GetCore();
+		auto core = runtime.GetCore();
 		++performed_seeks;
 		core.videoController->JumpToTime(request.line_start_ms + *request.seek_target_offset_ms);
 		if (!core.videoController->IsPlaying())
@@ -621,8 +743,7 @@ public:
 	Runner(PlaybackProbeRequest request, std::function<void(PlaybackProbeResult)> on_done)
 	: request(std::move(request))
 	, on_done(std::move(on_done))
-	, fake_audio_state(std::make_shared<FakeAudioClockState>(this->request.audio_rate_scale, this->request.audio_quantum_ms))
-	, fake_audio_service(std::make_shared<HeadlessFakeAudioPlayerFactoryService>(fake_audio_state)) {
+	, runtime(this->request) {
 	}
 
 	void Start() {
@@ -631,49 +752,13 @@ public:
 		Bind(wxEVT_TIMER, &Runner::OnRestartTimer, this, restart_timer.GetId());
 		Bind(wxEVT_TIMER, &Runner::OnSeekTimer, this, seek_timer.GetId());
 
-		trace_dir = request.trace_dir.value_or(UniqueProbeTraceDir());
-		agi::fs::CreateDirectory(trace_dir.parent_path());
-		agi::fs::CreateDirectory(trace_dir);
-		temporary_mru.emplace(trace_dir / "probe_mru.json");
-		temporary_video_provider.emplace("Video/Provider", request.video_provider);
-		if (!request.skip_audio)
-			temporary_audio_provider.emplace("Audio/Provider", request.audio_provider);
-
-		perf_trace::InitializeAt(trace_dir, GetAegisubLongVersionString(), "audio,video,ops");
-
-		auto core = context->GetCore();
-		core.statusSink = status_sink;
-		core.notificationSink = notification_sink;
-		core.audioPlayerFactoryService = fake_audio_service;
-
-		core.ass->LoadDefault(false);
-		OPT_SET("Video/Open Audio")->SetBool(false);
-		selected_video_provider = OPT_GET("Video/Provider")->GetString();
-		selected_audio_provider = request.skip_audio ? std::string() : OPT_GET("Audio/Provider")->GetString();
-
-		ClearLastVideoProviderSelectionReport();
-		if (!request.skip_audio)
-			ClearLastAudioProviderSelectionReport();
-
-		auto open_result = project_open_service::Open(*context, {
-			request.video_path,
-			request.skip_audio ? std::optional<agi::fs::path>{} : std::make_optional(request.audio_path),
-			request.skip_audio
-		});
-
-		video_provider_report = GetLastVideoProviderSelectionReport();
-		actual_video_provider = video_provider_report.selected_provider;
-		if (!request.skip_audio) {
-			audio_provider_report = GetLastAudioProviderSelectionReport();
-			actual_audio_provider_factory = audio_provider_report.selected_provider;
-		}
-		if (!open_result.opened) {
-			Finish(open_result.error_code ? open_result.error_code : 8,
-				open_result.error.empty() ? "failed to open project media" : open_result.error);
+		int init_error_code = 0;
+		std::string init_error_message;
+		if (!runtime.StartSession(request, init_error_code, init_error_message)) {
+			Finish(init_error_code ? init_error_code : 8,
+				init_error_message.empty() ? "failed to open project media" : init_error_message);
 			return;
 		}
-		actual_video_decoder = open_result.media.video_decoder_name;
-		actual_audio_provider = open_result.media.audio_provider_name;
 
 		int playable_duration_ms = ComputePlayableDurationMs();
 		if (playable_duration_ms <= 0) {
@@ -684,6 +769,7 @@ public:
 		request.duration_ms = playable_duration_ms;
 		InstallProbeLine(request.line_start_ms, playable_duration_ms);
 
+		auto core = runtime.GetCore();
 		connections = agi::signal::make_vector({
 			core.videoController->AddPlaybackFrameAdvancedListener(&Runner::OnPlaybackFrameAdvanced, this),
 			core.audioController->AddPlaybackPositionListener(&Runner::OnAudioPlaybackPosition, this),

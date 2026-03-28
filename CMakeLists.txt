@@ -503,6 +503,7 @@ add_executable(Aegisub WIN32
     src/grid_column.cpp
     src/headless_cli.cpp
     src/headless_playback_probe.cpp
+    src/headless_playback_session_host.cpp
     src/help_button.cpp
     src/hotkey.cpp
     src/hotkey_data_view_model.cpp
@@ -517,6 +518,7 @@ add_executable(Aegisub WIN32
     src/playback_probe_service.cpp
     src/playback_probe_timer_host.cpp
     src/playback_query_service.cpp
+    src/playback_session_service.cpp
     src/persist_location.cpp
     src/preferences.cpp
     src/preferences_base.cpp

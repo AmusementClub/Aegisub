@@ -200,6 +200,331 @@ std::vector<BatchCaseSpec> ReadBatchCaseList(agi::fs::path const& list_file) {
 	return cases;
 }
 
+std::string Trim(std::string value) {
+	auto const not_space = [](unsigned char ch) { return !std::isspace(ch); };
+	value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
+	value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
+	return value;
+}
+
+std::vector<std::string> SplitWhitespace(std::string const& text) {
+	std::istringstream in(text);
+	std::vector<std::string> tokens;
+	std::string token;
+	while (in >> token)
+		tokens.push_back(token);
+	return tokens;
+}
+
+std::optional<int> ParseIntegerValue(std::string const& text) {
+	if (!TryParseInteger(text))
+		return std::nullopt;
+	try {
+		return std::stoi(text);
+	}
+	catch (...) {
+		return std::nullopt;
+	}
+}
+
+std::optional<bool> ParseBoolValue(std::string value) {
+	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+	if (value == "true")
+		return true;
+	if (value == "false")
+		return false;
+	return std::nullopt;
+}
+
+std::optional<aegisub::playback_session_service::PlaybackAuthorityKind> ParseAuthorityValue(std::string value) {
+	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+	if (value == "audio")
+		return aegisub::playback_session_service::PlaybackAuthorityKind::Audio;
+	if (value == "video")
+		return aegisub::playback_session_service::PlaybackAuthorityKind::Video;
+	return std::nullopt;
+}
+
+bool ParseSessionStepLine(std::string const& line, size_t line_number, std::vector<aegisub::playback_session_service::PlaybackSessionStep>& steps, std::string& error) {
+	using aegisub::playback_session_service::PlaybackAuthorityKind;
+	using aegisub::playback_session_service::PlaybackSessionStep;
+	using aegisub::playback_session_service::PlaybackSessionStepKind;
+
+	auto const tokens = SplitWhitespace(line);
+	if (tokens.empty())
+		return true;
+
+	auto invalid = [&](std::string const& message) {
+		error = "session script line " + std::to_string(line_number) + ": " + message + " | " + line;
+		return false;
+	};
+
+	auto require_int = [&](size_t index, char const* name) -> std::optional<int> {
+		if (index >= tokens.size()) {
+			error = "session script line " + std::to_string(line_number) + ": missing " + name + " | " + line;
+			return std::nullopt;
+		}
+		auto parsed = ParseIntegerValue(tokens[index]);
+		if (!parsed) {
+			error = "session script line " + std::to_string(line_number) + ": invalid integer for " + name + " | " + line;
+			return std::nullopt;
+		}
+		return parsed;
+	};
+
+	auto step = PlaybackSessionStep{};
+	step.source_text = line;
+
+	auto const& command = tokens[0];
+	if (command == "open") {
+		step.kind = PlaybackSessionStepKind::OpenMedia;
+	}
+	else if (command == "reopen") {
+		step.kind = PlaybackSessionStepKind::ReopenMedia;
+	}
+	else if (command == "close") {
+		step.kind = PlaybackSessionStepKind::CloseMedia;
+	}
+	else if (command == "install-playline") {
+		if (tokens.size() != 3)
+			return invalid("install-playline expects <start_ms> <duration_ms>");
+		auto start_ms = require_int(1, "start_ms");
+		auto duration_ms = require_int(2, "duration_ms");
+		if (!start_ms || !duration_ms || *start_ms < 0 || *duration_ms <= 0)
+			return invalid("install-playline requires non-negative start and positive duration");
+		step.kind = PlaybackSessionStepKind::InstallPlayLine;
+		step.primary_value = *start_ms;
+		step.secondary_value = *duration_ms;
+	}
+	else if (command == "play") {
+		step.kind = PlaybackSessionStepKind::PlayVideo;
+	}
+	else if (command == "playline") {
+		step.kind = PlaybackSessionStepKind::PlayLine;
+	}
+	else if (command == "stop") {
+		step.kind = PlaybackSessionStepKind::StopPlayback;
+	}
+	else if (command == "sleep") {
+		if (tokens.size() != 2)
+			return invalid("sleep expects <ms>");
+		auto value = require_int(1, "ms");
+		if (!value || *value < 0)
+			return invalid("sleep requires a non-negative millisecond value");
+		step.kind = PlaybackSessionStepKind::Sleep;
+		step.primary_value = *value;
+	}
+	else if (command == "wait-playback-stop") {
+		step.kind = PlaybackSessionStepKind::WaitPlaybackStop;
+		if (tokens.size() > 2)
+			return invalid("wait-playback-stop expects at most one timeout value");
+		if (tokens.size() == 2) {
+			auto value = require_int(1, "timeout_ms");
+			if (!value || *value <= 0)
+				return invalid("wait-playback-stop requires a positive timeout");
+			step.primary_value = *value;
+		}
+		else {
+			step.primary_value = 5000;
+		}
+	}
+	else if (command == "jump-time") {
+		if (tokens.size() != 2)
+			return invalid("jump-time expects <ms>");
+		auto value = require_int(1, "ms");
+		if (!value || *value < 0)
+			return invalid("jump-time requires a non-negative millisecond value");
+		step.kind = PlaybackSessionStepKind::JumpToTime;
+		step.primary_value = *value;
+	}
+	else if (command == "jump-frame") {
+		if (tokens.size() != 2)
+			return invalid("jump-frame expects <frame>");
+		auto value = require_int(1, "frame");
+		if (!value || *value < 0)
+			return invalid("jump-frame requires a non-negative frame value");
+		step.kind = PlaybackSessionStepKind::JumpToFrame;
+		step.primary_value = *value;
+	}
+	else if (command == "query-media") {
+		step.kind = PlaybackSessionStepKind::QueryMedia;
+	}
+	else if (command == "query-playback") {
+		step.kind = PlaybackSessionStepKind::QueryPlayback;
+	}
+	else if (command == "assert-media") {
+		if (tokens.size() != 3)
+			return invalid("assert-media expects <has_video> <has_audio>");
+		auto has_video = ParseBoolValue(tokens[1]);
+		auto has_audio = ParseBoolValue(tokens[2]);
+		if (!has_video || !has_audio)
+			return invalid("assert-media expects true/false values");
+		step.kind = PlaybackSessionStepKind::AssertMedia;
+		step.expected_first = *has_video;
+		step.expected_second = *has_audio;
+	}
+	else if (command == "assert-playing") {
+		if (tokens.size() != 3)
+			return invalid("assert-playing expects <video_playing> <audio_playing>");
+		auto video_playing = ParseBoolValue(tokens[1]);
+		auto audio_playing = ParseBoolValue(tokens[2]);
+		if (!video_playing || !audio_playing)
+			return invalid("assert-playing expects true/false values");
+		step.kind = PlaybackSessionStepKind::AssertPlaying;
+		step.expected_first = *video_playing;
+		step.expected_second = *audio_playing;
+	}
+	else if (command == "assert-authority") {
+		if (tokens.size() != 2)
+			return invalid("assert-authority expects <audio|video>");
+		auto authority = ParseAuthorityValue(tokens[1]);
+		if (!authority)
+			return invalid("assert-authority expects audio or video");
+		step.kind = PlaybackSessionStepKind::AssertAuthority;
+		step.expected_authority = *authority;
+	}
+	else {
+		return invalid("unknown session step");
+	}
+
+	steps.push_back(std::move(step));
+	return true;
+}
+
+bool ParseSessionScriptFile(agi::fs::path const& script_file, std::vector<aegisub::playback_session_service::PlaybackSessionStep>& steps, std::string& error) {
+	std::ifstream in(script_file, std::ios::in);
+	if (!in) {
+		error = "could not open session script file: " + ToGenericString(script_file);
+		return false;
+	}
+
+	std::string line;
+	size_t line_number = 0;
+	while (std::getline(in, line)) {
+		++line_number;
+		if (!line.empty() && line.back() == '\r')
+			line.pop_back();
+		auto trimmed = Trim(line);
+		if (trimmed.empty() || trimmed[0] == '#')
+			continue;
+		if (!ParseSessionStepLine(trimmed, line_number, steps, error))
+			return false;
+	}
+	return true;
+}
+
+std::optional<PlaybackSessionRequest> ParseSessionPlaybackRequest(std::vector<std::string> const& args, std::string& error) {
+	PlaybackSessionRequest request;
+	agi::fs::path script_file;
+
+	for (size_t i = 4; i < args.size(); ++i) {
+		auto const& arg = args[i];
+		if (arg == "--script-file") {
+			auto value = RequireValue(args, i, "--script-file", error);
+			if (!value)
+				return std::nullopt;
+			script_file = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--video" || arg == "--probe-video") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.video_path = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--audio" || arg == "--probe-audio") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.audio_path = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--skip-audio" || arg == "--probe-skip-audio") {
+			request.skip_audio = true;
+			continue;
+		}
+		if (arg == "--video-provider" || arg == "--probe-video-provider") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.video_provider = *value;
+			continue;
+		}
+		if (arg == "--audio-provider" || arg == "--probe-audio-provider") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.audio_provider = *value;
+			continue;
+		}
+		if (arg == "--trace-dir" || arg == "--probe-trace-dir") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.trace_dir = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--audio-rate-scale" || arg == "--probe-audio-rate-scale") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			try {
+				request.audio_rate_scale = std::stod(*value);
+			}
+			catch (...) {
+				error = arg + " requires a positive number\n" + Usage();
+				return std::nullopt;
+			}
+			if (request.audio_rate_scale <= 0.0) {
+				error = arg + " requires a positive number\n" + Usage();
+				return std::nullopt;
+			}
+			continue;
+		}
+		if (arg == "--audio-quantum-ms" || arg == "--probe-audio-quantum-ms") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto parsed = ParseIntegerValue(*value);
+			if (!parsed || *parsed < 0) {
+				error = arg + " requires a non-negative integer\n" + Usage();
+				return std::nullopt;
+			}
+			request.audio_quantum_ms = *parsed;
+			continue;
+		}
+
+		error = "unrecognized session playback argument: " + arg + "\n" + Usage();
+		return std::nullopt;
+	}
+
+	if (script_file.empty()) {
+		error = "--cli session playback requires --script-file\n" + Usage();
+		return std::nullopt;
+	}
+	if (!agi::fs::FileExists(script_file)) {
+		error = "session playback script file does not exist: " + ToGenericString(script_file);
+		return std::nullopt;
+	}
+	if (request.video_path.empty() && request.audio_path.empty()) {
+		error = "--cli session playback requires --video or --audio\n" + Usage();
+		return std::nullopt;
+	}
+	if (!ParseSessionScriptFile(script_file, request.steps, error)) {
+		error += "\n" + Usage();
+		return std::nullopt;
+	}
+	if (request.steps.empty()) {
+		error = "session playback script is empty: " + ToGenericString(script_file);
+		return std::nullopt;
+	}
+	if (!request.skip_audio && request.audio_path.empty())
+		request.audio_path = request.video_path;
+
+	return request;
+}
+
 void WriteBatchResultsCsv(agi::fs::path const& output_dir, std::vector<BatchCaseResult> const& results) {
 	std::ofstream out(output_dir / "results.csv", std::ios::out | std::ios::trunc);
 	out << "index,passed,exit_code,video_path,audio_path,performed_seeks,seek_samples,audio_timer_samples,seek_max_abs_delta_ms,seek_mean_abs_delta_ms,actual_video_decoder,actual_audio_provider,trace_dir,message\n";
@@ -433,6 +758,17 @@ ParseResult ParseCommandLine(std::vector<std::string> const& args) {
 		return result;
 	}
 
+	if (command == "session" && subcommand == "playback") {
+		auto request = ParseSessionPlaybackRequest(args, result.error);
+		if (!request) {
+			if (result.error.empty())
+				result.error = Usage();
+			return result;
+		}
+		result.command.emplace(SessionPlaybackCommand{std::move(*request)});
+		return result;
+	}
+
 	if (command == "inspect" && subcommand == "trace") {
 		TraceInspectRequest request;
 		if (args.size() == 5) {
@@ -530,6 +866,10 @@ TraceInspectResult RunInspectTrace(TraceInspectRequest const& request) {
 	return result;
 }
 
+void RunSessionPlaybackAsync(PlaybackSessionRequest request, std::function<void(PlaybackSessionResult)> on_done) {
+	aegisub::playback_session_service::RunAsync(std::move(request), std::move(on_done));
+}
+
 void RunBatchPlaybackProbeAsync(BatchPlaybackProbeRequest request, std::function<void(BatchPlaybackProbeResult)> on_done) {
 	auto *runner = new BatchPlaybackProbeRunner(std::move(request), std::move(on_done));
 	runner->Start();
@@ -539,8 +879,20 @@ std::string Usage() {
 	return std::string(
 		"Usage:\n"
 		"  Aegisub.exe --cli probe playback [probe flags...]\n"
+		"  Aegisub.exe --cli session playback --script-file <path> --video <path> [session flags...]\n"
 		"  Aegisub.exe --cli inspect trace <session-dir|manifest.txt|summary.txt|trace.ndjson>\n"
 		"  Aegisub.exe --cli batch playback-probe --list-file <path> --output-dir <dir> [probe flags...]\n"
+		"\n"
+		"Session script steps:\n"
+		"  open | reopen | close | install-playline <start_ms> <duration_ms> | play | playline | stop\n"
+		"  sleep <ms> | wait-playback-stop [timeout_ms] | jump-time <ms> | jump-frame <frame>\n"
+		"  query-media | query-playback | assert-media <true|false> <true|false>\n"
+		"  assert-playing <true|false> <true|false> | assert-authority <audio|video>\n"
+		"\n"
+		"Session flags:\n"
+		"  --script-file <path> --video <path> [--audio <path>] [--skip-audio]\n"
+		"  [--video-provider <name>] [--audio-provider <name>] [--trace-dir <path>]\n"
+		"  [--audio-rate-scale <scale>] [--audio-quantum-ms <ms>]\n"
 		"\n"
 		"Batch list file syntax:\n"
 		"  one video path per line, or video<TAB>audio per line\n"

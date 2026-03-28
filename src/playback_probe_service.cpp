@@ -14,266 +14,37 @@
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 #include "playback_probe_service.h"
+#include "headless_playback_session_host.h"
 #include "playback_probe_timer_host.h"
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "async_video_provider.h"
 #include "audio_controller.h"
-#include "audio_provider_factory.h"
-#include "include/aegisub/audio_player.h"
 #include "include/aegisub/context.h"
-#include "libresrc/libresrc.h"
-#include "options.h"
 #include "perf_trace.h"
 #include "project.h"
-#include "project_open_service.h"
 #include "selection_controller.h"
-#include "status_sink.h"
-#include "ui_services.h"
-#include "version.h"
 #include "video_controller.h"
-#include "video_provider_manager.h"
-
-#include <libaegisub/audio/provider.h>
-#include <libaegisub/fs.h>
-#include <libaegisub/path.h>
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <fstream>
 #include <functional>
 #include <iostream>
 #include <map>
-#include <memory>
-#include <optional>
 #include <string>
-#include <utility>
 #include <vector>
 
 namespace aegisub::playback_probe_service {
 namespace {
 
-using Clock = std::chrono::steady_clock;
-using ProviderSelectionReport = provider_selection_diagnostics::SelectionReport;
-
-agi::fs::path UniqueProbeTraceDir() {
-	auto root = config::path->Decode("?temp");
-	agi::fs::CreateDirectory(root);
-	return agi::fs::UniquePath(root / "headless-playback-probe-%%%%%%%%");
-}
-
-class ConsoleStatusSink final : public agi::StatusSink {
-public:
-	void ShowStatus(std::string const& message, int) override {
-		std::cout << "[status] " << message << "\n";
-	}
-};
-
-class ConsoleNotificationSink final : public agi::NotificationSink {
-	void Print(char const* kind, std::string const& title, std::string const& message) {
-		std::cerr << "[" << kind << "] " << title;
-		if (!message.empty())
-			std::cerr << ": " << message;
-		std::cerr << "\n";
-	}
-
-public:
-	void ShowInfo(std::string const& title, std::string const& message) override {
-		Print("info", title, message);
-	}
-
-	void ShowError(std::string const& title, std::string const& message) override {
-		Print("error", title, message);
-	}
-
-	void ShowWarning(std::string const& title, std::string const& message) override {
-		Print("warning", title, message);
-	}
-};
-
-class FakeAudioClockState final {
-	double rate_scale = 1.0;
-	int quantum_ms = 0;
-	int sample_rate = 1;
-	int64_t start_sample = 0;
-	int64_t end_sample = 0;
-	int64_t current_sample = 0;
-	bool playing = false;
-	Clock::time_point real_start = Clock::now();
-
-	int64_t SamplesFromMilliseconds(double ms) const {
-		return sample_rate > 0
-			? static_cast<int64_t>(std::llround(ms * sample_rate / 1000.0))
-			: 0;
-	}
-
-	double QuantizeMilliseconds(double ms) const {
-		if (quantum_ms <= 0 || ms <= 0.0)
-			return ms;
-		return std::floor(ms / quantum_ms) * quantum_ms;
-	}
-
-	void ObserveSnapshot(char const* reason) const {
-		perf_trace::AudioOutputSnapshot snapshot;
-		snapshot.backend_name = "headless-fake";
-		snapshot.reason = reason;
-		snapshot.queued_buffers = 0;
-		snapshot.queued_ms = 0.0;
-		snapshot.end_of_stream = !playing && current_sample >= end_sample;
-		perf_trace::ObserveAudioOutputSnapshot(snapshot);
-	}
-
-public:
-	FakeAudioClockState(double rate_scale, int quantum_ms)
-	: rate_scale(rate_scale)
-	, quantum_ms(quantum_ms) {
-	}
-
-	void Begin(agi::AudioProvider* provider, int64_t start, int64_t count) {
-		sample_rate = provider ? provider->GetSampleRate() : 1;
-		start_sample = start;
-		end_sample = std::max<int64_t>(start, start + std::max<int64_t>(count, 0));
-		current_sample = start;
-		playing = true;
-		real_start = Clock::now();
-		ObserveSnapshot("play");
-	}
-
-	int64_t CurrentSample() {
-		if (!playing)
-			return current_sample;
-
-		double elapsed_ms = std::chrono::duration<double, std::milli>(Clock::now() - real_start).count();
-		elapsed_ms = QuantizeMilliseconds(elapsed_ms * rate_scale);
-		current_sample = std::min(end_sample, start_sample + SamplesFromMilliseconds(elapsed_ms));
-		if (current_sample >= end_sample)
-			playing = false;
-		ObserveSnapshot("tick");
-		return current_sample;
-	}
-
-	void Stop() {
-		CurrentSample();
-		playing = false;
-		ObserveSnapshot("stop");
-	}
-
-	bool IsPlaying() {
-		CurrentSample();
-		return playing;
-	}
-
-	void SetEndPosition(int64_t position) {
-		end_sample = std::max(start_sample, position);
-	}
-
-	int64_t GetEndPosition() const {
-		return end_sample;
-	}
-
-	int64_t GetCurrentPosition() {
-		return CurrentSample();
-	}
-
-	int GetCurrentPositionMs() {
-		return sample_rate > 0
-			? static_cast<int>(GetCurrentPosition() * 1000 / sample_rate)
-			: 0;
-	}
-};
-
-class HeadlessFakeAudioPlayer final : public AudioPlayer {
-	std::shared_ptr<FakeAudioClockState> state;
-
-public:
-	HeadlessFakeAudioPlayer(agi::AudioProvider* provider, std::shared_ptr<FakeAudioClockState> state)
-	: AudioPlayer(provider)
-	, state(std::move(state)) {
-	}
-
-	void Play(int64_t start, int64_t count) override {
-		state->Begin(provider, start, count);
-	}
-
-	void Stop() override {
-		state->Stop();
-	}
-
-	bool IsPlaying() override {
-		return state->IsPlaying();
-	}
-
-	void SetVolume(double) override {
-	}
-
-	int64_t GetEndPosition() override {
-		return state->GetEndPosition();
-	}
-
-	int64_t GetCurrentPosition() override {
-		return state->GetCurrentPosition();
-	}
-
-	void SetEndPosition(int64_t pos) override {
-		state->SetEndPosition(pos);
-	}
-};
-
-class HeadlessFakeAudioPlayerFactoryService final : public agi::AudioPlayerFactoryService {
-	std::shared_ptr<FakeAudioClockState> state;
-
-public:
-	explicit HeadlessFakeAudioPlayerFactoryService(std::shared_ptr<FakeAudioClockState> state)
-	: state(std::move(state)) {
-	}
-
-	std::unique_ptr<AudioPlayer> CreateAudioPlayer(agi::AudioProvider* provider) override {
-		return std::make_unique<HeadlessFakeAudioPlayer>(provider, state);
-	}
-};
-
-class ScopedTemporaryMru final {
-	agi::MRUManager* temporary_mru = nullptr;
-	agi::MRUManager* previous_mru = nullptr;
-
-public:
-	explicit ScopedTemporaryMru(agi::fs::path const& path) {
-		previous_mru = config::mru;
-		temporary_mru = new agi::MRUManager(path, GET_DEFAULT_CONFIG(default_mru), config::opt);
-		config::mru = temporary_mru;
-	}
-
-	~ScopedTemporaryMru() {
-		config::mru = previous_mru;
-		delete temporary_mru;
-	}
-};
-
-class ScopedTemporaryStringOption final {
-	std::string option_name;
-	std::string previous_value;
-	bool active = false;
-
-public:
-	ScopedTemporaryStringOption(char const* option_name, std::optional<std::string> const& temporary_value)
-	: option_name(option_name) {
-		if (!temporary_value)
-			return;
-
-		auto* option = OPT_SET(this->option_name);
-		previous_value = option->GetString();
-		option->SetString(*temporary_value);
-		active = true;
-	}
-
-	~ScopedTemporaryStringOption() {
-		if (!active)
-			return;
-		OPT_SET(option_name)->SetString(previous_value);
-	}
-};
+using headless_playback_session_host::BoolString;
+using headless_playback_session_host::DescribeProviderFallback;
+using headless_playback_session_host::FormatProviderAttempts;
+using headless_playback_session_host::PlaybackSessionHost;
+using headless_playback_session_host::PlaybackSessionHostOptions;
+using headless_playback_session_host::UsedProviderFallback;
 
 std::map<std::string, std::string> ReadSummaryFile(agi::fs::path const& path) {
 	std::map<std::string, std::string> values;
@@ -293,174 +64,10 @@ std::string GetSummaryValue(std::map<std::string, std::string> const& summary, c
 	return it == summary.end() ? std::string() : it->second;
 }
 
-std::string BoolString(bool value) {
-	return value ? "true" : "false";
-}
-
-bool UsedProviderFallback(ProviderSelectionReport const& report) {
-	return provider_selection_diagnostics::UsedFallback(report);
-}
-
-std::string FormatProviderAttempts(ProviderSelectionReport const& report) {
-	return provider_selection_diagnostics::FormatAttempts(report);
-}
-
-std::string DescribeProviderFallback(ProviderSelectionReport const& report) {
-	return provider_selection_diagnostics::DescribeFallbackReason(report);
-}
-
-class PlaybackProbeRuntime final {
-	std::unique_ptr<agi::Context> context = std::make_unique<agi::Context>();
-	std::shared_ptr<FakeAudioClockState> fake_audio_state;
-	std::shared_ptr<HeadlessFakeAudioPlayerFactoryService> fake_audio_service;
-	std::shared_ptr<ConsoleNotificationSink> notification_sink = std::make_shared<ConsoleNotificationSink>();
-	std::shared_ptr<ConsoleStatusSink> status_sink = std::make_shared<ConsoleStatusSink>();
-	std::optional<ScopedTemporaryMru> temporary_mru;
-	std::optional<ScopedTemporaryStringOption> temporary_video_provider;
-	std::optional<ScopedTemporaryStringOption> temporary_audio_provider;
-	agi::fs::path trace_dir;
-	bool perf_trace_initialized = false;
-	std::string selected_video_provider;
-	std::string selected_audio_provider;
-	ProviderSelectionReport video_provider_report;
-	ProviderSelectionReport audio_provider_report;
-	std::string actual_video_provider;
-	std::string actual_video_decoder;
-	std::string actual_audio_provider_factory;
-	std::string actual_audio_provider;
-
-public:
-	explicit PlaybackProbeRuntime(PlaybackProbeRequest const& request)
-	: fake_audio_state(std::make_shared<FakeAudioClockState>(request.audio_rate_scale, request.audio_quantum_ms))
-	, fake_audio_service(std::make_shared<HeadlessFakeAudioPlayerFactoryService>(fake_audio_state)) {
-	}
-
-	agi::ContextCoreSession GetCore() {
-		return context->GetCore();
-	}
-
-	agi::ConstContextCoreSession GetCore() const {
-		return static_cast<agi::Context const&>(*context).GetCore();
-	}
-
-	int GetCurrentAudioPositionMs() {
-		return fake_audio_state->GetCurrentPositionMs();
-	}
-
-	agi::fs::path const& TraceDir() const {
-		return trace_dir;
-	}
-
-	std::string const& SelectedVideoProvider() const {
-		return selected_video_provider;
-	}
-
-	std::string const& SelectedAudioProvider() const {
-		return selected_audio_provider;
-	}
-
-	std::string const& ActualVideoProvider() const {
-		return actual_video_provider;
-	}
-
-	std::string const& ActualVideoDecoder() const {
-		return actual_video_decoder;
-	}
-
-	std::string const& ActualAudioProviderFactory() const {
-		return actual_audio_provider_factory;
-	}
-
-	std::string const& ActualAudioProvider() const {
-		return actual_audio_provider;
-	}
-
-	ProviderSelectionReport const& VideoProviderReport() const {
-		return video_provider_report;
-	}
-
-	ProviderSelectionReport const& AudioProviderReport() const {
-		return audio_provider_report;
-	}
-
-	bool StartSession(PlaybackProbeRequest const& request, int& error_code, std::string& error_message) {
-		trace_dir = request.trace_dir.value_or(UniqueProbeTraceDir());
-		agi::fs::CreateDirectory(trace_dir.parent_path());
-		agi::fs::CreateDirectory(trace_dir);
-		temporary_mru.emplace(trace_dir / "probe_mru.json");
-		temporary_video_provider.emplace("Video/Provider", request.video_provider);
-		if (!request.skip_audio)
-			temporary_audio_provider.emplace("Audio/Provider", request.audio_provider);
-
-		perf_trace::InitializeAt(trace_dir, GetAegisubLongVersionString(), "audio,video,ops");
-		perf_trace_initialized = true;
-
-		auto core = GetCore();
-		core.statusSink = status_sink;
-		core.notificationSink = notification_sink;
-		core.audioPlayerFactoryService = fake_audio_service;
-
-		core.ass->LoadDefault(false);
-		OPT_SET("Video/Open Audio")->SetBool(false);
-		selected_video_provider = OPT_GET("Video/Provider")->GetString();
-		selected_audio_provider = request.skip_audio ? std::string() : OPT_GET("Audio/Provider")->GetString();
-
-		ClearLastVideoProviderSelectionReport();
-		if (!request.skip_audio)
-			ClearLastAudioProviderSelectionReport();
-
-		auto open_result = project_open_service::Open(core, {
-			request.video_path,
-			request.skip_audio ? std::optional<agi::fs::path>{} : std::make_optional(request.audio_path),
-			request.skip_audio
-		});
-
-		video_provider_report = GetLastVideoProviderSelectionReport();
-		actual_video_provider = video_provider_report.selected_provider;
-		if (!request.skip_audio) {
-			audio_provider_report = GetLastAudioProviderSelectionReport();
-			actual_audio_provider_factory = audio_provider_report.selected_provider;
-		}
-		if (!open_result.opened) {
-			error_code = open_result.error_code ? open_result.error_code : 8;
-			error_message = open_result.error.empty() ? "failed to open project media" : open_result.error;
-			return false;
-		}
-		actual_video_decoder = open_result.media.video_decoder_name;
-		actual_audio_provider = open_result.media.audio_provider_name;
-		return true;
-	}
-
-	void CloseMedia() {
-		if (!context)
-			return;
-
-		auto core = GetCore();
-		if (core.videoController->IsPlaying())
-			core.videoController->Stop();
-		core.project->CloseAudio();
-		core.project->CloseVideo();
-	}
-
-	void ShutdownTrace() {
-		if (!perf_trace_initialized)
-			return;
-		perf_trace::Shutdown();
-		perf_trace_initialized = false;
-	}
-
-	void ReleaseResources() {
-		context.reset();
-		temporary_audio_provider.reset();
-		temporary_video_provider.reset();
-		temporary_mru.reset();
-	}
-};
-
 class Runner final {
 	PlaybackProbeRequest request;
 	std::function<void(PlaybackProbeResult)> on_done;
-	PlaybackProbeRuntime runtime;
+	PlaybackSessionHost runtime;
 	std::unique_ptr<PlaybackProbeTimerHost> timer_host;
 	std::vector<agi::signal::Connection> connections;
 	bool probe_started = false;
@@ -734,7 +341,14 @@ public:
 	Runner(PlaybackProbeRequest request, std::function<void(PlaybackProbeResult)> on_done)
 	: request(std::move(request))
 	, on_done(std::move(on_done))
-	, runtime(this->request)
+	, runtime(PlaybackSessionHostOptions{
+		this->request.video_provider,
+		this->request.audio_provider,
+		this->request.trace_dir,
+		this->request.audio_rate_scale,
+		this->request.audio_quantum_ms,
+		"headless-playback-probe-%%%%%%%%",
+	})
 	, timer_host(CreatePlaybackProbeTimerHost(
 		[this] { OnTimeout(); },
 		[this] { OnCompletionPoll(); },
@@ -745,9 +359,20 @@ public:
 	void Start() {
 		int init_error_code = 0;
 		std::string init_error_message;
-		if (!runtime.StartSession(request, init_error_code, init_error_message)) {
+		if (!runtime.Start(init_error_code, init_error_message)) {
 			Finish(init_error_code ? init_error_code : 8,
-				init_error_message.empty() ? "failed to open project media" : init_error_message);
+				init_error_message.empty() ? "failed to start playback probe session" : init_error_message);
+			return;
+		}
+
+		auto open_result = runtime.OpenMedia({
+			request.video_path,
+			request.skip_audio ? std::optional<agi::fs::path>{} : std::make_optional(request.audio_path),
+			request.skip_audio
+		});
+		if (!open_result.opened) {
+			Finish(open_result.error_code ? open_result.error_code : 8,
+				open_result.error.empty() ? "failed to open project media" : open_result.error);
 			return;
 		}
 

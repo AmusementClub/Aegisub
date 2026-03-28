@@ -350,6 +350,17 @@ bool AegisubApp::OnInit() {
 				return true;
 			}
 
+			if (auto *session = std::get_if<headless_cli::SessionPlaybackCommand>(&*cli_parse.command)) {
+				auto session_request = session->request;
+				CallAfter([this, session_request = std::move(session_request)]() mutable {
+					headless_cli::RunSessionPlaybackAsync(std::move(session_request), [this](headless_cli::PlaybackSessionResult result) {
+						headless_cli_exit_code = result.exit_code;
+						ExitMainLoop();
+					});
+				});
+				return true;
+			}
+
 			if (auto *inspect = std::get_if<headless_cli::InspectTraceCommand>(&*cli_parse.command)) {
 				auto inspect_result = headless_cli::RunInspectTrace(inspect->request);
 				headless_cli_exit_code = inspect_result.exit_code;

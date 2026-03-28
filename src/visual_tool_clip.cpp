@@ -23,6 +23,7 @@
 #include "ass_dialogue.h"
 #include "compat.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "selection_controller.h"
 

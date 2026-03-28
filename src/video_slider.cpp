@@ -38,6 +38,7 @@
 #include "base_grid.h"
 #include "command/command.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
 #include "options.h"
 #include "project.h"

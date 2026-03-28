@@ -34,6 +34,7 @@
 #include "compat.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/toolbar.h"
 #include "options.h"
 #include "project.h"

@@ -40,6 +40,7 @@
 #include "../dialogs.h"
 #include "../format.h"
 #include "../include/aegisub/context.h"
+#include "../include/aegisub/context_ui.h"
 #include "../initial_line_state.h"
 #include "../libresrc/libresrc.h"
 #include "../options.h"

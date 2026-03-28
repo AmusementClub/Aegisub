@@ -23,22 +23,15 @@
 #include <libaegisub/signal.h>
 
 class AssFile;
-class AudioBox;
 class AudioController;
 class AssDialogue;
-class AudioKaraoke;
-class DialogManager;
-class FrameMain;
 class Project;
 class SearchReplaceEngine;
 class InitialLineState;
 class SelectionController;
 class SubsController;
-class BaseGrid;
 class TextSelectionController;
 class VideoController;
-class VideoDisplay;
-class wxWindow;
 namespace Automation4 { class ScriptManager; }
 namespace agi { class BackgroundRunner; }
 namespace agi { class StatusSink; }
@@ -52,6 +45,9 @@ namespace agi { class ProjectUiStateSink; }
 namespace agi { class AudioPlayerFactoryService; }
 namespace Automation4 { class AutomationBackgroundScriptRunnerFactory; }
 namespace Automation4 { class BackgroundScriptRunner; }
+namespace agi { struct ContextUiState; }
+namespace agi { struct ContextUiSession; }
+namespace agi { struct ConstContextUiSession; }
 namespace agi { struct InteractionRequest; }
 namespace agi { struct SingleChoiceInteractionRequest; }
 namespace agi { struct OpenFileDialogRequest; }
@@ -116,38 +112,6 @@ struct ConstContextCoreSession {
 	explicit ConstContextCoreSession(Context const& context);
 };
 
-struct ContextUiSession {
-	wxWindow *&parent;
-	wxWindow *&previousFocus;
-	wxWindow *&videoSlider;
-	AudioBox *&audioBox;
-	AudioKaraoke *&karaoke;
-	BaseGrid *&subsGrid;
-	std::unique_ptr<DialogManager>& dialog;
-	FrameMain *&frame;
-	VideoDisplay *&videoDisplay;
-	agi::signal::Signal<int>& videoFramePresented;
-
-	explicit ContextUiSession(Context& context);
-
-	DEFINE_SIGNAL_ADDERS(videoFramePresented, AddVideoFramePresentedListener)
-};
-
-struct ConstContextUiSession {
-	wxWindow *const& parent;
-	wxWindow *const& previousFocus;
-	wxWindow *const& videoSlider;
-	AudioBox *const& audioBox;
-	AudioKaraoke *const& karaoke;
-	BaseGrid *const& subsGrid;
-	std::unique_ptr<DialogManager> const& dialog;
-	FrameMain *const& frame;
-	VideoDisplay *const& videoDisplay;
-	agi::signal::Signal<int> const& videoFramePresented;
-
-	explicit ConstContextUiSession(Context const& context);
-};
-
 struct Context {
 	// Note: order here matters quite a bit, as things need to be set up and
 	// torn down in the correct order
@@ -172,20 +136,7 @@ struct Context {
 	std::shared_ptr<ProjectUiStateSink> projectUiStateSink;
 	std::shared_ptr<AudioPlayerFactoryService> audioPlayerFactoryService;
 	std::shared_ptr<Automation4::AutomationBackgroundScriptRunnerFactory> automationBackgroundScriptRunnerFactory;
-
-	// Things that should probably be in some sort of UI-context-model
-	wxWindow *parent = nullptr;
-	wxWindow *previousFocus = nullptr;
-	wxWindow *videoSlider = nullptr;
-
-	// Views (i.e. things that should eventually not be here at all)
-	AudioBox *audioBox = nullptr;
-	AudioKaraoke *karaoke = nullptr;
-	BaseGrid *subsGrid = nullptr;
-	std::unique_ptr<DialogManager> dialog;
-	FrameMain *frame = nullptr;
-	VideoDisplay *videoDisplay = nullptr;
-	agi::signal::Signal<int> videoFramePresented;
+	std::unique_ptr<ContextUiState> ui;
 
 	Context();
 	~Context();
@@ -216,8 +167,8 @@ struct Context {
 	// on the bridge members themselves having already been initialized.
 	ContextCoreSession GetCore() { return ContextCoreSession(*this); }
 	ConstContextCoreSession GetCore() const { return ConstContextCoreSession(*this); }
-	ContextUiSession GetUI() { return ContextUiSession(*this); }
-	ConstContextUiSession GetUI() const { return ConstContextUiSession(*this); }
+	ContextUiSession GetUI();
+	ConstContextUiSession GetUI() const;
 };
 
 }

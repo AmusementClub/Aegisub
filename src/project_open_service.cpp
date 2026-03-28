@@ -16,6 +16,7 @@
 #include "project_open_service.h"
 
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "project.h"
 
 #include <libaegisub/exception.h>

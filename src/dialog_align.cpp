@@ -33,6 +33,7 @@
 #include "dialog_manager.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "video_frame.h"
 #include "libresrc/libresrc.h"
 #include "options.h"

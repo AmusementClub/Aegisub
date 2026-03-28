@@ -32,6 +32,7 @@
 #include "audio_timing.h"
 #include "include/aegisub/audio_player.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "perf_trace.h"
 #include "project.h"

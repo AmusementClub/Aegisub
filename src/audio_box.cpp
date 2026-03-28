@@ -30,6 +30,7 @@
 #include "audio_box.h"
 
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/toolbar.h"
 
 #include "audio_controller.h"

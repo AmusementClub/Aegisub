@@ -26,6 +26,7 @@
 #include "dialogs.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/video_provider.h"
 #include "mkv_wrap.h"
 #include "options.h"
@@ -85,14 +86,21 @@ bool try_check_readable_media_path(agi::fs::path const& path, std::string& error
 	}
 }
 
-void RestoreSubtitleUiState(agi::Context *context, ProjectProperties const& properties) {
-	if (auto sink = context->GetProjectUiStateSink())
-		sink->RestoreSubtitleScrollPosition(properties.scroll_position);
+agi::ProjectUiStateSnapshot BuildSubtitleUiStateSnapshot(ProjectProperties const& properties) {
+	agi::ProjectUiStateSnapshot snapshot;
+	snapshot.subtitle_scroll_position = properties.scroll_position;
+	return snapshot;
 }
 
-void RestoreVideoUiState(agi::Context *context, ProjectProperties const& properties) {
+agi::ProjectUiStateSnapshot BuildVideoUiStateSnapshot(ProjectProperties const& properties) {
+	agi::ProjectUiStateSnapshot snapshot;
+	snapshot.video_zoom = properties.video_zoom;
+	return snapshot;
+}
+
+void RestoreProjectUiState(agi::Context *context, agi::ProjectUiStateSnapshot const& state) {
 	if (auto sink = context->GetProjectUiStateSink())
-		sink->RestoreVideoZoom(properties.video_zoom);
+		sink->RestoreProjectUiState(state);
 }
 
 void ApplyPostOpenVideoPlan(agi::Context *context, aegisub::video_session_ops::PostOpenPlan const& plan) {
@@ -249,7 +257,7 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 		sel.insert(active_line);
 	}
 	core.selectionController->SetSelectionAndActive(std::move(sel), active_line);
-	RestoreSubtitleUiState(context, properties);
+	RestoreProjectUiState(context, BuildSubtitleUiStateSnapshot(properties));
 
 	if (video_provider)
 		RefreshSubtitlesProvider(!transient_font_environment_matches(previous_transient_fonts, core.ass->GetTransientFonts()));
@@ -336,7 +344,7 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 					vc->SetAspectRatio(properties.ar_value);
 				else
 					vc->SetAspectRatio(ar_mode);
-				RestoreVideoUiState(context, properties);
+				RestoreProjectUiState(context, BuildVideoUiStateSnapshot(properties));
 			}
 			else if (audio == video) {
 				std::string ignored_error;
@@ -397,8 +405,8 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 		VideoMemorySnapshot snapshot;
 		if (video_provider)
 			snapshot.async = video_provider->CollectMemoryStats();
-		if (context->videoDisplay)
-			snapshot.display = context->videoDisplay->CollectMemoryStats();
+		if (auto video_display = context->GetUI().videoDisplay)
+			snapshot.display = video_display->CollectMemoryStats();
 		snapshot.audio = audio_provider->GetMemoryStats();
 		perf_trace::ObserveVideoMemorySnapshot("audio_open", snapshot, true);
 	}

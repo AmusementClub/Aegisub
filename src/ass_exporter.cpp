@@ -38,6 +38,7 @@
 #include "ass_file.h"
 #include "compat.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "project.h"
 #include "subtitle_format.h"
 

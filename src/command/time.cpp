@@ -39,6 +39,7 @@
 #include "../compat.h"
 #include "../dialogs.h"
 #include "../include/aegisub/context.h"
+#include "../include/aegisub/context_ui.h"
 #include "../libresrc/libresrc.h"
 #include "../project.h"
 #include "../selection_controller.h"

@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 
 #include "ass_file.h"
 #include "audio_controller.h"
@@ -83,30 +84,36 @@ ConstContextCoreSession::ConstContextCoreSession(Context const& context)
 , automationBackgroundScriptRunnerFactory(context.automationBackgroundScriptRunnerFactory) {
 }
 
-ContextUiSession::ContextUiSession(Context& context)
-: parent(context.parent)
-, previousFocus(context.previousFocus)
-, videoSlider(context.videoSlider)
-, audioBox(context.audioBox)
-, karaoke(context.karaoke)
-, subsGrid(context.subsGrid)
-, dialog(context.dialog)
-, frame(context.frame)
-, videoDisplay(context.videoDisplay)
-, videoFramePresented(context.videoFramePresented) {
+ContextUiState::ContextUiState()
+: dialog(make_unique<DialogManager>()) {
 }
 
-ConstContextUiSession::ConstContextUiSession(Context const& context)
-: parent(context.parent)
-, previousFocus(context.previousFocus)
-, videoSlider(context.videoSlider)
-, audioBox(context.audioBox)
-, karaoke(context.karaoke)
-, subsGrid(context.subsGrid)
-, dialog(context.dialog)
-, frame(context.frame)
-, videoDisplay(context.videoDisplay)
-, videoFramePresented(context.videoFramePresented) {
+ContextUiState::~ContextUiState() = default;
+
+ContextUiSession::ContextUiSession(ContextUiState& state)
+: parent(state.parent)
+, previousFocus(state.previousFocus)
+, videoSlider(state.videoSlider)
+, audioBox(state.audioBox)
+, karaoke(state.karaoke)
+, subsGrid(state.subsGrid)
+, dialog(state.dialog)
+, frame(state.frame)
+, videoDisplay(state.videoDisplay)
+, videoFramePresented(state.videoFramePresented) {
+}
+
+ConstContextUiSession::ConstContextUiSession(ContextUiState const& state)
+: parent(state.parent)
+, previousFocus(state.previousFocus)
+, videoSlider(state.videoSlider)
+, audioBox(state.audioBox)
+, karaoke(state.karaoke)
+, subsGrid(state.subsGrid)
+, dialog(state.dialog)
+, frame(state.frame)
+, videoDisplay(state.videoDisplay)
+, videoFramePresented(state.videoFramePresented) {
 }
 
 Context::Context()
@@ -131,7 +138,7 @@ Context::Context()
 , projectUiStateSink(std::make_shared<NullProjectUiStateSink>())
 , audioPlayerFactoryService(std::make_shared<NullAudioPlayerFactoryService>())
 , automationBackgroundScriptRunnerFactory(std::make_shared<Automation4::NullAutomationBackgroundScriptRunnerFactory>())
-, dialog(make_unique<DialogManager>())
+, ui(make_unique<ContextUiState>())
 {
 	subsController->SetSelectionController(selectionController.get());
 }
@@ -242,5 +249,13 @@ std::unique_ptr<Automation4::BackgroundScriptRunner> Context::CreateAutomationBa
 	if (automationBackgroundScriptRunnerFactory)
 		return automationBackgroundScriptRunnerFactory->Create(title);
 	return {};
+}
+
+ContextUiSession Context::GetUI() {
+	return ContextUiSession(*ui);
+}
+
+ConstContextUiSession Context::GetUI() const {
+	return ConstContextUiSession(*ui);
 }
 }

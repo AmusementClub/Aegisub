@@ -31,9 +31,11 @@
 #include "dialog_manager.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "ui_dispatch.h"
 
 #include <libaegisub/cajun/reader.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/io.h>
 #include <libaegisub/log.h>
 
@@ -330,11 +332,20 @@ void append_tail_message(std::deque<ParsedLogRecord>& messages, ParsedLogRecord 
 }
 
 void load_log_messages_from_file(agi::fs::path const& path, std::deque<ParsedLogRecord>& messages) {
+	if (!agi::fs::FileExists(path))
+		return;
+
 	std::unique_ptr<std::istream> stream;
 	try {
 		stream = agi::io::Open(path);
 	}
 	catch (agi::Exception const&) {
+		return;
+	}
+	catch (std::exception const&) {
+		return;
+	}
+	catch (...) {
 		return;
 	}
 	if (!stream)
@@ -361,7 +372,7 @@ void load_log_messages_from_file(agi::fs::path const& path, std::deque<ParsedLog
 
 std::vector<ParsedLogRecord> load_log_file_history() {
 	auto const path = agi::log::GetSessionLogFile();
-	if (path.empty())
+	if (path.empty() || !agi::fs::FileExists(path))
 		return {};
 
 	std::deque<ParsedLogRecord> messages;

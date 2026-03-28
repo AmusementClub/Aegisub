@@ -35,6 +35,7 @@
 
 #include "include/aegisub/audio_player.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/menu.h"
 #include "include/aegisub/toolbar.h"
 #include "include/aegisub/hotkey.h"
@@ -388,17 +389,13 @@ public:
 	{
 	}
 
-	void RestoreSubtitleScrollPosition(int scroll_position) override {
-		agi::ui::MainInvokeIfAlive(lifetime, [context = context, scroll_position] {
-			if (auto subs_grid = context->GetUI().subsGrid)
-				subs_grid->ScrollTo(scroll_position);
-		});
-	}
-
-	void RestoreVideoZoom(double zoom) override {
-		agi::ui::MainInvokeIfAlive(lifetime, [context = context, zoom] {
-			if (auto video_display = context->GetUI().videoDisplay)
-				video_display->SetZoom(zoom);
+	void RestoreProjectUiState(agi::ProjectUiStateSnapshot const& state) override {
+		agi::ui::MainInvokeIfAlive(lifetime, [context = context, state] {
+			auto ui = context->GetUI();
+			if (state.subtitle_scroll_position && ui.subsGrid)
+				ui.subsGrid->ScrollTo(*state.subtitle_scroll_position);
+			if (state.video_zoom && ui.videoDisplay)
+				ui.videoDisplay->SetZoom(*state.video_zoom);
 		});
 	}
 };

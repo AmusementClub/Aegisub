@@ -19,6 +19,7 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "subs_controller.h"
 
 #include <algorithm>

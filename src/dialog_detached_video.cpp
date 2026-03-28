@@ -36,6 +36,7 @@
 
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
 #include "options.h"
 #include "persist_location.h"

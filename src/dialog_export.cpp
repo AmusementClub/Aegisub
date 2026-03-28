@@ -31,6 +31,7 @@
 #include "ass_file.h"
 #include "compat.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "help_button.h"
 #include "libresrc/libresrc.h"
 #include "subtitle_format.h"

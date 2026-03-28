@@ -19,6 +19,7 @@
 #include "include/aegisub/menu.h"
 
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
 
 #include "auto4_base.h"

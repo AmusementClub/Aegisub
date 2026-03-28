@@ -37,6 +37,7 @@
 #include "../dialog_translation.h"
 #include "../dialogs.h"
 #include "../include/aegisub/context.h"
+#include "../include/aegisub/context_ui.h"
 #include "../libresrc/libresrc.h"
 #include "../options.h"
 #include "../resolution_resampler.h"

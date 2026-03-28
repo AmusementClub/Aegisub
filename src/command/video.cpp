@@ -41,6 +41,7 @@
 #include "../format.h"
 #include "../frame_main.h"
 #include "../include/aegisub/context.h"
+#include "../include/aegisub/context_ui.h"
 #include "../include/aegisub/subtitles_provider.h"
 #include "../libresrc/libresrc.h"
 #include "../options.h"

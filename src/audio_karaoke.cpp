@@ -22,6 +22,7 @@
 #include "audio_karaoke.h"
 
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
@@ -139,7 +140,7 @@ void AudioKaraoke::SetEnabled(bool en) {
 	enabled = en;
 	auto core = c->GetCore();
 
-	c->audioBox->ShowKaraokeBar(enabled);
+	c->GetUI().audioBox->ShowKaraokeBar(enabled);
 	if (enabled) {
 		LoadFromLine();
 		core.audioController->SetTimingController(CreateKaraokeTimingController(c, kara.get(), file_changed));

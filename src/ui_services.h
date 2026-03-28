@@ -186,17 +186,20 @@ public:
 	virtual std::unique_ptr<BackgroundRunner> Create(std::string const& title, std::string const& message) = 0;
 };
 
+struct ProjectUiStateSnapshot {
+	std::optional<int> subtitle_scroll_position;
+	std::optional<double> video_zoom;
+};
+
 class ProjectUiStateSink {
 public:
 	virtual ~ProjectUiStateSink() = default;
-	virtual void RestoreSubtitleScrollPosition(int scroll_position) = 0;
-	virtual void RestoreVideoZoom(double zoom) = 0;
+	virtual void RestoreProjectUiState(ProjectUiStateSnapshot const& state) = 0;
 };
 
 class NullProjectUiStateSink final : public ProjectUiStateSink {
 public:
-	void RestoreSubtitleScrollPosition(int) override { }
-	void RestoreVideoZoom(double) override { }
+	void RestoreProjectUiState(ProjectUiStateSnapshot const&) override { }
 };
 
 class AudioPlayerFactoryService {

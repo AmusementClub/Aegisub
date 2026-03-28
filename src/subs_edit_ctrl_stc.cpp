@@ -35,6 +35,7 @@
 #include "format.h"
 #include "options.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/spellchecker.h"
 #include "selection_controller.h"
 #include "text_selection_controller.h"

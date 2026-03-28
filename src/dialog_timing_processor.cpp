@@ -34,6 +34,7 @@
 #include "format.h"
 #include "help_button.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "project.h"

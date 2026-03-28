@@ -35,6 +35,7 @@
 #include "compat.h"
 #include "command/command.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "pen.h"
 #include "selection_controller.h"

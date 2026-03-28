@@ -16,6 +16,7 @@
 
 #include "ass_dialogue.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "selection_controller.h"
 
 InitialLineState::InitialLineState(agi::Context *c)

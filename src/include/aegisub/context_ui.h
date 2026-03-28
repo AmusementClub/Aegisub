@@ -1,0 +1,81 @@
+// Copyright (c) 2014, Thomas Goyne <plorkyeran@aegisub.org>
+//
+// Permission to use, copy, modify, and distribute this software for any
+// purpose with or without fee is hereby granted, provided that the above
+// copyright notice and this permission notice appear in all copies.
+//
+// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+// ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+// ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+// OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+//
+// Aegisub Project http://www.aegisub.org/
+
+#pragma once
+
+#include <memory>
+
+#include <libaegisub/signal.h>
+
+class AudioBox;
+class AudioKaraoke;
+class BaseGrid;
+class DialogManager;
+class FrameMain;
+class VideoDisplay;
+class wxWindow;
+
+namespace agi {
+
+struct ContextUiState {
+	wxWindow *parent = nullptr;
+	wxWindow *previousFocus = nullptr;
+	wxWindow *videoSlider = nullptr;
+	AudioBox *audioBox = nullptr;
+	AudioKaraoke *karaoke = nullptr;
+	BaseGrid *subsGrid = nullptr;
+	std::unique_ptr<DialogManager> dialog;
+	FrameMain *frame = nullptr;
+	VideoDisplay *videoDisplay = nullptr;
+	agi::signal::Signal<int> videoFramePresented;
+
+	ContextUiState();
+	~ContextUiState();
+};
+
+struct ContextUiSession {
+	wxWindow *&parent;
+	wxWindow *&previousFocus;
+	wxWindow *&videoSlider;
+	AudioBox *&audioBox;
+	AudioKaraoke *&karaoke;
+	BaseGrid *&subsGrid;
+	std::unique_ptr<DialogManager>& dialog;
+	FrameMain *&frame;
+	VideoDisplay *&videoDisplay;
+	agi::signal::Signal<int>& videoFramePresented;
+
+	explicit ContextUiSession(ContextUiState& state);
+
+	DEFINE_SIGNAL_ADDERS(videoFramePresented, AddVideoFramePresentedListener)
+};
+
+struct ConstContextUiSession {
+	wxWindow *const& parent;
+	wxWindow *const& previousFocus;
+	wxWindow *const& videoSlider;
+	AudioBox *const& audioBox;
+	AudioKaraoke *const& karaoke;
+	BaseGrid *const& subsGrid;
+	std::unique_ptr<DialogManager> const& dialog;
+	FrameMain *const& frame;
+	VideoDisplay *const& videoDisplay;
+	agi::signal::Signal<int> const& videoFramePresented;
+
+	explicit ConstContextUiSession(ContextUiState const& state);
+};
+
+}

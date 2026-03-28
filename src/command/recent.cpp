@@ -30,6 +30,7 @@
 #include "command.h"
 
 #include "../include/aegisub/context.h"
+#include "../include/aegisub/context_ui.h"
 #include "../libresrc/libresrc.h"
 #include "../main.h"
 #include "../options.h"

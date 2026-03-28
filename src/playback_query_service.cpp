@@ -18,6 +18,7 @@
 #include "async_video_provider.h"
 #include "audio_controller.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "project.h"
 #include "time_range.h"
 #include "video_controller.h"

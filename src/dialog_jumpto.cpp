@@ -30,6 +30,7 @@
 #include "async_video_provider.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "project.h"
 #include "timeedit_ctrl.h"

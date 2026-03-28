@@ -42,6 +42,7 @@
 #include "dialog_style_editor.h"
 #include "flyweight_hash.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
 #include "initial_line_state.h"
 #include "options.h"

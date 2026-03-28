@@ -34,6 +34,7 @@
 #include "audio_controller.h"
 #include "compat.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "perf_trace.h"
 #include "project.h"

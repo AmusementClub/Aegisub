@@ -20,6 +20,7 @@
 #include "dialog_manager.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "help_button.h"
 #include "libresrc/libresrc.h"
 #include "options.h"

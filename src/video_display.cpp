@@ -40,6 +40,7 @@
 #include "compat.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
 #include "include/aegisub/menu.h"
 #include "options.h"
@@ -192,7 +193,7 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 
 	SetCursor(wxNullCursor);
 
-	c->videoDisplay = this;
+	c->GetUI().videoDisplay = this;
 
 	con->videoController->JumpToFrame(con->videoController->GetFrameN());
 

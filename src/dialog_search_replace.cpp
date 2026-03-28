@@ -23,6 +23,7 @@
 
 #include "compat.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "search_replace_engine.h"
 #include "utils.h"

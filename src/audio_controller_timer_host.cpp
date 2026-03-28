@@ -15,29 +15,22 @@
 
 #include "audio_controller_timer_host.h"
 
-#include <wx/timer.h>
+#include "main_thread_timer.h"
 
 #include <utility>
 
 namespace {
 
-class WxAudioControllerTimerHost final : public AudioControllerTimerHost, public wxEvtHandler {
-	std::function<void()> on_playback_timer;
-	wxTimer playback_timer{this};
-
-	void HandlePlaybackTimer(wxTimerEvent&) {
-		if (on_playback_timer)
-			on_playback_timer();
-	}
+class DispatchAudioControllerTimerHost final : public AudioControllerTimerHost {
+	MainThreadTimer playback_timer;
 
 public:
-	explicit WxAudioControllerTimerHost(std::function<void()> on_playback_timer)
-	: on_playback_timer(std::move(on_playback_timer)) {
-		Bind(wxEVT_TIMER, &WxAudioControllerTimerHost::HandlePlaybackTimer, this, playback_timer.GetId());
+	explicit DispatchAudioControllerTimerHost(std::function<void()> on_playback_timer)
+	: playback_timer(std::move(on_playback_timer)) {
 	}
 
 	void Start(int interval_ms) override {
-		playback_timer.Start(interval_ms);
+		playback_timer.StartRepeating(interval_ms);
 	}
 
 	void Stop() override {
@@ -49,5 +42,5 @@ public:
 
 std::unique_ptr<AudioControllerTimerHost> CreateAudioControllerTimerHost(
 	std::function<void()> on_playback_timer) {
-	return std::make_unique<WxAudioControllerTimerHost>(std::move(on_playback_timer));
+	return std::make_unique<DispatchAudioControllerTimerHost>(std::move(on_playback_timer));
 }

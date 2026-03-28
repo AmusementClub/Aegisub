@@ -15,57 +15,29 @@
 
 #include "playback_probe_timer_host.h"
 
-#include <wx/timer.h>
+#include "main_thread_timer.h"
 
 #include <utility>
 
 namespace aegisub::playback_probe_service {
 namespace {
 
-class WxPlaybackProbeTimerHost final : public PlaybackProbeTimerHost, public wxEvtHandler {
-	std::function<void()> on_timeout;
-	std::function<void()> on_completion_poll;
-	std::function<void()> on_restart_timer;
-	std::function<void()> on_seek_timer;
-	wxTimer timeout_timer{this};
-	wxTimer completion_timer{this};
-	wxTimer restart_timer{this};
-	wxTimer seek_timer{this};
-
-	void HandleTimeout(wxTimerEvent&) {
-		if (on_timeout)
-			on_timeout();
-	}
-
-	void HandleCompletionPoll(wxTimerEvent&) {
-		if (on_completion_poll)
-			on_completion_poll();
-	}
-
-	void HandleRestartTimer(wxTimerEvent&) {
-		if (on_restart_timer)
-			on_restart_timer();
-	}
-
-	void HandleSeekTimer(wxTimerEvent&) {
-		if (on_seek_timer)
-			on_seek_timer();
-	}
+class DispatchPlaybackProbeTimerHost final : public PlaybackProbeTimerHost {
+	MainThreadTimer timeout_timer;
+	MainThreadTimer completion_timer;
+	MainThreadTimer restart_timer;
+	MainThreadTimer seek_timer;
 
 public:
-	WxPlaybackProbeTimerHost(
+	DispatchPlaybackProbeTimerHost(
 		std::function<void()> on_timeout,
 		std::function<void()> on_completion_poll,
 		std::function<void()> on_restart_timer,
 		std::function<void()> on_seek_timer)
-	: on_timeout(std::move(on_timeout))
-	, on_completion_poll(std::move(on_completion_poll))
-	, on_restart_timer(std::move(on_restart_timer))
-	, on_seek_timer(std::move(on_seek_timer)) {
-		Bind(wxEVT_TIMER, &WxPlaybackProbeTimerHost::HandleTimeout, this, timeout_timer.GetId());
-		Bind(wxEVT_TIMER, &WxPlaybackProbeTimerHost::HandleCompletionPoll, this, completion_timer.GetId());
-		Bind(wxEVT_TIMER, &WxPlaybackProbeTimerHost::HandleRestartTimer, this, restart_timer.GetId());
-		Bind(wxEVT_TIMER, &WxPlaybackProbeTimerHost::HandleSeekTimer, this, seek_timer.GetId());
+	: timeout_timer(std::move(on_timeout))
+	, completion_timer(std::move(on_completion_poll))
+	, restart_timer(std::move(on_restart_timer))
+	, seek_timer(std::move(on_seek_timer)) {
 	}
 
 	void StopAll() override {
@@ -76,11 +48,11 @@ public:
 	}
 
 	void StartTimeoutOnce(int timeout_ms) override {
-		timeout_timer.Start(timeout_ms, true);
+		timeout_timer.StartOnce(timeout_ms);
 	}
 
 	void StartCompletionPolling(int interval_ms) override {
-		completion_timer.Start(interval_ms);
+		completion_timer.StartRepeating(interval_ms);
 	}
 
 	void StartRestartOnce(int delay_ms) override {
@@ -101,7 +73,7 @@ std::unique_ptr<PlaybackProbeTimerHost> CreatePlaybackProbeTimerHost(
 	std::function<void()> on_completion_poll,
 	std::function<void()> on_restart_timer,
 	std::function<void()> on_seek_timer) {
-	return std::make_unique<WxPlaybackProbeTimerHost>(
+	return std::make_unique<DispatchPlaybackProbeTimerHost>(
 		std::move(on_timeout),
 		std::move(on_completion_poll),
 		std::move(on_restart_timer),

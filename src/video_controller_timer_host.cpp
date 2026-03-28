@@ -15,29 +15,22 @@
 
 #include "video_controller_timer_host.h"
 
-#include <wx/timer.h>
+#include "main_thread_timer.h"
 
 #include <utility>
 
 namespace {
 
-class WxVideoControllerTimerHost final : public VideoControllerTimerHost, public wxEvtHandler {
-	std::function<void()> on_play_timer;
-	wxTimer playback_timer{this};
-
-	void HandlePlayTimer(wxTimerEvent&) {
-		if (on_play_timer)
-			on_play_timer();
-	}
+class DispatchVideoControllerTimerHost final : public VideoControllerTimerHost {
+	MainThreadTimer playback_timer;
 
 public:
-	explicit WxVideoControllerTimerHost(std::function<void()> on_play_timer)
-	: on_play_timer(std::move(on_play_timer)) {
-		Bind(wxEVT_TIMER, &WxVideoControllerTimerHost::HandlePlayTimer, this, playback_timer.GetId());
+	explicit DispatchVideoControllerTimerHost(std::function<void()> on_play_timer)
+	: playback_timer(std::move(on_play_timer)) {
 	}
 
 	void Start(int interval_ms) override {
-		playback_timer.Start(interval_ms);
+		playback_timer.StartRepeating(interval_ms);
 	}
 
 	void Stop() override {
@@ -53,5 +46,5 @@ public:
 
 std::unique_ptr<VideoControllerTimerHost> CreateVideoControllerTimerHost(
 	std::function<void()> on_play_timer) {
-	return std::make_unique<WxVideoControllerTimerHost>(std::move(on_play_timer));
+	return std::make_unique<DispatchVideoControllerTimerHost>(std::move(on_play_timer));
 }

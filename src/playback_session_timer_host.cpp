@@ -15,37 +15,23 @@
 
 #include "playback_session_timer_host.h"
 
-#include <wx/timer.h>
+#include "main_thread_timer.h"
 
 #include <utility>
 
 namespace aegisub::playback_session_service {
 namespace {
 
-class WxPlaybackSessionTimerHost final : public PlaybackSessionTimerHost, public wxEvtHandler {
-	std::function<void()> on_delay_timer;
-	std::function<void()> on_wait_timer;
-	wxTimer delay_timer{this};
-	wxTimer wait_timer{this};
-
-	void HandleDelayTimer(wxTimerEvent&) {
-		if (on_delay_timer)
-			on_delay_timer();
-	}
-
-	void HandleWaitTimer(wxTimerEvent&) {
-		if (on_wait_timer)
-			on_wait_timer();
-	}
+class DispatchPlaybackSessionTimerHost final : public PlaybackSessionTimerHost {
+	MainThreadTimer delay_timer;
+	MainThreadTimer wait_timer;
 
 public:
-	WxPlaybackSessionTimerHost(
+	DispatchPlaybackSessionTimerHost(
 		std::function<void()> on_delay_timer,
 		std::function<void()> on_wait_timer)
-	: on_delay_timer(std::move(on_delay_timer))
-	, on_wait_timer(std::move(on_wait_timer)) {
-		Bind(wxEVT_TIMER, &WxPlaybackSessionTimerHost::HandleDelayTimer, this, delay_timer.GetId());
-		Bind(wxEVT_TIMER, &WxPlaybackSessionTimerHost::HandleWaitTimer, this, wait_timer.GetId());
+	: delay_timer(std::move(on_delay_timer))
+	, wait_timer(std::move(on_wait_timer)) {
 	}
 
 	void StopAll() override {
@@ -58,7 +44,7 @@ public:
 	}
 
 	void StartWaitPolling(int interval_ms) override {
-		wait_timer.Start(interval_ms);
+		wait_timer.StartRepeating(interval_ms);
 	}
 
 	void StopWaitPolling() override {
@@ -71,7 +57,7 @@ public:
 std::unique_ptr<PlaybackSessionTimerHost> CreatePlaybackSessionTimerHost(
 	std::function<void()> on_delay_timer,
 	std::function<void()> on_wait_timer) {
-	return std::make_unique<WxPlaybackSessionTimerHost>(
+	return std::make_unique<DispatchPlaybackSessionTimerHost>(
 		std::move(on_delay_timer),
 		std::move(on_wait_timer));
 }

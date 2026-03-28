@@ -15,49 +15,21 @@
 
 #include "headless_runtime_bootstrap.h"
 
-#include "command/command.h"
-#include "include/aegisub/hotkey.h"
-
-#include "aegisublocale.h"
-#include "auto4_base.h"
-#include "auto4_lua_factory.h"
-#include "crash_writer.h"
-#include "export_fixstyle.h"
-#include "export_framerate.h"
-#include "format.h"
+#include "app_runtime.h"
 #include "headless_cli.h"
 #include "headless_playback_probe.h"
-#include "libresrc/libresrc.h"
-#include "options.h"
-#include "perf_trace.h"
-#include "subtitles_provider_libass.h"
-#include "utils.h"
-#include "version.h"
 
 #include <libaegisub/dispatch.h>
-#include <libaegisub/exception.h>
-#include <libaegisub/fs.h>
-#include <libaegisub/io.h>
-#include <libaegisub/log.h>
-#include <libaegisub/make_unique.h>
-#include <libaegisub/path.h>
-#include <libaegisub/util.h>
-
-#include <boost/interprocess/streams/bufferstream.hpp>
-#include <boost/locale.hpp>
 
 #include <condition_variable>
 #include <deque>
 #include <iostream>
-#include <locale>
 #include <mutex>
 #include <optional>
 #include <thread>
 #include <utility>
 
-#include <wx/image.h>
 #include <wx/init.h>
-#include <wx/log.h>
 
 namespace {
 
@@ -67,28 +39,6 @@ void ReportHeadlessError(std::string const& title, std::string const& message) {
 	if (!title.empty())
 		std::cerr << "[" << title << "] ";
 	std::cerr << message << std::endl;
-}
-
-void InitializeGlobalLocale() {
-	auto locale = boost::locale::generator().generate("");
-
-	using codecvt = std::codecvt<wchar_t, char, std::mbstate_t>;
-	int result = std::codecvt_base::error;
-	if (std::has_facet<codecvt>(locale)) {
-		wchar_t test[] = L"\xFFFE";
-		char buff[8];
-		auto mb = std::mbstate_t();
-		const wchar_t* from_next;
-		char* to_next;
-		result = std::use_facet<codecvt>(locale).out(
-			mb,
-			test, std::end(test), from_next,
-			buff, std::end(buff), to_next);
-	}
-
-	if (result != std::codecvt_base::ok)
-		locale = boost::locale::generator().generate("en_US.UTF-8");
-	std::locale::global(locale);
 }
 
 class HeadlessMainThreadPump {
@@ -151,9 +101,7 @@ public:
 class HeadlessRuntimeEnvironment {
 	wxInitializer wx_initializer;
 	HeadlessMainThreadPump main_thread_pump;
-	AegisubLocale locale;
-	bool commands_initialized = false;
-	bool runtime_ready = false;
+	AppRuntime runtime;
 
 public:
 	bool Initialize(std::string& error) {
@@ -163,108 +111,34 @@ public:
 		}
 
 		try {
-			(void)wxLog::GetActiveTarget();
-			InitializeGlobalLocale();
-
-			agi::dispatch::Init(
-				[this](agi::dispatch::Thunk thunk) {
-					main_thread_pump.Post(std::move(thunk));
+			return runtime.Initialize(
+				{
+					RuntimeShellMode::Headless,
+					RuntimeLocalePolicy::UseConfiguredOrEnglish,
+					{
+						[this](agi::dispatch::Thunk thunk) {
+							main_thread_pump.Post(std::move(thunk));
+						},
+						[this] {
+							return main_thread_pump.IsMainThread();
+						},
+						[this] {
+							return main_thread_pump.Flush();
+						}
+					},
+					false,
+					true,
+					[](std::string const& title, std::string const& message) {
+						ReportHeadlessError(title, message);
+					}
 				},
-				[this] {
-					return main_thread_pump.IsMainThread();
-				},
-				[this] {
-					return main_thread_pump.Flush();
-				});
-
-			config::path = new agi::Path;
-			crash_writer::Initialize(config::path->Decode("?user"));
-
-			agi::log::log = new agi::log::LogSink;
-#ifdef _DEBUG
-			agi::log::log->Subscribe(agi::make_unique<agi::log::EmitSTDOUT>());
-#endif
-
-#ifdef __WXMSW__
-			try {
-				auto conf_local(config::path->Decode("?data/config.json"));
-				std::unique_ptr<std::istream> local_config(agi::io::Open(conf_local));
-				config::opt = new agi::Options(conf_local, GET_DEFAULT_CONFIG(default_config));
-				config::path->SetToken("?user", config::path->Decode("?data"));
-				config::path->SetToken("?local", config::path->Decode("?data"));
-				crash_writer::Initialize(config::path->Decode("?user"));
-			}
-			catch (agi::fs::FileSystemError const&) {
-			}
-#endif
-
-			perf_trace::Initialize(GetAegisubLongVersionString());
-			auto path_log = config::path->Decode("?user/log/");
-			agi::fs::CreateDirectory(path_log);
-			agi::log::log->Subscribe(agi::make_unique<agi::log::JsonEmitter>(path_log));
-			CleanCache(path_log, "*.ndjson", 10, 100, 24 * 60 * 60);
-			CleanCache(path_log, "*.json", 10, 100, 24 * 60 * 60);
-
-			if (!config::opt)
-				config::opt = new agi::Options(config::path->Decode("?user/config.json"), GET_DEFAULT_CONFIG(default_config));
-			boost::interprocess::ibufferstream stream((const char *)default_config_platform, sizeof(default_config_platform));
-			config::opt->ConfigNext(stream);
-			try {
-				config::opt->ConfigUser();
-			}
-			catch (agi::Exception const& err) {
-				ReportHeadlessError("config", agi::format("Configuration file is invalid. Error reported:\n%s", err.GetMessage()));
-			}
-
-#ifdef _WIN32
-			if (OPT_GET("App/First Start")->GetBool()) {
-				try {
-					auto installer_config = agi::io::Open(config::path->Decode("?data/installer_config.json"));
-					config::opt->ConfigNext(*installer_config.get());
-				}
-				catch (agi::fs::FileSystemError const&) {
-				}
-			}
-#endif
-
-			cmd::init_builtin_commands();
-			commands_initialized = true;
-			hotkey::init();
-
-			config::mru = new agi::MRUManager(config::path->Decode("?user/mru.json"), GET_DEFAULT_CONFIG(default_mru), config::opt);
-
-			agi::util::SetThreadName("AegiMain");
-			srand(time(nullptr));
-			setlocale(LC_NUMERIC, "C");
-			setlocale(LC_CTYPE, "C");
-			OPT_SET("Version/Last Version")->SetInt(GetSVNRevision());
-
-			auto lang = OPT_GET("App/Language")->GetString();
-			if (lang.empty() || !locale.HasLanguage(lang))
-				lang = "en_US";
-			locale.Init(lang);
-
-			Automation4::ScriptFactory::Register(agi::make_unique<Automation4::LuaScriptFactory>());
-			libass::CacheFonts();
-			AssExportFilterChain::Register(agi::make_unique<AssFixStylesFilter>());
-			AssExportFilterChain::Register(agi::make_unique<AssTransformFramerateFilter>());
-			wxImage::AddHandler(new wxPNGHandler);
-
-			runtime_ready = true;
-			return true;
-		}
-		catch (agi::Exception const& err) {
-			error = err.GetMessage();
-		}
-		catch (std::exception const& err) {
-			error = err.what();
+				error);
 		}
 		catch (...) {
 			error = "Unhandled exception during headless runtime initialization";
+			runtime.Shutdown();
+			return false;
 		}
-
-		Shutdown();
-		return false;
 	}
 
 	~HeadlessRuntimeEnvironment() {
@@ -277,36 +151,7 @@ public:
 
 private:
 	void Shutdown() {
-		if (config::opt) {
-			delete config::opt;
-			config::opt = nullptr;
-		}
-		if (config::mru) {
-			delete config::mru;
-			config::mru = nullptr;
-		}
-		if (commands_initialized) {
-			hotkey::clear();
-			cmd::clear();
-			commands_initialized = false;
-		}
-
-		if (config::global_scripts) {
-			delete config::global_scripts;
-			config::global_scripts = nullptr;
-		}
-
-		AssExportFilterChain::Clear();
-		perf_trace::Shutdown();
-
-		if (agi::log::log) {
-			delete agi::log::log;
-			agi::log::log = nullptr;
-		}
-
-		crash_writer::Cleanup();
-
-		runtime_ready = false;
+		runtime.Shutdown();
 	}
 };
 

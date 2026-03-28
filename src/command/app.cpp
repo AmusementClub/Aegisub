@@ -167,7 +167,7 @@ struct app_language final : public Command {
 
 	void operator()(agi::Context *c) override {
 		// Get language
-		auto new_language = wxGetApp().locale.PickLanguage();
+		auto new_language = wxGetApp().GetLocale().PickLanguage();
 		if (new_language.empty()) return;
 
 		OPT_SET("App/Language")->SetString(new_language);

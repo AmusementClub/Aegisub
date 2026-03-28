@@ -459,6 +459,7 @@ add_executable(Aegisub WIN32
     src/ass_parser.cpp
     src/ass_style.cpp
     src/ass_style_storage.cpp
+    src/app_runtime.cpp
     src/async_video_provider.cpp
     src/async_video_provider_host.cpp
     src/app_entry.cpp

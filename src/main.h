@@ -29,7 +29,10 @@
 
 #include <wx/app.h>
 
+#include <memory>
+
 #include "aegisublocale.h"
+#include "app_runtime.h"
 #include "ui_dispatch.h"
 
 #include <string>
@@ -64,11 +67,14 @@ class AegisubApp : public wxApp {
 	agi::ui::UiActivationScope ui_activation;
 public:
 	AegisubApp();
-	AegisubLocale locale;
 
 	agi::Context& NewProjectContext();
 	void CloseAll();
 	agi::ui::WeakLifetime GetAsyncUiLifetime() const { return ui_activation.GetLifetime(); }
+	AppRuntime& GetRuntime() { return *runtime; }
+	AppRuntime const& GetRuntime() const { return *runtime; }
+	AegisubLocale& GetLocale() { return runtime->Locale(); }
+	AegisubLocale const& GetLocale() const { return runtime->Locale(); }
 
 	// Apple events
 	void MacOpenFiles(wxArrayString const& filenames)
@@ -76,6 +82,9 @@ public:
 		override
 #endif
 	;
+
+private:
+	std::unique_ptr<AppRuntime> runtime;
 };
 
 wxDECLARE_APP(AegisubApp);

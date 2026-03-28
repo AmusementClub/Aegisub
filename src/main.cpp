@@ -38,39 +38,28 @@
 #include "include/aegisub/hotkey.h"
 
 #include "auto4_base.h"
-#include "auto4_lua_factory.h"
+#include "app_runtime.h"
 #include "compat.h"
 #include "crash_writer.h"
 #include "dialogs.h"
-#include "export_fixstyle.h"
-#include "export_framerate.h"
 #include "format.h"
 #include "frame_main.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
-#include "libresrc/libresrc.h"
 #include "options.h"
-#include "perf_trace.h"
 #include "project.h"
 #include "subs_controller.h"
-#include "subtitles_provider_libass.h"
 #include "utils.h"
 #include "value_event.h"
-#include "version.h"
 #include "wx_ui_services.h"
 
 #include <libaegisub/dispatch.h>
 #include <libaegisub/format_path.h>
 #include <libaegisub/fs.h>
-#include <libaegisub/io.h>
 #include <libaegisub/log.h>
-#include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
 #include <libaegisub/util.h>
 
-#include <boost/interprocess/streams/bufferstream.hpp>
-#include <boost/locale.hpp>
-#include <locale>
 #include <vector>
 #include <wx/arrstr.h>
 #include <wx/clipbrd.h>
@@ -148,42 +137,6 @@ bool AegisubApp::OnInit() {
 	// be created now
 	(void)wxLog::GetActiveTarget();
 
-	{
-		// Try to get the UTF-8 version of the current locale
-		auto locale = boost::locale::generator().generate("");
-
-		// Check if we actually got a UTF-8 locale
-		using codecvt = std::codecvt<wchar_t, char, std::mbstate_t>;
-		int result = std::codecvt_base::error;
-		if (std::has_facet<codecvt>(locale)) {
-			wchar_t test[] = L"\xFFFE";
-			char buff[8];
-			auto mb = std::mbstate_t();
-			const wchar_t* from_next;
-			char* to_next;
-			result = std::use_facet<codecvt>(locale).out(mb,
-				test, std::end(test), from_next,
-				buff, std::end(buff), to_next);
-		}
-
-		// If we didn't get a UTF-8 locale, force it to a known one
-		if (result != std::codecvt_base::ok)
-			locale = boost::locale::generator().generate("en_US.UTF-8");
-		std::locale::global(locale);
-	}
-
-#if defined(__GNUC__) && (__GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 8))
-	// Pointless `this` capture required due to http://gcc.gnu.org/bugzilla/show_bug.cgi?id=51494
-	agi::dispatch::Init([this](agi::dispatch::Thunk f) {
-#else
-	agi::dispatch::Init([](agi::dispatch::Thunk f) {
-#endif
-		auto evt = new ValueEvent<agi::dispatch::Thunk>(EVT_CALL_THUNK, -1, std::move(f));
-		wxTheApp->QueueEvent(evt);
-	}, [] {
-		return wxIsMainThread();
-	});
-
 	wxTheApp->Bind(EVT_CALL_THUNK, [this](ValueEvent<agi::dispatch::Thunk>& evt) {
 		try {
 			evt.Get()();
@@ -193,113 +146,44 @@ bool AegisubApp::OnInit() {
 		}
 	});
 
-	config::path = new agi::Path;
-	crash_writer::Initialize(config::path->Decode("?user"));
-
-	agi::log::log = new agi::log::LogSink;
-#ifdef _DEBUG
-	agi::log::log->Subscribe(agi::make_unique<agi::log::EmitSTDOUT>());
+	runtime = std::make_unique<AppRuntime>();
+	std::string runtime_error;
+	if (!runtime->Initialize(
+		{
+			RuntimeShellMode::Gui,
+			RuntimeLocalePolicy::PickIfNeeded,
+			{
+#if defined(__GNUC__) && (__GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 8))
+				[this](agi::dispatch::Thunk f) {
+#else
+				[](agi::dispatch::Thunk f) {
 #endif
-
-	// Set config file
-	StartupLog("Load local configuration");
-#ifdef __WXMSW__
-	// Try loading configuration from the install dir if one exists there
-	try {
-		auto conf_local(config::path->Decode("?data/config.json"));
-		std::unique_ptr<std::istream> localConfig(agi::io::Open(conf_local));
-		config::opt = new agi::Options(conf_local, GET_DEFAULT_CONFIG(default_config));
-
-		// Local config, make ?user mean ?data so all user settings are placed in install dir
-		config::path->SetToken("?user", config::path->Decode("?data"));
-		config::path->SetToken("?local", config::path->Decode("?data"));
-		crash_writer::Initialize(config::path->Decode("?user"));
-	} catch (agi::fs::FileSystemError const&) {
-		// File doesn't exist or we can't read it
-		// Might be worth displaying an error in the second case
+					auto evt = new ValueEvent<agi::dispatch::Thunk>(EVT_CALL_THUNK, -1, std::move(f));
+					wxTheApp->QueueEvent(evt);
+				},
+				[] {
+					return wxIsMainThread();
+				},
+				{}
+			},
+			true,
+			true,
+			[](std::string const& title, std::string const& message) {
+				AppNotificationSink().ShowError(title, message);
+			}
+		},
+		runtime_error)) {
+		AppNotificationSink().ShowError("Fatal error while initializing", runtime_error);
+		return false;
 	}
-#endif
-
-	StartupLog("Create log writer");
-	perf_trace::Initialize(GetAegisubLongVersionString());
-	auto path_log = config::path->Decode("?user/log/");
-	agi::fs::CreateDirectory(path_log);
-	agi::log::log->Subscribe(agi::make_unique<agi::log::JsonEmitter>(path_log));
-	// Preserve recent log files so new helper/headless instances do not prune
-	// logs still referenced by another running GUI session.
-	CleanCache(path_log, "*.ndjson", 10, 100, 24 * 60 * 60);
-	CleanCache(path_log, "*.json", 10, 100, 24 * 60 * 60);
-
-	StartupLog("Load user configuration");
-	try {
-		if (!config::opt)
-			config::opt = new agi::Options(config::path->Decode("?user/config.json"), GET_DEFAULT_CONFIG(default_config));
-		boost::interprocess::ibufferstream stream((const char *)default_config_platform, sizeof(default_config_platform));
-		config::opt->ConfigNext(stream);
-	} catch (agi::Exception& e) {
-		LOG_E("config/init") << "Caught exception: " << e.GetMessage();
-	}
-
-	try {
-		config::opt->ConfigUser();
-	}
-	catch (agi::Exception const& err) {
-		AppNotificationSink().ShowError("Error",
-			agi::format("Configuration file is invalid. Error reported:\n%s", err.GetMessage()));
-	}
-
-#ifdef _WIN32
-	StartupLog("Load installer configuration");
-	if (OPT_GET("App/First Start")->GetBool()) {
-		try {
-			auto installer_config = agi::io::Open(config::path->Decode("?data/installer_config.json"));
-			config::opt->ConfigNext(*installer_config.get());
-		} catch (agi::fs::FileSystemError const&) {
-			// Not an error obviously as the user may not have used the installer
-		}
-	}
-#endif
-
-	// Init commands.
-	cmd::init_builtin_commands();
-
-	// Init hotkeys
-	hotkey::init();
-
-	StartupLog("Load MRU");
-	config::mru = new agi::MRUManager(config::path->Decode("?user/mru.json"), GET_DEFAULT_CONFIG(default_mru), config::opt);
-
-	agi::util::SetThreadName("AegiMain");
 
 	StartupLog("Inside OnInit");
 	try {
-		// Initialize randomizer
-		StartupLog("Initialize random generator");
-		srand(time(nullptr));
-
-		// locale for loading options
-		StartupLog("Set initial locale");
-		setlocale(LC_NUMERIC, "C");
-		setlocale(LC_CTYPE, "C");
-
 		// Crash handling
 #if (!defined(_DEBUG) || defined(WITH_EXCEPTIONS)) && (wxUSE_ON_FATAL_EXCEPTION+0)
 		StartupLog("Install exception handler");
 		wxHandleFatalExceptions(true);
 #endif
-
-		StartupLog("Store options back");
-		OPT_SET("Version/Last Version")->SetInt(GetSVNRevision());
-
-		StartupLog("Initialize final locale");
-
-		// Set locale
-		auto lang = OPT_GET("App/Language")->GetString();
-		if (lang.empty() || (lang != "en_US" && !locale.HasLanguage(lang))) {
-			lang = locale.PickLanguage();
-			OPT_SET("App/Language")->SetString(lang);
-		}
-		locale.Init(lang);
 
 #ifdef __APPLE__
 		// When run from an app bundle, LC_CTYPE defaults to "C", which breaks on
@@ -310,22 +194,6 @@ bool AegisubApp::OnInit() {
 #endif
 
 		exception_message = _("Oops, Aegisub has crashed!\n\nAn attempt has been made to save a copy of your file to:\n\n%s\n\nAegisub will now close.");
-
-		// Load plugins
-		Automation4::ScriptFactory::Register(agi::make_unique<Automation4::LuaScriptFactory>());
-		libass::CacheFonts();
-
-		// Load Automation scripts
-		StartupLog("Load global Automation scripts");
-		config::global_scripts = new Automation4::AutoloadScriptManager(OPT_GET("Path/Automation/Autoload")->GetString());
-
-		// Load export filters
-		StartupLog("Register export filters");
-		AssExportFilterChain::Register(agi::make_unique<AssFixStylesFilter>());
-		AssExportFilterChain::Register(agi::make_unique<AssTransformFramerateFilter>());
-
-		StartupLog("Install PNG handler");
-		wxImage::AddHandler(new wxPNGHandler);
 
 		// Open main frame
 		StartupLog("Create main window");
@@ -396,20 +264,7 @@ int AegisubApp::OnExit() {
 		wxTheClipboard->Close();
 	}
 
-	delete config::opt;
-	delete config::mru;
-	hotkey::clear();
-	cmd::clear();
-
-	delete config::global_scripts;
-
-	AssExportFilterChain::Clear();
-
-	perf_trace::Shutdown();
-
-	// Keep this last!
-	delete agi::log::log;
-	crash_writer::Cleanup();
+	runtime.reset();
 
 	return wxApp::OnExit();
 }

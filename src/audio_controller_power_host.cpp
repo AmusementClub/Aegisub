@@ -15,6 +15,8 @@
 
 #include "audio_controller_power_host.h"
 
+#include "app_runtime.h"
+
 #include <wx/app.h>
 #include <wx/power.h>
 
@@ -70,7 +72,7 @@ std::unique_ptr<AudioControllerPowerHost> CreateAudioControllerPowerHost(
 	std::function<void()> on_suspend,
 	std::function<void()> on_resume) {
 #ifdef wxHAS_POWER_EVENTS
-	if (wxTheApp) {
+	if (IsGuiRuntimeShell() && wxTheApp) {
 		return std::make_unique<WxAudioControllerPowerHost>(
 			wxTheApp,
 			std::move(on_suspend),

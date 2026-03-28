@@ -1,3 +1,5 @@
+#pragma once
+
 // Copyright (c) 2005, Rodrigo Braz Monteiro
 // All rights reserved.
 //

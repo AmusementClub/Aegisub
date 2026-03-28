@@ -182,8 +182,25 @@ bool AegisubApp::OnInit() {
 		}
 	});
 
-	config::path = new agi::Path;
-	crash_writer::Initialize(config::path->Decode("?user"));
+	try {
+		auto path = agi::make_unique<agi::Path>();
+		crash_writer::Initialize(path->Decode("?user"));
+		config::path = path.release();
+	}
+	catch (agi::Exception const& e) {
+		AppNotificationSink().ShowError("Fatal error while initializing", e.GetMessage());
+		return false;
+	}
+	catch (std::exception const& e) {
+		AppNotificationSink().ShowError("Fatal error while initializing", e.what());
+		return false;
+	}
+#ifndef _DEBUG
+	catch (...) {
+		AppNotificationSink().ShowError("Fatal error while initializing", "Unhandled exception");
+		return false;
+	}
+#endif
 
 	agi::log::log = new agi::log::LogSink;
 #ifdef _DEBUG

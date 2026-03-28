@@ -35,7 +35,7 @@
 extern EXCEPTION_POINTERS *wxGlobalSEInformation;
 
 namespace {
-wchar_t crash_dump_path[MAX_PATH];
+std::wstring crash_dump_path;
 agi::fs::path crashlog_path;
 
 using MiniDumpWriteDump = BOOL(WINAPI *)(
@@ -82,7 +82,7 @@ struct dump_thread_state {
 	}
 
 	void write_dump(MiniDumpWriteDump fn, EXCEPTION_POINTERS *exception_pointers, DWORD crash_thread_id) {
-		auto file = CreateFile(crash_dump_path,
+		auto file = CreateFileW(crash_dump_path.c_str(),
 			GENERIC_WRITE,
 			0,  // no sharing
 			nullptr,
@@ -112,17 +112,17 @@ void Initialize(agi::fs::path const& path) {
 	auto dump_path = path / "crashdumps";
 	agi::fs::CreateDirectory(dump_path);
 
-	const auto path_str = (dump_path / GetVersionNumber()).wstring();
-	wcscpy_s(crash_dump_path, path_str.c_str());
-	auto len = path_str.size();
+	crash_dump_path = (dump_path / GetVersionNumber()).wstring();
 
 	const auto t = time(nullptr);
 	struct tm tm;
 	localtime_s(&tm, &t);
 
-	len += wcsftime(crash_dump_path + len, MAX_PATH - len, L"-%Y-%m-%d-%H-%M-%S-", &tm);
-	len += swprintf_s(crash_dump_path + len, MAX_PATH - len, L"%d", GetCurrentProcessId());
-	wcscpy_s(crash_dump_path + len, MAX_PATH - len, L".dmp");
+	wchar_t timestamp[32] = {0};
+	if (wcsftime(timestamp, sizeof(timestamp) / sizeof(timestamp[0]), L"-%Y-%m-%d-%H-%M-%S-", &tm))
+		crash_dump_path += timestamp;
+	crash_dump_path += std::to_wstring(GetCurrentProcessId());
+	crash_dump_path += L".dmp";
 
 	if (!dump_thread)
 		dump_thread = agi::make_unique<dump_thread_state>();

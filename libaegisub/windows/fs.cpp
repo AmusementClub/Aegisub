@@ -33,6 +33,18 @@ using agi::charset::ConvertLocal;
 
 namespace agi { namespace fs {
 namespace {
+std::string ShortNameFallback(path const& p) {
+	try {
+		return ConvertLocal(p.native());
+	}
+	catch (agi::Exception const&) {
+		return PathToString(p);
+	}
+	catch (std::exception const&) {
+		return PathToString(p);
+	}
+}
+
 std::wstring TrimQueryPath(path const& p) {
 	auto native = p.native();
 	auto const root_len = p.root_path().native().size();
@@ -83,9 +95,15 @@ bool TryGetFileInfo(path const& p, FileInfo& out, std::error_code& ec) {
 
 std::string ShortName(path const& p) {
 	std::wstring out(MAX_PATH + 1, 0);
-	DWORD len = GetShortPathName(p.c_str(), &out[0], out.size());
+	DWORD len = GetShortPathNameW(p.c_str(), &out[0], static_cast<DWORD>(out.size()));
 	if (!len)
-		return p.string();
+		return ShortNameFallback(p);
+	while (len >= out.size()) {
+		out.resize(len + 1, 0);
+		len = GetShortPathNameW(p.c_str(), &out[0], static_cast<DWORD>(out.size()));
+		if (!len)
+			return ShortNameFallback(p);
+	}
 	out.resize(len);
 	return ConvertLocal(out);
 }

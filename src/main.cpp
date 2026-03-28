@@ -46,9 +46,6 @@
 #include "export_framerate.h"
 #include "format.h"
 #include "frame_main.h"
-#include "headless_cli.h"
-#include "headless_playback_probe.h"
-#include "playback_probe_service.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
@@ -73,7 +70,6 @@
 
 #include <boost/interprocess/streams/bufferstream.hpp>
 #include <boost/locale.hpp>
-#include <iostream>
 #include <locale>
 #include <vector>
 #include <wx/arrstr.h>
@@ -90,7 +86,7 @@ namespace config {
 	Automation4::AutoloadScriptManager *global_scripts;
 }
 
-wxIMPLEMENT_APP(AegisubApp);
+wxIMPLEMENT_APP_NO_MAIN(AegisubApp);
 
 static const char *LastStartupState = nullptr;
 
@@ -331,124 +327,6 @@ bool AegisubApp::OnInit() {
 		StartupLog("Install PNG handler");
 		wxImage::AddHandler(new wxPNGHandler);
 
-		auto cli_parse = headless_cli::ParseCommandLine(ToUtf8Args(argv.GetArguments()));
-		if (cli_parse.requested) {
-			headless_cli_mode = true;
-			if (!cli_parse.command) {
-				headless_cli_exit_code = 64;
-				std::cerr << cli_parse.error << std::endl;
-				CallAfter([this] { ExitMainLoop(); });
-				return true;
-			}
-
-			if (auto *probe = std::get_if<headless_cli::ProbePlaybackCommand>(&*cli_parse.command)) {
-				auto probe_request = probe->request;
-				CallAfter([this, probe_request = std::move(probe_request)]() mutable {
-					aegisub::playback_probe_service::RunAsync(std::move(probe_request), [this](headless_playback_probe::PlaybackProbeResult result) {
-						headless_cli_exit_code = result.exit_code;
-						ExitMainLoop();
-					});
-				});
-				return true;
-			}
-
-			if (auto *session = std::get_if<headless_cli::SessionPlaybackCommand>(&*cli_parse.command)) {
-				auto session_request = session->request;
-				CallAfter([this, session_request = std::move(session_request)]() mutable {
-					headless_cli::RunSessionPlaybackAsync(std::move(session_request), [this](headless_cli::PlaybackSessionResult result) {
-						headless_cli_exit_code = result.exit_code;
-						ExitMainLoop();
-					});
-				});
-				return true;
-			}
-
-			if (auto *inspect = std::get_if<headless_cli::InspectTraceCommand>(&*cli_parse.command)) {
-				auto inspect_result = headless_cli::RunInspectTrace(inspect->request);
-				headless_cli_exit_code = inspect_result.exit_code;
-				if (!inspect_result.output.empty())
-					std::cout << inspect_result.output;
-				if (!inspect_result.error.empty())
-					std::cerr << inspect_result.error << std::endl;
-				CallAfter([this] { ExitMainLoop(); });
-				return true;
-			}
-
-			if (auto *inspect = std::get_if<headless_cli::InspectMediaCommand>(&*cli_parse.command)) {
-				auto inspect_result = headless_cli::RunInspectMedia(inspect->request);
-				headless_cli_exit_code = inspect_result.exit_code;
-				std::cout << headless_cli::BuildMediaInspectJson(inspect_result);
-				if (inspect_result.exit_code != 0 && !inspect_result.message.empty())
-					std::cerr << inspect_result.message << std::endl;
-				CallAfter([this] { ExitMainLoop(); });
-				return true;
-			}
-
-			if (auto *inspect = std::get_if<headless_cli::InspectAssInfoCommand>(&*cli_parse.command)) {
-				auto inspect_result = headless_cli::RunInspectAssInfo(inspect->request);
-				headless_cli_exit_code = inspect_result.snapshot ? 0 : 2;
-				std::cout << headless_cli::BuildAssInfoJson(inspect_result);
-				if (!inspect_result.snapshot && !inspect_result.error.empty())
-					std::cerr << inspect_result.error << std::endl;
-				CallAfter([this] { ExitMainLoop(); });
-				return true;
-			}
-
-			if (auto *batch = std::get_if<headless_cli::BatchPlaybackProbeCommand>(&*cli_parse.command)) {
-				auto batch_request = batch->request;
-				CallAfter([this, batch_request = std::move(batch_request)]() mutable {
-					headless_cli::RunBatchPlaybackProbeAsync(std::move(batch_request), [this](headless_cli::BatchPlaybackProbeResult result) {
-						headless_cli_exit_code = result.exit_code;
-						ExitMainLoop();
-					});
-				});
-				return true;
-			}
-
-			if (auto *batch = std::get_if<headless_cli::BatchTraceSummarizeCommand>(&*cli_parse.command)) {
-				auto batch_result = headless_cli::RunBatchTraceSummarize(batch->request);
-				headless_cli_exit_code = batch_result.exit_code;
-				if (!batch_result.message.empty())
-					std::cout << batch_result.message << std::endl;
-				CallAfter([this] { ExitMainLoop(); });
-				return true;
-			}
-
-			if (auto *batch = std::get_if<headless_cli::BatchAssInfoCommand>(&*cli_parse.command)) {
-				auto batch_result = headless_cli::RunBatchAssInfo(batch->request);
-				headless_cli_exit_code = batch_result.exit_code;
-				if (!batch_result.message.empty())
-					std::cout << batch_result.message << std::endl;
-				CallAfter([this] { ExitMainLoop(); });
-				return true;
-			}
-
-			headless_cli_exit_code = 64;
-			std::cerr << "unhandled CLI command" << std::endl;
-			CallAfter([this] { ExitMainLoop(); });
-			return true;
-		}
-
-		auto probe_parse = headless_playback_probe::ParseCommandLine(ToUtf8Args(argv.GetArguments()));
-		if (probe_parse.requested) {
-			headless_cli_mode = true;
-			if (!probe_parse.request) {
-				headless_cli_exit_code = 64;
-				std::cerr << probe_parse.error << std::endl;
-				CallAfter([this] { ExitMainLoop(); });
-				return true;
-			}
-
-			auto probe_request = *probe_parse.request;
-			CallAfter([this, probe_request = std::move(probe_request)]() mutable {
-				aegisub::playback_probe_service::RunAsync(std::move(probe_request), [this](headless_playback_probe::PlaybackProbeResult result) {
-					headless_cli_exit_code = result.exit_code;
-					ExitMainLoop();
-				});
-			});
-			return true;
-		}
-
 		// Open main frame
 		StartupLog("Create main window");
 		NewProjectContext();
@@ -627,10 +505,7 @@ int AegisubApp::OnRun() {
 	std::string error;
 
 	try {
-		auto exit_code = MainLoop();
-		if (headless_cli_mode)
-			return headless_cli_exit_code;
-		return exit_code;
+		return MainLoop();
 	}
 	catch (const std::exception &e) { error = std::string("std::exception: ") + e.what(); }
 	catch (const agi::Exception &e) { error = "agi::exception: " + e.GetMessage(); }

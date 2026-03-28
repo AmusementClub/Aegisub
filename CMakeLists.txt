@@ -461,6 +461,7 @@ add_executable(Aegisub WIN32
     src/ass_style_storage.cpp
     src/async_video_provider.cpp
     src/async_video_provider_host.cpp
+    src/app_entry.cpp
     src/audio_box.cpp
     src/audio_colorscheme.cpp
     src/audio_controller.cpp
@@ -507,6 +508,7 @@ add_executable(Aegisub WIN32
     src/grid_column.cpp
     src/headless_cli.cpp
     src/headless_playback_probe.cpp
+    src/headless_runtime_bootstrap.cpp
     src/headless_playback_session_host.cpp
     src/help_button.cpp
     src/hotkey.cpp

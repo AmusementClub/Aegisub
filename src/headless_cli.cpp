@@ -23,8 +23,6 @@
 #include <libaegisub/fs.h>
 #include <libaegisub/exception.h>
 
-#include <wx/app.h>
-
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>

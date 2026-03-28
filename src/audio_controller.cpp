@@ -29,6 +29,7 @@
 
 #include "audio_controller.h"
 
+#include "audio_controller_power_host.h"
 #include "audio_controller_timer_host.h"
 #include "audio_timing.h"
 #include "include/aegisub/audio_player.h"
@@ -52,13 +53,11 @@ constexpr int kAudioUiTimerRequestedMs = 20;
 AudioController::AudioController(agi::Context *context)
 : context(context)
 , playback_timer(CreateAudioControllerTimerHost([this] { OnPlaybackTimer(); }))
+, power_host(CreateAudioControllerPowerHost(
+	[this] { HandleComputerSuspending(); },
+	[this] { HandleComputerResuming(); }))
 , provider_connection(context->GetCore().project->AddAudioProviderListener(&AudioController::OnAudioProvider, this))
 {
-#ifdef wxHAS_POWER_EVENTS
-	Bind(wxEVT_POWER_SUSPENDED, &AudioController::OnComputerSuspending, this);
-	Bind(wxEVT_POWER_RESUME, &AudioController::OnComputerResuming, this);
-#endif
-
 	OPT_SUB("Audio/Player", &AudioController::OnAudioPlayerChanged, this);
 }
 
@@ -93,18 +92,16 @@ void AudioController::OnPlaybackTimer()
 	}
 }
 
-#ifdef wxHAS_POWER_EVENTS
-void AudioController::OnComputerSuspending(wxPowerEvent &)
+void AudioController::HandleComputerSuspending()
 {
 	Stop();
 	player.reset();
 }
 
-void AudioController::OnComputerResuming(wxPowerEvent &)
+void AudioController::HandleComputerResuming()
 {
 	OnAudioPlayerChanged();
 }
-#endif
 
 void AudioController::OnAudioPlayerChanged()
 {

@@ -35,6 +35,7 @@
 #include <chrono>
 #include <memory>
 #include <set>
+#include <string>
 
 #include "ui_dispatch.h"
 
@@ -42,9 +43,8 @@
 
 class AssDialogue;
 class AsyncVideoProvider;
+class VideoControllerErrorHost;
 class VideoControllerTimerHost;
-struct SubtitlesProviderErrorEvent;
-struct VideoProviderErrorEvent;
 
 namespace agi {
 	struct Context;
@@ -81,6 +81,7 @@ class VideoController final : public wxEvtHandler {
 	/// Playback timer used to periodically check if we should go to the next
 	/// frame while playing video
 	std::unique_ptr<VideoControllerTimerHost> playback_timer;
+	std::unique_ptr<VideoControllerErrorHost> error_host;
 
 	/// Time when playback was last started
 	std::chrono::steady_clock::time_point playback_start_time;
@@ -116,8 +117,8 @@ class VideoController final : public wxEvtHandler {
 
 	void OnPlayTimer();
 
-	void OnVideoError(VideoProviderErrorEvent const& err);
-	void OnSubtitlesError(SubtitlesProviderErrorEvent const& err);
+	void HandleVideoError(std::string const& message);
+	void HandleSubtitlesError(std::string const& message);
 
 	void OnSubtitlesCommit(int type, const AssDialogue *changed);
 	void OnNewVideoProvider(AsyncVideoProvider *provider);

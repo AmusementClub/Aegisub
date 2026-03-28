@@ -42,6 +42,7 @@
 #include "time_range.h"
 #include "async_video_provider.h"
 #include "utils.h"
+#include "video_controller_error_host.h"
 #include "video_controller_timer_host.h"
 
 #include <libaegisub/ass/time.h>
@@ -51,6 +52,10 @@
 VideoController::VideoController(agi::Context *c)
 : context(c)
 , playback_timer(CreateVideoControllerTimerHost([this] { OnPlayTimer(); }))
+, error_host(CreateVideoControllerErrorHost(
+	this,
+	[this](std::string const& message) { HandleVideoError(message); },
+	[this](std::string const& message) { HandleSubtitlesError(message); }))
 , playAudioOnStep(OPT_GET("Audio/Plays When Stepping Video"))
 {
 	auto core = context->GetCore();
@@ -58,8 +63,6 @@ VideoController::VideoController(agi::Context *c)
 		core.ass->AddCommitListener(&VideoController::OnSubtitlesCommit, this),
 		core.project->AddVideoProviderListener(&VideoController::OnNewVideoProvider, this),
 		core.selectionController->AddActiveLineListener(&VideoController::OnActiveLineChanged, this));
-	Bind(EVT_VIDEO_ERROR, &VideoController::OnVideoError, this);
-	Bind(EVT_SUBTITLES_ERROR, &VideoController::OnSubtitlesError, this);
 }
 
 VideoController::~VideoController() {
@@ -324,15 +327,15 @@ int VideoController::FrameAtTime(int time, agi::vfr::Time type) const {
 	return core.project->Timecodes().FrameAtTime(time, type);
 }
 
-void VideoController::OnVideoError(VideoProviderErrorEvent const& err) {
+void VideoController::HandleVideoError(std::string const& message) {
 	wxLogError(
 		wxS("Failed seeking video. The video file may be corrupt or incomplete.\n"
 		    "Error message reported: %s"),
-		to_wx(err.GetMessage()));
+		to_wx(message));
 }
 
-void VideoController::OnSubtitlesError(SubtitlesProviderErrorEvent const& err) {
+void VideoController::HandleSubtitlesError(std::string const& message) {
 	wxLogError(
 		wxS("Failed rendering subtitles. Error message reported: %s"),
-		to_wx(err.GetMessage()));
+		to_wx(message));
 }

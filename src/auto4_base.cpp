@@ -40,6 +40,7 @@
 #include "string_codec.h"
 #include "subs_controller.h"
 #include "ui_dispatch.h"
+#include "ui_services.h"
 
 #include <libaegisub/format.h>
 #include <libaegisub/fs.h>
@@ -52,7 +53,6 @@
 #include <future>
 
 #include <wx/dcmemory.h>
-#include <wx/filedlg.h>
 #include <wx/log.h>
 #include <wx/sizer.h>
 
@@ -243,58 +243,17 @@ namespace Automation4 {
 
 	std::vector<agi::fs::path> ProgressSink::RequestOpenFiles(AutomationOpenFileDialogRequest const& request)
 	{
-		return agi::ui::MainInvoke([request] {
-			int flags = wxFD_OPEN;
-			if (request.multiple)
-				flags |= wxFD_MULTIPLE;
-			if (request.must_exist)
-				flags |= wxFD_FILE_MUST_EXIST;
-
-			wxFileDialog dialog(
-				nullptr,
-				to_wx(request.message),
-				to_wx(request.dir),
-				to_wx(request.file),
-				to_wx(request.wildcard),
-				flags);
-			if (dialog.ShowModal() == wxID_CANCEL)
-				return std::vector<agi::fs::path>();
-
-			wxArrayString files;
-			dialog.GetPaths(files);
-
-			std::vector<agi::fs::path> paths;
-			paths.reserve(files.size());
-			for (auto const& file : files)
-				paths.emplace_back(file.ToStdWstring());
-			return paths;
-		});
+		return bsr->RequestOpenFiles(request);
 	}
 
 	agi::fs::path ProgressSink::RequestSaveFile(AutomationSaveFileDialogRequest const& request)
 	{
-		auto *parent = GetParentWindow();
-		return agi::ui::MainInvoke([parent, request] {
-			int flags = wxFD_SAVE;
-			if (request.prompt_overwrite)
-				flags |= wxFD_OVERWRITE_PROMPT;
-
-			wxFileDialog dialog(
-				parent,
-				to_wx(request.message),
-				to_wx(request.dir),
-				to_wx(request.file),
-				to_wx(request.wildcard),
-				flags);
-			if (dialog.ShowModal() == wxID_CANCEL)
-				return agi::fs::path();
-
-			return agi::fs::path(dialog.GetPath().ToStdWstring());
-		});
+		return bsr->RequestSaveFile(request);
 	}
 
-	BackgroundScriptRunner::BackgroundScriptRunner(wxWindow *parent, std::string const& title)
+	BackgroundScriptRunner::BackgroundScriptRunner(wxWindow *parent, std::string const& title, std::shared_ptr<agi::FileDialogService> file_dialog_service)
 	: impl(new DialogProgress(parent, to_wx(title)))
+	, file_dialog_service(std::move(file_dialog_service))
 	{
 	}
 
@@ -318,6 +277,53 @@ namespace Automation4 {
 	std::string BackgroundScriptRunner::GetTitle() const
 	{
 		return from_wx(impl->GetTitle());
+	}
+
+	std::vector<agi::fs::path> BackgroundScriptRunner::RequestOpenFiles(AutomationOpenFileDialogRequest const& request) const
+	{
+		if (!file_dialog_service)
+			return {};
+
+		if (request.multiple) {
+			return file_dialog_service->RequestOpenFiles({
+				request.message,
+				"",
+				request.file,
+				"",
+				request.wildcard,
+				request.dir,
+				request.must_exist
+			});
+		}
+
+		auto path = file_dialog_service->RequestOpenFile({
+			request.message,
+			"",
+			request.file,
+			"",
+			request.wildcard,
+			request.dir,
+			request.must_exist
+		});
+		if (path.empty())
+			return {};
+		return {std::move(path)};
+	}
+
+	agi::fs::path BackgroundScriptRunner::RequestSaveFile(AutomationSaveFileDialogRequest const& request) const
+	{
+		if (!file_dialog_service)
+			return {};
+
+		return file_dialog_service->RequestSaveFile({
+			request.message,
+			"",
+			request.file,
+			"",
+			request.wildcard,
+			request.dir,
+			request.prompt_overwrite
+		});
 	}
 
 	// Script

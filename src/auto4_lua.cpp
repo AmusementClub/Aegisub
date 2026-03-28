@@ -52,6 +52,7 @@
 #include "selection_controller.h"
 #include "subs_controller.h"
 #include "video_controller.h"
+#include "wx_ui_services.h"
 #include "utils.h"
 
 #include <libaegisub/dispatch.h>
@@ -1016,7 +1017,7 @@ namespace {
 		assert(lua_istable(L, -1));
 		stackcheck.check_stack(3);
 
-		BackgroundScriptRunner runner(export_dialog, GetName());
+		BackgroundScriptRunner runner(export_dialog, GetName(), agi::MakeWindowFileDialogService(export_dialog));
 		try {
 			LuaThreadedCall(L, 2, 0, runner, false);
 			stackcheck.check_stack(0);

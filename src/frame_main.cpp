@@ -269,7 +269,8 @@ public:
 				request.default_filename,
 				request.default_extension,
 				request.wildcard,
-				frame);
+				frame,
+				request.must_exist);
 		});
 	}
 
@@ -284,7 +285,8 @@ public:
 				request.default_filename,
 				request.default_extension,
 				request.wildcard,
-				frame);
+				frame,
+				request.must_exist);
 		});
 	}
 
@@ -299,7 +301,8 @@ public:
 				request.default_filename,
 				request.default_extension,
 				request.wildcard,
-				frame);
+				frame,
+				request.prompt_overwrite);
 		});
 	}
 
@@ -435,7 +438,10 @@ public:
 		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, title] {
 			if (!lifetime.lock())
 				return std::unique_ptr<Automation4::BackgroundScriptRunner>();
-			return agi::make_unique<Automation4::BackgroundScriptRunner>(frame, title);
+			return agi::make_unique<Automation4::BackgroundScriptRunner>(
+				frame,
+				title,
+				std::make_shared<FrameMainFileDialogService>(frame, lifetime));
 		});
 	}
 };

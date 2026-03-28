@@ -180,7 +180,8 @@ public:
 				request.default_filename,
 				request.default_extension,
 				request.wildcard,
-				parent);
+				parent,
+				request.must_exist);
 		});
 	}
 
@@ -193,7 +194,8 @@ public:
 				request.default_filename,
 				request.default_extension,
 				request.wildcard,
-				parent);
+				parent,
+				request.must_exist);
 		});
 	}
 
@@ -206,7 +208,8 @@ public:
 				request.default_filename,
 				request.default_extension,
 				request.wildcard,
-				parent);
+				parent,
+				request.prompt_overwrite);
 		});
 	}
 

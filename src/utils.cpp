@@ -337,27 +337,60 @@ static std::vector<agi::fs::path> FilesSelector(wxString const& message, std::st
 }
 
 agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
-	return FileSelector(message, option_name, "", default_filename, default_extension, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST, parent);
+	return OpenFileSelector(message, option_name, "", default_filename, default_extension, wildcard, parent, true);
 }
 
 std::vector<agi::fs::path> OpenFilesSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
-	return FilesSelector(message, option_name, "", default_filename, default_extension, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE, parent);
+	return OpenFilesSelector(message, option_name, "", default_filename, default_extension, wildcard, parent, true);
 }
 
 agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
-	return FileSelector(message, option_name, "", default_filename, default_extension, wildcard, wxFD_SAVE | wxFD_OVERWRITE_PROMPT, parent);
+	return SaveFileSelector(message, option_name, "", default_filename, default_extension, wildcard, parent, true);
+}
+
+agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool must_exist) {
+	return OpenFileSelector(message, option_name, "", default_filename, default_extension, wildcard, parent, must_exist);
+}
+
+std::vector<agi::fs::path> OpenFilesSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool must_exist) {
+	return OpenFilesSelector(message, option_name, "", default_filename, default_extension, wildcard, parent, must_exist);
+}
+
+agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool prompt_overwrite) {
+	return SaveFileSelector(message, option_name, "", default_filename, default_extension, wildcard, parent, prompt_overwrite);
 }
 
 agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
-	return FileSelector(message, option_name, default_path, default_filename, default_extension, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST, parent);
+	return OpenFileSelector(message, option_name, default_path, default_filename, default_extension, wildcard, parent, true);
 }
 
 std::vector<agi::fs::path> OpenFilesSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
-	return FilesSelector(message, option_name, default_path, default_filename, default_extension, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST | wxFD_MULTIPLE, parent);
+	return OpenFilesSelector(message, option_name, default_path, default_filename, default_extension, wildcard, parent, true);
 }
 
 agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
-	return FileSelector(message, option_name, default_path, default_filename, default_extension, wildcard, wxFD_SAVE | wxFD_OVERWRITE_PROMPT, parent);
+	return SaveFileSelector(message, option_name, default_path, default_filename, default_extension, wildcard, parent, true);
+}
+
+agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool must_exist) {
+	int flags = wxFD_OPEN;
+	if (must_exist)
+		flags |= wxFD_FILE_MUST_EXIST;
+	return FileSelector(message, option_name, default_path, default_filename, default_extension, wildcard, flags, parent);
+}
+
+std::vector<agi::fs::path> OpenFilesSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool must_exist) {
+	int flags = wxFD_OPEN | wxFD_MULTIPLE;
+	if (must_exist)
+		flags |= wxFD_FILE_MUST_EXIST;
+	return FilesSelector(message, option_name, default_path, default_filename, default_extension, wildcard, flags, parent);
+}
+
+agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool prompt_overwrite) {
+	int flags = wxFD_SAVE;
+	if (prompt_overwrite)
+		flags |= wxFD_OVERWRITE_PROMPT;
+	return FileSelector(message, option_name, default_path, default_filename, default_extension, wildcard, flags, parent);
 }
 
 agi::fs::path SelectDirectorySelector(wxString const& message, std::string const& default_path, wxWindow *parent) {

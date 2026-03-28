@@ -114,6 +114,7 @@ struct OpenFileDialogRequest {
 	std::string default_extension;
 	std::string wildcard;
 	std::string default_path;
+	bool must_exist = true;
 };
 
 struct OpenFilesDialogRequest {
@@ -123,6 +124,7 @@ struct OpenFilesDialogRequest {
 	std::string default_extension;
 	std::string wildcard;
 	std::string default_path;
+	bool must_exist = true;
 };
 
 struct SaveFileDialogRequest {
@@ -132,6 +134,7 @@ struct SaveFileDialogRequest {
 	std::string default_extension;
 	std::string wildcard;
 	std::string default_path;
+	bool prompt_overwrite = true;
 };
 
 struct SelectDirectoryDialogRequest {

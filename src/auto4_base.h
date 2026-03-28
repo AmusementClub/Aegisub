@@ -52,6 +52,7 @@ class wxWindow;
 class wxDialog;
 
 namespace agi { struct Context; }
+namespace agi { class FileDialogService; }
 namespace cmd { class Command; }
 
 namespace Automation4 {
@@ -122,14 +123,17 @@ namespace Automation4 {
 
 	class BackgroundScriptRunner {
 		std::unique_ptr<DialogProgress> impl;
+		std::shared_ptr<agi::FileDialogService> file_dialog_service;
 
 	public:
 		wxWindow *GetParentWindow() const;
 		std::string GetTitle() const;
+		std::vector<agi::fs::path> RequestOpenFiles(AutomationOpenFileDialogRequest const& request) const;
+		agi::fs::path RequestSaveFile(AutomationSaveFileDialogRequest const& request) const;
 
 		void Run(std::function<void(ProgressSink*)> task);
 
-		BackgroundScriptRunner(wxWindow *parent, std::string const& title);
+		BackgroundScriptRunner(wxWindow *parent, std::string const& title, std::shared_ptr<agi::FileDialogService> file_dialog_service = {});
 		~BackgroundScriptRunner();
 	};
 

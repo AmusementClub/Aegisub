@@ -8,7 +8,7 @@
 #include <string>
 
 namespace agi {
-	struct Context;
+	struct ContextCoreSession;
 }
 
 namespace aegisub::project_open_service {
@@ -26,6 +26,6 @@ struct ProjectOpenResult {
 	std::string error;
 };
 
-ProjectOpenResult Open(agi::Context& context, PlaybackOpenOptions const& options);
+ProjectOpenResult Open(agi::ContextCoreSession const& core, PlaybackOpenOptions const& options);
 
 }

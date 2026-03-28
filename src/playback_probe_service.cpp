@@ -23,7 +23,6 @@
 #include "audio_provider_factory.h"
 #include "include/aegisub/audio_player.h"
 #include "include/aegisub/context.h"
-#include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "perf_trace.h"
@@ -410,7 +409,7 @@ public:
 		if (!request.skip_audio)
 			ClearLastAudioProviderSelectionReport();
 
-		auto open_result = project_open_service::Open(*context, {
+		auto open_result = project_open_service::Open(core, {
 			request.video_path,
 			request.skip_audio ? std::optional<agi::fs::path>{} : std::make_optional(request.audio_path),
 			request.skip_audio

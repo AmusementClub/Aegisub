@@ -6,6 +6,7 @@
 #include <string>
 
 namespace agi {
+	struct ContextCoreSession;
 	struct ConstContextCoreSession;
 }
 
@@ -41,7 +42,9 @@ struct ProjectMediaSnapshot {
 	std::string audio_provider_name;
 };
 
+PlaybackStateSnapshot QueryPlaybackState(agi::ContextCoreSession const& core);
 PlaybackStateSnapshot QueryPlaybackState(agi::ConstContextCoreSession const& core);
+ProjectMediaSnapshot QueryProjectMedia(agi::ContextCoreSession const& core);
 ProjectMediaSnapshot QueryProjectMedia(agi::ConstContextCoreSession const& core);
 
 }

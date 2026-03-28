@@ -18,7 +18,6 @@
 #include "async_video_provider.h"
 #include "audio_controller.h"
 #include "include/aegisub/context.h"
-#include "include/aegisub/context_ui.h"
 #include "project.h"
 #include "time_range.h"
 #include "video_controller.h"
@@ -26,8 +25,10 @@
 #include <libaegisub/audio/provider.h>
 
 namespace aegisub::playback_query_service {
+namespace {
 
-PlaybackStateSnapshot QueryPlaybackState(agi::ConstContextCoreSession const& core) {
+template<typename CoreSession>
+PlaybackStateSnapshot QueryPlaybackStateImpl(CoreSession const& core) {
 	PlaybackStateSnapshot snapshot;
 	if (!core.project || !core.videoController || !core.audioController)
 		return snapshot;
@@ -47,7 +48,8 @@ PlaybackStateSnapshot QueryPlaybackState(agi::ConstContextCoreSession const& cor
 	return snapshot;
 }
 
-ProjectMediaSnapshot QueryProjectMedia(agi::ConstContextCoreSession const& core) {
+template<typename CoreSession>
+ProjectMediaSnapshot QueryProjectMediaImpl(CoreSession const& core) {
 	ProjectMediaSnapshot snapshot;
 	if (!core.project)
 		return snapshot;
@@ -76,6 +78,24 @@ ProjectMediaSnapshot QueryProjectMedia(agi::ConstContextCoreSession const& core)
 	}
 
 	return snapshot;
+}
+
+}
+
+PlaybackStateSnapshot QueryPlaybackState(agi::ContextCoreSession const& core) {
+	return QueryPlaybackStateImpl(core);
+}
+
+PlaybackStateSnapshot QueryPlaybackState(agi::ConstContextCoreSession const& core) {
+	return QueryPlaybackStateImpl(core);
+}
+
+ProjectMediaSnapshot QueryProjectMedia(agi::ContextCoreSession const& core) {
+	return QueryProjectMediaImpl(core);
+}
+
+ProjectMediaSnapshot QueryProjectMedia(agi::ConstContextCoreSession const& core) {
+	return QueryProjectMediaImpl(core);
 }
 
 }

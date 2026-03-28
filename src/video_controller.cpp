@@ -42,6 +42,7 @@
 #include "time_range.h"
 #include "async_video_provider.h"
 #include "utils.h"
+#include "video_controller_timer_host.h"
 
 #include <libaegisub/ass/time.h>
 
@@ -49,6 +50,7 @@
 
 VideoController::VideoController(agi::Context *c)
 : context(c)
+, playback_timer(CreateVideoControllerTimerHost([this] { OnPlayTimer(); }))
 , playAudioOnStep(OPT_GET("Audio/Plays When Stepping Video"))
 {
 	auto core = context->GetCore();
@@ -58,7 +60,6 @@ VideoController::VideoController(agi::Context *c)
 		core.selectionController->AddActiveLineListener(&VideoController::OnActiveLineChanged, this));
 	Bind(EVT_VIDEO_ERROR, &VideoController::OnVideoError, this);
 	Bind(EVT_SUBTITLES_ERROR, &VideoController::OnSubtitlesError, this);
-	playback.Bind(wxEVT_TIMER, &VideoController::OnPlayTimer, this);
 }
 
 VideoController::~VideoController() {
@@ -208,7 +209,7 @@ void VideoController::StartPlaybackTimer() {
 	playback_start_time = std::chrono::steady_clock::now();
 	perf_trace::ResetVideoPlaybackInterval();
 	perf_trace::TracePlayStart(frame_n, start_ms);
-	playback.Start(10);
+	playback_timer->Start(10);
 }
 
 void VideoController::StartPlayback(PlaybackMode mode, int range_end_ms) {
@@ -247,7 +248,7 @@ void VideoController::Stop() {
 	if (IsPlaying()) {
 		perf_trace::TracePlayStop(frame_n);
 		perf_trace::ResetVideoPlaybackInterval();
-		playback.Stop();
+		playback_timer->Stop();
 		playback_uses_audio_authority = false;
 		auto core = context->GetCore();
 		core.audioController->Stop();
@@ -255,7 +256,11 @@ void VideoController::Stop() {
 	ResetPlaybackState();
 }
 
-void VideoController::OnPlayTimer(wxTimerEvent &) {
+bool VideoController::IsPlaying() const {
+	return playback_timer && playback_timer->IsRunning();
+}
+
+void VideoController::OnPlayTimer() {
 	using namespace std::chrono;
 	auto core = context->GetCore();
 

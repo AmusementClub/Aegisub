@@ -33,14 +33,16 @@
 #include <libaegisub/vfr.h>
 
 #include <chrono>
+#include <memory>
 #include <set>
 
 #include "ui_dispatch.h"
 
-#include <wx/timer.h>
+#include <wx/event.h>
 
 class AssDialogue;
 class AsyncVideoProvider;
+class VideoControllerTimerHost;
 struct SubtitlesProviderErrorEvent;
 struct VideoProviderErrorEvent;
 
@@ -78,7 +80,7 @@ class VideoController final : public wxEvtHandler {
 
 	/// Playback timer used to periodically check if we should go to the next
 	/// frame while playing video
-	wxTimer playback;
+	std::unique_ptr<VideoControllerTimerHost> playback_timer;
 
 	/// Time when playback was last started
 	std::chrono::steady_clock::time_point playback_start_time;
@@ -112,7 +114,7 @@ class VideoController final : public wxEvtHandler {
 	/// Cached option for audio playing when frame stepping
 	const agi::OptionValue* playAudioOnStep;
 
-	void OnPlayTimer(wxTimerEvent &event);
+	void OnPlayTimer();
 
 	void OnVideoError(VideoProviderErrorEvent const& err);
 	void OnSubtitlesError(SubtitlesProviderErrorEvent const& err);
@@ -133,7 +135,7 @@ public:
 	~VideoController();
 
 	/// Is the video currently playing?
-	bool IsPlaying() const { return playback.IsRunning(); }
+	bool IsPlaying() const;
 	bool PlaybackUsesAudioAuthority() const { return playback_uses_audio_authority; }
 
 	/// Get the current frame number

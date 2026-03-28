@@ -31,11 +31,12 @@
 #include <libaegisub/signal.h>
 
 #include <cstdint>
+#include <memory>
 #include <wx/event.h>
 #include <wx/power.h>
-#include <wx/timer.h>
 
 class AudioPlayer;
+class AudioControllerTimerHost;
 class AudioTimingController;
 class TimeRange;
 namespace agi { class AudioProvider; }
@@ -81,7 +82,7 @@ class AudioController final : public wxEvtHandler {
 	PlaybackMode playback_mode = PM_NotPlaying;
 
 	/// Timer used for playback position updates
-	wxTimer playback_timer;
+	std::unique_ptr<AudioControllerTimerHost> playback_timer;
 
 	/// The audio provider
 	agi::AudioProvider *provider = nullptr;
@@ -90,7 +91,7 @@ class AudioController final : public wxEvtHandler {
 	void OnAudioProvider(agi::AudioProvider *new_provider);
 
 	/// Event handler for the playback timer
-	void OnPlaybackTimer(wxTimerEvent &event);
+	void OnPlaybackTimer();
 
 	/// @brief Timing controller signals primary playback range changed
 	void OnTimingControllerUpdatedPrimaryRange();

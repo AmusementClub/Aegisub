@@ -463,6 +463,7 @@ add_executable(Aegisub WIN32
     src/audio_box.cpp
     src/audio_colorscheme.cpp
     src/audio_controller.cpp
+    src/audio_controller_timer_host.cpp
     src/audio_display_analysis.cpp
     src/audio_latest_range_scheduler.cpp
     src/audio_display.cpp
@@ -560,6 +561,7 @@ add_executable(Aegisub WIN32
     src/version.cpp
     src/video_box.cpp
     src/video_controller.cpp
+    src/video_controller_timer_host.cpp
     src/video_display.cpp
     src/video_renderer_backend.cpp
     src/video_renderer_factory.cpp

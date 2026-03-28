@@ -29,6 +29,7 @@
 
 #include "audio_controller.h"
 
+#include "audio_controller_timer_host.h"
 #include "audio_timing.h"
 #include "include/aegisub/audio_player.h"
 #include "include/aegisub/context.h"
@@ -50,11 +51,9 @@ constexpr int kAudioUiTimerRequestedMs = 20;
 
 AudioController::AudioController(agi::Context *context)
 : context(context)
-, playback_timer(this)
+, playback_timer(CreateAudioControllerTimerHost([this] { OnPlaybackTimer(); }))
 , provider_connection(context->GetCore().project->AddAudioProviderListener(&AudioController::OnAudioProvider, this))
 {
-	Bind(wxEVT_TIMER, &AudioController::OnPlaybackTimer, this, playback_timer.GetId());
-
 #ifdef wxHAS_POWER_EVENTS
 	Bind(wxEVT_POWER_SUSPENDED, &AudioController::OnComputerSuspending, this);
 	Bind(wxEVT_POWER_RESUME, &AudioController::OnComputerResuming, this);
@@ -68,7 +67,7 @@ AudioController::~AudioController()
 	Stop();
 }
 
-void AudioController::OnPlaybackTimer(wxTimerEvent &)
+void AudioController::OnPlaybackTimer()
 {
 	if (!player) return;
 
@@ -171,7 +170,7 @@ void AudioController::PlayRange(const TimeRange &range)
 	playback_mode = PM_Range;
 	// This is a UI refresh timer, not the device clock. On Windows the observed
 	// wake-up cadence often lands closer to ~31 ms unless timer resolution is raised.
-	playback_timer.Start(kAudioUiTimerRequestedMs);
+	playback_timer->Start(kAudioUiTimerRequestedMs);
 
 	AnnouncePlaybackPosition(range.begin());
 }
@@ -206,7 +205,7 @@ void AudioController::PlayToEnd(int start_ms)
 	playback_mode = PM_ToEnd;
 	// This is a UI refresh timer, not the device clock. On Windows the observed
 	// wake-up cadence often lands closer to ~31 ms unless timer resolution is raised.
-	playback_timer.Start(kAudioUiTimerRequestedMs);
+	playback_timer->Start(kAudioUiTimerRequestedMs);
 
 	AnnouncePlaybackPosition(start_ms);
 }
@@ -217,7 +216,7 @@ void AudioController::Stop()
 
 	player->Stop();
 	playback_mode = PM_NotPlaying;
-	playback_timer.Stop();
+	playback_timer->Stop();
 	perf_trace::ResetAudioUiTimerInterval();
 	if (provider)
 		provider->ClearPlaybackWindow();

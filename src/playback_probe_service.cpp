@@ -14,6 +14,7 @@
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 #include "playback_probe_service.h"
+#include "playback_probe_timer_host.h"
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
@@ -37,8 +38,6 @@
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/path.h>
-
-#include <wx/timer.h>
 
 #include <algorithm>
 #include <chrono>
@@ -458,83 +457,11 @@ public:
 	}
 };
 
-class PlaybackProbeTimerHost final : public wxEvtHandler {
-	std::function<void()> on_timeout;
-	std::function<void()> on_completion_poll;
-	std::function<void()> on_restart_timer;
-	std::function<void()> on_seek_timer;
-	wxTimer timeout_timer{this};
-	wxTimer completion_timer{this};
-	wxTimer restart_timer{this};
-	wxTimer seek_timer{this};
-
-	void HandleTimeout(wxTimerEvent&) {
-		if (on_timeout)
-			on_timeout();
-	}
-
-	void HandleCompletionPoll(wxTimerEvent&) {
-		if (on_completion_poll)
-			on_completion_poll();
-	}
-
-	void HandleRestartTimer(wxTimerEvent&) {
-		if (on_restart_timer)
-			on_restart_timer();
-	}
-
-	void HandleSeekTimer(wxTimerEvent&) {
-		if (on_seek_timer)
-			on_seek_timer();
-	}
-
-public:
-	PlaybackProbeTimerHost(
-		std::function<void()> on_timeout,
-		std::function<void()> on_completion_poll,
-		std::function<void()> on_restart_timer,
-		std::function<void()> on_seek_timer)
-	: on_timeout(std::move(on_timeout))
-	, on_completion_poll(std::move(on_completion_poll))
-	, on_restart_timer(std::move(on_restart_timer))
-	, on_seek_timer(std::move(on_seek_timer)) {
-		Bind(wxEVT_TIMER, &PlaybackProbeTimerHost::HandleTimeout, this, timeout_timer.GetId());
-		Bind(wxEVT_TIMER, &PlaybackProbeTimerHost::HandleCompletionPoll, this, completion_timer.GetId());
-		Bind(wxEVT_TIMER, &PlaybackProbeTimerHost::HandleRestartTimer, this, restart_timer.GetId());
-		Bind(wxEVT_TIMER, &PlaybackProbeTimerHost::HandleSeekTimer, this, seek_timer.GetId());
-	}
-
-	void StopAll() {
-		timeout_timer.Stop();
-		completion_timer.Stop();
-		restart_timer.Stop();
-		seek_timer.Stop();
-	}
-
-	void StartTimeoutOnce(int timeout_ms) {
-		timeout_timer.Start(timeout_ms, true);
-	}
-
-	void StartCompletionPolling(int interval_ms) {
-		completion_timer.Start(interval_ms);
-	}
-
-	void StartRestartOnce(int delay_ms) {
-		restart_timer.StartOnce(delay_ms);
-	}
-
-	void ArmSeek(std::optional<int> delay_ms) {
-		seek_timer.Stop();
-		if (delay_ms)
-			seek_timer.StartOnce(*delay_ms);
-	}
-};
-
 class Runner final {
 	PlaybackProbeRequest request;
 	std::function<void(PlaybackProbeResult)> on_done;
 	PlaybackProbeRuntime runtime;
-	PlaybackProbeTimerHost timer_host;
+	std::unique_ptr<PlaybackProbeTimerHost> timer_host;
 	std::vector<agi::signal::Connection> connections;
 	bool probe_started = false;
 	bool finished = false;
@@ -685,7 +612,7 @@ class Runner final {
 		if (finished)
 			return;
 		finished = true;
-		timer_host.StopAll();
+		timer_host->StopAll();
 		connections.clear();
 
 		runtime.CloseMedia();
@@ -734,7 +661,7 @@ class Runner final {
 
 		++completed_playbacks;
 		if (completed_playbacks < request.repeat_count) {
-			timer_host.StartRestartOnce(request.repeat_gap_ms);
+			timer_host->StartRestartOnce(request.repeat_gap_ms);
 			return;
 		}
 
@@ -800,7 +727,7 @@ class Runner final {
 	}
 
 	void ArmSeekTimer() {
-		timer_host.ArmSeek(request.seek_after_ms);
+		timer_host->ArmSeek(request.seek_after_ms);
 	}
 
 public:
@@ -808,11 +735,11 @@ public:
 	: request(std::move(request))
 	, on_done(std::move(on_done))
 	, runtime(this->request)
-	, timer_host(
+	, timer_host(CreatePlaybackProbeTimerHost(
 		[this] { OnTimeout(); },
 		[this] { OnCompletionPoll(); },
 		[this] { OnRestartTimer(); },
-		[this] { OnSeekTimer(); }) {
+		[this] { OnSeekTimer(); })) {
 	}
 
 	void Start() {
@@ -842,8 +769,8 @@ public:
 		int timeout_ms = static_cast<int>(std::ceil(playable_duration_ms / std::max(request.audio_rate_scale, 0.1))) * std::max(request.repeat_count, 1)
 			+ std::max(0, request.repeat_count - 1) * request.repeat_gap_ms
 			+ 3000;
-		timer_host.StartTimeoutOnce(timeout_ms);
-		timer_host.StartCompletionPolling(20);
+		timer_host->StartTimeoutOnce(timeout_ms);
+		timer_host->StartCompletionPolling(20);
 
 		probe_started = true;
 		playback_stop_handled = false;

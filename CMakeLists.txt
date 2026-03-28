@@ -515,6 +515,7 @@ add_executable(Aegisub WIN32
     src/pen.cpp
     src/perf_trace.cpp
     src/playback_probe_service.cpp
+    src/playback_probe_timer_host.cpp
     src/playback_query_service.cpp
     src/persist_location.cpp
     src/preferences.cpp

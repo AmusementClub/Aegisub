@@ -458,15 +458,84 @@ public:
 	}
 };
 
-class Runner final : public wxEvtHandler {
-	PlaybackProbeRequest request;
-	std::function<void(PlaybackProbeResult)> on_done;
-	PlaybackProbeRuntime runtime;
-	std::vector<agi::signal::Connection> connections;
+class PlaybackProbeTimerHost final : public wxEvtHandler {
+	std::function<void()> on_timeout;
+	std::function<void()> on_completion_poll;
+	std::function<void()> on_restart_timer;
+	std::function<void()> on_seek_timer;
 	wxTimer timeout_timer{this};
 	wxTimer completion_timer{this};
 	wxTimer restart_timer{this};
 	wxTimer seek_timer{this};
+
+	void HandleTimeout(wxTimerEvent&) {
+		if (on_timeout)
+			on_timeout();
+	}
+
+	void HandleCompletionPoll(wxTimerEvent&) {
+		if (on_completion_poll)
+			on_completion_poll();
+	}
+
+	void HandleRestartTimer(wxTimerEvent&) {
+		if (on_restart_timer)
+			on_restart_timer();
+	}
+
+	void HandleSeekTimer(wxTimerEvent&) {
+		if (on_seek_timer)
+			on_seek_timer();
+	}
+
+public:
+	PlaybackProbeTimerHost(
+		std::function<void()> on_timeout,
+		std::function<void()> on_completion_poll,
+		std::function<void()> on_restart_timer,
+		std::function<void()> on_seek_timer)
+	: on_timeout(std::move(on_timeout))
+	, on_completion_poll(std::move(on_completion_poll))
+	, on_restart_timer(std::move(on_restart_timer))
+	, on_seek_timer(std::move(on_seek_timer)) {
+		Bind(wxEVT_TIMER, &PlaybackProbeTimerHost::HandleTimeout, this, timeout_timer.GetId());
+		Bind(wxEVT_TIMER, &PlaybackProbeTimerHost::HandleCompletionPoll, this, completion_timer.GetId());
+		Bind(wxEVT_TIMER, &PlaybackProbeTimerHost::HandleRestartTimer, this, restart_timer.GetId());
+		Bind(wxEVT_TIMER, &PlaybackProbeTimerHost::HandleSeekTimer, this, seek_timer.GetId());
+	}
+
+	void StopAll() {
+		timeout_timer.Stop();
+		completion_timer.Stop();
+		restart_timer.Stop();
+		seek_timer.Stop();
+	}
+
+	void StartTimeoutOnce(int timeout_ms) {
+		timeout_timer.Start(timeout_ms, true);
+	}
+
+	void StartCompletionPolling(int interval_ms) {
+		completion_timer.Start(interval_ms);
+	}
+
+	void StartRestartOnce(int delay_ms) {
+		restart_timer.StartOnce(delay_ms);
+	}
+
+	void ArmSeek(std::optional<int> delay_ms) {
+		seek_timer.Stop();
+		if (delay_ms)
+			seek_timer.StartOnce(*delay_ms);
+	}
+};
+
+class Runner final {
+	PlaybackProbeRequest request;
+	std::function<void(PlaybackProbeResult)> on_done;
+	PlaybackProbeRuntime runtime;
+	PlaybackProbeTimerHost timer_host;
+	std::vector<agi::signal::Connection> connections;
 	bool probe_started = false;
 	bool finished = false;
 	bool playback_stop_handled = false;
@@ -616,10 +685,7 @@ class Runner final : public wxEvtHandler {
 		if (finished)
 			return;
 		finished = true;
-		timeout_timer.Stop();
-		completion_timer.Stop();
-		restart_timer.Stop();
-		seek_timer.Stop();
+		timer_host.StopAll();
 		connections.clear();
 
 		runtime.CloseMedia();
@@ -668,7 +734,7 @@ class Runner final : public wxEvtHandler {
 
 		++completed_playbacks;
 		if (completed_playbacks < request.repeat_count) {
-			restart_timer.StartOnce(request.repeat_gap_ms);
+			timer_host.StartRestartOnce(request.repeat_gap_ms);
 			return;
 		}
 
@@ -690,11 +756,11 @@ class Runner final : public wxEvtHandler {
 		Finish(exit_code, message);
 	}
 
-	void OnTimeout(wxTimerEvent&) {
+	void OnTimeout() {
 		Finish(5, "playback probe timed out");
 	}
 
-	void OnCompletionPoll(wxTimerEvent&) {
+	void OnCompletionPoll() {
 		if (finished || !probe_started)
 			return;
 
@@ -710,7 +776,7 @@ class Runner final : public wxEvtHandler {
 			OnPlaybackStopped();
 	}
 
-	void OnRestartTimer(wxTimerEvent&) {
+	void OnRestartTimer() {
 		if (finished || !probe_started)
 			return;
 
@@ -722,7 +788,7 @@ class Runner final : public wxEvtHandler {
 		ArmSeekTimer();
 	}
 
-	void OnSeekTimer(wxTimerEvent&) {
+	void OnSeekTimer() {
 		if (finished || !probe_started || !request.seek_target_offset_ms)
 			return;
 
@@ -734,24 +800,22 @@ class Runner final : public wxEvtHandler {
 	}
 
 	void ArmSeekTimer() {
-		seek_timer.Stop();
-		if (request.seek_after_ms)
-			seek_timer.StartOnce(*request.seek_after_ms);
+		timer_host.ArmSeek(request.seek_after_ms);
 	}
 
 public:
 	Runner(PlaybackProbeRequest request, std::function<void(PlaybackProbeResult)> on_done)
 	: request(std::move(request))
 	, on_done(std::move(on_done))
-	, runtime(this->request) {
+	, runtime(this->request)
+	, timer_host(
+		[this] { OnTimeout(); },
+		[this] { OnCompletionPoll(); },
+		[this] { OnRestartTimer(); },
+		[this] { OnSeekTimer(); }) {
 	}
 
 	void Start() {
-		Bind(wxEVT_TIMER, &Runner::OnTimeout, this, timeout_timer.GetId());
-		Bind(wxEVT_TIMER, &Runner::OnCompletionPoll, this, completion_timer.GetId());
-		Bind(wxEVT_TIMER, &Runner::OnRestartTimer, this, restart_timer.GetId());
-		Bind(wxEVT_TIMER, &Runner::OnSeekTimer, this, seek_timer.GetId());
-
 		int init_error_code = 0;
 		std::string init_error_message;
 		if (!runtime.StartSession(request, init_error_code, init_error_message)) {
@@ -778,8 +842,8 @@ public:
 		int timeout_ms = static_cast<int>(std::ceil(playable_duration_ms / std::max(request.audio_rate_scale, 0.1))) * std::max(request.repeat_count, 1)
 			+ std::max(0, request.repeat_count - 1) * request.repeat_gap_ms
 			+ 3000;
-		timeout_timer.Start(timeout_ms, true);
-		completion_timer.Start(20);
+		timer_host.StartTimeoutOnce(timeout_ms);
+		timer_host.StartCompletionPolling(20);
 
 		probe_started = true;
 		playback_stop_handled = false;

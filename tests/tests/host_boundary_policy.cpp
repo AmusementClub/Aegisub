@@ -100,6 +100,7 @@ TEST(host_boundary_policy, service_like_sources_keep_wx_at_host_edges) {
 		"src/headless_wx_runtime_host.cpp",
 		"src/wx_automation_file_dialog_service.h",
 		"src/wx_audio_controller_power_host.cpp",
+		"src/wx_style_editor_ui_host.h",
 	};
 
 	std::set<std::string> actual_wx_candidates;
@@ -276,6 +277,32 @@ TEST(host_boundary_policy, preferences_interaction_usage_stays_centralized) {
 	EXPECT_FALSE(request_hits.empty());
 }
 
+TEST(host_boundary_policy, style_editor_ui_fallback_lives_in_explicit_wx_host_seam) {
+	auto const root = ProjectRoot();
+	auto const dialog_style_editor_cpp = root / "src" / "dialog_style_editor.cpp";
+	auto const wx_style_editor_ui_host_h = root / "src" / "wx_style_editor_ui_host.h";
+
+	auto include_hits = FindLiteralHits(dialog_style_editor_cpp, "wx_message_box_ui_services.h");
+	auto make_notification_hits = FindLiteralHits(dialog_style_editor_cpp, "MakeWindowNotificationSink(");
+	auto make_interaction_hits = FindLiteralHits(dialog_style_editor_cpp, "MakeWindowInteractionSink(");
+	auto seam_notification_hits = FindLiteralHits(dialog_style_editor_cpp, "ResolveStyleEditorNotificationSink(");
+	auto seam_interaction_hits = FindLiteralHits(dialog_style_editor_cpp, "ResolveStyleEditorInteractionSink(");
+
+	auto seam_make_notification_hits = FindLiteralHits(wx_style_editor_ui_host_h, "MakeWindowNotificationSink(");
+	auto seam_make_interaction_hits = FindLiteralHits(wx_style_editor_ui_host_h, "MakeWindowInteractionSink(");
+	auto seam_include_hits = FindLiteralHits(wx_style_editor_ui_host_h, "wx_message_box_ui_services.h");
+
+	EXPECT_TRUE(include_hits.empty()) << JoinLines(include_hits);
+	EXPECT_TRUE(make_notification_hits.empty()) << JoinLines(make_notification_hits);
+	EXPECT_TRUE(make_interaction_hits.empty()) << JoinLines(make_interaction_hits);
+	EXPECT_FALSE(seam_notification_hits.empty());
+	EXPECT_FALSE(seam_interaction_hits.empty());
+
+	EXPECT_FALSE(seam_make_notification_hits.empty());
+	EXPECT_FALSE(seam_make_interaction_hits.empty());
+	EXPECT_FALSE(seam_include_hits.empty());
+}
+
 TEST(host_boundary_policy, shared_dispatch_timers_stay_wx_free_and_no_longer_use_host_suffix) {
 	auto const root = ProjectRoot();
 	auto const src_root = root / "src";
@@ -348,6 +375,7 @@ TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 		"src/wx_app_bootstrap_ui_services.h",
 		"src/wx_automation_file_dialog_service.h",
 		"src/wx_file_dialog_services.h",
+		"src/wx_style_editor_ui_host.h",
 		"src/gui_wx_runtime_host.cpp",
 		"src/gui_wx_runtime_host.h",
 		"src/headless_wx_runtime_host.cpp",

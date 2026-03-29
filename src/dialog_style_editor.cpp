@@ -50,7 +50,7 @@
 #include "subs_preview.h"
 #include "utils.h"
 #include "validators.h"
-#include "wx_message_box_ui_services.h"
+#include "wx_style_editor_ui_host.h"
 
 #include <libaegisub/of_type_adaptor.h>
 #include <libaegisub/make_unique.h>
@@ -159,6 +159,9 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 , style(style)
 , store(store)
 {
+	notification_sink = agi::ResolveStyleEditorNotificationSink(c, this);
+	interaction_sink = agi::ResolveStyleEditorInteractionSink(c, this);
+
 	if (new_name.size()) {
 		is_new = true;
 		style = this->style = new AssStyle(*style);
@@ -364,7 +367,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 		wxSUNKEN_BORDER,
 		OPT_GET("Colour/Style Editor/Background/Preview")->GetColor(),
 		c ? c->GetCore().ass->GetTransientFonts() : std::shared_ptr<const TransientFontSet>(),
-		c ? c->GetNotificationSink() : agi::MakeWindowNotificationSink(this));
+		notification_sink);
 
 	SubsPreview->SetToolTip(_("Preview of current style"));
 	SubsPreview->SetStyle(*style);
@@ -443,9 +446,6 @@ std::string DialogStyleEditor::GetStyleName() const {
 
 void DialogStyleEditor::Apply(bool apply, bool close) {
 	if (apply) {
-		auto notification_sink = c ? c->GetNotificationSink() : agi::MakeWindowNotificationSink(this);
-		auto interaction_sink = c ? c->GetInteractionSink() : agi::MakeWindowInteractionSink(this);
-
 		std::string new_name = from_wx(StyleName->GetValue());
 		std::replace(new_name.begin(), new_name.end(), ',', ';');
 

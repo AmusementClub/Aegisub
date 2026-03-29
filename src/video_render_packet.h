@@ -31,6 +31,11 @@ struct VideoRenderPacket {
 	bool has_subtitle_overlay = false;
 	double time = 0.0;
 
+	bool HasDistinctCompositedFrame() const {
+		return static_cast<bool>(composited_frame_storage)
+			&& composited_frame_storage != source_frame_storage;
+	}
+
 	std::shared_ptr<VideoFrame> DisplayFrame() const {
 		return composited_frame_storage ? composited_frame_storage : source_frame_storage;
 	}

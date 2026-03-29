@@ -58,6 +58,7 @@ public:
 	virtual ~SubtitlesProvider() = default;
 	void LoadSubtitles(AssFile *subs, int time = -1);
 	virtual void OnActivated() { }
+	virtual std::string GetDebugName() const { return "unknown"; }
 	virtual SubtitleRenderMode GetRenderMode() const { return SubtitleRenderMode::CompatibilityFrameOnly; }
 	virtual bool RenderOverlayClearsTarget() const { return false; }
 	virtual bool SupportsOverlayDirtyRects() const { return false; }

@@ -26,8 +26,11 @@ enum class VideoRenderRoutingMode {
 inline VideoRenderRoutingMode DecideVideoRenderRouting(
 	VideoRenderPacket const& packet,
 	bool primary_renderer_supports_direct_overlay) {
-	if (!packet.has_subtitle_overlay)
+	if (!packet.has_subtitle_overlay) {
+		if (packet.HasDistinctCompositedFrame())
+			return VideoRenderRoutingMode::FallbackCompositedFrame;
 		return VideoRenderRoutingMode::SourceFrameOnly;
+	}
 
 	if (!packet.subtitle_overlay.IsValid() || !packet.subtitle_overlay.IsDirectRenderable())
 		return VideoRenderRoutingMode::FallbackCompositedFrame;

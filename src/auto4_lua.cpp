@@ -1017,7 +1017,13 @@ namespace {
 		assert(lua_istable(L, -1));
 		stackcheck.check_stack(3);
 
-		BackgroundScriptRunner runner(export_dialog, GetName(), agi::MakeWindowFileDialogService(export_dialog));
+		auto file_dialog_service = [&]() -> std::shared_ptr<agi::FileDialogService> {
+			if (auto const* context = get_context(L))
+				return context->GetFileDialogService();
+			return agi::MakeWindowFileDialogService(export_dialog);
+		}();
+
+		BackgroundScriptRunner runner(export_dialog, GetName(), std::move(file_dialog_service));
 		try {
 			LuaThreadedCall(L, 2, 0, runner, false);
 			stackcheck.check_stack(0);

@@ -31,9 +31,11 @@
 #include "ass_file.h"
 #include "compat.h"
 #include "help_button.h"
+#include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
-#include "wx_file_dialog_services.h"
+#include "ui_services.h"
 #include "utils.h"
 
 #include <wx/button.h>
@@ -44,6 +46,7 @@
 namespace {
 struct DialogAttachments {
 	wxDialog d;
+	agi::Context *context;
 	AssFile *ass;
 
 	wxListView *listView;
@@ -60,12 +63,13 @@ struct DialogAttachments {
 	void AttachFiles(std::vector<agi::fs::path> const& paths, wxString const& commit_msg);
 
 public:
-	DialogAttachments(wxWindow *parent, AssFile *ass);
+	DialogAttachments(agi::Context *c);
 };
 
-DialogAttachments::DialogAttachments(wxWindow *parent, AssFile *ass)
-: d(parent, -1, _("Attachment List"))
-, ass(ass)
+DialogAttachments::DialogAttachments(agi::Context *c)
+: d(c->GetUI().parent, -1, _("Attachment List"))
+, context(c)
+, ass(c->GetCore().ass.get())
 {
 	d.SetIcon(GETICON(attach_button_16));
 
@@ -131,8 +135,7 @@ void DialogAttachments::AttachFiles(std::vector<agi::fs::path> const& paths, wxS
 }
 
 void DialogAttachments::OnAttachFont(wxCommandEvent &) {
-	auto file_dialogs = agi::MakeWindowFileDialogService(&d);
-	AttachFiles(file_dialogs->RequestOpenFiles({
+	AttachFiles(context->RequestOpenFiles({
 		from_wx(_("Choose file to be attached")),
 		"",
 		"",
@@ -143,8 +146,7 @@ void DialogAttachments::OnAttachFont(wxCommandEvent &) {
 }
 
 void DialogAttachments::OnAttachGraphics(wxCommandEvent &) {
-	auto file_dialogs = agi::MakeWindowFileDialogService(&d);
-	AttachFiles(file_dialogs->RequestOpenFiles({
+	AttachFiles(context->RequestOpenFiles({
 		from_wx(_("Choose file to be attached")),
 		"",
 		"",
@@ -159,16 +161,15 @@ void DialogAttachments::OnExtract(wxCommandEvent &) {
 
 	agi::fs::path path;
 	bool fullPath = false;
-	auto file_dialogs = agi::MakeWindowFileDialogService(&d);
 
 	// Multiple or single?
 	if (listView->GetNextSelected(i) != -1)
-		path = file_dialogs->RequestSelectDirectory({
+		path = context->RequestSelectDirectory({
 			from_wx(_("Select the path to save the files to:")),
 			OPT_GET("Path/Fonts Collector Destination")->GetString()
 		});
 	else {
-		path = file_dialogs->RequestSaveFile({
+		path = context->RequestSaveFile({
 			from_wx(_("Select the path to save the file to:")),
 			"Path/Fonts Collector Destination",
 			ass->Attachments[i].GetFileName(),
@@ -206,6 +207,6 @@ void DialogAttachments::OnListClick(wxListEvent &) {
 }
 }
 
-void ShowAttachmentsDialog(wxWindow *parent, AssFile *file) {
-	DialogAttachments(parent, file).d.ShowModal();
+void ShowAttachmentsDialog(agi::Context *c) {
+	DialogAttachments(c).d.ShowModal();
 }

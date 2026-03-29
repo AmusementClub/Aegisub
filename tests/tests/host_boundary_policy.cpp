@@ -147,6 +147,45 @@ TEST(host_boundary_policy, ui_service_contract_stays_split_from_wx_adapter) {
 	EXPECT_FALSE(std::filesystem::exists(legacy_wx_ui_services_h));
 }
 
+TEST(host_boundary_policy, context_backed_file_dialog_callers_prefer_context_service) {
+	auto const root = ProjectRoot();
+
+	struct FileDialogCallerExpectation {
+		std::string path;
+		std::vector<std::string> required_context_calls;
+	};
+
+	std::vector<FileDialogCallerExpectation> const expectations = {
+		{
+			"src/dialog_attachments.cpp",
+			{"RequestOpenFiles(", "RequestSaveFile(", "RequestSelectDirectory("}
+		},
+		{
+			"src/dialog_automation.cpp",
+			{"RequestOpenFiles("}
+		},
+		{
+			"src/dialog_fonts_collector.cpp",
+			{"RequestSaveFile(", "RequestSelectDirectory("}
+		},
+	};
+
+	for (auto const& expectation : expectations) {
+		auto const path = root / expectation.path;
+		ASSERT_TRUE(std::filesystem::exists(path)) << expectation.path;
+
+		auto include_hits = FindLiteralHits(path, "wx_file_dialog_services.h");
+		auto make_window_hits = FindLiteralHits(path, "MakeWindowFileDialogService(");
+		EXPECT_TRUE(include_hits.empty()) << JoinLines(include_hits);
+		EXPECT_TRUE(make_window_hits.empty()) << JoinLines(make_window_hits);
+
+		for (auto const& call : expectation.required_context_calls) {
+			auto call_hits = FindLiteralHits(path, call);
+			EXPECT_FALSE(call_hits.empty()) << expectation.path << " missing " << call;
+		}
+	}
+}
+
 TEST(host_boundary_policy, shared_dispatch_timers_stay_wx_free_and_no_longer_use_host_suffix) {
 	auto const root = ProjectRoot();
 	auto const src_root = root / "src";

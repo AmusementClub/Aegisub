@@ -108,7 +108,7 @@ struct subtitle_attachment final : public Command {
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
 		core.videoController->Stop();
-		ShowAttachmentsDialog(c->GetUI().parent, core.ass.get());
+		ShowAttachmentsDialog(c);
 	}
 };
 

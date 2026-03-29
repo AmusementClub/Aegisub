@@ -37,7 +37,7 @@
 #include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
-#include "wx_file_dialog_services.h"
+#include "ui_services.h"
 
 #include <libaegisub/fs.h>
 #include <libaegisub/signal.h>
@@ -218,8 +218,7 @@ static bool has_file(Container const& c, agi::fs::path const& fn)
 
 void DialogAutomation::OnAdd(wxCommandEvent &)
 {
-	auto file_dialogs = agi::MakeWindowFileDialogService(this);
-	auto fnames = file_dialogs->RequestOpenFiles({
+	auto fnames = context->RequestOpenFiles({
 		from_wx(_("Add Automation script")),
 		"",
 		"",

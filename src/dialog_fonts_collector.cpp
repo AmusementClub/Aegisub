@@ -25,7 +25,7 @@
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "ui_dispatch.h"
-#include "wx_file_dialog_services.h"
+#include "ui_services.h"
 #include "utils.h"
 #include "value_event.h"
 
@@ -60,6 +60,7 @@ enum class FcMode {
 };
 
 class DialogFontsCollector final : public wxDialog {
+	agi::Context *context;
 	AssFile *subs;
 	agi::Path &path;
 	FcMode mode = FcMode::CheckFontsOnly;
@@ -239,6 +240,7 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 
 DialogFontsCollector::DialogFontsCollector(agi::Context *c)
 : wxDialog(c->GetUI().parent, -1, _("Fonts Collector"))
+, context(c)
 , subs(c->GetCore().ass.get())
 , path(*c->GetCore().path)
 {
@@ -354,11 +356,10 @@ void DialogFontsCollector::OnStart(wxCommandEvent &) {
 }
 
 void DialogFontsCollector::OnBrowse(wxCommandEvent &) {
-	auto file_dialogs = agi::MakeWindowFileDialogService(this);
 	agi::fs::path dest;
 	if (mode == FcMode::CopyToZip) {
 		auto current_path = wxFileName(dest_ctrl->GetValue());
-		dest = file_dialogs->RequestSaveFile({
+		dest = context->RequestSaveFile({
 			from_wx(_("Select archive file name")),
 			"",
 			from_wx(current_path.GetFullName()),
@@ -368,7 +369,7 @@ void DialogFontsCollector::OnBrowse(wxCommandEvent &) {
 		});
 	}
 	else
-		dest = file_dialogs->RequestSelectDirectory({
+		dest = context->RequestSelectDirectory({
 			from_wx(_("Select folder to save fonts on")),
 			from_wx(dest_ctrl->GetValue())
 		});

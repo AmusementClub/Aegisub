@@ -233,6 +233,49 @@ TEST(host_boundary_policy, automation_file_dialog_fallback_lives_in_explicit_wx_
 	EXPECT_FALSE(seam_include_hits.empty());
 }
 
+TEST(host_boundary_policy, app_bootstrap_ui_fallback_lives_in_explicit_wx_service_seam) {
+	auto const root = ProjectRoot();
+	auto const main_cpp = root / "src" / "main.cpp";
+	auto const wx_app_bootstrap_ui_services_h = root / "src" / "wx_app_bootstrap_ui_services.h";
+
+	auto main_message_box_include_hits = FindLiteralHits(main_cpp, "wx_message_box_ui_services.h");
+	auto main_single_choice_include_hits = FindLiteralHits(main_cpp, "wx_single_choice_dialog.h");
+	auto main_notification_hits = FindLiteralHits(main_cpp, "WxMessageBoxNotificationSink");
+	auto main_interaction_hits = FindLiteralHits(main_cpp, "WxMessageBoxInteractionSink");
+	auto main_make_single_choice_hits = FindLiteralHits(main_cpp, "MakeWindowSingleChoiceInteractionSink(");
+	auto main_bootstrap_notification_hits = FindLiteralHits(main_cpp, "AppBootstrapNotificationSink()");
+	auto main_bootstrap_single_choice_hits = FindLiteralHits(main_cpp, "MakeAppBootstrapSingleChoiceInteractionSink()");
+
+	auto seam_notification_hits = FindLiteralHits(wx_app_bootstrap_ui_services_h, "WxMessageBoxNotificationSink");
+	auto seam_interaction_hits = FindLiteralHits(wx_app_bootstrap_ui_services_h, "WxMessageBoxInteractionSink");
+	auto seam_single_choice_hits = FindLiteralHits(wx_app_bootstrap_ui_services_h, "MakeWindowSingleChoiceInteractionSink(");
+
+	EXPECT_TRUE(main_message_box_include_hits.empty()) << JoinLines(main_message_box_include_hits);
+	EXPECT_TRUE(main_single_choice_include_hits.empty()) << JoinLines(main_single_choice_include_hits);
+	EXPECT_TRUE(main_notification_hits.empty()) << JoinLines(main_notification_hits);
+	EXPECT_TRUE(main_interaction_hits.empty()) << JoinLines(main_interaction_hits);
+	EXPECT_TRUE(main_make_single_choice_hits.empty()) << JoinLines(main_make_single_choice_hits);
+	EXPECT_FALSE(main_bootstrap_notification_hits.empty());
+	EXPECT_FALSE(main_bootstrap_single_choice_hits.empty());
+
+	EXPECT_FALSE(seam_notification_hits.empty());
+	EXPECT_FALSE(seam_interaction_hits.empty());
+	EXPECT_FALSE(seam_single_choice_hits.empty());
+}
+
+TEST(host_boundary_policy, preferences_interaction_usage_stays_centralized) {
+	auto const root = ProjectRoot();
+	auto const preferences_cpp = root / "src" / "preferences.cpp";
+
+	auto include_hits = FindLiteralHits(preferences_cpp, "wx_message_box_ui_services.h");
+	auto make_hits = FindLiteralHits(preferences_cpp, "MakeWindowInteractionSink(");
+	auto request_hits = FindLiteralHits(preferences_cpp, "RequestInteraction(");
+
+	EXPECT_FALSE(include_hits.empty());
+	EXPECT_EQ(1u, make_hits.size()) << JoinLines(make_hits);
+	EXPECT_FALSE(request_hits.empty());
+}
+
 TEST(host_boundary_policy, shared_dispatch_timers_stay_wx_free_and_no_longer_use_host_suffix) {
 	auto const root = ProjectRoot();
 	auto const src_root = root / "src";
@@ -302,6 +345,7 @@ TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 	ASSERT_TRUE(std::filesystem::exists(src_root));
 
 	std::set<std::string> const expected_explicit_wx_surfaces = {
+		"src/wx_app_bootstrap_ui_services.h",
 		"src/wx_automation_file_dialog_service.h",
 		"src/wx_file_dialog_services.h",
 		"src/gui_wx_runtime_host.cpp",

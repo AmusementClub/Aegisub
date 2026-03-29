@@ -1136,6 +1136,12 @@ agi::fs::path Preferences::RequestSelectDirectory(agi::SelectDirectoryDialogRequ
 	return {};
 }
 
+agi::InteractionResult Preferences::RequestInteraction(agi::InteractionRequest const& request) const {
+	if (interaction_sink)
+		return interaction_sink->Request(request);
+	return agi::InteractionResult::Cancel;
+}
+
 void Preferences::OnOK(wxCommandEvent &event) {
 	OnApply(event);
 	EndModal(0);
@@ -1155,8 +1161,7 @@ void Preferences::OnApply(wxCommandEvent &) {
 }
 
 void Preferences::OnResetDefault(wxCommandEvent&) {
-	auto interaction = agi::MakeWindowInteractionSink(this);
-	if (interaction->Request({
+	if (RequestInteraction({
 		from_wx(_("Restore defaults?")),
 		from_wx(_("Are you sure that you want to restore the defaults? All your settings will be overridden.")),
 		agi::InteractionButtons::YesNo,
@@ -1184,6 +1189,7 @@ void Preferences::OnResetDefault(wxCommandEvent&) {
 Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"), wxDefaultPosition, wxSize(-1, -1), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER) {
 	SetIcon(GETICON(options_button_16));
 	file_dialog_service = agi::MakeWindowFileDialogService(this);
+	interaction_sink = agi::MakeWindowInteractionSink(this);
 
 	auto duration_ms = [](auto const& started) {
 		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();

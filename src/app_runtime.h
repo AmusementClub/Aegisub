@@ -28,12 +28,18 @@ struct AppRuntimeMainQueueHooks {
 	std::function<std::size_t()> flush_main_jobs;
 };
 
+struct AppRuntimeHostHooks {
+	std::function<void()> prime_process_logging;
+	std::function<void()> install_png_image_handler;
+};
+
 struct AppRuntimeInitOptions {
 	RuntimeShellMode shell_mode = RuntimeShellMode::Unknown;
 	RuntimeLocalePolicy locale_policy = RuntimeLocalePolicy::UseConfiguredOrEnglish;
 	AppRuntimeMainQueueHooks main_queue_hooks;
 	bool load_global_scripts = false;
 	bool install_png_handler = true;
+	AppRuntimeHostHooks host_hooks;
 	std::shared_ptr<agi::SingleChoiceInteractionSink> single_choice_sink;
 	std::function<void(std::string const& title, std::string const& message)> report_nonfatal_error;
 };

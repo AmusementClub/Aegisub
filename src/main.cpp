@@ -63,6 +63,8 @@
 #include <vector>
 #include <wx/arrstr.h>
 #include <wx/clipbrd.h>
+#include <wx/image.h>
+#include <wx/log.h>
 #include <wx/msgdlg.h>
 #include <wx/stackwalk.h>
 #include <wx/thread.h>
@@ -133,10 +135,6 @@ bool AegisubApp::OnInit() {
 	SetAppName(wxS("aegisub"));
 #endif
 
-	// The logger isn't created on demand on background threads, so force it to
-	// be created now
-	(void)wxLog::GetActiveTarget();
-
 	wxTheApp->Bind(EVT_CALL_THUNK, [this](ValueEvent<agi::dispatch::Thunk>& evt) {
 		try {
 			evt.Get()();
@@ -168,6 +166,14 @@ bool AegisubApp::OnInit() {
 			},
 			true,
 			true,
+			{
+				[] {
+					(void)wxLog::GetActiveTarget();
+				},
+				[] {
+					wxImage::AddHandler(new wxPNGHandler);
+				}
+			},
 			agi::MakeWindowSingleChoiceInteractionSink(),
 			[](std::string const& title, std::string const& message) {
 				AppNotificationSink().ShowError(title, message);

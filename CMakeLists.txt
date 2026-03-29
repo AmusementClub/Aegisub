@@ -511,6 +511,7 @@ add_executable(Aegisub WIN32
     src/headless_playback_probe.cpp
     src/headless_runtime_bootstrap.cpp
     src/headless_playback_session_host.cpp
+    src/headless_wx_runtime_host.cpp
     src/help_button.cpp
     src/hotkey.cpp
     src/hotkey_data_view_model.cpp

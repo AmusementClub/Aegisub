@@ -49,12 +49,6 @@
 #include <optional>
 #include <utility>
 
-// Shared runtime initialization stays at the process-shell boundary. It can
-// touch minimal wx runtime facilities, but service/session code should consume
-// the plain AppRuntime surface instead of depending on wx directly.
-#include <wx/image.h>
-#include <wx/log.h>
-
 namespace {
 
 RuntimeShellMode current_shell_mode = RuntimeShellMode::Unknown;
@@ -168,8 +162,11 @@ void InitializeAutomationAndFilters(AppRuntimeInitOptions const& options) {
 	AssExportFilterChain::Register(agi::make_unique<AssFixStylesFilter>());
 	AssExportFilterChain::Register(agi::make_unique<AssTransformFramerateFilter>());
 
-	if (options.install_png_handler)
-		wxImage::AddHandler(new wxPNGHandler);
+	if (options.install_png_handler) {
+		if (!options.host_hooks.install_png_image_handler)
+			throw agi::InternalError("AppRuntime requested PNG handler installation without a host hook.");
+		options.host_hooks.install_png_image_handler();
+	}
 }
 
 void CleanupRuntime() {
@@ -218,7 +215,8 @@ public:
 	bool Initialize(AppRuntimeInitOptions init_options, std::string& error) {
 		options = std::move(init_options);
 		try {
-			(void)wxLog::GetActiveTarget();
+			if (options.host_hooks.prime_process_logging)
+				options.host_hooks.prime_process_logging();
 			InitializeGlobalLocale();
 
 			agi::dispatch::Init(

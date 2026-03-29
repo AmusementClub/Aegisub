@@ -79,9 +79,8 @@ TEST(host_boundary_policy, service_like_sources_keep_wx_at_host_edges) {
 	ASSERT_TRUE(std::filesystem::exists(src_root));
 
 	std::set<std::string> const allowed_wx_candidates = {
-		"src/app_runtime.cpp",
 		"src/audio_controller_power_host.cpp",
-		"src/headless_runtime_bootstrap.cpp",
+		"src/headless_wx_runtime_host.cpp",
 	};
 
 	std::set<std::string> actual_wx_candidates;

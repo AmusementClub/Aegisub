@@ -18,6 +18,7 @@
 #include "app_runtime.h"
 #include "headless_cli.h"
 #include "headless_playback_probe.h"
+#include "headless_wx_runtime_host.h"
 
 #include <libaegisub/dispatch.h>
 
@@ -28,11 +29,6 @@
 #include <optional>
 #include <thread>
 #include <utility>
-
-// Headless bootstrap still owns the minimal wx runtime bring-up needed before
-// shared AppRuntime initialization. Keep that dependency here rather than in
-// service/session code.
-#include <wx/init.h>
 
 namespace {
 
@@ -102,14 +98,13 @@ public:
 };
 
 class HeadlessRuntimeEnvironment {
-	wxInitializer wx_initializer;
+	HeadlessWxRuntimeHost wx_host;
 	HeadlessMainThreadPump main_thread_pump;
 	AppRuntime runtime;
 
 public:
 	bool Initialize(std::string& error) {
-		if (!wx_initializer.IsOk()) {
-			error = "failed to initialize wx runtime for headless mode";
+		if (!wx_host.Initialize(error)) {
 			return false;
 		}
 
@@ -131,6 +126,7 @@ public:
 					},
 					false,
 					true,
+					wx_host.BuildRuntimeHooks(),
 					{},
 					[](std::string const& title, std::string const& message) {
 						ReportHeadlessError(title, message);

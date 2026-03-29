@@ -261,6 +261,7 @@ class CSRISubtitlesProvider final : public SubtitlesProvider {
 	std::unique_ptr<csri_inst, closer> instance;
 	csri_rend *renderer = nullptr;
 	std::shared_ptr<const TransientFontSet> transient_fonts;
+	std::string provider_name;
 
 	void LoadSubtitles(const char *data, size_t len) override {
 		std::lock_guard<std::mutex> lock(csri_mutex);
@@ -272,16 +273,18 @@ public:
 	~CSRISubtitlesProvider();
 	void OnActivated() override;
 
+	std::string GetDebugName() const override { return "CSRI/" + provider_name; }
 	SubtitleRenderMode GetRenderMode() const override { return SubtitleRenderMode::CompatibilityFrameOnly; }
 	bool RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double time) override;
 	void DrawSubtitles(VideoFrame &dst, double time) override;
 };
 
 CSRISubtitlesProvider::CSRISubtitlesProvider(std::string type, std::shared_ptr<const TransientFontSet> transient_fonts)
-: transient_fonts(std::move(transient_fonts)) {
+: transient_fonts(std::move(transient_fonts))
+, provider_name(std::move(type)) {
 	std::lock_guard<std::mutex> lock(csri_mutex);
 	for (csri_rend *cur = csri_renderer_default(); cur; cur = csri_renderer_next(cur)) {
-		if (type == csri_renderer_info(cur)->name) {
+		if (provider_name == csri_renderer_info(cur)->name) {
 			renderer = cur;
 			break;
 		}

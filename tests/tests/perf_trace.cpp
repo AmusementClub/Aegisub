@@ -16,6 +16,10 @@ std::string ReadAll(agi::fs::path const& path) {
 	out << in.rdbuf();
 	return out.str();
 }
+
+std::string Utf8PathSegment() {
+	return "\xE8\xB7\xAF\xE5\xBE\x84";
+}
 }
 
 TEST(PerfTrace, WritesExpectedSessionFiles) {
@@ -160,4 +164,22 @@ TEST(PerfTrace, SupportsNamedTraceSelection) {
 
 	EXPECT_NE(std::string::npos, manifest.find("source=audio,lua-dialog"));
 	EXPECT_NE(std::string::npos, manifest.find("trace_selection=audio,lua-dialog"));
+}
+
+TEST(PerfTrace, ManifestWritesUtf8Paths) {
+	agi::Path path_helper;
+	auto const session_dir = agi::fs::UniquePath(path_helper.Decode(std::string("?temp/perf_trace_") + Utf8PathSegment() + "_%%%%%%%%"));
+
+	perf_trace::InitializeAt(session_dir, "test-build", "utf8-paths");
+	ASSERT_TRUE(perf_trace::IsEnabled());
+	perf_trace::Shutdown();
+
+	auto const manifest = ReadAll(session_dir / "manifest.txt");
+	auto const session_dir_text = agi::fs::PathToString(session_dir);
+
+	EXPECT_NE(std::string::npos, session_dir_text.find(Utf8PathSegment()));
+	EXPECT_NE(std::string::npos, manifest.find(Utf8PathSegment()));
+	EXPECT_NE(std::string::npos, manifest.find("session_dir=" + session_dir_text));
+	EXPECT_NE(std::string::npos, manifest.find("trace_file=" + agi::fs::PathToString(session_dir / "trace.ndjson")));
+	EXPECT_NE(std::string::npos, manifest.find("summary_file=" + agi::fs::PathToString(session_dir / "summary.txt")));
 }

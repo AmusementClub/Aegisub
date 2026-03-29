@@ -43,6 +43,7 @@ enum {
 namespace {
 constexpr char const *kSourceModeLogTag = "video/source/mode";
 constexpr int kCompatibilityOverlayTileSize = 64;
+constexpr char const *kSubtitleProviderUseLogTag = "subtitle/provider/use";
 
 std::string FormatSourceModeList(std::vector<SourceFrameOutputMode> const& modes) {
 	std::string value = "[";
@@ -75,6 +76,17 @@ std::string FormatColorMetadata(SourceFrameColorMetadata const& color) {
 		+ (color.transfer.empty() ? "Unknown" : color.transfer)
 		+ ", range="
 		+ SourceFrameColorRangeName(color.range);
+}
+
+char const *SubtitleRenderModeName(SubtitleRenderMode mode) {
+	switch (mode) {
+		case SubtitleRenderMode::CompatibilityFrameOnly:
+			return "CompatibilityFrameOnly";
+		case SubtitleRenderMode::PremultipliedOverlay:
+			return "PremultipliedOverlay";
+		default:
+			return "Unknown";
+	}
 }
 
 template<typename T>
@@ -461,8 +473,12 @@ AsyncVideoProvider::AsyncVideoProvider(std::unique_ptr<VideoProvider> source_pro
 , source_provider(std::move(source_provider))
 , event_sink(std::move(event_sink))
 {
-	if (this->subs_provider)
+	if (this->subs_provider) {
+		LOG_I(kSubtitleProviderUseLogTag) << "Activated subtitles provider: "
+			<< this->subs_provider->GetDebugName()
+			<< " (mode=" << SubtitleRenderModeName(this->subs_provider->GetRenderMode()) << ")";
 		this->subs_provider->OnActivated();
+	}
 	ReconfigureSourceOutputMode();
 }
 
@@ -957,8 +973,12 @@ void AsyncVideoProvider::ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvi
 		while (ProcessPending()) { }
 		auto old_provider = std::move(subs_provider);
 		subs_provider = std::move(provider);
-		if (subs_provider)
+		if (subs_provider) {
+			LOG_I(kSubtitleProviderUseLogTag) << "Activated subtitles provider: "
+				<< subs_provider->GetDebugName()
+				<< " (mode=" << SubtitleRenderModeName(subs_provider->GetRenderMode()) << ")";
 			subs_provider->OnActivated();
+		}
 		old_provider.reset();
 		bool const mode_changed = ReconfigureSourceOutputMode();
 		single_frame = NEW_SUBS_FILE;

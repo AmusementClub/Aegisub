@@ -46,8 +46,12 @@ void Path::FillPlatformSpecificPaths() {
 	SetToken("?local", WinGetFolderPath(CSIDL_LOCAL_APPDATA)/"Aegisub");
 
 	std::wstring filename(MAX_PATH + 1, L'\0');
-	while (static_cast<DWORD>(filename.size()) == GetModuleFileNameW(nullptr, &filename[0], filename.size()))
+	DWORD len = 0;
+	while (static_cast<DWORD>(filename.size()) == (len = GetModuleFileNameW(nullptr, &filename[0], filename.size())))
 		filename.resize(filename.size() * 2);
+	if (!len)
+		throw agi::EnvironmentError("GetModuleFileNameW failed. This should not happen.");
+	filename.resize(len);
 	SetToken("?data", filename);
 
 	SetToken("?dictionary", Decode("?data/dictionaries"));

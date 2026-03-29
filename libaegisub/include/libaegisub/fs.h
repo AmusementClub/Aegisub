@@ -36,7 +36,7 @@ namespace agi {
 		/// Define a filesystem error which takes a path or a string
 #define DEFINE_FS_EXCEPTION(type, base, message) \
 		struct type : public base { \
-			type(path const& p) : base(message + p.string()) { } \
+			type(path const& p) : base(message + PathToString(p)) { } \
 			type(std::string const& s) : base(s) { } \
 			const char *GetName() const { return ""; } \
 			Exception *Copy() const { return new type(*this); } \

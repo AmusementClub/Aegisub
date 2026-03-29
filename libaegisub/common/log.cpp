@@ -163,8 +163,14 @@ Message::~Message() {
 }
 
 JsonEmitter::JsonEmitter(fs::path const& directory) {
-	path = fs::UniquePath(directory/util::strftime("%Y-%m-%d-%H-%M-%S-%%%%%%%%.ndjson"));
+	fs::CreateDirectory(directory);
+	path = fs::UniquePath(directory / fs::PathFromString(util::strftime("%Y-%m-%d-%H-%M-%S-%%%%%%%%.ndjson")));
 	fp.reset(new std::ofstream(path));
+	if (!fp || !fp->good()) {
+		fp.reset();
+		path.clear();
+		return;
+	}
 
 	std::lock_guard<std::mutex> lock(current_log_file_mutex);
 	current_log_file_path = path;

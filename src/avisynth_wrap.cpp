@@ -117,6 +117,15 @@ namespace {
 		return directories;
 	}
 
+	bool TryRegisterLegacyAutoloadDir(PNeoEnv const& neo_env, agi::fs::path const& path) {
+		auto legacy_path = avisynth::TryGetLegacyPathString(path);
+		if (!legacy_path)
+			return false;
+
+		neo_env->AddAutoloadDir(env->SaveString(legacy_path->c_str()), true);
+		return true;
+	}
+
 	void ConfigurePluginAutoloadDirectories() {
 		if (plugin_autoload_dirs_configured || !env)
 			return;
@@ -144,8 +153,16 @@ namespace {
 			try {
 				avisynth::InvokeUtf8PathFunction(env, "AddAutoloadDir", *it, { true });
 			}
-			catch (AvisynthError const&) {
-				neo_env->AddAutoloadDir(env->SaveString(agi::fs::ShortName(*it).c_str()), true);
+			catch (AvisynthError const& err) {
+				LOG_D(kAvisynthPluginLogTag) << "Avisynth script AddAutoloadDir fallback failed for " << agi::fs::PathToString(*it) << ": " << err.msg;
+				try {
+					if (!TryRegisterLegacyAutoloadDir(neo_env, *it)) {
+						LOG_W(kAvisynthPluginLogTag) << "Skipping legacy Avisynth AddAutoloadDir fallback for " << agi::fs::PathToString(*it) << " because the path is not ANSI/8.3-safe.";
+					}
+				}
+				catch (AvisynthError const& neo_err) {
+					LOG_W(kAvisynthPluginLogTag) << "Avisynth INeoEnv AddAutoloadDir failed for " << agi::fs::PathToString(*it) << ": " << neo_err.msg;
+				}
 			}
 		}
 		neo_env->AutoloadPlugins();

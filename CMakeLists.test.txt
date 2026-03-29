@@ -20,6 +20,7 @@ if(GTEST_FOUND)
         tests/tests/aegisublocale_compat.cpp
         tests/tests/ass_file_extradata.cpp
         tests/tests/audio.cpp
+        tests/tests/avisynth_legacy_path.cpp
         tests/tests/avisynth_runtime_policy.cpp
         tests/tests/audio_display.cpp
         tests/tests/async_video_provider.cpp
@@ -39,6 +40,7 @@ if(GTEST_FOUND)
         src/ass_style_storage.cpp
         src/async_video_provider.cpp
         src/async_video_provider_host.cpp
+        src/avisynth_legacy_path.cpp
         src/charset_choice.cpp
         src/compat.cpp
         src/csri_renderer_discovery.cpp
@@ -193,6 +195,18 @@ if(WITH_LIBPLACEBO)
     target_include_directories(placebo-runtime-smoke PRIVATE ${LibPlacebo_INCLUDE_DIR})
     target_link_libraries(placebo-runtime-smoke PRIVATE libaegisub)
 
+    if(WIN32)
+        add_executable(placebo-legacy-state-smoke EXCLUDE_FROM_ALL
+            tests/smoke/placebo_legacy_state_smoke.cpp
+            src/native_library.cpp
+            src/video_renderer_placebo_gl.cpp
+            src/video_renderer_placebo_runtime.cpp
+        )
+        target_compile_definitions(placebo-legacy-state-smoke PRIVATE CMAKE_BUILD WITH_LIBPLACEBO)
+        target_include_directories(placebo-legacy-state-smoke PRIVATE ${LibPlacebo_INCLUDE_DIR})
+        target_link_libraries(placebo-legacy-state-smoke PRIVATE libaegisub OpenGL::GL)
+    endif()
+
     add_executable(placebo-render-bench EXCLUDE_FROM_ALL
         tests/smoke/placebo_render_bench.cpp
         src/native_library.cpp
@@ -208,6 +222,23 @@ if(WITH_LIBPLACEBO)
 endif()
 
 if(WIN32)
+    if(WITH_AVISYNTH)
+        add_executable(avisynth-autoload-runtime-smoke EXCLUDE_FROM_ALL
+            tests/smoke/avisynth_autoload_runtime_smoke.cpp
+            tests/support/src_config_stubs.cpp
+            src/avisynth_legacy_path.cpp
+            src/avisynth_wrap.cpp
+            src/native_library.cpp
+        )
+        target_compile_definitions(avisynth-autoload-runtime-smoke PRIVATE
+            CMAKE_BUILD
+            WITH_AVISYNTH
+            NOMINMAX
+        )
+        target_include_directories(avisynth-autoload-runtime-smoke PRIVATE ${AviSynth_INCLUDE_DIR})
+        target_link_libraries(avisynth-autoload-runtime-smoke PRIVATE libaegisub Psapi)
+    endif()
+
     add_executable(opengl-overlay-smoke EXCLUDE_FROM_ALL
         tests/smoke/opengl_overlay_smoke.cpp
         src/video_renderer_opengl.cpp

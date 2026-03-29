@@ -634,10 +634,10 @@ void WriteManifest(Session const& session) {
 	out << "started_local=" << session.started_local << "\n";
 	out << "pid=" << wxGetProcessId() << "\n";
 	out << "platform=" << wxGetOsDescription().ToStdString(wxConvUTF8) << "\n";
-	out << "cwd=" << std::filesystem::current_path().string() << "\n";
-	out << "session_dir=" << session.directory.string() << "\n";
-	out << "trace_file=" << (session.directory / "trace.ndjson").string() << "\n";
-	out << "summary_file=" << (session.directory / "summary.txt").string() << "\n";
+	out << "cwd=" << agi::fs::PathToString(std::filesystem::current_path()) << "\n";
+	out << "session_dir=" << agi::fs::PathToString(session.directory) << "\n";
+	out << "trace_file=" << agi::fs::PathToString(session.directory / "trace.ndjson") << "\n";
+	out << "summary_file=" << agi::fs::PathToString(session.directory / "summary.txt") << "\n";
 	out.flush();
 }
 
@@ -867,7 +867,7 @@ void InitializeAt(agi::fs::path const& session_dir, std::string const& build_lab
 		session.has_pending_lua_dialog_open = false;
 		session.pending_lua_dialog_open_started_ns = 0;
 		session.last_video_memory_sample_ns = 0;
-		session.session_id = session_dir.filename().string();
+		session.session_id = agi::fs::PathToString(session_dir.filename());
 		session.build_label = build_label;
 		session.source_tag = selection.source_tag.empty() ? "manual" : selection.source_tag;
 		session.selection_tag = selection.selection_tag.empty() ? "all" : selection.selection_tag;

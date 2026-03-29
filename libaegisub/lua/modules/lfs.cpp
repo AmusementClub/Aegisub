@@ -48,7 +48,7 @@ auto wrap(char **err, Func f) -> decltype(f()) {
 template<typename Ret>
 bool setter(const char *path, char **err, Ret (*f)(bfs::path const&)) {
 	return wrap(err, [=]{
-		f(path);
+		f(PathFromString(path));
 		return true;
 	});
 }
@@ -59,7 +59,7 @@ bool lfs_chdir(const char *dir, char **err) {
 
 char *currentdir(char **err) {
 	return wrap(err, []{
-		return strndup(bfs::current_path().string());
+		return strndup(PathToString(bfs::current_path()));
 	});
 }
 
@@ -94,13 +94,13 @@ void dir_free(DirectoryIterator *it) {
 
 DirectoryIterator *dir_new(const char *path, char **err) {
 	return wrap(err, [=]{
-		return new DirectoryIterator(path, "");
+		return new DirectoryIterator(PathFromString(path), "");
 	});
 }
 
 const char *get_mode(const char *path, char **err) {
 	return wrap(err, [=]() -> const char * {
-		switch (bfs::status(path).type()) {
+		switch (bfs::status(PathFromString(path)).type()) {
 			case bfs::file_type::not_found:  return nullptr;
 			case bfs::file_type::regular:    return "file";
 			case bfs::file_type::directory:  return "directory";
@@ -115,11 +115,11 @@ const char *get_mode(const char *path, char **err) {
 }
 
 time_t get_mtime(const char *path, char **err) {
-	return wrap(err, [=] { return ModifiedTime(path); });
+	return wrap(err, [=] { return ModifiedTime(PathFromString(path)); });
 }
 
 uintmax_t get_size(const char *path, char **err) {
-	return wrap(err, [=] { return Size(path); });
+	return wrap(err, [=] { return Size(PathFromString(path)); });
 }
 }
 

@@ -2,6 +2,8 @@
 
 #ifdef WITH_AVISYNTH
 
+#include "avisynth_legacy_path.h"
+
 #include <avisynth.h>
 
 #include <libaegisub/fs_fwd.h>
@@ -9,16 +11,8 @@
 #include <initializer_list>
 #include <vector>
 
-namespace agi { namespace fs {
-	std::string ShortName(path const& file_path);
-} }
-
 namespace avisynth {
 namespace detail {
-	inline std::string LegacyPathString(agi::fs::path const& path) {
-		return agi::fs::ShortName(path);
-	}
-
 	inline AVSValue InvokePathFunctionImpl(
 		IScriptEnvironment *env,
 		char const *function_name,
@@ -56,6 +50,22 @@ namespace detail {
 	}
 }
 
+	inline AVSValue InvokeLegacyPathFunction(
+		IScriptEnvironment *env,
+		char const *function_name,
+		agi::fs::path const& path,
+		std::initializer_list<AVSValue> extra_args = {},
+		std::initializer_list<char const *> extra_arg_names = {})
+	{
+		auto legacy_path = TryGetLegacyPathString(path);
+		if (!legacy_path) {
+			auto message = BuildLegacyPathFailureMessage(function_name, path);
+			env->ThrowError("%s", message.c_str());
+		}
+
+		return detail::InvokePathFunctionImpl(env, function_name, *legacy_path, extra_args, extra_arg_names, false);
+	}
+
 	inline AVSValue InvokeUtf8PathFunction(
 		IScriptEnvironment *env,
 		char const *function_name,
@@ -67,7 +77,7 @@ namespace detail {
 			return detail::InvokePathFunctionImpl(env, function_name, agi::fs::PathToString(path), extra_args, extra_arg_names, true);
 		}
 		catch (AvisynthError const&) {
-			return detail::InvokePathFunctionImpl(env, function_name, detail::LegacyPathString(path), extra_args, extra_arg_names, false);
+			return InvokeLegacyPathFunction(env, function_name, path, extra_args, extra_arg_names);
 		}
 	}
 
@@ -82,7 +92,7 @@ namespace detail {
 			return detail::InvokePathFunctionImpl(env, function_name, agi::fs::PathToString(path), extra_args, extra_arg_names, false);
 		}
 		catch (AvisynthError const&) {
-			return detail::InvokePathFunctionImpl(env, function_name, detail::LegacyPathString(path), extra_args, extra_arg_names, false);
+			return InvokeLegacyPathFunction(env, function_name, path, extra_args, extra_arg_names);
 		}
 	}
 }

@@ -26,9 +26,12 @@
 #include "subtitles_provider_csri.h"
 #include "subtitles_provider_libass.h"
 
+#include <libaegisub/log.h>
 #include <libaegisub/string_utils.h>
 
 namespace {
+	constexpr char kSubtitleProviderSelectLogTag[] = "subtitle/provider/select";
+
 	struct factory {
 		std::string name;
 		std::string subtype;
@@ -55,21 +58,30 @@ std::vector<std::string> SubtitlesProviderFactory::GetClasses() {
 std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(SubtitleRenderEnvironment const& env) {
 	auto preferred = OPT_GET("Subtitle/Provider")->GetString();
 	auto sorted = GetSorted(factories(), preferred);
+	LOG_I(kSubtitleProviderSelectLogTag) << "Selecting subtitles provider"
+		<< (preferred.empty() ? "" : ": preferred=" + preferred);
 
 	std::string error;
 	for (auto factory : sorted) {
 		try {
 			auto provider = factory->create(factory->subtype, env);
-			if (provider) return provider;
+			if (provider) {
+				LOG_I(kSubtitleProviderSelectLogTag) << "Selected subtitles provider: " << factory->name;
+				return provider;
+			}
 		}
 		catch (agi::UserCancelException const&) { throw; }
 		catch (agi::Exception const& err) {
+			LOG_W(kSubtitleProviderSelectLogTag) << "Subtitle provider unavailable: "
+				<< factory->name << ": " << err.GetMessage();
 			error.append(factory->name);
 			error.append(": ");
 			error.append(err.GetMessage());
 			error.push_back('\n');
 		}
 		catch (...) {
+			LOG_W(kSubtitleProviderSelectLogTag) << "Subtitle provider unavailable: "
+				<< factory->name << ": Unknown error";
 			error.append(factory->name);
 			error.append(": Unknown error\n");
 		}

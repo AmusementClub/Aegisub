@@ -171,6 +171,7 @@ public:
 	LibassSubtitlesProvider(SubtitleRenderEnvironment const& env);
 	~LibassSubtitlesProvider();
 
+	std::string GetDebugName() const override { return "libass"; }
 	void LoadSubtitles(const char *data, size_t len) override {
 		auto *ass_library = library();
 		if (ass_track) ass_free_track(ass_track);

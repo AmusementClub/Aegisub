@@ -50,6 +50,16 @@ TEST(lagi_fs, dir_exists) {
 }
 
 #ifdef _WIN32
+TEST(lagi_fs, short_name_fallback_handles_utf8_only_paths) {
+	auto const utf8_path = std::string("data/") + "\xF0\x9F\x98\x80" + "-short-name-fallback";
+	auto const path = PathFromString(utf8_path);
+	auto const expected = PathToString(path);
+
+	EXPECT_NO_THROW({
+		auto const short_name = ShortName(path);
+		EXPECT_EQ(expected, short_name);
+	});
+}
 #else
 TEST(lagi_fs, short_name_is_a_no_op) {
 	EXPECT_STREQ("a b c d", ShortName("a b c d").c_str());

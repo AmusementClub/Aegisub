@@ -18,6 +18,15 @@ VideoRenderPacket make_packet(bool has_overlay, SubtitleOverlayCompositionMode c
 		composition_mode == SubtitleOverlayCompositionMode::PremultipliedAlpha;
 	return packet;
 }
+
+std::shared_ptr<VideoFrame> make_frame() {
+	auto frame = std::make_shared<VideoFrame>();
+	frame->width = 2;
+	frame->height = 2;
+	frame->pitch = 8;
+	frame->data.resize(16);
+	return frame;
+}
 }
 
 TEST(video_render_routing, source_only_packet_uses_source_frame_path) {
@@ -69,5 +78,33 @@ TEST(video_render_routing, invalid_direct_overlay_still_falls_back_to_composited
 		DecideVideoRenderRouting(packet, false));
 	EXPECT_EQ(
 		VideoRenderRoutingMode::FallbackCompositedFrame,
+		DecideVideoRenderRouting(packet, true));
+}
+
+TEST(video_render_routing, compatibility_packet_without_overlay_uses_composited_frame_fallback) {
+	VideoRenderPacket packet;
+	packet.source_frame_storage = make_frame();
+	packet.composited_frame_storage = make_frame();
+
+	EXPECT_TRUE(packet.HasDistinctCompositedFrame());
+	EXPECT_EQ(
+		VideoRenderRoutingMode::FallbackCompositedFrame,
+		DecideVideoRenderRouting(packet, false));
+	EXPECT_EQ(
+		VideoRenderRoutingMode::FallbackCompositedFrame,
+		DecideVideoRenderRouting(packet, true));
+}
+
+TEST(video_render_routing, shared_frame_storage_without_overlay_stays_on_source_frame_path) {
+	VideoRenderPacket packet;
+	packet.source_frame_storage = make_frame();
+	packet.composited_frame_storage = packet.source_frame_storage;
+
+	EXPECT_FALSE(packet.HasDistinctCompositedFrame());
+	EXPECT_EQ(
+		VideoRenderRoutingMode::SourceFrameOnly,
+		DecideVideoRenderRouting(packet, false));
+	EXPECT_EQ(
+		VideoRenderRoutingMode::SourceFrameOnly,
 		DecideVideoRenderRouting(packet, true));
 }

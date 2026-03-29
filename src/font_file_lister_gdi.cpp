@@ -80,13 +80,13 @@ std::vector<agi::fs::path> get_installed_fonts() {
 		for (DWORD i = 0;; ++i) {
 			WCHAR font_name[SHRT_MAX];
 			std::vector<WCHAR> font_filename(MAX_PATH);
-			DWORD name_len = sizeof(font_name);
-			DWORD data_len = font_filename.size();
+			DWORD name_len = static_cast<DWORD>(sizeof(font_name) / sizeof(font_name[0]));
+			DWORD data_len = static_cast<DWORD>(font_filename.size() * sizeof(WCHAR));
 
 			ret = RegEnumValueW(key, i, font_name, &name_len, NULL, NULL, reinterpret_cast<BYTE*>(font_filename.data()), &data_len);
 			if (ret == ERROR_MORE_DATA) {
-				name_len = sizeof(font_name);
-				font_filename.resize(data_len);
+				name_len = static_cast<DWORD>(sizeof(font_name) / sizeof(font_name[0]));
+				font_filename.resize((data_len + sizeof(WCHAR) - 1) / sizeof(WCHAR));
 				ret = RegEnumValueW(key, i, font_name, &name_len, NULL, NULL, reinterpret_cast<BYTE*>(font_filename.data()), &data_len);
 			}
 			if (ret == ERROR_NO_MORE_ITEMS) break;

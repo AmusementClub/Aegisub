@@ -135,33 +135,36 @@ bool AegisubApp::OnInit() {
 
 	runtime = std::make_unique<AppRuntime>();
 	std::string runtime_error;
-	if (!runtime->Initialize(
-		{
-			RuntimeShellMode::Gui,
-			RuntimeLocalePolicy::PickIfNeeded,
-			{
+	AppRuntimeInitOptions runtime_options;
+	runtime_options.shell_mode = RuntimeShellMode::Gui;
+	runtime_options.locale_policy = RuntimeLocalePolicy::PickIfNeeded;
+	runtime_options.main_queue_hooks = {
 #if defined(__GNUC__) && (__GNUC__ < 4 || (__GNUC__ == 4 && __GNUC_MINOR__ < 8))
-				[this](agi::dispatch::Thunk f) {
+		[this](agi::dispatch::Thunk f) {
 #else
-				[](agi::dispatch::Thunk f) {
+		[](agi::dispatch::Thunk f) {
 #endif
-					auto evt = new ValueEvent<agi::dispatch::Thunk>(EVT_CALL_THUNK, -1, std::move(f));
-					wxTheApp->QueueEvent(evt);
-				},
-				[] {
-					return wxIsMainThread();
-				},
-				{}
-			},
-			true,
-			true,
-			BuildGuiWxRuntimeHostHooks(),
-			agi::MakeAppBootstrapSingleChoiceInteractionSink(),
-			[](std::string const& title, std::string const& message) {
-				agi::AppBootstrapNotificationSink().ShowError(title, message);
-			}
+			auto evt = new ValueEvent<agi::dispatch::Thunk>(EVT_CALL_THUNK, -1, std::move(f));
+			wxTheApp->QueueEvent(evt);
 		},
-		runtime_error)) {
+		[] {
+			return wxIsMainThread();
+		},
+		{}
+	};
+	runtime_options.load_global_scripts = true;
+	runtime_options.initialize_commands = true;
+	runtime_options.initialize_ui_locale = true;
+	runtime_options.register_automation_script_factory = true;
+	runtime_options.warm_subtitles_provider_font_cache = true;
+	runtime_options.register_export_filters = true;
+	runtime_options.install_png_handler = true;
+	runtime_options.host_hooks = BuildGuiWxRuntimeHostHooks();
+	runtime_options.single_choice_sink = agi::MakeAppBootstrapSingleChoiceInteractionSink();
+	runtime_options.report_nonfatal_error = [](std::string const& title, std::string const& message) {
+		agi::AppBootstrapNotificationSink().ShowError(title, message);
+	};
+	if (!runtime->Initialize(std::move(runtime_options), runtime_error)) {
 		agi::AppBootstrapNotificationSink().ShowError("Fatal error while initializing", runtime_error);
 		return false;
 	}

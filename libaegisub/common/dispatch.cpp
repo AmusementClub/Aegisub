@@ -42,6 +42,16 @@ namespace {
 		std::deque<agi::dispatch::Thunk> tasks;
 		std::vector<std::jthread> threads;
 
+		void EnsureStartedLocked() {
+			if (!threads.empty())
+				return;
+
+			auto const worker_count = std::max<unsigned>(4, std::thread::hardware_concurrency());
+			threads.reserve(worker_count);
+			for (unsigned i = 0; i < worker_count; ++i)
+				threads.emplace_back([this](std::stop_token stop_token) { WorkerLoop(stop_token); });
+		}
+
 		void WorkerLoop(std::stop_token stop_token) {
 			agi::util::SetThreadName("Dispatch Worker");
 			while (true) {
@@ -61,18 +71,33 @@ namespace {
 
 	public:
 		ThreadPool() {
-			auto const worker_count = std::max<unsigned>(4, std::thread::hardware_concurrency());
-			threads.reserve(worker_count);
-			for (unsigned i = 0; i < worker_count; ++i)
-				threads.emplace_back([this](std::stop_token stop_token) { WorkerLoop(stop_token); });
+			std::lock_guard<std::mutex> lock(mutex);
+			EnsureStartedLocked();
+		}
+
+		void EnsureStarted() {
+			std::lock_guard<std::mutex> lock(mutex);
+			EnsureStartedLocked();
 		}
 
 		void Post(agi::dispatch::Thunk thunk) {
 			{
 				std::lock_guard<std::mutex> lock(mutex);
+				EnsureStartedLocked();
 				tasks.emplace_back(std::move(thunk));
 			}
 			cv.notify_one();
+		}
+
+		void Shutdown() {
+			std::vector<std::jthread> threads_to_stop;
+			{
+				std::lock_guard<std::mutex> lock(mutex);
+				tasks.clear();
+				threads_to_stop.swap(threads);
+			}
+			cv.notify_all();
+			threads_to_stop.clear();
 		}
 	};
 
@@ -151,7 +176,7 @@ void Init(
 	::flush_main_jobs = flush_main_jobs
 		? std::move(flush_main_jobs)
 		: [] { return std::size_t{0}; };
-	(void)BackgroundPool();
+	BackgroundPool().EnsureStarted();
 }
 
 bool IsMainThread() {
@@ -160,6 +185,18 @@ bool IsMainThread() {
 
 std::size_t RunMainJobsForTests() {
 	return flush_main_jobs ? flush_main_jobs() : 0;
+}
+
+void Shutdown() {
+	invoke_main = [](Thunk thunk) {
+		if (!thunk)
+			return;
+		std::jthread worker([thunk = std::move(thunk)]() mutable { thunk(); });
+		worker.join();
+	};
+	is_main_thread = [] { return false; };
+	flush_main_jobs = [] { return std::size_t{0}; };
+	BackgroundPool().Shutdown();
 }
 
 void Executor::Post(Thunk thunk) {

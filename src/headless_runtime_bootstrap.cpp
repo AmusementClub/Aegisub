@@ -18,7 +18,6 @@
 #include "app_runtime.h"
 #include "headless_cli.h"
 #include "headless_playback_probe.h"
-#include "headless_wx_runtime_host.h"
 
 #include <libaegisub/dispatch.h>
 
@@ -98,41 +97,37 @@ public:
 };
 
 class HeadlessRuntimeEnvironment {
-	HeadlessWxRuntimeHost wx_host;
 	HeadlessMainThreadPump main_thread_pump;
 	AppRuntime runtime;
 
 public:
 	bool Initialize(std::string& error) {
-		if (!wx_host.Initialize(error)) {
-			return false;
-		}
-
 		try {
-			return runtime.Initialize(
-				{
-					RuntimeShellMode::Headless,
-					RuntimeLocalePolicy::UseConfiguredOrEnglish,
-					{
-						[this](agi::dispatch::Thunk thunk) {
-							main_thread_pump.Post(std::move(thunk));
-						},
-						[this] {
-							return main_thread_pump.IsMainThread();
-						},
-						[this] {
-							return main_thread_pump.Flush();
-						}
-					},
-					false,
-					true,
-					wx_host.BuildRuntimeHooks(),
-					{},
-					[](std::string const& title, std::string const& message) {
-						ReportHeadlessError(title, message);
-					}
+			AppRuntimeInitOptions options;
+			options.shell_mode = RuntimeShellMode::Headless;
+			options.locale_policy = RuntimeLocalePolicy::UseConfiguredOrEnglish;
+			options.main_queue_hooks = {
+				[this](agi::dispatch::Thunk thunk) {
+					main_thread_pump.Post(std::move(thunk));
 				},
-				error);
+				[this] {
+					return main_thread_pump.IsMainThread();
+				},
+				[this] {
+					return main_thread_pump.Flush();
+				}
+			};
+			options.load_global_scripts = false;
+			options.initialize_commands = false;
+			options.initialize_ui_locale = false;
+			options.register_automation_script_factory = false;
+			options.warm_subtitles_provider_font_cache = false;
+			options.register_export_filters = false;
+			options.install_png_handler = false;
+			options.report_nonfatal_error = [](std::string const& title, std::string const& message) {
+				ReportHeadlessError(title, message);
+			};
+			return runtime.Initialize(std::move(options), error);
 		}
 		catch (...) {
 			error = "Unhandled exception during headless runtime initialization";

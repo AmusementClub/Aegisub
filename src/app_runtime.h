@@ -38,6 +38,11 @@ struct AppRuntimeInitOptions {
 	RuntimeLocalePolicy locale_policy = RuntimeLocalePolicy::UseConfiguredOrEnglish;
 	AppRuntimeMainQueueHooks main_queue_hooks;
 	bool load_global_scripts = false;
+	bool initialize_commands = true;
+	bool initialize_ui_locale = true;
+	bool register_automation_script_factory = true;
+	bool warm_subtitles_provider_font_cache = true;
+	bool register_export_filters = true;
 	bool install_png_handler = true;
 	AppRuntimeHostHooks host_hooks;
 	std::shared_ptr<agi::SingleChoiceInteractionSink> single_choice_sink;

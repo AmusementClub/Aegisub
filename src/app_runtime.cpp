@@ -52,6 +52,7 @@
 namespace {
 
 RuntimeShellMode current_shell_mode = RuntimeShellMode::Unknown;
+bool runtime_commands_initialized = false;
 
 void InitializeGlobalLocale() {
 	auto locale = boost::locale::generator().generate("");
@@ -130,14 +131,20 @@ void InitializeLoggingAndPerfTrace() {
 }
 
 void InitializeCommandsAndLocale(AppRuntimeInitOptions const& options, AegisubLocale& locale) {
-	cmd::init_builtin_commands();
-	hotkey::init();
-
 	agi::util::SetThreadName("AegiMain");
 	srand(time(nullptr));
 	setlocale(LC_NUMERIC, "C");
 	setlocale(LC_CTYPE, "C");
 	OPT_SET("Version/Last Version")->SetInt(GetSVNRevision());
+
+	if (options.initialize_commands) {
+		cmd::init_builtin_commands();
+		hotkey::init();
+		runtime_commands_initialized = true;
+	}
+
+	if (!options.initialize_ui_locale)
+		return;
 
 	auto lang = OPT_GET("App/Language")->GetString();
 	bool const has_language = !lang.empty() && (lang == "en_US" || locale.HasLanguage(lang));
@@ -152,15 +159,20 @@ void InitializeCommandsAndLocale(AppRuntimeInitOptions const& options, AegisubLo
 	locale.Init(lang);
 }
 
-void InitializeAutomationAndFilters(AppRuntimeInitOptions const& options) {
-	Automation4::ScriptFactory::Register(agi::make_unique<Automation4::LuaScriptFactory>());
-	libass::CacheFonts();
+void InitializeOptionalRuntimeFacilities(AppRuntimeInitOptions const& options) {
+	if (options.register_automation_script_factory)
+		Automation4::ScriptFactory::Register(agi::make_unique<Automation4::LuaScriptFactory>());
+
+	if (options.warm_subtitles_provider_font_cache)
+		libass::CacheFonts();
 
 	if (options.load_global_scripts)
 		config::global_scripts = new Automation4::AutoloadScriptManager(OPT_GET("Path/Automation/Autoload")->GetString());
 
-	AssExportFilterChain::Register(agi::make_unique<AssFixStylesFilter>());
-	AssExportFilterChain::Register(agi::make_unique<AssTransformFramerateFilter>());
+	if (options.register_export_filters) {
+		AssExportFilterChain::Register(agi::make_unique<AssFixStylesFilter>());
+		AssExportFilterChain::Register(agi::make_unique<AssTransformFramerateFilter>());
+	}
 
 	if (options.install_png_handler) {
 		if (!options.host_hooks.install_png_image_handler)
@@ -179,8 +191,11 @@ void CleanupRuntime() {
 		config::mru = nullptr;
 	}
 
-	hotkey::clear();
-	cmd::clear();
+	if (runtime_commands_initialized) {
+		hotkey::clear();
+		cmd::clear();
+		runtime_commands_initialized = false;
+	}
 
 	if (config::global_scripts) {
 		delete config::global_scripts;
@@ -192,9 +207,12 @@ void CleanupRuntime() {
 	perf_trace::Shutdown();
 
 	if (agi::log::log) {
-		delete agi::log::log;
+		auto* sink = agi::log::log;
 		agi::log::log = nullptr;
+		delete sink;
 	}
+
+	agi::dispatch::Shutdown();
 
 	// Legacy startup/shutdown left config::path alive until process teardown.
 	// Keep the same lifetime for now so late cleanup paths do not dereference
@@ -239,7 +257,7 @@ public:
 				}
 			}
 			InitializeCommandsAndLocale(options, locale);
-			InitializeAutomationAndFilters(options);
+			InitializeOptionalRuntimeFacilities(options);
 
 			initialized = true;
 			return true;

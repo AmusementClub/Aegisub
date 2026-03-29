@@ -159,7 +159,8 @@ Message::Message(const char* section, Severity severity, const char* func, int l
 
 Message::~Message() {
 	sm.message = std::string(buffer, (std::string::size_type)msg.tellp());
-	agi::log::log->Log(sm);
+	if (agi::log::log)
+		agi::log::log->Log(sm);
 }
 
 JsonEmitter::JsonEmitter(fs::path const& directory) {

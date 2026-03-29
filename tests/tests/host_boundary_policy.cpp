@@ -97,7 +97,6 @@ TEST(host_boundary_policy, service_like_sources_keep_wx_at_host_edges) {
 
 	std::set<std::string> const allowed_wx_candidates = {
 		"src/gui_wx_runtime_host.cpp",
-		"src/headless_wx_runtime_host.cpp",
 		"src/wx_automation_file_dialog_service.h",
 		"src/wx_audio_controller_power_host.cpp",
 		"src/wx_frame_main_dialog_ui_host.h",
@@ -481,21 +480,56 @@ TEST(host_boundary_policy, runtime_wx_hooks_live_in_explicit_runtime_host_files)
 	auto const root = ProjectRoot();
 	auto const main_cpp = root / "src" / "main.cpp";
 	auto const gui_runtime_host_cpp = root / "src" / "gui_wx_runtime_host.cpp";
-	auto const headless_runtime_host_cpp = root / "src" / "headless_wx_runtime_host.cpp";
+	auto const headless_runtime_bootstrap_cpp = root / "src" / "headless_runtime_bootstrap.cpp";
+	auto const legacy_headless_runtime_host_cpp = root / "src" / "headless_wx_runtime_host.cpp";
 
 	auto main_log_hits = FindLiteralHits(main_cpp, "wxLog::GetActiveTarget");
 	auto main_png_hits = FindLiteralHits(main_cpp, "wxPNGHandler");
 	auto gui_log_hits = FindLiteralHits(gui_runtime_host_cpp, "wxLog::GetActiveTarget");
 	auto gui_png_hits = FindLiteralHits(gui_runtime_host_cpp, "wxPNGHandler");
-	auto headless_log_hits = FindLiteralHits(headless_runtime_host_cpp, "wxLog::GetActiveTarget");
-	auto headless_png_hits = FindLiteralHits(headless_runtime_host_cpp, "wxPNGHandler");
+	auto headless_log_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "wxLog::GetActiveTarget");
+	auto headless_png_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "wxPNGHandler");
+	auto headless_host_include_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "headless_wx_runtime_host.h");
 
 	EXPECT_TRUE(main_log_hits.empty()) << JoinLines(main_log_hits);
 	EXPECT_TRUE(main_png_hits.empty()) << JoinLines(main_png_hits);
 	EXPECT_FALSE(gui_log_hits.empty());
 	EXPECT_FALSE(gui_png_hits.empty());
-	EXPECT_FALSE(headless_log_hits.empty());
-	EXPECT_FALSE(headless_png_hits.empty());
+	EXPECT_TRUE(headless_log_hits.empty()) << JoinLines(headless_log_hits);
+	EXPECT_TRUE(headless_png_hits.empty()) << JoinLines(headless_png_hits);
+	EXPECT_TRUE(headless_host_include_hits.empty()) << JoinLines(headless_host_include_hits);
+	EXPECT_FALSE(std::filesystem::exists(legacy_headless_runtime_host_cpp));
+}
+
+TEST(host_boundary_policy, headless_runtime_bootstrap_uses_minimal_runtime_init_options) {
+	auto const root = ProjectRoot();
+	auto const headless_runtime_bootstrap_cpp = root / "src" / "headless_runtime_bootstrap.cpp";
+
+	auto commands_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.initialize_commands = false;");
+	auto locale_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.initialize_ui_locale = false;");
+	auto automation_factory_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.register_automation_script_factory = false;");
+	auto font_warmup_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.warm_subtitles_provider_font_cache = false;");
+	auto export_filters_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.register_export_filters = false;");
+	auto png_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.install_png_handler = false;");
+
+	EXPECT_FALSE(commands_disabled_hits.empty());
+	EXPECT_FALSE(locale_disabled_hits.empty());
+	EXPECT_FALSE(automation_factory_disabled_hits.empty());
+	EXPECT_FALSE(font_warmup_disabled_hits.empty());
+	EXPECT_FALSE(export_filters_disabled_hits.empty());
+	EXPECT_FALSE(png_disabled_hits.empty());
+}
+
+TEST(host_boundary_policy, shared_exe_headless_wx_lifetime_is_explicit_in_app_entry) {
+	auto const root = ProjectRoot();
+	auto const app_entry_cpp = root / "src" / "app_entry.cpp";
+	auto const headless_runtime_bootstrap_cpp = root / "src" / "headless_runtime_bootstrap.cpp";
+
+	auto app_entry_initializer_hits = FindLiteralHits(app_entry_cpp, "wxInitializer");
+	auto bootstrap_initializer_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "wxInitializer");
+
+	EXPECT_FALSE(app_entry_initializer_hits.empty());
+	EXPECT_TRUE(bootstrap_initializer_hits.empty()) << JoinLines(bootstrap_initializer_hits);
 }
 
 TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
@@ -514,8 +548,6 @@ TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 		"src/wx_style_editor_ui_host.h",
 		"src/gui_wx_runtime_host.cpp",
 		"src/gui_wx_runtime_host.h",
-		"src/headless_wx_runtime_host.cpp",
-		"src/headless_wx_runtime_host.h",
 		"src/wx_message_box_ui_services.h",
 		"src/wx_audio_controller_power_host.cpp",
 		"src/wx_single_choice_dialog.h",

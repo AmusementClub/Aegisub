@@ -3,6 +3,7 @@
 #include "ass_info_service.h"
 #include "headless_playback_probe.h"
 #include "media_inspect_service.h"
+#include "project_session_service.h"
 #include "playback_session_service.h"
 #include "trace_summary_service.h"
 #include "trace_inspect_service.h"
@@ -20,6 +21,8 @@ namespace headless_cli {
 using TraceInspectRequest = aegisub::trace_inspect_service::TraceInspectRequest;
 using PlaybackSessionRequest = aegisub::playback_session_service::PlaybackSessionRequest;
 using PlaybackSessionResult = aegisub::playback_session_service::PlaybackSessionResult;
+using ProjectSessionRequest = aegisub::project_session_service::ProjectSessionRequest;
+using ProjectSessionResult = aegisub::project_session_service::ProjectSessionResult;
 using MediaInspectRequest = aegisub::media_inspect_service::MediaInspectRequest;
 using MediaInspectResult = aegisub::media_inspect_service::MediaInspectResult;
 using AssInfoInspectRequest = aegisub::ass_info_service::AssInfoInspectRequest;
@@ -52,6 +55,10 @@ struct ProbePlaybackCommand {
 
 struct SessionPlaybackCommand {
 	PlaybackSessionRequest request;
+};
+
+struct SessionProjectCommand {
+	ProjectSessionRequest request;
 };
 
 struct InspectMediaCommand {
@@ -110,6 +117,7 @@ struct BatchAssInfoCommand {
 using Command = std::variant<
 	ProbePlaybackCommand,
 	SessionPlaybackCommand,
+	SessionProjectCommand,
 	InspectMediaCommand,
 	InspectAssInfoCommand,
 	InspectTraceCommand,
@@ -130,6 +138,7 @@ AssInfoInspectResult RunInspectAssInfo(AssInfoInspectRequest const& request);
 std::string BuildMediaInspectJson(MediaInspectResult const& result);
 std::string BuildAssInfoJson(AssInfoInspectResult const& result);
 void RunSessionPlaybackAsync(PlaybackSessionRequest request, std::function<void(PlaybackSessionResult)> on_done);
+void RunSessionProjectAsync(ProjectSessionRequest request, std::function<void(ProjectSessionResult)> on_done);
 void RunBatchPlaybackProbeAsync(BatchPlaybackProbeRequest request, std::function<void(BatchPlaybackProbeResult)> on_done);
 BatchTraceSummarizeResult RunBatchTraceSummarize(BatchTraceSummarizeRequest const& request);
 BatchAssInfoResult RunBatchAssInfo(BatchAssInfoRequest const& request);

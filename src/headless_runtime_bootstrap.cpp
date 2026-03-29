@@ -200,6 +200,15 @@ int RunParsedHeadlessCli(HeadlessRuntimeEnvironment& runtime, headless_cli::Pars
 		return result.exit_code;
 	}
 
+	if (auto const* session = std::get_if<headless_cli::SessionProjectCommand>(&*parsed.command)) {
+		auto result = RunAsyncWithPump<headless_cli::ProjectSessionResult>(
+			runtime.MainThreadPump(),
+			[request = session->request](auto&& on_done) mutable {
+				headless_cli::RunSessionProjectAsync(std::move(request), std::forward<decltype(on_done)>(on_done));
+			});
+		return result.exit_code;
+	}
+
 	if (auto const* inspect = std::get_if<headless_cli::InspectTraceCommand>(&*parsed.command)) {
 		auto result = headless_cli::RunInspectTrace(inspect->request);
 		if (!result.output.empty())

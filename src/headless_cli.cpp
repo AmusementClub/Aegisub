@@ -526,6 +526,280 @@ std::optional<PlaybackSessionRequest> ParseSessionPlaybackRequest(std::vector<st
 	return request;
 }
 
+bool ParseProjectSessionStepLine(std::string const& line, size_t line_number, std::vector<aegisub::project_session_service::ProjectSessionStep>& steps, std::string& error) {
+	using aegisub::project_session_service::ProjectSessionStep;
+	using aegisub::project_session_service::ProjectSessionStepKind;
+
+	auto const tokens = SplitWhitespace(line);
+	if (tokens.empty())
+		return true;
+
+	auto invalid = [&](std::string const& message) {
+		error = "project session script line " + std::to_string(line_number) + ": " + message + " | " + line;
+		return false;
+	};
+
+	auto require_int = [&](size_t index, char const* name) -> std::optional<int> {
+		if (index >= tokens.size()) {
+			error = "project session script line " + std::to_string(line_number) + ": missing " + name + " | " + line;
+			return std::nullopt;
+		}
+		auto parsed = ParseIntegerValue(tokens[index]);
+		if (!parsed) {
+			error = "project session script line " + std::to_string(line_number) + ": invalid integer for " + name + " | " + line;
+			return std::nullopt;
+		}
+		return parsed;
+	};
+
+	auto step = ProjectSessionStep{};
+	step.source_text = line;
+
+	auto const& command = tokens[0];
+	if (command == "open-media") {
+		step.kind = ProjectSessionStepKind::OpenMedia;
+	}
+	else if (command == "reopen-media") {
+		step.kind = ProjectSessionStepKind::ReopenMedia;
+	}
+	else if (command == "close-media") {
+		step.kind = ProjectSessionStepKind::CloseMedia;
+	}
+	else if (command == "open-subtitles") {
+		step.kind = ProjectSessionStepKind::OpenSubtitles;
+	}
+	else if (command == "open-subtitles-unlinked") {
+		step.kind = ProjectSessionStepKind::OpenSubtitlesUnlinked;
+	}
+	else if (command == "open-subtitles-from-video") {
+		step.kind = ProjectSessionStepKind::OpenSubtitlesFromVideo;
+	}
+	else if (command == "close-subtitles") {
+		step.kind = ProjectSessionStepKind::CloseSubtitles;
+	}
+	else if (command == "open-timecodes") {
+		step.kind = ProjectSessionStepKind::OpenTimecodes;
+	}
+	else if (command == "close-timecodes") {
+		step.kind = ProjectSessionStepKind::CloseTimecodes;
+	}
+	else if (command == "open-keyframes") {
+		step.kind = ProjectSessionStepKind::OpenKeyframes;
+	}
+	else if (command == "close-keyframes") {
+		step.kind = ProjectSessionStepKind::CloseKeyframes;
+	}
+	else if (command == "query-project") {
+		step.kind = ProjectSessionStepKind::QueryProject;
+	}
+	else if (command == "assert-project") {
+		if (tokens.size() != 6)
+			return invalid("assert-project expects <subtitle_file_loaded> <has_video> <has_audio> <timecodes_file_loaded> <keyframes_file_loaded>");
+		auto subtitle_loaded = ParseBoolValue(tokens[1]);
+		auto has_video = ParseBoolValue(tokens[2]);
+		auto has_audio = ParseBoolValue(tokens[3]);
+		auto timecodes_loaded = ParseBoolValue(tokens[4]);
+		auto keyframes_loaded = ParseBoolValue(tokens[5]);
+		if (!subtitle_loaded || !has_video || !has_audio || !timecodes_loaded || !keyframes_loaded)
+			return invalid("assert-project expects true/false values");
+		step.kind = ProjectSessionStepKind::AssertProject;
+		step.expected_subtitle_file_loaded = *subtitle_loaded;
+		step.expected_has_video = *has_video;
+		step.expected_has_audio = *has_audio;
+		step.expected_timecodes_file_loaded = *timecodes_loaded;
+		step.expected_keyframes_file_loaded = *keyframes_loaded;
+	}
+	else if (command == "assert-subtitle-counts") {
+		if (tokens.size() != 5)
+			return invalid("assert-subtitle-counts expects <style_count> <event_count> <dialogue_count> <comment_count>");
+		auto style_count = require_int(1, "style_count");
+		auto event_count = require_int(2, "event_count");
+		auto dialogue_count = require_int(3, "dialogue_count");
+		auto comment_count = require_int(4, "comment_count");
+		if (!style_count || !event_count || !dialogue_count || !comment_count
+			|| *style_count < 0 || *event_count < 0 || *dialogue_count < 0 || *comment_count < 0)
+			return invalid("assert-subtitle-counts requires non-negative integers");
+		step.kind = ProjectSessionStepKind::AssertSubtitleCounts;
+		step.primary_value = *style_count;
+		step.secondary_value = *event_count;
+		step.tertiary_value = *dialogue_count;
+		step.quaternary_value = *comment_count;
+	}
+	else if (command == "assert-subtitle-modified") {
+		if (tokens.size() != 2)
+			return invalid("assert-subtitle-modified expects <true|false>");
+		auto modified = ParseBoolValue(tokens[1]);
+		if (!modified)
+			return invalid("assert-subtitle-modified expects true or false");
+		step.kind = ProjectSessionStepKind::AssertSubtitleModified;
+		step.expected_subtitle_modified = *modified;
+	}
+	else {
+		return invalid("unknown project session step");
+	}
+
+	steps.push_back(std::move(step));
+	return true;
+}
+
+bool ParseProjectSessionScriptFile(agi::fs::path const& script_file, std::vector<aegisub::project_session_service::ProjectSessionStep>& steps, std::string& error) {
+	std::ifstream in(script_file, std::ios::in);
+	if (!in) {
+		error = "could not open project session script file: " + ToGenericString(script_file);
+		return false;
+	}
+
+	std::string line;
+	size_t line_number = 0;
+	while (std::getline(in, line)) {
+		++line_number;
+		if (!line.empty() && line.back() == '\r')
+			line.pop_back();
+		auto trimmed = Trim(line);
+		if (trimmed.empty() || trimmed[0] == '#')
+			continue;
+		if (!ParseProjectSessionStepLine(trimmed, line_number, steps, error))
+			return false;
+	}
+	return true;
+}
+
+std::optional<ProjectSessionRequest> ParseSessionProjectRequest(std::vector<std::string> const& args, std::string& error) {
+	ProjectSessionRequest request;
+	agi::fs::path script_file;
+
+	for (size_t i = 4; i < args.size(); ++i) {
+		auto const& arg = args[i];
+		if (arg == "--script-file") {
+			auto value = RequireValue(args, i, "--script-file", error);
+			if (!value)
+				return std::nullopt;
+			script_file = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--video") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.video_path = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--audio") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.audio_path = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--subtitle") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.subtitle_path = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--subtitle-encoding") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.subtitle_encoding = *value;
+			continue;
+		}
+		if (arg == "--timecodes") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.timecodes_path = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--keyframes") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.keyframes_path = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--skip-audio") {
+			request.skip_audio = true;
+			continue;
+		}
+		if (arg == "--video-provider") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.video_provider = *value;
+			continue;
+		}
+		if (arg == "--audio-provider") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.audio_provider = *value;
+			continue;
+		}
+		if (arg == "--trace-dir") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.trace_dir = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--audio-rate-scale") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			try {
+				request.audio_rate_scale = std::stod(*value);
+			}
+			catch (...) {
+				error = arg + " requires a positive number\n" + Usage();
+				return std::nullopt;
+			}
+			if (request.audio_rate_scale <= 0.0) {
+				error = arg + " requires a positive number\n" + Usage();
+				return std::nullopt;
+			}
+			continue;
+		}
+		if (arg == "--audio-quantum-ms") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto parsed = ParseIntegerValue(*value);
+			if (!parsed || *parsed < 0) {
+				error = arg + " requires a non-negative integer\n" + Usage();
+				return std::nullopt;
+			}
+			request.audio_quantum_ms = *parsed;
+			continue;
+		}
+
+		error = "unrecognized session project argument: " + arg + "\n" + Usage();
+		return std::nullopt;
+	}
+
+	if (script_file.empty()) {
+		error = "--cli session project requires --script-file\n" + Usage();
+		return std::nullopt;
+	}
+	if (!agi::fs::FileExists(script_file)) {
+		error = "session project script file does not exist: " + ToGenericString(script_file);
+		return std::nullopt;
+	}
+	if (!ParseProjectSessionScriptFile(script_file, request.steps, error)) {
+		error += "\n" + Usage();
+		return std::nullopt;
+	}
+	if (request.steps.empty()) {
+		error = "session project script is empty: " + ToGenericString(script_file);
+		return std::nullopt;
+	}
+	if (!request.skip_audio && request.audio_path.empty() && !request.video_path.empty())
+		request.audio_path = request.video_path;
+
+	return request;
+}
+
 std::vector<agi::fs::path> ReadPathListFile(agi::fs::path const& list_file) {
 	std::ifstream in(list_file, std::ios::in);
 	std::vector<agi::fs::path> paths;
@@ -1275,6 +1549,17 @@ ParseResult ParseCommandLine(std::vector<std::string> const& args) {
 		return result;
 	}
 
+	if (command == "session" && subcommand == "project") {
+		auto request = ParseSessionProjectRequest(args, result.error);
+		if (!request) {
+			if (result.error.empty())
+				result.error = Usage();
+			return result;
+		}
+		result.command.emplace(SessionProjectCommand{std::move(*request)});
+		return result;
+	}
+
 	if (command == "inspect" && subcommand == "media") {
 		auto request = ParseInspectMediaRequest(args, result.error);
 		if (!request) {
@@ -1436,6 +1721,10 @@ void RunSessionPlaybackAsync(PlaybackSessionRequest request, std::function<void(
 	aegisub::playback_session_service::RunAsync(std::move(request), std::move(on_done));
 }
 
+void RunSessionProjectAsync(ProjectSessionRequest request, std::function<void(ProjectSessionResult)> on_done) {
+	aegisub::project_session_service::RunAsync(std::move(request), std::move(on_done));
+}
+
 void RunBatchPlaybackProbeAsync(BatchPlaybackProbeRequest request, std::function<void(BatchPlaybackProbeResult)> on_done) {
 	auto *runner = new BatchPlaybackProbeRunner(std::move(request), std::move(on_done));
 	runner->Start();
@@ -1514,6 +1803,7 @@ std::string Usage() {
 		"Usage:\n"
 		"  Aegisub.exe --cli probe playback [probe flags...]\n"
 		"  Aegisub.exe --cli session playback --script-file <path> --video <path> [session flags...]\n"
+		"  Aegisub.exe --cli session project --script-file <path> [project flags...]\n"
 		"  Aegisub.exe --cli inspect media --video <path> [media flags...]\n"
 		"  Aegisub.exe --cli inspect ass-info <path> [--encoding <name>]\n"
 		"  Aegisub.exe --cli inspect trace <session-dir|manifest.txt|summary.txt|trace.ndjson>\n"
@@ -1527,8 +1817,22 @@ std::string Usage() {
 		"  query-media | query-playback | assert-media <true|false> <true|false>\n"
 		"  assert-playing <true|false> <true|false> | assert-authority <audio|video>\n"
 		"\n"
-		"Session flags:\n"
+		"Playback session flags:\n"
 		"  --script-file <path> --video <path> [--audio <path>] [--skip-audio]\n"
+		"  [--video-provider <name>] [--audio-provider <name>] [--trace-dir <path>]\n"
+		"  [--audio-rate-scale <scale>] [--audio-quantum-ms <ms>]\n"
+		"\n"
+		"Project session steps:\n"
+		"  open-media | reopen-media | close-media | open-subtitles | open-subtitles-unlinked\n"
+		"  open-subtitles-from-video | close-subtitles | open-timecodes | close-timecodes\n"
+		"  open-keyframes | close-keyframes | query-project\n"
+		"  assert-project <true|false> <true|false> <true|false> <true|false> <true|false>\n"
+		"  assert-subtitle-counts <style_count> <event_count> <dialogue_count> <comment_count>\n"
+		"  assert-subtitle-modified <true|false>\n"
+		"\n"
+		"Project session flags:\n"
+		"  --script-file <path> [--video <path>] [--audio <path>] [--skip-audio]\n"
+		"  [--subtitle <path>] [--subtitle-encoding <name>] [--timecodes <path>] [--keyframes <path>]\n"
 		"  [--video-provider <name>] [--audio-provider <name>] [--trace-dir <path>]\n"
 		"  [--audio-rate-scale <scale>] [--audio-quantum-ms <ms>]\n"
 		"\n"

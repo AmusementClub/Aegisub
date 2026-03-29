@@ -533,6 +533,8 @@ add_executable(Aegisub WIN32
     src/preferences_base.cpp
     src/project.cpp
     src/project_open_service.cpp
+    src/project_query_service.cpp
+    src/project_session_service.cpp
     src/resolution_resampler.cpp
     src/search_replace_engine.cpp
     src/selection_controller.cpp

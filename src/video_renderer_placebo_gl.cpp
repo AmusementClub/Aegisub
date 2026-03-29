@@ -120,8 +120,11 @@ bool BuildBgra8PlaneData(placebo::runtime::Api const& api, SourceFrame const& fr
 }
 
 struct PlaceboRendererGL::Functions {
+	PFNGLACTIVETEXTUREPROC ActiveTexture = nullptr;
+	PFNGLBINDBUFFERPROC BindBuffer = nullptr;
 	PFNGLUSEPROGRAMPROC UseProgram = nullptr;
 	PFNGLBINDFRAMEBUFFERPROC BindFramebuffer = nullptr;
+	PFNGLBINDVERTEXARRAYPROC BindVertexArray = nullptr;
 };
 
 PlaceboRendererGL::PlaceboRendererGL() {
@@ -162,8 +165,11 @@ void PlaceboRendererGL::EnsureInitialized() {
 			throw VideoOutInitException("Failed to create libplacebo renderer.");
 
 		functions = std::make_unique<Functions>();
+		functions->ActiveTexture = LoadOptionalProc<PFNGLACTIVETEXTUREPROC>("glActiveTexture");
+		functions->BindBuffer = LoadOptionalProc<PFNGLBINDBUFFERPROC>("glBindBuffer");
 		functions->UseProgram = LoadOptionalProc<PFNGLUSEPROGRAMPROC>("glUseProgram");
 		functions->BindFramebuffer = LoadOptionalProc<PFNGLBINDFRAMEBUFFERPROC>("glBindFramebuffer", "glBindFramebufferEXT");
+		functions->BindVertexArray = LoadOptionalProc<PFNGLBINDVERTEXARRAYPROC>("glBindVertexArray");
 
 		LogInfo("Activated libplacebo video renderer using "
 			+ placebo::runtime::GetLoadedLibrary()
@@ -351,6 +357,17 @@ void PlaceboRendererGL::RestoreCompatibilityState() noexcept {
 	if (functions) {
 		if (functions->UseProgram)
 			functions->UseProgram(0);
+		if (functions->BindVertexArray)
+			functions->BindVertexArray(0);
+		// Visual tools still use legacy client-side arrays, so leave placebo's
+		// buffer bindings behind only if we want glVertexPointer to treat CPU
+		// pointers as VBO offsets and draw garbage.
+		if (functions->BindBuffer) {
+			functions->BindBuffer(GL_ARRAY_BUFFER, 0);
+			functions->BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
+		}
+		if (functions->ActiveTexture)
+			functions->ActiveTexture(GL_TEXTURE0);
 		if (functions->BindFramebuffer)
 			functions->BindFramebuffer(GL_FRAMEBUFFER, target_framebuffer);
 	}

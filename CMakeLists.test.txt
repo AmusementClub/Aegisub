@@ -160,6 +160,18 @@ if(WITH_LIBPLACEBO)
     target_include_directories(placebo-runtime-smoke PRIVATE ${LibPlacebo_INCLUDE_DIR})
     target_link_libraries(placebo-runtime-smoke PRIVATE libaegisub)
 
+    if(WIN32)
+        add_executable(placebo-legacy-state-smoke EXCLUDE_FROM_ALL
+            tests/smoke/placebo_legacy_state_smoke.cpp
+            src/native_library.cpp
+            src/video_renderer_placebo_gl.cpp
+            src/video_renderer_placebo_runtime.cpp
+        )
+        target_compile_definitions(placebo-legacy-state-smoke PRIVATE CMAKE_BUILD WITH_LIBPLACEBO)
+        target_include_directories(placebo-legacy-state-smoke PRIVATE ${LibPlacebo_INCLUDE_DIR})
+        target_link_libraries(placebo-legacy-state-smoke PRIVATE libaegisub OpenGL::GL)
+    endif()
+
     add_executable(placebo-render-bench EXCLUDE_FROM_ALL
         tests/smoke/placebo_render_bench.cpp
         src/native_library.cpp

@@ -100,6 +100,7 @@ TEST(host_boundary_policy, service_like_sources_keep_wx_at_host_edges) {
 		"src/headless_wx_runtime_host.cpp",
 		"src/wx_automation_file_dialog_service.h",
 		"src/wx_audio_controller_power_host.cpp",
+		"src/wx_frame_main_dialog_ui_host.h",
 		"src/wx_style_editor_ui_host.h",
 	};
 
@@ -303,6 +304,42 @@ TEST(host_boundary_policy, style_editor_ui_fallback_lives_in_explicit_wx_host_se
 	EXPECT_FALSE(seam_include_hits.empty());
 }
 
+TEST(host_boundary_policy, frame_main_dialog_ui_fallback_lives_in_explicit_wx_host_seam) {
+	auto const root = ProjectRoot();
+	auto const frame_main_cpp = root / "src" / "frame_main.cpp";
+	auto const wx_frame_main_dialog_ui_host_h = root / "src" / "wx_frame_main_dialog_ui_host.h";
+
+	auto message_box_include_hits = FindLiteralHits(frame_main_cpp, "wx_message_box_ui_services.h");
+	auto single_choice_include_hits = FindLiteralHits(frame_main_cpp, "wx_single_choice_dialog.h");
+	auto notification_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainNotificationSink");
+	auto interaction_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainInteractionSink");
+	auto single_choice_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainSingleChoiceInteractionSink");
+	auto startup_log_hits = FindLiteralHits(frame_main_cpp, "ShowFrameMainStartupLogDialog(");
+	auto seam_notification_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainNotificationSink(");
+	auto seam_interaction_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainInteractionSink(");
+	auto seam_single_choice_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainSingleChoiceInteractionSink(");
+
+	auto seam_message_box_include_hits = FindLiteralHits(wx_frame_main_dialog_ui_host_h, "wx_message_box_ui_services.h");
+	auto seam_single_choice_include_hits = FindLiteralHits(wx_frame_main_dialog_ui_host_h, "wx_single_choice_dialog.h");
+	auto seam_message_box_hits = FindLiteralHits(wx_frame_main_dialog_ui_host_h, "wxMessageBox(");
+	auto seam_single_choice_dialog_hits = FindLiteralHits(wx_frame_main_dialog_ui_host_h, "ShowSingleChoiceDialog(");
+
+	EXPECT_TRUE(message_box_include_hits.empty()) << JoinLines(message_box_include_hits);
+	EXPECT_TRUE(single_choice_include_hits.empty()) << JoinLines(single_choice_include_hits);
+	EXPECT_TRUE(notification_class_hits.empty()) << JoinLines(notification_class_hits);
+	EXPECT_TRUE(interaction_class_hits.empty()) << JoinLines(interaction_class_hits);
+	EXPECT_TRUE(single_choice_class_hits.empty()) << JoinLines(single_choice_class_hits);
+	EXPECT_FALSE(startup_log_hits.empty());
+	EXPECT_FALSE(seam_notification_hits.empty());
+	EXPECT_FALSE(seam_interaction_hits.empty());
+	EXPECT_FALSE(seam_single_choice_hits.empty());
+
+	EXPECT_FALSE(seam_message_box_include_hits.empty());
+	EXPECT_FALSE(seam_single_choice_include_hits.empty());
+	EXPECT_FALSE(seam_message_box_hits.empty());
+	EXPECT_FALSE(seam_single_choice_dialog_hits.empty());
+}
+
 TEST(host_boundary_policy, shared_dispatch_timers_stay_wx_free_and_no_longer_use_host_suffix) {
 	auto const root = ProjectRoot();
 	auto const src_root = root / "src";
@@ -375,6 +412,7 @@ TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 		"src/wx_app_bootstrap_ui_services.h",
 		"src/wx_automation_file_dialog_service.h",
 		"src/wx_file_dialog_services.h",
+		"src/wx_frame_main_dialog_ui_host.h",
 		"src/wx_style_editor_ui_host.h",
 		"src/gui_wx_runtime_host.cpp",
 		"src/gui_wx_runtime_host.h",

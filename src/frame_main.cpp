@@ -65,14 +65,13 @@
 #include "video_box.h"
 #include "video_controller.h"
 #include "video_display.h"
-#include "wx_single_choice_dialog.h"
+#include "wx_frame_main_dialog_ui_host.h"
 
 #include <libaegisub/dispatch.h>
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 
 #include <wx/dnd.h>
-#include <wx/msgdlg.h>
 #include <wx/sizer.h>
 #include <wx/statline.h>
 #include <wx/sysopt.h>
@@ -82,78 +81,12 @@ enum {
 };
 
 #ifdef WITH_STARTUPLOG
-#define StartupLog(a) wxMessageBox(wxS(a), wxS("Aegisub startup log"))
+#define StartupLog(a) agi::ShowFrameMainStartupLogDialog(wxS(a))
 #else
 #define StartupLog(a) LOG_I("frame_main/init") << a
 #endif
 
 namespace {
-int to_wx_flags(agi::InteractionButtons buttons, agi::InteractionIcon icon) {
-	int flags = 0;
-	switch (buttons) {
-	case agi::InteractionButtons::Ok:
-		flags |= wxOK;
-		break;
-	case agi::InteractionButtons::OkCancel:
-		flags |= wxOK | wxCANCEL;
-		break;
-	case agi::InteractionButtons::YesNo:
-		flags |= wxYES_NO;
-		break;
-	case agi::InteractionButtons::YesNoCancel:
-		flags |= wxYES_NO | wxCANCEL;
-		break;
-	}
-
-	switch (icon) {
-	case agi::InteractionIcon::None:
-		break;
-	case agi::InteractionIcon::Info:
-		flags |= wxICON_INFORMATION;
-		break;
-	case agi::InteractionIcon::Warning:
-		flags |= wxICON_WARNING;
-		break;
-	case agi::InteractionIcon::Error:
-		flags |= wxICON_ERROR;
-		break;
-	case agi::InteractionIcon::Question:
-		flags |= wxICON_QUESTION;
-		break;
-	}
-
-	return flags | wxCENTER;
-}
-
-agi::InteractionResult from_wx_result(int result) {
-	switch (result) {
-	case wxOK:
-		return agi::InteractionResult::Ok;
-	case wxCANCEL:
-		return agi::InteractionResult::Cancel;
-	case wxYES:
-		return agi::InteractionResult::Yes;
-	case wxNO:
-		return agi::InteractionResult::No;
-	default:
-		return agi::InteractionResult::Cancel;
-	}
-}
-
-agi::InteractionResult safe_result(agi::InteractionButtons buttons) {
-	switch (buttons) {
-	case agi::InteractionButtons::Ok:
-		return agi::InteractionResult::Ok;
-	case agi::InteractionButtons::OkCancel:
-		return agi::InteractionResult::Cancel;
-	case agi::InteractionButtons::YesNo:
-		return agi::InteractionResult::No;
-	case agi::InteractionButtons::YesNoCancel:
-		return agi::InteractionResult::Cancel;
-	}
-	return agi::InteractionResult::Cancel;
-}
-
 class FrameMainStatusSink final : public agi::StatusSink {
 	FrameMain *frame = nullptr;
 	agi::ui::WeakLifetime lifetime;
@@ -168,81 +101,6 @@ public:
 	void ShowStatus(std::string const& message, int timeout_ms) override {
 		agi::ui::MainAsyncIfAlive(lifetime, [frame = frame, message, timeout_ms] {
 			frame->StatusTimeout(to_wx(message), timeout_ms);
-		});
-	}
-};
-
-class FrameMainNotificationSink final : public agi::NotificationSink {
-	FrameMain *frame = nullptr;
-	agi::ui::WeakLifetime lifetime;
-
-public:
-	FrameMainNotificationSink(FrameMain *frame, agi::ui::WeakLifetime lifetime)
-	: frame(frame)
-	, lifetime(std::move(lifetime))
-	{
-	}
-
-	void ShowInfo(std::string const& title, std::string const& message) override {
-		agi::ui::MainInvokeIfAlive(lifetime, [frame = frame, title, message] {
-			wxMessageBox(to_wx(message), to_wx(title), wxOK | wxICON_INFORMATION | wxCENTER, frame);
-		});
-	}
-
-	void ShowError(std::string const& title, std::string const& message) override {
-		agi::ui::MainInvokeIfAlive(lifetime, [frame = frame, title, message] {
-			wxMessageBox(to_wx(message), to_wx(title), wxOK | wxICON_ERROR | wxCENTER, frame);
-		});
-	}
-
-	void ShowWarning(std::string const& title, std::string const& message) override {
-		agi::ui::MainInvokeIfAlive(lifetime, [frame = frame, title, message] {
-			wxMessageBox(to_wx(message), to_wx(title), wxOK | wxICON_WARNING | wxCENTER, frame);
-		});
-	}
-};
-
-class FrameMainInteractionSink final : public agi::InteractionSink {
-	FrameMain *frame = nullptr;
-	agi::ui::WeakLifetime lifetime;
-
-public:
-	FrameMainInteractionSink(FrameMain *frame, agi::ui::WeakLifetime lifetime)
-	: frame(frame)
-	, lifetime(std::move(lifetime))
-	{
-	}
-
-	agi::InteractionResult Request(agi::InteractionRequest const& request) override {
-		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, request] {
-			if (!lifetime.lock())
-				return safe_result(request.buttons);
-
-			return from_wx_result(wxMessageBox(
-				to_wx(request.message),
-				to_wx(request.title),
-				to_wx_flags(request.buttons, request.icon),
-				frame));
-		});
-	}
-};
-
-class FrameMainSingleChoiceInteractionSink final : public agi::SingleChoiceInteractionSink {
-	FrameMain *frame = nullptr;
-	agi::ui::WeakLifetime lifetime;
-
-public:
-	FrameMainSingleChoiceInteractionSink(FrameMain *frame, agi::ui::WeakLifetime lifetime)
-	: frame(frame)
-	, lifetime(std::move(lifetime))
-	{
-	}
-
-	std::optional<int> RequestSingleChoice(agi::SingleChoiceInteractionRequest const& request) override {
-		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, request] {
-			if (!lifetime.lock())
-				return std::optional<int>();
-			return agi::ShowSingleChoiceDialog(frame, request);
 		});
 	}
 };
@@ -498,9 +356,9 @@ FrameMain::FrameMain()
 	ui.parent = this;
 	ui.frame = this;
 	core.statusSink = std::make_shared<FrameMainStatusSink>(this, GetAsyncUiLifetime());
-	core.notificationSink = std::make_shared<FrameMainNotificationSink>(this, GetAsyncUiLifetime());
-	core.interactionSink = std::make_shared<FrameMainInteractionSink>(this, GetAsyncUiLifetime());
-	core.singleChoiceInteractionSink = std::make_shared<FrameMainSingleChoiceInteractionSink>(this, GetAsyncUiLifetime());
+	core.notificationSink = agi::MakeFrameMainNotificationSink(this, GetAsyncUiLifetime());
+	core.interactionSink = agi::MakeFrameMainInteractionSink(this, GetAsyncUiLifetime());
+	core.singleChoiceInteractionSink = agi::MakeFrameMainSingleChoiceInteractionSink(this, GetAsyncUiLifetime());
 	core.fileDialogService = std::make_shared<FrameMainFileDialogService>(this, GetAsyncUiLifetime());
 	core.videoSourceRequestService = std::make_shared<FrameMainVideoSourceRequestService>(this, GetAsyncUiLifetime());
 	core.backgroundRunnerFactory = std::make_shared<FrameMainBackgroundRunnerFactory>(this, GetAsyncUiLifetime());

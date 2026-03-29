@@ -22,6 +22,7 @@
 #include <libaegisub/vfr.h>
 
 #include <memory>
+#include <optional>
 
 class wxWindow;
 namespace agi { namespace charset { class IconvWrapper; } }
@@ -115,3 +116,4 @@ public:
 /// @param owner Parent window of the dialog
 /// @param s Struct with initial values and to fill with the chosen settings
 int ShowEbuExportConfigurationDialog(wxWindow *owner, EbuExportSettings &s);
+std::optional<EbuExportSettings> PromptForEbuExportSettings(wxWindow *owner, EbuExportSettings settings);

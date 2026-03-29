@@ -9,6 +9,8 @@
 #include <memory>
 #include <string>
 
+namespace agi { class SingleChoiceInteractionSink; }
+
 enum class RuntimeShellMode {
 	Unknown,
 	Gui,
@@ -32,6 +34,7 @@ struct AppRuntimeInitOptions {
 	AppRuntimeMainQueueHooks main_queue_hooks;
 	bool load_global_scripts = false;
 	bool install_png_handler = true;
+	std::shared_ptr<agi::SingleChoiceInteractionSink> single_choice_sink;
 	std::function<void(std::string const& title, std::string const& message)> report_nonfatal_error;
 };
 

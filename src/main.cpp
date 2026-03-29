@@ -168,6 +168,7 @@ bool AegisubApp::OnInit() {
 			},
 			true,
 			true,
+			agi::MakeWindowSingleChoiceInteractionSink(),
 			[](std::string const& title, std::string const& message) {
 				AppNotificationSink().ShowError(title, message);
 			}

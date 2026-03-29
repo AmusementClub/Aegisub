@@ -128,6 +128,7 @@ public:
 					},
 					false,
 					true,
+					{},
 					[](std::string const& title, std::string const& message) {
 						ReportHeadlessError(title, message);
 					}

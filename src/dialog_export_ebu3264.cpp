@@ -41,6 +41,7 @@
 #include <wx/statbox.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
+#include <wx/utils.h>
 #include <wx/valgen.h>
 
 namespace {
@@ -217,6 +218,21 @@ int ShowEbuExportConfigurationDialog(wxWindow *owner, EbuExportSettings &s) {
 	display_standard_ctrl->SetValidator(wxGenericValidator((int*)&s.display_standard));
 
 	return d.ShowModal();
+}
+
+std::optional<EbuExportSettings> PromptForEbuExportSettings(wxWindow *owner, EbuExportSettings settings) {
+	bool was_busy = wxIsBusy();
+	if (was_busy)
+		wxEndBusyCursor();
+
+	auto result = ShowEbuExportConfigurationDialog(owner, settings);
+
+	if (was_busy)
+		wxBeginBusyCursor();
+
+	if (result != wxID_OK)
+		return std::nullopt;
+	return settings;
 }
 
 agi::vfr::Framerate EbuExportSettings::GetFramerate() const {

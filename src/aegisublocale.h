@@ -29,9 +29,11 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#include <memory>
 #include <string>
 
 class wxTranslations;
+namespace agi { class SingleChoiceInteractionSink; }
 
 class AegisubLocale {
 	std::string active_language;
@@ -40,5 +42,5 @@ class AegisubLocale {
 public:
 	void Init(std::string const& language);
 	bool HasLanguage(std::string const& language);
-	std::string PickLanguage();
+	std::string PickLanguage(std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});
 };

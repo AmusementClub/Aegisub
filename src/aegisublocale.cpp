@@ -37,6 +37,7 @@
 
 #include "compat.h"
 #include "options.h"
+#include "ui_services.h"
 #include "utils.h"
 
 #include <libaegisub/path.h>
@@ -45,7 +46,6 @@
 #include <clocale>
 #include <functional>
 #include <wx/intl.h>
-#include <wx/choicdlg.h> // Keep this last so wxUSE_CHOICEDLG is set.
 
 #ifndef AEGISUB_CATALOG
 #define AEGISUB_CATALOG "aegisub"
@@ -76,7 +76,7 @@ bool AegisubLocale::HasLanguage(std::string const& language) {
 	return std::find(langs.begin(), langs.end(), to_wx(language)) != langs.end();
 }
 
-std::string AegisubLocale::PickLanguage() {
+std::string AegisubLocale::PickLanguage(std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
 	auto available = GetTranslations()->GetAvailableTranslations(wxString::FromUTF8(AEGISUB_CATALOG));
 
 	if (active_language.empty()) {
@@ -105,18 +105,28 @@ std::string AegisubLocale::PickLanguage() {
 	for (auto const& lang : langs)
 		langNames.push_back(LocalizedLanguageName(lang));
 
-	long style = wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxOK | wxCENTRE;
-	if (!active_language.empty())
-		style |= wxCANCEL;
+	if (!choice_sink)
+		return "";
 
-	wxSingleChoiceDialog dialog(nullptr, wxS("Please choose a language:"), wxS("Language"), langNames,
-			(void **)nullptr,
-			style);
-	if (dialog.ShowModal() == wxID_OK) {
-		int picked = dialog.GetSelection();
+	auto choice = choice_sink->RequestSingleChoice({
+		"Language",
+		"Please choose a language:",
+		[from = langs] {
+			std::vector<std::string> choices;
+			choices.reserve(from.size());
+			for (auto const& lang : from)
+				choices.push_back(from_wx(LocalizedLanguageName(lang)));
+			return choices;
+		}(),
+		0
+	});
+	if (choice) {
+		int picked = *choice;
+		if (picked >= 0 && picked < static_cast<int>(langs.size())) {
 		auto new_lang = from_wx(langs[picked]);
 		if (new_lang != active_language)
 			return new_lang;
+		}
 	}
 
 	return "";

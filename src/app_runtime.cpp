@@ -146,7 +146,7 @@ void InitializeCommandsAndLocale(AppRuntimeInitOptions const& options, AegisubLo
 	bool const has_language = !lang.empty() && (lang == "en_US" || locale.HasLanguage(lang));
 	if (!has_language) {
 		if (options.locale_policy == RuntimeLocalePolicy::PickIfNeeded)
-			lang = locale.PickLanguage();
+			lang = locale.PickLanguage(options.single_choice_sink);
 		if (lang.empty() || !locale.HasLanguage(lang))
 			lang = "en_US";
 		OPT_SET("App/Language")->SetString(lang);

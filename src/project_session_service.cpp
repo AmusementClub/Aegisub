@@ -578,6 +578,12 @@ public:
 		this->request.audio_rate_scale,
 		this->request.audio_quantum_ms,
 		"headless-project-session-%%%%%%%%",
+		{
+			this->request.video_track_index,
+			this->request.audio_track_index,
+			this->request.subtitle_track_index,
+			true
+		}
 	}) {
 	}
 

@@ -92,6 +92,7 @@ struct SingleChoiceInteractionRequest {
 	std::vector<std::string> choices;
 	int default_choice = 0;
 	std::string help_page;
+	std::string request_id;
 };
 
 class SingleChoiceInteractionSink {

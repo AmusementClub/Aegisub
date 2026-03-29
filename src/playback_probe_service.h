@@ -13,6 +13,8 @@ struct PlaybackProbeRequest {
 	agi::fs::path audio_path;
 	std::optional<std::string> video_provider;
 	std::optional<std::string> audio_provider;
+	std::optional<int> video_track_index;
+	std::optional<int> audio_track_index;
 	bool skip_audio = false;
 	int line_start_ms = 0;
 	int repeat_count = 1;

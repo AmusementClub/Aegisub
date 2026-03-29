@@ -50,6 +50,8 @@ struct PlaybackSessionRequest {
 	agi::fs::path audio_path;
 	std::optional<std::string> video_provider;
 	std::optional<std::string> audio_provider;
+	std::optional<int> video_track_index;
+	std::optional<int> audio_track_index;
 	bool skip_audio = false;
 	double audio_rate_scale = 1.0;
 	int audio_quantum_ms = 0;

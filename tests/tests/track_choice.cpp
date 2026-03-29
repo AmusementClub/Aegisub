@@ -10,6 +10,7 @@ TEST(track_choice, build_request_preserves_subtitle_choices) {
 	EXPECT_EQ(choices, request.choices);
 	EXPECT_FALSE(request.title.empty());
 	EXPECT_FALSE(request.message.empty());
+	EXPECT_EQ("track_choice.subtitle", request.request_id);
 }
 
 TEST(track_choice, build_request_uses_distinct_titles_for_audio_and_video) {
@@ -18,6 +19,15 @@ TEST(track_choice, build_request_uses_distinct_titles_for_audio_and_video) {
 
 	EXPECT_NE(audio_request.title, video_request.title);
 	EXPECT_NE(audio_request.message, video_request.message);
+}
+
+TEST(track_choice, build_request_uses_stable_request_ids_per_kind) {
+	auto audio_request = aegisub::track_choice::BuildRequest(aegisub::track_choice::DialogKind::Audio, {"Track 01"});
+	auto video_request = aegisub::track_choice::BuildRequest(aegisub::track_choice::DialogKind::Video, {"Track 00"});
+
+	EXPECT_EQ("track_choice.audio", audio_request.request_id);
+	EXPECT_EQ("track_choice.video", video_request.request_id);
+	EXPECT_NE(audio_request.request_id, video_request.request_id);
 }
 
 TEST(track_choice, resolve_selection_accepts_in_range_index) {

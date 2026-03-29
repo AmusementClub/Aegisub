@@ -6,14 +6,23 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace aegisub::media_inspect_service {
+
+struct TrackChoiceInfo {
+	int choice_index = 0;
+	std::string display_name;
+};
 
 struct MediaInspectRequest {
 	agi::fs::path video_path;
 	agi::fs::path audio_path;
 	std::optional<std::string> video_provider;
 	std::optional<std::string> audio_provider;
+	std::optional<int> video_track_index;
+	std::optional<int> audio_track_index;
+	std::optional<int> subtitle_track_index;
 	bool skip_audio = false;
 	double audio_rate_scale = 1.0;
 	int audio_quantum_ms = 0;
@@ -39,6 +48,9 @@ struct MediaInspectResult {
 	bool audio_provider_fallback = false;
 	std::string audio_provider_fallback_reason;
 	std::string audio_provider_attempts;
+	std::vector<TrackChoiceInfo> video_track_choices;
+	std::vector<TrackChoiceInfo> audio_track_choices;
+	std::vector<TrackChoiceInfo> subtitle_track_choices;
 };
 
 MediaInspectResult Inspect(MediaInspectRequest const& request);

@@ -172,6 +172,30 @@ RequestParseResult ParseRequestArguments(std::vector<std::string> const& args, b
 			request.audio_provider = *value;
 			continue;
 		}
+		if (arg == "--probe-video-track-index") {
+			auto value = require_value(i, "--probe-video-track-index");
+			if (!value)
+				return result;
+			auto parsed = ParseInt(*value);
+			if (!parsed || *parsed < 0) {
+				result.error = "--probe-video-track-index must be a non-negative integer\n" + Usage();
+				return result;
+			}
+			request.video_track_index = *parsed;
+			continue;
+		}
+		if (arg == "--probe-audio-track-index") {
+			auto value = require_value(i, "--probe-audio-track-index");
+			if (!value)
+				return result;
+			auto parsed = ParseInt(*value);
+			if (!parsed || *parsed < 0) {
+				result.error = "--probe-audio-track-index must be a non-negative integer\n" + Usage();
+				return result;
+			}
+			request.audio_track_index = *parsed;
+			continue;
+		}
 		if (arg == "--probe-duration-ms") {
 			auto value = require_value(i, "--probe-duration-ms");
 			if (!value)
@@ -278,6 +302,7 @@ std::string Usage() {
 		"[--probe-repeat-count <count>] [--probe-repeat-gap-ms <ms>] "
 		"[--probe-seek-after-ms <ms>] [--probe-seek-target-offset-ms <ms>] "
 		"[--probe-video-provider <name>] [--probe-audio-provider <name>] "
+		"[--probe-video-track-index <index>] [--probe-audio-track-index <index>] "
 		"[--probe-duration-ms <ms>] "
 		"[--probe-audio-rate-scale <scale>] [--probe-audio-quantum-ms <ms>] "
 		"[--probe-max-abs-delta-ms <ms>] [--probe-trace-dir <path>]";

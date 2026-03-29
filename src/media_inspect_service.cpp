@@ -17,7 +17,10 @@
 
 #include "headless_playback_session_host.h"
 #include "include/aegisub/context.h"
+#include "mkv_wrap.h"
 #include "provider_selection_diagnostics.h"
+
+#include <libaegisub/fs.h>
 
 #include <fstream>
 #include <utility>
@@ -31,6 +34,58 @@ std::string Sanitize(std::string const& value) {
 
 std::string ToGenericString(agi::fs::path const& path) {
 	return agi::fs::PathToGenericString(path);
+}
+
+void AppendTrackChoices(std::vector<TrackChoiceInfo>& target, std::vector<std::string> const& labels) {
+	target.reserve(labels.size());
+	for (size_t i = 0; i < labels.size(); ++i) {
+		target.push_back({
+			static_cast<int>(i),
+			labels[i]
+		});
+	}
+}
+
+void PopulateMatroskaTrackChoices(agi::fs::path const& path, MediaInspectResult& result) {
+	if (path.empty())
+		return;
+	if (!agi::fs::HasExtension(path, "mkv")
+		&& !agi::fs::HasExtension(path, "mka")
+		&& !agi::fs::HasExtension(path, "mks")
+		&& !agi::fs::HasExtension(path, "mk3d")
+		&& !agi::fs::HasExtension(path, "webm")) {
+		return;
+	}
+
+	try {
+		auto scan = MatroskaWrapper::ScanTracks(path);
+		std::vector<std::string> video_choices;
+		std::vector<std::string> audio_choices;
+		std::vector<std::string> subtitle_choices;
+		for (auto const& track : scan.tracks) {
+			auto label = DescribeMkvTrack(track);
+			switch (track.type) {
+			case MkvTrackType::Video:
+				video_choices.push_back(std::move(label));
+				break;
+			case MkvTrackType::Audio:
+				audio_choices.push_back(std::move(label));
+				break;
+			case MkvTrackType::Subtitle:
+				if (IsImportableMkvSubtitleTrack(track))
+					subtitle_choices.push_back(std::move(label));
+				break;
+			default:
+				break;
+			}
+		}
+
+		AppendTrackChoices(result.video_track_choices, video_choices);
+		AppendTrackChoices(result.audio_track_choices, audio_choices);
+		AppendTrackChoices(result.subtitle_track_choices, subtitle_choices);
+	}
+	catch (...) {
+	}
 }
 
 void WriteManifest(MediaInspectRequest const& request, MediaInspectResult const& result) {
@@ -75,6 +130,12 @@ void WriteSummary(MediaInspectResult const& result) {
 	write_bool("audio.provider_fallback", result.audio_provider_fallback);
 	write_value("audio.provider_fallback_reason", result.audio_provider_fallback_reason);
 	write_value("audio.provider_attempts", result.audio_provider_attempts);
+	for (auto const& track : result.video_track_choices)
+		write_value(("track.video.choice." + std::to_string(track.choice_index)).c_str(), track.display_name);
+	for (auto const& track : result.audio_track_choices)
+		write_value(("track.audio.choice." + std::to_string(track.choice_index)).c_str(), track.display_name);
+	for (auto const& track : result.subtitle_track_choices)
+		write_value(("track.subtitle.choice." + std::to_string(track.choice_index)).c_str(), track.display_name);
 	write_bool("media.has_video", result.media.has_video);
 	write_bool("media.has_audio", result.media.has_audio);
 	out << "media.video_width=" << result.media.video_width << "\n";
@@ -118,6 +179,12 @@ MediaInspectResult Inspect(MediaInspectRequest const& request) {
 		request.audio_rate_scale,
 		request.audio_quantum_ms,
 		"headless-inspect-media-%%%%%%%%",
+		{
+			request.video_track_index,
+			request.audio_track_index,
+			request.subtitle_track_index,
+			true
+		}
 	});
 
 	int start_error_code = 0;
@@ -152,6 +219,7 @@ MediaInspectResult Inspect(MediaInspectRequest const& request) {
 	result.audio_provider_fallback = UsedProviderFallback(host.AudioProviderReport());
 	result.audio_provider_fallback_reason = DescribeProviderFallback(host.AudioProviderReport());
 	result.audio_provider_attempts = FormatProviderAttempts(host.AudioProviderReport());
+	PopulateMatroskaTrackChoices(request.video_path.empty() ? request.audio_path : request.video_path, result);
 
 	if (!open_result.opened) {
 		result.exit_code = open_result.error_code ? open_result.error_code : 8;

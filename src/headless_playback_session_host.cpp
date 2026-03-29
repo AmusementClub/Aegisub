@@ -25,6 +25,7 @@
 #include "perf_trace.h"
 #include "project.h"
 #include "status_sink.h"
+#include "track_choice.h"
 #include "ui_services.h"
 #include "version.h"
 #include "video_controller.h"
@@ -32,6 +33,7 @@
 
 #include <libaegisub/fs.h>
 #include <libaegisub/path.h>
+#include <libaegisub/string_utils.h>
 
 #include <algorithm>
 #include <chrono>
@@ -79,6 +81,45 @@ public:
 
 	void ShowWarning(std::string const& title, std::string const& message) override {
 		Print("warning", title, message);
+	}
+};
+
+class HeadlessTrackChoiceInteractionSink final : public agi::SingleChoiceInteractionSink {
+	HeadlessTrackChoiceConfig config;
+
+	std::optional<int> ResolveConfiguredChoice(std::string const& request_id) const {
+		if (request_id == "track_choice.video")
+			return config.video_track_index;
+		if (request_id == "track_choice.audio")
+			return config.audio_track_index;
+		if (request_id == "track_choice.subtitle")
+			return config.subtitle_track_index;
+		return std::nullopt;
+	}
+
+public:
+	explicit HeadlessTrackChoiceInteractionSink(HeadlessTrackChoiceConfig config)
+	: config(std::move(config)) {
+	}
+
+	std::optional<int> RequestSingleChoice(agi::SingleChoiceInteractionRequest const& request) override {
+		if (!agi::util::strings::starts_with(request.request_id, "track_choice."))
+			return std::nullopt;
+
+		auto configured = ResolveConfiguredChoice(request.request_id);
+		if (configured) {
+			if (*configured >= 0 && *configured < static_cast<int>(request.choices.size()))
+				return configured;
+			return std::nullopt;
+		}
+
+		if (!config.default_to_first_track || request.choices.empty())
+			return std::nullopt;
+
+		auto default_choice = request.default_choice;
+		if (default_choice < 0 || default_choice >= static_cast<int>(request.choices.size()))
+			default_choice = 0;
+		return default_choice;
 	}
 };
 
@@ -274,7 +315,8 @@ public:
 	, fake_audio_state(std::make_shared<FakeAudioClockState>(this->options.audio_rate_scale, this->options.audio_quantum_ms))
 	, fake_audio_service(std::make_shared<HeadlessFakeAudioPlayerFactoryService>(fake_audio_state))
 	, notification_sink(std::make_shared<ConsoleNotificationSink>())
-	, status_sink(std::make_shared<ConsoleStatusSink>()) {
+	, status_sink(std::make_shared<ConsoleStatusSink>())
+	, track_choice_sink(std::make_shared<HeadlessTrackChoiceInteractionSink>(this->options.track_choice_config)) {
 	}
 
 	PlaybackSessionHostOptions options;
@@ -283,6 +325,7 @@ public:
 	std::shared_ptr<HeadlessFakeAudioPlayerFactoryService> fake_audio_service;
 	std::shared_ptr<ConsoleNotificationSink> notification_sink;
 	std::shared_ptr<ConsoleStatusSink> status_sink;
+	std::shared_ptr<HeadlessTrackChoiceInteractionSink> track_choice_sink;
 	std::optional<ScopedTemporaryMru> temporary_mru;
 	std::optional<ScopedTemporaryStringOption> temporary_video_provider;
 	std::optional<ScopedTemporaryStringOption> temporary_audio_provider;
@@ -332,6 +375,7 @@ public:
 		auto core = GetCore();
 		core.statusSink = status_sink;
 		core.notificationSink = notification_sink;
+		core.singleChoiceInteractionSink = track_choice_sink;
 		core.audioPlayerFactoryService = fake_audio_service;
 		core.ass->LoadDefault(false);
 		OPT_SET("Video/Open Audio")->SetBool(false);

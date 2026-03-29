@@ -16,6 +16,13 @@ namespace agi {
 
 namespace aegisub::headless_playback_session_host {
 
+struct HeadlessTrackChoiceConfig {
+	std::optional<int> video_track_index;
+	std::optional<int> audio_track_index;
+	std::optional<int> subtitle_track_index;
+	bool default_to_first_track = true;
+};
+
 struct PlaybackSessionHostOptions {
 	std::optional<std::string> video_provider;
 	std::optional<std::string> audio_provider;
@@ -23,6 +30,7 @@ struct PlaybackSessionHostOptions {
 	double audio_rate_scale = 1.0;
 	int audio_quantum_ms = 0;
 	std::string trace_dir_pattern = "headless-playback-session-%%%%%%%%";
+	HeadlessTrackChoiceConfig track_choice_config;
 };
 
 class PlaybackSessionHost final {

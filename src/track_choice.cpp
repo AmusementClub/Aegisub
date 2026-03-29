@@ -6,6 +6,19 @@
 
 namespace aegisub::track_choice {
 namespace {
+std::string BuildRequestId(DialogKind kind) {
+	switch (kind) {
+	case DialogKind::Audio:
+		return "track_choice.audio";
+	case DialogKind::Subtitle:
+		return "track_choice.subtitle";
+	case DialogKind::Video:
+		return "track_choice.video";
+	}
+
+	return {};
+}
+
 std::string BuildTitle(DialogKind kind) {
 	switch (kind) {
 	case DialogKind::Audio:
@@ -38,6 +51,7 @@ agi::SingleChoiceInteractionRequest BuildRequest(DialogKind kind, std::vector<st
 	request.title = BuildTitle(kind);
 	request.message = BuildMessage(kind);
 	request.choices = choices;
+	request.request_id = BuildRequestId(kind);
 	return request;
 }
 

@@ -563,6 +563,12 @@ public:
 		this->request.audio_rate_scale,
 		this->request.audio_quantum_ms,
 		"headless-playback-session-%%%%%%%%",
+		{
+			this->request.video_track_index,
+			this->request.audio_track_index,
+			{},
+			true
+		}
 	})
 	, timer_host(CreatePlaybackSessionTimerHost(
 		[this] { OnDelayTimer(); },

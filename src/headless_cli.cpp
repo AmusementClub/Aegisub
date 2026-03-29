@@ -459,6 +459,30 @@ std::optional<PlaybackSessionRequest> ParseSessionPlaybackRequest(std::vector<st
 			request.audio_provider = *value;
 			continue;
 		}
+		if (arg == "--video-track-index" || arg == "--probe-video-track-index") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto parsed = ParseIntegerValue(*value);
+			if (!parsed || *parsed < 0) {
+				error = arg + " requires a non-negative integer\n" + Usage();
+				return std::nullopt;
+			}
+			request.video_track_index = *parsed;
+			continue;
+		}
+		if (arg == "--audio-track-index" || arg == "--probe-audio-track-index") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto parsed = ParseIntegerValue(*value);
+			if (!parsed || *parsed < 0) {
+				error = arg + " requires a non-negative integer\n" + Usage();
+				return std::nullopt;
+			}
+			request.audio_track_index = *parsed;
+			continue;
+		}
 		if (arg == "--trace-dir" || arg == "--probe-trace-dir") {
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
@@ -737,6 +761,42 @@ std::optional<ProjectSessionRequest> ParseSessionProjectRequest(std::vector<std:
 			request.audio_provider = *value;
 			continue;
 		}
+		if (arg == "--video-track-index") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto parsed = ParseIntegerValue(*value);
+			if (!parsed || *parsed < 0) {
+				error = arg + " requires a non-negative integer\n" + Usage();
+				return std::nullopt;
+			}
+			request.video_track_index = *parsed;
+			continue;
+		}
+		if (arg == "--audio-track-index") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto parsed = ParseIntegerValue(*value);
+			if (!parsed || *parsed < 0) {
+				error = arg + " requires a non-negative integer\n" + Usage();
+				return std::nullopt;
+			}
+			request.audio_track_index = *parsed;
+			continue;
+		}
+		if (arg == "--subtitle-track-index") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto parsed = ParseIntegerValue(*value);
+			if (!parsed || *parsed < 0) {
+				error = arg + " requires a non-negative integer\n" + Usage();
+				return std::nullopt;
+			}
+			request.subtitle_track_index = *parsed;
+			continue;
+		}
 		if (arg == "--trace-dir") {
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
@@ -864,6 +924,42 @@ std::optional<MediaInspectRequest> ParseInspectMediaRequest(std::vector<std::str
 			if (!value)
 				return std::nullopt;
 			request.audio_provider = *value;
+			continue;
+		}
+		if (arg == "--video-track-index" || arg == "--probe-video-track-index") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto parsed = ParseIntegerValue(*value);
+			if (!parsed || *parsed < 0) {
+				error = arg + " requires a non-negative integer\n" + Usage();
+				return std::nullopt;
+			}
+			request.video_track_index = *parsed;
+			continue;
+		}
+		if (arg == "--audio-track-index" || arg == "--probe-audio-track-index") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto parsed = ParseIntegerValue(*value);
+			if (!parsed || *parsed < 0) {
+				error = arg + " requires a non-negative integer\n" + Usage();
+				return std::nullopt;
+			}
+			request.audio_track_index = *parsed;
+			continue;
+		}
+		if (arg == "--subtitle-track-index" || arg == "--probe-subtitle-track-index") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto parsed = ParseIntegerValue(*value);
+			if (!parsed || *parsed < 0) {
+				error = arg + " requires a non-negative integer\n" + Usage();
+				return std::nullopt;
+			}
+			request.subtitle_track_index = *parsed;
 			continue;
 		}
 		if (arg == "--trace-dir" || arg == "--probe-trace-dir") {
@@ -1050,6 +1146,24 @@ std::optional<BatchAssInfoRequest> ParseBatchAssInfoRequest(std::vector<std::str
 }
 
 std::string BuildMediaInspectJsonImpl(MediaInspectResult const& result) {
+	auto build_track_choices_json = [](std::vector<aegisub::media_inspect_service::TrackChoiceInfo> const& tracks, int indent) {
+		std::ostringstream out;
+		std::string padding(indent, ' ');
+		std::string entry_padding(indent + 2, ' ');
+		out << "[\n";
+		for (size_t i = 0; i < tracks.size(); ++i) {
+			if (i != 0)
+				out << ",\n";
+			out << entry_padding
+				<< "{ \"choice_index\": " << tracks[i].choice_index
+				<< ", \"display_name\": \"" << JsonEscape(tracks[i].display_name) << "\" }";
+		}
+		if (!tracks.empty())
+			out << "\n";
+		out << padding << "]";
+		return out.str();
+	};
+
 	std::ostringstream out;
 	out << "{\n";
 	out << "  \"opened\": " << std::boolalpha << result.opened << ",\n";
@@ -1068,6 +1182,9 @@ std::string BuildMediaInspectJsonImpl(MediaInspectResult const& result) {
 	out << "  \"audio_provider_fallback\": " << result.audio_provider_fallback << ",\n";
 	out << "  \"audio_provider_fallback_reason\": \"" << JsonEscape(result.audio_provider_fallback_reason) << "\",\n";
 	out << "  \"audio_provider_attempts\": \"" << JsonEscape(result.audio_provider_attempts) << "\",\n";
+	out << "  \"video_track_choices\": " << build_track_choices_json(result.video_track_choices, 2) << ",\n";
+	out << "  \"audio_track_choices\": " << build_track_choices_json(result.audio_track_choices, 2) << ",\n";
+	out << "  \"subtitle_track_choices\": " << build_track_choices_json(result.subtitle_track_choices, 2) << ",\n";
 	out << "  \"media\": {\n";
 	out << "    \"video_path\": \"" << JsonEscape(ToGenericString(result.media.video_path)) << "\",\n";
 	out << "    \"audio_path\": \"" << JsonEscape(ToGenericString(result.media.audio_path)) << "\",\n";
@@ -1820,6 +1937,7 @@ std::string Usage() {
 		"Playback session flags:\n"
 		"  --script-file <path> --video <path> [--audio <path>] [--skip-audio]\n"
 		"  [--video-provider <name>] [--audio-provider <name>] [--trace-dir <path>]\n"
+		"  [--video-track-index <index>] [--audio-track-index <index>]\n"
 		"  [--audio-rate-scale <scale>] [--audio-quantum-ms <ms>]\n"
 		"\n"
 		"Project session steps:\n"
@@ -1834,11 +1952,13 @@ std::string Usage() {
 		"  --script-file <path> [--video <path>] [--audio <path>] [--skip-audio]\n"
 		"  [--subtitle <path>] [--subtitle-encoding <name>] [--timecodes <path>] [--keyframes <path>]\n"
 		"  [--video-provider <name>] [--audio-provider <name>] [--trace-dir <path>]\n"
+		"  [--video-track-index <index>] [--audio-track-index <index>] [--subtitle-track-index <index>]\n"
 		"  [--audio-rate-scale <scale>] [--audio-quantum-ms <ms>]\n"
 		"\n"
 		"Inspect media flags:\n"
 		"  --video <path> [--audio <path>] [--skip-audio]\n"
 		"  [--video-provider <name>] [--audio-provider <name>] [--trace-dir <path>]\n"
+		"  [--video-track-index <index>] [--audio-track-index <index>] [--subtitle-track-index <index>]\n"
 		"  [--audio-rate-scale <scale>] [--audio-quantum-ms <ms>]\n"
 		"\n"
 		"Batch list file syntax:\n"

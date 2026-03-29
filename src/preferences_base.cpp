@@ -22,7 +22,7 @@
 #include "compat.h"
 #include "options.h"
 #include "preferences.h"
-#include "wx_file_dialog_services.h"
+#include "ui_services.h"
 
 #include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
@@ -62,9 +62,8 @@ OPTION_UPDATER(DoubleUpdater, wxSpinDoubleEvent, OptionValueDouble, evt.GetValue
 OPTION_UPDATER(BoolUpdater, wxCommandEvent, OptionValueBool, !!evt.GetInt());
 OPTION_UPDATER(ColourUpdater, ValueEvent<agi::Color>, OptionValueColor, evt.Get());
 
-static void browse_button(wxTextCtrl *ctrl) {
-	auto file_dialogs = agi::MakeWindowFileDialogService(ctrl);
-	auto path = file_dialogs->RequestSelectDirectory({
+static void browse_button(Preferences *prefs, wxTextCtrl *ctrl) {
+	auto path = prefs->RequestSelectDirectory({
 		from_wx(_("Please choose the folder:")),
 		agi::fs::PathToString(config::path->Decode(from_wx(ctrl->GetValue())))
 	});
@@ -72,7 +71,7 @@ static void browse_button(wxTextCtrl *ctrl) {
 		ctrl->SetValue(to_wx(agi::fs::PathToString(path)));
 }
 
-static void browse_file_button(wxWindow *parent, wxTextCtrl *ctrl, wxString const& wildcard) {
+static void browse_file_button(Preferences *prefs, wxTextCtrl *ctrl, wxString const& wildcard) {
 	auto current_path = config::path
 		? config::path->Decode(from_wx(ctrl->GetValue()))
 		: std::filesystem::path(from_wx(ctrl->GetValue()));
@@ -84,8 +83,7 @@ static void browse_file_button(wxWindow *parent, wxTextCtrl *ctrl, wxString cons
 		file = current.GetFullName();
 	}
 
-	auto file_dialogs = agi::MakeWindowFileDialogService(parent);
-	auto path = file_dialogs->RequestOpenFile({
+	auto path = prefs->RequestOpenFile({
 		from_wx(_("Please choose the file:")),
 		"",
 		from_wx(file),
@@ -295,7 +293,7 @@ void OptionPage::OptionBrowse(wxFlexGridSizer *flex, const wxString &name, const
 	text->Bind(wxEVT_TEXT, StringUpdater(opt_name, parent));
 
 	auto browse = new wxButton(this, -1, _("Browse..."));
-	browse->Bind(wxEVT_BUTTON, std::bind(browse_button, text));
+	browse->Bind(wxEVT_BUTTON, std::bind(browse_button, parent, text));
 
 	auto button_sizer = new wxBoxSizer(wxHORIZONTAL);
 	button_sizer->Add(text, wxSizerFlags(1).Expand());
@@ -318,8 +316,8 @@ void OptionPage::OptionBrowseFile(wxFlexGridSizer *flex, const wxString &name, c
 	text->Bind(wxEVT_TEXT, StringUpdater(opt_name, parent));
 
 	auto browse = new wxButton(this, -1, _("Browse..."));
-	browse->Bind(wxEVT_BUTTON, [this, text, wildcard](wxCommandEvent&) {
-		browse_file_button(this, text, wildcard);
+	browse->Bind(wxEVT_BUTTON, [prefs = parent, text, wildcard](wxCommandEvent&) {
+		browse_file_button(prefs, text, wildcard);
 	});
 
 	auto button_sizer = new wxBoxSizer(wxHORIZONTAL);

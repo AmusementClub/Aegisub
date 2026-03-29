@@ -186,6 +186,32 @@ TEST(host_boundary_policy, context_backed_file_dialog_callers_prefer_context_ser
 	}
 }
 
+TEST(host_boundary_policy, preferences_file_dialog_usage_stays_centralized) {
+	auto const root = ProjectRoot();
+	auto const preferences_cpp = root / "src" / "preferences.cpp";
+	auto const preferences_base_cpp = root / "src" / "preferences_base.cpp";
+
+	auto preferences_include_hits = FindLiteralHits(preferences_cpp, "wx_file_dialog_services.h");
+	auto preferences_make_hits = FindLiteralHits(preferences_cpp, "MakeWindowFileDialogService(");
+	auto preferences_request_hits = FindLiteralHits(preferences_cpp, "RequestSelectDirectory(");
+	auto preferences_open_hits = FindLiteralHits(preferences_cpp, "RequestOpenFile(");
+
+	auto preferences_base_include_hits = FindLiteralHits(preferences_base_cpp, "wx_file_dialog_services.h");
+	auto preferences_base_make_hits = FindLiteralHits(preferences_base_cpp, "MakeWindowFileDialogService(");
+	auto preferences_base_request_hits = FindLiteralHits(preferences_base_cpp, "RequestSelectDirectory(");
+	auto preferences_base_open_hits = FindLiteralHits(preferences_base_cpp, "RequestOpenFile(");
+
+	EXPECT_FALSE(preferences_include_hits.empty());
+	EXPECT_EQ(1u, preferences_make_hits.size()) << JoinLines(preferences_make_hits);
+	EXPECT_FALSE(preferences_request_hits.empty());
+	EXPECT_FALSE(preferences_open_hits.empty());
+
+	EXPECT_TRUE(preferences_base_include_hits.empty()) << JoinLines(preferences_base_include_hits);
+	EXPECT_TRUE(preferences_base_make_hits.empty()) << JoinLines(preferences_base_make_hits);
+	EXPECT_FALSE(preferences_base_request_hits.empty());
+	EXPECT_FALSE(preferences_base_open_hits.empty());
+}
+
 TEST(host_boundary_policy, shared_dispatch_timers_stay_wx_free_and_no_longer_use_host_suffix) {
 	auto const root = ProjectRoot();
 	auto const src_root = root / "src";

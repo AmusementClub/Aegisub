@@ -96,9 +96,11 @@ agi::fs::path FindExistingDialogDirectory(agi::fs::path path) {
 }
 
 class TokenizedDirProperty final : public wxLongStringProperty {
+	Preferences *prefs = nullptr;
 public:
-	TokenizedDirProperty(wxString const& label, wxString const& name, wxString const& value)
-	: wxLongStringProperty(label, name, value) { }
+	TokenizedDirProperty(Preferences *prefs, wxString const& label, wxString const& name, wxString const& value)
+	: wxLongStringProperty(label, name, value)
+	, prefs(prefs) { }
 
 protected:
 	bool DisplayEditorDialog(wxPropertyGrid *pg, wxVariant& value) override {
@@ -106,8 +108,7 @@ protected:
 		auto const current_path = config::path
 			? config::path->Decode(token_path)
 			: agi::fs::PathFromString(token_path);
-		auto file_dialogs = agi::MakeWindowFileDialogService(pg);
-		auto path = file_dialogs->RequestSelectDirectory({
+		auto path = prefs->RequestSelectDirectory({
 			from_wx(_("Please choose the folder:")),
 			agi::fs::PathToString(FindExistingDialogDirectory(current_path))
 		});
@@ -123,10 +124,12 @@ protected:
 };
 
 class TokenizedFileProperty final : public wxLongStringProperty {
+	Preferences *prefs = nullptr;
 	wxString wildcard;
 public:
-	TokenizedFileProperty(wxString const& label, wxString const& name, wxString const& value, wxString const& wildcard)
+	TokenizedFileProperty(Preferences *prefs, wxString const& label, wxString const& name, wxString const& value, wxString const& wildcard)
 	: wxLongStringProperty(label, name, value)
+	, prefs(prefs)
 	, wildcard(wildcard) { }
 
 protected:
@@ -137,8 +140,7 @@ protected:
 			: agi::fs::PathFromString(token_path);
 		wxFileName current(current_path.wstring());
 		auto const existing_dir = FindExistingDialogDirectory(current_path);
-		auto file_dialogs = agi::MakeWindowFileDialogService(pg);
-		auto path = file_dialogs->RequestOpenFile({
+		auto path = prefs->RequestOpenFile({
 			from_wx(_("Please choose the file:")),
 			"",
 			current.IsOk() ? from_wx(current.GetFullName()) : std::string(),
@@ -319,7 +321,7 @@ public:
 	wxPGProperty *AddDirectory(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new TokenizedDirProperty(label, to_wx(opt_name), to_wx(opt->GetString())));
+		auto *prop = grid->Append(new TokenizedDirProperty(prefs, label, to_wx(opt_name), to_wx(opt->GetString())));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
@@ -343,7 +345,7 @@ public:
 	wxPGProperty *AddFile(wxString const& label, const char *opt_name, wxString const& wildcard) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new TokenizedFileProperty(label, to_wx(opt_name), to_wx(opt->GetString()), wildcard));
+		auto *prop = grid->Append(new TokenizedFileProperty(prefs, label, to_wx(opt_name), to_wx(opt->GetString()), wildcard));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
@@ -1116,6 +1118,24 @@ void Preferences::AddChangeableOption(std::string const& name) {
 	option_names.push_back(name);
 }
 
+agi::fs::path Preferences::RequestOpenFile(agi::OpenFileDialogRequest const& request) const {
+	if (file_dialog_service)
+		return file_dialog_service->RequestOpenFile(request);
+	return {};
+}
+
+agi::fs::path Preferences::RequestSaveFile(agi::SaveFileDialogRequest const& request) const {
+	if (file_dialog_service)
+		return file_dialog_service->RequestSaveFile(request);
+	return {};
+}
+
+agi::fs::path Preferences::RequestSelectDirectory(agi::SelectDirectoryDialogRequest const& request) const {
+	if (file_dialog_service)
+		return file_dialog_service->RequestSelectDirectory(request);
+	return {};
+}
+
 void Preferences::OnOK(wxCommandEvent &event) {
 	OnApply(event);
 	EndModal(0);
@@ -1163,6 +1183,7 @@ void Preferences::OnResetDefault(wxCommandEvent&) {
 
 Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"), wxDefaultPosition, wxSize(-1, -1), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER) {
 	SetIcon(GETICON(options_button_16));
+	file_dialog_service = agi::MakeWindowFileDialogService(this);
 
 	auto duration_ms = [](auto const& started) {
 		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();

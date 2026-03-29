@@ -754,7 +754,7 @@ if(WITH_AVISYNTH)
     else()
         target_compile_definitions(Aegisub PRIVATE "AVISYNTH_SO=\"libavisynth.so\"")
     endif()
-    target_sources(Aegisub PRIVATE src/audio_provider_avs.cpp src/avisynth_wrap.cpp src/video_provider_avs.cpp)
+    target_sources(Aegisub PRIVATE src/audio_provider_avs.cpp src/avisynth_legacy_path.cpp src/avisynth_wrap.cpp src/video_provider_avs.cpp)
 endif()
 
 option(WITH_CSRI "Enable CSRI support" ON)

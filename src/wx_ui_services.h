@@ -17,6 +17,9 @@
 
 namespace agi {
 
+// This header is the explicit wx adapter bundle for window-backed UI services.
+// Replace these helpers when migrating the GUI shell away from wx.
+
 inline int ToWxMessageBoxFlags(InteractionButtons buttons, InteractionIcon icon) {
 	int flags = 0;
 	switch (buttons) {

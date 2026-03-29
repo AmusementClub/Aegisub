@@ -201,3 +201,32 @@ TEST(host_boundary_policy, runtime_wx_hooks_live_in_explicit_runtime_host_files)
 	EXPECT_FALSE(headless_log_hits.empty());
 	EXPECT_FALSE(headless_png_hits.empty());
 }
+
+TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
+	auto const root = ProjectRoot();
+	auto const src_root = root / "src";
+	ASSERT_TRUE(std::filesystem::exists(src_root));
+
+	std::set<std::string> const expected_explicit_wx_surfaces = {
+		"src/gui_wx_runtime_host.cpp",
+		"src/gui_wx_runtime_host.h",
+		"src/headless_wx_runtime_host.cpp",
+		"src/headless_wx_runtime_host.h",
+		"src/wx_audio_controller_power_host.cpp",
+		"src/wx_ui_services.h",
+	};
+
+	std::set<std::string> actual_explicit_wx_surfaces;
+	for (auto const& entry : std::filesystem::directory_iterator(src_root)) {
+		if (!entry.is_regular_file())
+			continue;
+
+		auto relative = std::filesystem::relative(entry.path(), root).generic_string();
+		auto const filename = entry.path().filename().string();
+		if (filename.find("wx") == std::string::npos)
+			continue;
+		actual_explicit_wx_surfaces.insert(relative);
+	}
+
+	EXPECT_EQ(expected_explicit_wx_surfaces, actual_explicit_wx_surfaces);
+}

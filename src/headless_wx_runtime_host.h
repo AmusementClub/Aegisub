@@ -5,6 +5,8 @@
 #include <memory>
 #include <string>
 
+// This host isolates the minimal wx runtime required by current headless
+// bring-up. Replace or remove it when headless runtime no longer depends on wx.
 class HeadlessWxRuntimeHost {
 	struct Impl;
 	std::unique_ptr<Impl> impl;

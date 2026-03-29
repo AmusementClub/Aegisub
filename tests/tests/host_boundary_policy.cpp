@@ -61,6 +61,23 @@ std::vector<std::string> FindWxMarkers(std::filesystem::path const& path) {
 	return hits;
 }
 
+std::vector<std::string> FindLiteralHits(std::filesystem::path const& path, std::string_view needle) {
+	std::ifstream input(path);
+	std::vector<std::string> hits;
+	std::string line;
+	int line_number = 0;
+	while (std::getline(input, line)) {
+		++line_number;
+		if (line.find(needle) == std::string::npos)
+			continue;
+
+		std::ostringstream hit;
+		hit << path.generic_string() << ":" << line_number << ": " << line;
+		hits.push_back(hit.str());
+	}
+	return hits;
+}
+
 std::string JoinLines(std::vector<std::string> const& lines) {
 	std::ostringstream out;
 	for (size_t i = 0; i < lines.size(); ++i) {
@@ -79,8 +96,9 @@ TEST(host_boundary_policy, service_like_sources_keep_wx_at_host_edges) {
 	ASSERT_TRUE(std::filesystem::exists(src_root));
 
 	std::set<std::string> const allowed_wx_candidates = {
-		"src/audio_controller_power_host.cpp",
+		"src/gui_wx_runtime_host.cpp",
 		"src/headless_wx_runtime_host.cpp",
+		"src/wx_audio_controller_power_host.cpp",
 	};
 
 	std::set<std::string> actual_wx_candidates;
@@ -161,4 +179,25 @@ TEST(host_boundary_policy, shared_dispatch_timers_stay_wx_free_and_no_longer_use
 
 	EXPECT_TRUE(unexpected_legacy_host_files.empty()) << JoinLines(unexpected_legacy_host_files);
 	EXPECT_TRUE(unexpected_wx_hits.empty()) << JoinLines(unexpected_wx_hits);
+}
+
+TEST(host_boundary_policy, runtime_wx_hooks_live_in_explicit_runtime_host_files) {
+	auto const root = ProjectRoot();
+	auto const main_cpp = root / "src" / "main.cpp";
+	auto const gui_runtime_host_cpp = root / "src" / "gui_wx_runtime_host.cpp";
+	auto const headless_runtime_host_cpp = root / "src" / "headless_wx_runtime_host.cpp";
+
+	auto main_log_hits = FindLiteralHits(main_cpp, "wxLog::GetActiveTarget");
+	auto main_png_hits = FindLiteralHits(main_cpp, "wxPNGHandler");
+	auto gui_log_hits = FindLiteralHits(gui_runtime_host_cpp, "wxLog::GetActiveTarget");
+	auto gui_png_hits = FindLiteralHits(gui_runtime_host_cpp, "wxPNGHandler");
+	auto headless_log_hits = FindLiteralHits(headless_runtime_host_cpp, "wxLog::GetActiveTarget");
+	auto headless_png_hits = FindLiteralHits(headless_runtime_host_cpp, "wxPNGHandler");
+
+	EXPECT_TRUE(main_log_hits.empty()) << JoinLines(main_log_hits);
+	EXPECT_TRUE(main_png_hits.empty()) << JoinLines(main_png_hits);
+	EXPECT_FALSE(gui_log_hits.empty());
+	EXPECT_FALSE(gui_png_hits.empty());
+	EXPECT_FALSE(headless_log_hits.empty());
+	EXPECT_FALSE(headless_png_hits.empty());
 }

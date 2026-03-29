@@ -44,6 +44,7 @@
 #include "dialogs.h"
 #include "format.h"
 #include "frame_main.h"
+#include "gui_wx_runtime_host.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "options.h"
@@ -63,8 +64,6 @@
 #include <vector>
 #include <wx/arrstr.h>
 #include <wx/clipbrd.h>
-#include <wx/image.h>
-#include <wx/log.h>
 #include <wx/msgdlg.h>
 #include <wx/stackwalk.h>
 #include <wx/thread.h>
@@ -166,14 +165,7 @@ bool AegisubApp::OnInit() {
 			},
 			true,
 			true,
-			{
-				[] {
-					(void)wxLog::GetActiveTarget();
-				},
-				[] {
-					wxImage::AddHandler(new wxPNGHandler);
-				}
-			},
+			BuildGuiWxRuntimeHostHooks(),
 			agi::MakeWindowSingleChoiceInteractionSink(),
 			[](std::string const& title, std::string const& message) {
 				AppNotificationSink().ShowError(title, message);

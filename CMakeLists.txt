@@ -466,7 +466,7 @@ add_executable(Aegisub WIN32
     src/audio_box.cpp
     src/audio_colorscheme.cpp
     src/audio_controller.cpp
-    src/audio_controller_power_host.cpp
+    src/wx_audio_controller_power_host.cpp
     src/audio_controller_timer.cpp
     src/audio_display_analysis.cpp
     src/audio_latest_range_scheduler.cpp
@@ -506,6 +506,7 @@ add_executable(Aegisub WIN32
     src/frame_main.cpp
     src/gl_text.cpp
     src/gl_wrap.cpp
+    src/gui_wx_runtime_host.cpp
     src/grid_column.cpp
     src/headless_cli.cpp
     src/headless_playback_probe.cpp

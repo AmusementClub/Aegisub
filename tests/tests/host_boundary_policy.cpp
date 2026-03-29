@@ -98,6 +98,7 @@ TEST(host_boundary_policy, service_like_sources_keep_wx_at_host_edges) {
 	std::set<std::string> const allowed_wx_candidates = {
 		"src/gui_wx_runtime_host.cpp",
 		"src/headless_wx_runtime_host.cpp",
+		"src/wx_automation_file_dialog_service.h",
 		"src/wx_audio_controller_power_host.cpp",
 	};
 
@@ -212,6 +213,26 @@ TEST(host_boundary_policy, preferences_file_dialog_usage_stays_centralized) {
 	EXPECT_FALSE(preferences_base_open_hits.empty());
 }
 
+TEST(host_boundary_policy, automation_file_dialog_fallback_lives_in_explicit_wx_service_seam) {
+	auto const root = ProjectRoot();
+	auto const auto4_lua_cpp = root / "src" / "auto4_lua.cpp";
+	auto const wx_automation_service_h = root / "src" / "wx_automation_file_dialog_service.h";
+
+	auto auto4_include_hits = FindLiteralHits(auto4_lua_cpp, "wx_file_dialog_services.h");
+	auto auto4_make_hits = FindLiteralHits(auto4_lua_cpp, "MakeWindowFileDialogService(");
+	auto auto4_seam_hits = FindLiteralHits(auto4_lua_cpp, "ResolveAutomationFileDialogService(");
+
+	auto seam_make_hits = FindLiteralHits(wx_automation_service_h, "MakeWindowFileDialogService(");
+	auto seam_include_hits = FindLiteralHits(wx_automation_service_h, "wx_file_dialog_services.h");
+
+	EXPECT_TRUE(auto4_include_hits.empty()) << JoinLines(auto4_include_hits);
+	EXPECT_TRUE(auto4_make_hits.empty()) << JoinLines(auto4_make_hits);
+	EXPECT_FALSE(auto4_seam_hits.empty());
+
+	EXPECT_FALSE(seam_make_hits.empty());
+	EXPECT_FALSE(seam_include_hits.empty());
+}
+
 TEST(host_boundary_policy, shared_dispatch_timers_stay_wx_free_and_no_longer_use_host_suffix) {
 	auto const root = ProjectRoot();
 	auto const src_root = root / "src";
@@ -281,6 +302,7 @@ TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 	ASSERT_TRUE(std::filesystem::exists(src_root));
 
 	std::set<std::string> const expected_explicit_wx_surfaces = {
+		"src/wx_automation_file_dialog_service.h",
 		"src/wx_file_dialog_services.h",
 		"src/gui_wx_runtime_host.cpp",
 		"src/gui_wx_runtime_host.h",

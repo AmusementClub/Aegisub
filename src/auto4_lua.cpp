@@ -52,7 +52,7 @@
 #include "selection_controller.h"
 #include "subs_controller.h"
 #include "video_controller.h"
-#include "wx_file_dialog_services.h"
+#include "wx_automation_file_dialog_service.h"
 #include "utils.h"
 
 #include <libaegisub/dispatch.h>
@@ -1017,11 +1017,13 @@ namespace {
 		assert(lua_istable(L, -1));
 		stackcheck.check_stack(3);
 
-		auto file_dialog_service = [&]() -> std::shared_ptr<agi::FileDialogService> {
-			if (auto const* context = get_context(L))
-				return context->GetFileDialogService();
-			return agi::MakeWindowFileDialogService(export_dialog);
-		}();
+		auto file_dialog_service = Automation4::ResolveAutomationFileDialogService(
+			[&]() -> std::shared_ptr<agi::FileDialogService> {
+				if (auto const* context = get_context(L))
+					return context->GetFileDialogService();
+				return {};
+			}(),
+			export_dialog);
 
 		BackgroundScriptRunner runner(export_dialog, GetName(), std::move(file_dialog_service));
 		try {

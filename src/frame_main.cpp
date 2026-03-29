@@ -33,7 +33,6 @@
 
 #include "frame_main.h"
 
-#include "include/aegisub/audio_player.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "include/aegisub/menu.h"
@@ -42,7 +41,6 @@
 
 #include "ass_file.h"
 #include "async_video_provider.h"
-#include "auto4_base.h"
 #include "audio_controller.h"
 #include "audio_box.h"
 #include "base_grid.h"
@@ -50,8 +48,6 @@
 #include "command/command.h"
 #include "dialog_detached_video.h"
 #include "dialog_manager.h"
-#include "dialog_progress.h"
-#include "dialogs.h"
 #include "libresrc/libresrc.h"
 #include "main.h"
 #include "options.h"
@@ -66,6 +62,8 @@
 #include "video_controller.h"
 #include "video_display.h"
 #include "wx_frame_main_dialog_ui_host.h"
+#include "wx_frame_main_request_host.h"
+#include "wx_frame_main_runtime_host.h"
 
 #include <libaegisub/dispatch.h>
 #include <libaegisub/log.h>
@@ -101,205 +99,6 @@ public:
 	void ShowStatus(std::string const& message, int timeout_ms) override {
 		agi::ui::MainAsyncIfAlive(lifetime, [frame = frame, message, timeout_ms] {
 			frame->StatusTimeout(to_wx(message), timeout_ms);
-		});
-	}
-};
-
-class FrameMainFileDialogService final : public agi::FileDialogService {
-	FrameMain *frame = nullptr;
-	agi::ui::WeakLifetime lifetime;
-
-public:
-	FrameMainFileDialogService(FrameMain *frame, agi::ui::WeakLifetime lifetime)
-	: frame(frame)
-	, lifetime(std::move(lifetime))
-	{
-	}
-
-	agi::fs::path RequestOpenFile(agi::OpenFileDialogRequest const& request) override {
-		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, request] {
-			if (!lifetime.lock())
-				return agi::fs::path();
-			return OpenFileSelector(
-				to_wx(request.title),
-				request.option_name,
-				request.default_path,
-				request.default_filename,
-				request.default_extension,
-				request.wildcard,
-				frame,
-				request.must_exist);
-		});
-	}
-
-	std::vector<agi::fs::path> RequestOpenFiles(agi::OpenFilesDialogRequest const& request) override {
-		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, request] {
-			if (!lifetime.lock())
-				return std::vector<agi::fs::path>();
-			return OpenFilesSelector(
-				to_wx(request.title),
-				request.option_name,
-				request.default_path,
-				request.default_filename,
-				request.default_extension,
-				request.wildcard,
-				frame,
-				request.must_exist);
-		});
-	}
-
-	agi::fs::path RequestSaveFile(agi::SaveFileDialogRequest const& request) override {
-		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, request] {
-			if (!lifetime.lock())
-				return agi::fs::path();
-			return SaveFileSelector(
-				to_wx(request.title),
-				request.option_name,
-				request.default_path,
-				request.default_filename,
-				request.default_extension,
-				request.wildcard,
-				frame,
-				request.prompt_overwrite);
-		});
-	}
-
-	agi::fs::path RequestSelectDirectory(agi::SelectDirectoryDialogRequest const& request) override {
-		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, request] {
-			if (!lifetime.lock())
-				return agi::fs::path();
-			return SelectDirectorySelector(to_wx(request.title), request.default_path, frame);
-		});
-	}
-};
-
-class FrameMainVideoSourceRequestService final : public agi::VideoSourceRequestService {
-	FrameMain *frame = nullptr;
-	agi::ui::WeakLifetime lifetime;
-
-public:
-	FrameMainVideoSourceRequestService(FrameMain *frame, agi::ui::WeakLifetime lifetime)
-	: frame(frame)
-	, lifetime(std::move(lifetime))
-	{
-	}
-
-	std::string RequestDummyVideoPath() override {
-		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime] {
-			if (!lifetime.lock())
-				return std::string();
-			return CreateDummyVideo(frame);
-		});
-	}
-};
-
-
-class FrameMainBackgroundRunner final : public agi::BackgroundRunner {
-	FrameMain *frame = nullptr;
-	agi::ui::WeakLifetime lifetime;
-	std::string title;
-	std::string message;
-
-public:
-	FrameMainBackgroundRunner(FrameMain *frame, agi::ui::WeakLifetime lifetime, std::string title, std::string message)
-	: frame(frame)
-	, lifetime(std::move(lifetime))
-	, title(std::move(title))
-	, message(std::move(message))
-	{
-	}
-
-	void Run(std::function<void(agi::ProgressSink *)> task) override {
-		agi::ui::MainInvoke([this, task = std::move(task)]() mutable {
-			if (!lifetime.lock()) {
-				agi::detail::InlineBackgroundRunner fallback;
-				fallback.Run(std::move(task));
-				return;
-			}
-
-			DialogProgress dialog(frame, to_wx(title), to_wx(message));
-			dialog.Run(std::move(task));
-		});
-	}
-};
-
-class FrameMainBackgroundRunnerFactory final : public agi::BackgroundRunnerFactory {
-	FrameMain *frame = nullptr;
-	agi::ui::WeakLifetime lifetime;
-
-public:
-	FrameMainBackgroundRunnerFactory(FrameMain *frame, agi::ui::WeakLifetime lifetime)
-	: frame(frame)
-	, lifetime(std::move(lifetime))
-	{
-	}
-
-	std::unique_ptr<agi::BackgroundRunner> Create(std::string const& title, std::string const& message) override {
-		return agi::make_unique<FrameMainBackgroundRunner>(frame, lifetime, title, message);
-	}
-};
-
-class FrameMainProjectUiStateSink final : public agi::ProjectUiStateSink {
-	agi::Context *context = nullptr;
-	agi::ui::WeakLifetime lifetime;
-
-public:
-	FrameMainProjectUiStateSink(agi::Context *context, agi::ui::WeakLifetime lifetime)
-	: context(context)
-	, lifetime(std::move(lifetime))
-	{
-	}
-
-	void RestoreProjectUiState(agi::ProjectUiStateSnapshot const& state) override {
-		agi::ui::MainInvokeIfAlive(lifetime, [context = context, state] {
-			auto ui = context->GetUI();
-			if (state.subtitle_scroll_position && ui.subsGrid)
-				ui.subsGrid->ScrollTo(*state.subtitle_scroll_position);
-			if (state.video_zoom && ui.videoDisplay)
-				ui.videoDisplay->SetZoom(*state.video_zoom);
-		});
-	}
-};
-
-class FrameMainAudioPlayerFactoryService final : public agi::AudioPlayerFactoryService {
-	FrameMain *frame = nullptr;
-	agi::ui::WeakLifetime lifetime;
-
-public:
-	FrameMainAudioPlayerFactoryService(FrameMain *frame, agi::ui::WeakLifetime lifetime)
-	: frame(frame)
-	, lifetime(std::move(lifetime))
-	{
-	}
-
-	std::unique_ptr<AudioPlayer> CreateAudioPlayer(agi::AudioProvider *provider) override {
-		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, provider] {
-			if (!lifetime.lock())
-				return std::unique_ptr<AudioPlayer>();
-			return AudioPlayerFactory::GetAudioPlayer(provider, frame);
-		});
-	}
-};
-
-class FrameMainAutomationBackgroundScriptRunnerFactory final : public Automation4::AutomationBackgroundScriptRunnerFactory {
-	FrameMain *frame = nullptr;
-	agi::ui::WeakLifetime lifetime;
-
-public:
-	FrameMainAutomationBackgroundScriptRunnerFactory(FrameMain *frame, agi::ui::WeakLifetime lifetime)
-	: frame(frame)
-	, lifetime(std::move(lifetime))
-	{
-	}
-
-	std::unique_ptr<Automation4::BackgroundScriptRunner> Create(std::string const& title) override {
-		return agi::ui::MainInvoke([frame = frame, lifetime = lifetime, title] {
-			if (!lifetime.lock())
-				return std::unique_ptr<Automation4::BackgroundScriptRunner>();
-			return agi::make_unique<Automation4::BackgroundScriptRunner>(
-				frame,
-				title,
-				std::make_shared<FrameMainFileDialogService>(frame, lifetime));
 		});
 	}
 };
@@ -359,12 +158,20 @@ FrameMain::FrameMain()
 	core.notificationSink = agi::MakeFrameMainNotificationSink(this, GetAsyncUiLifetime());
 	core.interactionSink = agi::MakeFrameMainInteractionSink(this, GetAsyncUiLifetime());
 	core.singleChoiceInteractionSink = agi::MakeFrameMainSingleChoiceInteractionSink(this, GetAsyncUiLifetime());
-	core.fileDialogService = std::make_shared<FrameMainFileDialogService>(this, GetAsyncUiLifetime());
-	core.videoSourceRequestService = std::make_shared<FrameMainVideoSourceRequestService>(this, GetAsyncUiLifetime());
-	core.backgroundRunnerFactory = std::make_shared<FrameMainBackgroundRunnerFactory>(this, GetAsyncUiLifetime());
-	core.projectUiStateSink = std::make_shared<FrameMainProjectUiStateSink>(context.get(), GetAsyncUiLifetime());
-	core.audioPlayerFactoryService = std::make_shared<FrameMainAudioPlayerFactoryService>(this, GetAsyncUiLifetime());
-	core.automationBackgroundScriptRunnerFactory = std::make_shared<FrameMainAutomationBackgroundScriptRunnerFactory>(this, GetAsyncUiLifetime());
+	core.fileDialogService = agi::MakeFrameMainFileDialogService(this, GetAsyncUiLifetime());
+	core.videoSourceRequestService = agi::MakeFrameMainVideoSourceRequestService(this, GetAsyncUiLifetime());
+	core.backgroundRunnerFactory = agi::MakeFrameMainBackgroundRunnerFactory(this, GetAsyncUiLifetime());
+	core.projectUiStateSink = agi::MakeFrameMainProjectUiStateSink(
+		[context = context.get()](agi::ProjectUiStateSnapshot const& state) {
+			auto ui = context->GetUI();
+			if (state.subtitle_scroll_position && ui.subsGrid)
+				ui.subsGrid->ScrollTo(*state.subtitle_scroll_position);
+			if (state.video_zoom && ui.videoDisplay)
+				ui.videoDisplay->SetZoom(*state.video_zoom);
+		},
+		GetAsyncUiLifetime());
+	core.audioPlayerFactoryService = agi::MakeFrameMainAudioPlayerFactoryService(this, GetAsyncUiLifetime());
+	core.automationBackgroundScriptRunnerFactory = agi::MakeFrameMainAutomationBackgroundScriptRunnerFactory(this, GetAsyncUiLifetime());
 
 	StartupLog("Apply saved Maximized state");
 	if (OPT_GET("App/Maximized")->GetBool()) Maximize(true);

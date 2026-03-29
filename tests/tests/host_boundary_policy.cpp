@@ -101,6 +101,8 @@ TEST(host_boundary_policy, service_like_sources_keep_wx_at_host_edges) {
 		"src/wx_automation_file_dialog_service.h",
 		"src/wx_audio_controller_power_host.cpp",
 		"src/wx_frame_main_dialog_ui_host.h",
+		"src/wx_frame_main_request_host.h",
+		"src/wx_frame_main_runtime_host.h",
 		"src/wx_style_editor_ui_host.h",
 	};
 
@@ -340,6 +342,82 @@ TEST(host_boundary_policy, frame_main_dialog_ui_fallback_lives_in_explicit_wx_ho
 	EXPECT_FALSE(seam_single_choice_dialog_hits.empty());
 }
 
+TEST(host_boundary_policy, frame_main_request_selection_fallback_lives_in_explicit_wx_host_seam) {
+	auto const root = ProjectRoot();
+	auto const frame_main_cpp = root / "src" / "frame_main.cpp";
+	auto const wx_frame_main_request_host_h = root / "src" / "wx_frame_main_request_host.h";
+
+	auto file_dialog_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainFileDialogService");
+	auto video_source_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainVideoSourceRequestService");
+	auto open_file_hits = FindLiteralHits(frame_main_cpp, "OpenFileSelector(");
+	auto open_files_hits = FindLiteralHits(frame_main_cpp, "OpenFilesSelector(");
+	auto save_file_hits = FindLiteralHits(frame_main_cpp, "SaveFileSelector(");
+	auto select_directory_hits = FindLiteralHits(frame_main_cpp, "SelectDirectorySelector(");
+	auto dummy_video_hits = FindLiteralHits(frame_main_cpp, "CreateDummyVideo(");
+	auto seam_file_dialog_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainFileDialogService(");
+	auto seam_video_source_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainVideoSourceRequestService(");
+
+	auto seam_wx_file_dialog_include_hits = FindLiteralHits(wx_frame_main_request_host_h, "wx_file_dialog_services.h");
+	auto seam_make_window_file_dialog_hits = FindLiteralHits(wx_frame_main_request_host_h, "MakeWindowFileDialogService(");
+	auto seam_dummy_video_hits = FindLiteralHits(wx_frame_main_request_host_h, "CreateDummyVideo(");
+
+	EXPECT_TRUE(file_dialog_class_hits.empty()) << JoinLines(file_dialog_class_hits);
+	EXPECT_TRUE(video_source_class_hits.empty()) << JoinLines(video_source_class_hits);
+	EXPECT_TRUE(open_file_hits.empty()) << JoinLines(open_file_hits);
+	EXPECT_TRUE(open_files_hits.empty()) << JoinLines(open_files_hits);
+	EXPECT_TRUE(save_file_hits.empty()) << JoinLines(save_file_hits);
+	EXPECT_TRUE(select_directory_hits.empty()) << JoinLines(select_directory_hits);
+	EXPECT_TRUE(dummy_video_hits.empty()) << JoinLines(dummy_video_hits);
+	EXPECT_FALSE(seam_file_dialog_hits.empty());
+	EXPECT_FALSE(seam_video_source_hits.empty());
+
+	EXPECT_FALSE(seam_wx_file_dialog_include_hits.empty());
+	EXPECT_FALSE(seam_make_window_file_dialog_hits.empty());
+	EXPECT_FALSE(seam_dummy_video_hits.empty());
+}
+
+TEST(host_boundary_policy, frame_main_runtime_capabilities_live_in_explicit_wx_host_seam) {
+	auto const root = ProjectRoot();
+	auto const frame_main_cpp = root / "src" / "frame_main.cpp";
+	auto const wx_frame_main_runtime_host_h = root / "src" / "wx_frame_main_runtime_host.h";
+
+	auto background_runner_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainBackgroundRunner");
+	auto background_runner_factory_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainBackgroundRunnerFactory");
+	auto project_ui_state_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainProjectUiStateSink");
+	auto audio_player_factory_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainAudioPlayerFactoryService");
+	auto automation_runner_factory_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainAutomationBackgroundScriptRunnerFactory");
+	auto dialog_progress_hits = FindLiteralHits(frame_main_cpp, "DialogProgress");
+	auto audio_player_factory_hits = FindLiteralHits(frame_main_cpp, "AudioPlayerFactory::GetAudioPlayer(");
+	auto automation_runner_hits = FindLiteralHits(frame_main_cpp, "Automation4::BackgroundScriptRunner");
+	auto seam_background_runner_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainBackgroundRunnerFactory(");
+	auto seam_project_ui_state_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainProjectUiStateSink(");
+	auto seam_audio_player_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainAudioPlayerFactoryService(");
+	auto seam_automation_runner_factory_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainAutomationBackgroundScriptRunnerFactory(");
+
+	auto seam_dialog_progress_hits = FindLiteralHits(wx_frame_main_runtime_host_h, "DialogProgress");
+	auto seam_audio_player_factory_hits = FindLiteralHits(wx_frame_main_runtime_host_h, "AudioPlayerFactory::GetAudioPlayer(");
+	auto seam_automation_runner_hits = FindLiteralHits(wx_frame_main_runtime_host_h, "Automation4::BackgroundScriptRunner");
+	auto seam_file_dialog_factory_hits = FindLiteralHits(wx_frame_main_runtime_host_h, "MakeFrameMainFileDialogService(");
+
+	EXPECT_TRUE(background_runner_class_hits.empty()) << JoinLines(background_runner_class_hits);
+	EXPECT_TRUE(background_runner_factory_class_hits.empty()) << JoinLines(background_runner_factory_class_hits);
+	EXPECT_TRUE(project_ui_state_class_hits.empty()) << JoinLines(project_ui_state_class_hits);
+	EXPECT_TRUE(audio_player_factory_class_hits.empty()) << JoinLines(audio_player_factory_class_hits);
+	EXPECT_TRUE(automation_runner_factory_class_hits.empty()) << JoinLines(automation_runner_factory_class_hits);
+	EXPECT_TRUE(dialog_progress_hits.empty()) << JoinLines(dialog_progress_hits);
+	EXPECT_TRUE(audio_player_factory_hits.empty()) << JoinLines(audio_player_factory_hits);
+	EXPECT_TRUE(automation_runner_hits.empty()) << JoinLines(automation_runner_hits);
+	EXPECT_FALSE(seam_background_runner_hits.empty());
+	EXPECT_FALSE(seam_project_ui_state_hits.empty());
+	EXPECT_FALSE(seam_audio_player_hits.empty());
+	EXPECT_FALSE(seam_automation_runner_factory_hits.empty());
+
+	EXPECT_FALSE(seam_dialog_progress_hits.empty());
+	EXPECT_FALSE(seam_audio_player_factory_hits.empty());
+	EXPECT_FALSE(seam_automation_runner_hits.empty());
+	EXPECT_FALSE(seam_file_dialog_factory_hits.empty());
+}
+
 TEST(host_boundary_policy, shared_dispatch_timers_stay_wx_free_and_no_longer_use_host_suffix) {
 	auto const root = ProjectRoot();
 	auto const src_root = root / "src";
@@ -413,6 +491,8 @@ TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 		"src/wx_automation_file_dialog_service.h",
 		"src/wx_file_dialog_services.h",
 		"src/wx_frame_main_dialog_ui_host.h",
+		"src/wx_frame_main_request_host.h",
+		"src/wx_frame_main_runtime_host.h",
 		"src/wx_style_editor_ui_host.h",
 		"src/gui_wx_runtime_host.cpp",
 		"src/gui_wx_runtime_host.h",

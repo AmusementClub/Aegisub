@@ -44,7 +44,7 @@
 
 class AssDialogue;
 class AsyncVideoProvider;
-class VideoControllerTimerHost;
+class VideoControllerTimer;
 
 namespace agi {
 	struct Context;
@@ -82,7 +82,7 @@ class VideoController final {
 
 	/// Playback timer used to periodically check if we should go to the next
 	/// frame while playing video
-	std::unique_ptr<VideoControllerTimerHost> playback_timer;
+	std::unique_ptr<VideoControllerTimer> playback_timer;
 
 	/// Time when playback was last started
 	std::chrono::steady_clock::time_point playback_start_time;

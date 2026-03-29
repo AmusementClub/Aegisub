@@ -3,14 +3,14 @@
 #include <functional>
 #include <memory>
 
-class VideoControllerTimerHost {
+class VideoControllerTimer {
 public:
-	virtual ~VideoControllerTimerHost() = default;
+	virtual ~VideoControllerTimer() = default;
 
 	virtual void Start(int interval_ms) = 0;
 	virtual void Stop() = 0;
 	virtual bool IsRunning() const = 0;
 };
 
-std::unique_ptr<VideoControllerTimerHost> CreateVideoControllerTimerHost(
+std::unique_ptr<VideoControllerTimer> CreateVideoControllerTimer(
 	std::function<void()> on_play_timer);

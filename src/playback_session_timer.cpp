@@ -13,7 +13,7 @@
 // CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-#include "playback_session_timer_host.h"
+#include "playback_session_timer.h"
 
 #include "main_thread_timer.h"
 
@@ -22,12 +22,12 @@
 namespace aegisub::playback_session_service {
 namespace {
 
-class DispatchPlaybackSessionTimerHost final : public PlaybackSessionTimerHost {
+class DispatchPlaybackSessionTimer final : public PlaybackSessionTimer {
 	MainThreadTimer delay_timer;
 	MainThreadTimer wait_timer;
 
 public:
-	DispatchPlaybackSessionTimerHost(
+	DispatchPlaybackSessionTimer(
 		std::function<void()> on_delay_timer,
 		std::function<void()> on_wait_timer)
 	: delay_timer(std::move(on_delay_timer))
@@ -54,10 +54,10 @@ public:
 
 }
 
-std::unique_ptr<PlaybackSessionTimerHost> CreatePlaybackSessionTimerHost(
+std::unique_ptr<PlaybackSessionTimer> CreatePlaybackSessionTimer(
 	std::function<void()> on_delay_timer,
 	std::function<void()> on_wait_timer) {
-	return std::make_unique<DispatchPlaybackSessionTimerHost>(
+	return std::make_unique<DispatchPlaybackSessionTimer>(
 		std::move(on_delay_timer),
 		std::move(on_wait_timer));
 }

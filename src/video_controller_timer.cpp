@@ -13,7 +13,7 @@
 // CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-#include "video_controller_timer_host.h"
+#include "video_controller_timer.h"
 
 #include "main_thread_timer.h"
 
@@ -21,11 +21,11 @@
 
 namespace {
 
-class DispatchVideoControllerTimerHost final : public VideoControllerTimerHost {
+class DispatchVideoControllerTimer final : public VideoControllerTimer {
 	MainThreadTimer playback_timer;
 
 public:
-	explicit DispatchVideoControllerTimerHost(std::function<void()> on_play_timer)
+	explicit DispatchVideoControllerTimer(std::function<void()> on_play_timer)
 	: playback_timer(std::move(on_play_timer)) {
 	}
 
@@ -44,7 +44,7 @@ public:
 
 }
 
-std::unique_ptr<VideoControllerTimerHost> CreateVideoControllerTimerHost(
+std::unique_ptr<VideoControllerTimer> CreateVideoControllerTimer(
 	std::function<void()> on_play_timer) {
-	return std::make_unique<DispatchVideoControllerTimerHost>(std::move(on_play_timer));
+	return std::make_unique<DispatchVideoControllerTimer>(std::move(on_play_timer));
 }

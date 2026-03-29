@@ -467,7 +467,7 @@ add_executable(Aegisub WIN32
     src/audio_colorscheme.cpp
     src/audio_controller.cpp
     src/audio_controller_power_host.cpp
-    src/audio_controller_timer_host.cpp
+    src/audio_controller_timer.cpp
     src/audio_display_analysis.cpp
     src/audio_latest_range_scheduler.cpp
     src/audio_display.cpp
@@ -525,10 +525,10 @@ add_executable(Aegisub WIN32
     src/pen.cpp
     src/perf_trace.cpp
     src/playback_probe_service.cpp
-    src/playback_probe_timer_host.cpp
+    src/playback_probe_timer.cpp
     src/playback_query_service.cpp
     src/playback_session_service.cpp
-    src/playback_session_timer_host.cpp
+    src/playback_session_timer.cpp
     src/persist_location.cpp
     src/preferences.cpp
     src/preferences_base.cpp
@@ -569,7 +569,7 @@ add_executable(Aegisub WIN32
     src/version.cpp
     src/video_box.cpp
     src/video_controller.cpp
-    src/video_controller_timer_host.cpp
+    src/video_controller_timer.cpp
     src/video_display.cpp
     src/video_renderer_backend.cpp
     src/video_renderer_factory.cpp

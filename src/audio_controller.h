@@ -35,7 +35,7 @@
 
 class AudioPlayer;
 class AudioControllerPowerHost;
-class AudioControllerTimerHost;
+class AudioControllerTimer;
 class AudioTimingController;
 class TimeRange;
 namespace agi { class AudioProvider; }
@@ -81,7 +81,7 @@ class AudioController final {
 	PlaybackMode playback_mode = PM_NotPlaying;
 
 	/// Timer used for playback position updates
-	std::unique_ptr<AudioControllerTimerHost> playback_timer;
+	std::unique_ptr<AudioControllerTimer> playback_timer;
 	std::unique_ptr<AudioControllerPowerHost> power_host;
 
 	/// The audio provider

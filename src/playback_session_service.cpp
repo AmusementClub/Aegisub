@@ -20,7 +20,7 @@
 #include "audio_controller.h"
 #include "headless_playback_session_host.h"
 #include "include/aegisub/context.h"
-#include "playback_session_timer_host.h"
+#include "playback_session_timer.h"
 #include "project_open_service.h"
 #include "selection_controller.h"
 #include "video_controller.h"
@@ -91,7 +91,7 @@ class Runner final {
 	PlaybackSessionRequest request;
 	std::function<void(PlaybackSessionResult)> on_done;
 	PlaybackSessionHost runtime;
-	std::unique_ptr<PlaybackSessionTimerHost> timer_host;
+	std::unique_ptr<PlaybackSessionTimer> timer;
 	std::chrono::steady_clock::time_point wait_deadline = std::chrono::steady_clock::now();
 	size_t next_step = 0;
 	bool finished = false;
@@ -350,7 +350,7 @@ class Runner final {
 		if (finished)
 			return;
 		finished = true;
-		timer_host->StopAll();
+		timer->StopAll();
 
 		auto result = BuildResult(exit_code, std::move(message));
 		runtime.CloseMedia();
@@ -444,13 +444,13 @@ class Runner final {
 			return true;
 		}
 		case PlaybackSessionStepKind::Sleep:
-			timer_host->StartDelayOnce(step.primary_value);
+			timer->StartDelayOnce(step.primary_value);
 			return false;
 		case PlaybackSessionStepKind::WaitPlaybackStop:
 			if (!IsPlaybackActive())
 				return true;
 			wait_deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(step.primary_value);
-			timer_host->StartWaitPolling(20);
+			timer->StartWaitPolling(20);
 			return false;
 		case PlaybackSessionStepKind::JumpToTime: {
 			auto core = runtime.GetCore();
@@ -541,12 +541,12 @@ class Runner final {
 		if (finished)
 			return;
 		if (!IsPlaybackActive()) {
-			timer_host->StopWaitPolling();
+			timer->StopWaitPolling();
 			Advance();
 			return;
 		}
 		if (std::chrono::steady_clock::now() >= wait_deadline) {
-			timer_host->StopWaitPolling();
+			timer->StopWaitPolling();
 			auto const& step = request.steps[next_step - 1];
 			FailStep(next_step, step, "timed out waiting for playback stop");
 		}
@@ -570,7 +570,7 @@ public:
 			true
 		}
 	})
-	, timer_host(CreatePlaybackSessionTimerHost(
+	, timer(CreatePlaybackSessionTimer(
 		[this] { OnDelayTimer(); },
 		[this] { OnWaitTimer(); })) {
 	}

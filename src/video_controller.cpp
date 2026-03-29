@@ -42,7 +42,7 @@
 #include "time_range.h"
 #include "async_video_provider.h"
 #include "utils.h"
-#include "video_controller_timer_host.h"
+#include "video_controller_timer.h"
 
 #include <libaegisub/ass/time.h>
 
@@ -50,7 +50,7 @@
 
 VideoController::VideoController(agi::Context *c)
 : context(c)
-, playback_timer(CreateVideoControllerTimerHost([this] { OnPlayTimer(); }))
+, playback_timer(CreateVideoControllerTimer([this] { OnPlayTimer(); }))
 , playAudioOnStep(OPT_GET("Audio/Plays When Stepping Video"))
 {
 	auto core = context->GetCore();

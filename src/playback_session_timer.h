@@ -5,9 +5,9 @@
 
 namespace aegisub::playback_session_service {
 
-class PlaybackSessionTimerHost {
+class PlaybackSessionTimer {
 public:
-	virtual ~PlaybackSessionTimerHost() = default;
+	virtual ~PlaybackSessionTimer() = default;
 
 	virtual void StopAll() = 0;
 	virtual void StartDelayOnce(int delay_ms) = 0;
@@ -15,7 +15,7 @@ public:
 	virtual void StopWaitPolling() = 0;
 };
 
-std::unique_ptr<PlaybackSessionTimerHost> CreatePlaybackSessionTimerHost(
+std::unique_ptr<PlaybackSessionTimer> CreatePlaybackSessionTimer(
 	std::function<void()> on_delay_timer,
 	std::function<void()> on_wait_timer);
 

@@ -13,7 +13,7 @@
 // CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-#include "audio_controller_timer_host.h"
+#include "audio_controller_timer.h"
 
 #include "main_thread_timer.h"
 
@@ -21,11 +21,11 @@
 
 namespace {
 
-class DispatchAudioControllerTimerHost final : public AudioControllerTimerHost {
+class DispatchAudioControllerTimer final : public AudioControllerTimer {
 	MainThreadTimer playback_timer;
 
 public:
-	explicit DispatchAudioControllerTimerHost(std::function<void()> on_playback_timer)
+	explicit DispatchAudioControllerTimer(std::function<void()> on_playback_timer)
 	: playback_timer(std::move(on_playback_timer)) {
 	}
 
@@ -40,7 +40,7 @@ public:
 
 }
 
-std::unique_ptr<AudioControllerTimerHost> CreateAudioControllerTimerHost(
+std::unique_ptr<AudioControllerTimer> CreateAudioControllerTimer(
 	std::function<void()> on_playback_timer) {
-	return std::make_unique<DispatchAudioControllerTimerHost>(std::move(on_playback_timer));
+	return std::make_unique<DispatchAudioControllerTimer>(std::move(on_playback_timer));
 }

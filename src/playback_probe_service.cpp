@@ -15,7 +15,7 @@
 
 #include "playback_probe_service.h"
 #include "headless_playback_session_host.h"
-#include "playback_probe_timer_host.h"
+#include "playback_probe_timer.h"
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
@@ -68,7 +68,7 @@ class Runner final {
 	PlaybackProbeRequest request;
 	std::function<void(PlaybackProbeResult)> on_done;
 	PlaybackSessionHost runtime;
-	std::unique_ptr<PlaybackProbeTimerHost> timer_host;
+	std::unique_ptr<PlaybackProbeTimer> timer;
 	std::vector<agi::signal::Connection> connections;
 	bool probe_started = false;
 	bool finished = false;
@@ -219,7 +219,7 @@ class Runner final {
 		if (finished)
 			return;
 		finished = true;
-		timer_host->StopAll();
+		timer->StopAll();
 		connections.clear();
 
 		runtime.CloseMedia();
@@ -268,7 +268,7 @@ class Runner final {
 
 		++completed_playbacks;
 		if (completed_playbacks < request.repeat_count) {
-			timer_host->StartRestartOnce(request.repeat_gap_ms);
+			timer->StartRestartOnce(request.repeat_gap_ms);
 			return;
 		}
 
@@ -334,7 +334,7 @@ class Runner final {
 	}
 
 	void ArmSeekTimer() {
-		timer_host->ArmSeek(request.seek_after_ms);
+		timer->ArmSeek(request.seek_after_ms);
 	}
 
 public:
@@ -355,7 +355,7 @@ public:
 			true
 		}
 	})
-	, timer_host(CreatePlaybackProbeTimerHost(
+	, timer(CreatePlaybackProbeTimer(
 		[this] { OnTimeout(); },
 		[this] { OnCompletionPoll(); },
 		[this] { OnRestartTimer(); },
@@ -400,8 +400,8 @@ public:
 		int timeout_ms = static_cast<int>(std::ceil(playable_duration_ms / std::max(request.audio_rate_scale, 0.1))) * std::max(request.repeat_count, 1)
 			+ std::max(0, request.repeat_count - 1) * request.repeat_gap_ms
 			+ 3000;
-		timer_host->StartTimeoutOnce(timeout_ms);
-		timer_host->StartCompletionPolling(20);
+		timer->StartTimeoutOnce(timeout_ms);
+		timer->StartCompletionPolling(20);
 
 		probe_started = true;
 		playback_stop_handled = false;

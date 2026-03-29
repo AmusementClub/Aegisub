@@ -13,7 +13,7 @@
 // CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-#include "playback_probe_timer_host.h"
+#include "playback_probe_timer.h"
 
 #include "main_thread_timer.h"
 
@@ -22,14 +22,14 @@
 namespace aegisub::playback_probe_service {
 namespace {
 
-class DispatchPlaybackProbeTimerHost final : public PlaybackProbeTimerHost {
+class DispatchPlaybackProbeTimer final : public PlaybackProbeTimer {
 	MainThreadTimer timeout_timer;
 	MainThreadTimer completion_timer;
 	MainThreadTimer restart_timer;
 	MainThreadTimer seek_timer;
 
 public:
-	DispatchPlaybackProbeTimerHost(
+	DispatchPlaybackProbeTimer(
 		std::function<void()> on_timeout,
 		std::function<void()> on_completion_poll,
 		std::function<void()> on_restart_timer,
@@ -68,12 +68,12 @@ public:
 
 }
 
-std::unique_ptr<PlaybackProbeTimerHost> CreatePlaybackProbeTimerHost(
+std::unique_ptr<PlaybackProbeTimer> CreatePlaybackProbeTimer(
 	std::function<void()> on_timeout,
 	std::function<void()> on_completion_poll,
 	std::function<void()> on_restart_timer,
 	std::function<void()> on_seek_timer) {
-	return std::make_unique<DispatchPlaybackProbeTimerHost>(
+	return std::make_unique<DispatchPlaybackProbeTimer>(
 		std::move(on_timeout),
 		std::move(on_completion_poll),
 		std::move(on_restart_timer),

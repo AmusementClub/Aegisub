@@ -3,13 +3,13 @@
 #include <functional>
 #include <memory>
 
-class AudioControllerTimerHost {
+class AudioControllerTimer {
 public:
-	virtual ~AudioControllerTimerHost() = default;
+	virtual ~AudioControllerTimer() = default;
 
 	virtual void Start(int interval_ms) = 0;
 	virtual void Stop() = 0;
 };
 
-std::unique_ptr<AudioControllerTimerHost> CreateAudioControllerTimerHost(
+std::unique_ptr<AudioControllerTimer> CreateAudioControllerTimer(
 	std::function<void()> on_playback_timer);

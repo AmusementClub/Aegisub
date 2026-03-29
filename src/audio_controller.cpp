@@ -30,7 +30,7 @@
 #include "audio_controller.h"
 
 #include "audio_controller_power_host.h"
-#include "audio_controller_timer_host.h"
+#include "audio_controller_timer.h"
 #include "audio_timing.h"
 #include "include/aegisub/audio_player.h"
 #include "include/aegisub/context.h"
@@ -52,7 +52,7 @@ constexpr int kAudioUiTimerRequestedMs = 20;
 
 AudioController::AudioController(agi::Context *context)
 : context(context)
-, playback_timer(CreateAudioControllerTimerHost([this] { OnPlaybackTimer(); }))
+, playback_timer(CreateAudioControllerTimer([this] { OnPlaybackTimer(); }))
 , power_host(CreateAudioControllerPowerHost(
 	[this] { HandleComputerSuspending(); },
 	[this] { HandleComputerResuming(); }))

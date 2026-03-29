@@ -120,3 +120,45 @@ TEST(host_boundary_policy, ui_service_contract_stays_split_from_wx_adapter) {
 	EXPECT_TRUE(ui_cpp_hits.empty()) << JoinLines(ui_cpp_hits);
 	EXPECT_FALSE(wx_adapter_hits.empty());
 }
+
+TEST(host_boundary_policy, shared_dispatch_timers_stay_wx_free_and_no_longer_use_host_suffix) {
+	auto const root = ProjectRoot();
+	auto const src_root = root / "src";
+
+	std::set<std::string> const expected_shared_timer_sources = {
+		"src/audio_controller_timer.cpp",
+		"src/audio_controller_timer.h",
+		"src/main_thread_timer.h",
+		"src/playback_probe_timer.cpp",
+		"src/playback_probe_timer.h",
+		"src/playback_session_timer.cpp",
+		"src/playback_session_timer.h",
+		"src/video_controller_timer.cpp",
+		"src/video_controller_timer.h",
+	};
+
+	std::vector<std::string> unexpected_legacy_host_files;
+	for (auto const& entry : std::filesystem::directory_iterator(src_root)) {
+		if (!entry.is_regular_file())
+			continue;
+		auto const filename = entry.path().filename().string();
+		if (filename.find("_timer_host.") == std::string::npos)
+			continue;
+
+		std::ostringstream hit;
+		hit << std::filesystem::relative(entry.path(), root).generic_string();
+		unexpected_legacy_host_files.push_back(hit.str());
+	}
+
+	std::vector<std::string> unexpected_wx_hits;
+	for (auto const& relative : expected_shared_timer_sources) {
+		auto const path = root / std::filesystem::path(relative);
+		ASSERT_TRUE(std::filesystem::exists(path)) << relative;
+
+		auto hits = FindWxMarkers(path);
+		unexpected_wx_hits.insert(unexpected_wx_hits.end(), hits.begin(), hits.end());
+	}
+
+	EXPECT_TRUE(unexpected_legacy_host_files.empty()) << JoinLines(unexpected_legacy_host_files);
+	EXPECT_TRUE(unexpected_wx_hits.empty()) << JoinLines(unexpected_wx_hits);
+}

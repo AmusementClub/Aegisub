@@ -52,9 +52,7 @@
 
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
-#include <wx/dirdlg.h>
 #include <wx/event.h>
-#include <wx/filedlg.h>
 #include <wx/filename.h>
 #include <wx/listctrl.h>
 #include <wx/propgrid/advprops.h>
@@ -107,17 +105,17 @@ protected:
 		auto const current_path = config::path
 			? config::path->Decode(token_path)
 			: agi::fs::PathFromString(token_path);
-		wxDirDialog dlg(pg, _("Please choose the folder:"), FindExistingDialogDirectory(current_path).wstring());
-		if (dlg.ShowModal() != wxID_OK)
-			return false;
-
-		wxString selected = dlg.GetPath();
-		if (selected.empty())
+		auto file_dialogs = agi::MakeWindowFileDialogService(pg);
+		auto path = file_dialogs->RequestSelectDirectory({
+			from_wx(_("Please choose the folder:")),
+			agi::fs::PathToString(FindExistingDialogDirectory(current_path))
+		});
+		if (path.empty())
 			return false;
 
 		auto const encoded = config::path
-			? config::path->Encode(agi::fs::PathFromString(from_wx(selected)))
-			: from_wx(selected);
+			? config::path->Encode(path)
+			: agi::fs::PathToString(path);
 		value = to_wx(encoded);
 		return true;
 	}
@@ -137,26 +135,23 @@ protected:
 			? config::path->Decode(token_path)
 			: agi::fs::PathFromString(token_path);
 		wxFileName current(current_path.wstring());
-		wxString dir;
-		wxString file;
 		auto const existing_dir = FindExistingDialogDirectory(current_path);
-		if (!existing_dir.empty())
-			dir = existing_dir.wstring();
-		if (current.IsOk()) {
-			file = current.GetFullName();
-		}
-
-		wxFileDialog dlg(pg, _("Please choose the file:"), dir, file, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST);
-		if (dlg.ShowModal() != wxID_OK)
-			return false;
-
-		wxString selected = dlg.GetPath();
-		if (selected.empty())
+		auto file_dialogs = agi::MakeWindowFileDialogService(pg);
+		auto path = file_dialogs->RequestOpenFile({
+			from_wx(_("Please choose the file:")),
+			"",
+			current.IsOk() ? from_wx(current.GetFullName()) : std::string(),
+			"",
+			from_wx(wildcard),
+			agi::fs::PathToString(existing_dir),
+			true
+		});
+		if (path.empty())
 			return false;
 
 		auto const encoded = config::path
-			? config::path->Encode(agi::fs::PathFromString(from_wx(selected)))
-			: from_wx(selected);
+			? config::path->Encode(path)
+			: agi::fs::PathToString(path);
 		value = to_wx(encoded);
 		return true;
 	}

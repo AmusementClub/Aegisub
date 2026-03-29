@@ -34,8 +34,7 @@
 #include "persist_location.h"
 #include "preferences_base.h"
 #include "video_provider_manager.h"
-#include "wx_file_dialog_services.h"
-#include "wx_message_box_ui_services.h"
+#include "wx_preferences_ui_host.h"
 
 #ifdef WITH_PORTAUDIO
 #include "audio_player_portaudio.h"
@@ -1188,8 +1187,8 @@ void Preferences::OnResetDefault(wxCommandEvent&) {
 
 Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"), wxDefaultPosition, wxSize(-1, -1), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER) {
 	SetIcon(GETICON(options_button_16));
-	file_dialog_service = agi::MakeWindowFileDialogService(this);
-	interaction_sink = agi::MakeWindowInteractionSink(this);
+	file_dialog_service = agi::MakePreferencesFileDialogService(this);
+	interaction_sink = agi::MakePreferencesInteractionSink(this);
 
 	auto duration_ms = [](auto const& started) {
 		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();

@@ -103,6 +103,7 @@ TEST(host_boundary_policy, service_like_sources_keep_wx_at_host_edges) {
 		"src/wx_frame_main_dialog_ui_host.h",
 		"src/wx_frame_main_request_host.h",
 		"src/wx_frame_main_runtime_host.h",
+		"src/wx_preferences_ui_host.h",
 		"src/wx_style_editor_ui_host.h",
 	};
 
@@ -195,9 +196,11 @@ TEST(host_boundary_policy, preferences_file_dialog_usage_stays_centralized) {
 	auto const root = ProjectRoot();
 	auto const preferences_cpp = root / "src" / "preferences.cpp";
 	auto const preferences_base_cpp = root / "src" / "preferences_base.cpp";
+	auto const wx_preferences_ui_host_h = root / "src" / "wx_preferences_ui_host.h";
 
 	auto preferences_include_hits = FindLiteralHits(preferences_cpp, "wx_file_dialog_services.h");
 	auto preferences_make_hits = FindLiteralHits(preferences_cpp, "MakeWindowFileDialogService(");
+	auto preferences_seam_hits = FindLiteralHits(preferences_cpp, "MakePreferencesFileDialogService(");
 	auto preferences_request_hits = FindLiteralHits(preferences_cpp, "RequestSelectDirectory(");
 	auto preferences_open_hits = FindLiteralHits(preferences_cpp, "RequestOpenFile(");
 
@@ -206,8 +209,12 @@ TEST(host_boundary_policy, preferences_file_dialog_usage_stays_centralized) {
 	auto preferences_base_request_hits = FindLiteralHits(preferences_base_cpp, "RequestSelectDirectory(");
 	auto preferences_base_open_hits = FindLiteralHits(preferences_base_cpp, "RequestOpenFile(");
 
-	EXPECT_FALSE(preferences_include_hits.empty());
-	EXPECT_EQ(1u, preferences_make_hits.size()) << JoinLines(preferences_make_hits);
+	auto seam_include_hits = FindLiteralHits(wx_preferences_ui_host_h, "wx_file_dialog_services.h");
+	auto seam_make_hits = FindLiteralHits(wx_preferences_ui_host_h, "MakeWindowFileDialogService(");
+
+	EXPECT_TRUE(preferences_include_hits.empty()) << JoinLines(preferences_include_hits);
+	EXPECT_TRUE(preferences_make_hits.empty()) << JoinLines(preferences_make_hits);
+	EXPECT_FALSE(preferences_seam_hits.empty());
 	EXPECT_FALSE(preferences_request_hits.empty());
 	EXPECT_FALSE(preferences_open_hits.empty());
 
@@ -215,6 +222,9 @@ TEST(host_boundary_policy, preferences_file_dialog_usage_stays_centralized) {
 	EXPECT_TRUE(preferences_base_make_hits.empty()) << JoinLines(preferences_base_make_hits);
 	EXPECT_FALSE(preferences_base_request_hits.empty());
 	EXPECT_FALSE(preferences_base_open_hits.empty());
+
+	EXPECT_FALSE(seam_include_hits.empty());
+	EXPECT_FALSE(seam_make_hits.empty());
 }
 
 TEST(host_boundary_policy, automation_file_dialog_fallback_lives_in_explicit_wx_service_seam) {
@@ -270,14 +280,21 @@ TEST(host_boundary_policy, app_bootstrap_ui_fallback_lives_in_explicit_wx_servic
 TEST(host_boundary_policy, preferences_interaction_usage_stays_centralized) {
 	auto const root = ProjectRoot();
 	auto const preferences_cpp = root / "src" / "preferences.cpp";
+	auto const wx_preferences_ui_host_h = root / "src" / "wx_preferences_ui_host.h";
 
 	auto include_hits = FindLiteralHits(preferences_cpp, "wx_message_box_ui_services.h");
 	auto make_hits = FindLiteralHits(preferences_cpp, "MakeWindowInteractionSink(");
+	auto seam_hits = FindLiteralHits(preferences_cpp, "MakePreferencesInteractionSink(");
 	auto request_hits = FindLiteralHits(preferences_cpp, "RequestInteraction(");
+	auto seam_include_hits = FindLiteralHits(wx_preferences_ui_host_h, "wx_message_box_ui_services.h");
+	auto seam_make_hits = FindLiteralHits(wx_preferences_ui_host_h, "MakeWindowInteractionSink(");
 
-	EXPECT_FALSE(include_hits.empty());
-	EXPECT_EQ(1u, make_hits.size()) << JoinLines(make_hits);
+	EXPECT_TRUE(include_hits.empty()) << JoinLines(include_hits);
+	EXPECT_TRUE(make_hits.empty()) << JoinLines(make_hits);
+	EXPECT_FALSE(seam_hits.empty());
 	EXPECT_FALSE(request_hits.empty());
+	EXPECT_FALSE(seam_include_hits.empty());
+	EXPECT_FALSE(seam_make_hits.empty());
 }
 
 TEST(host_boundary_policy, style_editor_ui_fallback_lives_in_explicit_wx_host_seam) {
@@ -493,6 +510,7 @@ TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 		"src/wx_frame_main_dialog_ui_host.h",
 		"src/wx_frame_main_request_host.h",
 		"src/wx_frame_main_runtime_host.h",
+		"src/wx_preferences_ui_host.h",
 		"src/wx_style_editor_ui_host.h",
 		"src/gui_wx_runtime_host.cpp",
 		"src/gui_wx_runtime_host.h",

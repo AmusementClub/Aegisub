@@ -52,7 +52,8 @@
 #include "subs_controller.h"
 #include "utils.h"
 #include "value_event.h"
-#include "wx_ui_services.h"
+#include "wx_message_box_ui_services.h"
+#include "wx_single_choice_dialog.h"
 
 #include <libaegisub/dispatch.h>
 #include <libaegisub/format_path.h>

@@ -22,7 +22,7 @@
 #include "compat.h"
 #include "options.h"
 #include "preferences.h"
-#include "wx_ui_services.h"
+#include "wx_file_dialog_services.h"
 
 #include <libaegisub/exception.h>
 #include <libaegisub/fs.h>

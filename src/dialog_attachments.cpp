@@ -33,7 +33,7 @@
 #include "help_button.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
-#include "wx_ui_services.h"
+#include "wx_file_dialog_services.h"
 #include "utils.h"
 
 #include <wx/button.h>

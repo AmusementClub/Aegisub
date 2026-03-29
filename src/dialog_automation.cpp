@@ -37,7 +37,7 @@
 #include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
-#include "wx_ui_services.h"
+#include "wx_file_dialog_services.h"
 
 #include <libaegisub/fs.h>
 #include <libaegisub/signal.h>

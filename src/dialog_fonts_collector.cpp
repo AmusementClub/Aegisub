@@ -25,7 +25,7 @@
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "ui_dispatch.h"
-#include "wx_ui_services.h"
+#include "wx_file_dialog_services.h"
 #include "utils.h"
 #include "value_event.h"
 

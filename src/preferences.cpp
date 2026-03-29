@@ -34,7 +34,8 @@
 #include "persist_location.h"
 #include "preferences_base.h"
 #include "video_provider_manager.h"
-#include "wx_ui_services.h"
+#include "wx_file_dialog_services.h"
+#include "wx_message_box_ui_services.h"
 
 #ifdef WITH_PORTAUDIO
 #include "audio_player_portaudio.h"

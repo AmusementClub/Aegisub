@@ -52,7 +52,7 @@
 #include "selection_controller.h"
 #include "subs_controller.h"
 #include "video_controller.h"
-#include "wx_ui_services.h"
+#include "wx_file_dialog_services.h"
 #include "utils.h"
 
 #include <libaegisub/dispatch.h>

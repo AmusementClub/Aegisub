@@ -50,7 +50,7 @@
 #include "subs_preview.h"
 #include "utils.h"
 #include "validators.h"
-#include "wx_ui_services.h"
+#include "wx_message_box_ui_services.h"
 
 #include <libaegisub/of_type_adaptor.h>
 #include <libaegisub/make_unique.h>

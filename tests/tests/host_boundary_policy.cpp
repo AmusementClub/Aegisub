@@ -128,15 +128,23 @@ TEST(host_boundary_policy, ui_service_contract_stays_split_from_wx_adapter) {
 	auto const root = ProjectRoot();
 	auto const ui_services_h = root / "src" / "ui_services.h";
 	auto const ui_services_cpp = root / "src" / "ui_services.cpp";
-	auto const wx_ui_services_h = root / "src" / "wx_ui_services.h";
+	auto const wx_message_box_ui_services_h = root / "src" / "wx_message_box_ui_services.h";
+	auto const wx_single_choice_dialog_h = root / "src" / "wx_single_choice_dialog.h";
+	auto const wx_file_dialog_services_h = root / "src" / "wx_file_dialog_services.h";
+	auto const legacy_wx_ui_services_h = root / "src" / "wx_ui_services.h";
 
 	auto ui_header_hits = FindWxMarkers(ui_services_h);
 	auto ui_cpp_hits = FindWxMarkers(ui_services_cpp);
-	auto wx_adapter_hits = FindWxMarkers(wx_ui_services_h);
+	auto wx_message_box_hits = FindWxMarkers(wx_message_box_ui_services_h);
+	auto wx_single_choice_hits = FindWxMarkers(wx_single_choice_dialog_h);
+	auto wx_file_dialog_hits = FindWxMarkers(wx_file_dialog_services_h);
 
 	EXPECT_TRUE(ui_header_hits.empty()) << JoinLines(ui_header_hits);
 	EXPECT_TRUE(ui_cpp_hits.empty()) << JoinLines(ui_cpp_hits);
-	EXPECT_FALSE(wx_adapter_hits.empty());
+	EXPECT_FALSE(wx_message_box_hits.empty());
+	EXPECT_FALSE(wx_single_choice_hits.empty());
+	EXPECT_FALSE(wx_file_dialog_hits.empty());
+	EXPECT_FALSE(std::filesystem::exists(legacy_wx_ui_services_h));
 }
 
 TEST(host_boundary_policy, shared_dispatch_timers_stay_wx_free_and_no_longer_use_host_suffix) {
@@ -208,12 +216,14 @@ TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 	ASSERT_TRUE(std::filesystem::exists(src_root));
 
 	std::set<std::string> const expected_explicit_wx_surfaces = {
+		"src/wx_file_dialog_services.h",
 		"src/gui_wx_runtime_host.cpp",
 		"src/gui_wx_runtime_host.h",
 		"src/headless_wx_runtime_host.cpp",
 		"src/headless_wx_runtime_host.h",
+		"src/wx_message_box_ui_services.h",
 		"src/wx_audio_controller_power_host.cpp",
-		"src/wx_ui_services.h",
+		"src/wx_single_choice_dialog.h",
 	};
 
 	std::set<std::string> actual_explicit_wx_surfaces;

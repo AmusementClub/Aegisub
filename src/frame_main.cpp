@@ -65,7 +65,7 @@
 #include "video_box.h"
 #include "video_controller.h"
 #include "video_display.h"
-#include "wx_ui_services.h"
+#include "wx_single_choice_dialog.h"
 
 #include <libaegisub/dispatch.h>
 #include <libaegisub/log.h>

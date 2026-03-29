@@ -49,6 +49,9 @@
 #include <optional>
 #include <utility>
 
+// Shared runtime initialization stays at the process-shell boundary. It can
+// touch minimal wx runtime facilities, but service/session code should consume
+// the plain AppRuntime surface instead of depending on wx directly.
 #include <wx/image.h>
 #include <wx/log.h>
 

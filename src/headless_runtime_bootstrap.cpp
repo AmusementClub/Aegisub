@@ -29,6 +29,9 @@
 #include <thread>
 #include <utility>
 
+// Headless bootstrap still owns the minimal wx runtime bring-up needed before
+// shared AppRuntime initialization. Keep that dependency here rather than in
+// service/session code.
 #include <wx/init.h>
 
 namespace {

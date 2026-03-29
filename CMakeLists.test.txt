@@ -72,6 +72,7 @@ if(GTEST_FOUND)
         tests/tests/format.cpp
         tests/tests/fs.cpp
         tests/tests/hotkey.cpp
+        tests/tests/host_boundary_policy.cpp
         tests/tests/iconv.cpp
         tests/tests/ifind.cpp
         tests/tests/io.cpp
@@ -143,7 +144,10 @@ if(GTEST_FOUND)
         target_compile_definitions(gtest-run PRIVATE WITH_LIBPLACEBO)
         target_include_directories(gtest-run PRIVATE ${LibPlacebo_INCLUDE_DIR})
     endif()
-    target_compile_definitions(gtest-run PRIVATE CMAKE_BUILD)
+    target_compile_definitions(gtest-run PRIVATE
+        CMAKE_BUILD
+        "AEGISUB_PROJECT_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\""
+    )
     aegisub_enable_wx_utf8_guard(gtest-run)
     target_include_directories(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     if(WITH_FFMS2)

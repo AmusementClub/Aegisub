@@ -28,6 +28,8 @@ class NoopAudioControllerPowerHost final : public AudioControllerPowerHost {
 };
 
 #ifdef wxHAS_POWER_EVENTS
+// Power notifications remain a GUI-shell host concern; shared services should
+// continue to consume the abstract host interface rather than wx directly.
 class WxAudioControllerPowerHost final : public AudioControllerPowerHost, public wxEvtHandler {
 	wxEvtHandler *event_source = nullptr;
 	std::function<void()> on_suspend;

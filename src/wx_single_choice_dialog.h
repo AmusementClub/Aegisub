@@ -9,27 +9,59 @@
 #include <wx/radiobox.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
+#include <wx/translation.h>
 #include <wx/utils.h>
 #include <wx/window.h>
 
 namespace agi {
+namespace {
+
+inline SingleChoiceInteractionRequest LocalizeKnownSingleChoiceRequest(SingleChoiceInteractionRequest request) {
+	if (request.request_id == "charset_choice.detected_charsets") {
+		request.title = from_wx(_("Choose character set"));
+		request.message = from_wx(_("Aegisub could not narrow down the character set to a single one.\nPlease pick one below:"));
+		return request;
+	}
+
+	if (request.request_id == "track_choice.audio") {
+		request.title = from_wx(_("Choose audio track"));
+		request.message = from_wx(_("Multiple audio tracks detected, please choose the one you wish to load:"));
+		return request;
+	}
+
+	if (request.request_id == "track_choice.subtitle") {
+		request.title = from_wx(_("Multiple subtitle tracks found"));
+		request.message = from_wx(_("Choose which track to read:"));
+		return request;
+	}
+
+	if (request.request_id == "track_choice.video") {
+		request.title = from_wx(_("Choose video track"));
+		request.message = from_wx(_("Multiple video tracks detected, please choose the one you wish to load:"));
+	}
+
+	return request;
+}
+
+}
 
 // This header is the explicit wx adapter surface for single-choice
 // interactions. Replace it when the GUI shell stops presenting wx dialogs
 // for request/response selection.
 
 inline std::optional<int> ShowSingleChoiceDialog(wxWindow *parent, SingleChoiceInteractionRequest const& request) {
-	if (request.choices.empty())
+	auto localized = LocalizeKnownSingleChoiceRequest(request);
+	if (localized.choices.empty())
 		return std::nullopt;
 
-	wxDialog dialog(parent, -1, to_wx(request.title));
+	wxDialog dialog(parent, -1, to_wx(localized.title));
 
 	auto sizer = new wxBoxSizer(wxVERTICAL);
-	sizer->Add(new wxStaticText(&dialog, -1, to_wx(request.message)), wxSizerFlags().Border());
+	sizer->Add(new wxStaticText(&dialog, -1, to_wx(localized.message)), wxSizerFlags().Border());
 
-	auto choices = to_wx(request.choices);
+	auto choices = to_wx(localized.choices);
 	auto *radio_box = new wxRadioBox(&dialog, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, choices, 1);
-	radio_box->SetSelection(std::clamp(request.default_choice, 0, static_cast<int>(request.choices.size() - 1)));
+	radio_box->SetSelection(std::clamp(localized.default_choice, 0, static_cast<int>(localized.choices.size() - 1)));
 	sizer->Add(radio_box, wxSizerFlags().Border(wxALL & ~wxTOP).Expand());
 
 	sizer->Add(dialog.CreateStdDialogButtonSizer(wxOK | wxCANCEL), wxSizerFlags().Border().Expand());

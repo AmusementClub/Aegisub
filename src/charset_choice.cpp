@@ -1,16 +1,13 @@
 #include "charset_choice.h"
 
-#include "compat.h"
-
-#include <wx/intl.h>
-
 namespace aegisub::charset_choice {
 
 agi::SingleChoiceInteractionRequest BuildRequest(std::vector<std::string> const& choices) {
 	agi::SingleChoiceInteractionRequest request;
-	request.title = from_wx(_("Choose character set"));
-	request.message = from_wx(_("Aegisub could not narrow down the character set to a single one.\nPlease pick one below:"));
+	request.title = "Choose character set";
+	request.message = "Aegisub could not narrow down the character set to a single one.\nPlease pick one below:";
 	request.choices = choices;
+	request.request_id = "charset_choice.detected_charsets";
 	return request;
 }
 

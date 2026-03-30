@@ -1,9 +1,5 @@
 #include "track_choice.h"
 
-#include "compat.h"
-
-#include <wx/intl.h>
-
 namespace aegisub::track_choice {
 namespace {
 std::string BuildRequestId(DialogKind kind) {
@@ -22,11 +18,11 @@ std::string BuildRequestId(DialogKind kind) {
 std::string BuildTitle(DialogKind kind) {
 	switch (kind) {
 	case DialogKind::Audio:
-		return from_wx(_("Choose audio track"));
+		return "Choose audio track";
 	case DialogKind::Subtitle:
-		return from_wx(_("Multiple subtitle tracks found"));
+		return "Multiple subtitle tracks found";
 	case DialogKind::Video:
-		return from_wx(_("Choose video track"));
+		return "Choose video track";
 	}
 
 	return {};
@@ -35,11 +31,11 @@ std::string BuildTitle(DialogKind kind) {
 std::string BuildMessage(DialogKind kind) {
 	switch (kind) {
 	case DialogKind::Audio:
-		return from_wx(_("Multiple audio tracks detected, please choose the one you wish to load:"));
+		return "Multiple audio tracks detected, please choose the one you wish to load:";
 	case DialogKind::Subtitle:
-		return from_wx(_("Choose which track to read:"));
+		return "Choose which track to read:";
 	case DialogKind::Video:
-		return from_wx(_("Multiple video tracks detected, please choose the one you wish to load:"));
+		return "Multiple video tracks detected, please choose the one you wish to load:";
 	}
 
 	return {};

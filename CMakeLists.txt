@@ -368,10 +368,20 @@ set(AEGISUB_SHARED_EXE_ENTRY_SOURCES
     src/app_entry.cpp
 )
 
-set(AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES
+set(AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES
     src/app_process_config.cpp
+    src/app_runtime.cpp
+)
+
+set(AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES
+    ${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES}
     src/headless_process_entry.cpp
     src/headless_runtime_bootstrap.cpp
+)
+
+set(AEGISUB_SHARED_SELECTION_REQUEST_SOURCES
+    src/charset_choice.cpp
+    src/track_choice.cpp
 )
 
 set(AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES
@@ -536,7 +546,6 @@ add_executable(Aegisub WIN32
     src/auto4_lua_dialog.cpp
     src/auto4_lua_progresssink.cpp
     src/base_grid.cpp
-    src/charset_choice.cpp
     src/charset_detect.cpp
     src/colorspace.cpp
     src/colour_button.cpp
@@ -552,6 +561,7 @@ add_executable(Aegisub WIN32
     src/gui_wx_runtime_host.cpp
     src/grid_column.cpp
     ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES}
+    ${AEGISUB_SHARED_SELECTION_REQUEST_SOURCES}
     ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES}
     src/help_button.cpp
     src/hotkey.cpp
@@ -581,7 +591,6 @@ add_executable(Aegisub WIN32
     src/subs_preview.cpp
     src/subtitle_fps_choice.cpp
     src/subtitle_overlay_blend.cpp
-    src/track_choice.cpp
     src/subtitles_provider.cpp
     src/subtitles_provider_libass.cpp
     src/text_file_reader.cpp

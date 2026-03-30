@@ -621,8 +621,8 @@ TEST(host_boundary_policy, shared_headless_entry_bootstrap_sources_live_in_named
 	std::set<std::string> const expected_entry_sources = {
 		"src/app_entry.cpp",
 	};
-	std::set<std::string> const expected_headless_entry_bootstrap_sources = {
-		"src/app_process_config.cpp",
+	std::set<std::string> const expected_headless_entry_bootstrap_entries = {
+		"${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES}",
 		"src/headless_process_entry.cpp",
 		"src/headless_runtime_bootstrap.cpp",
 	};
@@ -630,12 +630,46 @@ TEST(host_boundary_policy, shared_headless_entry_bootstrap_sources_live_in_named
 	auto entry_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_EXE_ENTRY_SOURCES");
 	auto headless_entry_bootstrap_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES");
 	auto entry_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_EXE_ENTRY_SOURCES}");
+	auto runtime_common_init_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES}");
 	auto headless_entry_bootstrap_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES}");
 
 	EXPECT_EQ(expected_entry_sources, entry_sources);
-	EXPECT_EQ(expected_headless_entry_bootstrap_sources, headless_entry_bootstrap_sources);
+	EXPECT_EQ(expected_headless_entry_bootstrap_entries, headless_entry_bootstrap_sources);
 	EXPECT_FALSE(entry_expansion_hits.empty());
+	EXPECT_FALSE(runtime_common_init_expansion_hits.empty());
 	EXPECT_FALSE(headless_entry_bootstrap_expansion_hits.empty());
+}
+
+TEST(host_boundary_policy, shared_runtime_common_init_sources_live_in_named_cmake_pack) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+
+	std::set<std::string> const expected_sources = {
+		"src/app_process_config.cpp",
+		"src/app_runtime.cpp",
+	};
+
+	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES");
+	auto expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES}");
+
+	EXPECT_EQ(expected_sources, sources);
+	EXPECT_FALSE(expansion_hits.empty());
+}
+
+TEST(host_boundary_policy, shared_selection_request_sources_live_in_named_cmake_pack) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+
+	std::set<std::string> const expected_sources = {
+		"src/charset_choice.cpp",
+		"src/track_choice.cpp",
+	};
+
+	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_SELECTION_REQUEST_SOURCES");
+	auto expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_SELECTION_REQUEST_SOURCES}");
+
+	EXPECT_EQ(expected_sources, sources);
+	EXPECT_FALSE(expansion_hits.empty());
 }
 
 TEST(host_boundary_policy, shared_headless_cli_inspect_batch_sources_live_in_named_cmake_pack) {
@@ -732,6 +766,72 @@ TEST(host_boundary_policy, shared_playback_project_session_sources_live_in_named
 	EXPECT_FALSE(support_expansion_hits.empty());
 	EXPECT_FALSE(core_expansion_hits.empty());
 	EXPECT_FALSE(expansion_hits.empty());
+}
+
+TEST(host_boundary_policy, shared_selection_request_helpers_keep_wx_at_single_choice_adapter_edge) {
+	auto const root = ProjectRoot();
+	auto const charset_choice_cpp = root / "src" / "charset_choice.cpp";
+	auto const track_choice_cpp = root / "src" / "track_choice.cpp";
+	auto const wx_single_choice_dialog_h = root / "src" / "wx_single_choice_dialog.h";
+
+	auto charset_choice_wx_hits = FindWxMarkers(charset_choice_cpp);
+	auto track_choice_wx_hits = FindWxMarkers(track_choice_cpp);
+	auto charset_choice_request_hits = FindLiteralHits(charset_choice_cpp, "charset_choice.detected_charsets");
+	auto adapter_charset_request_hits = FindLiteralHits(wx_single_choice_dialog_h, "charset_choice.detected_charsets");
+	auto adapter_track_audio_hits = FindLiteralHits(wx_single_choice_dialog_h, "track_choice.audio");
+	auto adapter_track_subtitle_hits = FindLiteralHits(wx_single_choice_dialog_h, "track_choice.subtitle");
+	auto adapter_track_video_hits = FindLiteralHits(wx_single_choice_dialog_h, "track_choice.video");
+
+	EXPECT_TRUE(charset_choice_wx_hits.empty()) << JoinLines(charset_choice_wx_hits);
+	EXPECT_TRUE(track_choice_wx_hits.empty()) << JoinLines(track_choice_wx_hits);
+	EXPECT_FALSE(charset_choice_request_hits.empty());
+	EXPECT_FALSE(adapter_charset_request_hits.empty());
+	EXPECT_FALSE(adapter_track_audio_hits.empty());
+	EXPECT_FALSE(adapter_track_subtitle_hits.empty());
+	EXPECT_FALSE(adapter_track_video_hits.empty());
+}
+
+TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_from_gui_shell) {
+	auto const root = ProjectRoot();
+	auto const main_cpp = root / "src" / "main.cpp";
+	auto const app_runtime_h = root / "src" / "app_runtime.h";
+	auto const app_runtime_cpp = root / "src" / "app_runtime.cpp";
+	auto const headless_process_entry_cpp = root / "src" / "headless_process_entry.cpp";
+	auto const headless_runtime_bootstrap_cpp = root / "src" / "headless_runtime_bootstrap.cpp";
+
+	auto main_gui_runtime_host_hits = FindLiteralHits(main_cpp, "gui_wx_runtime_host.h");
+	auto main_bootstrap_ui_hits = FindLiteralHits(main_cpp, "wx_app_bootstrap_ui_services.h");
+
+	auto app_runtime_header_wx_hits = FindWxMarkers(app_runtime_h);
+	auto app_runtime_gui_runtime_host_hits = FindLiteralHits(app_runtime_cpp, "gui_wx_runtime_host.h");
+	auto app_runtime_bootstrap_ui_hits = FindLiteralHits(app_runtime_cpp, "wx_app_bootstrap_ui_services.h");
+	auto app_runtime_main_header_hits = FindLiteralHits(app_runtime_cpp, "main.h");
+
+	auto process_entry_wx_hits = FindWxMarkers(headless_process_entry_cpp);
+	auto process_entry_main_header_hits = FindLiteralHits(headless_process_entry_cpp, "main.h");
+	auto process_entry_gui_runtime_host_hits = FindLiteralHits(headless_process_entry_cpp, "gui_wx_runtime_host.h");
+
+	auto bootstrap_wx_hits = FindWxMarkers(headless_runtime_bootstrap_cpp);
+	auto bootstrap_main_header_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "main.h");
+	auto bootstrap_gui_runtime_host_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "gui_wx_runtime_host.h");
+	auto bootstrap_bootstrap_ui_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "wx_app_bootstrap_ui_services.h");
+
+	EXPECT_FALSE(main_gui_runtime_host_hits.empty());
+	EXPECT_FALSE(main_bootstrap_ui_hits.empty());
+
+	EXPECT_TRUE(app_runtime_header_wx_hits.empty()) << JoinLines(app_runtime_header_wx_hits);
+	EXPECT_TRUE(app_runtime_gui_runtime_host_hits.empty()) << JoinLines(app_runtime_gui_runtime_host_hits);
+	EXPECT_TRUE(app_runtime_bootstrap_ui_hits.empty()) << JoinLines(app_runtime_bootstrap_ui_hits);
+	EXPECT_TRUE(app_runtime_main_header_hits.empty()) << JoinLines(app_runtime_main_header_hits);
+
+	EXPECT_TRUE(process_entry_wx_hits.empty()) << JoinLines(process_entry_wx_hits);
+	EXPECT_TRUE(process_entry_main_header_hits.empty()) << JoinLines(process_entry_main_header_hits);
+	EXPECT_TRUE(process_entry_gui_runtime_host_hits.empty()) << JoinLines(process_entry_gui_runtime_host_hits);
+
+	EXPECT_TRUE(bootstrap_wx_hits.empty()) << JoinLines(bootstrap_wx_hits);
+	EXPECT_TRUE(bootstrap_main_header_hits.empty()) << JoinLines(bootstrap_main_header_hits);
+	EXPECT_TRUE(bootstrap_gui_runtime_host_hits.empty()) << JoinLines(bootstrap_gui_runtime_host_hits);
+	EXPECT_TRUE(bootstrap_bootstrap_ui_hits.empty()) << JoinLines(bootstrap_bootstrap_ui_hits);
 }
 
 TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {

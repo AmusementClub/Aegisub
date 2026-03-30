@@ -10,6 +10,7 @@ TEST(charset_choice, build_request_preserves_choices) {
 	EXPECT_EQ(choices, request.choices);
 	EXPECT_FALSE(request.title.empty());
 	EXPECT_FALSE(request.message.empty());
+	EXPECT_EQ("charset_choice.detected_charsets", request.request_id);
 }
 
 TEST(charset_choice, resolve_selection_returns_selected_value) {

@@ -14,7 +14,6 @@
 // PERFORMANCE OF THIS SOFTWARE.
 
 #include "headless_process_entry.h"
-#include "wx_headless_process_host.h"
 
 #include <vector>
 #include <string>
@@ -67,7 +66,7 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wxCm
 
 	auto const args = CurrentProcessArgs();
 	if (IsHeadlessEntryCommandLine(args))
-		return RunHeadlessCommandLineInSharedWxProcessHost(args);
+		return RunHeadlessCommandLineInPlainProcessHost(args);
 
 	return wxEntry(hInstance, hPrevInstance, lpCmdLine, nCmdShow);
 }
@@ -83,7 +82,7 @@ int main(int argc, char** argv) {
 		args.emplace_back(argv[i]);
 
 	if (IsHeadlessEntryCommandLine(args))
-		return RunHeadlessCommandLineInSharedWxProcessHost(args);
+		return RunHeadlessCommandLineInPlainProcessHost(args);
 
 	return wxEntry(argc, argv);
 }

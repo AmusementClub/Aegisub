@@ -1,5 +1,6 @@
 #include <main.h>
 
+#include <cctype>
 #include <filesystem>
 #include <fstream>
 #include <regex>
@@ -86,6 +87,38 @@ std::string JoinLines(std::vector<std::string> const& lines) {
 		out << lines[i];
 	}
 	return out.str();
+}
+
+std::string TrimCopy(std::string value) {
+	auto const not_space = [](unsigned char ch) { return !std::isspace(ch); };
+	value.erase(value.begin(), std::find_if(value.begin(), value.end(), not_space));
+	value.erase(std::find_if(value.rbegin(), value.rend(), not_space).base(), value.end());
+	return value;
+}
+
+std::set<std::string> ReadNamedCMakeSetEntries(std::filesystem::path const& path, std::string const& variable_name) {
+	std::ifstream input(path);
+	std::set<std::string> entries;
+	std::string line;
+	bool in_block = false;
+	auto const begin_marker = "set(" + variable_name;
+
+	while (std::getline(input, line)) {
+		auto trimmed = TrimCopy(line);
+		if (!in_block) {
+			if (trimmed == begin_marker)
+				in_block = true;
+			continue;
+		}
+
+		if (trimmed == ")")
+			break;
+		if (trimmed.empty() || StartsWith(trimmed, "#"))
+			continue;
+		entries.insert(trimmed);
+	}
+
+	return entries;
 }
 
 }
@@ -579,6 +612,76 @@ TEST(host_boundary_policy, shared_process_config_globals_live_outside_gui_main) 
 	EXPECT_FALSE(config_mru_hits.empty());
 	EXPECT_FALSE(config_path_hits.empty());
 	EXPECT_FALSE(config_scripts_hits.empty());
+}
+
+TEST(host_boundary_policy, shared_headless_entry_bootstrap_sources_live_in_named_cmake_pack) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+
+	std::set<std::string> const expected_entry_sources = {
+		"src/app_entry.cpp",
+	};
+	std::set<std::string> const expected_headless_entry_bootstrap_sources = {
+		"src/app_process_config.cpp",
+		"src/headless_process_entry.cpp",
+		"src/headless_runtime_bootstrap.cpp",
+	};
+
+	auto entry_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_EXE_ENTRY_SOURCES");
+	auto headless_entry_bootstrap_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES");
+	auto entry_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_EXE_ENTRY_SOURCES}");
+	auto headless_entry_bootstrap_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES}");
+
+	EXPECT_EQ(expected_entry_sources, entry_sources);
+	EXPECT_EQ(expected_headless_entry_bootstrap_sources, headless_entry_bootstrap_sources);
+	EXPECT_FALSE(entry_expansion_hits.empty());
+	EXPECT_FALSE(headless_entry_bootstrap_expansion_hits.empty());
+}
+
+TEST(host_boundary_policy, shared_headless_cli_inspect_batch_sources_live_in_named_cmake_pack) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+
+	std::set<std::string> const expected_sources = {
+		"src/ass_info_service.cpp",
+		"src/headless_cli.cpp",
+		"src/headless_cli_batch.cpp",
+		"src/headless_cli_internal.cpp",
+		"src/headless_cli_execute.cpp",
+		"src/headless_playback_probe.cpp",
+		"src/media_inspect_service.cpp",
+		"src/trace_inspect_service.cpp",
+		"src/trace_summary_service.cpp",
+	};
+
+	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES");
+	auto expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES}");
+
+	EXPECT_EQ(expected_sources, sources);
+	EXPECT_FALSE(expansion_hits.empty());
+}
+
+TEST(host_boundary_policy, shared_playback_project_session_sources_live_in_named_cmake_pack) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+
+	std::set<std::string> const expected_sources = {
+		"src/headless_playback_session_host.cpp",
+		"src/playback_probe_service.cpp",
+		"src/playback_probe_timer.cpp",
+		"src/playback_query_service.cpp",
+		"src/playback_session_service.cpp",
+		"src/playback_session_timer.cpp",
+		"src/project_open_service.cpp",
+		"src/project_query_service.cpp",
+		"src/project_session_service.cpp",
+	};
+
+	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES");
+	auto expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES}");
+
+	EXPECT_EQ(expected_sources, sources);
+	EXPECT_FALSE(expansion_hits.empty());
 }
 
 TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {

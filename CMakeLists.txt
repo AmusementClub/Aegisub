@@ -364,6 +364,40 @@ add_subdirectory("vendor/csri")
 target_sources(csri PRIVATE src/csri_native_library_bridge.cpp)
 target_compile_features(csri PRIVATE cxx_std_20)
 
+set(AEGISUB_SHARED_EXE_ENTRY_SOURCES
+    src/app_entry.cpp
+)
+
+set(AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES
+    src/app_process_config.cpp
+    src/headless_process_entry.cpp
+    src/headless_runtime_bootstrap.cpp
+)
+
+set(AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES
+    src/ass_info_service.cpp
+    src/headless_cli.cpp
+    src/headless_cli_batch.cpp
+    src/headless_cli_internal.cpp
+    src/headless_cli_execute.cpp
+    src/headless_playback_probe.cpp
+    src/media_inspect_service.cpp
+    src/trace_inspect_service.cpp
+    src/trace_summary_service.cpp
+)
+
+set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES
+    src/headless_playback_session_host.cpp
+    src/playback_probe_service.cpp
+    src/playback_probe_timer.cpp
+    src/playback_query_service.cpp
+    src/playback_session_service.cpp
+    src/playback_session_timer.cpp
+    src/project_open_service.cpp
+    src/project_query_service.cpp
+    src/project_session_service.cpp
+)
+
 ## Aegisub
 add_executable(Aegisub WIN32
     "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.h"
@@ -460,11 +494,10 @@ add_executable(Aegisub WIN32
     src/ass_style.cpp
     src/ass_style_storage.cpp
     src/app_runtime.cpp
-    src/app_process_config.cpp
     src/async_video_provider.cpp
     src/async_video_provider_host.cpp
-    src/app_entry.cpp
-    src/headless_process_entry.cpp
+    ${AEGISUB_SHARED_EXE_ENTRY_SOURCES}
+    ${AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES}
     src/audio_box.cpp
     src/audio_colorscheme.cpp
     src/audio_controller.cpp
@@ -510,34 +543,23 @@ add_executable(Aegisub WIN32
     src/gl_wrap.cpp
     src/gui_wx_runtime_host.cpp
     src/grid_column.cpp
-    src/headless_cli.cpp
-    src/headless_playback_probe.cpp
-    src/headless_runtime_bootstrap.cpp
-    src/headless_playback_session_host.cpp
+    ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES}
+    ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES}
     src/help_button.cpp
     src/hotkey.cpp
     src/hotkey_data_view_model.cpp
     src/image_position_picker.cpp
     src/initial_line_state.cpp
     src/main.cpp
-    src/media_inspect_service.cpp
     src/menu.cpp
     src/csri_renderer_discovery.cpp
     src/native_library.cpp
     src/pen.cpp
     src/perf_trace.cpp
-    src/playback_probe_service.cpp
-    src/playback_probe_timer.cpp
-    src/playback_query_service.cpp
-    src/playback_session_service.cpp
-    src/playback_session_timer.cpp
     src/persist_location.cpp
     src/preferences.cpp
     src/preferences_base.cpp
     src/project.cpp
-    src/project_open_service.cpp
-    src/project_query_service.cpp
-    src/project_session_service.cpp
     src/resolution_resampler.cpp
     src/search_replace_engine.cpp
     src/selection_controller.cpp
@@ -562,8 +584,6 @@ add_executable(Aegisub WIN32
     src/toggle_bitmap.cpp
     src/toolbar.cpp
     src/tooltip_manager.cpp
-    src/trace_inspect_service.cpp
-    src/trace_summary_service.cpp
     src/utils.cpp
     src/ui_services.cpp
     src/validators.cpp

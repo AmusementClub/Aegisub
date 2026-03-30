@@ -384,24 +384,32 @@ set(AEGISUB_SHARED_SELECTION_REQUEST_SOURCES
     src/track_choice.cpp
 )
 
-set(AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES
+set(AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES
     src/ass_info_service.cpp
-    src/headless_cli.cpp
-    src/headless_cli_batch.cpp
-    src/headless_cli_internal.cpp
-    src/headless_cli_execute.cpp
-    src/headless_playback_probe.cpp
     src/media_inspect_service.cpp
     src/trace_inspect_service.cpp
     src/trace_summary_service.cpp
 )
 
+set(AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES
+    ${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}
+    src/headless_cli.cpp
+    src/headless_cli_batch.cpp
+    src/headless_cli_internal.cpp
+    src/headless_cli_execute.cpp
+    src/headless_playback_probe.cpp
+)
+
+set(AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES
+    src/playback_query_service.cpp
+    src/project_open_service.cpp
+)
+
 set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES
     src/headless_playback_session_host.cpp
     src/playback_probe_timer.cpp
-    src/playback_query_service.cpp
     src/playback_session_timer.cpp
-    src/project_open_service.cpp
+    ${AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES}
     src/project_query_service.cpp
 )
 

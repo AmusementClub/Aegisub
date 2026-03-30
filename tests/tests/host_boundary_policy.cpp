@@ -662,6 +662,7 @@ TEST(host_boundary_policy, shared_selection_request_sources_live_in_named_cmake_
 
 	std::set<std::string> const expected_sources = {
 		"src/charset_choice.cpp",
+		"src/subtitle_fps_choice.cpp",
 		"src/track_choice.cpp",
 	};
 
@@ -805,21 +806,28 @@ TEST(host_boundary_policy, shared_project_media_open_query_sources_live_in_named
 TEST(host_boundary_policy, shared_selection_request_helpers_keep_wx_at_single_choice_adapter_edge) {
 	auto const root = ProjectRoot();
 	auto const charset_choice_cpp = root / "src" / "charset_choice.cpp";
+	auto const subtitle_fps_choice_cpp = root / "src" / "subtitle_fps_choice.cpp";
 	auto const track_choice_cpp = root / "src" / "track_choice.cpp";
 	auto const wx_single_choice_dialog_h = root / "src" / "wx_single_choice_dialog.h";
 
 	auto charset_choice_wx_hits = FindWxMarkers(charset_choice_cpp);
+	auto subtitle_fps_choice_wx_hits = FindWxMarkers(subtitle_fps_choice_cpp);
 	auto track_choice_wx_hits = FindWxMarkers(track_choice_cpp);
 	auto charset_choice_request_hits = FindLiteralHits(charset_choice_cpp, "charset_choice.detected_charsets");
+	auto subtitle_fps_choice_request_hits = FindLiteralHits(subtitle_fps_choice_cpp, "subtitle_fps_choice.selection");
 	auto adapter_charset_request_hits = FindLiteralHits(wx_single_choice_dialog_h, "charset_choice.detected_charsets");
+	auto adapter_subtitle_fps_request_hits = FindLiteralHits(wx_single_choice_dialog_h, "subtitle_fps_choice.selection");
 	auto adapter_track_audio_hits = FindLiteralHits(wx_single_choice_dialog_h, "track_choice.audio");
 	auto adapter_track_subtitle_hits = FindLiteralHits(wx_single_choice_dialog_h, "track_choice.subtitle");
 	auto adapter_track_video_hits = FindLiteralHits(wx_single_choice_dialog_h, "track_choice.video");
 
 	EXPECT_TRUE(charset_choice_wx_hits.empty()) << JoinLines(charset_choice_wx_hits);
+	EXPECT_TRUE(subtitle_fps_choice_wx_hits.empty()) << JoinLines(subtitle_fps_choice_wx_hits);
 	EXPECT_TRUE(track_choice_wx_hits.empty()) << JoinLines(track_choice_wx_hits);
 	EXPECT_FALSE(charset_choice_request_hits.empty());
+	EXPECT_FALSE(subtitle_fps_choice_request_hits.empty());
 	EXPECT_FALSE(adapter_charset_request_hits.empty());
+	EXPECT_FALSE(adapter_subtitle_fps_request_hits.empty());
 	EXPECT_FALSE(adapter_track_audio_hits.empty());
 	EXPECT_FALSE(adapter_track_subtitle_hits.empty());
 	EXPECT_FALSE(adapter_track_video_hits.empty());

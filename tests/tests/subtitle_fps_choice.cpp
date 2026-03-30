@@ -14,6 +14,18 @@ TEST(subtitle_fps_choice, includes_video_choice_for_loaded_cfr_video) {
 	EXPECT_EQ(12u, model.choices.size());
 }
 
+TEST(subtitle_fps_choice, build_request_uses_stable_request_id_and_choices) {
+	auto fps = agi::vfr::Framerate(25, 1);
+	auto model = BuildSubtitleFpsChoiceModel(true, false, fps);
+
+	auto request = BuildSubtitleFpsChoiceRequest(model);
+
+	EXPECT_EQ("subtitle_fps_choice.selection", request.request_id);
+	EXPECT_EQ(model.choices, request.choices);
+	EXPECT_FALSE(request.title.empty());
+	EXPECT_FALSE(request.message.empty());
+}
+
 TEST(subtitle_fps_choice, omits_video_choice_for_vfr_when_not_allowed) {
 	auto fps = agi::vfr::Framerate({0, 40, 90});
 

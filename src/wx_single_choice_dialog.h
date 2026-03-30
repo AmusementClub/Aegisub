@@ -16,6 +16,44 @@
 namespace agi {
 namespace {
 
+inline std::string LocalizeSubtitleFpsChoiceLabel(std::string const& choice) {
+	if (choice == "15.000 FPS")
+		return from_wx(_("15.000 FPS"));
+	if (choice == "23.976 FPS (Decimated NTSC)")
+		return from_wx(_("23.976 FPS (Decimated NTSC)"));
+	if (choice == "24.000 FPS (FILM)")
+		return from_wx(_("24.000 FPS (FILM)"));
+	if (choice == "25.000 FPS (PAL)")
+		return from_wx(_("25.000 FPS (PAL)"));
+	if (choice == "29.970 FPS (NTSC)")
+		return from_wx(_("29.970 FPS (NTSC)"));
+	if (choice == "29.970 FPS (NTSC with SMPTE dropframe)")
+		return from_wx(_("29.970 FPS (NTSC with SMPTE dropframe)"));
+	if (choice == "30.000 FPS")
+		return from_wx(_("30.000 FPS"));
+	if (choice == "50.000 FPS (PAL x2)")
+		return from_wx(_("50.000 FPS (PAL x2)"));
+	if (choice == "59.940 FPS (NTSC x2)")
+		return from_wx(_("59.940 FPS (NTSC x2)"));
+	if (choice == "60.000 FPS")
+		return from_wx(_("60.000 FPS"));
+	if (choice == "119.880 FPS (NTSC x4)")
+		return from_wx(_("119.880 FPS (NTSC x4)"));
+	if (choice == "120.000 FPS")
+		return from_wx(_("120.000 FPS"));
+	if (choice == "From video (VFR)")
+		return from_wx(_("From video (VFR)"));
+
+	std::string const prefix = "From video (";
+	if (choice.size() > prefix.size() + 1
+		&& choice.compare(0, prefix.size(), prefix) == 0
+		&& choice.back() == ')') {
+		return choice;
+	}
+
+	return choice;
+}
+
 inline SingleChoiceInteractionRequest LocalizeKnownSingleChoiceRequest(SingleChoiceInteractionRequest request) {
 	if (request.request_id == "charset_choice.detected_charsets") {
 		request.title = from_wx(_("Choose character set"));
@@ -38,6 +76,15 @@ inline SingleChoiceInteractionRequest LocalizeKnownSingleChoiceRequest(SingleCho
 	if (request.request_id == "track_choice.video") {
 		request.title = from_wx(_("Choose video track"));
 		request.message = from_wx(_("Multiple video tracks detected, please choose the one you wish to load:"));
+		return request;
+	}
+
+	if (request.request_id == "subtitle_fps_choice.selection") {
+		request.title = from_wx(_("FPS"));
+		request.message = from_wx(_("Please choose the appropriate FPS for the subtitles:"));
+		std::transform(request.choices.begin(), request.choices.end(), request.choices.begin(), [](std::string const& choice) {
+			return LocalizeSubtitleFpsChoiceLabel(choice);
+		});
 	}
 
 	return request;

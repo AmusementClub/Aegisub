@@ -97,11 +97,7 @@ agi::vfr::Framerate SubtitleFormat::AskForFPS(bool allow_vfr, bool show_smpte, a
 	if (!choice_sink)
 		return agi::vfr::Framerate();
 
-	auto choice = choice_sink->RequestSingleChoice({
-		from_wx(_("FPS")),
-		from_wx(_("Please choose the appropriate FPS for the subtitles:")),
-		model.choices
-	});
+	auto choice = choice_sink->RequestSingleChoice(BuildSubtitleFpsChoiceRequest(model));
 	if (!choice)
 		return agi::vfr::Framerate();
 	return ResolveSubtitleFpsChoiceSelection(model, *choice, fps);

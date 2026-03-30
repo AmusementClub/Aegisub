@@ -381,6 +381,7 @@ set(AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES
 
 set(AEGISUB_SHARED_SELECTION_REQUEST_SOURCES
     src/charset_choice.cpp
+    src/subtitle_fps_choice.cpp
     src/track_choice.cpp
 )
 
@@ -597,7 +598,6 @@ add_executable(Aegisub WIN32
     src/subs_edit_box.cpp
     src/subs_edit_ctrl.cpp
     src/subs_preview.cpp
-    src/subtitle_fps_choice.cpp
     src/subtitle_overlay_blend.cpp
     src/subtitles_provider.cpp
     src/subtitles_provider_libass.cpp

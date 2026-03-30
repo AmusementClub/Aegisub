@@ -1,31 +1,42 @@
 #include "subtitle_fps_choice.h"
 
-#include "compat.h"
-#include "format.h"
-
 #include <libaegisub/exception.h>
-
-#include <wx/intl.h>
+#include <libaegisub/format.h>
 
 namespace {
+std::string BuildVideoChoiceLabel(agi::vfr::Framerate const& fps) {
+	return fps.IsVFR()
+		? "From video (VFR)"
+		: agi::format("From video (%g)", fps.FPS());
+}
+
 std::vector<std::string> build_standard_fps_labels(bool show_smpte) {
 	std::vector<std::string> choices;
 	choices.reserve(show_smpte ? 12 : 11);
-	choices.push_back(from_wx(_("15.000 FPS")));
-	choices.push_back(from_wx(_("23.976 FPS (Decimated NTSC)")));
-	choices.push_back(from_wx(_("24.000 FPS (FILM)")));
-	choices.push_back(from_wx(_("25.000 FPS (PAL)")));
-	choices.push_back(from_wx(_("29.970 FPS (NTSC)")));
+	choices.push_back("15.000 FPS");
+	choices.push_back("23.976 FPS (Decimated NTSC)");
+	choices.push_back("24.000 FPS (FILM)");
+	choices.push_back("25.000 FPS (PAL)");
+	choices.push_back("29.970 FPS (NTSC)");
 	if (show_smpte)
-		choices.push_back(from_wx(_("29.970 FPS (NTSC with SMPTE dropframe)")));
-	choices.push_back(from_wx(_("30.000 FPS")));
-	choices.push_back(from_wx(_("50.000 FPS (PAL x2)")));
-	choices.push_back(from_wx(_("59.940 FPS (NTSC x2)")));
-	choices.push_back(from_wx(_("60.000 FPS")));
-	choices.push_back(from_wx(_("119.880 FPS (NTSC x4)")));
-	choices.push_back(from_wx(_("120.000 FPS")));
+		choices.push_back("29.970 FPS (NTSC with SMPTE dropframe)");
+	choices.push_back("30.000 FPS");
+	choices.push_back("50.000 FPS (PAL x2)");
+	choices.push_back("59.940 FPS (NTSC x2)");
+	choices.push_back("60.000 FPS");
+	choices.push_back("119.880 FPS (NTSC x4)");
+	choices.push_back("120.000 FPS");
 	return choices;
 }
+}
+
+agi::SingleChoiceInteractionRequest BuildSubtitleFpsChoiceRequest(SubtitleFpsChoiceModel const& model) {
+	agi::SingleChoiceInteractionRequest request;
+	request.title = "FPS";
+	request.message = "Please choose the appropriate FPS for the subtitles:";
+	request.choices = model.choices;
+	request.request_id = "subtitle_fps_choice.selection";
+	return request;
 }
 
 SubtitleFpsChoiceModel BuildSubtitleFpsChoiceModel(bool allow_vfr, bool show_smpte, agi::vfr::Framerate const& fps) {
@@ -34,9 +45,7 @@ SubtitleFpsChoiceModel BuildSubtitleFpsChoiceModel(bool allow_vfr, bool show_smp
 
 	if (fps.IsLoaded() && (!fps.IsVFR() || allow_vfr)) {
 		model.includes_video_choice = true;
-		model.choices.push_back(!fps.IsVFR()
-			? from_wx(fmt_tl("From video (%g)", fps.FPS()))
-			: from_wx(_("From video (VFR)")));
+		model.choices.push_back(BuildVideoChoiceLabel(fps));
 	}
 
 	auto standard = build_standard_fps_labels(show_smpte);

@@ -13,15 +13,12 @@
 // CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF THE USE OR
 // PERFORMANCE OF THIS SOFTWARE.
 
-#include "wx_headless_process_host.h"
+#pragma once
 
-#include "headless_process_entry.h"
+#include <string>
+#include <vector>
 
-#include <wx/init.h>
-
-int RunHeadlessCommandLineInSharedWxProcessHost(std::vector<std::string> const& args) {
-	wxInitializer wx_initializer;
-	if (!wx_initializer.IsOk())
-		return 2;
-	return RunHeadlessCommandLineInPlainProcessHost(args);
-}
+// Plain headless entry seam: owns command-line detection and no-host
+// delegation into runtime bootstrap.
+bool IsHeadlessEntryCommandLine(std::vector<std::string> const& args);
+int RunHeadlessCommandLineInPlainProcessHost(std::vector<std::string> const& args);

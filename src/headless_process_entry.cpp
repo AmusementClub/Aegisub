@@ -13,15 +13,14 @@
 // CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF THE USE OR
 // PERFORMANCE OF THIS SOFTWARE.
 
-#include "wx_headless_process_host.h"
-
 #include "headless_process_entry.h"
 
-#include <wx/init.h>
+#include "headless_runtime_bootstrap.h"
 
-int RunHeadlessCommandLineInSharedWxProcessHost(std::vector<std::string> const& args) {
-	wxInitializer wx_initializer;
-	if (!wx_initializer.IsOk())
-		return 2;
-	return RunHeadlessCommandLineInPlainProcessHost(args);
+bool IsHeadlessEntryCommandLine(std::vector<std::string> const& args) {
+	return IsHeadlessCommandLine(args);
+}
+
+int RunHeadlessCommandLineInPlainProcessHost(std::vector<std::string> const& args) {
+	return RunHeadlessCommandLine(args);
 }

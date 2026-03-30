@@ -13,7 +13,7 @@
 // CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF THE USE OR
 // PERFORMANCE OF THIS SOFTWARE.
 
-#include "headless_runtime_bootstrap.h"
+#include "headless_process_entry.h"
 #include "wx_headless_process_host.h"
 
 #include <vector>
@@ -66,7 +66,7 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wxCm
 	wxDISABLE_DEBUG_SUPPORT();
 
 	auto const args = CurrentProcessArgs();
-	if (IsHeadlessCommandLine(args))
+	if (IsHeadlessEntryCommandLine(args))
 		return RunHeadlessCommandLineInSharedWxProcessHost(args);
 
 	return wxEntry(hInstance, hPrevInstance, lpCmdLine, nCmdShow);
@@ -82,7 +82,7 @@ int main(int argc, char** argv) {
 	for (int i = 0; i < argc; ++i)
 		args.emplace_back(argv[i]);
 
-	if (IsHeadlessCommandLine(args))
+	if (IsHeadlessEntryCommandLine(args))
 		return RunHeadlessCommandLineInSharedWxProcessHost(args);
 
 	return wxEntry(argc, argv);

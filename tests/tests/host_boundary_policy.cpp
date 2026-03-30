@@ -524,18 +524,37 @@ TEST(host_boundary_policy, headless_runtime_bootstrap_uses_minimal_runtime_init_
 TEST(host_boundary_policy, shared_exe_headless_wx_lifetime_lives_in_explicit_process_host_file) {
 	auto const root = ProjectRoot();
 	auto const app_entry_cpp = root / "src" / "app_entry.cpp";
+	auto const headless_process_entry_cpp = root / "src" / "headless_process_entry.cpp";
 	auto const headless_runtime_bootstrap_cpp = root / "src" / "headless_runtime_bootstrap.cpp";
 	auto const wx_headless_process_host_cpp = root / "src" / "wx_headless_process_host.cpp";
 
 	auto app_entry_initializer_hits = FindLiteralHits(app_entry_cpp, "wxInitializer");
 	auto app_entry_host_include_hits = FindLiteralHits(app_entry_cpp, "wx_headless_process_host.h");
+	auto app_entry_plain_entry_include_hits = FindLiteralHits(app_entry_cpp, "headless_process_entry.h");
+	auto app_entry_runtime_include_hits = FindLiteralHits(app_entry_cpp, "headless_runtime_bootstrap.h");
+	auto app_entry_plain_entry_call_hits = FindLiteralHits(app_entry_cpp, "IsHeadlessEntryCommandLine(args)");
 	auto app_entry_host_call_hits = FindLiteralHits(app_entry_cpp, "RunHeadlessCommandLineInSharedWxProcessHost(args)");
+	auto process_entry_runtime_include_hits = FindLiteralHits(headless_process_entry_cpp, "headless_runtime_bootstrap.h");
+	auto process_entry_runtime_call_hits = FindLiteralHits(headless_process_entry_cpp, "RunHeadlessCommandLine(args)");
+	auto process_entry_wx_hits = FindWxMarkers(headless_process_entry_cpp);
+	auto process_host_plain_entry_include_hits = FindLiteralHits(wx_headless_process_host_cpp, "headless_process_entry.h");
+	auto process_host_runtime_include_hits = FindLiteralHits(wx_headless_process_host_cpp, "headless_runtime_bootstrap.h");
+	auto process_host_plain_entry_call_hits = FindLiteralHits(wx_headless_process_host_cpp, "RunHeadlessCommandLineInPlainProcessHost(args)");
 	auto process_host_initializer_hits = FindLiteralHits(wx_headless_process_host_cpp, "wxInitializer");
 	auto bootstrap_initializer_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "wxInitializer");
 
 	EXPECT_TRUE(app_entry_initializer_hits.empty()) << JoinLines(app_entry_initializer_hits);
 	EXPECT_FALSE(app_entry_host_include_hits.empty());
+	EXPECT_FALSE(app_entry_plain_entry_include_hits.empty());
+	EXPECT_TRUE(app_entry_runtime_include_hits.empty()) << JoinLines(app_entry_runtime_include_hits);
+	EXPECT_FALSE(app_entry_plain_entry_call_hits.empty());
 	EXPECT_FALSE(app_entry_host_call_hits.empty());
+	EXPECT_FALSE(process_entry_runtime_include_hits.empty());
+	EXPECT_FALSE(process_entry_runtime_call_hits.empty());
+	EXPECT_TRUE(process_entry_wx_hits.empty()) << JoinLines(process_entry_wx_hits);
+	EXPECT_FALSE(process_host_plain_entry_include_hits.empty());
+	EXPECT_TRUE(process_host_runtime_include_hits.empty()) << JoinLines(process_host_runtime_include_hits);
+	EXPECT_FALSE(process_host_plain_entry_call_hits.empty());
 	EXPECT_FALSE(process_host_initializer_hits.empty());
 	EXPECT_TRUE(bootstrap_initializer_hits.empty()) << JoinLines(bootstrap_initializer_hits);
 }

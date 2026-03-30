@@ -14,12 +14,12 @@
 // PERFORMANCE OF THIS SOFTWARE.
 
 #include "headless_runtime_bootstrap.h"
+#include "wx_headless_process_host.h"
 
 #include <vector>
 #include <string>
 
 #include <wx/app.h>
-#include <wx/init.h>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -66,13 +66,8 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wxCm
 	wxDISABLE_DEBUG_SUPPORT();
 
 	auto const args = CurrentProcessArgs();
-	if (IsHeadlessCommandLine(args)) {
-		wxInitializer wx_initializer;
-		if (!wx_initializer.IsOk())
-			return 2;
-		auto const exit_code = RunHeadlessCommandLine(args);
-		return exit_code;
-	}
+	if (IsHeadlessCommandLine(args))
+		return RunHeadlessCommandLineInSharedWxProcessHost(args);
 
 	return wxEntry(hInstance, hPrevInstance, lpCmdLine, nCmdShow);
 }
@@ -88,7 +83,7 @@ int main(int argc, char** argv) {
 		args.emplace_back(argv[i]);
 
 	if (IsHeadlessCommandLine(args))
-		return RunHeadlessCommandLine(args);
+		return RunHeadlessCommandLineInSharedWxProcessHost(args);
 
 	return wxEntry(argc, argv);
 }

@@ -102,6 +102,7 @@ TEST(host_boundary_policy, service_like_sources_keep_wx_at_host_edges) {
 		"src/wx_frame_main_dialog_ui_host.h",
 		"src/wx_frame_main_request_host.h",
 		"src/wx_frame_main_runtime_host.h",
+		"src/wx_headless_process_host.cpp",
 		"src/wx_preferences_ui_host.h",
 		"src/wx_style_editor_ui_host.h",
 	};
@@ -520,15 +521,22 @@ TEST(host_boundary_policy, headless_runtime_bootstrap_uses_minimal_runtime_init_
 	EXPECT_FALSE(png_disabled_hits.empty());
 }
 
-TEST(host_boundary_policy, shared_exe_headless_wx_lifetime_is_explicit_in_app_entry) {
+TEST(host_boundary_policy, shared_exe_headless_wx_lifetime_lives_in_explicit_process_host_file) {
 	auto const root = ProjectRoot();
 	auto const app_entry_cpp = root / "src" / "app_entry.cpp";
 	auto const headless_runtime_bootstrap_cpp = root / "src" / "headless_runtime_bootstrap.cpp";
+	auto const wx_headless_process_host_cpp = root / "src" / "wx_headless_process_host.cpp";
 
 	auto app_entry_initializer_hits = FindLiteralHits(app_entry_cpp, "wxInitializer");
+	auto app_entry_host_include_hits = FindLiteralHits(app_entry_cpp, "wx_headless_process_host.h");
+	auto app_entry_host_call_hits = FindLiteralHits(app_entry_cpp, "RunHeadlessCommandLineInSharedWxProcessHost(args)");
+	auto process_host_initializer_hits = FindLiteralHits(wx_headless_process_host_cpp, "wxInitializer");
 	auto bootstrap_initializer_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "wxInitializer");
 
-	EXPECT_FALSE(app_entry_initializer_hits.empty());
+	EXPECT_TRUE(app_entry_initializer_hits.empty()) << JoinLines(app_entry_initializer_hits);
+	EXPECT_FALSE(app_entry_host_include_hits.empty());
+	EXPECT_FALSE(app_entry_host_call_hits.empty());
+	EXPECT_FALSE(process_host_initializer_hits.empty());
 	EXPECT_TRUE(bootstrap_initializer_hits.empty()) << JoinLines(bootstrap_initializer_hits);
 }
 
@@ -544,6 +552,8 @@ TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 		"src/wx_frame_main_dialog_ui_host.h",
 		"src/wx_frame_main_request_host.h",
 		"src/wx_frame_main_runtime_host.h",
+		"src/wx_headless_process_host.cpp",
+		"src/wx_headless_process_host.h",
 		"src/wx_preferences_ui_host.h",
 		"src/wx_style_editor_ui_host.h",
 		"src/gui_wx_runtime_host.cpp",

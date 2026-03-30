@@ -463,6 +463,7 @@ add_executable(Aegisub WIN32
     src/async_video_provider.cpp
     src/async_video_provider_host.cpp
     src/app_entry.cpp
+    src/wx_headless_process_host.cpp
     src/audio_box.cpp
     src/audio_colorscheme.cpp
     src/audio_controller.cpp

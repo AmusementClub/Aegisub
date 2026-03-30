@@ -559,6 +559,36 @@ TEST(host_boundary_policy, shared_exe_headless_wx_lifetime_lives_in_explicit_pro
 	EXPECT_TRUE(bootstrap_initializer_hits.empty()) << JoinLines(bootstrap_initializer_hits);
 }
 
+TEST(host_boundary_policy, shared_process_config_globals_live_outside_gui_main) {
+	auto const root = ProjectRoot();
+	auto const main_cpp = root / "src" / "main.cpp";
+	auto const app_process_config_cpp = root / "src" / "app_process_config.cpp";
+
+	auto main_config_namespace_hits = FindLiteralHits(main_cpp, "namespace config {");
+	auto main_opt_hits = FindLiteralHits(main_cpp, "agi::Options *opt = nullptr;");
+	auto main_mru_hits = FindLiteralHits(main_cpp, "agi::MRUManager *mru = nullptr;");
+	auto main_path_hits = FindLiteralHits(main_cpp, "agi::Path *path = nullptr;");
+	auto main_scripts_hits = FindLiteralHits(main_cpp, "Automation4::AutoloadScriptManager *global_scripts");
+
+	auto config_namespace_hits = FindLiteralHits(app_process_config_cpp, "namespace config {");
+	auto config_opt_hits = FindLiteralHits(app_process_config_cpp, "agi::Options *opt = nullptr;");
+	auto config_mru_hits = FindLiteralHits(app_process_config_cpp, "agi::MRUManager *mru = nullptr;");
+	auto config_path_hits = FindLiteralHits(app_process_config_cpp, "agi::Path *path = nullptr;");
+	auto config_scripts_hits = FindLiteralHits(app_process_config_cpp, "Automation4::AutoloadScriptManager *global_scripts = nullptr;");
+
+	EXPECT_TRUE(main_config_namespace_hits.empty()) << JoinLines(main_config_namespace_hits);
+	EXPECT_TRUE(main_opt_hits.empty()) << JoinLines(main_opt_hits);
+	EXPECT_TRUE(main_mru_hits.empty()) << JoinLines(main_mru_hits);
+	EXPECT_TRUE(main_path_hits.empty()) << JoinLines(main_path_hits);
+	EXPECT_TRUE(main_scripts_hits.empty()) << JoinLines(main_scripts_hits);
+
+	EXPECT_FALSE(config_namespace_hits.empty());
+	EXPECT_FALSE(config_opt_hits.empty());
+	EXPECT_FALSE(config_mru_hits.empty());
+	EXPECT_FALSE(config_path_hits.empty());
+	EXPECT_FALSE(config_scripts_hits.empty());
+}
+
 TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 	auto const root = ProjectRoot();
 	auto const src_root = root / "src";

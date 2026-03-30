@@ -69,13 +69,6 @@
 #include <wx/thread.h>
 #include <wx/utils.h>
 
-namespace config {
-	agi::Options *opt = nullptr;
-	agi::MRUManager *mru = nullptr;
-	agi::Path *path = nullptr;
-	Automation4::AutoloadScriptManager *global_scripts;
-}
-
 wxIMPLEMENT_APP_NO_MAIN(AegisubApp);
 
 static const char *LastStartupState = nullptr;

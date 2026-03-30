@@ -661,26 +661,76 @@ TEST(host_boundary_policy, shared_headless_cli_inspect_batch_sources_live_in_nam
 	EXPECT_FALSE(expansion_hits.empty());
 }
 
+TEST(host_boundary_policy, shared_headless_bootstrap_depends_on_narrow_cli_headers) {
+	auto const root = ProjectRoot();
+	auto const headless_runtime_bootstrap_cpp = root / "src" / "headless_runtime_bootstrap.cpp";
+	auto const headless_cli_h = root / "src" / "headless_cli.h";
+	auto const headless_cli_parse_h = root / "src" / "headless_cli_parse.h";
+	auto const headless_cli_execute_h = root / "src" / "headless_cli_execute.h";
+	auto const headless_cli_internal_h = root / "src" / "headless_cli_internal.h";
+	auto const headless_cli_command_model_h = root / "src" / "headless_cli_command_model.h";
+
+	auto bootstrap_umbrella_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "headless_cli.h");
+	auto bootstrap_parse_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "headless_cli_parse.h");
+	auto bootstrap_execute_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "headless_cli_execute.h");
+
+	auto internal_umbrella_hits = FindLiteralHits(headless_cli_internal_h, "headless_cli.h");
+	auto internal_command_model_hits = FindLiteralHits(headless_cli_internal_h, "headless_cli_command_model.h");
+
+	auto umbrella_parse_hits = FindLiteralHits(headless_cli_h, "headless_cli_parse.h");
+	auto umbrella_execute_hits = FindLiteralHits(headless_cli_h, "headless_cli_execute.h");
+	auto umbrella_service_hits = FindLiteralHits(headless_cli_h, "playback_session_service.h");
+	auto parse_model_hits = FindLiteralHits(headless_cli_parse_h, "headless_cli_command_model.h");
+	auto execute_model_hits = FindLiteralHits(headless_cli_execute_h, "headless_cli_command_model.h");
+
+	EXPECT_TRUE(bootstrap_umbrella_hits.empty()) << JoinLines(bootstrap_umbrella_hits);
+	EXPECT_FALSE(bootstrap_parse_hits.empty());
+	EXPECT_FALSE(bootstrap_execute_hits.empty());
+
+	EXPECT_TRUE(internal_umbrella_hits.empty()) << JoinLines(internal_umbrella_hits);
+	EXPECT_FALSE(internal_command_model_hits.empty());
+
+	EXPECT_FALSE(umbrella_parse_hits.empty());
+	EXPECT_FALSE(umbrella_execute_hits.empty());
+	EXPECT_TRUE(umbrella_service_hits.empty()) << JoinLines(umbrella_service_hits);
+	EXPECT_FALSE(parse_model_hits.empty());
+	EXPECT_FALSE(execute_model_hits.empty());
+}
+
 TEST(host_boundary_policy, shared_playback_project_session_sources_live_in_named_cmake_pack) {
 	auto const root = ProjectRoot();
 	auto const cmake_lists = root / "CMakeLists.txt";
 
-	std::set<std::string> const expected_sources = {
+	std::set<std::string> const expected_support_sources = {
 		"src/headless_playback_session_host.cpp",
-		"src/playback_probe_service.cpp",
 		"src/playback_probe_timer.cpp",
 		"src/playback_query_service.cpp",
-		"src/playback_session_service.cpp",
 		"src/playback_session_timer.cpp",
 		"src/project_open_service.cpp",
 		"src/project_query_service.cpp",
+	};
+	std::set<std::string> const expected_core_sources = {
+		"src/playback_probe_service.cpp",
+		"src/playback_session_service.cpp",
 		"src/project_session_service.cpp",
 	};
+	std::set<std::string> const expected_aggregate_entries = {
+		"${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES}",
+		"${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES}",
+	};
 
+	auto support_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES");
+	auto core_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES");
 	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES");
+	auto support_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES}");
+	auto core_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES}");
 	auto expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES}");
 
-	EXPECT_EQ(expected_sources, sources);
+	EXPECT_EQ(expected_support_sources, support_sources);
+	EXPECT_EQ(expected_core_sources, core_sources);
+	EXPECT_EQ(expected_aggregate_entries, sources);
+	EXPECT_FALSE(support_expansion_hits.empty());
+	EXPECT_FALSE(core_expansion_hits.empty());
 	EXPECT_FALSE(expansion_hits.empty());
 }
 

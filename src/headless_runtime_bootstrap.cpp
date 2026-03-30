@@ -16,7 +16,8 @@
 #include "headless_runtime_bootstrap.h"
 
 #include "app_runtime.h"
-#include "headless_cli.h"
+#include "headless_cli_execute.h"
+#include "headless_cli_parse.h"
 #include "headless_playback_probe.h"
 
 #include <libaegisub/dispatch.h>

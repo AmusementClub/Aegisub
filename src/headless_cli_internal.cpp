@@ -14,6 +14,7 @@
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 #include "headless_cli_internal.h"
+#include "headless_cli_parse.h"
 
 #include <libaegisub/fs.h>
 

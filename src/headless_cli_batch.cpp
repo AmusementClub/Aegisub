@@ -13,12 +13,14 @@
 // CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
+#include "headless_cli_execute.h"
 #include "headless_cli_internal.h"
 
 #include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
 
 #include <fstream>
+#include <memory>
 #include <utility>
 
 namespace headless_cli {
@@ -95,7 +97,7 @@ void WriteBatchManifestJson(agi::fs::path const& output_dir, agi::fs::path const
 	out << "}\n";
 }
 
-class BatchPlaybackProbeRunner final {
+class BatchPlaybackProbeRunner final : public std::enable_shared_from_this<BatchPlaybackProbeRunner> {
 	BatchPlaybackProbeRequest request;
 	std::function<void(BatchPlaybackProbeResult)> on_done;
 	std::vector<detail::BatchCaseSpec> cases;
@@ -134,7 +136,6 @@ class BatchPlaybackProbeRunner final {
 		}
 		if (on_done)
 			on_done(std::move(result));
-		delete this;
 	}
 
 	void RunNext() {
@@ -170,13 +171,15 @@ class BatchPlaybackProbeRunner final {
 			}
 			probe_request.trace_dir = trace_dir;
 
-			aegisub::playback_probe_service::RunAsync(std::move(probe_request), [this, index, spec](headless_playback_probe::PlaybackProbeResult probe_result) mutable {
-				results.push_back(detail::BatchCaseResult{
+			auto self = shared_from_this();
+			aegisub::playback_probe_service::RunAsync(std::move(probe_request), [self, index, spec](headless_playback_probe::PlaybackProbeResult probe_result) mutable {
+				auto& runner = *self;
+				runner.results.push_back(detail::BatchCaseResult{
 					index,
 					std::move(spec),
 					std::move(probe_result),
 				});
-				RunNext();
+				runner.RunNext();
 			});
 		}
 		catch (std::exception const& error) {
@@ -402,7 +405,7 @@ void WriteBatchAssInfoManifest(agi::fs::path const& output_dir, std::vector<std:
 }
 
 void RunBatchPlaybackProbeAsync(BatchPlaybackProbeRequest request, std::function<void(BatchPlaybackProbeResult)> on_done) {
-	auto *runner = new BatchPlaybackProbeRunner(std::move(request), std::move(on_done));
+	auto runner = std::make_shared<BatchPlaybackProbeRunner>(std::move(request), std::move(on_done));
 	runner->Start();
 }
 

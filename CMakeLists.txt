@@ -386,16 +386,24 @@ set(AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES
     src/trace_summary_service.cpp
 )
 
-set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES
+set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES
     src/headless_playback_session_host.cpp
-    src/playback_probe_service.cpp
     src/playback_probe_timer.cpp
     src/playback_query_service.cpp
-    src/playback_session_service.cpp
     src/playback_session_timer.cpp
     src/project_open_service.cpp
     src/project_query_service.cpp
+)
+
+set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES
+    src/playback_probe_service.cpp
+    src/playback_session_service.cpp
     src/project_session_service.cpp
+)
+
+set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES
+    ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES}
+    ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES}
 )
 
 ## Aegisub

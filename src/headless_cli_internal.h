@@ -15,7 +15,7 @@
 
 #pragma once
 
-#include "headless_cli.h"
+#include "headless_cli_command_model.h"
 
 #include <optional>
 #include <string>

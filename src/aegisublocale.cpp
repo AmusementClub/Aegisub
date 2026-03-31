@@ -36,9 +36,9 @@
 #include "aegisublocale_compat.h"
 
 #include "compat.h"
+#include "locale_choice.h"
 #include "options.h"
 #include "ui_services.h"
-#include "utils.h"
 
 #include <libaegisub/path.h>
 
@@ -100,34 +100,19 @@ std::string AegisubLocale::PickLanguage(std::shared_ptr<agi::SingleChoiceInterac
 			std::rotate(langs.begin(), it, it + 1);
 	}
 
-	// Generate names
-	wxArrayString langNames;
+	std::vector<std::string> language_codes;
+	language_codes.reserve(langs.size());
 	for (auto const& lang : langs)
-		langNames.push_back(LocalizedLanguageName(lang));
+		language_codes.push_back(from_wx(lang));
 
 	if (!choice_sink)
 		return "";
 
-	auto choice = choice_sink->RequestSingleChoice({
-		"Language",
-		"Please choose a language:",
-		[from = langs] {
-			std::vector<std::string> choices;
-			choices.reserve(from.size());
-			for (auto const& lang : from)
-				choices.push_back(from_wx(LocalizedLanguageName(lang)));
-			return choices;
-		}(),
-		0
-	});
-	if (choice) {
-		int picked = *choice;
-		if (picked >= 0 && picked < static_cast<int>(langs.size())) {
-		auto new_lang = from_wx(langs[picked]);
-		if (new_lang != active_language)
-			return new_lang;
-		}
-	}
+	auto new_lang = aegisub::locale_choice::ResolveSelection(
+		language_codes,
+		choice_sink->RequestSingleChoice(aegisub::locale_choice::BuildRequest(language_codes)));
+	if (new_lang && *new_lang != active_language)
+		return *new_lang;
 
 	return "";
 }

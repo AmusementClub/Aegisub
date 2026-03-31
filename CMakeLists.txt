@@ -381,6 +381,7 @@ set(AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES
 
 set(AEGISUB_SHARED_SELECTION_REQUEST_SOURCES
     src/charset_choice.cpp
+    src/locale_choice.cpp
     src/subtitle_fps_choice.cpp
     src/track_choice.cpp
 )
@@ -404,6 +405,10 @@ set(AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES
 set(AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES
     src/playback_query_service.cpp
     src/project_open_service.cpp
+)
+
+set(AEGISUB_SHARED_PROVIDER_TRACK_SELECTION_SOURCES
+    src/ffmpegsource_common.cpp
 )
 
 set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES
@@ -909,7 +914,7 @@ if(WITH_FFMS2)
         "${FFMS2_INCLUDE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/vendor/ffms2"
     )
-    target_sources(Aegisub PRIVATE src/audio_provider_ffmpegsource.cpp src/ffmpegsource_common.cpp src/video_provider_ffmpegsource.cpp)
+    target_sources(Aegisub PRIVATE src/audio_provider_ffmpegsource.cpp ${AEGISUB_SHARED_PROVIDER_TRACK_SELECTION_SOURCES} src/video_provider_ffmpegsource.cpp)
 elseif(NOT HAVE_FFMS2)
     message(WARNING
         "No supported video/audio reader interface was enabled.\n"

@@ -3,6 +3,7 @@
 #include "compat.h"
 #include "ui_dispatch.h"
 #include "ui_services.h"
+#include "utils.h"
 
 #include <algorithm>
 #include <wx/dialog.h>
@@ -54,6 +55,12 @@ inline std::string LocalizeSubtitleFpsChoiceLabel(std::string const& choice) {
 	return choice;
 }
 
+inline std::string LocalizeLocaleChoiceLabel(std::string const& choice) {
+	if (choice.empty())
+		return choice;
+	return from_wx(LocalizedLanguageName(to_wx(choice)));
+}
+
 inline SingleChoiceInteractionRequest LocalizeKnownSingleChoiceRequest(SingleChoiceInteractionRequest request) {
 	if (request.request_id == "charset_choice.detected_charsets") {
 		request.title = from_wx(_("Choose character set"));
@@ -84,6 +91,15 @@ inline SingleChoiceInteractionRequest LocalizeKnownSingleChoiceRequest(SingleCho
 		request.message = from_wx(_("Please choose the appropriate FPS for the subtitles:"));
 		std::transform(request.choices.begin(), request.choices.end(), request.choices.begin(), [](std::string const& choice) {
 			return LocalizeSubtitleFpsChoiceLabel(choice);
+		});
+		return request;
+	}
+
+	if (request.request_id == "locale_choice.ui_language") {
+		request.title = from_wx(_("Language"));
+		request.message = from_wx(_("Please choose a language:"));
+		std::transform(request.choices.begin(), request.choices.end(), request.choices.begin(), [](std::string const& choice) {
+			return LocalizeLocaleChoiceLabel(choice);
 		});
 	}
 

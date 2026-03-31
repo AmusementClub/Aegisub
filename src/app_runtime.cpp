@@ -113,8 +113,8 @@ public:
 	bool Initialize(AppRuntimeInitOptions init_options, std::string& error) {
 		options = std::move(init_options);
 		try {
-			if (options.host_hooks.prime_process_logging)
-				options.host_hooks.prime_process_logging();
+			if (options.process_host.prime_process_logging)
+				options.process_host.prime_process_logging();
 			InitializeGlobalLocale();
 
 			agi::dispatch::Init(

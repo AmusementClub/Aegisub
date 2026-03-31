@@ -1,13 +1,14 @@
 #pragma once
 
 #include "aegisublocale.h"
+#include "runtime_optional_facility_host.h"
+#include "runtime_process_host.h"
 #include "runtime_bootstrap_ui_host.h"
 #include "runtime_locale_host.h"
 
 #include <libaegisub/dispatch.h>
 
 #include <cstddef>
-#include <functional>
 #include <memory>
 #include <string>
 
@@ -28,11 +29,6 @@ struct AppRuntimeMainQueueHooks {
 	std::function<std::size_t()> flush_main_jobs;
 };
 
-struct AppRuntimeHostHooks {
-	std::function<void()> prime_process_logging;
-	std::function<void()> install_png_image_handler;
-};
-
 struct AppRuntimeInitOptions {
 	RuntimeShellMode shell_mode = RuntimeShellMode::Unknown;
 	RuntimeLocalePolicy locale_policy = RuntimeLocalePolicy::UseConfiguredOrEnglish;
@@ -45,7 +41,8 @@ struct AppRuntimeInitOptions {
 	bool warm_subtitles_provider_font_cache = true;
 	bool register_export_filters = true;
 	bool install_png_handler = true;
-	AppRuntimeHostHooks host_hooks;
+	RuntimeProcessHost process_host;
+	RuntimeOptionalFacilityHost optional_facility_host;
 	RuntimeBootstrapUiHost bootstrap_ui_host;
 };
 

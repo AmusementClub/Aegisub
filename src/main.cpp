@@ -155,7 +155,8 @@ bool AegisubApp::OnInit() {
 	runtime_options.warm_subtitles_provider_font_cache = true;
 	runtime_options.register_export_filters = true;
 	runtime_options.install_png_handler = true;
-	runtime_options.host_hooks = BuildGuiWxRuntimeHostHooks();
+	runtime_options.process_host = BuildGuiWxRuntimeProcessHost();
+	runtime_options.optional_facility_host = BuildGuiWxRuntimeOptionalFacilityHost();
 	runtime_options.bootstrap_ui_host = bootstrap_ui_host;
 	if (!runtime->Initialize(std::move(runtime_options), runtime_error)) {
 		if (bootstrap_ui_host.notification_sink)

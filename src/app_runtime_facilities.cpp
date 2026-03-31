@@ -43,9 +43,9 @@ void InitializeRuntimeOptionalFacilities(AppRuntimeInitOptions const& options) {
 	}
 
 	if (options.install_png_handler) {
-		if (!options.host_hooks.install_png_image_handler)
+		if (!options.optional_facility_host.install_png_image_handler)
 			throw agi::InternalError("AppRuntime requested PNG handler installation without a host hook.");
-		options.host_hooks.install_png_image_handler();
+		options.optional_facility_host.install_png_image_handler();
 	}
 }
 

@@ -1,7 +1,12 @@
 #pragma once
 
-#include "app_runtime.h"
+#include "runtime_optional_facility_host.h"
+#include "runtime_process_host.h"
 
-// Replace this hook provider when a non-wx GUI shell needs to supply
-// AppRuntime bring-up services.
-AppRuntimeHostHooks BuildGuiWxRuntimeHostHooks();
+// Replace this host provider when a non-wx GUI shell needs to supply
+// process-level runtime bring-up services.
+RuntimeProcessHost BuildGuiWxRuntimeProcessHost();
+
+// Replace this host provider when a non-wx GUI shell needs to supply
+// optional runtime facility hooks.
+RuntimeOptionalFacilityHost BuildGuiWxRuntimeOptionalFacilityHost();

@@ -581,6 +581,52 @@ TEST(host_boundary_policy, runtime_wx_hooks_live_in_explicit_runtime_host_files)
 	EXPECT_FALSE(std::filesystem::exists(legacy_headless_runtime_host_cpp));
 }
 
+TEST(host_boundary_policy, runtime_process_and_optional_facility_contracts_stay_split) {
+	auto const root = ProjectRoot();
+	auto const main_cpp = root / "src" / "main.cpp";
+	auto const app_runtime_h = root / "src" / "app_runtime.h";
+	auto const app_runtime_cpp = root / "src" / "app_runtime.cpp";
+	auto const app_runtime_facilities_cpp = root / "src" / "app_runtime_facilities.cpp";
+	auto const gui_runtime_host_h = root / "src" / "gui_wx_runtime_host.h";
+	auto const gui_runtime_host_cpp = root / "src" / "gui_wx_runtime_host.cpp";
+	auto const runtime_process_host_h = root / "src" / "runtime_process_host.h";
+	auto const runtime_optional_facility_host_h = root / "src" / "runtime_optional_facility_host.h";
+
+	auto app_runtime_process_hook_hits = FindLiteralHits(app_runtime_cpp, "process_host.prime_process_logging");
+	auto app_runtime_optional_png_hits = FindLiteralHits(app_runtime_cpp, "optional_facility_host.install_png_image_handler");
+	auto app_runtime_legacy_png_hits = FindLiteralHits(app_runtime_cpp, "host_hooks.install_png_image_handler");
+	auto facilities_process_hook_hits = FindLiteralHits(app_runtime_facilities_cpp, "process_host.prime_process_logging");
+	auto facilities_optional_png_hits = FindLiteralHits(app_runtime_facilities_cpp, "optional_facility_host.install_png_image_handler");
+	auto facilities_legacy_png_hits = FindLiteralHits(app_runtime_facilities_cpp, "host_hooks.install_png_image_handler");
+	auto runtime_header_process_hits = FindLiteralHits(app_runtime_h, "RuntimeProcessHost process_host");
+	auto runtime_header_optional_hits = FindLiteralHits(app_runtime_h, "RuntimeOptionalFacilityHost optional_facility_host");
+	auto gui_runtime_header_process_hits = FindLiteralHits(gui_runtime_host_h, "runtime_process_host.h");
+	auto gui_runtime_header_optional_hits = FindLiteralHits(gui_runtime_host_h, "runtime_optional_facility_host.h");
+	auto gui_runtime_cpp_process_builder_hits = FindLiteralHits(gui_runtime_host_cpp, "BuildGuiWxRuntimeProcessHost()");
+	auto gui_runtime_cpp_optional_builder_hits = FindLiteralHits(gui_runtime_host_cpp, "BuildGuiWxRuntimeOptionalFacilityHost()");
+	auto main_process_builder_hits = FindLiteralHits(main_cpp, "BuildGuiWxRuntimeProcessHost()");
+	auto main_optional_builder_hits = FindLiteralHits(main_cpp, "BuildGuiWxRuntimeOptionalFacilityHost()");
+	auto process_header_wx_hits = FindWxMarkers(runtime_process_host_h);
+	auto optional_header_wx_hits = FindWxMarkers(runtime_optional_facility_host_h);
+
+	EXPECT_FALSE(app_runtime_process_hook_hits.empty());
+	EXPECT_TRUE(app_runtime_optional_png_hits.empty()) << JoinLines(app_runtime_optional_png_hits);
+	EXPECT_TRUE(app_runtime_legacy_png_hits.empty()) << JoinLines(app_runtime_legacy_png_hits);
+	EXPECT_TRUE(facilities_process_hook_hits.empty()) << JoinLines(facilities_process_hook_hits);
+	EXPECT_FALSE(facilities_optional_png_hits.empty());
+	EXPECT_TRUE(facilities_legacy_png_hits.empty()) << JoinLines(facilities_legacy_png_hits);
+	EXPECT_FALSE(runtime_header_process_hits.empty());
+	EXPECT_FALSE(runtime_header_optional_hits.empty());
+	EXPECT_FALSE(gui_runtime_header_process_hits.empty());
+	EXPECT_FALSE(gui_runtime_header_optional_hits.empty());
+	EXPECT_FALSE(gui_runtime_cpp_process_builder_hits.empty());
+	EXPECT_FALSE(gui_runtime_cpp_optional_builder_hits.empty());
+	EXPECT_FALSE(main_process_builder_hits.empty());
+	EXPECT_FALSE(main_optional_builder_hits.empty());
+	EXPECT_TRUE(process_header_wx_hits.empty()) << JoinLines(process_header_wx_hits);
+	EXPECT_TRUE(optional_header_wx_hits.empty()) << JoinLines(optional_header_wx_hits);
+}
+
 TEST(host_boundary_policy, headless_runtime_bootstrap_uses_minimal_runtime_init_options) {
 	auto const root = ProjectRoot();
 	auto const headless_runtime_bootstrap_cpp = root / "src" / "headless_runtime_bootstrap.cpp";
@@ -1062,6 +1108,8 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	auto const app_runtime_h = root / "src" / "app_runtime.h";
 	auto const app_runtime_cpp = root / "src" / "app_runtime.cpp";
 	auto const runtime_bootstrap_ui_host_h = root / "src" / "runtime_bootstrap_ui_host.h";
+	auto const runtime_process_host_h = root / "src" / "runtime_process_host.h";
+	auto const runtime_optional_facility_host_h = root / "src" / "runtime_optional_facility_host.h";
 	auto const app_runtime_facilities_cpp = root / "src" / "app_runtime_facilities.cpp";
 	auto const app_runtime_init_cpp = root / "src" / "app_runtime_init.cpp";
 	auto const aegisublocale_cpp = root / "src" / "aegisublocale.cpp";
@@ -1074,6 +1122,8 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 
 	auto app_runtime_header_wx_hits = FindWxMarkers(app_runtime_h);
 	auto runtime_bootstrap_ui_header_wx_hits = FindWxMarkers(runtime_bootstrap_ui_host_h);
+	auto runtime_process_host_header_wx_hits = FindWxMarkers(runtime_process_host_h);
+	auto runtime_optional_facility_host_header_wx_hits = FindWxMarkers(runtime_optional_facility_host_h);
 	auto app_runtime_gui_runtime_host_hits = FindLiteralHits(app_runtime_cpp, "gui_wx_runtime_host.h");
 	auto app_runtime_gui_locale_host_hits = FindLiteralHits(app_runtime_cpp, "gui_wx_locale_host.h");
 	auto app_runtime_gui_bootstrap_ui_host_hits = FindLiteralHits(app_runtime_cpp, "gui_wx_bootstrap_ui_host.h");
@@ -1109,6 +1159,8 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 
 	EXPECT_TRUE(app_runtime_header_wx_hits.empty()) << JoinLines(app_runtime_header_wx_hits);
 	EXPECT_TRUE(runtime_bootstrap_ui_header_wx_hits.empty()) << JoinLines(runtime_bootstrap_ui_header_wx_hits);
+	EXPECT_TRUE(runtime_process_host_header_wx_hits.empty()) << JoinLines(runtime_process_host_header_wx_hits);
+	EXPECT_TRUE(runtime_optional_facility_host_header_wx_hits.empty()) << JoinLines(runtime_optional_facility_host_header_wx_hits);
 	EXPECT_TRUE(app_runtime_gui_runtime_host_hits.empty()) << JoinLines(app_runtime_gui_runtime_host_hits);
 	EXPECT_TRUE(app_runtime_gui_locale_host_hits.empty()) << JoinLines(app_runtime_gui_locale_host_hits);
 	EXPECT_TRUE(app_runtime_gui_bootstrap_ui_host_hits.empty()) << JoinLines(app_runtime_gui_bootstrap_ui_host_hits);
@@ -1147,6 +1199,14 @@ TEST(host_boundary_policy, gui_runtime_and_bootstrap_host_headers_stay_localized
 		"src/gui_wx_runtime_host.cpp",
 		"src/main.cpp",
 	};
+	std::set<std::string> const expected_runtime_process_host_includers = {
+		"src/app_runtime.h",
+		"src/gui_wx_runtime_host.h",
+	};
+	std::set<std::string> const expected_runtime_optional_facility_host_includers = {
+		"src/app_runtime.h",
+		"src/gui_wx_runtime_host.h",
+	};
 	std::set<std::string> const expected_locale_host_includers = {
 		"src/gui_wx_locale_host.cpp",
 		"src/main.cpp",
@@ -1160,11 +1220,15 @@ TEST(host_boundary_policy, gui_runtime_and_bootstrap_host_headers_stay_localized
 	};
 
 	auto runtime_host_includers = FindFilesContainingLiteralInTree(root, src_root, "gui_wx_runtime_host.h");
+	auto runtime_process_host_includers = FindFilesContainingLiteralInTree(root, src_root, "runtime_process_host.h");
+	auto runtime_optional_facility_host_includers = FindFilesContainingLiteralInTree(root, src_root, "runtime_optional_facility_host.h");
 	auto locale_host_includers = FindFilesContainingLiteralInTree(root, src_root, "gui_wx_locale_host.h");
 	auto bootstrap_host_includers = FindFilesContainingLiteralInTree(root, src_root, "gui_wx_bootstrap_ui_host.h");
 	auto bootstrap_ui_includers = FindFilesContainingLiteralInTree(root, src_root, "wx_app_bootstrap_ui_services.h");
 
 	EXPECT_EQ(expected_runtime_host_includers, runtime_host_includers);
+	EXPECT_EQ(expected_runtime_process_host_includers, runtime_process_host_includers);
+	EXPECT_EQ(expected_runtime_optional_facility_host_includers, runtime_optional_facility_host_includers);
 	EXPECT_EQ(expected_locale_host_includers, locale_host_includers);
 	EXPECT_EQ(expected_bootstrap_host_includers, bootstrap_host_includers);
 	EXPECT_EQ(expected_bootstrap_ui_includers, bootstrap_ui_includers);

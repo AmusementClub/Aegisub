@@ -20,11 +20,16 @@
 #include <wx/image.h>
 #include <wx/log.h>
 
-AppRuntimeHostHooks BuildGuiWxRuntimeHostHooks() {
+RuntimeProcessHost BuildGuiWxRuntimeProcessHost() {
 	return {
 		[] {
 			(void)wxLog::GetActiveTarget();
 		},
+	};
+}
+
+RuntimeOptionalFacilityHost BuildGuiWxRuntimeOptionalFacilityHost() {
+	return {
 		[] {
 			wxImage::AddHandler(new wxPNGHandler);
 		}

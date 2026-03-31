@@ -130,11 +130,10 @@ public:
 				config::opt->ConfigUser();
 			}
 			catch (agi::Exception const& err) {
-				if (options.bootstrap_ui_host.notification_sink) {
-					options.bootstrap_ui_host.notification_sink->ShowError(
-						"Error",
-						agi::format("Configuration file is invalid. Error reported:\n%s", err.GetMessage()));
-				}
+				ShowBootstrapUiError(
+					options.bootstrap_ui_host,
+					"Error",
+					agi::format("Configuration file is invalid. Error reported:\n%s", err.GetMessage()));
 			}
 			locale.SetHost(options.locale_host);
 			InitializeCommandsAndLocale(options, locale);

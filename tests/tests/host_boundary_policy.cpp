@@ -314,6 +314,10 @@ TEST(host_boundary_policy, app_bootstrap_ui_fallback_lives_in_explicit_wx_servic
 	auto main_bootstrap_ui_include_hits = FindLiteralHits(main_cpp, "wx_app_bootstrap_ui_services.h");
 	auto main_gui_bootstrap_ui_host_include_hits = FindLiteralHits(main_cpp, "gui_wx_bootstrap_ui_host.h");
 	auto main_build_bootstrap_ui_host_hits = FindLiteralHits(main_cpp, "BuildGuiWxRuntimeBootstrapUiHost()");
+	auto main_direct_notification_field_hits = FindLiteralHits(main_cpp, ".notification_sink");
+	auto main_direct_interaction_field_hits = FindLiteralHits(main_cpp, ".interaction_sink");
+	auto main_bootstrap_error_helper_hits = FindLiteralHits(main_cpp, "ShowBootstrapUiError(");
+	auto main_bootstrap_interaction_helper_hits = FindLiteralHits(main_cpp, "RequestBootstrapUiInteraction(");
 	auto host_runtime_bootstrap_host_include_hits = FindLiteralHits(gui_wx_bootstrap_ui_host_h, "runtime_bootstrap_ui_host.h");
 	auto host_bootstrap_ui_include_hits = FindLiteralHits(gui_wx_bootstrap_ui_host_cpp, "wx_app_bootstrap_ui_services.h");
 	auto host_bootstrap_notification_hits = FindLiteralHits(gui_wx_bootstrap_ui_host_cpp, "AppBootstrapNotificationSink()");
@@ -332,6 +336,10 @@ TEST(host_boundary_policy, app_bootstrap_ui_fallback_lives_in_explicit_wx_servic
 	EXPECT_TRUE(main_bootstrap_ui_include_hits.empty()) << JoinLines(main_bootstrap_ui_include_hits);
 	EXPECT_FALSE(main_gui_bootstrap_ui_host_include_hits.empty());
 	EXPECT_FALSE(main_build_bootstrap_ui_host_hits.empty());
+	EXPECT_TRUE(main_direct_notification_field_hits.empty()) << JoinLines(main_direct_notification_field_hits);
+	EXPECT_TRUE(main_direct_interaction_field_hits.empty()) << JoinLines(main_direct_interaction_field_hits);
+	EXPECT_FALSE(main_bootstrap_error_helper_hits.empty());
+	EXPECT_FALSE(main_bootstrap_interaction_helper_hits.empty());
 
 	EXPECT_FALSE(host_runtime_bootstrap_host_include_hits.empty());
 	EXPECT_FALSE(host_bootstrap_ui_include_hits.empty());

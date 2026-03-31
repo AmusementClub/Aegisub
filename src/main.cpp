@@ -159,8 +159,7 @@ bool AegisubApp::OnInit() {
 	runtime_options.optional_facility_host = BuildGuiWxRuntimeOptionalFacilityHost();
 	runtime_options.bootstrap_ui_host = bootstrap_ui_host;
 	if (!runtime->Initialize(std::move(runtime_options), runtime_error)) {
-		if (bootstrap_ui_host.notification_sink)
-			bootstrap_ui_host.notification_sink->ShowError("Fatal error while initializing", runtime_error);
+		ShowBootstrapUiError(bootstrap_ui_host, "Fatal error while initializing", runtime_error);
 		return false;
 	}
 
@@ -191,23 +190,19 @@ bool AegisubApp::OnInit() {
 		if (OPT_GET("App/First Start")->GetBool()) {
 			OPT_SET("App/First Start")->SetBool(false);
 #ifdef WITH_UPDATE_CHECKER
-			auto *interaction_sink = bootstrap_ui_host.interaction_sink;
 			auto request = agi::InteractionRequest{
 				from_wx(_("Check for updates?")),
 				from_wx(_("Do you want Aegisub to check for updates whenever it starts? You can still do it manually via the Help menu.")),
 				agi::InteractionButtons::YesNo,
 				agi::InteractionIcon::Question
 			};
-			auto result = interaction_sink
-				? interaction_sink->Request(request)
-				: agi::DefaultInteractionResult(request.buttons);
+			auto result = RequestBootstrapUiInteraction(bootstrap_ui_host, request);
 			OPT_SET("App/Auto/Check For Updates")->SetBool(result == agi::InteractionResult::Yes);
 			try {
 				config::opt->Flush();
 			}
 			catch (agi::fs::FileSystemError const& e) {
-				if (bootstrap_ui_host.notification_sink)
-					bootstrap_ui_host.notification_sink->ShowError("Error saving config file", e.GetMessage());
+				ShowBootstrapUiError(bootstrap_ui_host, "Error saving config file", e.GetMessage());
 			}
 #endif
 		}
@@ -223,19 +218,16 @@ bool AegisubApp::OnInit() {
 			OpenFiles(wxArrayStringsAdapter(args.size() - 1, &args[1]));
 	}
 	catch (agi::Exception const& e) {
-		if (bootstrap_ui_host.notification_sink)
-			bootstrap_ui_host.notification_sink->ShowError("Fatal error while initializing", e.GetMessage());
+		ShowBootstrapUiError(bootstrap_ui_host, "Fatal error while initializing", e.GetMessage());
 		return false;
 	}
 	catch (std::exception const& e) {
-		if (bootstrap_ui_host.notification_sink)
-			bootstrap_ui_host.notification_sink->ShowError("Fatal error while initializing", e.what());
+		ShowBootstrapUiError(bootstrap_ui_host, "Fatal error while initializing", e.what());
 		return false;
 	}
 #ifndef _DEBUG
 	catch (...) {
-		if (bootstrap_ui_host.notification_sink)
-			bootstrap_ui_host.notification_sink->ShowError("Fatal error while initializing", "Unhandled exception");
+		ShowBootstrapUiError(bootstrap_ui_host, "Fatal error while initializing", "Unhandled exception");
 		return false;
 	}
 #endif
@@ -316,16 +308,14 @@ void AegisubApp::UnhandledException(bool stackWalk) {
 	if (any) {
 		// Inform user of crash.
 		auto bootstrap_ui_host = BuildGuiWxRuntimeBootstrapUiHost();
-		if (bootstrap_ui_host.notification_sink)
-			bootstrap_ui_host.notification_sink->ShowError(from_wx(_("Program error")), agi::format(exception_message, path));
+		ShowBootstrapUiError(bootstrap_ui_host, from_wx(_("Program error")), agi::format(exception_message, path));
 	}
 	else if (LastStartupState) {
 		auto bootstrap_ui_host = BuildGuiWxRuntimeBootstrapUiHost();
-		if (bootstrap_ui_host.notification_sink) {
-			bootstrap_ui_host.notification_sink->ShowError(
-				from_wx(_("Program error")),
-				agi::format("Aegisub has crashed while starting up!\n\nThe last startup step attempted was: %s.", LastStartupState));
-		}
+		ShowBootstrapUiError(
+			bootstrap_ui_host,
+			from_wx(_("Program error")),
+			agi::format("Aegisub has crashed while starting up!\n\nThe last startup step attempted was: %s.", LastStartupState));
 	}
 #endif
 }
@@ -344,27 +334,24 @@ bool AegisubApp::OnExceptionInMainLoop() {
 	}
 	catch (const agi::Exception &e) {
 		auto bootstrap_ui_host = BuildGuiWxRuntimeBootstrapUiHost();
-		if (bootstrap_ui_host.notification_sink) {
-			bootstrap_ui_host.notification_sink->ShowError(
-				"Exception in event handler",
-				agi::format(_("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s"), e.GetMessage()));
-		}
+		ShowBootstrapUiError(
+			bootstrap_ui_host,
+			"Exception in event handler",
+			agi::format(_("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s"), e.GetMessage()));
 	}
 	catch (const std::exception &e) {
 		auto bootstrap_ui_host = BuildGuiWxRuntimeBootstrapUiHost();
-		if (bootstrap_ui_host.notification_sink) {
-			bootstrap_ui_host.notification_sink->ShowError(
-				"Exception in event handler",
-				agi::format(_("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s"), e.what()));
-		}
+		ShowBootstrapUiError(
+			bootstrap_ui_host,
+			"Exception in event handler",
+			agi::format(_("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s"), e.what()));
 	}
 	catch (...) {
 		auto bootstrap_ui_host = BuildGuiWxRuntimeBootstrapUiHost();
-		if (bootstrap_ui_host.notification_sink) {
-			bootstrap_ui_host.notification_sink->ShowError(
-				"Exception in event handler",
-				agi::format(_("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s"), "Unknown error"));
-		}
+		ShowBootstrapUiError(
+			bootstrap_ui_host,
+			"Exception in event handler",
+			agi::format(_("An unexpected error has occurred. Please save your work and restart Aegisub.\n\nError Message: %s"), "Unknown error"));
 	}
 	return true;
 }

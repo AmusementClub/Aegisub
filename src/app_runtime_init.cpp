@@ -16,20 +16,15 @@
 #include "app_runtime_init.h"
 
 #include "app_runtime.h"
+#include "app_runtime_facilities.h"
 
-#include "auto4_base.h"
-#include "auto4_lua_factory.h"
 #include "crash_writer.h"
-#include "export_fixstyle.h"
-#include "export_framerate.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "perf_trace.h"
-#include "subtitles_provider_libass.h"
 #include "utils.h"
 #include "version.h"
 
-#include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/io.h>
 #include <libaegisub/log.h>
@@ -94,28 +89,6 @@ void InitializeRuntimeLoggingAndPerfTrace() {
 	CleanCache(path_log, "*.json", 10, 100, 24 * 60 * 60);
 }
 
-void InitializeOptionalRuntimeFacilities(AppRuntimeInitOptions const& options) {
-	if (options.register_automation_script_factory)
-		Automation4::ScriptFactory::Register(agi::make_unique<Automation4::LuaScriptFactory>());
-
-	if (options.warm_subtitles_provider_font_cache)
-		libass::CacheFonts();
-
-	if (options.load_global_scripts)
-		config::global_scripts = new Automation4::AutoloadScriptManager(OPT_GET("Path/Automation/Autoload")->GetString());
-
-	if (options.register_export_filters) {
-		AssExportFilterChain::Register(agi::make_unique<AssFixStylesFilter>());
-		AssExportFilterChain::Register(agi::make_unique<AssTransformFramerateFilter>());
-	}
-
-	if (options.install_png_handler) {
-		if (!options.host_hooks.install_png_image_handler)
-			throw agi::InternalError("AppRuntime requested PNG handler installation without a host hook.");
-		options.host_hooks.install_png_image_handler();
-	}
-}
-
 void CleanupRuntimeProcessState() {
 	if (config::opt) {
 		delete config::opt;
@@ -125,12 +98,8 @@ void CleanupRuntimeProcessState() {
 		delete config::mru;
 		config::mru = nullptr;
 	}
-	if (config::global_scripts) {
-		delete config::global_scripts;
-		config::global_scripts = nullptr;
-	}
 
-	AssExportFilterChain::Clear();
+	CleanupRuntimeOptionalFacilities();
 
 	perf_trace::Shutdown();
 

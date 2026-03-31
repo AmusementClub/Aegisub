@@ -14,6 +14,7 @@
 // PERFORMANCE OF THIS SOFTWARE.
 
 #include "app_runtime.h"
+#include "app_runtime_facilities.h"
 #include "app_runtime_init.h"
 
 #include "command/command.h"
@@ -80,7 +81,7 @@ void InitializeCommandsAndLocale(AppRuntimeInitOptions const& options, AegisubLo
 	bool const has_language = !lang.empty() && (lang == "en_US" || locale.HasLanguage(lang));
 	if (!has_language) {
 		if (options.locale_policy == RuntimeLocalePolicy::PickIfNeeded)
-			lang = locale.PickLanguage(options.single_choice_sink);
+			lang = locale.PickLanguage(options.bootstrap_ui_host.single_choice_sink);
 		if (lang.empty() || !locale.HasLanguage(lang))
 			lang = "en_US";
 		OPT_SET("App/Language")->SetString(lang);
@@ -129,15 +130,15 @@ public:
 				config::opt->ConfigUser();
 			}
 			catch (agi::Exception const& err) {
-				if (options.report_nonfatal_error) {
-					options.report_nonfatal_error(
+				if (options.bootstrap_ui_host.notification_sink) {
+					options.bootstrap_ui_host.notification_sink->ShowError(
 						"Error",
 						agi::format("Configuration file is invalid. Error reported:\n%s", err.GetMessage()));
 				}
 			}
 			locale.SetHost(options.locale_host);
 			InitializeCommandsAndLocale(options, locale);
-			InitializeOptionalRuntimeFacilities(options);
+			InitializeRuntimeOptionalFacilities(options);
 
 			initialized = true;
 			return true;

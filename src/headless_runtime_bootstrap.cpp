@@ -19,6 +19,7 @@
 #include "headless_cli_execute.h"
 #include "headless_cli_parse.h"
 #include "headless_playback_probe.h"
+#include "ui_services.h"
 
 #include <libaegisub/dispatch.h>
 
@@ -39,6 +40,19 @@ void ReportHeadlessError(std::string const& title, std::string const& message) {
 		std::cerr << "[" << title << "] ";
 	std::cerr << message << std::endl;
 }
+
+class HeadlessNotificationSink final : public agi::NotificationSink {
+public:
+	void ShowInfo(std::string const&, std::string const&) override { }
+
+	void ShowError(std::string const& title, std::string const& message) override {
+		ReportHeadlessError(title, message);
+	}
+
+	void ShowWarning(std::string const& title, std::string const& message) override {
+		ReportHeadlessError(title, message);
+	}
+};
 
 class HeadlessMainThreadPump {
 	std::mutex mutex;
@@ -100,6 +114,7 @@ public:
 class HeadlessRuntimeEnvironment {
 	HeadlessMainThreadPump main_thread_pump;
 	AppRuntime runtime;
+	HeadlessNotificationSink notification_sink;
 
 public:
 	bool Initialize(std::string& error) {
@@ -125,9 +140,7 @@ public:
 			options.warm_subtitles_provider_font_cache = false;
 			options.register_export_filters = false;
 			options.install_png_handler = false;
-			options.report_nonfatal_error = [](std::string const& title, std::string const& message) {
-				ReportHeadlessError(title, message);
-			};
+			options.bootstrap_ui_host.notification_sink = &notification_sink;
 			return runtime.Initialize(std::move(options), error);
 		}
 		catch (...) {

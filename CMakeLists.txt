@@ -368,7 +368,12 @@ set(AEGISUB_SHARED_EXE_ENTRY_SOURCES
     src/app_entry.cpp
 )
 
+set(AEGISUB_SHARED_RUNTIME_OPTIONAL_FACILITY_SOURCES
+    src/app_runtime_facilities.cpp
+)
+
 set(AEGISUB_SHARED_RUNTIME_COMMON_INIT_SUPPORT_SOURCES
+    ${AEGISUB_SHARED_RUNTIME_OPTIONAL_FACILITY_SOURCES}
     src/app_runtime_init.cpp
 )
 
@@ -390,6 +395,10 @@ set(AEGISUB_SHARED_RUNTIME_LOCALE_CORE_SOURCES
 set(AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES
     src/gui_wx_locale_host.cpp
     src/gui_wx_runtime_host.cpp
+)
+
+set(AEGISUB_GUI_BOOTSTRAP_WX_HOST_SOURCES
+    src/gui_wx_bootstrap_ui_host.cpp
 )
 
 set(AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES
@@ -608,6 +617,7 @@ add_executable(Aegisub WIN32
     ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES}
     ${AEGISUB_SHARED_SELECTION_REQUEST_SOURCES}
     ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES}
+    ${AEGISUB_GUI_BOOTSTRAP_WX_HOST_SOURCES}
     src/help_button.cpp
     src/hotkey.cpp
     src/hotkey_data_view_model.cpp

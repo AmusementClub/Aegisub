@@ -1,6 +1,7 @@
 #pragma once
 
 #include "aegisublocale.h"
+#include "runtime_bootstrap_ui_host.h"
 #include "runtime_locale_host.h"
 
 #include <libaegisub/dispatch.h>
@@ -9,8 +10,6 @@
 #include <functional>
 #include <memory>
 #include <string>
-
-namespace agi { class SingleChoiceInteractionSink; }
 
 enum class RuntimeShellMode {
 	Unknown,
@@ -47,8 +46,7 @@ struct AppRuntimeInitOptions {
 	bool register_export_filters = true;
 	bool install_png_handler = true;
 	AppRuntimeHostHooks host_hooks;
-	std::shared_ptr<agi::SingleChoiceInteractionSink> single_choice_sink;
-	std::function<void(std::string const& title, std::string const& message)> report_nonfatal_error;
+	RuntimeBootstrapUiHost bootstrap_ui_host;
 };
 
 RuntimeShellMode GetRuntimeShellMode();

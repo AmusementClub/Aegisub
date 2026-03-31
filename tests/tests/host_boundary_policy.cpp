@@ -149,6 +149,7 @@ TEST(host_boundary_policy, service_like_sources_keep_wx_at_host_edges) {
 
 	std::set<std::string> const allowed_wx_candidates = {
 		"src/gui_wx_locale_host.cpp",
+		"src/gui_wx_runtime_entry_host.cpp",
 		"src/gui_wx_runtime_host.cpp",
 		"src/wx_automation_file_dialog_service.h",
 		"src/wx_audio_controller_power_host.cpp",
@@ -312,7 +313,9 @@ TEST(host_boundary_policy, app_bootstrap_ui_fallback_lives_in_explicit_wx_servic
 	auto main_interaction_hits = FindLiteralHits(main_cpp, "WxMessageBoxInteractionSink");
 	auto main_make_single_choice_hits = FindLiteralHits(main_cpp, "MakeWindowSingleChoiceInteractionSink(");
 	auto main_bootstrap_ui_include_hits = FindLiteralHits(main_cpp, "wx_app_bootstrap_ui_services.h");
+	auto main_runtime_entry_host_include_hits = FindLiteralHits(main_cpp, "gui_wx_runtime_entry_host.h");
 	auto main_gui_bootstrap_ui_host_include_hits = FindLiteralHits(main_cpp, "gui_wx_bootstrap_ui_host.h");
+	auto main_build_runtime_entry_host_pack_hits = FindLiteralHits(main_cpp, "BuildGuiWxRuntimeEntryHostPack()");
 	auto main_build_bootstrap_ui_host_hits = FindLiteralHits(main_cpp, "BuildGuiWxRuntimeBootstrapUiHost()");
 	auto main_direct_notification_field_hits = FindLiteralHits(main_cpp, ".notification_sink");
 	auto main_direct_interaction_field_hits = FindLiteralHits(main_cpp, ".interaction_sink");
@@ -334,8 +337,10 @@ TEST(host_boundary_policy, app_bootstrap_ui_fallback_lives_in_explicit_wx_servic
 	EXPECT_TRUE(main_interaction_hits.empty()) << JoinLines(main_interaction_hits);
 	EXPECT_TRUE(main_make_single_choice_hits.empty()) << JoinLines(main_make_single_choice_hits);
 	EXPECT_TRUE(main_bootstrap_ui_include_hits.empty()) << JoinLines(main_bootstrap_ui_include_hits);
-	EXPECT_FALSE(main_gui_bootstrap_ui_host_include_hits.empty());
-	EXPECT_FALSE(main_build_bootstrap_ui_host_hits.empty());
+	EXPECT_FALSE(main_runtime_entry_host_include_hits.empty());
+	EXPECT_TRUE(main_gui_bootstrap_ui_host_include_hits.empty()) << JoinLines(main_gui_bootstrap_ui_host_include_hits);
+	EXPECT_FALSE(main_build_runtime_entry_host_pack_hits.empty());
+	EXPECT_TRUE(main_build_bootstrap_ui_host_hits.empty()) << JoinLines(main_build_bootstrap_ui_host_hits);
 	EXPECT_TRUE(main_direct_notification_field_hits.empty()) << JoinLines(main_direct_notification_field_hits);
 	EXPECT_TRUE(main_direct_interaction_field_hits.empty()) << JoinLines(main_direct_interaction_field_hits);
 	EXPECT_FALSE(main_bootstrap_error_helper_hits.empty());
@@ -629,8 +634,8 @@ TEST(host_boundary_policy, runtime_process_and_optional_facility_contracts_stay_
 	EXPECT_FALSE(gui_runtime_header_optional_hits.empty());
 	EXPECT_FALSE(gui_runtime_cpp_process_builder_hits.empty());
 	EXPECT_FALSE(gui_runtime_cpp_optional_builder_hits.empty());
-	EXPECT_FALSE(main_process_builder_hits.empty());
-	EXPECT_FALSE(main_optional_builder_hits.empty());
+	EXPECT_TRUE(main_process_builder_hits.empty()) << JoinLines(main_process_builder_hits);
+	EXPECT_TRUE(main_optional_builder_hits.empty()) << JoinLines(main_optional_builder_hits);
 	EXPECT_TRUE(process_header_wx_hits.empty()) << JoinLines(process_header_wx_hits);
 	EXPECT_TRUE(optional_header_wx_hits.empty()) << JoinLines(optional_header_wx_hits);
 }
@@ -832,7 +837,9 @@ TEST(host_boundary_policy, gui_runtime_wx_host_sources_live_in_named_cmake_pack)
 	auto const cmake_lists = root / "CMakeLists.txt";
 
 	std::set<std::string> const expected_sources = {
+		"src/gui_wx_dispatch_event.cpp",
 		"src/gui_wx_locale_host.cpp",
+		"src/gui_wx_runtime_entry_host.cpp",
 		"src/gui_wx_runtime_host.cpp",
 	};
 
@@ -1115,6 +1122,8 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	auto const main_cpp = root / "src" / "main.cpp";
 	auto const app_runtime_h = root / "src" / "app_runtime.h";
 	auto const app_runtime_cpp = root / "src" / "app_runtime.cpp";
+	auto const gui_wx_runtime_entry_host_h = root / "src" / "gui_wx_runtime_entry_host.h";
+	auto const gui_wx_runtime_entry_host_cpp = root / "src" / "gui_wx_runtime_entry_host.cpp";
 	auto const runtime_bootstrap_ui_host_h = root / "src" / "runtime_bootstrap_ui_host.h";
 	auto const runtime_process_host_h = root / "src" / "runtime_process_host.h";
 	auto const runtime_optional_facility_host_h = root / "src" / "runtime_optional_facility_host.h";
@@ -1124,11 +1133,16 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	auto const headless_process_entry_cpp = root / "src" / "headless_process_entry.cpp";
 	auto const headless_runtime_bootstrap_cpp = root / "src" / "headless_runtime_bootstrap.cpp";
 
+	auto main_gui_runtime_entry_host_hits = FindLiteralHits(main_cpp, "gui_wx_runtime_entry_host.h");
+	auto main_gui_dispatch_event_hits = FindLiteralHits(main_cpp, "gui_wx_dispatch_event.h");
 	auto main_gui_runtime_host_hits = FindLiteralHits(main_cpp, "gui_wx_runtime_host.h");
 	auto main_gui_locale_host_hits = FindLiteralHits(main_cpp, "gui_wx_locale_host.h");
 	auto main_gui_bootstrap_ui_host_hits = FindLiteralHits(main_cpp, "gui_wx_bootstrap_ui_host.h");
+	auto main_queue_event_hits = FindLiteralHits(main_cpp, "QueueEvent(");
+	auto main_is_main_thread_hits = FindLiteralHits(main_cpp, "wxIsMainThread()");
 
 	auto app_runtime_header_wx_hits = FindWxMarkers(app_runtime_h);
+	auto gui_runtime_entry_host_h_wx_hits = FindWxMarkers(gui_wx_runtime_entry_host_h);
 	auto runtime_bootstrap_ui_header_wx_hits = FindWxMarkers(runtime_bootstrap_ui_host_h);
 	auto runtime_process_host_header_wx_hits = FindWxMarkers(runtime_process_host_h);
 	auto runtime_optional_facility_host_header_wx_hits = FindWxMarkers(runtime_optional_facility_host_h);
@@ -1150,6 +1164,12 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	auto app_runtime_init_bootstrap_ui_hits = FindLiteralHits(app_runtime_init_cpp, "wx_app_bootstrap_ui_services.h");
 	auto app_runtime_init_main_header_hits = FindLiteralHits(app_runtime_init_cpp, "main.h");
 	auto app_runtime_locale_wx_hits = FindWxMarkers(aegisublocale_cpp);
+	auto gui_runtime_entry_runtime_host_hits = FindLiteralHits(gui_wx_runtime_entry_host_cpp, "gui_wx_runtime_host.h");
+	auto gui_runtime_entry_locale_host_hits = FindLiteralHits(gui_wx_runtime_entry_host_cpp, "gui_wx_locale_host.h");
+	auto gui_runtime_entry_bootstrap_ui_host_hits = FindLiteralHits(gui_wx_runtime_entry_host_cpp, "gui_wx_bootstrap_ui_host.h");
+	auto gui_runtime_entry_dispatch_event_hits = FindLiteralHits(gui_wx_runtime_entry_host_cpp, "gui_wx_dispatch_event.h");
+	auto gui_runtime_entry_queue_event_hits = FindLiteralHits(gui_wx_runtime_entry_host_cpp, "QueueEvent(");
+	auto gui_runtime_entry_is_main_thread_hits = FindLiteralHits(gui_wx_runtime_entry_host_cpp, "wxIsMainThread()");
 
 	auto process_entry_wx_hits = FindWxMarkers(headless_process_entry_cpp);
 	auto process_entry_main_header_hits = FindLiteralHits(headless_process_entry_cpp, "main.h");
@@ -1161,11 +1181,16 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	auto bootstrap_gui_bootstrap_ui_host_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "gui_wx_bootstrap_ui_host.h");
 	auto bootstrap_bootstrap_ui_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "wx_app_bootstrap_ui_services.h");
 
-	EXPECT_FALSE(main_gui_runtime_host_hits.empty());
-	EXPECT_FALSE(main_gui_locale_host_hits.empty());
-	EXPECT_FALSE(main_gui_bootstrap_ui_host_hits.empty());
+	EXPECT_FALSE(main_gui_runtime_entry_host_hits.empty());
+	EXPECT_FALSE(main_gui_dispatch_event_hits.empty());
+	EXPECT_TRUE(main_gui_runtime_host_hits.empty()) << JoinLines(main_gui_runtime_host_hits);
+	EXPECT_TRUE(main_gui_locale_host_hits.empty()) << JoinLines(main_gui_locale_host_hits);
+	EXPECT_TRUE(main_gui_bootstrap_ui_host_hits.empty()) << JoinLines(main_gui_bootstrap_ui_host_hits);
+	EXPECT_TRUE(main_queue_event_hits.empty()) << JoinLines(main_queue_event_hits);
+	EXPECT_TRUE(main_is_main_thread_hits.empty()) << JoinLines(main_is_main_thread_hits);
 
 	EXPECT_TRUE(app_runtime_header_wx_hits.empty()) << JoinLines(app_runtime_header_wx_hits);
+	EXPECT_TRUE(gui_runtime_entry_host_h_wx_hits.empty()) << JoinLines(gui_runtime_entry_host_h_wx_hits);
 	EXPECT_TRUE(runtime_bootstrap_ui_header_wx_hits.empty()) << JoinLines(runtime_bootstrap_ui_header_wx_hits);
 	EXPECT_TRUE(runtime_process_host_header_wx_hits.empty()) << JoinLines(runtime_process_host_header_wx_hits);
 	EXPECT_TRUE(runtime_optional_facility_host_header_wx_hits.empty()) << JoinLines(runtime_optional_facility_host_header_wx_hits);
@@ -1187,6 +1212,12 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	EXPECT_TRUE(app_runtime_init_bootstrap_ui_hits.empty()) << JoinLines(app_runtime_init_bootstrap_ui_hits);
 	EXPECT_TRUE(app_runtime_init_main_header_hits.empty()) << JoinLines(app_runtime_init_main_header_hits);
 	EXPECT_TRUE(app_runtime_locale_wx_hits.empty()) << JoinLines(app_runtime_locale_wx_hits);
+	EXPECT_FALSE(gui_runtime_entry_runtime_host_hits.empty());
+	EXPECT_FALSE(gui_runtime_entry_locale_host_hits.empty());
+	EXPECT_FALSE(gui_runtime_entry_bootstrap_ui_host_hits.empty());
+	EXPECT_FALSE(gui_runtime_entry_dispatch_event_hits.empty());
+	EXPECT_FALSE(gui_runtime_entry_queue_event_hits.empty());
+	EXPECT_FALSE(gui_runtime_entry_is_main_thread_hits.empty());
 
 	EXPECT_TRUE(process_entry_wx_hits.empty()) << JoinLines(process_entry_wx_hits);
 	EXPECT_TRUE(process_entry_main_header_hits.empty()) << JoinLines(process_entry_main_header_hits);
@@ -1203,9 +1234,18 @@ TEST(host_boundary_policy, gui_runtime_and_bootstrap_host_headers_stay_localized
 	auto const root = ProjectRoot();
 	auto const src_root = root / "src";
 
-	std::set<std::string> const expected_runtime_host_includers = {
-		"src/gui_wx_runtime_host.cpp",
+	std::set<std::string> const expected_runtime_entry_host_includers = {
+		"src/gui_wx_runtime_entry_host.cpp",
 		"src/main.cpp",
+	};
+	std::set<std::string> const expected_dispatch_event_includers = {
+		"src/gui_wx_dispatch_event.cpp",
+		"src/gui_wx_runtime_entry_host.cpp",
+		"src/main.cpp",
+	};
+	std::set<std::string> const expected_runtime_host_includers = {
+		"src/gui_wx_runtime_entry_host.cpp",
+		"src/gui_wx_runtime_host.cpp",
 	};
 	std::set<std::string> const expected_runtime_process_host_includers = {
 		"src/app_runtime.h",
@@ -1216,17 +1256,19 @@ TEST(host_boundary_policy, gui_runtime_and_bootstrap_host_headers_stay_localized
 		"src/gui_wx_runtime_host.h",
 	};
 	std::set<std::string> const expected_locale_host_includers = {
+		"src/gui_wx_runtime_entry_host.cpp",
 		"src/gui_wx_locale_host.cpp",
-		"src/main.cpp",
 	};
 	std::set<std::string> const expected_bootstrap_host_includers = {
+		"src/gui_wx_runtime_entry_host.cpp",
 		"src/gui_wx_bootstrap_ui_host.cpp",
-		"src/main.cpp",
 	};
 	std::set<std::string> const expected_bootstrap_ui_includers = {
 		"src/gui_wx_bootstrap_ui_host.cpp",
 	};
 
+	auto runtime_entry_host_includers = FindFilesContainingLiteralInTree(root, src_root, "gui_wx_runtime_entry_host.h");
+	auto dispatch_event_includers = FindFilesContainingLiteralInTree(root, src_root, "gui_wx_dispatch_event.h");
 	auto runtime_host_includers = FindFilesContainingLiteralInTree(root, src_root, "gui_wx_runtime_host.h");
 	auto runtime_process_host_includers = FindFilesContainingLiteralInTree(root, src_root, "runtime_process_host.h");
 	auto runtime_optional_facility_host_includers = FindFilesContainingLiteralInTree(root, src_root, "runtime_optional_facility_host.h");
@@ -1234,6 +1276,8 @@ TEST(host_boundary_policy, gui_runtime_and_bootstrap_host_headers_stay_localized
 	auto bootstrap_host_includers = FindFilesContainingLiteralInTree(root, src_root, "gui_wx_bootstrap_ui_host.h");
 	auto bootstrap_ui_includers = FindFilesContainingLiteralInTree(root, src_root, "wx_app_bootstrap_ui_services.h");
 
+	EXPECT_EQ(expected_runtime_entry_host_includers, runtime_entry_host_includers);
+	EXPECT_EQ(expected_dispatch_event_includers, dispatch_event_includers);
 	EXPECT_EQ(expected_runtime_host_includers, runtime_host_includers);
 	EXPECT_EQ(expected_runtime_process_host_includers, runtime_process_host_includers);
 	EXPECT_EQ(expected_runtime_optional_facility_host_includers, runtime_optional_facility_host_includers);
@@ -1250,6 +1294,8 @@ TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 	std::set<std::string> const expected_explicit_wx_surfaces = {
 		"src/gui_wx_bootstrap_ui_host.cpp",
 		"src/gui_wx_bootstrap_ui_host.h",
+		"src/gui_wx_dispatch_event.cpp",
+		"src/gui_wx_dispatch_event.h",
 		"src/wx_app_bootstrap_ui_services.h",
 		"src/wx_automation_file_dialog_service.h",
 		"src/wx_file_dialog_services.h",
@@ -1260,6 +1306,8 @@ TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 		"src/wx_style_editor_ui_host.h",
 		"src/gui_wx_locale_host.cpp",
 		"src/gui_wx_locale_host.h",
+		"src/gui_wx_runtime_entry_host.cpp",
+		"src/gui_wx_runtime_entry_host.h",
 		"src/gui_wx_runtime_host.cpp",
 		"src/gui_wx_runtime_host.h",
 		"src/wx_message_box_ui_services.h",

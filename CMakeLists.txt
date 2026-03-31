@@ -393,6 +393,8 @@ set(AEGISUB_SHARED_RUNTIME_LOCALE_CORE_SOURCES
 )
 
 set(AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES
+    src/gui_wx_dispatch_event.cpp
+    src/gui_wx_runtime_entry_host.cpp
     src/gui_wx_locale_host.cpp
     src/gui_wx_runtime_host.cpp
 )

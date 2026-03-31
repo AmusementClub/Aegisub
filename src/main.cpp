@@ -41,7 +41,6 @@
 #include "app_runtime.h"
 #include "compat.h"
 #include "crash_writer.h"
-#include "dialogs.h"
 #include "format.h"
 #include "frame_main.h"
 #include "gui_wx_dispatch_event.h"
@@ -59,7 +58,6 @@
 #include <libaegisub/path.h>
 #include <libaegisub/util.h>
 
-#include <vector>
 #include <wx/arrstr.h>
 #include <wx/clipbrd.h>
 #include <wx/msgdlg.h>
@@ -90,16 +88,6 @@ AegisubApp::AegisubApp() {
 	wxSetEnv(wxS("UBUNTU_MENUPROXY"), wxS("0"));
 }
 
-namespace {
-std::vector<std::string> ToUtf8Args(wxArrayString const& args) {
-	std::vector<std::string> values;
-	values.reserve(args.size());
-	for (auto const& arg : args)
-		values.emplace_back(arg.ToStdString(wxConvUTF8));
-	return values;
-}
-}
-
 /// Message displayed when an exception has occurred.
 static wxString exception_message = wxS("Oops, Aegisub has crashed!\n\nAn attempt has been made to save a copy of your file to:\n\n%s\n\nAegisub will now close.");
 
@@ -113,14 +101,7 @@ bool AegisubApp::OnInit() {
 	SetAppName(wxS("aegisub"));
 #endif
 
-	wxTheApp->Bind(EVT_CALL_THUNK, [this](ValueEvent<agi::dispatch::Thunk>& evt) {
-		try {
-			evt.Get()();
-		}
-		catch (...) {
-			OnExceptionInMainLoop();
-		}
-	});
+	BindGuiWxMainQueueDispatchHandler(*wxTheApp, [this] { OnExceptionInMainLoop(); });
 
 	runtime = std::make_unique<AppRuntime>();
 	std::string runtime_error;
@@ -150,41 +131,12 @@ bool AegisubApp::OnInit() {
 
 		exception_message = _("Oops, Aegisub has crashed!\n\nAn attempt has been made to save a copy of your file to:\n\n%s\n\nAegisub will now close.");
 
-		// Open main frame
 		StartupLog("Create main window");
-		NewProjectContext();
-
-		// Version checker
 		StartupLog("Possibly perform automatic updates check");
-		if (OPT_GET("App/First Start")->GetBool()) {
-			OPT_SET("App/First Start")->SetBool(false);
-#ifdef WITH_UPDATE_CHECKER
-			auto request = agi::InteractionRequest{
-				from_wx(_("Check for updates?")),
-				from_wx(_("Do you want Aegisub to check for updates whenever it starts? You can still do it manually via the Help menu.")),
-				agi::InteractionButtons::YesNo,
-				agi::InteractionIcon::Question
-			};
-			auto result = RequestGuiWxBootstrapUiInteraction(request);
-			OPT_SET("App/Auto/Check For Updates")->SetBool(result == agi::InteractionResult::Yes);
-			try {
-				config::opt->Flush();
-			}
-			catch (agi::fs::FileSystemError const& e) {
-				ShowGuiWxBootstrapUiError("Error saving config file", e.GetMessage());
-			}
-#endif
-		}
-
-#ifdef WITH_UPDATE_CHECKER
-		PerformVersionCheck(false);
-#endif
-
-		// Get parameter subs
 		StartupLog("Parse command line");
-		auto const& args = argv.GetArguments();
-		if (args.size() > 1)
-			OpenFiles(wxArrayStringsAdapter(args.size() - 1, &args[1]));
+		RunGuiWxAppStartupSequence(argv.GetArguments(),
+			[this] { NewProjectContext(); },
+			[this](wxArrayString const& files) { OpenFiles(files); });
 	}
 	catch (agi::Exception const& e) {
 		ShowGuiWxBootstrapUiError("Fatal error while initializing", e.GetMessage());

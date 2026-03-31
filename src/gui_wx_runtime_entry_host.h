@@ -2,6 +2,11 @@
 
 #include "app_runtime.h"
 
+#include <functional>
+
+class wxApp;
+class wxArrayString;
+
 struct GuiWxRuntimeEntryHostPack {
 	AppRuntimeMainQueueHooks main_queue_hooks;
 	RuntimeLocaleHost locale_host;
@@ -22,3 +27,11 @@ AppRuntimeInitOptions BuildGuiWxAppRuntimeInitOptions();
 // before a project context exists.
 agi::InteractionResult RequestGuiWxBootstrapUiInteraction(agi::InteractionRequest const& request);
 void ShowGuiWxBootstrapUiError(std::string const& title, std::string const& message);
+
+// Replace these helpers when a non-wx GUI shell needs to own startup
+// orchestration and main-queue exception binding.
+void BindGuiWxMainQueueDispatchHandler(wxApp& app, std::function<void()> on_exception);
+void RunGuiWxAppStartupSequence(
+	wxArrayString const& args,
+	std::function<void()> create_project_context,
+	std::function<void(wxArrayString const&)> open_files);

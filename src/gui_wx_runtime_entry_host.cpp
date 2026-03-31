@@ -1,11 +1,15 @@
 #include "gui_wx_runtime_entry_host.h"
 
+#include "compat.h"
+#include "dialogs.h"
 #include "gui_wx_bootstrap_ui_host.h"
 #include "gui_wx_dispatch_event.h"
 #include "gui_wx_locale_host.h"
 #include "gui_wx_runtime_host.h"
+#include "options.h"
 
 #include <wx/app.h>
+#include <wx/arrstr.h>
 #include <wx/thread.h>
 
 namespace {
@@ -61,4 +65,54 @@ agi::InteractionResult RequestGuiWxBootstrapUiInteraction(agi::InteractionReques
 
 void ShowGuiWxBootstrapUiError(std::string const& title, std::string const& message) {
 	ShowBootstrapUiError(BuildGuiWxRuntimeEntryHostPack().bootstrap_ui_host, title, message);
+}
+
+void BindGuiWxMainQueueDispatchHandler(wxApp& app, std::function<void()> on_exception) {
+	app.Bind(EVT_CALL_THUNK, [on_exception = std::move(on_exception)](ValueEvent<agi::dispatch::Thunk>& evt) mutable {
+		try {
+			evt.Get()();
+		}
+		catch (...) {
+			on_exception();
+		}
+	});
+}
+
+void RunGuiWxAppStartupSequence(
+	wxArrayString const& args,
+	std::function<void()> create_project_context,
+	std::function<void(wxArrayString const&)> open_files) {
+	create_project_context();
+
+	if (OPT_GET("App/First Start")->GetBool()) {
+		OPT_SET("App/First Start")->SetBool(false);
+#ifdef WITH_UPDATE_CHECKER
+		auto request = agi::InteractionRequest{
+			from_wx(_("Check for updates?")),
+			from_wx(_("Do you want Aegisub to check for updates whenever it starts? You can still do it manually via the Help menu.")),
+			agi::InteractionButtons::YesNo,
+			agi::InteractionIcon::Question
+		};
+		auto result = RequestGuiWxBootstrapUiInteraction(request);
+		OPT_SET("App/Auto/Check For Updates")->SetBool(result == agi::InteractionResult::Yes);
+		try {
+			config::opt->Flush();
+		}
+		catch (agi::fs::FileSystemError const& e) {
+			ShowGuiWxBootstrapUiError("Error saving config file", e.GetMessage());
+		}
+#endif
+	}
+
+#ifdef WITH_UPDATE_CHECKER
+	PerformVersionCheck(false);
+#endif
+
+	if (args.size() <= 1)
+		return;
+
+	wxArrayString startup_files;
+	for (size_t i = 1; i < args.size(); ++i)
+		startup_files.push_back(args[i]);
+	open_files(startup_files);
 }

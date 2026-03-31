@@ -256,6 +256,7 @@ public:
 						agi::format("Configuration file is invalid. Error reported:\n%s", err.GetMessage()));
 				}
 			}
+			locale.SetHost(options.locale_host);
 			InitializeCommandsAndLocale(options, locale);
 			InitializeOptionalRuntimeFacilities(options);
 

@@ -44,6 +44,7 @@
 #include "dialogs.h"
 #include "format.h"
 #include "frame_main.h"
+#include "gui_wx_locale_host.h"
 #include "gui_wx_runtime_host.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
@@ -145,6 +146,7 @@ bool AegisubApp::OnInit() {
 		},
 		{}
 	};
+	runtime_options.locale_host = BuildGuiWxRuntimeLocaleHost();
 	runtime_options.load_global_scripts = true;
 	runtime_options.initialize_commands = true;
 	runtime_options.initialize_ui_locale = true;

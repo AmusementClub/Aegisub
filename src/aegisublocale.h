@@ -29,17 +29,19 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#include "runtime_locale_host.h"
+
 #include <memory>
 #include <string>
 
-class wxTranslations;
 namespace agi { class SingleChoiceInteractionSink; }
 
 class AegisubLocale {
 	std::string active_language;
-	wxTranslations *GetTranslations();
+	RuntimeLocaleHost host;
 
 public:
+	void SetHost(RuntimeLocaleHost host_hooks);
 	void Init(std::string const& language);
 	bool HasLanguage(std::string const& language);
 	std::string PickLanguage(std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});

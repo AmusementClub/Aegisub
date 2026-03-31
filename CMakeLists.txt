@@ -377,8 +377,19 @@ set(AEGISUB_SHARED_RUNTIME_LOCALE_SUPPORT_SOURCES
     src/locale_pick.cpp
 )
 
+set(AEGISUB_SHARED_RUNTIME_LOCALE_CORE_SOURCES
+    src/aegisublocale.cpp
+    ${AEGISUB_SHARED_RUNTIME_LOCALE_SUPPORT_SOURCES}
+)
+
+set(AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES
+    src/gui_wx_locale_host.cpp
+    src/gui_wx_runtime_host.cpp
+)
+
 set(AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES
     ${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES}
+    ${AEGISUB_SHARED_RUNTIME_LOCALE_CORE_SOURCES}
     src/headless_process_entry.cpp
     src/headless_runtime_bootstrap.cpp
 )
@@ -529,7 +540,6 @@ add_executable(Aegisub WIN32
     src/visual_tool_rotatez.cpp
     src/visual_tool_scale.cpp
     src/visual_tool_vector_clip.cpp
-    src/aegisublocale.cpp
     src/ass_attachment.cpp
     src/ass_info_service.cpp
     src/ass_dialogue.cpp
@@ -542,7 +552,6 @@ add_executable(Aegisub WIN32
     src/ass_parser.cpp
     src/ass_style.cpp
     src/ass_style_storage.cpp
-    src/app_runtime.cpp
     src/async_video_provider.cpp
     src/async_video_provider_host.cpp
     ${AEGISUB_SHARED_EXE_ENTRY_SOURCES}
@@ -589,10 +598,9 @@ add_executable(Aegisub WIN32
     src/frame_main.cpp
     src/gl_text.cpp
     src/gl_wrap.cpp
-    src/gui_wx_runtime_host.cpp
+    ${AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES}
     src/grid_column.cpp
     ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES}
-    ${AEGISUB_SHARED_RUNTIME_LOCALE_SUPPORT_SOURCES}
     ${AEGISUB_SHARED_SELECTION_REQUEST_SOURCES}
     ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES}
     src/help_button.cpp

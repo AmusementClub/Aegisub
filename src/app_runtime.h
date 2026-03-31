@@ -1,6 +1,7 @@
 #pragma once
 
 #include "aegisublocale.h"
+#include "runtime_locale_host.h"
 
 #include <libaegisub/dispatch.h>
 
@@ -37,6 +38,7 @@ struct AppRuntimeInitOptions {
 	RuntimeShellMode shell_mode = RuntimeShellMode::Unknown;
 	RuntimeLocalePolicy locale_policy = RuntimeLocalePolicy::UseConfiguredOrEnglish;
 	AppRuntimeMainQueueHooks main_queue_hooks;
+	RuntimeLocaleHost locale_host;
 	bool load_global_scripts = false;
 	bool initialize_commands = true;
 	bool initialize_ui_locale = true;

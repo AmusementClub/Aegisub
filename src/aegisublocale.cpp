@@ -33,39 +33,20 @@
 ///
 
 #include "aegisublocale.h"
-#include "aegisublocale_compat.h"
 
-#include "compat.h"
 #include "locale_choice.h"
 #include "locale_pick.h"
-#include "options.h"
 #include "ui_services.h"
 
-#include <libaegisub/path.h>
-
-#include <algorithm>
 #include <clocale>
-#include <functional>
-#include <wx/intl.h>
 
-#ifndef AEGISUB_CATALOG
-#define AEGISUB_CATALOG "aegisub"
-#endif
-
-wxTranslations *AegisubLocale::GetTranslations() {
-	wxTranslations *translations = wxTranslations::Get();
-	if (!translations) {
-		wxTranslations::Set(translations = new wxTranslations);
-		wxFileTranslationsLoader::AddCatalogLookupPathPrefix(config::path->Decode("?data/locale/").wstring());
-	}
-	return translations;
+void AegisubLocale::SetHost(RuntimeLocaleHost host_hooks) {
+	host = std::move(host_hooks);
 }
 
 void AegisubLocale::Init(std::string const& language) {
-	wxTranslations *translations = GetTranslations();
-	translations->SetLanguage(to_wx(language));
-	translations->AddCatalog(wxString::FromUTF8(AEGISUB_CATALOG));
-	translations->AddStdCatalog();
+	if (host.initialize_language)
+		host.initialize_language(language);
 
 	setlocale(LC_NUMERIC, "C");
 	setlocale(LC_CTYPE, "C");
@@ -73,34 +54,26 @@ void AegisubLocale::Init(std::string const& language) {
 }
 
 bool AegisubLocale::HasLanguage(std::string const& language) {
-	auto langs = GetTranslations()->GetAvailableTranslations(wxString::FromUTF8(AEGISUB_CATALOG));
-	return std::find(langs.begin(), langs.end(), to_wx(language)) != langs.end();
+	if (language == "en_US")
+		return true;
+	return host.has_language ? host.has_language(language) : false;
 }
 
 std::string AegisubLocale::PickLanguage(std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
-	auto available = GetTranslations()->GetAvailableTranslations(wxString::FromUTF8(AEGISUB_CATALOG));
-	std::vector<std::string> available_languages;
-	available_languages.reserve(available.size());
-	for (auto const& language : available)
-		available_languages.push_back(from_wx(language));
-
 	auto immediate_language = aegisub::locale_pick::ResolveImmediateLanguage(
-		available_languages,
+		host.get_available_languages ? host.get_available_languages() : std::vector<std::string>(),
 		active_language,
-		from_wx(aegisub::locale::FindPreferredTranslation(available)));
+		host.find_preferred_language && host.get_available_languages
+			? host.find_preferred_language(host.get_available_languages())
+			: std::string());
 	if (immediate_language) {
 		return *immediate_language;
 	}
 
-	wxArrayString langs = available;
-	if (std::find(langs.begin(), langs.end(), wxS("en_US")) == langs.end())
-		langs.insert(langs.begin(), wxS("en_US"));
-
-	std::string preferred_language;
-	auto preferred = aegisub::locale::FindPreferredTranslation(langs);
-	if (!preferred.empty()) {
-		preferred_language = from_wx(preferred);
-	}
+	auto available_languages = host.get_available_languages ? host.get_available_languages() : std::vector<std::string>();
+	auto preferred_language = host.find_preferred_language
+		? host.find_preferred_language(aegisub::locale_pick::BuildSelectionLanguages(available_languages, {}))
+		: std::string();
 
 	auto language_codes = aegisub::locale_pick::BuildSelectionLanguages(available_languages, preferred_language);
 

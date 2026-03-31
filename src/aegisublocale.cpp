@@ -37,6 +37,7 @@
 
 #include "compat.h"
 #include "locale_choice.h"
+#include "locale_pick.h"
 #include "options.h"
 #include "ui_services.h"
 
@@ -78,32 +79,30 @@ bool AegisubLocale::HasLanguage(std::string const& language) {
 
 std::string AegisubLocale::PickLanguage(std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
 	auto available = GetTranslations()->GetAvailableTranslations(wxString::FromUTF8(AEGISUB_CATALOG));
+	std::vector<std::string> available_languages;
+	available_languages.reserve(available.size());
+	for (auto const& language : available)
+		available_languages.push_back(from_wx(language));
 
-	if (active_language.empty()) {
-		wxString os_ui_language = aegisub::locale::FindPreferredTranslation(available);
-		if (!os_ui_language.empty())
-			return from_wx(os_ui_language);
+	auto immediate_language = aegisub::locale_pick::ResolveImmediateLanguage(
+		available_languages,
+		active_language,
+		from_wx(aegisub::locale::FindPreferredTranslation(available)));
+	if (immediate_language) {
+		return *immediate_language;
 	}
 
 	wxArrayString langs = available;
+	if (std::find(langs.begin(), langs.end(), wxS("en_US")) == langs.end())
+		langs.insert(langs.begin(), wxS("en_US"));
 
-	// No translations available, so don't bother asking the user
-	if (langs.empty() && active_language.empty())
-		return "en_US";
-
-	langs.insert(langs.begin(), wxS("en_US"));
-
-	// Check if user local language is available, if so, make it first
-	if (auto preferred = aegisub::locale::FindPreferredTranslation(langs); !preferred.empty()) {
-		auto it = std::find(langs.begin(), langs.end(), preferred);
-		if (it != langs.end())
-			std::rotate(langs.begin(), it, it + 1);
+	std::string preferred_language;
+	auto preferred = aegisub::locale::FindPreferredTranslation(langs);
+	if (!preferred.empty()) {
+		preferred_language = from_wx(preferred);
 	}
 
-	std::vector<std::string> language_codes;
-	language_codes.reserve(langs.size());
-	for (auto const& lang : langs)
-		language_codes.push_back(from_wx(lang));
+	auto language_codes = aegisub::locale_pick::BuildSelectionLanguages(available_languages, preferred_language);
 
 	if (!choice_sink)
 		return "";

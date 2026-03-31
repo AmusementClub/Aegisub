@@ -373,6 +373,10 @@ set(AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES
     src/app_runtime.cpp
 )
 
+set(AEGISUB_SHARED_RUNTIME_LOCALE_SUPPORT_SOURCES
+    src/locale_pick.cpp
+)
+
 set(AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES
     ${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES}
     src/headless_process_entry.cpp
@@ -409,6 +413,19 @@ set(AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES
 
 set(AEGISUB_SHARED_PROVIDER_TRACK_SELECTION_SOURCES
     src/ffmpegsource_common.cpp
+)
+
+set(AEGISUB_SHARED_MKV_SUBTITLE_COMMON_SOURCES
+    src/mkv_wrap_common.cpp
+)
+
+set(AEGISUB_SHARED_MKV_SUBTITLE_LEGACY_BACKEND_SOURCES
+    src/MatroskaParser.c
+    src/mkv_wrap.cpp
+)
+
+set(AEGISUB_SHARED_MKV_SUBTITLE_LIBMATROSKA_BACKEND_SOURCES
+    src/mkv_wrap_libmatroska.cpp
 )
 
 set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES
@@ -575,6 +592,7 @@ add_executable(Aegisub WIN32
     src/gui_wx_runtime_host.cpp
     src/grid_column.cpp
     ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES}
+    ${AEGISUB_SHARED_RUNTIME_LOCALE_SUPPORT_SOURCES}
     ${AEGISUB_SHARED_SELECTION_REQUEST_SOURCES}
     ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES}
     src/help_button.cpp
@@ -643,16 +661,16 @@ target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} libaegisub luajit)
 target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
 target_compile_features(Aegisub PRIVATE cxx_std_20)
 option(AEGISUB_MATROSKA_PARSING "Enable MKV subtitle parsing via libebml/libmatroska" ON)
-target_sources(Aegisub PRIVATE src/mkv_wrap_common.cpp)
+target_sources(Aegisub PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_COMMON_SOURCES})
 if(AEGISUB_MATROSKA_PARSING)
     find_package(EBML REQUIRED CONFIG)
     find_package(Matroska REQUIRED CONFIG)
     target_link_libraries(Aegisub PRIVATE "EBML::ebml" "Matroska::matroska")
     target_compile_definitions(Aegisub PRIVATE AEGISUB_MATROSKA_PARSING=1)
-    target_sources(Aegisub PRIVATE src/mkv_wrap_libmatroska.cpp)
+    target_sources(Aegisub PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_LIBMATROSKA_BACKEND_SOURCES})
 else()
     target_compile_definitions(Aegisub PRIVATE AEGISUB_MATROSKA_PARSING=0)
-    target_sources(Aegisub PRIVATE src/MatroskaParser.c src/mkv_wrap.cpp)
+    target_sources(Aegisub PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_LEGACY_BACKEND_SOURCES})
 endif()
 option(AEGISUB_USE_STRINGZILLA "Use StringZilla in selected string-heavy code paths" ON)
 if(AEGISUB_USE_STRINGZILLA)

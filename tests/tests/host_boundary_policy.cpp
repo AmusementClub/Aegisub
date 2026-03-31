@@ -656,6 +656,21 @@ TEST(host_boundary_policy, shared_runtime_common_init_sources_live_in_named_cmak
 	EXPECT_FALSE(expansion_hits.empty());
 }
 
+TEST(host_boundary_policy, shared_runtime_locale_support_sources_live_in_named_cmake_pack) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+
+	std::set<std::string> const expected_sources = {
+		"src/locale_pick.cpp",
+	};
+
+	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_RUNTIME_LOCALE_SUPPORT_SOURCES");
+	auto expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_RUNTIME_LOCALE_SUPPORT_SOURCES}");
+
+	EXPECT_EQ(expected_sources, sources);
+	EXPECT_FALSE(expansion_hits.empty());
+}
+
 TEST(host_boundary_policy, shared_selection_request_sources_live_in_named_cmake_pack) {
 	auto const root = ProjectRoot();
 	auto const cmake_lists = root / "CMakeLists.txt";
@@ -856,9 +871,40 @@ TEST(host_boundary_policy, shared_provider_track_selection_sources_live_in_named
 	EXPECT_FALSE(expansion_hits.empty());
 }
 
+TEST(host_boundary_policy, shared_mkv_subtitle_conditional_backend_sources_live_in_named_cmake_packs) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+
+	std::set<std::string> const expected_common_sources = {
+		"src/mkv_wrap_common.cpp",
+	};
+	std::set<std::string> const expected_legacy_sources = {
+		"src/MatroskaParser.c",
+		"src/mkv_wrap.cpp",
+	};
+	std::set<std::string> const expected_libmatroska_sources = {
+		"src/mkv_wrap_libmatroska.cpp",
+	};
+
+	auto common_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_MKV_SUBTITLE_COMMON_SOURCES");
+	auto legacy_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_MKV_SUBTITLE_LEGACY_BACKEND_SOURCES");
+	auto libmatroska_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_MKV_SUBTITLE_LIBMATROSKA_BACKEND_SOURCES");
+	auto common_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_MKV_SUBTITLE_COMMON_SOURCES}");
+	auto legacy_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_MKV_SUBTITLE_LEGACY_BACKEND_SOURCES}");
+	auto libmatroska_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_MKV_SUBTITLE_LIBMATROSKA_BACKEND_SOURCES}");
+
+	EXPECT_EQ(expected_common_sources, common_sources);
+	EXPECT_EQ(expected_legacy_sources, legacy_sources);
+	EXPECT_EQ(expected_libmatroska_sources, libmatroska_sources);
+	EXPECT_FALSE(common_expansion_hits.empty());
+	EXPECT_FALSE(legacy_expansion_hits.empty());
+	EXPECT_FALSE(libmatroska_expansion_hits.empty());
+}
+
 TEST(host_boundary_policy, shared_inspect_open_query_services_and_provider_diagnostics_stay_wx_free) {
 	auto const root = ProjectRoot();
 	std::vector<std::filesystem::path> const expected_wx_free_paths = {
+		root / "src" / "locale_pick.cpp",
 		root / "src" / "media_inspect_service.cpp",
 		root / "src" / "playback_query_service.cpp",
 		root / "src" / "project_open_service.cpp",

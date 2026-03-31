@@ -84,47 +84,6 @@ enum {
 #define StartupLog(a) LOG_I("frame_main/init") << a
 #endif
 
-namespace {
-class FrameMainStatusSink final : public agi::StatusSink {
-	FrameMain *frame = nullptr;
-	agi::ui::WeakLifetime lifetime;
-
-public:
-	FrameMainStatusSink(FrameMain *frame, agi::ui::WeakLifetime lifetime)
-	: frame(frame)
-	, lifetime(std::move(lifetime))
-	{
-	}
-
-	void ShowStatus(std::string const& message, int timeout_ms) override {
-		agi::ui::MainAsyncIfAlive(lifetime, [frame = frame, message, timeout_ms] {
-			frame->StatusTimeout(to_wx(message), timeout_ms);
-		});
-	}
-};
-
-}
-
-/// Handle files drag and dropped onto Aegisub
-class AegisubFileDropTarget final : public wxFileDropTarget {
-	agi::Context *context;
-	agi::ui::WeakLifetime lifetime;
-public:
-	AegisubFileDropTarget(agi::Context *context, agi::ui::WeakLifetime lifetime)
-	: context(context)
-	, lifetime(std::move(lifetime)) {
-	}
-	bool OnDropFiles(wxCoord, wxCoord, wxArrayString const& filenames) override {
-		std::vector<agi::fs::path> files;
-		for (wxString const& fn : filenames)
-			files.push_back(from_wx(fn));
-		agi::ui::MainAsyncIfAlive(lifetime, [context = context, files = std::move(files)] {
-			context->GetCore().project->LoadList(files);
-		});
-		return true;
-	}
-};
-
 FrameMain::FrameMain()
 : wxFrame(nullptr, -1, wxEmptyString, wxDefaultPosition, wxSize(920,700), wxDEFAULT_FRAME_STYLE | wxCLIP_CHILDREN)
 , context(agi::make_unique<agi::Context>())
@@ -154,7 +113,11 @@ FrameMain::FrameMain()
 	StartupLog("Initializing context frames");
 	ui.parent = this;
 	ui.frame = this;
-	core.statusSink = std::make_shared<FrameMainStatusSink>(this, GetAsyncUiLifetime());
+	core.statusSink = agi::MakeFrameMainStatusSink(
+		[this](std::string const& message, int timeout_ms) {
+			StatusTimeout(to_wx(message), timeout_ms);
+		},
+		GetAsyncUiLifetime());
 	core.notificationSink = agi::MakeFrameMainNotificationSink(this, GetAsyncUiLifetime());
 	core.interactionSink = agi::MakeFrameMainInteractionSink(this, GetAsyncUiLifetime());
 	core.singleChoiceInteractionSink = agi::MakeFrameMainSingleChoiceInteractionSink(this, GetAsyncUiLifetime());
@@ -201,7 +164,11 @@ FrameMain::FrameMain()
 	OPT_SUB("Video/Detached/Enabled", &FrameMain::OnVideoDetach, this);
 
 	StartupLog("Set up drag/drop target");
-	SetDropTarget(new AegisubFileDropTarget(context.get(), GetAsyncUiLifetime()));
+	SetDropTarget(agi::MakeFrameMainFileDropTarget(
+		[context = context.get()](std::vector<agi::fs::path> const& files) {
+			context->GetCore().project->LoadList(files);
+		},
+		GetAsyncUiLifetime()));
 
 	StartupLog("Load default file");
 	core.project->CloseSubtitles();

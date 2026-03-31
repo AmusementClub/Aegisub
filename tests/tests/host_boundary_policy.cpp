@@ -482,31 +482,41 @@ TEST(host_boundary_policy, frame_main_request_selection_fallback_lives_in_explic
 
 	auto file_dialog_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainFileDialogService");
 	auto video_source_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainVideoSourceRequestService");
+	auto file_drop_target_class_hits = FindLiteralHits(frame_main_cpp, "class AegisubFileDropTarget");
 	auto open_file_hits = FindLiteralHits(frame_main_cpp, "OpenFileSelector(");
 	auto open_files_hits = FindLiteralHits(frame_main_cpp, "OpenFilesSelector(");
 	auto save_file_hits = FindLiteralHits(frame_main_cpp, "SaveFileSelector(");
 	auto select_directory_hits = FindLiteralHits(frame_main_cpp, "SelectDirectorySelector(");
 	auto dummy_video_hits = FindLiteralHits(frame_main_cpp, "CreateDummyVideo(");
+	auto set_drop_target_inline_hits = FindLiteralHits(frame_main_cpp, "SetDropTarget(new AegisubFileDropTarget");
 	auto seam_file_dialog_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainFileDialogService(");
 	auto seam_video_source_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainVideoSourceRequestService(");
+	auto seam_drop_target_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainFileDropTarget(");
 
 	auto seam_wx_file_dialog_include_hits = FindLiteralHits(wx_frame_main_request_host_h, "wx_file_dialog_services.h");
 	auto seam_make_window_file_dialog_hits = FindLiteralHits(wx_frame_main_request_host_h, "MakeWindowFileDialogService(");
 	auto seam_dummy_video_hits = FindLiteralHits(wx_frame_main_request_host_h, "CreateDummyVideo(");
+	auto seam_drop_target_class_hits = FindLiteralHits(wx_frame_main_request_host_h, "class WxFrameMainFileDropTarget");
+	auto seam_drop_target_wx_hits = FindLiteralHits(wx_frame_main_request_host_h, "wxFileDropTarget");
 
 	EXPECT_TRUE(file_dialog_class_hits.empty()) << JoinLines(file_dialog_class_hits);
 	EXPECT_TRUE(video_source_class_hits.empty()) << JoinLines(video_source_class_hits);
+	EXPECT_TRUE(file_drop_target_class_hits.empty()) << JoinLines(file_drop_target_class_hits);
 	EXPECT_TRUE(open_file_hits.empty()) << JoinLines(open_file_hits);
 	EXPECT_TRUE(open_files_hits.empty()) << JoinLines(open_files_hits);
 	EXPECT_TRUE(save_file_hits.empty()) << JoinLines(save_file_hits);
 	EXPECT_TRUE(select_directory_hits.empty()) << JoinLines(select_directory_hits);
 	EXPECT_TRUE(dummy_video_hits.empty()) << JoinLines(dummy_video_hits);
+	EXPECT_TRUE(set_drop_target_inline_hits.empty()) << JoinLines(set_drop_target_inline_hits);
 	EXPECT_FALSE(seam_file_dialog_hits.empty());
 	EXPECT_FALSE(seam_video_source_hits.empty());
+	EXPECT_FALSE(seam_drop_target_hits.empty());
 
 	EXPECT_FALSE(seam_wx_file_dialog_include_hits.empty());
 	EXPECT_FALSE(seam_make_window_file_dialog_hits.empty());
 	EXPECT_FALSE(seam_dummy_video_hits.empty());
+	EXPECT_FALSE(seam_drop_target_class_hits.empty());
+	EXPECT_FALSE(seam_drop_target_wx_hits.empty());
 }
 
 TEST(host_boundary_policy, frame_main_runtime_capabilities_live_in_explicit_wx_host_seam) {
@@ -517,16 +527,20 @@ TEST(host_boundary_policy, frame_main_runtime_capabilities_live_in_explicit_wx_h
 	auto background_runner_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainBackgroundRunner");
 	auto background_runner_factory_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainBackgroundRunnerFactory");
 	auto project_ui_state_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainProjectUiStateSink");
+	auto status_sink_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainStatusSink");
 	auto audio_player_factory_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainAudioPlayerFactoryService");
 	auto automation_runner_factory_class_hits = FindLiteralHits(frame_main_cpp, "class FrameMainAutomationBackgroundScriptRunnerFactory");
 	auto dialog_progress_hits = FindLiteralHits(frame_main_cpp, "DialogProgress");
 	auto audio_player_factory_hits = FindLiteralHits(frame_main_cpp, "AudioPlayerFactory::GetAudioPlayer(");
 	auto automation_runner_hits = FindLiteralHits(frame_main_cpp, "Automation4::BackgroundScriptRunner");
 	auto seam_background_runner_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainBackgroundRunnerFactory(");
+	auto seam_status_sink_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainStatusSink(");
 	auto seam_project_ui_state_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainProjectUiStateSink(");
 	auto seam_audio_player_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainAudioPlayerFactoryService(");
 	auto seam_automation_runner_factory_hits = FindLiteralHits(frame_main_cpp, "MakeFrameMainAutomationBackgroundScriptRunnerFactory(");
 
+	auto seam_status_sink_class_hits = FindLiteralHits(wx_frame_main_runtime_host_h, "class WxFrameMainStatusSink");
+	auto seam_status_sink_header_hits = FindLiteralHits(wx_frame_main_runtime_host_h, "status_sink.h");
 	auto seam_dialog_progress_hits = FindLiteralHits(wx_frame_main_runtime_host_h, "DialogProgress");
 	auto seam_audio_player_factory_hits = FindLiteralHits(wx_frame_main_runtime_host_h, "AudioPlayerFactory::GetAudioPlayer(");
 	auto seam_automation_runner_hits = FindLiteralHits(wx_frame_main_runtime_host_h, "Automation4::BackgroundScriptRunner");
@@ -535,16 +549,20 @@ TEST(host_boundary_policy, frame_main_runtime_capabilities_live_in_explicit_wx_h
 	EXPECT_TRUE(background_runner_class_hits.empty()) << JoinLines(background_runner_class_hits);
 	EXPECT_TRUE(background_runner_factory_class_hits.empty()) << JoinLines(background_runner_factory_class_hits);
 	EXPECT_TRUE(project_ui_state_class_hits.empty()) << JoinLines(project_ui_state_class_hits);
+	EXPECT_TRUE(status_sink_class_hits.empty()) << JoinLines(status_sink_class_hits);
 	EXPECT_TRUE(audio_player_factory_class_hits.empty()) << JoinLines(audio_player_factory_class_hits);
 	EXPECT_TRUE(automation_runner_factory_class_hits.empty()) << JoinLines(automation_runner_factory_class_hits);
 	EXPECT_TRUE(dialog_progress_hits.empty()) << JoinLines(dialog_progress_hits);
 	EXPECT_TRUE(audio_player_factory_hits.empty()) << JoinLines(audio_player_factory_hits);
 	EXPECT_TRUE(automation_runner_hits.empty()) << JoinLines(automation_runner_hits);
 	EXPECT_FALSE(seam_background_runner_hits.empty());
+	EXPECT_FALSE(seam_status_sink_hits.empty());
 	EXPECT_FALSE(seam_project_ui_state_hits.empty());
 	EXPECT_FALSE(seam_audio_player_hits.empty());
 	EXPECT_FALSE(seam_automation_runner_factory_hits.empty());
 
+	EXPECT_FALSE(seam_status_sink_class_hits.empty());
+	EXPECT_FALSE(seam_status_sink_header_hits.empty());
 	EXPECT_FALSE(seam_dialog_progress_hits.empty());
 	EXPECT_FALSE(seam_audio_player_factory_hits.empty());
 	EXPECT_FALSE(seam_automation_runner_hits.empty());

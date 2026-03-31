@@ -3,6 +3,7 @@
 #include "auto4_base.h"
 #include "dialog_progress.h"
 #include "include/aegisub/audio_player.h"
+#include "status_sink.h"
 #include "ui_dispatch.h"
 #include "ui_services.h"
 #include "wx_frame_main_request_host.h"
@@ -55,6 +56,23 @@ public:
 
 	std::unique_ptr<BackgroundRunner> Create(std::string const& title, std::string const& message) override {
 		return std::make_unique<WxFrameMainBackgroundRunner>(parent, lifetime, title, message);
+	}
+};
+
+class WxFrameMainStatusSink final : public StatusSink {
+	std::function<void(std::string const&, int)> show_status;
+	ui::WeakLifetime lifetime;
+
+public:
+	WxFrameMainStatusSink(std::function<void(std::string const&, int)> show_status, ui::WeakLifetime lifetime)
+	: show_status(std::move(show_status))
+	, lifetime(std::move(lifetime)) {
+	}
+
+	void ShowStatus(std::string const& message, int timeout_ms) override {
+		ui::MainAsyncIfAlive(lifetime, [show_status = show_status, message, timeout_ms] {
+			show_status(message, timeout_ms);
+		});
 	}
 };
 
@@ -118,6 +136,12 @@ public:
 
 inline std::shared_ptr<BackgroundRunnerFactory> MakeFrameMainBackgroundRunnerFactory(wxWindow *parent, ui::WeakLifetime lifetime) {
 	return std::make_shared<WxFrameMainBackgroundRunnerFactory>(parent, std::move(lifetime));
+}
+
+inline std::shared_ptr<StatusSink> MakeFrameMainStatusSink(
+	std::function<void(std::string const&, int)> show_status,
+	ui::WeakLifetime lifetime) {
+	return std::make_shared<WxFrameMainStatusSink>(std::move(show_status), std::move(lifetime));
 }
 
 inline std::shared_ptr<ProjectUiStateSink> MakeFrameMainProjectUiStateSink(

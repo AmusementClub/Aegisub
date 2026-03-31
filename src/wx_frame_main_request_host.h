@@ -5,6 +5,8 @@
 #include "ui_services.h"
 #include "wx_file_dialog_services.h"
 
+#include <wx/dnd.h>
+
 namespace agi {
 
 // This header is the explicit wx host seam for frame_main request/selection
@@ -72,12 +74,40 @@ public:
 	}
 };
 
+class WxFrameMainFileDropTarget final : public wxFileDropTarget {
+	std::function<void(std::vector<agi::fs::path> const&)> open_files;
+	ui::WeakLifetime lifetime;
+
+public:
+	WxFrameMainFileDropTarget(std::function<void(std::vector<agi::fs::path> const&)> open_files, ui::WeakLifetime lifetime)
+	: open_files(std::move(open_files))
+	, lifetime(std::move(lifetime)) {
+	}
+
+	bool OnDropFiles(wxCoord, wxCoord, wxArrayString const& filenames) override {
+		std::vector<agi::fs::path> files;
+		files.reserve(filenames.size());
+		for (wxString const& filename : filenames)
+			files.push_back(from_wx(filename));
+		ui::MainAsyncIfAlive(lifetime, [open_files = open_files, files = std::move(files)] {
+			open_files(files);
+		});
+		return true;
+	}
+};
+
 inline std::shared_ptr<FileDialogService> MakeFrameMainFileDialogService(wxWindow *parent, ui::WeakLifetime lifetime) {
 	return std::make_shared<WxFrameMainFileDialogService>(parent, std::move(lifetime));
 }
 
 inline std::shared_ptr<VideoSourceRequestService> MakeFrameMainVideoSourceRequestService(wxWindow *parent, ui::WeakLifetime lifetime) {
 	return std::make_shared<WxFrameMainVideoSourceRequestService>(parent, std::move(lifetime));
+}
+
+inline wxFileDropTarget *MakeFrameMainFileDropTarget(
+	std::function<void(std::vector<agi::fs::path> const&)> open_files,
+	ui::WeakLifetime lifetime) {
+	return new WxFrameMainFileDropTarget(std::move(open_files), std::move(lifetime));
 }
 
 }

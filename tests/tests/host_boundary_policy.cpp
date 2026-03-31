@@ -316,11 +316,14 @@ TEST(host_boundary_policy, app_bootstrap_ui_fallback_lives_in_explicit_wx_servic
 	auto main_runtime_entry_host_include_hits = FindLiteralHits(main_cpp, "gui_wx_runtime_entry_host.h");
 	auto main_gui_bootstrap_ui_host_include_hits = FindLiteralHits(main_cpp, "gui_wx_bootstrap_ui_host.h");
 	auto main_build_runtime_entry_host_pack_hits = FindLiteralHits(main_cpp, "BuildGuiWxRuntimeEntryHostPack()");
+	auto main_build_runtime_init_options_hits = FindLiteralHits(main_cpp, "BuildGuiWxAppRuntimeInitOptions()");
 	auto main_build_bootstrap_ui_host_hits = FindLiteralHits(main_cpp, "BuildGuiWxRuntimeBootstrapUiHost()");
 	auto main_direct_notification_field_hits = FindLiteralHits(main_cpp, ".notification_sink");
 	auto main_direct_interaction_field_hits = FindLiteralHits(main_cpp, ".interaction_sink");
 	auto main_bootstrap_error_helper_hits = FindLiteralHits(main_cpp, "ShowBootstrapUiError(");
 	auto main_bootstrap_interaction_helper_hits = FindLiteralHits(main_cpp, "RequestBootstrapUiInteraction(");
+	auto main_gui_bootstrap_error_helper_hits = FindLiteralHits(main_cpp, "ShowGuiWxBootstrapUiError(");
+	auto main_gui_bootstrap_interaction_helper_hits = FindLiteralHits(main_cpp, "RequestGuiWxBootstrapUiInteraction(");
 	auto host_runtime_bootstrap_host_include_hits = FindLiteralHits(gui_wx_bootstrap_ui_host_h, "runtime_bootstrap_ui_host.h");
 	auto host_bootstrap_ui_include_hits = FindLiteralHits(gui_wx_bootstrap_ui_host_cpp, "wx_app_bootstrap_ui_services.h");
 	auto host_bootstrap_notification_hits = FindLiteralHits(gui_wx_bootstrap_ui_host_cpp, "AppBootstrapNotificationSink()");
@@ -339,12 +342,15 @@ TEST(host_boundary_policy, app_bootstrap_ui_fallback_lives_in_explicit_wx_servic
 	EXPECT_TRUE(main_bootstrap_ui_include_hits.empty()) << JoinLines(main_bootstrap_ui_include_hits);
 	EXPECT_FALSE(main_runtime_entry_host_include_hits.empty());
 	EXPECT_TRUE(main_gui_bootstrap_ui_host_include_hits.empty()) << JoinLines(main_gui_bootstrap_ui_host_include_hits);
-	EXPECT_FALSE(main_build_runtime_entry_host_pack_hits.empty());
+	EXPECT_TRUE(main_build_runtime_entry_host_pack_hits.empty()) << JoinLines(main_build_runtime_entry_host_pack_hits);
+	EXPECT_FALSE(main_build_runtime_init_options_hits.empty());
 	EXPECT_TRUE(main_build_bootstrap_ui_host_hits.empty()) << JoinLines(main_build_bootstrap_ui_host_hits);
 	EXPECT_TRUE(main_direct_notification_field_hits.empty()) << JoinLines(main_direct_notification_field_hits);
 	EXPECT_TRUE(main_direct_interaction_field_hits.empty()) << JoinLines(main_direct_interaction_field_hits);
-	EXPECT_FALSE(main_bootstrap_error_helper_hits.empty());
-	EXPECT_FALSE(main_bootstrap_interaction_helper_hits.empty());
+	EXPECT_TRUE(main_bootstrap_error_helper_hits.empty()) << JoinLines(main_bootstrap_error_helper_hits);
+	EXPECT_TRUE(main_bootstrap_interaction_helper_hits.empty()) << JoinLines(main_bootstrap_interaction_helper_hits);
+	EXPECT_FALSE(main_gui_bootstrap_error_helper_hits.empty());
+	EXPECT_FALSE(main_gui_bootstrap_interaction_helper_hits.empty());
 
 	EXPECT_FALSE(host_runtime_bootstrap_host_include_hits.empty());
 	EXPECT_FALSE(host_bootstrap_ui_include_hits.empty());
@@ -1140,6 +1146,9 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	auto main_gui_bootstrap_ui_host_hits = FindLiteralHits(main_cpp, "gui_wx_bootstrap_ui_host.h");
 	auto main_queue_event_hits = FindLiteralHits(main_cpp, "QueueEvent(");
 	auto main_is_main_thread_hits = FindLiteralHits(main_cpp, "wxIsMainThread()");
+	auto main_runtime_options_local_hits = FindLiteralHits(main_cpp, "AppRuntimeInitOptions runtime_options");
+	auto main_initialize_commands_hits = FindLiteralHits(main_cpp, "initialize_commands = true");
+	auto main_install_png_handler_hits = FindLiteralHits(main_cpp, "install_png_handler = true");
 
 	auto app_runtime_header_wx_hits = FindWxMarkers(app_runtime_h);
 	auto gui_runtime_entry_host_h_wx_hits = FindWxMarkers(gui_wx_runtime_entry_host_h);
@@ -1170,6 +1179,9 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	auto gui_runtime_entry_dispatch_event_hits = FindLiteralHits(gui_wx_runtime_entry_host_cpp, "gui_wx_dispatch_event.h");
 	auto gui_runtime_entry_queue_event_hits = FindLiteralHits(gui_wx_runtime_entry_host_cpp, "QueueEvent(");
 	auto gui_runtime_entry_is_main_thread_hits = FindLiteralHits(gui_wx_runtime_entry_host_cpp, "wxIsMainThread()");
+	auto gui_runtime_entry_init_options_hits = FindLiteralHits(gui_wx_runtime_entry_host_cpp, "AppRuntimeInitOptions options");
+	auto gui_runtime_entry_initialize_commands_hits = FindLiteralHits(gui_wx_runtime_entry_host_cpp, "initialize_commands = true");
+	auto gui_runtime_entry_install_png_handler_hits = FindLiteralHits(gui_wx_runtime_entry_host_cpp, "install_png_handler = true");
 
 	auto process_entry_wx_hits = FindWxMarkers(headless_process_entry_cpp);
 	auto process_entry_main_header_hits = FindLiteralHits(headless_process_entry_cpp, "main.h");
@@ -1188,6 +1200,9 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	EXPECT_TRUE(main_gui_bootstrap_ui_host_hits.empty()) << JoinLines(main_gui_bootstrap_ui_host_hits);
 	EXPECT_TRUE(main_queue_event_hits.empty()) << JoinLines(main_queue_event_hits);
 	EXPECT_TRUE(main_is_main_thread_hits.empty()) << JoinLines(main_is_main_thread_hits);
+	EXPECT_TRUE(main_runtime_options_local_hits.empty()) << JoinLines(main_runtime_options_local_hits);
+	EXPECT_TRUE(main_initialize_commands_hits.empty()) << JoinLines(main_initialize_commands_hits);
+	EXPECT_TRUE(main_install_png_handler_hits.empty()) << JoinLines(main_install_png_handler_hits);
 
 	EXPECT_TRUE(app_runtime_header_wx_hits.empty()) << JoinLines(app_runtime_header_wx_hits);
 	EXPECT_TRUE(gui_runtime_entry_host_h_wx_hits.empty()) << JoinLines(gui_runtime_entry_host_h_wx_hits);
@@ -1218,6 +1233,9 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	EXPECT_FALSE(gui_runtime_entry_dispatch_event_hits.empty());
 	EXPECT_FALSE(gui_runtime_entry_queue_event_hits.empty());
 	EXPECT_FALSE(gui_runtime_entry_is_main_thread_hits.empty());
+	EXPECT_FALSE(gui_runtime_entry_init_options_hits.empty());
+	EXPECT_FALSE(gui_runtime_entry_initialize_commands_hits.empty());
+	EXPECT_FALSE(gui_runtime_entry_install_png_handler_hits.empty());
 
 	EXPECT_TRUE(process_entry_wx_hits.empty()) << JoinLines(process_entry_wx_hits);
 	EXPECT_TRUE(process_entry_main_header_hits.empty()) << JoinLines(process_entry_main_header_hits);

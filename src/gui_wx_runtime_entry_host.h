@@ -13,3 +13,12 @@ struct GuiWxRuntimeEntryHostPack {
 // Replace this pack provider when a non-wx GUI shell needs to supply the full
 // runtime bring-up host bundle consumed by the GUI entry point.
 GuiWxRuntimeEntryHostPack BuildGuiWxRuntimeEntryHostPack();
+
+// Replace this helper when a non-wx GUI shell needs to define the runtime
+// initialization policy consumed by the GUI entry point.
+AppRuntimeInitOptions BuildGuiWxAppRuntimeInitOptions();
+
+// Replace these helpers when a non-wx GUI shell needs bootstrap UI access
+// before a project context exists.
+agi::InteractionResult RequestGuiWxBootstrapUiInteraction(agi::InteractionRequest const& request);
+void ShowGuiWxBootstrapUiError(std::string const& title, std::string const& message);

@@ -16,6 +16,7 @@
 #include "headless_cli_execute.h"
 #include "headless_cli_internal.h"
 
+#include <libaegisub/dispatch.h>
 #include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
 
@@ -105,6 +106,14 @@ class BatchPlaybackProbeRunner final : public std::enable_shared_from_this<Batch
 	size_t next_index = 0;
 	bool finished = false;
 
+	void ScheduleRunNext() {
+		auto self = shared_from_this();
+		agi::dispatch::Main().Async([self] {
+			if (!self->finished)
+				self->RunNext();
+		});
+	}
+
 	void RecordCaseFailure(size_t index, detail::BatchCaseSpec spec, agi::fs::path trace_dir, std::string message) {
 		headless_playback_probe::PlaybackProbeResult probe_result;
 		probe_result.exit_code = 70;
@@ -115,7 +124,7 @@ class BatchPlaybackProbeRunner final : public std::enable_shared_from_this<Batch
 			std::move(spec),
 			std::move(probe_result),
 		});
-		RunNext();
+		ScheduleRunNext();
 	}
 
 	void Finish(BatchPlaybackProbeResult result) {
@@ -173,13 +182,17 @@ class BatchPlaybackProbeRunner final : public std::enable_shared_from_this<Batch
 
 			auto self = shared_from_this();
 			aegisub::playback_probe_service::RunAsync(std::move(probe_request), [self, index, spec](headless_playback_probe::PlaybackProbeResult probe_result) mutable {
-				auto& runner = *self;
-				runner.results.push_back(detail::BatchCaseResult{
-					index,
-					std::move(spec),
-					std::move(probe_result),
+				// Let the previous probe fully unwind and destroy its runtime/session
+				// before the batch runner starts constructing the next case.
+				agi::dispatch::Main().Async([self, index, spec = std::move(spec), probe_result = std::move(probe_result)]() mutable {
+					self->results.push_back(detail::BatchCaseResult{
+						index,
+						std::move(spec),
+						std::move(probe_result),
+					});
+					if (!self->finished)
+						self->RunNext();
 				});
-				runner.RunNext();
 			});
 		}
 		catch (std::exception const& error) {
@@ -219,7 +232,7 @@ public:
 				Finish(std::move(result));
 				return;
 			}
-			RunNext();
+			ScheduleRunNext();
 		}
 		catch (std::exception const& error) {
 			BatchPlaybackProbeResult result;

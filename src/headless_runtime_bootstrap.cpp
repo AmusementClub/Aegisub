@@ -19,6 +19,7 @@
 #include "headless_cli_execute.h"
 #include "headless_cli_parse.h"
 #include "headless_playback_probe.h"
+#include "options.h"
 #include "ui_services.h"
 
 #include <libaegisub/dispatch.h>
@@ -141,7 +142,14 @@ public:
 			options.register_export_filters = false;
 			options.install_png_handler = false;
 			options.bootstrap_ui_host.notification_sink = &notification_sink;
-			return runtime.Initialize(std::move(options), error);
+			if (!runtime.Initialize(std::move(options), error))
+				return false;
+
+			// Headless contexts do not need wx autosave timers. Disabling them
+			// avoids constructing timer owners on CLI-only runs.
+			OPT_SET("App/Auto/Save")->SetBool(false);
+			OPT_SET("App/Auto/Save Every Seconds")->SetInt(0);
+			return true;
 		}
 		catch (...) {
 			error = "Unhandled exception during headless runtime initialization";

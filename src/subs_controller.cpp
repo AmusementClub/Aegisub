@@ -21,6 +21,7 @@
 #include "ass_file.h"
 #include "ass_info.h"
 #include "ass_style.h"
+#include "app_runtime.h"
 #include "compat.h"
 #include "command/command.h"
 #include "format.h"
@@ -45,6 +46,8 @@
 
 namespace {
 	void autosave_timer_changed(wxTimer *timer) {
+		if (!timer)
+			return;
 		int freq = OPT_GET("App/Auto/Save Every Seconds")->GetInt();
 		if (freq > 0 && OPT_GET("App/Auto/Save")->GetBool())
 			timer->Start(freq * 1000);
@@ -171,10 +174,14 @@ SubsController::SubsController(agi::Context *context)
 , text_selection_connection(context->GetCore().textSelectionController->AddSelectionListener(&SubsController::OnTextSelectionChanged, this))
 , autosave_queue(agi::dispatch::Create())
 {
-	autosave_timer_changed(&autosave_timer);
-	OPT_SUB("App/Auto/Save", [=] { autosave_timer_changed(&autosave_timer); });
-	OPT_SUB("App/Auto/Save Every Seconds", [=] { autosave_timer_changed(&autosave_timer); });
-	autosave_timer.Bind(wxEVT_TIMER, [=](wxTimerEvent&) { AutoSave(); });
+	if (!IsGuiRuntimeShell())
+		return;
+
+	autosave_timer = std::make_unique<wxTimer>();
+	autosave_timer_changed(autosave_timer.get());
+	OPT_SUB("App/Auto/Save", [=] { autosave_timer_changed(autosave_timer.get()); });
+	OPT_SUB("App/Auto/Save Every Seconds", [=] { autosave_timer_changed(autosave_timer.get()); });
+	autosave_timer->Bind(wxEVT_TIMER, [=](wxTimerEvent&) { AutoSave(); });
 }
 
 SubsController::~SubsController() {

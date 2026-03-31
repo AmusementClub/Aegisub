@@ -79,6 +79,25 @@ std::vector<std::string> FindLiteralHits(std::filesystem::path const& path, std:
 	return hits;
 }
 
+std::set<std::string> FindFilesContainingLiteralInTree(
+	std::filesystem::path const& project_root,
+	std::filesystem::path const& search_root,
+	std::string_view needle) {
+	std::set<std::string> files;
+	for (auto const& entry : std::filesystem::directory_iterator(search_root)) {
+		if (!entry.is_regular_file())
+			continue;
+
+		auto const extension = entry.path().extension().string();
+		if (extension != ".cpp" && extension != ".h")
+			continue;
+
+		if (!FindLiteralHits(entry.path(), needle).empty())
+			files.insert(std::filesystem::relative(entry.path(), project_root).generic_string());
+	}
+	return files;
+}
+
 std::string JoinLines(std::vector<std::string> const& lines) {
 	std::ostringstream out;
 	for (size_t i = 0; i < lines.size(); ++i) {
@@ -659,12 +678,30 @@ TEST(host_boundary_policy, shared_runtime_common_init_sources_live_in_named_cmak
 	auto const cmake_lists = root / "CMakeLists.txt";
 
 	std::set<std::string> const expected_sources = {
+		"${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SUPPORT_SOURCES}",
 		"src/app_process_config.cpp",
 		"src/app_runtime.cpp",
 	};
 
 	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES");
+	auto support_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SUPPORT_SOURCES}");
 	auto expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES}");
+
+	EXPECT_EQ(expected_sources, sources);
+	EXPECT_FALSE(support_expansion_hits.empty());
+	EXPECT_FALSE(expansion_hits.empty());
+}
+
+TEST(host_boundary_policy, shared_runtime_common_init_support_sources_live_in_named_cmake_pack) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+
+	std::set<std::string> const expected_sources = {
+		"src/app_runtime_init.cpp",
+	};
+
+	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_RUNTIME_COMMON_INIT_SUPPORT_SOURCES");
+	auto expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SUPPORT_SOURCES}");
 
 	EXPECT_EQ(expected_sources, sources);
 	EXPECT_FALSE(expansion_hits.empty());
@@ -952,6 +989,7 @@ TEST(host_boundary_policy, shared_mkv_subtitle_conditional_backend_sources_live_
 TEST(host_boundary_policy, shared_inspect_open_query_services_and_provider_diagnostics_stay_wx_free) {
 	auto const root = ProjectRoot();
 	std::vector<std::filesystem::path> const expected_wx_free_paths = {
+		root / "src" / "app_runtime_init.cpp",
 		root / "src" / "locale_pick.cpp",
 		root / "src" / "media_inspect_service.cpp",
 		root / "src" / "playback_query_service.cpp",
@@ -974,6 +1012,7 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	auto const main_cpp = root / "src" / "main.cpp";
 	auto const app_runtime_h = root / "src" / "app_runtime.h";
 	auto const app_runtime_cpp = root / "src" / "app_runtime.cpp";
+	auto const app_runtime_init_cpp = root / "src" / "app_runtime_init.cpp";
 	auto const aegisublocale_cpp = root / "src" / "aegisublocale.cpp";
 	auto const headless_process_entry_cpp = root / "src" / "headless_process_entry.cpp";
 	auto const headless_runtime_bootstrap_cpp = root / "src" / "headless_runtime_bootstrap.cpp";
@@ -987,6 +1026,11 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	auto app_runtime_gui_locale_host_hits = FindLiteralHits(app_runtime_cpp, "gui_wx_locale_host.h");
 	auto app_runtime_bootstrap_ui_hits = FindLiteralHits(app_runtime_cpp, "wx_app_bootstrap_ui_services.h");
 	auto app_runtime_main_header_hits = FindLiteralHits(app_runtime_cpp, "main.h");
+	auto app_runtime_init_wx_hits = FindWxMarkers(app_runtime_init_cpp);
+	auto app_runtime_init_gui_runtime_host_hits = FindLiteralHits(app_runtime_init_cpp, "gui_wx_runtime_host.h");
+	auto app_runtime_init_gui_locale_host_hits = FindLiteralHits(app_runtime_init_cpp, "gui_wx_locale_host.h");
+	auto app_runtime_init_bootstrap_ui_hits = FindLiteralHits(app_runtime_init_cpp, "wx_app_bootstrap_ui_services.h");
+	auto app_runtime_init_main_header_hits = FindLiteralHits(app_runtime_init_cpp, "main.h");
 	auto app_runtime_locale_wx_hits = FindWxMarkers(aegisublocale_cpp);
 
 	auto process_entry_wx_hits = FindWxMarkers(headless_process_entry_cpp);
@@ -1007,6 +1051,11 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	EXPECT_TRUE(app_runtime_gui_locale_host_hits.empty()) << JoinLines(app_runtime_gui_locale_host_hits);
 	EXPECT_TRUE(app_runtime_bootstrap_ui_hits.empty()) << JoinLines(app_runtime_bootstrap_ui_hits);
 	EXPECT_TRUE(app_runtime_main_header_hits.empty()) << JoinLines(app_runtime_main_header_hits);
+	EXPECT_TRUE(app_runtime_init_wx_hits.empty()) << JoinLines(app_runtime_init_wx_hits);
+	EXPECT_TRUE(app_runtime_init_gui_runtime_host_hits.empty()) << JoinLines(app_runtime_init_gui_runtime_host_hits);
+	EXPECT_TRUE(app_runtime_init_gui_locale_host_hits.empty()) << JoinLines(app_runtime_init_gui_locale_host_hits);
+	EXPECT_TRUE(app_runtime_init_bootstrap_ui_hits.empty()) << JoinLines(app_runtime_init_bootstrap_ui_hits);
+	EXPECT_TRUE(app_runtime_init_main_header_hits.empty()) << JoinLines(app_runtime_init_main_header_hits);
 	EXPECT_TRUE(app_runtime_locale_wx_hits.empty()) << JoinLines(app_runtime_locale_wx_hits);
 
 	EXPECT_TRUE(process_entry_wx_hits.empty()) << JoinLines(process_entry_wx_hits);
@@ -1017,6 +1066,31 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	EXPECT_TRUE(bootstrap_main_header_hits.empty()) << JoinLines(bootstrap_main_header_hits);
 	EXPECT_TRUE(bootstrap_gui_runtime_host_hits.empty()) << JoinLines(bootstrap_gui_runtime_host_hits);
 	EXPECT_TRUE(bootstrap_bootstrap_ui_hits.empty()) << JoinLines(bootstrap_bootstrap_ui_hits);
+}
+
+TEST(host_boundary_policy, gui_runtime_and_bootstrap_host_headers_stay_localized_to_gui_entry) {
+	auto const root = ProjectRoot();
+	auto const src_root = root / "src";
+
+	std::set<std::string> const expected_runtime_host_includers = {
+		"src/gui_wx_runtime_host.cpp",
+		"src/main.cpp",
+	};
+	std::set<std::string> const expected_locale_host_includers = {
+		"src/gui_wx_locale_host.cpp",
+		"src/main.cpp",
+	};
+	std::set<std::string> const expected_bootstrap_ui_includers = {
+		"src/main.cpp",
+	};
+
+	auto runtime_host_includers = FindFilesContainingLiteralInTree(root, src_root, "gui_wx_runtime_host.h");
+	auto locale_host_includers = FindFilesContainingLiteralInTree(root, src_root, "gui_wx_locale_host.h");
+	auto bootstrap_ui_includers = FindFilesContainingLiteralInTree(root, src_root, "wx_app_bootstrap_ui_services.h");
+
+	EXPECT_EQ(expected_runtime_host_includers, runtime_host_includers);
+	EXPECT_EQ(expected_locale_host_includers, locale_host_includers);
+	EXPECT_EQ(expected_bootstrap_ui_includers, bootstrap_ui_includers);
 }
 
 TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {

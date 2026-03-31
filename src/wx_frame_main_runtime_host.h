@@ -107,7 +107,9 @@ public:
 		return ui::MainInvoke([parent = parent, lifetime = lifetime, provider] {
 			if (!lifetime.lock())
 				return std::unique_ptr<AudioPlayer>();
-			return AudioPlayerFactory::GetAudioPlayer(provider, parent);
+			AudioPlayerHost host;
+			host.native_parent_handle = parent ? reinterpret_cast<void *>(parent->GetHandle()) : nullptr;
+			return AudioPlayerFactory::GetAudioPlayer(provider, host);
 		});
 	}
 };

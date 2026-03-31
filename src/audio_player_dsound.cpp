@@ -36,7 +36,6 @@
 #include "include/aegisub/audio_player.h"
 
 #include "audio_controller.h"
-#include "frame_main.h"
 #include "utils.h"
 
 #include <libaegisub/audio/provider.h>
@@ -46,9 +45,17 @@
 #include <mmsystem.h>
 #include <dsound.h>
 #include <cguid.h>
+#include <wx/thread.h>
 
 namespace {
 class DirectSoundPlayer;
+
+HWND RequireNativeParentHandle(AudioPlayerHost const& host) {
+	auto const parent = static_cast<HWND>(host.native_parent_handle);
+	if (!parent)
+		throw AudioPlayerOpenError("DirectSound requires a native parent window handle.");
+	return parent;
+}
 
 class DirectSoundPlayerThread final : public wxThread {
 	DirectSoundPlayer *parent;
@@ -82,7 +89,7 @@ class DirectSoundPlayer final : public AudioPlayer {
 	DirectSoundPlayerThread *thread = nullptr;
 
 public:
-	DirectSoundPlayer(agi::AudioProvider *provider, wxWindow *parent);
+	DirectSoundPlayer(agi::AudioProvider *provider, AudioPlayerHost const& host);
 	~DirectSoundPlayer();
 
 	void Play(int64_t start,int64_t count);
@@ -97,16 +104,18 @@ public:
 	void SetVolume(double vol) { volume = vol; }
 };
 
-DirectSoundPlayer::DirectSoundPlayer(agi::AudioProvider *provider, wxWindow *parent)
+DirectSoundPlayer::DirectSoundPlayer(agi::AudioProvider *provider, AudioPlayerHost const& host)
 : AudioPlayer(provider)
 {
+	auto const parent = RequireNativeParentHandle(host);
+
 	// Initialize the DirectSound object
 	HRESULT res;
 	res = DirectSoundCreate8(&DSDEVID_DefaultPlayback,&directSound,nullptr); // TODO: support selecting audio device
 	if (FAILED(res)) throw AudioPlayerOpenError("Failed initializing DirectSound");
 
 	// Set DirectSound parameters
-	directSound->SetCooperativeLevel((HWND)parent->GetHandle(),DSSCL_PRIORITY);
+	directSound->SetCooperativeLevel(parent, DSSCL_PRIORITY);
 
 	// Create the wave format structure
 	WAVEFORMATEX waveFormat;
@@ -370,8 +379,8 @@ void DirectSoundPlayerThread::Stop() {
 }
 }
 
-std::unique_ptr<AudioPlayer> CreateDirectSoundPlayer(agi::AudioProvider *provider, wxWindow *parent) {
-	return agi::make_unique<DirectSoundPlayer>(provider, parent);
+std::unique_ptr<AudioPlayer> CreateDirectSoundPlayer(agi::AudioProvider *provider, AudioPlayerHost const& host) {
+	return agi::make_unique<DirectSoundPlayer>(provider, host);
 }
 
 #endif // WITH_DIRECTSOUND

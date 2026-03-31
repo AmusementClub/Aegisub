@@ -569,6 +569,38 @@ TEST(host_boundary_policy, frame_main_runtime_capabilities_live_in_explicit_wx_h
 	EXPECT_FALSE(seam_file_dialog_factory_hits.empty());
 }
 
+TEST(host_boundary_policy, audio_player_factory_contract_stays_wx_free) {
+	auto const root = ProjectRoot();
+	auto const audio_player_h = root / "src" / "include" / "aegisub" / "audio_player.h";
+	auto const audio_player_cpp = root / "src" / "audio_player.cpp";
+	auto const audio_player_alsa_cpp = root / "src" / "audio_player_alsa.cpp";
+	auto const audio_player_dsound_cpp = root / "src" / "audio_player_dsound.cpp";
+	auto const audio_player_dsound2_cpp = root / "src" / "audio_player_dsound2.cpp";
+	auto const wx_frame_main_runtime_host_h = root / "src" / "wx_frame_main_runtime_host.h";
+
+	auto audio_player_header_wx_hits = FindWxMarkers(audio_player_h);
+	auto audio_player_cpp_wx_hits = FindWxMarkers(audio_player_cpp);
+	auto audio_player_header_wx_window_hits = FindLiteralHits(audio_player_h, "wxWindow");
+	auto audio_player_cpp_wx_window_hits = FindLiteralHits(audio_player_cpp, "wxWindow");
+	auto audio_player_host_hits = FindLiteralHits(audio_player_h, "AudioPlayerHost");
+	auto audio_player_factory_host_hits = FindLiteralHits(audio_player_cpp, "AudioPlayerHost");
+	auto alsa_frame_main_include_hits = FindLiteralHits(audio_player_alsa_cpp, "frame_main.h");
+	auto dsound_frame_main_include_hits = FindLiteralHits(audio_player_dsound_cpp, "frame_main.h");
+	auto dsound2_frame_main_include_hits = FindLiteralHits(audio_player_dsound2_cpp, "frame_main.h");
+	auto wx_runtime_host_native_parent_hits = FindLiteralHits(wx_frame_main_runtime_host_h, "native_parent_handle");
+
+	EXPECT_TRUE(audio_player_header_wx_hits.empty()) << JoinLines(audio_player_header_wx_hits);
+	EXPECT_TRUE(audio_player_cpp_wx_hits.empty()) << JoinLines(audio_player_cpp_wx_hits);
+	EXPECT_TRUE(audio_player_header_wx_window_hits.empty()) << JoinLines(audio_player_header_wx_window_hits);
+	EXPECT_TRUE(audio_player_cpp_wx_window_hits.empty()) << JoinLines(audio_player_cpp_wx_window_hits);
+	EXPECT_FALSE(audio_player_host_hits.empty());
+	EXPECT_FALSE(audio_player_factory_host_hits.empty());
+	EXPECT_TRUE(alsa_frame_main_include_hits.empty()) << JoinLines(alsa_frame_main_include_hits);
+	EXPECT_TRUE(dsound_frame_main_include_hits.empty()) << JoinLines(dsound_frame_main_include_hits);
+	EXPECT_TRUE(dsound2_frame_main_include_hits.empty()) << JoinLines(dsound2_frame_main_include_hits);
+	EXPECT_FALSE(wx_runtime_host_native_parent_hits.empty());
+}
+
 TEST(host_boundary_policy, shared_dispatch_timers_stay_wx_free_and_no_longer_use_host_suffix) {
 	auto const root = ProjectRoot();
 	auto const src_root = root / "src";

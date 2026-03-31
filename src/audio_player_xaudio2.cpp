@@ -821,7 +821,7 @@ void XAudio2Player::SetVolume(double vol) {
 }
 }
 
-std::unique_ptr<AudioPlayer> CreateXAudio2Player(agi::AudioProvider* provider, wxWindow*) {
+std::unique_ptr<AudioPlayer> CreateXAudio2Player(agi::AudioProvider* provider, AudioPlayerHost const&) {
 	return agi::make_unique<XAudio2Player>(provider);
 }
 

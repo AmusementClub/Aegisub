@@ -67,8 +67,8 @@ void ShowGuiWxBootstrapUiError(std::string const& title, std::string const& mess
 	ShowBootstrapUiError(BuildGuiWxRuntimeEntryHostPack().bootstrap_ui_host, title, message);
 }
 
-void BindGuiWxMainQueueDispatchHandler(wxApp& app, std::function<void()> on_exception) {
-	app.Bind(EVT_CALL_THUNK, [on_exception = std::move(on_exception)](ValueEvent<agi::dispatch::Thunk>& evt) mutable {
+void BindGuiWxMainQueueDispatchHandler(std::function<void()> on_exception) {
+	wxTheApp->Bind(EVT_CALL_THUNK, [on_exception = std::move(on_exception)](ValueEvent<agi::dispatch::Thunk>& evt) mutable {
 		try {
 			evt.Get()();
 		}
@@ -79,9 +79,9 @@ void BindGuiWxMainQueueDispatchHandler(wxApp& app, std::function<void()> on_exce
 }
 
 void RunGuiWxAppStartupSequence(
-	wxArrayString const& args,
+	std::vector<std::string> const& args,
 	std::function<void()> create_project_context,
-	std::function<void(wxArrayString const&)> open_files) {
+	std::function<void(std::vector<std::string> const&)> open_files) {
 	create_project_context();
 
 	if (OPT_GET("App/First Start")->GetBool()) {
@@ -111,8 +111,9 @@ void RunGuiWxAppStartupSequence(
 	if (args.size() <= 1)
 		return;
 
-	wxArrayString startup_files;
+	std::vector<std::string> startup_files;
+	startup_files.reserve(args.size() - 1);
 	for (size_t i = 1; i < args.size(); ++i)
-		startup_files.push_back(args[i]);
+		startup_files.emplace_back(args[i]);
 	open_files(startup_files);
 }

@@ -3,9 +3,8 @@
 #include "app_runtime.h"
 
 #include <functional>
-
-class wxApp;
-class wxArrayString;
+#include <string>
+#include <vector>
 
 struct GuiWxRuntimeEntryHostPack {
 	AppRuntimeMainQueueHooks main_queue_hooks;
@@ -30,8 +29,8 @@ void ShowGuiWxBootstrapUiError(std::string const& title, std::string const& mess
 
 // Replace these helpers when a non-wx GUI shell needs to own startup
 // orchestration and main-queue exception binding.
-void BindGuiWxMainQueueDispatchHandler(wxApp& app, std::function<void()> on_exception);
+void BindGuiWxMainQueueDispatchHandler(std::function<void()> on_exception);
 void RunGuiWxAppStartupSequence(
-	wxArrayString const& args,
+	std::vector<std::string> const& args,
 	std::function<void()> create_project_context,
-	std::function<void(wxArrayString const&)> open_files);
+	std::function<void(std::vector<std::string> const&)> open_files);

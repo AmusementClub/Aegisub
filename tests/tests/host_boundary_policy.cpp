@@ -350,7 +350,7 @@ TEST(host_boundary_policy, app_bootstrap_ui_fallback_lives_in_explicit_wx_servic
 	EXPECT_TRUE(main_bootstrap_error_helper_hits.empty()) << JoinLines(main_bootstrap_error_helper_hits);
 	EXPECT_TRUE(main_bootstrap_interaction_helper_hits.empty()) << JoinLines(main_bootstrap_interaction_helper_hits);
 	EXPECT_FALSE(main_gui_bootstrap_error_helper_hits.empty());
-	EXPECT_FALSE(main_gui_bootstrap_interaction_helper_hits.empty());
+	EXPECT_TRUE(main_gui_bootstrap_interaction_helper_hits.empty()) << JoinLines(main_gui_bootstrap_interaction_helper_hits);
 
 	EXPECT_FALSE(host_runtime_bootstrap_host_include_hits.empty());
 	EXPECT_FALSE(host_bootstrap_ui_include_hits.empty());
@@ -361,6 +361,36 @@ TEST(host_boundary_policy, app_bootstrap_ui_fallback_lives_in_explicit_wx_servic
 	EXPECT_FALSE(seam_notification_hits.empty());
 	EXPECT_FALSE(seam_interaction_hits.empty());
 	EXPECT_FALSE(seam_single_choice_hits.empty());
+}
+
+TEST(host_boundary_policy, gui_startup_orchestration_stays_localized_to_runtime_entry_host) {
+	auto const root = ProjectRoot();
+	auto const main_cpp = root / "src" / "main.cpp";
+	auto const gui_runtime_entry_host_cpp = root / "src" / "gui_wx_runtime_entry_host.cpp";
+
+	auto main_startup_helper_hits = FindLiteralHits(main_cpp, "RunGuiWxAppStartupSequence(");
+	auto main_first_start_hits = FindLiteralHits(main_cpp, "OPT_GET(\"App/First Start\")");
+	auto main_update_check_hits = FindLiteralHits(main_cpp, "PerformVersionCheck(false)");
+	auto main_bootstrap_interaction_hits = FindLiteralHits(main_cpp, "RequestGuiWxBootstrapUiInteraction(");
+	auto main_config_flush_hits = FindLiteralHits(main_cpp, "config::opt->Flush()");
+
+	auto entry_host_startup_helper_hits = FindLiteralHits(gui_runtime_entry_host_cpp, "RunGuiWxAppStartupSequence(");
+	auto entry_host_first_start_hits = FindLiteralHits(gui_runtime_entry_host_cpp, "OPT_GET(\"App/First Start\")");
+	auto entry_host_update_check_hits = FindLiteralHits(gui_runtime_entry_host_cpp, "PerformVersionCheck(false)");
+	auto entry_host_bootstrap_interaction_hits = FindLiteralHits(gui_runtime_entry_host_cpp, "RequestGuiWxBootstrapUiInteraction(");
+	auto entry_host_config_flush_hits = FindLiteralHits(gui_runtime_entry_host_cpp, "config::opt->Flush()");
+
+	EXPECT_FALSE(main_startup_helper_hits.empty());
+	EXPECT_TRUE(main_first_start_hits.empty()) << JoinLines(main_first_start_hits);
+	EXPECT_TRUE(main_update_check_hits.empty()) << JoinLines(main_update_check_hits);
+	EXPECT_TRUE(main_bootstrap_interaction_hits.empty()) << JoinLines(main_bootstrap_interaction_hits);
+	EXPECT_TRUE(main_config_flush_hits.empty()) << JoinLines(main_config_flush_hits);
+
+	EXPECT_FALSE(entry_host_startup_helper_hits.empty());
+	EXPECT_FALSE(entry_host_first_start_hits.empty());
+	EXPECT_FALSE(entry_host_update_check_hits.empty());
+	EXPECT_FALSE(entry_host_bootstrap_interaction_hits.empty());
+	EXPECT_FALSE(entry_host_config_flush_hits.empty());
 }
 
 TEST(host_boundary_policy, preferences_interaction_usage_stays_centralized) {
@@ -1194,7 +1224,7 @@ TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_
 	auto bootstrap_bootstrap_ui_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "wx_app_bootstrap_ui_services.h");
 
 	EXPECT_FALSE(main_gui_runtime_entry_host_hits.empty());
-	EXPECT_FALSE(main_gui_dispatch_event_hits.empty());
+	EXPECT_TRUE(main_gui_dispatch_event_hits.empty()) << JoinLines(main_gui_dispatch_event_hits);
 	EXPECT_TRUE(main_gui_runtime_host_hits.empty()) << JoinLines(main_gui_runtime_host_hits);
 	EXPECT_TRUE(main_gui_locale_host_hits.empty()) << JoinLines(main_gui_locale_host_hits);
 	EXPECT_TRUE(main_gui_bootstrap_ui_host_hits.empty()) << JoinLines(main_gui_bootstrap_ui_host_hits);
@@ -1259,7 +1289,6 @@ TEST(host_boundary_policy, gui_runtime_and_bootstrap_host_headers_stay_localized
 	std::set<std::string> const expected_dispatch_event_includers = {
 		"src/gui_wx_dispatch_event.cpp",
 		"src/gui_wx_runtime_entry_host.cpp",
-		"src/main.cpp",
 	};
 	std::set<std::string> const expected_runtime_host_includers = {
 		"src/gui_wx_runtime_entry_host.cpp",

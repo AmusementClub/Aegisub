@@ -43,7 +43,6 @@
 #include "crash_writer.h"
 #include "format.h"
 #include "frame_main.h"
-#include "gui_wx_dispatch_event.h"
 #include "gui_wx_runtime_entry_host.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
@@ -58,6 +57,7 @@
 #include <libaegisub/path.h>
 #include <libaegisub/util.h>
 
+#include <vector>
 #include <wx/arrstr.h>
 #include <wx/clipbrd.h>
 #include <wx/msgdlg.h>
@@ -88,6 +88,18 @@ AegisubApp::AegisubApp() {
 	wxSetEnv(wxS("UBUNTU_MENUPROXY"), wxS("0"));
 }
 
+namespace {
+
+std::vector<std::string> ToUtf8Args(wxArrayString const& args) {
+	std::vector<std::string> values;
+	values.reserve(args.size());
+	for (auto const& arg : args)
+		values.emplace_back(arg.ToStdString(wxConvUTF8));
+	return values;
+}
+
+}
+
 /// Message displayed when an exception has occurred.
 static wxString exception_message = wxS("Oops, Aegisub has crashed!\n\nAn attempt has been made to save a copy of your file to:\n\n%s\n\nAegisub will now close.");
 
@@ -101,7 +113,7 @@ bool AegisubApp::OnInit() {
 	SetAppName(wxS("aegisub"));
 #endif
 
-	BindGuiWxMainQueueDispatchHandler(*wxTheApp, [this] { OnExceptionInMainLoop(); });
+	BindGuiWxMainQueueDispatchHandler([this] { OnExceptionInMainLoop(); });
 
 	runtime = std::make_unique<AppRuntime>();
 	std::string runtime_error;
@@ -134,9 +146,16 @@ bool AegisubApp::OnInit() {
 		StartupLog("Create main window");
 		StartupLog("Possibly perform automatic updates check");
 		StartupLog("Parse command line");
-		RunGuiWxAppStartupSequence(argv.GetArguments(),
+		RunGuiWxAppStartupSequence(ToUtf8Args(argv.GetArguments()),
 			[this] { NewProjectContext(); },
-			[this](wxArrayString const& files) { OpenFiles(files); });
+			[this](std::vector<std::string> const& files) {
+				std::vector<agi::fs::path> paths;
+				paths.reserve(files.size());
+				for (auto const& file : files)
+					paths.emplace_back(file);
+				if (!paths.empty())
+					frames[0]->context->GetCore().project->LoadList(paths);
+			});
 	}
 	catch (agi::Exception const& e) {
 		ShowGuiWxBootstrapUiError("Fatal error while initializing", e.GetMessage());

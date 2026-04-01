@@ -29,6 +29,7 @@
 
 #include "audio_renderer_waveform.h"
 
+#include "compat.h"
 #include "audio_display_source.h"
 #include "audio_waveform_bitmap_tile_renderer.h"
 #include "audio_waveform_summary_cache.h"
@@ -121,8 +122,8 @@ void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 void AudioWaveformRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style)
 {
 	const AudioColorScheme *pal = &colors[style];
-	wxColor line(pal->get(1.0));
-	wxColor bg(pal->get(0.0));
+	wxColor line(to_wx(pal->get(1.0)));
+	wxColor bg(to_wx(pal->get(0.0)));
 
 	// Draw the line as background above and below, and line in the middle, to avoid
 	// overdraw flicker (the common theme in all of audio display direct drawing).

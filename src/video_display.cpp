@@ -767,7 +767,8 @@ void VideoDisplay::OnMouseEvent(wxMouseEvent& event) {
 	if (event.ButtonDown())
 		SetFocus();
 
-	last_mouse_pos = mouse_pos = event.GetPosition();
+	wxPoint pt = event.GetPosition();
+	last_mouse_pos = mouse_pos = Vector2D(pt.x, pt.y);
 
 	if (tool)
 		tool->OnMouseEvent(event);

@@ -45,7 +45,7 @@
 #include <wx/msgdlg.h>
 
 namespace {
-	void autosave_timer_changed(wxTimer *timer) {
+	void autosave_timer_changed(SubsControllerTimer *timer) {
 		if (!timer)
 			return;
 		int freq = OPT_GET("App/Auto/Save Every Seconds")->GetInt();
@@ -177,11 +177,10 @@ SubsController::SubsController(agi::Context *context)
 	if (!IsGuiRuntimeShell())
 		return;
 
-	autosave_timer = std::make_unique<wxTimer>();
+	autosave_timer = CreateSubsControllerTimer([this] { AutoSave(); });
 	autosave_timer_changed(autosave_timer.get());
 	OPT_SUB("App/Auto/Save", [=] { autosave_timer_changed(autosave_timer.get()); });
 	OPT_SUB("App/Auto/Save Every Seconds", [=] { autosave_timer_changed(autosave_timer.get()); });
-	autosave_timer->Bind(wxEVT_TIMER, [=](wxTimerEvent&) { AutoSave(); });
 }
 
 SubsController::~SubsController() {

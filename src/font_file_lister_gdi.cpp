@@ -30,6 +30,19 @@
 #include <Usp10.h>
 
 namespace {
+void append_utf16_to_utf8(std::string& out, wchar_t ch) {
+		char buf[4];
+		auto len = WideCharToMultiByte(CP_UTF8, 0, &ch, 1, buf, sizeof(buf), nullptr, nullptr);
+		if (len > 0) out.append(buf, len);
+	}
+
+	void append_utf16_pair_to_utf8(std::string& out, wchar_t lead, wchar_t trail) {
+		wchar_t pair[2] = {lead, trail};
+		char buf[4];
+		auto len = WideCharToMultiByte(CP_UTF8, 0, pair, 2, buf, sizeof(buf), nullptr, nullptr);
+		if (len > 0) out.append(buf, len);
+	}
+
 uint32_t murmur3(const char *data, uint32_t len) {
 	static const uint32_t c1 = 0xcc9e2d51;
 	static const uint32_t c2 = 0x1b873593;
@@ -116,7 +129,7 @@ font_index index_fonts(FontCollectorStatusCallback &cb) {
 			hash_to_path.emplace(hash, path);
 		}
 		catch (agi::Exception const& e) {
-			cb(to_wx(e.GetMessage() + "\n"), 3);
+			cb(e.GetMessage() + "\n", 3);
 		}
 	}
 	return hash_to_path;
@@ -143,7 +156,7 @@ void get_font_data(std::string& buffer, HDC dc) {
 GdiFontFileLister::GdiFontFileLister(FontCollectorStatusCallback &cb)
 : dc(CreateCompatibleDC(nullptr), [](HDC dc) { DeleteDC(dc); })
 {
-	cb(_("Updating font cache\n"), 0);
+	cb(from_wx(_("Updating font cache\n")), 0);
 	index = index_fonts(cb);
 }
 
@@ -253,7 +266,7 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 			if (U16_IS_SURROGATE(utf16characters[i]))
 				continue;
 			if (indices[i] == SHRT_MAX)
-				ret.missing += utf16characters[i];
+				append_utf16_to_utf8(ret.missing, utf16characters[i]);
 		}
 	}
 	else if (hr == S_FALSE) {
@@ -264,13 +277,12 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 			if (U16_IS_LEAD(utf16characters[i])) {
 				hr = ScriptGetCMap(dc, &cache, &utf16characters[i], 2, 0, &indices[i]);
 				if (hr == S_FALSE) {
-					ret.missing += utf16characters[i];
-					ret.missing += utf16characters[i + 1];
+					append_utf16_pair_to_utf8(ret.missing, utf16characters[i], utf16characters[i + 1]);
 				}
 				++i;
 			}
 			else if (indices[i] == 0) {
-				ret.missing += utf16characters[i];
+				append_utf16_to_utf8(ret.missing, utf16characters[i]);
 			}
 		}
 	}

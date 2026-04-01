@@ -24,16 +24,14 @@
 #include <vector>
 #include <unordered_map>
 
-#include <wx/string.h>
-
 class AssDialogue;
 class AssFile;
 
-typedef std::function<void (wxString, int)> FontCollectorStatusCallback;
+typedef std::function<void (std::string, int)> FontCollectorStatusCallback;
 
 struct CollectionResult {
 	/// Characters which could not be found in any font files
-	wxString missing;
+	std::string missing;
 	/// Paths to the file(s) containing the requested font
 	std::vector<agi::fs::path> paths;
 	bool fake_bold = false;

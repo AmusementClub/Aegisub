@@ -58,9 +58,9 @@ Vector2D Vector2D::Unit() const {
 
 Vector2D Vector2D::SingleAxis() const {
 	if (std::abs(x) < std::abs(y))
-		return Vector2D(0, y);
+		return Vector2D(0.f, y);
 	else
-		return Vector2D(x, 0);
+		return Vector2D(x, 0.f);
 }
 
 Vector2D Vector2D::Max(Vector2D param) const {

@@ -643,6 +643,7 @@ add_executable(Aegisub WIN32
     src/spline_curve.cpp
     src/string_codec.cpp
     src/subs_controller.cpp
+    src/subs_controller_timer.cpp
     src/subs_edit_box.cpp
     src/subs_edit_ctrl.cpp
     src/subs_preview.cpp

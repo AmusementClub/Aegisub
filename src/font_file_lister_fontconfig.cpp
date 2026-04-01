@@ -23,8 +23,16 @@
 #include <filesystem>
 #include <fontconfig/fontconfig.h>
 #include <wx/intl.h>
+#include <unicode/utf8.h>
 
 namespace {
+	void append_codepoint_to_utf8(std::string& out, int cp) {
+		char buf[4];
+		UChar8* p = (UChar8*)buf;
+		U8_APPEND_UNSAFE(p, cp);
+		out.append(buf, p - (UChar8*)buf);
+	}
+
 bool pattern_matches(FcPattern *pat, const char *field, std::string const& name) {
 	FcChar8 *str;
 	for (int i = 0; FcPatternGetString(pat, field, i, &str) == FcResultMatch; ++i) {
@@ -54,7 +62,8 @@ void find_font(FcFontSet *src, FcFontSet *dst, std::string const& family) {
 FontConfigFontFileLister::FontConfigFontFileLister(FontCollectorStatusCallback &cb)
 : config(FcInitLoadConfig(), FcConfigDestroy)
 {
-	cb(_("Updating font cache\n"), 0);
+	cb(from_wx(_("Updating font cache
+")), 0);
 	FcConfigBuildFonts(config);
 }
 
@@ -106,7 +115,7 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 	if (FcPatternGetCharSet(match, FC_CHARSET, 0, &charset) == FcResultMatch) {
 		for (int chr : characters) {
 			if (!FcCharSetHasChar(charset, chr))
-				ret.missing += chr;
+				append_codepoint_to_utf8(ret.missing, chr);
 		}
 	}
 

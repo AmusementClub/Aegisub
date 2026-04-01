@@ -36,7 +36,7 @@
 
 #include <vector>
 
-#include <wx/colour.h>
+#include <libaegisub/color.h>
 
 #include "utils.h"
 
@@ -92,12 +92,12 @@ public:
 		pixel[2] = color[2];
 	}
 
-	/// @brief Get a floating point value's colour as a wxColour
+	/// @brief Get a floating point value's colour as an agi::Color
 	/// @param val The value to map from
-	/// @return The corresponding wxColour
-	wxColour get(float val) const
+	/// @return The corresponding agi::Color
+	agi::Color get(float val) const
 	{
 		const unsigned char *color = get_color(val);
-		return wxColour(color[0], color[1], color[2]);
+		return agi::Color(color[0], color[1], color[2]);
 	}
 };

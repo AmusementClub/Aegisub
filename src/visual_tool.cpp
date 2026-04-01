@@ -188,7 +188,7 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 	ctrl_down = event.CmdDown();
 	alt_down = event.AltDown();
 
-	mouse_pos = event.GetPosition();
+	wxPoint pt = event.GetPosition(); mouse_pos = Vector2D(pt.x, pt.y);
 
 	if (event.Leaving()) {
 		mouse_pos = Vector2D();

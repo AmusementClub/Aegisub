@@ -100,9 +100,9 @@ wxDEFINE_EVENT(EVT_COLLECTION_DONE, wxThreadEvent);
 
 void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMode oper, wxEvtHandler *collector, agi::ui::WeakLifetime lifetime) {
 	agi::dispatch::BackgroundExecutor().Post([=]{
-		auto AppendText = [&](wxString text, int colour) {
-			agi::ui::MainAsyncIfAlive(lifetime, [collector, colour, text = text.Clone()] {
-				collector->AddPendingEvent(ValueEvent<color_str_pair>(EVT_ADD_TEXT, -1, {colour, text.Clone()}));
+		auto AppendText = [&](std::string text, int colour) {
+			agi::ui::MainAsyncIfAlive(lifetime, [collector, colour, text = to_wx(text)] {
+				collector->AddPendingEvent(ValueEvent<color_str_pair>(EVT_ADD_TEXT, -1, {colour, text}));
 			});
 		};
 
@@ -122,14 +122,14 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 				});
 				return;
 			case FcMode::SymlinkToFolder:
-				AppendText(_("Symlinking fonts to folder...\n"), 0);
+				AppendText(from_wx(_("Symlinking fonts to folder...\n")), 0);
 				break;
 			case FcMode::CopyToScriptFolder:
 			case FcMode::CopyToFolder:
-				AppendText(_("Copying fonts to folder...\n"), 0);
+				AppendText(from_wx(_("Copying fonts to folder...\n")), 0);
 				break;
 			case FcMode::CopyToZip:
-				AppendText(_("Copying fonts to archive...\n"), 0);
+				AppendText(from_wx(_("Copying fonts to archive...\n")), 0);
 				break;
 		}
 
@@ -141,8 +141,8 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 				agi::fs::CreateDirectory(destination.parent_path());
 			}
 			catch (agi::fs::FileSystemError const& e) {
-				AppendText(fmt_tl("* Failed to create directory '%s': %s.\n",
-					destination.parent_path().wstring(), to_wx(e.GetMessage())), 2);
+				AppendText(from_wx(fmt_tl("* Failed to create directory '%s': %s.\n",
+					destination.parent_path().wstring(), to_wx(e.GetMessage()))), 2);
 				agi::ui::MainAsyncIfAlive(lifetime, [collector] {
 					collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
 				});
@@ -154,7 +154,7 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 				zip = agi::make_unique<wxZipOutputStream>(*out);
 
 			if (!out->IsOk() || !zip || !zip->IsOk()) {
-				AppendText(fmt_tl("* Failed to open %s.\n", destination), 2);
+				AppendText(from_wx(fmt_tl("* Failed to open %s.\n", destination)), 2);
 				agi::ui::MainAsyncIfAlive(lifetime, [collector] {
 					collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
 				});
@@ -211,26 +211,26 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 			}
 
 			if (ret == 1)
-				AppendText(fmt_tl("* Copied %s.\n", path), 1);
+				AppendText(from_wx(fmt_tl("* Copied %s.\n", path)), 1);
 			else if (ret == 2)
-				AppendText(fmt_tl("* %s already exists on destination.\n", path.filename()), 3);
+				AppendText(from_wx(fmt_tl("* %s already exists on destination.\n", path.filename())), 3);
 			else if (ret == 3)
-				AppendText(fmt_tl("* Symlinked %s.\n", path), 1);
+				AppendText(from_wx(fmt_tl("* Symlinked %s.\n", path)), 1);
 			else {
-				AppendText(fmt_tl("* Failed to copy %s.\n", path), 2);
+				AppendText(from_wx(fmt_tl("* Failed to copy %s.\n", path)), 2);
 				allOk = false;
 			}
 		}
 
 		if (allOk)
-			AppendText(_("Done. All fonts copied."), 1);
+			AppendText(from_wx(_("Done. All fonts copied.")), 1);
 		else
-			AppendText(_("Done. Some fonts could not be copied."), 2);
+			AppendText(from_wx(_("Done. Some fonts could not be copied.")), 2);
 
 		if (total_size > 32 * 1024 * 1024)
-			AppendText(_("\nOver 32 MB of fonts were copied. Some of the fonts may not be loaded by the player if they are all attached to a Matroska file."), 2);
+			AppendText(from_wx(_("\nOver 32 MB of fonts were copied. Some of the fonts may not be loaded by the player if they are all attached to a Matroska file.")), 2);
 
-		AppendText(wxS("\n"), 0);
+		AppendText(std::string("\n"), 0);
 
 		agi::ui::MainAsyncIfAlive(lifetime, [collector] {
 			collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));

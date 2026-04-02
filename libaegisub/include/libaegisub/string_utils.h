@@ -307,12 +307,57 @@ inline bool parse_hex_byte(view value, unsigned char& out) {
 	return true;
 }
 
+struct utf8_icase_searcher {
+	std::string needle;
+
+#ifdef AEGISUB_USE_STRINGZILLA
+	bool case_invariant = false;
+	mutable sz_utf8_case_insensitive_needle_metadata_t metadata = {};
+#endif
+
+	utf8_icase_searcher() = default;
+	explicit utf8_icase_searcher(view value) : needle(value) {
+#ifdef AEGISUB_USE_STRINGZILLA
+		if (needle.empty()) return;
+		case_invariant = sz_utf8_case_invariant(needle.data(), needle.size()) == sz_true_k;
+		if (case_invariant)
+			return;
+
+		sz_size_t ignored = 0;
+		(void)sz_utf8_case_insensitive_find("", 0, needle.data(), needle.size(), &metadata, &ignored);
+#endif
+	}
+
+	sized_match find(view haystack) const {
+		if (needle.empty()) return {0, 0};
+
+#ifdef AEGISUB_USE_STRINGZILLA
+		if (case_invariant) {
+			auto pos = agi::util::strings::find(haystack, view(needle));
+			return pos == npos ? sized_match{} : sized_match{pos, needle.size()};
+		}
+
+		sz_size_t match_length = 0;
+		auto ptr = sz_utf8_case_insensitive_find(haystack.data(), haystack.size(), needle.data(), needle.size(), &metadata, &match_length);
+		if (!ptr) return {};
+		return { static_cast<std::size_t>(ptr - haystack.data()), static_cast<std::size_t>(match_length) };
+#else
+		auto pos = agi::util::strings::find(haystack, view(needle));
+		return pos == npos ? sized_match{} : sized_match{pos, needle.size()};
+#endif
+	}
+};
+
 inline bool utf8_iequals(view left, view right) {
 #ifdef AEGISUB_USE_STRINGZILLA
 	return sz_utf8_case_insensitive_order(left.data(), left.size(), right.data(), right.size()) == sz_equal_k;
 #else
 	return iequals(left, right);
 #endif
+}
+
+inline sized_match utf8_find_icase(view haystack, utf8_icase_searcher const& needle) {
+	return needle.find(haystack);
 }
 
 inline sized_match utf8_find_icase(view haystack, view needle) {

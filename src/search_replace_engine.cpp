@@ -120,18 +120,22 @@ matcher get_matcher(SearchReplaceSettings const& settings, Accessor&& a) {
 	bool full_match_only = settings.exact_match;
 	bool match_case = settings.match_case;
 	std::string look_for = settings.find;
+	agi::util::strings::view look_for_view(look_for);
+#ifdef AEGISUB_USE_STRINGZILLA
+	agi::util::strings::utf8_icase_searcher icase_searcher(look_for_view);
+#endif
 
 	return [=](const AssDialogue *diag, size_t start) mutable -> MatchState {
 		const auto str = a.get_view(diag, start);
 
 		if (full_match_only) {
 			if (match_case) {
-				return str == look_for
+				return str == look_for_view
 					? a.make_match_state(0, str.size())
 					: bad_match;
 			}
 #ifdef AEGISUB_USE_STRINGZILLA
-			const auto match = agi::util::strings::utf8_find_icase(str, look_for);
+			const auto match = agi::util::strings::utf8_find_icase(str, icase_searcher);
 			return match && match.offset == 0 && match.length == str.size()
 				? a.make_match_state(0, str.size())
 				: bad_match;
@@ -144,12 +148,12 @@ matcher get_matcher(SearchReplaceSettings const& settings, Accessor&& a) {
 		}
 
 		if (match_case) {
-			const auto pos = agi::util::strings::find(str, look_for);
-			return pos == agi::util::strings::npos ? bad_match : a.make_match_state(pos, pos + look_for.size());
+			const auto pos = agi::util::strings::find(str, look_for_view);
+			return pos == agi::util::strings::npos ? bad_match : a.make_match_state(pos, pos + look_for_view.size());
 		}
 
 #ifdef AEGISUB_USE_STRINGZILLA
-		const auto match = agi::util::strings::utf8_find_icase(str, look_for);
+		const auto match = agi::util::strings::utf8_find_icase(str, icase_searcher);
 		return match
 			? a.make_match_state(match.offset, match.offset + match.length)
 			: bad_match;

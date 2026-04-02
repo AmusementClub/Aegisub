@@ -16,6 +16,7 @@
 #include "app_runtime.h"
 #include "app_runtime_facilities.h"
 #include "app_runtime_init.h"
+#include "ui_timer.h"
 
 #include "command/command.h"
 #include "include/aegisub/hotkey.h"
@@ -97,6 +98,7 @@ void CleanupRuntime() {
 		runtime_commands_initialized = false;
 	}
 
+	ResetUiTimerHost();
 	agi::dispatch::Shutdown();
 	CleanupRuntimeProcessState();
 	current_shell_mode = RuntimeShellMode::Unknown;
@@ -116,6 +118,8 @@ public:
 			if (options.process_host.prime_process_logging)
 				options.process_host.prime_process_logging();
 			InitializeGlobalLocale();
+
+			InstallUiTimerHost(options.ui_timer_host);
 
 			agi::dispatch::Init(
 				options.main_queue_hooks.invoke_main,

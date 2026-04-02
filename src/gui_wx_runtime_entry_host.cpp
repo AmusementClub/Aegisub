@@ -32,6 +32,7 @@ AppRuntimeMainQueueHooks BuildGuiWxRuntimeMainQueueHooks() {
 GuiWxRuntimeEntryHostPack BuildGuiWxRuntimeEntryHostPack() {
 	GuiWxRuntimeEntryHostPack hosts;
 	hosts.main_queue_hooks = BuildGuiWxRuntimeMainQueueHooks();
+	hosts.ui_timer_host = CreateGuiWxUiTimerHost();
 	hosts.locale_host = BuildGuiWxRuntimeLocaleHost();
 	hosts.process_host = BuildGuiWxRuntimeProcessHost();
 	hosts.optional_facility_host = BuildGuiWxRuntimeOptionalFacilityHost();
@@ -45,6 +46,7 @@ AppRuntimeInitOptions BuildGuiWxAppRuntimeInitOptions() {
 	options.shell_mode = RuntimeShellMode::Gui;
 	options.locale_policy = RuntimeLocalePolicy::PickIfNeeded;
 	options.main_queue_hooks = std::move(gui_runtime_hosts.main_queue_hooks);
+	options.ui_timer_host = std::move(gui_runtime_hosts.ui_timer_host);
 	options.locale_host = std::move(gui_runtime_hosts.locale_host);
 	options.load_global_scripts = true;
 	options.initialize_commands = true;

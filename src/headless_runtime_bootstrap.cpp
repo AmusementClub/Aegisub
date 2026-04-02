@@ -20,6 +20,7 @@
 #include "headless_cli_parse.h"
 #include "headless_playback_probe.h"
 #include "options.h"
+#include "threaded_ui_timer.h"
 #include "ui_services.h"
 
 #include <libaegisub/dispatch.h>
@@ -134,6 +135,7 @@ public:
 					return main_thread_pump.Flush();
 				}
 			};
+			options.ui_timer_host = CreateThreadedUiTimerHost();
 			options.load_global_scripts = false;
 			options.initialize_commands = false;
 			options.initialize_ui_locale = false;

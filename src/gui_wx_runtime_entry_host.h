@@ -3,11 +3,13 @@
 #include "app_runtime.h"
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 struct GuiWxRuntimeEntryHostPack {
 	AppRuntimeMainQueueHooks main_queue_hooks;
+	std::shared_ptr<UiTimerHost> ui_timer_host;
 	RuntimeLocaleHost locale_host;
 	RuntimeProcessHost process_host;
 	RuntimeOptionalFacilityHost optional_facility_host;

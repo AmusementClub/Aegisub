@@ -15,30 +15,37 @@
 
 #include "video_controller_timer.h"
 
-#include "main_thread_timer.h"
+#include "threaded_ui_timer.h"
+#include "ui_timer.h"
 
 #include <utility>
 
 namespace {
 
+std::shared_ptr<UiTimerHost> ResolveUiTimerHost() {
+	if (auto host = GetUiTimerHost())
+		return host;
+	return CreateThreadedUiTimerHost();
+}
+
 class DispatchVideoControllerTimer final : public VideoControllerTimer {
-	MainThreadTimer playback_timer;
+	std::unique_ptr<UiTimer> playback_timer;
 
 public:
 	explicit DispatchVideoControllerTimer(std::function<void()> on_play_timer)
-	: playback_timer(std::move(on_play_timer)) {
+	: playback_timer(ResolveUiTimerHost()->CreateTimer(std::move(on_play_timer))) {
 	}
 
 	void Start(int interval_ms) override {
-		playback_timer.StartRepeating(interval_ms);
+		playback_timer->StartRepeating(interval_ms);
 	}
 
 	void Stop() override {
-		playback_timer.Stop();
+		playback_timer->Stop();
 	}
 
 	bool IsRunning() const override {
-		return playback_timer.IsRunning();
+		return playback_timer->IsRunning();
 	}
 };
 

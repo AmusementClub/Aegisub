@@ -576,6 +576,7 @@ add_executable(Aegisub WIN32
     src/audio_controller.cpp
     src/wx_audio_controller_power_host.cpp
     src/audio_controller_timer.cpp
+    src/threaded_ui_timer.cpp
     src/audio_display_analysis.cpp
     src/audio_latest_range_scheduler.cpp
     src/audio_display.cpp
@@ -658,6 +659,7 @@ add_executable(Aegisub WIN32
     src/toolbar.cpp
     src/tooltip_manager.cpp
     src/utils.cpp
+    src/ui_timer.cpp
     src/ui_services.cpp
     src/validators.cpp
     src/vector2d.cpp

@@ -9,8 +9,11 @@
 #include <libaegisub/dispatch.h>
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <string>
+
+class UiTimerHost;
 
 enum class RuntimeShellMode {
 	Unknown,
@@ -41,6 +44,7 @@ struct AppRuntimeInitOptions {
 	bool warm_subtitles_provider_font_cache = true;
 	bool register_export_filters = true;
 	bool install_png_handler = true;
+	std::shared_ptr<UiTimerHost> ui_timer_host;
 	RuntimeProcessHost process_host;
 	RuntimeOptionalFacilityHost optional_facility_host;
 	RuntimeBootstrapUiHost bootstrap_ui_host;

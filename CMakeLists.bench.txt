@@ -121,6 +121,7 @@ add_executable(async-video-provider-stress EXCLUDE_FROM_ALL
     src/ass_style.cpp
     src/ass_style_storage.cpp
     src/async_video_provider.cpp
+    src/async_video_provider_host.cpp
     src/compat.cpp
     src/subtitle_overlay_blend.cpp
     src/utils.cpp

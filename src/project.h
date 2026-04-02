@@ -27,6 +27,7 @@ class wxString;
 namespace agi { class AudioProvider; }
 namespace agi { class BackgroundRunner; }
 namespace agi { struct Context; }
+namespace aegisub::video_session_ops { struct OpenedVideoSummary; }
 struct ProjectProperties;
 
 class Project {
@@ -44,6 +45,7 @@ class Project {
 	agi::signal::Signal<AsyncVideoProvider *> AnnounceVideoProviderModified;
 	agi::signal::Signal<agi::vfr::Framerate const&> AnnounceTimecodesModified;
 	agi::signal::Signal<std::vector<int> const&> AnnounceKeyframesModified;
+	std::vector<agi::signal::Connection> option_connections;
 
 	bool video_has_subtitles = false;
 	std::unique_ptr<agi::BackgroundRunner> progress_runner;
@@ -56,7 +58,7 @@ class Project {
 
 	bool DoLoadSubtitles(agi::fs::path const& path, std::string encoding, ProjectProperties &properties);
 	void DoLoadAudio(agi::fs::path const& path, bool quiet);
-	bool DoLoadVideo(agi::fs::path const& path);
+	bool DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops::OpenedVideoSummary* summary = nullptr);
 	void DoLoadTimecodes(agi::fs::path const& path);
 	void DoLoadKeyframes(agi::fs::path const& path);
 
@@ -90,11 +92,13 @@ public:
 	void LoadTimecodes(agi::fs::path path);
 	void CloseTimecodes();
 	bool CanCloseTimecodes() const { return !timecodes_file.empty(); }
+	agi::fs::path const& TimecodesName() const { return timecodes_file; }
 	agi::vfr::Framerate const& Timecodes() const { return timecodes; }
 
 	void LoadKeyframes(agi::fs::path path);
 	void CloseKeyframes();
 	bool CanCloseKeyframes() const { return !keyframes_file.empty(); }
+	agi::fs::path const& KeyframesName() const { return keyframes_file; }
 	std::vector<int> const& Keyframes() const { return keyframes; }
 
 	void LoadList(std::vector<agi::fs::path> const& files);

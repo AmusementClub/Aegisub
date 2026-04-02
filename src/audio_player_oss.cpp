@@ -279,7 +279,7 @@ int64_t OSSPlayer::GetCurrentPosition()
 }
 }
 
-std::unique_ptr<AudioPlayer> CreateOSSPlayer(agi::AudioProvider *provider, wxWindow *) {
+std::unique_ptr<AudioPlayer> CreateOSSPlayer(agi::AudioProvider *provider, AudioPlayerHost const&) {
     return agi::make_unique<OSSPlayer>(provider);
 }
 

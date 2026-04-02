@@ -1,5 +1,6 @@
 #include "audio_waveform_bitmap_tile_renderer.h"
 
+#include "compat.h"
 #include "audio_waveform_summary_cache.h"
 #include "audio_colorscheme.h"
 
@@ -17,12 +18,12 @@ void RenderWaveformSummaryBlockToBitmap(
 	wxRect rect(wxPoint(0, 0), bmp.GetSize());
 	int midpoint = rect.height / 2;
 
-	dc.SetBrush(wxBrush(palette.get(0.0f)));
+	dc.SetBrush(wxBrush(to_wx(palette.get(0.0f))));
 	dc.SetPen(*wxTRANSPARENT_PEN);
 	dc.DrawRectangle(rect);
 
-	wxPen pen_peaks(wxPen(palette.get(0.4f)));
-	wxPen pen_avgs(wxPen(palette.get(0.7f)));
+	wxPen pen_peaks(wxPen(to_wx(palette.get(0.4f))));
+	wxPen pen_avgs(wxPen(to_wx(palette.get(0.7f))));
 
 	for (int x = 0; x < rect.width && x < static_cast<int>(AudioWaveformSummaryBlock::width); ++x) {
 		const auto &summary = block.summaries[x];
@@ -40,7 +41,7 @@ void RenderWaveformSummaryBlockToBitmap(
 	}
 
 	if (render_averages)
-		dc.SetPen(wxPen(palette.get(1.0f)));
+		dc.SetPen(wxPen(to_wx(palette.get(1.0f))));
 	else
 		dc.SetPen(pen_peaks);
 

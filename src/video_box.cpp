@@ -51,22 +51,23 @@
 VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 : wxPanel(parent, -1)
 , context(context)
+, current_frame(context->GetCore().videoController->GetFrameN())
 {
 	auto videoSlider = new VideoSlider(this, context);
 	videoSlider->SetToolTip(_("Seek video"));
 
 	auto mainToolbar = toolbar::GetToolbar(this, "video", context, "Video", false);
 
-	VideoPosition = new wxTextCtrl(this, -1, "", wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
+	VideoPosition = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
 	VideoPosition->SetToolTip(_("Current frame time and number"));
 
-	VideoSubsPos = new wxTextCtrl(this, -1, "", wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
+	VideoSubsPos = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
 	VideoSubsPos->SetToolTip(_("Time of this frame relative to start and end of current subs"));
 
 	wxArrayString choices;
 	for (int i = 1; i <= 24; ++i)
 		choices.Add(fmt_wx("%g%%", i * 12.5));
-	auto zoomBox = new wxComboBox(this, -1, "75%", wxDefaultPosition, wxDefaultSize, choices, wxCB_DROPDOWN | wxTE_PROCESS_ENTER);
+	auto zoomBox = new wxComboBox(this, -1, wxS("75%"), wxDefaultPosition, wxDefaultSize, choices, wxCB_DROPDOWN | wxTE_PROCESS_ENTER);
 
 	auto visualToolBar = toolbar::GetToolbar(this, "visual_tools", context, "Video", true);
 	auto visualSubToolBar = new wxToolBar(this, -1, wxDefaultPosition, wxDefaultSize, wxTB_VERTICAL | wxTB_BOTTOM | wxTB_NODIVIDER | wxTB_FLAT);
@@ -97,25 +98,28 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 
 	UpdateTimeBoxes();
 
+	auto core = context->GetCore();
 	connections = agi::signal::make_vector({
-		context->ass->AddCommitListener(&VideoBox::UpdateTimeBoxes, this),
-		context->project->AddKeyframesListener(&VideoBox::UpdateTimeBoxes, this),
-		context->project->AddTimecodesListener(&VideoBox::UpdateTimeBoxes, this),
-		context->project->AddVideoProviderListener(&VideoBox::UpdateTimeBoxes, this),
-		context->selectionController->AddSelectionListener(&VideoBox::UpdateTimeBoxes, this),
-		context->videoController->AddSeekListener(&VideoBox::UpdateTimeBoxes, this),
+		core.ass->AddCommitListener(&VideoBox::UpdateTimeBoxes, this),
+		core.project->AddKeyframesListener(&VideoBox::UpdateTimeBoxes, this),
+		core.project->AddTimecodesListener(&VideoBox::UpdateTimeBoxes, this),
+		core.project->AddVideoProviderListener(&VideoBox::OnVideoProviderChanged, this),
+		core.selectionController->AddSelectionListener(&VideoBox::UpdateTimeBoxes, this),
+		core.videoController->AddSeekListener(&VideoBox::OnCurrentFrameChanged, this),
+		core.videoController->AddPlaybackFrameAdvancedListener(&VideoBox::OnCurrentFrameChanged, this),
 	});
 }
 
 void VideoBox::UpdateTimeBoxes() {
-	if (!context->project->VideoProvider()) return;
+	auto core = context->GetCore();
+	if (!core.project->VideoProvider()) return;
 
-	int frame = context->videoController->GetFrameN();
-	int time = context->videoController->TimeAtFrame(frame, agi::vfr::EXACT);
+	int frame = current_frame >= 0 ? current_frame : core.videoController->GetFrameN();
+	int time = core.videoController->TimeAtFrame(frame, agi::vfr::EXACT);
 
 	// Set the text box for frame number and time
 	VideoPosition->SetValue(fmt_wx("%s - %d", agi::Time(time).GetAssFormatted(true), frame));
-	if (std::binary_search(context->project->Keyframes().begin(), context->project->Keyframes().end(), frame)) {
+	if (std::binary_search(core.project->Keyframes().begin(), core.project->Keyframes().end(), frame)) {
 		// Set the background color to indicate this is a keyframe
 		VideoPosition->SetBackgroundColour(to_wx(OPT_GET("Colour/Subtitle Grid/Background/Selection")->GetColor()));
 		VideoPosition->SetForegroundColour(to_wx(OPT_GET("Colour/Subtitle Grid/Selection")->GetColor()));
@@ -125,13 +129,24 @@ void VideoBox::UpdateTimeBoxes() {
 		VideoPosition->SetForegroundColour(wxNullColour);
 	}
 
-	AssDialogue *active_line = context->selectionController->GetActiveLine();
+	AssDialogue *active_line = core.selectionController->GetActiveLine();
 	if (!active_line)
-		VideoSubsPos->SetValue("");
+		VideoSubsPos->SetValue(wxString());
 	else {
 		VideoSubsPos->SetValue(fmt_wx(
 			"%+dms; %+dms; %dms",
 			time - active_line->Start,
 			time - active_line->End, active_line->End - active_line->Start));
 	}
+}
+
+void VideoBox::OnCurrentFrameChanged(int frame_number) {
+	current_frame = frame_number;
+	UpdateTimeBoxes();
+}
+
+void VideoBox::OnVideoProviderChanged() {
+	auto core = context->GetCore();
+	current_frame = core.project->VideoProvider() ? core.videoController->GetFrameN() : -1;
+	UpdateTimeBoxes();
 }

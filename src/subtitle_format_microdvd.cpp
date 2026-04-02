@@ -77,7 +77,7 @@ bool MicroDVDSubtitleFormat::CanReadFile(agi::fs::path const& filename, std::str
 	return false;
 }
 
-void MicroDVDSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& vfps, std::string const& encoding) const {
+void MicroDVDSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& vfps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory>) const {
 	TextFileReader file(filename, encoding);
 
 	target->LoadDefault(false, OPT_GET("Subtitle Format/MicroDVD/Default Style Catalog")->GetString());
@@ -103,7 +103,7 @@ void MicroDVDSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& file
 			}
 
 			// If it wasn't an fps line, ask the user for it
-			fps = AskForFPS(true, false, vfps);
+			fps = AskForFPS(true, false, vfps, choice_sink);
 			if (!fps.IsLoaded()) return;
 		}
 
@@ -126,8 +126,8 @@ void MicroDVDSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& file
 	}
 }
 
-void MicroDVDSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& vfps, std::string const& encoding) const {
-	agi::vfr::Framerate fps = AskForFPS(true, false, vfps);
+void MicroDVDSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& vfps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
+	agi::vfr::Framerate fps = AskForFPS(true, false, vfps, choice_sink);
 	if (!fps.IsLoaded()) return;
 
 	AssFile copy(*src);

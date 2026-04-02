@@ -21,6 +21,7 @@
 #include "compat.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "selection_controller.h"
 #include "text_selection_controller.h"
 
@@ -44,12 +45,8 @@ auto get_dialogue_field(SearchReplaceSettings::Field field) -> decltype(&AssDial
 	throw agi::InternalError("Bad field for search");
 }
 
-std::string const& get_normalized(const AssDialogue *diag, decltype(&AssDialogueBase::Text) field) {
-	auto& value = const_cast<AssDialogue*>(diag)->*field;
-	auto normalized = boost::locale::normalize(value.get());
-	if (normalized != value)
-		value = normalized;
-	return value.get();
+std::string const& get_field_text(const AssDialogue *diag, decltype(&AssDialogueBase::Text) field) {
+	return (diag->*field).get();
 }
 
 typedef std::function<MatchState (const AssDialogue*, size_t)> matcher;
@@ -57,14 +54,15 @@ typedef std::function<MatchState (const AssDialogue*, size_t)> matcher;
 class noop_accessor {
 	boost::flyweight<std::string> AssDialogueBase::*field;
 	size_t start = 0;
+	std::string normalized;
 
 public:
 	noop_accessor(SearchReplaceSettings::Field f) : field(get_dialogue_field(f)) { }
 
 	agi::util::strings::view get_view(const AssDialogue *d, size_t s) {
 		start = s;
-		auto const& value = get_normalized(d, field);
-		return agi::util::strings::subview(value, s);
+		normalized = boost::locale::normalize(get_field_text(d, field));
+		return agi::util::strings::subview(normalized, s);
 	}
 
 	std::string get_string(const AssDialogue *d, size_t s) {
@@ -79,18 +77,20 @@ public:
 class skip_tags_accessor {
 	boost::flyweight<std::string> AssDialogueBase::*field;
 	agi::util::tagless_find_helper helper;
+	std::string normalized;
 	std::string stripped;
 
 public:
 	skip_tags_accessor(SearchReplaceSettings::Field f) : field(get_dialogue_field(f)) { }
 
 	agi::util::strings::view get_view(const AssDialogue *d, size_t s) {
-		stripped = helper.strip_tags(get_normalized(d, field), s);
+		normalized = boost::locale::normalize(get_field_text(d, field));
+		stripped = helper.strip_tags(normalized, s);
 		return stripped;
 	}
 
 	std::string get_string(const AssDialogue *d, size_t s) {
-		return helper.strip_tags(get_normalized(d, field), s);
+		return std::string(get_view(d, s));
 	}
 
 	MatchState make_match_state(size_t s, size_t e, boost::u32regex *r = nullptr) {
@@ -200,45 +200,46 @@ bool SearchReplaceEngine::FindReplace(bool replace) {
 	if (!initialized)
 		return false;
 
+	auto core = context->GetCore();
 	auto matches = GetMatcher(settings);
 
-	AssDialogue *line = context->selectionController->GetActiveLine();
-	auto it = context->ass->iterator_to(*line);
+	AssDialogue *line = core.selectionController->GetActiveLine();
+	auto it = core.ass->iterator_to(*line);
 	size_t pos = 0;
 
 	auto replace_ms = bad_match;
 	if (replace) {
 		if (settings.field == SearchReplaceSettings::Field::TEXT)
-			pos = context->textSelectionController->GetSelectionStart();
+			pos = core.textSelectionController->GetSelectionStart();
 
 		if ((replace_ms = matches(line, pos))) {
 			size_t end = bad_pos;
 			if (settings.field == SearchReplaceSettings::Field::TEXT)
-				end = context->textSelectionController->GetSelectionEnd();
+				end = core.textSelectionController->GetSelectionEnd();
 
 			if (end == bad_pos || (pos == replace_ms.start && end == replace_ms.end)) {
 				Replace(line, replace_ms);
 				pos = replace_ms.end;
-				context->ass->Commit(_("replace"), AssFile::COMMIT_DIAG_TEXT);
+				core.ass->Commit(from_wx(_("replace")), AssFile::COMMIT_DIAG_TEXT);
 			}
 			else {
 				// The current line matches, but it wasn't already selected,
 				// so the match hasn't been "found" and displayed to the user
 				// yet, so do that rather than replacing
-				context->textSelectionController->SetSelection(replace_ms.start, replace_ms.end);
+				core.textSelectionController->SetSelection(replace_ms.start, replace_ms.end);
 				return true;
 			}
 		}
 	}
 	// Search from the end of the selection to avoid endless matching the same thing
 	else if (settings.field == SearchReplaceSettings::Field::TEXT)
-		pos = context->textSelectionController->GetSelectionEnd();
+		pos = core.textSelectionController->GetSelectionEnd();
 	// For non-text fields we just look for matching lines rather than each
 	// match within the line, so move to the next line
 	else if (settings.field != SearchReplaceSettings::Field::TEXT)
-		it = circular_next(it, context->ass->Events);
+		it = circular_next(it, core.ass->Events);
 
-	auto const& sel = context->selectionController->GetSelectedSet();
+	auto const& sel = core.selectionController->GetSelectedSet();
 	bool selection_only = sel.size() > 1 && settings.limit_to == SearchReplaceSettings::Limit::SELECTED;
 
 	do {
@@ -248,21 +249,21 @@ bool SearchReplaceEngine::FindReplace(bool replace) {
 		if (MatchState ms = matches(&*it, pos)) {
 			if (selection_only)
 				// We're cycling through the selection, so don't muck with it
-				context->selectionController->SetActiveLine(&*it);
+				core.selectionController->SetActiveLine(&*it);
 			else
-				context->selectionController->SetSelectionAndActive({ &*it }, &*it);
+				core.selectionController->SetSelectionAndActive({ &*it }, &*it);
 
 			if (settings.field == SearchReplaceSettings::Field::TEXT)
-				context->textSelectionController->SetSelection(ms.start, ms.end);
+				core.textSelectionController->SetSelection(ms.start, ms.end);
 
 			return true;
 		}
-	} while (pos = 0, &*(it = circular_next(it, context->ass->Events)) != line);
+	} while (pos = 0, &*(it = circular_next(it, core.ass->Events)) != line);
 
 	// Replaced something and didn't find another match, so select the newly
 	// inserted text
 	if (replace_ms && settings.field == SearchReplaceSettings::Field::TEXT)
-		context->textSelectionController->SetSelection(replace_ms.start, replace_ms.end);
+		core.textSelectionController->SetSelection(replace_ms.start, replace_ms.end);
 
 	return true;
 }
@@ -273,12 +274,13 @@ bool SearchReplaceEngine::ReplaceAll() {
 
 	size_t count = 0;
 
+	auto core = context->GetCore();
 	auto matches = GetMatcher(settings);
 
-	auto const& sel = context->selectionController->GetSelectedSet();
+	auto const& sel = core.selectionController->GetSelectedSet();
 	bool selection_only = settings.limit_to == SearchReplaceSettings::Limit::SELECTED;
 
-	for (auto& diag : context->ass->Events) {
+	for (auto& diag : core.ass->Events) {
 		if (selection_only && !sel.count(&diag)) continue;
 		if (settings.ignore_comments && diag.Comment) continue;
 
@@ -303,7 +305,7 @@ bool SearchReplaceEngine::ReplaceAll() {
 	}
 
 	if (count > 0) {
-		context->ass->Commit(_("replace"), AssFile::COMMIT_DIAG_TEXT);
+		core.ass->Commit(from_wx(_("replace")), AssFile::COMMIT_DIAG_TEXT);
 		context->ShowInfo(from_wx(fmt_plural(count, "One match was replaced.", "%d matches were replaced.", (int)count)));
 	}
 	else {

@@ -54,7 +54,6 @@ class wxComboBox;
 class wxTextCtrl;
 class wxToolBar;
 class wxImage;
-struct FrameReadyEvent;
 
 namespace agi {
 	struct Context;
@@ -64,6 +63,7 @@ namespace agi {
 class VideoDisplay final : public wxGLCanvas {
 	/// Signals the display is connected to
 	std::vector<agi::signal::Connection> connections;
+	agi::signal::Signal<int> FramePresented;
 
 	const agi::OptionValue* autohideTools;
 
@@ -133,7 +133,7 @@ class VideoDisplay final : public wxGLCanvas {
 	void DrawOverscanMask(float horizontal_percent, float vertical_percent) const;
 
 	/// Upload the image for the current frame to the video card
-	void UploadFrameData(FrameReadyEvent&);
+	void UploadFrameData(VideoRenderPacket const&, double);
 
 	/// @brief Initialize the gl context and set the active context to this one
 	/// @return Could the context be set?
@@ -180,6 +180,7 @@ public:
 	void Render();
 	wxImage GetFrameImage(bool raw);
 	VideoDisplayMemoryStats CollectMemoryStats() const;
+	DEFINE_SIGNAL_ADDERS(FramePresented, AddFramePresentedListener)
 
 	/// @brief Set the zoom level
 	/// @param value The new zoom level

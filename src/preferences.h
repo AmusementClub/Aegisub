@@ -22,12 +22,21 @@
 #include <memory>
 #include <vector>
 
+#include <libaegisub/fs_fwd.h>
+
 #include <wx/dialog.h>
 
 class wxButton;
 class wxTreebook;
 class PersistLocation;
 namespace agi { class OptionValue; }
+namespace agi { class FileDialogService; }
+namespace agi { class InteractionSink; }
+namespace agi { struct InteractionRequest; }
+namespace agi { struct OpenFileDialogRequest; }
+namespace agi { struct SaveFileDialogRequest; }
+namespace agi { struct SelectDirectoryDialogRequest; }
+namespace agi { enum class InteractionResult : int; }
 
 class Preferences final : public wxDialog {
 public:
@@ -36,6 +45,8 @@ private:
 	wxTreebook *book = nullptr;
 	wxButton *applyButton = nullptr;
 	std::unique_ptr<PersistLocation> persist;
+	std::shared_ptr<agi::FileDialogService> file_dialog_service;
+	std::shared_ptr<agi::InteractionSink> interaction_sink;
 
 	std::map<std::string, std::unique_ptr<agi::OptionValue>> pending_changes;
 	std::vector<Thunk> pending_callbacks;
@@ -70,4 +81,9 @@ public:
 	/// simply revert to the default config file as a bunch of things other than
 	/// user options are stored in it. Perhaps that should change in the future.
 	void AddChangeableOption(std::string const& name);
+
+	agi::fs::path RequestOpenFile(agi::OpenFileDialogRequest const& request) const;
+	agi::fs::path RequestSaveFile(agi::SaveFileDialogRequest const& request) const;
+	agi::fs::path RequestSelectDirectory(agi::SelectDirectoryDialogRequest const& request) const;
+	agi::InteractionResult RequestInteraction(agi::InteractionRequest const& request) const;
 };

@@ -38,7 +38,7 @@ inline wxString FindPreferredTranslation(wxArrayString const& supported, wxVecto
 			auto region = locale_id.GetRegion();
 			if (!language.empty()) {
 				if (!region.empty()) {
-					if (auto match = try_match(language + "_" + region); !match.empty())
+					if (auto match = try_match(language + wxS("_") + region); !match.empty())
 						return match;
 				}
 				if (auto match = try_match(language); !match.empty())

@@ -22,6 +22,7 @@
 
 #include "gl_text.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "selection_controller.h"
 #include "video_display.h"
 
@@ -43,7 +44,8 @@ VisualToolCross::~VisualToolCross() {
 void VisualToolCross::OnDoubleClick() {
 	Vector2D d = ToScriptCoords(mouse_pos) - GetLinePosition(active_line);
 
-	for (auto line : c->selectionController->GetSelectedSet()) {
+	auto core = c->GetCore();
+	for (auto line : core.selectionController->GetSelectedSet()) {
 		Vector2D p1, p2;
 		int t1, t2;
 		if (GetLineMove(line, p1, p2, t1, t2)) {

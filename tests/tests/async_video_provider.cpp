@@ -6,6 +6,7 @@
 #include "../../src/export_fixstyle.h"
 #include "../../src/include/aegisub/subtitles_provider.h"
 #include "../../src/subtitle_overlay_blend.h"
+#include "../../src/ui_services.h"
 #include "../../src/transient_font_set.h"
 #include "../../src/video_render_geometry.h"
 #include "../../src/include/aegisub/video_provider.h"
@@ -486,26 +487,30 @@ class EventRecorder {
 	std::vector<RecordedFrame> frames;
 
 public:
-	void operator()(std::unique_ptr<wxEvent> evt) {
-		if (evt->GetEventType() != EVT_FRAME_READY)
-			return;
-
-		auto *frame_evt = static_cast<FrameReadyEvent *>(evt.get());
-		auto display_frame = frame_evt->packet.DisplayFrame();
+	void operator()(VideoRenderPacket packet, double time) {
+		auto display_frame = packet.DisplayFrame();
 		RecordedFrame frame;
 		frame.frame_number = display_frame && !display_frame->data.empty() ? display_frame->data[0] : -1;
 		frame.subtitle_generation = display_frame && display_frame->data.size() > 1 ? display_frame->data[1] : -1;
-		frame.time = frame_evt->time;
-		frame.has_overlay = frame_evt->packet.has_subtitle_overlay;
-		frame.overlay_dirty_rect_count = frame_evt->packet.subtitle_overlay.dirty_rect_count;
-		frame.overlay_continuity_generation = frame_evt->packet.subtitle_overlay.continuity_generation;
-		frame.source_visible_rect = GetSourceFrameVisibleRect(frame_evt->packet.source_frame);
+		frame.time = time;
+		frame.has_overlay = packet.has_subtitle_overlay;
+		frame.overlay_dirty_rect_count = packet.subtitle_overlay.dirty_rect_count;
+		frame.overlay_continuity_generation = packet.subtitle_overlay.continuity_generation;
+		frame.source_visible_rect = GetSourceFrameVisibleRect(packet.source_frame);
 
 		{
 			std::lock_guard<std::mutex> lock(mutex);
 			frames.push_back(frame);
 		}
 		cv.notify_all();
+	}
+
+	operator AsyncVideoProviderEventSink() {
+		AsyncVideoProviderEventSink sink;
+		sink.on_frame_ready = [this](VideoRenderPacket packet, double time) {
+			(*this)(std::move(packet), time);
+		};
+		return sink;
 	}
 
 	bool WaitForCount(size_t count) {
@@ -533,6 +538,7 @@ AssFile MakeSubtitleFile(std::string const& text) {
 std::function<std::unique_ptr<VideoProvider>()> g_video_provider_factory;
 std::function<std::unique_ptr<SubtitlesProvider>(SubtitleRenderEnvironment const&)> g_subtitles_provider_factory;
 std::shared_ptr<const TransientFontSet> g_last_factory_transient_fonts;
+std::shared_ptr<agi::SingleChoiceInteractionSink> g_last_factory_choice_sink;
 agi::BackgroundRunner *g_last_factory_background_runner = nullptr;
 
 struct ScopedFactoryOverride final {
@@ -540,6 +546,7 @@ struct ScopedFactoryOverride final {
 		g_video_provider_factory = nullptr;
 		g_subtitles_provider_factory = nullptr;
 		g_last_factory_transient_fonts.reset();
+		g_last_factory_choice_sink.reset();
 		g_last_factory_background_runner = nullptr;
 	}
 };
@@ -547,7 +554,8 @@ struct ScopedFactoryOverride final {
 
 std::vector<std::string> VideoProviderFactory::GetClasses() { return {}; }
 std::vector<std::pair<std::string, std::string>> VideoProviderFactory::GetChoices() { return {}; }
-std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *) {
+std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
+	g_last_factory_choice_sink = std::move(choice_sink);
 	if (g_video_provider_factory)
 		return g_video_provider_factory();
 	return nullptr;
@@ -619,7 +627,7 @@ TEST(async_video_provider, request_frame_keeps_only_latest_pending_render) {
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	provider.RequestFrame(1, 1000);
 
@@ -656,7 +664,7 @@ TEST(async_video_provider, load_subtitles_invalidates_stale_render_result) {
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto first = MakeSubtitleFile("old");
 	auto second = MakeSubtitleFile("new");
@@ -692,7 +700,7 @@ TEST(async_video_provider, get_frame_flushes_pending_subtitle_state) {
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("sync");
 	provider.LoadSubtitles(&subtitle_file);
@@ -713,7 +721,7 @@ TEST(async_video_provider, get_frame_bgra_returns_cpu_frame_when_native_mode_sel
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
 	ASSERT_EQ(SourceFrameOutputMode::Native, provider.GetSelectedSourceMode());
@@ -754,7 +762,7 @@ TEST(async_video_provider, find_key_point_range_scans_frames_inside_worker) {
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto result = provider.FindKeyPointRange({
 		5,
@@ -800,7 +808,7 @@ TEST(async_video_provider, find_key_point_range_respects_flipped_frame_coordinat
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto result = provider.FindKeyPointRange({
 		3,
@@ -844,7 +852,7 @@ TEST(async_video_provider, find_key_point_range_refines_coarse_scan_boundaries) 
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto result = provider.FindKeyPointRange({
 		7,
@@ -889,7 +897,7 @@ TEST(async_video_provider, find_key_point_range_refines_to_boundary_when_coarse_
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto result = provider.FindKeyPointRange({
 		3,
@@ -934,7 +942,7 @@ TEST(async_video_provider, find_key_point_range_refines_to_boundary_after_coarse
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto result = provider.FindKeyPointRange({
 		12,
@@ -962,7 +970,7 @@ TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("overlay");
 	provider.LoadSubtitles(&subtitle_file);
@@ -1006,7 +1014,7 @@ TEST(async_video_provider, update_subtitles_advances_overlay_continuity_generati
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto initial = MakeSubtitleFile("overlay-1");
 	provider.LoadSubtitles(&initial);
@@ -1031,7 +1039,7 @@ TEST(async_video_provider, color_space_override_updates_effective_source_frame_m
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	provider.SetColorSpace("TV.601");
 	auto packet = provider.GetRenderPacket(3, 3000);
@@ -1049,7 +1057,7 @@ TEST(async_video_provider, direct_overlay_color_space_override_preserves_overlay
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("overlay");
 	provider.LoadSubtitles(&subtitle_file);
@@ -1074,7 +1082,7 @@ TEST(async_video_provider, bgra_source_frame_preserves_upstream_native_format_id
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto packet = provider.GetRenderPacket(3, 3000);
 	EXPECT_EQ(SourceFrameOutputMode::Bgra8, packet.source_frame.output_mode);
@@ -1098,7 +1106,7 @@ TEST(async_video_provider, bgra_source_mode_propagates_provider_geometry_to_over
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("overlay");
 	provider.LoadSubtitles(&subtitle_file);
@@ -1129,7 +1137,7 @@ TEST(async_video_provider, native_source_mode_returns_native_source_frame_packet
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
 	auto packet = provider.GetRenderPacket(5, 5000, true);
@@ -1159,7 +1167,7 @@ TEST(async_video_provider, native_source_mode_keeps_native_frame_for_source_only
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
 	auto packet = provider.GetRenderPacket(5, 5000, true);
@@ -1183,7 +1191,7 @@ TEST(async_video_provider, native_source_mode_keeps_native_frame_for_source_only
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
 	auto packet = provider.GetRenderPacket(5, 5000, true);
@@ -1206,7 +1214,7 @@ TEST(async_video_provider, native_source_mode_keeps_native_frame_for_rotated_sub
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("overlay");
 	provider.LoadSubtitles(&subtitle_file);
@@ -1233,7 +1241,7 @@ TEST(async_video_provider, native_source_mode_keeps_native_frame_for_display_vfl
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("overlay");
 	provider.LoadSubtitles(&subtitle_file);
@@ -1262,7 +1270,7 @@ TEST(async_video_provider, native_source_mode_keeps_native_frame_for_rotation_pl
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("overlay");
 	provider.LoadSubtitles(&subtitle_file);
@@ -1293,7 +1301,7 @@ TEST(async_video_provider, native_source_mode_propagates_non_full_visible_rect_t
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("overlay");
 	provider.LoadSubtitles(&subtitle_file);
@@ -1355,7 +1363,7 @@ TEST(async_video_provider, request_frame_event_preserves_non_full_visible_rect_m
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("overlay");
 	provider.LoadSubtitles(&subtitle_file);
@@ -1383,7 +1391,7 @@ TEST(async_video_provider, native_source_mode_keeps_native_frame_for_display_vfl
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
 	auto packet = provider.GetRenderPacket(5, 5000);
@@ -1404,7 +1412,7 @@ TEST(async_video_provider, preferred_source_modes_choose_native_for_overlay_path
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
 	EXPECT_EQ(SourceFrameOutputMode::Native, provider.GetSelectedSourceMode());
@@ -1421,7 +1429,7 @@ TEST(async_video_provider, compatibility_subtitle_mode_forces_bgra8_output_mode)
 	AsyncVideoProvider provider(
 		std::unique_ptr<VideoProvider>(video),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	EXPECT_FALSE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
 	EXPECT_EQ(SourceFrameOutputMode::Bgra8, provider.GetSelectedSourceMode());
@@ -1436,7 +1444,7 @@ TEST(async_video_provider, premultiplied_overlay_provider_can_supply_dirty_rects
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("overlay");
 	provider.LoadSubtitles(&subtitle_file);
@@ -1462,7 +1470,7 @@ TEST(async_video_provider, invisible_premultiplied_overlay_is_not_forwarded_as_v
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("overlay");
 	provider.LoadSubtitles(&subtitle_file);
@@ -1471,7 +1479,7 @@ TEST(async_video_provider, invisible_premultiplied_overlay_is_not_forwarded_as_v
 	EXPECT_FALSE(packet.has_subtitle_overlay);
 }
 
-TEST(async_video_provider, compatibility_only_backend_uses_single_legacy_render) {
+TEST(async_video_provider, compatibility_only_backend_emits_sparse_overlay_from_single_legacy_render) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
 	EventRecorder recorder;
@@ -1479,7 +1487,7 @@ TEST(async_video_provider, compatibility_only_backend_uses_single_legacy_render)
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("csri");
 	provider.LoadSubtitles(&subtitle_file);
@@ -1498,9 +1506,11 @@ TEST(async_video_provider, compatibility_only_backend_uses_single_legacy_render)
 	EXPECT_EQ(1, extracted_overlay.width);
 	EXPECT_EQ(1, extracted_overlay.height);
 
-	EXPECT_FALSE(packet.has_subtitle_overlay);
-	EXPECT_FALSE(static_cast<bool>(packet.subtitle_overlay_storage));
-	EXPECT_FALSE(packet.subtitle_overlay.IsValid());
+	EXPECT_TRUE(packet.has_subtitle_overlay);
+	ASSERT_TRUE(packet.subtitle_overlay_storage);
+	EXPECT_TRUE(packet.subtitle_overlay.IsValid());
+	EXPECT_EQ(SubtitleOverlayColorRole::SubtitleVideoCompatibility, packet.subtitle_overlay.color_role);
+	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, packet.subtitle_overlay.composition_mode);
 }
 
 TEST(async_video_provider, compatibility_backend_keeps_using_baked_composited_frames_when_content_is_stable) {
@@ -1511,7 +1521,7 @@ TEST(async_video_provider, compatibility_backend_keeps_using_baked_composited_fr
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("csri");
 	provider.LoadSubtitles(&subtitle_file);
@@ -1519,14 +1529,16 @@ TEST(async_video_provider, compatibility_backend_keeps_using_baked_composited_fr
 	auto first = provider.GetRenderPacket(5, 5000);
 	auto second = provider.GetRenderPacket(5, 5000);
 
-	EXPECT_FALSE(first.has_subtitle_overlay);
-	EXPECT_FALSE(second.has_subtitle_overlay);
+	EXPECT_TRUE(first.has_subtitle_overlay);
+	EXPECT_TRUE(second.has_subtitle_overlay);
+	ASSERT_TRUE(first.subtitle_overlay_storage);
+	ASSERT_TRUE(second.subtitle_overlay_storage);
 	ASSERT_TRUE(first.composited_frame_storage);
 	ASSERT_TRUE(second.composited_frame_storage);
 	EXPECT_EQ(first.composited_frame_storage->data, second.composited_frame_storage->data);
 }
 
-TEST(async_video_provider, compatibility_backend_does_not_allocate_explicit_overlay_storage) {
+TEST(async_video_provider, compatibility_backend_allocates_overlay_storage_for_sparse_diffs) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
 	EventRecorder recorder;
@@ -1534,28 +1546,65 @@ TEST(async_video_provider, compatibility_backend_does_not_allocate_explicit_over
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("csri");
 	provider.LoadSubtitles(&subtitle_file);
 
 	auto first = provider.GetRenderPacket(5, 5000);
 	auto second = provider.GetRenderPacket(5, 5000);
-	EXPECT_FALSE(first.has_subtitle_overlay);
-	EXPECT_FALSE(second.has_subtitle_overlay);
-	EXPECT_FALSE(static_cast<bool>(first.subtitle_overlay_storage));
-	EXPECT_FALSE(static_cast<bool>(second.subtitle_overlay_storage));
+	EXPECT_TRUE(first.has_subtitle_overlay);
+	EXPECT_TRUE(second.has_subtitle_overlay);
+	EXPECT_TRUE(static_cast<bool>(first.subtitle_overlay_storage));
+	EXPECT_TRUE(static_cast<bool>(second.subtitle_overlay_storage));
+}
+
+TEST(async_video_provider, dropped_packet_recycles_compatibility_overlay_buffer) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		recorder);
+
+	auto subtitle_file = MakeSubtitleFile("csri");
+	provider.LoadSubtitles(&subtitle_file);
+
+	auto first = provider.GetRenderPacket(5, 5000);
+	auto* first_storage = first.subtitle_overlay_storage.get();
+	ASSERT_TRUE(first_storage);
+
+	auto second = provider.GetRenderPacket(5, 5000);
+	auto* second_storage = second.subtitle_overlay_storage.get();
+	ASSERT_TRUE(second_storage);
+	ASSERT_NE(first_storage, second_storage);
+
+	auto third = provider.GetRenderPacket(5, 5000);
+	auto* third_storage = third.subtitle_overlay_storage.get();
+	ASSERT_TRUE(third_storage);
+	EXPECT_NE(third_storage, first_storage);
+	EXPECT_NE(third_storage, second_storage);
+
+	second = { };
+
+	auto fourth = provider.GetRenderPacket(5, 5000);
+	auto* fourth_storage = fourth.subtitle_overlay_storage.get();
+	ASSERT_TRUE(fourth_storage);
+	EXPECT_EQ(second_storage, fourth_storage);
 }
 
 TEST(async_video_provider, dropped_packet_advances_overlay_continuity_generation_on_next_delivered_event) {
 	auto state = std::make_shared<VideoProviderState>();
+
 	auto *subs = new FakeDropSensitiveOverlaySubtitlesProvider;
 	EventRecorder recorder;
 
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("overlay");
 	provider.LoadSubtitles(&subtitle_file);
@@ -1595,7 +1644,7 @@ TEST(async_video_provider, replacing_subtitles_provider_reuses_video_provider_an
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(compat_subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	auto subtitle_file = MakeSubtitleFile("swap");
 	provider.LoadSubtitles(&subtitle_file);
@@ -1603,7 +1652,7 @@ TEST(async_video_provider, replacing_subtitles_provider_reuses_video_provider_an
 	auto first = provider.GetRenderPacket(5, 5000);
 	ASSERT_TRUE(first.source_frame_storage);
 	EXPECT_EQ(5, first.source_frame_storage->data[0]);
-	EXPECT_FALSE(first.has_subtitle_overlay);
+	EXPECT_TRUE(first.has_subtitle_overlay);
 
 	auto *overlay_subs = new FakeOverlaySubtitlesProvider;
 	provider.ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider>(overlay_subs));
@@ -1626,7 +1675,7 @@ TEST(async_video_provider, provider_activation_runs_on_initial_create_and_replac
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(first_subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	EXPECT_EQ(1, first_subs->activation_calls);
 
@@ -1644,7 +1693,7 @@ TEST(async_video_provider, replacement_activates_new_provider_before_old_is_dest
 	AsyncVideoProvider provider(
 		agi::make_unique<FakeVideoProvider>(state),
 		std::unique_ptr<SubtitlesProvider>(first_subs),
-		[&](std::unique_ptr<wxEvent> evt) { recorder(std::move(evt)); });
+		recorder);
 
 	EXPECT_EQ(0, first_subs->destroyed_before_activation);
 	EXPECT_EQ(0, destruction_count);
@@ -1672,8 +1721,7 @@ TEST(async_video_provider, filename_constructor_forwards_transient_fonts_to_fact
 	fonts->generation = 42;
 	fonts->fonts.push_back({ "embedded.ttf", "font/ttf", { 'f', 'o', 'n', 't' } });
 
-	wxEvtHandler parent;
-	AsyncVideoProvider provider(agi::fs::path("dummy.mkv"), "", &parent, nullptr, fonts);
+	AsyncVideoProvider provider(agi::fs::path("dummy.mkv"), "", AsyncVideoProviderEventSink{}, nullptr, fonts);
 
 	ASSERT_TRUE(g_last_factory_transient_fonts);
 	EXPECT_EQ(fonts, g_last_factory_transient_fonts);
@@ -1689,4 +1737,40 @@ TEST(async_video_provider, filename_constructor_forwards_transient_fonts_to_fact
 	ASSERT_GE(frame->data.size(), 2u);
 	EXPECT_EQ(3, frame->data[0]);
 	EXPECT_EQ(1, frame->data[1]);
+}
+
+TEST(async_video_provider, filename_constructor_forwards_choice_sink_to_video_factory) {
+	ScopedFactoryOverride scope;
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeSubtitlesProvider;
+
+	g_video_provider_factory = [state] {
+		return agi::make_unique<FakeVideoProvider>(state);
+	};
+	g_subtitles_provider_factory = [subs](SubtitleRenderEnvironment const&) {
+		return std::unique_ptr<SubtitlesProvider>(subs);
+	};
+
+	auto choice_sink = std::make_shared<agi::NullSingleChoiceInteractionSink>();
+	AsyncVideoProvider provider(agi::fs::path("dummy.mkv"), "", AsyncVideoProviderEventSink{}, nullptr, {}, choice_sink);
+
+	ASSERT_TRUE(g_last_factory_choice_sink);
+	EXPECT_EQ(choice_sink, g_last_factory_choice_sink);
+}
+
+TEST(async_video_provider, filename_constructor_does_not_create_default_choice_sink) {
+	ScopedFactoryOverride scope;
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeSubtitlesProvider;
+
+	g_video_provider_factory = [state] {
+		return agi::make_unique<FakeVideoProvider>(state);
+	};
+	g_subtitles_provider_factory = [subs](SubtitleRenderEnvironment const&) {
+		return std::unique_ptr<SubtitlesProvider>(subs);
+	};
+
+	AsyncVideoProvider provider(agi::fs::path("dummy.mkv"), "", AsyncVideoProviderEventSink{}, nullptr);
+
+	EXPECT_EQ(nullptr, g_last_factory_choice_sink);
 }

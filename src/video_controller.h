@@ -29,20 +29,22 @@
 
 #pragma once
 
+#include "async_video_provider_host.h"
+#include "video_render_packet.h"
+
 #include <libaegisub/signal.h>
 #include <libaegisub/vfr.h>
 
 #include <chrono>
+#include <memory>
 #include <set>
+#include <string>
 
 #include "ui_dispatch.h"
 
-#include <wx/timer.h>
-
 class AssDialogue;
 class AsyncVideoProvider;
-struct SubtitlesProviderErrorEvent;
-struct VideoProviderErrorEvent;
+class VideoControllerTimer;
 
 namespace agi {
 	struct Context;
@@ -58,9 +60,13 @@ enum class AspectRatio {
 };
 
 /// Manage stuff related to video playback
-class VideoController final : public wxEvtHandler {
-	/// Current frame number changed (new frame number)
+class VideoController final {
+	/// Navigation target frame changed (new frame number)
 	agi::signal::Signal<int> Seek;
+	/// Continuous playback advanced to a new frame (new frame number)
+	agi::signal::Signal<int> PlaybackFrameAdvanced;
+	/// A render packet is ready to be presented.
+	agi::signal::Signal<VideoRenderPacket const&, double> FrameReady;
 	/// Aspect ratio was changed (type, value)
 	agi::signal::Signal<AspectRatio, double> ARChange;
 
@@ -76,7 +82,7 @@ class VideoController final : public wxEvtHandler {
 
 	/// Playback timer used to periodically check if we should go to the next
 	/// frame while playing video
-	wxTimer playback;
+	std::unique_ptr<VideoControllerTimer> playback_timer;
 
 	/// Time when playback was last started
 	std::chrono::steady_clock::time_point playback_start_time;
@@ -87,6 +93,14 @@ class VideoController final : public wxEvtHandler {
 
 	/// The last frame to play if video is currently playing
 	int end_frame = 0;
+	enum class PlaybackMode {
+		None,
+		ToEnd,
+		LineRange
+	};
+	PlaybackMode playback_mode = PlaybackMode::None;
+	int playback_end_ms = 0;
+	bool playback_uses_audio_authority = false;
 
 	/// The frame number which was last requested from the video provider,
 	/// which may not be the same thing as the currently displayed frame
@@ -102,10 +116,11 @@ class VideoController final : public wxEvtHandler {
 	/// Cached option for audio playing when frame stepping
 	const agi::OptionValue* playAudioOnStep;
 
-	void OnPlayTimer(wxTimerEvent &event);
+	void OnPlayTimer();
 
-	void OnVideoError(VideoProviderErrorEvent const& err);
-	void OnSubtitlesError(SubtitlesProviderErrorEvent const& err);
+	void HandleVideoError(std::string const& message);
+	void HandleSubtitlesError(std::string const& message);
+	void DeliverFrameReady(VideoRenderPacket packet, double time);
 
 	void OnSubtitlesCommit(int type, const AssDialogue *changed);
 	void OnNewVideoProvider(AsyncVideoProvider *provider);
@@ -113,13 +128,18 @@ class VideoController final : public wxEvtHandler {
 
 	void RequestFrame();
 	void RequestFrameImmediate();
+	void StartPlayback(PlaybackMode mode, int range_end_ms = 0);
+	bool PreparePlayback(PlaybackMode mode, int start_frame, int range_end_ms = 0);
+	void StartPlaybackTimer();
+	void ResetPlaybackState();
 
 public:
 	VideoController(agi::Context *context);
 	~VideoController();
 
 	/// Is the video currently playing?
-	bool IsPlaying() const { return playback.IsRunning(); }
+	bool IsPlaying() const;
+	bool PlaybackUsesAudioAuthority() const { return playback_uses_audio_authority; }
 
 	/// Get the current frame number
 	int GetFrameN() const { return frame_n; }
@@ -160,8 +180,11 @@ public:
 	void Stop();
 
 	DEFINE_SIGNAL_ADDERS(Seek, AddSeekListener)
+	DEFINE_SIGNAL_ADDERS(PlaybackFrameAdvanced, AddPlaybackFrameAdvancedListener)
+	DEFINE_SIGNAL_ADDERS(FrameReady, AddFrameReadyListener)
 	DEFINE_SIGNAL_ADDERS(ARChange, AddARChangeListener)
 	agi::ui::WeakLifetime GetAsyncUiLifetime() const { return ui_activation.GetLifetime(); }
+	AsyncVideoProviderEventSink CreateAsyncVideoProviderEventSink();
 
 	int TimeAtFrame(int frame, agi::vfr::Time type = agi::vfr::EXACT) const;
 	int FrameAtTime(int time, agi::vfr::Time type = agi::vfr::EXACT) const;

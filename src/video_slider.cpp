@@ -38,6 +38,7 @@
 #include "base_grid.h"
 #include "command/command.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
 #include "options.h"
 #include "project.h"
@@ -53,16 +54,17 @@ VideoSlider::VideoSlider (wxWindow* parent, agi::Context *c)
 , connections(agi::signal::make_vector({
 	OPT_SUB("Video/Slider/Show Keyframes", [=] { Refresh(false); }),
 	OPT_SUB("Video/Scale with DPI", [=](agi::OptionValue const&) { UpdateScale(); }),
-	c->videoController->AddSeekListener(&VideoSlider::SetValue, this),
-	c->project->AddVideoProviderListener(&VideoSlider::VideoOpened, this),
-	c->project->AddKeyframesListener(&VideoSlider::KeyframesChanged, this),
+	c->GetCore().videoController->AddSeekListener(&VideoSlider::SetValue, this),
+	c->GetUI().AddVideoFramePresentedListener(&VideoSlider::SetValue, this),
+	c->GetCore().project->AddVideoProviderListener(&VideoSlider::VideoOpened, this),
+	c->GetCore().project->AddKeyframesListener(&VideoSlider::KeyframesChanged, this),
 }))
 {
 	UpdateScale();
 	SetBackgroundStyle(wxBG_STYLE_PAINT);
 
-	c->videoSlider = this;
-	VideoOpened(c->project->VideoProvider());
+	c->GetUI().videoSlider = this;
+	VideoOpened(c->GetCore().project->VideoProvider());
 }
 
 void VideoSlider::UpdateScale() {
@@ -153,7 +155,7 @@ void VideoSlider::OnMouse(wxMouseEvent &event) {
 			SetValue(go);
 		}
 
-		c->videoController->JumpToFrame(val);
+		c->GetCore().videoController->JumpToFrame(val);
 	}
 	else if (event.GetWheelRotation() != 0 && ForwardMouseWheelEvent(this, event)) {
 		// If mouse is over the slider, use wheel to step by frames or keyframes (when Shift is held)
@@ -164,7 +166,7 @@ void VideoSlider::OnMouse(wxMouseEvent &event) {
 				cmd::call("video/frame/prev/keyframe", c);
 		else {
 			SetValue(val + (event.GetWheelRotation() > 0 ? -1 : 1));
-			c->videoController->JumpToFrame(val);
+			c->GetCore().videoController->JumpToFrame(val);
 		}
 	}
 }
@@ -182,7 +184,7 @@ void VideoSlider::OnKeyDown(wxKeyEvent &event) {
 		case WXK_PAGEDOWN:
 		case WXK_HOME:
 		case WXK_END:
-			c->subsGrid->GetEventHandler()->ProcessEvent(event);
+			c->GetUI().subsGrid->GetEventHandler()->ProcessEvent(event);
 			break;
 		default:
 			event.Skip();

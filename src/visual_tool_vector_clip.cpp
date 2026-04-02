@@ -19,6 +19,7 @@
 #include "ass_dialogue.h"
 #include "compat.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "selection_controller.h"
 #include "utils.h"
@@ -232,7 +233,8 @@ void VisualToolVectorClip::Save() {
 		value += std::to_string(spline.GetScale()) + ",";
 	value += spline.EncodeToAss() + ")";
 
-	for (auto line : c->selectionController->GetSelectedSet()) {
+	auto core = c->GetCore();
+	for (auto line : core.selectionController->GetSelectedSet()) {
 		// This check is technically not correct as it could be outside of an
 		// override block... but that's rather unlikely
 		bool has_iclip = line->Text.get().find("\\iclip") != std::string::npos;

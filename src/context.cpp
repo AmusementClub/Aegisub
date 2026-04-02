@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 
 #include "ass_file.h"
 #include "audio_controller.h"
@@ -35,6 +36,86 @@
 #include <libaegisub/path.h>
 
 namespace agi {
+ContextCoreSession::ContextCoreSession(Context& context)
+: ass(context.ass)
+, textSelectionController(context.textSelectionController)
+, subsController(context.subsController)
+, project(context.project)
+, local_scripts(context.local_scripts)
+, selectionController(context.selectionController)
+, videoController(context.videoController)
+, audioController(context.audioController)
+, initialLineState(context.initialLineState)
+, search(context.search)
+, path(context.path)
+, statusSink(context.statusSink)
+, notificationSink(context.notificationSink)
+, interactionSink(context.interactionSink)
+, singleChoiceInteractionSink(context.singleChoiceInteractionSink)
+, fileDialogService(context.fileDialogService)
+, videoSourceRequestService(context.videoSourceRequestService)
+, backgroundRunnerFactory(context.backgroundRunnerFactory)
+, projectUiStateSink(context.projectUiStateSink)
+, audioPlayerFactoryService(context.audioPlayerFactoryService)
+, automationBackgroundScriptRunnerFactory(context.automationBackgroundScriptRunnerFactory) {
+}
+
+ConstContextCoreSession::ConstContextCoreSession(Context const& context)
+: ass(context.ass)
+, textSelectionController(context.textSelectionController)
+, subsController(context.subsController)
+, project(context.project)
+, local_scripts(context.local_scripts)
+, selectionController(context.selectionController)
+, videoController(context.videoController)
+, audioController(context.audioController)
+, initialLineState(context.initialLineState)
+, search(context.search)
+, path(context.path)
+, statusSink(context.statusSink)
+, notificationSink(context.notificationSink)
+, interactionSink(context.interactionSink)
+, singleChoiceInteractionSink(context.singleChoiceInteractionSink)
+, fileDialogService(context.fileDialogService)
+, videoSourceRequestService(context.videoSourceRequestService)
+, backgroundRunnerFactory(context.backgroundRunnerFactory)
+, projectUiStateSink(context.projectUiStateSink)
+, audioPlayerFactoryService(context.audioPlayerFactoryService)
+, automationBackgroundScriptRunnerFactory(context.automationBackgroundScriptRunnerFactory) {
+}
+
+ContextUiState::ContextUiState()
+: dialog(make_unique<DialogManager>()) {
+}
+
+ContextUiState::~ContextUiState() = default;
+
+ContextUiSession::ContextUiSession(ContextUiState& state)
+: parent(state.parent)
+, previousFocus(state.previousFocus)
+, videoSlider(state.videoSlider)
+, audioBox(state.audioBox)
+, karaoke(state.karaoke)
+, subsGrid(state.subsGrid)
+, dialog(state.dialog)
+, frame(state.frame)
+, videoDisplay(state.videoDisplay)
+, videoFramePresented(state.videoFramePresented) {
+}
+
+ConstContextUiSession::ConstContextUiSession(ContextUiState const& state)
+: parent(state.parent)
+, previousFocus(state.previousFocus)
+, videoSlider(state.videoSlider)
+, audioBox(state.audioBox)
+, karaoke(state.karaoke)
+, subsGrid(state.subsGrid)
+, dialog(state.dialog)
+, frame(state.frame)
+, videoDisplay(state.videoDisplay)
+, videoFramePresented(state.videoFramePresented) {
+}
+
 Context::Context()
 : ass(make_unique<AssFile>())
 , textSelectionController(make_unique<TextSelectionController>())
@@ -50,8 +131,14 @@ Context::Context()
 , statusSink(std::make_shared<NullStatusSink>())
 , notificationSink(std::make_shared<NullNotificationSink>())
 , interactionSink(std::make_shared<NullInteractionSink>())
+, singleChoiceInteractionSink(std::make_shared<NullSingleChoiceInteractionSink>())
+, fileDialogService(std::make_shared<NullFileDialogService>())
+, videoSourceRequestService(std::make_shared<NullVideoSourceRequestService>())
 , backgroundRunnerFactory(std::make_shared<InlineBackgroundRunnerFactory>())
-, dialog(make_unique<DialogManager>())
+, projectUiStateSink(std::make_shared<NullProjectUiStateSink>())
+, audioPlayerFactoryService(std::make_shared<NullAudioPlayerFactoryService>())
+, automationBackgroundScriptRunnerFactory(std::make_shared<Automation4::NullAutomationBackgroundScriptRunnerFactory>())
+, ui(make_unique<ContextUiState>())
 {
 	subsController->SetSelectionController(selectionController.get());
 }
@@ -96,9 +183,79 @@ InteractionResult Context::RequestInteraction(InteractionRequest const& request)
 	return InteractionResult::Cancel;
 }
 
+std::shared_ptr<SingleChoiceInteractionSink> Context::GetSingleChoiceInteractionSink() const {
+	return singleChoiceInteractionSink;
+}
+
+std::optional<int> Context::RequestSingleChoice(SingleChoiceInteractionRequest const& request) const {
+	if (singleChoiceInteractionSink)
+		return singleChoiceInteractionSink->RequestSingleChoice(request);
+	return std::nullopt;
+}
+
+std::shared_ptr<FileDialogService> Context::GetFileDialogService() const {
+	return fileDialogService;
+}
+
+agi::fs::path Context::RequestOpenFile(OpenFileDialogRequest const& request) const {
+	if (fileDialogService)
+		return fileDialogService->RequestOpenFile(request);
+	return {};
+}
+
+std::vector<agi::fs::path> Context::RequestOpenFiles(OpenFilesDialogRequest const& request) const {
+	if (fileDialogService)
+		return fileDialogService->RequestOpenFiles(request);
+	return {};
+}
+
+agi::fs::path Context::RequestSaveFile(SaveFileDialogRequest const& request) const {
+	if (fileDialogService)
+		return fileDialogService->RequestSaveFile(request);
+	return {};
+}
+
+agi::fs::path Context::RequestSelectDirectory(SelectDirectoryDialogRequest const& request) const {
+	if (fileDialogService)
+		return fileDialogService->RequestSelectDirectory(request);
+	return {};
+}
+
+std::shared_ptr<VideoSourceRequestService> Context::GetVideoSourceRequestService() const {
+	return videoSourceRequestService;
+}
+
+std::string Context::RequestDummyVideoPath() const {
+	if (videoSourceRequestService)
+		return videoSourceRequestService->RequestDummyVideoPath();
+	return {};
+}
+
 std::unique_ptr<BackgroundRunner> Context::CreateBackgroundRunner(std::string const& title, std::string const& message) const {
 	if (backgroundRunnerFactory)
 		return backgroundRunnerFactory->Create(title, message);
 	return std::make_unique<detail::InlineBackgroundRunner>();
+}
+
+std::shared_ptr<ProjectUiStateSink> Context::GetProjectUiStateSink() const {
+	return projectUiStateSink;
+}
+
+std::shared_ptr<AudioPlayerFactoryService> Context::GetAudioPlayerFactoryService() const {
+	return audioPlayerFactoryService;
+}
+
+std::unique_ptr<Automation4::BackgroundScriptRunner> Context::CreateAutomationBackgroundScriptRunner(std::string const& title) const {
+	if (automationBackgroundScriptRunnerFactory)
+		return automationBackgroundScriptRunnerFactory->Create(title);
+	return {};
+}
+
+ContextUiSession Context::GetUI() {
+	return ContextUiSession(*ui);
+}
+
+ConstContextUiSession Context::GetUI() const {
+	return ConstContextUiSession(*ui);
 }
 }

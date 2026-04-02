@@ -27,6 +27,8 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#pragma once
+
 #include "ass_entry.h"
 
 #include <libaegisub/fs_fwd.h>
@@ -36,6 +38,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <string>
 #include <vector>
 
 class AssAttachment;
@@ -43,7 +46,6 @@ class AssDialogue;
 class AssInfo;
 class AssStyle;
 class TransientFontSet;
-class wxString;
 
 template<typename T>
 using EntryList = typename boost::intrusive::make_list<T, boost::intrusive::constant_time_size<false>, boost::intrusive::base_hook<AssEntryListHook>>::type;
@@ -55,7 +57,7 @@ struct ExtradataEntry {
 };
 
 struct AssFileCommit {
-	wxString const& message;
+	std::string const& message;
 	int *commit_id;
 	AssDialogue *single_line;
 };
@@ -192,7 +194,7 @@ public:
 	/// @param commitId    Commit to amend rather than pushing a new commit
 	/// @param single_line Line which was changed, if only one line was
 	/// @return Unique identifier for the new undo group
-	int Commit(wxString const& desc, int type, int commitId = -1, AssDialogue *single_line = nullptr);
+	int Commit(std::string const& desc, int type, int commitId = -1, AssDialogue *single_line = nullptr);
 
 	/// Comparison function for use when sorting
 	typedef bool (*CompFunc)(AssDialogue const& lft, AssDialogue const& rgt);

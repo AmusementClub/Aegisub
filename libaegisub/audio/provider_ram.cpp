@@ -33,6 +33,21 @@ namespace {
 using namespace agi;
 using Clock = std::chrono::steady_clock;
 
+std::string FormatWrappedProviderName(char const* wrapper_name, AudioProvider const* source) {
+	std::string name = wrapper_name;
+	if (!source)
+		return name;
+
+	auto const source_name = source->GetMemoryStats().provider_name;
+	if (source_name.empty())
+		return name;
+
+	name += " (";
+	name += source_name;
+	name += ")";
+	return name;
+}
+
 constexpr size_t kMinPageBytes = 128 * 1024;
 constexpr size_t kTargetPageBytes = 256 * 1024;
 constexpr size_t kMaxPageBytes = 1024 * 1024;
@@ -575,7 +590,7 @@ AudioProviderMemoryStats ExactPagedRAMAudioProvider::GetMemoryStats() const {
 	}
 
 	AudioProviderMemoryStats stats;
-	stats.provider_name = "RAM Paged";
+	stats.provider_name = FormatWrappedProviderName("RAM Paged", source.get());
 	stats.storage_kind = "memory";
 	stats.storage_bytes = StorageBytesUnlocked();
 	stats.logical_bytes = static_cast<size_t>(num_samples)

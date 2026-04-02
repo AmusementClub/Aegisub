@@ -37,6 +37,7 @@
 #include "../dialog_translation.h"
 #include "../dialogs.h"
 #include "../include/aegisub/context.h"
+#include "../include/aegisub/context_ui.h"
 #include "../libresrc/libresrc.h"
 #include "../options.h"
 #include "../resolution_resampler.h"
@@ -59,9 +60,9 @@ struct tool_assdraw final : public Command {
 	STR_HELP("Launch the ASSDraw3 tool for vector drawing")
 
 	void operator()(agi::Context *) override {
-		wxString command("\"");
+		wxString command(wxS("\""));
 		command += config::path->Decode("?data/ASSDraw3.exe").wstring();
-		command += "\"";
+		command += wxS("\"");
 		wxExecute(command);
 	}
 };
@@ -74,7 +75,7 @@ struct tool_export final : public Command {
 	STR_HELP("Save a copy of subtitles in a different format or with processing applied to it")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
+		c->GetCore().videoController->Stop();
 		ShowExportDialog(c);
 	}
 };
@@ -111,10 +112,11 @@ struct tool_resampleres final : public Command {
 	STR_HELP("Resample subtitles to maintain their current appearance at a different script resolution")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
+		auto core = c->GetCore();
+		core.videoController->Stop();
 		ResampleSettings settings;
 		if (PromptForResampleSettings(c, settings))
-			ResampleResolution(c->ass.get(), settings);
+			ResampleResolution(core.ass.get(), settings);
 	}
 };
 
@@ -126,7 +128,7 @@ struct tool_style_assistant final : public Command {
 	STR_HELP("Open styling assistant")
 
 	void operator()(agi::Context *c) override {
-		c->dialog->Show<DialogStyling>(c);
+		c->GetUI().dialog->Show<DialogStyling>(c);
 	}
 };
 
@@ -134,7 +136,7 @@ struct tool_styling_assistant_validator : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	bool Validate(const agi::Context *c) override {
-		return !!c->dialog->Get<DialogStyling>();
+		return !!c->GetUI().dialog->Get<DialogStyling>();
 	}
 };
 
@@ -145,7 +147,7 @@ struct tool_styling_assistant_commit final : public tool_styling_assistant_valid
 	STR_HELP("Commit changes and move to the next line")
 
 	void operator()(agi::Context *c) override {
-		c->dialog->Get<DialogStyling>()->Commit(true);
+		c->GetUI().dialog->Get<DialogStyling>()->Commit(true);
 	}
 };
 
@@ -156,7 +158,7 @@ struct tool_styling_assistant_preview final : public tool_styling_assistant_vali
 	STR_HELP("Commit changes and stay on the current line")
 
 	void operator()(agi::Context *c) override {
-		c->dialog->Get<DialogStyling>()->Commit(false);
+		c->GetUI().dialog->Get<DialogStyling>()->Commit(false);
 	}
 };
 
@@ -204,9 +206,11 @@ struct tool_translation_assistant final : public Command {
 	STR_HELP("Open translation assistant")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
+		auto core = c->GetCore();
+		auto ui = c->GetUI();
+		core.videoController->Stop();
 		try {
-			c->dialog->ShowModal<DialogTranslation>(c);
+			ui.dialog->ShowModal<DialogTranslation>(c);
 		}
 		catch (DialogTranslation::NothingToTranslate const&) {
 			c->ShowInfo(from_wx(_("There is nothing to translate in the file.")));
@@ -218,7 +222,7 @@ struct tool_translation_assistant_validator : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	bool Validate(const agi::Context *c) override {
-		return !!c->dialog->Get<DialogTranslation>();
+		return !!c->GetUI().dialog->Get<DialogTranslation>();
 	}
 };
 
@@ -229,7 +233,7 @@ struct tool_translation_assistant_commit final : public tool_translation_assista
 	STR_HELP("Commit changes and move to the next line")
 
 	void operator()(agi::Context *c) override {
-		c->dialog->Get<DialogTranslation>()->Commit(true);
+		c->GetUI().dialog->Get<DialogTranslation>()->Commit(true);
 	}
 };
 
@@ -240,7 +244,7 @@ struct tool_translation_assistant_preview final : public tool_translation_assist
 	STR_HELP("Commit changes and stay on the current line")
 
 	void operator()(agi::Context *c) override {
-		c->dialog->Get<DialogTranslation>()->Commit(false);
+		c->GetUI().dialog->Get<DialogTranslation>()->Commit(false);
 	}
 };
 
@@ -251,7 +255,7 @@ struct tool_translation_assistant_next final : public tool_translation_assistant
 	STR_HELP("Move to the next line without committing changes")
 
 	void operator()(agi::Context *c) override {
-		c->dialog->Get<DialogTranslation>()->NextBlock();
+		c->GetUI().dialog->Get<DialogTranslation>()->NextBlock();
 	}
 };
 
@@ -262,7 +266,7 @@ struct tool_translation_assistant_prev final : public tool_translation_assistant
 	STR_HELP("Move to the previous line without committing changes")
 
 	void operator()(agi::Context *c) override {
-		c->dialog->Get<DialogTranslation>()->PrevBlock();
+		c->GetUI().dialog->Get<DialogTranslation>()->PrevBlock();
 	}
 };
 
@@ -273,7 +277,7 @@ struct tool_translation_assistant_insert final : public tool_translation_assista
 	STR_HELP("Insert the untranslated text")
 
 	void operator()(agi::Context *c) override {
-		c->dialog->Get<DialogTranslation>()->InsertOriginal();
+		c->GetUI().dialog->Get<DialogTranslation>()->InsertOriginal();
 	}
 };
 }

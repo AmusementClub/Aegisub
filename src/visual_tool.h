@@ -48,7 +48,7 @@ namespace agi {
 /// of each method for no good reason (and four times as many error messages)
 class VisualToolBase {
 	void OnCommit(int type);
-	void OnSeek(int new_frame);
+	void OnFramePresented(int new_frame);
 	void OnResolutionPolicyChanged(agi::OptionValue const&);
 	void UpdateScriptResolution();
 

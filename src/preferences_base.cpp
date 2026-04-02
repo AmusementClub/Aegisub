@@ -22,17 +22,17 @@
 #include "compat.h"
 #include "options.h"
 #include "preferences.h"
+#include "ui_services.h"
 
 #include <libaegisub/exception.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/path.h>
 #include <libaegisub/make_unique.h>
 
 #include <wx/checkbox.h>
 #include <wx/clntdata.h>
 #include <wx/combobox.h>
-#include <wx/dirdlg.h>
 #include <wx/event.h>
-#include <wx/filedlg.h>
 #include <wx/filename.h>
 #include <wx/fontdlg.h>
 #include <wx/listctrl.h>
@@ -62,16 +62,16 @@ OPTION_UPDATER(DoubleUpdater, wxSpinDoubleEvent, OptionValueDouble, evt.GetValue
 OPTION_UPDATER(BoolUpdater, wxCommandEvent, OptionValueBool, !!evt.GetInt());
 OPTION_UPDATER(ColourUpdater, ValueEvent<agi::Color>, OptionValueColor, evt.Get());
 
-static void browse_button(wxTextCtrl *ctrl) {
-	wxDirDialog dlg(nullptr, _("Please choose the folder:"), config::path->Decode(from_wx(ctrl->GetValue())).wstring());
-	if (dlg.ShowModal() == wxID_OK) {
-		wxString dir = dlg.GetPath();
-		if (!dir.empty())
-			ctrl->SetValue(dir);
-	}
+static void browse_button(Preferences *prefs, wxTextCtrl *ctrl) {
+	auto path = prefs->RequestSelectDirectory({
+		from_wx(_("Please choose the folder:")),
+		agi::fs::PathToString(config::path->Decode(from_wx(ctrl->GetValue())))
+	});
+	if (!path.empty())
+		ctrl->SetValue(to_wx(agi::fs::PathToString(path)));
 }
 
-static void browse_file_button(wxWindow *parent, wxTextCtrl *ctrl, wxString const& wildcard) {
+static void browse_file_button(Preferences *prefs, wxTextCtrl *ctrl, wxString const& wildcard) {
 	auto current_path = config::path
 		? config::path->Decode(from_wx(ctrl->GetValue()))
 		: std::filesystem::path(from_wx(ctrl->GetValue()));
@@ -83,12 +83,16 @@ static void browse_file_button(wxWindow *parent, wxTextCtrl *ctrl, wxString cons
 		file = current.GetFullName();
 	}
 
-	wxFileDialog dlg(parent, _("Please choose the file:"), dir, file, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST);
-	if (dlg.ShowModal() == wxID_OK) {
-		wxString path = dlg.GetPath();
-		if (!path.empty())
-			ctrl->SetValue(path);
-	}
+	auto path = prefs->RequestOpenFile({
+		from_wx(_("Please choose the file:")),
+		"",
+		from_wx(file),
+		"",
+		from_wx(wildcard),
+		from_wx(dir)
+	});
+	if (!path.empty())
+		ctrl->SetValue(to_wx(agi::fs::PathToString(path)));
 }
 
 static void configure_browse_widgets(OptionPage *page, wxTextCtrl *text, wxButton *browse, wxControl *enabler, bool do_enable) {
@@ -289,7 +293,7 @@ void OptionPage::OptionBrowse(wxFlexGridSizer *flex, const wxString &name, const
 	text->Bind(wxEVT_TEXT, StringUpdater(opt_name, parent));
 
 	auto browse = new wxButton(this, -1, _("Browse..."));
-	browse->Bind(wxEVT_BUTTON, std::bind(browse_button, text));
+	browse->Bind(wxEVT_BUTTON, std::bind(browse_button, parent, text));
 
 	auto button_sizer = new wxBoxSizer(wxHORIZONTAL);
 	button_sizer->Add(text, wxSizerFlags(1).Expand());
@@ -312,8 +316,8 @@ void OptionPage::OptionBrowseFile(wxFlexGridSizer *flex, const wxString &name, c
 	text->Bind(wxEVT_TEXT, StringUpdater(opt_name, parent));
 
 	auto browse = new wxButton(this, -1, _("Browse..."));
-	browse->Bind(wxEVT_BUTTON, [this, text, wildcard](wxCommandEvent&) {
-		browse_file_button(this, text, wildcard);
+	browse->Bind(wxEVT_BUTTON, [prefs = parent, text, wildcard](wxCommandEvent&) {
+		browse_file_button(prefs, text, wildcard);
 	});
 
 	auto button_sizer = new wxBoxSizer(wxHORIZONTAL);

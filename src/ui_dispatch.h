@@ -3,8 +3,7 @@
 #include <libaegisub/dispatch.h>
 #include <libaegisub/signal.h>
 
-#include <wx/debug.h>
-
+#include <cassert>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -92,7 +91,11 @@ inline bool CheckAccess() {
 }
 
 inline void VerifyAccess() {
-	wxASSERT_MSG(CheckAccess(), "UI access must happen on the main thread");
+#ifndef NDEBUG
+	assert(CheckAccess() && "UI access must happen on the main thread");
+#else
+	(void)0;
+#endif
 }
 
 template<typename Callback>

@@ -40,11 +40,13 @@
 #include "../dialogs.h"
 #include "../format.h"
 #include "../include/aegisub/context.h"
+#include "../include/aegisub/context_ui.h"
 #include "../initial_line_state.h"
 #include "../libresrc/libresrc.h"
 #include "../options.h"
 #include "../project.h"
 #include "../selection_controller.h"
+#include "../subtitle_edit_ops.h"
 #include "../subs_controller.h"
 #include "../text_selection_controller.h"
 #include "../utils.h"
@@ -57,7 +59,6 @@
 #include <libaegisub/string_utils.h>
 
 #include <algorithm>
-#include <boost/regex.hpp>
 
 #include <wx/clipbrd.h>
 #include <wx/fontdlg.h>
@@ -69,21 +70,22 @@ namespace {
 struct validate_sel_nonempty : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 	bool Validate(const agi::Context *c) override {
-		return c->selectionController->GetSelectedSet().size() > 0;
+		return c->GetCore().selectionController->GetSelectedSet().size() > 0;
 	}
 };
 
 struct validate_video_and_sel_nonempty : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 	bool Validate(const agi::Context *c) override {
-		return c->project->VideoProvider() && !c->selectionController->GetSelectedSet().empty();
+		auto core = c->GetCore();
+		return core.project->VideoProvider() && !core.selectionController->GetSelectedSet().empty();
 	}
 };
 
 struct validate_sel_multiple : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 	bool Validate(const agi::Context *c) override {
-		return c->selectionController->GetSelectedSet().size() > 1;
+		return c->GetCore().selectionController->GetSelectedSet().size() > 1;
 	}
 };
 
@@ -106,6 +108,7 @@ AssDialogue *get_dialogue(String data) {
 
 template<typename Paster>
 void paste_lines(agi::Context *c, bool paste_over, Paster&& paste_line) {
+	auto core = c->GetCore();
 	std::string data = GetClipboard();
 	if (data.empty()) return;
 
@@ -129,10 +132,10 @@ void paste_lines(agi::Context *c, bool paste_over, Paster&& paste_line) {
 	});
 
 	if (first) {
-		c->ass->Commit(_("paste"), paste_over ? AssFile::COMMIT_DIAG_FULL : AssFile::COMMIT_DIAG_ADDREM);
+		core.ass->Commit(from_wx(_("paste")), paste_over ? AssFile::COMMIT_DIAG_FULL : AssFile::COMMIT_DIAG_ADDREM);
 
 		if (!paste_over)
-			c->selectionController->SetSelectionAndActive(std::move(newsel), first);
+			core.selectionController->SetSelectionAndActive(std::move(newsel), first);
 	}
 }
 
@@ -340,17 +343,18 @@ selection_pos remap_pos_for_line(AssDialogue *line, size_t chars) {
 }
 
 template<typename Func>
-void update_lines(const agi::Context *c, wxString const& undo_msg, Func&& f) {
-	const auto active_line = c->selectionController->GetActiveLine();
-	const int sel_start = c->textSelectionController->GetSelectionStart();
-	const int sel_end = c->textSelectionController->GetSelectionEnd();
+void update_lines(const agi::Context *c, std::string const& undo_msg, Func&& f) {
+	auto core = c->GetCore();
+	const auto active_line = core.selectionController->GetActiveLine();
+	const int sel_start = core.textSelectionController->GetSelectionStart();
+	const int sel_end = core.textSelectionController->GetSelectionEnd();
 	const int norm_sel_start = normalize_pos(active_line->Text, sel_start);
 	const int norm_sel_end = normalize_pos(active_line->Text, sel_end);
 	const size_t sel_start_chars = character_pos(active_line->Text, sel_start);
 	const size_t sel_end_chars = character_pos(active_line->Text, sel_end);
 	int active_sel_shift = 0;
 
-	for (const auto line : c->selectionController->GetSelectedSet()) {
+	for (const auto line : core.selectionController->GetSelectedSet()) {
 		int line_sel_start = sel_start;
 		int line_sel_end = sel_end;
 		int line_norm_sel_start = norm_sel_start;
@@ -369,15 +373,16 @@ void update_lines(const agi::Context *c, wxString const& undo_msg, Func&& f) {
 			active_sel_shift = shift;
 	}
 
-	auto const& sel = c->selectionController->GetSelectedSet();
-	c->ass->Commit(undo_msg, AssFile::COMMIT_DIAG_TEXT, -1, sel.size() == 1 ? *sel.begin() : nullptr);
+	auto const& sel = core.selectionController->GetSelectedSet();
+	core.ass->Commit(undo_msg, AssFile::COMMIT_DIAG_TEXT, -1, sel.size() == 1 ? *sel.begin() : nullptr);
 	if (active_sel_shift != 0)
-		c->textSelectionController->SetSelection(sel_start + active_sel_shift, sel_end + active_sel_shift);
+		core.textSelectionController->SetSelection(sel_start + active_sel_shift, sel_end + active_sel_shift);
 }
 
-void toggle_override_tag(const agi::Context *c, bool (AssStyle::*field), const char *tag, wxString const& undo_msg) {
+void toggle_override_tag(const agi::Context *c, bool (AssStyle::*field), const char *tag, std::string const& undo_msg) {
+	auto core = c->GetCore();
 	update_lines(c, undo_msg, [&](AssDialogue *line, int sel_start, int sel_end, int norm_sel_start, int norm_sel_end) {
-		AssStyle const* const style = c->ass->GetStyle(line->Style);
+		AssStyle const* const style = core.ass->GetStyle(line->Style);
 		bool state = style ? style->*field : AssStyle().*field;
 
 		parsed_line parsed(line);
@@ -393,14 +398,16 @@ void toggle_override_tag(const agi::Context *c, bool (AssStyle::*field), const c
 }
 
 void show_color_picker(const agi::Context *c, agi::Color (AssStyle::*field), const char *tag, const char *alt, const char *alpha) {
+	auto core = c->GetCore();
+	auto ui = c->GetUI();
 	agi::Color initial_color;
-	const auto active_line = c->selectionController->GetActiveLine();
-	const int sel_start = c->textSelectionController->GetSelectionStart();
-	const int sel_end = c->textSelectionController->GetSelectionEnd();
+	const auto active_line = core.selectionController->GetActiveLine();
+	const int sel_start = core.textSelectionController->GetSelectionStart();
+	const int sel_end = core.textSelectionController->GetSelectionEnd();
 	const int norm_sel_start = normalize_pos(active_line->Text, sel_start);
 	const size_t sel_start_chars = character_pos(active_line->Text, sel_start);
 
-	auto const& sel = c->selectionController->GetSelectedSet();
+	auto const& sel = core.selectionController->GetSelectedSet();
 	struct line_info {
 		agi::Color color;
 		parsed_line parsed;
@@ -417,7 +424,7 @@ void show_color_picker(const agi::Context *c, agi::Color (AssStyle::*field), con
 			line_norm_sel_start = start.plain;
 		}
 
-		AssStyle const* const style = c->ass->GetStyle(line->Style);
+		AssStyle const* const style = core.ass->GetStyle(line->Style);
 		agi::Color color = (style ? style->*field : AssStyle().*field);
 
 		parsed_line parsed(line);
@@ -435,7 +442,7 @@ void show_color_picker(const agi::Context *c, agi::Color (AssStyle::*field), con
 
 	int active_shift = 0;
 	int commit_id = -1;
-	bool ok = GetColorFromUser(c->parent, initial_color, true, [&](agi::Color new_color) {
+	bool ok = GetColorFromUser(ui.parent, initial_color, true, [&](agi::Color new_color) {
 		for (auto& line : lines) {
 			int shift = line.parsed.set_tag(tag, new_color.GetAssOverrideFormatted(), line.norm_sel_start, line.sel_start);
 			if (new_color.a != line.color.a) {
@@ -447,14 +454,14 @@ void show_color_picker(const agi::Context *c, agi::Color (AssStyle::*field), con
 				active_shift = shift;
 		}
 
-		commit_id = c->ass->Commit(_("set color"), AssFile::COMMIT_DIAG_TEXT, commit_id, sel.size() == 1 ? *sel.begin() : nullptr);
+		commit_id = core.ass->Commit(from_wx(_("set color")), AssFile::COMMIT_DIAG_TEXT, commit_id, sel.size() == 1 ? *sel.begin() : nullptr);
 		if (active_shift)
-			c->textSelectionController->SetSelection(sel_start + active_shift, sel_start + active_shift);
+			core.textSelectionController->SetSelection(sel_start + active_shift, sel_start + active_shift);
 	});
 
 	if (!ok && commit_id != -1) {
-		c->subsController->Undo();
-		c->textSelectionController->SetSelection(sel_start, sel_end);
+		core.subsController->Undo();
+		core.textSelectionController->SetSelection(sel_start, sel_end);
 	}
 }
 
@@ -514,7 +521,7 @@ struct edit_style_bold final : public Command {
 	STR_HELP("Toggle bold (\\b) for the current selection or at the current cursor position")
 
 	void operator()(agi::Context *c) override {
-		toggle_override_tag(c, &AssStyle::bold, "\\b", _("toggle bold"));
+		toggle_override_tag(c, &AssStyle::bold, "\\b", from_wx(_("toggle bold")));
 	}
 };
 
@@ -526,7 +533,7 @@ struct edit_style_italic final : public Command {
 	STR_HELP("Toggle italics (\\i) for the current selection or at the current cursor position")
 
 	void operator()(agi::Context *c) override {
-		toggle_override_tag(c, &AssStyle::italic, "\\i", _("toggle italic"));
+		toggle_override_tag(c, &AssStyle::italic, "\\i", from_wx(_("toggle italic")));
 	}
 };
 
@@ -538,7 +545,7 @@ struct edit_style_underline final : public Command {
 	STR_HELP("Toggle underline (\\u) for the current selection or at the current cursor position")
 
 	void operator()(agi::Context *c) override {
-		toggle_override_tag(c, &AssStyle::underline, "\\u", _("toggle underline"));
+		toggle_override_tag(c, &AssStyle::underline, "\\u", from_wx(_("toggle underline")));
 	}
 };
 
@@ -550,7 +557,7 @@ struct edit_style_strikeout final : public Command {
 	STR_HELP("Toggle strikeout (\\s) for the current selection or at the current cursor position")
 
 	void operator()(agi::Context *c) override {
-		toggle_override_tag(c, &AssStyle::strikeout, "\\s", _("toggle strikeout"));
+		toggle_override_tag(c, &AssStyle::strikeout, "\\s", from_wx(_("toggle strikeout")));
 	}
 };
 
@@ -562,14 +569,16 @@ struct edit_font final : public Command {
 	STR_HELP("Select a font face and size")
 
 	void operator()(agi::Context *c) override {
-		const parsed_line active(c->selectionController->GetActiveLine());
-		const int active_insertion_point = normalize_pos(active.line->Text, c->textSelectionController->GetInsertionPoint());
-		const size_t insertion_chars = character_pos(active.line->Text, c->textSelectionController->GetInsertionPoint());
+		auto core = c->GetCore();
+		auto ui = c->GetUI();
+		const parsed_line active(core.selectionController->GetActiveLine());
+		const int active_insertion_point = normalize_pos(active.line->Text, core.textSelectionController->GetInsertionPoint());
+		const size_t insertion_chars = character_pos(active.line->Text, core.textSelectionController->GetInsertionPoint());
 
 		auto font_for_line = [&](parsed_line const& line, int insertion_point) -> wxFont {
 			const int blockn = line.block_at_pos(insertion_point);
 
-			const AssStyle *style = c->ass->GetStyle(line.line->Style);
+			const AssStyle *style = core.ass->GetStyle(line.line->Style);
 			const AssStyle default_style;
 			if (!style)
 				style = &default_style;
@@ -584,10 +593,10 @@ struct edit_font final : public Command {
 		};
 
 		const wxFont initial = font_for_line(active, active_insertion_point);
-		const wxFont font = wxGetFontFromUser(c->parent, initial);
+		const wxFont font = wxGetFontFromUser(ui.parent, initial);
 		if (!font.Ok() || font == initial) return;
 
-		update_lines(c, _("set font"), [&](AssDialogue *line, int sel_start, int sel_end, int norm_sel_start, int norm_sel_end) {
+		update_lines(c, from_wx(_("set font")), [&](AssDialogue *line, int sel_start, int sel_end, int norm_sel_start, int norm_sel_end) {
 			parsed_line parsed(line);
 			int line_insertion_point = active_insertion_point;
 			if (line != active.line)
@@ -623,13 +632,13 @@ struct edit_find_replace final : public Command {
 	STR_HELP("Find and replace words in subtitles")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
+		c->GetCore().videoController->Stop();
 		DialogSearchReplace::Show(c, true);
 	}
 };
 
 static void copy_lines(agi::Context *c) {
-	auto selection = c->selectionController->GetSortedSelection();
+	auto selection = c->GetCore().selectionController->GetSortedSelection();
 	std::vector<std::string> lines;
 	lines.reserve(selection.size());
 	for (auto* dialogue : selection)
@@ -637,15 +646,16 @@ static void copy_lines(agi::Context *c) {
 	SetClipboard(agi::util::strings::join(lines, "\r\n"));
 }
 
-static void delete_lines(agi::Context *c, wxString const& commit_message) {
-	auto const& sel = c->selectionController->GetSelectedSet();
+static void delete_lines(agi::Context *c, std::string const& commit_message) {
+	auto core = c->GetCore();
+	auto const& sel = core.selectionController->GetSelectedSet();
 
 	// Find a line near the active line not being deleted to make the new active line
 	AssDialogue *pre_sel = nullptr;
 	AssDialogue *post_sel = nullptr;
 	bool hit_selection = false;
 
-	for (auto& diag : c->ass->Events) {
+	for (auto& diag : core.ass->Events) {
 		if (sel.count(&diag))
 			hit_selection = true;
 		else if (hit_selection && !post_sel) {
@@ -661,7 +671,7 @@ static void delete_lines(agi::Context *c, wxString const& commit_message) {
 	// need to create a new dialogue line for it, and we can't select dialogue
 	// lines until after they're committed.
 	std::vector<std::unique_ptr<AssDialogue>> to_delete;
-	c->ass->Events.remove_and_dispose_if([&sel](AssDialogue const& e) {
+	core.ass->Events.remove_and_dispose_if([&sel](AssDialogue const& e) {
 		return sel.count(const_cast<AssDialogue *>(&e));
 	}, [&](AssDialogue *e) {
 		to_delete.emplace_back(e);
@@ -674,11 +684,11 @@ static void delete_lines(agi::Context *c, wxString const& commit_message) {
 	// lines, so make a new one
 	if (!new_active) {
 		new_active = new AssDialogue;
-		c->ass->Events.push_back(*new_active);
+		core.ass->Events.push_back(*new_active);
 	}
 
-	c->ass->Commit(commit_message, AssFile::COMMIT_DIAG_ADDREM);
-	c->selectionController->SetSelectionAndActive({ new_active }, new_active);
+	core.ass->Commit(commit_message, AssFile::COMMIT_DIAG_ADDREM);
+	core.selectionController->SetSelectionAndActive({ new_active }, new_active);
 }
 
 struct edit_line_copy final : public validate_sel_nonempty {
@@ -696,7 +706,7 @@ struct edit_line_copy final : public validate_sel_nonempty {
 		// and there's no way to do something if the native platform code leaves
 		// it unprocessed
 
-		if (wxTextEntryBase *ctrl = dynamic_cast<wxTextEntryBase*>(c->parent->FindFocus()))
+		if (wxTextEntryBase *ctrl = dynamic_cast<wxTextEntryBase*>(c->GetUI().parent->FindFocus()))
 			ctrl->Copy();
 		else {
 			copy_lines(c);
@@ -712,11 +722,11 @@ struct edit_line_cut: public validate_sel_nonempty {
 	STR_HELP("Cut subtitles")
 
 	void operator()(agi::Context *c) override {
-		if (wxTextEntryBase *ctrl = dynamic_cast<wxTextEntryBase*>(c->parent->FindFocus()))
+		if (wxTextEntryBase *ctrl = dynamic_cast<wxTextEntryBase*>(c->GetUI().parent->FindFocus()))
 			ctrl->Cut();
 		else {
 			copy_lines(c);
-			delete_lines(c, _("cut lines"));
+			delete_lines(c, from_wx(_("cut lines")));
 		}
 	}
 };
@@ -729,19 +739,20 @@ struct edit_line_delete final : public validate_sel_nonempty {
 	STR_HELP("Delete currently selected lines")
 
 	void operator()(agi::Context *c) override {
-		delete_lines(c, _("delete lines"));
+		delete_lines(c, from_wx(_("delete lines")));
 	}
 };
 
 static void duplicate_lines(agi::Context *c, int shift) {
-	auto const& sel = c->selectionController->GetSelectedSet();
+	auto core = c->GetCore();
+	auto const& sel = core.selectionController->GetSelectedSet();
 	auto in_selection = [&](AssDialogue const& d) { return sel.count(const_cast<AssDialogue *>(&d)); };
 
 	Selection new_sel;
 	AssDialogue *new_active = nullptr;
 
-	auto start = c->ass->Events.begin();
-	auto end = c->ass->Events.end();
+	auto start = core.ass->Events.begin();
+	auto end = core.ass->Events.end();
 	while (start != end) {
 		// Find the first line in the selection
 		start = std::find_if(start, end, in_selection);
@@ -757,31 +768,31 @@ static void duplicate_lines(agi::Context *c, int shift) {
 			auto old_diag = &*start;
 			auto new_diag = new AssDialogue(*old_diag);
 
-			c->ass->Events.insert(insert_pos, *new_diag);
+			core.ass->Events.insert(insert_pos, *new_diag);
 			new_sel.insert(new_diag);
 			if (!new_active)
 				new_active = new_diag;
 
 			if (shift) {
-				int cur_frame = c->videoController->GetFrameN();
-				int old_start = c->videoController->FrameAtTime(new_diag->Start, agi::vfr::START);
-				int old_end = c->videoController->FrameAtTime(new_diag->End, agi::vfr::END);
+				int cur_frame = core.videoController->GetFrameN();
+				int old_start = core.videoController->FrameAtTime(new_diag->Start, agi::vfr::START);
+				int old_end = core.videoController->FrameAtTime(new_diag->End, agi::vfr::END);
 
 				// If the current frame isn't within the range of the line then
 				// splitting doesn't make any sense, so instead just duplicate
 				// the line and set the new one to just this frame
 				if (cur_frame < old_start || cur_frame > old_end) {
-					new_diag->Start = c->videoController->TimeAtFrame(cur_frame, agi::vfr::START);
-					new_diag->End = c->videoController->TimeAtFrame(cur_frame, agi::vfr::END);
+					new_diag->Start = core.videoController->TimeAtFrame(cur_frame, agi::vfr::START);
+					new_diag->End = core.videoController->TimeAtFrame(cur_frame, agi::vfr::END);
 				}
 				/// @todo This does dumb things when old_start == old_end
 				else if (shift < 0) {
-					old_diag->End = c->videoController->TimeAtFrame(cur_frame - 1, agi::vfr::END);
-					new_diag->Start = c->videoController->TimeAtFrame(cur_frame, agi::vfr::START);
+					old_diag->End = core.videoController->TimeAtFrame(cur_frame - 1, agi::vfr::END);
+					new_diag->Start = core.videoController->TimeAtFrame(cur_frame, agi::vfr::START);
 				}
 				else {
-					old_diag->End = c->videoController->TimeAtFrame(cur_frame, agi::vfr::END);
-					new_diag->Start = c->videoController->TimeAtFrame(cur_frame + 1, agi::vfr::START);
+					old_diag->End = core.videoController->TimeAtFrame(cur_frame, agi::vfr::END);
+					new_diag->Start = core.videoController->TimeAtFrame(cur_frame + 1, agi::vfr::START);
 				}
 
 				/// @todo also split \t and \move?
@@ -794,9 +805,9 @@ static void duplicate_lines(agi::Context *c, int shift) {
 
 	if (new_sel.empty()) return;
 
-	c->ass->Commit(shift ? _("split") : _("duplicate lines"), AssFile::COMMIT_DIAG_ADDREM);
+	core.ass->Commit(from_wx(shift ? _("split") : _("duplicate lines")), AssFile::COMMIT_DIAG_ADDREM);
 
-	c->selectionController->SetSelectionAndActive(std::move(new_sel), new_active);
+	core.selectionController->SetSelectionAndActive(std::move(new_sel), new_active);
 }
 
 struct edit_line_duplicate final : public validate_sel_nonempty {
@@ -834,35 +845,20 @@ struct edit_line_duplicate_shift_back final : public validate_video_and_sel_none
 	}
 };
 
-static void combine_lines(agi::Context *c, void (*combiner)(AssDialogue *, AssDialogue *), wxString const& message) {
-	auto sel = c->selectionController->GetSortedSelection();
+static void combine_lines(agi::Context *c, aegisub::subtitle_edit_ops::JoinMode mode, std::string const& message) {
+	auto core = c->GetCore();
+	auto sel = core.selectionController->GetSortedSelection();
+	if (!aegisub::subtitle_edit_ops::JoinSelectionIntoFirst(sel, mode))
+		return;
 
 	AssDialogue *first = sel[0];
-	combiner(first, nullptr);
-	for (size_t i = 1; i < sel.size(); ++i) {
-		combiner(first, sel[i]);
-		first->End = std::max(first->End, sel[i]->End);
+	for (size_t i = 1; i < sel.size(); ++i)
 		delete sel[i];
-	}
 
-	c->selectionController->SetSelectionAndActive({first}, first);
+	core.selectionController->SetSelectionAndActive({first}, first);
 
-	c->ass->Commit(message, AssFile::COMMIT_DIAG_ADDREM | AssFile::COMMIT_DIAG_FULL);
+	core.ass->Commit(message, AssFile::COMMIT_DIAG_ADDREM | AssFile::COMMIT_DIAG_FULL);
 }
-
-static void combine_karaoke(AssDialogue *first, AssDialogue *second) {
-	if (second)
-		first->Text = first->Text.get() + "{\\k" + std::to_string((second->End - second->Start) / 10) + "}" + second->Text.get();
-	else
-		first->Text = "{\\k" + std::to_string((first->End - first->Start) / 10) + "}" + first->Text.get();
-}
-
-static void combine_concat(AssDialogue *first, AssDialogue *second) {
-	if (second)
-		first->Text = first->Text.get() + " " + second->Text.get();
-}
-
-static void combine_drop(AssDialogue *, AssDialogue *) { }
 
 struct edit_line_join_as_karaoke final : public validate_sel_multiple {
 	CMD_NAME("edit/line/join/as_karaoke")
@@ -871,7 +867,7 @@ struct edit_line_join_as_karaoke final : public validate_sel_multiple {
 	STR_HELP("Join selected lines in a single one, as karaoke")
 
 	void operator()(agi::Context *c) override {
-		combine_lines(c, combine_karaoke, _("join as karaoke"));
+		combine_lines(c, aegisub::subtitle_edit_ops::JoinMode::Karaoke, from_wx(_("join as karaoke")));
 	}
 };
 
@@ -882,7 +878,7 @@ struct edit_line_join_concatenate final : public validate_sel_multiple {
 	STR_HELP("Join selected lines in a single one, concatenating text together")
 
 	void operator()(agi::Context *c) override {
-		combine_lines(c, combine_concat, _("join lines"));
+		combine_lines(c, aegisub::subtitle_edit_ops::JoinMode::Concatenate, from_wx(_("join lines")));
 	}
 };
 
@@ -893,11 +889,12 @@ struct edit_line_join_keep_first final : public validate_sel_multiple {
 	STR_HELP("Join selected lines in a single one, keeping text of first and discarding remaining")
 
 	void operator()(agi::Context *c) override {
-		combine_lines(c, combine_drop, _("join lines"));
+		combine_lines(c, aegisub::subtitle_edit_ops::JoinMode::KeepFirst, from_wx(_("join lines")));
 	}
 };
 
 static bool try_paste_lines(agi::Context *c) {
+	auto core = c->GetCore();
 	std::string data = GetClipboard();
 	agi::util::strings::trim_left_inplace(data);
 	if (!agi::util::strings::starts_with(data, "Dialogue:")) return false;
@@ -919,10 +916,10 @@ static bool try_paste_lines(agi::Context *c) {
 	for (auto& line : parsed)
 		new_selection.insert(&line);
 
-	auto pos = c->ass->iterator_to(*c->selectionController->GetActiveLine());
-	c->ass->Events.splice(pos, parsed, parsed.begin(), parsed.end());
-	c->ass->Commit(_("paste"), AssFile::COMMIT_DIAG_ADDREM);
-	c->selectionController->SetSelectionAndActive(std::move(new_selection), new_active);
+	auto pos = core.ass->iterator_to(*core.selectionController->GetActiveLine());
+	core.ass->Events.splice(pos, parsed, parsed.begin(), parsed.end());
+	core.ass->Commit(from_wx(_("paste")), AssFile::COMMIT_DIAG_ADDREM);
+	core.selectionController->SetSelectionAndActive(std::move(new_selection), new_active);
 
 	return true;
 }
@@ -945,14 +942,15 @@ struct edit_line_paste final : public Command {
 	}
 
 	void operator()(agi::Context *c) override {
-		if (wxTextEntryBase *ctrl = dynamic_cast<wxTextEntryBase*>(c->parent->FindFocus())) {
+		auto core = c->GetCore();
+		if (wxTextEntryBase *ctrl = dynamic_cast<wxTextEntryBase*>(c->GetUI().parent->FindFocus())) {
 			if (!try_paste_lines(c))
 				ctrl->Paste();
 		}
 		else {
-			auto pos = c->ass->iterator_to(*c->selectionController->GetActiveLine());
+			auto pos = core.ass->iterator_to(*core.selectionController->GetActiveLine());
 			paste_lines(c, false, [=](AssDialogue *new_line) -> AssDialogue * {
-				c->ass->Events.insert(pos, *new_line);
+				core.ass->Events.insert(pos, *new_line);
 				return new_line;
 			});
 		}
@@ -967,7 +965,7 @@ struct edit_line_paste_over final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	bool Validate(const agi::Context *c) override {
-		bool can_paste = !c->selectionController->GetSelectedSet().empty();
+		bool can_paste = !c->GetCore().selectionController->GetSelectedSet().empty();
 		if (can_paste && wxTheClipboard->Open()) {
 			can_paste = wxTheClipboard->IsSupported(wxDF_TEXT) || wxTheClipboard->IsSupported(wxDF_UNICODETEXT);
 			wxTheClipboard->Close();
@@ -976,18 +974,20 @@ struct edit_line_paste_over final : public Command {
 	}
 
 	void operator()(agi::Context *c) override {
-		auto const& sel = c->selectionController->GetSelectedSet();
+		auto core = c->GetCore();
+		auto ui = c->GetUI();
+		auto const& sel = core.selectionController->GetSelectedSet();
 		std::vector<bool> pasteOverOptions;
 
 		// Only one line selected, so paste over downwards from the active line
 		if (sel.size() < 2) {
-			auto pos = c->ass->iterator_to(*c->selectionController->GetActiveLine());
+			auto pos = core.ass->iterator_to(*core.selectionController->GetActiveLine());
 
 			paste_lines(c, true, [&](AssDialogue *new_line) -> AssDialogue * {
 				std::unique_ptr<AssDialogue> deleter(new_line);
-				if (pos == c->ass->Events.end()) return nullptr;
+				if (pos == core.ass->Events.end()) return nullptr;
 
-				AssDialogue *ret = paste_over(c->parent, pasteOverOptions, new_line, &*pos);
+				AssDialogue *ret = paste_over(ui.parent, pasteOverOptions, new_line, &*pos);
 				if (ret)
 					++pos;
 				return ret;
@@ -995,54 +995,19 @@ struct edit_line_paste_over final : public Command {
 		}
 		else {
 			// Multiple lines selected, so paste over the selection
-			auto sorted_selection = c->selectionController->GetSortedSelection();
+			auto sorted_selection = core.selectionController->GetSortedSelection();
 			auto pos = begin(sorted_selection);
 			paste_lines(c, true, [&](AssDialogue *new_line) -> AssDialogue * {
 				std::unique_ptr<AssDialogue> deleter(new_line);
 				if (pos == end(sorted_selection)) return nullptr;
 
-				AssDialogue *ret = paste_over(c->parent, pasteOverOptions, new_line, *pos);
+				AssDialogue *ret = paste_over(ui.parent, pasteOverOptions, new_line, *pos);
 				if (ret) ++pos;
 				return ret;
 			});
 		}
 	}
 };
-
-namespace {
-std::string trim_text(std::string text) {
-	boost::regex start(R"(^( |	|\\[nNh])+)");
-	boost::regex end(R"(( |	|\\[nNh])+$)");
-
-	text = regex_replace(text, start, "", boost::format_first_only);
-	text = regex_replace(text, end, "", boost::format_first_only);
-	return text;
-}
-
-void expand_times(AssDialogue *src, AssDialogue *dst) {
-	dst->Start = std::min(dst->Start, src->Start);
-	dst->End = std::max(dst->End, src->End);
-}
-
-bool check_start(AssDialogue *d1, AssDialogue *d2) {
-	if (agi::util::strings::starts_with(d1->Text.get(), d2->Text.get())) {
-		d1->Text = trim_text(d1->Text.get().substr(d2->Text.get().size()));
-		expand_times(d1, d2);
-		return true;
-	}
-	return false;
-}
-
-bool check_end(AssDialogue *d1, AssDialogue *d2) {
-	if (agi::util::strings::ends_with(d1->Text.get(), d2->Text.get())) {
-		d1->Text = trim_text(d1->Text.get().substr(0, d1->Text.get().size() - d2->Text.get().size()));
-		expand_times(d1, d2);
-		return true;
-	}
-	return false;
-}
-
-}
 
 struct edit_line_recombine final : public validate_sel_multiple {
 	CMD_NAME("edit/line/recombine")
@@ -1051,63 +1016,20 @@ struct edit_line_recombine final : public validate_sel_multiple {
 	STR_HELP("Recombine subtitles which have been split and merged")
 
 	void operator()(agi::Context *c) override {
-		auto const& sel_set = c->selectionController->GetSelectedSet();
+		auto core = c->GetCore();
+		auto const& sel_set = core.selectionController->GetSelectedSet();
 		if (sel_set.size() < 2) return;
 
-		auto active_line = c->selectionController->GetActiveLine();
+		auto active_line = core.selectionController->GetActiveLine();
 
 		std::vector<AssDialogue*> sel(sel_set.begin(), sel_set.end());
-		std::sort(sel.begin(), sel.end(), [](const AssDialogue *a, const AssDialogue *b) {
-			return a->Start < b->Start;
-		});
-
-		for (auto &diag : sel)
-			diag->Text = trim_text(diag->Text);
-
-		auto end = sel.end() - 1;
-		for (auto cur = sel.begin(); cur != end; ++cur) {
-			auto d1 = *cur;
-			auto d2 = cur + 1;
-
-			// 1, 1+2 (or 2+1), 2 gets turned into 1, 2, 2 so kill the duplicate
-			if (d1->Text == (*d2)->Text) {
-				expand_times(d1, *d2);
-				delete d1;
-				continue;
-			}
-
-			// 1, 1+2, 1 turns into 1, 2, [empty]
-			if (d1->Text.get().empty()) {
-				delete d1;
-				continue;
-			}
-
-			// If d2 is the last line in the selection it'll never hit the above test
-			if (d2 == end && (*d2)->Text.get().empty()) {
-				delete *d2;
-				continue;
-			}
-
-			// 1, 1+2
-			while (d2 <= end && check_start(*d2, d1))
-				++d2;
-
-			// 1, 2+1
-			while (d2 <= end && check_end(*d2, d1))
-				++d2;
-
-			// 1+2, 2
-			while (d2 <= end && check_end(d1, *d2))
-				++d2;
-
-			// 2+1, 2
-			while (d2 <= end && check_start(d1, *d2))
-				++d2;
-		}
+		auto result = aegisub::subtitle_edit_ops::RecombineSelection(sel);
+		for (auto *line : result.lines_to_remove)
+			delete line;
 
 		// Remove now non-existent lines from the selection
 		Selection lines, new_sel;
-		for (auto& line : c->ass->Events)
+		for (auto& line : core.ass->Events)
 			lines.insert(&line);
 		std::set_intersection(lines.begin(), lines.end(), sel_set.begin(), sel_set.end(), inserter(new_sel, new_sel.begin()));
 
@@ -1117,9 +1039,9 @@ struct edit_line_recombine final : public validate_sel_multiple {
 		// Restore selection
 		if (!new_sel.count(active_line))
 			active_line = *new_sel.begin();
-		c->selectionController->SetSelectionAndActive(std::move(new_sel), active_line);
+		core.selectionController->SetSelectionAndActive(std::move(new_sel), active_line);
 
-		c->ass->Commit(_("combining"), AssFile::COMMIT_DIAG_ADDREM | AssFile::COMMIT_DIAG_FULL);
+		core.ass->Commit(from_wx(_("combining")), AssFile::COMMIT_DIAG_ADDREM | AssFile::COMMIT_DIAG_FULL);
 	}
 };
 
@@ -1130,7 +1052,8 @@ struct edit_line_split_by_karaoke final : public validate_sel_nonempty {
 	STR_HELP("Use karaoke timing to split line into multiple smaller lines")
 
 	void operator()(agi::Context *c) override {
-		auto sel = c->selectionController->GetSortedSelection();
+		auto core = c->GetCore();
+		auto sel = core.selectionController->GetSortedSelection();
 		if (sel.empty()) return;
 
 		Selection new_sel;
@@ -1150,45 +1073,48 @@ struct edit_line_split_by_karaoke final : public validate_sel_nonempty {
 				new_line->End = syl.start_time + syl.duration;
 				new_line->Text = syl.GetText(false);
 
-				c->ass->Events.insert(c->ass->iterator_to(*line), *new_line);
+				core.ass->Events.insert(core.ass->iterator_to(*line), *new_line);
 
 				new_sel.insert(new_line);
 			}
 
-			c->ass->Events.erase(c->ass->iterator_to(*line));
+			core.ass->Events.erase(core.ass->iterator_to(*line));
 			to_delete.emplace_back(line);
 		}
 
 		if (to_delete.empty()) return;
 
-		c->ass->Commit(_("splitting"), AssFile::COMMIT_DIAG_ADDREM | AssFile::COMMIT_DIAG_FULL);
+		core.ass->Commit(from_wx(_("splitting")), AssFile::COMMIT_DIAG_ADDREM | AssFile::COMMIT_DIAG_FULL);
 
-		AssDialogue *new_active = c->selectionController->GetActiveLine();
-		if (!new_sel.count(c->selectionController->GetActiveLine()))
+		AssDialogue *new_active = core.selectionController->GetActiveLine();
+		if (!new_sel.count(core.selectionController->GetActiveLine()))
 			new_active = *new_sel.begin();
-		c->selectionController->SetSelectionAndActive(std::move(new_sel), new_active);
+		core.selectionController->SetSelectionAndActive(std::move(new_sel), new_active);
 	}
 };
 
 void split_lines(agi::Context *c, AssDialogue *&n1, AssDialogue *&n2) {
-	int pos = c->textSelectionController->GetSelectionStart();
+	auto core = c->GetCore();
+	int pos = core.textSelectionController->GetSelectionStart();
 
-	n1 = c->selectionController->GetActiveLine();
+	n1 = core.selectionController->GetActiveLine();
 	n2 = new AssDialogue(*n1);
-	c->ass->Events.insert(++c->ass->iterator_to(*n1), *n2);
+	core.ass->Events.insert(++core.ass->iterator_to(*n1), *n2);
 
 	std::string orig = n1->Text;
-	n1->Text = agi::util::strings::trim_right_copy(orig.substr(0, pos));
-	n2->Text = agi::util::strings::trim_left_copy(orig.substr(pos));
+	auto split_text = aegisub::subtitle_edit_ops::SplitTextAtPosition(orig, pos);
+	n1->Text = std::move(split_text.first);
+	n2->Text = std::move(split_text.second);
 }
 
 template<typename Func>
 void split_lines(agi::Context *c, Func&& set_time) {
+	auto core = c->GetCore();
 	AssDialogue *n1, *n2;
 	split_lines(c, n1, n2);
 	set_time(n1, n2);
 
-	c->ass->Commit(_("split"), AssFile::COMMIT_DIAG_ADDREM | AssFile::COMMIT_DIAG_FULL);
+	core.ass->Commit(from_wx(_("split")), AssFile::COMMIT_DIAG_ADDREM | AssFile::COMMIT_DIAG_FULL);
 }
 
 struct edit_line_split_estimate final : public validate_video_and_sel_nonempty {
@@ -1199,10 +1125,10 @@ struct edit_line_split_estimate final : public validate_video_and_sel_nonempty {
 
 	void operator()(agi::Context *c) override {
 		split_lines(c, [](AssDialogue *n1, AssDialogue *n2) {
-			size_t len = n1->Text.get().size() + n2->Text.get().size();
-			if (!len) return;
-			double splitPos = double(n1->Text.get().size()) / len;
-			n2->Start = n1->End = (int)((n1->End - n1->Start) * splitPos) + n1->Start;
+			auto split_time = aegisub::subtitle_edit_ops::EstimateSplitTime(n1->Start, n1->End, n1->Text.get(), n2->Text.get());
+			if (!split_time)
+				return;
+			n2->Start = n1->End = *split_time;
 		});
 	}
 };
@@ -1225,12 +1151,13 @@ struct edit_line_split_video final : public validate_video_and_sel_nonempty {
 	STR_HELP("Split the current line at the cursor, dividing the line's duration at the current video frame")
 
 	void operator()(agi::Context *c) override {
+		auto core = c->GetCore();
 		split_lines(c, [&](AssDialogue *n1, AssDialogue *n2) {
 			int cur_frame = mid(
-				c->videoController->FrameAtTime(n1->Start, agi::vfr::START),
-				c->videoController->GetFrameN(),
-				c->videoController->FrameAtTime(n1->End, agi::vfr::END));
-			n1->End = n2->Start = c->videoController->TimeAtFrame(cur_frame, agi::vfr::END);
+				core.videoController->FrameAtTime(n1->Start, agi::vfr::START),
+				core.videoController->GetFrameN(),
+				core.videoController->FrameAtTime(n1->End, agi::vfr::END));
+			n1->End = n2->Start = core.videoController->TimeAtFrame(cur_frame, agi::vfr::END);
 		});
 	}
 };
@@ -1242,22 +1169,24 @@ struct edit_redo final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_DYNAMIC_NAME)
 
 	wxString StrMenu(const agi::Context *c) const override {
-		return c->subsController->IsRedoStackEmpty() ?
+		auto core = c->GetCore();
+		return core.subsController->IsRedoStackEmpty() ?
 			_("Nothing to &redo") :
-			fmt_tl("&Redo %s", c->subsController->GetRedoDescription());
+			fmt_tl("&Redo %s", to_wx(core.subsController->GetRedoDescription()));
 	}
 	wxString StrDisplay(const agi::Context *c) const override {
-		return c->subsController->IsRedoStackEmpty() ?
+		auto core = c->GetCore();
+		return core.subsController->IsRedoStackEmpty() ?
 			_("Nothing to redo") :
-			fmt_tl("Redo %s", c->subsController->GetRedoDescription());
+			fmt_tl("Redo %s", to_wx(core.subsController->GetRedoDescription()));
 	}
 
 	bool Validate(const agi::Context *c) override {
-		return !c->subsController->IsRedoStackEmpty();
+		return !c->GetCore().subsController->IsRedoStackEmpty();
 	}
 
 	void operator()(agi::Context *c) override {
-		c->subsController->Redo();
+		c->GetCore().subsController->Redo();
 	}
 };
 
@@ -1268,22 +1197,24 @@ struct edit_undo final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_DYNAMIC_NAME)
 
 	wxString StrMenu(const agi::Context *c) const override {
-		return c->subsController->IsUndoStackEmpty() ?
+		auto core = c->GetCore();
+		return core.subsController->IsUndoStackEmpty() ?
 			_("Nothing to &undo") :
-			fmt_tl("&Undo %s", c->subsController->GetUndoDescription());
+			fmt_tl("&Undo %s", to_wx(core.subsController->GetUndoDescription()));
 	}
 	wxString StrDisplay(const agi::Context *c) const override {
-		return c->subsController->IsUndoStackEmpty() ?
+		auto core = c->GetCore();
+		return core.subsController->IsUndoStackEmpty() ?
 			_("Nothing to undo") :
-			fmt_tl("Undo %s", c->subsController->GetUndoDescription());
+			fmt_tl("Undo %s", to_wx(core.subsController->GetUndoDescription()));
 	}
 
 	bool Validate(const agi::Context *c) override {
-		return !c->subsController->IsUndoStackEmpty();
+		return !c->GetCore().subsController->IsUndoStackEmpty();
 	}
 
 	void operator()(agi::Context *c) override {
-		c->subsController->Undo();
+		c->GetCore().subsController->Undo();
 	}
 };
 
@@ -1294,9 +1225,10 @@ struct edit_revert final : public Command {
 	STR_HELP("Revert the active line to its initial state (shown in the upper editor)")
 
 	void operator()(agi::Context *c) override {
-		AssDialogue *line = c->selectionController->GetActiveLine();
-		line->Text = c->initialLineState->GetInitialText();
-		c->ass->Commit(_("revert line"), AssFile::COMMIT_DIAG_TEXT, -1, line);
+		auto core = c->GetCore();
+		AssDialogue *line = core.selectionController->GetActiveLine();
+		line->Text = core.initialLineState->GetInitialText();
+		core.ass->Commit(from_wx(_("revert line")), AssFile::COMMIT_DIAG_TEXT, -1, line);
 	}
 };
 
@@ -1307,9 +1239,10 @@ struct edit_clear final : public Command {
 	STR_HELP("Clear the current line's text")
 
 	void operator()(agi::Context *c) override {
-		AssDialogue *line = c->selectionController->GetActiveLine();
+		auto core = c->GetCore();
+		AssDialogue *line = core.selectionController->GetActiveLine();
 		line->Text = "";
-		c->ass->Commit(_("clear line"), AssFile::COMMIT_DIAG_TEXT, -1, line);
+		core.ass->Commit(from_wx(_("clear line")), AssFile::COMMIT_DIAG_TEXT, -1, line);
 	}
 };
 
@@ -1320,15 +1253,10 @@ struct edit_clear_text final : public Command {
 	STR_HELP("Clear the current line's text, leaving override tags")
 
 	void operator()(agi::Context *c) override {
-		AssDialogue *line = c->selectionController->GetActiveLine();
-		auto blocks = line->ParseTags();
-		std::string text;
-		for (auto const& block : blocks) {
-			if (block->GetType() != AssBlockType::PLAIN)
-				text += block->GetText();
-		}
-		line->Text = std::move(text);
-		c->ass->Commit(_("clear line"), AssFile::COMMIT_DIAG_TEXT, -1, line);
+		auto core = c->GetCore();
+		AssDialogue *line = core.selectionController->GetActiveLine();
+		line->Text = aegisub::subtitle_edit_ops::BuildTagOnlyText(*line);
+		core.ass->Commit(from_wx(_("clear line")), AssFile::COMMIT_DIAG_TEXT, -1, line);
 	}
 };
 
@@ -1339,15 +1267,15 @@ struct edit_insert_original final : public Command {
 	STR_HELP("Insert the original line text at the cursor")
 
 	void operator()(agi::Context *c) override {
-		AssDialogue *line = c->selectionController->GetActiveLine();
-		int sel_start = c->textSelectionController->GetSelectionStart();
-		int sel_end = c->textSelectionController->GetSelectionEnd();
+		auto core = c->GetCore();
+		AssDialogue *line = core.selectionController->GetActiveLine();
+		int sel_start = core.textSelectionController->GetSelectionStart();
+		int sel_end = core.textSelectionController->GetSelectionEnd();
 
-		std::string new_text = line->Text.get();
-		agi::util::strings::replace_range_inplace(new_text, sel_start, sel_end, c->initialLineState->GetInitialText());
-		line->Text = std::move(new_text);
-		c->ass->Commit(_("insert original"), AssFile::COMMIT_DIAG_TEXT, -1, line);
-		c->textSelectionController->SetSelection(sel_start, sel_start + c->initialLineState->GetInitialText().length());
+		auto const& original_text = core.initialLineState->GetInitialText();
+		line->Text = aegisub::subtitle_edit_ops::ReplaceRangeWithText(line->Text.get(), sel_start, sel_end, original_text);
+		core.ass->Commit(from_wx(_("insert original")), AssFile::COMMIT_DIAG_TEXT, -1, line);
+		core.textSelectionController->SetSelection(sel_start, sel_start + original_text.length());
 	}
 };
 

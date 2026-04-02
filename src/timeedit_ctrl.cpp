@@ -36,6 +36,7 @@
 
 #include "compat.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "project.h"
 #include "utils.h"
@@ -63,7 +64,11 @@ TimeEdit::TimeEdit(wxWindow* parent, wxWindowID id, agi::Context *c, const std::
 {
 	// Set validator
 	wxTextValidator val(wxFILTER_INCLUDE_CHAR_LIST);
-	wxString includes[] = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", ".", ":", ","};
+	wxString includes[] = {
+		wxS("0"), wxS("1"), wxS("2"), wxS("3"), wxS("4"),
+		wxS("5"), wxS("6"), wxS("7"), wxS("8"), wxS("9"),
+		wxS("0"), wxS("."), wxS(":"), wxS(",")
+	};
 	val.SetIncludes(wxArrayString(countof(includes), includes));
 	SetValidator(val);
 
@@ -87,17 +92,17 @@ void TimeEdit::SetTime(agi::Time new_time) {
 }
 
 int TimeEdit::GetFrame() const {
-	return c->project->Timecodes().FrameAtTime(time, isEnd ? agi::vfr::END : agi::vfr::START);
+	return c->GetCore().project->Timecodes().FrameAtTime(time, isEnd ? agi::vfr::END : agi::vfr::START);
 }
 
 void TimeEdit::SetFrame(int fn) {
-	SetTime(c->project->Timecodes().TimeAtFrame(fn, isEnd ? agi::vfr::END : agi::vfr::START));
+	SetTime(c->GetCore().project->Timecodes().TimeAtFrame(fn, isEnd ? agi::vfr::END : agi::vfr::START));
 }
 
 void TimeEdit::SetByFrame(bool enableByFrame) {
 	if (enableByFrame == byFrame) return;
 
-	byFrame = enableByFrame && c->project->Timecodes().IsLoaded();
+	byFrame = enableByFrame && c->GetCore().project->Timecodes().IsLoaded();
 	UpdateText();
 }
 
@@ -106,7 +111,7 @@ void TimeEdit::OnModified(wxCommandEvent &event) {
 	if (byFrame) {
 		long temp = 0;
 		GetValue().ToLong(&temp);
-		time = c->project->Timecodes().TimeAtFrame(temp, isEnd ? agi::vfr::END : agi::vfr::START);
+		time = c->GetCore().project->Timecodes().TimeAtFrame(temp, isEnd ? agi::vfr::END : agi::vfr::START);
 	}
 	else if (insert)
 		time = from_wx(GetValue());
@@ -114,7 +119,7 @@ void TimeEdit::OnModified(wxCommandEvent &event) {
 
 void TimeEdit::UpdateText() {
 	if (byFrame)
-		ChangeValue(std::to_wstring(c->project->Timecodes().FrameAtTime(time, isEnd ? agi::vfr::END : agi::vfr::START)));
+		ChangeValue(std::to_wstring(c->GetCore().project->Timecodes().FrameAtTime(time, isEnd ? agi::vfr::END : agi::vfr::START)));
 	else
 		ChangeValue(to_wx(time.GetAssFormatted()));
 }

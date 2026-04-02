@@ -40,6 +40,8 @@
 #include "mkv_wrap.h"
 #include "native_library.h"
 #include "options.h"
+#include "track_choice.h"
+#include "ui_services.h"
 #include "utils.h"
 
 #include <libaegisub/background_runner.h>
@@ -57,7 +59,6 @@
 #include <string>
 #include <vector>
 #include <wx/intl.h>
-#include <wx/choicdlg.h>
 
 #ifdef CreateDirectory
 #undef CreateDirectory
@@ -160,8 +161,9 @@ namespace {
 #endif
 }
 
-FFmpegSourceProvider::FFmpegSourceProvider(agi::BackgroundRunner *br)
+FFmpegSourceProvider::FFmpegSourceProvider(agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink)
 : br(br)
+, choice_sink(std::move(choice_sink))
 {
 	ffms::EnsureLoaded();
 	ffms::Init(0, 0);
@@ -375,22 +377,22 @@ std::vector<FFmpegSourceProvider::TrackChoice> FFmpegSourceProvider::GetTracksOf
 FFmpegSourceProvider::TrackSelection
 FFmpegSourceProvider::AskForTrackSelection(std::vector<TrackChoice> const& TrackList,
                                            FFMS_TrackType Type) {
-	std::vector<int> TrackNumbers;
-	wxArrayString Choices;
-
+	std::vector<std::string> choices;
+	choices.reserve(TrackList.size());
 	for (auto const& track : TrackList) {
-		Choices.Add(to_wx(track.display_name));
-		TrackNumbers.push_back(track.ffms_track_index);
+		choices.push_back(track.display_name);
 	}
 
-	int Choice = wxGetSingleChoiceIndex(
-		Type == FFMS_TYPE_VIDEO ? _("Multiple video tracks detected, please choose the one you wish to load:") : _("Multiple audio tracks detected, please choose the one you wish to load:"),
-		Type == FFMS_TYPE_VIDEO ? _("Choose video track") : _("Choose audio track"),
-		Choices);
-
-	if (Choice < 0)
+	if (!choice_sink)
 		return TrackSelection::None;
-	return static_cast<TrackSelection>(TrackNumbers[Choice]);
+
+	auto choice = choice_sink->RequestSingleChoice(aegisub::track_choice::BuildRequest(
+		Type == FFMS_TYPE_VIDEO ? aegisub::track_choice::DialogKind::Video : aegisub::track_choice::DialogKind::Audio,
+		choices));
+	auto resolved = aegisub::track_choice::ResolveSelection(TrackList.size(), choice);
+	if (!resolved)
+		return TrackSelection::None;
+	return static_cast<TrackSelection>(TrackList[*resolved].ffms_track_index);
 }
 
 /// @brief Set ffms2 log level according to setting in config.dat

@@ -713,14 +713,14 @@ namespace Automation4 {
 		// Apply any pending commits
 		for (auto const& pc : pending_commits) {
 			apply_lines(pc.lines);
-			ass->Commit(pc.mesage, pc.modification_type);
+			ass->Commit(from_wx(pc.mesage), pc.modification_type);
 		}
 
 		// Commit any changes after the last undo point was set
 		if (modification_type)
 			apply_lines(lines);
 		if (modification_type && can_set_undo && !undo_description.empty())
-			ass->Commit(undo_description, modification_type);
+			ass->Commit(from_wx(undo_description), modification_type);
 
 		lines_to_delete.clear();
 

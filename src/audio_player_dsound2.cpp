@@ -36,7 +36,6 @@
 #include "include/aegisub/audio_player.h"
 
 #include "audio_controller.h"
-#include "frame_main.h"
 #include "options.h"
 #include "perf_trace.h"
 #include "utils.h"
@@ -55,6 +54,13 @@
 
 namespace {
 class DirectSoundPlayer2Thread;
+
+HWND RequireNativeParentHandle(AudioPlayerHost const& host) {
+	auto const parent = static_cast<HWND>(host.native_parent_handle);
+	if (!parent)
+		throw AudioPlayerOpenError("DirectSound requires a native parent window handle.");
+	return parent;
+}
 
 /// @class DirectSoundPlayer2
 /// @brief New implementation of DirectSound-based audio player
@@ -78,7 +84,7 @@ class DirectSoundPlayer2 final : public AudioPlayer {
 
 public:
 	/// @brief Constructor
-	DirectSoundPlayer2(agi::AudioProvider *provider, wxWindow *parent);
+	DirectSoundPlayer2(agi::AudioProvider *provider, AudioPlayerHost const& host);
 	/// @brief Destructor
 	~DirectSoundPlayer2();
 
@@ -247,7 +253,7 @@ public:
 	/// @param provider       Audio provider to take sample data from
 	/// @param WantedLatency Desired length in milliseconds to write ahead of the playback cursor
 	/// @param BufferLength  Multiplier for WantedLatency to get total buffer length
-	DirectSoundPlayer2Thread(agi::AudioProvider *provider, int WantedLatency, int BufferLength, wxWindow *parent);
+	DirectSoundPlayer2Thread(agi::AudioProvider *provider, int WantedLatency, int BufferLength, AudioPlayerHost const& host);
 	/// @brief Destructor, waits for thread to have died
 	~DirectSoundPlayer2Thread();
 
@@ -728,8 +734,8 @@ void DirectSoundPlayer2Thread::CheckError()
 	}
 }
 
-DirectSoundPlayer2Thread::DirectSoundPlayer2Thread(agi::AudioProvider *provider, int WantedLatency, int BufferLength, wxWindow *parent)
-: parent((HWND)parent->GetHandle())
+DirectSoundPlayer2Thread::DirectSoundPlayer2Thread(agi::AudioProvider *provider, int WantedLatency, int BufferLength, AudioPlayerHost const& host)
+: parent(RequireNativeParentHandle(host))
 , event_start_playback  (CreateEvent(0, FALSE, FALSE, 0))
 , event_stop_playback   (CreateEvent(0, FALSE, FALSE, 0))
 , event_update_end_time (CreateEvent(0, FALSE, FALSE, 0))
@@ -868,7 +874,7 @@ bool DirectSoundPlayer2Thread::IsDead()
 	}
 }
 
-DirectSoundPlayer2::DirectSoundPlayer2(agi::AudioProvider *provider, wxWindow *parent)
+DirectSoundPlayer2::DirectSoundPlayer2(agi::AudioProvider *provider, AudioPlayerHost const& host)
 : AudioPlayer(provider)
 {
 	// The buffer will hold BufferLength times WantedLatency milliseconds of audio
@@ -883,7 +889,7 @@ DirectSoundPlayer2::DirectSoundPlayer2(agi::AudioProvider *provider, wxWindow *p
 
 	try
 	{
-		thread = agi::make_unique<DirectSoundPlayer2Thread>(provider, WantedLatency, BufferLength, parent);
+		thread = agi::make_unique<DirectSoundPlayer2Thread>(provider, WantedLatency, BufferLength, host);
 	}
 	catch (const char *msg)
 	{
@@ -997,8 +1003,8 @@ void DirectSoundPlayer2::SetVolume(double vol)
 }
 }
 
-std::unique_ptr<AudioPlayer> CreateDirectSound2Player(agi::AudioProvider *provider, wxWindow *parent) {
-	return agi::make_unique<DirectSoundPlayer2>(provider, parent);
+std::unique_ptr<AudioPlayer> CreateDirectSound2Player(agi::AudioProvider *provider, AudioPlayerHost const& host) {
+	return agi::make_unique<DirectSoundPlayer2>(provider, host);
 }
 
 #endif // WITH_DIRECTSOUND

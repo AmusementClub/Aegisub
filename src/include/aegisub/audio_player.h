@@ -42,7 +42,6 @@
 #include <vector>
 
 namespace agi { class AudioProvider; }
-class wxWindow;
 
 class AudioPlayer {
 protected:
@@ -63,9 +62,13 @@ public:
 	virtual void SetEndPosition(int64_t pos)=0;
 };
 
+struct AudioPlayerHost {
+	void *native_parent_handle = nullptr;
+};
+
 struct AudioPlayerFactory {
 	static std::vector<std::string> GetClasses();
-	static std::unique_ptr<AudioPlayer> GetAudioPlayer(agi::AudioProvider *provider, wxWindow *window);
+	static std::unique_ptr<AudioPlayer> GetAudioPlayer(agi::AudioProvider *provider, AudioPlayerHost const& host = {});
 };
 
 DEFINE_EXCEPTION(AudioPlayerOpenError, agi::Exception);

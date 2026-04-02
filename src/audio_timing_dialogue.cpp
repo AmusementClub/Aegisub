@@ -32,8 +32,10 @@
 #include "audio_marker.h"
 #include "audio_rendering_style.h"
 #include "audio_timing.h"
+#include "compat.h"
 #include "command/command.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "pen.h"
 #include "selection_controller.h"
@@ -417,11 +419,11 @@ AudioTimingControllerDialogue::AudioTimingControllerDialogue(agi::Context *c)
 , keyframes_provider(c, "Audio/Display/Draw/Keyframes in Dialogue Mode")
 , video_position_provider(c)
 , context(c)
-, commit_connection(c->ass->AddCommitListener(&AudioTimingControllerDialogue::OnFileChanged, this))
+, commit_connection(c->GetCore().ass->AddCommitListener(&AudioTimingControllerDialogue::OnFileChanged, this))
 , inactive_line_mode_connection(OPT_SUB("Audio/Inactive Lines Display Mode", &AudioTimingControllerDialogue::RegenerateInactiveLines, this))
 , inactive_line_comment_connection(OPT_SUB("Audio/Display/Draw/Inactive Comments", &AudioTimingControllerDialogue::RegenerateInactiveLines, this))
-, active_line_connection(c->selectionController->AddActiveLineListener(&AudioTimingControllerDialogue::Revert, this))
-, selection_connection(c->selectionController->AddSelectionListener(&AudioTimingControllerDialogue::OnSelectedSetChanged, this))
+, active_line_connection(c->GetCore().selectionController->AddActiveLineListener(&AudioTimingControllerDialogue::Revert, this))
+, selection_connection(c->GetCore().selectionController->AddSelectionListener(&AudioTimingControllerDialogue::OnSelectedSetChanged, this))
 {
 	keyframes_provider.AddMarkerMovedListener([=]{ AnnounceMarkerMoved(); });
 	video_position_provider.AddMarkerMovedListener([=]{ AnnounceMarkerMoved(); });
@@ -473,7 +475,8 @@ void AudioTimingControllerDialogue::Next(NextMode mode)
 {
 	if (mode == TIMING_UNIT)
 	{
-		context->selectionController->NextLine();
+		auto core = context->GetCore();
+		core.selectionController->NextLine();
 		return;
 	}
 
@@ -495,7 +498,8 @@ void AudioTimingControllerDialogue::Next(NextMode mode)
 
 void AudioTimingControllerDialogue::Prev()
 {
-	context->selectionController->PrevLine();
+	auto core = context->GetCore();
+	core.selectionController->PrevLine();
 }
 
 void AudioTimingControllerDialogue::DoCommit(bool user_triggered)
@@ -507,15 +511,16 @@ void AudioTimingControllerDialogue::DoCommit(bool user_triggered)
 			line->Apply();
 
 		commit_connection.Block();
+		auto core = context->GetCore();
 		if (user_triggered)
 		{
-			context->ass->Commit(_("timing"), AssFile::COMMIT_DIAG_TIME);
+			core.ass->Commit(from_wx(_("timing")), AssFile::COMMIT_DIAG_TIME);
 			commit_id = -1; // never coalesce with a manually triggered commit
 		}
 		else
 		{
 			AssDialogue *amend = modified_lines.size() == 1 ? (*modified_lines.begin())->GetLine() : nullptr;
-			commit_id = context->ass->Commit(_("timing"), AssFile::COMMIT_DIAG_TIME, commit_id, amend);
+			commit_id = core.ass->Commit(from_wx(_("timing")), AssFile::COMMIT_DIAG_TIME, commit_id, amend);
 		}
 
 		commit_connection.Unblock();
@@ -526,8 +531,9 @@ void AudioTimingControllerDialogue::DoCommit(bool user_triggered)
 void AudioTimingControllerDialogue::Revert()
 {
 	commit_id = -1;
+	auto core = context->GetCore();
 
-	if (AssDialogue *line = context->selectionController->GetActiveLine())
+	if (AssDialogue *line = core.selectionController->GetActiveLine())
 	{
 		modified_lines.clear();
 		if (active_line.SetLine(line))
@@ -710,39 +716,40 @@ void AudioTimingControllerDialogue::RegenerateInactiveLines()
 
 	bool was_empty = inactive_lines.empty();
 	inactive_lines.clear();
+	auto core = context->GetCore();
 
-	auto const& sel = context->selectionController->GetSelectedSet();
+	auto const& sel = core.selectionController->GetSelectedSet();
 
 	switch (int mode = inactive_line_mode->GetInt())
 	{
 	case 1: // Previous line only
 	case 2: // Previous and next lines
-		if (AssDialogue *line = context->selectionController->GetActiveLine())
+		if (AssDialogue *line = core.selectionController->GetActiveLine())
 		{
-			auto current_line = context->ass->iterator_to(*line);
-			if (current_line == context->ass->Events.end())
+			auto current_line = core.ass->iterator_to(*line);
+			if (current_line == core.ass->Events.end())
 				break;
 
-			if (current_line != context->ass->Events.begin())
+			if (current_line != core.ass->Events.begin())
 			{
 				auto prev = current_line;
-				while (--prev != context->ass->Events.begin() && !predicate(*prev)) ;
+				while (--prev != core.ass->Events.begin() && !predicate(*prev)) ;
 				if (predicate(*prev))
 					AddInactiveLine(sel, &*prev);
 			}
 
 			if (mode == 2)
 			{
-				auto next = std::find_if(++current_line, context->ass->Events.end(), predicate);
-				if (next != context->ass->Events.end())
+				auto next = std::find_if(++current_line, core.ass->Events.end(), predicate);
+				if (next != core.ass->Events.end())
 					AddInactiveLine(sel, &*next);
 			}
 		}
 		break;
 	case 3: // All inactive lines
 	{
-		AssDialogue *active_line = context->selectionController->GetActiveLine();
-		for (auto& line : context->ass->Events)
+		AssDialogue *active_line = core.selectionController->GetActiveLine();
+		for (auto& line : core.ass->Events)
 		{
 			if (&line != active_line && predicate(line))
 				AddInactiveLine(sel, &line);
@@ -774,9 +781,10 @@ void AudioTimingControllerDialogue::RegenerateSelectedLines()
 {
 	bool was_empty = selected_lines.empty();
 	selected_lines.clear();
+	auto core = context->GetCore();
 
-	AssDialogue *active = context->selectionController->GetActiveLine();
-	for (auto line : context->selectionController->GetSelectedSet())
+	AssDialogue *active = core.selectionController->GetActiveLine();
+	for (auto line : core.selectionController->GetSelectedSet())
 	{
 		if (line == active) continue;
 

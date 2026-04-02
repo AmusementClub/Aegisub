@@ -64,6 +64,10 @@ namespace agi {
 		/// @return number of jobs executed
 		std::size_t RunMainJobsForTests();
 
+		/// Rebind main-thread hooks to a safe fallback and stop shared
+		/// background workers during runtime shutdown.
+		void Shutdown();
+
 		/// Get the main-thread executor
 		Executor& MainExecutor();
 

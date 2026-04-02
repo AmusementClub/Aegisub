@@ -364,6 +364,115 @@ add_subdirectory("vendor/csri")
 target_sources(csri PRIVATE src/csri_native_library_bridge.cpp)
 target_compile_features(csri PRIVATE cxx_std_20)
 
+set(AEGISUB_SHARED_EXE_ENTRY_SOURCES
+    src/app_entry.cpp
+)
+
+set(AEGISUB_SHARED_RUNTIME_OPTIONAL_FACILITY_SOURCES
+    src/app_runtime_facilities.cpp
+)
+
+set(AEGISUB_SHARED_RUNTIME_COMMON_INIT_SUPPORT_SOURCES
+    ${AEGISUB_SHARED_RUNTIME_OPTIONAL_FACILITY_SOURCES}
+    src/app_runtime_init.cpp
+)
+
+set(AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES
+    src/app_process_config.cpp
+    src/app_runtime.cpp
+    ${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SUPPORT_SOURCES}
+)
+
+set(AEGISUB_SHARED_RUNTIME_LOCALE_SUPPORT_SOURCES
+    src/locale_pick.cpp
+)
+
+set(AEGISUB_SHARED_RUNTIME_LOCALE_CORE_SOURCES
+    src/aegisublocale.cpp
+    ${AEGISUB_SHARED_RUNTIME_LOCALE_SUPPORT_SOURCES}
+)
+
+set(AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES
+    src/gui_wx_dispatch_event.cpp
+    src/gui_wx_runtime_entry_host.cpp
+    src/gui_wx_locale_host.cpp
+    src/gui_wx_runtime_host.cpp
+)
+
+set(AEGISUB_GUI_BOOTSTRAP_WX_HOST_SOURCES
+    src/gui_wx_bootstrap_ui_host.cpp
+)
+
+set(AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES
+    ${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES}
+    ${AEGISUB_SHARED_RUNTIME_LOCALE_CORE_SOURCES}
+    src/headless_process_entry.cpp
+    src/headless_runtime_bootstrap.cpp
+)
+
+set(AEGISUB_SHARED_SELECTION_REQUEST_SOURCES
+    src/charset_choice.cpp
+    src/locale_choice.cpp
+    src/subtitle_fps_choice.cpp
+    src/track_choice.cpp
+)
+
+set(AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES
+    src/ass_info_service.cpp
+    src/media_inspect_service.cpp
+    src/trace_inspect_service.cpp
+    src/trace_summary_service.cpp
+)
+
+set(AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES
+    ${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}
+    src/headless_cli.cpp
+    src/headless_cli_internal.cpp
+    src/headless_cli_execute.cpp
+    src/headless_playback_probe.cpp
+)
+
+set(AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES
+    src/playback_query_service.cpp
+    src/project_open_service.cpp
+)
+
+set(AEGISUB_SHARED_PROVIDER_TRACK_SELECTION_SOURCES
+    src/ffmpegsource_common.cpp
+)
+
+set(AEGISUB_SHARED_MKV_SUBTITLE_COMMON_SOURCES
+    src/mkv_wrap_common.cpp
+)
+
+set(AEGISUB_SHARED_MKV_SUBTITLE_LEGACY_BACKEND_SOURCES
+    src/MatroskaParser.c
+    src/mkv_wrap.cpp
+)
+
+set(AEGISUB_SHARED_MKV_SUBTITLE_LIBMATROSKA_BACKEND_SOURCES
+    src/mkv_wrap_libmatroska.cpp
+)
+
+set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES
+    src/headless_playback_session_host.cpp
+    src/playback_probe_timer.cpp
+    src/playback_session_timer.cpp
+    ${AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES}
+    src/project_query_service.cpp
+)
+
+set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES
+    src/playback_probe_service.cpp
+    src/playback_session_service.cpp
+    src/project_session_service.cpp
+)
+
+set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES
+    ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES}
+    ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES}
+)
+
 ## Aegisub
 add_executable(Aegisub WIN32
     "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.h"
@@ -429,6 +538,15 @@ add_executable(Aegisub WIN32
     src/subtitle_format_transtation.cpp
     src/subtitle_format_ttxt.cpp
     src/subtitle_format_txt.cpp
+    src/project_session_ops.cpp
+    src/subtitle_edit_ops.cpp
+    src/subtitle_editor_ops.cpp
+    src/subtitle_grid_ops.cpp
+    src/subtitle_timing_ops.cpp
+    src/video_aspect_ratio_ops.cpp
+    src/video_navigation_ops.cpp
+    src/video_session_ops.cpp
+    src/video_snapshot_ops.cpp
     src/visual_tool.cpp
     src/visual_tool_clip.cpp
     src/visual_tool_cross.cpp
@@ -437,8 +555,8 @@ add_executable(Aegisub WIN32
     src/visual_tool_rotatez.cpp
     src/visual_tool_scale.cpp
     src/visual_tool_vector_clip.cpp
-    src/aegisublocale.cpp
     src/ass_attachment.cpp
+    src/ass_info_service.cpp
     src/ass_dialogue.cpp
     src/ass_entry.cpp
     src/ass_export_filter.cpp
@@ -450,9 +568,15 @@ add_executable(Aegisub WIN32
     src/ass_style.cpp
     src/ass_style_storage.cpp
     src/async_video_provider.cpp
+    src/async_video_provider_host.cpp
+    ${AEGISUB_SHARED_EXE_ENTRY_SOURCES}
+    ${AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES}
     src/audio_box.cpp
     src/audio_colorscheme.cpp
     src/audio_controller.cpp
+    src/wx_audio_controller_power_host.cpp
+    src/audio_controller_timer.cpp
+    src/threaded_ui_timer.cpp
     src/audio_display_analysis.cpp
     src/audio_latest_range_scheduler.cpp
     src/audio_display.cpp
@@ -490,7 +614,12 @@ add_executable(Aegisub WIN32
     src/frame_main.cpp
     src/gl_text.cpp
     src/gl_wrap.cpp
+    ${AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES}
     src/grid_column.cpp
+    ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES}
+    ${AEGISUB_SHARED_SELECTION_REQUEST_SOURCES}
+    ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES}
+    ${AEGISUB_GUI_BOOTSTRAP_WX_HOST_SOURCES}
     src/help_button.cpp
     src/hotkey.cpp
     src/hotkey_data_view_model.cpp
@@ -514,6 +643,7 @@ add_executable(Aegisub WIN32
     src/spline_curve.cpp
     src/string_codec.cpp
     src/subs_controller.cpp
+    src/subs_controller_timer.cpp
     src/subs_edit_box.cpp
     src/subs_edit_ctrl.cpp
     src/subs_preview.cpp
@@ -529,15 +659,19 @@ add_executable(Aegisub WIN32
     src/toolbar.cpp
     src/tooltip_manager.cpp
     src/utils.cpp
+    src/ui_timer.cpp
+    src/ui_services.cpp
     src/validators.cpp
     src/vector2d.cpp
     src/version.cpp
     src/video_box.cpp
     src/video_controller.cpp
+    src/video_controller_timer.cpp
     src/video_display.cpp
     src/video_renderer_backend.cpp
     src/video_renderer_factory.cpp
     src/video_frame.cpp
+    src/video_property_update.cpp
     src/video_renderer_opengl.cpp
     src/video_renderer_opengl_tile.cpp
     src/video_provider_cache.cpp
@@ -554,16 +688,16 @@ target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} libaegisub luajit)
 target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
 target_compile_features(Aegisub PRIVATE cxx_std_20)
 option(AEGISUB_MATROSKA_PARSING "Enable MKV subtitle parsing via libebml/libmatroska" ON)
-target_sources(Aegisub PRIVATE src/mkv_wrap_common.cpp)
+target_sources(Aegisub PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_COMMON_SOURCES})
 if(AEGISUB_MATROSKA_PARSING)
     find_package(EBML REQUIRED CONFIG)
     find_package(Matroska REQUIRED CONFIG)
     target_link_libraries(Aegisub PRIVATE "EBML::ebml" "Matroska::matroska")
     target_compile_definitions(Aegisub PRIVATE AEGISUB_MATROSKA_PARSING=1)
-    target_sources(Aegisub PRIVATE src/mkv_wrap_libmatroska.cpp)
+    target_sources(Aegisub PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_LIBMATROSKA_BACKEND_SOURCES})
 else()
     target_compile_definitions(Aegisub PRIVATE AEGISUB_MATROSKA_PARSING=0)
-    target_sources(Aegisub PRIVATE src/MatroskaParser.c src/mkv_wrap.cpp)
+    target_sources(Aegisub PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_LEGACY_BACKEND_SOURCES})
 endif()
 option(AEGISUB_USE_STRINGZILLA "Use StringZilla in selected string-heavy code paths" ON)
 if(AEGISUB_USE_STRINGZILLA)
@@ -600,9 +734,8 @@ else()
 endif()
 
 if(WIN32)
-    find_program(POWERSHELL_EXECUTABLE NAMES pwsh powershell REQUIRED)
     add_custom_target(git_version
-        COMMAND "${POWERSHELL_EXECUTABLE}" -NoProfile -ExecutionPolicy Bypass -File "${PROJECT_SOURCE_DIR}/build/version.ps1" -RepoRoot .
+        COMMAND "${PROJECT_SOURCE_DIR}/build/version.cmd" .
         BYPRODUCTS "${PROJECT_SOURCE_DIR}/build/git_version.h"
         WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
         VERBATIM
@@ -714,6 +847,13 @@ target_link_libraries(Aegisub PRIVATE "ICU::uc")
 
 find_package(wxWidgets REQUIRED adv base core gl propgrid stc xml)
 option(WITH_WXSTC "Enable wxStyledTextCtrl support" ON)
+function(aegisub_enable_wx_utf8_guard target_name)
+    if(TARGET ${target_name})
+        target_compile_definitions(${target_name} PRIVATE "wxNO_IMPLICIT_WXSTRING_ENCODING")
+    endif()
+endfunction()
+
+aegisub_enable_wx_utf8_guard(Aegisub)
 if(WITH_WXSTC)
     target_compile_definitions(Aegisub PRIVATE "WITH_WXSTC")
     target_sources(Aegisub PRIVATE src/subs_edit_ctrl_stc.cpp)
@@ -819,7 +959,7 @@ if(WITH_FFMS2)
         "${FFMS2_INCLUDE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/vendor/ffms2"
     )
-    target_sources(Aegisub PRIVATE src/audio_provider_ffmpegsource.cpp src/ffmpegsource_common.cpp src/video_provider_ffmpegsource.cpp)
+    target_sources(Aegisub PRIVATE src/audio_provider_ffmpegsource.cpp ${AEGISUB_SHARED_PROVIDER_TRACK_SELECTION_SOURCES} src/video_provider_ffmpegsource.cpp)
 elseif(NOT HAVE_FFMS2)
     message(WARNING
         "No supported video/audio reader interface was enabled.\n"

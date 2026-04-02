@@ -58,6 +58,7 @@ class BaseGrid final : public wxWindow {
 	int yPos = 0;
 
 	int active_row = -1;
+	int current_frame = -1;
 
 	std::unique_ptr<WidthHelper> width_helper;
 
@@ -86,10 +87,6 @@ class BaseGrid final : public wxWindow {
 
 	std::vector<AssDialogue*> index_line_map;  ///< Row number -> dialogue line
 
-	/// Connection for video seek event. Stored explicitly so that it can be
-	/// blocked if the relevant option is disabled
-	agi::signal::Connection seek_listener;
-
 	/// Cached grid body context menu
 	std::unique_ptr<wxMenu> context_menu;
 
@@ -105,7 +102,8 @@ class BaseGrid final : public wxWindow {
 	void OnSize(wxSizeEvent &event);
 	void OnSubtitlesCommit(int type);
 	void OnActiveLineChanged(AssDialogue *);
-	void OnSeek();
+	void OnCurrentFrameChanged(int frame_number);
+	void OnVideoProviderChanged();
 
 	void AdjustScrollbar();
 	void SetColumnWidths();

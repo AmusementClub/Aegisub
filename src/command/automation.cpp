@@ -36,6 +36,7 @@
 #include "../dialogs.h"
 #include "../frame_main.h"
 #include "../include/aegisub/context.h"
+#include "../include/aegisub/context_ui.h"
 #include "../libresrc/libresrc.h"
 #include "../options.h"
 
@@ -52,7 +53,7 @@ struct reload_all final : public Command {
 
 	void operator()(agi::Context *c) override {
 		config::global_scripts->Reload();
-		c->local_scripts->Reload();
+		c->GetCore().local_scripts->Reload();
 		c->ShowStatus(from_wx(_("Reloaded all Automation scripts")));
 	}
 };

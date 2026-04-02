@@ -184,8 +184,8 @@ void OpenGLWrapper::DrawRing(Vector2D center, float r1, float r2, float ar, floa
 
 	VertexArray buf(2, steps);
 
-	Vector2D scale_inner = Vector2D(ar, 1) * r1;
-	Vector2D scale_outer = Vector2D(ar, 1) * r2;
+	Vector2D scale_inner = Vector2D(ar, 1.f) * r1;
+	Vector2D scale_outer = Vector2D(ar, 1.f) * r2;
 
 	if (fill_a != 0.f) {
 		SetModeFill();

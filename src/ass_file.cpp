@@ -271,7 +271,7 @@ AssStyle *AssFile::GetStyle(std::string const& name) {
 	return nullptr;
 }
 
-int AssFile::Commit(wxString const& desc, int type, int amend_id, AssDialogue *single_line) {
+int AssFile::Commit(std::string const& desc, int type, int amend_id, AssDialogue *single_line) {
 	if (type == COMMIT_NEW || (type & COMMIT_DIAG_ADDREM) || (type & COMMIT_ORDER)) {
 		int i = 0;
 		for (auto& event : Events)

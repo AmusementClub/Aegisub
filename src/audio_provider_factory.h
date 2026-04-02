@@ -14,6 +14,8 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#include "provider_selection_diagnostics.h"
+
 #include <libaegisub/fs_fwd.h>
 
 #include <memory>
@@ -26,11 +28,15 @@ namespace agi {
 	class BackgroundRunner;
 	class NotificationSink;
 	class Path;
+	class SingleChoiceInteractionSink;
 }
 
 std::unique_ptr<agi::AudioProvider> GetAudioProvider(agi::fs::path const& filename,
                                                      agi::Path const& path_helper,
                                                      agi::BackgroundRunner *br,
-                                                     agi::NotificationSink *notification_sink = nullptr);
+                                                     agi::NotificationSink& notification_sink,
+                                                     std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 std::vector<std::string> GetAudioProviderNames();
 std::vector<std::pair<std::string, std::string>> GetAudioProviderChoices();
+aegisub::provider_selection_diagnostics::SelectionReport GetLastAudioProviderSelectionReport();
+void ClearLastAudioProviderSelectionReport();

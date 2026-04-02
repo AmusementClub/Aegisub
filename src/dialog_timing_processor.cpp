@@ -34,6 +34,7 @@
 #include "format.h"
 #include "help_button.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "project.h"
@@ -103,7 +104,7 @@ struct DialogTimingProcessor {
 wxTextCtrl *make_ctrl(wxWindow *parent, wxSizer *sizer, wxString const& desc, int *value, wxCheckBox *cb, wxString const& tooltip) {
 	wxIntegerValidator<int> validator(value);
 	validator.SetMin(0);
-	wxTextCtrl *ctrl = new wxTextCtrl(parent, -1, "", wxDefaultPosition, wxSize(60,-1), 0, validator);
+	wxTextCtrl *ctrl = new wxTextCtrl(parent, -1, wxEmptyString, wxDefaultPosition, wxSize(60,-1), 0, validator);
 	ctrl->SetToolTip(tooltip);
 	if (!desc.empty())
 		sizer->Add(new wxStaticText(parent, -1, desc), wxSizerFlags().Center().Border(wxRIGHT));
@@ -131,10 +132,11 @@ wxCheckBox *make_check(wxStaticBoxSizer *sizer, wxString const& desc, const char
 }
 
 DialogTimingProcessor::DialogTimingProcessor(agi::Context *c)
-: d(c->parent, -1, _("Timing Post-Processor"))
+: d(c->GetUI().parent, -1, _("Timing Post-Processor"))
 , c(c)
 {
 	using std::bind;
+	auto core = c->GetCore();
 
 	d.SetIcon(GETICON(timing_processor_toolbutton_16));
 
@@ -150,7 +152,7 @@ DialogTimingProcessor::DialogTimingProcessor(agi::Context *c)
 
 	// Styles box
 	auto LeftSizer = new wxStaticBoxSizer(wxVERTICAL,&d,_("Apply to styles"));
-	StyleList = new wxCheckListBox(&d, -1, wxDefaultPosition, d.FromDIP(wxSize(150, 150)), to_wx(c->ass->GetStyles()));
+	StyleList = new wxCheckListBox(&d, -1, wxDefaultPosition, d.FromDIP(wxSize(150, 150)), to_wx(core.ass->GetStyles()));
 	StyleList->SetToolTip(_("Select styles to process. Unchecked ones will be ignored."));
 
 	auto all = new wxButton(&d,-1,_("&All"));
@@ -171,12 +173,12 @@ DialogTimingProcessor::DialogTimingProcessor(agi::Context *c)
 	hasLeadIn = make_check(LeadSizer, _("Add lead &in:"),
 		"Tool/Timing Post Processor/Enable/Lead/IN",
 		_("Enable adding of lead-ins to lines"));
-	make_ctrl(LeadSizer, "", &leadIn, hasLeadIn, _("Lead in to be added, in milliseconds"));
+	make_ctrl(LeadSizer, wxEmptyString, &leadIn, hasLeadIn, _("Lead in to be added, in milliseconds"));
 
 	hasLeadOut = make_check(LeadSizer, _("Add lead &out:"),
 		"Tool/Timing Post Processor/Enable/Lead/OUT",
 		_("Enable adding of lead-outs to lines"));
-	make_ctrl(LeadSizer, "", &leadOut, hasLeadOut, _("Lead out to be added, in milliseconds"));
+	make_ctrl(LeadSizer, wxEmptyString, &leadOut, hasLeadOut, _("Lead out to be added, in milliseconds"));
 
 	LeadSizer->AddStretchSpacer(1);
 
@@ -215,7 +217,7 @@ DialogTimingProcessor::DialogTimingProcessor(agi::Context *c)
 	KeyframesFlexSizer->Add(keysEnable,0,wxRIGHT|wxEXPAND,10);
 
 	// Keyframes are only available if timecodes are loaded
-	bool keysAvailable = !c->project->Keyframes().empty() && c->project->Timecodes().IsLoaded();
+	bool keysAvailable = !core.project->Keyframes().empty() && core.project->Timecodes().IsLoaded();
 	if (!keysAvailable) {
 		keysEnable->SetValue(false);
 		keysEnable->Enable(false);
@@ -330,14 +332,16 @@ std::vector<AssDialogue*> DialogTimingProcessor::SortDialogues() {
 
 	auto valid_line = [&](const AssDialogue *d) { return !d->Comment && styles.count(d->Style); };
 	if (onlySelection->IsChecked()) {
-		for (auto* dialogue : c->selectionController->GetSelectedSet()) {
+		auto core = c->GetCore();
+		for (auto* dialogue : core.selectionController->GetSelectedSet()) {
 			if (valid_line(dialogue))
 				sorted.push_back(dialogue);
 		}
 	}
 	else {
-		sorted.reserve(c->ass->Events.size());
-		for (auto& dialogue : c->ass->Events) {
+		auto core = c->GetCore();
+		sorted.reserve(core.ass->Events.size());
+		for (auto& dialogue : core.ass->Events) {
 			if (valid_line(&dialogue))
 				sorted.push_back(&dialogue);
 		}
@@ -422,9 +426,10 @@ void DialogTimingProcessor::Process() {
 
 	// Keyframe snapping
 	if (keysEnable->IsChecked()) {
-		std::vector<int> kf = c->project->Keyframes();
-		auto fps = c->project->Timecodes();
-		if (auto provider = c->project->VideoProvider())
+		auto core = c->GetCore();
+		std::vector<int> kf = core.project->Keyframes();
+		auto fps = core.project->Timecodes();
+		if (auto provider = core.project->VideoProvider())
 			kf.push_back(provider->GetFrameCount() - 1);
 
 		for (AssDialogue *cur : sorted) {
@@ -446,7 +451,7 @@ void DialogTimingProcessor::Process() {
 		}
 	}
 
-	c->ass->Commit(_("timing processor"), AssFile::COMMIT_DIAG_TIME);
+	c->GetCore().ass->Commit(from_wx(_("timing processor")), AssFile::COMMIT_DIAG_TIME);
 }
 }
 

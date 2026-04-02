@@ -241,7 +241,7 @@ namespace Automation4 {
 
 			// Same serialisation interface as single-line edit
 			wxControl *Create(wxWindow *parent) override {
-				cw = new wxTextCtrl(parent, -1, "", wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE, StringBinder(&text));
+				cw = new wxTextCtrl(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_MULTILINE, StringBinder(&text));
 				cw->SetMinSize(wxSize(0, parent->FromDIP(30)));
 				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
@@ -272,7 +272,7 @@ namespace Automation4 {
 			void UnserialiseValue(const std::string &serialised) override { value = atoi(serialised.c_str()); }
 
 			wxControl *Create(wxWindow *parent) override {
-				cw = new wxSpinCtrl(parent, -1, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, value);
+				cw = new wxSpinCtrl(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, value);
 				cw->SetValidator(wxGenericValidator(&value));
 				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
@@ -322,7 +322,7 @@ namespace Automation4 {
 
 				if (step > 0) {
 					auto const construct_started = std::chrono::steady_clock::now();
-					scd = new wxSpinCtrlDouble(parent, -1, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, value, step);
+					scd = new wxSpinCtrlDouble(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, value, step);
 					create_trace.floatedit_spin_construct_with_value_ms = DurationMs(std::chrono::steady_clock::now() - construct_started);
 
 					auto const validator_bind_started = std::chrono::steady_clock::now();
@@ -335,7 +335,7 @@ namespace Automation4 {
 
 				DoubleValidator val(&value, min, max);
 				auto const construct_started = std::chrono::steady_clock::now();
-				cw = new wxTextCtrl(parent, -1, "", wxDefaultPosition, wxDefaultSize, 0, val);
+				cw = new wxTextCtrl(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0, val);
 				create_trace.floatedit_text_construct_with_validator_ms = DurationMs(std::chrono::steady_clock::now() - construct_started);
 				SetTooltipIfPresent(cw, hint_wx);
 				return cw;
@@ -378,7 +378,7 @@ namespace Automation4 {
 				create_trace = {};
 
 				auto const native_construct_started = std::chrono::steady_clock::now();
-				cw = new wxOwnerDrawnComboBox(parent, -1, "", wxDefaultPosition, wxDefaultSize, items_wx, wxCB_READONLY | wxODCB_STD_CONTROL_PAINT);
+				cw = new wxOwnerDrawnComboBox(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, items_wx, wxCB_READONLY | wxODCB_STD_CONTROL_PAINT);
 				create_trace.native_construct_ms = DurationMs(std::chrono::steady_clock::now() - native_construct_started);
 
 				auto const validator_bind_started = std::chrono::steady_clock::now();

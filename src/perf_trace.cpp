@@ -633,7 +633,7 @@ void WriteManifest(Session const& session) {
 	out << "trace_selection=" << session.selection_tag << "\n";
 	out << "started_local=" << session.started_local << "\n";
 	out << "pid=" << wxGetProcessId() << "\n";
-	out << "platform=" << wxGetOsDescription().ToStdString() << "\n";
+	out << "platform=" << wxGetOsDescription().ToStdString(wxConvUTF8) << "\n";
 	out << "cwd=" << agi::fs::PathToString(std::filesystem::current_path()) << "\n";
 	out << "session_dir=" << agi::fs::PathToString(session.directory) << "\n";
 	out << "trace_file=" << agi::fs::PathToString(session.directory / "trace.ndjson") << "\n";

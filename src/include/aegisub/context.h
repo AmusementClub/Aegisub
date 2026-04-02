@@ -15,40 +15,106 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
+
+#include <libaegisub/fs_fwd.h>
+#include <libaegisub/signal.h>
 
 class AssFile;
-class AudioBox;
 class AudioController;
 class AssDialogue;
-class AudioKaraoke;
-class DialogManager;
-class FrameMain;
 class Project;
 class SearchReplaceEngine;
 class InitialLineState;
 class SelectionController;
 class SubsController;
-class BaseGrid;
 class TextSelectionController;
 class VideoController;
-class VideoDisplay;
-class wxWindow;
 namespace Automation4 { class ScriptManager; }
 namespace agi { class BackgroundRunner; }
 namespace agi { class StatusSink; }
 namespace agi { class NotificationSink; }
 namespace agi { class InteractionSink; }
+namespace agi { class SingleChoiceInteractionSink; }
+namespace agi { class FileDialogService; }
+namespace agi { class VideoSourceRequestService; }
 namespace agi { class BackgroundRunnerFactory; }
+namespace agi { class ProjectUiStateSink; }
+namespace agi { class AudioPlayerFactoryService; }
+namespace Automation4 { class AutomationBackgroundScriptRunnerFactory; }
+namespace Automation4 { class BackgroundScriptRunner; }
+namespace agi { struct ContextUiState; }
+namespace agi { struct ContextUiSession; }
+namespace agi { struct ConstContextUiSession; }
 namespace agi { struct InteractionRequest; }
+namespace agi { struct SingleChoiceInteractionRequest; }
+namespace agi { struct OpenFileDialogRequest; }
+namespace agi { struct OpenFilesDialogRequest; }
+namespace agi { struct SaveFileDialogRequest; }
+namespace agi { struct SelectDirectoryDialogRequest; }
 namespace agi { enum class InteractionResult : int; }
 
 namespace agi {
 class Path;
+struct Context;
+
+struct ContextCoreSession {
+	std::unique_ptr<AssFile>& ass;
+	std::unique_ptr<TextSelectionController>& textSelectionController;
+	std::unique_ptr<SubsController>& subsController;
+	std::unique_ptr<Project>& project;
+	std::unique_ptr<Automation4::ScriptManager>& local_scripts;
+	std::unique_ptr<SelectionController>& selectionController;
+	std::unique_ptr<VideoController>& videoController;
+	std::unique_ptr<AudioController>& audioController;
+	std::unique_ptr<InitialLineState>& initialLineState;
+	std::unique_ptr<SearchReplaceEngine>& search;
+	std::unique_ptr<Path>& path;
+	std::shared_ptr<StatusSink>& statusSink;
+	std::shared_ptr<NotificationSink>& notificationSink;
+	std::shared_ptr<InteractionSink>& interactionSink;
+	std::shared_ptr<SingleChoiceInteractionSink>& singleChoiceInteractionSink;
+	std::shared_ptr<FileDialogService>& fileDialogService;
+	std::shared_ptr<VideoSourceRequestService>& videoSourceRequestService;
+	std::shared_ptr<BackgroundRunnerFactory>& backgroundRunnerFactory;
+	std::shared_ptr<ProjectUiStateSink>& projectUiStateSink;
+	std::shared_ptr<AudioPlayerFactoryService>& audioPlayerFactoryService;
+	std::shared_ptr<Automation4::AutomationBackgroundScriptRunnerFactory>& automationBackgroundScriptRunnerFactory;
+
+	explicit ContextCoreSession(Context& context);
+};
+
+struct ConstContextCoreSession {
+	std::unique_ptr<AssFile> const& ass;
+	std::unique_ptr<TextSelectionController> const& textSelectionController;
+	std::unique_ptr<SubsController> const& subsController;
+	std::unique_ptr<Project> const& project;
+	std::unique_ptr<Automation4::ScriptManager> const& local_scripts;
+	std::unique_ptr<SelectionController> const& selectionController;
+	std::unique_ptr<VideoController> const& videoController;
+	std::unique_ptr<AudioController> const& audioController;
+	std::unique_ptr<InitialLineState> const& initialLineState;
+	std::unique_ptr<SearchReplaceEngine> const& search;
+	std::unique_ptr<Path> const& path;
+	std::shared_ptr<StatusSink> const& statusSink;
+	std::shared_ptr<NotificationSink> const& notificationSink;
+	std::shared_ptr<InteractionSink> const& interactionSink;
+	std::shared_ptr<SingleChoiceInteractionSink> const& singleChoiceInteractionSink;
+	std::shared_ptr<FileDialogService> const& fileDialogService;
+	std::shared_ptr<VideoSourceRequestService> const& videoSourceRequestService;
+	std::shared_ptr<BackgroundRunnerFactory> const& backgroundRunnerFactory;
+	std::shared_ptr<ProjectUiStateSink> const& projectUiStateSink;
+	std::shared_ptr<AudioPlayerFactoryService> const& audioPlayerFactoryService;
+	std::shared_ptr<Automation4::AutomationBackgroundScriptRunnerFactory> const& automationBackgroundScriptRunnerFactory;
+
+	explicit ConstContextCoreSession(Context const& context);
+};
 
 struct Context {
 	// Note: order here matters quite a bit, as things need to be set up and
-    // torn down in the correct order
+	// torn down in the correct order
 	std::unique_ptr<AssFile> ass;
 	std::unique_ptr<TextSelectionController> textSelectionController;
 	std::unique_ptr<SubsController> subsController;
@@ -63,20 +129,14 @@ struct Context {
 	std::shared_ptr<StatusSink> statusSink;
 	std::shared_ptr<NotificationSink> notificationSink;
 	std::shared_ptr<InteractionSink> interactionSink;
+	std::shared_ptr<SingleChoiceInteractionSink> singleChoiceInteractionSink;
+	std::shared_ptr<FileDialogService> fileDialogService;
+	std::shared_ptr<VideoSourceRequestService> videoSourceRequestService;
 	std::shared_ptr<BackgroundRunnerFactory> backgroundRunnerFactory;
-
-	// Things that should probably be in some sort of UI-context-model
-	wxWindow *parent = nullptr;
-	wxWindow *previousFocus = nullptr;
-	wxWindow *videoSlider = nullptr;
-
-	// Views (i.e. things that should eventually not be here at all)
-	AudioBox *audioBox = nullptr;
-	AudioKaraoke *karaoke = nullptr;
-	BaseGrid *subsGrid = nullptr;
-	std::unique_ptr<DialogManager> dialog;
-	FrameMain *frame = nullptr;
-	VideoDisplay *videoDisplay = nullptr;
+	std::shared_ptr<ProjectUiStateSink> projectUiStateSink;
+	std::shared_ptr<AudioPlayerFactoryService> audioPlayerFactoryService;
+	std::shared_ptr<Automation4::AutomationBackgroundScriptRunnerFactory> automationBackgroundScriptRunnerFactory;
+	std::unique_ptr<ContextUiState> ui;
 
 	Context();
 	~Context();
@@ -89,7 +149,26 @@ struct Context {
 	void ShowWarning(std::string const& message, std::string const& title = "Warning") const;
 	std::shared_ptr<InteractionSink> GetInteractionSink() const;
 	InteractionResult RequestInteraction(InteractionRequest const& request) const;
+	std::shared_ptr<SingleChoiceInteractionSink> GetSingleChoiceInteractionSink() const;
+	std::optional<int> RequestSingleChoice(SingleChoiceInteractionRequest const& request) const;
+	std::shared_ptr<FileDialogService> GetFileDialogService() const;
+	agi::fs::path RequestOpenFile(OpenFileDialogRequest const& request) const;
+	std::vector<agi::fs::path> RequestOpenFiles(OpenFilesDialogRequest const& request) const;
+	agi::fs::path RequestSaveFile(SaveFileDialogRequest const& request) const;
+	agi::fs::path RequestSelectDirectory(SelectDirectoryDialogRequest const& request) const;
+	std::shared_ptr<VideoSourceRequestService> GetVideoSourceRequestService() const;
+	std::string RequestDummyVideoPath() const;
 	std::unique_ptr<BackgroundRunner> CreateBackgroundRunner(std::string const& title = "", std::string const& message = "") const;
+	std::shared_ptr<ProjectUiStateSink> GetProjectUiStateSink() const;
+	std::shared_ptr<AudioPlayerFactoryService> GetAudioPlayerFactoryService() const;
+	std::unique_ptr<Automation4::BackgroundScriptRunner> CreateAutomationBackgroundScriptRunner(std::string const& title) const;
+
+	// Returned on demand to avoid making Context subobject construction depend
+	// on the bridge members themselves having already been initialized.
+	ContextCoreSession GetCore() { return ContextCoreSession(*this); }
+	ConstContextCoreSession GetCore() const { return ConstContextCoreSession(*this); }
+	ContextUiSession GetUI();
+	ConstContextUiSession GetUI() const;
 };
 
 }

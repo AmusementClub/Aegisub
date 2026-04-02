@@ -19,6 +19,7 @@
 #include "include/aegisub/menu.h"
 
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
 
 #include "auto4_base.h"
@@ -66,7 +67,7 @@ class MruMenu final : public wxMenu {
 
 		for (size_t i = GetMenuItemCount(); i < new_size; ++i) {
 			if (i >= items.size()) {
-				items.push_back(new wxMenuItem(this, id_base + cmds->size(), "_"));
+				items.push_back(new wxMenuItem(this, id_base + cmds->size(), wxS("_")));
 				cmds->push_back(agi::format("recent/%s/%d", agi::util::strings::to_lower_copy(type), i));
 			}
 			Append(items[i]);
@@ -103,7 +104,7 @@ public:
 		int i = 0;
 		for (auto it = mru->begin(); it != mru->end(); ++it, ++i) {
 			wxString name = it->wstring();
-			if (!name.StartsWith("?"))
+			if (!name.StartsWith(wxS("?")))
 				name = it->filename().wstring();
 			wxString newLabel = fmt_wx("%s%d %s",
 				i <= 9 ? "&" : "", i + 1,
@@ -209,17 +210,18 @@ public:
 			flags & cmd::COMMAND_RADIO ? wxITEM_RADIO :
 			flags & cmd::COMMAND_TOGGLE ? wxITEM_CHECK :
 			wxITEM_NORMAL;
+		auto ui = context->GetUI();
 
 		menu_text += to_wx("\t" + hotkey::get_hotkey_str_first("Default", co->name()));
 
 		wxMenuItem *item = new wxMenuItem(parent, id_base + items.size(), menu_text, co->StrHelp(), kind);
 #if defined(__WXMSW__)
 		if (kind == wxITEM_NORMAL)
-			item->SetBitmap(co->IconBundle(context->parent->GetLayoutDirection()));
+			item->SetBitmap(co->IconBundle(ui.parent->GetLayoutDirection()));
 #elif !defined(__WXMAC__)
 		/// @todo Maybe make this a configuration option instead?
 		if (kind == wxITEM_NORMAL)
-			item->SetBitmap(co->IconBundle(context->parent->GetLayoutDirection()));
+			item->SetBitmap(co->IconBundle(ui.parent->GetLayoutDirection()));
 #endif
 		parent->Append(item);
 		items.push_back(co->name());
@@ -506,7 +508,9 @@ class AutomationMenu final : public wxMenu {
 			Delete(items[i]);
 
 		auto macros = config::global_scripts->GetMacros();
-		macros.insert(macros.end(), c->local_scripts->GetMacros().begin(), c->local_scripts->GetMacros().end());
+		auto core = c->GetCore();
+		auto const& local_macros = core.local_scripts->GetMacros();
+		macros.insert(macros.end(), local_macros.begin(), local_macros.end());
 		if (macros.empty()) {
 			Append(-1, _("No Automation macros loaded"))->Enable(false);
 			return;
@@ -535,7 +539,7 @@ public:
 	: c(c)
 	, cm(cm)
 	, global_slot(config::global_scripts->AddScriptChangeListener(&AutomationMenu::Regenerate, this))
-	, local_slot(c->local_scripts->AddScriptChangeListener(&AutomationMenu::Regenerate, this))
+	, local_slot(c->GetCore().local_scripts->AddScriptChangeListener(&AutomationMenu::Regenerate, this))
 	{
 		cm->AddCommand(cmd::get("am/meta"), this);
 		AppendSeparator();

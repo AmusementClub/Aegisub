@@ -39,8 +39,6 @@
 
 #include <libaegisub/lua/utils.h>
 
-#include <wx/filedlg.h>
-
 using namespace agi::lua;
 
 namespace {
@@ -56,11 +54,6 @@ namespace {
 	{
 		lua_pushnil(L);
 		lua_setfield(L, idx, name);
-	}
-
-	wxString check_wxstring(lua_State *L, int idx)
-	{
-		return to_wx(check_string(L, idx));
 	}
 }
 
@@ -206,62 +199,51 @@ namespace Automation4 {
 	int LuaProgressSink::LuaDisplayOpenDialog(lua_State *L)
 	{
 		ProgressSink *ps = GetObjPointer(L, lua_upvalueindex(1));
-		wxString message(check_wxstring(L, 1));
-		wxString dir(check_wxstring(L, 2));
-		wxString file(check_wxstring(L, 3));
-		wxString wildcard(check_wxstring(L, 4));
-		bool multiple = !!lua_toboolean(L, 5);
-		bool must_exist = lua_toboolean(L, 6) || lua_isnil(L, 6);
+		AutomationOpenFileDialogRequest request{
+			check_string(L, 1),
+			check_string(L, 2),
+			check_string(L, 3),
+			check_string(L, 4),
+			!!lua_toboolean(L, 5),
+			lua_toboolean(L, 6) || lua_isnil(L, 6)
+		};
 
-		int flags = wxFD_OPEN;
-		if (multiple)
-			flags |= wxFD_MULTIPLE;
-		if (must_exist)
-			flags |= wxFD_FILE_MUST_EXIST;
-
-		wxFileDialog diag(nullptr, message, dir, file, wildcard, flags);
-		if (ps->ShowDialog(&diag) == wxID_CANCEL) {
+		auto files = ps->RequestOpenFiles(request);
+		if (files.empty()) {
 			lua_pushnil(L);
 			return 1;
 		}
 
-		if (multiple) {
-			wxArrayString files;
-			diag.GetPaths(files);
-
+		if (request.multiple) {
 			lua_createtable(L, files.size(), 0);
 			for (size_t i = 0; i < files.size(); ++i) {
-				lua_pushstring(L, files[i].utf8_str());
+				lua_pushstring(L, agi::fs::PathToString(files[i]).c_str());
 				lua_rawseti(L, -2, i + 1);
 			}
 
 			return 1;
 		}
 
-		lua_pushstring(L, diag.GetPath().utf8_str());
+		lua_pushstring(L, agi::fs::PathToString(files.front()).c_str());
 		return 1;
 	}
 
 	int LuaProgressSink::LuaDisplaySaveDialog(lua_State *L)
 	{
 		ProgressSink *ps = GetObjPointer(L, lua_upvalueindex(1));
-		wxString message(check_wxstring(L, 1));
-		wxString dir(check_wxstring(L, 2));
-		wxString file(check_wxstring(L, 3));
-		wxString wildcard(check_wxstring(L, 4));
-		bool prompt_overwrite = !lua_toboolean(L, 5);
-
-		int flags = wxFD_SAVE;
-		if (prompt_overwrite)
-			flags |= wxFD_OVERWRITE_PROMPT;
-
-		wxFileDialog diag(ps->GetParentWindow(), message, dir, file, wildcard, flags);
-		if (ps->ShowDialog(&diag) == wxID_CANCEL) {
+		auto path = ps->RequestSaveFile({
+			check_string(L, 1),
+			check_string(L, 2),
+			check_string(L, 3),
+			check_string(L, 4),
+			!lua_toboolean(L, 5)
+		});
+		if (path.empty()) {
 			lua_pushnil(L);
 			return 1;
 		}
 
-		lua_pushstring(L, diag.GetPath().utf8_str());
+		lua_pushstring(L, agi::fs::PathToString(path).c_str());
 		return 1;
 	}
 }

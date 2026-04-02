@@ -40,6 +40,7 @@
 #include "compat.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
 #include "options.h"
 #include "project.h"
@@ -316,7 +317,7 @@ public:
 	: display(display)
 	{
 		int width, height;
-		display->GetTextExtent("0123456789:.", &width, &height);
+		display->GetTextExtent(wxS("0123456789:."), &width, &height);
 		bounds.height = height + display->FromDIP(4);
 	}
 
@@ -1519,10 +1520,11 @@ void AudioDisplay::OnAudioOpen(agi::AudioProvider *provider)
 	{
 		if (connections.empty())
 		{
+			auto core = context->GetCore();
 			connections = agi::signal::make_vector({
 				controller->AddPlaybackPositionListener(&AudioDisplay::OnPlaybackPosition, this),
 				controller->AddPlaybackStopListener(&AudioDisplay::RemoveTrackCursor, this),
-				context->videoController->AddSeekListener(&AudioDisplay::OnVideoSeek, this),
+				core.videoController->AddSeekListener(&AudioDisplay::OnVideoSeek, this),
 				controller->AddTimingControllerListener(&AudioDisplay::OnTimingController, this),
 				OPT_SUB("Audio/Spectrum", &AudioDisplay::ReloadRenderingSettings, this),
 				OPT_SUB("Audio/Display/Waveform Style", &AudioDisplay::ReloadRenderingSettings, this),
@@ -1586,12 +1588,16 @@ void AudioDisplay::OnPlaybackPosition(int ms)
 
 void AudioDisplay::OnVideoSeek(int frame)
 {
-	if (!provider || !context || !context->videoController)
+	if (!provider || !context || controller->IsPlaying())
 		return;
 
-	// Video playback/seek events can update the timing cursor even when audio playback
-	// callbacks are not active.
-	const int ms = context->videoController->TimeAtFrame(frame, agi::vfr::EXACT);
+	auto core = context->GetCore();
+	if (!core.project->VideoProvider())
+		return;
+
+	// During continuous playback, the audio transport owns the main track cursor.
+	// Video seek only drives paused-state navigation feedback.
+	const int ms = core.videoController->TimeAtFrame(frame, agi::vfr::EXACT);
 	SetTrackCursor(AbsoluteXFromTime(ms), false);
 }
 

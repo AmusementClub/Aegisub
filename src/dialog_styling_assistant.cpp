@@ -22,6 +22,7 @@
 #include "dialog_styling_assistant.h"
 
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
 
 #include "ass_dialogue.h"
@@ -52,9 +53,9 @@ static void add_hotkey(wxSizer *sizer, wxWindow *parent, const char *command, wx
 }
 
 DialogStyling::DialogStyling(agi::Context *context)
-: wxDialog(context->parent, -1, _("Styling Assistant"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMINIMIZE_BOX)
+: wxDialog(context->GetUI().parent, -1, _("Styling Assistant"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMINIMIZE_BOX)
 , c(context)
-, active_line_connection(context->selectionController->AddActiveLineListener(&DialogStyling::OnActiveLineChanged, this))
+, active_line_connection(context->GetCore().selectionController->AddActiveLineListener(&DialogStyling::OnActiveLineChanged, this))
 {
 	SetIcon(GETICON(styling_toolbutton_16));
 
@@ -70,7 +71,7 @@ DialogStyling::DialogStyling(agi::Context *context)
 
 	{
 		wxSizer *styles_box = new wxStaticBoxSizer(wxVERTICAL, this, _("Styles available"));
-		style_list = new wxListBox(this, -1, wxDefaultPosition, FromDIP(wxSize(150, 180)), to_wx(context->ass->GetStyles()));
+		style_list = new wxListBox(this, -1, wxDefaultPosition, FromDIP(wxSize(150, 180)), to_wx(context->GetCore().ass->GetStyles()));
 		styles_box->Add(style_list, 1, wxEXPAND, 0);
 		bottom_sizer->Add(styles_box, 1, wxEXPAND | wxRIGHT, 5);
 	}
@@ -78,7 +79,7 @@ DialogStyling::DialogStyling(agi::Context *context)
 	wxSizer *right_sizer = new wxBoxSizer(wxVERTICAL);
 	{
 		wxSizer *style_text_box = new wxStaticBoxSizer(wxHORIZONTAL, this, _("Set style"));
-		style_name = new wxTextCtrl(this, -1, "", wxDefaultPosition, wxSize(180, -1), wxTE_PROCESS_ENTER);
+		style_name = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxSize(180, -1), wxTE_PROCESS_ENTER);
 		style_text_box->Add(style_name, 1, wxEXPAND);
 		right_sizer->Add(style_text_box, 0, wxEXPAND | wxBOTTOM, 5);
 	}
@@ -108,14 +109,15 @@ DialogStyling::DialogStyling(agi::Context *context)
 
 	{
 		wxSizer *actions_box = new wxStaticBoxSizer(wxHORIZONTAL, this, _("Actions"));
+		auto core = c->GetCore();
 		actions_box->AddStretchSpacer(1);
 
 		play_audio = new wxButton(this, -1, _("Play &Audio"));
-		play_audio->Enable(!!c->project->AudioProvider());
+		play_audio->Enable(!!core.project->AudioProvider());
 		actions_box->Add(play_audio, 0, wxLEFT | wxRIGHT | wxBOTTOM, 5);
 
 		play_video = new wxButton(this, -1, _("Play &Video"));
-		play_video->Enable(!!c->project->VideoProvider());
+		play_video->Enable(!!core.project->VideoProvider());
 		actions_box->Add(play_video, 0, wxBOTTOM | wxRIGHT, 5);
 
 		actions_box->AddStretchSpacer(1);
@@ -147,7 +149,7 @@ DialogStyling::DialogStyling(agi::Context *context)
 	style_list->Bind(wxEVT_LISTBOX_DCLICK, &DialogStyling::OnListDoubleClicked, this);
 	style_name->Bind(wxEVT_TEXT, &DialogStyling::OnStyleBoxModified, this);
 
-	OnActiveLineChanged(c->selectionController->GetActiveLine());
+	OnActiveLineChanged(c->GetCore().selectionController->GetActiveLine());
 }
 
 DialogStyling::~DialogStyling () {
@@ -165,14 +167,15 @@ void DialogStyling::OnActiveLineChanged(AssDialogue *new_line) {
 	style_list->SetStringSelection(to_wx(active_line->Style));
 
 	if (auto_seek->IsChecked() && IsActive())
-		c->videoController->JumpToTime(active_line->Start);
+		c->GetCore().videoController->JumpToTime(active_line->Start);
 }
 
 void DialogStyling::Commit(bool next) {
-	if (!c->ass->GetStyle(from_wx(style_name->GetValue()))) return;
+	auto core = c->GetCore();
+	if (!core.ass->GetStyle(from_wx(style_name->GetValue()))) return;
 
 	active_line->Style = from_wx(style_name->GetValue());
-	c->ass->Commit(_("styling assistant"), AssFile::COMMIT_DIAG_META);
+	core.ass->Commit(from_wx(_("styling assistant")), AssFile::COMMIT_DIAG_META);
 
 	if (next) cmd::call("grid/line/next", c);
 }
@@ -180,13 +183,14 @@ void DialogStyling::Commit(bool next) {
 void DialogStyling::OnActivate(wxActivateEvent &) {
 	if (!IsActive()) return;
 
-	play_video->Enable(!!c->project->VideoProvider());
-	play_audio->Enable(!!c->project->AudioProvider());
+	auto core = c->GetCore();
+	play_video->Enable(!!core.project->VideoProvider());
+	play_audio->Enable(!!core.project->AudioProvider());
 
-	style_list->Set(to_wx(c->ass->GetStyles()));
+	style_list->Set(to_wx(core.ass->GetStyles()));
 
 	if (auto_seek->IsChecked())
-		c->videoController->JumpToTime(active_line->Start);
+		core.videoController->JumpToTime(active_line->Start);
 
 	style_name->SetFocus();
 }
@@ -231,7 +235,7 @@ void DialogStyling::OnListDoubleClicked(wxCommandEvent &evt) {
 }
 
 void DialogStyling::OnPlayVideoButton(wxCommandEvent &) {
-	c->videoController->PlayLine();
+	c->GetCore().videoController->PlayLine();
 	style_name->SetFocus();
 }
 

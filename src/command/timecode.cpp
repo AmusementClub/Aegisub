@@ -34,15 +34,38 @@
 #include "../async_video_provider.h"
 #include "../compat.h"
 #include "../include/aegisub/context.h"
+#include "../include/aegisub/context_ui.h"
 #include "../libresrc/libresrc.h"
 #include "../options.h"
 #include "../project.h"
+#include "../project_session_ops.h"
+#include "../ui_services.h"
 #include "../utils.h"
 
 #include <libaegisub/make_unique.h>
 
 namespace {
 	using cmd::Command;
+
+agi::OpenFileDialogRequest make_open_timecodes_file_request() {
+	return {
+		from_wx(_("Open Timecodes File")),
+		"Path/Last/Timecodes",
+		"",
+		"",
+		from_wx(_("All Supported Formats") + wxS(" (*.txt)|*.txt|") + _("All Files") + wxS(" (*.*)|*.*"))
+	};
+}
+
+agi::SaveFileDialogRequest make_save_timecodes_file_request() {
+	return {
+		from_wx(_("Save Timecodes File")),
+		"Path/Last/Timecodes",
+		"",
+		"",
+		from_wx(_("All Supported Formats") + wxS(" (*.txt)|*.txt|") + _("All Files") + wxS(" (*.*)|*.*"))
+	};
+}
 
 struct timecode_close final : public Command {
 	CMD_NAME("timecode/close")
@@ -53,11 +76,11 @@ struct timecode_close final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	bool Validate(const agi::Context *c) override {
-		return c->project->CanCloseTimecodes();
+		return c->GetCore().project->CanCloseTimecodes();
 	}
 
 	void operator()(agi::Context *c) override {
-		c->project->CloseTimecodes();
+		c->GetCore().project->CloseTimecodes();
 	}
 };
 
@@ -69,10 +92,10 @@ struct timecode_open final : public Command {
 	STR_HELP("Open a VFR timecodes v1 or v2 file")
 
 	void operator()(agi::Context *c) override {
-		auto str = from_wx(_("All Supported Formats") + " (*.txt)|*.txt|" + _("All Files") + " (*.*)|*.*");
-		auto filename = OpenFileSelector(_("Open Timecodes File"), "Path/Last/Timecodes", "", "", str, c->parent);
+		auto core = c->GetCore();
+		auto filename = c->RequestOpenFile(make_open_timecodes_file_request());
 		if (!filename.empty())
-			c->project->LoadTimecodes(filename);
+			core.project->LoadTimecodes(filename);
 	}
 };
 
@@ -85,22 +108,25 @@ struct timecode_save final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	bool Validate(const agi::Context *c) override {
-		return c->project->Timecodes().IsLoaded();
+		return c->GetCore().project->Timecodes().IsLoaded();
 	}
 
 	void operator()(agi::Context *c) override {
-		auto str = from_wx(_("All Supported Formats") + " (*.txt)|*.txt|" + _("All Files") + " (*.*)|*.*");
-		auto filename = SaveFileSelector(_("Save Timecodes File"), "Path/Last/Timecodes", "", "", str, c->parent);
+		auto core = c->GetCore();
+		auto filename = c->RequestSaveFile(make_save_timecodes_file_request());
 		if (filename.empty()) return;
 
-		try {
-			auto provider = c->project->VideoProvider();
-			c->project->Timecodes().Save(filename, provider ? provider->GetFrameCount() : -1);
-			config::mru->Add("Timecodes", filename);
-		}
-		catch (agi::Exception const& err) {
-			c->ShowError(err.GetMessage(), "Error saving timecodes");
-		}
+		auto provider = core.project->VideoProvider();
+		aegisub::project_session_ops::SaveTimecodesToPath(
+			filename,
+			provider ? provider->GetFrameCount() : -1,
+			[&](agi::fs::path const& path, int frame_count) {
+				core.project->Timecodes().Save(path, frame_count);
+			},
+			*c->GetNotificationSink(),
+			[](char const* category, agi::fs::path const& path) {
+				config::mru->Add(category, path);
+			});
 	}
 };
 }

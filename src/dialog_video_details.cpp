@@ -31,6 +31,7 @@
 #include "compat.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "project.h"
 
 #include <libaegisub/ass/time.h>
@@ -64,9 +65,10 @@ wxString FormatColorMetadata(SourceFrameColorMetadata const& color) {
 }
 
 void ShowVideoDetailsDialog(agi::Context *c) {
-	wxDialog d(c->parent, -1, _("Video Details"));
+	wxDialog d(c->GetUI().parent, -1, _("Video Details"));
 
-	auto provider = c->project->VideoProvider();
+	auto core = c->GetCore();
+	auto provider = core.project->VideoProvider();
 	auto width = provider->GetWidth();
 	auto height = provider->GetHeight();
 	auto framecount = provider->GetFrameCount();
@@ -78,7 +80,7 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 		fg->Add(new wxStaticText(&d, -1, name), 0, wxALIGN_CENTRE_VERTICAL);
 		fg->Add(new wxTextCtrl(&d, -1, value, wxDefaultPosition, wxSize(300,-1), wxTE_READONLY), 0, wxALIGN_CENTRE_VERTICAL | wxEXPAND);
 	};
-	make_field(_("File name:"), c->project->VideoName().wstring());
+	make_field(_("File name:"), core.project->VideoName().wstring());
 	make_field(_("FPS:"), fmt_wx("%.3f", fps.FPS()));
 	make_field(_("Resolution:"), fmt_wx("%dx%d (%d:%d)", width, height, ar_width, ar_height));
 	make_field(_("Length:"), fmt_plural(framecount, "1 frame", "%d frames (%s)",

@@ -60,38 +60,38 @@ struct DialogDummyVideo {
 };
 
 struct ResolutionShortcut {
-	const char *name;
+	const wxString name;
 	int width;
 	int height;
 };
 
 static ResolutionShortcut resolutions[] = {
-	{"640x480 (SD fullscreen)", 640, 480},
-	{"704x480 (SD anamorphic)", 704, 480},
-	{"640x360 (SD widescreen)", 640, 360},
-	{"704x396 (SD widescreen)", 704, 396},
-	{"640x352 (SD widescreen MOD16)", 640, 352},
-	{"704x400 (SD widescreen MOD16)", 704, 400},
-	{"1024x576 (SuperPAL widescreen)", 1024, 576},
-	{"1280x720 (HD 720p)", 1280, 720},
-	{"1920x1080 (FHD 1080p)", 1920, 1080},
-	{"2560x1440 (QHD 1440p)", 2560, 1440},
-	{"3840x2160 (4K UHD 2160p)", 3840, 2160},
+	{wxS("640x480 (SD fullscreen)"), 640, 480},
+	{wxS("704x480 (SD anamorphic)"), 704, 480},
+	{wxS("640x360 (SD widescreen)"), 640, 360},
+	{wxS("704x396 (SD widescreen)"), 704, 396},
+	{wxS("640x352 (SD widescreen MOD16)"), 640, 352},
+	{wxS("704x400 (SD widescreen MOD16)"), 704, 400},
+	{wxS("1024x576 (SuperPAL widescreen)"), 1024, 576},
+	{wxS("1280x720 (HD 720p)"), 1280, 720},
+	{wxS("1920x1080 (FHD 1080p)"), 1920, 1080},
+	{wxS("2560x1440 (QHD 1440p)"), 2560, 1440},
+	{wxS("3840x2160 (4K UHD 2160p)"), 3840, 2160},
 };
 
 wxSpinCtrl *spin_ctrl(wxWindow *parent, int min, int max, int *value) {
-	auto ctrl = new wxSpinCtrl(parent, -1, "", wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, *value);
+	auto ctrl = new wxSpinCtrl(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, min, max, *value);
 	ctrl->SetValidator(wxGenericValidator(value));
 	return ctrl;
 }
 
 // FIXME: change the misleading function name, this is TextCtrl in fact
 wxControl *spin_ctrl(wxWindow *parent, double min, double max, double *value) {
-	return new wxTextCtrl(parent, -1, "", wxDefaultPosition, wxDefaultSize, 0, DoubleValidator(value, min, max));
+	return new wxTextCtrl(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0, DoubleValidator(value, min, max));
 }
 
 wxComboBox *resolution_shortcuts(wxWindow *parent, int width, int height) {
-	wxComboBox *ctrl = new wxComboBox(parent, -1, "", wxDefaultPosition, wxDefaultSize, 0, nullptr, wxCB_READONLY);
+	wxComboBox *ctrl = new wxComboBox(parent, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0, nullptr, wxCB_READONLY);
 
 	for (auto const& res : resolutions) {
 		ctrl->Append(res.name);
@@ -109,7 +109,7 @@ DialogDummyVideo::DialogDummyVideo(wxWindow *parent)
 
 	auto res_sizer = new wxBoxSizer(wxHORIZONTAL);
 	res_sizer->Add(spin_ctrl(&d, 1, 10000, &width), wxSizerFlags(1).Expand());
-	res_sizer->Add(new wxStaticText(&d, -1, " x "), wxSizerFlags().Center());
+	res_sizer->Add(new wxStaticText(&d, -1, wxS(" x ")), wxSizerFlags().Center());
 	res_sizer->Add(spin_ctrl(&d, 1, 10000, &height), wxSizerFlags(1).Expand());
 
 	auto color_sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -119,11 +119,11 @@ DialogDummyVideo::DialogDummyVideo(wxWindow *parent)
 
 	sizer = new wxFlexGridSizer(2, 5, 5);
 	AddCtrl(_("Video resolution:"), resolution_shortcuts(&d, width, height));
-	AddCtrl("", res_sizer);
+	AddCtrl(wxEmptyString, res_sizer);
 	AddCtrl(_("Color:"), color_sizer);
 	AddCtrl(_("Frame rate (fps):"), spin_ctrl(&d, .1, 1000.0, &fps));
 	AddCtrl(_("Duration (frames):"), spin_ctrl(&d, 2, 36000000, &length)); // Ten hours of 1k FPS
-	AddCtrl("", length_display = new wxStaticText(&d, -1, ""));
+	AddCtrl(wxEmptyString, length_display = new wxStaticText(&d, -1, wxEmptyString));
 
 	auto btn_sizer = d.CreateStdDialogButtonSizer(wxOK | wxCANCEL | wxHELP);
 	btn_sizer->GetHelpButton()->Bind(wxEVT_BUTTON, std::bind(&HelpButton::OpenPage, "Dummy Video"));

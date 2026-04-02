@@ -38,6 +38,7 @@
 #include "ass_file.h"
 #include "compat.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "project.h"
 #include "subtitle_format.h"
 
@@ -80,7 +81,8 @@ std::vector<std::string> AssExporter::GetAllFilterNames() const {
 }
 
 void AssExporter::Export(agi::fs::path const& filename, std::string const& charset, wxWindow *export_dialog) {
-	AssFile subs(*c->ass);
+	auto core = c->GetCore();
+	AssFile subs(*core.ass);
 
 	for (auto filter : filters) {
 		filter->LoadSettings(is_default, c);
@@ -91,7 +93,7 @@ void AssExporter::Export(agi::fs::path const& filename, std::string const& chars
 	if (!writer)
 		throw agi::InvalidInputException("Unknown file type.");
 
-	writer->ExportFile(&subs, filename, c->project->Timecodes(), charset);
+	writer->ExportFile(&subs, filename, core.project->Timecodes(), charset, c->GetSingleChoiceInteractionSink());
 }
 
 wxSizer *AssExporter::GetSettingsSizer(std::string const& name) {

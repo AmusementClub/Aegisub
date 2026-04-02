@@ -40,6 +40,7 @@
 #include "../dialogs.h"
 #include "../frame_main.h"
 #include "../include/aegisub/context.h"
+#include "../include/aegisub/context_ui.h"
 #include "../libresrc/libresrc.h"
 #include "../main.h"
 #include "../options.h"
@@ -58,7 +59,7 @@ struct app_about final : public Command {
 	STR_HELP("About Aegisub")
 
 	void operator()(agi::Context *c) override {
-		ShowAboutDialog(c->parent);
+		ShowAboutDialog(c->GetUI().parent);
 	}
 };
 
@@ -70,15 +71,16 @@ struct app_display_audio_subs final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	void operator()(agi::Context *c) override {
-		c->frame->SetDisplayMode(0,1);
+		c->GetUI().frame->SetDisplayMode(0,1);
 	}
 
 	bool Validate(const agi::Context *c) override {
-		return !!c->project->AudioProvider();
+		return !!c->GetCore().project->AudioProvider();
 	}
 
 	bool IsActive(const agi::Context *c) override {
-		return c->frame->IsAudioShown() && !c->frame->IsVideoShown();
+		auto ui = c->GetUI();
+		return ui.frame->IsAudioShown() && !ui.frame->IsVideoShown();
 	}
 };
 
@@ -90,15 +92,18 @@ struct app_display_full final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	void operator()(agi::Context *c) override {
-		c->frame->SetDisplayMode(1,1);
+		c->GetUI().frame->SetDisplayMode(1,1);
 	}
 
 	bool Validate(const agi::Context *c) override {
-		return c->project->AudioProvider() && c->project->VideoProvider() && !c->dialog->Get<DialogDetachedVideo>();
+		auto core = c->GetCore();
+		auto ui = c->GetUI();
+		return core.project->AudioProvider() && core.project->VideoProvider() && !ui.dialog->Get<DialogDetachedVideo>();
 	}
 
 	bool IsActive(const agi::Context *c) override {
-		return c->frame->IsAudioShown() && c->frame->IsVideoShown();
+		auto ui = c->GetUI();
+		return ui.frame->IsAudioShown() && ui.frame->IsVideoShown();
 	}
 };
 
@@ -110,11 +115,12 @@ struct app_display_subs final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	void operator()(agi::Context *c) override {
-		c->frame->SetDisplayMode(0, 0);
+		c->GetUI().frame->SetDisplayMode(0, 0);
 	}
 
 	bool IsActive(const agi::Context *c) override {
-		return !c->frame->IsAudioShown() && !c->frame->IsVideoShown();
+		auto ui = c->GetUI();
+		return !ui.frame->IsAudioShown() && !ui.frame->IsVideoShown();
 	}
 };
 
@@ -126,15 +132,18 @@ struct app_display_video_subs final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	void operator()(agi::Context *c) override {
-		c->frame->SetDisplayMode(1, 0);
+		c->GetUI().frame->SetDisplayMode(1, 0);
 	}
 
 	bool Validate(const agi::Context *c) override {
-		return c->project->VideoProvider() && !c->dialog->Get<DialogDetachedVideo>();
+		auto core = c->GetCore();
+		auto ui = c->GetUI();
+		return core.project->VideoProvider() && !ui.dialog->Get<DialogDetachedVideo>();
 	}
 
 	bool IsActive(const agi::Context *c) override {
-		return !c->frame->IsAudioShown() && c->frame->IsVideoShown();
+		auto ui = c->GetUI();
+		return !ui.frame->IsAudioShown() && ui.frame->IsVideoShown();
 	}
 };
 
@@ -158,7 +167,7 @@ struct app_language final : public Command {
 
 	void operator()(agi::Context *c) override {
 		// Get language
-		auto new_language = wxGetApp().locale.PickLanguage();
+		auto new_language = wxGetApp().GetLocale().PickLanguage(c ? c->GetSingleChoiceInteractionSink() : std::shared_ptr<agi::SingleChoiceInteractionSink>());
 		if (new_language.empty()) return;
 
 		OPT_SET("App/Language")->SetString(new_language);
@@ -172,7 +181,7 @@ struct app_language final : public Command {
 		});
 		if (result == agi::InteractionResult::Yes) {
 			// Restart Aegisub
-			if (c->frame->Close()) {
+			if (c->GetUI().frame->Close()) {
 				RestartAegisub();
 			}
 		}
@@ -212,7 +221,7 @@ struct app_options final : public Command {
 
 	void operator()(agi::Context *c) override {
 		try {
-			ShowPreferences(c->parent);
+			ShowPreferences(c->GetUI().parent);
 		} catch (agi::Exception& e) {
 			LOG_E("config/init") << "Caught exception: " << e.GetMessage();
 		}
@@ -277,7 +286,7 @@ struct app_minimize final : public Command {
 	STR_HELP("Minimize the active window")
 
 	void operator()(agi::Context *c) override {
-		c->frame->Iconize();
+		c->GetUI().frame->Iconize();
 	}
 };
 
@@ -288,7 +297,8 @@ struct app_maximize final : public Command {
 	STR_HELP("Maximize the active window")
 
 	void operator()(agi::Context *c) override {
-		c->frame->Maximize(!c->frame->IsMaximized());
+		auto frame = c->GetUI().frame;
+		frame->Maximize(!frame->IsMaximized());
 	}
 };
 

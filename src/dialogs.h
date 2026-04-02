@@ -50,7 +50,7 @@ void PerformVersionCheck(bool interactive);
 bool PromptForResampleSettings(agi::Context *c, ResampleSettings &settings);
 
 /// Update the video properties for a newly opened video, possibly prompting the user about what to do
-void UpdateVideoProperties(AssFile *file, const AsyncVideoProvider *new_provider, wxWindow *parent);
+void UpdateVideoProperties(agi::Context *context, AssFile *file, const AsyncVideoProvider *new_provider);
 
 int GetSelectedChoices(wxWindow *parent, wxArrayInt& selections, wxString const& message, wxString const& caption, wxArrayString const& choices);
 
@@ -59,7 +59,7 @@ std::string CreateDummyVideo(wxWindow *parent);
 bool ShowPasteOverDialog(wxWindow *parent);
 bool ShowPlainTextImportDialog();
 void ShowAboutDialog(wxWindow *parent);
-void ShowAttachmentsDialog(wxWindow *parent, AssFile *file);
+void ShowAttachmentsDialog(agi::Context *c);
 void ShowAutomationDialog(agi::Context *c);
 void ShowExportDialog(agi::Context *c);
 void ShowFontsCollectorDialog(agi::Context *c);

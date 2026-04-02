@@ -302,7 +302,8 @@ enum class ParseState {
 	LAST_WAS_BLANK
 };
 
-void SRTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding) const {
+void SRTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory>) const {
+	(void)choice_sink;
 	using namespace std;
 
 	TextFileReader file(filename, encoding);
@@ -422,7 +423,8 @@ void SRTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename,
 		line->Text = tag_parser.ToAss(text);
 }
 
-void SRTSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding) const {
+void SRTSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
+	(void)choice_sink;
 	TextFileWriter file(filename, encoding);
 
 	// Convert to SRT

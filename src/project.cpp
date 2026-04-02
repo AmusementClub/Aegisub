@@ -21,16 +21,17 @@
 #include "async_video_provider.h"
 #include "audio_controller.h"
 #include "audio_provider_factory.h"
-#include "base_grid.h"
 #include "charset_detect.h"
 #include "compat.h"
 #include "dialogs.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/video_provider.h"
 #include "mkv_wrap.h"
 #include "options.h"
 #include "perf_trace.h"
+#include "project_session_ops.h"
 #include "selection_controller.h"
 #include "subs_controller.h"
 #include "transient_font_set.h"
@@ -40,6 +41,7 @@
 #include "video_memory_stats.h"
 #include "video_controller.h"
 #include "video_display.h"
+#include "video_session_ops.h"
 
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/access.h>
@@ -83,32 +85,61 @@ bool try_check_readable_media_path(agi::fs::path const& path, std::string& error
 		return false;
 	}
 }
+
+agi::ProjectUiStateSnapshot BuildSubtitleUiStateSnapshot(ProjectProperties const& properties) {
+	agi::ProjectUiStateSnapshot snapshot;
+	snapshot.subtitle_scroll_position = properties.scroll_position;
+	return snapshot;
+}
+
+agi::ProjectUiStateSnapshot BuildVideoUiStateSnapshot(ProjectProperties const& properties) {
+	agi::ProjectUiStateSnapshot snapshot;
+	snapshot.video_zoom = properties.video_zoom;
+	return snapshot;
+}
+
+void RestoreProjectUiState(agi::Context *context, agi::ProjectUiStateSnapshot const& state) {
+	if (auto sink = context->GetProjectUiStateSink())
+		sink->RestoreProjectUiState(state);
+}
+
+void ApplyPostOpenVideoPlan(agi::Context *context, aegisub::video_session_ops::PostOpenPlan const& plan) {
+	auto video_controller = context->GetCore().videoController.get();
+	if (plan.display_aspect_ratio_override)
+		video_controller->SetAspectRatio(*plan.display_aspect_ratio_override);
+	else
+		video_controller->SetAspectRatio(AspectRatio::Default);
+	video_controller->JumpToFrame(plan.initial_frame);
+}
 }
 
 Project::Project(agi::Context *c) : context(c) {
-	OPT_SUB("Audio/Cache/Type", &Project::ReloadAudio, this);
-	OPT_SUB("Audio/Provider", &Project::ReloadAudio, this);
-	OPT_SUB("Provider/Audio/FFmpegSource/Decode Error Handling", &Project::ReloadAudio, this);
-	OPT_SUB("Provider/Audio/FFmpegSource/Downmix", &Project::ReloadAudio, this);
-	OPT_SUB("Provider/Avisynth/Allow Ancient", &Project::ReloadVideo, this);
-	OPT_SUB("Provider/Avisynth/Allow Ancient", &Project::ReloadAudio, this);
-	OPT_SUB("Provider/Avisynth/Memory Max", &Project::ReloadVideo, this);
-	OPT_SUB("Provider/Avisynth/Memory Max", &Project::ReloadAudio, this);
-	OPT_SUB("Provider/Avisynth/Runtime Path", &Project::ReloadVideo, this);
-	OPT_SUB("Provider/Avisynth/Runtime Path", &Project::ReloadAudio, this);
-	OPT_SUB("Provider/Video/FFmpegSource/Decoding Threads", &Project::ReloadVideo, this);
-	OPT_SUB("Provider/Video/FFmpegSource/Unsafe Seeking", &Project::ReloadVideo, this);
-	OPT_SUB("Subtitle/Provider", &Project::ReloadSubtitlesProvider, this);
-	OPT_SUB("Video/Provider", &Project::ReloadVideo, this);
+	option_connections = agi::signal::make_vector({
+		OPT_SUB("Audio/Cache/Type", &Project::ReloadAudio, this),
+		OPT_SUB("Audio/Provider", &Project::ReloadAudio, this),
+		OPT_SUB("Provider/Audio/FFmpegSource/Decode Error Handling", &Project::ReloadAudio, this),
+		OPT_SUB("Provider/Audio/FFmpegSource/Downmix", &Project::ReloadAudio, this),
+		OPT_SUB("Provider/Avisynth/Allow Ancient", &Project::ReloadVideo, this),
+		OPT_SUB("Provider/Avisynth/Allow Ancient", &Project::ReloadAudio, this),
+		OPT_SUB("Provider/Avisynth/Memory Max", &Project::ReloadVideo, this),
+		OPT_SUB("Provider/Avisynth/Memory Max", &Project::ReloadAudio, this),
+		OPT_SUB("Provider/Avisynth/Runtime Path", &Project::ReloadVideo, this),
+		OPT_SUB("Provider/Avisynth/Runtime Path", &Project::ReloadAudio, this),
+		OPT_SUB("Provider/Video/FFmpegSource/Decoding Threads", &Project::ReloadVideo, this),
+		OPT_SUB("Provider/Video/FFmpegSource/Unsafe Seeking", &Project::ReloadVideo, this),
+		OPT_SUB("Subtitle/Provider", &Project::ReloadSubtitlesProvider, this),
+		OPT_SUB("Video/Provider", &Project::ReloadVideo, this),
+	});
 }
 
 Project::~Project() { }
 
 void Project::UpdateRelativePaths() {
-	context->ass->Properties.audio_file     = agi::fs::PathToGenericString(context->path->MakeRelative(audio_file, "?script"));
-	context->ass->Properties.video_file     = agi::fs::PathToGenericString(context->path->MakeRelative(video_file, "?script"));
-	context->ass->Properties.timecodes_file = agi::fs::PathToGenericString(context->path->MakeRelative(timecodes_file, "?script"));
-	context->ass->Properties.keyframes_file = agi::fs::PathToGenericString(context->path->MakeRelative(keyframes_file, "?script"));
+	auto core = context->GetCore();
+	core.ass->Properties.audio_file     = agi::fs::PathToGenericString(core.path->MakeRelative(audio_file, "?script"));
+	core.ass->Properties.video_file     = agi::fs::PathToGenericString(core.path->MakeRelative(video_file, "?script"));
+	core.ass->Properties.timecodes_file = agi::fs::PathToGenericString(core.path->MakeRelative(timecodes_file, "?script"));
+	core.ass->Properties.keyframes_file = agi::fs::PathToGenericString(core.path->MakeRelative(keyframes_file, "?script"));
 }
 
 void Project::ReloadAudio() {
@@ -120,15 +151,16 @@ void Project::RefreshSubtitlesProvider(bool recreate_provider) {
 	if (!video_provider)
 		return;
 
+	auto core = context->GetCore();
 	try {
 		if (recreate_provider) {
 			video_provider->ReplaceSubtitlesProvider(SubtitlesProviderFactory::GetProvider({
 				GetProgressRunner(),
-				context->ass->GetTransientFonts()
+				core.ass->GetTransientFonts()
 			}));
 		}
-		video_provider->LoadSubtitles(context->ass.get());
-		context->videoController->JumpToFrame(context->videoController->GetFrameN());
+		video_provider->LoadSubtitles(core.ass.get());
+		core.videoController->JumpToFrame(core.videoController->GetFrameN());
 	}
 	catch (agi::UserCancelException const&) {
 	}
@@ -150,7 +182,8 @@ void Project::ReloadSubtitlesProvider() {
 void Project::ReloadVideo() {
 	if (video_provider) {
 		DoLoadVideo(video_file);
-		context->videoController->JumpToFrame(context->videoController->GetFrameN());
+		auto core = context->GetCore();
+		core.videoController->JumpToFrame(core.videoController->GetFrameN());
 	}
 }
 
@@ -173,29 +206,31 @@ void Project::ShowWarning(std::string const& message, std::string const& title) 
 }
 
 void Project::SetPath(agi::fs::path& var, const char *token, const char *mru, agi::fs::path const& value) {
+	auto core = context->GetCore();
 	var = value;
 	if (*token)
-		context->path->SetToken(token, value);
+		core.path->SetToken(token, value);
 	if (*mru)
 		config::mru->Add(mru, value);
 	UpdateRelativePaths();
 }
 
 bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, ProjectProperties &properties) {
-	auto const previous_transient_fonts = context->ass->GetTransientFonts();
+	auto core = context->GetCore();
+	auto const previous_transient_fonts = core.ass->GetTransientFonts();
+	auto remove_mru = [](char const* category, agi::fs::path const& candidate) {
+		config::mru->Remove(category, candidate);
+	};
 
-	try {
-		if (encoding.empty())
-			encoding = CharSetDetect::GetEncoding(path);
-	}
-	catch (agi::UserCancelException const&) {
+	auto resolved_encoding = aegisub::project_session_ops::ResolveSubtitleEncoding(
+		path,
+		std::move(encoding),
+		[&] { return CharSetDetect::GetEncoding(path, context->GetSingleChoiceInteractionSink()); },
+		*context->GetNotificationSink(),
+		remove_mru);
+	if (!resolved_encoding)
 		return false;
-	}
-	catch (agi::fs::FileNotFound const&) {
-		config::mru->Remove("Subtitle", path);
-		ShowError(agi::format("%s not found.", path));
-		return false;
-	}
+	encoding = *resolved_encoding;
 
 	if (encoding != "binary") {
 		// Try loading as timecodes and keyframes first since we can't
@@ -206,40 +241,26 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 		try { DoLoadKeyframes(path); return false; } catch (...) { }
 	}
 
-	try {
-		properties = context->subsController->Load(path, encoding);
-	}
-	catch (agi::UserCancelException const&) { return false; }
-	catch (agi::fs::FileNotFound const&) {
-		config::mru->Remove("Subtitle", path);
-		ShowError(agi::format("%s not found.", path));
-		return false;
-	}
-	catch (agi::Exception const& e) {
-		ShowError(e.GetMessage());
-		return false;
-	}
-	catch (std::exception const& e) {
-		ShowError(std::string(e.what()));
-		return false;
-	}
-	catch (...) {
-		ShowError(wxString("Unknown error"));
+	if (!aegisub::project_session_ops::LoadSubtitlesWithErrorHandling(
+		path,
+		[&] { properties = core.subsController->Load(path, encoding); },
+		*context->GetNotificationSink(),
+		remove_mru)) {
 		return false;
 	}
 
 	Selection sel;
 	AssDialogue *active_line = nullptr;
-	if (!context->ass->Events.empty()) {
-		int row = mid<int>(0, properties.active_row, context->ass->Events.size() - 1);
-		active_line = &*std::next(context->ass->Events.begin(), row);
+	if (!core.ass->Events.empty()) {
+		int row = mid<int>(0, properties.active_row, core.ass->Events.size() - 1);
+		active_line = &*std::next(core.ass->Events.begin(), row);
 		sel.insert(active_line);
 	}
-	context->selectionController->SetSelectionAndActive(std::move(sel), active_line);
-	context->subsGrid->ScrollTo(properties.scroll_position);
+	core.selectionController->SetSelectionAndActive(std::move(sel), active_line);
+	RestoreProjectUiState(context, BuildSubtitleUiStateSnapshot(properties));
 
 	if (video_provider)
-		RefreshSubtitlesProvider(!transient_font_environment_matches(previous_transient_fonts, context->ass->GetTransientFonts()));
+		RefreshSubtitlesProvider(!transient_font_environment_matches(previous_transient_fonts, core.ass->GetTransientFonts()));
 
 	return true;
 }
@@ -251,38 +272,41 @@ void Project::LoadSubtitles(agi::fs::path path, std::string encoding, bool load_
 }
 
 void Project::CloseSubtitles() {
-	auto const previous_transient_fonts = context->ass->GetTransientFonts();
+	auto core = context->GetCore();
+	auto const previous_transient_fonts = core.ass->GetTransientFonts();
 
-	context->subsController->Close();
-	context->path->SetToken("?script", "");
-	LoadUnloadFiles(context->ass->Properties);
-	auto line = &*context->ass->Events.begin();
-	context->selectionController->SetSelectionAndActive({line}, line);
+	core.subsController->Close();
+	core.path->SetToken("?script", "");
+	LoadUnloadFiles(core.ass->Properties);
+	auto line = &*core.ass->Events.begin();
+	core.selectionController->SetSelectionAndActive({line}, line);
 	if (video_provider)
-		RefreshSubtitlesProvider(!transient_font_environment_matches(previous_transient_fonts, context->ass->GetTransientFonts()));
+		RefreshSubtitlesProvider(!transient_font_environment_matches(previous_transient_fonts, core.ass->GetTransientFonts()));
 }
 
 void Project::LoadUnloadFiles(ProjectProperties properties) {
 	auto load_linked = OPT_GET("App/Auto/Load Linked Files")->GetInt();
 	if (!load_linked) return;
 
-	auto audio     = context->path->MakeAbsolute(properties.audio_file, "?script");
-	auto video     = context->path->MakeAbsolute(properties.video_file, "?script");
-	auto timecodes = context->path->MakeAbsolute(properties.timecodes_file, "?script");
-	auto keyframes = context->path->MakeAbsolute(properties.keyframes_file, "?script");
+	auto core = context->GetCore();
+	auto audio     = core.path->MakeAbsolute(properties.audio_file, "?script");
+	auto video     = core.path->MakeAbsolute(properties.video_file, "?script");
+	auto timecodes = core.path->MakeAbsolute(properties.timecodes_file, "?script");
+	auto keyframes = core.path->MakeAbsolute(properties.keyframes_file, "?script");
 
 	if (video == video_file && audio == audio_file && keyframes == keyframes_file && timecodes == timecodes_file)
 		return;
 
 	if (load_linked == 2) {
-		wxString str = _("Do you want to load/unload the associated files?");
-		str += "\n";
+		std::string message = from_wx(_("Do you want to load/unload the associated files?"));
+		message += "\n";
 
 		auto append_file = [&](agi::fs::path const& p, wxString const& unload, wxString const& load) {
+			message += "\n";
 			if (p.empty())
-				str += "\n" + unload;
+				message += from_wx(unload);
 			else
-				str += "\n" + agi::wxformat(load, p);
+				message += agi::format(load, p);
 		};
 
 		if (audio != audio_file)
@@ -296,7 +320,7 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 
 		if (context->RequestInteraction({
 			from_wx(_("(Un)Load files?")),
-			from_wx(str),
+			message,
 			agi::InteractionButtons::YesNo,
 			agi::InteractionIcon::Question
 		}) != agi::InteractionResult::Yes)
@@ -304,14 +328,15 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 	}
 
 	bool loaded_video = false;
+	aegisub::video_session_ops::OpenedVideoSummary opened_video_summary;
 	bool skip_duplicate_audio_error = false;
 	if (video != video_file) {
 		if (video.empty())
 			CloseVideo();
 		else {
-			loaded_video = DoLoadVideo(video);
+			loaded_video = DoLoadVideo(video, &opened_video_summary);
 			if (loaded_video) {
-				auto vc = context->videoController.get();
+				auto vc = core.videoController.get();
 				vc->JumpToFrame(properties.video_position);
 
 				auto ar_mode = static_cast<AspectRatio>(properties.ar_mode);
@@ -319,7 +344,7 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 					vc->SetAspectRatio(properties.ar_value);
 				else
 					vc->SetAspectRatio(ar_mode);
-				context->videoDisplay->SetZoom(properties.video_zoom);
+				RestoreProjectUiState(context, BuildVideoUiStateSnapshot(properties));
 			}
 			else if (audio == video) {
 				std::string ignored_error;
@@ -337,52 +362,51 @@ void Project::LoadUnloadFiles(ProjectProperties properties) {
 		else if (!skip_duplicate_audio_error)
 			DoLoadAudio(audio, false);
 	}
-	else if (loaded_video && OPT_GET("Video/Open Audio")->GetBool() && audio_file != video_file && video_provider->HasAudio())
+	else if (loaded_video && aegisub::video_session_ops::PlanPostOpen(
+		opened_video_summary,
+		OPT_GET("Video/Open Audio")->GetBool(),
+		audio_file,
+		video_file).auto_load_linked_audio)
 		DoLoadAudio(video, true);
 }
 
 void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
+	auto remove_mru = [](char const* category, agi::fs::path const& candidate) {
+		config::mru->Remove(category, candidate);
+	};
+
 	std::string access_error;
 	if (!try_check_readable_media_path(path, access_error)) {
-		config::mru->Remove("Audio", path);
-		return ShowError(_("The audio file was not found: ") + to_wx(access_error));
+		aegisub::project_session_ops::HandleUnreadableAudioOpenPath(
+			path,
+			access_error,
+			*context->GetNotificationSink(),
+			remove_mru);
+		return;
 	}
 
-	try {
-		try {
-			audio_provider = GetAudioProvider(path, *context->path, GetProgressRunner(), context->GetNotificationSink().get());
-		}
-		catch (agi::UserCancelException const&) { return; }
-		catch (...) {
-			config::mru->Remove("Audio", path);
-			throw;
-		}
-	}
-	catch (agi::fs::FileNotFound const& e) {
-		return ShowError(_("The audio file was not found: ") + to_wx(e.GetMessage()));
-	}
-	catch (agi::AudioDataNotFound const& e) {
-		if (quiet) {
-			LOG_D("video/open/audio") << "File " << video_file << " has no audio data: " << e.GetMessage();
-			return;
-		}
-		else
-			return ShowError(_("None of the available audio providers recognised the selected file as containing audio data.\n\nThe following providers were tried:\n") + to_wx(e.GetMessage()));
-	}
-	catch (agi::AudioProviderError const& e) {
-		return ShowError(_("None of the available audio providers have a codec available to handle the selected file.\n\nThe following providers were tried:\n") + to_wx(e.GetMessage()));
-	}
-	catch (agi::Exception const& e) {
-		return ShowError(e.GetMessage());
-	}
+	audio_provider = aegisub::project_session_ops::CreateAudioProviderWithErrorHandling(
+		path,
+		quiet,
+		[&]() {
+			auto core = context->GetCore();
+			return GetAudioProvider(path, *core.path, GetProgressRunner(), *context->GetNotificationSink(), context->GetSingleChoiceInteractionSink());
+		},
+		*context->GetNotificationSink(),
+		[&](std::string const& error) {
+			LOG_D("video/open/audio") << "File " << video_file << " has no audio data: " << error;
+		},
+		remove_mru);
+	if (!audio_provider)
+		return;
 
 	SetPath(audio_file, "?audio", "Audio", path);
 	if (perf_trace::ShouldSampleVideoMemory(true)) {
 		VideoMemorySnapshot snapshot;
 		if (video_provider)
 			snapshot.async = video_provider->CollectMemoryStats();
-		if (context->videoDisplay)
-			snapshot.display = context->videoDisplay->CollectMemoryStats();
+		if (auto video_display = context->GetUI().videoDisplay)
+			snapshot.display = video_display->CollectMemoryStats();
 		snapshot.audio = audio_provider->GetMemoryStats();
 		perf_trace::ObserveVideoMemorySnapshot("audio_open", snapshot, true);
 	}
@@ -399,35 +423,46 @@ void Project::CloseAudio() {
 	SetPath(audio_file, "?audio", "", "");
 }
 
-bool Project::DoLoadVideo(agi::fs::path const& path) {
+bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops::OpenedVideoSummary* summary) {
 	std::string access_error;
 	if (!try_check_readable_media_path(path, access_error)) {
-		config::mru->Remove("Video", path);
-		ShowError(to_wx(access_error));
-		return false;
+		return aegisub::video_session_ops::HandleUnreadableVideoOpenPath(
+			path,
+			access_error,
+			*context->GetNotificationSink(),
+			[](char const* category, agi::fs::path const& candidate) {
+				config::mru->Remove(category, candidate);
+			});
 	}
 
 	auto const load_started = std::chrono::steady_clock::now();
-	try {
-		auto old_matrix = context->ass->GetScriptInfo("YCbCr Matrix");
-		video_provider = agi::make_unique<AsyncVideoProvider>(
-			path,
-			old_matrix,
-			context->videoController.get(),
-			GetProgressRunner(),
-			context->ass->GetTransientFonts(),
-			context->videoController->GetAsyncUiLifetime());
-	}
-	catch (agi::UserCancelException const&) { return false; }
-	catch (agi::fs::FileSystemError const& err) {
-		config::mru->Remove("Video", path);
-		ShowError(to_wx(err.GetMessage()));
+	video_provider = aegisub::video_session_ops::CreateVideoProviderWithErrorHandling(
+		path,
+		[&] {
+			auto core = context->GetCore();
+			auto old_matrix = core.ass->GetScriptInfo("YCbCr Matrix");
+			auto event_sink = core.videoController->CreateAsyncVideoProviderEventSink();
+			return agi::make_unique<AsyncVideoProvider>(
+				path,
+				old_matrix,
+				std::move(event_sink),
+				GetProgressRunner(),
+				core.ass->GetTransientFonts(),
+				context->GetSingleChoiceInteractionSink());
+		},
+		*context->GetNotificationSink(),
+		[](char const* category, agi::fs::path const& candidate) {
+			config::mru->Remove(category, candidate);
+		});
+	if (!video_provider)
 		return false;
-	}
-	catch (VideoProviderError const& err) {
-		ShowError(to_wx(err.GetMessage()));
-		return false;
-	}
+
+	auto opened_video = aegisub::video_session_ops::BuildOpenedVideoSummary(
+		*video_provider,
+		path,
+		[](agi::fs::path const& candidate) {
+			return MatroskaWrapper::HasSubtitles(candidate);
+		});
 
 	timecodes_file.clear();
 	keyframes_file.clear();
@@ -436,19 +471,20 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 
 	AnnounceVideoProviderModified(video_provider.get());
 
-	UpdateVideoProperties(context->ass.get(), video_provider.get(), context->parent);
-	video_provider->LoadSubtitles(context->ass.get());
+	auto core = context->GetCore();
+	UpdateVideoProperties(context, core.ass.get(), video_provider.get());
+	video_provider->LoadSubtitles(core.ass.get());
 
-	timecodes = video_provider->GetFPS();
-	keyframes = video_provider->GetKeyFrames();
+	timecodes = opened_video.timecodes;
+	keyframes = opened_video.keyframes;
 
-	std::string warning = video_provider->GetWarning();
+	std::string warning = opened_video.warning;
 	if (!warning.empty())
 		ShowWarning(warning, "Warning");
 
-	video_has_subtitles = false;
-	if (agi::fs::HasExtension(path, "mkv"))
-		video_has_subtitles = MatroskaWrapper::HasSubtitles(path);
+	video_has_subtitles = opened_video.has_subtitles;
+	if (summary)
+		*summary = opened_video;
 
 	AnnounceKeyframesModified(keyframes);
 	AnnounceTimecodesModified(timecodes);
@@ -466,26 +502,27 @@ bool Project::DoLoadVideo(agi::fs::path const& path) {
 
 void Project::LoadVideo(agi::fs::path path) {
 	if (path.empty()) return;
-	if (!DoLoadVideo(path)) return;
-	if (OPT_GET("Video/Open Audio")->GetBool() && audio_file != video_file && video_provider->HasAudio())
+	aegisub::video_session_ops::OpenedVideoSummary opened_video;
+	if (!DoLoadVideo(path, &opened_video)) return;
+	auto plan = aegisub::video_session_ops::PlanPostOpen(
+		opened_video,
+		OPT_GET("Video/Open Audio")->GetBool(),
+		audio_file,
+		video_file);
+	if (plan.auto_load_linked_audio)
 		DoLoadAudio(video_file, true);
-
-	double dar = video_provider->GetDAR();
-	if (dar > 0)
-		context->videoController->SetAspectRatio(dar);
-	else
-		context->videoController->SetAspectRatio(AspectRatio::Default);
-	context->videoController->JumpToFrame(0);
+	ApplyPostOpenVideoPlan(context, plan);
 }
 
 void Project::CloseVideo() {
+	auto core = context->GetCore();
 	AnnounceVideoProviderModified(nullptr);
 	video_provider.reset();
 	SetPath(video_file, "?video", "", "");
 	video_has_subtitles = false;
-	context->ass->Properties.ar_mode = 0;
-	context->ass->Properties.ar_value = 0.0;
-	context->ass->Properties.video_position = 0;
+	core.ass->Properties.ar_mode = 0;
+	core.ass->Properties.ar_value = 0.0;
+	core.ass->Properties.video_position = 0;
 }
 
 void Project::DoLoadTimecodes(agi::fs::path const& path) {
@@ -503,7 +540,7 @@ void Project::LoadTimecodes(agi::fs::path path) {
 		config::mru->Remove("Timecodes", path);
 	}
 	catch (agi::vfr::Error const& e) {
-		ShowError("Failed to parse timecodes file: " + e.GetMessage());
+		ShowError(agi::format("Failed to parse timecodes file: %s", e.GetMessage()));
 		config::mru->Remove("Timecodes", path);
 	}
 }
@@ -529,7 +566,7 @@ void Project::LoadKeyframes(agi::fs::path path) {
 		config::mru->Remove("Keyframes", path);
 	}
 	catch (agi::keyframe::Error const& e) {
-		ShowError("Failed to parse keyframes file: " + e.GetMessage());
+		ShowError(agi::format("Failed to parse keyframes file: %s", e.GetMessage()));
 		config::mru->Remove("Keyframes", path);
 	}
 }
@@ -649,13 +686,14 @@ void Project::LoadList(std::vector<agi::fs::path> const& files) {
 	if (!audio.empty())
 		DoLoadAudio(audio, false);
 
-	if (!video.empty() && DoLoadVideo(video)) {
-		double dar = video_provider->GetDAR();
-		if (dar > 0)
-			context->videoController->SetAspectRatio(dar);
-		else
-			context->videoController->SetAspectRatio(AspectRatio::Default);
-		context->videoController->JumpToFrame(0);
+	aegisub::video_session_ops::OpenedVideoSummary opened_video;
+	if (!video.empty() && DoLoadVideo(video, &opened_video)) {
+		auto plan = aegisub::video_session_ops::PlanPostOpen(
+			opened_video,
+			OPT_GET("Video/Open Audio")->GetBool(),
+			audio_file,
+			video_file);
+		ApplyPostOpenVideoPlan(context, plan);
 
 		// We loaded these earlier, but loading video unloaded them
 		// Non-Do version of Load in case they've vanished or changed between
@@ -666,7 +704,7 @@ void Project::LoadList(std::vector<agi::fs::path> const& files) {
 			LoadKeyframes(keyframes);
 
 		// Load audio from video
-		if (audio.empty() && OPT_GET("Video/Open Audio")->GetBool() && audio_file != video_file)
+		if (audio.empty() && plan.auto_load_linked_audio)
 			DoLoadAudio(video_file, true);
 	}
 

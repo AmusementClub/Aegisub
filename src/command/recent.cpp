@@ -30,10 +30,12 @@
 #include "command.h"
 
 #include "../include/aegisub/context.h"
+#include "../include/aegisub/context_ui.h"
 #include "../libresrc/libresrc.h"
 #include "../main.h"
 #include "../options.h"
 #include "../project.h"
+#include "../project_session_ops.h"
 #include "../subs_controller.h"
 
 #include <libaegisub/make_unique.h>
@@ -54,7 +56,7 @@ struct recent_audio_entry : public Command {
 	STR_HELP("Open recent audio")
 
 	void operator()(agi::Context *c, int id) {
-		c->project->LoadAudio(config::mru->GetEntry("Audio", id));
+		c->GetCore().project->LoadAudio(config::mru->GetEntry("Audio", id));
 	}
 };
 
@@ -65,7 +67,7 @@ struct recent_keyframes_entry : public Command {
 	STR_HELP("Open recent keyframes")
 
 	void operator()(agi::Context *c, int id) {
-		c->project->LoadKeyframes(config::mru->GetEntry("Keyframes", id));
+		c->GetCore().project->LoadKeyframes(config::mru->GetEntry("Keyframes", id));
 	}
 };
 
@@ -76,12 +78,33 @@ struct recent_subtitle_entry : public Command {
 	STR_HELP("Open recent subtitles")
 
 	void operator()(agi::Context *c, int id) {
+		auto path = config::mru->GetEntry("Subtitle", id);
+		auto target = aegisub::project_session_ops::ResolveSubtitleSessionTarget(
 #ifdef __APPLE__
-		wxGetApp().NewProjectContext().project->LoadSubtitles(config::mru->GetEntry("Subtitle", id));
+			true,
+			false
 #else
-		if (c->subsController->TryToClose() == wxCANCEL) return;
-		c->project->LoadSubtitles(config::mru->GetEntry("Subtitle", id));
+			false,
+			c->GetCore().subsController->TryToClose() == wxCANCEL
 #endif
+		);
+		if (target == aegisub::project_session_ops::SubtitleSessionTarget::Cancel)
+			return;
+
+		aegisub::project_session_ops::ExecuteSubtitleLoad(
+			target,
+			path,
+			[&](agi::fs::path const& filename, std::string const& encoding, bool load_linked) {
+				c->GetCore().project->LoadSubtitles(filename, encoding, load_linked);
+			},
+#ifdef __APPLE__
+			[&](agi::fs::path const& filename, std::string const& encoding, bool load_linked) {
+				wxGetApp().NewProjectContext().GetCore().project->LoadSubtitles(filename, encoding, load_linked);
+			}
+#else
+			aegisub::project_session_ops::SubtitleLoadAction{}
+#endif
+		);
 	}
 };
 
@@ -92,7 +115,7 @@ struct recent_timecodes_entry : public Command {
 	STR_HELP("Open recent timecodes")
 
 	void operator()(agi::Context *c, int id) {
-		c->project->LoadTimecodes(config::mru->GetEntry("Timecodes", id));
+		c->GetCore().project->LoadTimecodes(config::mru->GetEntry("Timecodes", id));
 	}
 };
 
@@ -103,7 +126,7 @@ struct recent_video_entry : public Command {
 	STR_HELP("Open recent videos")
 
 	void operator()(agi::Context *c, int id) {
-		c->project->LoadVideo(config::mru->GetEntry("Video", id));
+		c->GetCore().project->LoadVideo(config::mru->GetEntry("Video", id));
 	}
 };
 

@@ -18,6 +18,7 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "compatibility_overlay_buffer_plan.h"
 #include "export_fixstyle.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "source_frame.h"
@@ -41,6 +42,7 @@ enum {
 
 namespace {
 constexpr char const *kSourceModeLogTag = "video/source/mode";
+constexpr int kCompatibilityOverlayTileSize = 64;
 constexpr char const *kSubtitleProviderUseLogTag = "subtitle/provider/use";
 
 std::string FormatSourceModeList(std::vector<SourceFrameOutputMode> const& modes) {
@@ -97,6 +99,32 @@ std::shared_ptr<T> acquire_buffer(std::vector<std::shared_ptr<T>>& buffers) {
 	auto buffer = std::make_shared<T>();
 	buffers.push_back(buffer);
 	return buffer;
+}
+
+std::shared_ptr<SubtitleOverlayStorage> acquire_compatibility_overlay_buffer(
+	std::array<std::shared_ptr<SubtitleOverlayStorage>, 2>& preferred_buffers,
+	std::vector<std::shared_ptr<SubtitleOverlayStorage>>& overflow_buffers,
+	std::shared_ptr<SubtitleOverlayStorage> const& previous_overlay,
+	int& next_preferred_slot) {
+	std::array<CompatibilityOverlayBufferSlotState, 2> slot_states = { };
+	for (size_t i = 0; i < preferred_buffers.size(); ++i) {
+		auto const& slot = preferred_buffers[i];
+		slot_states[i].allocated = static_cast<bool>(slot);
+		slot_states[i].reusable = slot && slot.use_count() == 1;
+		slot_states[i].holds_previous = slot && slot.get() == previous_overlay.get();
+	}
+
+	auto plan = DecideCompatibilityOverlayBufferPlan(next_preferred_slot, slot_states);
+	next_preferred_slot = plan.next_preferred_slot;
+
+	if (plan.action == CompatibilityOverlayBufferPlanAction::UseOverflowPool)
+		return acquire_buffer(overflow_buffers);
+
+	size_t slot_index = plan.action == CompatibilityOverlayBufferPlanAction::UseSlot0 ? 0u : 1u;
+	auto& slot = preferred_buffers[slot_index];
+	if (!slot)
+		slot = std::make_shared<SubtitleOverlayStorage>();
+	return slot;
 }
 
 struct KeyPointLabColor {
@@ -217,6 +245,12 @@ bool BoundsWithinTolerance(
 }
 }
 
+void AsyncVideoProvider::ResetCompatibilityOverlayState() {
+	previous_compatibility_overlay.reset();
+	next_compatibility_overlay_buffer = 0;
+}
+
+
 void AsyncVideoProvider::AdvanceOverlayContinuityGeneration() {
 	++overlay_continuity_generation;
 	if (overlay_continuity_generation == 0)
@@ -235,17 +269,18 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 
 VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double time, bool raw, bool force_bgra_frame) {
 	VideoRenderPacket packet;
+	packet.frame_number = frame_number;
 
 	std::shared_ptr<VideoFrame> frame;
 	bool native_frame_needs_display_transform_fallback = false;
 	if (selected_source_mode == SourceFrameOutputMode::Native && !force_bgra_frame) {
 		try {
 			if (!source_provider->GetNativeFrame(frame_number, packet.source_frame, packet.source_frame_owner))
-				throw VideoDecodeError("Selected native source mode but provider did not return a native frame.");
+				throw AsyncVideoProviderVideoError("Selected native source mode but provider did not return a native frame.");
 		}
-		catch (VideoProviderError const& err) { throw VideoProviderErrorEvent(err); }
+		catch (VideoProviderError const& err) { throw AsyncVideoProviderVideoError(err.GetMessage()); }
 		if (!packet.source_frame.IsValid())
-			throw VideoProviderErrorEvent(VideoDecodeError("Provider returned an invalid native source frame."));
+			throw AsyncVideoProviderVideoError("Provider returned an invalid native source frame.");
 		native_frame_needs_display_transform_fallback =
 			SourceFrameNeedsDisplayTransformFallback(packet.source_frame);
 	}
@@ -255,7 +290,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		try {
 			source_provider->GetFrame(frame_number, *frame);
 		}
-		catch (VideoProviderError const& err) { throw VideoProviderErrorEvent(err); }
+		catch (VideoProviderError const& err) { throw AsyncVideoProviderVideoError(err.GetMessage()); }
 
 		packet.source_frame_storage = frame;
 		packet.source_frame_owner = frame;
@@ -271,7 +306,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		try {
 			source_provider->GetFrame(frame_number, *frame);
 		}
-		catch (VideoProviderError const& err) { throw VideoProviderErrorEvent(err); }
+		catch (VideoProviderError const& err) { throw AsyncVideoProviderVideoError(err.GetMessage()); }
 
 		packet.source_frame_storage = frame;
 		packet.source_frame_owner = frame;
@@ -303,7 +338,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 			}
 		}
 	}
-	catch (agi::Exception const& err) { throw SubtitlesProviderErrorEvent(err.GetMessage()); }
+	catch (agi::Exception const& err) { throw AsyncVideoProviderSubtitlesError(err.GetMessage()); }
 
 	try {
 		std::shared_ptr<VideoFrame> composited;
@@ -362,12 +397,43 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 			}
 			else {
 				if (!composited)
-					throw SubtitlesProviderErrorEvent("Subtitle provider cannot bake subtitles into native source frames.");
+					throw AsyncVideoProviderSubtitlesError("Subtitle provider cannot bake subtitles into native source frames.");
 				subs_provider->DrawSubtitles(*composited, time / 1000.);
 			}
 		}
 		else {
 			subs_provider->DrawSubtitles(*composited, time / 1000.);
+			auto overlay_storage = acquire_compatibility_overlay_buffer(
+				compatibility_overlay_buffers,
+				subtitle_overlay_buffers,
+				previous_compatibility_overlay,
+				next_compatibility_overlay_buffer);
+			SubtitleOverlay subtitle_overlay;
+			if (BuildSparsePremultipliedCompatibilityOverlayWithDirtyTiles(
+				*frame,
+				*composited,
+				previous_compatibility_overlay.get(),
+				*overlay_storage,
+				subtitle_overlay,
+				kCompatibilityOverlayTileSize,
+				kCompatibilityOverlayTileSize)) {
+				bool should_emit_overlay =
+					overlay_storage->has_visible_content ||
+					(previous_compatibility_overlay && previous_compatibility_overlay->has_visible_content) ||
+					!overlay_storage->dirty_rects.empty();
+				if (should_emit_overlay) {
+					subtitle_overlay = overlay_storage->MakeView(true);
+					subtitle_overlay.color_role = SubtitleOverlayColorRole::SubtitleVideoCompatibility;
+					subtitle_overlay.continuity_generation = overlay_continuity_generation;
+					packet.subtitle_overlay_storage = overlay_storage;
+					packet.subtitle_overlay = subtitle_overlay;
+					packet.has_subtitle_overlay = true;
+				}
+				previous_compatibility_overlay = overlay_storage;
+			}
+			else {
+				previous_compatibility_overlay.reset();
+			}
 		}
 	}
 	catch (agi::UserCancelException const&) { }
@@ -375,31 +441,29 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 	return packet;
 }
 
-static std::unique_ptr<SubtitlesProvider> get_subs_provider(wxEvtHandler *evt_handler, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts, agi::ui::WeakLifetime event_lifetime) {
+static std::unique_ptr<SubtitlesProvider> get_subs_provider(
+	AsyncVideoProviderEventSink const& event_sink,
+	agi::BackgroundRunner *br,
+	std::shared_ptr<const TransientFontSet> transient_fonts) {
 	try {
 		return SubtitlesProviderFactory::GetProvider({ br, std::move(transient_fonts) });
 	}
 	catch (agi::Exception const& err) {
-		if (!evt_handler)
-			return nullptr;
-		agi::ui::MainAsyncIfAlive(event_lifetime, [evt_handler, message = err.GetMessage()] {
-			evt_handler->AddPendingEvent(SubtitlesProviderErrorEvent(message));
-		});
+		if (event_sink.on_subtitles_error)
+			event_sink.on_subtitles_error(err.GetMessage());
 		return nullptr;
 	}
 }
 
-AsyncVideoProvider::AsyncVideoProvider(agi::fs::path const& video_filename, std::string const& colormatrix, wxEvtHandler *parent, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts, agi::ui::WeakLifetime event_lifetime)
+AsyncVideoProvider::AsyncVideoProvider(agi::fs::path const& video_filename, std::string const& colormatrix, AsyncVideoProviderEventSink event_sink, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink)
 : AsyncVideoProvider(
-	VideoProviderFactory::GetProvider(video_filename, colormatrix, br),
-	get_subs_provider(parent, br, std::move(transient_fonts), event_lifetime),
-	[parent, event_lifetime](std::unique_ptr<wxEvent> evt) mutable {
-		if (!parent)
-			return;
-		agi::ui::MainAsyncIfAlive(event_lifetime, [parent, evt = std::move(evt)]() mutable {
-			parent->QueueEvent(evt.release());
-		});
-	})
+	VideoProviderFactory::GetProvider(
+		video_filename,
+		colormatrix,
+		br,
+		std::move(choice_sink)),
+	get_subs_provider(event_sink, br, std::move(transient_fonts)),
+	std::move(event_sink))
 {
 }
 
@@ -423,7 +487,6 @@ AsyncVideoProvider::~AsyncVideoProvider() {
 		while (ProcessPending()) { }
 	});
 }
-
 AsyncVideoProviderMemoryStats AsyncVideoProvider::CollectMemoryStats() {
 	AsyncVideoProviderMemoryStats stats;
 	worker->Sync([&] {
@@ -455,6 +518,7 @@ AsyncVideoProviderMemoryStats AsyncVideoProvider::CollectMemoryStats() {
 void AsyncVideoProvider::LoadSubtitles(const AssFile *new_subs) throw() {
 	auto copy = agi::make_unique<AssFile>(*new_subs);
 	++content_version;
+	ResetCompatibilityOverlayState();
 	InvalidateProviderOverlayState();
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
@@ -468,6 +532,7 @@ void AsyncVideoProvider::UpdateSubtitles(const AssFile *new_subs, const AssDialo
 	(void)changed;
 	auto copy = agi::make_unique<AssFile>(*new_subs);
 	++content_version;
+	ResetCompatibilityOverlayState();
 	InvalidateProviderOverlayState();
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
@@ -519,9 +584,19 @@ bool AsyncVideoProvider::NeedUpdate(std::vector<AssDialogueBase const*> const& v
 	return false;
 }
 
-void AsyncVideoProvider::DeliverEvent(std::unique_ptr<wxEvent> evt) {
-	if (event_sink)
-		event_sink(std::move(evt));
+void AsyncVideoProvider::DeliverFrameReady(VideoRenderPacket packet, double time) {
+	if (event_sink.on_frame_ready)
+		event_sink.on_frame_ready(std::move(packet), time);
+}
+
+void AsyncVideoProvider::DeliverVideoError(std::string const& message) {
+	if (event_sink.on_video_error)
+		event_sink.on_video_error(message);
+}
+
+void AsyncVideoProvider::DeliverSubtitlesError(std::string const& message) {
+	if (event_sink.on_subtitles_error)
+		event_sink.on_subtitles_error(message);
 }
 
 void AsyncVideoProvider::ScheduleProcessing() {
@@ -619,8 +694,7 @@ bool AsyncVideoProvider::ProcessPending() {
 	last_rendered = frame_number;
 
 	try {
-		auto evt = std::make_unique<FrameReadyEvent>(ProcRenderPacket(frame_number, time), time);
-		evt->SetEventType(EVT_FRAME_READY);
+		auto packet = ProcRenderPacket(frame_number, time);
 		auto current_content_version = content_version.load(std::memory_order_relaxed);
 		auto current_request_version = request_version.load(std::memory_order_relaxed);
 		bool should_deliver =
@@ -628,21 +702,36 @@ bool AsyncVideoProvider::ProcessPending() {
 			work.request_version == current_request_version;
 		perf_trace::ObserveFrameResult(frame_number, time, should_deliver, false);
 		if (should_deliver) {
-			DeliverEvent(std::move(evt));
+			DeliverFrameReady(std::move(packet), time);
 		}
 		else {
+			ResetCompatibilityOverlayState();
 			AdvanceOverlayContinuityGeneration();
 		}
 	}
-	catch (wxEvent const& err) {
+	catch (AsyncVideoProviderVideoError const& err) {
 		auto current_content_version = content_version.load(std::memory_order_relaxed);
 		auto current_request_version = request_version.load(std::memory_order_relaxed);
 		bool should_deliver =
 			work.content_version == current_content_version &&
 			work.request_version == current_request_version;
 		if (should_deliver)
-			DeliverEvent(std::unique_ptr<wxEvent>(err.Clone()));
+			DeliverVideoError(err.GetMessage());
 		else {
+			ResetCompatibilityOverlayState();
+			AdvanceOverlayContinuityGeneration();
+		}
+	}
+	catch (AsyncVideoProviderSubtitlesError const& err) {
+		auto current_content_version = content_version.load(std::memory_order_relaxed);
+		auto current_request_version = request_version.load(std::memory_order_relaxed);
+		bool should_deliver =
+			work.content_version == current_content_version &&
+			work.request_version == current_request_version;
+		if (should_deliver)
+			DeliverSubtitlesError(err.GetMessage());
+		else {
+			ResetCompatibilityOverlayState();
 			AdvanceOverlayContinuityGeneration();
 		}
 	}
@@ -838,6 +927,7 @@ bool AsyncVideoProvider::ReconfigureSourceOutputMode() {
 	++content_version;
 	last_rendered = -1;
 	last_lines.clear();
+	ResetCompatibilityOverlayState();
 	AdvanceOverlayContinuityGeneration();
 	return true;
 }
@@ -853,6 +943,10 @@ VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bo
 
 void AsyncVideoProvider::SetColorSpace(std::string const& matrix) {
 	++content_version;
+	if (subs_provider && subs_provider->GetRenderMode() == SubtitleRenderMode::CompatibilityFrameOnly) {
+		ResetCompatibilityOverlayState();
+		AdvanceOverlayContinuityGeneration();
+	}
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_color_space = matrix;
@@ -891,22 +985,8 @@ void AsyncVideoProvider::ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvi
 		last_rendered = -1;
 		last_lines.clear();
 		if (!mode_changed) {
+			ResetCompatibilityOverlayState();
 			AdvanceOverlayContinuityGeneration();
 		}
 	});
-}
-
-wxDEFINE_EVENT(EVT_FRAME_READY, FrameReadyEvent);
-wxDEFINE_EVENT(EVT_VIDEO_ERROR, VideoProviderErrorEvent);
-wxDEFINE_EVENT(EVT_SUBTITLES_ERROR, SubtitlesProviderErrorEvent);
-
-VideoProviderErrorEvent::VideoProviderErrorEvent(VideoProviderError const& err)
-: agi::Exception(err.GetMessage())
-{
-	SetEventType(EVT_VIDEO_ERROR);
-}
-SubtitlesProviderErrorEvent::SubtitlesProviderErrorEvent(std::string const& err)
-: agi::Exception(err)
-{
-	SetEventType(EVT_SUBTITLES_ERROR);
 }

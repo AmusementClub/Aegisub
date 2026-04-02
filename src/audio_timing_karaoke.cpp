@@ -25,6 +25,7 @@
 #include "audio_timing.h"
 #include "compat.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "pen.h"
 #include "selection_controller.h"
@@ -114,7 +115,7 @@ class AudioTimingControllerKaraoke final : public AudioTimingController {
 public:
 	// AudioTimingController implementation
 	void GetMarkers(const TimeRange &range, AudioMarkerVector &out_markers) const override;
-	wxString GetWarningMessage() const override { return ""; }
+	wxString GetWarningMessage() const override { return wxString(); }
 	TimeRange GetIdealVisibleTimeRange() const override;
 	void GetRenderingStyles(AudioRenderingStyleRanges &ranges) const override;
 	TimeRange GetPrimaryPlaybackRange() const override;
@@ -144,7 +145,7 @@ std::unique_ptr<AudioTimingController> CreateKaraokeTimingController(agi::Contex
 AudioTimingControllerKaraoke::AudioTimingControllerKaraoke(agi::Context *c, AssKaraoke *kara, agi::signal::Connection& file_changed)
 : file_changed_slot(file_changed)
 , c(c)
-, active_line(c->selectionController->GetActiveLine())
+, active_line(c->GetCore().selectionController->GetActiveLine())
 , kara(kara)
 , start_marker(active_line->Start, &start_pen, AudioMarker::Feet_Right)
 , end_marker(active_line->End, &end_pen, AudioMarker::Feet_Left)
@@ -169,20 +170,23 @@ void AudioTimingControllerKaraoke::Next(NextMode mode) {
 	++cur_syl;
 	if (cur_syl > markers.size()) {
 		--cur_syl;
-		c->selectionController->NextLine();
+		auto core = c->GetCore();
+		core.selectionController->NextLine();
 	}
 	else {
 		AnnounceUpdatedPrimaryRange();
 		AnnounceUpdatedStyleRanges();
 	}
 
-	c->audioController->PlayPrimaryRange();
+	auto core = c->GetCore();
+	core.audioController->PlayPrimaryRange();
 }
 
 void AudioTimingControllerKaraoke::Prev() {
 	if (cur_syl == 0) {
 		AssDialogue *old_line = active_line;
-		c->selectionController->PrevLine();
+		auto core = c->GetCore();
+		core.selectionController->PrevLine();
 		if (old_line != active_line) {
 			cur_syl = markers.size();
 			AnnounceUpdatedPrimaryRange();
@@ -195,7 +199,8 @@ void AudioTimingControllerKaraoke::Prev() {
 		AnnounceUpdatedStyleRanges();
 	}
 
-	c->audioController->PlayPrimaryRange();
+	auto core = c->GetCore();
+	core.audioController->PlayPrimaryRange();
 }
 
 void AudioTimingControllerKaraoke::GetRenderingStyles(AudioRenderingStyleRanges &ranges) const
@@ -235,7 +240,8 @@ void AudioTimingControllerKaraoke::GetMarkers(TimeRange const& range, AudioMarke
 void AudioTimingControllerKaraoke::DoCommit() {
 	active_line->Text = kara->GetText();
 	file_changed_slot.Block();
-	commit_id = c->ass->Commit(_("karaoke timing"), AssFile::COMMIT_DIAG_TEXT, commit_id, active_line);
+	auto core = c->GetCore();
+	commit_id = core.ass->Commit(from_wx(_("karaoke timing")), AssFile::COMMIT_DIAG_TEXT, commit_id, active_line);
 	file_changed_slot.Unblock();
 	pending_changes = false;
 }
@@ -246,7 +252,8 @@ void AudioTimingControllerKaraoke::Commit() {
 }
 
 void AudioTimingControllerKaraoke::Revert() {
-	active_line = c->selectionController->GetActiveLine();
+	auto core = c->GetCore();
+	active_line = core.selectionController->GetActiveLine();
 
 	cur_syl = 0;
 	commit_id = -1;
@@ -358,7 +365,8 @@ std::vector<AudioMarker*> AudioTimingControllerKaraoke::OnRightClick(int ms, boo
 
 	AnnounceUpdatedPrimaryRange();
 	AnnounceUpdatedStyleRanges();
-	c->audioController->PlayPrimaryRange();
+	auto core = c->GetCore();
+	core.audioController->PlayPrimaryRange();
 
 	return {};
 }

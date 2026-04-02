@@ -19,7 +19,8 @@
 
 #include <boost/container/list.hpp>
 #include <filesystem>
-#include <wx/timer.h>
+
+#include "subs_controller_timer.h"
 
 class SelectionController;
 namespace agi {
@@ -53,8 +54,8 @@ class SubsController {
 	/// being marked unmodified if we reused commit IDs
 	int next_commit_id = 1;
 
-	/// Timer for triggering autosaves
-	wxTimer autosave_timer;
+	/// Timer for triggering autosaves on GUI shells only.
+	std::unique_ptr<SubsControllerTimer> autosave_timer;
 
 	/// Queue which autosaves are performed on
 	std::unique_ptr<agi::dispatch::Queue> autosave_queue;
@@ -90,6 +91,7 @@ public:
 
 	/// The file's path and filename if any, or platform-appropriate "untitled"
 	agi::fs::path Filename() const;
+	bool HasFile() const { return !filename.empty(); }
 
 	/// Does the file have unsaved changes?
 	bool IsModified() const { return commit_id != saved_commit_id; };
@@ -132,7 +134,7 @@ public:
 	/// Check if redo stack is empty
 	bool IsRedoStackEmpty() const { return redo_stack.empty(); };
 	/// Get the description of the first undoable change
-	wxString GetUndoDescription() const;
+	std::string GetUndoDescription() const;
 	/// Get the description of the first redoable change
-	wxString GetRedoDescription() const;
+	std::string GetRedoDescription() const;
 };

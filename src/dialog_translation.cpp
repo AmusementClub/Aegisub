@@ -22,6 +22,7 @@
 #include "dialog_translation.h"
 
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
 
 #include "ass_dialogue.h"
@@ -46,7 +47,6 @@
 
 #include <algorithm>
 #include <wx/checkbox.h>
-#include <wx/msgdlg.h>
 #include <wx/sizer.h>
 #include <wx/settings.h>
 #include <wx/stattext.h>
@@ -64,12 +64,12 @@ static bool bad_block(std::unique_ptr<AssDialogueBlock> &block) {
 }
 
 DialogTranslation::DialogTranslation(agi::Context *c)
-: wxDialog(c->parent, -1, _("Translation Assistant"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMINIMIZE_BOX)
+: wxDialog(c->GetUI().parent, -1, _("Translation Assistant"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMINIMIZE_BOX)
 , c(c)
-, file_change_connection(c->ass->AddCommitListener(&DialogTranslation::OnExternalCommit, this))
-, active_line_connection(c->selectionController->AddActiveLineListener(&DialogTranslation::OnActiveLineChanged, this))
-, active_line(c->selectionController->GetActiveLine())
-, line_count(c->ass->Events.size())
+, file_change_connection(c->GetCore().ass->AddCommitListener(&DialogTranslation::OnExternalCommit, this))
+, active_line_connection(c->GetCore().selectionController->AddActiveLineListener(&DialogTranslation::OnActiveLineChanged, this))
+, active_line(c->GetCore().selectionController->GetActiveLine())
+, line_count(c->GetCore().ass->Events.size())
 #ifdef WITH_WXSTC
 , use_stc(OPT_GET("Subtitle/Use STC")->GetBool())
 #endif
@@ -82,7 +82,7 @@ DialogTranslation::DialogTranslation(agi::Context *c)
 	{
 		wxSizer *original_box = new wxStaticBoxSizer(wxVERTICAL, this, _("Original"));
 
-		line_number_display = new wxStaticText(this, -1, "");
+		line_number_display = new wxStaticText(this, -1, wxEmptyString);
 		original_box->Add(line_number_display, 0, wxBOTTOM, 5);
 
 		original_text = new wxStyledTextCtrl(this, -1, wxDefaultPosition, FromDIP(wxSize(320, 80)));
@@ -152,14 +152,15 @@ DialogTranslation::DialogTranslation(agi::Context *c)
 
 	{
 		wxStaticBoxSizer *actions_box = new wxStaticBoxSizer(wxVERTICAL, this, _("Actions"));
+		auto core = c->GetCore();
 
 		wxButton *play_audio = new wxButton(this, -1, _("Play &Audio"));
-		play_audio->Enable(!!c->project->AudioProvider());
+		play_audio->Enable(!!core.project->AudioProvider());
 		play_audio->Bind(wxEVT_BUTTON, &DialogTranslation::OnPlayAudioButton, this);
 		actions_box->Add(play_audio, 0, wxALL, 5);
 
 		wxButton *play_video = new wxButton(this, -1, _("Play &Video"));
-		play_video->Enable(!!c->project->VideoProvider());
+		play_video->Enable(!!core.project->VideoProvider());
 		play_video->Bind(wxEVT_BUTTON, &DialogTranslation::OnPlayVideoButton, this);
 		actions_box->Add(play_video, 0, wxLEFT | wxRIGHT | wxBOTTOM, 5);
 
@@ -200,14 +201,14 @@ void DialogTranslation::OnActiveLineChanged(AssDialogue *new_line) {
 	cur_block = 0;
 
 	if (bad_block(blocks[cur_block]) && !NextBlock()) {
-		wxMessageBox(_("No more lines to translate."));
+		c->ShowInfo(from_wx(_("No more lines to translate.")));
 		EndModal(1);
 	}
 }
 
 void DialogTranslation::OnExternalCommit(int commit_type) {
 	if (commit_type == AssFile::COMMIT_NEW || commit_type & AssFile::COMMIT_DIAG_ADDREM) {
-		line_count = c->ass->Events.size();
+		line_count = c->GetCore().ass->Events.size();
 		line_number_display->SetLabel(fmt_tl("Current line: %d/%d", active_line->Row + 1, line_count));
 	}
 
@@ -217,10 +218,11 @@ void DialogTranslation::OnExternalCommit(int commit_type) {
 
 bool DialogTranslation::NextBlock() {
 	switching_lines = true;
+	auto core = c->GetCore();
 	do {
 		if (cur_block == blocks.size() - 1) {
-			c->selectionController->NextLine();
-			AssDialogue *new_line = c->selectionController->GetActiveLine();
+			core.selectionController->NextLine();
+			AssDialogue *new_line = core.selectionController->GetActiveLine();
 			if (active_line == new_line || !new_line) return false;
 
 			active_line = new_line;
@@ -238,10 +240,11 @@ bool DialogTranslation::NextBlock() {
 
 bool DialogTranslation::PrevBlock() {
 	switching_lines = true;
+	auto core = c->GetCore();
 	do {
 		if (cur_block == 0) {
-			c->selectionController->PrevLine();
-			AssDialogue *new_line = c->selectionController->GetActiveLine();
+			core.selectionController->PrevLine();
+			AssDialogue *new_line = core.selectionController->GetActiveLine();
 			if (active_line == new_line || !new_line) return false;
 
 			active_line = new_line;
@@ -284,7 +287,8 @@ void DialogTranslation::UpdateDisplay() {
 
 	original_text->SetReadOnly(true);
 
-	if (seek_video->IsChecked()) c->videoController->JumpToTime(active_line->Start);
+	if (seek_video->IsChecked())
+		c->GetCore().videoController->JumpToTime(active_line->Start);
 
 #ifdef WITH_WXSTC
 	if (use_stc) {
@@ -319,12 +323,12 @@ void DialogTranslation::Commit(bool next) {
 	active_line->UpdateText(blocks);
 
 	file_change_connection.Block();
-	c->ass->Commit(_("translation assistant"), AssFile::COMMIT_DIAG_TEXT);
+	c->GetCore().ass->Commit(from_wx(_("translation assistant")), AssFile::COMMIT_DIAG_TEXT);
 	file_change_connection.Unblock();
 
 	if (next) {
 		if (!NextBlock()) {
-			wxMessageBox(_("No more lines to translate."));
+			c->ShowInfo(from_wx(_("No more lines to translate.")));
 			EndModal(1);
 		}
 	}
@@ -360,7 +364,7 @@ void DialogTranslation::OnKeyDown(wxKeyEvent &evt) {
 }
 
 void DialogTranslation::OnPlayVideoButton(wxCommandEvent &) {
-	c->videoController->PlayLine();
+	c->GetCore().videoController->PlayLine();
 #ifdef WITH_WXSTC
 	if (use_stc) {
 		translated_text_stc->SetFocus();

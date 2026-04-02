@@ -32,11 +32,14 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/fs_fwd.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 class AssFile;
 namespace agi { namespace vfr { class Framerate; } }
+namespace agi { class SingleChoiceInteractionSink; }
+namespace agi { class BackgroundRunnerFactory; }
 
 class SubtitleFormat {
 	std::string name;
@@ -65,7 +68,7 @@ public:
 	/// Prompt the user for a frame rate to use
 	/// @param allow_vfr Include video frame rate as an option even if it's vfr
 	/// @param show_smpte Show SMPTE drop frame option
-	static agi::vfr::Framerate AskForFPS(bool allow_vfr, bool show_smpte, agi::vfr::Framerate const& fps);
+	static agi::vfr::Framerate AskForFPS(bool allow_vfr, bool show_smpte, agi::vfr::Framerate const& fps, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 
 	/// Constructor
 	/// @param Subtitle format name
@@ -98,21 +101,21 @@ public:
 	/// @param[out] target Destination to read lines into
 	/// @param filename File to load
 	/// @param encoding Encoding to use. May be ignored by the reader.
-	virtual void ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding) const { }
+	virtual void ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory = {}) const { }
 
 	/// Save a subtitle file
 	/// @param src Data to write
 	/// @param filename File to write to
 	/// @param forceEncoding Encoding to use or empty string for default
-	virtual void WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding="") const { }
+	virtual void WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding="", std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {}) const { }
 
 	/// Export a subtitle file
 	///
 	/// This is used when saving via Export As..., for subtitle formats which
 	/// want to distinguish between exporting a final version of a script and
 	/// saving a project.
-	virtual void ExportFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding="") const {
-		WriteFile(src, filename, fps, encoding);
+	virtual void ExportFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding="", std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {}) const {
+		WriteFile(src, filename, fps, encoding, std::move(choice_sink));
 	}
 
 	/// Get the wildcards for a save or load dialog

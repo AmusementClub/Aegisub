@@ -39,18 +39,40 @@ if(GTEST_FOUND)
         src/ass_style.cpp
         src/ass_style_storage.cpp
         src/async_video_provider.cpp
+        src/async_video_provider_host.cpp
+        src/audio_controller_timer.cpp
         src/avisynth_legacy_path.cpp
+        src/charset_choice.cpp
         src/compat.cpp
         src/csri_renderer_discovery.cpp
         src/fft.cpp
+        src/locale_choice.cpp
+        src/locale_pick.cpp
         src/mkv_wrap_common.cpp
         src/native_library.cpp
         src/perf_trace.cpp
+        src/resolution_resampler.cpp
         src/text_file_writer.cpp
+        src/threaded_ui_timer.cpp
+        src/ui_timer.cpp
         src/utils.cpp
+        src/ui_services.cpp
+        src/project_session_ops.cpp
+        src/subtitle_edit_ops.cpp
+        src/subtitle_editor_ops.cpp
+        src/subtitle_grid_ops.cpp
+        src/video_property_update.cpp
+        src/video_aspect_ratio_ops.cpp
+        src/video_navigation_ops.cpp
+        src/video_controller_timer.cpp
+        src/video_session_ops.cpp
+        src/video_snapshot_ops.cpp
+        src/subtitle_timing_ops.cpp
         tests/tests/cajun.cpp
         tests/tests/calltip_provider.cpp
+        tests/tests/charset_choice.cpp
         tests/tests/character_count.cpp
+        tests/tests/compat.cpp
         tests/tests/color.cpp
         tests/tests/compatibility_overlay_buffer_plan.cpp
         tests/tests/csri_renderer_discovery.cpp
@@ -58,6 +80,7 @@ if(GTEST_FOUND)
         tests/tests/format.cpp
         tests/tests/fs.cpp
         tests/tests/hotkey.cpp
+        tests/tests/host_boundary_policy.cpp
         tests/tests/iconv.cpp
         tests/tests/ifind.cpp
         tests/tests/io.cpp
@@ -65,6 +88,8 @@ if(GTEST_FOUND)
         tests/tests/keyframe.cpp
         tests/tests/line_iterator.cpp
         tests/tests/line_wrap.cpp
+        tests/tests/locale_choice.cpp
+        tests/tests/locale_pick.cpp
         tests/tests/mkv_wrap_common.cpp
         tests/tests/media_load_precheck.cpp
         tests/tests/native_library.cpp
@@ -77,6 +102,7 @@ if(GTEST_FOUND)
         tests/tests/option.cpp
         tests/tests/path.cpp
         tests/tests/perf_trace.cpp
+        tests/tests/project_session_ops.cpp
         tests/tests/ready_flag.cpp
         tests/tests/scope_exit.cpp
         tests/tests/signals.cpp
@@ -84,16 +110,28 @@ if(GTEST_FOUND)
         tests/tests/source_frame_format_selection.cpp
         tests/tests/source_frame_overlay.cpp
         tests/tests/subtitle_overlay_blend.cpp
+        tests/tests/subtitle_fps_choice.cpp
         tests/tests/subtitle_format_microdvd.cpp
+        tests/tests/subtitle_edit_ops.cpp
+        tests/tests/subtitle_editor_ops.cpp
+        tests/tests/subtitle_grid_ops.cpp
+        tests/tests/subtitle_timing_ops.cpp
         tests/tests/syntax_highlight.cpp
         tests/tests/thesaurus.cpp
         tests/tests/time.cpp
+        tests/tests/track_choice.cpp
         tests/tests/type_name.cpp
         tests/tests/ui_dispatch.cpp
+        tests/tests/ui_timer.cpp
         tests/tests/ui_services.cpp
         tests/tests/util.cpp
         tests/tests/uuencode.cpp
         tests/tests/vfr.cpp
+        tests/tests/video_property_update.cpp
+        tests/tests/video_aspect_ratio_ops.cpp
+        tests/tests/video_navigation_ops.cpp
+        tests/tests/video_session_ops.cpp
+        tests/tests/video_snapshot_ops.cpp
         tests/tests/video_cache.cpp
         tests/tests/video_display_layout.cpp
         tests/tests/video_zoom.cpp
@@ -102,7 +140,9 @@ if(GTEST_FOUND)
         tests/support/main.cpp
         tests/support/src_config_stubs.cpp
         tests/support/util.cpp
+        src/subtitle_fps_choice.cpp
         src/subtitle_overlay_blend.cpp
+        src/track_choice.cpp
         src/video_renderer_opengl_tile.cpp
         src/video_renderer_backend.cpp
         src/video_provider_cache.cpp
@@ -115,7 +155,11 @@ if(GTEST_FOUND)
         target_compile_definitions(gtest-run PRIVATE WITH_LIBPLACEBO)
         target_include_directories(gtest-run PRIVATE ${LibPlacebo_INCLUDE_DIR})
     endif()
-    target_compile_definitions(gtest-run PRIVATE CMAKE_BUILD)
+    target_compile_definitions(gtest-run PRIVATE
+        CMAKE_BUILD
+        "AEGISUB_PROJECT_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\""
+    )
+    aegisub_enable_wx_utf8_guard(gtest-run)
     target_include_directories(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     if(WITH_FFMS2)
         target_sources(gtest-run PRIVATE
@@ -246,6 +290,7 @@ if(WIN32)
             ${LibPlacebo_INCLUDE_DIR}
             "${PROJECT_SOURCE_DIR}/vendor/ffms2"
         )
+        aegisub_enable_wx_utf8_guard(video-geometry-compare)
         target_link_libraries(video-geometry-compare PRIVATE
             libaegisub
             OpenGL::GL

@@ -207,7 +207,7 @@ void CoreAudioPlayer::SetEndPosition(int64_t pos)
 
 }
 
-std::unique_ptr<AudioPlayer> CreateCoreAudioPlayer(agi::AudioProvider *provider, wxWindow *)
+std::unique_ptr<AudioPlayer> CreateCoreAudioPlayer(agi::AudioProvider *provider, AudioPlayerHost const&)
 {
     return agi::make_unique<CoreAudioPlayer>(provider);
 }

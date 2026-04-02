@@ -17,6 +17,7 @@
 #include "command.h"
 
 #include "../include/aegisub/context.h"
+#include "../include/aegisub/context_ui.h"
 #include "../libresrc/libresrc.h"
 #include "../project.h"
 #include "../video_display.h"
@@ -38,15 +39,16 @@ namespace {
 		CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 		bool Validate(const agi::Context *c) override {
-			return !!c->project->VideoProvider();
+			return !!c->GetCore().project->VideoProvider();
 		}
 
 		bool IsActive(const agi::Context *c) override {
-			return c->videoDisplay->ToolIsType(typeid(T));
+			return c->GetUI().videoDisplay->ToolIsType(typeid(T));
 		}
 
 		void operator()(agi::Context *c) override {
-			c->videoDisplay->SetTool(agi::make_unique<T>(c->videoDisplay, c));
+			auto video_display = c->GetUI().videoDisplay;
+			video_display->SetTool(agi::make_unique<T>(video_display, c));
 		}
 	};
 

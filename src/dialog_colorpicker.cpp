@@ -639,17 +639,17 @@ DialogColorPicker::DialogColorPicker(wxWindow *parent, agi::Color initial_color,
 	wxSizer *hsv_box = new wxStaticBoxSizer(wxVERTICAL, this, _("HSV color"));
 
 	for (auto& elem : rgb_input)
-		elem = new wxSpinCtrl(this, -1, "", wxDefaultPosition, colorinput_size, wxSP_ARROW_KEYS, 0, 255);
+		elem = new wxSpinCtrl(this, -1, wxEmptyString, wxDefaultPosition, colorinput_size, wxSP_ARROW_KEYS, 0, 255);
 
-	// ass_input = new wxTextCtrl(this, -1, "", wxDefaultPosition, colorinput_size);
-	html_input = new wxTextCtrl(this, -1, "", wxDefaultPosition, colorinput_size);
-	alpha_input = new wxSpinCtrl(this, -1, "", wxDefaultPosition, colorinput_size, wxSP_ARROW_KEYS, 0, 255);
+	// ass_input = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, colorinput_size);
+	html_input = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, colorinput_size);
+	alpha_input = new wxSpinCtrl(this, -1, wxEmptyString, wxDefaultPosition, colorinput_size, wxSP_ARROW_KEYS, 0, 255);
 
 	for (auto& elem : hsl_input)
-		elem = new wxSpinCtrl(this, -1, "", wxDefaultPosition, colorinput_size, wxSP_ARROW_KEYS, 0, 255);
+		elem = new wxSpinCtrl(this, -1, wxEmptyString, wxDefaultPosition, colorinput_size, wxSP_ARROW_KEYS, 0, 255);
 
 	for (auto& elem : hsv_input)
-		elem = new wxSpinCtrl(this, -1, "", wxDefaultPosition, colorinput_size, wxSP_ARROW_KEYS, 0, 255);
+		elem = new wxSpinCtrl(this, -1, wxEmptyString, wxDefaultPosition, colorinput_size, wxSP_ARROW_KEYS, 0, 255);
 
 	preview_box = new wxStaticBitmap(this, -1, wxBitmap(preview_size.x, preview_size.y, 24), wxDefaultPosition, preview_size, STATIC_BORDER_FLAG);
 	recent_box = new ColorPickerRecent(this, 8, 4, recent_cell_size);
@@ -684,7 +684,7 @@ DialogColorPicker::DialogColorPicker(wxWindow *parent, agi::Color initial_color,
 	wxString rgb_labels[] = { _("Red:"), _("Green:"), _("Blue:") };
 	rgb_box->Add(MakeColorInputSizer(rgb_labels, rgb_input), 1, wxALL|wxEXPAND, border);
 
-	wxString ass_labels[] = { "ASS:", "HTML:", _("Alpha:") };
+	wxString ass_labels[] = { wxS("ASS:"), wxS("HTML:"), _("Alpha:") };
 	wxControl *ass_ctrls[] = { ass_input, html_input, alpha_input };
 	auto ass_colors_sizer = MakeColorInputSizer(ass_labels, ass_ctrls);
 	if (!alpha)
@@ -1128,7 +1128,7 @@ void DialogColorPicker::OnDropperMouse(wxMouseEvent &evt) {
 	if (evt.LeftDown() && !screen_dropper_icon->HasCapture()) {
 		Freeze();
 #ifdef WIN32
-		screen_dropper_icon->SetCursor(wxCursor("eyedropper_cursor"));
+		screen_dropper_icon->SetCursor(wxCursor(wxS("eyedropper_cursor")));
 #else
 		screen_dropper_icon->SetCursor(*wxCROSS_CURSOR);
 #endif

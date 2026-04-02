@@ -38,8 +38,6 @@
 #include <libaegisub/line_wrap.h>
 #include <libaegisub/string_utils.h>
 
-#include <wx/utils.h>
-
 namespace
 {
 #pragma pack(push, 1)
@@ -602,17 +600,11 @@ namespace
 	EbuExportSettings get_export_config(wxWindow *parent)
 	{
 		EbuExportSettings s("Subtitle Format/EBU STL");
-
-		// Disable the busy cursor set by the exporter while the dialog is visible
-		wxEndBusyCursor();
-		int res = ShowEbuExportConfigurationDialog(parent, s);
-		wxBeginBusyCursor();
-
-		if (res != wxID_OK)
+		auto configured = PromptForEbuExportSettings(parent, s);
+		if (!configured)
 			throw agi::UserCancelException("EBU/STL export");
-
-		s.Save();
-		return s;
+		configured->Save();
+		return *configured;
 	}
 
 } // namespace {
@@ -622,8 +614,9 @@ Ebu3264SubtitleFormat::Ebu3264SubtitleFormat()
 {
 }
 
-void Ebu3264SubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const&) const
+void Ebu3264SubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const&, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const
 {
+	(void)choice_sink;
 	// collect data from user
 	EbuExportSettings export_settings = get_export_config(nullptr);
 	AssFile copy(*src);

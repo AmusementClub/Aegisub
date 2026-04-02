@@ -16,148 +16,72 @@
 
 #include "ass_file.h"
 #include "async_video_provider.h"
+#include "compat.h"
 #include "format.h"
-#include "help_button.h"
+#include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "options.h"
-#include "resolution_resampler.h"
+#include "ui_services.h"
+#include "video_property_update.h"
 
-#include <wx/dialog.h>
+#include <algorithm>
 #include <wx/intl.h>
-#include <wx/radiobox.h>
-#include <wx/sizer.h>
-#include <wx/stattext.h>
 
 namespace {
-enum {
-	MISMATCH_IGNORE,
-	MISMATCH_PROMPT,
-	MISMATCH_RESAMPLE,
-	MISMATCH_SET
-};
-enum {
-	FIX_IGNORE,
-	FIX_SET,
-	FIX_RESAMPLE
-};
-
-int prompt(wxWindow *parent, bool ar_changed, int sx, int sy, int vx, int vy) {
-	wxDialog d(parent, -1, _("Resolution mismatch"));
-
-	auto label_text = fmt_tl("The resolution of the loaded video and the resolution specified for the subtitles don't match.\n\nVideo resolution:\t%d x %d\nScript resolution:\t%d x %d\n\nChange subtitles resolution to match video?", vx, vy, sx, sy);
-
-	auto sizer = new wxBoxSizer(wxVERTICAL);
-	sizer->Add(new wxStaticText(&d, -1, label_text), wxSizerFlags().Border());
-
-	wxRadioBox *rb;
-	if (ar_changed) {
-		wxString choices[] = {
-			_("Set to video resolution"),
-			_("Resample script (stretch to new aspect ratio)"),
-			_("Resample script (add borders)"),
-			_("Resample script (remove borders)")
-		};
-		rb = new wxRadioBox(&d, -1, "", wxDefaultPosition, wxDefaultSize, 4, choices, 1);
+agi::SingleChoiceInteractionRequest build_resolution_mismatch_request(VideoPropertyUpdateInput const& input, bool aspect_ratio_changed) {
+	agi::SingleChoiceInteractionRequest request;
+	request.title = from_wx(_("Resolution mismatch"));
+	request.message = agi::format(_("The resolution of the loaded video and the resolution specified for the subtitles don't match.\n\nVideo resolution:\t%d x %d\nScript resolution:\t%d x %d\n\nChange subtitles resolution to match video?"),
+		input.video_width, input.video_height, input.script_width, input.script_height);
+	request.help_page = "Resolution mismatch";
+	request.choices.push_back(from_wx(_("Set to video resolution")));
+	request.choices.push_back(from_wx(aspect_ratio_changed
+		? _("Resample script (stretch to new aspect ratio)")
+		: _("Resample script")));
+	if (aspect_ratio_changed) {
+		request.choices.push_back(from_wx(_("Resample script (add borders)")));
+		request.choices.push_back(from_wx(_("Resample script (remove borders)")));
 	}
-	else {
-		wxString choices[] = {
-			_("Set to video resolution"),
-			_("Resample script"),
-		};
-		rb = new wxRadioBox(&d, -1, "", wxDefaultPosition, wxDefaultSize, 2, choices, 1);
-	}
-	sizer->Add(rb, wxSizerFlags().Border(wxALL & ~wxTOP).Expand());
-	sizer->Add(d.CreateStdDialogButtonSizer(wxOK | wxCANCEL | wxHELP), wxSizerFlags().Border().Expand());
 
-	unsigned int sel = OPT_GET("Video/Last Script Resolution Mismatch Choice")->GetInt();
-	rb->SetSelection(std::min(sel - 1, rb->GetCount()));
-
-	d.SetSizerAndFit(sizer);
-	d.CenterOnParent();
-
-	d.Bind(wxEVT_BUTTON, [&](wxCommandEvent&) { d.EndModal(rb->GetSelection() + 1); }, wxID_OK);
-	d.Bind(wxEVT_BUTTON, [&](wxCommandEvent&) { d.EndModal(0); }, wxID_CANCEL);
-	d.Bind(wxEVT_BUTTON, [&](wxCommandEvent&) { HelpButton::OpenPage("Resolution mismatch"); }, wxID_HELP);
-
-	return d.ShowModal();
+	auto const last_choice = OPT_GET("Video/Last Script Resolution Mismatch Choice")->GetInt();
+	request.default_choice = std::clamp(static_cast<int>(last_choice) - 1, 0, static_cast<int>(request.choices.size() - 1));
+	return request;
 }
 
-bool update_video_properties(AssFile *file, const AsyncVideoProvider *new_provider, wxWindow *parent) {
-	bool commit_subs = false;
-
-	// When opening dummy video only want to set the script properties if
-	// they were previously unset
-	bool set_properties = new_provider->ShouldSetVideoProperties();
-
-	auto matrix = new_provider->GetColorSpace();
-	if (set_properties && matrix != file->GetScriptInfo("YCbCr Matrix")) {
-		file->SetScriptInfo("YCbCr Matrix", matrix);
-		commit_subs = true;
-	}
-
-	// Check that the script resolution matches the video resolution
+VideoPropertyUpdateInput make_input(AssFile *file, const AsyncVideoProvider *new_provider) {
 	int sx, sy;
-	auto resolution_type = file->GetResolutionType(sx, sy);
-	int vx = new_provider->GetWidth();
-	int vy = new_provider->GetHeight();
+	return {
+		new_provider->ShouldSetVideoProperties(),
+		file->GetScriptInfo("YCbCr Matrix"),
+		new_provider->GetColorSpace(),
+		file->GetResolutionType(sx, sy),
+		sx,
+		sy,
+		new_provider->GetWidth(),
+		new_provider->GetHeight(),
+		static_cast<VideoResolutionMismatchMode>(OPT_GET("Video/Script Resolution Mismatch")->GetInt())
+	};
+}
+}
 
-	// If the script resolution hasn't been set at all just force it to the
-	// video resolution
-	if (resolution_type == ScriptResolutionType::None) {
-		file->SetResolution(ScriptResolutionType::None, vx, vy);
-		return true;
-	}
-
-	if (!set_properties)
-		return false;
-
-	// Treat exact multiples of the video resolution as equaling the resolution
-	// for the people who use that for subpixel precision (which is mostly
-	// pointless these days due to decimals being supported almost everywhere)
-	if (sx % vx == 0 && sy % vy == 0)
-		return commit_subs;
-
-	auto sar = double(sx) / sy;
-	auto var = double(vx) / vy;
-	bool ar_changed = std::abs(sar - var) / var > .01;
-
-	switch (OPT_GET("Video/Script Resolution Mismatch")->GetInt()) {
-	case MISMATCH_IGNORE: default:
-		return commit_subs;
-
-	case MISMATCH_SET:
-		file->SetResolution(ScriptResolutionType::None, vx, vy);
-		return true;
-
-	case MISMATCH_RESAMPLE:
-		if (!ar_changed) {
-			ResampleResolution(file, {
-				{0, 0, 0, 0},
-				sx, sy, vx, vy,
-				ResampleARMode::Stretch,
-				YCbCrMatrix::rgb, YCbCrMatrix::rgb
-			});
-			return true;
+void UpdateVideoProperties(agi::Context *context, AssFile *file, const AsyncVideoProvider *new_provider) {
+	auto input = make_input(file, new_provider);
+	auto plan = PlanVideoPropertyUpdate(input);
+	if (plan.prompt_for_resolution_mismatch) {
+		auto selection = context->RequestSingleChoice(build_resolution_mismatch_request(input, plan.aspect_ratio_changed));
+		if (!selection) {
+			plan.prompt_for_resolution_mismatch = false;
 		}
-		// Fallthrough
-		// to prompt if the AR changed
-
-	case MISMATCH_PROMPT:
-		int res = prompt(parent, ar_changed, sx, sy, vx, vy);
-		if (res == FIX_IGNORE) return commit_subs;
-		OPT_SET("Video/Last Script Resolution Mismatch Choice")->SetInt(res);
-
-		ResampleResolution(file, {
-			{0, 0, 0, 0},
-			sx, sy, vx, vy,
-			static_cast<ResampleARMode>(res - FIX_RESAMPLE),
-			YCbCrMatrix::rgb, YCbCrMatrix::rgb
-		});
-		return true;
+		else if (auto choice = ParseVideoResolutionMismatchChoice(*selection, plan.aspect_ratio_changed)) {
+			OPT_SET("Video/Last Script Resolution Mismatch Choice")->SetInt(*selection + 1);
+			plan = ResolveVideoResolutionMismatchChoice(plan, *choice);
+		}
+		else {
+			plan.prompt_for_resolution_mismatch = false;
+		}
 	}
-}
-}
 
-void UpdateVideoProperties(AssFile *file, const AsyncVideoProvider *new_provider, wxWindow *parent) {
-	if (update_video_properties(file, new_provider, parent))
-		file->Commit(_("change script resolution"), AssFile::COMMIT_SCRIPTINFO);
+	ApplyVideoPropertyUpdatePlan(file, input, plan);
+	if (plan.ShouldCommit())
+		file->Commit(from_wx(_("change script resolution")), AssFile::COMMIT_SCRIPTINFO);
 }

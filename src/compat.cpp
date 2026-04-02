@@ -33,5 +33,5 @@ agi::Color from_wx(wxColour color) {
 }
 
 std::string from_wx(wxString const& str) {
-	return std::string(str.utf8_str());
+	return str.utf8_string();
 }

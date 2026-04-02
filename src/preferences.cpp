@@ -34,7 +34,7 @@
 #include "persist_location.h"
 #include "preferences_base.h"
 #include "video_provider_manager.h"
-#include "wx_ui_services.h"
+#include "wx_preferences_ui_host.h"
 
 #ifdef WITH_PORTAUDIO
 #include "audio_player_portaudio.h"
@@ -52,9 +52,7 @@
 
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
-#include <wx/dirdlg.h>
 #include <wx/event.h>
-#include <wx/filedlg.h>
 #include <wx/filename.h>
 #include <wx/listctrl.h>
 #include <wx/propgrid/advprops.h>
@@ -97,9 +95,11 @@ agi::fs::path FindExistingDialogDirectory(agi::fs::path path) {
 }
 
 class TokenizedDirProperty final : public wxLongStringProperty {
+	Preferences *prefs = nullptr;
 public:
-	TokenizedDirProperty(wxString const& label, wxString const& name, wxString const& value)
-	: wxLongStringProperty(label, name, value) { }
+	TokenizedDirProperty(Preferences *prefs, wxString const& label, wxString const& name, wxString const& value)
+	: wxLongStringProperty(label, name, value)
+	, prefs(prefs) { }
 
 protected:
 	bool DisplayEditorDialog(wxPropertyGrid *pg, wxVariant& value) override {
@@ -107,27 +107,28 @@ protected:
 		auto const current_path = config::path
 			? config::path->Decode(token_path)
 			: agi::fs::PathFromString(token_path);
-		wxDirDialog dlg(pg, _("Please choose the folder:"), FindExistingDialogDirectory(current_path).wstring());
-		if (dlg.ShowModal() != wxID_OK)
-			return false;
-
-		wxString selected = dlg.GetPath();
-		if (selected.empty())
+		auto path = prefs->RequestSelectDirectory({
+			from_wx(_("Please choose the folder:")),
+			agi::fs::PathToString(FindExistingDialogDirectory(current_path))
+		});
+		if (path.empty())
 			return false;
 
 		auto const encoded = config::path
-			? config::path->Encode(agi::fs::PathFromString(from_wx(selected)))
-			: from_wx(selected);
+			? config::path->Encode(path)
+			: agi::fs::PathToString(path);
 		value = to_wx(encoded);
 		return true;
 	}
 };
 
 class TokenizedFileProperty final : public wxLongStringProperty {
+	Preferences *prefs = nullptr;
 	wxString wildcard;
 public:
-	TokenizedFileProperty(wxString const& label, wxString const& name, wxString const& value, wxString const& wildcard)
+	TokenizedFileProperty(Preferences *prefs, wxString const& label, wxString const& name, wxString const& value, wxString const& wildcard)
 	: wxLongStringProperty(label, name, value)
+	, prefs(prefs)
 	, wildcard(wildcard) { }
 
 protected:
@@ -137,26 +138,22 @@ protected:
 			? config::path->Decode(token_path)
 			: agi::fs::PathFromString(token_path);
 		wxFileName current(current_path.wstring());
-		wxString dir;
-		wxString file;
 		auto const existing_dir = FindExistingDialogDirectory(current_path);
-		if (!existing_dir.empty())
-			dir = existing_dir.wstring();
-		if (current.IsOk()) {
-			file = current.GetFullName();
-		}
-
-		wxFileDialog dlg(pg, _("Please choose the file:"), dir, file, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST);
-		if (dlg.ShowModal() != wxID_OK)
-			return false;
-
-		wxString selected = dlg.GetPath();
-		if (selected.empty())
+		auto path = prefs->RequestOpenFile({
+			from_wx(_("Please choose the file:")),
+			"",
+			current.IsOk() ? from_wx(current.GetFullName()) : std::string(),
+			"",
+			from_wx(wildcard),
+			agi::fs::PathToString(existing_dir),
+			true
+		});
+		if (path.empty())
 			return false;
 
 		auto const encoded = config::path
-			? config::path->Encode(agi::fs::PathFromString(from_wx(selected)))
-			: from_wx(selected);
+			? config::path->Encode(path)
+			: agi::fs::PathToString(path);
 		value = to_wx(encoded);
 		return true;
 	}
@@ -245,7 +242,7 @@ public:
 	wxPGProperty *AddBool(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new wxBoolProperty(label, opt_name, opt->GetBool()));
+		auto *prop = grid->Append(new wxBoolProperty(label, to_wx(opt_name), opt->GetBool()));
 		prop->SetAttribute(wxPG_BOOL_USE_CHECKBOX, true);
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
@@ -257,11 +254,11 @@ public:
 	wxPGProperty *AddInt(wxString const& label, const char *opt_name, int min, int max) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new wxIntProperty(label, opt_name, opt->GetInt()));
+		auto *prop = grid->Append(new wxIntProperty(label, to_wx(opt_name), opt->GetInt()));
 		prop->SetAttribute(wxPG_ATTR_MIN, static_cast<long>(min));
 		prop->SetAttribute(wxPG_ATTR_MAX, static_cast<long>(max));
 		prop->SetAttribute(wxPG_ATTR_SPINCTRL_STEP, 1L);
-		prop->SetEditor("SpinCtrl");
+		prop->SetEditor(wxS("SpinCtrl"));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
@@ -272,12 +269,12 @@ public:
 	wxPGProperty *AddDouble(wxString const& label, const char *opt_name, double min, double max, double step, int precision = 2) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new wxFloatProperty(label, opt_name, opt->GetDouble()));
+		auto *prop = grid->Append(new wxFloatProperty(label, to_wx(opt_name), opt->GetDouble()));
 		prop->SetAttribute(wxPG_ATTR_MIN, min);
 		prop->SetAttribute(wxPG_ATTR_MAX, max);
 		prop->SetAttribute(wxPG_ATTR_SPINCTRL_STEP, step);
 		prop->SetAttribute(wxPG_FLOAT_PRECISION, precision);
-		prop->SetEditor("SpinCtrl");
+		prop->SetEditor(wxS("SpinCtrl"));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueDouble>(name, value.GetDouble());
@@ -288,7 +285,7 @@ public:
 	wxPGProperty *AddString(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new wxStringProperty(label, opt_name, to_wx(opt->GetString())));
+		auto *prop = grid->Append(new wxStringProperty(label, to_wx(opt_name), to_wx(opt->GetString())));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
@@ -310,7 +307,7 @@ public:
 		if (size_opt->GetInt() > 0)
 			font.SetPointSize(static_cast<int>(size_opt->GetInt()));
 
-		auto *prop = grid->Append(new wxFontProperty(label, opt_prefix, font));
+		auto *prop = grid->Append(new wxFontProperty(label, to_wx(opt_prefix), font));
 		updaters.emplace(prop, [this, face_name, font_size](wxVariant const& value) {
 			wxFont font;
 			font << value;
@@ -323,7 +320,7 @@ public:
 	wxPGProperty *AddDirectory(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new TokenizedDirProperty(label, opt_name, to_wx(opt->GetString())));
+		auto *prop = grid->Append(new TokenizedDirProperty(prefs, label, to_wx(opt_name), to_wx(opt->GetString())));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
@@ -334,7 +331,7 @@ public:
 	wxPGProperty *AddColour(wxString const& label, const char *opt_name) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new wxColourProperty(label, opt_name, to_wx(opt->GetColor())));
+		auto *prop = grid->Append(new wxColourProperty(label, to_wx(opt_name), to_wx(opt->GetColor())));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			wxColourPropertyValue colour;
@@ -347,7 +344,7 @@ public:
 	wxPGProperty *AddFile(wxString const& label, const char *opt_name, wxString const& wildcard) {
 		prefs->AddChangeableOption(opt_name);
 		auto opt = OPT_GET(opt_name);
-		auto *prop = grid->Append(new TokenizedFileProperty(label, opt_name, to_wx(opt->GetString()), wildcard));
+		auto *prop = grid->Append(new TokenizedFileProperty(prefs, label, to_wx(opt_name), to_wx(opt->GetString()), wildcard));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueString>(name, from_wx(value.GetString()));
@@ -368,7 +365,7 @@ public:
 		prefs->AddChangeableOption(opt_name);
 		int const selected = ClampChoiceSelection(opt->GetInt(), choices.size());
 		auto pg_choices = MakeChoices(choices);
-		auto *prop = grid->Append(new wxEnumProperty(label, opt_name, pg_choices, selected));
+		auto *prop = grid->Append(new wxEnumProperty(label, to_wx(opt_name), pg_choices, selected));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
 			QueueOptionChange<agi::OptionValueInt>(name, static_cast<int>(value.GetLong()));
@@ -391,7 +388,7 @@ public:
 		if (opt->GetType() == agi::OptionType::Int)
 			selected = ClampChoiceSelection(opt->GetInt(), choices.size());
 
-		auto *prop = grid->Append(new wxEnumProperty(label, opt_name, pg_choices, selected));
+		auto *prop = grid->Append(new wxEnumProperty(label, to_wx(opt_name), pg_choices, selected));
 		if (opt->GetType() == agi::OptionType::Int) {
 			std::string name = opt_name;
 			updaters.emplace(prop, [this, name](wxVariant const& value) {
@@ -551,13 +548,18 @@ void BuildVideoPage(OptionPage *p) {
 	binder->AddBool(_("Seek video to line start on selection change"), "Video/Subtitle Sync");
 	binder->AddBool(_("Automatically open audio when opening video"), "Video/Open Audio");
 
-	const wxString czoom_arr[24] = { "12.5%", "25%", "37.5%", "50%", "62.5%", "75%", "87.5%", "100%", "112.5%", "125%", "137.5%", "150%", "162.5%", "175%", "187.5%", "200%", "212.5%", "225%", "237.5%", "250%", "262.5%", "275%", "287.5%", "300%" };
+	const wxString czoom_arr[24] = {
+		wxS("12.5%"), wxS("25%"), wxS("37.5%"), wxS("50%"), wxS("62.5%"), wxS("75%"),
+		wxS("87.5%"), wxS("100%"), wxS("112.5%"), wxS("125%"), wxS("137.5%"), wxS("150%"),
+		wxS("162.5%"), wxS("175%"), wxS("187.5%"), wxS("200%"), wxS("212.5%"), wxS("225%"),
+		wxS("237.5%"), wxS("250%"), wxS("262.5%"), wxS("275%"), wxS("287.5%"), wxS("300%")
+	};
 	wxArrayString choice_zoom(24, czoom_arr);
 	binder->AddChoice(_("Default Zoom"), choice_zoom, "Video/Default Zoom");
 
 	binder->AddInt(_("Fast jump step in frames"), "Video/Slider/Fast Jump Step", 0, INT_MAX);
 
-	const wxString cscr_arr[3] = { "?video", "?script", "." };
+	const wxString cscr_arr[3] = { wxS("?video"), wxS("?script"), wxS(".") };
 	wxArrayString scr_res(3, cscr_arr);
 	binder->AddChoice(_("Screenshot save path"), scr_res, "Path/Screenshot");
 
@@ -759,15 +761,15 @@ void BuildAdvancedAudioPage(OptionPage *p) {
 	binder->AddInt(_("Cache memory max (MB)"), "Audio/Renderer/Spectrum/Memory Max", 2, 1024);
 
 #ifdef WITH_AVISYNTH
-	binder->AddCategory("Avisynth");
-	const wxString adm_arr[4] = { "None", "ConvertToMono", "GetLeftChannel", "GetRightChannel" };
+	binder->AddCategory(wxS("Avisynth"));
+	const wxString adm_arr[4] = { wxS("None"), wxS("ConvertToMono"), wxS("GetLeftChannel"), wxS("GetRightChannel") };
 	wxArrayString adm_choice(4, adm_arr);
 	binder->AddChoice(_("Avisynth down-mixer"), adm_choice, "Audio/Downmixer");
 	binder->AddInt(_("Force sample rate"), "Provider/Audio/AVS/Sample Rate", 0, INT_MAX);
 #endif
 
 #ifdef WITH_FFMS2
-	binder->AddCategory("FFmpegSource");
+	binder->AddCategory(wxS("FFmpegSource"));
 
 	const wxString error_modes[] = { _("Ignore"), _("Clear"), _("Stop"), _("Abort") };
 	wxArrayString error_modes_choice(4, error_modes);
@@ -778,21 +780,21 @@ void BuildAdvancedAudioPage(OptionPage *p) {
 #endif
 
 #ifdef WITH_PORTAUDIO
-	binder->AddCategory("Portaudio");
+	binder->AddCategory(wxS("Portaudio"));
 	binder->AddChoice(_("Portaudio device"), PortAudioPlayer::GetOutputDevices(), "Player/Audio/PortAudio/Device Name");
 #endif
 
 #ifdef WITH_OSS
-	binder->AddCategory("OSS");
+	binder->AddCategory(wxS("OSS"));
 	binder->AddDirectory(_("OSS Device"), "Player/Audio/OSS/Device");
 #endif
 
 #if defined(WITH_DIRECTSOUND) && defined(WITH_XAUDIO2)
-	binder->AddCategory("DirectSound / XAudio2");
+	binder->AddCategory(wxS("DirectSound / XAudio2"));
 #elif defined(WITH_DIRECTSOUND)
-	binder->AddCategory("DirectSound");
+	binder->AddCategory(wxS("DirectSound"));
 #elif defined(WITH_XAUDIO2)
-	binder->AddCategory("XAudio2");
+	binder->AddCategory(wxS("XAudio2"));
 #endif
 #if defined(WITH_DIRECTSOUND) || defined(WITH_XAUDIO2)
 	binder->AddInt(_("Buffer latency"), "Player/Audio/DirectSound/Buffer Latency", 1, 1000);
@@ -812,9 +814,9 @@ void BuildAdvancedVideoPage(OptionPage *p) {
 	binder->AddCategory(_("Expert"));
 	binder->AddChoice(_("Video provider"), VideoProviderFactory::GetChoices(), "Video/Provider");
 	wxArrayString renderer_choices;
-	renderer_choices.Add("opengl");
+	renderer_choices.Add(wxS("opengl"));
 #ifdef WITH_LIBPLACEBO
-	renderer_choices.Add("libplacebo");
+	renderer_choices.Add(wxS("libplacebo"));
 #endif
 	binder->AddChoice(_("Video renderer"), renderer_choices, "Video/Renderer/Backend");
 
@@ -822,7 +824,7 @@ void BuildAdvancedVideoPage(OptionPage *p) {
 	binder->AddChoice(_("Subtitles provider"), sp_choice, "Subtitle/Provider");
 
 #ifdef WITH_AVISYNTH
-	binder->AddCategory("Avisynth");
+	binder->AddCategory(wxS("Avisynth"));
 	binder->AddBool(_("Allow pre-2.56a Avisynth"), "Provider/Avisynth/Allow Ancient");
 	binder->AddFile(_("Avisynth runtime library path"), "Provider/Avisynth/Runtime Path",
 #ifdef _WIN32
@@ -837,9 +839,9 @@ void BuildAdvancedVideoPage(OptionPage *p) {
 #endif
 
 #ifdef WITH_FFMS2
-	binder->AddCategory("FFmpegSource");
+	binder->AddCategory(wxS("FFmpegSource"));
 
-	const wxString log_levels[] = { "Quiet", "Panic", "Fatal", "Error", "Warning", "Info", "Verbose", "Debug" };
+	const wxString log_levels[] = { wxS("Quiet"), wxS("Panic"), wxS("Fatal"), wxS("Error"), wxS("Warning"), wxS("Info"), wxS("Verbose"), wxS("Debug") };
 	wxArrayString log_levels_choice(8, log_levels);
 	binder->AddChoice(_("Debug log verbosity"), log_levels_choice, "Provider/FFmpegSource/Log Level");
 
@@ -869,7 +871,7 @@ class CommandRenderer final : public wxDataViewCustomRenderer {
 
 public:
 	CommandRenderer()
-	: wxDataViewCustomRenderer("wxDataViewIconText", wxDATAVIEW_CELL_EDITABLE)
+	: wxDataViewCustomRenderer(wxS("wxDataViewIconText"), wxDATAVIEW_CELL_EDITABLE)
 	, autocomplete(to_wx(cmd::get_registered_commands()))
 	{
 	}
@@ -939,7 +941,7 @@ class HotkeyRenderer final : public wxDataViewCustomRenderer {
 
 public:
 	HotkeyRenderer()
-	: wxDataViewCustomRenderer("string", wxDATAVIEW_CELL_EDITABLE)
+	: wxDataViewCustomRenderer(wxS("string"), wxDATAVIEW_CELL_EDITABLE)
 	{ }
 
 	wxWindow *CreateEditorCtrl(wxWindow *parent, wxRect label_rect, wxVariant const& var) override {
@@ -1004,20 +1006,20 @@ Interface_Hotkeys::Interface_Hotkeys(wxTreebook *book, Preferences *parent)
 	delete_button->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { model->Delete(dvc->GetSelection()); });
 
 	quick_search->Bind(wxEVT_TEXT, &Interface_Hotkeys::OnUpdateFilter, this);
-	quick_search->Bind(wxEVT_SEARCHCTRL_CANCEL_BTN, [=](wxCommandEvent&) { quick_search->SetValue(""); });
+	quick_search->Bind(wxEVT_SEARCHCTRL_CANCEL_BTN, [=](wxCommandEvent&) { quick_search->SetValue(wxEmptyString); });
 
 	dvc = new wxDataViewCtrl(this, -1);
 	dvc->AssociateModel(model.get());
 #ifndef __APPLE__
-	dvc->AppendColumn(new wxDataViewColumn("Hotkey", new HotkeyRenderer, 0, 125, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE));
-	dvc->AppendColumn(new wxDataViewColumn("Command", new CommandRenderer, 1, 250, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE));
+	dvc->AppendColumn(new wxDataViewColumn(wxS("Hotkey"), new HotkeyRenderer, 0, 125, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE));
+	dvc->AppendColumn(new wxDataViewColumn(wxS("Command"), new CommandRenderer, 1, 250, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE));
 #else
-	auto col = new wxDataViewColumn("Hotkey", new wxDataViewTextRenderer("string", wxDATAVIEW_CELL_EDITABLE), 0, 150, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE);
+	auto col = new wxDataViewColumn(wxS("Hotkey"), new wxDataViewTextRenderer(wxS("string"), wxDATAVIEW_CELL_EDITABLE), 0, 150, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE);
 	col->SetMinWidth(150);
 	dvc->AppendColumn(col);
-	dvc->AppendColumn(new wxDataViewColumn("Command", new wxDataViewIconTextRenderer("wxDataViewIconText", wxDATAVIEW_CELL_EDITABLE), 1, 250, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE));
+	dvc->AppendColumn(new wxDataViewColumn(wxS("Command"), new wxDataViewIconTextRenderer(wxS("wxDataViewIconText"), wxDATAVIEW_CELL_EDITABLE), 1, 250, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE));
 #endif
-	dvc->AppendTextColumn("Description", 2, wxDATAVIEW_CELL_INERT, 300, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE);
+	dvc->AppendTextColumn(wxS("Description"), 2, wxDATAVIEW_CELL_INERT, 300, wxALIGN_LEFT, wxCOL_SORTABLE | wxCOL_RESIZABLE);
 
 	wxSizer *buttons = new wxBoxSizer(wxHORIZONTAL);
 	buttons->Add(quick_search, wxSizerFlags().Border());
@@ -1115,6 +1117,30 @@ void Preferences::AddChangeableOption(std::string const& name) {
 	option_names.push_back(name);
 }
 
+agi::fs::path Preferences::RequestOpenFile(agi::OpenFileDialogRequest const& request) const {
+	if (file_dialog_service)
+		return file_dialog_service->RequestOpenFile(request);
+	return {};
+}
+
+agi::fs::path Preferences::RequestSaveFile(agi::SaveFileDialogRequest const& request) const {
+	if (file_dialog_service)
+		return file_dialog_service->RequestSaveFile(request);
+	return {};
+}
+
+agi::fs::path Preferences::RequestSelectDirectory(agi::SelectDirectoryDialogRequest const& request) const {
+	if (file_dialog_service)
+		return file_dialog_service->RequestSelectDirectory(request);
+	return {};
+}
+
+agi::InteractionResult Preferences::RequestInteraction(agi::InteractionRequest const& request) const {
+	if (interaction_sink)
+		return interaction_sink->Request(request);
+	return agi::InteractionResult::Cancel;
+}
+
 void Preferences::OnOK(wxCommandEvent &event) {
 	OnApply(event);
 	EndModal(0);
@@ -1134,8 +1160,7 @@ void Preferences::OnApply(wxCommandEvent &) {
 }
 
 void Preferences::OnResetDefault(wxCommandEvent&) {
-	auto interaction = agi::MakeWindowInteractionSink(this);
-	if (interaction->Request({
+	if (RequestInteraction({
 		from_wx(_("Restore defaults?")),
 		from_wx(_("Are you sure that you want to restore the defaults? All your settings will be overridden.")),
 		agi::InteractionButtons::YesNo,
@@ -1162,6 +1187,8 @@ void Preferences::OnResetDefault(wxCommandEvent&) {
 
 Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"), wxDefaultPosition, wxSize(-1, -1), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER) {
 	SetIcon(GETICON(options_button_16));
+	file_dialog_service = agi::MakePreferencesFileDialogService(this);
+	interaction_sink = agi::MakePreferencesInteractionSink(this);
 
 	auto duration_ms = [](auto const& started) {
 		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();

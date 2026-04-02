@@ -62,6 +62,7 @@ public:
 	AvisynthAudioProvider(agi::fs::path const& filename);
 
 	bool NeedsCache() const override { return true; }
+	agi::AudioProviderMemoryStats GetMemoryStats() const override { return BuildMemoryStats("Avisynth"); }
 };
 
 AvisynthAudioProvider::AvisynthAudioProvider(agi::fs::path const& filename) try {

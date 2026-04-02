@@ -31,20 +31,26 @@
 #include <wx/intl.h>
 
 namespace {
-wxString format_missing(wxString const& str) {
-	wxString printable;
-	wxString unprintable;
-	for (wxUniChar c : str) {
-		if (!u_isUWhiteSpace(c.GetValue()))
-			printable += c;
-		else {
-			unprintable += fmt_wx("\n - U+%04X ", c.GetValue());
-			UErrorCode ec;
-			char buf[1024];
-			auto len = u_charName(c.GetValue(), U_EXTENDED_CHAR_NAME, buf, sizeof buf, &ec);
+std::string format_missing(std::string const& str) {
+	std::string printable;
+	std::string unprintable;
+	size_t i = 0;
+	while (i < str.size()) {
+		auto ch = (unsigned char)str[i];
+		UChar32 c;
+		U8_NEXT((const uint8_t*)str.data(), i, (int32_t)str.size(), c);
+		if (!u_isUWhiteSpace(c)) {
+			printable += str.substr(i - U8_LENGTH(c), U8_LENGTH(c));
+		} else {
+			char buf[64];
+			snprintf(buf, sizeof buf, "\n - U+%04X ", c);
+			unprintable += buf;
+			UErrorCode ec = U_ZERO_ERROR;
+			char name[1024];
+			auto len = u_charName(c, U_EXTENDED_CHAR_NAME, name, sizeof name, &ec);
 			if (len != 0 && U_SUCCESS(ec))
-				unprintable += to_wx(buf);
-			if (c.GetValue() == 0xA0)
+				unprintable += name;
+			if (c == 0xA0)
 				unprintable += " (\\h)";
 		}
 	}
@@ -64,7 +70,7 @@ void FontCollector::ProcessDialogueLine(const AssDialogue *line, int index) {
 
 	auto style_it = styles.find(line->Style);
 	if (style_it == end(styles)) {
-		status_callback(fmt_tl("Style '%s' does not exist\n", line->Style), 2);
+		status_callback(from_wx(fmt_tl("Style '%s' does not exist\n", line->Style)), 2);
 		++missing;
 		return;
 	}
@@ -151,7 +157,7 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style) {
 	auto res = lister.GetFontPaths(style.first.facename, style.first.bold, style.first.italic, style.second.chars);
 
 	if (res.paths.empty()) {
-		status_callback(fmt_tl("Could not find font '%s'\n", style.first.facename), 2);
+		status_callback(from_wx(fmt_tl("Could not find font '%s'\n", style.first.facename)), 2);
 		PrintUsage(style.second);
 		++missing;
 	}
@@ -159,21 +165,21 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style) {
 		for (auto& elem : res.paths) {
 			elem.make_preferred();
 			if (std::find(begin(results), end(results), elem) == end(results)) {
-				status_callback(fmt_tl("Found '%s' at '%s'\n", style.first.facename, elem), 0);
+				status_callback(from_wx(fmt_tl("Found '%s' at '%s'\n", style.first.facename, elem)), 0);
 				results.push_back(elem);
 			}
 		}
 
 		if (res.fake_bold)
-			status_callback(fmt_tl("'%s' does not have a bold variant.\n", style.first.facename), 3);
+			status_callback(from_wx(fmt_tl("'%s' does not have a bold variant.\n", style.first.facename)), 3);
 		if (res.fake_italic)
-			status_callback(fmt_tl("'%s' does not have an italic variant.\n", style.first.facename), 3);
+			status_callback(from_wx(fmt_tl("'%s' does not have an italic variant.\n", style.first.facename)), 3);
 
 		if (res.missing.size()) {
 			if (res.missing.size() > 50)
-				status_callback(fmt_tl("'%s' is missing %d glyphs used.\n", style.first.facename, res.missing.size()), 2);
+				status_callback(from_wx(fmt_tl("'%s' is missing %d glyphs used.\n", style.first.facename, res.missing.size())), 2);
 			else if (res.missing.size() > 0)
-				status_callback(fmt_tl("'%s' is missing the following glyphs used: %s\n", style.first.facename, format_missing(res.missing)), 2);
+				status_callback(from_wx(fmt_tl("'%s' is missing the following glyphs used: %s\n", style.first.facename, format_missing(res.missing))), 2);
 			PrintUsage(style.second);
 			++missing_glyphs;
 		}
@@ -184,25 +190,25 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style) {
 
 void FontCollector::PrintUsage(UsageData const& data) {
 	if (data.styles.size()) {
-		status_callback(_("Used in styles:\n"), 2);
+		status_callback(from_wx(_("Used in styles:\n")), 2);
 		for (auto const& style : data.styles)
-			status_callback(fmt_wx("  - %s\n", style), 2);
+			status_callback(from_wx(fmt_wx("  - %s\n", style)), 2);
 	}
 
 	if (data.lines.size()) {
-		status_callback(_("Used on lines:"), 2);
+		status_callback(from_wx(_("Used on lines:")), 2);
 		for (int line : data.lines)
-			status_callback(fmt_wx(" %d", line), 2);
-		status_callback("\n", 2);
+			status_callback(from_wx(fmt_wx(" %d", line)), 2);
+		status_callback(std::string("\n"), 2);
 	}
-	status_callback("\n", 2);
+	status_callback(std::string("\n"), 2);
 }
 
 std::vector<agi::fs::path> FontCollector::GetFontPaths(const AssFile *file) {
 	missing = 0;
 	missing_glyphs = 0;
 
-	status_callback(_("Parsing file\n"), 0);
+	status_callback(from_wx(_("Parsing file\n")), 0);
 
 	for (auto const& style : file->Styles) {
 		StyleInfo &info = styles[style.name];
@@ -216,23 +222,23 @@ std::vector<agi::fs::path> FontCollector::GetFontPaths(const AssFile *file) {
 	for (auto const& diag : file->Events)
 		ProcessDialogueLine(&diag, ++index);
 
-	status_callback(_("Searching for font files\n"), 0);
+	status_callback(from_wx(_("Searching for font files\n")), 0);
 	for (auto const& style : used_styles) ProcessChunk(style);
-	status_callback(_("Done\n\n"), 0);
+	status_callback(from_wx(_("Done\n\n")), 0);
 
 	std::vector<agi::fs::path> paths;
 	paths.reserve(results.size());
 	paths.insert(paths.end(), results.begin(), results.end());
 
 	if (missing == 0)
-		status_callback(_("All fonts found.\n"), 1);
+		status_callback(from_wx(_("All fonts found.\n")), 1);
 	else
-		status_callback(fmt_plural(missing, "One font could not be found\n", "%d fonts could not be found.\n", missing), 2);
+		status_callback(from_wx(fmt_plural(missing, "One font could not be found\n", "%d fonts could not be found.\n", missing)), 2);
 	if (missing_glyphs != 0)
-		status_callback(fmt_plural(missing_glyphs,
+		status_callback(from_wx(fmt_plural(missing_glyphs,
 			"One font was found, but was missing glyphs used in the script.\n",
 			"%d fonts were found, but were missing glyphs used in the script.\n",
-			missing_glyphs), 2);
+			missing_glyphs)), 2);
 
 	return paths;
 }

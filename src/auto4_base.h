@@ -43,6 +43,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <vector>
 
 class AssStyle;
@@ -51,6 +52,7 @@ class wxWindow;
 class wxDialog;
 
 namespace agi { struct Context; }
+namespace agi { class FileDialogService; }
 namespace cmd { class Command; }
 
 namespace Automation4 {
@@ -102,17 +104,50 @@ namespace Automation4 {
 
 	class ProgressSink;
 
+	struct AutomationOpenFileDialogRequest {
+		std::string message;
+		std::string dir;
+		std::string file;
+		std::string wildcard;
+		bool multiple = false;
+		bool must_exist = true;
+	};
+
+	struct AutomationSaveFileDialogRequest {
+		std::string message;
+		std::string dir;
+		std::string file;
+		std::string wildcard;
+		bool prompt_overwrite = true;
+	};
+
 	class BackgroundScriptRunner {
 		std::unique_ptr<DialogProgress> impl;
+		std::shared_ptr<agi::FileDialogService> file_dialog_service;
 
 	public:
 		wxWindow *GetParentWindow() const;
 		std::string GetTitle() const;
+		std::vector<agi::fs::path> RequestOpenFiles(AutomationOpenFileDialogRequest const& request) const;
+		agi::fs::path RequestSaveFile(AutomationSaveFileDialogRequest const& request) const;
 
 		void Run(std::function<void(ProgressSink*)> task);
 
-		BackgroundScriptRunner(wxWindow *parent, std::string const& title);
+		BackgroundScriptRunner(wxWindow *parent, std::string const& title, std::shared_ptr<agi::FileDialogService> file_dialog_service = {});
 		~BackgroundScriptRunner();
+	};
+
+	class AutomationBackgroundScriptRunnerFactory {
+	public:
+		virtual ~AutomationBackgroundScriptRunnerFactory() = default;
+		virtual std::unique_ptr<BackgroundScriptRunner> Create(std::string const& title) = 0;
+	};
+
+	class NullAutomationBackgroundScriptRunnerFactory final : public AutomationBackgroundScriptRunnerFactory {
+	public:
+		std::unique_ptr<BackgroundScriptRunner> Create(std::string const&) override {
+			return {};
+		}
 	};
 
 	/// A wrapper around agi::ProgressSink which adds the ability to open
@@ -133,6 +168,8 @@ namespace Automation4 {
 		/// thread until it closes
 		void ShowDialog(ScriptDialog *config_dialog);
 		int ShowDialog(wxDialog *dialog);
+		std::vector<agi::fs::path> RequestOpenFiles(AutomationOpenFileDialogRequest const& request);
+		agi::fs::path RequestSaveFile(AutomationSaveFileDialogRequest const& request);
 		wxWindow *GetParentWindow() const { return bsr->GetParentWindow(); }
 
 		/// Get the current automation trace level

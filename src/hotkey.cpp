@@ -20,6 +20,7 @@
 #include "command/command.h"
 #include "compat.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "options.h"
 
 #include <libaegisub/path.h>

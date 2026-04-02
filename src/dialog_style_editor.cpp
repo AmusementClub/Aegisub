@@ -42,6 +42,7 @@
 #include "compat.h"
 #include "help_button.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "persist_location.h"
@@ -49,6 +50,7 @@
 #include "subs_preview.h"
 #include "utils.h"
 #include "validators.h"
+#include "wx_style_editor_ui_host.h"
 
 #include <libaegisub/of_type_adaptor.h>
 #include <libaegisub/make_unique.h>
@@ -61,6 +63,32 @@
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
 #include <wx/stattext.h>
+
+namespace {
+wxArrayString GetStyleEncodingStrings() {
+	wxArrayString encoding_strings;
+	encoding_strings.Add(wxS("0 - ") + _("ANSI"));
+	encoding_strings.Add(wxS("1 - ") + _("Default"));
+	encoding_strings.Add(wxS("2 - ") + _("Symbol"));
+	encoding_strings.Add(wxS("77 - ") + _("Mac"));
+	encoding_strings.Add(wxS("128 - ") + _("Shift_JIS"));
+	encoding_strings.Add(wxS("129 - ") + _("Hangeul"));
+	encoding_strings.Add(wxS("130 - ") + _("Johab"));
+	encoding_strings.Add(wxS("134 - ") + _("GB2312"));
+	encoding_strings.Add(wxS("136 - ") + _("Chinese BIG5"));
+	encoding_strings.Add(wxS("161 - ") + _("Greek"));
+	encoding_strings.Add(wxS("162 - ") + _("Turkish"));
+	encoding_strings.Add(wxS("163 - ") + _("Vietnamese"));
+	encoding_strings.Add(wxS("177 - ") + _("Hebrew"));
+	encoding_strings.Add(wxS("178 - ") + _("Arabic"));
+	encoding_strings.Add(wxS("186 - ") + _("Baltic"));
+	encoding_strings.Add(wxS("204 - ") + _("Russian"));
+	encoding_strings.Add(wxS("222 - ") + _("Thai"));
+	encoding_strings.Add(wxS("238 - ") + _("East European"));
+	encoding_strings.Add(wxS("255 - ") + _("OEM"));
+	return encoding_strings;
+}
+}
 
 /// Style rename helper that walks a file searching for a style and optionally
 /// updating references to it
@@ -85,8 +113,9 @@ class StyleRenamer {
 	void Walk(bool replace) {
 		found_any = false;
 		do_replace = replace;
+		auto core = c->GetCore();
 
-		for (auto& diag : c->ass->Events) {
+		for (auto& diag : core.ass->Events) {
 			if (diag.Style == source_name) {
 				if (replace)
 					diag.Style = new_name;
@@ -130,6 +159,9 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 , style(style)
 , store(store)
 {
+	notification_sink = agi::ResolveStyleEditorNotificationSink(c, this);
+	interaction_sink = agi::ResolveStyleEditorInteractionSink(c, this);
+
 	if (new_name.size()) {
 		is_new = true;
 		style = this->style = new AssStyle(*style);
@@ -150,7 +182,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	};
 
 	auto num_text_ctrl = [&](double *value, double min, double max, double step) -> wxSpinCtrlDouble * {
-		auto scd = new wxSpinCtrlDouble(this, -1, "", wxDefaultPosition,
+		auto scd = new wxSpinCtrlDouble(this, -1, wxEmptyString, wxDefaultPosition,
 			wxDefaultSize, wxSP_ARROW_KEYS, min, max, *value, step);
 		scd->SetValidator(DoubleSpinValidator(value));
 		scd->Bind(wxEVT_SPINCTRLDOUBLE, [=](wxSpinDoubleEvent &evt) {
@@ -168,11 +200,10 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 
 	// Prepare control values
 	wxString EncodingValue = std::to_wstring(style->encoding);
-	wxString alignValues[9] = { "7", "8", "9", "4", "5", "6", "1", "2", "3" };
+	wxString alignValues[9] = { wxS("7"), wxS("8"), wxS("9"), wxS("4"), wxS("5"), wxS("6"), wxS("1"), wxS("2"), wxS("3") };
 
 	// Encoding options
-	wxArrayString encodingStrings;
-	AssStyle::GetEncodings(encodingStrings);
+	wxArrayString encodingStrings = GetStyleEncodingStrings();
 
 	// Create sizers
 	wxSizer *NameSizer = new wxStaticBoxSizer(wxHORIZONTAL, this, _("Style Name"));
@@ -216,7 +247,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	auto ScaleY = num_text_ctrl(&work->scaley, 0.0, 10000.0, 1.0);
 	auto Angle = num_text_ctrl(&work->angle, -360.0, 360.0, 1.0);
 	auto Spacing = num_text_ctrl(&work->spacing, 0.0, 1000.0, 0.1);
-	Encoding = new wxComboBox(this, -1, "", wxDefaultPosition, wxDefaultSize, encodingStrings, wxCB_READONLY);
+	Encoding = new wxComboBox(this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, encodingStrings, wxCB_READONLY);
 
 	// Set control tooltips
 	StyleName->SetToolTip(_("Style name"));
@@ -335,8 +366,8 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 		wxSize(100, 60),
 		wxSUNKEN_BORDER,
 		OPT_GET("Colour/Style Editor/Background/Preview")->GetColor(),
-		c ? c->ass->GetTransientFonts() : std::shared_ptr<const TransientFontSet>(),
-		c ? c->GetNotificationSink() : std::shared_ptr<agi::NotificationSink>());
+		c ? c->GetCore().ass->GetTransientFonts() : std::shared_ptr<const TransientFontSet>(),
+		notification_sink);
 
 	SubsPreview->SetToolTip(_("Preview of current style"));
 	SubsPreview->SetStyle(*style);
@@ -419,12 +450,14 @@ void DialogStyleEditor::Apply(bool apply, bool close) {
 		std::replace(new_name.begin(), new_name.end(), ',', ';');
 
 		// Get list of existing styles
-		std::vector<std::string> styles = store ? store->GetNames() : c->ass->GetStyles();
+		std::vector<std::string> styles = store ? store->GetNames() : c->GetCore().ass->GetStyles();
 
 		// Check if style name is unique
-		AssStyle *existing = store ? store->GetStyle(new_name) : c->ass->GetStyle(new_name);
+		AssStyle *existing = store ? store->GetStyle(new_name) : c->GetCore().ass->GetStyle(new_name);
 		if (existing && existing != style) {
-			wxMessageBox(_("There is already a style with this name. Please choose another name."), _("Style name conflict"), wxOK | wxICON_ERROR | wxCENTER);
+			notification_sink->ShowError(
+				from_wx(_("Style name conflict")),
+				from_wx(_("There is already a style with this name. Please choose another name.")));
 			return;
 		}
 
@@ -435,14 +468,16 @@ void DialogStyleEditor::Apply(bool apply, bool close) {
 				StyleRenamer renamer(c, work->name, new_name);
 				if (renamer.NeedsReplace()) {
 					// See if user wants to update style name through script
-					int answer = wxMessageBox(
-						_("Do you want to change all instances of this style in the script to this new name?"),
-						_("Update script?"),
-						wxYES_NO | wxCANCEL);
+					auto answer = interaction_sink->Request({
+						from_wx(_("Update script?")),
+						from_wx(_("Do you want to change all instances of this style in the script to this new name?")),
+						agi::InteractionButtons::YesNoCancel,
+						agi::InteractionIcon::Question
+					});
 
-					if (answer == wxCANCEL) return;
+					if (answer == agi::InteractionResult::Cancel) return;
 
-					if (answer == wxYES) {
+					if (answer == agi::InteractionResult::Yes) {
 						did_rename = true;
 						renamer.Replace();
 					}
@@ -460,11 +495,11 @@ void DialogStyleEditor::Apply(bool apply, bool close) {
 			if (store)
 				store->push_back(std::unique_ptr<AssStyle>(style));
 			else
-				c->ass->Styles.push_back(*style);
+				c->GetCore().ass->Styles.push_back(*style);
 			is_new = false;
 		}
 		if (!store)
-			c->ass->Commit(_("style change"), AssFile::COMMIT_STYLES | (did_rename ? AssFile::COMMIT_DIAG_FULL : 0));
+			c->GetCore().ass->Commit(from_wx(_("style change")), AssFile::COMMIT_STYLES | (did_rename ? AssFile::COMMIT_DIAG_FULL : 0));
 
 		// Update preview
 		if (!close) SubsPreview->SetStyle(*style);

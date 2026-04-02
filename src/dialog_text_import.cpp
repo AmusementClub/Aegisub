@@ -47,7 +47,7 @@ bool ShowPlainTextImportDialog() {
 	wxDialog d(nullptr, -1, _("Text import options"));
 
 	auto make_text_ctrl = [&](std::string *var) {
-		return new wxTextCtrl(&d, -1, "", wxDefaultPosition, wxDefaultSize, 0, StringBinder(var));
+		return new wxTextCtrl(&d, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0, StringBinder(var));
 	};
 
 	auto fg = new wxFlexGridSizer(2, 5, 5);

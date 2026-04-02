@@ -39,35 +39,35 @@
 #include "options.h"
 
 #ifdef WITH_ALSA
-std::unique_ptr<AudioPlayer> CreateAlsaPlayer(agi::AudioProvider *providers, wxWindow *window);
+std::unique_ptr<AudioPlayer> CreateAlsaPlayer(agi::AudioProvider *providers, AudioPlayerHost const& host);
 #endif
 #ifdef WITH_DIRECTSOUND
-std::unique_ptr<AudioPlayer> CreateDirectSoundPlayer(agi::AudioProvider *providers, wxWindow *window);
-std::unique_ptr<AudioPlayer> CreateDirectSound2Player(agi::AudioProvider *providers, wxWindow *window);
+std::unique_ptr<AudioPlayer> CreateDirectSoundPlayer(agi::AudioProvider *providers, AudioPlayerHost const& host);
+std::unique_ptr<AudioPlayer> CreateDirectSound2Player(agi::AudioProvider *providers, AudioPlayerHost const& host);
 #endif
 #ifdef WITH_XAUDIO2
-std::unique_ptr<AudioPlayer> CreateXAudio2Player(agi::AudioProvider* providers, wxWindow* window);
+std::unique_ptr<AudioPlayer> CreateXAudio2Player(agi::AudioProvider* providers, AudioPlayerHost const& host);
 #endif
 #ifdef WITH_OPENAL
-std::unique_ptr<AudioPlayer> CreateOpenALPlayer(agi::AudioProvider *providers, wxWindow *window);
+std::unique_ptr<AudioPlayer> CreateOpenALPlayer(agi::AudioProvider *providers, AudioPlayerHost const& host);
 #endif
 #ifdef WITH_COREAUDIO
-std::unique_ptr<AudioPlayer> CreateCoreAudioPlayer(agi::AudioProvider *providers, wxWindow *window);
+std::unique_ptr<AudioPlayer> CreateCoreAudioPlayer(agi::AudioProvider *providers, AudioPlayerHost const& host);
 #endif
 #ifdef WITH_PORTAUDIO
-std::unique_ptr<AudioPlayer> CreatePortAudioPlayer(agi::AudioProvider *providers, wxWindow *window);
+std::unique_ptr<AudioPlayer> CreatePortAudioPlayer(agi::AudioProvider *providers, AudioPlayerHost const& host);
 #endif
 #ifdef WITH_LIBPULSE
-std::unique_ptr<AudioPlayer> CreatePulseAudioPlayer(agi::AudioProvider *providers, wxWindow *window);
+std::unique_ptr<AudioPlayer> CreatePulseAudioPlayer(agi::AudioProvider *providers, AudioPlayerHost const& host);
 #endif
 #ifdef WITH_OSS
-std::unique_ptr<AudioPlayer> CreateOSSPlayer(agi::AudioProvider *providers, wxWindow *window);
+std::unique_ptr<AudioPlayer> CreateOSSPlayer(agi::AudioProvider *providers, AudioPlayerHost const& host);
 #endif
 
 namespace {
 	struct factory {
 		const char *name;
-		std::unique_ptr<AudioPlayer> (*create)(agi::AudioProvider *, wxWindow *window);
+		std::unique_ptr<AudioPlayer> (*create)(agi::AudioProvider *, AudioPlayerHost const& host);
 		bool hidden;
 	};
 
@@ -104,7 +104,7 @@ std::vector<std::string> AudioPlayerFactory::GetClasses() {
 	return ::GetClasses(factories);
 }
 
-std::unique_ptr<AudioPlayer> AudioPlayerFactory::GetAudioPlayer(agi::AudioProvider *provider, wxWindow *window) {
+std::unique_ptr<AudioPlayer> AudioPlayerFactory::GetAudioPlayer(agi::AudioProvider *provider, AudioPlayerHost const& host) {
 	if (std::begin(factories) == std::end(factories))
 		throw AudioPlayerOpenError("No audio players are available.");
 
@@ -114,7 +114,7 @@ std::unique_ptr<AudioPlayer> AudioPlayerFactory::GetAudioPlayer(agi::AudioProvid
 	std::string error;
 	for (auto factory : sorted) {
 		try {
-			return factory->create(provider, window);
+			return factory->create(provider, host);
 		}
 		catch (AudioPlayerOpenError const& err) {
 			error += std::string(factory->name) + " factory: " + err.GetMessage() + "\n";

@@ -19,6 +19,7 @@
 #include <dispatch/dispatch.h>
 #include <condition_variable>
 #include <mutex>
+#include <thread>
 
 namespace {
 using namespace agi::dispatch;
@@ -89,6 +90,14 @@ struct GCDQueue final : OSXQueue {
 namespace agi { namespace dispatch {
 void Init(std::function<void (Thunk)> invoke_main) {
     ::invoke_main = std::move(invoke_main);
+}
+
+void Shutdown() {
+    ::invoke_main = [](Thunk thunk) {
+        if (thunk)
+            std::thread worker([thunk = std::move(thunk)]() mutable { thunk(); });
+            worker.join();
+    };
 }
 
 void Executor::Post(Thunk thunk) {

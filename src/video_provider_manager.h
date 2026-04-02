@@ -14,6 +14,8 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#include "provider_selection_diagnostics.h"
+
 #include <libaegisub/fs_fwd.h>
 
 #include <cstddef>
@@ -23,7 +25,10 @@
 #include <vector>
 
 class VideoProvider;
-namespace agi { class BackgroundRunner; }
+namespace agi {
+	class BackgroundRunner;
+	class SingleChoiceInteractionSink;
+}
 
 std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoProvider> parent);
 std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoProvider> parent, size_t max_cache_size_bytes);
@@ -31,5 +36,8 @@ std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoPro
 struct VideoProviderFactory {
 	static std::vector<std::string> GetClasses();
 	static std::vector<std::pair<std::string, std::string>> GetChoices();
-	static std::unique_ptr<VideoProvider> GetProvider(agi::fs::path const& video_file, std::string const& colormatrix, agi::BackgroundRunner *br);
+	static std::unique_ptr<VideoProvider> GetProvider(agi::fs::path const& video_file, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 };
+
+aegisub::provider_selection_diagnostics::SelectionReport GetLastVideoProviderSelectionReport();
+void ClearLastVideoProviderSelectionReport();

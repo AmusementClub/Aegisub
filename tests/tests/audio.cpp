@@ -16,6 +16,7 @@
 
 #include <main.h>
 
+#include "../../src/provider_selection_diagnostics.h"
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/make_unique.h>
@@ -88,6 +89,63 @@ struct TestAudioProvider : agi::AudioProvider {
 			*out++ = (Sample)(start + bias);
 	}
 };
+
+template<typename Sample=uint16_t>
+struct NamedTestAudioProvider : TestAudioProvider<Sample> {
+	using TestAudioProvider<Sample>::TestAudioProvider;
+
+	agi::AudioProviderMemoryStats GetMemoryStats() const override {
+		return this->BuildMemoryStats("TestSource");
+	}
+};
+
+TEST(provider_selection_diagnostics, reports_fallback_reason_from_preferred_attempt) {
+	aegisub::provider_selection_diagnostics::SelectionReport report;
+	report.preferred_provider = "Avisynth";
+	report.selected_provider = "FFmpegSource";
+	report.attempts = {
+		{"Avisynth", "error", "Avisynth error:\nmissing plugin"},
+		{"FFmpegSource", "opened", ""}
+	};
+
+	EXPECT_TRUE(aegisub::provider_selection_diagnostics::UsedFallback(report));
+	EXPECT_EQ("error: Avisynth error: missing plugin", aegisub::provider_selection_diagnostics::DescribeFallbackReason(report));
+	EXPECT_EQ(
+		"Avisynth:error (Avisynth error: missing plugin) | FFmpegSource:opened",
+		aegisub::provider_selection_diagnostics::FormatAttempts(report));
+}
+
+TEST(provider_selection_diagnostics, does_not_report_fallback_when_preferred_opens) {
+	aegisub::provider_selection_diagnostics::SelectionReport report;
+	report.preferred_provider = "FFmpegSource";
+	report.selected_provider = "FFmpegSource";
+	report.attempts = {
+		{"FFmpegSource", "opened", ""}
+	};
+
+	EXPECT_FALSE(aegisub::provider_selection_diagnostics::UsedFallback(report));
+	EXPECT_TRUE(aegisub::provider_selection_diagnostics::DescribeFallbackReason(report).empty());
+	EXPECT_EQ("FFmpegSource:opened", aegisub::provider_selection_diagnostics::FormatAttempts(report));
+}
+
+TEST(provider_selection_diagnostics, canonicalizes_common_aliases) {
+	EXPECT_EQ("FFmpegSource", aegisub::provider_selection_diagnostics::CanonicalizeProviderName("ffms2"));
+	EXPECT_EQ("FFmpegSource", aegisub::provider_selection_diagnostics::CanonicalizeProviderName("ffmpegsource"));
+	EXPECT_EQ("Avisynth", aegisub::provider_selection_diagnostics::CanonicalizeProviderName("avs"));
+	EXPECT_EQ("YUV4MPEG", aegisub::provider_selection_diagnostics::CanonicalizeProviderName("y4m"));
+}
+
+TEST(provider_selection_diagnostics, does_not_report_fallback_for_equivalent_aliases) {
+	aegisub::provider_selection_diagnostics::SelectionReport report;
+	report.preferred_provider = "ffms2";
+	report.selected_provider = "FFmpegSource";
+	report.attempts = {
+		{"FFmpegSource", "opened", ""}
+	};
+
+	EXPECT_FALSE(aegisub::provider_selection_diagnostics::UsedFallback(report));
+	EXPECT_TRUE(aegisub::provider_selection_diagnostics::DescribeFallbackReason(report).empty());
+}
 
 struct BlockingSequenceAudioProvider : agi::AudioProvider {
 	mutable std::mutex mutex;
@@ -340,6 +398,13 @@ TEST(lagi_audio, ram_cache_reports_memory_stats) {
 	EXPECT_EQ(1, warm_stats.resident_pages);
 }
 
+TEST(lagi_audio, ram_cache_preserves_wrapped_provider_name) {
+	auto provider = agi::CreateRAMAudioProvider(agi::make_unique<NamedTestAudioProvider<>>());
+
+	auto const stats = provider->GetMemoryStats();
+	EXPECT_EQ("RAM Paged (TestSource)", stats.provider_name);
+}
+
 TEST(lagi_audio, hd_cache) {
 	auto provider = agi::CreateHDAudioProvider(agi::make_unique<TestAudioProvider<>>(), agi::Path().Decode("?temp"));
 	while (provider->GetDecodedSamples() != provider->GetNumSamples()) agi::util::sleep_for(0);
@@ -361,6 +426,13 @@ TEST(lagi_audio, hd_cache_reports_memory_stats) {
 	EXPECT_EQ(static_cast<size_t>(90) * 48000 * sizeof(uint16_t), stats.storage_bytes);
 	EXPECT_EQ(stats.storage_bytes, stats.logical_bytes);
 	EXPECT_EQ(stats.logical_bytes, stats.decoded_bytes);
+}
+
+TEST(lagi_audio, hd_cache_preserves_wrapped_provider_name) {
+	auto provider = agi::CreateHDAudioProvider(agi::make_unique<NamedTestAudioProvider<>>(), agi::Path().Decode("?temp"));
+
+	auto const stats = provider->GetMemoryStats();
+	EXPECT_EQ("HD (TestSource)", stats.provider_name);
 }
 
 TEST(lagi_audio, ram_cache_does_not_decode_until_requested) {

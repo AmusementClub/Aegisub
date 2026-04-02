@@ -40,6 +40,7 @@
 #include "compat.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
 #include "include/aegisub/menu.h"
 #include "options.h"
@@ -134,6 +135,7 @@ wxImage GetBgraFallbackImage(agi::Context *context, int frame_number, double fra
 	return GetImage(*frame);
 }
 
+
 VideoMemorySnapshot BuildVideoMemorySnapshot(agi::Context *context, VideoDisplay const* display) {
 	VideoMemorySnapshot snapshot;
 	if (!context || !context->project)
@@ -170,8 +172,8 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 	zoomBox->Bind(wxEVT_COMBOBOX, &VideoDisplay::SetZoomFromBox, this);
 	zoomBox->Bind(wxEVT_TEXT_ENTER, &VideoDisplay::SetZoomFromBoxText, this);
 
-	con->videoController->Bind(EVT_FRAME_READY, &VideoDisplay::UploadFrameData, this);
 	connections = agi::signal::make_vector({
+		con->videoController->AddFrameReadyListener(&VideoDisplay::UploadFrameData, this),
 		con->project->AddVideoProviderListener(&VideoDisplay::OnVideoProviderChanged, this),
 		con->videoController->AddARChangeListener(&VideoDisplay::UpdateSize, this),
 	});
@@ -191,7 +193,7 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 
 	SetCursor(wxNullCursor);
 
-	c->videoDisplay = this;
+	c->GetUI().videoDisplay = this;
 
 	con->videoController->JumpToFrame(con->videoController->GetFrameN());
 
@@ -200,7 +202,6 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 
 VideoDisplay::~VideoDisplay () {
 	Unload();
-	con->videoController->Unbind(EVT_FRAME_READY, &VideoDisplay::UploadFrameData, this);
 }
 
 double VideoDisplay::GetVideoScaleFactor() const {
@@ -274,8 +275,8 @@ void VideoDisplay::OnVideoProviderChanged(AsyncVideoProvider *provider) {
 	UpdateSize();
 }
 
-void VideoDisplay::UploadFrameData(FrameReadyEvent &evt) {
-	pending_packet = std::move(evt.packet);
+void VideoDisplay::UploadFrameData(VideoRenderPacket const& packet, double) {
+	pending_packet = packet;
 	has_pending_packet = true;
 
 	// Instead of calling Render(), we force a render here to minimize delay
@@ -569,6 +570,9 @@ void VideoDisplay::DoRender() try {
 			has_displayed_packet = true;
 			pending_packet = { };
 			has_pending_packet = false;
+			FramePresented(displayed_packet.frame_number);
+			auto ui = con->GetUI();
+			ui.videoFramePresented(displayed_packet.frame_number);
 			if (perf_trace::ShouldSampleVideoMemory(first_presented_frame)) {
 				auto snapshot = BuildVideoMemorySnapshot(con, this);
 				perf_trace::ObserveVideoMemorySnapshot("frame_presented", snapshot, first_presented_frame);
@@ -577,18 +581,18 @@ void VideoDisplay::DoRender() try {
 	}
 	catch (const VideoOutInitException& err) {
 		wxLogError(
-			"Failed to initialize video display. Closing other running "
-			"programs and updating your video card drivers may fix this.\n"
-			"Error message reported: %s",
-			err.GetMessage());
+			wxS("Failed to initialize video display. Closing other running "
+			    "programs and updating your video card drivers may fix this.\n"
+			    "Error message reported: %s"),
+			to_wx(err.GetMessage()));
 		con->project->CloseVideo();
 		return;
 	}
 	catch (const VideoOutRenderException& err) {
 		wxLogError(
-			"Could not upload video frame to graphics card.\n"
-			"Error message reported: %s",
-			err.GetMessage());
+			wxS("Could not upload video frame to graphics card.\n"
+			    "Error message reported: %s"),
+			to_wx(err.GetMessage()));
 		return;
 	}
 
@@ -630,9 +634,9 @@ void VideoDisplay::DoRender() try {
 }
 catch (const agi::Exception &err) {
 	wxLogError(
-		"An error occurred trying to render the video frame on the screen.\n"
-		"Error message reported: %s",
-		err.GetMessage());
+		wxS("An error occurred trying to render the video frame on the screen.\n"
+		    "Error message reported: %s"),
+		to_wx(err.GetMessage()));
 	con->project->CloseVideo();
 }
 
@@ -763,7 +767,8 @@ void VideoDisplay::OnMouseEvent(wxMouseEvent& event) {
 	if (event.ButtonDown())
 		SetFocus();
 
-	last_mouse_pos = mouse_pos = event.GetPosition();
+	wxPoint pt = event.GetPosition();
+	last_mouse_pos = mouse_pos = Vector2D(pt.x, pt.y);
 
 	if (tool)
 		tool->OnMouseEvent(event);
@@ -819,7 +824,7 @@ void VideoDisplay::SetZoomFromBox(wxCommandEvent &) {
 
 void VideoDisplay::SetZoomFromBoxText(wxCommandEvent &) {
 	wxString strValue = zoomBox->GetValue();
-	if (strValue.EndsWith("%"))
+	if (strValue.EndsWith(wxS("%")))
 		strValue.RemoveLast();
 
 	double value;

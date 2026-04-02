@@ -46,6 +46,7 @@ class wxTextCtrl;
 class wxThreadEvent;
 class wxWindow;
 namespace agi { struct Context; struct Color; }
+namespace agi { class InteractionSink; class NotificationSink; }
 template<typename T> class ValueEvent;
 
 class DialogStyleEditor final : public wxDialog {
@@ -68,6 +69,8 @@ class DialogStyleEditor final : public wxDialog {
 
 	/// The style storage style is in, if applicable
 	AssStyleStorage *store;
+	std::shared_ptr<agi::NotificationSink> notification_sink;
+	std::shared_ptr<agi::InteractionSink> interaction_sink;
 
 	wxTextCtrl *StyleName;
 	wxComboBox *FontName;

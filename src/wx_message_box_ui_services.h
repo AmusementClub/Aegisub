@@ -9,6 +9,10 @@
 
 namespace agi {
 
+// This header is the explicit wx adapter surface for message-box-backed
+// notification and interaction services. Replace it when the GUI shell
+// stops using wx message boxes.
+
 inline int ToWxMessageBoxFlags(InteractionButtons buttons, InteractionIcon icon) {
 	int flags = 0;
 	switch (buttons) {

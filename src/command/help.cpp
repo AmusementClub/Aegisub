@@ -33,6 +33,7 @@
 
 #include "../help_button.h"
 #include "../include/aegisub/context.h"
+#include "../include/aegisub/context_ui.h"
 #include "../libresrc/libresrc.h"
 
 #include <libaegisub/make_unique.h>
@@ -54,10 +55,10 @@ struct help_bugs final : public Command {
 				for (char *foo = (char*)nullptr;;) *foo++ = 42;
 			} else {
 				c->ShowInfo("Now crashing with an unhandled exception...");
-				throw c->parent;
+				throw c->GetUI().parent;
 			}
 		}
-		wxLaunchDefaultBrowser("https://github.com/Aegisub/Aegisub/issues", wxBROWSER_NEW_WINDOW);
+		wxLaunchDefaultBrowser(wxS("https://github.com/Aegisub/Aegisub/issues"), wxBROWSER_NEW_WINDOW);
 	}
 };
 
@@ -81,7 +82,7 @@ struct help_irc final : public Command {
 	STR_HELP("Visit Aegisub's official IRC channel")
 
 	void operator()(agi::Context *) override {
-		wxLaunchDefaultBrowser("irc://irc.rizon.net/aegisub", wxBROWSER_NEW_WINDOW);
+		wxLaunchDefaultBrowser(wxS("irc://irc.rizon.net/aegisub"), wxBROWSER_NEW_WINDOW);
 	}
 };
 
@@ -105,7 +106,7 @@ struct help_website final : public Command {
 	STR_HELP("Visit Aegisub's official website")
 
 	void operator()(agi::Context *) override {
-		wxLaunchDefaultBrowser("http://www.aegisub.org/", wxBROWSER_NEW_WINDOW);
+		wxLaunchDefaultBrowser(wxS("http://www.aegisub.org/"), wxBROWSER_NEW_WINDOW);
 	}
 };
 }

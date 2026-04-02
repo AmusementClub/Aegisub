@@ -42,9 +42,12 @@ class VideoBox final : public wxPanel {
 	agi::Context *context;     ///< Project context
 	wxTextCtrl *VideoPosition; ///< Current frame/time
 	wxTextCtrl *VideoSubsPos;  ///< Time relative to the active subtitle line
+	int current_frame = -1;
 
 	/// Update VideoPosition and VideoSubsPos
 	void UpdateTimeBoxes();
+	void OnCurrentFrameChanged(int frame_number);
+	void OnVideoProviderChanged();
 
 public:
 	VideoBox(wxWindow *parent, bool isDetached, agi::Context *context);

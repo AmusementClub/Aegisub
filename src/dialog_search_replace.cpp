@@ -23,6 +23,7 @@
 
 #include "compat.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "search_replace_engine.h"
 #include "utils.h"
@@ -36,14 +37,13 @@
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
 #include <wx/radiobox.h>
-#include <wx/msgdlg.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 #include <wx/valgen.h>
 
 DialogSearchReplace::DialogSearchReplace(agi::Context* c, bool replace)
-: wxDialog(c->parent, -1, replace ? _("Replace") : _("Find"))
+: wxDialog(c->GetUI().parent, -1, replace ? _("Replace") : _("Find"))
 , c(c)
 , settings(agi::make_unique<SearchReplaceSettings>())
 , has_replace(replace)
@@ -62,13 +62,13 @@ DialogSearchReplace::DialogSearchReplace(agi::Context* c, bool replace)
 	settings->exact_match = false;
 
 	auto find_sizer = new wxFlexGridSizer(2, 2, 5, 15);
-	find_edit = new wxComboBox(this, -1, "", wxDefaultPosition, wxSize(300, -1), recent_find, wxCB_DROPDOWN | wxTE_PROCESS_ENTER, StringBinder(&settings->find));
+	find_edit = new wxComboBox(this, -1, wxEmptyString, wxDefaultPosition, wxSize(300, -1), recent_find, wxCB_DROPDOWN | wxTE_PROCESS_ENTER, StringBinder(&settings->find));
 	find_edit->SetMaxLength(0);
 	find_sizer->Add(new wxStaticText(this, -1, _("Find what:")), wxSizerFlags().Center().Left());
 	find_sizer->Add(find_edit);
 
 	if (has_replace) {
-		replace_edit = new wxComboBox(this, -1, "", wxDefaultPosition, wxSize(300, -1), lagi_MRU_wxAS("Replace"), wxCB_DROPDOWN | wxTE_PROCESS_ENTER, StringBinder(&settings->replace_with));
+		replace_edit = new wxComboBox(this, -1, wxEmptyString, wxDefaultPosition, wxSize(300, -1), lagi_MRU_wxAS("Replace"), wxCB_DROPDOWN | wxTE_PROCESS_ENTER, StringBinder(&settings->replace_with));
 		replace_edit->SetMaxLength(0);
 		find_sizer->Add(new wxStaticText(this, -1, _("Replace with:")), wxSizerFlags().Center().Left());
 		find_sizer->Add(replace_edit);
@@ -137,12 +137,13 @@ void DialogSearchReplace::FindReplace(bool (SearchReplaceEngine::*func)()) {
 	if (settings->find.empty())
 		return;
 
-	c->search->Configure(*settings);
+	auto core = c->GetCore();
+	core.search->Configure(*settings);
 	try {
-		((*c->search).*func)();
+		((*core.search).*func)();
 	}
 	catch (std::exception const& e) {
-		wxMessageBox(to_wx(e.what()), "Error", wxOK | wxICON_ERROR | wxCENTER, this);
+		c->ShowError(e.what());
 		return;
 	}
 

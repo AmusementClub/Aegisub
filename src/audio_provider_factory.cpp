@@ -21,7 +21,6 @@
 #include "options.h"
 #include "ui_services.h"
 #include "utils.h"
-#include "wx_ui_services.h"
 #ifdef WITH_FFMS2
 #include "ffmpegsource_common.h"
 #endif
@@ -35,21 +34,35 @@
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
 
-#include <wx/msgdlg.h>
-
 using namespace agi;
 
 std::unique_ptr<AudioProvider> CreateAvisynthAudioProvider(fs::path const& filename, BackgroundRunner *);
-std::unique_ptr<AudioProvider> CreateFFmpegSourceAudioProvider(fs::path const& filename, BackgroundRunner *);
+std::unique_ptr<AudioProvider> CreateFFmpegSourceAudioProvider(fs::path const& filename, BackgroundRunner *, std::shared_ptr<SingleChoiceInteractionSink> choice_sink);
 
 namespace {
+thread_local aegisub::provider_selection_diagnostics::SelectionReport last_audio_provider_selection_report;
+
 struct factory {
 	const char *name;
-	std::unique_ptr<AudioProvider> (*create)(fs::path const&, BackgroundRunner *);
+	std::unique_ptr<AudioProvider> (*create)(fs::path const&, BackgroundRunner *, std::shared_ptr<SingleChoiceInteractionSink>);
 	bool (*is_available)();
 	std::string (*availability_error)();
 	bool hidden;
 };
+
+std::unique_ptr<AudioProvider> CreateDummyAudioProviderWithChoice(fs::path const& filename, BackgroundRunner *br, std::shared_ptr<SingleChoiceInteractionSink>) {
+	return CreateDummyAudioProvider(filename, br);
+}
+
+std::unique_ptr<AudioProvider> CreatePCMAudioProviderWithChoice(fs::path const& filename, BackgroundRunner *br, std::shared_ptr<SingleChoiceInteractionSink>) {
+	return CreatePCMAudioProvider(filename, br);
+}
+
+#ifdef WITH_AVISYNTH
+std::unique_ptr<AudioProvider> CreateAvisynthAudioProviderWithChoice(fs::path const& filename, BackgroundRunner *br, std::shared_ptr<SingleChoiceInteractionSink>) {
+	return CreateAvisynthAudioProvider(filename, br);
+}
+#endif
 
 #ifdef WITH_FFMS2
 bool IsFFmpegSourceAvailable() {
@@ -81,15 +94,22 @@ std::string GetDisplayName(factory const& provider) {
 }
 
 const factory providers[] = {
-	{"Dummy", CreateDummyAudioProvider, nullptr, nullptr, true},
-	{"PCM", CreatePCMAudioProvider, nullptr, nullptr, true},
+	{"Dummy", CreateDummyAudioProviderWithChoice, nullptr, nullptr, true},
+	{"PCM", CreatePCMAudioProviderWithChoice, nullptr, nullptr, true},
 #ifdef WITH_FFMS2
 	{"FFmpegSource", CreateFFmpegSourceAudioProvider, IsFFmpegSourceAvailable, GetFFmpegSourceAvailabilityError, false},
 #endif
 #ifdef WITH_AVISYNTH
-	{"Avisynth", CreateAvisynthAudioProvider, IsAvisynthAvailable, GetAvisynthAvailabilityError, false},
+	{"Avisynth", CreateAvisynthAudioProviderWithChoice, IsAvisynthAvailable, GetAvisynthAvailabilityError, false},
 #endif
 };
+
+void RecordAttempt(aegisub::provider_selection_diagnostics::SelectionReport& report,
+                   char const* provider_name,
+                   char const* outcome,
+                   std::string detail = {}) {
+	report.attempts.push_back({provider_name ? provider_name : "", outcome ? outcome : "", std::move(detail)});
+}
 }
 
 std::vector<std::string> GetAudioProviderNames() {
@@ -108,9 +128,13 @@ std::vector<std::pair<std::string, std::string>> GetAudioProviderChoices() {
 std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
                                                      Path const& path_helper,
                                                      BackgroundRunner *br,
-                                                     NotificationSink *notification_sink) {
-	auto preferred = OPT_GET("Audio/Provider")->GetString();
+                                                     NotificationSink& notification_sink,
+                                                     std::shared_ptr<SingleChoiceInteractionSink> choice_sink) {
+	auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(OPT_GET("Audio/Provider")->GetString());
 	auto sorted = GetSorted(providers, preferred);
+	aegisub::provider_selection_diagnostics::SelectionReport diagnostics;
+	diagnostics.preferred_provider = preferred;
+	last_audio_provider_selection_report = diagnostics;
 
 	std::unique_ptr<AudioProvider> provider;
 	bool found_file = false;
@@ -127,12 +151,18 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 			LOG_D("audio_provider") << err;
 			msg_all.append(err);
 			msg_all.push_back('\n');
+			RecordAttempt(diagnostics, factory->name, "unavailable", factory->availability_error ? factory->availability_error() : "runtime library is unavailable.");
 			continue;
 		}
 
 		try {
-			provider = factory->create(filename, br);
-			if (!provider) continue;
+			provider = factory->create(filename, br, choice_sink);
+			if (!provider) {
+				RecordAttempt(diagnostics, factory->name, "returned_null", "provider factory returned null");
+				continue;
+			}
+			diagnostics.selected_provider = factory->name;
+			RecordAttempt(diagnostics, factory->name, "opened");
 			LOG_I("audio_provider") << "Using audio provider: " << factory->name;
 			break;
 		}
@@ -142,6 +172,7 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 			msg_all.append(": ");
 			msg_all.append(err.GetMessage());
 			msg_all.append(" not found.\n");
+			RecordAttempt(diagnostics, factory->name, "file_not_found", err.GetMessage());
 		}
 		catch (AudioDataNotFound const& err) {
 			LOG_D("audio_provider") << err.GetMessage();
@@ -150,6 +181,7 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 			msg_all.append(": ");
 			msg_all.append(err.GetMessage());
 			msg_all.push_back('\n');
+			RecordAttempt(diagnostics, factory->name, "no_audio", err.GetMessage());
 		}
 		catch (AudioProviderError const& err) {
 			LOG_D("audio_provider") << err.GetMessage();
@@ -162,8 +194,11 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 			thismsg.push_back('\n');
 			msg_all.append(thismsg);
 			msg_partial.append(thismsg);
+			RecordAttempt(diagnostics, factory->name, "error", err.GetMessage());
 		}
 	}
+
+	last_audio_provider_selection_report = diagnostics;
 
 	if (!provider) {
 		if (found_audio)
@@ -194,10 +229,7 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 				"- Turn off cache or switch to hard disk cache in Preferences -> Advanced -> Audio -> Cache -> Cache type\n"
 				"- Enable channel downmix in Preferences -> Advanced -> Audio"
 			));
-			if (notification_sink)
-				notification_sink->ShowError(from_wx(_("Out of Memory")), message);
-			else
-				agi::WxMessageBoxNotificationSink().ShowError(from_wx(_("Out of Memory")), message);
+			notification_sink.ShowError(from_wx(_("Out of Memory")), message);
 			cache = 2;
 		}
 		else
@@ -214,4 +246,12 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 	}
 
 	throw InternalError("Invalid audio caching method");
+}
+
+aegisub::provider_selection_diagnostics::SelectionReport GetLastAudioProviderSelectionReport() {
+	return last_audio_provider_selection_report;
+}
+
+void ClearLastAudioProviderSelectionReport() {
+	last_audio_provider_selection_report = {};
 }

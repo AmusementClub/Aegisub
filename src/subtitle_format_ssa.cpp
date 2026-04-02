@@ -40,7 +40,8 @@ std::string strip_newlines(std::string str) {
 }
 }
 
-void SsaSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const&, std::string const& encoding) const {
+void SsaSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const&, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
+	(void)choice_sink;
 	TextFileWriter file(filename, encoding);
 
 	file.WriteLineToFile("[Script Info]");

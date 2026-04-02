@@ -21,9 +21,11 @@
 #include "format.h"
 #include "help_button.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "ui_dispatch.h"
+#include "ui_services.h"
 #include "utils.h"
 #include "value_event.h"
 
@@ -58,6 +60,7 @@ enum class FcMode {
 };
 
 class DialogFontsCollector final : public wxDialog {
+	agi::Context *context;
 	AssFile *subs;
 	agi::Path &path;
 	FcMode mode = FcMode::CheckFontsOnly;
@@ -97,9 +100,9 @@ wxDEFINE_EVENT(EVT_COLLECTION_DONE, wxThreadEvent);
 
 void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMode oper, wxEvtHandler *collector, agi::ui::WeakLifetime lifetime) {
 	agi::dispatch::BackgroundExecutor().Post([=]{
-		auto AppendText = [&](wxString text, int colour) {
-			agi::ui::MainAsyncIfAlive(lifetime, [collector, colour, text = text.Clone()] {
-				collector->AddPendingEvent(ValueEvent<color_str_pair>(EVT_ADD_TEXT, -1, {colour, text.Clone()}));
+		auto AppendText = [&](std::string text, int colour) {
+			agi::ui::MainAsyncIfAlive(lifetime, [collector, colour, text = to_wx(text)] {
+				collector->AddPendingEvent(ValueEvent<color_str_pair>(EVT_ADD_TEXT, -1, {colour, text}));
 			});
 		};
 
@@ -119,14 +122,14 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 				});
 				return;
 			case FcMode::SymlinkToFolder:
-				AppendText(_("Symlinking fonts to folder...\n"), 0);
+				AppendText(from_wx(_("Symlinking fonts to folder...\n")), 0);
 				break;
 			case FcMode::CopyToScriptFolder:
 			case FcMode::CopyToFolder:
-				AppendText(_("Copying fonts to folder...\n"), 0);
+				AppendText(from_wx(_("Copying fonts to folder...\n")), 0);
 				break;
 			case FcMode::CopyToZip:
-				AppendText(_("Copying fonts to archive...\n"), 0);
+				AppendText(from_wx(_("Copying fonts to archive...\n")), 0);
 				break;
 		}
 
@@ -138,8 +141,8 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 				agi::fs::CreateDirectory(destination.parent_path());
 			}
 			catch (agi::fs::FileSystemError const& e) {
-				AppendText(fmt_tl("* Failed to create directory '%s': %s.\n",
-					destination.parent_path().wstring(), to_wx(e.GetMessage())), 2);
+				AppendText(from_wx(fmt_tl("* Failed to create directory '%s': %s.\n",
+					destination.parent_path().wstring(), to_wx(e.GetMessage()))), 2);
 				agi::ui::MainAsyncIfAlive(lifetime, [collector] {
 					collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
 				});
@@ -151,7 +154,7 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 				zip = agi::make_unique<wxZipOutputStream>(*out);
 
 			if (!out->IsOk() || !zip || !zip->IsOk()) {
-				AppendText(fmt_tl("* Failed to open %s.\n", destination), 2);
+				AppendText(from_wx(fmt_tl("* Failed to open %s.\n", destination)), 2);
 				agi::ui::MainAsyncIfAlive(lifetime, [collector] {
 					collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
 				});
@@ -208,26 +211,26 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 			}
 
 			if (ret == 1)
-				AppendText(fmt_tl("* Copied %s.\n", path), 1);
+				AppendText(from_wx(fmt_tl("* Copied %s.\n", path)), 1);
 			else if (ret == 2)
-				AppendText(fmt_tl("* %s already exists on destination.\n", path.filename()), 3);
+				AppendText(from_wx(fmt_tl("* %s already exists on destination.\n", path.filename())), 3);
 			else if (ret == 3)
-				AppendText(fmt_tl("* Symlinked %s.\n", path), 1);
+				AppendText(from_wx(fmt_tl("* Symlinked %s.\n", path)), 1);
 			else {
-				AppendText(fmt_tl("* Failed to copy %s.\n", path), 2);
+				AppendText(from_wx(fmt_tl("* Failed to copy %s.\n", path)), 2);
 				allOk = false;
 			}
 		}
 
 		if (allOk)
-			AppendText(_("Done. All fonts copied."), 1);
+			AppendText(from_wx(_("Done. All fonts copied.")), 1);
 		else
-			AppendText(_("Done. Some fonts could not be copied."), 2);
+			AppendText(from_wx(_("Done. Some fonts could not be copied.")), 2);
 
 		if (total_size > 32 * 1024 * 1024)
-			AppendText(_("\nOver 32 MB of fonts were copied. Some of the fonts may not be loaded by the player if they are all attached to a Matroska file."), 2);
+			AppendText(from_wx(_("\nOver 32 MB of fonts were copied. Some of the fonts may not be loaded by the player if they are all attached to a Matroska file.")), 2);
 
-		AppendText("\n", 0);
+		AppendText(std::string("\n"), 0);
 
 		agi::ui::MainAsyncIfAlive(lifetime, [collector] {
 			collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
@@ -236,10 +239,12 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMod
 }
 
 DialogFontsCollector::DialogFontsCollector(agi::Context *c)
-: wxDialog(c->parent, -1, _("Fonts Collector"))
-, subs(c->ass.get())
-, path(*c->path)
+: wxDialog(c->GetUI().parent, -1, _("Fonts Collector"))
+, context(c)
+, subs(c->GetCore().ass.get())
+, path(*c->GetCore().path)
 {
+	auto core = c->GetCore();
 	SetIcon(GETICON(font_collector_button_16));
 
 	wxString modes[] = {
@@ -256,13 +261,13 @@ DialogFontsCollector::DialogFontsCollector(agi::Context *c)
 	collection_mode = new wxRadioBox(this, -1, _("Action"), wxDefaultPosition, wxDefaultSize, countof(modes), modes, 1);
 	collection_mode->SetSelection(static_cast<int>(mode));
 
-	if (c->path->Decode("?script") == "?script")
+	if (core.path->Decode("?script") == "?script")
 		collection_mode->Enable(2, false);
 
 	wxStaticBoxSizer *destination_box = new wxStaticBoxSizer(wxVERTICAL, this, _("Destination"));
 
-	dest_label = new wxStaticText(this, -1, " ");
-	dest_ctrl = new wxTextCtrl(this, -1, c->path->Decode(OPT_GET("Path/Fonts Collector Destination")->GetString()).wstring());
+	dest_label = new wxStaticText(this, -1, wxS(" "));
+	dest_ctrl = new wxTextCtrl(this, -1, core.path->Decode(OPT_GET("Path/Fonts Collector Destination")->GetString()).wstring());
 	dest_browse_button = new wxButton(this, -1, _("&Browse..."));
 
 	wxSizer *dest_browse_sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -351,20 +356,26 @@ void DialogFontsCollector::OnStart(wxCommandEvent &) {
 }
 
 void DialogFontsCollector::OnBrowse(wxCommandEvent &) {
-	wxString dest;
+	agi::fs::path dest;
 	if (mode == FcMode::CopyToZip) {
-		dest = wxFileSelector(
-			_("Select archive file name"),
-			dest_ctrl->GetValue(),
-			wxFileName(dest_ctrl->GetValue()).GetFullName(),
-			".zip", "Zip Archives (*.zip)|*.zip",
-			wxFD_SAVE|wxFD_OVERWRITE_PROMPT);
+		auto current_path = wxFileName(dest_ctrl->GetValue());
+		dest = context->RequestSaveFile({
+			from_wx(_("Select archive file name")),
+			"",
+			from_wx(current_path.GetFullName()),
+			".zip",
+			"Zip Archives (*.zip)|*.zip",
+			from_wx(current_path.GetPath())
+		});
 	}
 	else
-		dest = wxDirSelector(_("Select folder to save fonts on"), dest_ctrl->GetValue(), 0);
+		dest = context->RequestSelectDirectory({
+			from_wx(_("Select folder to save fonts on")),
+			from_wx(dest_ctrl->GetValue())
+		});
 
 	if (!dest.empty())
-		dest_ctrl->SetValue(dest);
+		dest_ctrl->SetValue(to_wx(agi::fs::PathToString(dest)));
 }
 
 void DialogFontsCollector::OnRadio(wxCommandEvent &evt) {
@@ -391,16 +402,16 @@ void DialogFontsCollector::UpdateControls() {
 			dest_label->SetLabel(_("Choose the folder where the fonts will be collected to. It will be created if it doesn't exist."));
 
 			// Remove filename from browse box
-			if (dst.Right(4) == ".zip")
+			if (dst.Right(4) == wxS(".zip"))
 				dest_ctrl->SetValue(wxFileName(dst).GetPath());
 		}
 		else {
 			dest_label->SetLabel(_("Enter the name of the destination zip file to collect the fonts to. If a folder is entered, a default name will be used."));
 
 			// Add filename to browse box
-			if (!dst.EndsWith(".zip")) {
-				wxFileName fn(dst + "//");
-				fn.SetFullName("fonts.zip");
+			if (!dst.EndsWith(wxS(".zip"))) {
+				wxFileName fn(dst + wxS("//"));
+				fn.SetFullName(wxS("fonts.zip"));
 				dest_ctrl->SetValue(fn.GetFullPath());
 			}
 		}
@@ -451,5 +462,5 @@ void DialogFontsCollector::OnIdle(wxIdleEvent&) {
 }
 
 void ShowFontsCollectorDialog(agi::Context *c) {
-	c->dialog->Show<DialogFontsCollector>(c);
+	c->GetUI().dialog->Show<DialogFontsCollector>(c);
 }

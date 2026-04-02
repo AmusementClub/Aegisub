@@ -50,8 +50,8 @@ std::vector<std::string> EncoreSubtitleFormat::GetWriteWildcards() const {
 	return {"encore.txt"};
 }
 
-void EncoreSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& video_fps, std::string const&) const {
-	agi::vfr::Framerate fps = AskForFPS(false, true, video_fps);
+void EncoreSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& video_fps, std::string const&, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
+	agi::vfr::Framerate fps = AskForFPS(false, true, video_fps, choice_sink);
 	if (!fps.IsLoaded()) return;
 
 	// Convert to encore

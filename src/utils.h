@@ -33,6 +33,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include <wx/bitmap.h>
 #include <wx/string.h>
@@ -77,7 +78,12 @@ double GetWindowScaleFactor(wxWindow *window);
 /// @param file_type Wildcard pattern for files to clean up
 /// @param max_size Maximum size of directory in MB
 /// @param max_files Maximum number of files
-void CleanCache(agi::fs::path const& directory, std::string const& file_type, uint64_t max_size, uint64_t max_files = -1);
+void CleanCache(
+	agi::fs::path const& directory,
+	std::string const& file_type,
+	uint64_t max_size,
+	uint64_t max_files = -1,
+	uint64_t preserve_recent_seconds = 0);
 
 /// @brief Templated abs() function
 template <typename T> T tabs(T x) { return x < 0 ? -x : x; }
@@ -99,7 +105,18 @@ void SetClipboard(wxBitmap const& new_value);
 wxString FontFace(std::string opt_prefix);
 
 agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent);
+std::vector<agi::fs::path> OpenFilesSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent);
 agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent);
+agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool must_exist);
+std::vector<agi::fs::path> OpenFilesSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool must_exist);
+agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool prompt_overwrite);
+agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent);
+std::vector<agi::fs::path> OpenFilesSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent);
+agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent);
+agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool must_exist);
+std::vector<agi::fs::path> OpenFilesSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool must_exist);
+agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool prompt_overwrite);
+agi::fs::path SelectDirectorySelector(wxString const& message, std::string const& default_path, wxWindow *parent);
 
 wxString LocalizedLanguageName(wxString const& lang);
 

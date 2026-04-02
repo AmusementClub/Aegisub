@@ -46,6 +46,7 @@
 #include <unicode/locid.h>
 #include <unicode/unistr.h>
 #include <wx/clipbrd.h>
+#include <wx/dirdlg.h>
 #include <wx/filedlg.h>
 #include <wx/stdpaths.h>
 #include <wx/window.h>
@@ -57,7 +58,10 @@
 
 /// @brief There shall be no kiB, MiB stuff here Pretty reading of size
 wxString PrettySize(int bytes) {
-	const char *suffix[] = { "", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB" };
+	const wxString suffix[] = {
+		wxEmptyString, wxS("kB"), wxS("MB"), wxS("GB"), wxS("TB"),
+		wxS("PB"), wxS("EB"), wxS("ZB"), wxS("YB")
+	};
 
 	// Set size
 	size_t i = 0;
@@ -68,12 +72,12 @@ wxString PrettySize(int bytes) {
 	}
 
 	// Set number of decimal places
-	const char *fmt = "%.0f";
+	wxString fmt = wxS("%.0f");
 	if (size < 10)
-		fmt = "%.2f";
+		fmt = wxS("%.2f");
 	else if (size < 100)
-		fmt = "%1.f";
-	return agi::wxformat(fmt, size) + " " + suffix[i];
+		fmt = wxS("%1.f");
+	return agi::wxformat(fmt, size) + wxS(" ") + suffix[i];
 }
 
 std::string float_to_string(double val) {
@@ -100,7 +104,7 @@ void RestartAegisub() {
 	config::opt->Flush();
 
 #if defined(__WXMSW__)
-	wxExecute("\"" + wxStandardPaths::Get().GetExecutablePath() + "\"");
+	wxExecute(wxS("\"") + wxStandardPaths::Get().GetExecutablePath() + wxS("\""));
 #else
 	wxExecute(wxStandardPaths::Get().GetExecutablePath());
 #endif
@@ -179,7 +183,12 @@ void SetClipboard(wxBitmap const& new_data) {
 	}
 }
 
-void CleanCache(agi::fs::path const& directory, std::string const& file_type, uint64_t max_size, uint64_t max_files) {
+void CleanCache(
+	agi::fs::path const& directory,
+	std::string const& file_type,
+	uint64_t max_size,
+	uint64_t max_files,
+	uint64_t preserve_recent_seconds) {
 	static std::unique_ptr<agi::dispatch::Queue> queue;
 	if (!queue)
 		queue = agi::dispatch::Create();
@@ -190,11 +199,23 @@ void CleanCache(agi::fs::path const& directory, std::string const& file_type, ui
 	queue->Async([=]{
 		LOG_D("utils/clean_cache") << "cleaning " << directory/file_type;
 		uint64_t total_size = 0;
-		using cache_item = std::pair<int64_t, agi::fs::path>;
+		time_t const preserve_recent_cutoff = preserve_recent_seconds == 0
+			? 0
+			: std::max<time_t>(0, std::time(nullptr) - static_cast<time_t>(preserve_recent_seconds));
+		struct cache_item {
+			int64_t modified_time = 0;
+			agi::fs::path path;
+			bool preserve_recent = false;
+		};
 		std::vector<cache_item> cachefiles;
 		for (auto const& file : agi::fs::DirectoryIterator(directory, file_type)) {
 			agi::fs::path path = directory/file;
-			cachefiles.push_back({agi::fs::ModifiedTime(path), path});
+			auto const modified_time = agi::fs::ModifiedTime(path);
+			cachefiles.push_back({
+				modified_time,
+				path,
+				preserve_recent_cutoff != 0 && modified_time >= preserve_recent_cutoff
+			});
 			total_size += agi::fs::Size(path);
 		}
 
@@ -205,7 +226,7 @@ void CleanCache(agi::fs::path const& directory, std::string const& file_type, ui
 		}
 
 		sort(begin(cachefiles), end(cachefiles), [](cache_item const& a, cache_item const& b) {
-			return a.first < b.first;
+			return a.modified_time < b.modified_time;
 		});
 
 		int deleted = 0;
@@ -213,14 +234,16 @@ void CleanCache(agi::fs::path const& directory, std::string const& file_type, ui
 			// stop cleaning?
 			if ((total_size <= max_size && cachefiles.size() - deleted <= max_files) || cachefiles.size() - deleted < 2)
 				break;
+			if (i.preserve_recent)
+				continue;
 
-			uint64_t size = agi::fs::Size(i.second);
+			uint64_t size = agi::fs::Size(i.path);
 			try {
-				agi::fs::Remove(i.second);
-				LOG_D("utils/clean_cache") << "deleted " << i.second;
+				agi::fs::Remove(i.path);
+				LOG_D("utils/clean_cache") << "deleted " << i.path;
 			}
 			catch  (agi::Exception const& e) {
-				LOG_D("utils/clean_cache") << "failed to delete file " << i.second << ": " << e.GetMessage();
+				LOG_D("utils/clean_cache") << "failed to delete file " << i.path << ": " << e.GetMessage();
 				continue;
 			}
 
@@ -274,26 +297,108 @@ wxString FontFace(std::string opt_prefix) {
 	return to_wx(value);
 }
 
-static agi::fs::path FileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, int flags, wxWindow *parent) {
+static wxString ResolveFileDialogPath(std::string const& option_name, std::string const& default_path) {
 	wxString path;
-	if (!option_name.empty())
+	if (!default_path.empty())
+		path = to_wx(default_path);
+	else if (!option_name.empty())
 		path = to_wx(OPT_GET(option_name)->GetString());
-	agi::fs::path filename = wxFileSelector(message, path, to_wx(default_filename), to_wx(default_extension), to_wx(wildcard), flags, parent).wx_str();
+	return path;
+}
+
+static void UpdateFileDialogOption(std::string const& option_name, agi::fs::path const& filename) {
 	if (!filename.empty() && !option_name.empty())
 		OPT_SET(option_name)->SetString(agi::fs::PathToString(filename.parent_path()));
+}
+
+static agi::fs::path FileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, int flags, wxWindow *parent) {
+	auto path = ResolveFileDialogPath(option_name, default_path);
+	agi::fs::path filename = wxFileSelector(message, path, to_wx(default_filename), to_wx(default_extension), to_wx(wildcard), flags, parent).wx_str();
+	UpdateFileDialogOption(option_name, filename);
 	return filename;
 }
 
+static std::vector<agi::fs::path> FilesSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, int flags, wxWindow *parent) {
+	wxFileDialog dialog(parent, message, ResolveFileDialogPath(option_name, default_path), to_wx(default_filename), to_wx(wildcard), flags);
+	if (dialog.ShowModal() == wxID_CANCEL)
+		return {};
+
+	wxArrayString selections;
+	dialog.GetPaths(selections);
+
+	std::vector<agi::fs::path> paths;
+	paths.reserve(selections.size());
+	for (auto const& selection : selections)
+		paths.emplace_back(selection.wx_str());
+
+	if (!paths.empty())
+		UpdateFileDialogOption(option_name, paths.front());
+	return paths;
+}
+
 agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
-	return FileSelector(message, option_name, default_filename, default_extension, wildcard, wxFD_OPEN | wxFD_FILE_MUST_EXIST, parent);
+	return OpenFileSelector(message, option_name, "", default_filename, default_extension, wildcard, parent, true);
+}
+
+std::vector<agi::fs::path> OpenFilesSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
+	return OpenFilesSelector(message, option_name, "", default_filename, default_extension, wildcard, parent, true);
 }
 
 agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
-	return FileSelector(message, option_name, default_filename, default_extension, wildcard, wxFD_SAVE | wxFD_OVERWRITE_PROMPT, parent);
+	return SaveFileSelector(message, option_name, "", default_filename, default_extension, wildcard, parent, true);
+}
+
+agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool must_exist) {
+	return OpenFileSelector(message, option_name, "", default_filename, default_extension, wildcard, parent, must_exist);
+}
+
+std::vector<agi::fs::path> OpenFilesSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool must_exist) {
+	return OpenFilesSelector(message, option_name, "", default_filename, default_extension, wildcard, parent, must_exist);
+}
+
+agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool prompt_overwrite) {
+	return SaveFileSelector(message, option_name, "", default_filename, default_extension, wildcard, parent, prompt_overwrite);
+}
+
+agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
+	return OpenFileSelector(message, option_name, default_path, default_filename, default_extension, wildcard, parent, true);
+}
+
+std::vector<agi::fs::path> OpenFilesSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
+	return OpenFilesSelector(message, option_name, default_path, default_filename, default_extension, wildcard, parent, true);
+}
+
+agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent) {
+	return SaveFileSelector(message, option_name, default_path, default_filename, default_extension, wildcard, parent, true);
+}
+
+agi::fs::path OpenFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool must_exist) {
+	int flags = wxFD_OPEN;
+	if (must_exist)
+		flags |= wxFD_FILE_MUST_EXIST;
+	return FileSelector(message, option_name, default_path, default_filename, default_extension, wildcard, flags, parent);
+}
+
+std::vector<agi::fs::path> OpenFilesSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool must_exist) {
+	int flags = wxFD_OPEN | wxFD_MULTIPLE;
+	if (must_exist)
+		flags |= wxFD_FILE_MUST_EXIST;
+	return FilesSelector(message, option_name, default_path, default_filename, default_extension, wildcard, flags, parent);
+}
+
+agi::fs::path SaveFileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, wxWindow *parent, bool prompt_overwrite) {
+	int flags = wxFD_SAVE;
+	if (prompt_overwrite)
+		flags |= wxFD_OVERWRITE_PROMPT;
+	return FileSelector(message, option_name, default_path, default_filename, default_extension, wildcard, flags, parent);
+}
+
+agi::fs::path SelectDirectorySelector(wxString const& message, std::string const& default_path, wxWindow *parent) {
+	return from_wx(wxDirSelector(message, to_wx(default_path), 0, wxDefaultPosition, parent));
 }
 
 wxString LocalizedLanguageName(wxString const& lang) {
-	icu::Locale iculoc(lang.c_str());
+	icu::Locale iculoc(lang.utf8_string().c_str());
 	if (!iculoc.isBogus()) {
 		icu::UnicodeString ustr;
 		iculoc.getDisplayName(iculoc, ustr);

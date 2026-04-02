@@ -35,6 +35,7 @@
 #include "format.h"
 #include "options.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/spellchecker.h"
 #include "selection_controller.h"
 #include "text_selection_controller.h"
@@ -271,7 +272,7 @@ void SubsStyledTextEditCtrl::SetStyles() {
 }
 
 void SubsStyledTextEditCtrl::UpdateStyle() {
-	AssDialogue *diag = context ? context->selectionController->GetActiveLine() : nullptr;
+	AssDialogue *diag = context ? context->GetCore().selectionController->GetActiveLine() : nullptr;
 	bool template_line = diag && diag->Comment && agi::util::strings::istarts_with(diag->Effect.get(), "template");
 
 	tokenized_line = agi::ass::TokenizeDialogueBody(line_text, template_line);
@@ -342,10 +343,10 @@ void SubsStyledTextEditCtrl::SetTextTo(std::string const& text) {
 	line_text.clear();
 
 	if (context) {
-		context->textSelectionController->SetSelection(0, 0);
+		context->GetCore().textSelectionController->SetSelection(0, 0);
 		SetTextRaw(text.c_str());
 		auto pos = agi::IndexOfCharacter(text, old_pos);
-		context->textSelectionController->SetSelection(pos, pos);
+		context->GetCore().textSelectionController->SetSelection(pos, pos);
 	}
 	else {
 		SetSelection(0, 0);

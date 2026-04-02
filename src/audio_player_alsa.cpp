@@ -37,7 +37,6 @@
 
 #include "audio_controller.h"
 #include "compat.h"
-#include "frame_main.h"
 #include "options.h"
 
 #include <libaegisub/audio/provider.h>
@@ -348,7 +347,7 @@ int64_t AlsaPlayer::GetCurrentPosition()
 }
 }
 
-std::unique_ptr<AudioPlayer> CreateAlsaPlayer(agi::AudioProvider *provider, wxWindow *)
+std::unique_ptr<AudioPlayer> CreateAlsaPlayer(agi::AudioProvider *provider, AudioPlayerHost const&)
 {
 	return agi::make_unique<AlsaPlayer>(provider);
 }

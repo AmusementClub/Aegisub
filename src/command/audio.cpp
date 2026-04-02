@@ -39,10 +39,12 @@
 #include "../audio_timing.h"
 #include "../compat.h"
 #include "../include/aegisub/context.h"
+#include "../include/aegisub/context_ui.h"
 #include "../libresrc/libresrc.h"
 #include "../options.h"
 #include "../project.h"
 #include "../selection_controller.h"
+#include "../ui_services.h"
 #include "../utils.h"
 #include "../video_controller.h"
 
@@ -53,10 +55,32 @@
 namespace {
 	using cmd::Command;
 
+agi::OpenFileDialogRequest make_open_audio_file_request() {
+	return {
+		from_wx(_("Open Audio File")),
+		"Path/Last/Audio",
+		"",
+		"",
+		from_wx(_("Audio Formats") + wxS(" (*.aac,*.ac3,*.ape,*.dts,*.eac3,*.flac,*.m4a,*.mka,*.mp3,*.mp4,*.ogg,*.opus,*.w64,*.wav,*.wma)|*.aac;*.ac3;*.ape;*.dts;*.eac3;*.flac;*.m4a;*.mka;*.mp3;*.mp4;*.ogg;*.opus;*.w64;*.wav;*.wma|")
+			+ _("Video Formats") + wxS(" (*.asf,*.avi,*.avs,*.d2v,*.m2ts,*.m4v,*.mkv,*.mov,*.mp4,*.mpeg,*.mpg,*.ogm,*.webm,*.wmv,*.ts)|*.asf;*.avi;*.avs;*.d2v;*.m2ts;*.m4v;*.mkv;*.mov;*.mp4;*.mpeg;*.mpg;*.ogm;*.webm;*.wmv;*.ts|")
+			+ _("All Files") + wxS(" (*.*)|*.*"))
+	};
+}
+
+agi::SaveFileDialogRequest make_save_audio_clip_request() {
+	return {
+		from_wx(_("Save audio clip")),
+		"",
+		"",
+		"wav",
+		""
+	};
+}
+
 	struct validate_audio_open : public Command {
 		CMD_TYPE(COMMAND_VALIDATE)
 		bool Validate(const agi::Context *c) override {
-			return !!c->project->AudioProvider();
+			return !!c->GetCore().project->AudioProvider();
 		}
 	};
 
@@ -68,7 +92,7 @@ struct audio_close final : public validate_audio_open {
 	STR_HELP("Close the currently open audio file")
 
 	void operator()(agi::Context *c) override {
-		c->project->CloseAudio();
+		c->GetCore().project->CloseAudio();
 	}
 };
 
@@ -80,12 +104,10 @@ struct audio_open final : public Command {
 	STR_HELP("Open an audio file")
 
 	void operator()(agi::Context *c) override {
-		auto str = from_wx(_("Audio Formats") + " (*.aac,*.ac3,*.ape,*.dts,*.eac3,*.flac,*.m4a,*.mka,*.mp3,*.mp4,*.ogg,*.opus,*.w64,*.wav,*.wma)|*.aac;*.ac3;*.ape;*.dts;*.eac3;*.flac;*.m4a;*.mka;*.mp3;*.mp4;*.ogg;*.opus;*.w64;*.wav;*.wma|"
-					+ _("Video Formats") + " (*.asf,*.avi,*.avs,*.d2v,*.m2ts,*.m4v,*.mkv,*.mov,*.mp4,*.mpeg,*.mpg,*.ogm,*.webm,*.wmv,*.ts)|*.asf;*.avi;*.avs;*.d2v;*.m2ts;*.m4v;*.mkv;*.mov;*.mp4;*.mpeg;*.mpg;*.ogm;*.webm;*.wmv;*.ts|"
-					+ _("All Files") + " (*.*)|*.*");
-		auto filename = OpenFileSelector(_("Open Audio File"), "Path/Last/Audio", "", "", str, c->parent);
+		auto core = c->GetCore();
+		auto filename = c->RequestOpenFile(make_open_audio_file_request());
 		if (!filename.empty())
-			c->project->LoadAudio(filename);
+			core.project->LoadAudio(filename);
 	}
 };
 
@@ -96,7 +118,7 @@ struct audio_open_blank final : public Command {
 	STR_HELP("Open a 150 minutes blank audio clip, for debugging")
 
 	void operator()(agi::Context *c) override {
-		c->project->LoadAudio("dummy-audio:silence?sr=44100&bd=16&ch=1&ln=396900000");
+		c->GetCore().project->LoadAudio("dummy-audio:silence?sr=44100&bd=16&ch=1&ln=396900000");
 	}
 };
 
@@ -107,7 +129,7 @@ struct audio_open_noise final : public Command {
 	STR_HELP("Open a 150 minutes noise-filled audio clip, for debugging")
 
 	void operator()(agi::Context *c) override {
-		c->project->LoadAudio("dummy-audio:noise?sr=44100&bd=16&ch=1&ln=396900000");
+		c->GetCore().project->LoadAudio("dummy-audio:noise?sr=44100&bd=16&ch=1&ln=396900000");
 	}
 };
 
@@ -120,11 +142,13 @@ struct audio_open_video final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	bool Validate(const agi::Context *c) override {
-		return c->project->VideoProvider() && c->project->VideoProvider()->HasAudio();
+		auto core = c->GetCore();
+		return core.project->VideoProvider() && core.project->VideoProvider()->HasAudio();
 	}
 
 	void operator()(agi::Context *c) override {
-		c->project->LoadAudio(c->project->VideoName());
+		auto core = c->GetCore();
+		core.project->LoadAudio(core.project->VideoName());
 	}
 };
 
@@ -168,14 +192,16 @@ struct audio_save_clip final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	bool Validate(const agi::Context *c) override {
-		return c->project->AudioProvider() && !c->selectionController->GetSelectedSet().empty();
+		auto core = c->GetCore();
+		return core.project->AudioProvider() && !core.selectionController->GetSelectedSet().empty();
 	}
 
 	void operator()(agi::Context *c) override {
-		auto const& sel = c->selectionController->GetSelectedSet();
+		auto core = c->GetCore();
+		auto const& sel = core.selectionController->GetSelectedSet();
 		if (sel.empty()) return;
 
-		auto filename = SaveFileSelector(_("Save audio clip"), "", "", "wav", "", c->parent);
+		auto filename = c->RequestSaveFile(make_save_audio_clip_request());
 		if (filename.empty()) return;
 
 		agi::Time start = INT_MAX, end = 0;
@@ -184,7 +210,7 @@ struct audio_save_clip final : public Command {
 			end = std::max(end, line->End);
 		}
 
-		agi::SaveAudioClip(*c->project->AudioProvider(), filename, start, end);
+		agi::SaveAudioClip(*core.project->AudioProvider(), filename, start, end);
 	}
 };
 
@@ -195,8 +221,9 @@ struct audio_play_current_selection final : public validate_audio_open {
 	STR_HELP("Play the current audio selection, ignoring changes made while playing")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		c->audioController->PlayRange(c->audioController->GetPrimaryPlaybackRange());
+		auto core = c->GetCore();
+		core.videoController->Stop();
+		core.audioController->PlayRange(core.audioController->GetPrimaryPlaybackRange());
 	}
 };
 
@@ -208,10 +235,11 @@ struct audio_play_current_line final : public validate_audio_open {
 	STR_HELP("Play the audio for the current line")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		AudioTimingController *tc = c->audioController->GetTimingController();
+		auto core = c->GetCore();
+		core.videoController->Stop();
+		AudioTimingController *tc = core.audioController->GetTimingController();
 		if (tc)
-			c->audioController->PlayRange(tc->GetActiveLineRange());
+			core.audioController->PlayRange(tc->GetActiveLineRange());
 	}
 };
 
@@ -223,8 +251,9 @@ struct audio_play_selection final : public validate_audio_open {
 	STR_HELP("Play audio until the end of the selection is reached")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		c->audioController->PlayPrimaryRange();
+		auto core = c->GetCore();
+		core.videoController->Stop();
+		core.audioController->PlayPrimaryRange();
 	}
 };
 
@@ -235,11 +264,12 @@ struct audio_play_toggle final : public validate_audio_open {
 	STR_HELP("Play selection, or stop playback if it's already playing")
 
 	void operator()(agi::Context *c) override {
-		if (c->audioController->IsPlaying())
-			c->audioController->Stop();
+		auto core = c->GetCore();
+		if (core.audioController->IsPlaying())
+			core.audioController->Stop();
 		else {
-			c->videoController->Stop();
-			c->audioController->PlayPrimaryRange();
+			core.videoController->Stop();
+			core.audioController->PlayPrimaryRange();
 		}
 	}
 };
@@ -253,12 +283,13 @@ struct audio_stop final : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 
 	bool Validate(const agi::Context *c) override {
-		return c->audioController->IsPlaying();
+		return c->GetCore().audioController->IsPlaying();
 	}
 
 	void operator()(agi::Context *c) override {
-		c->audioController->Stop();
-		c->videoController->Stop();
+		auto core = c->GetCore();
+		core.audioController->Stop();
+		core.videoController->Stop();
 	}
 };
 
@@ -270,9 +301,10 @@ struct audio_play_before final : public validate_audio_open {
 	STR_HELP("Play 500 ms before selection")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		int begin = c->audioController->GetPrimaryPlaybackRange().begin();
-		c->audioController->PlayRange(TimeRange(begin - 500, begin));
+		auto core = c->GetCore();
+		core.videoController->Stop();
+		int begin = core.audioController->GetPrimaryPlaybackRange().begin();
+		core.audioController->PlayRange(TimeRange(begin - 500, begin));
 	}
 };
 
@@ -284,9 +316,10 @@ struct audio_play_after final : public validate_audio_open {
 	STR_HELP("Play 500 ms after selection")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		int end = c->audioController->GetPrimaryPlaybackRange().end();
-		c->audioController->PlayRange(TimeRange(end, end + 500));
+		auto core = c->GetCore();
+		core.videoController->Stop();
+		int end = core.audioController->GetPrimaryPlaybackRange().end();
+		core.audioController->PlayRange(TimeRange(end, end + 500));
 	}
 };
 
@@ -298,9 +331,10 @@ struct audio_play_end final : public validate_audio_open {
 	STR_HELP("Play last 500 ms of selection")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		TimeRange times(c->audioController->GetPrimaryPlaybackRange());
-		c->audioController->PlayToEndOfPrimary(times.end() - std::min(500, times.length()));
+		auto core = c->GetCore();
+		core.videoController->Stop();
+		TimeRange times(core.audioController->GetPrimaryPlaybackRange());
+		core.audioController->PlayToEndOfPrimary(times.end() - std::min(500, times.length()));
 	}
 };
 
@@ -312,9 +346,10 @@ struct audio_play_begin final : public validate_audio_open {
 	STR_HELP("Play first 500 ms of selection")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		TimeRange times(c->audioController->GetPrimaryPlaybackRange());
-		c->audioController->PlayRange(TimeRange(
+		auto core = c->GetCore();
+		core.videoController->Stop();
+		TimeRange times(core.audioController->GetPrimaryPlaybackRange());
+		core.audioController->PlayRange(TimeRange(
 			times.begin(),
 			times.begin() + std::min(500, times.length())));
 	}
@@ -328,8 +363,9 @@ struct audio_play_to_end final : public validate_audio_open {
 	STR_HELP("Play from selection start to end of file")
 
 	void operator()(agi::Context *c) override {
-		c->videoController->Stop();
-		c->audioController->PlayToEnd(c->audioController->GetPrimaryPlaybackRange().begin());
+		auto core = c->GetCore();
+		core.videoController->Stop();
+		core.audioController->PlayToEnd(core.audioController->GetPrimaryPlaybackRange().begin());
 	}
 };
 
@@ -341,7 +377,7 @@ struct audio_commit final : public validate_audio_open {
 	STR_HELP("Commit any pending audio timing changes")
 
 	void operator()(agi::Context *c) override {
-		AudioTimingController *tc = c->audioController->GetTimingController();
+		AudioTimingController *tc = c->GetCore().audioController->GetTimingController();
 		if (tc) {
 			tc->Commit();
 			if(OPT_GET("Audio/Next Line on Commit")->GetBool())
@@ -357,7 +393,7 @@ struct audio_commit_default final : public validate_audio_open {
 	STR_HELP("Commit any pending audio timing changes and reset the next line's times to the default")
 
 	void operator()(agi::Context *c) override {
-		AudioTimingController *tc = c->audioController->GetTimingController();
+		AudioTimingController *tc = c->GetCore().audioController->GetTimingController();
 		if (tc) {
 			tc->Commit();
 			tc->Next(AudioTimingController::LINE_RESET_DEFAULT);
@@ -372,7 +408,7 @@ struct audio_commit_next final : public validate_audio_open {
 	STR_HELP("Commit any pending audio timing changes and move to the next line")
 
 	void operator()(agi::Context *c) override {
-		AudioTimingController *tc = c->audioController->GetTimingController();
+		AudioTimingController *tc = c->GetCore().audioController->GetTimingController();
 		if (tc) {
 			tc->Commit();
 			tc->Next(AudioTimingController::LINE);
@@ -387,7 +423,7 @@ struct audio_commit_stay final : public validate_audio_open {
 	STR_HELP("Commit any pending audio timing changes and stay on the current line")
 
 	void operator()(agi::Context *c) override {
-		AudioTimingController *tc = c->audioController->GetTimingController();
+		AudioTimingController *tc = c->GetCore().audioController->GetTimingController();
 		if (tc) tc->Commit();
 	}
 };
@@ -400,7 +436,7 @@ struct audio_go_to final : public validate_audio_open {
 	STR_HELP("Scroll the audio display to center on the current audio selection")
 
 	void operator()(agi::Context *c) override {
-		c->audioBox->ScrollToActiveLine();
+		c->GetUI().audioBox->ScrollToActiveLine();
 	}
 };
 
@@ -411,7 +447,7 @@ struct audio_scroll_left final : public validate_audio_open {
 		STR_HELP("Scroll the audio display left")
 
 		void operator()(agi::Context *c) override {
-			c->audioBox->ScrollAudioBy(-128);
+			c->GetUI().audioBox->ScrollAudioBy(-128);
 	}
 };
 
@@ -422,7 +458,7 @@ struct audio_scroll_right final : public validate_audio_open {
 		STR_HELP("Scroll the audio display right")
 
 		void operator()(agi::Context *c) override {
-			c->audioBox->ScrollAudioBy(128);
+			c->GetUI().audioBox->ScrollAudioBy(128);
 	}
 };
 
@@ -524,10 +560,11 @@ struct audio_karaoke final : public Command {
 	CMD_TYPE(COMMAND_TOGGLE)
 
 	bool IsActive(const agi::Context *c) override {
-		return c->karaoke->IsEnabled();
+		return c->GetUI().karaoke->IsEnabled();
 	}
 	void operator()(agi::Context *c) override {
-		c->karaoke->SetEnabled(!c->karaoke->IsEnabled());
+		auto karaoke = c->GetUI().karaoke;
+		karaoke->SetEnabled(!karaoke->IsEnabled());
 	}
 };
 

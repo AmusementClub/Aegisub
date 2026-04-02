@@ -34,6 +34,7 @@
 
 #include "audio_renderer_spectrum.h"
 
+#include "compat.h"
 #include "audio_display_analysis.h"
 #include "audio_spectrum_analysis_cache.h"
 #include "audio_spectrum_bitmap_tile_renderer.h"
@@ -512,7 +513,7 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 void AudioSpectrumRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style)
 {
 	// Get the colour of silence
-	wxColour col = colors[style].get(0.0f);
+	wxColour col = to_wx(colors[style].get(0.0f));
 	dc.SetBrush(wxBrush(col));
 	dc.SetPen(wxPen(col));
 	dc.DrawRectangle(rect);

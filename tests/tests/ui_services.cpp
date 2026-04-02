@@ -1,6 +1,7 @@
 #include <main.h>
 
 #include "../../src/ui_services.h"
+#include "../../src/include/aegisub/audio_player.h"
 
 TEST(ui_services, null_interaction_sink_uses_safe_defaults) {
 	agi::NullInteractionSink sink;
@@ -9,6 +10,53 @@ TEST(ui_services, null_interaction_sink_uses_safe_defaults) {
 	EXPECT_EQ(agi::InteractionResult::Cancel, sink.Request({"title", "message", agi::InteractionButtons::OkCancel}));
 	EXPECT_EQ(agi::InteractionResult::No, sink.Request({"title", "message", agi::InteractionButtons::YesNo}));
 	EXPECT_EQ(agi::InteractionResult::Cancel, sink.Request({"title", "message", agi::InteractionButtons::YesNoCancel}));
+}
+
+TEST(ui_services, null_single_choice_interaction_sink_cancels) {
+	agi::NullSingleChoiceInteractionSink sink;
+
+	EXPECT_EQ(std::nullopt, sink.RequestSingleChoice({
+		"title",
+		"message",
+		{"first", "second"},
+		0
+	}));
+}
+
+TEST(ui_services, null_file_dialog_service_cancels) {
+	agi::NullFileDialogService sink;
+
+	EXPECT_TRUE(sink.RequestOpenFile({
+		"Open video file",
+		"Path/Last/Video",
+		"",
+		"",
+		"Video Files|*.mkv"
+	}).empty());
+	EXPECT_TRUE(sink.RequestOpenFiles({
+		"Open video files",
+		"Path/Last/Video",
+		"",
+		"",
+		"Video Files|*.mkv"
+	}).empty());
+	EXPECT_TRUE(sink.RequestSaveFile({
+		"Save video file",
+		"Path/Last/Video",
+		"clip.mkv",
+		"mkv",
+		"Video Files|*.mkv"
+	}).empty());
+	EXPECT_TRUE(sink.RequestSelectDirectory({
+		"Select export directory",
+		"C:/temp"
+	}).empty());
+}
+
+TEST(ui_services, null_video_source_request_service_cancels) {
+	agi::NullVideoSourceRequestService sink;
+
+	EXPECT_TRUE(sink.RequestDummyVideoPath().empty());
 }
 
 TEST(ui_services, inline_background_runner_executes_task) {
@@ -35,4 +83,19 @@ TEST(ui_services, null_notification_sink_accepts_all_levels) {
 	sink.ShowInfo("title", "message");
 	sink.ShowWarning("title", "message");
 	sink.ShowError("title", "message");
+}
+
+TEST(ui_services, null_project_ui_state_sink_accepts_restores) {
+	agi::NullProjectUiStateSink sink;
+
+	sink.RestoreProjectUiState({
+		123,
+		1.5,
+	});
+}
+
+TEST(ui_services, null_audio_player_factory_service_returns_null_player) {
+	agi::NullAudioPlayerFactoryService sink;
+
+	EXPECT_FALSE(sink.CreateAudioPlayer(nullptr));
 }

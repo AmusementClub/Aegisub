@@ -24,6 +24,7 @@
 #include "ass_file.h"
 #include "compat.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "selection_controller.h"
 #include "utils.h"
@@ -43,8 +44,9 @@ static const DraggableFeatureType DRAG_END = DRAG_BIG_CIRCLE;
 VisualToolDrag::VisualToolDrag(VideoDisplay *parent, agi::Context *context)
 : VisualTool<VisualToolDragDraggableFeature>(parent, context)
 {
-	connections.push_back(c->selectionController->AddSelectionListener(&VisualToolDrag::OnSelectedSetChanged, this));
-	auto const& sel_set = c->selectionController->GetSelectedSet();
+	auto core = c->GetCore();
+	connections.push_back(core.selectionController->AddSelectionListener(&VisualToolDrag::OnSelectedSetChanged, this));
+	auto const& sel_set = core.selectionController->GetSelectedSet();
 	selection.insert(begin(selection), begin(sel_set), end(sel_set));
 }
 
@@ -85,7 +87,8 @@ void VisualToolDrag::UpdateToggleButtons() {
 
 void VisualToolDrag::OnSubTool(wxCommandEvent &) {
 	// Toggle \move <-> \pos
-	VideoController *vc = c->videoController.get();
+	auto core = c->GetCore();
+	VideoController *vc = core.videoController.get();
 	for (auto line : selection) {
 		Vector2D p1, p2;
 		int t1, t2;
@@ -119,7 +122,8 @@ void VisualToolDrag::OnFileChanged() {
 	primary = nullptr;
 	active_feature = nullptr;
 
-	for (auto& diag : c->ass->Events) {
+	auto core = c->GetCore();
+	for (auto& diag : core.ass->Events) {
 		if (IsDisplayed(&diag))
 			MakeFeatures(&diag);
 	}
@@ -134,7 +138,8 @@ void VisualToolDrag::OnFrameChanged() {
 	auto feat = features.begin();
 	auto end = features.end();
 
-	for (auto& diag : c->ass->Events) {
+	auto core = c->GetCore();
+	for (auto& diag : core.ass->Events) {
 		if (IsDisplayed(&diag)) {
 			// Features don't exist and should
 			if (feat == end || feat->line != &diag)
@@ -162,7 +167,8 @@ template<class C, class T> static bool line_not_present(C const& set, T const& i
 }
 
 void VisualToolDrag::OnSelectedSetChanged() {
-	auto const& new_sel_set = c->selectionController->GetSelectedSet();
+	auto core = c->GetCore();
+	auto const& new_sel_set = core.selectionController->GetSelectedSet();
 	std::vector<AssDialogue *> new_sel(begin(new_sel_set), end(new_sel_set));
 
 	bool any_changed = false;
@@ -287,7 +293,8 @@ bool VisualToolDrag::InitializeDrag(Feature *feature) {
 	// Set time of clicked feature to the current frame and shift all other
 	// selected features by the same amount
 	if (feature->type != DRAG_ORIGIN) {
-		int time = c->videoController->TimeAtFrame(frame_number) - feature->line->Start;
+		auto core = c->GetCore();
+		int time = core.videoController->TimeAtFrame(frame_number) - feature->line->Start;
 		int change = time - feature->time;
 
 		for (auto feat : sel_features)
@@ -318,7 +325,8 @@ void VisualToolDrag::UpdateDrag(Feature *feature) {
 void VisualToolDrag::OnDoubleClick() {
 	Vector2D d = ToScriptCoords(mouse_pos) - (primary ? ToScriptCoords(primary->pos) : GetLinePosition(active_line));
 
-	for (auto line : c->selectionController->GetSelectedSet()) {
+	auto core = c->GetCore();
+	for (auto line : core.selectionController->GetSelectedSet()) {
 		Vector2D p1, p2;
 		int t1, t2;
 		if (GetLineMove(line, p1, p2, t1, t2)) {

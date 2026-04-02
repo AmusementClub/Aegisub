@@ -23,24 +23,10 @@
 
 namespace headless_cli::detail {
 
-struct BatchCaseSpec {
-	agi::fs::path video_path;
-	std::optional<agi::fs::path> audio_path;
-};
-
-struct BatchCaseResult {
-	size_t index = 0;
-	BatchCaseSpec spec;
-	headless_playback_probe::PlaybackProbeResult probe_result;
-};
-
 std::string JsonEscape(std::string const& input);
-std::string CsvEscape(std::string const& input);
 std::string ToGenericString(agi::fs::path const& path);
 std::optional<std::string> RequireValue(std::vector<std::string> const& args, size_t& index, std::string const& flag, std::string& error);
 std::string BuildTraceInspectJson(aegisub::trace_inspect_service::TraceSessionSummary const& session);
-std::string CaseDirectoryName(size_t index);
-std::vector<BatchCaseSpec> ReadBatchCaseList(agi::fs::path const& list_file);
 std::string Trim(std::string value);
 std::vector<std::string> SplitWhitespace(std::string const& text);
 std::optional<int> ParseIntegerValue(std::string const& text);

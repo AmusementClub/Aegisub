@@ -112,21 +112,6 @@ std::string JsonEscape(std::string const& input) {
 	return escaped;
 }
 
-std::string CsvEscape(std::string const& input) {
-	if (input.find_first_of(",\"\r\n") == std::string::npos)
-		return input;
-
-	std::string escaped = "\"";
-	for (char c : input) {
-		if (c == '"')
-			escaped += "\"\"";
-		else
-			escaped += c;
-	}
-	escaped += "\"";
-	return escaped;
-}
-
 std::string ToGenericString(agi::fs::path const& path) {
 	return agi::fs::PathToGenericString(path);
 }
@@ -148,39 +133,6 @@ std::string BuildTraceInspectJson(aegisub::trace_inspect_service::TraceSessionSu
 	out << "  \"summary\": " << KeyValueMapToJson(session.summary, 2) << "\n";
 	out << "}\n";
 	return out.str();
-}
-
-std::string CaseDirectoryName(size_t index) {
-	std::ostringstream out;
-	out << "case-" << std::setfill('0') << std::setw(4) << (index + 1);
-	return out.str();
-}
-
-std::vector<BatchCaseSpec> ReadBatchCaseList(agi::fs::path const& list_file) {
-	std::ifstream in(list_file, std::ios::in);
-	std::vector<BatchCaseSpec> cases;
-	std::string line;
-	while (std::getline(in, line)) {
-		if (!line.empty() && line.back() == '\r')
-			line.pop_back();
-		if (line.empty() || line[0] == '#')
-			continue;
-
-		BatchCaseSpec spec;
-		auto split = line.find('\t');
-		if (split == std::string::npos) {
-			spec.video_path = agi::fs::path(line);
-		}
-		else {
-			spec.video_path = agi::fs::path(line.substr(0, split));
-			auto audio_text = line.substr(split + 1);
-			if (!audio_text.empty())
-				spec.audio_path = agi::fs::path(audio_text);
-		}
-		if (!spec.video_path.empty())
-			cases.emplace_back(std::move(spec));
-	}
-	return cases;
 }
 
 std::string Trim(std::string value) {

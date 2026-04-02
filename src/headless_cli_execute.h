@@ -29,8 +29,5 @@ std::string BuildMediaInspectJson(MediaInspectResult const& result);
 std::string BuildAssInfoJson(AssInfoInspectResult const& result);
 void RunSessionPlaybackAsync(PlaybackSessionRequest request, std::function<void(PlaybackSessionResult)> on_done);
 void RunSessionProjectAsync(ProjectSessionRequest request, std::function<void(ProjectSessionResult)> on_done);
-void RunBatchPlaybackProbeAsync(BatchPlaybackProbeRequest request, std::function<void(BatchPlaybackProbeResult)> on_done);
-BatchTraceSummarizeResult RunBatchTraceSummarize(BatchTraceSummarizeRequest const& request);
-BatchAssInfoResult RunBatchAssInfo(BatchAssInfoRequest const& request);
 
 }

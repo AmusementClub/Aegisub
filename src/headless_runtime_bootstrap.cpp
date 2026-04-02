@@ -250,29 +250,6 @@ int RunParsedHeadlessCli(HeadlessRuntimeEnvironment& runtime, headless_cli::Pars
 		return result.snapshot ? 0 : 2;
 	}
 
-	if (auto const* batch = std::get_if<headless_cli::BatchPlaybackProbeCommand>(&*parsed.command)) {
-		auto result = RunAsyncWithPump<headless_cli::BatchPlaybackProbeResult>(
-			runtime.MainThreadPump(),
-			[request = batch->request](auto&& on_done) mutable {
-				headless_cli::RunBatchPlaybackProbeAsync(std::move(request), std::forward<decltype(on_done)>(on_done));
-			});
-		return result.exit_code;
-	}
-
-	if (auto const* batch = std::get_if<headless_cli::BatchTraceSummarizeCommand>(&*parsed.command)) {
-		auto result = headless_cli::RunBatchTraceSummarize(batch->request);
-		if (!result.message.empty())
-			std::cout << result.message << std::endl;
-		return result.exit_code;
-	}
-
-	if (auto const* batch = std::get_if<headless_cli::BatchAssInfoCommand>(&*parsed.command)) {
-		auto result = headless_cli::RunBatchAssInfo(batch->request);
-		if (!result.message.empty())
-			std::cout << result.message << std::endl;
-		return result.exit_code;
-	}
-
 	std::cerr << "unhandled CLI command" << std::endl;
 	return 64;
 }

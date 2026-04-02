@@ -987,22 +987,21 @@ TEST(host_boundary_policy, shared_cli_inspect_service_sources_live_in_named_cmak
 	EXPECT_FALSE(expansion_hits.empty());
 }
 
-TEST(host_boundary_policy, shared_headless_cli_inspect_batch_sources_live_in_named_cmake_pack) {
+TEST(host_boundary_policy, shared_headless_cli_inspect_probe_sources_live_in_named_cmake_pack) {
 	auto const root = ProjectRoot();
 	auto const cmake_lists = root / "CMakeLists.txt";
 
 	std::set<std::string> const expected_entries = {
 		"${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}",
 		"src/headless_cli.cpp",
-		"src/headless_cli_batch.cpp",
 		"src/headless_cli_internal.cpp",
 		"src/headless_cli_execute.cpp",
 		"src/headless_playback_probe.cpp",
 	};
 
-	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES");
+	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES");
 	auto cli_inspect_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}");
-	auto expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES}");
+	auto expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES}");
 
 	EXPECT_EQ(expected_entries, sources);
 	EXPECT_FALSE(cli_inspect_expansion_hits.empty());

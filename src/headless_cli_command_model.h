@@ -20,7 +20,6 @@
 #include "media_inspect_service.h"
 #include "project_session_service.h"
 #include "playback_session_service.h"
-#include "trace_summary_service.h"
 #include "trace_inspect_service.h"
 
 #include <libaegisub/fs_fwd.h>
@@ -48,21 +47,6 @@ struct TraceInspectResult {
 	std::string error;
 };
 
-struct BatchPlaybackProbeRequest {
-	agi::fs::path list_file;
-	agi::fs::path output_dir;
-	headless_playback_probe::PlaybackProbeRequest probe_template;
-};
-
-struct BatchPlaybackProbeResult {
-	int exit_code = 0;
-	size_t total_cases = 0;
-	size_t passed_cases = 0;
-	size_t failed_cases = 0;
-	agi::fs::path output_dir;
-	std::string message;
-};
-
 struct ProbePlaybackCommand {
 	headless_playback_probe::PlaybackProbeRequest request;
 };
@@ -87,57 +71,13 @@ struct InspectTraceCommand {
 	TraceInspectRequest request;
 };
 
-struct BatchPlaybackProbeCommand {
-	BatchPlaybackProbeRequest request;
-};
-
-struct BatchTraceSummarizeRequest {
-	std::vector<agi::fs::path> inputs;
-	agi::fs::path output_dir;
-};
-
-struct BatchTraceSummarizeResult {
-	int exit_code = 0;
-	size_t total_sessions = 0;
-	size_t passed_sessions = 0;
-	size_t failed_sessions = 0;
-	agi::fs::path output_dir;
-	std::string message;
-};
-
-struct BatchTraceSummarizeCommand {
-	BatchTraceSummarizeRequest request;
-};
-
-struct BatchAssInfoRequest {
-	std::vector<agi::fs::path> inputs;
-	agi::fs::path output_dir;
-	std::string encoding;
-};
-
-struct BatchAssInfoResult {
-	int exit_code = 0;
-	size_t total_files = 0;
-	size_t passed_files = 0;
-	size_t failed_files = 0;
-	agi::fs::path output_dir;
-	std::string message;
-};
-
-struct BatchAssInfoCommand {
-	BatchAssInfoRequest request;
-};
-
 using Command = std::variant<
 	ProbePlaybackCommand,
 	SessionPlaybackCommand,
 	SessionProjectCommand,
 	InspectMediaCommand,
 	InspectAssInfoCommand,
-	InspectTraceCommand,
-	BatchPlaybackProbeCommand,
-	BatchTraceSummarizeCommand,
-	BatchAssInfoCommand>;
+	InspectTraceCommand>;
 
 struct ParseResult {
 	bool requested = false;

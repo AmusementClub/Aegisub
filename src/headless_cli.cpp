@@ -730,29 +730,6 @@ std::optional<ProjectSessionRequest> ParseSessionProjectRequest(std::vector<std:
 	return request;
 }
 
-std::vector<agi::fs::path> ReadPathListFile(agi::fs::path const& list_file) {
-	std::ifstream in(list_file, std::ios::in);
-	std::vector<agi::fs::path> paths;
-	std::string line;
-	while (std::getline(in, line)) {
-		if (!line.empty() && line.back() == '\r')
-			line.pop_back();
-		line = Trim(line);
-		if (line.empty() || line[0] == '#')
-			continue;
-		paths.emplace_back(line);
-	}
-	return paths;
-}
-
-std::vector<agi::fs::path> ResolveBatchInputs(std::vector<agi::fs::path> direct_inputs, agi::fs::path const& list_file) {
-	if (!list_file.empty()) {
-		auto listed = ReadPathListFile(list_file);
-		direct_inputs.insert(direct_inputs.end(), listed.begin(), listed.end());
-	}
-	return direct_inputs;
-}
-
 std::optional<MediaInspectRequest> ParseInspectMediaRequest(std::vector<std::string> const& args, std::string& error) {
 	MediaInspectRequest request;
 
@@ -916,105 +893,6 @@ std::optional<AssInfoInspectRequest> ParseInspectAssInfoRequest(std::vector<std:
 	return request;
 }
 
-std::optional<BatchTraceSummarizeRequest> ParseBatchTraceSummarizeRequest(std::vector<std::string> const& args, std::string& error) {
-	BatchTraceSummarizeRequest request;
-	agi::fs::path list_file;
-
-	for (size_t i = 4; i < args.size(); ++i) {
-		auto const& arg = args[i];
-		if (arg == "--output-dir") {
-			auto value = RequireValue(args, i, "--output-dir", error);
-			if (!value)
-				return std::nullopt;
-			request.output_dir = agi::fs::path(*value);
-			continue;
-		}
-		if (arg == "--list-file") {
-			auto value = RequireValue(args, i, "--list-file", error);
-			if (!value)
-				return std::nullopt;
-			list_file = agi::fs::path(*value);
-			continue;
-		}
-		if (arg == "--input") {
-			auto value = RequireValue(args, i, "--input", error);
-			if (!value)
-				return std::nullopt;
-			request.inputs.emplace_back(*value);
-			continue;
-		}
-		request.inputs.emplace_back(arg);
-	}
-
-	if (request.output_dir.empty()) {
-		error = "--cli batch trace-summarize requires --output-dir\n" + Usage();
-		return std::nullopt;
-	}
-	if (!list_file.empty() && !agi::fs::FileExists(list_file)) {
-		error = "trace-summarize list file does not exist: " + ToGenericString(list_file);
-		return std::nullopt;
-	}
-	request.inputs = ResolveBatchInputs(std::move(request.inputs), list_file);
-	if (request.inputs.empty()) {
-		error = "--cli batch trace-summarize requires at least one input path\n" + Usage();
-		return std::nullopt;
-	}
-	return request;
-}
-
-std::optional<BatchAssInfoRequest> ParseBatchAssInfoRequest(std::vector<std::string> const& args, std::string& error) {
-	BatchAssInfoRequest request;
-	agi::fs::path list_file;
-
-	for (size_t i = 4; i < args.size(); ++i) {
-		auto const& arg = args[i];
-		if (arg == "--output-dir") {
-			auto value = RequireValue(args, i, "--output-dir", error);
-			if (!value)
-				return std::nullopt;
-			request.output_dir = agi::fs::path(*value);
-			continue;
-		}
-		if (arg == "--list-file") {
-			auto value = RequireValue(args, i, "--list-file", error);
-			if (!value)
-				return std::nullopt;
-			list_file = agi::fs::path(*value);
-			continue;
-		}
-		if (arg == "--input") {
-			auto value = RequireValue(args, i, "--input", error);
-			if (!value)
-				return std::nullopt;
-			request.inputs.emplace_back(*value);
-			continue;
-		}
-		if (arg == "--encoding") {
-			auto value = RequireValue(args, i, "--encoding", error);
-			if (!value)
-				return std::nullopt;
-			request.encoding = *value;
-			continue;
-		}
-		request.inputs.emplace_back(arg);
-	}
-
-	if (request.output_dir.empty()) {
-		error = "--cli batch ass-info requires --output-dir\n" + Usage();
-		return std::nullopt;
-	}
-	if (!list_file.empty() && !agi::fs::FileExists(list_file)) {
-		error = "ass-info list file does not exist: " + ToGenericString(list_file);
-		return std::nullopt;
-	}
-	request.inputs = ResolveBatchInputs(std::move(request.inputs), list_file);
-	if (request.inputs.empty()) {
-		error = "--cli batch ass-info requires at least one input path\n" + Usage();
-		return std::nullopt;
-	}
-	return request;
-}
-
 }
 
 ParseResult ParseCommandLine(std::vector<std::string> const& args) {
@@ -1116,82 +994,6 @@ ParseResult ParseCommandLine(std::vector<std::string> const& args) {
 		return result;
 	}
 
-	if (command == "batch" && subcommand == "playback-probe") {
-		BatchPlaybackProbeRequest request;
-		std::vector<std::string> probe_args;
-		probe_args.emplace_back(args.front());
-
-		for (size_t i = 4; i < args.size(); ++i) {
-			if (args[i] == "--list-file") {
-				auto value = RequireValue(args, i, "--list-file", result.error);
-				if (!value)
-					return result;
-				request.list_file = agi::fs::path(*value);
-				continue;
-			}
-			if (args[i] == "--output-dir") {
-				auto value = RequireValue(args, i, "--output-dir", result.error);
-				if (!value)
-					return result;
-				request.output_dir = agi::fs::path(*value);
-				continue;
-			}
-			probe_args.emplace_back(args[i]);
-		}
-
-		if (request.list_file.empty()) {
-			result.error = "--cli batch playback-probe requires --list-file\n" + Usage();
-			return result;
-		}
-		if (request.output_dir.empty()) {
-			result.error = "--cli batch playback-probe requires --output-dir\n" + Usage();
-			return result;
-		}
-		if (!agi::fs::FileExists(request.list_file)) {
-			result.error = "batch playback probe list file does not exist: " + ToGenericString(request.list_file);
-			return result;
-		}
-
-		for (size_t i = 1; i < probe_args.size(); ++i) {
-			auto const& arg = probe_args[i];
-			if (arg == "--probe-video" || arg == "--probe-audio" || arg == "--probe-trace-dir" || arg == "--headless-playback-probe") {
-				result.error = "batch playback-probe does not accept per-item flag in common args: " + arg + "\n" + Usage();
-				return result;
-			}
-		}
-
-		auto parsed = headless_playback_probe::ParseRequestArguments(probe_args, false);
-		if (!parsed.request) {
-			result.error = parsed.error.empty() ? Usage() : parsed.error;
-			return result;
-		}
-		request.probe_template = std::move(*parsed.request);
-		result.command.emplace(BatchPlaybackProbeCommand{std::move(request)});
-		return result;
-	}
-
-	if (command == "batch" && subcommand == "trace-summarize") {
-		auto request = ParseBatchTraceSummarizeRequest(args, result.error);
-		if (!request) {
-			if (result.error.empty())
-				result.error = Usage();
-			return result;
-		}
-		result.command.emplace(BatchTraceSummarizeCommand{std::move(*request)});
-		return result;
-	}
-
-	if (command == "batch" && subcommand == "ass-info") {
-		auto request = ParseBatchAssInfoRequest(args, result.error);
-		if (!request) {
-			if (result.error.empty())
-				result.error = Usage();
-			return result;
-		}
-		result.command.emplace(BatchAssInfoCommand{std::move(*request)});
-		return result;
-	}
-
 	result.error = "unrecognized CLI command: " + command + " " + subcommand + "\n" + Usage();
 	return result;
 }
@@ -1205,9 +1007,6 @@ std::string Usage() {
 		"  Aegisub.exe --cli inspect media --video <path> [media flags...]\n"
 		"  Aegisub.exe --cli inspect ass-info <path> [--encoding <name>]\n"
 		"  Aegisub.exe --cli inspect trace <session-dir|manifest.txt|summary.txt|trace.ndjson>\n"
-		"  Aegisub.exe --cli batch playback-probe --list-file <path> --output-dir <dir> [probe flags...]\n"
-		"  Aegisub.exe --cli batch trace-summarize --output-dir <dir> [--list-file <path>|--input <path>...]\n"
-		"  Aegisub.exe --cli batch ass-info --output-dir <dir> [--list-file <path>|--input <path>...] [--encoding <name>]\n"
 		"\n"
 		"Session script steps:\n"
 		"  open | reopen | close | install-playline <start_ms> <duration_ms> | play | playline | stop\n"
@@ -1243,9 +1042,6 @@ std::string Usage() {
 		"  [--video-provider <name>] [--audio-provider <name>] [--trace-dir <path>]\n"
 		"  [--video-track-index <index>] [--audio-track-index <index>] [--subtitle-track-index <index>]\n"
 		"  [--audio-rate-scale <scale>] [--audio-quantum-ms <ms>]\n"
-		"\n"
-		"Batch list file syntax:\n"
-		"  one path per line, or for playback-probe one video<TAB>audio per line\n"
 		"\n"
 		"Playback probe flags:\n"
 		"  ") + headless_playback_probe::Usage();

@@ -424,10 +424,9 @@ set(AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES
     src/trace_summary_service.cpp
 )
 
-set(AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES
+set(AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES
     ${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}
     src/headless_cli.cpp
-    src/headless_cli_batch.cpp
     src/headless_cli_internal.cpp
     src/headless_cli_execute.cpp
     src/headless_playback_probe.cpp
@@ -616,7 +615,7 @@ add_executable(Aegisub WIN32
     src/gl_wrap.cpp
     ${AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES}
     src/grid_column.cpp
-    ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_BATCH_SOURCES}
+    ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES}
     ${AEGISUB_SHARED_SELECTION_REQUEST_SOURCES}
     ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES}
     ${AEGISUB_GUI_BOOTSTRAP_WX_HOST_SOURCES}

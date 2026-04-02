@@ -58,6 +58,30 @@ struct SyntheticInt16StereoProvider final : agi::AudioProvider {
 	}
 };
 
+struct SyntheticInt16InterleavedProvider final : agi::AudioProvider {
+	std::vector<int16_t> data;
+
+	SyntheticInt16InterleavedProvider(int64_t frames, int channel_count) {
+		channels = channel_count;
+		num_samples = frames;
+		decoded_samples = num_samples;
+		sample_rate = 48000;
+		bytes_per_sample = sizeof(int16_t);
+		float_samples = false;
+		data.resize(static_cast<size_t>(frames) * channels);
+		for (int64_t i = 0; i < frames; ++i) {
+			for (int ch = 0; ch < channels; ++ch) {
+				int value = static_cast<int>(((i * (17 + ch * 7)) + ch * 113) % 65536) - 32768;
+				data[static_cast<size_t>(i) * channels + ch] = static_cast<int16_t>(value);
+			}
+		}
+	}
+
+	void FillBuffer(void *buf, int64_t start, int64_t count) const override {
+		std::memcpy(buf, data.data() + start * channels, static_cast<size_t>(count) * channels * sizeof(int16_t));
+	}
+};
+
 BenchResult RunDisplaySourceBench() {
 	constexpr int64_t frames = 1 << 18;
 	constexpr int iterations = 50;
@@ -73,6 +97,50 @@ BenchResult RunDisplaySourceBench() {
 	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
 	double total_frames = static_cast<double>(frames) * iterations;
 	return { "display_source_s16_stereo", iterations, total_ms, total_ms / iterations, total_frames / (total_ms / 1000.0) / 1'000'000.0 };
+}
+
+BenchResult RunLegacySingleChannelDisplaySourceBench() {
+	constexpr int64_t frames = 1 << 18;
+	constexpr int channels = 8;
+	constexpr int channel = 5;
+	constexpr int iterations = 40;
+	SyntheticInt16InterleavedProvider provider(frames, channels);
+	auto source = CreateAudioDisplaySource(&provider);
+	std::vector<float> interleaved(static_cast<size_t>(frames) * channels);
+	std::vector<float> out(static_cast<size_t>(frames));
+
+	auto t0 = clock_type::now();
+	for (int i = 0; i < iterations; ++i) {
+		source->GetFloatAudio(interleaved.data(), 0, frames);
+		const float *src = interleaved.data() + channel;
+		for (int64_t frame = 0; frame < frames; ++frame, src += channels)
+			out[static_cast<size_t>(frame)] = *src;
+	}
+	auto t1 = clock_type::now();
+
+	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	double total_frames = static_cast<double>(frames) * iterations;
+	return { "legacy_single_channel_s16_8ch", iterations, total_ms, total_ms / iterations, total_frames / (total_ms / 1000.0) / 1'000'000.0 };
+}
+
+BenchResult RunDirectSingleChannelDisplaySourceBench() {
+	constexpr int64_t frames = 1 << 18;
+	constexpr int channels = 8;
+	constexpr int channel = 5;
+	constexpr int iterations = 40;
+	SyntheticInt16InterleavedProvider provider(frames, channels);
+	auto source = CreateAudioDisplaySource(&provider);
+	auto single = CreateSingleChannelAudioDisplaySource(source.get(), channel);
+	std::vector<float> out(static_cast<size_t>(frames));
+
+	auto t0 = clock_type::now();
+	for (int i = 0; i < iterations; ++i)
+		single->GetFloatAudio(out.data(), 0, frames);
+	auto t1 = clock_type::now();
+
+	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	double total_frames = static_cast<double>(frames) * iterations;
+	return { "direct_single_channel_s16_8ch", iterations, total_ms, total_ms / iterations, total_frames / (total_ms / 1000.0) / 1'000'000.0 };
 }
 
 BenchResult RunOldMonoFetchBench() {
@@ -816,6 +884,8 @@ int main(int argc, char **argv) {
 	std::vector<BenchResult> results;
 	results.push_back(RunOldMonoFetchBench());
 	results.push_back(RunDisplaySourceBench());
+	results.push_back(RunLegacySingleChannelDisplaySourceBench());
+	results.push_back(RunDirectSingleChannelDisplaySourceBench());
 	results.push_back(RunMixBench(AudioMixPolicy::MonoAverage, "mix_mono_average"));
 	results.push_back(RunMixBench(AudioMixPolicy::MonoMaxAbs, "mix_mono_maxabs"));
 	results.push_back(RunOldWaveformBench());

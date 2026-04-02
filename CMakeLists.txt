@@ -788,6 +788,7 @@ target_include_directories(Aegisub PRIVATE ${ass_INCLUDE_DIRS})
 target_link_libraries(Aegisub LINK_PRIVATE ${ass_LIBRARIES})
 
 find_package(Boost REQUIRED container locale regex spirit)
+find_package(hwy REQUIRED CONFIG)
 target_link_libraries(libaegisub PRIVATE "Boost::locale")
 target_link_libraries(libaegisub PUBLIC "Boost::headers" "Boost::container")
 target_link_libraries(Aegisub PRIVATE "Boost::headers" "Boost::container" "Boost::locale")
@@ -802,6 +803,13 @@ else()
     target_link_libraries(libaegisub PRIVATE "ICU::uc" "ICU::dt" "ICU::in")
     target_link_libraries(Aegisub PRIVATE "ICU::uc" "ICU::dt" "ICU::in")
 endif()
+
+function(aegisub_enable_highway target_name)
+    target_compile_definitions(${target_name} PRIVATE AEGISUB_WITH_HIGHWAY=1)
+    target_link_libraries(${target_name} PRIVATE hwy::hwy)
+endfunction()
+
+aegisub_enable_highway(Aegisub)
 
 find_package(OpenGL REQUIRED)
 target_link_libraries(Aegisub PRIVATE "OpenGL::GL")

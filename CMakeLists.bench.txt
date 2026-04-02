@@ -4,9 +4,7 @@ add_executable(audio-display-bench EXCLUDE_FROM_ALL
     src/audio_latest_range_scheduler.cpp
     src/audio_display_source.cpp
     src/audio_mix_policy.cpp
-    src/audio_spectrum_bitmap_tile_renderer.cpp
     src/audio_spectrum_analysis_cache.cpp
-    src/audio_waveform_bitmap_tile_renderer.cpp
     src/audio_waveform_summary_cache.cpp
     src/fft.cpp
 )
@@ -15,41 +13,48 @@ target_include_directories(audio-display-bench PRIVATE
     "${PROJECT_SOURCE_DIR}/libaegisub/include"
 )
 target_link_libraries(audio-display-bench PRIVATE libaegisub ${wxWidgets_LIBRARIES})
+aegisub_enable_highway(audio-display-bench)
 
-add_executable(string-concat-bench EXCLUDE_FROM_ALL
-    tools/string_concat_bench_main.cpp
-)
-target_compile_features(string-concat-bench PRIVATE cxx_std_20)
-target_include_directories(string-concat-bench PRIVATE
-    "${PROJECT_SOURCE_DIR}/libaegisub/include"
-)
-if(STRINGZILLA_INCLUDE_DIRS)
-    target_include_directories(string-concat-bench PRIVATE ${STRINGZILLA_INCLUDE_DIRS})
-    target_compile_definitions(string-concat-bench PRIVATE AEGISUB_USE_STRINGZILLA=1)
+if(EXISTS "${PROJECT_SOURCE_DIR}/tools/string_concat_bench_main.cpp")
+    add_executable(string-concat-bench EXCLUDE_FROM_ALL
+        tools/string_concat_bench_main.cpp
+    )
+    target_compile_features(string-concat-bench PRIVATE cxx_std_20)
+    target_include_directories(string-concat-bench PRIVATE
+        "${PROJECT_SOURCE_DIR}/libaegisub/include"
+    )
+    if(STRINGZILLA_INCLUDE_DIRS)
+        target_include_directories(string-concat-bench PRIVATE ${STRINGZILLA_INCLUDE_DIRS})
+        target_compile_definitions(string-concat-bench PRIVATE AEGISUB_USE_STRINGZILLA=1)
+    endif()
+    target_link_libraries(string-concat-bench PRIVATE "Boost::headers")
 endif()
-target_link_libraries(string-concat-bench PRIVATE "Boost::headers")
 
-add_executable(string-path-bench EXCLUDE_FROM_ALL
-    tools/string_path_bench_main.cpp
-)
-target_compile_features(string-path-bench PRIVATE cxx_std_20)
-target_include_directories(string-path-bench PRIVATE
-    "${PROJECT_SOURCE_DIR}/libaegisub/include"
-)
-if(STRINGZILLA_INCLUDE_DIRS)
-    target_include_directories(string-path-bench PRIVATE ${STRINGZILLA_INCLUDE_DIRS})
-    target_compile_definitions(string-path-bench PRIVATE AEGISUB_USE_STRINGZILLA=1)
+if(EXISTS "${PROJECT_SOURCE_DIR}/tools/string_path_bench_main.cpp")
+    add_executable(string-path-bench EXCLUDE_FROM_ALL
+        tools/string_path_bench_main.cpp
+    )
+    target_compile_features(string-path-bench PRIVATE cxx_std_20)
+    target_include_directories(string-path-bench PRIVATE
+        "${PROJECT_SOURCE_DIR}/libaegisub/include"
+    )
+    if(STRINGZILLA_INCLUDE_DIRS)
+        target_include_directories(string-path-bench PRIVATE ${STRINGZILLA_INCLUDE_DIRS})
+        target_compile_definitions(string-path-bench PRIVATE AEGISUB_USE_STRINGZILLA=1)
+    endif()
+    target_link_libraries(string-path-bench PRIVATE "Boost::headers" "Boost::locale")
 endif()
-target_link_libraries(string-path-bench PRIVATE "Boost::headers" "Boost::locale")
 
-add_executable(phase1-low-cost-bench EXCLUDE_FROM_ALL
-    tools/phase1_low_cost_bench_main.cpp
-)
-target_compile_features(phase1-low-cost-bench PRIVATE cxx_std_20)
-target_include_directories(phase1-low-cost-bench PRIVATE
-    "${PROJECT_SOURCE_DIR}/libaegisub/include"
-)
-target_link_libraries(phase1-low-cost-bench PRIVATE "Boost::headers")
+if(EXISTS "${PROJECT_SOURCE_DIR}/tools/phase1_low_cost_bench_main.cpp")
+    add_executable(phase1-low-cost-bench EXCLUDE_FROM_ALL
+        tools/phase1_low_cost_bench_main.cpp
+    )
+    target_compile_features(phase1-low-cost-bench PRIVATE cxx_std_20)
+    target_include_directories(phase1-low-cost-bench PRIVATE
+        "${PROJECT_SOURCE_DIR}/libaegisub/include"
+    )
+    target_link_libraries(phase1-low-cost-bench PRIVATE "Boost::headers")
+endif()
 
 add_executable(modern-gl-renderer-tile-bench EXCLUDE_FROM_ALL
     tools/video_renderer_opengl_tile_bench_main.cpp
@@ -91,14 +96,16 @@ target_include_directories(dispatch-micro-bench PRIVATE
 )
 target_link_libraries(dispatch-micro-bench PRIVATE libaegisub)
 
-add_executable(dispatch-realworld-bench EXCLUDE_FROM_ALL
-    tools/dispatch_realworld_bench_main.cpp
-)
-target_compile_features(dispatch-realworld-bench PRIVATE cxx_std_20)
-target_include_directories(dispatch-realworld-bench PRIVATE
-    "${PROJECT_SOURCE_DIR}/libaegisub/include"
-)
-target_link_libraries(dispatch-realworld-bench PRIVATE libaegisub)
+if(EXISTS "${PROJECT_SOURCE_DIR}/tools/dispatch_realworld_bench_main.cpp")
+    add_executable(dispatch-realworld-bench EXCLUDE_FROM_ALL
+        tools/dispatch_realworld_bench_main.cpp
+    )
+    target_compile_features(dispatch-realworld-bench PRIVATE cxx_std_20)
+    target_include_directories(dispatch-realworld-bench PRIVATE
+        "${PROJECT_SOURCE_DIR}/libaegisub/include"
+    )
+    target_link_libraries(dispatch-realworld-bench PRIVATE libaegisub)
+endif()
 
 add_executable(video-cache-bench EXCLUDE_FROM_ALL
     tools/video_cache_bench_main.cpp
@@ -132,40 +139,47 @@ target_include_directories(async-video-provider-stress PRIVATE
     "${PROJECT_SOURCE_DIR}/libaegisub/include"
 )
 target_link_libraries(async-video-provider-stress PRIVATE libaegisub ${wxWidgets_LIBRARIES})
+aegisub_enable_highway(async-video-provider-stress)
 
-add_executable(phase2a-lex-token-bench EXCLUDE_FROM_ALL
-    tools/phase2a_lex_token_bench_main.cpp
-)
-target_compile_features(phase2a-lex-token-bench PRIVATE cxx_std_20)
-target_include_directories(phase2a-lex-token-bench PRIVATE
-    "${PROJECT_SOURCE_DIR}/libaegisub/include"
-)
-target_link_libraries(phase2a-lex-token-bench PRIVATE "Boost::headers")
+if(EXISTS "${PROJECT_SOURCE_DIR}/tools/phase2a_lex_token_bench_main.cpp")
+    add_executable(phase2a-lex-token-bench EXCLUDE_FROM_ALL
+        tools/phase2a_lex_token_bench_main.cpp
+    )
+    target_compile_features(phase2a-lex-token-bench PRIVATE cxx_std_20)
+    target_include_directories(phase2a-lex-token-bench PRIVATE
+        "${PROJECT_SOURCE_DIR}/libaegisub/include"
+    )
+    target_link_libraries(phase2a-lex-token-bench PRIVATE "Boost::headers")
+endif()
 
-add_executable(phase2a-algorithm-bench EXCLUDE_FROM_ALL
-    tools/phase2a_algorithm_bench_main.cpp
-)
-target_compile_features(phase2a-algorithm-bench PRIVATE cxx_std_20)
-target_include_directories(phase2a-algorithm-bench PRIVATE
-    "${PROJECT_SOURCE_DIR}/libaegisub/include"
-)
-target_link_libraries(phase2a-algorithm-bench PRIVATE "Boost::headers")
+if(EXISTS "${PROJECT_SOURCE_DIR}/tools/phase2a_algorithm_bench_main.cpp")
+    add_executable(phase2a-algorithm-bench EXCLUDE_FROM_ALL
+        tools/phase2a_algorithm_bench_main.cpp
+    )
+    target_compile_features(phase2a-algorithm-bench PRIVATE cxx_std_20)
+    target_include_directories(phase2a-algorithm-bench PRIVATE
+        "${PROJECT_SOURCE_DIR}/libaegisub/include"
+    )
+    target_link_libraries(phase2a-algorithm-bench PRIVATE "Boost::headers")
+endif()
 
 if(NOT TARGET Boost::filesystem)
     find_package(Boost QUIET COMPONENTS filesystem)
 endif()
 
-add_executable(phase2b-filesystem-bench EXCLUDE_FROM_ALL
-    tools/phase2b_filesystem_bench_main.cpp
-)
-target_compile_features(phase2b-filesystem-bench PRIVATE cxx_std_20)
-target_include_directories(phase2b-filesystem-bench PRIVATE
-    "${PROJECT_SOURCE_DIR}/libaegisub/include"
-)
-target_link_libraries(phase2b-filesystem-bench PRIVATE libaegisub)
-if(TARGET Boost::filesystem)
-    target_compile_definitions(phase2b-filesystem-bench PRIVATE AEGISUB_BENCH_HAVE_BOOST_FILESYSTEM=1)
-    target_link_libraries(phase2b-filesystem-bench PRIVATE "Boost::filesystem")
+if(EXISTS "${PROJECT_SOURCE_DIR}/tools/phase2b_filesystem_bench_main.cpp")
+    add_executable(phase2b-filesystem-bench EXCLUDE_FROM_ALL
+        tools/phase2b_filesystem_bench_main.cpp
+    )
+    target_compile_features(phase2b-filesystem-bench PRIVATE cxx_std_20)
+    target_include_directories(phase2b-filesystem-bench PRIVATE
+        "${PROJECT_SOURCE_DIR}/libaegisub/include"
+    )
+    target_link_libraries(phase2b-filesystem-bench PRIVATE libaegisub)
+    if(TARGET Boost::filesystem)
+        target_compile_definitions(phase2b-filesystem-bench PRIVATE AEGISUB_BENCH_HAVE_BOOST_FILESYSTEM=1)
+        target_link_libraries(phase2b-filesystem-bench PRIVATE "Boost::filesystem")
+    endif()
 endif()
 
 add_executable(csri-overlay-bench EXCLUDE_FROM_ALL
@@ -178,6 +192,7 @@ target_include_directories(csri-overlay-bench PRIVATE
     "${PROJECT_SOURCE_DIR}/libaegisub/include"
 )
 target_link_libraries(csri-overlay-bench PRIVATE "Boost::headers")
+aegisub_enable_highway(csri-overlay-bench)
 
 find_package(benchmark CONFIG QUIET)
 if(benchmark_FOUND)
@@ -195,4 +210,5 @@ if(benchmark_FOUND)
         "${PROJECT_SOURCE_DIR}/libaegisub/include"
     )
     target_link_libraries(audio-micro-bench PRIVATE benchmark::benchmark libaegisub ${wxWidgets_LIBRARIES})
+    aegisub_enable_highway(audio-micro-bench)
 endif()

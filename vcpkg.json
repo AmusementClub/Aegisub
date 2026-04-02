@@ -23,6 +23,7 @@
     "boost-spirit",
     "fftw3",
     "gtest",
+    "highway",
     "hunspell",
     "icu",
     "libass",

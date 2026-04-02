@@ -13,13 +13,10 @@
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 #include "subtitle_overlay_blend.h"
+#include "simd/subtitle_overlay_simd.h"
 
 #include <algorithm>
 #include <cstring>
-
-#if defined(_M_X64) || defined(_M_IX86) || defined(__SSE2__)
-#include <emmintrin.h>
-#endif
 
 namespace {
 constexpr SubtitleOverlayRowRange kEmptyRowRange { 0, 0 };
@@ -48,11 +45,6 @@ inline unsigned char const* StorageRowPointer(SubtitleOverlayStorage const& stor
 	int physical_y = storage.flipped ? (storage.height - 1 - y) : y;
 	return storage.pixels.data() + static_cast<ptrdiff_t>(physical_y) * storage.pitch;
 }
-
-inline unsigned int AssR(std::uint32_t color) { return color >> 24; }
-inline unsigned int AssG(std::uint32_t color) { return (color >> 16) & 0xFF; }
-inline unsigned int AssB(std::uint32_t color) { return (color >> 8) & 0xFF; }
-inline unsigned int AssA(std::uint32_t color) { return color & 0xFF; }
 
 bool FramesAreComparable(VideoFrame const& source, VideoFrame const& composited) {
 	if (source.width != composited.width || source.height != composited.height || source.data.empty() || composited.data.empty())
@@ -91,25 +83,53 @@ bool PreviousOverlayComparable(SubtitleOverlayStorage const* previous, SubtitleO
 		previous->pixels.size() == current.pixels.size() &&
 		previous->row_ranges.size() == current.row_ranges.size();
 }
-
-int FirstSetBit4(unsigned int mask) {
-	switch (mask & 0xF) {
-	case 0x1: case 0x3: case 0x5: case 0x7: case 0x9: case 0xB: case 0xD: case 0xF: return 0;
-	case 0x2: case 0x6: case 0xA: case 0xE: return 1;
-	case 0x4: case 0xC: return 2;
-	case 0x8: return 3;
-	default: return 0;
-	}
 }
 
-int LastSetBit4(unsigned int mask) {
-	switch (mask & 0xF) {
-	case 0x8: case 0xC: case 0xA: case 0xE: case 0x9: case 0xD: case 0xB: case 0xF: return 3;
-	case 0x4: case 0x6: case 0x5: case 0x7: return 2;
-	case 0x2: case 0x3: return 1;
-	case 0x1: return 0;
-	default: return 0;
+void MarkDirtyTilesForRow(
+	SubtitleOverlayStorage const& current,
+	SubtitleOverlayStorage const& previous,
+	int y,
+	int tile_width,
+	int tile_height,
+	int tiles_x,
+	std::vector<unsigned char>& dirty_tiles);
+
+bool BuildSparsePremultipliedCompatibilityOverlayRows(
+	VideoFrame const& source,
+	VideoFrame const& composited,
+	SubtitleOverlayStorage& storage,
+	SubtitleOverlayStorage const* previous = nullptr,
+	int tile_width = 0,
+	int tile_height = 0,
+	std::vector<unsigned char>* dirty_tiles = nullptr) {
+	int width = static_cast<int>(source.width);
+	int height = static_cast<int>(source.height);
+	int tiles_x = (tile_width > 0) ? (width + tile_width - 1) / tile_width : 0;
+	storage.active_row_begin = height;
+	storage.active_row_end = 0;
+
+	for (int y = 0; y < height; ++y) {
+		auto const* src_row = RowPointer(source, y);
+		auto const* composited_row = RowPointer(composited, y);
+		auto previous_range = storage.row_ranges[static_cast<size_t>(y)];
+		auto* dst_row = StorageRowPointer(storage, y);
+
+		if (!previous_range.IsEmpty())
+			std::memset(dst_row, 0, static_cast<size_t>(width) * 4);
+
+		auto row_range = aegisub::simd::BuildSparseOverlayRow(src_row, composited_row, dst_row, width);
+		storage.row_ranges[static_cast<size_t>(y)] = row_range;
+		if (!row_range.IsEmpty()) {
+			storage.active_row_begin = std::min(storage.active_row_begin, y);
+			storage.active_row_end = y + 1;
+			storage.has_visible_content = true;
+		}
+
+		if (previous && dirty_tiles && tile_width > 0 && tile_height > 0)
+			MarkDirtyTilesForRow(storage, *previous, y, tile_width, tile_height, tiles_x, *dirty_tiles);
 	}
+
+	return true;
 }
 
 bool RowBandIntersectsActivity(SubtitleOverlayStorage const& storage, int y, int height) {
@@ -233,154 +253,6 @@ bool BuildDirtyRectsFromTileMask(SubtitleOverlayStorage& current, std::vector<un
 	return !current.dirty_rects.empty();
 }
 
-bool BuildSparsePremultipliedCompatibilityOverlayScalar(VideoFrame const& source, VideoFrame const& composited, SubtitleOverlayStorage& storage) {
-	int width = static_cast<int>(source.width);
-	int height = static_cast<int>(source.height);
-	size_t row_bytes = static_cast<size_t>(width) * 4;
-	storage.active_row_begin = height;
-	storage.active_row_end = 0;
-
-	for (int y = 0; y < height; ++y) {
-		auto const* src_row = RowPointer(source, y);
-		auto const* composited_row = RowPointer(composited, y);
-		auto previous_range = storage.row_ranges[static_cast<size_t>(y)];
-		auto* dst_row = StorageRowPointer(storage, y);
-
-		if (std::memcmp(src_row, composited_row, row_bytes) == 0) {
-			if (!previous_range.IsEmpty())
-				std::memset(dst_row, 0, row_bytes);
-			storage.row_ranges[static_cast<size_t>(y)] = kEmptyRowRange;
-			continue;
-		}
-
-		if (!previous_range.IsEmpty())
-			std::memset(dst_row, 0, row_bytes);
-
-		int row_x0 = width;
-		int row_x1 = 0;
-		for (int x = 0; x < width; ++x) {
-			auto pixel_offset = static_cast<ptrdiff_t>(x) * 4;
-			auto const* src = src_row + pixel_offset;
-			auto const* composited_pixel = composited_row + pixel_offset;
-			auto* dst = dst_row + pixel_offset;
-			if (std::memcmp(src, composited_pixel, 4) != 0) {
-				dst[0] = composited_pixel[0];
-				dst[1] = composited_pixel[1];
-				dst[2] = composited_pixel[2];
-				dst[3] = 255;
-				row_x0 = std::min(row_x0, x);
-				row_x1 = x + 1;
-				storage.has_visible_content = true;
-			}
-		}
-
-		if (row_x0 < row_x1) {
-			storage.row_ranges[static_cast<size_t>(y)] = { row_x0, row_x1 };
-			storage.active_row_begin = std::min(storage.active_row_begin, y);
-			storage.active_row_end = y + 1;
-		}
-		else {
-			storage.row_ranges[static_cast<size_t>(y)] = kEmptyRowRange;
-		}
-	}
-
-	return true;
-}
-
-#if defined(_M_X64) || defined(_M_IX86) || defined(__SSE2__)
-bool BuildSparsePremultipliedCompatibilityOverlaySimd(
-	VideoFrame const& source,
-	VideoFrame const& composited,
-	SubtitleOverlayStorage& storage,
-	SubtitleOverlayStorage const* previous = nullptr,
-	int tile_width = 0,
-	int tile_height = 0,
-	std::vector<unsigned char>* dirty_tiles = nullptr) {
-	int width = static_cast<int>(source.width);
-	int height = static_cast<int>(source.height);
-	size_t row_bytes = static_cast<size_t>(width) * 4;
-	__m128i const all_ones = _mm_set1_epi32(-1);
-	__m128i const alpha_mask = _mm_set1_epi32(static_cast<int>(0xFF000000u));
-	int tiles_x = (tile_width > 0) ? (width + tile_width - 1) / tile_width : 0;
-	storage.active_row_begin = height;
-	storage.active_row_end = 0;
-
-	for (int y = 0; y < height; ++y) {
-		auto const* src_row = RowPointer(source, y);
-		auto const* composited_row = RowPointer(composited, y);
-		auto previous_range = storage.row_ranges[static_cast<size_t>(y)];
-		auto* dst_row = StorageRowPointer(storage, y);
-
-		if (std::memcmp(src_row, composited_row, row_bytes) == 0) {
-			if (!previous_range.IsEmpty())
-				std::memset(dst_row, 0, row_bytes);
-			storage.row_ranges[static_cast<size_t>(y)] = kEmptyRowRange;
-			if (previous && dirty_tiles && tile_width > 0 && tile_height > 0)
-				MarkDirtyTilesForRow(storage, *previous, y, tile_width, tile_height, tiles_x, *dirty_tiles);
-			continue;
-		}
-
-		if (!previous_range.IsEmpty())
-			std::memset(dst_row, 0, row_bytes);
-
-		int row_x0 = width;
-		int row_x1 = 0;
-		int simd_width = width & ~3;
-		int x = 0;
-		for (; x < simd_width; x += 4) {
-			auto const* src = src_row + static_cast<ptrdiff_t>(x) * 4;
-			auto const* composited_pixel = composited_row + static_cast<ptrdiff_t>(x) * 4;
-			__m128i src_vec = _mm_loadu_si128(reinterpret_cast<__m128i const*>(src));
-			__m128i composited_vec = _mm_loadu_si128(reinterpret_cast<__m128i const*>(composited_pixel));
-			__m128i equal_mask = _mm_cmpeq_epi32(src_vec, composited_vec);
-			if (_mm_movemask_epi8(equal_mask) == 0xFFFF)
-				continue;
-
-			unsigned int changed_lanes = static_cast<unsigned int>(~_mm_movemask_ps(_mm_castsi128_ps(equal_mask))) & 0xF;
-			__m128i changed_mask = _mm_xor_si128(equal_mask, all_ones);
-			__m128i with_alpha = _mm_or_si128(composited_vec, alpha_mask);
-			__m128i sparse = _mm_and_si128(changed_mask, with_alpha);
-			_mm_storeu_si128(reinterpret_cast<__m128i*>(dst_row + static_cast<ptrdiff_t>(x) * 4), sparse);
-			row_x0 = std::min(row_x0, x + FirstSetBit4(changed_lanes));
-			row_x1 = std::max(row_x1, x + LastSetBit4(changed_lanes) + 1);
-			storage.has_visible_content = true;
-		}
-
-		for (; x < width; ++x) {
-			auto pixel_offset = static_cast<ptrdiff_t>(x) * 4;
-			auto const* src = src_row + pixel_offset;
-			auto const* composited_pixel = composited_row + pixel_offset;
-			auto* dst = dst_row + pixel_offset;
-			if (std::memcmp(src, composited_pixel, 4) != 0) {
-				dst[0] = composited_pixel[0];
-				dst[1] = composited_pixel[1];
-				dst[2] = composited_pixel[2];
-				dst[3] = 255;
-				row_x0 = std::min(row_x0, x);
-				row_x1 = x + 1;
-				storage.has_visible_content = true;
-			}
-		}
-
-		if (row_x0 < row_x1) {
-			storage.row_ranges[static_cast<size_t>(y)] = { row_x0, row_x1 };
-			storage.active_row_begin = std::min(storage.active_row_begin, y);
-			storage.active_row_end = y + 1;
-		}
-		else {
-			storage.row_ranges[static_cast<size_t>(y)] = kEmptyRowRange;
-		}
-
-		if (previous && dirty_tiles && tile_width > 0 && tile_height > 0)
-			MarkDirtyTilesForRow(storage, *previous, y, tile_width, tile_height, tiles_x, *dirty_tiles);
-	}
-
-	return true;
-}
-#endif
-
-}
-
 void ClearBgraSubtitleTarget(BgraSubtitleTargetView target) {
 	if (!target.data || target.width <= 0 || target.height <= 0 || target.stride == 0)
 		return;
@@ -409,39 +281,10 @@ void BlendLibassMaskIntoBgraTarget(
 	if (x0 >= x1 || y0 >= y1)
 		return;
 
-	unsigned int opacity = 255 - AssA(ass_color);
-	unsigned int r = AssR(ass_color);
-	unsigned int g = AssG(ass_color);
-	unsigned int b = AssB(ass_color);
-
 	for (int y = y0; y < y1; ++y) {
-		auto* dst_row = RowPointer(target, y);
-		auto const* src_row = mask_data + static_cast<ptrdiff_t>(y - dst_y) * mask_stride;
-
-		for (int x = x0; x < x1; ++x) {
-			unsigned int src_alpha = static_cast<unsigned int>(src_row[x - dst_x]) * opacity / 255;
-			if (!src_alpha)
-				continue;
-
-			auto* dst = dst_row + static_cast<ptrdiff_t>(x) * 4;
-			if (mode == SubtitleOverlayBlendMode::LegacyBakeIn) {
-				unsigned int inv_alpha = 255 - src_alpha;
-				dst[0] = static_cast<unsigned char>((src_alpha * b + inv_alpha * dst[0]) / 255);
-				dst[1] = static_cast<unsigned char>((src_alpha * g + inv_alpha * dst[1]) / 255);
-				dst[2] = static_cast<unsigned char>((src_alpha * r + inv_alpha * dst[2]) / 255);
-				dst[3] = 0;
-			}
-			else {
-				unsigned int inv_alpha = 255 - src_alpha;
-				unsigned int src_b = src_alpha * b / 255;
-				unsigned int src_g = src_alpha * g / 255;
-				unsigned int src_r = src_alpha * r / 255;
-				dst[0] = static_cast<unsigned char>(src_b + dst[0] * inv_alpha / 255);
-				dst[1] = static_cast<unsigned char>(src_g + dst[1] * inv_alpha / 255);
-				dst[2] = static_cast<unsigned char>(src_r + dst[2] * inv_alpha / 255);
-				dst[3] = static_cast<unsigned char>(src_alpha + dst[3] * inv_alpha / 255);
-			}
-		}
+		auto* dst_row = RowPointer(target, y) + static_cast<ptrdiff_t>(x0) * 4;
+		auto const* src_row = mask_data + static_cast<ptrdiff_t>(y - dst_y) * mask_stride + (x0 - dst_x);
+		aegisub::simd::BlendLibassMaskRow(dst_row, src_row, x1 - x0, mode, ass_color);
 	}
 }
 
@@ -455,11 +298,7 @@ bool BuildSparsePremultipliedCompatibilityOverlay(VideoFrame const& source, Vide
 	int height = static_cast<int>(source.height);
 	PrepareSparseOverlayStorage(storage, width, height, source.flipped);
 
-#if defined(_M_X64) || defined(_M_IX86) || defined(__SSE2__)
-	BuildSparsePremultipliedCompatibilityOverlaySimd(source, composited, storage);
-#else
-	BuildSparsePremultipliedCompatibilityOverlayScalar(source, composited, storage);
-#endif
+	BuildSparsePremultipliedCompatibilityOverlayRows(source, composited, storage);
 
 	overlay = storage.MakeView(true);
 	overlay.color_role = SubtitleOverlayColorRole::SubtitleVideoCompatibility;
@@ -497,13 +336,7 @@ bool BuildSparsePremultipliedCompatibilityOverlayWithDirtyTiles(
 	int tiles_y = (height + tile_height - 1) / tile_height;
 	std::vector<unsigned char> dirty_tiles(static_cast<size_t>(tiles_x) * tiles_y, 0);
 
-#if defined(_M_X64) || defined(_M_IX86) || defined(__SSE2__)
-	BuildSparsePremultipliedCompatibilityOverlaySimd(source, composited, storage, previous, tile_width, tile_height, &dirty_tiles);
-#else
-	BuildSparsePremultipliedCompatibilityOverlayScalar(source, composited, storage);
-	for (int y = 0; y < height; ++y)
-		MarkDirtyTilesForRow(storage, *previous, y, tile_width, tile_height, tiles_x, dirty_tiles);
-#endif
+	BuildSparsePremultipliedCompatibilityOverlayRows(source, composited, storage, previous, tile_width, tile_height, &dirty_tiles);
 
 	BuildDirtyRectsFromTileMask(storage, dirty_tiles, tile_width, tile_height);
 	overlay = storage.MakeView(true);
@@ -679,21 +512,8 @@ void CompositePremultipliedBgraOverlayOntoVideoFrame(VideoFrame& frame, Subtitle
 	for (int y = y0; y < y1; ++y) {
 		int overlay_y = y - overlay.target_y;
 		int dst_y = frame.flipped ? (static_cast<int>(frame.height) - 1 - y) : y;
-		auto* dst_row = frame.data.data() + static_cast<ptrdiff_t>(dst_y) * frame.pitch;
-		auto const* src_row = RowPointer(overlay, overlay_y);
-
-		for (int x = x0; x < x1; ++x) {
-			auto const* src = src_row + static_cast<ptrdiff_t>(x - overlay.target_x) * 4;
-			auto* dst = dst_row + static_cast<ptrdiff_t>(x) * 4;
-			unsigned int src_alpha = src[3];
-			if (!src_alpha)
-				continue;
-
-			unsigned int inv_alpha = 255 - src_alpha;
-			dst[0] = static_cast<unsigned char>(src[0] + dst[0] * inv_alpha / 255);
-			dst[1] = static_cast<unsigned char>(src[1] + dst[1] * inv_alpha / 255);
-			dst[2] = static_cast<unsigned char>(src[2] + dst[2] * inv_alpha / 255);
-			dst[3] = 0;
-		}
+		auto* dst_row = frame.data.data() + static_cast<ptrdiff_t>(dst_y) * frame.pitch + static_cast<ptrdiff_t>(x0) * 4;
+		auto const* src_row = RowPointer(overlay, overlay_y) + static_cast<ptrdiff_t>(x0 - overlay.target_x) * 4;
+		aegisub::simd::CompositePremultipliedBgraRow(dst_row, src_row, x1 - x0);
 	}
 }

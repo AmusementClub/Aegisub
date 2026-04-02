@@ -113,6 +113,30 @@ TEST(lagi_audio_display, display_source_preserves_float_samples) {
 	EXPECT_NEAR(-1.0f, samples[3], 1e-6f);
 }
 
+TEST(lagi_audio_display, single_channel_display_source_extracts_requested_s16_channel) {
+	Int16StereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	auto right = CreateSingleChannelAudioDisplaySource(source.get(), 1);
+	ASSERT_TRUE(!!right);
+
+	float samples[2] = { 0.f, 0.f };
+	right->GetFloatAudio(samples, 0, 2);
+	EXPECT_NEAR(-1.0f, samples[0], 1e-6f);
+	EXPECT_NEAR(-16384.0f / 32768.0f, samples[1], 1e-6f);
+}
+
+TEST(lagi_audio_display, single_channel_display_source_extracts_requested_float_channel) {
+	FloatStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	auto left = CreateSingleChannelAudioDisplaySource(source.get(), 0);
+	ASSERT_TRUE(!!left);
+
+	float samples[2] = { 0.f, 0.f };
+	left->GetFloatAudio(samples, 0, 2);
+	EXPECT_NEAR(0.25f, samples[0], 1e-6f);
+	EXPECT_NEAR(0.75f, samples[1], 1e-6f);
+}
+
 TEST(lagi_audio_display, mix_policy_average_and_maxabs) {
 	const float frame[] = { 0.25f, -0.75f, 0.5f };
 	EXPECT_NEAR(0.0f, MixAudioFrameToMono(AudioMixPolicy::MonoAverage, frame, 3), 1e-6f);

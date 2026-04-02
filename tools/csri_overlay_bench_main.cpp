@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <iostream>
 #include <numeric>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -109,6 +110,212 @@ void fill_box(VideoFrame& frame, int x0, int y0, int width, int height, unsigned
 			pixel[3] = 0;
 		}
 	}
+}
+
+void reference_blend_libass_mask_into_bgra_target(
+	BgraSubtitleTargetView target,
+	SubtitleOverlayBlendMode mode,
+	int dst_x,
+	int dst_y,
+	int mask_w,
+	int mask_h,
+	unsigned char const* mask_data,
+	ptrdiff_t mask_stride,
+	std::uint32_t ass_color) {
+	unsigned int opacity = 255 - (ass_color & 0xFFu);
+	unsigned int r = ass_color >> 24;
+	unsigned int g = (ass_color >> 16) & 0xFFu;
+	unsigned int b = (ass_color >> 8) & 0xFFu;
+
+	int x0 = std::max(0, dst_x);
+	int y0 = std::max(0, dst_y);
+	int x1 = std::min(target.width, dst_x + mask_w);
+	int y1 = std::min(target.height, dst_y + mask_h);
+	if (x0 >= x1 || y0 >= y1)
+		return;
+
+	for (int y = y0; y < y1; ++y) {
+		auto* dst_row = target.data + static_cast<std::ptrdiff_t>(y) * target.stride;
+		auto const* src_row = mask_data + static_cast<std::ptrdiff_t>(y - dst_y) * mask_stride;
+		for (int x = x0; x < x1; ++x) {
+			unsigned int src_alpha = static_cast<unsigned int>(src_row[x - dst_x]) * opacity / 255;
+			if (!src_alpha)
+				continue;
+
+			auto* dst = dst_row + static_cast<std::ptrdiff_t>(x) * 4;
+			if (mode == SubtitleOverlayBlendMode::LegacyBakeIn) {
+				unsigned int inv_alpha = 255 - src_alpha;
+				dst[0] = static_cast<unsigned char>((src_alpha * b + inv_alpha * dst[0]) / 255);
+				dst[1] = static_cast<unsigned char>((src_alpha * g + inv_alpha * dst[1]) / 255);
+				dst[2] = static_cast<unsigned char>((src_alpha * r + inv_alpha * dst[2]) / 255);
+				dst[3] = 0;
+			}
+			else {
+				unsigned int inv_alpha = 255 - src_alpha;
+				unsigned int src_b = src_alpha * b / 255;
+				unsigned int src_g = src_alpha * g / 255;
+				unsigned int src_r = src_alpha * r / 255;
+				dst[0] = static_cast<unsigned char>(src_b + dst[0] * inv_alpha / 255);
+				dst[1] = static_cast<unsigned char>(src_g + dst[1] * inv_alpha / 255);
+				dst[2] = static_cast<unsigned char>(src_r + dst[2] * inv_alpha / 255);
+				dst[3] = static_cast<unsigned char>(src_alpha + dst[3] * inv_alpha / 255);
+			}
+		}
+	}
+}
+
+void reference_composite_premultiplied_overlay(VideoFrame& frame, SubtitleOverlay const& overlay) {
+	int x0 = std::max(0, overlay.target_x);
+	int y0 = std::max(0, overlay.target_y);
+	int x1 = std::min(static_cast<int>(frame.width), overlay.target_x + overlay.width);
+	int y1 = std::min(static_cast<int>(frame.height), overlay.target_y + overlay.height);
+	if (x0 >= x1 || y0 >= y1)
+		return;
+
+	for (int y = y0; y < y1; ++y) {
+		int overlay_y = y - overlay.target_y;
+		auto* dst_row = frame.data.data() + static_cast<std::ptrdiff_t>(y) * frame.pitch;
+		auto const* src_row = overlay.planes[0].data + static_cast<std::ptrdiff_t>(overlay_y) * overlay.planes[0].stride;
+		for (int x = x0; x < x1; ++x) {
+			auto const* src = src_row + static_cast<std::ptrdiff_t>(x - overlay.target_x) * 4;
+			auto* dst = dst_row + static_cast<std::ptrdiff_t>(x) * 4;
+			unsigned int src_alpha = src[3];
+			if (!src_alpha)
+				continue;
+
+			unsigned int inv_alpha = 255 - src_alpha;
+			dst[0] = static_cast<unsigned char>(src[0] + dst[0] * inv_alpha / 255);
+			dst[1] = static_cast<unsigned char>(src[1] + dst[1] * inv_alpha / 255);
+			dst[2] = static_cast<unsigned char>(src[2] + dst[2] * inv_alpha / 255);
+			dst[3] = 0;
+		}
+	}
+}
+
+std::vector<unsigned char> make_bgra_pixels(int width, int height, bool with_alpha) {
+	std::vector<unsigned char> pixels(static_cast<std::size_t>(width) * height * 4);
+	for (int y = 0; y < height; ++y) {
+		for (int x = 0; x < width; ++x) {
+			auto* pixel = pixels.data() + (static_cast<std::size_t>(y) * width + x) * 4;
+			pixel[0] = static_cast<unsigned char>((x * 13 + y * 7) & 0xFF);
+			pixel[1] = static_cast<unsigned char>((x * 5 + y * 17) & 0xFF);
+			pixel[2] = static_cast<unsigned char>((x * 19 + y * 3) & 0xFF);
+			pixel[3] = with_alpha ? static_cast<unsigned char>((x * 11 + y * 23) & 0xFF) : 0;
+		}
+	}
+	return pixels;
+}
+
+std::vector<unsigned char> make_mask_pixels(int width, int height) {
+	std::vector<unsigned char> mask(static_cast<std::size_t>(width) * height);
+	for (int y = 0; y < height; ++y) {
+		for (int x = 0; x < width; ++x) {
+			mask[static_cast<std::size_t>(y) * width + x] =
+				static_cast<unsigned char>(((x * 29) ^ (y * 17) ^ ((x + y) * 7)) & 0xFF);
+		}
+	}
+	return mask;
+}
+
+std::uint64_t checksum_bytes(std::vector<unsigned char> const& bytes) {
+	return std::accumulate(bytes.begin(), bytes.end(), std::uint64_t{0});
+}
+
+std::uint64_t checksum_frame(VideoFrame const& frame) {
+	return checksum_bytes(frame.data);
+}
+
+std::pair<std::uint64_t, std::pair<std::size_t, std::size_t>> bench_blend_mask(bool reference, SubtitleOverlayBlendMode mode) {
+	constexpr int target_width = 512;
+	constexpr int target_height = 128;
+	constexpr int mask_width = 384;
+	constexpr int mask_height = 96;
+	constexpr int dst_x = 48;
+	constexpr int dst_y = 16;
+	auto base = make_bgra_pixels(target_width, target_height, mode == SubtitleOverlayBlendMode::PremultipliedOverlay);
+	auto mask = make_mask_pixels(mask_width, mask_height);
+	auto working = base;
+
+	BgraSubtitleTargetView target {
+		working.data(),
+		target_width * 4,
+		target_width,
+		target_height,
+		false
+	};
+
+	if (reference) {
+		reference_blend_libass_mask_into_bgra_target(
+			target, mode, dst_x, dst_y, mask_width, mask_height, mask.data(), mask_width, 0x2E84D000u);
+	}
+	else {
+		BlendLibassMaskIntoBgraTarget(
+			target, mode, dst_x, dst_y, mask_width, mask_height, mask.data(), mask_width, 0x2E84D000u);
+	}
+
+	return {
+		checksum_bytes(working),
+		{ working.size(), static_cast<std::size_t>(mask_width) * mask_height }
+	};
+}
+
+std::pair<std::uint64_t, std::pair<std::size_t, std::size_t>> bench_composite_overlay(bool reference) {
+	constexpr int frame_width = 512;
+	constexpr int frame_height = 128;
+	constexpr int overlay_width = 384;
+	constexpr int overlay_height = 96;
+	constexpr int target_x = 48;
+	constexpr int target_y = 16;
+	VideoFrame frame = make_frame(frame_width, frame_height);
+	frame.data = make_bgra_pixels(frame_width, frame_height, false);
+
+	SubtitleOverlayStorage storage;
+	storage.Reset(overlay_width, overlay_height, false);
+	for (int y = 0; y < overlay_height; ++y) {
+		for (int x = 0; x < overlay_width; ++x) {
+			auto* pixel = storage.pixels.data() + (static_cast<std::size_t>(y) * overlay_width + x) * 4;
+			unsigned int alpha = static_cast<unsigned int>(((x * 31) + (y * 19) + 53) & 0xFF);
+			pixel[0] = static_cast<unsigned char>(alpha * 48 / 255);
+			pixel[1] = static_cast<unsigned char>(alpha * 180 / 255);
+			pixel[2] = static_cast<unsigned char>(alpha * 250 / 255);
+			pixel[3] = static_cast<unsigned char>(alpha);
+		}
+	}
+	auto overlay = storage.MakeView(true);
+	overlay.canvas_width = frame_width;
+	overlay.canvas_height = frame_height;
+	overlay.target_x = target_x;
+	overlay.target_y = target_y;
+	overlay.composition_mode = SubtitleOverlayCompositionMode::PremultipliedAlpha;
+
+	if (reference)
+		reference_composite_premultiplied_overlay(frame, overlay);
+	else
+		CompositePremultipliedBgraOverlayOntoVideoFrame(frame, overlay);
+
+	return {
+		checksum_frame(frame),
+		{ frame.data.size(), storage.pixels.size() }
+	};
+}
+
+void ensure_blend_parity() {
+	auto legacy_reference = bench_blend_mask(true, SubtitleOverlayBlendMode::LegacyBakeIn);
+	auto legacy_actual = bench_blend_mask(false, SubtitleOverlayBlendMode::LegacyBakeIn);
+	if (legacy_reference.first != legacy_actual.first)
+		throw std::runtime_error("Legacy alpha blend checksum mismatch.");
+
+	auto premul_reference = bench_blend_mask(true, SubtitleOverlayBlendMode::PremultipliedOverlay);
+	auto premul_actual = bench_blend_mask(false, SubtitleOverlayBlendMode::PremultipliedOverlay);
+	if (premul_reference.first != premul_actual.first)
+		throw std::runtime_error("Premultiplied alpha blend checksum mismatch.");
+}
+
+void ensure_composite_parity() {
+	auto reference = bench_composite_overlay(true);
+	auto actual = bench_composite_overlay(false);
+	if (reference.first != actual.first)
+		throw std::runtime_error("Overlay composite checksum mismatch.");
 }
 
 std::pair<VideoFrame, VideoFrame> make_single_patch_case() {
@@ -373,6 +580,17 @@ int main() {
 	print_transition_group("Subtitle disappears", disappear, previous_disappear, reusable_disappear);
 	print_transition_group("Karaoke progression within line", karaoke, previous_karaoke, reusable_karaoke);
 	print_transition_group("Scrolling banner across tiles", banner_scroll, previous_banner_scroll, reusable_banner_scroll);
+
+	ensure_blend_parity();
+	ensure_composite_parity();
+	print_group("Alpha and composite kernels", {
+		run_bench("blend_legacy_reference", 200, [&] { return bench_blend_mask(true, SubtitleOverlayBlendMode::LegacyBakeIn); }),
+		run_bench("blend_legacy_fast", 200, [&] { return bench_blend_mask(false, SubtitleOverlayBlendMode::LegacyBakeIn); }),
+		run_bench("blend_premul_reference", 200, [&] { return bench_blend_mask(true, SubtitleOverlayBlendMode::PremultipliedOverlay); }),
+		run_bench("blend_premul_fast", 200, [&] { return bench_blend_mask(false, SubtitleOverlayBlendMode::PremultipliedOverlay); }),
+		run_bench("composite_reference", 200, [&] { return bench_composite_overlay(true); }),
+		run_bench("composite_fast", 200, [&] { return bench_composite_overlay(false); }),
+	});
 
 	return 0;
 }

@@ -1,4 +1,5 @@
 #include "audio_display_source.h"
+#include "simd/audio_sample_convert.h"
 
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/make_unique.h>
@@ -8,14 +9,7 @@
 #include <cstring>
 #include <vector>
 
-#ifdef AEGISUB_WITH_HIGHWAY
-#include <hwy/highway.h>
-#endif
-
 namespace {
-#ifdef AEGISUB_WITH_HIGHWAY
-namespace hn = hwy::HWY_NAMESPACE;
-#endif
 
 struct AudioDecodeScratch {
 	std::vector<char> raw_buffer;
@@ -50,88 +44,6 @@ class AudioProviderDisplaySource final : public AudioDisplaySource {
 		if (sample & 0x00800000)
 			sample |= ~0x00FFFFFF;
 		return static_cast<float>(sample) / 8388608.0f;
-	}
-
-	static void DecodeUInt8Buffer(const uint8_t *src, size_t sample_count, float *dst) {
-#ifdef AEGISUB_WITH_HIGHWAY
-		const hn::CappedTag<uint32_t, 8> du32;
-		const hn::Rebind<uint8_t, decltype(du32)> du8;
-		const hn::Rebind<float, decltype(du32)> df;
-		const auto bias = hn::Set(df, 128.0f);
-		const auto scale = hn::Set(df, 1.0f / 128.0f);
-		const size_t lanes = hn::Lanes(du32);
-		size_t i = 0;
-		for (; i + lanes <= sample_count; i += lanes) {
-			auto values = hn::PromoteTo(du32, hn::LoadU(du8, src + i));
-			auto floats = hn::Mul(hn::Sub(hn::ConvertTo(df, values), bias), scale);
-			hn::StoreU(floats, df, dst + i);
-		}
-		for (; i < sample_count; ++i)
-			dst[i] = DecodeUInt8(src[i]);
-#else
-		for (size_t i = 0; i < sample_count; ++i)
-			dst[i] = DecodeUInt8(src[i]);
-#endif
-	}
-
-	static void DecodeInt16Buffer(const int16_t *src, size_t sample_count, float *dst) {
-#ifdef AEGISUB_WITH_HIGHWAY
-		const hn::CappedTag<int32_t, 8> di32;
-		const hn::Rebind<int16_t, decltype(di32)> di16;
-		const hn::Rebind<float, decltype(di32)> df;
-		const auto scale = hn::Set(df, 1.0f / 32768.0f);
-		const size_t lanes = hn::Lanes(di32);
-		size_t i = 0;
-		for (; i + lanes <= sample_count; i += lanes) {
-			auto values = hn::PromoteTo(di32, hn::LoadU(di16, src + i));
-			auto floats = hn::Mul(hn::ConvertTo(df, values), scale);
-			hn::StoreU(floats, df, dst + i);
-		}
-		for (; i < sample_count; ++i)
-			dst[i] = static_cast<float>(src[i]) / 32768.0f;
-#else
-		for (size_t i = 0; i < sample_count; ++i)
-			dst[i] = static_cast<float>(src[i]) / 32768.0f;
-#endif
-	}
-
-	static void DecodeInt32Buffer(const int32_t *src, size_t sample_count, float *dst) {
-#ifdef AEGISUB_WITH_HIGHWAY
-		const hn::CappedTag<int32_t, 8> di32;
-		const hn::Rebind<float, decltype(di32)> df;
-		const auto scale = hn::Set(df, 1.0f / 2147483648.0f);
-		const size_t lanes = hn::Lanes(di32);
-		size_t i = 0;
-		for (; i + lanes <= sample_count; i += lanes) {
-			auto values = hn::LoadU(di32, src + i);
-			auto floats = hn::Mul(hn::ConvertTo(df, values), scale);
-			hn::StoreU(floats, df, dst + i);
-		}
-		for (; i < sample_count; ++i)
-			dst[i] = static_cast<float>(src[i] / 2147483648.0);
-#else
-		for (size_t i = 0; i < sample_count; ++i)
-			dst[i] = static_cast<float>(src[i] / 2147483648.0);
-#endif
-	}
-
-	static void DecodeFloat64Buffer(const double *src, size_t sample_count, float *dst) {
-#ifdef AEGISUB_WITH_HIGHWAY
-		const hn::CappedTag<double, 4> df64;
-		const hn::Rebind<float, decltype(df64)> df32;
-		const size_t lanes = hn::Lanes(df64);
-		size_t i = 0;
-		for (; i + lanes <= sample_count; i += lanes) {
-			auto values = hn::LoadU(df64, src + i);
-			auto floats = hn::DemoteTo(df32, values);
-			hn::StoreU(floats, df32, dst + i);
-		}
-		for (; i < sample_count; ++i)
-			dst[i] = static_cast<float>(src[i]);
-#else
-		for (size_t i = 0; i < sample_count; ++i)
-			dst[i] = static_cast<float>(src[i]);
-#endif
 	}
 
 public:
@@ -171,7 +83,7 @@ public:
 			else if (bytes_per_sample == 8) {
 				scratch.f64_buffer.resize(sample_count);
 				provider->GetAudio(scratch.f64_buffer.data(), start, count);
-				DecodeFloat64Buffer(scratch.f64_buffer.data(), sample_count, buf);
+				aegisub::simd::DecodeFloat64ToFloat(scratch.f64_buffer.data(), sample_count, buf);
 			}
 			else {
 				std::fill(buf, buf + sample_count, 0.f);
@@ -182,12 +94,12 @@ public:
 				case 1:
 					scratch.raw_buffer.resize(sample_count);
 					provider->GetAudio(scratch.raw_buffer.data(), start, count);
-					DecodeUInt8Buffer(reinterpret_cast<uint8_t const*>(scratch.raw_buffer.data()), sample_count, buf);
+					aegisub::simd::DecodeUInt8ToFloat(reinterpret_cast<uint8_t const*>(scratch.raw_buffer.data()), sample_count, buf);
 					break;
 				case 2:
 					scratch.s16_buffer.resize(sample_count);
 					provider->GetAudio(scratch.s16_buffer.data(), start, count);
-					DecodeInt16Buffer(scratch.s16_buffer.data(), sample_count, buf);
+					aegisub::simd::DecodeInt16ToFloat(scratch.s16_buffer.data(), sample_count, buf);
 					break;
 				case 3:
 					scratch.raw_buffer.resize(sample_count * bytes_per_sample);
@@ -201,7 +113,7 @@ public:
 				case 4:
 					scratch.s32_buffer.resize(sample_count);
 					provider->GetAudio(scratch.s32_buffer.data(), start, count);
-					DecodeInt32Buffer(scratch.s32_buffer.data(), sample_count, buf);
+					aegisub::simd::DecodeInt32ToFloat(scratch.s32_buffer.data(), sample_count, buf);
 					break;
 				default:
 					std::fill(buf, buf + sample_count, 0.f);

@@ -107,6 +107,7 @@ if(GTEST_FOUND)
         tests/tests/scope_exit.cpp
         tests/tests/signals.cpp
         tests/tests/split.cpp
+        tests/tests/string_utils.cpp
         tests/tests/source_frame_format_selection.cpp
         tests/tests/source_frame_overlay.cpp
         tests/tests/subtitle_overlay_blend.cpp
@@ -159,6 +160,10 @@ if(GTEST_FOUND)
         CMAKE_BUILD
         "AEGISUB_PROJECT_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\""
     )
+    if(STRINGZILLA_INCLUDE_DIRS)
+        target_include_directories(gtest-run PRIVATE ${STRINGZILLA_INCLUDE_DIRS})
+        target_compile_definitions(gtest-run PRIVATE AEGISUB_USE_STRINGZILLA=1)
+    endif()
     aegisub_enable_wx_utf8_guard(gtest-run)
     target_include_directories(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     if(WITH_FFMS2)
@@ -298,5 +303,18 @@ if(WIN32)
         )
     endif()
 endif()
+
+add_executable(search-replace-bench EXCLUDE_FROM_ALL
+    tests/smoke/search_replace_bench.cpp
+)
+target_compile_features(search-replace-bench PRIVATE cxx_std_20)
+target_include_directories(search-replace-bench PRIVATE
+    "${PROJECT_SOURCE_DIR}/libaegisub/include"
+)
+if(STRINGZILLA_INCLUDE_DIRS)
+    target_include_directories(search-replace-bench PRIVATE ${STRINGZILLA_INCLUDE_DIRS})
+    target_compile_definitions(search-replace-bench PRIVATE AEGISUB_USE_STRINGZILLA=1)
+endif()
+target_link_libraries(search-replace-bench PRIVATE libaegisub)
 
 add_custom_target(test DEPENDS test-automation test-aegisub)

@@ -503,6 +503,7 @@
 			"Field" : 0,
 			"Match Case" : false,
 			"RegExp" : false,
+			"Unicode Escapes" : false,
 			"Skip Comments" : false,
 			"Skip Tags" : false
 		},

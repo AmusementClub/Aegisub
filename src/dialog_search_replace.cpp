@@ -29,6 +29,7 @@
 #include "utils.h"
 #include "validators.h"
 
+#include <libaegisub/exception.h>
 #include <libaegisub/make_unique.h>
 
 #include <functional>
@@ -57,6 +58,7 @@ DialogSearchReplace::DialogSearchReplace(agi::Context* c, bool replace)
 	settings->replace_with = recent_replace.empty() ? std::string() : from_wx(recent_replace.front());
 	settings->match_case = OPT_GET("Tool/Search Replace/Match Case")->GetBool();
 	settings->use_regex = OPT_GET("Tool/Search Replace/RegExp")->GetBool();
+	settings->use_unicode_escapes = OPT_GET("Tool/Search Replace/Unicode Escapes")->GetBool();
 	settings->ignore_comments = OPT_GET("Tool/Search Replace/Skip Comments")->GetBool();
 	settings->skip_tags = OPT_GET("Tool/Search Replace/Skip Tags")->GetBool();
 	settings->exact_match = false;
@@ -77,6 +79,7 @@ DialogSearchReplace::DialogSearchReplace(agi::Context* c, bool replace)
 	auto options_sizer = new wxBoxSizer(wxVERTICAL);
 	options_sizer->Add(new wxCheckBox(this, -1, _("&Match case"), wxDefaultPosition, wxDefaultSize, 0, wxGenericValidator(&settings->match_case)), wxSizerFlags().Border(wxBOTTOM));
 	options_sizer->Add(new wxCheckBox(this, -1, _("&Use regular expressions"), wxDefaultPosition, wxDefaultSize, 0, wxGenericValidator(&settings->use_regex)), wxSizerFlags().Border(wxBOTTOM));
+	options_sizer->Add(new wxCheckBox(this, -1, _("Use &Unicode escapes"), wxDefaultPosition, wxDefaultSize, 0, wxGenericValidator(&settings->use_unicode_escapes)), wxSizerFlags().Border(wxBOTTOM));
 	options_sizer->Add(new wxCheckBox(this, -1, _("&Skip Comments"), wxDefaultPosition, wxDefaultSize, 0, wxGenericValidator(&settings->ignore_comments)), wxSizerFlags().Border(wxBOTTOM));
 	options_sizer->Add(new wxCheckBox(this, -1, _("S&kip Override Tags"), wxDefaultPosition, wxDefaultSize, 0, wxGenericValidator(&settings->skip_tags)));
 
@@ -142,6 +145,10 @@ void DialogSearchReplace::FindReplace(bool (SearchReplaceEngine::*func)()) {
 	try {
 		((*core.search).*func)();
 	}
+	catch (agi::Exception const& e) {
+		c->ShowError(e.GetMessage());
+		return;
+	}
 	catch (std::exception const& e) {
 		c->ShowError(e.what());
 		return;
@@ -153,6 +160,7 @@ void DialogSearchReplace::FindReplace(bool (SearchReplaceEngine::*func)()) {
 
 	OPT_SET("Tool/Search Replace/Match Case")->SetBool(settings->match_case);
 	OPT_SET("Tool/Search Replace/RegExp")->SetBool(settings->use_regex);
+	OPT_SET("Tool/Search Replace/Unicode Escapes")->SetBool(settings->use_unicode_escapes);
 	OPT_SET("Tool/Search Replace/Skip Comments")->SetBool(settings->ignore_comments);
 	OPT_SET("Tool/Search Replace/Skip Tags")->SetBool(settings->skip_tags);
 	OPT_SET("Tool/Search Replace/Field")->SetInt(static_cast<int>(settings->field));

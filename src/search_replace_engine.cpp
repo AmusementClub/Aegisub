@@ -99,14 +99,26 @@ public:
 	}
 };
 
+std::string prepare_search_text(SearchReplaceSettings const& settings) {
+	if (!settings.use_unicode_escapes)
+		return settings.find;
+
+	std::string expanded;
+	if (!agi::util::strings::expand_unicode_codepoint_escapes(settings.find, expanded))
+		throw agi::InvalidInputException("Invalid Unicode escape. Use \\uXXXX, \\UXXXXXXXX, u+XXXX, or U+XXXX.");
+	return expanded;
+}
+
 template<typename Accessor>
 matcher get_matcher(SearchReplaceSettings const& settings, Accessor&& a) {
+	std::string prepared_find = prepare_search_text(settings);
+
 	if (settings.use_regex) {
 		int flags = boost::u32regex::perl;
 		if (!settings.match_case)
 			flags |= boost::u32regex::icase;
 
-		auto regex = boost::make_u32regex(settings.find, flags);
+		auto regex = boost::make_u32regex(prepared_find, flags);
 
 		return [=](const AssDialogue *diag, size_t start) mutable -> MatchState {
 			boost::smatch result;
@@ -119,19 +131,23 @@ matcher get_matcher(SearchReplaceSettings const& settings, Accessor&& a) {
 
 	bool full_match_only = settings.exact_match;
 	bool match_case = settings.match_case;
-	std::string look_for = settings.find;
+	std::string look_for = std::move(prepared_find);
+	agi::util::strings::view look_for_view(look_for);
+#ifdef AEGISUB_USE_STRINGZILLA
+	agi::util::strings::utf8_icase_searcher icase_searcher(look_for_view);
+#endif
 
 	return [=](const AssDialogue *diag, size_t start) mutable -> MatchState {
 		const auto str = a.get_view(diag, start);
 
 		if (full_match_only) {
 			if (match_case) {
-				return str == look_for
+				return str == look_for_view
 					? a.make_match_state(0, str.size())
 					: bad_match;
 			}
 #ifdef AEGISUB_USE_STRINGZILLA
-			const auto match = agi::util::strings::utf8_find_icase(str, look_for);
+			const auto match = agi::util::strings::utf8_find_icase(str, icase_searcher);
 			return match && match.offset == 0 && match.length == str.size()
 				? a.make_match_state(0, str.size())
 				: bad_match;
@@ -144,12 +160,12 @@ matcher get_matcher(SearchReplaceSettings const& settings, Accessor&& a) {
 		}
 
 		if (match_case) {
-			const auto pos = agi::util::strings::find(str, look_for);
-			return pos == agi::util::strings::npos ? bad_match : a.make_match_state(pos, pos + look_for.size());
+			const auto pos = agi::util::strings::find(str, look_for_view);
+			return pos == agi::util::strings::npos ? bad_match : a.make_match_state(pos, pos + look_for_view.size());
 		}
 
 #ifdef AEGISUB_USE_STRINGZILLA
-		const auto match = agi::util::strings::utf8_find_icase(str, look_for);
+		const auto match = agi::util::strings::utf8_find_icase(str, icase_searcher);
 		return match
 			? a.make_match_state(match.offset, match.offset + match.length)
 			: bad_match;

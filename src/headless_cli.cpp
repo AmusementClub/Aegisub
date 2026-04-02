@@ -367,6 +367,19 @@ bool ParseProjectSessionStepLine(std::string const& line, size_t line_number, st
 		return parsed;
 	};
 
+	auto remainder_after_token = [&](size_t token_count) -> std::string {
+		size_t index = 0;
+		size_t consumed_tokens = 0;
+		while (index < line.size() && consumed_tokens < token_count) {
+			while (index < line.size() && !std::isspace(static_cast<unsigned char>(line[index])))
+				++index;
+			++consumed_tokens;
+			while (index < line.size() && std::isspace(static_cast<unsigned char>(line[index])))
+				++index;
+		}
+		return index < line.size() ? line.substr(index) : std::string{};
+	};
+
 	auto step = ProjectSessionStep{};
 	step.source_text = line;
 
@@ -403,6 +416,65 @@ bool ParseProjectSessionStepLine(std::string const& line, size_t line_number, st
 	}
 	else if (command == "close-keyframes") {
 		step.kind = ProjectSessionStepKind::CloseKeyframes;
+	}
+	else if (command == "insert-dialogue") {
+		if (tokens.size() < 5)
+			return invalid("insert-dialogue expects <row> <start_ms> <end_ms> <comment> [text...]");
+		auto row = require_int(1, "row");
+		auto start_ms = require_int(2, "start_ms");
+		auto end_ms = require_int(3, "end_ms");
+		auto comment = ParseBoolValue(tokens[4]);
+		if (!row || !start_ms || !end_ms || !comment || *row < 0 || *start_ms < 0 || *end_ms <= *start_ms)
+			return invalid("insert-dialogue requires non-negative row/start, end > start, and true/false comment");
+		step.kind = ProjectSessionStepKind::InsertDialogue;
+		step.primary_value = *row;
+		step.secondary_value = *start_ms;
+		step.tertiary_value = *end_ms;
+		step.bool_value = *comment;
+		step.text_value = remainder_after_token(5);
+	}
+	else if (command == "delete-dialogue") {
+		if (tokens.size() != 2)
+			return invalid("delete-dialogue expects <row>");
+		auto row = require_int(1, "row");
+		if (!row || *row < 0)
+			return invalid("delete-dialogue requires a non-negative row");
+		step.kind = ProjectSessionStepKind::DeleteDialogue;
+		step.primary_value = *row;
+	}
+	else if (command == "set-dialogue-times") {
+		if (tokens.size() != 4)
+			return invalid("set-dialogue-times expects <row> <start_ms> <end_ms>");
+		auto row = require_int(1, "row");
+		auto start_ms = require_int(2, "start_ms");
+		auto end_ms = require_int(3, "end_ms");
+		if (!row || !start_ms || !end_ms || *row < 0 || *start_ms < 0 || *end_ms <= *start_ms)
+			return invalid("set-dialogue-times requires non-negative row/start and end > start");
+		step.kind = ProjectSessionStepKind::SetDialogueTimes;
+		step.primary_value = *row;
+		step.secondary_value = *start_ms;
+		step.tertiary_value = *end_ms;
+	}
+	else if (command == "assert-dialogue") {
+		if (tokens.size() < 5)
+			return invalid("assert-dialogue expects <row> <start_ms> <end_ms> <comment> [text...]");
+		auto row = require_int(1, "row");
+		auto start_ms = require_int(2, "start_ms");
+		auto end_ms = require_int(3, "end_ms");
+		auto comment = ParseBoolValue(tokens[4]);
+		if (!row || !start_ms || !end_ms || !comment || *row < 0 || *start_ms < 0 || *end_ms <= *start_ms)
+			return invalid("assert-dialogue requires non-negative row/start, end > start, and true/false comment");
+		step.kind = ProjectSessionStepKind::AssertDialogue;
+		step.primary_value = *row;
+		step.secondary_value = *start_ms;
+		step.tertiary_value = *end_ms;
+		step.bool_value = *comment;
+		step.text_value = remainder_after_token(5);
+	}
+	else if (command == "save-subtitles") {
+		if (tokens.size() != 1)
+			return invalid("save-subtitles does not accept inline arguments; use --output-subtitle when needed");
+		step.kind = ProjectSessionStepKind::SaveSubtitles;
 	}
 	else if (command == "query-project") {
 		step.kind = ProjectSessionStepKind::QueryProject;
@@ -511,6 +583,13 @@ std::optional<ProjectSessionRequest> ParseSessionProjectRequest(std::vector<std:
 			if (!value)
 				return std::nullopt;
 			request.subtitle_path = agi::fs::path(*value);
+			continue;
+		}
+		if (arg == "--output-subtitle") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.output_subtitle_path = agi::fs::path(*value);
 			continue;
 		}
 		if (arg == "--subtitle-encoding") {
@@ -1145,14 +1224,16 @@ std::string Usage() {
 		"Project session steps:\n"
 		"  open-media | reopen-media | close-media | open-subtitles | open-subtitles-unlinked\n"
 		"  open-subtitles-from-video | close-subtitles | open-timecodes | close-timecodes\n"
-		"  open-keyframes | close-keyframes | query-project\n"
+		"  open-keyframes | close-keyframes | insert-dialogue <row> <start_ms> <end_ms> <comment> [text...]\n"
+		"  delete-dialogue <row> | set-dialogue-times <row> <start_ms> <end_ms>\n"
+		"  assert-dialogue <row> <start_ms> <end_ms> <comment> [text...] | save-subtitles | query-project\n"
 		"  assert-project <true|false> <true|false> <true|false> <true|false> <true|false>\n"
 		"  assert-subtitle-counts <style_count> <event_count> <dialogue_count> <comment_count>\n"
 		"  assert-subtitle-modified <true|false>\n"
 		"\n"
 		"Project session flags:\n"
 		"  --script-file <path> [--video <path>] [--audio <path>] [--skip-audio]\n"
-		"  [--subtitle <path>] [--subtitle-encoding <name>] [--timecodes <path>] [--keyframes <path>]\n"
+		"  [--subtitle <path>] [--output-subtitle <path>] [--subtitle-encoding <name>] [--timecodes <path>] [--keyframes <path>]\n"
 		"  [--video-provider <name>] [--audio-provider <name>] [--trace-dir <path>]\n"
 		"  [--video-track-index <index>] [--audio-track-index <index>] [--subtitle-track-index <index>]\n"
 		"  [--audio-rate-scale <scale>] [--audio-quantum-ms <ms>]\n"

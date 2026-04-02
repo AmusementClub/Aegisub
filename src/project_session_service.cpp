@@ -15,11 +15,14 @@
 
 #include "project_session_service.h"
 
+#include "ass_dialogue.h"
+#include "ass_file.h"
 #include "headless_playback_session_host.h"
 #include "include/aegisub/context.h"
 #include "project.h"
 #include "project_open_service.h"
 #include "provider_selection_diagnostics.h"
+#include "selection_controller.h"
 #include "subs_controller.h"
 
 #include <libaegisub/fs.h>
@@ -69,6 +72,11 @@ std::string StepName(ProjectSessionStepKind kind) {
 	case ProjectSessionStepKind::CloseTimecodes: return "close-timecodes";
 	case ProjectSessionStepKind::OpenKeyframes: return "open-keyframes";
 	case ProjectSessionStepKind::CloseKeyframes: return "close-keyframes";
+	case ProjectSessionStepKind::InsertDialogue: return "insert-dialogue";
+	case ProjectSessionStepKind::DeleteDialogue: return "delete-dialogue";
+	case ProjectSessionStepKind::SetDialogueTimes: return "set-dialogue-times";
+	case ProjectSessionStepKind::AssertDialogue: return "assert-dialogue";
+	case ProjectSessionStepKind::SaveSubtitles: return "save-subtitles";
 	case ProjectSessionStepKind::QueryProject: return "query-project";
 	case ProjectSessionStepKind::AssertProject: return "assert-project";
 	case ProjectSessionStepKind::AssertSubtitleCounts: return "assert-subtitle-counts";
@@ -94,6 +102,10 @@ class Runner final {
 	size_t close_timecodes_count = 0;
 	size_t open_keyframes_count = 0;
 	size_t close_keyframes_count = 0;
+	size_t insert_dialogue_count = 0;
+	size_t delete_dialogue_count = 0;
+	size_t set_dialogue_times_count = 0;
+	size_t save_subtitles_count = 0;
 	size_t query_count = 0;
 
 	project_open_service::PlaybackOpenOptions BuildOpenOptions() const {
@@ -145,6 +157,46 @@ class Runner final {
 			return false;
 		}
 		return true;
+	}
+
+	bool RequireSubtitleSession(ProjectSessionStep const& step, size_t current_step, agi::ContextCoreSession const& core) {
+		auto snapshot = project_query_service::QueryProjectSession(core);
+		if (snapshot.subtitle_file_loaded)
+			return true;
+		FailStep(current_step, step, "subtitles must be loaded before subtitle edit step");
+		return false;
+	}
+
+	AssDialogue* FindDialogueByRow(agi::ContextCoreSession const& core, int row) const {
+		if (row < 0)
+			return nullptr;
+		int current_row = 0;
+		for (auto& dialogue : core.ass->Events) {
+			if (current_row == row)
+				return &dialogue;
+			++current_row;
+		}
+		return nullptr;
+	}
+
+	EntryList<AssDialogue>::iterator FindInsertPositionByRow(agi::ContextCoreSession const& core, int row, bool& valid) const {
+		valid = row >= 0;
+		int current_row = 0;
+		auto it = core.ass->Events.begin();
+		for (; it != core.ass->Events.end() && current_row < row; ++it, ++current_row) { }
+		valid = valid && current_row == row;
+		if (!valid && it == core.ass->Events.end() && current_row == row)
+			valid = true;
+		return it;
+	}
+
+	void SetActiveLineAndSelection(agi::ContextCoreSession const& core, AssDialogue* line) {
+		if (!line && !core.ass->Events.empty())
+			line = &core.ass->Events.front();
+		if (line)
+			core.selectionController->SetSelectionAndActive({ line }, line);
+		else
+			core.selectionController->SetSelectionAndActive({}, nullptr);
 	}
 
 	void WriteSnapshot(std::ofstream& out, std::string const& prefix, ProjectSessionSnapshot const& snapshot) const {
@@ -215,6 +267,7 @@ class Runner final {
 		out << "session.video=" << Sanitize(ToGenericString(request.video_path)) << "\n";
 		out << "session.audio=" << Sanitize(ToGenericString(request.audio_path)) << "\n";
 		out << "session.subtitle=" << Sanitize(ToGenericString(request.subtitle_path)) << "\n";
+		out << "session.output_subtitle=" << Sanitize(ToGenericString(request.output_subtitle_path)) << "\n";
 		out << "session.timecodes=" << Sanitize(ToGenericString(request.timecodes_path)) << "\n";
 		out << "session.keyframes=" << Sanitize(ToGenericString(request.keyframes_path)) << "\n";
 		out << "session.subtitle_encoding=" << Sanitize(request.subtitle_encoding) << "\n";
@@ -249,6 +302,10 @@ class Runner final {
 		out << "project.close_timecodes_count=" << result.close_timecodes_count << "\n";
 		out << "project.open_keyframes_count=" << result.open_keyframes_count << "\n";
 		out << "project.close_keyframes_count=" << result.close_keyframes_count << "\n";
+		out << "project.insert_dialogue_count=" << result.insert_dialogue_count << "\n";
+		out << "project.delete_dialogue_count=" << result.delete_dialogue_count << "\n";
+		out << "project.set_dialogue_times_count=" << result.set_dialogue_times_count << "\n";
+		out << "project.save_subtitles_count=" << result.save_subtitles_count << "\n";
 		out << "project.query_count=" << result.query_count << "\n";
 		write_value("project.selected.video_provider", result.selected_video_provider);
 		write_value("project.selected.audio_provider", result.selected_audio_provider);
@@ -279,6 +336,7 @@ class Runner final {
 		std::cout << "video=" << ToGenericString(request.video_path) << "\n";
 		std::cout << "audio=" << ToGenericString(request.audio_path) << "\n";
 		std::cout << "subtitle=" << ToGenericString(request.subtitle_path) << "\n";
+		std::cout << "output_subtitle=" << ToGenericString(request.output_subtitle_path) << "\n";
 		std::cout << "timecodes=" << ToGenericString(request.timecodes_path) << "\n";
 		std::cout << "keyframes=" << ToGenericString(request.keyframes_path) << "\n";
 		std::cout << "subtitle_encoding=" << request.subtitle_encoding << "\n";
@@ -300,6 +358,10 @@ class Runner final {
 		std::cout << "close_timecodes_count=" << result.close_timecodes_count << "\n";
 		std::cout << "open_keyframes_count=" << result.open_keyframes_count << "\n";
 		std::cout << "close_keyframes_count=" << result.close_keyframes_count << "\n";
+		std::cout << "insert_dialogue_count=" << result.insert_dialogue_count << "\n";
+		std::cout << "delete_dialogue_count=" << result.delete_dialogue_count << "\n";
+		std::cout << "set_dialogue_times_count=" << result.set_dialogue_times_count << "\n";
+		std::cout << "save_subtitles_count=" << result.save_subtitles_count << "\n";
 		std::cout << "query_count=" << result.query_count << "\n";
 		PrintSnapshot(result.final_project, "final");
 		for (size_t i = 0; i < queries.size(); ++i) {
@@ -328,6 +390,10 @@ class Runner final {
 		result.close_timecodes_count = close_timecodes_count;
 		result.open_keyframes_count = open_keyframes_count;
 		result.close_keyframes_count = close_keyframes_count;
+		result.insert_dialogue_count = insert_dialogue_count;
+		result.delete_dialogue_count = delete_dialogue_count;
+		result.set_dialogue_times_count = set_dialogue_times_count;
+		result.save_subtitles_count = save_subtitles_count;
 		result.query_count = query_count;
 		result.trace_dir = runtime.TraceDir();
 		result.message = message;
@@ -507,6 +573,146 @@ class Runner final {
 				return false;
 			}
 			++close_keyframes_count;
+			return true;
+		}
+		case ProjectSessionStepKind::InsertDialogue: {
+			auto core = runtime.GetCore();
+			if (!RequireSubtitleSession(step, current_step, core))
+				return false;
+
+			bool valid = false;
+			auto insert_pos = FindInsertPositionByRow(core, step.primary_value, valid);
+			if (!valid) {
+				FailStep(current_step, step, "insert-dialogue row is out of range");
+				return false;
+			}
+
+			AssDialogue* template_line = nullptr;
+			if (!core.ass->Events.empty()) {
+				if (insert_pos != core.ass->Events.end())
+					template_line = &*insert_pos;
+				else
+					template_line = &core.ass->Events.back();
+			}
+
+			auto new_line = template_line ? std::make_unique<AssDialogue>(*template_line) : std::make_unique<AssDialogue>();
+			new_line->Start = step.secondary_value;
+			new_line->End = step.tertiary_value;
+			new_line->Comment = step.bool_value;
+			new_line->Text = step.text_value;
+			new_line->Actor = boost::flyweight<std::string>{};
+			new_line->Effect = boost::flyweight<std::string>{};
+			AssDialogue* inserted = new_line.get();
+			core.ass->Events.insert(insert_pos, *new_line.release());
+			core.ass->Commit("headless insert dialogue", AssFile::COMMIT_DIAG_ADDREM, -1, inserted);
+			SetActiveLineAndSelection(core, inserted);
+			++insert_dialogue_count;
+			return true;
+		}
+		case ProjectSessionStepKind::DeleteDialogue: {
+			auto core = runtime.GetCore();
+			if (!RequireSubtitleSession(step, current_step, core))
+				return false;
+
+			auto* line = FindDialogueByRow(core, step.primary_value);
+			if (!line) {
+				FailStep(current_step, step, "delete-dialogue row is out of range");
+				return false;
+			}
+
+			std::unique_ptr<AssDialogue> deleted(line);
+			core.ass->Events.erase(core.ass->iterator_to(*line));
+			core.ass->Commit("headless delete dialogue", AssFile::COMMIT_DIAG_ADDREM);
+
+			auto* next_line = FindDialogueByRow(core, std::min(step.primary_value, static_cast<int>(core.ass->Events.size()) - 1));
+			SetActiveLineAndSelection(core, next_line);
+			++delete_dialogue_count;
+			return true;
+		}
+		case ProjectSessionStepKind::SetDialogueTimes: {
+			auto core = runtime.GetCore();
+			if (!RequireSubtitleSession(step, current_step, core))
+				return false;
+
+			auto* line = FindDialogueByRow(core, step.primary_value);
+			if (!line) {
+				FailStep(current_step, step, "set-dialogue-times row is out of range");
+				return false;
+			}
+			line->Start = step.secondary_value;
+			line->End = step.tertiary_value;
+			core.ass->Commit("headless set dialogue times", AssFile::COMMIT_DIAG_TIME, -1, line);
+			SetActiveLineAndSelection(core, line);
+			++set_dialogue_times_count;
+			return true;
+		}
+		case ProjectSessionStepKind::AssertDialogue: {
+			auto core = runtime.GetCore();
+			if (!RequireSubtitleSession(step, current_step, core))
+				return false;
+
+			auto* line = FindDialogueByRow(core, step.primary_value);
+			if (!line) {
+				FailStep(current_step, step, "assert-dialogue row is out of range");
+				return false;
+			}
+			auto snapshot = project_query_service::QueryProjectSession(core);
+			RecordProjectQuery(current_step, "assert-dialogue", snapshot);
+			if (line->Start.GetMillisecond() != step.secondary_value) {
+				FailStep(current_step, step, "dialogue start time mismatch");
+				return false;
+			}
+			if (line->End.GetMillisecond() != step.tertiary_value) {
+				FailStep(current_step, step, "dialogue end time mismatch");
+				return false;
+			}
+			if (line->Comment != step.bool_value) {
+				FailStep(current_step, step, "dialogue comment flag mismatch");
+				return false;
+			}
+			if (line->Text.get() != step.text_value) {
+				FailStep(current_step, step, "dialogue text mismatch");
+				return false;
+			}
+			return true;
+		}
+		case ProjectSessionStepKind::SaveSubtitles: {
+			auto core = runtime.GetCore();
+			if (!RequireSubtitleSession(step, current_step, core))
+				return false;
+
+			auto save_path = !request.output_subtitle_path.empty()
+				? request.output_subtitle_path
+				: core.subsController->HasFile() ? core.subsController->Filename() : agi::fs::path{};
+			if (save_path.empty()) {
+				FailStep(current_step, step, "save-subtitles requires --output-subtitle or a bound subtitle file");
+				return false;
+			}
+
+			try {
+				if (!save_path.parent_path().empty())
+					agi::fs::CreateDirectory(save_path.parent_path());
+				core.subsController->Save(save_path, request.subtitle_encoding);
+			}
+			catch (std::exception const& e) {
+				FailStep(current_step, step, e.what());
+				return false;
+			}
+			catch (...) {
+				FailStep(current_step, step, "save-subtitles threw an unknown exception");
+				return false;
+			}
+
+			auto snapshot = project_query_service::QueryProjectSession(core);
+			if (!snapshot.subtitle_file_loaded || snapshot.subtitle_path != save_path) {
+				FailStep(current_step, step, "subtitle file did not bind to saved output path");
+				return false;
+			}
+			if (snapshot.subtitle_modified) {
+				FailStep(current_step, step, "subtitle file remained modified after save");
+				return false;
+			}
+			++save_subtitles_count;
 			return true;
 		}
 		case ProjectSessionStepKind::QueryProject: {

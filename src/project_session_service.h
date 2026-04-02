@@ -23,6 +23,11 @@ enum class ProjectSessionStepKind {
 	CloseTimecodes,
 	OpenKeyframes,
 	CloseKeyframes,
+	InsertDialogue,
+	DeleteDialogue,
+	SetDialogueTimes,
+	AssertDialogue,
+	SaveSubtitles,
 	QueryProject,
 	AssertProject,
 	AssertSubtitleCounts,
@@ -41,6 +46,8 @@ struct ProjectSessionStep {
 	int secondary_value = 0;
 	int tertiary_value = 0;
 	int quaternary_value = 0;
+	bool bool_value = false;
+	std::string text_value;
 	std::string source_text;
 };
 
@@ -48,6 +55,7 @@ struct ProjectSessionRequest {
 	agi::fs::path video_path;
 	agi::fs::path audio_path;
 	agi::fs::path subtitle_path;
+	agi::fs::path output_subtitle_path;
 	agi::fs::path timecodes_path;
 	agi::fs::path keyframes_path;
 	std::string subtitle_encoding;
@@ -77,6 +85,10 @@ struct ProjectSessionResult {
 	size_t close_timecodes_count = 0;
 	size_t open_keyframes_count = 0;
 	size_t close_keyframes_count = 0;
+	size_t insert_dialogue_count = 0;
+	size_t delete_dialogue_count = 0;
+	size_t set_dialogue_times_count = 0;
+	size_t save_subtitles_count = 0;
 	size_t query_count = 0;
 	agi::fs::path trace_dir;
 	project_query_service::ProjectSessionSnapshot final_project;

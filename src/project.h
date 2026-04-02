@@ -66,7 +66,6 @@ class Project {
 	void UpdateRelativePaths();
 	void RefreshSubtitlesProvider(bool recreate_provider);
 	void ReloadAudio();
-	void ReloadSubtitlesProvider();
 	void ReloadVideo();
 
 	void SetPath(agi::fs::path& var, const char *token, const char *mru, agi::fs::path const& value);
@@ -88,6 +87,7 @@ public:
 	void CloseVideo();
 	AsyncVideoProvider *VideoProvider() const { return video_provider.get(); }
 	agi::fs::path const& VideoName() const { return video_file; }
+	void ReloadSubtitlesProvider();
 
 	void LoadTimecodes(agi::fs::path path);
 	void CloseTimecodes();

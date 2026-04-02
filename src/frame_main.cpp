@@ -74,9 +74,20 @@
 #include <wx/statline.h>
 #include <wx/sysopt.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 enum {
 	ID_APP_TIMER_STATUSCLEAR = 12002
+#ifdef _WIN32
+	,ID_APP_TIMER_FONTCHANGE_DEBOUNCE
+#endif
 };
+
+#ifdef _WIN32
+constexpr int kFontChangeDebounceDelayMs = 500;
+#endif
 
 #ifdef WITH_STARTUPLOG
 #define StartupLog(a) agi::ShowFrameMainStartupLogDialog(wxS(a))
@@ -184,6 +195,9 @@ FrameMain::FrameMain()
 FrameMain::~FrameMain () {
 	ui_activation.Deactivate();
 	auto core = context->GetCore();
+#ifdef _WIN32
+	FontChangeDebounce.Stop();
+#endif
 	core.project->CloseAudio();
 	core.project->CloseVideo();
 
@@ -331,6 +345,9 @@ void FrameMain::StatusTimeout(wxString text,int ms) {
 
 BEGIN_EVENT_TABLE(FrameMain, wxFrame)
 	EVT_TIMER(ID_APP_TIMER_STATUSCLEAR, FrameMain::OnStatusClear)
+#ifdef _WIN32
+	EVT_TIMER(ID_APP_TIMER_FONTCHANGE_DEBOUNCE, FrameMain::OnFontChangeDebounce)
+#endif
 	EVT_CLOSE(FrameMain::OnCloseWindow)
 	EVT_CHAR_HOOK(FrameMain::OnKeyDown)
 	EVT_MOUSEWHEEL(FrameMain::OnMouseWheel)
@@ -355,12 +372,31 @@ void FrameMain::OnCloseWindow(wxCloseEvent &event) {
 	// Store maximization state
 	OPT_SET("App/Maximized")->SetBool(IsMaximized());
 
+#ifdef _WIN32
+	FontChangeDebounce.Stop();
+#endif
+
 	Destroy();
 }
 
 void FrameMain::OnStatusClear(wxTimerEvent &) {
 	SetStatusText(wxString(),1);
 }
+
+#ifdef _WIN32
+void FrameMain::OnFontChangeDebounce(wxTimerEvent &) {
+	context->GetCore().project->ReloadSubtitlesProvider();
+}
+
+WXLRESULT FrameMain::MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lParam) {
+	if (message == WM_FONTCHANGE) {
+		FontChangeDebounce.SetOwner(this, ID_APP_TIMER_FONTCHANGE_DEBOUNCE);
+		FontChangeDebounce.Start(kFontChangeDebounceDelayMs, true);
+	}
+
+	return wxFrame::MSWWindowProc(message, wParam, lParam);
+}
+#endif
 
 void FrameMain::OnAudioOpen(agi::AudioProvider *provider) {
 	if (provider)

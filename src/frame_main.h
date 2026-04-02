@@ -55,6 +55,9 @@ class FrameMain : public wxFrame {
 	bool showVideo = true; ///< Is the video display shown?
 	bool showAudio = true; ///< Is the audio display shown?
 	wxTimer StatusClear;   ///< Status bar timeout timer
+#ifdef _WIN32
+	wxTimer FontChangeDebounce; ///< Debounces WM_FONTCHANGE bursts before refreshing subtitles
+#endif
 
 	void InitContents();
 
@@ -64,6 +67,9 @@ class FrameMain : public wxFrame {
 	void OnMouseWheel(wxMouseEvent &evt);
 
 	void OnStatusClear(wxTimerEvent &event);
+#ifdef _WIN32
+	void OnFontChangeDebounce(wxTimerEvent &event);
+#endif
 	void OnCloseWindow (wxCloseEvent &event);
 
 	void OnAudioOpen(agi::AudioProvider *provider);
@@ -83,6 +89,10 @@ class FrameMain : public wxFrame {
 public:
 	FrameMain();
 	~FrameMain();
+
+#ifdef _WIN32
+	WXLRESULT MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lParam) override;
+#endif
 
 	/// Set the status bar text
 	/// @param text New status bar text

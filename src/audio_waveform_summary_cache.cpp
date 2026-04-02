@@ -4,6 +4,11 @@
 
 namespace {
 constexpr size_t block_bytes = sizeof(AudioWaveformSummaryBlock);
+
+std::vector<float>& GetWaveformSummaryScratch() {
+	thread_local std::vector<float> scratch;
+	return scratch;
+}
 }
 
 AudioWaveformSummaryCache::AudioWaveformSummaryCache() {
@@ -54,7 +59,8 @@ std::unique_ptr<AudioWaveformSummaryBlock> AudioWaveformSummaryCache::BuildBlock
 	const double pixel_samples = pixel_ms * source->GetSampleRate() / 1000.0;
 	const int samples_per_pixel = std::max(1, static_cast<int>(pixel_samples));
 	const size_t block_frames = AudioWaveformSummaryBlock::width * static_cast<size_t>(samples_per_pixel);
-	std::vector<float> audio_buffer(block_frames * channels);
+	auto &audio_buffer = GetWaveformSummaryScratch();
+	audio_buffer.resize(block_frames * channels);
 
 	const int64_t block_start = static_cast<int64_t>(block_index * AudioWaveformSummaryBlock::width * pixel_samples);
 	source->GetFloatAudio(audio_buffer.data(), block_start, static_cast<int64_t>(block_frames));

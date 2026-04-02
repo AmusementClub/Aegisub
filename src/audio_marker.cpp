@@ -22,7 +22,6 @@
 #include "audio_marker.h"
 
 #include "include/aegisub/context.h"
-#include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "pen.h"
 #include "project.h"
@@ -100,8 +99,9 @@ public:
 
 VideoPositionMarkerProvider::VideoPositionMarkerProvider(agi::Context *c)
 : vc(c->GetCore().videoController.get())
-, displayed_frame(vc->GetFrameN())
-, video_frame_presented_slot(c->GetUI().AddVideoFramePresentedListener(&VideoPositionMarkerProvider::Update, this))
+, current_frame(vc->GetFrameN())
+, video_seek_slot(vc->AddSeekListener(&VideoPositionMarkerProvider::Update, this))
+, playback_frame_advanced_slot(vc->AddPlaybackFrameAdvancedListener(&VideoPositionMarkerProvider::Update, this))
 , enable_opt_changed_slot(OPT_SUB("Audio/Display/Draw/Video Position", &VideoPositionMarkerProvider::OptChanged, this))
 {
 	OptChanged(*OPT_GET("Audio/Display/Draw/Video Position"));
@@ -110,7 +110,7 @@ VideoPositionMarkerProvider::VideoPositionMarkerProvider(agi::Context *c)
 VideoPositionMarkerProvider::~VideoPositionMarkerProvider() { }
 
 void VideoPositionMarkerProvider::Update(int frame_number) {
-	displayed_frame = frame_number;
+	current_frame = frame_number;
 	if (!marker)
 		return;
 
@@ -121,7 +121,7 @@ void VideoPositionMarkerProvider::Update(int frame_number) {
 void VideoPositionMarkerProvider::OptChanged(agi::OptionValue const& opt) {
 	if (opt.GetBool()) {
 		marker = agi::make_unique<VideoPositionMarker>();
-		int const frame = displayed_frame >= 0 ? displayed_frame : vc->GetFrameN();
+		int const frame = current_frame >= 0 ? current_frame : vc->GetFrameN();
 		marker->SetPosition(vc->TimeAtFrame(frame));
 	}
 	else {

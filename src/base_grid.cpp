@@ -66,7 +66,7 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 : wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, wxWANTS_CHARS | wxSUNKEN_BORDER)
 , scrollBar(new wxScrollBar(this, GRID_SCROLLBAR, wxDefaultPosition, wxDefaultSize, wxSB_VERTICAL))
 , context(context)
-, displayed_frame(context->GetCore().videoController->GetFrameN())
+, current_frame(context->GetCore().videoController->GetFrameN())
 , columns(GetGridColumns())
 , columns_visible(OPT_GET("Subtitle/Grid/Column")->GetListBool())
 {
@@ -95,7 +95,8 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 		core.selectionController->AddActiveLineListener(&BaseGrid::OnActiveLineChanged, this),
 		core.selectionController->AddSelectionListener([&]{ Refresh(false); }),
 		core.project->AddVideoProviderListener(&BaseGrid::OnVideoProviderChanged, this),
-		context->GetUI().AddVideoFramePresentedListener(&BaseGrid::OnFramePresented, this),
+		core.videoController->AddSeekListener(&BaseGrid::OnCurrentFrameChanged, this),
+		core.videoController->AddPlaybackFrameAdvancedListener(&BaseGrid::OnCurrentFrameChanged, this),
 
 		OPT_SUB("Subtitle/Grid/Font Face", &BaseGrid::UpdateStyle, this),
 		OPT_SUB("Subtitle/Grid/Font Size", &BaseGrid::UpdateStyle, this),
@@ -254,8 +255,8 @@ void BaseGrid::SelectRow(int row, bool addToSelected, bool select) {
 	}
 }
 
-void BaseGrid::OnFramePresented(int frame_number) {
-	displayed_frame = frame_number;
+void BaseGrid::OnCurrentFrameChanged(int frame_number) {
+	current_frame = frame_number;
 	if (!OPT_GET("Subtitle/Grid/Highlight Subtitles in Frame")->GetBool())
 		return;
 
@@ -278,7 +279,7 @@ void BaseGrid::OnFramePresented(int frame_number) {
 
 void BaseGrid::OnVideoProviderChanged() {
 	auto core = context->GetCore();
-	displayed_frame = core.project->VideoProvider() ? core.videoController->GetFrameN() : -1;
+	current_frame = core.project->VideoProvider() ? core.videoController->GetFrameN() : -1;
 	Refresh(false);
 }
 
@@ -650,10 +651,10 @@ AssDialogue *BaseGrid::GetDialogue(int n) const {
 
 bool BaseGrid::IsDisplayed(const AssDialogue *line) const {
 	auto core = context->GetCore();
-	if (!core.project->VideoProvider() || displayed_frame < 0)
+	if (!core.project->VideoProvider() || current_frame < 0)
 		return false;
-	return core.project->Timecodes().FrameAtTime(line->Start, agi::vfr::START) <= displayed_frame
-		&& core.project->Timecodes().FrameAtTime(line->End, agi::vfr::END) >= displayed_frame;
+	return core.project->Timecodes().FrameAtTime(line->Start, agi::vfr::START) <= current_frame
+		&& core.project->Timecodes().FrameAtTime(line->End, agi::vfr::END) >= current_frame;
 }
 
 void BaseGrid::OnCharHook(wxKeyEvent &event) {

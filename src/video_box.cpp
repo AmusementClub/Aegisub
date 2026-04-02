@@ -34,7 +34,6 @@
 #include "compat.h"
 #include "format.h"
 #include "include/aegisub/context.h"
-#include "include/aegisub/context_ui.h"
 #include "include/aegisub/toolbar.h"
 #include "options.h"
 #include "project.h"
@@ -52,7 +51,7 @@
 VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 : wxPanel(parent, -1)
 , context(context)
-, displayed_frame(context->GetCore().videoController->GetFrameN())
+, current_frame(context->GetCore().videoController->GetFrameN())
 {
 	auto videoSlider = new VideoSlider(this, context);
 	videoSlider->SetToolTip(_("Seek video"));
@@ -104,9 +103,10 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 		core.ass->AddCommitListener(&VideoBox::UpdateTimeBoxes, this),
 		core.project->AddKeyframesListener(&VideoBox::UpdateTimeBoxes, this),
 		core.project->AddTimecodesListener(&VideoBox::UpdateTimeBoxes, this),
-		core.project->AddVideoProviderListener(&VideoBox::UpdateTimeBoxes, this),
+		core.project->AddVideoProviderListener(&VideoBox::OnVideoProviderChanged, this),
 		core.selectionController->AddSelectionListener(&VideoBox::UpdateTimeBoxes, this),
-		context->GetUI().AddVideoFramePresentedListener(&VideoBox::OnFramePresented, this),
+		core.videoController->AddSeekListener(&VideoBox::OnCurrentFrameChanged, this),
+		core.videoController->AddPlaybackFrameAdvancedListener(&VideoBox::OnCurrentFrameChanged, this),
 	});
 }
 
@@ -114,7 +114,7 @@ void VideoBox::UpdateTimeBoxes() {
 	auto core = context->GetCore();
 	if (!core.project->VideoProvider()) return;
 
-	int frame = displayed_frame >= 0 ? displayed_frame : core.videoController->GetFrameN();
+	int frame = current_frame >= 0 ? current_frame : core.videoController->GetFrameN();
 	int time = core.videoController->TimeAtFrame(frame, agi::vfr::EXACT);
 
 	// Set the text box for frame number and time
@@ -140,7 +140,13 @@ void VideoBox::UpdateTimeBoxes() {
 	}
 }
 
-void VideoBox::OnFramePresented(int frame_number) {
-	displayed_frame = frame_number;
+void VideoBox::OnCurrentFrameChanged(int frame_number) {
+	current_frame = frame_number;
+	UpdateTimeBoxes();
+}
+
+void VideoBox::OnVideoProviderChanged() {
+	auto core = context->GetCore();
+	current_frame = core.project->VideoProvider() ? core.videoController->GetFrameN() : -1;
 	UpdateTimeBoxes();
 }

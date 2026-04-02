@@ -58,7 +58,7 @@ class BaseGrid final : public wxWindow {
 	int yPos = 0;
 
 	int active_row = -1;
-	int displayed_frame = -1;
+	int current_frame = -1;
 
 	std::unique_ptr<WidthHelper> width_helper;
 
@@ -102,7 +102,7 @@ class BaseGrid final : public wxWindow {
 	void OnSize(wxSizeEvent &event);
 	void OnSubtitlesCommit(int type);
 	void OnActiveLineChanged(AssDialogue *);
-	void OnFramePresented(int frame_number);
+	void OnCurrentFrameChanged(int frame_number);
 	void OnVideoProviderChanged();
 
 	void AdjustScrollbar();

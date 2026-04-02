@@ -84,6 +84,7 @@ std::set<AssDialogue*> process(std::string const& match_text, bool match_case, M
 		mode == Mode::REGEXP,
 		false,
 		false,
+		false,
 		mode == Mode::EXACT
 	};
 

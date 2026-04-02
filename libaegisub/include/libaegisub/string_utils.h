@@ -307,6 +307,106 @@ inline bool parse_hex_byte(view value, unsigned char& out) {
 	return true;
 }
 
+inline bool is_valid_unicode_scalar(char32_t codepoint) {
+	return codepoint <= 0x10FFFF && !(codepoint >= 0xD800 && codepoint <= 0xDFFF);
+}
+
+inline bool append_utf8_codepoint(std::string& out, char32_t codepoint) {
+	if (!is_valid_unicode_scalar(codepoint))
+		return false;
+
+	if (codepoint <= 0x7F) {
+		out.push_back(static_cast<char>(codepoint));
+		return true;
+	}
+	if (codepoint <= 0x7FF) {
+		out.push_back(static_cast<char>(0xC0 | (codepoint >> 6)));
+		out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+		return true;
+	}
+	if (codepoint <= 0xFFFF) {
+		out.push_back(static_cast<char>(0xE0 | (codepoint >> 12)));
+		out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+		out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+		return true;
+	}
+
+	out.push_back(static_cast<char>(0xF0 | (codepoint >> 18)));
+	out.push_back(static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F)));
+	out.push_back(static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F)));
+	out.push_back(static_cast<char>(0x80 | (codepoint & 0x3F)));
+	return true;
+}
+
+struct unicode_codepoint_escape {
+	std::size_t consumed = 0;
+	char32_t codepoint = 0;
+	bool invalid = false;
+
+	explicit operator bool() const { return consumed != 0; }
+};
+
+inline unicode_codepoint_escape parse_unicode_codepoint_escape(view value) {
+	auto parse_fixed = [&](std::size_t offset, std::size_t digits) {
+		if (value.size() < offset + digits)
+			return unicode_codepoint_escape{0, 0, true};
+
+		unsigned int raw_codepoint = 0;
+		auto result = std::from_chars(value.data() + offset, value.data() + offset + digits, raw_codepoint, 16);
+		char32_t codepoint = static_cast<char32_t>(raw_codepoint);
+		if (result.ec != std::errc() || result.ptr != value.data() + offset + digits || !is_valid_unicode_scalar(codepoint))
+			return unicode_codepoint_escape{0, 0, true};
+		return unicode_codepoint_escape{offset + digits, codepoint, false};
+	};
+
+	if (value.size() >= 2 && value[0] == '\\' && value[1] == 'u')
+		return parse_fixed(2, 4);
+	if (value.size() >= 2 && value[0] == '\\' && value[1] == 'U')
+		return parse_fixed(2, 8);
+	if (value.size() >= 2 && (value[0] == 'u' || value[0] == 'U') && value[1] == '+') {
+		std::size_t digits = 0;
+		while (digits < 6 && 2 + digits < value.size() && std::isxdigit(static_cast<unsigned char>(value[2 + digits])) != 0)
+			++digits;
+		if (digits == 0)
+			return {0, 0, true};
+
+		unsigned int raw_codepoint = 0;
+		auto result = std::from_chars(value.data() + 2, value.data() + 2 + digits, raw_codepoint, 16);
+		char32_t codepoint = static_cast<char32_t>(raw_codepoint);
+		if (result.ec != std::errc() || result.ptr != value.data() + 2 + digits || !is_valid_unicode_scalar(codepoint))
+			return {0, 0, true};
+		return {2 + digits, codepoint, false};
+	}
+
+	return {};
+}
+
+inline bool expand_unicode_codepoint_escapes(view value, std::string& out) {
+	out.clear();
+	out.reserve(value.size());
+
+	for (std::size_t pos = 0; pos < value.size(); ) {
+		auto match = parse_unicode_codepoint_escape(subview(value, pos));
+		if (match) {
+			if (match.invalid || !append_utf8_codepoint(out, match.codepoint))
+				return false;
+			pos += match.consumed;
+			continue;
+		}
+
+		bool looks_like_escape =
+			(value[pos] == '\\' && pos + 1 < value.size() && (value[pos + 1] == 'u' || value[pos + 1] == 'U')) ||
+			((value[pos] == 'u' || value[pos] == 'U') && pos + 1 < value.size() && value[pos + 1] == '+');
+		if (looks_like_escape)
+			return false;
+
+		out.push_back(value[pos]);
+		++pos;
+	}
+
+	return true;
+}
+
 struct utf8_icase_searcher {
 	std::string needle;
 

@@ -49,6 +49,7 @@ struct SearchReplaceSettings {
 
 	bool match_case;
 	bool use_regex;
+	bool use_unicode_escapes;
 	bool ignore_comments;
 	bool skip_tags;
 	bool exact_match;

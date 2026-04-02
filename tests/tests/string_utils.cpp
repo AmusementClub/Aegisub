@@ -20,6 +20,7 @@
 
 namespace {
 using agi::util::strings::sized_match;
+using agi::util::strings::expand_unicode_codepoint_escapes;
 using agi::util::strings::utf8_find_icase;
 using agi::util::strings::utf8_icase_searcher;
 
@@ -58,4 +59,25 @@ TEST(lagi_string_utils, utf8_icase_searcher_can_be_reused) {
 	expect_same_match(utf8_find_icase("Stra\xC3\x9F""e", searcher), sized_match{0, 7});
 	expect_same_match(utf8_find_icase("prefix Stra\xC3\x9F""e suffix", searcher), sized_match{7, 7});
 	expect_same_match(utf8_find_icase("plain ascii only", searcher), sized_match{});
+}
+
+TEST(lagi_string_utils, expand_unicode_codepoint_escapes_supports_search_forms) {
+	std::string expanded;
+
+	ASSERT_TRUE(expand_unicode_codepoint_escapes("\\u4F60\\u597D", expanded));
+	EXPECT_EQ("\xE4\xBD\xA0\xE5\xA5\xBD", expanded);
+
+	ASSERT_TRUE(expand_unicode_codepoint_escapes("u+4f60/U+1F600", expanded));
+	EXPECT_EQ("\xE4\xBD\xA0/\xF0\x9F\x98\x80", expanded);
+
+	ASSERT_TRUE(expand_unicode_codepoint_escapes("prefix U+0041 suffix", expanded));
+	EXPECT_EQ("prefix A suffix", expanded);
+}
+
+TEST(lagi_string_utils, expand_unicode_codepoint_escapes_rejects_invalid_input) {
+	std::string expanded;
+
+	EXPECT_FALSE(expand_unicode_codepoint_escapes("\\u12", expanded));
+	EXPECT_FALSE(expand_unicode_codepoint_escapes("u+110000", expanded));
+	EXPECT_FALSE(expand_unicode_codepoint_escapes("U+D800", expanded));
 }

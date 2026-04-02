@@ -99,14 +99,26 @@ public:
 	}
 };
 
+std::string prepare_search_text(SearchReplaceSettings const& settings) {
+	if (!settings.use_unicode_escapes)
+		return settings.find;
+
+	std::string expanded;
+	if (!agi::util::strings::expand_unicode_codepoint_escapes(settings.find, expanded))
+		throw agi::InvalidInputException("Invalid Unicode escape. Use \\uXXXX, \\UXXXXXXXX, u+XXXX, or U+XXXX.");
+	return expanded;
+}
+
 template<typename Accessor>
 matcher get_matcher(SearchReplaceSettings const& settings, Accessor&& a) {
+	std::string prepared_find = prepare_search_text(settings);
+
 	if (settings.use_regex) {
 		int flags = boost::u32regex::perl;
 		if (!settings.match_case)
 			flags |= boost::u32regex::icase;
 
-		auto regex = boost::make_u32regex(settings.find, flags);
+		auto regex = boost::make_u32regex(prepared_find, flags);
 
 		return [=](const AssDialogue *diag, size_t start) mutable -> MatchState {
 			boost::smatch result;
@@ -119,7 +131,7 @@ matcher get_matcher(SearchReplaceSettings const& settings, Accessor&& a) {
 
 	bool full_match_only = settings.exact_match;
 	bool match_case = settings.match_case;
-	std::string look_for = settings.find;
+	std::string look_for = std::move(prepared_find);
 	agi::util::strings::view look_for_view(look_for);
 #ifdef AEGISUB_USE_STRINGZILLA
 	agi::util::strings::utf8_icase_searcher icase_searcher(look_for_view);

@@ -66,6 +66,7 @@
 
 #include <algorithm>
 #include <wx/combobox.h>
+#include <wx/dcclient.h>
 #include <wx/image.h>
 #include <wx/menu.h>
 #include <wx/textctrl.h>
@@ -178,7 +179,9 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 		con->videoController->AddARChangeListener(&VideoDisplay::UpdateSize, this),
 	});
 
-	Bind(wxEVT_PAINT, std::bind(&VideoDisplay::Render, this));
+	SetBackgroundStyle(wxBG_STYLE_PAINT);
+	Bind(wxEVT_PAINT, &VideoDisplay::OnPaint, this);
+	Bind(wxEVT_ERASE_BACKGROUND, &VideoDisplay::OnEraseBackground, this);
 	Bind(wxEVT_IDLE, &VideoDisplay::OnIdle, this);
 	Bind(wxEVT_SIZE, &VideoDisplay::OnSizeEvent, this);
 	Bind(wxEVT_CONTEXT_MENU, &VideoDisplay::OnContextMenu, this);
@@ -302,6 +305,15 @@ VideoDisplayMemoryStats VideoDisplay::CollectMemoryStats() const {
 
 void VideoDisplay::Render() {
 	render_requested = true;
+}
+
+void VideoDisplay::OnEraseBackground(wxEraseEvent &) {
+}
+
+void VideoDisplay::OnPaint(wxPaintEvent &) {
+	wxPaintDC dc(this);
+	(void)dc;
+	DoRender();
 }
 
 wxImage VideoDisplay::CapturePacketImage(VideoRenderPacket const& packet) {
@@ -732,19 +744,25 @@ void VideoDisplay::UpdateSize() {
 		SetMinClientSize(videoSize / scale_factor);
 		SetMaxClientSize(videoSize / scale_factor);
 
-		GetParent()->Layout();
-		GetGrandParent()->Layout();
+		LayoutContainingSizers();
 	}
 
 	PositionVideo();
+}
+
+void VideoDisplay::LayoutContainingSizers() {
+	wxWindow *layout_root = GetGrandParent();
+	if (!layout_root)
+		layout_root = GetParent();
+	if (layout_root)
+		layout_root->Layout();
 }
 
 void VideoDisplay::RefreshVideoScale() {
 	if (tool && toolBar) {
 		toolBar->ClearTools();
 		tool->SetToolbar(toolBar);
-		GetParent()->Layout();
-		GetGrandParent()->Layout();
+		LayoutContainingSizers();
 	}
 	if (con->project->VideoProvider())
 		UpdateSize();
@@ -846,8 +864,7 @@ void VideoDisplay::SetTool(std::unique_ptr<VisualToolBase> new_tool) {
 		UpdateSize();
 	else {
 		// UpdateSize fits the window to the video, which we don't want to do
-		GetParent()->Layout();
-		GetGrandParent()->Layout();
+		LayoutContainingSizers();
 		tool->SetDisplayArea(viewport_left / scale_factor, viewport_top / scale_factor,
 			viewport_width / scale_factor, viewport_height / scale_factor);
 	}

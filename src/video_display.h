@@ -123,7 +123,7 @@ class VideoDisplay final : public wxGLCanvas {
 	agi::signal::Connection dpi_scale_option_connection;
 	agi::signal::Connection renderer_backend_option_connection;
 
-	bool render_requested;
+	bool render_requested = false;
 
 	double GetVideoScaleFactor() const;
 
@@ -160,11 +160,14 @@ class VideoDisplay final : public wxGLCanvas {
 	void OnMouseEvent(wxMouseEvent& event);
 	void OnMouseWheel(wxMouseEvent& event);
 	void OnMouseLeave(wxMouseEvent& event);
+	void OnEraseBackground(wxEraseEvent &event);
+	void OnPaint(wxPaintEvent &event);
 	/// @brief Recalculate video positioning and scaling when the available area or zoom changes
 	void OnSizeEvent(wxSizeEvent &event);
 	void OnContextMenu(wxContextMenuEvent&);
 	void OnIdle(wxIdleEvent&);
 	void DoRender();
+	void LayoutContainingSizers();
 
 public:
 	/// @brief Constructor

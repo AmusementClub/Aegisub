@@ -962,6 +962,51 @@ TEST(async_video_provider, find_key_point_range_refines_to_boundary_after_coarse
 	EXPECT_EQ((std::vector<int>{ 12, 4, 3, 2, 1, 0, 20, 13 }), state->requested_frames);
 }
 
+TEST(async_video_provider, find_key_point_range_frame_by_frame_scan_does_not_cross_short_mismatch_gap) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 3;
+	video->frame_height = 3;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		auto set_pixel = [&](int x, int y, unsigned char b, unsigned char g, unsigned char r) {
+			size_t base = static_cast<size_t>(y) * frame.pitch + static_cast<size_t>(x) * 4;
+			frame.data[base + 0] = b;
+			frame.data[base + 1] = g;
+			frame.data[base + 2] = r;
+			frame.data[base + 3] = 255;
+		};
+
+		if ((n >= 8 && n <= 10) || (n >= 17 && n <= 20)) {
+			set_pixel(1, 1, 32, 96, 160);
+			set_pixel(0, 1, 32, 96, 160);
+			set_pixel(2, 1, 32, 96, 160);
+		}
+	};
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		recorder);
+
+	auto result = provider.FindKeyPointRange({
+		10,
+		1,
+		1,
+		160,
+		96,
+		32,
+		0,
+		1,
+		0
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_EQ(8, result.left);
+	EXPECT_EQ(10, result.right);
+	EXPECT_EQ((std::vector<int>{ 10, 9, 8, 7, 11 }), state->requested_frames);
+}
+
 TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *subs = new FakeOverlaySubtitlesProvider;

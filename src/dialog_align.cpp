@@ -52,7 +52,9 @@
 #include <wx/textctrl.h>
 
 namespace {
-	constexpr int kKeyPointCoarseScanStep = 8;
+	// Key-point alignment needs contiguous frame ranges, so do not skip over
+	// short mismatch runs between two matching samples.
+	constexpr int kKeyPointScanStep = 1;
 
 	class DialogAlignToVideo final : public wxDialog {
 		agi::Context* context;
@@ -191,7 +193,7 @@ namespace {
 			g,
 			b,
 			tolerance,
-			kKeyPointCoarseScanStep,
+			kKeyPointScanStep,
 			5
 		});
 		if (scan.status == KeyPointRangeScanStatus::FrameUnavailable) {

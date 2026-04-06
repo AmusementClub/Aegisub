@@ -32,6 +32,46 @@ TEST(video_display_layout, free_size_letterboxes_top_bottom_for_wide_target_aspe
 	EXPECT_EQ(113, layout.viewport_height);
 }
 
+TEST(video_display_layout, attached_content_layout_defaults_to_base_viewport_without_transform) {
+	VideoDisplayViewportLayout base = { 10, 320, 40, 20, 180 };
+	auto content = BuildVideoDisplayContentLayout(base, 240, true);
+	EXPECT_EQ(base.viewport_left, content.viewport_left);
+	EXPECT_EQ(base.viewport_width, content.viewport_width);
+	EXPECT_EQ(base.viewport_bottom, content.viewport_bottom);
+	EXPECT_EQ(base.viewport_top, content.viewport_top);
+	EXPECT_EQ(base.viewport_height, content.viewport_height);
+}
+
+TEST(video_display_layout, attached_content_layout_scales_around_base_viewport_center) {
+	VideoDisplayViewportLayout base = { 10, 320, 40, 20, 180 };
+	auto content = BuildVideoDisplayContentLayout(base, 240, true, { 1.5, 0.0, 0.0 });
+	EXPECT_EQ(-70, content.viewport_left);
+	EXPECT_EQ(480, content.viewport_width);
+	EXPECT_EQ(-25, content.viewport_top);
+	EXPECT_EQ(270, content.viewport_height);
+	EXPECT_EQ(-5, content.viewport_bottom);
+}
+
+TEST(video_display_layout, attached_content_layout_clamps_pan_using_viewport_height_units) {
+	VideoDisplayViewportLayout base = { 10, 320, 40, 20, 180 };
+	auto content = BuildVideoDisplayContentLayout(base, 240, true, { 2.0, 5.0, -5.0 });
+	EXPECT_EQ(242, content.viewport_left);
+	EXPECT_EQ(640, content.viewport_width);
+	EXPECT_EQ(-322, content.viewport_top);
+	EXPECT_EQ(360, content.viewport_height);
+	EXPECT_EQ(202, content.viewport_bottom);
+}
+
+TEST(video_display_layout, detached_content_layout_stays_equal_to_base_viewport_when_disabled) {
+	VideoDisplayViewportLayout base = { 0, 200, 43, 43, 113 };
+	auto content = BuildVideoDisplayContentLayout(base, 199, false, { 3.0, 1.0, -1.0 });
+	EXPECT_EQ(base.viewport_left, content.viewport_left);
+	EXPECT_EQ(base.viewport_width, content.viewport_width);
+	EXPECT_EQ(base.viewport_bottom, content.viewport_bottom);
+	EXPECT_EQ(base.viewport_top, content.viewport_top);
+	EXPECT_EQ(base.viewport_height, content.viewport_height);
+}
+
 TEST(video_display_layout, source_storage_visible_display_and_viewport_spaces_form_explicit_chain) {
 	VideoFrame frame;
 	frame.width = 12;

@@ -150,6 +150,20 @@ VideoMemorySnapshot BuildVideoMemorySnapshot(agi::Context *context, VideoDisplay
 		snapshot.display = display->CollectMemoryStats();
 	return snapshot;
 }
+
+void ApplyViewportLayout(
+	VideoDisplayViewportLayout const& layout,
+	int& viewport_left,
+	int& viewport_width,
+	int& viewport_bottom,
+	int& viewport_top,
+	int& viewport_height) {
+	viewport_left = layout.viewport_left;
+	viewport_width = layout.viewport_width;
+	viewport_bottom = layout.viewport_bottom;
+	viewport_top = layout.viewport_top;
+	viewport_height = layout.viewport_height;
+}
 }
 
 VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBox, wxWindow *parent, agi::Context *c)
@@ -694,6 +708,9 @@ void VideoDisplay::PositionVideo() {
 	auto provider = con->project->VideoProvider();
 	if (!provider || !IsShownOnScreen()) return;
 
+	int const canvas_width = GetClientSize().GetWidth() * scale_factor;
+	int const canvas_height = GetClientSize().GetHeight() * scale_factor;
+
 	AspectRatio arType = con->videoController->GetAspectRatioType();
 	double target_aspect_ratio = 0.0;
 	if (freeSize) {
@@ -701,18 +718,19 @@ void VideoDisplay::PositionVideo() {
 			? static_cast<double>(provider->GetWidth()) / provider->GetHeight()
 			: con->videoController->GetAspectRatioValue();
 	}
-	auto layout = BuildVideoDisplayViewportLayout(
-		GetClientSize().GetWidth() * scale_factor,
-		GetClientSize().GetHeight() * scale_factor,
+	baseViewport = BuildVideoDisplayViewportLayout(
+		canvas_width,
+		canvas_height,
 		videoSize.GetWidth(),
 		videoSize.GetHeight(),
 		freeSize,
 		target_aspect_ratio);
-	viewport_left = layout.viewport_left;
-	viewport_width = layout.viewport_width;
-	viewport_bottom = layout.viewport_bottom;
-	viewport_top = layout.viewport_top;
-	viewport_height = layout.viewport_height;
+	auto layout = BuildVideoDisplayContentLayout(
+		baseViewport,
+		canvas_height,
+		!freeSize,
+		{ contentZoomValue, pan_x, pan_y });
+	ApplyViewportLayout(layout, viewport_left, viewport_width, viewport_bottom, viewport_top, viewport_height);
 
 	if (tool)
 		tool->SetDisplayArea(viewport_left / scale_factor, viewport_top / scale_factor,

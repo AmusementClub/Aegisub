@@ -14,12 +14,21 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cmath>
+
 struct VideoDisplayViewportLayout {
 	int viewport_left = 0;
 	int viewport_width = 0;
 	int viewport_bottom = 0;
 	int viewport_top = 0;
 	int viewport_height = 0;
+};
+
+struct VideoDisplayContentTransform {
+	double zoom = 1.0;
+	double pan_x = 0.0;
+	double pan_y = 0.0;
 };
 
 inline VideoDisplayViewportLayout BuildVideoDisplayViewportLayout(
@@ -58,5 +67,55 @@ inline VideoDisplayViewportLayout BuildVideoDisplayViewportLayout(
 		layout.viewport_height -= delta;
 	}
 
+	return layout;
+}
+
+inline double ClampVideoDisplayNormalizedPan(double pan, int content_size, int viewport_size) {
+	if (viewport_size <= 0)
+		return 0.0;
+
+	double const max_pan =
+		(0.5 * static_cast<double>(content_size) + 0.4 * static_cast<double>(viewport_size))
+		/ static_cast<double>(viewport_size);
+	return std::clamp(pan, -max_pan, max_pan);
+}
+
+inline VideoDisplayViewportLayout BuildVideoDisplayContentLayout(
+	VideoDisplayViewportLayout const& base_viewport,
+	int canvas_height,
+	bool enable_content_transform,
+	VideoDisplayContentTransform transform = {}) {
+	if (!enable_content_transform
+		|| base_viewport.viewport_width <= 0
+		|| base_viewport.viewport_height <= 0) {
+		return base_viewport;
+	}
+
+	double const zoom = std::max(0.125, transform.zoom);
+	int const content_width = std::max(1, static_cast<int>(std::lround(base_viewport.viewport_width * zoom)));
+	int const content_height = std::max(1, static_cast<int>(std::lround(base_viewport.viewport_height * zoom)));
+
+	double const clamped_pan_x = ClampVideoDisplayNormalizedPan(
+		transform.pan_x,
+		content_width,
+		base_viewport.viewport_height);
+	double const clamped_pan_y = ClampVideoDisplayNormalizedPan(
+		transform.pan_y,
+		content_height,
+		base_viewport.viewport_height);
+
+	double content_left = static_cast<double>(base_viewport.viewport_left)
+		+ 0.5 * static_cast<double>(base_viewport.viewport_width - content_width)
+		+ clamped_pan_x * static_cast<double>(base_viewport.viewport_height);
+	double content_top = static_cast<double>(base_viewport.viewport_top)
+		+ 0.5 * static_cast<double>(base_viewport.viewport_height - content_height)
+		+ clamped_pan_y * static_cast<double>(base_viewport.viewport_height);
+
+	VideoDisplayViewportLayout layout;
+	layout.viewport_left = static_cast<int>(std::lround(content_left));
+	layout.viewport_width = content_width;
+	layout.viewport_top = static_cast<int>(std::lround(content_top));
+	layout.viewport_height = content_height;
+	layout.viewport_bottom = canvas_height - layout.viewport_height - layout.viewport_top;
 	return layout;
 }

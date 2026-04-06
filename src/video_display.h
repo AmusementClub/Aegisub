@@ -35,6 +35,7 @@
 #include <libaegisub/signal.h>
 
 #include "ivideo_renderer.h"
+#include "video_display_layout.h"
 #include "video_memory_stats.h"
 #include "video_render_packet.h"
 
@@ -77,6 +78,9 @@ class VideoDisplay final : public wxGLCanvas {
 
 	Vector2D last_mouse_pos, mouse_pos;
 
+	/// Base viewport before attached-mode content pan/zoom is applied
+	VideoDisplayViewportLayout baseViewport;
+
 	/// Screen pixels between the left of the canvas and the left of the video
 	int viewport_left = 0;
 	/// The width of the video in screen pixels
@@ -90,6 +94,11 @@ class VideoDisplay final : public wxGLCanvas {
 
 	/// The current zoom level, where 1.0 = 100%
 	double zoomValue;
+	/// The current content zoom level inside the base viewport
+	double contentZoomValue = 1.0;
+	/// Current content pan in units relative to the base viewport height
+	double pan_x = 0.0;
+	double pan_y = 0.0;
 
 	/// The video renderer
 	std::unique_ptr<IVideoRenderer> videoRenderer;

@@ -608,6 +608,8 @@
 
 	"Video" : {
 		"Default Zoom" : 7,
+		"Scroll Action" : 0,
+		"Ctrl Scroll Action" : 2,
 		"Detached" : {
 			"Enabled" : false,
 			"Last" : {
@@ -633,6 +635,7 @@
 			"Backend" : "opengl"
 		},
 		"Script Resolution Mismatch" : 1,
+		"Shift Scroll Action" : 4,
 		"Slider" : {
 			"Fast Jump Step" : 10,
 			"Show Keyframes" : true

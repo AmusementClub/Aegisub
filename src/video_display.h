@@ -162,6 +162,9 @@ class VideoDisplay final : public wxGLCanvas {
 	void SetZoomFromBox(wxCommandEvent&);
 	/// Set the zoom level to that indicated by the text
 	void SetZoomFromBoxText(wxCommandEvent&);
+	void Pan(Vector2D delta);
+	Vector2D GetZoomAnchorPoint(wxPoint position) const;
+	void ZoomAndPan(double newZoomValue, Vector2D anchorPoint, wxPoint newPosition);
 
 	/// @brief Key event handler
 	void OnKeyDown(wxKeyEvent &event);
@@ -199,6 +202,9 @@ public:
 	void SetZoom(double value);
 	/// @brief Get the current zoom level
 	double GetZoom() const { return zoomValue; }
+	double GetWindowZoom() const { return zoomValue; }
+	void SetWindowZoom(double value) { SetZoom(value); }
+	void ResetContentZoom();
 
 	/// Get the last seen position of the mouse in script coordinates
 	Vector2D GetMousePosition() const;

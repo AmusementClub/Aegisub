@@ -17,12 +17,24 @@
 #include <algorithm>
 #include <cmath>
 
+#include "vector2d.h"
+
 struct VideoDisplayViewportLayout {
 	int viewport_left = 0;
 	int viewport_width = 0;
 	int viewport_bottom = 0;
 	int viewport_top = 0;
 	int viewport_height = 0;
+};
+
+enum VideoDisplayScrollAction {
+	SCALE_VIDEO = 0,
+	SCALE_VIDEO_REV = 1,
+	ZOOM_VIDEO = 2,
+	ZOOM_VIDEO_REV = 3,
+	PAN_VIDEO = 4,
+	PAN_VIDEO_SWAP = 5,
+	NOTHING = 6
 };
 
 struct VideoDisplayContentTransform {
@@ -80,6 +92,27 @@ inline double ClampVideoDisplayNormalizedPan(double pan, int content_size, int v
 	return std::clamp(pan, -max_pan, max_pan);
 }
 
+inline double ClampVideoDisplayContentZoom(double zoom) {
+	return std::clamp(zoom, 0.125, 10.0);
+}
+
+inline VideoDisplayContentTransform ClampVideoDisplayContentTransform(
+	VideoDisplayViewportLayout const& base_viewport,
+	VideoDisplayContentTransform transform) {
+	transform.zoom = ClampVideoDisplayContentZoom(transform.zoom);
+	if (base_viewport.viewport_width <= 0 || base_viewport.viewport_height <= 0) {
+		transform.pan_x = 0.0;
+		transform.pan_y = 0.0;
+		return transform;
+	}
+
+	int const content_width = std::max(1, static_cast<int>(std::lround(base_viewport.viewport_width * transform.zoom)));
+	int const content_height = std::max(1, static_cast<int>(std::lround(base_viewport.viewport_height * transform.zoom)));
+	transform.pan_x = ClampVideoDisplayNormalizedPan(transform.pan_x, content_width, base_viewport.viewport_height);
+	transform.pan_y = ClampVideoDisplayNormalizedPan(transform.pan_y, content_height, base_viewport.viewport_height);
+	return transform;
+}
+
 inline VideoDisplayViewportLayout BuildVideoDisplayContentLayout(
 	VideoDisplayViewportLayout const& base_viewport,
 	int canvas_height,
@@ -91,25 +124,17 @@ inline VideoDisplayViewportLayout BuildVideoDisplayContentLayout(
 		return base_viewport;
 	}
 
-	double const zoom = std::max(0.125, transform.zoom);
+	transform = ClampVideoDisplayContentTransform(base_viewport, transform);
+	double const zoom = transform.zoom;
 	int const content_width = std::max(1, static_cast<int>(std::lround(base_viewport.viewport_width * zoom)));
 	int const content_height = std::max(1, static_cast<int>(std::lround(base_viewport.viewport_height * zoom)));
 
-	double const clamped_pan_x = ClampVideoDisplayNormalizedPan(
-		transform.pan_x,
-		content_width,
-		base_viewport.viewport_height);
-	double const clamped_pan_y = ClampVideoDisplayNormalizedPan(
-		transform.pan_y,
-		content_height,
-		base_viewport.viewport_height);
-
 	double content_left = static_cast<double>(base_viewport.viewport_left)
 		+ 0.5 * static_cast<double>(base_viewport.viewport_width - content_width)
-		+ clamped_pan_x * static_cast<double>(base_viewport.viewport_height);
+		+ transform.pan_x * static_cast<double>(base_viewport.viewport_height);
 	double content_top = static_cast<double>(base_viewport.viewport_top)
 		+ 0.5 * static_cast<double>(base_viewport.viewport_height - content_height)
-		+ clamped_pan_y * static_cast<double>(base_viewport.viewport_height);
+		+ transform.pan_y * static_cast<double>(base_viewport.viewport_height);
 
 	VideoDisplayViewportLayout layout;
 	layout.viewport_left = static_cast<int>(std::lround(content_left));
@@ -118,4 +143,70 @@ inline VideoDisplayViewportLayout BuildVideoDisplayContentLayout(
 	layout.viewport_height = content_height;
 	layout.viewport_bottom = canvas_height - layout.viewport_height - layout.viewport_top;
 	return layout;
+}
+
+inline Vector2D GetVideoDisplayViewportCenter(VideoDisplayViewportLayout const& base_viewport) {
+	return Vector2D(base_viewport.viewport_left, base_viewport.viewport_top)
+		+ Vector2D(base_viewport.viewport_width, base_viewport.viewport_height) / 2;
+}
+
+inline Vector2D GetVideoDisplayZoomAnchorPoint(
+	VideoDisplayViewportLayout const& base_viewport,
+	VideoDisplayContentTransform const& transform,
+	Vector2D position) {
+	if (base_viewport.viewport_height <= 0)
+		return Vector2D(0.0f, 0.0f);
+
+	auto clamped = ClampVideoDisplayContentTransform(base_viewport, transform);
+	Vector2D const viewport_center = GetVideoDisplayViewportCenter(base_viewport);
+	Vector2D const scaled_pan = Vector2D(static_cast<float>(clamped.pan_x), static_cast<float>(clamped.pan_y)) * base_viewport.viewport_height;
+	double const zoom = clamped.zoom;
+	return (position - viewport_center - scaled_pan) / static_cast<float>(zoom);
+}
+
+inline VideoDisplayContentTransform ZoomVideoDisplayContent(
+	VideoDisplayViewportLayout const& base_viewport,
+	VideoDisplayContentTransform transform,
+	double new_zoom,
+	Vector2D anchor_point,
+	Vector2D new_position) {
+	if (base_viewport.viewport_height <= 0) {
+		transform.zoom = ClampVideoDisplayContentZoom(new_zoom);
+		return transform;
+	}
+
+	new_zoom = ClampVideoDisplayContentZoom(new_zoom);
+	Vector2D const viewport_center = GetVideoDisplayViewportCenter(base_viewport);
+	Vector2D const new_scaled_pan = new_position - viewport_center - anchor_point * static_cast<float>(new_zoom);
+	transform.zoom = new_zoom;
+	transform.pan_x = new_scaled_pan.X() / base_viewport.viewport_height;
+	transform.pan_y = new_scaled_pan.Y() / base_viewport.viewport_height;
+	return ClampVideoDisplayContentTransform(base_viewport, transform);
+}
+
+inline VideoDisplayContentTransform PanVideoDisplayContent(
+	VideoDisplayViewportLayout const& base_viewport,
+	VideoDisplayContentTransform transform,
+	Vector2D delta) {
+	if (base_viewport.viewport_height <= 0)
+		return transform;
+
+	transform.pan_x += delta.X() / base_viewport.viewport_height;
+	transform.pan_y += delta.Y() / base_viewport.viewport_height;
+	return ClampVideoDisplayContentTransform(base_viewport, transform);
+}
+
+inline int ResolveVideoDisplayScrollAction(
+	bool ctrl_down,
+	bool shift_down,
+	int scroll_action,
+	int ctrl_scroll_action,
+	int shift_scroll_action) {
+	if (ctrl_down && shift_down)
+		return NOTHING;
+	if (ctrl_down)
+		return ctrl_scroll_action;
+	if (shift_down)
+		return shift_scroll_action;
+	return scroll_action;
 }

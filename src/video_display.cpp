@@ -284,6 +284,9 @@ void VideoDisplay::OnVideoProviderChanged(AsyncVideoProvider *provider) {
 	has_pending_packet = false;
 	displayed_packet = { };
 	has_displayed_packet = false;
+	contentZoomValue = 1.0;
+	pan_x = 0.0;
+	pan_y = 0.0;
 	ResetRenderers();
 
 	if (!provider)
@@ -628,14 +631,22 @@ void VideoDisplay::DoRender() try {
 	if (!viewport_height || !viewport_width)
 		PositionVideo();
 
-	videoRenderer->Render({ viewport_left, viewport_bottom, viewport_width, viewport_height }, GetClientSize().GetWidth() * scale_factor, GetClientSize().GetHeight() * scale_factor);
+	wxSize client_size = GetClientSize();
+	client_size = wxSize(std::max(1, client_size.GetWidth()), std::max(1, client_size.GetHeight()));
+	videoRenderer->Render({ viewport_left, viewport_bottom, viewport_width, viewport_height }, client_size.GetWidth() * scale_factor, client_size.GetHeight() * scale_factor);
 	if (subtitleOverlayRenderer)
-		subtitleOverlayRenderer->Render({ viewport_left, viewport_bottom, viewport_width, viewport_height }, GetClientSize().GetWidth() * scale_factor, GetClientSize().GetHeight() * scale_factor);
-	E(glViewport(0, std::min(viewport_bottom, 0), videoSize.GetWidth(), videoSize.GetHeight()));
+		subtitleOverlayRenderer->Render({ viewport_left, viewport_bottom, viewport_width, viewport_height }, client_size.GetWidth() * scale_factor, client_size.GetHeight() * scale_factor);
+	if (freeSize)
+		E(glViewport(0, std::min(viewport_bottom, 0), videoSize.GetWidth(), videoSize.GetHeight()));
+	else
+		E(glViewport(0, 0, client_size.GetWidth() * scale_factor, client_size.GetHeight() * scale_factor));
 
 	E(glMatrixMode(GL_PROJECTION));
 	E(glLoadIdentity());
-	E(glOrtho(0.0f, videoSize.GetWidth() / scale_factor, videoSize.GetHeight() / scale_factor, 0.0f, -1000.0f, 1000.0f));
+	if (freeSize)
+		E(glOrtho(0.0f, videoSize.GetWidth() / scale_factor, videoSize.GetHeight() / scale_factor, 0.0f, -1000.0f, 1000.0f));
+	else
+		E(glOrtho(0.0f, client_size.GetWidth(), client_size.GetHeight(), 0.0f, -1000.0f, 1000.0f));
 
 	if (OPT_GET("Video/Overscan Mask")->GetBool()) {
 		double ar = con->videoController->GetAspectRatioValue();
@@ -667,19 +678,19 @@ catch (const agi::Exception &err) {
 }
 
 void VideoDisplay::DrawOverscanMask(float horizontal_percent, float vertical_percent) const {
-	Vector2D v(viewport_width, viewport_height);
+	Vector2D v = Vector2D(viewport_width, viewport_height) / scale_factor;
 	Vector2D size = Vector2D(horizontal_percent, vertical_percent) / 2 * v;
 
 	// Clockwise from top-left
 	Vector2D corners[] = {
 		size,
-		Vector2D(viewport_width - size.X(), size),
+		Vector2D(viewport_width / scale_factor - size.X(), size),
 		v - size,
-		Vector2D(size, viewport_height - size.Y())
+		Vector2D(size, viewport_height / scale_factor - size.Y())
 	};
 
 	// Shift to compensate for black bars
-	Vector2D pos(viewport_left, viewport_top);
+	Vector2D pos = Vector2D(viewport_left, viewport_top) / scale_factor;
 	for (auto& corner : corners)
 		corner = corner + pos;
 
@@ -732,9 +743,12 @@ void VideoDisplay::PositionVideo() {
 		{ contentZoomValue, pan_x, pan_y });
 	ApplyViewportLayout(layout, viewport_left, viewport_width, viewport_bottom, viewport_top, viewport_height);
 
-	if (tool)
+	if (tool) {
+		wxSize client_size = GetClientSize();
+		tool->SetCanvasSize(client_size.GetWidth(), client_size.GetHeight());
 		tool->SetDisplayArea(viewport_left / scale_factor, viewport_top / scale_factor,
 			viewport_width / scale_factor, viewport_height / scale_factor);
+	}
 
 	Render();
 }
@@ -803,6 +817,9 @@ void VideoDisplay::OnMouseEvent(wxMouseEvent& event) {
 	if (event.ButtonDown())
 		SetFocus();
 
+	if (!freeSize && event.Dragging() && event.MiddleIsDown())
+		Pan(Vector2D(event.GetX(), event.GetY()) - last_mouse_pos);
+
 	wxPoint pt = event.GetPosition();
 	last_mouse_pos = mouse_pos = Vector2D(pt.x, pt.y);
 
@@ -820,10 +837,53 @@ void VideoDisplay::OnMouseWheel(wxMouseEvent& event) {
 	if (int wheel = event.GetWheelRotation()) {
 		if (ForwardMouseWheelEvent(this, event)) {
 			int wheel_steps = wheel / event.GetWheelDelta();
-			if (freeSize)
+			if (freeSize) {
 				SetZoom(AdvanceDetachedVideoZoomByWheel(zoomValue, wheel_steps, zoomBox->GetCount()));
-			else
-				SetZoom(zoomValue + kVideoZoomStep * wheel_steps);
+				return;
+			}
+
+			int action = ResolveVideoDisplayScrollAction(
+				event.CmdDown(),
+				event.ShiftDown(),
+				OPT_GET("Video/Scroll Action")->GetInt(),
+				OPT_GET("Video/Ctrl Scroll Action")->GetInt(),
+				OPT_GET("Video/Shift Scroll Action")->GetInt());
+			int dir = 1;
+			bool swap = false;
+			switch (action) {
+				case SCALE_VIDEO_REV:
+					dir = -1;
+					[[fallthrough]];
+				case SCALE_VIDEO:
+					SetWindowZoom(zoomValue + dir * kVideoZoomStep * wheel_steps);
+					break;
+
+				case ZOOM_VIDEO_REV:
+					dir = -1;
+					[[fallthrough]];
+				case ZOOM_VIDEO:
+				{
+					double newZoomValue = contentZoomValue * (1 + dir * kVideoZoomStep * wheel_steps);
+					wxPoint scaled_position = event.GetPosition() * scale_factor;
+					ZoomAndPan(newZoomValue, GetZoomAnchorPoint(scaled_position), scaled_position);
+					break;
+				}
+
+				case PAN_VIDEO_SWAP:
+					swap = true;
+					[[fallthrough]];
+				case PAN_VIDEO:
+				{
+					double distance = 5.0 * wheel_steps;
+					Vector2D pan = event.GetWheelAxis() == wxMOUSE_WHEEL_HORIZONTAL ? Vector2D(-distance, 0) : Vector2D(0, distance);
+					Pan(swap ? Vector2D(pan.Y(), pan.X()) : pan);
+					break;
+				}
+
+				case NOTHING:
+				default:
+					break;
+			}
 		}
 	}
 }
@@ -883,9 +943,60 @@ void VideoDisplay::SetTool(std::unique_ptr<VisualToolBase> new_tool) {
 	else {
 		// UpdateSize fits the window to the video, which we don't want to do
 		LayoutContainingSizers();
+		tool->SetCanvasSize(GetClientSize().GetWidth(), GetClientSize().GetHeight());
 		tool->SetDisplayArea(viewport_left / scale_factor, viewport_top / scale_factor,
 			viewport_width / scale_factor, viewport_height / scale_factor);
 	}
+}
+
+void VideoDisplay::Pan(Vector2D delta) {
+	if (freeSize || baseViewport.viewport_height <= 0)
+		return;
+
+	auto transform = PanVideoDisplayContent(
+		baseViewport,
+		{ contentZoomValue, pan_x, pan_y },
+		delta * scale_factor);
+	contentZoomValue = transform.zoom;
+	pan_x = transform.pan_x;
+	pan_y = transform.pan_y;
+	PositionVideo();
+}
+
+Vector2D VideoDisplay::GetZoomAnchorPoint(wxPoint position) const {
+	if (freeSize)
+		return {};
+
+	return ::GetVideoDisplayZoomAnchorPoint(
+		baseViewport,
+		{ contentZoomValue, pan_x, pan_y },
+		Vector2D(position.x, position.y));
+}
+
+void VideoDisplay::ZoomAndPan(double newZoomValue, Vector2D anchorPoint, wxPoint newPosition) {
+	if (freeSize)
+		return;
+
+	auto transform = ::ZoomVideoDisplayContent(
+		baseViewport,
+		{ contentZoomValue, pan_x, pan_y },
+		newZoomValue,
+		anchorPoint,
+		Vector2D(newPosition.x, newPosition.y));
+	contentZoomValue = transform.zoom;
+	pan_x = transform.pan_x;
+	pan_y = transform.pan_y;
+	PositionVideo();
+}
+
+void VideoDisplay::ResetContentZoom() {
+	if (freeSize)
+		return;
+
+	contentZoomValue = 1.0;
+	pan_x = 0.0;
+	pan_y = 0.0;
+	PositionVideo();
 }
 
 bool VideoDisplay::ToolIsType(std::type_info const& type) const {

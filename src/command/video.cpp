@@ -680,7 +680,18 @@ struct video_opt_scale_with_dpi final : public Command {
 	void operator()(agi::Context *c) override {
 		auto video_display = c->GetUI().videoDisplay;
 		OPT_SET("Video/Scale with DPI")->SetBool(!OPT_GET("Video/Scale with DPI")->GetBool());
-		video_display->SetZoom(video_display->GetZoom());
+		video_display->SetWindowZoom(video_display->GetWindowZoom());
+	}
+};
+
+struct video_reset_pan final : public validator_video_attached {
+	CMD_NAME("video/reset_pan")
+	STR_MENU("Reset Video &Pan")
+	STR_DISP("Reset Video Pan")
+	STR_HELP("Reset the video's position in the video display")
+
+	void operator()(agi::Context *c) override {
+		c->GetUI().videoDisplay->ResetContentZoom();
 	}
 };
 
@@ -734,14 +745,14 @@ public:
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	bool IsActive(const agi::Context *c) override {
-		return c->GetUI().videoDisplay->GetZoom() == 1.;
+		return c->GetUI().videoDisplay->GetWindowZoom() == 1.;
 	}
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
 		auto video_display = c->GetUI().videoDisplay;
 		core.videoController->Stop();
-		video_display->SetZoom(1.);
+		video_display->SetWindowZoom(1.);
 	}
 };
 
@@ -767,14 +778,14 @@ public:
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	bool IsActive(const agi::Context *c) override {
-		return c->GetUI().videoDisplay->GetZoom() == 2.;
+		return c->GetUI().videoDisplay->GetWindowZoom() == 2.;
 	}
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
 		auto video_display = c->GetUI().videoDisplay;
 		core.videoController->Stop();
-		video_display->SetZoom(2.);
+		video_display->SetWindowZoom(2.);
 	}
 };
 
@@ -787,14 +798,14 @@ public:
 	CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
 
 	bool IsActive(const agi::Context *c) override {
-		return c->GetUI().videoDisplay->GetZoom() == .5;
+		return c->GetUI().videoDisplay->GetWindowZoom() == .5;
 	}
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
 		auto video_display = c->GetUI().videoDisplay;
 		core.videoController->Stop();
-		video_display->SetZoom(.5);
+		video_display->SetWindowZoom(.5);
 	}
 };
 
@@ -807,7 +818,7 @@ struct video_zoom_in final : public validator_video_attached {
 
 	void operator()(agi::Context *c) override {
 		auto video_display = c->GetUI().videoDisplay;
-		video_display->SetZoom(video_display->GetZoom() + .125);
+		video_display->SetWindowZoom(video_display->GetWindowZoom() + .125);
 	}
 };
 
@@ -820,7 +831,7 @@ struct video_zoom_out final : public validator_video_attached {
 
 	void operator()(agi::Context *c) override {
 		auto video_display = c->GetUI().videoDisplay;
-		video_display->SetZoom(video_display->GetZoom() - .125);
+		video_display->SetWindowZoom(video_display->GetWindowZoom() - .125);
 	}
 };
 }
@@ -859,6 +870,7 @@ namespace cmd {
 		reg(agi::make_unique<video_opt_scale_with_dpi>());
 		reg(agi::make_unique<video_play>());
 		reg(agi::make_unique<video_play_line>());
+		reg(agi::make_unique<video_reset_pan>());
 		reg(agi::make_unique<video_show_overscan>());
 		reg(agi::make_unique<video_stop>());
 		reg(agi::make_unique<video_zoom_100>());

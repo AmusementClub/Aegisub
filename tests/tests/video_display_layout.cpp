@@ -72,6 +72,39 @@ TEST(video_display_layout, detached_content_layout_stays_equal_to_base_viewport_
 	EXPECT_EQ(base.viewport_height, content.viewport_height);
 }
 
+TEST(video_display_layout, zoom_anchor_uses_viewport_center_and_current_pan) {
+	VideoDisplayViewportLayout base = { 10, 320, 40, 20, 180 };
+	VideoDisplayContentTransform transform = { 1.0, 0.0, 0.0 };
+	auto anchor = GetVideoDisplayZoomAnchorPoint(base, transform, Vector2D(210, 110));
+	EXPECT_FLOAT_EQ(40.0f, anchor.X());
+	EXPECT_FLOAT_EQ(0.0f, anchor.Y());
+}
+
+TEST(video_display_layout, zoom_and_pan_keeps_anchor_under_cursor) {
+	VideoDisplayViewportLayout base = { 10, 320, 40, 20, 180 };
+	VideoDisplayContentTransform transform = { 1.0, 0.0, 0.0 };
+	auto anchor = GetVideoDisplayZoomAnchorPoint(base, transform, Vector2D(210, 110));
+	auto zoomed = ZoomVideoDisplayContent(base, transform, 2.0, anchor, Vector2D(210, 110));
+	EXPECT_DOUBLE_EQ(2.0, zoomed.zoom);
+	EXPECT_NEAR(-40.0 / 180.0, zoomed.pan_x, 1e-6);
+	EXPECT_DOUBLE_EQ(0.0, zoomed.pan_y);
+}
+
+TEST(video_display_layout, pan_video_display_content_uses_viewport_height_units) {
+	VideoDisplayViewportLayout base = { 10, 320, 40, 20, 180 };
+	VideoDisplayContentTransform transform = { 1.0, 0.0, 0.0 };
+	auto panned = PanVideoDisplayContent(base, transform, Vector2D(18, -36));
+	EXPECT_NEAR(0.1, panned.pan_x, 1e-6);
+	EXPECT_NEAR(-0.2, panned.pan_y, 1e-6);
+}
+
+TEST(video_display_layout, resolve_scroll_action_prefers_modifier_specific_options) {
+	EXPECT_EQ(SCALE_VIDEO, ResolveVideoDisplayScrollAction(false, false, SCALE_VIDEO, ZOOM_VIDEO, PAN_VIDEO));
+	EXPECT_EQ(ZOOM_VIDEO, ResolveVideoDisplayScrollAction(true, false, SCALE_VIDEO, ZOOM_VIDEO, PAN_VIDEO));
+	EXPECT_EQ(PAN_VIDEO, ResolveVideoDisplayScrollAction(false, true, SCALE_VIDEO, ZOOM_VIDEO, PAN_VIDEO));
+	EXPECT_EQ(NOTHING, ResolveVideoDisplayScrollAction(true, true, SCALE_VIDEO, ZOOM_VIDEO, PAN_VIDEO));
+}
+
 TEST(video_display_layout, source_storage_visible_display_and_viewport_spaces_form_explicit_chain) {
 	VideoFrame frame;
 	frame.width = 12;

@@ -548,6 +548,20 @@ void BuildVideoPage(OptionPage *p) {
 	binder->AddBool(_("Seek video to line start on selection change"), "Video/Subtitle Sync");
 	binder->AddBool(_("Automatically open audio when opening video"), "Video/Open Audio");
 
+	const wxString cscroll_arr[] = {
+		_("Resizes the video box"),
+		_("Resizes the video box (reversed)"),
+		_("Zooms the video"),
+		_("Zooms the video (reversed)"),
+		_("Pans the video"),
+		_("Pans the video (X/Y swapped)"),
+		_("Does nothing")
+	};
+	wxArrayString choice_scroll(7, cscroll_arr);
+	binder->AddChoice(_("Scrolling on the video display"), choice_scroll, "Video/Scroll Action");
+	binder->AddChoice(_("Ctrl+Scrolling on the video display"), choice_scroll, "Video/Ctrl Scroll Action");
+	binder->AddChoice(_("Shift+Scrolling on the video display"), choice_scroll, "Video/Shift Scroll Action");
+
 	const wxString czoom_arr[24] = {
 		wxS("12.5%"), wxS("25%"), wxS("37.5%"), wxS("50%"), wxS("62.5%"), wxS("75%"),
 		wxS("87.5%"), wxS("100%"), wxS("112.5%"), wxS("125%"), wxS("137.5%"), wxS("150%"),

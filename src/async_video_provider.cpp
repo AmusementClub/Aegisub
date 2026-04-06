@@ -234,15 +234,73 @@ bool CalculateKeyPointBounds(
 	return true;
 }
 
-bool BoundsWithinTolerance(
-	KeyPointBounds const& lhs,
-	KeyPointBounds const& rhs,
-	int tolerance) {
-	return std::abs(lhs.left - rhs.left) <= tolerance
-		&& std::abs(lhs.right - rhs.right) <= tolerance
-		&& std::abs(lhs.up - rhs.up) <= tolerance
-		&& std::abs(lhs.down - rhs.down) <= tolerance;
+bool MatchesKeyPointBoundsWithinTolerance(
+	VideoFrame const& frame,
+	int x,
+	int y,
+	KeyPointLabColor const& reference,
+	double tolerance_squared,
+	KeyPointBounds const& anchor_bounds,
+	int bounds_tolerance) {
+	int const width = static_cast<int>(frame.width);
+	int const height = static_cast<int>(frame.height);
+	if (x < 0 || x >= width)
+		return false;
+
+	int normalized_y = 0;
+	if (!NormalizeFrameY(frame, y, normalized_y))
+		return false;
+
+	if (!KeyPointPixelMatches(frame, x, normalized_y, reference, tolerance_squared))
+		return false;
+
+	auto const matches = [&](int px, int py) {
+		return KeyPointPixelMatches(frame, px, py, reference, tolerance_squared);
+	};
+
+	int const min_left = std::max(0, anchor_bounds.left - bounds_tolerance);
+	int const max_left = std::min(width - 1, anchor_bounds.left + bounds_tolerance);
+	int left = x;
+	while (left > min_left && matches(left - 1, normalized_y))
+		--left;
+	if (left > max_left)
+		return false;
+	if (left == min_left && min_left > 0 && matches(min_left - 1, normalized_y))
+		return false;
+
+	int const min_right = std::max(0, anchor_bounds.right - bounds_tolerance);
+	int const max_right = std::min(width - 1, anchor_bounds.right + bounds_tolerance);
+	int right = x;
+	while (right < max_right && matches(right + 1, normalized_y))
+		++right;
+	if (right < min_right)
+		return false;
+	if (right == max_right && max_right + 1 < width && matches(max_right + 1, normalized_y))
+		return false;
+
+	int const min_up = std::max(0, anchor_bounds.up - bounds_tolerance);
+	int const max_up = std::min(height - 1, anchor_bounds.up + bounds_tolerance);
+	int up = normalized_y;
+	while (up > min_up && matches(x, up - 1))
+		--up;
+	if (up > max_up)
+		return false;
+	if (up == min_up && min_up > 0 && matches(x, min_up - 1))
+		return false;
+
+	int const min_down = std::max(0, anchor_bounds.down - bounds_tolerance);
+	int const max_down = std::min(height - 1, anchor_bounds.down + bounds_tolerance);
+	int down = normalized_y;
+	while (down < max_down && matches(x, down + 1))
+		++down;
+	if (down < min_down)
+		return false;
+	if (down == max_down && max_down + 1 < height && matches(x, max_down + 1))
+		return false;
+
+	return true;
 }
+
 }
 
 void AsyncVideoProvider::ResetCompatibilityOverlayState() {
@@ -783,7 +841,7 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 			static_cast<double>(request.tolerance) * static_cast<double>(request.tolerance);
 
 		VideoFrame frame;
-		auto probe_frame = [&](int frame_number, KeyPointBounds& bounds) -> KeyPointRangeScanStatus {
+		auto load_frame = [&](int frame_number) -> KeyPointRangeScanStatus {
 			try {
 				source_provider->GetFrame(frame_number, frame);
 			}
@@ -799,13 +857,38 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 				return KeyPointRangeScanStatus::FrameUnavailable;
 			}
 
+			return KeyPointRangeScanStatus::Success;
+		};
+
+		auto probe_anchor_frame = [&](int frame_number, KeyPointBounds& bounds) -> KeyPointRangeScanStatus {
+			auto const status = load_frame(frame_number);
+			if (status != KeyPointRangeScanStatus::Success)
+				return status;
+
 			return CalculateKeyPointBounds(frame, request.x, request.y, reference, tolerance_squared, bounds)
 				? KeyPointRangeScanStatus::Success
 				: KeyPointRangeScanStatus::AnchorMismatch;
 		};
 
+		auto probe_frame = [&](int frame_number, KeyPointBounds const& anchor_bounds) -> KeyPointRangeScanStatus {
+			auto const status = load_frame(frame_number);
+			if (status != KeyPointRangeScanStatus::Success)
+				return status;
+
+			return MatchesKeyPointBoundsWithinTolerance(
+				frame,
+				request.x,
+				request.y,
+				reference,
+				tolerance_squared,
+				anchor_bounds,
+				request.bounds_tolerance)
+				? KeyPointRangeScanStatus::Success
+				: KeyPointRangeScanStatus::AnchorMismatch;
+		};
+
 		KeyPointBounds anchor_bounds;
-		result.status = probe_frame(request.frame, anchor_bounds);
+		result.status = probe_anchor_frame(request.frame, anchor_bounds);
 		if (result.status != KeyPointRangeScanStatus::Success)
 			return;
 
@@ -815,10 +898,8 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 		int missing_left = -1;
 		KeyPointRangeScanStatus left_boundary_status = KeyPointRangeScanStatus::Success;
 		for (int pos = request.frame - request.scan_step; pos >= 0; pos -= request.scan_step) {
-			KeyPointBounds bounds;
-			auto const status = probe_frame(pos, bounds);
-			if (status != KeyPointRangeScanStatus::Success
-				|| !BoundsWithinTolerance(bounds, anchor_bounds, request.bounds_tolerance)) {
+			auto const status = probe_frame(pos, anchor_bounds);
+			if (status != KeyPointRangeScanStatus::Success) {
 				if (status == KeyPointRangeScanStatus::FrameUnavailable) {
 					result.status = status;
 					return;
@@ -831,14 +912,12 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 		}
 		if (left_boundary_status != KeyPointRangeScanStatus::FrameUnavailable) {
 			for (int pos = left - 1; pos > missing_left; --pos) {
-				KeyPointBounds bounds;
-				auto const status = probe_frame(pos, bounds);
+				auto const status = probe_frame(pos, anchor_bounds);
 				if (status == KeyPointRangeScanStatus::FrameUnavailable) {
 					result.status = status;
 					return;
 				}
-				if (status != KeyPointRangeScanStatus::Success
-					|| !BoundsWithinTolerance(bounds, anchor_bounds, request.bounds_tolerance)) {
+				if (status != KeyPointRangeScanStatus::Success) {
 					break;
 				}
 				left = pos;
@@ -848,10 +927,8 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 		int missing_right = -1;
 		KeyPointRangeScanStatus right_boundary_status = KeyPointRangeScanStatus::Success;
 		for (int pos = request.frame + request.scan_step; pos < frame_count; pos += request.scan_step) {
-			KeyPointBounds bounds;
-			auto const status = probe_frame(pos, bounds);
-			if (status != KeyPointRangeScanStatus::Success
-				|| !BoundsWithinTolerance(bounds, anchor_bounds, request.bounds_tolerance)) {
+			auto const status = probe_frame(pos, anchor_bounds);
+			if (status != KeyPointRangeScanStatus::Success) {
 				if (status == KeyPointRangeScanStatus::FrameUnavailable) {
 					result.status = status;
 					return;
@@ -865,14 +942,12 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 		int const right_refine_end = missing_right >= 0 ? missing_right : frame_count;
 		if (right_boundary_status != KeyPointRangeScanStatus::FrameUnavailable) {
 			for (int pos = right + 1; pos < right_refine_end; ++pos) {
-				KeyPointBounds bounds;
-				auto const status = probe_frame(pos, bounds);
+				auto const status = probe_frame(pos, anchor_bounds);
 				if (status == KeyPointRangeScanStatus::FrameUnavailable) {
 					result.status = status;
 					return;
 				}
-				if (status != KeyPointRangeScanStatus::Success
-					|| !BoundsWithinTolerance(bounds, anchor_bounds, request.bounds_tolerance)) {
+				if (status != KeyPointRangeScanStatus::Success) {
 					break;
 				}
 				right = pos;

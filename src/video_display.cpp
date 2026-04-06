@@ -205,6 +205,8 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 	Bind(wxEVT_LEFT_DCLICK, &VideoDisplay::OnMouseEvent, this);
 	Bind(wxEVT_LEFT_DOWN, &VideoDisplay::OnMouseEvent, this);
 	Bind(wxEVT_LEFT_UP, &VideoDisplay::OnMouseEvent, this);
+	Bind(wxEVT_MIDDLE_DOWN, &VideoDisplay::OnMouseEvent, this);
+	Bind(wxEVT_MIDDLE_UP, &VideoDisplay::OnMouseEvent, this);
 	Bind(wxEVT_MOTION, &VideoDisplay::OnMouseEvent, this);
 	Bind(wxEVT_MOUSEWHEEL, &VideoDisplay::OnMouseWheel, this);
 
@@ -678,21 +680,24 @@ catch (const agi::Exception &err) {
 }
 
 void VideoDisplay::DrawOverscanMask(float horizontal_percent, float vertical_percent) const {
-	Vector2D v = Vector2D(viewport_width, viewport_height) / scale_factor;
+	// This pass renders in logical client coordinates, so keep the clip rect and
+	// mask geometry in the same space on HiDPI displays.
+	Vector2D viewport_pos = Vector2D(viewport_left, viewport_top) / scale_factor;
+	Vector2D viewport_size = Vector2D(viewport_width, viewport_height) / scale_factor;
+	Vector2D v = viewport_size;
 	Vector2D size = Vector2D(horizontal_percent, vertical_percent) / 2 * v;
 
 	// Clockwise from top-left
 	Vector2D corners[] = {
 		size,
-		Vector2D(viewport_width / scale_factor - size.X(), size),
+		Vector2D(viewport_size.X() - size.X(), size),
 		v - size,
-		Vector2D(size, viewport_height / scale_factor - size.Y())
+		Vector2D(size, viewport_size.Y() - size.Y())
 	};
 
 	// Shift to compensate for black bars
-	Vector2D pos = Vector2D(viewport_left, viewport_top) / scale_factor;
 	for (auto& corner : corners)
-		corner = corner + pos;
+		corner = corner + viewport_pos;
 
 	int count = 0;
 	std::vector<float> points;
@@ -712,7 +717,7 @@ void VideoDisplay::DrawOverscanMask(float horizontal_percent, float vertical_per
 
 	std::vector<int> vstart(1, 0);
 	std::vector<int> vcount(1, count);
-	gl.DrawMultiPolygon(points, vstart, vcount, Vector2D(viewport_left, viewport_top), Vector2D(viewport_width, viewport_height), true);
+	gl.DrawMultiPolygon(points, vstart, vcount, viewport_pos, viewport_size, true);
 }
 
 void VideoDisplay::PositionVideo() {
@@ -826,14 +831,18 @@ void VideoDisplay::OnSizeEvent(wxSizeEvent &event) {
 }
 
 void VideoDisplay::OnMouseEvent(wxMouseEvent& event) {
+	wxPoint pt = event.GetPosition();
+	Vector2D current_pos(pt.x, pt.y);
+
 	if (event.ButtonDown())
 		SetFocus();
 
-	if (event.Dragging() && event.MiddleIsDown())
-		Pan(Vector2D(event.GetX(), event.GetY()) - last_mouse_pos);
+	if (event.ButtonDown() && event.MiddleIsDown())
+		last_mouse_pos = current_pos;
+	else if (event.Dragging() && event.MiddleIsDown())
+		Pan(current_pos - last_mouse_pos);
 
-	wxPoint pt = event.GetPosition();
-	last_mouse_pos = mouse_pos = Vector2D(pt.x, pt.y);
+	last_mouse_pos = mouse_pos = current_pos;
 
 	if (tool)
 		tool->OnMouseEvent(event);

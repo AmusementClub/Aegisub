@@ -684,7 +684,7 @@ struct video_opt_scale_with_dpi final : public Command {
 	}
 };
 
-struct video_reset_pan final : public validator_video_attached {
+struct video_reset_pan final : public validator_video_loaded {
 	CMD_NAME("video/reset_pan")
 	STR_MENU("Reset Video &Pan")
 	STR_DISP("Reset Video Pan")

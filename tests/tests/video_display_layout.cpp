@@ -72,6 +72,16 @@ TEST(video_display_layout, detached_content_layout_stays_equal_to_base_viewport_
 	EXPECT_EQ(base.viewport_height, content.viewport_height);
 }
 
+TEST(video_display_layout, detached_content_layout_can_pan_without_resizing_when_zoom_is_unity) {
+	VideoDisplayViewportLayout base = { 0, 200, 43, 43, 113 };
+	auto content = BuildVideoDisplayContentLayout(base, 199, true, { 1.0, 0.5, -0.25 });
+	EXPECT_EQ(57, content.viewport_left);
+	EXPECT_EQ(200, content.viewport_width);
+	EXPECT_EQ(15, content.viewport_top);
+	EXPECT_EQ(113, content.viewport_height);
+	EXPECT_EQ(71, content.viewport_bottom);
+}
+
 TEST(video_display_layout, zoom_anchor_uses_viewport_center_and_current_pan) {
 	VideoDisplayViewportLayout base = { 10, 320, 40, 20, 180 };
 	VideoDisplayContentTransform transform = { 1.0, 0.0, 0.0 };

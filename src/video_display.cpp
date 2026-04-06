@@ -736,11 +736,16 @@ void VideoDisplay::PositionVideo() {
 		videoSize.GetHeight(),
 		freeSize,
 		target_aspect_ratio);
+	bool const enable_content_transform =
+		!freeSize ||
+		pan_x != 0.0 ||
+		pan_y != 0.0 ||
+		(!freeSize && contentZoomValue != 1.0);
 	auto layout = BuildVideoDisplayContentLayout(
 		baseViewport,
 		canvas_height,
-		!freeSize,
-		{ contentZoomValue, pan_x, pan_y });
+		enable_content_transform,
+		{ freeSize ? 1.0 : contentZoomValue, pan_x, pan_y });
 	ApplyViewportLayout(layout, viewport_left, viewport_width, viewport_bottom, viewport_top, viewport_height);
 
 	if (tool) {
@@ -766,6 +771,10 @@ void VideoDisplay::UpdateSize() {
 	if (freeSize) {
 		wxWindow *top = GetParent();
 		while (!top->IsTopLevel()) top = top->GetParent();
+
+		contentZoomValue = 1.0;
+		pan_x = 0.0;
+		pan_y = 0.0;
 
 		wxSize cs = GetClientSize();
 		wxSize oldSize = top->GetSize();
@@ -803,6 +812,9 @@ void VideoDisplay::RefreshVideoScale() {
 void VideoDisplay::OnSizeEvent(wxSizeEvent &event) {
 	if (freeSize) {
 		videoSize = GetClientSize() * scale_factor;
+		contentZoomValue = 1.0;
+		pan_x = 0.0;
+		pan_y = 0.0;
 		PositionVideo();
 		zoomValue = double(viewport_height) / con->project->VideoProvider()->GetHeight();
 		zoomBox->ChangeValue(fmt_wx("%g%%", zoomValue * 100.));
@@ -817,7 +829,7 @@ void VideoDisplay::OnMouseEvent(wxMouseEvent& event) {
 	if (event.ButtonDown())
 		SetFocus();
 
-	if (!freeSize && event.Dragging() && event.MiddleIsDown())
+	if (event.Dragging() && event.MiddleIsDown())
 		Pan(Vector2D(event.GetX(), event.GetY()) - last_mouse_pos);
 
 	wxPoint pt = event.GetPosition();
@@ -950,12 +962,12 @@ void VideoDisplay::SetTool(std::unique_ptr<VisualToolBase> new_tool) {
 }
 
 void VideoDisplay::Pan(Vector2D delta) {
-	if (freeSize || baseViewport.viewport_height <= 0)
+	if (baseViewport.viewport_height <= 0)
 		return;
 
 	auto transform = PanVideoDisplayContent(
 		baseViewport,
-		{ contentZoomValue, pan_x, pan_y },
+		{ freeSize ? 1.0 : contentZoomValue, pan_x, pan_y },
 		delta * scale_factor);
 	contentZoomValue = transform.zoom;
 	pan_x = transform.pan_x;
@@ -990,9 +1002,6 @@ void VideoDisplay::ZoomAndPan(double newZoomValue, Vector2D anchorPoint, wxPoint
 }
 
 void VideoDisplay::ResetContentZoom() {
-	if (freeSize)
-		return;
-
 	contentZoomValue = 1.0;
 	pan_x = 0.0;
 	pan_y = 0.0;

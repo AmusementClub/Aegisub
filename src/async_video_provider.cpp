@@ -937,6 +937,10 @@ VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bo
 	worker->Sync([&]{
 		while (ProcessPending()) { }
 		ret = ProcRenderPacket(frame, time, raw);
+		// Synchronous frame requests are used for frame stepping, so keep the
+		// provider's current-frame context aligned with what was just rendered.
+		frame_number = frame;
+		this->time = time;
 	});
 	return ret;
 }

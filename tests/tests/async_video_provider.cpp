@@ -1031,6 +1031,39 @@ TEST(async_video_provider, update_subtitles_advances_overlay_continuity_generati
 	EXPECT_GT(second.subtitle_overlay.continuity_generation, first_generation);
 }
 
+TEST(async_video_provider, update_subtitles_reuses_latest_synchronous_render_frame) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeSubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		recorder);
+
+	auto initial = MakeSubtitleFile("before");
+	provider.LoadSubtitles(&initial);
+	provider.RequestFrame(1, 1000);
+
+	ASSERT_TRUE(recorder.WaitForCount(1));
+	auto frames = recorder.Snapshot();
+	ASSERT_EQ(1u, frames.size());
+	EXPECT_EQ(1, frames.back().frame_number);
+
+	auto stepped = provider.GetRenderPacket(9, 9000);
+	ASSERT_TRUE(stepped.source_frame_storage);
+	EXPECT_EQ(9, stepped.source_frame_storage->data[0]);
+
+	auto updated = MakeSubtitleFile("after");
+	provider.UpdateSubtitles(&updated, &updated.Events.front());
+
+	ASSERT_TRUE(recorder.WaitForCount(2));
+	frames = recorder.Snapshot();
+	ASSERT_EQ(2u, frames.size());
+	EXPECT_EQ(9, frames.back().frame_number);
+	EXPECT_GT(frames.back().subtitle_generation, frames.front().subtitle_generation);
+}
+
 TEST(async_video_provider, color_space_override_updates_effective_source_frame_metadata) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *subs = new FakeOverlaySubtitlesProvider;

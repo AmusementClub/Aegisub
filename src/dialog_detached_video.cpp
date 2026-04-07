@@ -190,11 +190,15 @@ void DialogDetachedVideo::OnClose(wxCloseEvent &evt) {
 
 	ui.videoDisplay = old_display;
 	ui.videoSlider = old_slider;
+
+	// Show the attached video box before restoring the visual tool. Attached
+	// tools call back into VideoDisplay::UpdateSize(), which is a no-op while
+	// the display is hidden.
+	OPT_SET("Video/Detached/Enabled")->SetBool(false);
 	RestoreVisualTool(ui.videoDisplay, context, current_tool);
 
-	OPT_SET("Video/Detached/Enabled")->SetBool(false);
-
 	core.videoController->JumpToFrame(core.videoController->GetFrameN());
+	ui.videoDisplay->Refresh(false);
 
 	evt.Skip();
 }

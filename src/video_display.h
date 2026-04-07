@@ -67,6 +67,9 @@ class VideoDisplay final : public wxGLCanvas {
 	agi::signal::Signal<int> FramePresented;
 
 	const agi::OptionValue* autohideTools;
+	const agi::OptionValue* scrollAction;
+	const agi::OptionValue* ctrlScrollAction;
+	const agi::OptionValue* shiftScrollAction;
 
 	agi::Context *con;
 

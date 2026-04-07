@@ -169,6 +169,9 @@ void ApplyViewportLayout(
 VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBox, wxWindow *parent, agi::Context *c)
 : wxGLCanvas(parent, -1, attribList)
 , autohideTools(OPT_GET("Tool/Visual/Autohide"))
+, scrollAction(OPT_GET("Video/Scroll Action"))
+, ctrlScrollAction(OPT_GET("Video/Ctrl Scroll Action"))
+, shiftScrollAction(OPT_GET("Video/Shift Scroll Action"))
 , con(c)
 , zoomValue(OPT_GET("Video/Default Zoom")->GetInt() * .125 + .125)
 , toolBar(toolbar)
@@ -739,10 +742,9 @@ void VideoDisplay::PositionVideo() {
 		freeSize,
 		target_aspect_ratio);
 	bool const enable_content_transform =
-		!freeSize ||
+		(!freeSize && contentZoomValue != 1.0) ||
 		pan_x != 0.0 ||
-		pan_y != 0.0 ||
-		(!freeSize && contentZoomValue != 1.0);
+		pan_y != 0.0;
 	auto layout = BuildVideoDisplayContentLayout(
 		baseViewport,
 		canvas_height,
@@ -839,7 +841,7 @@ void VideoDisplay::OnMouseEvent(wxMouseEvent& event) {
 	if (event.ButtonDown())
 		SetFocus();
 
-	if (event.ButtonDown() && event.MiddleIsDown())
+	if (event.MiddleDown())
 		last_mouse_pos = current_pos;
 	else if (event.Dragging() && event.MiddleIsDown())
 		Pan(current_pos - last_mouse_pos);
@@ -868,9 +870,9 @@ void VideoDisplay::OnMouseWheel(wxMouseEvent& event) {
 			int action = ResolveVideoDisplayScrollAction(
 				event.CmdDown(),
 				event.ShiftDown(),
-				OPT_GET("Video/Scroll Action")->GetInt(),
-				OPT_GET("Video/Ctrl Scroll Action")->GetInt(),
-				OPT_GET("Video/Shift Scroll Action")->GetInt());
+				scrollAction->GetInt(),
+				ctrlScrollAction->GetInt(),
+				shiftScrollAction->GetInt());
 			int dir = 1;
 			bool swap = false;
 			switch (action) {

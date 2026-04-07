@@ -638,17 +638,14 @@ void VideoDisplay::DoRender() try {
 	videoRenderer->Render({ viewport_left, viewport_bottom, viewport_width, viewport_height }, client_size.GetWidth() * scale_factor, client_size.GetHeight() * scale_factor);
 	if (subtitleOverlayRenderer)
 		subtitleOverlayRenderer->Render({ viewport_left, viewport_bottom, viewport_width, viewport_height }, client_size.GetWidth() * scale_factor, client_size.GetHeight() * scale_factor);
-	if (freeSize)
-		E(glViewport(0, std::min(viewport_bottom, 0), videoSize.GetWidth(), videoSize.GetHeight()));
-	else
-		E(glViewport(0, 0, client_size.GetWidth() * scale_factor, client_size.GetHeight() * scale_factor));
 
+	// Overlay pass (overscan mask, visual tools) renders in client/window coordinates.
+	// Always use a viewport anchored at (0,0) so that ortho coords == mouse coords.
+	// The video_pos offset already positions tool features relative to the video.
+	E(glViewport(0, 0, client_size.GetWidth() * scale_factor, client_size.GetHeight() * scale_factor));
 	E(glMatrixMode(GL_PROJECTION));
 	E(glLoadIdentity());
-	if (freeSize)
-		E(glOrtho(0.0f, videoSize.GetWidth() / scale_factor, videoSize.GetHeight() / scale_factor, 0.0f, -1000.0f, 1000.0f));
-	else
-		E(glOrtho(0.0f, client_size.GetWidth(), client_size.GetHeight(), 0.0f, -1000.0f, 1000.0f));
+	E(glOrtho(0.0f, client_size.GetWidth(), client_size.GetHeight(), 0.0f, -1000.0f, 1000.0f));
 
 	if (OPT_GET("Video/Overscan Mask")->GetBool()) {
 		double ar = con->videoController->GetAspectRatioValue();
@@ -816,10 +813,15 @@ void VideoDisplay::RefreshVideoScale() {
 
 void VideoDisplay::OnSizeEvent(wxSizeEvent &event) {
 	if (freeSize) {
-		videoSize = GetClientSize() * scale_factor;
-		contentZoomValue = 1.0;
-		pan_x = 0.0;
-		pan_y = 0.0;
+		wxSize newVideoSize = GetClientSize() * scale_factor;
+		// Only reset pan/zoom when the window size actually changed (user resize),
+		// not when an internal layout change (e.g. toolbar swap) re-enters here.
+		if (newVideoSize != videoSize) {
+			contentZoomValue = 1.0;
+			pan_x = 0.0;
+			pan_y = 0.0;
+		}
+		videoSize = newVideoSize;
 		PositionVideo();
 		zoomValue = double(viewport_height) / con->project->VideoProvider()->GetHeight();
 		zoomBox->ChangeValue(fmt_wx("%g%%", zoomValue * 100.));
@@ -967,6 +969,7 @@ void VideoDisplay::SetTool(std::unique_ptr<VisualToolBase> new_tool) {
 		tool->SetCanvasSize(GetClientSize().GetWidth(), GetClientSize().GetHeight());
 		tool->SetDisplayArea(viewport_left / scale_factor, viewport_top / scale_factor,
 			viewport_width / scale_factor, viewport_height / scale_factor);
+		Render();
 	}
 }
 

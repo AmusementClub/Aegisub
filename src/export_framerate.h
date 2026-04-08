@@ -44,6 +44,10 @@ class AssTransformFramerateFilter final : public AssExportFilter {
 	AssDialogue *line = nullptr;
 	int newStart = 0;
 	int newEnd = 0;
+	int oldAssStart = 0;
+	int oldAssEnd = 0;
+	int newAssStart = 0;
+	int newAssEnd = 0;
 	int newK = 0;
 	int oldK = 0;
 
@@ -68,18 +72,10 @@ class AssTransformFramerateFilter final : public AssExportFilter {
 	/// @param userdata Filter instance
 	static void TransformTimeTags(std::string const& name, AssOverrideParameter *curParam, void *userdata);
 
-	/// @brief Convert a time from the input frame rate to the output frame rate
-	/// @param time Time in ms to convert
-	/// @return Time in ms
-	///
-	/// This preserves two things:
-	///   1. The frame number
-	///   2. The relative distance between the beginning of the frame which time
-	///      is in and the beginning of the next frame
-	int ConvertTime(int time);
 public:
 	AssTransformFramerateFilter();
 	void ProcessSubs(AssFile *subs, wxWindow *) override;
 	wxWindow *GetConfigDialogWindow(wxWindow *parent, agi::Context *c) override;
 	void LoadSettings(bool is_default, agi::Context *c) override;
+	void UpdateExportFramerate(agi::vfr::Framerate& fps) const override { fps = Input; }
 };

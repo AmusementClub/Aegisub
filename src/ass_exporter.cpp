@@ -83,17 +83,19 @@ std::vector<std::string> AssExporter::GetAllFilterNames() const {
 void AssExporter::Export(agi::fs::path const& filename, std::string const& charset, wxWindow *export_dialog) {
 	auto core = c->GetCore();
 	AssFile subs(*core.ass);
+	auto export_fps = core.project->Timecodes();
 
 	for (auto filter : filters) {
 		filter->LoadSettings(is_default, c);
 		filter->ProcessSubs(&subs, export_dialog);
+		filter->UpdateExportFramerate(export_fps);
 	}
 
 	const SubtitleFormat *writer = SubtitleFormat::GetWriter(filename);
 	if (!writer)
 		throw agi::InvalidInputException("Unknown file type.");
 
-	writer->ExportFile(&subs, filename, core.project->Timecodes(), charset, c->GetSingleChoiceInteractionSink());
+	writer->ExportFile(&subs, filename, export_fps, charset, c->GetSingleChoiceInteractionSink());
 }
 
 wxSizer *AssExporter::GetSettingsSizer(std::string const& name) {

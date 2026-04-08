@@ -26,6 +26,7 @@ if(GTEST_FOUND)
         tests/tests/audio_display.cpp
         tests/tests/async_video_provider.cpp
         tests/tests/dispatch.cpp
+        tests/tests/export_framerate_transform.cpp
         src/audio_display_analysis.cpp
         src/audio_latest_range_scheduler.cpp
         src/audio_display_source.cpp
@@ -46,6 +47,7 @@ if(GTEST_FOUND)
         src/avisynth_legacy_path.cpp
         src/charset_choice.cpp
         src/compat.cpp
+        src/export_framerate_transform.cpp
         src/csri_renderer_discovery.cpp
         src/fft.cpp
         src/locale_choice.cpp

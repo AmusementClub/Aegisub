@@ -42,7 +42,10 @@ class AssFile;
 class AssExportFilterChain;
 class wxWindow;
 
-namespace agi { struct Context; }
+namespace agi {
+	struct Context;
+	namespace vfr { class Framerate; }
+}
 
 class AssExportFilter : public boost::intrusive::make_list_base_hook<boost::intrusive::link_mode<boost::intrusive::auto_unlink>>::type {
 	/// The filter chain needs to be able to muck around with filter names when
@@ -80,6 +83,9 @@ public:
 	/// @param is_default If true use default settings instead
 	/// @param c Project context
 	virtual void LoadSettings(bool is_default, agi::Context *c) { }
+
+	/// Allow filters to update the framerate context used by the final writer.
+	virtual void UpdateExportFramerate(agi::vfr::Framerate& fps) const { (void)fps; }
 };
 
 typedef boost::intrusive::make_list<AssExportFilter, boost::intrusive::constant_time_size<false>>::type FilterList;

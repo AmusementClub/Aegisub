@@ -33,6 +33,7 @@
 #include "ass_file.h"
 #include "async_video_provider.h"
 #include "compat.h"
+#include "export_framerate_transform.h"
 #include "format.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
@@ -149,23 +150,29 @@ void AssTransformFramerateFilter::LoadSettings(bool is_default, agi::Context *c)
 	}
 }
 
-/// Truncate a time to centisecond precision
-static int trunc_cs(int time) {
-	return (time / 10) * 10;
-}
-
 void AssTransformFramerateFilter::TransformTimeTags(std::string const& name, AssOverrideParameter *curParam, void *curData) {
+	(void)name;
 	VariableDataType type = curParam->GetType();
 	if (type != VariableDataType::INT && type != VariableDataType::FLOAT) return;
 
 	AssTransformFramerateFilter *instance = static_cast<AssTransformFramerateFilter*>(curData);
-	AssDialogue *curDiag = instance->line;
-
 	int parVal = curParam->Get<int>();
+	AssFramerateTransform const transform{
+		instance->newStart,
+		instance->newEnd,
+		instance->oldAssStart,
+		instance->oldAssEnd,
+		instance->newAssStart,
+		instance->newAssEnd
+	};
 
 	switch (curParam->classification) {
 		case AssParameterClass::RELATIVE_TIME_START: {
-			int value = instance->ConvertTime(trunc_cs(curDiag->Start) + parVal) - instance->newStart;
+			int value = TransformRelativeStartTagTimeForExport(
+				instance->Output,
+				instance->Input,
+				transform,
+				parVal);
 
 			// An end time of 0 is actually the end time of the line, so ensure
 			// nonzero is never converted to 0
@@ -177,14 +184,20 @@ void AssTransformFramerateFilter::TransformTimeTags(std::string const& name, Ass
 			break;
 		}
 		case AssParameterClass::RELATIVE_TIME_END:
-			curParam->Set(instance->newEnd - instance->ConvertTime(trunc_cs(curDiag->End) - parVal));
+			curParam->Set(TransformRelativeEndTagTimeForExport(
+				instance->Output,
+				instance->Input,
+				transform,
+				parVal));
 			break;
 		case AssParameterClass::KARAOKE: {
-			int start = curDiag->Start / 10 + instance->oldK + parVal;
-			int value = (instance->ConvertTime(start * 10) - instance->newStart) / 10 - instance->newK;
-			instance->oldK += parVal;
-			instance->newK += value;
-			curParam->Set(value);
+			curParam->Set(TransformKaraokeDurationForExport(
+				instance->Output,
+				instance->Input,
+				transform,
+				parVal,
+				instance->oldK,
+				instance->newK));
 			break;
 		}
 		default:
@@ -198,8 +211,13 @@ void AssTransformFramerateFilter::TransformFrameRate(AssFile *subs) {
 		line = &curDialogue;
 		newK = 0;
 		oldK = 0;
-		newStart = trunc_cs(ConvertTime(curDialogue.Start));
-		newEnd = trunc_cs(ConvertTime(curDialogue.End) + 9);
+		auto const transform = BuildAssFramerateTransform(Output, Input, curDialogue.Start, curDialogue.End);
+		newStart = transform.new_start_ms;
+		newEnd = transform.new_end_ms;
+		oldAssStart = transform.old_ass_start_ms;
+		oldAssEnd = transform.old_ass_end_ms;
+		newAssStart = transform.new_ass_start_ms;
+		newAssEnd = transform.new_ass_end_ms;
 
 		// Process stuff
 		auto blocks = line->ParseTags();
@@ -209,18 +227,4 @@ void AssTransformFramerateFilter::TransformFrameRate(AssFile *subs) {
 		curDialogue.End = newEnd;
 		curDialogue.UpdateText(blocks);
 	}
-}
-
-int AssTransformFramerateFilter::ConvertTime(int time) {
-	int frame = Output.FrameAtTime(time);
-	int frameStart = Output.TimeAtFrame(frame);
-	int frameEnd = Output.TimeAtFrame(frame + 1);
-	int frameDur = frameEnd - frameStart;
-	double dist = double(time - frameStart) / frameDur;
-
-	int newStart = Input.TimeAtFrame(frame);
-	int newEnd = Input.TimeAtFrame(frame + 1);
-	int newDur = newEnd - newStart;
-
-	return newStart + newDur * dist;
 }

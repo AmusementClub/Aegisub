@@ -18,6 +18,7 @@ if(GTEST_FOUND)
     add_executable(gtest-run EXCLUDE_FROM_ALL
         tests/tests/access.cpp
         tests/tests/aegisublocale_compat.cpp
+        tests/tests/ass_dialogue.cpp
         tests/tests/ass_file_extradata.cpp
         tests/tests/audio.cpp
         tests/tests/avisynth_legacy_path.cpp
@@ -33,6 +34,7 @@ if(GTEST_FOUND)
         src/audio_waveform_summary_cache.cpp
         src/ass_attachment.cpp
         src/ass_dialogue.cpp
+        src/ass_time_projection.cpp
         src/ass_entry.cpp
         src/ass_file.cpp
         src/ass_override.cpp

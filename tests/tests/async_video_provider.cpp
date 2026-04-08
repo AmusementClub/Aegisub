@@ -568,7 +568,7 @@ std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(Subtitl
 		return g_subtitles_provider_factory(env);
 	return nullptr;
 }
-void SubtitlesProvider::LoadSubtitles(AssFile *, int) {
+void SubtitlesProvider::LoadSubtitles(AssFile *, int, agi::vfr::Framerate const*) {
 	static const char payload[] = "test";
 	LoadSubtitles(payload, sizeof(payload) - 1);
 }
@@ -1851,4 +1851,36 @@ TEST(async_video_provider, filename_constructor_does_not_create_default_choice_s
 	AsyncVideoProvider provider(agi::fs::path("dummy.mkv"), "", AsyncVideoProviderEventSink{}, nullptr);
 
 	EXPECT_EQ(nullptr, g_last_factory_choice_sink);
+}
+
+TEST(async_video_provider, subtitle_timecodes_override_source_fps_for_visibility_updates) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeSubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		recorder);
+
+	AssFile subtitle_file;
+	auto *line = new AssDialogue;
+	line->Start = 0;
+	line->End = 17;
+	line->Text = "timecodes";
+	subtitle_file.Events.push_back(*line);
+	provider.LoadSubtitles(&subtitle_file);
+
+	provider.SetSubtitlesTimecodes(agi::vfr::Framerate(100.0));
+	provider.RequestFrame(0, 15);
+	ASSERT_TRUE(recorder.WaitForCount(1));
+
+	subtitle_file.Events.front().Text = "updated";
+	provider.UpdateSubtitles(&subtitle_file, &subtitle_file.Events.front());
+	ASSERT_TRUE(recorder.WaitForCount(2));
+
+	auto frames = recorder.Snapshot();
+	ASSERT_EQ(2u, frames.size());
+	EXPECT_EQ(1, frames[0].subtitle_generation);
+	EXPECT_EQ(2, frames[1].subtitle_generation);
 }

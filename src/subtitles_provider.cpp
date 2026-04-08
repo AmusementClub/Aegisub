@@ -17,6 +17,7 @@
 #include "include/aegisub/subtitles_provider.h"
 
 #include "ass_dialogue.h"
+#include "ass_time_projection.h"
 #include "ass_attachment.h"
 #include "ass_file.h"
 #include "ass_info.h"
@@ -90,7 +91,7 @@ std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(Subtitl
 	throw error;
 }
 
-void SubtitlesProvider::LoadSubtitles(AssFile *subs, int time) {
+void SubtitlesProvider::LoadSubtitles(AssFile *subs, int time, agi::vfr::Framerate const* fps) {
 	buffer.clear();
 
 	auto push_header = [&](const char *str) {
@@ -122,8 +123,8 @@ void SubtitlesProvider::LoadSubtitles(AssFile *subs, int time) {
 
 	push_header("[Events]\n");
 	for (auto const& line : subs->Events) {
-		if (!line.Comment && (time < 0 || !(line.Start > time || line.End <= time)))
-			push_line(line.GetEntryData());
+		if (!line.Comment && (time < 0 || IsAssDialogueVisibleAtTimeForStorage(line.Start, line.End, time, fps)))
+			push_line(SerializeAssDialogueForStorage(line, fps));
 	}
 
 	LoadSubtitles(&buffer[0], buffer.size());

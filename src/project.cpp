@@ -159,6 +159,7 @@ void Project::RefreshSubtitlesProvider(bool recreate_provider) {
 				core.ass->GetTransientFonts()
 			}));
 		}
+		video_provider->SetSubtitlesTimecodes(timecodes);
 		video_provider->LoadSubtitles(core.ass.get());
 		core.videoController->JumpToFrame(core.videoController->GetFrameN());
 	}
@@ -177,6 +178,15 @@ void Project::RefreshSubtitlesProvider(bool recreate_provider) {
 
 void Project::ReloadSubtitlesProvider() {
 	RefreshSubtitlesProvider(true);
+}
+
+void Project::RefreshVideoFrameForTimecodesChange() {
+	if (!video_provider)
+		return;
+
+	video_provider->SetSubtitlesTimecodes(timecodes);
+	auto core = context->GetCore();
+	core.videoController->JumpToFrame(core.videoController->GetFrameN());
 }
 
 void Project::ReloadVideo() {
@@ -477,6 +487,7 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 
 	timecodes = opened_video.timecodes;
 	keyframes = opened_video.keyframes;
+	video_provider->SetSubtitlesTimecodes(timecodes);
 
 	std::string warning = opened_video.warning;
 	if (!warning.empty())
@@ -528,6 +539,7 @@ void Project::CloseVideo() {
 void Project::DoLoadTimecodes(agi::fs::path const& path) {
 	timecodes = agi::vfr::Framerate(path);
 	SetPath(timecodes_file, "", "Timecodes", path);
+	RefreshVideoFrameForTimecodesChange();
 	AnnounceTimecodesModified(timecodes);
 }
 
@@ -548,6 +560,7 @@ void Project::LoadTimecodes(agi::fs::path path) {
 void Project::CloseTimecodes() {
 	timecodes = video_provider ? video_provider->GetFPS() : agi::vfr::Framerate{};
 	SetPath(timecodes_file, "", "", "");
+	RefreshVideoFrameForTimecodesChange();
 	AnnounceTimecodesModified(timecodes);
 }
 

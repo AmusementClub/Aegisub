@@ -251,7 +251,7 @@ void SubsController::Save(agi::fs::path const& filename, std::string const& enco
 			save_source = save_copy.get();
 		}
 
-		writer->WriteFile(save_source, filename, 0, encoding, context->GetSingleChoiceInteractionSink());
+		writer->WriteFile(save_source, filename, core.project->Timecodes(), encoding, context->GetSingleChoiceInteractionSink());
 		FileSave();
 	}
 	catch (...) {
@@ -314,7 +314,8 @@ void SubsController::AutoSave() {
 	auto status_sink = context->GetStatusSink();
 	auto choice_sink = context->GetSingleChoiceInteractionSink();
 	auto subs_copy = new AssFile(*core.ass);
-	autosave_queue->Async([subs_copy, name, directory, status_sink, choice_sink] {
+	auto fps = core.project->Timecodes();
+	autosave_queue->Async([subs_copy, name, directory, status_sink, choice_sink, fps] {
 		wxString msg;
 		std::unique_ptr<AssFile> subs(subs_copy);
 
@@ -323,7 +324,7 @@ void SubsController::AutoSave() {
 			auto path = directory / agi::fs::PathFromString(agi::format("%s.%s.AUTOSAVE.ass",
 				agi::fs::PathToString(name),
 				agi::util::strftime("%Y-%m-%d-%H-%M-%S")));
-			SubtitleFormat::GetWriter(path)->WriteFile(subs.get(), path, 0, "", choice_sink);
+			SubtitleFormat::GetWriter(path)->WriteFile(subs.get(), path, fps, "", choice_sink);
 			msg = fmt_tl("File backup saved as \"%s\".", path);
 		}
 		catch (const agi::Exception& err) {

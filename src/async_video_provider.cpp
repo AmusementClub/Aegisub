@@ -18,6 +18,7 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "ass_time_projection.h"
 #include "compatibility_overlay_buffer_plan.h"
 #include "export_fixstyle.h"
 #include "include/aegisub/subtitles_provider.h"
@@ -379,6 +380,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 
 	try {
 		if (single_frame != frame_number && single_frame != SUBS_FILE_ALREADY_LOADED) {
+			auto const& fps = subtitles_timecodes;
 			// Generally edits and seeks come in groups; if the last thing done
 			// was seek it is more likely that the user will seek again and
 			// vice versa. As such, if this is the first frame requested after
@@ -386,13 +388,13 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 			// other lines will probably not be viewed before the file changes
 			// again), and if it's a different frame, export the entire file.
 			if (single_frame != NEW_SUBS_FILE) {
-				subs_provider->LoadSubtitles(subs.get());
+				subs_provider->LoadSubtitles(subs.get(), -1, &fps);
 				single_frame = SUBS_FILE_ALREADY_LOADED;
 			}
 			else {
 				AssFixStylesFilter::ProcessSubs(subs.get());
 				single_frame = frame_number;
-				subs_provider->LoadSubtitles(subs.get(), time);
+				subs_provider->LoadSubtitles(subs.get(), time, &fps);
 			}
 		}
 	}
@@ -531,6 +533,7 @@ AsyncVideoProvider::AsyncVideoProvider(std::unique_ptr<VideoProvider> source_pro
 , source_provider(std::move(source_provider))
 , event_sink(std::move(event_sink))
 {
+	subtitles_timecodes = this->source_provider->GetFPS();
 	if (this->subs_provider) {
 		LOG_I(kSubtitleProviderUseLogTag) << "Activated subtitles provider: "
 			<< this->subs_provider->GetDebugName()
@@ -736,8 +739,9 @@ bool AsyncVideoProvider::ProcessPending() {
 
 	std::vector<AssDialogueBase const*> visible_lines;
 	if (subs) {
+		auto const& fps = subtitles_timecodes;
 		for (auto const& line : subs->Events) {
-			if (!line.Comment && !(line.Start > time || line.End <= time))
+			if (!line.Comment && IsAssDialogueVisibleAtTimeForStorage(line.Start, line.End, static_cast<int>(time), &fps))
 				visible_lines.push_back(&line);
 		}
 	}
@@ -1032,6 +1036,19 @@ void AsyncVideoProvider::SetColorSpace(std::string const& matrix) {
 		has_pending_color_space = true;
 	}
 	ScheduleProcessing();
+}
+
+void AsyncVideoProvider::SetSubtitlesTimecodes(agi::vfr::Framerate timecodes) {
+	worker->Sync([&] {
+		while (ProcessPending()) { }
+		subtitles_timecodes = std::move(timecodes);
+		++content_version;
+		single_frame = NEW_SUBS_FILE;
+		last_rendered = -1;
+		last_lines.clear();
+		ResetCompatibilityOverlayState();
+		InvalidateProviderOverlayState();
+	});
 }
 
 bool AsyncVideoProvider::SetPreferredSourceModes(std::vector<SourceFrameOutputMode> modes) {

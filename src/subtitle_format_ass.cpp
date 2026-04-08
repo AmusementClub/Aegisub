@@ -20,6 +20,7 @@
 #include "ass_dialogue.h"
 #include "ass_info.h"
 #include "ass_file.h"
+#include "ass_time_projection.h"
 #include "ass_style.h"
 #include "ass_parser.h"
 #include "options.h"
@@ -31,6 +32,7 @@
 #include <libaegisub/ass/uuencode.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/string_utils.h>
+#include <libaegisub/vfr.h>
 
 DEFINE_EXCEPTION(AssParseError, SubtitleFormatParseError);
 
@@ -62,6 +64,7 @@ const char *format(AssEntryGroup group) {
 struct Writer {
 	TextFileWriter file;
 	AssEntryGroup group = AssEntryGroup::INFO;
+	agi::vfr::Framerate const* fps = nullptr;
 
 	Writer(agi::fs::path const& filename, std::string const& encoding)
 	: file(filename, encoding)
@@ -86,6 +89,20 @@ struct Writer {
 			}
 
 			file.WriteLineToFile(line.GetEntryData());
+		}
+	}
+
+	void Write(EntryList<AssDialogue> const& list) {
+		for (auto const& line : list) {
+			if (line.Group() != group) {
+				file.WriteLineToFile("");
+				file.WriteLineToFile(line.GroupHeader());
+				if (const char *str = format(line.Group()))
+					file.WriteLineToFile(str, false);
+				group = line.Group();
+			}
+
+			file.WriteLineToFile(SerializeAssDialogueForStorage(line, fps));
 		}
 	}
 
@@ -161,6 +178,7 @@ struct Writer {
 void AssSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
 	(void)choice_sink;
 	Writer writer(filename, encoding);
+	writer.fps = fps.IsLoaded() ? &fps : nullptr;
 	writer.Write(src->Info);
 	writer.Write(src->Properties);
 	writer.Write(src->Styles);
@@ -173,6 +191,7 @@ void AssSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filen
 void AssSubtitleFormat::ExportFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
 	(void)choice_sink;
 	Writer writer(filename, encoding);
+	writer.fps = fps.IsLoaded() ? &fps : nullptr;
 	writer.Write(src->Info);
 	writer.Write(src->Styles);
 	writer.Write(src->Attachments);

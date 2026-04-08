@@ -44,6 +44,7 @@
 class AssFile;
 class TransientFontSet;
 struct VideoFrame;
+namespace agi { namespace vfr { class Framerate; } }
 
 enum class SubtitleRenderMode {
 	CompatibilityFrameOnly,
@@ -56,7 +57,7 @@ class SubtitlesProvider {
 
 public:
 	virtual ~SubtitlesProvider() = default;
-	void LoadSubtitles(AssFile *subs, int time = -1);
+	void LoadSubtitles(AssFile *subs, int time = -1, agi::vfr::Framerate const* fps = nullptr);
 	virtual void OnActivated() { }
 	virtual std::string GetDebugName() const { return "unknown"; }
 	virtual SubtitleRenderMode GetRenderMode() const { return SubtitleRenderMode::CompatibilityFrameOnly; }

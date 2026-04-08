@@ -89,6 +89,7 @@ class AsyncVideoProvider {
 
 	int frame_number = -1; ///< Last frame number requested
 	double time = -1.; ///< Time of the frame to pass to the subtitle renderer
+	agi::vfr::Framerate subtitles_timecodes;
 
 	/// Copy of the subtitles file to avoid having to touch the project context
 	std::unique_ptr<AssFile> subs;
@@ -211,6 +212,8 @@ public:
 	AsyncVideoProvider(agi::fs::path const& filename, std::string const& colormatrix, AsyncVideoProviderEventSink event_sink, agi::BackgroundRunner *br, std::shared_ptr<const TransientFontSet> transient_fonts = {}, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink = {});
 	AsyncVideoProvider(std::unique_ptr<VideoProvider> source_provider, std::unique_ptr<SubtitlesProvider> subs_provider, AsyncVideoProviderEventSink event_sink);
 	~AsyncVideoProvider();
+
+	void SetSubtitlesTimecodes(agi::vfr::Framerate timecodes);
 };
 
 DEFINE_EXCEPTION(AsyncVideoProviderVideoError, agi::Exception);

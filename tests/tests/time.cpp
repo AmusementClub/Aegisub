@@ -28,6 +28,7 @@ TEST(lagi_time, out_of_range_times) {
 
 TEST(lagi_time, rounds_to_cs) {
 	EXPECT_EQ(10, (int)Time(14));
+	EXPECT_EQ(20, (int)Time(15));
 }
 
 TEST(lagi_time, cs_formatting) {

@@ -167,12 +167,16 @@ static void append_unsafe_str(std::string &out, std::string const& str) {
 }
 
 std::string AssDialogue::GetEntryData() const {
+	return GetEntryData(Start.GetAssFormatted(), End.GetAssFormatted());
+}
+
+std::string AssDialogue::GetEntryData(std::string const& formatted_start, std::string const& formatted_end) const {
 	std::string str = Comment ? "Comment: " : "Dialogue: ";
 	str.reserve(51 + Style.get().size() + Actor.get().size() + Effect.get().size() + Text.get().size());
 
 	append_int(str, Layer);
-	append_str(str, Start.GetAssFormatted());
-	append_str(str, End.GetAssFormatted());
+	append_str(str, formatted_start);
+	append_str(str, formatted_end);
 	append_unsafe_str(str, Style);
 	append_unsafe_str(str, Actor);
 	for (auto margin : Margin)

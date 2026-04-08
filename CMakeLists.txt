@@ -558,6 +558,7 @@ add_executable(Aegisub WIN32
     src/ass_attachment.cpp
     src/ass_info_service.cpp
     src/ass_dialogue.cpp
+    src/ass_time_projection.cpp
     src/ass_entry.cpp
     src/ass_export_filter.cpp
     src/ass_exporter.cpp

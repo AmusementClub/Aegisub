@@ -30,6 +30,8 @@
 #include <libaegisub/ass/time.h>
 #include <libaegisub/signal.h>
 
+#include "time_display_mode.h"
+
 #include <wx/textctrl.h>
 
 namespace agi {
@@ -40,20 +42,25 @@ namespace agi {
 /// @brief A text edit control for editing agi::Time objects
 ///
 /// This control constrains values to valid times, and can display the time
-/// being edited as either a h:mm:ss.cc formatted time, or a frame number
+/// being edited as ASS storage time, exact time, or a frame number
 class TimeEdit final : public wxTextCtrl {
-	bool byFrame = false; ///< Is the time displayed as a frame number?
+	SubtitleTimeDisplayMode display_mode = SubtitleTimeDisplayMode::Ass;
 	agi::Context *c; ///< Project context
 	bool isEnd;      ///< Should the time be treated as an end time for time <-> frame conversions?
 	agi::Time time;  ///< The time, which may be displayed as either a frame number or time
+	agi::Time linked_time; ///< The other boundary when ASS display needs interval projection
+	bool has_linked_time = false;
 	bool insert;     ///< If true, disable overwriting behavior in time mode
+	bool input_changed = false;
 
 	agi::signal::Connection insert_opt;
 
 	void CopyTime();
 	void PasteTime();
+	bool DisplaysFrames() const { return display_mode == SubtitleTimeDisplayMode::Frame; }
+	std::string GetDisplayedText() const;
 
-	/// Set the value of the text box from the current time and byFrame setting
+	/// Set the value of the text box from the current time and display mode
 	void UpdateText();
 
 	void OnContextMenu(wxContextMenuEvent &event);
@@ -82,9 +89,16 @@ public:
 	/// Set the time to a frame number. Does nothing if timecodes are unavailable
 	void SetFrame(int fn);
 
-	/// Set whether the time is displayed as a time or the corresponding frame number
-	/// @param enableByFrame If true, frame numbers are displayed
+	/// Set the display mode for the control
+	void SetDisplayMode(SubtitleTimeDisplayMode mode);
+
+	/// Set the time used as the opposite boundary when displaying ASS-projected values
+	void SetLinkedTime(agi::Time other_time);
+	void ClearLinkedTime();
+
+	/// Legacy helper for callers that only want to toggle frame display
 	void SetByFrame(bool enableByFrame);
+	bool ConsumeInputChanged();
 
 	/// Constructor
 	/// @param parent Parent window

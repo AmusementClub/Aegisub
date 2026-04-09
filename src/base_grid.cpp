@@ -747,10 +747,19 @@ void BaseGrid::OnKeyDown(wxKeyEvent &event) {
 }
 
 void BaseGrid::SetByFrame(bool state) {
-	if (byFrame == state) return;
-	byFrame = state;
+	SetDisplayMode(state ? SubtitleTimeDisplayMode::Frame : SubtitleTimeDisplayMode::Ass);
+}
+
+void BaseGrid::SetDisplayMode(SubtitleTimeDisplayMode mode) {
+	if (display_mode == mode)
+		return;
+
+	if (mode == SubtitleTimeDisplayMode::Frame && !context->GetCore().project->Timecodes().IsLoaded())
+		mode = SubtitleTimeDisplayMode::Ass;
+
+	display_mode = mode;
 	for (auto& column : columns)
-		column->SetByFrame(byFrame);
+		column->SetDisplayMode(display_mode);
 	SetColumnWidths();
 	Refresh(false);
 }

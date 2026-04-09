@@ -50,16 +50,19 @@
 #include "placeholder_ctrl.h"
 #include "selection_controller.h"
 #include "subs_edit_ctrl.h"
+#include "subs_controller.h"
 #ifdef WITH_WXSTC
 #include "subs_edit_ctrl_stc.h"
 #endif
 #include "text_selection_controller.h"
+#include "time_display_mode.h"
 #include "timeedit_ctrl.h"
 #include "tooltip_manager.h"
 #include "utils.h"
 #include "validators.h"
 
 #include <libaegisub/character_count.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/util.h>
 
 #include <functional>
@@ -202,7 +205,8 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 	MakeButton("grid/line/next/create");
 	middle_right_sizer->AddSpacer(10);
 
-	by_time = MakeRadio(_("T&ime"), true, _("Time by h:mm:ss.cs"));
+	by_ass = MakeRadio(_("A&SS"), true, _("Display ASS storage timestamps (h:mm:ss.cs)"));
+	by_exact = MakeRadio(_("E&xact"), false, _("Display exact timestamps (h:mm:ss.mmm)"));
 	by_frame = MakeRadio(_("F&rame"), false, _("Time by frame number"));
 	by_frame->Enable(false);
 
@@ -296,6 +300,8 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 		core.selectionController->AddActiveLineListener(&SubsEditBox::OnActiveLineChanged, this),
 		core.selectionController->AddSelectionListener(&SubsEditBox::OnSelectedSetChanged, this),
 		core.initialLineState->AddChangeListener(&SubsEditBox::OnLineInitialTextChanged, this),
+		core.subsController->AddFileOpenListener([this](agi::fs::path const&) { UpdateTimeDisplayModeFromFile(true); }),
+		core.subsController->AddFileSaveListener([this] { UpdateTimeDisplayModeFromFile(false); }),
 	 });
 
 #ifdef WITH_WXSTC
@@ -316,6 +322,9 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 		split_box->SetValue(true);
 		DoOnSplit(true);
 	}
+
+	UpdateFrameTiming(core.project->Timecodes());
+	UpdateTimeDisplayModeFromFile(true);
 }
 
 SubsEditBox::~SubsEditBox() {
@@ -350,7 +359,11 @@ TimeEdit *SubsEditBox::MakeTimeCtrl(wxString const& tooltip, TimeField field) {
 	ctrl->SetInitialSize(ctrl->GetSizeFromTextSize(GetTextExtent(wxS("0:00:00.000"))));
 #endif
 	ctrl->SetToolTip(tooltip);
-	Bind(wxEVT_TEXT, [=](wxCommandEvent&) { CommitTimes(field); }, ctrl->GetId());
+	ctrl->SetDisplayMode(time_display_mode);
+	Bind(wxEVT_TEXT, [=](wxCommandEvent&) {
+		if (ctrl->ConsumeInputChanged())
+			CommitTimes(field);
+	}, ctrl->GetId());
 	ctrl->Bind(wxEVT_CHAR_HOOK, time_edit_char_hook);
 	middle_left_sizer->Add(ctrl, wxSizerFlags().Expand());
 	return ctrl;
@@ -429,6 +442,8 @@ void SubsEditBox::UpdateFields(int type, bool repopulate_lists) {
 	if (!line) return;
 
 	if (type & AssFile::COMMIT_DIAG_TIME) {
+		start_time->SetLinkedTime(line->End);
+		end_time->SetLinkedTime(line->Start);
 		start_time->SetTime(line->Start);
 		end_time->SetTime(line->End);
 		SetDurationField();
@@ -520,12 +535,64 @@ void SubsEditBox::UpdateFrameTiming(agi::vfr::Framerate const& fps) {
 	}
 	else {
 		by_frame->Enable(false);
-		by_time->SetValue(true);
-		start_time->SetByFrame(false);
-		end_time->SetByFrame(false);
-		duration->SetByFrame(false);
-		c->GetUI().subsGrid->SetByFrame(false);
+		if (time_display_mode == SubtitleTimeDisplayMode::Frame)
+			ApplyTimeDisplayMode(non_frame_display_mode);
 	}
+}
+
+void SubsEditBox::ApplyTimeDisplayMode(SubtitleTimeDisplayMode mode, bool update_radio_buttons) {
+	if (mode == SubtitleTimeDisplayMode::Frame && !c->GetCore().project->Timecodes().IsLoaded())
+		mode = non_frame_display_mode;
+
+	if (mode != SubtitleTimeDisplayMode::Frame)
+		non_frame_display_mode = mode;
+
+	time_display_mode = mode;
+
+	if (update_radio_buttons) {
+		by_ass->SetValue(mode == SubtitleTimeDisplayMode::Ass);
+		by_exact->SetValue(mode == SubtitleTimeDisplayMode::Exact);
+		by_frame->SetValue(mode == SubtitleTimeDisplayMode::Frame);
+	}
+
+	start_time->SetDisplayMode(mode);
+	end_time->SetDisplayMode(mode);
+	duration->SetDisplayMode(mode);
+	c->GetUI().subsGrid->SetDisplayMode(mode);
+
+	if (line) {
+		start_time->SetLinkedTime(line->End);
+		end_time->SetLinkedTime(line->Start);
+		start_time->SetTime(line->Start);
+		end_time->SetTime(line->End);
+		SetDurationField();
+	}
+	else {
+		start_time->ClearLinkedTime();
+		end_time->ClearLinkedTime();
+	}
+}
+
+void SubsEditBox::UpdateTimeDisplayModeFromFile(bool force_apply) {
+	auto core = c->GetCore();
+	auto const filename = core.subsController->HasFile()
+		? core.subsController->Filename()
+		: agi::fs::path();
+	auto const default_mode = DefaultTimeDisplayModeForFile(filename);
+
+	bool const follow_current_default = time_display_mode == file_default_display_mode;
+	bool const follow_frame_default = time_display_mode == SubtitleTimeDisplayMode::Frame
+		&& non_frame_display_mode == file_default_display_mode;
+	file_default_display_mode = default_mode;
+
+	if (time_display_mode == SubtitleTimeDisplayMode::Frame) {
+		if (force_apply || follow_frame_default)
+			non_frame_display_mode = default_mode;
+		return;
+	}
+
+	if (force_apply || follow_current_default)
+		ApplyTimeDisplayMode(default_mode);
 }
 
 void SubsEditBox::OnKeyDown(wxKeyEvent &event) {
@@ -612,12 +679,17 @@ void SubsEditBox::CommitTimes(TimeField field) {
 				break;
 
 			case TIME_DURATION:
-				if (by_frame->GetValue()) {
+				if (time_display_mode == SubtitleTimeDisplayMode::Frame) {
 					auto const& fps = core.project->Timecodes();
 					d->End = fps.TimeAtFrame(fps.FrameAtTime(d->Start, agi::vfr::START) + duration->GetFrame() - 1, agi::vfr::END);
 				}
 				else
-					d->End = d->Start + duration->GetTime();
+					d->End = GetEndTimeForDisplayedDuration(
+						d->Start,
+						d->End,
+						duration->GetTime(),
+						time_display_mode,
+						&core.project->Timecodes());
 				initial_times[d].second = d->End;
 				break;
 		}
@@ -639,13 +711,18 @@ void SubsEditBox::CommitTimes(TimeField field) {
 }
 
 void SubsEditBox::SetDurationField() {
+	if (!line)
+		return;
+
 	// With VFR, the frame count calculated from the duration in time can be
 	// completely wrong (since the duration is calculated as if it were a start
 	// time), so we need to explicitly set it with the correct units.
-	if (by_frame->GetValue())
+	if (time_display_mode == SubtitleTimeDisplayMode::Frame)
 		duration->SetFrame(end_time->GetFrame() - start_time->GetFrame() + 1);
 	else
-		duration->SetTime(end_time->GetTime() - start_time->GetTime());
+		// Duration is already derived from the whole dialogue interval, so unlike
+		// start/end it does not need linked-boundary ASS projection inside TimeEdit.
+		duration->SetTime(agi::Time(GetDurationForDisplay(line->Start, line->End, time_display_mode, &c->GetCore().project->Timecodes())));
 }
 
 void SubsEditBox::OnSize(wxSizeEvent &evt) {
@@ -674,13 +751,12 @@ void SubsEditBox::OnSize(wxSizeEvent &evt) {
 void SubsEditBox::OnFrameTimeRadio(wxCommandEvent &event) {
 	event.Skip();
 
-	bool byFrame = by_frame->GetValue();
-	start_time->SetByFrame(byFrame);
-	end_time->SetByFrame(byFrame);
-	duration->SetByFrame(byFrame);
-	c->GetUI().subsGrid->SetByFrame(byFrame);
-
-	SetDurationField();
+	SubtitleTimeDisplayMode mode = SubtitleTimeDisplayMode::Ass;
+	if (by_frame->GetValue())
+		mode = SubtitleTimeDisplayMode::Frame;
+	else if (by_exact->GetValue())
+		mode = SubtitleTimeDisplayMode::Exact;
+	ApplyTimeDisplayMode(mode, false);
 }
 
 void SubsEditBox::SetControlsState(bool state) {
@@ -690,6 +766,8 @@ void SubsEditBox::SetControlsState(bool state) {
 	Enable(state);
 	if (!state) {
 		wxEventBlocker blocker(this);
+		start_time->ClearLinkedTime();
+		end_time->ClearLinkedTime();
 #ifdef WITH_WXSTC
 		if (use_stc) {
 			edit_ctrl_stc->SetTextTo(std::string());

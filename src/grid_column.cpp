@@ -22,6 +22,8 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "options.h"
+#include "project.h"
+#include "time_display_mode.h"
 #include "video_controller.h"
 
 #include <libaegisub/character_count.h>
@@ -144,10 +146,10 @@ struct GridColumnLayer final : GridColumn {
 };
 
 struct GridColumnTime : GridColumn {
-	bool by_frame = false;
+	SubtitleTimeDisplayMode display_mode = SubtitleTimeDisplayMode::Ass;
 
 	bool Centered() const override { return true; }
-	void SetByFrame(bool by_frame) override { this->by_frame = by_frame; }
+	void SetDisplayMode(SubtitleTimeDisplayMode mode) override { display_mode = mode; }
 };
 
 struct GridColumnStartTime final : GridColumnTime {
@@ -155,14 +157,18 @@ struct GridColumnStartTime final : GridColumnTime {
 	COLUMN_DESCRIPTION(_("Start Time"))
 
 	wxString Value(const AssDialogue *d, const agi::Context *c) const override {
-		if (by_frame)
+		if (display_mode == SubtitleTimeDisplayMode::Frame)
 			return std::to_wstring(c->GetCore().videoController->FrameAtTime(d->Start, agi::vfr::START));
-		return to_wx(d->Start.GetAssFormatted());
+
+		auto const displayed = GetDialogueTimesForDisplay(d->Start, d->End, display_mode, &c->GetCore().project->Timecodes());
+		return to_wx(FormatTimeForDisplay(displayed.first, display_mode));
 	}
 
 	int Width(const agi::Context *c, WidthHelper &helper) const override {
-		if (!by_frame)
+		if (display_mode == SubtitleTimeDisplayMode::Ass)
 			return helper(wxS("0:00:00.00"));
+		if (display_mode == SubtitleTimeDisplayMode::Exact)
+			return helper(wxS("0:00:00.000"));
 		auto core = c->GetCore();
 		int frame = core.videoController->FrameAtTime(max_value(&AssDialogue::Start, core.ass->Events), agi::vfr::START);
 		return helper(std::to_wstring(frame));
@@ -174,14 +180,18 @@ struct GridColumnEndTime final : GridColumnTime {
 	COLUMN_DESCRIPTION(_("End Time"))
 
 	wxString Value(const AssDialogue *d, const agi::Context *c) const override {
-		if (by_frame)
+		if (display_mode == SubtitleTimeDisplayMode::Frame)
 			return std::to_wstring(c->GetCore().videoController->FrameAtTime(d->End, agi::vfr::END));
-		return to_wx(d->End.GetAssFormatted());
+
+		auto const displayed = GetDialogueTimesForDisplay(d->Start, d->End, display_mode, &c->GetCore().project->Timecodes());
+		return to_wx(FormatTimeForDisplay(displayed.second, display_mode));
 	}
 
 	int Width(const agi::Context *c, WidthHelper &helper) const override {
-		if (!by_frame)
+		if (display_mode == SubtitleTimeDisplayMode::Ass)
 			return helper(wxS("0:00:00.00"));
+		if (display_mode == SubtitleTimeDisplayMode::Exact)
+			return helper(wxS("0:00:00.000"));
 		auto core = c->GetCore();
 		int frame = core.videoController->FrameAtTime(max_value(&AssDialogue::End, core.ass->Events), agi::vfr::END);
 		return helper(std::to_wstring(frame));
@@ -294,19 +304,24 @@ class GridColumnCPS final : public GridColumn {
 	const agi::OptionValue *cps_warn = OPT_GET("Subtitle/Character Counter/CPS Warning Threshold");
 	const agi::OptionValue *cps_error = OPT_GET("Subtitle/Character Counter/CPS Error Threshold");
 	const agi::OptionValue *bg_color = OPT_GET("Colour/Subtitle Grid/CPS Error");
+	SubtitleTimeDisplayMode display_mode = SubtitleTimeDisplayMode::Ass;
 
 public:
 	COLUMN_HEADER(_("CPS"))
 	COLUMN_DESCRIPTION(_("Characters Per Second"))
 	bool Centered() const override { return true; }
 	bool RefreshOnTextChange() const override { return true; }
+	void SetDisplayMode(SubtitleTimeDisplayMode mode) override { display_mode = mode; }
 
 	wxString Value(const AssDialogue *d, const agi::Context *) const override {
 		return wxS("");
 	}
 
-	int CPS(const AssDialogue *d) const {
-		int duration = d->End - d->Start;
+	int CPS(const AssDialogue *d, const agi::Context *c) const {
+		auto const duration_mode = display_mode == SubtitleTimeDisplayMode::Ass
+			? SubtitleTimeDisplayMode::Ass
+			: SubtitleTimeDisplayMode::Exact;
+		int duration = GetDurationForDisplay(d->Start, d->End, duration_mode, &c->GetCore().project->Timecodes());
 		auto const& text = d->Text.get();
 
 		if (duration <= 100 || text.size() > static_cast<size_t>(duration))
@@ -325,8 +340,8 @@ public:
 		return helper(wxS("999"));
 	}
 
-	void Paint(wxDC &dc, int x, int y, const AssDialogue *d, const agi::Context *) const override {
-		int cps = CPS(d);
+	void Paint(wxDC &dc, int x, int y, const AssDialogue *d, const agi::Context *c) const override {
+		int cps = CPS(d, c);
 		if (cps < 0 || cps > 100) return;
 
 		wxString str = std::to_wstring(cps);

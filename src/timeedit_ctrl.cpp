@@ -39,6 +39,7 @@
 #include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "project.h"
+#include "time_display_mode.h"
 #include "utils.h"
 
 #include <libaegisub/ass/time.h>
@@ -87,6 +88,7 @@ TimeEdit::TimeEdit(wxWindow* parent, wxWindowID id, agi::Context *c, const std::
 void TimeEdit::SetTime(agi::Time new_time) {
 	if (time != new_time) {
 		time = new_time;
+		input_changed = false;
 		UpdateText();
 	}
 }
@@ -99,29 +101,80 @@ void TimeEdit::SetFrame(int fn) {
 	SetTime(c->GetCore().project->Timecodes().TimeAtFrame(fn, isEnd ? agi::vfr::END : agi::vfr::START));
 }
 
-void TimeEdit::SetByFrame(bool enableByFrame) {
-	if (enableByFrame == byFrame) return;
+void TimeEdit::SetDisplayMode(SubtitleTimeDisplayMode mode) {
+	if (display_mode == mode)
+		return;
 
-	byFrame = enableByFrame && c->GetCore().project->Timecodes().IsLoaded();
+	if (mode == SubtitleTimeDisplayMode::Frame && !c->GetCore().project->Timecodes().IsLoaded())
+		mode = SubtitleTimeDisplayMode::Ass;
+
+	display_mode = mode;
+	input_changed = false;
 	UpdateText();
+}
+
+void TimeEdit::SetLinkedTime(agi::Time other_time) {
+	has_linked_time = true;
+	linked_time = other_time;
+	if (display_mode == SubtitleTimeDisplayMode::Ass)
+		UpdateText();
+}
+
+void TimeEdit::ClearLinkedTime() {
+	has_linked_time = false;
+	if (display_mode == SubtitleTimeDisplayMode::Ass)
+		UpdateText();
+}
+
+void TimeEdit::SetByFrame(bool enableByFrame) {
+	SetDisplayMode(enableByFrame ? SubtitleTimeDisplayMode::Frame : SubtitleTimeDisplayMode::Ass);
+}
+
+std::string TimeEdit::GetDisplayedText() const {
+	if (DisplaysFrames())
+		return std::to_string(c->GetCore().project->Timecodes().FrameAtTime(time, isEnd ? agi::vfr::END : agi::vfr::START));
+
+	if (display_mode == SubtitleTimeDisplayMode::Ass && has_linked_time) {
+		auto const displayed = isEnd
+			? GetDialogueTimesForDisplay(linked_time, time, display_mode, &c->GetCore().project->Timecodes())
+			: GetDialogueTimesForDisplay(time, linked_time, display_mode, &c->GetCore().project->Timecodes());
+		return FormatTimeForDisplay(isEnd ? displayed.second : displayed.first, display_mode);
+	}
+
+	return FormatTimeForDisplay(time, display_mode);
+}
+
+bool TimeEdit::ConsumeInputChanged() {
+	bool changed = input_changed;
+	input_changed = false;
+	return changed;
 }
 
 void TimeEdit::OnModified(wxCommandEvent &event) {
 	event.Skip();
-	if (byFrame) {
+	if (DisplaysFrames()) {
 		long temp = 0;
 		GetValue().ToLong(&temp);
-		time = c->GetCore().project->Timecodes().TimeAtFrame(temp, isEnd ? agi::vfr::END : agi::vfr::START);
+		auto const new_time = c->GetCore().project->Timecodes().TimeAtFrame(temp, isEnd ? agi::vfr::END : agi::vfr::START);
+		input_changed = new_time != time;
+		time = new_time;
 	}
-	else if (insert)
-		time = from_wx(GetValue());
+	else if (insert) {
+		auto const current_text = GetDisplayedText();
+		auto const input_text = from_wx(GetValue());
+		if (input_text == current_text) {
+			input_changed = false;
+			return;
+		}
+
+		auto const new_time = agi::Time(input_text);
+		input_changed = new_time != time;
+		time = new_time;
+	}
 }
 
 void TimeEdit::UpdateText() {
-	if (byFrame)
-		ChangeValue(std::to_wstring(c->GetCore().project->Timecodes().FrameAtTime(time, isEnd ? agi::vfr::END : agi::vfr::START)));
-	else
-		ChangeValue(to_wx(time.GetAssFormatted()));
+	ChangeValue(to_wx(GetDisplayedText()));
 }
 
 void TimeEdit::OnKeyDown(wxKeyEvent &event) {
@@ -146,7 +199,7 @@ void TimeEdit::OnKeyDown(wxKeyEvent &event) {
 		return;
 	}
 
-	if (byFrame || insert) {
+	if (DisplaysFrames() || insert) {
 		event.Skip();
 		return;
 	}
@@ -171,7 +224,7 @@ void TimeEdit::OnKeyDown(wxKeyEvent &event) {
 
 void TimeEdit::OnChar(wxKeyEvent &event) {
 	event.Skip();
-	if (byFrame || insert) return;
+	if (DisplaysFrames() || insert) return;
 
 	int key = event.GetUnicodeKey();
 	if ((key < '0' || key > '9') && key != ';' && key != '.' && key != ',') return;
@@ -196,7 +249,8 @@ void TimeEdit::OnChar(wxKeyEvent &event) {
 	// Overwrite the digit
 	text[start] = (char)key;
 	time = text;
-	SetValue(to_wx(time.GetAssFormatted()));
+	input_changed = true;
+	SetValue(to_wx(GetDisplayedText()));
 	SetInsertionPoint(start + 1);
 }
 
@@ -205,7 +259,7 @@ void TimeEdit::OnInsertChanged(agi::OptionValue const& opt) {
 }
 
 void TimeEdit::OnContextMenu(wxContextMenuEvent &evt) {
-	if (byFrame || insert) {
+	if (DisplaysFrames() || insert) {
 		evt.Skip();
 		return;
 	}
@@ -217,7 +271,7 @@ void TimeEdit::OnContextMenu(wxContextMenuEvent &evt) {
 }
 
 void TimeEdit::OnFocusLost(wxFocusEvent &evt) {
-	if (insert || byFrame)
+	if (insert || DisplaysFrames())
 		UpdateText();
 	evt.Skip();
 }
@@ -227,7 +281,7 @@ void TimeEdit::CopyTime() {
 }
 
 void TimeEdit::PasteTime() {
-	if (byFrame) {
+	if (DisplaysFrames()) {
 		Paste();
 		return;
 	}
@@ -236,9 +290,13 @@ void TimeEdit::PasteTime() {
 	if (text.empty()) return;
 
 	agi::Time tempTime(text);
-	if (tempTime.GetAssFormatted() == text) {
+	auto const normalized = display_mode == SubtitleTimeDisplayMode::Exact
+		? tempTime.GetAssFormatted(true)
+		: tempTime.GetAssFormatted();
+	if (normalized == text) {
 		SetTime(tempTime);
 		SetSelection(0, GetValue().size());
+		input_changed = true;
 
 		wxCommandEvent evt(wxEVT_TEXT, GetId());
 		evt.SetEventObject(this);

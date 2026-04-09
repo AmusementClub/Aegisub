@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "flyweight_hash.h"
+#include "time_display_mode.h"
 
 #include <memory>
 #include <string>
@@ -72,7 +73,8 @@ public:
 	bool Visible() const { return visible; }
 
 	virtual void UpdateWidth(const agi::Context *c, WidthHelper &helper);
-	virtual void SetByFrame(bool /* by_frame */) { }
+	virtual void SetDisplayMode(SubtitleTimeDisplayMode /* mode */) { }
+	virtual void SetByFrame(bool by_frame) { SetDisplayMode(by_frame ? SubtitleTimeDisplayMode::Frame : SubtitleTimeDisplayMode::Ass); }
 	void SetVisible(bool new_value) { visible = new_value; }
 };
 

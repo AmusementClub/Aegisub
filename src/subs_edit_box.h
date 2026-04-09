@@ -38,6 +38,8 @@
 
 #include <libaegisub/signal.h>
 
+#include "time_display_mode.h"
+
 namespace agi { namespace vfr { class Framerate; } }
 namespace agi { struct Context; }
 namespace agi { class Time; }
@@ -93,10 +95,14 @@ class SubsEditBox final : public wxPanel {
 	wxSpinCtrl *layer;
 	std::array<wxTextCtrl *, 3> margin;
 	Placeholder<wxComboBox> *effect_box;
-	wxRadioButton *by_time;
+	wxRadioButton *by_ass;
+	wxRadioButton *by_exact;
 	wxRadioButton *by_frame;
 	wxTextCtrl *char_count;
 	wxCheckBox *split_box;
+	SubtitleTimeDisplayMode time_display_mode = SubtitleTimeDisplayMode::Ass;
+	SubtitleTimeDisplayMode non_frame_display_mode = SubtitleTimeDisplayMode::Ass;
+	SubtitleTimeDisplayMode file_default_display_mode = SubtitleTimeDisplayMode::Ass;
 
 	wxSizer *top_sizer;
 	wxSizer *middle_right_sizer;
@@ -190,6 +196,8 @@ class SubsEditBox final : public wxPanel {
 
 	/// @brief Enable or disable frame timing mode
 	void UpdateFrameTiming(agi::vfr::Framerate const& fps);
+	void ApplyTimeDisplayMode(SubtitleTimeDisplayMode mode, bool update_radio_buttons = true);
+	void UpdateTimeDisplayModeFromFile(bool force_apply);
 
 	/// Update the character count box for the given text
 	void UpdateCharacterCount(std::string const& text);

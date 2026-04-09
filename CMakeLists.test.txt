@@ -27,6 +27,7 @@ if(GTEST_FOUND)
         tests/tests/async_video_provider.cpp
         tests/tests/dispatch.cpp
         tests/tests/export_framerate_transform.cpp
+        tests/tests/time_display_mode.cpp
         src/audio_display_analysis.cpp
         src/audio_latest_range_scheduler.cpp
         src/audio_display_source.cpp
@@ -57,6 +58,7 @@ if(GTEST_FOUND)
         src/perf_trace.cpp
         src/resolution_resampler.cpp
         src/text_file_writer.cpp
+        src/time_display_mode.cpp
         src/threaded_ui_timer.cpp
         src/ui_timer.cpp
         src/utils.cpp

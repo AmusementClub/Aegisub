@@ -34,6 +34,8 @@
 #include <vector>
 #include <wx/window.h>
 
+#include "time_display_mode.h"
+
 namespace agi {
 	struct Context;
 	class OptionValue;
@@ -48,7 +50,7 @@ class BaseGrid final : public wxWindow {
 	bool holding = false;   ///< Is a drag selection in process?
 	wxFont font;            ///< Current grid font
 	wxScrollBar *scrollBar; ///< The grid's scrollbar
-	bool byFrame = false;   ///< Should times be displayed as frame numbers
+	SubtitleTimeDisplayMode display_mode = SubtitleTimeDisplayMode::Ass;
 
 	/// Row from which the selection shrinks/grows from when selecting via the
 	/// keyboard, shift-clicking or dragging
@@ -127,6 +129,7 @@ public:
 	BaseGrid(wxWindow* parent, agi::Context *context);
 	~BaseGrid();
 
+	void SetDisplayMode(SubtitleTimeDisplayMode mode);
 	void SetByFrame(bool state);
 	void ScrollTo(int y);
 

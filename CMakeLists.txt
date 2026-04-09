@@ -656,6 +656,7 @@ add_executable(Aegisub WIN32
     src/text_file_writer.cpp
     src/text_selection_controller.cpp
     src/thesaurus.cpp
+    src/time_display_mode.cpp
     src/timeedit_ctrl.cpp
     src/toggle_bitmap.cpp
     src/toolbar.cpp

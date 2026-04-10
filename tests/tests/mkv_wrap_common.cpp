@@ -1,5 +1,6 @@
 #include <main.h>
 
+#include "../../src/ass_dialogue.h"
 #include "../../src/mkv_wrap_common.h"
 
 #include <zlib.h>
@@ -112,7 +113,16 @@ TEST(mkv_wrap_common, parse_ass_packet_uses_read_order_and_layer) {
 
 	ASSERT_TRUE(line.has_value());
 	EXPECT_EQ(17, line->sort_key);
-	EXPECT_EQ("Dialogue: 3,0:00:01.00,0:00:02.50,Default,,0,0,0,,Hello", line->line);
+	EXPECT_EQ("Dialogue: 3,0:00:01.000,0:00:02.500,Default,,0,0,0,,Hello", line->line);
+}
+
+TEST(mkv_wrap_common, parse_ass_packet_preserves_exact_millisecond_boundaries) {
+	auto const line = ParseMkvTextSubtitlePacket(MkvTextSubtitleCodec::Ass, "17,3,Default,,0,0,0,,Hello", 1001, 2509, 0);
+
+	ASSERT_TRUE(line.has_value());
+	AssDialogue parsed(line->line);
+	EXPECT_EQ(1001, parsed.Start.GetMillisecond());
+	EXPECT_EQ(2509, parsed.End.GetMillisecond());
 }
 
 TEST(mkv_wrap_common, parse_ass_packet_rejects_bad_numeric_fields) {
@@ -126,7 +136,7 @@ TEST(mkv_wrap_common, parse_utf8_packet_escapes_newlines) {
 
 	ASSERT_TRUE(line.has_value());
 	EXPECT_EQ(9, line->sort_key);
-	EXPECT_EQ("Dialogue: 0,0:00:00.05,0:00:03.05,Default,,0,0,0,,Line 1\\NLine 2\\NLine 3", line->line);
+	EXPECT_EQ("Dialogue: 0,0:00:00.050,0:00:03.050,Default,,0,0,0,,Line 1\\NLine 2\\NLine 3", line->line);
 }
 
 TEST(mkv_wrap_common, decode_content_encoded_data_handles_no_encodings) {

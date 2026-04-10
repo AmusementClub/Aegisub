@@ -166,15 +166,15 @@ static void read_subtitles(agi::ProgressSink *ps, MatroskaFile *file, MkvStdIO *
 				layer,
 				agi::format("Dialogue: %d,%s,%s,%s"
 					, marked
-					, subStart.GetAssFormatted()
-					, subEnd.GetAssFormatted()
+					, subStart.GetAssFormatted(true)
+					, subEnd.GetAssFormatted(true)
 					, std::string_view(second + 1, static_cast<size_t>(readBufEnd - (second + 1)))));
 		}
 		// Process SRT
 		else {
 			auto line = agi::format("Dialogue: 0,%s,%s,Default,,0,0,0,,%s"
-				, subStart.GetAssFormatted()
-				, subEnd.GetAssFormatted()
+				, subStart.GetAssFormatted(true)
+				, subEnd.GetAssFormatted(true)
 				, std::string_view(readBuf, static_cast<size_t>(readBufEnd - readBuf)));
 			agi::util::strings::replace_all_inplace(line, "\r\n", "\\N");
 			agi::util::strings::replace_all_inplace(line, "\r", "\\N");

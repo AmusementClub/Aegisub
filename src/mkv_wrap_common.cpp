@@ -232,8 +232,8 @@ std::optional<MkvTextSubtitleLine> ParseMkvTextSubtitlePacket(MkvTextSubtitleCod
 			read_order,
 			agi::format("Dialogue: %d,%s,%s,%s",
 				layer_or_marked,
-				start.GetAssFormatted(),
-				end.GetAssFormatted(),
+				start.GetAssFormatted(true),
+				end.GetAssFormatted(true),
 				std::string(payload))
 		};
 	}
@@ -241,8 +241,8 @@ std::optional<MkvTextSubtitleLine> ParseMkvTextSubtitlePacket(MkvTextSubtitleCod
 		return MkvTextSubtitleLine{
 			fallback_sort_key,
 			agi::format("Dialogue: 0,%s,%s,Default,,0,0,0,,%s",
-				start.GetAssFormatted(),
-				end.GetAssFormatted(),
+				start.GetAssFormatted(true),
+				end.GetAssFormatted(true),
 				escape_srt_payload(packet))
 		};
 	case MkvTextSubtitleCodec::Unsupported:

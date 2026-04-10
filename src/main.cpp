@@ -90,6 +90,10 @@ AegisubApp::AegisubApp() {
 
 namespace {
 
+agi::fs::path PathFromUtf8(std::string const& value) {
+	return agi::fs::PathFromString(value);
+}
+
 std::vector<std::string> ToUtf8Args(wxArrayString const& args) {
 	std::vector<std::string> values;
 	values.reserve(args.size());
@@ -152,7 +156,7 @@ bool AegisubApp::OnInit() {
 				std::vector<agi::fs::path> paths;
 				paths.reserve(files.size());
 				for (auto const& file : files)
-					paths.emplace_back(file);
+					paths.push_back(PathFromUtf8(file));
 				if (!paths.empty())
 					frames[0]->context->GetCore().project->LoadList(paths);
 			});
@@ -314,7 +318,7 @@ void AegisubApp::MacOpenFiles(wxArrayString const& filenames) {
 void AegisubApp::OpenFiles(wxArrayStringsAdapter filenames) {
 	std::vector<agi::fs::path> files;
 	for (size_t i = 0; i < filenames.GetCount(); ++i)
-		files.push_back(from_wx(filenames[i]));
+		files.push_back(PathFromUtf8(from_wx(filenames[i])));
 	if (!files.empty())
 		frames[0]->context->GetCore().project->LoadList(files);
 }

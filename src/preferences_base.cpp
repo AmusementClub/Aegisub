@@ -74,7 +74,7 @@ static void browse_button(Preferences *prefs, wxTextCtrl *ctrl) {
 static void browse_file_button(Preferences *prefs, wxTextCtrl *ctrl, wxString const& wildcard) {
 	auto current_path = config::path
 		? config::path->Decode(from_wx(ctrl->GetValue()))
-		: std::filesystem::path(from_wx(ctrl->GetValue()));
+		: agi::fs::PathFromString(from_wx(ctrl->GetValue()));
 	wxFileName current(current_path.wstring());
 	wxString dir;
 	wxString file;

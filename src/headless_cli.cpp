@@ -37,6 +37,10 @@ using detail::SplitWhitespace;
 using detail::ToGenericString;
 using detail::Trim;
 
+agi::fs::path PathFromUtf8Arg(std::string const& value) {
+	return agi::fs::PathFromString(value);
+}
+
 bool ParseSessionStepLine(std::string const& line, size_t line_number, std::vector<aegisub::playback_session_service::PlaybackSessionStep>& steps, std::string& error) {
 	using aegisub::playback_session_service::PlaybackAuthorityKind;
 	using aegisub::playback_session_service::PlaybackSessionStep;
@@ -215,21 +219,21 @@ std::optional<PlaybackSessionRequest> ParseSessionPlaybackRequest(std::vector<st
 			auto value = RequireValue(args, i, "--script-file", error);
 			if (!value)
 				return std::nullopt;
-			script_file = agi::fs::path(*value);
+			script_file = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--video" || arg == "--probe-video") {
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
 				return std::nullopt;
-			request.video_path = agi::fs::path(*value);
+			request.video_path = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--audio" || arg == "--probe-audio") {
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
 				return std::nullopt;
-			request.audio_path = agi::fs::path(*value);
+			request.audio_path = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--skip-audio" || arg == "--probe-skip-audio") {
@@ -278,7 +282,7 @@ std::optional<PlaybackSessionRequest> ParseSessionPlaybackRequest(std::vector<st
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
 				return std::nullopt;
-			request.trace_dir = agi::fs::path(*value);
+			request.trace_dir = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--audio-rate-scale" || arg == "--probe-audio-rate-scale") {
@@ -561,35 +565,35 @@ std::optional<ProjectSessionRequest> ParseSessionProjectRequest(std::vector<std:
 			auto value = RequireValue(args, i, "--script-file", error);
 			if (!value)
 				return std::nullopt;
-			script_file = agi::fs::path(*value);
+			script_file = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--video") {
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
 				return std::nullopt;
-			request.video_path = agi::fs::path(*value);
+			request.video_path = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--audio") {
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
 				return std::nullopt;
-			request.audio_path = agi::fs::path(*value);
+			request.audio_path = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--subtitle") {
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
 				return std::nullopt;
-			request.subtitle_path = agi::fs::path(*value);
+			request.subtitle_path = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--output-subtitle") {
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
 				return std::nullopt;
-			request.output_subtitle_path = agi::fs::path(*value);
+			request.output_subtitle_path = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--subtitle-encoding") {
@@ -603,14 +607,14 @@ std::optional<ProjectSessionRequest> ParseSessionProjectRequest(std::vector<std:
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
 				return std::nullopt;
-			request.timecodes_path = agi::fs::path(*value);
+			request.timecodes_path = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--keyframes") {
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
 				return std::nullopt;
-			request.keyframes_path = agi::fs::path(*value);
+			request.keyframes_path = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--skip-audio") {
@@ -671,7 +675,7 @@ std::optional<ProjectSessionRequest> ParseSessionProjectRequest(std::vector<std:
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
 				return std::nullopt;
-			request.trace_dir = agi::fs::path(*value);
+			request.trace_dir = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--audio-rate-scale") {
@@ -734,7 +738,7 @@ std::optional<MediaInspectRequest> ParseInspectMediaRequest(std::vector<std::str
 	MediaInspectRequest request;
 
 	if (args.size() == 5 && !args[4].empty() && args[4][0] != '-') {
-		request.video_path = agi::fs::path(args[4]);
+		request.video_path = PathFromUtf8Arg(args[4]);
 		request.audio_path = request.video_path;
 		return request;
 	}
@@ -745,14 +749,14 @@ std::optional<MediaInspectRequest> ParseInspectMediaRequest(std::vector<std::str
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
 				return std::nullopt;
-			request.video_path = agi::fs::path(*value);
+			request.video_path = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--audio" || arg == "--probe-audio") {
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
 				return std::nullopt;
-			request.audio_path = agi::fs::path(*value);
+			request.audio_path = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--skip-audio" || arg == "--probe-skip-audio") {
@@ -813,7 +817,7 @@ std::optional<MediaInspectRequest> ParseInspectMediaRequest(std::vector<std::str
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
 				return std::nullopt;
-			request.trace_dir = agi::fs::path(*value);
+			request.trace_dir = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--audio-rate-scale" || arg == "--probe-audio-rate-scale") {
@@ -862,7 +866,7 @@ std::optional<AssInfoInspectRequest> ParseInspectAssInfoRequest(std::vector<std:
 	AssInfoInspectRequest request;
 
 	if (args.size() == 5 && !args[4].empty() && args[4][0] != '-') {
-		request.subtitle_path = agi::fs::path(args[4]);
+		request.subtitle_path = PathFromUtf8Arg(args[4]);
 		return request;
 	}
 
@@ -872,7 +876,7 @@ std::optional<AssInfoInspectRequest> ParseInspectAssInfoRequest(std::vector<std:
 			auto value = RequireValue(args, i, arg, error);
 			if (!value)
 				return std::nullopt;
-			request.subtitle_path = agi::fs::path(*value);
+			request.subtitle_path = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--encoding") {
@@ -970,7 +974,7 @@ ParseResult ParseCommandLine(std::vector<std::string> const& args) {
 	if (command == "inspect" && subcommand == "trace") {
 		TraceInspectRequest request;
 		if (args.size() == 5) {
-			request.input_path = agi::fs::path(args[4]);
+			request.input_path = PathFromUtf8Arg(args[4]);
 		}
 		else {
 			for (size_t i = 4; i < args.size(); ++i) {
@@ -978,7 +982,7 @@ ParseResult ParseCommandLine(std::vector<std::string> const& args) {
 					auto value = RequireValue(args, i, args[i], result.error);
 					if (!value)
 						return result;
-					request.input_path = agi::fs::path(*value);
+					request.input_path = PathFromUtf8Arg(*value);
 					continue;
 				}
 				result.error = "unrecognized inspect trace argument: " + args[i] + "\n" + Usage();

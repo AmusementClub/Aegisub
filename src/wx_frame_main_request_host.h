@@ -88,7 +88,7 @@ public:
 		std::vector<agi::fs::path> files;
 		files.reserve(filenames.size());
 		for (wxString const& filename : filenames)
-			files.push_back(from_wx(filename));
+			files.push_back(agi::fs::PathFromString(from_wx(filename)));
 		ui::MainAsyncIfAlive(lifetime, [open_files = open_files, files = std::move(files)] {
 			open_files(files);
 		});

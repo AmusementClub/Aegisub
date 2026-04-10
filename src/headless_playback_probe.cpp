@@ -25,6 +25,10 @@
 namespace headless_playback_probe {
 namespace {
 
+agi::fs::path PathFromUtf8Arg(std::string const& value) {
+	return agi::fs::PathFromString(value);
+}
+
 std::optional<int> ParseInt(std::string const& text) {
 	try {
 		size_t consumed = 0;
@@ -83,7 +87,7 @@ RequestParseResult ParseRequestArguments(std::vector<std::string> const& args, b
 			auto value = require_value(i, "--probe-video");
 			if (!value)
 				return result;
-			request.video_path = *value;
+			request.video_path = PathFromUtf8Arg(*value);
 			have_video = true;
 			continue;
 		}
@@ -91,7 +95,7 @@ RequestParseResult ParseRequestArguments(std::vector<std::string> const& args, b
 			auto value = require_value(i, "--probe-audio");
 			if (!value)
 				return result;
-			request.audio_path = *value;
+			request.audio_path = PathFromUtf8Arg(*value);
 			continue;
 		}
 		if (arg == "--probe-skip-audio") {
@@ -248,7 +252,7 @@ RequestParseResult ParseRequestArguments(std::vector<std::string> const& args, b
 			auto value = require_value(i, "--probe-trace-dir");
 			if (!value)
 				return result;
-			request.trace_dir = agi::fs::path(*value);
+			request.trace_dir = PathFromUtf8Arg(*value);
 			continue;
 		}
 

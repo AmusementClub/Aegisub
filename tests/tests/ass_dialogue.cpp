@@ -82,3 +82,21 @@ TEST(ass_time_projection, projected_visibility_uses_storage_interval_not_origina
 	EXPECT_TRUE(IsAssDialogueVisibleAtTimeForStorage(agi::Time(18), agi::Time(19), 19));
 	EXPECT_FALSE(IsAssDialogueVisibleAtTimeForStorage(agi::Time(18), agi::Time(19), 20));
 }
+
+TEST(ass_dialogue, exact_millisecond_dialogue_text_roundtrips_through_parser) {
+	AssDialogue line;
+	line.Comment = false;
+	line.Layer = 0;
+	line.Start = 18497;
+	line.End = 20499;
+	line.Style = "Default";
+	line.Text = "exact";
+
+	AssDialogue parsed(line.GetEntryData(
+		line.Start.GetAssFormatted(true),
+		line.End.GetAssFormatted(true)));
+
+	EXPECT_EQ(18497, parsed.Start.GetMillisecond());
+	EXPECT_EQ(20499, parsed.End.GetMillisecond());
+	EXPECT_EQ("exact", parsed.Text.get());
+}

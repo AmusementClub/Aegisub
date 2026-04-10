@@ -35,6 +35,7 @@
 #include "../ass_file.h"
 #include "../ass_karaoke.h"
 #include "../ass_style.h"
+#include "../ass_time_projection.h"
 #include "../compat.h"
 #include "../dialog_search_replace.h"
 #include "../dialogs.h"
@@ -60,12 +61,80 @@
 
 #include <algorithm>
 
+#include <wx/dataobj.h>
 #include <wx/clipbrd.h>
 #include <wx/fontdlg.h>
 #include <wx/textentry.h>
 
 namespace {
 	using cmd::Command;
+
+wxDataFormat dialogue_exact_clipboard_format() {
+	static wxDataFormat format(wxS("AegisubInternalDialogueExactMsV1"));
+	return format;
+}
+
+bool is_dialogue_clipboard_line(std::string const& data) {
+	auto trimmed = agi::util::strings::trim_copy(data);
+	return agi::util::strings::starts_with(trimmed, "Dialogue:")
+		|| agi::util::strings::starts_with(trimmed, "Comment:");
+}
+
+std::string serialize_dialogue_for_exact_clipboard(AssDialogue const& line) {
+	return line.GetEntryData(line.Start.GetAssFormatted(true), line.End.GetAssFormatted(true));
+}
+
+std::string get_exact_dialogue_clipboard_payload() {
+	std::string data;
+	wxClipboard *cb = wxClipboard::Get();
+	if (cb->Open()) {
+		auto const format = dialogue_exact_clipboard_format();
+		if (cb->IsSupported(format)) {
+			wxCustomDataObject raw_data(format);
+			if (cb->GetData(raw_data) && raw_data.GetData() && raw_data.GetSize())
+				data.assign(static_cast<char const*>(raw_data.GetData()), raw_data.GetSize());
+		}
+		cb->Close();
+	}
+	return data;
+}
+
+void set_dialogue_clipboard(std::string const& text_data, std::string const& exact_data) {
+	wxClipboard *cb = wxClipboard::Get();
+	if (cb->Open()) {
+		auto *composite = new wxDataObjectComposite;
+		composite->Add(new wxTextDataObject(to_wx(text_data)), true);
+
+		auto *exact_object = new wxCustomDataObject(dialogue_exact_clipboard_format());
+		exact_object->SetData(exact_data.size(), exact_data.data());
+		composite->Add(exact_object);
+
+		cb->SetData(composite);
+		cb->Flush();
+		cb->Close();
+	}
+}
+
+bool parse_dialogue_clipboard_data(std::string const& data, EntryList<AssDialogue> &parsed) {
+	auto trimmed = agi::util::strings::trim_copy(data);
+	if (!is_dialogue_clipboard_line(trimmed))
+		return false;
+
+	try {
+		agi::util::strings::for_each_split_any(trimmed, "\r\n", [&](agi::util::strings::view line) {
+			auto curdata = agi::util::strings::trim_copy(line);
+			if (curdata.empty())
+				return;
+			parsed.push_back(*new AssDialogue(curdata));
+		});
+	}
+	catch (...) {
+		parsed.clear_and_dispose([](AssDialogue *e) { delete e; });
+		return false;
+	}
+
+	return !parsed.empty();
+}
 
 struct validate_sel_nonempty : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
@@ -109,27 +178,48 @@ AssDialogue *get_dialogue(String data) {
 template<typename Paster>
 void paste_lines(agi::Context *c, bool paste_over, Paster&& paste_line) {
 	auto core = c->GetCore();
-	std::string data = GetClipboard();
-	if (data.empty()) return;
 
 	AssDialogue *first = nullptr;
 	Selection newsel;
-	bool stop = false;
 
-	agi::util::strings::for_each_split_any(data, "\r\n", [&](agi::util::strings::view line) {
-		if (stop)
-			return;
-
-		AssDialogue *inserted = paste_line(get_dialogue(std::string(line)));
-		if (!inserted) {
-			stop = true;
-			return;
-		}
+	auto handle_line = [&](AssDialogue *new_line) {
+		AssDialogue *inserted = paste_line(new_line);
+		if (!inserted)
+			return false;
 
 		newsel.insert(inserted);
 		if (!first)
 			first = inserted;
-	});
+		return true;
+	};
+
+	EntryList<AssDialogue> exact_lines;
+	auto exact_data = get_exact_dialogue_clipboard_payload();
+	if (!exact_data.empty() && parse_dialogue_clipboard_data(exact_data, exact_lines)) {
+		for (auto const& line : exact_lines) {
+			std::unique_ptr<AssDialogue> new_line(new AssDialogue(line));
+			if (!handle_line(new_line.get()))
+				break;
+			new_line.release();
+		}
+		exact_lines.clear_and_dispose([](AssDialogue *e) { delete e; });
+	}
+	else {
+		std::string data = GetClipboard();
+		if (data.empty()) return;
+
+		bool stop = false;
+		agi::util::strings::for_each_split_any(data, "\r\n", [&](agi::util::strings::view line) {
+			if (stop)
+				return;
+
+			AssDialogue *new_line = get_dialogue(std::string(line));
+			if (!handle_line(new_line)) {
+				delete new_line;
+				stop = true;
+			}
+		});
+	}
 
 	if (first) {
 		core.ass->Commit(from_wx(_("paste")), paste_over ? AssFile::COMMIT_DIAG_FULL : AssFile::COMMIT_DIAG_ADDREM);
@@ -638,12 +728,19 @@ struct edit_find_replace final : public Command {
 };
 
 static void copy_lines(agi::Context *c) {
+	auto core = c->GetCore();
 	auto selection = c->GetCore().selectionController->GetSortedSelection();
-	std::vector<std::string> lines;
-	lines.reserve(selection.size());
-	for (auto* dialogue : selection)
-		lines.push_back(dialogue->GetEntryData());
-	SetClipboard(agi::util::strings::join(lines, "\r\n"));
+	std::vector<std::string> text_lines;
+	std::vector<std::string> exact_lines;
+	text_lines.reserve(selection.size());
+	exact_lines.reserve(selection.size());
+	for (auto* dialogue : selection) {
+		text_lines.push_back(SerializeAssDialogueForStorage(*dialogue, &core.project->Timecodes()));
+		exact_lines.push_back(serialize_dialogue_for_exact_clipboard(*dialogue));
+	}
+	set_dialogue_clipboard(
+		agi::util::strings::join(text_lines, "\r\n"),
+		agi::util::strings::join(exact_lines, "\r\n"));
 }
 
 static void delete_lines(agi::Context *c, std::string const& commit_message) {
@@ -895,21 +992,11 @@ struct edit_line_join_keep_first final : public validate_sel_multiple {
 
 static bool try_paste_lines(agi::Context *c) {
 	auto core = c->GetCore();
-	std::string data = GetClipboard();
-	agi::util::strings::trim_left_inplace(data);
-	if (!agi::util::strings::starts_with(data, "Dialogue:")) return false;
-
 	EntryList<AssDialogue> parsed;
-	try {
-		agi::util::strings::for_each_split_any(data, "\r\n", [&](agi::util::strings::view line) {
-			auto curdata = agi::util::strings::trim_copy(line);
-			parsed.push_back(*new AssDialogue(curdata));
-		});
-	}
-	catch (...) {
-		parsed.clear_and_dispose([](AssDialogue *e) { delete e; });
+	auto exact_data = get_exact_dialogue_clipboard_payload();
+	bool exact_parsed = !exact_data.empty() && parse_dialogue_clipboard_data(exact_data, parsed);
+	if (!exact_parsed && !parse_dialogue_clipboard_data(GetClipboard(), parsed))
 		return false;
-	}
 
 	AssDialogue *new_active = &*parsed.begin();
 	Selection new_selection;

@@ -14,6 +14,8 @@ jobs:
       PROJECT_VCPKG_INSTALLED_ROOT: ${{ github.workspace }}\vcpkg_installed
       VCPKG_ROOT: ${{ github.workspace }}\vcpkg
       VCPKG_DEFAULT_TRIPLET: x64-windows-release
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
+      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.cache\vcpkg\archives,readwrite
       VCPKG_DISABLE_METRICS: '1'
     steps:
     - name: checkout code
@@ -41,19 +43,26 @@ jobs:
       with:
         dotnet-version: 10.0.x
 
+    - name: capture runner image version
+      id: runner-image
+      shell: pwsh
+      run: |
+        $imageVersion = if ($env:ImageVersion) { $env:ImageVersion } else { 'unknown-image' }
+        "image_version=$imageVersion" >> $env:GITHUB_OUTPUT
+
     - name: prepare dependencies
       shell: pwsh
       run: |
         dotnet build/package-win-portable.cs -- --mode prepare-dependency --cache-dir .cache/package-win-portable
 
-    - name: restore vcpkg installed cache
-      id: restore-vcpkg-installed
+    - name: restore vcpkg binary cache
+      id: restore-vcpkg-binary-cache
       uses: actions/cache/restore@v5
       with:
-        path: ${{ env.PROJECT_VCPKG_INSTALLED_ROOT }}
-        key: windows-vcpkg-installed-x64-windows-release-${{ hashFiles('vcpkg.json', 'cmake/x64-windows-release.cmake') }}
+        path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+        key: windows-vcpkg-binary-cache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ steps.vcpkg-baseline.outputs.ref }}-${{ steps.runner-image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'cmake/x64-windows-release.cmake') }}
         restore-keys: |
-          windows-vcpkg-installed-x64-windows-release-
+          windows-vcpkg-binary-cache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ steps.vcpkg-baseline.outputs.ref }}-${{ steps.runner-image.outputs.image_version }}-
 
     - name: bootstrap vcpkg
       shell: pwsh
@@ -66,12 +75,12 @@ jobs:
       run: |
         ./build/build-win-vcpkg.ps1 -Mode build -VcpkgRoot $env:PROJECT_VCPKG_ROOT -VcpkgInstalledRoot $env:PROJECT_VCPKG_INSTALLED_ROOT
 
-    - name: save vcpkg installed cache
-      if: success() && steps.restore-vcpkg-installed.outputs.cache-hit != 'true'
+    - name: save vcpkg binary cache
+      if: success() && steps.restore-vcpkg-binary-cache.outputs.cache-hit != 'true'
       uses: actions/cache/save@v5
       with:
-        path: ${{ env.PROJECT_VCPKG_INSTALLED_ROOT }}
-        key: ${{ steps.restore-vcpkg-installed.outputs.cache-primary-key }}
+        path: ${{ env.VCPKG_DEFAULT_BINARY_CACHE }}
+        key: windows-vcpkg-binary-cache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ steps.vcpkg-baseline.outputs.ref }}-${{ steps.runner-image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'cmake/x64-windows-release.cmake') }}
 
     - name: test
       id: test

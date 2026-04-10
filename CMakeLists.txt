@@ -463,6 +463,7 @@ set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES
 )
 
 set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES
+    src/automation_session_service.cpp
     src/playback_probe_service.cpp
     src/playback_session_service.cpp
     src/project_session_service.cpp
@@ -597,6 +598,17 @@ add_executable(Aegisub WIN32
     src/audio_waveform_summary_cache.cpp
     src/audio_timing_dialogue.cpp
     src/audio_timing_karaoke.cpp
+    src/automation/automation_debug_adapter.cpp
+    src/automation/automation_breakpoint_store.cpp
+    src/automation/automation_context_snapshot.cpp
+    src/automation/engine/automation_engine_registry.cpp
+    src/automation/automation_debug_service.cpp
+    src/automation/automation_debug_session.cpp
+    src/automation/automation_live_host.cpp
+    src/automation/automation_lua_debug_backend.cpp
+    src/automation/automation_lua_runtime.cpp
+    src/automation/automation_mutation_journal.cpp
+    src/automation/automation_runtime_journal.cpp
     src/auto4_base.cpp
     src/auto4_lua.cpp
     src/auto4_lua_assfile.cpp

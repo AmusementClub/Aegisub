@@ -15,6 +15,7 @@
 
 #include "headless_cli_parse.h"
 #include "headless_cli_internal.h"
+#include "automation/automation_breakpoint_store.h"
 
 #include <libaegisub/fs.h>
 
@@ -39,6 +40,315 @@ using detail::Trim;
 
 agi::fs::path PathFromUtf8Arg(std::string const& value) {
 	return agi::fs::PathFromString(value);
+}
+
+std::optional<std::vector<int>> ParseIntegerListValue(std::string const& value) {
+	std::vector<int> rows;
+	std::stringstream stream(value);
+	std::string item;
+	while (std::getline(stream, item, ',')) {
+		item = Trim(item);
+		if (item.empty())
+			continue;
+		auto parsed = ParseIntegerValue(item);
+		if (!parsed || *parsed <= 0)
+			return std::nullopt;
+		rows.push_back(*parsed);
+	}
+	return rows;
+}
+
+enum class ParseOptionResult {
+	Unhandled,
+	Parsed,
+	Error
+};
+
+bool MatchesOption(std::string const& arg, std::string_view primary, std::string_view probe_alias = {})
+{
+	return arg == primary || (!probe_alias.empty() && arg == probe_alias);
+}
+
+ParseOptionResult ParsePathOption(
+	std::vector<std::string> const& args,
+	size_t& i,
+	std::string const& arg,
+	std::string_view primary,
+	std::string_view probe_alias,
+	std::string& error,
+	agi::fs::path& target)
+{
+	if (!MatchesOption(arg, primary, probe_alias))
+		return ParseOptionResult::Unhandled;
+
+	auto value = RequireValue(args, i, arg, error);
+	if (!value)
+		return ParseOptionResult::Error;
+
+	target = PathFromUtf8Arg(*value);
+	return ParseOptionResult::Parsed;
+}
+
+ParseOptionResult ParseStringOption(
+	std::vector<std::string> const& args,
+	size_t& i,
+	std::string const& arg,
+	std::string_view primary,
+	std::string_view probe_alias,
+	std::string& error,
+	std::optional<std::string>& target)
+{
+	if (!MatchesOption(arg, primary, probe_alias))
+		return ParseOptionResult::Unhandled;
+
+	auto value = RequireValue(args, i, arg, error);
+	if (!value)
+		return ParseOptionResult::Error;
+
+	target = *value;
+	return ParseOptionResult::Parsed;
+}
+
+ParseOptionResult ParseTrackIndexOption(
+	std::vector<std::string> const& args,
+	size_t& i,
+	std::string const& arg,
+	std::string_view primary,
+	std::string_view probe_alias,
+	std::string& error,
+	std::optional<int>& target)
+{
+	if (!MatchesOption(arg, primary, probe_alias))
+		return ParseOptionResult::Unhandled;
+
+	auto value = RequireValue(args, i, arg, error);
+	if (!value)
+		return ParseOptionResult::Error;
+
+	auto parsed = ParseIntegerValue(*value);
+	if (!parsed || *parsed < 0) {
+		error = arg + " requires a non-negative integer\n" + Usage();
+		return ParseOptionResult::Error;
+	}
+
+	target = *parsed;
+	return ParseOptionResult::Parsed;
+}
+
+ParseOptionResult ParseTraceDirOption(
+	std::vector<std::string> const& args,
+	size_t& i,
+	std::string const& arg,
+	std::string_view primary,
+	std::string_view probe_alias,
+	std::string& error,
+	std::optional<agi::fs::path>& target)
+{
+	if (!MatchesOption(arg, primary, probe_alias))
+		return ParseOptionResult::Unhandled;
+
+	auto value = RequireValue(args, i, arg, error);
+	if (!value)
+		return ParseOptionResult::Error;
+
+	target = PathFromUtf8Arg(*value);
+	return ParseOptionResult::Parsed;
+}
+
+ParseOptionResult ParsePositiveDoubleOption(
+	std::vector<std::string> const& args,
+	size_t& i,
+	std::string const& arg,
+	std::string_view primary,
+	std::string_view probe_alias,
+	std::string& error,
+	double& target)
+{
+	if (!MatchesOption(arg, primary, probe_alias))
+		return ParseOptionResult::Unhandled;
+
+	auto value = RequireValue(args, i, arg, error);
+	if (!value)
+		return ParseOptionResult::Error;
+
+	try {
+		target = std::stod(*value);
+	}
+	catch (...) {
+		error = arg + " requires a positive number\n" + Usage();
+		return ParseOptionResult::Error;
+	}
+
+	if (target <= 0.0) {
+		error = arg + " requires a positive number\n" + Usage();
+		return ParseOptionResult::Error;
+	}
+
+	return ParseOptionResult::Parsed;
+}
+
+ParseOptionResult ParseNonNegativeIntegerOption(
+	std::vector<std::string> const& args,
+	size_t& i,
+	std::string const& arg,
+	std::string_view primary,
+	std::string_view probe_alias,
+	std::string& error,
+	int& target)
+{
+	if (!MatchesOption(arg, primary, probe_alias))
+		return ParseOptionResult::Unhandled;
+
+	auto value = RequireValue(args, i, arg, error);
+	if (!value)
+		return ParseOptionResult::Error;
+
+	auto parsed = ParseIntegerValue(*value);
+	if (!parsed || *parsed < 0) {
+		error = arg + " requires a non-negative integer\n" + Usage();
+		return ParseOptionResult::Error;
+	}
+
+	target = *parsed;
+	return ParseOptionResult::Parsed;
+}
+
+struct CommonMediaRequestFields {
+	agi::fs::path& video_path;
+	agi::fs::path& audio_path;
+	std::optional<std::string>& video_provider;
+	std::optional<std::string>& audio_provider;
+	std::optional<int>& video_track_index;
+	std::optional<int>& audio_track_index;
+	std::optional<int>* subtitle_track_index = nullptr;
+	bool& skip_audio;
+	double& audio_rate_scale;
+	int& audio_quantum_ms;
+	std::optional<agi::fs::path>& trace_dir;
+};
+
+ParseOptionResult TryParseCommonMediaArgument(
+	CommonMediaRequestFields fields,
+	std::vector<std::string> const& args,
+	size_t& i,
+	std::string const& arg,
+	std::string& error,
+	bool allow_probe_aliases)
+{
+	auto const probe_video = allow_probe_aliases ? std::string_view{"--probe-video"} : std::string_view{};
+	auto const probe_audio = allow_probe_aliases ? std::string_view{"--probe-audio"} : std::string_view{};
+	auto const probe_skip_audio = allow_probe_aliases ? std::string_view{"--probe-skip-audio"} : std::string_view{};
+	auto const probe_video_provider = allow_probe_aliases ? std::string_view{"--probe-video-provider"} : std::string_view{};
+	auto const probe_audio_provider = allow_probe_aliases ? std::string_view{"--probe-audio-provider"} : std::string_view{};
+	auto const probe_video_track = allow_probe_aliases ? std::string_view{"--probe-video-track-index"} : std::string_view{};
+	auto const probe_audio_track = allow_probe_aliases ? std::string_view{"--probe-audio-track-index"} : std::string_view{};
+	auto const probe_subtitle_track = allow_probe_aliases ? std::string_view{"--probe-subtitle-track-index"} : std::string_view{};
+	auto const probe_trace_dir = allow_probe_aliases ? std::string_view{"--probe-trace-dir"} : std::string_view{};
+	auto const probe_audio_rate = allow_probe_aliases ? std::string_view{"--probe-audio-rate-scale"} : std::string_view{};
+	auto const probe_audio_quantum = allow_probe_aliases ? std::string_view{"--probe-audio-quantum-ms"} : std::string_view{};
+
+	for (auto result : {
+		ParsePathOption(args, i, arg, "--video", probe_video, error, fields.video_path),
+		ParsePathOption(args, i, arg, "--audio", probe_audio, error, fields.audio_path),
+		ParseStringOption(args, i, arg, "--video-provider", probe_video_provider, error, fields.video_provider),
+		ParseStringOption(args, i, arg, "--audio-provider", probe_audio_provider, error, fields.audio_provider),
+		ParseTrackIndexOption(args, i, arg, "--video-track-index", probe_video_track, error, fields.video_track_index),
+		ParseTrackIndexOption(args, i, arg, "--audio-track-index", probe_audio_track, error, fields.audio_track_index),
+		ParseTraceDirOption(args, i, arg, "--trace-dir", probe_trace_dir, error, fields.trace_dir),
+		ParsePositiveDoubleOption(args, i, arg, "--audio-rate-scale", probe_audio_rate, error, fields.audio_rate_scale),
+		ParseNonNegativeIntegerOption(args, i, arg, "--audio-quantum-ms", probe_audio_quantum, error, fields.audio_quantum_ms),
+	}) {
+		if (result != ParseOptionResult::Unhandled)
+			return result;
+	}
+
+	if (fields.subtitle_track_index) {
+		auto result = ParseTrackIndexOption(args, i, arg, "--subtitle-track-index", probe_subtitle_track, error, *fields.subtitle_track_index);
+		if (result != ParseOptionResult::Unhandled)
+			return result;
+	}
+
+	if (MatchesOption(arg, "--skip-audio", probe_skip_audio)) {
+		fields.skip_audio = true;
+		return ParseOptionResult::Parsed;
+	}
+
+	return ParseOptionResult::Unhandled;
+}
+
+struct CommonSubtitleIoRequestFields {
+	agi::fs::path& subtitle_path;
+	agi::fs::path& output_subtitle_path;
+	agi::fs::path& timecodes_path;
+	agi::fs::path& keyframes_path;
+	std::string& subtitle_encoding;
+	std::string* output_encoding = nullptr;
+};
+
+ParseOptionResult TryParseCommonSubtitleIoArgument(
+	CommonSubtitleIoRequestFields fields,
+	std::vector<std::string> const& args,
+	size_t& i,
+	std::string const& arg,
+	std::string& error)
+{
+	for (auto result : {
+		ParsePathOption(args, i, arg, "--subtitle", {}, error, fields.subtitle_path),
+		ParsePathOption(args, i, arg, "--output-subtitle", {}, error, fields.output_subtitle_path),
+		ParsePathOption(args, i, arg, "--timecodes", {}, error, fields.timecodes_path),
+		ParsePathOption(args, i, arg, "--keyframes", {}, error, fields.keyframes_path),
+	}) {
+		if (result != ParseOptionResult::Unhandled)
+			return result;
+	}
+
+	if (arg == "--subtitle-encoding") {
+		auto value = RequireValue(args, i, arg, error);
+		if (!value)
+			return ParseOptionResult::Error;
+		fields.subtitle_encoding = *value;
+		return ParseOptionResult::Parsed;
+	}
+
+	if (fields.output_encoding && arg == "--output-encoding") {
+		auto value = RequireValue(args, i, arg, error);
+		if (!value)
+			return ParseOptionResult::Error;
+		*fields.output_encoding = *value;
+		return ParseOptionResult::Parsed;
+	}
+
+	return ParseOptionResult::Unhandled;
+}
+
+std::optional<Automation4::AutomationDebugBreakpoint> ParseAutomationDebugBreakpointValue(
+	std::string const& value,
+	agi::fs::path const& default_source)
+{
+	auto trimmed = Trim(value);
+	if (trimmed.empty())
+		return std::nullopt;
+
+	auto split = trimmed.rfind(':');
+	std::string source_text;
+	std::string line_text = trimmed;
+	if (split != std::string::npos) {
+		source_text = Trim(trimmed.substr(0, split));
+		line_text = Trim(trimmed.substr(split + 1));
+	}
+
+	auto parsed_line = ParseIntegerValue(line_text);
+	if (!parsed_line || *parsed_line <= 0)
+		return std::nullopt;
+
+	if (source_text.empty())
+		source_text = ToGenericString(default_source);
+
+	return Automation4::AutomationDebugBreakpoint{
+		Automation4::NormalizeAutomationDebugSource(source_text),
+		*parsed_line,
+		true
+	};
 }
 
 bool ParseSessionStepLine(std::string const& line, size_t line_number, std::vector<aegisub::playback_session_service::PlaybackSessionStep>& steps, std::string& error) {
@@ -222,98 +532,23 @@ std::optional<PlaybackSessionRequest> ParseSessionPlaybackRequest(std::vector<st
 			script_file = PathFromUtf8Arg(*value);
 			continue;
 		}
-		if (arg == "--video" || arg == "--probe-video") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.video_path = PathFromUtf8Arg(*value);
+		auto result = TryParseCommonMediaArgument({
+			request.video_path,
+			request.audio_path,
+			request.video_provider,
+			request.audio_provider,
+			request.video_track_index,
+			request.audio_track_index,
+			nullptr,
+			request.skip_audio,
+			request.audio_rate_scale,
+			request.audio_quantum_ms,
+			request.trace_dir,
+		}, args, i, arg, error, true);
+		if (result == ParseOptionResult::Error)
+			return std::nullopt;
+		if (result == ParseOptionResult::Parsed)
 			continue;
-		}
-		if (arg == "--audio" || arg == "--probe-audio") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.audio_path = PathFromUtf8Arg(*value);
-			continue;
-		}
-		if (arg == "--skip-audio" || arg == "--probe-skip-audio") {
-			request.skip_audio = true;
-			continue;
-		}
-		if (arg == "--video-provider" || arg == "--probe-video-provider") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.video_provider = *value;
-			continue;
-		}
-		if (arg == "--audio-provider" || arg == "--probe-audio-provider") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.audio_provider = *value;
-			continue;
-		}
-		if (arg == "--video-track-index" || arg == "--probe-video-track-index") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			auto parsed = ParseIntegerValue(*value);
-			if (!parsed || *parsed < 0) {
-				error = arg + " requires a non-negative integer\n" + Usage();
-				return std::nullopt;
-			}
-			request.video_track_index = *parsed;
-			continue;
-		}
-		if (arg == "--audio-track-index" || arg == "--probe-audio-track-index") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			auto parsed = ParseIntegerValue(*value);
-			if (!parsed || *parsed < 0) {
-				error = arg + " requires a non-negative integer\n" + Usage();
-				return std::nullopt;
-			}
-			request.audio_track_index = *parsed;
-			continue;
-		}
-		if (arg == "--trace-dir" || arg == "--probe-trace-dir") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.trace_dir = PathFromUtf8Arg(*value);
-			continue;
-		}
-		if (arg == "--audio-rate-scale" || arg == "--probe-audio-rate-scale") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			try {
-				request.audio_rate_scale = std::stod(*value);
-			}
-			catch (...) {
-				error = arg + " requires a positive number\n" + Usage();
-				return std::nullopt;
-			}
-			if (request.audio_rate_scale <= 0.0) {
-				error = arg + " requires a positive number\n" + Usage();
-				return std::nullopt;
-			}
-			continue;
-		}
-		if (arg == "--audio-quantum-ms" || arg == "--probe-audio-quantum-ms") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			auto parsed = ParseIntegerValue(*value);
-			if (!parsed || *parsed < 0) {
-				error = arg + " requires a non-negative integer\n" + Usage();
-				return std::nullopt;
-			}
-			request.audio_quantum_ms = *parsed;
-			continue;
-		}
 
 		error = "unrecognized session playback argument: " + arg + "\n" + Usage();
 		return std::nullopt;
@@ -568,145 +803,36 @@ std::optional<ProjectSessionRequest> ParseSessionProjectRequest(std::vector<std:
 			script_file = PathFromUtf8Arg(*value);
 			continue;
 		}
-		if (arg == "--video") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.video_path = PathFromUtf8Arg(*value);
+		auto subtitle_result = TryParseCommonSubtitleIoArgument({
+			request.subtitle_path,
+			request.output_subtitle_path,
+			request.timecodes_path,
+			request.keyframes_path,
+			request.subtitle_encoding,
+			nullptr,
+		}, args, i, arg, error);
+		if (subtitle_result == ParseOptionResult::Error)
+			return std::nullopt;
+		if (subtitle_result == ParseOptionResult::Parsed)
 			continue;
-		}
-		if (arg == "--audio") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.audio_path = PathFromUtf8Arg(*value);
+
+		auto media_result = TryParseCommonMediaArgument({
+			request.video_path,
+			request.audio_path,
+			request.video_provider,
+			request.audio_provider,
+			request.video_track_index,
+			request.audio_track_index,
+			&request.subtitle_track_index,
+			request.skip_audio,
+			request.audio_rate_scale,
+			request.audio_quantum_ms,
+			request.trace_dir,
+		}, args, i, arg, error, false);
+		if (media_result == ParseOptionResult::Error)
+			return std::nullopt;
+		if (media_result == ParseOptionResult::Parsed)
 			continue;
-		}
-		if (arg == "--subtitle") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.subtitle_path = PathFromUtf8Arg(*value);
-			continue;
-		}
-		if (arg == "--output-subtitle") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.output_subtitle_path = PathFromUtf8Arg(*value);
-			continue;
-		}
-		if (arg == "--subtitle-encoding") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.subtitle_encoding = *value;
-			continue;
-		}
-		if (arg == "--timecodes") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.timecodes_path = PathFromUtf8Arg(*value);
-			continue;
-		}
-		if (arg == "--keyframes") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.keyframes_path = PathFromUtf8Arg(*value);
-			continue;
-		}
-		if (arg == "--skip-audio") {
-			request.skip_audio = true;
-			continue;
-		}
-		if (arg == "--video-provider") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.video_provider = *value;
-			continue;
-		}
-		if (arg == "--audio-provider") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.audio_provider = *value;
-			continue;
-		}
-		if (arg == "--video-track-index") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			auto parsed = ParseIntegerValue(*value);
-			if (!parsed || *parsed < 0) {
-				error = arg + " requires a non-negative integer\n" + Usage();
-				return std::nullopt;
-			}
-			request.video_track_index = *parsed;
-			continue;
-		}
-		if (arg == "--audio-track-index") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			auto parsed = ParseIntegerValue(*value);
-			if (!parsed || *parsed < 0) {
-				error = arg + " requires a non-negative integer\n" + Usage();
-				return std::nullopt;
-			}
-			request.audio_track_index = *parsed;
-			continue;
-		}
-		if (arg == "--subtitle-track-index") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			auto parsed = ParseIntegerValue(*value);
-			if (!parsed || *parsed < 0) {
-				error = arg + " requires a non-negative integer\n" + Usage();
-				return std::nullopt;
-			}
-			request.subtitle_track_index = *parsed;
-			continue;
-		}
-		if (arg == "--trace-dir") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.trace_dir = PathFromUtf8Arg(*value);
-			continue;
-		}
-		if (arg == "--audio-rate-scale") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			try {
-				request.audio_rate_scale = std::stod(*value);
-			}
-			catch (...) {
-				error = arg + " requires a positive number\n" + Usage();
-				return std::nullopt;
-			}
-			if (request.audio_rate_scale <= 0.0) {
-				error = arg + " requires a positive number\n" + Usage();
-				return std::nullopt;
-			}
-			continue;
-		}
-		if (arg == "--audio-quantum-ms") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			auto parsed = ParseIntegerValue(*value);
-			if (!parsed || *parsed < 0) {
-				error = arg + " requires a non-negative integer\n" + Usage();
-				return std::nullopt;
-			}
-			request.audio_quantum_ms = *parsed;
-			continue;
-		}
 
 		error = "unrecognized session project argument: " + arg + "\n" + Usage();
 		return std::nullopt;
@@ -734,6 +860,169 @@ std::optional<ProjectSessionRequest> ParseSessionProjectRequest(std::vector<std:
 	return request;
 }
 
+std::optional<AutomationSessionRequest> ParseSessionAutomationRequest(std::vector<std::string> const& args, std::string& error) {
+	AutomationSessionRequest request;
+	bool saw_macro = false;
+	bool saw_filter = false;
+	std::vector<std::string> raw_debug_breakpoints;
+
+	for (size_t i = 4; i < args.size(); ++i) {
+		auto const& arg = args[i];
+		if (arg == "--script" || arg == "--automation-script" || arg == "--script-file") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.script_path = PathFromUtf8Arg(*value);
+			continue;
+		}
+		if (arg == "--macro") {
+			auto value = RequireValue(args, i, "--macro", error);
+			if (!value)
+				return std::nullopt;
+			request.feature_name = *value;
+			request.feature_kind = aegisub::automation_session_service::AutomationSessionFeatureKind::Macro;
+			saw_macro = true;
+			continue;
+		}
+		if (arg == "--filter") {
+			auto value = RequireValue(args, i, "--filter", error);
+			if (!value)
+				return std::nullopt;
+			request.feature_name = *value;
+			request.feature_kind = aegisub::automation_session_service::AutomationSessionFeatureKind::ExportFilter;
+			saw_filter = true;
+			continue;
+		}
+		auto subtitle_result = TryParseCommonSubtitleIoArgument({
+			request.subtitle_path,
+			request.output_subtitle_path,
+			request.timecodes_path,
+			request.keyframes_path,
+			request.subtitle_encoding,
+			&request.output_encoding,
+		}, args, i, arg, error);
+		if (subtitle_result == ParseOptionResult::Error)
+			return std::nullopt;
+		if (subtitle_result == ParseOptionResult::Parsed)
+			continue;
+
+		auto media_result = TryParseCommonMediaArgument({
+			request.video_path,
+			request.audio_path,
+			request.video_provider,
+			request.audio_provider,
+			request.video_track_index,
+			request.audio_track_index,
+			&request.subtitle_track_index,
+			request.skip_audio,
+			request.audio_rate_scale,
+			request.audio_quantum_ms,
+			request.trace_dir,
+		}, args, i, arg, error, false);
+		if (media_result == ParseOptionResult::Error)
+			return std::nullopt;
+		if (media_result == ParseOptionResult::Parsed)
+			continue;
+		if (arg == "--selection" || arg == "--selected-rows") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto rows = ParseIntegerListValue(*value);
+			if (!rows) {
+				error = arg + " requires a comma-separated list of positive integers\n" + Usage();
+				return std::nullopt;
+			}
+			request.selected_rows = std::move(*rows);
+			continue;
+		}
+		if (arg == "--active-row") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto parsed = ParseIntegerValue(*value);
+			if (!parsed || *parsed <= 0) {
+				error = arg + " requires a positive integer\n" + Usage();
+				return std::nullopt;
+			}
+			request.active_row = *parsed;
+			continue;
+		}
+		if (arg == "--debug-stop-on-entry") {
+			request.debug.enabled = true;
+			request.debug.stop_on_entry = true;
+			continue;
+		}
+		if (arg == "--debug-breakpoint") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			request.debug.enabled = true;
+			raw_debug_breakpoints.push_back(*value);
+			continue;
+		}
+		if (arg == "--debug-auto-step") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto parsed = ParseIntegerValue(*value);
+			if (!parsed || *parsed < 0) {
+				error = arg + " requires a non-negative integer\n" + Usage();
+				return std::nullopt;
+			}
+			request.debug.enabled = true;
+			request.debug.auto_step_count = *parsed;
+			continue;
+		}
+		if (arg == "--debug-max-pauses") {
+			auto value = RequireValue(args, i, arg, error);
+			if (!value)
+				return std::nullopt;
+			auto parsed = ParseIntegerValue(*value);
+			if (!parsed || *parsed <= 0) {
+				error = arg + " requires a positive integer\n" + Usage();
+				return std::nullopt;
+			}
+			request.debug.enabled = true;
+			request.debug.max_pauses = static_cast<size_t>(*parsed);
+			continue;
+		}
+
+		error = "unrecognized session automation argument: " + arg + "\n" + Usage();
+		return std::nullopt;
+	}
+
+	if (request.script_path.empty()) {
+		error = "--cli session automation requires --script\n" + Usage();
+		return std::nullopt;
+	}
+	if (!agi::fs::FileExists(request.script_path)) {
+		error = "automation script file does not exist: " + ToGenericString(request.script_path);
+		return std::nullopt;
+	}
+	if (saw_macro == saw_filter) {
+		error = "--cli session automation requires exactly one of --macro or --filter\n" + Usage();
+		return std::nullopt;
+	}
+	if (request.feature_name.empty()) {
+		error = "automation session requires a feature name\n" + Usage();
+		return std::nullopt;
+	}
+	for (auto const& breakpoint_value : raw_debug_breakpoints) {
+		auto breakpoint = ParseAutomationDebugBreakpointValue(breakpoint_value, request.script_path);
+		if (!breakpoint) {
+			error = "--debug-breakpoint requires <source:line> or <line>\n" + Usage();
+			return std::nullopt;
+		}
+		request.debug.breakpoints.push_back(std::move(*breakpoint));
+	}
+	if (!request.skip_audio && request.audio_path.empty() && !request.video_path.empty())
+		request.audio_path = request.video_path;
+	if (request.output_encoding.empty())
+		request.output_encoding = request.subtitle_encoding;
+
+	return request;
+}
+
 std::optional<MediaInspectRequest> ParseInspectMediaRequest(std::vector<std::string> const& args, std::string& error) {
 	MediaInspectRequest request;
 
@@ -745,110 +1034,23 @@ std::optional<MediaInspectRequest> ParseInspectMediaRequest(std::vector<std::str
 
 	for (size_t i = 4; i < args.size(); ++i) {
 		auto const& arg = args[i];
-		if (arg == "--video" || arg == "--probe-video") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.video_path = PathFromUtf8Arg(*value);
+		auto result = TryParseCommonMediaArgument({
+			request.video_path,
+			request.audio_path,
+			request.video_provider,
+			request.audio_provider,
+			request.video_track_index,
+			request.audio_track_index,
+			&request.subtitle_track_index,
+			request.skip_audio,
+			request.audio_rate_scale,
+			request.audio_quantum_ms,
+			request.trace_dir,
+		}, args, i, arg, error, true);
+		if (result == ParseOptionResult::Error)
+			return std::nullopt;
+		if (result == ParseOptionResult::Parsed)
 			continue;
-		}
-		if (arg == "--audio" || arg == "--probe-audio") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.audio_path = PathFromUtf8Arg(*value);
-			continue;
-		}
-		if (arg == "--skip-audio" || arg == "--probe-skip-audio") {
-			request.skip_audio = true;
-			continue;
-		}
-		if (arg == "--video-provider" || arg == "--probe-video-provider") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.video_provider = *value;
-			continue;
-		}
-		if (arg == "--audio-provider" || arg == "--probe-audio-provider") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.audio_provider = *value;
-			continue;
-		}
-		if (arg == "--video-track-index" || arg == "--probe-video-track-index") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			auto parsed = ParseIntegerValue(*value);
-			if (!parsed || *parsed < 0) {
-				error = arg + " requires a non-negative integer\n" + Usage();
-				return std::nullopt;
-			}
-			request.video_track_index = *parsed;
-			continue;
-		}
-		if (arg == "--audio-track-index" || arg == "--probe-audio-track-index") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			auto parsed = ParseIntegerValue(*value);
-			if (!parsed || *parsed < 0) {
-				error = arg + " requires a non-negative integer\n" + Usage();
-				return std::nullopt;
-			}
-			request.audio_track_index = *parsed;
-			continue;
-		}
-		if (arg == "--subtitle-track-index" || arg == "--probe-subtitle-track-index") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			auto parsed = ParseIntegerValue(*value);
-			if (!parsed || *parsed < 0) {
-				error = arg + " requires a non-negative integer\n" + Usage();
-				return std::nullopt;
-			}
-			request.subtitle_track_index = *parsed;
-			continue;
-		}
-		if (arg == "--trace-dir" || arg == "--probe-trace-dir") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			request.trace_dir = PathFromUtf8Arg(*value);
-			continue;
-		}
-		if (arg == "--audio-rate-scale" || arg == "--probe-audio-rate-scale") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			try {
-				request.audio_rate_scale = std::stod(*value);
-			}
-			catch (...) {
-				error = arg + " requires a positive number\n" + Usage();
-				return std::nullopt;
-			}
-			if (request.audio_rate_scale <= 0.0) {
-				error = arg + " requires a positive number\n" + Usage();
-				return std::nullopt;
-			}
-			continue;
-		}
-		if (arg == "--audio-quantum-ms" || arg == "--probe-audio-quantum-ms") {
-			auto value = RequireValue(args, i, arg, error);
-			if (!value)
-				return std::nullopt;
-			auto parsed = ParseIntegerValue(*value);
-			if (!parsed || *parsed < 0) {
-				error = arg + " requires a non-negative integer\n" + Usage();
-				return std::nullopt;
-			}
-			request.audio_quantum_ms = *parsed;
-			continue;
-		}
 		error = "unrecognized inspect media argument: " + arg + "\n" + Usage();
 		return std::nullopt;
 	}
@@ -949,6 +1151,17 @@ ParseResult ParseCommandLine(std::vector<std::string> const& args) {
 		return result;
 	}
 
+	if (command == "session" && subcommand == "automation") {
+		auto request = ParseSessionAutomationRequest(args, result.error);
+		if (!request) {
+			if (result.error.empty())
+				result.error = Usage();
+			return result;
+		}
+		result.command.emplace(SessionAutomationCommand{std::move(*request)});
+		return result;
+	}
+
 	if (command == "inspect" && subcommand == "media") {
 		auto request = ParseInspectMediaRequest(args, result.error);
 		if (!request) {
@@ -1008,6 +1221,7 @@ std::string Usage() {
 		"  Aegisub.exe --cli probe playback [probe flags...]\n"
 		"  Aegisub.exe --cli session playback --script-file <path> --video <path> [session flags...]\n"
 		"  Aegisub.exe --cli session project --script-file <path> [project flags...]\n"
+		"  Aegisub.exe --cli session automation --script <path> (--macro <name>|--filter <name>) [automation flags...]\n"
 		"  Aegisub.exe --cli inspect media --video <path> [media flags...]\n"
 		"  Aegisub.exe --cli inspect ass-info <path> [--encoding <name>]\n"
 		"  Aegisub.exe --cli inspect trace <session-dir|manifest.txt|summary.txt|trace.ndjson>\n"
@@ -1037,6 +1251,15 @@ std::string Usage() {
 		"Project session flags:\n"
 		"  --script-file <path> [--video <path>] [--audio <path>] [--skip-audio]\n"
 		"  [--subtitle <path>] [--output-subtitle <path>] [--subtitle-encoding <name>] [--timecodes <path>] [--keyframes <path>]\n"
+		"  [--video-provider <name>] [--audio-provider <name>] [--trace-dir <path>]\n"
+		"  [--video-track-index <index>] [--audio-track-index <index>] [--subtitle-track-index <index>]\n"
+		"  [--audio-rate-scale <scale>] [--audio-quantum-ms <ms>]\n"
+		"\n"
+		"Automation session flags:\n"
+		"  --script <path> (--macro <name>|--filter <name>) [--subtitle <path>] [--output-subtitle <path>]\n"
+		"  [--subtitle-encoding <name>] [--output-encoding <name>] [--video <path>] [--audio <path>] [--skip-audio]\n"
+		"  [--timecodes <path>] [--keyframes <path>] [--selection <row,row,...>] [--active-row <row>]\n"
+		"  [--debug-stop-on-entry] [--debug-breakpoint <source:line>|<line>] [--debug-auto-step <count>] [--debug-max-pauses <count>]\n"
 		"  [--video-provider <name>] [--audio-provider <name>] [--trace-dir <path>]\n"
 		"  [--video-track-index <index>] [--audio-track-index <index>] [--subtitle-track-index <index>]\n"
 		"  [--audio-rate-scale <scale>] [--audio-quantum-ms <ms>]\n"

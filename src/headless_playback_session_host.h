@@ -10,6 +10,7 @@
 #include <string>
 
 namespace agi {
+	class Context;
 	struct ContextCoreSession;
 	struct ConstContextCoreSession;
 }
@@ -38,8 +39,10 @@ public:
 	explicit PlaybackSessionHost(PlaybackSessionHostOptions options = {});
 	~PlaybackSessionHost();
 
+	agi::Context *GetContext();
+	agi::Context const* GetContext() const;
 	agi::ContextCoreSession GetCore();
-	agi::ConstContextCoreSession GetCore() const;
+	agi::ContextCoreSession GetCore() const;
 
 	bool Start(int& error_code, std::string& error_message);
 	project_open_service::ProjectOpenResult OpenMedia(project_open_service::PlaybackOpenOptions const& options);

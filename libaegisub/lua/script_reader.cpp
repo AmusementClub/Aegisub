@@ -25,6 +25,20 @@
 #include <lauxlib.h>
 
 namespace agi { namespace lua {
+	static bool ensure_moonscript_loader(lua_State *L) {
+		lua_getfield(L, LUA_REGISTRYINDEX, "moonscript");
+		if (lua_isfunction(L, -1))
+			return true;
+
+		lua_pop(L, 1);
+		luaL_loadstring(L, "return require('moonscript').loadstring");
+		if (lua_pcall(L, 0, 1, 0))
+			return false; // leave error message
+		lua_pushvalue(L, -1);
+		lua_setfield(L, LUA_REGISTRYINDEX, "moonscript");
+		return true;
+	}
+
 	bool LoadFile(lua_State *L, agi::fs::path const& raw_filename) {
 		auto filename = raw_filename;
 		try {
@@ -51,7 +65,8 @@ namespace agi { namespace lua {
 		// We have a MoonScript file, so we need to load it with that
 		// It might be nice to have a dedicated lua state for compiling
 		// MoonScript to Lua
-		lua_getfield(L, LUA_REGISTRYINDEX, "moonscript");
+		if (!ensure_moonscript_loader(L))
+			return false;
 
 		// Save the text we'll be loading for the line number rewriting in the
 		// error handling
@@ -148,12 +163,6 @@ namespace agi { namespace lua {
 		push_value(L, exception_wrapper<module_loader>);
 		lua_rawseti(L, -2, 2);
 		lua_pop(L, 2); // loaders, package
-
-		luaL_loadstring(L, "return require('moonscript').loadstring");
-		if (lua_pcall(L, 0, 1, 0)) {
-			return false; // leave error message
-		}
-		lua_setfield(L, LUA_REGISTRYINDEX, "moonscript");
 
 		return true;
 	}

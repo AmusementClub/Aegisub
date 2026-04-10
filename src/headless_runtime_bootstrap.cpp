@@ -139,7 +139,7 @@ public:
 			options.load_global_scripts = false;
 			options.initialize_commands = false;
 			options.initialize_ui_locale = false;
-			options.register_automation_script_factory = false;
+			options.register_automation_script_factory = true;
 			options.warm_subtitles_provider_font_cache = false;
 			options.register_export_filters = false;
 			options.install_png_handler = false;
@@ -223,6 +223,15 @@ int RunParsedHeadlessCli(HeadlessRuntimeEnvironment& runtime, headless_cli::Pars
 			runtime.MainThreadPump(),
 			[request = session->request](auto&& on_done) mutable {
 				headless_cli::RunSessionProjectAsync(std::move(request), std::forward<decltype(on_done)>(on_done));
+			});
+		return result.exit_code;
+	}
+
+	if (auto const* session = std::get_if<headless_cli::SessionAutomationCommand>(&*parsed.command)) {
+		auto result = RunAsyncWithPump<headless_cli::AutomationSessionResult>(
+			runtime.MainThreadPump(),
+			[request = session->request](auto&& on_done) mutable {
+				headless_cli::RunSessionAutomationAsync(std::move(request), std::forward<decltype(on_done)>(on_done));
 			});
 		return result.exit_code;
 	}

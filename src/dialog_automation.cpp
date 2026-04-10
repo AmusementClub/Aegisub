@@ -28,6 +28,9 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "auto4_base.h"
+#include "automation/automation_debug_ui.h"
+#include "automation/engine/automation_engine_registry.h"
+#include "automation/automation_debug_service.h"
 #include "compat.h"
 #include "command/command.h"
 #include "dialog_manager.h"
@@ -43,6 +46,7 @@
 #include <libaegisub/signal.h>
 
 #include <algorithm>
+#include <string>
 #include <vector>
 
 #include <wx/button.h>
@@ -50,6 +54,7 @@
 #include <wx/listctrl.h>
 #include <wx/log.h>
 #include <wx/sizer.h>
+#include <wx/textctrl.h>
 
 namespace {
 /// Struct to attach a flag for global/local to scripts
@@ -57,6 +62,61 @@ struct ExtraScriptInfo {
 	Automation4::Script *script;
 	bool is_global;
 };
+
+void ShowCopyableInfoDialog(wxWindow *parent, wxString const& title, wxString const& message)
+{
+	wxDialog dialog(parent, wxID_ANY, title, wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+
+	auto *text = new wxTextCtrl(
+		&dialog,
+		wxID_ANY,
+		message,
+		wxDefaultPosition,
+		dialog.FromDIP(wxSize(540, 360)),
+		wxTE_MULTILINE | wxTE_RICH2 | wxHSCROLL | wxTE_NOHIDESEL);
+	text->SetEditable(false);
+	text->SetMinSize(dialog.FromDIP(wxSize(500, 320)));
+	text->Bind(wxEVT_CHAR_HOOK, [text](wxKeyEvent &event) {
+		if (event.GetModifiers() == wxMOD_CONTROL && (event.GetKeyCode() == 'A' || event.GetKeyCode() == 1)) {
+			text->SelectAll();
+			return;
+		}
+		event.Skip();
+	});
+
+	auto *copy_button = new wxButton(&dialog, wxID_ANY, _("&Copy"));
+	auto *close_button = new wxButton(&dialog, wxID_CLOSE, _("&Close"));
+
+	copy_button->Bind(wxEVT_BUTTON, [text](wxCommandEvent &) {
+		text->SelectAll();
+		text->Copy();
+	});
+	close_button->Bind(wxEVT_BUTTON, [&dialog](wxCommandEvent &) {
+		dialog.EndModal(wxID_CLOSE);
+	});
+
+	wxSizer *button_box = new wxBoxSizer(wxHORIZONTAL);
+	button_box->AddStretchSpacer(1);
+	button_box->Add(copy_button, 0);
+	button_box->AddSpacer(8);
+	button_box->Add(close_button, 0);
+
+	wxSizer *main_box = new wxBoxSizer(wxVERTICAL);
+	main_box->Add(text, wxSizerFlags(1).Expand().Border());
+	main_box->Add(button_box, wxSizerFlags().Expand().Border(wxALL & ~wxTOP));
+	dialog.SetSizer(main_box);
+	dialog.SetMinSize(dialog.FromDIP(wxSize(560, 400)));
+	dialog.SetClientSize(dialog.FromDIP(wxSize(560, 400)));
+	dialog.CenterOnParent();
+	dialog.SetEscapeId(wxID_CLOSE);
+	dialog.Bind(wxEVT_INIT_DIALOG, [text](wxInitDialogEvent &) {
+		text->SetFocus();
+		text->SetInsertionPoint(0);
+		text->ShowPosition(0);
+	});
+
+	dialog.ShowModal();
+}
 
 class DialogAutomation final : public wxDialog {
 	agi::Context *context;
@@ -86,10 +146,14 @@ class DialogAutomation final : public wxDialog {
 	/// Reload a script
 	wxButton *reload_button;
 
+	/// Toggle live automation debug mode
+	wxButton *debug_mode_button;
+
 	void RebuildList();
 	void AddScript(Automation4::Script *script, bool is_global);
 	void SetScriptInfo(int i, Automation4::Script *script);
 	void UpdateDisplay();
+	void UpdateDebugModeButton();
 
 	void OnAdd(wxCommandEvent &);
 	void OnRemove(wxCommandEvent &);
@@ -97,6 +161,7 @@ class DialogAutomation final : public wxDialog {
 
 	void OnInfo(wxCommandEvent &);
 	void OnReloadAutoload(wxCommandEvent &);
+	void OnToggleDebugMode(wxCommandEvent &);
 
 public:
 	DialogAutomation(agi::Context *context);
@@ -117,6 +182,7 @@ DialogAutomation::DialogAutomation(agi::Context *c)
 	wxButton *add_button = new wxButton(this, -1, _("&Add"));
 	remove_button = new wxButton(this, -1, _("&Remove"));
 	reload_button = new wxButton(this, -1, _("Re&load"));
+	debug_mode_button = new wxButton(this, -1, _("Enable Debug Mode"));
 	wxButton *info_button = new wxButton(this, -1, _("Show &Info"));
 	wxButton *reload_autoload_button = new wxButton(this, -1, _("Re&scan Autoload Dir"));
 	wxButton *close_button = new wxButton(this, wxID_CANCEL, _("&Close"));
@@ -126,6 +192,7 @@ DialogAutomation::DialogAutomation(agi::Context *c)
 	add_button->Bind(wxEVT_BUTTON, &DialogAutomation::OnAdd, this);
 	remove_button->Bind(wxEVT_BUTTON, &DialogAutomation::OnRemove, this);
 	reload_button->Bind(wxEVT_BUTTON, &DialogAutomation::OnReload, this);
+	debug_mode_button->Bind(wxEVT_BUTTON, &DialogAutomation::OnToggleDebugMode, this);
 	info_button->Bind(wxEVT_BUTTON, &DialogAutomation::OnInfo, this);
 	reload_autoload_button->Bind(wxEVT_BUTTON, &DialogAutomation::OnReloadAutoload, this);
 
@@ -142,6 +209,7 @@ DialogAutomation::DialogAutomation(agi::Context *c)
 	button_box->Add(remove_button, 0);
 	button_box->AddSpacer(10);
 	button_box->Add(reload_button, 0);
+	button_box->Add(debug_mode_button, 0);
 	button_box->Add(info_button, 0);
 	button_box->AddSpacer(10);
 	button_box->Add(reload_autoload_button, 0);
@@ -207,6 +275,18 @@ void DialogAutomation::UpdateDisplay()
 	bool local = selected && !script_info[list->GetItemData(i)].is_global;
 	remove_button->Enable(local);
 	reload_button->Enable(selected);
+	UpdateDebugModeButton();
+}
+
+void DialogAutomation::UpdateDebugModeButton()
+{
+	if (!debug_mode_button)
+		return;
+
+	bool enabled = config::automation_debug_service && config::automation_debug_service->IsEnabled();
+	debug_mode_button->SetLabel(enabled
+		? _("Disable Debug Mode")
+		: _("Enable Debug Mode"));
 }
 
 template<class Container>
@@ -237,7 +317,13 @@ void DialogAutomation::OnAdd(wxCommandEvent &)
 			continue;
 		}
 
-		local_manager->Add(Automation4::ScriptFactory::CreateFromFile(fnpath, true));
+		bool recognised = false;
+		auto script = Automation4::ScriptFactory::CreateFromFile(fnpath, true, &recognised);
+		if (!recognised)
+			wxLogError(_("The file was not recognised as an Automation script: %s"), fnpath.wstring());
+		else if (script && !script->GetLoadedState())
+			wxLogError(_("Failed to load Automation script '%s':\n%s"), fnpath.wstring(), to_wx(script->GetDescription()));
+		local_manager->Add(std::move(script));
 	}
 }
 
@@ -278,8 +364,11 @@ void DialogAutomation::OnInfo(wxCommandEvent &)
 		local_manager->GetScripts().size()));
 
 	info.push_back(_("Scripting engines installed:"));
-	for (auto const& f : Automation4::ScriptFactory::GetFactories())
-		info.push_back(fmt_wx("- %s (%s)", f->GetEngineName(), f->GetFilenamePattern()));
+	for (auto const& engine : Automation4::AutomationEngineRegistry::GetEngines()) {
+		if (!engine)
+			continue;
+		info.push_back(fmt_wx("- %s (%s)", engine->EngineName(), engine->FilenamePattern()));
+	}
 
 	if (ei) {
 		info.push_back(fmt_tl("\nScript info:\nName: %s\nDescription: %s\nAuthor: %s\nVersion: %s\nFull path: %s\nState: %s\n\nFeatures provided by script:",
@@ -296,12 +385,49 @@ void DialogAutomation::OnInfo(wxCommandEvent &)
 			info.push_back(fmt_tl("    Export filter: %s", f->GetName()));
 	}
 
-	context->ShowInfo(from_wx(wxJoin(info, '\n', 0)), from_wx(_("Automation Script Info")));
+	bool debug_enabled = config::automation_debug_service && config::automation_debug_service->IsEnabled();
+	info.push_back(fmt_tl("\nDebug mode: %s",
+		debug_enabled ? _("Enabled") : _("Disabled")));
+	if (debug_enabled && config::automation_debug_service) {
+		auto debug_state = config::automation_debug_service->GetStateSnapshot();
+		info.push_back(fmt_tl("Debugger connected: %s",
+			debug_state.client_connected ? _("Yes") : _("No")));
+		info.push_back(fmt_tl("Debugger configured: %s",
+			debug_state.client_configured ? _("Yes") : _("No")));
+		if (debug_state.endpoint.available) {
+			info.push_back(fmt_tl("Debug host: %s", debug_state.endpoint.host));
+			info.push_back(fmt_tl("Debug port: %d", debug_state.endpoint.port));
+			info.push_back(fmt_tl("Debug authentication: %s",
+				debug_state.endpoint.token.empty() ? _("Not required") : _("Token")));
+			info.push_back(fmt_tl("Debug token: %s",
+				debug_state.endpoint.token.empty() ? _("(not required)") : to_wx(debug_state.endpoint.token)));
+		}
+
+		auto session = config::automation_debug_service->GetCurrentSession();
+		if (session) {
+			auto target = session->GetTarget();
+			info.push_back(fmt_tl("Current debug target: %s (%s)",
+				target.feature_name,
+				target.script_file.wstring()));
+		}
+	}
+
+	ShowCopyableInfoDialog(this, _("Automation Script Info"), wxJoin(info, '\n', 0));
 }
 
 void DialogAutomation::OnReloadAutoload(wxCommandEvent &)
 {
 	global_manager->Reload();
+}
+
+void DialogAutomation::OnToggleDebugMode(wxCommandEvent &)
+{
+	auto result = Automation4::ToggleAutomationDebugService(config::automation_debug_service);
+	UpdateDebugModeButton();
+	if (result.show_error)
+		context->ShowError(result.message);
+	else
+		context->ShowStatus(result.message);
 }
 }
 

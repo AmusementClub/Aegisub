@@ -34,6 +34,8 @@
 
 #include "auto4_lua.h"
 
+#include "automation/automation_host.h"
+#include "automation/automation_lua_runtime.h"
 #include "compat.h"
 #include "perf_trace.h"
 
@@ -42,6 +44,9 @@
 using namespace agi::lua;
 
 namespace {
+	constexpr char kAutomationDebugProgressRegistryKey[] = "automation_debug_progress_state";
+	constexpr char kAutomationDebugDialogRegistryKey[] = "automation_debug_dialog_state";
+
 	template<lua_CFunction fn>
 	void set_field_to_closure(lua_State *L, const char *name, int ps_idx = -3)
 	{
@@ -55,10 +60,154 @@ namespace {
 		lua_pushnil(L);
 		lua_setfield(L, idx, name);
 	}
+
+	void ensure_registry_table(lua_State *L, char const* key, int narr = 0, int nrec = 0)
+	{
+		lua_getfield(L, LUA_REGISTRYINDEX, key);
+		if (lua_istable(L, -1))
+			return;
+		lua_pop(L, 1);
+		lua_createtable(L, narr, nrec);
+		lua_pushvalue(L, -1);
+		lua_setfield(L, LUA_REGISTRYINDEX, key);
+	}
+
+	void clear_registry_table(lua_State *L, char const* key)
+	{
+		lua_pushnil(L);
+		lua_setfield(L, LUA_REGISTRYINDEX, key);
+	}
+
+	void record_dialog_controls(lua_State *L, int table_index)
+	{
+		table_index = table_index < 0 ? lua_gettop(L) + table_index + 1 : table_index;
+		size_t const count = lua_objlen(L, table_index);
+		lua_createtable(L, static_cast<int>(count), 0);
+		for (size_t i = 1; i <= count; ++i) {
+			lua_rawgeti(L, table_index, static_cast<int>(i));
+			if (!lua_istable(L, -1)) {
+				lua_pop(L, 1);
+				continue;
+			}
+
+			lua_createtable(L, 0, 8);
+			for (auto const* string_name : { "class", "name", "label", "hint" }) {
+				lua_getfield(L, -2, string_name);
+				if (lua_isstring(L, -1))
+					lua_setfield(L, -2, string_name);
+				else
+					lua_pop(L, 1);
+			}
+			for (auto const* numeric_name : { "x", "y", "width", "height" }) {
+				lua_getfield(L, -2, numeric_name);
+				if (lua_isnumber(L, -1))
+					lua_setfield(L, -2, numeric_name);
+				else
+					lua_pop(L, 1);
+			}
+			lua_rawseti(L, -3, static_cast<int>(i));
+			lua_pop(L, 1);
+		}
+		lua_setfield(L, -2, "controls");
+	}
+
+	void record_dialog_buttons(lua_State *L, int table_index, char const* field_name)
+	{
+		table_index = table_index < 0 ? lua_gettop(L) + table_index + 1 : table_index;
+		if (!lua_istable(L, table_index))
+			return;
+
+		size_t const count = lua_objlen(L, table_index);
+		lua_createtable(L, static_cast<int>(count), 0);
+		int out_index = 1;
+		for (size_t i = 1; i <= count; ++i) {
+			lua_rawgeti(L, table_index, static_cast<int>(i));
+			if (lua_isstring(L, -1))
+				lua_rawseti(L, -2, out_index++);
+			else
+				lua_pop(L, 1);
+		}
+		lua_setfield(L, -2, field_name);
+	}
+
+	void record_dialog_display_request(lua_State *L)
+	{
+		ensure_registry_table(L, kAutomationDebugDialogRegistryKey, 0, 8);
+		set_field(L, "kind", "display");
+		set_field(L, "state", "requested");
+		set_field(L, "control_count", static_cast<int>(lua_objlen(L, 1)));
+		record_dialog_controls(L, 1);
+		if (lua_istable(L, 2)) {
+			set_field(L, "button_count", static_cast<int>(lua_objlen(L, 2)));
+			record_dialog_buttons(L, 2, "buttons");
+		}
+		else {
+			set_field(L, "button_count", 0);
+		}
+		lua_pop(L, 1);
+	}
+
+	void record_dialog_display_result(lua_State *L, int result_count)
+	{
+		ensure_registry_table(L, kAutomationDebugDialogRegistryKey, 0, 8);
+		set_field(L, "state", "completed");
+		if (result_count == 2) {
+			if (lua_isstring(L, -2)) {
+				set_field(L, "accepted", true);
+				set_field(L, "button", std::string(lua_tostring(L, -2)));
+			}
+			else {
+				set_field(L, "accepted", false);
+				set_field(L, "button", std::string("cancel"));
+			}
+			if (lua_istable(L, -1))
+				set_field(L, "result_field_count", static_cast<int>(lua_objlen(L, -1)));
+		}
+		lua_pop(L, 1);
+	}
+
+	void record_file_dialog_request(lua_State *L, char const* kind, std::string const& title, std::string const& path, std::string const& filter)
+	{
+		ensure_registry_table(L, kAutomationDebugDialogRegistryKey, 0, 8);
+		set_field(L, "kind", kind);
+		set_field(L, "state", "requested");
+		set_field(L, "title", title);
+		set_field(L, "path", path);
+		set_field(L, "filter", filter);
+		lua_pop(L, 1);
+	}
+
+	void record_file_dialog_result_none(lua_State *L)
+	{
+		ensure_registry_table(L, kAutomationDebugDialogRegistryKey, 0, 8);
+		set_field(L, "state", "cancelled");
+		lua_pop(L, 1);
+	}
+
+	void record_file_dialog_result_single(lua_State *L, std::string const& path)
+	{
+		ensure_registry_table(L, kAutomationDebugDialogRegistryKey, 0, 8);
+		set_field(L, "state", "completed");
+		set_field(L, "result", path);
+		lua_pop(L, 1);
+	}
+
+	void record_file_dialog_result_multiple(lua_State *L, std::vector<agi::fs::path> const& files)
+	{
+		ensure_registry_table(L, kAutomationDebugDialogRegistryKey, 0, 8);
+		set_field(L, "state", "completed");
+		lua_createtable(L, static_cast<int>(files.size()), 0);
+		for (size_t i = 0; i < files.size(); ++i) {
+			lua_pushstring(L, agi::fs::PathToString(files[i]).c_str());
+			lua_rawseti(L, -2, static_cast<int>(i + 1));
+		}
+		lua_setfield(L, -2, "results");
+		lua_pop(L, 1);
+	}
 }
 
 namespace Automation4 {
-	LuaProgressSink::LuaProgressSink(lua_State *L, ProgressSink *ps, bool allow_config_dialog)
+	LuaProgressSink::LuaProgressSink(lua_State *L, ProgressSink *ps, AutomationInvocation const& invocation)
 	: L(L)
 	{
 		auto ud = (ProgressSink**)lua_newuserdata(L, sizeof(ProgressSink*));
@@ -83,7 +232,8 @@ namespace Automation4 {
 		// Set aegisub.log
 		set_field_to_closure<LuaDebugOut>(L, "log", -2);
 
-		if (allow_config_dialog) {
+		auto *host = LuaGetAutomationHost(L);
+		if (invocation.capabilities.allow_dialog && host && host->Ui().SupportsInteractiveDialogs()) {
 			lua_createtable(L, 0, 3);
 			set_field_to_closure<LuaDisplayDialog>(L, "display");
 			set_field_to_closure<LuaDisplayOpenDialog>(L, "open");
@@ -94,6 +244,15 @@ namespace Automation4 {
 		// reference so other objects can also find the progress sink
 		lua_pushvalue(L, -2);
 		lua_setfield(L, LUA_REGISTRYINDEX, "progress_sink");
+
+		ensure_registry_table(L, kAutomationDebugProgressRegistryKey, 0, 6);
+		set_field(L, "percent", 0.0);
+		set_field(L, "task", std::string());
+		set_field(L, "title", std::string());
+		set_field(L, "cancelled", false);
+		set_field(L, "dialog_available", invocation.capabilities.allow_dialog && host && host->Ui().SupportsInteractiveDialogs());
+		lua_pop(L, 1);
+		clear_registry_table(L, kAutomationDebugDialogRegistryKey);
 
 		lua_pop(L, 2);
 	}
@@ -107,6 +266,8 @@ namespace Automation4 {
 		lua_pop(L, 1);
 
 		set_field_to_nil(L, LUA_REGISTRYINDEX, "progress_sink");
+		clear_registry_table(L, kAutomationDebugProgressRegistryKey);
+		clear_registry_table(L, kAutomationDebugDialogRegistryKey);
 	}
 
 	ProgressSink* LuaProgressSink::GetObjPointer(lua_State *L, int idx)
@@ -117,25 +278,41 @@ namespace Automation4 {
 
 	int LuaProgressSink::LuaSetProgress(lua_State *L)
 	{
-		GetObjPointer(L, lua_upvalueindex(1))->SetProgress(lua_tonumber(L, 1), 100);
+		auto progress = lua_tonumber(L, 1);
+		GetObjPointer(L, lua_upvalueindex(1))->SetProgress(progress, 100);
+		ensure_registry_table(L, kAutomationDebugProgressRegistryKey, 0, 6);
+		set_field(L, "percent", progress);
+		lua_pop(L, 1);
 		return 0;
 	}
 
 	int LuaProgressSink::LuaSetTask(lua_State *L)
 	{
-		GetObjPointer(L, lua_upvalueindex(1))->SetMessage(check_string(L, 1));
+		auto task = check_string(L, 1);
+		GetObjPointer(L, lua_upvalueindex(1))->SetMessage(task);
+		ensure_registry_table(L, kAutomationDebugProgressRegistryKey, 0, 6);
+		set_field(L, "task", task);
+		lua_pop(L, 1);
 		return 0;
 	}
 
 	int LuaProgressSink::LuaSetTitle(lua_State *L)
 	{
-		GetObjPointer(L, lua_upvalueindex(1))->SetTitle(check_string(L, 1));
+		auto title = check_string(L, 1);
+		GetObjPointer(L, lua_upvalueindex(1))->SetTitle(title);
+		ensure_registry_table(L, kAutomationDebugProgressRegistryKey, 0, 6);
+		set_field(L, "title", title);
+		lua_pop(L, 1);
 		return 0;
 	}
 
 	int LuaProgressSink::LuaGetCancelled(lua_State *L)
 	{
-		lua_pushboolean(L, GetObjPointer(L, lua_upvalueindex(1))->IsCancelled());
+		auto cancelled = GetObjPointer(L, lua_upvalueindex(1))->IsCancelled();
+		ensure_registry_table(L, kAutomationDebugProgressRegistryKey, 0, 6);
+		set_field(L, "cancelled", cancelled);
+		lua_pop(L, 1);
+		lua_pushboolean(L, cancelled);
 		return 1;
 	}
 
@@ -181,14 +358,20 @@ namespace Automation4 {
 	int LuaProgressSink::LuaDisplayDialog(lua_State *L)
 	{
 		ProgressSink *ps = GetObjPointer(L, lua_upvalueindex(1));
+		auto *host = LuaGetAutomationHost(L);
+		if (!host)
+			return error(L, "Automation host unavailable for dialog.display");
+		record_dialog_display_request(L);
 		perf_trace::TraceLuaDialogOpenBegin();
 
 		try {
 			LuaDialog dlg(L, true); // magically creates the config dialog structure etc
-			ps->ShowDialog(&dlg);
+			host->Ui().ShowDialog(*ps, dlg);
 
 			// more magic: puts two values on stack: button pushed and table with control results
-			return dlg.LuaReadBack(L);
+			int result_count = dlg.LuaReadBack(L);
+			record_dialog_display_result(L, result_count);
+			return result_count;
 		}
 		catch (...) {
 			perf_trace::TraceLuaDialogOpenEnd(-1, -1, -1.0, false);
@@ -199,6 +382,9 @@ namespace Automation4 {
 	int LuaProgressSink::LuaDisplayOpenDialog(lua_State *L)
 	{
 		ProgressSink *ps = GetObjPointer(L, lua_upvalueindex(1));
+		auto *host = LuaGetAutomationHost(L);
+		if (!host)
+			return error(L, "Automation host unavailable for dialog.open");
 		AutomationOpenFileDialogRequest request{
 			check_string(L, 1),
 			check_string(L, 2),
@@ -207,14 +393,17 @@ namespace Automation4 {
 			!!lua_toboolean(L, 5),
 			lua_toboolean(L, 6) || lua_isnil(L, 6)
 		};
+		record_file_dialog_request(L, "open", request.message, request.dir, request.wildcard);
 
-		auto files = ps->RequestOpenFiles(request);
+		auto files = host->Ui().RequestOpenFiles(*ps, request);
 		if (files.empty()) {
+			record_file_dialog_result_none(L);
 			lua_pushnil(L);
 			return 1;
 		}
 
 		if (request.multiple) {
+			record_file_dialog_result_multiple(L, files);
 			lua_createtable(L, files.size(), 0);
 			for (size_t i = 0; i < files.size(); ++i) {
 				lua_pushstring(L, agi::fs::PathToString(files[i]).c_str());
@@ -224,6 +413,7 @@ namespace Automation4 {
 			return 1;
 		}
 
+		record_file_dialog_result_single(L, agi::fs::PathToString(files.front()));
 		lua_pushstring(L, agi::fs::PathToString(files.front()).c_str());
 		return 1;
 	}
@@ -231,18 +421,24 @@ namespace Automation4 {
 	int LuaProgressSink::LuaDisplaySaveDialog(lua_State *L)
 	{
 		ProgressSink *ps = GetObjPointer(L, lua_upvalueindex(1));
-		auto path = ps->RequestSaveFile({
+		auto *host = LuaGetAutomationHost(L);
+		if (!host)
+			return error(L, "Automation host unavailable for dialog.save");
+		auto path = host->Ui().RequestSaveFile(*ps, {
 			check_string(L, 1),
 			check_string(L, 2),
 			check_string(L, 3),
 			check_string(L, 4),
 			!lua_toboolean(L, 5)
 		});
+		record_file_dialog_request(L, "save", check_string(L, 1), check_string(L, 2), check_string(L, 4));
 		if (path.empty()) {
+			record_file_dialog_result_none(L);
 			lua_pushnil(L);
 			return 1;
 		}
 
+		record_file_dialog_result_single(L, agi::fs::PathToString(path));
 		lua_pushstring(L, agi::fs::PathToString(path).c_str());
 		return 1;
 	}

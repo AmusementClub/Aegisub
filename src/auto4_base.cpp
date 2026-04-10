@@ -31,6 +31,8 @@
 
 #include "ass_file.h"
 #include "ass_style.h"
+#include "automation/engine/automation_engine_registry.h"
+#include "automation/automation_live_host.h"
 #include "compat.h"
 #include "dialog_progress.h"
 #include "include/aegisub/context.h"
@@ -51,6 +53,7 @@
 
 #include <chrono>
 #include <future>
+#include <utility>
 
 #include <wx/dcmemory.h>
 #include <wx/log.h>
@@ -64,6 +67,74 @@
 #endif
 
 namespace Automation4 {
+	namespace {
+		class ScriptCompatibilityWrapper final : public Script {
+			std::unique_ptr<AutomationScriptInstance> impl;
+
+		public:
+			explicit ScriptCompatibilityWrapper(std::unique_ptr<AutomationScriptInstance> impl)
+			: Script(impl ? impl->GetFilename() : agi::fs::path())
+			, impl(std::move(impl))
+			{
+			}
+
+			void Reload() override { impl->Reload(); }
+			std::string GetName() const override { return impl->GetName(); }
+			std::string GetDescription() const override { return impl->GetDescription(); }
+			std::string GetAuthor() const override { return impl->GetAuthor(); }
+			std::string GetVersion() const override { return impl->GetVersion(); }
+			bool GetLoadedState() const override { return impl->GetLoadedState(); }
+			std::vector<cmd::Command*> GetMacros() const override { return impl->GetMacros(); }
+			std::vector<ExportFilter*> GetFilters() const override { return impl->GetFilters(); }
+			std::string GetEngineName() const override { return impl->GetEngineName(); }
+			std::optional<AutomationRuntimeStateSnapshot> TryGetRuntimeStateSnapshot() const override { return impl->TryGetRuntimeStateSnapshot(); }
+			void SetRuntimeTraceSink(AutomationRuntimeTraceSink *sink) override { impl->SetRuntimeTraceSink(sink); }
+			void SetAutomationHost(std::shared_ptr<AutomationHost> host) override { impl->SetAutomationHost(std::move(host)); }
+			void SetDebugSession(AutomationDebugSession *session) override { impl->SetDebugSession(session); }
+		};
+
+		std::unique_ptr<Script> WrapScriptInstance(std::unique_ptr<AutomationScriptInstance> instance)
+		{
+			if (!instance)
+				return nullptr;
+
+			if (auto *script = dynamic_cast<Script *>(instance.get())) {
+				instance.release();
+				return std::unique_ptr<Script>(script);
+			}
+
+			return agi::make_unique<ScriptCompatibilityWrapper>(std::move(instance));
+		}
+
+		void AddFilterEntry(
+			std::vector<std::pair<std::string, std::string>>& entries,
+			std::string engine_name,
+			std::string filename_pattern)
+		{
+			if (engine_name.empty() || filename_pattern.empty())
+				return;
+
+			auto const entry = std::make_pair(std::move(engine_name), std::move(filename_pattern));
+			if (find(entries.begin(), entries.end(), entry) == entries.end())
+				entries.emplace_back(entry);
+		}
+
+		struct ScriptLoadAttempt {
+			std::unique_ptr<Script> script;
+			bool recognised = false;
+		};
+
+		void ReportFailedAutomationScriptLoad(agi::fs::path const& filename, std::string const& description)
+		{
+			wxLogError(_("Failed to load Automation script '%s':\n%s"), filename.wstring(), to_wx(description));
+		}
+
+		void ReportUnrecognisedAutomationScript(agi::fs::path const& filename)
+		{
+			wxLogError(_("The file was not recognised as an Automation script: %s"), filename.wstring());
+		}
+	}
+
 	bool CalculateTextExtents(AssStyle *style, std::string const& text, double &width, double &height, double &descent, double &extlead)
 	{
 		width = height = descent = extlead = 0;
@@ -184,6 +255,7 @@ namespace Automation4 {
 	}
 
 	wxWindow* ExportFilter::GetConfigDialogWindow(wxWindow *parent, agi::Context *c) {
+		automation_host = c ? CreateAutomationLiveHost(c) : nullptr;
 		config_dialog = GenerateConfigDialog(parent, c);
 
 		if (config_dialog) {
@@ -198,6 +270,7 @@ namespace Automation4 {
 	}
 
 	void ExportFilter::LoadSettings(bool is_default, agi::Context *c) {
+		automation_host = c ? CreateAutomationLiveHost(c) : nullptr;
 		if (config_dialog)
 			c->GetCore().ass->Properties.automation_settings[GetScriptSettingsIdentifier()] = config_dialog->Serialise();
 	}
@@ -252,7 +325,21 @@ namespace Automation4 {
 	}
 
 	BackgroundScriptRunner::BackgroundScriptRunner(wxWindow *parent, std::string const& title, std::shared_ptr<agi::FileDialogService> file_dialog_service)
-	: impl(new DialogProgress(parent, to_wx(title)))
+	: impl(std::make_unique<DialogProgress>(parent, to_wx(title)))
+	, parent(parent)
+	, title(title)
+	, file_dialog_service(std::move(file_dialog_service))
+	{
+	}
+
+	BackgroundScriptRunner::BackgroundScriptRunner(
+		std::unique_ptr<agi::BackgroundRunner> impl,
+		wxWindow *parent,
+		std::string title,
+		std::shared_ptr<agi::FileDialogService> file_dialog_service)
+	: impl(std::move(impl))
+	, parent(parent)
+	, title(std::move(title))
 	, file_dialog_service(std::move(file_dialog_service))
 	{
 	}
@@ -271,12 +358,16 @@ namespace Automation4 {
 
 	wxWindow *BackgroundScriptRunner::GetParentWindow() const
 	{
-		return impl.get();
+		if (auto* window = dynamic_cast<wxWindow *>(impl.get()))
+			return window;
+		return parent;
 	}
 
 	std::string BackgroundScriptRunner::GetTitle() const
 	{
-		return from_wx(impl->GetTitle());
+		if (auto* dialog = dynamic_cast<wxDialog *>(impl.get()))
+			return from_wx(dialog->GetTitle());
+		return title;
 	}
 
 	std::vector<agi::fs::path> BackgroundScriptRunner::RequestOpenFiles(AutomationOpenFileDialogRequest const& request) const
@@ -332,6 +423,18 @@ namespace Automation4 {
 	{
 		include_path.emplace_back(filename.parent_path());
 
+		for (auto probe = filename.parent_path(); !probe.empty();) {
+			auto candidate = probe / "include";
+			if (agi::fs::DirectoryExists(candidate)) {
+				include_path.emplace_back(std::move(candidate));
+				break;
+			}
+			auto parent = probe.parent_path();
+			if (parent == probe)
+				break;
+			probe = std::move(parent);
+		}
+
 		std::string include_paths = OPT_GET("Path/Automation/Include")->GetString();
 		for (auto tok : agi::Split(include_paths, '|')) {
 			auto path = config::path->Decode(agi::str(tok));
@@ -343,6 +446,9 @@ namespace Automation4 {
 	// ScriptManager
 	void ScriptManager::Add(std::unique_ptr<Script> script)
 	{
+		if (!script)
+			return;
+
 		if (find(scripts.begin(), scripts.end(), script) == scripts.end())
 			scripts.emplace_back(std::move(script));
 
@@ -391,7 +497,7 @@ namespace Automation4 {
 	{
 		scripts.clear();
 
-		std::vector<std::future<std::unique_ptr<Script>>> script_futures;
+		std::vector<std::future<ScriptLoadAttempt>> script_futures;
 
 		for (auto tok : agi::Split(path, '|')) {
 			auto dirname = config::path->Decode(agi::str(tok));
@@ -399,17 +505,26 @@ namespace Automation4 {
 
 			for (auto filename : agi::fs::DirectoryIterator(dirname, "*.*"))
 				script_futures.emplace_back(std::async(std::launch::async, [=] {
-					return ScriptFactory::CreateFromFile(dirname / agi::fs::PathFromString(filename), false, false);
+					ScriptLoadAttempt attempt;
+					attempt.script = ScriptFactory::CreateFromFile(
+						dirname / agi::fs::PathFromString(filename),
+						false,
+						&attempt.recognised);
+					return attempt;
 				}));
 		}
 
 		int error_count = 0;
 		for (auto& future : script_futures) {
-			auto s = future.get();
-			if (s) {
-				if (!s->GetLoadedState()) ++error_count;
-				scripts.emplace_back(std::move(s));
+			auto attempt = future.get();
+			if (!attempt.script)
+				continue;
+
+			if (!attempt.script->GetLoadedState()) {
+				++error_count;
+				ReportFailedAutomationScriptLoad(attempt.script->GetFilename(), attempt.script->GetDescription());
 			}
+			scripts.emplace_back(std::move(attempt.script));
 		}
 
 		if (error_count == 1) {
@@ -462,8 +577,15 @@ namespace Automation4 {
 				continue;
 			}
 			auto sfname = basepath / agi::fs::PathFromString(trimmed);
-			if (agi::fs::FileExists(sfname))
-				scripts.emplace_back(Automation4::ScriptFactory::CreateFromFile(sfname, true));
+			if (agi::fs::FileExists(sfname)) {
+				bool recognised = false;
+				auto script = Automation4::ScriptFactory::CreateFromFile(sfname, true, &recognised);
+				if (!recognised)
+					ReportUnrecognisedAutomationScript(sfname);
+				else if (script && !script->GetLoadedState())
+					ReportFailedAutomationScriptLoad(sfname, script->GetDescription());
+				scripts.emplace_back(std::move(script));
+			}
 			else {
 				wxLogWarning(wxS("Automation Script referenced could not be found.\nFilename specified: %c%s\nSearched relative to: %s\nResolved filename: %s"),
 					first_char, to_wx(trimmed), basepath.wstring(), sfname.wstring());
@@ -507,61 +629,37 @@ namespace Automation4 {
 		core.ass->Properties.automation_scripts = std::move(scripts_string);
 	}
 
-	// ScriptFactory
-	ScriptFactory::ScriptFactory(std::string engine_name, std::string filename_pattern)
-	: engine_name(std::move(engine_name))
-	, filename_pattern(std::move(filename_pattern))
+	std::unique_ptr<Script> ScriptFactory::CreateFromFile(
+		agi::fs::path const& filename,
+		bool create_unknown,
+		bool *recognised_out)
 	{
-	}
+		if (recognised_out)
+			*recognised_out = false;
 
-	void ScriptFactory::Register(std::unique_ptr<ScriptFactory> factory)
-	{
-		if (find(Factories().begin(), Factories().end(), factory) != Factories().end())
-			throw agi::InternalError("Automation 4: Attempt to register the same script factory multiple times. This should never happen.");
-
-		Factories().emplace_back(std::move(factory));
-	}
-
-	std::unique_ptr<Script> ScriptFactory::CreateFromFile(agi::fs::path const& filename, bool complain_about_unrecognised, bool create_unknown)
-	{
-		for (auto& factory : Factories()) {
-			auto s = factory->Produce(filename);
-			if (s) {
-				if (!s->GetLoadedState()) {
-					wxLogError(_("Failed to load Automation script '%s':\n%s"), filename.wstring(), to_wx(s->GetDescription()));
-				}
-				return s;
-			}
-		}
-
-		if (complain_about_unrecognised) {
-			wxLogError(_("The file was not recognised as an Automation script: %s"), filename.wstring());
+		if (auto script = WrapScriptInstance(AutomationEngineRegistry::CreateFromFile(filename))) {
+			if (recognised_out)
+				*recognised_out = true;
+			return script;
 		}
 
 		return create_unknown ? agi::make_unique<UnknownScript>(filename) : nullptr;
 	}
 
-	std::vector<std::unique_ptr<ScriptFactory>>& ScriptFactory::Factories()
-	{
-		static std::vector<std::unique_ptr<ScriptFactory>> factories;
-		return factories;
-	}
-
-	const std::vector<std::unique_ptr<ScriptFactory>>& ScriptFactory::GetFactories()
-	{
-		return Factories();
-	}
-
 	std::string ScriptFactory::GetWildcardStr()
 	{
 		std::string fnfilter, catchall;
-		for (auto& fact : Factories()) {
-			if (fact->GetEngineName().empty() || fact->GetFilenamePattern().empty())
+		std::vector<std::pair<std::string, std::string>> entries;
+		for (auto const& engine : AutomationEngineRegistry::GetEngines()) {
+			if (!engine)
 				continue;
+			AddFilterEntry(entries, engine->EngineName(), engine->FilenamePattern());
+		}
 
-			std::string filter(fact->GetFilenamePattern());
+		for (auto const& entry : entries) {
+			std::string filter(entry.second);
 			agi::util::strings::replace_all_inplace(filter, ",", ";");
-			fnfilter += agi::format("%s scripts (%s)|%s|", fact->GetEngineName(), fact->GetFilenamePattern(), filter);
+			fnfilter += agi::format("%s scripts (%s)|%s|", entry.first, entry.second, filter);
 			catchall += filter + ";";
 		}
 		fnfilter += from_wx(_("All Files")) + " (*.*)|*.*";
@@ -569,7 +667,7 @@ namespace Automation4 {
 		if (!catchall.empty())
 			catchall.pop_back();
 
-		if (Factories().size() > 1)
+		if (entries.size() > 1)
 			fnfilter = from_wx(_("All Supported Formats")) + "|" + catchall + "|" + fnfilter;
 
 		return fnfilter;

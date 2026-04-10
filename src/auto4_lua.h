@@ -28,8 +28,10 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "auto4_base.h"
+#include "automation/automation_invocation.h"
 
 #include <deque>
+#include <memory>
 #include <vector>
 #include <wx/string.h>
 
@@ -39,6 +41,8 @@ class wxWindow;
 struct lua_State;
 
 namespace Automation4 {
+	class AutomationMutationJournal;
+
 	struct LuaDialogControlCreateTrace {
 		double native_construct_ms = 0.0;
 		double validator_bind_ms = 0.0;
@@ -75,9 +79,9 @@ namespace Automation4 {
 		/// How ass file been modified by the script since the last commit
 		int modification_type = 0;
 
-		/// Reference count used to avoid deleting this until both lua and the
-		/// calling C++ code are done with it
-		int references = 2;
+		/// Script-owned operations are no longer allowed once processing
+		/// completes, even though Lua userdata may still keep the object alive.
+		bool script_reference_active = true;
 
 		/// Set of subtitle lines being modified; initially a shallow copy of ass->Line
 		std::vector<AssEntry*> lines;
@@ -87,6 +91,9 @@ namespace Automation4 {
 		std::deque<PendingCommit> pending_commits;
 		/// Lines to delete once processing complete successfully
 		std::vector<std::unique_ptr<AssEntry>> lines_to_delete;
+		/// Host references are kept alive for the full LuaAssFile lifetime.
+		std::shared_ptr<AutomationHost> automation_host;
+		std::shared_ptr<AutomationMutationJournal> mutation_journal;
 
 		/// Create copies of all of the lines in the script info section if it
 		/// hasn't already happened. This is done lazily, since it only needs
@@ -100,6 +107,9 @@ namespace Automation4 {
 		/// Set the line at the index to the given value
 		void AssignLine(size_t idx, std::unique_ptr<AssEntry> e);
 		void InsertLine(std::vector<AssEntry *> &vec, size_t idx, std::unique_ptr<AssEntry> e);
+		/// Mark the script-owned reference as completed without relying on self-delete.
+		void ReleaseScriptReference();
+		void RegisterMiscFunctions();
 
 		int ObjectIndexRead(lua_State *L);
 		void ObjectIndexWrite(lua_State *L);
@@ -108,7 +118,6 @@ namespace Automation4 {
 		void ObjectDeleteRange(lua_State *L);
 		void ObjectAppend(lua_State *L);
 		void ObjectInsert(lua_State *L);
-		void ObjectGarbageCollect(lua_State *L);
 		int ObjectIPairs(lua_State *L);
 		int IterNext(lua_State *L);
 
@@ -116,11 +125,19 @@ namespace Automation4 {
 		int LuaGetScriptResolution(lua_State *L);
 
 		void LuaSetUndoPoint(lua_State *L);
-
-		// LuaAssFile can only be deleted by the reference count hitting zero
-		~LuaAssFile();
 	public:
+		~LuaAssFile();
+		static std::shared_ptr<LuaAssFile> Create(lua_State *L, AssFile *ass, bool can_modify = false, bool can_set_undo = false);
 		static LuaAssFile *GetObjPointer(lua_State *L, int idx, bool allow_expired);
+		size_t DebugLineCount() const { return lines.size(); }
+		size_t DebugInfoCount() const;
+		size_t DebugStyleCount() const;
+		size_t DebugDialogueCount() const;
+		size_t DebugPendingCommitCount() const { return pending_commits.size(); }
+		bool DebugCanModify() const { return can_modify; }
+		bool DebugCanSetUndo() const { return can_set_undo; }
+		bool DebugHasPendingModifications() const { return modification_type != 0; }
+		bool DebugTryPushLineAsLua(lua_State *L, size_t automation_row);
 
 		/// makes a Lua representation of AssEntry and places on the top of the stack
 		void AssEntryToLua(lua_State *L, size_t idx);
@@ -136,11 +153,6 @@ namespace Automation4 {
 		/// End processing without applying any changes made
 		void Cancel();
 
-		/// Constructor
-		/// @param L lua state
-		/// @param ass File to wrap
-		/// @param can_modify Is modifying the file allowed?
-		/// @param can_set_undo Is setting undo points allowed?
 		LuaAssFile(lua_State *L, AssFile *ass, bool can_modify = false, bool can_set_undo = false);
 	};
 
@@ -157,7 +169,7 @@ namespace Automation4 {
 		static int LuaDisplaySaveDialog(lua_State *L);
 
 	public:
-		LuaProgressSink(lua_State *L, ProgressSink *ps, bool allow_config_dialog = true);
+		LuaProgressSink(lua_State *L, ProgressSink *ps, AutomationInvocation const& invocation);
 		~LuaProgressSink();
 
 		static ProgressSink* GetObjPointer(lua_State *L, int idx);

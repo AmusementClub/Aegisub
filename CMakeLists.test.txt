@@ -23,11 +23,16 @@ if(GTEST_FOUND)
         tests/tests/audio.cpp
         tests/tests/avisynth_legacy_path.cpp
         tests/tests/avisynth_runtime_policy.cpp
+        tests/tests/automation_debug_adapter.cpp
         tests/tests/audio_display.cpp
         tests/tests/async_video_provider.cpp
         tests/tests/dispatch.cpp
         tests/tests/export_framerate_transform.cpp
         tests/tests/time_display_mode.cpp
+        src/automation/automation_breakpoint_store.cpp
+        src/automation/automation_debug_adapter.cpp
+        src/automation/automation_debug_service.cpp
+        src/automation/automation_debug_session.cpp
         src/audio_display_analysis.cpp
         src/audio_latest_range_scheduler.cpp
         src/audio_display_source.cpp
@@ -190,6 +195,7 @@ if(GTEST_FOUND)
     endif()
     target_precompile_headers(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/tests/support/tests_pre.h")
     if(WIN32)
+        target_link_libraries(gtest-run PRIVATE ws2_32)
         add_custom_target(test-aegisub
             COMMAND "${PROJECT_SOURCE_DIR}/tests/setup.bat"
             COMMAND gtest-run

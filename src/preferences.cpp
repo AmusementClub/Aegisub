@@ -723,6 +723,12 @@ void BuildAutomationPage(OptionPage *p) {
 	wxArrayString ar_choice(4, ar_arr);
 	p->OptionChoice(general, _("Autoreload on Export"), ar_choice, "Automation/Autoreload Mode");
 
+	auto live_debug = p->PageSizer(_("Live Debug"));
+	p->OptionAdd(live_debug, _("Listen port (0 = auto)"), "Automation/Debug/Listen Port", 0, 65535);
+	auto require_token = p->OptionAdd(live_debug, _("Require attach token"), "Automation/Debug/Require Token");
+	auto token = p->OptionAdd(live_debug, _("Attach token (blank = auto-generate)"), "Automation/Debug/Token");
+	p->EnableIfChecked(require_token, token);
+
 	p->SetSizerAndFit(p->sizer);
 }
 

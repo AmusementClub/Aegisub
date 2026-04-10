@@ -22,6 +22,7 @@
 
 namespace agi { class Path; }
 namespace Automation4 { class AutoloadScriptManager; }
+namespace Automation4 { class AutomationDebugService; }
 
 /// For holding all configuration-related objects and values.
 namespace config {
@@ -29,6 +30,7 @@ namespace config {
 	extern agi::MRUManager *mru; ///< Most Recently Used
 	extern agi::Path *path;
 	extern Automation4::AutoloadScriptManager *global_scripts;
+	extern Automation4::AutomationDebugService *automation_debug_service;
 }
 
 /// Macro to get OptionValue object

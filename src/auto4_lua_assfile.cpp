@@ -39,6 +39,9 @@
 #include "ass_file.h"
 #include "ass_karaoke.h"
 #include "ass_style.h"
+#include "automation/automation_host.h"
+#include "automation/automation_lua_runtime.h"
+#include "automation/automation_mutation_journal.h"
 #include "compat.h"
 
 #include <libaegisub/exception.h>
@@ -114,6 +117,17 @@ namespace {
 		return 0;
 	}
 
+	int destroy_lua_assfile_userdata(lua_State *L)
+	{
+		auto *storage = static_cast<std::shared_ptr<LuaAssFile> *>(lua_touserdata(L, 1));
+		if (!storage)
+			return 0;
+
+		LOG_D("automation/lua") << "Garbage collected LuaAssFile";
+		storage->~shared_ptr<LuaAssFile>();
+		return 0;
+	}
+
 	int modification_mask(AssEntry *e)
 	{
 		if (!e) return AssFile::COMMIT_SCRIPTINFO;
@@ -128,10 +142,50 @@ namespace {
 	const T *check_cast_constptr(const U *value) {
 		return typeid(const T) == typeid(*value) ? static_cast<const T *>(value) : nullptr;
 	}
+
+	AutomationMutationLineSnapshot CaptureMutationLineSnapshot(AssEntry const& entry)
+	{
+		AutomationMutationLineSnapshot snapshot;
+		snapshot.section = entry.GroupHeader();
+		if (auto const* info = check_cast_constptr<AssInfo>(&entry)) {
+			snapshot.line_class = "info";
+			snapshot.raw = info->GetEntryData();
+		}
+		else if (auto const* style = check_cast_constptr<AssStyle>(&entry)) {
+			snapshot.line_class = "style";
+			snapshot.raw = style->GetEntryData();
+		}
+		else if (auto const* dialogue = check_cast_constptr<AssDialogue>(&entry)) {
+			snapshot.line_class = "dialogue";
+			snapshot.raw = dialogue->GetEntryData();
+		}
+		return snapshot;
+	}
 }
 
 namespace Automation4 {
 	LuaAssFile::~LuaAssFile() { }
+
+	std::shared_ptr<LuaAssFile> LuaAssFile::Create(lua_State *L, AssFile *ass, bool can_modify, bool can_set_undo)
+	{
+		auto ass_file = std::shared_ptr<LuaAssFile>(new LuaAssFile(L, ass, can_modify, can_set_undo));
+
+		auto *storage = static_cast<std::shared_ptr<LuaAssFile> *>(
+			lua_newuserdata(L, sizeof(std::shared_ptr<LuaAssFile>)));
+		new(storage) std::shared_ptr<LuaAssFile>(ass_file);
+
+		lua_createtable(L, 0, 5);
+		set_field<closure_wrapper<&LuaAssFile::ObjectIndexRead>>(L, "__index");
+		set_field<closure_wrapper_v<&LuaAssFile::ObjectIndexWrite, false>>(L, "__newindex");
+		set_field<closure_wrapper<&LuaAssFile::ObjectGetLen>>(L, "__len");
+		set_field<destroy_lua_assfile_userdata>(L, "__gc");
+		set_field<closure_wrapper<&LuaAssFile::ObjectIPairs>>(L, "__ipairs");
+		set_field(L, "__aegisub_debug_type", "LuaAssFile");
+		lua_setmetatable(L, -2);
+		ass_file->RegisterMiscFunctions();
+
+		return ass_file;
+	}
 
 	void LuaAssFile::CheckAllowModify()
 	{
@@ -451,11 +505,19 @@ namespace Automation4 {
 			if (!lua_isnil(L, 3)) {
 				// insert
 				CheckBounds(n);
+				auto capture_current_line = [&](size_t idx) {
+					auto const* current = lines[idx] ? lines[idx] : static_cast<AssEntry const*>(&ass->Info[idx]);
+					return CaptureMutationLineSnapshot(*current);
+				};
 
+				auto before_line = capture_current_line(n - 1);
 				auto e = LuaToAssEntry(L, ass);
+				auto after_line = CaptureMutationLineSnapshot(*e);
 				modification_type |= modification_mask(e.get());
 				QueueLineForDeletion(n - 1);
 				AssignLine(n - 1, std::move(e));
+				if (mutation_journal)
+					mutation_journal->RecordReplace(n, std::move(before_line), std::move(after_line));
 			}
 			else {
 				// delete
@@ -501,10 +563,15 @@ namespace Automation4 {
 
 		sort(ids.begin(), ids.end());
 
+		std::vector<int> removed_indices;
+		std::vector<AutomationMutationLineSnapshot> removed_lines;
 		size_t id_idx = 0, out = 0;
 		for (size_t i = 0; i < lines.size(); ++i) {
 			if (id_idx < ids.size() && ids[id_idx] == i) {
-				modification_type |= modification_mask(lines[i]);
+				auto const* current = lines[i] ? lines[i] : static_cast<AssEntry const*>(&ass->Info[i]);
+				modification_type |= modification_mask(const_cast<AssEntry *>(current));
+				removed_indices.push_back(static_cast<int>(i + 1));
+				removed_lines.push_back(CaptureMutationLineSnapshot(*current));
 				QueueLineForDeletion(i);
 				++id_idx;
 			}
@@ -514,6 +581,8 @@ namespace Automation4 {
 		}
 
 		lines.erase(lines.begin() + out, lines.end());
+		if (mutation_journal && !removed_indices.empty())
+			mutation_journal->RecordDelete(std::move(removed_indices), std::move(removed_lines));
 	}
 
 	void LuaAssFile::ObjectDeleteRange(lua_State *L)
@@ -525,12 +594,18 @@ namespace Automation4 {
 
 		if (a >= b) return;
 
+		std::vector<AutomationMutationLineSnapshot> removed_lines;
+		removed_lines.reserve(b - a);
 		for (size_t i = a; i < b; ++i) {
-			modification_type |= modification_mask(lines[i]);
+			auto const* current = lines[i] ? lines[i] : static_cast<AssEntry const*>(&ass->Info[i]);
+			modification_type |= modification_mask(const_cast<AssEntry *>(current));
+			removed_lines.push_back(CaptureMutationLineSnapshot(*current));
 			QueueLineForDeletion(i);
 		}
 
 		lines.erase(lines.begin() + a, lines.begin() + b);
+		if (mutation_journal)
+			mutation_journal->RecordDeleteRange(static_cast<int>(a + 1), static_cast<int>(b), std::move(removed_lines));
 	}
 
 	void LuaAssFile::ObjectAppend(lua_State *L)
@@ -538,30 +613,44 @@ namespace Automation4 {
 		CheckAllowModify();
 
 		int n = lua_gettop(L);
+		std::vector<int> appended_indices;
+		std::vector<AutomationMutationLineSnapshot> appended_lines;
 
 		for (int i = 1; i <= n; i++) {
 			lua_pushvalue(L, i);
 			auto e = LuaToAssEntry(L, ass);
+			auto line_snapshot = CaptureMutationLineSnapshot(*e);
 			modification_type |= modification_mask(e.get());
 
 			if (lines.empty()) {
+				appended_indices.push_back(1);
+				appended_lines.push_back(std::move(line_snapshot));
 				InsertLine(lines, 0, std::move(e));
 				continue;
 			}
 
 			// Find the appropriate place to put it
 			auto group = e->Group();
-			for (size_t i = lines.size(); i > 0; --i) {
-				auto cur_group = lines[i - 1] ? lines[i - 1]->Group() : AssEntryGroup::INFO;
+			for (size_t insert_at = lines.size(); insert_at > 0; --insert_at) {
+				auto cur_group = lines[insert_at - 1] ? lines[insert_at - 1]->Group() : AssEntryGroup::INFO;
 				if (cur_group == group) {
-					InsertLine(lines, i, std::move(e));
+					appended_indices.push_back(static_cast<int>(insert_at + 1));
+					appended_lines.push_back(std::move(line_snapshot));
+					InsertLine(lines, insert_at, std::move(e));
 					break;
 				}
 			}
 
 			// No lines of this type exist already, so just append it to the end
-			if (e) InsertLine(lines, lines.size(), std::move(e));
+			if (e) {
+				appended_indices.push_back(static_cast<int>(lines.size() + 1));
+				appended_lines.push_back(std::move(line_snapshot));
+				InsertLine(lines, lines.size(), std::move(e));
+			}
 		}
+
+		if (mutation_journal && !appended_indices.empty())
+			mutation_journal->RecordAppend(std::move(appended_indices), std::move(appended_lines));
 	}
 
 	void LuaAssFile::ObjectInsert(lua_State *L)
@@ -582,22 +671,25 @@ namespace Automation4 {
 
 		int n = lua_gettop(L);
 		std::vector<AssEntry *> new_entries;
+		std::vector<AutomationMutationLineSnapshot> inserted_lines;
 		new_entries.reserve(n - 1);
+		inserted_lines.reserve(n - 1);
 		for (int i = 2; i <= n; i++) {
 			lua_pushvalue(L, i);
 			auto e = LuaToAssEntry(L, ass);
+			inserted_lines.push_back(CaptureMutationLineSnapshot(*e));
 			modification_type |= modification_mask(e.get());
 			InsertLine(new_entries, i - 2, std::move(e));
 			lua_pop(L, 1);
 		}
 		lines.insert(lines.begin() + before - 1, new_entries.begin(), new_entries.end());
-	}
-
-	void LuaAssFile::ObjectGarbageCollect(lua_State *L)
-	{
-		references--;
-		if (!references) delete this;
-		LOG_D("automation/lua") << "Garbage collected LuaAssFile";
+		if (mutation_journal && !inserted_lines.empty()) {
+			std::vector<int> inserted_indices;
+			inserted_indices.reserve(inserted_lines.size());
+			for (size_t i = 0; i < inserted_lines.size(); ++i)
+				inserted_indices.push_back(static_cast<int>(before + i));
+			mutation_journal->RecordInsert(std::move(inserted_indices), std::move(inserted_lines));
+		}
 	}
 
 	int LuaAssFile::ObjectIPairs(lua_State *L)
@@ -674,10 +766,13 @@ namespace Automation4 {
 		if (modification_type) {
 			pending_commits.emplace_back();
 			PendingCommit& back = pending_commits.back();
+			auto description = check_string(L, 1);
 
 			back.modification_type = modification_type;
-			back.mesage = to_wx(check_string(L, 1));
+			back.mesage = to_wx(description);
 			back.lines = lines;
+			if (mutation_journal)
+				mutation_journal->RecordUndoPoint(description, modification_type, static_cast<int>(lines.size()));
 			modification_type = 0;
 		}
 	}
@@ -685,11 +780,51 @@ namespace Automation4 {
 	LuaAssFile *LuaAssFile::GetObjPointer(lua_State *L, int idx, bool allow_expired)
 	{
 		assert(lua_type(L, idx) == LUA_TUSERDATA);
-		auto ud = lua_touserdata(L, idx);
-		auto laf = *static_cast<LuaAssFile **>(ud);
-		if (!allow_expired && laf->references < 2)
+		auto *storage = static_cast<std::shared_ptr<LuaAssFile> *>(lua_touserdata(L, idx));
+		auto *laf = storage ? storage->get() : nullptr;
+		if (!laf)
+			error(L, "Subtitles object is no longer valid");
+		if (!allow_expired && !laf->script_reference_active)
 			error(L, "Subtitles object is no longer valid");
 		return laf;
+	}
+
+	size_t LuaAssFile::DebugInfoCount() const
+	{
+		size_t count = 0;
+		for (auto const* line : lines) {
+			if (!line)
+				++count;
+		}
+		return count;
+	}
+
+	size_t LuaAssFile::DebugStyleCount() const
+	{
+		size_t count = 0;
+		for (auto const* line : lines) {
+			if (line && line->Group() == AssEntryGroup::STYLE)
+				++count;
+		}
+		return count;
+	}
+
+	size_t LuaAssFile::DebugDialogueCount() const
+	{
+		size_t count = 0;
+		for (auto const* line : lines) {
+			if (line && line->Group() == AssEntryGroup::DIALOGUE)
+				++count;
+		}
+		return count;
+	}
+
+	bool LuaAssFile::DebugTryPushLineAsLua(lua_State *L, size_t automation_row)
+	{
+		if (automation_row == 0 || automation_row > lines.size())
+			return false;
+		AssEntryToLua(L, automation_row - 1);
+		return true;
 	}
 
 	std::vector<AssEntry *> LuaAssFile::ProcessingComplete(wxString const& undo_description)
@@ -713,28 +848,55 @@ namespace Automation4 {
 		// Apply any pending commits
 		for (auto const& pc : pending_commits) {
 			apply_lines(pc.lines);
+			if (mutation_journal)
+				mutation_journal->RecordCommit(from_wx(pc.mesage), pc.modification_type, static_cast<int>(pc.lines.size()), true);
 			ass->Commit(from_wx(pc.mesage), pc.modification_type);
 		}
 
 		// Commit any changes after the last undo point was set
 		if (modification_type)
 			apply_lines(lines);
-		if (modification_type && can_set_undo && !undo_description.empty())
+		if (modification_type && can_set_undo && !undo_description.empty()) {
+			if (mutation_journal)
+				mutation_journal->RecordCommit(from_wx(undo_description), modification_type, static_cast<int>(lines.size()), true);
 			ass->Commit(from_wx(undo_description), modification_type);
+		}
+		else if (modification_type && mutation_journal) {
+			mutation_journal->RecordApply(modification_type, static_cast<int>(lines.size()));
+		}
 
 		lines_to_delete.clear();
 
 		auto ret = std::move(lines);
-		references--;
-		if (!references) delete this;
+		ReleaseScriptReference();
 		return ret;
 	}
 
 	void LuaAssFile::Cancel()
 	{
+		if (mutation_journal)
+			mutation_journal->RecordCancel(
+				static_cast<int>(pending_commits.size()),
+				static_cast<int>(lines_to_delete.size()),
+				modification_type);
 		for (auto& line : lines_to_delete) line.release();
-		references--;
-		if (!references) delete this;
+		ReleaseScriptReference();
+	}
+
+	void LuaAssFile::ReleaseScriptReference()
+	{
+		if (!script_reference_active)
+			return;
+		script_reference_active = false;
+	}
+
+	void LuaAssFile::RegisterMiscFunctions()
+	{
+		// register misc functions
+		lua_getglobal(L, "aegisub");
+		set_field<closure_wrapper<&LuaAssFile::LuaParseKaraokeData>>(L, "parse_karaoke_data");
+		set_field<closure_wrapper_v<&LuaAssFile::LuaSetUndoPoint, false>>(L, "set_undo_point");
+		lua_pop(L, 1); // pop "aegisub" table
 	}
 
 	LuaAssFile::LuaAssFile(lua_State *L, AssFile *ass, bool can_modify, bool can_set_undo)
@@ -743,34 +905,15 @@ namespace Automation4 {
 	, can_modify(can_modify)
 	, can_set_undo(can_set_undo)
 	{
+		automation_host = LuaGetAutomationHostShared(L);
+		if (automation_host)
+			mutation_journal = automation_host->GetMutationJournal();
+
 		// for (auto& line : ass->Info) lines.push_back(nullptr);
 		lines.insert(lines.end(), ass->Info.size(), nullptr);
 		for (auto& line : ass->Styles)
 			lines.push_back(&line);
 		for (auto& line : ass->Events)
 			lines.push_back(&line);
-
-		// prepare userdata object
-		*static_cast<LuaAssFile**>(lua_newuserdata(L, sizeof(LuaAssFile*))) = this;
-
-		// make the metatable
-		lua_createtable(L, 0, 5);
-		set_field<closure_wrapper<&LuaAssFile::ObjectIndexRead>>(L, "__index");
-		set_field<closure_wrapper_v<&LuaAssFile::ObjectIndexWrite, false>>(L, "__newindex");
-		set_field<closure_wrapper<&LuaAssFile::ObjectGetLen>>(L, "__len");
-		set_field<closure_wrapper_v<&LuaAssFile::ObjectGarbageCollect, true>>(L, "__gc");
-		set_field<closure_wrapper<&LuaAssFile::ObjectIPairs>>(L, "__ipairs");
-		lua_setmetatable(L, -2);
-
-		// register misc functions
-		// assume the "aegisub" global table exists
-		lua_getglobal(L, "aegisub");
-
-		set_field<closure_wrapper<&LuaAssFile::LuaParseKaraokeData>>(L, "parse_karaoke_data");
-		set_field<closure_wrapper_v<&LuaAssFile::LuaSetUndoPoint, false>>(L, "set_undo_point");
-
-		lua_pop(L, 1); // pop "aegisub" table
-
-		// Leaves userdata object on stack
 	}
 }

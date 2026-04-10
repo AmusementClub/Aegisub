@@ -32,6 +32,7 @@
 #include "command.h"
 
 #include "../auto4_base.h"
+#include "../automation/automation_debug_ui.h"
 #include "../compat.h"
 #include "../dialogs.h"
 #include "../frame_main.h"
@@ -41,6 +42,8 @@
 #include "../options.h"
 
 #include <libaegisub/make_unique.h>
+
+#include <string>
 
 namespace {
 	using cmd::Command;
@@ -101,6 +104,21 @@ struct meta final : public Command {
 	}
 };
 
+struct toggle_debug_mode final : public Command {
+	CMD_NAME("am/debug/toggle")
+	STR_MENU("Toggle Automation &Debug Mode")
+	STR_DISP("Toggle Automation Debug Mode")
+	STR_HELP("Enable or disable live Automation debug mode in the running Aegisub process")
+
+	void operator()(agi::Context *c) override {
+		auto result = Automation4::ToggleAutomationDebugService(config::automation_debug_service);
+		if (result.show_error)
+			c->ShowError(result.message);
+		else
+			c->ShowStatus(result.message);
+	}
+};
+
 }
 
 namespace cmd {
@@ -109,5 +127,6 @@ namespace cmd {
 		reg(agi::make_unique<open_manager>());
 		reg(agi::make_unique<reload_all>());
 		reg(agi::make_unique<reload_autoload>());
+		reg(agi::make_unique<toggle_debug_mode>());
 	}
 }

@@ -98,6 +98,11 @@
 
 	"Automation" : {
 		"Autoreload Mode" : 1,
+		"Debug" : {
+			"Listen Port" : 0,
+			"Require Token" : true,
+			"Token" : ""
+		},
 		"Trace Level" : 3
 	},
 

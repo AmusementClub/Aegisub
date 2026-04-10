@@ -1,0 +1,98 @@
+{
+  "name": "aegisub-automation-debug",
+  "displayName": "Aegisub Automation Debug",
+  "description": "Attach VSCode to a running Aegisub Automation debug session.",
+  "version": "0.0.2",
+  "publisher": "local",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "activationEvents": [
+    "onDebug",
+    "onDebugResolve:aegisub-automation"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "debuggers": [
+      {
+        "type": "aegisub-automation",
+        "label": "Aegisub Automation",
+        "languages": [
+          "lua"
+        ],
+        "configurationAttributes": {
+          "attach": {
+            "properties": {
+              "name": {
+                "type": "string",
+                "default": "Aegisub Automation: Attach"
+              },
+              "request": {
+                "type": "string",
+                "enum": [
+                  "attach"
+                ],
+                "default": "attach"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "aegisub-automation"
+                ],
+                "default": "aegisub-automation"
+              },
+              "host": {
+                "type": "string",
+                "default": "127.0.0.1"
+              },
+              "port": {
+                "type": "number",
+                "default": 47123
+              },
+              "token": {
+                "type": "string",
+                "default": ""
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "default": false
+              },
+              "autoStepCount": {
+                "type": "number",
+                "default": 0
+              },
+              "maxPauses": {
+                "type": "number",
+                "default": 512
+              }
+            },
+            "required": [
+              "port",
+              "token"
+            ]
+          }
+        },
+        "configurationSnippets": [
+          {
+            "label": "Aegisub Automation: Attach to running Aegisub",
+            "description": "Attach to the live Automation debug endpoint exposed by Aegisub Debug Mode.",
+            "body": {
+              "type": "aegisub-automation",
+              "request": "attach",
+              "name": "Aegisub Automation: Attach",
+              "host": "127.0.0.1",
+              "port": 47123,
+              "token": "",
+              "stopOnEntry": false,
+              "autoStepCount": 0,
+              "maxPauses": 512
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

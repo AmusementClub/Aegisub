@@ -14,10 +14,12 @@
 // PERFORMANCE OF THIS SOFTWARE.
 
 #include "options.h"
+#include "automation/automation_debug_service.h"
 
 namespace config {
 	agi::Options *opt = nullptr;
 	agi::MRUManager *mru = nullptr;
 	agi::Path *path = nullptr;
 	Automation4::AutoloadScriptManager *global_scripts = nullptr;
+	Automation4::AutomationDebugService *automation_debug_service = nullptr;
 }

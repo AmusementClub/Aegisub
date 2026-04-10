@@ -32,12 +32,19 @@
 /// @ingroup scripting
 ///
 
+#pragma once
+
+#include "automation/engine/automation_engine.h"
 #include "auto4_base.h"
 
 namespace Automation4 {
-	class LuaScriptFactory final : public ScriptFactory {
-		std::unique_ptr<Script> Produce(agi::fs::path const& filename) const override;
+	std::unique_ptr<AutomationScriptInstance> CreateLuaAutomationScriptInstance(agi::fs::path const& filename);
+
+	class LuaAutomationEngine final : public AutomationEngine {
 	public:
-		LuaScriptFactory();
+		std::string EngineName() const override;
+		std::string FilenamePattern() const override;
+		bool SupportsFile(agi::fs::path const& filename) const override;
+		std::unique_ptr<AutomationScriptInstance> LoadScript(agi::fs::path const& filename) const override;
 	};
 }

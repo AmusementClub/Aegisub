@@ -346,8 +346,8 @@ public:
 		return context->GetCore();
 	}
 
-	agi::ConstContextCoreSession GetCore() const {
-		return static_cast<agi::Context const&>(*context).GetCore();
+	agi::ContextCoreSession GetCore() const {
+		return const_cast<agi::Context&>(*context).GetCore();
 	}
 
 	bool Start(int& error_code, std::string& error_message) {
@@ -493,8 +493,16 @@ agi::ContextCoreSession PlaybackSessionHost::GetCore() {
 	return impl->GetCore();
 }
 
-agi::ConstContextCoreSession PlaybackSessionHost::GetCore() const {
+agi::ContextCoreSession PlaybackSessionHost::GetCore() const {
 	return static_cast<Impl const&>(*impl).GetCore();
+}
+
+agi::Context *PlaybackSessionHost::GetContext() {
+	return impl ? impl->context.get() : nullptr;
+}
+
+agi::Context const* PlaybackSessionHost::GetContext() const {
+	return impl ? impl->context.get() : nullptr;
 }
 
 bool PlaybackSessionHost::Start(int& error_code, std::string& error_message) {

@@ -165,4 +165,8 @@ void RunSessionProjectAsync(ProjectSessionRequest request, std::function<void(Pr
 	aegisub::project_session_service::RunAsync(std::move(request), std::move(on_done));
 }
 
+void RunSessionAutomationAsync(AutomationSessionRequest request, std::function<void(AutomationSessionResult)> on_done) {
+	aegisub::automation_session_service::RunAsync(std::move(request), std::move(on_done));
+}
+
 }

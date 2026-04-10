@@ -19,6 +19,8 @@
 
 #include "auto4_base.h"
 #include "auto4_lua_factory.h"
+#include "automation/engine/automation_engine_registry.h"
+#include "automation/automation_debug_service.h"
 #include "export_fixstyle.h"
 #include "export_framerate.h"
 #include "options.h"
@@ -28,14 +30,19 @@
 #include <libaegisub/make_unique.h>
 
 void InitializeRuntimeOptionalFacilities(AppRuntimeInitOptions const& options) {
-	if (options.register_automation_script_factory)
-		Automation4::ScriptFactory::Register(agi::make_unique<Automation4::LuaScriptFactory>());
+	if (options.register_automation_script_factory) {
+		if (!Automation4::AutomationEngineRegistry::FindEngine("Lua"))
+			Automation4::AutomationEngineRegistry::Register(agi::make_unique<Automation4::LuaAutomationEngine>());
+	}
 
 	if (options.warm_subtitles_provider_font_cache)
 		libass::CacheFonts();
 
 	if (options.load_global_scripts)
 		config::global_scripts = new Automation4::AutoloadScriptManager(OPT_GET("Path/Automation/Autoload")->GetString());
+
+	if (options.shell_mode == RuntimeShellMode::Gui && !config::automation_debug_service)
+		config::automation_debug_service = new Automation4::AutomationDebugService();
 
 	if (options.register_export_filters) {
 		AssExportFilterChain::Register(agi::make_unique<AssFixStylesFilter>());
@@ -53,6 +60,11 @@ void CleanupRuntimeOptionalFacilities() {
 	if (config::global_scripts) {
 		delete config::global_scripts;
 		config::global_scripts = nullptr;
+	}
+
+	if (config::automation_debug_service) {
+		delete config::automation_debug_service;
+		config::automation_debug_service = nullptr;
 	}
 
 	AssExportFilterChain::Clear();

@@ -16,6 +16,7 @@
 #pragma once
 
 #include "ass_info_service.h"
+#include "automation_session_service.h"
 #include "headless_playback_probe.h"
 #include "media_inspect_service.h"
 #include "project_session_service.h"
@@ -36,6 +37,8 @@ using PlaybackSessionRequest = aegisub::playback_session_service::PlaybackSessio
 using PlaybackSessionResult = aegisub::playback_session_service::PlaybackSessionResult;
 using ProjectSessionRequest = aegisub::project_session_service::ProjectSessionRequest;
 using ProjectSessionResult = aegisub::project_session_service::ProjectSessionResult;
+using AutomationSessionRequest = aegisub::automation_session_service::AutomationSessionRequest;
+using AutomationSessionResult = aegisub::automation_session_service::AutomationSessionResult;
 using MediaInspectRequest = aegisub::media_inspect_service::MediaInspectRequest;
 using MediaInspectResult = aegisub::media_inspect_service::MediaInspectResult;
 using AssInfoInspectRequest = aegisub::ass_info_service::AssInfoInspectRequest;
@@ -59,6 +62,10 @@ struct SessionProjectCommand {
 	ProjectSessionRequest request;
 };
 
+struct SessionAutomationCommand {
+	AutomationSessionRequest request;
+};
+
 struct InspectMediaCommand {
 	MediaInspectRequest request;
 };
@@ -75,6 +82,7 @@ using Command = std::variant<
 	ProbePlaybackCommand,
 	SessionPlaybackCommand,
 	SessionProjectCommand,
+	SessionAutomationCommand,
 	InspectMediaCommand,
 	InspectAssInfoCommand,
 	InspectTraceCommand>;

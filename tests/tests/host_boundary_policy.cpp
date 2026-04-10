@@ -732,14 +732,14 @@ TEST(host_boundary_policy, headless_runtime_bootstrap_uses_minimal_runtime_init_
 
 	auto commands_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.initialize_commands = false;");
 	auto locale_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.initialize_ui_locale = false;");
-	auto automation_factory_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.register_automation_script_factory = false;");
+	auto automation_factory_enabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.register_automation_script_factory = true;");
 	auto font_warmup_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.warm_subtitles_provider_font_cache = false;");
 	auto export_filters_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.register_export_filters = false;");
 	auto png_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.install_png_handler = false;");
 
 	EXPECT_FALSE(commands_disabled_hits.empty());
 	EXPECT_FALSE(locale_disabled_hits.empty());
-	EXPECT_FALSE(automation_factory_disabled_hits.empty());
+	EXPECT_FALSE(automation_factory_enabled_hits.empty());
 	EXPECT_FALSE(font_warmup_disabled_hits.empty());
 	EXPECT_FALSE(export_filters_disabled_hits.empty());
 	EXPECT_FALSE(png_disabled_hits.empty());
@@ -1056,6 +1056,7 @@ TEST(host_boundary_policy, shared_playback_project_session_sources_live_in_named
 		"src/project_query_service.cpp",
 	};
 	std::set<std::string> const expected_core_sources = {
+		"src/automation_session_service.cpp",
 		"src/playback_probe_service.cpp",
 		"src/playback_session_service.cpp",
 		"src/project_session_service.cpp",

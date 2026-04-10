@@ -34,6 +34,10 @@
 
 #pragma once
 
+#include "automation/engine/automation_script_instance.h"
+#include "automation/automation_runtime_state_snapshot.h"
+#include "automation/automation_runtime_trace_sink.h"
+
 #include <libaegisub/background_runner.h>
 #include <libaegisub/exception.h>
 #include <libaegisub/fs_fwd.h>
@@ -43,11 +47,11 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 class AssStyle;
-class DialogProgress;
 class wxWindow;
 class wxDialog;
 
@@ -56,6 +60,9 @@ namespace agi { class FileDialogService; }
 namespace cmd { class Command; }
 
 namespace Automation4 {
+	class AutomationHost;
+	class AutomationDebugSession;
+
 	DEFINE_EXCEPTION(AutomationError, agi::Exception);
 	DEFINE_EXCEPTION(ScriptLoadError, AutomationError);
 	DEFINE_EXCEPTION(MacroRunError, AutomationError);
@@ -67,12 +74,14 @@ namespace Automation4 {
 
 	class ExportFilter : public AssExportFilter {
 		std::unique_ptr<ScriptDialog> config_dialog;
+		std::shared_ptr<AutomationHost> automation_host;
 
 		/// subclasses should implement this, producing a new ScriptDialog
 		virtual std::unique_ptr<ScriptDialog> GenerateConfigDialog(wxWindow *parent, agi::Context *c) = 0;
 
 	protected:
 		std::string GetScriptSettingsIdentifier();
+		std::shared_ptr<AutomationHost> GetAutomationHost() const { return automation_host; }
 
 	public:
 		ExportFilter(std::string const& name, std::string const& description, int priority);
@@ -122,7 +131,9 @@ namespace Automation4 {
 	};
 
 	class BackgroundScriptRunner {
-		std::unique_ptr<DialogProgress> impl;
+		std::unique_ptr<agi::BackgroundRunner> impl;
+		wxWindow *parent = nullptr;
+		std::string title;
 		std::shared_ptr<agi::FileDialogService> file_dialog_service;
 
 	public:
@@ -134,6 +145,11 @@ namespace Automation4 {
 		void Run(std::function<void(ProgressSink*)> task);
 
 		BackgroundScriptRunner(wxWindow *parent, std::string const& title, std::shared_ptr<agi::FileDialogService> file_dialog_service = {});
+		BackgroundScriptRunner(
+			std::unique_ptr<agi::BackgroundRunner> impl,
+			wxWindow *parent,
+			std::string title,
+			std::shared_ptr<agi::FileDialogService> file_dialog_service = {});
 		~BackgroundScriptRunner();
 	};
 
@@ -178,7 +194,7 @@ namespace Automation4 {
 		ProgressSink(agi::ProgressSink *impl, BackgroundScriptRunner *bsr);
 	};
 
-	class Script {
+	class Script : public AutomationScriptInstance {
 		agi::fs::path filename;
 
 	protected:
@@ -194,7 +210,7 @@ namespace Automation4 {
 		virtual void Reload() = 0;
 
 		/// The script's file name with path
-		agi::fs::path GetFilename() const { return filename; }
+		agi::fs::path GetFilename() const override { return filename; }
 		/// The script's file name without path
 		agi::fs::path GetPrettyFilename() const { return filename.filename(); }
 		/// The script's name. Not required to be unique.
@@ -212,6 +228,16 @@ namespace Automation4 {
 		virtual std::vector<cmd::Command*> GetMacros() const=0;
 		/// Get a list of export filters provided by this script
 		virtual std::vector<ExportFilter*> GetFilters() const=0;
+		/// Name of the runtime engine backing the script
+		virtual std::string GetEngineName() const { return ""; }
+		/// Get the current automation runtime snapshot when supported by the engine
+		virtual std::optional<AutomationRuntimeStateSnapshot> TryGetRuntimeStateSnapshot() const { return std::nullopt; }
+		/// Install an engine-agnostic runtime trace sink when supported by the engine
+		virtual void SetRuntimeTraceSink(AutomationRuntimeTraceSink*) { }
+		/// Install an engine-agnostic automation host when supported by the engine
+		virtual void SetAutomationHost(std::shared_ptr<AutomationHost>) { }
+		/// Install an engine-agnostic debug session when supported by the engine
+		virtual void SetDebugSession(AutomationDebugSession*) { }
 	};
 
 	/// A manager of loaded automation scripts
@@ -265,47 +291,19 @@ namespace Automation4 {
 		void Reload() override;
 	};
 
-	/// Both a base class for script factories and a manager of registered
-	/// script factories
 	class ScriptFactory {
-		std::string engine_name;
-		std::string filename_pattern;
-
-		/// Load a file, or return nullptr if the file is not in a supported
-		/// format. If the file is in a supported format but is invalid, a
-		/// script should be returned which returns false from IsLoaded and
-		/// an appropriate error message from GetDescription.
-		///
-		/// This is private as it should only ever be called through
-		/// CreateFromFile
-		virtual std::unique_ptr<Script> Produce(agi::fs::path const& filename) const = 0;
-
-		static std::vector<std::unique_ptr<ScriptFactory>>& Factories();
-
-	protected:
-		ScriptFactory(std::string engine_name, std::string filename_pattern);
-
 	public:
-		virtual ~ScriptFactory() = default;
-
-		/// Name of this automation engine
-		const std::string& GetEngineName() const { return engine_name; }
-		/// Extension which this engine supports
-		const std::string& GetFilenamePattern() const { return filename_pattern; }
-
-		/// Register an automation engine.
-		static void Register(std::unique_ptr<ScriptFactory> factory);
-
 		/// Get the full wildcard string for all loaded engines
 		static std::string GetWildcardStr();
 
 		/// Load a script from a file
 		/// @param filename Script to load
-		/// @param complain_about_unrecognised Should an error be displayed for files that aren't automation scripts?
 		/// @param create_unknown Create a placeholder rather than returning nullptr if no script engine supports the file
-		static std::unique_ptr<Script> CreateFromFile(agi::fs::path const& filename, bool complain_about_unrecognised, bool create_unknown=true);
-
-		static const std::vector<std::unique_ptr<ScriptFactory>>& GetFactories();
+		/// @param recognised_out Optional out flag which receives whether any automation engine recognised the file
+		static std::unique_ptr<Script> CreateFromFile(
+			agi::fs::path const& filename,
+			bool create_unknown = true,
+			bool *recognised_out = nullptr);
 	};
 
 	/// A script which represents a file not recognized by any registered

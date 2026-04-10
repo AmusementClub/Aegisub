@@ -38,6 +38,11 @@
 #include "ass_file.h"
 #include "ass_info.h"
 #include "ass_style.h"
+#include "automation/automation_debug_session.h"
+#include "automation/automation_debug_service.h"
+#include "automation/automation_live_host.h"
+#include "automation/automation_lua_debug_backend.h"
+#include "automation/automation_lua_runtime.h"
 #include "async_video_provider.h"
 #include "auto4_lua_factory.h"
 #include "audio_controller.h"
@@ -72,11 +77,14 @@
 #include <wx/clipbrd.h>
 #include <wx/log.h>
 #include <wx/msgdlg.h>
+#include <wx/translation.h>
 
 using namespace agi::lua;
 using namespace Automation4;
 
 namespace {
+	constexpr char kTemplateDebugEnabledRegistryKey[] = "automation_template_debug_enabled";
+
 	wxString get_wxstring(lua_State *L, int idx)
 	{
 		return wxString::FromUTF8(lua_tostring(L, idx));
@@ -87,44 +95,30 @@ namespace {
 		return to_wx(check_string(L, idx));
 	}
 
-	void set_context(lua_State *L, const agi::Context *c)
+	AutomationHost *get_host(lua_State *L)
 	{
-		// Explicit cast is needed to discard the const
-		push_value(L, (void *)c);
-		lua_setfield(L, LUA_REGISTRYINDEX, "project_context");
-	}
-
-	const agi::Context *get_context(lua_State *L)
-	{
-		lua_getfield(L, LUA_REGISTRYINDEX, "project_context");
-		if (!lua_islightuserdata(L, -1)) {
-			lua_pop(L, 1);
-			return nullptr;
-		}
-		const agi::Context * c = static_cast<const agi::Context *>(lua_touserdata(L, -1));
-		lua_pop(L, 1);
-		return c;
+		return LuaGetAutomationHost(L);
 	}
 
 	int get_file_name(lua_State *L)
 	{
-		const agi::Context *c = get_context(L);
-		if (!c) {
-			lua_pushnil(L);
-			return 1;
+		if (auto *host = get_host(L)) {
+			if (auto filename = host->TryGetFileName()) {
+				push_value(L, *filename);
+				return 1;
+			}
 		}
-		auto core = c->GetCore();
-		if (!core.subsController->Filename().empty())
-			push_value(L, core.subsController->Filename().filename());
-		else
-			lua_pushnil(L);
+		lua_pushnil(L);
 		return 1;
 	}
 
 	int get_translation(lua_State *L)
 	{
 		wxString str(check_wxstring(L, 1));
-		push_value(L, wxGetTranslation(str).utf8_str());
+		if (wxTranslations::Get())
+			push_value(L, wxGetTranslation(str).utf8_str());
+		else
+			push_value(L, str.utf8_str());
 		return 1;
 	}
 
@@ -161,49 +155,41 @@ namespace {
 
 	int frame_from_ms(lua_State *L)
 	{
-		const agi::Context *c = get_context(L);
 		int ms = lua_tointeger(L, -1);
 		lua_pop(L, 1);
-		if (!c) {
-			lua_pushnil(L);
-			return 1;
+		if (auto *host = get_host(L)) {
+			if (auto frame = host->Media().FrameFromMs(ms)) {
+				push_value(L, *frame);
+				return 1;
+			}
 		}
-		auto core = c->GetCore();
-		if (core.project->Timecodes().IsLoaded())
-			push_value(L, core.videoController->FrameAtTime(ms, agi::vfr::START));
-		else
-			lua_pushnil(L);
+		lua_pushnil(L);
 
 		return 1;
 	}
 
 	int ms_from_frame(lua_State *L)
 	{
-		const agi::Context *c = get_context(L);
 		int frame = lua_tointeger(L, -1);
 		lua_pop(L, 1);
-		if (!c) {
-			lua_pushnil(L);
-			return 1;
+		if (auto *host = get_host(L)) {
+			if (auto ms = host->Media().MsFromFrame(frame)) {
+				push_value(L, *ms);
+				return 1;
+			}
 		}
-		auto core = c->GetCore();
-		if (core.project->Timecodes().IsLoaded())
-			push_value(L, core.videoController->TimeAtFrame(frame, agi::vfr::START));
-		else
-			lua_pushnil(L);
+		lua_pushnil(L);
 		return 1;
 	}
 
 	int video_size(lua_State *L)
 	{
-		const agi::Context *c = get_context(L);
-		if (c) {
-			auto core = c->GetCore();
-			if (auto provider = core.project->VideoProvider()) {
-				push_value(L, provider->GetWidth());
-				push_value(L, provider->GetHeight());
-				push_value(L, core.videoController->GetAspectRatioValue());
-				push_value(L, (int)core.videoController->GetAspectRatioType());
+		if (auto *host = get_host(L)) {
+			if (auto video = host->Media().TryGetVideoInfo()) {
+				push_value(L, video->width);
+				push_value(L, video->height);
+				push_value(L, video->aspect_ratio);
+				push_value(L, video->aspect_ratio_type);
 				return 4;
 			}
 		}
@@ -213,9 +199,8 @@ namespace {
 
 	int get_keyframes(lua_State *L)
 	{
-		if (const agi::Context *c = get_context(L)) {
-			auto core = c->GetCore();
-			push_value(L, core.project->Keyframes());
+		if (auto *host = get_host(L)) {
+			push_value(L, host->Media().GetKeyframes());
 		}
 		else
 			lua_pushnil(L);
@@ -226,10 +211,8 @@ namespace {
 	{
 		std::string path = check_string(L, 1);
 		lua_pop(L, 1);
-		if (const agi::Context *c = get_context(L)) {
-			auto core = c->GetCore();
-			push_value(L, core.path->Decode(path));
-		}
+		if (auto *host = get_host(L))
+			push_value(L, host->DecodePath(path));
 		else
 			push_value(L, config::path->Decode(path));
 		return 1;
@@ -239,6 +222,21 @@ namespace {
 	{
 		lua_pushnil(L);
 		throw error_tag();
+	}
+
+	int lua_set_debug_template_context(lua_State *L)
+	{
+		LuaSetAutomationTemplateDebugContext(L, lua_gettop(L) >= 1 ? 1 : 0);
+		return 0;
+	}
+
+	int lua_is_debug_template_enabled(lua_State *L)
+	{
+		lua_getfield(L, LUA_REGISTRYINDEX, kTemplateDebugEnabledRegistryKey);
+		bool enabled = !!lua_toboolean(L, -1);
+		lua_pop(L, 1);
+		push_value(L, enabled);
+		return 1;
 	}
 
 	int lua_text_textents(lua_State *L)
@@ -277,44 +275,38 @@ namespace {
 
 	int lua_get_audio_selection(lua_State *L)
 	{
-		const agi::Context *c = get_context(L);
-		if (!c) {
-			lua_pushnil(L);
-			return 1;
+		if (auto *host = get_host(L)) {
+			if (auto audio_selection = host->Media().TryGetAudioSelection()) {
+				push_value(L, audio_selection->begin);
+				push_value(L, audio_selection->end);
+				return 2;
+			}
 		}
-		auto core = c->GetCore();
-		if (!core.audioController || !core.audioController->GetTimingController()) {
-			lua_pushnil(L);
-			return 1;
-		}
-		const TimeRange range = core.audioController->GetTimingController()->GetActiveLineRange();
-		push_value(L, range.begin());
-		push_value(L, range.end());
-		return 2;
+		lua_pushnil(L);
+		return 1;
 	}
 
 	int lua_set_status_text(lua_State *L)
 	{
-		const agi::Context *c = get_context(L);
-		if (!c) {
+		auto *host = get_host(L);
+		if (!host) {
 			lua_pushnil(L);
 			return 1;
 		}
 		std::string text = check_string(L, 1);
 		lua_pop(L, 1);
-		c->ShowStatus(text);
+		host->Ui().ShowStatus(text);
 		return 0;
 	}
 
 	int project_properties(lua_State *L)
 	{
-		const agi::Context *c = get_context(L);
-		if (!c)
+		auto *host = get_host(L);
+		if (!host)
 			lua_pushnil(L);
-		else {
-			auto core = c->GetCore();
+		else if (auto project = host->TryGetProjectProperties()) {
 			lua_createtable(L, 0, 14);
-#define PUSH_FIELD(name) set_field(L, #name, core.ass->Properties.name)
+#define PUSH_FIELD(name) set_field(L, #name, project->name)
 			PUSH_FIELD(automation_scripts);
 			PUSH_FIELD(export_filters);
 			PUSH_FIELD(export_encoding);
@@ -326,11 +318,13 @@ namespace {
 			PUSH_FIELD(ar_mode);
 			PUSH_FIELD(video_position);
 #undef PUSH_FIELD
-			set_field(L, "audio_file", core.path->MakeAbsolute(core.ass->Properties.audio_file, "?script"));
-			set_field(L, "video_file", core.path->MakeAbsolute(core.ass->Properties.video_file, "?script"));
-			set_field(L, "timecodes_file", core.path->MakeAbsolute(core.ass->Properties.timecodes_file, "?script"));
-			set_field(L, "keyframes_file", core.path->MakeAbsolute(core.ass->Properties.keyframes_file, "?script"));
+			set_field(L, "audio_file", project->audio_file);
+			set_field(L, "video_file", project->video_file);
+			set_field(L, "timecodes_file", project->timecodes_file);
+			set_field(L, "keyframes_file", project->keyframes_file);
 		}
+		else
+			lua_pushnil(L);
 		return 1;
 	}
 
@@ -352,9 +346,9 @@ namespace {
 	/// @param nargs Number of arguments the function takes
 	/// @param nresults Number of values the function returns
 	/// @param bsr Background script runner to use for the progress dialog
-	/// @param can_open_config Can the function open its own dialogs?
+	/// @param invocation Structured invocation metadata for the current feature call.
 	/// @throws agi::UserCancelException if the function fails to run to completion (either due to cancelling or errors)
-	void LuaThreadedCall(lua_State *L, int nargs, int nresults, BackgroundScriptRunner &bsr, bool can_open_config);
+	void LuaThreadedCall(lua_State *L, int nargs, int nresults, BackgroundScriptRunner &bsr, AutomationInvocation const& invocation);
 
 	class LuaCommand final : public cmd::Command, private LuaFeature {
 		std::string cmd_name;
@@ -395,6 +389,11 @@ namespace {
 	};
 	class LuaScript final : public Script {
 		lua_State *L = nullptr;
+		std::shared_ptr<AutomationHost> automation_host;
+		void const* automation_host_identity = nullptr;
+		AutomationRuntimeTraceSink *runtime_trace_sink = nullptr;
+		AutomationDebugSession *debug_session = nullptr;
+		std::unique_ptr<AutomationLuaDebugBackend> debug_backend;
 
 		std::string name;
 		std::string description;
@@ -420,6 +419,13 @@ namespace {
 		void RegisterFilter(LuaExportFilter *filter);
 
 		static LuaScript* GetScriptObject(lua_State *L);
+		std::shared_ptr<AutomationHost> GetAutomationHost() const { return automation_host; }
+		bool MatchesAutomationHostContext(agi::Context const* context) const
+		{
+			return automation_host && automation_host_identity == context;
+		}
+		AutomationDebugBackend *GetDebugBackend() const { return debug_backend.get(); }
+		AutomationDebugSession *GetDebugSession() const { return debug_session; }
 
 		// Script implementation
 		void Reload() override { Create(); }
@@ -432,6 +438,15 @@ namespace {
 
 		std::vector<cmd::Command*> GetMacros() const override { return macros; }
 		std::vector<ExportFilter*> GetFilters() const override;
+		std::string GetEngineName() const override { return "Lua"; }
+		std::optional<AutomationRuntimeStateSnapshot> TryGetRuntimeStateSnapshot() const override;
+		void SetRuntimeTraceSink(AutomationRuntimeTraceSink *sink) override;
+		void SetAutomationHost(std::shared_ptr<AutomationHost> host) override;
+		void SetAutomationHostForContext(std::shared_ptr<AutomationHost> host, agi::Context const* context);
+		void SetDebugSession(AutomationDebugSession *session) override;
+
+	private:
+		void UpdateTemplateDebugEnabledFlag();
 	};
 
 	LuaScript::LuaScript(agi::fs::path const& filename)
@@ -452,6 +467,9 @@ namespace {
 			description = "Could not initialize Lua state";
 			return;
 		}
+		debug_backend = agi::make_unique<AutomationLuaDebugBackend>(L, GetFilename());
+		if (debug_session)
+			debug_backend->SetSession(debug_session);
 
 		bool loaded = false;
 		auto cleanup_on_failure = agi::make_scope_exit([&] {
@@ -493,6 +511,12 @@ namespace {
 		lua_setfield(L, LUA_REGISTRYINDEX, "aegisub");
 		stackcheck.check_stack(0);
 
+		if (automation_host)
+			LuaSetAutomationHost(L, automation_host);
+		if (runtime_trace_sink)
+			LuaSetAutomationRuntimeTraceSink(L, runtime_trace_sink);
+		UpdateTemplateDebugEnabledFlag();
+
 		// make "aegisub" table
 		lua_pushstring(L, "aegisub");
 		lua_createtable(L, 0, 13);
@@ -506,6 +530,8 @@ namespace {
 		set_field<get_keyframes>(L, "keyframes");
 		set_field<decode_path>(L, "decode_path");
 		set_field<cancel_script>(L, "cancel");
+		set_field<lua_set_debug_template_context>(L, "__set_debug_template_context");
+		set_field<lua_is_debug_template_enabled>(L, "__is_debug_template_enabled");
 		set_field(L, "lua_automation_version", 4);
 		set_field<clipboard_init>(L, "__init_clipboard");
 		set_field<get_file_name>(L, "file_name");
@@ -517,6 +543,7 @@ namespace {
 		// store aegisub table to globals
 		lua_settable(L, LUA_GLOBALSINDEX);
 		stackcheck.check_stack(0);
+		debug_backend->CaptureRuntimeBaseline();
 
 		// load user script
 		if (!LoadFile(L, GetFilename())) {
@@ -565,6 +592,7 @@ namespace {
 	{
 		// Assume the script object is clean if there's no Lua state
 		if (!L) return;
+		debug_backend.reset();
 
 		// loops backwards because commands remove themselves from macros when
 		// they're unregistered
@@ -583,6 +611,53 @@ namespace {
 		ret.reserve(filters.size());
 		for (auto& filter : filters) ret.push_back(filter.get());
 		return ret;
+	}
+
+	std::optional<AutomationRuntimeStateSnapshot> LuaScript::TryGetRuntimeStateSnapshot() const
+	{
+		if (!L)
+			return std::nullopt;
+		return LuaGetAutomationRuntimeStateSnapshot(L);
+	}
+
+	void LuaScript::UpdateTemplateDebugEnabledFlag()
+	{
+		if (!L)
+			return;
+		push_value(L, debug_session || runtime_trace_sink);
+		lua_setfield(L, LUA_REGISTRYINDEX, kTemplateDebugEnabledRegistryKey);
+	}
+
+	void LuaScript::SetRuntimeTraceSink(AutomationRuntimeTraceSink *sink)
+	{
+		runtime_trace_sink = sink;
+		if (L) {
+			LuaSetAutomationRuntimeTraceSink(L, sink);
+			UpdateTemplateDebugEnabledFlag();
+		}
+	}
+
+	void LuaScript::SetAutomationHost(std::shared_ptr<AutomationHost> host)
+	{
+		SetAutomationHostForContext(std::move(host), nullptr);
+	}
+
+	void LuaScript::SetAutomationHostForContext(std::shared_ptr<AutomationHost> host, agi::Context const* context)
+	{
+		automation_host = std::move(host);
+		automation_host_identity = automation_host
+			? (context ? static_cast<void const*>(context) : automation_host->ProjectContextIdentity())
+			: nullptr;
+		if (L)
+			LuaSetAutomationHost(L, automation_host);
+	}
+
+	void LuaScript::SetDebugSession(AutomationDebugSession *session)
+	{
+		debug_session = session;
+		UpdateTemplateDebugEnabledFlag();
+		if (debug_backend)
+			debug_backend->SetSession(session);
 	}
 
 	void LuaScript::RegisterCommand(LuaCommand *command)
@@ -614,6 +689,48 @@ namespace {
 		return (LuaScript*)ptr;
 	}
 
+	std::shared_ptr<AutomationHost> EnsureLuaScriptHost(lua_State *L, agi::Context const* context)
+	{
+		auto *script = LuaScript::GetScriptObject(L);
+		auto host = script->GetAutomationHost();
+		if (context && !script->MatchesAutomationHostContext(context)) {
+			host = CreateAutomationLiveHost(context);
+			script->SetAutomationHostForContext(host, context);
+		}
+		return host;
+	}
+
+	std::shared_ptr<AutomationDebugSession> PrepareLuaDebugSession(lua_State *L, AutomationInvocation const& invocation)
+	{
+		auto *script = LuaScript::GetScriptObject(L);
+		if (!script)
+			return {};
+
+		if (script->GetDebugSession())
+			return {};
+
+		if (!config::automation_debug_service || !config::automation_debug_service->IsEnabled())
+			return {};
+
+		auto session = config::automation_debug_service->PrepareSession({
+			script->GetEngineName(),
+			script->GetFilename(),
+			invocation.feature_name
+		});
+		script->SetDebugSession(session.get());
+		return session;
+	}
+
+	void FinalizeLuaDebugSession(lua_State *L, std::shared_ptr<AutomationDebugSession> const& session)
+	{
+		if (!session)
+			return;
+		if (auto *script = LuaScript::GetScriptObject(L))
+			script->SetDebugSession(nullptr);
+		if (config::automation_debug_service)
+			config::automation_debug_service->ClearSession(session);
+	}
+
 
 	int LuaScript::LuaInclude(lua_State *L)
 	{
@@ -631,6 +748,20 @@ namespace {
 				if (agi::fs::FileExists(filepath))
 					break;
 			}
+
+			if (!agi::fs::FileExists(filepath)) {
+				for (auto probe = s->GetFilename().parent_path(); !probe.empty();) {
+					auto candidate = probe / "include" / filename;
+					if (agi::fs::FileExists(candidate)) {
+						filepath = std::move(candidate);
+						break;
+					}
+					auto parent = probe.parent_path();
+					if (parent == probe)
+						break;
+					probe = std::move(parent);
+				}
+			}
 		}
 
 		if (!agi::fs::FileExists(filepath))
@@ -644,11 +775,14 @@ namespace {
 		return lua_gettop(L) - pretop;
 	}
 
-	void LuaThreadedCall(lua_State *L, int nargs, int nresults, BackgroundScriptRunner &bsr, bool can_open_config)
+	void LuaThreadedCall(lua_State *L, int nargs, int nresults, BackgroundScriptRunner &bsr, AutomationInvocation const& invocation)
 	{
 		bool failed = false;
 		bsr.Run([&](ProgressSink *ps) {
-			LuaProgressSink lps(L, ps, can_open_config);
+			LuaProgressSink lps(L, ps, invocation);
+			ScopedAutomationDebugInvocation debug_invocation(
+				LuaScript::GetScriptObject(L)->GetDebugBackend(),
+				invocation);
 
 			// Insert our error handler under the function to call
 			lua_pushcclosure(L, add_stack_trace, 0);
@@ -772,18 +906,31 @@ namespace {
 	{
 		if (!(cmd_type & cmd::COMMAND_VALIDATE)) return true;
 		auto core = c->GetCore();
+		auto invocation = MakeMacroValidateInvocation(cmd_name);
+		auto rows = selected_rows(c);
+		int active_row = 0;
+		if (auto active_line = core.selectionController->GetActiveLine())
+			active_row = active_line->Row + core.ass->Info.size() + core.ass->Styles.size() + 1;
 
-		set_context(L, c);
+		auto host = EnsureLuaScriptHost(L, c);
+		auto debug_session = PrepareLuaDebugSession(L, invocation);
+		auto clear_debug_session = agi::make_scope_exit([&] {
+			FinalizeLuaDebugSession(L, debug_session);
+		});
+		LuaSetAutomationRuntimeState(L, host, invocation, rows, active_row);
 
 		// Error handler goes under the function to call
 		lua_pushcclosure(L, add_stack_trace, 0);
 
 		GetFeatureFunction("validate");
-		auto subsobj = new LuaAssFile(L, core.ass.get());
+		auto subsobj = LuaAssFile::Create(
+			L, core.ass.get(),
+			invocation.capabilities.allow_modify,
+			invocation.capabilities.allow_undo);
 
-		push_value(L, selected_rows(c));
-		if (auto active_line = core.selectionController->GetActiveLine())
-			push_value(L, active_line->Row + core.ass->Info.size() + core.ass->Styles.size() + 1);
+		push_value(L, rows);
+		if (active_row)
+			push_value(L, active_row);
 		else
 			lua_pushnil(L);
 
@@ -813,27 +960,35 @@ namespace {
 	{
 		LuaStackcheck stackcheck(L);
 		auto core = c->GetCore();
-		set_context(L, c);
-		stackcheck.check_stack(0);
-
-		GetFeatureFunction("run");
-		auto subsobj = new LuaAssFile(L, core.ass.get(), true, true);
-
+		auto invocation = MakeMacroRunInvocation(cmd_name);
 		int original_offset = core.ass->Info.size() + core.ass->Styles.size() + 1;
 		auto original_sel = selected_rows(c);
 		int original_active = 0;
 		if (auto active_line = core.selectionController->GetActiveLine())
 			original_active = active_line->Row + original_offset;
+		auto host = EnsureLuaScriptHost(L, c);
+		auto debug_session = PrepareLuaDebugSession(L, invocation);
+		auto clear_debug_session = agi::make_scope_exit([&] {
+			FinalizeLuaDebugSession(L, debug_session);
+		});
+		LuaSetAutomationRuntimeState(L, host, invocation, original_sel, original_active);
+		stackcheck.check_stack(0);
+
+		GetFeatureFunction("run");
+		auto subsobj = LuaAssFile::Create(
+			L, core.ass.get(),
+			invocation.capabilities.allow_modify,
+			invocation.capabilities.allow_undo);
 
 		push_value(L, original_sel);
 		push_value(L, original_active);
 
-		auto runner = c->CreateAutomationBackgroundScriptRunner(from_wx(StrDisplay(c)));
+		auto runner = host ? host->Ui().CreateBackgroundScriptRunner(from_wx(StrDisplay(c))) : std::unique_ptr<BackgroundScriptRunner>{};
 		if (!runner)
 			throw AutomationError("Automation background runner unavailable");
 
 		try {
-			LuaThreadedCall(L, 3, 2, *runner, true);
+			LuaThreadedCall(L, 3, 2, *runner, invocation);
 		}
 		catch (agi::UserCancelException const&) {
 			subsobj->Cancel();
@@ -921,17 +1076,30 @@ namespace {
 	{
 		if (!(cmd_type & cmd::COMMAND_TOGGLE)) return false;
 		auto core = c->GetCore();
+		auto invocation = MakeMacroIsActiveInvocation(cmd_name);
+		auto rows = selected_rows(c);
+		int active_row = 0;
+		if (auto active_line = core.selectionController->GetActiveLine())
+			active_row = active_line->Row + core.ass->Info.size() + core.ass->Styles.size() + 1;
 
 		LuaStackcheck stackcheck(L);
 
-		set_context(L, c);
+		auto host = EnsureLuaScriptHost(L, c);
+		auto debug_session = PrepareLuaDebugSession(L, invocation);
+		auto clear_debug_session = agi::make_scope_exit([&] {
+			FinalizeLuaDebugSession(L, debug_session);
+		});
+		LuaSetAutomationRuntimeState(L, host, invocation, rows, active_row);
 		stackcheck.check_stack(0);
 
 		GetFeatureFunction("isactive");
-		auto subsobj = new LuaAssFile(L, core.ass.get());
-		push_value(L, selected_rows(c));
-		if (auto active_line = core.selectionController->GetActiveLine())
-			push_value(L, active_line->Row + core.ass->Info.size() + core.ass->Styles.size() + 1);
+		auto subsobj = LuaAssFile::Create(
+			L, core.ass.get(),
+			invocation.capabilities.allow_modify,
+			invocation.capabilities.allow_undo);
+		push_value(L, rows);
+		if (active_row)
+			push_value(L, active_row);
 
 		int err = lua_pcall(L, 3, 1, 0);
 		subsobj->ProcessingComplete();
@@ -991,13 +1159,28 @@ namespace {
 	void LuaExportFilter::ProcessSubs(AssFile *subs, wxWindow *export_dialog)
 	{
 		LuaStackcheck stackcheck(L);
+		auto invocation = MakeExportFilterRunInvocation(GetName());
+		auto debug_session = PrepareLuaDebugSession(L, invocation);
+		auto clear_debug_session = agi::make_scope_exit([&] {
+			FinalizeLuaDebugSession(L, debug_session);
+		});
+		auto host = LuaScript::GetScriptObject(L)->GetAutomationHost();
+		if (!host) {
+			host = GetAutomationHost();
+			if (host)
+				LuaScript::GetScriptObject(L)->SetAutomationHost(host);
+		}
+		LuaSetAutomationRuntimeState(L, host, invocation, {}, 0);
 
 		GetFeatureFunction("run");
 		stackcheck.check_stack(1);
 
 		// The entire point of an export filter is to modify the file, but
 		// setting undo points makes no sense
-		auto subsobj = new LuaAssFile(L, subs, true);
+		auto subsobj = LuaAssFile::Create(
+			L, subs,
+			invocation.capabilities.allow_modify,
+			invocation.capabilities.allow_undo);
 		assert(lua_isuserdata(L, -1));
 		stackcheck.check_stack(2);
 
@@ -1014,17 +1197,17 @@ namespace {
 		assert(lua_istable(L, -1));
 		stackcheck.check_stack(3);
 
-		auto file_dialog_service = Automation4::ResolveAutomationFileDialogService(
-			[&]() -> std::shared_ptr<agi::FileDialogService> {
-				if (auto const* context = get_context(L))
-					return context->GetFileDialogService();
-				return {};
-			}(),
-			export_dialog);
-
-		BackgroundScriptRunner runner(export_dialog, GetName(), std::move(file_dialog_service));
+		std::unique_ptr<BackgroundScriptRunner> runner;
+		if (host)
+			runner = host->Ui().CreateBackgroundScriptRunner(GetName(), AutomationUiAnchor{ export_dialog });
+		if (!runner) {
+			auto file_dialog_service = Automation4::ResolveAutomationFileDialogService(
+				host ? host->Ui().GetFileDialogService() : std::shared_ptr<agi::FileDialogService>{},
+				export_dialog);
+			runner = std::make_unique<BackgroundScriptRunner>(export_dialog, GetName(), std::move(file_dialog_service));
+		}
 		try {
-			LuaThreadedCall(L, 2, 0, runner, false);
+			LuaThreadedCall(L, 2, 0, *runner, invocation);
 			stackcheck.check_stack(0);
 			subsobj->ProcessingComplete();
 		}
@@ -1039,13 +1222,22 @@ namespace {
 		if (!has_config)
 			return nullptr;
 		auto core = c->GetCore();
+		auto invocation = MakeExportFilterConfigInvocation(GetName());
+		auto host = EnsureLuaScriptHost(L, c);
+		auto debug_session = PrepareLuaDebugSession(L, invocation);
+		auto clear_debug_session = agi::make_scope_exit([&] {
+			FinalizeLuaDebugSession(L, debug_session);
+		});
 
-		set_context(L, c);
+		LuaSetAutomationRuntimeState(L, host, invocation, {}, 0);
 
 		GetFeatureFunction("config");
 
 		// prepare function call
-		auto subsobj = new LuaAssFile(L, core.ass.get());
+		auto subsobj = LuaAssFile::Create(
+			L, core.ass.get(),
+			invocation.capabilities.allow_modify,
+			invocation.capabilities.allow_undo);
 		// stored options
 		lua_newtable(L); // TODO, nothing for now
 
@@ -1066,15 +1258,30 @@ namespace {
 }
 
 namespace Automation4 {
-	LuaScriptFactory::LuaScriptFactory()
-	: ScriptFactory("Lua", "*.lua,*.moon")
-	{
-	}
-
-	std::unique_ptr<Script> LuaScriptFactory::Produce(agi::fs::path const& filename) const
+	std::unique_ptr<AutomationScriptInstance> CreateLuaAutomationScriptInstance(agi::fs::path const& filename)
 	{
 		if (agi::fs::HasExtension(filename, "lua") || agi::fs::HasExtension(filename, "moon"))
 			return agi::make_unique<LuaScript>(filename);
 		return nullptr;
+	}
+
+	std::string LuaAutomationEngine::EngineName() const
+	{
+		return "Lua";
+	}
+
+	std::string LuaAutomationEngine::FilenamePattern() const
+	{
+		return "*.lua,*.moon";
+	}
+
+	bool LuaAutomationEngine::SupportsFile(agi::fs::path const& filename) const
+	{
+		return agi::fs::HasExtension(filename, "lua") || agi::fs::HasExtension(filename, "moon");
+	}
+
+	std::unique_ptr<AutomationScriptInstance> LuaAutomationEngine::LoadScript(agi::fs::path const& filename) const
+	{
+		return CreateLuaAutomationScriptInstance(filename);
 	}
 }

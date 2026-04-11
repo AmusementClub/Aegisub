@@ -52,8 +52,8 @@ class FrameMain : public wxFrame {
     void Thaw(void) {}
 #endif
 
-	bool showVideo = true; ///< Is the video display shown?
-	bool showAudio = true; ///< Is the audio display shown?
+	bool showVideo = false; ///< Is the video display shown?
+	bool showAudio = false; ///< Is the audio display shown?
 	wxTimer StatusClear;   ///< Status bar timeout timer
 #ifdef _WIN32
 	wxTimer FontChangeDebounce; ///< Debounces WM_FONTCHANGE bursts before refreshing subtitles

@@ -308,7 +308,12 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 		}
 	}
 
-	if (!any) return;
+	if (!any) {
+		wxBufferedPaintDC dc(this);
+		dc.SetBackground(row_colors.Default);
+		dc.Clear();
+		return;
+	}
 
 	int w = 0;
 	int h = 0;

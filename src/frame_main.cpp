@@ -70,6 +70,7 @@
 #include <libaegisub/make_unique.h>
 
 #include <wx/dnd.h>
+#include <wx/settings.h>
 #include <wx/sizer.h>
 #include <wx/statline.h>
 #include <wx/sysopt.h>
@@ -146,6 +147,9 @@ FrameMain::FrameMain()
 		GetAsyncUiLifetime());
 	core.audioPlayerFactoryService = agi::MakeFrameMainAudioPlayerFactoryService(this, GetAsyncUiLifetime());
 	core.automationBackgroundScriptRunnerFactory = agi::MakeFrameMainAutomationBackgroundScriptRunnerFactory(this, GetAsyncUiLifetime());
+
+	StartupLog("Set frame background for resize painting");
+	SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_APPWORKSPACE));
 
 	StartupLog("Apply saved Maximized state");
 	if (OPT_GET("App/Maximized")->GetBool()) Maximize(true);
@@ -247,6 +251,11 @@ void FrameMain::InitContents() {
 	MainSizer->Add(TopSizer,0,wxEXPAND | wxALL,0);
 	MainSizer->Add(ui.subsGrid,1,wxEXPAND | wxALL,0);
 	Panel->SetSizer(MainSizer);
+
+	// Hide video/audio initially to prevent black flash on startup.
+	// SetDisplayMode will show them when providers become available.
+	TopSizer->Show(videoBox, false);
+	ToolsSizer->Show(audioBox, false);
 
 	StartupLog("Perform layout");
 	Layout();
@@ -392,6 +401,15 @@ WXLRESULT FrameMain::MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lPa
 	if (message == WM_FONTCHANGE) {
 		FontChangeDebounce.SetOwner(this, ID_APP_TIMER_FONTCHANGE_DEBOUNCE);
 		FontChangeDebounce.Start(kFontChangeDebounceDelayMs, true);
+	}
+
+	if (message == WM_SIZE) {
+		WXLRESULT res = wxFrame::MSWWindowProc(message, wParam, lParam);
+		// Invalidate the entire frame after resize to prevent black areas.
+		// With WS_CLIPCHILDREN, newly-exposed gaps between the panel's old
+		// position and the frame's new edge are not repainted by default.
+		Refresh(false);
+		return res;
 	}
 
 	return wxFrame::MSWWindowProc(message, wParam, lParam);

@@ -37,6 +37,7 @@
 #include <libaegisub/dispatch.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/log.h>
+#include <libaegisub/path.h>
 
 #ifdef __UNIX__
 #include <unistd.h>
@@ -298,17 +299,25 @@ wxString FontFace(std::string opt_prefix) {
 }
 
 static wxString ResolveFileDialogPath(std::string const& option_name, std::string const& default_path) {
-	wxString path;
+	std::string path;
 	if (!default_path.empty())
-		path = to_wx(default_path);
+		path = default_path;
 	else if (!option_name.empty())
-		path = to_wx(OPT_GET(option_name)->GetString());
-	return path;
+		path = OPT_GET(option_name)->GetString();
+
+	if (path.empty())
+		return wxString();
+
+	if (config::path)
+		path = agi::fs::PathToString(config::path->Decode(path));
+	return to_wx(path);
 }
 
 static void UpdateFileDialogOption(std::string const& option_name, agi::fs::path const& filename) {
 	if (!filename.empty() && !option_name.empty())
-		OPT_SET(option_name)->SetString(agi::fs::PathToString(filename.parent_path()));
+		OPT_SET(option_name)->SetString(config::path && option_name.rfind("Path/Last/", 0) != 0
+			? config::path->Encode(filename.parent_path())
+			: agi::fs::PathToString(filename.parent_path()));
 }
 
 static agi::fs::path FileSelector(wxString const& message, std::string const& option_name, std::string const& default_path, std::string const& default_filename, std::string const& default_extension, std::string const& wildcard, int flags, wxWindow *parent) {
@@ -394,7 +403,7 @@ agi::fs::path SaveFileSelector(wxString const& message, std::string const& optio
 }
 
 agi::fs::path SelectDirectorySelector(wxString const& message, std::string const& default_path, wxWindow *parent) {
-	return from_wx(wxDirSelector(message, to_wx(default_path), 0, wxDefaultPosition, parent));
+	return from_wx(wxDirSelector(message, ResolveFileDialogPath("", default_path), 0, wxDefaultPosition, parent));
 }
 
 wxString LocalizedLanguageName(wxString const& lang) {

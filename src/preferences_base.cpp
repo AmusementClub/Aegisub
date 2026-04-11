@@ -68,7 +68,7 @@ static void browse_button(Preferences *prefs, wxTextCtrl *ctrl) {
 		agi::fs::PathToString(config::path->Decode(from_wx(ctrl->GetValue())))
 	});
 	if (!path.empty())
-		ctrl->SetValue(to_wx(agi::fs::PathToString(path)));
+		ctrl->SetValue(to_wx(config::path ? config::path->Encode(path) : agi::fs::PathToString(path)));
 }
 
 static void browse_file_button(Preferences *prefs, wxTextCtrl *ctrl, wxString const& wildcard) {
@@ -92,7 +92,7 @@ static void browse_file_button(Preferences *prefs, wxTextCtrl *ctrl, wxString co
 		from_wx(dir)
 	});
 	if (!path.empty())
-		ctrl->SetValue(to_wx(agi::fs::PathToString(path)));
+		ctrl->SetValue(to_wx(config::path ? config::path->Encode(path) : agi::fs::PathToString(path)));
 }
 
 static void configure_browse_widgets(OptionPage *page, wxTextCtrl *text, wxButton *browse, wxControl *enabler, bool do_enable) {

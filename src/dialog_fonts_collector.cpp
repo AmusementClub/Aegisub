@@ -267,7 +267,7 @@ DialogFontsCollector::DialogFontsCollector(agi::Context *c)
 	wxStaticBoxSizer *destination_box = new wxStaticBoxSizer(wxVERTICAL, this, _("Destination"));
 
 	dest_label = new wxStaticText(this, -1, wxS(" "));
-	dest_ctrl = new wxTextCtrl(this, -1, core.path->Decode(OPT_GET("Path/Fonts Collector Destination")->GetString()).wstring());
+	dest_ctrl = new wxTextCtrl(this, -1, to_wx(OPT_GET("Path/Fonts Collector Destination")->GetString()));
 	dest_browse_button = new wxButton(this, -1, _("&Browse..."));
 
 	wxSizer *dest_browse_sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -319,9 +319,10 @@ void DialogFontsCollector::OnStart(wxCommandEvent &) {
 	collection_log->ClearAll();
 	collection_log->SetReadOnly(true);
 
+	auto const destination_text = from_wx(dest_ctrl->GetValue());
 	agi::fs::path dest;
 	if (mode != FcMode::CheckFontsOnly) {
-		dest = path.Decode(mode == FcMode::CopyToScriptFolder ? "?script/" : from_wx(dest_ctrl->GetValue()));
+		dest = path.Decode(mode == FcMode::CopyToScriptFolder ? "?script/" : destination_text);
 
 		if (mode != FcMode::CopyToZip) {
 			if (agi::fs::FileExists(dest))
@@ -340,8 +341,12 @@ void DialogFontsCollector::OnStart(wxCommandEvent &) {
 		}
 	}
 
-	if (mode != FcMode::CheckFontsOnly)
-		OPT_SET("Path/Fonts Collector Destination")->SetString(agi::fs::PathToString(dest));
+	if (mode == FcMode::CopyToFolder || mode == FcMode::SymlinkToFolder || mode == FcMode::CopyToZip) {
+		auto stored_destination = path.Encode(dest);
+		if (!destination_text.empty() && destination_text[0] == '?')
+			stored_destination = destination_text;
+		OPT_SET("Path/Fonts Collector Destination")->SetString(stored_destination);
+	}
 
 	// Disable the UI while it runs as we don't support canceling
 	EnableCloseButton(false);
@@ -357,8 +362,9 @@ void DialogFontsCollector::OnStart(wxCommandEvent &) {
 
 void DialogFontsCollector::OnBrowse(wxCommandEvent &) {
 	agi::fs::path dest;
+	auto const current_dest = path.Decode(from_wx(dest_ctrl->GetValue()));
 	if (mode == FcMode::CopyToZip) {
-		auto current_path = wxFileName(dest_ctrl->GetValue());
+		auto current_path = wxFileName(current_dest.wstring());
 		dest = context->RequestSaveFile({
 			from_wx(_("Select archive file name")),
 			"",
@@ -371,11 +377,11 @@ void DialogFontsCollector::OnBrowse(wxCommandEvent &) {
 	else
 		dest = context->RequestSelectDirectory({
 			from_wx(_("Select folder to save fonts on")),
-			from_wx(dest_ctrl->GetValue())
+			agi::fs::PathToString(current_dest)
 		});
 
 	if (!dest.empty())
-		dest_ctrl->SetValue(to_wx(agi::fs::PathToString(dest)));
+		dest_ctrl->SetValue(to_wx(path.Encode(dest)));
 }
 
 void DialogFontsCollector::OnRadio(wxCommandEvent &evt) {
@@ -403,16 +409,16 @@ void DialogFontsCollector::UpdateControls() {
 
 			// Remove filename from browse box
 			if (dst.Right(4) == wxS(".zip"))
-				dest_ctrl->SetValue(wxFileName(dst).GetPath());
+				dest_ctrl->SetValue(to_wx(agi::fs::PathToString(agi::fs::PathFromString(from_wx(dst)).parent_path())));
 		}
 		else {
 			dest_label->SetLabel(_("Enter the name of the destination zip file to collect the fonts to. If a folder is entered, a default name will be used."));
 
 			// Add filename to browse box
 			if (!dst.EndsWith(wxS(".zip"))) {
-				wxFileName fn(dst + wxS("//"));
-				fn.SetFullName(wxS("fonts.zip"));
-				dest_ctrl->SetValue(fn.GetFullPath());
+				auto dest = agi::fs::PathFromString(from_wx(dst));
+				dest /= "fonts.zip";
+				dest_ctrl->SetValue(to_wx(agi::fs::PathToString(dest)));
 			}
 		}
 	}

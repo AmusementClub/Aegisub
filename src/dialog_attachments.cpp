@@ -38,6 +38,8 @@
 #include "ui_services.h"
 #include "utils.h"
 
+#include <libaegisub/path.h>
+
 #include <wx/button.h>
 #include <wx/dialog.h>
 #include <wx/listctrl.h>
@@ -48,6 +50,7 @@ struct DialogAttachments {
 	wxDialog d;
 	agi::Context *context;
 	AssFile *ass;
+	agi::Path &path_helper;
 
 	wxListView *listView;
 	wxButton *extractButton;
@@ -61,6 +64,8 @@ struct DialogAttachments {
 
 	void UpdateList();
 	void AttachFiles(std::vector<agi::fs::path> const& paths, wxString const& commit_msg);
+	std::string GetFontDestinationDialogPath() const;
+	void SaveFontDestination(agi::fs::path const& destination);
 
 public:
 	DialogAttachments(agi::Context *c);
@@ -70,6 +75,7 @@ DialogAttachments::DialogAttachments(agi::Context *c)
 : d(c->GetUI().parent, -1, _("Attachment List"))
 , context(c)
 , ass(c->GetCore().ass.get())
+, path_helper(*c->GetCore().path)
 {
 	d.SetIcon(GETICON(attach_button_16));
 
@@ -134,6 +140,15 @@ void DialogAttachments::AttachFiles(std::vector<agi::fs::path> const& paths, wxS
 	UpdateList();
 }
 
+std::string DialogAttachments::GetFontDestinationDialogPath() const {
+	return agi::fs::PathToString(path_helper.Decode(OPT_GET("Path/Fonts Collector Destination")->GetString()));
+}
+
+void DialogAttachments::SaveFontDestination(agi::fs::path const& destination) {
+	if (!destination.empty())
+		OPT_SET("Path/Fonts Collector Destination")->SetString(path_helper.Encode(destination));
+}
+
 void DialogAttachments::OnAttachFont(wxCommandEvent &) {
 	AttachFiles(context->RequestOpenFiles({
 		from_wx(_("Choose file to be attached")),
@@ -141,7 +156,7 @@ void DialogAttachments::OnAttachFont(wxCommandEvent &) {
 		"",
 		"",
 		"Font Files (*.ttf)|*.ttf",
-		OPT_GET("Path/Fonts Collector Destination")->GetString()
+		GetFontDestinationDialogPath()
 	}), _("attach font file"));
 }
 
@@ -159,31 +174,34 @@ void DialogAttachments::OnExtract(wxCommandEvent &) {
 	int i = listView->GetFirstSelected();
 	if (i == -1) return;
 
-	agi::fs::path path;
+	agi::fs::path target_path;
 	bool fullPath = false;
 
 	// Multiple or single?
 	if (listView->GetNextSelected(i) != -1)
-		path = context->RequestSelectDirectory({
+		target_path = context->RequestSelectDirectory({
 			from_wx(_("Select the path to save the files to:")),
-			OPT_GET("Path/Fonts Collector Destination")->GetString()
+			GetFontDestinationDialogPath()
 		});
 	else {
-		path = context->RequestSaveFile({
+		target_path = context->RequestSaveFile({
 			from_wx(_("Select the path to save the file to:")),
-			"Path/Fonts Collector Destination",
+			"",
 			ass->Attachments[i].GetFileName(),
 			".ttf",
-			"Font Files (*.ttf)|*.ttf"
+			"Font Files (*.ttf)|*.ttf",
+			GetFontDestinationDialogPath()
 		});
 		fullPath = true;
 	}
-	if (path.empty()) return;
+	if (target_path.empty()) return;
+
+	SaveFontDestination(fullPath ? target_path.parent_path() : target_path);
 
 	// Loop through items in list
 	while (i != -1) {
 		auto& attach = ass->Attachments[i];
-		attach.Extract(fullPath ? path : path/attach.GetFileName());
+		attach.Extract(fullPath ? target_path : target_path/attach.GetFileName());
 		i = listView->GetNextSelected(i);
 	}
 }

@@ -300,18 +300,15 @@ void DialogAutomation::OnAdd(wxCommandEvent &)
 {
 	auto fnames = context->RequestOpenFiles({
 		from_wx(_("Add Automation script")),
+		"Path/Last/Automation",
 		"",
 		"",
-		"",
-		Automation4::ScriptFactory::GetWildcardStr(),
-		OPT_GET("Path/Last/Automation")->GetString()
+		Automation4::ScriptFactory::GetWildcardStr()
 	});
 	if (fnames.empty())
 		return;
 
 	for (auto const& fnpath : fnames) {
-		OPT_SET("Path/Last/Automation")->SetString(agi::fs::PathToString(fnpath.parent_path()));
-
 		if (has_file(local_manager->GetScripts(), fnpath) || has_file(global_manager->GetScripts(), fnpath)) {
 			wxLogError(wxS("Script '%s' is already loaded"), to_wx(agi::fs::PathToString(fnpath)));
 			continue;

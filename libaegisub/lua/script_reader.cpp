@@ -18,6 +18,7 @@
 
 #include "libaegisub/file_mapping.h"
 #include "libaegisub/log.h"
+#include "libaegisub/path.h"
 #include "libaegisub/lua/utils.h"
 #include "libaegisub/split.h"
 #include "libaegisub/string_utils.h"
@@ -136,6 +137,87 @@ namespace agi { namespace lua {
 		return lua_gettop(L) - pretop;
 	}
 
+#ifdef _WIN32
+	static void prepend_runtime_cpath(lua_State *L) {
+		agi::Path path;
+
+		lua_getglobal(L, "package");
+		lua_getfield(L, -1, "cpath");
+		std::string cpath = check_string(L, -1);
+		lua_pop(L, 1);
+
+		std::string runtime_cpath;
+		for (auto const* token : { "?user/runtimes", "?data/runtimes" }) {
+			auto runtime_dir = agi::fs::PathToString(path.Decode(token));
+			if (runtime_dir.empty())
+				continue;
+			runtime_cpath += runtime_dir;
+			runtime_cpath += "/?.dll;";
+		}
+
+		push_value(L, runtime_cpath + cpath);
+		lua_setfield(L, -2, "cpath");
+		lua_pop(L, 1);
+	}
+
+	static bool install_ffi_load_wrapper(lua_State *L) {
+		static char const* wrapper = R"lua(
+local ffi = require('ffi')
+if not rawget(ffi, '__aegisub_original_load') then
+  local function has_explicit_path(name)
+    return name:find('[\\/]') ~= nil or name:match('^%a:')
+  end
+
+  local function is_file(path)
+    local lfs = rawget(ffi, '__aegisub_lfs')
+    if lfs == nil then
+      local ok, loaded = pcall(require, 'lfs')
+      lfs = ok and loaded or false
+      rawset(ffi, '__aegisub_lfs', lfs)
+    end
+    return lfs and lfs.attributes(path, 'mode') == 'file'
+  end
+
+  local function resolve_library(name)
+    if type(name) ~= 'string' or name == '' or has_explicit_path(name) then
+      return name
+    end
+
+    local candidates = { name }
+    if name:lower():sub(-4) == '.dll' then
+      candidates = { name:sub(1, -5), name }
+    end
+
+    local cpath = package.cpath
+    if type(cpath) ~= 'string' then
+      return name
+    end
+
+    for _, candidate in ipairs(candidates) do
+      for template in cpath:gmatch('[^;]+') do
+        if template:find('?', 1, true) then
+          local path = template:gsub('%?', candidate, 1)
+          if is_file(path) then
+            return path
+          end
+        end
+      end
+    end
+
+    return name
+  end
+
+  rawset(ffi, '__aegisub_original_load', ffi.load)
+  ffi.load = function(name, global)
+    return rawget(ffi, '__aegisub_original_load')(resolve_library(name), global)
+  end
+end
+)lua";
+
+		return luaL_dostring(L, wrapper) == 0;
+	}
+#endif
+
 	bool Install(lua_State *L, std::vector<fs::path> const& include_path) {
 		// set the module load path to include_path
 		lua_getglobal(L, "package");
@@ -158,11 +240,20 @@ namespace agi { namespace lua {
 
 		lua_settable(L, -3);
 
+#ifdef _WIN32
+		prepend_runtime_cpath(L);
+#endif
+
 		// Replace the default lua module loader with our unicode compatible one
 		lua_getfield(L, -1, "loaders");
 		push_value(L, exception_wrapper<module_loader>);
 		lua_rawseti(L, -2, 2);
 		lua_pop(L, 2); // loaders, package
+
+#ifdef _WIN32
+		if (!install_ffi_load_wrapper(L))
+			return false;
+#endif
 
 		return true;
 	}

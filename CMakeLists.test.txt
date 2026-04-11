@@ -101,6 +101,7 @@ if(GTEST_FOUND)
         tests/tests/line_wrap.cpp
         tests/tests/locale_choice.cpp
         tests/tests/locale_pick.cpp
+        tests/tests/lua_script_reader.cpp
         tests/tests/mkv_wrap_common.cpp
         tests/tests/media_load_precheck.cpp
         tests/tests/native_library.cpp

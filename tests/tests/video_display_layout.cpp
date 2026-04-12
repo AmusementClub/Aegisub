@@ -32,6 +32,118 @@ TEST(video_display_layout, free_size_letterboxes_top_bottom_for_wide_target_aspe
 	EXPECT_EQ(113, layout.viewport_height);
 }
 
+TEST(video_display_layout, attached_content_layout_defaults_to_base_viewport_without_transform) {
+	VideoDisplayViewportLayout base = { 10, 320, 40, 20, 180 };
+	auto content = BuildVideoDisplayContentLayout(base, 240, true);
+	EXPECT_EQ(base.viewport_left, content.viewport_left);
+	EXPECT_EQ(base.viewport_width, content.viewport_width);
+	EXPECT_EQ(base.viewport_bottom, content.viewport_bottom);
+	EXPECT_EQ(base.viewport_top, content.viewport_top);
+	EXPECT_EQ(base.viewport_height, content.viewport_height);
+}
+
+TEST(video_display_layout, attached_content_layout_scales_around_base_viewport_center) {
+	VideoDisplayViewportLayout base = { 10, 320, 40, 20, 180 };
+	auto content = BuildVideoDisplayContentLayout(base, 240, true, { 1.5, 0.0, 0.0 });
+	EXPECT_EQ(-70, content.viewport_left);
+	EXPECT_EQ(480, content.viewport_width);
+	EXPECT_EQ(-25, content.viewport_top);
+	EXPECT_EQ(270, content.viewport_height);
+	EXPECT_EQ(-5, content.viewport_bottom);
+}
+
+TEST(video_display_layout, attached_content_layout_clamps_pan_using_viewport_height_units) {
+	VideoDisplayViewportLayout base = { 10, 320, 40, 20, 180 };
+	auto content = BuildVideoDisplayContentLayout(base, 240, true, { 2.0, 5.0, -5.0 });
+	EXPECT_EQ(242, content.viewport_left);
+	EXPECT_EQ(640, content.viewport_width);
+	EXPECT_EQ(-322, content.viewport_top);
+	EXPECT_EQ(360, content.viewport_height);
+	EXPECT_EQ(202, content.viewport_bottom);
+}
+
+TEST(video_display_layout, detached_content_layout_stays_equal_to_base_viewport_when_disabled) {
+	VideoDisplayViewportLayout base = { 0, 200, 43, 43, 113 };
+	auto content = BuildVideoDisplayContentLayout(base, 199, false, { 3.0, 1.0, -1.0 });
+	EXPECT_EQ(base.viewport_left, content.viewport_left);
+	EXPECT_EQ(base.viewport_width, content.viewport_width);
+	EXPECT_EQ(base.viewport_bottom, content.viewport_bottom);
+	EXPECT_EQ(base.viewport_top, content.viewport_top);
+	EXPECT_EQ(base.viewport_height, content.viewport_height);
+}
+
+TEST(video_display_layout, detached_content_layout_can_pan_without_resizing_when_zoom_is_unity) {
+	VideoDisplayViewportLayout base = { 0, 200, 43, 43, 113 };
+	auto content = BuildVideoDisplayContentLayout(base, 199, true, { 1.0, 0.5, -0.25 });
+	EXPECT_EQ(57, content.viewport_left);
+	EXPECT_EQ(200, content.viewport_width);
+	EXPECT_EQ(15, content.viewport_top);
+	EXPECT_EQ(113, content.viewport_height);
+	EXPECT_EQ(71, content.viewport_bottom);
+}
+
+TEST(video_display_layout, zoom_anchor_uses_viewport_center_and_current_pan) {
+	VideoDisplayViewportLayout base = { 10, 320, 40, 20, 180 };
+	VideoDisplayContentTransform transform = { 1.0, 0.0, 0.0 };
+	auto anchor = GetVideoDisplayZoomAnchorPoint(base, transform, Vector2D(210, 110));
+	EXPECT_FLOAT_EQ(40.0f, anchor.X());
+	EXPECT_FLOAT_EQ(0.0f, anchor.Y());
+}
+
+TEST(video_display_layout, zoom_and_pan_keeps_anchor_under_cursor) {
+	VideoDisplayViewportLayout base = { 10, 320, 40, 20, 180 };
+	VideoDisplayContentTransform transform = { 1.0, 0.0, 0.0 };
+	auto anchor = GetVideoDisplayZoomAnchorPoint(base, transform, Vector2D(210, 110));
+	auto zoomed = ZoomVideoDisplayContent(base, transform, 2.0, anchor, Vector2D(210, 110));
+	EXPECT_DOUBLE_EQ(2.0, zoomed.zoom);
+	EXPECT_NEAR(-40.0 / 180.0, zoomed.pan_x, 1e-6);
+	EXPECT_DOUBLE_EQ(0.0, zoomed.pan_y);
+}
+
+TEST(video_display_layout, pan_video_display_content_uses_viewport_height_units) {
+	VideoDisplayViewportLayout base = { 10, 320, 40, 20, 180 };
+	VideoDisplayContentTransform transform = { 1.0, 0.0, 0.0 };
+	auto panned = PanVideoDisplayContent(base, transform, Vector2D(18, -36));
+	EXPECT_NEAR(0.1, panned.pan_x, 1e-6);
+	EXPECT_NEAR(-0.2, panned.pan_y, 1e-6);
+}
+
+TEST(video_display_layout, content_zoom_clamps_to_supported_range) {
+	EXPECT_DOUBLE_EQ(0.125, ClampVideoDisplayContentZoom(0.01));
+	EXPECT_DOUBLE_EQ(10.0, ClampVideoDisplayContentZoom(25.0));
+}
+
+TEST(video_display_layout, pan_video_display_content_clamps_extreme_offsets) {
+	VideoDisplayViewportLayout base = { 0, 200, 0, 0, 100 };
+	VideoDisplayContentTransform transform = { 1.0, 0.0, 0.0 };
+	auto panned = PanVideoDisplayContent(base, transform, Vector2D(10000, -10000));
+	EXPECT_NEAR(1.4, panned.pan_x, 1e-6);
+	EXPECT_NEAR(-0.9, panned.pan_y, 1e-6);
+}
+
+TEST(video_display_layout, zoom_video_display_content_clamps_extreme_requests) {
+	VideoDisplayViewportLayout base = { 0, 200, 0, 0, 100 };
+	VideoDisplayContentTransform transform = { 1.0, 0.0, 0.0 };
+	auto anchor = GetVideoDisplayZoomAnchorPoint(base, transform, Vector2D(150, 50));
+
+	auto zoomed_in = ZoomVideoDisplayContent(base, transform, 100.0, anchor, Vector2D(150, 50));
+	EXPECT_DOUBLE_EQ(10.0, zoomed_in.zoom);
+	EXPECT_NEAR(-4.5, zoomed_in.pan_x, 1e-6);
+	EXPECT_DOUBLE_EQ(0.0, zoomed_in.pan_y);
+
+	auto zoomed_out = ZoomVideoDisplayContent(base, transform, 0.01, anchor, Vector2D(150, 50));
+	EXPECT_DOUBLE_EQ(0.125, zoomed_out.zoom);
+	EXPECT_NEAR(0.4375, zoomed_out.pan_x, 1e-6);
+	EXPECT_DOUBLE_EQ(0.0, zoomed_out.pan_y);
+}
+
+TEST(video_display_layout, resolve_scroll_action_prefers_modifier_specific_options) {
+	EXPECT_EQ(SCALE_VIDEO, ResolveVideoDisplayScrollAction(false, false, SCALE_VIDEO, ZOOM_VIDEO, PAN_VIDEO));
+	EXPECT_EQ(ZOOM_VIDEO, ResolveVideoDisplayScrollAction(true, false, SCALE_VIDEO, ZOOM_VIDEO, PAN_VIDEO));
+	EXPECT_EQ(PAN_VIDEO, ResolveVideoDisplayScrollAction(false, true, SCALE_VIDEO, ZOOM_VIDEO, PAN_VIDEO));
+	EXPECT_EQ(NOTHING, ResolveVideoDisplayScrollAction(true, true, SCALE_VIDEO, ZOOM_VIDEO, PAN_VIDEO));
+}
+
 TEST(video_display_layout, source_storage_visible_display_and_viewport_spaces_form_explicit_chain) {
 	VideoFrame frame;
 	frame.width = 12;

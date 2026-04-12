@@ -45,6 +45,13 @@
 #include "video_box.h"
 #include "video_controller.h"
 #include "video_display.h"
+#include "visual_tool_clip.h"
+#include "visual_tool_cross.h"
+#include "visual_tool_drag.h"
+#include "visual_tool_rotatexy.h"
+#include "visual_tool_rotatez.h"
+#include "visual_tool_scale.h"
+#include "visual_tool_vector_clip.h"
 
 #include <libaegisub/format_path.h>
 #include <libaegisub/make_unique.h>
@@ -53,6 +60,70 @@
 
 #include <wx/sizer.h>
 #include <wx/display.h> /// Must be included last.
+
+namespace {
+enum class SavedVisualTool {
+	None,
+	Cross,
+	Drag,
+	RotateZ,
+	RotateXY,
+	Scale,
+	Clip,
+	VectorClip,
+};
+
+SavedVisualTool DetectVisualTool(VideoDisplay *display) {
+	if (!display)
+		return SavedVisualTool::None;
+	if (display->ToolIsType(typeid(VisualToolCross)))
+		return SavedVisualTool::Cross;
+	if (display->ToolIsType(typeid(VisualToolDrag)))
+		return SavedVisualTool::Drag;
+	if (display->ToolIsType(typeid(VisualToolRotateZ)))
+		return SavedVisualTool::RotateZ;
+	if (display->ToolIsType(typeid(VisualToolRotateXY)))
+		return SavedVisualTool::RotateXY;
+	if (display->ToolIsType(typeid(VisualToolScale)))
+		return SavedVisualTool::Scale;
+	if (display->ToolIsType(typeid(VisualToolClip)))
+		return SavedVisualTool::Clip;
+	if (display->ToolIsType(typeid(VisualToolVectorClip)))
+		return SavedVisualTool::VectorClip;
+	return SavedVisualTool::None;
+}
+
+void RestoreVisualTool(VideoDisplay *display, agi::Context *context, SavedVisualTool tool) {
+	if (!display || !context)
+		return;
+
+	switch (tool) {
+		case SavedVisualTool::Cross:
+			display->SetTool(agi::make_unique<VisualToolCross>(display, context));
+			break;
+		case SavedVisualTool::Drag:
+			display->SetTool(agi::make_unique<VisualToolDrag>(display, context));
+			break;
+		case SavedVisualTool::RotateZ:
+			display->SetTool(agi::make_unique<VisualToolRotateZ>(display, context));
+			break;
+		case SavedVisualTool::RotateXY:
+			display->SetTool(agi::make_unique<VisualToolRotateXY>(display, context));
+			break;
+		case SavedVisualTool::Scale:
+			display->SetTool(agi::make_unique<VisualToolScale>(display, context));
+			break;
+		case SavedVisualTool::Clip:
+			display->SetTool(agi::make_unique<VisualToolClip>(display, context));
+			break;
+		case SavedVisualTool::VectorClip:
+			display->SetTool(agi::make_unique<VisualToolVectorClip>(display, context));
+			break;
+		case SavedVisualTool::None:
+			break;
+	}
+}
+}
 
 DialogDetachedVideo::DialogDetachedVideo(agi::Context *context)
 : wxDialog(context->GetUI().parent, -1, wxS("Detached Video"), wxDefaultPosition, wxSize(400,300), wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMAXIMIZE_BOX | wxMINIMIZE_BOX | wxWANTS_CHARS)
@@ -70,12 +141,14 @@ DialogDetachedVideo::DialogDetachedVideo(agi::Context *context)
 
 	SetTitle(fmt_tl("Video: %s", core.project->VideoName().filename()));
 
+	auto const initial_tool = DetectVisualTool(old_display);
 	old_display->Unload();
 
 	// Video area;
 	auto videoBox = new VideoBox(this, true, context);
 	ui.videoDisplay->SetMinClientSize(old_display->GetClientSize());
 	videoBox->Layout();
+	RestoreVisualTool(ui.videoDisplay, context, initial_tool);
 
 	// Set sizer
 	wxSizer *mainSizer = new wxBoxSizer(wxVERTICAL);
@@ -111,15 +184,21 @@ DialogDetachedVideo::~DialogDetachedVideo() { }
 void DialogDetachedVideo::OnClose(wxCloseEvent &evt) {
 	auto core = context->GetCore();
 	auto ui = context->GetUI();
+	auto const current_tool = DetectVisualTool(ui.videoDisplay);
 
 	ui.videoDisplay->Destroy();
 
 	ui.videoDisplay = old_display;
 	ui.videoSlider = old_slider;
 
+	// Show the attached video box before restoring the visual tool. Attached
+	// tools call back into VideoDisplay::UpdateSize(), which is a no-op while
+	// the display is hidden.
 	OPT_SET("Video/Detached/Enabled")->SetBool(false);
+	RestoreVisualTool(ui.videoDisplay, context, current_tool);
 
 	core.videoController->JumpToFrame(core.videoController->GetFrameN());
+	ui.videoDisplay->Refresh(false);
 
 	evt.Skip();
 }

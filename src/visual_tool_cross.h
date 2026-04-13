@@ -31,6 +31,7 @@ class OpenGLText;
 ///        shifts the selected lines to the clicked point
 class VisualToolCross final : public VisualTool<VisualDraggableFeature> {
 	std::unique_ptr<OpenGLText> gl_text;
+	const agi::OptionValue *coordinate_font_size_opt;
 
 	void OnDoubleClick() override;
 	void Draw() override;

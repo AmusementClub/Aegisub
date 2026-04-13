@@ -545,6 +545,7 @@ void BuildVideoPage(OptionPage *p) {
 	binder->AddCategory(_("Options"));
 	binder->AddBool(_("Show keyframes in slider"), "Video/Slider/Show Keyframes");
 	binder->AddBool(_("Only show visual tools when mouse is over video"), "Tool/Visual/Autohide");
+	binder->AddInt(_("Visual tools coordinate font size"), "Tool/Visual/Coordinate Font Size", 6, 72);
 	binder->AddBool(_("Seek video to line start on selection change"), "Video/Subtitle Sync");
 	binder->AddBool(_("Automatically open audio when opening video"), "Video/Open Audio");
 

@@ -598,7 +598,8 @@
 			"Skip Whitespace" : true
 		},
 		"Visual" : {
-			"Autohide": false
+			"Autohide": false,
+			"Coordinate Font Size" : 12
 		},
 		"Align to Video" : {
 			"Tolerance" : 20,

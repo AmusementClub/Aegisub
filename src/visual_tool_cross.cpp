@@ -30,11 +30,15 @@
 #include <libaegisub/format.h>
 #include <libaegisub/make_unique.h>
 
+#include <algorithm>
+
 VisualToolCross::VisualToolCross(VideoDisplay *parent, agi::Context *context)
 : VisualTool<VisualDraggableFeature>(parent, context)
 , gl_text(agi::make_unique<OpenGLText>())
+, coordinate_font_size_opt(OPT_GET("Tool/Visual/Coordinate Font Size"))
 {
 	parent->SetCursor(wxCursor(wxCURSOR_BLANK));
+	connections.push_back(OPT_SUB("Tool/Visual/Coordinate Font Size", [=](agi::OptionValue const&) { parent->Render(); }));
 }
 
 VisualToolCross::~VisualToolCross() {
@@ -82,7 +86,9 @@ void VisualToolCross::Draw() {
 	std::string mouse_text = Text(ToScriptCoords(shift_down ? 2 * video_pos + video_res - mouse_pos : mouse_pos));
 
 	int tw, th;
-	gl_text->SetFont("Verdana", 12, true, false);
+	int font_size = coordinate_font_size_opt->GetInt();
+	font_size = std::min(72, std::max(6, font_size));
+	gl_text->SetFont("Verdana", font_size, true, false);
 	gl_text->SetColour(agi::Color(255, 255, 255, 255));
 	gl_text->GetExtent(mouse_text, tw, th);
 

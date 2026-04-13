@@ -200,7 +200,6 @@ void AudioWaveformSummaryCache::Prefetch(size_t first_block, size_t last_block) 
 	const int64_t block_frames = static_cast<int64_t>(AudioWaveformSummaryBlock::width) * samples_per_pixel;
 	const int64_t start_frame = static_cast<int64_t>(first_block * AudioWaveformSummaryBlock::width * pixel_samples);
 	const int64_t end_frame = static_cast<int64_t>(last_block * AudioWaveformSummaryBlock::width * pixel_samples) + block_frames;
-	source->HintFloatAudio(start_frame, end_frame - start_frame);
 
 	{
 		std::lock_guard<std::mutex> lock(cache_mutex);
@@ -214,6 +213,8 @@ void AudioWaveformSummaryCache::Prefetch(size_t first_block, size_t last_block) 
 		if (!has_missing)
 			return;
 	}
+
+	source->HintFloatAudio(start_frame, end_frame - start_frame);
 
 	if (!scheduler) {
 		std::lock_guard<std::mutex> lock(scheduler_mutex);

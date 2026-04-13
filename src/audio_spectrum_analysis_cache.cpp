@@ -274,7 +274,6 @@ void AudioSpectrumAnalysisCache::Prefetch(size_t first_block, size_t last_block)
 	auto const half_window = static_cast<int64_t>(size_t(1) << derivation_size);
 	auto const start_sample = (static_cast<int64_t>(first_block) << derivation_dist) - half_window;
 	auto const end_sample = (static_cast<int64_t>(last_block) << derivation_dist) + half_window;
-	source->HintFloatAudio(start_sample, end_sample - start_sample);
 
 	{
 		std::lock_guard<std::mutex> lock(cache_mutex);
@@ -288,6 +287,8 @@ void AudioSpectrumAnalysisCache::Prefetch(size_t first_block, size_t last_block)
 		if (!has_missing)
 			return;
 	}
+
+	source->HintFloatAudio(start_sample, end_sample - start_sample);
 
 	if (!scheduler) {
 		std::lock_guard<std::mutex> lock(scheduler_mutex);

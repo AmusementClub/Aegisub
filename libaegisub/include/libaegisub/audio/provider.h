@@ -36,16 +36,30 @@ struct AudioProviderMemoryStats {
 	size_t loading_bytes = 0;
 	size_t pinned_bytes = 0;
 	size_t free_bytes = 0;
+	uint64_t page_loads = 0;
+	uint64_t page_reloads = 0;
+	uint64_t sync_page_loads = 0;
+	uint64_t async_page_loads = 0;
+	uint64_t viewport_hint_changes = 0;
+	uint64_t viewport_hint_unchanged = 0;
 	int64_t num_samples = 0;
 	int64_t decoded_samples = 0;
 	int64_t resident_pages = 0;
 	int64_t loading_pages = 0;
 	int64_t pinned_pages = 0;
 	int64_t free_pages = 0;
+	int64_t unique_loaded_pages = 0;
+	int64_t reloaded_pages = 0;
+	int64_t hottest_page_index = -1;
+	int64_t hottest_page_load_count = 0;
+	int64_t last_loaded_page_index = -1;
+	int64_t last_hint_first_page = -1;
+	int64_t last_hint_last_page = -1;
 	int sample_rate = 0;
 	int bytes_per_sample = 0;
 	int channels = 0;
 	bool float_samples = false;
+	std::string recent_loaded_pages;
 };
 
 class AudioProvider {

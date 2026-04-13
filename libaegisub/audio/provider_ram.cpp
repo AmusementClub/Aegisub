@@ -18,6 +18,7 @@
 
 #include "libaegisub/make_unique.h"
 
+#include <array>
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -26,6 +27,8 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <sstream>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -56,7 +59,9 @@ constexpr size_t kHardBudgetBytes = 160 * 1024 * 1024;
 constexpr size_t kIdleBudgetBytes = 64 * 1024 * 1024;
 constexpr size_t kFreeBufferReservePages = 16;
 constexpr size_t kViewportMaxPages = 32;
+constexpr size_t kLongSeekPageJumpThreshold = 24;
 constexpr auto kIdleTrimDelay = std::chrono::milliseconds(1000);
+constexpr size_t kRecentLoadedPageHistory = 16;
 
 enum PagePinMask : uint32_t {
 	PagePinPlaybackCritical = 1u << 0,
@@ -186,6 +191,24 @@ class ExactPagedRAMAudioProvider final : public AudioProviderWrapper {
 	mutable int64_t resident_frames = 0;
 	mutable int64_t loading_page_count = 0;
 	mutable size_t loading_buffer_bytes = 0;
+	mutable std::vector<uint32_t> page_load_counts;
+	mutable uint64_t total_page_loads = 0;
+	mutable uint64_t total_page_reloads = 0;
+	mutable uint64_t total_sync_page_loads = 0;
+	mutable uint64_t total_async_page_loads = 0;
+	mutable uint64_t viewport_hint_change_count = 0;
+	mutable uint64_t viewport_hint_unchanged_count = 0;
+	mutable int64_t unique_loaded_pages = 0;
+	mutable int64_t reloaded_pages = 0;
+	mutable int64_t hottest_page_index = -1;
+	mutable int64_t hottest_page_load_count = 0;
+	mutable int64_t last_loaded_page_index = -1;
+	mutable int64_t last_hint_first_page = -1;
+	mutable int64_t last_hint_last_page = -1;
+	mutable int64_t last_hint_center_page = -1;
+	mutable std::array<int32_t, kRecentLoadedPageHistory> recent_loaded_pages;
+	mutable size_t recent_loaded_pages_count = 0;
+	mutable size_t recent_loaded_pages_cursor = 0;
 	mutable std::vector<size_t> playback_critical_pages;
 	mutable std::vector<size_t> playback_ahead_pages;
 	mutable std::vector<size_t> playback_behind_pages;
@@ -214,6 +237,8 @@ class ExactPagedRAMAudioProvider final : public AudioProviderWrapper {
 	void LoadPage(LoadContext& load) const;
 	PageReadPin PinPage(size_t page_index) const;
 	void UnpinPage(size_t page_index) const;
+	void RecordLoadedPageUnlocked(size_t page_index, bool synchronous) const;
+	std::string FormatRecentLoadedPagesUnlocked() const;
 	bool TrySelectPrefetchPageUnlocked(size_t& page_index) const;
 	bool HasPrefetchWorkUnlocked() const;
 	void ClearViewportPinsUnlocked() const;
@@ -252,6 +277,8 @@ ExactPagedRAMAudioProvider::ExactPagedRAMAudioProvider(std::unique_ptr<AudioProv
 			static_cast<size_t>(frame_count) * frame_bytes
 		});
 	}
+	page_load_counts.resize(page_count);
+	recent_loaded_pages.fill(-1);
 
 	worker = std::jthread([this](std::stop_token stop_token) { WorkerLoop(stop_token); });
 }
@@ -405,6 +432,7 @@ void ExactPagedRAMAudioProvider::CompleteLoadSuccess(LoadContext& load) const {
 	page.buffer = std::move(load.buffer);
 	page.state = PageState::Ready;
 	page.last_access_seq = ++access_seq;
+	RecordLoadedPageUnlocked(load.page_index, load.synchronous);
 	resident_buffer_bytes += page_bytes;
 	++resident_pages;
 	resident_frames += page.frame_count;
@@ -496,6 +524,51 @@ void ExactPagedRAMAudioProvider::UnpinPage(size_t page_index) const {
 	TrimAfterAccess();
 }
 
+void ExactPagedRAMAudioProvider::RecordLoadedPageUnlocked(size_t page_index, bool synchronous) const {
+	if (page_index >= page_load_counts.size())
+		page_load_counts.resize(page_index + 1, 0);
+
+	auto& load_count = page_load_counts[page_index];
+	if (load_count == 0)
+		++unique_loaded_pages;
+	++load_count;
+	++total_page_loads;
+	if (synchronous)
+		++total_sync_page_loads;
+	else
+		++total_async_page_loads;
+	if (load_count > 1) {
+		++total_page_reloads;
+		if (load_count == 2)
+			++reloaded_pages;
+	}
+	if (static_cast<int64_t>(load_count) > hottest_page_load_count) {
+		hottest_page_load_count = static_cast<int64_t>(load_count);
+		hottest_page_index = static_cast<int64_t>(page_index);
+	}
+	last_loaded_page_index = static_cast<int64_t>(page_index);
+	recent_loaded_pages[recent_loaded_pages_cursor] = static_cast<int32_t>(page_index);
+	recent_loaded_pages_cursor = (recent_loaded_pages_cursor + 1) % recent_loaded_pages.size();
+	recent_loaded_pages_count = std::min(recent_loaded_pages_count + 1, recent_loaded_pages.size());
+}
+
+std::string ExactPagedRAMAudioProvider::FormatRecentLoadedPagesUnlocked() const {
+	if (recent_loaded_pages_count == 0)
+		return {};
+
+	std::ostringstream out;
+	size_t start = 0;
+	if (recent_loaded_pages_count == recent_loaded_pages.size())
+		start = recent_loaded_pages_cursor;
+	for (size_t i = 0; i < recent_loaded_pages_count; ++i) {
+		size_t const idx = (start + i) % recent_loaded_pages.size();
+		if (i)
+			out << ",";
+		out << recent_loaded_pages[idx];
+	}
+	return out.str();
+}
+
 bool ExactPagedRAMAudioProvider::TrySelectPrefetchPageUnlocked(size_t& page_index) const {
 	auto try_select = [&](std::vector<size_t> const& candidates) {
 		for (auto const index : candidates) {
@@ -544,17 +617,28 @@ void ExactPagedRAMAudioProvider::WorkerLoop(std::stop_token stop_token) const {
 					break;
 				}
 
+				auto const over_idle_budget = StorageBytesUnlocked() > kIdleBudgetBytes;
 				auto const idle_deadline = last_access_time + kIdleTrimDelay;
-				if (StorageBytesUnlocked() > kIdleBudgetBytes && Clock::now() >= idle_deadline) {
+				if (over_idle_budget && Clock::now() >= idle_deadline) {
 					should_idle_trim = true;
 					break;
 				}
 
-				worker_cv.wait_until(lock, stop_token, idle_deadline, [&] {
-					return stop_token.stop_requested()
-						|| HasPrefetchWorkUnlocked()
-						|| (StorageBytesUnlocked() > kIdleBudgetBytes && Clock::now() >= last_access_time + kIdleTrimDelay);
-				});
+				bool woke_with_predicate = false;
+				if (over_idle_budget) {
+					woke_with_predicate = worker_cv.wait_until(lock, stop_token, idle_deadline, [&] {
+						return stop_token.stop_requested()
+							|| HasPrefetchWorkUnlocked()
+							|| (StorageBytesUnlocked() > kIdleBudgetBytes && Clock::now() >= last_access_time + kIdleTrimDelay);
+					});
+				}
+				else {
+					woke_with_predicate = worker_cv.wait(lock, stop_token, [&] {
+						return HasPrefetchWorkUnlocked() || StorageBytesUnlocked() > kIdleBudgetBytes;
+					});
+				}
+
+				(void)woke_with_predicate;
 			}
 		}
 
@@ -601,16 +685,30 @@ AudioProviderMemoryStats ExactPagedRAMAudioProvider::GetMemoryStats() const {
 	stats.loading_bytes = loading_buffer_bytes;
 	stats.pinned_bytes = static_cast<size_t>(pinned_pages) * page_bytes;
 	stats.free_bytes = FreeBytesUnlocked();
+	stats.page_loads = total_page_loads;
+	stats.page_reloads = total_page_reloads;
+	stats.sync_page_loads = total_sync_page_loads;
+	stats.async_page_loads = total_async_page_loads;
+	stats.viewport_hint_changes = viewport_hint_change_count;
+	stats.viewport_hint_unchanged = viewport_hint_unchanged_count;
 	stats.num_samples = num_samples;
 	stats.decoded_samples = resident_frames;
 	stats.resident_pages = resident_pages;
 	stats.loading_pages = loading_page_count;
 	stats.pinned_pages = pinned_pages;
 	stats.free_pages = static_cast<int64_t>(free_buffers.size());
+	stats.unique_loaded_pages = unique_loaded_pages;
+	stats.reloaded_pages = reloaded_pages;
+	stats.hottest_page_index = hottest_page_index;
+	stats.hottest_page_load_count = hottest_page_load_count;
+	stats.last_loaded_page_index = last_loaded_page_index;
+	stats.last_hint_first_page = last_hint_first_page;
+	stats.last_hint_last_page = last_hint_last_page;
 	stats.sample_rate = sample_rate;
 	stats.bytes_per_sample = bytes_per_sample;
 	stats.channels = channels;
 	stats.float_samples = float_samples;
+	stats.recent_loaded_pages = FormatRecentLoadedPagesUnlocked();
 	return stats;
 }
 
@@ -641,6 +739,11 @@ void ExactPagedRAMAudioProvider::SetPlaybackWindow(int64_t current_frame, int64_
 	for (size_t page_index = current_page; page_index > first_behind_page; --page_index)
 		behind_pages.push_back(page_index - 1);
 
+	auto const changed = !playback_active
+		|| critical_pages != playback_critical_pages
+		|| ahead_pages != playback_ahead_pages
+		|| behind_pages != playback_behind_pages;
+
 	ApplyPinSetUnlocked(playback_critical_pages, critical_pages, PagePinPlaybackCritical);
 	ApplyPinSetUnlocked(playback_ahead_pages, ahead_pages, PagePinPlaybackAhead);
 	ApplyPinSetUnlocked(playback_behind_pages, behind_pages, PagePinPlaybackBehind);
@@ -648,45 +751,90 @@ void ExactPagedRAMAudioProvider::SetPlaybackWindow(int64_t current_frame, int64_
 	if (StorageBytesUnlocked() > kHardBudgetBytes)
 		TrimStorageUnlocked(kHardBudgetBytes, kFreeBufferReservePages);
 
-	worker_cv.notify_all();
+	if (changed)
+		worker_cv.notify_all();
 }
 
 void ExactPagedRAMAudioProvider::ClearPlaybackWindow() {
 	std::lock_guard<std::mutex> lock(mutex);
+	auto const changed = playback_active
+		|| !playback_critical_pages.empty()
+		|| !playback_ahead_pages.empty()
+		|| !playback_behind_pages.empty();
 	playback_active = false;
 	ApplyPinSetUnlocked(playback_critical_pages, {}, PagePinPlaybackCritical);
 	ApplyPinSetUnlocked(playback_ahead_pages, {}, PagePinPlaybackAhead);
 	ApplyPinSetUnlocked(playback_behind_pages, {}, PagePinPlaybackBehind);
 	if (StorageBytesUnlocked() > kSoftBudgetBytes)
 		TrimStorageUnlocked(kSoftBudgetBytes, kFreeBufferReservePages);
-	worker_cv.notify_all();
+	if (changed)
+		worker_cv.notify_all();
 }
 
 void ExactPagedRAMAudioProvider::HintVisibleRange(int64_t start_frame, int64_t frame_count) {
 	if (num_samples <= 0 || frame_count <= 0)
 		return;
 
+	bool changed = false;
+	int64_t hint_first_page = -1;
+	int64_t hint_last_page = -1;
 	std::lock_guard<std::mutex> lock(mutex);
 	MarkAccessUnlocked();
 
 	start_frame = std::clamp<int64_t>(start_frame, 0, num_samples);
 	auto end_frame = std::clamp<int64_t>(start_frame + frame_count, 0, num_samples);
 	if (end_frame <= start_frame) {
+		changed = !viewport_pages.empty();
+		if (changed)
+			++viewport_hint_change_count;
+		else
+			++viewport_hint_unchanged_count;
+		last_hint_first_page = -1;
+		last_hint_last_page = -1;
+		last_hint_center_page = -1;
 		ClearViewportPinsUnlocked();
-		worker_cv.notify_all();
+		if (changed)
+			worker_cv.notify_all();
 		return;
 	}
 
 	auto const visible_frames = end_frame - start_frame;
-	auto const padded_frames = std::min<int64_t>(viewport_max_frames, visible_frames + visible_frames);
 	auto center_frame = start_frame + visible_frames / 2;
+	auto const center_page = PageIndexFromFrame(center_frame);
+	int64_t jump_pages = 0;
+	if (last_hint_center_page >= 0) {
+		auto const center_page_i64 = static_cast<int64_t>(center_page);
+		jump_pages = center_page_i64 >= last_hint_center_page
+			? (center_page_i64 - last_hint_center_page)
+			: (last_hint_center_page - center_page_i64);
+	}
+
+	auto padded_frames = std::min<int64_t>(viewport_max_frames, visible_frames + visible_frames);
+	if (!playback_active && jump_pages >= static_cast<int64_t>(kLongSeekPageJumpThreshold)) {
+		// During large paused seeks, avoid over-prefetching so the first useful audio page arrives sooner.
+		padded_frames = std::min<int64_t>(viewport_max_frames, std::max<int64_t>(visible_frames, frames_per_page));
+	}
+
 	auto request_start = std::max<int64_t>(0, center_frame - padded_frames / 2);
 	auto request_end = std::min<int64_t>(num_samples, request_start + padded_frames);
 	request_start = std::max<int64_t>(0, request_end - padded_frames);
+	last_hint_center_page = static_cast<int64_t>(center_page);
 
 	auto new_pages = BuildPageRange(request_start, request_end);
+	if (!new_pages.empty()) {
+		hint_first_page = static_cast<int64_t>(new_pages.front());
+		hint_last_page = static_cast<int64_t>(new_pages.back());
+	}
+	changed = new_pages != viewport_pages;
+	if (changed)
+		++viewport_hint_change_count;
+	else
+		++viewport_hint_unchanged_count;
+	last_hint_first_page = hint_first_page;
+	last_hint_last_page = hint_last_page;
 	ApplyPinSetUnlocked(viewport_pages, new_pages, PagePinViewport);
-	worker_cv.notify_all();
+	if (changed)
+		worker_cv.notify_all();
 }
 
 void ExactPagedRAMAudioProvider::FillBuffer(void *buf, int64_t start, int64_t count) const {

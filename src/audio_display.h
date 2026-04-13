@@ -168,6 +168,7 @@ class AudioDisplay: public wxWindow {
 	void ReloadRenderingSettings();
 
 	AudioViewportRequest BuildViewportRequest(const wxRect &update_rect) const;
+	void HintVisibleAudioRange() const;
 
 	/// Paint the audio data for the viewport request
 	/// @param dc DC to paint to

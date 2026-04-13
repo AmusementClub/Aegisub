@@ -690,6 +690,7 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 	scroll_left = pixel_position;
 	scrollbar->SetPosition(scroll_left);
 	timeline->SetPosition(scroll_left);
+	HintVisibleAudioRange();
 	if (dragged_object)
 		QueueHighFrequencyRefresh(nullptr, true);
 	else
@@ -760,6 +761,7 @@ void AudioDisplay::SetZoomLevel(int new_zoom_level)
 	timeline->ChangeZoom(ms_per_pixel);
 
 	ScrollPixelToLeft(AbsoluteXFromTime(cursor_time) - cursor_pos);
+	HintVisibleAudioRange();
 	if (track_cursor_pos >= 0)
 		track_cursor_pos = AbsoluteXFromTime(cursor_time);
 	Refresh();
@@ -1098,17 +1100,29 @@ AudioViewportRequest AudioDisplay::BuildViewportRequest(const wxRect &update_rec
 	return viewport;
 }
 
+void AudioDisplay::HintVisibleAudioRange() const {
+	if (!provider || ms_per_pixel <= 0.0)
+		return;
+
+	auto const sample_rate = provider->GetSampleRate();
+	if (sample_rate <= 0)
+		return;
+
+	auto const client_width = std::max(0, GetClientSize().GetWidth());
+	if (client_width <= 0)
+		return;
+
+	auto const begin_ms = std::max(0, TimeFromAbsoluteX(scroll_left));
+	auto const end_ms = std::max(begin_ms, TimeFromAbsoluteX(scroll_left + client_width));
+	auto const start_frame = static_cast<int64_t>(begin_ms) * sample_rate / 1000;
+	auto const end_frame = static_cast<int64_t>(end_ms) * sample_rate / 1000;
+	provider->HintVisibleRange(start_frame, end_frame - start_frame);
+}
+
 void AudioDisplay::PaintAudio(wxDC &dc, const AudioViewportRequest &viewport) {
 	if (!audio_tile_compositor || !audio_renderer)
 		return;
-	if (provider && ms_per_pixel > 0.0) {
-		auto const client_width = std::max(0, GetClientSize().GetWidth());
-		auto const begin_ms = std::max(0, TimeFromAbsoluteX(scroll_left));
-		auto const end_ms = std::max(begin_ms, TimeFromAbsoluteX(scroll_left + client_width));
-		auto const start_frame = static_cast<int64_t>(begin_ms) * provider->GetSampleRate() / 1000;
-		auto const end_frame = static_cast<int64_t>(end_ms) * provider->GetSampleRate() / 1000;
-		provider->HintVisibleRange(start_frame, end_frame - start_frame);
-	}
+	HintVisibleAudioRange();
 	audio_tile_compositor->Compose(dc, *audio_renderer, viewport, style_ranges);
 }
 
@@ -1484,6 +1498,7 @@ void AudioDisplay::OnSize(wxSizeEvent &)
 
 	audio_top = timeline->GetHeight();
 
+	HintVisibleAudioRange();
 	Refresh();
 }
 
@@ -1514,6 +1529,7 @@ void AudioDisplay::OnAudioOpen(agi::AudioProvider *provider)
 	ms_per_pixel = 0;
 	SetZoomLevel(zoom_level);
 
+	HintVisibleAudioRange();
 	Refresh();
 
 	if (provider)

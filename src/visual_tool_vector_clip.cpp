@@ -160,7 +160,7 @@ void VisualToolVectorClip::Draw() {
 		}
 		else {
 			gl.SetLineColour(feature_color, .5f, 1);
-			gl.DrawCircle(feature.pos, 2.f);
+			gl.DrawCircle(feature.pos, 3.f);
 		}
 	}
 

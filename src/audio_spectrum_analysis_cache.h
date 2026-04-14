@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <queue>
@@ -53,6 +54,7 @@ class AudioSpectrumAnalysisCache {
 	mutable std::mutex cache_mutex;
 	std::vector<std::unique_ptr<float[]>> cache_blocks;
 	std::vector<uint64_t> cache_touch;
+	std::vector<uint8_t> pending_blocks;
 	std::priority_queue<TouchEntry, std::vector<TouchEntry>, std::greater<TouchEntry>> touch_heap;
 	mutable std::mutex build_mutex;
 
@@ -83,16 +85,23 @@ class AudioSpectrumAnalysisCache {
 	std::atomic<uint64_t> metrics_prefetch_builds{0};
 	std::atomic<uint64_t> metrics_prefetch_busy_skips{0};
 	std::atomic<bool> prefetch_enabled{true};
+	std::atomic<uint64_t> active_prefetch_generation{0};
 	std::atomic<uint64_t> metrics_stale_drops{0};
 	std::atomic<uint64_t> metrics_evictions{0};
+	std::function<void()> ready_callback;
 
 	std::unique_ptr<AudioLatestRangeScheduler> scheduler;
 
+	void StopScheduler();
+	bool IsCurrentPrefetchGeneration(uint64_t generation) const;
 	void RecreateCache();
 	std::unique_ptr<float[]> BuildBlockUnlocked(size_t block_index);
+	size_t GetMaxBuildBlocks(size_t preferred_cap) const;
+	std::vector<std::pair<size_t, std::unique_ptr<float[]>>> BuildBlocksUnlocked(size_t first_block, size_t last_block);
 	void TouchLocked(size_t block_index);
 	void TrimLocked();
 	void DrainReady();
+	void ClearPendingRange(size_t first_block, size_t last_block);
 	void ProcessPrefetch(size_t first_block, size_t last_block, uint64_t generation);
 
 public:
@@ -105,7 +114,10 @@ public:
 	void Age(size_t max_size);
 	bool IsReady() const;
 	const float* Get(size_t block_index);
+	const float* GetIfReady(size_t block_index);
+	bool AreBlocksReady(size_t first_block, size_t last_block);
 	void Prefetch(size_t first_block, size_t last_block);
 	void SetPrefetchEnabled(bool enabled);
+	void SetReadyCallback(std::function<void()> callback) { ready_callback = std::move(callback); }
 	AudioSpectrumAnalysisCacheMetrics GetMetricsSnapshot() const;
 };

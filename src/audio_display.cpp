@@ -44,6 +44,7 @@
 #include "include/aegisub/hotkey.h"
 #include "options.h"
 #include "project.h"
+#include "ui_dispatch.h"
 #include "utils.h"
 #include "video_controller.h"
 
@@ -625,6 +626,7 @@ AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::C
 
 AudioDisplay::~AudioDisplay()
 {
+	ui_activation.Deactivate();
 }
 
 void AudioDisplay::QueueHighFrequencyRefresh(const wxRect *rect, bool update) {
@@ -691,6 +693,7 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 	scrollbar->SetPosition(scroll_left);
 	timeline->SetPosition(scroll_left);
 	HintVisibleAudioRange();
+	WarmVisibleAudioCache();
 	if (dragged_object)
 		QueueHighFrequencyRefresh(nullptr, true);
 	else
@@ -760,8 +763,12 @@ void AudioDisplay::SetZoomLevel(int new_zoom_level)
 	scrollbar->ChangeLengths(pixel_audio_width, client_width);
 	timeline->ChangeZoom(ms_per_pixel);
 
+	const int old_scroll_left = scroll_left;
 	ScrollPixelToLeft(AbsoluteXFromTime(cursor_time) - cursor_pos);
-	HintVisibleAudioRange();
+	if (scroll_left == old_scroll_left) {
+		HintVisibleAudioRange();
+		WarmVisibleAudioCache();
+	}
 	if (track_cursor_pos >= 0)
 		track_cursor_pos = AbsoluteXFromTime(cursor_time);
 	Refresh();
@@ -921,6 +928,13 @@ void AudioDisplay::ReloadRenderingSettings()
 		colour_scheme_name = OPT_GET("Colour/Audio Display/Waveform")->GetString();
 		audio_renderer_provider = agi::make_unique<AudioWaveformRenderer>(colour_scheme_name);
 	}
+
+	auto ui_lifetime = ui_activation.GetLifetime();
+	audio_renderer_provider->SetContentReadyCallback([this, ui_lifetime] {
+		agi::ui::MainAsyncIfAlive(ui_lifetime, [this] {
+			OnRenderContentReady();
+		});
+	});
 
 	audio_renderer->SetRenderer(audio_renderer_provider.get());
 	scrollbar->SetColourScheme(colour_scheme_name);
@@ -1119,10 +1133,37 @@ void AudioDisplay::HintVisibleAudioRange() const {
 	provider->HintVisibleRange(start_frame, end_frame - start_frame);
 }
 
+void AudioDisplay::WarmVisibleAudioCache() const {
+	if (!audio_renderer_provider || dragged_object)
+		return;
+
+	auto const client_width = std::max(0, GetClientSize().GetWidth());
+	if (client_width <= 0)
+		return;
+
+	audio_renderer_provider->WarmCacheRange(scroll_left, client_width);
+}
+
+void AudioDisplay::OnRenderContentReady() {
+	if (!audio_renderer_provider || dragged_object)
+		return;
+
+	auto const client_width = std::max(0, GetClientSize().GetWidth());
+	if (client_width <= 0)
+		return;
+
+	if (!audio_renderer_provider->IsCacheRangeReady(scroll_left, client_width))
+		return;
+
+	QueueHighFrequencyRefresh(nullptr, false);
+}
+
 void AudioDisplay::PaintAudio(wxDC &dc, const AudioViewportRequest &viewport) {
 	if (!audio_tile_compositor || !audio_renderer)
 		return;
+
 	HintVisibleAudioRange();
+	WarmVisibleAudioCache();
 	audio_tile_compositor->Compose(dc, *audio_renderer, viewport, style_ranges);
 }
 
@@ -1529,7 +1570,6 @@ void AudioDisplay::OnAudioOpen(agi::AudioProvider *provider)
 	ms_per_pixel = 0;
 	SetZoomLevel(zoom_level);
 
-	HintVisibleAudioRange();
 	Refresh();
 
 	if (provider)

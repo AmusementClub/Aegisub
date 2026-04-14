@@ -11,7 +11,9 @@
 
 #include <libaegisub/audio/provider.h>
 
+#include <chrono>
 #include <cmath>
+#include <thread>
 
 namespace {
 struct Int16StereoProvider final : agi::AudioProvider {
@@ -67,7 +69,7 @@ struct CountingStereoProvider final : agi::AudioProvider {
 
 	CountingStereoProvider() {
 		channels = 2;
-		num_samples = 1 << 16;
+		num_samples = 1 << 21;
 		decoded_samples = num_samples;
 		sample_rate = 48000;
 		bytes_per_sample = sizeof(int16_t);
@@ -206,6 +208,22 @@ TEST(lagi_audio_display, waveform_summary_cache_reuses_hot_block) {
 	EXPECT_EQ(first.summaries[0].peak_max, second.summaries[0].peak_max);
 }
 
+TEST(lagi_audio_display, waveform_summary_cache_batches_adjacent_visible_blocks) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioWaveformSummaryCache cache;
+	cache.SetSource(source.get());
+	cache.SetMillisecondsPerPixel(20.0);
+	cache.SetMixPolicy(AudioMixPolicy::MonoMaxAbs);
+
+	cache.Get(0);
+	const int calls_after_first = provider.fill_calls;
+	cache.Get(1);
+
+	EXPECT_EQ(1, calls_after_first);
+	EXPECT_EQ(calls_after_first, provider.fill_calls);
+}
+
 TEST(lagi_audio_display, waveform_summary_cache_invalidates_on_zoom_change) {
 	CountingStereoProvider provider;
 	auto source = CreateAudioDisplaySource(&provider);
@@ -247,12 +265,51 @@ TEST(lagi_audio_display, waveform_summary_cache_prefetch_records_metrics) {
 	cache.SetMixPolicy(AudioMixPolicy::MonoMaxAbs);
 
 	cache.Get(0);
-	cache.Prefetch(1, 2);
+	cache.Prefetch(40, 41);
 	std::this_thread::sleep_for(std::chrono::milliseconds(5));
-	cache.Get(1);
+	cache.Get(40);
 	auto metrics = cache.GetMetricsSnapshot();
 	EXPECT_GE(metrics.prefetch_requests, 1u);
 	EXPECT_GE(metrics.prefetch_builds, 1u);
+}
+
+TEST(lagi_audio_display, waveform_summary_cache_get_if_ready_becomes_available_after_prefetch) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioWaveformSummaryCache cache;
+	cache.SetSource(source.get());
+	cache.SetMillisecondsPerPixel(20.0);
+	cache.SetMixPolicy(AudioMixPolicy::MonoMaxAbs);
+
+	EXPECT_EQ(nullptr, cache.GetIfReady(0));
+	EXPECT_EQ(0, provider.fill_calls);
+
+	cache.Prefetch(0, 0);
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+	const AudioWaveformSummaryBlock *block = nullptr;
+	while (!(block = cache.GetIfReady(0)) && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+	ASSERT_NE(nullptr, block);
+	EXPECT_GT(provider.fill_calls, 0);
+}
+
+TEST(lagi_audio_display, waveform_summary_cache_get_if_ready_does_not_mutate_metrics) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioWaveformSummaryCache cache;
+	cache.SetSource(source.get());
+	cache.SetMillisecondsPerPixel(20.0);
+	cache.SetMixPolicy(AudioMixPolicy::MonoMaxAbs);
+
+	cache.Get(0);
+	auto const before = cache.GetMetricsSnapshot();
+	EXPECT_NE(nullptr, cache.GetIfReady(0));
+	EXPECT_EQ(nullptr, cache.GetIfReady(40));
+	auto const after = cache.GetMetricsSnapshot();
+
+	EXPECT_EQ(before.cache_hits, after.cache_hits);
+	EXPECT_EQ(before.cache_misses, after.cache_misses);
 }
 
 TEST(lagi_audio_display, latest_range_scheduler_request_increments_generation) {
@@ -295,6 +352,22 @@ TEST(lagi_audio_display, spectrum_analysis_cache_reuses_hot_block) {
 	EXPECT_EQ(first[0], second[0]);
 }
 
+TEST(lagi_audio_display, spectrum_analysis_cache_batches_adjacent_visible_blocks) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(9, 7);
+
+	cache.Get(0);
+	const int calls_after_first = provider.fill_calls;
+	cache.Get(1);
+
+	EXPECT_EQ(1, calls_after_first);
+	EXPECT_EQ(calls_after_first, provider.fill_calls);
+}
+
 TEST(lagi_audio_display, spectrum_analysis_cache_metrics_count_hits_and_misses) {
 	CountingStereoProvider provider;
 	auto source = CreateAudioDisplaySource(&provider);
@@ -320,12 +393,51 @@ TEST(lagi_audio_display, spectrum_analysis_cache_prefetch_records_metrics) {
 	cache.SetResolution(9, 7);
 
 	cache.Get(0);
-	cache.Prefetch(1, 2);
+	cache.Prefetch(300, 301);
 	std::this_thread::sleep_for(std::chrono::milliseconds(5));
-	cache.Get(1);
+	cache.Get(300);
 	auto metrics = cache.GetMetricsSnapshot();
 	EXPECT_GE(metrics.prefetch_requests, 2u);
 	EXPECT_GE(metrics.prefetch_builds, 1u);
+}
+
+TEST(lagi_audio_display, spectrum_analysis_cache_get_if_ready_becomes_available_after_prefetch) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(9, 7);
+
+	EXPECT_EQ(nullptr, cache.GetIfReady(0));
+	EXPECT_EQ(0, provider.fill_calls);
+
+	cache.Prefetch(0, 0);
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+	const float *block = nullptr;
+	while (!(block = cache.GetIfReady(0)) && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
+	ASSERT_NE(nullptr, block);
+	EXPECT_GT(provider.fill_calls, 0);
+}
+
+TEST(lagi_audio_display, spectrum_analysis_cache_get_if_ready_does_not_mutate_metrics) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(9, 7);
+
+	cache.Get(0);
+	auto const before = cache.GetMetricsSnapshot();
+	EXPECT_NE(nullptr, cache.GetIfReady(0));
+	EXPECT_EQ(nullptr, cache.GetIfReady(300));
+	auto const after = cache.GetMetricsSnapshot();
+
+	EXPECT_EQ(before.cache_hits, after.cache_hits);
+	EXPECT_EQ(before.cache_misses, after.cache_misses);
 }
 
 TEST(lagi_audio_display, spectrum_analysis_cache_stays_finite_with_prefetch_interleaving) {

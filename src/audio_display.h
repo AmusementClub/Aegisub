@@ -40,6 +40,7 @@
 #include <wx/window.h>
 
 #include "audio_renderer_spectrum.h"
+#include "ui_dispatch.h"
 
 namespace agi { class AudioProvider; }
 namespace agi { struct Context; }
@@ -65,6 +66,7 @@ class AudioDisplay: public wxWindow {
 	agi::signal::Connection audio_open_connection;
 
 	std::vector<agi::signal::Connection> connections;
+	agi::ui::UiActivationScope ui_activation;
 	agi::Context *context;
 
 	/// The audio renderer manager
@@ -169,6 +171,8 @@ class AudioDisplay: public wxWindow {
 
 	AudioViewportRequest BuildViewportRequest(const wxRect &update_rect) const;
 	void HintVisibleAudioRange() const;
+	void WarmVisibleAudioCache() const;
+	void OnRenderContentReady();
 
 	/// Paint the audio data for the viewport request
 	/// @param dc DC to paint to

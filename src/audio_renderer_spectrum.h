@@ -38,6 +38,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "audio_renderer.h"
@@ -117,6 +118,8 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 	std::vector<const float *> channel_power_inputs;
 	std::vector<const float *> combined_power_columns;
 	std::vector<float> combined_power_scratch;
+	bool EnsureCachesConfigured();
+	std::pair<size_t, size_t> GetVisibleBlockRange(int start, int length) const;
 	void EnsurePerChannelCaches();
 	bool UsesAnalysisCache() const;
 	bool UsesPerChannelCaches() const;
@@ -135,6 +138,8 @@ public:
 	/// @param start First column of pixel data in display to render
 	/// @param style Style to render audio in
 	void Render(wxBitmap &bmp, int start, AudioRenderingStyle style) override;
+	void WarmCacheRange(int start, int length) override;
+	bool IsCacheRangeReady(int start, int length) override;
 
 	/// @brief Render blank area
 	void RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style) override;

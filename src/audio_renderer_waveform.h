@@ -32,6 +32,7 @@
 #include "audio_mix_policy.h"
 
 #include <memory>
+#include <utility>
 
 class AudioColorScheme;
 class AudioWaveformSummaryCache;
@@ -47,6 +48,9 @@ class AudioWaveformRenderer final : public AudioRendererBitmapProvider {
 	/// Whether to render max+avg or just max
 	bool render_averages;
 	AudioMixPolicy mix_policy = AudioMixPolicy::MonoMaxAbs;
+	bool interactive_prefetch_enabled = true;
+	bool EnsureSummaryCacheConfigured();
+	std::pair<size_t, size_t> GetBlockRange(int start, int length) const;
 
 	void OnSetProvider() override;
 	void OnSetMillisecondsPerPixel() override;
@@ -64,6 +68,8 @@ public:
 	/// @param start First column of pixel data in display to render
 	/// @param style Style to render audio in
 	void Render(wxBitmap &bmp, int start, AudioRenderingStyle style) override;
+	void WarmCacheRange(int start, int length) override;
+	bool IsCacheRangeReady(int start, int length) override;
 
 	/// @brief Render blank area
 	void RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style) override;
@@ -72,6 +78,7 @@ public:
 	/// @param max_size Maximum size in bytes for the cache
 	///
 	void AgeCache(size_t max_size) override;
+	void SetInteractivePrefetchEnabled(bool enabled) override;
 	std::vector<std::string> GetDebugInfo() const override;
 
 	/// Get a list of waveform rendering modes

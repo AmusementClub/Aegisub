@@ -31,6 +31,7 @@
 
 #include <memory>
 #include <string>
+#include <functional>
 #include <vector>
 
 #include <wx/gdicmn.h>
@@ -234,6 +235,7 @@ protected:
 	double pixel_ms;
 	/// Vertical zoom/amplitude scale factor
 	float amplitude_scale;
+	std::function<void()> content_ready_callback;
 
 	/// @brief Called when the audio provider changes
 	///
@@ -249,6 +251,11 @@ protected:
 	///
 	/// Implementations can override this method to do something when the vertical zoom is changed
 	virtual void OnSetAmplitudeScale() { }
+
+	void NotifyRenderContentReady() const {
+		if (content_ready_callback)
+			content_ready_callback();
+	}
 
 public:
 	/// @brief Constructor
@@ -279,6 +286,7 @@ public:
 	/// @param provider Audio provider to change to
 	void SetProvider(agi::AudioProvider *provider);
 	void SetDisplaySource(AudioDisplaySource *source);
+	void SetContentReadyCallback(std::function<void()> callback) { content_ready_callback = std::move(callback); }
 
 	/// @brief Change horizontal zoom
 	/// @param pixel_ms Milliseconds per pixel to zoom to
@@ -294,6 +302,8 @@ public:
 	/// Deriving classes should override this method if they implement any
 	/// kind of caching.
 	virtual void AgeCache(size_t max_size) { }
+	virtual void WarmCacheRange(int start, int length) { }
+	virtual bool IsCacheRangeReady(int start, int length) { return true; }
 	virtual void SetInteractivePrefetchEnabled(bool) { }
 	virtual std::vector<std::string> GetDebugInfo() const { return {}; }
 };

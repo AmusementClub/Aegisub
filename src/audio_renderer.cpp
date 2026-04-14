@@ -178,7 +178,7 @@ wxBitmap const& AudioRenderer::GetCachedBitmap(const int i, const AudioRendering
 	auto& bmp = bitmaps[style].Get(i, &created);
 	if (created)
 	{
-		renderer->Render(bmp, i*cache_bitmap_width, style);
+		renderer->Render(bmp, i * cache_bitmap_width, style);
 		needs_age = true;
 	}
 

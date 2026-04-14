@@ -57,6 +57,7 @@ AudioWaveformRenderer::AudioWaveformRenderer(std::string const& color_scheme_nam
 	colors.reserve(AudioStyle_MAX);
 	for (int i = 0; i < AudioStyle_MAX; ++i)
 		colors.emplace_back(6, color_scheme_name, i);
+	summary_cache->SetReadyCallback([this] { NotifyRenderContentReady(); });
 }
 
 AudioWaveformRenderer::~AudioWaveformRenderer() { }
@@ -74,6 +75,12 @@ void AudioWaveformRenderer::OnSetMillisecondsPerPixel() {
 void AudioWaveformRenderer::AgeCache(size_t max_size) {
 	if (summary_cache)
 		summary_cache->Age(max_size);
+}
+
+void AudioWaveformRenderer::SetInteractivePrefetchEnabled(bool enabled) {
+	interactive_prefetch_enabled = enabled;
+	if (summary_cache)
+		summary_cache->SetPrefetchEnabled(enabled);
 }
 
 std::vector<std::string> AudioWaveformRenderer::GetDebugInfo() const {
@@ -98,25 +105,54 @@ std::vector<std::string> AudioWaveformRenderer::GetDebugInfo() const {
 	};
 }
 
-void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
-{
-	wxMemoryDC dc(bmp);
-	const AudioColorScheme *pal = &colors[style];
-
+bool AudioWaveformRenderer::EnsureSummaryCacheConfigured() {
 	if (!display_source || !summary_cache)
-		return;
+		return false;
 
 	summary_cache->SetSource(display_source);
 	summary_cache->SetMillisecondsPerPixel(pixel_ms);
 	summary_cache->SetMixPolicy(mix_policy);
-	if (!summary_cache->IsReady())
+	summary_cache->SetPrefetchEnabled(interactive_prefetch_enabled);
+	return summary_cache->IsReady();
+}
+
+std::pair<size_t, size_t> AudioWaveformRenderer::GetBlockRange(int start, int length) const {
+	const size_t first_block = static_cast<size_t>(std::max(start, 0) / static_cast<int>(AudioWaveformSummaryBlock::width));
+	const int end = start + std::max(length, 1) - 1;
+	const size_t last_block = static_cast<size_t>(std::max(end, start) / static_cast<int>(AudioWaveformSummaryBlock::width));
+	return { first_block, last_block };
+}
+
+void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
+{
+	if (!EnsureSummaryCacheConfigured()) {
+		wxMemoryDC dc(bmp);
+		RenderBlank(dc, wxRect(0, 0, bmp.GetWidth(), bmp.GetHeight()), style);
 		return;
+	}
 
 	const size_t block_index = static_cast<size_t>(start / AudioWaveformSummaryBlock::width);
 	const auto &summary_block = summary_cache->Get(block_index);
-	summary_cache->Prefetch(block_index + 1, block_index + 2);
+	if (interactive_prefetch_enabled)
+		summary_cache->Prefetch(block_index + 1, block_index + 2);
 
-	RenderWaveformSummaryBlockToBitmap(bmp, summary_block, *pal, render_averages, amplitude_scale);
+	RenderWaveformSummaryBlockToBitmap(bmp, summary_block, colors[style], render_averages, amplitude_scale);
+}
+
+void AudioWaveformRenderer::WarmCacheRange(int start, int length) {
+	if (!interactive_prefetch_enabled || !EnsureSummaryCacheConfigured() || length <= 0)
+		return;
+
+	auto const [first_block, last_block] = GetBlockRange(start, length);
+	summary_cache->Prefetch(first_block, last_block + 2);
+}
+
+bool AudioWaveformRenderer::IsCacheRangeReady(int start, int length) {
+	if (!EnsureSummaryCacheConfigured() || length <= 0)
+		return true;
+
+	auto const [first_block, last_block] = GetBlockRange(start, length);
+	return summary_cache->AreBlocksReady(first_block, last_block);
 }
 
 void AudioWaveformRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style)

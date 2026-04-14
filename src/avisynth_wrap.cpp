@@ -174,7 +174,7 @@ namespace {
 	bool TryLoadPluginFallback(char const *token_path) {
 		if (!env)
 			return false;
-		auto path = config::path ? config::path->Decode(token_path) : agi::fs::path(token_path);
+		auto path = config::path ? config::path->Decode(token_path) : agi::fs::PathFromString(token_path);
 		if (!agi::fs::FileExists(path))
 			return false;
 

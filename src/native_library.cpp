@@ -140,13 +140,13 @@ constexpr char kRuntimesSearchDir[] = "runtimes";
 		std::string path(size, '\0');
 		if (_NSGetExecutablePath(path.data(), &size) != 0)
 			return {};
-		return agi::fs::PathToString(stdfs::path(path.c_str()).parent_path());
+		return agi::fs::PathToString(agi::fs::PathFromString(path.c_str()).parent_path());
 #else
 		std::vector<char> buffer(4096, '\0');
 		auto len = readlink("/proc/self/exe", buffer.data(), buffer.size() - 1);
 		if (len <= 0) return {};
 		buffer[static_cast<size_t>(len)] = '\0';
-		return agi::fs::PathToString(stdfs::path(buffer.data()).parent_path());
+		return agi::fs::PathToString(agi::fs::PathFromString(buffer.data()).parent_path());
 #endif
 	}
 

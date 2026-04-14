@@ -27,6 +27,10 @@ namespace {
 std::string utf8_path_sample() {
 	return "\xE4\xB8\xAD\xE6\x96\x87""-mru.ass";
 }
+
+std::string utf8_find_sample() {
+	return "\xE5\xA5\xB3\xE3\x81\xAE\xE5\xAD\x90";
+}
 }
 
 TEST(lagi_mru, load_from_file) {
@@ -142,6 +146,17 @@ TEST(lagi_mru, utf8_entries_round_trip) {
 
 	agi::MRUManager reloaded("data/mru_tmp", default_mru);
 	EXPECT_EQ(entry, agi::fs::PathToString(reloaded.GetEntry("Video", 0)));
+}
+
+TEST(lagi_mru, utf8_string_entries_round_trip) {
+	auto const entry = utf8_find_sample();
+
+	agi::fs::Remove("data/mru_tmp");
+	agi::MRUManager mru("data/mru_tmp", default_mru);
+	ASSERT_NO_THROW(mru.Add("Find", entry));
+
+	agi::MRUManager reloaded("data/mru_tmp", default_mru);
+	EXPECT_EQ(entry, agi::fs::PathToString(reloaded.GetEntry("Find", 0)));
 }
 
 // Check to make sure an entry is really removed.  This was fixed in

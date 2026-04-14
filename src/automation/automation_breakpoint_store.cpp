@@ -14,16 +14,16 @@
 
 #include "automation_breakpoint_store.h"
 
+#include <libaegisub/fs.h>
+
 #include <algorithm>
-#include <filesystem>
 
 namespace Automation4 {
 namespace {
 
 std::string FilenameComponent(std::string const& source)
 {
-	auto path = std::filesystem::path(source);
-	return path.filename().generic_string();
+	return agi::fs::PathToGenericString(agi::fs::PathFromString(source).filename());
 }
 
 }
@@ -47,10 +47,8 @@ std::string NormalizeAutomationDebugSource(std::string const& source)
 	if (!normalized.empty() && normalized.front() == '[')
 		return normalized;
 
-	std::error_code ec;
-	auto path = std::filesystem::path(normalized).lexically_normal();
-	auto generic = path.generic_string();
-	if (!ec && !generic.empty())
+	auto generic = agi::fs::PathToGenericString(agi::fs::PathFromString(normalized).lexically_normal());
+	if (!generic.empty())
 		return generic;
 	return normalized;
 }

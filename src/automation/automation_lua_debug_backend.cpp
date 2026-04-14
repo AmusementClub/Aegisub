@@ -17,7 +17,7 @@
 #include "../auto4_lua.h"
 #include "automation_lua_runtime.h"
 
-#include <libaegisub/fs_fwd.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/lua/utils.h>
 #include <libaegisub/scope_exit.h>
 
@@ -1061,14 +1061,14 @@ void CaptureFunctionChildren(lua_State *L, int value_index, AutomationDebugVaria
 	location.column = 0;
 	auto raw_source = std::string(ar.source ? ar.source : "");
 	location.source_path = NormalizeAutomationDebugSource(raw_source);
-	auto const extension = std::filesystem::path(location.source_path).extension().generic_string();
+	auto const extension = agi::fs::PathToString(agi::fs::PathFromString(location.source_path).extension());
 	bool const looks_like_script_file =
 		!location.source_path.empty() &&
 		(extension == ".lua" || extension == ".moon");
 	location.source_kind = ((!raw_source.empty() && raw_source.front() == '@') || looks_like_script_file) ? "script" : "chunk";
 	location.display_name = ar.short_src ? ar.short_src : "";
 	if (location.source_kind == "script" && !location.source_path.empty())
-		location.display_name = agi::fs::path(location.source_path).filename().generic_string();
+		location.display_name = agi::fs::PathToString(agi::fs::PathFromString(location.source_path).filename());
 	std::ostringstream preview;
 	preview << ((ar.what && std::strcmp(ar.what, "C") == 0) ? "cfunction" : "function");
 	if (!function_name_is_anonymous)
@@ -1389,7 +1389,7 @@ AutomationDebugLocation AutomationLuaDebugBackend::BuildLocation(lua_Debug const
 	auto runtime_snapshot = LuaGetAutomationRuntimeStateSnapshot(L);
 
 	auto const script_source = NormalizeAutomationDebugSource(agi::fs::PathToString(script_file));
-	auto const extension = std::filesystem::path(location.source_path).extension().generic_string();
+	auto const extension = agi::fs::PathToString(agi::fs::PathFromString(location.source_path).extension());
 	bool const looks_like_script_file =
 		location.source_path == script_source ||
 		extension == ".lua" ||
@@ -1411,7 +1411,7 @@ AutomationDebugLocation AutomationLuaDebugBackend::BuildLocation(lua_Debug const
 	}
 
 	if (location.source_kind == "script" && !location.source_path.empty())
-		location.display_name = agi::fs::PathToString(agi::fs::path(location.source_path).filename());
+		location.display_name = agi::fs::PathToString(agi::fs::PathFromString(location.source_path).filename());
 	else if (location.display_name.empty())
 		location.display_name = agi::fs::PathToString(script_file.filename());
 

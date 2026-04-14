@@ -95,18 +95,22 @@ file_mapping::file_mapping(fs::path const& filename, bool temporary)
 		}
 	}
 #else
-: handle(temporary
-	? ipcdetail::create_or_open_file(filename.string().c_str(), read_write)
-	: ipcdetail::open_existing_file(filename.string().c_str(), read_only))
+: handle([&filename, temporary] {
+	auto const filename_text = fs::PathToString(filename);
+	return temporary
+		? ipcdetail::create_or_open_file(filename_text.c_str(), read_write)
+		: ipcdetail::open_existing_file(filename_text.c_str(), read_only);
+}())
 {
 	if (handle == ipcdetail::invalid_file()) {
+		auto const filename_text = fs::PathToString(filename);
 		switch (errno) {
 		case ENOENT:
 			throw fs::FileNotFound(filename);
 		case EACCES:
 			throw fs::ReadDenied(filename);
 		case EIO:
-			throw fs::FileSystemUnknownError("Fatal I/O opening path: " + filename.string());
+			throw fs::FileSystemUnknownError("Fatal I/O opening path: " + filename_text);
 		}
 	}
 #endif
@@ -147,14 +151,15 @@ temp_file_mapping::temp_file_mapping(fs::path const& filename, uint64_t size)
 	SetFilePointerEx(handle, li, nullptr, FILE_BEGIN);
 	SetEndOfFile(handle);
 #else
-	unlink(filename.string().c_str());
+	auto const filename_text = fs::PathToString(filename);
+	unlink(filename_text.c_str());
 	if (ftruncate(handle, size) == -1) {
 		switch (errno) {
-		case EBADF:  throw InternalError("Error opening file " + filename.string() + " not handled");
+		case EBADF:  throw InternalError("Error opening file " + filename_text + " not handled");
 		case EFBIG:  throw fs::DriveFull(filename);
-		case EINVAL: throw InternalError("File opened incorrectly: " + filename.string());
+		case EINVAL: throw InternalError("File opened incorrectly: " + filename_text);
 		case EROFS:  throw fs::WriteDenied(filename);
-		default: throw fs::FileSystemUnknownError("Unknown error opening file: " + filename.string());
+		default: throw fs::FileSystemUnknownError("Unknown error opening file: " + filename_text);
 		}
 	}
 #endif

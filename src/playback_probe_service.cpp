@@ -27,6 +27,8 @@
 #include "selection_controller.h"
 #include "video_controller.h"
 
+#include <libaegisub/fs.h>
+
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -148,8 +150,8 @@ class Runner final {
 		auto const summary = ReadSummaryFile(runtime.TraceDir() / "summary.txt");
 
 		std::cout << "headless-playback-probe\n";
-		std::cout << "video=" << request.video_path.string() << "\n";
-		std::cout << "audio=" << request.audio_path.string() << "\n";
+		std::cout << "video=" << agi::fs::PathToGenericString(request.video_path) << "\n";
+		std::cout << "audio=" << agi::fs::PathToGenericString(request.audio_path) << "\n";
 		std::cout << "skip_audio=" << BoolString(result.skip_audio) << "\n";
 		std::cout << "line_start_ms=" << request.line_start_ms << "\n";
 		std::cout << "repeat_count=" << request.repeat_count << "\n";
@@ -172,7 +174,7 @@ class Runner final {
 		std::cout << "duration_ms=" << request.duration_ms << "\n";
 		std::cout << "audio_rate_scale=" << request.audio_rate_scale << "\n";
 		std::cout << "audio_quantum_ms=" << request.audio_quantum_ms << "\n";
-		std::cout << "trace_dir=" << result.trace_dir.string() << "\n";
+		std::cout << "trace_dir=" << agi::fs::PathToGenericString(result.trace_dir) << "\n";
 		std::cout << "seek.samples=" << result.seek_samples << "\n";
 		std::cout << "seek.max_abs_delta_ms=" << result.max_abs_delta_ms << "\n";
 		std::cout << "seek.mean_abs_delta_ms=" << result.mean_abs_delta_ms << "\n";

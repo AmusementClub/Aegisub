@@ -44,7 +44,7 @@ agi::fs::path ResolveSessionDirectory(agi::fs::path path) {
 	if (agi::fs::DirectoryExists(path))
 		return path;
 
-	auto filename = path.filename().string();
+	auto filename = agi::fs::PathToString(path.filename());
 	if (filename == "summary.txt" || filename == "manifest.txt" || filename == "trace.ndjson")
 		return path.parent_path();
 	return {};

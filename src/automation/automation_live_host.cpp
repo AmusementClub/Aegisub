@@ -30,6 +30,7 @@
 #include "../subs_controller.h"
 #include "../video_controller.h"
 
+#include <libaegisub/fs.h>
 #include <libaegisub/path.h>
 
 #include <utility>
@@ -289,7 +290,7 @@ public:
 	{
 		if (context)
 			return GetCore(context).path->Decode(path);
-		return config::path ? config::path->Decode(path) : agi::fs::path(path);
+		return config::path ? config::path->Decode(path) : agi::fs::PathFromString(path);
 	}
 
 	std::optional<AutomationProjectPropertiesView> TryGetProjectProperties() const override

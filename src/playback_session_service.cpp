@@ -250,8 +250,8 @@ class Runner final {
 
 	void PrintReport(PlaybackSessionResult const& result) const {
 		std::cout << "headless-playback-session\n";
-		std::cout << "video=" << request.video_path.string() << "\n";
-		std::cout << "audio=" << request.audio_path.string() << "\n";
+		std::cout << "video=" << agi::fs::PathToGenericString(request.video_path) << "\n";
+		std::cout << "audio=" << agi::fs::PathToGenericString(request.audio_path) << "\n";
 		std::cout << "skip_audio=" << BoolString(request.skip_audio) << "\n";
 		std::cout << "selected.video_provider=" << result.selected_video_provider << "\n";
 		std::cout << "selected.audio_provider=" << result.selected_audio_provider << "\n";
@@ -303,7 +303,7 @@ class Runner final {
 				std::cout << "query[" << (i + 1) << "].playback.current_audio_time_ms=" << query.playback->current_audio_time_ms << "\n";
 			}
 		}
-		std::cout << "trace_dir=" << result.trace_dir.string() << "\n";
+		std::cout << "trace_dir=" << agi::fs::PathToGenericString(result.trace_dir) << "\n";
 		std::cout << "result=" << (result.passed ? "PASS" : "FAIL") << "\n";
 		if (!result.message.empty())
 			std::cout << "message=" << result.message << "\n";

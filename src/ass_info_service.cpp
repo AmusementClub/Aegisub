@@ -22,6 +22,7 @@
 #include "subtitle_format.h"
 #include "ui_services.h"
 
+#include <libaegisub/fs.h>
 #include <libaegisub/exception.h>
 #include <libaegisub/vfr.h>
 
@@ -35,7 +36,7 @@ AssInfoInspectResult Inspect(AssInfoInspectRequest const& request) {
 
 	auto const* reader = SubtitleFormat::GetReader(request.subtitle_path, request.encoding);
 	if (!reader) {
-		result.error = "could not resolve subtitle reader for: " + request.subtitle_path.string();
+		result.error = "could not resolve subtitle reader for: " + agi::fs::PathToString(request.subtitle_path);
 		return result;
 	}
 

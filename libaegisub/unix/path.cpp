@@ -17,6 +17,7 @@
 #include <libaegisub/path.h>
 
 #include <libaegisub/exception.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/util_osx.h>
 
 #include <filesystem>
@@ -41,7 +42,7 @@ std::string home_dir() {
 namespace agi {
 void Path::FillPlatformSpecificPaths() {
 #ifndef __APPLE__
-	agi::fs::path home = home_dir();
+	agi::fs::path home = agi::fs::PathFromString(home_dir());
 	SetToken("?user", home/".aegisub");
 	SetToken("?local", home/".aegisub");
 	SetToken("?data", P_DATA);

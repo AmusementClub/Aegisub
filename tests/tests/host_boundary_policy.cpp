@@ -98,6 +98,24 @@ std::set<std::string> FindFilesContainingLiteralInTree(
 	return files;
 }
 
+std::vector<std::string> FindLiteralHitsRecursive(
+	std::filesystem::path const& root,
+	std::string_view needle) {
+	std::vector<std::string> hits;
+	for (auto const& entry : std::filesystem::recursive_directory_iterator(root)) {
+		if (!entry.is_regular_file())
+			continue;
+
+		auto const extension = entry.path().extension().string();
+		if (extension != ".cpp" && extension != ".h")
+			continue;
+
+		auto file_hits = FindLiteralHits(entry.path(), needle);
+		hits.insert(hits.end(), file_hits.begin(), file_hits.end());
+	}
+	return hits;
+}
+
 std::string JoinLines(std::vector<std::string> const& lines) {
 	std::ostringstream out;
 	for (size_t i = 0; i < lines.size(); ++i) {
@@ -1201,6 +1219,74 @@ TEST(host_boundary_policy, shared_inspect_open_query_services_and_provider_diagn
 	auto const media_inspect_service_cpp = root / "src" / "media_inspect_service.cpp";
 	auto media_inspect_provider_diagnostics_hits = FindLiteralHits(media_inspect_service_cpp, "provider_selection_diagnostics.h");
 	EXPECT_FALSE(media_inspect_provider_diagnostics_hits.empty());
+}
+
+TEST(host_boundary_policy, src_sources_avoid_locale_encoded_path_string_extractors) {
+	auto const root = ProjectRoot();
+	auto const src_root = root / "src";
+	ASSERT_TRUE(std::filesystem::exists(src_root));
+
+	auto hits = FindLiteralHitsRecursive(src_root, ".string()");
+	auto generic_hits = FindLiteralHitsRecursive(src_root, ".generic_string()");
+	hits.insert(hits.end(), generic_hits.begin(), generic_hits.end());
+	EXPECT_TRUE(hits.empty()) << JoinLines(hits);
+}
+
+TEST(host_boundary_policy, src_sources_avoid_implicit_narrow_path_construction) {
+	auto const root = ProjectRoot();
+	auto const src_root = root / "src";
+	ASSERT_TRUE(std::filesystem::exists(src_root));
+
+	std::vector<std::string> unexpected_hits;
+	for (auto const& needle : {"agi::fs::path(", "std::filesystem::path(", "stdfs::path("}) {
+		for (auto const& hit : FindLiteralHitsRecursive(src_root, needle)) {
+			if (std::string_view(needle) == "agi::fs::path(" && hit.find("agi::fs::path()") != std::string::npos)
+				continue;
+			if (std::string_view(needle) == "stdfs::path(" && hit.find("stdfs::path(path).parent_path()") != std::string::npos)
+				continue;
+			unexpected_hits.push_back(hit);
+		}
+	}
+
+	EXPECT_TRUE(unexpected_hits.empty()) << JoinLines(unexpected_hits);
+}
+
+TEST(host_boundary_policy, common_sources_avoid_locale_encoded_path_string_extractors) {
+	auto const root = ProjectRoot();
+	auto const common_root = root / "libaegisub" / "common";
+	ASSERT_TRUE(std::filesystem::exists(common_root));
+
+	std::vector<std::string> unexpected_hits;
+	for (auto const& needle : {".string()", ".generic_string()"}) {
+		for (auto const& hit : FindLiteralHitsRecursive(common_root, needle)) {
+			if (hit.find("libaegisub/common/fs.cpp") != std::string::npos
+				&& hit.find("return value.string();") != std::string::npos)
+				continue;
+			if (hit.find("libaegisub/common/fs.cpp") != std::string::npos
+				&& hit.find("return value.generic_string();") != std::string::npos)
+				continue;
+			unexpected_hits.push_back(hit);
+		}
+	}
+
+	EXPECT_TRUE(unexpected_hits.empty()) << JoinLines(unexpected_hits);
+}
+
+TEST(host_boundary_policy, common_sources_avoid_implicit_narrow_path_construction) {
+	auto const root = ProjectRoot();
+	auto const common_root = root / "libaegisub" / "common";
+	ASSERT_TRUE(std::filesystem::exists(common_root));
+
+	std::vector<std::string> unexpected_hits;
+	for (auto const& needle : {"agi::fs::path(", "std::filesystem::path(", "bfs::path("}) {
+		for (auto const& hit : FindLiteralHitsRecursive(common_root, needle)) {
+			if (std::string_view(needle) == "agi::fs::path(" && hit.find("agi::fs::path()") != std::string::npos)
+				continue;
+			unexpected_hits.push_back(hit);
+		}
+	}
+
+	EXPECT_TRUE(unexpected_hits.empty()) << JoinLines(unexpected_hits);
 }
 
 TEST(host_boundary_policy, shared_runtime_common_init_reachable_set_stays_split_from_gui_shell) {

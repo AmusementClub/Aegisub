@@ -39,7 +39,7 @@ void Check(agi::fs::path const& file, acs::Type type) {
 			case EACCES:
 				throw fs::ReadDenied(file);
 			case EIO:
-				throw fs::FileSystemUnknownError("Fatal I/O error in 'stat' on path: " + file.string());
+				throw fs::FileSystemUnknownError("Fatal I/O error in 'stat' on path: " + fs::PathToString(file));
 		}
 	}
 

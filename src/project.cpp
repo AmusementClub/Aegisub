@@ -656,7 +656,7 @@ void Project::LoadList(std::vector<agi::fs::path> const& files) {
 		if (file.is_relative()) file = absolute(file);
 		if (!agi::fs::FileExists(file)) continue;
 
-		auto ext = file.extension().string();
+		auto ext = agi::fs::PathToString(file.extension());
 		agi::util::strings::to_lower_inplace(ext);
 
 		// Could be subtitles, keyframes or timecodes, so try loading as each

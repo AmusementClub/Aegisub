@@ -28,6 +28,7 @@
 #include <filesystem>
 #include <cassert>
 #include <libaegisub/format.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/log.h>
 #include <libaegisub/string_utils.h>
 #include <unordered_map>
@@ -152,7 +153,7 @@ EntryList<AssDialogue>::iterator AssFile::iterator_to(AssDialogue& line) {
 void AssFile::InsertAttachment(agi::fs::path const& filename) {
 	AssEntryGroup group = AssEntryGroup::GRAPHIC;
 
-	auto ext = agi::util::strings::to_lower_copy(filename.extension().string());
+	auto ext = agi::util::strings::to_lower_copy(agi::fs::PathToString(filename.extension()));
 	if (ext == ".ttf" || ext == ".ttc" || ext == ".pfb")
 		group = AssEntryGroup::FONT;
 

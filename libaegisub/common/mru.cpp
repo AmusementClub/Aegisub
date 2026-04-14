@@ -93,10 +93,26 @@ void MRUManager::Add(const char *key, agi::fs::path const& entry) {
 	Flush();
 }
 
+void MRUManager::Add(const char *key, std::string const& entry) {
+	Add(key, fs::PathFromString(entry));
+}
+
+void MRUManager::Add(const char *key, char const* entry) {
+	Add(key, fs::PathFromString(entry));
+}
+
 void MRUManager::Remove(const char *key, agi::fs::path const& entry) {
 	auto& map = Find(key);
 	map.erase(remove(begin(map), end(map), entry), end(map));
 	Flush();
+}
+
+void MRUManager::Remove(const char *key, std::string const& entry) {
+	Remove(key, fs::PathFromString(entry));
+}
+
+void MRUManager::Remove(const char *key, char const* entry) {
+	Remove(key, fs::PathFromString(entry));
 }
 
 const MRUManager::MRUListMap* MRUManager::Get(const char *key) {

@@ -75,7 +75,7 @@ bool TryGetFileInfo(path const& p, FileInfo& out, std::error_code& ec) {
 }
 
 std::string ShortName(path const& p) {
-	return p.string();
+	return PathToString(p);
 }
 
 void Touch(path const& file) {
@@ -119,7 +119,7 @@ DirectoryIterator::DirectoryIterator(path const& p, std::string const& filter)
 	else if (privdata->bad())
 		++*this;
 	else
-		value = privdata->it->path().filename().string();
+		value = PathToString(privdata->it->path().filename());
 }
 
 bool DirectoryIterator::operator==(DirectoryIterator const& rhs) const {
@@ -139,7 +139,7 @@ DirectoryIterator& DirectoryIterator::operator++() {
 		++privdata->it;
 	}
 
-	value = privdata->it->path().filename().string();
+	value = PathToString(privdata->it->path().filename());
 
 	return *this;
 }

@@ -14,6 +14,7 @@
 
 #include <array>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 #include <libaegisub/exception.h>
@@ -54,12 +55,16 @@ public:
 	/// @param entry Entry to add
 	/// @exception MRUError thrown when an invalid key is used.
 	void Add(const char *key, agi::fs::path const& entry);
+	void Add(const char *key, std::string const& entry);
+	void Add(const char *key, char const* entry);
 
 	/// @brief Remove entry from the list.
 	/// @param key List name
 	/// @param entry Entry to add
 	/// @exception MRUError thrown when an invalid key is used.
 	void Remove(const char *key, agi::fs::path const& entry);
+	void Remove(const char *key, std::string const& entry);
+	void Remove(const char *key, char const* entry);
 
 	/// @brief Return list
 	/// @param key List name

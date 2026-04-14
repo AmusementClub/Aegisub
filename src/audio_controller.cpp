@@ -41,6 +41,7 @@
 #include "ui_services.h"
 
 #include <libaegisub/audio/provider.h>
+#include <libaegisub/log.h>
 
 #include <algorithm>
 
@@ -48,6 +49,14 @@ namespace {
 constexpr int64_t kPlaybackAheadMs = 8000;
 constexpr int64_t kPlaybackBehindMs = 2000;
 constexpr int kAudioUiTimerRequestedMs = 20;
+
+bool ShouldAutoRecoverXAudio2Output() {
+#ifdef WITH_XAUDIO2
+	return OPT_GET("Audio/Player")->GetString() == "XAudio2";
+#else
+	return false;
+#endif
+}
 }
 
 AudioController::AudioController(agi::Context *context)
@@ -224,6 +233,21 @@ void AudioController::Stop()
 bool AudioController::IsPlaying()
 {
 	return player && playback_mode != PM_NotPlaying;
+}
+
+void AudioController::RecoverAudioPlayerAfterDeviceChange()
+{
+	if (!provider) {
+		LOG_D("audio/player/xaudio2/recovery") << "Ignoring queued XAudio2 recovery because no audio provider is loaded.";
+		return;
+	}
+	if (!ShouldAutoRecoverXAudio2Output()) {
+		LOG_D("audio/player/xaudio2/recovery") << "Ignoring queued audio recovery because XAudio2 is not the selected backend.";
+		return;
+	}
+
+	LOG_I("audio/player/xaudio2/recovery") << "Rebuilding XAudio2 audio player after session or device change.";
+	OnAudioPlayerChanged();
 }
 
 int AudioController::GetPlaybackPosition()

@@ -28,6 +28,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include <memory>
+#include <string>
 #include <wx/frame.h>
 #include <wx/timer.h>
 
@@ -57,6 +58,9 @@ class FrameMain : public wxFrame {
 	wxTimer StatusClear;   ///< Status bar timeout timer
 #ifdef _WIN32
 	wxTimer FontChangeDebounce; ///< Debounces WM_FONTCHANGE bursts before refreshing subtitles
+	wxTimer AudioOutputRecoveryDebounce; ///< Debounces session/device-change bursts before rebuilding XAudio2 output
+	bool session_notifications_registered = false;
+	std::string pending_audio_output_recovery_reason;
 #endif
 
 	void InitContents();
@@ -69,6 +73,10 @@ class FrameMain : public wxFrame {
 	void OnStatusClear(wxTimerEvent &event);
 #ifdef _WIN32
 	void OnFontChangeDebounce(wxTimerEvent &event);
+	void OnAudioOutputRecoveryDebounce(wxTimerEvent &event);
+	void QueueAudioOutputRecovery(std::string reason);
+	void RegisterSessionNotifications();
+	void UnregisterSessionNotifications();
 #endif
 	void OnCloseWindow (wxCloseEvent &event);
 

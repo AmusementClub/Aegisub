@@ -76,18 +76,64 @@
 #include <wx/sysopt.h>
 
 #ifdef _WIN32
+#include <dbt.h>
 #include <windows.h>
+#include <wtsapi32.h>
 #endif
 
 enum {
 	ID_APP_TIMER_STATUSCLEAR = 12002
 #ifdef _WIN32
 	,ID_APP_TIMER_FONTCHANGE_DEBOUNCE
+	,ID_APP_TIMER_AUDIO_OUTPUT_RECOVERY
 #endif
 };
 
 #ifdef _WIN32
 constexpr int kFontChangeDebounceDelayMs = 500;
+constexpr int kAudioOutputRecoveryDebounceDelayMs = 750;
+
+bool IsRelevantAudioDeviceChange(WXWPARAM wParam) {
+	switch (static_cast<UINT>(wParam)) {
+		case DBT_DEVNODES_CHANGED:
+		case DBT_DEVICEARRIVAL:
+		case DBT_DEVICEREMOVECOMPLETE:
+			return true;
+		default:
+			return false;
+	}
+}
+
+char const* DescribeAudioDeviceChange(WXWPARAM wParam) {
+	switch (static_cast<UINT>(wParam)) {
+		case DBT_DEVNODES_CHANGED: return "WM_DEVICECHANGE/DBT_DEVNODES_CHANGED";
+		case DBT_DEVICEARRIVAL: return "WM_DEVICECHANGE/DBT_DEVICEARRIVAL";
+		case DBT_DEVICEREMOVECOMPLETE: return "WM_DEVICECHANGE/DBT_DEVICEREMOVECOMPLETE";
+		default: return "WM_DEVICECHANGE";
+	}
+}
+
+bool IsRelevantSessionChange(WXWPARAM wParam) {
+	switch (static_cast<DWORD>(wParam)) {
+		case WTS_CONSOLE_CONNECT:
+		case WTS_CONSOLE_DISCONNECT:
+		case WTS_REMOTE_CONNECT:
+		case WTS_REMOTE_DISCONNECT:
+			return true;
+		default:
+			return false;
+	}
+}
+
+char const* DescribeSessionChange(WXWPARAM wParam) {
+	switch (static_cast<DWORD>(wParam)) {
+		case WTS_CONSOLE_CONNECT: return "WM_WTSSESSION_CHANGE/WTS_CONSOLE_CONNECT";
+		case WTS_CONSOLE_DISCONNECT: return "WM_WTSSESSION_CHANGE/WTS_CONSOLE_DISCONNECT";
+		case WTS_REMOTE_CONNECT: return "WM_WTSSESSION_CHANGE/WTS_REMOTE_CONNECT";
+		case WTS_REMOTE_DISCONNECT: return "WM_WTSSESSION_CHANGE/WTS_REMOTE_DISCONNECT";
+		default: return "WM_WTSSESSION_CHANGE";
+	}
+}
 #endif
 
 #ifdef WITH_STARTUPLOG
@@ -192,6 +238,9 @@ FrameMain::FrameMain()
 	AddFullScreenButton(this);
 	Show();
 	SetDisplayMode(1, 1);
+#ifdef _WIN32
+	RegisterSessionNotifications();
+#endif
 
 	StartupLog("Leaving FrameMain constructor");
 }
@@ -201,6 +250,8 @@ FrameMain::~FrameMain () {
 	auto core = context->GetCore();
 #ifdef _WIN32
 	FontChangeDebounce.Stop();
+	AudioOutputRecoveryDebounce.Stop();
+	UnregisterSessionNotifications();
 #endif
 	core.project->CloseAudio();
 	core.project->CloseVideo();
@@ -356,6 +407,7 @@ BEGIN_EVENT_TABLE(FrameMain, wxFrame)
 	EVT_TIMER(ID_APP_TIMER_STATUSCLEAR, FrameMain::OnStatusClear)
 #ifdef _WIN32
 	EVT_TIMER(ID_APP_TIMER_FONTCHANGE_DEBOUNCE, FrameMain::OnFontChangeDebounce)
+	EVT_TIMER(ID_APP_TIMER_AUDIO_OUTPUT_RECOVERY, FrameMain::OnAudioOutputRecoveryDebounce)
 #endif
 	EVT_CLOSE(FrameMain::OnCloseWindow)
 	EVT_CHAR_HOOK(FrameMain::OnKeyDown)
@@ -383,6 +435,8 @@ void FrameMain::OnCloseWindow(wxCloseEvent &event) {
 
 #ifdef _WIN32
 	FontChangeDebounce.Stop();
+	AudioOutputRecoveryDebounce.Stop();
+	UnregisterSessionNotifications();
 #endif
 
 	Destroy();
@@ -397,11 +451,61 @@ void FrameMain::OnFontChangeDebounce(wxTimerEvent &) {
 	context->GetCore().project->ReloadSubtitlesProvider();
 }
 
+void FrameMain::OnAudioOutputRecoveryDebounce(wxTimerEvent &) {
+	LOG_I("audio/player/xaudio2/recovery") << "Running queued XAudio2 recovery after " << pending_audio_output_recovery_reason;
+	context->GetCore().audioController->RecoverAudioPlayerAfterDeviceChange();
+	pending_audio_output_recovery_reason.clear();
+}
+
+void FrameMain::QueueAudioOutputRecovery(std::string reason) {
+	if (OPT_GET("Audio/Player")->GetString() != "XAudio2")
+		return;
+
+	if (AudioOutputRecoveryDebounce.IsRunning()) {
+		LOG_D("audio/player/xaudio2/recovery") << "Coalescing XAudio2 recovery request; latest trigger: " << reason;
+	}
+	else {
+		LOG_I("audio/player/xaudio2/recovery") << "Queueing XAudio2 recovery after " << reason;
+	}
+	pending_audio_output_recovery_reason = std::move(reason);
+	AudioOutputRecoveryDebounce.SetOwner(this, ID_APP_TIMER_AUDIO_OUTPUT_RECOVERY);
+	AudioOutputRecoveryDebounce.Start(kAudioOutputRecoveryDebounceDelayMs, true);
+}
+
+void FrameMain::RegisterSessionNotifications() {
+	if (session_notifications_registered)
+		return;
+
+	auto *hwnd = reinterpret_cast<HWND>(GetHandle());
+	if (!hwnd)
+		return;
+
+	session_notifications_registered = !!WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
+	if (!session_notifications_registered)
+		LOG_W("audio/player/xaudio2/recovery") << "Failed to register session-change notifications for XAudio2 recovery.";
+}
+
+void FrameMain::UnregisterSessionNotifications() {
+	if (!session_notifications_registered)
+		return;
+
+	auto *hwnd = reinterpret_cast<HWND>(GetHandle());
+	if (hwnd)
+		WTSUnRegisterSessionNotification(hwnd);
+	session_notifications_registered = false;
+}
+
 WXLRESULT FrameMain::MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lParam) {
 	if (message == WM_FONTCHANGE) {
 		FontChangeDebounce.SetOwner(this, ID_APP_TIMER_FONTCHANGE_DEBOUNCE);
 		FontChangeDebounce.Start(kFontChangeDebounceDelayMs, true);
 	}
+
+	if (message == WM_DEVICECHANGE && IsRelevantAudioDeviceChange(wParam))
+		QueueAudioOutputRecovery(DescribeAudioDeviceChange(wParam));
+
+	if (message == WM_WTSSESSION_CHANGE && IsRelevantSessionChange(wParam))
+		QueueAudioOutputRecovery(DescribeSessionChange(wParam));
 
 	if (message == WM_SIZE) {
 		WXLRESULT res = wxFrame::MSWWindowProc(message, wParam, lParam);

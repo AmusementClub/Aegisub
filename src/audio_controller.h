@@ -159,6 +159,10 @@ public:
 	/// @return True if audio is being played back
 	bool IsPlaying();
 
+	/// Recreate the active audio player after a Windows session/output-device
+	/// transition when the selected backend is XAudio2.
+	void RecoverAudioPlayerAfterDeviceChange();
+
 	/// @brief Get the current playback position
 	/// @return Approximate current time in milliseconds being heard by the user
 	///

@@ -928,6 +928,7 @@ if(WITH_CSRI)
 endif()
 
 if(WIN32)
+    target_link_libraries(Aegisub PRIVATE Wtsapi32)
     option(WITH_DIRECTSOUND "Enable DirectSound support" ON)
     if(WITH_DIRECTSOUND)
         target_compile_definitions(Aegisub PRIVATE "WITH_DIRECTSOUND")

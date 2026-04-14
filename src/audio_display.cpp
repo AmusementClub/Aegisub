@@ -982,8 +982,7 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 	if (!audio_renderer_provider || !provider) return;
 
 	{
-		EnsurePaintBitmap();
-		wxBufferedPaintDC dc(this, paint_bitmap);
+		wxBufferedPaintDC dc(this);
 
 		for (wxRegionIterator region(GetUpdateRegion()); region; ++region)
 		{
@@ -1052,12 +1051,6 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 			DrawDebugInfo(dc);
 	}
 
-}
-
-void AudioDisplay::EnsurePaintBitmap() {
-	wxSize cs = GetClientSize();
-	if (!paint_bitmap.IsOk() || paint_bitmap.GetWidth() != cs.x || paint_bitmap.GetHeight() != cs.y)
-		paint_bitmap = wxBitmap(cs.x, cs.y, wxBITMAP_SCREEN_DEPTH);
 }
 
 void AudioDisplay::DrawDebugInfo(wxDC &dc) {
@@ -1517,8 +1510,6 @@ void AudioDisplay::OnSize(wxSizeEvent &)
 	pending_high_frequency_refresh = false;
 	pending_high_frequency_update = false;
 	pending_high_frequency_rect = wxRect();
-	// Invalidate persistent back buffer so it gets recreated at the new size
-	paint_bitmap = wxBitmap();
 
 	// We changed size, update the sub-controls' internal data and redraw
 	wxSize size = GetClientSize();

@@ -140,9 +140,6 @@ class AudioDisplay: public wxWindow {
 	/// Width of the audio marker feet in pixels
 	static const int foot_size = 6;
 
-	/// Persistent back buffer for flicker-free painting
-	wxBitmap paint_bitmap;
-
 	/// Zoom level given as a number, see SetZoomLevel for details
 	int zoom_level;
 
@@ -152,7 +149,6 @@ class AudioDisplay: public wxWindow {
 	wxString track_cursor_label;
 	/// Bounding rectangle last drawn track cursor label
 	wxRect track_cursor_label_rect;
-	void EnsurePaintBitmap();
 	/// @brief Move the tracking cursor
 	/// @param new_pos   New absolute pixel position of the tracking cursor
 	/// @param show_time Display timestamp by the tracking cursor?

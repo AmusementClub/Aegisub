@@ -108,6 +108,10 @@ class BaseGrid final : public wxWindow {
 	void OnVideoProviderChanged();
 
 	void AdjustScrollbar();
+	std::vector<int> GetRowsDisplayedAtCurrentFrame() const;
+	wxRect GetScrollableRect() const;
+	void RefreshChangedVisibleRows(std::vector<int> const& old_visible_rows, std::vector<int> const& new_visible_rows);
+	void RefreshAfterScroll(int old_y_pos);
 	void RefreshDialogueRow(const AssDialogue *line);
 	void SetColumnWidths();
 

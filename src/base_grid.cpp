@@ -262,24 +262,12 @@ void BaseGrid::SelectRow(int row, bool addToSelected, bool select) {
 
 void BaseGrid::OnCurrentFrameChanged(int frame_number) {
 	current_frame = frame_number;
-	if (!OPT_GET("Subtitle/Grid/Highlight Subtitles in Frame")->GetBool())
+	auto new_visible_rows = GetRowsDisplayedAtCurrentFrame();
+	if (new_visible_rows == visible_rows)
 		return;
 
-	int lines = GetClientSize().GetHeight() / lineHeight + 1;
-	lines = mid(0, lines, GetRows() - yPos);
-
-	auto it = begin(visible_rows);
-	for (int i = yPos; i < yPos + lines; ++i) {
-		if (IsDisplayed(index_line_map[i])) {
-			if (it == end(visible_rows) || *it != i) {
-				Refresh(false);
-				return;
-			}
-			++it;
-		}
-	}
-	if (it != end(visible_rows))
-		Refresh(false);
+	RefreshChangedVisibleRows(visible_rows, new_visible_rows);
+	visible_rows = std::move(new_visible_rows);
 }
 
 void BaseGrid::OnVideoProviderChanged() {
@@ -296,18 +284,39 @@ void BaseGrid::OnIdle(wxIdleEvent&) {
 }
 
 void BaseGrid::OnPaint(wxPaintEvent &) {
-	// Find which columns need to be repainted
+	int w = 0;
+	int h = 0;
+	GetClientSize(&w,&h);
+	w -= scrollBar->GetSize().GetWidth();
+
+	const int drawPerScreen = h/lineHeight + 1;
+	const int nDraw = mid(0, drawPerScreen, GetRows() - yPos);
+
+	// Find which columns and visible rows need to be repainted
 	std::vector<char> paint_columns;
 	paint_columns.resize(columns.size(), false);
 	bool any = false;
+	bool paint_header = false;
+	int first_dirty_row = nDraw;
+	int last_dirty_row = -1;
 	for (wxRegionIterator region(GetUpdateRegion()); region; ++region) {
 		wxRect updrect = region.GetRect();
+		if (updrect.x < w && updrect.x + updrect.width > 0)
+			any = true;
+		if (updrect.y <= lineHeight && updrect.y + updrect.height > 0)
+			paint_header = true;
+		if (nDraw && updrect.y + updrect.height > lineHeight) {
+			int first = updrect.y <= lineHeight ? 0 : (updrect.y - lineHeight) / lineHeight;
+			int last = (updrect.y + updrect.height - 1 - lineHeight) / lineHeight;
+			first_dirty_row = std::min(first_dirty_row, mid(0, first, nDraw - 1));
+			last_dirty_row = std::max(last_dirty_row, mid(0, last, nDraw - 1));
+		}
+
 		int x = 0;
 		for (size_t i : agi::util::range(columns.size())) {
 			int width = columns[i]->Width();
 			if (width && updrect.x < x + width && updrect.x + updrect.width > x) {
 				paint_columns[i] = true;
-				any = true;
 			}
 			x += width;
 		}
@@ -320,21 +329,21 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 		return;
 	}
 
-	int w = 0;
-	int h = 0;
-	GetClientSize(&w,&h);
-	w -= scrollBar->GetSize().GetWidth();
-
-	wxBufferedPaintDC dc(this);
+		wxBufferedPaintDC dc(this);
 	dc.SetFont(font);
 
 	dc.SetBackground(row_colors.Default);
 	dc.Clear();
 
 	// Draw labels
-	dc.SetPen(*wxTRANSPARENT_PEN);
-	dc.SetBrush(row_colors.LeftCol);
-	dc.DrawRectangle(0, lineHeight, columns[0]->Width(), h-lineHeight);
+	bool const has_dirty_rows = first_dirty_row <= last_dirty_row;
+	if (has_dirty_rows) {
+		dc.SetPen(*wxTRANSPARENT_PEN);
+		dc.SetBrush(row_colors.LeftCol);
+		int const top = (first_dirty_row + 1) * lineHeight;
+		int const height = (last_dirty_row - first_dirty_row + 1) * lineHeight + 1;
+		dc.DrawRectangle(0, top, columns[0]->Width(), height);
+	}
 
 	// Row colors
 	wxColour text_standard(to_wx(OPT_GET("Colour/Subtitle Grid/Standard")->GetColor()));
@@ -343,9 +352,11 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 
 	// First grid row
 	wxPen grid_pen(to_wx(OPT_GET("Colour/Subtitle Grid/Lines")->GetColor()));
-	dc.SetPen(grid_pen);
-	dc.DrawLine(0, 0, w, 0);
-	dc.SetPen(*wxTRANSPARENT_PEN);
+	if (paint_header) {
+		dc.SetPen(grid_pen);
+		dc.DrawLine(0, 0, w, 0);
+		dc.SetPen(*wxTRANSPARENT_PEN);
+	}
 
 	auto paint_text = [&](wxString const& str, int x, int y, int col) {
 		int left = x + 4;
@@ -358,7 +369,7 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 	};
 
 	// Paint header
-	{
+	if (paint_header) {
 		dc.SetTextForeground(text_standard);
 		dc.SetBrush(row_colors.Header);
 		dc.DrawRectangle(0, 0, w, lineHeight);
@@ -375,16 +386,14 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 	}
 
 	// Paint the rows
-	const int drawPerScreen = h/lineHeight + 1;
-	const int nDraw = mid(0, drawPerScreen, GetRows() - yPos);
 	const int grid_x = columns[0]->Width();
 
 	auto core = context->GetCore();
 	const auto active_line = core.selectionController->GetActiveLine();
 	auto const& selection = core.selectionController->GetSelectedSet();
-	visible_rows.clear();
+	visible_rows = GetRowsDisplayedAtCurrentFrame();
 
-	for (int i : agi::util::range(nDraw)) {
+	for (int i = first_dirty_row; i <= last_dirty_row; ++i) {
 		wxBrush color = row_colors.Default;
 		AssDialogue *curDiag = index_line_map[i + yPos];
 
@@ -396,10 +405,9 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 		else if (curDiag->Comment)
 			color = row_colors.Comment;
 
-		if (OPT_GET("Subtitle/Grid/Highlight Subtitles in Frame")->GetBool() && IsDisplayed(curDiag)) {
+		if (std::binary_search(begin(visible_rows), end(visible_rows), i + yPos)) {
 			if (color == row_colors.Default)
 				color = row_colors.Visible;
-			visible_rows.push_back(i + yPos);
 		}
 		dc.SetBrush(color);
 
@@ -427,28 +435,31 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 
 		// Draw grid
 		dc.SetPen(grid_pen);
+		dc.DrawLine(0, y, w, y);
 		dc.DrawLine(0, y + lineHeight, w , y + lineHeight);
 		dc.SetPen(*wxTRANSPARENT_PEN);
 	}
 
 	// Draw grid columns
-	{
-		int maxH = (nDraw + 1) * lineHeight;
+	if (paint_header || has_dirty_rows) {
+		int minH = paint_header ? 0 : (first_dirty_row + 1) * lineHeight;
+		int maxH = has_dirty_rows ? (last_dirty_row + 2) * lineHeight : lineHeight;
 		int x = 0;
 		dc.SetPen(grid_pen);
 		for (auto const& column : columns) {
 			x += column->Width();
 			if (x < w)
-				dc.DrawLine(x, 0, x, maxH);
+				dc.DrawLine(x, minH, x, maxH);
 		}
-		dc.DrawLine(0, 0, 0, maxH);
-		dc.DrawLine(w, 0, w, maxH);
+		dc.DrawLine(0, minH, 0, maxH);
+		dc.DrawLine(w, minH, w, maxH);
 	}
 
-	if (active_line && active_line->Row >= yPos && active_line->Row < yPos + nDraw) {
+	int const active_screen_row = active_line ? active_line->Row - yPos : -1;
+	if (active_screen_row >= first_dirty_row && active_screen_row <= last_dirty_row) {
 		dc.SetPen(wxPen(to_wx(OPT_GET("Colour/Subtitle Grid/Active Border")->GetColor())));
 		dc.SetBrush(*wxTRANSPARENT_BRUSH);
-		dc.DrawRectangle(0, (active_line->Row - yPos + 1) * lineHeight, w, lineHeight + 1);
+		dc.DrawRectangle(0, (active_screen_row + 1) * lineHeight, w, lineHeight + 1);
 	}
 }
 
@@ -460,8 +471,10 @@ void BaseGrid::OnSize(wxSizeEvent &) {
 void BaseGrid::OnScroll(wxScrollEvent &event) {
 	int newPos = event.GetPosition();
 	if (yPos != newPos) {
+		int old_y_pos = yPos;
 		context->GetCore().ass->Properties.scroll_position = yPos = newPos;
-		Refresh(false);
+		visible_rows = GetRowsDisplayedAtCurrentFrame();
+		RefreshAfterScroll(old_y_pos);
 	}
 }
 
@@ -598,10 +611,78 @@ void BaseGrid::OnContextMenu(wxContextMenuEvent &evt) {
 void BaseGrid::ScrollTo(int y) {
 	int nextY = mid(0, y, GetRows() - 1);
 	if (yPos != nextY) {
+		int old_y_pos = yPos;
 		context->GetCore().ass->Properties.scroll_position = yPos = nextY;
 		scrollBar->SetThumbPosition(yPos);
-		Refresh(false);
+		visible_rows = GetRowsDisplayedAtCurrentFrame();
+		RefreshAfterScroll(old_y_pos);
 	}
+}
+
+std::vector<int> BaseGrid::GetRowsDisplayedAtCurrentFrame() const {
+	std::vector<int> rows;
+	if (!OPT_GET("Subtitle/Grid/Highlight Subtitles in Frame")->GetBool())
+		return rows;
+
+	auto core = context->GetCore();
+	if (!core.project->VideoProvider() || current_frame < 0)
+		return rows;
+
+	int lines = GetClientSize().GetHeight() / lineHeight + 1;
+	lines = mid(0, lines, GetRows() - yPos);
+	rows.reserve(lines);
+
+	for (int i = yPos; i < yPos + lines; ++i) {
+		if (IsDisplayed(index_line_map[i]))
+			rows.push_back(i);
+	}
+
+	return rows;
+}
+
+wxRect BaseGrid::GetScrollableRect() const {
+	int width = 0;
+	int height = 0;
+	GetClientSize(&width, &height);
+	width -= scrollBar->GetSize().GetWidth();
+	int top = lineHeight + 1;
+
+	return wxRect(0, top, std::max(0, width), std::max(0, height - top));
+}
+
+void BaseGrid::RefreshChangedVisibleRows(std::vector<int> const& old_visible_rows, std::vector<int> const& new_visible_rows) {
+	auto old_it = begin(old_visible_rows);
+	auto new_it = begin(new_visible_rows);
+
+	while (old_it != end(old_visible_rows) || new_it != end(new_visible_rows)) {
+		int row = -1;
+		if (old_it == end(old_visible_rows))
+			row = *new_it++;
+		else if (new_it == end(new_visible_rows))
+			row = *old_it++;
+		else if (*old_it < *new_it)
+			row = *old_it++;
+		else if (*new_it < *old_it)
+			row = *new_it++;
+		else {
+			++old_it;
+			++new_it;
+			continue;
+		}
+
+		RefreshDialogueRow(GetDialogue(row));
+	}
+}
+
+void BaseGrid::RefreshAfterScroll(int old_y_pos) {
+	wxRect rect = GetScrollableRect();
+	int delta_rows = yPos - old_y_pos;
+	int delta_pixels = -delta_rows * lineHeight;
+
+	if (rect.GetWidth() > 0 && rect.GetHeight() > 0 && delta_pixels > -rect.GetHeight() && delta_pixels < rect.GetHeight())
+		ScrollWindow(0, delta_pixels, &rect);
+	else
+		Refresh(false);
 }
 
 void BaseGrid::AdjustScrollbar() {

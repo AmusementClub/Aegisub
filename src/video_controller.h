@@ -91,7 +91,7 @@ class VideoController final {
 	/// video is not currently playing
 	int start_ms = 0;
 
-	/// The last frame to play if video is currently playing
+	/// One past the last frame to play if video is currently playing
 	int end_frame = 0;
 	enum class PlaybackMode {
 		None,

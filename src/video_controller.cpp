@@ -197,7 +197,7 @@ bool VideoController::PreparePlayback(PlaybackMode mode, int start_frame, int ra
 		core.audioController->PlayRange(TimeRange(start_ms, playback_end_ms));
 	}
 	else {
-		end_frame = provider->GetFrameCount() - 1;
+		end_frame = provider->GetFrameCount();
 		core.audioController->PlayToEnd(start_ms);
 	}
 	playback_uses_audio_authority = core.audioController->IsPlaying();
@@ -274,15 +274,19 @@ void VideoController::OnPlayTimer() {
 
 	int next_frame = FrameAtTime(authority_time_ms);
 	perf_trace::ObserveVideoPlaybackTick(next_frame);
-	if (next_frame == frame_n) return;
 
-	if (next_frame >= end_frame)
-		Stop();
-	else {
+	bool const reached_end = next_frame >= end_frame;
+	if (reached_end)
+		next_frame = end_frame - 1;
+
+	if (next_frame != frame_n) {
 		frame_n = next_frame;
 		RequestFrame();
 		PlaybackFrameAdvanced(frame_n);
 	}
+
+	if (reached_end)
+		Stop();
 }
 
 double VideoController::GetARFromType(AspectRatio type) const {

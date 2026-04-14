@@ -102,12 +102,13 @@ class BaseGrid final : public wxWindow {
 	void OnScroll(wxScrollEvent &event);
 	void OnShowColMenu(wxCommandEvent &event);
 	void OnSize(wxSizeEvent &event);
-	void OnSubtitlesCommit(int type);
+	void OnSubtitlesCommit(int type, const AssDialogue *single_line);
 	void OnActiveLineChanged(AssDialogue *);
 	void OnCurrentFrameChanged(int frame_number);
 	void OnVideoProviderChanged();
 
 	void AdjustScrollbar();
+	void RefreshDialogueRow(const AssDialogue *line);
 	void SetColumnWidths();
 
 	bool IsDisplayed(const AssDialogue *line) const;

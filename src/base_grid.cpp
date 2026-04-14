@@ -133,7 +133,7 @@ BEGIN_EVENT_TABLE(BaseGrid,wxWindow)
 	EVT_IDLE(BaseGrid::OnIdle)
 END_EVENT_TABLE()
 
-void BaseGrid::OnSubtitlesCommit(int type) {
+void BaseGrid::OnSubtitlesCommit(int type, const AssDialogue *single_line) {
 	if (type == AssFile::COMMIT_NEW || type & AssFile::COMMIT_ORDER || type & AssFile::COMMIT_DIAG_ADDREM)
 		UpdateMaps();
 
@@ -149,6 +149,11 @@ void BaseGrid::OnSubtitlesCommit(int type) {
 		refresh_on_idle = true;
 	}
 	else if (type & AssFile::COMMIT_DIAG_TEXT) {
+		if (single_line) {
+			RefreshDialogueRow(single_line);
+			return;
+		}
+
 		for (auto const& rect : text_refresh_rects)
 			RefreshRect(rect, false);
 	}
@@ -623,6 +628,26 @@ void BaseGrid::AdjustScrollbar() {
 
 	scrollBar->SetScrollbar(yPos, drawPerScreen, rows + drawPerScreen - 1, drawPerScreen - 2, true);
 	scrollBar->Thaw();
+}
+
+void BaseGrid::RefreshDialogueRow(const AssDialogue *line) {
+	if (!line)
+		return;
+
+	int const visible_row = line->Row - yPos;
+	if (visible_row < 0)
+		return;
+
+	int width = 0;
+	int height = 0;
+	GetClientSize(&width, &height);
+
+	int const top = (visible_row + 1) * lineHeight;
+	if (top >= height)
+		return;
+
+	// Repaint the whole row so selection/background/border stay in sync with the edited text.
+	RefreshRect(wxRect(0, top, width, lineHeight + 1), false);
 }
 
 void BaseGrid::SetColumnWidths() {

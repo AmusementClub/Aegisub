@@ -282,6 +282,18 @@ if(WIN32)
     target_compile_definitions(opengl-overlay-bench PRIVATE CMAKE_BUILD)
     target_link_libraries(opengl-overlay-bench PRIVATE libaegisub OpenGL::GL Psapi)
 
+    add_executable(scene-cache-playback-smoke EXCLUDE_FROM_ALL
+        tests/smoke/scene_cache_playback_smoke.cpp
+    )
+    target_compile_definitions(scene-cache-playback-smoke PRIVATE CMAKE_BUILD NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(scene-cache-playback-smoke PRIVATE OpenGL::GL)
+
+    add_executable(scene-cache-subtitle-commit-smoke EXCLUDE_FROM_ALL
+        tests/smoke/scene_cache_subtitle_commit_smoke.cpp
+    )
+    target_compile_definitions(scene-cache-subtitle-commit-smoke PRIVATE CMAKE_BUILD NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(scene-cache-subtitle-commit-smoke PRIVATE libaegisub)
+
     add_executable(detached-visual-tools-smoke EXCLUDE_FROM_ALL
         tests/smoke/detached_visual_tools_smoke.cpp
         src/gl_wrap.cpp

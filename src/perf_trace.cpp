@@ -462,6 +462,7 @@ struct Summary {
 	size_t display_displayed_packet_ref_max_bytes = 0;
 	size_t renderer_primary_texture_max_bytes = 0;
 	size_t renderer_secondary_texture_max_bytes = 0;
+	size_t display_scene_cache_texture_max_bytes = 0;
 	size_t audio_storage_max_bytes = 0;
 	size_t audio_logical_max_bytes = 0;
 	size_t audio_decoded_max_bytes = 0;
@@ -712,6 +713,7 @@ void WriteSummaryLocked(Session const& session) {
 	write_int("display_displayed_packet_ref.max_bytes", session.summary.display_displayed_packet_ref_max_bytes);
 	write_int("renderer_primary_texture.max_bytes", session.summary.renderer_primary_texture_max_bytes);
 	write_int("renderer_secondary_texture.max_bytes", session.summary.renderer_secondary_texture_max_bytes);
+	write_int("display_scene_cache_texture.max_bytes", session.summary.display_scene_cache_texture_max_bytes);
 	write_int("audio_storage.max_bytes", session.summary.audio_storage_max_bytes);
 	write_int("audio_logical.max_bytes", session.summary.audio_logical_max_bytes);
 	write_int("audio_decoded.max_bytes", session.summary.audio_decoded_max_bytes);
@@ -1294,6 +1296,7 @@ void ObserveVideoMemorySnapshot(char const* reason, VideoMemorySnapshot const& s
 	session.summary.display_displayed_packet_ref_max_bytes = std::max(session.summary.display_displayed_packet_ref_max_bytes, snapshot.display.displayed_packet_ref_bytes);
 	session.summary.renderer_primary_texture_max_bytes = std::max(session.summary.renderer_primary_texture_max_bytes, snapshot.display.primary_renderer_texture_bytes);
 	session.summary.renderer_secondary_texture_max_bytes = std::max(session.summary.renderer_secondary_texture_max_bytes, snapshot.display.secondary_renderer_texture_bytes);
+	session.summary.display_scene_cache_texture_max_bytes = std::max(session.summary.display_scene_cache_texture_max_bytes, snapshot.display.scene_cache_texture_bytes);
 	session.summary.audio_storage_max_bytes = std::max(session.summary.audio_storage_max_bytes, snapshot.audio.storage_bytes);
 	session.summary.audio_logical_max_bytes = std::max(session.summary.audio_logical_max_bytes, snapshot.audio.logical_bytes);
 	session.summary.audio_decoded_max_bytes = std::max(session.summary.audio_decoded_max_bytes, snapshot.audio.decoded_bytes);
@@ -1339,6 +1342,7 @@ void ObserveVideoMemorySnapshot(char const* reason, VideoMemorySnapshot const& s
 	payload.AddString("renderer_primary", snapshot.display.primary_renderer_name);
 	payload.AddInt("renderer_secondary_texture_bytes", static_cast<int64_t>(snapshot.display.secondary_renderer_texture_bytes));
 	payload.AddString("renderer_secondary", snapshot.display.secondary_renderer_name);
+	payload.AddInt("display_scene_cache_texture_bytes", static_cast<int64_t>(snapshot.display.scene_cache_texture_bytes));
 	payload.AddString("audio_provider", snapshot.audio.provider_name);
 	payload.AddString("audio_storage_kind", snapshot.audio.storage_kind);
 	payload.AddInt("audio_storage_bytes", static_cast<int64_t>(snapshot.audio.storage_bytes));

@@ -102,12 +102,23 @@ class AsyncVideoProvider {
 	int last_rendered = -1;
 	/// Last rendered subtitles on that frame
 	std::vector<AssDialogueBase> last_lines;
+	/// Cached source frame for subtitle-only rerenders of the current frame
+	int cached_source_frame_number = -1;
+	SourceFrameOutputMode cached_source_mode = SourceFrameOutputMode::Bgra8;
+	bool cached_source_force_bgra = false;
+	SourceFrame cached_source_frame;
+	std::shared_ptr<VideoFrame> cached_source_frame_storage;
+	std::shared_ptr<void> cached_source_frame_owner;
 	/// Check if we actually need to honor a frame request or if no visible
 	/// lines have actually changed
 	bool NeedUpdate(std::vector<AssDialogueBase const*> const& visible_lines);
 
 	VideoRenderPacket ProcRenderPacket(int frame, double time, bool raw = false);
 	VideoRenderPacket ProcRenderPacket(int frame, double time, bool raw, bool force_bgra_frame);
+	void ResetCachedSourceFrame() noexcept;
+	bool CanReuseCachedSourceFrame(int frame, bool raw, bool force_bgra_frame) const noexcept;
+	void ReuseCachedSourceFrame(VideoRenderPacket& packet, std::shared_ptr<VideoFrame>& frame) const;
+	void UpdateCachedSourceFrame(int frame, bool force_bgra_frame, VideoRenderPacket const& packet) noexcept;
 
 	/// Monotonic counter used to identify the latest seek/drag request.
 	std::atomic<uint_fast32_t> request_version{ 0 };
@@ -121,6 +132,7 @@ class AsyncVideoProvider {
 
 	std::mutex pending_mutex;
 	std::unique_ptr<AssFile> pending_subs;
+	std::unique_ptr<AssDialogueBase> pending_changed_line;
 	bool pending_check_updated = false;
 	bool has_pending_frame = false;
 	int pending_frame_number = -1;

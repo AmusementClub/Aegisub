@@ -314,6 +314,54 @@ bool MatchesKeyPointBoundsWithinTolerance(
 
 }
 
+void AsyncVideoProvider::ResetCachedSourceFrame() noexcept {
+	cached_source_frame_number = -1;
+	cached_source_mode = SourceFrameOutputMode::Bgra8;
+	cached_source_force_bgra = false;
+	cached_source_frame = { };
+	cached_source_frame_storage.reset();
+	cached_source_frame_owner.reset();
+}
+
+bool AsyncVideoProvider::CanReuseCachedSourceFrame(int frame, bool raw, bool force_bgra_frame) const noexcept {
+	if (raw || !subs_provider || !subs)
+		return false;
+	if (!cached_source_frame.IsValid())
+		return false;
+	if (cached_source_frame_number != frame)
+		return false;
+	if (cached_source_mode != selected_source_mode)
+		return false;
+	if (cached_source_force_bgra != force_bgra_frame)
+		return false;
+	if (cached_source_frame.output_mode == SourceFrameOutputMode::Native && !cached_source_frame_owner)
+		return false;
+	return true;
+}
+
+void AsyncVideoProvider::ReuseCachedSourceFrame(VideoRenderPacket& packet, std::shared_ptr<VideoFrame>& frame) const {
+	packet.source_frame_storage = cached_source_frame_storage;
+	packet.source_frame_owner = cached_source_frame_owner;
+	packet.source_frame = cached_source_frame;
+	frame = cached_source_frame_storage;
+}
+
+void AsyncVideoProvider::UpdateCachedSourceFrame(int frame, bool force_bgra_frame, VideoRenderPacket const& packet) noexcept {
+	if (!packet.source_frame.IsValid()) {
+		ResetCachedSourceFrame();
+		return;
+	}
+
+	cached_source_frame_number = frame;
+	cached_source_mode = selected_source_mode;
+	cached_source_force_bgra = force_bgra_frame;
+	cached_source_frame = packet.source_frame;
+	cached_source_frame_storage = packet.source_frame_storage;
+	cached_source_frame_owner = packet.source_frame_owner;
+	if (!cached_source_frame_owner && cached_source_frame_storage)
+		cached_source_frame_owner = cached_source_frame_storage;
+}
+
 void AsyncVideoProvider::AdvanceOverlayContinuityGeneration() {
 	++overlay_continuity_generation;
 	if (overlay_continuity_generation == 0)
@@ -343,7 +391,10 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 
 	std::shared_ptr<VideoFrame> frame;
 	bool native_frame_needs_display_transform_fallback = false;
-	if (selected_source_mode == SourceFrameOutputMode::Native && !force_bgra_frame) {
+	if (CanReuseCachedSourceFrame(frame_number, raw, force_bgra_frame)) {
+		ReuseCachedSourceFrame(packet, frame);
+	}
+	else if (selected_source_mode == SourceFrameOutputMode::Native && !force_bgra_frame) {
 		try {
 			if (!source_provider->GetNativeFrame(frame_number, packet.source_frame, packet.source_frame_owner))
 				throw AsyncVideoProviderVideoError("Selected native source mode but provider did not return a native frame.");
@@ -383,6 +434,9 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		packet.source_frame = MakeBakedSourceFrameView(*frame, packet.source_frame);
 		packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
 	}
+
+	if (!raw && subs_provider && subs)
+		UpdateCachedSourceFrame(frame_number, force_bgra_frame, packet);
 
 	if (raw || !subs_provider || !subs) {
 		packet.composited_frame_storage = frame;
@@ -576,19 +630,30 @@ void AsyncVideoProvider::LoadSubtitles(const AssFile *new_subs) throw() {
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_subs = std::move(copy);
+		pending_changed_line.reset();
 		pending_check_updated = false;
 	}
 	ScheduleProcessing();
 }
 
 void AsyncVideoProvider::UpdateSubtitles(const AssFile *new_subs, const AssDialogue *changed) throw() {
-	(void)changed;
-	auto copy = agi::make_unique<AssFile>(*new_subs);
 	++content_version;
 	InvalidateProviderOverlayState();
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
-		pending_subs = std::move(copy);
+		if (changed) {
+			if (pending_subs) {
+				pending_subs = agi::make_unique<AssFile>(*new_subs);
+				pending_changed_line.reset();
+			}
+			else {
+				pending_changed_line = agi::make_unique<AssDialogueBase>(static_cast<AssDialogueBase const&>(*changed));
+			}
+		}
+		else {
+			pending_subs = agi::make_unique<AssFile>(*new_subs);
+			pending_changed_line.reset();
+		}
 		if (!has_pending_frame)
 			pending_check_updated = true;
 	}
@@ -672,6 +737,7 @@ void AsyncVideoProvider::ScheduleProcessing() {
 bool AsyncVideoProvider::ProcessPending() {
 	struct PendingWork {
 		std::unique_ptr<AssFile> subs;
+		std::unique_ptr<AssDialogueBase> changed_line;
 		bool check_updated = false;
 		bool has_frame = false;
 		int frame_number = -1;
@@ -685,12 +751,13 @@ bool AsyncVideoProvider::ProcessPending() {
 	PendingWork work;
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
-		if (!pending_subs && !has_pending_frame && !has_pending_color_space) {
+		if (!pending_subs && !pending_changed_line && !has_pending_frame && !has_pending_color_space) {
 			processing_scheduled = false;
 			return false;
 		}
 
 		work.subs = std::move(pending_subs);
+		work.changed_line = std::move(pending_changed_line);
 		work.check_updated = pending_check_updated;
 		pending_check_updated = false;
 		if (has_pending_frame) {
@@ -699,7 +766,7 @@ bool AsyncVideoProvider::ProcessPending() {
 			work.time = pending_time;
 			has_pending_frame = false;
 		}
-		else if (work.subs && frame_number >= 0) {
+		else if ((work.subs || work.changed_line) && frame_number >= 0) {
 			work.has_frame = true;
 			work.frame_number = frame_number;
 			work.time = time;
@@ -716,10 +783,21 @@ bool AsyncVideoProvider::ProcessPending() {
 
 	if (work.has_color_space)
 		source_provider->SetColorSpace(work.color_space);
+	if (work.has_color_space)
+		ResetCachedSourceFrame();
 
 	if (work.subs) {
 		subs = std::move(work.subs);
 		single_frame = NEW_SUBS_FILE;
+	}
+	else if (work.changed_line && subs) {
+		int const target_row = work.changed_line->Row;
+		if (target_row >= 0 && target_row < static_cast<int>(subs->Events.size())) {
+			auto it = subs->Events.begin();
+			std::advance(it, target_row);
+			static_cast<AssDialogueBase&>(*it) = *work.changed_line;
+			single_frame = NEW_SUBS_FILE;
+		}
 	}
 
 	if (!work.has_frame)
@@ -989,6 +1067,7 @@ bool AsyncVideoProvider::ReconfigureSourceOutputMode() {
 	++content_version;
 	last_rendered = -1;
 	last_lines.clear();
+	ResetCachedSourceFrame();
 	AdvanceOverlayContinuityGeneration();
 	TrimReusablePools();
 	return true;
@@ -1026,6 +1105,7 @@ void AsyncVideoProvider::SetSubtitlesTimecodes(agi::vfr::Framerate timecodes) {
 		single_frame = NEW_SUBS_FILE;
 		last_rendered = -1;
 		last_lines.clear();
+		ResetCachedSourceFrame();
 		InvalidateProviderOverlayState();
 	});
 }
@@ -1059,6 +1139,7 @@ void AsyncVideoProvider::ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvi
 		single_frame = NEW_SUBS_FILE;
 		last_rendered = -1;
 		last_lines.clear();
+		ResetCachedSourceFrame();
 		if (!mode_changed) {
 			AdvanceOverlayContinuityGeneration();
 			TrimReusablePools();

@@ -117,6 +117,9 @@ protected:
 	agi::signal::Connection file_changed_connection;
 	int commit_id = -1; ///< Last used commit id for coalescing
 
+	/// @brief Identify the line to pass to AssFile::Commit when a single-line edit is likely
+	virtual AssDialogue *GetCommitTargetLine() const;
+
 	/// @brief Commit the current file state
 	/// @param message Description of changes for undo
 	virtual void Commit(wxString message = wxString());

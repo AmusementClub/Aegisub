@@ -85,6 +85,7 @@ struct VideoDisplayMemoryStats {
 	size_t displayed_packet_ref_bytes = 0;
 	size_t primary_renderer_texture_bytes = 0;
 	size_t secondary_renderer_texture_bytes = 0;
+	size_t scene_cache_texture_bytes = 0;
 	std::string primary_renderer_name;
 	std::string secondary_renderer_name;
 };

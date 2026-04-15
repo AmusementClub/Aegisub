@@ -135,13 +135,20 @@ bool VisualToolBase::IsDisplayed(AssDialogue *line) const {
 		&& core.videoController->FrameAtTime(line->End, agi::vfr::END) >= frame;
 }
 
+AssDialogue *VisualToolBase::GetCommitTargetLine() const {
+	auto const& selected = c->GetCore().selectionController->GetSelectedSet();
+	if (selected.size() == 1)
+		return *selected.begin();
+	return nullptr;
+}
+
 void VisualToolBase::Commit(wxString message) {
 	file_changed_connection.Block();
 	if (message.empty())
 		message = _("visual typesetting");
 
 	auto core = c->GetCore();
-	commit_id = core.ass->Commit(from_wx(message), AssFile::COMMIT_DIAG_TEXT, commit_id);
+	commit_id = core.ass->Commit(from_wx(message), AssFile::COMMIT_DIAG_TEXT, commit_id, GetCommitTargetLine());
 	file_changed_connection.Unblock();
 }
 

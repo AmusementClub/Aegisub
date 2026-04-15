@@ -38,6 +38,7 @@
 #include "video_display_layout.h"
 #include "video_memory_stats.h"
 #include "video_render_packet.h"
+#include "video_subtitle_scene_cache.h"
 
 #include "vector2d.h"
 
@@ -47,6 +48,7 @@
 #include <wx/glcanvas.h>
 
 // Prototypes
+class AssDialogue;
 class RetinaHelper;
 class AsyncVideoProvider;
 class VideoController;
@@ -136,8 +138,33 @@ class VideoDisplay final : public wxGLCanvas {
 	agi::signal::Connection renderer_backend_option_connection;
 
 	bool render_requested = false;
+	bool scene_cache_enabled = true;
+	bool scene_cache_retry_blocked = false;
+	bool scene_cache_valid = false;
+	bool scene_cache_dirty = true;
+	bool scene_cache_waiting_for_subtitle_packet = false;
+	int scene_cache_retry_canvas_width = 0;
+	int scene_cache_retry_canvas_height = 0;
+	int scene_cache_width = 0;
+	int scene_cache_height = 0;
+	unsigned int scene_cache_framebuffer = 0;
+	unsigned int scene_cache_texture = 0;
+	video_subtitle_scene_cache::SubtitleSceneSnapshot displayed_subtitle_scene;
 
 	double GetVideoScaleFactor() const;
+	void InvalidateSceneCache();
+	void ResetSceneCacheRetryBlock() noexcept;
+	void BlockSceneCacheUntilRetry(int canvas_width, int canvas_height) noexcept;
+	bool ShouldAttemptSceneCache(int canvas_width, int canvas_height) noexcept;
+	void DestroySceneCache() noexcept;
+	bool EnsureSceneCache(int canvas_width, int canvas_height);
+	void RenderBackendScene(int canvas_width, int canvas_height);
+	bool RenderSceneToCache(wxSize const& client_size, int canvas_width, int canvas_height);
+	void DrawSceneCache(wxSize const& client_size, int canvas_width, int canvas_height);
+	void DrawOverlayPass(wxSize const& client_size);
+	void ResetDisplayedSubtitleScene() noexcept;
+	void RefreshDisplayedSubtitleSceneSnapshot();
+	void OnSubtitlesCommit(int type, AssDialogue const* changed);
 
 	/// @brief Draw an overscan mask
 	/// @param horizontal_percent The percent of the video reserved horizontally

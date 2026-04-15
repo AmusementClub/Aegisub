@@ -35,6 +35,7 @@
 #include "video_display.h"
 
 #include "ass_file.h"
+#include "ass_time_projection.h"
 #include "async_video_provider.h"
 #include "command/command.h"
 #include "compat.h"
@@ -43,6 +44,7 @@
 #include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
 #include "include/aegisub/menu.h"
+#include "legacy_gl_draw.h"
 #include "options.h"
 #include "perf_trace.h"
 #include "project.h"
@@ -164,6 +166,53 @@ void ApplyViewportLayout(
 	viewport_top = layout.viewport_top;
 	viewport_height = layout.viewport_height;
 }
+
+bool SourceFrameColorMetadataEquals(
+	SourceFrameColorMetadata const& lhs,
+	SourceFrameColorMetadata const& rhs) {
+	return lhs.matrix == rhs.matrix
+		&& lhs.primaries == rhs.primaries
+		&& lhs.transfer == rhs.transfer
+		&& lhs.range == rhs.range;
+}
+
+bool SourceFrameGeometryEquals(
+	SourceFrameGeometry const& lhs,
+	SourceFrameGeometry const& rhs) {
+	return lhs.storage_width == rhs.storage_width
+		&& lhs.storage_height == rhs.storage_height
+		&& lhs.visible_rect.x == rhs.visible_rect.x
+		&& lhs.visible_rect.y == rhs.visible_rect.y
+		&& lhs.visible_rect.width == rhs.visible_rect.width
+		&& lhs.visible_rect.height == rhs.visible_rect.height
+		&& lhs.rotation == rhs.rotation
+		&& lhs.display_vflip == rhs.display_vflip
+		&& lhs.pixel_aspect_ratio == rhs.pixel_aspect_ratio;
+}
+
+bool SourceFrameNativeFormatIdentityEquals(
+	SourceFrameNativeFormatIdentity const& lhs,
+	SourceFrameNativeFormatIdentity const& rhs) {
+	return lhs.format_namespace == rhs.format_namespace
+		&& lhs.format_id == rhs.format_id;
+}
+
+bool SourceFrameEquivalentForUpload(
+	SourceFrame const& lhs,
+	SourceFrame const& rhs) {
+	return lhs.output_mode == rhs.output_mode
+		&& lhs.pixel_format == rhs.pixel_format
+		&& SourceFrameNativeFormatIdentityEquals(lhs.native_format, rhs.native_format)
+		&& SourceFrameFormatInfoEquals(lhs.format_info, rhs.format_info)
+		&& lhs.width == rhs.width
+		&& lhs.height == rhs.height
+		&& lhs.flipped == rhs.flipped
+		&& lhs.plane_count == rhs.plane_count
+		&& SourceFrameColorMetadataEquals(lhs.color, rhs.color)
+		&& lhs.chroma_location == rhs.chroma_location
+		&& SourceFrameGeometryEquals(lhs.geometry, rhs.geometry);
+}
+
 }
 
 VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBox, wxWindow *parent, agi::Context *c)
@@ -194,6 +243,7 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 		con->videoController->AddFrameReadyListener(&VideoDisplay::UploadFrameData, this),
 		con->project->AddVideoProviderListener(&VideoDisplay::OnVideoProviderChanged, this),
 		con->videoController->AddARChangeListener(&VideoDisplay::UpdateSize, this),
+		con->ass->AddCommitListener(&VideoDisplay::OnSubtitlesCommit, this),
 	});
 
 	SetBackgroundStyle(wxBG_STYLE_PAINT);
@@ -248,6 +298,132 @@ bool VideoDisplay::InitContext() {
 	return true;
 }
 
+void VideoDisplay::InvalidateSceneCache() {
+	scene_cache_dirty = true;
+	scene_cache_valid = false;
+}
+
+void VideoDisplay::ResetDisplayedSubtitleScene() noexcept {
+	displayed_subtitle_scene.clear();
+	scene_cache_waiting_for_subtitle_packet = false;
+}
+
+void VideoDisplay::ResetSceneCacheRetryBlock() noexcept {
+	scene_cache_retry_blocked = false;
+	scene_cache_retry_canvas_width = 0;
+	scene_cache_retry_canvas_height = 0;
+}
+
+void VideoDisplay::BlockSceneCacheUntilRetry(int canvas_width, int canvas_height) noexcept {
+	scene_cache_retry_blocked = true;
+	scene_cache_retry_canvas_width = canvas_width;
+	scene_cache_retry_canvas_height = canvas_height;
+	DestroySceneCache();
+}
+
+bool VideoDisplay::ShouldAttemptSceneCache(int canvas_width, int canvas_height) noexcept {
+	if (!scene_cache_enabled || canvas_width <= 0 || canvas_height <= 0)
+		return false;
+
+	if (scene_cache_retry_canvas_width != canvas_width
+		|| scene_cache_retry_canvas_height != canvas_height) {
+		scene_cache_retry_blocked = false;
+		scene_cache_retry_canvas_width = canvas_width;
+		scene_cache_retry_canvas_height = canvas_height;
+	}
+
+	return !scene_cache_retry_blocked;
+}
+
+void VideoDisplay::DestroySceneCache() noexcept {
+	if (scene_cache_texture) {
+		auto texture = static_cast<GLuint>(scene_cache_texture);
+		glDeleteTextures(1, &texture);
+		scene_cache_texture = 0;
+	}
+	if (scene_cache_framebuffer) {
+		auto const& gl = GetCaptureFramebufferFunctions();
+		if (gl.DeleteFramebuffers) {
+			auto framebuffer = static_cast<GLuint>(scene_cache_framebuffer);
+			gl.DeleteFramebuffers(1, &framebuffer);
+		}
+		scene_cache_framebuffer = 0;
+	}
+	scene_cache_width = 0;
+	scene_cache_height = 0;
+	scene_cache_valid = false;
+	scene_cache_dirty = true;
+}
+
+bool VideoDisplay::EnsureSceneCache(int canvas_width, int canvas_height) {
+	if (!scene_cache_enabled)
+		return false;
+	if (canvas_width <= 0 || canvas_height <= 0)
+		return false;
+
+	auto const& gl = GetCaptureFramebufferFunctions();
+	if (!gl.BindFramebuffer
+		|| !gl.DeleteFramebuffers
+		|| !gl.GenFramebuffers
+		|| !gl.FramebufferTexture2D
+		|| !gl.CheckFramebufferStatus) {
+		DestroySceneCache();
+		return false;
+	}
+
+	if (scene_cache_framebuffer
+		&& scene_cache_texture
+		&& scene_cache_width == canvas_width
+		&& scene_cache_height == canvas_height) {
+		return true;
+	}
+
+	DestroySceneCache();
+
+	GLint previous_framebuffer = 0;
+	E(glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &previous_framebuffer));
+
+	auto cleanup = agi::make_scope_exit([&] {
+		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(previous_framebuffer));
+	});
+
+	GLuint framebuffer = 0;
+	GLuint texture = 0;
+	gl.GenFramebuffers(1, &framebuffer);
+	if (GLenum err = glGetError())
+		throw OpenGlException("glGenFramebuffers", err);
+	E(glGenTextures(1, &texture));
+
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, framebuffer);
+	if (GLenum err = glGetError())
+		throw OpenGlException("glBindFramebuffer", err);
+	E(glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT));
+	E(glReadBuffer(GL_COLOR_ATTACHMENT0_EXT));
+	E(glBindTexture(GL_TEXTURE_2D, texture));
+	E(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR));
+	E(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR));
+	E(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP));
+	E(glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP));
+	E(glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, canvas_width, canvas_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr));
+	gl.FramebufferTexture2D(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, texture, 0);
+	if (GLenum err = glGetError())
+		throw OpenGlException("glFramebufferTexture2D", err);
+	if (gl.CheckFramebufferStatus(GL_FRAMEBUFFER_EXT) != GL_FRAMEBUFFER_COMPLETE_EXT) {
+		glDeleteTextures(1, &texture);
+		gl.DeleteFramebuffers(1, &framebuffer);
+		return false;
+	}
+	E(glBindTexture(GL_TEXTURE_2D, 0));
+
+	scene_cache_framebuffer = framebuffer;
+	scene_cache_texture = texture;
+	scene_cache_width = canvas_width;
+	scene_cache_height = canvas_height;
+	scene_cache_valid = false;
+	scene_cache_dirty = true;
+	return true;
+}
+
 void VideoDisplay::ResetRenderers() {
 	if (glContext)
 		SetCurrent(*glContext);
@@ -259,6 +435,9 @@ void VideoDisplay::ResetRenderers() {
 	if (subtitleOverlayRenderer)
 		subtitleOverlayRenderer->Reset();
 	subtitleOverlayRenderer.reset();
+	ResetDisplayedSubtitleScene();
+	ResetSceneCacheRetryBlock();
+	InvalidateSceneCache();
 }
 
 bool VideoDisplay::ApplyRendererSourceModePreference() {
@@ -279,6 +458,7 @@ void VideoDisplay::OnRendererBackendChanged(agi::OptionValue const&) {
 	}
 
 	ResetRenderers();
+	InvalidateSceneCache();
 
 	if (has_pending_packet)
 		DoRender();
@@ -289,10 +469,14 @@ void VideoDisplay::OnVideoProviderChanged(AsyncVideoProvider *provider) {
 	has_pending_packet = false;
 	displayed_packet = { };
 	has_displayed_packet = false;
+	ResetDisplayedSubtitleScene();
 	contentZoomValue = 1.0;
 	pan_x = 0.0;
 	pan_y = 0.0;
 	ResetRenderers();
+	if (glContext)
+		SetCurrent(*glContext);
+	DestroySceneCache();
 
 	if (!provider)
 		return;
@@ -303,6 +487,8 @@ void VideoDisplay::OnVideoProviderChanged(AsyncVideoProvider *provider) {
 void VideoDisplay::UploadFrameData(VideoRenderPacket const& packet, double) {
 	pending_packet = packet;
 	has_pending_packet = true;
+	scene_cache_waiting_for_subtitle_packet = false;
+	InvalidateSceneCache();
 
 	// Instead of calling Render(), we force a render here to minimize delay
 	DoRender();
@@ -322,6 +508,8 @@ VideoDisplayMemoryStats VideoDisplay::CollectMemoryStats() const {
 		stats.secondary_renderer_name = subtitleOverlayRenderer->GetDebugName();
 		stats.secondary_renderer_texture_bytes = subtitleOverlayRenderer->EstimateTextureBytes();
 	}
+	if (scene_cache_texture && scene_cache_width > 0 && scene_cache_height > 0)
+		stats.scene_cache_texture_bytes = static_cast<size_t>(scene_cache_width) * static_cast<size_t>(scene_cache_height) * 4;
 	return stats;
 }
 
@@ -544,15 +732,154 @@ void VideoDisplay::OnIdle(wxIdleEvent&) {
 		DoRender();
 }
 
+void VideoDisplay::RenderBackendScene(int canvas_width, int canvas_height) {
+	videoRenderer->Render(
+		{ viewport_left, viewport_bottom, viewport_width, viewport_height },
+		canvas_width,
+		canvas_height);
+	if (subtitleOverlayRenderer) {
+		subtitleOverlayRenderer->Render(
+			{ viewport_left, viewport_bottom, viewport_width, viewport_height },
+			canvas_width,
+			canvas_height);
+	}
+}
+
+bool VideoDisplay::RenderSceneToCache(wxSize const&, int canvas_width, int canvas_height) {
+	if (!EnsureSceneCache(canvas_width, canvas_height))
+		return false;
+
+	auto const& gl = GetCaptureFramebufferFunctions();
+	GLint previous_framebuffer = 0;
+	E(glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &previous_framebuffer));
+
+	auto cleanup = agi::make_scope_exit([&] {
+		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(previous_framebuffer));
+	});
+
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(scene_cache_framebuffer));
+	if (GLenum err = glGetError())
+		throw OpenGlException("glBindFramebuffer", err);
+	E(glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT));
+	E(glReadBuffer(GL_COLOR_ATTACHMENT0_EXT));
+	RenderBackendScene(canvas_width, canvas_height);
+	scene_cache_valid = true;
+	scene_cache_dirty = false;
+	return true;
+}
+
+void VideoDisplay::DrawSceneCache(wxSize const&, int canvas_width, int canvas_height) {
+	if (!scene_cache_valid || !scene_cache_texture || canvas_width <= 0 || canvas_height <= 0)
+		return;
+
+	E(glDisable(GL_SCISSOR_TEST));
+	E(glDisable(GL_STENCIL_TEST));
+	E(glDisable(GL_CULL_FACE));
+	E(glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE));
+	E(glDisable(GL_BLEND));
+	E(glViewport(0, 0, canvas_width, canvas_height));
+	E(glClearColor(0.0f, 0.0f, 0.0f, 0.0f));
+	E(glClearStencil(0));
+	E(glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT));
+	E(glMatrixMode(GL_PROJECTION));
+	E(glLoadIdentity());
+	E(glOrtho(0.0, canvas_width, 0.0, canvas_height, -1.0, 1.0));
+	E(glMatrixMode(GL_MODELVIEW));
+	E(glLoadIdentity());
+	legacy_gl::DrawTexturedQuad(static_cast<GLuint>(scene_cache_texture), canvas_width, canvas_height);
+	if (GLenum err = glGetError())
+		throw OpenGlException("legacy_gl::DrawTexturedQuad", err);
+}
+
+void VideoDisplay::DrawOverlayPass(wxSize const& client_size) {
+	// Overlay pass (overscan mask, visual tools) renders in client/window coordinates.
+	// Always use a viewport anchored at (0,0) so that ortho coords == mouse coords.
+	// The video_pos offset already positions tool features relative to the video.
+	E(glViewport(0, 0, client_size.GetWidth() * scale_factor, client_size.GetHeight() * scale_factor));
+	E(glMatrixMode(GL_PROJECTION));
+	E(glLoadIdentity());
+	E(glOrtho(0.0f, client_size.GetWidth(), client_size.GetHeight(), 0.0f, -1000.0f, 1000.0f));
+	E(glMatrixMode(GL_MODELVIEW));
+	E(glLoadIdentity());
+
+	if (OPT_GET("Video/Overscan Mask")->GetBool()) {
+		double ar = con->videoController->GetAspectRatioValue();
+
+		// Based on BBC's guidelines: http://www.bbc.co.uk/guidelines/dq/pdf/tv/tv_standards_london.pdf
+		// 16:9 or wider
+		if (ar > 1.75) {
+			DrawOverscanMask(.1f, .05f);
+			DrawOverscanMask(0.035f, 0.035f);
+		}
+		// Less wide than 16:9 (use 4:3 standard)
+		else {
+			DrawOverscanMask(.067f, .05f);
+			DrawOverscanMask(0.033f, 0.035f);
+		}
+	}
+
+	if ((mouse_pos || !autohideTools->GetBool()) && tool)
+		tool->Draw();
+}
+
+void VideoDisplay::RefreshDisplayedSubtitleSceneSnapshot() {
+	displayed_subtitle_scene.clear();
+
+	if (!has_displayed_packet)
+		return;
+
+	auto *subs = con->ass.get();
+	auto *project = con->project.get();
+	if (!subs || !project)
+		return;
+
+	auto const frame_time = static_cast<int>(displayed_packet.time);
+	auto const& fps = project->Timecodes();
+	displayed_subtitle_scene = video_subtitle_scene_cache::CaptureSubtitleSceneSnapshot(
+		subs->Events,
+		fps,
+		frame_time);
+}
+
+void VideoDisplay::OnSubtitlesCommit(int type, AssDialogue const* changed) {
+	if (!video_subtitle_scene_cache::IsVisualSubtitleCommitType(type))
+		return;
+
+	InvalidateSceneCache();
+
+	if (!has_displayed_packet) {
+		scene_cache_waiting_for_subtitle_packet = false;
+		return;
+	}
+
+	auto *subs = con->ass.get();
+	auto *project = con->project.get();
+	if (!subs || !project) {
+		scene_cache_waiting_for_subtitle_packet = true;
+		return;
+	}
+
+	scene_cache_waiting_for_subtitle_packet = video_subtitle_scene_cache::ShouldWaitForFreshPacket(
+		type,
+		has_displayed_packet,
+		changed != nullptr,
+		subs->Events,
+		project->Timecodes(),
+		static_cast<int>(displayed_packet.time),
+		displayed_subtitle_scene);
+}
+
 void VideoDisplay::DoRender() try {
 	render_requested = false;
 
 	if (!con->project->VideoProvider() || !InitContext() || (!videoRenderer && !has_pending_packet))
 		return;
 
+	bool renderer_was_just_created = false;
 	if (!videoRenderer) {
 		auto renderer_result = CreateConfiguredVideoRenderer();
 		videoRenderer = std::move(renderer_result.renderer);
+		renderer_was_just_created = true;
 		if (ApplyRendererSourceModePreference()) {
 			pending_packet = { };
 			has_pending_packet = false;
@@ -569,28 +896,38 @@ void VideoDisplay::DoRender() try {
 	try {
 		if (has_pending_packet) {
 			bool const first_presented_frame = !has_displayed_packet;
+			bool const reuse_uploaded_source_frame =
+				!renderer_was_just_created
+				&& has_displayed_packet
+				&& pending_packet.frame_number == displayed_packet.frame_number
+				&& SourceFrameEquivalentForUpload(pending_packet.source_frame, displayed_packet.source_frame);
 			auto const routing = DecideVideoRenderRouting(
 				pending_packet,
 				videoRenderer->SupportsDirectOverlay());
 
 			if (routing == VideoRenderRoutingMode::SourceFrameOnly) {
-				videoRenderer->UploadFrame(pending_packet.source_frame);
+				if (!reuse_uploaded_source_frame)
+					videoRenderer->UploadFrame(pending_packet.source_frame);
 				videoRenderer->UploadOverlay(nullptr);
 				if (subtitleOverlayRenderer)
 					subtitleOverlayRenderer->UploadOverlay(nullptr);
 			}
 			else if (routing == VideoRenderRoutingMode::PrimaryRendererDirectOverlay) {
-				videoRenderer->UploadFrame(pending_packet.source_frame);
+				if (!reuse_uploaded_source_frame)
+					videoRenderer->UploadFrame(pending_packet.source_frame);
 				videoRenderer->UploadOverlay(&pending_packet.subtitle_overlay);
 				if (subtitleOverlayRenderer)
 					subtitleOverlayRenderer->UploadOverlay(nullptr);
 			}
 			else if (routing == VideoRenderRoutingMode::SecondaryRendererDirectOverlay) {
-				videoRenderer->UploadFrame(pending_packet.source_frame);
+				if (!reuse_uploaded_source_frame)
+					videoRenderer->UploadFrame(pending_packet.source_frame);
 				videoRenderer->UploadOverlay(nullptr);
-				if (!subtitleOverlayRenderer)
+				bool const created_overlay_renderer = !subtitleOverlayRenderer;
+				if (created_overlay_renderer)
 					subtitleOverlayRenderer = agi::make_unique<OpenGLVideoRenderer>(false, true, false);
-				subtitleOverlayRenderer->UploadFrame(pending_packet.source_frame);
+				if (!reuse_uploaded_source_frame || created_overlay_renderer)
+					subtitleOverlayRenderer->UploadFrame(pending_packet.source_frame);
 				subtitleOverlayRenderer->UploadOverlay(&pending_packet.subtitle_overlay);
 			}
 			else {
@@ -604,6 +941,7 @@ void VideoDisplay::DoRender() try {
 			has_displayed_packet = true;
 			pending_packet = { };
 			has_pending_packet = false;
+			RefreshDisplayedSubtitleSceneSnapshot();
 			FramePresented(displayed_packet.frame_number);
 			auto ui = con->GetUI();
 			ui.videoFramePresented(displayed_packet.frame_number);
@@ -638,36 +976,45 @@ void VideoDisplay::DoRender() try {
 
 	wxSize client_size = GetClientSize();
 	client_size = wxSize(std::max(1, client_size.GetWidth()), std::max(1, client_size.GetHeight()));
-	videoRenderer->Render({ viewport_left, viewport_bottom, viewport_width, viewport_height }, client_size.GetWidth() * scale_factor, client_size.GetHeight() * scale_factor);
-	if (subtitleOverlayRenderer)
-		subtitleOverlayRenderer->Render({ viewport_left, viewport_bottom, viewport_width, viewport_height }, client_size.GetWidth() * scale_factor, client_size.GetHeight() * scale_factor);
+	int const canvas_width = client_size.GetWidth() * scale_factor;
+	int const canvas_height = client_size.GetHeight() * scale_factor;
 
-	// Overlay pass (overscan mask, visual tools) renders in client/window coordinates.
-	// Always use a viewport anchored at (0,0) so that ortho coords == mouse coords.
-	// The video_pos offset already positions tool features relative to the video.
-	E(glViewport(0, 0, client_size.GetWidth() * scale_factor, client_size.GetHeight() * scale_factor));
-	E(glMatrixMode(GL_PROJECTION));
-	E(glLoadIdentity());
-	E(glOrtho(0.0f, client_size.GetWidth(), client_size.GetHeight(), 0.0f, -1000.0f, 1000.0f));
-
-	if (OPT_GET("Video/Overscan Mask")->GetBool()) {
-		double ar = con->videoController->GetAspectRatioValue();
-
-		// Based on BBC's guidelines: http://www.bbc.co.uk/guidelines/dq/pdf/tv/tv_standards_london.pdf
-		// 16:9 or wider
-		if (ar > 1.75) {
-			DrawOverscanMask(.1f, .05f);
-			DrawOverscanMask(0.035f, 0.035f);
+	bool rendered_from_scene_cache = false;
+	if (!scene_cache_waiting_for_subtitle_packet && ShouldAttemptSceneCache(canvas_width, canvas_height)) {
+		try {
+			if (scene_cache_dirty
+				|| !scene_cache_valid
+				|| scene_cache_width != canvas_width
+				|| scene_cache_height != canvas_height) {
+				if (!RenderSceneToCache(client_size, canvas_width, canvas_height)) {
+					wxLogWarning(
+						wxS("Video scene cache could not be created for the current frame size.\n"
+						    "Falling back to direct backend rendering until the display size changes or the renderer resets."));
+					BlockSceneCacheUntilRetry(canvas_width, canvas_height);
+				}
+			}
+			if (!scene_cache_retry_blocked) {
+				DrawSceneCache(client_size, canvas_width, canvas_height);
+				rendered_from_scene_cache = true;
+			}
 		}
-		// Less wide than 16:9 (use 4:3 standard)
-		else {
-			DrawOverscanMask(.067f, .05f);
-			DrawOverscanMask(0.033f, 0.035f);
+		catch (agi::Exception const& err) {
+			wxLogWarning(
+				wxS("Video scene cache failed for the current frame size.\n"
+				    "Falling back to direct backend rendering until the display size changes or the renderer resets.\n"
+				    "Error message reported: %s"),
+				to_wx(err.GetMessage()));
+			BlockSceneCacheUntilRetry(canvas_width, canvas_height);
 		}
 	}
 
-	if ((mouse_pos || !autohideTools->GetBool()) && tool)
-		tool->Draw();
+	if (!rendered_from_scene_cache) {
+		RenderBackendScene(canvas_width, canvas_height);
+		scene_cache_valid = false;
+		scene_cache_dirty = true;
+	}
+
+	DrawOverlayPass(client_size);
 
 	SwapBuffers();
 }
@@ -759,6 +1106,7 @@ void VideoDisplay::PositionVideo() {
 			viewport_width / scale_factor, viewport_height / scale_factor);
 	}
 
+	InvalidateSceneCache();
 	Render();
 }
 
@@ -1032,10 +1380,14 @@ Vector2D VideoDisplay::GetMousePosition() const {
 
 void VideoDisplay::Unload() {
 	ResetRenderers();
+	if (glContext)
+		SetCurrent(*glContext);
+	DestroySceneCache();
 	tool.reset();
 	glContext.reset();
 	pending_packet = { };
 	has_pending_packet = false;
 	displayed_packet = { };
 	has_displayed_packet = false;
+	ResetDisplayedSubtitleScene();
 }

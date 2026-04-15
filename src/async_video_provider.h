@@ -125,6 +125,7 @@ class AsyncVideoProvider {
 
 	std::mutex pending_mutex;
 	std::unique_ptr<AssFile> pending_subs;
+	std::unique_ptr<AssDialogueBase> pending_changed_line;
 	bool pending_check_updated = false;
 	bool has_pending_frame = false;
 	int pending_frame_number = -1;

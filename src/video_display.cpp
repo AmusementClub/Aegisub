@@ -164,6 +164,52 @@ void ApplyViewportLayout(
 	viewport_top = layout.viewport_top;
 	viewport_height = layout.viewport_height;
 }
+
+bool SourceFrameColorMetadataEquals(
+	SourceFrameColorMetadata const& lhs,
+	SourceFrameColorMetadata const& rhs) {
+	return lhs.matrix == rhs.matrix
+		&& lhs.primaries == rhs.primaries
+		&& lhs.transfer == rhs.transfer
+		&& lhs.range == rhs.range;
+}
+
+bool SourceFrameGeometryEquals(
+	SourceFrameGeometry const& lhs,
+	SourceFrameGeometry const& rhs) {
+	return lhs.storage_width == rhs.storage_width
+		&& lhs.storage_height == rhs.storage_height
+		&& lhs.visible_rect.x == rhs.visible_rect.x
+		&& lhs.visible_rect.y == rhs.visible_rect.y
+		&& lhs.visible_rect.width == rhs.visible_rect.width
+		&& lhs.visible_rect.height == rhs.visible_rect.height
+		&& lhs.rotation == rhs.rotation
+		&& lhs.display_vflip == rhs.display_vflip
+		&& lhs.pixel_aspect_ratio == rhs.pixel_aspect_ratio;
+}
+
+bool SourceFrameNativeFormatIdentityEquals(
+	SourceFrameNativeFormatIdentity const& lhs,
+	SourceFrameNativeFormatIdentity const& rhs) {
+	return lhs.format_namespace == rhs.format_namespace
+		&& lhs.format_id == rhs.format_id;
+}
+
+bool SourceFrameEquivalentForUpload(
+	SourceFrame const& lhs,
+	SourceFrame const& rhs) {
+	return lhs.output_mode == rhs.output_mode
+		&& lhs.pixel_format == rhs.pixel_format
+		&& SourceFrameNativeFormatIdentityEquals(lhs.native_format, rhs.native_format)
+		&& SourceFrameFormatInfoEquals(lhs.format_info, rhs.format_info)
+		&& lhs.width == rhs.width
+		&& lhs.height == rhs.height
+		&& lhs.flipped == rhs.flipped
+		&& lhs.plane_count == rhs.plane_count
+		&& SourceFrameColorMetadataEquals(lhs.color, rhs.color)
+		&& lhs.chroma_location == rhs.chroma_location
+		&& SourceFrameGeometryEquals(lhs.geometry, rhs.geometry);
+}
 }
 
 VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBox, wxWindow *parent, agi::Context *c)
@@ -550,9 +596,11 @@ void VideoDisplay::DoRender() try {
 	if (!con->project->VideoProvider() || !InitContext() || (!videoRenderer && !has_pending_packet))
 		return;
 
+	bool renderer_was_just_created = false;
 	if (!videoRenderer) {
 		auto renderer_result = CreateConfiguredVideoRenderer();
 		videoRenderer = std::move(renderer_result.renderer);
+		renderer_was_just_created = true;
 		if (ApplyRendererSourceModePreference()) {
 			pending_packet = { };
 			has_pending_packet = false;
@@ -569,28 +617,38 @@ void VideoDisplay::DoRender() try {
 	try {
 		if (has_pending_packet) {
 			bool const first_presented_frame = !has_displayed_packet;
+			bool const reuse_uploaded_source_frame =
+				!renderer_was_just_created
+				&& has_displayed_packet
+				&& pending_packet.frame_number == displayed_packet.frame_number
+				&& SourceFrameEquivalentForUpload(pending_packet.source_frame, displayed_packet.source_frame);
 			auto const routing = DecideVideoRenderRouting(
 				pending_packet,
 				videoRenderer->SupportsDirectOverlay());
 
 			if (routing == VideoRenderRoutingMode::SourceFrameOnly) {
-				videoRenderer->UploadFrame(pending_packet.source_frame);
+				if (!reuse_uploaded_source_frame)
+					videoRenderer->UploadFrame(pending_packet.source_frame);
 				videoRenderer->UploadOverlay(nullptr);
 				if (subtitleOverlayRenderer)
 					subtitleOverlayRenderer->UploadOverlay(nullptr);
 			}
 			else if (routing == VideoRenderRoutingMode::PrimaryRendererDirectOverlay) {
-				videoRenderer->UploadFrame(pending_packet.source_frame);
+				if (!reuse_uploaded_source_frame)
+					videoRenderer->UploadFrame(pending_packet.source_frame);
 				videoRenderer->UploadOverlay(&pending_packet.subtitle_overlay);
 				if (subtitleOverlayRenderer)
 					subtitleOverlayRenderer->UploadOverlay(nullptr);
 			}
 			else if (routing == VideoRenderRoutingMode::SecondaryRendererDirectOverlay) {
-				videoRenderer->UploadFrame(pending_packet.source_frame);
+				if (!reuse_uploaded_source_frame)
+					videoRenderer->UploadFrame(pending_packet.source_frame);
 				videoRenderer->UploadOverlay(nullptr);
-				if (!subtitleOverlayRenderer)
+				bool const created_overlay_renderer = !subtitleOverlayRenderer;
+				if (created_overlay_renderer)
 					subtitleOverlayRenderer = agi::make_unique<OpenGLVideoRenderer>(false, true, false);
-				subtitleOverlayRenderer->UploadFrame(pending_packet.source_frame);
+				if (!reuse_uploaded_source_frame || created_overlay_renderer)
+					subtitleOverlayRenderer->UploadFrame(pending_packet.source_frame);
 				subtitleOverlayRenderer->UploadOverlay(&pending_packet.subtitle_overlay);
 			}
 			else {

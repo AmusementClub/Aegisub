@@ -584,20 +584,31 @@ void AsyncVideoProvider::LoadSubtitles(const AssFile *new_subs) throw() {
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_subs = std::move(copy);
+		pending_changed_line.reset();
 		pending_check_updated = false;
 	}
 	ScheduleProcessing();
 }
 
 void AsyncVideoProvider::UpdateSubtitles(const AssFile *new_subs, const AssDialogue *changed) throw() {
-	(void)changed;
-	auto copy = agi::make_unique<AssFile>(*new_subs);
 	++content_version;
 	ResetCompatibilityOverlayState();
 	InvalidateProviderOverlayState();
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
-		pending_subs = std::move(copy);
+		if (changed) {
+			if (pending_subs) {
+				pending_subs = agi::make_unique<AssFile>(*new_subs);
+				pending_changed_line.reset();
+			}
+			else {
+				pending_changed_line = agi::make_unique<AssDialogueBase>(static_cast<AssDialogueBase const&>(*changed));
+			}
+		}
+		else {
+			pending_subs = agi::make_unique<AssFile>(*new_subs);
+			pending_changed_line.reset();
+		}
 		if (!has_pending_frame)
 			pending_check_updated = true;
 	}
@@ -681,6 +692,7 @@ void AsyncVideoProvider::ScheduleProcessing() {
 bool AsyncVideoProvider::ProcessPending() {
 	struct PendingWork {
 		std::unique_ptr<AssFile> subs;
+		std::unique_ptr<AssDialogueBase> changed_line;
 		bool check_updated = false;
 		bool has_frame = false;
 		int frame_number = -1;
@@ -700,6 +712,7 @@ bool AsyncVideoProvider::ProcessPending() {
 		}
 
 		work.subs = std::move(pending_subs);
+		work.changed_line = std::move(pending_changed_line);
 		work.check_updated = pending_check_updated;
 		pending_check_updated = false;
 		if (has_pending_frame) {
@@ -708,7 +721,7 @@ bool AsyncVideoProvider::ProcessPending() {
 			work.time = pending_time;
 			has_pending_frame = false;
 		}
-		else if (work.subs && frame_number >= 0) {
+		else if ((work.subs || work.changed_line) && frame_number >= 0) {
 			work.has_frame = true;
 			work.frame_number = frame_number;
 			work.time = time;
@@ -729,6 +742,15 @@ bool AsyncVideoProvider::ProcessPending() {
 	if (work.subs) {
 		subs = std::move(work.subs);
 		single_frame = NEW_SUBS_FILE;
+	}
+	else if (work.changed_line && subs) {
+		int const target_row = work.changed_line->Row;
+		if (target_row >= 0 && target_row < static_cast<int>(subs->Events.size())) {
+			auto it = subs->Events.begin();
+			std::advance(it, target_row);
+			static_cast<AssDialogueBase&>(*it) = *work.changed_line;
+			single_frame = NEW_SUBS_FILE;
+		}
 	}
 
 	if (!work.has_frame)

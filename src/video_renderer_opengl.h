@@ -71,6 +71,7 @@ class OpenGLVideoRenderer final : public IVideoRenderer {
 	int max_texture_size = 0;
 	bool supports_rectangular_textures = false;
 	GLint internal_format = 0;
+	bool compatibility_pipeline = false;
 	bool render_video_layer = true;
 	bool render_overlay_layer = true;
 	bool clear_before_render = true;

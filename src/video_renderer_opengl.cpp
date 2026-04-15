@@ -14,12 +14,16 @@
 
 #include "video_renderer_opengl.h"
 
+#include "legacy_gl_draw.h"
 #include "video_render_opengl_proc_loader.h"
 #include "video_renderer_opengl_overlay_upload_plan.h"
 #include "video_renderer_error.h"
 
 #include <libaegisub/compiler.h>
 #include <libaegisub/log.h>
+
+#include <cctype>
+#include <cstdlib>
 
 #ifdef _WIN32
 #ifdef HAVE_OPENGL_GL_H
@@ -83,10 +87,18 @@ struct OpenGLVideoRenderer::Functions {
 
 namespace {
 template<typename Proc>
-void LoadProc(Proc& proc, char const *name) {
+bool LoadOptionalProc(Proc& proc, char const *name) {
 	proc = reinterpret_cast<Proc>(opengl::GetProcAddress(name));
-	if (!proc)
-		throw_message<VideoOutInitException>(name);
+	return proc != nullptr;
+}
+
+bool ReadEnvFlag(char const *name) {
+	auto const* value = std::getenv(name);
+	if (!value || !*value)
+		return false;
+
+	char const first = static_cast<char>(std::tolower(static_cast<unsigned char>(*value)));
+	return first != '0' && first != 'f' && first != 'n';
 }
 
 template<typename Exception>
@@ -115,34 +127,51 @@ OpenGLVideoRenderer::~OpenGLVideoRenderer() {
 }
 
 void OpenGLVideoRenderer::LoadFunctions() {
-	if (functions)
+	if (functions || compatibility_pipeline)
 		return;
 
-	functions = std::make_unique<Functions>();
-	LoadProc(functions->AttachShader, "glAttachShader");
-	LoadProc(functions->BindAttribLocation, "glBindAttribLocation");
-	LoadProc(functions->BindBuffer, "glBindBuffer");
-	LoadProc(functions->BufferData, "glBufferData");
-	LoadProc(functions->CompileShader, "glCompileShader");
-	LoadProc(functions->CreateProgram, "glCreateProgram");
-	LoadProc(functions->CreateShader, "glCreateShader");
-	LoadProc(functions->DeleteBuffers, "glDeleteBuffers");
-	LoadProc(functions->DeleteProgram, "glDeleteProgram");
-	LoadProc(functions->DeleteShader, "glDeleteShader");
-	LoadProc(functions->DisableVertexAttribArray, "glDisableVertexAttribArray");
-	LoadProc(functions->EnableVertexAttribArray, "glEnableVertexAttribArray");
-	LoadProc(functions->GenBuffers, "glGenBuffers");
-	LoadProc(functions->GetProgramInfoLog, "glGetProgramInfoLog");
-	LoadProc(functions->GetProgramiv, "glGetProgramiv");
-	LoadProc(functions->GetShaderInfoLog, "glGetShaderInfoLog");
-	LoadProc(functions->GetShaderiv, "glGetShaderiv");
-	LoadProc(functions->GetUniformLocation, "glGetUniformLocation");
-	LoadProc(functions->LinkProgram, "glLinkProgram");
-	LoadProc(functions->ShaderSource, "glShaderSource");
-	LoadProc(functions->Uniform1i, "glUniform1i");
-	LoadProc(functions->UniformMatrix4fv, "glUniformMatrix4fv");
-	LoadProc(functions->UseProgram, "glUseProgram");
-	LoadProc(functions->VertexAttribPointer, "glVertexAttribPointer");
+	if (ReadEnvFlag("AEGISUB_OPENGL_FORCE_COMPATIBILITY_PIPELINE")) {
+		compatibility_pipeline = true;
+		LOG_W("video/out/opengl") << "Forcing the fixed-function compatibility pipeline via "
+			<< "AEGISUB_OPENGL_FORCE_COMPATIBILITY_PIPELINE.";
+		return;
+	}
+
+	auto loaded = std::make_unique<Functions>();
+	bool have_modern_pipeline = true;
+	have_modern_pipeline = LoadOptionalProc(loaded->AttachShader, "glAttachShader") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->BindAttribLocation, "glBindAttribLocation") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->BindBuffer, "glBindBuffer") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->BufferData, "glBufferData") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->CompileShader, "glCompileShader") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->CreateProgram, "glCreateProgram") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->CreateShader, "glCreateShader") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->DeleteBuffers, "glDeleteBuffers") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->DeleteProgram, "glDeleteProgram") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->DeleteShader, "glDeleteShader") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->DisableVertexAttribArray, "glDisableVertexAttribArray") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->EnableVertexAttribArray, "glEnableVertexAttribArray") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->GenBuffers, "glGenBuffers") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->GetProgramInfoLog, "glGetProgramInfoLog") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->GetProgramiv, "glGetProgramiv") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->GetShaderInfoLog, "glGetShaderInfoLog") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->GetShaderiv, "glGetShaderiv") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->GetUniformLocation, "glGetUniformLocation") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->LinkProgram, "glLinkProgram") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->ShaderSource, "glShaderSource") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->Uniform1i, "glUniform1i") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->UniformMatrix4fv, "glUniformMatrix4fv") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->UseProgram, "glUseProgram") && have_modern_pipeline;
+	have_modern_pipeline = LoadOptionalProc(loaded->VertexAttribPointer, "glVertexAttribPointer") && have_modern_pipeline;
+
+	if (!have_modern_pipeline) {
+		compatibility_pipeline = true;
+		LOG_W("video/out/opengl") << "Required shader or buffer OpenGL entry points are unavailable; "
+			<< "falling back to the fixed-function compatibility pipeline.";
+		return;
+	}
+
+	functions = std::move(loaded);
 }
 
 void OpenGLVideoRenderer::DetectOpenGLCapabilities() {
@@ -165,6 +194,9 @@ void OpenGLVideoRenderer::DetectOpenGLCapabilities() {
 }
 
 void OpenGLVideoRenderer::CreateProgram() {
+	if (compatibility_pipeline)
+		return;
+
 	if (program)
 		return;
 
@@ -252,6 +284,9 @@ void OpenGLVideoRenderer::CreateProgram() {
 }
 
 void OpenGLVideoRenderer::CreateLayerBuffers(LayerResources& layer) {
+	if (compatibility_pipeline)
+		return;
+
 	if (layer.vertex_buffer && layer.element_buffer)
 		return;
 
@@ -277,9 +312,9 @@ void OpenGLVideoRenderer::EnsureInitialized() {
 	LoadFunctions();
 	DetectOpenGLCapabilities();
 	CreateProgram();
-	if (render_video_layer)
+	if (!compatibility_pipeline && render_video_layer)
 		CreateLayerBuffers(video_layer);
-	if (render_overlay_layer)
+	if (!compatibility_pipeline && render_overlay_layer)
 		CreateLayerBuffers(overlay_layer);
 }
 
@@ -321,6 +356,7 @@ void OpenGLVideoRenderer::DestroyResources() noexcept {
 void OpenGLVideoRenderer::Reset() {
 	DestroyResources();
 	functions.reset();
+	compatibility_pipeline = false;
 	max_texture_size = 0;
 	supports_rectangular_textures = false;
 	internal_format = 0;
@@ -389,6 +425,9 @@ void OpenGLVideoRenderer::RebuildLayerGeometry(LayerResources& layer) {
 		layer.indices.push_back(base + 2);
 		layer.indices.push_back(base + 3);
 	}
+
+	if (compatibility_pipeline)
+		return;
 
 	auto& gl = *functions;
 	gl.BindBuffer(GL_ARRAY_BUFFER, layer.vertex_buffer);
@@ -540,13 +579,65 @@ void OpenGLVideoRenderer::UploadDirtyRects(LayerResources& layer, unsigned char 
 void OpenGLVideoRenderer::RenderLayer(LayerResources& layer) {
 	if (!layer.has_content || layer.layout.tiles.empty())
 		return;
-	auto& gl = *functions;
 	int const render_width = layer.render_output_layout.output_width > 0
 		? layer.render_output_layout.output_width
 		: layer.canvas_width;
 	int const render_height = layer.render_output_layout.output_height > 0
 		? layer.render_output_layout.output_height
 		: layer.canvas_height;
+
+	if (compatibility_pipeline) {
+		legacy_gl::ResetCompatibilityState();
+		glMatrixMode(GL_PROJECTION);
+		glLoadIdentity();
+		if (layer.layout.flipped)
+			glOrtho(0.0, render_width, 0.0, render_height, -1.0, 1.0);
+		else
+			glOrtho(0.0, render_width, render_height, 0.0, -1.0, 1.0);
+		glMatrixMode(GL_MODELVIEW);
+		glLoadIdentity();
+
+		if (layer.composition_mode == SubtitleOverlayCompositionMode::PremultipliedAlpha) {
+			CHECK_RENDER_ERROR(glEnable(GL_BLEND));
+			CHECK_RENDER_ERROR(glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
+		}
+		else {
+			CHECK_RENDER_ERROR(glDisable(GL_BLEND));
+		}
+
+		CHECK_RENDER_ERROR(glDisableClientState(GL_COLOR_ARRAY));
+		CHECK_RENDER_ERROR(glColor4f(1.0f, 1.0f, 1.0f, 1.0f));
+		CHECK_RENDER_ERROR(glEnable(GL_TEXTURE_2D));
+		CHECK_RENDER_ERROR(glEnableClientState(GL_VERTEX_ARRAY));
+		CHECK_RENDER_ERROR(glEnableClientState(GL_TEXTURE_COORD_ARRAY));
+		CHECK_RENDER_ERROR(glVertexPointer(
+			2,
+			GL_FLOAT,
+			sizeof(Vertex),
+			reinterpret_cast<void const*>(&layer.vertices[0].position[0])));
+		CHECK_RENDER_ERROR(glTexCoordPointer(
+			2,
+			GL_FLOAT,
+			sizeof(Vertex),
+			reinterpret_cast<void const*>(&layer.vertices[0].texcoord[0])));
+
+		for (size_t i = 0; i < layer.texture_ids.size(); ++i) {
+			CHECK_RENDER_ERROR(glBindTexture(GL_TEXTURE_2D, layer.texture_ids[i]));
+			CHECK_RENDER_ERROR(glDrawElements(
+				GL_TRIANGLES,
+				6,
+				GL_UNSIGNED_INT,
+				static_cast<void const*>(layer.indices.data() + i * 6)));
+		}
+
+		CHECK_RENDER_ERROR(glDisableClientState(GL_TEXTURE_COORD_ARRAY));
+		CHECK_RENDER_ERROR(glDisableClientState(GL_VERTEX_ARRAY));
+		CHECK_RENDER_ERROR(glBindTexture(GL_TEXTURE_2D, 0));
+		CHECK_RENDER_ERROR(glDisable(GL_TEXTURE_2D));
+		return;
+	}
+
+	auto& gl = *functions;
 	auto projection_matrix = BuildOpenGLVideoRendererOrthoMatrix(render_width, render_height, layer.layout.flipped);
 
 	if (layer.composition_mode == SubtitleOverlayCompositionMode::PremultipliedAlpha) {

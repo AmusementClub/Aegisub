@@ -1332,6 +1332,13 @@ void ObserveVideoMemorySnapshot(char const* reason, VideoMemorySnapshot const& s
 	payload.AddInt("async_compatibility_overlay_pool_buffers", snapshot.async.compatibility_overlay_pool_buffers);
 	payload.AddString("source_mode", SourceFrameOutputModeName(snapshot.async.selected_source_mode));
 	payload.AddString("decoder", snapshot.async.decoder_name);
+	payload.AddString("subtitles_provider", snapshot.async.subtitles_provider_name);
+	payload.AddString("subtitles_render_mode", snapshot.async.subtitles_render_mode);
+	payload.AddBool("compatibility_requires_bgra8", snapshot.async.compatibility_requires_bgra8);
+	payload.AddBool("subtitles_loaded", snapshot.async.subtitles_loaded);
+	payload.AddBool("compatibility_overlay_active", snapshot.async.compatibility_overlay_active);
+	payload.AddBool("pending_subtitles_update", snapshot.async.pending_subtitles_update);
+	payload.AddInt("subtitles_event_count", snapshot.async.subtitles_event_count);
 	payload.AddInt("display_pending_packet_ref_bytes", static_cast<int64_t>(snapshot.display.pending_packet_ref_bytes));
 	payload.AddInt("display_displayed_packet_ref_bytes", static_cast<int64_t>(snapshot.display.displayed_packet_ref_bytes));
 	payload.AddInt("renderer_primary_texture_bytes", static_cast<int64_t>(snapshot.display.primary_renderer_texture_bytes));

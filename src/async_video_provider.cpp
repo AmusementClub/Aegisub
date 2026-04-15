@@ -554,6 +554,17 @@ AsyncVideoProviderMemoryStats AsyncVideoProvider::CollectMemoryStats() {
 		stats.provider = source_provider->GetMemoryStats();
 		stats.selected_source_mode = selected_source_mode;
 		stats.decoder_name = source_provider->GetDecoderName();
+		if (subs_provider) {
+			stats.subtitles_provider_name = subs_provider->GetDebugName();
+			stats.subtitles_render_mode = SubtitleRenderModeName(subs_provider->GetRenderMode());
+			stats.compatibility_requires_bgra8 =
+				subs_provider->GetRenderMode() == SubtitleRenderMode::CompatibilityFrameOnly;
+		}
+		stats.subtitles_loaded = static_cast<bool>(subs);
+		stats.compatibility_overlay_active = static_cast<bool>(previous_compatibility_overlay);
+		stats.pending_subtitles_update = static_cast<bool>(pending_subs);
+		if (subs)
+			stats.subtitles_event_count = static_cast<int>(subs->Events.size());
 
 		stats.source_pool_buffers = static_cast<int>(source_buffers.size());
 		for (auto const& buffer : source_buffers) {
@@ -571,6 +582,13 @@ AsyncVideoProviderMemoryStats AsyncVideoProvider::CollectMemoryStats() {
 		for (auto const& overlay : subtitle_overlay_buffers) {
 			if (overlay)
 				stats.subtitle_overlay_pool_bytes += EstimateSubtitleOverlayStorageBytes(*overlay);
+		}
+
+		for (auto const& overlay : compatibility_overlay_buffers) {
+			if (!overlay)
+				continue;
+			++stats.compatibility_overlay_pool_buffers;
+			stats.compatibility_overlay_pool_bytes += EstimateSubtitleOverlayStorageBytes(*overlay);
 		}
 	});
 	return stats;

@@ -467,6 +467,14 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 	if (!video_provider)
 		return false;
 
+	if (perf_trace::ShouldSampleVideoMemory(true)) {
+		VideoMemorySnapshot snapshot;
+		snapshot.async = video_provider->CollectMemoryStats();
+		if (audio_provider)
+			snapshot.audio = audio_provider->GetMemoryStats();
+		perf_trace::ObserveVideoMemorySnapshot("video_provider_ready", snapshot, true);
+	}
+
 	auto opened_video = aegisub::video_session_ops::BuildOpenedVideoSummary(
 		*video_provider,
 		path,
@@ -484,6 +492,13 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 	auto core = context->GetCore();
 	UpdateVideoProperties(context, core.ass.get(), video_provider.get());
 	video_provider->LoadSubtitles(core.ass.get());
+	if (perf_trace::ShouldSampleVideoMemory(true)) {
+		VideoMemorySnapshot snapshot;
+		snapshot.async = video_provider->CollectMemoryStats();
+		if (audio_provider)
+			snapshot.audio = audio_provider->GetMemoryStats();
+		perf_trace::ObserveVideoMemorySnapshot("video_subtitles_bound", snapshot, true);
+	}
 
 	timecodes = opened_video.timecodes;
 	keyframes = opened_video.keyframes;

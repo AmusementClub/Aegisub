@@ -64,6 +64,7 @@
 #include "visual_tool.h"
 
 #include <libaegisub/make_unique.h>
+#include <libaegisub/log.h>
 #include <libaegisub/scope_exit.h>
 
 #include <algorithm>
@@ -998,9 +999,10 @@ void VideoDisplay::DoRender() try {
 				|| scene_cache_width != canvas_width
 				|| scene_cache_height != canvas_height) {
 				if (!RenderSceneToCache(client_size, canvas_width, canvas_height)) {
-					wxLogWarning(
-						wxS("Video scene cache could not be created for the current frame size.\n"
-						    "Falling back to direct backend rendering until the display size changes or the renderer resets."));
+					LOG_W("video/display/scene_cache")
+						<< "Video scene cache could not be created for canvas "
+						<< canvas_width << "x" << canvas_height
+						<< "; falling back to direct backend rendering until the display size changes or the renderer resets.";
 					BlockSceneCacheUntilRetry(canvas_width, canvas_height);
 				}
 			}
@@ -1010,11 +1012,11 @@ void VideoDisplay::DoRender() try {
 			}
 		}
 		catch (agi::Exception const& err) {
-			wxLogWarning(
-				wxS("Video scene cache failed for the current frame size.\n"
-				    "Falling back to direct backend rendering until the display size changes or the renderer resets.\n"
-				    "Error message reported: %s"),
-				to_wx(err.GetMessage()));
+			LOG_W("video/display/scene_cache")
+				<< "Video scene cache failed for canvas "
+				<< canvas_width << "x" << canvas_height
+				<< "; falling back to direct backend rendering until the display size changes or the renderer resets: "
+				<< err.GetMessage();
 			BlockSceneCacheUntilRetry(canvas_width, canvas_height);
 		}
 	}

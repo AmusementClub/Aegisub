@@ -21,6 +21,8 @@
 #include <memory>
 
 struct VideoRenderPacket {
+	// For compatibility-only subtitle providers, this may already hold the
+	// final baked BGRA display frame rather than a subtitle-free source frame.
 	std::shared_ptr<VideoFrame> source_frame_storage;
 	std::shared_ptr<void> source_frame_owner;
 	std::shared_ptr<VideoFrame> composited_frame_storage;
@@ -30,6 +32,7 @@ struct VideoRenderPacket {
 	SourceFrame source_frame;
 	SubtitleOverlay subtitle_overlay;
 	bool has_subtitle_overlay = false;
+	bool allow_source_frame_upload_reuse = true;
 	double time = 0.0;
 
 	bool HasDistinctCompositedFrame() const {

@@ -326,6 +326,8 @@ void AsyncVideoProvider::ResetCachedSourceFrame() noexcept {
 bool AsyncVideoProvider::CanReuseCachedSourceFrame(int frame, bool raw, bool force_bgra_frame) const noexcept {
 	if (raw || !subs_provider || !subs)
 		return false;
+	if (subs_provider->GetRenderMode() == SubtitleRenderMode::CompatibilityFrameOnly)
+		return false;
 	if (!cached_source_frame.IsValid())
 		return false;
 	if (cached_source_frame_number != frame)
@@ -435,7 +437,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
 	}
 
-	if (!raw && subs_provider && subs)
+	if (!raw && subs_provider && subs && render_mode != SubtitleRenderMode::CompatibilityFrameOnly)
 		UpdateCachedSourceFrame(frame_number, force_bgra_frame, packet);
 
 	if (raw || !subs_provider || !subs) {
@@ -470,10 +472,8 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		if (render_mode == SubtitleRenderMode::CompatibilityFrameOnly) {
 			if (!frame)
 				throw AsyncVideoProviderSubtitlesError("Compatibility subtitles provider requires a BGRA source frame.");
-			composited = acquire_buffer(composited_buffers);
-			*composited = *frame;
-			packet.composited_frame_storage = composited;
-			subs_provider->DrawSubtitles(*composited, time / 1000.);
+			packet.allow_source_frame_upload_reuse = false;
+			subs_provider->DrawSubtitles(*frame, time / 1000.);
 		}
 		else if (render_mode == SubtitleRenderMode::PremultipliedOverlay) {
 			auto overlay_storage = acquire_buffer(subtitle_overlay_buffers);

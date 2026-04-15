@@ -517,6 +517,14 @@ void VideoDisplay::Render() {
 	render_requested = true;
 }
 
+void VideoDisplay::RenderNow() {
+	// Mouse-drag visual tool updates can keep the UI too busy for idle-driven
+	// redraws; render synchronously so tool feedback is not gated on subtitle
+	// packet delivery cadence.
+	render_requested = true;
+	DoRender();
+}
+
 void VideoDisplay::OnEraseBackground(wxEraseEvent &) {
 }
 
@@ -897,8 +905,11 @@ void VideoDisplay::DoRender() try {
 		if (has_pending_packet) {
 			bool const first_presented_frame = !has_displayed_packet;
 			bool const reuse_uploaded_source_frame =
+				pending_packet.allow_source_frame_upload_reuse
+				&&
 				!renderer_was_just_created
 				&& has_displayed_packet
+				&& displayed_packet.allow_source_frame_upload_reuse
 				&& pending_packet.frame_number == displayed_packet.frame_number
 				&& SourceFrameEquivalentForUpload(pending_packet.source_frame, displayed_packet.source_frame);
 			auto const routing = DecideVideoRenderRouting(

@@ -223,6 +223,8 @@ public:
 
 	/// @brief Render the currently visible frame
 	void Render();
+	/// @brief Render immediately on the UI thread; used for high-frequency tool feedback
+	void RenderNow();
 	wxImage GetFrameImage(bool raw);
 	VideoDisplayMemoryStats CollectMemoryStats() const;
 	DEFINE_SIGNAL_ADDERS(FramePresented, AddFramePresentedListener)

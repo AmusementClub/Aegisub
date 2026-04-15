@@ -19,7 +19,6 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_time_projection.h"
-#include "compatibility_overlay_buffer_plan.h"
 #include "export_fixstyle.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "source_frame.h"
@@ -34,6 +33,7 @@
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 
+#include <algorithm>
 #include <cmath>
 
 enum {
@@ -43,7 +43,6 @@ enum {
 
 namespace {
 constexpr char const *kSourceModeLogTag = "video/source/mode";
-constexpr int kCompatibilityOverlayTileSize = 64;
 constexpr char const *kSubtitleProviderUseLogTag = "subtitle/provider/use";
 
 std::string FormatSourceModeList(std::vector<SourceFrameOutputMode> const& modes) {
@@ -102,30 +101,41 @@ std::shared_ptr<T> acquire_buffer(std::vector<std::shared_ptr<T>>& buffers) {
 	return buffer;
 }
 
-std::shared_ptr<SubtitleOverlayStorage> acquire_compatibility_overlay_buffer(
-	std::array<std::shared_ptr<SubtitleOverlayStorage>, 2>& preferred_buffers,
-	std::vector<std::shared_ptr<SubtitleOverlayStorage>>& overflow_buffers,
-	std::shared_ptr<SubtitleOverlayStorage> const& previous_overlay,
-	int& next_preferred_slot) {
-	std::array<CompatibilityOverlayBufferSlotState, 2> slot_states = { };
-	for (size_t i = 0; i < preferred_buffers.size(); ++i) {
-		auto const& slot = preferred_buffers[i];
-		slot_states[i].allocated = static_cast<bool>(slot);
-		slot_states[i].reusable = slot && slot.use_count() == 1;
-		slot_states[i].holds_previous = slot && slot.get() == previous_overlay.get();
+std::shared_ptr<VideoFrame> BakePacketForCpuReadback(VideoRenderPacket const& packet) {
+	auto display_frame = packet.DisplayFrame();
+	if (!display_frame)
+		return nullptr;
+
+	if (!packet.has_subtitle_overlay || !packet.subtitle_overlay.IsValid())
+		return display_frame;
+
+	auto baked = std::make_shared<VideoFrame>(*display_frame);
+	if (packet.subtitle_overlay.pixel_format != SubtitleOverlayPixelFormat::Bgra8)
+		return baked;
+
+	if (packet.subtitle_overlay.composition_mode == SubtitleOverlayCompositionMode::PremultipliedAlpha
+		&& packet.subtitle_overlay.premultiplied_alpha) {
+		CompositePremultipliedBgraOverlayOntoVideoFrame(*baked, packet.subtitle_overlay);
 	}
+	else if (packet.subtitle_overlay.composition_mode == SubtitleOverlayCompositionMode::OpaqueReplace) {
+		CompositeOpaqueBgraOverlayOntoVideoFrame(*baked, packet.subtitle_overlay);
+	}
+	return baked;
+}
 
-	auto plan = DecideCompatibilityOverlayBufferPlan(next_preferred_slot, slot_states);
-	next_preferred_slot = plan.next_preferred_slot;
+template<typename T>
+void TrimReusableBufferPool(std::vector<std::shared_ptr<T>>& buffers) {
+	if (buffers.size() <= 1)
+		return;
 
-	if (plan.action == CompatibilityOverlayBufferPlanAction::UseOverflowPool)
-		return acquire_buffer(overflow_buffers);
-
-	size_t slot_index = plan.action == CompatibilityOverlayBufferPlanAction::UseSlot0 ? 0u : 1u;
-	auto& slot = preferred_buffers[slot_index];
-	if (!slot)
-		slot = std::make_shared<SubtitleOverlayStorage>();
-	return slot;
+	buffers.erase(
+		std::remove_if(
+			buffers.begin(),
+			buffers.end(),
+			[](std::shared_ptr<T> const& buffer) {
+				return buffer && buffer.use_count() == 1;
+			}),
+		buffers.end());
 }
 
 struct KeyPointLabColor {
@@ -304,12 +314,6 @@ bool MatchesKeyPointBoundsWithinTolerance(
 
 }
 
-void AsyncVideoProvider::ResetCompatibilityOverlayState() {
-	previous_compatibility_overlay.reset();
-	next_compatibility_overlay_buffer = 0;
-}
-
-
 void AsyncVideoProvider::AdvanceOverlayContinuityGeneration() {
 	++overlay_continuity_generation;
 	if (overlay_continuity_generation == 0)
@@ -320,6 +324,12 @@ void AsyncVideoProvider::InvalidateProviderOverlayState() {
 	if (subs_provider)
 		subs_provider->InvalidateOverlayState();
 	AdvanceOverlayContinuityGeneration();
+}
+
+void AsyncVideoProvider::TrimReusablePools() {
+	TrimReusableBufferPool(source_buffers);
+	TrimReusableBufferPool(composited_buffers);
+	TrimReusableBufferPool(subtitle_overlay_buffers);
 }
 
 VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double time, bool raw) {
@@ -402,7 +412,9 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 
 	try {
 		std::shared_ptr<VideoFrame> composited;
-		if (frame) {
+		bool const is_compatibility_only_provider =
+			subs_provider->GetRenderMode() == SubtitleRenderMode::CompatibilityFrameOnly;
+		if (frame && is_compatibility_only_provider) {
 			composited = acquire_buffer(composited_buffers);
 			*composited = *frame;
 			packet.composited_frame_storage = composited;
@@ -451,11 +463,14 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 					packet.subtitle_overlay_storage = overlay_storage;
 					packet.subtitle_overlay = subtitle_overlay;
 					packet.has_subtitle_overlay = true;
-					if (composited)
-						CompositePremultipliedBgraOverlayOntoVideoFrame(*composited, subtitle_overlay);
 				}
 			}
 			else {
+				if (!composited && frame) {
+					composited = acquire_buffer(composited_buffers);
+					*composited = *frame;
+					packet.composited_frame_storage = composited;
+				}
 				if (!composited)
 					throw AsyncVideoProviderSubtitlesError("Subtitle provider cannot bake subtitles into native source frames.");
 				subs_provider->DrawSubtitles(*composited, time / 1000.);
@@ -463,37 +478,6 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		}
 		else {
 			subs_provider->DrawSubtitles(*composited, time / 1000.);
-			auto overlay_storage = acquire_compatibility_overlay_buffer(
-				compatibility_overlay_buffers,
-				subtitle_overlay_buffers,
-				previous_compatibility_overlay,
-				next_compatibility_overlay_buffer);
-			SubtitleOverlay subtitle_overlay;
-			if (BuildSparsePremultipliedCompatibilityOverlayWithDirtyTiles(
-				*frame,
-				*composited,
-				previous_compatibility_overlay.get(),
-				*overlay_storage,
-				subtitle_overlay,
-				kCompatibilityOverlayTileSize,
-				kCompatibilityOverlayTileSize)) {
-				bool should_emit_overlay =
-					overlay_storage->has_visible_content ||
-					(previous_compatibility_overlay && previous_compatibility_overlay->has_visible_content) ||
-					!overlay_storage->dirty_rects.empty();
-				if (should_emit_overlay) {
-					subtitle_overlay = overlay_storage->MakeView(true);
-					subtitle_overlay.color_role = SubtitleOverlayColorRole::SubtitleVideoCompatibility;
-					subtitle_overlay.continuity_generation = overlay_continuity_generation;
-					packet.subtitle_overlay_storage = overlay_storage;
-					packet.subtitle_overlay = subtitle_overlay;
-					packet.has_subtitle_overlay = true;
-				}
-				previous_compatibility_overlay = overlay_storage;
-			}
-			else {
-				previous_compatibility_overlay.reset();
-			}
 		}
 	}
 	catch (agi::UserCancelException const&) { }
@@ -561,7 +545,6 @@ AsyncVideoProviderMemoryStats AsyncVideoProvider::CollectMemoryStats() {
 				subs_provider->GetRenderMode() == SubtitleRenderMode::CompatibilityFrameOnly;
 		}
 		stats.subtitles_loaded = static_cast<bool>(subs);
-		stats.compatibility_overlay_active = static_cast<bool>(previous_compatibility_overlay);
 		stats.pending_subtitles_update = static_cast<bool>(pending_subs);
 		if (subs)
 			stats.subtitles_event_count = static_cast<int>(subs->Events.size());
@@ -583,13 +566,6 @@ AsyncVideoProviderMemoryStats AsyncVideoProvider::CollectMemoryStats() {
 			if (overlay)
 				stats.subtitle_overlay_pool_bytes += EstimateSubtitleOverlayStorageBytes(*overlay);
 		}
-
-		for (auto const& overlay : compatibility_overlay_buffers) {
-			if (!overlay)
-				continue;
-			++stats.compatibility_overlay_pool_buffers;
-			stats.compatibility_overlay_pool_bytes += EstimateSubtitleOverlayStorageBytes(*overlay);
-		}
 	});
 	return stats;
 }
@@ -597,7 +573,6 @@ AsyncVideoProviderMemoryStats AsyncVideoProvider::CollectMemoryStats() {
 void AsyncVideoProvider::LoadSubtitles(const AssFile *new_subs) throw() {
 	auto copy = agi::make_unique<AssFile>(*new_subs);
 	++content_version;
-	ResetCompatibilityOverlayState();
 	InvalidateProviderOverlayState();
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
@@ -611,7 +586,6 @@ void AsyncVideoProvider::UpdateSubtitles(const AssFile *new_subs, const AssDialo
 	(void)changed;
 	auto copy = agi::make_unique<AssFile>(*new_subs);
 	++content_version;
-	ResetCompatibilityOverlayState();
 	InvalidateProviderOverlayState();
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
@@ -785,7 +759,6 @@ bool AsyncVideoProvider::ProcessPending() {
 			DeliverFrameReady(std::move(packet), time);
 		}
 		else {
-			ResetCompatibilityOverlayState();
 			AdvanceOverlayContinuityGeneration();
 		}
 	}
@@ -798,7 +771,6 @@ bool AsyncVideoProvider::ProcessPending() {
 		if (should_deliver)
 			DeliverVideoError(err.GetMessage());
 		else {
-			ResetCompatibilityOverlayState();
 			AdvanceOverlayContinuityGeneration();
 		}
 	}
@@ -811,7 +783,6 @@ bool AsyncVideoProvider::ProcessPending() {
 		if (should_deliver)
 			DeliverSubtitlesError(err.GetMessage());
 		else {
-			ResetCompatibilityOverlayState();
 			AdvanceOverlayContinuityGeneration();
 		}
 	}
@@ -823,7 +794,7 @@ std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrame(int frame, double time,
 	std::shared_ptr<VideoFrame> ret;
 	worker->Sync([&]{
 		while (ProcessPending()) { }
-		ret = ProcRenderPacket(frame, time, raw).DisplayFrame();
+		ret = BakePacketForCpuReadback(ProcRenderPacket(frame, time, raw, true));
 	});
 	return ret;
 }
@@ -832,7 +803,7 @@ std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrameBgra(int frame, double t
 	std::shared_ptr<VideoFrame> ret;
 	worker->Sync([&] {
 		while (ProcessPending()) { }
-		ret = ProcRenderPacket(frame, time, raw, true).DisplayFrame();
+		ret = BakePacketForCpuReadback(ProcRenderPacket(frame, time, raw, true));
 	});
 	return ret;
 }
@@ -1024,8 +995,8 @@ bool AsyncVideoProvider::ReconfigureSourceOutputMode() {
 	++content_version;
 	last_rendered = -1;
 	last_lines.clear();
-	ResetCompatibilityOverlayState();
 	AdvanceOverlayContinuityGeneration();
+	TrimReusablePools();
 	return true;
 }
 
@@ -1044,10 +1015,7 @@ VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bo
 
 void AsyncVideoProvider::SetColorSpace(std::string const& matrix) {
 	++content_version;
-	if (subs_provider && subs_provider->GetRenderMode() == SubtitleRenderMode::CompatibilityFrameOnly) {
-		ResetCompatibilityOverlayState();
-		AdvanceOverlayContinuityGeneration();
-	}
+	AdvanceOverlayContinuityGeneration();
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_color_space = matrix;
@@ -1064,7 +1032,6 @@ void AsyncVideoProvider::SetSubtitlesTimecodes(agi::vfr::Framerate timecodes) {
 		single_frame = NEW_SUBS_FILE;
 		last_rendered = -1;
 		last_lines.clear();
-		ResetCompatibilityOverlayState();
 		InvalidateProviderOverlayState();
 	});
 }
@@ -1099,8 +1066,8 @@ void AsyncVideoProvider::ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvi
 		last_rendered = -1;
 		last_lines.clear();
 		if (!mode_changed) {
-			ResetCompatibilityOverlayState();
 			AdvanceOverlayContinuityGeneration();
+			TrimReusablePools();
 		}
 	});
 }

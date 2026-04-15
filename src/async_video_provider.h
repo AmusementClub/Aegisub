@@ -27,7 +27,6 @@
 #include <libaegisub/fs_fwd.h>
 
 #include <atomic>
-#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -118,9 +117,6 @@ class AsyncVideoProvider {
 	std::vector<std::shared_ptr<VideoFrame>> source_buffers;
 	std::vector<std::shared_ptr<VideoFrame>> composited_buffers;
 	std::vector<std::shared_ptr<SubtitleOverlayStorage>> subtitle_overlay_buffers;
-	std::array<std::shared_ptr<SubtitleOverlayStorage>, 2> compatibility_overlay_buffers = { };
-	int next_compatibility_overlay_buffer = 0;
-	std::shared_ptr<SubtitleOverlayStorage> previous_compatibility_overlay;
 	uint64_t overlay_continuity_generation = 1;
 
 	std::mutex pending_mutex;
@@ -139,9 +135,9 @@ class AsyncVideoProvider {
 	void DeliverFrameReady(VideoRenderPacket packet, double time);
 	void DeliverVideoError(std::string const& message);
 	void DeliverSubtitlesError(std::string const& message);
-	void ResetCompatibilityOverlayState();
 	void AdvanceOverlayContinuityGeneration();
 	void InvalidateProviderOverlayState();
+	void TrimReusablePools();
 	bool ReconfigureSourceOutputMode();
 	void ScheduleProcessing();
 	bool ProcessPending();

@@ -44,16 +44,5 @@ void BlendLibassMaskIntoBgraTarget(
 	unsigned char const* mask_data,
 	ptrdiff_t mask_stride,
 	std::uint32_t ass_color);
-bool BuildSparsePremultipliedCompatibilityOverlay(VideoFrame const& source, VideoFrame const& composited, SubtitleOverlayStorage& storage, SubtitleOverlay& overlay);
-bool BuildSparsePremultipliedCompatibilityOverlayWithDirtyTiles(
-	VideoFrame const& source,
-	VideoFrame const& composited,
-	SubtitleOverlayStorage const* previous,
-	SubtitleOverlayStorage& storage,
-	SubtitleOverlay& overlay,
-	int tile_width,
-	int tile_height);
-bool BuildDirtyTileRectsForOverlay(SubtitleOverlayStorage const* previous, SubtitleOverlayStorage& current, int tile_width, int tile_height);
-bool ExtractOpaqueBgraDifferenceOverlay(VideoFrame const& source, VideoFrame const& composited, SubtitleOverlayStorage& storage, SubtitleOverlay& overlay);
 void CompositeOpaqueBgraOverlayOntoVideoFrame(VideoFrame& frame, SubtitleOverlay const& overlay);
 void CompositePremultipliedBgraOverlayOntoVideoFrame(VideoFrame& frame, SubtitleOverlay const& overlay);

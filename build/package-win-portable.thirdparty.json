@@ -108,7 +108,7 @@
     {
       "sourceType": "archive",
       "name": "assrender",
-      "url": "https://github.com/AmusementClub/assrender/releases/download/0.38.3/assrender_win-x64_v0.38.3.zip",
+      "url": "https://github.com/AmusementClub/assrender/releases/download/0.38.4/assrender_win-x64_v0.38.4.zip",
       "path": [
         {
           "source": "Release/assrender.dll",

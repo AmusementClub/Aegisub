@@ -77,16 +77,6 @@ target_include_directories(modern-gl-overlay-plan-bench PRIVATE
 )
 target_link_libraries(modern-gl-overlay-plan-bench PRIVATE "Boost::headers")
 
-add_executable(compatibility-overlay-buffer-plan-bench EXCLUDE_FROM_ALL
-    tools/compatibility_overlay_buffer_plan_bench_main.cpp
-)
-target_compile_features(compatibility-overlay-buffer-plan-bench PRIVATE cxx_std_20)
-target_include_directories(compatibility-overlay-buffer-plan-bench PRIVATE
-    "${PROJECT_SOURCE_DIR}/src"
-    "${PROJECT_SOURCE_DIR}/libaegisub/include"
-)
-target_link_libraries(compatibility-overlay-buffer-plan-bench PRIVATE "Boost::headers")
-
 add_executable(dispatch-micro-bench EXCLUDE_FROM_ALL
     tools/dispatch_micro_bench_main.cpp
 )

@@ -166,7 +166,7 @@ public:
 	/// newer ones, so there is no guarantee that every requested frame is shown.
 	void RequestFrame(int frame, double time) throw();
 
-	/// @brief Synchronously get a frame
+	/// @brief Synchronously get a CPU-readable BGRA frame
 	/// @brief frame Frame number
 	/// @brief time  Exact start time of the frame in seconds
 	/// @brief raw   Get raw frame without subtitles

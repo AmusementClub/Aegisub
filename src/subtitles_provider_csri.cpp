@@ -275,7 +275,6 @@ public:
 
 	std::string GetDebugName() const override { return "CSRI/" + provider_name; }
 	SubtitleRenderMode GetRenderMode() const override { return SubtitleRenderMode::CompatibilityFrameOnly; }
-	bool RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double time) override;
 	void DrawSubtitles(VideoFrame &dst, double time) override;
 };
 
@@ -308,14 +307,6 @@ void CSRISubtitlesProvider::OnActivated() {
 #else
 	(void)transient_fonts;
 #endif
-}
-
-bool CSRISubtitlesProvider::RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double time) {
-	(void)overlay;
-	(void)time;
-	// CSRI remains a compatibility-only backend. The explicit overlay shown by
-	// modern renderers is extracted downstream from source/composited frames.
-	return false;
 }
 
 void CSRISubtitlesProvider::DrawSubtitles(VideoFrame &dst, double time) {

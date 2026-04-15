@@ -85,7 +85,6 @@ if(GTEST_FOUND)
         tests/tests/character_count.cpp
         tests/tests/compat.cpp
         tests/tests/color.cpp
-        tests/tests/compatibility_overlay_buffer_plan.cpp
         tests/tests/csri_renderer_discovery.cpp
         tests/tests/dialogue_lexer.cpp
         tests/tests/format.cpp

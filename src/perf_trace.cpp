@@ -458,7 +458,6 @@ struct Summary {
 	size_t async_source_pool_max_bytes = 0;
 	size_t async_composited_pool_max_bytes = 0;
 	size_t async_overlay_pool_max_bytes = 0;
-	size_t async_compatibility_overlay_pool_max_bytes = 0;
 	size_t display_pending_packet_ref_max_bytes = 0;
 	size_t display_displayed_packet_ref_max_bytes = 0;
 	size_t renderer_primary_texture_max_bytes = 0;
@@ -709,7 +708,6 @@ void WriteSummaryLocked(Session const& session) {
 	write_int("async_source_pool.max_bytes", session.summary.async_source_pool_max_bytes);
 	write_int("async_composited_pool.max_bytes", session.summary.async_composited_pool_max_bytes);
 	write_int("async_overlay_pool.max_bytes", session.summary.async_overlay_pool_max_bytes);
-	write_int("async_compatibility_overlay_pool.max_bytes", session.summary.async_compatibility_overlay_pool_max_bytes);
 	write_int("display_pending_packet_ref.max_bytes", session.summary.display_pending_packet_ref_max_bytes);
 	write_int("display_displayed_packet_ref.max_bytes", session.summary.display_displayed_packet_ref_max_bytes);
 	write_int("renderer_primary_texture.max_bytes", session.summary.renderer_primary_texture_max_bytes);
@@ -1292,7 +1290,6 @@ void ObserveVideoMemorySnapshot(char const* reason, VideoMemorySnapshot const& s
 	session.summary.async_source_pool_max_bytes = std::max(session.summary.async_source_pool_max_bytes, snapshot.async.source_pool_bytes);
 	session.summary.async_composited_pool_max_bytes = std::max(session.summary.async_composited_pool_max_bytes, snapshot.async.composited_pool_bytes);
 	session.summary.async_overlay_pool_max_bytes = std::max(session.summary.async_overlay_pool_max_bytes, snapshot.async.subtitle_overlay_pool_bytes);
-	session.summary.async_compatibility_overlay_pool_max_bytes = std::max(session.summary.async_compatibility_overlay_pool_max_bytes, snapshot.async.compatibility_overlay_pool_bytes);
 	session.summary.display_pending_packet_ref_max_bytes = std::max(session.summary.display_pending_packet_ref_max_bytes, snapshot.display.pending_packet_ref_bytes);
 	session.summary.display_displayed_packet_ref_max_bytes = std::max(session.summary.display_displayed_packet_ref_max_bytes, snapshot.display.displayed_packet_ref_bytes);
 	session.summary.renderer_primary_texture_max_bytes = std::max(session.summary.renderer_primary_texture_max_bytes, snapshot.display.primary_renderer_texture_bytes);
@@ -1328,15 +1325,12 @@ void ObserveVideoMemorySnapshot(char const* reason, VideoMemorySnapshot const& s
 	payload.AddInt("async_composited_pool_buffers", snapshot.async.composited_pool_buffers);
 	payload.AddInt("async_subtitle_overlay_pool_bytes", static_cast<int64_t>(snapshot.async.subtitle_overlay_pool_bytes));
 	payload.AddInt("async_subtitle_overlay_pool_buffers", snapshot.async.subtitle_overlay_pool_buffers);
-	payload.AddInt("async_compatibility_overlay_pool_bytes", static_cast<int64_t>(snapshot.async.compatibility_overlay_pool_bytes));
-	payload.AddInt("async_compatibility_overlay_pool_buffers", snapshot.async.compatibility_overlay_pool_buffers);
 	payload.AddString("source_mode", SourceFrameOutputModeName(snapshot.async.selected_source_mode));
 	payload.AddString("decoder", snapshot.async.decoder_name);
 	payload.AddString("subtitles_provider", snapshot.async.subtitles_provider_name);
 	payload.AddString("subtitles_render_mode", snapshot.async.subtitles_render_mode);
 	payload.AddBool("compatibility_requires_bgra8", snapshot.async.compatibility_requires_bgra8);
 	payload.AddBool("subtitles_loaded", snapshot.async.subtitles_loaded);
-	payload.AddBool("compatibility_overlay_active", snapshot.async.compatibility_overlay_active);
 	payload.AddBool("pending_subtitles_update", snapshot.async.pending_subtitles_update);
 	payload.AddInt("subtitles_event_count", snapshot.async.subtitles_event_count);
 	payload.AddInt("display_pending_packet_ref_bytes", static_cast<int64_t>(snapshot.display.pending_packet_ref_bytes));

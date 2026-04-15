@@ -339,6 +339,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double time, bool raw, bool force_bgra_frame) {
 	VideoRenderPacket packet;
 	packet.frame_number = frame_number;
+	auto const render_mode = subs_provider ? subs_provider->GetRenderMode() : SubtitleRenderMode::CompatibilityFrameOnly;
 
 	std::shared_ptr<VideoFrame> frame;
 	bool native_frame_needs_display_transform_fallback = false;
@@ -412,15 +413,15 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 
 	try {
 		std::shared_ptr<VideoFrame> composited;
-		bool const is_compatibility_only_provider =
-			subs_provider->GetRenderMode() == SubtitleRenderMode::CompatibilityFrameOnly;
-		if (frame && is_compatibility_only_provider) {
+		if (render_mode == SubtitleRenderMode::CompatibilityFrameOnly) {
+			if (!frame)
+				throw AsyncVideoProviderSubtitlesError("Compatibility subtitles provider requires a BGRA source frame.");
 			composited = acquire_buffer(composited_buffers);
 			*composited = *frame;
 			packet.composited_frame_storage = composited;
+			subs_provider->DrawSubtitles(*composited, time / 1000.);
 		}
-
-		if (subs_provider->GetRenderMode() == SubtitleRenderMode::PremultipliedOverlay) {
+		else if (render_mode == SubtitleRenderMode::PremultipliedOverlay) {
 			auto overlay_storage = acquire_buffer(subtitle_overlay_buffers);
 			overlay_storage->Reset(
 				packet.source_frame.width,
@@ -466,18 +467,16 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 				}
 			}
 			else {
-				if (!composited && frame) {
-					composited = acquire_buffer(composited_buffers);
-					*composited = *frame;
-					packet.composited_frame_storage = composited;
-				}
-				if (!composited)
+				if (!frame)
 					throw AsyncVideoProviderSubtitlesError("Subtitle provider cannot bake subtitles into native source frames.");
+				composited = acquire_buffer(composited_buffers);
+				*composited = *frame;
+				packet.composited_frame_storage = composited;
 				subs_provider->DrawSubtitles(*composited, time / 1000.);
 			}
 		}
 		else {
-			subs_provider->DrawSubtitles(*composited, time / 1000.);
+			throw AsyncVideoProviderSubtitlesError("Subtitle provider reported an unknown render mode.");
 		}
 	}
 	catch (agi::UserCancelException const&) { }
@@ -791,12 +790,7 @@ bool AsyncVideoProvider::ProcessPending() {
 }
 
 std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrame(int frame, double time, bool raw) {
-	std::shared_ptr<VideoFrame> ret;
-	worker->Sync([&]{
-		while (ProcessPending()) { }
-		ret = BakePacketForCpuReadback(ProcRenderPacket(frame, time, raw, true));
-	});
-	return ret;
+	return GetFrameBgra(frame, time, raw);
 }
 
 std::shared_ptr<VideoFrame> AsyncVideoProvider::GetFrameBgra(int frame, double time, bool raw) {

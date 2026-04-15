@@ -1557,7 +1557,7 @@ TEST(async_video_provider, invisible_premultiplied_overlay_is_not_forwarded_as_v
 	EXPECT_FALSE(packet.has_subtitle_overlay);
 }
 
-TEST(async_video_provider, compatibility_only_backend_emits_sparse_overlay_from_single_legacy_render) {
+TEST(async_video_provider, compatibility_only_backend_emits_baked_composited_frame) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
 	EventRecorder recorder;
@@ -1578,17 +1578,8 @@ TEST(async_video_provider, compatibility_only_backend_emits_sparse_overlay_from_
 	EXPECT_EQ(5, packet.source_frame_storage->data[0]);
 	EXPECT_EQ(11, packet.composited_frame_storage->data[1]);
 
-	SubtitleOverlayStorage storage;
-	SubtitleOverlay extracted_overlay;
-	EXPECT_TRUE(ExtractOpaqueBgraDifferenceOverlay(*packet.source_frame_storage, *packet.composited_frame_storage, storage, extracted_overlay));
-	EXPECT_EQ(1, extracted_overlay.width);
-	EXPECT_EQ(1, extracted_overlay.height);
-
-	EXPECT_TRUE(packet.has_subtitle_overlay);
-	ASSERT_TRUE(packet.subtitle_overlay_storage);
-	EXPECT_TRUE(packet.subtitle_overlay.IsValid());
-	EXPECT_EQ(SubtitleOverlayColorRole::SubtitleVideoCompatibility, packet.subtitle_overlay.color_role);
-	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, packet.subtitle_overlay.composition_mode);
+	EXPECT_FALSE(packet.has_subtitle_overlay);
+	EXPECT_FALSE(packet.subtitle_overlay_storage);
 }
 
 TEST(async_video_provider, compatibility_backend_keeps_using_baked_composited_frames_when_content_is_stable) {
@@ -1607,16 +1598,16 @@ TEST(async_video_provider, compatibility_backend_keeps_using_baked_composited_fr
 	auto first = provider.GetRenderPacket(5, 5000);
 	auto second = provider.GetRenderPacket(5, 5000);
 
-	EXPECT_TRUE(first.has_subtitle_overlay);
-	EXPECT_TRUE(second.has_subtitle_overlay);
-	ASSERT_TRUE(first.subtitle_overlay_storage);
-	ASSERT_TRUE(second.subtitle_overlay_storage);
+	EXPECT_FALSE(first.has_subtitle_overlay);
+	EXPECT_FALSE(second.has_subtitle_overlay);
+	EXPECT_FALSE(first.subtitle_overlay_storage);
+	EXPECT_FALSE(second.subtitle_overlay_storage);
 	ASSERT_TRUE(first.composited_frame_storage);
 	ASSERT_TRUE(second.composited_frame_storage);
 	EXPECT_EQ(first.composited_frame_storage->data, second.composited_frame_storage->data);
 }
 
-TEST(async_video_provider, compatibility_backend_allocates_overlay_storage_for_sparse_diffs) {
+TEST(async_video_provider, compatibility_backend_uses_only_baked_composited_frames) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
 	EventRecorder recorder;
@@ -1631,46 +1622,13 @@ TEST(async_video_provider, compatibility_backend_allocates_overlay_storage_for_s
 
 	auto first = provider.GetRenderPacket(5, 5000);
 	auto second = provider.GetRenderPacket(5, 5000);
-	EXPECT_TRUE(first.has_subtitle_overlay);
-	EXPECT_TRUE(second.has_subtitle_overlay);
-	EXPECT_TRUE(static_cast<bool>(first.subtitle_overlay_storage));
-	EXPECT_TRUE(static_cast<bool>(second.subtitle_overlay_storage));
-}
-
-TEST(async_video_provider, dropped_packet_recycles_compatibility_overlay_buffer) {
-	auto state = std::make_shared<VideoProviderState>();
-	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
-	EventRecorder recorder;
-
-	AsyncVideoProvider provider(
-		agi::make_unique<FakeVideoProvider>(state),
-		std::unique_ptr<SubtitlesProvider>(subs),
-		recorder);
-
-	auto subtitle_file = MakeSubtitleFile("csri");
-	provider.LoadSubtitles(&subtitle_file);
-
-	auto first = provider.GetRenderPacket(5, 5000);
-	auto* first_storage = first.subtitle_overlay_storage.get();
-	ASSERT_TRUE(first_storage);
-
-	auto second = provider.GetRenderPacket(5, 5000);
-	auto* second_storage = second.subtitle_overlay_storage.get();
-	ASSERT_TRUE(second_storage);
-	ASSERT_NE(first_storage, second_storage);
-
-	auto third = provider.GetRenderPacket(5, 5000);
-	auto* third_storage = third.subtitle_overlay_storage.get();
-	ASSERT_TRUE(third_storage);
-	EXPECT_NE(third_storage, first_storage);
-	EXPECT_NE(third_storage, second_storage);
-
-	second = { };
-
-	auto fourth = provider.GetRenderPacket(5, 5000);
-	auto* fourth_storage = fourth.subtitle_overlay_storage.get();
-	ASSERT_TRUE(fourth_storage);
-	EXPECT_EQ(second_storage, fourth_storage);
+	EXPECT_FALSE(first.has_subtitle_overlay);
+	EXPECT_FALSE(second.has_subtitle_overlay);
+	EXPECT_FALSE(static_cast<bool>(first.subtitle_overlay_storage));
+	EXPECT_FALSE(static_cast<bool>(second.subtitle_overlay_storage));
+	ASSERT_TRUE(first.composited_frame_storage);
+	ASSERT_TRUE(second.composited_frame_storage);
+	EXPECT_EQ(first.composited_frame_storage->data[1], second.composited_frame_storage->data[1]);
 }
 
 TEST(async_video_provider, dropped_packet_advances_overlay_continuity_generation_on_next_delivered_event) {

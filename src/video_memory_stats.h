@@ -67,18 +67,15 @@ struct AsyncVideoProviderMemoryStats {
 	size_t source_pool_bytes = 0;
 	size_t composited_pool_bytes = 0;
 	size_t subtitle_overlay_pool_bytes = 0;
-	size_t compatibility_overlay_pool_bytes = 0;
 	int source_pool_buffers = 0;
 	int composited_pool_buffers = 0;
 	int subtitle_overlay_pool_buffers = 0;
-	int compatibility_overlay_pool_buffers = 0;
 	SourceFrameOutputMode selected_source_mode = SourceFrameOutputMode::Bgra8;
 	std::string decoder_name;
 	std::string subtitles_provider_name;
 	std::string subtitles_render_mode;
 	bool compatibility_requires_bgra8 = false;
 	bool subtitles_loaded = false;
-	bool compatibility_overlay_active = false;
 	bool pending_subtitles_update = false;
 	int subtitles_event_count = 0;
 };

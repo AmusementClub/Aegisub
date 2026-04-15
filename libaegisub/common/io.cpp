@@ -58,6 +58,12 @@ Save::Save(fs::path const& file, bool binary)
 
 void Save::Close() {
 	if (!fp) return;
+	fp->flush();
+	if (!fp->good()) {
+		auto failed_tmp = tmp_name;
+		fp.reset();
+		throw fs::WriteDenied(failed_tmp);
+	}
 	fp.reset(); // Need to close before rename on Windows to unlock the file
 	for (int i = 0; i < 10; ++i) {
 		try {

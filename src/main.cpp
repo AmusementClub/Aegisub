@@ -228,6 +228,7 @@ void AegisubApp::UnhandledException(bool stackWalk) {
 #if (!defined(_DEBUG) || defined(WITH_EXCEPTIONS)) && (wxUSE_ON_FATAL_EXCEPTION+0)
 	bool any = false;
 	agi::fs::path path;
+	agi::fs::path last_recovered_path;
 	for (auto& frame : frames) {
 		auto c = frame->context.get();
 		if (!c) continue;
@@ -235,15 +236,26 @@ void AegisubApp::UnhandledException(bool stackWalk) {
 		auto core = c->GetCore();
 		if (!core.ass || !core.subsController) continue;
 
-		path = config::path->Decode("?user/recovered");
-		agi::fs::CreateDirectory(path);
+		try {
+			path = config::path->Decode("?user/recovered");
+			agi::fs::CreateDirectory(path);
 
-		auto filename = core.subsController->Filename().stem();
-		filename.replace_extension(agi::format("%s.ass", agi::util::strftime("%Y-%m-%d-%H-%M-%S")));
-		path /= filename;
-		core.subsController->Save(path);
-
-		any = true;
+			auto filename = core.subsController->Filename().stem();
+			filename.replace_extension(agi::format("%s.ass", agi::util::strftime("%Y-%m-%d-%H-%M-%S")));
+			path /= filename;
+			core.subsController->Save(path);
+			any = true;
+			last_recovered_path = path;
+		}
+		catch (agi::Exception const& err) {
+			crash_writer::Write("Crash recovery save failed: " + err.GetMessage());
+		}
+		catch (std::exception const& err) {
+			crash_writer::Write(std::string("Crash recovery save failed: ") + err.what());
+		}
+		catch (...) {
+			crash_writer::Write("Crash recovery save failed: unknown error");
+		}
 	}
 
 	if (stackWalk)
@@ -251,7 +263,7 @@ void AegisubApp::UnhandledException(bool stackWalk) {
 
 	if (any) {
 		// Inform user of crash.
-		ShowGuiWxBootstrapUiError(from_wx(_("Program error")), agi::format(exception_message, path));
+		ShowGuiWxBootstrapUiError(from_wx(_("Program error")), agi::format(exception_message, last_recovered_path));
 	}
 	else if (LastStartupState) {
 		ShowGuiWxBootstrapUiError(

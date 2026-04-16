@@ -145,6 +145,12 @@ class AudioDisplay: public wxWindow {
 
 	/// Absolute pixel position of the tracking cursor (mouse or playback)
 	int track_cursor_pos = -1;
+	/// Absolute pixel position of the last video-position marker refresh
+	int last_video_marker_pos = -1;
+	/// Last frame number used to compute the video-position marker
+	int last_video_marker_frame = -1;
+	/// True while a middle-button scrub seek is in progress
+	bool middle_scrub_seek_active = false;
 	/// Label to show by track cursor
 	wxString track_cursor_label;
 	/// Bounding rectangle last drawn track cursor label
@@ -155,6 +161,10 @@ class AudioDisplay: public wxWindow {
 	void SetTrackCursor(int new_pos, bool show_time);
 	/// @brief Remove the tracking cursor from the display
 	void RemoveTrackCursor();
+	bool TryGetCurrentVideoMarker(int &out_pos, int &out_frame) const;
+	int GetCurrentVideoMarkerPos() const;
+	wxRect GetMarkerRefreshRect(int absolute_x) const;
+	bool QueueDynamicVideoMarkerRefresh();
 
 	/// Previous style ranges for optimizing redraw when ranges change
 	std::vector<std::pair<int, int>> style_ranges;

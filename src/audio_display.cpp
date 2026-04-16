@@ -1361,6 +1361,79 @@ void AudioDisplay::RemoveTrackCursor()
 	SetTrackCursor(-1, false);
 }
 
+bool AudioDisplay::TryGetCurrentVideoMarker(int &out_pos, int &out_frame) const {
+	out_pos = -1;
+	out_frame = -1;
+	if (!provider || !context || ms_per_pixel <= 0.0)
+		return false;
+	if (!OPT_GET("Audio/Display/Draw/Video Position")->GetBool())
+		return false;
+
+	auto core = context->GetCore();
+	if (!core.videoController)
+		return false;
+
+	const int frame = core.videoController->GetFrameN();
+	if (frame < 0)
+		return false;
+
+	out_frame = frame;
+	out_pos = AbsoluteXFromTime(core.videoController->TimeAtFrame(frame));
+	return out_pos >= 0;
+}
+
+int AudioDisplay::GetCurrentVideoMarkerPos() const {
+	int pos = -1;
+	int frame = -1;
+	if (!TryGetCurrentVideoMarker(pos, frame))
+		return -1;
+	return pos;
+}
+
+wxRect AudioDisplay::GetMarkerRefreshRect(int absolute_x) const {
+	if (absolute_x < 0 || audio_height <= 0)
+		return wxRect();
+
+	const int padding = FromDIP(foot_size) + FromDIP(4);
+	return wxRect(absolute_x - scroll_left - padding, audio_top, padding * 2 + 1, audio_height + 1);
+}
+
+bool AudioDisplay::QueueDynamicVideoMarkerRefresh() {
+	if (!provider || !context || audio_marker)
+		return false;
+	if (!controller->IsPlaying() && !middle_scrub_seek_active)
+		return false;
+
+	int new_pos = -1;
+	int new_frame = -1;
+	if (!TryGetCurrentVideoMarker(new_pos, new_frame)) {
+		last_video_marker_pos = -1;
+		last_video_marker_frame = -1;
+		return false;
+	}
+
+	// If the video marker didn't move, don't swallow this marker update. It may
+	// have come from a different marker provider (e.g. toggling keyframes).
+	if (new_frame == last_video_marker_frame && new_pos == last_video_marker_pos)
+		return false;
+
+	wxRect dirty;
+	if (new_pos != last_video_marker_pos) {
+		dirty = GetMarkerRefreshRect(last_video_marker_pos);
+		const wxRect new_dirty = GetMarkerRefreshRect(new_pos);
+		if (dirty.IsEmpty())
+			dirty = new_dirty;
+		else if (!new_dirty.IsEmpty())
+			dirty.Union(new_dirty);
+	}
+
+	last_video_marker_pos = new_pos;
+	last_video_marker_frame = new_frame;
+	if (!dirty.IsEmpty())
+		QueueHighFrequencyRefresh(&dirty, true);
+	return true;
+}
+
 void AudioDisplay::OnMouseEnter(wxMouseEvent&)
 {
 	if (OPT_GET("Audio/Auto/Focus")->GetBool())
@@ -1385,6 +1458,11 @@ void AudioDisplay::OnMouseEvent(wxMouseEvent& event)
 
 	if (event.IsButton())
 		SetFocus();
+
+	if (event.MiddleDown())
+		middle_scrub_seek_active = true;
+	else if (event.MiddleUp() || (middle_scrub_seek_active && !event.MiddleIsDown()))
+		middle_scrub_seek_active = false;
 
 	const int mouse_x = event.GetPosition().x;
 
@@ -1560,6 +1638,18 @@ void AudioDisplay::OnAudioOpen(agi::AudioProvider *provider)
 
 	ms_per_pixel = 0;
 	SetZoomLevel(zoom_level);
+	{
+		int pos = -1;
+		int frame = -1;
+		if (TryGetCurrentVideoMarker(pos, frame)) {
+			last_video_marker_pos = pos;
+			last_video_marker_frame = frame;
+		}
+		else {
+			last_video_marker_pos = -1;
+			last_video_marker_frame = -1;
+		}
+	}
 
 	Refresh();
 
@@ -1717,6 +1807,21 @@ void AudioDisplay::OnStyleRangesChanged()
 
 void AudioDisplay::OnMarkerMoved()
 {
+	if (QueueDynamicVideoMarkerRefresh())
+		return;
+
+	{
+		int pos = -1;
+		int frame = -1;
+		if (TryGetCurrentVideoMarker(pos, frame)) {
+			last_video_marker_pos = pos;
+			last_video_marker_frame = frame;
+		}
+		else {
+			last_video_marker_pos = -1;
+			last_video_marker_frame = -1;
+		}
+	}
 	const wxRect audio_rect(0, audio_top, GetClientSize().GetWidth(), audio_height);
 	if (audio_marker)
 		QueueHighFrequencyRefresh(&audio_rect, true);

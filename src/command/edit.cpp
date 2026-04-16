@@ -115,6 +115,39 @@ void set_dialogue_clipboard(std::string const& text_data, std::string const& exa
 	}
 }
 
+wxTextEntryBase *focused_text_control() {
+	// wxSTC can report focus on an internal child, so walk upward before falling back to line commands.
+	for (auto *focus = wxWindow::FindFocus(); focus; focus = focus->GetParent()) {
+		if (auto *ctrl = dynamic_cast<wxTextEntryBase*>(focus))
+			return ctrl;
+	}
+	return nullptr;
+}
+
+bool copy_focused_text_control() {
+	if (auto *ctrl = focused_text_control()) {
+		ctrl->Copy();
+		return true;
+	}
+	return false;
+}
+
+bool cut_focused_text_control() {
+	if (auto *ctrl = focused_text_control()) {
+		ctrl->Cut();
+		return true;
+	}
+	return false;
+}
+
+bool paste_focused_text_control() {
+	if (auto *ctrl = focused_text_control()) {
+		ctrl->Paste();
+		return true;
+	}
+	return false;
+}
+
 bool parse_dialogue_clipboard_data(std::string const& data, EntryList<AssDialogue> &parsed) {
 	auto trimmed = agi::util::strings::trim_copy(data);
 	if (!is_dialogue_clipboard_line(trimmed))
@@ -803,9 +836,7 @@ struct edit_line_copy final : public validate_sel_nonempty {
 		// and there's no way to do something if the native platform code leaves
 		// it unprocessed
 
-		if (wxTextEntryBase *ctrl = dynamic_cast<wxTextEntryBase*>(c->GetUI().parent->FindFocus()))
-			ctrl->Copy();
-		else {
+		if (!copy_focused_text_control()) {
 			copy_lines(c);
 		}
 	}
@@ -819,9 +850,7 @@ struct edit_line_cut: public validate_sel_nonempty {
 	STR_HELP("Cut subtitles")
 
 	void operator()(agi::Context *c) override {
-		if (wxTextEntryBase *ctrl = dynamic_cast<wxTextEntryBase*>(c->GetUI().parent->FindFocus()))
-			ctrl->Cut();
-		else {
+		if (!cut_focused_text_control()) {
 			copy_lines(c);
 			delete_lines(c, from_wx(_("cut lines")));
 		}
@@ -1030,9 +1059,9 @@ struct edit_line_paste final : public Command {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		if (wxTextEntryBase *ctrl = dynamic_cast<wxTextEntryBase*>(c->GetUI().parent->FindFocus())) {
+		if (focused_text_control()) {
 			if (!try_paste_lines(c))
-				ctrl->Paste();
+				paste_focused_text_control();
 		}
 		else {
 			auto pos = core.ass->iterator_to(*core.selectionController->GetActiveLine());

@@ -326,8 +326,6 @@ void AsyncVideoProvider::ResetCachedSourceFrame() noexcept {
 bool AsyncVideoProvider::CanReuseCachedSourceFrame(int frame, bool raw, bool force_bgra_frame) const noexcept {
 	if (raw || !subs_provider || !subs)
 		return false;
-	if (subs_provider->GetRenderMode() == SubtitleRenderMode::CompatibilityFrameOnly)
-		return false;
 	if (!cached_source_frame.IsValid())
 		return false;
 	if (cached_source_frame_number != frame)
@@ -437,7 +435,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
 	}
 
-	if (!raw && subs_provider && subs && render_mode != SubtitleRenderMode::CompatibilityFrameOnly)
+	if (!raw && subs_provider && subs)
 		UpdateCachedSourceFrame(frame_number, force_bgra_frame, packet);
 
 	if (raw || !subs_provider || !subs) {
@@ -473,7 +471,16 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 			if (!frame)
 				throw AsyncVideoProviderSubtitlesError("Compatibility subtitles provider requires a BGRA source frame.");
 			packet.allow_source_frame_upload_reuse = false;
-			subs_provider->DrawSubtitles(*frame, time / 1000.);
+			// Compatibility renderers draw in place, so keep the decoded frame
+			// immutable for subtitle-only rerenders and bake into a copy instead.
+			composited = acquire_buffer(composited_buffers);
+			*composited = *frame;
+			packet.source_frame_storage = composited;
+			packet.source_frame_owner = composited;
+			packet.source_frame = MakeSourceFrameView(*composited, source_provider->GetColorMetadata());
+			packet.source_frame.geometry = source_provider->GetFrameGeometry();
+			packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
+			subs_provider->DrawSubtitles(*composited, time / 1000.);
 		}
 		else if (render_mode == SubtitleRenderMode::PremultipliedOverlay) {
 			auto overlay_storage = acquire_buffer(subtitle_overlay_buffers);
@@ -1088,7 +1095,6 @@ VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bo
 
 void AsyncVideoProvider::SetColorSpace(std::string const& matrix) {
 	++content_version;
-	AdvanceOverlayContinuityGeneration();
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_color_space = matrix;

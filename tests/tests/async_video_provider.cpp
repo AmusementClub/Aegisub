@@ -735,6 +735,32 @@ TEST(async_video_provider, get_frame_bgra_returns_cpu_frame_when_native_mode_sel
 	EXPECT_EQ(SourceFrameOutputMode::Native, video->output_mode);
 }
 
+TEST(async_video_provider, get_frame_bgra_bakes_direct_overlay_for_cpu_consumers) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		recorder);
+
+	auto subtitle_file = MakeSubtitleFile("overlay");
+	provider.LoadSubtitles(&subtitle_file);
+
+	auto frame = provider.GetFrameBgra(9, 9000);
+	ASSERT_TRUE(frame);
+	ASSERT_GE(frame->data.size(), 4u);
+	// We only care that the overlay path is baked into the CPU frame.
+	// Exact blend math is validated in subtitle_overlay_blend tests.
+	EXPECT_NE(9, frame->data[0]);
+	EXPECT_GT(frame->data[1], 0);
+	EXPECT_GT(frame->data[2], 0);
+
+	std::lock_guard<std::mutex> lock(state->mutex);
+	EXPECT_EQ((std::vector<int>{ 9 }), state->requested_frames);
+}
+
 TEST(async_video_provider, find_key_point_range_scans_frames_inside_worker) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *video = new FakeVideoProvider(state);
@@ -1022,7 +1048,7 @@ TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 
 	auto packet = provider.GetRenderPacket(9, 9000);
 	ASSERT_TRUE(packet.source_frame_storage);
-	ASSERT_TRUE(packet.composited_frame_storage);
+	EXPECT_FALSE(packet.composited_frame_storage);
 	ASSERT_TRUE(packet.has_subtitle_overlay);
 	EXPECT_TRUE(packet.source_frame.IsValid());
 	EXPECT_TRUE(packet.subtitle_overlay.IsValid());
@@ -1039,10 +1065,10 @@ TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {
 	EXPECT_EQ(SubtitleOverlayCompositionMode::PremultipliedAlpha, packet.subtitle_overlay.composition_mode);
 	EXPECT_EQ(SubtitleOverlayCoordinateSpace::SourceStorage, packet.subtitle_overlay.coordinate_space);
 	EXPECT_GT(packet.subtitle_overlay.continuity_generation, 0u);
+	EXPECT_EQ(packet.source_frame_storage, packet.DisplayFrame());
 	EXPECT_EQ(9, packet.source_frame_storage->data[0]);
-	EXPECT_GT(packet.composited_frame_storage->data[0], packet.source_frame_storage->data[0]);
-	EXPECT_GT(packet.composited_frame_storage->data[1], packet.source_frame_storage->data[1]);
-	EXPECT_GT(packet.composited_frame_storage->data[2], packet.source_frame_storage->data[2]);
+	EXPECT_EQ(0, packet.source_frame_storage->data[1]);
+	EXPECT_EQ(0, packet.source_frame_storage->data[2]);
 	EXPECT_EQ(128, packet.subtitle_overlay.planes[0].data[3]);
 	ASSERT_EQ(1, packet.subtitle_overlay.dirty_rect_count);
 	EXPECT_EQ(0, packet.subtitle_overlay.dirty_rects[0].x);
@@ -1867,6 +1893,7 @@ TEST(async_video_provider, subtitle_timecodes_override_source_fps_for_visibility
 
 	AssFile subtitle_file;
 	auto *line = new AssDialogue;
+	line->Row = 0;
 	line->Start = 0;
 	line->End = 17;
 	line->Text = "timecodes";

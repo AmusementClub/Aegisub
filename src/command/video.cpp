@@ -427,9 +427,14 @@ struct video_frame_next_large final : public validator_video_loaded {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		core.videoController->JumpToFrame(aegisub::video_navigation_ops::ComputeRelativeFrameJump(
-			core.videoController->GetFrameN(),
-			OPT_GET("Video/Slider/Fast Jump Step")->GetInt()));
+		int const delta = OPT_GET("Video/Slider/Fast Jump Step")->GetInt();
+		if (core.videoController->IsPlaying()) {
+			core.videoController->JumpToFrame(aegisub::video_navigation_ops::ComputeRelativeFrameJump(
+				core.videoController->GetFrameN(),
+				delta));
+			return;
+		}
+		core.videoController->NavigateByFrames(delta);
 	}
 };
 
@@ -491,9 +496,14 @@ struct video_frame_prev_large final : public validator_video_loaded {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		core.videoController->JumpToFrame(aegisub::video_navigation_ops::ComputeRelativeFrameJump(
-			core.videoController->GetFrameN(),
-			-OPT_GET("Video/Slider/Fast Jump Step")->GetInt()));
+		int const delta = -OPT_GET("Video/Slider/Fast Jump Step")->GetInt();
+		if (core.videoController->IsPlaying()) {
+			core.videoController->JumpToFrame(aegisub::video_navigation_ops::ComputeRelativeFrameJump(
+				core.videoController->GetFrameN(),
+				delta));
+			return;
+		}
+		core.videoController->NavigateByFrames(delta);
 	}
 };
 

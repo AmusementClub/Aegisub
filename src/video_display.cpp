@@ -884,6 +884,10 @@ void VideoDisplay::DoRender() try {
 	if (!con->project->VideoProvider() || !InitContext() || (!videoRenderer && !has_pending_packet))
 		return;
 
+	bool presented_new_frame = false;
+	int presented_frame_number = -1;
+	bool first_presented_frame = false;
+
 	bool renderer_was_just_created = false;
 	if (!videoRenderer) {
 		auto renderer_result = CreateConfiguredVideoRenderer();
@@ -904,7 +908,7 @@ void VideoDisplay::DoRender() try {
 
 	try {
 		if (has_pending_packet) {
-			bool const first_presented_frame = !has_displayed_packet;
+			first_presented_frame = !has_displayed_packet;
 			bool const reuse_uploaded_source_frame =
 				pending_packet.allow_source_frame_upload_reuse
 				&&
@@ -954,13 +958,8 @@ void VideoDisplay::DoRender() try {
 			pending_packet = { };
 			has_pending_packet = false;
 			RefreshDisplayedSubtitleSceneSnapshot();
-			FramePresented(displayed_packet.frame_number);
-			auto ui = con->GetUI();
-			ui.videoFramePresented(displayed_packet.frame_number);
-			if (perf_trace::ShouldSampleVideoMemory(first_presented_frame)) {
-				auto snapshot = BuildVideoMemorySnapshot(con, this);
-				perf_trace::ObserveVideoMemorySnapshot("frame_presented", snapshot, first_presented_frame);
-			}
+			presented_new_frame = true;
+			presented_frame_number = displayed_packet.frame_number;
 		}
 	}
 	catch (const VideoOutInitException& err) {
@@ -1030,6 +1029,15 @@ void VideoDisplay::DoRender() try {
 	DrawOverlayPass(client_size);
 
 	SwapBuffers();
+
+	if (presented_new_frame) {
+		FramePresented(presented_frame_number);
+		con->videoController->NotifyFramePresented(presented_frame_number);
+		if (perf_trace::ShouldSampleVideoMemory(first_presented_frame)) {
+			auto snapshot = BuildVideoMemorySnapshot(con, this);
+			perf_trace::ObserveVideoMemorySnapshot("frame_presented", snapshot, first_presented_frame);
+		}
+	}
 }
 catch (const agi::Exception &err) {
 	wxLogError(

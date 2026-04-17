@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -49,6 +50,7 @@ class AudioSpectrumAnalysisCache {
 	size_t block_count = 0;
 	size_t max_cache_bytes = 64 * 1024 * 1024;
 	size_t current_cache_bytes = 0;
+	size_t current_cache_entries = 0;
 	uint64_t touch_counter = 0;
 
 	mutable std::mutex cache_mutex;
@@ -85,6 +87,7 @@ class AudioSpectrumAnalysisCache {
 	std::atomic<uint64_t> metrics_prefetch_builds{0};
 	std::atomic<uint64_t> metrics_prefetch_busy_skips{0};
 	std::atomic<bool> prefetch_enabled{true};
+	std::atomic<size_t> prefetch_build_max_blocks{1024};
 	std::atomic<uint64_t> active_prefetch_generation{0};
 	std::atomic<uint64_t> metrics_stale_drops{0};
 	std::atomic<uint64_t> metrics_evictions{0};
@@ -97,7 +100,9 @@ class AudioSpectrumAnalysisCache {
 	void RecreateCache();
 	std::unique_ptr<float[]> BuildBlockUnlocked(size_t block_index);
 	size_t GetMaxBuildBlocks(size_t preferred_cap) const;
+	std::vector<std::pair<size_t, std::unique_ptr<float[]>>> BuildBlocksUnlockedInternal(size_t first_block, size_t last_block, uint64_t generation, bool check_generation);
 	std::vector<std::pair<size_t, std::unique_ptr<float[]>>> BuildBlocksUnlocked(size_t first_block, size_t last_block);
+	std::vector<std::pair<size_t, std::unique_ptr<float[]>>> BuildBlocksUnlocked(size_t first_block, size_t last_block, uint64_t generation);
 	void TouchLocked(size_t block_index);
 	void TrimLocked();
 	void DrainReady();
@@ -118,6 +123,7 @@ public:
 	bool AreBlocksReady(size_t first_block, size_t last_block);
 	void Prefetch(size_t first_block, size_t last_block);
 	void SetPrefetchEnabled(bool enabled);
+	void SetPrefetchBuildMaxBlocks(size_t max_blocks) { prefetch_build_max_blocks.store(std::max<size_t>(1, max_blocks), std::memory_order_relaxed); }
 	void SetReadyCallback(std::function<void()> callback) { ready_callback = std::move(callback); }
 	AudioSpectrumAnalysisCacheMetrics GetMetricsSnapshot() const;
 };

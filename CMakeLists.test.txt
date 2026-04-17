@@ -75,6 +75,8 @@ if(GTEST_FOUND)
         src/video_property_update.cpp
         src/video_aspect_ratio_ops.cpp
         src/video_navigation_ops.cpp
+        src/navigation_preview_policy.cpp
+        src/playback_transport_policy.cpp
         src/video_controller_timer.cpp
         src/video_session_ops.cpp
         src/video_snapshot_ops.cpp
@@ -108,6 +110,7 @@ if(GTEST_FOUND)
         tests/tests/video_renderer_opengl_overlay_upload_plan.cpp
         tests/tests/video_renderer_opengl_tile.cpp
         tests/tests/video_render_routing.cpp
+        tests/tests/video_subtitle_scene_cache.cpp
         tests/tests/video_renderer_placebo_source_frame.cpp
         tests/tests/mru.cpp
         tests/tests/option.cpp
@@ -142,6 +145,8 @@ if(GTEST_FOUND)
         tests/tests/video_property_update.cpp
         tests/tests/video_aspect_ratio_ops.cpp
         tests/tests/video_navigation_ops.cpp
+        tests/tests/navigation_preview_policy.cpp
+        tests/tests/playback_transport_policy.cpp
         tests/tests/video_session_ops.cpp
         tests/tests/video_snapshot_ops.cpp
         tests/tests/video_cache.cpp

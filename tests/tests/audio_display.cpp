@@ -3,10 +3,12 @@
 #include <main.h>
 
 #include "../../src/audio_display_analysis.h"
+#include "../../src/audio_display_invalidation_planner.h"
 #include "../../src/audio_latest_range_scheduler.h"
 #include "../../src/audio_display_source.h"
 #include "../../src/audio_mix_policy.h"
 #include "../../src/audio_spectrum_analysis_cache.h"
+#include "../../src/audio_waveform_bitmap_tile_renderer.h"
 #include "../../src/audio_waveform_summary_cache.h"
 
 #include <libaegisub/audio/provider.h>
@@ -312,6 +314,36 @@ TEST(lagi_audio_display, waveform_summary_cache_get_if_ready_does_not_mutate_met
 	EXPECT_EQ(before.cache_misses, after.cache_misses);
 }
 
+TEST(lagi_audio_display, waveform_summary_column_refs_respect_sub_block_offsets) {
+	auto refs = BuildWaveformSummaryColumnRefs(8, 40);
+
+	ASSERT_EQ(40u, refs.size());
+	EXPECT_EQ(0u, refs[0].block_index);
+	EXPECT_EQ(8u, refs[0].summary_index);
+	EXPECT_EQ(0u, refs[23].block_index);
+	EXPECT_EQ(31u, refs[23].summary_index);
+	EXPECT_EQ(1u, refs[24].block_index);
+	EXPECT_EQ(0u, refs[24].summary_index);
+	EXPECT_EQ(1u, refs[39].block_index);
+	EXPECT_EQ(15u, refs[39].summary_index);
+}
+
+TEST(lagi_audio_display, waveform_summary_column_refs_cover_multi_block_tiles) {
+	auto refs = BuildWaveformSummaryColumnRefs(0, 96);
+
+	ASSERT_EQ(96u, refs.size());
+	EXPECT_EQ(0u, refs[0].block_index);
+	EXPECT_EQ(0u, refs[0].summary_index);
+	EXPECT_EQ(0u, refs[31].block_index);
+	EXPECT_EQ(31u, refs[31].summary_index);
+	EXPECT_EQ(1u, refs[32].block_index);
+	EXPECT_EQ(0u, refs[32].summary_index);
+	EXPECT_EQ(2u, refs[64].block_index);
+	EXPECT_EQ(0u, refs[64].summary_index);
+	EXPECT_EQ(2u, refs[95].block_index);
+	EXPECT_EQ(31u, refs[95].summary_index);
+}
+
 TEST(lagi_audio_display, latest_range_scheduler_request_increments_generation) {
 	AudioLatestRangeScheduler scheduler([](size_t, size_t, uint64_t) {});
 	const uint64_t before = scheduler.CurrentGeneration();
@@ -458,9 +490,43 @@ TEST(lagi_audio_display, spectrum_analysis_cache_stays_finite_with_prefetch_inte
 }
 
 TEST(lagi_audio_display, track_cursor_overlay_refresh_policy_handles_same_pixel_updates) {
-	EXPECT_FALSE(ShouldRefreshTrackCursor(-1, -1));
-	EXPECT_TRUE(ShouldRefreshTrackCursor(-1, 120));
-	EXPECT_TRUE(ShouldRefreshTrackCursor(120, -1));
-	EXPECT_TRUE(ShouldRefreshTrackCursor(120, 120));
-	EXPECT_TRUE(ShouldRefreshTrackCursor(120, 121));
+	EXPECT_FALSE(AudioDisplayInvalidationPlanner::ShouldRefreshTrackCursor(-1, -1));
+	EXPECT_TRUE(AudioDisplayInvalidationPlanner::ShouldRefreshTrackCursor(-1, 120));
+	EXPECT_TRUE(AudioDisplayInvalidationPlanner::ShouldRefreshTrackCursor(120, -1));
+	EXPECT_FALSE(AudioDisplayInvalidationPlanner::ShouldRefreshTrackCursor(120, 120));
+	EXPECT_TRUE(AudioDisplayInvalidationPlanner::ShouldRefreshTrackCursor(120, 121));
+}
+
+TEST(lagi_audio_display, invalidation_planner_unions_track_cursor_and_label_rects) {
+	using Planner = AudioDisplayInvalidationPlanner;
+
+	Planner::Rect const old_label = { 0, 5, 10, 5 };
+	Planner::Rect const new_label = { 30, 5, 10, 5 };
+
+	auto const dirty = Planner::PlanTrackCursorDirtyRect(
+		120,
+		121,
+		old_label,
+		new_label,
+		100,
+		10,
+		50);
+
+	EXPECT_EQ((Planner::Rect{ 0, 5, 40, 55 }), dirty);
+}
+
+TEST(lagi_audio_display, invalidation_planner_unions_marker_move_rects) {
+	using Planner = AudioDisplayInvalidationPlanner;
+
+	Planner::Rect const old_marker = { 10, 10, 5, 50 };
+	Planner::Rect const new_marker = { 20, 10, 5, 50 };
+
+	EXPECT_EQ((Planner::Rect{ 10, 10, 15, 50 }), Planner::PlanMarkerMoveDirtyRect(old_marker, new_marker));
+}
+
+TEST(lagi_audio_display, invalidation_planner_unions_selection_edge_rects) {
+	using Planner = AudioDisplayInvalidationPlanner;
+
+	auto const dirty = Planner::PlanSelectionEdgeDirtyRect(1000, 995, 900, 10, 50);
+	EXPECT_EQ((Planner::Rect{ 94, 10, 8, 50 }), dirty);
 }

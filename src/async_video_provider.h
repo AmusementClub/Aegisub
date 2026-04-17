@@ -176,7 +176,13 @@ public:
 	///
 	/// This is intended for seek/drag preview. Pending requests are replaced by
 	/// newer ones, so there is no guarantee that every requested frame is shown.
-	void RequestFrame(int frame, double time) throw();
+	///
+	/// If `supersede_in_flight` is true, supersedes any in-flight request and
+	/// may drop a frame which finishes after a newer request arrives (latest-only).
+	void RequestFrame(int frame, double time, bool supersede_in_flight = true) throw();
+
+	/// Cancel any pending preview frame request and supersede in-flight work.
+	void CancelPendingFrameRequests() noexcept;
 
 	/// @brief Synchronously get a CPU-readable BGRA frame
 	/// @brief frame Frame number

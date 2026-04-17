@@ -29,7 +29,9 @@
 
 #include <libaegisub/signal.h>
 
+#include <chrono>
 #include <vector>
+#include <wx/timer.h>
 #include <wx/window.h>
 
 namespace agi { struct Context; }
@@ -44,8 +46,18 @@ class VideoSlider: public wxWindow {
 	std::vector<int> keyframes; ///< Currently loaded keyframes
 	std::vector<agi::signal::Connection> connections;
 
+	bool is_dragging = false;
+
 	int val = 0; ///< Current frame number
 	int max = 1; ///< Last frame number
+
+	wxTimer seek_timer;
+	std::chrono::steady_clock::time_point last_seek_time;
+	int last_seek_frame = -1;
+	int pending_seek_frame = -1;
+
+	std::chrono::milliseconds seek_min_interval_forward{ 33 };
+	std::chrono::milliseconds seek_min_interval_backward{ 100 };
 
 	/// Get the frame number for the given x coordinate
 	int GetValueAtX(int x);
@@ -53,6 +65,7 @@ class VideoSlider: public wxWindow {
 	int GetXAtValue(int value);
 	/// Set the position of the slider
 	void SetValue(int value);
+	void OnFramePresented(int value);
 
 	/// Video open event handler
 	void VideoOpened(AsyncVideoProvider *new_provider);
@@ -60,6 +73,8 @@ class VideoSlider: public wxWindow {
 	void KeyframesChanged(std::vector<int> const& newKeyframes);
 	void UpdateScale();
 
+	void ScheduleSeek(int target_frame, bool force);
+	void OnSeekTimer(wxTimerEvent &evt);
 	void OnMouse(wxMouseEvent &event);
 	void OnKeyDown(wxKeyEvent &event);
 	void OnCharHook(wxKeyEvent &event);

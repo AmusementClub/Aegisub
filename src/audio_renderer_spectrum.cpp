@@ -83,6 +83,11 @@ AudioSpectrumRenderer::AudioSpectrumRenderer(std::string const& color_scheme_nam
 		colors.emplace_back(12, color_scheme_name, i);
 	analysis_cache = std::make_unique<AudioSpectrumAnalysisCache>();
 	analysis_cache->SetReadyCallback([this] { NotifyRenderContentReady(); });
+	ConfigurePrefetchBudgets();
+}
+
+void AudioSpectrumRenderer::OnAllowPlaceholderChanged() {
+	ConfigurePrefetchBudgets();
 }
 
 bool AudioSpectrumRenderer::UsesAnalysisCache() const {
@@ -145,6 +150,18 @@ void AudioSpectrumRenderer::EnsurePerChannelCaches() {
 		per_channel_caches.push_back(std::move(cache));
 		active_channel_indices.push_back(ch);
 		active_channel_labels.push_back(GetChannelLabel(ch, total_channels));
+	}
+
+	ConfigurePrefetchBudgets();
+}
+
+void AudioSpectrumRenderer::ConfigurePrefetchBudgets() {
+	const size_t max_blocks = allow_placeholder ? size_t{256} : size_t{1024};
+	if (analysis_cache)
+		analysis_cache->SetPrefetchBuildMaxBlocks(max_blocks);
+	for (auto &cache : per_channel_caches) {
+		if (cache)
+			cache->SetPrefetchBuildMaxBlocks(max_blocks);
 	}
 }
 
@@ -393,12 +410,12 @@ bool AudioSpectrumRenderer::IsCacheRangeReady(int start, int length) {
 	return analysis_cache->AreBlocksReady(first_visible_block, last_visible_block);
 }
 
-void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
+AudioRenderResult AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
 {
 	if (!EnsureCachesConfigured() || bmp.GetWidth() <= 0) {
 		wxMemoryDC dc(bmp);
 		RenderBlank(dc, wxRect(0, 0, bmp.GetWidth(), bmp.GetHeight()), style);
-		return;
+		return AudioRenderResult::Ready;
 	}
 
 	// ChannelSplit path: render each channel into its own horizontal band
@@ -413,7 +430,7 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 			if (!caches_ready) {
 				wxMemoryDC dc(bmp);
 				RenderBlank(dc, wxRect(0, 0, bmp.GetWidth(), bmp.GetHeight()), style);
-				return;
+				return AudioRenderResult::Ready;
 			}
 
 			const AudioColorScheme *pal = &colors[style];
@@ -424,44 +441,58 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 			const size_t first_visible_block = static_cast<size_t>(start * samples_per_pixel) >> derivation_dist;
 			const size_t last_visible_block = static_cast<size_t>(std::max(start, end - 1) * samples_per_pixel) >> derivation_dist;
 
-			for (int ch = 0; ch < channels; ++ch) {
+			for (int ch = 0; ch < channels; ++ch)
 				per_channel_caches[ch]->Prefetch(first_visible_block, last_visible_block + 8);
 
-				std::vector<const float *> ch_columns(static_cast<size_t>(bmp.GetWidth()));
+			channel_split_power_columns_scratch.resize(static_cast<size_t>(bmp.GetWidth()));
+			const bool needs_recreate = !channel_split_band_bitmap_scratch.IsOk()
+				|| channel_split_band_bitmap_scratch.GetWidth() != bmp.GetWidth()
+				|| channel_split_band_bitmap_scratch.GetHeight() != band_height;
+			if (needs_recreate)
+				channel_split_band_bitmap_scratch = wxBitmap(bmp.GetWidth(), band_height);
+
+			wxMemoryDC dst_dc(bmp);
+			bool has_missing_columns = false;
+			for (int ch = 0; ch < channels; ++ch) {
 				size_t last_block = static_cast<size_t>(-1);
 				const float *last_power = nullptr;
 
 				for (int ax = start; ax < end; ++ax) {
 					size_t block_idx = static_cast<size_t>(ax * samples_per_pixel) >> derivation_dist;
+					const float *power = nullptr;
 					if (block_idx == last_block) {
-						ch_columns[ax - start] = last_power;
-					} else {
-						last_power = per_channel_caches[ch]->Get(block_idx);
-						last_block = block_idx;
-						ch_columns[ax - start] = last_power;
+						power = last_power;
 					}
+					else {
+						if (allow_placeholder)
+							power = per_channel_caches[ch]->GetIfReady(block_idx);
+						else
+							power = per_channel_caches[ch]->Get(block_idx);
+						last_block = block_idx;
+						last_power = power;
+					}
+					if (!power)
+						has_missing_columns = true;
+					channel_split_power_columns_scratch[static_cast<size_t>(ax - start)] = power;
 				}
 
-				wxBitmap sub_bmp(bmp.GetWidth(), band_height);
 				RenderSpectrumColumnsToBitmap(
-					sub_bmp, ch_columns, derivation_size,
+					channel_split_band_bitmap_scratch, channel_split_power_columns_scratch, derivation_size,
 					render_band_a.data(), render_band_b.data(),
 					ch_interpolated ? render_band_frac.data() : nullptr,
 					ch_interpolated, amplitude_scale, *pal);
 
-				wxMemoryDC dst_dc(bmp);
-				dst_dc.DrawBitmap(sub_bmp, 0, ch * band_height);
+				dst_dc.DrawBitmap(channel_split_band_bitmap_scratch, 0, ch * band_height);
 			}
 
 			// Draw dividers between channel bands
 			if (channels > 1) {
-				wxMemoryDC dst_dc(bmp);
 				dst_dc.SetPen(wxPen(wxColour(80, 80, 80), 1));
 				for (int ch = 1; ch < channels; ++ch)
 					dst_dc.DrawLine(0, ch * band_height, bmp.GetWidth(), ch * band_height);
 			}
 
-			return;
+			return has_missing_columns ? AudioRenderResult::Placeholder : AudioRenderResult::Ready;
 		}
 	}
 
@@ -471,7 +502,7 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 		if (!caches_ready) {
 			wxMemoryDC dc(bmp);
 			RenderBlank(dc, wxRect(0, 0, bmp.GetWidth(), bmp.GetHeight()), style);
-			return;
+			return AudioRenderResult::Ready;
 		}
 
 		assert(bmp.IsOk());
@@ -494,6 +525,7 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 		size_t last_block_index = static_cast<size_t>(-1);
 		const float *last_power = nullptr;
 		size_t combined_block_count = 0;
+		bool has_missing_columns = false;
 
 		for (int ax = start; ax < end; ++ax) {
 			size_t block_index = static_cast<size_t>(ax * samples_per_pixel) >> derivation_dist;
@@ -502,20 +534,31 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 				power = last_power;
 			}
 			else {
+				bool ready = true;
 				for (size_t ch = 0; ch < per_channel_caches.size(); ++ch) {
-					channel_power_inputs[ch] = per_channel_caches[ch]->Get(block_index);
+					if (allow_placeholder)
+						channel_power_inputs[ch] = per_channel_caches[ch]->GetIfReady(block_index);
+					else
+						channel_power_inputs[ch] = per_channel_caches[ch]->Get(block_index);
+					if (!channel_power_inputs[ch])
+						ready = false;
 				}
 
-				float *dst = combined_power_scratch.data() + combined_block_count * bin_count;
-				if (mono_mix_mode == AudioSpectrumMonoMixMode::PerBinMaxPower)
-					MergeSpectrumPowerBinsMax(channel_power_inputs, bin_count, dst);
-				else
-					MergeSpectrumPowerBinsAverage(channel_power_inputs, bin_count, dst);
-
-				power = dst;
+				if (!ready) {
+					has_missing_columns = true;
+					power = nullptr;
+				}
+				else {
+					float *dst = combined_power_scratch.data() + combined_block_count * bin_count;
+					if (mono_mix_mode == AudioSpectrumMonoMixMode::PerBinMaxPower)
+						MergeSpectrumPowerBinsMax(channel_power_inputs, bin_count, dst);
+					else
+						MergeSpectrumPowerBinsAverage(channel_power_inputs, bin_count, dst);
+					power = dst;
+					++combined_block_count;
+				}
 				last_block_index = block_index;
 				last_power = power;
-				++combined_block_count;
 			}
 			combined_power_columns[static_cast<size_t>(ax - start)] = power;
 		}
@@ -530,13 +573,13 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 			interpolated,
 			amplitude_scale,
 			*pal);
-		return;
+		return has_missing_columns ? AudioRenderResult::Placeholder : AudioRenderResult::Ready;
 	}
 
 	if (!analysis_cache || !analysis_cache->IsReady()) {
 		wxMemoryDC dc(bmp);
 		RenderBlank(dc, wxRect(0, 0, bmp.GetWidth(), bmp.GetHeight()), style);
-		return;
+		return AudioRenderResult::Ready;
 	}
 
 	assert(bmp.IsOk());
@@ -554,9 +597,10 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 	const bool interpolated = bmp.GetHeight() > 1 << derivation_size;
 	analysis_cache->Prefetch(first_visible_block, last_visible_block + 8);
 
-	std::vector<const float *> power_columns(static_cast<size_t>(bmp.GetWidth()));
+	power_columns_scratch.resize(static_cast<size_t>(bmp.GetWidth()));
 	size_t last_block_index = static_cast<size_t>(-1);
 	const float *last_power = nullptr;
+	bool has_missing_columns = false;
 
 	for (int ax = start; ax < end; ++ax) {
 		size_t block_index = static_cast<size_t>(ax * samples_per_pixel) >> derivation_dist;
@@ -565,16 +609,21 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 			power = last_power;
 		}
 		else {
-			power = analysis_cache->Get(block_index);
+			if (allow_placeholder)
+				power = analysis_cache->GetIfReady(block_index);
+			else
+				power = analysis_cache->Get(block_index);
 			last_block_index = block_index;
 			last_power = power;
 		}
-		power_columns[static_cast<size_t>(ax - start)] = power;
+		if (!power)
+			has_missing_columns = true;
+		power_columns_scratch[static_cast<size_t>(ax - start)] = power;
 	}
 
 	RenderSpectrumColumnsToBitmap(
 		bmp,
-		power_columns,
+		power_columns_scratch,
 		derivation_size,
 		render_band_a.data(),
 		render_band_b.data(),
@@ -582,6 +631,7 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 		interpolated,
 		amplitude_scale,
 		*pal);
+	return has_missing_columns ? AudioRenderResult::Placeholder : AudioRenderResult::Ready;
 }
 
 void AudioSpectrumRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style)

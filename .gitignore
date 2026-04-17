@@ -19,6 +19,7 @@
 *.mkv
 *.mo
 *.ncb
+*.ndjson
 *.obj
 *.opensdf
 *.orig

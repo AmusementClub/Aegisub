@@ -30,6 +30,7 @@
 #pragma once
 
 #include "async_video_provider_host.h"
+#include "playback_transport_policy.h"
 #include "video_render_packet.h"
 
 #include <libaegisub/signal.h>
@@ -39,6 +40,7 @@
 #include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 #include "ui_dispatch.h"
 
@@ -67,6 +69,8 @@ class VideoController final {
 	agi::signal::Signal<int> PlaybackFrameAdvanced;
 	/// A render packet is ready to be presented.
 	agi::signal::Signal<VideoRenderPacket const&, double> FrameReady;
+	/// A frame was presented by the video display (new frame number).
+	agi::signal::Signal<int> FramePresented;
 	/// Aspect ratio was changed (type, value)
 	agi::signal::Signal<AspectRatio, double> ARChange;
 
@@ -105,6 +109,8 @@ class VideoController final {
 	/// The frame number which was last requested from the video provider,
 	/// which may not be the same thing as the currently displayed frame
 	int frame_n = 0;
+	/// The frame number which was last presented by the video display.
+	int presented_frame_n = -1;
 
 	/// The picture aspect ratio of the video if the aspect ratio has been
 	/// overridden by the user
@@ -116,7 +122,26 @@ class VideoController final {
 	/// Cached option for audio playing when frame stepping
 	const agi::OptionValue* playAudioOnStep;
 
+	std::unique_ptr<PlaybackTransportPolicy> step_transport_policy;
+	std::unique_ptr<VideoControllerTimer> step_preview_timer;
+	std::unique_ptr<VideoControllerTimer> step_release_timer;
+	bool step_preview_enabled = true;
+	bool step_preview_active = false;
+	int step_preview_target_frame = -1;
+
+	bool has_step_last_input = false;
+	std::chrono::steady_clock::time_point step_last_input_time;
+	int step_burst_count = 0;
+	std::chrono::milliseconds step_preview_interval{ 33 };
+	std::chrono::milliseconds step_preview_interval_backward{ 100 };
+	std::chrono::milliseconds step_repeat_burst_window{ 1000 };
+	int step_repeat_burst_threshold = 3;
+	std::chrono::milliseconds step_repeat_release_delay{ 200 };
+	int step_transport_policy_direction = 0;
+
 	void OnPlayTimer();
+	void OnStepPreviewTimer();
+	void OnStepReleaseTimer();
 
 	void HandleVideoError(std::string const& message);
 	void HandleSubtitlesError(std::string const& message);
@@ -127,7 +152,22 @@ class VideoController final {
 	void OnActiveLineChanged(AssDialogue *line);
 
 	void RequestFrame();
+	void RequestFrame(bool supersede_in_flight);
 	void RequestFrameImmediate();
+	void RequestFramePreview(int target_frame, bool trace, bool supersede_in_flight);
+	void CancelStepPreviewSession();
+	void StepFrames(int delta, bool immediate_inspection, bool play_audio_on_inspection);
+	void HandleInspectionStepTarget(int target, bool immediate_request, bool play_audio, int delta);
+	void HandleStepTransportOutputs(
+		const std::vector<PlaybackTransportPolicy::Output> &outputs,
+		bool immediate_inspection,
+		bool play_audio_on_inspection,
+		int delta);
+	PlaybackTransportPolicy &EnsureStepTransportPolicy();
+	PlaybackTransportPolicy &EnsureStepPreviewTransportPolicy(int direction);
+	void ScheduleStepPreviewTimer(std::chrono::steady_clock::time_point now);
+	void ResetStepPreviewSessionState();
+	void StepSingleFrame(int delta);
 	void StartPlayback(PlaybackMode mode, int range_end_ms = 0);
 	bool PreparePlayback(PlaybackMode mode, int start_frame, int range_end_ms = 0);
 	void StartPlaybackTimer();
@@ -143,6 +183,11 @@ public:
 
 	/// Get the current frame number
 	int GetFrameN() const { return frame_n; }
+	/// Get the last presented frame number, or -1 if nothing has been presented yet
+	int GetPresentedFrameN() const { return presented_frame_n; }
+
+	/// Notify the controller that the display presented a new frame
+	void NotifyFramePresented(int frame_number);
 
 	/// Get the actual aspect ratio from a predefined AR type
 	double GetARFromType(AspectRatio type) const;
@@ -163,10 +208,22 @@ public:
 	/// @brief Jump to the beginning of a frame
 	/// @param n Frame number to jump to
 	void JumpToFrame(int n);
+	/// @brief Preview-seek to the beginning of a frame
+	///
+	/// Used for high-frequency navigation (drag/step preview) where delivering
+	/// an in-flight frame is better than dropping it under heavy decoder load.
+	void PreviewToFrame(int n);
 	/// @brief Jump to a time
 	/// @param ms Time to jump to in milliseconds
 	/// @param end Type of time
 	void JumpToTime(int ms, agi::vfr::Time end = agi::vfr::START);
+
+	/// Navigate by a relative number of frames (paused only).
+	///
+	/// Designed for hotkey repeat scenarios (e.g. prev/next-large): uses the
+	/// same preview coalescing as single-frame stepping, but does not play
+	/// audio on each step.
+	void NavigateByFrames(int delta);
 
 	/// Starting playing the video
 	void Play();
@@ -182,6 +239,7 @@ public:
 	DEFINE_SIGNAL_ADDERS(Seek, AddSeekListener)
 	DEFINE_SIGNAL_ADDERS(PlaybackFrameAdvanced, AddPlaybackFrameAdvancedListener)
 	DEFINE_SIGNAL_ADDERS(FrameReady, AddFrameReadyListener)
+	DEFINE_SIGNAL_ADDERS(FramePresented, AddFramePresentedListener)
 	DEFINE_SIGNAL_ADDERS(ARChange, AddARChangeListener)
 	agi::ui::WeakLifetime GetAsyncUiLifetime() const { return ui_activation.GetLifetime(); }
 	AsyncVideoProviderEventSink CreateAsyncVideoProviderEventSink();

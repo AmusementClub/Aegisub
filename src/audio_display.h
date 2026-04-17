@@ -34,6 +34,7 @@
 #include <cstdint>
 #include <memory>
 
+#include <wx/bitmap.h>
 #include <wx/gdicmn.h>
 #include <wx/string.h>
 #include <wx/timer.h>
@@ -145,12 +146,27 @@ class AudioDisplay: public wxWindow {
 
 	/// Absolute pixel position of the tracking cursor (mouse or playback)
 	int track_cursor_pos = -1;
+	/// Optional content backing bitmap for overlay-only refreshes (env-flagged).
+	bool content_backing_enabled = false;
+	bool content_backing_valid = false;
+	wxBitmap content_backing_bitmap;
+	int content_backing_scroll_left = 0;
+	double content_backing_ms_per_pixel = 0.0;
+	int content_backing_audio_top = 0;
+	int content_backing_audio_height = 0;
+	int content_backing_client_width = 0;
+	uint64_t content_backing_updates = 0;
+	uint64_t content_backing_blits = 0;
 	/// Absolute pixel position of the last video-position marker refresh
 	int last_video_marker_pos = -1;
 	/// Last frame number used to compute the video-position marker
 	int last_video_marker_frame = -1;
 	/// True while a middle-button scrub seek is in progress
 	bool middle_scrub_seek_active = false;
+	/// Defer high-frequency middle-button scrub seeks to reduce seek fanout
+	wxTimer middle_scrub_seek_timer;
+	std::chrono::steady_clock::time_point middle_scrub_last_seek_time;
+	int middle_scrub_pending_seek_frame = -1;
 	/// Label to show by track cursor
 	wxString track_cursor_label;
 	/// Bounding rectangle last drawn track cursor label
@@ -165,6 +181,11 @@ class AudioDisplay: public wxWindow {
 	int GetCurrentVideoMarkerPos() const;
 	wxRect GetMarkerRefreshRect(int absolute_x) const;
 	bool QueueDynamicVideoMarkerRefresh();
+	void InvalidateContentBacking();
+	bool EnsureContentBackingBitmap();
+	void UpdateContentBackingBitmap();
+	void ScheduleMiddleScrubSeek(int target_ms, bool force);
+	void OnMiddleScrubSeekTimer(wxTimerEvent &evt);
 
 	/// Previous style ranges for optimizing redraw when ranges change
 	std::vector<std::pair<int, int>> style_ranges;
@@ -235,6 +256,7 @@ class AudioDisplay: public wxWindow {
 	void OnTimingController();
 	void OnMarkerMoved();
 	void OnVideoSeek(int frame);
+	void OnTrackCursorTimeOptionChanged(agi::OptionValue const& opt);
 	void OnSpectrumMonoMixModeChanged(agi::OptionValue const& opt);
 	void OnSpectrumComputationModeChanged(agi::OptionValue const& opt);
 	void OnSpectrumFrequencyCurveChanged(agi::OptionValue const& opt);

@@ -31,7 +31,7 @@
 #include "audio_display.h"
 
 #include "audio_controller.h"
-#include "audio_display_analysis.h"
+#include "audio_display_invalidation_planner.h"
 #include "audio_renderer.h"
 #include "audio_renderer_spectrum.h"
 #include "audio_renderer_waveform.h"
@@ -53,9 +53,12 @@
 #include <libaegisub/make_unique.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 
 #include <wx/dcbuffer.h>
 #include <wx/dcclient.h>
+#include <wx/dcmemory.h>
 #include <wx/font.h>
 #include <wx/mousestate.h>
 
@@ -91,6 +94,48 @@ public:
 };
 
 namespace {
+AudioDisplayInvalidationPlanner::Rect ToPlannerRect(wxRect const& rect) {
+	if (rect.IsEmpty())
+		return { };
+	return { rect.x, rect.y, rect.width, rect.height };
+}
+
+wxRect ToWxRect(AudioDisplayInvalidationPlanner::Rect const& rect) {
+	return wxRect(rect.x, rect.y, rect.width, rect.height);
+}
+
+bool ReadEnvFlag(char const *name) {
+	auto const* value = std::getenv(name);
+	if (!value || !*value)
+		return false;
+
+	char const first = static_cast<char>(std::tolower(static_cast<unsigned char>(*value)));
+	return first != '0' && first != 'f' && first != 'n';
+}
+
+bool ReadEnvFlagDefaultOn(char const *name) {
+	auto const* value = std::getenv(name);
+	if (!value || !*value)
+		return true;
+
+	char const first = static_cast<char>(std::tolower(static_cast<unsigned char>(*value)));
+	return first != '0' && first != 'f' && first != 'n';
+}
+
+int ReadEnvInt(char const *name, int default_value, int min_value, int max_value) {
+	auto const* value = std::getenv(name);
+	if (!value || !*value)
+		return default_value;
+
+	char *end = nullptr;
+	long parsed = std::strtol(value, &end, 10);
+	if (!end || end == value)
+		return default_value;
+
+	parsed = std::clamp(parsed, static_cast<long>(min_value), static_cast<long>(max_value));
+	return static_cast<int>(parsed);
+}
+
 /// @brief Colourscheme-based UI colour provider
 ///
 /// This class provides UI colours corresponding to the supplied audio colour
@@ -590,7 +635,7 @@ AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::C
 : wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, wxWANTS_CHARS|wxBORDER_SIMPLE)
 , audio_open_connection(context->project->AddAudioProviderListener(&AudioDisplay::OnAudioOpen, this))
 , context(context)
-, audio_renderer(agi::make_unique<AudioRenderer>())
+, audio_renderer(agi::make_unique<AudioRenderer>(ReadEnvInt("AEGISUB_AUDIO_RENDERER_CACHE_BITMAP_WIDTH", 32, 8, 512)))
 , audio_tile_compositor(agi::make_unique<AudioTileCompositor>())
 , controller(controller)
 , scrollbar(agi::make_unique<AudioDisplayScrollbar>(this))
@@ -598,6 +643,7 @@ AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::C
 , style_ranges({{0, 0}})
 {
 	audio_renderer->SetAmplitudeScale(scale_amplitude);
+	content_backing_enabled = ReadEnvFlag("AEGISUB_AUDIO_DISPLAY_CONTENT_BACKING");
 	SetZoomLevel(0);
 
 	SetMinClientSize(wxSize(-1, 70));
@@ -621,6 +667,7 @@ AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::C
 	Bind(wxEVT_KEY_DOWN, &AudioDisplay::OnKeyDown, this);
 	scroll_timer.Bind(wxEVT_TIMER, &AudioDisplay::OnScrollTimer, this);
 	high_frequency_refresh_timer.Bind(wxEVT_TIMER, &AudioDisplay::OnHighFrequencyRefreshTimer, this);
+	middle_scrub_seek_timer.Bind(wxEVT_TIMER, &AudioDisplay::OnMiddleScrubSeekTimer, this);
 	load_timer.Bind(wxEVT_TIMER, &AudioDisplay::OnLoadTimer, this);
 }
 
@@ -672,6 +719,84 @@ void AudioDisplay::OnHighFrequencyRefreshTimer(wxTimerEvent &) {
 	FlushHighFrequencyRefresh();
 }
 
+void AudioDisplay::InvalidateContentBacking() {
+	content_backing_valid = false;
+}
+
+bool AudioDisplay::EnsureContentBackingBitmap() {
+	if (!content_backing_enabled)
+		return false;
+
+	int const width = GetClientSize().GetWidth();
+	if (width <= 0 || audio_height <= 0) {
+		content_backing_valid = false;
+		content_backing_bitmap = wxBitmap();
+		return false;
+	}
+
+	bool const needs_recreate = !content_backing_bitmap.IsOk()
+		|| content_backing_bitmap.GetWidth() != width
+		|| content_backing_bitmap.GetHeight() != audio_height;
+	if (needs_recreate) {
+		content_backing_bitmap = wxBitmap(width, audio_height);
+		content_backing_valid = false;
+	}
+
+	bool const up_to_date = content_backing_valid
+		&& content_backing_scroll_left == scroll_left
+		&& content_backing_audio_top == audio_top
+		&& content_backing_audio_height == audio_height
+		&& content_backing_client_width == width
+		&& content_backing_ms_per_pixel == ms_per_pixel;
+	if (!up_to_date)
+		UpdateContentBackingBitmap();
+
+	return content_backing_valid && content_backing_bitmap.IsOk();
+}
+
+void AudioDisplay::UpdateContentBackingBitmap() {
+	if (!content_backing_enabled)
+		return;
+	if (!audio_renderer_provider || !provider)
+		return;
+
+	int const width = GetClientSize().GetWidth();
+	if (width <= 0 || audio_height <= 0) {
+		content_backing_valid = false;
+		return;
+	}
+
+	if (!content_backing_bitmap.IsOk()
+		|| content_backing_bitmap.GetWidth() != width
+		|| content_backing_bitmap.GetHeight() != audio_height) {
+		content_backing_bitmap = wxBitmap(width, audio_height);
+		content_backing_valid = false;
+	}
+	if (!content_backing_bitmap.IsOk())
+		return;
+
+	wxMemoryDC backing_dc;
+	backing_dc.SelectObject(content_backing_bitmap);
+
+	wxRect full_audio_rect(0, audio_top, width, audio_height);
+	auto viewport = BuildViewportRequest(full_audio_rect);
+	viewport.audio_top = 0;
+	viewport.update_rect = wxRect(0, 0, width, audio_height);
+
+	backing_dc.SetClippingRegion(viewport.update_rect);
+	PaintAudio(backing_dc, viewport);
+	backing_dc.DestroyClippingRegion();
+	backing_dc.SelectObject(wxNullBitmap);
+
+	content_backing_scroll_left = scroll_left;
+	content_backing_ms_per_pixel = ms_per_pixel;
+	content_backing_audio_top = audio_top;
+	content_backing_audio_height = audio_height;
+	content_backing_client_width = width;
+	content_backing_valid = true;
+	++content_backing_updates;
+}
+
 void AudioDisplay::ScrollBy(int pixel_amount)
 {
 	ScrollPixelToLeft(scroll_left + pixel_amount);
@@ -694,6 +819,7 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 	timeline->SetPosition(scroll_left);
 	HintVisibleAudioRange();
 	WarmVisibleAudioCache();
+	InvalidateContentBacking();
 	if (dragged_object)
 		QueueHighFrequencyRefresh(nullptr, true);
 	else
@@ -771,6 +897,7 @@ void AudioDisplay::SetZoomLevel(int new_zoom_level)
 	}
 	if (track_cursor_pos >= 0)
 		track_cursor_pos = AbsoluteXFromTime(cursor_time);
+	InvalidateContentBacking();
 	Refresh();
 }
 
@@ -809,6 +936,7 @@ int AudioDisplay::GetZoomLevelFactor(int level)
 void AudioDisplay::SetAmplitudeScale(float scale)
 {
 	audio_renderer->SetAmplitudeScale(scale);
+	InvalidateContentBacking();
 	Refresh();
 }
 
@@ -824,6 +952,7 @@ void AudioDisplay::SetSpectrumChannelMode(AudioSpectrumChannelMode mode) {
 	if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
 		spectrum->SetChannelMode(mode);
 		audio_renderer->Invalidate();
+		InvalidateContentBacking();
 		Refresh();
 	}
 }
@@ -839,6 +968,7 @@ void AudioDisplay::SetSpectrumMonoMixMode(AudioSpectrumMonoMixMode mode) {
 	if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
 		spectrum->SetMonoMixMode(mode);
 		audio_renderer->Invalidate();
+		InvalidateContentBacking();
 		Refresh();
 	}
 }
@@ -857,6 +987,7 @@ void AudioDisplay::OnSpectrumComputationModeChanged(agi::OptionValue const& opt)
 	if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
 		spectrum->SetComputationMode(mode);
 		audio_renderer->Invalidate();
+		InvalidateContentBacking();
 		Refresh();
 	}
 }
@@ -866,6 +997,7 @@ void AudioDisplay::OnSpectrumFrequencyCurveChanged(agi::OptionValue const& opt) 
 	if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
 		spectrum->SetFrequencyCurvePreset(preset);
 		audio_renderer->Invalidate();
+		InvalidateContentBacking();
 		Refresh();
 	}
 }
@@ -877,6 +1009,7 @@ void AudioDisplay::SetSpectrumSelectedChannels(const std::vector<int> &channels)
 	if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
 		spectrum->SetSelectedChannels(spectrum_selected_channels_runtime);
 		audio_renderer->Invalidate();
+		InvalidateContentBacking();
 		Refresh();
 	}
 }
@@ -929,6 +1062,9 @@ void AudioDisplay::ReloadRenderingSettings()
 		audio_renderer_provider = agi::make_unique<AudioWaveformRenderer>(colour_scheme_name);
 	}
 
+	if (audio_renderer_provider)
+		audio_renderer_provider->SetAllowPlaceholder(ReadEnvFlagDefaultOn("AEGISUB_AUDIO_ANALYSIS_PLACEHOLDER"));
+
 	auto ui_lifetime = ui_activation.GetLifetime();
 	audio_renderer_provider->SetContentReadyCallback([this, ui_lifetime] {
 		agi::ui::MainAsyncIfAlive(ui_lifetime, [this] {
@@ -940,6 +1076,7 @@ void AudioDisplay::ReloadRenderingSettings()
 	scrollbar->SetColourScheme(colour_scheme_name);
 	timeline->SetColourScheme(colour_scheme_name);
 
+	InvalidateContentBacking();
 	Refresh();
 }
 
@@ -964,8 +1101,10 @@ void AudioDisplay::OnLoadTimer(wxTimerEvent&)
 		const double left = last_sample_decoded * 1000.0 / provider->GetSampleRate() / ms_per_pixel;
 		const double right = new_decoded_count * 1000.0 / provider->GetSampleRate() / ms_per_pixel;
 
-		if (left < scroll_left + pixel_audio_width && right >= scroll_left)
+		if (left < scroll_left + pixel_audio_width && right >= scroll_left) {
+			InvalidateContentBacking();
 			Refresh();
+		}
 		else
 			RefreshRect(scrollbar->GetBounds());
 		last_sample_decoded = new_decoded_count;
@@ -983,6 +1122,25 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 
 	{
 		wxBufferedPaintDC dc(this);
+		wxMemoryDC backing_dc;
+		bool backing_checked = false;
+		bool backing_selected = false;
+
+		auto ensure_backing_dc = [&]() -> bool {
+			if (!content_backing_enabled)
+				return false;
+			if (!backing_checked) {
+				backing_checked = true;
+				EnsureContentBackingBitmap();
+			}
+			if (!content_backing_valid || !content_backing_bitmap.IsOk())
+				return false;
+			if (!backing_selected) {
+				backing_dc.SelectObject(content_backing_bitmap);
+				backing_selected = true;
+			}
+			return true;
+		};
 
 		for (wxRegionIterator region(GetUpdateRegion()); region; ++region)
 		{
@@ -1000,43 +1158,60 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 			bool redraw_timeline = timeline->GetBounds().Intersects(rect);
 			wxRect audio_bounds(0, audio_top, GetClientSize().GetWidth(), audio_height);
 			if (audio_bounds.Intersects(rect)) {
-				auto viewport = BuildViewportRequest(rect);
-				PaintAudio(dc, viewport);
+				wxRect audio_rect = rect;
+				audio_rect.Intersect(audio_bounds);
+				if (audio_rect.width > 0 && audio_rect.height > 0) {
+					auto viewport = BuildViewportRequest(audio_rect);
+					if (ensure_backing_dc()) {
+						dc.Blit(
+							audio_rect.x,
+							audio_rect.y,
+							audio_rect.width,
+							audio_rect.height,
+							&backing_dc,
+							audio_rect.x,
+							audio_rect.y - audio_top);
+						++content_backing_blits;
+					}
+					else {
+						PaintAudio(dc, viewport);
+					}
 
-				// Overlay split-channel labels once, at the left edge of the visible area
-				if (spectrum_channel_mode_runtime == AudioSpectrumChannelMode::ChannelSplit) {
-					if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
-						const auto &labels = spectrum->GetActiveChannelLabels();
-						const int n = static_cast<int>(labels.size());
-						if (n > 0 && audio_height > 0) {
-							const int band_h = audio_height / n;
-							const int label_x = FromDIP(4);
-							wxFont label_font = dc.GetFont();
-							label_font.SetPointSize(std::max(7, label_font.GetPointSize() - 1));
-							label_font.SetWeight(wxFONTWEIGHT_BOLD);
-							dc.SetFont(label_font);
-							for (int i = 0; i < n; ++i) {
-								const wxString wx_label = wxString::FromUTF8(labels[i].c_str());
-								const int label_y = audio_top + i * band_h + FromDIP(2);
-								// Shadow pass
-								dc.SetTextForeground(wxColour(0, 0, 0));
-								for (int dy = -1; dy <= 1; ++dy)
-									for (int dx = -1; dx <= 1; ++dx)
-										if (dx || dy)
-											dc.DrawText(wx_label, label_x + dx, label_y + dy);
-								// Label pass
-								dc.SetTextForeground(wxColour(230, 230, 230));
-								dc.DrawText(wx_label, label_x, label_y);
+					// Overlay split-channel labels once, at the left edge of the visible area
+					if (spectrum_channel_mode_runtime == AudioSpectrumChannelMode::ChannelSplit) {
+						if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
+							const auto &labels = spectrum->GetActiveChannelLabels();
+							const int n = static_cast<int>(labels.size());
+							if (n > 0 && audio_height > 0) {
+								const int band_h = audio_height / n;
+								const int label_x = FromDIP(4);
+								wxFont label_font = dc.GetFont();
+								label_font.SetPointSize(std::max(7, label_font.GetPointSize() - 1));
+								label_font.SetWeight(wxFONTWEIGHT_BOLD);
+								dc.SetFont(label_font);
+								for (int i = 0; i < n; ++i) {
+									const wxString wx_label = wxString::FromUTF8(labels[i].c_str());
+									const int label_y = audio_top + i * band_h + FromDIP(2);
+									// Shadow pass
+									dc.SetTextForeground(wxColour(0, 0, 0));
+									for (int dy = -1; dy <= 1; ++dy)
+										for (int dx = -1; dx <= 1; ++dx)
+											if (dx || dy)
+												dc.DrawText(wx_label, label_x + dx, label_y + dy);
+									// Label pass
+									dc.SetTextForeground(wxColour(230, 230, 230));
+									dc.DrawText(wx_label, label_x, label_y);
+								}
 							}
 						}
 					}
-				}
 
-				TimeRange viewport_time(viewport.begin_ms, viewport.end_ms);
-				PaintMarkers(dc, viewport_time);
-				PaintLabels(dc, viewport_time);
-				if (track_cursor_pos >= 0)
-					PaintTrackCursor(dc);
+					TimeRange viewport_time(viewport.begin_ms, viewport.end_ms);
+					PaintMarkers(dc, viewport_time);
+					PaintLabels(dc, viewport_time);
+					if (track_cursor_pos >= 0)
+						PaintTrackCursor(dc);
+				}
 			}
 
 			if (redraw_scrollbar)
@@ -1046,6 +1221,9 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 
 			dc.DestroyClippingRegion();
 		}
+
+		if (backing_selected)
+			backing_dc.SelectObject(wxNullBitmap);
 
 		if (OPT_GET("Audio/Display/Draw/Debug Metrics")->GetBool())
 			DrawDebugInfo(dc);
@@ -1058,6 +1236,12 @@ void AudioDisplay::DrawDebugInfo(wxDC &dc) {
 		return;
 
 	auto lines = audio_renderer_provider->GetDebugInfo();
+	if (content_backing_enabled) {
+		lines.insert(lines.begin(),
+			"content_backing: enabled=1 valid=" + std::to_string(content_backing_valid ? 1 : 0)
+			+ " updates=" + std::to_string(content_backing_updates)
+			+ " blits=" + std::to_string(content_backing_blits));
+	}
 	if (lines.empty())
 		return;
 
@@ -1145,9 +1329,11 @@ void AudioDisplay::OnRenderContentReady() {
 	if (client_width <= 0)
 		return;
 
-	if (!audio_renderer_provider->IsCacheRangeReady(scroll_left, client_width))
+	if (!audio_renderer_provider->AllowsPlaceholder()
+		&& !audio_renderer_provider->IsCacheRangeReady(scroll_left, client_width))
 		return;
 
+	InvalidateContentBacking();
 	QueueHighFrequencyRefresh(nullptr, false);
 }
 
@@ -1173,7 +1359,8 @@ void AudioDisplay::PaintMarkers(wxDC &dc, TimeRange updtime)
 		int marker_x = RelativeXFromTime(marker->GetPosition());
 
 		dc.SetPen(marker->GetStyle());
-		dc.DrawLine(marker_x, audio_top, marker_x, audio_top+audio_height);
+		if (audio_height > 0)
+			dc.DrawLine(marker_x, audio_top, marker_x, audio_top + audio_height - 1);
 
 		if (marker->GetFeet() == AudioMarker::Feet_None) continue;
 
@@ -1193,7 +1380,7 @@ void AudioDisplay::PaintFoot(wxDC &dc, int marker_x, int dir)
 	wxPoint foot_top[3] = { wxPoint(foot_size * dir, 0), wxPoint(0, 0), wxPoint(0, foot_size) };
 	wxPoint foot_bot[3] = { wxPoint(foot_size * dir, 0), wxPoint(0, -foot_size), wxPoint(0, 0) };
 	dc.DrawPolygon(3, foot_top, marker_x, audio_top);
-	dc.DrawPolygon(3, foot_bot, marker_x, audio_top+audio_height);
+	dc.DrawPolygon(3, foot_bot, marker_x, audio_top + std::max(0, audio_height - 1));
 }
 
 void AudioDisplay::PaintLabels(wxDC &dc, TimeRange updtime)
@@ -1231,7 +1418,8 @@ void AudioDisplay::PaintLabels(wxDC &dc, TimeRange updtime)
 
 void AudioDisplay::PaintTrackCursor(wxDC &dc) {
 	wxDCPenChanger penchanger(dc, wxPen(*wxWHITE));
-	dc.DrawLine(track_cursor_pos-scroll_left, audio_top, track_cursor_pos-scroll_left, audio_top+audio_height);
+	if (audio_height > 0)
+		dc.DrawLine(track_cursor_pos-scroll_left, audio_top, track_cursor_pos-scroll_left, audio_top + audio_height - 1);
 
 	if (track_cursor_label.empty()) return;
 
@@ -1282,6 +1470,13 @@ void AudioDisplay::SetDraggedObject(AudioDisplayInteractionObject *new_obj)
 
 	if (!dragged_object)
 		audio_marker.reset();
+
+	if (!dragged_object && audio_renderer_provider && audio_renderer_provider->AllowsPlaceholder()) {
+		HintVisibleAudioRange();
+		WarmVisibleAudioCache();
+		InvalidateContentBacking();
+		QueueHighFrequencyRefresh(nullptr, false);
+	}
 }
 
 void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
@@ -1289,7 +1484,20 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 	const int old_pos = track_cursor_pos;
 	const wxRect old_label_rect = track_cursor_label_rect;
 
-	if (!ShouldRefreshTrackCursor(track_cursor_pos, new_pos))
+	const wxString old_label = track_cursor_label;
+	const bool old_label_visible = old_pos >= 0 && !old_label.empty();
+	const bool new_label_visible = show_time && new_pos >= 0;
+	if (old_pos == new_pos) {
+		if (!old_label_visible && !new_label_visible)
+			return;
+		if (new_label_visible) {
+			agi::Time new_label_time = TimeFromAbsoluteX(new_pos);
+			const wxString new_label = to_wx(new_label_time.GetAssFormatted());
+			if (old_label_visible && new_label == old_label)
+				return;
+		}
+	}
+	else if (!AudioDisplayInvalidationPlanner::ShouldRefreshTrackCursor(old_pos, new_pos))
 		return;
 
 	track_cursor_pos = new_pos;
@@ -1304,12 +1512,6 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 		track_cursor_label_rect.SetSize(wxSize(0,0));
 		track_cursor_label.Clear();
 	}
-
-	auto line_rect = [this](int pos) {
-		if (pos < 0)
-			return wxRect();
-		return wxRect(pos - scroll_left - 1, audio_top, 3, audio_height + 1);
-	};
 
 	auto calc_label_rect = [this]() {
 		if (track_cursor_pos < 0 || track_cursor_label.empty())
@@ -1339,21 +1541,18 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 
 	// Queue a narrow repaint around old/new cursor and label regions to keep
 	// cursor updates smooth without repainting the entire audio display.
-	wxRect dirty = line_rect(old_pos);
-	if (dirty.IsEmpty())
-		dirty = line_rect(track_cursor_pos);
-	else
-		dirty.Union(line_rect(track_cursor_pos));
-	if (!old_label_rect.IsEmpty()) {
-		if (dirty.IsEmpty()) dirty = old_label_rect;
-		else dirty.Union(old_label_rect);
+	auto const dirty = AudioDisplayInvalidationPlanner::PlanTrackCursorDirtyRect(
+		old_pos,
+		track_cursor_pos,
+		ToPlannerRect(old_label_rect),
+		ToPlannerRect(new_label_rect),
+		scroll_left,
+		audio_top,
+		audio_height);
+	if (!dirty.IsEmpty()) {
+		wxRect rect = ToWxRect(dirty);
+		QueueHighFrequencyRefresh(&rect, true);
 	}
-	if (!new_label_rect.IsEmpty()) {
-		if (dirty.IsEmpty()) dirty = new_label_rect;
-		else dirty.Union(new_label_rect);
-	}
-	if (!dirty.IsEmpty())
-		QueueHighFrequencyRefresh(&dirty, true);
 }
 
 void AudioDisplay::RemoveTrackCursor()
@@ -1395,13 +1594,11 @@ wxRect AudioDisplay::GetMarkerRefreshRect(int absolute_x) const {
 		return wxRect();
 
 	const int padding = FromDIP(foot_size) + FromDIP(4);
-	return wxRect(absolute_x - scroll_left - padding, audio_top, padding * 2 + 1, audio_height + 1);
+	return wxRect(absolute_x - scroll_left - padding, audio_top, padding * 2 + 1, audio_height);
 }
 
 bool AudioDisplay::QueueDynamicVideoMarkerRefresh() {
 	if (!provider || !context || audio_marker)
-		return false;
-	if (!controller->IsPlaying() && !middle_scrub_seek_active)
 		return false;
 
 	int new_pos = -1;
@@ -1419,12 +1616,11 @@ bool AudioDisplay::QueueDynamicVideoMarkerRefresh() {
 
 	wxRect dirty;
 	if (new_pos != last_video_marker_pos) {
-		dirty = GetMarkerRefreshRect(last_video_marker_pos);
-		const wxRect new_dirty = GetMarkerRefreshRect(new_pos);
-		if (dirty.IsEmpty())
-			dirty = new_dirty;
-		else if (!new_dirty.IsEmpty())
-			dirty.Union(new_dirty);
+		auto const planned = AudioDisplayInvalidationPlanner::PlanMarkerMoveDirtyRect(
+			ToPlannerRect(GetMarkerRefreshRect(last_video_marker_pos)),
+			ToPlannerRect(GetMarkerRefreshRect(new_pos)));
+		if (!planned.IsEmpty())
+			dirty = ToWxRect(planned);
 	}
 
 	last_video_marker_pos = new_pos;
@@ -1446,6 +1642,71 @@ void AudioDisplay::OnMouseLeave(wxMouseEvent&)
 		RemoveTrackCursor();
 }
 
+void AudioDisplay::ScheduleMiddleScrubSeek(int target_ms, bool force) {
+	if (!context || !context->videoController)
+		return;
+
+	constexpr auto min_interval = std::chrono::milliseconds(33);
+	const int target_frame = context->videoController->FrameAtTime(target_ms, agi::vfr::EXACT);
+	const int current_frame = context->videoController->GetFrameN();
+
+	if (force) {
+		if (middle_scrub_seek_timer.IsRunning())
+			middle_scrub_seek_timer.Stop();
+		middle_scrub_pending_seek_frame = -1;
+
+		if (target_frame != current_frame) {
+			context->videoController->JumpToFrame(target_frame);
+		}
+		middle_scrub_last_seek_time = std::chrono::steady_clock::now();
+		return;
+	}
+
+	if (target_frame == current_frame) {
+		if (middle_scrub_pending_seek_frame != -1) {
+			middle_scrub_pending_seek_frame = -1;
+			if (middle_scrub_seek_timer.IsRunning())
+				middle_scrub_seek_timer.Stop();
+		}
+		return;
+	}
+
+	auto const now = std::chrono::steady_clock::now();
+	auto const elapsed = now - middle_scrub_last_seek_time;
+	if (elapsed >= min_interval) {
+		if (middle_scrub_seek_timer.IsRunning())
+			middle_scrub_seek_timer.Stop();
+		middle_scrub_pending_seek_frame = -1;
+		context->videoController->PreviewToFrame(target_frame);
+		middle_scrub_last_seek_time = now;
+		return;
+	}
+
+	middle_scrub_pending_seek_frame = target_frame;
+	if (!middle_scrub_seek_timer.IsRunning()) {
+		auto const remaining = min_interval - elapsed;
+		const int delay_ms = static_cast<int>(std::max<int64_t>(
+			1, std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count()));
+		middle_scrub_seek_timer.Start(delay_ms, true);
+	}
+}
+
+void AudioDisplay::OnMiddleScrubSeekTimer(wxTimerEvent &) {
+	if (!context || !context->videoController)
+		return;
+	if (middle_scrub_pending_seek_frame < 0)
+		return;
+	if (middle_scrub_pending_seek_frame == context->videoController->GetFrameN()) {
+		middle_scrub_pending_seek_frame = -1;
+		return;
+	}
+
+	auto const now = std::chrono::steady_clock::now();
+	context->videoController->PreviewToFrame(middle_scrub_pending_seek_frame);
+	middle_scrub_last_seek_time = now;
+	middle_scrub_pending_seek_frame = -1;
+}
+
 void AudioDisplay::OnMouseEvent(wxMouseEvent& event)
 {
 	// If we have focus, we get mouse move events on Mac even when the mouse is
@@ -1459,12 +1720,17 @@ void AudioDisplay::OnMouseEvent(wxMouseEvent& event)
 	if (event.IsButton())
 		SetFocus();
 
+	const bool scrub_end_event = event.MiddleUp() || (middle_scrub_seek_active && !event.MiddleIsDown());
 	if (event.MiddleDown())
 		middle_scrub_seek_active = true;
-	else if (event.MiddleUp() || (middle_scrub_seek_active && !event.MiddleIsDown()))
+	else if (scrub_end_event)
 		middle_scrub_seek_active = false;
 
 	const int mouse_x = event.GetPosition().x;
+	if (scrub_end_event) {
+		ScheduleMiddleScrubSeek(TimeFromRelativeX(mouse_x), true);
+		return;
+	}
 
 	// Scroll the display after a mouse-up near one of the edges
 	if ((event.LeftUp() || event.RightUp()) && OPT_GET("Audio/Auto/Scroll")->GetBool())
@@ -1483,7 +1749,8 @@ void AudioDisplay::OnMouseEvent(wxMouseEvent& event)
 
 	if (event.MiddleIsDown())
 	{
-		context->videoController->JumpToTime(TimeFromRelativeX(mouse_x), agi::vfr::EXACT);
+		SetTrackCursor(scroll_left + mouse_x, OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool());
+		ScheduleMiddleScrubSeek(TimeFromRelativeX(mouse_x), event.MiddleDown());
 		return;
 	}
 
@@ -1588,6 +1855,7 @@ void AudioDisplay::OnSize(wxSizeEvent &)
 	pending_high_frequency_refresh = false;
 	pending_high_frequency_update = false;
 	pending_high_frequency_rect = wxRect();
+	InvalidateContentBacking();
 
 	// We changed size, update the sub-controls' internal data and redraw
 	wxSize size = GetClientSize();
@@ -1627,6 +1895,7 @@ int AudioDisplay::GetDuration() const
 void AudioDisplay::OnAudioOpen(agi::AudioProvider *provider)
 {
 	this->provider = provider;
+	InvalidateContentBacking();
 
 	if (!audio_renderer_provider)
 		ReloadRenderingSettings();
@@ -1661,8 +1930,9 @@ void AudioDisplay::OnAudioOpen(agi::AudioProvider *provider)
 			connections = agi::signal::make_vector({
 				controller->AddPlaybackPositionListener(&AudioDisplay::OnPlaybackPosition, this),
 				controller->AddPlaybackStopListener(&AudioDisplay::RemoveTrackCursor, this),
-				core.videoController->AddSeekListener(&AudioDisplay::OnVideoSeek, this),
+				core.videoController->AddFramePresentedListener(&AudioDisplay::OnVideoSeek, this),
 				controller->AddTimingControllerListener(&AudioDisplay::OnTimingController, this),
+				OPT_SUB("Audio/Display/Draw/Cursor Time", &AudioDisplay::OnTrackCursorTimeOptionChanged, this),
 				OPT_SUB("Audio/Spectrum", &AudioDisplay::ReloadRenderingSettings, this),
 				OPT_SUB("Audio/Display/Waveform Style", &AudioDisplay::ReloadRenderingSettings, this),
 				OPT_SUB("Colour/Audio Display/Spectrum", &AudioDisplay::ReloadRenderingSettings, this),
@@ -1705,6 +1975,9 @@ void AudioDisplay::OnTimingController()
 
 void AudioDisplay::OnPlaybackPosition(int ms)
 {
+	if (middle_scrub_seek_active)
+		return;
+
 	int pixel_position = AbsoluteXFromTime(ms);
 	SetTrackCursor(pixel_position, false);
 
@@ -1735,7 +2008,16 @@ void AudioDisplay::OnVideoSeek(int frame)
 	// During continuous playback, the audio transport owns the main track cursor.
 	// Video seek only drives paused-state navigation feedback.
 	const int ms = core.videoController->TimeAtFrame(frame, agi::vfr::EXACT);
-	SetTrackCursor(AbsoluteXFromTime(ms), false);
+	const bool show_time = middle_scrub_seek_active && OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool();
+	SetTrackCursor(AbsoluteXFromTime(ms), show_time);
+}
+
+void AudioDisplay::OnTrackCursorTimeOptionChanged(agi::OptionValue const& opt) {
+	if (!controller || controller->IsPlaying())
+		return;
+	if (track_cursor_pos < 0)
+		return;
+	SetTrackCursor(track_cursor_pos, opt.GetBool());
 }
 
 void AudioDisplay::OnSelectionChanged()
@@ -1798,6 +2080,7 @@ void AudioDisplay::OnStyleRangesChanged()
 	style_ranges.clear();
 	for (auto pair : asrm) style_ranges.push_back(pair);
 
+	InvalidateContentBacking();
 	const wxRect audio_rect(0, audio_top, GetClientSize().GetWidth(), audio_height);
 	if (audio_marker)
 		QueueHighFrequencyRefresh(&audio_rect, true);

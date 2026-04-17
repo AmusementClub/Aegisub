@@ -131,13 +131,26 @@ bool ShouldWaitForFreshPacket(
 	if (!IsVisualSubtitleCommitType(commit_type) || !has_displayed_packet)
 		return false;
 
-	// Full subtitle reloads (styles/script info/add-remove/etc.) always schedule
-	// a fresh packet for the current frame, and they can change appearance even
-	// when the visible dialogue fields themselves are unchanged.
-	if (!has_incremental_changed_line)
-		return true;
+	bool const scene_needs_refresh =
+		CurrentFrameSubtitleSceneNeedsRefresh(lines, fps, frame_time_ms, displayed_snapshot);
 
-	return CurrentFrameSubtitleSceneNeedsRefresh(lines, fps, frame_time_ms, displayed_snapshot);
+	if (has_incremental_changed_line)
+		return scene_needs_refresh;
+
+	// Without a single changed dialogue line, treat multi-line dialogue edits
+	// using the scene snapshot diff. For style/script info/extradata reloads,
+	// we still need to wait when a visible line exists because those commits can
+	// affect rendering without changing dialogue fields.
+	bool const commit_can_change_visuals_without_dialogue_diff =
+		commit_type == AssFile::COMMIT_NEW
+		|| (commit_type & (AssFile::COMMIT_SCRIPTINFO | AssFile::COMMIT_STYLES | AssFile::COMMIT_EXTRADATA));
+	if (commit_can_change_visuals_without_dialogue_diff) {
+		if (scene_needs_refresh)
+			return true;
+		return !displayed_snapshot.empty();
+	}
+
+	return scene_needs_refresh;
 }
 
 } // namespace video_subtitle_scene_cache

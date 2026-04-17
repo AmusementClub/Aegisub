@@ -51,9 +51,14 @@ void TraceVideoOpen(agi::fs::path const& path, int width, int height, int frame_
 void TracePlayStart(int frame, int start_ms);
 void TracePlayStop(int frame);
 void TraceSeek(int frame, bool was_playing);
+void TraceVideoStepPreviewConfig(bool enabled, int interval_ms, int interval_backward_ms, int burst_window_ms, int burst_threshold, int release_delay_ms);
+void TraceVideoStepPreviewBegin(int start_frame, int delta, int burst_count, int burst_threshold);
+void TraceVideoStepPreviewCancel(int frame);
+void TraceVideoStepPreviewRelease(int final_target_frame);
 
 void ObserveFrameRequest(int frame, double time, bool immediate);
 void ObserveFrameResult(int frame, double time, bool delivered, bool immediate);
+void ObserveVideoFrameRenderDuration(int frame, double time, bool delivered, bool immediate, double duration_ms);
 void ObserveAudioUiTimerPosition(int ms);
 void ObserveAudioOutputSnapshot(AudioOutputSnapshot const& snapshot);
 void ObserveVideoPlaybackTick(int frame);

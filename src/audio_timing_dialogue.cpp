@@ -512,14 +512,14 @@ void AudioTimingControllerDialogue::DoCommit(bool user_triggered)
 
 		commit_connection.Block();
 		auto core = context->GetCore();
+		AssDialogue *amend = modified_lines.size() == 1 ? (*modified_lines.begin())->GetLine() : nullptr;
 		if (user_triggered)
 		{
-			core.ass->Commit(from_wx(_("timing")), AssFile::COMMIT_DIAG_TIME);
+			core.ass->Commit(from_wx(_("timing")), AssFile::COMMIT_DIAG_TIME, -1, amend);
 			commit_id = -1; // never coalesce with a manually triggered commit
 		}
 		else
 		{
-			AssDialogue *amend = modified_lines.size() == 1 ? (*modified_lines.begin())->GetLine() : nullptr;
 			commit_id = core.ass->Commit(from_wx(_("timing")), AssFile::COMMIT_DIAG_TIME, commit_id, amend);
 		}
 

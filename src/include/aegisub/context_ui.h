@@ -40,7 +40,6 @@ struct ContextUiState {
 	std::unique_ptr<DialogManager> dialog;
 	FrameMain *frame = nullptr;
 	VideoDisplay *videoDisplay = nullptr;
-	agi::signal::Signal<int> videoFramePresented;
 
 	ContextUiState();
 	~ContextUiState();
@@ -56,11 +55,8 @@ struct ContextUiSession {
 	std::unique_ptr<DialogManager>& dialog;
 	FrameMain *&frame;
 	VideoDisplay *&videoDisplay;
-	agi::signal::Signal<int>& videoFramePresented;
 
 	explicit ContextUiSession(ContextUiState& state);
-
-	DEFINE_SIGNAL_ADDERS(videoFramePresented, AddVideoFramePresentedListener)
 };
 
 struct ConstContextUiSession {
@@ -73,7 +69,6 @@ struct ConstContextUiSession {
 	std::unique_ptr<DialogManager> const& dialog;
 	FrameMain *const& frame;
 	VideoDisplay *const& videoDisplay;
-	agi::signal::Signal<int> const& videoFramePresented;
 
 	explicit ConstContextUiSession(ContextUiState const& state);
 };

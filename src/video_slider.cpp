@@ -45,8 +45,34 @@
 #include "utils.h"
 #include "video_controller.h"
 
+#include <algorithm>
+#include <cstdlib>
+#include <cctype>
+#include <limits>
+#include <optional>
+
 #include <wx/dcbuffer.h>
 #include <wx/settings.h>
+
+namespace {
+
+std::optional<int> ReadEnvInt(char const* name) {
+	auto const* value = std::getenv(name);
+	if (!value || !*value)
+		return std::nullopt;
+
+	char* end = nullptr;
+	long parsed = std::strtol(value, &end, 10);
+	if (end == value)
+		return std::nullopt;
+	if (parsed < std::numeric_limits<int>::min())
+		return std::numeric_limits<int>::min();
+	if (parsed > std::numeric_limits<int>::max())
+		return std::numeric_limits<int>::max();
+	return static_cast<int>(parsed);
+}
+
+}
 
 VideoSlider::VideoSlider (wxWindow* parent, agi::Context *c)
 : wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, wxWANTS_CHARS | wxFULL_REPAINT_ON_RESIZE)
@@ -54,14 +80,20 @@ VideoSlider::VideoSlider (wxWindow* parent, agi::Context *c)
 , connections(agi::signal::make_vector({
 	OPT_SUB("Video/Slider/Show Keyframes", [=] { Refresh(false); }),
 	OPT_SUB("Video/Scale with DPI", [=](agi::OptionValue const&) { UpdateScale(); }),
-	c->GetCore().videoController->AddSeekListener(&VideoSlider::SetValue, this),
-	c->GetUI().AddVideoFramePresentedListener(&VideoSlider::SetValue, this),
+	c->GetCore().videoController->AddFramePresentedListener(&VideoSlider::OnFramePresented, this),
 	c->GetCore().project->AddVideoProviderListener(&VideoSlider::VideoOpened, this),
 	c->GetCore().project->AddKeyframesListener(&VideoSlider::KeyframesChanged, this),
 }))
 {
+	if (auto ms = ReadEnvInt("AEGISUB_VIDEO_SLIDER_SEEK_INTERVAL_MS"))
+		seek_min_interval_forward = std::chrono::milliseconds(std::max(1, *ms));
+	seek_min_interval_backward = std::max(seek_min_interval_backward, seek_min_interval_forward);
+	if (auto ms = ReadEnvInt("AEGISUB_VIDEO_SLIDER_SEEK_INTERVAL_BACKWARD_MS"))
+		seek_min_interval_backward = std::chrono::milliseconds(std::max(1, *ms));
+
 	UpdateScale();
 	SetBackgroundStyle(wxBG_STYLE_PAINT);
+	seek_timer.Bind(wxEVT_TIMER, &VideoSlider::OnSeekTimer, this);
 
 	c->GetUI().videoSlider = this;
 	VideoOpened(c->GetCore().project->VideoProvider());
@@ -82,6 +114,69 @@ void VideoSlider::SetValue(int value) {
 	if (GetXAtValue(val) != GetXAtValue(value))
 		Refresh(false);
 	val = value;
+}
+
+void VideoSlider::OnFramePresented(int value) {
+	if (is_dragging)
+		return;
+	SetValue(value);
+}
+
+void VideoSlider::ScheduleSeek(int target_frame, bool force) {
+	auto *videoController = c->GetCore().videoController.get();
+	if (!videoController)
+		return;
+
+	auto min_interval = seek_min_interval_forward;
+	if (last_seek_frame >= 0 && target_frame < last_seek_frame)
+		min_interval = seek_min_interval_backward;
+
+	if (force) {
+		if (seek_timer.IsRunning())
+			seek_timer.Stop();
+		pending_seek_frame = -1;
+		videoController->JumpToFrame(target_frame);
+		last_seek_time = std::chrono::steady_clock::now();
+		last_seek_frame = target_frame;
+		return;
+	}
+
+	auto const now = std::chrono::steady_clock::now();
+	auto const elapsed = now - last_seek_time;
+	if (elapsed >= min_interval) {
+		if (seek_timer.IsRunning())
+			seek_timer.Stop();
+		pending_seek_frame = -1;
+		videoController->PreviewToFrame(target_frame);
+		last_seek_time = now;
+		last_seek_frame = target_frame;
+		return;
+	}
+
+	pending_seek_frame = target_frame;
+	if (!seek_timer.IsRunning()) {
+		auto const remaining = min_interval - elapsed;
+		auto const remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count();
+		const int delay_ms = remaining_ms > 1 ? static_cast<int>(remaining_ms) : 1;
+		seek_timer.Start(delay_ms, true);
+	}
+}
+
+void VideoSlider::OnSeekTimer(wxTimerEvent &) {
+	auto *videoController = c->GetCore().videoController.get();
+	if (!videoController)
+		return;
+	if (pending_seek_frame < 0)
+		return;
+	if (pending_seek_frame == videoController->GetFrameN()) {
+		pending_seek_frame = -1;
+		return;
+	}
+
+	videoController->PreviewToFrame(pending_seek_frame);
+	last_seek_time = std::chrono::steady_clock::now();
+	last_seek_frame = pending_seek_frame;
+	pending_seek_frame = -1;
 }
 
 void VideoSlider::VideoOpened(AsyncVideoProvider *provider) {
@@ -123,6 +218,8 @@ BEGIN_EVENT_TABLE(VideoSlider, wxWindow)
 END_EVENT_TABLE()
 
 void VideoSlider::OnMouse(wxMouseEvent &event) {
+	is_dragging = event.LeftIsDown();
+
 	bool had_focus = HasFocus();
 	if (event.ButtonDown())
 		SetFocus();
@@ -155,7 +252,15 @@ void VideoSlider::OnMouse(wxMouseEvent &event) {
 			SetValue(go);
 		}
 
-		c->GetCore().videoController->JumpToFrame(val);
+		ScheduleSeek(val, event.LeftDown());
+	}
+	else if (event.LeftUp()) {
+		if (pending_seek_frame != -1) {
+			int go = GetValueAtX(event.GetX());
+			if (go != val)
+				SetValue(go);
+			ScheduleSeek(val, true);
+		}
 	}
 	else if (event.GetWheelRotation() != 0 && ForwardMouseWheelEvent(this, event)) {
 		// If mouse is over the slider, use wheel to step by frames or keyframes (when Shift is held)

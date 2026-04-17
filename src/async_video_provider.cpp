@@ -34,6 +34,7 @@
 #include <libaegisub/make_unique.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 enum {
@@ -667,8 +668,9 @@ void AsyncVideoProvider::UpdateSubtitles(const AssFile *new_subs, const AssDialo
 	ScheduleProcessing();
 }
 
-void AsyncVideoProvider::RequestFrame(int new_frame, double new_time) throw() {
-	++request_version;
+void AsyncVideoProvider::RequestFrame(int new_frame, double new_time, bool supersede_in_flight) throw() {
+	if (supersede_in_flight)
+		++request_version;
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_time = new_time;
@@ -677,6 +679,17 @@ void AsyncVideoProvider::RequestFrame(int new_frame, double new_time) throw() {
 		pending_check_updated = false;
 	}
 	ScheduleProcessing();
+}
+
+void AsyncVideoProvider::CancelPendingFrameRequests() noexcept {
+	request_version.fetch_add(1, std::memory_order_relaxed);
+	{
+		std::lock_guard<std::mutex> lock(pending_mutex);
+		has_pending_frame = false;
+		pending_frame_number = -1;
+		pending_time = -1.;
+		pending_check_updated = false;
+	}
 }
 
 bool AsyncVideoProvider::NeedUpdate(std::vector<AssDialogueBase const*> const& visible_lines) {
@@ -832,12 +845,16 @@ bool AsyncVideoProvider::ProcessPending() {
 	last_rendered = frame_number;
 
 	try {
+		auto const render_begin = std::chrono::steady_clock::now();
 		auto packet = ProcRenderPacket(frame_number, time);
+		auto const render_duration_ms =
+			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - render_begin).count();
 		auto current_content_version = content_version.load(std::memory_order_relaxed);
 		auto current_request_version = request_version.load(std::memory_order_relaxed);
 		bool should_deliver =
 			work.content_version == current_content_version &&
 			work.request_version == current_request_version;
+		perf_trace::ObserveVideoFrameRenderDuration(frame_number, time, should_deliver, false, render_duration_ms);
 		perf_trace::ObserveFrameResult(frame_number, time, should_deliver, false);
 		if (should_deliver) {
 			DeliverFrameReady(std::move(packet), time);
@@ -1083,8 +1100,12 @@ bool AsyncVideoProvider::ReconfigureSourceOutputMode() {
 VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bool raw) {
 	VideoRenderPacket ret;
 	worker->Sync([&]{
+		auto const render_begin = std::chrono::steady_clock::now();
 		while (ProcessPending()) { }
 		ret = ProcRenderPacket(frame, time, raw);
+		auto const render_duration_ms =
+			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - render_begin).count();
+		perf_trace::ObserveVideoFrameRenderDuration(frame, time, true, true, render_duration_ms);
 		// Synchronous frame requests are used for frame stepping, so keep the
 		// provider's current-frame context aligned with what was just rendered.
 		frame_number = frame;

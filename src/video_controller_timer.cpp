@@ -36,6 +36,10 @@ public:
 	: playback_timer(ResolveUiTimerHost()->CreateTimer(std::move(on_play_timer))) {
 	}
 
+	void StartOnce(int delay_ms) override {
+		playback_timer->StartOnce(delay_ms);
+	}
+
 	void Start(int interval_ms) override {
 		playback_timer->StartRepeating(interval_ms);
 	}

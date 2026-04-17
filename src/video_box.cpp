@@ -105,8 +105,7 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 		core.project->AddTimecodesListener(&VideoBox::UpdateTimeBoxes, this),
 		core.project->AddVideoProviderListener(&VideoBox::OnVideoProviderChanged, this),
 		core.selectionController->AddSelectionListener(&VideoBox::UpdateTimeBoxes, this),
-		core.videoController->AddSeekListener(&VideoBox::OnCurrentFrameChanged, this),
-		core.videoController->AddPlaybackFrameAdvancedListener(&VideoBox::OnCurrentFrameChanged, this),
+		core.videoController->AddFramePresentedListener(&VideoBox::OnCurrentFrameChanged, this),
 	});
 }
 

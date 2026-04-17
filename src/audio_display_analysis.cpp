@@ -152,8 +152,3 @@ void MergeSpectrumPowerBinsAverage(const std::vector<const float *> &channels, s
 		dst[i] *= scale;
 }
 
-bool ShouldRefreshTrackCursor(int old_pos, int new_pos) {
-	if (old_pos == new_pos)
-		return old_pos >= 0;
-	return old_pos >= 0 || new_pos >= 0;
-}

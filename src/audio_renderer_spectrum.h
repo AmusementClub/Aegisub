@@ -85,12 +85,14 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 	/// Overrides the OnSetProvider event handler in the base class, to reset things
 	/// when the audio provider is changed.
 	void OnSetProvider() override;
+	void OnAllowPlaceholderChanged() override;
 
 	/// @brief Recreates the cache
 	///
 	/// To be called when the number of blocks in cache might have changed,
 	/// e.g. new audio provider or new resolution.
 	void RecreateCache();
+	void ConfigurePrefetchBudgets();
 
 	AudioMixPolicy mix_policy = AudioMixPolicy::MonoAverage;
 	AudioSpectrumComputationMode computation_mode = AudioSpectrumComputationMode::LegacyLinear;
@@ -118,6 +120,9 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 	std::vector<const float *> channel_power_inputs;
 	std::vector<const float *> combined_power_columns;
 	std::vector<float> combined_power_scratch;
+	std::vector<const float *> power_columns_scratch;
+	std::vector<const float *> channel_split_power_columns_scratch;
+	wxBitmap channel_split_band_bitmap_scratch;
 	bool EnsureCachesConfigured();
 	std::pair<size_t, size_t> GetVisibleBlockRange(int start, int length) const;
 	void EnsurePerChannelCaches();
@@ -137,7 +142,7 @@ public:
 	/// @param bmp   [in,out] Bitmap to render into, also carries length information
 	/// @param start First column of pixel data in display to render
 	/// @param style Style to render audio in
-	void Render(wxBitmap &bmp, int start, AudioRenderingStyle style) override;
+	AudioRenderResult Render(wxBitmap &bmp, int start, AudioRenderingStyle style) override;
 	void WarmCacheRange(int start, int length) override;
 	bool IsCacheRangeReady(int start, int length) override;
 

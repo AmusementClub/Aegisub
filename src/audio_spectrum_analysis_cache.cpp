@@ -46,6 +46,7 @@ void AudioSpectrumAnalysisCache::RecreateCache() {
 	cache_touch.clear();
 	touch_heap = {};
 	current_cache_bytes = 0;
+	current_cache_entries = 0;
 	touch_counter = 0;
 	rolling_window_valid = false;
 	pending_blocks.clear();
@@ -171,7 +172,7 @@ size_t AudioSpectrumAnalysisCache::GetMaxBuildBlocks(size_t preferred_cap) const
 	return std::max<size_t>(1, std::min(preferred_cap, temp_limited));
 }
 
-std::vector<std::pair<size_t, std::unique_ptr<float[]>>> AudioSpectrumAnalysisCache::BuildBlocksUnlocked(size_t first_block, size_t last_block) {
+std::vector<std::pair<size_t, std::unique_ptr<float[]>>> AudioSpectrumAnalysisCache::BuildBlocksUnlockedInternal(size_t first_block, size_t last_block, uint64_t generation, bool check_generation) {
 	std::vector<std::pair<size_t, std::unique_ptr<float[]>>> result;
 	if (!source || derivation_size == 0 || first_block > last_block || block_count == 0)
 		return result;
@@ -196,6 +197,9 @@ std::vector<std::pair<size_t, std::unique_ptr<float[]>>> AudioSpectrumAnalysisCa
 	}
 
 	for (size_t block_index = first_block; block_index <= last_block; ++block_index) {
+		if (check_generation && !IsCurrentPrefetchGeneration(generation))
+			break;
+
 		auto block = std::make_unique<float[]>(static_cast<size_t>(1) << derivation_size);
 		const float *window = mono_buffer.data() + (block_index - first_block) * hop_samples;
 
@@ -230,6 +234,14 @@ std::vector<std::pair<size_t, std::unique_ptr<float[]>>> AudioSpectrumAnalysisCa
 	return result;
 }
 
+std::vector<std::pair<size_t, std::unique_ptr<float[]>>> AudioSpectrumAnalysisCache::BuildBlocksUnlocked(size_t first_block, size_t last_block) {
+	return BuildBlocksUnlockedInternal(first_block, last_block, 0, false);
+}
+
+std::vector<std::pair<size_t, std::unique_ptr<float[]>>> AudioSpectrumAnalysisCache::BuildBlocksUnlocked(size_t first_block, size_t last_block, uint64_t generation) {
+	return BuildBlocksUnlockedInternal(first_block, last_block, generation, true);
+}
+
 void AudioSpectrumAnalysisCache::TouchLocked(size_t block_index) {
 	const uint64_t touch = ++touch_counter;
 	cache_touch[block_index] = touch;
@@ -257,6 +269,7 @@ void AudioSpectrumAnalysisCache::TrimLocked() {
 		cache_blocks[victim].reset();
 		cache_touch[victim] = 0;
 		current_cache_bytes -= block_bytes;
+		--current_cache_entries;
 		metrics_evictions.fetch_add(1, std::memory_order_relaxed);
 	}
 }
@@ -283,6 +296,7 @@ void AudioSpectrumAnalysisCache::DrainReady() {
 		if (!cache_blocks[pair.first]) {
 			cache_blocks[pair.first] = std::move(pair.second);
 			current_cache_bytes += block_bytes;
+			++current_cache_entries;
 			TouchLocked(pair.first);
 			TrimLocked();
 		}
@@ -372,6 +386,7 @@ const float* AudioSpectrumAnalysisCache::Get(size_t block_index) {
 		if (!cache_blocks[index]) {
 			cache_blocks[index] = std::move(pair.second);
 			current_cache_bytes += block_bytes;
+			++current_cache_entries;
 		}
 		if (index < pending_blocks.size())
 			pending_blocks[index] = 0;
@@ -383,6 +398,7 @@ const float* AudioSpectrumAnalysisCache::Get(size_t block_index) {
 	if (block_index < cache_blocks.size() && !cache_blocks[block_index]) {
 		cache_blocks[block_index] = BuildBlockUnlocked(block_index);
 		current_cache_bytes += block_bytes;
+		++current_cache_entries;
 		if (block_index < pending_blocks.size())
 			pending_blocks[block_index] = 0;
 		TouchLocked(block_index);
@@ -394,8 +410,16 @@ const float* AudioSpectrumAnalysisCache::Get(size_t block_index) {
 const float* AudioSpectrumAnalysisCache::GetIfReady(size_t block_index) {
 	DrainReady();
 	std::lock_guard<std::mutex> lock(cache_mutex);
-	if (block_index < cache_blocks.size())
-		return cache_blocks[block_index].get();
+	if (block_index < cache_blocks.size()) {
+		auto *block = cache_blocks[block_index].get();
+		if (!block)
+			return nullptr;
+
+		if (block_index < pending_blocks.size())
+			pending_blocks[block_index] = 0;
+		TouchLocked(block_index);
+		return block;
+	}
 	return nullptr;
 }
 
@@ -470,7 +494,6 @@ void AudioSpectrumAnalysisCache::SetPrefetchEnabled(bool enabled) {
 }
 
 void AudioSpectrumAnalysisCache::ProcessPrefetch(size_t first_block, size_t last_block, uint64_t generation) {
-	bool enqueued_ready = false;
 	size_t block_index = first_block;
 	while (block_index <= last_block) {
 		if (!IsCurrentPrefetchGeneration(generation)) {
@@ -492,7 +515,8 @@ void AudioSpectrumAnalysisCache::ProcessPrefetch(size_t first_block, size_t last
 				break;
 
 			chunk_last = chunk_first;
-			const size_t max_blocks = GetMaxBuildBlocks(kSpectrumPrefetchBuildMaxBlocks);
+			const size_t configured_max_blocks = prefetch_build_max_blocks.load(std::memory_order_relaxed);
+			const size_t max_blocks = GetMaxBuildBlocks(std::min(kSpectrumPrefetchBuildMaxBlocks, configured_max_blocks));
 			const size_t limit = std::min(cache_blocks.size(), chunk_first + max_blocks);
 			while (chunk_last + 1 <= last_block && chunk_last + 1 < limit && !cache_blocks[chunk_last + 1])
 				++chunk_last;
@@ -504,27 +528,26 @@ void AudioSpectrumAnalysisCache::ProcessPrefetch(size_t first_block, size_t last
 			ClearPendingRange(chunk_first, last_block);
 			break;
 		}
-		auto built_blocks = BuildBlocksUnlocked(chunk_first, chunk_last);
+		auto built_blocks = BuildBlocksUnlocked(chunk_first, chunk_last, generation);
 		if (!IsCurrentPrefetchGeneration(generation)) {
 			metrics_stale_drops.fetch_add(1, std::memory_order_relaxed);
 			ClearPendingRange(chunk_first, last_block);
 			break;
 		}
+		const size_t built_count = built_blocks.size();
 		{
 			std::lock_guard<std::mutex> lock(ready_mutex);
 			for (auto &pair : built_blocks)
 				ready_blocks.emplace_back(pair.first, std::move(pair.second));
 		}
-		if (!built_blocks.empty()) {
+		if (built_count > 0) {
 			has_ready_blocks = true;
-			metrics_prefetch_builds.fetch_add(built_blocks.size(), std::memory_order_relaxed);
-			enqueued_ready = true;
+			metrics_prefetch_builds.fetch_add(built_count, std::memory_order_relaxed);
+			if (ready_callback)
+				ready_callback();
 		}
 		block_index = chunk_last + 1;
 	}
-
-	if (enqueued_ready && ready_callback)
-		ready_callback();
 }
 
 AudioSpectrumAnalysisCacheMetrics AudioSpectrumAnalysisCache::GetMetricsSnapshot() const {
@@ -541,7 +564,7 @@ AudioSpectrumAnalysisCacheMetrics AudioSpectrumAnalysisCache::GetMetricsSnapshot
 	m.prefetch_enabled = prefetch_enabled.load(std::memory_order_relaxed);
 	m.stale_drops = metrics_stale_drops.load(std::memory_order_relaxed);
 	m.evictions = metrics_evictions.load(std::memory_order_relaxed);
-	m.cache_entries = std::count_if(cache_blocks.begin(), cache_blocks.end(), [](auto const& block) { return !!block; });
+	m.cache_entries = current_cache_entries;
 	m.cache_bytes = current_cache_bytes;
 	return m;
 }

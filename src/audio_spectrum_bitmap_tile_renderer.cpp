@@ -3,6 +3,7 @@
 #include "audio_colorscheme.h"
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 
 #include <wx/dcmemory.h>
@@ -33,10 +34,23 @@ void RenderSpectrumColumnsToBitmap(
 	if (power_columns.empty())
 		return;
 
-	wxImage img(bmp.GetSize());
+	const int width = bmp.GetWidth();
+	const int height = bmp.GetHeight();
+	if (width <= 0 || height <= 0)
+		return;
+
+	static thread_local wxImage img;
+	if (!img.IsOk() || img.GetWidth() != width || img.GetHeight() != height)
+		img.Create(width, height, false);
+	if (!img.IsOk())
+		return;
+
+	const auto silence = palette.get(0.0f);
 	unsigned char *imgdata = img.GetData();
-	ptrdiff_t stride = img.GetWidth() * 3;
-	int imgheight = img.GetHeight();
+	if (!imgdata)
+		return;
+	ptrdiff_t stride = static_cast<ptrdiff_t>(width) * 3;
+	int imgheight = height;
 	const int maxband = 1 << derivation_size;
 	std::vector<int> local_band_a;
 	std::vector<int> local_band_b;
@@ -68,7 +82,17 @@ void RenderSpectrumColumnsToBitmap(
 		band_frac = interpolated ? local_band_frac.data() : nullptr;
 	}
 
-	for (int x = 0; x < img.GetWidth(); ++x) {
+	static thread_local std::vector<unsigned char> silence_row;
+	silence_row.resize(static_cast<size_t>(stride));
+	for (ptrdiff_t i = 0; i + 2 < stride; i += 3) {
+		silence_row[static_cast<size_t>(i + 0)] = silence.r;
+		silence_row[static_cast<size_t>(i + 1)] = silence.g;
+		silence_row[static_cast<size_t>(i + 2)] = silence.b;
+	}
+	for (int y = 0; y < imgheight; ++y)
+		std::memcpy(imgdata + y * stride, silence_row.data(), static_cast<size_t>(stride));
+
+	for (int x = 0; x < width; ++x) {
 		const float *power = (x < static_cast<int>(power_columns.size())) ? power_columns[x] : nullptr;
 		if (!power)
 			continue;

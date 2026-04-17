@@ -99,8 +99,7 @@ ContextUiSession::ContextUiSession(ContextUiState& state)
 , subsGrid(state.subsGrid)
 , dialog(state.dialog)
 , frame(state.frame)
-, videoDisplay(state.videoDisplay)
-, videoFramePresented(state.videoFramePresented) {
+, videoDisplay(state.videoDisplay) {
 }
 
 ConstContextUiSession::ConstContextUiSession(ContextUiState const& state)
@@ -112,8 +111,7 @@ ConstContextUiSession::ConstContextUiSession(ContextUiState const& state)
 , subsGrid(state.subsGrid)
 , dialog(state.dialog)
 , frame(state.frame)
-, videoDisplay(state.videoDisplay)
-, videoFramePresented(state.videoFramePresented) {
+, videoDisplay(state.videoDisplay) {
 }
 
 Context::Context()

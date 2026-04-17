@@ -29,6 +29,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <functional>
@@ -44,6 +45,11 @@ class AudioRenderer;
 class AudioRendererBitmapProvider;
 class wxDC;
 namespace agi { class AudioProvider; }
+
+enum class AudioRenderResult {
+	Ready = 0,
+	Placeholder = 1,
+};
 
 /// @class AudioRendererBitmapCacheBitmapFactory
 /// @brief Produces wxBitmap objects for DataBlockCache storage for the audio renderer
@@ -91,10 +97,11 @@ class AudioRenderer {
 	float amplitude_scale = 0.f;
 
 	/// Width of bitmaps to store in cache
-	const int cache_bitmap_width = 32; // Completely arbitrary value
+	const int cache_bitmap_width; // Completely arbitrary value
 
 	/// Cached bitmaps for audio ranges
 	std::vector<AudioRendererBitmapCache> bitmaps;
+	std::vector<std::vector<uint8_t>> bitmap_pending;
 	/// The maximum allowed size of each bitmap cache, in bytes
 	size_t cache_bitmap_maxsize = 0;
 	/// The maximum allowed size of the renderer's cache, in bytes
@@ -133,7 +140,7 @@ public:
 	///
 	/// Initialises audio rendering to a do-nothing state. An audio provider
 	/// and bitmap provider must be set before the audio renderer is functional.
-	AudioRenderer();
+	explicit AudioRenderer(int cache_bitmap_width = 32);
 
 	/// @brief Set horizontal zoom
 	/// @param pixel_ms Milliseconds per pixel to render audio at
@@ -236,6 +243,7 @@ protected:
 	/// Vertical zoom/amplitude scale factor
 	float amplitude_scale;
 	std::function<void()> content_ready_callback;
+	bool allow_placeholder = false;
 
 	/// @brief Called when the audio provider changes
 	///
@@ -251,6 +259,8 @@ protected:
 	///
 	/// Implementations can override this method to do something when the vertical zoom is changed
 	virtual void OnSetAmplitudeScale() { }
+
+	virtual void OnAllowPlaceholderChanged() { }
 
 	void NotifyRenderContentReady() const {
 		if (content_ready_callback)
@@ -271,7 +281,7 @@ public:
 	///
 	/// Deriving classes must implement this method. The bitmap in bmp holds
 	/// the width and height to render.
-	virtual void Render(wxBitmap &bmp, int start, AudioRenderingStyle style) = 0;
+	virtual AudioRenderResult Render(wxBitmap &bmp, int start, AudioRenderingStyle style) = 0;
 
 	/// @brief Blank audio rendering function
 	/// @param dc    The device context to render to
@@ -287,6 +297,13 @@ public:
 	void SetProvider(agi::AudioProvider *provider);
 	void SetDisplaySource(AudioDisplaySource *source);
 	void SetContentReadyCallback(std::function<void()> callback) { content_ready_callback = std::move(callback); }
+	void SetAllowPlaceholder(bool allow) {
+		if (allow_placeholder == allow)
+			return;
+		allow_placeholder = allow;
+		OnAllowPlaceholderChanged();
+	}
+	bool AllowsPlaceholder() const { return allow_placeholder; }
 
 	/// @brief Change horizontal zoom
 	/// @param pixel_ms Milliseconds per pixel to zoom to

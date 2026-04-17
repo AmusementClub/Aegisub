@@ -99,9 +99,8 @@ public:
 
 VideoPositionMarkerProvider::VideoPositionMarkerProvider(agi::Context *c)
 : vc(c->GetCore().videoController.get())
-, current_frame(vc->GetFrameN())
-, video_seek_slot(vc->AddSeekListener(&VideoPositionMarkerProvider::Update, this))
-, playback_frame_advanced_slot(vc->AddPlaybackFrameAdvancedListener(&VideoPositionMarkerProvider::Update, this))
+, current_frame(vc->GetPresentedFrameN() >= 0 ? vc->GetPresentedFrameN() : vc->GetFrameN())
+, frame_presented_slot(vc->AddFramePresentedListener(&VideoPositionMarkerProvider::Update, this))
 , enable_opt_changed_slot(OPT_SUB("Audio/Display/Draw/Video Position", &VideoPositionMarkerProvider::OptChanged, this))
 {
 	OptChanged(*OPT_GET("Audio/Display/Draw/Video Position"));

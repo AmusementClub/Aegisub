@@ -36,6 +36,7 @@
 
 class AudioColorScheme;
 class AudioWaveformSummaryCache;
+struct AudioWaveformSummary;
 class wxArrayString;
 
 /// Render a waveform display of PCM audio data
@@ -49,11 +50,14 @@ class AudioWaveformRenderer final : public AudioRendererBitmapProvider {
 	bool render_averages;
 	AudioMixPolicy mix_policy = AudioMixPolicy::MonoMaxAbs;
 	bool interactive_prefetch_enabled = true;
+	std::vector<const AudioWaveformSummary *> summary_columns_scratch;
 	bool EnsureSummaryCacheConfigured();
 	std::pair<size_t, size_t> GetBlockRange(int start, int length) const;
 
 	void OnSetProvider() override;
 	void OnSetMillisecondsPerPixel() override;
+	void OnAllowPlaceholderChanged() override;
+	void ConfigurePrefetchBudgets();
 
 public:
 	/// @brief Constructor
@@ -67,7 +71,7 @@ public:
 	/// @param bmp   [in,out] Bitmap to render into, also carries length information
 	/// @param start First column of pixel data in display to render
 	/// @param style Style to render audio in
-	void Render(wxBitmap &bmp, int start, AudioRenderingStyle style) override;
+	AudioRenderResult Render(wxBitmap &bmp, int start, AudioRenderingStyle style) override;
 	void WarmCacheRange(int start, int length) override;
 	bool IsCacheRangeReady(int start, int length) override;
 

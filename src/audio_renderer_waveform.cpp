@@ -58,9 +58,20 @@ AudioWaveformRenderer::AudioWaveformRenderer(std::string const& color_scheme_nam
 	for (int i = 0; i < AudioStyle_MAX; ++i)
 		colors.emplace_back(6, color_scheme_name, i);
 	summary_cache->SetReadyCallback([this] { NotifyRenderContentReady(); });
+	ConfigurePrefetchBudgets();
 }
 
 AudioWaveformRenderer::~AudioWaveformRenderer() { }
+
+void AudioWaveformRenderer::OnAllowPlaceholderChanged() {
+	ConfigurePrefetchBudgets();
+}
+
+void AudioWaveformRenderer::ConfigurePrefetchBudgets() {
+	const size_t max_blocks = allow_placeholder ? size_t{32} : size_t{64};
+	if (summary_cache)
+		summary_cache->SetPrefetchBuildMaxBlocks(max_blocks);
+}
 
 void AudioWaveformRenderer::OnSetProvider() {
 	if (summary_cache)
@@ -123,20 +134,48 @@ std::pair<size_t, size_t> AudioWaveformRenderer::GetBlockRange(int start, int le
 	return { first_block, last_block };
 }
 
-void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
+AudioRenderResult AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
 {
-	if (!EnsureSummaryCacheConfigured()) {
+	if (!EnsureSummaryCacheConfigured() || bmp.GetWidth() <= 0) {
 		wxMemoryDC dc(bmp);
 		RenderBlank(dc, wxRect(0, 0, bmp.GetWidth(), bmp.GetHeight()), style);
-		return;
+		return AudioRenderResult::Ready;
 	}
 
-	const size_t block_index = static_cast<size_t>(start / AudioWaveformSummaryBlock::width);
-	const auto &summary_block = summary_cache->Get(block_index);
-	if (interactive_prefetch_enabled)
-		summary_cache->Prefetch(block_index + 1, block_index + 2);
+	const auto [first_block, last_block] = GetBlockRange(start, bmp.GetWidth());
+	if (interactive_prefetch_enabled) {
+		if (allow_placeholder)
+			summary_cache->Prefetch(first_block, last_block + 2);
+		else
+			summary_cache->Prefetch(last_block + 1, last_block + 2);
+	}
 
-	RenderWaveformSummaryBlockToBitmap(bmp, summary_block, colors[style], render_averages, amplitude_scale);
+	summary_columns_scratch.resize(static_cast<size_t>(bmp.GetWidth()));
+
+	bool has_missing_columns = false;
+	size_t active_block_index = static_cast<size_t>(-1);
+	const AudioWaveformSummaryBlock *active_block = nullptr;
+	for (int x = 0; x < bmp.GetWidth(); ++x) {
+		const auto column_ref = GetWaveformSummaryColumnRef(start + x);
+		if (column_ref.block_index != active_block_index) {
+			active_block_index = column_ref.block_index;
+			if (allow_placeholder)
+				active_block = summary_cache->GetIfReady(active_block_index);
+			else
+				active_block = &summary_cache->Get(active_block_index);
+		}
+
+		if (!active_block) {
+			has_missing_columns = true;
+			summary_columns_scratch[static_cast<size_t>(x)] = nullptr;
+			continue;
+		}
+
+		summary_columns_scratch[static_cast<size_t>(x)] = &active_block->summaries[column_ref.summary_index];
+	}
+
+	RenderWaveformSummaryColumnsToBitmap(bmp, summary_columns_scratch, colors[style], render_averages, amplitude_scale);
+	return has_missing_columns ? AudioRenderResult::Placeholder : AudioRenderResult::Ready;
 }
 
 void AudioWaveformRenderer::WarmCacheRange(int start, int length) {

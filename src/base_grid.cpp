@@ -95,8 +95,7 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 		core.selectionController->AddActiveLineListener(&BaseGrid::OnActiveLineChanged, this),
 		core.selectionController->AddSelectionListener([&]{ Refresh(false); }),
 		core.project->AddVideoProviderListener(&BaseGrid::OnVideoProviderChanged, this),
-		core.videoController->AddSeekListener(&BaseGrid::OnCurrentFrameChanged, this),
-		core.videoController->AddPlaybackFrameAdvancedListener(&BaseGrid::OnCurrentFrameChanged, this),
+		core.videoController->AddFramePresentedListener(&BaseGrid::OnCurrentFrameChanged, this),
 
 		OPT_SUB("Subtitle/Grid/Font Face", &BaseGrid::UpdateStyle, this),
 		OPT_SUB("Subtitle/Grid/Font Size", &BaseGrid::UpdateStyle, this),

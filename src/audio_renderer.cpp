@@ -70,11 +70,13 @@ size_t AudioRendererBitmapCacheBitmapFactory::GetBlockSize() const
 	return block_size;
 }
 
-AudioRenderer::AudioRenderer()
+AudioRenderer::AudioRenderer(int cache_bitmap_width_)
+: cache_bitmap_width(std::max(1, cache_bitmap_width_))
 {
 	bitmaps.reserve(AudioStyle_MAX);
 	for (int i = 0; i < AudioStyle_MAX; ++i)
 		bitmaps.emplace_back(256, AudioRendererBitmapCacheBitmapFactory(this));
+	bitmap_pending.resize(AudioStyle_MAX);
 
 	// Make sure there's *some* values for those fields, and in the caches
 	SetMillisecondsPerPixel(1);
@@ -160,6 +162,7 @@ void AudioRenderer::ResetBlockCount()
 	{
 		const size_t total_blocks = NumBlocks(provider->GetNumSamples());
 		for (auto& bmp : bitmaps) bmp.SetBlockCount(total_blocks);
+		for (auto &pending : bitmap_pending) pending.assign(total_blocks, uint8_t{0});
 	}
 }
 
@@ -176,9 +179,14 @@ wxBitmap const& AudioRenderer::GetCachedBitmap(const int i, const AudioRendering
 
 	bool created = false;
 	auto& bmp = bitmaps[style].Get(i, &created);
-	if (created)
-	{
-		renderer->Render(bmp, i * cache_bitmap_width, style);
+	bool pending = false;
+	if (static_cast<size_t>(style) < bitmap_pending.size() && static_cast<size_t>(i) < bitmap_pending[style].size())
+		pending = bitmap_pending[style][i] != 0;
+
+	if (created || pending) {
+		const auto result = renderer->Render(bmp, i * cache_bitmap_width, style);
+		if (static_cast<size_t>(style) < bitmap_pending.size() && static_cast<size_t>(i) < bitmap_pending[style].size())
+			bitmap_pending[style][i] = result == AudioRenderResult::Placeholder ? uint8_t{1} : uint8_t{0};
 		needs_age = true;
 	}
 
@@ -231,6 +239,7 @@ void AudioRenderer::Render(wxDC &dc, wxPoint origin, const int start, const int 
 void AudioRenderer::Invalidate()
 {
 	for (auto& bmp : bitmaps) bmp.Age(0);
+	for (auto &pending : bitmap_pending) std::fill(pending.begin(), pending.end(), uint8_t{0});
 	needs_age = false;
 }
 

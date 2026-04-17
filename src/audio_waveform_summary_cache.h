@@ -2,6 +2,7 @@
 
 #include <array>
 #include <atomic>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -48,6 +49,7 @@ class AudioWaveformSummaryCache {
 	size_t block_count = 0;
 	size_t max_cache_bytes = 4 * 1024 * 1024;
 	size_t current_cache_bytes = 0;
+	size_t current_cache_entries = 0;
 	uint64_t touch_counter = 0;
 
 	mutable std::mutex cache_mutex;
@@ -70,6 +72,7 @@ class AudioWaveformSummaryCache {
 	std::atomic<uint64_t> metrics_prefetch_requests{0};
 	std::atomic<uint64_t> metrics_prefetch_builds{0};
 	std::atomic<bool> prefetch_enabled{true};
+	std::atomic<size_t> prefetch_build_max_blocks{64};
 	std::atomic<uint64_t> active_prefetch_generation{0};
 	std::atomic<uint64_t> metrics_stale_drops{0};
 	std::atomic<uint64_t> metrics_evictions{0};
@@ -80,7 +83,9 @@ class AudioWaveformSummaryCache {
 	void RecreateCache();
 	std::unique_ptr<AudioWaveformSummaryBlock> BuildBlock(size_t block_index) const;
 	size_t GetMaxBuildBlocks(size_t preferred_cap) const;
+	std::vector<std::pair<size_t, std::unique_ptr<AudioWaveformSummaryBlock>>> BuildBlocksInternal(size_t first_block, size_t last_block, uint64_t generation, bool check_generation) const;
 	std::vector<std::pair<size_t, std::unique_ptr<AudioWaveformSummaryBlock>>> BuildBlocks(size_t first_block, size_t last_block) const;
+	std::vector<std::pair<size_t, std::unique_ptr<AudioWaveformSummaryBlock>>> BuildBlocks(size_t first_block, size_t last_block, uint64_t generation) const;
 	void TouchLocked(size_t block_index);
 	void TrimLocked();
 	void DrainReady();
@@ -101,6 +106,7 @@ public:
 	bool AreBlocksReady(size_t first_block, size_t last_block);
 	void Prefetch(size_t first_block, size_t last_block);
 	void SetPrefetchEnabled(bool enabled);
+	void SetPrefetchBuildMaxBlocks(size_t max_blocks) { prefetch_build_max_blocks.store(std::max<size_t>(1, max_blocks), std::memory_order_relaxed); }
 	void SetReadyCallback(std::function<void()> callback) { ready_callback = std::move(callback); }
 	AudioWaveformSummaryCacheMetrics GetMetricsSnapshot() const;
 };

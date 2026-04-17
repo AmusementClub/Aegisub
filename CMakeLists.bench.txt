@@ -4,6 +4,7 @@ add_executable(audio-display-bench EXCLUDE_FROM_ALL
     src/audio_latest_range_scheduler.cpp
     src/audio_display_source.cpp
     src/audio_mix_policy.cpp
+    src/audio_renderer.cpp
     src/audio_spectrum_analysis_cache.cpp
     src/audio_waveform_summary_cache.cpp
     src/fft.cpp

@@ -1,6 +1,7 @@
 #include "audio_display_analysis.h"
 #include "audio_display_source.h"
 #include "audio_mix_policy.h"
+#include "audio_renderer.h"
 #include "audio_spectrum_analysis_cache.h"
 #include "audio_waveform_summary_cache.h"
 #include "fft.h"
@@ -17,6 +18,10 @@
 #include <sstream>
 #include <string>
 #include <vector>
+
+#include <wx/bitmap.h>
+#include <wx/dcmemory.h>
+#include <wx/init.h>
 
 namespace {
 using clock_type = std::chrono::steady_clock;
@@ -81,6 +86,86 @@ struct SyntheticInt16InterleavedProvider final : agi::AudioProvider {
 		std::memcpy(buf, data.data() + start * channels, static_cast<size_t>(count) * channels * sizeof(int16_t));
 	}
 };
+
+struct SyntheticSilentProvider final : agi::AudioProvider {
+	SyntheticSilentProvider(int64_t frames, int channel_count) {
+		channels = channel_count;
+		num_samples = frames;
+		decoded_samples = num_samples;
+		sample_rate = 48000;
+		bytes_per_sample = sizeof(int16_t);
+		float_samples = false;
+	}
+
+	void FillBuffer(void *buf, int64_t, int64_t count) const override {
+		std::memset(buf, 0, static_cast<size_t>(count) * channels * bytes_per_sample);
+	}
+};
+
+struct NoOpAudioBitmapProvider final : AudioRendererBitmapProvider {
+	AudioRenderResult Render(wxBitmap &, int, AudioRenderingStyle) override {
+		return AudioRenderResult::Ready;
+	}
+
+	void RenderBlank(wxDC &, const wxRect &, AudioRenderingStyle) override {
+	}
+};
+
+BenchResult RunAudioRendererTileDrawHotBench(int cache_bitmap_width, const char *name) {
+	constexpr int iterations = 3000;
+	constexpr int viewport_width = 2048;
+	constexpr int viewport_height = 256;
+	constexpr int64_t frames = 48000 * 60 * 10;
+
+	SyntheticSilentProvider provider(frames, 2);
+	NoOpAudioBitmapProvider bitmap_provider;
+	AudioRenderer renderer(cache_bitmap_width);
+	renderer.SetCacheMaxSize(256ull * 1024 * 1024);
+	renderer.SetHeight(viewport_height);
+	renderer.SetAudioProvider(&provider);
+	renderer.SetRenderer(&bitmap_provider);
+
+	wxBitmap canvas(viewport_width, viewport_height);
+	wxMemoryDC dc(canvas);
+
+	renderer.Render(dc, wxPoint(0, 0), 0, viewport_width, AudioStyle_Normal);
+
+	auto t0 = clock_type::now();
+	for (int i = 0; i < iterations; ++i)
+		renderer.Render(dc, wxPoint(0, 0), 0, viewport_width, AudioStyle_Normal);
+	auto t1 = clock_type::now();
+
+	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	return { name, iterations, total_ms, total_ms / iterations, 0.0 };
+}
+
+BenchResult RunAudioRendererTileDrawColdBench(int cache_bitmap_width, const char *name) {
+	constexpr int iterations = 100;
+	constexpr int viewport_width = 2048;
+	constexpr int viewport_height = 256;
+	constexpr int64_t frames = 48000 * 60 * 10;
+
+	SyntheticSilentProvider provider(frames, 2);
+	NoOpAudioBitmapProvider bitmap_provider;
+	AudioRenderer renderer(cache_bitmap_width);
+	renderer.SetCacheMaxSize(256ull * 1024 * 1024);
+	renderer.SetHeight(viewport_height);
+	renderer.SetAudioProvider(&provider);
+	renderer.SetRenderer(&bitmap_provider);
+
+	wxBitmap canvas(viewport_width, viewport_height);
+	wxMemoryDC dc(canvas);
+
+	auto t0 = clock_type::now();
+	for (int i = 0; i < iterations; ++i) {
+		renderer.Invalidate();
+		renderer.Render(dc, wxPoint(0, 0), 0, viewport_width, AudioStyle_Normal);
+	}
+	auto t1 = clock_type::now();
+
+	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	return { name, iterations, total_ms, total_ms / iterations, 0.0 };
+}
 
 BenchResult RunDisplaySourceBench() {
 	constexpr int64_t frames = 1 << 18;
@@ -881,6 +966,12 @@ int main(int argc, char **argv) {
 			out_path = argv[++i];
 	}
 
+	wxInitializer initializer;
+	if (!initializer.IsOk()) {
+		std::cerr << "wxWidgets initialization failed\n";
+		return 1;
+	}
+
 	std::vector<BenchResult> results;
 	results.push_back(RunOldMonoFetchBench());
 	results.push_back(RunDisplaySourceBench());
@@ -902,6 +993,14 @@ int main(int argc, char **argv) {
 	results.push_back(RunSpectrumSequentialPrefetchBench());
 	results.push_back(RunOldSpectrumRenderBench());
 	results.push_back(RunNewSpectrumRenderOptimizedBench());
+	results.push_back(RunAudioRendererTileDrawHotBench(16, "audio_renderer_draw_hot_w16"));
+	results.push_back(RunAudioRendererTileDrawHotBench(32, "audio_renderer_draw_hot_w32"));
+	results.push_back(RunAudioRendererTileDrawHotBench(64, "audio_renderer_draw_hot_w64"));
+	results.push_back(RunAudioRendererTileDrawHotBench(128, "audio_renderer_draw_hot_w128"));
+	results.push_back(RunAudioRendererTileDrawColdBench(16, "audio_renderer_draw_cold_w16"));
+	results.push_back(RunAudioRendererTileDrawColdBench(32, "audio_renderer_draw_cold_w32"));
+	results.push_back(RunAudioRendererTileDrawColdBench(64, "audio_renderer_draw_cold_w64"));
+	results.push_back(RunAudioRendererTileDrawColdBench(128, "audio_renderer_draw_cold_w128"));
 	results.push_back(RunSpectrumVerticalZoomDragBench(false, "spectrum_vertical_zoom_drag_uncached_bands"));
 	results.push_back(RunSpectrumVerticalZoomDragBench(true, "spectrum_vertical_zoom_drag_cached_bands"));
 	results.push_back(RunNaiveSpectrumVerticalZoomStreamBench());

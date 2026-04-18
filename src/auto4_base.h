@@ -46,6 +46,7 @@
 #include "ass_export_filter.h"
 
 #include <filesystem>
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <string>
@@ -286,9 +287,14 @@ namespace Automation4 {
 	/// Manager for scripts in the autoload directory
 	class AutoloadScriptManager final : public ScriptManager {
 		std::string path;
+		std::shared_ptr<char> reload_lifetime = std::make_shared<char>();
+		std::shared_ptr<std::atomic<uint64_t>> reload_generation = std::make_shared<std::atomic<uint64_t>>(0);
+
+		void ApplyReloadedScripts(std::vector<std::unique_ptr<Script>> loaded_scripts, int error_count);
 	public:
 		AutoloadScriptManager(std::string path);
 		void Reload() override;
+		void ReloadAsync();
 	};
 
 	class ScriptFactory {

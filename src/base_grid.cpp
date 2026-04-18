@@ -547,7 +547,8 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 		// Normal click
 		if ((click || dclick) && !shift && !ctrl && !alt) {
 			if (dclick) {
-				ui.audioBox->ScrollToActiveLine();
+				if (ui.audioBox)
+					ui.audioBox->ScrollToActiveLine();
 				core.videoController->JumpToTime(dlg->Start);
 			}
 			SelectRow(row, false);

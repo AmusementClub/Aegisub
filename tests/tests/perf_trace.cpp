@@ -51,6 +51,9 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	perf_trace::ResetVideoPlaybackInterval();
 	perf_trace::ObserveVideoPlaybackTick(12);
 	perf_trace::ObserveVideoPlaybackTick(13);
+	perf_trace::TraceWindowOpenBegin("main");
+	perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.paths_and_options", 4.25);
+	perf_trace::TraceWindowOpenEnd("main", 8.5, true);
 	VideoMemorySnapshot memory_snapshot;
 	memory_snapshot.async.provider.cache_native_bytes = 4096;
 	memory_snapshot.async.provider.cache_native_frames = 1;
@@ -89,6 +92,7 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_ui_timer_interval\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_output_snapshot\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_memory_snapshot\""));
+	EXPECT_NE(std::string::npos, trace.find("\"name\":\"window_open_phase_duration\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"lua_dialog_phase_duration\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"lua_dialog_control_type_duration\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"lua_dialog_control_step_duration\""));
@@ -98,6 +102,9 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, summary.find("frame.request.total=1"));
 	EXPECT_NE(std::string::npos, summary.find("frame.delivered.total=1"));
 	EXPECT_NE(std::string::npos, summary.find("frame.dropped.total=1"));
+	EXPECT_NE(std::string::npos, summary.find("window_open.success=1"));
+	EXPECT_NE(std::string::npos, summary.find("window_phase.main.startup.runtime.paths_and_options.count=1"));
+	EXPECT_NE(std::string::npos, summary.find("window_phase.main.startup.runtime.paths_and_options.total_ms="));
 	EXPECT_NE(std::string::npos, summary.find("lua_dialog.success=1"));
 	EXPECT_NE(std::string::npos, summary.find("video_memory.samples=1"));
 	EXPECT_NE(std::string::npos, summary.find("provider_cache_native.max_bytes=4096"));

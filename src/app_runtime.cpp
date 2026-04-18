@@ -22,6 +22,7 @@
 #include "include/aegisub/hotkey.h"
 
 #include "options.h"
+#include "perf_trace.h"
 #include "version.h"
 
 #include <libaegisub/exception.h>
@@ -30,6 +31,7 @@
 
 #include <boost/locale.hpp>
 
+#include <chrono>
 #include <clocale>
 #include <cstdlib>
 #include <locale>
@@ -115,21 +117,41 @@ public:
 	bool Initialize(AppRuntimeInitOptions init_options, std::string& error) {
 		options = std::move(init_options);
 		try {
+			auto phase_started = std::chrono::steady_clock::now();
+			auto finish_phase = [&]() {
+				auto const now = std::chrono::steady_clock::now();
+				auto const elapsed_ms = std::chrono::duration<double, std::milli>(now - phase_started).count();
+				phase_started = now;
+				return elapsed_ms;
+			};
+
 			if (options.process_host.prime_process_logging)
 				options.process_host.prime_process_logging();
+			auto const prime_process_logging_ms = finish_phase();
 			InitializeGlobalLocale();
+			auto const global_locale_ms = finish_phase();
 
 			InstallUiTimerHost(options.ui_timer_host);
+			auto const install_ui_timer_host_ms = finish_phase();
 
 			agi::dispatch::Init(
 				options.main_queue_hooks.invoke_main,
 				options.main_queue_hooks.is_main_thread,
 				options.main_queue_hooks.flush_main_jobs);
+			auto const dispatch_init_ms = finish_phase();
 
 			current_shell_mode = options.shell_mode;
 
 			InitializeRuntimePathsAndOptions();
+			auto const paths_and_options_ms = finish_phase();
 			InitializeRuntimeLoggingAndPerfTrace();
+			auto const logging_and_perf_trace_ms = finish_phase();
+			perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.prime_process_logging", prime_process_logging_ms);
+			perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.global_locale", global_locale_ms);
+			perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.install_ui_timer_host", install_ui_timer_host_ms);
+			perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.dispatch.init", dispatch_init_ms);
+			perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.paths_and_options", paths_and_options_ms);
+			perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.logging_and_perf_trace", logging_and_perf_trace_ms);
 			try {
 				config::opt->ConfigUser();
 			}
@@ -139,9 +161,12 @@ public:
 					"Error",
 					agi::format("Configuration file is invalid. Error reported:\n%s", err.GetMessage()));
 			}
+			perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.config_user", finish_phase());
 			locale.SetHost(options.locale_host);
 			InitializeCommandsAndLocale(options, locale);
+			perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.commands_and_locale", finish_phase());
 			InitializeRuntimeOptionalFacilities(options);
+			perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.optional_facilities", finish_phase());
 
 			initialized = true;
 			return true;

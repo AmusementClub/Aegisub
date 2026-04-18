@@ -124,6 +124,11 @@ namespace Automation4 {
 			bool recognised = false;
 		};
 
+		struct AutoloadReloadResult {
+			std::vector<std::unique_ptr<Script>> scripts;
+			int error_count = 0;
+		};
+
 		void ReportFailedAutomationScriptLoad(agi::fs::path const& filename, std::string const& description)
 		{
 			wxLogError(_("Failed to load Automation script '%s':\n%s"), filename.wstring(), to_wx(description));
@@ -132,6 +137,39 @@ namespace Automation4 {
 		void ReportUnrecognisedAutomationScript(agi::fs::path const& filename)
 		{
 			wxLogError(_("The file was not recognised as an Automation script: %s"), filename.wstring());
+		}
+
+		AutoloadReloadResult LoadAutoloadScripts(std::string const& path)
+		{
+			AutoloadReloadResult result;
+			std::vector<std::future<ScriptLoadAttempt>> script_futures;
+
+			for (auto tok : agi::Split(path, '|')) {
+				auto dirname = config::path->Decode(agi::str(tok));
+				if (!agi::fs::DirectoryExists(dirname)) continue;
+
+				for (auto filename : agi::fs::DirectoryIterator(dirname, "*.*"))
+					script_futures.emplace_back(std::async(std::launch::async, [=] {
+						ScriptLoadAttempt attempt;
+						attempt.script = ScriptFactory::CreateFromFile(
+							dirname / agi::fs::PathFromString(filename),
+							false,
+							&attempt.recognised);
+						return attempt;
+					}));
+			}
+
+			for (auto& future : script_futures) {
+				auto attempt = future.get();
+				if (!attempt.script)
+					continue;
+
+				if (!attempt.script->GetLoadedState())
+					++result.error_count;
+				result.scripts.emplace_back(std::move(attempt.script));
+			}
+
+			return result;
 		}
 	}
 
@@ -490,42 +528,16 @@ namespace Automation4 {
 	AutoloadScriptManager::AutoloadScriptManager(std::string path)
 	: path(std::move(path))
 	{
-		Reload();
 	}
 
-	void AutoloadScriptManager::Reload()
+	void AutoloadScriptManager::ApplyReloadedScripts(std::vector<std::unique_ptr<Script>> loaded_scripts, int error_count)
 	{
-		scripts.clear();
-
-		std::vector<std::future<ScriptLoadAttempt>> script_futures;
-
-		for (auto tok : agi::Split(path, '|')) {
-			auto dirname = config::path->Decode(agi::str(tok));
-			if (!agi::fs::DirectoryExists(dirname)) continue;
-
-			for (auto filename : agi::fs::DirectoryIterator(dirname, "*.*"))
-				script_futures.emplace_back(std::async(std::launch::async, [=] {
-					ScriptLoadAttempt attempt;
-					attempt.script = ScriptFactory::CreateFromFile(
-						dirname / agi::fs::PathFromString(filename),
-						false,
-						&attempt.recognised);
-					return attempt;
-				}));
+		for (auto& script : loaded_scripts) {
+			if (!script->GetLoadedState())
+				ReportFailedAutomationScriptLoad(script->GetFilename(), script->GetDescription());
 		}
 
-		int error_count = 0;
-		for (auto& future : script_futures) {
-			auto attempt = future.get();
-			if (!attempt.script)
-				continue;
-
-			if (!attempt.script->GetLoadedState()) {
-				++error_count;
-				ReportFailedAutomationScriptLoad(attempt.script->GetFilename(), attempt.script->GetDescription());
-			}
-			scripts.emplace_back(std::move(attempt.script));
-		}
+		scripts = std::move(loaded_scripts);
 
 		if (error_count == 1) {
 			wxLogWarning(wxS("A script in the Automation autoload directory failed to load.\nPlease review the errors, fix them and use the Rescan Autoload Dir button in Automation Manager to load the scripts again."));
@@ -535,6 +547,32 @@ namespace Automation4 {
 		}
 
 		ScriptsChanged();
+	}
+
+	void AutoloadScriptManager::Reload()
+	{
+		reload_generation->fetch_add(1, std::memory_order_relaxed);
+		auto result = LoadAutoloadScripts(path);
+		ApplyReloadedScripts(std::move(result.scripts), result.error_count);
+	}
+
+	void AutoloadScriptManager::ReloadAsync()
+	{
+		auto lifetime = std::weak_ptr<char>(reload_lifetime);
+		auto generation = reload_generation;
+		auto path_copy = path;
+		auto const reload_id = generation->fetch_add(1, std::memory_order_relaxed) + 1;
+
+		agi::dispatch::Background().Async([this, lifetime, generation, reload_id, path_copy = std::move(path_copy)] {
+			auto result = std::make_shared<AutoloadReloadResult>(LoadAutoloadScripts(path_copy));
+			agi::dispatch::Main().Async([this, lifetime, generation, reload_id, result] {
+				if (!lifetime.lock())
+					return;
+				if (generation->load(std::memory_order_relaxed) != reload_id)
+					return;
+				ApplyReloadedScripts(std::move(result->scripts), result->error_count);
+			});
+		});
 	}
 
 	LocalScriptManager::LocalScriptManager(agi::Context *c)

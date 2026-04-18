@@ -38,6 +38,7 @@ class AegisubApp;
 class AsyncVideoProvider;
 class AudioBox;
 class VideoBox;
+class wxPanel;
 namespace agi { class AudioProvider; }
 namespace agi { struct Context; class OptionValue; }
 
@@ -55,6 +56,7 @@ class FrameMain : public wxFrame {
 
 	bool showVideo = false; ///< Is the video display shown?
 	bool showAudio = false; ///< Is the audio display shown?
+	wxPanel *contentsPanel = nullptr;
 	wxTimer StatusClear;   ///< Status bar timeout timer
 #ifdef _WIN32
 	wxTimer FontChangeDebounce; ///< Debounces WM_FONTCHANGE bursts before refreshing subtitles
@@ -64,6 +66,8 @@ class FrameMain : public wxFrame {
 #endif
 
 	void InitContents();
+	void EnsureVideoBoxCreated();
+	void EnsureAudioBoxCreated();
 
 	void UpdateTitle();
 
@@ -87,8 +91,8 @@ class FrameMain : public wxFrame {
 
 	void EnableToolBar(agi::OptionValue const& opt);
 
-	AudioBox *audioBox;      ///< The audio area
-	VideoBox *videoBox;      ///< The video area
+	AudioBox *audioBox = nullptr;      ///< The audio area
+	VideoBox *videoBox = nullptr;      ///< The video area
 
 	wxSizer *MainSizer;  ///< Arranges things from top to bottom in the window
 	wxSizer *TopSizer;   ///< Arranges video box and tool box from left to right

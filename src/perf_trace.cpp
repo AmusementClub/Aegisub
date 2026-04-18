@@ -136,6 +136,37 @@ std::string ToLower(std::string value) {
 	return value;
 }
 
+std::string NormalizeSummaryKey(std::string_view value) {
+	std::string normalized;
+	normalized.reserve(value.size());
+	for (unsigned char ch : value) {
+		if ((ch >= 'a' && ch <= 'z')
+			|| (ch >= 'A' && ch <= 'Z')
+			|| (ch >= '0' && ch <= '9')
+			|| ch == '.'
+			|| ch == '_'
+			|| ch == '-') {
+			normalized.push_back(static_cast<char>(ch));
+		}
+		else {
+			normalized.push_back('_');
+		}
+	}
+	if (normalized.empty())
+		normalized = "unnamed";
+	return normalized;
+}
+
+std::string MakeWindowPhaseSummaryKey(char const* window_kind, char const* phase) {
+	auto key = NormalizeSummaryKey(window_kind ? window_kind : "window");
+	auto phase_key = NormalizeSummaryKey(phase ? phase : "phase");
+	if (!phase_key.empty()) {
+		key += ".";
+		key += phase_key;
+	}
+	return key;
+}
+
 bool IsFalseyToken(std::string const& value) {
 	auto lowered = ToLower(Trim(value));
 	if (lowered.empty()) return true;
@@ -491,6 +522,8 @@ struct Summary {
 	std::string audio_provider_name;
 	std::string audio_storage_kind;
 	std::string audio_output_backend;
+	std::map<std::string, DurationSummary> window_phase_durations;
+	std::vector<std::string> window_phase_order;
 	IntervalSummary audio_ui_timer_interval;
 	IntervalSummary video_playback_tick_interval;
 	DurationSummary window_open_duration;
@@ -697,6 +730,17 @@ void WriteSummaryLocked(Session const& session) {
 	write_double("window_open_duration.min_ms", session.summary.window_open_duration.min_ms);
 	write_double("window_open_duration.max_ms", session.summary.window_open_duration.max_ms);
 	write_mean("window_open_duration.mean_ms", session.summary.window_open_duration.total_ms, session.summary.window_open_duration.count);
+	for (auto const& key : session.summary.window_phase_order) {
+		auto const it = session.summary.window_phase_durations.find(key);
+		if (it == session.summary.window_phase_durations.end())
+			continue;
+		auto const& phase = it->second;
+		out << "window_phase." << key << ".count=" << phase.count << "\n";
+		out << "window_phase." << key << ".total_ms=" << ToStringDouble(phase.total_ms) << "\n";
+		out << "window_phase." << key << ".min_ms=" << ToStringDouble(phase.min_ms) << "\n";
+		out << "window_phase." << key << ".max_ms=" << ToStringDouble(phase.max_ms) << "\n";
+		out << "window_phase." << key << ".mean_ms=" << ToStringDouble(phase.count ? phase.total_ms / phase.count : 0.0) << "\n";
+	}
 
 	write_int("lua_dialog_duration.count", session.summary.lua_dialog_duration.count);
 	write_double("lua_dialog_duration.min_ms", session.summary.lua_dialog_duration.min_ms);
@@ -1178,11 +1222,27 @@ void TraceWindowOpenBegin(char const* window_kind) {
 }
 
 void ObserveWindowOpenPhase(char const* window_kind, char const* phase, double duration_ms) {
-	RecordEntry(TraceCategory::UiWindow, "metric", "window_open_phase_duration", false, [&](JsonObjectBuilder& payload) {
-		payload.AddString("window_kind", window_kind ? window_kind : "");
-		payload.AddString("phase", phase ? phase : "");
-		payload.AddDouble("duration_ms", duration_ms);
-	});
+	if (!trace_active.load(std::memory_order_relaxed))
+		return;
+
+	auto const timestamp_ns = NowNs();
+	auto& session = GetSession();
+	std::lock_guard<std::mutex> lock(session.mutex);
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::UiWindow))
+		return;
+
+	JsonObjectBuilder payload;
+	payload.AddString("window_kind", window_kind ? window_kind : "");
+	payload.AddString("phase", phase ? phase : "");
+	payload.AddDouble("duration_ms", duration_ms);
+	AppendEntryLocked(session, "metric", "window_open_phase_duration", payload.Finish(), false, timestamp_ns);
+
+	auto const summary_key = MakeWindowPhaseSummaryKey(window_kind, phase);
+	auto [it, inserted] = session.summary.window_phase_durations.emplace(summary_key, DurationSummary{});
+	if (inserted)
+		session.summary.window_phase_order.emplace_back(summary_key);
+	if (duration_ms >= 0.0)
+		it->second.Observe(duration_ms);
 }
 
 void TraceWindowOpenEnd(char const* window_kind, double duration_ms, bool succeeded) {

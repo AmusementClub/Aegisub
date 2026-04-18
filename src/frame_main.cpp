@@ -52,6 +52,7 @@
 #include "main.h"
 #include "options.h"
 #include "project.h"
+#include "perf_trace.h"
 #include "status_sink.h"
 #include "subs_controller.h"
 #include "subs_edit_box.h"
@@ -69,6 +70,7 @@
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 
+#include <chrono>
 #include <wx/dnd.h>
 #include <wx/settings.h>
 #include <wx/sizer.h>
@@ -146,6 +148,15 @@ FrameMain::FrameMain()
 : wxFrame(nullptr, -1, wxEmptyString, wxDefaultPosition, wxSize(920,700), wxDEFAULT_FRAME_STYLE | wxCLIP_CHILDREN)
 , context(agi::make_unique<agi::Context>())
 {
+	auto phase_started = std::chrono::steady_clock::now();
+	auto observe_phase = [&](char const* phase) {
+		perf_trace::ObserveWindowOpenPhase(
+			"main",
+			phase,
+			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - phase_started).count());
+		phase_started = std::chrono::steady_clock::now();
+	};
+
 	SetSize(FromDIP(wxSize(920, 700)));
 	StartupLog("Entering FrameMain constructor");
 
@@ -167,6 +178,7 @@ FrameMain::FrameMain()
 		core.subsController->AddFileSaveListener(&FrameMain::UpdateTitle, this),
 		core.project->AddAudioProviderListener(&FrameMain::OnAudioOpen, this),
 		core.project->AddVideoProviderListener(&FrameMain::OnVideoOpen, this));
+	observe_phase("startup.frame.context.bind_core_listeners");
 
 	StartupLog("Initializing context frames");
 	ui.parent = this;
@@ -193,6 +205,7 @@ FrameMain::FrameMain()
 		GetAsyncUiLifetime());
 	core.audioPlayerFactoryService = agi::MakeFrameMainAudioPlayerFactoryService(this, GetAsyncUiLifetime());
 	core.automationBackgroundScriptRunnerFactory = agi::MakeFrameMainAutomationBackgroundScriptRunnerFactory(this, GetAsyncUiLifetime());
+	observe_phase("startup.frame.context.install_ui_services");
 
 	StartupLog("Set frame background for resize painting");
 	SetBackgroundColour(wxSystemSettings::GetColour(wxSYS_COLOUR_APPWORKSPACE));
@@ -204,9 +217,11 @@ FrameMain::FrameMain()
 	wxSystemOptions::SetOption(wxS("msw.remap"), 0);
 	OPT_SUB("App/Show Toolbar", &FrameMain::EnableToolBar, this);
 	EnableToolBar(*OPT_GET("App/Show Toolbar"));
+	observe_phase("startup.frame.toolbar.attach_or_hide");
 
 	StartupLog("Initialize menu bar");
 	menu::GetMenuBar("main", this, (wxID_HIGHEST + 1) + 10000, context.get());
+	observe_phase("startup.frame.menu.attach");
 
 	StartupLog("Create status bar");
 	CreateStatusBar(2);
@@ -223,6 +238,7 @@ FrameMain::FrameMain()
 	StartupLog("Create views and inner main window controls");
 	InitContents();
 	OPT_SUB("Video/Detached/Enabled", &FrameMain::OnVideoDetach, this);
+	observe_phase("startup.frame.contents.total");
 
 	StartupLog("Set up drag/drop target");
 	SetDropTarget(agi::MakeFrameMainFileDropTarget(
@@ -230,9 +246,11 @@ FrameMain::FrameMain()
 			context->GetCore().project->LoadList(files);
 		},
 		GetAsyncUiLifetime()));
+	observe_phase("startup.frame.drag_drop.install");
 
 	StartupLog("Load default file");
 	core.project->CloseSubtitles();
+	observe_phase("startup.frame.project.close_initial_subtitles");
 
 	StartupLog("Display main window");
 	AddFullScreenButton(this);
@@ -241,6 +259,7 @@ FrameMain::FrameMain()
 #ifdef _WIN32
 	RegisterSessionNotifications();
 #endif
+	observe_phase("startup.frame.show");
 
 	StartupLog("Leaving FrameMain constructor");
 }
@@ -274,43 +293,61 @@ void FrameMain::EnableToolBar(agi::OptionValue const& opt) {
 }
 
 void FrameMain::InitContents() {
+	auto phase_started = std::chrono::steady_clock::now();
+	auto observe_phase = [&](char const* phase) {
+		perf_trace::ObserveWindowOpenPhase(
+			"main",
+			phase,
+			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - phase_started).count());
+		phase_started = std::chrono::steady_clock::now();
+	};
+
 	StartupLog("Create background panel");
-	auto Panel = new wxPanel(this, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxCLIP_CHILDREN);
+	contentsPanel = new wxPanel(this, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxCLIP_CHILDREN);
 
 	StartupLog("Create subtitles grid");
 	auto ui = context->GetUI();
-	ui.subsGrid = new BaseGrid(Panel, context.get());
-
-	StartupLog("Create video box");
-	videoBox = new VideoBox(Panel, false, context.get());
-
-	StartupLog("Create audio box");
-	ui.audioBox = audioBox = new AudioBox(Panel, context.get());
+	ui.subsGrid = new BaseGrid(contentsPanel, context.get());
 
 	StartupLog("Create subtitle editing box");
-	auto EditBox = new SubsEditBox(Panel, context.get());
+	auto EditBox = new SubsEditBox(contentsPanel, context.get());
+	observe_phase("startup.frame.contents.create_base_controls");
 
 	StartupLog("Arrange main sizers");
 	ToolsSizer = new wxBoxSizer(wxVERTICAL);
-	ToolsSizer->Add(audioBox, 0, wxEXPAND);
 	ToolsSizer->Add(EditBox, 1, wxEXPAND);
 	TopSizer = new wxBoxSizer(wxHORIZONTAL);
-	TopSizer->Add(videoBox, 0, wxEXPAND, 0);
 	TopSizer->Add(ToolsSizer, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 5);
 	MainSizer = new wxBoxSizer(wxVERTICAL);
-	MainSizer->Add(new wxStaticLine(Panel),0,wxEXPAND | wxALL,0);
+	MainSizer->Add(new wxStaticLine(contentsPanel),0,wxEXPAND | wxALL,0);
 	MainSizer->Add(TopSizer,0,wxEXPAND | wxALL,0);
 	MainSizer->Add(ui.subsGrid,1,wxEXPAND | wxALL,0);
-	Panel->SetSizer(MainSizer);
-
-	// Hide video/audio initially to prevent black flash on startup.
-	// SetDisplayMode will show them when providers become available.
-	TopSizer->Show(videoBox, false);
-	ToolsSizer->Show(audioBox, false);
+	contentsPanel->SetSizer(MainSizer);
+	observe_phase("startup.frame.contents.create_sizers");
 
 	StartupLog("Perform layout");
 	Layout();
+	observe_phase("startup.frame.contents.initial_layout");
 	StartupLog("Leaving InitContents");
+}
+
+void FrameMain::EnsureVideoBoxCreated() {
+	if (videoBox)
+		return;
+
+	videoBox = new VideoBox(contentsPanel, false, context.get());
+	TopSizer->Insert(0, videoBox, 0, wxEXPAND, 0);
+	TopSizer->Show(videoBox, false, true);
+}
+
+void FrameMain::EnsureAudioBoxCreated() {
+	if (audioBox)
+		return;
+
+	auto ui = context->GetUI();
+	ui.audioBox = audioBox = new AudioBox(contentsPanel, context.get());
+	ToolsSizer->Insert(0, audioBox, 0, wxEXPAND);
+	ToolsSizer->Show(audioBox, false, true);
 }
 
 void FrameMain::SetDisplayMode(int video, int audio) {
@@ -329,11 +366,16 @@ void FrameMain::SetDisplayMode(int video, int audio) {
 	// See if anything changed
 	if (sv == showVideo && sa == showAudio) return;
 
-	showVideo = sv;
-	showAudio = sa;
-
 	bool didFreeze = !IsFrozen();
 	if (didFreeze) Freeze();
+
+	if (sv)
+		EnsureVideoBoxCreated();
+	if (sa)
+		EnsureAudioBoxCreated();
+
+	showVideo = sv;
+	showAudio = sa;
 
 	core.videoController->Stop();
 
@@ -371,6 +413,7 @@ void FrameMain::OnVideoOpen(AsyncVideoProvider *provider) {
 	}
 
 	Freeze();
+	EnsureVideoBoxCreated();
 	int vidx = provider->GetWidth(), vidy = provider->GetHeight();
 	auto ui = context->GetUI();
 

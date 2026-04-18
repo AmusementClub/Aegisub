@@ -1,5 +1,6 @@
 #include "gui_wx_runtime_entry_host.h"
 
+#include "auto4_base.h"
 #include "compat.h"
 #include "dialogs.h"
 #include "gui_wx_bootstrap_ui_host.h"
@@ -7,7 +8,9 @@
 #include "gui_wx_locale_host.h"
 #include "gui_wx_runtime_host.h"
 #include "options.h"
+#include "perf_trace.h"
 
+#include <chrono>
 #include <wx/app.h>
 #include <wx/arrstr.h>
 #include <wx/thread.h>
@@ -84,7 +87,17 @@ void RunGuiWxAppStartupSequence(
 	std::vector<std::string> const& args,
 	std::function<void()> create_project_context,
 	std::function<void(std::vector<std::string> const&)> open_files) {
+	auto phase_started = std::chrono::steady_clock::now();
+	auto observe_phase = [&](char const* phase) {
+		perf_trace::ObserveWindowOpenPhase(
+			"main",
+			phase,
+			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - phase_started).count());
+		phase_started = std::chrono::steady_clock::now();
+	};
+
 	create_project_context();
+	observe_phase("startup.sequence.create_project_context");
 
 	if (OPT_GET("App/First Start")->GetBool()) {
 		OPT_SET("App/First Start")->SetBool(false);
@@ -105,17 +118,23 @@ void RunGuiWxAppStartupSequence(
 		}
 #endif
 	}
+	observe_phase("startup.sequence.first_start_prompt");
+
+	if (config::global_scripts)
+		config::global_scripts->ReloadAsync();
+	observe_phase("startup.sequence.global_scripts.reload_async_schedule");
 
 #ifdef WITH_UPDATE_CHECKER
 	PerformVersionCheck(false);
 #endif
+	observe_phase("startup.sequence.update_check.schedule");
 
-	if (args.size() <= 1)
-		return;
-
-	std::vector<std::string> startup_files;
-	startup_files.reserve(args.size() - 1);
-	for (size_t i = 1; i < args.size(); ++i)
-		startup_files.emplace_back(args[i]);
-	open_files(startup_files);
+	if (args.size() > 1) {
+		std::vector<std::string> startup_files;
+		startup_files.reserve(args.size() - 1);
+		for (size_t i = 1; i < args.size(); ++i)
+			startup_files.emplace_back(args[i]);
+		open_files(startup_files);
+	}
+	observe_phase("startup.sequence.open_files");
 }

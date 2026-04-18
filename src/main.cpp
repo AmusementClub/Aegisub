@@ -47,6 +47,7 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "project.h"
 #include "subs_controller.h"
 #include "utils.h"
@@ -57,6 +58,7 @@
 #include <libaegisub/path.h>
 #include <libaegisub/util.h>
 
+#include <chrono>
 #include <vector>
 #include <wx/arrstr.h>
 #include <wx/clipbrd.h>
@@ -110,6 +112,15 @@ static wxString exception_message = wxS("Oops, Aegisub has crashed!\n\nAn attemp
 /// @brief Gets called when application starts.
 /// @return bool
 bool AegisubApp::OnInit() {
+	auto const startup_started = std::chrono::steady_clock::now();
+	auto duration_ms = [](std::chrono::steady_clock::time_point started) {
+		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+	};
+	auto finish_startup_trace = [&](bool succeeded) {
+		perf_trace::TraceWindowOpenEnd("main", duration_ms(startup_started), succeeded);
+	};
+	perf_trace::TraceWindowOpenBegin("main");
+
 	// App name (yeah, this is a little weird to get rid of an odd warning)
 #if defined(__WXMSW__) || defined(__WXMAC__)
 	SetAppName(wxS("Aegisub"));
@@ -124,10 +135,14 @@ bool AegisubApp::OnInit() {
 	auto runtime_options = BuildGuiWxAppRuntimeInitOptions();
 	auto bootstrap_ui_host = runtime_options.bootstrap_ui_host;
 	runtime_options.bootstrap_ui_host = bootstrap_ui_host;
+	auto const runtime_initialize_started = std::chrono::steady_clock::now();
 	if (!runtime->Initialize(std::move(runtime_options), runtime_error)) {
+		perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.total", duration_ms(runtime_initialize_started));
+		finish_startup_trace(false);
 		ShowGuiWxBootstrapUiError("Fatal error while initializing", runtime_error);
 		return false;
 	}
+	perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.total", duration_ms(runtime_initialize_started));
 
 	StartupLog("Inside OnInit");
 	try {
@@ -150,6 +165,7 @@ bool AegisubApp::OnInit() {
 		StartupLog("Create main window");
 		StartupLog("Possibly perform automatic updates check");
 		StartupLog("Parse command line");
+		auto const startup_sequence_started = std::chrono::steady_clock::now();
 		RunGuiWxAppStartupSequence(ToUtf8Args(argv.GetArguments()),
 			[this] { NewProjectContext(); },
 			[this](std::vector<std::string> const& files) {
@@ -160,26 +176,33 @@ bool AegisubApp::OnInit() {
 				if (!paths.empty())
 					frames[0]->context->GetCore().project->LoadList(paths);
 			});
+		perf_trace::ObserveWindowOpenPhase("main", "startup.sequence.total", duration_ms(startup_sequence_started));
 	}
 	catch (agi::Exception const& e) {
+		finish_startup_trace(false);
 		ShowGuiWxBootstrapUiError("Fatal error while initializing", e.GetMessage());
 		return false;
 	}
 	catch (std::exception const& e) {
+		finish_startup_trace(false);
 		ShowGuiWxBootstrapUiError("Fatal error while initializing", e.what());
 		return false;
 	}
 #ifndef _DEBUG
 	catch (...) {
+		finish_startup_trace(false);
 		ShowGuiWxBootstrapUiError("Fatal error while initializing", "Unhandled exception");
 		return false;
 	}
 #endif
 
 	StartupLog("Clean old autosave files");
+	auto const autosave_cleanup_started = std::chrono::steady_clock::now();
 	CleanCache(config::path->Decode(OPT_GET("Path/Auto/Save")->GetString()), "*.AUTOSAVE.ass", 100, 1000);
+	perf_trace::ObserveWindowOpenPhase("main", "startup.post.autosave_cleanup.schedule", duration_ms(autosave_cleanup_started));
 
 	StartupLog("Initialization complete");
+	finish_startup_trace(true);
 	return true;
 }
 

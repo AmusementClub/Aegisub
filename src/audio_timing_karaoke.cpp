@@ -29,6 +29,7 @@
 #include "options.h"
 #include "pen.h"
 #include "selection_controller.h"
+#include "subtitle_command_session.h"
 #include "utils.h"
 
 #include <libaegisub/make_unique.h>
@@ -71,7 +72,7 @@ public:
 /// one syllable be the same as the start time of the next one.
 class AudioTimingControllerKaraoke final : public AudioTimingController {
 	std::vector<agi::signal::Connection> connections;
-	agi::signal::Connection& file_changed_slot;
+	std::shared_ptr<aegisub::SubtitleCommandSession> command_session;
 
 	agi::Context *c;          ///< Project context
 	AssDialogue *active_line; ///< Currently active line
@@ -104,7 +105,6 @@ class AudioTimingControllerKaraoke final : public AudioTimingController {
 
 	 /// Should changes be automatically commited?
 	bool auto_commit = OPT_GET("Audio/Auto/Commit")->GetBool();
-	int commit_id = -1;   ///< Last commit id used for an autocommit
 	bool pending_changes; ///< Are there any pending changes to be committed?
 
 	void DoCommit();
@@ -134,16 +134,16 @@ public:
 	std::vector<AudioMarker*> OnRightClick(int ms, bool, int, int) override;
 	void OnMarkerDrag(std::vector<AudioMarker*> const& marker, int new_position, int) override;
 
-	AudioTimingControllerKaraoke(agi::Context *c, AssKaraoke *kara, agi::signal::Connection& file_changed);
+	AudioTimingControllerKaraoke(agi::Context *c, AssKaraoke *kara, std::shared_ptr<aegisub::SubtitleCommandSession> command_session);
 };
 
-std::unique_ptr<AudioTimingController> CreateKaraokeTimingController(agi::Context *c, AssKaraoke *kara, agi::signal::Connection& file_changed)
+std::unique_ptr<AudioTimingController> CreateKaraokeTimingController(agi::Context *c, AssKaraoke *kara, std::shared_ptr<aegisub::SubtitleCommandSession> command_session)
 {
-	return agi::make_unique<AudioTimingControllerKaraoke>(c, kara, file_changed);
+	return agi::make_unique<AudioTimingControllerKaraoke>(c, kara, command_session);
 }
 
-AudioTimingControllerKaraoke::AudioTimingControllerKaraoke(agi::Context *c, AssKaraoke *kara, agi::signal::Connection& file_changed)
-: file_changed_slot(file_changed)
+AudioTimingControllerKaraoke::AudioTimingControllerKaraoke(agi::Context *c, AssKaraoke *kara, std::shared_ptr<aegisub::SubtitleCommandSession> command_session)
+: command_session(command_session)
 , c(c)
 , active_line(c->GetCore().selectionController->GetActiveLine())
 , kara(kara)
@@ -238,11 +238,9 @@ void AudioTimingControllerKaraoke::GetMarkers(TimeRange const& range, AudioMarke
 }
 
 void AudioTimingControllerKaraoke::DoCommit() {
-	active_line->Text = kara->GetText();
-	file_changed_slot.Block();
-	auto core = c->GetCore();
-	commit_id = core.ass->Commit(from_wx(_("karaoke timing")), AssFile::COMMIT_DIAG_TEXT, commit_id, active_line);
-	file_changed_slot.Unblock();
+	command_session->Run(from_wx(_("karaoke timing")), AssFile::COMMIT_DIAG_TEXT, command_session->GetCommitId(), active_line, [&] {
+		active_line->Text = kara->GetText();
+	});
 	pending_changes = false;
 }
 
@@ -256,7 +254,7 @@ void AudioTimingControllerKaraoke::Revert() {
 	active_line = core.selectionController->GetActiveLine();
 
 	cur_syl = 0;
-	commit_id = -1;
+	command_session->ResetCommitId();
 	pending_changes = false;
 
 	start_marker.Move(active_line->Start);
@@ -406,7 +404,7 @@ void AudioTimingControllerKaraoke::AnnounceChanges(int syl) {
 		DoCommit();
 	else {
 		pending_changes = true;
-		commit_id = -1;
+		command_session->ResetCommitId();
 	}
 }
 

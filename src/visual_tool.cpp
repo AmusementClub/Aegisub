@@ -43,6 +43,7 @@
 VisualToolBase::VisualToolBase(VideoDisplay *parent, agi::Context *context)
 : c(context)
 , parent(parent)
+, command_session(context->GetCore().ass.get())
 , frame_number(c->GetCore().videoController->GetFrameN())
 , highlight_color_primary_opt(OPT_GET("Colour/Visual Tools/Highlight Primary"))
 , highlight_color_secondary_opt(OPT_GET("Colour/Visual Tools/Highlight Secondary"))
@@ -67,19 +68,48 @@ void VisualToolBase::UpdateScriptResolution() {
 	script_res = Vector2D(script_w, script_h);
 }
 
-void VisualToolBase::OnCommit(int type) {
-	holding = false;
-	dragging = false;
+void VisualToolBase::OnCommit(int type, AssDialogue const* changed) {
+	bool const local_commit = command_session.IsLocalCommitInProgress();
+	if (local_commit && !command_session.ShouldObserveLocalCommit())
+		return;
 
-	if (type == AssFile::COMMIT_NEW || type & AssFile::COMMIT_SCRIPTINFO) {
+	if (!local_commit) {
+		holding = false;
+		dragging = false;
+	}
+
+	auto *new_active_line = GetActiveDialogueLine();
+	bool needs_render = false;
+	bool const coordinate_system_changed = type == AssFile::COMMIT_NEW || type & AssFile::COMMIT_SCRIPTINFO;
+
+	if (coordinate_system_changed) {
+		active_line = new_active_line;
 		UpdateScriptResolution();
 		OnCoordinateSystemsChanged();
+		needs_render = true;
 	}
 
-	if (type & AssFile::COMMIT_DIAG_FULL || type & AssFile::COMMIT_DIAG_ADDREM) {
-		active_line = GetActiveDialogueLine();
-		OnFileChanged();
+	bool needs_file_refresh = false;
+	if (type & (AssFile::COMMIT_STYLES | AssFile::COMMIT_ORDER | AssFile::COMMIT_DIAG_ADDREM | AssFile::COMMIT_DIAG_META | AssFile::COMMIT_DIAG_TIME))
+		needs_file_refresh = true;
+	else if (type & (AssFile::COMMIT_DIAG_TEXT | AssFile::COMMIT_EXTRADATA)) {
+		if (!changed)
+			needs_file_refresh = true;
+		else {
+			needs_file_refresh = changed == active_line
+				|| changed == new_active_line
+				|| IsDisplayed(changed);
+		}
 	}
+
+	if (needs_file_refresh) {
+		active_line = new_active_line;
+		OnFileChanged();
+		needs_render = true;
+	}
+
+	if (needs_render)
+		parent->Render();
 }
 
 void VisualToolBase::OnFramePresented(int new_frame) {
@@ -124,7 +154,7 @@ void VisualToolBase::OnResolutionPolicyChanged(agi::OptionValue const&) {
 	parent->Render();
 }
 
-bool VisualToolBase::IsDisplayed(AssDialogue *line) const {
+bool VisualToolBase::IsDisplayed(AssDialogue const* line) const {
 	int frame = frame_number;
 	if (frame < 0)
 		frame = c->GetCore().videoController->GetFrameN();
@@ -143,13 +173,22 @@ AssDialogue *VisualToolBase::GetCommitTargetLine() const {
 }
 
 void VisualToolBase::Commit(wxString message) {
-	file_changed_connection.Block();
 	if (message.empty())
 		message = _("visual typesetting");
 
-	auto core = c->GetCore();
-	commit_id = core.ass->Commit(from_wx(message), AssFile::COMMIT_DIAG_TEXT, commit_id, GetCommitTargetLine());
-	file_changed_connection.Unblock();
+	command_session.Commit(from_wx(message), AssFile::COMMIT_DIAG_TEXT, command_session.GetCommitId(), GetCommitTargetLine());
+}
+
+void VisualToolBase::CommitAndRefresh(wxString message) {
+	if (message.empty())
+		message = _("visual typesetting");
+
+	command_session.CommitWithFeedback(
+		from_wx(message),
+		AssFile::COMMIT_DIAG_TEXT,
+		command_session.GetCommitId(),
+		GetCommitTargetLine(),
+		aegisub::LocalCommitFeedback::ObserveSelf);
 }
 
 AssDialogue* VisualToolBase::GetActiveDialogueLine() {
@@ -301,7 +340,7 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 
 	// Only coalesce the changes made in a single drag
 	if (!event.LeftIsDown())
-		commit_id = -1;
+		command_session.ResetCommitId();
 }
 
 template<class FeatureType>

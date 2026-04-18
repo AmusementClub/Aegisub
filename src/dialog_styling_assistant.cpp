@@ -34,6 +34,7 @@
 #include "persist_location.h"
 #include "project.h"
 #include "selection_controller.h"
+#include "subtitle_command_session.h"
 #include "video_controller.h"
 
 #include <libaegisub/make_unique.h>
@@ -56,6 +57,7 @@ DialogStyling::DialogStyling(agi::Context *context)
 : wxDialog(context->GetUI().parent, -1, _("Styling Assistant"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER | wxMINIMIZE_BOX)
 , c(context)
 , active_line_connection(context->GetCore().selectionController->AddActiveLineListener(&DialogStyling::OnActiveLineChanged, this))
+, command_session(agi::make_unique<aegisub::SubtitleCommandSession>(context->GetCore().ass.get()))
 {
 	SetIcon(GETICON(styling_toolbutton_16));
 
@@ -174,8 +176,9 @@ void DialogStyling::Commit(bool next) {
 	auto core = c->GetCore();
 	if (!core.ass->GetStyle(from_wx(style_name->GetValue()))) return;
 
-	active_line->Style = from_wx(style_name->GetValue());
-	core.ass->Commit(from_wx(_("styling assistant")), AssFile::COMMIT_DIAG_META);
+	command_session->Run(from_wx(_("styling assistant")), AssFile::COMMIT_DIAG_META, -1, active_line, [&] {
+		active_line->Style = from_wx(style_name->GetValue());
+	});
 
 	if (next) cmd::call("grid/line/next", c);
 }

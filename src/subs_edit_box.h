@@ -38,6 +38,7 @@
 
 #include <libaegisub/signal.h>
 
+#include "subtitle_command_session.h"
 #include "time_display_mode.h"
 
 namespace agi { namespace vfr { class Framerate; } }
@@ -81,6 +82,7 @@ class SubsEditBox final : public wxPanel {
 	bool controls_enabled = true;
 
 	agi::Context *c;
+	aegisub::SubtitleCommandSession command_session;
 
 	agi::signal::Connection file_changed_slot;
 
@@ -116,10 +118,6 @@ class SubsEditBox final : public wxPanel {
 	/// @brief Commits the current edit box contents
 	/// @param desc Undo description to use
 	void CommitText(wxString const& desc);
-	void Commit(wxString const& desc, int type, bool amend, AssDialogue *line);
-
-	/// Last commit ID for undo coalescing
-	int commit_id = -1;
 
 	/// Last used commit message to avoid coalescing different types of changes
 	wxString last_commit_type;
@@ -187,7 +185,7 @@ class SubsEditBox final : public wxPanel {
 
 	/// @brief Reload the current line from the file
 	/// @param type AssFile::COMMITType
-	void OnCommit(int type);
+	void OnCommit(int type, AssDialogue const* changed);
 
 	void UpdateFields(int type, bool repopulate_lists);
 

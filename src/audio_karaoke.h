@@ -29,6 +29,7 @@ class AssKaraoke;
 class wxButton;
 namespace agi { class AudioProvider; }
 namespace agi { struct Context; }
+namespace aegisub { class SubtitleCommandSession; }
 
 /// @class AudioKaraoke
 /// @brief Syllable split and join UI for karaoke
@@ -67,6 +68,7 @@ class AudioKaraoke final : public wxWindow {
 	agi::signal::Connection audio_opened; ///< Audio opened connection
 	agi::signal::Connection audio_closed; ///< Audio closed connection
 	agi::signal::Connection active_line_changed;
+	std::shared_ptr<aegisub::SubtitleCommandSession> command_session;
 
 	/// Currently active dialogue line
 	AssDialogue *active_line = nullptr;

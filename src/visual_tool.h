@@ -23,6 +23,7 @@
 #include "gl_wrap.h"
 #include "vector2d.h"
 #include "options.h"
+#include "subtitle_command_session.h"
 
 #include <libaegisub/owning_intrusive_list.h>
 #include <libaegisub/signal.h>
@@ -47,7 +48,7 @@ namespace agi {
 /// functionality as possible is implemented here to avoid having four copies
 /// of each method for no good reason (and four times as many error messages)
 class VisualToolBase {
-	void OnCommit(int type);
+	void OnCommit(int type, AssDialogue const* changed);
 	void OnFramePresented(int new_frame);
 	void OnResolutionPolicyChanged(agi::OptionValue const&);
 	void UpdateScriptResolution();
@@ -66,7 +67,7 @@ class VisualToolBase {
 	/// Called when the script, video or screen resolutions change
 	virtual void OnCoordinateSystemsChanged() { DoRefresh(); }
 
-	/// Called when the file is changed by something other than a visual tool
+	/// Called when the file changes and the tool needs to resync from script state
 	virtual void OnFileChanged() { DoRefresh(); }
 
 	/// Called when the frame number changes
@@ -114,8 +115,8 @@ protected:
 	const agi::OptionValue *line_color_secondary_opt;
 	const agi::OptionValue *shaded_area_alpha_opt;
 
+	aegisub::SubtitleCommandSession command_session;
 	agi::signal::Connection file_changed_connection;
-	int commit_id = -1; ///< Last used commit id for coalescing
 
 	/// @brief Identify the line to pass to AssFile::Commit when a single-line edit is likely
 	virtual AssDialogue *GetCommitTargetLine() const;
@@ -123,7 +124,8 @@ protected:
 	/// @brief Commit the current file state
 	/// @param message Description of changes for undo
 	virtual void Commit(wxString message = wxString());
-	bool IsDisplayed(AssDialogue *line) const;
+	void CommitAndRefresh(wxString message = wxString());
+	bool IsDisplayed(AssDialogue const* line) const;
 
 	/// Get the line's position if it's set, or it's default based on style if not
 	Vector2D GetLinePosition(AssDialogue *diag);

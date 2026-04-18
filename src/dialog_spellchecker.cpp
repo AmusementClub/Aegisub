@@ -25,6 +25,7 @@
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "selection_controller.h"
+#include "subtitle_command_session.h"
 #include "text_selection_controller.h"
 
 #include <libaegisub/ass/dialogue_parser.h>
@@ -49,6 +50,7 @@ namespace {
 class DialogSpellChecker final : public wxDialog {
 	agi::Context *context; ///< The project context
 	std::unique_ptr<agi::SpellChecker> spellchecker; ///< The spellchecking engine
+	aegisub::SubtitleCommandSession command_session;
 
 	/// Words which the user has indicated should always be corrected
 	std::map<std::string, std::string> auto_replace;
@@ -83,7 +85,7 @@ class DialogSpellChecker final : public wxDialog {
 	/// @param start_pos Index in the line to start at
 	/// @param[in,out] commit_id Commit id for coalescing autoreplace commits
 	/// @return Was a misspelling found?
-	bool CheckLine(AssDialogue *active_line, int start_pos, int *commit_id);
+	bool CheckLine(AssDialogue *active_line, int start_pos);
 
 	/// Set the current word to be corrected
 	void SetWord(std::string const& word);
@@ -103,6 +105,7 @@ DialogSpellChecker::DialogSpellChecker(agi::Context *context)
 : wxDialog(context->GetUI().parent, -1, _("Spell Checker"))
 , context(context)
 , spellchecker(SpellCheckerFactory::GetSpellChecker())
+, command_session(context->GetCore().ass.get())
 {
 	SetIcon(GETICON(spellcheck_toolbutton_16));
 
@@ -254,9 +257,9 @@ bool DialogSpellChecker::FindNext() {
 	}
 
 	int start_pos = core.textSelectionController->GetInsertionPoint();
-	int commit_id = -1;
+	command_session.ResetCommitId();
 
-	if (CheckLine(active_line, start_pos, &commit_id))
+	if (CheckLine(active_line, start_pos))
 		return true;
 
 	auto it = core.ass->iterator_to(*active_line);
@@ -272,7 +275,7 @@ bool DialogSpellChecker::FindNext() {
 		}
 
 		active_line = &*it;
-		if (CheckLine(active_line, 0, &commit_id))
+		if (CheckLine(active_line, 0))
 			return true;
 	}
 
@@ -292,7 +295,7 @@ bool DialogSpellChecker::FindNext() {
 	return false;
 }
 
-bool DialogSpellChecker::CheckLine(AssDialogue *active_line, int start_pos, int *commit_id) {
+bool DialogSpellChecker::CheckLine(AssDialogue *active_line, int start_pos) {
 	if (active_line->Comment && OPT_GET("Tool/Spell Checker/Skip Comments")->GetBool()) return false;
 
 	std::string text = active_line->Text;
@@ -330,8 +333,9 @@ bool DialogSpellChecker::CheckLine(AssDialogue *active_line, int start_pos, int 
 		}
 
 		text.replace(word_start, word_len, auto_rep->second);
-		active_line->Text = text;
-		*commit_id = context->GetCore().ass->Commit(from_wx(_("spell check replace")), AssFile::COMMIT_DIAG_TEXT, *commit_id);
+		command_session.Run(from_wx(_("spell check replace")), AssFile::COMMIT_DIAG_TEXT, command_session.GetCommitId(), active_line, [&] {
+			active_line->Text = text;
+		});
 		word_start += auto_rep->second.size();
 	}
 	return false;
@@ -345,8 +349,10 @@ void DialogSpellChecker::Replace() {
 	if (to_wx(active_line->Text.get().substr(word_start, word_len)) == orig_word->GetValue()) {
 		std::string text = active_line->Text;
 		text.replace(word_start, word_len, from_wx(replace_word->GetValue()));
-		active_line->Text = text;
-		core.ass->Commit(from_wx(_("spell check replace")), AssFile::COMMIT_DIAG_TEXT);
+		command_session.ResetCommitId();
+		command_session.Run(from_wx(_("spell check replace")), AssFile::COMMIT_DIAG_TEXT, -1, active_line, [&] {
+			active_line->Text = text;
+		});
 		core.textSelectionController->SetInsertionPoint(word_start + replace_word->GetValue().size());
 	}
 }

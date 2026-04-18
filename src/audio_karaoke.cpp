@@ -36,6 +36,7 @@
 #include "options.h"
 #include "project.h"
 #include "selection_controller.h"
+#include "subtitle_command_session.h"
 #include "utils.h"
 
 #include <libaegisub/make_unique.h>
@@ -66,6 +67,7 @@ AudioKaraoke::AudioKaraoke(wxWindow *parent, agi::Context *c)
 , file_changed(c->GetCore().ass->AddCommitListener(&AudioKaraoke::OnFileChanged, this))
 , audio_opened(c->GetCore().project->AddAudioProviderListener(&AudioKaraoke::OnAudioOpened, this))
 , active_line_changed(c->GetCore().selectionController->AddActiveLineListener(&AudioKaraoke::OnActiveLineChanged, this))
+, command_session(std::make_shared<aegisub::SubtitleCommandSession>(c->GetCore().ass.get()))
 , kara(agi::make_unique<AssKaraoke>())
 {
 	using std::bind;
@@ -123,6 +125,9 @@ void AudioKaraoke::OnActiveLineChanged(AssDialogue *new_line) {
 }
 
 void AudioKaraoke::OnFileChanged(int type, const AssDialogue *changed) {
+	if (command_session->IsLocalCommitInProgress() && !command_session->ShouldObserveLocalCommit())
+		return;
+
 	if (enabled && (type & AssFile::COMMIT_DIAG_FULL) && (!changed || changed == active_line)) {
 		LoadFromLine();
 		split_area->Refresh(false);
@@ -143,7 +148,7 @@ void AudioKaraoke::SetEnabled(bool en) {
 	c->GetUI().audioBox->ShowKaraokeBar(enabled);
 	if (enabled) {
 		LoadFromLine();
-		core.audioController->SetTimingController(CreateKaraokeTimingController(c, kara.get(), file_changed));
+		core.audioController->SetTimingController(CreateKaraokeTimingController(c, kara.get(), command_session));
 		Refresh(false);
 	}
 	else {
@@ -430,10 +435,10 @@ void AudioKaraoke::CancelSplit() {
 }
 
 void AudioKaraoke::AcceptSplit() {
-	active_line->Text = kara->GetText();
-	file_changed.Block();
-	c->GetCore().ass->Commit(from_wx(_("karaoke split")), AssFile::COMMIT_DIAG_TEXT);
-	file_changed.Unblock();
+	command_session->Run(from_wx(_("karaoke split")), AssFile::COMMIT_DIAG_TEXT, -1, active_line, [&] {
+		active_line->Text = kara->GetText();
+	});
+	command_session->ResetCommitId();
 
 	accept_button->Enable(false);
 	cancel_button->Enable(false);

@@ -36,6 +36,7 @@
 #include "persist_location.h"
 #include "project.h"
 #include "subs_edit_ctrl.h"
+#include "subtitle_command_session.h"
 #ifdef WITH_WXSTC
 #include "subs_edit_ctrl_stc.h"
 #endif
@@ -68,6 +69,7 @@ DialogTranslation::DialogTranslation(agi::Context *c)
 , c(c)
 , file_change_connection(c->GetCore().ass->AddCommitListener(&DialogTranslation::OnExternalCommit, this))
 , active_line_connection(c->GetCore().selectionController->AddActiveLineListener(&DialogTranslation::OnActiveLineChanged, this))
+, command_session(agi::make_unique<aegisub::SubtitleCommandSession>(c->GetCore().ass.get()))
 , active_line(c->GetCore().selectionController->GetActiveLine())
 , line_count(c->GetCore().ass->Events.size())
 #ifdef WITH_WXSTC
@@ -206,13 +208,16 @@ void DialogTranslation::OnActiveLineChanged(AssDialogue *new_line) {
 	}
 }
 
-void DialogTranslation::OnExternalCommit(int commit_type) {
+void DialogTranslation::OnExternalCommit(int commit_type, AssDialogue const* changed) {
+	if (command_session->IsLocalCommitInProgress() && !command_session->ShouldObserveLocalCommit())
+		return;
+
 	if (commit_type == AssFile::COMMIT_NEW || commit_type & AssFile::COMMIT_DIAG_ADDREM) {
 		line_count = c->GetCore().ass->Events.size();
 		line_number_display->SetLabel(fmt_tl("Current line: %d/%d", active_line->Row + 1, line_count));
 	}
 
-	if (commit_type & AssFile::COMMIT_DIAG_TEXT)
+	if ((commit_type & AssFile::COMMIT_DIAG_TEXT) && (!changed || changed == active_line))
 		OnActiveLineChanged(active_line);
 }
 
@@ -319,12 +324,10 @@ void DialogTranslation::Commit(bool next) {
 	agi::util::strings::replace_all_inplace(new_value, "\r\n", "\\N");
 	agi::util::strings::replace_all_inplace(new_value, "\r", "\\N");
 	agi::util::strings::replace_all_inplace(new_value, "\n", "\\N");
-	*blocks[cur_block] = AssDialogueBlockPlain(new_value);
-	active_line->UpdateText(blocks);
-
-	file_change_connection.Block();
-	c->GetCore().ass->Commit(from_wx(_("translation assistant")), AssFile::COMMIT_DIAG_TEXT);
-	file_change_connection.Unblock();
+	command_session->Run(from_wx(_("translation assistant")), AssFile::COMMIT_DIAG_TEXT, -1, active_line, [&] {
+		*blocks[cur_block] = AssDialogueBlockPlain(new_value);
+		active_line->UpdateText(blocks);
+	});
 
 	if (next) {
 		if (!NextBlock()) {

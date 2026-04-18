@@ -29,6 +29,7 @@ class SubsStyledTextEditCtrl;
 class wxCheckBox;
 class wxStaticText;
 class wxStyledTextCtrl;
+namespace aegisub { class SubtitleCommandSession; }
 
 /// Assistant for translating subtitles in one language to another language
 class DialogTranslation final : public wxDialog {
@@ -36,6 +37,7 @@ class DialogTranslation final : public wxDialog {
 
 	agi::signal::Connection file_change_connection;
 	agi::signal::Connection active_line_connection;
+	std::unique_ptr<aegisub::SubtitleCommandSession> command_session;
 
 	/// The active line
 	AssDialogue *active_line;
@@ -64,7 +66,7 @@ class DialogTranslation final : public wxDialog {
 	void OnPlayAudioButton(wxCommandEvent &);
 	void OnPlayVideoButton(wxCommandEvent &);
 	void OnKeyDown(wxKeyEvent &evt);
-	void OnExternalCommit(int commit_type);
+	void OnExternalCommit(int commit_type, AssDialogue const* changed);
 
 	void UpdateDisplay();
 

@@ -865,6 +865,7 @@ void VideoDisplay::OnSubtitlesCommit(int type, AssDialogue const* changed) {
 	auto *project = con->project.get();
 	if (!subs || !project) {
 		scene_cache_waiting_for_subtitle_packet = true;
+		Render();
 		return;
 	}
 
@@ -876,6 +877,7 @@ void VideoDisplay::OnSubtitlesCommit(int type, AssDialogue const* changed) {
 		project->Timecodes(),
 		static_cast<int>(displayed_packet.time),
 		displayed_subtitle_scene);
+	Render();
 }
 
 void VideoDisplay::DoRender() try {

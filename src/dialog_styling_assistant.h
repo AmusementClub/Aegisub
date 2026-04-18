@@ -29,10 +29,12 @@ class wxKeyEvent;
 class wxListBox;
 class wxTextCtrl;
 namespace agi { struct Context; }
+namespace aegisub { class SubtitleCommandSession; }
 
 class DialogStyling final : public wxDialog {
 	agi::Context *c;
 	agi::signal::Connection active_line_connection;
+	std::unique_ptr<aegisub::SubtitleCommandSession> command_session;
 
 	wxButton *play_audio;
 	wxButton *play_video;

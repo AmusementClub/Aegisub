@@ -39,6 +39,7 @@
 #include "options.h"
 #include "pen.h"
 #include "selection_controller.h"
+#include "subtitle_command_session.h"
 #include "utils.h"
 
 #include <libaegisub/ass/time.h>
@@ -319,8 +320,8 @@ class AudioTimingControllerDialogue final : public AudioTimingController {
 	/// changes applied on commit
 	std::set<TimeableLine*> modified_lines;
 
-	/// Commit id for coalescing purposes when in auto commit mode
-	int commit_id =-1;
+	/// Commit state for audio timing changes
+	aegisub::SubtitleCommandSession command_session;
 
 	/// The owning project context
 	agi::Context *context;
@@ -381,7 +382,7 @@ class AudioTimingControllerDialogue final : public AudioTimingController {
 	void OnSelectedSetChanged();
 
 	// AssFile events
-	void OnFileChanged(int type);
+	void OnFileChanged(int type, AssDialogue const*);
 
 public:
 	// AudioMarkerProvider interface
@@ -419,6 +420,7 @@ AudioTimingControllerDialogue::AudioTimingControllerDialogue(agi::Context *c)
 , keyframes_provider(c, "Audio/Display/Draw/Keyframes in Dialogue Mode")
 , video_position_provider(c)
 , context(c)
+, command_session(c->GetCore().ass.get())
 , commit_connection(c->GetCore().ass->AddCommitListener(&AudioTimingControllerDialogue::OnFileChanged, this))
 , inactive_line_mode_connection(OPT_SUB("Audio/Inactive Lines Display Mode", &AudioTimingControllerDialogue::RegenerateInactiveLines, this))
 , inactive_line_comment_connection(OPT_SUB("Audio/Display/Draw/Inactive Comments", &AudioTimingControllerDialogue::RegenerateInactiveLines, this))
@@ -455,7 +457,10 @@ void AudioTimingControllerDialogue::OnSelectedSetChanged()
 	RegenerateInactiveLines();
 }
 
-void AudioTimingControllerDialogue::OnFileChanged(int type) {
+void AudioTimingControllerDialogue::OnFileChanged(int type, AssDialogue const*) {
+	if (command_session.IsLocalCommitInProgress() && !command_session.ShouldObserveLocalCommit())
+		return;
+
 	if (type & AssFile::COMMIT_DIAG_TIME)
 		Revert();
 	else if (type & AssFile::COMMIT_DIAG_ADDREM)
@@ -507,30 +512,29 @@ void AudioTimingControllerDialogue::DoCommit(bool user_triggered)
 	// Store back new times
 	if (modified_lines.size())
 	{
-		for (auto line : modified_lines)
-			line->Apply();
-
-		commit_connection.Block();
-		auto core = context->GetCore();
 		AssDialogue *amend = modified_lines.size() == 1 ? (*modified_lines.begin())->GetLine() : nullptr;
 		if (user_triggered)
 		{
-			core.ass->Commit(from_wx(_("timing")), AssFile::COMMIT_DIAG_TIME, -1, amend);
-			commit_id = -1; // never coalesce with a manually triggered commit
+			command_session.Run(from_wx(_("timing")), AssFile::COMMIT_DIAG_TIME, -1, amend, [&] {
+				for (auto line : modified_lines)
+					line->Apply();
+			});
+			command_session.ResetCommitId(); // never coalesce with a manually triggered commit
 		}
 		else
 		{
-			commit_id = core.ass->Commit(from_wx(_("timing")), AssFile::COMMIT_DIAG_TIME, commit_id, amend);
+			command_session.Run(from_wx(_("timing")), AssFile::COMMIT_DIAG_TIME, command_session.GetCommitId(), amend, [&] {
+				for (auto line : modified_lines)
+					line->Apply();
+			});
 		}
-
-		commit_connection.Unblock();
 		modified_lines.clear();
 	}
 }
 
 void AudioTimingControllerDialogue::Revert()
 {
-	commit_id = -1;
+	command_session.ResetCommitId();
 	auto core = context->GetCore();
 
 	if (AssDialogue *line = core.selectionController->GetActiveLine())

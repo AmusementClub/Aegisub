@@ -106,8 +106,7 @@ void VisualToolDrag::OnSubTool(wxCommandEvent &) {
 		}
 	}
 
-	Commit();
-	OnFileChanged();
+	CommitAndRefresh();
 	//UpdateToggleButtons();
 }
 
@@ -342,7 +341,5 @@ void VisualToolDrag::OnDoubleClick() {
 			SetOverride(line, "\\org", (org + d).PStr());
 	}
 
-	Commit(_("positioning"));
-
-	OnFileChanged();
+	CommitAndRefresh(_("positioning"));
 }

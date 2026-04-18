@@ -36,6 +36,7 @@ class AssFile;
 class AssKaraoke;
 class AudioRenderingStyleRanges;
 namespace agi { struct Context; }
+namespace aegisub { class SubtitleCommandSession; }
 
 #include "audio_marker.h"
 
@@ -186,4 +187,4 @@ std::unique_ptr<AudioTimingController> CreateDialogueTimingController(agi::Conte
 /// @brief Create a karaoke audio timing controller
 /// @param c Project context
 /// @param kara Karaoke model
-std::unique_ptr<AudioTimingController> CreateKaraokeTimingController(agi::Context *c, AssKaraoke *kara, agi::signal::Connection& file_changed);
+std::unique_ptr<AudioTimingController> CreateKaraokeTimingController(agi::Context *c, AssKaraoke *kara, std::shared_ptr<aegisub::SubtitleCommandSession> command_session);

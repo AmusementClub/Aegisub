@@ -45,6 +45,15 @@ int ceil_cs(int ms) {
 	return std::clamp(((ms + 9) / 10) * 10, 0, kAssMaxMs);
 }
 
+/// Symmetric round to centisecond grid — identical to agi::Time::operator int().
+/// Always returns the same value for the same input regardless of boundary role,
+/// eliminating the display inconsistency where Start and End show different ASS
+/// timestamps for the same internal millisecond value.
+int round_cs(int ms) {
+	ms = clamp_ass_internal_ms(ms);
+	return std::clamp((ms + 5) / 10 * 10, 0, kAssMaxMs);
+}
+
 agi::vfr::Time to_vfr_mode(AssStorageTimeBoundary boundary) {
 	return boundary == AssStorageTimeBoundary::Start ? agi::vfr::START : agi::vfr::END;
 }
@@ -71,11 +80,11 @@ int prefer_frame_safe_candidate(
 	if (!valid[0] && valid[1])
 		return candidates[1];
 
-	// If both neighboring ASS timestamps preserve the same frame, prefer the
-	// conservative boundary-specific candidate: start rounds up, end rounds down.
-	return boundary == AssStorageTimeBoundary::Start
-		? candidates[1]
-		: candidates[0];
+	// Both candidates preserve frame identity. Use symmetric rounding
+	// (same as agi::Time::operator int()) so that the same internal
+	// millisecond value always produces the same ASS timestamp regardless
+	// of whether it appears as a Start or End boundary.
+	return round_cs(original_ms);
 }
 
 int project_short_interval_to_single_ass_bucket(int start_ms, int end_ms) {
@@ -101,9 +110,9 @@ int ProjectAssTimeForStorage(int time_ms, AssStorageTimeBoundary boundary, agi::
 			return projected;
 	}
 
-	return boundary == AssStorageTimeBoundary::Start
-		? ceil_cs(time_ms)
-		: floor_cs(time_ms);
+	// No framerate available or neither candidate preserves frame identity.
+	// Use symmetric rounding for display consistency.
+	return round_cs(time_ms);
 }
 
 std::pair<int, int> ProjectAssDialogueTimesForStorage(agi::Time const& start, agi::Time const& end, agi::vfr::Framerate const* fps) {

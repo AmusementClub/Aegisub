@@ -118,6 +118,7 @@ if(GTEST_FOUND)
         tests/tests/perf_trace.cpp
         tests/tests/project_session_ops.cpp
         tests/tests/ready_flag.cpp
+        tests/tests/secondary_subtitle_strip_layout.cpp
         tests/tests/scope_exit.cpp
         tests/tests/signals.cpp
         tests/tests/split.cpp

@@ -38,6 +38,7 @@
 #include "include/aegisub/toolbar.h"
 #include "options.h"
 #include "project.h"
+#include "secondary_subtitle_strip.h"
 #include "selection_controller.h"
 #include "video_controller.h"
 #include "video_display.h"
@@ -47,6 +48,7 @@
 #include <wx/sizer.h>
 #include <wx/statline.h>
 #include <wx/textctrl.h>
+#include <wx/toplevel.h>
 #include <wx/toolbar.h>
 
 VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
@@ -73,7 +75,7 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 	auto visualToolBar = toolbar::GetToolbar(this, "visual_tools", context, "Video", true);
 	auto visualSubToolBar = new wxToolBar(this, -1, wxDefaultPosition, wxDefaultSize, wxTB_VERTICAL | wxTB_BOTTOM | wxTB_NODIVIDER | wxTB_FLAT);
 
-	auto videoDisplay = new VideoDisplay(visualSubToolBar, isDetached, zoomBox, this, context);
+	videoDisplay = new VideoDisplay(visualSubToolBar, isDetached, zoomBox, this, context);
 	videoDisplay->MoveBeforeInTabOrder(videoSlider);
 
 	auto toolbarSizer = new wxBoxSizer(wxVERTICAL);
@@ -95,9 +97,20 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 	VideoSizer->Add(new wxStaticLine(this), 0, wxEXPAND, 0);
 	VideoSizer->Add(videoSlider, 0, wxEXPAND, 0);
 	VideoSizer->Add(videoBottomSizer, 0, wxEXPAND | wxBOTTOM, 5);
+	if (!isDetached) {
+		secondarySubtitleStripSeparator = new wxStaticLine(this);
+		secondarySubtitleStrip = new SecondarySubtitleStrip(this, context);
+		VideoSizer->Add(secondarySubtitleStripSeparator, 0, wxEXPAND, 0);
+		VideoSizer->Add(secondarySubtitleStrip, 0, wxEXPAND, 0);
+		VideoSizer->Show(secondarySubtitleStripSeparator, false);
+		VideoSizer->Show(secondarySubtitleStrip, false);
+		secondarySubtitleStrip->SetSessionActive(false);
+	}
 	SetSizer(VideoSizer);
+	Bind(wxEVT_SIZE, &VideoBox::OnSize, this);
 
 	UpdateTimeBoxes();
+	UpdateSecondarySubtitleStripVisibility();
 
 	auto core = context->GetCore();
 	connections = agi::signal::make_vector({
@@ -106,7 +119,10 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 		core.project->AddTimecodesListener(&VideoBox::UpdateTimeBoxes, this),
 		core.project->AddVideoProviderListener(&VideoBox::OnVideoProviderChanged, this),
 		core.selectionController->AddSelectionListener(&VideoBox::UpdateTimeBoxes, this),
-		core.videoController->AddFramePresentedListener(&VideoBox::OnCurrentFrameChanged, this),
+		core.videoController->AddSeekListener(&VideoBox::OnCurrentFrameChanged, this),
+		core.videoController->AddPlaybackFrameAdvancedListener(&VideoBox::OnCurrentFrameChanged, this),
+		OPT_SUB("Video/Detached/Enabled", &VideoBox::OnDetachedVideoChanged, this),
+		OPT_SUB("Video/Secondary Subtitles/Enabled", &VideoBox::OnSecondarySubtitleStripEnabledChanged, this),
 	});
 }
 
@@ -159,4 +175,172 @@ void VideoBox::UpdateTimeBoxes() {
 void VideoBox::OnCurrentFrameChanged(int frame_number) {
 	current_frame = frame_number;
 	UpdateTimeBoxes();
+}
+
+void VideoBox::UpdateSecondarySubtitleStripVisibility() {
+	if (!secondarySubtitleStrip || !secondarySubtitleStripSeparator || !GetSizer())
+		return;
+
+	auto core = context->GetCore();
+	bool const show_strip =
+		static_cast<bool>(core.project->VideoProvider())
+		&& OPT_GET("Video/Secondary Subtitles/Enabled")->GetBool()
+		&& !OPT_GET("Video/Detached/Enabled")->GetBool();
+	bool const visibility_changed = secondarySubtitleStrip->IsShown() != show_strip;
+	int const preserved_video_height = videoDisplay ? videoDisplay->GetClientSize().GetHeight() : 0;
+	int const previous_min_height = GetSecondarySubtitleLayoutMinHeight();
+
+	GetSizer()->Show(secondarySubtitleStripSeparator, show_strip);
+	GetSizer()->Show(secondarySubtitleStrip, show_strip);
+	secondarySubtitleStrip->SetSessionActive(show_strip);
+	if (visibility_changed) {
+		int const new_min_height = GetSecondarySubtitleLayoutMinHeight();
+		RelayoutAfterSecondarySubtitleStripChange(
+			preserved_video_height,
+			new_min_height - previous_min_height);
+	}
+	else {
+		GetSizer()->Layout();
+		Layout();
+		UpdateSecondarySubtitleStripGutter();
+	}
+}
+
+void VideoBox::UpdateSecondarySubtitleStripGutter() {
+	if (!secondarySubtitleStrip || !videoDisplay)
+		return;
+
+	secondarySubtitleStrip->SetLeftGutterWidth(std::max(videoDisplay->GetPosition().x, 0));
+}
+
+int VideoBox::GetSecondarySubtitleLayoutMinHeight() const {
+	auto *sizer = const_cast<VideoBox *>(this)->GetSizer();
+	return sizer ? sizer->CalcMin().GetHeight() : 0;
+}
+
+void VideoBox::RelayoutAfterSecondarySubtitleStripChange(int preserved_video_height, int preferred_client_height_delta) {
+	if (!videoDisplay)
+		return;
+
+	for (wxWindow *window = this; window; window = window->GetParent())
+		window->InvalidateBestSize();
+
+	auto relayout = [this] {
+		if (GetSizer())
+			GetSizer()->Layout();
+		Layout();
+		UpdateSecondarySubtitleStripGutter();
+		if (auto *parent = GetParent())
+			parent->Layout();
+	};
+
+	auto *top = dynamic_cast<wxTopLevelWindow *>(wxGetTopLevelParent(this));
+	bool const can_resize_top = top && !top->IsMaximized() && !top->IsFullScreen();
+	auto resize_top_client = [top, can_resize_top](int delta_height) {
+		if (!can_resize_top || delta_height == 0)
+			return;
+
+		wxSize target_client_size = top->GetClientSize() + wxSize(0, delta_height);
+		target_client_size.SetHeight(std::max(target_client_size.GetHeight(), 1));
+		top->SetClientSize(target_client_size);
+		top->SendSizeEvent(0);
+	};
+
+	resize_top_client(preferred_client_height_delta);
+	relayout();
+
+	if (preserved_video_height > 0) {
+		int const video_height_delta = preserved_video_height - videoDisplay->GetClientSize().GetHeight();
+		resize_top_client(video_height_delta);
+	}
+	relayout();
+
+	Refresh();
+	Update();
+	if (auto *parent = GetParent()) {
+		parent->Refresh();
+		parent->Update();
+	}
+}
+
+void VideoBox::OnVideoProviderChanged() {
+	ApplyVideoProvider();
+	UpdateSecondarySubtitleStripVisibility();
+}
+
+void VideoBox::OnDetachedVideoChanged(agi::OptionValue const&) {
+	UpdateSecondarySubtitleStripVisibility();
+}
+
+void VideoBox::OnSecondarySubtitleStripEnabledChanged(agi::OptionValue const&) {
+	UpdateSecondarySubtitleStripVisibility();
+}
+
+void VideoBox::OnSecondarySubtitleStripHeightChanged(int previous_height, int new_height) {
+	if (!secondarySubtitleStrip || !secondarySubtitleStrip->IsShown() || !videoDisplay)
+		return;
+
+	if (previous_height == new_height)
+		return;
+
+	if (secondarySubtitleStripHeightDragActive) {
+		PreviewSecondarySubtitleStripHeightChange();
+		return;
+	}
+
+	int const preserved_video_height = videoDisplay->GetClientSize().GetHeight();
+	RelayoutAfterSecondarySubtitleStripChange(preserved_video_height, new_height - previous_height);
+}
+
+void VideoBox::BeginSecondarySubtitleStripHeightDrag() {
+	if (secondarySubtitleStripHeightDragActive)
+		return;
+
+	secondarySubtitleStripHeightDragActive = true;
+	secondarySubtitleStripHeightDragPreservedVideoHeight =
+		videoDisplay ? videoDisplay->GetClientSize().GetHeight() : 0;
+}
+
+void VideoBox::PreviewSecondarySubtitleStripHeightChange() {
+	for (wxWindow *window = this; window; window = window->GetParent())
+		window->InvalidateBestSize();
+
+	if (GetSizer())
+		GetSizer()->Layout();
+	Layout();
+	UpdateSecondarySubtitleStripGutter();
+	if (auto *parent = GetParent()) {
+		parent->Layout();
+	}
+	if (secondarySubtitleStripSeparator && secondarySubtitleStripSeparator->IsShown())
+		secondarySubtitleStripSeparator->Refresh(false);
+	if (secondarySubtitleStrip) {
+		secondarySubtitleStrip->Refresh(false);
+		secondarySubtitleStrip->Update();
+	}
+	if (videoDisplay) {
+		videoDisplay->Refresh(false);
+		videoDisplay->Update();
+	}
+}
+
+void VideoBox::CommitSecondarySubtitleStripHeightDrag() {
+	if (!secondarySubtitleStripHeightDragActive)
+		return;
+
+	secondarySubtitleStripHeightDragActive = false;
+	RelayoutAfterSecondarySubtitleStripChange(
+		secondarySubtitleStripHeightDragPreservedVideoHeight,
+		0);
+	secondarySubtitleStripHeightDragPreservedVideoHeight = 0;
+}
+void VideoBox::OnSize(wxSizeEvent &event) {
+	event.Skip();
+	if (!secondarySubtitleStrip)
+		return;
+
+	CallAfter([this] {
+		if (secondarySubtitleStrip)
+			UpdateSecondarySubtitleStripGutter();
+	});
 }

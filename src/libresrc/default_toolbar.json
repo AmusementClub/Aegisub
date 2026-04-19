@@ -68,7 +68,8 @@
         "video/play",
         "video/play/line",
         "video/stop",
-        "video/opt/autoscroll"
+        "video/opt/autoscroll",
+        "video/secondary_subtitles/toggle"
     ],
     "visual_tools" : [
         "video/tool/cross",

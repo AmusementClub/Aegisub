@@ -74,6 +74,7 @@ namespace agi { class BackgroundRunner; }
 struct SubtitleRenderEnvironment {
 	agi::BackgroundRunner *background_runner = nullptr;
 	std::shared_ptr<const TransientFontSet> transient_fonts;
+	std::string preferred_provider;
 };
 
 struct SubtitlesProviderFactory {

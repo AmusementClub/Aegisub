@@ -33,7 +33,11 @@
 #include <wx/panel.h>
 
 namespace agi { struct Context; }
+namespace agi { class OptionValue; }
+class SecondarySubtitleStrip;
+class VideoDisplay;
 class wxTextCtrl;
+class wxStaticLine;
 
 /// @class VideoBox
 /// @brief The box containing the video display and associated controls
@@ -42,15 +46,31 @@ class VideoBox final : public wxPanel {
 	agi::Context *context;     ///< Project context
 	wxTextCtrl *VideoPosition; ///< Current frame/time
 	wxTextCtrl *VideoSubsPos;  ///< Time relative to the active subtitle line
+	SecondarySubtitleStrip *secondarySubtitleStrip = nullptr;
+	wxStaticLine *secondarySubtitleStripSeparator = nullptr;
+	VideoDisplay *videoDisplay = nullptr;
 	int current_frame = -1;
+	bool secondarySubtitleStripHeightDragActive = false;
+	int secondarySubtitleStripHeightDragPreservedVideoHeight = 0;
 
 	/// Update VideoPosition and VideoSubsPos
 	void UpdateTimeBoxes();
 	void ApplyVideoProvider();
+	void UpdateSecondarySubtitleStripGutter();
+	void UpdateSecondarySubtitleStripVisibility();
+	int GetSecondarySubtitleLayoutMinHeight() const;
+	void RelayoutAfterSecondarySubtitleStripChange(int preserved_video_height, int preferred_client_height_delta);
 	void OnCurrentFrameChanged(int frame_number);
 	void OnVideoProviderChanged();
+	void OnDetachedVideoChanged(agi::OptionValue const&);
+	void OnSecondarySubtitleStripEnabledChanged(agi::OptionValue const&);
+	void OnSize(wxSizeEvent &event);
 
 public:
 	VideoBox(wxWindow *parent, bool isDetached, agi::Context *context);
 	void SyncToContextState();
+	void OnSecondarySubtitleStripHeightChanged(int previous_height, int new_height);
+	void BeginSecondarySubtitleStripHeightDrag();
+	void PreviewSecondarySubtitleStripHeightChange();
+	void CommitSecondarySubtitleStripHeightDrag();
 };

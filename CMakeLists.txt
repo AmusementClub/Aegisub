@@ -653,6 +653,8 @@ add_executable(Aegisub WIN32
     src/project.cpp
     src/resolution_resampler.cpp
     src/search_replace_engine.cpp
+    src/secondary_subtitle_session.cpp
+    src/secondary_subtitle_strip.cpp
     src/selection_controller.cpp
     src/spellchecker.cpp
     src/spline.cpp

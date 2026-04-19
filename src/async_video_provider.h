@@ -230,5 +230,9 @@ public:
 	void SetSubtitlesTimecodes(agi::vfr::Framerate timecodes);
 };
 
+/// Create a CPU-readable BGRA frame suitable for UI rendering, compositing any
+/// premultiplied subtitle overlay contained in the packet.
+std::shared_ptr<VideoFrame> BakePacketForCpuReadback(VideoRenderPacket const& packet);
+
 DEFINE_EXCEPTION(AsyncVideoProviderVideoError, agi::Exception);
 DEFINE_EXCEPTION(AsyncVideoProviderSubtitlesError, agi::Exception);

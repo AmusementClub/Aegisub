@@ -98,6 +98,14 @@ struct validator_video_attached : public Command {
 	}
 };
 
+struct validator_secondary_subtitle_strip_enabled : public validator_video_loaded {
+	CMD_TYPE(COMMAND_VALIDATE)
+	bool Validate(const agi::Context *c) override {
+		return validator_video_loaded::Validate(c)
+			&& OPT_GET("Video/Secondary Subtitles/Enabled")->GetBool();
+	}
+};
+
 struct video_aspect_cinematic final : public validator_video_loaded {
 	CMD_NAME("video/aspect/cinematic")
 	STR_MENU("&Cinematic (2.35)")
@@ -694,14 +702,21 @@ struct video_opt_scale_with_dpi final : public Command {
 	}
 };
 
-struct video_reset_pan final : public validator_video_loaded {
-	CMD_NAME("video/reset_pan")
-	STR_MENU("Reset Video &Pan")
-	STR_DISP("Reset Video Pan")
-	STR_HELP("Reset the video's position in the video display")
+struct video_secondary_subtitles_toggle final : public validator_video_loaded {
+	CMD_NAME("video/secondary_subtitles/toggle")
+	CMD_ICON(show_video_details_menu)
+	STR_MENU("Show Secondary Subtitle Strip")
+	STR_DISP("Toggle Secondary Subtitle Strip")
+	STR_HELP("Show or hide the secondary subtitle strip below the main video")
+	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
 
-	void operator()(agi::Context *c) override {
-		c->GetUI().videoDisplay->ResetContentZoom();
+	bool IsActive(const agi::Context *) override {
+		return OPT_GET("Video/Secondary Subtitles/Enabled")->GetBool();
+	}
+
+	void operator()(agi::Context *) override {
+		auto enabled = OPT_GET("Video/Secondary Subtitles/Enabled")->GetBool();
+		OPT_SET("Video/Secondary Subtitles/Enabled")->SetBool(!enabled);
 	}
 };
 
@@ -880,7 +895,7 @@ namespace cmd {
 		reg(agi::make_unique<video_opt_scale_with_dpi>());
 		reg(agi::make_unique<video_play>());
 		reg(agi::make_unique<video_play_line>());
-		reg(agi::make_unique<video_reset_pan>());
+		reg(agi::make_unique<video_secondary_subtitles_toggle>());
 		reg(agi::make_unique<video_show_overscan>());
 		reg(agi::make_unique<video_stop>());
 		reg(agi::make_unique<video_zoom_100>());

@@ -40,9 +40,8 @@ namespace {
 		bool hidden;
 	};
 
-	std::vector<factory> const& factories() {
-		static std::vector<factory> factories;
-		if (factories.size()) return factories;
+	std::vector<factory> factories() {
+		std::vector<factory> factories;
 #ifdef WITH_CSRI
 		for (auto const& subtype : csri::List())
 			factories.push_back(factory{"CSRI/" + subtype, subtype, csri::Create, false});
@@ -53,12 +52,16 @@ namespace {
 }
 
 std::vector<std::string> SubtitlesProviderFactory::GetClasses() {
-	return ::GetClasses(factories());
+	auto available_factories = factories();
+	return ::GetClasses(available_factories);
 }
 
 std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(SubtitleRenderEnvironment const& env) {
-	auto preferred = OPT_GET("Subtitle/Provider")->GetString();
-	auto sorted = GetSorted(factories(), preferred);
+	auto preferred = env.preferred_provider.empty()
+		? OPT_GET("Subtitle/Provider")->GetString()
+		: env.preferred_provider;
+	auto available_factories = factories();
+	auto sorted = GetSorted(available_factories, preferred);
 	LOG_I(kSubtitleProviderSelectLogTag) << "Selecting subtitles provider"
 		<< (preferred.empty() ? "" : ": preferred=" + preferred);
 

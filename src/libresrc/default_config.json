@@ -273,6 +273,9 @@
 				"Tags" : "rgb(90, 90, 90)"
 			}
 		},
+		"Secondary Subtitle Strip" : {
+			"Dummy Background" : "rgb(0, 0, 0)"
+		},
 		"Video Dummy" : {
 			"Last Colour" : "rgb(47, 163, 254)"
 		},
@@ -641,6 +644,19 @@
 		"Provider" : "ffmpegsource",
 		"Renderer" : {
 			"Backend" : "opengl"
+		},
+		"Secondary Subtitles" : {
+			"Dummy" : {
+				"Pattern" : false
+			},
+			"Enabled" : false,
+			"External Path" : "",
+			"Height" : 96,
+			"Provider" : "",
+			"Show Vertical Ruler" : false,
+			"Scroll Offset Y" : 0,
+			"Source Mode" : 0,
+			"Visible Source Height" : 180
 		},
 		"Script Resolution Mismatch" : 1,
 		"Slider" : {

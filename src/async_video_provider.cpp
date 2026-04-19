@@ -102,7 +102,7 @@ std::shared_ptr<T> acquire_buffer(std::vector<std::shared_ptr<T>>& buffers) {
 	return buffer;
 }
 
-std::shared_ptr<VideoFrame> BakePacketForCpuReadback(VideoRenderPacket const& packet) {
+std::shared_ptr<VideoFrame> BakePacketForCpuReadbackImpl(VideoRenderPacket const& packet) {
 	auto display_frame = packet.DisplayFrame();
 	if (!display_frame)
 		return nullptr;
@@ -315,6 +315,10 @@ bool MatchesKeyPointBoundsWithinTolerance(
 
 }
 
+std::shared_ptr<VideoFrame> BakePacketForCpuReadback(VideoRenderPacket const& packet) {
+	return BakePacketForCpuReadbackImpl(packet);
+}
+
 void AsyncVideoProvider::ResetCachedSourceFrame() noexcept {
 	cached_source_frame_number = -1;
 	cached_source_mode = SourceFrameOutputMode::Bgra8;
@@ -392,7 +396,21 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 
 	std::shared_ptr<VideoFrame> frame;
 	bool native_frame_needs_display_transform_fallback = false;
-	if (CanReuseCachedSourceFrame(frame_number, raw, force_bgra_frame)) {
+	bool const can_reuse_cached_source = CanReuseCachedSourceFrame(frame_number, raw, force_bgra_frame);
+	bool used_cached_source_template_for_compatibility = false;
+	if (can_reuse_cached_source && render_mode == SubtitleRenderMode::CompatibilityFrameOnly) {
+		// Compatibility subtitle renderers draw directly into BGRA frames.
+		// Keep a cached subtitle-free source frame and copy it into a fresh
+		// buffer when subtitles change, rather than re-requesting the video.
+		frame = acquire_buffer(source_buffers);
+		if (cached_source_frame_storage)
+			*frame = *cached_source_frame_storage;
+		packet.source_frame_storage = frame;
+		packet.source_frame_owner = frame;
+		packet.source_frame = MakeSourceFrameView(*frame, cached_source_frame);
+		used_cached_source_template_for_compatibility = true;
+	}
+	else if (can_reuse_cached_source) {
 		ReuseCachedSourceFrame(packet, frame);
 	}
 	else if (selected_source_mode == SourceFrameOutputMode::Native && !force_bgra_frame) {
@@ -436,8 +454,24 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
 	}
 
-	if (!raw && subs_provider && subs)
-		UpdateCachedSourceFrame(frame_number, force_bgra_frame, packet);
+	if (!raw && subs_provider && subs) {
+		if (render_mode == SubtitleRenderMode::CompatibilityFrameOnly) {
+			// Cache the subtitle-free video pixels for immediate subtitle-only rerenders.
+			if (!used_cached_source_template_for_compatibility && frame) {
+				if (!cached_source_frame_storage)
+					cached_source_frame_storage = std::make_shared<VideoFrame>();
+				*cached_source_frame_storage = *frame;
+				cached_source_frame_owner = cached_source_frame_storage;
+				cached_source_frame_number = frame_number;
+				cached_source_mode = selected_source_mode;
+				cached_source_force_bgra = force_bgra_frame;
+				cached_source_frame = MakeSourceFrameView(*cached_source_frame_storage, packet.source_frame);
+			}
+		}
+		else {
+			UpdateCachedSourceFrame(frame_number, force_bgra_frame, packet);
+		}
+	}
 
 	if (raw || !subs_provider || !subs) {
 		packet.composited_frame_storage = frame;
@@ -650,7 +684,15 @@ void AsyncVideoProvider::UpdateSubtitles(const AssFile *new_subs, const AssDialo
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		if (changed) {
-			if (pending_subs) {
+			// UpdateSubtitles only supports in-place changes to existing lines.
+			// If we can't reliably identify the target line, fall back to a
+			// full reload.
+			int const row = static_cast<AssDialogueBase const&>(*changed).Row;
+			if (row < 0 || row >= static_cast<int>(new_subs->Events.size())) {
+				pending_subs = agi::make_unique<AssFile>(*new_subs);
+				pending_changed_line.reset();
+			}
+			else if (pending_subs) {
 				pending_subs = agi::make_unique<AssFile>(*new_subs);
 				pending_changed_line.reset();
 			}
@@ -1103,9 +1145,11 @@ VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bo
 		auto const render_begin = std::chrono::steady_clock::now();
 		while (ProcessPending()) { }
 		ret = ProcRenderPacket(frame, time, raw);
-		auto const render_duration_ms =
-			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - render_begin).count();
-		perf_trace::ObserveVideoFrameRenderDuration(frame, time, true, true, render_duration_ms);
+	auto const render_duration_ms =
+		std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - render_begin).count();
+	perf_trace::ObserveVideoFrameRenderDuration(frame, time, true, true, render_duration_ms);
+	if (ret.has_subtitle_overlay && ret.subtitle_overlay.IsValid() && !ret.composited_frame_storage)
+		ret.composited_frame_storage = BakePacketForCpuReadback(ret);
 		// Synchronous frame requests are used for frame stepping, so keep the
 		// provider's current-frame context aligned with what was just rendered.
 		frame_number = frame;

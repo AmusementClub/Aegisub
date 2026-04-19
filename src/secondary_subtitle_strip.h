@@ -8,6 +8,7 @@
 
 #include "secondary_subtitle_strip_layout.h"
 
+#include <libaegisub/fs_fwd.h>
 #include <libaegisub/signal.h>
 
 #include <memory>
@@ -81,6 +82,7 @@ class SecondarySubtitleStrip final : public wxPanel {
 public:
 	SecondarySubtitleStrip(wxWindow *parent, agi::Context *context);
 
+	bool OpenExternalSubtitlesFromPath(agi::fs::path const& path, bool show_errors = true);
 	void SetSessionActive(bool active);
 	void SetLeftGutterWidth(int width);
 };

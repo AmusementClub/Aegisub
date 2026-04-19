@@ -233,6 +233,7 @@ void SubsController::Save(agi::fs::path const& filename, std::string const& enco
 		throw agi::InvalidInputException("Unknown file type.");
 
 	auto old_filename = this->filename;
+	auto old_properties = context->GetCore().ass->Properties;
 	int old_autosaved_commit_id = autosaved_commit_id, old_saved_commit_id = saved_commit_id;
 	auto core = context->GetCore();
 	try {
@@ -242,6 +243,7 @@ void SubsController::Save(agi::fs::path const& filename, std::string const& enco
 		// relative to the script in the header
 		this->filename = filename;
 		core.path->SetToken("?script", filename.parent_path());
+		UpdateProperties();
 
 		const AssFile *save_source = core.ass.get();
 		std::unique_ptr<AssFile> save_copy;
@@ -257,6 +259,7 @@ void SubsController::Save(agi::fs::path const& filename, std::string const& enco
 	catch (...) {
 		this->filename = old_filename;
 		core.path->SetToken("?script", old_filename.parent_path());
+		core.ass->Properties = std::move(old_properties);
 		autosaved_commit_id = old_autosaved_commit_id;
 		saved_commit_id = old_saved_commit_id;
 		throw;

@@ -22,12 +22,14 @@
 #include "video_controller.h"
 #include "video_frame.h"
 #include "video_provider_dummy.h"
+#include "watched_file.h"
 
 #include <libaegisub/color.h>
 #include <libaegisub/background_runner.h>
 #include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/path.h>
 
 #include <exception>
 #include <wx/bitmap.h>
@@ -39,7 +41,8 @@ constexpr char const *kSecondarySubtitleWarningTitle = "Secondary subtitles";
 }
 
 SecondarySubtitleSession::SecondarySubtitleSession(agi::Context *context)
-: context(context) {
+: context(context)
+, external_subtitle_watch(agi::make_unique<WatchedFile>()) {
 	auto core = context->GetCore();
 	auto ui = context->GetUI();
 	ui_activation.AddConnections(
@@ -47,14 +50,23 @@ SecondarySubtitleSession::SecondarySubtitleSession(agi::Context *context)
 		core.project->AddTimecodesListener(&SecondarySubtitleSession::OnTimecodesChanged, this),
 		core.ass->AddCommitListener(&SecondarySubtitleSession::OnAssCommit, this),
 		core.subsController->AddFileOpenListener(&SecondarySubtitleSession::OnMainSubtitlesFileChanged, this),
+		core.subsController->AddUpdatePropertiesListener(&SecondarySubtitleSession::OnUpdateProperties, this),
+		core.videoController->AddFramePresentedListener(&SecondarySubtitleSession::OnPrimaryFramePresented, this),
 		OPT_SUB("Colour/Secondary Subtitle Strip/Dummy Background", &SecondarySubtitleSession::OnDummyBackgroundColorChanged, this),
 		OPT_SUB("Video/Secondary Subtitles/Dummy/Pattern", &SecondarySubtitleSession::OnDummyBackgroundPatternChanged, this),
 		OPT_SUB("Video/Secondary Subtitles/Provider", &SecondarySubtitleSession::OnConfiguredProviderChanged, this),
-		OPT_SUB("Subtitle/Provider", &SecondarySubtitleSession::OnGlobalProviderChanged, this),
-		ui.AddVideoFramePresentedListener(&SecondarySubtitleSession::OnPrimaryFramePresented, this));
+		OPT_SUB("Subtitle/Provider", &SecondarySubtitleSession::OnGlobalProviderChanged, this));
+	external_subtitle_watch->SetChangedCallback([this](agi::fs::path const& path) {
+		OnExternalSubtitleFileChanged(path);
+	});
+	external_subtitle_watch->SetErrorCallback([this](std::string const& message) {
+		OnExternalSubtitleWatchError(message);
+	});
+	RestoreSourceFromProjectProperties();
 }
 
 SecondarySubtitleSession::~SecondarySubtitleSession() {
+	external_subtitle_watch.reset();
 	ui_activation.Deactivate();
 	ReleaseProvider();
 }
@@ -112,16 +124,43 @@ void SecondarySubtitleSession::OnGlobalProviderChanged(agi::OptionValue const&) 
 }
 
 void SecondarySubtitleSession::OnMainSubtitlesFileChanged(agi::fs::path const&) {
-	bool const had_external_source = source_mode == SecondarySubtitleSourceMode::ExternalFile;
-	if (!had_external_source && external_subtitle_path.empty() && !external_subtitles)
-		return;
+	RestoreSourceFromProjectProperties();
 
+	if (active)
+		RebuildProvider(context->GetCore().project->VideoProvider());
+}
+
+void SecondarySubtitleSession::OnUpdateProperties() {
+	SyncExternalSubtitleProjectProperty();
+}
+
+void SecondarySubtitleSession::RestoreSourceFromProjectProperties() {
+	auto core = context->GetCore();
 	source_mode = SecondarySubtitleSourceMode::CurrentScript;
 	external_subtitle_path.clear();
 	ClearExternalSubtitles();
 
-	if (active)
-		RebuildProvider(context->GetCore().project->VideoProvider());
+	auto const& stored_path = core.ass->Properties.secondary_subtitles_file;
+	if (stored_path.empty()) {
+		UpdateExternalSubtitleWatch();
+		return;
+	}
+
+	source_mode = SecondarySubtitleSourceMode::ExternalFile;
+	external_subtitle_path = agi::fs::PathToString(core.path->MakeAbsolute(stored_path, "?script"));
+	UpdateExternalSubtitleWatch();
+}
+
+void SecondarySubtitleSession::SyncExternalSubtitleProjectProperty() {
+	auto core = context->GetCore();
+	if (source_mode != SecondarySubtitleSourceMode::ExternalFile || external_subtitle_path.empty()) {
+		core.ass->Properties.secondary_subtitles_file.clear();
+		return;
+	}
+
+	auto absolute_path = agi::fs::PathFromString(external_subtitle_path);
+	core.ass->Properties.secondary_subtitles_file =
+		agi::fs::PathToGenericString(core.path->MakeRelative(absolute_path, "?script"));
 }
 
 void SecondarySubtitleSession::RequestFrame(int frame_number) {
@@ -131,6 +170,18 @@ void SecondarySubtitleSession::RequestFrame(int frame_number) {
 	current_frame = frame_number;
 	auto core = context->GetCore();
 	provider->RequestFrame(frame_number, core.project->Timecodes().TimeAtFrame(frame_number));
+}
+
+void SecondarySubtitleSession::UpdateExternalSubtitleWatch() {
+	if (!external_subtitle_watch)
+		return;
+
+	if (!active || source_mode != SecondarySubtitleSourceMode::ExternalFile || external_subtitle_path.empty()) {
+		external_subtitle_watch->ClearTargetPath();
+		return;
+	}
+
+	external_subtitle_watch->SetTargetPath(agi::fs::PathFromString(external_subtitle_path));
 }
 
 AssFile *SecondarySubtitleSession::ResolveSubtitlesForProvider(AsyncVideoProvider *main_provider) {
@@ -205,17 +256,14 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 		return false;
 	}
 	catch (agi::Exception const& err) {
-		ClearExternalSubtitles();
 		if (show_errors)
 			context->ShowError(err.GetMessage(), kSecondarySubtitleWarningTitle);
 	}
 	catch (std::exception const& err) {
-		ClearExternalSubtitles();
 		if (show_errors)
 			context->ShowError(err.what(), kSecondarySubtitleWarningTitle);
 	}
 	catch (...) {
-		ClearExternalSubtitles();
 		if (show_errors)
 			context->ShowError("Unknown error while loading secondary subtitles.", kSecondarySubtitleWarningTitle);
 	}
@@ -319,6 +367,11 @@ void SecondarySubtitleSession::OnAssCommit(int, AssDialogue const* changed) {
 		provider->UpdateSubtitles(core.ass.get(), changed);
 	else
 		provider->LoadSubtitles(core.ass.get());
+
+	// Without a new primary frame presented, the secondary strip would not be
+	// re-rendered. Request the current frame so edits are visible immediately.
+	if (active)
+		RequestFrame(core.videoController->GetFrameN());
 }
 
 void SecondarySubtitleSession::OnPrimaryFramePresented(int frame_number) {
@@ -367,6 +420,25 @@ bool SecondarySubtitleSession::OpenExternalSubtitles() {
 
 	source_mode = SecondarySubtitleSourceMode::ExternalFile;
 	external_subtitle_path = path_string;
+	SyncExternalSubtitleProjectProperty();
+	UpdateExternalSubtitleWatch();
+	if (active)
+		RebuildProvider(context->GetCore().project->VideoProvider());
+	return true;
+}
+
+bool SecondarySubtitleSession::OpenExternalSubtitlesFromPath(agi::fs::path const& path, bool show_errors) {
+	if (path.empty())
+		return false;
+
+	auto const path_string = agi::fs::PathToString(path);
+	if (!LoadExternalSubtitlesFromPath(path_string, show_errors))
+		return false;
+
+	source_mode = SecondarySubtitleSourceMode::ExternalFile;
+	external_subtitle_path = path_string;
+	SyncExternalSubtitleProjectProperty();
+	UpdateExternalSubtitleWatch();
 	if (active)
 		RebuildProvider(context->GetCore().project->VideoProvider());
 	return true;
@@ -408,12 +480,14 @@ void SecondarySubtitleSession::SetActive(bool value) {
 
 	active = value;
 	if (!active) {
+		UpdateExternalSubtitleWatch();
 		ReleaseProvider();
 		ClearBitmap();
 		return;
 	}
 
 	auto core = context->GetCore();
+	UpdateExternalSubtitleWatch();
 	if (!provider && core.project->VideoProvider())
 		RebuildProvider(core.project->VideoProvider());
 	else if (provider)
@@ -433,6 +507,30 @@ void SecondarySubtitleSession::UseIndependentSubtitlesProvider(std::string const
 
 void SecondarySubtitleSession::UseCurrentScriptSource() {
 	source_mode = SecondarySubtitleSourceMode::CurrentScript;
+	external_subtitle_path.clear();
+	ClearExternalSubtitles();
+	SyncExternalSubtitleProjectProperty();
+	UpdateExternalSubtitleWatch();
 	if (active)
 		RebuildProvider(context->GetCore().project->VideoProvider());
+}
+
+void SecondarySubtitleSession::OnExternalSubtitleFileChanged(agi::fs::path const&) {
+	if (!active || source_mode != SecondarySubtitleSourceMode::ExternalFile || external_subtitle_path.empty())
+		return;
+
+	if (!LoadConfiguredExternalSubtitles(false, true))
+		return;
+
+	if (provider) {
+		SyncConfiguredSubtitlesSource(context->GetCore().project->VideoProvider());
+		RequestFrame(context->GetCore().videoController->GetFrameN());
+	}
+	else if (active) {
+		RebuildProvider(context->GetCore().project->VideoProvider());
+	}
+}
+
+void SecondarySubtitleSession::OnExternalSubtitleWatchError(std::string const& message) {
+	wxLogWarning(wxS("Secondary subtitle watcher error: %s"), to_wx(message));
 }

@@ -897,6 +897,10 @@ void SecondarySubtitleStrip::OnMouseCaptureLost(wxMouseCaptureLostEvent &) {
 	FinishMouseInteractions();
 }
 
+bool SecondarySubtitleStrip::OpenExternalSubtitlesFromPath(agi::fs::path const& path, bool show_errors) {
+	return session && session->OpenExternalSubtitlesFromPath(path, show_errors);
+}
+
 void SecondarySubtitleStrip::SetSessionActive(bool active) {
 	if (!active) {
 		if (resize_dragging) {

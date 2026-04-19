@@ -699,6 +699,7 @@ add_executable(Aegisub WIN32
     src/video_provider_yuv4mpeg.cpp
     src/video_slider.cpp
     src/visual_feature.cpp
+    src/watched_file.cpp
 )
 set_source_files_properties(src/native_library.cpp PROPERTIES
     SKIP_PRECOMPILE_HEADERS ON

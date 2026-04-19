@@ -20,6 +20,7 @@ if(GTEST_FOUND)
         tests/tests/aegisublocale_compat.cpp
         tests/tests/ass_dialogue.cpp
         tests/tests/ass_file_extradata.cpp
+        tests/tests/ass_project_garbage.cpp
         tests/tests/audio.cpp
         tests/tests/avisynth_legacy_path.cpp
         tests/tests/avisynth_runtime_policy.cpp
@@ -40,6 +41,7 @@ if(GTEST_FOUND)
         src/audio_spectrum_analysis_cache.cpp
         src/audio_waveform_summary_cache.cpp
         src/ass_attachment.cpp
+        src/ass_parser.cpp
         src/ass_dialogue.cpp
         src/ass_time_projection.cpp
         src/ass_entry.cpp
@@ -63,11 +65,13 @@ if(GTEST_FOUND)
         src/perf_trace.cpp
         src/resolution_resampler.cpp
         src/text_file_writer.cpp
+        src/string_codec.cpp
         src/time_display_mode.cpp
         src/threaded_ui_timer.cpp
         src/ui_timer.cpp
         src/utils.cpp
         src/ui_services.cpp
+        src/watched_file.cpp
         src/project_session_ops.cpp
         src/subtitle_edit_ops.cpp
         src/subtitle_editor_ops.cpp
@@ -138,6 +142,7 @@ if(GTEST_FOUND)
         tests/tests/track_choice.cpp
         tests/tests/type_name.cpp
         tests/tests/ui_dispatch.cpp
+        tests/tests/watched_file.cpp
         tests/tests/ui_timer.cpp
         tests/tests/ui_services.cpp
         tests/tests/util.cpp

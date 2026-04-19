@@ -138,6 +138,10 @@ void VideoBox::ApplyVideoProvider() {
 	UpdateTimeBoxes();
 }
 
+bool VideoBox::OpenSecondarySubtitlesFromPath(agi::fs::path const& path, bool show_errors) {
+	return secondarySubtitleStrip && secondarySubtitleStrip->OpenExternalSubtitlesFromPath(path, show_errors);
+}
+
 void VideoBox::UpdateTimeBoxes() {
 	auto core = context->GetCore();
 	if (!core.project->VideoProvider()) return;

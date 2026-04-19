@@ -18,6 +18,7 @@
 class AssDialogue;
 class AssFile;
 class AsyncVideoProvider;
+class WatchedFile;
 struct VideoRenderPacket;
 namespace agi {
 	struct Context;
@@ -39,10 +40,12 @@ class SecondarySubtitleSession final {
 	std::unique_ptr<agi::BackgroundRunner> background_runner;
 	std::unique_ptr<AsyncVideoProvider> provider;
 	std::unique_ptr<AssFile> external_subtitles;
+	std::unique_ptr<WatchedFile> external_subtitle_watch;
 	SecondarySubtitleSourceMode source_mode = SecondarySubtitleSourceMode::CurrentScript;
 	std::string external_subtitle_path;
 	std::string loaded_external_subtitle_path;
 	bool external_subtitles_follow_video_resolution = false;
+
 	wxBitmap current_bitmap;
 	bool has_bitmap = false;
 	bool active = false;
@@ -58,6 +61,10 @@ class SecondarySubtitleSession final {
 	void OnConfiguredProviderChanged(agi::OptionValue const& opt);
 	void OnGlobalProviderChanged(agi::OptionValue const& opt);
 	void OnMainSubtitlesFileChanged(agi::fs::path const& filename);
+	void OnUpdateProperties();
+	void RestoreSourceFromProjectProperties();
+	void SyncExternalSubtitleProjectProperty();
+	void UpdateExternalSubtitleWatch();
 	AssFile *ResolveSubtitlesForProvider(AsyncVideoProvider *main_provider);
 	void RebuildProvider(AsyncVideoProvider *main_provider);
 	void RequestFrame(int frame_number);
@@ -73,12 +80,15 @@ class SecondarySubtitleSession final {
 	void OnFrameReady(VideoRenderPacket packet, double time);
 	void OnVideoError(std::string const& message);
 	void OnSubtitlesError(std::string const& message);
+	void OnExternalSubtitleFileChanged(agi::fs::path const& path);
+	void OnExternalSubtitleWatchError(std::string const& message);
 
 public:
 	explicit SecondarySubtitleSession(agi::Context *context);
 	~SecondarySubtitleSession();
 
 	bool OpenExternalSubtitles();
+	bool OpenExternalSubtitlesFromPath(agi::fs::path const& path, bool show_errors = true);
 	bool ReloadSubtitles();
 	bool IsFollowingGlobalSubtitlesProvider() const;
 	std::string GetConfiguredSubtitlesProvider() const;

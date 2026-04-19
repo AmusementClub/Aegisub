@@ -67,6 +67,7 @@
 #include "wx_frame_main_runtime_host.h"
 
 #include <libaegisub/dispatch.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 
@@ -242,8 +243,77 @@ FrameMain::FrameMain()
 
 	StartupLog("Set up drag/drop target");
 	SetDropTarget(agi::MakeFrameMainFileDropTarget(
-		[context = context.get()](std::vector<agi::fs::path> const& files) {
-			context->GetCore().project->LoadList(files);
+		[this](std::vector<agi::fs::path> const& files) {
+			auto *ctx = context.get();
+			if (!ctx)
+				return;
+
+			auto core = ctx->GetCore();
+			if (!OPT_GET("Video/Secondary Subtitles/Enabled")->GetBool()) {
+				core.project->LoadList(files);
+				return;
+			}
+
+			auto is_subtitle_drop_file = [](agi::fs::path const& path) {
+				// Match the subtitle list in Project::LoadList. Avoid container
+				// formats like mkv which can be both video and subtitles.
+				return agi::fs::HasExtension(path, "ass")
+					|| agi::fs::HasExtension(path, "ssa")
+					|| agi::fs::HasExtension(path, "srt")
+					|| agi::fs::HasExtension(path, "sub")
+					|| agi::fs::HasExtension(path, "ttxt");
+			};
+
+			std::vector<agi::fs::path> subtitle_files;
+			std::vector<agi::fs::path> other_files;
+			subtitle_files.reserve(files.size());
+			other_files.reserve(files.size());
+			for (auto const& file : files) {
+				if (is_subtitle_drop_file(file))
+					subtitle_files.push_back(file);
+				else
+					other_files.push_back(file);
+			}
+
+			if (subtitle_files.empty()) {
+				core.project->LoadList(files);
+				return;
+			}
+
+			agi::SingleChoiceInteractionRequest request;
+			request.title = from_wx(_("Dropped subtitles"));
+			request.message = from_wx(_("Where do you want to load the dropped subtitle file?"));
+			request.choices = {
+				from_wx(_("Main subtitles")),
+				from_wx(_("Secondary subtitles"))
+			};
+			request.default_choice = 0;
+			request.request_id = "frame_main.drop_target.subtitle_destination";
+
+			auto choice = ctx->RequestSingleChoice(request);
+			if (!choice) {
+				// Cancel: still load non-subtitle files (e.g. video), but skip the subtitles.
+				if (!other_files.empty())
+					core.project->LoadList(other_files);
+				return;
+			}
+
+			if (*choice == 0) {
+				core.project->LoadList(files);
+				return;
+			}
+
+			if (!other_files.empty())
+				core.project->LoadList(other_files);
+
+			if (videoBox)
+				videoBox->OpenSecondarySubtitlesFromPath(subtitle_files.front());
+
+			if (subtitle_files.size() > 1) {
+				ctx->ShowInfo(
+					from_wx(_("Multiple subtitle files were dropped. Only the first one was loaded as secondary.")),
+					from_wx(_("Secondary subtitles")));
+			}
 		},
 		GetAsyncUiLifetime()));
 	observe_phase("startup.frame.drag_drop.install");

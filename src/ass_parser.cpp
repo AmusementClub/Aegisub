@@ -52,6 +52,7 @@ public:
 		{"Video File", &ProjectProperties::video_file},
 		{"Timecodes File", &ProjectProperties::timecodes_file},
 		{"Keyframes File", &ProjectProperties::keyframes_file},
+		{"Secondary Subtitles File", &ProjectProperties::secondary_subtitles_file},
 		{"Video Zoom Percent", &ProjectProperties::video_zoom},
 		{"Scroll Position", &ProjectProperties::scroll_position},
 		{"Active Line", &ProjectProperties::active_row},

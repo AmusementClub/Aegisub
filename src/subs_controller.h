@@ -124,6 +124,7 @@ public:
 
 	DEFINE_SIGNAL_ADDERS(FileOpen, AddFileOpenListener)
 	DEFINE_SIGNAL_ADDERS(FileSave, AddFileSaveListener)
+	DEFINE_SIGNAL_ADDERS(UpdateProperties, AddUpdatePropertiesListener)
 
 	/// @brief Undo the last set of changes to the file
 	void Undo();

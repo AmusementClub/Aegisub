@@ -71,6 +71,7 @@ struct ProjectProperties {
 	std::string video_file;
 	std::string timecodes_file;
 	std::string keyframes_file;
+	std::string secondary_subtitles_file;
 	std::map<std::string, std::string> automation_settings;
 
 	// UI State

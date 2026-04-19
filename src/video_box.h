@@ -27,6 +27,7 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#include <libaegisub/fs_fwd.h>
 #include <libaegisub/signal.h>
 
 #include <vector>
@@ -69,6 +70,7 @@ class VideoBox final : public wxPanel {
 public:
 	VideoBox(wxWindow *parent, bool isDetached, agi::Context *context);
 	void SyncToContextState();
+	bool OpenSecondarySubtitlesFromPath(agi::fs::path const& path, bool show_errors = true);
 	void OnSecondarySubtitleStripHeightChanged(int previous_height, int new_height);
 	void BeginSecondarySubtitleStripHeightDrag();
 	void PreviewSecondarySubtitleStripHeightChange();

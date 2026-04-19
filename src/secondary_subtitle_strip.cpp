@@ -324,6 +324,7 @@ void SecondarySubtitleStrip::ApplyConfiguredHeight(int logical_height) {
 	int dip_height = FromDIP(panel_height);
 	SetMinSize(wxSize(-1, dip_height));
 	SetInitialSize(wxSize(-1, dip_height));
+	InvalidateBestSize();
 }
 
 int SecondarySubtitleStrip::GetRulerOverlayWidth() const {

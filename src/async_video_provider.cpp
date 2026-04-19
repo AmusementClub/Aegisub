@@ -1145,11 +1145,9 @@ VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bo
 		auto const render_begin = std::chrono::steady_clock::now();
 		while (ProcessPending()) { }
 		ret = ProcRenderPacket(frame, time, raw);
-	auto const render_duration_ms =
-		std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - render_begin).count();
-	perf_trace::ObserveVideoFrameRenderDuration(frame, time, true, true, render_duration_ms);
-	if (ret.has_subtitle_overlay && ret.subtitle_overlay.IsValid() && !ret.composited_frame_storage)
-		ret.composited_frame_storage = BakePacketForCpuReadback(ret);
+		auto const render_duration_ms =
+			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - render_begin).count();
+		perf_trace::ObserveVideoFrameRenderDuration(frame, time, true, true, render_duration_ms);
 		// Synchronous frame requests are used for frame stepping, so keep the
 		// provider's current-frame context aligned with what was just rendered.
 		frame_number = frame;

@@ -55,8 +55,8 @@ std::string NormalizePathForCompare(agi::fs::path const& path) {
 	if (path.empty())
 		return {};
 
-	auto normalized = path.lexically_normal().generic_string();
-	auto const root_len = path.root_path().generic_string().size();
+	auto normalized = agi::fs::PathToGenericString(path.lexically_normal());
+	auto const root_len = agi::fs::PathToGenericString(path.root_path()).size();
 	while (normalized.size() > root_len && !normalized.empty() && normalized.back() == '/')
 		normalized.pop_back();
 	return normalized;
@@ -174,7 +174,7 @@ bool WatchedFile::SetTargetPath(agi::fs::path const& path) {
 
 	auto directory = path.parent_path();
 	if (directory.empty())
-		directory = agi::fs::path(".");
+		directory = agi::fs::PathFromString(".");
 
 	bool const same_target = PathsEqual(target_path, path);
 	bool const same_directory = PathsEqual(watched_directory, directory);

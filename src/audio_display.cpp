@@ -676,6 +676,11 @@ AudioDisplay::~AudioDisplay()
 	ui_activation.Deactivate();
 }
 
+void AudioDisplay::SyncToCurrentAudioProvider() {
+	if (context->project->AudioProvider())
+		OnAudioOpen(context->project->AudioProvider());
+}
+
 void AudioDisplay::QueueHighFrequencyRefresh(const wxRect *rect, bool update) {
 	pending_high_frequency_refresh = true;
 	pending_high_frequency_update |= update;
@@ -1349,7 +1354,9 @@ void AudioDisplay::PaintAudio(wxDC &dc, const AudioViewportRequest &viewport) {
 void AudioDisplay::PaintMarkers(wxDC &dc, TimeRange updtime)
 {
 	AudioMarkerVector markers;
-	controller->GetTimingController()->GetMarkers(updtime, markers);
+	auto *timing_controller = controller->GetTimingController();
+	if (!timing_controller) return;
+	timing_controller->GetMarkers(updtime, markers);
 	if (markers.empty()) return;
 
 	wxDCPenChanger pen_retainer(dc, wxPen());
@@ -1386,7 +1393,9 @@ void AudioDisplay::PaintFoot(wxDC &dc, int marker_x, int dir)
 void AudioDisplay::PaintLabels(wxDC &dc, TimeRange updtime)
 {
 	std::vector<AudioLabelProvider::AudioLabel> labels;
-	controller->GetTimingController()->GetLabels(updtime, labels);
+	auto *timing_controller = controller->GetTimingController();
+	if (!timing_controller) return;
+	timing_controller->GetLabels(updtime, labels);
 	if (labels.empty()) return;
 
 	wxDCFontChanger fc(dc);

@@ -335,19 +335,82 @@ void FrameMain::EnsureVideoBoxCreated() {
 	if (videoBox)
 		return;
 
+	bool didFreeze = contentsPanel && !contentsPanel->IsFrozen();
+	if (didFreeze)
+		contentsPanel->Freeze();
+
 	videoBox = new VideoBox(contentsPanel, false, context.get());
+	videoBox->Hide();
 	TopSizer->Insert(0, videoBox, 0, wxEXPAND, 0);
 	TopSizer->Show(videoBox, false, true);
+	videoBox->SyncToContextState();
+
+	if (didFreeze)
+		contentsPanel->Thaw();
 }
 
 void FrameMain::EnsureAudioBoxCreated() {
 	if (audioBox)
 		return;
 
+	bool didFreeze = contentsPanel && !contentsPanel->IsFrozen();
+	if (didFreeze)
+		contentsPanel->Freeze();
+
 	auto ui = context->GetUI();
 	ui.audioBox = audioBox = new AudioBox(contentsPanel, context.get());
 	ToolsSizer->Insert(0, audioBox, 0, wxEXPAND);
 	ToolsSizer->Show(audioBox, false, true);
+	audioBox->SyncToContextState();
+
+	if (didFreeze)
+		contentsPanel->Thaw();
+}
+
+void FrameMain::SyncAudioOpenUi() {
+	pending_audio_open_ui_sync = false;
+	if (IsBeingDeleted())
+		return;
+
+	auto core = context->GetCore();
+	if (!core.project->AudioProvider()) {
+		SetDisplayMode(-1, 0);
+		return;
+	}
+
+	EnsureAudioBoxCreated();
+	SetDisplayMode(-1, 1);
+}
+
+void FrameMain::SyncVideoOpenUi() {
+	pending_video_open_ui_sync = false;
+	if (IsBeingDeleted())
+		return;
+
+	auto core = context->GetCore();
+	auto provider = core.project->VideoProvider();
+	if (!provider) {
+		SetDisplayMode(0, -1);
+		return;
+	}
+
+	Freeze();
+	EnsureVideoBoxCreated();
+	int vidx = provider->GetWidth(), vidy = provider->GetHeight();
+	auto ui = context->GetUI();
+
+	double zoom = ui.videoDisplay->GetZoom();
+	wxSize windowSize = GetSize();
+	if (vidx*3*zoom > windowSize.GetX()*4 || vidy*4*zoom > windowSize.GetY()*6)
+		ui.videoDisplay->SetZoom(zoom * .25);
+	else if (vidx*3*zoom > windowSize.GetX()*2 || vidy*4*zoom > windowSize.GetY()*3)
+		ui.videoDisplay->SetZoom(zoom * .5);
+
+	SetDisplayMode(1,-1);
+
+	if (OPT_GET("Video/Detached/Enabled")->GetBool() && !ui.dialog->Get<DialogDetachedVideo>())
+		cmd::call("video/detach", context.get());
+	Thaw();
 }
 
 void FrameMain::SetDisplayMode(int video, int audio) {
@@ -379,8 +442,10 @@ void FrameMain::SetDisplayMode(int video, int audio) {
 
 	core.videoController->Stop();
 
-	TopSizer->Show(videoBox, showVideo, true);
-	ToolsSizer->Show(audioBox, showAudio, true);
+	if (videoBox)
+		TopSizer->Show(videoBox, showVideo, true);
+	if (audioBox)
+		ToolsSizer->Show(audioBox, showAudio, true);
 
 	MainSizer->Layout();
 	Layout();
@@ -412,24 +477,15 @@ void FrameMain::OnVideoOpen(AsyncVideoProvider *provider) {
 		return;
 	}
 
-	Freeze();
-	EnsureVideoBoxCreated();
-	int vidx = provider->GetWidth(), vidy = provider->GetHeight();
-	auto ui = context->GetUI();
+	if (!videoBox) {
+		if (!pending_video_open_ui_sync) {
+			pending_video_open_ui_sync = true;
+			CallAfter([this] { SyncVideoOpenUi(); });
+		}
+		return;
+	}
 
-	// Set zoom level based on video resolution and window size
-	double zoom = ui.videoDisplay->GetZoom();
-	wxSize windowSize = GetSize();
-	if (vidx*3*zoom > windowSize.GetX()*4 || vidy*4*zoom > windowSize.GetY()*6)
-		ui.videoDisplay->SetZoom(zoom * .25);
-	else if (vidx*3*zoom > windowSize.GetX()*2 || vidy*4*zoom > windowSize.GetY()*3)
-		ui.videoDisplay->SetZoom(zoom * .5);
-
-	SetDisplayMode(1,-1);
-
-	if (OPT_GET("Video/Detached/Enabled")->GetBool() && !ui.dialog->Get<DialogDetachedVideo>())
-		cmd::call("video/detach", context.get());
-	Thaw();
+	SyncVideoOpenUi();
 }
 
 void FrameMain::OnVideoDetach(agi::OptionValue const& opt) {
@@ -564,10 +620,20 @@ WXLRESULT FrameMain::MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lPa
 #endif
 
 void FrameMain::OnAudioOpen(agi::AudioProvider *provider) {
-	if (provider)
-		SetDisplayMode(-1, 1);
-	else
+	if (!provider) {
 		SetDisplayMode(-1, 0);
+		return;
+	}
+
+	if (!audioBox) {
+		if (!pending_audio_open_ui_sync) {
+			pending_audio_open_ui_sync = true;
+			CallAfter([this] { SyncAudioOpenUi(); });
+		}
+		return;
+	}
+
+	SetDisplayMode(-1, 1);
 }
 
 void FrameMain::OnSubtitlesOpen() {

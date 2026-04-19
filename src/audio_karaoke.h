@@ -155,6 +155,8 @@ public:
 	/// Destructor
 	~AudioKaraoke();
 
+	void SyncToContextState();
+
 	/// Is karaoke mode currently enabled?
 	bool IsEnabled() const { return enabled; }
 

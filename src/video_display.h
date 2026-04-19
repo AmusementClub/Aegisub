@@ -236,6 +236,7 @@ public:
 	double GetZoom() const { return zoomValue; }
 	double GetWindowZoom() const { return zoomValue; }
 	void SetWindowZoom(double value) { SetZoom(value); }
+	void SyncToCurrentVideoProvider();
 	void ResetContentZoom();
 
 	/// Get the last seen position of the mouse in script coordinates

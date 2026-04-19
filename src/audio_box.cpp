@@ -154,6 +154,14 @@ AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 	audioDisplay->SetAmplitudeScale(pow(mid(1, VerticalZoom->GetValue(), 100) / 50.0, 3));
 }
 
+void AudioBox::SyncToContextState() {
+	context->GetUI().karaoke->SyncToContextState();
+	audioDisplay->SyncToCurrentAudioProvider();
+
+	if (context->GetCore().project->AudioProvider())
+		OnAudioOpen();
+}
+
 BEGIN_EVENT_TABLE(AudioBox,wxSashWindow)
 	EVT_COMMAND_SCROLL(Audio_Horizontal_Zoom, AudioBox::OnHorizontalZoom)
 	EVT_COMMAND_SCROLL(Audio_Vertical_Zoom, AudioBox::OnVerticalZoom)

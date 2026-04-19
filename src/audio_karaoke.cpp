@@ -116,6 +116,11 @@ AudioKaraoke::AudioKaraoke(wxWindow *parent, agi::Context *c)
 AudioKaraoke::~AudioKaraoke() {
 }
 
+void AudioKaraoke::SyncToContextState() {
+	OnActiveLineChanged(c->GetCore().selectionController->GetActiveLine());
+	OnAudioOpened(c->GetCore().project->AudioProvider());
+}
+
 void AudioKaraoke::OnActiveLineChanged(AssDialogue *new_line) {
 	active_line = new_line;
 	if (enabled) {

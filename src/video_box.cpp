@@ -34,6 +34,7 @@
 #include "compat.h"
 #include "format.h"
 #include "include/aegisub/context.h"
+#include "include/aegisub/context_ui.h"
 #include "include/aegisub/toolbar.h"
 #include "options.h"
 #include "project.h"
@@ -107,6 +108,12 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 		core.selectionController->AddSelectionListener(&VideoBox::UpdateTimeBoxes, this),
 		core.videoController->AddFramePresentedListener(&VideoBox::OnCurrentFrameChanged, this),
 	});
+}
+
+void VideoBox::SyncToContextState() {
+	OnVideoProviderChanged();
+	if (auto video_display = context->GetUI().videoDisplay)
+		video_display->SyncToCurrentVideoProvider();
 }
 
 void VideoBox::UpdateTimeBoxes() {

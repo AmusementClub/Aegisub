@@ -51,4 +51,5 @@ class VideoBox final : public wxPanel {
 
 public:
 	VideoBox(wxWindow *parent, bool isDetached, agi::Context *context);
+	void SyncToContextState();
 };

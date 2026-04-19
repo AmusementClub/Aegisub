@@ -277,6 +277,12 @@ VideoDisplay::~VideoDisplay () {
 	Unload();
 }
 
+void VideoDisplay::SyncToCurrentVideoProvider() {
+	OnVideoProviderChanged(con->project->VideoProvider());
+	if (con->project->VideoProvider())
+		con->videoController->JumpToFrame(con->videoController->GetFrameN());
+}
+
 double VideoDisplay::GetVideoScaleFactor() const {
 	if (!OPT_GET("Video/Scale with DPI")->GetBool())
 		return 1.0;

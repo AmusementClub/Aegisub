@@ -312,16 +312,8 @@ public:
 			UpdateItem(item);
 		}
 
-		if (limit_scope) {
-			for (auto item : mru) {
-				if (item == opened_menu)
-					item->Update();
-			}
-		}
-		else {
-			for (auto item : mru)
-				item->Update();
-		}
+		for (auto item : mru)
+			item->Update();
 	}
 
 	void OnMenuClose(wxMenuEvent &) {

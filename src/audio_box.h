@@ -105,6 +105,7 @@ class AudioBox final : public wxSashWindow {
 
 public:
 	AudioBox(wxWindow *parent, agi::Context *context);
+	void SyncToContextState();
 
 	void ShowKaraokeBar(bool show);
 

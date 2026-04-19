@@ -56,6 +56,8 @@ class FrameMain : public wxFrame {
 
 	bool showVideo = false; ///< Is the video display shown?
 	bool showAudio = false; ///< Is the audio display shown?
+	bool pending_video_open_ui_sync = false;
+	bool pending_audio_open_ui_sync = false;
 	wxPanel *contentsPanel = nullptr;
 	wxTimer StatusClear;   ///< Status bar timeout timer
 #ifdef _WIN32
@@ -68,6 +70,8 @@ class FrameMain : public wxFrame {
 	void InitContents();
 	void EnsureVideoBoxCreated();
 	void EnsureAudioBoxCreated();
+	void SyncAudioOpenUi();
+	void SyncVideoOpenUi();
 
 	void UpdateTitle();
 

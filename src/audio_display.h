@@ -343,6 +343,7 @@ public:
 	/// @param scale New amplitude scale factor, 1.0 is no scaling
 	void SetAmplitudeScale(float scale);
 	void SetInteractivePrefetchEnabled(bool enabled);
+	void SyncToCurrentAudioProvider();
 	void SetSpectrumChannelMode(AudioSpectrumChannelMode mode);
 	AudioSpectrumChannelMode GetSpectrumChannelMode() const;
 	void SetSpectrumMonoMixMode(AudioSpectrumMonoMixMode mode);

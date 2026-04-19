@@ -111,9 +111,19 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 }
 
 void VideoBox::SyncToContextState() {
-	OnVideoProviderChanged();
+	ApplyVideoProvider();
 	if (auto video_display = context->GetUI().videoDisplay)
 		video_display->SyncToCurrentVideoProvider();
+}
+
+void VideoBox::ApplyVideoProvider() {
+	auto core = context->GetCore();
+	current_frame = core.project->VideoProvider() ? core.videoController->GetFrameN() : -1;
+	UpdateTimeBoxes();
+}
+
+void VideoBox::OnVideoProviderChanged() {
+	ApplyVideoProvider();
 }
 
 void VideoBox::UpdateTimeBoxes() {
@@ -148,11 +158,5 @@ void VideoBox::UpdateTimeBoxes() {
 
 void VideoBox::OnCurrentFrameChanged(int frame_number) {
 	current_frame = frame_number;
-	UpdateTimeBoxes();
-}
-
-void VideoBox::OnVideoProviderChanged() {
-	auto core = context->GetCore();
-	current_frame = core.project->VideoProvider() ? core.videoController->GetFrameN() : -1;
 	UpdateTimeBoxes();
 }

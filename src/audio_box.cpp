@@ -159,7 +159,7 @@ void AudioBox::SyncToContextState() {
 	audioDisplay->SyncToCurrentAudioProvider();
 
 	if (context->GetCore().project->AudioProvider())
-		OnAudioOpen();
+		ApplyAudioOpen();
 }
 
 BEGIN_EVENT_TABLE(AudioBox,wxSashWindow)
@@ -336,12 +336,16 @@ void AudioBox::OnVerticalLink(agi::OptionValue const& opt) {
 	VolumeBar->Enable(!opt.GetBool());
 }
 
-void AudioBox::OnAudioOpen() {
+void AudioBox::ApplyAudioOpen() {
 	controller->SetVolume(pow(mid(1, VolumeBar->GetValue(), 100) / 50.0, 3));
 	audioDisplay->SetInteractivePrefetchEnabled(true);
 	spectrum_prefetch_temporarily_disabled = false;
 	if (spectrum_channel_btn)
 		spectrum_channel_btn->Enable(OPT_GET("Audio/Spectrum")->GetBool());
+}
+
+void AudioBox::OnAudioOpen() {
+	ApplyAudioOpen();
 }
 
 void AudioBox::OnSpectrumModeChange(agi::OptionValue const& opt) {

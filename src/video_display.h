@@ -180,6 +180,7 @@ class VideoDisplay final : public wxGLCanvas {
 	void ResetRenderers();
 	bool ApplyRendererSourceModePreference();
 	void OnRendererBackendChanged(agi::OptionValue const&);
+	void ApplyVideoProvider(AsyncVideoProvider *provider);
 	void OnVideoProviderChanged(AsyncVideoProvider *provider);
 	wxImage CaptureCurrentRenderersImage();
 	wxImage CapturePacketImage(VideoRenderPacket const& packet);

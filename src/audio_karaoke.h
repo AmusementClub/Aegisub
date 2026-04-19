@@ -136,6 +136,9 @@ class AudioKaraoke final : public wxWindow {
 	/// Apply any pending split information to the syllable data and return to normal mode
 	void AcceptSplit();
 
+	void ApplyActiveLine(AssDialogue *new_line);
+	void ApplyAudioProvider(agi::AudioProvider *provider);
+
 	void OnActiveLineChanged(AssDialogue *new_line);
 	void OnContextMenu(wxContextMenuEvent&);
 	void OnEnableButton(wxCommandEvent &evt);

@@ -91,6 +91,7 @@ class AudioBox final : public wxSashWindow {
 	void SetHorizontalZoom(int new_zoom);
 	void ApplyVerticalZoomPos(int pos);
 	void FlushPendingZoomPreview();
+	void ApplyAudioOpen();
 	void OnAudioOpen();
 	void OnHorizontalZoom(wxScrollEvent &event);
 	void OnMouseWheel(wxMouseEvent &evt);

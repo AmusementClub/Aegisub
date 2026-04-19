@@ -278,7 +278,7 @@ VideoDisplay::~VideoDisplay () {
 }
 
 void VideoDisplay::SyncToCurrentVideoProvider() {
-	OnVideoProviderChanged(con->project->VideoProvider());
+	ApplyVideoProvider(con->project->VideoProvider());
 	if (con->project->VideoProvider())
 		con->videoController->JumpToFrame(con->videoController->GetFrameN());
 }
@@ -471,7 +471,7 @@ void VideoDisplay::OnRendererBackendChanged(agi::OptionValue const&) {
 		DoRender();
 }
 
-void VideoDisplay::OnVideoProviderChanged(AsyncVideoProvider *provider) {
+void VideoDisplay::ApplyVideoProvider(AsyncVideoProvider *provider) {
 	pending_packet = { };
 	has_pending_packet = false;
 	displayed_packet = { };
@@ -489,6 +489,10 @@ void VideoDisplay::OnVideoProviderChanged(AsyncVideoProvider *provider) {
 		return;
 
 	UpdateSize();
+}
+
+void VideoDisplay::OnVideoProviderChanged(AsyncVideoProvider *provider) {
+	ApplyVideoProvider(provider);
 }
 
 void VideoDisplay::UploadFrameData(VideoRenderPacket const& packet, double) {

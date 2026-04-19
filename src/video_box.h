@@ -46,6 +46,7 @@ class VideoBox final : public wxPanel {
 
 	/// Update VideoPosition and VideoSubsPos
 	void UpdateTimeBoxes();
+	void ApplyVideoProvider();
 	void OnCurrentFrameChanged(int frame_number);
 	void OnVideoProviderChanged();
 

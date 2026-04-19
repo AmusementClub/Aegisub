@@ -117,16 +117,20 @@ AudioKaraoke::~AudioKaraoke() {
 }
 
 void AudioKaraoke::SyncToContextState() {
-	OnActiveLineChanged(c->GetCore().selectionController->GetActiveLine());
-	OnAudioOpened(c->GetCore().project->AudioProvider());
+	ApplyActiveLine(c->GetCore().selectionController->GetActiveLine());
+	ApplyAudioProvider(c->GetCore().project->AudioProvider());
 }
 
-void AudioKaraoke::OnActiveLineChanged(AssDialogue *new_line) {
+void AudioKaraoke::ApplyActiveLine(AssDialogue *new_line) {
 	active_line = new_line;
 	if (enabled) {
 		LoadFromLine();
 		split_area->Refresh(false);
 	}
+}
+
+void AudioKaraoke::OnActiveLineChanged(AssDialogue *new_line) {
+	ApplyActiveLine(new_line);
 }
 
 void AudioKaraoke::OnFileChanged(int type, const AssDialogue *changed) {
@@ -139,11 +143,15 @@ void AudioKaraoke::OnFileChanged(int type, const AssDialogue *changed) {
 	}
 }
 
-void AudioKaraoke::OnAudioOpened(agi::AudioProvider *provider) {
+void AudioKaraoke::ApplyAudioProvider(agi::AudioProvider *provider) {
 	if (provider)
 		SetEnabled(enabled);
 	else
 		c->GetCore().audioController->SetTimingController(nullptr);
+}
+
+void AudioKaraoke::OnAudioOpened(agi::AudioProvider *provider) {
+	ApplyAudioProvider(provider);
 }
 
 void AudioKaraoke::SetEnabled(bool en) {

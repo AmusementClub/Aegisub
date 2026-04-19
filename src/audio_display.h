@@ -249,6 +249,8 @@ class AudioDisplay: public wxWindow {
 
 	int GetDuration() const;
 
+	void ApplyAudioProvider(agi::AudioProvider *provider);
+
 	void OnAudioOpen(agi::AudioProvider *provider);
 	void OnPlaybackPosition(int ms_position);
 	void OnSelectionChanged();

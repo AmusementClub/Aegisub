@@ -678,7 +678,7 @@ AudioDisplay::~AudioDisplay()
 
 void AudioDisplay::SyncToCurrentAudioProvider() {
 	if (context->project->AudioProvider())
-		OnAudioOpen(context->project->AudioProvider());
+		ApplyAudioProvider(context->project->AudioProvider());
 }
 
 void AudioDisplay::QueueHighFrequencyRefresh(const wxRect *rect, bool update) {
@@ -1901,7 +1901,7 @@ int AudioDisplay::GetDuration() const
 	return (provider->GetNumSamples() * 1000 + provider->GetSampleRate() - 1) / provider->GetSampleRate();
 }
 
-void AudioDisplay::OnAudioOpen(agi::AudioProvider *provider)
+void AudioDisplay::ApplyAudioProvider(agi::AudioProvider *provider)
 {
 	this->provider = provider;
 	InvalidateContentBacking();
@@ -1965,6 +1965,11 @@ void AudioDisplay::OnAudioOpen(agi::AudioProvider *provider)
 	{
 		connections.clear();
 	}
+}
+
+void AudioDisplay::OnAudioOpen(agi::AudioProvider *provider)
+{
+	ApplyAudioProvider(provider);
 }
 
 void AudioDisplay::OnTimingController()

@@ -16,6 +16,7 @@
 #include "include/aegisub/subtitles_provider.h"
 #include "options.h"
 #include "project.h"
+#include "subs_controller.h"
 #include "subtitle_format.h"
 #include "ui_services.h"
 #include "video_controller.h"
@@ -28,7 +29,6 @@
 #include <libaegisub/fs.h>
 #include <libaegisub/make_unique.h>
 
-#include <algorithm>
 #include <exception>
 #include <wx/bitmap.h>
 #include <wx/intl.h>
@@ -36,50 +36,6 @@
 
 namespace {
 constexpr char const *kSecondarySubtitleWarningTitle = "Secondary subtitles";
-
-enum class SecondarySubtitleSourceMode : int {
-	CurrentScript = 0,
-	ExternalFile = 1
-};
-
-SecondarySubtitleSourceMode GetConfiguredSecondarySubtitleSourceMode() {
-	return OPT_GET("Video/Secondary Subtitles/Source Mode")->GetInt() == 1
-		? SecondarySubtitleSourceMode::ExternalFile
-		: SecondarySubtitleSourceMode::CurrentScript;
-}
-
-void SetConfiguredSecondarySubtitleSourceMode(SecondarySubtitleSourceMode mode) {
-	OPT_SET("Video/Secondary Subtitles/Source Mode")->SetInt(static_cast<int>(mode));
-}
-
-std::string GetConfiguredSecondarySubtitlePath() {
-	return OPT_GET("Video/Secondary Subtitles/External Path")->GetString();
-}
-
-void SetConfiguredSecondarySubtitlePath(std::string const& path_string) {
-	OPT_SET("Video/Secondary Subtitles/External Path")->SetString(path_string);
-}
-
-std::string GetConfiguredSecondarySubtitleProvider() {
-	return OPT_GET("Video/Secondary Subtitles/Provider")->GetString();
-}
-
-void SetConfiguredSecondarySubtitleProvider(std::string const& provider_name) {
-	OPT_SET("Video/Secondary Subtitles/Provider")->SetString(provider_name);
-}
-
-std::string GetGlobalSubtitleProvider() {
-	return OPT_GET("Subtitle/Provider")->GetString();
-}
-
-bool SecondarySubtitleProviderExists(std::string const& provider_name) {
-	auto const providers = SubtitlesProviderFactory::GetClasses();
-	return std::find(begin(providers), end(providers), provider_name) != end(providers);
-}
-
-bool GetConfiguredSecondarySubtitleDummyPattern() {
-	return OPT_GET("Video/Secondary Subtitles/Dummy/Pattern")->GetBool();
-}
 }
 
 SecondarySubtitleSession::SecondarySubtitleSession(agi::Context *context)
@@ -90,6 +46,7 @@ SecondarySubtitleSession::SecondarySubtitleSession(agi::Context *context)
 		core.project->AddVideoProviderListener(&SecondarySubtitleSession::OnVideoProviderChanged, this),
 		core.project->AddTimecodesListener(&SecondarySubtitleSession::OnTimecodesChanged, this),
 		core.ass->AddCommitListener(&SecondarySubtitleSession::OnAssCommit, this),
+		core.subsController->AddFileOpenListener(&SecondarySubtitleSession::OnMainSubtitlesFileChanged, this),
 		OPT_SUB("Colour/Secondary Subtitle Strip/Dummy Background", &SecondarySubtitleSession::OnDummyBackgroundColorChanged, this),
 		OPT_SUB("Video/Secondary Subtitles/Dummy/Pattern", &SecondarySubtitleSession::OnDummyBackgroundPatternChanged, this),
 		OPT_SUB("Video/Secondary Subtitles/Provider", &SecondarySubtitleSession::OnConfiguredProviderChanged, this),
@@ -154,6 +111,19 @@ void SecondarySubtitleSession::OnGlobalProviderChanged(agi::OptionValue const&) 
 	RebuildProvider(context->GetCore().project->VideoProvider());
 }
 
+void SecondarySubtitleSession::OnMainSubtitlesFileChanged(agi::fs::path const&) {
+	bool const had_external_source = source_mode == SecondarySubtitleSourceMode::ExternalFile;
+	if (!had_external_source && external_subtitle_path.empty() && !external_subtitles)
+		return;
+
+	source_mode = SecondarySubtitleSourceMode::CurrentScript;
+	external_subtitle_path.clear();
+	ClearExternalSubtitles();
+
+	if (active)
+		RebuildProvider(context->GetCore().project->VideoProvider());
+}
+
 void SecondarySubtitleSession::RequestFrame(int frame_number) {
 	if (!provider || frame_number < 0)
 		return;
@@ -165,7 +135,7 @@ void SecondarySubtitleSession::RequestFrame(int frame_number) {
 
 AssFile *SecondarySubtitleSession::ResolveSubtitlesForProvider(AsyncVideoProvider *main_provider) {
 	auto core = context->GetCore();
-	if (GetConfiguredSecondarySubtitleSourceMode() == SecondarySubtitleSourceMode::CurrentScript)
+	if (source_mode == SecondarySubtitleSourceMode::CurrentScript)
 		return core.ass.get();
 
 	if (LoadConfiguredExternalSubtitles(false)) {
@@ -192,7 +162,7 @@ void SecondarySubtitleSession::SyncConfiguredSubtitlesSource(AsyncVideoProvider 
 }
 
 bool SecondarySubtitleSession::LoadConfiguredExternalSubtitles(bool show_errors, bool force_reload) {
-	auto path_string = GetConfiguredSecondarySubtitlePath();
+	auto path_string = external_subtitle_path;
 	if (path_string.empty())
 		return false;
 
@@ -203,7 +173,7 @@ bool SecondarySubtitleSession::LoadConfiguredExternalSubtitles(bool show_errors,
 }
 
 bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& path_string, bool show_errors) {
-	agi::fs::path path(path_string);
+	auto const path = agi::fs::PathFromString(path_string);
 	try {
 		auto charset = CharSetDetect::GetEncoding(path, context->GetSingleChoiceInteractionSink());
 		auto const *reader = SubtitleFormat::GetReader(path, charset);
@@ -229,7 +199,6 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 		external_subtitles->swap(temp);
 		loaded_external_subtitle_path = path_string;
 		external_subtitles_follow_video_resolution = follow_video_resolution;
-		external_subtitles_load_failed = false;
 		return true;
 	}
 	catch (agi::UserCancelException const&) {
@@ -237,19 +206,16 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 	}
 	catch (agi::Exception const& err) {
 		ClearExternalSubtitles();
-		external_subtitles_load_failed = true;
 		if (show_errors)
 			context->ShowError(err.GetMessage(), kSecondarySubtitleWarningTitle);
 	}
 	catch (std::exception const& err) {
 		ClearExternalSubtitles();
-		external_subtitles_load_failed = true;
 		if (show_errors)
 			context->ShowError(err.what(), kSecondarySubtitleWarningTitle);
 	}
 	catch (...) {
 		ClearExternalSubtitles();
-		external_subtitles_load_failed = true;
 		if (show_errors)
 			context->ShowError("Unknown error while loading secondary subtitles.", kSecondarySubtitleWarningTitle);
 	}
@@ -291,7 +257,7 @@ void SecondarySubtitleSession::RebuildProvider(AsyncVideoProvider *main_provider
 		SubtitleRenderEnvironment render_environment;
 		render_environment.background_runner = background_runner.get();
 		render_environment.transient_fonts = subtitles ? subtitles->GetTransientFonts() : core.ass->GetTransientFonts();
-		render_environment.preferred_provider = GetConfiguredSecondarySubtitleProvider();
+		render_environment.preferred_provider = OPT_GET("Video/Secondary Subtitles/Provider")->GetString();
 		auto subtitles_provider = SubtitlesProviderFactory::GetProvider(render_environment);
 		auto dummy_video_provider = agi::make_unique<DummyVideoProvider>(
 			main_provider->GetFPS().FPS(),
@@ -299,7 +265,7 @@ void SecondarySubtitleSession::RebuildProvider(AsyncVideoProvider *main_provider
 			main_provider->GetWidth(),
 			main_provider->GetHeight(),
 			OPT_GET("Colour/Secondary Subtitle Strip/Dummy Background")->GetColor(),
-			GetConfiguredSecondarySubtitleDummyPattern());
+			OPT_GET("Video/Secondary Subtitles/Dummy/Pattern")->GetBool());
 		provider = agi::make_unique<AsyncVideoProvider>(
 			std::move(dummy_video_provider),
 			std::move(subtitles_provider),
@@ -334,7 +300,7 @@ void SecondarySubtitleSession::OnTimecodesChanged(agi::vfr::Framerate const&) {
 		return;
 
 	auto core = context->GetCore();
-	if (GetConfiguredSecondarySubtitleSourceMode() == SecondarySubtitleSourceMode::ExternalFile && active) {
+	if (source_mode == SecondarySubtitleSourceMode::ExternalFile && active) {
 		RebuildProvider(core.project->VideoProvider());
 		return;
 	}
@@ -345,7 +311,7 @@ void SecondarySubtitleSession::OnTimecodesChanged(agi::vfr::Framerate const&) {
 }
 
 void SecondarySubtitleSession::OnAssCommit(int, AssDialogue const* changed) {
-	if (!provider || GetConfiguredSecondarySubtitleSourceMode() != SecondarySubtitleSourceMode::CurrentScript)
+	if (!provider || source_mode != SecondarySubtitleSourceMode::CurrentScript)
 		return;
 
 	auto core = context->GetCore();
@@ -399,15 +365,15 @@ bool SecondarySubtitleSession::OpenExternalSubtitles() {
 	if (!LoadExternalSubtitlesFromPath(path_string, true))
 		return false;
 
-	SetConfiguredSecondarySubtitlePath(path_string);
-	SetConfiguredSecondarySubtitleSourceMode(SecondarySubtitleSourceMode::ExternalFile);
+	source_mode = SecondarySubtitleSourceMode::ExternalFile;
+	external_subtitle_path = path_string;
 	if (active)
 		RebuildProvider(context->GetCore().project->VideoProvider());
 	return true;
 }
 
 bool SecondarySubtitleSession::ReloadSubtitles() {
-	if (GetConfiguredSecondarySubtitleSourceMode() == SecondarySubtitleSourceMode::CurrentScript) {
+	if (source_mode == SecondarySubtitleSourceMode::CurrentScript) {
 		SyncConfiguredSubtitlesSource();
 		if (provider)
 			RequestFrame(context->GetCore().videoController->GetFrameN());
@@ -420,47 +386,20 @@ bool SecondarySubtitleSession::ReloadSubtitles() {
 	return reloaded;
 }
 
-bool SecondarySubtitleSession::IsUsingExternalSubtitles() const {
-	return GetConfiguredSecondarySubtitleSourceMode() == SecondarySubtitleSourceMode::ExternalFile;
-}
-
 bool SecondarySubtitleSession::IsFollowingGlobalSubtitlesProvider() const {
-	return GetConfiguredSecondarySubtitleProvider().empty();
+	return OPT_GET("Video/Secondary Subtitles/Provider")->GetString().empty();
 }
 
 std::string SecondarySubtitleSession::GetConfiguredSubtitlesProvider() const {
-	return GetConfiguredSecondarySubtitleProvider();
+	return OPT_GET("Video/Secondary Subtitles/Provider")->GetString();
 }
 
 std::string SecondarySubtitleSession::GetEffectiveSubtitlesProvider() const {
-	auto configured_provider = GetConfiguredSecondarySubtitleProvider();
+	auto configured_provider = OPT_GET("Video/Secondary Subtitles/Provider")->GetString();
 	if (!configured_provider.empty())
 		return configured_provider;
 
-	return GetGlobalSubtitleProvider();
-}
-
-std::string SecondarySubtitleSession::GetProviderDescription() const {
-	auto effective_provider = GetEffectiveSubtitlesProvider();
-	if (IsFollowingGlobalSubtitlesProvider())
-		return effective_provider + " (following Preferences)";
-
-	if (SecondarySubtitleProviderExists(effective_provider))
-		return effective_provider + " (independent)";
-
-	return effective_provider + " (independent, unavailable)";
-}
-
-std::string SecondarySubtitleSession::GetSourceDescription() const {
-	if (GetConfiguredSecondarySubtitleSourceMode() == SecondarySubtitleSourceMode::CurrentScript)
-		return "Current script";
-
-	auto path_string = GetConfiguredSecondarySubtitlePath();
-	if (path_string.empty())
-		return "External subtitles";
-	if (external_subtitles_load_failed)
-		return "External (unavailable): " + path_string;
-	return "External: " + path_string;
+	return OPT_GET("Subtitle/Provider")->GetString();
 }
 
 void SecondarySubtitleSession::SetActive(bool value) {
@@ -485,16 +424,15 @@ void SecondarySubtitleSession::SetActive(bool value) {
 }
 
 void SecondarySubtitleSession::UseGlobalSubtitlesProvider() {
-	SetConfiguredSecondarySubtitleProvider("");
+	OPT_SET("Video/Secondary Subtitles/Provider")->SetString("");
 }
 
 void SecondarySubtitleSession::UseIndependentSubtitlesProvider(std::string const& provider_name) {
-	SetConfiguredSecondarySubtitleProvider(provider_name);
+	OPT_SET("Video/Secondary Subtitles/Provider")->SetString(provider_name);
 }
 
 void SecondarySubtitleSession::UseCurrentScriptSource() {
-	SetConfiguredSecondarySubtitleSourceMode(SecondarySubtitleSourceMode::CurrentScript);
-	external_subtitles_load_failed = false;
+	source_mode = SecondarySubtitleSourceMode::CurrentScript;
 	if (active)
 		RebuildProvider(context->GetCore().project->VideoProvider());
 }

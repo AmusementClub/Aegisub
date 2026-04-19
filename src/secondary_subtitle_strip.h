@@ -57,8 +57,6 @@ class SecondarySubtitleStrip final : public wxPanel {
 	void StoreScrollOffset();
 	int GetEntryButtonIconSize() const;
 	void RefreshGutterToolbars();
-	void UpdateEntryButton();
-	void UpdateReloadButton();
 	void UpdateScrollBar();
 	void UpdateResizeHandleHot(wxPoint const& position, bool mouse_present);
 	void FinishMouseInteractions();

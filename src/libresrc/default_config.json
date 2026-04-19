@@ -645,19 +645,16 @@
 		"Renderer" : {
 			"Backend" : "opengl"
 		},
-		"Secondary Subtitles" : {
-			"Dummy" : {
-				"Pattern" : false
+			"Secondary Subtitles" : {
+				"Dummy" : {
+					"Pattern" : false
+				},
+				"Enabled" : false,
+				"Height" : 96,
+				"Provider" : "",
+				"Show Vertical Ruler" : false,
+				"Scroll Offset Y" : 0
 			},
-			"Enabled" : false,
-			"External Path" : "",
-			"Height" : 96,
-			"Provider" : "",
-			"Show Vertical Ruler" : false,
-			"Scroll Offset Y" : 0,
-			"Source Mode" : 0,
-			"Visible Source Height" : 180
-		},
 		"Script Resolution Mismatch" : 1,
 		"Slider" : {
 			"Fast Jump Step" : 10,

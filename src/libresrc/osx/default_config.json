@@ -640,12 +640,10 @@
 				"Pattern" : false
 			},
 			"Enabled" : false,
-			"External Path" : "",
 			"Height" : 96,
 			"Provider" : "",
 			"Show Vertical Ruler" : false,
-			"Scroll Offset Y" : 0,
-			"Source Mode" : 0
+			"Scroll Offset Y" : 0
 		},
 		"Script Resolution Mismatch" : 1,
 		"Shift Scroll Action" : 4,

@@ -48,14 +48,6 @@ enum SecondarySubtitleStripMenuId {
 	MenuSecondarySubtitleProviderFirst = wxID_HIGHEST + 1300
 };
 
-bool GetConfiguredSecondarySubtitleVerticalRuler() {
-	return OPT_GET("Video/Secondary Subtitles/Show Vertical Ruler")->GetBool();
-}
-
-bool GetConfiguredSecondarySubtitleDummyPattern() {
-	return OPT_GET("Video/Secondary Subtitles/Dummy/Pattern")->GetBool();
-}
-
 int GetScrollBarWidth(wxWindow *window) {
 	int width = wxSystemSettings::GetMetric(wxSYS_VSCROLL_X, window);
 	return std::max(width, window->FromDIP(12));
@@ -134,8 +126,8 @@ public:
 		min_height,
 		max_height))
 	, applied_dummy_background(OPT_GET("Colour/Secondary Subtitle Strip/Dummy Background")->GetColor())
-	, applied_dummy_checkerboard(GetConfiguredSecondarySubtitleDummyPattern())
-	, applied_show_vertical_ruler(GetConfiguredSecondarySubtitleVerticalRuler()) {
+	, applied_dummy_checkerboard(OPT_GET("Video/Secondary Subtitles/Dummy/Pattern")->GetBool())
+	, applied_show_vertical_ruler(OPT_GET("Video/Secondary Subtitles/Show Vertical Ruler")->GetBool()) {
 		auto *height_label = new wxStaticText(this, wxID_ANY, _("Strip height"));
 		height = new wxSpinCtrl(
 			this,
@@ -217,7 +209,6 @@ SecondarySubtitleStrip::SecondarySubtitleStrip(wxWindow *parent, agi::Context *c
 		0);
 
 	session->SetBitmapUpdatedCallback([this] {
-		UpdateEntryButton();
 		UpdateScrollBar();
 		Refresh(false);
 	});
@@ -244,8 +235,6 @@ SecondarySubtitleStrip::SecondarySubtitleStrip(wxWindow *parent, agi::Context *c
 	entry_button->SetToolTip(_("Secondary subtitle strip options"));
 	reload_button->Bind(wxEVT_TOOL, &SecondarySubtitleStrip::OnReloadButton, this, MenuSecondarySubtitleStripReloadButton);
 	reload_button->SetToolTip(_("Reload secondary source"));
-	UpdateEntryButton();
-	UpdateReloadButton();
 
 	auto bind_scroll = [this](wxEventTypeTag<wxScrollEvent> event_type) {
 		scroll_bar->Bind(event_type, &SecondarySubtitleStrip::OnScroll, this);
@@ -298,7 +287,7 @@ wxRect SecondarySubtitleStrip::GetResizeHandleRect() const {
 }
 
 wxRect SecondarySubtitleStrip::GetRulerOverlayRect(wxRect const& content_rect) const {
-	if (!GetConfiguredSecondarySubtitleVerticalRuler())
+	if (!OPT_GET("Video/Secondary Subtitles/Show Vertical Ruler")->GetBool())
 		return wxRect();
 
 	wxRect rect = content_rect;
@@ -338,7 +327,7 @@ void SecondarySubtitleStrip::ApplyConfiguredHeight(int logical_height) {
 }
 
 int SecondarySubtitleStrip::GetRulerOverlayWidth() const {
-	return GetConfiguredSecondarySubtitleVerticalRuler() ? FromDIP(44) : 0;
+	return OPT_GET("Video/Secondary Subtitles/Show Vertical Ruler")->GetBool() ? FromDIP(44) : 0;
 }
 
 void SecondarySubtitleStrip::StoreScrollOffset() {
@@ -369,6 +358,7 @@ void SecondarySubtitleStrip::RefreshGutterToolbars() {
 		wxBitmapBundle::FromBitmap(CMD_ICON_GET(options_button, GetLayoutDirection(), icon_size)),
 		_("Secondary subtitle strip options"));
 	entry_button->Realize();
+	entry_button->SetToolTip(_("Secondary subtitle strip options"));
 	entry_button->SetMinSize(wxSize(button_extent, button_extent));
 
 	reload_button->ClearTools();
@@ -382,6 +372,7 @@ void SecondarySubtitleStrip::RefreshGutterToolbars() {
 		wxBitmapBundle::FromBitmap(CMD_ICON_GET(arrow_sort, GetLayoutDirection(), icon_size)),
 		_("Reload secondary source"));
 	reload_button->Realize();
+	reload_button->SetToolTip(_("Reload secondary source"));
 	reload_button->SetMinSize(wxSize(button_extent, button_extent));
 }
 
@@ -421,14 +412,6 @@ void SecondarySubtitleStrip::LayoutGutterControls() {
 	int scroll_bottom = gutter_rect.GetBottom() - margin + 1;
 	int scroll_height = std::max(scroll_bottom - scroll_y, 0);
 	scroll_bar->SetSize(scroll_x, scroll_y, scroll_width, scroll_height);
-}
-
-void SecondarySubtitleStrip::UpdateEntryButton() {
-	entry_button->SetToolTip(_("Secondary subtitle strip options"));
-}
-
-void SecondarySubtitleStrip::UpdateReloadButton() {
-	reload_button->SetToolTip(_("Reload secondary source"));
 }
 
 int SecondarySubtitleStrip::GetThumbPosition(int max_scroll_offset_y) const {
@@ -535,14 +518,12 @@ void SecondarySubtitleStrip::OnEntryButton(wxCommandEvent &) {
 
 	RefreshGutterToolbars();
 	LayoutGutterControls();
-	UpdateEntryButton();
 	UpdateScrollBar();
 	Refresh(false);
 }
 
 void SecondarySubtitleStrip::OnReloadButton(wxCommandEvent &) {
 	session->ReloadSubtitles();
-	UpdateReloadButton();
 	UpdateScrollBar();
 	Refresh(false);
 }
@@ -927,7 +908,6 @@ void SecondarySubtitleStrip::SetSessionActive(bool active) {
 
 	session->SetActive(active);
 	UpdateScrollBar();
-	UpdateEntryButton();
 	Refresh(false);
 }
 

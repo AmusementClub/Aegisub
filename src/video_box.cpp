@@ -138,10 +138,6 @@ void VideoBox::ApplyVideoProvider() {
 	UpdateTimeBoxes();
 }
 
-void VideoBox::OnVideoProviderChanged() {
-	ApplyVideoProvider();
-}
-
 void VideoBox::UpdateTimeBoxes() {
 	auto core = context->GetCore();
 	if (!core.project->VideoProvider()) return;

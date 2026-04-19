@@ -5,7 +5,7 @@
 
 #include <libaegisub/vfr.h>
 
-TEST(ass_time_projection, generic_end_time_projects_down_for_ass_storage) {
+TEST(ass_time_projection, generic_end_time_uses_symmetric_rounding_for_ass_storage) {
 	AssDialogue line;
 	line.Comment = false;
 	line.Layer = 2;
@@ -18,7 +18,7 @@ TEST(ass_time_projection, generic_end_time_projects_down_for_ass_storage) {
 	line.Text = "Hello";
 
 	EXPECT_EQ(
-		"Dialogue: 2,0:00:14.19,0:17:39.26,Default,Actor,1,2,3,Effect,Hello",
+		"Dialogue: 2,0:00:14.19,0:17:39.27,Default,Actor,1,2,3,Effect,Hello",
 		SerializeAssDialogueForStorage(line));
 }
 
@@ -36,11 +36,11 @@ TEST(ass_time_projection, non_canonical_times_preserve_100fps_frame_semantics_wh
 	EXPECT_EQ(20, ProjectAssTimeForStorage(17, AssStorageTimeBoundary::End, &fps));
 }
 
-TEST(ass_time_projection, frame_safe_ties_use_boundary_conservative_candidate) {
+TEST(ass_time_projection, frame_safe_ties_use_symmetric_rounding_candidate) {
 	auto const fps = agi::vfr::Framerate(50.0);
 
 	EXPECT_EQ(20, ProjectAssTimeForStorage(15, AssStorageTimeBoundary::Start, &fps));
-	EXPECT_EQ(30, ProjectAssTimeForStorage(35, AssStorageTimeBoundary::End, &fps));
+	EXPECT_EQ(40, ProjectAssTimeForStorage(35, AssStorageTimeBoundary::End, &fps));
 }
 
 TEST(ass_time_projection, serializes_frame_safe_dialogue_using_projection_when_fps_is_available) {

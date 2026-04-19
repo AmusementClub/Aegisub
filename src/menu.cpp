@@ -81,8 +81,10 @@ namespace {
 			if (!blocked)
 				return;
 			SendMessage(hwnd, WM_SETREDRAW, TRUE, 0);
-			DrawMenuBar(hwnd);
-			RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_FRAME | RDW_ALLCHILDREN);
+			// Invalidate the frame and children so they repaint eventually,
+			// but do NOT use RDW_UPDATENOW — forcing synchronous repaint of
+			// every child window causes a visible full-window flash.
+			RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_FRAME | RDW_ALLCHILDREN);
 #endif
 		}
 	};

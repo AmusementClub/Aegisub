@@ -75,6 +75,7 @@ vendor/luajit/src/lj_vm.s
 vendor/luajit/src/luajit
 
 .vs
+*.vscode
 /build-*
 /tools
 CMakePresets.json

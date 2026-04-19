@@ -44,6 +44,11 @@ namespace cmd {
 		return find_command(name)->second.get();
 	}
 
+	Command *get_if(std::string const& name) {
+		auto it = cmd_map.find(name);
+		return it != cmd_map.end() ? it->second.get() : nullptr;
+	}
+
 	void call(std::string const& name, agi::Context*c) {
 		Command &cmd = *find_command(name)->second;
 		if (cmd.Validate(c))

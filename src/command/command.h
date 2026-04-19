@@ -157,6 +157,10 @@ DEFINE_EXCEPTION(CommandNotFound, CommandError);
 	/// @param Command object.
 	Command* get(std::string const& name);
 
+	/// Retrieve a Command object if it is registered.
+	/// @return The command, or nullptr if not found.
+	Command* get_if(std::string const& name);
+
 	/// Get a list of registered command names
 	std::vector<std::string> get_registered_commands();
 

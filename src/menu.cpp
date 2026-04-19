@@ -46,11 +46,46 @@
 #include <wx/menu.h>
 #include <wx/menuitem.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 #ifdef __WXMAC__
 #include <wx/app.h>
 #endif
 
 namespace {
+	struct MenuBarRedrawBlock final {
+		wxWindow *host = nullptr;
+#ifdef _WIN32
+		HWND hwnd = nullptr;
+		bool blocked = false;
+#endif
+
+		explicit MenuBarRedrawBlock(wxWindow *window)
+			: host(window)
+		{
+#ifdef _WIN32
+			if (!host || !host->IsShownOnScreen())
+				return;
+			hwnd = reinterpret_cast<HWND>(host->GetHandle());
+			if (!hwnd)
+				return;
+			SendMessage(hwnd, WM_SETREDRAW, FALSE, 0);
+			blocked = true;
+#endif
+		}
+
+		~MenuBarRedrawBlock() {
+#ifdef _WIN32
+			if (!blocked)
+				return;
+			SendMessage(hwnd, WM_SETREDRAW, TRUE, 0);
+			DrawMenuBar(hwnd);
+			RedrawWindow(hwnd, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_FRAME | RDW_ALLCHILDREN);
+#endif
+		}
+	};
 
 class MruMenu final : public wxMenu {
 	/// Window ID of first menu item
@@ -147,7 +182,9 @@ class CommandManager {
 
 	/// Update a single dynamic menu item
 	void UpdateItem(std::pair<std::string, wxMenuItem*> const& item) {
-		cmd::Command *c = cmd::get(item.first);
+		cmd::Command *c = cmd::get_if(item.first);
+		if (!c)
+			return;
 		int flags = c->Type();
 		if (flags & cmd::COMMAND_VALIDATE) {
 			bool enabled = c->Validate(context);
@@ -172,7 +209,9 @@ class CommandManager {
 	}
 
 	void UpdateItemName(std::pair<std::string, wxMenuItem*> const& item) {
-		cmd::Command *c = cmd::get(item.first);
+		cmd::Command *c = cmd::get_if(item.first);
+		if (!c)
+			return;
 		wxString text;
 		if (c->Type() & cmd::COMMAND_DYNAMIC_NAME)
 			text = c->StrMenu(context);
@@ -417,8 +456,14 @@ void process_menu_item(wxMenu *parent, agi::Context *c, json::Object const& ele,
 
 	read_entry(ele, "text", &text);
 
+	auto *command_ptr = cmd::get_if(command);
+	if (!command_ptr) {
+		LOG_D("menu/command/not_found") << "Skipping command " << command << " because it is not registered";
+		return;
+	}
+
 	try {
-		int id = cm->AddCommand(cmd::get(command), parent, text);
+		int id = cm->AddCommand(command_ptr, parent, text);
 #ifdef __WXMAC__
 		if (!special.empty()) {
 			if (special == "about")
@@ -436,7 +481,7 @@ void process_menu_item(wxMenu *parent, agi::Context *c, json::Object const& ele,
 #ifdef _DEBUG
 		parent->Append(-1, to_wx(e.GetMessage()))->Enable(false);
 #endif
-		LOG_W("menu/command/not_found") << "Skipping command " << command << ": " << e.GetMessage();
+		LOG_D("menu/command/not_found") << "Skipping command " << command << ": " << e.GetMessage();
 	}
 }
 
@@ -499,8 +544,12 @@ class AutomationMenu final : public wxMenu {
 	};
 
 	void Regenerate() {
+		auto ui = c->GetUI();
+		MenuBarRedrawBlock redraw_block(ui.parent);
+
 		for (auto item : all_items)
 			cm->Remove(item);
+		all_items.clear();
 
 		wxMenuItemList &items = GetMenuItems();
 		// Remove everything but automation manager and the separator

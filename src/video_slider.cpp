@@ -182,6 +182,7 @@ void VideoSlider::OnSeekTimer(wxTimerEvent &) {
 void VideoSlider::VideoOpened(AsyncVideoProvider *provider) {
 	if (provider) {
 		max = provider->GetFrameCount() - 1;
+		keyframes = c->GetCore().project->Keyframes();
 		Refresh(false);
 	}
 }

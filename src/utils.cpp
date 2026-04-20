@@ -155,32 +155,47 @@ double GetWindowScaleFactor(wxWindow *window) {
 std::string GetClipboard() {
 	wxString data;
 	wxClipboard *cb = wxClipboard::Get();
-	if (cb->Open()) {
-		if (cb->IsSupported(wxDF_TEXT) || cb->IsSupported(wxDF_UNICODETEXT)) {
-			wxTextDataObject raw_data;
-			cb->GetData(raw_data);
-			data = raw_data.GetText();
+	wxLogNull disable_logging;
+	for (int i = 0; i < 5; ++i) {
+		if (cb->Open()) {
+			if (cb->IsSupported(wxDF_TEXT) || cb->IsSupported(wxDF_UNICODETEXT)) {
+				wxTextDataObject raw_data;
+				cb->GetData(raw_data);
+				data = raw_data.GetText();
+			}
+			cb->Close();
+			break;
 		}
-		cb->Close();
+		wxMilliSleep(20);
 	}
 	return from_wx(data);
 }
 
 void SetClipboard(std::string const& new_data) {
 	wxClipboard *cb = wxClipboard::Get();
-	if (cb->Open()) {
-		cb->SetData(new wxTextDataObject(to_wx(new_data)));
-		cb->Flush();
-		cb->Close();
+	wxLogNull disable_logging;
+	for (int i = 0; i < 5; ++i) {
+		if (cb->Open()) {
+			cb->SetData(new wxTextDataObject(to_wx(new_data)));
+			cb->Flush();
+			cb->Close();
+			break;
+		}
+		wxMilliSleep(20);
 	}
 }
 
 void SetClipboard(wxBitmap const& new_data) {
 	wxClipboard *cb = wxClipboard::Get();
-	if (cb->Open()) {
-		cb->SetData(new wxBitmapDataObject(new_data));
-		cb->Flush();
-		cb->Close();
+	wxLogNull disable_logging;
+	for (int i = 0; i < 5; ++i) {
+		if (cb->Open()) {
+			cb->SetData(new wxBitmapDataObject(new_data));
+			cb->Flush();
+			cb->Close();
+			break;
+		}
+		wxMilliSleep(20);
 	}
 }
 

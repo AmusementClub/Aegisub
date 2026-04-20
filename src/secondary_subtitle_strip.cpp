@@ -53,8 +53,9 @@ int GetScrollBarWidth(wxWindow *window) {
 	return std::max(width, window->FromDIP(12));
 }
 
-int GetGutterButtonExtent(wxWindow *window, int icon_size) {
-	return std::max(window->FromDIP(20), icon_size + window->FromDIP(4));
+int GetGutterButtonExtent(wxWindow *window, wxToolBar *toolbar) {
+	wxSize best_size = toolbar->GetBestSize();
+	return std::max({window->FromDIP(20), best_size.GetWidth(), best_size.GetHeight()});
 }
 
 int PickNiceRulerStep(double target_step) {
@@ -338,21 +339,15 @@ void SecondarySubtitleStrip::StoreScrollOffset() {
 }
 
 int SecondarySubtitleStrip::GetEntryButtonIconSize() const {
-#if defined(__WXMSW__)
-	return GetVideoUiIconSize(const_cast<SecondarySubtitleStrip *>(this));
-#else
-	return OPT_GET("App/Toolbar Icon Size")->GetInt();
-#endif
+	return GetVideoUiIconSize(
+		const_cast<SecondarySubtitleStrip *>(this),
+		OPT_GET("App/Toolbar Icon Size")->GetInt());
 }
 
 void SecondarySubtitleStrip::RefreshGutterToolbars() {
 	int icon_size = std::max(GetEntryButtonIconSize(), 1);
-	int button_extent = GetGutterButtonExtent(this, icon_size);
 	entry_button->ClearTools();
 	entry_button->SetToolBitmapSize(wxSize(icon_size, icon_size));
-	entry_button->SetMargins(0, 0);
-	entry_button->SetToolPacking(0);
-	entry_button->SetToolSeparation(0);
 	entry_button->AddTool(
 		MenuSecondarySubtitleStripOptionsButton,
 		_("Secondary subtitle strip options"),
@@ -360,13 +355,11 @@ void SecondarySubtitleStrip::RefreshGutterToolbars() {
 		_("Secondary subtitle strip options"));
 	entry_button->Realize();
 	entry_button->SetToolTip(_("Secondary subtitle strip options"));
-	entry_button->SetMinSize(wxSize(button_extent, button_extent));
+	int const entry_button_extent = GetGutterButtonExtent(this, entry_button);
+	entry_button->SetMinSize(wxSize(entry_button_extent, entry_button_extent));
 
 	reload_button->ClearTools();
 	reload_button->SetToolBitmapSize(wxSize(icon_size, icon_size));
-	reload_button->SetMargins(0, 0);
-	reload_button->SetToolPacking(0);
-	reload_button->SetToolSeparation(0);
 	reload_button->AddTool(
 		MenuSecondarySubtitleStripReloadButton,
 		_("Reload secondary source"),
@@ -374,7 +367,8 @@ void SecondarySubtitleStrip::RefreshGutterToolbars() {
 		_("Reload secondary source"));
 	reload_button->Realize();
 	reload_button->SetToolTip(_("Reload secondary source"));
-	reload_button->SetMinSize(wxSize(button_extent, button_extent));
+	int const reload_button_extent = GetGutterButtonExtent(this, reload_button);
+	reload_button->SetMinSize(wxSize(reload_button_extent, reload_button_extent));
 }
 
 void SecondarySubtitleStrip::LayoutGutterControls() {

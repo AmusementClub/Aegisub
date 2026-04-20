@@ -21,6 +21,7 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
+#include "options.h"
 #include "selection_controller.h"
 #include "utils.h"
 
@@ -54,7 +55,7 @@ void VisualToolVectorClip::SetToolbar(wxToolBar *toolBar) {
 	this->toolBar = toolBar;
 
 	toolBar->AddSeparator();
-	const int icon_size = GetVideoUiIconSize(toolBar);
+	const int icon_size = GetVideoUiIconSize(toolBar, OPT_GET("App/Toolbar Icon Size")->GetInt());
 	toolBar->SetToolBitmapSize(wxSize(icon_size, icon_size));
 
 #define ICON(name) wxBitmapBundle::FromBitmap(CMD_ICON_GET(name, wxLayout_Default, icon_size))

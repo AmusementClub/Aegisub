@@ -141,7 +141,7 @@ wxSize ScaleVideoUi(wxWindow *window, wxSize const& value) {
 }
 
 int GetVideoUiIconSize(wxWindow *window, int logical_size) {
-	return ScaleVideoUi(window, logical_size);
+	return window->FromDIP(logical_size);
 }
 
 double GetWindowScaleFactor(wxWindow *window) {

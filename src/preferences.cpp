@@ -420,9 +420,7 @@ void BuildGeneralPage(OptionPage *p) {
 	p->OptionAdd(general, _("Save UI state in subtitles files"), "App/Save UI State");
 	p->CellSkip(general);
 
-#ifndef __WXMSW__
 	p->OptionAdd(general, _("Toolbar Icon Size"), "App/Toolbar Icon Size");
-#endif
 	wxString autoload_modes[] = { _("Never"), _("Always"), _("Ask") };
 	wxArrayString autoload_modes_arr(3, autoload_modes);
 	p->OptionChoice(general, _("Automatically load linked files"), autoload_modes_arr, "App/Auto/Load Linked Files");

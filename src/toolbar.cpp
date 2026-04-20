@@ -73,12 +73,14 @@ namespace {
 		agi::signal::Connection hotkeys_changed_slot;
 		agi::signal::Connection video_dpi_slot;
 
-		bool IsVideoToolbar() const {
-			return name == "video";
+		bool UsesVideoUiToolbarIcons() const {
+			return name == "video" || name == "visual_tools";
 		}
 
 		int GetVideoToolbarIconSize() const {
-			return GetVideoUiIconSize(const_cast<Toolbar *>(this));
+			return GetVideoUiIconSize(
+				const_cast<Toolbar *>(this),
+				OPT_GET("App/Toolbar Icon Size")->GetInt());
 		}
 
 		/// Enable/disable the toolbar buttons
@@ -130,6 +132,10 @@ namespace {
 			commands.reserve(arr.size());
 			bool needs_onidle = false;
 			bool last_was_sep = false;
+			if (UsesVideoUiToolbarIcons()) {
+				int const tool_icon_size = GetVideoToolbarIconSize();
+				SetToolBitmapSize(wxSize(tool_icon_size, tool_icon_size));
+			}
 
 			for (json::String const& command_name : arr) {
 				if (command_name.empty()) {
@@ -153,7 +159,7 @@ namespace {
 					flags & cmd::COMMAND_TOGGLE ? wxITEM_CHECK :
 					wxITEM_NORMAL;
 
-				if (IsVideoToolbar())
+				if (UsesVideoUiToolbarIcons())
 					AddTool(TOOL_ID_BASE + commands.size(), command->StrDisplay(context), command->Icon(GetVideoToolbarIconSize(), GetLayoutDirection()), GetTooltip(command), kind);
 				else
 					AddTool(TOOL_ID_BASE + commands.size(), command->StrDisplay(context), command->IconBundle(GetLayoutDirection()), GetTooltip(command), kind);
@@ -194,7 +200,7 @@ namespace {
 #endif
 		, icon_size_slot(OPT_SUB("App/Toolbar Icon Size", &Toolbar::OnIconSizeChange, this))
 		, hotkeys_changed_slot(hotkey::inst->AddHotkeyChangeListener(&Toolbar::RegenerateToolbar, this))
-		, video_dpi_slot(IsVideoToolbar() ? OPT_SUB("Video/Scale with DPI", [=](agi::OptionValue const&) { RegenerateToolbar(); }) : agi::signal::Connection())
+		, video_dpi_slot(UsesVideoUiToolbarIcons() ? OPT_SUB("Video/Scale with DPI", [=](agi::OptionValue const&) { RegenerateToolbar(); }) : agi::signal::Connection())
 		{
 			Populate();
 			Bind(wxEVT_TOOL, &Toolbar::OnClick, this);
@@ -221,7 +227,7 @@ namespace {
 		}))
 #endif
 		, hotkeys_changed_slot(hotkey::inst->AddHotkeyChangeListener(&Toolbar::RegenerateToolbar, this))
-		, video_dpi_slot(IsVideoToolbar() ? OPT_SUB("Video/Scale with DPI", [=](agi::OptionValue const&) { RegenerateToolbar(); }) : agi::signal::Connection())
+		, video_dpi_slot(UsesVideoUiToolbarIcons() ? OPT_SUB("Video/Scale with DPI", [=](agi::OptionValue const&) { RegenerateToolbar(); }) : agi::signal::Connection())
 		{
 			parent->SetToolBar(this);
 			Populate();

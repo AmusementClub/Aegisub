@@ -26,6 +26,7 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
+#include "options.h"
 #include "selection_controller.h"
 #include "utils.h"
 #include "video_controller.h"
@@ -54,7 +55,7 @@ void VisualToolDrag::SetToolbar(wxToolBar *tb) {
 	if (toolbar)
 		toolbar->Unbind(wxEVT_TOOL, &VisualToolDrag::OnSubTool, this);
 	toolbar = tb;
-	const int icon_size = GetVideoUiIconSize(toolbar);
+	const int icon_size = GetVideoUiIconSize(toolbar, OPT_GET("App/Toolbar Icon Size")->GetInt());
 	toolbar->SetToolBitmapSize(wxSize(icon_size, icon_size));
 	toolbar->AddSeparator();
 	move_pos_button = toolbar->AddTool(-1, _("Toggle between \\move and \\pos"),
@@ -77,7 +78,7 @@ void VisualToolDrag::UpdateToggleButtons() {
 
 	if (to_move == button_is_move) return;
 
-	const int icon_size = GetVideoUiIconSize(toolbar);
+	const int icon_size = GetVideoUiIconSize(toolbar, OPT_GET("App/Toolbar Icon Size")->GetInt());
 	if (to_move)
 		toolbar->SetToolNormalBitmap(move_pos_button, wxBitmapBundle::FromBitmap(CMD_ICON_GET(visual_move_conv_move, wxLayout_Default, icon_size)));
 	else

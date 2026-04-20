@@ -665,8 +665,10 @@ void AudioSpectrumRenderer::SetInteractivePrefetchEnabled(bool enabled) {
 	interactive_prefetch_enabled = enabled;
 	if (analysis_cache)
 		analysis_cache->SetPrefetchEnabled(enabled);
-	for (auto &cache : per_channel_caches)
-		cache->SetPrefetchEnabled(enabled);
+	for (auto &cache : per_channel_caches) {
+		if (cache)
+			cache->SetPrefetchEnabled(enabled);
+	}
 }
 
 std::vector<std::string> AudioSpectrumRenderer::GetDebugInfo() const {

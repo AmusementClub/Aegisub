@@ -1808,22 +1808,25 @@ void AudioDisplay::OnMouseEvent(wxMouseEvent& event)
 
 bool AudioDisplay::ForwardMouseEvent(wxMouseEvent &event) {
 	// Handle any ongoing drag
-	if (dragged_object && HasCapture())
+	if (dragged_object)
 	{
-		if (!dragged_object->OnMouseEvent(event))
+		if (HasCapture())
 		{
-			scroll_timer.Stop();
+			if (!dragged_object->OnMouseEvent(event))
+			{
+				scroll_timer.Stop();
+				SetDraggedObject(nullptr);
+				SetCursor(wxNullCursor);
+			}
+			return true;
+		}
+		else
+		{
+			// Something is wrong, we might have lost capture somehow.
+			// Fix state and pretend it didn't happen.
 			SetDraggedObject(nullptr);
 			SetCursor(wxNullCursor);
 		}
-		return true;
-	}
-	else
-	{
-		// Something is wrong, we might have lost capture somehow.
-		// Fix state and pretend it didn't happen.
-		SetDraggedObject(nullptr);
-		SetCursor(wxNullCursor);
 	}
 
 	const wxPoint mousepos = event.GetPosition();

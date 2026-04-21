@@ -1,7 +1,7 @@
 // Copyright (c) 2026
 // All rights reserved.
 
-#include "audio_display_skia_host.h"
+#include "audio_display_skia_backend.h"
 
 #include "audio_display_skia_target.h"
 #include "skia_runtime/skia_gpu_context_host.h"
@@ -30,10 +30,10 @@ int audio_display_gl_attribs[] = { WX_GL_RGBA, WX_GL_DOUBLEBUFFER, WX_GL_STENCIL
 int audio_display_gl_attribs[] = { WX_GL_RGBA, WX_GL_DOUBLEBUFFER, WX_GL_STENCIL_SIZE, 8, 0 };
 #endif
 
-class AudioDisplaySkiaBitmapHost final : public AudioDisplaySkiaHost {
+class AudioDisplaySkiaBitmapBackend final : public AudioDisplaySkiaBackend {
 public:
-	AudioDisplaySkiaHostBackend GetBackend() const override {
-		return AudioDisplaySkiaHostBackend::Bitmap;
+	AudioDisplaySkiaBackendType GetBackendType() const override {
+		return AudioDisplaySkiaBackendType::Bitmap;
 	}
 
 	std::unique_ptr<AudioDisplaySkiaTarget> CreateContentTarget(wxBitmap &bitmap, wxRect const& rect) override {
@@ -60,10 +60,10 @@ struct AudioDisplaySkiaOffscreenReadbackCache {
 	std::vector<uint32_t> pixels;
 };
 
-class AudioDisplaySkiaGpuOffscreenHost;
+class AudioDisplaySkiaGpuOffscreenBackend;
 
 class AudioDisplaySkiaGpuOffscreenContentTarget final : public AudioDisplaySkiaTarget {
-	AudioDisplaySkiaGpuOffscreenHost &host;
+	AudioDisplaySkiaGpuOffscreenBackend &host;
 	wxRect rect;
 	wxBitmap *dest_bitmap = nullptr;
 	AudioDisplaySkiaOffscreenReadbackCache *readback = nullptr;
@@ -73,7 +73,7 @@ class AudioDisplaySkiaGpuOffscreenContentTarget final : public AudioDisplaySkiaT
 
 public:
 	AudioDisplaySkiaGpuOffscreenContentTarget(
-		AudioDisplaySkiaGpuOffscreenHost &host,
+		AudioDisplaySkiaGpuOffscreenBackend &host,
 		wxBitmap &bitmap,
 		wxRect const& rect);
 	bool IsValid() const override;
@@ -83,7 +83,7 @@ public:
 };
 
 class AudioDisplaySkiaGpuOffscreenPresentTarget final : public AudioDisplaySkiaPresentTarget {
-	AudioDisplaySkiaGpuOffscreenHost &host;
+	AudioDisplaySkiaGpuOffscreenBackend &host;
 	wxRect rect;
 	AudioDisplaySkiaOffscreenReadbackCache *readback = nullptr;
 #ifdef WITH_SKIA
@@ -91,7 +91,7 @@ class AudioDisplaySkiaGpuOffscreenPresentTarget final : public AudioDisplaySkiaP
 #endif
 
 public:
-	AudioDisplaySkiaGpuOffscreenPresentTarget(AudioDisplaySkiaGpuOffscreenHost &host, wxRect const& rect);
+	AudioDisplaySkiaGpuOffscreenPresentTarget(AudioDisplaySkiaGpuOffscreenBackend &host, wxRect const& rect);
 	bool IsValid() const override;
 	wxRect const& GetRect() const override { return rect; }
 	SkCanvas *GetCanvas() const override;
@@ -99,7 +99,7 @@ public:
 	bool PresentTo(wxDC &dc, bool use_mask) override;
 };
 
-class AudioDisplaySkiaGpuOffscreenHost final : public AudioDisplaySkiaHost {
+class AudioDisplaySkiaGpuOffscreenBackend final : public AudioDisplaySkiaBackend {
 	wxWindow *owner = nullptr;
 	wxFrame *hidden_frame = nullptr;
 	wxGLCanvas *canvas = nullptr;
@@ -142,11 +142,11 @@ class AudioDisplaySkiaGpuOffscreenHost final : public AudioDisplaySkiaHost {
 	}
 
 public:
-	explicit AudioDisplaySkiaGpuOffscreenHost(wxWindow *owner)
+	explicit AudioDisplaySkiaGpuOffscreenBackend(wxWindow *owner)
 	: owner(owner) {
 	}
 
-	~AudioDisplaySkiaGpuOffscreenHost() override {
+	~AudioDisplaySkiaGpuOffscreenBackend() override {
 		content_surface_cache.surface.reset();
 		present_surface_cache.surface.reset();
 		content_readback_cache.bitmap = wxBitmap();
@@ -223,8 +223,8 @@ public:
 		return cache;
 	}
 
-	AudioDisplaySkiaHostBackend GetBackend() const override {
-		return AudioDisplaySkiaHostBackend::ExperimentalGpu;
+	AudioDisplaySkiaBackendType GetBackendType() const override {
+		return AudioDisplaySkiaBackendType::ExperimentalGpu;
 	}
 
 	std::unique_ptr<AudioDisplaySkiaTarget> CreateContentTarget(wxBitmap &bitmap, wxRect const& rect) override {
@@ -244,7 +244,7 @@ public:
 };
 
 AudioDisplaySkiaGpuOffscreenContentTarget::AudioDisplaySkiaGpuOffscreenContentTarget(
-	AudioDisplaySkiaGpuOffscreenHost &host,
+	AudioDisplaySkiaGpuOffscreenBackend &host,
 	wxBitmap &bitmap,
 	wxRect const& rect)
 : host(host)
@@ -305,7 +305,7 @@ bool AudioDisplaySkiaGpuOffscreenContentTarget::Finalize() {
 }
 
 AudioDisplaySkiaGpuOffscreenPresentTarget::AudioDisplaySkiaGpuOffscreenPresentTarget(
-	AudioDisplaySkiaGpuOffscreenHost &host,
+	AudioDisplaySkiaGpuOffscreenBackend &host,
 	wxRect const& rect)
 : host(host)
 , rect(rect)
@@ -367,22 +367,22 @@ bool AudioDisplaySkiaGpuOffscreenPresentTarget::PresentTo(wxDC &dc, bool use_mas
 }
 
 // ---------------------------------------------------------------------------
-// Direct-GPU present host — renders to AudioDisplay's own wxGLCanvas
+// Direct-GPU present backend — renders to AudioDisplay's own wxGLCanvas
 // (which is the AudioDisplay itself) and presents via SwapBuffers.
-// The GL canvas and context are owned by AudioDisplay, not by this host.
+// The GL canvas and context are owned by AudioDisplay, not by this backend.
 // ---------------------------------------------------------------------------
 
-class AudioDisplaySkiaDirectGpuHost;
+class AudioDisplaySkiaDirectGpuBackend;
 
 class AudioDisplaySkiaDirectGpuPresentTarget final : public AudioDisplaySkiaPresentTarget {
-	AudioDisplaySkiaDirectGpuHost &host;
+	AudioDisplaySkiaDirectGpuBackend &host;
 	wxRect rect;
 #ifdef WITH_SKIA
 	sk_sp<SkSurface> surface;
 #endif
 
 public:
-	AudioDisplaySkiaDirectGpuPresentTarget(AudioDisplaySkiaDirectGpuHost &host, wxRect const& rect);
+	AudioDisplaySkiaDirectGpuPresentTarget(AudioDisplaySkiaDirectGpuBackend &host, wxRect const& rect);
 	bool IsValid() const override;
 	wxRect const& GetRect() const override { return rect; }
 	SkCanvas *GetCanvas() const override;
@@ -390,7 +390,7 @@ public:
 	bool PresentTo(wxDC &dc, bool use_mask) override;
 };
 
-class AudioDisplaySkiaDirectGpuHost final : public AudioDisplaySkiaHost {
+class AudioDisplaySkiaDirectGpuBackend final : public AudioDisplaySkiaBackend {
 	wxGLCanvas *canvas = nullptr;     // not owned — AudioDisplay IS the canvas
 	wxGLContext *gl_ctx = nullptr;    // not owned — AudioDisplay owns it
 	std::unique_ptr<SkiaGpuContextHost> context_host;
@@ -403,11 +403,11 @@ class AudioDisplaySkiaDirectGpuHost final : public AudioDisplaySkiaHost {
 #endif
 
 public:
-	AudioDisplaySkiaDirectGpuHost(wxGLCanvas *canvas, wxGLContext *gl_ctx)
+	AudioDisplaySkiaDirectGpuBackend(wxGLCanvas *canvas, wxGLContext *gl_ctx)
 	: canvas(canvas), gl_ctx(gl_ctx) {
 	}
 
-	~AudioDisplaySkiaDirectGpuHost() override {
+	~AudioDisplaySkiaDirectGpuBackend() override {
 		present_surface.reset();
 		if (context_host) context_host->Reset();
 		context_host.reset();
@@ -467,8 +467,8 @@ public:
 		present_height = 0;
 	}
 
-	AudioDisplaySkiaHostBackend GetBackend() const override {
-		return AudioDisplaySkiaHostBackend::DirectGpu;
+	AudioDisplaySkiaBackendType GetBackendType() const override {
+		return AudioDisplaySkiaBackendType::DirectGpu;
 	}
 
 	std::unique_ptr<AudioDisplaySkiaTarget> CreateContentTarget(wxBitmap &bitmap, wxRect const& rect) override {
@@ -484,7 +484,7 @@ public:
 };
 
 AudioDisplaySkiaDirectGpuPresentTarget::AudioDisplaySkiaDirectGpuPresentTarget(
-	AudioDisplaySkiaDirectGpuHost &host, wxRect const& rect)
+	AudioDisplaySkiaDirectGpuBackend &host, wxRect const& rect)
 : host(host), rect(rect) {
 #ifdef WITH_SKIA
 	if (!host.EnsureCurrent() || rect.width <= 0 || rect.height <= 0)
@@ -530,14 +530,14 @@ bool AudioDisplaySkiaDirectGpuPresentTarget::PresentTo(wxDC & /*dc*/, bool /*use
 	return true;
 }
 
-std::unique_ptr<AudioDisplaySkiaHost> CreateAudioDisplaySkiaBitmapHost() {
-	return std::make_unique<AudioDisplaySkiaBitmapHost>();
+std::unique_ptr<AudioDisplaySkiaBackend> CreateAudioDisplaySkiaBitmapBackend() {
+	return std::make_unique<AudioDisplaySkiaBitmapBackend>();
 }
 
-std::unique_ptr<AudioDisplaySkiaHost> CreateAudioDisplaySkiaExperimentalGpuHost(wxWindow *owner) {
-	return std::make_unique<AudioDisplaySkiaGpuOffscreenHost>(owner);
+std::unique_ptr<AudioDisplaySkiaBackend> CreateAudioDisplaySkiaExperimentalGpuBackend(wxWindow *owner) {
+	return std::make_unique<AudioDisplaySkiaGpuOffscreenBackend>(owner);
 }
 
-std::unique_ptr<AudioDisplaySkiaHost> CreateAudioDisplaySkiaDirectGpuHost(wxGLCanvas *canvas, wxGLContext *gl_ctx) {
-	return std::make_unique<AudioDisplaySkiaDirectGpuHost>(canvas, gl_ctx);
+std::unique_ptr<AudioDisplaySkiaBackend> CreateAudioDisplaySkiaDirectGpuBackend(wxGLCanvas *canvas, wxGLContext *gl_ctx) {
+	return std::make_unique<AudioDisplaySkiaDirectGpuBackend>(canvas, gl_ctx);
 }

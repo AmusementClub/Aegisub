@@ -44,6 +44,9 @@
 #include <wx/window.h>
 
 #include "audio_renderer_spectrum.h"
+#ifdef WITH_SKIA
+#include "audio_display_skia_backend.h"
+#endif
 #include "audio_display_render_model.h"
 #include "ui_dispatch.h"
 
@@ -56,10 +59,7 @@ class AudioRenderer;
 class AudioRendererBitmapProvider;
 class TimeRange;
 class AudioTileCompositor;
-#ifdef WITH_SKIA
-class AudioDisplaySkiaHost;
 class AudioDisplaySkiaRenderer;
-#endif
 
 class AudioDisplayInteractionObject;
 class AudioMarkerInteractionObject;
@@ -170,7 +170,7 @@ class AudioDisplay: public wxWindow {
 #ifdef WITH_SKIA
 	bool skia_waveform_content_enabled = false;
 	std::unique_ptr<wxGLContext> gl_context;
-	std::unique_ptr<AudioDisplaySkiaHost> skia_host;
+	std::unique_ptr<AudioDisplaySkiaBackend> skia_backend;
 	std::unique_ptr<AudioDisplaySkiaRenderer> skia_renderer;
 	/// Reusable render model for DirectGpu path — avoids per-frame heap
 	/// allocation of large vectors (spectrum.power, spectrum.ready, etc.).

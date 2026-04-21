@@ -12,24 +12,24 @@ class wxWindow;
 class AudioDisplaySkiaTarget;
 class AudioDisplaySkiaPresentTarget;
 
-enum class AudioDisplaySkiaHostBackend {
+enum class AudioDisplaySkiaBackendType {
 	Bitmap = 0,
 	ExperimentalGpu,
 	DirectGpu,
 };
 
-class AudioDisplaySkiaHost {
+class AudioDisplaySkiaBackend {
 public:
-	virtual ~AudioDisplaySkiaHost() = default;
+	virtual ~AudioDisplaySkiaBackend() = default;
 
-	virtual AudioDisplaySkiaHostBackend GetBackend() const = 0;
+	virtual AudioDisplaySkiaBackendType GetBackendType() const = 0;
 	virtual std::unique_ptr<AudioDisplaySkiaTarget> CreateContentTarget(wxBitmap &bitmap, wxRect const& rect) = 0;
 	virtual std::unique_ptr<AudioDisplaySkiaPresentTarget> CreatePresentTarget(wxRect const& rect) = 0;
 };
 
-std::unique_ptr<AudioDisplaySkiaHost> CreateAudioDisplaySkiaBitmapHost();
-std::unique_ptr<AudioDisplaySkiaHost> CreateAudioDisplaySkiaExperimentalGpuHost(wxWindow *owner);
+std::unique_ptr<AudioDisplaySkiaBackend> CreateAudioDisplaySkiaBitmapBackend();
+std::unique_ptr<AudioDisplaySkiaBackend> CreateAudioDisplaySkiaExperimentalGpuBackend(wxWindow *owner);
 
 class wxGLCanvas;
 class wxGLContext;
-std::unique_ptr<AudioDisplaySkiaHost> CreateAudioDisplaySkiaDirectGpuHost(wxGLCanvas *canvas, wxGLContext *gl_ctx);
+std::unique_ptr<AudioDisplaySkiaBackend> CreateAudioDisplaySkiaDirectGpuBackend(wxGLCanvas *canvas, wxGLContext *gl_ctx);

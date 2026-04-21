@@ -33,7 +33,6 @@
 #include "audio_controller.h"
 #include "audio_display_invalidation_planner.h"
 #ifdef WITH_SKIA
-#include "audio_display_skia_host.h"
 #include "audio_display_skia_renderer.h"
 #include "audio_display_skia_target.h"
 #endif
@@ -883,7 +882,7 @@ AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::C
 		if (gl_context && gl_context->IsOK()) {
 			skia_waveform_content_enabled = true;
 			content_backing_enabled = false;
-			skia_host = CreateAudioDisplaySkiaDirectGpuHost(this, gl_context.get());
+			skia_backend = CreateAudioDisplaySkiaDirectGpuBackend(this, gl_context.get());
 			skia_renderer = agi::make_unique<AudioDisplaySkiaRenderer>();
 		}
 	}
@@ -1038,7 +1037,7 @@ void AudioDisplay::UpdateContentBackingBitmap() {
 #ifdef WITH_SKIA
 	if (skia_waveform_content_enabled && skia_renderer && audio_renderer_provider) {
 		audio_renderer_provider->PopulateRenderModel(model);
-		auto target = skia_host ? skia_host->CreateContentTarget(content_backing_bitmap, wxRect(0, 0, width, audio_height)) : nullptr;
+		auto target = skia_backend ? skia_backend->CreateContentTarget(content_backing_bitmap, wxRect(0, 0, width, audio_height)) : nullptr;
 		if (target && target->IsValid()) {
 			auto *canvas = target->GetCanvas();
 			rendered_with_skia = canvas
@@ -1413,7 +1412,7 @@ void AudioDisplay::OnLoadTimer(wxTimerEvent&)
 #ifdef WITH_SKIA
 void AudioDisplay::DoDirectGpuRender() {
 	if (!audio_renderer_provider || !provider) return;
-	if (!skia_renderer || !skia_host || !gl_context) return;
+	if (!skia_renderer || !skia_backend || !gl_context) return;
 
 	wxRect full_rect(wxPoint(0, 0), GetClientSize());
 	if (full_rect.width <= 0 || full_rect.height <= 0) return;
@@ -1424,7 +1423,7 @@ void AudioDisplay::DoDirectGpuRender() {
 		audio_renderer_provider->PopulateRenderModel(model);
 
 	if (skia_renderer->CanDrawFrame(model)) {
-		auto frame_target = skia_host->CreatePresentTarget(full_rect);
+		auto frame_target = skia_backend->CreatePresentTarget(full_rect);
 		auto *canvas = frame_target ? frame_target->GetCanvas() : nullptr;
 		// PresentTo needs a DC argument for the interface but DirectGpu
 		// ignores it — SwapBuffers is used instead.
@@ -1453,7 +1452,7 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 
 #ifdef WITH_SKIA
 	// AudioDisplay IS a wxGLCanvas — render everything via Skia + GL.
-	if (skia_waveform_content_enabled && skia_renderer && skia_host && gl_context) {
+	if (skia_waveform_content_enabled && skia_renderer && skia_backend && gl_context) {
 		wxPaintDC dc(this);  // consume/validate WM_PAINT
 		(void)dc;
 		SetCurrent(*gl_context);
@@ -2306,7 +2305,7 @@ void AudioDisplay::OnSize(wxSizeEvent &)
 
 #ifdef WITH_SKIA
 	// Invalidate cached present surface — size changed.
-	if (skia_host && skia_host->GetBackend() == AudioDisplaySkiaHostBackend::DirectGpu) {
+	if (skia_backend && skia_backend->GetBackendType() == AudioDisplaySkiaBackendType::DirectGpu) {
 		// DirectGpuHost caches an FBO 0 surface by size; the next
 		// CreatePresentTarget call will recreate it.
 	}

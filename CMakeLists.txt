@@ -812,7 +812,7 @@ find_package(ass REQUIRED)
 target_include_directories(Aegisub PRIVATE ${ass_INCLUDE_DIRS})
 target_link_libraries(Aegisub LINK_PRIVATE ${ass_LIBRARIES})
 
-find_package(Boost REQUIRED container locale regex spirit)
+find_package(Boost CONFIG REQUIRED COMPONENTS container locale regex spirit)
 find_package(hwy REQUIRED CONFIG)
 target_link_libraries(libaegisub PRIVATE "Boost::locale")
 target_link_libraries(libaegisub PUBLIC "Boost::headers" "Boost::container")
@@ -842,6 +842,45 @@ check_include_files(OpenGL/gl.h HAVE_OPENGL_GL_H)
 if(HAVE_OPENGL_GL_H)
     target_compile_definitions(Aegisub PRIVATE "HAVE_OPENGL_GL_H")
 endif()
+
+if(WIN32)
+    function(aegisub_seed_skia_windows_sdk_import lib_name cache_var)
+        if(DEFINED ${cache_var} AND EXISTS "${${cache_var}}")
+            return()
+        endif()
+
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+            set(_aegisub_sdk_arch "x64")
+        else()
+            set(_aegisub_sdk_arch "x86")
+        endif()
+
+        file(GLOB _aegisub_sdk_um_dirs LIST_DIRECTORIES true
+            "C:/Program Files (x86)/Windows Kits/10/Lib/*/um/${_aegisub_sdk_arch}")
+        list(SORT _aegisub_sdk_um_dirs COMPARE NATURAL ORDER DESCENDING)
+
+        foreach(_aegisub_sdk_um_dir IN LISTS _aegisub_sdk_um_dirs)
+            unset(_aegisub_sdk_lib CACHE)
+            unset(_aegisub_sdk_lib)
+            find_library(_aegisub_sdk_lib
+                NAMES "${lib_name}"
+                NAMES_PER_DIR
+                PATHS "${_aegisub_sdk_um_dir}"
+                NO_DEFAULT_PATH)
+            if(_aegisub_sdk_lib)
+                set(${cache_var} "${_aegisub_sdk_lib}" CACHE FILEPATH
+                    "Windows SDK import preseeded for unofficial-skia" FORCE)
+                break()
+            endif()
+        endforeach()
+    endfunction()
+
+    foreach(_aegisub_cfg RELEASE DEBUG)
+        aegisub_seed_skia_windows_sdk_import("FontSub.lib" "z_vcpkg_skia_link_libs_FontSub_lib_${_aegisub_cfg}")
+        aegisub_seed_skia_windows_sdk_import("Usp10.lib" "z_vcpkg_skia_link_libs_Usp10_lib_${_aegisub_cfg}")
+    endforeach()
+endif()
+
 find_package(unofficial-skia CONFIG QUIET)
 set(AEGISUB_HAVE_SKIA_PACKAGE OFF)
 if(TARGET unofficial::skia::skia)
@@ -858,8 +897,8 @@ if(WITH_SKIA)
     target_compile_definitions(Aegisub PRIVATE WITH_SKIA)
     target_link_libraries(Aegisub PRIVATE unofficial::skia::skia)
     target_sources(Aegisub PRIVATE
-        src/audio_display_skia_host.cpp
-        src/audio_display_skia_host.h
+        src/audio_display_skia_backend.cpp
+        src/audio_display_skia_backend.h
         src/audio_display_skia_renderer.cpp
         src/audio_display_skia_renderer.h
         src/audio_display_skia_target.cpp
@@ -1257,6 +1296,7 @@ message(STATUS "\n"
     "  LuaJIT:                bundled\n"
     "  LuaJIT Shared:         ${AEGISUB_LUAJIT_SHARED}\n"
     "  LuaSocket:             ${LUA_WITH_LUASOCKET}\n"
+    "  Skia:                  ${WITH_SKIA}\n"
     "\n"
     "Dynamic Loading\n"
     "  AviSynth:              ${HAVE_AVISYNTH}\n"

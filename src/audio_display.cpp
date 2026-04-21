@@ -1928,7 +1928,7 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 			return;
 		if (new_label_visible) {
 			agi::Time new_label_time = TimeFromAbsoluteX(new_pos);
-			const wxString new_label = to_wx(new_label_time.GetAssFormatted());
+			const wxString new_label = to_wx(new_label_time.GetAssFormatted(true));
 			if (old_label_visible && new_label == old_label)
 				return;
 		}
@@ -1941,7 +1941,7 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 	if (show_time)
 	{
 		agi::Time new_label_time = TimeFromAbsoluteX(track_cursor_pos);
-		track_cursor_label = to_wx(new_label_time.GetAssFormatted());
+		track_cursor_label = to_wx(new_label_time.GetAssFormatted(true));
 	}
 	else
 	{

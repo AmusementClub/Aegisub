@@ -25,6 +25,8 @@
 #include "include/aegisub/context_ui.h"
 #include "selection_controller.h"
 #include "video_display.h"
+#include "video_overlay_draw_context.h"
+#include "video_overlay_draw_context_legacy_gl.h"
 
 #include <libaegisub/color.h>
 #include <libaegisub/format.h>
@@ -69,28 +71,41 @@ void VisualToolCross::OnDoubleClick() {
 }
 
 void VisualToolCross::Draw() {
+	LegacyVideoOverlayDrawContext context(gl, *gl_text);
+	DrawWithContext(context);
+}
+
+void VisualToolCross::DrawOverlay(VideoOverlayDrawContext &context) {
+	DrawWithContext(context);
+}
+
+void VisualToolCross::DrawWithContext(VideoOverlayDrawContext &context) {
 	if (!mouse_pos) return;
 
 	// Draw cross
-	gl.SetInvert();
-	gl.SetLineColour(*wxWHITE, 1.0, 1);
+	context.SetInvert();
+	context.SetLineColour(*wxWHITE, 1.0f, 1);
 	float lines[] = {
 		0.f, mouse_pos.Y(),
 		canvas_size.X(), mouse_pos.Y(),
 		mouse_pos.X(), 0.f,
 		mouse_pos.X(), canvas_size.Y()
 	};
-	gl.DrawLines(2, lines, 4);
-	gl.ClearInvert();
+	context.DrawLines(2, lines, 4);
+	context.ClearInvert();
 
 	std::string mouse_text = Text(ToScriptCoords(shift_down ? 2 * video_pos + video_res - mouse_pos : mouse_pos));
 
-	int tw, th;
 	int font_size = coordinate_font_size_opt->GetInt();
 	font_size = std::min(72, std::max(6, font_size));
-	gl_text->SetFont("Verdana", font_size, true, false);
-	gl_text->SetColour(agi::Color(255, 255, 255, 255));
-	gl_text->GetExtent(mouse_text, tw, th);
+	VideoOverlayTextStyle text_style;
+	text_style.face = "Verdana";
+	text_style.size = font_size;
+	text_style.bold = true;
+	text_style.colour = *wxWHITE;
+	wxSize const extent = context.MeasureText(mouse_text, text_style);
+	int const tw = extent.GetWidth();
+	int const th = extent.GetHeight();
 
 	// Place the text in the corner of the cross closest to the center of the video
 	int dx = mouse_pos.X();
@@ -105,7 +120,7 @@ void VisualToolCross::Draw() {
 	else
 		dy -= th + 3;
 
-	gl_text->Print(mouse_text, dx, dy);
+	context.DrawText(mouse_text, dx, dy, text_style);
 }
 
 std::string VisualToolCross::Text(Vector2D v) {

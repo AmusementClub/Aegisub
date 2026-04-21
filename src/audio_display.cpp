@@ -32,6 +32,11 @@
 
 #include "audio_controller.h"
 #include "audio_display_invalidation_planner.h"
+#ifdef WITH_SKIA
+#include "audio_display_skia_host.h"
+#include "audio_display_skia_renderer.h"
+#include "audio_display_skia_target.h"
+#endif
 #include "audio_renderer.h"
 #include "audio_renderer_spectrum.h"
 #include "audio_renderer_waveform.h"
@@ -54,12 +59,19 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdlib>
+#include <string>
 
+#include <libaegisub/fs.h>
+#include <libaegisub/log.h>
 #include <wx/dcbuffer.h>
 #include <wx/dcclient.h>
 #include <wx/dcmemory.h>
 #include <wx/font.h>
+#ifdef WITH_SKIA
+#include <wx/glcanvas.h>
+#endif
 #include <wx/mousestate.h>
 
 /// @class AudioDisplayInteractionObject
@@ -104,6 +116,26 @@ wxRect ToWxRect(AudioDisplayInvalidationPlanner::Rect const& rect) {
 	return wxRect(rect.x, rect.y, rect.width, rect.height);
 }
 
+/// Convert wxRect to AudioDisplayRect (render model boundary conversion).
+AudioDisplayRect ToDisplayRect(wxRect const& r) {
+	return { r.x, r.y, r.width, r.height };
+}
+
+/// Convert wxColour to packed BGRA uint32_t (render model boundary conversion).
+uint32_t PackWxColour(wxColour const& c) {
+	return AudioDisplayPackColour(c.Red(), c.Green(), c.Blue(), c.Alpha());
+}
+
+/// Convert packed BGRA uint32_t to wxColour (fallback wxDC render path).
+wxColour UnpackToWxColour(uint32_t c) {
+	return wxColour(AudioDisplayColourR(c), AudioDisplayColourG(c), AudioDisplayColourB(c), AudioDisplayColourA(c));
+}
+
+/// Convert AudioDisplayRect to wxRect (fallback wxDC render path).
+wxRect ToWxRect(AudioDisplayRect const& r) {
+	return wxRect(r.x, r.y, r.width, r.height);
+}
+
 bool ReadEnvFlag(char const *name) {
 	auto const* value = std::getenv(name);
 	if (!value || !*value)
@@ -134,6 +166,93 @@ int ReadEnvInt(char const *name, int default_value, int min_value, int max_value
 
 	parsed = std::clamp(parsed, static_cast<long>(min_value), static_cast<long>(max_value));
 	return static_cast<int>(parsed);
+}
+
+bool IsSkiaAudioRenderBackendEnabled() {
+#ifdef WITH_SKIA
+	// Render Backend preference: 0=Auto (GPU if available), 1=GPU, 2=CPU
+	int64_t backend = OPT_GET("Audio/Display/Draw/Render Backend")->GetInt();
+	return backend != 2; // anything except explicit CPU → try Skia GPU
+#else
+	return false;
+#endif
+}
+
+bool IsFalseLikeEnvValue(char const *value) {
+	if (!value || !*value)
+		return true;
+
+	char const first = static_cast<char>(std::tolower(static_cast<unsigned char>(*value)));
+	return first == '0' || first == 'f' || first == 'n';
+}
+
+bool IsTrueLikeEnvValue(std::string const& value) {
+	if (value.empty())
+		return false;
+
+	auto lower = value;
+	std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) {
+		return static_cast<char>(std::tolower(c));
+	});
+	return lower == "1" || lower == "true" || lower == "yes" || lower == "on";
+}
+
+bool IsAudioDebugLogEnabled() {
+	static bool enabled = false;
+	static bool initialized = false;
+	if (initialized)
+		return enabled;
+	initialized = true;
+
+	auto const* value = std::getenv("AEGISUB_AUDIO_DEBUG_LOG");
+	if (!value || !*value)
+		return enabled;
+
+	std::string const setting(value);
+	enabled = IsTrueLikeEnvValue(setting) || !IsFalseLikeEnvValue(value);
+	return enabled;
+}
+
+/// Emit audio renderer debug info into the standard NDJSON session log when
+/// AEGISUB_AUDIO_DEBUG_LOG is enabled. Any non-false-like value enables it.
+/// Throttled to at most once per second to avoid excessive log spam.
+void MaybeLogDebugInfo(AudioRendererBitmapProvider *renderer_provider) {
+	if (!renderer_provider)
+		return;
+	if (!IsAudioDebugLogEnabled())
+		return;
+
+	using clock = std::chrono::steady_clock;
+	static auto last_write = clock::time_point{};
+	static bool announced = false;
+	auto now = clock::now();
+	if (now - last_write < std::chrono::seconds(1))
+		return;
+	last_write = now;
+
+	if (!announced) {
+		announced = true;
+		auto const session_log = agi::log::GetSessionLogFile();
+		if (!session_log.empty())
+			LOG_I("audio/debug") << "enabled=1 session_log_file=" << agi::fs::PathToString(session_log);
+		else
+			LOG_I("audio/debug") << "enabled=1 session_log_file=<none>";
+	}
+
+	auto lines = renderer_provider->GetDebugInfo();
+	if (lines.empty())
+		return;
+
+	std::string message;
+	for (size_t i = 0; i < lines.size(); ++i) {
+		if (i != 0)
+			message += " | ";
+		message += lines[i];
+	}
+	if (message.empty())
+		return;
+
+	LOG_D("audio/debug") << message;
 }
 
 /// @brief Colourscheme-based UI colour provider
@@ -325,6 +444,33 @@ public:
 			dc.DrawRectangle(wxRect(thumb.x - (min_width - thumb.width) / 2, thumb.y, min_width, thumb.height));
 		else
 			dc.DrawRectangle(thumb);
+	}
+
+	AudioDisplayScrollbarRenderData BuildRenderModel(bool has_focus, int load_progress) {
+		colours.SetFocused(has_focus);
+
+		AudioDisplayScrollbarRenderData model;
+		model.visible = true;
+		model.bounds = ToDisplayRect(bounds);
+		model.thumb = ToDisplayRect(thumb);
+		model.light_colour = PackWxColour(colours.Light());
+		model.dark_colour = PackWxColour(colours.Dark());
+		model.selection_colour = PackWxColour(colours.Selection());
+		if (sel_length > 0 && sel_start >= 0) {
+			model.has_selection = true;
+			model.selection_rect = ToDisplayRect(wxRect(sel_start, bounds.y, sel_length, bounds.height));
+		}
+		if (load_progress > 0 && load_progress < data_length) {
+			model.has_load_marker = true;
+			model.load_marker_rect = ToDisplayRect(wxRect(
+				(int64_t)bounds.width * load_progress / data_length - 25, bounds.y + 1,
+				25, bounds.height - 2));
+		}
+
+		int const min_width = GetMinWidth();
+		if (model.thumb.width < min_width)
+			model.thumb = ToDisplayRect(wxRect(thumb.x - (min_width - thumb.width) / 2, thumb.y, min_width, thumb.height));
+		return model;
 	}
 };
 
@@ -537,6 +683,76 @@ public:
 
 		} while (next_scale_mark_pos < bounds.width);
 	}
+
+	AudioDisplayTimelineRenderData BuildRenderModel() {
+		AudioDisplayTimelineRenderData model;
+		model.visible = true;
+		model.bounds = ToDisplayRect(bounds);
+		model.light_colour = PackWxColour(colours.Light());
+		model.dark_colour = PackWxColour(colours.Dark());
+
+		int const bottom = bounds.y + bounds.height;
+		int const ms_left = int(pixel_left * ms_per_pixel);
+		int next_scale_mark = int(ms_left / scale_minor_divisor);
+		if (next_scale_mark * scale_minor_divisor < ms_left)
+			next_scale_mark += 1;
+		assert(next_scale_mark * scale_minor_divisor >= ms_left);
+
+		int next_scale_mark_pos = 0;
+		int last_text_right = -1;
+		int last_hour = -1, last_minute = -1;
+		if (duration < 3600)
+			last_hour = 0;
+
+		do {
+			next_scale_mark_pos = int(next_scale_mark * scale_minor_divisor / ms_per_pixel) - pixel_left;
+			bool const mark_is_major = next_scale_mark % scale_major_modulo == 0;
+
+			AudioDisplayTimelineTick tick;
+			tick.x = next_scale_mark_pos;
+			tick.major = mark_is_major;
+
+			if (mark_is_major && next_scale_mark_pos > last_text_right) {
+				double const mark_time = next_scale_mark * scale_minor_divisor / 1000.0;
+				int const mark_hour = (int)(mark_time / 3600);
+				int const mark_minute = (int)(mark_time / 60) % 60;
+				double const mark_second = mark_time - mark_hour * 3600.0 - mark_minute * 60.0;
+
+				bool const changed_hour = mark_hour != last_hour;
+				bool const changed_minute = mark_minute != last_minute;
+
+				wxString label_wx;
+				if (changed_hour) {
+					label_wx = fmt_wx("%d:%02d:", mark_hour, mark_minute);
+					last_hour = mark_hour;
+					last_minute = mark_minute;
+				}
+				else if (changed_minute) {
+					label_wx = fmt_wx("%d:", mark_minute);
+					last_minute = mark_minute;
+				}
+
+				if (scale_minor >= Sc_Decisecond)
+					label_wx += fmt_wx("%02d", mark_second);
+				else if (scale_minor == Sc_Centisecond)
+					label_wx += fmt_wx("%02.1f", mark_second);
+				else
+					label_wx += fmt_wx("%02.2f", mark_second);
+
+				tick.label = std::string(label_wx.utf8_str());
+
+				int tw = 0;
+				int th = 0;
+				display->GetTextExtent(label_wx, &tw, &th);
+				last_text_right = next_scale_mark_pos + tw;
+			}
+
+			model.ticks.push_back(std::move(tick));
+			next_scale_mark += 1;
+		} while (next_scale_mark_pos < bounds.width);
+
+		return model;
+	}
 };
 
 namespace {
@@ -631,8 +847,23 @@ public:
 	int GetPosition() const { return markers.front()->GetPosition(); }
 };
 
+// GL attributes for the AudioDisplay's own wxGLCanvas (WITH_SKIA).
+#ifdef WITH_SKIA
+namespace {
+#if wxCHECK_VERSION(3, 1, 1)
+const int s_audio_gl_attribs[] = { WX_GL_RGBA, WX_GL_DOUBLEBUFFER, WX_GL_STENCIL_SIZE, 8, WX_GL_BUFFER_SIZE, 24, WX_GL_MIN_ALPHA, 8, 0 };
+#else
+const int s_audio_gl_attribs[] = { WX_GL_RGBA, WX_GL_DOUBLEBUFFER, WX_GL_STENCIL_SIZE, 8, 0 };
+#endif
+}
+#endif
+
 AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::Context *context)
+#ifdef WITH_SKIA
+: wxGLCanvas(parent, wxID_ANY, s_audio_gl_attribs, wxDefaultPosition, wxDefaultSize, wxWANTS_CHARS|wxBORDER_SIMPLE)
+#else
 : wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, wxWANTS_CHARS|wxBORDER_SIMPLE)
+#endif
 , audio_open_connection(context->project->AddAudioProviderListener(&AudioDisplay::OnAudioOpen, this))
 , context(context)
 , audio_renderer(agi::make_unique<AudioRenderer>(ReadEnvInt("AEGISUB_AUDIO_RENDERER_CACHE_BITMAP_WIDTH", 32, 8, 512)))
@@ -644,6 +875,19 @@ AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::C
 {
 	audio_renderer->SetAmplitudeScale(scale_amplitude);
 	content_backing_enabled = ReadEnvFlag("AEGISUB_AUDIO_DISPLAY_CONTENT_BACKING");
+#ifdef WITH_SKIA
+	// Render Backend preference: 0=Auto, 1=GPU, 2=CPU
+	// Auto and GPU both try DirectGpu; fall back to legacy GDI on failure.
+	if (IsSkiaAudioRenderBackendEnabled()) {
+		gl_context = std::make_unique<wxGLContext>(this);
+		if (gl_context && gl_context->IsOK()) {
+			skia_waveform_content_enabled = true;
+			content_backing_enabled = false;
+			skia_host = CreateAudioDisplaySkiaDirectGpuHost(this, gl_context.get());
+			skia_renderer = agi::make_unique<AudioDisplaySkiaRenderer>();
+		}
+	}
+#endif
 	SetZoomLevel(0);
 
 	SetMinClientSize(wxSize(-1, 70));
@@ -676,11 +920,6 @@ AudioDisplay::~AudioDisplay()
 	ui_activation.Deactivate();
 }
 
-void AudioDisplay::SyncToCurrentAudioProvider() {
-	if (context->project->AudioProvider())
-		ApplyAudioProvider(context->project->AudioProvider());
-}
-
 void AudioDisplay::QueueHighFrequencyRefresh(const wxRect *rect, bool update) {
 	pending_high_frequency_refresh = true;
 	pending_high_frequency_update |= update;
@@ -707,12 +946,13 @@ void AudioDisplay::FlushHighFrequencyRefresh() {
 		high_frequency_refresh_timer.Stop();
 
 	if (pending_high_frequency_full_refresh)
-		Refresh();
+		RequestPaint();
 	else if (!pending_high_frequency_rect.IsEmpty())
-		RefreshRect(pending_high_frequency_rect, false);
+		RequestPaint(&pending_high_frequency_rect);
 
-	if (pending_high_frequency_update)
+	if (pending_high_frequency_update) {
 		Update();
+	}
 
 	pending_high_frequency_full_refresh = false;
 	pending_high_frequency_refresh = false;
@@ -743,7 +983,11 @@ bool AudioDisplay::EnsureContentBackingBitmap() {
 		|| content_backing_bitmap.GetWidth() != width
 		|| content_backing_bitmap.GetHeight() != audio_height;
 	if (needs_recreate) {
-		content_backing_bitmap = wxBitmap(width, audio_height);
+		content_backing_bitmap =
+#ifdef WITH_SKIA
+			skia_waveform_content_enabled ? wxBitmap(width, audio_height, 32) :
+#endif
+			wxBitmap(width, audio_height);
 		content_backing_valid = false;
 	}
 
@@ -774,24 +1018,52 @@ void AudioDisplay::UpdateContentBackingBitmap() {
 	if (!content_backing_bitmap.IsOk()
 		|| content_backing_bitmap.GetWidth() != width
 		|| content_backing_bitmap.GetHeight() != audio_height) {
-		content_backing_bitmap = wxBitmap(width, audio_height);
+		content_backing_bitmap =
+#ifdef WITH_SKIA
+			skia_waveform_content_enabled ? wxBitmap(width, audio_height, 32) :
+#endif
+			wxBitmap(width, audio_height);
 		content_backing_valid = false;
 	}
 	if (!content_backing_bitmap.IsOk())
 		return;
 
-	wxMemoryDC backing_dc;
-	backing_dc.SelectObject(content_backing_bitmap);
-
 	wxRect full_audio_rect(0, audio_top, width, audio_height);
-	auto viewport = BuildViewportRequest(full_audio_rect);
-	viewport.audio_top = 0;
-	viewport.update_rect = wxRect(0, 0, width, audio_height);
+	auto model = BuildRenderModel(full_audio_rect, false, false);
+	model.viewport.audio_top = 0;
+	model.viewport.update_rect = AudioDisplayRect{0, 0, width, audio_height};
+	model.audio_bounds = AudioDisplayRect{0, 0, width, audio_height};
 
-	backing_dc.SetClippingRegion(viewport.update_rect);
-	PaintAudio(backing_dc, viewport);
-	backing_dc.DestroyClippingRegion();
-	backing_dc.SelectObject(wxNullBitmap);
+	bool rendered_with_skia = false;
+#ifdef WITH_SKIA
+	if (skia_waveform_content_enabled && skia_renderer && audio_renderer_provider) {
+		audio_renderer_provider->PopulateRenderModel(model);
+		auto target = skia_host ? skia_host->CreateContentTarget(content_backing_bitmap, wxRect(0, 0, width, audio_height)) : nullptr;
+		if (target && target->IsValid()) {
+			auto *canvas = target->GetCanvas();
+			rendered_with_skia = canvas
+				&& skia_renderer->DrawContentToCanvas(*canvas, target->GetRect(), model)
+				&& target->Finalize();
+		}
+	}
+#endif
+
+	if (!rendered_with_skia) {
+		wxMemoryDC backing_dc;
+		backing_dc.SelectObject(content_backing_bitmap);
+		backing_dc.SetClippingRegion(model.viewport.update_rect.x, model.viewport.update_rect.y,
+			model.viewport.update_rect.width, model.viewport.update_rect.height);
+		PaintAudio(backing_dc, model);
+		backing_dc.DestroyClippingRegion();
+		backing_dc.SelectObject(wxNullBitmap);
+	}
+
+	{
+		wxMemoryDC backing_dc;
+		backing_dc.SelectObject(content_backing_bitmap);
+		PaintStaticAudioOverlays(backing_dc, model);
+		backing_dc.SelectObject(wxNullBitmap);
+	}
 
 	content_backing_scroll_left = scroll_left;
 	content_backing_ms_per_pixel = ms_per_pixel;
@@ -799,7 +1071,6 @@ void AudioDisplay::UpdateContentBackingBitmap() {
 	content_backing_audio_height = audio_height;
 	content_backing_client_width = width;
 	content_backing_valid = true;
-	++content_backing_updates;
 }
 
 void AudioDisplay::ScrollBy(int pixel_amount)
@@ -828,7 +1099,7 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 	if (dragged_object)
 		QueueHighFrequencyRefresh(nullptr, true);
 	else
-		Refresh();
+		RequestPaint();
 }
 
 void AudioDisplay::ScrollTimeRangeInView(const TimeRange &range)
@@ -903,7 +1174,7 @@ void AudioDisplay::SetZoomLevel(int new_zoom_level)
 	if (track_cursor_pos >= 0)
 		track_cursor_pos = AbsoluteXFromTime(cursor_time);
 	InvalidateContentBacking();
-	Refresh();
+	RequestPaint();
 }
 
 wxString AudioDisplay::GetZoomLevelDescription(int level) const
@@ -942,12 +1213,17 @@ void AudioDisplay::SetAmplitudeScale(float scale)
 {
 	audio_renderer->SetAmplitudeScale(scale);
 	InvalidateContentBacking();
-	Refresh();
+	RequestPaint();
 }
 
 void AudioDisplay::SetInteractivePrefetchEnabled(bool enabled) {
 	if (audio_renderer_provider)
 		audio_renderer_provider->SetInteractivePrefetchEnabled(enabled);
+}
+
+void AudioDisplay::SyncToCurrentAudioProvider() {
+	if (context->project->AudioProvider())
+		ApplyAudioProvider(context->project->AudioProvider());
 }
 
 void AudioDisplay::SetSpectrumChannelMode(AudioSpectrumChannelMode mode) {
@@ -958,7 +1234,7 @@ void AudioDisplay::SetSpectrumChannelMode(AudioSpectrumChannelMode mode) {
 		spectrum->SetChannelMode(mode);
 		audio_renderer->Invalidate();
 		InvalidateContentBacking();
-		Refresh();
+		RequestPaint();
 	}
 }
 
@@ -974,7 +1250,7 @@ void AudioDisplay::SetSpectrumMonoMixMode(AudioSpectrumMonoMixMode mode) {
 		spectrum->SetMonoMixMode(mode);
 		audio_renderer->Invalidate();
 		InvalidateContentBacking();
-		Refresh();
+		RequestPaint();
 	}
 }
 
@@ -993,7 +1269,7 @@ void AudioDisplay::OnSpectrumComputationModeChanged(agi::OptionValue const& opt)
 		spectrum->SetComputationMode(mode);
 		audio_renderer->Invalidate();
 		InvalidateContentBacking();
-		Refresh();
+		RequestPaint();
 	}
 }
 
@@ -1003,7 +1279,7 @@ void AudioDisplay::OnSpectrumFrequencyCurveChanged(agi::OptionValue const& opt) 
 		spectrum->SetFrequencyCurvePreset(preset);
 		audio_renderer->Invalidate();
 		InvalidateContentBacking();
-		Refresh();
+		RequestPaint();
 	}
 }
 
@@ -1015,7 +1291,7 @@ void AudioDisplay::SetSpectrumSelectedChannels(const std::vector<int> &channels)
 		spectrum->SetSelectedChannels(spectrum_selected_channels_runtime);
 		audio_renderer->Invalidate();
 		InvalidateContentBacking();
-		Refresh();
+		RequestPaint();
 	}
 }
 
@@ -1059,6 +1335,17 @@ void AudioDisplay::ReloadRenderingSettings()
 		audio_spectrum_renderer->SetMonoMixMode(spectrum_mono_mix_mode_runtime);
 		audio_spectrum_renderer->SetSelectedChannels(spectrum_selected_channels_runtime);
 
+		// Restore analysis cache capacity: the Set* calls above invoke
+		// AgeCache(0) which shrinks max_cache_bytes to a single block.
+		// In the Skia/GPU path the legacy AudioRenderer::Render path
+		// (which normally restores the size) is bypassed, so we must
+		// restore it explicitly.
+		{
+			auto max_mb = OPT_GET("Audio/Renderer/Spectrum/Memory Max")->GetInt();
+			size_t max_bytes = static_cast<size_t>(std::max<int64_t>(1, max_mb)) * 1024 * 1024;
+			audio_spectrum_renderer->AgeCache(max_bytes);
+		}
+
 		audio_renderer_provider = std::move(audio_spectrum_renderer);
 	}
 	else
@@ -1082,7 +1369,7 @@ void AudioDisplay::ReloadRenderingSettings()
 	timeline->SetColourScheme(colour_scheme_name);
 
 	InvalidateContentBacking();
-	Refresh();
+	RequestPaint();
 }
 
 void AudioDisplay::OnLoadTimer(wxTimerEvent&)
@@ -1108,10 +1395,12 @@ void AudioDisplay::OnLoadTimer(wxTimerEvent&)
 
 		if (left < scroll_left + pixel_audio_width && right >= scroll_left) {
 			InvalidateContentBacking();
-			Refresh();
+			RequestPaint();
 		}
-		else
-			RefreshRect(scrollbar->GetBounds());
+		else {
+			wxRect sb = scrollbar->GetBounds();
+			RequestPaint(&sb);
+		}
 		last_sample_decoded = new_decoded_count;
 	}
 
@@ -1121,13 +1410,63 @@ void AudioDisplay::OnLoadTimer(wxTimerEvent&)
 	}
 }
 
+#ifdef WITH_SKIA
+void AudioDisplay::DoDirectGpuRender() {
+	if (!audio_renderer_provider || !provider) return;
+	if (!skia_renderer || !skia_host || !gl_context) return;
+
+	wxRect full_rect(wxPoint(0, 0), GetClientSize());
+	if (full_rect.width <= 0 || full_rect.height <= 0) return;
+
+	auto &model = reusable_render_model;
+	FillRenderModel(model, full_rect, true, true);
+	if (audio_renderer_provider)
+		audio_renderer_provider->PopulateRenderModel(model);
+
+	if (skia_renderer->CanDrawFrame(model)) {
+		auto frame_target = skia_host->CreatePresentTarget(full_rect);
+		auto *canvas = frame_target ? frame_target->GetCanvas() : nullptr;
+		// PresentTo needs a DC argument for the interface but DirectGpu
+		// ignores it — SwapBuffers is used instead.
+		wxClientDC dummy_dc(this);
+		if (frame_target
+			&& frame_target->IsValid()
+			&& canvas
+			&& skia_renderer->DrawFrameToCanvas(*canvas, frame_target->GetRect(), model)
+			&& frame_target->PresentTo(dummy_dc, true)) {
+			// frame rendered successfully
+		}
+	}
+}
+#endif
+
+void AudioDisplay::RequestPaint(const wxRect *rect, bool erase_background) {
+	if (rect)
+		RefreshRect(*rect, erase_background);
+	else
+		Refresh(erase_background);
+}
+
 void AudioDisplay::OnPaint(wxPaintEvent&)
 {
 	if (!audio_renderer_provider || !provider) return;
 
+#ifdef WITH_SKIA
+	// AudioDisplay IS a wxGLCanvas — render everything via Skia + GL.
+	if (skia_waveform_content_enabled && skia_renderer && skia_host && gl_context) {
+		wxPaintDC dc(this);  // consume/validate WM_PAINT
+		(void)dc;
+		SetCurrent(*gl_context);
+		DoDirectGpuRender();
+		MaybeLogDebugInfo(audio_renderer_provider.get());
+		return;
+	}
+#endif
+
+#ifndef WITH_SKIA
+	// Legacy wx GDI path — only available when Skia is not compiled in.
 	{
 		wxBufferedPaintDC dc(this);
-		wxMemoryDC backing_dc;
 		bool backing_checked = false;
 		bool backing_selected = false;
 
@@ -1158,16 +1497,18 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 				continue;
 
 			dc.SetClippingRegion(rect);
+			auto model = BuildRenderModel(
+				rect,
+				scrollbar->GetBounds().Intersects(rect),
+				timeline->GetBounds().Intersects(rect));
 
-			bool redraw_scrollbar = scrollbar->GetBounds().Intersects(rect);
-			bool redraw_timeline = timeline->GetBounds().Intersects(rect);
 			wxRect audio_bounds(0, audio_top, GetClientSize().GetWidth(), audio_height);
 			if (audio_bounds.Intersects(rect)) {
 				wxRect audio_rect = rect;
 				audio_rect.Intersect(audio_bounds);
 				if (audio_rect.width > 0 && audio_rect.height > 0) {
-					auto viewport = BuildViewportRequest(audio_rect);
-					if (ensure_backing_dc()) {
+					bool used_backing = ensure_backing_dc();
+					if (used_backing) {
 						dc.Blit(
 							audio_rect.x,
 							audio_rect.y,
@@ -1176,53 +1517,24 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 							&backing_dc,
 							audio_rect.x,
 							audio_rect.y - audio_top);
-						++content_backing_blits;
 					}
 					else {
-						PaintAudio(dc, viewport);
+						PaintAudio(dc, model);
 					}
 
-					// Overlay split-channel labels once, at the left edge of the visible area
-					if (spectrum_channel_mode_runtime == AudioSpectrumChannelMode::ChannelSplit) {
-						if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get())) {
-							const auto &labels = spectrum->GetActiveChannelLabels();
-							const int n = static_cast<int>(labels.size());
-							if (n > 0 && audio_height > 0) {
-								const int band_h = audio_height / n;
-								const int label_x = FromDIP(4);
-								wxFont label_font = dc.GetFont();
-								label_font.SetPointSize(std::max(7, label_font.GetPointSize() - 1));
-								label_font.SetWeight(wxFONTWEIGHT_BOLD);
-								dc.SetFont(label_font);
-								for (int i = 0; i < n; ++i) {
-									const wxString wx_label = wxString::FromUTF8(labels[i].c_str());
-									const int label_y = audio_top + i * band_h + FromDIP(2);
-									// Shadow pass
-									dc.SetTextForeground(wxColour(0, 0, 0));
-									for (int dy = -1; dy <= 1; ++dy)
-										for (int dx = -1; dx <= 1; ++dx)
-											if (dx || dy)
-												dc.DrawText(wx_label, label_x + dx, label_y + dy);
-									// Label pass
-									dc.SetTextForeground(wxColour(230, 230, 230));
-									dc.DrawText(wx_label, label_x, label_y);
-								}
-							}
-						}
-					}
-
-					TimeRange viewport_time(viewport.begin_ms, viewport.end_ms);
-					PaintMarkers(dc, viewport_time);
-					PaintLabels(dc, viewport_time);
-					if (track_cursor_pos >= 0)
-						PaintTrackCursor(dc);
+					if (!used_backing)
+						PaintStaticAudioOverlays(dc, model);
+					PaintMarkers(dc, model);
+					PaintLabels(dc, model);
+					if (model.track_cursor_visible)
+						PaintTrackCursor(dc, model);
 				}
 			}
 
-			if (redraw_scrollbar)
-				scrollbar->Paint(dc, HasFocus(), audio_load_position);
-			if (redraw_timeline)
-				timeline->Paint(dc);
+			if (model.redraw_scrollbar)
+				PaintScrollbar(dc, model);
+			if (model.redraw_timeline)
+				PaintTimeline(dc, model);
 
 			dc.DestroyClippingRegion();
 		}
@@ -1230,52 +1542,85 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 		if (backing_selected)
 			backing_dc.SelectObject(wxNullBitmap);
 
-		if (OPT_GET("Audio/Display/Draw/Debug Metrics")->GetBool())
-			DrawDebugInfo(dc);
+		MaybeLogDebugInfo(audio_renderer_provider.get());
 	}
-
+#endif // !WITH_SKIA
 }
 
-void AudioDisplay::DrawDebugInfo(wxDC &dc) {
-	if (!audio_renderer_provider)
-		return;
+AudioDisplayRenderModel AudioDisplay::BuildRenderModel(
+	const wxRect &update_rect,
+	bool redraw_scrollbar,
+	bool redraw_timeline) const {
+	AudioDisplayRenderModel model;
+	FillRenderModel(model, update_rect, redraw_scrollbar, redraw_timeline);
+	return model;
+}
 
-	auto lines = audio_renderer_provider->GetDebugInfo();
-	if (content_backing_enabled) {
-		lines.insert(lines.begin(),
-			"content_backing: enabled=1 valid=" + std::to_string(content_backing_valid ? 1 : 0)
-			+ " updates=" + std::to_string(content_backing_updates)
-			+ " blits=" + std::to_string(content_backing_blits));
+void AudioDisplay::FillRenderModel(
+	AudioDisplayRenderModel &model,
+	const wxRect &update_rect,
+	bool redraw_scrollbar,
+	bool redraw_timeline) const {
+	model.Reset();
+	model.viewport = BuildViewportRequest(update_rect);
+	model.audio_bounds = AudioDisplayRect{0, audio_top, GetClientSize().GetWidth(), audio_height};
+	model.viewport_time = TimeRange(model.viewport.begin_ms, model.viewport.end_ms);
+	model.style_ranges = style_ranges;
+	model.redraw_scrollbar = redraw_scrollbar;
+	model.redraw_timeline = redraw_timeline;
+	model.track_cursor_visible = track_cursor_pos >= 0;
+	model.track_cursor_absolute_x = track_cursor_pos;
+	model.track_cursor_label = std::string(track_cursor_label.utf8_str());
+	if (scrollbar)
+		model.scrollbar = scrollbar->BuildRenderModel(HasFocus(), audio_load_position);
+	if (timeline)
+		model.timeline = timeline->BuildRenderModel();
+
+	if (auto *timing = controller ? controller->GetTimingController() : nullptr) {
+		timing->GetMarkers(model.viewport_time, model.markers);
+		timing->GetLabels(model.viewport_time, model.labels);
 	}
-	if (lines.empty())
-		return;
 
-	wxFont font = dc.GetFont();
-	font.SetPointSize(std::max(7, font.GetPointSize() - 1));
-	dc.SetFont(font);
-
-	int max_width = 0;
-	int line_height = 0;
-	for (const auto& line : lines) {
-		wxSize extent = dc.GetTextExtent(to_wx(line));
-		max_width = std::max(max_width, extent.GetWidth());
-		line_height = std::max(line_height, extent.GetHeight());
+	model.marker_geometry.reserve(model.markers.size());
+	for (auto const* marker : model.markers) {
+		AudioDisplayMarkerRenderData marker_data;
+		marker_data.x = RelativeXFromTime(marker->GetPosition());
+		marker_data.top = audio_top;
+		marker_data.bottom = audio_top + std::max(0, audio_height - 1);
+		{
+			wxPen pen = marker->GetStyle();
+			marker_data.style.colour = PackWxColour(pen.GetColour());
+			marker_data.style.width = pen.GetWidth();
+		}
+		marker_data.feet = marker->GetFeet();
+		model.marker_geometry.push_back(std::move(marker_data));
 	}
 
-	const int padding = FromDIP(4);
-	const int left = GetClientSize().GetWidth() - max_width - padding * 2 - FromDIP(6);
-	const int top = audio_top + padding;
-	const int height = static_cast<int>(lines.size()) * line_height + padding * 2;
+	model.label_geometry.reserve(model.labels.size());
+	for (auto const& label : model.labels) {
+		AudioDisplayRangeLabelRenderData label_data;
+		label_data.text = std::string(label.text.utf8_str());
+		label_data.left = RelativeXFromTime(label.range.begin());
+		label_data.width = AbsoluteXFromTime(label.range.length());
+		label_data.top = audio_top + FromDIP(4);
+		model.label_geometry.push_back(std::move(label_data));
+	}
 
-	dc.SetPen(*wxTRANSPARENT_PEN);
-	dc.SetBrush(wxBrush(wxColour(0, 0, 0, 160)));
-	dc.DrawRectangle(left, top, max_width + padding * 2, height);
-	dc.SetTextForeground(*wxWHITE);
+	model.track_cursor.visible = model.track_cursor_visible;
+	model.track_cursor.x = model.track_cursor_absolute_x - scroll_left;
+	model.track_cursor.top = audio_top;
+	model.track_cursor.bottom = audio_top + std::max(0, audio_height - 1);
+	model.track_cursor.label = model.track_cursor_label;
 
-	int y = top + padding;
-	for (const auto& line : lines) {
-		dc.DrawText(to_wx(line), left + padding, y);
-		y += line_height;
+	{
+		wxString face = FontFace("Audio/Track Cursor");
+		if (!face.empty())
+			model.audio_label_font_face = std::string(face.utf8_str());
+	}
+
+	if (spectrum_channel_mode_runtime == AudioSpectrumChannelMode::ChannelSplit) {
+		if (auto *spectrum = dynamic_cast<AudioSpectrumRenderer *>(audio_renderer_provider.get()))
+			model.split_channel_labels = spectrum->GetActiveChannelLabels();
 	}
 }
 
@@ -1290,7 +1635,7 @@ AudioViewportRequest AudioDisplay::BuildViewportRequest(const wxRect &update_rec
 	viewport.audio_top = audio_top;
 	viewport.audio_height = audio_height;
 	viewport.foot_size = request_foot_size;
-	viewport.update_rect = update_rect;
+	viewport.update_rect = ToDisplayRect(update_rect);
 	viewport.begin_ms = begin_ms;
 	viewport.end_ms = end_ms;
 	return viewport;
@@ -1316,7 +1661,7 @@ void AudioDisplay::HintVisibleAudioRange() const {
 }
 
 void AudioDisplay::WarmVisibleAudioCache() const {
-	if (!audio_renderer_provider || dragged_object)
+	if (!audio_renderer_provider)
 		return;
 
 	auto const client_width = std::max(0, GetClientSize().GetWidth());
@@ -1327,7 +1672,7 @@ void AudioDisplay::WarmVisibleAudioCache() const {
 }
 
 void AudioDisplay::OnRenderContentReady() {
-	if (!audio_renderer_provider || dragged_object)
+	if (!audio_renderer_provider)
 		return;
 
 	auto const client_width = std::max(0, GetClientSize().GetWidth());
@@ -1339,46 +1684,74 @@ void AudioDisplay::OnRenderContentReady() {
 		return;
 
 	InvalidateContentBacking();
-	QueueHighFrequencyRefresh(nullptr, false);
+	// During drag, use throttled refresh to avoid flooding the paint queue.
+	// Without this, async cache completions were silently dropped and the
+	// spectrum stayed black until drag ended.
+	if (dragged_object)
+		QueueHighFrequencyRefresh(nullptr, true);
+	else
+		QueueHighFrequencyRefresh(nullptr, false);
 }
 
-void AudioDisplay::PaintAudio(wxDC &dc, const AudioViewportRequest &viewport) {
+void AudioDisplay::PaintAudio(wxDC &dc, AudioDisplayRenderModel const& model) {
 	if (!audio_tile_compositor || !audio_renderer)
 		return;
 
 	HintVisibleAudioRange();
 	WarmVisibleAudioCache();
-	audio_tile_compositor->Compose(dc, *audio_renderer, viewport, style_ranges);
+	audio_tile_compositor->Compose(dc, *audio_renderer, model.viewport, model.style_ranges);
 }
 
-void AudioDisplay::PaintMarkers(wxDC &dc, TimeRange updtime)
+void AudioDisplay::PaintMarkers(wxDC &dc, AudioDisplayRenderModel const& model)
 {
-	AudioMarkerVector markers;
-	auto *timing_controller = controller->GetTimingController();
-	if (!timing_controller) return;
-	timing_controller->GetMarkers(updtime, markers);
-	if (markers.empty()) return;
+	if (model.marker_geometry.empty()) return;
 
 	wxDCPenChanger pen_retainer(dc, wxPen());
 	wxDCBrushChanger brush_retainer(dc, wxBrush());
-	for (const auto marker : markers)
+	for (auto const& marker : model.marker_geometry)
 	{
-		int marker_x = RelativeXFromTime(marker->GetPosition());
+		wxColour pen_colour = UnpackToWxColour(marker.style.colour);
+		dc.SetPen(wxPen(pen_colour, marker.style.width));
+		if (model.audio_bounds.height > 0)
+			dc.DrawLine(marker.x, marker.top, marker.x, marker.bottom);
 
-		dc.SetPen(marker->GetStyle());
-		if (audio_height > 0)
-			dc.DrawLine(marker_x, audio_top, marker_x, audio_top + audio_height - 1);
+		if (marker.feet == AudioMarker::Feet_None) continue;
 
-		if (marker->GetFeet() == AudioMarker::Feet_None) continue;
-
-		dc.SetBrush(wxBrush(marker->GetStyle().GetColour()));
+		dc.SetBrush(wxBrush(pen_colour));
 		dc.SetPen(*wxTRANSPARENT_PEN);
 
-		if (marker->GetFeet() & AudioMarker::Feet_Left)
-			PaintFoot(dc, marker_x, -1);
-		if (marker->GetFeet() & AudioMarker::Feet_Right)
-			PaintFoot(dc, marker_x, 1);
+		if (marker.feet & AudioMarker::Feet_Left)
+			PaintFoot(dc, marker.x, -1);
+		if (marker.feet & AudioMarker::Feet_Right)
+			PaintFoot(dc, marker.x, 1);
 	}
+}
+
+void AudioDisplay::PaintScrollbar(wxDC &dc, AudioDisplayRenderModel const& model) {
+	auto const& scrollbar_model = model.scrollbar;
+	if (!scrollbar_model.visible)
+		return;
+
+	dc.SetPen(wxPen(UnpackToWxColour(scrollbar_model.light_colour)));
+	dc.SetBrush(wxBrush(UnpackToWxColour(scrollbar_model.dark_colour)));
+	dc.DrawRectangle(ToWxRect(scrollbar_model.bounds));
+
+	if (scrollbar_model.has_selection) {
+		dc.SetPen(wxPen(UnpackToWxColour(scrollbar_model.selection_colour)));
+		dc.SetBrush(wxBrush(UnpackToWxColour(scrollbar_model.selection_colour)));
+		dc.DrawRectangle(ToWxRect(scrollbar_model.selection_rect));
+	}
+
+	dc.SetPen(wxPen(UnpackToWxColour(scrollbar_model.light_colour)));
+	dc.SetBrush(*wxTRANSPARENT_BRUSH);
+	dc.DrawRectangle(ToWxRect(scrollbar_model.bounds));
+
+	if (scrollbar_model.has_load_marker)
+		dc.GradientFillLinear(ToWxRect(scrollbar_model.load_marker_rect), UnpackToWxColour(scrollbar_model.dark_colour), UnpackToWxColour(scrollbar_model.light_colour));
+
+	dc.SetPen(wxPen(UnpackToWxColour(scrollbar_model.light_colour)));
+	dc.SetBrush(wxBrush(UnpackToWxColour(scrollbar_model.light_colour)));
+	dc.DrawRectangle(ToWxRect(scrollbar_model.thumb));
 }
 
 void AudioDisplay::PaintFoot(wxDC &dc, int marker_x, int dir)
@@ -1390,47 +1763,100 @@ void AudioDisplay::PaintFoot(wxDC &dc, int marker_x, int dir)
 	dc.DrawPolygon(3, foot_bot, marker_x, audio_top + std::max(0, audio_height - 1));
 }
 
-void AudioDisplay::PaintLabels(wxDC &dc, TimeRange updtime)
+void AudioDisplay::PaintLabels(wxDC &dc, AudioDisplayRenderModel const& model)
 {
-	std::vector<AudioLabelProvider::AudioLabel> labels;
-	auto *timing_controller = controller->GetTimingController();
-	if (!timing_controller) return;
-	timing_controller->GetLabels(updtime, labels);
-	if (labels.empty()) return;
+	if (model.label_geometry.empty()) return;
 
 	wxDCFontChanger fc(dc);
 	wxFont font = dc.GetFont();
 	font.SetWeight(wxFONTWEIGHT_BOLD);
 	fc.Set(font);
 	dc.SetTextForeground(*wxWHITE);
-	for (auto const& label : labels)
+	for (auto const& label : model.label_geometry)
 	{
-		wxSize extent = dc.GetTextExtent(label.text);
-		int left = RelativeXFromTime(label.range.begin());
-		int width = AbsoluteXFromTime(label.range.length());
-		int label_top = audio_top + FromDIP(4);
+		wxString const wx_text = wxString::FromUTF8(label.text);
+		wxSize const extent = dc.GetTextExtent(wx_text);
 
 		// If it doesn't fit, truncate
-		if (width < extent.GetWidth())
+		if (label.width < extent.GetWidth())
 		{
-			dc.SetClippingRegion(left, label_top, width, extent.GetHeight());
-			dc.DrawText(label.text, left, label_top);
+			dc.SetClippingRegion(label.left, label.top, label.width, extent.GetHeight());
+			dc.DrawText(wx_text, label.left, label.top);
 			dc.DestroyClippingRegion();
 		}
 		// Otherwise center in the range
 		else
 		{
-			dc.DrawText(label.text, left + (width - extent.GetWidth()) / 2, label_top);
+			dc.DrawText(wx_text, label.left + (label.width - extent.GetWidth()) / 2, label.top);
 		}
 	}
 }
 
-void AudioDisplay::PaintTrackCursor(wxDC &dc) {
-	wxDCPenChanger penchanger(dc, wxPen(*wxWHITE));
-	if (audio_height > 0)
-		dc.DrawLine(track_cursor_pos-scroll_left, audio_top, track_cursor_pos-scroll_left, audio_top + audio_height - 1);
+void AudioDisplay::PaintTimeline(wxDC &dc, AudioDisplayRenderModel const& model) {
+	auto const& timeline_model = model.timeline;
+	if (!timeline_model.visible)
+		return;
 
-	if (track_cursor_label.empty()) return;
+	int const bottom = timeline_model.bounds.y + timeline_model.bounds.height;
+	int const major_tick_height = FromDIP(6);
+	int const minor_tick_height = FromDIP(4);
+
+	dc.SetPen(wxPen(UnpackToWxColour(timeline_model.dark_colour)));
+	dc.SetBrush(wxBrush(UnpackToWxColour(timeline_model.dark_colour)));
+	dc.DrawRectangle(ToWxRect(timeline_model.bounds));
+
+	dc.SetPen(wxPen(UnpackToWxColour(timeline_model.light_colour)));
+	dc.DrawLine(timeline_model.bounds.x, bottom - 1, timeline_model.bounds.x + timeline_model.bounds.width, bottom - 1);
+
+	dc.SetTextBackground(UnpackToWxColour(timeline_model.dark_colour));
+	dc.SetTextForeground(UnpackToWxColour(timeline_model.light_colour));
+
+	for (auto const& tick : timeline_model.ticks) {
+		if (tick.major)
+			dc.DrawLine(tick.x, bottom - major_tick_height, tick.x, bottom - 1);
+		else
+			dc.DrawLine(tick.x, bottom - minor_tick_height, tick.x, bottom - 1);
+
+		if (!tick.label.empty())
+			dc.DrawText(wxString::FromUTF8(tick.label), tick.x, timeline_model.bounds.y);
+	}
+}
+
+void AudioDisplay::PaintSplitChannelLabels(wxDC &dc, AudioDisplayRenderModel const& model) {
+	if (model.split_channel_labels.empty() || model.audio_bounds.height <= 0)
+		return;
+
+	const int band_h = model.audio_bounds.height / static_cast<int>(model.split_channel_labels.size());
+	const int label_x = FromDIP(4);
+	wxFont label_font = dc.GetFont();
+	label_font.SetPointSize(std::max(7, label_font.GetPointSize() - 1));
+	label_font.SetWeight(wxFONTWEIGHT_BOLD);
+	dc.SetFont(label_font);
+	for (size_t i = 0; i < model.split_channel_labels.size(); ++i) {
+		const wxString wx_label = wxString::FromUTF8(model.split_channel_labels[i].c_str());
+		const int label_y = model.audio_bounds.y + static_cast<int>(i) * band_h + FromDIP(2);
+		dc.SetTextForeground(wxColour(0, 0, 0));
+		for (int dy = -1; dy <= 1; ++dy)
+			for (int dx = -1; dx <= 1; ++dx)
+				if (dx || dy)
+					dc.DrawText(wx_label, label_x + dx, label_y + dy);
+		dc.SetTextForeground(wxColour(230, 230, 230));
+		dc.DrawText(wx_label, label_x, label_y);
+	}
+}
+
+void AudioDisplay::PaintStaticAudioOverlays(wxDC &dc, AudioDisplayRenderModel const& model) {
+	PaintSplitChannelLabels(dc, model);
+}
+
+void AudioDisplay::PaintTrackCursor(wxDC &dc, AudioDisplayRenderModel const& model) {
+	wxDCPenChanger penchanger(dc, wxPen(*wxWHITE));
+	if (model.track_cursor.visible)
+		dc.DrawLine(model.track_cursor.x, model.track_cursor.top, model.track_cursor.x, model.track_cursor.bottom);
+
+	if (model.track_cursor.label.empty()) return;
+
+	wxString const wx_label = wxString::FromUTF8(model.track_cursor.label);
 
 	wxDCFontChanger fc(dc);
 	wxFont font = dc.GetFont();
@@ -1440,9 +1866,9 @@ void AudioDisplay::PaintTrackCursor(wxDC &dc) {
 	font.SetWeight(wxFONTWEIGHT_BOLD);
 	fc.Set(font);
 
-	wxSize label_size(dc.GetTextExtent(track_cursor_label));
+	wxSize label_size(dc.GetTextExtent(wx_label));
 	int label_margin = FromDIP(2);
-	wxPoint label_pos(track_cursor_pos - scroll_left - label_size.x/2, audio_top + label_margin);
+	wxPoint label_pos(model.track_cursor.x - label_size.x/2, model.track_cursor.top + label_margin);
 	label_pos.x = mid(label_margin, label_pos.x, GetClientSize().GetWidth() - label_size.x - label_margin);
 
 	int old_bg_mode = dc.GetBackgroundMode();
@@ -1450,14 +1876,14 @@ void AudioDisplay::PaintTrackCursor(wxDC &dc) {
 
 	// Draw border
 	dc.SetTextForeground(wxColour(64, 64, 64));
-	dc.DrawText(track_cursor_label, label_pos.x+1, label_pos.y+1);
-	dc.DrawText(track_cursor_label, label_pos.x+1, label_pos.y-1);
-	dc.DrawText(track_cursor_label, label_pos.x-1, label_pos.y+1);
-	dc.DrawText(track_cursor_label, label_pos.x-1, label_pos.y-1);
+	dc.DrawText(wx_label, label_pos.x+1, label_pos.y+1);
+	dc.DrawText(wx_label, label_pos.x+1, label_pos.y-1);
+	dc.DrawText(wx_label, label_pos.x-1, label_pos.y+1);
+	dc.DrawText(wx_label, label_pos.x-1, label_pos.y-1);
 
 	// Draw fill
 	dc.SetTextForeground(*wxWHITE);
-	dc.DrawText(track_cursor_label, label_pos.x, label_pos.y);
+	dc.DrawText(wx_label, label_pos.x, label_pos.y);
 	dc.SetBackgroundMode(old_bg_mode);
 
 	label_pos.x -= label_margin;
@@ -1470,7 +1896,9 @@ void AudioDisplay::PaintTrackCursor(wxDC &dc) {
 void AudioDisplay::SetDraggedObject(AudioDisplayInteractionObject *new_obj)
 {
 	dragged_object = new_obj;
-	SetInteractivePrefetchEnabled(!dragged_object);
+	// Keep interactive prefetch enabled during drag so that scrolled-into
+	// regions are populated by the background thread and don't appear black.
+	// SetInteractivePrefetchEnabled(!dragged_object);
 
 	if (dragged_object && !HasCapture())
 		CaptureMouse();
@@ -1639,10 +2067,17 @@ bool AudioDisplay::QueueDynamicVideoMarkerRefresh() {
 	return true;
 }
 
-void AudioDisplay::OnMouseEnter(wxMouseEvent&)
+void AudioDisplay::OnMouseEnter(wxMouseEvent& event)
 {
 	if (OPT_GET("Audio/Auto/Focus")->GetBool())
 		SetFocus();
+
+	// Restore the track cursor at the current mouse position so that it
+	// reappears immediately after an alt-tab / minimize-restore cycle
+	// (OnMouseLeave removes it when the window loses focus).
+	if (!controller->IsPlaying())
+		SetTrackCursor(scroll_left + event.GetPosition().x,
+			OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool());
 }
 
 void AudioDisplay::OnMouseLeave(wxMouseEvent&)
@@ -1869,6 +2304,14 @@ void AudioDisplay::OnSize(wxSizeEvent &)
 	pending_high_frequency_rect = wxRect();
 	InvalidateContentBacking();
 
+#ifdef WITH_SKIA
+	// Invalidate cached present surface — size changed.
+	if (skia_host && skia_host->GetBackend() == AudioDisplaySkiaHostBackend::DirectGpu) {
+		// DirectGpuHost caches an FBO 0 surface by size; the next
+		// CreatePresentTarget call will recreate it.
+	}
+#endif
+
 	// We changed size, update the sub-controls' internal data and redraw
 	wxSize size = GetClientSize();
 
@@ -1889,13 +2332,14 @@ void AudioDisplay::OnSize(wxSizeEvent &)
 	audio_top = timeline->GetHeight();
 
 	HintVisibleAudioRange();
-	Refresh();
+	RequestPaint();
 }
 
 void AudioDisplay::OnFocus(wxFocusEvent &)
 {
 	// The scrollbar indicates focus so repaint that
-	RefreshRect(scrollbar->GetBounds(), false);
+	wxRect sb = scrollbar->GetBounds();
+	RequestPaint(&sb);
 }
 
 int AudioDisplay::GetDuration() const
@@ -1932,7 +2376,7 @@ void AudioDisplay::ApplyAudioProvider(agi::AudioProvider *provider)
 		}
 	}
 
-	Refresh();
+	RequestPaint();
 
 	if (provider)
 	{
@@ -2064,8 +2508,10 @@ void AudioDisplay::OnSelectionChanged()
 
 	if (audio_marker)
 		QueueHighFrequencyRefresh(&scrollbar->GetBounds(), true);
-	else
-		RefreshRect(scrollbar->GetBounds(), false);
+	else {
+		wxRect sb = scrollbar->GetBounds();
+		RequestPaint(&sb);
+	}
 }
 
 void AudioDisplay::OnScrollTimer(wxTimerEvent &event)
@@ -2102,7 +2548,7 @@ void AudioDisplay::OnStyleRangesChanged()
 	if (audio_marker)
 		QueueHighFrequencyRefresh(&audio_rect, true);
 	else
-		RefreshRect(audio_rect, false);
+		RequestPaint(&audio_rect);
 }
 
 void AudioDisplay::OnMarkerMoved()
@@ -2126,5 +2572,5 @@ void AudioDisplay::OnMarkerMoved()
 	if (audio_marker)
 		QueueHighFrequencyRefresh(&audio_rect, true);
 	else
-		RefreshRect(audio_rect, false);
+		RequestPaint(&audio_rect);
 }

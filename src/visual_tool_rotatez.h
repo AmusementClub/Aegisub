@@ -41,6 +41,8 @@ class VisualToolRotateZ final : public VisualTool<VisualDraggableFeature> {
 	void DoRefresh() override;
 
 	void Draw() override;
+	bool SupportsOverlayContext() const override { return true; }
+	void DrawOverlay(VideoOverlayDrawContext &context) override;
 public:
 	VisualToolRotateZ(VideoDisplay *parent, agi::Context *context);
 };

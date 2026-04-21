@@ -25,6 +25,7 @@
 #include <memory>
 
 class OpenGLText;
+class VideoOverlayDrawContext;
 
 /// @class VisualToolCross
 /// @brief A crosshair which shows the current mouse position and on double-click
@@ -35,6 +36,9 @@ class VisualToolCross final : public VisualTool<VisualDraggableFeature> {
 
 	void OnDoubleClick() override;
 	void Draw() override;
+	bool SupportsOverlayContext() const override { return true; }
+	void DrawOverlay(VideoOverlayDrawContext &context) override;
+	void DrawWithContext(VideoOverlayDrawContext &context);
 	std::string Text(Vector2D v);
 public:
 	VisualToolCross(VideoDisplay *parent, agi::Context *context);

@@ -68,6 +68,8 @@
 #include <libaegisub/scope_exit.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cstdlib>
 #include <wx/combobox.h>
 #include <wx/dcclient.h>
 #include <wx/image.h>
@@ -81,6 +83,20 @@
 #else
 #include <GL/gl.h>
 #include <GL/glext.h>
+#endif
+
+#ifdef WITH_SKIA
+#include "skia_runtime/skia_gpu_context_host.h"
+#include "skia_runtime/skia_surface_provider.h"
+#include "skia_runtime/skia_text_layout_cache.h"
+#include "video_overlay_draw_context_skia.h"
+
+#include <include/core/SkCanvas.h>
+#include <include/core/SkPaint.h>
+#include <include/core/SkPath.h>
+#include <include/core/SkPathBuilder.h>
+#include <include/core/SkRect.h>
+#include <include/core/SkSurface.h>
 #endif
 
 /// Attribute list for gl canvases; set the canvases to doublebuffered rgba with an 8 bit stencil buffer
@@ -119,6 +135,11 @@ struct CaptureFramebufferFunctions {
 	PFNGLGENFRAMEBUFFERSPROC GenFramebuffers = nullptr;
 	PFNGLFRAMEBUFFERTEXTURE2DPROC FramebufferTexture2D = nullptr;
 	PFNGLCHECKFRAMEBUFFERSTATUSPROC CheckFramebufferStatus = nullptr;
+	PFNGLBINDRENDERBUFFERPROC BindRenderbuffer = nullptr;
+	PFNGLDELETERENDERBUFFERSPROC DeleteRenderbuffers = nullptr;
+	PFNGLGENRENDERBUFFERSPROC GenRenderbuffers = nullptr;
+	PFNGLRENDERBUFFERSTORAGEPROC RenderbufferStorage = nullptr;
+	PFNGLFRAMEBUFFERRENDERBUFFERPROC FramebufferRenderbuffer = nullptr;
 };
 
 CaptureFramebufferFunctions const& GetCaptureFramebufferFunctions() {
@@ -128,6 +149,11 @@ CaptureFramebufferFunctions const& GetCaptureFramebufferFunctions() {
 		LoadOptionalProc<PFNGLGENFRAMEBUFFERSPROC>("glGenFramebuffers", "glGenFramebuffersEXT"),
 		LoadOptionalProc<PFNGLFRAMEBUFFERTEXTURE2DPROC>("glFramebufferTexture2D", "glFramebufferTexture2DEXT"),
 		LoadOptionalProc<PFNGLCHECKFRAMEBUFFERSTATUSPROC>("glCheckFramebufferStatus", "glCheckFramebufferStatusEXT"),
+		LoadOptionalProc<PFNGLBINDRENDERBUFFERPROC>("glBindRenderbuffer", "glBindRenderbufferEXT"),
+		LoadOptionalProc<PFNGLDELETERENDERBUFFERSPROC>("glDeleteRenderbuffers", "glDeleteRenderbuffersEXT"),
+		LoadOptionalProc<PFNGLGENRENDERBUFFERSPROC>("glGenRenderbuffers", "glGenRenderbuffersEXT"),
+		LoadOptionalProc<PFNGLRENDERBUFFERSTORAGEPROC>("glRenderbufferStorage", "glRenderbufferStorageEXT"),
+		LoadOptionalProc<PFNGLFRAMEBUFFERRENDERBUFFERPROC>("glFramebufferRenderbuffer", "glFramebufferRenderbufferEXT"),
 	};
 	return functions;
 }
@@ -212,6 +238,23 @@ bool SourceFrameEquivalentForUpload(
 		&& SourceFrameColorMetadataEquals(lhs.color, rhs.color)
 		&& lhs.chroma_location == rhs.chroma_location
 		&& SourceFrameGeometryEquals(lhs.geometry, rhs.geometry);
+}
+
+bool ReadEnvFlagDefaultOn(char const *name) {
+	auto const* value = std::getenv(name);
+	if (!value || !*value)
+		return true;
+
+	char const first = static_cast<char>(std::tolower(static_cast<unsigned char>(*value)));
+	return first != '0' && first != 'f' && first != 'n';
+}
+
+bool IsSkiaVideoOverlayEnabled() {
+#ifdef WITH_SKIA
+	return ReadEnvFlagDefaultOn("AEGISUB_ENABLE_SKIA_VIDEO_OVERLAY");
+#else
+	return false;
+#endif
 }
 
 }
@@ -442,6 +485,10 @@ void VideoDisplay::ResetRenderers() {
 	if (subtitleOverlayRenderer)
 		subtitleOverlayRenderer->Reset();
 	subtitleOverlayRenderer.reset();
+#ifdef WITH_SKIA
+	if (skia_overlay_context_host)
+		skia_overlay_context_host->Reset();
+#endif
 	ResetDisplayedSubtitleScene();
 	ResetSceneCacheRetryBlock();
 	InvalidateSceneCache();
@@ -810,7 +857,7 @@ void VideoDisplay::DrawSceneCache(wxSize const&, int canvas_width, int canvas_he
 		throw OpenGlException("legacy_gl::DrawTexturedQuad", err);
 }
 
-void VideoDisplay::DrawOverlayPass(wxSize const& client_size) {
+void VideoDisplay::DrawLegacyOverlayPass(wxSize const& client_size) {
 	// Overlay pass (overscan mask, visual tools) renders in client/window coordinates.
 	// Always use a viewport anchored at (0,0) so that ortho coords == mouse coords.
 	// The video_pos offset already positions tool features relative to the video.
@@ -839,6 +886,140 @@ void VideoDisplay::DrawOverlayPass(wxSize const& client_size) {
 
 	if ((mouse_pos || !autohideTools->GetBool()) && tool)
 		tool->Draw();
+}
+
+bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) {
+#ifndef WITH_SKIA
+	(void)client_size;
+	return false;
+#else
+	if (!IsSkiaVideoOverlayEnabled())
+		return false;
+
+	if ((mouse_pos || !autohideTools->GetBool()) && tool && !tool->SupportsOverlayContext())
+		return false;
+
+	if (!skia_overlay_context_host)
+		skia_overlay_context_host = agi::make_unique<SkiaGpuContextHost>();
+	if (!skia_overlay_surface_provider)
+		skia_overlay_surface_provider = agi::make_unique<SkiaSurfaceProvider>();
+	if (!skia_overlay_text_cache)
+		skia_overlay_text_cache = agi::make_unique<SkiaTextLayoutCache>();
+
+	if (!skia_overlay_context_host->EnsureCurrentContext())
+		return false;
+	skia_overlay_context_host->SyncExternalState();
+
+	int const canvas_width = client_size.GetWidth() * scale_factor;
+	int const canvas_height = client_size.GetHeight() * scale_factor;
+	if (!EnsureSkiaOverlayBacking(canvas_width, canvas_height))
+		return false;
+
+	auto const& gl = GetCaptureFramebufferFunctions();
+	if (!gl.BindFramebuffer)
+		return false;
+
+	GLint previous_framebuffer = 0;
+	GLint previous_draw_buffer = GL_BACK;
+	GLint previous_read_buffer = GL_BACK;
+	glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &previous_framebuffer);
+	glGetIntegerv(GL_DRAW_BUFFER, &previous_draw_buffer);
+	glGetIntegerv(GL_READ_BUFFER, &previous_read_buffer);
+	auto restore_framebuffer = agi::make_scope_exit([&] {
+		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(previous_framebuffer));
+		glDrawBuffer(static_cast<GLenum>(previous_draw_buffer));
+		glReadBuffer(static_cast<GLenum>(previous_read_buffer));
+	});
+
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, skia_overlay_framebuffer);
+	glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
+	glReadBuffer(GL_COLOR_ATTACHMENT0_EXT);
+
+	SkiaFramebufferSurfaceDescriptor descriptor;
+	descriptor.width = canvas_width;
+	descriptor.height = canvas_height;
+	descriptor.sample_count = 0;
+	descriptor.stencil_bits = 8;
+	descriptor.framebuffer_id = skia_overlay_framebuffer;
+	descriptor.bottom_left_origin = false;
+	auto surface = skia_overlay_surface_provider->AcquireFramebufferSurface(
+		skia_overlay_context_host->Get(),
+		descriptor);
+	if (!surface)
+		return false;
+
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, skia_overlay_invert_framebuffer);
+	glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
+	glReadBuffer(GL_COLOR_ATTACHMENT0_EXT);
+
+	SkiaFramebufferSurfaceDescriptor invert_descriptor = descriptor;
+	invert_descriptor.framebuffer_id = skia_overlay_invert_framebuffer;
+	auto invert_surface = skia_overlay_surface_provider->AcquireFramebufferSurface(
+		skia_overlay_context_host->Get(),
+		invert_descriptor);
+	if (!invert_surface)
+		return false;
+
+	SkCanvas *canvas = surface.get()->getCanvas();
+	SkCanvas *invert_canvas = invert_surface.get()->getCanvas();
+	if (!canvas)
+		return false;
+	if (!invert_canvas)
+		return false;
+
+	canvas->clear(SK_ColorTRANSPARENT);
+	invert_canvas->clear(SK_ColorTRANSPARENT);
+	canvas->save();
+	invert_canvas->save();
+	canvas->scale(scale_factor, scale_factor);
+	invert_canvas->scale(scale_factor, scale_factor);
+
+	if (OPT_GET("Video/Overscan Mask")->GetBool()) {
+		double ar = con->videoController->GetAspectRatioValue();
+		if (ar > 1.75) {
+			DrawOverscanMaskSkia(*canvas, .1f, .05f);
+			DrawOverscanMaskSkia(*canvas, 0.035f, 0.035f);
+		}
+		else {
+			DrawOverscanMaskSkia(*canvas, 0.067f, 0.05f);
+			DrawOverscanMaskSkia(*canvas, 0.033f, 0.035f);
+		}
+	}
+
+	if ((mouse_pos || !autohideTools->GetBool()) && tool) {
+		SkiaVideoOverlayDrawContext draw_context(*canvas, invert_canvas, *skia_overlay_text_cache, static_cast<float>(scale_factor));
+		tool->DrawOverlay(draw_context);
+	}
+
+	canvas->restore();
+	invert_canvas->restore();
+	skia_overlay_context_host->FlushAndSubmit();
+	skia_overlay_context_host->ResetTextureBindingsForExternalUse();
+
+	// Composite the Skia-drawn overlay texture back to the window framebuffer.
+	// The Skia surface uses kTopLeft origin, so the texture content is already
+	// in top-left layout. Use a top-left ortho projection with normal (non-flipped)
+	// tex coords so the overlay composites correctly.
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(previous_framebuffer));
+	glDrawBuffer(static_cast<GLenum>(previous_draw_buffer));
+	glReadBuffer(static_cast<GLenum>(previous_read_buffer));
+	glDisable(GL_SCISSOR_TEST);
+	glDisable(GL_STENCIL_TEST);
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_DEPTH_TEST);
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+	glViewport(0, 0, canvas_width, canvas_height);
+	legacy_gl::DrawTexturedQuadTopLeft(static_cast<GLuint>(skia_overlay_texture), canvas_width, canvas_height);
+	legacy_gl::DrawAlphaMaskedInvertQuadTopLeft(static_cast<GLuint>(skia_overlay_invert_texture), canvas_width, canvas_height);
+	return true;
+#endif
+}
+
+void VideoDisplay::DrawOverlayPass(wxSize const& client_size) {
+	if (!TryDrawSkiaOverlayPass(client_size))
+		DrawLegacyOverlayPass(client_size);
 }
 
 void VideoDisplay::RefreshDisplayedSubtitleSceneSnapshot() {
@@ -1099,6 +1280,231 @@ void VideoDisplay::DrawOverscanMask(float horizontal_percent, float vertical_per
 	std::vector<int> vcount(1, count);
 	gl.DrawMultiPolygon(points, vstart, vcount, viewport_pos, viewport_size, true);
 }
+
+#ifdef WITH_SKIA
+void VideoDisplay::DrawOverscanMaskSkia(SkCanvas &canvas, float horizontal_percent, float vertical_percent) const {
+	Vector2D viewport_pos = Vector2D(viewport_left, viewport_top) / scale_factor;
+	Vector2D viewport_size = Vector2D(viewport_width, viewport_height) / scale_factor;
+	Vector2D const size = Vector2D(horizontal_percent, vertical_percent) / 2 * viewport_size;
+
+	Vector2D corners[] = {
+		size,
+		Vector2D(viewport_size.X() - size.X(), size),
+		viewport_size - size,
+		Vector2D(size, viewport_size.Y() - size.Y())
+	};
+
+	for (auto& corner : corners)
+		corner = corner + viewport_pos;
+
+	std::vector<float> points;
+	for (size_t i = 0; i < 4; ++i) {
+		size_t const prev = (i + 3) % 4;
+		size_t const next = (i + 1) % 4;
+		SplineCurve(
+			(corners[prev] + corners[i] * 4) / 5,
+			corners[i], corners[i],
+			(corners[next] + corners[i] * 4) / 5)
+			.GetPoints(points);
+	}
+
+	SkPathBuilder builder(SkPathFillType::kEvenOdd);
+	builder.addRect(SkRect::MakeXYWH(viewport_pos.X(), viewport_pos.Y(), viewport_size.X(), viewport_size.Y()));
+	if (!points.empty()) {
+		std::vector<SkPoint> polygon;
+		polygon.reserve(points.size() / 2);
+		for (size_t i = 0; i + 1 < points.size(); i += 2)
+			polygon.push_back(SkPoint::Make(points[i], points[i + 1]));
+		builder.addPolygon({ polygon.data(), polygon.size() }, true);
+	}
+	SkPath const path = builder.detach();
+
+	SkPaint fill;
+	fill.setAntiAlias(true);
+	fill.setStyle(SkPaint::kFill_Style);
+	fill.setColor(SkColorSetARGB(128, 30, 70, 200));
+	canvas.drawPath(path, fill);
+}
+
+bool VideoDisplay::EnsureSkiaOverlayBacking(int canvas_width, int canvas_height) {
+	if (canvas_width <= 0 || canvas_height <= 0)
+		return false;
+
+	if (skia_overlay_framebuffer
+		&& skia_overlay_texture
+		&& skia_overlay_stencil_renderbuffer
+		&& skia_overlay_invert_framebuffer
+		&& skia_overlay_invert_texture
+		&& skia_overlay_invert_stencil_renderbuffer
+		&& canvas_width == skia_overlay_width
+		&& canvas_height == skia_overlay_height) {
+		return true;
+	}
+
+	DestroySkiaOverlayBacking();
+
+	auto const& gl = GetCaptureFramebufferFunctions();
+	if (!gl.GenFramebuffers
+		|| !gl.BindFramebuffer
+		|| !gl.DeleteFramebuffers
+		|| !gl.FramebufferTexture2D
+		|| !gl.CheckFramebufferStatus
+		|| !gl.GenRenderbuffers
+		|| !gl.BindRenderbuffer
+		|| !gl.DeleteRenderbuffers
+		|| !gl.RenderbufferStorage
+		|| !gl.FramebufferRenderbuffer) {
+		return false;
+	}
+
+	GLint previous_framebuffer = 0;
+	glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &previous_framebuffer);
+	auto restore_framebuffer = agi::make_scope_exit([&] {
+		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(previous_framebuffer));
+	});
+
+	glGenTextures(1, &skia_overlay_texture);
+	glBindTexture(GL_TEXTURE_2D, skia_overlay_texture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexImage2D(
+		GL_TEXTURE_2D,
+		0,
+		GL_RGBA8,
+		canvas_width,
+		canvas_height,
+		0,
+		GL_RGBA,
+		GL_UNSIGNED_BYTE,
+		nullptr);
+	glBindTexture(GL_TEXTURE_2D, 0);
+
+	gl.GenFramebuffers(1, &skia_overlay_framebuffer);
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, skia_overlay_framebuffer);
+	gl.FramebufferTexture2D(
+		GL_FRAMEBUFFER_EXT,
+		GL_COLOR_ATTACHMENT0_EXT,
+		GL_TEXTURE_2D,
+		skia_overlay_texture,
+		0);
+
+	gl.GenRenderbuffers(1, &skia_overlay_stencil_renderbuffer);
+	gl.BindRenderbuffer(GL_RENDERBUFFER_EXT, skia_overlay_stencil_renderbuffer);
+	gl.RenderbufferStorage(GL_RENDERBUFFER_EXT, GL_DEPTH24_STENCIL8, canvas_width, canvas_height);
+	gl.FramebufferRenderbuffer(
+		GL_FRAMEBUFFER_EXT,
+		GL_DEPTH_ATTACHMENT_EXT,
+		GL_RENDERBUFFER_EXT,
+		skia_overlay_stencil_renderbuffer);
+	gl.FramebufferRenderbuffer(
+		GL_FRAMEBUFFER_EXT,
+		GL_STENCIL_ATTACHMENT_EXT,
+		GL_RENDERBUFFER_EXT,
+		skia_overlay_stencil_renderbuffer);
+	gl.BindRenderbuffer(GL_RENDERBUFFER_EXT, 0);
+
+	GLenum const status = gl.CheckFramebufferStatus(GL_FRAMEBUFFER_EXT);
+	if (status != GL_FRAMEBUFFER_COMPLETE && status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+		DestroySkiaOverlayBacking();
+		return false;
+	}
+
+	glGenTextures(1, &skia_overlay_invert_texture);
+	glBindTexture(GL_TEXTURE_2D, skia_overlay_invert_texture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexImage2D(
+		GL_TEXTURE_2D,
+		0,
+		GL_RGBA8,
+		canvas_width,
+		canvas_height,
+		0,
+		GL_RGBA,
+		GL_UNSIGNED_BYTE,
+		nullptr);
+	glBindTexture(GL_TEXTURE_2D, 0);
+
+	gl.GenFramebuffers(1, &skia_overlay_invert_framebuffer);
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, skia_overlay_invert_framebuffer);
+	gl.FramebufferTexture2D(
+		GL_FRAMEBUFFER_EXT,
+		GL_COLOR_ATTACHMENT0_EXT,
+		GL_TEXTURE_2D,
+		skia_overlay_invert_texture,
+		0);
+
+	gl.GenRenderbuffers(1, &skia_overlay_invert_stencil_renderbuffer);
+	gl.BindRenderbuffer(GL_RENDERBUFFER_EXT, skia_overlay_invert_stencil_renderbuffer);
+	gl.RenderbufferStorage(GL_RENDERBUFFER_EXT, GL_DEPTH24_STENCIL8, canvas_width, canvas_height);
+	gl.FramebufferRenderbuffer(
+		GL_FRAMEBUFFER_EXT,
+		GL_DEPTH_ATTACHMENT_EXT,
+		GL_RENDERBUFFER_EXT,
+		skia_overlay_invert_stencil_renderbuffer);
+	gl.FramebufferRenderbuffer(
+		GL_FRAMEBUFFER_EXT,
+		GL_STENCIL_ATTACHMENT_EXT,
+		GL_RENDERBUFFER_EXT,
+		skia_overlay_invert_stencil_renderbuffer);
+	gl.BindRenderbuffer(GL_RENDERBUFFER_EXT, 0);
+
+	GLenum const invert_status = gl.CheckFramebufferStatus(GL_FRAMEBUFFER_EXT);
+	if (invert_status != GL_FRAMEBUFFER_COMPLETE && invert_status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+		DestroySkiaOverlayBacking();
+		return false;
+	}
+
+	skia_overlay_width = canvas_width;
+	skia_overlay_height = canvas_height;
+	return true;
+}
+
+void VideoDisplay::DestroySkiaOverlayBacking() noexcept {
+	// Release Skia GPU resources first so Skia drops any internal references
+	// to the GL objects we are about to delete.
+	if (skia_overlay_context_host)
+		skia_overlay_context_host->FlushAndSubmit();
+
+	auto const& gl = GetCaptureFramebufferFunctions();
+
+	if (skia_overlay_framebuffer) {
+		if (gl.DeleteFramebuffers)
+			gl.DeleteFramebuffers(1, &skia_overlay_framebuffer);
+		skia_overlay_framebuffer = 0;
+	}
+	if (skia_overlay_invert_framebuffer) {
+		if (gl.DeleteFramebuffers)
+			gl.DeleteFramebuffers(1, &skia_overlay_invert_framebuffer);
+		skia_overlay_invert_framebuffer = 0;
+	}
+	if (skia_overlay_stencil_renderbuffer) {
+		if (gl.DeleteRenderbuffers)
+			gl.DeleteRenderbuffers(1, &skia_overlay_stencil_renderbuffer);
+		skia_overlay_stencil_renderbuffer = 0;
+	}
+	if (skia_overlay_invert_stencil_renderbuffer) {
+		if (gl.DeleteRenderbuffers)
+			gl.DeleteRenderbuffers(1, &skia_overlay_invert_stencil_renderbuffer);
+		skia_overlay_invert_stencil_renderbuffer = 0;
+	}
+	if (skia_overlay_texture) {
+		glDeleteTextures(1, &skia_overlay_texture);
+		skia_overlay_texture = 0;
+	}
+	if (skia_overlay_invert_texture) {
+		glDeleteTextures(1, &skia_overlay_invert_texture);
+		skia_overlay_invert_texture = 0;
+	}
+
+	skia_overlay_width = 0;
+	skia_overlay_height = 0;
+}
+#endif
 
 void VideoDisplay::PositionVideo() {
 	auto provider = con->project->VideoProvider();
@@ -1416,6 +1822,12 @@ void VideoDisplay::Unload() {
 	if (glContext)
 		SetCurrent(*glContext);
 	DestroySceneCache();
+#ifdef WITH_SKIA
+	DestroySkiaOverlayBacking();
+	skia_overlay_context_host.reset();
+	skia_overlay_surface_provider.reset();
+	skia_overlay_text_cache.reset();
+#endif
 	tool.reset();
 	glContext.reset();
 	pending_packet = { };

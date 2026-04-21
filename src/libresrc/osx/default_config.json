@@ -40,7 +40,6 @@
 		"Display" : {
 			"Draw" : {
 				"Cursor Time" : true,
-				"Debug Metrics" : false,
 				"Inactive Comments" : false,
 				"Keyframes in Dialogue Mode" : true,
 				"Keyframes in Karaoke Mode" : true,

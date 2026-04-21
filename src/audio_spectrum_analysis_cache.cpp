@@ -4,12 +4,88 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 namespace {
 constexpr float spectrum_eps = 1e-12f;
 constexpr size_t kSpectrumBuildBatchMaxTempBytes = 8 * 1024 * 1024;
 constexpr size_t kSpectrumSyncBuildMaxBlocks = 256;
 constexpr size_t kSpectrumPrefetchBuildMaxBlocks = 1024;
+
+uint16_t FloatToHalfBits(float value) {
+	uint32_t bits = 0;
+	std::memcpy(&bits, &value, sizeof(bits));
+
+	uint32_t const sign = (bits >> 16) & 0x8000u;
+	uint32_t mantissa = bits & 0x007fffffu;
+	int exponent = static_cast<int>((bits >> 23) & 0xffu) - 127 + 15;
+
+	if (exponent <= 0) {
+		if (exponent < -10)
+			return static_cast<uint16_t>(sign);
+
+		mantissa = (mantissa | 0x00800000u) >> (1 - exponent);
+		if ((mantissa & 0x00001000u) != 0)
+			mantissa += 0x00002000u;
+		return static_cast<uint16_t>(sign | (mantissa >> 13));
+	}
+
+	if (exponent >= 31) {
+		if (mantissa == 0)
+			return static_cast<uint16_t>(sign | 0x7c00u);
+
+		mantissa >>= 13;
+		return static_cast<uint16_t>(sign | 0x7c00u | mantissa | (mantissa == 0));
+	}
+
+	if ((mantissa & 0x00001000u) != 0) {
+		mantissa += 0x00002000u;
+		if ((mantissa & 0x00800000u) != 0) {
+			mantissa = 0;
+			++exponent;
+			if (exponent >= 31)
+				return static_cast<uint16_t>(sign | 0x7c00u);
+		}
+	}
+
+	return static_cast<uint16_t>(sign | (static_cast<uint32_t>(exponent) << 10) | (mantissa >> 13));
+}
+
+float HalfBitsToFloat(uint16_t value) {
+	uint32_t const sign = (static_cast<uint32_t>(value & 0x8000u)) << 16;
+	uint32_t exponent = (value >> 10) & 0x1fu;
+	uint32_t mantissa = value & 0x03ffu;
+	uint32_t bits = 0;
+
+	if (exponent == 0) {
+		if (mantissa == 0) {
+			bits = sign;
+		}
+		else {
+			int exp = -14;
+			while ((mantissa & 0x0400u) == 0) {
+				mantissa <<= 1;
+				--exp;
+			}
+			mantissa &= 0x03ffu;
+			bits = sign
+				| (static_cast<uint32_t>(exp + 127) << 23)
+				| (mantissa << 13);
+		}
+	}
+	else if (exponent == 31) {
+		bits = sign | 0x7f800000u | (mantissa << 13);
+	}
+	else {
+		bits = sign
+			| ((exponent + (127 - 15)) << 23)
+			| (mantissa << 13);
+	}
+
+	float result = 0.0f;
+	std::memcpy(&result, &bits, sizeof(result));
+	return result;
+}
 }
 
 AudioSpectrumAnalysisCache::AudioSpectrumAnalysisCache() {
@@ -49,6 +125,8 @@ void AudioSpectrumAnalysisCache::RecreateCache() {
 	current_cache_entries = 0;
 	touch_counter = 0;
 	rolling_window_valid = false;
+	decoded_block_scratch.clear();
+	decoded_block_index = static_cast<size_t>(-1);
 	pending_blocks.clear();
 #ifdef WITH_FFTW3
 	if (dft_plan) {
@@ -93,11 +171,12 @@ void AudioSpectrumAnalysisCache::RecreateCache() {
 	metrics_generation.fetch_add(1, std::memory_order_relaxed);
 }
 
-std::unique_ptr<float[]> AudioSpectrumAnalysisCache::BuildBlockUnlocked(size_t block_index) {
+AudioSpectrumAnalysisCache::CacheBlock AudioSpectrumAnalysisCache::BuildBlockUnlocked(size_t block_index) {
 	const int channels = std::max(1, source->GetChannels());
 	const size_t sample_count = static_cast<size_t>(2) << derivation_size;
 	const size_t hop_samples = static_cast<size_t>(1) << derivation_dist;
-	auto block = std::make_unique<float[]>(static_cast<size_t>(1) << derivation_size);
+	const size_t bin_count = static_cast<size_t>(1) << derivation_size;
+	auto block = std::make_unique<uint8_t[]>(BlockBytes());
 	mono_scratch.resize(sample_count);
 
 	int64_t first_sample = (((int64_t)block_index) << derivation_dist) - ((int64_t)1 << derivation_size);
@@ -128,6 +207,10 @@ std::unique_ptr<float[]> AudioSpectrumAnalysisCache::BuildBlockUnlocked(size_t b
 	rolling_window_valid = true;
 	rolling_window_block_index = block_index;
 
+	float *const f32 = reinterpret_cast<float *>(block.get());
+	uint16_t *const f16 = reinterpret_cast<uint16_t *>(block.get());
+	const bool half = (cache_format == SpectrumCacheFormat::HalfFloat);
+
 #ifdef WITH_FFTW3
 	for (size_t i = 0; i < sample_count; ++i)
 		dft_input[i] = mono_scratch[i];
@@ -136,8 +219,10 @@ std::unique_ptr<float[]> AudioSpectrumAnalysisCache::BuildBlockUnlocked(size_t b
 
 	double scale_factor = 9 / std::sqrt(2 << (derivation_size + 1));
 	fftw_complex *o = dft_output;
-	for (size_t i = 0; i < (static_cast<size_t>(1) << derivation_size); ++i, ++o)
-		block[i] = std::log10(std::sqrt(static_cast<float>(o[0][0] * o[0][0] + o[0][1] * o[0][1])) * static_cast<float>(scale_factor) + 1.f);
+	for (size_t i = 0; i < bin_count; ++i, ++o) {
+		float value = std::log10(std::sqrt(static_cast<float>(o[0][0] * o[0][0] + o[0][1] * o[0][1])) * static_cast<float>(scale_factor) + 1.f);
+		if (half) f16[i] = FloatToHalfBits(value); else f32[i] = value;
+	}
 #else
 	float *fft_input = fft_scratch.data();
 	float *fft_real = fft_scratch.data() + sample_count;
@@ -147,9 +232,10 @@ std::unique_ptr<float[]> AudioSpectrumAnalysisCache::BuildBlockUnlocked(size_t b
 	FFT fft;
 	fft.Transform(sample_count, fft_input, fft_real, fft_imag);
 	const float scale_factor = 9 / std::sqrt(2 * static_cast<float>(sample_count));
-	for (size_t i = 0; i < (static_cast<size_t>(1) << derivation_size); ++i) {
+	for (size_t i = 0; i < bin_count; ++i) {
 		float power = std::sqrt(fft_real[i] * fft_real[i] + fft_imag[i] * fft_imag[i]) * scale_factor;
-		block[i] = std::log10(power + 1.f);
+		float value = std::log10(power + 1.f);
+		if (half) f16[i] = FloatToHalfBits(value); else f32[i] = value;
 	}
 #endif
 	return block;
@@ -172,8 +258,8 @@ size_t AudioSpectrumAnalysisCache::GetMaxBuildBlocks(size_t preferred_cap) const
 	return std::max<size_t>(1, std::min(preferred_cap, temp_limited));
 }
 
-std::vector<std::pair<size_t, std::unique_ptr<float[]>>> AudioSpectrumAnalysisCache::BuildBlocksUnlockedInternal(size_t first_block, size_t last_block, uint64_t generation, bool check_generation) {
-	std::vector<std::pair<size_t, std::unique_ptr<float[]>>> result;
+std::vector<std::pair<size_t, AudioSpectrumAnalysisCache::CacheBlock>> AudioSpectrumAnalysisCache::BuildBlocksUnlockedInternal(size_t first_block, size_t last_block, uint64_t generation, bool check_generation) {
+	std::vector<std::pair<size_t, CacheBlock>> result;
 	if (!source || derivation_size == 0 || first_block > last_block || block_count == 0)
 		return result;
 
@@ -183,6 +269,7 @@ std::vector<std::pair<size_t, std::unique_ptr<float[]>>> AudioSpectrumAnalysisCa
 	const int channels = std::max(1, source->GetChannels());
 	const size_t sample_count = static_cast<size_t>(2) << derivation_size;
 	const size_t hop_samples = static_cast<size_t>(1) << derivation_dist;
+	const size_t bin_count = static_cast<size_t>(1) << derivation_size;
 	const int64_t first_sample = (static_cast<int64_t>(first_block) << derivation_dist) - (static_cast<int64_t>(1) << derivation_size);
 	const size_t total_samples = sample_count + (last_block - first_block) * hop_samples;
 
@@ -196,11 +283,16 @@ std::vector<std::pair<size_t, std::unique_ptr<float[]>>> AudioSpectrumAnalysisCa
 		MixAudioToMono(mix_policy, audio_buffer.data(), static_cast<int>(total_samples), channels, mono_buffer.data());
 	}
 
+	const bool half = (cache_format == SpectrumCacheFormat::HalfFloat);
+	const size_t block_bytes = BlockBytes();
+
 	for (size_t block_index = first_block; block_index <= last_block; ++block_index) {
 		if (check_generation && !IsCurrentPrefetchGeneration(generation))
 			break;
 
-		auto block = std::make_unique<float[]>(static_cast<size_t>(1) << derivation_size);
+		auto block = std::make_unique<uint8_t[]>(block_bytes);
+		float *const f32 = reinterpret_cast<float *>(block.get());
+		uint16_t *const f16 = reinterpret_cast<uint16_t *>(block.get());
 		const float *window = mono_buffer.data() + (block_index - first_block) * hop_samples;
 
 #ifdef WITH_FFTW3
@@ -211,8 +303,10 @@ std::vector<std::pair<size_t, std::unique_ptr<float[]>>> AudioSpectrumAnalysisCa
 
 		double scale_factor = 9 / std::sqrt(2 << (derivation_size + 1));
 		fftw_complex *o = dft_output;
-		for (size_t i = 0; i < (static_cast<size_t>(1) << derivation_size); ++i, ++o)
-			block[i] = std::log10(std::sqrt(static_cast<float>(o[0][0] * o[0][0] + o[0][1] * o[0][1])) * static_cast<float>(scale_factor) + 1.f);
+		for (size_t i = 0; i < bin_count; ++i, ++o) {
+			float value = std::log10(std::sqrt(static_cast<float>(o[0][0] * o[0][0] + o[0][1] * o[0][1])) * static_cast<float>(scale_factor) + 1.f);
+			if (half) f16[i] = FloatToHalfBits(value); else f32[i] = value;
+		}
 #else
 		float *fft_input = fft_scratch.data();
 		float *fft_real = fft_scratch.data() + sample_count;
@@ -222,9 +316,10 @@ std::vector<std::pair<size_t, std::unique_ptr<float[]>>> AudioSpectrumAnalysisCa
 		FFT fft;
 		fft.Transform(sample_count, fft_input, fft_real, fft_imag);
 		const float scale_factor = 9 / std::sqrt(2 * static_cast<float>(sample_count));
-		for (size_t i = 0; i < (static_cast<size_t>(1) << derivation_size); ++i) {
+		for (size_t i = 0; i < bin_count; ++i) {
 			float power = std::sqrt(fft_real[i] * fft_real[i] + fft_imag[i] * fft_imag[i]) * scale_factor;
-			block[i] = std::log10(power + 1.f);
+			float value = std::log10(power + 1.f);
+			if (half) f16[i] = FloatToHalfBits(value); else f32[i] = value;
 		}
 #endif
 		result.emplace_back(block_index, std::move(block));
@@ -234,11 +329,11 @@ std::vector<std::pair<size_t, std::unique_ptr<float[]>>> AudioSpectrumAnalysisCa
 	return result;
 }
 
-std::vector<std::pair<size_t, std::unique_ptr<float[]>>> AudioSpectrumAnalysisCache::BuildBlocksUnlocked(size_t first_block, size_t last_block) {
+std::vector<std::pair<size_t, AudioSpectrumAnalysisCache::CacheBlock>> AudioSpectrumAnalysisCache::BuildBlocksUnlocked(size_t first_block, size_t last_block) {
 	return BuildBlocksUnlockedInternal(first_block, last_block, 0, false);
 }
 
-std::vector<std::pair<size_t, std::unique_ptr<float[]>>> AudioSpectrumAnalysisCache::BuildBlocksUnlocked(size_t first_block, size_t last_block, uint64_t generation) {
+std::vector<std::pair<size_t, AudioSpectrumAnalysisCache::CacheBlock>> AudioSpectrumAnalysisCache::BuildBlocksUnlocked(size_t first_block, size_t last_block, uint64_t generation) {
 	return BuildBlocksUnlockedInternal(first_block, last_block, generation, true);
 }
 
@@ -249,7 +344,7 @@ void AudioSpectrumAnalysisCache::TouchLocked(size_t block_index) {
 }
 
 void AudioSpectrumAnalysisCache::TrimLocked() {
-	const size_t block_bytes = (sizeof(float) << derivation_size);
+	const size_t block_bytes = BlockBytes();
 	while (current_cache_bytes > max_cache_bytes) {
 		size_t victim = block_count;
 		while (!touch_heap.empty()) {
@@ -277,7 +372,7 @@ void AudioSpectrumAnalysisCache::TrimLocked() {
 void AudioSpectrumAnalysisCache::DrainReady() {
 	if (!has_ready_blocks.load(std::memory_order_acquire))
 		return;
-	std::vector<std::pair<size_t, std::unique_ptr<float[]>>> ready;
+	std::vector<std::pair<size_t, CacheBlock>> ready;
 	{
 		std::lock_guard<std::mutex> lock(ready_mutex);
 		if (ready_blocks.empty())
@@ -286,7 +381,7 @@ void AudioSpectrumAnalysisCache::DrainReady() {
 		has_ready_blocks = false;
 	}
 
-	const size_t block_bytes = (sizeof(float) << derivation_size);
+	const size_t block_bytes = BlockBytes();
 	std::lock_guard<std::mutex> lock(cache_mutex);
 	for (auto &pair : ready) {
 		if (pair.first >= cache_blocks.size())
@@ -336,15 +431,61 @@ void AudioSpectrumAnalysisCache::SetResolution(size_t new_derivation_size, size_
 	RecreateCache();
 }
 
+void AudioSpectrumAnalysisCache::SetCacheFormat(SpectrumCacheFormat new_format) {
+	if (cache_format == new_format)
+		return;
+	cache_format = new_format;
+	RecreateCache();
+}
+
 void AudioSpectrumAnalysisCache::Age(size_t max_size) {
 	std::lock_guard<std::mutex> lock(cache_mutex);
-	const size_t block_bytes = (sizeof(float) << derivation_size);
-	max_cache_bytes = std::max(block_bytes, max_size);
-	TrimLocked();
+	const size_t block_bytes = BlockBytes();
+	if (max_size > 0) {
+		// Normal trim: set the capacity and evict excess.
+		max_cache_bytes = std::max(block_bytes, max_size);
+		TrimLocked();
+	} else {
+		// Flush request: clear all cached data without permanently
+		// shrinking the capacity.  The Skia/GPU rendering path does not
+		// call the legacy AudioRenderer::Render which would later restore
+		// the proper size, so shrinking here would leave the cache with a
+		// one-block limit forever.
+		for (auto &block : cache_blocks)
+			block.reset();
+		current_cache_bytes = 0;
+		current_cache_entries = 0;
+		touch_counter = 0;
+		decoded_block_scratch.clear();
+		decoded_block_index = static_cast<size_t>(-1);
+	}
 }
 
 bool AudioSpectrumAnalysisCache::IsReady() const {
 	return source && block_count > 0;
+}
+
+const float* AudioSpectrumAnalysisCache::DecodeBlock(const uint8_t *block, size_t block_index) const {
+	if (!block)
+		return nullptr;
+	if (decoded_block_index == block_index && !decoded_block_scratch.empty())
+		return decoded_block_scratch.data();
+
+	const size_t bin_count = static_cast<size_t>(1) << derivation_size;
+
+	if (cache_format == SpectrumCacheFormat::Float32) {
+		// Float32 blocks store raw floats — no conversion needed.
+		decoded_block_index = block_index;
+		return reinterpret_cast<const float *>(block);
+	}
+
+	// HalfFloat: decode uint16 half-float bits into scratch buffer.
+	const uint16_t *f16 = reinterpret_cast<const uint16_t *>(block);
+	decoded_block_scratch.resize(bin_count);
+	for (size_t i = 0; i < bin_count; ++i)
+		decoded_block_scratch[i] = HalfBitsToFloat(f16[i]);
+	decoded_block_index = block_index;
+	return decoded_block_scratch.data();
 }
 
 const float* AudioSpectrumAnalysisCache::Get(size_t block_index) {
@@ -357,7 +498,7 @@ const float* AudioSpectrumAnalysisCache::Get(size_t block_index) {
 				pending_blocks[block_index] = 0;
 			TouchLocked(block_index);
 			metrics_cache_hits.fetch_add(1, std::memory_order_relaxed);
-			return cache_blocks[block_index].get();
+			return DecodeBlock(cache_blocks[block_index].get(), block_index);
 		}
 
 		if (block_index < cache_blocks.size()) {
@@ -377,7 +518,7 @@ const float* AudioSpectrumAnalysisCache::Get(size_t block_index) {
 	auto built_blocks = BuildBlocksUnlocked(block_index, last_block_to_build);
 	metrics_visible_builds.fetch_add(1, std::memory_order_relaxed);
 
-	const size_t block_bytes = (sizeof(float) << derivation_size);
+	const size_t block_bytes = BlockBytes();
 	std::lock_guard<std::mutex> lock(cache_mutex);
 	for (auto &pair : built_blocks) {
 		const size_t index = pair.first;
@@ -404,7 +545,7 @@ const float* AudioSpectrumAnalysisCache::Get(size_t block_index) {
 		TouchLocked(block_index);
 		TrimLocked();
 	}
-	return cache_blocks[block_index].get();
+	return DecodeBlock(cache_blocks[block_index].get(), block_index);
 }
 
 const float* AudioSpectrumAnalysisCache::GetIfReady(size_t block_index) {
@@ -418,7 +559,7 @@ const float* AudioSpectrumAnalysisCache::GetIfReady(size_t block_index) {
 		if (block_index < pending_blocks.size())
 			pending_blocks[block_index] = 0;
 		TouchLocked(block_index);
-		return block;
+		return DecodeBlock(block, block_index);
 	}
 	return nullptr;
 }

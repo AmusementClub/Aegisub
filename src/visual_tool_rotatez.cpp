@@ -25,6 +25,8 @@
 #include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "selection_controller.h"
+#include "video_overlay_draw_context.h"
+#include "video_overlay_helpers.h"
 
 #include <libaegisub/format.h>
 
@@ -33,6 +35,39 @@
 
 static const float deg2rad = 3.1415926536f / 180.f;
 static const float rad2deg = 180.f / 3.1415926536f;
+
+namespace {
+void DrawProjectedAnnulus(VideoOverlayDrawContext &context, Vector2D origin, Vector2D scale, float rx, float ry, float outer_radius, float inner_radius, float start_deg, float end_deg) {
+	bool const full_circle = std::abs(end_deg - start_deg) < 0.001f;
+	float arc_start = start_deg * deg2rad;
+	float arc_end = full_circle ? (start_deg + 360.0f) * deg2rad : end_deg * deg2rad;
+	if (arc_end <= arc_start)
+		arc_end += 2.0f * 3.1415926536f;
+
+	int const steps = std::max(24, static_cast<int>(outer_radius * (arc_end - arc_start) / 12.0f));
+	std::vector<Vector2D> outer_points;
+	std::vector<Vector2D> inner_points;
+	outer_points.reserve(steps + 1);
+	inner_points.reserve(steps + 1);
+	for (int i = 0; i <= steps; ++i) {
+		float const t = static_cast<float>(i) / steps;
+		float const angle = arc_start + (arc_end - arc_start) * t;
+		Vector2D const dir = Vector2D::FromAngle(angle);
+		outer_points.push_back(video_overlay_helpers::ProjectScaledRotatedPoint(dir * outer_radius, origin, scale, rx, ry, 0.0f));
+		inner_points.push_back(video_overlay_helpers::ProjectScaledRotatedPoint(dir * inner_radius, origin, scale, rx, ry, 0.0f));
+	}
+
+	for (int i = 0; i < steps; ++i) {
+		Vector2D const quad[] = {
+			outer_points[i],
+			outer_points[i + 1],
+			inner_points[i + 1],
+			inner_points[i],
+		};
+		context.DrawPolygon(quad, 4);
+	}
+}
+}
 
 VisualToolRotateZ::VisualToolRotateZ(VideoDisplay *parent, agi::Context *context)
 : VisualTool<VisualDraggableFeature>(parent, context)
@@ -104,6 +139,59 @@ void VisualToolRotateZ::Draw() {
 	if (mouse_pos && (mouse_pos - org->pos).SquareLen() > 100) {
 		gl.SetLineColour(line_color_secondary);
 		gl.DrawLine(org->pos, mouse_pos);
+	}
+}
+
+void VisualToolRotateZ::DrawOverlay(VideoOverlayDrawContext &context) {
+	if (!active_line) return;
+
+	DrawAllFeatures(context);
+
+	wxColour const line_color_primary = to_wx(line_color_primary_opt->GetColor());
+	wxColour const line_color_secondary = to_wx(line_color_secondary_opt->GetColor());
+	wxColour const highlight_color = to_wx(highlight_color_primary_opt->GetColor());
+
+	float radius = (pos - org->pos).Len();
+	float const original_radius = radius;
+	if (radius < 50)
+		radius = 50;
+
+	context.SetLineColour(line_color_secondary, 1.0f, 1);
+	context.SetFillColour(highlight_color, 0.3f);
+	DrawProjectedAnnulus(context, org->pos, scale, rotation_x, rotation_y, radius + 4, radius - 4, 0.0f, 0.0f);
+
+	int const markers = 6;
+	float const mark_start = -90.0f / markers;
+	float const mark_end = mark_start + (180.0f / markers);
+	for (int i = 0; i < markers; ++i) {
+		float const marker_angle = i * (360.0f / markers);
+		DrawProjectedAnnulus(context, org->pos, scale, rotation_x, rotation_y, radius + 30, radius + 12, marker_angle + mark_start, marker_angle + mark_end);
+	}
+
+	Vector2D const angle_vec = Vector2D::FromAngle(angle * deg2rad);
+	context.SetLineColour(line_color_primary, 1.0f, 2);
+	context.SetFillColour(line_color_primary, 0.0f);
+	video_overlay_helpers::DrawProjectedLine(context, angle_vec * -radius, angle_vec * radius, org->pos, scale, rotation_x, rotation_y, 0.0f);
+
+	if (org->pos != pos) {
+		Vector2D const rotated_pos = Vector2D::FromAngle(angle * deg2rad - (pos - org->pos).Angle()) * original_radius;
+		video_overlay_helpers::DrawProjectedLine(context, Vector2D(), rotated_pos, org->pos, scale, rotation_x, rotation_y, 0.0f);
+		video_overlay_helpers::DrawProjectedLine(context, rotated_pos - angle_vec * 20, rotated_pos + angle_vec * 20, org->pos, scale, rotation_x, rotation_y, 0.0f);
+	}
+
+	context.SetLineColour(line_color_secondary, 1.0f, 1);
+	context.SetFillColour(highlight_color, 0.3f);
+	context.DrawCircle(
+		video_overlay_helpers::ProjectScaledRotatedPoint(angle_vec * radius, org->pos, scale, rotation_x, rotation_y, 0.0f),
+		video_overlay_helpers::ProjectCircleRadius(angle_vec * radius, 4.0f, org->pos, scale, rotation_x, rotation_y, 0.0f));
+	context.DrawCircle(
+		video_overlay_helpers::ProjectScaledRotatedPoint(angle_vec * -radius, org->pos, scale, rotation_x, rotation_y, 0.0f),
+		video_overlay_helpers::ProjectCircleRadius(angle_vec * -radius, 4.0f, org->pos, scale, rotation_x, rotation_y, 0.0f));
+
+	if (mouse_pos && (mouse_pos - org->pos).SquareLen() > 100) {
+		context.SetLineColour(line_color_secondary, 1.0f, 1);
+		context.SetFillColour(line_color_secondary, 0.0f);
+		context.DrawLine(org->pos, mouse_pos);
 	}
 }
 

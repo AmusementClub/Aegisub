@@ -68,6 +68,8 @@ class VisualToolDrag final : public VisualTool<VisualToolDragDraggableFeature> {
 	bool InitializeDrag(Feature *feature) override;
 	void UpdateDrag(Feature *feature) override;
 	void Draw() override;
+	bool SupportsOverlayContext() const override { return true; }
+	void DrawOverlay(VideoOverlayDrawContext &context) override;
 	void OnDoubleClick() override;
 
 	/// Set the pos/move button to the correct icon based on the active line

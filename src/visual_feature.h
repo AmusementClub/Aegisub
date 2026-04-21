@@ -40,6 +40,7 @@
 
 class OpenGLWrapper;
 class AssDialogue;
+class VideoOverlayDrawContext;
 
 /// VisualDraggableFeature display types
 enum DraggableFeatureType {
@@ -72,6 +73,7 @@ public:
 	/// @brief Draw this feature
 	/// @param gl OpenGLWrapper to use
 	void Draw(OpenGLWrapper const& gl) const;
+	void Draw(VideoOverlayDrawContext &context) const;
 
 	/// Start a drag
 	void StartDrag();

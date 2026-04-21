@@ -46,6 +46,8 @@ class VisualToolClip final : public VisualTool<ClipCorner> {
 	void UpdateDrag(ClipCorner *feature) override;
 
 	void Draw() override;
+	bool SupportsOverlayContext() const override { return true; }
+	void DrawOverlay(VideoOverlayDrawContext &context) override;
 public:
 	VisualToolClip(VideoDisplay *parent, agi::Context *context);
 };

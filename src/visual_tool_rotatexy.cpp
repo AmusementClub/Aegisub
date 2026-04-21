@@ -25,10 +25,11 @@
 #include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "selection_controller.h"
+#include "video_overlay_draw_context.h"
+#include "video_overlay_helpers.h"
 
 #include <libaegisub/format.h>
 
-#include <cmath>
 #include <wx/colour.h>
 
 VisualToolRotateXY::VisualToolRotateXY(VideoDisplay *parent, agi::Context *context)
@@ -148,6 +149,67 @@ void VisualToolRotateXY::Draw() {
 	gl.DrawLines(3, arrows, 18);
 
 	gl.ResetTransform();
+}
+
+void VisualToolRotateXY::DrawOverlay(VideoOverlayDrawContext &context) {
+	if (!active_line) return;
+
+	DrawAllFeatures(context);
+
+	wxColour const line_color_primary = to_wx(line_color_primary_opt->GetColor());
+	wxColour const line_color_secondary = to_wx(line_color_secondary_opt->GetColor());
+
+	static const int radius = 15;
+	static const int line_count = radius * 2 + 1;
+	static const int spacing = 20;
+	static const int half_line_length = spacing * (radius + 1);
+	static const float fade_factor = 0.9f / radius;
+
+	for (int i = 0; i < line_count; ++i) {
+		int const pos = spacing * (i - radius);
+		float const alpha = 1.0f - std::abs(i - radius) * fade_factor;
+
+		video_overlay_helpers::DrawProjectedFadedLine(
+			context,
+			{ static_cast<float>(pos), static_cast<float>(half_line_length), 0.0f },
+			{ static_cast<float>(pos), 0.0f, 0.0f },
+			org->pos, angle_x, angle_y, angle_z, fax, fay,
+			line_color_secondary, 0.0f, alpha, 2);
+		video_overlay_helpers::DrawProjectedFadedLine(
+			context,
+			{ static_cast<float>(pos), 0.0f, 0.0f },
+			{ static_cast<float>(pos), static_cast<float>(-half_line_length), 0.0f },
+			org->pos, angle_x, angle_y, angle_z, fax, fay,
+			line_color_secondary, alpha, 0.0f, 2);
+
+		video_overlay_helpers::DrawProjectedFadedLine(
+			context,
+			{ static_cast<float>(half_line_length), static_cast<float>(pos), 0.0f },
+			{ 0.0f, static_cast<float>(pos), 0.0f },
+			org->pos, angle_x, angle_y, angle_z, fax, fay,
+			line_color_secondary, 0.0f, alpha, 2);
+		video_overlay_helpers::DrawProjectedFadedLine(
+			context,
+			{ 0.0f, static_cast<float>(pos), 0.0f },
+			{ static_cast<float>(-half_line_length), static_cast<float>(pos), 0.0f },
+			org->pos, angle_x, angle_y, angle_z, fax, fay,
+			line_color_secondary, alpha, 0.0f, 2);
+	}
+
+	context.SetLineColour(line_color_primary, 1.0f, 2);
+	video_overlay_helpers::DrawProjectedLine(context, { 0.0f, 0.0f, 0.0f }, { 50.0f, 0.0f, 0.0f }, org->pos, angle_x, angle_y, angle_z, fax, fay);
+	video_overlay_helpers::DrawProjectedLine(context, { 0.0f, 0.0f, 0.0f }, { 0.0f, 50.0f, 0.0f }, org->pos, angle_x, angle_y, angle_z, fax, fay);
+	video_overlay_helpers::DrawProjectedLine(context, { 0.0f, 0.0f, 0.0f }, { 0.0f, 0.0f, 50.0f }, org->pos, angle_x, angle_y, angle_z, fax, fay);
+
+	video_overlay_helpers::Vec3 const arrow_sets[][6] = {
+		{{60.f,0.f,0.f},{50.f,-3.f,-3.f},{50.f,3.f,-3.f},{50.f,3.f,3.f},{50.f,-3.f,3.f},{50.f,-3.f,-3.f}},
+		{{0.f,60.f,0.f},{-3.f,50.f,-3.f},{3.f,50.f,-3.f},{3.f,50.f,3.f},{-3.f,50.f,3.f},{-3.f,50.f,-3.f}},
+		{{0.f,0.f,60.f},{-3.f,-3.f,50.f},{3.f,-3.f,50.f},{3.f,3.f,50.f},{-3.f,3.f,50.f},{-3.f,-3.f,50.f}},
+	};
+	for (auto const& arrow : arrow_sets) {
+		for (int i = 0; i < 5; ++i)
+			video_overlay_helpers::DrawProjectedLine(context, arrow[i], arrow[i + 1], org->pos, angle_x, angle_y, angle_z, fax, fay);
+	}
 }
 
 bool VisualToolRotateXY::InitializeHold() {

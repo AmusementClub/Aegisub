@@ -582,6 +582,7 @@ add_executable(Aegisub WIN32
     src/audio_controller_timer.cpp
     src/threaded_ui_timer.cpp
     src/audio_display_analysis.cpp
+    src/audio_display_render_model.h
     src/audio_latest_range_scheduler.cpp
     src/audio_display.cpp
     src/audio_display_source.cpp
@@ -683,6 +684,9 @@ add_executable(Aegisub WIN32
     src/validators.cpp
     src/vector2d.cpp
     src/version.cpp
+    src/video_overlay_draw_context.h
+    src/video_overlay_draw_context_legacy_gl.cpp
+    src/video_overlay_draw_context_legacy_gl.h
     src/video_box.cpp
     src/video_controller.cpp
     src/video_controller_timer.cpp
@@ -707,6 +711,7 @@ set_source_files_properties(src/native_library.cpp PROPERTIES
 target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} libaegisub luajit)
 target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
 target_compile_features(Aegisub PRIVATE cxx_std_20)
+target_include_directories(Aegisub PRIVATE src)
 option(AEGISUB_MATROSKA_PARSING "Enable MKV subtitle parsing via libebml/libmatroska" ON)
 target_sources(Aegisub PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_COMMON_SOURCES})
 if(AEGISUB_MATROSKA_PARSING)
@@ -836,6 +841,38 @@ target_link_libraries(Aegisub PRIVATE "OpenGL::GL")
 check_include_files(OpenGL/gl.h HAVE_OPENGL_GL_H)
 if(HAVE_OPENGL_GL_H)
     target_compile_definitions(Aegisub PRIVATE "HAVE_OPENGL_GL_H")
+endif()
+find_package(unofficial-skia CONFIG QUIET)
+set(AEGISUB_HAVE_SKIA_PACKAGE OFF)
+if(TARGET unofficial::skia::skia)
+    set(AEGISUB_HAVE_SKIA_PACKAGE ON)
+endif()
+option(WITH_SKIA "Enable optional Skia-based 2D rendering infrastructure" ${AEGISUB_HAVE_SKIA_PACKAGE})
+if(WITH_SKIA)
+    if(NOT TARGET unofficial::skia::skia)
+        message(FATAL_ERROR
+            "WITH_SKIA is ON, but the Skia vcpkg package was not found.\n"
+            "Install the skia port in manifest mode or pass -DWITH_SKIA=OFF."
+        )
+    endif()
+    target_compile_definitions(Aegisub PRIVATE WITH_SKIA)
+    target_link_libraries(Aegisub PRIVATE unofficial::skia::skia)
+    target_sources(Aegisub PRIVATE
+        src/audio_display_skia_host.cpp
+        src/audio_display_skia_host.h
+        src/audio_display_skia_renderer.cpp
+        src/audio_display_skia_renderer.h
+        src/audio_display_skia_target.cpp
+        src/audio_display_skia_target.h
+        src/video_overlay_draw_context_skia.cpp
+        src/video_overlay_draw_context_skia.h
+        src/skia_runtime/skia_gpu_context_host.cpp
+        src/skia_runtime/skia_gpu_context_host.h
+        src/skia_runtime/skia_surface_provider.cpp
+        src/skia_runtime/skia_surface_provider.h
+        src/skia_runtime/skia_text_layout_cache.cpp
+        src/skia_runtime/skia_text_layout_cache.h
+    )
 endif()
 
 option(WITH_LIBPLACEBO "Enable optional runtime-loaded libplacebo renderer support" ON)

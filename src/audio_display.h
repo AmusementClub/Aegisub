@@ -36,11 +36,15 @@
 
 #include <wx/bitmap.h>
 #include <wx/gdicmn.h>
+#ifdef WITH_SKIA
+#include <wx/glcanvas.h>
+#endif
 #include <wx/string.h>
 #include <wx/timer.h>
 #include <wx/window.h>
 
 #include "audio_renderer_spectrum.h"
+#include "audio_display_render_model.h"
 #include "ui_dispatch.h"
 
 namespace agi { class AudioProvider; }
@@ -52,10 +56,14 @@ class AudioRenderer;
 class AudioRendererBitmapProvider;
 class TimeRange;
 class AudioTileCompositor;
-struct AudioViewportRequest;
+#ifdef WITH_SKIA
+class AudioDisplaySkiaHost;
+class AudioDisplaySkiaRenderer;
+#endif
 
 class AudioDisplayInteractionObject;
 class AudioMarkerInteractionObject;
+class wxGLContext;
 
 /// @class AudioDisplay
 /// @brief Primary view/UI for interaction with audio timing
@@ -63,7 +71,11 @@ class AudioMarkerInteractionObject;
 /// The audio display is the common view that allows the user to interact with the active
 /// timing controller. The audio display also renders audio according to the audio controller
 /// and the timing controller, using an audio renderer instance.
+#ifdef WITH_SKIA
+class AudioDisplay: public wxGLCanvas {
+#else
 class AudioDisplay: public wxWindow {
+#endif
 	agi::signal::Connection audio_open_connection;
 
 	std::vector<agi::signal::Connection> connections;
@@ -155,8 +167,15 @@ class AudioDisplay: public wxWindow {
 	int content_backing_audio_top = 0;
 	int content_backing_audio_height = 0;
 	int content_backing_client_width = 0;
-	uint64_t content_backing_updates = 0;
-	uint64_t content_backing_blits = 0;
+#ifdef WITH_SKIA
+	bool skia_waveform_content_enabled = false;
+	std::unique_ptr<wxGLContext> gl_context;
+	std::unique_ptr<AudioDisplaySkiaHost> skia_host;
+	std::unique_ptr<AudioDisplaySkiaRenderer> skia_renderer;
+	/// Reusable render model for DirectGpu path — avoids per-frame heap
+	/// allocation of large vectors (spectrum.power, spectrum.ready, etc.).
+	AudioDisplayRenderModel reusable_render_model;
+#endif
 	/// Absolute pixel position of the last video-position marker refresh
 	int last_video_marker_pos = -1;
 	/// Last frame number used to compute the video-position marker
@@ -196,6 +215,8 @@ class AudioDisplay: public wxWindow {
 	/// in Options and need to be reloaded to take effect.
 	void ReloadRenderingSettings();
 
+	AudioDisplayRenderModel BuildRenderModel(const wxRect &update_rect, bool redraw_scrollbar, bool redraw_timeline) const;
+	void FillRenderModel(AudioDisplayRenderModel &model, const wxRect &update_rect, bool redraw_scrollbar, bool redraw_timeline) const;
 	AudioViewportRequest BuildViewportRequest(const wxRect &update_rect) const;
 	void HintVisibleAudioRange() const;
 	void WarmVisibleAudioCache() const;
@@ -204,12 +225,14 @@ class AudioDisplay: public wxWindow {
 	/// Paint the audio data for the viewport request
 	/// @param dc DC to paint to
 	/// @param viewport Viewport request to repaint
-	void PaintAudio(wxDC &dc, const AudioViewportRequest &viewport);
+	void PaintAudio(wxDC &dc, AudioDisplayRenderModel const& model);
 
 	/// Paint the markers in a time range
 	/// @param dc DC to paint to
 	/// @param updtime Time range to repaint
-	void PaintMarkers(wxDC &dc, TimeRange updtime);
+	void PaintMarkers(wxDC &dc, AudioDisplayRenderModel const& model);
+	void PaintScrollbar(wxDC &dc, AudioDisplayRenderModel const& model);
+	void PaintTimeline(wxDC &dc, AudioDisplayRenderModel const& model);
 
 	/// Draw a single foot for a marker
 	/// @param dc DC to paint to
@@ -220,12 +243,13 @@ class AudioDisplay: public wxWindow {
 	/// Paint the labels in a time range
 	/// @param dc DC to paint to
 	/// @param updtime Time range to repaint
-	void PaintLabels(wxDC &dc, TimeRange updtime);
+	void PaintLabels(wxDC &dc, AudioDisplayRenderModel const& model);
+	void PaintSplitChannelLabels(wxDC &dc, AudioDisplayRenderModel const& model);
+	void PaintStaticAudioOverlays(wxDC &dc, AudioDisplayRenderModel const& model);
 
 	/// Paint the track cursor
 	/// @param dc DC to paint to
-	void PaintTrackCursor(wxDC &dc);
-	void DrawDebugInfo(wxDC &dc);
+	void PaintTrackCursor(wxDC &dc, AudioDisplayRenderModel const& model);
 
 	/// Forward the mouse event to the appropriate child control, if any
 	/// @return Was the mouse event forwarded somewhere?
@@ -233,6 +257,13 @@ class AudioDisplay: public wxWindow {
 
 	/// wxWidgets paint event
 	void OnPaint(wxPaintEvent &event);
+#ifdef WITH_SKIA
+	/// Full-frame Skia render to the GL canvas's FBO 0 + SwapBuffers.
+	void DoDirectGpuRender();
+#endif
+	/// Request a repaint.
+	void RequestPaint(const wxRect *rect = nullptr, bool
+		erase_background = false);
 	/// wxWidgets mouse input event
 	void OnMouseEvent(wxMouseEvent &event);
 	/// wxWidgets control size changed event

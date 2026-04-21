@@ -26,6 +26,7 @@
 #include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "selection_controller.h"
+#include "video_overlay_draw_context.h"
 
 #include <libaegisub/format.h>
 
@@ -93,6 +94,35 @@ void VisualToolClip::Draw() {
 		gl.DrawRectangle(Vector2D(v_min, c_max), v_max);
 		gl.DrawRectangle(Vector2D(v_min, c_min), Vector2D(c_min, c_max));
 		gl.DrawRectangle(Vector2D(c_max, c_min), Vector2D(v_max, c_max));
+	}
+}
+
+void VisualToolClip::DrawOverlay(VideoOverlayDrawContext &context) {
+	if (!active_line) return;
+
+	DrawAllFeatures(context);
+
+	wxColour const line_color = to_wx(line_color_primary_opt->GetColor());
+	float const shaded_alpha = static_cast<float>(shaded_area_alpha_opt->GetDouble());
+
+	context.SetLineColour(line_color, 1.0f, 2);
+	context.SetFillColour(line_color, 0.0f);
+	context.DrawRectangle(cur_1, cur_2);
+
+	context.SetLineColour(line_color, 0.0f);
+	context.SetFillColour(*wxBLACK, shaded_alpha);
+	if (inverse) {
+		context.DrawRectangle(cur_1, cur_2);
+	}
+	else {
+		Vector2D const v_min = video_pos;
+		Vector2D const v_max = video_pos + video_res;
+		Vector2D const c_min = cur_1.Min(cur_2);
+		Vector2D const c_max = cur_1.Max(cur_2);
+		context.DrawRectangle(v_min, Vector2D(v_max, c_min));
+		context.DrawRectangle(Vector2D(v_min, c_max), v_max);
+		context.DrawRectangle(Vector2D(v_min, c_min), Vector2D(c_min, c_max));
+		context.DrawRectangle(Vector2D(c_max, c_min), Vector2D(v_max, c_max));
 	}
 }
 

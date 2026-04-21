@@ -51,6 +51,12 @@
 class AssDialogue;
 class RetinaHelper;
 class AsyncVideoProvider;
+#ifdef WITH_SKIA
+class SkCanvas;
+class SkiaGpuContextHost;
+class SkiaSurfaceProvider;
+class SkiaTextLayoutCache;
+#endif
 class VideoController;
 class VisualToolBase;
 class wxComboBox;
@@ -150,6 +156,19 @@ class VideoDisplay final : public wxGLCanvas {
 	unsigned int scene_cache_framebuffer = 0;
 	unsigned int scene_cache_texture = 0;
 	video_subtitle_scene_cache::SubtitleSceneSnapshot displayed_subtitle_scene;
+#ifdef WITH_SKIA
+	std::unique_ptr<SkiaGpuContextHost> skia_overlay_context_host;
+	std::unique_ptr<SkiaSurfaceProvider> skia_overlay_surface_provider;
+	std::unique_ptr<SkiaTextLayoutCache> skia_overlay_text_cache;
+	unsigned int skia_overlay_framebuffer = 0;
+	unsigned int skia_overlay_texture = 0;
+	unsigned int skia_overlay_stencil_renderbuffer = 0;
+	unsigned int skia_overlay_invert_framebuffer = 0;
+	unsigned int skia_overlay_invert_texture = 0;
+	unsigned int skia_overlay_invert_stencil_renderbuffer = 0;
+	int skia_overlay_width = 0;
+	int skia_overlay_height = 0;
+#endif
 
 	double GetVideoScaleFactor() const;
 	void InvalidateSceneCache();
@@ -161,7 +180,9 @@ class VideoDisplay final : public wxGLCanvas {
 	void RenderBackendScene(int canvas_width, int canvas_height);
 	bool RenderSceneToCache(wxSize const& client_size, int canvas_width, int canvas_height);
 	void DrawSceneCache(wxSize const& client_size, int canvas_width, int canvas_height);
+	void DrawLegacyOverlayPass(wxSize const& client_size);
 	void DrawOverlayPass(wxSize const& client_size);
+	bool TryDrawSkiaOverlayPass(wxSize const& client_size);
 	void ResetDisplayedSubtitleScene() noexcept;
 	void RefreshDisplayedSubtitleSceneSnapshot();
 	void OnSubtitlesCommit(int type, AssDialogue const* changed);
@@ -170,6 +191,11 @@ class VideoDisplay final : public wxGLCanvas {
 	/// @param horizontal_percent The percent of the video reserved horizontally
 	/// @param vertical_percent The percent of the video reserved vertically
 	void DrawOverscanMask(float horizontal_percent, float vertical_percent) const;
+#ifdef WITH_SKIA
+	void DrawOverscanMaskSkia(SkCanvas &canvas, float horizontal_percent, float vertical_percent) const;
+	bool EnsureSkiaOverlayBacking(int canvas_width, int canvas_height);
+	void DestroySkiaOverlayBacking() noexcept;
+#endif
 
 	/// Upload the image for the current frame to the video card
 	void UploadFrameData(VideoRenderPacket const&, double);

@@ -3,9 +3,9 @@
 
 #pragma once
 
-#include <vector>
+#include "audio_display_types.h"
 
-#include <wx/gdicmn.h>
+#include <vector>
 
 class AudioRenderer;
 class wxDC;
@@ -16,7 +16,7 @@ struct AudioViewportRequest {
 	int audio_top = 0;
 	int audio_height = 0;
 	int foot_size = 0;
-	wxRect update_rect;
+	AudioDisplayRect update_rect;
 	int begin_ms = 0;
 	int end_ms = 0;
 };

@@ -43,6 +43,7 @@
 
 class AudioRenderer;
 class AudioRendererBitmapProvider;
+struct AudioDisplayRenderModel;
 class wxDC;
 namespace agi { class AudioProvider; }
 
@@ -322,5 +323,6 @@ public:
 	virtual void WarmCacheRange(int start, int length) { }
 	virtual bool IsCacheRangeReady(int start, int length) { return true; }
 	virtual void SetInteractivePrefetchEnabled(bool) { }
+	virtual void PopulateRenderModel(AudioDisplayRenderModel &) { }
 	virtual std::vector<std::string> GetDebugInfo() const { return {}; }
 };

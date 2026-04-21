@@ -33,6 +33,7 @@
 ///
 
 #include "gl_wrap.h"
+#include "video_overlay_draw_context.h"
 #include "visual_feature.h"
 
 bool VisualDraggableFeature::IsMouseOver(Vector2D mouse_pos) const {
@@ -93,6 +94,41 @@ void VisualDraggableFeature::Draw(OpenGLWrapper const& gl) const {
 
 		case DRAG_SMALL_CIRCLE:
 			gl.DrawCircle(pos, 3);
+			break;
+		default:
+			break;
+	}
+}
+
+void VisualDraggableFeature::Draw(VideoOverlayDrawContext &context) const {
+	if (!pos) return;
+
+	switch (type) {
+		case DRAG_BIG_SQUARE:
+			context.DrawRectangle(pos - 6, pos + 6);
+			context.DrawLine(pos - Vector2D(0, 12), pos + Vector2D(0, 12));
+			context.DrawLine(pos - Vector2D(12, 0), pos + Vector2D(12, 0));
+			break;
+
+		case DRAG_BIG_CIRCLE:
+			context.DrawCircle(pos, 6);
+			context.DrawLine(pos - Vector2D(0, 12), pos + Vector2D(0, 12));
+			context.DrawLine(pos - Vector2D(12, 0), pos + Vector2D(12, 0));
+			break;
+
+		case DRAG_BIG_TRIANGLE:
+			context.DrawTriangle(pos - Vector2D(9, 6), pos + Vector2D(9, -6), pos + Vector2D(0, 10));
+			context.DrawLine(pos, pos + Vector2D(0, -16));
+			context.DrawLine(pos, pos + Vector2D(-14, 8));
+			context.DrawLine(pos, pos + Vector2D(14, 8));
+			break;
+
+		case DRAG_SMALL_SQUARE:
+			context.DrawRectangle(pos - 3, pos + 3);
+			break;
+
+		case DRAG_SMALL_CIRCLE:
+			context.DrawCircle(pos, 3);
 			break;
 		default:
 			break;

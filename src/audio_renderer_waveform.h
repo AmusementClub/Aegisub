@@ -74,6 +74,7 @@ public:
 	AudioRenderResult Render(wxBitmap &bmp, int start, AudioRenderingStyle style) override;
 	void WarmCacheRange(int start, int length) override;
 	bool IsCacheRangeReady(int start, int length) override;
+	void PopulateRenderModel(AudioDisplayRenderModel &model) override;
 
 	/// @brief Render blank area
 	void RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style) override;

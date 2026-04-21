@@ -120,7 +120,9 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 	std::vector<const float *> channel_power_inputs;
 	std::vector<const float *> combined_power_columns;
 	std::vector<float> combined_power_scratch;
+	std::vector<float> power_columns_storage_scratch;
 	std::vector<const float *> power_columns_scratch;
+	std::vector<float> channel_split_power_storage_scratch;
 	std::vector<const float *> channel_split_power_columns_scratch;
 	wxBitmap channel_split_band_bitmap_scratch;
 	bool EnsureCachesConfigured();
@@ -145,6 +147,7 @@ public:
 	AudioRenderResult Render(wxBitmap &bmp, int start, AudioRenderingStyle style) override;
 	void WarmCacheRange(int start, int length) override;
 	bool IsCacheRangeReady(int start, int length) override;
+	void PopulateRenderModel(AudioDisplayRenderModel &model) override;
 
 	/// @brief Render blank area
 	void RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style) override;

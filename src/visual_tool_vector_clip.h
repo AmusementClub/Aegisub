@@ -57,6 +57,8 @@ class VisualToolVectorClip final : public VisualTool<VisualToolVectorClipDraggab
 
 	void DoRefresh() override;
 	void Draw() override;
+	bool SupportsOverlayContext() const override { return true; }
+	void DrawOverlay(VideoOverlayDrawContext &context) override;
 
 public:
 	VisualToolVectorClip(VideoDisplay *parent, agi::Context *context);

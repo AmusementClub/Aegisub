@@ -57,6 +57,7 @@ public:
 	void DrawEllipse(Vector2D center, Vector2D radius) const;
 	void DrawCircle(Vector2D center, float radius) const { DrawEllipse(center, Vector2D(radius, radius)); }
 	void DrawRectangle(Vector2D p1, Vector2D p2) const;
+	void DrawPolygon(Vector2D const *points, size_t n) const;
 	void DrawRing(Vector2D center, float r1, float r2, float ar = 1.0f, float arcStart = 0.0f, float arcEnd = 0.0f) const;
 	void DrawTriangle(Vector2D p1, Vector2D p2, Vector2D p3) const;
 

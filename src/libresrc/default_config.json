@@ -40,7 +40,7 @@
 		"Display" : {
 			"Draw" : {
 				"Cursor Time" : true,
-				"Debug Metrics" : false,
+				"Render Backend" : 0,
 				"Inactive Comments" : false,
 				"Keyframes in Dialogue Mode" : true,
 				"Keyframes in Karaoke Mode" : true,
@@ -70,6 +70,7 @@
 		"Provider" : "ffmpegsource",
 		"Renderer" : {
 			"Spectrum" : {
+				"Cache Format" : 0,
 				"Computation Mode" : 0,
 				"Cutoff" : 0,
 				"FreqCurve" : 2,

@@ -32,6 +32,7 @@
 
 class AssDialogue;
 class VideoDisplay;
+class VideoOverlayDrawContext;
 class wxMouseCaptureLostEvent;
 class wxMouseEvent;
 class wxToolBar;
@@ -152,6 +153,8 @@ public:
 	// Stuff called by VideoDisplay
 	virtual void OnMouseEvent(wxMouseEvent &event)=0;
 	virtual void Draw()=0;
+	virtual bool SupportsOverlayContext() const { return false; }
+	virtual void DrawOverlay(VideoOverlayDrawContext &) { }
 	virtual void SetCanvasSize(int w, int h);
 	virtual void SetDisplayArea(int x, int y, int w, int h);
 	virtual void SetToolbar(wxToolBar *) { }
@@ -193,6 +196,7 @@ protected:
 
 	/// Draw all of the features in the list
 	void DrawAllFeatures();
+	void DrawAllFeatures(VideoOverlayDrawContext &context);
 
 	/// @brief Remove a feature from the selection
 	/// @param i Index in the feature list

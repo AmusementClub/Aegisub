@@ -504,7 +504,6 @@ void BuildAudioPage(OptionPage *p) {
 	binder->AddBool(_("Cursor time"), "Audio/Display/Draw/Cursor Time");
 	binder->AddBool(_("Video position"), "Audio/Display/Draw/Video Position");
 	binder->AddBool(_("Seconds boundaries"), "Audio/Display/Draw/Seconds");
-	binder->AddBool(_("Debug metrics"), "Audio/Display/Draw/Debug Metrics");
 	binder->AddChoice(_("Waveform Style"), AudioWaveformRenderer::GetWaveformStyles(), "Audio/Display/Waveform Style");
 
 	const wxString sq_arr[4] = { _("Regular quality"), _("Better quality"), _("High quality"), _("Insane quality") };
@@ -770,6 +769,12 @@ void BuildAdvancedAudioPage(OptionPage *p) {
 	wxArrayString apl_choice = to_wx(AudioPlayerFactory::GetClasses());
 	binder->AddChoice(_("Audio player"), apl_choice, "Audio/Player");
 
+	{
+		const wxString rb_arr[] = { _("Auto"), _("GPU (Skia)"), _("CPU (GDI)") };
+		wxArrayString rb_choice(3, rb_arr);
+		binder->AddChoice(_("Render backend"), rb_choice, "Audio/Display/Draw/Render Backend");
+	}
+
 	binder->AddCategory(_("Cache"));
 	const wxString ct_arr[3] = { _("None (Not recommended with Avisynth)"), _("RAM"), _("Hard Disk") };
 	wxArrayString ct_choice(3, ct_arr);
@@ -778,6 +783,11 @@ void BuildAdvancedAudioPage(OptionPage *p) {
 
 	binder->AddCategory(_("Spectrum Cache"));
 	binder->AddInt(_("Cache memory max (MB)"), "Audio/Renderer/Spectrum/Memory Max", 2, 1024);
+	{
+		const wxString cf_arr[] = { _("Float32"), _("Float16 (half)") };
+		wxArrayString cf_choice(2, cf_arr);
+		binder->AddChoice(_("Cache format"), cf_choice, "Audio/Renderer/Spectrum/Cache Format");
+	}
 
 #ifdef WITH_AVISYNTH
 	binder->AddCategory(wxS("Avisynth"));

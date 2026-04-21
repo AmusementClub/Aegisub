@@ -146,6 +146,24 @@ void OpenGLWrapper::DrawRectangle(Vector2D p1, Vector2D p2) const {
 	}
 }
 
+void OpenGLWrapper::DrawPolygon(Vector2D const *points, size_t n) const {
+	if (!points || n < 3)
+		return;
+
+	VertexArray buf(2, n);
+	for (size_t i = 0; i < n; ++i)
+		buf.Set(i, points[i]);
+
+	if (fill_a != 0.f) {
+		SetModeFill();
+		buf.Draw(GL_POLYGON, false);
+	}
+	if (line_a != 0.f) {
+		SetModeLine();
+		buf.Draw(GL_LINE_LOOP);
+	}
+}
+
 void OpenGLWrapper::DrawTriangle(Vector2D p1, Vector2D p2, Vector2D p3) const {
 	VertexArray buf(2, 3);
 	buf.Set(0, p1);

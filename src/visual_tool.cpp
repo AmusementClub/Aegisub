@@ -30,6 +30,7 @@
 #include "selection_controller.h"
 #include "video_controller.h"
 #include "video_display.h"
+#include "video_overlay_draw_context.h"
 #include "visual_tool_clip.h"
 #include "visual_tool_drag.h"
 #include "visual_tool_vector_clip.h"
@@ -358,6 +359,24 @@ void VisualTool<FeatureType>::DrawAllFeatures() {
 			fill = alt_fill;
 		gl.SetFillColour(fill, 0.3f);
 		feature.Draw(gl);
+	}
+}
+
+template<class FeatureType>
+void VisualTool<FeatureType>::DrawAllFeatures(VideoOverlayDrawContext &context) {
+	wxColour const grid_color = to_wx(line_color_secondary_opt->GetColor());
+	context.SetLineColour(grid_color, 1.0f, 1);
+	wxColour const base_fill = to_wx(highlight_color_primary_opt->GetColor());
+	wxColour const active_fill = to_wx(highlight_color_secondary_opt->GetColor());
+	wxColour const alt_fill = to_wx(line_color_primary_opt->GetColor());
+	for (auto& feature : features) {
+		wxColour fill = base_fill;
+		if (&feature == active_feature)
+			fill = active_fill;
+		else if (sel_features.count(&feature))
+			fill = alt_fill;
+		context.SetFillColour(fill, 0.3f);
+		feature.Draw(context);
 	}
 }
 

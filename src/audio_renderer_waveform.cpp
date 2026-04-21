@@ -30,6 +30,7 @@
 #include "audio_renderer_waveform.h"
 
 #include "compat.h"
+#include "audio_display_render_model.h"
 #include "audio_display_source.h"
 #include "audio_waveform_bitmap_tile_renderer.h"
 #include "audio_waveform_summary_cache.h"
@@ -192,6 +193,62 @@ bool AudioWaveformRenderer::IsCacheRangeReady(int start, int length) {
 
 	auto const [first_block, last_block] = GetBlockRange(start, length);
 	return summary_cache->AreBlocksReady(first_block, last_block);
+}
+
+void AudioWaveformRenderer::PopulateRenderModel(AudioDisplayRenderModel &model) {
+	if (!EnsureSummaryCacheConfigured())
+		return;
+
+	int const width = model.viewport.update_rect.width;
+	if (width <= 0)
+		return;
+
+	int const start = model.viewport.scroll_left + model.viewport.update_rect.x;
+	auto const [first_block, last_block] = GetBlockRange(start, width);
+	if (interactive_prefetch_enabled) {
+		if (allow_placeholder)
+			summary_cache->Prefetch(first_block, last_block + 2);
+		else
+			summary_cache->Prefetch(last_block + 1, last_block + 2);
+	}
+
+	model.content_kind = AudioDisplayContentKind::Waveform;
+	model.waveform.pixel_origin = model.viewport.update_rect.x;
+	model.waveform.render_averages = render_averages;
+	model.waveform.amplitude_scale = amplitude_scale;
+	model.waveform.columns.assign(static_cast<size_t>(width), AudioDisplayWaveformColumn());
+	for (size_t i = 0; i < model.waveform.palettes.size(); ++i) {
+		auto const& palette = colors[i];
+		auto pack = [](agi::Color c) { return AudioDisplayPackColour(c.r, c.g, c.b); };
+		model.waveform.palettes[i] = {
+			pack(palette.get(0.0f)),
+			pack(palette.get(0.4f)),
+			pack(palette.get(0.7f)),
+			pack(palette.get(render_averages ? 1.0f : 0.4f)),
+		};
+	}
+
+	size_t active_block_index = static_cast<size_t>(-1);
+	const AudioWaveformSummaryBlock *active_block = nullptr;
+	for (int x = 0; x < width; ++x) {
+		auto const column_ref = GetWaveformSummaryColumnRef(start + x);
+		if (column_ref.block_index != active_block_index) {
+			active_block_index = column_ref.block_index;
+			if (allow_placeholder)
+				active_block = summary_cache->GetIfReady(active_block_index);
+			else
+				active_block = &summary_cache->Get(active_block_index);
+		}
+
+		auto &column = model.waveform.columns[static_cast<size_t>(x)];
+		if (!active_block) {
+			column.ready = false;
+			continue;
+		}
+
+		column.ready = true;
+		column.summary = active_block->summaries[column_ref.summary_index];
+	}
 }
 
 void AudioWaveformRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style)

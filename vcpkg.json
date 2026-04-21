@@ -29,6 +29,15 @@
     "libass",
     "libiconv",
     "matroska",
+    {
+      "name": "skia",
+      "default-features": false,
+      "features": [
+        "gl",
+        "harfbuzz",
+        "icu"
+      ]
+    },
     "stringzilla",
     "uchardet",
     "wxwidgets",

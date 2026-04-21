@@ -31,6 +31,8 @@
 #include "utils.h"
 #include "video_controller.h"
 #include "video_display.h"
+#include "video_overlay_draw_context.h"
+#include "video_overlay_helpers.h"
 
 #include <libaegisub/format.h>
 #include <libaegisub/make_unique.h>
@@ -233,6 +235,42 @@ void VisualToolDrag::Draw() {
 		else {
 			gl.SetLineColour(line_color, 0.5f, 2);
 			gl.DrawDashedLine(start, end, 6);
+		}
+	}
+}
+
+void VisualToolDrag::DrawOverlay(VideoOverlayDrawContext &context) {
+	DrawAllFeatures(context);
+
+	wxColour const line_color = to_wx(line_color_primary_opt->GetColor());
+
+	for (auto& feature : features) {
+		if (feature.type == DRAG_START) continue;
+
+		Feature *p2 = &feature;
+		Feature *p1 = feature.parent;
+
+		bool const has_arrow = p2->type == DRAG_END;
+		int const arrow_len = has_arrow ? 10 : 0;
+
+		Vector2D direction = p2->pos - p1->pos;
+		if (direction.SquareLen() < (20 + arrow_len) * (20 + arrow_len))
+			continue;
+
+		direction = direction.Unit();
+		Vector2D const start = p1->pos + direction * 10;
+		Vector2D const end = p2->pos - direction * (10 + arrow_len);
+
+		if (has_arrow) {
+			context.SetLineColour(line_color, 0.8f, 2);
+			context.DrawLine(start, end);
+
+			Vector2D const t_half_base_w = Vector2D(-direction.Y(), direction.X()) * 4;
+			context.DrawTriangle(end + direction * arrow_len, end + t_half_base_w, end - t_half_base_w);
+		}
+		else {
+			context.SetLineColour(line_color, 0.5f, 2);
+			video_overlay_helpers::DrawDashedLine(context, start, end, 6);
 		}
 	}
 }

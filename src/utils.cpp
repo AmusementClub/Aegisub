@@ -49,6 +49,7 @@
 #include <wx/clipbrd.h>
 #include <wx/dirdlg.h>
 #include <wx/filedlg.h>
+#include <wx/log.h>
 #include <wx/stdpaths.h>
 #include <wx/window.h>
 

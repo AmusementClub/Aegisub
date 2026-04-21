@@ -22,6 +22,8 @@
 
 #include "compat.h"
 #include "options.h"
+#include "video_overlay_draw_context.h"
+#include "video_overlay_helpers.h"
 
 #include <wx/colour.h>
 
@@ -88,6 +90,74 @@ void VisualToolScale::Draw() {
 	gl.DrawLine(Vector2D(half_len, half_len + guide_size), Vector2D(half_len, half_len + guide_size + guide_size / 2));
 
 	gl.ResetTransform();
+}
+
+void VisualToolScale::DrawOverlay(VideoOverlayDrawContext &context) {
+	if (!active_line) return;
+
+	static const int base_len = 160;
+	static const int guide_size = 10;
+
+	wxColour const line_color_primary = to_wx(line_color_primary_opt->GetColor());
+	wxColour const line_color_secondary = to_wx(line_color_secondary_opt->GetColor());
+	wxColour const highlight_color = to_wx(highlight_color_primary_opt->GetColor());
+	Vector2D const overlay_scale(100.0f, 100.0f);
+
+	Vector2D const base_point = pos
+		.Max(Vector2D(base_len / 2 + guide_size, base_len / 2 + guide_size))
+		.Min(video_res - base_len / 2 - guide_size * 3);
+
+	Vector2D const scale_half_length = scale * base_len / 200;
+	float const minor_dim_offset = base_len / 2 + guide_size * 1.5f;
+
+	Vector2D const x_p1(minor_dim_offset, -scale_half_length.Y());
+	Vector2D const x_p2(minor_dim_offset, scale_half_length.Y());
+	Vector2D const y_p1(-scale_half_length.X(), minor_dim_offset);
+	Vector2D const y_p2(scale_half_length.X(), minor_dim_offset);
+
+	context.SetLineColour(line_color_primary, 1.f, 2);
+	video_overlay_helpers::DrawProjectedLine(context, x_p1, x_p2, base_point, overlay_scale, rx, ry, rz);
+	video_overlay_helpers::DrawProjectedLine(context, y_p1, y_p2, base_point, overlay_scale, rx, ry, rz);
+
+	context.SetLineColour(line_color_secondary, 1.f, 1);
+	context.SetFillColour(highlight_color, 0.3f);
+	context.DrawCircle(
+		video_overlay_helpers::ProjectScaledRotatedPoint(x_p1, base_point, overlay_scale, rx, ry, rz),
+		video_overlay_helpers::ProjectCircleRadius(x_p1, 4.0f, base_point, overlay_scale, rx, ry, rz));
+	context.DrawCircle(
+		video_overlay_helpers::ProjectScaledRotatedPoint(x_p2, base_point, overlay_scale, rx, ry, rz),
+		video_overlay_helpers::ProjectCircleRadius(x_p2, 4.0f, base_point, overlay_scale, rx, ry, rz));
+	context.DrawCircle(
+		video_overlay_helpers::ProjectScaledRotatedPoint(y_p1, base_point, overlay_scale, rx, ry, rz),
+		video_overlay_helpers::ProjectCircleRadius(y_p1, 4.0f, base_point, overlay_scale, rx, ry, rz));
+	context.DrawCircle(
+		video_overlay_helpers::ProjectScaledRotatedPoint(y_p2, base_point, overlay_scale, rx, ry, rz),
+		video_overlay_helpers::ProjectCircleRadius(y_p2, 4.0f, base_point, overlay_scale, rx, ry, rz));
+
+	int const half_len = base_len / 2;
+	context.SetLineColour(line_color_secondary, 1.0f, 1);
+	context.SetFillColour(highlight_color, 0.3f);
+	video_overlay_helpers::DrawProjectedQuad(
+		context,
+		Vector2D(half_len, -half_len),
+		Vector2D(half_len + guide_size, -half_len),
+		Vector2D(half_len + guide_size, half_len),
+		Vector2D(half_len, half_len),
+		base_point, overlay_scale, rx, ry, rz);
+	video_overlay_helpers::DrawProjectedQuad(
+		context,
+		Vector2D(-half_len, half_len),
+		Vector2D(half_len, half_len),
+		Vector2D(half_len, half_len + guide_size),
+		Vector2D(-half_len, half_len + guide_size),
+		base_point, overlay_scale, rx, ry, rz);
+	context.SetFillColour(highlight_color, 0.0f);
+
+	context.SetLineColour(line_color_secondary, 1.f, 2);
+	video_overlay_helpers::DrawProjectedLine(context, Vector2D(half_len + guide_size, -half_len), Vector2D(half_len + guide_size + guide_size / 2, -half_len), base_point, overlay_scale, rx, ry, rz);
+	video_overlay_helpers::DrawProjectedLine(context, Vector2D(half_len + guide_size, half_len), Vector2D(half_len + guide_size + guide_size / 2, half_len), base_point, overlay_scale, rx, ry, rz);
+	video_overlay_helpers::DrawProjectedLine(context, Vector2D(-half_len, half_len + guide_size), Vector2D(-half_len, half_len + guide_size + guide_size / 2), base_point, overlay_scale, rx, ry, rz);
+	video_overlay_helpers::DrawProjectedLine(context, Vector2D(half_len, half_len + guide_size), Vector2D(half_len, half_len + guide_size + guide_size / 2), base_point, overlay_scale, rx, ry, rz);
 }
 
 bool VisualToolScale::InitializeHold() {

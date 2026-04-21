@@ -36,9 +36,6 @@
 
 #include <wx/bitmap.h>
 #include <wx/gdicmn.h>
-#ifdef WITH_SKIA
-#include <wx/glcanvas.h>
-#endif
 #include <wx/string.h>
 #include <wx/timer.h>
 #include <wx/window.h>
@@ -63,7 +60,6 @@ class AudioDisplaySkiaRenderer;
 
 class AudioDisplayInteractionObject;
 class AudioMarkerInteractionObject;
-class wxGLContext;
 
 /// @class AudioDisplay
 /// @brief Primary view/UI for interaction with audio timing
@@ -71,11 +67,7 @@ class wxGLContext;
 /// The audio display is the common view that allows the user to interact with the active
 /// timing controller. The audio display also renders audio according to the audio controller
 /// and the timing controller, using an audio renderer instance.
-#ifdef WITH_SKIA
-class AudioDisplay: public wxGLCanvas {
-#else
 class AudioDisplay: public wxWindow {
-#endif
 	agi::signal::Connection audio_open_connection;
 
 	std::vector<agi::signal::Connection> connections;
@@ -169,10 +161,9 @@ class AudioDisplay: public wxWindow {
 	int content_backing_client_width = 0;
 #ifdef WITH_SKIA
 	bool skia_waveform_content_enabled = false;
-	std::unique_ptr<wxGLContext> gl_context;
 	std::unique_ptr<AudioDisplaySkiaBackend> skia_backend;
 	std::unique_ptr<AudioDisplaySkiaRenderer> skia_renderer;
-	/// Reusable render model for DirectGpu path — avoids per-frame heap
+	/// Reusable render model for Skia path — avoids per-frame heap
 	/// allocation of large vectors (spectrum.power, spectrum.ready, etc.).
 	AudioDisplayRenderModel reusable_render_model;
 #endif
@@ -259,8 +250,8 @@ class AudioDisplay: public wxWindow {
 	/// wxWidgets paint event
 	void OnPaint(wxPaintEvent &event);
 #ifdef WITH_SKIA
-	/// Full-frame Skia render to the GL canvas's FBO 0 + SwapBuffers.
-	void DoDirectGpuRender();
+	/// Full-frame Skia render to an offscreen target, then present through wxDC.
+	bool TryPaintWithSkia(wxDC &dc);
 #endif
 	/// Request a repaint.
 	void RequestPaint(const wxRect *rect = nullptr, bool

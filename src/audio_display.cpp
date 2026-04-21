@@ -72,9 +72,6 @@
 #include <wx/dcclient.h>
 #include <wx/dcmemory.h>
 #include <wx/font.h>
-#ifdef WITH_SKIA
-#include <wx/glcanvas.h>
-#endif
 #include <wx/mousestate.h>
 
 /// @class AudioDisplayInteractionObject
@@ -965,23 +962,8 @@ public:
 	int GetPosition() const { return markers.front()->GetPosition(); }
 };
 
-// GL attributes for the AudioDisplay's own wxGLCanvas (WITH_SKIA).
-#ifdef WITH_SKIA
-namespace {
-#if wxCHECK_VERSION(3, 1, 1)
-const int s_audio_gl_attribs[] = { WX_GL_RGBA, WX_GL_DOUBLEBUFFER, WX_GL_STENCIL_SIZE, 8, WX_GL_BUFFER_SIZE, 24, WX_GL_MIN_ALPHA, 8, 0 };
-#else
-const int s_audio_gl_attribs[] = { WX_GL_RGBA, WX_GL_DOUBLEBUFFER, WX_GL_STENCIL_SIZE, 8, 0 };
-#endif
-}
-#endif
-
 AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::Context *context)
-#ifdef WITH_SKIA
-: wxGLCanvas(parent, wxID_ANY, s_audio_gl_attribs, wxDefaultPosition, wxDefaultSize, wxWANTS_CHARS|wxBORDER_SIMPLE)
-#else
 : wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, wxWANTS_CHARS|wxBORDER_SIMPLE)
-#endif
 , audio_open_connection(context->project->AddAudioProviderListener(&AudioDisplay::OnAudioOpen, this))
 , context(context)
 , audio_renderer(agi::make_unique<AudioRenderer>(ReadEnvInt("AEGISUB_AUDIO_RENDERER_CACHE_BITMAP_WIDTH", 32, 8, 512)))
@@ -995,15 +977,13 @@ AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::C
 	content_backing_enabled = ReadEnvFlag("AEGISUB_AUDIO_DISPLAY_CONTENT_BACKING");
 #ifdef WITH_SKIA
 	// Render Backend preference: 0=Auto, 1=GPU, 2=CPU
-	// Auto and GPU both try DirectGpu; fall back to legacy GDI on failure.
+	// Auto and GPU both try Skia on a hidden offscreen GL canvas; wxDC/GDI
+	// remains available for low-GL systems and explicit CPU mode.
 	if (IsSkiaAudioRenderBackendEnabled()) {
-		gl_context = std::make_unique<wxGLContext>(this);
-		if (gl_context && gl_context->IsOK()) {
-			skia_waveform_content_enabled = true;
-			content_backing_enabled = false;
-			skia_backend = CreateAudioDisplaySkiaDirectGpuBackend(this, gl_context.get());
-			skia_renderer = agi::make_unique<AudioDisplaySkiaRenderer>();
-		}
+		skia_backend = CreateAudioDisplaySkiaExperimentalGpuBackend(this);
+		skia_renderer = agi::make_unique<AudioDisplaySkiaRenderer>();
+		skia_waveform_content_enabled = static_cast<bool>(skia_backend) && static_cast<bool>(skia_renderer);
+		content_backing_enabled = false;
 	}
 #endif
 	SetZoomLevel(0);
@@ -1490,11 +1470,11 @@ void AudioDisplay::LogRenderConfiguration(char const* trigger) const {
 		<< " render_backend=" << render_backend;
 	AppendQuoted(out, "render_backend_name", RenderBackendName(render_backend));
 #ifdef WITH_SKIA
-	AppendQuoted(out, "effective_backend", skia_waveform_content_enabled ? "skia_direct_gpu" : "skia_direct_unavailable");
-	out << " skia_direct=" << (skia_waveform_content_enabled ? 1 : 0);
+	AppendQuoted(out, "effective_backend", skia_waveform_content_enabled ? "skia_offscreen_gpu" : "wx_dc");
+	out << " skia_offscreen=" << (skia_waveform_content_enabled ? 1 : 0);
 #else
 	AppendQuoted(out, "effective_backend", "wx_dc");
-	out << " skia_direct=0";
+	out << " skia_offscreen=0";
 #endif
 
 	out << " waveform_style=" << waveform_style;
@@ -1631,32 +1611,44 @@ void AudioDisplay::OnLoadTimer(wxTimerEvent&)
 }
 
 #ifdef WITH_SKIA
-void AudioDisplay::DoDirectGpuRender() {
-	if (!audio_renderer_provider || !provider) return;
-	if (!skia_renderer || !skia_backend || !gl_context) return;
+bool AudioDisplay::TryPaintWithSkia(wxDC &dc) {
+	if (!audio_renderer_provider || !provider)
+		return false;
+	if (!skia_waveform_content_enabled || !skia_renderer || !skia_backend)
+		return false;
 
 	wxRect full_rect(wxPoint(0, 0), GetClientSize());
-	if (full_rect.width <= 0 || full_rect.height <= 0) return;
+	if (full_rect.width <= 0 || full_rect.height <= 0)
+		return false;
 
 	auto &model = reusable_render_model;
 	FillRenderModel(model, full_rect, true, true);
 	if (audio_renderer_provider)
 		audio_renderer_provider->PopulateRenderModel(model);
 
-	if (skia_renderer->CanDrawFrame(model)) {
-		auto frame_target = skia_backend->CreatePresentTarget(full_rect);
-		auto *canvas = frame_target ? frame_target->GetCanvas() : nullptr;
-		// PresentTo needs a DC argument for the interface but DirectGpu
-		// ignores it — SwapBuffers is used instead.
-		wxClientDC dummy_dc(this);
-		if (frame_target
-			&& frame_target->IsValid()
-			&& canvas
-			&& skia_renderer->DrawFrameToCanvas(*canvas, frame_target->GetRect(), model)
-			&& frame_target->PresentTo(dummy_dc, true)) {
-			// frame rendered successfully
-		}
+	if (!skia_renderer->CanDrawFrame(model))
+		return false;
+
+	auto frame_target = skia_backend->CreatePresentTarget(full_rect);
+	auto *canvas = frame_target ? frame_target->GetCanvas() : nullptr;
+	if (frame_target
+		&& frame_target->IsValid()
+		&& canvas
+		&& skia_renderer->DrawFrameToCanvas(*canvas, frame_target->GetRect(), model)
+		&& frame_target->PresentTo(dc, false)) {
+		return true;
 	}
+
+	// If the Skia path cannot create or present a valid surface, stop
+	// retrying it for this control instance. The wxDC path below is the
+	// compatibility fallback for low-end/virtualized GL.
+	LOG_W("audio/render/skia") << "offscreen backend failed; falling back to wx_dc";
+	skia_waveform_content_enabled = false;
+	skia_backend.reset();
+	skia_renderer.reset();
+	InvalidateContentBacking();
+	LogRenderConfiguration("skia_fallback");
+	return false;
 }
 #endif
 
@@ -1671,22 +1663,19 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 {
 	if (!audio_renderer_provider || !provider) return;
 
+	wxBufferedPaintDC dc(this);
+
 #ifdef WITH_SKIA
-	// AudioDisplay IS a wxGLCanvas — render everything via Skia + GL.
-	if (skia_waveform_content_enabled && skia_renderer && skia_backend && gl_context) {
-		wxPaintDC dc(this);  // consume/validate WM_PAINT
-		(void)dc;
-		SetCurrent(*gl_context);
-		DoDirectGpuRender();
+	if (TryPaintWithSkia(dc)) {
 		MaybeLogDebugInfo(audio_renderer_provider.get());
 		return;
 	}
 #endif
 
-#ifndef WITH_SKIA
-	// Legacy wx GDI path — only available when Skia is not compiled in.
+	// Legacy wx GDI path. Also used as the compatibility fallback when Skia
+	// was compiled in but the available GL stack cannot support it.
 	{
-		wxBufferedPaintDC dc(this);
+		wxMemoryDC backing_dc;
 		bool backing_checked = false;
 		bool backing_selected = false;
 
@@ -1764,7 +1753,6 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 
 		MaybeLogDebugInfo(audio_renderer_provider.get());
 	}
-#endif // !WITH_SKIA
 }
 
 AudioDisplayRenderModel AudioDisplay::BuildRenderModel(
@@ -2523,14 +2511,6 @@ void AudioDisplay::OnSize(wxSizeEvent &)
 	pending_high_frequency_update = false;
 	pending_high_frequency_rect = wxRect();
 	InvalidateContentBacking();
-
-#ifdef WITH_SKIA
-	// Invalidate cached present surface — size changed.
-	if (skia_backend && skia_backend->GetBackendType() == AudioDisplaySkiaBackendType::DirectGpu) {
-		// DirectGpuHost caches an FBO 0 surface by size; the next
-		// CreatePresentTarget call will recreate it.
-	}
-#endif
 
 	// We changed size, update the sub-controls' internal data and redraw
 	wxSize size = GetClientSize();

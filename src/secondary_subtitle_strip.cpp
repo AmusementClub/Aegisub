@@ -425,8 +425,8 @@ void SecondarySubtitleStrip::UpdateScrollBar() {
 
 	auto const& bitmap = session->GetBitmap();
 	auto layout = BuildLayoutForBitmap(bitmap, GetContentRect());
-	scroll_offset_y = layout.clamped_scroll_offset_y;
-	StoreScrollOffset();
+	// Keep the requested bottom distance across resizes even when the current
+	// strip height can only display a clamped view.
 
 	bool const show_scroll = layout.max_scroll_offset_y > 0;
 	scroll_bar->Show(show_scroll);
@@ -590,8 +590,6 @@ void SecondarySubtitleStrip::OnPaint(wxPaintEvent &) {
 	if (content_rect.width > 0 && content_rect.height > 0 && session->HasBitmap()) {
 		auto const& bitmap = session->GetBitmap();
 		auto layout = BuildLayoutForBitmap(bitmap, content_rect);
-		scroll_offset_y = layout.clamped_scroll_offset_y;
-		StoreScrollOffset();
 		if (layout.source_height > 0) {
 			double scale = static_cast<double>(content_rect.width) / bitmap.GetWidth();
 			int draw_height = std::clamp(

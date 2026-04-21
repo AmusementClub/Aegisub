@@ -91,10 +91,6 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 	// Set properties
 	SetWrapMode(wxSTC_WRAP_WORD);
 	SetMarginWidth(1,0);
-#ifdef __WXMSW__
-	// Prefer DirectWrite on Windows for more stable glyph shaping and rasterization.
-	SetTechnology(wxSTC_TECHNOLOGY_DIRECTWRITE);
-#endif
 #if wxCHECK_VERSION (3, 1, 0)
 	UsePopUp(wxSTC_POPUP_NEVER);
 #else

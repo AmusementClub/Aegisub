@@ -36,6 +36,7 @@
 #include "audio_display_skia_renderer.h"
 #include "audio_display_skia_target.h"
 #endif
+#include "audio_provider_factory.h"
 #include "audio_renderer.h"
 #include "audio_renderer_spectrum.h"
 #include "audio_renderer_waveform.h"
@@ -60,10 +61,13 @@
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
+#include <iomanip>
+#include <sstream>
 #include <string>
 
 #include <libaegisub/fs.h>
 #include <libaegisub/log.h>
+#include <libaegisub/path.h>
 #include <wx/dcbuffer.h>
 #include <wx/dcclient.h>
 #include <wx/dcmemory.h>
@@ -210,6 +214,121 @@ bool IsAudioDebugLogEnabled() {
 	std::string const setting(value);
 	enabled = IsTrueLikeEnvValue(setting) || !IsFalseLikeEnvValue(value);
 	return enabled;
+}
+
+void AppendQuoted(std::ostringstream& out, char const* key, std::string const& value) {
+	out << ' ' << key << '=' << std::quoted(value);
+}
+
+std::string PathForLog(agi::fs::path const& path) {
+	return path.empty() ? std::string("<none>") : agi::fs::PathToString(path);
+}
+
+std::string ResolveTokenPathForLog(agi::Context const* context, std::string const& token_path) {
+	if (!context || !context->path)
+		return "<unavailable>";
+
+	try {
+		return PathForLog(context->path->Decode(token_path));
+	}
+	catch (agi::Exception const& err) {
+		return std::string("<error: ") + err.GetMessage() + ">";
+	}
+	catch (...) {
+		return "<error>";
+	}
+}
+
+std::string ResolveAudioHdCachePathForLog(agi::Context const* context) {
+	auto configured = OPT_GET("Audio/Cache/HD/Location")->GetString();
+	if (configured == "default")
+		configured = "?temp";
+
+	if (!context || !context->path)
+		return configured;
+
+	try {
+		return PathForLog(context->path->MakeAbsolute(context->path->Decode(configured), "?temp"));
+	}
+	catch (agi::Exception const& err) {
+		return std::string("<error: ") + err.GetMessage() + ">";
+	}
+	catch (...) {
+		return "<error>";
+	}
+}
+
+char const* AudioCacheTypeName(int64_t value) {
+	switch (value) {
+		case 0: return "none";
+		case 1: return "ram";
+		case 2: return "hard_disk";
+		default: return "unknown";
+	}
+}
+
+char const* RenderBackendName(int64_t value) {
+	switch (value) {
+		case 0: return "auto";
+		case 1: return "gpu";
+		case 2: return "cpu";
+		default: return "unknown";
+	}
+}
+
+char const* SpectrumComputationModeName(int64_t value) {
+	switch (value) {
+		case 0: return "legacy_linear";
+		case 1: return "frequency_curve";
+		default: return "unknown";
+	}
+}
+
+char const* SpectrumMonoMixModeName(AudioSpectrumMonoMixMode value) {
+	switch (value) {
+		case AudioSpectrumMonoMixMode::MonoAverage: return "mono_average";
+		case AudioSpectrumMonoMixMode::PerBinMaxPower: return "per_bin_max_power";
+		case AudioSpectrumMonoMixMode::PerBinAveragePower: return "per_bin_average_power";
+		default: return "unknown";
+	}
+}
+
+char const* SpectrumChannelModeName(AudioSpectrumChannelMode value) {
+	switch (value) {
+		case AudioSpectrumChannelMode::MonoMix: return "mono_mix";
+		case AudioSpectrumChannelMode::ChannelSplit: return "channel_split";
+		default: return "unknown";
+	}
+}
+
+char const* WaveformStyleName(int64_t value) {
+	switch (value) {
+		case 0: return "max_only";
+		case 1: return "max_avg";
+		case 2: return "continuous";
+		default: return "unknown";
+	}
+}
+
+char const* RendererProviderName(AudioRendererBitmapProvider const* renderer_provider) {
+	if (dynamic_cast<AudioSpectrumRenderer const*>(renderer_provider))
+		return "spectrum";
+	if (dynamic_cast<AudioWaveformRenderer const*>(renderer_provider))
+		return "waveform";
+	return renderer_provider ? "unknown" : "none";
+}
+
+std::string JoinSelectedChannels(std::vector<int> const& channels) {
+	if (channels.empty())
+		return "all";
+
+	std::ostringstream out;
+	for (size_t i = 0; i < channels.size(); ++i) {
+		if (i)
+			out << ',';
+		out << channels[i];
+	}
+	return out.str();
 }
 
 /// Emit audio renderer debug info into the standard NDJSON session log when
@@ -1210,6 +1329,7 @@ int AudioDisplay::GetZoomLevelFactor(int level)
 
 void AudioDisplay::SetAmplitudeScale(float scale)
 {
+	scale_amplitude = scale;
 	audio_renderer->SetAmplitudeScale(scale);
 	InvalidateContentBacking();
 	RequestPaint();
@@ -1233,6 +1353,7 @@ void AudioDisplay::SetSpectrumChannelMode(AudioSpectrumChannelMode mode) {
 		spectrum->SetChannelMode(mode);
 		audio_renderer->Invalidate();
 		InvalidateContentBacking();
+		LogRenderConfiguration("spectrum_channel_mode");
 		RequestPaint();
 	}
 }
@@ -1249,6 +1370,7 @@ void AudioDisplay::SetSpectrumMonoMixMode(AudioSpectrumMonoMixMode mode) {
 		spectrum->SetMonoMixMode(mode);
 		audio_renderer->Invalidate();
 		InvalidateContentBacking();
+		LogRenderConfiguration("spectrum_mono_mix_mode");
 		RequestPaint();
 	}
 }
@@ -1268,6 +1390,7 @@ void AudioDisplay::OnSpectrumComputationModeChanged(agi::OptionValue const& opt)
 		spectrum->SetComputationMode(mode);
 		audio_renderer->Invalidate();
 		InvalidateContentBacking();
+		LogRenderConfiguration("spectrum_computation_mode");
 		RequestPaint();
 	}
 }
@@ -1278,6 +1401,7 @@ void AudioDisplay::OnSpectrumFrequencyCurveChanged(agi::OptionValue const& opt) 
 		spectrum->SetFrequencyCurvePreset(preset);
 		audio_renderer->Invalidate();
 		InvalidateContentBacking();
+		LogRenderConfiguration("spectrum_frequency_curve");
 		RequestPaint();
 	}
 }
@@ -1290,12 +1414,107 @@ void AudioDisplay::SetSpectrumSelectedChannels(const std::vector<int> &channels)
 		spectrum->SetSelectedChannels(spectrum_selected_channels_runtime);
 		audio_renderer->Invalidate();
 		InvalidateContentBacking();
+		LogRenderConfiguration("spectrum_selected_channels");
 		RequestPaint();
 	}
 }
 
 int AudioDisplay::GetProviderChannels() const {
 	return provider ? std::max(1, provider->GetChannels()) : 1;
+}
+
+void AudioDisplay::LogRenderConfiguration(char const* trigger) const {
+	if (!context || !provider || !audio_renderer_provider)
+		return;
+
+	auto const stats = provider->GetMemoryStats();
+	auto const selection = GetLastAudioProviderSelectionReport();
+	auto const attempts = aegisub::provider_selection_diagnostics::FormatAttempts(selection);
+	auto const audio_cache_type = OPT_GET("Audio/Cache/Type")->GetInt();
+	auto const render_backend = OPT_GET("Audio/Display/Draw/Render Backend")->GetInt();
+	auto const waveform_style = OPT_GET("Audio/Display/Waveform Style")->GetInt();
+	auto spectrum_quality = OPT_GET("Audio/Renderer/Spectrum/Quality")->GetInt();
+	auto const configured_spectrum_quality = spectrum_quality;
+#ifdef WITH_FFTW3
+	spectrum_quality += 2;
+#endif
+	spectrum_quality = mid<int64_t>(0, spectrum_quality, 5);
+	auto const spectrum_mode = mid<int64_t>(0, OPT_GET("Audio/Renderer/Spectrum/Computation Mode")->GetInt(), 1);
+
+	std::ostringstream out;
+	out << "trigger=" << (trigger ? trigger : "unknown")
+		<< " renderer=" << RendererProviderName(audio_renderer_provider.get())
+		<< " spectrum=" << (OPT_GET("Audio/Spectrum")->GetBool() ? 1 : 0);
+
+	if (context->project) {
+		AppendQuoted(out, "audio_path", PathForLog(context->project->AudioName()));
+		AppendQuoted(out, "video_path", PathForLog(context->project->VideoName()));
+	}
+
+	AppendQuoted(out, "provider_option", OPT_GET("Audio/Provider")->GetString());
+	if (!selection.preferred_provider.empty())
+		AppendQuoted(out, "preferred_provider", selection.preferred_provider);
+	if (!selection.selected_provider.empty())
+		AppendQuoted(out, "selected_provider", selection.selected_provider);
+	if (!attempts.empty())
+		AppendQuoted(out, "provider_attempts", attempts);
+	AppendQuoted(out, "provider_name", stats.provider_name.empty() ? std::string("<unknown>") : stats.provider_name);
+	AppendQuoted(out, "provider_storage", stats.storage_kind.empty() ? std::string("<unknown>") : stats.storage_kind);
+
+	out << " sample_rate=" << stats.sample_rate
+		<< " channels=" << stats.channels
+		<< " bytes_per_sample=" << stats.bytes_per_sample
+		<< " float_samples=" << (stats.float_samples ? 1 : 0)
+		<< " samples=" << stats.num_samples
+		<< " decoded_samples=" << stats.decoded_samples
+		<< " logical_bytes=" << stats.logical_bytes
+		<< " decoded_bytes=" << stats.decoded_bytes
+		<< " storage_bytes=" << stats.storage_bytes
+		<< " zoom_level=" << zoom_level
+		<< " ms_per_pixel=" << ms_per_pixel
+		<< " amplitude_scale=" << scale_amplitude
+		<< " audio_height=" << audio_height
+		<< " audio_width_px=" << pixel_audio_width
+		<< " scroll_left=" << scroll_left
+		<< " cache_type=" << audio_cache_type;
+	AppendQuoted(out, "cache_type_name", AudioCacheTypeName(audio_cache_type));
+	AppendQuoted(out, "hd_cache_config", OPT_GET("Audio/Cache/HD/Location")->GetString());
+	AppendQuoted(out, "hd_cache_path", ResolveAudioHdCachePathForLog(context));
+	AppendQuoted(out, "ffms_index_cache_dir", ResolveTokenPathForLog(context, "?local/ffms2cache/"));
+
+	out << " renderer_memory_max_mb=" << OPT_GET("Audio/Renderer/Spectrum/Memory Max")->GetInt()
+		<< " renderer_cache_format=" << OPT_GET("Audio/Renderer/Spectrum/Cache Format")->GetInt()
+		<< " renderer_cache_bitmap_width=" << ReadEnvInt("AEGISUB_AUDIO_RENDERER_CACHE_BITMAP_WIDTH", 32, 8, 512)
+		<< " allow_placeholder=" << (audio_renderer_provider->AllowsPlaceholder() ? 1 : 0)
+		<< " content_backing=" << (content_backing_enabled ? 1 : 0)
+		<< " render_backend=" << render_backend;
+	AppendQuoted(out, "render_backend_name", RenderBackendName(render_backend));
+#ifdef WITH_SKIA
+	AppendQuoted(out, "effective_backend", skia_waveform_content_enabled ? "skia_direct_gpu" : "skia_direct_unavailable");
+	out << " skia_direct=" << (skia_waveform_content_enabled ? 1 : 0);
+#else
+	AppendQuoted(out, "effective_backend", "wx_dc");
+	out << " skia_direct=0";
+#endif
+
+	out << " waveform_style=" << waveform_style;
+	AppendQuoted(out, "waveform_style_name", WaveformStyleName(waveform_style));
+	out << " spectrum_quality_config=" << configured_spectrum_quality
+		<< " spectrum_quality_effective=" << spectrum_quality
+		<< " spectrum_mode=" << spectrum_mode;
+	AppendQuoted(out, "spectrum_mode_name", SpectrumComputationModeName(spectrum_mode));
+	out << " spectrum_freq_curve=" << OPT_GET("Audio/Renderer/Spectrum/FreqCurve")->GetInt()
+		<< " spectrum_channel_mode=" << static_cast<int>(spectrum_channel_mode_runtime);
+	AppendQuoted(out, "spectrum_channel_mode_name", SpectrumChannelModeName(spectrum_channel_mode_runtime));
+	out << " spectrum_mono_mix_mode=" << static_cast<int>(spectrum_mono_mix_mode_runtime);
+	AppendQuoted(out, "spectrum_mono_mix_mode_name", SpectrumMonoMixModeName(spectrum_mono_mix_mode_runtime));
+	AppendQuoted(out, "spectrum_selected_channels", JoinSelectedChannels(spectrum_selected_channels_runtime));
+	AppendQuoted(out, "ffms_decode_error_handling", OPT_GET("Provider/Audio/FFmpegSource/Decode Error Handling")->GetString());
+	out << " ffms_downmix=" << (OPT_GET("Provider/Audio/FFmpegSource/Downmix")->GetBool() ? 1 : 0)
+		<< " ffms_index_all_tracks=" << (OPT_GET("Provider/FFmpegSource/Index All Tracks")->GetBool() ? 1 : 0);
+	AppendQuoted(out, "avisynth_runtime_path", OPT_GET("Provider/Avisynth/Runtime Path")->GetString());
+
+	LOG_I("audio/render/config") << out.str();
 }
 
 void AudioDisplay::ReloadRenderingSettings()
@@ -1369,6 +1588,8 @@ void AudioDisplay::ReloadRenderingSettings()
 
 	InvalidateContentBacking();
 	RequestPaint();
+	if (provider && pixel_audio_width > 1)
+		LogRenderConfiguration("render_settings");
 }
 
 void AudioDisplay::OnLoadTimer(wxTimerEvent&)
@@ -2375,6 +2596,7 @@ void AudioDisplay::ApplyAudioProvider(agi::AudioProvider *provider)
 		}
 	}
 
+	LogRenderConfiguration("audio_provider");
 	RequestPaint();
 
 	if (provider)

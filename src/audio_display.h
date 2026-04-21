@@ -214,6 +214,7 @@ class AudioDisplay: public wxWindow {
 	/// This can be called if some rendering quality settings have been changed
 	/// in Options and need to be reloaded to take effect.
 	void ReloadRenderingSettings();
+	void LogRenderConfiguration(char const* trigger) const;
 
 	AudioDisplayRenderModel BuildRenderModel(const wxRect &update_rect, bool redraw_scrollbar, bool redraw_timeline) const;
 	void FillRenderModel(AudioDisplayRenderModel &model, const wxRect &update_rect, bool redraw_scrollbar, bool redraw_timeline) const;

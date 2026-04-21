@@ -236,6 +236,7 @@ class XAudio2Thread :public IXAudio2VoiceCallback {
 	/// Playback baseline captured when the current queued stream actually starts.
 	std::atomic<int64_t> playback_started_frame{ 0 };
 	std::atomic<uint64_t> playback_started_samples_played{ 0 };
+	std::atomic<ULONGLONG> playback_started_time{ 0 };
 
 	/// Generation number of the queued buffer occupying each slot. Zero means free.
 	std::vector<std::atomic<uint32_t>> buffer_generation;
@@ -434,6 +435,8 @@ void XAudio2Thread::Run() {
 		switch (wait_result) {
 		case WAIT_OBJECT_0 + 0:
 			// Start or restart playback
+			ResetEvent(is_playing);
+			playback_started_time.store(0, std::memory_order_release);
 			pSourceVoice->Stop();
 			pSourceVoice->FlushSourceBuffers();
 			reset_queued_buffers();
@@ -446,6 +449,7 @@ void XAudio2Thread::Run() {
 		stop_playback:
 			// Stop playing
 			ResetEvent(is_playing);
+			playback_started_time.store(0, std::memory_order_release);
 			pSourceVoice->Stop();
 			pSourceVoice->FlushSourceBuffers();
 			reset_queued_buffers();
@@ -504,7 +508,7 @@ void XAudio2Thread::Run() {
 				submitted_frames += fill_len;
 				submitted_bytes += fill_len * wfx.nBlockAlign;
 				XAUDIO2_BUFFER xbf;
-				xbf.Flags = fill_len + next_input_frame == current_end_frame ? XAUDIO2_END_OF_STREAM : 0;
+				xbf.Flags = next_input_frame == current_end_frame ? XAUDIO2_END_OF_STREAM : 0;
 				xbf.AudioBytes = fill_len * wfx.nBlockAlign;
 				xbf.pAudioData = buff[i].data();
 				xbf.PlayBegin = 0;
@@ -524,12 +528,18 @@ void XAudio2Thread::Run() {
 					pSourceVoice->GetState(&start_state);
 					playback_started_frame.store(start_frame.load(std::memory_order_acquire), std::memory_order_release);
 					playback_started_samples_played.store(start_state.SamplesPlayed, std::memory_order_release);
-					pSourceVoice->Start();
+					if (FAILED(hr = pSourceVoice->Start())) {
+						REPORT_ERROR("Failed starting SourceVoice")
+					}
+					playback_started_time.store(GetTickCount64(), std::memory_order_release);
 					SetEvent(is_playing);
 				}
 				else {
 					playback_should_be_running = false;
-					ResetEvent(is_playing);
+					playback_started_frame.store(start_frame.load(std::memory_order_acquire), std::memory_order_release);
+					playback_started_samples_played.store(0, std::memory_order_release);
+					playback_started_time.store(GetTickCount64(), std::memory_order_release);
+					SetEvent(is_playing);
 				}
 			}
 			if (trace_audio_output) {
@@ -550,6 +560,7 @@ void XAudio2Thread::Run() {
 			source_voice.store(nullptr, std::memory_order_release);
 			pXAudio2->Release();
 			ResetEvent(is_playing);
+			playback_started_time.store(0, std::memory_order_release);
 			reset_queued_buffers();
 			playback_should_be_running = false;
 			break;
@@ -635,6 +646,8 @@ void XAudio2Thread::Play(int64_t start, int64_t count)
 {
 	CheckError();
 
+	ResetEvent(is_playing);
+	playback_started_time.store(0, std::memory_order_release);
 	start_frame.store(start, std::memory_order_release);
 	end_frame.store(start + count, std::memory_order_release);
 	SetEvent(event_start_playback);
@@ -696,18 +709,30 @@ bool XAudio2Thread::IsPlaying() {
 int64_t XAudio2Thread::GetCurrentFrame() {
 	CheckError();
 	if (!IsPlaying()) return 0;
+	auto const base_frame = playback_started_frame.load(std::memory_order_acquire);
+	auto const started_time = playback_started_time.load(std::memory_order_acquire);
+	if (!started_time)
+		return base_frame;
+
+	auto const elapsed_ms = GetTickCount64() - started_time;
+	auto const clock_frame = base_frame + static_cast<int64_t>(elapsed_ms * provider->GetSampleRate() / 1000);
+
 	auto* voice = source_voice.load(std::memory_order_acquire);
 	if (!voice)
-		return 0;
+		return clock_frame;
 
 	XAUDIO2_VOICE_STATE state = { };
 	voice->GetState(&state);
 	auto const base_samples = playback_started_samples_played.load(std::memory_order_acquire);
-	auto const base_frame = playback_started_frame.load(std::memory_order_acquire);
 	auto const end = end_frame.load(std::memory_order_acquire);
 	auto const played_samples = state.SamplesPlayed >= base_samples ? state.SamplesPlayed - base_samples : 0;
-	auto const current_frame = base_frame + static_cast<int64_t>(played_samples);
-	return std::min(current_frame, end);
+	auto const state_frame = base_frame + static_cast<int64_t>(played_samples);
+
+	// SamplesPlayed can run ahead of what the user hears near the end of a queued
+	// stream, but it is still useful for not advancing through startup underruns.
+	if (state_frame < end)
+		return std::min(clock_frame, state_frame);
+	return clock_frame;
 }
 
 int64_t XAudio2Thread::GetEndFrame() {

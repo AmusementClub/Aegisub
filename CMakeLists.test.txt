@@ -25,6 +25,7 @@ if(GTEST_FOUND)
         tests/tests/avisynth_legacy_path.cpp
         tests/tests/avisynth_runtime_policy.cpp
         tests/tests/automation_debug_adapter.cpp
+        tests/tests/automation_edit_box_request_policy.cpp
         tests/tests/audio_display.cpp
         tests/tests/async_video_provider.cpp
         tests/tests/dispatch.cpp

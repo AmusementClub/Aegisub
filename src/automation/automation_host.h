@@ -91,6 +91,9 @@ namespace Automation4 {
 		virtual std::vector<agi::fs::path> RequestOpenFiles(ProgressSink& sink, AutomationOpenFileDialogRequest const& request) = 0;
 		virtual agi::fs::path RequestSaveFile(ProgressSink& sink, AutomationSaveFileDialogRequest const& request) = 0;
 		virtual std::shared_ptr<agi::FileDialogService> GetFileDialogService() const = 0;
+		virtual bool CanFocusSubtitleEditBox() const = 0;
+		virtual bool FocusSubtitleEditBox() = 0;
+		virtual bool SetSubtitleEditBoxCursor(int character_index, bool after) = 0;
 	};
 
 	class AutomationHost {

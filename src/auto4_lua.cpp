@@ -38,6 +38,7 @@
 #include "ass_file.h"
 #include "ass_info.h"
 #include "ass_style.h"
+#include "automation/automation_edit_box_request_policy.h"
 #include "automation/automation_debug_session.h"
 #include "automation/automation_debug_service.h"
 #include "automation/automation_live_host.h"
@@ -84,6 +85,15 @@ using namespace Automation4;
 
 namespace {
 	constexpr char kTemplateDebugEnabledRegistryKey[] = "automation_template_debug_enabled";
+	constexpr char kEditBoxRequestRegistryKey[] = "automation_edit_box_request";
+
+	struct PendingEditBoxRequest {
+		bool requested = false;
+		bool focus = false;
+		bool has_cursor = false;
+		int character_index = 0;
+		bool after = false;
+	};
 
 	wxString get_wxstring(lua_State *L, int idx)
 	{
@@ -98,6 +108,92 @@ namespace {
 	AutomationHost *get_host(lua_State *L)
 	{
 		return LuaGetAutomationHost(L);
+	}
+
+	void ensure_edit_box_request_table(lua_State *L)
+	{
+		lua_getfield(L, LUA_REGISTRYINDEX, kEditBoxRequestRegistryKey);
+		if (lua_istable(L, -1))
+			return;
+
+		lua_pop(L, 1);
+		lua_createtable(L, 0, 4);
+		lua_pushvalue(L, -1);
+		lua_setfield(L, LUA_REGISTRYINDEX, kEditBoxRequestRegistryKey);
+	}
+
+	void clear_pending_edit_box_request(lua_State *L)
+	{
+		lua_pushnil(L);
+		lua_setfield(L, LUA_REGISTRYINDEX, kEditBoxRequestRegistryKey);
+	}
+
+	bool table_bool_field(lua_State *L, int index, char const* field)
+	{
+		lua_getfield(L, index, field);
+		bool value = !!lua_toboolean(L, -1);
+		lua_pop(L, 1);
+		return value;
+	}
+
+	int table_int_field(lua_State *L, int index, char const* field)
+	{
+		lua_getfield(L, index, field);
+		int value = lua_isnumber(L, -1) ? static_cast<int>(lua_tointeger(L, -1)) : 0;
+		lua_pop(L, 1);
+		return value;
+	}
+
+	PendingEditBoxRequest take_pending_edit_box_request(lua_State *L)
+	{
+		PendingEditBoxRequest request;
+		lua_getfield(L, LUA_REGISTRYINDEX, kEditBoxRequestRegistryKey);
+		if (lua_istable(L, -1)) {
+			request.focus = table_bool_field(L, -1, "focus");
+			request.has_cursor = table_bool_field(L, -1, "has_cursor");
+			request.character_index = table_int_field(L, -1, "character_index");
+			request.after = table_bool_field(L, -1, "after");
+			request.requested = request.focus || request.has_cursor;
+		}
+		lua_pop(L, 1);
+		clear_pending_edit_box_request(L);
+		return request;
+	}
+
+	void queue_pending_edit_box_focus(lua_State *L)
+	{
+		ensure_edit_box_request_table(L);
+		set_field(L, "focus", true);
+		lua_pop(L, 1);
+	}
+
+	void queue_pending_edit_box_cursor(lua_State *L, int character_index, bool after)
+	{
+		ensure_edit_box_request_table(L);
+		set_field(L, "focus", true);
+		set_field(L, "has_cursor", true);
+		set_field(L, "character_index", character_index);
+		set_field(L, "after", after);
+		lua_pop(L, 1);
+	}
+
+	void apply_pending_edit_box_request(lua_State *L, AutomationHost *host)
+	{
+		auto request = take_pending_edit_box_request(L);
+		if (!request.requested || !host)
+			return;
+
+		if (request.has_cursor)
+			host->Ui().SetSubtitleEditBoxCursor(request.character_index, request.after);
+		else if (request.focus)
+			host->Ui().FocusSubtitleEditBox();
+	}
+
+	bool can_queue_edit_box_request(lua_State *L, AutomationHost *host)
+	{
+		auto runtime_state = LuaGetAutomationRuntimeStateSnapshot(L);
+		bool can_focus_edit_box = host && host->Ui().CanFocusSubtitleEditBox();
+		return CanQueueSubtitleEditBoxRequest(runtime_state, can_focus_edit_box);
 	}
 
 	int get_file_name(lua_State *L)
@@ -297,6 +393,29 @@ namespace {
 		lua_pop(L, 1);
 		host->Ui().ShowStatus(text);
 		return 0;
+	}
+
+	int lua_focus_edit_box(lua_State *L)
+	{
+		auto *host = get_host(L);
+		bool available = can_queue_edit_box_request(L, host);
+		if (available)
+			queue_pending_edit_box_focus(L);
+		push_value(L, available);
+		return 1;
+	}
+
+	int lua_set_edit_box_cursor(lua_State *L)
+	{
+		int character_index = check_int(L, 1);
+		bool after = lua_gettop(L) >= 2 && !!lua_toboolean(L, 2);
+
+		auto *host = get_host(L);
+		bool available = can_queue_edit_box_request(L, host);
+		if (available)
+			queue_pending_edit_box_cursor(L, character_index, after);
+		push_value(L, available);
+		return 1;
 	}
 
 	int project_properties(lua_State *L)
@@ -539,6 +658,8 @@ namespace {
 		set_field<project_properties>(L, "project_properties");
 		set_field<lua_get_audio_selection>(L, "get_audio_selection");
 		set_field<lua_set_status_text>(L, "set_status_text");
+		set_field<lua_focus_edit_box>(L, "focus_edit_box");
+		set_field<lua_set_edit_box_cursor>(L, "set_edit_box_cursor");
 
 		// store aegisub table to globals
 		lua_settable(L, LUA_GLOBALSINDEX);
@@ -972,6 +1093,7 @@ namespace {
 			FinalizeLuaDebugSession(L, debug_session);
 		});
 		LuaSetAutomationRuntimeState(L, host, invocation, original_sel, original_active);
+		clear_pending_edit_box_request(L);
 		stackcheck.check_stack(0);
 
 		GetFeatureFunction("run");
@@ -992,6 +1114,7 @@ namespace {
 		}
 		catch (agi::UserCancelException const&) {
 			subsobj->Cancel();
+			clear_pending_edit_box_request(L);
 			stackcheck.check_stack(0);
 			return;
 		}
@@ -1069,6 +1192,7 @@ namespace {
 			core.selectionController->SetSelectionAndActive(std::move(new_sel), new_active);
 		}
 
+		apply_pending_edit_box_request(L, host.get());
 		stackcheck.check_stack(0);
 	}
 
@@ -1171,6 +1295,7 @@ namespace {
 				LuaScript::GetScriptObject(L)->SetAutomationHost(host);
 		}
 		LuaSetAutomationRuntimeState(L, host, invocation, {}, 0);
+		clear_pending_edit_box_request(L);
 
 		GetFeatureFunction("run");
 		stackcheck.check_stack(1);
@@ -1210,9 +1335,11 @@ namespace {
 			LuaThreadedCall(L, 2, 0, *runner, invocation);
 			stackcheck.check_stack(0);
 			subsobj->ProcessingComplete();
+			clear_pending_edit_box_request(L);
 		}
 		catch (agi::UserCancelException const&) {
 			subsobj->Cancel();
+			clear_pending_edit_box_request(L);
 			throw;
 		}
 	}

@@ -48,3 +48,39 @@ function aegisub.set_status_bar_text(text)
 Returns: 0 values
 
 ---
+
+Focusing the subtitle edit box
+
+function aegisub.focus_edit_box()
+
+Requests keyboard focus for the main subtitle text edit box when the current
+macro finishes.
+
+Returns: 1 value, boolean.
+  true if the request can be applied in the current Automation host, false
+  otherwise.
+
+---
+
+Moving the subtitle edit box cursor
+
+function aegisub.set_edit_box_cursor(character_index, after)
+
+Requests the text cursor to be moved in the main subtitle text edit box when
+the current macro finishes. Setting the cursor also focuses the edit box.
+
+@character_index (number)
+  1-based character index. Passing 1 with after=false puts the cursor before
+  the first character. Passing 1 with after=true puts the cursor after the
+  first character. Values outside the current line are clamped to the line
+  bounds.
+
+@after (boolean)
+  Optional. false or nil places the cursor before character_index. true places
+  it after character_index.
+
+Returns: 1 value, boolean.
+  true if the request can be applied in the current Automation host, false
+  otherwise.
+
+---

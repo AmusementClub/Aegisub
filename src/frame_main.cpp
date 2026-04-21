@@ -381,6 +381,7 @@ void FrameMain::InitContents() {
 
 	StartupLog("Create subtitle editing box");
 	auto EditBox = new SubsEditBox(contentsPanel, context.get());
+	ui.subsEditBox = EditBox;
 	observe_phase("startup.frame.contents.create_base_controls");
 
 	StartupLog("Arrange main sizers");

@@ -217,4 +217,11 @@ public:
 	/// @param parent Parent window
 	SubsEditBox(wxWindow *parent, agi::Context *context);
 	~SubsEditBox();
+
+	/// Report whether the main subtitle text editor can currently take focus.
+	bool CanFocusEditControl() const;
+	/// Give keyboard focus to the main subtitle text editor.
+	void FocusEditControl();
+	/// Set the caret before or after the 1-based character index in the main editor.
+	void SetEditControlCaret(int character_index, bool after);
 };

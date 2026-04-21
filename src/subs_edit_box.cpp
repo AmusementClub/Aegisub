@@ -49,6 +49,7 @@
 #include "project.h"
 #include "placeholder_ctrl.h"
 #include "selection_controller.h"
+#include "subtitle_edit_box_focus.h"
 #include "subs_edit_ctrl.h"
 #include "subs_controller.h"
 #ifdef WITH_WXSTC
@@ -330,6 +331,55 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 
 SubsEditBox::~SubsEditBox() {
 	c->GetCore().textSelectionController->SetControl((wxTextCtrl*)nullptr);
+}
+
+bool SubsEditBox::CanFocusEditControl() const {
+#ifdef WITH_WXSTC
+	if (use_stc)
+		return aegisub::subtitle_edit_box_focus::CanFocusEditControl(
+			line != nullptr,
+			edit_ctrl_stc && edit_ctrl_stc->IsEnabled(),
+			edit_ctrl_stc && edit_ctrl_stc->AcceptsFocusFromKeyboard());
+#endif
+	return aegisub::subtitle_edit_box_focus::CanFocusEditControl(
+		line != nullptr,
+		edit_ctrl_tc && edit_ctrl_tc->IsEnabled(),
+		edit_ctrl_tc && edit_ctrl_tc->AcceptsFocusFromKeyboard());
+}
+
+void SubsEditBox::FocusEditControl() {
+#ifdef WITH_WXSTC
+	if (use_stc) {
+		edit_ctrl_stc->SetFocus();
+		return;
+	}
+#endif
+	edit_ctrl_tc->SetFocus();
+}
+
+void SubsEditBox::SetEditControlCaret(int character_index, bool after) {
+	size_t character_offset = 0;
+	if (character_index > 0)
+		character_offset = static_cast<size_t>(character_index - 1) + (after ? 1 : 0);
+
+	std::string text;
+#ifdef WITH_WXSTC
+	if (use_stc) {
+		auto data = edit_ctrl_stc->GetTextRaw();
+		text.assign(data.data(), data.length());
+	}
+	else {
+#endif
+		text = from_wx(edit_ctrl_tc->GetValue());
+#ifdef WITH_WXSTC
+	}
+#endif
+
+	auto const caret_position = static_cast<long>(agi::IndexOfCharacter(text, character_offset));
+	auto core = c->GetCore();
+	core.textSelectionController->SetSelection(caret_position, caret_position);
+	core.textSelectionController->SetInsertionPoint(caret_position);
+	FocusEditControl();
 }
 
 wxTextCtrl *SubsEditBox::MakeMarginCtrl(wxString const& tooltip, int margin, wxString const& commit_msg) {

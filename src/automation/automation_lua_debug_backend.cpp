@@ -335,7 +335,7 @@ int KnownTableChildPriority(std::string_view parent_name, std::string_view child
 			return static_cast<int>(std::distance(order.begin(), it));
 	}
 	if (parent_name == "aegisub") {
-		static constexpr std::array<std::string_view, 21> order{{
+		static constexpr std::array<std::string_view, 23> order{{
 			"register_macro",
 			"register_filter",
 			"progress",
@@ -354,6 +354,8 @@ int KnownTableChildPriority(std::string_view parent_name, std::string_view child
 			"project_properties",
 			"get_audio_selection",
 			"set_status_text",
+			"focus_edit_box",
+			"set_edit_box_cursor",
 			"parse_karaoke_data",
 			"set_undo_point",
 			"lua_automation_version",

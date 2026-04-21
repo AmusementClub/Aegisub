@@ -27,7 +27,9 @@
 #include "../include/aegisub/context_ui.h"
 #include "../options.h"
 #include "../project.h"
+#include "../subs_edit_box.h"
 #include "../subs_controller.h"
+#include "../ui_dispatch.h"
 #include "../video_controller.h"
 
 #include <libaegisub/fs.h>
@@ -192,6 +194,39 @@ public:
 		if (!SupportsInteractiveDialogs())
 			return {};
 		return context->GetFileDialogService();
+	}
+
+	bool CanFocusSubtitleEditBox() const override
+	{
+		return agi::ui::MainInvoke([this] {
+			return context && context->GetUI().subsEditBox && context->GetUI().subsEditBox->CanFocusEditControl();
+		});
+	}
+
+	bool FocusSubtitleEditBox() override
+	{
+		return agi::ui::MainInvoke([this] {
+			if (!context)
+				return false;
+			auto ui = context->GetUI();
+			if (!ui.subsEditBox || !ui.subsEditBox->CanFocusEditControl())
+				return false;
+			ui.subsEditBox->FocusEditControl();
+			return true;
+		});
+	}
+
+	bool SetSubtitleEditBoxCursor(int character_index, bool after) override
+	{
+		return agi::ui::MainInvoke([this, character_index, after] {
+			if (!context)
+				return false;
+			auto ui = context->GetUI();
+			if (!ui.subsEditBox || !ui.subsEditBox->CanFocusEditControl())
+				return false;
+			ui.subsEditBox->SetEditControlCaret(character_index, after);
+			return true;
+		});
 	}
 };
 

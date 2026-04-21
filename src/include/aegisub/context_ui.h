@@ -25,6 +25,7 @@ class AudioKaraoke;
 class BaseGrid;
 class DialogManager;
 class FrameMain;
+class SubsEditBox;
 class VideoDisplay;
 class wxWindow;
 
@@ -37,6 +38,7 @@ struct ContextUiState {
 	AudioBox *audioBox = nullptr;
 	AudioKaraoke *karaoke = nullptr;
 	BaseGrid *subsGrid = nullptr;
+	SubsEditBox *subsEditBox = nullptr;
 	std::unique_ptr<DialogManager> dialog;
 	FrameMain *frame = nullptr;
 	VideoDisplay *videoDisplay = nullptr;
@@ -52,6 +54,7 @@ struct ContextUiSession {
 	AudioBox *&audioBox;
 	AudioKaraoke *&karaoke;
 	BaseGrid *&subsGrid;
+	SubsEditBox *&subsEditBox;
 	std::unique_ptr<DialogManager>& dialog;
 	FrameMain *&frame;
 	VideoDisplay *&videoDisplay;
@@ -66,6 +69,7 @@ struct ConstContextUiSession {
 	AudioBox *const& audioBox;
 	AudioKaraoke *const& karaoke;
 	BaseGrid *const& subsGrid;
+	SubsEditBox *const& subsEditBox;
 	std::unique_ptr<DialogManager> const& dialog;
 	FrameMain *const& frame;
 	VideoDisplay *const& videoDisplay;

@@ -44,7 +44,7 @@ std::string strip_newlines(std::string str) {
 
 void SsaSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const {
 	(void)choice_sink;
-	TextFileWriter file(filename, encoding);
+	TextFileWriter file(filename, ResolveWriteEncoding(encoding));
 	auto const* projection_fps = fps.IsLoaded() ? &fps : nullptr;
 
 	file.WriteLineToFile("[Script Info]");

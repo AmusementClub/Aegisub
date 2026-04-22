@@ -18,9 +18,9 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_info.h"
+#include "ass_parse_error.h"
 #include "ass_style.h"
 #include "string_codec.h"
-#include "subtitle_format.h"
 
 #include <libaegisub/ass/uuencode.h>
 #include <libaegisub/make_unique.h>

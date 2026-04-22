@@ -138,7 +138,7 @@ void MicroDVDSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& 
 	StripTags(copy);
 	ConvertNewlines(copy, "|");
 
-	TextFileWriter file(filename, encoding);
+	TextFileWriter file(filename, ResolveWriteEncoding(encoding));
 
 	// Write FPS line
 	if (!fps.IsVFR())

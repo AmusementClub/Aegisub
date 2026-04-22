@@ -569,6 +569,7 @@ add_executable(Aegisub WIN32
     src/ass_karaoke.cpp
     src/ass_override.cpp
     src/ass_parser.cpp
+    src/ass_io_core.cpp
     src/ass_style.cpp
     src/ass_style_storage.cpp
     src/async_video_provider.cpp

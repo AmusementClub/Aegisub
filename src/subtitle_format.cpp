@@ -37,6 +37,7 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "compat.h"
+#include "options.h"
 #include "subtitle_fps_choice.h"
 #include "subtitle_format_ass.h"
 #include "subtitle_format_ebu3264.h"
@@ -101,6 +102,12 @@ agi::vfr::Framerate SubtitleFormat::AskForFPS(bool allow_vfr, bool show_smpte, a
 	if (!choice)
 		return agi::vfr::Framerate();
 	return ResolveSubtitleFpsChoiceSelection(model, *choice, fps);
+}
+
+std::string SubtitleFormat::ResolveWriteEncoding(std::string encoding) {
+	if (encoding.empty())
+		encoding = OPT_GET("App/Save Charset")->GetString();
+	return encoding;
 }
 
 void SubtitleFormat::StripTags(AssFile &file) {

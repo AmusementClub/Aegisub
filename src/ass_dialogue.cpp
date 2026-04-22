@@ -32,7 +32,7 @@
 /// @ingroup subs_storage
 
 #include "ass_dialogue.h"
-#include "subtitle_format.h"
+#include "ass_parse_error.h"
 #include "utils.h"
 
 #include <libaegisub/of_type_adaptor.h>

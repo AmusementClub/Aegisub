@@ -40,7 +40,8 @@ class TextFileWriter {
 #endif
 
 public:
-	TextFileWriter(agi::fs::path const& filename, std::string encoding="");
+	/// @param encoding Encoding to write; callers should resolve app defaults before constructing
+	TextFileWriter(agi::fs::path const& filename, std::string encoding);
 	~TextFileWriter();
 
 	void Close();

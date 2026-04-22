@@ -29,6 +29,8 @@
 
 #pragma once
 
+#include "ass_parse_error.h"
+
 #include <libaegisub/exception.h>
 #include <libaegisub/fs_fwd.h>
 
@@ -69,6 +71,8 @@ public:
 	/// @param allow_vfr Include video frame rate as an option even if it's vfr
 	/// @param show_smpte Show SMPTE drop frame option
 	static agi::vfr::Framerate AskForFPS(bool allow_vfr, bool show_smpte, agi::vfr::Framerate const& fps, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
+	/// Resolve empty output encoding to the configured save charset.
+	static std::string ResolveWriteEncoding(std::string encoding);
 
 	/// Constructor
 	/// @param Subtitle format name
@@ -129,6 +133,3 @@ public:
 	/// Initialize subtitle formats
 	static void LoadFormats();
 };
-
-DEFINE_EXCEPTION(SubtitleFormatParseError, agi::InvalidInputException);
-DEFINE_EXCEPTION(UnknownSubtitleFormatError, agi::InvalidInputException);

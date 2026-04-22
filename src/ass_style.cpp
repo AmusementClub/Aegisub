@@ -34,7 +34,7 @@
 
 #include "ass_style.h"
 
-#include "subtitle_format.h"
+#include "ass_parse_error.h"
 #include "utils.h"
 
 #include <libaegisub/format.h>

@@ -16,23 +16,18 @@
 
 #include "font_file_lister.h"
 
+#include "font_collector_unicode.h"
+
 #include <libaegisub/string_utils.h>
 
 #include <fontconfig/fontconfig.h>
-#include <unicode/utf8.h>
+#include <utility>
 
 namespace {
 void Emit(FontCollectorEventSink const& sink, FontCollectorEvent event) {
 	if (sink)
 		sink(event);
 }
-
-	void append_codepoint_to_utf8(std::string& out, int cp) {
-		char buf[4];
-		UChar8* p = (UChar8*)buf;
-		U8_APPEND_UNSAFE(p, cp);
-		out.append(buf, p - (UChar8*)buf);
-	}
 
 bool pattern_matches(FcPattern *pat, const char *field, std::string const& name) {
 	FcChar8 *str;
@@ -116,8 +111,11 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 	FcCharSet *charset;
 	if (FcPatternGetCharSet(match, FC_CHARSET, 0, &charset) == FcResultMatch) {
 		for (int chr : characters) {
-			if (!FcCharSetHasChar(charset, chr))
-				append_codepoint_to_utf8(ret.missing, chr);
+			font_collector::unicode::Rune rune;
+			if (!font_collector::unicode::Rune::TryCreate(chr, rune))
+				continue;
+			if (!FcCharSetHasChar(charset, rune.Value()))
+				font_collector::unicode::AppendRuneToUtf8(ret.missing, rune);
 		}
 	}
 

@@ -33,12 +33,12 @@
 
 #include "ass_dialogue.h"
 #include "ass_parse_error.h"
-#include "utils.h"
 
 #include <libaegisub/of_type_adaptor.h>
 #include <libaegisub/split.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/string_utils.h>
+#include <libaegisub/util.h>
 
 #include <boost/regex.hpp>
 #include <boost/spirit/include/karma_generate.hpp>
@@ -115,7 +115,7 @@ void AssDialogue::Parse(std::string const& raw) {
 	for (int& margin : Margin) {
 		if (!agi::util::strings::parse_integer(tkn.next_str(), margin))
 			throw SubtitleFormatParseError("Failed parsing line: " + raw);
-		margin = mid(-9999, margin, 99999);
+		margin = agi::util::mid(-9999, margin, 99999);
 	}
 	Effect = tkn.next_str_trim();
 

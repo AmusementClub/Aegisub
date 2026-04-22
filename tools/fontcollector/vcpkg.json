@@ -1,0 +1,14 @@
+{
+  "name": "aegisub-fontcollector",
+  "version-string": "0.0.1",
+  "builtin-baseline": "58950f88544e4637524dbd6a01d0317cf4cb77fc",
+  "dependencies": [
+    "boost-flyweight",
+    "boost-interprocess",
+    "boost-intrusive",
+    "boost-regex",
+    "boost-spirit",
+    "cli11",
+    "libiconv"
+  ]
+}

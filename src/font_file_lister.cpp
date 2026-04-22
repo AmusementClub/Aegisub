@@ -19,10 +19,11 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_style.h"
+#include "font_collector_unicode.h"
 
 #include <algorithm>
 #include <tuple>
-#include <unicode/utf8.h>
+#include <utility>
 
 namespace {
 void Emit(FontCollectorEventSink const& sink, FontCollectorEvent event) {
@@ -92,8 +93,9 @@ void FontCollector::ProcessDialogueLine(const AssDialogue *line, int index) {
 			}
 
 			auto& chars = usage.chars;
-			auto size = static_cast<int>(text.size());
-			for (int i = 0; i < size; ) {
+			auto const *data = text.data();
+			auto const size = text.size();
+			for (size_t i = 0; i < size; ) {
 				if (text[i] == '\\' && i + 1 < size) {
 					char next = text[++i];
 					if (next == 'N' || next == 'n') {
@@ -110,9 +112,21 @@ void FontCollector::ProcessDialogueLine(const AssDialogue *line, int index) {
 					continue;
 				}
 
-				UChar32 c;
-				U8_NEXT(&text[0], i, size, c);
-				chars.push_back(c);
+				auto const ch = static_cast<unsigned char>(data[i]);
+				if (ch < 0x80) {
+					chars.push_back(ch);
+					++i;
+					continue;
+				}
+
+				font_collector::unicode::Rune rune;
+				int bytes_consumed = 0;
+				font_collector::unicode::Rune::DecodeFromUtf8(
+					data + i, size - i, rune, bytes_consumed);
+				if (bytes_consumed == 0)
+					bytes_consumed = 1;
+				i += bytes_consumed;
+				chars.push_back(rune.Value());
 			}
 
 			sort(begin(chars), end(chars));

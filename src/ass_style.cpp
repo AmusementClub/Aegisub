@@ -35,7 +35,6 @@
 #include "ass_style.h"
 
 #include "ass_parse_error.h"
-#include "utils.h"
 
 #include <libaegisub/format.h>
 #include <libaegisub/split.h>
@@ -152,9 +151,9 @@ AssStyle::AssStyle(std::string const& str, int version) {
 	if (version == 0)
 		alignment = SsaToAss(alignment);
 
-	Margin[0] = mid(-9999, p.next_int(), 99999);
-	Margin[1] = mid(-9999, p.next_int(), 99999);
-	Margin[2] = mid(-9999, p.next_int(), 99999);
+	Margin[0] = agi::util::mid(-9999, p.next_int(), 99999);
+	Margin[1] = agi::util::mid(-9999, p.next_int(), 99999);
+	Margin[2] = agi::util::mid(-9999, p.next_int(), 99999);
 
 	// Skip alpha level
 	if (version == 0)

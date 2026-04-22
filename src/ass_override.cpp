@@ -30,15 +30,24 @@
 
 #include "ass_dialogue.h"
 
-#include "utils.h"
-
 #include <libaegisub/color.h>
 #include <libaegisub/exception.h>
 #include <libaegisub/format.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/string_utils.h>
+#include <libaegisub/util.h>
 
 #include <functional>
+
+namespace {
+std::string override_float_to_string(double val) {
+	std::string s = agi::format("%.3f", val);
+	size_t pos = s.find_last_not_of("0");
+	if (pos != s.find(".")) ++pos;
+	s.erase(begin(s) + pos, end(s));
+	return s;
+}
+}
 
 AssOverrideParameter::AssOverrideParameter(VariableDataType type, AssParameterClass classification)
 : type(type)
@@ -62,7 +71,7 @@ template<> std::string AssOverrideParameter::Get<std::string>() const {
 template<> int AssOverrideParameter::Get<int>() const {
 	if (classification == AssParameterClass::ALPHA)
 		// &Hxx&, but vsfilter lets you leave everything out
-		return mid<int>(0, strtol(std::find_if(value.c_str(), value.c_str() + value.size(), isxdigit), nullptr, 16), 255);
+		return agi::util::mid<int>(0, strtol(std::find_if(value.c_str(), value.c_str() + value.size(), isxdigit), nullptr, 16), 255);
 	return atoi(Get<std::string>().c_str());
 }
 
@@ -98,13 +107,13 @@ template<> void AssOverrideParameter::Set<std::string>(std::string new_value) {
 
 template<> void AssOverrideParameter::Set<int>(int new_value) {
 	if (classification == AssParameterClass::ALPHA)
-		Set(agi::format("&H%02X&", mid(0, new_value, 255)));
+		Set(agi::format("&H%02X&", agi::util::mid(0, new_value, 255)));
 	else
 		Set(std::to_string(new_value));
 }
 
 template<> void AssOverrideParameter::Set<double>(double new_value) {
-	Set(float_to_string(new_value));
+	Set(override_float_to_string(new_value));
 }
 
 template<> void AssOverrideParameter::Set<bool>(bool new_value) {

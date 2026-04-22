@@ -25,6 +25,13 @@
 #include <vector>
 #include <unordered_map>
 
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 class AssDialogue;
 class AssFile;
 

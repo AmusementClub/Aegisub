@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <cstdint>
 
+#include <algorithm>
 #include <cassert>
 #include <libaegisub/charset_conv.h>
 #include <iconv.h>

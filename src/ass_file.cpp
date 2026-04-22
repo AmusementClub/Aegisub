@@ -20,8 +20,10 @@
 #include "ass_dialogue.h"
 #include "ass_info.h"
 #include "ass_style.h"
+#ifndef AEGISUB_FONTCOLLECTOR_STANDALONE
 #include "ass_style_storage.h"
 #include "options.h"
+#endif
 #include "transient_font_set.h"
 
 #include <algorithm>
@@ -92,22 +94,28 @@ void AssFile::LoadDefault(bool include_dialogue_line, std::string const& style_c
 	Info.emplace_back("ScriptType", "v4.00+");
 	Info.emplace_back("WrapStyle", "0");
 	Info.emplace_back("ScaledBorderAndShadow", "yes");
+#ifndef AEGISUB_FONTCOLLECTOR_STANDALONE
 	if (!OPT_GET("Subtitle/Default Resolution/Auto")->GetBool()) {
 		SetResolution(ScriptResolutionType::None,
 			OPT_GET("Subtitle/Default Resolution/Width")->GetInt(),
 			OPT_GET("Subtitle/Default Resolution/Height")->GetInt());
 	}
+#else
+	(void)style_catalog;
+#endif
 	Info.emplace_back("YCbCr Matrix", "None");
 
 	// Add default style
 	Styles.push_back(*new AssStyle);
 
+#ifndef AEGISUB_FONTCOLLECTOR_STANDALONE
 	// Add/replace any catalog styles requested
 	if (AssStyleStorage::CatalogExists(style_catalog)) {
 		AssStyleStorage catalog;
 		catalog.LoadCatalog(style_catalog);
 		catalog.ReplaceIntoFile(*this);
 	}
+#endif
 
 	if (include_dialogue_line)
 		Events.push_back(*new AssDialogue);
@@ -242,9 +250,13 @@ ScriptResolutionType AssFile::GetResolutionType() const {
 }
 
 ScriptResolutionType AssFile::GetPreferredResolutionType() const {
+#ifdef AEGISUB_FONTCOLLECTOR_STANDALONE
+	return ScriptResolutionType::PlayRes;
+#else
 	return OPT_GET("Subtitle/Resolution/Prefer PlayRes")->GetBool()
 		? ScriptResolutionType::PlayRes
 		: ScriptResolutionType::LayoutRes;
+#endif
 }
 
 void AssFile::SetResolution(ScriptResolutionType type, int w, int h) {

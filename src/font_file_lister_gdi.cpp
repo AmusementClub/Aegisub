@@ -16,15 +16,20 @@
 
 #include "font_file_lister.h"
 
+#include "font_collector_unicode.h"
+
 #include <libaegisub/charset_conv_win.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/io.h>
 #include <libaegisub/scope_exit.h>
 
-#include <vector>
+#include <algorithm>
+#include <cstdint>
+#include <cstring>
+#include <memory>
 #include <ShlObj.h>
-#include <unicode/utf16.h>
 #include <Usp10.h>
+#include <vector>
 
 namespace {
 void Emit(FontCollectorEventSink const& sink, FontCollectorEvent event) {
@@ -33,17 +38,17 @@ void Emit(FontCollectorEventSink const& sink, FontCollectorEvent event) {
 }
 
 void append_utf16_to_utf8(std::string& out, wchar_t ch) {
-		char buf[4];
-		auto len = WideCharToMultiByte(CP_UTF8, 0, &ch, 1, buf, sizeof(buf), nullptr, nullptr);
-		if (len > 0) out.append(buf, len);
-	}
+	char buf[4];
+	auto len = WideCharToMultiByte(CP_UTF8, 0, &ch, 1, buf, sizeof(buf), nullptr, nullptr);
+	if (len > 0) out.append(buf, len);
+}
 
-	void append_utf16_pair_to_utf8(std::string& out, wchar_t lead, wchar_t trail) {
-		wchar_t pair[2] = {lead, trail};
-		char buf[4];
-		auto len = WideCharToMultiByte(CP_UTF8, 0, pair, 2, buf, sizeof(buf), nullptr, nullptr);
-		if (len > 0) out.append(buf, len);
-	}
+void append_utf16_pair_to_utf8(std::string& out, wchar_t lead, wchar_t trail) {
+	wchar_t pair[2] = {lead, trail};
+	char buf[4];
+	auto len = WideCharToMultiByte(CP_UTF8, 0, pair, 2, buf, sizeof(buf), nullptr, nullptr);
+	if (len > 0) out.append(buf, len);
+}
 
 uint32_t murmur3(const char *data, uint32_t len) {
 	static const uint32_t c1 = 0xcc9e2d51;
@@ -249,12 +254,13 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 	std::wstring utf16characters;
 	utf16characters.reserve(characters.size());
 	for (int chr : characters) {
-		if (U16_LENGTH(chr) == 1)
-			utf16characters.push_back(static_cast<wchar_t>(chr));
-		else {
-			utf16characters.push_back(U16_LEAD(chr));
-			utf16characters.push_back(U16_TRAIL(chr));
-		}
+		font_collector::unicode::Rune rune;
+		if (!font_collector::unicode::Rune::TryCreate(chr, rune))
+			continue;
+		wchar_t buffer[2];
+		int chars_written = 0;
+		if (rune.TryEncodeToUtf16(buffer, chars_written))
+			utf16characters.append(buffer, chars_written);
 	}
 
 	SCRIPT_CACHE cache = nullptr;
@@ -270,7 +276,7 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 		GetGlyphIndicesW(dc, utf16characters.data(), utf16characters.size(),
 			indices.get(), GGI_MARK_NONEXISTING_GLYPHS);
 		for (size_t i = 0; i < utf16characters.size(); ++i) {
-			if (U16_IS_SURROGATE(utf16characters[i]))
+			if (font_collector::unicode::IsSurrogate(utf16characters[i]))
 				continue;
 			if (indices[i] == SHRT_MAX)
 				append_utf16_to_utf8(ret.missing, utf16characters[i]);
@@ -281,7 +287,7 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 			// Uniscribe doesn't report glyph indexes for non-BMP characters,
 			// so we have to call ScriptGetCMap on each individual pair to
 			// determine if it's the missing one
-			if (U16_IS_LEAD(utf16characters[i])) {
+			if (font_collector::unicode::IsHighSurrogate(utf16characters[i])) {
 				hr = ScriptGetCMap(dc, &cache, &utf16characters[i], 2, 0, &indices[i]);
 				if (hr == S_FALSE) {
 					append_utf16_pair_to_utf8(ret.missing, utf16characters[i], utf16characters[i + 1]);

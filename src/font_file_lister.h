@@ -14,11 +14,12 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#include "font_collector_events.h"
+
 #include <libaegisub/fs_fwd.h>
 #include <libaegisub/scoped_ptr.h>
 
 #include <filesystem>
-#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -26,8 +27,6 @@
 
 class AssDialogue;
 class AssFile;
-
-typedef std::function<void (std::string, int)> FontCollectorStatusCallback;
 
 struct CollectionResult {
 	/// Characters which could not be found in any font files
@@ -49,7 +48,7 @@ class GdiFontFileLister {
 public:
 	/// Constructor
 	/// @param cb Callback for status logging
-	GdiFontFileLister(FontCollectorStatusCallback &cb);
+	GdiFontFileLister(FontCollectorEventSink &cb);
 
 	/// @brief Get the path to the font with the given styles
 	/// @param facename Name of font face
@@ -65,7 +64,7 @@ using FontFileLister = GdiFontFileLister;
 #elif defined(__APPLE__)
 
 struct CoreTextFontFileLister {
-	CoreTextFontFileLister(FontCollectorStatusCallback &) {}
+	CoreTextFontFileLister(FontCollectorEventSink &) {}
 
 	/// @brief Get the path to the font with the given styles
 	/// @param facename Name of font face
@@ -97,7 +96,7 @@ class FontConfigFontFileLister {
 public:
 	/// Constructor
 	/// @param cb Callback for status logging
-	FontConfigFontFileLister(FontCollectorStatusCallback &cb);
+	FontConfigFontFileLister(FontCollectorEventSink &cb);
 
 	/// @brief Get the path to the font with the given styles
 	/// @param facename Name of font face
@@ -130,7 +129,7 @@ class FontCollector {
 	};
 
 	/// Message callback provider by caller
-	FontCollectorStatusCallback status_callback;
+	FontCollectorEventSink event_sink;
 
 	FontFileLister lister;
 
@@ -158,7 +157,7 @@ public:
 	/// Constructor
 	/// @param status_callback Function to pass status updates to
 	/// @param lister The actual font file lister
-	FontCollector(FontCollectorStatusCallback status_callback);
+	FontCollector(FontCollectorEventSink event_sink);
 
 	/// @brief Get a list of the locations of all font files used in the file
 	/// @param file Lines in the subtitle file to check

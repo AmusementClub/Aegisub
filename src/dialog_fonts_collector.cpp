@@ -14,7 +14,7 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
-#include "font_file_lister.h"
+#include "font_collector_core.h"
 
 #include "compat.h"
 #include "dialog_manager.h"
@@ -35,6 +35,9 @@
 #include <libaegisub/path.h>
 #include <libaegisub/make_unique.h>
 
+#include <unicode/uchar.h>
+#include <unicode/utf8.h>
+
 #include <wx/button.h>
 #include <wx/dialog.h>
 #include <wx/dirdlg.h>
@@ -51,19 +54,11 @@
 #include <wx/zipstrm.h>
 
 namespace {
-enum class FcMode {
-	CheckFontsOnly = 0,
-	CopyToFolder = 1,
-	CopyToScriptFolder = 2,
-	CopyToZip = 3,
-	SymlinkToFolder = 4
-};
-
 class DialogFontsCollector final : public wxDialog {
 	agi::Context *context;
 	AssFile *subs;
 	agi::Path &path;
-	FcMode mode = FcMode::CheckFontsOnly;
+	FontCollectionMode mode = FontCollectionMode::CheckFontsOnly;
 	agi::ui::UiActivationScope ui_activation;
 
 	wxStyledTextCtrl *collection_log;
@@ -98,139 +93,156 @@ using color_str_pair = std::pair<int, wxString>;
 wxDEFINE_EVENT(EVT_ADD_TEXT, ValueEvent<color_str_pair>);
 wxDEFINE_EVENT(EVT_COLLECTION_DONE, wxThreadEvent);
 
-void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FcMode oper, wxEvtHandler *collector, agi::ui::WeakLifetime lifetime) {
+std::string FormatMissingGlyphs(std::string const& str) {
+	std::string printable;
+	std::string unprintable;
+	size_t i = 0;
+	while (i < str.size()) {
+		UChar32 c;
+		U8_NEXT((const uint8_t*)str.data(), i, (int32_t)str.size(), c);
+		if (!u_isUWhiteSpace(c)) {
+			printable += str.substr(i - U8_LENGTH(c), U8_LENGTH(c));
+		}
+		else {
+			char buf[64];
+			snprintf(buf, sizeof buf, "\n - U+%04X ", c);
+			unprintable += buf;
+			UErrorCode ec = U_ZERO_ERROR;
+			char name[1024];
+			auto len = u_charName(c, U_EXTENDED_CHAR_NAME, name, sizeof name, &ec);
+			if (len != 0 && U_SUCCESS(ec))
+				unprintable += name;
+			if (c == 0xA0)
+				unprintable += " (\\h)";
+		}
+	}
+
+	return printable + unprintable;
+}
+
+color_str_pair FormatFontCollectorEvent(FontCollectorEvent const& event) {
+	switch (event.type) {
+		case FontCollectorEventType::UpdatingFontCache:
+			return {0, _("Updating font cache\n")};
+		case FontCollectorEventType::FontCacheError:
+			return {3, to_wx(event.message + "\n")};
+		case FontCollectorEventType::ParsingFile:
+			return {0, _("Parsing file\n")};
+		case FontCollectorEventType::StyleMissing:
+			return {2, fmt_tl("Style '%s' does not exist\n", event.style)};
+		case FontCollectorEventType::SearchingForFontFiles:
+			return {0, _("Searching for font files\n")};
+		case FontCollectorEventType::FontMissing:
+			return {2, fmt_tl("Could not find font '%s'\n", event.face)};
+		case FontCollectorEventType::FontFound:
+			return {0, fmt_tl("Found '%s' at '%s'\n", event.face, event.path)};
+		case FontCollectorEventType::FakeBold:
+			return {3, fmt_tl("'%s' does not have a bold variant.\n", event.face)};
+		case FontCollectorEventType::FakeItalic:
+			return {3, fmt_tl("'%s' does not have an italic variant.\n", event.face)};
+		case FontCollectorEventType::MissingGlyphs:
+			if (event.count > 50)
+				return {2, fmt_tl("'%s' is missing %d glyphs used.\n", event.face, event.count)};
+			return {2, fmt_tl("'%s' is missing the following glyphs used: %s\n", event.face, FormatMissingGlyphs(event.message))};
+		case FontCollectorEventType::Usage: {
+			wxString text;
+			if (event.styles.size()) {
+				text += _("Used in styles:\n");
+				for (auto const& style : event.styles)
+					text += fmt_wx("  - %s\n", style);
+			}
+
+			if (event.lines.size()) {
+				text += _("Used on lines:");
+				for (int line : event.lines)
+					text += fmt_wx(" %d", line);
+				text += wxS("\n");
+			}
+			text += wxS("\n");
+			return {2, text};
+		}
+		case FontCollectorEventType::SearchComplete:
+			return {0, _("Done\n\n")};
+		case FontCollectorEventType::AllFontsFound:
+			return {1, _("All fonts found.\n")};
+		case FontCollectorEventType::FontsMissing:
+			return {2, fmt_plural(event.count, "One font could not be found\n", "%d fonts could not be found.\n", event.count)};
+		case FontCollectorEventType::FontsMissingGlyphs:
+			return {2, fmt_plural(event.count,
+				"One font was found, but was missing glyphs used in the script.\n",
+				"%d fonts were found, but were missing glyphs used in the script.\n",
+				event.count)};
+		case FontCollectorEventType::CollectionSymlinkingFontsToFolder:
+			return {0, _("Symlinking fonts to folder...\n")};
+		case FontCollectorEventType::CollectionCopyingFontsToFolder:
+			return {0, _("Copying fonts to folder...\n")};
+		case FontCollectorEventType::CollectionCopyingFontsToArchive:
+			return {0, _("Copying fonts to archive...\n")};
+		case FontCollectorEventType::CollectionFailedCreateDirectory:
+			return {2, fmt_tl("* Failed to create directory '%s': %s.\n", event.path.wstring(), to_wx(event.message))};
+		case FontCollectorEventType::CollectionFailedOpen:
+			return {2, fmt_tl("* Failed to open %s.\n", event.path)};
+		case FontCollectorEventType::CollectionCopied:
+			return {1, fmt_tl("* Copied %s.\n", event.path)};
+		case FontCollectorEventType::CollectionAlreadyExists:
+			return {3, fmt_tl("* %s already exists on destination.\n", event.path.filename())};
+		case FontCollectorEventType::CollectionSymlinked:
+			return {1, fmt_tl("* Symlinked %s.\n", event.path)};
+		case FontCollectorEventType::CollectionFailedCopy:
+			return {2, fmt_tl("* Failed to copy %s.\n", event.path)};
+		case FontCollectorEventType::CollectionDoneAllCopied:
+			return {1, _("Done. All fonts copied.")};
+		case FontCollectorEventType::CollectionDoneSomeNotCopied:
+			return {2, _("Done. Some fonts could not be copied.")};
+		case FontCollectorEventType::CollectionOver32MBWarning:
+			return {2, _("\nOver 32 MB of fonts were copied. Some of the fonts may not be loaded by the player if they are all attached to a Matroska file.")};
+		case FontCollectorEventType::CollectionNewline:
+			return {0, wxS("\n")};
+	}
+
+	return {0, wxString{}};
+}
+
+class WxZipArchiveWriter final : public FontCollectionArchiveWriter {
+	std::unique_ptr<wxFFileOutputStream> out;
+	std::unique_ptr<wxZipOutputStream> zip;
+
+public:
+	WxZipArchiveWriter(agi::fs::path const& destination)
+	: out(agi::make_unique<wxFFileOutputStream>(destination.wstring()))
+	{
+		if (out->IsOk())
+			zip = agi::make_unique<wxZipOutputStream>(*out);
+	}
+
+	bool IsOk() const override {
+		return out && out->IsOk() && zip && zip->IsOk();
+	}
+
+	bool AddFile(agi::fs::path const& source, agi::fs::path const& name) override {
+		wxFFileInputStream in(source.wstring());
+		if (!in.IsOk())
+			return false;
+
+		if (!zip->PutNextEntry(name.wstring()))
+			return false;
+
+		zip->Write(in);
+		return zip->IsOk();
+	}
+};
+
+void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FontCollectionMode oper, wxEvtHandler *collector, agi::ui::WeakLifetime lifetime) {
 	agi::dispatch::BackgroundExecutor().Post([=]{
-		auto AppendText = [&](std::string text, int colour) {
-			agi::ui::MainAsyncIfAlive(lifetime, [collector, colour, text = to_wx(text)] {
-				collector->AddPendingEvent(ValueEvent<color_str_pair>(EVT_ADD_TEXT, -1, {colour, text}));
+		auto AppendFontEvent = [&](FontCollectorEvent const& event) {
+			agi::ui::MainAsyncIfAlive(lifetime, [collector, event] {
+				collector->AddPendingEvent(ValueEvent<color_str_pair>(EVT_ADD_TEXT, -1, FormatFontCollectorEvent(event)));
 			});
 		};
 
-		auto paths = FontCollector(AppendText).GetFontPaths(subs);
-		if (paths.empty()) {
-			agi::ui::MainAsyncIfAlive(lifetime, [collector] {
-				collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
-			});
-			return;
-		}
-
-		// Copy fonts
-		switch (oper) {
-			case FcMode::CheckFontsOnly:
-				agi::ui::MainAsyncIfAlive(lifetime, [collector] {
-					collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
-				});
-				return;
-			case FcMode::SymlinkToFolder:
-				AppendText(from_wx(_("Symlinking fonts to folder...\n")), 0);
-				break;
-			case FcMode::CopyToScriptFolder:
-			case FcMode::CopyToFolder:
-				AppendText(from_wx(_("Copying fonts to folder...\n")), 0);
-				break;
-			case FcMode::CopyToZip:
-				AppendText(from_wx(_("Copying fonts to archive...\n")), 0);
-				break;
-		}
-
-		// Open zip stream if saving to compressed archive
-		std::unique_ptr<wxFFileOutputStream> out;
-		std::unique_ptr<wxZipOutputStream> zip;
-		if (oper == FcMode::CopyToZip) {
-			try {
-				agi::fs::CreateDirectory(destination.parent_path());
-			}
-			catch (agi::fs::FileSystemError const& e) {
-				AppendText(from_wx(fmt_tl("* Failed to create directory '%s': %s.\n",
-					destination.parent_path().wstring(), to_wx(e.GetMessage()))), 2);
-				agi::ui::MainAsyncIfAlive(lifetime, [collector] {
-					collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
-				});
-				return;
-			}
-
-			out = agi::make_unique<wxFFileOutputStream>(destination.wstring());
-			if (out->IsOk())
-				zip = agi::make_unique<wxZipOutputStream>(*out);
-
-			if (!out->IsOk() || !zip || !zip->IsOk()) {
-				AppendText(from_wx(fmt_tl("* Failed to open %s.\n", destination)), 2);
-				agi::ui::MainAsyncIfAlive(lifetime, [collector] {
-					collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
-				});
-				return;
-			}
-		}
-
-		int64_t total_size = 0;
-		bool allOk = true;
-		for (auto path : paths) {
-			path.make_preferred();
-
-			int ret = 0;
-			total_size += agi::fs::Size(path);
-
-			switch (oper) {
-				case FcMode::SymlinkToFolder:
-				case FcMode::CopyToScriptFolder:
-				case FcMode::CopyToFolder: {
-					auto dest = destination/path.filename();
-					if (agi::fs::FileExists(dest))
-						ret = 2;
-#ifndef _WIN32
-					else if (oper == FcMode::SymlinkToFolder) {
-						// returns 0 on success, -1 on error...
-						if (symlink(path.c_str(), dest.c_str()))
-							ret = 0;
-						else
-							ret = 3;
-					}
-#endif
-					else {
-						try {
-							agi::fs::Copy(path, dest);
-							ret = true;
-						}
-						catch (...) {
-							ret = false;
-						}
-					}
-				}
-				break;
-
-				case FcMode::CopyToZip: {
-					wxFFileInputStream in(path.wstring());
-					if (!in.IsOk())
-						ret = false;
-					else {
-						ret = zip->PutNextEntry(path.filename().wstring());
-						zip->Write(in);
-					}
-				}
-				default: break;
-			}
-
-			if (ret == 1)
-				AppendText(from_wx(fmt_tl("* Copied %s.\n", path)), 1);
-			else if (ret == 2)
-				AppendText(from_wx(fmt_tl("* %s already exists on destination.\n", path.filename())), 3);
-			else if (ret == 3)
-				AppendText(from_wx(fmt_tl("* Symlinked %s.\n", path)), 1);
-			else {
-				AppendText(from_wx(fmt_tl("* Failed to copy %s.\n", path)), 2);
-				allOk = false;
-			}
-		}
-
-		if (allOk)
-			AppendText(from_wx(_("Done. All fonts copied.")), 1);
-		else
-			AppendText(from_wx(_("Done. Some fonts could not be copied.")), 2);
-
-		if (total_size > 32 * 1024 * 1024)
-			AppendText(from_wx(_("\nOver 32 MB of fonts were copied. Some of the fonts may not be loaded by the player if they are all attached to a Matroska file.")), 2);
-
-		AppendText(std::string("\n"), 0);
+		CollectFonts(subs, destination, oper, AppendFontEvent, [](agi::fs::path const& archive) {
+			return agi::make_unique<WxZipArchiveWriter>(archive);
+		});
 
 		agi::ui::MainAsyncIfAlive(lifetime, [collector] {
 			collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
@@ -257,7 +269,7 @@ DialogFontsCollector::DialogFontsCollector(agi::Context *c)
 #endif
 	};
 
-	mode = static_cast<FcMode>(mid<int>(0, OPT_GET("Tool/Fonts Collector/Action")->GetInt(), countof(modes)));
+	mode = static_cast<FontCollectionMode>(mid<int>(0, OPT_GET("Tool/Fonts Collector/Action")->GetInt(), countof(modes) - 1));
 	collection_mode = new wxRadioBox(this, -1, _("Action"), wxDefaultPosition, wxDefaultSize, countof(modes), modes, 1);
 	collection_mode->SetSelection(static_cast<int>(mode));
 
@@ -321,27 +333,26 @@ void DialogFontsCollector::OnStart(wxCommandEvent &) {
 
 	auto const destination_text = from_wx(dest_ctrl->GetValue());
 	agi::fs::path dest;
-	if (mode != FcMode::CheckFontsOnly) {
-		dest = path.Decode(mode == FcMode::CopyToScriptFolder ? "?script/" : destination_text);
+	if (mode != FontCollectionMode::CheckFontsOnly) {
+		dest = path.Decode(mode == FontCollectionMode::CopyToScriptFolder ? "?script/" : destination_text);
 
-		if (mode != FcMode::CopyToZip) {
-			if (agi::fs::FileExists(dest))
-				wxMessageBox(_("Invalid destination."), _("Error"), wxOK | wxICON_ERROR | wxCENTER, this);
-			try {
-				agi::fs::CreateDirectory(dest);
-			}
-			catch (agi::Exception const&) {
+		auto destination_result = PrepareFontCollectionDestination(mode, dest);
+		if (destination_result.invalid_destination)
+			wxMessageBox(_("Invalid destination."), _("Error"), wxOK | wxICON_ERROR | wxCENTER, this);
+
+		switch (destination_result.error) {
+			case FontCollectionDestinationError::None:
+				break;
+			case FontCollectionDestinationError::CouldNotCreateDestinationFolder:
 				wxMessageBox(_("Could not create destination folder."), _("Error"), wxOK | wxICON_ERROR | wxCENTER, this);
 				return;
-			}
-		}
-		else if (agi::fs::DirectoryExists(dest) || dest.filename().empty()) {
-			wxMessageBox(_("Invalid path for .zip file."), _("Error"), wxOK | wxICON_ERROR | wxCENTER, this);
-			return;
+			case FontCollectionDestinationError::InvalidArchivePath:
+				wxMessageBox(_("Invalid path for .zip file."), _("Error"), wxOK | wxICON_ERROR | wxCENTER, this);
+				return;
 		}
 	}
 
-	if (mode == FcMode::CopyToFolder || mode == FcMode::SymlinkToFolder || mode == FcMode::CopyToZip) {
+	if (mode == FontCollectionMode::CopyToFolder || mode == FontCollectionMode::SymlinkToFolder || mode == FontCollectionMode::CopyToZip) {
 		auto stored_destination = path.Encode(dest);
 		if (!destination_text.empty() && destination_text[0] == '?')
 			stored_destination = destination_text;
@@ -363,7 +374,7 @@ void DialogFontsCollector::OnStart(wxCommandEvent &) {
 void DialogFontsCollector::OnBrowse(wxCommandEvent &) {
 	agi::fs::path dest;
 	auto const current_dest = path.Decode(from_wx(dest_ctrl->GetValue()));
-	if (mode == FcMode::CopyToZip) {
+	if (mode == FontCollectionMode::CopyToZip) {
 		auto current_path = wxFileName(current_dest.wstring());
 		dest = context->RequestSaveFile({
 			from_wx(_("Select archive file name")),
@@ -386,14 +397,14 @@ void DialogFontsCollector::OnBrowse(wxCommandEvent &) {
 
 void DialogFontsCollector::OnRadio(wxCommandEvent &evt) {
 	OPT_SET("Tool/Fonts Collector/Action")->SetInt(evt.GetInt());
-	mode = static_cast<FcMode>(evt.GetInt());
+	mode = static_cast<FontCollectionMode>(evt.GetInt());
 	UpdateControls();
 }
 
 void DialogFontsCollector::UpdateControls() {
 	wxString dst = dest_ctrl->GetValue();
 
-	if (mode == FcMode::CheckFontsOnly || mode == FcMode::CopyToScriptFolder) {
+	if (mode == FontCollectionMode::CheckFontsOnly || mode == FontCollectionMode::CopyToScriptFolder) {
 		dest_ctrl->Enable(false);
 		dest_browse_button->Enable(false);
 		dest_label->Enable(false);
@@ -404,7 +415,7 @@ void DialogFontsCollector::UpdateControls() {
 		dest_browse_button->Enable(true);
 		dest_label->Enable(true);
 
-		if (mode == FcMode::CopyToFolder || mode == FcMode::SymlinkToFolder) {
+		if (mode == FontCollectionMode::CopyToFolder || mode == FontCollectionMode::SymlinkToFolder) {
 			dest_label->SetLabel(_("Choose the folder where the fonts will be collected to. It will be created if it doesn't exist."));
 
 			// Remove filename from browse box

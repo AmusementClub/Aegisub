@@ -16,12 +16,9 @@
 
 #include "font_file_lister.h"
 
-#include "compat.h"
-
 #include <libaegisub/charset_conv_win.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/io.h>
-#include <libaegisub/log.h>
 #include <libaegisub/scope_exit.h>
 
 #include <vector>
@@ -30,6 +27,11 @@
 #include <Usp10.h>
 
 namespace {
+void Emit(FontCollectorEventSink const& sink, FontCollectorEvent event) {
+	if (sink)
+		sink(event);
+}
+
 void append_utf16_to_utf8(std::string& out, wchar_t ch) {
 		char buf[4];
 		auto len = WideCharToMultiByte(CP_UTF8, 0, &ch, 1, buf, sizeof(buf), nullptr, nullptr);
@@ -117,7 +119,7 @@ std::vector<agi::fs::path> get_installed_fonts() {
 
 using font_index = std::unordered_multimap<uint32_t, agi::fs::path>;
 
-font_index index_fonts(FontCollectorStatusCallback &cb) {
+font_index index_fonts(FontCollectorEventSink &cb) {
 	font_index hash_to_path;
 	auto fonts = get_installed_fonts();
 	std::unique_ptr<char[]> buffer(new char[1024]);
@@ -129,7 +131,10 @@ font_index index_fonts(FontCollectorStatusCallback &cb) {
 			hash_to_path.emplace(hash, path);
 		}
 		catch (agi::Exception const& e) {
-			cb(e.GetMessage() + "\n", 3);
+			FontCollectorEvent event;
+			event.type = FontCollectorEventType::FontCacheError;
+			event.message = e.GetMessage();
+			Emit(cb, std::move(event));
 		}
 	}
 	return hash_to_path;
@@ -153,10 +158,12 @@ void get_font_data(std::string& buffer, HDC dc) {
 }
 }
 
-GdiFontFileLister::GdiFontFileLister(FontCollectorStatusCallback &cb)
+GdiFontFileLister::GdiFontFileLister(FontCollectorEventSink &cb)
 : dc(CreateCompatibleDC(nullptr), [](HDC dc) { DeleteDC(dc); })
 {
-	cb(from_wx(_("Updating font cache\n")), 0);
+	FontCollectorEvent event;
+	event.type = FontCollectorEventType::UpdatingFontCache;
+	Emit(cb, std::move(event));
 	index = index_fonts(cb);
 }
 

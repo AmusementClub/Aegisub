@@ -19,49 +19,21 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_style.h"
-#include "compat.h"
-#include "format.h"
-
-#include <libaegisub/format_flyweight.h>
-#include <libaegisub/format_path.h>
 
 #include <algorithm>
 #include <tuple>
-#include <unicode/uchar.h>
-#include <wx/intl.h>
+#include <unicode/utf8.h>
 
 namespace {
-std::string format_missing(std::string const& str) {
-	std::string printable;
-	std::string unprintable;
-	size_t i = 0;
-	while (i < str.size()) {
-		auto ch = (unsigned char)str[i];
-		UChar32 c;
-		U8_NEXT((const uint8_t*)str.data(), i, (int32_t)str.size(), c);
-		if (!u_isUWhiteSpace(c)) {
-			printable += str.substr(i - U8_LENGTH(c), U8_LENGTH(c));
-		} else {
-			char buf[64];
-			snprintf(buf, sizeof buf, "\n - U+%04X ", c);
-			unprintable += buf;
-			UErrorCode ec = U_ZERO_ERROR;
-			char name[1024];
-			auto len = u_charName(c, U_EXTENDED_CHAR_NAME, name, sizeof name, &ec);
-			if (len != 0 && U_SUCCESS(ec))
-				unprintable += name;
-			if (c == 0xA0)
-				unprintable += " (\\h)";
-		}
-	}
-
-	return printable + unprintable;
+void Emit(FontCollectorEventSink const& sink, FontCollectorEvent event) {
+	if (sink)
+		sink(event);
 }
 }
 
-FontCollector::FontCollector(FontCollectorStatusCallback status_callback)
-: status_callback(std::move(status_callback))
-, lister(this->status_callback)
+FontCollector::FontCollector(FontCollectorEventSink event_sink)
+: event_sink(std::move(event_sink))
+, lister(this->event_sink)
 {
 }
 
@@ -70,7 +42,10 @@ void FontCollector::ProcessDialogueLine(const AssDialogue *line, int index) {
 
 	auto style_it = styles.find(line->Style);
 	if (style_it == end(styles)) {
-		status_callback(from_wx(fmt_tl("Style '%s' does not exist\n", line->Style)), 2);
+		FontCollectorEvent event;
+		event.type = FontCollectorEventType::StyleMissing;
+		event.style = line->Style;
+		Emit(event_sink, std::move(event));
 		++missing;
 		return;
 	}
@@ -157,7 +132,10 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style) {
 	auto res = lister.GetFontPaths(style.first.facename, style.first.bold, style.first.italic, style.second.chars);
 
 	if (res.paths.empty()) {
-		status_callback(from_wx(fmt_tl("Could not find font '%s'\n", style.first.facename)), 2);
+		FontCollectorEvent event;
+		event.type = FontCollectorEventType::FontMissing;
+		event.face = style.first.facename;
+		Emit(event_sink, std::move(event));
 		PrintUsage(style.second);
 		++missing;
 	}
@@ -165,21 +143,35 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style) {
 		for (auto& elem : res.paths) {
 			elem.make_preferred();
 			if (std::find(begin(results), end(results), elem) == end(results)) {
-				status_callback(from_wx(fmt_tl("Found '%s' at '%s'\n", style.first.facename, elem)), 0);
+				FontCollectorEvent event;
+				event.type = FontCollectorEventType::FontFound;
+				event.face = style.first.facename;
+				event.path = elem;
+				Emit(event_sink, std::move(event));
 				results.push_back(elem);
 			}
 		}
 
-		if (res.fake_bold)
-			status_callback(from_wx(fmt_tl("'%s' does not have a bold variant.\n", style.first.facename)), 3);
-		if (res.fake_italic)
-			status_callback(from_wx(fmt_tl("'%s' does not have an italic variant.\n", style.first.facename)), 3);
+		if (res.fake_bold) {
+			FontCollectorEvent event;
+			event.type = FontCollectorEventType::FakeBold;
+			event.face = style.first.facename;
+			Emit(event_sink, std::move(event));
+		}
+		if (res.fake_italic) {
+			FontCollectorEvent event;
+			event.type = FontCollectorEventType::FakeItalic;
+			event.face = style.first.facename;
+			Emit(event_sink, std::move(event));
+		}
 
 		if (res.missing.size()) {
-			if (res.missing.size() > 50)
-				status_callback(from_wx(fmt_tl("'%s' is missing %d glyphs used.\n", style.first.facename, res.missing.size())), 2);
-			else if (res.missing.size() > 0)
-				status_callback(from_wx(fmt_tl("'%s' is missing the following glyphs used: %s\n", style.first.facename, format_missing(res.missing))), 2);
+			FontCollectorEvent event;
+			event.type = FontCollectorEventType::MissingGlyphs;
+			event.face = style.first.facename;
+			event.message = res.missing;
+			event.count = static_cast<int>(res.missing.size());
+			Emit(event_sink, std::move(event));
 			PrintUsage(style.second);
 			++missing_glyphs;
 		}
@@ -189,26 +181,20 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style) {
 }
 
 void FontCollector::PrintUsage(UsageData const& data) {
-	if (data.styles.size()) {
-		status_callback(from_wx(_("Used in styles:\n")), 2);
-		for (auto const& style : data.styles)
-			status_callback(from_wx(fmt_wx("  - %s\n", style)), 2);
-	}
-
-	if (data.lines.size()) {
-		status_callback(from_wx(_("Used on lines:")), 2);
-		for (int line : data.lines)
-			status_callback(from_wx(fmt_wx(" %d", line)), 2);
-		status_callback(std::string("\n"), 2);
-	}
-	status_callback(std::string("\n"), 2);
+	FontCollectorEvent event;
+	event.type = FontCollectorEventType::Usage;
+	event.styles = data.styles;
+	event.lines = data.lines;
+	Emit(event_sink, std::move(event));
 }
 
 std::vector<agi::fs::path> FontCollector::GetFontPaths(const AssFile *file) {
 	missing = 0;
 	missing_glyphs = 0;
 
-	status_callback(from_wx(_("Parsing file\n")), 0);
+	FontCollectorEvent event;
+	event.type = FontCollectorEventType::ParsingFile;
+	Emit(event_sink, std::move(event));
 
 	for (auto const& style : file->Styles) {
 		StyleInfo &info = styles[style.name];
@@ -222,23 +208,34 @@ std::vector<agi::fs::path> FontCollector::GetFontPaths(const AssFile *file) {
 	for (auto const& diag : file->Events)
 		ProcessDialogueLine(&diag, ++index);
 
-	status_callback(from_wx(_("Searching for font files\n")), 0);
+	event = FontCollectorEvent();
+	event.type = FontCollectorEventType::SearchingForFontFiles;
+	Emit(event_sink, std::move(event));
 	for (auto const& style : used_styles) ProcessChunk(style);
-	status_callback(from_wx(_("Done\n\n")), 0);
+	event = FontCollectorEvent();
+	event.type = FontCollectorEventType::SearchComplete;
+	Emit(event_sink, std::move(event));
 
 	std::vector<agi::fs::path> paths;
 	paths.reserve(results.size());
 	paths.insert(paths.end(), results.begin(), results.end());
 
-	if (missing == 0)
-		status_callback(from_wx(_("All fonts found.\n")), 1);
-	else
-		status_callback(from_wx(fmt_plural(missing, "One font could not be found\n", "%d fonts could not be found.\n", missing)), 2);
-	if (missing_glyphs != 0)
-		status_callback(from_wx(fmt_plural(missing_glyphs,
-			"One font was found, but was missing glyphs used in the script.\n",
-			"%d fonts were found, but were missing glyphs used in the script.\n",
-			missing_glyphs)), 2);
+	event = FontCollectorEvent();
+	if (missing == 0) {
+		event.type = FontCollectorEventType::AllFontsFound;
+		Emit(event_sink, std::move(event));
+	}
+	else {
+		event.type = FontCollectorEventType::FontsMissing;
+		event.count = missing;
+		Emit(event_sink, std::move(event));
+	}
+	if (missing_glyphs != 0) {
+		event = FontCollectorEvent();
+		event.type = FontCollectorEventType::FontsMissingGlyphs;
+		event.count = missing_glyphs;
+		Emit(event_sink, std::move(event));
+	}
 
 	return paths;
 }

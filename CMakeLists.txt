@@ -627,6 +627,7 @@ add_executable(Aegisub WIN32
     src/export_framerate_transform.cpp
     src/export_framerate.cpp
     src/fft.cpp
+    src/font_collector_core.cpp
     src/font_file_lister.cpp
     src/frame_main.cpp
     src/gl_text.cpp

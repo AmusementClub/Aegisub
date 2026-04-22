@@ -16,16 +16,17 @@
 
 #include "font_file_lister.h"
 
-#include <libaegisub/charset_conv_win.h>
-#include <libaegisub/log.h>
 #include <libaegisub/string_utils.h>
 
-#include <filesystem>
 #include <fontconfig/fontconfig.h>
-#include <wx/intl.h>
 #include <unicode/utf8.h>
 
 namespace {
+void Emit(FontCollectorEventSink const& sink, FontCollectorEvent event) {
+	if (sink)
+		sink(event);
+}
+
 	void append_codepoint_to_utf8(std::string& out, int cp) {
 		char buf[4];
 		UChar8* p = (UChar8*)buf;
@@ -59,11 +60,12 @@ void find_font(FcFontSet *src, FcFontSet *dst, std::string const& family) {
 
 }
 
-FontConfigFontFileLister::FontConfigFontFileLister(FontCollectorStatusCallback &cb)
+FontConfigFontFileLister::FontConfigFontFileLister(FontCollectorEventSink &cb)
 : config(FcInitLoadConfig(), FcConfigDestroy)
 {
-	cb(from_wx(_("Updating font cache
-")), 0);
+	FontCollectorEvent event;
+	event.type = FontCollectorEventType::UpdatingFontCache;
+	Emit(cb, std::move(event));
 	FcConfigBuildFonts(config);
 }
 

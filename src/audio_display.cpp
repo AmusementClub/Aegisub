@@ -35,6 +35,12 @@
 #ifdef WITH_SKIA
 #include "audio_display_skia_renderer.h"
 #include "audio_display_skia_target.h"
+
+#include <include/core/SkCanvas.h>
+#include <include/core/SkImage.h>
+#include <include/core/SkPaint.h>
+#include <include/core/SkRect.h>
+#include <include/core/SkSurface.h>
 #endif
 #include "audio_provider_factory.h"
 #include "audio_renderer.h"
@@ -49,12 +55,14 @@
 #include "include/aegisub/hotkey.h"
 #include "options.h"
 #include "project.h"
+#include "time_display_mode.h"
 #include "ui_dispatch.h"
 #include "utils.h"
 #include "video_controller.h"
 
 #include <libaegisub/ass/time.h>
 #include <libaegisub/audio/provider.h>
+#include <libaegisub/exception.h>
 #include <libaegisub/make_unique.h>
 
 #include <algorithm>
@@ -112,6 +120,27 @@ AudioDisplayInvalidationPlanner::Rect ToPlannerRect(wxRect const& rect) {
 	return { rect.x, rect.y, rect.width, rect.height };
 }
 
+SubtitleTimeDisplayMode ReadAudioCursorTimeDisplayMode() {
+	int64_t mode = OPT_GET("Audio/Display/Draw/Cursor Time Format")->GetInt();
+	return mode == 1 ? SubtitleTimeDisplayMode::Exact : SubtitleTimeDisplayMode::Ass;
+}
+
+wxString TryReadFontFace(std::string const& opt_prefix) {
+	try {
+		return FontFace(opt_prefix);
+	}
+	catch (agi::InternalError const&) {
+		return wxString();
+	}
+}
+
+wxString ResolveAudioLabelFontFace() {
+	auto face = TryReadFontFace("Audio/Karaoke");
+	if (!face.empty())
+		return face;
+	return TryReadFontFace("Audio/Track Cursor");
+}
+
 wxRect ToWxRect(AudioDisplayInvalidationPlanner::Rect const& rect) {
 	return wxRect(rect.x, rect.y, rect.width, rect.height);
 }
@@ -136,6 +165,16 @@ wxRect ToWxRect(AudioDisplayRect const& r) {
 	return wxRect(r.x, r.y, r.width, r.height);
 }
 
+#ifdef WITH_SKIA
+SkColor ToSkColorFromPacked(uint32_t colour) {
+	return SkColorSetARGB(
+		AudioDisplayColourA(colour),
+		AudioDisplayColourR(colour),
+		AudioDisplayColourG(colour),
+		AudioDisplayColourB(colour));
+}
+#endif
+
 bool ReadEnvFlag(char const *name) {
 	auto const* value = std::getenv(name);
 	if (!value || !*value)
@@ -154,6 +193,11 @@ bool ReadEnvFlagDefaultOn(char const *name) {
 	return first != '0' && first != 'f' && first != 'n';
 }
 
+std::string ReadEnvString(char const *name) {
+	auto const* value = std::getenv(name);
+	return (value && *value) ? std::string(value) : std::string();
+}
+
 int ReadEnvInt(char const *name, int default_value, int min_value, int max_value) {
 	auto const* value = std::getenv(name);
 	if (!value || !*value)
@@ -170,9 +214,9 @@ int ReadEnvInt(char const *name, int default_value, int min_value, int max_value
 
 bool IsSkiaAudioRenderBackendEnabled() {
 #ifdef WITH_SKIA
-	// Render Backend preference: 0=Auto (GPU if available), 1=GPU, 2=CPU
+	// Render Backend preference: 0=Auto, 1=GPU (Skia), 2=Bitmap (Skia), 3=Bitmap (wxDC/GDI)
 	int64_t backend = OPT_GET("Audio/Display/Draw/Render Backend")->GetInt();
-	return backend != 2; // anything except explicit CPU → try Skia GPU
+	return backend != 3; // anything except explicit wxDC bitmap keeps Skia enabled
 #else
 	return false;
 #endif
@@ -268,10 +312,121 @@ char const* RenderBackendName(int64_t value) {
 	switch (value) {
 		case 0: return "auto";
 		case 1: return "gpu";
-		case 2: return "cpu";
+		case 2: return "bitmap_skia";
+		case 3: return "bitmap_wxdc";
 		default: return "unknown";
 	}
 }
+
+#ifdef WITH_SKIA
+char const* SkiaBackendTypeName(AudioDisplaySkiaBackendType value) {
+	switch (value) {
+		case AudioDisplaySkiaBackendType::Bitmap: return "bitmap";
+		case AudioDisplaySkiaBackendType::Gpu: return "gpu";
+		default: return "unknown";
+	}
+}
+
+std::string ToLowerAscii(std::string value) {
+	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
+		return static_cast<char>(std::tolower(c));
+	});
+	return value;
+}
+
+enum class AudioDisplaySkiaHostPreference {
+	Auto = 0,
+	Bitmap,
+	Gpu,
+};
+
+AudioDisplaySkiaHostPreference ReadAudioDisplaySkiaHostPreference() {
+	auto const value = ToLowerAscii(ReadEnvString("AEGISUB_AUDIO_SKIA_HOST"));
+	if (value == "bitmap")
+		return AudioDisplaySkiaHostPreference::Bitmap;
+	if (value == "gpu"
+		|| value == "direct"
+		|| value == "direct-gpu"
+		|| value == "direct_gpu"
+		|| value == "offscreen"
+		|| value == "offscreen-gpu"
+		|| value == "offscreen_gpu")
+		return AudioDisplaySkiaHostPreference::Gpu;
+	return AudioDisplaySkiaHostPreference::Auto;
+}
+
+void LogSkiaGpuDiagnostics(AudioDisplaySkiaBackend const* backend, AudioDisplaySkiaGpuDiagnostics const& info) {
+	std::ostringstream log;
+	log << "backend=" << (backend ? SkiaBackendTypeName(backend->GetBackendType()) : "none")
+		<< " available=" << (info.available ? 1 : 0)
+		<< " software_like=" << (info.software_like ? 1 : 0);
+	AppendQuoted(log, "gl_vendor", info.vendor.empty() ? std::string("<unknown>") : info.vendor);
+	AppendQuoted(log, "gl_renderer", info.renderer.empty() ? std::string("<unknown>") : info.renderer);
+	AppendQuoted(log, "gl_version", info.version.empty() ? std::string("<unknown>") : info.version);
+	AppendQuoted(log, "glsl_version", info.shading_language_version.empty() ? std::string("<unknown>") : info.shading_language_version);
+	LOG_I("audio/render/skia") << log.str();
+}
+
+std::string MatchDenylistToken(std::string const& haystack, std::string const& raw_list) {
+	if (haystack.empty() || raw_list.empty())
+		return {};
+
+	auto const haystack_lower = ToLowerAscii(haystack);
+	std::string token;
+	auto flush_token = [&](std::string &value) -> std::string {
+		auto trimmed = value;
+		trimmed.erase(trimmed.begin(), std::find_if(trimmed.begin(), trimmed.end(), [](unsigned char c) {
+			return !std::isspace(c);
+		}));
+		trimmed.erase(std::find_if(trimmed.rbegin(), trimmed.rend(), [](unsigned char c) {
+			return !std::isspace(c);
+		}).base(), trimmed.end());
+		value.clear();
+		if (trimmed.empty())
+			return {};
+		auto const lowered = ToLowerAscii(trimmed);
+		return haystack_lower.find(lowered) != std::string::npos ? trimmed : std::string();
+	};
+
+	for (char ch : raw_list) {
+		if (ch == ',' || ch == ';' || ch == '|') {
+			auto const match = flush_token(token);
+			if (!match.empty())
+				return match;
+		}
+		else {
+			token.push_back(ch);
+		}
+	}
+	return flush_token(token);
+}
+
+std::string GetSkiaGpuAutoDowngradeReason(AudioDisplaySkiaGpuDiagnostics const& info) {
+	if (!info.available)
+		return {};
+
+	if (ReadEnvFlagDefaultOn("AEGISUB_AUDIO_SKIA_DISABLE_SOFTWARE_GL") && info.software_like)
+		return "software_gl_stack";
+
+	auto const denylist = ReadEnvString("AEGISUB_AUDIO_SKIA_GL_DENYLIST");
+	if (denylist.empty())
+		return {};
+
+	auto const combined = info.vendor + " " + info.renderer + " " + info.version + " " + info.shading_language_version;
+	auto const match = MatchDenylistToken(combined, denylist);
+	return match.empty() ? std::string() : std::string("gl_denylist:") + match;
+}
+
+std::string EffectiveSkiaBackendName(bool skia_enabled, AudioDisplaySkiaBackend const* backend, std::string const& auto_downgrade_reason) {
+	if (skia_enabled && backend) {
+		switch (backend->GetBackendType()) {
+			case AudioDisplaySkiaBackendType::Gpu: return "skia_gpu";
+			case AudioDisplaySkiaBackendType::Bitmap: return "skia_bitmap";
+		}
+	}
+	return auto_downgrade_reason.empty() ? std::string("wx_dc") : std::string("wx_dc_auto_downgraded");
+}
+#endif
 
 char const* SpectrumComputationModeName(int64_t value) {
 	switch (value) {
@@ -963,7 +1118,11 @@ public:
 };
 
 AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::Context *context)
+#ifdef WITH_SKIA
+: wxGLCanvas(parent, -1, GetAudioDisplayGlAttribs(), wxDefaultPosition, wxDefaultSize, wxWANTS_CHARS|wxBORDER_SIMPLE)
+#else
 : wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, wxWANTS_CHARS|wxBORDER_SIMPLE)
+#endif
 , audio_open_connection(context->project->AddAudioProviderListener(&AudioDisplay::OnAudioOpen, this))
 , context(context)
 , audio_renderer(agi::make_unique<AudioRenderer>(ReadEnvInt("AEGISUB_AUDIO_RENDERER_CACHE_BITMAP_WIDTH", 32, 8, 512)))
@@ -974,16 +1133,66 @@ AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::C
 , style_ranges({{0, 0}})
 {
 	audio_renderer->SetAmplitudeScale(scale_amplitude);
-	content_backing_enabled = ReadEnvFlag("AEGISUB_AUDIO_DISPLAY_CONTENT_BACKING");
+	content_backing_requested = ReadEnvFlag("AEGISUB_AUDIO_DISPLAY_CONTENT_BACKING");
+	content_backing_enabled = content_backing_requested;
 #ifdef WITH_SKIA
-	// Render Backend preference: 0=Auto, 1=GPU, 2=CPU
-	// Auto and GPU both try Skia on a hidden offscreen GL canvas; wxDC/GDI
-	// remains available for low-GL systems and explicit CPU mode.
+	// Render Backend preference: 0=Auto, 1=GPU (Skia), 2=Bitmap (Skia), 3=Bitmap (wxDC/GDI).
+	// Auto and GPU prefer direct present on AudioDisplay's own wxGLCanvas,
+	// with bitmap kept only as an explicit debug/bring-up host.
 	if (IsSkiaAudioRenderBackendEnabled()) {
-		skia_backend = CreateAudioDisplaySkiaExperimentalGpuBackend(this);
+		auto const render_backend = OPT_GET("Audio/Display/Draw/Render Backend")->GetInt();
 		skia_renderer = agi::make_unique<AudioDisplaySkiaRenderer>();
+
+		if (render_backend == 2) {
+			skia_backend = CreateAudioDisplaySkiaBitmapBackend();
+		}
+		else {
+			switch (ReadAudioDisplaySkiaHostPreference()) {
+				case AudioDisplaySkiaHostPreference::Bitmap:
+					skia_backend = CreateAudioDisplaySkiaBitmapBackend();
+					break;
+				case AudioDisplaySkiaHostPreference::Gpu:
+				case AudioDisplaySkiaHostPreference::Auto:
+					skia_gl_context = agi::make_unique<wxGLContext>(this);
+					if (skia_gl_context && skia_gl_context->IsOK())
+						skia_backend = CreateAudioDisplaySkiaGpuBackend(this, skia_gl_context.get());
+					else
+						skia_gl_context.reset();
+					break;
+			}
+		}
+
+		if (skia_backend && skia_backend->GetBackendType() != AudioDisplaySkiaBackendType::Gpu)
+			skia_gl_context.reset();
+
 		skia_waveform_content_enabled = static_cast<bool>(skia_backend) && static_cast<bool>(skia_renderer);
 		content_backing_enabled = false;
+
+		if (skia_backend) {
+			skia_backend->QueryGpuDiagnostics(skia_gpu_diagnostics);
+			LogSkiaGpuDiagnostics(skia_backend.get(), skia_gpu_diagnostics);
+
+			auto const downgrade_reason = GetSkiaGpuAutoDowngradeReason(skia_gpu_diagnostics);
+			if (!downgrade_reason.empty()) {
+				if (render_backend == 0) {
+					skia_gpu_auto_downgrade_reason = downgrade_reason;
+					LOG_W("audio/render/skia") << "auto backend downgraded to wx_dc reason=" << downgrade_reason;
+					skia_waveform_content_enabled = false;
+					skia_backend.reset();
+					skia_renderer.reset();
+					skia_gl_context.reset();
+					content_backing_enabled = content_backing_requested;
+				}
+				else {
+					LOG_W("audio/render/skia") << "explicit gpu backend kept despite downgrade candidate reason=" << downgrade_reason;
+				}
+			}
+		}
+		else {
+			LOG_W("audio/render/skia") << "gpu backend unavailable; falling back to wx_dc";
+			skia_renderer.reset();
+			content_backing_enabled = content_backing_requested;
+		}
 	}
 #endif
 	SetZoomLevel(0);
@@ -1062,8 +1271,210 @@ void AudioDisplay::OnHighFrequencyRefreshTimer(wxTimerEvent &) {
 	FlushHighFrequencyRefresh();
 }
 
+#ifdef WITH_SKIA
+bool AudioDisplay::IsGpuSkiaBackendActive() const {
+	return skia_waveform_content_enabled
+		&& skia_backend
+		&& skia_backend->GetBackendType() == AudioDisplaySkiaBackendType::Gpu;
+}
+
+void AudioDisplay::DisableSkiaBackend(std::string const& reason, char const* trigger) {
+	if (!reason.empty())
+		LOG_W("audio/render/skia") << reason;
+
+	skia_waveform_content_enabled = false;
+	skia_content_backing_image.reset();
+	skia_backend.reset();
+	skia_renderer.reset();
+	skia_gl_context.reset();
+	content_backing_enabled = content_backing_requested;
+	InvalidateContentBacking();
+	LogRenderConfiguration(trigger);
+}
+
+bool AudioDisplay::EnsureGpuSkiaContentSurface() {
+	if (!IsGpuSkiaBackendActive() || !skia_renderer || !audio_renderer_provider || !provider)
+		return false;
+
+	int const width = GetClientSize().GetWidth();
+	if (width <= 0 || audio_height <= 0) {
+		skia_content_backing_image.reset();
+		content_backing_valid = false;
+		return false;
+	}
+
+	bool const up_to_date = content_backing_valid
+		&& content_backing_scroll_left == scroll_left
+		&& content_backing_audio_top == audio_top
+		&& content_backing_audio_height == audio_height
+		&& content_backing_client_width == width
+		&& content_backing_ms_per_pixel == ms_per_pixel;
+	if (up_to_date)
+		return true;
+
+	auto surface = skia_backend->AcquireCachedContentSurface(width, audio_height);
+	auto *canvas = surface ? surface->getCanvas() : nullptr;
+	if (!surface || !canvas) {
+		skia_content_backing_image.reset();
+		content_backing_valid = false;
+		return false;
+	}
+
+	wxRect full_audio_rect(0, audio_top, width, audio_height);
+	auto model = BuildRenderModel(full_audio_rect, false, false);
+	model.viewport.audio_top = 0;
+	model.viewport.update_rect = AudioDisplayRect{0, 0, width, audio_height};
+	model.audio_bounds = AudioDisplayRect{0, 0, width, audio_height};
+	audio_renderer_provider->PopulateRenderModel(model);
+
+	canvas->clear(SK_ColorTRANSPARENT);
+	if (model.audio_bounds.width > 0 && model.audio_bounds.height > 0) {
+		SkColor bg_color = SK_ColorBLACK;
+		if (model.content_kind == AudioDisplayContentKind::Waveform && !model.waveform.palettes.empty())
+			bg_color = ToSkColorFromPacked(model.waveform.palettes[AudioStyle_Normal].background);
+		else if (model.content_kind == AudioDisplayContentKind::Spectrum && !model.spectrum.palettes.empty())
+			bg_color = ToSkColorFromPacked(model.spectrum.palettes[AudioStyle_Normal].colours[0]);
+
+		SkPaint bg;
+		bg.setAntiAlias(false);
+		bg.setStyle(SkPaint::kFill_Style);
+		bg.setColor(bg_color);
+		canvas->drawRect(SkRect::MakeXYWH(0.0f, 0.0f, static_cast<float>(width), static_cast<float>(audio_height)), bg);
+	}
+
+	if (!skia_renderer->DrawContentToCanvas(*canvas, wxRect(0, 0, width, audio_height), model)) {
+		skia_content_backing_image.reset();
+		content_backing_valid = false;
+		return false;
+	}
+
+	skia_content_backing_image = surface->makeImageSnapshot();
+	if (!skia_content_backing_image) {
+		content_backing_valid = false;
+		return false;
+	}
+
+	content_backing_scroll_left = scroll_left;
+	content_backing_ms_per_pixel = ms_per_pixel;
+	content_backing_audio_top = audio_top;
+	content_backing_audio_height = audio_height;
+	content_backing_client_width = width;
+	content_backing_valid = true;
+	return true;
+}
+
+bool AudioDisplay::TryReuseGpuSkiaContentSurfaceForScroll(int old_scroll_left, int new_scroll_left) {
+	if (!IsGpuSkiaBackendActive() || !skia_renderer || !audio_renderer_provider || !provider || !skia_content_backing_image)
+		return false;
+	if (!content_backing_valid || content_backing_scroll_left != old_scroll_left)
+		return false;
+
+	int const width = GetClientSize().GetWidth();
+	int const delta = new_scroll_left - old_scroll_left;
+	if (width <= 0 || audio_height <= 0 || delta == 0 || std::abs(delta) >= width)
+		return false;
+	if (content_backing_audio_top != audio_top
+		|| content_backing_audio_height != audio_height
+		|| content_backing_client_width != width
+		|| content_backing_ms_per_pixel != ms_per_pixel)
+		return false;
+
+	auto surface = skia_backend->AcquireCachedContentSurface(width, audio_height);
+	auto *canvas = surface ? surface->getCanvas() : nullptr;
+	if (!surface || !canvas)
+		return false;
+
+	int const exposed_width = std::abs(delta);
+	int const exposed_x = delta > 0 ? width - exposed_width : 0;
+	if (exposed_width <= 0)
+		return false;
+
+	canvas->clear(SK_ColorTRANSPARENT);
+	canvas->drawImage(skia_content_backing_image, static_cast<float>(-delta), 0.0f);
+
+	wxRect exposed_display_rect(exposed_x, audio_top, exposed_width, audio_height);
+	auto model = BuildRenderModel(exposed_display_rect, false, false);
+	model.viewport.audio_top = 0;
+	model.viewport.update_rect = AudioDisplayRect{exposed_x, 0, exposed_width, audio_height};
+	model.audio_bounds = AudioDisplayRect{0, 0, width, audio_height};
+	audio_renderer_provider->PopulateRenderModel(model);
+
+	if (!skia_renderer->DrawContentToCanvas(*canvas, wxRect(exposed_x, 0, exposed_width, audio_height), model)) {
+		skia_content_backing_image.reset();
+		content_backing_valid = false;
+		return false;
+	}
+
+	skia_content_backing_image = surface->makeImageSnapshot();
+	if (!skia_content_backing_image) {
+		content_backing_valid = false;
+		return false;
+	}
+
+	content_backing_scroll_left = new_scroll_left;
+	content_backing_ms_per_pixel = ms_per_pixel;
+	content_backing_audio_top = audio_top;
+	content_backing_audio_height = audio_height;
+	content_backing_client_width = width;
+	content_backing_valid = true;
+	return true;
+}
+
+bool AudioDisplay::TryPaintWithSkiaGpu(wxDC &dc, wxRect const& full_rect) {
+	if (!IsGpuSkiaBackendActive() || !skia_renderer || !skia_backend)
+		return false;
+
+	auto frame_target = skia_backend->CreatePresentTarget(full_rect);
+	auto *canvas = frame_target ? frame_target->GetCanvas() : nullptr;
+	if (!(frame_target && frame_target->IsValid() && canvas))
+		return false;
+
+	auto &model = reusable_render_model;
+	FillRenderModel(model, full_rect, true, true);
+
+	bool composed_cached_frame = false;
+	if (EnsureGpuSkiaContentSurface() && skia_content_backing_image) {
+			canvas->clear(SK_ColorTRANSPARENT);
+			canvas->drawImage(skia_content_backing_image, 0.0f, static_cast<float>(audio_top));
+			if (skia_renderer->CanDrawAudioAreaOverlays(model)
+				&& !skia_renderer->CompositeAudioAreaOverlaysToCanvas(*canvas, full_rect, model))
+				return false;
+			skia_renderer->DrawChromeToCanvas(*canvas, full_rect, model);
+			composed_cached_frame = true;
+	}
+
+	if (!composed_cached_frame) {
+		audio_renderer_provider->PopulateRenderModel(model);
+		if (!skia_renderer->DrawFrameToCanvas(*canvas, frame_target->GetRect(), model))
+			return false;
+	}
+
+	return frame_target->PresentTo(dc, false);
+}
+#endif
+
 void AudioDisplay::InvalidateContentBacking() {
+#ifdef WITH_SKIA
+	skia_content_backing_image.reset();
+#endif
 	content_backing_valid = false;
+}
+
+bool AudioDisplay::EnsureContentBackingBitmapStorage(int width, int height) {
+	if (width <= 0 || height <= 0) {
+		content_backing_bitmap = wxBitmap();
+		content_backing_valid = false;
+		return false;
+	}
+
+	bool const needs_recreate = !content_backing_bitmap.IsOk()
+		|| content_backing_bitmap.GetWidth() != width
+		|| content_backing_bitmap.GetHeight() != height;
+	if (needs_recreate) {
+		content_backing_bitmap = wxBitmap(width, height);
+		content_backing_valid = false;
+	}
+	return content_backing_bitmap.IsOk();
 }
 
 bool AudioDisplay::EnsureContentBackingBitmap() {
@@ -1077,17 +1488,8 @@ bool AudioDisplay::EnsureContentBackingBitmap() {
 		return false;
 	}
 
-	bool const needs_recreate = !content_backing_bitmap.IsOk()
-		|| content_backing_bitmap.GetWidth() != width
-		|| content_backing_bitmap.GetHeight() != audio_height;
-	if (needs_recreate) {
-		content_backing_bitmap =
-#ifdef WITH_SKIA
-			skia_waveform_content_enabled ? wxBitmap(width, audio_height, 32) :
-#endif
-			wxBitmap(width, audio_height);
-		content_backing_valid = false;
-	}
+	if (!EnsureContentBackingBitmapStorage(width, audio_height))
+		return false;
 
 	bool const up_to_date = content_backing_valid
 		&& content_backing_scroll_left == scroll_left
@@ -1099,6 +1501,76 @@ bool AudioDisplay::EnsureContentBackingBitmap() {
 		UpdateContentBackingBitmap();
 
 	return content_backing_valid && content_backing_bitmap.IsOk();
+}
+
+bool AudioDisplay::TryReuseContentBackingBitmapForScroll(int old_scroll_left, int new_scroll_left) {
+	if (!content_backing_enabled || !content_backing_valid || !content_backing_bitmap.IsOk())
+		return false;
+	if (content_backing_scroll_left != old_scroll_left)
+		return false;
+
+	int const width = GetClientSize().GetWidth();
+	int const delta = new_scroll_left - old_scroll_left;
+	if (width <= 0 || audio_height <= 0 || delta == 0 || std::abs(delta) >= width)
+		return false;
+	if (content_backing_audio_top != audio_top
+		|| content_backing_audio_height != audio_height
+		|| content_backing_client_width != width
+		|| content_backing_ms_per_pixel != ms_per_pixel)
+		return false;
+	if (!EnsureContentBackingBitmapStorage(width, audio_height))
+		return false;
+
+	int const exposed_width = std::abs(delta);
+	int const exposed_x = delta > 0 ? width - exposed_width : 0;
+	if (exposed_width <= 0)
+		return false;
+	int const reused_width = width - exposed_width;
+	if (reused_width <= 0)
+		return false;
+
+	if (!content_backing_scratch_bitmap.IsOk()
+		|| content_backing_scratch_bitmap.GetWidth() != width
+		|| content_backing_scratch_bitmap.GetHeight() != audio_height) {
+		content_backing_scratch_bitmap = wxBitmap(width, audio_height);
+	}
+	if (!content_backing_scratch_bitmap.IsOk())
+		return false;
+
+	{
+		std::swap(content_backing_bitmap, content_backing_scratch_bitmap);
+
+		wxMemoryDC src_dc;
+		wxMemoryDC dst_dc;
+		src_dc.SelectObject(content_backing_scratch_bitmap);
+		dst_dc.SelectObject(content_backing_bitmap);
+		int const src_x = delta > 0 ? delta : 0;
+		int const dst_x = delta > 0 ? 0 : exposed_width;
+		dst_dc.Blit(dst_x, 0, reused_width, audio_height, &src_dc, src_x, 0, wxCOPY, false);
+		src_dc.SelectObject(wxNullBitmap);
+		dst_dc.SelectObject(wxNullBitmap);
+	}
+
+	wxRect exposed_display_rect(exposed_x, audio_top, exposed_width, audio_height);
+	auto model = BuildRenderModel(exposed_display_rect, false, false);
+	model.viewport.audio_top = 0;
+	model.viewport.update_rect = AudioDisplayRect{exposed_x, 0, exposed_width, audio_height};
+	model.audio_bounds = AudioDisplayRect{0, 0, width, audio_height};
+
+	wxMemoryDC backing_dc;
+	backing_dc.SelectObject(content_backing_bitmap);
+	backing_dc.SetClippingRegion(exposed_x, 0, exposed_width, audio_height);
+	PaintAudio(backing_dc, model);
+	backing_dc.DestroyClippingRegion();
+	backing_dc.SelectObject(wxNullBitmap);
+
+	content_backing_scroll_left = new_scroll_left;
+	content_backing_ms_per_pixel = ms_per_pixel;
+	content_backing_audio_top = audio_top;
+	content_backing_audio_height = audio_height;
+	content_backing_client_width = width;
+	content_backing_valid = true;
+	return true;
 }
 
 void AudioDisplay::UpdateContentBackingBitmap() {
@@ -1113,17 +1585,7 @@ void AudioDisplay::UpdateContentBackingBitmap() {
 		return;
 	}
 
-	if (!content_backing_bitmap.IsOk()
-		|| content_backing_bitmap.GetWidth() != width
-		|| content_backing_bitmap.GetHeight() != audio_height) {
-		content_backing_bitmap =
-#ifdef WITH_SKIA
-			skia_waveform_content_enabled ? wxBitmap(width, audio_height, 32) :
-#endif
-			wxBitmap(width, audio_height);
-		content_backing_valid = false;
-	}
-	if (!content_backing_bitmap.IsOk())
+	if (!EnsureContentBackingBitmapStorage(width, audio_height))
 		return;
 
 	wxRect full_audio_rect(0, audio_top, width, audio_height);
@@ -1156,13 +1618,6 @@ void AudioDisplay::UpdateContentBackingBitmap() {
 		backing_dc.SelectObject(wxNullBitmap);
 	}
 
-	{
-		wxMemoryDC backing_dc;
-		backing_dc.SelectObject(content_backing_bitmap);
-		PaintStaticAudioOverlays(backing_dc, model);
-		backing_dc.SelectObject(wxNullBitmap);
-	}
-
 	content_backing_scroll_left = scroll_left;
 	content_backing_ms_per_pixel = ms_per_pixel;
 	content_backing_audio_top = audio_top;
@@ -1188,14 +1643,24 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 	if (pixel_position == scroll_left)
 		return;
 
+	const int old_scroll_left = scroll_left;
 	scroll_left = pixel_position;
 	scrollbar->SetPosition(scroll_left);
 	timeline->SetPosition(scroll_left);
 	HintVisibleAudioRange();
 	WarmVisibleAudioCache();
-	InvalidateContentBacking();
+	bool reused_content = false;
+#ifdef WITH_SKIA
+	reused_content = TryReuseGpuSkiaContentSurfaceForScroll(old_scroll_left, scroll_left);
+#endif
+	if (!reused_content)
+		reused_content = TryReuseContentBackingBitmapForScroll(old_scroll_left, scroll_left);
+	if (!reused_content)
+		InvalidateContentBacking();
 	if (dragged_object)
 		QueueHighFrequencyRefresh(nullptr, true);
+	else if (controller && controller->IsPlaying())
+		QueueHighFrequencyRefresh(nullptr, false);
 	else
 		RequestPaint();
 }
@@ -1470,11 +1935,20 @@ void AudioDisplay::LogRenderConfiguration(char const* trigger) const {
 		<< " render_backend=" << render_backend;
 	AppendQuoted(out, "render_backend_name", RenderBackendName(render_backend));
 #ifdef WITH_SKIA
-	AppendQuoted(out, "effective_backend", skia_waveform_content_enabled ? "skia_offscreen_gpu" : "wx_dc");
-	out << " skia_offscreen=" << (skia_waveform_content_enabled ? 1 : 0);
+	AppendQuoted(out, "effective_backend", EffectiveSkiaBackendName(skia_waveform_content_enabled, skia_backend.get(), skia_gpu_auto_downgrade_reason));
+	AppendQuoted(out, "skia_backend_type", skia_backend ? SkiaBackendTypeName(skia_backend->GetBackendType()) : "none");
+	out << " skia_gpu_available=" << (skia_gpu_diagnostics.available ? 1 : 0)
+		<< " skia_gpu_software_like=" << (skia_gpu_diagnostics.software_like ? 1 : 0);
+	AppendQuoted(out, "skia_gl_vendor", skia_gpu_diagnostics.vendor.empty() ? std::string("<unknown>") : skia_gpu_diagnostics.vendor);
+	AppendQuoted(out, "skia_gl_renderer", skia_gpu_diagnostics.renderer.empty() ? std::string("<unknown>") : skia_gpu_diagnostics.renderer);
+	AppendQuoted(out, "skia_gl_version", skia_gpu_diagnostics.version.empty() ? std::string("<unknown>") : skia_gpu_diagnostics.version);
+	AppendQuoted(out, "skia_glsl_version", skia_gpu_diagnostics.shading_language_version.empty() ? std::string("<unknown>") : skia_gpu_diagnostics.shading_language_version);
+	if (!skia_gpu_auto_downgrade_reason.empty())
+		AppendQuoted(out, "skia_auto_downgrade_reason", skia_gpu_auto_downgrade_reason);
+	out << " skia_gpu=" << ((skia_backend && skia_backend->GetBackendType() == AudioDisplaySkiaBackendType::Gpu) ? 1 : 0);
 #else
 	AppendQuoted(out, "effective_backend", "wx_dc");
-	out << " skia_offscreen=0";
+	out << " skia_gpu=0";
 #endif
 
 	out << " waveform_style=" << waveform_style;
@@ -1616,38 +2090,83 @@ bool AudioDisplay::TryPaintWithSkia(wxDC &dc) {
 		return false;
 	if (!skia_waveform_content_enabled || !skia_renderer || !skia_backend)
 		return false;
+	if (!skia_gpu_diagnostics.available && skia_backend->GetBackendType() != AudioDisplaySkiaBackendType::Bitmap) {
+		AudioDisplaySkiaGpuDiagnostics diagnostics;
+		if (skia_backend->QueryGpuDiagnostics(diagnostics)) {
+			skia_gpu_diagnostics = diagnostics;
+			LogSkiaGpuDiagnostics(skia_backend.get(), skia_gpu_diagnostics);
+
+			auto const render_backend = OPT_GET("Audio/Display/Draw/Render Backend")->GetInt();
+			auto const downgrade_reason = GetSkiaGpuAutoDowngradeReason(skia_gpu_diagnostics);
+			if (!downgrade_reason.empty() && render_backend == 0) {
+				skia_gpu_auto_downgrade_reason = downgrade_reason;
+				DisableSkiaBackend(std::string("auto backend downgraded to wx_dc reason=") + downgrade_reason, "skia_auto_downgrade");
+				return false;
+			}
+		}
+	}
 
 	wxRect full_rect(wxPoint(0, 0), GetClientSize());
 	if (full_rect.width <= 0 || full_rect.height <= 0)
 		return false;
-
-	auto &model = reusable_render_model;
-	FillRenderModel(model, full_rect, true, true);
-	if (audio_renderer_provider)
-		audio_renderer_provider->PopulateRenderModel(model);
-
-	if (!skia_renderer->CanDrawFrame(model))
+	if (IsGpuSkiaBackendActive()) {
+		if (TryPaintWithSkiaGpu(dc, full_rect))
+			return true;
+		DisableSkiaBackend(
+			std::string(skia_backend ? SkiaBackendTypeName(skia_backend->GetBackendType()) : "unknown")
+				+ " backend failed; falling back to wx_dc",
+			"skia_fallback");
 		return false;
-
-	auto frame_target = skia_backend->CreatePresentTarget(full_rect);
-	auto *canvas = frame_target ? frame_target->GetCanvas() : nullptr;
-	if (frame_target
-		&& frame_target->IsValid()
-		&& canvas
-		&& skia_renderer->DrawFrameToCanvas(*canvas, frame_target->GetRect(), model)
-		&& frame_target->PresentTo(dc, false)) {
-		return true;
 	}
+
+	bool painted_any = false;
+	auto &model = reusable_render_model;
+	wxRect audio_rect(0, audio_top, full_rect.width, audio_height);
+	for (wxRegionIterator region(GetUpdateRegion()); region; ++region) {
+		wxRect rect = region.GetRect();
+		if (rect.width <= 0 || rect.height <= 0)
+			continue;
+
+		rect.Intersect(full_rect);
+		if (rect.width <= 0 || rect.height <= 0)
+			continue;
+
+		FillRenderModel(
+			model,
+			rect,
+			scrollbar && scrollbar->GetBounds().Intersects(rect),
+			timeline && timeline->GetBounds().Intersects(rect));
+		if (audio_renderer_provider && audio_rect.Intersects(rect))
+			audio_renderer_provider->PopulateRenderModel(model);
+
+		if (!skia_renderer->CanDrawFrame(model))
+			continue;
+
+		auto frame_target = skia_backend->CreatePresentTarget(rect);
+		auto *canvas = frame_target ? frame_target->GetCanvas() : nullptr;
+		if (!(frame_target
+			&& frame_target->IsValid()
+			&& canvas
+			&& skia_renderer->DrawFrameToCanvas(*canvas, frame_target->GetRect(), model)
+			&& frame_target->PresentTo(dc, false))) {
+			painted_any = false;
+			goto skia_fallback;
+		}
+
+		painted_any = true;
+	}
+
+	if (painted_any)
+		return true;
 
 	// If the Skia path cannot create or present a valid surface, stop
 	// retrying it for this control instance. The wxDC path below is the
 	// compatibility fallback for low-end/virtualized GL.
-	LOG_W("audio/render/skia") << "offscreen backend failed; falling back to wx_dc";
-	skia_waveform_content_enabled = false;
-	skia_backend.reset();
-	skia_renderer.reset();
-	InvalidateContentBacking();
-	LogRenderConfiguration("skia_fallback");
+	skia_fallback:
+	DisableSkiaBackend(
+		std::string(skia_backend ? SkiaBackendTypeName(skia_backend->GetBackendType()) : "unknown")
+			+ " backend failed; falling back to wx_dc",
+		"skia_fallback");
 	return false;
 }
 #endif
@@ -1663,7 +2182,11 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 {
 	if (!audio_renderer_provider || !provider) return;
 
+#ifdef WITH_SKIA
+	wxPaintDC dc(this);
+#else
 	wxBufferedPaintDC dc(this);
+#endif
 
 #ifdef WITH_SKIA
 	if (TryPaintWithSkia(dc)) {
@@ -1678,6 +2201,7 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 		wxMemoryDC backing_dc;
 		bool backing_checked = false;
 		bool backing_selected = false;
+		bool prepared_visible_audio = false;
 
 		auto ensure_backing_dc = [&]() -> bool {
 			if (!content_backing_enabled)
@@ -1717,6 +2241,11 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 				audio_rect.Intersect(audio_bounds);
 				if (audio_rect.width > 0 && audio_rect.height > 0) {
 					bool used_backing = ensure_backing_dc();
+					if (!used_backing && !prepared_visible_audio) {
+						HintVisibleAudioRange();
+						WarmVisibleAudioCache();
+						prepared_visible_audio = true;
+					}
 					if (used_backing) {
 						dc.Blit(
 							audio_rect.x,
@@ -1731,8 +2260,7 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 						PaintAudio(dc, model);
 					}
 
-					if (!used_backing)
-						PaintStaticAudioOverlays(dc, model);
+					PaintStaticAudioOverlays(dc, model);
 					PaintMarkers(dc, model);
 					PaintLabels(dc, model);
 					if (model.track_cursor_visible)
@@ -1821,7 +2349,7 @@ void AudioDisplay::FillRenderModel(
 	model.track_cursor.label = model.track_cursor_label;
 
 	{
-		wxString face = FontFace("Audio/Track Cursor");
+		wxString face = ResolveAudioLabelFontFace();
 		if (!face.empty())
 			model.audio_label_font_face = std::string(face.utf8_str());
 	}
@@ -1861,15 +2389,31 @@ void AudioDisplay::HintVisibleAudioRange() const {
 	if (client_width <= 0)
 		return;
 
+	auto const now = std::chrono::steady_clock::now();
+	if (controller && controller->IsPlaying() && !dragged_object) {
+		int const min_scroll_delta = std::max(16, client_width / 8);
+		if (last_visible_audio_hint_client_width == client_width
+			&& last_visible_audio_hint_scroll_left >= 0
+			&& std::abs(scroll_left - last_visible_audio_hint_scroll_left) < min_scroll_delta
+			&& now - last_visible_audio_hint_time < std::chrono::milliseconds(high_frequency_refresh_interval_ms)) {
+			return;
+		}
+	}
+
 	auto const begin_ms = std::max(0, TimeFromAbsoluteX(scroll_left));
 	auto const end_ms = std::max(begin_ms, TimeFromAbsoluteX(scroll_left + client_width));
 	auto const start_frame = static_cast<int64_t>(begin_ms) * sample_rate / 1000;
 	auto const end_frame = static_cast<int64_t>(end_ms) * sample_rate / 1000;
 	provider->HintVisibleRange(start_frame, end_frame - start_frame);
+	last_visible_audio_hint_time = now;
+	last_visible_audio_hint_scroll_left = scroll_left;
+	last_visible_audio_hint_client_width = client_width;
 }
 
 void AudioDisplay::WarmVisibleAudioCache() const {
 	if (!audio_renderer_provider)
+		return;
+	if (controller && controller->IsPlaying() && !dragged_object)
 		return;
 
 	auto const client_width = std::max(0, GetClientSize().GetWidth());
@@ -1904,9 +2448,6 @@ void AudioDisplay::OnRenderContentReady() {
 void AudioDisplay::PaintAudio(wxDC &dc, AudioDisplayRenderModel const& model) {
 	if (!audio_tile_compositor || !audio_renderer)
 		return;
-
-	HintVisibleAudioRange();
-	WarmVisibleAudioCache();
 	audio_tile_compositor->Compose(dc, *audio_renderer, model.viewport, model.style_ranges);
 }
 
@@ -1976,8 +2517,7 @@ void AudioDisplay::PaintLabels(wxDC &dc, AudioDisplayRenderModel const& model)
 	if (model.label_geometry.empty()) return;
 
 	wxDCFontChanger fc(dc);
-	wxFont font = dc.GetFont();
-	font.SetWeight(wxFONTWEIGHT_BOLD);
+	wxFont font = MakeAudioLabelFont(dc);
 	fc.Set(font);
 	dc.SetTextForeground(*wxWHITE);
 	for (auto const& label : model.label_geometry)
@@ -2036,9 +2576,8 @@ void AudioDisplay::PaintSplitChannelLabels(wxDC &dc, AudioDisplayRenderModel con
 
 	const int band_h = model.audio_bounds.height / static_cast<int>(model.split_channel_labels.size());
 	const int label_x = FromDIP(4);
-	wxFont label_font = dc.GetFont();
-	label_font.SetPointSize(std::max(7, label_font.GetPointSize() - 1));
-	label_font.SetWeight(wxFONTWEIGHT_BOLD);
+	wxFont label_font = MakeAudioLabelFont(dc, -1);
+	label_font.SetPointSize(std::max(7, label_font.GetPointSize()));
 	dc.SetFont(label_font);
 	for (size_t i = 0; i < model.split_channel_labels.size(); ++i) {
 		const wxString wx_label = wxString::FromUTF8(model.split_channel_labels[i].c_str());
@@ -2067,11 +2606,7 @@ void AudioDisplay::PaintTrackCursor(wxDC &dc, AudioDisplayRenderModel const& mod
 	wxString const wx_label = wxString::FromUTF8(model.track_cursor.label);
 
 	wxDCFontChanger fc(dc);
-	wxFont font = dc.GetFont();
-	wxString face_name = FontFace("Audio/Track Cursor");
-	if (!face_name.empty())
-		font.SetFaceName(face_name);
-	font.SetWeight(wxFONTWEIGHT_BOLD);
+	wxFont font = MakeAudioLabelFont(dc);
 	fc.Set(font);
 
 	wxSize label_size(dc.GetTextExtent(wx_label));
@@ -2124,6 +2659,23 @@ void AudioDisplay::SetDraggedObject(AudioDisplayInteractionObject *new_obj)
 	}
 }
 
+wxFont AudioDisplay::MakeAudioLabelFont(wxDC &dc, int point_size_delta, bool bold) const {
+	wxFont font = dc.GetFont();
+	wxString face_name = ResolveAudioLabelFontFace();
+	if (!face_name.empty())
+		font.SetFaceName(face_name);
+	if (point_size_delta != 0)
+		font.SetPointSize(std::max(1, font.GetPointSize() + point_size_delta));
+	font.SetWeight(bold ? wxFONTWEIGHT_BOLD : wxFONTWEIGHT_NORMAL);
+	return font;
+}
+
+wxString AudioDisplay::FormatTrackCursorLabel(int absolute_pos) const {
+	if (absolute_pos < 0)
+		return wxString();
+	return to_wx(FormatTimeForDisplay(TimeFromAbsoluteX(absolute_pos), ReadAudioCursorTimeDisplayMode()));
+}
+
 void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 {
 	const int old_pos = track_cursor_pos;
@@ -2132,25 +2684,26 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 	const wxString old_label = track_cursor_label;
 	const bool old_label_visible = old_pos >= 0 && !old_label.empty();
 	const bool new_label_visible = show_time && new_pos >= 0;
+	wxString new_label;
 	if (old_pos == new_pos) {
 		if (!old_label_visible && !new_label_visible)
 			return;
-		if (new_label_visible) {
-			agi::Time new_label_time = TimeFromAbsoluteX(new_pos);
-			const wxString new_label = to_wx(new_label_time.GetAssFormatted(true));
-			if (old_label_visible && new_label == old_label)
-				return;
-		}
+		if (new_label_visible)
+			new_label = FormatTrackCursorLabel(new_pos);
+		if (old_label_visible == new_label_visible && (!new_label_visible || new_label == old_label))
+			return;
 	}
 	else if (!AudioDisplayInvalidationPlanner::ShouldRefreshTrackCursor(old_pos, new_pos))
 		return;
 
+	if (new_label_visible && new_label.empty())
+		new_label = FormatTrackCursorLabel(new_pos);
+
 	track_cursor_pos = new_pos;
 
-	if (show_time)
+	if (new_label_visible)
 	{
-		agi::Time new_label_time = TimeFromAbsoluteX(track_cursor_pos);
-		track_cursor_label = to_wx(new_label_time.GetAssFormatted(true));
+		track_cursor_label = new_label;
 	}
 	else
 	{
@@ -2163,11 +2716,7 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 			return wxRect();
 
 		wxClientDC dc(this);
-		wxFont font = dc.GetFont();
-		wxString face_name = FontFace("Audio/Track Cursor");
-		if (!face_name.empty())
-			font.SetFaceName(face_name);
-		font.SetWeight(wxFONTWEIGHT_BOLD);
+		wxFont font = MakeAudioLabelFont(dc);
 		dc.SetFont(font);
 
 		wxSize label_size(dc.GetTextExtent(track_cursor_label));
@@ -2196,8 +2745,30 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 		audio_height);
 	if (!dirty.IsEmpty()) {
 		wxRect rect = ToWxRect(dirty);
-		QueueHighFrequencyRefresh(&rect, true);
+		if (dragged_object)
+			QueueHighFrequencyRefresh(&rect, true);
+		else if (controller && controller->IsPlaying())
+			QueueHighFrequencyRefresh(&rect, false);
+		else {
+			bool prefer_deferred_refresh = false;
+#ifdef WITH_SKIA
+			prefer_deferred_refresh = defer_immediate_track_cursor_refresh && IsGpuSkiaBackendActive();
+#endif
+			if (prefer_deferred_refresh)
+				QueueHighFrequencyRefresh(&rect, false);
+			else {
+				RequestPaint(&rect);
+				Update();
+			}
+		}
 	}
+}
+
+void AudioDisplay::OnPlaybackStop()
+{
+	defer_immediate_track_cursor_refresh = true;
+	RemoveTrackCursor();
+	defer_immediate_track_cursor_refresh = false;
 }
 
 void AudioDisplay::RemoveTrackCursor()
@@ -2532,6 +3103,7 @@ void AudioDisplay::OnSize(wxSizeEvent &)
 	audio_top = timeline->GetHeight();
 
 	HintVisibleAudioRange();
+	WarmVisibleAudioCache();
 	RequestPaint();
 }
 
@@ -2586,10 +3158,11 @@ void AudioDisplay::ApplyAudioProvider(agi::AudioProvider *provider)
 			auto core = context->GetCore();
 			connections = agi::signal::make_vector({
 				controller->AddPlaybackPositionListener(&AudioDisplay::OnPlaybackPosition, this),
-				controller->AddPlaybackStopListener(&AudioDisplay::RemoveTrackCursor, this),
+				controller->AddPlaybackStopListener(&AudioDisplay::OnPlaybackStop, this),
 				core.videoController->AddFramePresentedListener(&AudioDisplay::OnVideoSeek, this),
 				controller->AddTimingControllerListener(&AudioDisplay::OnTimingController, this),
 				OPT_SUB("Audio/Display/Draw/Cursor Time", &AudioDisplay::OnTrackCursorTimeOptionChanged, this),
+				OPT_SUB("Audio/Display/Draw/Cursor Time Format", &AudioDisplay::OnTrackCursorTimeOptionChanged, this),
 				OPT_SUB("Audio/Spectrum", &AudioDisplay::ReloadRenderingSettings, this),
 				OPT_SUB("Audio/Display/Waveform Style", &AudioDisplay::ReloadRenderingSettings, this),
 				OPT_SUB("Colour/Audio Display/Spectrum", &AudioDisplay::ReloadRenderingSettings, this),
@@ -2601,7 +3174,6 @@ void AudioDisplay::ApplyAudioProvider(agi::AudioProvider *provider)
 			});
 			OnTimingController();
 		}
-
 		last_sample_decoded = provider->GetDecodedSamples();
 		audio_load_position = -1;
 		audio_load_speed = 0;
@@ -2675,11 +3247,12 @@ void AudioDisplay::OnVideoSeek(int frame)
 }
 
 void AudioDisplay::OnTrackCursorTimeOptionChanged(agi::OptionValue const& opt) {
+	(void)opt;
 	if (!controller || controller->IsPlaying())
 		return;
 	if (track_cursor_pos < 0)
 		return;
-	SetTrackCursor(track_cursor_pos, opt.GetBool());
+	SetTrackCursor(track_cursor_pos, OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool());
 }
 
 void AudioDisplay::OnSelectionChanged()

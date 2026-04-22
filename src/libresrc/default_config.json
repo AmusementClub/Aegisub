@@ -40,6 +40,7 @@
 		"Display" : {
 			"Draw" : {
 				"Cursor Time" : true,
+				"Cursor Time Format" : 0,
 				"Render Backend" : 0,
 				"Inactive Comments" : false,
 				"Keyframes in Dialogue Mode" : true,

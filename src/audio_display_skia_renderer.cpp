@@ -832,7 +832,7 @@ void DrawChromeToCanvas(SkCanvas &canvas, AudioDisplayRenderModel const& model) 
 			bottom,
 			stroke);
 
-		SkFont font = MakeUiFont(ResolveUiTypeface(model.audio_label_font_face), 11.0f, false);
+		SkFont font = MakeUiFont(ResolveUiTypeface(std::string()), 11.0f, false);
 		SkPaint text;
 		text.setAntiAlias(true);
 		text.setColor(ToSkColor(timeline.light_colour));
@@ -959,7 +959,7 @@ bool AudioDisplaySkiaRenderer::DrawFrameToCanvas(SkCanvas &canvas, wxRect const&
 	}
 
 	if ((model.redraw_timeline && model.timeline.visible) || (model.redraw_scrollbar && model.scrollbar.visible)) {
-		DrawChromeToCanvas(canvas, model);
+		::DrawChromeToCanvas(canvas, model);
 		drew_any = true;
 	}
 
@@ -1131,14 +1131,32 @@ bool AudioDisplaySkiaRenderer::CanDrawAudioAreaOverlays(AudioDisplayRenderModel 
 }
 
 #ifdef WITH_SKIA
+bool AudioDisplaySkiaRenderer::CompositeAudioAreaOverlaysToCanvas(SkCanvas &canvas, wxRect const& target_rect, AudioDisplayRenderModel const& model) const {
+	if (!CanDrawAudioAreaOverlays(model))
+		return false;
+
+	canvas.save();
+	canvas.translate(-static_cast<float>(target_rect.x), -static_cast<float>(target_rect.y));
+	RenderAudioAreaOverlaysOnCanvas(canvas, model);
+	canvas.restore();
+	return true;
+}
+
 bool AudioDisplaySkiaRenderer::DrawAudioAreaOverlaysToCanvas(SkCanvas &canvas, wxRect const& target_rect, AudioDisplayRenderModel const& model) const {
 	if (!CanDrawAudioAreaOverlays(model))
 		return false;
 
 	canvas.clear(SK_ColorTRANSPARENT);
+	return CompositeAudioAreaOverlaysToCanvas(canvas, target_rect, model);
+}
+
+bool AudioDisplaySkiaRenderer::DrawChromeToCanvas(SkCanvas &canvas, wxRect const& target_rect, AudioDisplayRenderModel const& model) const {
+	if (!((model.redraw_timeline && model.timeline.visible) || (model.redraw_scrollbar && model.scrollbar.visible)))
+		return false;
+
 	canvas.save();
 	canvas.translate(-static_cast<float>(target_rect.x), -static_cast<float>(target_rect.y));
-	RenderAudioAreaOverlaysOnCanvas(canvas, model);
+	::DrawChromeToCanvas(canvas, model);
 	canvas.restore();
 	return true;
 }

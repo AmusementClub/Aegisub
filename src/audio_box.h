@@ -101,8 +101,10 @@ class AudioBox final : public wxSashWindow {
 	void OnSpectrumPrefetchResumeTimer(wxTimerEvent &event);
 	void OnVerticalZoom(wxScrollEvent &event);
 	void OnVolume(wxScrollEvent &event);
+	void OnRenderBackendChange(agi::OptionValue const& opt);
 	void OnSpectrumModeChange(agi::OptionValue const& opt);
 	void OnSpectrumChannelBtn(wxCommandEvent &event);
+	void RebuildAudioDisplay();
 
 public:
 	AudioBox(wxWindow *parent, agi::Context *context);

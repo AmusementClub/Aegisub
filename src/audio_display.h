@@ -38,11 +38,15 @@
 #include <wx/gdicmn.h>
 #include <wx/string.h>
 #include <wx/timer.h>
+#ifdef WITH_SKIA
+#include <wx/glcanvas.h>
+#endif
 #include <wx/window.h>
 
 #include "audio_renderer_spectrum.h"
 #ifdef WITH_SKIA
 #include "audio_display_skia_backend.h"
+#include <include/core/SkRefCnt.h>
 #endif
 #include "audio_display_render_model.h"
 #include "ui_dispatch.h"
@@ -60,6 +64,9 @@ class AudioDisplaySkiaRenderer;
 
 class AudioDisplayInteractionObject;
 class AudioMarkerInteractionObject;
+#ifdef WITH_SKIA
+class SkImage;
+#endif
 
 /// @class AudioDisplay
 /// @brief Primary view/UI for interaction with audio timing
@@ -67,7 +74,12 @@ class AudioMarkerInteractionObject;
 /// The audio display is the common view that allows the user to interact with the active
 /// timing controller. The audio display also renders audio according to the audio controller
 /// and the timing controller, using an audio renderer instance.
-class AudioDisplay: public wxWindow {
+class AudioDisplay:
+#ifdef WITH_SKIA
+	public wxGLCanvas {
+#else
+	public wxWindow {
+#endif
 	agi::signal::Connection audio_open_connection;
 
 	std::vector<agi::signal::Connection> connections;
@@ -112,6 +124,7 @@ class AudioDisplay: public wxWindow {
 	bool pending_high_frequency_update = false;
 	wxRect pending_high_frequency_rect;
 	static const int high_frequency_refresh_interval_ms = 16;
+	bool defer_immediate_track_cursor_refresh = false;
 	void QueueHighFrequencyRefresh(const wxRect *rect, bool update);
 	void FlushHighFrequencyRefresh();
 
@@ -151,21 +164,35 @@ class AudioDisplay: public wxWindow {
 	/// Absolute pixel position of the tracking cursor (mouse or playback)
 	int track_cursor_pos = -1;
 	/// Optional content backing bitmap for overlay-only refreshes (env-flagged).
+	bool content_backing_requested = false;
 	bool content_backing_enabled = false;
 	bool content_backing_valid = false;
 	wxBitmap content_backing_bitmap;
+	wxBitmap content_backing_scratch_bitmap;
 	int content_backing_scroll_left = 0;
 	double content_backing_ms_per_pixel = 0.0;
 	int content_backing_audio_top = 0;
 	int content_backing_audio_height = 0;
 	int content_backing_client_width = 0;
+	mutable std::chrono::steady_clock::time_point last_visible_audio_hint_time;
+	mutable int last_visible_audio_hint_scroll_left = -1;
+	mutable int last_visible_audio_hint_client_width = 0;
 #ifdef WITH_SKIA
 	bool skia_waveform_content_enabled = false;
+	std::unique_ptr<wxGLContext> skia_gl_context;
 	std::unique_ptr<AudioDisplaySkiaBackend> skia_backend;
 	std::unique_ptr<AudioDisplaySkiaRenderer> skia_renderer;
+	sk_sp<SkImage> skia_content_backing_image;
+	AudioDisplaySkiaGpuDiagnostics skia_gpu_diagnostics;
+	std::string skia_gpu_auto_downgrade_reason;
 	/// Reusable render model for Skia path — avoids per-frame heap
 	/// allocation of large vectors (spectrum.power, spectrum.ready, etc.).
 	AudioDisplayRenderModel reusable_render_model;
+	bool IsGpuSkiaBackendActive() const;
+	bool EnsureGpuSkiaContentSurface();
+	bool TryReuseGpuSkiaContentSurfaceForScroll(int old_scroll_left, int new_scroll_left);
+	bool TryPaintWithSkiaGpu(wxDC &dc, wxRect const& full_rect);
+	void DisableSkiaBackend(std::string const& reason, char const* trigger);
 #endif
 	/// Absolute pixel position of the last video-position marker refresh
 	int last_video_marker_pos = -1;
@@ -185,6 +212,7 @@ class AudioDisplay: public wxWindow {
 	/// @param new_pos   New absolute pixel position of the tracking cursor
 	/// @param show_time Display timestamp by the tracking cursor?
 	void SetTrackCursor(int new_pos, bool show_time);
+	void OnPlaybackStop();
 	/// @brief Remove the tracking cursor from the display
 	void RemoveTrackCursor();
 	bool TryGetCurrentVideoMarker(int &out_pos, int &out_frame) const;
@@ -192,7 +220,9 @@ class AudioDisplay: public wxWindow {
 	wxRect GetMarkerRefreshRect(int absolute_x) const;
 	bool QueueDynamicVideoMarkerRefresh();
 	void InvalidateContentBacking();
+	bool EnsureContentBackingBitmapStorage(int width, int height);
 	bool EnsureContentBackingBitmap();
+	bool TryReuseContentBackingBitmapForScroll(int old_scroll_left, int new_scroll_left);
 	void UpdateContentBackingBitmap();
 	void ScheduleMiddleScrubSeek(int target_ms, bool force);
 	void OnMiddleScrubSeekTimer(wxTimerEvent &evt);
@@ -250,7 +280,7 @@ class AudioDisplay: public wxWindow {
 	/// wxWidgets paint event
 	void OnPaint(wxPaintEvent &event);
 #ifdef WITH_SKIA
-	/// Full-frame Skia render to an offscreen target, then present through wxDC.
+	/// Full-frame Skia render using the active backend and present path.
 	bool TryPaintWithSkia(wxDC &dc);
 #endif
 	/// Request a repaint.
@@ -282,6 +312,8 @@ class AudioDisplay: public wxWindow {
 	void OnMarkerMoved();
 	void OnVideoSeek(int frame);
 	void OnTrackCursorTimeOptionChanged(agi::OptionValue const& opt);
+	wxFont MakeAudioLabelFont(wxDC &dc, int point_size_delta = 0, bool bold = true) const;
+	wxString FormatTrackCursorLabel(int absolute_pos) const;
 	void OnSpectrumMonoMixModeChanged(agi::OptionValue const& opt);
 	void OnSpectrumComputationModeChanged(agi::OptionValue const& opt);
 	void OnSpectrumFrequencyCurveChanged(agi::OptionValue const& opt);
@@ -376,6 +408,7 @@ public:
 	void SetSpectrumSelectedChannels(const std::vector<int> &channels);
 	const std::vector<int>& GetSpectrumSelectedChannels() const { return spectrum_selected_channels_runtime; }
 	int GetProviderChannels() const;
+	int GetScrollLeft() const { return scroll_left; }
 
 	/// Get a time in milliseconds from an X coordinate relative to current scroll
 	int TimeFromRelativeX(int x) const { return int((scroll_left + x) * ms_per_pixel); }

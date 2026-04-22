@@ -502,6 +502,11 @@ void BuildAudioPage(OptionPage *p) {
 	binder->AddBool(_("Keyframes in dialogue mode"), "Audio/Display/Draw/Keyframes in Dialogue Mode");
 	binder->AddBool(_("Keyframes in karaoke mode"), "Audio/Display/Draw/Keyframes in Karaoke Mode");
 	binder->AddBool(_("Cursor time"), "Audio/Display/Draw/Cursor Time");
+	{
+		const wxString ctf_arr[] = { _("ASS centiseconds"), _("Exact milliseconds") };
+		wxArrayString ctf_choice(2, ctf_arr);
+		binder->AddChoice(_("Cursor time format"), ctf_choice, "Audio/Display/Draw/Cursor Time Format");
+	}
 	binder->AddBool(_("Video position"), "Audio/Display/Draw/Video Position");
 	binder->AddBool(_("Seconds boundaries"), "Audio/Display/Draw/Seconds");
 	binder->AddChoice(_("Waveform Style"), AudioWaveformRenderer::GetWaveformStyles(), "Audio/Display/Waveform Style");
@@ -526,8 +531,8 @@ void BuildAudioPage(OptionPage *p) {
 	wxArrayString sc_choice(5, sc_arr);
 	binder->AddChoice(_("Spectrum Frequency Mapping"), sc_choice, "Audio/Renderer/Spectrum/FreqCurve");
 
-	binder->AddCategory(_("Audio labels"));
-	binder->AddFont(_("Font"), "Audio/Karaoke/");
+	binder->AddCategory(_("Audio overlay text"));
+	binder->AddFont(_("Overlay labels and cursor font"), "Audio/Karaoke/");
 
 	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
@@ -770,8 +775,13 @@ void BuildAdvancedAudioPage(OptionPage *p) {
 	binder->AddChoice(_("Audio player"), apl_choice, "Audio/Player");
 
 	{
-		const wxString rb_arr[] = { _("Auto"), _("GPU (Skia)"), _("CPU (GDI)") };
-		wxArrayString rb_choice(3, rb_arr);
+		const wxString rb_arr[] = {
+			_("Auto"),
+			_("GPU (Skia)"),
+			_("Bitmap (Skia)"),
+			_("Bitmap (wxDC/GDI)")
+		};
+		wxArrayString rb_choice(4, rb_arr);
 		binder->AddChoice(_("Render backend"), rb_choice, "Audio/Display/Draw/Render Backend");
 	}
 

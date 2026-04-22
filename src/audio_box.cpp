@@ -117,6 +117,7 @@ AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 	link_btn->SetMaxSize(wxDefaultSize);
 	VertVolArea->Add(link_btn, 0, wxRIGHT | wxEXPAND, 0);
 	OPT_SUB("Audio/Link", &AudioBox::OnVerticalLink, this);
+	OPT_SUB("Audio/Display/Draw/Render Backend", &AudioBox::OnRenderBackendChange, this);
 
 	spectrum_channel_btn = new wxButton(panel, Audio_SpectrumChannel, _("CH"), wxDefaultPosition, wxSize(20, -1), wxBU_EXACTFIT);
 	spectrum_channel_btn->SetToolTip(_("Spectrum display options"));
@@ -326,6 +327,10 @@ void AudioBox::OnVolume(wxScrollEvent &event) {
 	controller->SetVolume(pow(pos / 50.0, 3));
 }
 
+void AudioBox::OnRenderBackendChange(agi::OptionValue const&) {
+	RebuildAudioDisplay();
+}
+
 void AudioBox::OnVerticalLink(agi::OptionValue const& opt) {
 	if (opt.GetBool()) {
 		int pos = mid(1, VerticalZoom->GetValue(), 100);
@@ -342,6 +347,46 @@ void AudioBox::ApplyAudioOpen() {
 	spectrum_prefetch_temporarily_disabled = false;
 	if (spectrum_channel_btn)
 		spectrum_channel_btn->Enable(OPT_GET("Audio/Spectrum")->GetBool());
+}
+
+void AudioBox::RebuildAudioDisplay() {
+	if (!audioDisplay || !panel)
+		return;
+
+	auto *old_display = audioDisplay;
+	auto *display_sizer = old_display->GetContainingSizer();
+	if (!display_sizer)
+		return;
+
+	const int saved_zoom = old_display->GetZoomLevel();
+	const int saved_scroll_left = old_display->GetScrollLeft();
+	const int saved_vertical_zoom = mid(1, VerticalZoom->GetValue(), 100);
+	const bool saved_prefetch_disabled = spectrum_prefetch_temporarily_disabled;
+	const bool had_focus = old_display->HasFocus();
+
+	auto *new_display = new AudioDisplay(panel, context->GetCore().audioController.get(), context);
+	new_display->Bind(wxEVT_MOUSEWHEEL, &AudioBox::OnMouseWheel, this);
+	new_display->SetZoomLevel(saved_zoom);
+	new_display->SetAmplitudeScale(pow(saved_vertical_zoom / 50.0, 3));
+
+	display_sizer->Replace(old_display, new_display);
+	audioDisplay = new_display;
+	old_display->Destroy();
+
+	panel->Layout();
+	new_display->SyncToCurrentAudioProvider();
+	new_display->ScrollPixelToLeft(saved_scroll_left);
+	if (context->GetCore().project->AudioProvider())
+		ApplyAudioOpen();
+	if (saved_prefetch_disabled) {
+		audioDisplay->SetInteractivePrefetchEnabled(false);
+		spectrum_prefetch_temporarily_disabled = true;
+	}
+	if (had_focus)
+		audioDisplay->SetFocus();
+	panel->SendSizeEvent();
+	Refresh();
+	Update();
 }
 
 void AudioBox::OnAudioOpen() {

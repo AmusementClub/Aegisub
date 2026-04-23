@@ -559,8 +559,26 @@ struct Session {
 	Summary summary;
 };
 
+struct StartupTimingSession {
+	std::mutex mutex;
+	bool env_checked = false;
+	bool enabled = false;
+	int64_t started_ns = 0;
+	std::string session_id;
+	std::string started_local;
+	agi::fs::path output_path;
+	std::ofstream stream;
+	std::vector<std::string> pending_lines;
+	bool path_logged = false;
+};
+
 Session& GetSession() {
 	static Session session;
+	return session;
+}
+
+StartupTimingSession& GetStartupTimingSession() {
+	static StartupTimingSession session;
 	return session;
 }
 
@@ -635,6 +653,118 @@ void AppendEntryLocked(Session& session, char const* kind, std::string const& na
 		|| Clock::now() - session.last_flush >= kBufferedFlushInterval;
 	if (should_flush)
 		FlushLocked(session, immediate);
+}
+
+bool IsStartupTimingEnabledLocked(StartupTimingSession& session) {
+	if (session.env_checked)
+		return session.enabled;
+
+	session.env_checked = true;
+	auto const value = Trim(ReadEnvValue("AEGISUB_STARTUP_DEBUG_LOG"));
+	session.enabled = !value.empty() && !IsFalseyToken(value);
+	if (session.enabled) {
+		session.started_ns = NowNs();
+		session.started_local = agi::util::strftime("%Y-%m-%d-%H-%M-%S");
+		session.session_id = session.started_local + "-" + ToString(static_cast<long long>(wxGetProcessId()));
+	}
+	return session.enabled;
+}
+
+agi::fs::path ResolveStartupTimingDirectory(bool allow_temp_fallback) {
+	if (config::path)
+		return config::path->Decode("?user/log");
+	if (!allow_temp_fallback)
+		return {};
+	try {
+		return std::filesystem::temp_directory_path() / "Aegisub";
+	}
+	catch (...) {
+		return {};
+	}
+}
+
+bool EnsureStartupTimingStreamLocked(StartupTimingSession& session, bool allow_temp_fallback) {
+	if (session.stream.is_open())
+		return true;
+
+	auto const directory = ResolveStartupTimingDirectory(allow_temp_fallback);
+	if (directory.empty())
+		return false;
+
+	try {
+		agi::fs::CreateDirectory(directory);
+		if (session.output_path.empty()) {
+			auto filename = agi::fs::PathFromString(
+				"startup-timing-" + (session.session_id.empty() ? std::string("session") : session.session_id) + "-%%%%%%%%.ndjson");
+			session.output_path = agi::fs::UniquePath(directory / filename);
+		}
+
+		session.stream = agi::io::OpenOutputFileStream(session.output_path, std::ios::out | std::ios::trunc);
+		if (!session.stream.is_open())
+			return false;
+
+		for (auto const& line : session.pending_lines)
+			session.stream << line << '\n';
+		session.stream.flush();
+		session.pending_lines.clear();
+
+		if (!session.path_logged && agi::log::log) {
+			session.path_logged = true;
+			LOG_I("perf/startup") << "Startup timing log: " << agi::fs::PathToString(session.output_path);
+		}
+		return true;
+	}
+	catch (...) {
+		return false;
+	}
+}
+
+void MaybeLogStartupTimingPathLocked(StartupTimingSession& session) {
+	if (session.path_logged || !session.stream.is_open() || !agi::log::log)
+		return;
+	session.path_logged = true;
+	LOG_I("perf/startup") << "Startup timing log: " << agi::fs::PathToString(session.output_path);
+}
+
+template <typename PayloadBuilder>
+void RecordStartupTimingEntry(char const* window_kind, char const* kind, std::string const& name, PayloadBuilder&& fill_payload, bool allow_temp_fallback = false, int64_t timestamp_ns = NowNs()) {
+	if (std::string_view(window_kind ? window_kind : "") != "main")
+		return;
+
+	auto& session = GetStartupTimingSession();
+	std::lock_guard<std::mutex> lock(session.mutex);
+	if (!IsStartupTimingEnabledLocked(session))
+		return;
+
+	if (session.started_ns == 0)
+		session.started_ns = timestamp_ns;
+
+	JsonObjectBuilder payload;
+	payload.AddString("window_kind", window_kind ? window_kind : "");
+	payload.AddDouble("since_process_start_ms", static_cast<double>(timestamp_ns - session.started_ns) / 1000000.0);
+	fill_payload(payload);
+
+	std::string line;
+	line.reserve(session.session_id.size() + name.size() + 256);
+	line += "{\"session\":\"";
+	line += EscapeJson(session.session_id);
+	line += "\",\"source\":\"AEGISUB_STARTUP_DEBUG_LOG\",\"t_monotonic_ns\":";
+	line += ToString(timestamp_ns);
+	line += ",\"kind\":\"";
+	line += kind;
+	line += "\",\"name\":\"";
+	line += EscapeJson(name);
+	line += "\",\"payload\":";
+	line += payload.Finish();
+	line += "}";
+
+	if (!EnsureStartupTimingStreamLocked(session, allow_temp_fallback))
+		session.pending_lines.emplace_back(std::move(line));
+	else {
+		MaybeLogStartupTimingPathLocked(session);
+		session.stream << line << '\n';
+		session.stream.flush();
+	}
 }
 
 template <typename PayloadBuilder>
@@ -1217,12 +1347,20 @@ void ObserveVideoPlaybackTick(int frame) {
 }
 
 void TraceWindowOpenBegin(char const* window_kind) {
+	RecordStartupTimingEntry(window_kind, "op", "window_open_begin", [&](JsonObjectBuilder&) {
+	});
+
 	RecordEntry(TraceCategory::UiWindow, "op", "window_open_begin", true, [&](JsonObjectBuilder& payload) {
 		payload.AddString("window_kind", window_kind ? window_kind : "");
 	});
 }
 
 void ObserveWindowOpenPhase(char const* window_kind, char const* phase, double duration_ms) {
+	RecordStartupTimingEntry(window_kind, "metric", "window_open_phase_duration", [&](JsonObjectBuilder& payload) {
+		payload.AddString("phase", phase ? phase : "");
+		payload.AddDouble("duration_ms", duration_ms);
+	});
+
 	if (!trace_active.load(std::memory_order_relaxed))
 		return;
 
@@ -1247,6 +1385,15 @@ void ObserveWindowOpenPhase(char const* window_kind, char const* phase, double d
 }
 
 void TraceWindowOpenEnd(char const* window_kind, double duration_ms, bool succeeded) {
+	RecordStartupTimingEntry(window_kind, "op", "window_open_end", [&](JsonObjectBuilder& payload) {
+		payload.AddDouble("duration_ms", duration_ms);
+		payload.AddBool("succeeded", succeeded);
+	}, true);
+	RecordStartupTimingEntry(window_kind, "metric", "window_open_duration", [&](JsonObjectBuilder& payload) {
+		payload.AddDouble("duration_ms", duration_ms);
+		payload.AddBool("succeeded", succeeded);
+	}, true);
+
 	RecordEntry(TraceCategory::UiWindow, "op", "window_open_end", true, [&](JsonObjectBuilder& payload) {
 		payload.AddString("window_kind", window_kind ? window_kind : "");
 		payload.AddDouble("duration_ms", duration_ms);

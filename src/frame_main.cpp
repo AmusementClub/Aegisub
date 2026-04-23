@@ -330,6 +330,16 @@ FrameMain::FrameMain()
 	RegisterSessionNotifications();
 #endif
 	observe_phase("startup.frame.show");
+	auto startup_lifetime = GetAsyncUiLifetime();
+	auto main_loop_turn_started = std::chrono::steady_clock::now();
+	CallAfter([startup_lifetime, main_loop_turn_started] {
+		if (startup_lifetime.expired())
+			return;
+		perf_trace::ObserveWindowOpenPhase(
+			"main",
+			"startup.frame.first_main_loop_turn_after_show",
+			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - main_loop_turn_started).count());
+	});
 
 	StartupLog("Leaving FrameMain constructor");
 }

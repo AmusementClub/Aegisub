@@ -14,7 +14,9 @@
 // PERFORMANCE OF THIS SOFTWARE.
 
 #include "headless_process_entry.h"
+#include "perf_trace.h"
 
+#include <chrono>
 #include <vector>
 #include <string>
 #include <cstdio>
@@ -102,11 +104,24 @@ void EnsureHeadlessConsoleStreams() {
 extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wxCmdLineArgType lpCmdLine, int nCmdShow) {
 	wxDISABLE_DEBUG_SUPPORT();
 
+	auto phase_started = std::chrono::steady_clock::now();
+	auto observe_phase = [&](char const* phase) {
+		perf_trace::ObserveWindowOpenPhase(
+			"main",
+			phase,
+			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - phase_started).count());
+		phase_started = std::chrono::steady_clock::now();
+	};
+
 	auto const args = CurrentProcessArgs();
+	observe_phase("startup.entry.capture_process_args");
 	if (IsHeadlessEntryCommandLine(args)) {
+		observe_phase("startup.entry.headless_command_check");
 		EnsureHeadlessConsoleStreams();
 		return RunHeadlessCommandLineInPlainProcessHost(args);
 	}
+	observe_phase("startup.entry.headless_command_check");
+	observe_phase("startup.entry.before_wx_entry");
 
 	return wxEntry(hInstance, hPrevInstance, lpCmdLine, nCmdShow);
 }
@@ -116,13 +131,25 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wxCm
 int main(int argc, char** argv) {
 	wxDISABLE_DEBUG_SUPPORT();
 
+	auto phase_started = std::chrono::steady_clock::now();
+	auto observe_phase = [&](char const* phase) {
+		perf_trace::ObserveWindowOpenPhase(
+			"main",
+			phase,
+			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - phase_started).count());
+		phase_started = std::chrono::steady_clock::now();
+	};
+
 	std::vector<std::string> args;
 	args.reserve(argc);
 	for (int i = 0; i < argc; ++i)
 		args.emplace_back(argv[i]);
+	observe_phase("startup.entry.capture_process_args");
 
 	if (IsHeadlessEntryCommandLine(args))
 		return RunHeadlessCommandLineInPlainProcessHost(args);
+	observe_phase("startup.entry.headless_command_check");
+	observe_phase("startup.entry.before_wx_entry");
 
 	return wxEntry(argc, argv);
 }

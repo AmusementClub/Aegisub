@@ -86,8 +86,15 @@ void AegisubApp::OnAssertFailure(const wxChar *file, int line, const wxChar *fun
 }
 
 AegisubApp::AegisubApp() {
+	auto const started = std::chrono::steady_clock::now();
+
 	// http://trac.wxwidgets.org/ticket/14302
 	wxSetEnv(wxS("UBUNTU_MENUPROXY"), wxS("0"));
+
+	perf_trace::ObserveWindowOpenPhase(
+		"main",
+		"startup.wx_app.constructor",
+		std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count());
 }
 
 namespace {
@@ -116,6 +123,11 @@ bool AegisubApp::OnInit() {
 	auto duration_ms = [](std::chrono::steady_clock::time_point started) {
 		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 	};
+	auto phase_started = std::chrono::steady_clock::now();
+	auto observe_phase = [&](char const* phase) {
+		perf_trace::ObserveWindowOpenPhase("main", phase, duration_ms(phase_started));
+		phase_started = std::chrono::steady_clock::now();
+	};
 	auto finish_startup_trace = [&](bool succeeded) {
 		perf_trace::TraceWindowOpenEnd("main", duration_ms(startup_started), succeeded);
 	};
@@ -127,14 +139,18 @@ bool AegisubApp::OnInit() {
 #else
 	SetAppName(wxS("aegisub"));
 #endif
+	observe_phase("startup.on_init.set_app_name");
 
 	BindGuiWxMainQueueDispatchHandler([this] { OnExceptionInMainLoop(); });
+	observe_phase("startup.on_init.bind_main_queue_handler");
 
 	runtime = std::make_unique<AppRuntime>();
+	observe_phase("startup.on_init.create_runtime");
 	std::string runtime_error;
 	auto runtime_options = BuildGuiWxAppRuntimeInitOptions();
 	auto bootstrap_ui_host = runtime_options.bootstrap_ui_host;
 	runtime_options.bootstrap_ui_host = bootstrap_ui_host;
+	observe_phase("startup.on_init.build_runtime_options");
 	auto const runtime_initialize_started = std::chrono::steady_clock::now();
 	if (!runtime->Initialize(std::move(runtime_options), runtime_error)) {
 		perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.total", duration_ms(runtime_initialize_started));
@@ -143,6 +159,7 @@ bool AegisubApp::OnInit() {
 		return false;
 	}
 	perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.total", duration_ms(runtime_initialize_started));
+	phase_started = std::chrono::steady_clock::now();
 
 	StartupLog("Inside OnInit");
 	try {
@@ -150,6 +167,7 @@ bool AegisubApp::OnInit() {
 #if (!defined(_DEBUG) || defined(WITH_EXCEPTIONS)) && (wxUSE_ON_FATAL_EXCEPTION+0)
 		StartupLog("Install exception handler");
 		wxHandleFatalExceptions(true);
+		observe_phase("startup.on_init.install_exception_handler");
 #endif
 
 #ifdef __APPLE__
@@ -158,9 +176,11 @@ bool AegisubApp::OnInit() {
 		// The right thing to do here would be to query CoreFoundation for the user's
 		// locale and add .UTF-8 to that, but :effort:
 		setlocale(LC_CTYPE, "en_US.UTF-8");
+		observe_phase("startup.on_init.platform_locale_adjustment");
 #endif
 
 		exception_message = _("Oops, Aegisub has crashed!\n\nAn attempt has been made to save a copy of your file to:\n\n%s\n\nAegisub will now close.");
+		observe_phase("startup.on_init.exception_message_setup");
 
 		StartupLog("Create main window");
 		StartupLog("Possibly perform automatic updates check");

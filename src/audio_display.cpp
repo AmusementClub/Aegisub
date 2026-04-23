@@ -92,6 +92,7 @@
 #include <wx/dcmemory.h>
 #include <wx/font.h>
 #include <wx/mousestate.h>
+#include <wx/utils.h>
 
 wxDEFINE_EVENT(EVT_AUDIO_DISPLAY_REBUILD_HOST, wxCommandEvent);
 
@@ -2028,6 +2029,7 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 	scroll_left = pixel_position;
 	scrollbar->SetPosition(scroll_left);
 	timeline->SetPosition(scroll_left);
+	SyncTrackCursorToMouseAfterScroll();
 	HintVisibleAudioRange();
 	WarmVisibleAudioCache();
 	bool reused_content = false;
@@ -3068,11 +3070,10 @@ wxString AudioDisplay::FormatTrackCursorLabel(int absolute_pos) const {
 	return to_wx(FormatTimeForDisplay(TimeFromAbsoluteX(absolute_pos), ReadAudioCursorTimeDisplayMode()));
 }
 
-void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
+void AudioDisplay::SetTrackCursor(int new_pos, bool show_time, bool follows_mouse)
 {
 	const int old_pos = track_cursor_pos;
 	const wxRect old_label_rect = track_cursor_label_rect;
-
 	const wxString old_label = track_cursor_label;
 	const bool old_label_visible = old_pos >= 0 && !old_label.empty();
 	const bool new_label_visible = show_time && new_pos >= 0;
@@ -3082,8 +3083,10 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 			return;
 		if (new_label_visible)
 			new_label = FormatTrackCursorLabel(new_pos);
-		if (old_label_visible == new_label_visible && (!new_label_visible || new_label == old_label))
+		if (old_label_visible == new_label_visible && (!new_label_visible || new_label == old_label)) {
+			track_cursor_follows_mouse = follows_mouse;
 			return;
+		}
 	}
 	else if (!AudioDisplayInvalidationPlanner::ShouldRefreshTrackCursor(old_pos, new_pos))
 		return;
@@ -3092,6 +3095,7 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 		new_label = FormatTrackCursorLabel(new_pos);
 
 	track_cursor_pos = new_pos;
+	track_cursor_follows_mouse = follows_mouse;
 
 	if (new_label_visible)
 	{
@@ -3169,7 +3173,27 @@ void AudioDisplay::OnPlaybackStop()
 
 void AudioDisplay::RemoveTrackCursor()
 {
-	SetTrackCursor(-1, false);
+	SetTrackCursor(-1, false, false);
+}
+
+void AudioDisplay::SyncTrackCursorToMouseAfterScroll() {
+	if (!controller || controller->IsPlaying() || track_cursor_pos < 0)
+		return;
+	if (!track_cursor_follows_mouse)
+		return;
+
+	wxWindow *window = GetWindow();
+	if (!window || !window->IsShownOnScreen())
+		return;
+
+	wxPoint const mouse_pos = window->ScreenToClient(wxGetMousePosition());
+	if (!GetClientRect().Contains(mouse_pos))
+		return;
+
+	SetTrackCursor(
+		scroll_left + mouse_pos.x,
+		OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool(),
+		true);
 }
 
 bool AudioDisplay::TryGetCurrentVideoMarker(int &out_pos, int &out_frame) const {
@@ -3251,8 +3275,10 @@ void AudioDisplay::OnMouseEnter(wxMouseEvent& event)
 	// reappears immediately after an alt-tab / minimize-restore cycle
 	// (OnMouseLeave removes it when the window loses focus).
 	if (!controller->IsPlaying())
-		SetTrackCursor(scroll_left + event.GetPosition().x,
-			OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool());
+		SetTrackCursor(
+			scroll_left + event.GetPosition().x,
+			OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool(),
+			true);
 }
 
 void AudioDisplay::OnMouseLeave(wxMouseEvent&)
@@ -3368,14 +3394,20 @@ void AudioDisplay::OnMouseEvent(wxMouseEvent& event)
 
 	if (event.MiddleIsDown())
 	{
-		SetTrackCursor(scroll_left + mouse_x, OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool());
+		SetTrackCursor(
+			scroll_left + mouse_x,
+			OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool(),
+			true);
 		ScheduleMiddleScrubSeek(TimeFromRelativeX(mouse_x), event.MiddleDown());
 		return;
 	}
 
 	if (event.Moving() && !controller->IsPlaying())
 	{
-		SetTrackCursor(scroll_left + mouse_x, OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool());
+		SetTrackCursor(
+			scroll_left + mouse_x,
+			OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool(),
+			true);
 	}
 
 	AudioTimingController *timing = controller->GetTimingController();
@@ -3609,7 +3641,7 @@ void AudioDisplay::OnPlaybackPosition(int ms)
 		return;
 
 	int pixel_position = AbsoluteXFromTime(ms);
-	SetTrackCursor(pixel_position, false);
+	SetTrackCursor(pixel_position, false, false);
 
 	if (OPT_GET("Audio/Lock Scroll on Cursor")->GetBool())
 	{
@@ -3639,7 +3671,7 @@ void AudioDisplay::OnVideoSeek(int frame)
 	// Video seek only drives paused-state navigation feedback.
 	const int ms = core.videoController->TimeAtFrame(frame, agi::vfr::EXACT);
 	const bool show_time = middle_scrub_seek_active && OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool();
-	SetTrackCursor(AbsoluteXFromTime(ms), show_time);
+	SetTrackCursor(AbsoluteXFromTime(ms), show_time, false);
 }
 
 void AudioDisplay::OnTrackCursorTimeOptionChanged(agi::OptionValue const& opt) {
@@ -3648,7 +3680,10 @@ void AudioDisplay::OnTrackCursorTimeOptionChanged(agi::OptionValue const& opt) {
 		return;
 	if (track_cursor_pos < 0)
 		return;
-	SetTrackCursor(track_cursor_pos, OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool());
+	SetTrackCursor(
+		track_cursor_pos,
+		OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool(),
+		track_cursor_follows_mouse);
 }
 
 void AudioDisplay::OnSelectionChanged()

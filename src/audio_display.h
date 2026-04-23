@@ -161,6 +161,7 @@ class AudioDisplay {
 
 	/// Absolute pixel position of the tracking cursor (mouse or playback)
 	int track_cursor_pos = -1;
+	bool track_cursor_follows_mouse = false;
 	/// Content backing bitmap for scroll reuse and overlay-only refreshes.
 	bool content_backing_enabled = false;
 	bool content_backing_valid = false;
@@ -214,10 +215,11 @@ class AudioDisplay {
 	/// @brief Move the tracking cursor
 	/// @param new_pos   New absolute pixel position of the tracking cursor
 	/// @param show_time Display timestamp by the tracking cursor?
-	void SetTrackCursor(int new_pos, bool show_time);
+	void SetTrackCursor(int new_pos, bool show_time, bool follows_mouse);
 	void OnPlaybackStop();
 	/// @brief Remove the tracking cursor from the display
 	void RemoveTrackCursor();
+	void SyncTrackCursorToMouseAfterScroll();
 	bool TryGetCurrentVideoMarker(int &out_pos, int &out_frame) const;
 	int GetCurrentVideoMarkerPos() const;
 	wxRect GetMarkerRefreshRect(int absolute_x) const;

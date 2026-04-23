@@ -28,6 +28,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "async_video_provider.h"
 #include "compat.h"
 #include "help_button.h"
@@ -236,7 +237,7 @@ int DialogProperties::SetInfoIfDifferent(std::string const& key, std::string con
 
 wxString DialogProperties::GetEffectiveResolutionText() const {
 	int width, height;
-	auto type = c->GetCore().ass->GetResolutionType(width, height);
+	auto type = c->GetCore().ass->GetResolutionType(GetAppScriptResolutionPreference(), width, height);
 	wxString source = wxS("Fallback");
 	if (type == ScriptResolutionType::PlayRes)
 		source = wxS("PlayRes");

@@ -1,4 +1,5 @@
 // Copyright (c) 2014, Thomas Goyne <plorkyeran@aegisub.org>
+// Copyright (c) 2026, MIR
 //
 // Permission to use, copy, modify, and distribute this software for any
 // purpose with or without fee is hereby granted, provided that the above
@@ -20,10 +21,6 @@
 #include "ass_dialogue.h"
 #include "ass_info.h"
 #include "ass_style.h"
-#ifndef AEGISUB_FONTCOLLECTOR_STANDALONE
-#include "ass_style_storage.h"
-#include "options.h"
-#endif
 #include "transient_font_set.h"
 
 #include <algorithm>
@@ -87,37 +84,27 @@ AssFile::~AssFile() {
 	Events.clear_and_dispose([](AssDialogue *e) { delete e; });
 }
 
-void AssFile::LoadDefault(bool include_dialogue_line, std::string const& style_catalog) {
+void AssFile::LoadDefault(bool include_dialogue_line) {
+	AssFileLoadDefaultOptions options;
+	options.include_dialogue_line = include_dialogue_line;
+	LoadDefault(options);
+}
+
+void AssFile::LoadDefault(AssFileLoadDefaultOptions const& options) {
 	transient_fonts.reset();
 
 	Info.emplace_back("Title", "Default Aegisub file");
 	Info.emplace_back("ScriptType", "v4.00+");
 	Info.emplace_back("WrapStyle", "0");
 	Info.emplace_back("ScaledBorderAndShadow", "yes");
-#ifndef AEGISUB_FONTCOLLECTOR_STANDALONE
-	if (!OPT_GET("Subtitle/Default Resolution/Auto")->GetBool()) {
-		SetResolution(ScriptResolutionType::None,
-			OPT_GET("Subtitle/Default Resolution/Width")->GetInt(),
-			OPT_GET("Subtitle/Default Resolution/Height")->GetInt());
-	}
-#else
-	(void)style_catalog;
-#endif
+	if (options.set_resolution)
+		SetResolution(ScriptResolutionType::None, options.resolution_width, options.resolution_height);
 	Info.emplace_back("YCbCr Matrix", "None");
 
 	// Add default style
 	Styles.push_back(*new AssStyle);
 
-#ifndef AEGISUB_FONTCOLLECTOR_STANDALONE
-	// Add/replace any catalog styles requested
-	if (AssStyleStorage::CatalogExists(style_catalog)) {
-		AssStyleStorage catalog;
-		catalog.LoadCatalog(style_catalog);
-		catalog.ReplaceIntoFile(*this);
-	}
-#endif
-
-	if (include_dialogue_line)
+	if (options.include_dialogue_line)
 		Events.push_back(*new AssDialogue);
 }
 
@@ -227,11 +214,18 @@ void AssFile::SetScriptInfo(std::string const& key, std::string const& value) {
 }
 
 void AssFile::GetResolution(int &sw, int &sh) const {
-	GetResolutionType(sw, sh);
+	GetResolution(GetPreferredResolutionType(), sw, sh);
+}
+
+void AssFile::GetResolution(ScriptResolutionType preferred, int &sw, int &sh) const {
+	GetResolutionType(preferred, sw, sh);
 }
 
 ScriptResolutionType AssFile::GetResolutionType(int &sw, int &sh) const {
-	auto primary = GetPreferredResolutionType();
+	return GetResolutionType(GetPreferredResolutionType(), sw, sh);
+}
+
+ScriptResolutionType AssFile::GetResolutionType(ScriptResolutionType primary, int &sw, int &sh) const {
 	if (get_resolution(*this, primary, sw, sh))
 		return primary;
 
@@ -249,14 +243,13 @@ ScriptResolutionType AssFile::GetResolutionType() const {
 	return GetResolutionType(sw, sh);
 }
 
+ScriptResolutionType AssFile::GetResolutionType(ScriptResolutionType preferred) const {
+	int sw, sh;
+	return GetResolutionType(preferred, sw, sh);
+}
+
 ScriptResolutionType AssFile::GetPreferredResolutionType() const {
-#ifdef AEGISUB_FONTCOLLECTOR_STANDALONE
 	return ScriptResolutionType::PlayRes;
-#else
-	return OPT_GET("Subtitle/Resolution/Prefer PlayRes")->GetBool()
-		? ScriptResolutionType::PlayRes
-		: ScriptResolutionType::LayoutRes;
-#endif
 }
 
 void AssFile::SetResolution(ScriptResolutionType type, int w, int h) {

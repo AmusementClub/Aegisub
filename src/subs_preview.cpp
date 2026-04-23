@@ -34,6 +34,7 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "ass_style.h"
 #include "compat.h"
 #include "dialog_progress.h"
@@ -63,7 +64,7 @@ SubtitlesPreview::SubtitlesPreview(wxWindow *parent, wxSize size, int winStyle, 
 
 	SetStyle(*style);
 
-	sub_file->LoadDefault();
+	LoadDefaultAssFileWithAppOptions(*sub_file);
 	sub_file->SetTransientFonts(this->transient_fonts);
 	sub_file->Styles.push_back(*style);
 	sub_file->Events.push_back(*line);

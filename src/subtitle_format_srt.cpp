@@ -37,6 +37,7 @@
 #include "ass_attachment.h"
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "options.h"
 #include "text_file_reader.h"
 #include "text_file_writer.h"
@@ -307,7 +308,7 @@ void SRTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename,
 	using namespace std;
 
 	TextFileReader file(filename, encoding);
-	target->LoadDefault(false, OPT_GET("Subtitle Format/SRT/Default Style Catalog")->GetString());
+	LoadDefaultAssFileWithAppOptions(*target, false, OPT_GET("Subtitle Format/SRT/Default Style Catalog")->GetString());
 
 	// See parsing algorithm at <http://devel.aegisub.org/wiki/SubtitleFormats/SRT>
 

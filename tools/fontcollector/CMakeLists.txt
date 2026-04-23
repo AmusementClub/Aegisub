@@ -157,7 +157,6 @@ target_compile_features(aegisub_fontcollector PRIVATE cxx_std_20)
 target_compile_definitions(aegisub_fontcollector
     PRIVATE
         AEGISUB_FONTCOLLECTOR_BUILD
-        AEGISUB_FONTCOLLECTOR_STANDALONE
         CMAKE_BUILD
 )
 if(WIN32)

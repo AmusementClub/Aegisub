@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "async_video_provider.h"
 #include "compat.h"
 #include "format.h"
@@ -54,7 +55,7 @@ VideoPropertyUpdateInput make_input(AssFile *file, const AsyncVideoProvider *new
 		new_provider->ShouldSetVideoProperties(),
 		file->GetScriptInfo("YCbCr Matrix"),
 		new_provider->GetColorSpace(),
-		file->GetResolutionType(sx, sy),
+		file->GetResolutionType(GetAppScriptResolutionPreference(), sx, sy),
 		sx,
 		sy,
 		new_provider->GetWidth(),

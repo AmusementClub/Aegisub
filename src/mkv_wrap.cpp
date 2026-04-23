@@ -35,6 +35,7 @@
 #include "mkv_wrap.h"
 
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "ass_parser.h"
 #include "compat.h"
 #include "MatroskaParser.h"
@@ -265,7 +266,7 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 	}
 	// Load default if it's SRT
 	else
-		target->LoadDefault(false, OPT_GET("Subtitle Format/SRT/Default Style Catalog")->GetString());
+		LoadDefaultAssFileWithAppOptions(*target, false, OPT_GET("Subtitle Format/SRT/Default Style Catalog")->GetString());
 
 	parser.AddLine("[Events]");
 

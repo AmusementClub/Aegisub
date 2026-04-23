@@ -36,6 +36,7 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "compat.h"
 #include "options.h"
 
@@ -60,7 +61,7 @@ std::vector<std::string> TTXTSubtitleFormat::GetWriteWildcards() const {
 
 void TTXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory>) const {
 	(void)choice_sink;
-	target->LoadDefault(false, OPT_GET("Subtitle Format/TTXT/Default Style Catalog")->GetString());
+	LoadDefaultAssFileWithAppOptions(*target, false, OPT_GET("Subtitle Format/TTXT/Default Style Catalog")->GetString());
 
 	// Load XML document
 	wxXmlDocument doc;

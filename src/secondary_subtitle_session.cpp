@@ -9,6 +9,7 @@
 #include "async_video_provider.h"
 #include "async_video_provider_host.h"
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "charset_detect.h"
 #include "compat.h"
 #include "include/aegisub/context.h"
@@ -240,7 +241,7 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 			context->GetSingleChoiceInteractionSink(),
 			context->GetCore().backgroundRunnerFactory);
 
-		auto const follow_video_resolution = temp.GetResolutionType() == ScriptResolutionType::None;
+		auto const follow_video_resolution = temp.GetResolutionType(GetAppScriptResolutionPreference()) == ScriptResolutionType::None;
 		if (follow_video_resolution) {
 			if (auto *main_provider = context->GetCore().project->VideoProvider())
 				temp.SetResolution(ScriptResolutionType::None, main_provider->GetWidth(), main_provider->GetHeight());

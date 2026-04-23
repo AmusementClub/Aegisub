@@ -89,6 +89,13 @@ enum class ScriptResolutionType : int {
 	None
 };
 
+struct AssFileLoadDefaultOptions {
+	bool include_dialogue_line = true;
+	bool set_resolution = false;
+	int resolution_width = 0;
+	int resolution_height = 0;
+};
+
 class AssFile {
 	/// A set of changes has been committed to the file (AssFile::COMMITType)
 	agi::signal::Signal<int, const AssDialogue*> AnnounceCommit;
@@ -114,8 +121,8 @@ public:
 
 	/// @brief Load default file
 	/// @param defline Add a blank line to the file
-	/// @param style_catalog Style catalog name to fill styles from, blank to use default style
-	void LoadDefault(bool defline = true, std::string const& style_catalog = std::string());
+	void LoadDefault(bool defline = true);
+	void LoadDefault(AssFileLoadDefaultOptions const& options);
 	/// Attach a file to the ass file
 	void InsertAttachment(agi::fs::path const& filename);
 	void SetTransientFonts(std::shared_ptr<const TransientFontSet> fonts);
@@ -133,8 +140,11 @@ public:
 	/// @param[out] w Width
 	/// @param[in] h Height
 	void GetResolution(int &w,int &h) const;
+	void GetResolution(ScriptResolutionType preferred, int &w,int &h) const;
 	ScriptResolutionType GetResolutionType(int &w, int &h) const;
+	ScriptResolutionType GetResolutionType(ScriptResolutionType preferred, int &w, int &h) const;
 	ScriptResolutionType GetResolutionType() const;
+	ScriptResolutionType GetResolutionType(ScriptResolutionType preferred) const;
 	ScriptResolutionType GetPreferredResolutionType() const;
 	void SetResolution(ScriptResolutionType type, int w, int h);
 	/// Get the value in a [Script Info] key as int, or 0 if it is not present

@@ -22,6 +22,7 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "ass_style.h"
 #include "compat.h"
 #include "include/aegisub/context.h"
@@ -65,7 +66,7 @@ VisualToolBase::VisualToolBase(VideoDisplay *parent, agi::Context *context)
 void VisualToolBase::UpdateScriptResolution() {
 	int script_w, script_h;
 	auto core = c->GetCore();
-	core.ass->GetResolution(script_w, script_h);
+	core.ass->GetResolution(GetAppScriptResolutionPreference(), script_w, script_h);
 	script_res = Vector2D(script_w, script_h);
 }
 

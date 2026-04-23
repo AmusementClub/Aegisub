@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "async_video_provider.h"
 #include "compat.h"
 #include "help_button.h"
@@ -94,7 +95,7 @@ DialogResample::DialogResample(agi::Context *c, ResampleSettings &settings)
 	d.SetIcon(GETICON(resample_toolbutton_16));
 
 	memset(&settings, 0, sizeof(settings));
-	core.ass->GetResolution(script_w, script_h);
+	core.ass->GetResolution(GetAppScriptResolutionPreference(), script_w, script_h);
 	settings.source_x = script_w;
 	settings.source_y = script_h;
 	settings.source_matrix = script_mat = MatrixFromString(core.ass->GetScriptInfo("YCbCr Matrix"));

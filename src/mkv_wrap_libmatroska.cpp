@@ -22,6 +22,7 @@
 #include "mkv_wrap.h"
 
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "ass_parser.h"
 #include "compat.h"
 #include "mkv_wrap_common.h"
@@ -931,7 +932,7 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 
 	AssParser parser(target, selected_track->subtitle_codec != MkvTextSubtitleCodec::Ssa);
 	if (selected_track->subtitle_codec == MkvTextSubtitleCodec::Utf8) {
-		target->LoadDefault(false, OPT_GET("Subtitle Format/SRT/Default Style Catalog")->GetString());
+		LoadDefaultAssFileWithAppOptions(*target, false, OPT_GET("Subtitle Format/SRT/Default Style Catalog")->GetString());
 	}
 	else {
 		std::string decoded_error;

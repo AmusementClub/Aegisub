@@ -37,6 +37,7 @@
 #include "ass_dialogue.h"
 #include "ass_info.h"
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "ass_karaoke.h"
 #include "ass_style.h"
 #include "automation/automation_host.h"
@@ -752,7 +753,7 @@ namespace Automation4 {
 	int LuaAssFile::LuaGetScriptResolution(lua_State *L)
 	{
 		int w, h;
-		ass->GetResolution(w, h);
+		ass->GetResolution(GetAppScriptResolutionPreference(), w, h);
 		push_value(L, w);
 		push_value(L, h);
 		return 2;

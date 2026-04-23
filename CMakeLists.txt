@@ -566,6 +566,7 @@ add_executable(Aegisub WIN32
     src/ass_export_filter.cpp
     src/ass_exporter.cpp
     src/ass_file.cpp
+    src/ass_file_app.cpp
     src/ass_karaoke.cpp
     src/ass_override.cpp
     src/ass_parser.cpp

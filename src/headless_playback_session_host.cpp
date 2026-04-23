@@ -16,6 +16,7 @@
 #include "headless_playback_session_host.h"
 
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "audio_controller.h"
 #include "audio_provider_factory.h"
 #include "include/aegisub/audio_player.h"
@@ -377,7 +378,7 @@ public:
 		core.notificationSink = notification_sink;
 		core.singleChoiceInteractionSink = track_choice_sink;
 		core.audioPlayerFactoryService = fake_audio_service;
-		core.ass->LoadDefault(false);
+		LoadDefaultAssFileWithAppOptions(*core.ass, false);
 		OPT_SET("Video/Open Audio")->SetBool(false);
 
 		started = true;

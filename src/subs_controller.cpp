@@ -19,6 +19,7 @@
 #include "ass_attachment.h"
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "ass_info.h"
 #include "ass_style.h"
 #include "app_runtime.h"
@@ -276,7 +277,7 @@ void SubsController::Close() {
 	AssFile blank;
 	auto core = context->GetCore();
 	blank.swap(*core.ass);
-	core.ass->LoadDefault(true, OPT_GET("Subtitle Format/ASS/Default Style Catalog")->GetString());
+	LoadDefaultAssFileWithAppOptions(*core.ass, true, OPT_GET("Subtitle Format/ASS/Default Style Catalog")->GetString());
 	core.ass->Commit("", AssFile::COMMIT_NEW);
 	FileOpen(filename);
 }

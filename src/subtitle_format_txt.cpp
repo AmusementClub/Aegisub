@@ -36,6 +36,7 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "dialogs.h"
 #include "options.h"
 #include "text_file_reader.h"
@@ -70,7 +71,7 @@ void TXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename,
 
 	TextFileReader file(filename, encoding, false);
 
-	target->LoadDefault(false, OPT_GET("Subtitle Format/TXT/Default Style Catalog")->GetString());
+	LoadDefaultAssFileWithAppOptions(*target, false, OPT_GET("Subtitle Format/TXT/Default Style Catalog")->GetString());
 
 	std::string actor;
 	std::string separator = OPT_GET("Tool/Import/Text/Actor Separator")->GetString();

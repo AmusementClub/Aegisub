@@ -262,6 +262,52 @@ bool IsAudioDebugLogEnabled() {
 	return enabled;
 }
 
+bool IsAudioCursorDebugLogEnabled() {
+	static bool enabled = false;
+	static bool initialized = false;
+	if (initialized)
+		return enabled;
+	initialized = true;
+
+	auto const* value = std::getenv("AEGISUB_AUDIO_CURSOR_DEBUG_LOG");
+	if (!value || !*value)
+		return enabled;
+
+	std::string const setting(value);
+	enabled = IsTrueLikeEnvValue(setting) || !IsFalseLikeEnvValue(value);
+	return enabled;
+}
+
+void MaybeAnnounceAudioCursorDebugLog() {
+	static bool announced = false;
+	if (announced || !IsAudioCursorDebugLogEnabled())
+		return;
+
+	announced = true;
+	auto const session_log = agi::log::GetSessionLogFile();
+	if (!session_log.empty())
+		LOG_I("audio/debug/cursor") << "enabled=1 source=AEGISUB_AUDIO_CURSOR_DEBUG_LOG session_log_file=" << agi::fs::PathToString(session_log);
+	else
+		LOG_I("audio/debug/cursor") << "enabled=1 source=AEGISUB_AUDIO_CURSOR_DEBUG_LOG session_log_file=<none>";
+}
+
+void AppendRect(std::ostringstream& out, char const* key, wxRect const& rect) {
+	out << ' ' << key << '='
+		<< rect.x << ',' << rect.y << ',' << rect.width << ',' << rect.height;
+}
+
+template <typename Fn>
+void LogAudioCursorDebug(char const* event, Fn&& fn) {
+	if (!IsAudioCursorDebugLogEnabled())
+		return;
+
+	MaybeAnnounceAudioCursorDebugLog();
+	std::ostringstream out;
+	out << "event=" << event;
+	fn(out);
+	LOG_D("audio/debug/cursor") << out.str();
+}
+
 void AppendQuoted(std::ostringstream& out, char const* key, std::string const& value) {
 	out << ' ' << key << '=' << std::quoted(value);
 }
@@ -1740,6 +1786,14 @@ bool AudioDisplay::TryPaintWithSkiaGpu(wxDC &dc, wxRect const& full_rect) {
 	}
 
 	if (!skia_frame_backing_valid) {
+		LogAudioCursorDebug("paint_frame.skia_full", [&](std::ostringstream& out) {
+			AppendRect(out, "full_rect", full_rect);
+			out << " frame_backing_valid=0"
+				<< " track_cursor_pos=" << track_cursor_pos
+				<< " scroll_left=" << scroll_left
+				<< " audio_top=" << audio_top
+				<< " audio_height=" << audio_height;
+		});
 		if (!rebuild_full_frame())
 			return false;
 	}
@@ -1758,6 +1812,16 @@ bool AudioDisplay::TryPaintWithSkiaGpu(wxDC &dc, wxRect const& full_rect) {
 				rect,
 				scrollbar && scrollbar->GetBounds().Intersects(rect),
 				timeline && timeline->GetBounds().Intersects(rect));
+
+			LogAudioCursorDebug("paint_region.skia_cached", [&](std::ostringstream& out) {
+				AppendRect(out, "rect", rect);
+				out << " cursor_visible=" << model.track_cursor.visible
+					<< " cursor_abs=" << model.track_cursor_absolute_x
+					<< " cursor_rel=" << model.track_cursor.x
+					<< " marker_count=" << model.marker_geometry.size()
+					<< " redraw_scrollbar=" << model.redraw_scrollbar
+					<< " redraw_timeline=" << model.redraw_timeline;
+			});
 
 			frame_canvas->save();
 			frame_canvas->clipRect(SkRect::MakeXYWH(
@@ -2604,6 +2668,16 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 				scrollbar->GetBounds().Intersects(rect),
 				timeline->GetBounds().Intersects(rect));
 
+			LogAudioCursorDebug("paint_region.wxdc", [&](std::ostringstream& out) {
+				AppendRect(out, "rect", rect);
+				out << " cursor_visible=" << model.track_cursor.visible
+					<< " cursor_abs=" << model.track_cursor_absolute_x
+					<< " cursor_rel=" << model.track_cursor.x
+					<< " marker_count=" << model.marker_geometry.size()
+					<< " redraw_scrollbar=" << model.redraw_scrollbar
+					<< " redraw_timeline=" << model.redraw_timeline;
+			});
+
 			wxRect audio_bounds(0, audio_top, GetClientSize().GetWidth(), audio_height);
 			if (audio_bounds.Intersects(rect)) {
 				wxRect audio_rect = rect;
@@ -2649,6 +2723,12 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 		wxRect audio_bounds(0, audio_top, GetClientSize().GetWidth(), audio_height);
 		if (track_cursor_pos >= 0 && audio_bounds.Intersects(update_box)) {
 			auto model = BuildRenderModel(update_box, false, false);
+			LogAudioCursorDebug("paint_track_cursor.wxdc", [&](std::ostringstream& out) {
+				AppendRect(out, "update_box", update_box);
+				out << " cursor_abs=" << model.track_cursor_absolute_x
+					<< " cursor_rel=" << model.track_cursor.x
+					<< " marker_count=" << model.marker_geometry.size();
+			});
 			PaintTrackCursor(dc, model);
 		}
 
@@ -2713,8 +2793,23 @@ void AudioDisplay::FillRenderModel(
 		timing->GetLabels(model.viewport_time, model.labels);
 	}
 
+	bool const log_cursor_model = IsAudioCursorDebugLogEnabled()
+		&& (model.track_cursor_visible || !model.markers.empty());
+	int current_video_marker_pos = -1;
+	uint32_t play_cursor_colour = 0;
+	int markers_at_track_cursor = 0;
+	int markers_at_video_marker = 0;
+	int play_cursor_like_markers = 0;
+	int candidate_marker_count = 0;
+	std::ostringstream candidate_markers;
+	if (log_cursor_model) {
+		current_video_marker_pos = GetCurrentVideoMarkerPos();
+		play_cursor_colour = PackWxColour(to_wx(OPT_GET("Colour/Audio Display/Play Cursor")->GetColor()));
+	}
+
 	model.marker_geometry.reserve(model.markers.size());
 	for (auto const* marker : model.markers) {
+		int const marker_absolute_x = AbsoluteXFromTime(marker->GetPosition());
 		AudioDisplayMarkerRenderData marker_data;
 		marker_data.x = RelativeXFromTime(marker->GetPosition());
 		marker_data.top = audio_top;
@@ -2725,6 +2820,34 @@ void AudioDisplay::FillRenderModel(
 			marker_data.style.width = pen.GetWidth();
 		}
 		marker_data.feet = marker->GetFeet();
+
+		if (log_cursor_model) {
+			if (marker_absolute_x == model.track_cursor_absolute_x)
+				++markers_at_track_cursor;
+			if (marker_absolute_x == current_video_marker_pos)
+				++markers_at_video_marker;
+			if (marker_data.style.colour == play_cursor_colour && marker_data.feet == AudioMarker::Feet_None)
+				++play_cursor_like_markers;
+
+			bool const near_track_cursor = model.track_cursor_visible
+				&& std::abs(marker_absolute_x - model.track_cursor_absolute_x) <= 1;
+			bool const near_video_marker = current_video_marker_pos >= 0
+				&& std::abs(marker_absolute_x - current_video_marker_pos) <= 1;
+			bool const marker_looks_like_play_cursor = marker_data.style.colour == play_cursor_colour
+				&& marker_data.feet == AudioMarker::Feet_None;
+			if ((near_track_cursor || near_video_marker || marker_looks_like_play_cursor)
+				&& candidate_marker_count < 8) {
+				if (candidate_marker_count++)
+					candidate_markers << ';';
+				candidate_markers
+					<< "abs=" << marker_absolute_x
+					<< "/rel=" << marker_data.x
+					<< "/colour=0x" << std::hex << marker_data.style.colour << std::dec
+					<< "/feet=" << marker_data.feet
+					<< "/width=" << marker_data.style.width;
+			}
+		}
+
 		model.marker_geometry.push_back(std::move(marker_data));
 	}
 
@@ -2743,6 +2866,25 @@ void AudioDisplay::FillRenderModel(
 	model.track_cursor.top = audio_top;
 	model.track_cursor.bottom = audio_top + std::max(0, audio_height - 1);
 	model.track_cursor.label = model.track_cursor_label;
+
+	if (log_cursor_model) {
+		LogAudioCursorDebug("fill_render_model", [&](std::ostringstream& out) {
+			AppendRect(out, "update_rect", update_rect);
+			out << " scroll_left=" << scroll_left
+				<< " cursor_visible=" << model.track_cursor_visible
+				<< " cursor_abs=" << model.track_cursor_absolute_x
+				<< " cursor_rel=" << model.track_cursor.x
+				<< " follows_mouse=" << track_cursor_follows_mouse
+				<< " video_marker_abs=" << current_video_marker_pos
+				<< " marker_count=" << model.marker_geometry.size()
+				<< " markers_at_track_cursor=" << markers_at_track_cursor
+				<< " markers_at_video_marker=" << markers_at_video_marker
+				<< " play_cursor_like_markers=" << play_cursor_like_markers;
+			auto const candidates = candidate_markers.str();
+			if (!candidates.empty())
+				AppendQuoted(out, "candidates", candidates);
+		});
+	}
 
 	{
 		wxString face = ResolveAudioLabelFontFace();
@@ -3078,18 +3220,48 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time, bool follows_mous
 	const bool old_label_visible = old_pos >= 0 && !old_label.empty();
 	const bool new_label_visible = show_time && new_pos >= 0;
 	wxString new_label;
+	int current_video_marker_pos = -1;
+	if (IsAudioCursorDebugLogEnabled())
+		current_video_marker_pos = GetCurrentVideoMarkerPos();
+
+	LogAudioCursorDebug("set_track_cursor.begin", [&](std::ostringstream& out) {
+		out << " old_pos=" << old_pos
+			<< " new_pos=" << new_pos
+			<< " show_time=" << show_time
+			<< " follows_mouse_new=" << follows_mouse
+			<< " follows_mouse_old=" << track_cursor_follows_mouse
+			<< " old_label_visible=" << old_label_visible
+			<< " new_label_visible=" << new_label_visible
+			<< " scroll_left=" << scroll_left
+			<< " video_marker_abs=" << current_video_marker_pos
+			<< " playing=" << (controller && controller->IsPlaying());
+	});
+
 	if (old_pos == new_pos) {
-		if (!old_label_visible && !new_label_visible)
+		if (!old_label_visible && !new_label_visible) {
+			LogAudioCursorDebug("set_track_cursor.skip", [&](std::ostringstream& out) {
+				out << " reason=no_visible_change same_pos=" << new_pos;
+			});
 			return;
+		}
 		if (new_label_visible)
 			new_label = FormatTrackCursorLabel(new_pos);
 		if (old_label_visible == new_label_visible && (!new_label_visible || new_label == old_label)) {
 			track_cursor_follows_mouse = follows_mouse;
+			LogAudioCursorDebug("set_track_cursor.skip", [&](std::ostringstream& out) {
+				out << " reason=same_label_state same_pos=" << new_pos
+					<< " follows_mouse=" << follows_mouse;
+			});
 			return;
 		}
 	}
-	else if (!AudioDisplayInvalidationPlanner::ShouldRefreshTrackCursor(old_pos, new_pos))
+	else if (!AudioDisplayInvalidationPlanner::ShouldRefreshTrackCursor(old_pos, new_pos)) {
+		LogAudioCursorDebug("set_track_cursor.skip", [&](std::ostringstream& out) {
+			out << " reason=planner_skip old_pos=" << old_pos
+				<< " new_pos=" << new_pos;
+		});
 		return;
+	}
 
 	if (new_label_visible && new_label.empty())
 		new_label = FormatTrackCursorLabel(new_pos);
@@ -3145,22 +3317,44 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time, bool follows_mous
 		if (IsGpuSkiaBackendActive())
 			rect = wxRect(0, audio_top, GetClientSize().GetWidth(), audio_height);
 #endif
+		char const* refresh_mode = "immediate";
 		if (dragged_object)
+		{
+			refresh_mode = "dragged_update";
 			QueueHighFrequencyRefresh(&rect, true);
+		}
 		else if (controller && controller->IsPlaying())
+		{
+			refresh_mode = "playing_deferred";
 			QueueHighFrequencyRefresh(&rect, false);
+		}
 		else {
 			bool prefer_deferred_refresh = false;
 #ifdef WITH_SKIA
 			prefer_deferred_refresh = defer_immediate_track_cursor_refresh && IsGpuSkiaBackendActive();
 #endif
-			if (prefer_deferred_refresh)
+			if (prefer_deferred_refresh) {
+				refresh_mode = "deferred";
 				QueueHighFrequencyRefresh(&rect, false);
+			}
 			else {
 				RequestPaint(&rect);
 				Update();
 			}
 		}
+		LogAudioCursorDebug("set_track_cursor.refresh", [&](std::ostringstream& out) {
+			AppendRect(out, "dirty", rect);
+			out << " refresh_mode=" << refresh_mode
+				<< " cursor_abs=" << track_cursor_pos
+				<< " cursor_rel=" << (track_cursor_pos - scroll_left)
+				<< " label_visible=" << !track_cursor_label.empty();
+		});
+	}
+	else {
+		LogAudioCursorDebug("set_track_cursor.no_dirty", [&](std::ostringstream& out) {
+			out << " cursor_abs=" << track_cursor_pos
+				<< " cursor_rel=" << (track_cursor_pos - scroll_left);
+		});
 	}
 }
 
@@ -3240,6 +3434,11 @@ bool AudioDisplay::QueueDynamicVideoMarkerRefresh() {
 	int new_pos = -1;
 	int new_frame = -1;
 	if (!TryGetCurrentVideoMarker(new_pos, new_frame)) {
+		LogAudioCursorDebug("video_marker.refresh", [&](std::ostringstream& out) {
+			out << " reason=no_current_video_marker"
+				<< " last_pos=" << last_video_marker_pos
+				<< " last_frame=" << last_video_marker_frame;
+		});
 		last_video_marker_pos = -1;
 		last_video_marker_frame = -1;
 		return false;
@@ -3247,10 +3446,18 @@ bool AudioDisplay::QueueDynamicVideoMarkerRefresh() {
 
 	// If the video marker didn't move, don't swallow this marker update. It may
 	// have come from a different marker provider (e.g. toggling keyframes).
-	if (new_frame == last_video_marker_frame && new_pos == last_video_marker_pos)
+	if (new_frame == last_video_marker_frame && new_pos == last_video_marker_pos) {
+		LogAudioCursorDebug("video_marker.refresh", [&](std::ostringstream& out) {
+			out << " reason=unchanged"
+				<< " pos=" << new_pos
+				<< " frame=" << new_frame;
+		});
 		return false;
+	}
 
 	wxRect dirty;
+	int const old_pos = last_video_marker_pos;
+	int const old_frame = last_video_marker_frame;
 	if (new_pos != last_video_marker_pos) {
 		auto const planned = AudioDisplayInvalidationPlanner::PlanMarkerMoveDirtyRect(
 			ToPlannerRect(GetMarkerRefreshRect(last_video_marker_pos)),
@@ -3263,6 +3470,15 @@ bool AudioDisplay::QueueDynamicVideoMarkerRefresh() {
 	last_video_marker_frame = new_frame;
 	if (!dirty.IsEmpty())
 		QueueHighFrequencyRefresh(&dirty, true);
+	LogAudioCursorDebug("video_marker.refresh", [&](std::ostringstream& out) {
+		out << " reason=moved"
+			<< " old_pos=" << old_pos
+			<< " new_pos=" << new_pos
+			<< " old_frame=" << old_frame
+			<< " new_frame=" << new_frame;
+		if (!dirty.IsEmpty())
+			AppendRect(out, "dirty", dirty);
+	});
 	return true;
 }
 
@@ -3641,6 +3857,12 @@ void AudioDisplay::OnPlaybackPosition(int ms)
 		return;
 
 	int pixel_position = AbsoluteXFromTime(ms);
+	LogAudioCursorDebug("playback_position", [&](std::ostringstream& out) {
+		out << " ms=" << ms
+			<< " pixel_position=" << pixel_position
+			<< " scroll_left=" << scroll_left
+			<< " lock_scroll=" << OPT_GET("Audio/Lock Scroll on Cursor")->GetBool();
+	});
 	SetTrackCursor(pixel_position, false, false);
 
 	if (OPT_GET("Audio/Lock Scroll on Cursor")->GetBool())
@@ -3671,6 +3893,13 @@ void AudioDisplay::OnVideoSeek(int frame)
 	// Video seek only drives paused-state navigation feedback.
 	const int ms = core.videoController->TimeAtFrame(frame, agi::vfr::EXACT);
 	const bool show_time = middle_scrub_seek_active && OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool();
+	LogAudioCursorDebug("video_seek", [&](std::ostringstream& out) {
+		out << " frame=" << frame
+			<< " ms=" << ms
+			<< " show_time=" << show_time
+			<< " scroll_left=" << scroll_left
+			<< " middle_scrub_seek_active=" << middle_scrub_seek_active;
+	});
 	SetTrackCursor(AbsoluteXFromTime(ms), show_time, false);
 }
 
@@ -3758,7 +3987,13 @@ void AudioDisplay::OnStyleRangesChanged()
 
 void AudioDisplay::OnMarkerMoved()
 {
-	if (QueueDynamicVideoMarkerRefresh())
+	bool const handled_dynamic_video = QueueDynamicVideoMarkerRefresh();
+	LogAudioCursorDebug("markers_changed", [&](std::ostringstream& out) {
+		out << " handled_dynamic_video=" << handled_dynamic_video
+			<< " track_cursor_pos=" << track_cursor_pos
+			<< " scroll_left=" << scroll_left;
+	});
+	if (handled_dynamic_video)
 		return;
 
 	{

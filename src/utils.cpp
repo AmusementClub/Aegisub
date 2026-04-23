@@ -226,7 +226,7 @@ void CleanCache(
 		};
 		std::vector<cache_item> cachefiles;
 		for (auto const& file : agi::fs::DirectoryIterator(directory, file_type)) {
-			agi::fs::path path = directory/file;
+			agi::fs::path path = directory / agi::fs::PathFromString(file);
 			auto const modified_time = agi::fs::ModifiedTime(path);
 			cachefiles.push_back({
 				modified_time,

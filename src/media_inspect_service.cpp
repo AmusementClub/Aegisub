@@ -21,6 +21,7 @@
 #include "provider_selection_diagnostics.h"
 
 #include <libaegisub/fs.h>
+#include <libaegisub/io.h>
 
 #include <fstream>
 #include <utility>
@@ -92,7 +93,7 @@ void WriteManifest(MediaInspectRequest const& request, MediaInspectResult const&
 	if (result.trace_dir.empty())
 		return;
 
-	std::ofstream out(result.trace_dir / "manifest.txt", std::ios::out | std::ios::app);
+	auto out = agi::io::OpenOutputFileStream(result.trace_dir / "manifest.txt", std::ios::out | std::ios::app);
 	if (!out)
 		return;
 
@@ -106,7 +107,7 @@ void WriteSummary(MediaInspectResult const& result) {
 	if (result.trace_dir.empty())
 		return;
 
-	std::ofstream out(result.trace_dir / "summary.txt", std::ios::out | std::ios::app);
+	auto out = agi::io::OpenOutputFileStream(result.trace_dir / "summary.txt", std::ios::out | std::ios::app);
 	if (!out)
 		return;
 

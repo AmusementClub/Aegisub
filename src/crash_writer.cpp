@@ -20,6 +20,7 @@
 
 #include <libaegisub/format.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/io.h>
 #include <libaegisub/util.h>
 
 #include <fstream>
@@ -38,8 +39,8 @@ class StackWalker : public wxStackWalker {
 
 public:
 	StackWalker(std::string const& cause)
-	: fp(crashlog_path, std::ios::app)
 	{
+		io::OpenFileStream(fp, crashlog_path, std::ios::app);
 		if (!fp.good()) return;
 
 		fp << util::strftime("--- %y-%m-%d %H:%M:%S ------------------\n");
@@ -82,7 +83,7 @@ void Write() {
 }
 
 void Write(std::string const& error) {
-	std::ofstream file(crashlog_path, std::ios::app);
+	auto file = io::OpenOutputFileStream(crashlog_path, std::ios::app);
 	if (file.is_open()) {
 		file << util::strftime("--- %y-%m-%d %H:%M:%S ------------------\n");
 		file << agi::format("VER - %s\n", GetAegisubLongVersionString());

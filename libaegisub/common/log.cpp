@@ -18,6 +18,7 @@
 #include "libaegisub/cajun/writer.h"
 #include "libaegisub/dispatch.h"
 #include "libaegisub/fs.h"
+#include "libaegisub/io.h"
 #include "libaegisub/util.h"
 
 #include <chrono>
@@ -102,7 +103,7 @@ LogSink::~LogSink() {
 }
 
 void LogSink::Log(SinkMessage const& sm) {
-	queue->Async([=] {
+	auto deliver = [=] {
 		if (messages.size() < 250)
 			messages.push_back(sm);
 		else {
@@ -111,7 +112,14 @@ void LogSink::Log(SinkMessage const& sm) {
 				next_idx = 0;
 		}
 		for (auto& em : emitters) em->log(sm);
-	});
+	};
+
+	// Keep non-debug logs crash-resilient: run them through the sink
+	// synchronously so an imminent fail-fast still leaves the entry on disk.
+	if (sm.severity <= Info)
+		queue->Sync(deliver);
+	else
+		queue->Async(deliver);
 }
 
 void LogSink::Subscribe(std::unique_ptr<Emitter> em) {
@@ -166,12 +174,13 @@ Message::~Message() {
 JsonEmitter::JsonEmitter(fs::path const& directory) {
 	fs::CreateDirectory(directory);
 	path = fs::UniquePath(directory / fs::PathFromString(util::strftime("%Y-%m-%d-%H-%M-%S-%%%%%%%%.ndjson")));
-	fp.reset(new std::ofstream(path));
-	if (!fp || !fp->good()) {
-		fp.reset();
+	auto out = std::make_unique<std::ofstream>();
+	io::OpenFileStream(*out, path);
+	if (!out || !out->good()) {
 		path.clear();
 		return;
 	}
+	fp = std::move(out);
 
 	std::lock_guard<std::mutex> lock(current_log_file_mutex);
 	current_log_file_path = path;
@@ -201,7 +210,7 @@ void JsonEmitter::log(SinkMessage const& sm) {
 	buffer += make_ndjson_line(sm);
 	++buffered_count;
 
-	bool const flush_immediately = sm.severity <= Warning;
+	bool const flush_immediately = sm.severity <= Info;
 	if (last_flush_time == 0)
 		last_flush_time = sm.time;
 

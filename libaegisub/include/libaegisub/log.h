@@ -16,6 +16,7 @@
 
 #include <boost/interprocess/streams/bufferstream.hpp>
 #include <cstdint>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -115,7 +116,7 @@ public:
 
 /// A buffered emitter which writes the log to a file in NDJSON format
 class JsonEmitter final : public Emitter {
-	std::unique_ptr<std::ostream> fp;
+	std::unique_ptr<std::ofstream> fp;
 	fs::path path;
 	std::string buffer;
 	size_t buffered_count = 0;

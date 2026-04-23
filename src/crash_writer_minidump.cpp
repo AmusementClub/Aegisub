@@ -20,6 +20,7 @@
 
 #include <libaegisub/format.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/io.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/util.h>
 
@@ -150,7 +151,7 @@ void Write() {
 }
 
 void Write(std::string const& error) {
-	std::ofstream file(crashlog_path, std::ios::app);
+	auto file = agi::io::OpenOutputFileStream(crashlog_path, std::ios::app);
 	if (file.is_open()) {
 		file << agi::util::strftime("--- %y-%m-%d %H:%M:%S ------------------\n");
 		agi::format(file, "VER - %s\n", GetAegisubLongVersionString());

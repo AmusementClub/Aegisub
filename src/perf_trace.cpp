@@ -17,6 +17,7 @@
 #include "options.h"
 
 #include <libaegisub/fs.h>
+#include <libaegisub/io.h>
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
@@ -655,7 +656,7 @@ void RecordEntry(TraceCategory categories, char const* kind, std::string const& 
 }
 
 void WriteManifest(Session const& session) {
-	std::ofstream out(session.directory / "manifest.txt", std::ios::out | std::ios::trunc);
+	auto out = agi::io::OpenOutputFileStream(session.directory / "manifest.txt", std::ios::out | std::ios::trunc);
 	if (!out.is_open())
 		return;
 
@@ -675,7 +676,7 @@ void WriteManifest(Session const& session) {
 }
 
 void WriteSummaryLocked(Session const& session) {
-	std::ofstream out(session.directory / "summary.txt", std::ios::out | std::ios::trunc);
+	auto out = agi::io::OpenOutputFileStream(session.directory / "summary.txt", std::ios::out | std::ios::trunc);
 	if (!out.is_open())
 		return;
 
@@ -889,7 +890,7 @@ void InitializeAt(agi::fs::path const& session_dir, std::string const& build_lab
 	}
 	try {
 		agi::fs::CreateDirectory(session_dir);
-		std::ofstream trace_stream(session_dir / "trace.ndjson", std::ios::out | std::ios::trunc);
+		auto trace_stream = agi::io::OpenOutputFileStream(session_dir / "trace.ndjson", std::ios::out | std::ios::trunc);
 		if (!trace_stream.is_open())
 			return;
 

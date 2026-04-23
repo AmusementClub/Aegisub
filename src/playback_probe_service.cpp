@@ -28,6 +28,7 @@
 #include "video_controller.h"
 
 #include <libaegisub/fs.h>
+#include <libaegisub/io.h>
 
 #include <algorithm>
 #include <cmath>
@@ -50,7 +51,7 @@ using headless_playback_session_host::UsedProviderFallback;
 
 std::map<std::string, std::string> ReadSummaryFile(agi::fs::path const& path) {
 	std::map<std::string, std::string> values;
-	std::ifstream in(path, std::ios::in);
+	auto in = agi::io::OpenInputFileStream(path, std::ios::in);
 	std::string line;
 	while (std::getline(in, line)) {
 		auto split = line.find('=');
@@ -83,7 +84,7 @@ class Runner final {
 	int max_abs_delta_ms = 0;
 
 	void AppendProbeSummary(PlaybackProbeResult const& result) const {
-		std::ofstream out(runtime.TraceDir() / "summary.txt", std::ios::out | std::ios::app);
+		auto out = agi::io::OpenOutputFileStream(runtime.TraceDir() / "summary.txt", std::ios::out | std::ios::app);
 		if (!out)
 			return;
 

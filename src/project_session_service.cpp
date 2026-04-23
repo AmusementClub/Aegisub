@@ -26,6 +26,7 @@
 #include "subs_controller.h"
 
 #include <libaegisub/fs.h>
+#include <libaegisub/io.h>
 
 #include <fstream>
 #include <iostream>
@@ -259,7 +260,7 @@ class Runner final {
 	void WriteManifest(ProjectSessionResult const& result) const {
 		if (runtime.TraceDir().empty())
 			return;
-		std::ofstream out(runtime.TraceDir() / "manifest.txt", std::ios::out | std::ios::app);
+		auto out = agi::io::OpenOutputFileStream(runtime.TraceDir() / "manifest.txt", std::ios::out | std::ios::app);
 		if (!out)
 			return;
 
@@ -280,7 +281,7 @@ class Runner final {
 	void WriteSummary(ProjectSessionResult const& result) const {
 		if (runtime.TraceDir().empty())
 			return;
-		std::ofstream out(runtime.TraceDir() / "summary.txt", std::ios::out | std::ios::app);
+		auto out = agi::io::OpenOutputFileStream(runtime.TraceDir() / "summary.txt", std::ios::out | std::ios::app);
 		if (!out)
 			return;
 

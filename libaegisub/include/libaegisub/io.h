@@ -20,7 +20,7 @@
 #include <libaegisub/fs_fwd.h>
 
 #include <filesystem>
-#include <iosfwd>
+#include <fstream>
 #include <memory>
 
 namespace agi {
@@ -28,6 +28,34 @@ namespace agi {
 
 DEFINE_EXCEPTION(IOError, Exception);
 DEFINE_EXCEPTION(IOFatal, IOError);
+
+inline void OpenFileStream(std::ifstream& stream, fs::path const& file, std::ios::openmode mode = std::ios::in) {
+#ifdef _WIN32
+	stream.open(file.c_str(), mode);
+#else
+	stream.open(file, mode);
+#endif
+}
+
+inline void OpenFileStream(std::ofstream& stream, fs::path const& file, std::ios::openmode mode = std::ios::out) {
+#ifdef _WIN32
+	stream.open(file.c_str(), mode);
+#else
+	stream.open(file, mode);
+#endif
+}
+
+inline std::ifstream OpenInputFileStream(fs::path const& file, std::ios::openmode mode = std::ios::in) {
+	std::ifstream stream;
+	OpenFileStream(stream, file, mode);
+	return stream;
+}
+
+inline std::ofstream OpenOutputFileStream(fs::path const& file, std::ios::openmode mode = std::ios::out) {
+	std::ofstream stream;
+	OpenFileStream(stream, file, mode);
+	return stream;
+}
 
 std::unique_ptr<std::istream> Open(fs::path const& file, bool binary = false);
 

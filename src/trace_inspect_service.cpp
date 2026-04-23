@@ -16,6 +16,7 @@
 #include "trace_inspect_service.h"
 
 #include <libaegisub/fs.h>
+#include <libaegisub/io.h>
 
 #include <fstream>
 #include <string>
@@ -29,7 +30,7 @@ std::string ToGenericString(agi::fs::path const& path) {
 
 std::map<std::string, std::string> ReadKeyValueFile(agi::fs::path const& path) {
 	std::map<std::string, std::string> values;
-	std::ifstream in(path, std::ios::in);
+	auto in = agi::io::OpenInputFileStream(path, std::ios::in);
 	std::string line;
 	while (std::getline(in, line)) {
 		auto split = line.find('=');

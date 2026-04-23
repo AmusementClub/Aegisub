@@ -18,6 +18,7 @@
 #include "automation/automation_breakpoint_store.h"
 
 #include <libaegisub/fs.h>
+#include <libaegisub/io.h>
 
 #include <algorithm>
 #include <fstream>
@@ -498,7 +499,7 @@ bool ParseSessionStepLine(std::string const& line, size_t line_number, std::vect
 }
 
 bool ParseSessionScriptFile(agi::fs::path const& script_file, std::vector<aegisub::playback_session_service::PlaybackSessionStep>& steps, std::string& error) {
-	std::ifstream in(script_file, std::ios::in);
+	auto in = agi::io::OpenInputFileStream(script_file, std::ios::in);
 	if (!in) {
 		error = "could not open session script file: " + ToGenericString(script_file);
 		return false;
@@ -769,7 +770,7 @@ bool ParseProjectSessionStepLine(std::string const& line, size_t line_number, st
 }
 
 bool ParseProjectSessionScriptFile(agi::fs::path const& script_file, std::vector<aegisub::project_session_service::ProjectSessionStep>& steps, std::string& error) {
-	std::ifstream in(script_file, std::ios::in);
+	auto in = agi::io::OpenInputFileStream(script_file, std::ios::in);
 	if (!in) {
 		error = "could not open project session script file: " + ToGenericString(script_file);
 		return false;

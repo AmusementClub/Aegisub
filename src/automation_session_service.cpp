@@ -37,6 +37,7 @@
 
 #include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/io.h>
 
 #include <algorithm>
 #include <cctype>
@@ -357,7 +358,7 @@ class Runner final {
 		if (runtime.TraceDir().empty())
 			return;
 
-		std::ofstream out(runtime.TraceDir() / "automation-session-host.log", std::ios::out | std::ios::app);
+		auto out = agi::io::OpenOutputFileStream(runtime.TraceDir() / "automation-session-host.log", std::ios::out | std::ios::app);
 		if (!out)
 			return;
 		out << message << "\n";
@@ -483,7 +484,7 @@ class Runner final {
 		if (runtime.TraceDir().empty())
 			return;
 
-		std::ofstream out(runtime.TraceDir() / "manifest.txt", std::ios::out | std::ios::app);
+		auto out = agi::io::OpenOutputFileStream(runtime.TraceDir() / "manifest.txt", std::ios::out | std::ios::app);
 		if (!out)
 			return;
 
@@ -513,7 +514,7 @@ class Runner final {
 		if (runtime.TraceDir().empty())
 			return;
 
-		std::ofstream out(runtime.TraceDir() / "summary.txt", std::ios::out | std::ios::app);
+		auto out = agi::io::OpenOutputFileStream(runtime.TraceDir() / "summary.txt", std::ios::out | std::ios::app);
 		if (!out)
 			return;
 

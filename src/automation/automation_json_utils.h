@@ -15,6 +15,7 @@
 #pragma once
 
 #include <libaegisub/fs.h>
+#include <libaegisub/io.h>
 
 #include <cstdio>
 #include <fstream>
@@ -149,7 +150,7 @@ namespace Automation4::json {
 		std::string& error) {
 		agi::fs::CreateDirectory(path.parent_path());
 
-		std::ofstream out(path, std::ios::out | std::ios::trunc);
+		auto out = agi::io::OpenOutputFileStream(path, std::ios::out | std::ios::trunc);
 		if (!out) {
 			error = std::string(open_error);
 			return false;

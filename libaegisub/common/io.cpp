@@ -33,7 +33,8 @@ namespace agi {
 std::unique_ptr<std::istream> Open(fs::path const& file, bool binary) {
 	LOG_D("agi/io/open/file") << file;
 
-	auto stream = agi::make_unique<std::ifstream>(file, (binary ? std::ios::binary : std::ios::in));
+	auto stream = agi::make_unique<std::ifstream>();
+	OpenFileStream(*stream, file, binary ? std::ios::binary : std::ios::in);
 	if (stream->fail()) {
 		acs::CheckFileRead(file);
 		throw IOFatal("Unknown fatal error occurred opening " + fs::PathToString(file));
@@ -48,7 +49,9 @@ Save::Save(fs::path const& file, bool binary)
 {
 	LOG_D("agi/io/save/file") << file;
 
-	fp = agi::make_unique<std::ofstream>(tmp_name, binary ? std::ios::binary : std::ios::out);
+	auto output = agi::make_unique<std::ofstream>();
+	OpenFileStream(*output, tmp_name, binary ? std::ios::binary : std::ios::out);
+	fp = std::move(output);
 	if (!fp->good()) {
 		acs::CheckDirWrite(file.parent_path());
 		acs::CheckFileWrite(file);

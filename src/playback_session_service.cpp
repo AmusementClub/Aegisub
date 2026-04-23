@@ -26,6 +26,7 @@
 #include "video_controller.h"
 
 #include <libaegisub/fs.h>
+#include <libaegisub/io.h>
 
 #include <chrono>
 #include <fstream>
@@ -161,7 +162,7 @@ class Runner final {
 	}
 
 	void WriteManifest(PlaybackSessionResult const& result) const {
-		std::ofstream out(runtime.TraceDir() / "manifest.txt", std::ios::out | std::ios::app);
+		auto out = agi::io::OpenOutputFileStream(runtime.TraceDir() / "manifest.txt", std::ios::out | std::ios::app);
 		if (!out)
 			return;
 
@@ -175,7 +176,7 @@ class Runner final {
 	}
 
 	void WriteSummary(PlaybackSessionResult const& result) const {
-		std::ofstream out(runtime.TraceDir() / "summary.txt", std::ios::out | std::ios::app);
+		auto out = agi::io::OpenOutputFileStream(runtime.TraceDir() / "summary.txt", std::ios::out | std::ios::app);
 		if (!out)
 			return;
 

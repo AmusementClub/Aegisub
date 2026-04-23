@@ -666,8 +666,7 @@ void AudioSpectrumAnalysisCache::ProcessPrefetch(size_t first_block, size_t last
 		std::unique_lock<std::mutex> build_lock(build_mutex, std::try_to_lock);
 		if (!build_lock.owns_lock()) {
 			metrics_prefetch_busy_skips.fetch_add(1, std::memory_order_relaxed);
-			ClearPendingRange(chunk_first, last_block);
-			break;
+			build_lock.lock();
 		}
 		auto built_blocks = BuildBlocksUnlocked(chunk_first, chunk_last, generation);
 		if (!IsCurrentPrefetchGeneration(generation)) {

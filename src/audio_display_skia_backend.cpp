@@ -106,6 +106,12 @@ public:
 		(void)height;
 		return nullptr;
 	}
+
+	sk_sp<SkSurface> AcquireCachedFrameSurface(int width, int height) override {
+		(void)width;
+		(void)height;
+		return nullptr;
+	}
 #endif
 };
 
@@ -136,8 +142,11 @@ class AudioDisplaySkiaGpuBackend final : public AudioDisplaySkiaBackend {
 #ifdef WITH_SKIA
 	sk_sp<SkSurface> present_surface;
 	sk_sp<SkSurface> content_surface;
+	sk_sp<SkSurface> frame_surface;
 	int content_width = 0;
 	int content_height = 0;
+	int frame_width = 0;
+	int frame_height = 0;
 #endif
 
 public:
@@ -147,6 +156,7 @@ public:
 
 	~AudioDisplaySkiaGpuBackend() override {
 #ifdef WITH_SKIA
+		frame_surface.reset();
 		content_surface.reset();
 		present_surface.reset();
 #endif
@@ -204,6 +214,32 @@ public:
 		return content_surface;
 	}
 
+	sk_sp<SkSurface> AcquireCachedFrameSurfaceInternal(int width, int height) {
+		if (!EnsureCurrent() || width <= 0 || height <= 0)
+			return nullptr;
+
+		if (frame_surface && frame_width == width && frame_height == height)
+			return frame_surface;
+
+		frame_surface.reset();
+		frame_surface = SkSurfaces::RenderTarget(
+			GetContext(),
+			skgpu::Budgeted::kNo,
+			SkImageInfo::Make(
+				width,
+				height,
+				kBGRA_8888_SkColorType,
+				kPremul_SkAlphaType,
+				SkColorSpace::MakeSRGB()),
+			0,
+			kTopLeft_GrSurfaceOrigin,
+			nullptr,
+			false);
+		frame_width = width;
+		frame_height = height;
+		return frame_surface;
+	}
+
 	sk_sp<SkSurface> AcquirePresentSurface(int width, int height) {
 		if (!EnsureCurrent() || width <= 0 || height <= 0)
 			return nullptr;
@@ -256,6 +292,10 @@ public:
 #ifdef WITH_SKIA
 	sk_sp<SkSurface> AcquireCachedContentSurface(int width, int height) override {
 		return AcquireCachedContentSurfaceInternal(width, height);
+	}
+
+	sk_sp<SkSurface> AcquireCachedFrameSurface(int width, int height) override {
+		return AcquireCachedFrameSurfaceInternal(width, height);
 	}
 #endif
 };

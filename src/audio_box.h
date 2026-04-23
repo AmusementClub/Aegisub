@@ -102,6 +102,7 @@ class AudioBox final : public wxSashWindow {
 	void OnVerticalZoom(wxScrollEvent &event);
 	void OnVolume(wxScrollEvent &event);
 	void OnRenderBackendChange(agi::OptionValue const& opt);
+	void OnAudioDisplayRebuildHost(wxCommandEvent &event);
 	void OnSpectrumModeChange(agi::OptionValue const& opt);
 	void OnSpectrumChannelBtn(wxCommandEvent &event);
 	void RebuildAudioDisplay();

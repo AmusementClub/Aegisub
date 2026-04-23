@@ -31,6 +31,7 @@
 #include "mkv_wrap.h"
 #include "options.h"
 #include "perf_trace.h"
+#include "provider_selection_diagnostics.h"
 #include "project_session_ops.h"
 #include "selection_controller.h"
 #include "subs_controller.h"
@@ -408,7 +409,14 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 		},
 		remove_mru);
 	if (!audio_provider)
+	{
+		auto const report = GetLastAudioProviderSelectionReport();
+		LOG_W("project/audio") << "failed to open audio path=" << path
+			<< " preferred_provider=" << report.preferred_provider
+			<< " selected_provider=" << (report.selected_provider.empty() ? std::string("<none>") : report.selected_provider)
+			<< " attempts=" << aegisub::provider_selection_diagnostics::FormatAttempts(report);
 		return;
+	}
 
 	SetPath(audio_file, "?audio", "Audio", path);
 	if (perf_trace::ShouldSampleVideoMemory(true)) {

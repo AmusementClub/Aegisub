@@ -34,6 +34,8 @@
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
 
+#include <exception>
+
 using namespace agi;
 
 std::unique_ptr<AudioProvider> CreateAvisynthAudioProvider(fs::path const& filename, BackgroundRunner *);
@@ -110,6 +112,24 @@ void RecordAttempt(aegisub::provider_selection_diagnostics::SelectionReport& rep
                    std::string detail = {}) {
 	report.attempts.push_back({provider_name ? provider_name : "", outcome ? outcome : "", std::move(detail)});
 }
+
+std::string GetAvailabilityError(factory const& provider) {
+	if (!provider.availability_error)
+		return "runtime library is unavailable.";
+
+	try {
+		return provider.availability_error();
+	}
+	catch (agi::Exception const& err) {
+		return err.GetMessage();
+	}
+	catch (std::exception const& err) {
+		return err.what();
+	}
+	catch (...) {
+		return "unknown availability error";
+	}
+}
 }
 
 std::vector<std::string> GetAudioProviderNames() {
@@ -135,7 +155,6 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 	aegisub::provider_selection_diagnostics::SelectionReport diagnostics;
 	diagnostics.preferred_provider = preferred;
 	last_audio_provider_selection_report = diagnostics;
-
 	std::unique_ptr<AudioProvider> provider;
 	bool found_file = false;
 	bool found_audio = false;
@@ -143,15 +162,36 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 	std::string msg_partial; // error messages from providers that could partially load the file (knows container, missing codec)
 
 	for (auto const& factory : sorted) {
-		if (factory->is_available && !factory->is_available()) {
+		bool provider_available = true;
+		std::string availability_error;
+		if (factory->is_available) {
+			try {
+				provider_available = factory->is_available();
+			}
+			catch (agi::Exception const& err) {
+				provider_available = false;
+				availability_error = err.GetMessage();
+			}
+			catch (std::exception const& err) {
+				provider_available = false;
+				availability_error = err.what();
+			}
+			catch (...) {
+				provider_available = false;
+				availability_error = "unknown availability exception";
+			}
+		}
+		if (!provider_available) {
+			if (availability_error.empty())
+				availability_error = GetAvailabilityError(*factory);
 			std::string err;
 			err.append(factory->name);
 			err.append(": ");
-			err.append(factory->availability_error ? factory->availability_error() : "runtime library is unavailable.");
+			err.append(availability_error);
 			LOG_D("audio_provider") << err;
 			msg_all.append(err);
 			msg_all.push_back('\n');
-			RecordAttempt(diagnostics, factory->name, "unavailable", factory->availability_error ? factory->availability_error() : "runtime library is unavailable.");
+			RecordAttempt(diagnostics, factory->name, "unavailable", availability_error);
 			continue;
 		}
 
@@ -195,6 +235,30 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 			msg_all.append(thismsg);
 			msg_partial.append(thismsg);
 			RecordAttempt(diagnostics, factory->name, "error", err.GetMessage());
+		}
+		catch (std::exception const& err) {
+			LOG_W("audio_provider") << factory->name << " threw std::exception: " << err.what();
+			found_audio = true;
+			found_file = true;
+			std::string thismsg;
+			thismsg.append(factory->name);
+			thismsg.append(": ");
+			thismsg.append(err.what());
+			thismsg.push_back('\n');
+			msg_all.append(thismsg);
+			msg_partial.append(thismsg);
+			RecordAttempt(diagnostics, factory->name, "std_exception", err.what());
+		}
+		catch (...) {
+			LOG_W("audio_provider") << factory->name << " threw unknown exception";
+			found_audio = true;
+			found_file = true;
+			std::string thismsg;
+			thismsg.append(factory->name);
+			thismsg.append(": unknown exception\n");
+			msg_all.append(thismsg);
+			msg_partial.append(thismsg);
+			RecordAttempt(diagnostics, factory->name, "unknown_exception", "unknown exception");
 		}
 	}
 

@@ -86,13 +86,20 @@ AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 : wxSashWindow(parent, -1, wxDefaultPosition, wxDefaultSize, wxSW_3D | wxCLIP_CHILDREN)
 , controller(context->GetCore().audioController.get())
 , context(context)
-, audio_open_connection(context->GetCore().audioController->AddAudioPlayerOpenListener(&AudioBox::OnAudioOpen, this))
-, panel(new wxPanel(this, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxBORDER_RAISED))
-, audioDisplay(new AudioDisplay(panel, context->GetCore().audioController.get(), context))
-, HorizontalZoom(new wxSlider(panel, Audio_Horizontal_Zoom, -OPT_GET("Audio/Zoom/Horizontal")->GetInt(), -50, 30, wxDefaultPosition, wxDefaultSize, wxSL_VERTICAL|wxSL_BOTH))
-, VerticalZoom(new wxSlider(panel, Audio_Vertical_Zoom, OPT_GET("Audio/Zoom/Vertical")->GetInt(), 0, 100, wxDefaultPosition, wxDefaultSize, wxSL_VERTICAL|wxSL_BOTH|wxSL_INVERSE))
-, VolumeBar(new wxSlider(panel, Audio_Volume, OPT_GET("Audio/Volume")->GetInt(), 0, 100, wxDefaultPosition, wxDefaultSize, wxSL_VERTICAL|wxSL_BOTH|wxSL_INVERSE))
+, audio_open_connection()
+, panel(nullptr)
+, audioDisplay(nullptr)
+, HorizontalZoom(nullptr)
+, VerticalZoom(nullptr)
+, VolumeBar(nullptr)
 {
+	audio_open_connection = context->GetCore().audioController->AddAudioPlayerOpenListener(&AudioBox::OnAudioOpen, this);
+	panel = new wxPanel(this, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxBORDER_RAISED);
+	audioDisplay = CreateAudioDisplay(panel, context->GetCore().audioController.get(), context);
+	HorizontalZoom = new wxSlider(panel, Audio_Horizontal_Zoom, -OPT_GET("Audio/Zoom/Horizontal")->GetInt(), -50, 30, wxDefaultPosition, wxDefaultSize, wxSL_VERTICAL|wxSL_BOTH);
+	VerticalZoom = new wxSlider(panel, Audio_Vertical_Zoom, OPT_GET("Audio/Zoom/Vertical")->GetInt(), 0, 100, wxDefaultPosition, wxDefaultSize, wxSL_VERTICAL|wxSL_BOTH|wxSL_INVERSE);
+	VolumeBar = new wxSlider(panel, Audio_Volume, OPT_GET("Audio/Volume")->GetInt(), 0, 100, wxDefaultPosition, wxDefaultSize, wxSL_VERTICAL|wxSL_BOTH|wxSL_INVERSE);
+
 	SetSashVisible(wxSASH_BOTTOM, true);
 	Bind(wxEVT_SASH_DRAGGED, &AudioBox::OnSashDrag, this);
 
@@ -124,10 +131,9 @@ AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 	spectrum_channel_btn->Enable(OPT_GET("Audio/Spectrum")->GetBool());
 	VertVolArea->Add(spectrum_channel_btn, 0, wxEXPAND, 0);
 	OPT_SUB("Audio/Spectrum", &AudioBox::OnSpectrumModeChange, this);
-
 	// Top sizer
 	wxSizer *TopSizer = new wxBoxSizer(wxHORIZONTAL);
-	TopSizer->Add(audioDisplay,1,wxEXPAND,0);
+	TopSizer->Add(audioDisplay->GetWindow(),1,wxEXPAND,0);
 	TopSizer->Add(HorizontalZoom,0,wxEXPAND,0);
 	TopSizer->Add(VertVolArea,0,wxEXPAND,0);
 
@@ -147,7 +153,8 @@ AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 	SetMinSize(wxSize(-1, OPT_GET("Audio/Display Height")->GetInt()));
 	SetMinimumSizeY(panel->GetSize().GetHeight());
 
-	audioDisplay->Bind(wxEVT_MOUSEWHEEL, &AudioBox::OnMouseWheel, this);
+	audioDisplay->GetWindow()->Bind(wxEVT_MOUSEWHEEL, &AudioBox::OnMouseWheel, this);
+	panel->Bind(EVT_AUDIO_DISPLAY_REBUILD_HOST, &AudioBox::OnAudioDisplayRebuildHost, this);
 	zoom_preview_timer.Bind(wxEVT_TIMER, &AudioBox::OnZoomPreviewTimer, this);
 	spectrum_prefetch_resume_timer.Bind(wxEVT_TIMER, &AudioBox::OnSpectrumPrefetchResumeTimer, this);
 
@@ -171,7 +178,7 @@ BEGIN_EVENT_TABLE(AudioBox,wxSashWindow)
 END_EVENT_TABLE()
 
 void AudioBox::OnMouseWheel(wxMouseEvent &evt) {
-	if (!ForwardMouseWheelEvent(audioDisplay, evt))
+	if (!ForwardMouseWheelEvent(audioDisplay->GetWindow(), evt))
 		return;
 	bool zoom = evt.CmdDown() != OPT_GET("Audio/Wheel Default to Zoom")->GetBool();
 	if (!zoom) {
@@ -331,6 +338,13 @@ void AudioBox::OnRenderBackendChange(agi::OptionValue const&) {
 	RebuildAudioDisplay();
 }
 
+void AudioBox::OnAudioDisplayRebuildHost(wxCommandEvent &event) {
+	if (!audioDisplay || event.GetEventObject() != audioDisplay->GetWindow())
+		return;
+
+	RebuildAudioDisplay();
+}
+
 void AudioBox::OnVerticalLink(agi::OptionValue const& opt) {
 	if (opt.GetBool()) {
 		int pos = mid(1, VerticalZoom->GetValue(), 100);
@@ -354,7 +368,8 @@ void AudioBox::RebuildAudioDisplay() {
 		return;
 
 	auto *old_display = audioDisplay;
-	auto *display_sizer = old_display->GetContainingSizer();
+	auto *old_window = old_display->GetWindow();
+	auto *display_sizer = old_window->GetContainingSizer();
 	if (!display_sizer)
 		return;
 
@@ -362,16 +377,16 @@ void AudioBox::RebuildAudioDisplay() {
 	const int saved_scroll_left = old_display->GetScrollLeft();
 	const int saved_vertical_zoom = mid(1, VerticalZoom->GetValue(), 100);
 	const bool saved_prefetch_disabled = spectrum_prefetch_temporarily_disabled;
-	const bool had_focus = old_display->HasFocus();
+	const bool had_focus = old_window->HasFocus();
 
-	auto *new_display = new AudioDisplay(panel, context->GetCore().audioController.get(), context);
-	new_display->Bind(wxEVT_MOUSEWHEEL, &AudioBox::OnMouseWheel, this);
+	auto *new_display = CreateAudioDisplay(panel, context->GetCore().audioController.get(), context);
+	new_display->GetWindow()->Bind(wxEVT_MOUSEWHEEL, &AudioBox::OnMouseWheel, this);
 	new_display->SetZoomLevel(saved_zoom);
 	new_display->SetAmplitudeScale(pow(saved_vertical_zoom / 50.0, 3));
 
-	display_sizer->Replace(old_display, new_display);
+	display_sizer->Replace(old_window, new_display->GetWindow());
 	audioDisplay = new_display;
-	old_display->Destroy();
+	old_window->Destroy();
 
 	panel->Layout();
 	new_display->SyncToCurrentAudioProvider();
@@ -383,7 +398,7 @@ void AudioBox::RebuildAudioDisplay() {
 		spectrum_prefetch_temporarily_disabled = true;
 	}
 	if (had_focus)
-		audioDisplay->SetFocus();
+		audioDisplay->GetWindow()->SetFocus();
 	panel->SendSizeEvent();
 	Refresh();
 	Update();

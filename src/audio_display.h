@@ -35,7 +35,10 @@
 #include <memory>
 
 #include <wx/bitmap.h>
+#include <wx/cursor.h>
+#include <wx/event.h>
 #include <wx/gdicmn.h>
+#include <wx/region.h>
 #include <wx/string.h>
 #include <wx/timer.h>
 #ifdef WITH_SKIA
@@ -74,12 +77,7 @@ class SkImage;
 /// The audio display is the common view that allows the user to interact with the active
 /// timing controller. The audio display also renders audio according to the audio controller
 /// and the timing controller, using an audio renderer instance.
-class AudioDisplay:
-#ifdef WITH_SKIA
-	public wxGLCanvas {
-#else
-	public wxWindow {
-#endif
+class AudioDisplay {
 	agi::signal::Connection audio_open_connection;
 
 	std::vector<agi::signal::Connection> connections;
@@ -163,10 +161,10 @@ class AudioDisplay:
 
 	/// Absolute pixel position of the tracking cursor (mouse or playback)
 	int track_cursor_pos = -1;
-	/// Optional content backing bitmap for overlay-only refreshes (env-flagged).
-	bool content_backing_requested = false;
+	/// Content backing bitmap for scroll reuse and overlay-only refreshes.
 	bool content_backing_enabled = false;
 	bool content_backing_valid = false;
+	wxBitmap paint_bitmap;
 	wxBitmap content_backing_bitmap;
 	wxBitmap content_backing_scratch_bitmap;
 	int content_backing_scroll_left = 0;
@@ -183,6 +181,11 @@ class AudioDisplay:
 	std::unique_ptr<AudioDisplaySkiaBackend> skia_backend;
 	std::unique_ptr<AudioDisplaySkiaRenderer> skia_renderer;
 	sk_sp<SkImage> skia_content_backing_image;
+	sk_sp<SkImage> skia_frame_backing_image;
+	bool skia_frame_backing_valid = false;
+	int skia_frame_backing_client_width = 0;
+	int skia_frame_backing_client_height = 0;
+	bool host_rebuild_requested = false;
 	AudioDisplaySkiaGpuDiagnostics skia_gpu_diagnostics;
 	std::string skia_gpu_auto_downgrade_reason;
 	/// Reusable render model for Skia path — avoids per-frame heap
@@ -220,6 +223,7 @@ class AudioDisplay:
 	wxRect GetMarkerRefreshRect(int absolute_x) const;
 	bool QueueDynamicVideoMarkerRefresh();
 	void InvalidateContentBacking();
+	bool CanUseContentBackingForCurrentViewport() const;
 	bool EnsureContentBackingBitmapStorage(int width, int height);
 	bool EnsureContentBackingBitmap();
 	bool TryReuseContentBackingBitmapForScroll(int old_scroll_left, int new_scroll_left);
@@ -322,9 +326,39 @@ class AudioDisplay:
 	AudioSpectrumMonoMixMode spectrum_mono_mix_mode_runtime = AudioSpectrumMonoMixMode::MonoAverage;
 	std::vector<int> spectrum_selected_channels_runtime;
 
+protected:
+	AudioDisplay(AudioController *controller, agi::Context *context);
+	void InitializeHost();
+	void BindHostEvents();
+#ifdef WITH_SKIA
+	virtual wxGLCanvas* GetGlCanvas() { return nullptr; }
+	virtual wxGLCanvas const* GetGlCanvas() const { return nullptr; }
+#endif
+
+	int FromDIP(int value) const { return GetWindow()->FromDIP(value); }
+	void GetTextExtent(wxString const& text, int *width, int *height) const { GetWindow()->GetTextExtent(text, width, height); }
+	wxSize GetClientSize() const { return GetWindow()->GetClientSize(); }
+	wxRect GetClientRect() const { return GetWindow()->GetClientRect(); }
+	wxRegion GetUpdateRegion() const { return GetWindow()->GetUpdateRegion(); }
+	void SetMinClientSize(wxSize const& size) { GetWindow()->SetMinClientSize(size); }
+	void SetBackgroundStyle(wxBackgroundStyle style) { GetWindow()->SetBackgroundStyle(style); }
+	void SetThemeEnabled(bool enabled) { GetWindow()->SetThemeEnabled(enabled); }
+	bool HasCapture() const { return GetWindow()->HasCapture(); }
+	void CaptureMouse() { GetWindow()->CaptureMouse(); }
+	void ReleaseMouse() { GetWindow()->ReleaseMouse(); }
+	bool HasFocus() const { return GetWindow()->HasFocus(); }
+	void SetFocus() { GetWindow()->SetFocus(); }
+	void SetCursor(wxCursor const& cursor) { GetWindow()->SetCursor(cursor); }
+	void Refresh(bool erase_background = false) { GetWindow()->Refresh(erase_background); }
+	void RefreshRect(wxRect const& rect, bool erase_background = false) { GetWindow()->RefreshRect(rect, erase_background); }
+	void Update() { GetWindow()->Update(); }
+	void RequestWindowHostRebuild();
+
 public:
-	AudioDisplay(wxWindow *parent, AudioController *controller, agi::Context *context);
-	~AudioDisplay();
+	virtual ~AudioDisplay();
+
+	virtual wxWindow* GetWindow() = 0;
+	virtual wxWindow const* GetWindow() const = 0;
 
 	/// @brief Scroll the audio display
 	/// @param pixel_amount Number of pixels to scroll the view
@@ -419,3 +453,7 @@ public:
 	/// Get an absolute X coordinate from a time in milliseconds
 	int AbsoluteXFromTime(int ms) const { return int(ms / ms_per_pixel); }
 };
+
+wxDECLARE_EVENT(EVT_AUDIO_DISPLAY_REBUILD_HOST, wxCommandEvent);
+
+AudioDisplay *CreateAudioDisplay(wxWindow *parent, AudioController *controller, agi::Context *context);

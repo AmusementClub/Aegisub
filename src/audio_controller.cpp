@@ -127,10 +127,12 @@ void AudioController::OnAudioPlayerChanged()
 	}
 	catch (...)
 	{
+		LOG_W("audio/controller") << "OnAudioPlayerChanged caught exception from CreateAudioPlayer";
 		/// @todo This really shouldn't be just swallowing all audio player open errors
 		core.project->CloseAudio();
 	}
 	if (!player) {
+		LOG_W("audio/controller") << "OnAudioPlayerChanged no player; closing audio";
 		core.project->CloseAudio();
 		return;
 	}

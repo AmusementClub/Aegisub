@@ -43,6 +43,7 @@ public:
 	virtual bool QueryGpuDiagnostics(AudioDisplaySkiaGpuDiagnostics &out) = 0;
 #ifdef WITH_SKIA
 	virtual sk_sp<SkSurface> AcquireCachedContentSurface(int width, int height) = 0;
+	virtual sk_sp<SkSurface> AcquireCachedFrameSurface(int width, int height) = 0;
 #endif
 };
 

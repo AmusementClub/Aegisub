@@ -81,6 +81,7 @@ class AudioDisplay {
 	agi::signal::Connection audio_open_connection;
 
 	std::vector<agi::signal::Connection> connections;
+	std::vector<agi::signal::Connection> timing_controller_connections;
 	agi::ui::UiActivationScope ui_activation;
 	agi::Context *context;
 
@@ -358,6 +359,7 @@ protected:
 
 public:
 	virtual ~AudioDisplay();
+	static void ResetAutoDowngradeFlag();
 
 	virtual wxWindow* GetWindow() = 0;
 	virtual wxWindow const* GetWindow() const = 0;

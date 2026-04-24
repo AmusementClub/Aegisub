@@ -1534,6 +1534,11 @@ AudioDisplay *CreateAudioDisplay(wxWindow *parent, AudioController *controller, 
 	return new AudioDisplayWindowHost(parent, controller, context);
 }
 
+void AudioDisplay::ResetAutoDowngradeFlag() {
+	audio_display_auto_wxdc_forced = false;
+	audio_display_auto_downgrade_reason.clear();
+}
+
 void AudioDisplay::QueueHighFrequencyRefresh(const wxRect *rect, bool update) {
 	pending_high_frequency_refresh = true;
 	pending_high_frequency_update |= update;
@@ -3839,11 +3844,20 @@ void AudioDisplay::OnAudioOpen(agi::AudioProvider *provider)
 void AudioDisplay::OnTimingController()
 {
 	AudioTimingController *timing_controller = controller->GetTimingController();
+
+	// Disconnect from any previous timing controller before subscribing
+	// to the current one. Without this, the timing controller's signals
+	// (which outlive AudioDisplay) would hold dangling pointers after a
+	// display host rebuild.
+	timing_controller_connections.clear();
+
 	if (timing_controller)
 	{
-		timing_controller->AddMarkerMovedListener(&AudioDisplay::OnMarkerMoved, this);
-		timing_controller->AddUpdatedPrimaryRangeListener(&AudioDisplay::OnSelectionChanged, this);
-		timing_controller->AddUpdatedStyleRangesListener(&AudioDisplay::OnStyleRangesChanged, this);
+		timing_controller_connections = agi::signal::make_vector({
+			timing_controller->AddMarkerMovedListener(&AudioDisplay::OnMarkerMoved, this),
+			timing_controller->AddUpdatedPrimaryRangeListener(&AudioDisplay::OnSelectionChanged, this),
+			timing_controller->AddUpdatedStyleRangesListener(&AudioDisplay::OnStyleRangesChanged, this),
+		});
 
 		OnStyleRangesChanged();
 		OnMarkerMoved();

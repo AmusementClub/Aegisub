@@ -335,6 +335,7 @@ void AudioBox::OnVolume(wxScrollEvent &event) {
 }
 
 void AudioBox::OnRenderBackendChange(agi::OptionValue const&) {
+	AudioDisplay::ResetAutoDowngradeFlag();
 	RebuildAudioDisplay();
 }
 

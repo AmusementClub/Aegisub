@@ -99,8 +99,7 @@ public:
 
 VideoPositionMarkerProvider::VideoPositionMarkerProvider(agi::Context *c)
 : vc(c->GetCore().videoController.get())
-, current_frame(vc->GetPresentedFrameN() >= 0 ? vc->GetPresentedFrameN() : vc->GetFrameN())
-, frame_presented_slot(vc->AddFramePresentedListener(&VideoPositionMarkerProvider::Update, this))
+, video_seek_slot(vc->AddSeekListener(&VideoPositionMarkerProvider::Update, this))
 , enable_opt_changed_slot(OPT_SUB("Audio/Display/Draw/Video Position", &VideoPositionMarkerProvider::OptChanged, this))
 {
 	OptChanged(*OPT_GET("Audio/Display/Draw/Video Position"));
@@ -109,24 +108,20 @@ VideoPositionMarkerProvider::VideoPositionMarkerProvider(agi::Context *c)
 VideoPositionMarkerProvider::~VideoPositionMarkerProvider() { }
 
 void VideoPositionMarkerProvider::Update(int frame_number) {
-	current_frame = frame_number;
-	if (!marker)
-		return;
-
 	marker->SetPosition(vc->TimeAtFrame(frame_number));
 	AnnounceMarkerMoved();
 }
 
 void VideoPositionMarkerProvider::OptChanged(agi::OptionValue const& opt) {
 	if (opt.GetBool()) {
+		video_seek_slot.Unblock();
 		marker = agi::make_unique<VideoPositionMarker>();
-		int const frame = current_frame >= 0 ? current_frame : vc->GetFrameN();
-		marker->SetPosition(vc->TimeAtFrame(frame));
+		marker->SetPosition(vc->GetFrameN());
 	}
 	else {
+		video_seek_slot.Block();
 		marker.reset();
 	}
-	AnnounceMarkerMoved();
 }
 
 void VideoPositionMarkerProvider::GetMarkers(const TimeRange &range, AudioMarkerVector &out) const {

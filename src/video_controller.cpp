@@ -571,6 +571,7 @@ void VideoController::OnPlayTimer() {
 	if (next_frame != frame_n) {
 		frame_n = next_frame;
 		RequestFrame();
+		Seek(frame_n);
 		PlaybackFrameAdvanced(frame_n);
 	}
 

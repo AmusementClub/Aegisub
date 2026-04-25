@@ -29,7 +29,6 @@
 
 #include <wx/defs.h>
 #include <wx/sashwin.h>
-#include <wx/timer.h>
 
 #include <libaegisub/signal.h>
 
@@ -43,7 +42,6 @@ class AudioDisplay;
 class wxBitmapToggleButton;
 class wxButton;
 class wxCommandEvent;
-class wxMenuEvent;
 class wxPanel;
 class wxScrollEvent;
 class wxSizer;
@@ -70,47 +68,23 @@ class AudioBox final : public wxSashWindow {
 	wxSlider *HorizontalZoom;
 	wxSlider *VerticalZoom;
 	wxSlider *VolumeBar;
-	wxButton *spectrum_channel_btn = nullptr;
 
 	// Mouse wheel zoom accumulator
 	int mouse_zoom_accum = 0;
-	wxTimer zoom_preview_timer;
-	wxTimer spectrum_prefetch_resume_timer;
-	bool spectrum_prefetch_temporarily_disabled = false;
-	int pending_horizontal_zoom = 0;
-	int pending_vertical_zoom_pos = 0;
-	bool horizontal_zoom_pending = false;
-	bool vertical_zoom_pending = false;
 
-	static const int zoom_preview_interval_ms = 16;
-	static const int spectrum_vertical_zoom_preview_interval_ms = 33;
-	static const int spectrum_prefetch_resume_delay_ms = 120;
-
-	int GetZoomPreviewIntervalMs(bool vertical) const;
-	void DisableSpectrumPrefetchTemporarily();
 	void SetHorizontalZoom(int new_zoom);
-	void ApplyVerticalZoomPos(int pos);
-	void FlushPendingZoomPreview();
-	void ApplyAudioOpen();
 	void OnAudioOpen();
 	void OnHorizontalZoom(wxScrollEvent &event);
 	void OnMouseWheel(wxMouseEvent &evt);
 	void OnSashDrag(wxSashEvent &event);
 	void OnVerticalLink(agi::OptionValue const& opt);
-	void OnZoomPreviewTimer(wxTimerEvent &event);
-	void OnSpectrumPrefetchResumeTimer(wxTimerEvent &event);
 	void OnVerticalZoom(wxScrollEvent &event);
 	void OnVolume(wxScrollEvent &event);
-	void OnRenderBackendChange(agi::OptionValue const& opt);
-	void OnAudioDisplayRebuildHost(wxCommandEvent &event);
-	void OnSpectrumModeChange(agi::OptionValue const& opt);
-	void OnSpectrumChannelBtn(wxCommandEvent &event);
-	void RebuildAudioDisplay();
 
 public:
 	AudioBox(wxWindow *parent, agi::Context *context);
-	void SyncToContextState();
 
+	void SyncToContextState();
 	void ShowKaraokeBar(bool show);
 
 	/// @brief Scroll the audio display

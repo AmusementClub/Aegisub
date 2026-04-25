@@ -29,14 +29,11 @@
 
 #include "audio_controller.h"
 
-#include "audio_controller_power_host.h"
-#include "audio_controller_timer.h"
 #include "audio_timing.h"
 #include "include/aegisub/audio_player.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "options.h"
-#include "perf_trace.h"
 #include "project.h"
 #include "ui_services.h"
 
@@ -46,10 +43,6 @@
 #include <algorithm>
 
 namespace {
-constexpr int64_t kPlaybackAheadMs = 8000;
-constexpr int64_t kPlaybackBehindMs = 2000;
-constexpr int kAudioUiTimerRequestedMs = 20;
-
 bool ShouldAutoRecoverXAudio2Output() {
 #ifdef WITH_XAUDIO2
 	return OPT_GET("Audio/Player")->GetString() == "XAudio2";
@@ -61,12 +54,16 @@ bool ShouldAutoRecoverXAudio2Output() {
 
 AudioController::AudioController(agi::Context *context)
 : context(context)
-, playback_timer(CreateAudioControllerTimer([this] { OnPlaybackTimer(); }))
-, power_host(CreateAudioControllerPowerHost(
-	[this] { HandleComputerSuspending(); },
-	[this] { HandleComputerResuming(); }))
+, playback_timer(this)
 , provider_connection(context->GetCore().project->AddAudioProviderListener(&AudioController::OnAudioProvider, this))
 {
+	Bind(wxEVT_TIMER, &AudioController::OnPlaybackTimer, this, playback_timer.GetId());
+
+#ifdef wxHAS_POWER_EVENTS
+	Bind(wxEVT_POWER_SUSPENDED, &AudioController::OnComputerSuspending, this);
+	Bind(wxEVT_POWER_RESUME, &AudioController::OnComputerResuming, this);
+#endif
+
 	OPT_SUB("Audio/Player", &AudioController::OnAudioPlayerChanged, this);
 }
 
@@ -75,7 +72,7 @@ AudioController::~AudioController()
 	Stop();
 }
 
-void AudioController::OnPlaybackTimer()
+void AudioController::OnPlaybackTimer(wxTimerEvent &)
 {
 	if (!player) return;
 
@@ -89,28 +86,22 @@ void AudioController::OnPlaybackTimer()
 	}
 	else
 	{
-		if (provider) {
-			provider->SetPlaybackWindow(
-				pos,
-				SamplesFromMilliseconds(kPlaybackAheadMs),
-				SamplesFromMilliseconds(kPlaybackBehindMs));
-		}
-		auto const position_ms = MillisecondsFromSamples(pos);
-		perf_trace::ObserveAudioUiTimerPosition(position_ms);
-		AnnouncePlaybackPosition(position_ms);
+		AnnouncePlaybackPosition(MillisecondsFromSamples(pos));
 	}
 }
 
-void AudioController::HandleComputerSuspending()
+#ifdef wxHAS_POWER_EVENTS
+void AudioController::OnComputerSuspending(wxPowerEvent &)
 {
 	Stop();
 	player.reset();
 }
 
-void AudioController::HandleComputerResuming()
+void AudioController::OnComputerResuming(wxPowerEvent &)
 {
 	OnAudioPlayerChanged();
 }
+#endif
 
 void AudioController::OnAudioPlayerChanged()
 {
@@ -166,19 +157,9 @@ void AudioController::PlayRange(const TimeRange &range)
 {
 	if (!player) return;
 
-	auto const start_sample = SamplesFromMilliseconds(range.begin());
-	if (provider) {
-		provider->SetPlaybackWindow(
-			start_sample,
-			SamplesFromMilliseconds(kPlaybackAheadMs),
-			SamplesFromMilliseconds(kPlaybackBehindMs));
-	}
-	perf_trace::ResetAudioUiTimerInterval();
-	player->Play(start_sample, SamplesFromMilliseconds(range.length()));
+	player->Play(SamplesFromMilliseconds(range.begin()), SamplesFromMilliseconds(range.length()));
 	playback_mode = PM_Range;
-	// This is a UI refresh timer, not the device clock. On Windows the observed
-	// wake-up cadence often lands closer to ~31 ms unless timer resolution is raised.
-	playback_timer->Start(kAudioUiTimerRequestedMs);
+	playback_timer.Start(20);
 
 	AnnouncePlaybackPosition(range.begin());
 }
@@ -202,18 +183,9 @@ void AudioController::PlayToEnd(int start_ms)
 	if (!player) return;
 
 	int64_t start_sample = SamplesFromMilliseconds(start_ms);
-	if (provider) {
-		provider->SetPlaybackWindow(
-			start_sample,
-			SamplesFromMilliseconds(kPlaybackAheadMs),
-			SamplesFromMilliseconds(kPlaybackBehindMs));
-	}
-	perf_trace::ResetAudioUiTimerInterval();
 	player->Play(start_sample, provider->GetNumSamples()-start_sample);
 	playback_mode = PM_ToEnd;
-	// This is a UI refresh timer, not the device clock. On Windows the observed
-	// wake-up cadence often lands closer to ~31 ms unless timer resolution is raised.
-	playback_timer->Start(kAudioUiTimerRequestedMs);
+	playback_timer.Start(20);
 
 	AnnouncePlaybackPosition(start_ms);
 }
@@ -224,10 +196,7 @@ void AudioController::Stop()
 
 	player->Stop();
 	playback_mode = PM_NotPlaying;
-	playback_timer->Stop();
-	perf_trace::ResetAudioUiTimerInterval();
-	if (provider)
-		provider->ClearPlaybackWindow();
+	playback_timer.Stop();
 
 	AnnouncePlaybackStop();
 }

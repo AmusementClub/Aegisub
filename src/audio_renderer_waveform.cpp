@@ -29,18 +29,12 @@
 
 #include "audio_renderer_waveform.h"
 
-#include "compat.h"
-#include "audio_display_render_model.h"
-#include "audio_display_source.h"
-#include "audio_waveform_bitmap_tile_renderer.h"
-#include "audio_waveform_summary_cache.h"
 #include "audio_colorscheme.h"
 #include "options.h"
 
-#include <libaegisub/make_unique.h>
+#include <libaegisub/audio/provider.h>
 
 #include <algorithm>
-#include <sstream>
 #include <wx/dcmemory.h>
 
 enum {
@@ -53,209 +47,92 @@ enum {
 
 AudioWaveformRenderer::AudioWaveformRenderer(std::string const& color_scheme_name)
 : render_averages(OPT_GET("Audio/Display/Waveform Style")->GetInt() == Waveform_MaxAvg)
-, summary_cache(agi::make_unique<AudioWaveformSummaryCache>())
 {
 	colors.reserve(AudioStyle_MAX);
 	for (int i = 0; i < AudioStyle_MAX; ++i)
 		colors.emplace_back(6, color_scheme_name, i);
-	summary_cache->SetReadyCallback([this] { NotifyRenderContentReady(); });
-	ConfigurePrefetchBudgets();
 }
 
 AudioWaveformRenderer::~AudioWaveformRenderer() { }
 
-void AudioWaveformRenderer::OnAllowPlaceholderChanged() {
-	ConfigurePrefetchBudgets();
-}
-
-void AudioWaveformRenderer::ConfigurePrefetchBudgets() {
-	const size_t max_blocks = allow_placeholder ? size_t{32} : size_t{64};
-	if (summary_cache)
-		summary_cache->SetPrefetchBuildMaxBlocks(max_blocks);
-}
-
-void AudioWaveformRenderer::OnSetProvider() {
-	if (summary_cache)
-		summary_cache->SetSource(display_source);
-}
-
-void AudioWaveformRenderer::OnSetMillisecondsPerPixel() {
-	if (summary_cache)
-		summary_cache->SetMillisecondsPerPixel(pixel_ms);
-}
-
-void AudioWaveformRenderer::AgeCache(size_t max_size) {
-	if (summary_cache)
-		summary_cache->Age(max_size);
-}
-
-void AudioWaveformRenderer::SetInteractivePrefetchEnabled(bool enabled) {
-	interactive_prefetch_enabled = enabled;
-	if (summary_cache)
-		summary_cache->SetPrefetchEnabled(enabled);
-}
-
-std::vector<std::string> AudioWaveformRenderer::GetDebugInfo() const {
-	if (!summary_cache)
-		return {};
-	auto metrics = summary_cache->GetMetricsSnapshot();
-	std::ostringstream line1;
-	std::ostringstream line2;
-	line1 << "WF gen=" << metrics.generation
-		<< " hits=" << metrics.cache_hits
-		<< " miss=" << metrics.cache_misses
-		<< " vis=" << metrics.visible_builds
-		<< " pf_req=" << metrics.prefetch_requests
-		<< " pf_build=" << metrics.prefetch_builds
-		<< " stale=" << metrics.stale_drops;
-	line2 << "WF cache entries=" << metrics.cache_entries
-		<< " bytes=" << metrics.cache_bytes
-		<< " evict=" << metrics.evictions;
-	return {
-		line1.str(),
-		line2.str()
-	};
-}
-
-bool AudioWaveformRenderer::EnsureSummaryCacheConfigured() {
-	if (!display_source || !summary_cache)
-		return false;
-
-	summary_cache->SetSource(display_source);
-	summary_cache->SetMillisecondsPerPixel(pixel_ms);
-	summary_cache->SetMixPolicy(mix_policy);
-	summary_cache->SetPrefetchEnabled(interactive_prefetch_enabled);
-	return summary_cache->IsReady();
-}
-
-std::pair<size_t, size_t> AudioWaveformRenderer::GetBlockRange(int start, int length) const {
-	const size_t first_block = static_cast<size_t>(std::max(start, 0) / static_cast<int>(AudioWaveformSummaryBlock::width));
-	const int end = start + std::max(length, 1) - 1;
-	const size_t last_block = static_cast<size_t>(std::max(end, start) / static_cast<int>(AudioWaveformSummaryBlock::width));
-	return { first_block, last_block };
-}
-
-AudioRenderResult AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
+void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
 {
-	if (!EnsureSummaryCacheConfigured() || bmp.GetWidth() <= 0) {
-		wxMemoryDC dc(bmp);
-		RenderBlank(dc, wxRect(0, 0, bmp.GetWidth(), bmp.GetHeight()), style);
-		return AudioRenderResult::Ready;
+	wxMemoryDC dc(bmp);
+	wxRect rect(wxPoint(0, 0), bmp.GetSize());
+	int midpoint = rect.height / 2;
+
+	const AudioColorScheme *pal = &colors[style];
+
+	double pixel_samples = pixel_ms * provider->GetSampleRate() / 1000.0;
+
+	// Fill the background
+	dc.SetBrush(wxBrush(pal->get(0.0f)));
+	dc.SetPen(*wxTRANSPARENT_PEN);
+	dc.DrawRectangle(rect);
+
+	// Make sure we've got a buffer to fill with audio data
+	if (!audio_buffer)
+	{
+		// Buffer for one pixel strip of audio
+		size_t buffer_needed = pixel_samples * provider->GetChannels() * provider->GetBytesPerSample();
+		audio_buffer.reset(new char[buffer_needed]);
 	}
 
-	const auto [first_block, last_block] = GetBlockRange(start, bmp.GetWidth());
-	if (interactive_prefetch_enabled) {
-		if (allow_placeholder)
-			summary_cache->Prefetch(first_block, last_block + 2);
-		else
-			summary_cache->Prefetch(last_block + 1, last_block + 2);
-	}
+	double cur_sample = start * pixel_samples;
 
-	summary_columns_scratch.resize(static_cast<size_t>(bmp.GetWidth()));
+	wxPen pen_peaks(wxPen(pal->get(0.4f)));
+	wxPen pen_avgs(wxPen(pal->get(0.7f)));
 
-	bool has_missing_columns = false;
-	size_t active_block_index = static_cast<size_t>(-1);
-	const AudioWaveformSummaryBlock *active_block = nullptr;
-	for (int x = 0; x < bmp.GetWidth(); ++x) {
-		const auto column_ref = GetWaveformSummaryColumnRef(start + x);
-		if (column_ref.block_index != active_block_index) {
-			active_block_index = column_ref.block_index;
-			if (allow_placeholder)
-				active_block = summary_cache->GetIfReady(active_block_index);
+	for (int x = 0; x < rect.width; ++x)
+	{
+		provider->GetInt16MonoAudio(reinterpret_cast<int16_t*>(audio_buffer.get()), (int64_t)cur_sample, (int64_t)pixel_samples);
+		cur_sample += pixel_samples;
+
+		int peak_min = 0, peak_max = 0;
+		int64_t avg_min_accum = 0, avg_max_accum = 0;
+		auto aud = reinterpret_cast<const int16_t *>(audio_buffer.get());
+		for (int si = pixel_samples; si > 0; --si, ++aud)
+		{
+			if (*aud > 0)
+			{
+				peak_max = std::max(peak_max, (int)*aud);
+				avg_max_accum += *aud;
+			}
 			else
-				active_block = &summary_cache->Get(active_block_index);
+			{
+				peak_min = std::min(peak_min, (int)*aud);
+				avg_min_accum += *aud;
+			}
 		}
 
-		if (!active_block) {
-			has_missing_columns = true;
-			summary_columns_scratch[static_cast<size_t>(x)] = nullptr;
-			continue;
+		// midpoint is half height
+		peak_min = std::max((int)(peak_min * amplitude_scale * midpoint) / 0x8000, -midpoint);
+		peak_max = std::min((int)(peak_max * amplitude_scale * midpoint) / 0x8000, midpoint);
+		int avg_min = std::max((int)(avg_min_accum * amplitude_scale * midpoint / pixel_samples) / 0x8000, -midpoint);
+		int avg_max = std::min((int)(avg_max_accum * amplitude_scale * midpoint / pixel_samples) / 0x8000, midpoint);
+
+		dc.SetPen(pen_peaks);
+		dc.DrawLine(x, midpoint - peak_max, x, midpoint - peak_min);
+		if (render_averages) {
+			dc.SetPen(pen_avgs);
+			dc.DrawLine(x, midpoint - avg_max, x, midpoint - avg_min);
 		}
-
-		summary_columns_scratch[static_cast<size_t>(x)] = &active_block->summaries[column_ref.summary_index];
 	}
 
-	RenderWaveformSummaryColumnsToBitmap(bmp, summary_columns_scratch, colors[style], render_averages, amplitude_scale);
-	return has_missing_columns ? AudioRenderResult::Placeholder : AudioRenderResult::Ready;
-}
+	// Horizontal zero-point line
+	if (render_averages)
+		dc.SetPen(wxPen(pal->get(1.0f)));
+	else
+		dc.SetPen(pen_peaks);
 
-void AudioWaveformRenderer::WarmCacheRange(int start, int length) {
-	if (!interactive_prefetch_enabled || !EnsureSummaryCacheConfigured() || length <= 0)
-		return;
-
-	auto const [first_block, last_block] = GetBlockRange(start, length);
-	summary_cache->Prefetch(first_block, last_block + 2);
-}
-
-bool AudioWaveformRenderer::IsCacheRangeReady(int start, int length) {
-	if (!EnsureSummaryCacheConfigured() || length <= 0)
-		return true;
-
-	auto const [first_block, last_block] = GetBlockRange(start, length);
-	return summary_cache->AreBlocksReady(first_block, last_block);
-}
-
-void AudioWaveformRenderer::PopulateRenderModel(AudioDisplayRenderModel &model) {
-	if (!EnsureSummaryCacheConfigured())
-		return;
-
-	int const width = model.viewport.update_rect.width;
-	if (width <= 0)
-		return;
-
-	int const start = model.viewport.scroll_left + model.viewport.update_rect.x;
-	auto const [first_block, last_block] = GetBlockRange(start, width);
-	if (interactive_prefetch_enabled) {
-		if (allow_placeholder)
-			summary_cache->Prefetch(first_block, last_block + 2);
-		else
-			summary_cache->Prefetch(last_block + 1, last_block + 2);
-	}
-
-	model.content_kind = AudioDisplayContentKind::Waveform;
-	model.waveform.pixel_origin = model.viewport.update_rect.x;
-	model.waveform.render_averages = render_averages;
-	model.waveform.amplitude_scale = amplitude_scale;
-	model.waveform.columns.assign(static_cast<size_t>(width), AudioDisplayWaveformColumn());
-	for (size_t i = 0; i < model.waveform.palettes.size(); ++i) {
-		auto const& palette = colors[i];
-		auto pack = [](agi::Color c) { return AudioDisplayPackColour(c.r, c.g, c.b); };
-		model.waveform.palettes[i] = {
-			pack(palette.get(0.0f)),
-			pack(palette.get(0.4f)),
-			pack(palette.get(0.7f)),
-			pack(palette.get(render_averages ? 1.0f : 0.4f)),
-		};
-	}
-
-	size_t active_block_index = static_cast<size_t>(-1);
-	const AudioWaveformSummaryBlock *active_block = nullptr;
-	for (int x = 0; x < width; ++x) {
-		auto const column_ref = GetWaveformSummaryColumnRef(start + x);
-		if (column_ref.block_index != active_block_index) {
-			active_block_index = column_ref.block_index;
-			if (allow_placeholder)
-				active_block = summary_cache->GetIfReady(active_block_index);
-			else
-				active_block = &summary_cache->Get(active_block_index);
-		}
-
-		auto &column = model.waveform.columns[static_cast<size_t>(x)];
-		if (!active_block) {
-			column.ready = false;
-			continue;
-		}
-
-		column.ready = true;
-		column.summary = active_block->summaries[column_ref.summary_index];
-	}
+	dc.DrawLine(0, midpoint, rect.width, midpoint);
 }
 
 void AudioWaveformRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style)
 {
 	const AudioColorScheme *pal = &colors[style];
-	wxColor line(to_wx(pal->get(1.0)));
-	wxColor bg(to_wx(pal->get(0.0)));
+	wxColor line(pal->get(1.0));
+	wxColor bg(pal->get(0.0));
 
 	// Draw the line as background above and below, and line in the middle, to avoid
 	// overdraw flicker (the common theme in all of audio display direct drawing).

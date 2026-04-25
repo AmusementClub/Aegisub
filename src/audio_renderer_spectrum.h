@@ -33,35 +33,19 @@
 ///
 /// Calculate and render a frequency-power spectrum for PCM audio data.
 
-#pragma once
-
 #include <cstdint>
 #include <memory>
-#include <string>
-#include <utility>
 #include <vector>
 
 #include "audio_renderer.h"
-#include "audio_mix_policy.h"
+
+#ifdef WITH_FFTW3
+#include <fftw3.h>
+#endif
 
 class AudioColorScheme;
-class AudioSpectrumAnalysisCache;
-
-enum class AudioSpectrumComputationMode {
-	LegacyLinear = 0,
-	FrequencyCurve = 1,
-};
-
-enum class AudioSpectrumChannelMode {
-	MonoMix = 0,
-	ChannelSplit = 1,
-};
-
-enum class AudioSpectrumMonoMixMode {
-	MonoAverage = 0,
-	PerBinMaxPower = 1,
-	PerBinAveragePower = 2,
-};
+class AudioSpectrumCache;
+struct AudioSpectrumCacheBlockFactory;
 
 /// @class AudioSpectrumRenderer
 /// @brief Render frequency-power spectrum graphs for audio data.
@@ -69,7 +53,10 @@ enum class AudioSpectrumMonoMixMode {
 /// Renders frequency-power spectrum graphs of PCM audio data using a derivation function
 /// such as the fast fourier transform.
 class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
-	std::unique_ptr<AudioSpectrumAnalysisCache> analysis_cache;
+	friend struct AudioSpectrumCacheBlockFactory;
+
+	/// Internal cache management for the spectrum
+	std::unique_ptr<AudioSpectrumCache> cache;
 
 	/// Colour tables used for rendering
 	std::vector<AudioColorScheme> colors;
@@ -85,52 +72,38 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 	/// Overrides the OnSetProvider event handler in the base class, to reset things
 	/// when the audio provider is changed.
 	void OnSetProvider() override;
-	void OnAllowPlaceholderChanged() override;
 
 	/// @brief Recreates the cache
 	///
 	/// To be called when the number of blocks in cache might have changed,
 	/// e.g. new audio provider or new resolution.
 	void RecreateCache();
-	void ConfigurePrefetchBudgets();
 
-	AudioMixPolicy mix_policy = AudioMixPolicy::MonoAverage;
-	AudioSpectrumComputationMode computation_mode = AudioSpectrumComputationMode::LegacyLinear;
-	float frequency_reference_position = 1.0f / 3.0f;
-	int frequency_curve_preset = 2;
-	AudioSpectrumChannelMode channel_mode = AudioSpectrumChannelMode::MonoMix;
-	AudioSpectrumMonoMixMode mono_mix_mode = AudioSpectrumMonoMixMode::MonoAverage;
-	bool interactive_prefetch_enabled = true;
-	std::vector<int> render_band_a;
-	std::vector<int> render_band_b;
-	std::vector<float> render_band_frac;
-	int render_scale_cache_height = 0;
-	size_t render_scale_cache_derivation_size = 0;
-	bool render_scale_cache_interpolated = false;
-	int render_scale_cache_sample_rate = 0;
-	int render_scale_cache_mode = -1;
-	float render_scale_cache_reference_position = 0.0f;
-	void EnsureRenderScaleCache(int imgheight);
-	void SetFrequencyReferencePosition(float position);
-	std::vector<std::unique_ptr<AudioDisplaySource>> per_channel_sources;
-	std::vector<std::unique_ptr<AudioSpectrumAnalysisCache>> per_channel_caches;
-	std::vector<int> active_channel_indices;
-	std::vector<std::string> active_channel_labels;
-	std::vector<int> selected_channels;
-	std::vector<const float *> channel_power_inputs;
-	std::vector<const float *> combined_power_columns;
-	std::vector<float> combined_power_scratch;
-	std::vector<float> power_columns_storage_scratch;
-	std::vector<const float *> power_columns_scratch;
-	std::vector<float> channel_split_power_storage_scratch;
-	std::vector<const float *> channel_split_power_columns_scratch;
-	wxBitmap channel_split_band_bitmap_scratch;
-	bool EnsureCachesConfigured();
-	std::pair<size_t, size_t> GetVisibleBlockRange(int start, int length) const;
-	void EnsurePerChannelCaches();
-	bool UsesAnalysisCache() const;
-	bool UsesPerChannelCaches() const;
-	bool UsesPerChannelMonoAggregation() const;
+	/// @brief Fill a block with frequency-power data for a time range
+	/// @param      block_index Index of the block to fill data for
+	/// @param[out] block       Address to write the data to
+	void FillBlock(size_t block_index, float *block);
+
+	/// @brief Convert audio data to float range [-1;+1)
+	/// @param count Samples to convert
+	/// @param dest Buffer to fill
+	template<class T>
+	void ConvertToFloat(size_t count, T *dest);
+
+#ifdef WITH_FFTW3
+	/// FFTW plan data
+	fftw_plan dft_plan = nullptr;
+	/// Pre-allocated input array for FFTW
+	double *dft_input = nullptr;
+	/// Pre-allocated output array for FFTW
+	fftw_complex *dft_output = nullptr;
+#else
+	/// Pre-allocated scratch area for doing FFT derivations
+	std::vector<float> fft_scratch;
+#endif
+
+	/// Pre-allocated scratch area for storing raw audio data
+	std::vector<int16_t> audio_scratch;
 
 public:
 	/// @brief Constructor
@@ -144,10 +117,7 @@ public:
 	/// @param bmp   [in,out] Bitmap to render into, also carries length information
 	/// @param start First column of pixel data in display to render
 	/// @param style Style to render audio in
-	AudioRenderResult Render(wxBitmap &bmp, int start, AudioRenderingStyle style) override;
-	void WarmCacheRange(int start, int length) override;
-	bool IsCacheRangeReady(int start, int length) override;
-	void PopulateRenderModel(AudioDisplayRenderModel &model) override;
+	void Render(wxBitmap &bmp, int start, AudioRenderingStyle style) override;
 
 	/// @brief Render blank area
 	void RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style) override;
@@ -162,16 +132,8 @@ public:
 	/// The derivation distance must be smaller than or equal to the size. If the distance
 	/// is specified too large, it will be clamped to the size.
 	void SetResolution(size_t derivation_size, size_t derivation_dist);
-	void SetComputationMode(AudioSpectrumComputationMode mode);
-	void SetFrequencyCurvePreset(int preset);
-	void SetChannelMode(AudioSpectrumChannelMode mode);
-	void SetMonoMixMode(AudioSpectrumMonoMixMode mode);
-	void SetSelectedChannels(const std::vector<int> &channels);
-	const std::vector<std::string> &GetActiveChannelLabels() const { return active_channel_labels; }
 
 	/// @brief Cleans up the cache
 	/// @param max_size Maximum size in bytes for the cache
 	void AgeCache(size_t max_size) override;
-	void SetInteractivePrefetchEnabled(bool enabled) override;
-	std::vector<std::string> GetDebugInfo() const override;
 };

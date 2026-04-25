@@ -29,28 +29,18 @@
 
 #pragma once
 
-#include <cstdint>
 #include <memory>
-#include <string>
-#include <functional>
 #include <vector>
 
 #include <wx/gdicmn.h>
 
-#include "audio_display_source.h"
 #include "audio_rendering_style.h"
 #include "block_cache.h"
 
 class AudioRenderer;
 class AudioRendererBitmapProvider;
-struct AudioDisplayRenderModel;
 class wxDC;
 namespace agi { class AudioProvider; }
-
-enum class AudioRenderResult {
-	Ready = 0,
-	Placeholder = 1,
-};
 
 /// @class AudioRendererBitmapCacheBitmapFactory
 /// @brief Produces wxBitmap objects for DataBlockCache storage for the audio renderer
@@ -98,11 +88,10 @@ class AudioRenderer {
 	float amplitude_scale = 0.f;
 
 	/// Width of bitmaps to store in cache
-	const int cache_bitmap_width; // Completely arbitrary value
+	const int cache_bitmap_width = 32; // Completely arbitrary value
 
 	/// Cached bitmaps for audio ranges
 	std::vector<AudioRendererBitmapCache> bitmaps;
-	std::vector<std::vector<uint8_t>> bitmap_pending;
 	/// The maximum allowed size of each bitmap cache, in bytes
 	size_t cache_bitmap_maxsize = 0;
 	/// The maximum allowed size of the renderer's cache, in bytes
@@ -115,7 +104,6 @@ class AudioRenderer {
 
 	/// Audio provider to use as source
 	agi::AudioProvider *provider = nullptr;
-	std::unique_ptr<AudioDisplaySource> display_source;
 
 	/// @brief Make sure bitmap index i is in cache
 	/// @param i     Index of bitmap to get into cache
@@ -141,7 +129,7 @@ public:
 	///
 	/// Initialises audio rendering to a do-nothing state. An audio provider
 	/// and bitmap provider must be set before the audio renderer is functional.
-	explicit AudioRenderer(int cache_bitmap_width = 32);
+	AudioRenderer();
 
 	/// @brief Set horizontal zoom
 	/// @param pixel_ms Milliseconds per pixel to render audio at
@@ -237,14 +225,10 @@ class AudioRendererBitmapProvider {
 protected:
 	/// Audio provider to use for rendering
 	agi::AudioProvider *provider;
-	/// Display source to use for rendering
-	AudioDisplaySource *display_source;
 	/// Horizontal zoom in milliseconds per pixel
 	double pixel_ms;
 	/// Vertical zoom/amplitude scale factor
 	float amplitude_scale;
-	std::function<void()> content_ready_callback;
-	bool allow_placeholder = false;
 
 	/// @brief Called when the audio provider changes
 	///
@@ -261,16 +245,9 @@ protected:
 	/// Implementations can override this method to do something when the vertical zoom is changed
 	virtual void OnSetAmplitudeScale() { }
 
-	virtual void OnAllowPlaceholderChanged() { }
-
-	void NotifyRenderContentReady() const {
-		if (content_ready_callback)
-			content_ready_callback();
-	}
-
 public:
 	/// @brief Constructor
-	AudioRendererBitmapProvider() : provider(nullptr), display_source(nullptr), pixel_ms(0), amplitude_scale(0) { };
+	AudioRendererBitmapProvider() : provider(nullptr), pixel_ms(0), amplitude_scale(0) { };
 
 	/// @brief Destructor
 	virtual ~AudioRendererBitmapProvider() = default;
@@ -282,7 +259,7 @@ public:
 	///
 	/// Deriving classes must implement this method. The bitmap in bmp holds
 	/// the width and height to render.
-	virtual AudioRenderResult Render(wxBitmap &bmp, int start, AudioRenderingStyle style) = 0;
+	virtual void Render(wxBitmap &bmp, int start, AudioRenderingStyle style) = 0;
 
 	/// @brief Blank audio rendering function
 	/// @param dc    The device context to render to
@@ -296,15 +273,6 @@ public:
 	/// @brief Change audio provider
 	/// @param provider Audio provider to change to
 	void SetProvider(agi::AudioProvider *provider);
-	void SetDisplaySource(AudioDisplaySource *source);
-	void SetContentReadyCallback(std::function<void()> callback) { content_ready_callback = std::move(callback); }
-	void SetAllowPlaceholder(bool allow) {
-		if (allow_placeholder == allow)
-			return;
-		allow_placeholder = allow;
-		OnAllowPlaceholderChanged();
-	}
-	bool AllowsPlaceholder() const { return allow_placeholder; }
 
 	/// @brief Change horizontal zoom
 	/// @param pixel_ms Milliseconds per pixel to zoom to
@@ -320,9 +288,4 @@ public:
 	/// Deriving classes should override this method if they implement any
 	/// kind of caching.
 	virtual void AgeCache(size_t max_size) { }
-	virtual void WarmCacheRange(int start, int length) { }
-	virtual bool IsCacheRangeReady(int start, int length) { return true; }
-	virtual void SetInteractivePrefetchEnabled(bool) { }
-	virtual void PopulateRenderModel(AudioDisplayRenderModel &) { }
-	virtual std::vector<std::string> GetDebugInfo() const { return {}; }
 };

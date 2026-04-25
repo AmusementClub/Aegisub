@@ -141,11 +141,10 @@ public:
 /// Marker provider for the current video playback position
 class VideoPositionMarkerProvider final : public AudioMarkerProvider {
 	VideoController *vc;
-	int current_frame = -1;
 
 	std::unique_ptr<VideoPositionMarker> marker;
 
-	agi::signal::Connection frame_presented_slot;
+	agi::signal::Connection video_seek_slot;
 	agi::signal::Connection enable_opt_changed_slot;
 
 	void Update(int frame_number);

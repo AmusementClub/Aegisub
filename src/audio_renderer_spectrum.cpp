@@ -34,15 +34,7 @@
 
 #include "audio_renderer_spectrum.h"
 
-#include "compat.h"
-#include "audio_display_analysis.h"
-#include "audio_display_render_model.h"
-#include "audio_spectrum_analysis_cache.h"
-#include "audio_spectrum_bitmap_tile_renderer.h"
 #include "audio_colorscheme.h"
-#include "audio_display_source.h"
-#include "audio_mix_policy.h"
-#include "options.h"
 #ifndef WITH_FFTW3
 #include "fft.h"
 #endif
@@ -51,704 +43,176 @@
 #include <libaegisub/make_unique.h>
 
 #include <algorithm>
-#include <cmath>
-#include <cstring>
-#include <sstream>
 
 #include <wx/image.h>
 #include <wx/dcmemory.h>
-#include <wx/string.h>
 
-namespace {
-std::string GetChannelLabel(int channel, int total_channels) {
-	if (total_channels == 1)
-		return "M";
-	if (total_channels == 2)
-		return channel == 0 ? "L" : "R";
-	if (total_channels == 6) {
-		static const char *labels[] = {"FL", "FR", "FC", "LFE", "SL", "SR"};
-		if (channel >= 0 && channel < 6)
-			return labels[channel];
-	}
-	if (total_channels == 8) {
-		static const char *labels[] = {"FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR"};
-		if (channel >= 0 && channel < 8)
-			return labels[channel];
-	}
-	return "CH" + std::to_string(channel + 1);
-}
-}
+/// Allocates blocks of derived data for the audio spectrum
+struct AudioSpectrumCacheBlockFactory {
+	typedef std::unique_ptr<float, std::default_delete<float[]>> BlockType;
 
-static SpectrumCacheFormat GetCacheFormatFromOption() {
-	// Cache Format preference: 0=Float32, 1=HalfFloat
-	int64_t fmt = OPT_GET("Audio/Renderer/Spectrum/Cache Format")->GetInt();
-	if (fmt == 1)
-		return SpectrumCacheFormat::HalfFloat;
-	return SpectrumCacheFormat::Float32;
-}
+	/// Pointer back to the owning spectrum renderer
+	AudioSpectrumRenderer *spectrum;
+
+	/// @brief Allocate and fill a data block
+	/// @param i Index of the block to produce data for
+	/// @return Newly allocated and filled block
+	///
+	/// The filling is delegated to the spectrum renderer
+	BlockType ProduceBlock(size_t i)
+	{
+		auto res = new float[((size_t)1)<<spectrum->derivation_size];
+		spectrum->FillBlock(i, res);
+		return BlockType(res);
+	}
+
+	/// @brief Calculate the in-memory size of a spec
+	/// @return The size in bytes of a spectrum cache block
+	size_t GetBlockSize() const
+	{
+		return sizeof(float) << spectrum->derivation_size;
+	}
+};
+
+/// @brief Cache for audio spectrum frequency-power data
+class AudioSpectrumCache
+: public DataBlockCache<float, 10, AudioSpectrumCacheBlockFactory> {
+public:
+	AudioSpectrumCache(size_t block_count, AudioSpectrumRenderer *renderer)
+	: DataBlockCache(block_count, AudioSpectrumCacheBlockFactory{renderer})
+	{
+	}
+};
 
 AudioSpectrumRenderer::AudioSpectrumRenderer(std::string const& color_scheme_name)
 {
 	colors.reserve(AudioStyle_MAX);
 	for (int i = 0; i < AudioStyle_MAX; ++i)
 		colors.emplace_back(12, color_scheme_name, i);
-	analysis_cache = std::make_unique<AudioSpectrumAnalysisCache>();
-	analysis_cache->SetCacheFormat(GetCacheFormatFromOption());
-	analysis_cache->SetReadyCallback([this] { NotifyRenderContentReady(); });
-	ConfigurePrefetchBudgets();
-}
-
-void AudioSpectrumRenderer::OnAllowPlaceholderChanged() {
-	ConfigurePrefetchBudgets();
-}
-
-bool AudioSpectrumRenderer::UsesAnalysisCache() const {
-	return channel_mode == AudioSpectrumChannelMode::MonoMix
-		&& mono_mix_mode == AudioSpectrumMonoMixMode::MonoAverage;
-}
-
-bool AudioSpectrumRenderer::UsesPerChannelCaches() const {
-	if (!display_source)
-		return false;
-	const int total_channels = std::max(1, display_source->GetChannels());
-	if (total_channels <= 1)
-		return false;
-	return channel_mode == AudioSpectrumChannelMode::ChannelSplit
-		|| mono_mix_mode != AudioSpectrumMonoMixMode::MonoAverage;
-}
-
-bool AudioSpectrumRenderer::UsesPerChannelMonoAggregation() const {
-	return channel_mode == AudioSpectrumChannelMode::MonoMix
-		&& mono_mix_mode != AudioSpectrumMonoMixMode::MonoAverage
-		&& UsesPerChannelCaches();
-}
-
-void AudioSpectrumRenderer::EnsurePerChannelCaches() {
-	per_channel_sources.clear();
-	per_channel_caches.clear();
-	active_channel_indices.clear();
-	active_channel_labels.clear();
-
-	if (!UsesPerChannelCaches())
-		return;
-
-	const int total_channels = std::max(1, display_source->GetChannels());
-	std::vector<int> channels_to_use;
-	if (channel_mode != AudioSpectrumChannelMode::ChannelSplit || selected_channels.empty()) {
-		channels_to_use.reserve(total_channels);
-		for (int ch = 0; ch < total_channels; ++ch)
-			channels_to_use.push_back(ch);
-	}
-	else {
-		channels_to_use = selected_channels;
-		channels_to_use.erase(std::remove_if(channels_to_use.begin(), channels_to_use.end(),
-			[total_channels](int ch) { return ch < 0 || ch >= total_channels; }), channels_to_use.end());
-		std::sort(channels_to_use.begin(), channels_to_use.end());
-		channels_to_use.erase(std::unique(channels_to_use.begin(), channels_to_use.end()), channels_to_use.end());
-		if (channels_to_use.empty()) {
-			for (int ch = 0; ch < total_channels; ++ch)
-				channels_to_use.push_back(ch);
-		}
-	}
-
-	for (int ch : channels_to_use) {
-		per_channel_sources.push_back(CreateSingleChannelAudioDisplaySource(display_source, ch));
-		auto cache = std::make_unique<AudioSpectrumAnalysisCache>();
-		cache->SetSource(per_channel_sources.back().get());
-		cache->SetCacheFormat(GetCacheFormatFromOption());
-		cache->SetMixPolicy(mix_policy);
-		cache->SetResolution(derivation_size, derivation_dist);
-		cache->SetPrefetchEnabled(interactive_prefetch_enabled);
-		cache->SetReadyCallback([this] { NotifyRenderContentReady(); });
-		per_channel_caches.push_back(std::move(cache));
-		active_channel_indices.push_back(ch);
-		active_channel_labels.push_back(GetChannelLabel(ch, total_channels));
-	}
-
-	ConfigurePrefetchBudgets();
-}
-
-void AudioSpectrumRenderer::ConfigurePrefetchBudgets() {
-	const size_t max_blocks = allow_placeholder ? size_t{256} : size_t{1024};
-	if (analysis_cache)
-		analysis_cache->SetPrefetchBuildMaxBlocks(max_blocks);
-	for (auto &cache : per_channel_caches) {
-		if (cache)
-			cache->SetPrefetchBuildMaxBlocks(max_blocks);
-	}
-}
-
-void AudioSpectrumRenderer::SetFrequencyReferencePosition(float position) {
-	frequency_reference_position = mid(0.001f, position, 0.999f);
-}
-
-void AudioSpectrumRenderer::EnsureRenderScaleCache(int imgheight) {
-	const int sample_rate = provider ? provider->GetSampleRate() : 0;
-	bool interpolated = imgheight > 1 << derivation_size;
-	if (render_scale_cache_height == imgheight
-		&& render_scale_cache_derivation_size == derivation_size
-		&& render_scale_cache_interpolated == interpolated
-		&& render_scale_cache_sample_rate == sample_rate
-		&& render_scale_cache_mode == static_cast<int>(computation_mode)
-		&& render_scale_cache_reference_position == frequency_reference_position)
-		return;
-
-	render_scale_cache_height = imgheight;
-	render_scale_cache_derivation_size = derivation_size;
-	render_scale_cache_interpolated = interpolated;
-	render_scale_cache_sample_rate = sample_rate;
-	render_scale_cache_mode = static_cast<int>(computation_mode);
-	render_scale_cache_reference_position = frequency_reference_position;
-
-	render_band_a.resize(imgheight);
-	render_band_b.resize(imgheight);
-	render_band_frac.resize(interpolated ? imgheight : 0);
-
-	if (computation_mode == AudioSpectrumComputationMode::LegacyLinear || !provider || sample_rate <= 0) {
-		const int maxband = 1 << derivation_size;
-		if (interpolated) {
-			for (int y = 0; y < imgheight; ++y) {
-				double ideal = static_cast<double>(y + 1.) / imgheight * maxband;
-				int lower = std::max(0, std::min(maxband - 1, static_cast<int>(std::floor(ideal))));
-				int upper = std::max(0, std::min(maxband - 1, static_cast<int>(std::ceil(ideal))));
-				render_band_a[y] = lower;
-				render_band_b[y] = upper;
-				render_band_frac[y] = static_cast<float>(ideal - std::floor(ideal));
-			}
-		}
-		else {
-			for (int y = 0; y < imgheight; ++y) {
-				int sample1 = std::max(0, maxband * y / imgheight);
-				int sample2 = std::min(maxband - 1, maxband * (y + 1) / imgheight);
-				render_band_a[y] = sample1;
-				render_band_b[y] = sample2;
-			}
-		}
-		return;
-	}
-
-	const int nbr_bins = 1 << derivation_size;
-	const int minband = 1;
-	int maxband = std::min(nbr_bins, static_cast<int>(std::floor(nbr_bins * 20000.0f / (sample_rate * 0.5f))));
-	if (maxband <= minband + 1)
-		maxband = std::min(nbr_bins, minband + 2);
-
-	const float scale_log = std::log(static_cast<float>(maxband) / minband);
-	const float b_fref = mid(1.0f, nbr_bins * 1000.0f / (sample_rate * 0.5f), static_cast<float>(maxband - 1));
-	const float b_lin_fref = minband + (maxband - minband) * frequency_reference_position;
-	const float b_log_fref = minband * std::exp(frequency_reference_position * scale_log);
-	float log_ratio = (b_fref - b_lin_fref) / (b_log_fref - b_lin_fref);
-	log_ratio = mid(0.0f, log_ratio, 1.0f);
-
-	auto mapped_bin = [&](float pos_rel) {
-		float b_lin = minband + pos_rel * (maxband - minband);
-		float b_log = minband * std::exp(pos_rel * scale_log);
-		float bin = b_lin + log_ratio * (b_log - b_lin);
-		return mid(static_cast<float>(minband), bin, static_cast<float>(maxband - 1));
-	};
-
-	if (interpolated) {
-		for (int y = 0; y < imgheight; ++y) {
-			float bin = mapped_bin(static_cast<float>(y + 1) / imgheight);
-			int lower = std::max(0, std::min(nbr_bins - 1, static_cast<int>(std::floor(bin))));
-			int upper = std::max(0, std::min(nbr_bins - 1, static_cast<int>(std::ceil(bin))));
-			render_band_a[y] = lower;
-			render_band_b[y] = upper;
-			render_band_frac[y] = bin - std::floor(bin);
-		}
-	}
-	else {
-		for (int y = 0; y < imgheight; ++y) {
-			float bin_prev = y == 0 ? static_cast<float>(minband) : mapped_bin(static_cast<float>(y) / imgheight);
-			float bin_cur = mapped_bin(static_cast<float>(y + 1) / imgheight);
-			float bin_next = y + 2 <= imgheight ? mapped_bin(static_cast<float>(y + 2) / imgheight) : static_cast<float>(maxband);
-
-			int sample1 = static_cast<int>(std::floor((bin_prev + bin_cur) * 0.5f));
-			int sample2 = static_cast<int>(std::floor((bin_cur + bin_next) * 0.5f));
-			sample1 = std::max(0, std::min(nbr_bins - 2, sample1));
-			sample2 = std::max(sample1 + 1, std::min(nbr_bins - 1, sample2));
-			render_band_a[y] = sample1;
-			render_band_b[y] = sample2;
-		}
-	}
 }
 
 AudioSpectrumRenderer::~AudioSpectrumRenderer()
 {
+	// This sequence will clean up
+	provider = nullptr;
+	RecreateCache();
 }
 
 void AudioSpectrumRenderer::RecreateCache()
 {
-	if (analysis_cache) {
-		if (UsesAnalysisCache()) {
-			analysis_cache->SetSource(display_source);
-			analysis_cache->SetMixPolicy(mix_policy);
-			analysis_cache->SetResolution(derivation_size, derivation_dist);
-			analysis_cache->SetPrefetchEnabled(interactive_prefetch_enabled);
-		}
-		else {
-			analysis_cache->SetSource(nullptr);
-		}
+#ifdef WITH_FFTW3
+	if (dft_plan)
+	{
+		fftw_destroy_plan(dft_plan);
+		fftw_free(dft_input);
+		fftw_free(dft_output);
+		dft_plan = nullptr;
+		dft_input = nullptr;
+		dft_output = nullptr;
 	}
-	for (auto &cache : per_channel_caches) {
-		if (cache) {
-			cache->SetMixPolicy(mix_policy);
-			cache->SetResolution(derivation_size, derivation_dist);
-			cache->SetPrefetchEnabled(interactive_prefetch_enabled);
-		}
+#endif
+
+	if (provider)
+	{
+		size_t block_count = (size_t)((provider->GetNumSamples() + ((size_t)1<<derivation_dist) - 1) >> derivation_dist);
+		cache = agi::make_unique<AudioSpectrumCache>(block_count, this);
+
+#ifdef WITH_FFTW3
+		dft_input = fftw_alloc_real(2<<derivation_size);
+		dft_output = fftw_alloc_complex(2<<derivation_size);
+		dft_plan = fftw_plan_dft_r2c_1d(
+			2<<derivation_size,
+			dft_input,
+			dft_output,
+			FFTW_MEASURE);
+#else
+		// Allocate scratch for 6x the derivation size:
+		// 2x for the input sample data
+		// 2x for the real part of the output
+		// 2x for the imaginary part of the output
+		fft_scratch.resize(6 << derivation_size);
+#endif
+		audio_scratch.resize(2 << derivation_size);
 	}
 }
 
 void AudioSpectrumRenderer::OnSetProvider()
 {
 	RecreateCache();
-	EnsurePerChannelCaches();
 }
 
 void AudioSpectrumRenderer::SetResolution(size_t _derivation_size, size_t _derivation_dist)
 {
 	if (derivation_dist != _derivation_dist)
+	{
 		derivation_dist = _derivation_dist;
+		if (cache)
+			cache->Age(0);
+	}
 
 	if (derivation_size != _derivation_size)
+	{
 		derivation_size = _derivation_size;
-	RecreateCache();
-}
-
-void AudioSpectrumRenderer::SetComputationMode(AudioSpectrumComputationMode mode) {
-	if (computation_mode == mode)
-		return;
-	computation_mode = mode;
-	render_scale_cache_height = 0;
-	AgeCache(0);
-}
-
-void AudioSpectrumRenderer::SetFrequencyCurvePreset(int preset) {
-	preset = mid(0, preset, 4);
-	if (frequency_curve_preset == preset)
-		return;
-	frequency_curve_preset = preset;
-	const float fref_pos[] = {0.001f, 0.125f, 0.333f, 0.425f, 0.999f};
-	SetFrequencyReferencePosition(fref_pos[preset]);
-	render_scale_cache_height = 0;
-	AgeCache(0);
-}
-
-void AudioSpectrumRenderer::SetChannelMode(AudioSpectrumChannelMode mode) {
-	if (channel_mode == mode)
-		return;
-	channel_mode = mode;
-	RecreateCache();
-	EnsurePerChannelCaches();
-	render_scale_cache_height = 0;
-	AgeCache(0);
-}
-
-void AudioSpectrumRenderer::SetMonoMixMode(AudioSpectrumMonoMixMode mode) {
-	if (mono_mix_mode == mode)
-		return;
-	const bool old_uses_analysis = UsesAnalysisCache();
-	const bool old_uses_per_channel = UsesPerChannelCaches();
-	mono_mix_mode = mode;
-	const bool new_uses_analysis = UsesAnalysisCache();
-	const bool new_uses_per_channel = UsesPerChannelCaches();
-	if (old_uses_analysis != new_uses_analysis || old_uses_per_channel != new_uses_per_channel) {
 		RecreateCache();
-		EnsurePerChannelCaches();
-		AgeCache(0);
 	}
 }
 
-void AudioSpectrumRenderer::SetSelectedChannels(const std::vector<int> &channels) {
-	selected_channels = channels;
-	EnsurePerChannelCaches();
-	render_scale_cache_height = 0;
-	AgeCache(0);
-}
-
-bool AudioSpectrumRenderer::EnsureCachesConfigured() {
-	if (!display_source)
-		return false;
-	if (UsesPerChannelCaches() && per_channel_caches.empty())
-		EnsurePerChannelCaches();
-	return true;
-}
-
-std::pair<size_t, size_t> AudioSpectrumRenderer::GetVisibleBlockRange(int start, int length) const {
-	const double samples_per_pixel = pixel_ms * display_source->GetSampleRate() / 1000.0;
-	const int end = start + std::max(length, 1);
-	const size_t first_visible_block = static_cast<size_t>(std::max(start, 0) * samples_per_pixel) >> derivation_dist;
-	const size_t last_visible_block = static_cast<size_t>(std::max(start, end - 1) * samples_per_pixel) >> derivation_dist;
-	return { first_visible_block, last_visible_block };
-}
-
-void AudioSpectrumRenderer::WarmCacheRange(int start, int length) {
-	if (!interactive_prefetch_enabled || !EnsureCachesConfigured() || length <= 0)
-		return;
-
-	auto const [first_visible_block, last_visible_block] = GetVisibleBlockRange(start, length);
-	if (UsesPerChannelCaches() && !per_channel_caches.empty()) {
-		for (auto &cache : per_channel_caches) {
-			if (cache && cache->IsReady())
-				cache->Prefetch(first_visible_block, last_visible_block + 8);
-		}
-		return;
-	}
-
-	if (analysis_cache && analysis_cache->IsReady())
-		analysis_cache->Prefetch(first_visible_block, last_visible_block + 8);
-}
-
-bool AudioSpectrumRenderer::IsCacheRangeReady(int start, int length) {
-	if (!EnsureCachesConfigured() || length <= 0)
-		return true;
-
-	auto const [first_visible_block, last_visible_block] = GetVisibleBlockRange(start, length);
-	if (UsesPerChannelCaches() && !per_channel_caches.empty()) {
-		for (auto &cache : per_channel_caches) {
-			if (!cache || !cache->IsReady())
-				return true;
-		}
-
-		for (auto &cache : per_channel_caches) {
-			if (!cache->AreBlocksReady(first_visible_block, last_visible_block))
-				return false;
-		}
-		return true;
-	}
-
-	if (!analysis_cache || !analysis_cache->IsReady())
-		return true;
-
-	return analysis_cache->AreBlocksReady(first_visible_block, last_visible_block);
-}
-
-void AudioSpectrumRenderer::PopulateRenderModel(AudioDisplayRenderModel &model) {
-	if (!EnsureCachesConfigured())
-		return;
-
-	int const width = model.viewport.update_rect.width;
-	int const total_height = model.audio_bounds.height;
-	if (width <= 0 || total_height <= 0)
-		return;
-
-	model.content_kind = AudioDisplayContentKind::Spectrum;
-	auto &spectrum = model.spectrum;
-	spectrum.Reset();
-	spectrum.pixel_origin = model.viewport.update_rect.x;
-	spectrum.amplitude_scale = amplitude_scale;
-	spectrum.bins_per_column = static_cast<int>(size_t{1} << derivation_size);
-	if (spectrum.bins_per_column <= 0)
-		return;
-
-	for (size_t style = 0; style < colors.size() && style < spectrum.palettes.size(); ++style) {
-		for (size_t i = 0; i < AudioDisplaySpectrumPaletteSize; ++i) {
-			float const t = static_cast<float>(i) / static_cast<float>(AudioDisplaySpectrumPaletteSize - 1);
-			agi::Color c = colors[style].get(t);
-			spectrum.palettes[style].colours[i] = AudioDisplayPackColour(c.r, c.g, c.b);
-		}
-	}
-
-	int const start = model.viewport.scroll_left + model.viewport.update_rect.x;
-	auto const [first_visible_block, last_visible_block] = GetVisibleBlockRange(start, width);
-
-	auto fill_ready_and_copy = [&](int channel, int x, float const* power) {
-		size_t const ready_index = static_cast<size_t>(channel * width + x);
-		if (!power) {
-			spectrum.ready[ready_index] = uint8_t{0};
-			return;
-		}
-
-		spectrum.ready[ready_index] = uint8_t{1};
-		float *dst = spectrum.power.data()
-			+ (static_cast<size_t>(channel * width + x) * static_cast<size_t>(spectrum.bins_per_column));
-		std::memcpy(dst, power, static_cast<size_t>(spectrum.bins_per_column) * sizeof(float));
-	};
-
-	int channel_count = 1;
-	int band_height = total_height;
-	bool const can_split_channels = channel_mode == AudioSpectrumChannelMode::ChannelSplit
-		&& !per_channel_caches.empty()
-		&& (total_height / static_cast<int>(per_channel_caches.size())) >= 4
-		&& width > 0;
-	if (can_split_channels) {
-		channel_count = static_cast<int>(per_channel_caches.size());
-		band_height = total_height / channel_count;
-	}
-
-	spectrum.channel_count = channel_count;
-	spectrum.channel_band_height = band_height;
-	spectrum.interpolated = band_height > (1 << derivation_size);
-	EnsureRenderScaleCache(band_height);
-	spectrum.band_a = render_band_a;
-	spectrum.band_b = render_band_b;
-	if (spectrum.interpolated)
-		spectrum.band_frac = render_band_frac;
-
-	spectrum.ready.assign(static_cast<size_t>(channel_count * width), uint8_t{0});
-	spectrum.power.assign(
-		static_cast<size_t>(channel_count * width) * static_cast<size_t>(spectrum.bins_per_column),
-		0.0f);
-
-	if (can_split_channels) {
-		for (auto &cache : per_channel_caches)
-			cache->Prefetch(first_visible_block, last_visible_block + 8);
-
-		for (int ch = 0; ch < channel_count; ++ch) {
-			size_t last_block_index = static_cast<size_t>(-1);
-			float const* last_power = nullptr;
-			for (int x = 0; x < width; ++x) {
-				size_t const block_index = static_cast<size_t>((start + x) * (pixel_ms * display_source->GetSampleRate() / 1000.0)) >> derivation_dist;
-				float const* power = nullptr;
-				if (block_index == last_block_index) {
-					power = last_power;
-				}
-				else {
-					power = allow_placeholder
-						? per_channel_caches[ch]->GetIfReady(block_index)
-						: per_channel_caches[ch]->Get(block_index);
-					last_block_index = block_index;
-					last_power = power;
-				}
-				fill_ready_and_copy(ch, x, power);
-			}
-		}
-		return;
-	}
-
-	if (UsesPerChannelMonoAggregation() && !per_channel_caches.empty()) {
-		for (auto &cache : per_channel_caches)
-			cache->Prefetch(first_visible_block, last_visible_block + 8);
-
-		channel_power_inputs.resize(per_channel_caches.size());
-		for (int x = 0; x < width; ++x) {
-			size_t const block_index = static_cast<size_t>((start + x) * (pixel_ms * display_source->GetSampleRate() / 1000.0)) >> derivation_dist;
-			bool ready = true;
-			for (size_t ch = 0; ch < per_channel_caches.size(); ++ch) {
-				channel_power_inputs[ch] = allow_placeholder
-					? per_channel_caches[ch]->GetIfReady(block_index)
-					: per_channel_caches[ch]->Get(block_index);
-				if (!channel_power_inputs[ch])
-					ready = false;
-			}
-
-			if (!ready)
-				continue;
-
-			float *dst = spectrum.power.data() + (static_cast<size_t>(x) * static_cast<size_t>(spectrum.bins_per_column));
-			if (mono_mix_mode == AudioSpectrumMonoMixMode::PerBinMaxPower)
-				MergeSpectrumPowerBinsMax(channel_power_inputs, static_cast<size_t>(spectrum.bins_per_column), dst);
-			else
-				MergeSpectrumPowerBinsAverage(channel_power_inputs, static_cast<size_t>(spectrum.bins_per_column), dst);
-			spectrum.ready[static_cast<size_t>(x)] = uint8_t{1};
-		}
-		return;
-	}
-
-	if (!analysis_cache || !analysis_cache->IsReady())
-		return;
-
-	analysis_cache->Prefetch(first_visible_block, last_visible_block + 8);
-	size_t last_block_index = static_cast<size_t>(-1);
-	float const* last_power = nullptr;
-	for (int x = 0; x < width; ++x) {
-		size_t const block_index = static_cast<size_t>((start + x) * (pixel_ms * display_source->GetSampleRate() / 1000.0)) >> derivation_dist;
-		float const* power = nullptr;
-		if (block_index == last_block_index) {
-			power = last_power;
-		}
-		else {
-			power = allow_placeholder
-				? analysis_cache->GetIfReady(block_index)
-				: analysis_cache->Get(block_index);
-			last_block_index = block_index;
-			last_power = power;
-		}
-		fill_ready_and_copy(0, x, power);
+template<class T>
+void AudioSpectrumRenderer::ConvertToFloat(size_t count, T *dest) {
+	for (size_t si = 0; si < count; ++si)
+	{
+		dest[si] = (T)(audio_scratch[si]) / 32768.0;
 	}
 }
 
-AudioRenderResult AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
+void AudioSpectrumRenderer::FillBlock(size_t block_index, float *block)
 {
-	if (!EnsureCachesConfigured() || bmp.GetWidth() <= 0) {
-		wxMemoryDC dc(bmp);
-		RenderBlank(dc, wxRect(0, 0, bmp.GetWidth(), bmp.GetHeight()), style);
-		return AudioRenderResult::Ready;
+	assert(cache);
+	assert(block);
+
+	int64_t first_sample = (((int64_t)block_index) << derivation_dist) - ((int64_t)1 << derivation_size);
+	provider->GetInt16MonoAudio(audio_scratch.data(), first_sample, 2 << derivation_size);
+
+#ifdef WITH_FFTW3
+	ConvertToFloat(2 << derivation_size, dft_input);
+
+	fftw_execute(dft_plan);
+
+	double scale_factor = 9 / sqrt(2 << (derivation_size + 1));
+
+	fftw_complex *o = dft_output;
+	for (size_t si = (size_t)1<<derivation_size; si > 0; --si)
+	{
+		*block++ = log10( sqrt(o[0][0] * o[0][0] + o[0][1] * o[0][1]) * scale_factor + 1 );
+		o++;
 	}
+#else
+	ConvertToFloat(2 << derivation_size, &fft_scratch[0]);
 
-	// ChannelSplit path: render each channel into its own horizontal band
-	if (channel_mode == AudioSpectrumChannelMode::ChannelSplit && !per_channel_caches.empty()) {
-		const int channels = static_cast<int>(per_channel_caches.size());
-		const int total_height = bmp.GetHeight();
-		const int band_height = total_height / channels;
+	float *fft_input = &fft_scratch[0];
+	float *fft_real = &fft_scratch[0] + (2 << derivation_size);
+	float *fft_imag = &fft_scratch[0] + (4 << derivation_size);
 
-		if (band_height >= 4 && bmp.GetWidth() > 0) {
-			const bool caches_ready = std::all_of(per_channel_caches.begin(), per_channel_caches.end(),
-				[](const auto &cache) { return cache && cache->IsReady(); });
-			if (!caches_ready) {
-				wxMemoryDC dc(bmp);
-				RenderBlank(dc, wxRect(0, 0, bmp.GetWidth(), bmp.GetHeight()), style);
-				return AudioRenderResult::Ready;
-			}
+	FFT fft;
+	fft.Transform(2<<derivation_size, fft_input, fft_real, fft_imag);
 
-			const AudioColorScheme *pal = &colors[style];
-			const double samples_per_pixel = pixel_ms * display_source->GetSampleRate() / 1000.0;
-			const int end = start + bmp.GetWidth();
-			EnsureRenderScaleCache(band_height);
-			const bool ch_interpolated = band_height > 1 << derivation_size;
-			const size_t first_visible_block = static_cast<size_t>(start * samples_per_pixel) >> derivation_dist;
-			const size_t last_visible_block = static_cast<size_t>(std::max(start, end - 1) * samples_per_pixel) >> derivation_dist;
+	float scale_factor = 9 / sqrt(2 * (float)(2<<derivation_size));
 
-			for (int ch = 0; ch < channels; ++ch)
-				per_channel_caches[ch]->Prefetch(first_visible_block, last_visible_block + 8);
-
-			const size_t bin_count = static_cast<size_t>(1) << derivation_size;
-			channel_split_power_columns_scratch.resize(static_cast<size_t>(bmp.GetWidth()));
-			channel_split_power_storage_scratch.resize(static_cast<size_t>(bmp.GetWidth()) * bin_count);
-			const bool needs_recreate = !channel_split_band_bitmap_scratch.IsOk()
-				|| channel_split_band_bitmap_scratch.GetWidth() != bmp.GetWidth()
-				|| channel_split_band_bitmap_scratch.GetHeight() != band_height;
-			if (needs_recreate)
-				channel_split_band_bitmap_scratch = wxBitmap(bmp.GetWidth(), band_height);
-
-			wxMemoryDC dst_dc(bmp);
-			bool has_missing_columns = false;
-			for (int ch = 0; ch < channels; ++ch) {
-				size_t last_block = static_cast<size_t>(-1);
-				const float *last_power = nullptr;
-
-				for (int ax = start; ax < end; ++ax) {
-					size_t block_idx = static_cast<size_t>(ax * samples_per_pixel) >> derivation_dist;
-					const float *power = nullptr;
-					if (block_idx == last_block) {
-						power = last_power;
-					}
-					else {
-						if (allow_placeholder)
-							power = per_channel_caches[ch]->GetIfReady(block_idx);
-						else
-							power = per_channel_caches[ch]->Get(block_idx);
-						last_block = block_idx;
-						last_power = power;
-					}
-					if (!power)
-						has_missing_columns = true;
-					size_t const column_index = static_cast<size_t>(ax - start);
-					if (power) {
-						float *dst = channel_split_power_storage_scratch.data() + column_index * bin_count;
-						std::memcpy(dst, power, bin_count * sizeof(float));
-						channel_split_power_columns_scratch[column_index] = dst;
-					}
-					else {
-						channel_split_power_columns_scratch[column_index] = nullptr;
-					}
-				}
-
-				RenderSpectrumColumnsToBitmap(
-					channel_split_band_bitmap_scratch, channel_split_power_columns_scratch, derivation_size,
-					render_band_a.data(), render_band_b.data(),
-					ch_interpolated ? render_band_frac.data() : nullptr,
-					ch_interpolated, amplitude_scale, *pal);
-
-				dst_dc.DrawBitmap(channel_split_band_bitmap_scratch, 0, ch * band_height);
-			}
-
-			// Draw dividers between channel bands
-			if (channels > 1) {
-				dst_dc.SetPen(wxPen(wxColour(80, 80, 80), 1));
-				for (int ch = 1; ch < channels; ++ch)
-					dst_dc.DrawLine(0, ch * band_height, bmp.GetWidth(), ch * band_height);
-			}
-
-			return has_missing_columns ? AudioRenderResult::Placeholder : AudioRenderResult::Ready;
-		}
+	for (size_t si = 1<<derivation_size; si > 0; --si)
+	{
+		// With x in range [0;1], log10(x*9+1) will also be in range [0;1],
+		// although the FFT output can apparently get greater magnitudes than 1
+		// despite the input being limited to [-1;+1).
+		*block++ = log10( sqrt(*fft_real * *fft_real + *fft_imag * *fft_imag) * scale_factor + 1 );
+		fft_real++; fft_imag++;
 	}
+#endif
+}
 
-	if (UsesPerChannelMonoAggregation() && !per_channel_caches.empty()) {
-		const bool caches_ready = std::all_of(per_channel_caches.begin(), per_channel_caches.end(),
-			[](const auto &cache) { return cache && cache->IsReady(); });
-		if (!caches_ready) {
-			wxMemoryDC dc(bmp);
-			RenderBlank(dc, wxRect(0, 0, bmp.GetWidth(), bmp.GetHeight()), style);
-			return AudioRenderResult::Ready;
-		}
-
-		assert(bmp.IsOk());
-
-		const int end = start + bmp.GetWidth();
-		const AudioColorScheme *pal = &colors[style];
-		const double samples_per_pixel = pixel_ms * display_source->GetSampleRate() / 1000.0;
-		const size_t first_visible_block = static_cast<size_t>(start * samples_per_pixel) >> derivation_dist;
-		const size_t last_visible_block = static_cast<size_t>(std::max(start, end - 1) * samples_per_pixel) >> derivation_dist;
-		EnsureRenderScaleCache(bmp.GetHeight());
-		const bool interpolated = bmp.GetHeight() > 1 << derivation_size;
-		const size_t bin_count = static_cast<size_t>(1) << derivation_size;
-
-		combined_power_columns.resize(static_cast<size_t>(bmp.GetWidth()));
-		combined_power_scratch.resize(static_cast<size_t>(bmp.GetWidth()) * bin_count);
-		channel_power_inputs.resize(per_channel_caches.size());
-		for (auto &cache : per_channel_caches)
-			cache->Prefetch(first_visible_block, last_visible_block + 8);
-
-		size_t last_block_index = static_cast<size_t>(-1);
-		const float *last_power = nullptr;
-		size_t combined_block_count = 0;
-		bool has_missing_columns = false;
-
-		for (int ax = start; ax < end; ++ax) {
-			size_t block_index = static_cast<size_t>(ax * samples_per_pixel) >> derivation_dist;
-			const float *power = nullptr;
-			if (block_index == last_block_index) {
-				power = last_power;
-			}
-			else {
-				bool ready = true;
-				for (size_t ch = 0; ch < per_channel_caches.size(); ++ch) {
-					if (allow_placeholder)
-						channel_power_inputs[ch] = per_channel_caches[ch]->GetIfReady(block_index);
-					else
-						channel_power_inputs[ch] = per_channel_caches[ch]->Get(block_index);
-					if (!channel_power_inputs[ch])
-						ready = false;
-				}
-
-				if (!ready) {
-					has_missing_columns = true;
-					power = nullptr;
-				}
-				else {
-					float *dst = combined_power_scratch.data() + combined_block_count * bin_count;
-					if (mono_mix_mode == AudioSpectrumMonoMixMode::PerBinMaxPower)
-						MergeSpectrumPowerBinsMax(channel_power_inputs, bin_count, dst);
-					else
-						MergeSpectrumPowerBinsAverage(channel_power_inputs, bin_count, dst);
-					power = dst;
-					++combined_block_count;
-				}
-				last_block_index = block_index;
-				last_power = power;
-			}
-			combined_power_columns[static_cast<size_t>(ax - start)] = power;
-		}
-
-		RenderSpectrumColumnsToBitmap(
-			bmp,
-			combined_power_columns,
-			derivation_size,
-			render_band_a.data(),
-			render_band_b.data(),
-			interpolated ? render_band_frac.data() : nullptr,
-			interpolated,
-			amplitude_scale,
-			*pal);
-		return has_missing_columns ? AudioRenderResult::Placeholder : AudioRenderResult::Ready;
-	}
-
-	if (!analysis_cache || !analysis_cache->IsReady()) {
-		wxMemoryDC dc(bmp);
-		RenderBlank(dc, wxRect(0, 0, bmp.GetWidth(), bmp.GetHeight()), style);
-		return AudioRenderResult::Ready;
-	}
+void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
+{
+	if (!cache)
+		return;
 
 	assert(bmp.IsOk());
 
@@ -757,65 +221,70 @@ AudioRenderResult AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioR
 	assert(start >= 0);
 	assert(end >= start);
 
+	// Prepare an image buffer to write
+	wxImage img(bmp.GetSize());
+	unsigned char *imgdata = img.GetData();
+	ptrdiff_t stride = img.GetWidth()*3;
+	int imgheight = img.GetHeight();
+
 	const AudioColorScheme *pal = &colors[style];
-	const double samples_per_pixel = pixel_ms * display_source->GetSampleRate() / 1000.0;
-	const size_t first_visible_block = static_cast<size_t>(start * samples_per_pixel) >> derivation_dist;
-	const size_t last_visible_block = static_cast<size_t>(std::max(start, end - 1) * samples_per_pixel) >> derivation_dist;
-	EnsureRenderScaleCache(bmp.GetHeight());
-	const bool interpolated = bmp.GetHeight() > 1 << derivation_size;
-	analysis_cache->Prefetch(first_visible_block, last_visible_block + 8);
 
-	const size_t bin_count = static_cast<size_t>(1) << derivation_size;
-	power_columns_scratch.resize(static_cast<size_t>(bmp.GetWidth()));
-	power_columns_storage_scratch.resize(static_cast<size_t>(bmp.GetWidth()) * bin_count);
-	size_t last_block_index = static_cast<size_t>(-1);
-	const float *last_power = nullptr;
-	bool has_missing_columns = false;
+	/// @todo Make minband and maxband configurable
+	int minband = 0;
+	int maxband = 1 << derivation_size;
 
-	for (int ax = start; ax < end; ++ax) {
-		size_t block_index = static_cast<size_t>(ax * samples_per_pixel) >> derivation_dist;
-		const float *power = nullptr;
-		if (block_index == last_block_index) {
-			power = last_power;
+	// ax = absolute x, absolute to the virtual spectrum bitmap
+	for (int ax = start; ax < end; ++ax)
+	{
+		// Derived audio data
+		size_t block_index = (size_t)(ax * pixel_ms * provider->GetSampleRate() / 1000) >> derivation_dist;
+		float *power = &cache->Get(block_index);
+
+		// Prepare bitmap writing
+		unsigned char *px = imgdata + (imgheight-1) * stride + (ax - start) * 3;
+
+		// Scale up or down vertically?
+		if (imgheight > 1<<derivation_size)
+		{
+			// Interpolate
+			for (int y = 0; y < imgheight; ++y)
+			{
+				assert(px >= imgdata);
+				assert(px < imgdata + imgheight*stride);
+				auto ideal = (double)(y+1.)/imgheight * (maxband-minband) + minband;
+				float sample1 = power[(int)floor(ideal)+minband];
+				float sample2 = power[(int)ceil(ideal)+minband];
+				float frac = ideal - floor(ideal);
+				float val = (1-frac)*sample1 + frac*sample2;
+				pal->map(val*amplitude_scale, px);
+				px -= stride;
+			}
 		}
-		else {
-			if (allow_placeholder)
-				power = analysis_cache->GetIfReady(block_index);
-			else
-				power = analysis_cache->Get(block_index);
-			last_block_index = block_index;
-			last_power = power;
-		}
-		if (!power)
-			has_missing_columns = true;
-		size_t const column_index = static_cast<size_t>(ax - start);
-		if (power) {
-			float *dst = power_columns_storage_scratch.data() + column_index * bin_count;
-			std::memcpy(dst, power, bin_count * sizeof(float));
-			power_columns_scratch[column_index] = dst;
-		}
-		else {
-			power_columns_scratch[column_index] = nullptr;
+		else
+		{
+			// Pick greatest
+			for (int y = 0; y < imgheight; ++y)
+			{
+				assert(px >= imgdata);
+				assert(px < imgdata + imgheight*stride);
+				int sample1 = std::max(0, maxband * y/imgheight + minband);
+				int sample2 = std::min((1<<derivation_size)-1, maxband * (y+1)/imgheight + minband);
+				float maxval = *std::max_element(&power[sample1], &power[sample2 + 1]);
+				pal->map(maxval*amplitude_scale, px);
+				px -= stride;
+			}
 		}
 	}
 
-	RenderSpectrumColumnsToBitmap(
-		bmp,
-		power_columns_scratch,
-		derivation_size,
-		render_band_a.data(),
-		render_band_b.data(),
-		interpolated ? render_band_frac.data() : nullptr,
-		interpolated,
-		amplitude_scale,
-		*pal);
-	return has_missing_columns ? AudioRenderResult::Placeholder : AudioRenderResult::Ready;
+	wxBitmap tmpbmp(img);
+	wxMemoryDC targetdc(bmp);
+	targetdc.DrawBitmap(tmpbmp, 0, 0);
 }
 
 void AudioSpectrumRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style)
 {
 	// Get the colour of silence
-	wxColour col = to_wx(colors[style].get(0.0f));
+	wxColour col = colors[style].get(0.0f);
 	dc.SetBrush(wxBrush(col));
 	dc.SetPen(wxPen(col));
 	dc.DrawRectangle(rect);
@@ -823,60 +292,6 @@ void AudioSpectrumRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRende
 
 void AudioSpectrumRenderer::AgeCache(size_t max_size)
 {
-	if (UsesPerChannelCaches() && !per_channel_caches.empty()) {
-		if (analysis_cache)
-			analysis_cache->Age(0);
-		const size_t n = per_channel_caches.size();
-		const size_t ch_max = n > 0 ? max_size / n : 0;
-		for (auto &cache : per_channel_caches)
-			cache->Age(ch_max);
-	}
-	else {
-		if (analysis_cache)
-			analysis_cache->Age(max_size);
-		for (auto &cache : per_channel_caches)
-			cache->Age(0);
-	}
-}
-
-void AudioSpectrumRenderer::SetInteractivePrefetchEnabled(bool enabled) {
-	interactive_prefetch_enabled = enabled;
-	if (analysis_cache)
-		analysis_cache->SetPrefetchEnabled(enabled);
-	for (auto &cache : per_channel_caches) {
-		if (cache)
-			cache->SetPrefetchEnabled(enabled);
-	}
-}
-
-std::vector<std::string> AudioSpectrumRenderer::GetDebugInfo() const {
-	const AudioSpectrumAnalysisCache *metrics_cache = analysis_cache.get();
-	if (UsesPerChannelCaches() && !per_channel_caches.empty() && per_channel_caches.front())
-		metrics_cache = per_channel_caches.front().get();
-	if (!metrics_cache)
-		return {};
-	auto metrics = metrics_cache->GetMetricsSnapshot();
-	std::ostringstream line1;
-	std::ostringstream line2;
-	line1 << "SP gen=" << metrics.generation
-		<< " hits=" << metrics.cache_hits
-		<< " miss=" << metrics.cache_misses
-		<< " mode=" << static_cast<int>(computation_mode)
-		<< " curve=" << frequency_curve_preset
-		<< " ch=" << static_cast<int>(channel_mode)
-		<< " mono=" << static_cast<int>(mono_mix_mode)
-		<< " vis=" << metrics.visible_builds
-		<< " lock=" << metrics.visible_lock_contention
-		<< " pf_req=" << metrics.prefetch_requests
-		<< " pf_build=" << metrics.prefetch_builds
-		<< " pf_skip=" << metrics.prefetch_busy_skips
-		<< " pf_on=" << (metrics.prefetch_enabled ? 1 : 0)
-		<< " stale=" << metrics.stale_drops;
-	line2 << "SP cache entries=" << metrics.cache_entries
-		<< " bytes=" << metrics.cache_bytes
-		<< " evict=" << metrics.evictions;
-	return {
-		line1.str(),
-		line2.str()
-	};
+	if (cache)
+		cache->Age(max_size);
 }

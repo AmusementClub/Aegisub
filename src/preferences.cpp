@@ -94,6 +94,12 @@ agi::fs::path FindExistingDialogDirectory(agi::fs::path path) {
 	return path;
 }
 
+void NormalizeAudioDisplayDormantOptions() {
+	auto const render_backend = OPT_GET("Audio/Display/Draw/Render Backend")->GetInt();
+	if (render_backend == 2 || render_backend < 0 || render_backend > 3)
+		OPT_SET("Audio/Display/Draw/Render Backend")->SetInt(0);
+}
+
 class TokenizedDirProperty final : public wxLongStringProperty {
 	Preferences *prefs = nullptr;
 public:
@@ -474,6 +480,8 @@ void BuildGeneralDefaultStylesPage(OptionPage *p) {
 
 /// Audio preferences page
 void BuildAudioPage(OptionPage *p) {
+	NormalizeAudioDisplayDormantOptions();
+
 	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
 	auto *grid = binder->GetGrid();
 	binder->BindEvents(binder);
@@ -502,11 +510,6 @@ void BuildAudioPage(OptionPage *p) {
 	binder->AddBool(_("Keyframes in dialogue mode"), "Audio/Display/Draw/Keyframes in Dialogue Mode");
 	binder->AddBool(_("Keyframes in karaoke mode"), "Audio/Display/Draw/Keyframes in Karaoke Mode");
 	binder->AddBool(_("Cursor time"), "Audio/Display/Draw/Cursor Time");
-	{
-		const wxString ctf_arr[] = { _("ASS centiseconds"), _("Exact milliseconds") };
-		wxArrayString ctf_choice(2, ctf_arr);
-		binder->AddChoice(_("Cursor time format"), ctf_choice, "Audio/Display/Draw/Cursor Time Format");
-	}
 	binder->AddBool(_("Video position"), "Audio/Display/Draw/Video Position");
 	binder->AddBool(_("Seconds boundaries"), "Audio/Display/Draw/Seconds");
 	binder->AddChoice(_("Waveform Style"), AudioWaveformRenderer::GetWaveformStyles(), "Audio/Display/Waveform Style");
@@ -514,22 +517,6 @@ void BuildAudioPage(OptionPage *p) {
 	const wxString sq_arr[4] = { _("Regular quality"), _("Better quality"), _("High quality"), _("Insane quality") };
 	wxArrayString sq_choice(4, sq_arr);
 	binder->AddChoice(_("Spectrum Quality"), sq_choice, "Audio/Renderer/Spectrum/Quality");
-
-	const wxString sm_arr[2] = { _("Legacy linear"), _("Frequency curve") };
-	wxArrayString sm_choice(2, sm_arr);
-	binder->AddChoice(_("Spectrum Computation Mode"), sm_choice, "Audio/Renderer/Spectrum/Computation Mode");
-
-	const wxString smm_arr[3] = {
-		_("Time-domain downmix"),
-		_("Strongest channel per frequency bin"),
-		_("Average channel energy per frequency bin")
-	};
-	wxArrayString smm_choice(3, smm_arr);
-	binder->AddChoice(_("Spectrum mono mix method"), smm_choice, "Audio/Renderer/Spectrum/Mono Mix Mode");
-
-	const wxString sc_arr[5] = { _("Linear"), _("Extended"), _("Medium"), _("Compressed"), _("Logarithmic") };
-	wxArrayString sc_choice(5, sc_arr);
-	binder->AddChoice(_("Spectrum Frequency Mapping"), sc_choice, "Audio/Renderer/Spectrum/FreqCurve");
 
 	binder->AddCategory(_("Audio overlay text"));
 	binder->AddFont(_("Overlay labels and cursor font"), "Audio/Karaoke/");
@@ -764,6 +751,8 @@ void BuildAdvancedPage(OptionPage *p) {
 
 /// Advanced Audio preferences subpage
 void BuildAdvancedAudioPage(OptionPage *p) {
+	NormalizeAudioDisplayDormantOptions();
+
 	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
 	auto *grid = binder->GetGrid();
 	binder->BindEvents(binder);
@@ -774,17 +763,6 @@ void BuildAdvancedAudioPage(OptionPage *p) {
 	wxArrayString apl_choice = to_wx(AudioPlayerFactory::GetClasses());
 	binder->AddChoice(_("Audio player"), apl_choice, "Audio/Player");
 
-	{
-		const wxString rb_arr[] = {
-			_("Auto"),
-			_("GPU (Skia)"),
-			_("Bitmap (Skia)"),
-			_("Bitmap (wxDC/GDI)")
-		};
-		wxArrayString rb_choice(4, rb_arr);
-		binder->AddChoice(_("Render backend"), rb_choice, "Audio/Display/Draw/Render Backend");
-	}
-
 	binder->AddCategory(_("Cache"));
 	const wxString ct_arr[3] = { _("None (Not recommended with Avisynth)"), _("RAM"), _("Hard Disk") };
 	wxArrayString ct_choice(3, ct_arr);
@@ -793,11 +771,6 @@ void BuildAdvancedAudioPage(OptionPage *p) {
 
 	binder->AddCategory(_("Spectrum Cache"));
 	binder->AddInt(_("Cache memory max (MB)"), "Audio/Renderer/Spectrum/Memory Max", 2, 1024);
-	{
-		const wxString cf_arr[] = { _("Float32"), _("Float16 (half)") };
-		wxArrayString cf_choice(2, cf_arr);
-		binder->AddChoice(_("Cache format"), cf_choice, "Audio/Renderer/Spectrum/Cache Format");
-	}
 
 #ifdef WITH_AVISYNTH
 	binder->AddCategory(wxS("Avisynth"));

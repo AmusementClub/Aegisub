@@ -583,24 +583,14 @@ add_executable(Aegisub WIN32
     src/wx_audio_controller_power_host.cpp
     src/audio_controller_timer.cpp
     src/threaded_ui_timer.cpp
-    src/audio_display_analysis.cpp
-    src/audio_display_render_model.h
-    src/audio_latest_range_scheduler.cpp
     src/audio_display.cpp
-    src/audio_display_source.cpp
     src/audio_karaoke.cpp
-    src/audio_mix_policy.cpp
     src/audio_marker.cpp
     src/audio_player.cpp
     src/audio_provider_factory.cpp
-    src/audio_tile_compositor.cpp
     src/audio_renderer.cpp
-    src/audio_spectrum_bitmap_tile_renderer.cpp
-    src/audio_spectrum_analysis_cache.cpp
     src/audio_renderer_spectrum.cpp
-    src/audio_waveform_bitmap_tile_renderer.cpp
     src/audio_renderer_waveform.cpp
-    src/audio_waveform_summary_cache.cpp
     src/audio_timing_dialogue.cpp
     src/audio_timing_karaoke.cpp
     src/automation/automation_debug_adapter.cpp
@@ -901,12 +891,6 @@ if(WITH_SKIA)
     target_compile_definitions(Aegisub PRIVATE WITH_SKIA)
     target_link_libraries(Aegisub PRIVATE unofficial::skia::skia)
     target_sources(Aegisub PRIVATE
-        src/audio_display_skia_backend.cpp
-        src/audio_display_skia_backend.h
-        src/audio_display_skia_renderer.cpp
-        src/audio_display_skia_renderer.h
-        src/audio_display_skia_target.cpp
-        src/audio_display_skia_target.h
         src/video_overlay_draw_context_skia.cpp
         src/video_overlay_draw_context_skia.h
         src/skia_runtime/skia_gpu_context_host.cpp
@@ -1264,12 +1248,6 @@ set(WITH_BENCH OFF CACHE BOOL "Enable benchmark targets")
 if(WITH_BENCH)
     include("CMakeLists.bench.txt")
 endif()
-
-set_source_files_properties(
-    src/audio_latest_range_scheduler.cpp
-    PROPERTIES
-    SKIP_PRECOMPILE_HEADERS ON
-)
 
 message(STATUS "\n"
     "Configure settings\n"

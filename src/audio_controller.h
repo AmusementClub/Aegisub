@@ -32,10 +32,11 @@
 
 #include <cstdint>
 #include <memory>
+#include <wx/event.h>
+#include <wx/power.h>
+#include <wx/timer.h>
 
 class AudioPlayer;
-class AudioControllerPowerHost;
-class AudioControllerTimer;
 class AudioTimingController;
 class TimeRange;
 namespace agi { class AudioProvider; }
@@ -46,7 +47,7 @@ namespace agi { struct Context; }
 ///
 /// AudioController owns an AudioPlayer and uses it to play audio from the
 /// project's current audio provider.
-class AudioController final {
+class AudioController final : public wxEvtHandler {
 	/// Project context this controller belongs to
 	agi::Context *context;
 
@@ -81,8 +82,7 @@ class AudioController final {
 	PlaybackMode playback_mode = PM_NotPlaying;
 
 	/// Timer used for playback position updates
-	std::unique_ptr<AudioControllerTimer> playback_timer;
-	std::unique_ptr<AudioControllerPowerHost> power_host;
+	wxTimer playback_timer;
 
 	/// The audio provider
 	agi::AudioProvider *provider = nullptr;
@@ -91,7 +91,7 @@ class AudioController final {
 	void OnAudioProvider(agi::AudioProvider *new_provider);
 
 	/// Event handler for the playback timer
-	void OnPlaybackTimer();
+	void OnPlaybackTimer(wxTimerEvent &event);
 
 	/// @brief Timing controller signals primary playback range changed
 	void OnTimingControllerUpdatedPrimaryRange();
@@ -102,8 +102,12 @@ class AudioController final {
 	/// Handler for the current audio player changing
 	void OnAudioPlayerChanged();
 
-	void HandleComputerSuspending();
-	void HandleComputerResuming();
+#ifdef wxHAS_POWER_EVENTS
+	/// Handle computer going into suspend mode by stopping audio and closing device
+	void OnComputerSuspending(wxPowerEvent &event);
+	/// Handle computer resuming from suspend by re-opening the audio device
+	void OnComputerResuming(wxPowerEvent &event);
+#endif
 
 	/// @brief Convert a count of audio samples to a time in milliseconds
 	/// @param samples Sample count to convert

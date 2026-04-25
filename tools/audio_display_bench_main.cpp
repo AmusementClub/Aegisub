@@ -103,8 +103,7 @@ struct SyntheticSilentProvider final : agi::AudioProvider {
 };
 
 struct NoOpAudioBitmapProvider final : AudioRendererBitmapProvider {
-	AudioRenderResult Render(wxBitmap &, int, AudioRenderingStyle) override {
-		return AudioRenderResult::Ready;
+	void Render(wxBitmap &, int, AudioRenderingStyle) override {
 	}
 
 	void RenderBlank(wxDC &, const wxRect &, AudioRenderingStyle) override {
@@ -119,7 +118,8 @@ BenchResult RunAudioRendererTileDrawHotBench(int cache_bitmap_width, const char 
 
 	SyntheticSilentProvider provider(frames, 2);
 	NoOpAudioBitmapProvider bitmap_provider;
-	AudioRenderer renderer(cache_bitmap_width);
+	(void)cache_bitmap_width;
+	AudioRenderer renderer;
 	renderer.SetCacheMaxSize(256ull * 1024 * 1024);
 	renderer.SetHeight(viewport_height);
 	renderer.SetAudioProvider(&provider);
@@ -147,7 +147,8 @@ BenchResult RunAudioRendererTileDrawColdBench(int cache_bitmap_width, const char
 
 	SyntheticSilentProvider provider(frames, 2);
 	NoOpAudioBitmapProvider bitmap_provider;
-	AudioRenderer renderer(cache_bitmap_width);
+	(void)cache_bitmap_width;
+	AudioRenderer renderer;
 	renderer.SetCacheMaxSize(256ull * 1024 * 1024);
 	renderer.SetHeight(viewport_height);
 	renderer.SetAudioProvider(&provider);

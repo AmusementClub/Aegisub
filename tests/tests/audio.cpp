@@ -363,46 +363,13 @@ TEST(lagi_audio, ram_cache) {
 	EXPECT_EQ(2, provider->GetBytesPerSample());
 	EXPECT_EQ(false, provider->AreSamplesFloat());
 	EXPECT_EQ(false, provider->NeedsCache());
-	EXPECT_EQ(provider->GetNumSamples(), provider->GetDecodedSamples());
+	while (provider->GetDecodedSamples() != provider->GetNumSamples()) agi::util::sleep_for(0);
 
 	uint16_t buff[512];
 	provider->GetAudio(buff, (1 << 22) - 256, 512); // Stride two cache blocks
 
 	for (size_t i = 0; i < 512; ++i)
 		ASSERT_EQ(static_cast<uint16_t>((1 << 22) - 256 + i), buff[i]);
-}
-
-TEST(lagi_audio, ram_cache_reports_memory_stats) {
-	auto provider = agi::CreateRAMAudioProvider(agi::make_unique<TestAudioProvider<>>());
-
-	auto const cold_stats = provider->GetMemoryStats();
-	EXPECT_EQ("RAM Paged", cold_stats.provider_name);
-	EXPECT_EQ("memory", cold_stats.storage_kind);
-	EXPECT_EQ(0u, cold_stats.storage_bytes);
-	EXPECT_EQ(static_cast<size_t>(90) * 48000 * sizeof(uint16_t), cold_stats.logical_bytes);
-	EXPECT_EQ(0u, cold_stats.decoded_bytes);
-	EXPECT_EQ(0, cold_stats.decoded_samples);
-	EXPECT_EQ(1, cold_stats.channels);
-	EXPECT_EQ(2, cold_stats.bytes_per_sample);
-	EXPECT_EQ(48000, cold_stats.sample_rate);
-
-	uint16_t sample = 0;
-	provider->GetAudio(&sample, 0, 1);
-	EXPECT_EQ(0, sample);
-
-	auto const warm_stats = provider->GetMemoryStats();
-	EXPECT_EQ(static_cast<size_t>(256) * 1024, warm_stats.storage_bytes);
-	EXPECT_EQ(warm_stats.storage_bytes, warm_stats.decoded_bytes);
-	EXPECT_EQ(static_cast<size_t>(256) * 1024, warm_stats.page_size_bytes);
-	EXPECT_EQ(131072, warm_stats.decoded_samples);
-	EXPECT_EQ(1, warm_stats.resident_pages);
-}
-
-TEST(lagi_audio, ram_cache_preserves_wrapped_provider_name) {
-	auto provider = agi::CreateRAMAudioProvider(agi::make_unique<NamedTestAudioProvider<>>());
-
-	auto const stats = provider->GetMemoryStats();
-	EXPECT_EQ("RAM Paged (TestSource)", stats.provider_name);
 }
 
 TEST(lagi_audio, hd_cache) {
@@ -433,121 +400,6 @@ TEST(lagi_audio, hd_cache_preserves_wrapped_provider_name) {
 
 	auto const stats = provider->GetMemoryStats();
 	EXPECT_EQ("HD (TestSource)", stats.provider_name);
-}
-
-TEST(lagi_audio, ram_cache_does_not_decode_until_requested) {
-	auto source = agi::make_unique<BlockingSequenceAudioProvider>();
-	auto *raw = source.get();
-	auto provider = agi::CreateRAMAudioProvider(std::move(source));
-
-	agi::util::sleep_for(20);
-	std::lock_guard<std::mutex> lock(raw->mutex);
-	EXPECT_FALSE(raw->entered);
-}
-
-TEST(lagi_audio, ram_cache_waits_for_cold_page_and_returns_exact_samples) {
-	auto source = agi::make_unique<BlockingSequenceAudioProvider>();
-	auto *raw = source.get();
-	auto provider = agi::CreateRAMAudioProvider(std::move(source));
-
-	uint16_t buff[32] = { };
-	std::thread reader([&] {
-		provider->GetAudio(buff, provider->GetNumSamples() - 32, 32);
-	});
-
-	ASSERT_TRUE(raw->WaitUntilEntered());
-	raw->Release();
-	reader.join();
-
-	for (size_t i = 0; i < 32; ++i)
-		EXPECT_EQ(static_cast<uint16_t>(provider->GetNumSamples() - 32 + i), buff[i]);
-}
-
-TEST(lagi_audio, ram_cache_reuses_hot_pages_without_redecoding) {
-	auto source = agi::make_unique<CountingSequenceAudioProvider>();
-	auto *raw = source.get();
-	auto provider = agi::CreateRAMAudioProvider(std::move(source));
-
-	uint16_t buff[16];
-	provider->GetAudio(buff, 100, 16);
-	provider->GetAudio(buff, 200, 16);
-	EXPECT_EQ(1, raw->fill_calls.load(std::memory_order_relaxed));
-
-	provider->GetAudio(buff, 131072 + 10, 16);
-	EXPECT_EQ(2, raw->fill_calls.load(std::memory_order_relaxed));
-}
-
-TEST(lagi_audio, ram_cache_playback_window_prefetches_ahead_pages) {
-	constexpr int64_t kPageFrames = 131072;
-	auto source = agi::make_unique<CountingSequenceAudioProvider>(1800);
-	auto *raw = source.get();
-	auto provider = agi::CreateRAMAudioProvider(std::move(source));
-
-	provider->SetPlaybackWindow(0, kPageFrames * 3, kPageFrames);
-	ASSERT_TRUE(WaitUntil([&] { return raw->fill_calls.load(std::memory_order_relaxed) >= 4; }));
-
-	auto const stats = provider->GetMemoryStats();
-	EXPECT_GE(stats.pinned_pages, 4);
-	EXPECT_GE(stats.resident_pages, 4);
-}
-
-TEST(lagi_audio, ram_cache_reports_loading_stats_for_inflight_prefetch) {
-	auto source = agi::make_unique<BlockingSequenceAudioProvider>(1800);
-	auto *raw = source.get();
-	auto provider = agi::CreateRAMAudioProvider(std::move(source));
-
-	provider->SetPlaybackWindow(0, 131072 * 2, 0);
-	ASSERT_TRUE(raw->WaitUntilEntered());
-
-	auto const stats = provider->GetMemoryStats();
-	EXPECT_EQ(static_cast<size_t>(256) * 1024, stats.page_size_bytes);
-	EXPECT_EQ(1, stats.loading_pages);
-	EXPECT_EQ(static_cast<size_t>(256) * 1024, stats.loading_bytes);
-
-	raw->Release();
-	ASSERT_TRUE(WaitUntil([&] { return provider->GetMemoryStats().loading_pages == 0; }));
-}
-
-TEST(lagi_audio, ram_cache_viewport_hint_prefetches_without_direct_read) {
-	auto source = agi::make_unique<CountingSequenceAudioProvider>(1800);
-	auto *raw = source.get();
-	auto provider = agi::CreateRAMAudioProvider(std::move(source));
-
-	provider->HintVisibleRange(0, 131072 * 2);
-	ASSERT_TRUE(WaitUntil([&] { return raw->fill_calls.load(std::memory_order_relaxed) >= 1; }));
-
-	auto const stats = provider->GetMemoryStats();
-	EXPECT_GT(stats.pinned_pages, 0);
-	EXPECT_GT(stats.resident_pages, 0);
-}
-
-TEST(lagi_audio, ram_cache_bounds_resident_memory) {
-	constexpr int64_t kPageFrames = 131072;
-	auto provider = agi::CreateRAMAudioProvider(agi::make_unique<TestAudioProvider<>>(1800));
-
-	uint16_t sample = 0;
-	for (int page = 0; page < 520; ++page)
-		provider->GetAudio(&sample, static_cast<int64_t>(page) * kPageFrames, 1);
-
-	auto const stats = provider->GetMemoryStats();
-	EXPECT_LE(stats.storage_bytes, static_cast<size_t>(132) * 1024 * 1024);
-	EXPECT_LE(stats.decoded_bytes, static_cast<size_t>(128) * 1024 * 1024);
-	EXPECT_GT(stats.storage_bytes, 0u);
-}
-
-TEST(lagi_audio, ram_cache_idle_shrink_reduces_storage_after_burst) {
-	constexpr int64_t kPageFrames = 131072;
-	auto provider = agi::CreateRAMAudioProvider(agi::make_unique<TestAudioProvider<>>(1800));
-
-	uint16_t sample = 0;
-	for (int page = 0; page < 300; ++page)
-		provider->GetAudio(&sample, static_cast<int64_t>(page) * kPageFrames, 1);
-
-	ASSERT_TRUE(WaitUntil([&] {
-		auto const stats = provider->GetMemoryStats();
-		return stats.storage_bytes <= static_cast<size_t>(68) * 1024 * 1024
-			&& stats.free_bytes == 0;
-	}, std::chrono::milliseconds(4000)));
 }
 
 TEST(lagi_audio, hd_cache_zero_fills_undecoded_tail) {

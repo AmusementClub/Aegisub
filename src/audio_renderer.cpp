@@ -33,8 +33,6 @@
 
 #include "audio_renderer.h"
 
-#include "audio_display_source.h"
-
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/make_unique.h>
 
@@ -70,13 +68,11 @@ size_t AudioRendererBitmapCacheBitmapFactory::GetBlockSize() const
 	return block_size;
 }
 
-AudioRenderer::AudioRenderer(int cache_bitmap_width_)
-: cache_bitmap_width(std::max(1, cache_bitmap_width_))
+AudioRenderer::AudioRenderer()
 {
 	bitmaps.reserve(AudioStyle_MAX);
 	for (int i = 0; i < AudioStyle_MAX; ++i)
 		bitmaps.emplace_back(256, AudioRendererBitmapCacheBitmapFactory(this));
-	bitmap_pending.resize(AudioStyle_MAX);
 
 	// Make sure there's *some* values for those fields, and in the caches
 	SetMillisecondsPerPixel(1);
@@ -120,8 +116,6 @@ void AudioRenderer::SetRenderer(AudioRendererBitmapProvider *const _renderer)
 
 		if (renderer)
 		{
-			display_source = CreateAudioDisplaySource(provider);
-			renderer->SetDisplaySource(display_source.get());
 			renderer->SetProvider(provider);
 			renderer->SetAmplitudeScale(amplitude_scale);
 			renderer->SetMillisecondsPerPixel(pixel_ms);
@@ -134,10 +128,6 @@ void AudioRenderer::SetAudioProvider(agi::AudioProvider *const _provider)
 	if (compare_and_set(provider, _provider))
 	{
 		Invalidate();
-		display_source = CreateAudioDisplaySource(provider);
-
-		if (renderer)
-			renderer->SetDisplaySource(display_source.get());
 
 		if (renderer)
 			renderer->SetProvider(provider);
@@ -162,7 +152,6 @@ void AudioRenderer::ResetBlockCount()
 	{
 		const size_t total_blocks = NumBlocks(provider->GetNumSamples());
 		for (auto& bmp : bitmaps) bmp.SetBlockCount(total_blocks);
-		for (auto &pending : bitmap_pending) pending.assign(total_blocks, uint8_t{0});
 	}
 }
 
@@ -179,14 +168,9 @@ wxBitmap const& AudioRenderer::GetCachedBitmap(const int i, const AudioRendering
 
 	bool created = false;
 	auto& bmp = bitmaps[style].Get(i, &created);
-	bool pending = false;
-	if (static_cast<size_t>(style) < bitmap_pending.size() && static_cast<size_t>(i) < bitmap_pending[style].size())
-		pending = bitmap_pending[style][i] != 0;
-
-	if (created || pending) {
-		const auto result = renderer->Render(bmp, i * cache_bitmap_width, style);
-		if (static_cast<size_t>(style) < bitmap_pending.size() && static_cast<size_t>(i) < bitmap_pending[style].size())
-			bitmap_pending[style][i] = result == AudioRenderResult::Placeholder ? uint8_t{1} : uint8_t{0};
+	if (created)
+	{
+		renderer->Render(bmp, i*cache_bitmap_width, style);
 		needs_age = true;
 	}
 
@@ -239,7 +223,6 @@ void AudioRenderer::Render(wxDC &dc, wxPoint origin, const int start, const int 
 void AudioRenderer::Invalidate()
 {
 	for (auto& bmp : bitmaps) bmp.Age(0);
-	for (auto &pending : bitmap_pending) std::fill(pending.begin(), pending.end(), uint8_t{0});
 	needs_age = false;
 }
 
@@ -247,11 +230,6 @@ void AudioRendererBitmapProvider::SetProvider(agi::AudioProvider *const _provide
 {
 	if (compare_and_set(provider, _provider))
 		OnSetProvider();
-}
-
-void AudioRendererBitmapProvider::SetDisplaySource(AudioDisplaySource *const source)
-{
-	display_source = source;
 }
 
 void AudioRendererBitmapProvider::SetMillisecondsPerPixel(const double new_pixel_ms)

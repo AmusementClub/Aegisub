@@ -38,7 +38,7 @@ FontCollector::FontCollector(FontCollectorEventSink event_sink)
 {
 }
 
-void FontCollector::ProcessDialogueLine(const AssDialogue *line, int index) {
+void FontCollector::ProcessDialogueLine(const AssDialogue *line, int index, int wrap_style) {
 	if (line->Comment) return;
 
 	auto style_it = styles.find(line->Style);
@@ -100,6 +100,8 @@ void FontCollector::ProcessDialogueLine(const AssDialogue *line, int index) {
 					char next = text[++i];
 					if (next == 'N' || next == 'n') {
 						++i;
+						if (next == 'n' && wrap_style != 2)
+							chars.push_back(0x20);
 						continue;
 					}
 					if (next == 'h') {
@@ -218,9 +220,10 @@ std::vector<agi::fs::path> FontCollector::GetFontPaths(const AssFile *file) {
 		used_styles[info].styles.push_back(style.name);
 	}
 
+	int wrap_style = file->GetScriptInfoAsInt("WrapStyle");
 	int index = 0;
 	for (auto const& diag : file->Events)
-		ProcessDialogueLine(&diag, ++index);
+		ProcessDialogueLine(&diag, ++index, wrap_style);
 
 	event = FontCollectorEvent();
 	event.type = FontCollectorEventType::SearchingForFontFiles;

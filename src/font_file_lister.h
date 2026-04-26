@@ -152,7 +152,7 @@ class FontCollector {
 	int missing_glyphs = 0;
 
 	/// Gather all of the unique styles with text on a line
-	void ProcessDialogueLine(const AssDialogue *line, int index);
+	void ProcessDialogueLine(const AssDialogue *line, int index, int wrap_style);
 
 	/// Get the font for a single style
 	void ProcessChunk(std::pair<StyleInfo, UsageData> const& style);

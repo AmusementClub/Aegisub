@@ -158,6 +158,7 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style, F
 		usage.styles = style.second.styles;
 		usage.override_lines = style.second.lines;
 		usage.matched.facename = res.matched_facename;
+		usage.matched.face_index = res.face_index;
 		usage.matched.weight = res.matched_weight;
 		usage.matched.italic = res.matched_italic;
 		usage.matched.paths = res.paths;

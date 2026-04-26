@@ -39,6 +39,7 @@ class AssFile;
 struct CollectionResult {
 	/// Font face selected by the platform matcher.
 	std::string matched_facename;
+	int face_index = -1;
 	/// Font weight selected by the platform matcher.
 	int matched_weight = 0;
 	/// Whether the selected platform font is italic.
@@ -53,6 +54,7 @@ struct CollectionResult {
 
 struct FontCollectorMatchedFont {
 	std::string facename;
+	int face_index = -1;
 	int weight = 0;
 	bool italic = false;
 	std::vector<agi::fs::path> paths;

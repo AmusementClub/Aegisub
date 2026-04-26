@@ -107,6 +107,7 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 	FcChar8 *matched_family;
 	if (FcPatternGetString(match, FC_FAMILY, 0, &matched_family) == FcResultMatch)
 		ret.matched_facename = reinterpret_cast<char const *>(matched_family);
+	FcPatternGetInteger(match, FC_INDEX, 0, &ret.face_index);
 	if (FcPatternGetInteger(match, FC_WEIGHT, 0, &ret.matched_weight) != FcResultMatch)
 		ret.matched_weight = 0;
 	int matched_slant = 0;

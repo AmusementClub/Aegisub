@@ -135,6 +135,7 @@ void EmitCUsage(FontCollectorAssFontUsage const& usage,
 	c_usage.override_lines = usage.override_lines.empty() ? nullptr : usage.override_lines.data();
 	c_usage.override_line_count = usage.override_lines.size();
 	c_usage.matched.facename = usage.matched.facename.c_str();
+	c_usage.matched.face_index = usage.matched.face_index;
 	c_usage.matched.weight = usage.matched.weight;
 	c_usage.matched.italic = usage.matched.italic;
 	c_usage.matched.paths = paths.empty() ? nullptr : paths.data();

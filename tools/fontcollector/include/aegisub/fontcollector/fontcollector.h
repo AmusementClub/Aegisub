@@ -91,6 +91,7 @@ typedef struct AegisubFontCollectorEvent {
 
 typedef struct AegisubFontCollectorMatchedFont {
 	char const *facename;
+	int face_index;
 	int weight;
 	int italic;
 	char const *const *paths;

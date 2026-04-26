@@ -19,6 +19,7 @@
 #include <libaegisub/fs_fwd.h>
 #include <libaegisub/scoped_ptr.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -36,6 +37,12 @@ class AssDialogue;
 class AssFile;
 
 struct CollectionResult {
+	/// Font face selected by the platform matcher.
+	std::string matched_facename;
+	/// Font weight selected by the platform matcher.
+	int matched_weight = 0;
+	/// Whether the selected platform font is italic.
+	bool matched_italic = false;
 	/// Characters which could not be found in any font files
 	std::string missing;
 	/// Paths to the file(s) containing the requested font
@@ -44,13 +51,37 @@ struct CollectionResult {
 	bool fake_italic = false;
 };
 
+struct FontCollectorMatchedFont {
+	std::string facename;
+	int weight = 0;
+	bool italic = false;
+	std::vector<agi::fs::path> paths;
+	bool fake_bold = false;
+	bool fake_italic = false;
+	std::string missing_chars;
+};
+
+struct FontCollectorAssFontUsage {
+	std::string ass_facename;
+	int ass_bold = 0;
+	bool ass_italic = false;
+	std::vector<uint32_t> chars;
+	std::vector<std::string> styles;
+	std::vector<int> override_lines;
+	FontCollectorMatchedFont matched;
+};
+
+struct FontCollectorDetails {
+	std::vector<FontCollectorAssFontUsage> fonts;
+};
+
 #ifdef _WIN32
 class GdiFontFileLister {
 	std::unordered_multimap<uint32_t, agi::fs::path> index;
 	agi::scoped_holder<HDC> dc;
 	std::string buffer;
 
-	bool ProcessLogFont(LOGFONTW const& expected, LOGFONTW const& actual, std::vector<int> const& characters);
+	bool ProcessLogFont(LOGFONTW const& expected, LOGFONTW const& actual, std::vector<uint32_t> const& characters);
 
 public:
 	/// Constructor
@@ -63,7 +94,7 @@ public:
 	/// @param italic Italic?
 	/// @param characters Characters in this style
 	/// @return Path to the matching font file(s), or empty if not found
-	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<int> const& characters);
+	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters);
 };
 
 using FontFileLister = GdiFontFileLister;
@@ -79,7 +110,7 @@ struct CoreTextFontFileLister {
 	/// @param italic Italic?
 	/// @param characters Characters in this style
 	/// @return Path to the matching font file(s), or empty if not found
-	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<int> const& characters);
+	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters);
 };
 
 using FontFileLister = CoreTextFontFileLister;
@@ -111,7 +142,7 @@ public:
 	/// @param italic Italic?
 	/// @param characters Characters in this style
 	/// @return Path to the matching font file(s), or empty if not found
-	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<int> const& characters);
+	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters);
 };
 
 using FontFileLister = FontConfigFontFileLister;
@@ -130,7 +161,7 @@ class FontCollector {
 
 	/// Data about where each style is used
 	struct UsageData {
-		std::vector<int> chars;          ///< Characters used in this style which glyphs will be needed for
+		std::vector<uint32_t> chars;     ///< Characters used in this style which glyphs will be needed for
 		std::vector<int> lines;          ///< Lines on which this style is used via overrides
 		std::vector<std::string> styles; ///< ASS styles which use this style
 	};
@@ -155,7 +186,7 @@ class FontCollector {
 	void ProcessDialogueLine(const AssDialogue *line, int index, int wrap_style);
 
 	/// Get the font for a single style
-	void ProcessChunk(std::pair<StyleInfo, UsageData> const& style);
+	void ProcessChunk(std::pair<StyleInfo, UsageData> const& style, FontCollectorDetails *details);
 
 	/// Print the lines and styles on which a missing font is used
 	void PrintUsage(UsageData const& data);
@@ -170,5 +201,5 @@ public:
 	/// @param file Lines in the subtitle file to check
 	/// @param status Callback function for messages
 	/// @return List of paths to fonts
-	std::vector<agi::fs::path> GetFontPaths(const AssFile *file);
+	std::vector<agi::fs::path> GetFontPaths(const AssFile *file, FontCollectorDetails *details = nullptr);
 };

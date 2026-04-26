@@ -142,10 +142,29 @@ void FontCollector::ProcessDialogueLine(const AssDialogue *line, int index, int 
 	}
 }
 
-void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style) {
+void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style, FontCollectorDetails *details) {
 	if (style.second.chars.empty()) return;
 
 	auto res = lister.GetFontPaths(style.first.facename, style.first.bold, style.first.italic, style.second.chars);
+	for (auto& path : res.paths)
+		path.make_preferred();
+
+	if (details) {
+		auto& usage = details->fonts.emplace_back();
+		usage.ass_facename = style.first.facename;
+		usage.ass_bold = style.first.bold;
+		usage.ass_italic = style.first.italic;
+		usage.chars = style.second.chars;
+		usage.styles = style.second.styles;
+		usage.override_lines = style.second.lines;
+		usage.matched.facename = res.matched_facename;
+		usage.matched.weight = res.matched_weight;
+		usage.matched.italic = res.matched_italic;
+		usage.matched.paths = res.paths;
+		usage.matched.fake_bold = res.fake_bold;
+		usage.matched.fake_italic = res.fake_italic;
+		usage.matched.missing_chars = res.missing;
+	}
 
 	if (res.paths.empty()) {
 		FontCollectorEvent event;
@@ -157,7 +176,6 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style) {
 	}
 	else {
 		for (auto& elem : res.paths) {
-			elem.make_preferred();
 			if (std::find(begin(results), end(results), elem) == end(results)) {
 				FontCollectorEvent event;
 				event.type = FontCollectorEventType::FontFound;
@@ -204,9 +222,11 @@ void FontCollector::PrintUsage(UsageData const& data) {
 	Emit(event_sink, std::move(event));
 }
 
-std::vector<agi::fs::path> FontCollector::GetFontPaths(const AssFile *file) {
+std::vector<agi::fs::path> FontCollector::GetFontPaths(const AssFile *file, FontCollectorDetails *details) {
 	missing = 0;
 	missing_glyphs = 0;
+	if (details)
+		details->fonts.clear();
 
 	FontCollectorEvent event;
 	event.type = FontCollectorEventType::ParsingFile;
@@ -224,11 +244,13 @@ std::vector<agi::fs::path> FontCollector::GetFontPaths(const AssFile *file) {
 	int index = 0;
 	for (auto const& diag : file->Events)
 		ProcessDialogueLine(&diag, ++index, wrap_style);
+	if (details)
+		details->fonts.reserve(used_styles.size());
 
 	event = FontCollectorEvent();
 	event.type = FontCollectorEventType::SearchingForFontFiles;
 	Emit(event_sink, std::move(event));
-	for (auto const& style : used_styles) ProcessChunk(style);
+	for (auto const& style : used_styles) ProcessChunk(style, details);
 	event = FontCollectorEvent();
 	event.type = FontCollectorEventType::SearchComplete;
 	Emit(event_sink, std::move(event));

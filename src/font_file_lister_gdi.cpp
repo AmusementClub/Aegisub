@@ -172,7 +172,7 @@ GdiFontFileLister::GdiFontFileLister(FontCollectorEventSink &cb)
 	index = index_fonts(cb);
 }
 
-CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<int> const& characters) {
+CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters) {
 	CollectionResult ret;
 
 	LOGFONTW lf{};
@@ -227,6 +227,15 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 		DeleteObject(hfont);
 	});
 
+	wchar_t selected_face[LF_FACESIZE] = {};
+	if (GetTextFaceW(dc, LF_FACESIZE, selected_face) > 0)
+		ret.matched_facename = agi::charset::ConvertW(selected_face);
+	TEXTMETRICW metrics = {};
+	if (GetTextMetricsW(dc, &metrics)) {
+		ret.matched_weight = metrics.tmWeight;
+		ret.matched_italic = metrics.tmItalic != 0;
+	}
+
 	get_font_data(buffer, dc);
 
 	auto range = index.equal_range(murmur3(buffer.c_str(), std::min<size_t>(buffer.size(), 1024U)));
@@ -253,7 +262,7 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 	// Convert the characters to a utf-16 string
 	std::wstring utf16characters;
 	utf16characters.reserve(characters.size());
-	for (int chr : characters) {
+	for (auto chr : characters) {
 		font_collector::unicode::Rune rune;
 		if (!font_collector::unicode::Rune::TryCreate(chr, rune))
 			continue;

@@ -240,7 +240,7 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FontC
 			});
 		};
 
-		CollectFonts(subs, destination, oper, AppendFontEvent, [](agi::fs::path const& archive) {
+		CollectFonts(subs, destination, oper, AppendFontEvent, nullptr, [](agi::fs::path const& archive) {
 			return agi::make_unique<WxZipArchiveWriter>(archive);
 		});
 

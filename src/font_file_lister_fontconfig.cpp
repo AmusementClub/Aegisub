@@ -64,7 +64,7 @@ FontConfigFontFileLister::FontConfigFontFileLister(FontCollectorEventSink &cb)
 	FcConfigBuildFonts(config);
 }
 
-CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<int> const& characters) {
+CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters) {
 	CollectionResult ret;
 
 	std::string family = facename[0] == '@' ? facename.substr(1) : facename;
@@ -104,13 +104,22 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 
 	auto match = matches->fonts[0];
 
+	FcChar8 *matched_family;
+	if (FcPatternGetString(match, FC_FAMILY, 0, &matched_family) == FcResultMatch)
+		ret.matched_facename = reinterpret_cast<char const *>(matched_family);
+	if (FcPatternGetInteger(match, FC_WEIGHT, 0, &ret.matched_weight) != FcResultMatch)
+		ret.matched_weight = 0;
+	int matched_slant = 0;
+	if (FcPatternGetInteger(match, FC_SLANT, 0, &matched_slant) == FcResultMatch)
+		ret.matched_italic = matched_slant != FC_SLANT_ROMAN;
+
 	FcChar8 *file;
 	if(FcPatternGetString(match, FC_FILE, 0, &file) != FcResultMatch)
 		return ret;
 
 	FcCharSet *charset;
 	if (FcPatternGetCharSet(match, FC_CHARSET, 0, &charset) == FcResultMatch) {
-		for (int chr : characters) {
+		for (auto chr : characters) {
 			font_collector::unicode::Rune rune;
 			if (!font_collector::unicode::Rune::TryCreate(chr, rune))
 				continue;

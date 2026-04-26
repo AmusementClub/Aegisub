@@ -5,6 +5,7 @@
 #include "ass_file.h"
 #include "ass_io_core.h"
 #include "font_collector_core.h"
+#include "font_file_lister.h"
 
 #include <libaegisub/charset.h>
 #include <libaegisub/exception.h>
@@ -102,12 +103,56 @@ void EmitCEvent(FontCollectorEvent const& event, AegisubFontCollectorEventCallba
 
 	callback(&c_event, user_data);
 }
+
+void EmitCUsage(FontCollectorAssFontUsage const& usage,
+                AegisubFontCollectorFontUsageCallback callback,
+                void *user_data) {
+	if (!callback)
+		return;
+
+	std::vector<std::string> path_texts;
+	path_texts.reserve(usage.matched.paths.size());
+	std::vector<char const*> paths;
+	paths.reserve(usage.matched.paths.size());
+	for (auto const& path : usage.matched.paths) {
+		path_texts.push_back(agi::fs::PathToString(path));
+		paths.push_back(path_texts.back().c_str());
+	}
+
+	std::vector<char const*> styles;
+	styles.reserve(usage.styles.size());
+	for (auto const& style : usage.styles)
+		styles.push_back(style.c_str());
+
+	AegisubFontCollectorFontUsage c_usage = {};
+	c_usage.ass_facename = usage.ass_facename.c_str();
+	c_usage.ass_bold = usage.ass_bold;
+	c_usage.ass_italic = usage.ass_italic;
+	c_usage.chars = usage.chars.empty() ? nullptr : usage.chars.data();
+	c_usage.char_count = usage.chars.size();
+	c_usage.styles = styles.empty() ? nullptr : styles.data();
+	c_usage.style_count = styles.size();
+	c_usage.override_lines = usage.override_lines.empty() ? nullptr : usage.override_lines.data();
+	c_usage.override_line_count = usage.override_lines.size();
+	c_usage.matched.facename = usage.matched.facename.c_str();
+	c_usage.matched.weight = usage.matched.weight;
+	c_usage.matched.italic = usage.matched.italic;
+	c_usage.matched.paths = paths.empty() ? nullptr : paths.data();
+	c_usage.matched.path_count = paths.size();
+	c_usage.matched.fake_bold = usage.matched.fake_bold;
+	c_usage.matched.fake_italic = usage.matched.fake_italic;
+	c_usage.matched.missing_chars = usage.matched.missing_chars.c_str();
+
+	callback(&c_usage, user_data);
+}
 }
 
 extern "C" int aegisub_fontcollector_collect(
 	AegisubFontCollectorRequest const *request,
 	AegisubFontCollectorEventCallback callback,
 	void *user_data,
+	AegisubFontCollectorFontUsageCallback usage_callback,
+	void *usage_user_data,
 	char *error_buffer,
 	size_t error_buffer_size) {
 	WriteError(error_buffer, error_buffer_size, "");
@@ -160,6 +205,7 @@ extern "C" int aegisub_fontcollector_collect(
 			? std::string(request->encoding)
 			: agi::charset::Detect(input_path);
 		auto subs = ReadAssFileForCore(input_path, encoding);
+		FontCollectorDetails details;
 
 		CollectFonts(
 			&subs,
@@ -167,7 +213,11 @@ extern "C" int aegisub_fontcollector_collect(
 			mode,
 			[&](FontCollectorEvent const& event) {
 				EmitCEvent(event, callback, user_data);
-			});
+			},
+			usage_callback ? &details : nullptr);
+
+		for (auto const& usage : details.fonts)
+			EmitCUsage(usage, usage_callback, usage_user_data);
 
 		return AEGISUB_FONTCOLLECTOR_OK;
 	}

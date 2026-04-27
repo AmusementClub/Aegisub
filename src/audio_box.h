@@ -57,6 +57,7 @@ class AudioBox final : public wxSashWindow {
 	agi::Context *context;
 
 	agi::signal::Connection audio_open_connection;
+	agi::signal::Connection spectrum_mode_connection;
 
 
 	/// Panel containing the children
@@ -68,6 +69,7 @@ class AudioBox final : public wxSashWindow {
 	wxSlider *HorizontalZoom;
 	wxSlider *VerticalZoom;
 	wxSlider *VolumeBar;
+	wxButton *spectrum_options_btn = nullptr;
 
 	// Mouse wheel zoom accumulator
 	int mouse_zoom_accum = 0;
@@ -77,6 +79,8 @@ class AudioBox final : public wxSashWindow {
 	void OnHorizontalZoom(wxScrollEvent &event);
 	void OnMouseWheel(wxMouseEvent &evt);
 	void OnSashDrag(wxSashEvent &event);
+	void OnSpectrumModeChange(agi::OptionValue const& opt);
+	void OnSpectrumOptionsBtn(wxCommandEvent &event);
 	void OnVerticalLink(agi::OptionValue const& opt);
 	void OnVerticalZoom(wxScrollEvent &event);
 	void OnVolume(wxScrollEvent &event);

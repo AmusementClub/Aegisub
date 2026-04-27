@@ -148,6 +148,7 @@ class AudioDisplay: public wxWindow {
 	/// This can be called if some rendering quality settings have been changed
 	/// in Options and need to be reloaded to take effect.
 	void ReloadRenderingSettings();
+	void ReloadSpectrumRenderingSettings();
 
 	/// Paint the audio data for a time range
 	/// @param dc DC to paint to

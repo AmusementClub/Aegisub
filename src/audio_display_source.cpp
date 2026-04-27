@@ -197,6 +197,42 @@ public:
 		}
 	}
 };
+
+class Int16MonoAudioDisplaySource final : public AudioDisplaySource {
+	agi::AudioProvider *provider;
+
+public:
+	Int16MonoAudioDisplaySource(agi::AudioProvider *provider)
+	: provider(provider) {
+	}
+
+	int64_t GetNumSamples() const override {
+		return provider ? provider->GetNumSamples() : 0;
+	}
+
+	int GetChannels() const override {
+		return provider ? 1 : 0;
+	}
+
+	int GetSampleRate() const override {
+		return provider ? provider->GetSampleRate() : 0;
+	}
+
+	void HintFloatAudio(int64_t start, int64_t count) const override {
+		if (provider && count > 0)
+			provider->HintVisibleRange(start, count);
+	}
+
+	void GetFloatAudio(float *buf, int64_t start, int64_t count) const override {
+		if (!provider || !buf || count <= 0)
+			return;
+
+		auto &scratch = GetAudioDecodeScratch();
+		scratch.s16_buffer.resize(static_cast<size_t>(count));
+		provider->GetInt16MonoAudio(scratch.s16_buffer.data(), start, count);
+		aegisub::simd::DecodeInt16ToFloat(scratch.s16_buffer.data(), static_cast<size_t>(count), buf);
+	}
+};
 }
 
 std::unique_ptr<AudioDisplaySource> CreateAudioDisplaySource(agi::AudioProvider *provider) {
@@ -205,11 +241,20 @@ std::unique_ptr<AudioDisplaySource> CreateAudioDisplaySource(agi::AudioProvider 
 	return agi::make_unique<AudioProviderDisplaySource>(provider);
 }
 
+std::unique_ptr<AudioDisplaySource> CreateInt16MonoAudioDisplaySource(agi::AudioProvider *provider) {
+	if (!provider)
+		return nullptr;
+	return agi::make_unique<Int16MonoAudioDisplaySource>(provider);
+}
+
 namespace {
 class SingleChannelAudioDisplaySource final : public AudioDisplaySource {
 	AudioDisplaySource *core;
 	int channel;
 	int total_channels;
+	mutable std::vector<float> interleaved_cache;
+	mutable int64_t cached_start = 0;
+	mutable int64_t cached_count = 0;
 public:
 	SingleChannelAudioDisplaySource(AudioDisplaySource *source, int ch)
 		: core(source), channel(ch), total_channels(std::max(1, source->GetChannels())) {}
@@ -224,10 +269,13 @@ public:
 		if (total_channels == 1) { core->GetFloatAudio(buf, start, count); return; }
 		if (core->GetFloatAudioChannel(buf, channel, start, count))
 			return;
-		auto &scratch = GetAudioDecodeScratch();
-		scratch.f32_buffer.resize(static_cast<size_t>(count) * total_channels);
-		core->GetFloatAudio(scratch.f32_buffer.data(), start, count);
-		ExtractInterleavedChannel(scratch.f32_buffer.data(), total_channels, channel, count, buf);
+		if (start != cached_start || count != cached_count) {
+			interleaved_cache.resize(static_cast<size_t>(count) * total_channels);
+			core->GetFloatAudio(interleaved_cache.data(), start, count);
+			cached_start = start;
+			cached_count = count;
+		}
+		ExtractInterleavedChannel(interleaved_cache.data(), total_channels, channel, count, buf);
 	}
 };
 }

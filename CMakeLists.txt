@@ -583,6 +583,10 @@ add_executable(Aegisub WIN32
     src/wx_audio_controller_power_host.cpp
     src/audio_controller_timer.cpp
     src/threaded_ui_timer.cpp
+    src/audio_display_analysis.cpp
+    src/audio_display_source.cpp
+    src/audio_mix_policy.cpp
+    src/audio_spectrum_analysis_cache.cpp
     src/audio_display.cpp
     src/audio_karaoke.cpp
     src/audio_marker.cpp

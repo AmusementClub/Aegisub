@@ -43,6 +43,8 @@
 #include "utils.h"
 
 #include <cmath>
+#include <wx/button.h>
+#include <wx/menu.h>
 #include <wx/panel.h>
 #include <wx/slider.h>
 #include <wx/scrolbar.h>
@@ -54,7 +56,8 @@
 enum {
 	Audio_Horizontal_Zoom = 1600,
 	Audio_Vertical_Zoom,
-	Audio_Volume
+	Audio_Volume,
+	Audio_SpectrumOptions
 };
 
 AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
@@ -92,6 +95,12 @@ AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 	link_btn->SetMaxSize(wxDefaultSize);
 	VertVolArea->Add(link_btn, 0, wxRIGHT | wxEXPAND, 0);
 	OPT_SUB("Audio/Link", &AudioBox::OnVerticalLink, this);
+
+	spectrum_options_btn = new wxButton(panel, Audio_SpectrumOptions, _("CH"), wxDefaultPosition, wxSize(20, -1), wxBU_EXACTFIT);
+	spectrum_options_btn->SetToolTip(_("Spectrum display options"));
+	spectrum_options_btn->Enable(OPT_GET("Audio/Spectrum")->GetBool());
+	VertVolArea->Add(spectrum_options_btn, 0, wxEXPAND, 0);
+	spectrum_mode_connection = OPT_SUB("Audio/Spectrum", &AudioBox::OnSpectrumModeChange, this);
 
 	// Top sizer
 	wxSizer *TopSizer = new wxBoxSizer(wxHORIZONTAL);
@@ -133,6 +142,7 @@ BEGIN_EVENT_TABLE(AudioBox,wxSashWindow)
 	EVT_COMMAND_SCROLL(Audio_Horizontal_Zoom, AudioBox::OnHorizontalZoom)
 	EVT_COMMAND_SCROLL(Audio_Vertical_Zoom, AudioBox::OnVerticalZoom)
 	EVT_COMMAND_SCROLL(Audio_Volume, AudioBox::OnVolume)
+	EVT_BUTTON(Audio_SpectrumOptions, AudioBox::OnSpectrumOptionsBtn)
 END_EVENT_TABLE()
 
 void AudioBox::OnMouseWheel(wxMouseEvent &evt) {
@@ -217,6 +227,105 @@ void AudioBox::OnVerticalLink(agi::OptionValue const& opt) {
 
 void AudioBox::OnAudioOpen() {
 	controller->SetVolume(pow(mid(1, VolumeBar->GetValue(), 100) / 50.0, 3));
+	if (spectrum_options_btn)
+		spectrum_options_btn->Enable(OPT_GET("Audio/Spectrum")->GetBool());
+}
+
+void AudioBox::OnSpectrumModeChange(agi::OptionValue const& opt) {
+	if (spectrum_options_btn)
+		spectrum_options_btn->Enable(opt.GetBool());
+}
+
+void AudioBox::OnSpectrumOptionsBtn(wxCommandEvent &) {
+	enum {
+		ID_MONO_AVG = wxID_HIGHEST + 2000,
+		ID_MONO_BIN_MAX,
+		ID_MONO_BIN_AVG,
+		ID_SAMPLE_DEV_S16,
+		ID_SAMPLE_FLOAT32,
+		ID_COMP_LEGACY,
+		ID_COMP_CURVE,
+		ID_CURVE_LINEAR,
+		ID_CURVE_EXTENDED,
+		ID_CURVE_MEDIUM,
+		ID_CURVE_COMPRESSED,
+		ID_CURVE_LOG,
+	};
+
+	const int current_mono_mode = mid<int>(0, OPT_GET("Audio/Renderer/Spectrum/Mono Mix Mode")->GetInt(), 2);
+	const int current_input_format = mid<int>(0, OPT_GET("Audio/Renderer/Spectrum/Input Format")->GetInt(), 1);
+	const int current_computation_mode = mid<int>(0, OPT_GET("Audio/Renderer/Spectrum/Computation Mode")->GetInt(), 1);
+	const int current_freq_curve = mid<int>(0, OPT_GET("Audio/Renderer/Spectrum/FreqCurve")->GetInt(), 4);
+
+	wxMenu menu;
+
+	wxMenu *sample_menu = new wxMenu();
+	sample_menu->AppendRadioItem(ID_SAMPLE_DEV_S16, _("s16 mono"))->Check(current_input_format == 0);
+	sample_menu->AppendRadioItem(ID_SAMPLE_FLOAT32, _("float32"))->Check(current_input_format == 1);
+	menu.AppendSubMenu(sample_menu, _("Input format"));
+
+	wxMenu *mono_menu = new wxMenu();
+	mono_menu->AppendRadioItem(ID_MONO_AVG, _("Time-domain downmix"))->Check(current_input_format == 0 || current_mono_mode == 0);
+	auto *mono_bin_max = mono_menu->AppendRadioItem(ID_MONO_BIN_MAX, _("Strongest channel per frequency bin"));
+	mono_bin_max->Check(current_input_format == 1 && current_mono_mode == 1);
+	mono_bin_max->Enable(current_input_format == 1);
+	auto *mono_bin_avg = mono_menu->AppendRadioItem(ID_MONO_BIN_AVG, _("Average channel energy per frequency bin"));
+	mono_bin_avg->Check(current_input_format == 1 && current_mono_mode == 2);
+	mono_bin_avg->Enable(current_input_format == 1);
+	menu.AppendSubMenu(mono_menu, _("Mono mix method"));
+
+	wxMenu *computation_menu = new wxMenu();
+	computation_menu->AppendRadioItem(ID_COMP_LEGACY, _("Legacy linear"))->Check(current_computation_mode == 0);
+	computation_menu->AppendRadioItem(ID_COMP_CURVE, _("Frequency curve"))->Check(current_computation_mode == 1);
+	menu.AppendSubMenu(computation_menu, _("Spectrum computation mode"));
+
+	wxMenu *curve_menu = new wxMenu();
+	curve_menu->AppendRadioItem(ID_CURVE_LINEAR, _("Linear"))->Check(current_freq_curve == 0);
+	curve_menu->AppendRadioItem(ID_CURVE_EXTENDED, _("Extended"))->Check(current_freq_curve == 1);
+	curve_menu->AppendRadioItem(ID_CURVE_MEDIUM, _("Medium"))->Check(current_freq_curve == 2);
+	curve_menu->AppendRadioItem(ID_CURVE_COMPRESSED, _("Compressed"))->Check(current_freq_curve == 3);
+	curve_menu->AppendRadioItem(ID_CURVE_LOG, _("Logarithmic"))->Check(current_freq_curve == 4);
+	auto *curve_menu_item = menu.AppendSubMenu(curve_menu, _("Spectrum frequency mapping"));
+	curve_menu_item->Enable(current_computation_mode == 1);
+
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		CallAfter([] { OPT_SET("Audio/Renderer/Spectrum/Mono Mix Mode")->SetInt(0); });
+	}, ID_MONO_AVG);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		CallAfter([] { OPT_SET("Audio/Renderer/Spectrum/Mono Mix Mode")->SetInt(1); });
+	}, ID_MONO_BIN_MAX);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		CallAfter([] { OPT_SET("Audio/Renderer/Spectrum/Mono Mix Mode")->SetInt(2); });
+	}, ID_MONO_BIN_AVG);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		CallAfter([] { OPT_SET("Audio/Renderer/Spectrum/Input Format")->SetInt(0); });
+	}, ID_SAMPLE_DEV_S16);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		CallAfter([] { OPT_SET("Audio/Renderer/Spectrum/Input Format")->SetInt(1); });
+	}, ID_SAMPLE_FLOAT32);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		CallAfter([] { OPT_SET("Audio/Renderer/Spectrum/Computation Mode")->SetInt(0); });
+	}, ID_COMP_LEGACY);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		CallAfter([] { OPT_SET("Audio/Renderer/Spectrum/Computation Mode")->SetInt(1); });
+	}, ID_COMP_CURVE);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		CallAfter([] { OPT_SET("Audio/Renderer/Spectrum/FreqCurve")->SetInt(0); });
+	}, ID_CURVE_LINEAR);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		CallAfter([] { OPT_SET("Audio/Renderer/Spectrum/FreqCurve")->SetInt(1); });
+	}, ID_CURVE_EXTENDED);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		CallAfter([] { OPT_SET("Audio/Renderer/Spectrum/FreqCurve")->SetInt(2); });
+	}, ID_CURVE_MEDIUM);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		CallAfter([] { OPT_SET("Audio/Renderer/Spectrum/FreqCurve")->SetInt(3); });
+	}, ID_CURVE_COMPRESSED);
+	menu.Bind(wxEVT_MENU, [this](wxCommandEvent &) {
+		CallAfter([] { OPT_SET("Audio/Renderer/Spectrum/FreqCurve")->SetInt(4); });
+	}, ID_CURVE_LOG);
+
+	PopupMenu(&menu);
 }
 
 void AudioBox::ShowKaraokeBar(bool show) {

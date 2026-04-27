@@ -518,6 +518,26 @@ void BuildAudioPage(OptionPage *p) {
 	wxArrayString sq_choice(4, sq_arr);
 	binder->AddChoice(_("Spectrum Quality"), sq_choice, "Audio/Renderer/Spectrum/Quality");
 
+	const wxString sif_arr[2] = { _("Provider s16 mono"), _("Float32 per-channel") };
+	wxArrayString sif_choice(2, sif_arr);
+	binder->AddChoice(_("Spectrum Input Format"), sif_choice, "Audio/Renderer/Spectrum/Input Format");
+
+	const wxString scm_arr[2] = { _("Legacy linear"), _("Frequency curve") };
+	wxArrayString scm_choice(2, scm_arr);
+	binder->AddChoice(_("Spectrum Computation Mode"), scm_choice, "Audio/Renderer/Spectrum/Computation Mode");
+
+	const wxString smm_arr[3] = {
+		_("Time-domain downmix"),
+		_("Strongest channel per frequency bin"),
+		_("Average channel energy per frequency bin")
+	};
+	wxArrayString smm_choice(3, smm_arr);
+	binder->AddChoice(_("Spectrum Mono Mix Method"), smm_choice, "Audio/Renderer/Spectrum/Mono Mix Mode");
+
+	const wxString sc_arr[5] = { _("Linear"), _("Extended"), _("Medium"), _("Compressed"), _("Logarithmic") };
+	wxArrayString sc_choice(5, sc_arr);
+	binder->AddChoice(_("Spectrum Frequency Mapping"), sc_choice, "Audio/Renderer/Spectrum/FreqCurve");
+
 	binder->AddCategory(_("Audio overlay text"));
 	binder->AddFont(_("Overlay labels and cursor font"), "Audio/Karaoke/");
 

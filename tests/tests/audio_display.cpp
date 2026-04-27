@@ -43,6 +43,29 @@ struct Int16StereoProvider final : agi::AudioProvider {
 	}
 };
 
+struct Int16MonoProvider final : agi::AudioProvider {
+	Int16MonoProvider() {
+		channels = 1;
+		num_samples = 4;
+		decoded_samples = num_samples;
+		sample_rate = 48000;
+		bytes_per_sample = sizeof(int16_t);
+		float_samples = false;
+	}
+
+	void FillBuffer(void *buf, int64_t start, int64_t count) const override {
+		static const int16_t samples[] = {
+			32767,
+			-32768,
+			0,
+			16384,
+		};
+		auto out = static_cast<int16_t *>(buf);
+		for (int64_t i = 0; i < count; ++i)
+			out[i] = samples[start + i];
+	}
+};
+
 struct FloatStereoProvider final : agi::AudioProvider {
 	FloatStereoProvider() {
 		channels = 2;
@@ -102,6 +125,21 @@ TEST(lagi_audio_display, display_source_converts_s16_stereo_to_float) {
 	EXPECT_NEAR(-1.0f, samples[1], 1e-6f);
 	EXPECT_NEAR(16384.0f / 32768.0f, samples[2], 1e-6f);
 	EXPECT_NEAR(-16384.0f / 32768.0f, samples[3], 1e-6f);
+}
+
+TEST(lagi_audio_display, int16_mono_display_source_uses_provider_mono_path) {
+	Int16MonoProvider provider;
+	auto source = CreateInt16MonoAudioDisplaySource(&provider);
+	ASSERT_TRUE(!!source);
+	EXPECT_EQ(1, source->GetChannels());
+	EXPECT_EQ(48000, source->GetSampleRate());
+
+	float samples[4] = { 0.f, 0.f, 0.f, 0.f };
+	source->GetFloatAudio(samples, 0, 4);
+	EXPECT_NEAR(32767.0f / 32768.0f, samples[0], 1e-6f);
+	EXPECT_NEAR(-1.0f, samples[1], 1e-6f);
+	EXPECT_NEAR(0.0f, samples[2], 1e-6f);
+	EXPECT_NEAR(16384.0f / 32768.0f, samples[3], 1e-6f);
 }
 
 TEST(lagi_audio_display, display_source_preserves_float_samples) {
@@ -384,7 +422,7 @@ TEST(lagi_audio_display, spectrum_analysis_cache_reuses_hot_block) {
 	EXPECT_EQ(first[0], second[0]);
 }
 
-TEST(lagi_audio_display, spectrum_analysis_cache_batches_adjacent_visible_blocks) {
+TEST(lagi_audio_display, spectrum_analysis_cache_does_not_build_adjacent_blocks_implicitly) {
 	CountingStereoProvider provider;
 	auto source = CreateAudioDisplaySource(&provider);
 	AudioSpectrumAnalysisCache cache;
@@ -394,10 +432,11 @@ TEST(lagi_audio_display, spectrum_analysis_cache_batches_adjacent_visible_blocks
 
 	cache.Get(0);
 	const int calls_after_first = provider.fill_calls;
+	EXPECT_EQ(nullptr, cache.GetIfReady(1));
 	cache.Get(1);
 
 	EXPECT_EQ(1, calls_after_first);
-	EXPECT_EQ(calls_after_first, provider.fill_calls);
+	EXPECT_GT(provider.fill_calls, calls_after_first);
 }
 
 TEST(lagi_audio_display, spectrum_analysis_cache_metrics_count_hits_and_misses) {
@@ -416,7 +455,23 @@ TEST(lagi_audio_display, spectrum_analysis_cache_metrics_count_hits_and_misses) 
 	EXPECT_EQ(1u, metrics.visible_builds);
 }
 
-TEST(lagi_audio_display, spectrum_analysis_cache_prefetch_records_metrics) {
+TEST(lagi_audio_display, spectrum_analysis_cache_resolution_change_still_keeps_one_block) {
+	CountingStereoProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(5, 5);
+	cache.Age(sizeof(float) * (size_t(1) << 5));
+
+	cache.SetResolution(9, 7);
+	const float *block = cache.Get(0);
+
+	ASSERT_NE(nullptr, block);
+	EXPECT_TRUE(std::isfinite(block[0]));
+}
+
+TEST(lagi_audio_display, spectrum_analysis_cache_prefetch_is_hint_only) {
 	CountingStereoProvider provider;
 	auto source = CreateAudioDisplaySource(&provider);
 	AudioSpectrumAnalysisCache cache;
@@ -426,14 +481,13 @@ TEST(lagi_audio_display, spectrum_analysis_cache_prefetch_records_metrics) {
 
 	cache.Get(0);
 	cache.Prefetch(300, 301);
-	std::this_thread::sleep_for(std::chrono::milliseconds(5));
-	cache.Get(300);
 	auto metrics = cache.GetMetricsSnapshot();
-	EXPECT_GE(metrics.prefetch_requests, 2u);
-	EXPECT_GE(metrics.prefetch_builds, 1u);
+	EXPECT_GE(metrics.prefetch_requests, 1u);
+	EXPECT_EQ(0u, metrics.prefetch_builds);
+	EXPECT_EQ(nullptr, cache.GetIfReady(300));
 }
 
-TEST(lagi_audio_display, spectrum_analysis_cache_get_if_ready_becomes_available_after_prefetch) {
+TEST(lagi_audio_display, spectrum_analysis_cache_get_if_ready_becomes_available_after_sync_get) {
 	CountingStereoProvider provider;
 	auto source = CreateAudioDisplaySource(&provider);
 	AudioSpectrumAnalysisCache cache;
@@ -445,11 +499,9 @@ TEST(lagi_audio_display, spectrum_analysis_cache_get_if_ready_becomes_available_
 	EXPECT_EQ(0, provider.fill_calls);
 
 	cache.Prefetch(0, 0);
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
-	const float *block = nullptr;
-	while (!(block = cache.GetIfReady(0)) && std::chrono::steady_clock::now() < deadline)
-		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	EXPECT_EQ(nullptr, cache.GetIfReady(0));
 
+	const float *block = cache.Get(0);
 	ASSERT_NE(nullptr, block);
 	EXPECT_GT(provider.fill_calls, 0);
 }

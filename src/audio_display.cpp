@@ -766,6 +766,14 @@ void AudioDisplay::ReloadRenderingSettings()
 		audio_spectrum_renderer->SetResolution(
 			spectrum_width[spectrum_quality],
 			spectrum_distance[spectrum_quality]);
+		audio_spectrum_renderer->SetInputFormat(static_cast<AudioSpectrumInputFormat>(
+			mid<int>(0, OPT_GET("Audio/Renderer/Spectrum/Input Format")->GetInt(), 1)));
+		audio_spectrum_renderer->SetComputationMode(static_cast<AudioSpectrumComputationMode>(
+			mid<int>(0, OPT_GET("Audio/Renderer/Spectrum/Computation Mode")->GetInt(), 1)));
+		audio_spectrum_renderer->SetFrequencyCurvePreset(
+			OPT_GET("Audio/Renderer/Spectrum/FreqCurve")->GetInt());
+		audio_spectrum_renderer->SetMonoMixMode(static_cast<AudioSpectrumMonoMixMode>(
+			mid<int>(0, OPT_GET("Audio/Renderer/Spectrum/Mono Mix Mode")->GetInt(), 2)));
 
 		audio_renderer_provider = std::move(audio_spectrum_renderer);
 	}
@@ -780,6 +788,14 @@ void AudioDisplay::ReloadRenderingSettings()
 	timeline->SetColourScheme(colour_scheme_name);
 
 	Refresh();
+}
+
+void AudioDisplay::ReloadSpectrumRenderingSettings()
+{
+	// Rebuild the spectrum renderer rather than mutating the live instance in place.
+	// CH menu toggles can flip sample path, mono aggregation, and cache topology together,
+	// so swapping in a fresh renderer avoids transient reuse of stale internal cache state.
+	ReloadRenderingSettings();
 }
 
 void AudioDisplay::OnLoadTimer(wxTimerEvent&)
@@ -1235,7 +1251,11 @@ void AudioDisplay::OnAudioOpen(agi::AudioProvider *provider)
 				OPT_SUB("Audio/Display/Waveform Style", &AudioDisplay::ReloadRenderingSettings, this),
 				OPT_SUB("Colour/Audio Display/Spectrum", &AudioDisplay::ReloadRenderingSettings, this),
 				OPT_SUB("Colour/Audio Display/Waveform", &AudioDisplay::ReloadRenderingSettings, this),
-				OPT_SUB("Audio/Renderer/Spectrum/Quality", &AudioDisplay::ReloadRenderingSettings, this),
+				OPT_SUB("Audio/Renderer/Spectrum/Quality", &AudioDisplay::ReloadSpectrumRenderingSettings, this),
+				OPT_SUB("Audio/Renderer/Spectrum/Input Format", &AudioDisplay::ReloadSpectrumRenderingSettings, this),
+				OPT_SUB("Audio/Renderer/Spectrum/Computation Mode", &AudioDisplay::ReloadSpectrumRenderingSettings, this),
+				OPT_SUB("Audio/Renderer/Spectrum/FreqCurve", &AudioDisplay::ReloadSpectrumRenderingSettings, this),
+				OPT_SUB("Audio/Renderer/Spectrum/Mono Mix Mode", &AudioDisplay::ReloadSpectrumRenderingSettings, this),
 			});
 			OnTimingController();
 		}

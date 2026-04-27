@@ -881,6 +881,40 @@ BenchResult RunSpectrumSeekDragStreamBench() {
 	return { "spectrum_seek_drag_stream", events, total_ms, total_ms / events, 0.0 };
 }
 
+BenchResult RunSpectrumSeekDragStreamS16MonoBench() {
+	constexpr int events = 2000;
+	constexpr size_t viewport_blocks = 12;
+	SyntheticInt16StereoProvider provider(1 << 24);
+	auto source = CreateInt16MonoAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(9, 7);
+
+	const size_t max_block = static_cast<size_t>(provider.GetNumSamples()) >> 7;
+	size_t block = 0;
+	volatile float sink = 0.f;
+
+	auto t0 = clock_type::now();
+	for (int i = 0; i < events; ++i) {
+		if (i % 180 == 0)
+			block = (block + 4000) % std::max<size_t>(1, max_block - viewport_blocks - 16);
+		else
+			block = (block + ((i & 1) ? 1 : 3)) % std::max<size_t>(1, max_block - viewport_blocks - 16);
+
+		for (size_t b = block; b < block + viewport_blocks; ++b) {
+			const float *p = cache.Get(b);
+			sink += p[0];
+		}
+		cache.Prefetch(block + viewport_blocks, block + viewport_blocks + 8);
+	}
+	auto t1 = clock_type::now();
+	(void)sink;
+
+	double total_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
+	return { "spectrum_seek_drag_stream_s16_mono", events, total_ms, total_ms / events, 0.0 };
+}
+
 BenchResult RunNaiveWaveformUpdateStreamBench() {
 	constexpr int events = 300;
 	constexpr int frames = 1 << 16;
@@ -1007,6 +1041,7 @@ int main(int argc, char **argv) {
 	results.push_back(RunNaiveSpectrumVerticalZoomStreamBench());
 	results.push_back(RunCoalescedSpectrumVerticalZoomStreamBench());
 	results.push_back(RunSpectrumSeekDragStreamBench());
+	results.push_back(RunSpectrumSeekDragStreamS16MonoBench());
 	results.push_back(RunNaiveWaveformUpdateStreamBench());
 	results.push_back(RunCoalescedWaveformUpdateStreamBench());
 

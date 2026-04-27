@@ -41,6 +41,7 @@
 
 #include <algorithm>
 #include <boost/locale/collator.hpp>
+#include <unordered_set>
 #include <vector>
 #include <wx/frame.h>
 #include <wx/menu.h>
@@ -168,6 +169,8 @@ class CommandManager {
 	std::vector<std::pair<std::string, wxMenuItem*>> dynamic_items;
 	/// Menu items which need to be updated only when hotkeys change
 	std::vector<std::pair<std::string, wxMenuItem*>> static_items;
+	/// Menus managed by this command manager.
+	std::unordered_set<wxMenu *> owned_menus;
 	/// window id -> command map
 	std::vector<std::string> items;
 	/// MRU menus which need to be updated on menu open
@@ -188,8 +191,9 @@ class CommandManager {
 		if (!c)
 			return;
 		int flags = c->Type();
+		bool enabled = true;
 		if (flags & cmd::COMMAND_VALIDATE) {
-			bool enabled = c->Validate(context);
+			enabled = c->Validate(context);
 			if (item.second->IsEnabled() != enabled)
 				item.second->Enable(enabled);
 			flags = c->Type();
@@ -201,7 +205,7 @@ class CommandManager {
 			if (item.second->GetHelp() != help)
 				item.second->SetHelp(help);
 		}
-		if (flags & cmd::COMMAND_RADIO || flags & cmd::COMMAND_TOGGLE) {
+		if ((flags & cmd::COMMAND_RADIO || flags & cmd::COMMAND_TOGGLE) && enabled) {
 			bool check = c->IsActive(context);
 			// Don't call Check(false) on radio items as this causes wxGtk to
 			// send a menu clicked event, and it should be a no-op anyway
@@ -251,6 +255,7 @@ public:
 			flags & cmd::COMMAND_RADIO ? wxITEM_RADIO :
 			flags & cmd::COMMAND_TOGGLE ? wxITEM_CHECK :
 			wxITEM_NORMAL;
+		owned_menus.insert(parent);
 		auto ui = context->GetUI();
 
 		menu_text += to_wx("\t" + hotkey::get_hotkey_str_first("Default", co->name()));
@@ -295,6 +300,8 @@ public:
 	void AddRecent(std::string const& name, wxMenu *parent) {
 		mru.push_back(new MruMenu(id_base, name, &items));
 		mru.back()->Update();
+		owned_menus.insert(parent);
+		owned_menus.insert(mru.back());
 		parent->AppendSubMenu(mru.back(), _("&Recent"));
 	}
 
@@ -306,6 +313,10 @@ public:
 		menu_open_active = true;
 
 		wxMenu *opened_menu = evt.GetMenu();
+		if (opened_menu && !owned_menus.count(opened_menu)) {
+			menu_open_active = false;
+			return;
+		}
 		bool limit_scope = opened_menu != nullptr;
 
 		for (auto const& item : dynamic_items) {

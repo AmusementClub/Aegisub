@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "font_file_lister.h"
+#include "font_file_lister_dwrite.h"
 
 #include "font_collector_unicode.h"
 
@@ -26,6 +27,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <dwrite.h>
 #include <memory>
 #include <ShlObj.h>
 #include <Usp10.h>
@@ -163,13 +165,29 @@ void get_font_data(std::string& buffer, HDC dc) {
 }
 }
 
+GdiFontFileLister::~GdiFontFileLister() = default;
+
 GdiFontFileLister::GdiFontFileLister(FontCollectorEventSink &cb)
-: dc(CreateCompatibleDC(nullptr), [](HDC dc) { DeleteDC(dc); })
+: dwrite_bridge(std::make_unique<DWriteBridge>())
+, dc(CreateCompatibleDC(nullptr), [](HDC dc) { DeleteDC(dc); })
 {
 	FontCollectorEvent event;
+	if (dwrite_bridge->available()) {
+		event.type = FontCollectorEventType::FontBackendInfo;
+		event.message = dwrite_bridge->dll_description();
+		Emit(cb, std::move(event));
+	}
+	else {
+		event.type = FontCollectorEventType::FontBackendInfo;
+		event.message = "GDI (DWrite unavailable)";
+		Emit(cb, std::move(event));
+	}
+
+	event = FontCollectorEvent();
 	event.type = FontCollectorEventType::UpdatingFontCache;
 	Emit(cb, std::move(event));
-	index = index_fonts(cb);
+	if (!dwrite_bridge->available())
+		index = index_fonts(cb);
 }
 
 CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters) {
@@ -236,28 +254,70 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 		ret.matched_italic = metrics.tmItalic != 0;
 	}
 
-	get_font_data(buffer, dc);
+	// --- DWrite bridge: file path, face index, raw data ---
+	if (dwrite_bridge->available()) {
+		auto *dw_face = dwrite_bridge->is_dwritecore()
+			? dwrite_bridge->CreateFontFaceFromLogFont(matches[0])
+			: dwrite_bridge->CreateFontFaceFromHdc(dc);
+		if (dw_face) {
+			std::string dw_path;
+			int dw_index = -1;
+			if (dwrite_bridge->GetFontFilePath(dw_face, dw_path, dw_index))
+				ret.path_source = dwrite_bridge->is_dwritecore() ? "dwritecore" : "dwrite";
 
-	auto range = index.equal_range(murmur3(buffer.c_str(), std::min<size_t>(buffer.size(), 1024U)));
-	if (range.first == range.second)
-		return ret; // could instead write to a temp dir
+			if (!dw_path.empty()) {
+				ret.paths.push_back(agi::fs::PathFromString(dw_path));
+				ret.face_index = dw_index;
+			}
 
-	// Compare the full files for each of the fonts with the same prefix
-	std::unique_ptr<char[]> file_buffer(new char[buffer.size()]);
-	for (auto it = range.first; it != range.second; ++it) {
-		auto stream = agi::io::Open(it->second, true);
-		stream->read(&file_buffer[0], buffer.size());
-		if ((size_t)stream->tellg() != buffer.size())
-			continue;
-		if (memcmp(&file_buffer[0], &buffer[0], buffer.size()) == 0) {
-			ret.paths.push_back(it->second);
-			break;
+			if (ret.face_index < 0)
+				ret.face_index = static_cast<int>(dw_face->GetIndex());
+
+			dwrite_bridge->ReadFontData(dw_face, ret.raw_data.bytes);
+			if (ret.raw_data.bytes.size() >= 4)
+				ret.is_collection = (DetermineFontFormat(std::span<const char, 4>(ret.raw_data.bytes.data(), 4)) == FontFormat::Collection);
+
+			dw_face->Release();
 		}
 	}
 
-	// No fonts actually matched
-	if (ret.paths.empty())
-		return ret;
+	// Fallback to registry + hash lookup when DWrite didn't find a path
+	bool gdi_data_loaded = false;
+	if (ret.paths.empty()) {
+		get_font_data(buffer, dc);
+		gdi_data_loaded = true;
+
+		if (!buffer.empty()) {
+			auto range = index.equal_range(murmur3(buffer.c_str(), std::min<size_t>(buffer.size(), 1024U)));
+
+			std::unique_ptr<char[]> file_buffer(new char[buffer.size()]);
+			for (auto it = range.first; it != range.second; ++it) {
+				auto stream = agi::io::Open(it->second, true);
+				stream->read(&file_buffer[0], buffer.size());
+				if ((size_t)stream->tellg() != buffer.size())
+					continue;
+				if (memcmp(&file_buffer[0], &buffer[0], buffer.size()) == 0) {
+					ret.paths.push_back(it->second);
+					ret.path_source = "gdi";
+					break;
+				}
+			}
+		}
+
+		if (ret.paths.empty() && buffer.empty())
+			return ret;
+	}
+
+	// Fallback raw data via GDI when DWrite stream unavailable
+	if (ret.raw_data.bytes.empty()) {
+		if (!gdi_data_loaded)
+			get_font_data(buffer, dc);
+		if (!buffer.empty()) {
+			ret.raw_data.bytes.assign(buffer.begin(), buffer.end());
+			if (buffer.size() >= 4)
+				ret.is_collection = (DetermineFontFormat(std::span<const char, 4>(buffer.data(), 4)) == FontFormat::Collection);
+		}
+	}
 
 	// Convert the characters to a utf-16 string
 	std::wstring utf16characters;

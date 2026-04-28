@@ -161,13 +161,16 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style, F
 		usage.matched.face_index = res.face_index;
 		usage.matched.weight = res.matched_weight;
 		usage.matched.italic = res.matched_italic;
+		usage.matched.is_collection = res.is_collection;
 		usage.matched.paths = res.paths;
+		usage.matched.path_source = res.path_source;
+		usage.matched.raw_data = res.raw_data;
 		usage.matched.fake_bold = res.fake_bold;
 		usage.matched.fake_italic = res.fake_italic;
 		usage.matched.missing_chars = res.missing;
 	}
 
-	if (res.paths.empty()) {
+	if (res.paths.empty() && res.raw_data.bytes.empty()) {
 		FontCollectorEvent event;
 		event.type = FontCollectorEventType::FontMissing;
 		event.face = style.first.facename;
@@ -182,6 +185,7 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style, F
 				event.type = FontCollectorEventType::FontFound;
 				event.face = style.first.facename;
 				event.path = elem;
+				event.message = res.path_source;
 				Emit(event_sink, std::move(event));
 				results.push_back(elem);
 			}
@@ -205,7 +209,16 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style, F
 			event.type = FontCollectorEventType::MissingGlyphs;
 			event.face = style.first.facename;
 			event.message = res.missing;
-			event.count = static_cast<int>(res.missing.size());
+			int missing_count = 0;
+			for (size_t pos = 0; pos < res.missing.size(); ) {
+				font_collector::unicode::Rune rune;
+				int consumed = 0;
+				font_collector::unicode::Rune::DecodeFromUtf8(res.missing.data() + pos, res.missing.size() - pos, rune, consumed);
+				if (consumed <= 0) { ++pos; continue; }
+				pos += consumed;
+				++missing_count;
+			}
+			event.count = missing_count;
 			Emit(event_sink, std::move(event));
 			PrintUsage(style.second);
 			++missing_glyphs;

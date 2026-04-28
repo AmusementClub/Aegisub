@@ -272,6 +272,7 @@ add_library(libaegisub STATIC
     libaegisub/common/file_mapping.cpp
     libaegisub/common/format.cpp
     libaegisub/common/fs.cpp
+    libaegisub/common/native_library.cpp
     libaegisub/common/hotkey.cpp
     libaegisub/common/io.cpp
     libaegisub/common/json.cpp
@@ -362,6 +363,7 @@ add_custom_command(
 
 add_subdirectory("vendor/csri")
 target_sources(csri PRIVATE src/csri_native_library_bridge.cpp)
+target_include_directories(csri PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/libaegisub/include")
 target_compile_features(csri PRIVATE cxx_std_20)
 
 set(AEGISUB_SHARED_EXE_ENTRY_SOURCES
@@ -649,7 +651,6 @@ add_executable(Aegisub WIN32
     src/main.cpp
     src/menu.cpp
     src/csri_renderer_discovery.cpp
-    src/native_library.cpp
     src/pen.cpp
     src/perf_trace.cpp
     src/persist_location.cpp
@@ -709,7 +710,7 @@ add_executable(Aegisub WIN32
     src/visual_feature.cpp
     src/watched_file.cpp
 )
-set_source_files_properties(src/native_library.cpp PROPERTIES
+set_source_files_properties(libaegisub/common/native_library.cpp PROPERTIES
     SKIP_PRECOMPILE_HEADERS ON
 )
 target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} libaegisub luajit)
@@ -790,7 +791,7 @@ endif()
 
 if(MSVC)
     add_definitions("/DNOMINMAX /DINITGUID")
-    target_link_libraries(Aegisub LINK_PRIVATE Usp10)
+    target_link_libraries(Aegisub LINK_PRIVATE Usp10 dwrite)
     target_link_libraries(Aegisub PRIVATE Psapi)
     #target_sources(Aegisub PRIVATE src/res/res.rc src/res/strings.rc src/crash_writer_minidump.cpp)
     target_sources(Aegisub PRIVATE src/res/res.rc src/res/strings.rc src/crash_writer.cpp src/dpi_aware.manifest)
@@ -803,7 +804,7 @@ else()
 endif()
 
 if(WIN32)
-    target_sources(Aegisub PRIVATE src/font_file_lister_gdi.cpp)
+    target_sources(Aegisub PRIVATE src/font_file_lister_gdi.cpp src/font_file_lister_dwrite.cpp)
 elseif(APPLE)
     target_sources(Aegisub PRIVATE src/font_file_lister_coretext.mm)
 else()

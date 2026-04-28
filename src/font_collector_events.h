@@ -23,6 +23,7 @@
 #include <vector>
 
 enum class FontCollectorEventType {
+	FontBackendInfo,
 	UpdatingFontCache,
 	FontCacheError,
 	ParsingFile,

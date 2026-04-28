@@ -36,6 +36,11 @@
 class AssDialogue;
 class AssFile;
 
+struct FontRawData {
+	/// Raw font file bytes (from GetFontData or IDWriteFontFileStream).
+	std::vector<char> bytes;
+};
+
 struct CollectionResult {
 	/// Font face selected by the platform matcher.
 	std::string matched_facename;
@@ -44,10 +49,16 @@ struct CollectionResult {
 	int matched_weight = 0;
 	/// Whether the selected platform font is italic.
 	bool matched_italic = false;
+	/// Whether the font is in a TrueType/OpenType collection.
+	bool is_collection = false;
 	/// Characters which could not be found in any font files
 	std::string missing;
 	/// Paths to the file(s) containing the requested font
 	std::vector<agi::fs::path> paths;
+	/// How the font file path was resolved: "dwritecore", "dwrite", "gdi", or empty.
+	std::string path_source;
+	/// Raw font data, usable when the file path is unavailable.
+	FontRawData raw_data;
 	bool fake_bold = false;
 	bool fake_italic = false;
 };
@@ -57,7 +68,10 @@ struct FontCollectorMatchedFont {
 	int face_index = -1;
 	int weight = 0;
 	bool italic = false;
+	bool is_collection = false;
 	std::vector<agi::fs::path> paths;
+	std::string path_source;
+	FontRawData raw_data;
 	bool fake_bold = false;
 	bool fake_italic = false;
 	std::string missing_chars;
@@ -77,8 +91,11 @@ struct FontCollectorDetails {
 	std::vector<FontCollectorAssFontUsage> fonts;
 };
 
+class DWriteBridge;
+
 #ifdef _WIN32
 class GdiFontFileLister {
+	std::unique_ptr<DWriteBridge> dwrite_bridge;
 	std::unordered_multimap<uint32_t, agi::fs::path> index;
 	agi::scoped_holder<HDC> dc;
 	std::string buffer;
@@ -89,6 +106,7 @@ public:
 	/// Constructor
 	/// @param cb Callback for status logging
 	GdiFontFileLister(FontCollectorEventSink &cb);
+	~GdiFontFileLister();
 
 	/// @brief Get the path to the font with the given styles
 	/// @param facename Name of font face

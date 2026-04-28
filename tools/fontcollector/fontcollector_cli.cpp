@@ -92,6 +92,7 @@ void WriteJsonString(std::ostream& out, std::string const& value) {
 
 std::string EventTypeName(AegisubFontCollectorEventType type) {
 	switch (type) {
+		case AEGISUB_FONTCOLLECTOR_EVENT_FONT_BACKEND_INFO: return "font_backend_info";
 		case AEGISUB_FONTCOLLECTOR_EVENT_UPDATING_FONT_CACHE: return "updating_font_cache";
 		case AEGISUB_FONTCOLLECTOR_EVENT_FONT_CACHE_ERROR: return "font_cache_error";
 		case AEGISUB_FONTCOLLECTOR_EVENT_PARSING_FILE: return "parsing_file";
@@ -191,6 +192,8 @@ std::string JoinLines(AegisubFontCollectorEvent const& event) {
 
 std::string FormatEvent(AegisubFontCollectorEvent const& event) {
 	switch (event.type) {
+		case AEGISUB_FONTCOLLECTOR_EVENT_FONT_BACKEND_INFO:
+			return "Font backend: " + Safe(event.message);
 		case AEGISUB_FONTCOLLECTOR_EVENT_UPDATING_FONT_CACHE:
 			return "Updating font cache";
 		case AEGISUB_FONTCOLLECTOR_EVENT_FONT_CACHE_ERROR:
@@ -203,8 +206,11 @@ std::string FormatEvent(AegisubFontCollectorEvent const& event) {
 			return "Searching for font files";
 		case AEGISUB_FONTCOLLECTOR_EVENT_FONT_MISSING:
 			return "Missing font: " + Safe(event.face);
-		case AEGISUB_FONTCOLLECTOR_EVENT_FONT_FOUND:
-			return "Found font: " + Safe(event.face) + " -> " + Safe(event.path);
+		case AEGISUB_FONTCOLLECTOR_EVENT_FONT_FOUND: {
+			auto src = Safe(event.message);
+			return "Found font: " + Safe(event.face) + " -> " + Safe(event.path) +
+			       (src.empty() ? "" : " [" + src + "]");
+		}
 		case AEGISUB_FONTCOLLECTOR_EVENT_FAKE_BOLD:
 			return "Fake bold required: " + Safe(event.face);
 		case AEGISUB_FONTCOLLECTOR_EVENT_FAKE_ITALIC:

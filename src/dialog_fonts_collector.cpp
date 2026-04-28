@@ -122,6 +122,8 @@ std::string FormatMissingGlyphs(std::string const& str) {
 
 color_str_pair FormatFontCollectorEvent(FontCollectorEvent const& event) {
 	switch (event.type) {
+		case FontCollectorEventType::FontBackendInfo:
+			return {0, fmt_wx("Font backend: %s\n", event.message)};
 		case FontCollectorEventType::UpdatingFontCache:
 			return {0, _("Updating font cache\n")};
 		case FontCollectorEventType::FontCacheError:
@@ -134,8 +136,10 @@ color_str_pair FormatFontCollectorEvent(FontCollectorEvent const& event) {
 			return {0, _("Searching for font files\n")};
 		case FontCollectorEventType::FontMissing:
 			return {2, fmt_tl("Could not find font '%s'\n", event.face)};
-		case FontCollectorEventType::FontFound:
-			return {0, fmt_tl("Found '%s' at '%s'\n", event.face, event.path)};
+		case FontCollectorEventType::FontFound: {
+			auto src = event.message.empty() ? wxString{} : fmt_wx(" [%s]", event.message);
+			return {0, fmt_tl("Found '%s' at '%s'%s\n", event.face, event.path, src)};
+		}
 		case FontCollectorEventType::FakeBold:
 			return {3, fmt_tl("'%s' does not have a bold variant.\n", event.face)};
 		case FontCollectorEventType::FakeItalic:

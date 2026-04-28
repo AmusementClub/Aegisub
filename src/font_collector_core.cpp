@@ -107,8 +107,9 @@ void CollectFonts(AssFile const *subs,
                   agi::fs::path const& destination,
                   FontCollectionMode mode,
                   FontCollectorEventSink font_event_sink,
+                  FontCollectorDetails *details,
                   FontCollectionArchiveFactory archive_factory) {
-	auto paths = FontCollector(font_event_sink).GetFontPaths(subs);
+	auto paths = FontCollector(font_event_sink).GetFontPaths(subs, details);
 	if (paths.empty())
 		return;
 

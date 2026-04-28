@@ -26,21 +26,66 @@ extern "C" {
 #define NOMINMAX
 #include <windows.h>
 
+#include "font_file_lister_dwrite.h"
+
 namespace {
+DWriteBridge& dwrite_bridge() {
+	static DWriteBridge bridge;
+	return bridge;
+}
+
 class GdiFont {
 	HFONT font;
 	std::shared_ptr<HDC__> dc;
+	IDWriteFontFace *dwrite_face = nullptr;
+	bool dwrite_face_attempted = false;
 
 	size_t size = 0;
 	std::unique_ptr<char[]> font_data;
 
+	void ensure_dwrite_face() {
+		if (dwrite_face_attempted)
+			return;
+		dwrite_face_attempted = true;
+		if (dwrite_bridge().available()) {
+			SelectObject(dc.get(), font);
+			dwrite_face = dwrite_bridge().CreateFontFaceFromHdc(dc.get());
+		}
+	}
+
 public:
-	GdiFont(HFONT font, std::shared_ptr<HDC__> dc) : font(font), dc(dc) { }
-	~GdiFont() { DeleteObject(font); }
+	GdiFont(HFONT font, std::shared_ptr<HDC__> dc) : font(font), dc(dc) {}
+	~GdiFont() {
+		if (dwrite_face)
+			dwrite_face->Release();
+		DeleteObject(font);
+	}
 
 	size_t GetData(unsigned char *data, size_t offset, size_t len);
 	bool CheckPostscript() { return false; }
-	bool CheckGlyph(uint32_t codepoint) { return true; }
+		bool CheckGlyph(uint32_t codepoint) {
+			if (codepoint == 0)
+				return true;
+			ensure_dwrite_face();
+			if (dwrite_face)
+				return dwrite_bridge().HasGlyph(dwrite_face, codepoint);
+
+			// Fallback: GDI GetGlyphIndicesW
+			SelectObject(dc.get(), font);
+			WORD index = 0xFFFF;
+			if (codepoint < 0x10000) {
+				auto wch = static_cast<wchar_t>(codepoint);
+				GetGlyphIndicesW(dc.get(), &wch, 1, &index, GGI_MARK_NONEXISTING_GLYPHS);
+			}
+			else {
+				wchar_t pair[2] = {
+					static_cast<wchar_t>(0xD800 + ((codepoint - 0x10000) >> 10)),
+					static_cast<wchar_t>(0xDC00 + ((codepoint - 0x10000) & 0x3FF))
+				};
+				GetGlyphIndicesW(dc.get(), pair, 2, &index, GGI_MARK_NONEXISTING_GLYPHS);
+			}
+			return index != 0xFFFF;
+		}
 	void Destroy() { delete this; }
 };
 

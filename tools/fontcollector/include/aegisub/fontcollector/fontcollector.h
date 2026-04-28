@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <stdint.h>
 #include <stddef.h>
 
 #if defined(_WIN32)
@@ -37,6 +38,7 @@ typedef enum AegisubFontCollectorResult {
 } AegisubFontCollectorResult;
 
 typedef enum AegisubFontCollectorEventType {
+	AEGISUB_FONTCOLLECTOR_EVENT_FONT_BACKEND_INFO,
 	AEGISUB_FONTCOLLECTOR_EVENT_UPDATING_FONT_CACHE,
 	AEGISUB_FONTCOLLECTOR_EVENT_FONT_CACHE_ERROR,
 	AEGISUB_FONTCOLLECTOR_EVENT_PARSING_FILE,
@@ -86,15 +88,47 @@ typedef struct AegisubFontCollectorEvent {
 	int const *lines;
 	size_t line_count;
 	int count;
+	int requested_weight;
+	int requested_italic;
 } AegisubFontCollectorEvent;
+
+typedef struct AegisubFontCollectorMatchedFont {
+	char const *facename;
+	int face_index;
+	int weight;
+	int italic;
+	char const *const *paths;
+	size_t path_count;
+	int fake_bold;
+	int fake_italic;
+	char const *missing_chars;
+	int requested_weight;
+} AegisubFontCollectorMatchedFont;
+
+typedef struct AegisubFontCollectorFontUsage {
+	char const *ass_facename;
+	int ass_bold;
+	int ass_italic;
+	uint32_t const *chars;
+	size_t char_count;
+	char const *const *styles;
+	size_t style_count;
+	int const *override_lines;
+	size_t override_line_count;
+	AegisubFontCollectorMatchedFont matched;
+} AegisubFontCollectorFontUsage;
 
 /* Event pointer fields are valid only for the duration of the callback. */
 typedef void (*AegisubFontCollectorEventCallback)(AegisubFontCollectorEvent const *event, void *user_data);
+/* Usage pointer fields are valid only for the duration of the callback. */
+typedef void (*AegisubFontCollectorFontUsageCallback)(AegisubFontCollectorFontUsage const *usage, void *user_data);
 
 AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_collect(
 	AegisubFontCollectorRequest const *request,
 	AegisubFontCollectorEventCallback callback,
 	void *user_data,
+	AegisubFontCollectorFontUsageCallback usage_callback,
+	void *usage_user_data,
 	char *error_buffer,
 	size_t error_buffer_size);
 

@@ -38,7 +38,7 @@
 #include <avisynth.h>
 #include "avisynth_path_helper.h"
 #include "avisynth_runtime_policy.h"
-#include "native_library.h"
+#include <libaegisub/native_library.h>
 #include "options.h"
 
 #include <libaegisub/fs.h>

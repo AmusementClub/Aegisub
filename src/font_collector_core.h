@@ -24,6 +24,7 @@
 #include <memory>
 
 class AssFile;
+struct FontCollectorDetails;
 
 enum class FontCollectionMode {
 	CheckFontsOnly = 0,
@@ -61,4 +62,5 @@ void CollectFonts(AssFile const *subs,
                   agi::fs::path const& destination,
                   FontCollectionMode mode,
                   FontCollectorEventSink font_event_sink,
+                  FontCollectorDetails *details = nullptr,
                   FontCollectionArchiveFactory archive_factory = {});

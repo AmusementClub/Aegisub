@@ -122,6 +122,8 @@ std::string FormatMissingGlyphs(std::string const& str) {
 
 color_str_pair FormatFontCollectorEvent(FontCollectorEvent const& event) {
 	switch (event.type) {
+		case FontCollectorEventType::FontBackendInfo:
+			return {0, fmt_wx("Font backend: %s\n", event.message)};
 		case FontCollectorEventType::UpdatingFontCache:
 			return {0, _("Updating font cache\n")};
 		case FontCollectorEventType::FontCacheError:
@@ -134,10 +136,16 @@ color_str_pair FormatFontCollectorEvent(FontCollectorEvent const& event) {
 			return {0, _("Searching for font files\n")};
 		case FontCollectorEventType::FontMissing:
 			return {2, fmt_tl("Could not find font '%s'\n", event.face)};
-		case FontCollectorEventType::FontFound:
-			return {0, fmt_tl("Found '%s' at '%s'\n", event.face, event.path)};
-		case FontCollectorEventType::FakeBold:
-			return {3, fmt_tl("'%s' does not have a bold variant.\n", event.face)};
+		case FontCollectorEventType::FontFound: {
+			auto src = event.message.empty() ? wxString{} : fmt_wx(" [%s]", event.message);
+			return {0, fmt_tl("Found '%s' at '%s'%s\n", event.face, event.path, src)};
+		}
+		case FontCollectorEventType::FakeBold: {
+			wxString weight_hint = event.requested_weight
+			    ? fmt_wx(L" (requested weight %d)", event.requested_weight)
+			    : wxString{};
+			return {3, fmt_tl("'%s' does not have a bold variant%s.\n", event.face, weight_hint)};
+		}
 		case FontCollectorEventType::FakeItalic:
 			return {3, fmt_tl("'%s' does not have an italic variant.\n", event.face)};
 		case FontCollectorEventType::MissingGlyphs:
@@ -240,7 +248,7 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FontC
 			});
 		};
 
-		CollectFonts(subs, destination, oper, AppendFontEvent, [](agi::fs::path const& archive) {
+		CollectFonts(subs, destination, oper, AppendFontEvent, nullptr, [](agi::fs::path const& archive) {
 			return agi::make_unique<WxZipArchiveWriter>(archive);
 		});
 

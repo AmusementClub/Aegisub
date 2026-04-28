@@ -1,8 +1,8 @@
-// Copyright (c) 2026
+// Copyright (c) 2026, MIR
 
 #include "csri_renderer_discovery.h"
 
-#include "native_library.h"
+#include <libaegisub/native_library.h>
 
 namespace csri {
 

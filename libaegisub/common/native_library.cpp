@@ -1,6 +1,6 @@
-// Copyright (c) 2026
+// Copyright (c) 2026, MIR
 
-#include "native_library.h"
+#include <libaegisub/native_library.h>
 
 #include <libaegisub/exception.h>
 #include <libaegisub/fs.h>

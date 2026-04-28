@@ -16,12 +16,15 @@
 
 #include "font_file_lister.h"
 
+#include "font_collector_unicode.h"
+
 #include <AppKit/AppKit.h>
 #include <CoreText/CoreText.h>
 
 namespace {
 struct FontMatch {
 	NSURL *url = nil;
+	NSString *facename = nil;
 	NSCharacterSet *codepoints = nil;
 	int weight = 400;
 	int width = 5;
@@ -39,6 +42,7 @@ FontMatch process_descriptor(NSFontDescriptor *desc, NSString *name) {
 		return ret;
 
 	NSFont *font = [NSFont fontWithDescriptor:desc size:10];
+	ret.facename = font.familyName;
 
 	// Ask CoreText if the font is italic, but if it says no double-check
 	// by reading the macStyle field of the 'head' table as CT doesn't honor
@@ -124,7 +128,7 @@ int weight_penalty(int desired, int actual) {
 
 CollectionResult CoreTextFontFileLister::GetFontPaths(std::string const& facename,
                                                       int bold, bool italic,
-                                                      std::vector<int> const& characters) {
+                                                      std::vector<uint32_t> const& characters) {
 	CollectionResult ret;
 
 	if (bold == 0)
@@ -188,12 +192,15 @@ CollectionResult CoreTextFontFileLister::GetFontPaths(std::string const& facenam
 
 		ret.fake_italic = italic && !best.italic;
 		ret.fake_bold = bold > 400 && best.weight < bold;
+		if (best.facename)
+			ret.matched_facename = best.facename.UTF8String;
+		ret.matched_weight = best.weight;
+		ret.matched_italic = best.italic;
 
 		ret.paths.push_back(best.url.fileSystemRepresentation);
-		for (int chr : characters) {
-			if (![best.codepoints longCharacterIsMember:chr]) {
-				ret.missing += chr;
-			}
+		for (auto chr : characters) {
+			if (![best.codepoints longCharacterIsMember:static_cast<long>(chr)])
+				font_collector::unicode::AppendRuneToUtf8(ret.missing, chr);
 		}
 	}
 

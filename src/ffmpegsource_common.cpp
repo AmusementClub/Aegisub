@@ -38,7 +38,7 @@
 #include "compat.h"
 #include "format.h"
 #include "mkv_wrap.h"
-#include "native_library.h"
+#include <libaegisub/native_library.h>
 #include "options.h"
 #include "track_choice.h"
 #include "ui_services.h"

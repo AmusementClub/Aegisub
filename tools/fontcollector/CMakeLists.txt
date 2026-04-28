@@ -77,6 +77,7 @@ set(AEGISUB_FONTCOLLECTOR_LAGI_SOURCES
     ${AEGISUB_ROOT}/libaegisub/common/line_iterator.cpp
     ${AEGISUB_ROOT}/libaegisub/common/parser.cpp
     ${AEGISUB_ROOT}/libaegisub/common/vfr.cpp
+    ${AEGISUB_ROOT}/libaegisub/common/native_library.cpp
     fontcollector_libaegisub_log.cpp
 )
 
@@ -177,9 +178,17 @@ target_link_libraries(aegisub_fontcollector
         Boost::regex
 )
 
+if(MSVC AND AEGISUB_FONTCOLLECTOR_STATIC_RUNTIME)
+    # Boost::regex from vcpkg static triplet may default to debug CRT,
+    # which conflicts with the target's Release /MT. Suppress the stale default lib.
+    target_link_options(aegisub_fontcollector PRIVATE
+        "$<$<NOT:$<CONFIG:Debug>>:/NODEFAULTLIB:LIBCMTD>"
+    )
+endif()
+
 if(WIN32)
-    target_sources(aegisub_fontcollector PRIVATE ${AEGISUB_ROOT}/src/font_file_lister_gdi.cpp)
-    target_link_libraries(aegisub_fontcollector PRIVATE Advapi32 Gdi32 Shell32 Usp10)
+    target_sources(aegisub_fontcollector PRIVATE ${AEGISUB_ROOT}/src/font_file_lister_gdi.cpp ${AEGISUB_ROOT}/src/font_file_lister_dwrite.cpp)
+    target_link_libraries(aegisub_fontcollector PRIVATE Advapi32 Gdi32 Shell32 Usp10 dwrite Version)
 elseif(APPLE)
     target_sources(aegisub_fontcollector PRIVATE ${AEGISUB_ROOT}/src/font_file_lister_coretext.mm)
     target_link_libraries(aegisub_fontcollector PRIVATE "-framework AppKit" "-framework CoreText")

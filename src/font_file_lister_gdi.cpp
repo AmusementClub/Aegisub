@@ -1,4 +1,5 @@
 // Copyright (c) 2016, Thomas Goyne <plorkyeran@aegisub.org>
+// Copyright (c) 2026, MIRIMIRIM
 //
 // Permission to use, copy, modify, and distribute this software for any
 // purpose with or without fee is hereby granted, provided that the above
@@ -15,6 +16,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "font_file_lister.h"
+#include "font_file_lister_dwrite.h"
 
 #include "font_collector_unicode.h"
 
@@ -26,6 +28,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <dwrite.h>
 #include <memory>
 #include <ShlObj.h>
 #include <Usp10.h>
@@ -80,6 +83,37 @@ uint32_t murmur3(const char *data, uint32_t len) {
 	hash ^= hash >> 16;
 
 	return hash;
+}
+
+struct FauxResult { bool faux_bold = false; bool faux_italic = false; };
+
+// FauxResult DetectFauxStyles(HDC dc, LOGFONTW& lf, TEXTMETRICW const& metrics,
+//                             int requested_bold, bool requested_italic) {
+// 	struct FamilyBits { bool bold = false; bool italic = false; };
+// 	FamilyBits bits;
+// 	EnumFontFamiliesExW(dc, &lf,
+// 		[](LOGFONTW const *member, TEXTMETRICW const *, DWORD, LPARAM lParam) -> int {
+// 			auto *b = reinterpret_cast<FamilyBits *>(lParam);
+// 			if (static_cast<int>(member->lfWeight) >= 600) b->bold = true;
+// 			if (member->lfItalic) b->italic = true;
+// 			return 1;
+// 		}, reinterpret_cast<LPARAM>(&bits), 0);
+
+// 	bool const synthesizing = (metrics.tmOverhang != 0);
+
+// 	FauxResult result;
+// 	result.faux_italic = requested_italic && !bits.italic && synthesizing;
+// 	result.faux_bold = (requested_bold != 0) && !bits.bold && synthesizing;
+// 	return result;
+// }
+
+FauxResult DetectFauxStylesDWrite(IDWriteFontFace *face) {
+	FauxResult result;
+	if (!face) return result;
+	auto const sims = face->GetSimulations();
+	result.faux_bold = (sims & DWRITE_FONT_SIMULATIONS_BOLD) != 0;
+	result.faux_italic = (sims & DWRITE_FONT_SIMULATIONS_OBLIQUE) != 0;
+	return result;
 }
 
 std::vector<agi::fs::path> get_installed_fonts() {
@@ -163,16 +197,32 @@ void get_font_data(std::string& buffer, HDC dc) {
 }
 }
 
+GdiFontFileLister::~GdiFontFileLister() = default;
+
 GdiFontFileLister::GdiFontFileLister(FontCollectorEventSink &cb)
-: dc(CreateCompatibleDC(nullptr), [](HDC dc) { DeleteDC(dc); })
+: dwrite_bridge(std::make_unique<DWriteBridge>())
+, dc(CreateCompatibleDC(nullptr), [](HDC dc) { DeleteDC(dc); })
 {
 	FontCollectorEvent event;
+	if (dwrite_bridge->available()) {
+		event.type = FontCollectorEventType::FontBackendInfo;
+		event.message = dwrite_bridge->dll_description();
+		Emit(cb, std::move(event));
+	}
+	else {
+		event.type = FontCollectorEventType::FontBackendInfo;
+		event.message = "GDI (DWrite unavailable)";
+		Emit(cb, std::move(event));
+	}
+
+	event = FontCollectorEvent();
 	event.type = FontCollectorEventType::UpdatingFontCache;
 	Emit(cb, std::move(event));
-	index = index_fonts(cb);
+	if (!dwrite_bridge->available())
+		index = index_fonts(cb);
 }
 
-CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<int> const& characters) {
+CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters) {
 	CollectionResult ret;
 
 	LOGFONTW lf{};
@@ -182,78 +232,105 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 	lf.lfWeight = bold == 0 ? 400 :
 	              bold == 1 ? 700 :
 	                          bold;
+	lf.lfCharSet = DEFAULT_CHARSET;
+	lf.lfOutPrecision = OUT_TT_ONLY_PRECIS;
+	lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
+	lf.lfQuality = ANTIALIASED_QUALITY;
+	lf.lfPitchAndFamily = DEFAULT_PITCH|FF_DONTCARE;
+	ret.requested_weight = lf.lfWeight;
 
-	// Gather all of the styles for the given family name
-	std::vector<LOGFONTW> matches;
-	using type = decltype(matches);
-	EnumFontFamiliesExW(dc, &lf, [](const LOGFONTW *lf, const TEXTMETRICW *, DWORD, LPARAM lParam) -> int {
-		reinterpret_cast<type*>(lParam)->push_back(*lf);
-		return 1;
-	}, (LPARAM)&matches, 0);
-
-	if (matches.empty())
-		return ret;
-
-	// If the user asked for a non-regular style, verify that it actually exists
-	if (italic || bold) {
-		bool has_bold = false;
-		bool has_italic = false;
-		bool has_bold_italic = false;
-
-		auto is_italic = [&](LOGFONTW const& lf) {
-			return !italic || lf.lfItalic;
-		};
-		auto is_bold = [&](LOGFONTW const& lf) {
-			return !bold
-				|| (bold == 1 && lf.lfWeight >= 700)
-				|| (bold > 1 && lf.lfWeight > bold);
-		};
-
-		for (auto const& match : matches) {
-			has_bold = has_bold || is_bold(match);
-			has_italic = has_italic || is_italic(match);
-			has_bold_italic = has_bold_italic || (is_bold(match) && is_italic(match));
-		}
-
-		ret.fake_italic = !has_italic;
-		ret.fake_bold = (italic && has_italic ? !has_bold_italic : !has_bold);
-	}
-
-	// Open the font and get the data for it to look up in the index
-	auto hfont = CreateFontIndirectW(&matches[0]);
+	auto hfont = CreateFontIndirectW(&lf);
+	if (!hfont) return ret;
 	SelectObject(dc, hfont);
 	auto release_font = agi::make_scope_exit([=] {
 		SelectObject(dc, nullptr);
 		DeleteObject(hfont);
 	});
 
-	get_font_data(buffer, dc);
-
-	auto range = index.equal_range(murmur3(buffer.c_str(), std::min<size_t>(buffer.size(), 1024U)));
-	if (range.first == range.second)
-		return ret; // could instead write to a temp dir
-
-	// Compare the full files for each of the fonts with the same prefix
-	std::unique_ptr<char[]> file_buffer(new char[buffer.size()]);
-	for (auto it = range.first; it != range.second; ++it) {
-		auto stream = agi::io::Open(it->second, true);
-		stream->read(&file_buffer[0], buffer.size());
-		if ((size_t)stream->tellg() != buffer.size())
-			continue;
-		if (memcmp(&file_buffer[0], &buffer[0], buffer.size()) == 0) {
-			ret.paths.push_back(it->second);
-			break;
-		}
+	// Get the actual face name GDI selected.
+	wchar_t selected_face[LF_FACESIZE] = {};
+	if (GetTextFaceW(dc, LF_FACESIZE, selected_face) > 0)
+		ret.matched_facename = agi::charset::ConvertW(selected_face);
+	TEXTMETRICW metrics = {};
+	if (GetTextMetricsW(dc, &metrics)) {
+	ret.matched_weight = metrics.tmWeight;
+	ret.matched_italic = metrics.tmItalic != 0;
 	}
 
-	// No fonts actually matched
-	if (ret.paths.empty())
-		return ret;
+	// --- DWrite bridge: try to get path, simulations and raw data ---
+	if (dwrite_bridge->available()) {
+		IDWriteFontFace *dw_face;
+		if (dwrite_bridge->is_dwritecore()) {
+			LOGFONT lf_actual{};
+			GetObject(hfont, sizeof(LOGFONT), &lf_actual);
+			dw_face = dwrite_bridge->CreateFontFaceFromLogFont(lf_actual);
+		} else {
+			dw_face = dwrite_bridge->CreateFontFaceFromHdc(dc);
+		}
+		if (dw_face) {
+			std::string dw_path;
+			int dw_index = -1;
+			if (dwrite_bridge->GetFontFilePath(dw_face, dw_path, dw_index))
+				ret.path_source = dwrite_bridge->is_dwritecore() ? "dwritecore" : "dwrite";
+
+			if (!dw_path.empty()) {
+				ret.paths.push_back(agi::fs::PathFromString(dw_path));
+				ret.face_index = dw_index;
+			}
+
+			if (ret.face_index < 0)
+				ret.face_index = static_cast<int>(dw_face->GetIndex());
+
+			dwrite_bridge->ReadFontData(dw_face, ret.raw_data.bytes);
+
+			auto dw_faux = DetectFauxStylesDWrite(dw_face);
+			if (dw_faux.faux_bold) ret.fake_bold = true;
+			if (dw_faux.faux_italic) ret.fake_italic = true;
+
+			dw_face->Release();
+		}
+	}
+	// else {
+	// 	auto faux = DetectFauxStyles(dc, lf, metrics, bold, italic);
+	// 	ret.fake_bold = faux.faux_bold;
+	// 	ret.fake_italic = faux.faux_italic;
+	// }
+
+	// --- GDI fallback: path via registry + hash, raw_data via GetFontData ---
+	if (ret.paths.empty() || ret.raw_data.bytes.empty()) {
+		// Ensure we have the raw GDI font data.
+		if (ret.raw_data.bytes.empty())
+			get_font_data(buffer, dc);
+
+		// Try to find the file path from the registry index.
+		if (ret.paths.empty() && !buffer.empty()) {
+			auto range = index.equal_range(murmur3(buffer.c_str(), std::min<size_t>(buffer.size(), 1024U)));
+			std::unique_ptr<char[]> file_buffer(new char[buffer.size()]);
+			for (auto it = range.first; it != range.second; ++it) {
+				auto stream = agi::io::Open(it->second, true);
+				stream->read(&file_buffer[0], buffer.size());
+				if ((size_t)stream->tellg() != buffer.size())
+					continue;
+				if (memcmp(&file_buffer[0], &buffer[0], buffer.size()) == 0) {
+					ret.paths.push_back(it->second);
+					ret.path_source = "gdi";
+					break;
+				}
+			}
+		}
+
+		// Fill raw_data from GDI if DWrite didn't provide it.
+		if (ret.raw_data.bytes.empty() && !buffer.empty()) {
+			ret.raw_data.bytes.assign(buffer.begin(), buffer.end());
+		}
+	}
+	if (ret.raw_data.bytes.size() >= 4 && ret.raw_data.bytes.data())
+		ret.is_collection = (DetermineFontFormat(std::span<const char, 4>(ret.raw_data.bytes.data(), 4)) == FontFormat::Collection);
 
 	// Convert the characters to a utf-16 string
 	std::wstring utf16characters;
 	utf16characters.reserve(characters.size());
-	for (int chr : characters) {
+	for (auto chr : characters) {
 		font_collector::unicode::Rune rune;
 		if (!font_collector::unicode::Rune::TryCreate(chr, rune))
 			continue;

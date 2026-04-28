@@ -5,7 +5,7 @@
 namespace {
 using font_collector::unicode::Rune;
 
-bool is_valid_scalar_value(unsigned value) {
+bool is_valid_scalar_value(uint32_t value) {
 	return value <= 0x10FFFF && (value - 0xD800) > 0x7FF;
 }
 
@@ -54,7 +54,7 @@ bool Rune::TryEncodeToUtf8(std::span<char> destination, int& bytes_written) cons
 	if (size == 0)
 		return false;
 
-	auto const value = static_cast<unsigned>(this->value);
+	auto const value = this->value;
 	if (value < 0x80) {
 		destination[0] = static_cast<char>(value);
 		bytes_written = 1;
@@ -90,8 +90,8 @@ bool Rune::TryEncodeToUtf8(std::span<char> destination, int& bytes_written) cons
 	return true;
 }
 
-bool Rune::IsValid(int scalar_value) {
-	return is_valid_scalar_value(static_cast<unsigned>(scalar_value));
+bool Rune::IsValid(uint32_t scalar_value) {
+	return is_valid_scalar_value(scalar_value);
 }
 
 #ifdef _WIN32
@@ -100,7 +100,7 @@ bool Rune::TryEncodeToUtf16(std::span<wchar_t> destination, int& chars_written) 
 	if (destination.empty())
 		return false;
 
-	auto const value = static_cast<unsigned>(this->value);
+	auto const value = this->value;
 	if (value < 0x10000) {
 		destination[0] = static_cast<wchar_t>(value);
 		chars_written = 1;
@@ -116,7 +116,7 @@ bool Rune::TryEncodeToUtf16(std::span<wchar_t> destination, int& chars_written) 
 }
 #endif
 
-bool Rune::TryCreate(int scalar_value, Rune& result) {
+bool Rune::TryCreate(uint32_t scalar_value, Rune& result) {
 	if (!IsValid(scalar_value)) {
 		result = Rune();
 		return false;

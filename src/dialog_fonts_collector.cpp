@@ -142,7 +142,7 @@ color_str_pair FormatFontCollectorEvent(FontCollectorEvent const& event) {
 		}
 		case FontCollectorEventType::FakeBold: {
 			wxString weight_hint = event.requested_weight
-			    ? fmt_wx(L" (requested weight %d)", event.requested_weight)
+			    ? fmt_wx(" (requested weight %d)", event.requested_weight)
 			    : wxString{};
 			return {3, fmt_tl("'%s' does not have a bold variant%s.\n", event.face, weight_hint)};
 		}

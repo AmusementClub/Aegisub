@@ -1,4 +1,4 @@
-#include "../../src/native_library.h"
+#include <libaegisub/native_library.h>
 
 #include <gtest/gtest.h>
 

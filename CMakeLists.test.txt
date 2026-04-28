@@ -62,7 +62,7 @@ if(GTEST_FOUND)
         src/locale_choice.cpp
         src/locale_pick.cpp
         src/mkv_wrap_common.cpp
-        src/native_library.cpp
+        libaegisub/common/native_library.cpp
         src/perf_trace.cpp
         src/resolution_resampler.cpp
         src/text_file_writer.cpp
@@ -227,7 +227,7 @@ endif()
 if(WITH_LIBPLACEBO)
     add_executable(placebo-runtime-smoke EXCLUDE_FROM_ALL
         tests/smoke/placebo_runtime_smoke.cpp
-        src/native_library.cpp
+        libaegisub/common/native_library.cpp
         src/video_renderer_placebo_runtime.cpp
     )
     target_compile_definitions(placebo-runtime-smoke PRIVATE CMAKE_BUILD WITH_LIBPLACEBO)
@@ -237,7 +237,7 @@ if(WITH_LIBPLACEBO)
     if(WIN32)
         add_executable(placebo-legacy-state-smoke EXCLUDE_FROM_ALL
             tests/smoke/placebo_legacy_state_smoke.cpp
-            src/native_library.cpp
+            libaegisub/common/native_library.cpp
             src/video_renderer_placebo_gl.cpp
             src/video_renderer_placebo_runtime.cpp
         )
@@ -248,7 +248,7 @@ if(WITH_LIBPLACEBO)
 
     add_executable(placebo-render-bench EXCLUDE_FROM_ALL
         tests/smoke/placebo_render_bench.cpp
-        src/native_library.cpp
+        libaegisub/common/native_library.cpp
         src/video_renderer_placebo_gl.cpp
         src/video_renderer_placebo_runtime.cpp
     )
@@ -267,7 +267,7 @@ if(WIN32)
             tests/support/src_config_stubs.cpp
             src/avisynth_legacy_path.cpp
             src/avisynth_wrap.cpp
-            src/native_library.cpp
+            libaegisub/common/native_library.cpp
         )
         target_compile_definitions(avisynth-autoload-runtime-smoke PRIVATE
             CMAKE_BUILD
@@ -321,7 +321,7 @@ if(WIN32)
     target_link_libraries(detached-visual-tools-smoke PRIVATE libaegisub OpenGL::GL ${wxWidgets_LIBRARIES})
     if(WITH_LIBPLACEBO)
         target_sources(detached-visual-tools-smoke PRIVATE
-            src/native_library.cpp
+            libaegisub/common/native_library.cpp
             src/video_renderer_placebo_gl.cpp
             src/video_renderer_placebo_runtime.cpp
         )
@@ -338,7 +338,7 @@ if(WIN32)
             src/video_provider_ffmpegsource.cpp
             src/video_renderer_opengl.cpp
             src/video_renderer_opengl_tile.cpp
-            src/native_library.cpp
+            libaegisub/common/native_library.cpp
             src/video_renderer_placebo_gl.cpp
             src/video_renderer_placebo_runtime.cpp
         )

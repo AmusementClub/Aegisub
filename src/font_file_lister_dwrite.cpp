@@ -274,6 +274,42 @@ bool DWriteBridge::GetFontFilePath(IDWriteFontFace *face, std::string &out_path,
 	if (FAILED(hr))
 		return false;
 
+	// DWrite may return the path in all-caps (e.g. C:\WINDOWS\FONTS\ARIAL.TTF).
+	{
+		std::wstring fixed;
+		fixed.reserve(path_len);
+		// Copy the drive root or UNC prefix as-is (e.g. "C:" or "\\server\share").
+		auto const root_end = path_len >= 2 && wpath[1] == L':' ? 2 :
+		                      (path_len >= 2 && wpath[0] == L'\\' && wpath[1] == L'\\') ? path_len : 0;
+		fixed.assign(wpath.data(), root_end);
+
+		for (size_t i = root_end; i < path_len; ) {
+			while (i < path_len && (wpath[i] == L'\\' || wpath[i] == L'/'))
+				++i;
+			if (i >= path_len) break;
+
+			size_t comp_end = i;
+			while (comp_end < path_len && wpath[comp_end] != L'\\' && wpath[comp_end] != L'/')
+				++comp_end;
+
+			fixed.push_back(L'\\');
+			auto const comp_begin = fixed.size();
+			fixed.append(wpath.data() + i, comp_end - i);
+
+			WIN32_FIND_DATAW fd;
+			HANDLE h = FindFirstFileW(fixed.c_str(), &fd);
+			if (h != INVALID_HANDLE_VALUE) {
+				FindClose(h);
+				fixed.resize(comp_begin);
+				fixed.append(fd.cFileName);
+			}
+			i = comp_end;
+		}
+		wpath.assign(fixed.begin(), fixed.end());
+		wpath.push_back(L'\0');
+		path_len = static_cast<UINT32>(fixed.size());
+	}
+
 	out_path = wide_to_utf8(wpath.data(), path_len);
 	if (!out_path.empty())
 		out_face_index = static_cast<int>(face->GetIndex());

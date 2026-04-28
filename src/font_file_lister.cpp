@@ -191,6 +191,14 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style, F
 			}
 		}
 
+		if (res.paths.empty() && !res.raw_data.bytes.empty()) {
+			FontCollectorEvent event;
+			event.type = FontCollectorEventType::FontFound;
+			event.face = style.first.facename;
+			event.message = "memory";
+			Emit(event_sink, std::move(event));
+		}
+
 		if (res.fake_bold) {
 			FontCollectorEvent event;
 			event.type = FontCollectorEventType::FakeBold;

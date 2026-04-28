@@ -208,6 +208,8 @@ std::string FormatEvent(AegisubFontCollectorEvent const& event) {
 			return "Missing font: " + Safe(event.face);
 		case AEGISUB_FONTCOLLECTOR_EVENT_FONT_FOUND: {
 			auto src = Safe(event.message);
+			if (src == "memory")
+				return "Found font: " + Safe(event.face) + " (memory)";
 			return "Found font: " + Safe(event.face) + " -> " + Safe(event.path) +
 			       (src.empty() ? "" : " [" + src + "]");
 		}

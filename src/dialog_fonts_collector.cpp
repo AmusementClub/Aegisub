@@ -140,8 +140,12 @@ color_str_pair FormatFontCollectorEvent(FontCollectorEvent const& event) {
 			auto src = event.message.empty() ? wxString{} : fmt_wx(" [%s]", event.message);
 			return {0, fmt_tl("Found '%s' at '%s'%s\n", event.face, event.path, src)};
 		}
-		case FontCollectorEventType::FakeBold:
-			return {3, fmt_tl("'%s' does not have a bold variant.\n", event.face)};
+		case FontCollectorEventType::FakeBold: {
+			wxString weight_hint = event.requested_weight
+			    ? fmt_wx(L" (requested weight %d)", event.requested_weight)
+			    : wxString{};
+			return {3, fmt_tl("'%s' does not have a bold variant%s.\n", event.face, weight_hint)};
+		}
 		case FontCollectorEventType::FakeItalic:
 			return {3, fmt_tl("'%s' does not have an italic variant.\n", event.face)};
 		case FontCollectorEventType::MissingGlyphs:

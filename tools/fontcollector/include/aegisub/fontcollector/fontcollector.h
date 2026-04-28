@@ -88,6 +88,8 @@ typedef struct AegisubFontCollectorEvent {
 	int const *lines;
 	size_t line_count;
 	int count;
+	int requested_weight;
+	int requested_italic;
 } AegisubFontCollectorEvent;
 
 typedef struct AegisubFontCollectorMatchedFont {
@@ -100,6 +102,7 @@ typedef struct AegisubFontCollectorMatchedFont {
 	int fake_bold;
 	int fake_italic;
 	char const *missing_chars;
+	int requested_weight;
 } AegisubFontCollectorMatchedFont;
 
 typedef struct AegisubFontCollectorFontUsage {

@@ -1,4 +1,4 @@
-// Copyright (c) 2026, MIR
+// Copyright (c) 2026, MIRIMIRIM
 
 #pragma once
 

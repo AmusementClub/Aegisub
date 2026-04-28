@@ -63,6 +63,8 @@ struct FontCollectorEvent {
 	std::vector<int> lines;
 	agi::fs::path path;
 	int count = 0;
+	int requested_weight = 0;
+	int requested_italic = 0;
 };
 
 using FontCollectorEventSink = std::function<void(FontCollectorEvent const&)>;

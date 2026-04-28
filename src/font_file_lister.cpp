@@ -1,4 +1,5 @@
 // Copyright (c) 2012, Thomas Goyne <plorkyeran@aegisub.org>
+// Copyright (c) 2026, MIRIMIRIM
 //
 // Permission to use, copy, modify, and distribute this software for any
 // purpose with or without fee is hereby granted, provided that the above
@@ -145,6 +146,10 @@ void FontCollector::ProcessDialogueLine(const AssDialogue *line, int index, int 
 void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style, FontCollectorDetails *details) {
 	if (style.second.chars.empty()) return;
 
+	auto const requested_weight = style.first.bold == 0 ? 400 :
+	                              style.first.bold == 1 ? 700 :
+	                                                     style.first.bold;
+
 	auto res = lister.GetFontPaths(style.first.facename, style.first.bold, style.first.italic, style.second.chars);
 	for (auto& path : res.paths)
 		path.make_preferred();
@@ -168,22 +173,27 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style, F
 		usage.matched.fake_bold = res.fake_bold;
 		usage.matched.fake_italic = res.fake_italic;
 		usage.matched.missing_chars = res.missing;
+		usage.matched.requested_weight = res.requested_weight;
 	}
 
-	if (res.paths.empty() && res.raw_data.bytes.empty()) {
+	auto make_event = [&](FontCollectorEventType type) {
 		FontCollectorEvent event;
-		event.type = FontCollectorEventType::FontMissing;
+		event.type = type;
 		event.face = style.first.facename;
-		Emit(event_sink, std::move(event));
+		event.requested_weight = requested_weight;
+		event.requested_italic = style.first.italic ? 1 : 0;
+		return event;
+	};
+
+	if (res.paths.empty() && res.raw_data.bytes.empty()) {
+		Emit(event_sink, make_event(FontCollectorEventType::FontMissing));
 		PrintUsage(style.second);
 		++missing;
 	}
 	else {
 		for (auto& elem : res.paths) {
 			if (std::find(begin(results), end(results), elem) == end(results)) {
-				FontCollectorEvent event;
-				event.type = FontCollectorEventType::FontFound;
-				event.face = style.first.facename;
+				auto event = make_event(FontCollectorEventType::FontFound);
 				event.path = elem;
 				event.message = res.path_source;
 				Emit(event_sink, std::move(event));
@@ -192,30 +202,18 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style, F
 		}
 
 		if (res.paths.empty() && !res.raw_data.bytes.empty()) {
-			FontCollectorEvent event;
-			event.type = FontCollectorEventType::FontFound;
-			event.face = style.first.facename;
+			auto event = make_event(FontCollectorEventType::FontFound);
 			event.message = "memory";
 			Emit(event_sink, std::move(event));
 		}
 
-		if (res.fake_bold) {
-			FontCollectorEvent event;
-			event.type = FontCollectorEventType::FakeBold;
-			event.face = style.first.facename;
-			Emit(event_sink, std::move(event));
-		}
-		if (res.fake_italic) {
-			FontCollectorEvent event;
-			event.type = FontCollectorEventType::FakeItalic;
-			event.face = style.first.facename;
-			Emit(event_sink, std::move(event));
-		}
+		if (res.fake_bold)
+			Emit(event_sink, make_event(FontCollectorEventType::FakeBold));
+		if (res.fake_italic)
+			Emit(event_sink, make_event(FontCollectorEventType::FakeItalic));
 
 		if (res.missing.size()) {
-			FontCollectorEvent event;
-			event.type = FontCollectorEventType::MissingGlyphs;
-			event.face = style.first.facename;
+			auto event = make_event(FontCollectorEventType::MissingGlyphs);
 			event.message = res.missing;
 			int missing_count = 0;
 			for (size_t pos = 0; pos < res.missing.size(); ) {

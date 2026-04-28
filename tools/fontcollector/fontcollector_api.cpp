@@ -101,6 +101,8 @@ void EmitCEvent(FontCollectorEvent const& event, AegisubFontCollectorEventCallba
 	c_event.lines = event.lines.empty() ? nullptr : event.lines.data();
 	c_event.line_count = event.lines.size();
 	c_event.count = event.count;
+	c_event.requested_weight = event.requested_weight;
+	c_event.requested_italic = event.requested_italic;
 
 	callback(&c_event, user_data);
 }
@@ -144,6 +146,7 @@ void EmitCUsage(FontCollectorAssFontUsage const& usage,
 	c_usage.matched.fake_bold = usage.matched.fake_bold;
 	c_usage.matched.fake_italic = usage.matched.fake_italic;
 	c_usage.matched.missing_chars = usage.matched.missing_chars.c_str();
+	c_usage.matched.requested_weight = usage.matched.requested_weight;
 
 	callback(&c_usage, user_data);
 }

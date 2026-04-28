@@ -141,6 +141,8 @@ struct JsonEvent {
 	std::vector<std::string> styles;
 	std::vector<int> lines;
 	int count = 0;
+	int requested_weight = 0;
+	int requested_italic = 0;
 };
 
 struct JsonMatchedFont {
@@ -152,6 +154,7 @@ struct JsonMatchedFont {
 	bool fake_bold = false;
 	bool fake_italic = false;
 	std::string missing_chars;
+	int requested_weight = 0;
 };
 
 struct JsonUsage {
@@ -214,7 +217,7 @@ std::string FormatEvent(AegisubFontCollectorEvent const& event) {
 			       (src.empty() ? "" : " [" + src + "]");
 		}
 		case AEGISUB_FONTCOLLECTOR_EVENT_FAKE_BOLD:
-			return "Fake bold required: " + Safe(event.face);
+			return "Fake bold required: " + Safe(event.face) + (event.requested_weight ? " (requested " + std::to_string(event.requested_weight) + ")" : std::string());
 		case AEGISUB_FONTCOLLECTOR_EVENT_FAKE_ITALIC:
 			return "Fake italic required: " + Safe(event.face);
 		case AEGISUB_FONTCOLLECTOR_EVENT_MISSING_GLYPHS:
@@ -298,6 +301,8 @@ void CollectJsonEvent(AegisubFontCollectorEvent const *event, void *user_data) {
 	if (event->line_count)
 		item.lines.assign(event->lines, event->lines + event->line_count);
 	item.count = event->count;
+	item.requested_weight = event->requested_weight;
+	item.requested_italic = event->requested_italic;
 }
 
 std::string JoinPaths(AegisubFontCollectorMatchedFont const& font) {
@@ -381,6 +386,7 @@ void CollectJsonUsage(AegisubFontCollectorFontUsage const *usage, void *user_dat
 	item.matched.fake_bold = usage->matched.fake_bold != 0;
 	item.matched.fake_italic = usage->matched.fake_italic != 0;
 	item.matched.missing_chars = Safe(usage->matched.missing_chars);
+	item.matched.requested_weight = usage->matched.requested_weight;
 }
 
 void WriteJsonStringArray(std::ostream& out, std::vector<std::string> const& values) {
@@ -444,7 +450,9 @@ void WriteJsonReport(std::ostream& out, int result, std::string const& error, Js
 		WriteJsonStringArray(out, event.styles);
 		out << ",\n      \"lines\": ";
 		WriteJsonIntArray(out, event.lines);
-		out << ",\n      \"count\": " << event.count << "\n";
+		out << ",\n      \"count\": " << event.count;
+		out << ",\n      \"requested_weight\": " << event.requested_weight;
+		out << ",\n      \"requested_italic\": " << event.requested_italic << "\n";
 		out << "    }" << (i + 1 == context.events.size() ? "\n" : ",\n");
 	}
 	out << "  ],\n  \"font_usage\": [\n";
@@ -469,7 +477,9 @@ void WriteJsonReport(std::ostream& out, int result, std::string const& error, Js
 		out << "        \"facename\": ";
 		WriteJsonString(out, usage.matched.facename);
 		out << ",\n        \"face_index\": " << usage.matched.face_index;
-		out << ",\n        \"weight\": " << usage.matched.weight << ",\n        \"italic\": ";
+		out << ",\n        \"weight\": " << usage.matched.weight;
+		out << ",\n        \"requested_weight\": " << usage.matched.requested_weight;
+		out << ",\n        \"italic\": ";
 		WriteJsonBool(out, usage.matched.italic);
 		out << ",\n        \"paths\": ";
 		WriteJsonStringArray(out, usage.matched.paths);

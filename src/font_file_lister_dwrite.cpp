@@ -1,4 +1,4 @@
-// Copyright (c) 2026, MIR
+// Copyright (c) 2026, MIRIMIRIM
 
 #include "font_file_lister_dwrite.h"
 

@@ -1,4 +1,5 @@
 // Copyright (c) 2012, Thomas Goyne <plorkyeran@aegisub.org>
+// Copyright (c) 2026, MIRIMIRIM
 //
 // Permission to use, copy, modify, and distribute this software for any
 // purpose with or without fee is hereby granted, provided that the above
@@ -61,6 +62,8 @@ struct CollectionResult {
 	FontRawData raw_data;
 	bool fake_bold = false;
 	bool fake_italic = false;
+	/// The lfWeight value passed to CreateFontIndirectW.
+	int requested_weight = 0;
 };
 
 struct FontCollectorMatchedFont {
@@ -75,6 +78,7 @@ struct FontCollectorMatchedFont {
 	bool fake_bold = false;
 	bool fake_italic = false;
 	std::string missing_chars;
+	int requested_weight = 0;
 };
 
 struct FontCollectorAssFontUsage {

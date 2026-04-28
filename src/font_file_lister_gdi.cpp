@@ -1,4 +1,5 @@
 // Copyright (c) 2016, Thomas Goyne <plorkyeran@aegisub.org>
+// Copyright (c) 2026, MIRIMIRIM
 //
 // Permission to use, copy, modify, and distribute this software for any
 // purpose with or without fee is hereby granted, provided that the above
@@ -236,6 +237,7 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 	lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
 	lf.lfQuality = ANTIALIASED_QUALITY;
 	lf.lfPitchAndFamily = DEFAULT_PITCH|FF_DONTCARE;
+	ret.requested_weight = lf.lfWeight;
 
 	auto hfont = CreateFontIndirectW(&lf);
 	if (!hfont) return ret;

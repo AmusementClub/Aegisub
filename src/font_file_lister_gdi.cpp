@@ -84,6 +84,37 @@ uint32_t murmur3(const char *data, uint32_t len) {
 	return hash;
 }
 
+struct FauxResult { bool faux_bold = false; bool faux_italic = false; };
+
+// FauxResult DetectFauxStyles(HDC dc, LOGFONTW& lf, TEXTMETRICW const& metrics,
+//                             int requested_bold, bool requested_italic) {
+// 	struct FamilyBits { bool bold = false; bool italic = false; };
+// 	FamilyBits bits;
+// 	EnumFontFamiliesExW(dc, &lf,
+// 		[](LOGFONTW const *member, TEXTMETRICW const *, DWORD, LPARAM lParam) -> int {
+// 			auto *b = reinterpret_cast<FamilyBits *>(lParam);
+// 			if (static_cast<int>(member->lfWeight) >= 600) b->bold = true;
+// 			if (member->lfItalic) b->italic = true;
+// 			return 1;
+// 		}, reinterpret_cast<LPARAM>(&bits), 0);
+
+// 	bool const synthesizing = (metrics.tmOverhang != 0);
+
+// 	FauxResult result;
+// 	result.faux_italic = requested_italic && !bits.italic && synthesizing;
+// 	result.faux_bold = (requested_bold != 0) && !bits.bold && synthesizing;
+// 	return result;
+// }
+
+FauxResult DetectFauxStylesDWrite(IDWriteFontFace *face) {
+	FauxResult result;
+	if (!face) return result;
+	auto const sims = face->GetSimulations();
+	result.faux_bold = (sims & DWRITE_FONT_SIMULATIONS_BOLD) != 0;
+	result.faux_italic = (sims & DWRITE_FONT_SIMULATIONS_OBLIQUE) != 0;
+	return result;
+}
+
 std::vector<agi::fs::path> get_installed_fonts() {
 	static const auto fonts_key_name = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts";
 
@@ -200,65 +231,40 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 	lf.lfWeight = bold == 0 ? 400 :
 	              bold == 1 ? 700 :
 	                          bold;
+	lf.lfCharSet = DEFAULT_CHARSET;
+	lf.lfOutPrecision = OUT_TT_ONLY_PRECIS;
+	lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
+	lf.lfQuality = ANTIALIASED_QUALITY;
+	lf.lfPitchAndFamily = DEFAULT_PITCH|FF_DONTCARE;
 
-	// Gather all of the styles for the given family name
-	std::vector<LOGFONTW> matches;
-	using type = decltype(matches);
-	EnumFontFamiliesExW(dc, &lf, [](const LOGFONTW *lf, const TEXTMETRICW *, DWORD, LPARAM lParam) -> int {
-		reinterpret_cast<type*>(lParam)->push_back(*lf);
-		return 1;
-	}, (LPARAM)&matches, 0);
-
-	if (matches.empty())
-		return ret;
-
-	// If the user asked for a non-regular style, verify that it actually exists
-	if (italic || bold) {
-		bool has_bold = false;
-		bool has_italic = false;
-		bool has_bold_italic = false;
-
-		auto is_italic = [&](LOGFONTW const& lf) {
-			return !italic || lf.lfItalic;
-		};
-		auto is_bold = [&](LOGFONTW const& lf) {
-			return !bold
-				|| (bold == 1 && lf.lfWeight >= 700)
-				|| (bold > 1 && lf.lfWeight > bold);
-		};
-
-		for (auto const& match : matches) {
-			has_bold = has_bold || is_bold(match);
-			has_italic = has_italic || is_italic(match);
-			has_bold_italic = has_bold_italic || (is_bold(match) && is_italic(match));
-		}
-
-		ret.fake_italic = !has_italic;
-		ret.fake_bold = (italic && has_italic ? !has_bold_italic : !has_bold);
-	}
-
-	// Open the font and get the data for it to look up in the index
-	auto hfont = CreateFontIndirectW(&matches[0]);
+	auto hfont = CreateFontIndirectW(&lf);
+	if (!hfont) return ret;
 	SelectObject(dc, hfont);
 	auto release_font = agi::make_scope_exit([=] {
 		SelectObject(dc, nullptr);
 		DeleteObject(hfont);
 	});
 
+	// Get the actual face name GDI selected.
 	wchar_t selected_face[LF_FACESIZE] = {};
 	if (GetTextFaceW(dc, LF_FACESIZE, selected_face) > 0)
 		ret.matched_facename = agi::charset::ConvertW(selected_face);
 	TEXTMETRICW metrics = {};
 	if (GetTextMetricsW(dc, &metrics)) {
-		ret.matched_weight = metrics.tmWeight;
-		ret.matched_italic = metrics.tmItalic != 0;
+	ret.matched_weight = metrics.tmWeight;
+	ret.matched_italic = metrics.tmItalic != 0;
 	}
 
-	// --- DWrite bridge: try to get path and raw data ---
+	// --- DWrite bridge: try to get path, simulations and raw data ---
 	if (dwrite_bridge->available()) {
-		auto *dw_face = dwrite_bridge->is_dwritecore()
-			? dwrite_bridge->CreateFontFaceFromLogFont(matches[0])
-			: dwrite_bridge->CreateFontFaceFromHdc(dc);
+		IDWriteFontFace *dw_face;
+		if (dwrite_bridge->is_dwritecore()) {
+			LOGFONT lf_actual{};
+			GetObject(hfont, sizeof(LOGFONT), &lf_actual);
+			dw_face = dwrite_bridge->CreateFontFaceFromLogFont(lf_actual);
+		} else {
+			dw_face = dwrite_bridge->CreateFontFaceFromHdc(dc);
+		}
 		if (dw_face) {
 			std::string dw_path;
 			int dw_index = -1;
@@ -275,9 +281,18 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 
 			dwrite_bridge->ReadFontData(dw_face, ret.raw_data.bytes);
 
+			auto dw_faux = DetectFauxStylesDWrite(dw_face);
+			if (dw_faux.faux_bold) ret.fake_bold = true;
+			if (dw_faux.faux_italic) ret.fake_italic = true;
+
 			dw_face->Release();
 		}
 	}
+	// else {
+	// 	auto faux = DetectFauxStyles(dc, lf, metrics, bold, italic);
+	// 	ret.fake_bold = faux.faux_bold;
+	// 	ret.fake_italic = faux.faux_italic;
+	// }
 
 	// --- GDI fallback: path via registry + hash, raw_data via GetFontData ---
 	if (ret.paths.empty() || ret.raw_data.bytes.empty()) {

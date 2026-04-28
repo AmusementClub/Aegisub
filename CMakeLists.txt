@@ -881,11 +881,7 @@ if(WIN32)
 endif()
 
 find_package(unofficial-skia CONFIG QUIET)
-set(AEGISUB_HAVE_SKIA_PACKAGE OFF)
-if(TARGET unofficial::skia::skia)
-    set(AEGISUB_HAVE_SKIA_PACKAGE ON)
-endif()
-option(WITH_SKIA "Enable optional Skia-based 2D rendering infrastructure" ${AEGISUB_HAVE_SKIA_PACKAGE})
+option(WITH_SKIA "Enable optional Skia-based 2D rendering infrastructure" OFF)
 if(WITH_SKIA)
     if(NOT TARGET unofficial::skia::skia)
         message(FATAL_ERROR

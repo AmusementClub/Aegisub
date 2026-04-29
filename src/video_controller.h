@@ -218,7 +218,7 @@ public:
 	/// @brief Jump to a time
 	/// @param ms Time to jump to in milliseconds
 	/// @param end Type of time
-	void JumpToTime(int ms, agi::vfr::Time end = agi::vfr::START);
+	void JumpToTime(int ms, agi::vfr::Time end = agi::vfr::EXACT);
 
 	/// Navigate by a relative number of frames (paused only).
 	///

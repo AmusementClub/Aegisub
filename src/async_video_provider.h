@@ -87,7 +87,8 @@ class AsyncVideoProvider {
 	AsyncVideoProviderEventSink event_sink;
 
 	int frame_number = -1; ///< Last frame number requested
-	double time = -1.; ///< Time of the frame to pass to the subtitle renderer
+	double time = -1.; ///< Time of the frame for UI/display state
+	double subtitle_time = -1.; ///< Time to pass to the subtitle renderer
 	agi::vfr::Framerate subtitles_timecodes;
 
 	/// Copy of the subtitles file to avoid having to touch the project context
@@ -100,6 +101,10 @@ class AsyncVideoProvider {
 
 	/// Last rendered frame number
 	int last_rendered = -1;
+	/// Last rendered subtitle time on that frame
+	double last_rendered_subtitle_time = -1.;
+	/// Subtitle time used for the currently filtered single-frame subtitle file
+	double single_frame_subtitle_time = -1.;
 	/// Last rendered subtitles on that frame
 	std::vector<AssDialogueBase> last_lines;
 	/// Cached source frame for subtitle-only rerenders of the current frame
@@ -115,6 +120,7 @@ class AsyncVideoProvider {
 
 	VideoRenderPacket ProcRenderPacket(int frame, double time, bool raw = false);
 	VideoRenderPacket ProcRenderPacket(int frame, double time, bool raw, bool force_bgra_frame);
+	VideoRenderPacket ProcRenderPacket(int frame, double time, double subtitle_time, bool raw, bool force_bgra_frame);
 	void ResetCachedSourceFrame() noexcept;
 	bool CanReuseCachedSourceFrame(int frame, bool raw, bool force_bgra_frame) const noexcept;
 	void ReuseCachedSourceFrame(VideoRenderPacket& packet, std::shared_ptr<VideoFrame>& frame) const;
@@ -137,6 +143,7 @@ class AsyncVideoProvider {
 	bool has_pending_frame = false;
 	int pending_frame_number = -1;
 	double pending_time = -1.;
+	double pending_subtitle_time = -1.;
 	bool has_pending_color_space = false;
 	std::string pending_color_space;
 	bool processing_scheduled = false;
@@ -180,6 +187,7 @@ public:
 	/// If `supersede_in_flight` is true, supersedes any in-flight request and
 	/// may drop a frame which finishes after a newer request arrives (latest-only).
 	void RequestFrame(int frame, double time, bool supersede_in_flight = true) throw();
+	void RequestFrame(int frame, double time, double subtitle_time, bool supersede_in_flight) throw();
 
 	/// Cancel any pending preview frame request and supersede in-flight work.
 	void CancelPendingFrameRequests() noexcept;

@@ -109,6 +109,8 @@ class VideoController final {
 	/// The frame number which was last requested from the video provider,
 	/// which may not be the same thing as the currently displayed frame
 	int frame_n = 0;
+	/// One-shot subtitle render time override used by time-based seeks
+	int subtitle_seek_time_ms = -1;
 	/// The frame number which was last presented by the video display.
 	int presented_frame_n = -1;
 

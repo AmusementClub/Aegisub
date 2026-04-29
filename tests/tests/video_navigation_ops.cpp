@@ -1,6 +1,46 @@
 #include <main.h>
 
+#include "../../src/video_controller.h"
 #include "../../src/video_navigation_ops.h"
+
+#include <cstdint>
+
+namespace {
+
+agi::vfr::Framerate MakeNtscFilmTimecodes() {
+	std::vector<int> timecodes;
+	timecodes.reserve(31701);
+	for (int frame = 0; frame <= 31700; ++frame)
+		timecodes.push_back(static_cast<int>(static_cast<int64_t>(frame) * 1000 * 1001 / 24000));
+	return agi::vfr::Framerate(timecodes);
+}
+
+int ResolveTimeJumpFrame(aegisub::video_navigation_ops::JumpTarget const& target, agi::vfr::Framerate const& fps) {
+	return fps.FrameAtTime(target.value, target.time_mode);
+}
+
+}
+
+TEST(video_navigation_ops, default_time_seek_selects_containing_frame_for_mid_frame_subtitle_start) {
+	auto const fps = MakeNtscFilmTimecodes();
+	int const subtitle_start_ms = 21 * 60 * 1000 + 54 * 1000 + 490;
+
+	EXPECT_EQ(agi::vfr::EXACT, VideoController::DefaultJumpToTimeMode);
+	EXPECT_EQ(31516, fps.FrameAtTime(subtitle_start_ms, VideoController::DefaultJumpToTimeMode));
+	EXPECT_EQ(31517, fps.FrameAtTime(subtitle_start_ms, agi::vfr::START));
+}
+
+TEST(video_navigation_ops, explicit_line_boundary_modes_are_not_changed_by_default_exact_seek) {
+	auto const fps = agi::vfr::Framerate(1.0);
+
+	auto start = aegisub::video_navigation_ops::PlanLineBoundaryJump(1, agi::vfr::START);
+	EXPECT_EQ(1, ResolveTimeJumpFrame(start, fps));
+	EXPECT_EQ(0, fps.FrameAtTime(start.value, VideoController::DefaultJumpToTimeMode));
+
+	auto end = aegisub::video_navigation_ops::PlanLineBoundaryJump(1000, agi::vfr::END);
+	EXPECT_EQ(0, ResolveTimeJumpFrame(end, fps));
+	EXPECT_EQ(1, fps.FrameAtTime(end.value, VideoController::DefaultJumpToTimeMode));
+}
 
 TEST(video_navigation_ops, next_boundary_prefers_active_start_then_end_then_next_line) {
 	using aegisub::video_navigation_ops::JumpTargetKind;

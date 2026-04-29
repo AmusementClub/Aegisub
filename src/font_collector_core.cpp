@@ -108,8 +108,12 @@ void CollectFonts(AssFile const *subs,
                   FontCollectionMode mode,
                   FontCollectorEventSink font_event_sink,
                   FontCollectorDetails *details,
-                  FontCollectionArchiveFactory archive_factory) {
-	auto paths = FontCollector(font_event_sink).GetFontPaths(subs, details);
+                  FontCollectionArchiveFactory archive_factory,
+                  bool enable_libass_compat) {
+	FontCollector collector(font_event_sink);
+	if (enable_libass_compat)
+		collector.EnableLibassCompat(true);
+	auto paths = collector.GetFontPaths(subs, details);
 	if (paths.empty())
 		return;
 

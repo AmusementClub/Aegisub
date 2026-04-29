@@ -149,10 +149,17 @@ struct JsonMatchedFont {
 	std::string facename;
 	int face_index = -1;
 	int weight = 0;
+	bool bold = false;
 	bool italic = false;
+	bool is_collection = false;
+	std::string path_source;
 	std::vector<std::string> paths;
 	bool fake_bold = false;
 	bool fake_italic = false;
+	/// libass-style synthetic detection from platform-neutral common layer (opt-in)
+	bool libass_fake_bold = false;
+	bool libass_fake_italic = false;
+	int libass_score = 0;
 	std::string missing_chars;
 	int requested_weight = 0;
 };
@@ -379,12 +386,18 @@ void CollectJsonUsage(AegisubFontCollectorFontUsage const *usage, void *user_dat
 	item.matched.facename = Safe(usage->matched.facename);
 	item.matched.face_index = usage->matched.face_index;
 	item.matched.weight = usage->matched.weight;
+	item.matched.bold = usage->matched.bold != 0;
 	item.matched.italic = usage->matched.italic != 0;
+	item.matched.is_collection = usage->matched.is_collection != 0;
+	item.matched.path_source = Safe(usage->matched.path_source);
 	item.matched.paths.reserve(usage->matched.path_count);
 	for (size_t i = 0; i < usage->matched.path_count; ++i)
 		item.matched.paths.emplace_back(usage->matched.paths[i]);
 	item.matched.fake_bold = usage->matched.fake_bold != 0;
 	item.matched.fake_italic = usage->matched.fake_italic != 0;
+	item.matched.libass_fake_bold = usage->matched.libass_fake_bold != 0;
+	item.matched.libass_fake_italic = usage->matched.libass_fake_italic != 0;
+	item.matched.libass_score = usage->matched.libass_score;
 	item.matched.missing_chars = Safe(usage->matched.missing_chars);
 	item.matched.requested_weight = usage->matched.requested_weight;
 }
@@ -479,14 +492,25 @@ void WriteJsonReport(std::ostream& out, int result, std::string const& error, Js
 		out << ",\n        \"face_index\": " << usage.matched.face_index;
 		out << ",\n        \"weight\": " << usage.matched.weight;
 		out << ",\n        \"requested_weight\": " << usage.matched.requested_weight;
+		out << ",\n        \"bold\": ";
+		WriteJsonBool(out, usage.matched.bold);
 		out << ",\n        \"italic\": ";
 		WriteJsonBool(out, usage.matched.italic);
+		out << ",\n        \"is_collection\": ";
+		WriteJsonBool(out, usage.matched.is_collection);
+		out << ",\n        \"path_source\": ";
+		WriteJsonString(out, usage.matched.path_source);
 		out << ",\n        \"paths\": ";
 		WriteJsonStringArray(out, usage.matched.paths);
 		out << ",\n        \"fake_bold\": ";
 		WriteJsonBool(out, usage.matched.fake_bold);
 		out << ",\n        \"fake_italic\": ";
 		WriteJsonBool(out, usage.matched.fake_italic);
+		out << ",\n        \"libass_fake_bold\": ";
+		WriteJsonBool(out, usage.matched.libass_fake_bold);
+		out << ",\n        \"libass_fake_italic\": ";
+		WriteJsonBool(out, usage.matched.libass_fake_italic);
+		out << ",\n        \"libass_score\": " << usage.matched.libass_score;
 		out << ",\n        \"missing_chars\": ";
 		WriteJsonString(out, usage.matched.missing_chars);
 		out << "\n      }\n";

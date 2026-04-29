@@ -74,6 +74,9 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 	             bold == 1 ? 200 :
 	                         bold;
 	int slant  = italic ? 110 : 0;
+	ret.requested_weight = bold == 0 ? 400 :
+	                       bold == 1 ? 700 :
+	                                   bold;
 
 	// Create a fontconfig pattern to match the desired weight/slant
 	agi::scoped_holder<FcPattern*> pat(FcPatternCreate(), FcPatternDestroy);
@@ -110,6 +113,7 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 	FcPatternGetInteger(match, FC_INDEX, 0, &ret.face_index);
 	if (FcPatternGetInteger(match, FC_WEIGHT, 0, &ret.matched_weight) != FcResultMatch)
 		ret.matched_weight = 0;
+	ret.matched_bold = ret.matched_weight > 180;
 	int matched_slant = 0;
 	if (FcPatternGetInteger(match, FC_SLANT, 0, &matched_slant) == FcResultMatch)
 		ret.matched_italic = matched_slant != FC_SLANT_ROMAN;
@@ -140,5 +144,6 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 		ret.fake_italic = italic && !actual_slant;
 
 	ret.paths.emplace_back((const char *)file);
+	ret.path_source = "fontconfig";
 	return ret;
 }

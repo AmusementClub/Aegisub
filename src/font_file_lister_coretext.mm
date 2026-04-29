@@ -135,6 +135,7 @@ CollectionResult CoreTextFontFileLister::GetFontPaths(std::string const& facenam
 		bold = 400;
 	else if (bold == 1)
 		bold = 700;
+	ret.requested_weight = bold;
 
 	FontMatch best;
 	bool have_match = false;
@@ -195,7 +196,9 @@ CollectionResult CoreTextFontFileLister::GetFontPaths(std::string const& facenam
 		if (best.facename)
 			ret.matched_facename = best.facename.UTF8String;
 		ret.matched_weight = best.weight;
+		ret.matched_bold = best.bold;
 		ret.matched_italic = best.italic;
+		ret.path_source = "coretext";
 
 		ret.paths.push_back(best.url.fileSystemRepresentation);
 		for (auto chr : characters) {

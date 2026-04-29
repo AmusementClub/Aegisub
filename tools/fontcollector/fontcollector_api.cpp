@@ -140,11 +140,17 @@ void EmitCUsage(FontCollectorAssFontUsage const& usage,
 	c_usage.matched.facename = usage.matched.facename.c_str();
 	c_usage.matched.face_index = usage.matched.face_index;
 	c_usage.matched.weight = usage.matched.weight;
+	c_usage.matched.bold = usage.matched.bold;
 	c_usage.matched.italic = usage.matched.italic;
+	c_usage.matched.is_collection = usage.matched.is_collection;
+	c_usage.matched.path_source = usage.matched.path_source.c_str();
 	c_usage.matched.paths = paths.empty() ? nullptr : paths.data();
 	c_usage.matched.path_count = paths.size();
 	c_usage.matched.fake_bold = usage.matched.fake_bold;
 	c_usage.matched.fake_italic = usage.matched.fake_italic;
+	c_usage.matched.libass_fake_bold = usage.matched.libass_fake_bold;
+	c_usage.matched.libass_fake_italic = usage.matched.libass_fake_italic;
+	c_usage.matched.libass_score = usage.matched.libass_score;
 	c_usage.matched.missing_chars = usage.matched.missing_chars.c_str();
 	c_usage.matched.requested_weight = usage.matched.requested_weight;
 
@@ -219,7 +225,9 @@ extern "C" int aegisub_fontcollector_collect(
 			[&](FontCollectorEvent const& event) {
 				EmitCEvent(event, callback, user_data);
 			},
-			usage_callback ? &details : nullptr);
+			usage_callback ? &details : nullptr,
+			{},
+			/* enable_libass_compat = */ true);
 
 		for (auto const& usage : details.fonts)
 			EmitCUsage(usage, usage_callback, usage_user_data);

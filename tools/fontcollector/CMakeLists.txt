@@ -140,6 +140,7 @@ set(AEGISUB_FONTCOLLECTOR_SOURCES
     ${AEGISUB_ROOT}/src/font_collector_core.cpp
     ${AEGISUB_ROOT}/src/font_collector_unicode.cpp
     ${AEGISUB_ROOT}/src/font_file_lister.cpp
+    ${AEGISUB_ROOT}/src/font_matching_common.cpp
     ${AEGISUB_ROOT}/src/string_codec.cpp
     ${AEGISUB_ROOT}/src/text_file_reader.cpp
     ${AEGISUB_ROOT}/src/text_file_writer.cpp

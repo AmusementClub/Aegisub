@@ -21,6 +21,7 @@
 #include "ass_file.h"
 #include "ass_style.h"
 #include "font_collector_unicode.h"
+#include "font_matching_common.h"
 
 #include <algorithm>
 #include <tuple>
@@ -165,6 +166,7 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style, F
 		usage.matched.facename = res.matched_facename;
 		usage.matched.face_index = res.face_index;
 		usage.matched.weight = res.matched_weight;
+		usage.matched.bold = res.matched_bold;
 		usage.matched.italic = res.matched_italic;
 		usage.matched.is_collection = res.is_collection;
 		usage.matched.paths = res.paths;
@@ -174,6 +176,18 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style, F
 		usage.matched.fake_italic = res.fake_italic;
 		usage.matched.missing_chars = res.missing;
 		usage.matched.requested_weight = res.requested_weight;
+
+		if (enable_libass_compat_) {
+			auto request = NormalizeAssFontRequest(style.first.facename, style.first.bold, style.first.italic);
+			FontMatchFaceAttributes face_attributes;
+			face_attributes.weight = res.matched_weight ? res.matched_weight : request.requested_weight;
+			face_attributes.bold = res.matched_bold;
+			face_attributes.italic = res.matched_italic;
+			auto synthetic = DetectSyntheticStyle(face_attributes, request);
+			usage.matched.libass_fake_bold = synthetic.fake_bold;
+			usage.matched.libass_fake_italic = synthetic.fake_italic;
+			usage.matched.libass_score = FontAttributesSimilarity(face_attributes, request);
+		}
 	}
 
 	auto make_event = [&](FontCollectorEventType type) {

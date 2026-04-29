@@ -48,6 +48,8 @@ struct CollectionResult {
 	int face_index = -1;
 	/// Font weight selected by the platform matcher.
 	int matched_weight = 0;
+	/// Whether the selected platform font is bold.
+	bool matched_bold = false;
 	/// Whether the selected platform font is italic.
 	bool matched_italic = false;
 	/// Whether the font is in a TrueType/OpenType collection.
@@ -70,6 +72,7 @@ struct FontCollectorMatchedFont {
 	std::string facename;
 	int face_index = -1;
 	int weight = 0;
+	bool bold = false;
 	bool italic = false;
 	bool is_collection = false;
 	std::vector<agi::fs::path> paths;
@@ -77,6 +80,10 @@ struct FontCollectorMatchedFont {
 	FontRawData raw_data;
 	bool fake_bold = false;
 	bool fake_italic = false;
+	/// libass-style synthetic detection from platform-neutral common layer (opt-in)
+	bool libass_fake_bold = false;
+	bool libass_fake_italic = false;
+	int libass_score = 0;
 	std::string missing_chars;
 	int requested_weight = 0;
 };
@@ -206,6 +213,9 @@ class FontCollector {
 	/// Number of fonts which were found, but did not contain all used glyphs
 	int missing_glyphs = 0;
 
+	/// When true, compute libass_fake_bold/italic/score from platform metadata
+	bool enable_libass_compat_ = false;
+
 	/// Gather all of the unique styles with text on a line
 	void ProcessDialogueLine(const AssDialogue *line, int index, int wrap_style);
 
@@ -220,6 +230,13 @@ public:
 	/// @param status_callback Function to pass status updates to
 	/// @param lister The actual font file lister
 	FontCollector(FontCollectorEventSink event_sink);
+
+	/// Enable libass-style synthetic detection for cross-reference (opt-in).
+	/// When enabled, libass_fake_bold, libass_fake_italic, and libass_score
+	/// are computed from the platform lister's matched_weight/bold/italic
+	/// using the platform-neutral common layer.
+	/// Disabled by default; set to true for diagnostic/CLI use.
+	void EnableLibassCompat(bool enable) { enable_libass_compat_ = enable; }
 
 	/// @brief Get a list of the locations of all font files used in the file
 	/// @param file Lines in the subtitle file to check

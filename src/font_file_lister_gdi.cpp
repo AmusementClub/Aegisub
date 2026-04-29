@@ -253,8 +253,9 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 		ret.matched_facename = agi::charset::ConvertW(selected_face);
 	TEXTMETRICW metrics = {};
 	if (GetTextMetricsW(dc, &metrics)) {
-	ret.matched_weight = metrics.tmWeight;
-	ret.matched_italic = metrics.tmItalic != 0;
+		ret.matched_weight = metrics.tmWeight;
+		ret.matched_bold = metrics.tmWeight > 550;
+		ret.matched_italic = metrics.tmItalic != 0;
 	}
 
 	// --- DWrite bridge: try to get path, simulations and raw data ---

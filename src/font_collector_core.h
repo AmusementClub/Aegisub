@@ -1,4 +1,4 @@
-// Copyright (c) 2026, Aegisub Project
+// Copyright (c) 2026, MIRIMIRIM
 //
 // Permission to use, copy, modify, and distribute this software for any
 // purpose with or without fee is hereby granted, provided that the above
@@ -63,4 +63,5 @@ void CollectFonts(AssFile const *subs,
                   FontCollectionMode mode,
                   FontCollectorEventSink font_event_sink,
                   FontCollectorDetails *details = nullptr,
-                  FontCollectionArchiveFactory archive_factory = {});
+                  FontCollectionArchiveFactory archive_factory = {},
+                  bool enable_libass_compat = false);

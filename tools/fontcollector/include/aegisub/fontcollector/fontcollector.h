@@ -96,11 +96,18 @@ typedef struct AegisubFontCollectorMatchedFont {
 	char const *facename;
 	int face_index;
 	int weight;
+	int bold;
 	int italic;
+	int is_collection;
+	char const *path_source;
 	char const *const *paths;
 	size_t path_count;
 	int fake_bold;
 	int fake_italic;
+	/// libass-style synthetic detection from platform-neutral common layer (opt-in)
+	int libass_fake_bold;
+	int libass_fake_italic;
+	int libass_score;
 	char const *missing_chars;
 	int requested_weight;
 } AegisubFontCollectorMatchedFont;

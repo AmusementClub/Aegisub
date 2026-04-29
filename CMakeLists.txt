@@ -628,6 +628,7 @@ add_executable(Aegisub WIN32
     src/font_collector_core.cpp
     src/font_collector_unicode.cpp
     src/font_file_lister.cpp
+    src/font_matching_common.cpp
     src/frame_main.cpp
     src/gl_text.cpp
     src/gl_wrap.cpp

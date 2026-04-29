@@ -233,7 +233,7 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 	              bold == 1 ? 700 :
 	                          bold;
 	lf.lfCharSet = DEFAULT_CHARSET;
-	lf.lfOutPrecision = OUT_TT_ONLY_PRECIS;
+	lf.lfOutPrecision = OUT_TT_PRECIS;
 	lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
 	lf.lfQuality = ANTIALIASED_QUALITY;
 	lf.lfPitchAndFamily = DEFAULT_PITCH|FF_DONTCARE;

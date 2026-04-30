@@ -543,10 +543,22 @@ void VideoDisplay::OnVideoProviderChanged(AsyncVideoProvider *provider) {
 }
 
 void VideoDisplay::UploadFrameData(VideoRenderPacket const& packet, double) {
+	bool const can_reuse_video_only_scene_cache = scene_cache_valid
+		&& !scene_cache_dirty
+		&& has_displayed_packet
+		&& videoRenderer
+		&& last_frame_had_separate_overlay
+		&& DecideVideoRenderRouting(packet, videoRenderer->SupportsDirectOverlay()) == VideoRenderRoutingMode::SecondaryRendererDirectOverlay
+		&& packet.allow_source_frame_upload_reuse
+		&& displayed_packet.allow_source_frame_upload_reuse
+		&& packet.frame_number == displayed_packet.frame_number
+		&& SourceFrameEquivalentForUpload(packet.source_frame, displayed_packet.source_frame);
+
 	pending_packet = packet;
 	has_pending_packet = true;
 	scene_cache_waiting_for_subtitle_packet = false;
-	InvalidateSceneCache();
+	if (!can_reuse_video_only_scene_cache)
+		InvalidateSceneCache();
 
 	// Instead of calling Render(), we force a render here to minimize delay
 	DoRender();
@@ -828,7 +840,17 @@ bool VideoDisplay::RenderSceneToCache(wxSize const&, int canvas_width, int canva
 		throw OpenGlException("glBindFramebuffer", err);
 	E(glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT));
 	E(glReadBuffer(GL_COLOR_ATTACHMENT0_EXT));
-	RenderBackendScene(canvas_width, canvas_height);
+	// When the subtitle overlay is rendered by a separate pass (e.g. placebo
+	// backend), only cache the video layer so that subtitle-only commits can
+	// reuse the cache without a full video re-render.
+	if (last_frame_had_separate_overlay) {
+		videoRenderer->Render(
+			{ viewport_left, viewport_bottom, viewport_width, viewport_height },
+			canvas_width,
+			canvas_height);
+	} else {
+		RenderBackendScene(canvas_width, canvas_height);
+	}
 	scene_cache_valid = true;
 	scene_cache_dirty = false;
 	return true;
@@ -1050,6 +1072,13 @@ void VideoDisplay::OnSubtitlesCommit(int type, AssDialogue const* changed) {
 	if (!video_subtitle_scene_cache::IsVisualSubtitleCommitType(type))
 		return;
 
+	// When the subtitle overlay is rendered by a separate pass, the scene cache
+	// only holds the video layer, so subtitle-only commits do not invalidate it.
+	if (last_frame_had_separate_overlay) {
+		Render();
+		return;
+	}
+
 	InvalidateSceneCache();
 
 	if (!has_displayed_packet) {
@@ -1118,6 +1147,7 @@ void VideoDisplay::DoRender() try {
 			auto const routing = DecideVideoRenderRouting(
 				pending_packet,
 				videoRenderer->SupportsDirectOverlay());
+			last_frame_had_separate_overlay = (routing == VideoRenderRoutingMode::SecondaryRendererDirectOverlay);
 
 			if (routing == VideoRenderRoutingMode::SourceFrameOnly) {
 				if (!reuse_uploaded_source_frame)
@@ -1222,6 +1252,15 @@ void VideoDisplay::DoRender() try {
 		RenderBackendScene(canvas_width, canvas_height);
 		scene_cache_valid = false;
 		scene_cache_dirty = true;
+	}
+
+	// When the scene cache is video-only (separate overlay mode), the subtitle
+	// overlay pass was skipped during cache fill and must be applied now.
+	if (rendered_from_scene_cache && last_frame_had_separate_overlay && subtitleOverlayRenderer) {
+		subtitleOverlayRenderer->Render(
+			{ viewport_left, viewport_bottom, viewport_width, viewport_height },
+			canvas_width,
+			canvas_height);
 	}
 
 	DrawOverlayPass(client_size);

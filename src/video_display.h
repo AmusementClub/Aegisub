@@ -149,6 +149,7 @@ class VideoDisplay final : public wxGLCanvas {
 	bool scene_cache_valid = false;
 	bool scene_cache_dirty = true;
 	bool scene_cache_waiting_for_subtitle_packet = false;
+	bool last_frame_had_separate_overlay = false;
 	int scene_cache_retry_canvas_width = 0;
 	int scene_cache_retry_canvas_height = 0;
 	int scene_cache_width = 0;

@@ -32,18 +32,22 @@ struct VideoPropertyUpdateInput {
 	int script_height = 0;
 	int video_width = 0;
 	int video_height = 0;
+	int layout_res_x = 0;
+	int layout_res_y = 0;
 	VideoResolutionMismatchMode mismatch_mode = VideoResolutionMismatchMode::Ignore;
 };
 
 struct VideoPropertyUpdatePlan {
 	bool update_matrix = false;
 	bool set_resolution = false;
+	bool set_layout_res = false;
 	std::optional<ResampleARMode> resample_mode;
 	bool prompt_for_resolution_mismatch = false;
+	bool prompt_for_layout_res = false;
 	bool aspect_ratio_changed = false;
 
 	bool ShouldCommit() const {
-		return update_matrix || set_resolution || resample_mode.has_value();
+		return update_matrix || set_resolution || set_layout_res || resample_mode.has_value();
 	}
 };
 

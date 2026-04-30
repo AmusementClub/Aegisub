@@ -29,6 +29,7 @@
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
 #include <wx/dialog.h>
+#include <wx/msgdlg.h>
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
 #include <wx/statbox.h>
@@ -264,8 +265,35 @@ void DialogResample::OnMarginChange(wxSpinCtrl *src, wxSpinCtrl *dst) {
 	if (symmetrical->IsChecked())
 		dst->SetValue(src->GetValue());
 }
+
+/// Check if the file uses tags whose rendering depends on LayoutRes:
+/// - \frx / \fry: 3D perspective uses camera distance scaled from LayoutResY.
+///   Changing LayoutRes will alter the 3D effect even if angle values stay the same.
+/// - \be: not scaled by libass at all; changing resolution may produce unexpected results.
+/// See libass ass_render.c: calc_transform_matrix() and init_font_scale().
+static bool file_has_layoutres_sensitive_tags(AssFile const& ass) {
+	for (auto const& line : ass.Events) {
+		if (line.Comment) continue;
+		auto const& text = line.Text.get();
+		// \frx and \fry are standalone tags (no sub-tag prefix)
+		if (text.find("\\frx") != std::string::npos) return true;
+		if (text.find("\\fry") != std::string::npos) return true;
+		// \be is also standalone
+		if (text.find("\\be") != std::string::npos) return true;
+	}
+	return false;
+}
 }
 
 bool PromptForResampleSettings(agi::Context *c, ResampleSettings &settings) {
+	if (file_has_layoutres_sensitive_tags(*c->GetCore().ass)) {
+		auto result = wxMessageBox(
+			_("This script contains \\frx, \\fry, or \\be tags whose rendering depends on the LayoutRes headers. Changing the resolution may alter their appearance in ways that cannot be automatically corrected.\n\nContinue anyway?"),
+			_("LayoutRes-dependent tags detected"),
+			wxYES_NO | wxICON_WARNING,
+			c->GetUI().parent);
+		if (result != wxYES)
+			return false;
+	}
 	return DialogResample(c, settings).d.ShowModal() == wxID_OK;
 }

@@ -49,6 +49,18 @@ agi::SingleChoiceInteractionRequest build_resolution_mismatch_request(VideoPrope
 	return request;
 }
 
+agi::SingleChoiceInteractionRequest build_layout_res_request(VideoPropertyUpdateInput const& input) {
+	agi::SingleChoiceInteractionRequest request;
+	request.title = from_wx(_("LayoutRes not set"));
+	request.message = agi::format(_("The script does not have LayoutRes headers set. LayoutRes tells the renderer which video resolution the subtitles were originally authored for, ensuring \\blur, \\frx/\\fry perspective, and borders (when ScaledBorderAndShadow=no) scale correctly.\n\nSet LayoutRes to the current video resolution?\nVideo resolution:\t%d x %d"),
+		input.video_width, input.video_height);
+	request.help_page = "Properties";
+	request.choices.push_back(from_wx(_("Set to video resolution")));
+	request.choices.push_back(from_wx(_("Not now")));
+	request.default_choice = 0;
+	return request;
+}
+
 VideoPropertyUpdateInput make_input(AssFile *file, const AsyncVideoProvider *new_provider) {
 	int sx, sy;
 	return {
@@ -60,6 +72,8 @@ VideoPropertyUpdateInput make_input(AssFile *file, const AsyncVideoProvider *new
 		sy,
 		new_provider->GetWidth(),
 		new_provider->GetHeight(),
+		file->GetScriptInfoAsInt("LayoutResX"),
+		file->GetScriptInfoAsInt("LayoutResY"),
 		static_cast<VideoResolutionMismatchMode>(OPT_GET("Video/Script Resolution Mismatch")->GetInt())
 	};
 }
@@ -83,6 +97,19 @@ void UpdateVideoProperties(agi::Context *context, AssFile *file, const AsyncVide
 	}
 
 	ApplyVideoPropertyUpdatePlan(file, input, plan);
+
+	// If LayoutRes is still missing after handling any resolution mismatch,
+	// prompt the user to set it. LayoutRes ensures \blur, \frx/\fry, and
+	// borders (when SBAS=no) scale correctly when the script is used with
+	// different video resolutions. See libass discussion #734 (astiob).
+	if (plan.prompt_for_layout_res && file->GetScriptInfoAsInt("LayoutResX") <= 0) {
+		auto selection = context->RequestSingleChoice(build_layout_res_request(input));
+		if (selection && *selection == 0) {
+			plan.set_layout_res = true;
+			ApplyVideoPropertyUpdatePlan(file, input, plan);
+		}
+	}
+
 	if (plan.ShouldCommit())
 		file->Commit(from_wx(_("change script resolution")), AssFile::COMMIT_SCRIPTINFO);
 }

@@ -12,6 +12,14 @@ bool resolution_matches_video_multiple(VideoPropertyUpdateInput const& input) {
 		&& input.script_width % input.video_width == 0
 		&& input.script_height % input.video_height == 0;
 }
+
+bool aspect_ratios_match(int w1, int h1, int w2, int h2) {
+	if (w1 <= 0 || h1 <= 0 || w2 <= 0 || h2 <= 0)
+		return false;
+	auto ar1 = double(w1) / h1;
+	auto ar2 = double(w2) / h2;
+	return std::abs(ar1 - ar2) / ar2 <= .01;
+}
 }
 
 VideoPropertyUpdatePlan PlanVideoPropertyUpdate(VideoPropertyUpdateInput const& input) {
@@ -31,6 +39,21 @@ VideoPropertyUpdatePlan PlanVideoPropertyUpdate(VideoPropertyUpdateInput const& 
 
 	if (resolution_matches_video_multiple(input))
 		return plan;
+
+	// If LayoutRes is set and its aspect ratio matches the video's storage
+	// aspect ratio, the PlayRes mismatch is intentional (script was tagged
+	// with LayoutRes then resampled to a different PlayRes). Suppress the
+	// mismatch prompt — see libass discussion #734 (TheOneric).
+	if (input.layout_res_x > 0 && input.layout_res_y > 0
+		&& aspect_ratios_match(input.layout_res_x, input.layout_res_y,
+		                       input.video_width, input.video_height))
+		return plan;
+
+	// LayoutRes missing while video is loaded — flag for later prompting
+	if (input.set_properties
+		&& input.layout_res_x <= 0 && input.layout_res_y <= 0
+		&& input.video_width > 0 && input.video_height > 0)
+		plan.prompt_for_layout_res = true;
 
 	auto script_aspect_ratio = double(input.script_width) / input.script_height;
 	auto video_aspect_ratio = double(input.video_width) / input.video_height;
@@ -105,6 +128,11 @@ void ApplyVideoPropertyUpdatePlan(AssFile *file, VideoPropertyUpdateInput const&
 	if (plan.set_resolution) {
 		file->SetResolution(ScriptResolutionType::None, input.video_width, input.video_height);
 		return;
+	}
+
+	if (plan.set_layout_res) {
+		file->SetScriptInfo("LayoutResX", std::to_string(input.video_width));
+		file->SetScriptInfo("LayoutResY", std::to_string(input.video_height));
 	}
 
 	if (plan.resample_mode) {

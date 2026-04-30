@@ -44,7 +44,10 @@ void LoadDefaultAssFileWithAppOptions(AssFile& file, bool include_dialogue_line,
 }
 
 ScriptResolutionType GetAppScriptResolutionPreference() {
-	return OPT_GET("Subtitle/Resolution/Prefer PlayRes")->GetBool()
-		? ScriptResolutionType::PlayRes
-		: ScriptResolutionType::LayoutRes;
+	// libass always uses PlayRes for \pos, \move, \fs, margins, and all coordinate mapping.
+	// LayoutRes only affects \blur, \frx/\fry perspective, and border/shadow when SBAS=no.
+	// Aegisub's internal coordinate system (visual tools, Lua API) MUST use PlayRes
+	// to match what libass actually renders. See libass ass_render.c: init_font_scale(),
+	// x2scr_pos(), y2scr_pos() — all use track->PlayResX/Y, never LayoutRes.
+	return ScriptResolutionType::PlayRes;
 }

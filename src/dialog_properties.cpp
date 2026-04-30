@@ -237,7 +237,7 @@ int DialogProperties::SetInfoIfDifferent(std::string const& key, std::string con
 
 wxString DialogProperties::GetEffectiveResolutionText() const {
 	int width, height;
-	auto type = c->GetCore().ass->GetResolutionType(GetAppScriptResolutionPreference(), width, height);
+	auto type = c->GetCore().ass->GetResolutionType(ScriptResolutionType::PlayRes, width, height);
 	wxString source = wxS("Fallback");
 	if (type == ScriptResolutionType::PlayRes)
 		source = wxS("PlayRes");

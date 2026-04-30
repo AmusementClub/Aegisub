@@ -55,7 +55,7 @@ VideoPropertyUpdateInput make_input(AssFile *file, const AsyncVideoProvider *new
 		new_provider->ShouldSetVideoProperties(),
 		file->GetScriptInfo("YCbCr Matrix"),
 		new_provider->GetColorSpace(),
-		file->GetResolutionType(GetAppScriptResolutionPreference(), sx, sy),
+		file->GetResolutionType(ScriptResolutionType::PlayRes, sx, sy),
 		sx,
 		sy,
 		new_provider->GetWidth(),

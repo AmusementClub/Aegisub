@@ -241,7 +241,7 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 			context->GetSingleChoiceInteractionSink(),
 			context->GetCore().backgroundRunnerFactory);
 
-		auto const follow_video_resolution = temp.GetResolutionType(GetAppScriptResolutionPreference()) == ScriptResolutionType::None;
+		auto const follow_video_resolution = temp.GetResolutionType(ScriptResolutionType::PlayRes) == ScriptResolutionType::None;
 		if (follow_video_resolution) {
 			if (auto *main_provider = context->GetCore().project->VideoProvider())
 				temp.SetResolution(ScriptResolutionType::None, main_provider->GetWidth(), main_provider->GetHeight());

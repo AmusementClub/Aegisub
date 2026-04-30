@@ -74,7 +74,6 @@
         { "command" : "tool/style/assistant" },
         { "command" : "tool/translation_assistant" },
         { "command" : "tool/resampleres" },
-        { "command" : "subtitle/opt/prefer_playres" },
         { "command" : "subtitle/spellcheck" },
         {},
         { "command" : "tool/assdraw" },

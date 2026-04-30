@@ -753,7 +753,7 @@ namespace Automation4 {
 	int LuaAssFile::LuaGetScriptResolution(lua_State *L)
 	{
 		int w, h;
-		ass->GetResolution(GetAppScriptResolutionPreference(), w, h);
+		ass->GetResolution(ScriptResolutionType::PlayRes, w, h);
 		push_value(L, w);
 		push_value(L, h);
 		return 2;

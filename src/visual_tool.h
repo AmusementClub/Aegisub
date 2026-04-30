@@ -51,7 +51,6 @@ namespace agi {
 class VisualToolBase {
 	void OnCommit(int type, AssDialogue const* changed);
 	void OnFramePresented(int new_frame);
-	void OnResolutionPolicyChanged(agi::OptionValue const&);
 	void UpdateScriptResolution();
 
 	void OnMouseCaptureLost(wxMouseCaptureLostEvent &);

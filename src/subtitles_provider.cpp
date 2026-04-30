@@ -109,6 +109,28 @@ void SubtitlesProvider::LoadSubtitles(AssFile *subs, int time, agi::vfr::Framera
 	for (auto const& line : subs->Info)
 		push_line(line.GetEntryData());
 
+	// libass requires PlayRes for all coordinate mapping (\pos, \move, \fs,
+	// margins). If only LayoutRes is set, libass falls back to PlayRes=384x288
+	// (Gabest default), which causes a preview mismatch with Aegisub's visual
+	// tools that use LayoutRes as the effective resolution. Inject synthetic
+	// PlayRes headers so libass renders with the correct coordinate space.
+	// See libass ass_render.c: init_font_scale() — screen_scale always uses
+	// PlayRes; x2scr_pos/y2scr_pos always use PlayRes.
+	if (subs->GetScriptInfo("PlayResX").empty() && subs->GetScriptInfo("PlayResY").empty()) {
+		int w = 0, h = 0;
+		// Prefer LayoutRes if available, otherwise use effective resolution
+		if (subs->GetScriptInfoAsInt("LayoutResX") > 0 && subs->GetScriptInfoAsInt("LayoutResY") > 0) {
+			w = subs->GetScriptInfoAsInt("LayoutResX");
+			h = subs->GetScriptInfoAsInt("LayoutResY");
+		} else {
+			subs->GetResolution(ScriptResolutionType::PlayRes, w, h);
+		}
+		if (w > 0 && h > 0) {
+			push_line("PlayResX: " + std::to_string(w));
+			push_line("PlayResY: " + std::to_string(h));
+		}
+	}
+
 	push_header("[V4+ Styles]\n");
 	for (auto const& line : subs->Styles)
 		push_line(line.GetEntryData());

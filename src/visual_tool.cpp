@@ -59,14 +59,13 @@ VisualToolBase::VisualToolBase(VideoDisplay *parent, agi::Context *context)
 	active_line = GetActiveDialogueLine();
 	connections.push_back(core.selectionController->AddActiveLineListener(&VisualToolBase::OnActiveLineChanged, this));
 	connections.push_back(core.videoController->AddFramePresentedListener(&VisualToolBase::OnFramePresented, this));
-	connections.push_back(OPT_SUB("Subtitle/Resolution/Prefer PlayRes", &VisualToolBase::OnResolutionPolicyChanged, this));
 	parent->Bind(wxEVT_MOUSE_CAPTURE_LOST, &VisualToolBase::OnMouseCaptureLost, this);
 }
 
 void VisualToolBase::UpdateScriptResolution() {
 	int script_w, script_h;
 	auto core = c->GetCore();
-	core.ass->GetResolution(GetAppScriptResolutionPreference(), script_w, script_h);
+	core.ass->GetResolution(ScriptResolutionType::PlayRes, script_w, script_h);
 	script_res = Vector2D(script_w, script_h);
 }
 
@@ -144,16 +143,6 @@ void VisualToolBase::OnActiveLineChanged(AssDialogue *new_line) {
 		OnLineChanged();
 		parent->Render();
 	}
-}
-
-void VisualToolBase::OnResolutionPolicyChanged(agi::OptionValue const&) {
-	holding = false;
-	dragging = false;
-	if (parent->HasCapture())
-		parent->ReleaseMouse();
-	UpdateScriptResolution();
-	OnCoordinateSystemsChanged();
-	parent->Render();
 }
 
 bool VisualToolBase::IsDisplayed(AssDialogue const* line) const {

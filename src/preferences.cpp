@@ -591,7 +591,6 @@ void BuildVideoPage(OptionPage *p) {
 	auto *auto_prop = binder->AddBool(_("Use resolution of first video opened"), "Subtitle/Default Resolution/Auto");
 	auto *width_prop = binder->AddInt(_("Default width"), "Subtitle/Default Resolution/Width", 0, INT_MAX);
 	auto *height_prop = binder->AddInt(_("Default height"), "Subtitle/Default Resolution/Height", 0, INT_MAX);
-	binder->AddBool(_("Prefer PlayRes over LayoutRes"), "Subtitle/Resolution/Prefer PlayRes");
 	auto update_resolution_enable = [grid, width_prop, height_prop]() {
 		bool const auto_enabled = OPT_GET("Subtitle/Default Resolution/Auto")->GetBool();
 		grid->EnableProperty(width_prop, !auto_enabled);

@@ -102,7 +102,8 @@ void UpdateVideoProperties(agi::Context *context, AssFile *file, const AsyncVide
 	// prompt the user to set it. LayoutRes ensures \blur, \frx/\fry, and
 	// borders (when SBAS=no) scale correctly when the script is used with
 	// different video resolutions. See libass discussion #734 (astiob).
-	if (plan.prompt_for_layout_res && file->GetScriptInfoAsInt("LayoutResX") <= 0) {
+	if (plan.prompt_for_layout_res
+		&& (file->GetScriptInfoAsInt("LayoutResX") <= 0 || file->GetScriptInfoAsInt("LayoutResY") <= 0)) {
 		auto selection = context->RequestSingleChoice(build_layout_res_request(input));
 		if (selection && *selection == 0) {
 			plan.set_layout_res = true;

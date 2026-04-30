@@ -34,6 +34,10 @@ VideoPropertyUpdatePlan PlanVideoPropertyUpdate(VideoPropertyUpdateInput const& 
 	if (!input.set_properties)
 		return plan;
 
+	bool const missing_layout_res = input.layout_res_x <= 0 || input.layout_res_y <= 0;
+	if (missing_layout_res && input.video_width > 0 && input.video_height > 0)
+		plan.prompt_for_layout_res = true;
+
 	if (input.script_width <= 0 || input.script_height <= 0 || input.video_width <= 0 || input.video_height <= 0)
 		return plan;
 
@@ -48,12 +52,6 @@ VideoPropertyUpdatePlan PlanVideoPropertyUpdate(VideoPropertyUpdateInput const& 
 		&& aspect_ratios_match(input.layout_res_x, input.layout_res_y,
 		                       input.video_width, input.video_height))
 		return plan;
-
-	// LayoutRes missing while video is loaded — flag for later prompting
-	if (input.set_properties
-		&& input.layout_res_x <= 0 && input.layout_res_y <= 0
-		&& input.video_width > 0 && input.video_height > 0)
-		plan.prompt_for_layout_res = true;
 
 	auto script_aspect_ratio = double(input.script_width) / input.script_height;
 	auto video_aspect_ratio = double(input.video_width) / input.video_height;

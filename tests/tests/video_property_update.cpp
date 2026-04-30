@@ -39,6 +39,42 @@ TEST(video_property_update, matrix_only_change_keeps_commit_without_prompt) {
 	EXPECT_TRUE(plan.ShouldCommit());
 }
 
+TEST(video_property_update, missing_layout_res_prompts_even_when_script_resolution_matches_video) {
+	VideoPropertyUpdateInput input;
+	input.set_properties = true;
+	input.resolution_type = ScriptResolutionType::PlayRes;
+	input.script_width = 1920;
+	input.script_height = 1080;
+	input.video_width = 1920;
+	input.video_height = 1080;
+	input.mismatch_mode = VideoResolutionMismatchMode::Ignore;
+
+	auto plan = PlanVideoPropertyUpdate(input);
+
+	EXPECT_TRUE(plan.prompt_for_layout_res);
+	EXPECT_FALSE(plan.prompt_for_resolution_mismatch);
+	EXPECT_FALSE(plan.set_resolution);
+}
+
+TEST(video_property_update, incomplete_layout_res_prompts_even_when_script_resolution_matches_video) {
+	VideoPropertyUpdateInput input;
+	input.set_properties = true;
+	input.resolution_type = ScriptResolutionType::PlayRes;
+	input.script_width = 1920;
+	input.script_height = 1080;
+	input.video_width = 1920;
+	input.video_height = 1080;
+	input.layout_res_x = 1920;
+	input.layout_res_y = 0;
+	input.mismatch_mode = VideoResolutionMismatchMode::Ignore;
+
+	auto plan = PlanVideoPropertyUpdate(input);
+
+	EXPECT_TRUE(plan.prompt_for_layout_res);
+	EXPECT_FALSE(plan.prompt_for_resolution_mismatch);
+	EXPECT_FALSE(plan.set_resolution);
+}
+
 TEST(video_property_update, set_mode_updates_resolution_without_prompt) {
 	VideoPropertyUpdateInput input;
 	input.set_properties = true;

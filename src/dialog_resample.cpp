@@ -16,6 +16,7 @@
 
 #include "ass_file.h"
 #include "ass_file_app.h"
+#include "ass_dialogue.h"
 #include "async_video_provider.h"
 #include "compat.h"
 #include "help_button.h"

@@ -25,6 +25,10 @@ static_assert(static_cast<int>(FontCollectionMode::CopyToFolder) == AEGISUB_FONT
 static_assert(static_cast<int>(FontCollectionMode::CopyToScriptFolder) == AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_SCRIPT_FOLDER);
 static_assert(static_cast<int>(FontCollectionMode::CopyToZip) == AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_ZIP);
 static_assert(static_cast<int>(FontCollectionMode::SymlinkToFolder) == AEGISUB_FONTCOLLECTOR_MODE_SYMLINK_TO_FOLDER);
+static_assert(static_cast<int>(FontCollectorBackend::Auto) == AEGISUB_FONTCOLLECTOR_BACKEND_AUTO);
+static_assert(static_cast<int>(FontCollectorBackend::PlatformDefault) == AEGISUB_FONTCOLLECTOR_BACKEND_PLATFORM_DEFAULT);
+static_assert(static_cast<int>(FontCollectorBackend::Fontconfig) == AEGISUB_FONTCOLLECTOR_BACKEND_FONTCONFIG);
+static_assert(static_cast<int>(FontCollectorBackend::CoreText) == AEGISUB_FONTCOLLECTOR_BACKEND_CORETEXT);
 static_assert(static_cast<int>(FontCollectorEventType::FontBackendInfo) == AEGISUB_FONTCOLLECTOR_EVENT_FONT_BACKEND_INFO);
 static_assert(static_cast<int>(FontCollectorEventType::CollectionNewline) == AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_NEWLINE);
 
@@ -51,6 +55,24 @@ bool ToCoreMode(AegisubFontCollectorMode mode, FontCollectionMode& out) {
 			return true;
 		case AEGISUB_FONTCOLLECTOR_MODE_SYMLINK_TO_FOLDER:
 			out = FontCollectionMode::SymlinkToFolder;
+			return true;
+	}
+	return false;
+}
+
+bool ToCoreBackend(AegisubFontCollectorBackend backend, FontCollectorBackend& out) {
+	switch (backend) {
+		case AEGISUB_FONTCOLLECTOR_BACKEND_AUTO:
+			out = FontCollectorBackend::Auto;
+			return true;
+		case AEGISUB_FONTCOLLECTOR_BACKEND_PLATFORM_DEFAULT:
+			out = FontCollectorBackend::PlatformDefault;
+			return true;
+		case AEGISUB_FONTCOLLECTOR_BACKEND_FONTCONFIG:
+			out = FontCollectorBackend::Fontconfig;
+			return true;
+		case AEGISUB_FONTCOLLECTOR_BACKEND_CORETEXT:
+			out = FontCollectorBackend::CoreText;
 			return true;
 	}
 	return false;
@@ -179,6 +201,12 @@ extern "C" int aegisub_fontcollector_collect(
 		return AEGISUB_FONTCOLLECTOR_INVALID_MODE;
 	}
 
+	FontCollectorBackend backend;
+	if (!ToCoreBackend(request->backend, backend)) {
+		WriteError(error_buffer, error_buffer_size, "invalid font backend");
+		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+	}
+
 	if (mode == FontCollectionMode::CopyToZip) {
 		WriteError(error_buffer, error_buffer_size, "zip collection is not implemented by this library yet");
 		return AEGISUB_FONTCOLLECTOR_UNSUPPORTED_MODE;
@@ -227,7 +255,8 @@ extern "C" int aegisub_fontcollector_collect(
 			},
 			usage_callback ? &details : nullptr,
 			{},
-			/* enable_libass_compat = */ true);
+			/* enable_libass_compat = */ true,
+			backend);
 
 		for (auto const& usage : details.fonts)
 			EmitCUsage(usage, usage_callback, usage_user_data);

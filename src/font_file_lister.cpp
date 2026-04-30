@@ -32,11 +32,21 @@ void Emit(FontCollectorEventSink const& sink, FontCollectorEvent event) {
 	if (sink)
 		sink(event);
 }
+
+std::unique_ptr<IFontFileLister> CreateDefaultFontFileLister(FontCollectorEventSink& event_sink) {
+	return std::make_unique<FontFileLister>(event_sink);
+}
 }
 
 FontCollector::FontCollector(FontCollectorEventSink event_sink)
 : event_sink(std::move(event_sink))
-, lister(this->event_sink)
+, lister(CreateDefaultFontFileLister(this->event_sink))
+{
+}
+
+FontCollector::FontCollector(FontCollectorEventSink event_sink, std::unique_ptr<IFontFileLister> lister)
+: event_sink(std::move(event_sink))
+, lister(std::move(lister))
 {
 }
 
@@ -151,7 +161,7 @@ void FontCollector::ProcessChunk(std::pair<StyleInfo, UsageData> const& style, F
 	                              style.first.bold == 1 ? 700 :
 	                                                     style.first.bold;
 
-	auto res = lister.GetFontPaths(style.first.facename, style.first.bold, style.first.italic, style.second.chars);
+	auto res = lister->GetFontPaths(style.first.facename, style.first.bold, style.first.italic, style.second.chars);
 	for (auto& path : res.paths)
 		path.make_preferred();
 

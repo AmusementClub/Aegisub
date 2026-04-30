@@ -21,13 +21,111 @@
 #include <libaegisub/string_utils.h>
 
 #include <fontconfig/fontconfig.h>
+#include <cmath>
+#include <cwctype>
+#include <filesystem>
+#include <string>
+#include <system_error>
 #include <utility>
+#include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
 void Emit(FontCollectorEventSink const& sink, FontCollectorEvent event) {
 	if (sink)
 		sink(event);
 }
+
+#ifdef _WIN32
+std::string WideToUtf8(std::wstring const& value) {
+	if (value.empty())
+		return {};
+
+	auto len = WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+	if (len <= 0)
+		return {};
+
+	std::string text(len, '\0');
+	WideCharToMultiByte(CP_UTF8, 0, value.c_str(), static_cast<int>(value.size()), text.data(), len, nullptr, nullptr);
+	return text;
+}
+
+bool DirectoryExists(std::wstring const& path) {
+	auto attributes = GetFileAttributesW(path.c_str());
+	return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+bool IsFontFile(std::filesystem::path const& path) {
+	auto ext = path.extension().wstring();
+	for (auto& ch : ext)
+		ch = static_cast<wchar_t>(std::towlower(ch));
+	return ext == L".ttf" || ext == L".ttc" || ext == L".otf" || ext == L".otc" || ext == L".woff" || ext == L".woff2";
+}
+
+std::vector<std::wstring> GetWindowsFontDirs() {
+	std::vector<std::wstring> dirs;
+
+	wchar_t windows_dir[MAX_PATH] = {};
+	if (GetWindowsDirectoryW(windows_dir, MAX_PATH)) {
+		std::wstring font_dir = windows_dir;
+		font_dir += L"\\Fonts";
+		if (DirectoryExists(font_dir))
+			dirs.push_back(font_dir);
+	}
+
+	auto local_app_data_len = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+	if (local_app_data_len > 1) {
+		std::wstring local_app_data(local_app_data_len, L'\0');
+		if (GetEnvironmentVariableW(L"LOCALAPPDATA", local_app_data.data(), local_app_data_len)) {
+			while (!local_app_data.empty() && local_app_data.back() == L'\0')
+				local_app_data.pop_back();
+
+			std::wstring user_font_dir = local_app_data + L"\\Microsoft\\Windows\\Fonts";
+			if (DirectoryExists(user_font_dir))
+				dirs.push_back(user_font_dir);
+		}
+	}
+
+	return dirs;
+}
+
+void AddWindowsFontFiles(FcConfig *config) {
+	for (auto const& dir : GetWindowsFontDirs()) {
+		std::error_code ec;
+		std::filesystem::recursive_directory_iterator it(
+			std::filesystem::path(dir),
+			std::filesystem::directory_options::skip_permission_denied,
+			ec);
+		std::filesystem::recursive_directory_iterator end;
+		for (; !ec && it != end; it.increment(ec)) {
+			std::error_code status_ec;
+			if (!it->is_regular_file(status_ec) || status_ec || !IsFontFile(it->path()))
+				continue;
+
+			auto path = WideToUtf8(it->path().wstring());
+			if (!path.empty())
+				FcConfigAppFontAddFile(config, reinterpret_cast<FcChar8 const *>(path.c_str()));
+		}
+	}
+}
+
+FcConfig *CreateFontConfig() {
+	auto config = FcConfigCreate();
+	if (!config)
+		return nullptr;
+
+	AddWindowsFontFiles(config);
+
+	return config;
+}
+#else
+FcConfig *CreateFontConfig() {
+	return FcInitLoadConfig();
+}
+#endif
 
 bool pattern_matches(FcPattern *pat, const char *field, std::string const& name) {
 	FcChar8 *str;
@@ -53,30 +151,69 @@ void find_font(FcFontSet *src, FcFontSet *dst, std::string const& family) {
 	}
 }
 
+int NormalizeAssWeight(int bold) {
+	return (bold == 1 || bold == -1) ? 700 : bold <= 0 ? 400 : bold;
+}
+
+int FontconfigWeightFromOpenType(int weight) {
+#if FC_VERSION >= 21292
+	return static_cast<int>(std::lround(FcWeightFromOpenTypeDouble(weight)));
+#else
+	return FcWeightFromOpenType(weight);
+#endif
+}
+
+int OpenTypeWeightFromFontconfig(FcPattern *pattern) {
+	double fc_weight = 0;
+	if (FcPatternGetDouble(pattern, FC_WEIGHT, 0, &fc_weight) == FcResultMatch) {
+#if FC_VERSION >= 21292
+		return static_cast<int>(std::lround(FcWeightToOpenTypeDouble(fc_weight)));
+#else
+		return FcWeightToOpenType(static_cast<int>(std::lround(fc_weight)));
+#endif
+	}
+
+	int fc_weight_int = 0;
+	if (FcPatternGetInteger(pattern, FC_WEIGHT, 0, &fc_weight_int) == FcResultMatch) {
+#if FC_VERSION >= 21292
+		return static_cast<int>(std::lround(FcWeightToOpenTypeDouble(fc_weight_int)));
+#else
+		return FcWeightToOpenType(fc_weight_int);
+#endif
+	}
+
+	return 400;
+}
+
 }
 
 FontConfigFontFileLister::FontConfigFontFileLister(FontCollectorEventSink &cb)
-: config(FcInitLoadConfig(), FcConfigDestroy)
+: config(CreateFontConfig(), FcConfigDestroy)
 {
 	FontCollectorEvent event;
+	event.type = FontCollectorEventType::FontBackendInfo;
+	event.message = "fontconfig";
+	Emit(cb, std::move(event));
+
+	event = FontCollectorEvent();
 	event.type = FontCollectorEventType::UpdatingFontCache;
 	Emit(cb, std::move(event));
-	FcConfigBuildFonts(config);
+	if (config)
+		FcConfigBuildFonts(config);
 }
 
 CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters) {
 	CollectionResult ret;
+	if (!config)
+		return ret;
 
 	std::string family = facename[0] == '@' ? facename.substr(1) : facename;
 	agi::util::strings::to_lower_inplace(family);
 
-	int weight = bold == 0 ? 80 :
-	             bold == 1 ? 200 :
-	                         bold;
+	int requested_weight = NormalizeAssWeight(bold);
+	int weight = FontconfigWeightFromOpenType(requested_weight);
 	int slant  = italic ? 110 : 0;
-	ret.requested_weight = bold == 0 ? 400 :
-	                       bold == 1 ? 700 :
-	                                   bold;
+	ret.requested_weight = requested_weight;
 
 	// Create a fontconfig pattern to match the desired weight/slant
 	agi::scoped_holder<FcPattern*> pat(FcPatternCreate(), FcPatternDestroy);
@@ -86,7 +223,7 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 	FcPatternAddInteger(pat, FC_SLANT, slant);
 	FcPatternAddInteger(pat, FC_WEIGHT, weight);
 
-	FcDefaultSubstitute(pat);
+	FcConfigSetDefaultSubstitute(config, pat);
 	if (!FcConfigSubstitute(config, pat, FcMatchPattern)) return ret;
 
 	// Create a font set with only correctly named fonts
@@ -111,9 +248,8 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 	if (FcPatternGetString(match, FC_FAMILY, 0, &matched_family) == FcResultMatch)
 		ret.matched_facename = reinterpret_cast<char const *>(matched_family);
 	FcPatternGetInteger(match, FC_INDEX, 0, &ret.face_index);
-	if (FcPatternGetInteger(match, FC_WEIGHT, 0, &ret.matched_weight) != FcResultMatch)
-		ret.matched_weight = 0;
-	ret.matched_bold = ret.matched_weight > 180;
+	ret.matched_weight = OpenTypeWeightFromFontconfig(match);
+	ret.matched_bold = ret.matched_weight > 550;
 	int matched_slant = 0;
 	if (FcPatternGetInteger(match, FC_SLANT, 0, &matched_slant) == FcResultMatch)
 		ret.matched_italic = matched_slant != FC_SLANT_ROMAN;
@@ -133,11 +269,7 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 		}
 	}
 
-	if (weight > 80) {
-		int actual_weight = weight;
-		if (FcPatternGetInteger(match, FC_WEIGHT, 0, &actual_weight) == FcResultMatch)
-			ret.fake_bold = actual_weight <= 80;
-	}
+	ret.fake_bold = requested_weight > ret.matched_weight + 150 && !ret.matched_bold;
 
 	int actual_slant = slant;
 	if (FcPatternGetInteger(match, FC_SLANT, 0, &actual_slant) == FcResultMatch)

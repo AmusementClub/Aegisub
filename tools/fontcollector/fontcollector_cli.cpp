@@ -176,9 +176,44 @@ struct JsonUsage {
 };
 
 struct JsonContext {
+	std::string requested_backend;
+	std::string resolved_backend;
 	std::vector<JsonEvent> events;
 	std::vector<JsonUsage> usages;
 };
+
+std::string RequestedBackendName(AegisubFontCollectorBackend backend) {
+	switch (backend) {
+		case AEGISUB_FONTCOLLECTOR_BACKEND_AUTO: return "auto";
+		case AEGISUB_FONTCOLLECTOR_BACKEND_PLATFORM_DEFAULT: return "platform";
+		case AEGISUB_FONTCOLLECTOR_BACKEND_FONTCONFIG: return "fontconfig";
+		case AEGISUB_FONTCOLLECTOR_BACKEND_CORETEXT: return "coretext";
+	}
+	return "unknown";
+}
+
+std::string PlatformBackendName() {
+#if defined(_WIN32)
+	return "gdi-dwrite";
+#elif defined(__APPLE__)
+	return "coretext";
+#else
+	return "fontconfig";
+#endif
+}
+
+std::string ResolvedBackendName(AegisubFontCollectorBackend backend) {
+	switch (backend) {
+		case AEGISUB_FONTCOLLECTOR_BACKEND_AUTO:
+		case AEGISUB_FONTCOLLECTOR_BACKEND_PLATFORM_DEFAULT:
+			return PlatformBackendName();
+		case AEGISUB_FONTCOLLECTOR_BACKEND_FONTCONFIG:
+			return "fontconfig";
+		case AEGISUB_FONTCOLLECTOR_BACKEND_CORETEXT:
+			return "coretext";
+	}
+	return "unknown";
+}
 
 std::string JoinStyles(AegisubFontCollectorEvent const& event) {
 	std::ostringstream out;
@@ -442,6 +477,12 @@ void WriteJsonReport(std::ostream& out, int result, std::string const& error, Js
 	WriteJsonBool(out, result == AEGISUB_FONTCOLLECTOR_OK);
 	out << ",\n  \"result\": " << result << ",\n  \"error\": ";
 	WriteJsonString(out, error);
+	out << ",\n  \"backend\": ";
+	WriteJsonString(out, context.requested_backend);
+	out << ",\n  \"requested_backend\": ";
+	WriteJsonString(out, context.requested_backend);
+	out << ",\n  \"resolved_backend\": ";
+	WriteJsonString(out, result == AEGISUB_FONTCOLLECTOR_OK ? context.resolved_backend : std::string());
 	out << ",\n  \"events\": [\n";
 	for (size_t i = 0; i < context.events.size(); ++i) {
 		auto const& event = context.events[i];
@@ -535,6 +576,7 @@ int main(int argc, char **argv) {
 
 	std::string input;
 	std::string encoding;
+	std::string backend = "auto";
 	bool check = false;
 	bool copy_to_script = false;
 	bool details = false;
@@ -546,6 +588,8 @@ int main(int argc, char **argv) {
 
 	app.add_option("input", input, "ASS/SSA subtitle file")->required();
 	app.add_option("--encoding", encoding, "Input subtitle encoding; omitted enables BOM/UTF-8 detection");
+	app.add_option("--backend", backend, "Font backend: auto, platform, fontconfig, or coretext")
+		->check(CLI::IsMember({"auto", "platform", "fontconfig", "coretext"}));
 	app.add_flag("--details", details, "Print ASS font usage and matched font details");
 	app.add_flag("--json", json, "Print structured JSON output; implies --details");
 
@@ -563,6 +607,14 @@ int main(int argc, char **argv) {
 	AegisubFontCollectorRequest request = {};
 	request.input_path = input.c_str();
 	request.encoding = encoding.c_str();
+	if (backend == "platform")
+		request.backend = AEGISUB_FONTCOLLECTOR_BACKEND_PLATFORM_DEFAULT;
+	else if (backend == "fontconfig")
+		request.backend = AEGISUB_FONTCOLLECTOR_BACKEND_FONTCONFIG;
+	else if (backend == "coretext")
+		request.backend = AEGISUB_FONTCOLLECTOR_BACKEND_CORETEXT;
+	else
+		request.backend = AEGISUB_FONTCOLLECTOR_BACKEND_AUTO;
 
 	if (!copy_dir.empty()) {
 		request.mode = AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_FOLDER;
@@ -584,6 +636,8 @@ int main(int argc, char **argv) {
 
 	std::array<char, 4096> error = {};
 	JsonContext json_context;
+	json_context.requested_backend = RequestedBackendName(request.backend);
+	json_context.resolved_backend = ResolvedBackendName(request.backend);
 	int result = aegisub_fontcollector_collect(
 		&request,
 		json ? &CollectJsonEvent : &PrintEvent,

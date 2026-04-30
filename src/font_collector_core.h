@@ -17,6 +17,7 @@
 #pragma once
 
 #include "font_collector_events.h"
+#include "font_collector_backend.h"
 
 #include <libaegisub/fs_fwd.h>
 
@@ -64,4 +65,5 @@ void CollectFonts(AssFile const *subs,
                   FontCollectorEventSink font_event_sink,
                   FontCollectorDetails *details = nullptr,
                   FontCollectionArchiveFactory archive_factory = {},
-                  bool enable_libass_compat = false);
+                  bool enable_libass_compat = false,
+                  FontCollectorBackend backend = FontCollectorBackend::Auto);

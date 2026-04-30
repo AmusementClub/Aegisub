@@ -22,6 +22,7 @@
 #include <libaegisub/fs.h>
 
 #include <cstdint>
+#include <stdexcept>
 #include <utility>
 
 #ifndef _WIN32
@@ -45,6 +46,28 @@ void Emit(FontCollectorEventSink const& event_sink, FontCollectorEventType type)
 	FontCollectorEvent event;
 	event.type = type;
 	Emit(event_sink, std::move(event));
+}
+
+std::unique_ptr<IFontFileLister> CreateFontFileLister(FontCollectorBackend backend, FontCollectorEventSink& event_sink) {
+	switch (backend) {
+		case FontCollectorBackend::Auto:
+		case FontCollectorBackend::PlatformDefault:
+			return std::make_unique<FontFileLister>(event_sink);
+		case FontCollectorBackend::Fontconfig:
+#if !defined(_WIN32) && !defined(__APPLE__) || defined(AEGISUB_FONTCOLLECTOR_ENABLE_FONTCONFIG)
+			return std::make_unique<FontConfigFontFileLister>(event_sink);
+#else
+			throw std::runtime_error("fontconfig backend is not enabled in this build");
+#endif
+		case FontCollectorBackend::CoreText:
+#if defined(__APPLE__)
+			return std::make_unique<CoreTextFontFileLister>(event_sink);
+#else
+			throw std::runtime_error("coretext backend is not enabled in this build");
+#endif
+	}
+
+	return std::make_unique<FontFileLister>(event_sink);
 }
 
 FileCollectionResult CopyFontToFolder(agi::fs::path const& source,
@@ -109,8 +132,10 @@ void CollectFonts(AssFile const *subs,
                   FontCollectorEventSink font_event_sink,
                   FontCollectorDetails *details,
                   FontCollectionArchiveFactory archive_factory,
-                  bool enable_libass_compat) {
-	FontCollector collector(font_event_sink);
+                  bool enable_libass_compat,
+                  FontCollectorBackend backend) {
+	auto lister = CreateFontFileLister(backend, font_event_sink);
+	FontCollector collector(font_event_sink, std::move(lister));
 	if (enable_libass_compat)
 		collector.EnableLibassCompat(true);
 	auto paths = collector.GetFontPaths(subs, details);

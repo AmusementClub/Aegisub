@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -102,10 +103,16 @@ struct FontCollectorDetails {
 	std::vector<FontCollectorAssFontUsage> fonts;
 };
 
+class IFontFileLister {
+public:
+	virtual ~IFontFileLister() = default;
+	virtual CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters) = 0;
+};
+
 class DWriteBridge;
 
 #ifdef _WIN32
-class GdiFontFileLister {
+class GdiFontFileLister : public IFontFileLister {
 	std::unique_ptr<DWriteBridge> dwrite_bridge;
 	std::unordered_multimap<uint32_t, agi::fs::path> index;
 	agi::scoped_holder<HDC> dc;
@@ -125,15 +132,13 @@ public:
 	/// @param italic Italic?
 	/// @param characters Characters in this style
 	/// @return Path to the matching font file(s), or empty if not found
-	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters);
+	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters) override;
 };
-
-using FontFileLister = GdiFontFileLister;
 
 #elif defined(__APPLE__)
 
-struct CoreTextFontFileLister {
-	CoreTextFontFileLister(FontCollectorEventSink &) {}
+struct CoreTextFontFileLister : public IFontFileLister {
+	CoreTextFontFileLister(FontCollectorEventSink &cb);
 
 	/// @brief Get the path to the font with the given styles
 	/// @param facename Name of font face
@@ -141,19 +146,19 @@ struct CoreTextFontFileLister {
 	/// @param italic Italic?
 	/// @param characters Characters in this style
 	/// @return Path to the matching font file(s), or empty if not found
-	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters);
+	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters) override;
 };
 
-using FontFileLister = CoreTextFontFileLister;
+#endif
 
-#else
+#if !defined(_WIN32) && !defined(__APPLE__) || defined(AEGISUB_FONTCOLLECTOR_ENABLE_FONTCONFIG)
 
 typedef struct _FcConfig FcConfig;
 typedef struct _FcFontSet FcFontSet;
 
 /// @class FontConfigFontFileLister
 /// @brief fontconfig powered font lister
-class FontConfigFontFileLister {
+class FontConfigFontFileLister : public IFontFileLister {
 	agi::scoped_holder<FcConfig*> config;
 
 	/// @brief Case-insensitive match ASS/SSA font family against full name. (also known as "name for humans")
@@ -173,9 +178,16 @@ public:
 	/// @param italic Italic?
 	/// @param characters Characters in this style
 	/// @return Path to the matching font file(s), or empty if not found
-	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters);
+	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters) override;
 };
 
+#endif
+
+#if defined(__APPLE__)
+using FontFileLister = CoreTextFontFileLister;
+#elif defined(_WIN32)
+using FontFileLister = GdiFontFileLister;
+#else
 using FontFileLister = FontConfigFontFileLister;
 #endif
 
@@ -200,7 +212,7 @@ class FontCollector {
 	/// Message callback provider by caller
 	FontCollectorEventSink event_sink;
 
-	FontFileLister lister;
+	std::unique_ptr<IFontFileLister> lister;
 
 	/// The set of all glyphs used in the file
 	std::map<StyleInfo, UsageData> used_styles;
@@ -230,6 +242,7 @@ public:
 	/// @param status_callback Function to pass status updates to
 	/// @param lister The actual font file lister
 	FontCollector(FontCollectorEventSink event_sink);
+	FontCollector(FontCollectorEventSink event_sink, std::unique_ptr<IFontFileLister> lister);
 
 	/// Enable libass-style synthetic detection for cross-reference (opt-in).
 	/// When enabled, libass_fake_bold, libass_fake_italic, and libass_score

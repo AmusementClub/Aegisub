@@ -21,7 +21,14 @@
 #include <AppKit/AppKit.h>
 #include <CoreText/CoreText.h>
 
+#include <utility>
+
 namespace {
+void Emit(FontCollectorEventSink const& sink, FontCollectorEvent event) {
+	if (sink)
+		sink(event);
+}
+
 struct FontMatch {
 	NSURL *url = nil;
 	NSString *facename = nil;
@@ -124,6 +131,13 @@ int weight_penalty(int desired, int actual) {
 		d = d * 2 / 5;
 	return std::abs(d);
 }
+}
+
+CoreTextFontFileLister::CoreTextFontFileLister(FontCollectorEventSink &cb) {
+	FontCollectorEvent event;
+	event.type = FontCollectorEventType::FontBackendInfo;
+	event.message = "coretext";
+	Emit(cb, std::move(event));
 }
 
 CollectionResult CoreTextFontFileLister::GetFontPaths(std::string const& facename,

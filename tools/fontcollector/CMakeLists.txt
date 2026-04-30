@@ -188,8 +188,13 @@ if(MSVC AND AEGISUB_FONTCOLLECTOR_STATIC_RUNTIME)
 endif()
 
 if(WIN32)
-    target_sources(aegisub_fontcollector PRIVATE ${AEGISUB_ROOT}/src/font_file_lister_gdi.cpp ${AEGISUB_ROOT}/src/font_file_lister_dwrite.cpp)
-    target_link_libraries(aegisub_fontcollector PRIVATE Advapi32 Gdi32 Shell32 Usp10 dwrite Version)
+    find_package(Fontconfig REQUIRED)
+    target_compile_definitions(aegisub_fontcollector PRIVATE AEGISUB_FONTCOLLECTOR_ENABLE_FONTCONFIG)
+    target_sources(aegisub_fontcollector PRIVATE
+        ${AEGISUB_ROOT}/src/font_file_lister_gdi.cpp
+        ${AEGISUB_ROOT}/src/font_file_lister_dwrite.cpp
+        ${AEGISUB_ROOT}/src/font_file_lister_fontconfig.cpp)
+    target_link_libraries(aegisub_fontcollector PRIVATE Advapi32 Gdi32 Shell32 Usp10 dwrite Version Fontconfig::Fontconfig)
 elseif(APPLE)
     target_sources(aegisub_fontcollector PRIVATE ${AEGISUB_ROOT}/src/font_file_lister_coretext.mm)
     target_link_libraries(aegisub_fontcollector PRIVATE "-framework AppKit" "-framework CoreText")

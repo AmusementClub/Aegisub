@@ -27,6 +27,13 @@ typedef enum AegisubFontCollectorMode {
 	AEGISUB_FONTCOLLECTOR_MODE_SYMLINK_TO_FOLDER = 4
 } AegisubFontCollectorMode;
 
+typedef enum AegisubFontCollectorBackend {
+	AEGISUB_FONTCOLLECTOR_BACKEND_AUTO = 0,
+	AEGISUB_FONTCOLLECTOR_BACKEND_PLATFORM_DEFAULT = 1,
+	AEGISUB_FONTCOLLECTOR_BACKEND_FONTCONFIG = 2,
+	AEGISUB_FONTCOLLECTOR_BACKEND_CORETEXT = 3
+} AegisubFontCollectorBackend;
+
 typedef enum AegisubFontCollectorResult {
 	AEGISUB_FONTCOLLECTOR_OK = 0,
 	AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT = 1,
@@ -75,6 +82,7 @@ typedef struct AegisubFontCollectorRequest {
 	char const *destination_path;
 	char const *encoding;
 	AegisubFontCollectorMode mode;
+	AegisubFontCollectorBackend backend;
 } AegisubFontCollectorRequest;
 
 typedef struct AegisubFontCollectorEvent {

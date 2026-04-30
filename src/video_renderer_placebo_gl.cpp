@@ -372,6 +372,9 @@ void PlaceboRendererGL::RestoreCompatibilityState() noexcept {
 			functions->BindFramebuffer(GL_FRAMEBUFFER, target_framebuffer);
 	}
 	glBindTexture(GL_TEXTURE_2D, 0);
+	glDisable(GL_TEXTURE_2D);
+	glDisable(GL_BLEND);
+	glDisable(GL_DEPTH_TEST);
 }
 
 void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width, int canvas_height) {

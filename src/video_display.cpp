@@ -858,6 +858,11 @@ void VideoDisplay::DrawSceneCache(wxSize const&, int canvas_width, int canvas_he
 }
 
 void VideoDisplay::DrawLegacyOverlayPass(wxSize const& client_size) {
+	// Restore legacy-compatible GL state before the overlay pass, since the
+	// video backend (libplacebo or modern OpenGL pipeline) may have left VAOs,
+	// shader programs, or other non-fixed-function state bound.
+	legacy_gl::ResetCompatibilityState();
+
 	// Overlay pass (overscan mask, visual tools) renders in client/window coordinates.
 	// Always use a viewport anchored at (0,0) so that ortho coords == mouse coords.
 	// The video_pos offset already positions tool features relative to the video.

@@ -109,8 +109,6 @@ class VideoController final {
 	/// The frame number which was last requested from the video provider,
 	/// which may not be the same thing as the currently displayed frame
 	int frame_n = 0;
-	/// One-shot subtitle render time override used by time-based seeks
-	int subtitle_seek_time_ms = -1;
 	/// The frame number which was last presented by the video display.
 	int presented_frame_n = -1;
 
@@ -176,7 +174,7 @@ class VideoController final {
 	void ResetPlaybackState();
 
 public:
-	static constexpr agi::vfr::Time DefaultJumpToTimeMode = agi::vfr::EXACT;
+	static constexpr agi::vfr::Time DefaultJumpToTimeMode = agi::vfr::START;
 
 	VideoController(agi::Context *context);
 	~VideoController();

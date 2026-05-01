@@ -456,7 +456,7 @@ class Runner final {
 		case PlaybackSessionStepKind::JumpToTime: {
 			auto core = runtime.GetCore();
 			bool const was_playing = IsPlaybackActive();
-			core.videoController->JumpToTime(step.primary_value);
+			core.videoController->JumpToTime(step.primary_value, agi::vfr::EXACT);
 			if (was_playing && !IsPlaybackActive()) {
 				FailStep(current_step, step, "playback did not survive jump-time");
 				return false;

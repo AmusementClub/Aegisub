@@ -181,7 +181,6 @@ public:
 class FakeOverlaySubtitlesProvider final : public SubtitlesProvider {
 public:
 	int load_calls = 0;
-	double last_render_time = -1.0;
 
 private:
 	void LoadSubtitles(const char *, size_t) override {
@@ -197,8 +196,7 @@ public:
 		return true;
 	}
 
-	bool RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double time) override {
-		last_render_time = time;
+	bool RenderOverlay(SourceFrame const&, SubtitleOverlay& overlay, double) override {
 		overlay.premultiplied_alpha = true;
 		overlay.has_visible_content = true;
 		for (int y = 0; y < overlay.height; ++y)
@@ -405,7 +403,6 @@ public:
 	int load_calls = 0;
 	int render_overlay_calls = 0;
 	int draw_calls = 0;
-	double last_draw_time = -1.0;
 
 private:
 	void LoadSubtitles(const char *, size_t) override {
@@ -422,9 +419,8 @@ public:
 		return true;
 	}
 
-	void DrawSubtitles(VideoFrame &dst, double time) override {
+	void DrawSubtitles(VideoFrame &dst, double) override {
 		++draw_calls;
-		last_draw_time = time;
 		if (dst.data.size() < 2)
 			dst.data.resize(2);
 		dst.data[1] = static_cast<unsigned char>(10 + load_calls);
@@ -716,51 +712,6 @@ TEST(async_video_provider, get_frame_flushes_pending_subtitle_state) {
 	ASSERT_GE(frame->data.size(), 2u);
 	EXPECT_EQ(7, frame->data[0]);
 	EXPECT_EQ(1, frame->data[1]);
-}
-
-TEST(async_video_provider, request_frame_can_render_subtitles_at_seek_time_inside_video_frame) {
-	auto state = std::make_shared<VideoProviderState>();
-	auto *subs = new FakeOverlaySubtitlesProvider;
-	EventRecorder recorder;
-
-	AsyncVideoProvider provider(
-		agi::make_unique<FakeVideoProvider>(state),
-		std::unique_ptr<SubtitlesProvider>(subs),
-		recorder);
-
-	auto subtitle_file = MakeSubtitleFile("seek-time");
-	provider.LoadSubtitles(&subtitle_file);
-
-	provider.RequestFrame(31516, 1314481, 1314490, true);
-	ASSERT_TRUE(recorder.WaitForCount(1));
-
-	auto frames = recorder.Snapshot();
-	ASSERT_EQ(1u, frames.size());
-	EXPECT_EQ(31516 & 0xff, frames.back().frame_number);
-	EXPECT_EQ(1314481, frames.back().time);
-	EXPECT_EQ(1314490, static_cast<int>(subs->last_render_time * 1000.0 + 0.5));
-
-	std::lock_guard<std::mutex> lock(state->mutex);
-	EXPECT_EQ((std::vector<int>{ 31516 }), state->requested_frames);
-}
-
-TEST(async_video_provider, request_frame_uses_subtitle_time_in_compatibility_renderer) {
-	auto state = std::make_shared<VideoProviderState>();
-	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
-	EventRecorder recorder;
-
-	AsyncVideoProvider provider(
-		agi::make_unique<FakeVideoProvider>(state),
-		std::unique_ptr<SubtitlesProvider>(subs),
-		recorder);
-
-	auto subtitle_file = MakeSubtitleFile("seek-time-compat");
-	provider.LoadSubtitles(&subtitle_file);
-
-	provider.RequestFrame(7, 1000, 1017, true);
-	ASSERT_TRUE(recorder.WaitForCount(1));
-
-	EXPECT_EQ(1017, static_cast<int>(subs->last_draw_time * 1000.0 + 0.5));
 }
 
 TEST(async_video_provider, get_frame_bgra_returns_cpu_frame_when_native_mode_selected) {

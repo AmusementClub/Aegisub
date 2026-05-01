@@ -386,14 +386,10 @@ void AsyncVideoProvider::TrimReusablePools() {
 }
 
 VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double time, bool raw) {
-	return ProcRenderPacket(frame_number, time, time, raw, false);
+	return ProcRenderPacket(frame_number, time, raw, false);
 }
 
 VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double time, bool raw, bool force_bgra_frame) {
-	return ProcRenderPacket(frame_number, time, time, raw, force_bgra_frame);
-}
-
-VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double time, double subtitle_time, bool raw, bool force_bgra_frame) {
 	VideoRenderPacket packet;
 	packet.frame_number = frame_number;
 	auto const render_mode = subs_provider ? subs_provider->GetRenderMode() : SubtitleRenderMode::CompatibilityFrameOnly;
@@ -483,7 +479,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 	}
 
 	try {
-		if ((single_frame != frame_number || single_frame_subtitle_time != subtitle_time) && single_frame != SUBS_FILE_ALREADY_LOADED) {
+		if (single_frame != frame_number && single_frame != SUBS_FILE_ALREADY_LOADED) {
 			auto const& fps = subtitles_timecodes;
 			// Generally edits and seeks come in groups; if the last thing done
 			// was seek it is more likely that the user will seek again and
@@ -494,13 +490,11 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 			if (single_frame != NEW_SUBS_FILE) {
 				subs_provider->LoadSubtitles(subs.get(), -1, &fps);
 				single_frame = SUBS_FILE_ALREADY_LOADED;
-				single_frame_subtitle_time = -1.;
 			}
 			else {
 				AssFixStylesFilter::ProcessSubs(subs.get());
 				single_frame = frame_number;
-				single_frame_subtitle_time = subtitle_time;
-				subs_provider->LoadSubtitles(subs.get(), static_cast<int>(subtitle_time), &fps);
+				subs_provider->LoadSubtitles(subs.get(), static_cast<int>(time), &fps);
 			}
 		}
 	}
@@ -521,7 +515,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 			packet.source_frame = MakeSourceFrameView(*composited, source_provider->GetColorMetadata());
 			packet.source_frame.geometry = source_provider->GetFrameGeometry();
 			packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
-			subs_provider->DrawSubtitles(*composited, subtitle_time / 1000.);
+			subs_provider->DrawSubtitles(*composited, time / 1000.);
 		}
 		else if (render_mode == SubtitleRenderMode::PremultipliedOverlay) {
 			auto overlay_storage = acquire_buffer(subtitle_overlay_buffers);
@@ -532,7 +526,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 				!subs_provider->RenderOverlayClearsTarget());
 			auto subtitle_overlay = overlay_storage->MakeView(true);
 
-			if (subs_provider->RenderOverlay(packet.source_frame, subtitle_overlay, subtitle_time / 1000.)) {
+			if (subs_provider->RenderOverlay(packet.source_frame, subtitle_overlay, time / 1000.)) {
 				overlay_storage->has_visible_content = subtitle_overlay.has_visible_content;
 				if (subs_provider->SupportsOverlayDirtyRects()) {
 					if (subtitle_overlay.dirty_rects && subtitle_overlay.dirty_rect_count > 0) {
@@ -574,7 +568,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 				composited = acquire_buffer(composited_buffers);
 				*composited = *frame;
 				packet.composited_frame_storage = composited;
-				subs_provider->DrawSubtitles(*composited, subtitle_time / 1000.);
+				subs_provider->DrawSubtitles(*composited, time / 1000.);
 			}
 		}
 		else {
@@ -717,16 +711,11 @@ void AsyncVideoProvider::UpdateSubtitles(const AssFile *new_subs, const AssDialo
 }
 
 void AsyncVideoProvider::RequestFrame(int new_frame, double new_time, bool supersede_in_flight) throw() {
-	RequestFrame(new_frame, new_time, new_time, supersede_in_flight);
-}
-
-void AsyncVideoProvider::RequestFrame(int new_frame, double new_time, double new_subtitle_time, bool supersede_in_flight) throw() {
 	if (supersede_in_flight)
 		++request_version;
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_time = new_time;
-		pending_subtitle_time = new_subtitle_time;
 		pending_frame_number = new_frame;
 		has_pending_frame = true;
 		pending_check_updated = false;
@@ -741,14 +730,13 @@ void AsyncVideoProvider::CancelPendingFrameRequests() noexcept {
 		has_pending_frame = false;
 		pending_frame_number = -1;
 		pending_time = -1.;
-		pending_subtitle_time = -1.;
 		pending_check_updated = false;
 	}
 }
 
 bool AsyncVideoProvider::NeedUpdate(std::vector<AssDialogueBase const*> const& visible_lines) {
 	// Always need to render after a seek
-	if (single_frame != NEW_SUBS_FILE || frame_number != last_rendered || subtitle_time != last_rendered_subtitle_time)
+	if (single_frame != NEW_SUBS_FILE || frame_number != last_rendered)
 		return true;
 
 	// Obviously need to render if the number of visible lines has changed
@@ -816,7 +804,6 @@ bool AsyncVideoProvider::ProcessPending() {
 		bool has_frame = false;
 		int frame_number = -1;
 		double time = -1.;
-		double subtitle_time = -1.;
 		bool has_color_space = false;
 		std::string color_space;
 		uint_fast32_t request_version = 0;
@@ -839,14 +826,12 @@ bool AsyncVideoProvider::ProcessPending() {
 			work.has_frame = true;
 			work.frame_number = pending_frame_number;
 			work.time = pending_time;
-			work.subtitle_time = pending_subtitle_time;
 			has_pending_frame = false;
 		}
 		else if ((work.subs || work.changed_line) && frame_number >= 0) {
 			work.has_frame = true;
 			work.frame_number = frame_number;
 			work.time = time;
-			work.subtitle_time = subtitle_time;
 		}
 		if (has_pending_color_space) {
 			work.has_color_space = true;
@@ -866,7 +851,6 @@ bool AsyncVideoProvider::ProcessPending() {
 	if (work.subs) {
 		subs = std::move(work.subs);
 		single_frame = NEW_SUBS_FILE;
-		single_frame_subtitle_time = -1.;
 	}
 	else if (work.changed_line && subs) {
 		int const target_row = work.changed_line->Row;
@@ -875,7 +859,6 @@ bool AsyncVideoProvider::ProcessPending() {
 			std::advance(it, target_row);
 			static_cast<AssDialogueBase&>(*it) = *work.changed_line;
 			single_frame = NEW_SUBS_FILE;
-			single_frame_subtitle_time = -1.;
 		}
 	}
 
@@ -884,13 +867,12 @@ bool AsyncVideoProvider::ProcessPending() {
 
 	frame_number = work.frame_number;
 	time = work.time;
-	subtitle_time = work.subtitle_time;
 
 	std::vector<AssDialogueBase const*> visible_lines;
 	if (subs) {
 		auto const& fps = subtitles_timecodes;
 		for (auto const& line : subs->Events) {
-			if (!line.Comment && IsAssDialogueVisibleAtTimeForStorage(line.Start, line.End, static_cast<int>(subtitle_time), &fps))
+			if (!line.Comment && IsAssDialogueVisibleAtTimeForStorage(line.Start, line.End, static_cast<int>(time), &fps))
 				visible_lines.push_back(&line);
 		}
 	}
@@ -903,11 +885,10 @@ bool AsyncVideoProvider::ProcessPending() {
 	for (auto line : visible_lines)
 		last_lines.push_back(*line);
 	last_rendered = frame_number;
-	last_rendered_subtitle_time = subtitle_time;
 
 	try {
 		auto const render_begin = std::chrono::steady_clock::now();
-		auto packet = ProcRenderPacket(frame_number, time, subtitle_time, false, false);
+		auto packet = ProcRenderPacket(frame_number, time, false, false);
 		auto const render_duration_ms =
 			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - render_begin).count();
 		auto current_content_version = content_version.load(std::memory_order_relaxed);
@@ -1151,7 +1132,6 @@ bool AsyncVideoProvider::ReconfigureSourceOutputMode() {
 	selected_source_mode = applied;
 	++content_version;
 	last_rendered = -1;
-	last_rendered_subtitle_time = -1.;
 	last_lines.clear();
 	ResetCachedSourceFrame();
 	AdvanceOverlayContinuityGeneration();
@@ -1172,7 +1152,6 @@ VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bo
 		// provider's current-frame context aligned with what was just rendered.
 		frame_number = frame;
 		this->time = time;
-		this->subtitle_time = time;
 	});
 	return ret;
 }
@@ -1193,9 +1172,7 @@ void AsyncVideoProvider::SetSubtitlesTimecodes(agi::vfr::Framerate timecodes) {
 		subtitles_timecodes = std::move(timecodes);
 		++content_version;
 		single_frame = NEW_SUBS_FILE;
-		single_frame_subtitle_time = -1.;
 		last_rendered = -1;
-		last_rendered_subtitle_time = -1.;
 		last_lines.clear();
 		ResetCachedSourceFrame();
 		InvalidateProviderOverlayState();
@@ -1229,9 +1206,7 @@ void AsyncVideoProvider::ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvi
 		old_provider.reset();
 		bool const mode_changed = ReconfigureSourceOutputMode();
 		single_frame = NEW_SUBS_FILE;
-		single_frame_subtitle_time = -1.;
 		last_rendered = -1;
-		last_rendered_subtitle_time = -1.;
 		last_lines.clear();
 		ResetCachedSourceFrame();
 		if (!mode_changed) {

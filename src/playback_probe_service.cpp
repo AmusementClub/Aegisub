@@ -331,7 +331,7 @@ class Runner final {
 
 		auto core = runtime.GetCore();
 		++performed_seeks;
-		core.videoController->JumpToTime(request.line_start_ms + *request.seek_target_offset_ms);
+		core.videoController->JumpToTime(request.line_start_ms + *request.seek_target_offset_ms, agi::vfr::EXACT);
 		if (!core.videoController->IsPlaying())
 			Finish(11, "playback probe lost playback after scheduled seek");
 	}

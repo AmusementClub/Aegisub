@@ -168,9 +168,7 @@ void VideoController::RequestFrame(bool supersede_in_flight) {
 	core.ass->Properties.video_position = frame_n;
 	auto const frame_time = TimeAtFrame(frame_n);
 	perf_trace::ObserveFrameRequest(frame_n, frame_time, false);
-	auto const subtitle_time = subtitle_seek_time_ms >= 0 ? subtitle_seek_time_ms : frame_time;
-	subtitle_seek_time_ms = -1;
-	provider->RequestFrame(frame_n, frame_time, subtitle_time, supersede_in_flight);
+	provider->RequestFrame(frame_n, frame_time, supersede_in_flight);
 }
 
 void VideoController::RequestFrameImmediate() {
@@ -421,7 +419,6 @@ void VideoController::PreviewToFrame(int n) {
 void VideoController::JumpToTime(int ms, agi::vfr::Time end) {
 	if (!provider) return;
 
-	subtitle_seek_time_ms = ms;
 	JumpToFrame(FrameAtTime(ms, end));
 }
 

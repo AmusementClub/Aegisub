@@ -31,7 +31,9 @@
 #include <libaegisub/fs.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
+#include <libaegisub/string_utils.h>
 
+#include <algorithm>
 #include <exception>
 #include <wx/bitmap.h>
 #include <wx/intl.h>
@@ -88,6 +90,7 @@ void SecondarySubtitleSession::ClearExternalSubtitles() {
 	external_subtitles.reset();
 	loaded_external_subtitle_path.clear();
 	external_subtitles_follow_video_resolution = false;
+	external_subtitles_use_plugin_provider = false;
 }
 
 void SecondarySubtitleSession::ReleaseProvider() {
@@ -189,6 +192,8 @@ AssFile *SecondarySubtitleSession::ResolveSubtitlesForProvider(AsyncVideoProvide
 	auto core = context->GetCore();
 	if (source_mode == SecondarySubtitleSourceMode::CurrentScript)
 		return core.ass.get();
+	if (external_subtitles_use_plugin_provider)
+		return nullptr;
 
 	if (LoadConfiguredExternalSubtitles(false)) {
 		UpdateExternalSubtitleResolution(main_provider);
@@ -209,7 +214,12 @@ void SecondarySubtitleSession::SyncConfiguredSubtitlesSource(AsyncVideoProvider 
 	else {
 		AssFile empty_subtitles;
 		provider->LoadSubtitles(&empty_subtitles);
-		ClearBitmap();
+		// Plugin providers decode from external files; their overlay
+		// may still be valid while the file is being re-read.
+		// Only clear the bitmap for ASS-based providers that load
+		// their data through this call.
+		if (!external_subtitles_use_plugin_provider)
+			ClearBitmap();
 	}
 }
 
@@ -217,6 +227,13 @@ bool SecondarySubtitleSession::LoadConfiguredExternalSubtitles(bool show_errors,
 	auto path_string = external_subtitle_path;
 	if (path_string.empty())
 		return false;
+	if (ShouldUsePluginProviderForExternalFile(path_string)) {
+		external_subtitles.reset();
+		loaded_external_subtitle_path = path_string;
+		external_subtitles_follow_video_resolution = false;
+		external_subtitles_use_plugin_provider = true;
+		return true;
+	}
 
 	if (!force_reload && external_subtitles && loaded_external_subtitle_path == path_string)
 		return true;
@@ -224,7 +241,19 @@ bool SecondarySubtitleSession::LoadConfiguredExternalSubtitles(bool show_errors,
 	return LoadExternalSubtitlesFromPath(path_string, show_errors);
 }
 
+bool SecondarySubtitleSession::ShouldUsePluginProviderForExternalFile(std::string const& path_string) const {
+	return SubtitlesProviderFactory::HasExternalFileProviderFor(agi::fs::PathFromString(path_string));
+}
+
 bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& path_string, bool show_errors) {
+	if (ShouldUsePluginProviderForExternalFile(path_string)) {
+		external_subtitles.reset();
+		loaded_external_subtitle_path = path_string;
+		external_subtitles_follow_video_resolution = false;
+		external_subtitles_use_plugin_provider = true;
+		return true;
+	}
+
 	auto const path = agi::fs::PathFromString(path_string);
 	try {
 		auto charset = CharSetDetect::GetEncoding(path, context->GetSingleChoiceInteractionSink());
@@ -251,6 +280,7 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 		external_subtitles->swap(temp);
 		loaded_external_subtitle_path = path_string;
 		external_subtitles_follow_video_resolution = follow_video_resolution;
+		external_subtitles_use_plugin_provider = false;
 		return true;
 	}
 	catch (agi::UserCancelException const&) {
@@ -307,6 +337,10 @@ void SecondarySubtitleSession::RebuildProvider(AsyncVideoProvider *main_provider
 		render_environment.background_runner = background_runner.get();
 		render_environment.transient_fonts = subtitles ? subtitles->GetTransientFonts() : core.ass->GetTransientFonts();
 		render_environment.preferred_provider = OPT_GET("Video/Secondary Subtitles/Provider")->GetString();
+		if (source_mode == SecondarySubtitleSourceMode::ExternalFile && external_subtitles_use_plugin_provider) {
+			render_environment.external_subtitle_file = agi::fs::PathFromString(external_subtitle_path);
+			render_environment.require_external_file_provider = true;
+		}
 		auto subtitles_provider = SubtitlesProviderFactory::GetProvider(render_environment);
 		auto dummy_video_provider = agi::make_unique<DummyVideoProvider>(
 			main_provider->GetFPS().FPS(),
@@ -405,12 +439,22 @@ void SecondarySubtitleSession::OnSubtitlesError(std::string const& message) {
 }
 
 bool SecondarySubtitleSession::OpenExternalSubtitles() {
+	auto external_plugin_wildcards = SubtitlesProviderFactory::GetExternalFileProviderWildcards();
+	auto wildcards = SubtitleFormat::GetWildcards(0);
+	if (!external_plugin_wildcards.empty()) {
+		auto joined = agi::util::strings::join(external_plugin_wildcards, ";");
+		wildcards = "Dynamic Subtitle Plugins (" + agi::util::strings::join(external_plugin_wildcards, ",") + ")|" + joined + "|" + wildcards;
+	}
+	// Prepend "All files" so the dialog defaults to showing everything
+	// instead of filtering to the first entry.
+	wildcards = "All files (*.*)|*.*|" + wildcards;
+
 	auto path = context->RequestOpenFile({
 		from_wx(_("Open secondary subtitles")),
 		"Path/Last/Subtitles",
 		"",
 		"",
-		SubtitleFormat::GetWildcards(0)
+		wildcards
 	});
 	if (path.empty())
 		return false;

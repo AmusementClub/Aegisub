@@ -565,6 +565,8 @@ std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path c
 	return nullptr;
 }
 std::vector<std::string> SubtitlesProviderFactory::GetClasses() { return {}; }
+bool SubtitlesProviderFactory::HasExternalFileProviderFor(agi::fs::path const&) { return false; }
+std::vector<std::string> SubtitlesProviderFactory::GetExternalFileProviderWildcards() { return {}; }
 std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(SubtitleRenderEnvironment const& env) {
 	g_last_factory_background_runner = env.background_runner;
 	g_last_factory_transient_fonts = env.transient_fonts;

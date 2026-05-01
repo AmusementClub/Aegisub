@@ -45,6 +45,7 @@ class SecondarySubtitleSession final {
 	std::string external_subtitle_path;
 	std::string loaded_external_subtitle_path;
 	bool external_subtitles_follow_video_resolution = false;
+	bool external_subtitles_use_plugin_provider = false;
 
 	wxBitmap current_bitmap;
 	bool has_bitmap = false;
@@ -71,6 +72,7 @@ class SecondarySubtitleSession final {
 	void SyncConfiguredSubtitlesSource(AsyncVideoProvider *main_provider = nullptr);
 	bool LoadConfiguredExternalSubtitles(bool show_errors, bool force_reload = false);
 	bool LoadExternalSubtitlesFromPath(std::string const& path_string, bool show_errors);
+	bool ShouldUsePluginProviderForExternalFile(std::string const& path_string) const;
 	void UpdateExternalSubtitleResolution(AsyncVideoProvider *main_provider);
 
 	void OnVideoProviderChanged(AsyncVideoProvider *main_provider);

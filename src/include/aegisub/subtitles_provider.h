@@ -37,6 +37,8 @@
 #include "../../source_frame.h"
 #include "../../subtitle_overlay.h"
 
+#include <libaegisub/fs_fwd.h>
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -75,9 +77,13 @@ struct SubtitleRenderEnvironment {
 	agi::BackgroundRunner *background_runner = nullptr;
 	std::shared_ptr<const TransientFontSet> transient_fonts;
 	std::string preferred_provider;
+	agi::fs::path external_subtitle_file;
+	bool require_external_file_provider = false;
 };
 
 struct SubtitlesProviderFactory {
 	static std::unique_ptr<SubtitlesProvider> GetProvider(SubtitleRenderEnvironment const& env);
 	static std::vector<std::string> GetClasses();
+	static bool HasExternalFileProviderFor(agi::fs::path const& filename);
+	static std::vector<std::string> GetExternalFileProviderWildcards();
 };

@@ -669,6 +669,7 @@ add_executable(Aegisub WIN32
     src/subtitle_overlay_blend.cpp
     src/subtitles_provider.cpp
     src/subtitles_provider_libass.cpp
+    src/subtitles_provider_plugin.cpp
     src/text_file_reader.cpp
     src/text_file_writer.cpp
     src/text_selection_controller.cpp
@@ -712,6 +713,7 @@ target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} libaegisub luajit)
 target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
 target_compile_features(Aegisub PRIVATE cxx_std_20)
 target_include_directories(Aegisub PRIVATE src)
+target_include_directories(Aegisub PRIVATE vendor)
 option(AEGISUB_MATROSKA_PARSING "Enable MKV subtitle parsing via libebml/libmatroska" ON)
 target_sources(Aegisub PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_COMMON_SOURCES})
 if(AEGISUB_MATROSKA_PARSING)

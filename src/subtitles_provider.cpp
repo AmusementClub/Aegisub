@@ -26,6 +26,7 @@
 #include "options.h"
 #include "subtitles_provider_csri.h"
 #include "subtitles_provider_libass.h"
+#include "subtitles_provider_plugin.h"
 
 #include <libaegisub/log.h>
 #include <libaegisub/string_utils.h>
@@ -38,29 +39,47 @@ namespace {
 		std::string subtype;
 		std::unique_ptr<SubtitlesProvider> (*create)(std::string const& subtype, SubtitleRenderEnvironment const& env);
 		bool hidden;
+		bool external_file;
 	};
 
-	std::vector<factory> factories() {
+	std::vector<factory> subtitle_file_factories() {
+		std::vector<factory> factories;
+		for (auto const& provider : subtitle_plugin::List())
+			factories.push_back(factory{provider, provider, subtitle_plugin::Create, false, true});
+		return factories;
+	}
+
+	std::vector<factory> ass_renderer_factories() {
 		std::vector<factory> factories;
 #ifdef WITH_CSRI
 		for (auto const& subtype : csri::List())
-			factories.push_back(factory{"CSRI/" + subtype, subtype, csri::Create, false});
+			factories.push_back(factory{"CSRI/" + subtype, subtype, csri::Create, false, false});
 #endif
-		factories.push_back(factory{"libass", "", libass::Create, false});
+		factories.push_back(factory{"libass", "", libass::Create, false, false});
 		return factories;
 	}
 }
 
 std::vector<std::string> SubtitlesProviderFactory::GetClasses() {
-	auto available_factories = factories();
+	auto available_factories = ass_renderer_factories();
 	return ::GetClasses(available_factories);
+}
+
+bool SubtitlesProviderFactory::HasExternalFileProviderFor(agi::fs::path const& filename) {
+	return subtitle_plugin::HasExternalFileProviderFor(filename);
+}
+
+std::vector<std::string> SubtitlesProviderFactory::GetExternalFileProviderWildcards() {
+	return subtitle_plugin::GetExternalFileProviderWildcards();
 }
 
 std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(SubtitleRenderEnvironment const& env) {
 	auto preferred = env.preferred_provider.empty()
 		? OPT_GET("Subtitle/Provider")->GetString()
 		: env.preferred_provider;
-	auto available_factories = factories();
+	auto available_factories = env.require_external_file_provider
+		? subtitle_file_factories()
+		: ass_renderer_factories();
 	auto sorted = GetSorted(available_factories, preferred);
 	LOG_I(kSubtitleProviderSelectLogTag) << "Selecting subtitles provider"
 		<< (preferred.empty() ? "" : ": preferred=" + preferred);
@@ -91,6 +110,8 @@ std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(Subtitl
 		}
 	}
 
+	if (error.empty() && env.require_external_file_provider)
+		throw std::string("No dynamic subtitle plugin provider is available for this subtitle file.");
 	throw error;
 }
 

@@ -95,8 +95,9 @@ std::vector<std::wstring> GetWindowsFontDirs() {
 void AddWindowsFontFiles(FcConfig *config) {
 	for (auto const& dir : GetWindowsFontDirs()) {
 		std::error_code ec;
+		auto const font_dir = std::filesystem::path{dir};
 		std::filesystem::recursive_directory_iterator it(
-			std::filesystem::path(dir),
+			font_dir,
 			std::filesystem::directory_options::skip_permission_denied,
 			ec);
 		std::filesystem::recursive_directory_iterator end;

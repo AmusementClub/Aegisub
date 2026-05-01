@@ -42,6 +42,7 @@ enum {
 	BUTTON_REMOVE,
 	BUTTON_FREEHAND,
 	BUTTON_FREEHAND_SMOOTH,
+	BUTTON_MOVE,
 	BUTTON_LAST // Leave this at the end and don't use it
 };
 
@@ -71,6 +72,8 @@ void VisualToolVectorClip::SetToolbar(wxToolBar *toolBar) {
 	toolBar->AddSeparator();
 	toolBar->AddTool(BUTTON_FREEHAND, _("Freehand"), ICON(visual_vector_clip_freehand), _("Draws a freehand shape"), wxITEM_CHECK);
 	toolBar->AddTool(BUTTON_FREEHAND_SMOOTH, _("Freehand smooth"), ICON(visual_vector_clip_freehand_smooth), _("Draws a smoothed freehand shape"), wxITEM_CHECK);
+	toolBar->AddSeparator();
+	toolBar->AddTool(BUTTON_MOVE, _("Move"), ICON(visual_vector_clip_line), _("Appends a move point"), wxITEM_CHECK);
 	toolBar->ToggleTool(BUTTON_DRAG, true);
 	toolBar->Realize();
 	toolBar->Show(true);
@@ -457,6 +460,17 @@ bool VisualToolVectorClip::InitializeHold() {
 		spline.clear();
 		spline.emplace_back(mouse_pos);
 		return true;
+	}
+
+	// Append a move point at the current mouse position
+	if (mode == 8) {
+		SplineCurve curve;
+		curve.p1 = mouse_pos;
+		curve.type = SplineCurve::POINT;
+		spline.push_back(curve);
+		MakeFeatures();
+		Commit(_("append move point"));
+		return false;
 	}
 
 	// Nothing to do for mode 5 (remove)

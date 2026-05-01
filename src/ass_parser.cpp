@@ -32,6 +32,27 @@
 #include <unordered_map>
 #include <variant>
 
+namespace {
+enum class ParsedScriptType {
+	SSA,
+	ASS,
+	Unsupported
+};
+
+ParsedScriptType parse_script_type(std::string version_str) {
+	agi::util::strings::trim_inplace(version_str);
+	agi::util::strings::to_lower_inplace(version_str);
+
+	if (agi::util::strings::ends_with(version_str, "4.00++"))
+		return ParsedScriptType::Unsupported;
+	if (agi::util::strings::ends_with(version_str, "4.00+"))
+		return ParsedScriptType::ASS;
+	if (agi::util::strings::ends_with(version_str, "4.00"))
+		return ParsedScriptType::SSA;
+	return ParsedScriptType::Unsupported;
+}
+}
+
 class AssParser::HeaderToProperty {
 	using field = std::variant<
 		std::string ProjectProperties::*,
@@ -134,16 +155,17 @@ void AssParser::ParseScriptInfoLine(std::string const& data) {
 		return;
 	}
 
-	if (agi::util::strings::starts_with(data, "ScriptType:")) {
-		std::string version_str = data.substr(11);
-		agi::util::strings::trim_inplace(version_str);
-		agi::util::strings::to_lower_inplace(version_str);
-		if (version_str == "v4.00")
-			version = 0;
-		else if (version_str == "v4.00+")
-			version = 1;
-		else
-			throw SubtitleFormatParseError("Unknown SSA file format version");
+	if (agi::util::strings::istarts_with(data, "ScriptType:")) {
+		switch (parse_script_type(data.substr(11))) {
+			case ParsedScriptType::SSA:
+				version = 0;
+				break;
+			case ParsedScriptType::ASS:
+				version = 1;
+				break;
+			case ParsedScriptType::Unsupported:
+				throw SubtitleFormatParseError("Unknown SSA file format version");
+		}
 	}
 
 	// Nothing actually supports the Collisions property and malformed values
@@ -234,9 +256,11 @@ void AssParser::AddLine(std::string const& data) {
 	if (data.empty()) return;
 
 	// Section header
-	if (data[0] == '[' && data.back() == ']') {
+	auto header = agi::util::strings::trim_copy(data);
+	if (header.empty()) return;
+	if (header[0] == '[' && header.back() == ']') {
 		// Ugly hacks to allow intermixed v4 and v4+ style sections
-		const std::string low = agi::util::strings::to_lower_copy(data);
+		const std::string low = agi::util::strings::to_lower_copy(header);
 		if (low == "[v4 styles]") {
 			version = 0;
 			state = &AssParser::ParseStyleLine;

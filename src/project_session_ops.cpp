@@ -78,6 +78,11 @@ std::optional<std::string> ResolveSubtitleEncoding(agi::fs::path const& path,
 		show_missing_subtitle_path_error(path, notification_sink);
 		return std::nullopt;
 	}
+	catch (agi::fs::FileSystemError const& err) {
+		remove_mru_if_requested("Subtitle", path, remove_mru);
+		notification_sink.ShowError(kErrorLoadingFileTitle, err.GetMessage());
+		return std::nullopt;
+	}
 }
 
 bool LoadSubtitlesWithErrorHandling(agi::fs::path const& path,

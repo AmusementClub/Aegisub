@@ -222,6 +222,8 @@ public:
 	bool CanFocusEditControl() const;
 	/// Give keyboard focus to the main subtitle text editor.
 	void FocusEditControl();
+	/// Return the current selection in the main subtitle text editor.
+	std::string GetEditControlSelectedText() const;
 	/// Set the caret before or after the 1-based character index in the main editor.
 	void SetEditControlCaret(int character_index, bool after);
 };

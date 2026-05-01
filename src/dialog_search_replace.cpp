@@ -21,17 +21,22 @@
 
 #include "dialog_search_replace.h"
 
+#include "ass_dialogue.h"
 #include "compat.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "search_replace_engine.h"
+#include "selection_controller.h"
+#include "subs_edit_box.h"
+#include "text_selection_controller.h"
 #include "utils.h"
 #include "validators.h"
 
 #include <libaegisub/exception.h>
 #include <libaegisub/make_unique.h>
 
+#include <algorithm>
 #include <functional>
 
 #include <wx/button.h>
@@ -178,6 +183,29 @@ static void update_mru(wxComboBox *cb, const char *mru_name) {
 	cb->Thaw();
 }
 
+static wxString get_selected_text_for_search(agi::Context *context) {
+	if (auto *edit_box = context->GetUI().subsEditBox) {
+		auto selected = edit_box->GetEditControlSelectedText();
+		if (!selected.empty())
+			return to_wx(selected);
+	}
+
+	if (auto *active_line = context->selectionController->GetActiveLine()) {
+		auto const& tsc = context->textSelectionController;
+		long sel_start = tsc->GetSelectionStart();
+		long sel_end = tsc->GetSelectionEnd();
+		if (sel_start > sel_end)
+			std::swap(sel_start, sel_end);
+		if (sel_start != sel_end && sel_start >= 0) {
+			auto const& text = active_line->Text.get();
+			if (static_cast<size_t>(sel_end) <= text.size())
+				return to_wx(text.substr(sel_start, sel_end - sel_start));
+		}
+	}
+
+	return {};
+}
+
 void DialogSearchReplace::UpdateDropDowns() {
 	update_mru(find_edit, "Find");
 
@@ -188,6 +216,8 @@ void DialogSearchReplace::UpdateDropDowns() {
 void DialogSearchReplace::Show(agi::Context *context, bool replace) {
 	static DialogSearchReplace *diag = nullptr;
 
+	wxString preselected = get_selected_text_for_search(context);
+
 	if (diag && replace != diag->has_replace) {
 		// Already opened, but wrong type - destroy and create the right one
 		diag->Destroy();
@@ -196,6 +226,11 @@ void DialogSearchReplace::Show(agi::Context *context, bool replace) {
 
 	if (!diag)
 		diag = new DialogSearchReplace(context, replace);
+
+	if (!preselected.empty()) {
+		diag->find_edit->SetValue(preselected);
+		diag->settings->find = from_wx(preselected);
+	}
 
 	diag->find_edit->SetFocus();
 	diag->find_edit->SelectAll();

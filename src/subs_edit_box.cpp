@@ -66,6 +66,7 @@
 #include <libaegisub/fs.h>
 #include <libaegisub/util.h>
 
+#include <algorithm>
 #include <functional>
 #include <unordered_set>
 
@@ -355,6 +356,41 @@ void SubsEditBox::FocusEditControl() {
 	}
 #endif
 	edit_ctrl_tc->SetFocus();
+}
+
+std::string SubsEditBox::GetEditControlSelectedText() const {
+#ifdef WITH_WXSTC
+	if (use_stc) {
+		if (!edit_ctrl_stc)
+			return {};
+
+		int sel_start = edit_ctrl_stc->GetSelectionStart();
+		int sel_end = edit_ctrl_stc->GetSelectionEnd();
+		if (sel_start == sel_end)
+			return {};
+		if (sel_start > sel_end)
+			std::swap(sel_start, sel_end);
+
+		auto data = edit_ctrl_stc->GetTextRaw();
+		int text_len = static_cast<int>(data.length());
+		sel_start = std::max(0, std::min(sel_start, text_len));
+		sel_end = std::max(sel_start, std::min(sel_end, text_len));
+		return std::string(data.data() + sel_start, sel_end - sel_start);
+	}
+#endif
+
+	if (!edit_ctrl_tc)
+		return {};
+
+	long sel_start = 0;
+	long sel_end = 0;
+	edit_ctrl_tc->GetSelection(&sel_start, &sel_end);
+	if (sel_start == sel_end)
+		return {};
+	if (sel_start > sel_end)
+		std::swap(sel_start, sel_end);
+
+	return from_wx(edit_ctrl_tc->GetRange(sel_start, sel_end));
 }
 
 void SubsEditBox::SetEditControlCaret(int character_index, bool after) {

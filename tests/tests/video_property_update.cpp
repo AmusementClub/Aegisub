@@ -1,5 +1,6 @@
 #include <main.h>
 
+#include "../../src/ass_dialogue.h"
 #include "../../src/ass_file.h"
 #include "../../src/resolution_resampler.h"
 #include "../../src/video_property_update.h"
@@ -143,4 +144,24 @@ TEST(video_property_update, resolve_choice_sets_expected_resample_mode) {
 	ASSERT_TRUE(resolved.resample_mode.has_value());
 	EXPECT_EQ(ResampleARMode::RemoveBorder, *resolved.resample_mode);
 	EXPECT_FALSE(resolved.set_resolution);
+}
+
+TEST(resolution_resampler, clamps_negative_renderer_clamped_override_values_when_rewriting) {
+	AssFile file;
+	file.LoadDefault(false);
+	file.Events.push_back(*new AssDialogue("Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\bord-2\\xbord-3\\ybord-4\\shad-5\\xshad-6\\yshad-7\\be-8\\blur-9\\fsp-10}x"));
+
+	ResampleSettings settings = {};
+	settings.source_x = 640;
+	settings.source_y = 480;
+	settings.dest_x = 1280;
+	settings.dest_y = 960;
+	settings.ar_mode = ResampleARMode::Stretch;
+	settings.source_matrix = YCbCrMatrix::rgb;
+	settings.dest_matrix = YCbCrMatrix::rgb;
+
+	ResampleResolution(&file, settings);
+
+	auto const& text = file.Events.front().Text.get();
+	EXPECT_EQ("{\\bord0\\xbord0\\ybord0\\shad0\\xshad-12\\yshad-14\\be0\\blur0\\fsp-20}x", text);
 }

@@ -106,6 +106,17 @@ namespace {
 		bool convert_colors;
 	};
 
+	bool clamp_resampled_override_value(std::string const& name) {
+		return name == "\\bord"
+			|| name == "\\xbord"
+			|| name == "\\ybord"
+			|| name == "\\shad"
+			|| name == "\\be"
+			|| name == "\\blur"
+			|| name == "\\fscx"
+			|| name == "\\fscy";
+	}
+
 	void resample_tags(std::string const& name, AssOverrideParameter *cur, void *ud) {
 		resample_state *state = static_cast<resample_state *>(ud);
 
@@ -159,10 +170,18 @@ namespace {
 		}
 
 		VariableDataType curType = cur->GetType();
-		if (curType == VariableDataType::FLOAT)
-			cur->Set((cur->Get<double>() + shift) * resizer);
-		else if (curType == VariableDataType::INT)
-			cur->Set<int>((cur->Get<int>() + shift) * resizer + 0.5);
+		if (curType == VariableDataType::FLOAT) {
+			auto value = (cur->Get<double>() + shift) * resizer;
+			if (clamp_resampled_override_value(name))
+				value = std::max(value, 0.0);
+			cur->Set(value);
+		}
+		else if (curType == VariableDataType::INT) {
+			auto value = static_cast<int>((cur->Get<int>() + shift) * resizer + 0.5);
+			if (clamp_resampled_override_value(name))
+				value = std::max(value, 0);
+			cur->Set<int>(value);
+		}
 	}
 
 	void resample_line(resample_state *state, AssDialogue &diag) {

@@ -31,6 +31,17 @@ TEST(time_display_mode, exact_display_preserves_internal_milliseconds) {
 	EXPECT_EQ("0:00:01.234", FormatTimeForDisplay(displayed.first, SubtitleTimeDisplayMode::Exact));
 }
 
+TEST(time_display_mode, ass_display_preserves_times_past_ten_hours) {
+	auto const displayed = GetDialogueTimesForDisplay(
+		agi::Time(12 * 60 * 60 * 1000),
+		agi::Time(12 * 60 * 60 * 1000 + 1230),
+		SubtitleTimeDisplayMode::Ass);
+
+	EXPECT_EQ(12 * 60 * 60 * 1000, displayed.first);
+	EXPECT_EQ(12 * 60 * 60 * 1000 + 1230, displayed.second);
+	EXPECT_EQ("12:00:00.00", FormatTimeForDisplay(displayed.first, SubtitleTimeDisplayMode::Ass));
+}
+
 TEST(time_display_mode, duration_follows_selected_display_semantics) {
 	auto const fps = agi::vfr::Framerate(100.0);
 
@@ -83,4 +94,15 @@ TEST(time_display_mode, ass_duration_edit_falls_back_to_canonical_start_when_col
 	EXPECT_EQ(40, end.GetMillisecond());
 	EXPECT_EQ(20, displayed.first);
 	EXPECT_EQ(40, displayed.second);
+}
+
+TEST(time_display_mode, ass_duration_edit_supports_times_past_ten_hours) {
+	auto const start = agi::Time(12 * 60 * 60 * 1000);
+	auto const end = GetEndTimeForDisplayedDuration(
+		start,
+		agi::Time(12 * 60 * 60 * 1000 + 1000),
+		agi::Time(2000),
+		SubtitleTimeDisplayMode::Ass);
+
+	EXPECT_EQ(12 * 60 * 60 * 1000 + 2000, end.GetMillisecond());
 }

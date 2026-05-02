@@ -24,34 +24,36 @@
 #include <limits>
 
 namespace {
-constexpr int kAssMaxMs = 10 * 60 * 60 * 1000 - 10;
-constexpr int kAssInternalMaxMs = 10 * 60 * 60 * 1000 - 6;
+constexpr int kAssMaxMs = std::numeric_limits<int>::max() / 10 * 10;
 
-int clamp_ass_internal_ms(int ms) {
-	return std::clamp(ms, 0, kAssInternalMaxMs);
+int clamp_nonnegative_ms(int ms) {
+	return std::max(0, ms);
 }
 
-int floor_cs(int ms) {
-	ms = clamp_ass_internal_ms(ms);
-	return std::clamp(ms / 10 * 10, 0, kAssMaxMs);
+int clamp_ass_cs(long long ms) {
+	return static_cast<int>(std::clamp(ms, 0LL, static_cast<long long>(kAssMaxMs)));
 }
 
-int ceil_cs(int ms) {
-	ms = clamp_ass_internal_ms(ms);
+int floor_cs(long long ms) {
+	ms = std::max(0LL, ms);
+	return clamp_ass_cs(ms / 10 * 10);
+}
+
+int ceil_cs(long long ms) {
 	if (ms <= 0)
 		return 0;
 	if (ms >= kAssMaxMs)
 		return kAssMaxMs;
-	return std::clamp(((ms + 9) / 10) * 10, 0, kAssMaxMs);
+	return clamp_ass_cs(((ms + 9) / 10) * 10);
 }
 
 /// Symmetric round to centisecond grid — identical to agi::Time::operator int().
 /// Always returns the same value for the same input regardless of boundary role,
 /// eliminating the display inconsistency where Start and End show different ASS
 /// timestamps for the same internal millisecond value.
-int round_cs(int ms) {
-	ms = clamp_ass_internal_ms(ms);
-	return std::clamp((ms + 5) / 10 * 10, 0, kAssMaxMs);
+int round_cs(long long ms) {
+	ms = std::max(0LL, ms);
+	return clamp_ass_cs((ms + 5) / 10 * 10);
 }
 
 agi::vfr::Time to_vfr_mode(AssStorageTimeBoundary boundary) {
@@ -91,7 +93,7 @@ int project_short_interval_to_single_ass_bucket(int start_ms, int end_ms) {
 	// When start/end projection collapses a positive interval, the source span
 	// is smaller than ASS can represent. Pick the single centisecond bucket
 	// containing the interval midpoint rather than expanding to the full hull.
-	int midpoint_ms = start_ms + (end_ms - start_ms) / 2;
+	long long midpoint_ms = static_cast<long long>(start_ms) + (static_cast<long long>(end_ms) - start_ms) / 2;
 	int projected_start = floor_cs(midpoint_ms);
 	if (projected_start >= kAssMaxMs)
 		projected_start = std::max(0, kAssMaxMs - 10);
@@ -100,7 +102,7 @@ int project_short_interval_to_single_ass_bucket(int start_ms, int end_ms) {
 }
 
 int ProjectAssTimeForStorage(int time_ms, AssStorageTimeBoundary boundary, agi::vfr::Framerate const* fps) {
-	time_ms = clamp_ass_internal_ms(time_ms);
+	time_ms = clamp_nonnegative_ms(time_ms);
 
 	if (fps && fps->IsLoaded()) {
 		// If either neighboring ASS timestamp preserves the same START/END frame,

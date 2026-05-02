@@ -24,7 +24,11 @@
 #include <stdexcept>
 
 namespace {
-constexpr int kMaxInternalTimeMs = 10 * 60 * 60 * 1000 - 6;
+constexpr int kMaxInternalTimeMs = std::numeric_limits<int>::max();
+
+int clamp_internal_time_ms(long long ms) {
+	return static_cast<int>(std::clamp(ms, 0LL, static_cast<long long>(kMaxInternalTimeMs)));
+}
 
 std::string lowercase(std::string value) {
 	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
@@ -92,10 +96,8 @@ agi::Time GetEndTimeForDisplayedDuration(
 
 	auto const current_displayed = GetDialogueTimesForDisplay(start, current_end, mode, fps);
 	int const current_start_ms = current_displayed.first;
-	int const target_end_from_current_start = std::clamp(
-		current_start_ms + target_duration_ms,
-		current_start_ms,
-		kMaxInternalTimeMs);
+	int const target_end_from_current_start = clamp_internal_time_ms(
+		static_cast<long long>(current_start_ms) + target_duration_ms);
 
 	// If the existing ASS-projected start can still represent the requested
 	// duration, keep that displayed anchor and place the internal end directly
@@ -117,10 +119,8 @@ agi::Time GetEndTimeForDisplayedDuration(
 		start.GetMillisecond(),
 		AssStorageTimeBoundary::Start,
 		fps);
-	return agi::Time(std::clamp(
-		canonical_start_ms + target_duration_ms,
-		canonical_start_ms,
-		kMaxInternalTimeMs));
+	return agi::Time(clamp_internal_time_ms(
+		static_cast<long long>(canonical_start_ms) + target_duration_ms));
 }
 
 std::string FormatTimeForDisplay(int ms, SubtitleTimeDisplayMode mode) {

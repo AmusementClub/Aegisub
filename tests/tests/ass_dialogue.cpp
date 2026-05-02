@@ -113,6 +113,20 @@ TEST(ass_dialogue, parses_file_times_with_multi_digit_hours) {
 		parsed.GetEntryData());
 }
 
+TEST(ass_time_projection, storage_serialization_preserves_times_past_ten_hours) {
+	AssDialogue line;
+	line.Comment = false;
+	line.Layer = 0;
+	line.Start = 12 * 60 * 60 * 1000;
+	line.End = 12 * 60 * 60 * 1000 + 1230;
+	line.Style = "Default";
+	line.Text = "long";
+
+	EXPECT_EQ(
+		"Dialogue: 0,12:00:00.00,12:00:01.23,Default,,0,0,0,,long",
+		SerializeAssDialogueForStorage(line));
+}
+
 TEST(ass_dialogue, parses_aegisub_millisecond_precision_times) {
 	AssDialogue parsed("Dialogue: 0,0:00:18.497,0:00:20.499,Default,,0,0,0,,exact");
 

@@ -3,6 +3,7 @@
 #include "../../src/subtitle_edit_ops.h"
 
 #include <memory>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -19,6 +20,28 @@ struct edit_fixture {
 		return line;
 	}
 };
+
+struct marked_text {
+	std::string text;
+	int caret = 0;
+};
+
+marked_text UnmarkCaret(std::string marked) {
+	auto const pos = marked.find('|');
+	EXPECT_NE(std::string::npos, pos);
+	marked.erase(pos, 1);
+	return {std::move(marked), static_cast<int>(pos)};
+}
+
+std::string ApplyAutoClose(std::string marked, aegisub::subtitle_edit_ops::AutoCloseKey key) {
+	auto input = UnmarkCaret(std::move(marked));
+	auto edit = aegisub::subtitle_edit_ops::BuildAutoCloseEdit(input.text, input.caret, input.caret, key);
+	EXPECT_TRUE(edit.handled);
+
+	auto text = aegisub::subtitle_edit_ops::ReplaceRangeWithText(input.text, edit.replace_start, edit.replace_end, edit.replacement);
+	text.insert(static_cast<size_t>(edit.caret), "|");
+	return text;
+}
 
 }
 
@@ -100,4 +123,30 @@ TEST(subtitle_edit_ops, build_tag_only_text_keeps_non_plain_blocks) {
 TEST(subtitle_edit_ops, replace_range_with_text_clamps_invalid_ranges) {
 	EXPECT_EQ("Z", aegisub::subtitle_edit_ops::ReplaceRangeWithText("abcde", -3, 99, "Z"));
 	EXPECT_EQ("aXYde", aegisub::subtitle_edit_ops::ReplaceRangeWithText("abcde", 1, 3, "XY"));
+}
+
+TEST(subtitle_edit_ops, autoclose_inserts_and_skips_override_braces) {
+	using aegisub::subtitle_edit_ops::AutoCloseKey;
+
+	EXPECT_EQ("a{|}b", ApplyAutoClose("a|b", AutoCloseKey::OpenBrace));
+	EXPECT_EQ("a{}|b", ApplyAutoClose("a{|}b", AutoCloseKey::CloseBrace));
+	EXPECT_EQ("|", ApplyAutoClose("{|}", AutoCloseKey::Backspace));
+}
+
+TEST(subtitle_edit_ops, autoclose_parentheses_only_inside_override_blocks) {
+	using aegisub::subtitle_edit_ops::AutoCloseKey;
+
+	EXPECT_EQ("{\\pos(|)}", ApplyAutoClose("{\\pos|}", AutoCloseKey::OpenParen));
+	EXPECT_EQ("{\\pos()|}", ApplyAutoClose("{\\pos(|)}", AutoCloseKey::CloseParen));
+	EXPECT_EQ("{\\pos|}", ApplyAutoClose("{\\pos(|)}", AutoCloseKey::Backspace));
+
+	EXPECT_FALSE(aegisub::subtitle_edit_ops::BuildAutoCloseEdit("plain text", 5, 5, AutoCloseKey::OpenParen).handled);
+	EXPECT_FALSE(aegisub::subtitle_edit_ops::BuildAutoCloseEdit("plain ) text", 6, 6, AutoCloseKey::CloseParen).handled);
+}
+
+TEST(subtitle_edit_ops, autoclose_ignores_selected_text) {
+	using aegisub::subtitle_edit_ops::AutoCloseKey;
+
+	EXPECT_FALSE(aegisub::subtitle_edit_ops::BuildAutoCloseEdit("abc", 0, 2, AutoCloseKey::OpenBrace).handled);
+	EXPECT_FALSE(aegisub::subtitle_edit_ops::BuildAutoCloseEdit("{\\pos}", 1, 5, AutoCloseKey::OpenParen).handled);
 }

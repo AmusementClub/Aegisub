@@ -40,6 +40,7 @@
 #include "selection_controller.h"
 #include "text_selection_controller.h"
 #include "thesaurus.h"
+#include "subtitle_edit_ops.h"
 #include "utils.h"
 
 #include <libaegisub/ass/dialogue_parser.h>
@@ -50,6 +51,7 @@
 #include <libaegisub/string_utils.h>
 
 #include <functional>
+#include <string_view>
 
 #include <wx/clipbrd.h>
 #include <wx/intl.h>
@@ -81,6 +83,50 @@ enum {
 	EDIT_MENU_THES_LANGUAGE = EDIT_MENU_DIC_LANGUAGE + LANGS_MAX,
 	EDIT_MENU_THES_LANGS
 };
+
+bool GetAutoCloseKey(wxKeyEvent const& event, aegisub::subtitle_edit_ops::AutoCloseKey& key) {
+	if (event.CmdDown() || event.AltDown())
+		return false;
+
+	if (event.GetKeyCode() == WXK_BACK) {
+		key = aegisub::subtitle_edit_ops::AutoCloseKey::Backspace;
+		return true;
+	}
+
+	int unicode_key = event.GetUnicodeKey();
+	if (unicode_key == WXK_NONE)
+		unicode_key = event.GetKeyCode();
+
+	switch (unicode_key) {
+	case '{':
+		key = aegisub::subtitle_edit_ops::AutoCloseKey::OpenBrace;
+		return true;
+	case '}':
+		key = aegisub::subtitle_edit_ops::AutoCloseKey::CloseBrace;
+		return true;
+	case '(':
+		key = aegisub::subtitle_edit_ops::AutoCloseKey::OpenParen;
+		return true;
+	case ')':
+		key = aegisub::subtitle_edit_ops::AutoCloseKey::CloseParen;
+		return true;
+	default:
+		return false;
+	}
+}
+
+void ApplyAutoCloseEdit(wxStyledTextCtrl *ctrl, aegisub::subtitle_edit_ops::AutoCloseEdit const& edit) {
+	if (edit.replace_start != edit.replace_end || !edit.replacement.empty()) {
+		ctrl->BeginUndoAction();
+		ctrl->SetSelection(edit.replace_start, edit.replace_end);
+		ctrl->ReplaceSelection(wxString::FromUTF8Unchecked(edit.replacement.c_str()));
+		ctrl->SetSelection(edit.caret, edit.caret);
+		ctrl->EndUndoAction();
+	}
+	else {
+		ctrl->SetSelection(edit.caret, edit.caret);
+	}
+}
 
 SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, long style, agi::Context *context)
 : wxStyledTextCtrl(parent, -1, wxDefaultPosition, wsize, style)
@@ -209,6 +255,22 @@ void SubsStyledTextEditCtrl::OnLoseFocus(wxFocusEvent &event) {
 
 void SubsStyledTextEditCtrl::OnKeyDown(wxKeyEvent &event) {
 	event.Skip();
+
+	aegisub::subtitle_edit_ops::AutoCloseKey auto_close_key;
+	if (GetAutoCloseKey(event, auto_close_key)) {
+		wxCharBuffer old = GetTextRaw();
+		auto const edit = aegisub::subtitle_edit_ops::BuildAutoCloseEdit(
+			std::string_view(old.data(), old.length()),
+			GetSelectionStart(),
+			GetSelectionEnd(),
+			auto_close_key);
+
+		if (edit.handled) {
+			ApplyAutoCloseEdit(this, edit);
+			event.Skip(false);
+			return;
+		}
+	}
 
 	// Workaround for wxSTC eating tabs.
 	if (event.GetKeyCode() == WXK_TAB)

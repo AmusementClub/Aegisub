@@ -3,8 +3,31 @@
 #include <libaegisub/string_utils.h>
 
 #include <algorithm>
+#include <string_view>
+#include <utility>
 
 namespace {
+
+bool is_inside_override_block(std::string_view text, int pos) {
+	pos = std::clamp(pos, 0, static_cast<int>(text.size()));
+	if (pos == 0)
+		return false;
+
+	auto const last_open = text.rfind('{', static_cast<size_t>(pos - 1));
+	if (last_open == std::string_view::npos)
+		return false;
+
+	auto const last_close = text.rfind('}', static_cast<size_t>(pos - 1));
+	return last_close == std::string_view::npos || last_open > last_close;
+}
+
+bool has_char_at(std::string_view text, int pos, char value) {
+	return pos >= 0 && pos < static_cast<int>(text.size()) && text[static_cast<size_t>(pos)] == value;
+}
+
+aegisub::subtitle_edit_ops::AutoCloseEdit make_replace_edit(int start, int end, std::string replacement, int caret) {
+	return {true, start, end, std::move(replacement), caret};
+}
 
 bool match_trim_token_from_start(std::string const& text, size_t start, size_t& token_len) {
 	if (start >= text.size())
@@ -207,6 +230,43 @@ std::string ReplaceRangeWithText(std::string text, int start, int end, std::stri
 	size_t const clamped_end = static_cast<size_t>(clamped_end_int);
 	agi::util::strings::replace_range_inplace(text, clamped_start, clamped_end, replacement);
 	return text;
+}
+
+AutoCloseEdit BuildAutoCloseEdit(std::string_view text, int selection_start, int selection_end, AutoCloseKey key) {
+	int const text_size = static_cast<int>(text.size());
+	selection_start = std::clamp(selection_start, 0, text_size);
+	selection_end = std::clamp(selection_end, 0, text_size);
+	if (selection_start > selection_end)
+		std::swap(selection_start, selection_end);
+
+	if (selection_start != selection_end)
+		return {};
+
+	int const pos = selection_start;
+	switch (key) {
+	case AutoCloseKey::OpenBrace:
+		return make_replace_edit(pos, pos, "{}", pos + 1);
+	case AutoCloseKey::OpenParen:
+		if (is_inside_override_block(text, pos))
+			return make_replace_edit(pos, pos, "()", pos + 1);
+		return {};
+	case AutoCloseKey::CloseBrace:
+		if (has_char_at(text, pos, '}'))
+			return make_replace_edit(pos, pos, "", pos + 1);
+		return {};
+	case AutoCloseKey::CloseParen:
+		if (has_char_at(text, pos, ')') && is_inside_override_block(text, pos))
+			return make_replace_edit(pos, pos, "", pos + 1);
+		return {};
+	case AutoCloseKey::Backspace:
+		if (has_char_at(text, pos - 1, '{') && has_char_at(text, pos, '}'))
+			return make_replace_edit(pos - 1, pos + 1, "", pos - 1);
+		if (has_char_at(text, pos - 1, '(') && has_char_at(text, pos, ')') && is_inside_override_block(text, pos))
+			return make_replace_edit(pos - 1, pos + 1, "", pos - 1);
+		return {};
+	}
+
+	return {};
 }
 
 }

@@ -17,6 +17,7 @@
 
 #include "font_file_lister.h"
 
+#include "ass_compat.h"
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_style.h"
@@ -53,7 +54,7 @@ FontCollector::FontCollector(FontCollectorEventSink event_sink, std::unique_ptr<
 void FontCollector::ProcessDialogueLine(const AssDialogue *line, int index, int wrap_style) {
 	if (line->Comment) return;
 
-	auto style_it = styles.find(line->Style);
+	auto style_it = AssCompat::FindStyle(styles, line->Style);
 	if (style_it == end(styles)) {
 		FontCollectorEvent event;
 		event.type = FontCollectorEventType::StyleMissing;

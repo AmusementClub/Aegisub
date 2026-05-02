@@ -1,8 +1,11 @@
 #include <gtest/gtest.h>
 
+#include "../../src/ass_compat.h"
 #include "../../src/ass_dialogue.h"
 #include "../../src/ass_file.h"
 #include "../../src/ass_style.h"
+
+#include <map>
 
 TEST(ass_file_extradata, cleaning_copy_does_not_mutate_original_file_state) {
 	AssFile original;
@@ -43,4 +46,15 @@ TEST(ass_file_style_lookup, keeps_non_default_style_names_case_sensitive) {
 	EXPECT_EQ("Foo", file.GetStyle("Foo")->name);
 	EXPECT_EQ("foo", file.GetStyle("foo")->name);
 	EXPECT_EQ(nullptr, file.GetStyle("FOO"));
+}
+
+TEST(ass_file_style_lookup, shared_style_map_lookup_matches_renderer_compatible_names) {
+	std::map<std::string, int> styles;
+	styles["Default"] = 1;
+	styles["*Starred"] = 2;
+	styles["Foo"] = 3;
+
+	EXPECT_EQ(1, AssCompat::FindStyle(styles, "*default")->second);
+	EXPECT_EQ(2, AssCompat::FindStyle(styles, "Starred")->second);
+	EXPECT_EQ(styles.end(), AssCompat::FindStyle(styles, "foo"));
 }

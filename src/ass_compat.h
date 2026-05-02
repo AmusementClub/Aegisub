@@ -7,6 +7,7 @@
 #include <charconv>
 #include <cstdint>
 #include <limits>
+#include <string>
 
 namespace AssCompat {
 
@@ -24,6 +25,19 @@ inline bool StyleNamesMatch(agi::util::strings::view defined_name, agi::util::st
 		lookup = "Default";
 
 	return defined == lookup;
+}
+
+template<class StyleMap>
+typename StyleMap::const_iterator FindStyle(StyleMap const& styles, std::string const& name) {
+	auto exact = styles.find(name);
+	if (exact != styles.end())
+		return exact;
+
+	for (auto it = styles.begin(); it != styles.end(); ++it) {
+		if (StyleNamesMatch(it->first, name))
+			return it;
+	}
+	return styles.end();
 }
 
 inline bool digit_value(char c, unsigned base, std::uint32_t& value) {

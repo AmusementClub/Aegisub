@@ -81,6 +81,7 @@ TEST(ass_file_style_lookup, analyzes_renderer_compatibility_repairs_without_rewr
 
 TEST(ass_compat_format, formats_canonical_ass_values) {
 	EXPECT_EQ("-12", AssCompat::FormatInteger(-12));
+	EXPECT_EQ("4294967295", AssCompat::FormatUnsignedInteger(4294967295u));
 	EXPECT_EQ("1.25", AssCompat::FormatFloat(1.25));
 	EXPECT_EQ("2", AssCompat::FormatFloat(2.0));
 	EXPECT_EQ("0:00:12.34", AssCompat::FormatTime(12345));

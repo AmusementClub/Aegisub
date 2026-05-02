@@ -14,6 +14,7 @@
 
 #include "ass_time_projection.h"
 
+#include "ass_compat.h"
 #include "ass_dialogue.h"
 
 #include <libaegisub/ass/time.h>
@@ -143,6 +144,6 @@ bool IsAssDialogueVisibleAtTimeForStorage(agi::Time const& start, agi::Time cons
 std::string SerializeAssDialogueForStorage(AssDialogue const& line, agi::vfr::Framerate const* fps) {
 	auto const projected = ProjectAssDialogueTimesForStorage(line.Start, line.End, fps);
 	return line.GetEntryData(
-		agi::Time(projected.first).GetAssFormatted(),
-		agi::Time(projected.second).GetAssFormatted());
+		AssCompat::FormatTime(projected.first),
+		AssCompat::FormatTime(projected.second));
 }

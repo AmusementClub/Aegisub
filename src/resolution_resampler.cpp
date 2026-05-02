@@ -16,6 +16,7 @@
 
 #include "resolution_resampler.h"
 
+#include "ass_compat.h"
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_style.h"
@@ -162,7 +163,7 @@ namespace {
 
 			case AssParameterClass::COLOR:
 				if (state->convert_colors)
-					cur->Set<std::string>(state->conv.rgb_to_rgb(agi::Color{cur->Get<std::string>()}).GetAssOverrideFormatted());
+					cur->Set<std::string>(AssCompat::FormatOverrideColor(state->conv.rgb_to_rgb(cur->Get<agi::Color>())));
 				return;
 
 			default:

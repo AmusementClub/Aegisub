@@ -32,6 +32,7 @@
 #include "command.h"
 
 #include "../ass_dialogue.h"
+#include "../ass_compat.h"
 #include "../ass_file.h"
 #include "../ass_karaoke.h"
 #include "../ass_style.h"
@@ -567,9 +568,9 @@ void show_color_picker(const agi::Context *c, agi::Color (AssStyle::*field), con
 	int commit_id = -1;
 	bool ok = GetColorFromUser(ui.parent, initial_color, true, [&](agi::Color new_color) {
 		for (auto& line : lines) {
-			int shift = line.parsed.set_tag(tag, new_color.GetAssOverrideFormatted(), line.norm_sel_start, line.sel_start);
+			int shift = line.parsed.set_tag(tag, AssCompat::FormatOverrideColor(new_color), line.norm_sel_start, line.sel_start);
 			if (new_color.a != line.color.a) {
-				shift += line.parsed.set_tag(alpha, agi::format("&H%02X&", (int)new_color.a), line.norm_sel_start, line.sel_start + shift);
+				shift += line.parsed.set_tag(alpha, AssCompat::FormatOverrideAlpha(new_color.a), line.norm_sel_start, line.sel_start + shift);
 				line.color.a = new_color.a;
 			}
 

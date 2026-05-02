@@ -42,8 +42,6 @@
 #include <libaegisub/util.h>
 
 #include <boost/regex.hpp>
-#include <boost/spirit/include/karma_generate.hpp>
-#include <boost/spirit/include/karma_int.hpp>
 
 static int next_id = 0;
 
@@ -153,7 +151,7 @@ void AssDialogue::Parse(std::string const& raw) {
 }
 
 static void append_int(std::string &str, int v) {
-	boost::spirit::karma::generate(back_inserter(str), boost::spirit::karma::int_, v);
+	str.append(AssCompat::FormatInteger(v));
 	str.push_back(',');
 }
 
@@ -173,7 +171,9 @@ static void append_unsafe_str(std::string &out, std::string const& str) {
 }
 
 std::string AssDialogue::GetEntryData() const {
-	return GetEntryData(Start.GetAssFormatted(), End.GetAssFormatted());
+	return GetEntryData(
+		AssCompat::FormatTime(static_cast<int>(Start)),
+		AssCompat::FormatTime(static_cast<int>(End)));
 }
 
 std::string AssDialogue::GetEntryData(std::string const& formatted_start, std::string const& formatted_end) const {
@@ -193,7 +193,7 @@ std::string AssDialogue::GetEntryData(std::string const& formatted_start, std::s
 		str.push_back('{');
 		for (auto id : ExtradataIds.get()) {
 			str.push_back('=');
-			boost::spirit::karma::generate(back_inserter(str), boost::spirit::karma::int_, id);
+			str.append(AssCompat::FormatUnsignedInteger(id));
 		}
 		str.push_back('}');
 	}

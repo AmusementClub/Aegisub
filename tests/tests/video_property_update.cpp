@@ -165,3 +165,23 @@ TEST(resolution_resampler, clamps_negative_renderer_clamped_override_values_when
 	auto const& text = file.Events.front().Text.get();
 	EXPECT_EQ("{\\bord0\\xbord0\\ybord0\\shad0\\xshad-12\\yshad-14\\be0\\blur0\\fsp-20}x", text);
 }
+
+TEST(resolution_resampler, rewrites_compatible_override_colors_with_shared_formatter) {
+	AssFile file;
+	file.LoadDefault(false);
+	file.Events.push_back(*new AssDialogue("Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\c&HFFFFFF&tail}x"));
+
+	ResampleSettings settings = {};
+	settings.source_x = 640;
+	settings.source_y = 480;
+	settings.dest_x = 640;
+	settings.dest_y = 480;
+	settings.ar_mode = ResampleARMode::Stretch;
+	settings.source_matrix = YCbCrMatrix::tv_601;
+	settings.dest_matrix = YCbCrMatrix::tv_709;
+
+	ResampleResolution(&file, settings);
+
+	auto const& text = file.Events.front().Text.get();
+	EXPECT_EQ("{\\c&HFFFFFF&}x", text);
+}

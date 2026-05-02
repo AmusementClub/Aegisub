@@ -37,7 +37,6 @@
 #include "ass_compat.h"
 #include "ass_parse_error.h"
 
-#include <libaegisub/format.h>
 #include <libaegisub/split.h>
 #include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
@@ -55,6 +54,13 @@ AssEntryGroup AssStyle::Group() const { return AssEntryGroup::STYLE; }
 namespace {
 double non_negative(double value) {
 	return std::max(value, 0.0);
+}
+
+void append_style_field(std::string& line, std::string const& value, bool& first) {
+	if (!first)
+		line.push_back(',');
+	line.append(value);
+	first = false;
 }
 
 class parser {
@@ -182,17 +188,33 @@ void AssStyle::UpdateData() {
 	replace(name.begin(), name.end(), ',', ';');
 	replace(font.begin(), font.end(), ',', ';');
 
-	data = agi::format("Style: %s,%s,%g,%s,%s,%s,%s,%d,%d,%d,%d,%g,%g,%g,%g,%d,%g,%g,%i,%i,%i,%i,%i",
-		name, font, fontsize,
-		AssCompat::FormatStyleColor(primary),
-		AssCompat::FormatStyleColor(secondary),
-		AssCompat::FormatStyleColor(outline),
-		AssCompat::FormatStyleColor(shadow),
-		(bold? -1 : 0), (italic ? -1 : 0),
-		(underline ? -1 : 0), (strikeout ? -1 : 0),
-		non_negative(scalex), non_negative(scaley), non_negative(spacing), angle,
-		borderstyle, non_negative(outline_w), non_negative(shadow_w), alignment,
-		Margin[0], Margin[1], Margin[2], encoding);
+	data = "Style: ";
+	bool first = true;
+	auto append = [&](std::string const& value) { append_style_field(data, value, first); };
+
+	append(name);
+	append(font);
+	append(AssCompat::FormatFloat(fontsize));
+	append(AssCompat::FormatStyleColor(primary));
+	append(AssCompat::FormatStyleColor(secondary));
+	append(AssCompat::FormatStyleColor(outline));
+	append(AssCompat::FormatStyleColor(shadow));
+	append(AssCompat::FormatInteger(bold ? -1 : 0));
+	append(AssCompat::FormatInteger(italic ? -1 : 0));
+	append(AssCompat::FormatInteger(underline ? -1 : 0));
+	append(AssCompat::FormatInteger(strikeout ? -1 : 0));
+	append(AssCompat::FormatFloat(non_negative(scalex)));
+	append(AssCompat::FormatFloat(non_negative(scaley)));
+	append(AssCompat::FormatFloat(non_negative(spacing)));
+	append(AssCompat::FormatFloat(angle));
+	append(AssCompat::FormatInteger(borderstyle));
+	append(AssCompat::FormatFloat(non_negative(outline_w)));
+	append(AssCompat::FormatFloat(non_negative(shadow_w)));
+	append(AssCompat::FormatInteger(alignment));
+	append(AssCompat::FormatInteger(Margin[0]));
+	append(AssCompat::FormatInteger(Margin[1]));
+	append(AssCompat::FormatInteger(Margin[2]));
+	append(AssCompat::FormatInteger(encoding));
 }
 
 int AssStyle::AssToSsa(int ass_align) {

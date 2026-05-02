@@ -135,6 +135,24 @@ TEST(ass_dialogue, parses_aegisub_millisecond_precision_times) {
 	EXPECT_EQ(20499, parsed.End.GetMillisecond());
 }
 
+TEST(ass_dialogue, serializes_entry_data_with_shared_canonical_formatters) {
+	AssDialogue line;
+	line.Comment = false;
+	line.Layer = -12;
+	line.Start = 14189;
+	line.End = 20495;
+	line.Style = "Default";
+	line.Actor = "Actor";
+	line.Margin = { { 7, 8, 9 } };
+	line.Effect = "Effect";
+	line.ExtradataIds = std::vector<uint32_t>{1, 4294967295u};
+	line.Text = "Text";
+
+	EXPECT_EQ(
+		"Dialogue: -12,0:00:14.19,0:00:20.50,Default,Actor,7,8,9,Effect,{=1=4294967295}Text",
+		line.GetEntryData());
+}
+
 TEST(ass_dialogue, rejects_malformed_file_times) {
 	EXPECT_THROW(
 		AssDialogue("Dialogue: 0,1a:b2c3d:e4f5g.!6&7,0:00:01.00,Default,,0,0,0,,bad"),

@@ -272,6 +272,10 @@ inline std::string FormatInteger(int value) {
 	return std::to_string(value);
 }
 
+inline std::string FormatUnsignedInteger(std::uint32_t value) {
+	return std::to_string(value);
+}
+
 inline std::string FormatFloat(double value) {
 	char buffer[64];
 	auto result = std::to_chars(std::begin(buffer), std::end(buffer), value, std::chars_format::fixed, 3);

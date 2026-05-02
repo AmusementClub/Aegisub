@@ -190,6 +190,16 @@ void AssTransformFramerateFilter::TransformTimeTags(std::string const& name, Ass
 				transform,
 				parVal));
 			break;
+		case AssParameterClass::KARAOKE_START: {
+			curParam->Set(TransformKaraokeStartForExport(
+				instance->Output,
+				instance->Input,
+				transform,
+				parVal,
+				instance->oldK,
+				instance->newK));
+			break;
+		}
 		case AssParameterClass::KARAOKE: {
 			curParam->Set(TransformKaraokeDurationForExport(
 				instance->Output,

@@ -61,3 +61,11 @@ int TransformKaraokeDurationForExport(
 	int duration_cs,
 	int& old_accumulated_cs,
 	int& new_accumulated_cs);
+
+int TransformKaraokeStartForExport(
+	agi::vfr::Framerate const& source,
+	agi::vfr::Framerate const& destination,
+	AssFramerateTransform const& transform,
+	int start_cs,
+	int& old_accumulated_cs,
+	int& new_accumulated_cs);

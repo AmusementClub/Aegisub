@@ -297,7 +297,7 @@ static void load_protos() {
 	proto[++i].Set("\\3a", VariableDataType::TEXT, AssParameterClass::ALPHA); // \3a&H<aa>&
 	proto[++i].Set("\\4a", VariableDataType::TEXT, AssParameterClass::ALPHA); // \4a&H<aa>&
 	proto[++i].Set("\\fe", VariableDataType::TEXT); // \fe<charset>
-	proto[++i].Set("\\kt", VariableDataType::INT, AssParameterClass::KARAOKE); // \kt<duration>
+	proto[++i].Set("\\kt", VariableDataType::INT, AssParameterClass::KARAOKE_START); // \kt<start time>
 	proto[++i].Set("\\ko", VariableDataType::INT, AssParameterClass::KARAOKE); // \ko<duration>
 	proto[++i].Set("\\kf", VariableDataType::INT, AssParameterClass::KARAOKE); // \kf<duration>
 	proto[++i].Set("\\be", VariableDataType::INT, AssParameterClass::ABSOLUTE_SIZE_XY); // \be<strength>

@@ -24,8 +24,12 @@
 std::string AssKaraoke::Syllable::GetText(bool k_tag) const {
 	std::string ret;
 
-	if (k_tag)
-		ret = agi::format("{%s%d}", tag_type, ((duration + 5) / 10));
+	if (k_tag) {
+		if (explicit_start)
+			ret = agi::format("{\\kt%d%s%d}", explicit_start_cs, tag_type, ((duration + 5) / 10));
+		else
+			ret = agi::format("{%s%d}", tag_type, ((duration + 5) / 10));
+	}
 
 	size_t idx = 0;
 	for (auto const& ovr : ovr_tags) {
@@ -103,7 +107,25 @@ void AssKaraoke::ParseSyllables(const AssDialogue *line, Syllable &syl) {
 			auto ovr = static_cast<AssDialogueBlockOverride*>(block.get());
 			bool in_tag = false;
 			for (auto& tag : ovr->Tags) {
-				if (tag.IsValid() && agi::util::strings::istarts_with(tag.Name, "\\k")) {
+				if (tag.IsValid() && tag.Name == "\\kt") {
+					if (in_tag) {
+						syl.ovr_tags[syl.text.size()].push_back('}');
+						in_tag = false;
+					}
+
+					if (syl.duration > 0 || !syl.text.empty()) {
+						syls.push_back(syl);
+						syl.text.clear();
+						syl.ovr_tags.clear();
+					}
+
+					int start_cs = tag.Params[0].Get(0);
+					syl.start_time = line->Start + start_cs * 10;
+					syl.duration = 0;
+					syl.explicit_start = true;
+					syl.explicit_start_cs = start_cs;
+				}
+				else if (tag.IsValid() && (tag.Name == "\\k" || tag.Name == "\\K" || tag.Name == "\\kf" || tag.Name == "\\ko")) {
 					if (in_tag) {
 						syl.ovr_tags[syl.text.size()].push_back('}');
 						in_tag = false;
@@ -114,7 +136,8 @@ void AssKaraoke::ParseSyllables(const AssDialogue *line, Syllable &syl) {
 					if (tag.Name == "\\K") tag.Name = "\\kf";
 
 					// Don't bother including zero duration zero length syls
-					if (syl.duration > 0 || !syl.text.empty()) {
+					bool split = syl.duration > 0 || !syl.text.empty();
+					if (split) {
 						syls.push_back(syl);
 						syl.text.clear();
 						syl.ovr_tags.clear();
@@ -123,6 +146,10 @@ void AssKaraoke::ParseSyllables(const AssDialogue *line, Syllable &syl) {
 					syl.tag_type = tag.Name;
 					syl.start_time += syl.duration;
 					syl.duration = tag.Params[0].Get(0) * 10;
+					if (split) {
+						syl.explicit_start = false;
+						syl.explicit_start_cs = 0;
+					}
 				}
 				else {
 					std::string& otext = syl.ovr_tags[syl.text.size()];

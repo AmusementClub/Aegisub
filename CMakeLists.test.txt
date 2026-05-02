@@ -45,6 +45,7 @@ if(GTEST_FOUND)
         src/ass_attachment.cpp
         src/ass_parser.cpp
         src/ass_dialogue.cpp
+        src/ass_karaoke.cpp
         src/ass_time_projection.cpp
         src/ass_entry.cpp
         src/ass_file.cpp

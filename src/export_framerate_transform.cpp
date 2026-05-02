@@ -28,6 +28,10 @@ int round_duration_to_centiseconds(int ms) {
 	ms = std::max(0, ms);
 	return ((ms + 5) / 10) * 10;
 }
+
+int round_time_to_centiseconds(int ms) {
+	return ms < 0 ? -round_duration_to_centiseconds(-ms) : round_duration_to_centiseconds(ms);
+}
 }
 
 int TransformFrameBoundaryTimeForExport(
@@ -103,5 +107,20 @@ int TransformKaraokeDurationForExport(
 	int value = std::max(0, new_boundary_cs - new_accumulated_cs);
 	old_accumulated_cs += duration_cs;
 	new_accumulated_cs += value;
+	return value;
+}
+
+int TransformKaraokeStartForExport(
+	agi::vfr::Framerate const& source,
+	agi::vfr::Framerate const& destination,
+	AssFramerateTransform const& transform,
+	int start_cs,
+	int& old_accumulated_cs,
+	int& new_accumulated_cs) {
+	int old_absolute_start_ms = transform.old_ass_start_ms + start_cs * 10;
+	int new_absolute_start_ms = TransformFrameInstantTimeForExport(source, destination, old_absolute_start_ms);
+	int value = round_time_to_centiseconds(new_absolute_start_ms - transform.new_ass_start_ms) / 10;
+	old_accumulated_cs = start_cs;
+	new_accumulated_cs = value;
 	return value;
 }

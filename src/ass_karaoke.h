@@ -33,6 +33,8 @@ public:
 		int duration;   ///< Duration in milliseconds
 		std::string text; ///< Stripped syllable text
 		std::string tag_type; ///< \k, \kf or \ko
+		bool explicit_start = false; ///< Syllable start was introduced by \kt
+		int explicit_start_cs = 0; ///< \kt start time in centiseconds relative to the line
 		/// Non-karaoke override tags in this syllable. Key is an index in text
 		/// before which the value should be inserted
 		std::map<size_t, std::string> ovr_tags;

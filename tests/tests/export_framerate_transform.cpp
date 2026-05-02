@@ -64,3 +64,30 @@ TEST(export_framerate_transform, karaoke_durations_follow_transformed_absolute_b
 	EXPECT_EQ(3, old_accumulated_cs);
 	EXPECT_EQ(7, new_accumulated_cs);
 }
+
+TEST(export_framerate_transform, karaoke_start_tags_transform_absolute_boundaries) {
+	auto const source = agi::vfr::Framerate(100.0);
+	auto const destination = agi::vfr::Framerate(50.0);
+	auto const transform = BuildAssFramerateTransform(source, destination, 5, 55);
+	int old_accumulated_cs = 2;
+	int new_accumulated_cs = 4;
+
+	EXPECT_EQ(7, TransformKaraokeStartForExport(source, destination, transform, 3, old_accumulated_cs, new_accumulated_cs));
+	EXPECT_EQ(3, old_accumulated_cs);
+	EXPECT_EQ(7, new_accumulated_cs);
+	EXPECT_EQ(4, TransformKaraokeDurationForExport(source, destination, transform, 2, old_accumulated_cs, new_accumulated_cs));
+	EXPECT_EQ(5, old_accumulated_cs);
+	EXPECT_EQ(11, new_accumulated_cs);
+}
+
+TEST(export_framerate_transform, karaoke_start_tags_can_remain_before_line_start) {
+	auto const source = agi::vfr::Framerate(100.0);
+	auto const destination = agi::vfr::Framerate(50.0);
+	auto const transform = BuildAssFramerateTransform(source, destination, 105, 205);
+	int old_accumulated_cs = 0;
+	int new_accumulated_cs = 0;
+
+	EXPECT_EQ(-3, TransformKaraokeStartForExport(source, destination, transform, -2, old_accumulated_cs, new_accumulated_cs));
+	EXPECT_EQ(-2, old_accumulated_cs);
+	EXPECT_EQ(-3, new_accumulated_cs);
+}

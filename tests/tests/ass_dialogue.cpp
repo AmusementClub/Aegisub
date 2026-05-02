@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "../../src/ass_dialogue.h"
+#include "../../src/ass_karaoke.h"
 #include "../../src/ass_parse_error.h"
 #include "../../src/ass_time_projection.h"
 
@@ -183,6 +184,33 @@ TEST(ass_dialogue, override_parser_accepts_compatible_signed_fs_kt_and_fsc) {
 	EXPECT_EQ("\\fsc", override_block->Tags[3].Name);
 	EXPECT_TRUE(override_block->Tags[3].Params.empty());
 	EXPECT_EQ("{\\fs+10\\fs-5\\kt50\\fsc}", override_block->GetText());
+}
+
+TEST(ass_karaoke, kt_sets_absolute_syllable_start_instead_of_duration) {
+	AssDialogue line;
+	line.Start = 1000;
+	line.End = 4000;
+	line.Text = "{\\kt50\\k20}A{\\k30}B";
+
+	AssKaraoke kara(&line, false, false);
+	ASSERT_EQ(2u, kara.size());
+
+	auto it = kara.begin();
+	EXPECT_EQ(1500, it->start_time);
+	EXPECT_EQ(200, it->duration);
+	EXPECT_EQ("\\k", it->tag_type);
+	EXPECT_TRUE(it->explicit_start);
+	EXPECT_EQ(50, it->explicit_start_cs);
+	EXPECT_EQ("A", it->text);
+	EXPECT_EQ("{\\kt50\\k20}A", it->GetText(true));
+
+	++it;
+	EXPECT_EQ(1700, it->start_time);
+	EXPECT_EQ(300, it->duration);
+	EXPECT_EQ("B", it->text);
+	EXPECT_FALSE(it->explicit_start);
+
+	EXPECT_EQ("{\\kt50\\k20}A{\\k30}B", kara.GetText());
 }
 
 TEST(ass_dialogue, override_parser_distinguishes_empty_reset_parameters) {

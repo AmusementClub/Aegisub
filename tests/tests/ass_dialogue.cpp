@@ -317,6 +317,23 @@ TEST(ass_dialogue, override_float_parameters_parse_compatible_numeric_prefixes) 
 	EXPECT_EQ("{\\fscx110.25tail\\fsp+1.5px\\bord-2.5em}", override_block->GetText());
 }
 
+TEST(ass_dialogue, override_int_parameters_parse_compatible_numeric_prefixes) {
+	AssDialogue line;
+	line.Text = "{\\be&H10tail\\q+2junk\\p-3more}x";
+
+	auto blocks = line.ParseTags();
+	ASSERT_EQ(2u, blocks.size());
+
+	auto *override_block = dynamic_cast<AssDialogueBlockOverride *>(blocks[0].get());
+	ASSERT_NE(nullptr, override_block);
+	ASSERT_EQ(3u, override_block->Tags.size());
+
+	EXPECT_EQ(16, override_block->Tags[0].Params[0].Get<int>());
+	EXPECT_EQ(2, override_block->Tags[1].Params[0].Get<int>());
+	EXPECT_EQ(-3, override_block->Tags[2].Params[0].Get<int>());
+	EXPECT_EQ("{\\be&H10tail\\q+2junk\\p-3more}", override_block->GetText());
+}
+
 TEST(ass_dialogue, override_color_and_alpha_parameters_parse_compatible_hex_prefixes) {
 	AssDialogue line;
 	line.Text = "{\\c&H010203&tail\\1a&H123&junk\\alpha&H80&}x";

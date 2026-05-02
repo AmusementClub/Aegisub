@@ -72,7 +72,9 @@ template<> int AssOverrideParameter::Get<int>() const {
 		AssCompat::ParseOverrideAlpha(Get<std::string>(), alpha);
 		return agi::util::mid<int>(0, alpha, 255);
 	}
-	return atoi(Get<std::string>().c_str());
+	int value = 0;
+	AssCompat::ParseInteger(Get<std::string>(), value);
+	return value;
 }
 
 template<> double AssOverrideParameter::Get<double>() const {

@@ -90,7 +90,7 @@ public:
 
 	double next_double() {
 		double value = 0.0;
-		if (!agi::util::try_parse(next_tok(), &value))
+		if (!AssCompat::ParseFloat(next_tok(), value))
 			throw SubtitleFormatParseError("Malformed style: bad double field");
 		return value;
 	}

@@ -30,6 +30,8 @@
 
 #include "ass_dialogue.h"
 
+#include "ass_compat.h"
+
 #include <libaegisub/color.h>
 #include <libaegisub/exception.h>
 #include <libaegisub/format.h>
@@ -83,11 +85,15 @@ template<> int AssOverrideParameter::Get<int>() const {
 }
 
 template<> double AssOverrideParameter::Get<double>() const {
-	return atof(Get<std::string>().c_str());
+	double value = 0.0;
+	AssCompat::ParseFloat(Get<std::string>(), value);
+	return value;
 }
 
 template<> float AssOverrideParameter::Get<float>() const {
-	return atof(Get<std::string>().c_str());
+	double value = 0.0;
+	AssCompat::ParseFloat(Get<std::string>(), value);
+	return static_cast<float>(value);
 }
 
 template<> bool AssOverrideParameter::Get<bool>() const {

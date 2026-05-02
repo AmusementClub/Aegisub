@@ -44,6 +44,21 @@ TEST(lagi_ass_style, preserves_negative_style_values_in_memory_and_clamps_saved_
 		style.GetEntryData());
 }
 
+TEST(lagi_ass_style, parses_compatible_float_fields_and_normalizes_output) {
+	AssStyle style("Style: Default,Arial,48.5px,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,+110.25tail,99.5%,1.25em,-15deg,1,2.5px,3.75drop,2,10,20,30,1");
+
+	EXPECT_DOUBLE_EQ(48.5, style.fontsize);
+	EXPECT_DOUBLE_EQ(110.25, style.scalex);
+	EXPECT_DOUBLE_EQ(99.5, style.scaley);
+	EXPECT_DOUBLE_EQ(1.25, style.spacing);
+	EXPECT_DOUBLE_EQ(-15.0, style.angle);
+	EXPECT_DOUBLE_EQ(2.5, style.outline_w);
+	EXPECT_DOUBLE_EQ(3.75, style.shadow_w);
+	EXPECT_EQ(
+		"Style: Default,Arial,48.5,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,110.25,99.5,1.25,-15,1,2.5,3.75,2,10,20,30,1",
+		style.GetEntryData());
+}
+
 TEST(lagi_ass_style, rejects_bad_int_field) {
 	EXPECT_THROW(
 		AssStyle("Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,2,2,2,nope,20,30,1"),

@@ -4,6 +4,7 @@
 
 #include <libaegisub/string_utils.h>
 
+#include <charconv>
 #include <cstdint>
 #include <limits>
 
@@ -82,6 +83,19 @@ inline bool ParseInteger(agi::util::strings::view text, int& out) {
 		signed_value -= static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max()) + 1;
 	out = static_cast<int>(signed_value);
 	return true;
+}
+
+inline bool ParseFloat(agi::util::strings::view text, double& out) {
+	auto p = text.data();
+	auto end = p + text.size();
+
+	while (p != end && agi::util::strings::is_space(*p))
+		++p;
+	if (p != end && *p == '+')
+		++p;
+
+	auto result = std::from_chars(p, end, out);
+	return result.ec == std::errc() && result.ptr != p;
 }
 
 inline bool ParseDecimalInteger(agi::util::strings::view text, int& out) {

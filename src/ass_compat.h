@@ -11,10 +11,33 @@
 
 namespace AssCompat {
 
+struct StyleNameAnalysis {
+	std::string suggested_name;
+	bool has_compatibility_prefix = false;
+	bool has_default_case_mismatch = false;
+
+	bool NeedsExplicitRepair() const {
+		return has_compatibility_prefix || has_default_case_mismatch;
+	}
+};
+
 inline agi::util::strings::view StripStyleCompatibilityPrefix(agi::util::strings::view name) {
 	while (!name.empty() && name.front() == '*')
 		name.remove_prefix(1);
 	return name;
+}
+
+inline StyleNameAnalysis AnalyzeStyleName(agi::util::strings::view name) {
+	auto stripped = StripStyleCompatibilityPrefix(name);
+	StyleNameAnalysis analysis;
+	analysis.has_compatibility_prefix = stripped.size() != name.size();
+	analysis.has_default_case_mismatch = agi::util::strings::iequals(stripped, "Default") && stripped != "Default";
+	analysis.suggested_name = analysis.has_default_case_mismatch ? "Default" : std::string(stripped.begin(), stripped.end());
+	return analysis;
+}
+
+inline std::string SuggestStyleNameRepair(agi::util::strings::view name) {
+	return AnalyzeStyleName(name).suggested_name;
 }
 
 inline bool StyleNamesMatch(agi::util::strings::view defined_name, agi::util::strings::view lookup_name) {

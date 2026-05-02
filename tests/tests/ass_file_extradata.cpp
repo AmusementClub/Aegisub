@@ -58,3 +58,23 @@ TEST(ass_file_style_lookup, shared_style_map_lookup_matches_renderer_compatible_
 	EXPECT_EQ(2, AssCompat::FindStyle(styles, "Starred")->second);
 	EXPECT_EQ(styles.end(), AssCompat::FindStyle(styles, "foo"));
 }
+
+TEST(ass_file_style_lookup, analyzes_renderer_compatibility_repairs_without_rewriting_on_read) {
+	auto starred = AssCompat::AnalyzeStyleName("*Starred");
+	EXPECT_TRUE(starred.has_compatibility_prefix);
+	EXPECT_FALSE(starred.has_default_case_mismatch);
+	EXPECT_TRUE(starred.NeedsExplicitRepair());
+	EXPECT_EQ("Starred", starred.suggested_name);
+
+	auto default_case = AssCompat::AnalyzeStyleName("*default");
+	EXPECT_TRUE(default_case.has_compatibility_prefix);
+	EXPECT_TRUE(default_case.has_default_case_mismatch);
+	EXPECT_TRUE(default_case.NeedsExplicitRepair());
+	EXPECT_EQ("Default", default_case.suggested_name);
+
+	auto ordinary = AssCompat::AnalyzeStyleName("foo");
+	EXPECT_FALSE(ordinary.has_compatibility_prefix);
+	EXPECT_FALSE(ordinary.has_default_case_mismatch);
+	EXPECT_FALSE(ordinary.NeedsExplicitRepair());
+	EXPECT_EQ("foo", ordinary.suggested_name);
+}

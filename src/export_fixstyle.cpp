@@ -38,8 +38,6 @@
 #include "ass_dialogue.h"
 #include "compat.h"
 
-#include <algorithm>
-#include <libaegisub/string_utils.h>
 #include <wx/intl.h>
 
 AssFixStylesFilter::AssFixStylesFilter()
@@ -48,12 +46,8 @@ AssFixStylesFilter::AssFixStylesFilter()
 }
 
 void AssFixStylesFilter::ProcessSubs(AssFile *subs) {
-	auto styles = subs->GetStyles();
-	for (auto& str : styles) agi::util::strings::to_lower_inplace(str);
-	sort(begin(styles), end(styles));
-
 	for (auto& diag : subs->Events) {
-		if (!binary_search(begin(styles), end(styles), agi::util::strings::to_lower_copy(diag.Style.get())))
+		if (!subs->GetStyle(diag.Style))
 			diag.Style = "Default";
 	}
 }

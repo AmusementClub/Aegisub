@@ -100,3 +100,36 @@ TEST(ass_dialogue, exact_millisecond_dialogue_text_roundtrips_through_parser) {
 	EXPECT_EQ(20499, parsed.End.GetMillisecond());
 	EXPECT_EQ("exact", parsed.Text.get());
 }
+
+TEST(ass_dialogue, override_parser_accepts_compatible_signed_fs_kt_and_fsc) {
+	AssDialogue line;
+	line.Text = "{\\fs+10\\fs-5\\kt50\\fsc}x";
+
+	auto blocks = line.ParseTags();
+	ASSERT_EQ(2u, blocks.size());
+	ASSERT_EQ(AssBlockType::OVERRIDE, blocks[0]->GetType());
+
+	auto *override_block = dynamic_cast<AssDialogueBlockOverride *>(blocks[0].get());
+	ASSERT_NE(nullptr, override_block);
+	ASSERT_EQ(4u, override_block->Tags.size());
+
+	EXPECT_TRUE(override_block->Tags[0].IsValid());
+	EXPECT_EQ("\\fs", override_block->Tags[0].Name);
+	ASSERT_EQ(1u, override_block->Tags[0].Params.size());
+	EXPECT_EQ("+10", override_block->Tags[0].Params[0].Get<std::string>());
+
+	EXPECT_TRUE(override_block->Tags[1].IsValid());
+	EXPECT_EQ("\\fs", override_block->Tags[1].Name);
+	ASSERT_EQ(1u, override_block->Tags[1].Params.size());
+	EXPECT_EQ("-5", override_block->Tags[1].Params[0].Get<std::string>());
+
+	EXPECT_TRUE(override_block->Tags[2].IsValid());
+	EXPECT_EQ("\\kt", override_block->Tags[2].Name);
+	ASSERT_EQ(1u, override_block->Tags[2].Params.size());
+	EXPECT_EQ(50, override_block->Tags[2].Params[0].Get<int>());
+
+	EXPECT_TRUE(override_block->Tags[3].IsValid());
+	EXPECT_EQ("\\fsc", override_block->Tags[3].Name);
+	EXPECT_TRUE(override_block->Tags[3].Params.empty());
+	EXPECT_EQ("{\\fs+10\\fs-5\\kt50\\fsc}", override_block->GetText());
+}

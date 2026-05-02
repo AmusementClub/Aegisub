@@ -247,6 +247,7 @@ static void load_protos() {
 
 	proto[++i].Set("\\fscx", VariableDataType::FLOAT, AssParameterClass::RELATIVE_SIZE_X); // \fscx<percent>
 	proto[++i].Set("\\fscy", VariableDataType::FLOAT, AssParameterClass::RELATIVE_SIZE_Y); // \fscy<percent>
+	proto[++i].name = "\\fsc"; // \fsc resets font scale in VSFilter/libass
 	// \pos(<x>,<y>)
 	i++;
 	proto[i].name = "\\pos";
@@ -282,13 +283,12 @@ static void load_protos() {
 	proto[++i].Set("\\3a", VariableDataType::TEXT, AssParameterClass::ALPHA); // \3a&H<aa>&
 	proto[++i].Set("\\4a", VariableDataType::TEXT, AssParameterClass::ALPHA); // \4a&H<aa>&
 	proto[++i].Set("\\fe", VariableDataType::TEXT); // \fe<charset>
+	proto[++i].Set("\\kt", VariableDataType::INT, AssParameterClass::KARAOKE); // \kt<duration>
 	proto[++i].Set("\\ko", VariableDataType::INT, AssParameterClass::KARAOKE); // \ko<duration>
 	proto[++i].Set("\\kf", VariableDataType::INT, AssParameterClass::KARAOKE); // \kf<duration>
 	proto[++i].Set("\\be", VariableDataType::INT, AssParameterClass::ABSOLUTE_SIZE_XY); // \be<strength>
 	proto[++i].Set("\\blur", VariableDataType::FLOAT, AssParameterClass::ABSOLUTE_SIZE_XY); // \blur<strength>
 	proto[++i].Set("\\fn", VariableDataType::TEXT); // \fn<name>
-	proto[++i].Set("\\fs+", VariableDataType::FLOAT); // \fs+<size>
-	proto[++i].Set("\\fs-", VariableDataType::FLOAT); // \fs-<size>
 	proto[++i].Set("\\fs", VariableDataType::FLOAT, AssParameterClass::ABSOLUTE_SIZE_Y); // \fs<size>
 	proto[++i].Set("\\an", VariableDataType::INT); // \an<alignment>
 	proto[++i].Set("\\c", VariableDataType::TEXT, AssParameterClass::COLOR); // \c&H<bbggrr>&
@@ -367,7 +367,7 @@ void parse_parameters(AssOverrideTag *tag, const std::string &text, AssOverrideT
 	std::vector<std::string> paramList = tokenize(text);
 	size_t totalPars = paramList.size();
 
-	int parsFlag = 1 << (totalPars - 1); // Get optional parameters flag
+	int parsFlag = totalPars ? 1 << (totalPars - 1) : 0; // Get optional parameters flag
 	// vector (i)clip is the second clip proto_ittype in the list
 	if ((tag->Name == "\\clip" || tag->Name == "\\iclip") && totalPars != 4) {
 		++proto_it;

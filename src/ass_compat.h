@@ -5,6 +5,7 @@
 #include <libaegisub/color.h>
 #include <libaegisub/string_utils.h>
 
+#include <algorithm>
 #include <charconv>
 #include <cstdint>
 #include <limits>
@@ -265,6 +266,63 @@ inline bool ParseOverrideAlpha(agi::util::strings::view text, int& out) {
 		return false;
 	out = color.r;
 	return true;
+}
+
+inline std::string FormatInteger(int value) {
+	return std::to_string(value);
+}
+
+inline std::string FormatFloat(double value) {
+	char buffer[64];
+	auto result = std::to_chars(std::begin(buffer), std::end(buffer), value, std::chars_format::fixed, 3);
+	std::string text(buffer, result.ec == std::errc() ? result.ptr : buffer);
+	auto pos = text.find_last_not_of('0');
+	if (pos != text.find('.'))
+		++pos;
+	text.erase(text.begin() + pos, text.end());
+	return text;
+}
+
+inline void append_two_digits(std::string& text, int value) {
+	text.push_back(static_cast<char>('0' + value / 10));
+	text.push_back(static_cast<char>('0' + value % 10));
+}
+
+inline std::string FormatTime(int milliseconds, bool ms_precision = false) {
+	milliseconds = std::max(0, milliseconds);
+	int hours = milliseconds / 3600000;
+	int minutes = (milliseconds / 60000) % 60;
+	int seconds = (milliseconds / 1000) % 60;
+	int centiseconds = (milliseconds % 1000) / 10;
+
+	auto text = std::to_string(hours);
+	text.push_back(':');
+	append_two_digits(text, minutes);
+	text.push_back(':');
+	append_two_digits(text, seconds);
+	text.push_back('.');
+	append_two_digits(text, centiseconds);
+	if (ms_precision)
+		text += static_cast<char>('0' + milliseconds % 10);
+	return text;
+}
+
+inline std::string FormatStyleColor(agi::Color const& color) {
+	return color.GetAssStyleFormatted();
+}
+
+inline std::string FormatOverrideColor(agi::Color const& color) {
+	return color.GetAssOverrideFormatted();
+}
+
+inline std::string FormatOverrideAlpha(int value) {
+	static char const digits[] = "0123456789ABCDEF";
+	auto clamped = std::clamp(value, 0, 255);
+	std::string text = "&H";
+	text.push_back(digits[clamped >> 4]);
+	text.push_back(digits[clamped & 0xF]);
+	text.push_back('&');
+	return text;
 }
 
 }

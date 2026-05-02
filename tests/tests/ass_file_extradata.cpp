@@ -78,3 +78,14 @@ TEST(ass_file_style_lookup, analyzes_renderer_compatibility_repairs_without_rewr
 	EXPECT_FALSE(ordinary.NeedsExplicitRepair());
 	EXPECT_EQ("foo", ordinary.suggested_name);
 }
+
+TEST(ass_compat_format, formats_canonical_ass_values) {
+	EXPECT_EQ("-12", AssCompat::FormatInteger(-12));
+	EXPECT_EQ("1.25", AssCompat::FormatFloat(1.25));
+	EXPECT_EQ("2", AssCompat::FormatFloat(2.0));
+	EXPECT_EQ("0:00:12.34", AssCompat::FormatTime(12345));
+	EXPECT_EQ("12:00:00.005", AssCompat::FormatTime(43200005, true));
+	EXPECT_EQ("&H04030201", AssCompat::FormatStyleColor(agi::Color(1, 2, 3, 4)));
+	EXPECT_EQ("&H030201&", AssCompat::FormatOverrideColor(agi::Color(1, 2, 3, 4)));
+	EXPECT_EQ("&HFF&", AssCompat::FormatOverrideAlpha(300));
+}

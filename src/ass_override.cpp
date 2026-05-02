@@ -457,7 +457,7 @@ std::string AssDialogueBlockOverride::GetText() {
 void AssDialogueBlockOverride::ProcessParameters(ProcessParametersCallback callback, void *userData) {
 	for (auto& tag : Tags) {
 		for (auto& par : tag.Params) {
-			if (par.omitted) continue;
+			if (par.omitted || par.empty) continue;
 
 			callback(tag.Name, &par, userData);
 

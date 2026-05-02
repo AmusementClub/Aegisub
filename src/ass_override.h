@@ -88,7 +88,7 @@ public:
 	template<class T> void Set(T param);
 	template<class T> T Get() const;
 	template<class T> T Get(T def) const {
-		return !omitted ? Get<T>() : def;
+		return !omitted && !empty ? Get<T>() : def;
 	}
 };
 

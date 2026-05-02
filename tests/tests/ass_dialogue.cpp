@@ -217,6 +217,46 @@ TEST(ass_dialogue, override_parser_distinguishes_empty_reset_parameters) {
 	EXPECT_EQ("{\\fs\\bord\\move(1,,3,)}", override_block->GetText());
 }
 
+TEST(ass_dialogue, empty_override_parameters_read_as_semantic_defaults) {
+	AssDialogue line;
+	line.Text = "{\\fn\\fs}x";
+
+	auto blocks = line.ParseTags();
+	ASSERT_EQ(2u, blocks.size());
+
+	auto *override_block = dynamic_cast<AssDialogueBlockOverride *>(blocks[0].get());
+	ASSERT_NE(nullptr, override_block);
+	ASSERT_EQ(2u, override_block->Tags.size());
+
+	EXPECT_TRUE(override_block->Tags[0].Params[0].empty);
+	EXPECT_EQ("Arial", override_block->Tags[0].Params[0].Get<std::string>("Arial"));
+	EXPECT_TRUE(override_block->Tags[1].Params[0].empty);
+	EXPECT_EQ(20.0, override_block->Tags[1].Params[0].Get<double>(20.0));
+	EXPECT_EQ("{\\fn\\fs}", override_block->GetText());
+}
+
+TEST(ass_dialogue, empty_override_parameters_are_not_processed_as_values) {
+	AssDialogue line;
+	line.Text = "{\\bord\\shad4}x";
+
+	auto blocks = line.ParseTags();
+	ASSERT_EQ(2u, blocks.size());
+
+	auto *override_block = dynamic_cast<AssDialogueBlockOverride *>(blocks[0].get());
+	ASSERT_NE(nullptr, override_block);
+	ASSERT_EQ(2u, override_block->Tags.size());
+
+	int processed = 0;
+	override_block->ProcessParameters([](std::string const&, AssOverrideParameter *param, void *userdata) {
+		auto *count = static_cast<int *>(userdata);
+		++*count;
+		param->Set(param->Get<double>() * 2.0);
+	}, &processed);
+
+	EXPECT_EQ(1, processed);
+	EXPECT_EQ("{\\bord\\shad8}", override_block->GetText());
+}
+
 TEST(ass_dialogue, transform_parser_keeps_style_modifier_commas_together) {
 	AssDialogue line;
 	line.Text = "{\\t(0,1000,\\fnA,B\\bord5)}x";

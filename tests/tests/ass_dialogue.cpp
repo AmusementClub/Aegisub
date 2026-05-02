@@ -216,3 +216,45 @@ TEST(ass_dialogue, override_parser_distinguishes_empty_reset_parameters) {
 	EXPECT_TRUE(override_block->Tags[2].Params[5].omitted);
 	EXPECT_EQ("{\\fs\\bord\\move(1,,3,)}", override_block->GetText());
 }
+
+TEST(ass_dialogue, transform_parser_keeps_style_modifier_commas_together) {
+	AssDialogue line;
+	line.Text = "{\\t(0,1000,\\fnA,B\\bord5)}x";
+
+	auto blocks = line.ParseTags();
+	ASSERT_EQ(2u, blocks.size());
+
+	auto *override_block = dynamic_cast<AssDialogueBlockOverride *>(blocks[0].get());
+	ASSERT_NE(nullptr, override_block);
+	ASSERT_EQ(1u, override_block->Tags.size());
+
+	auto const& tag = override_block->Tags[0];
+	EXPECT_EQ("\\t", tag.Name);
+	ASSERT_EQ(4u, tag.Params.size());
+	EXPECT_EQ(0, tag.Params[0].Get<int>());
+	EXPECT_EQ(1000, tag.Params[1].Get<int>());
+	EXPECT_TRUE(tag.Params[2].omitted);
+	EXPECT_EQ("\\fnA,B\\bord5", tag.Params[3].Get<std::string>());
+	EXPECT_EQ("{\\t(0,1000,\\fnA,B\\bord5)}", override_block->GetText());
+}
+
+TEST(ass_dialogue, transform_parser_keeps_nested_clip_commas_in_modifier_block) {
+	AssDialogue line;
+	line.Text = "{\\t(0,1000,2,\\clip(1,2,3,4)\\bord5)}x";
+
+	auto blocks = line.ParseTags();
+	ASSERT_EQ(2u, blocks.size());
+
+	auto *override_block = dynamic_cast<AssDialogueBlockOverride *>(blocks[0].get());
+	ASSERT_NE(nullptr, override_block);
+	ASSERT_EQ(1u, override_block->Tags.size());
+
+	auto const& tag = override_block->Tags[0];
+	EXPECT_EQ("\\t", tag.Name);
+	ASSERT_EQ(4u, tag.Params.size());
+	EXPECT_EQ(0, tag.Params[0].Get<int>());
+	EXPECT_EQ(1000, tag.Params[1].Get<int>());
+	EXPECT_EQ(2.0, tag.Params[2].Get<double>());
+	EXPECT_EQ("\\clip(1,2,3,4)\\bord5", tag.Params[3].Get<std::string>());
+	EXPECT_EQ("{\\t(0,1000,2,\\clip(1,2,3,4)\\bord5)}", override_block->GetText());
+}

@@ -346,6 +346,21 @@ std::vector<std::string> tokenize(const std::string &text) {
 			char c = text[i];
 			// parDepth 1 is where we start, and the tag-level we're interested in parsing on
 			if (c == ',' && parDepth == 1) break;
+			if (c == '\\' && parDepth == 1) {
+				// A backslash argument in a parenthesized tag is a style-modifier block.
+				// Commas after it belong to that block, as in VSFilter/libass \t parsing.
+				while (i < textlen && parDepth > 0) {
+					c = text[i];
+					if (c == '(')
+						parDepth++;
+					else if (c == ')') {
+						if (--parDepth == 0)
+							break;
+					}
+					i++;
+				}
+				break;
+			}
 			if (c == '(') parDepth++;
 			else if (c == ')') {
 				if (--parDepth == 0) {
@@ -410,7 +425,9 @@ void AssDialogueBlockOverride::ParseTags() {
 	size_t start = 0;
 	for (size_t i = 1; i < text.size(); ++i) {
 		if (depth > 0) {
-			if (text[i] == ')')
+			if (text[i] == '(')
+				++depth;
+			else if (text[i] == ')')
 				--depth;
 		}
 		else if (text[i] == '\\') {

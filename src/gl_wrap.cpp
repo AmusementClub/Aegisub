@@ -423,11 +423,11 @@ void OpenGLWrapper::SetScale(Vector2D scale) {
 	glScalef(scale.X() / 100.f, scale.Y() / 100.f, 1.f);
 }
 
-void OpenGLWrapper::SetRotation(float x, float y, float z, float zScale) {
+void OpenGLWrapper::SetRotation(float x, float y, float z, float perspective_z_scale) {
 	PrepareTransform();
 	float matrix[16] = { 2500, 0, 0, 0, 0, 2500, 0, 0, 0, 0, 1, 1, 0, 0, 2500, 2500 };
 	glMultMatrixf(matrix);
-	glScalef(1.f, 1.f, 8.f / zScale);
+	glScalef(1.f, 1.f, perspective_z_scale);
 	glRotatef(y, 0.f, -1.f, 0.f);
 	glRotatef(x, -1.f, 0.f, 0.f);
 	glRotatef(z, 0.f, 0.f, -1.f);

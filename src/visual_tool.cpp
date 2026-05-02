@@ -21,6 +21,7 @@
 #include "visual_tool.h"
 
 #include "ass_dialogue.h"
+#include "async_video_provider.h"
 #include "ass_file.h"
 #include "ass_file_app.h"
 #include "ass_style.h"
@@ -215,6 +216,7 @@ void VisualToolBase::SetCanvasSize(int w, int h) {
 }
 
 void VisualToolBase::SetDisplayArea(int x, int y, int w, int h) {
+	UpdateLayoutResolution();
 	if (x == video_pos.X() && y == video_pos.Y() && w == video_res.X() && h == video_res.Y()) return;
 
 	video_pos = Vector2D(x, y);

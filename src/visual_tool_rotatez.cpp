@@ -37,7 +37,7 @@ static const float deg2rad = 3.1415926536f / 180.f;
 static const float rad2deg = 180.f / 3.1415926536f;
 
 namespace {
-void DrawProjectedAnnulus(VideoOverlayDrawContext &context, Vector2D origin, Vector2D scale, float rx, float ry, float outer_radius, float inner_radius, float start_deg, float end_deg) {
+void DrawProjectedAnnulus(VideoOverlayDrawContext &context, Vector2D origin, Vector2D scale, float rx, float ry, float outer_radius, float inner_radius, float start_deg, float end_deg, float perspective_z_scale) {
 	bool const full_circle = std::abs(end_deg - start_deg) < 0.001f;
 	float arc_start = start_deg * deg2rad;
 	float arc_end = full_circle ? (start_deg + 360.0f) * deg2rad : end_deg * deg2rad;
@@ -53,8 +53,8 @@ void DrawProjectedAnnulus(VideoOverlayDrawContext &context, Vector2D origin, Vec
 		float const t = static_cast<float>(i) / steps;
 		float const angle = arc_start + (arc_end - arc_start) * t;
 		Vector2D const dir = Vector2D::FromAngle(angle);
-		outer_points.push_back(video_overlay_helpers::ProjectScaledRotatedPoint(dir * outer_radius, origin, scale, rx, ry, 0.0f));
-		inner_points.push_back(video_overlay_helpers::ProjectScaledRotatedPoint(dir * inner_radius, origin, scale, rx, ry, 0.0f));
+		outer_points.push_back(video_overlay_helpers::ProjectScaledRotatedPoint(dir * outer_radius, origin, scale, rx, ry, 0.0f, perspective_z_scale));
+		inner_points.push_back(video_overlay_helpers::ProjectScaledRotatedPoint(dir * inner_radius, origin, scale, rx, ry, 0.0f, perspective_z_scale));
 	}
 
 	for (int i = 0; i < steps; ++i) {
@@ -94,7 +94,8 @@ void VisualToolRotateZ::Draw() {
 
 	// Set up the projection
 	gl.SetOrigin(org->pos);
-	gl.SetRotation(rotation_x, rotation_y, 0);
+	float const perspective_z_scale = video_overlay_helpers::GetLayoutResAdjustedPerspectiveZScale(script_res, layout_res);
+	gl.SetRotation(rotation_x, rotation_y, 0, perspective_z_scale);
 	gl.SetScale(scale);
 
 	// Draw the circle
@@ -150,6 +151,7 @@ void VisualToolRotateZ::DrawOverlay(VideoOverlayDrawContext &context) {
 	wxColour const line_color_primary = to_wx(line_color_primary_opt->GetColor());
 	wxColour const line_color_secondary = to_wx(line_color_secondary_opt->GetColor());
 	wxColour const highlight_color = to_wx(highlight_color_primary_opt->GetColor());
+	float const perspective_z_scale = video_overlay_helpers::GetLayoutResAdjustedPerspectiveZScale(script_res, layout_res);
 
 	float radius = (pos - org->pos).Len();
 	float const original_radius = radius;
@@ -158,35 +160,35 @@ void VisualToolRotateZ::DrawOverlay(VideoOverlayDrawContext &context) {
 
 	context.SetLineColour(line_color_secondary, 1.0f, 1);
 	context.SetFillColour(highlight_color, 0.3f);
-	DrawProjectedAnnulus(context, org->pos, scale, rotation_x, rotation_y, radius + 4, radius - 4, 0.0f, 0.0f);
+	DrawProjectedAnnulus(context, org->pos, scale, rotation_x, rotation_y, radius + 4, radius - 4, 0.0f, 0.0f, perspective_z_scale);
 
 	int const markers = 6;
 	float const mark_start = -90.0f / markers;
 	float const mark_end = mark_start + (180.0f / markers);
 	for (int i = 0; i < markers; ++i) {
 		float const marker_angle = i * (360.0f / markers);
-		DrawProjectedAnnulus(context, org->pos, scale, rotation_x, rotation_y, radius + 30, radius + 12, marker_angle + mark_start, marker_angle + mark_end);
+		DrawProjectedAnnulus(context, org->pos, scale, rotation_x, rotation_y, radius + 30, radius + 12, marker_angle + mark_start, marker_angle + mark_end, perspective_z_scale);
 	}
 
 	Vector2D const angle_vec = Vector2D::FromAngle(angle * deg2rad);
 	context.SetLineColour(line_color_primary, 1.0f, 2);
 	context.SetFillColour(line_color_primary, 0.0f);
-	video_overlay_helpers::DrawProjectedLine(context, angle_vec * -radius, angle_vec * radius, org->pos, scale, rotation_x, rotation_y, 0.0f);
+	video_overlay_helpers::DrawProjectedLine(context, angle_vec * -radius, angle_vec * radius, org->pos, scale, rotation_x, rotation_y, 0.0f, perspective_z_scale);
 
 	if (org->pos != pos) {
 		Vector2D const rotated_pos = Vector2D::FromAngle(angle * deg2rad - (pos - org->pos).Angle()) * original_radius;
-		video_overlay_helpers::DrawProjectedLine(context, Vector2D(), rotated_pos, org->pos, scale, rotation_x, rotation_y, 0.0f);
-		video_overlay_helpers::DrawProjectedLine(context, rotated_pos - angle_vec * 20, rotated_pos + angle_vec * 20, org->pos, scale, rotation_x, rotation_y, 0.0f);
+		video_overlay_helpers::DrawProjectedLine(context, Vector2D(), rotated_pos, org->pos, scale, rotation_x, rotation_y, 0.0f, perspective_z_scale);
+		video_overlay_helpers::DrawProjectedLine(context, rotated_pos - angle_vec * 20, rotated_pos + angle_vec * 20, org->pos, scale, rotation_x, rotation_y, 0.0f, perspective_z_scale);
 	}
 
 	context.SetLineColour(line_color_secondary, 1.0f, 1);
 	context.SetFillColour(highlight_color, 0.3f);
 	context.DrawCircle(
-		video_overlay_helpers::ProjectScaledRotatedPoint(angle_vec * radius, org->pos, scale, rotation_x, rotation_y, 0.0f),
-		video_overlay_helpers::ProjectCircleRadius(angle_vec * radius, 4.0f, org->pos, scale, rotation_x, rotation_y, 0.0f));
+		video_overlay_helpers::ProjectScaledRotatedPoint(angle_vec * radius, org->pos, scale, rotation_x, rotation_y, 0.0f, perspective_z_scale),
+		video_overlay_helpers::ProjectCircleRadius(angle_vec * radius, 4.0f, org->pos, scale, rotation_x, rotation_y, 0.0f, perspective_z_scale));
 	context.DrawCircle(
-		video_overlay_helpers::ProjectScaledRotatedPoint(angle_vec * -radius, org->pos, scale, rotation_x, rotation_y, 0.0f),
-		video_overlay_helpers::ProjectCircleRadius(angle_vec * -radius, 4.0f, org->pos, scale, rotation_x, rotation_y, 0.0f));
+		video_overlay_helpers::ProjectScaledRotatedPoint(angle_vec * -radius, org->pos, scale, rotation_x, rotation_y, 0.0f, perspective_z_scale),
+		video_overlay_helpers::ProjectCircleRadius(angle_vec * -radius, 4.0f, org->pos, scale, rotation_x, rotation_y, 0.0f, perspective_z_scale));
 
 	if (mouse_pos && (mouse_pos - org->pos).SquareLen() > 100) {
 		context.SetLineColour(line_color_secondary, 1.0f, 1);

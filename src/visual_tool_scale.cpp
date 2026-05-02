@@ -52,7 +52,8 @@ void VisualToolScale::Draw() {
 
 	// Set the origin to the base point and apply the line's rotation
 	gl.SetOrigin(base_point);
-	gl.SetRotation(rx, ry, rz);
+	float const perspective_z_scale = video_overlay_helpers::GetLayoutResAdjustedPerspectiveZScale(script_res, layout_res);
+	gl.SetRotation(rx, ry, rz, perspective_z_scale);
 
 	Vector2D scale_half_length = scale * base_len / 200;
 	float minor_dim_offset = base_len / 2 + guide_size * 1.5f;
@@ -102,6 +103,7 @@ void VisualToolScale::DrawOverlay(VideoOverlayDrawContext &context) {
 	wxColour const line_color_secondary = to_wx(line_color_secondary_opt->GetColor());
 	wxColour const highlight_color = to_wx(highlight_color_primary_opt->GetColor());
 	Vector2D const overlay_scale(100.0f, 100.0f);
+	float const perspective_z_scale = video_overlay_helpers::GetLayoutResAdjustedPerspectiveZScale(script_res, layout_res);
 
 	Vector2D const base_point = pos
 		.Max(Vector2D(base_len / 2 + guide_size, base_len / 2 + guide_size))
@@ -116,23 +118,23 @@ void VisualToolScale::DrawOverlay(VideoOverlayDrawContext &context) {
 	Vector2D const y_p2(scale_half_length.X(), minor_dim_offset);
 
 	context.SetLineColour(line_color_primary, 1.f, 2);
-	video_overlay_helpers::DrawProjectedLine(context, x_p1, x_p2, base_point, overlay_scale, rx, ry, rz);
-	video_overlay_helpers::DrawProjectedLine(context, y_p1, y_p2, base_point, overlay_scale, rx, ry, rz);
+	video_overlay_helpers::DrawProjectedLine(context, x_p1, x_p2, base_point, overlay_scale, rx, ry, rz, perspective_z_scale);
+	video_overlay_helpers::DrawProjectedLine(context, y_p1, y_p2, base_point, overlay_scale, rx, ry, rz, perspective_z_scale);
 
 	context.SetLineColour(line_color_secondary, 1.f, 1);
 	context.SetFillColour(highlight_color, 0.3f);
 	context.DrawCircle(
-		video_overlay_helpers::ProjectScaledRotatedPoint(x_p1, base_point, overlay_scale, rx, ry, rz),
-		video_overlay_helpers::ProjectCircleRadius(x_p1, 4.0f, base_point, overlay_scale, rx, ry, rz));
+		video_overlay_helpers::ProjectScaledRotatedPoint(x_p1, base_point, overlay_scale, rx, ry, rz, perspective_z_scale),
+		video_overlay_helpers::ProjectCircleRadius(x_p1, 4.0f, base_point, overlay_scale, rx, ry, rz, perspective_z_scale));
 	context.DrawCircle(
-		video_overlay_helpers::ProjectScaledRotatedPoint(x_p2, base_point, overlay_scale, rx, ry, rz),
-		video_overlay_helpers::ProjectCircleRadius(x_p2, 4.0f, base_point, overlay_scale, rx, ry, rz));
+		video_overlay_helpers::ProjectScaledRotatedPoint(x_p2, base_point, overlay_scale, rx, ry, rz, perspective_z_scale),
+		video_overlay_helpers::ProjectCircleRadius(x_p2, 4.0f, base_point, overlay_scale, rx, ry, rz, perspective_z_scale));
 	context.DrawCircle(
-		video_overlay_helpers::ProjectScaledRotatedPoint(y_p1, base_point, overlay_scale, rx, ry, rz),
-		video_overlay_helpers::ProjectCircleRadius(y_p1, 4.0f, base_point, overlay_scale, rx, ry, rz));
+		video_overlay_helpers::ProjectScaledRotatedPoint(y_p1, base_point, overlay_scale, rx, ry, rz, perspective_z_scale),
+		video_overlay_helpers::ProjectCircleRadius(y_p1, 4.0f, base_point, overlay_scale, rx, ry, rz, perspective_z_scale));
 	context.DrawCircle(
-		video_overlay_helpers::ProjectScaledRotatedPoint(y_p2, base_point, overlay_scale, rx, ry, rz),
-		video_overlay_helpers::ProjectCircleRadius(y_p2, 4.0f, base_point, overlay_scale, rx, ry, rz));
+		video_overlay_helpers::ProjectScaledRotatedPoint(y_p2, base_point, overlay_scale, rx, ry, rz, perspective_z_scale),
+		video_overlay_helpers::ProjectCircleRadius(y_p2, 4.0f, base_point, overlay_scale, rx, ry, rz, perspective_z_scale));
 
 	int const half_len = base_len / 2;
 	context.SetLineColour(line_color_secondary, 1.0f, 1);
@@ -143,21 +145,21 @@ void VisualToolScale::DrawOverlay(VideoOverlayDrawContext &context) {
 		Vector2D(half_len + guide_size, -half_len),
 		Vector2D(half_len + guide_size, half_len),
 		Vector2D(half_len, half_len),
-		base_point, overlay_scale, rx, ry, rz);
+		base_point, overlay_scale, rx, ry, rz, perspective_z_scale);
 	video_overlay_helpers::DrawProjectedQuad(
 		context,
 		Vector2D(-half_len, half_len),
 		Vector2D(half_len, half_len),
 		Vector2D(half_len, half_len + guide_size),
 		Vector2D(-half_len, half_len + guide_size),
-		base_point, overlay_scale, rx, ry, rz);
+		base_point, overlay_scale, rx, ry, rz, perspective_z_scale);
 	context.SetFillColour(highlight_color, 0.0f);
 
 	context.SetLineColour(line_color_secondary, 1.f, 2);
-	video_overlay_helpers::DrawProjectedLine(context, Vector2D(half_len + guide_size, -half_len), Vector2D(half_len + guide_size + guide_size / 2, -half_len), base_point, overlay_scale, rx, ry, rz);
-	video_overlay_helpers::DrawProjectedLine(context, Vector2D(half_len + guide_size, half_len), Vector2D(half_len + guide_size + guide_size / 2, half_len), base_point, overlay_scale, rx, ry, rz);
-	video_overlay_helpers::DrawProjectedLine(context, Vector2D(-half_len, half_len + guide_size), Vector2D(-half_len, half_len + guide_size + guide_size / 2), base_point, overlay_scale, rx, ry, rz);
-	video_overlay_helpers::DrawProjectedLine(context, Vector2D(half_len, half_len + guide_size), Vector2D(half_len, half_len + guide_size + guide_size / 2), base_point, overlay_scale, rx, ry, rz);
+	video_overlay_helpers::DrawProjectedLine(context, Vector2D(half_len + guide_size, -half_len), Vector2D(half_len + guide_size + guide_size / 2, -half_len), base_point, overlay_scale, rx, ry, rz, perspective_z_scale);
+	video_overlay_helpers::DrawProjectedLine(context, Vector2D(half_len + guide_size, half_len), Vector2D(half_len + guide_size + guide_size / 2, half_len), base_point, overlay_scale, rx, ry, rz, perspective_z_scale);
+	video_overlay_helpers::DrawProjectedLine(context, Vector2D(-half_len, half_len + guide_size), Vector2D(-half_len, half_len + guide_size + guide_size / 2), base_point, overlay_scale, rx, ry, rz, perspective_z_scale);
+	video_overlay_helpers::DrawProjectedLine(context, Vector2D(half_len, half_len + guide_size), Vector2D(half_len, half_len + guide_size + guide_size / 2), base_point, overlay_scale, rx, ry, rz, perspective_z_scale);
 }
 
 bool VisualToolScale::InitializeHold() {

@@ -48,7 +48,7 @@ public:
 
 	void SetScale(Vector2D scale);
 	void SetOrigin(Vector2D origin);
-	void SetRotation(float x, float y, float z, float zScale = 1.f);
+	void SetRotation(float x, float y, float z, float perspective_z_scale = 8.f);
 	void SetShear(float x, float y);
 	void ResetTransform();
 

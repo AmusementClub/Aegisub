@@ -154,6 +154,7 @@ if(GTEST_FOUND)
         tests/tests/video_property_update.cpp
         tests/tests/video_aspect_ratio_ops.cpp
         tests/tests/video_navigation_ops.cpp
+        tests/tests/video_overlay_helpers.cpp
         tests/tests/navigation_preview_policy.cpp
         tests/tests/playback_transport_policy.cpp
         tests/tests/video_session_ops.cpp

@@ -9,6 +9,22 @@
 
 namespace AssCompat {
 
+inline agi::util::strings::view StripStyleCompatibilityPrefix(agi::util::strings::view name) {
+	while (!name.empty() && name.front() == '*')
+		name.remove_prefix(1);
+	return name;
+}
+
+inline bool StyleNamesMatch(agi::util::strings::view defined_name, agi::util::strings::view lookup_name) {
+	auto defined = StripStyleCompatibilityPrefix(defined_name);
+	auto lookup = StripStyleCompatibilityPrefix(lookup_name);
+
+	if (agi::util::strings::iequals(lookup, "Default"))
+		lookup = "Default";
+
+	return defined == lookup;
+}
+
 inline bool digit_value(char c, unsigned base, std::uint32_t& value) {
 	if (c >= '0' && c <= '9')
 		value = static_cast<std::uint32_t>(c - '0');

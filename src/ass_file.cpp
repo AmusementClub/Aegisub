@@ -18,6 +18,7 @@
 #include "ass_file.h"
 
 #include "ass_attachment.h"
+#include "ass_compat.h"
 #include "ass_dialogue.h"
 #include "ass_info.h"
 #include "ass_style.h"
@@ -271,7 +272,7 @@ std::vector<std::string> AssFile::GetStyles() const {
 
 AssStyle *AssFile::GetStyle(std::string const& name) {
 	for (auto& style : Styles) {
-		if (agi::util::strings::iequals(style.name, name))
+		if (AssCompat::StyleNamesMatch(style.name, name))
 			return &style;
 	}
 	return nullptr;

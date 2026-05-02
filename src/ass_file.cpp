@@ -214,6 +214,11 @@ void AssFile::SetScriptInfo(std::string const& key, std::string const& value) {
 		Info.emplace_back(key, value);
 }
 
+void AssFile::GetLayoutResolution(int &lw, int &lh) const {
+	lw = GetScriptInfoAsInt("LayoutResX");
+	lh = GetScriptInfoAsInt("LayoutResY");
+}
+
 void AssFile::GetResolution(int &sw, int &sh) const {
 	GetResolution(GetPreferredResolutionType(), sw, sh);
 }

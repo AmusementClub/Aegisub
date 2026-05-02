@@ -51,7 +51,10 @@ void VisualToolRotateXY::Draw() {
 
 	// Transform grid
 	gl.SetOrigin(org->pos);
-	gl.SetRotation(angle_x, angle_y, angle_z);
+	// libass uses camera distance = 20000 * blur_scale_y,
+	// where blur_scale_y = frame_height / LayoutResY.
+	// Compensate for PlayRes ≠ LayoutRes in the OpenGL preview.
+	gl.SetRotation(angle_x, angle_y, angle_z, script_res.Y() / layout_res.Y());
 	gl.SetShear(fax, fay);
 
 	// Draw grid

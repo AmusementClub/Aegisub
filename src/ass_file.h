@@ -147,6 +147,8 @@ public:
 	ScriptResolutionType GetResolutionType(ScriptResolutionType preferred) const;
 	ScriptResolutionType GetPreferredResolutionType() const;
 	void SetResolution(ScriptResolutionType type, int w, int h);
+	/// @brief Get the specified layout resolution, or 0 if not present
+	void GetLayoutResolution(int &w, int &h) const;
 	/// Get the value in a [Script Info] key as int, or 0 if it is not present
 	int GetScriptInfoAsInt(std::string const& key) const;
 	/// Get the value in a [Script Info] key as string.

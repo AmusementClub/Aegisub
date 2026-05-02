@@ -28,6 +28,7 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "options.h"
+#include "project.h"
 #include "selection_controller.h"
 #include "video_controller.h"
 #include "video_display.h"
@@ -56,6 +57,7 @@ VisualToolBase::VisualToolBase(VideoDisplay *parent, agi::Context *context)
 {
 	auto core = c->GetCore();
 	UpdateScriptResolution();
+	UpdateLayoutResolution();
 	active_line = GetActiveDialogueLine();
 	connections.push_back(core.selectionController->AddActiveLineListener(&VisualToolBase::OnActiveLineChanged, this));
 	connections.push_back(core.videoController->AddFramePresentedListener(&VisualToolBase::OnFramePresented, this));
@@ -67,6 +69,23 @@ void VisualToolBase::UpdateScriptResolution() {
 	auto core = c->GetCore();
 	core.ass->GetResolution(ScriptResolutionType::PlayRes, script_w, script_h);
 	script_res = Vector2D(script_w, script_h);
+}
+
+void VisualToolBase::UpdateLayoutResolution() {
+	int lw, lh;
+	c->GetCore().ass->GetLayoutResolution(lw, lh);
+	if (lw <= 0 || lh <= 0) {
+		// Fall back to video storage resolution (what libass uses when LayoutRes is unset)
+		if (auto *provider = c->GetCore().project->VideoProvider()) {
+			lw = provider->GetWidth();
+			lh = provider->GetHeight();
+		} else {
+			// Last resort: use PlayRes
+			lw = script_res.X();
+			lh = script_res.Y();
+		}
+	}
+	layout_res = Vector2D(lw, lh);
 }
 
 void VisualToolBase::OnCommit(int type, AssDialogue const* changed) {
@@ -86,6 +105,7 @@ void VisualToolBase::OnCommit(int type, AssDialogue const* changed) {
 	if (coordinate_system_changed) {
 		active_line = new_active_line;
 		UpdateScriptResolution();
+		UpdateLayoutResolution();
 		OnCoordinateSystemsChanged();
 		needs_render = true;
 	}

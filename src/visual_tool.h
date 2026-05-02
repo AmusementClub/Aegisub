@@ -52,6 +52,7 @@ class VisualToolBase {
 	void OnCommit(int type, AssDialogue const* changed);
 	void OnFramePresented(int new_frame);
 	void UpdateScriptResolution();
+	void UpdateLayoutResolution();
 
 	void OnMouseCaptureLost(wxMouseCaptureLostEvent &);
 
@@ -104,7 +105,8 @@ protected:
 
 	Vector2D mouse_pos; ///< Last seen mouse position
 	Vector2D drag_start; ///< Mouse position at the beginning of the last drag
-	Vector2D script_res; ///< Script resolution
+	Vector2D script_res; ///< Script resolution (PlayRes)
+	Vector2D layout_res; ///< Layout resolution (for \frx/\fry perspective preview)
 	Vector2D canvas_size; ///< Size of the display canvas
 	Vector2D video_pos; ///< Top-left corner of the video in the display area
 	Vector2D video_res; ///< Video resolution

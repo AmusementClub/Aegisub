@@ -184,3 +184,35 @@ TEST(ass_dialogue, override_parser_accepts_compatible_signed_fs_kt_and_fsc) {
 	EXPECT_TRUE(override_block->Tags[3].Params.empty());
 	EXPECT_EQ("{\\fs+10\\fs-5\\kt50\\fsc}", override_block->GetText());
 }
+
+TEST(ass_dialogue, override_parser_distinguishes_empty_reset_parameters) {
+	AssDialogue line;
+	line.Text = "{\\fs\\bord()\\move(1,,3,)}x";
+
+	auto blocks = line.ParseTags();
+	ASSERT_EQ(2u, blocks.size());
+
+	auto *override_block = dynamic_cast<AssDialogueBlockOverride *>(blocks[0].get());
+	ASSERT_NE(nullptr, override_block);
+	ASSERT_EQ(3u, override_block->Tags.size());
+
+	ASSERT_EQ(1u, override_block->Tags[0].Params.size());
+	EXPECT_EQ("\\fs", override_block->Tags[0].Name);
+	EXPECT_FALSE(override_block->Tags[0].Params[0].omitted);
+	EXPECT_TRUE(override_block->Tags[0].Params[0].empty);
+
+	ASSERT_EQ(1u, override_block->Tags[1].Params.size());
+	EXPECT_EQ("\\bord", override_block->Tags[1].Name);
+	EXPECT_FALSE(override_block->Tags[1].Params[0].omitted);
+	EXPECT_TRUE(override_block->Tags[1].Params[0].empty);
+
+	ASSERT_EQ(6u, override_block->Tags[2].Params.size());
+	EXPECT_EQ("\\move", override_block->Tags[2].Name);
+	EXPECT_FALSE(override_block->Tags[2].Params[0].empty);
+	EXPECT_TRUE(override_block->Tags[2].Params[1].empty);
+	EXPECT_FALSE(override_block->Tags[2].Params[2].empty);
+	EXPECT_TRUE(override_block->Tags[2].Params[3].empty);
+	EXPECT_TRUE(override_block->Tags[2].Params[4].omitted);
+	EXPECT_TRUE(override_block->Tags[2].Params[5].omitted);
+	EXPECT_EQ("{\\fs\\bord\\move(1,,3,)}", override_block->GetText());
+}

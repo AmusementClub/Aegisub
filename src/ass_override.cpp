@@ -57,6 +57,13 @@ AssOverrideParameter::AssOverrideParameter(VariableDataType type, AssParameterCl
 
 AssOverrideParameter::~AssOverrideParameter() = default;
 
+void AssOverrideParameter::SetEmpty() {
+	omitted = false;
+	empty = true;
+	value.clear();
+	block.reset();
+}
+
 template<> std::string AssOverrideParameter::Get<std::string>() const {
 	if (omitted) throw agi::InternalError("AssOverrideParameter::Get() called on omitted parameter");
 	if (block.get()) {
@@ -101,6 +108,7 @@ template<> AssDialogueBlockOverride *AssOverrideParameter::Get<AssDialogueBlockO
 
 template<> void AssOverrideParameter::Set<std::string>(std::string new_value) {
 	omitted = false;
+	empty = false;
 	value = new_value;
 	block.reset();
 }
@@ -365,6 +373,8 @@ void parse_parameters(AssOverrideTag *tag, const std::string &text, AssOverrideT
 
 	// Tokenize text, attempting to find all parameters
 	std::vector<std::string> paramList = tokenize(text);
+	if (paramList.empty() && text.empty() && !proto_it->params.empty())
+		paramList.emplace_back();
 	size_t totalPars = paramList.size();
 
 	int parsFlag = totalPars ? 1 << (totalPars - 1) : 0; // Get optional parameters flag
@@ -382,7 +392,11 @@ void parse_parameters(AssOverrideTag *tag, const std::string &text, AssOverrideT
 		if (!(curproto.optional & parsFlag) || curPar >= totalPars)
 			continue;
 
-		tag->Params.back().Set(paramList[curPar++]);
+		auto const& value = paramList[curPar++];
+		if (value.empty())
+			tag->Params.back().SetEmpty();
+		else
+			tag->Params.back().Set(value);
 	}
 }
 
@@ -476,7 +490,8 @@ AssOverrideTag::operator std::string() const {
 		if (param.omitted) continue;
 		if (!first)
 			result += ",";
-		result += param.Get<std::string>();
+		if (!param.empty)
+			result += param.Get<std::string>();
 		first = false;
 	}
 

@@ -80,8 +80,11 @@ public:
 
 	/// Is this parameter actually present?
 	bool omitted = true;
+	/// Was this parameter explicitly present as empty syntax, which renderers use as reset-to-style/current-default semantics?
+	bool empty = false;
 
 	VariableDataType GetType() const { return type; }
+	void SetEmpty();
 	template<class T> void Set(T param);
 	template<class T> T Get() const;
 	template<class T> T Get(T def) const {

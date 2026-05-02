@@ -34,6 +34,7 @@
 
 #include "ass_style.h"
 
+#include "ass_compat.h"
 #include "ass_parse_error.h"
 
 #include <libaegisub/format.h>
@@ -76,7 +77,7 @@ public:
 
 	int next_int() {
 		int value = 0;
-		if (!agi::util::strings::parse_integer(next_tok(), value))
+		if (!AssCompat::ParseInteger(next_tok(), value))
 			throw SubtitleFormatParseError("Malformed style: bad int field");
 		return value;
 	}

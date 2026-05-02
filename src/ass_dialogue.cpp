@@ -32,6 +32,7 @@
 /// @ingroup subs_storage
 
 #include "ass_dialogue.h"
+#include "ass_compat.h"
 #include "ass_parse_error.h"
 
 #include <libaegisub/of_type_adaptor.h>
@@ -105,7 +106,7 @@ void AssDialogue::Parse(std::string const& raw) {
 	// Get layer number
 	if (ssa)
 		Layer = 0;
-	else if (!agi::util::strings::parse_integer(tmp, Layer))
+	else if (!AssCompat::ParseInteger(tmp, Layer))
 		throw SubtitleFormatParseError("Failed parsing line: " + raw);
 
 	Start = tkn.next_str_trim();
@@ -113,7 +114,7 @@ void AssDialogue::Parse(std::string const& raw) {
 	Style = tkn.next_str_trim();
 	Actor = tkn.next_str_trim();
 	for (int& margin : Margin) {
-		if (!agi::util::strings::parse_integer(tkn.next_str(), margin))
+		if (!AssCompat::ParseInteger(tkn.next_str(), margin))
 			throw SubtitleFormatParseError("Failed parsing line: " + raw);
 		margin = agi::util::mid(-9999, margin, 99999);
 	}

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "../../src/ass_dialogue.h"
+#include "../../src/ass_parse_error.h"
 #include "../../src/ass_time_projection.h"
 
 #include <libaegisub/vfr.h>
@@ -99,6 +100,24 @@ TEST(ass_dialogue, exact_millisecond_dialogue_text_roundtrips_through_parser) {
 	EXPECT_EQ(18497, parsed.Start.GetMillisecond());
 	EXPECT_EQ(20499, parsed.End.GetMillisecond());
 	EXPECT_EQ("exact", parsed.Text.get());
+}
+
+TEST(ass_dialogue, parses_compatible_integer_fields_and_normalizes_output) {
+	AssDialogue parsed("Dialogue: 0x10junk,0:00:00.00,0:00:01.00,Default,,&H 20px,-15tail,+30more,,text");
+
+	EXPECT_EQ(16, parsed.Layer);
+	EXPECT_EQ(32, parsed.Margin[0]);
+	EXPECT_EQ(-15, parsed.Margin[1]);
+	EXPECT_EQ(30, parsed.Margin[2]);
+	EXPECT_EQ(
+		"Dialogue: 16,0:00:00.00,0:00:01.00,Default,,32,-15,30,,text",
+		parsed.GetEntryData());
+}
+
+TEST(ass_dialogue, rejects_integer_fields_without_digits) {
+	EXPECT_THROW(
+		AssDialogue("Dialogue: nope,0:00:00.00,0:00:01.00,Default,,0,0,0,,text"),
+		SubtitleFormatParseError);
 }
 
 TEST(ass_dialogue, override_parser_accepts_compatible_signed_fs_kt_and_fsc) {

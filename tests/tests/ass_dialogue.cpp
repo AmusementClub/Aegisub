@@ -5,6 +5,7 @@
 #include "../../src/ass_parse_error.h"
 #include "../../src/ass_time_projection.h"
 
+#include <libaegisub/color.h>
 #include <libaegisub/vfr.h>
 
 TEST(ass_time_projection, generic_end_time_uses_symmetric_rounding_for_ass_storage) {
@@ -314,6 +315,23 @@ TEST(ass_dialogue, override_float_parameters_parse_compatible_numeric_prefixes) 
 	EXPECT_EQ(1.5f, override_block->Tags[1].Params[0].Get<float>());
 	EXPECT_EQ(-2.5, override_block->Tags[2].Params[0].Get<double>());
 	EXPECT_EQ("{\\fscx110.25tail\\fsp+1.5px\\bord-2.5em}", override_block->GetText());
+}
+
+TEST(ass_dialogue, override_color_and_alpha_parameters_parse_compatible_hex_prefixes) {
+	AssDialogue line;
+	line.Text = "{\\c&H010203&tail\\1a&H123&junk\\alpha&H80&}x";
+
+	auto blocks = line.ParseTags();
+	ASSERT_EQ(2u, blocks.size());
+
+	auto *override_block = dynamic_cast<AssDialogueBlockOverride *>(blocks[0].get());
+	ASSERT_NE(nullptr, override_block);
+	ASSERT_EQ(3u, override_block->Tags.size());
+
+	EXPECT_EQ(agi::Color(0x03, 0x02, 0x01, 0x00), override_block->Tags[0].Params[0].Get<agi::Color>());
+	EXPECT_EQ(0x23, override_block->Tags[1].Params[0].Get<int>());
+	EXPECT_EQ(0x80, override_block->Tags[2].Params[0].Get<int>());
+	EXPECT_EQ("{\\c&H010203&tail\\1a&H123&junk\\alpha&H80&}", override_block->GetText());
 }
 
 TEST(ass_dialogue, transform_parser_keeps_style_modifier_commas_together) {

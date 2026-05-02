@@ -78,9 +78,11 @@ template<> std::string AssOverrideParameter::Get<std::string>() const {
 }
 
 template<> int AssOverrideParameter::Get<int>() const {
-	if (classification == AssParameterClass::ALPHA)
-		// &Hxx&, but vsfilter lets you leave everything out
-		return agi::util::mid<int>(0, strtol(std::find_if(value.c_str(), value.c_str() + value.size(), isxdigit), nullptr, 16), 255);
+	if (classification == AssParameterClass::ALPHA) {
+		int alpha = 0;
+		AssCompat::ParseOverrideAlpha(Get<std::string>(), alpha);
+		return agi::util::mid<int>(0, alpha, 255);
+	}
 	return atoi(Get<std::string>().c_str());
 }
 
@@ -101,7 +103,9 @@ template<> bool AssOverrideParameter::Get<bool>() const {
 }
 
 template<> agi::Color AssOverrideParameter::Get<agi::Color>() const {
-	return Get<std::string>();
+	agi::Color color;
+	AssCompat::ParseOverrideColor(Get<std::string>(), color);
+	return color;
 }
 
 template<> AssDialogueBlockOverride *AssOverrideParameter::Get<AssDialogueBlockOverride*>() const {

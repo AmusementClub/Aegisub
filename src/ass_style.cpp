@@ -79,7 +79,12 @@ public:
 	}
 
 	std::string next_str() { return next_tok(); }
-	agi::Color next_color() { return next_tok(); }
+	agi::Color next_color() {
+		agi::Color color;
+		if (!AssCompat::ParseStyleColor(next_tok(), color))
+			throw SubtitleFormatParseError("Malformed style: bad color field");
+		return color;
+	}
 
 	int next_int() {
 		int value = 0;

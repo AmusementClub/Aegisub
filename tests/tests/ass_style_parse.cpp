@@ -59,6 +59,18 @@ TEST(lagi_ass_style, parses_compatible_float_fields_and_normalizes_output) {
 		style.GetEntryData());
 }
 
+TEST(lagi_ass_style, parses_compatible_color_fields_and_normalizes_output) {
+	AssStyle style("Style: Default,Arial,48,0x11223344tail,16777215more,&H00010203junk,-1,-1,0,0,0,100,100,0,0,1,2,2,2,10,20,30,1");
+
+	EXPECT_EQ(agi::Color(0x44, 0x33, 0x22, 0x11), style.primary);
+	EXPECT_EQ(agi::Color(0xFF, 0xFF, 0xFF, 0x00), style.secondary);
+	EXPECT_EQ(agi::Color(0x03, 0x02, 0x01, 0x00), style.outline);
+	EXPECT_EQ(agi::Color(0xFF, 0xFF, 0xFF, 0xFF), style.shadow);
+	EXPECT_EQ(
+		"Style: Default,Arial,48,&H11223344,&H00FFFFFF,&H00010203,&HFFFFFFFF,-1,0,0,0,100,100,0,0,1,2,2,2,10,20,30,1",
+		style.GetEntryData());
+}
+
 TEST(lagi_ass_style, rejects_bad_int_field) {
 	EXPECT_THROW(
 		AssStyle("Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,2,2,2,nope,20,30,1"),
@@ -68,5 +80,11 @@ TEST(lagi_ass_style, rejects_bad_int_field) {
 TEST(lagi_ass_style, rejects_bad_double_field) {
 	EXPECT_THROW(
 		AssStyle("Style: Default,Arial,nope,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,2,2,2,10,20,30,1"),
+		SubtitleFormatParseError);
+}
+
+TEST(lagi_ass_style, rejects_bad_color_field) {
+	EXPECT_THROW(
+		AssStyle("Style: Default,Arial,48,nope,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,2,2,2,10,20,30,1"),
 		SubtitleFormatParseError);
 }

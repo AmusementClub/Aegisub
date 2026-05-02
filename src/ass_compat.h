@@ -2,6 +2,7 @@
 
 #pragma once
 
+#include <libaegisub/color.h>
 #include <libaegisub/string_utils.h>
 
 #include <charconv>
@@ -214,6 +215,55 @@ inline bool ParseTime(agi::util::strings::view text, int& out) {
 		milliseconds = std::numeric_limits<int>::max();
 
 	out = static_cast<int>(milliseconds);
+	return true;
+}
+
+inline bool ParseStyleColor(agi::util::strings::view text, agi::Color& out) {
+	int value = 0;
+	if (!ParseInteger(text, value))
+		return false;
+
+	auto color = static_cast<std::uint32_t>(value);
+	out = agi::Color(
+		static_cast<unsigned char>(color & 0xFF),
+		static_cast<unsigned char>((color >> 8) & 0xFF),
+		static_cast<unsigned char>((color >> 16) & 0xFF),
+		static_cast<unsigned char>((color >> 24) & 0xFF));
+	return true;
+}
+
+inline bool ParseOverrideColor(agi::util::strings::view text, agi::Color& out) {
+	auto p = text.data();
+	auto end = p + text.size();
+
+	while (p != end && (*p == '&' || agi::util::strings::ascii_iequals(*p, 'h')))
+		++p;
+
+	std::uint32_t value = 0;
+	std::uint32_t digit = 0;
+	bool any = false;
+	while (p != end && digit_value(*p, 16, digit)) {
+		value = value * 16 + digit;
+		any = true;
+		++p;
+	}
+
+	if (!any)
+		return false;
+
+	out = agi::Color(
+		static_cast<unsigned char>(value & 0xFF),
+		static_cast<unsigned char>((value >> 8) & 0xFF),
+		static_cast<unsigned char>((value >> 16) & 0xFF),
+		static_cast<unsigned char>((value >> 24) & 0xFF));
+	return true;
+}
+
+inline bool ParseOverrideAlpha(agi::util::strings::view text, int& out) {
+	agi::Color color;
+	if (!ParseOverrideColor(text, color))
+		return false;
+	out = color.r;
 	return true;
 }
 

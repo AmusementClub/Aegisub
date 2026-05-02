@@ -277,13 +277,24 @@ inline std::string FormatUnsignedInteger(std::uint32_t value) {
 }
 
 inline std::string FormatFloat(double value) {
-	char buffer[64];
+	if (value == 0.0)
+		return "0";
+
+	char buffer[384];
 	auto result = std::to_chars(std::begin(buffer), std::end(buffer), value, std::chars_format::fixed, 3);
-	std::string text(buffer, result.ec == std::errc() ? result.ptr : buffer);
+	std::string text = result.ec == std::errc() ? std::string(buffer, result.ptr) : std::to_string(value);
+	if (text.empty())
+		return "0";
+
+	auto dot = text.find('.');
+	if (dot == std::string::npos)
+		return text;
+
 	auto pos = text.find_last_not_of('0');
-	if (pos != text.find('.'))
-		++pos;
-	text.erase(text.begin() + pos, text.end());
+	if (pos == std::string::npos)
+		return "0";
+
+	text.erase(pos == dot ? dot : pos + 1);
 	return text;
 }
 

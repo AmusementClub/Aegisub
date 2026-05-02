@@ -42,6 +42,8 @@
 #include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 
+#include <algorithm>
+
 AssStyle::AssStyle() {
 	std::fill(Margin.begin(), Margin.end(), 10);
 
@@ -51,6 +53,10 @@ AssStyle::AssStyle() {
 AssEntryGroup AssStyle::Group() const { return AssEntryGroup::STYLE; }
 
 namespace {
+double non_negative(double value) {
+	return std::max(value, 0.0);
+}
+
 class parser {
 	agi::split_iterator<agi::StringRange::const_iterator> pos;
 
@@ -179,8 +185,8 @@ void AssStyle::UpdateData() {
 		shadow.GetAssStyleFormatted(),
 		(bold? -1 : 0), (italic ? -1 : 0),
 		(underline ? -1 : 0), (strikeout ? -1 : 0),
-		scalex, scaley, spacing, angle,
-		borderstyle, outline_w, shadow_w, alignment,
+		non_negative(scalex), non_negative(scaley), non_negative(spacing), angle,
+		borderstyle, non_negative(outline_w), non_negative(shadow_w), alignment,
 		Margin[0], Margin[1], Margin[2], encoding);
 }
 

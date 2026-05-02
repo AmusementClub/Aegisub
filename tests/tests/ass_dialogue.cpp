@@ -375,3 +375,52 @@ TEST(ass_dialogue, transform_parser_keeps_nested_clip_commas_in_modifier_block) 
 	EXPECT_EQ("\\clip(1,2,3,4)\\bord5", tag.Params[3].Get<std::string>());
 	EXPECT_EQ("{\\t(0,1000,2,\\clip(1,2,3,4)\\bord5)}", override_block->GetText());
 }
+
+TEST(ass_dialogue, transform_parser_keeps_nested_transform_modifier_intact) {
+	AssDialogue line;
+	line.Text = "{\\t(0,1000,\\t(0,500,\\bord5)\\shad3)}x";
+
+	auto blocks = line.ParseTags();
+	ASSERT_EQ(2u, blocks.size());
+
+	auto *override_block = dynamic_cast<AssDialogueBlockOverride *>(blocks[0].get());
+	ASSERT_NE(nullptr, override_block);
+	ASSERT_EQ(1u, override_block->Tags.size());
+
+	auto const& tag = override_block->Tags[0];
+	EXPECT_EQ("\\t", tag.Name);
+	ASSERT_EQ(4u, tag.Params.size());
+	EXPECT_EQ(0, tag.Params[0].Get<int>());
+	EXPECT_EQ(1000, tag.Params[1].Get<int>());
+	EXPECT_TRUE(tag.Params[2].omitted);
+	EXPECT_EQ("\\t(0,500,\\bord5)\\shad3", tag.Params[3].Get<std::string>());
+	EXPECT_EQ("{\\t(0,1000,\\t(0,500,\\bord5)\\shad3)}", override_block->GetText());
+}
+
+TEST(ass_dialogue, transform_parser_keeps_signed_fs_and_fsc_modifier_intact) {
+	AssDialogue line;
+	line.Text = "{\\t(0,1000,2,\\fs+10\\fsc)}x";
+
+	auto blocks = line.ParseTags();
+	ASSERT_EQ(2u, blocks.size());
+
+	auto *override_block = dynamic_cast<AssDialogueBlockOverride *>(blocks[0].get());
+	ASSERT_NE(nullptr, override_block);
+	ASSERT_EQ(1u, override_block->Tags.size());
+
+	auto const& tag = override_block->Tags[0];
+	EXPECT_EQ("\\t", tag.Name);
+	ASSERT_EQ(4u, tag.Params.size());
+	EXPECT_EQ(0, tag.Params[0].Get<int>());
+	EXPECT_EQ(1000, tag.Params[1].Get<int>());
+	EXPECT_EQ(2.0, tag.Params[2].Get<double>());
+	EXPECT_EQ("\\fs+10\\fsc", tag.Params[3].Get<std::string>());
+
+	auto *modifiers = tag.Params[3].Get<AssDialogueBlockOverride *>();
+	ASSERT_EQ(2u, modifiers->Tags.size());
+	EXPECT_EQ("\\fs", modifiers->Tags[0].Name);
+	EXPECT_EQ(10.0, modifiers->Tags[0].Params[0].Get<double>());
+	EXPECT_EQ("\\fsc", modifiers->Tags[1].Name);
+	EXPECT_TRUE(modifiers->Tags[1].Params.empty());
+	EXPECT_EQ("{\\t(0,1000,2,\\fs+10\\fsc)}", override_block->GetText());
+}

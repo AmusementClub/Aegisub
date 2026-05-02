@@ -33,11 +33,28 @@
 #include <variant>
 
 namespace {
+char const* const ass_event_format = "Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text";
+char const* const ass_style_format = "Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding";
+char const* const ssa_event_format = "Marked, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text";
+char const* const ssa_style_format = "Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, TertiaryColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, AlphaLevel, Encoding";
+
 enum class ParsedScriptType {
 	SSA,
 	ASS,
 	Unsupported
 };
+
+std::vector<std::string> split_format_fields(agi::util::strings::view format) {
+	std::vector<std::string> fields;
+	agi::util::strings::for_each_split_any(format, ",", false, [&](agi::util::strings::view field) {
+		fields.push_back(agi::util::strings::trim_copy(field));
+	});
+	return fields;
+}
+
+bool format_line_matches(agi::util::strings::view line, agi::util::strings::view expected) {
+	return split_format_fields(line) == split_format_fields(expected);
+}
 
 ParsedScriptType parse_script_type(std::string version_str) {
 	agi::util::strings::trim_inplace(version_str);
@@ -196,11 +213,27 @@ void AssParser::ParseMetadataLine(std::string const& data) {
 }
 
 void AssParser::ParseEventLine(std::string const& data) {
+	if (agi::util::strings::starts_with(data, "Format:")) {
+		auto format = agi::util::strings::trim_copy(agi::util::strings::subview(data, 7));
+		auto expected = version == 0 ? ssa_event_format : ass_event_format;
+		if (!format_line_matches(format, expected))
+			compatibility_warnings.push_back("Custom Event Format line ignored; Aegisub and xy-VSFilter parse events in fixed field order.");
+		return;
+	}
+
 	if (agi::util::strings::starts_with(data, "Dialogue:") || agi::util::strings::starts_with(data, "Comment:"))
 		target->Events.push_back(*new AssDialogue(data));
 }
 
 void AssParser::ParseStyleLine(std::string const& data) {
+	if (agi::util::strings::starts_with(data, "Format:")) {
+		auto format = agi::util::strings::trim_copy(agi::util::strings::subview(data, 7));
+		auto expected = version == 0 ? ssa_style_format : ass_style_format;
+		if (!format_line_matches(format, expected))
+			compatibility_warnings.push_back("Custom Style Format line ignored; Aegisub and xy-VSFilter parse styles in fixed field order.");
+		return;
+	}
+
 	if (agi::util::strings::starts_with(data, "Style:"))
 		target->Styles.push_back(*new AssStyle(data, version));
 }

@@ -14,6 +14,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 class AssAttachment;
 class AssFile;
@@ -24,6 +25,7 @@ class AssParser {
 
 	AssFile *target;
 	int version;
+	std::vector<std::string> compatibility_warnings;
 	std::unique_ptr<AssAttachment> attach;
 	void (AssParser::*state)(std::string const&);
 
@@ -40,5 +42,6 @@ public:
 	AssParser(AssFile *target, int version);
 	~AssParser();
 
+	std::vector<std::string> const& CompatibilityWarnings() const { return compatibility_warnings; }
 	void AddLine(std::string const& data);
 };

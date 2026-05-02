@@ -68,6 +68,8 @@ TEST(ass_parser, ignores_custom_event_format_order) {
 	EXPECT_EQ(33, line.Margin[2]);
 	EXPECT_EQ("fx", line.Effect.get());
 	EXPECT_EQ("hello", line.Text.get());
+	ASSERT_EQ(1u, parser.CompatibilityWarnings().size());
+	EXPECT_NE(std::string::npos, parser.CompatibilityWarnings().front().find("Custom Event Format"));
 }
 
 TEST(ass_parser, ignores_custom_style_format_order) {
@@ -89,4 +91,20 @@ TEST(ass_parser, ignores_custom_style_format_order) {
 	EXPECT_EQ(20, style.Margin[1]);
 	EXPECT_EQ(30, style.Margin[2]);
 	EXPECT_EQ(1, style.encoding);
+	ASSERT_EQ(1u, parser.CompatibilityWarnings().size());
+	EXPECT_NE(std::string::npos, parser.CompatibilityWarnings().front().find("Custom Style Format"));
+}
+
+TEST(ass_parser, accepts_standard_format_lines_without_compatibility_warning) {
+	AssFile file;
+	AssParser parser(&file, 1);
+
+	parser.AddLine("[V4+ Styles]");
+	parser.AddLine("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding");
+	parser.AddLine("Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,2,2,2,10,20,30,1");
+	parser.AddLine("[Events]");
+	parser.AddLine("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text");
+	parser.AddLine("Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,ok");
+
+	EXPECT_TRUE(parser.CompatibilityWarnings().empty());
 }

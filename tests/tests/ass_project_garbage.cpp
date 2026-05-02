@@ -2,6 +2,7 @@
 #include "../../src/ass_file.h"
 #include "../../src/ass_parse_error.h"
 #include "../../src/ass_parser.h"
+#include "../../src/ass_style.h"
 
 #include <gtest/gtest.h>
 
@@ -45,4 +46,47 @@ TEST(ass_parser, rejects_v4pp_script_type) {
 
 	parser.AddLine("[Script Info]");
 	EXPECT_THROW(parser.AddLine("ScriptType: v4.00++"), SubtitleFormatParseError);
+}
+
+TEST(ass_parser, ignores_custom_event_format_order) {
+	AssFile file;
+	AssParser parser(&file, 1);
+
+	parser.AddLine("[Events]");
+	parser.AddLine("Format: Text, Effect, MarginV, MarginR, MarginL, Name, Style, End, Start, Layer");
+	parser.AddLine("Dialogue: 7,0:00:01.00,0:00:02.00,StyleName,Actor,11,22,33,fx,hello");
+
+	ASSERT_EQ(1u, file.Events.size());
+	auto const& line = file.Events.front();
+	EXPECT_EQ(7, line.Layer);
+	EXPECT_EQ(1000, line.Start);
+	EXPECT_EQ(2000, line.End);
+	EXPECT_EQ("StyleName", line.Style.get());
+	EXPECT_EQ("Actor", line.Actor.get());
+	EXPECT_EQ(11, line.Margin[0]);
+	EXPECT_EQ(22, line.Margin[1]);
+	EXPECT_EQ(33, line.Margin[2]);
+	EXPECT_EQ("fx", line.Effect.get());
+	EXPECT_EQ("hello", line.Text.get());
+}
+
+TEST(ass_parser, ignores_custom_style_format_order) {
+	AssFile file;
+	AssParser parser(&file, 1);
+
+	parser.AddLine("[V4+ Styles]");
+	parser.AddLine("Format: Encoding, MarginV, MarginR, MarginL, Alignment, Shadow, Outline, BorderStyle, Angle, Spacing, ScaleY, ScaleX, StrikeOut, Underline, Italic, Bold, BackColour, OutlineColour, SecondaryColour, PrimaryColour, Fontsize, Fontname, Name");
+	parser.AddLine("Style: Fixed,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,100,100,0,0,1,2,2,2,10,20,30,1");
+
+	ASSERT_EQ(1u, file.Styles.size());
+	auto const& style = file.Styles.front();
+	EXPECT_EQ("Fixed", style.name);
+	EXPECT_EQ("Arial", style.font);
+	EXPECT_DOUBLE_EQ(48.0, style.fontsize);
+	EXPECT_TRUE(style.bold);
+	EXPECT_FALSE(style.italic);
+	EXPECT_EQ(10, style.Margin[0]);
+	EXPECT_EQ(20, style.Margin[1]);
+	EXPECT_EQ(30, style.Margin[2]);
+	EXPECT_EQ(1, style.encoding);
 }

@@ -24,7 +24,7 @@
 #include <algorithm>
 
 namespace agi {
-Time::Time(int time) : time(util::mid(0, time, 10 * 60 * 60 * 1000 - 6)) { }
+Time::Time(int time) : time(std::max(0, time)) { }
 
 Time::Time(std::string const& text) {
 	int after_decimal = -1;
@@ -56,38 +56,24 @@ Time::Time(std::string const& text) {
 		time = (time * 60 + current) * 1000;
 
 	// Limit to the valid range
-	time = util::mid(0, time, 10 * 60 * 60 * 1000 - 6);
+	time = std::max(0, time);
 }
 
 std::string Time::GetAssFormatted(bool msPrecision) const {
 	int ass_time = msPrecision ? time : int(*this);
-	std::string ret(10 + msPrecision, ':');
-	ret[0] = '0' + ass_time / 3600000;
-	ret[2] = '0' + (ass_time % (60 * 60 * 1000)) / (60 * 1000 * 10);
-	ret[3] = '0' + (ass_time % (10 * 60 * 1000)) / (60 * 1000);
-	ret[5] = '0' + (ass_time % (60 * 1000)) / (1000 * 10);
-	ret[6] = '0' + (ass_time % (10 * 1000)) / 1000;
-	ret[7] = '.';
-	ret[8] = '0' + (ass_time % 1000) / 100;
-	ret[9] = '0' + (ass_time % 100) / 10;
+	int hours = ass_time / 3600000;
+	int minutes = (ass_time / 60000) % 60;
+	int seconds = (ass_time / 1000) % 60;
+	int centiseconds = (ass_time % 1000) / 10;
+
+	std::string ret = format("%d:%02d:%02d.%02d", hours, minutes, seconds, centiseconds);
 	if (msPrecision)
-		ret[10] = '0' + ass_time % 10;
+		ret += static_cast<char>('0' + ass_time % 10);
 	return ret;
 }
 
 std::string Time::GetSrtFormatted() const {
-	std::string ret(12, ':');
-	ret[0] = '0';
-	ret[1] = '0' + time / 3600000;
-	ret[3] = '0' + (time % (60 * 60 * 1000)) / (60 * 1000 * 10);
-	ret[4] = '0' + (time % (10 * 60 * 1000)) / (60 * 1000);
-	ret[6] = '0' + (time % (60 * 1000)) / (1000 * 10);
-	ret[7] = '0' + (time % (10 * 1000)) / 1000;
-	ret[8] = ',';
-	ret[9] = '0' + (time % 1000) / 100;
-	ret[10] = '0' + (time % 100) / 10;
-	ret[11] = '0' + time % 10;
-	return ret;
+	return format("%02d:%02d:%02d,%03d", time / 3600000, (time / 60000) % 60, (time / 1000) % 60, time % 1000);
 }
 
 SmpteFormatter::SmpteFormatter(vfr::Framerate fps, char sep)

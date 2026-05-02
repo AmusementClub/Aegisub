@@ -84,4 +84,86 @@ inline bool ParseInteger(agi::util::strings::view text, int& out) {
 	return true;
 }
 
+inline bool ParseDecimalInteger(agi::util::strings::view text, int& out) {
+	auto p = text.data();
+	auto end = p + text.size();
+
+	while (p != end && agi::util::strings::is_space(*p))
+		++p;
+
+	bool negative = false;
+	if (p != end && (*p == '+' || *p == '-'))
+		negative = *p++ == '-';
+
+	std::uint32_t value = 0;
+	bool any = false;
+	while (p != end && *p >= '0' && *p <= '9') {
+		value = value * 10 + static_cast<std::uint32_t>(*p - '0');
+		any = true;
+		++p;
+	}
+
+	if (!any)
+		return false;
+	while (p != end && agi::util::strings::is_space(*p))
+		++p;
+	if (p != end)
+		return false;
+
+	if (negative)
+		value = 0 - value;
+
+	std::int64_t signed_value = value;
+	if (signed_value > std::numeric_limits<std::int32_t>::max())
+		signed_value -= static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max()) + 1;
+	out = static_cast<int>(signed_value);
+	return true;
+}
+
+inline bool ParseTime(agi::util::strings::view text, int& out) {
+	int parts[4] = {0, 0, 0, 0};
+	char const separators[3] = {':', ':', '.'};
+	std::size_t start = 0;
+
+	for (int i = 0; i < 3; ++i) {
+		auto end = agi::util::strings::find(text, separators[i], start);
+		if (end == agi::util::strings::npos)
+			return false;
+		if (!ParseDecimalInteger(text.substr(start, end - start), parts[i]))
+			return false;
+		start = end + 1;
+	}
+
+	auto fraction = text.substr(start);
+	if (!ParseDecimalInteger(fraction, parts[3]))
+		return false;
+
+	auto count_fraction_digits = [](agi::util::strings::view value) {
+		auto p = value.data();
+		auto end = p + value.size();
+		while (p != end && agi::util::strings::is_space(*p))
+			++p;
+		if (p != end && (*p == '+' || *p == '-'))
+			++p;
+
+		std::size_t digits = 0;
+		while (p != end && *p >= '0' && *p <= '9') {
+			++digits;
+			++p;
+		}
+		return digits;
+	};
+
+	int fractional_ms = count_fraction_digits(fraction) == 3 ? parts[3] : parts[3] * 10;
+
+	auto milliseconds = ((static_cast<long long>(parts[0]) * 60 + parts[1]) * 60 + parts[2]) * 1000 + fractional_ms;
+	if (milliseconds < 0)
+		milliseconds = 0;
+	if (milliseconds > std::numeric_limits<int>::max())
+		milliseconds = std::numeric_limits<int>::max();
+
+	out = static_cast<int>(milliseconds);
+	return true;
+}
+
 }

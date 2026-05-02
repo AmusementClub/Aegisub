@@ -109,8 +109,13 @@ void AssDialogue::Parse(std::string const& raw) {
 	else if (!AssCompat::ParseInteger(tmp, Layer))
 		throw SubtitleFormatParseError("Failed parsing line: " + raw);
 
-	Start = tkn.next_str_trim();
-	End = tkn.next_str_trim();
+	int time = 0;
+	if (!AssCompat::ParseTime(tkn.next_str_trim(), time))
+		throw SubtitleFormatParseError("Failed parsing line: " + raw);
+	Start = time;
+	if (!AssCompat::ParseTime(tkn.next_str_trim(), time))
+		throw SubtitleFormatParseError("Failed parsing line: " + raw);
+	End = time;
 	Style = tkn.next_str_trim();
 	Actor = tkn.next_str_trim();
 	for (int& margin : Margin) {

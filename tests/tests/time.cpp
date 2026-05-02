@@ -23,7 +23,7 @@ using agi::Time;
 
 TEST(lagi_time, out_of_range_times) {
 	EXPECT_EQ(0, (int)Time(-1));
-	EXPECT_EQ(10 * 60 * 60 * 1000 - 10, (int)Time(10 * 60 * 60 * 1000));
+	EXPECT_EQ(10 * 60 * 60 * 1000, (int)Time(10 * 60 * 60 * 1000));
 }
 
 TEST(lagi_time, rounds_to_cs) {
@@ -37,6 +37,15 @@ TEST(lagi_time, cs_formatting) {
 
 TEST(lagi_time, ms_formatting) {
 	EXPECT_STREQ("1:23:45.678", Time((((1 * 60) + 23) * 60 + 45) * 1000 + 678).GetAssFormatted(true).c_str());
+}
+
+TEST(lagi_time, ass_time_formatting_supports_multi_digit_hours) {
+	EXPECT_STREQ("12:03:04.56", Time((((12 * 60) + 3) * 60 + 4) * 1000 + 560).GetAssFormatted().c_str());
+	EXPECT_STREQ("12:03:04.567", Time((((12 * 60) + 3) * 60 + 4) * 1000 + 567).GetAssFormatted(true).c_str());
+}
+
+TEST(lagi_time, srt_time_formatting_supports_multi_digit_hours) {
+	EXPECT_STREQ("12:03:04,567", Time((((12 * 60) + 3) * 60 + 4) * 1000 + 567).GetSrtFormatted().c_str());
 }
 
 TEST(lagi_time, well_formed_ass_time_parse) {

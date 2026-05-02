@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include <limits>
 #include <string>
 
 namespace agi {
@@ -29,7 +30,11 @@ public:
 
 	/// Get millisecond, rounded to centisecond precision
 	// Always round up for 5ms because the range is [start, stop)
-	operator int() const { return (time + 5) - (time + 5) % 10; }
+	operator int() const {
+		auto rounded = static_cast<long long>(time) + 5;
+		rounded -= rounded % 10;
+		return rounded > std::numeric_limits<int>::max() ? std::numeric_limits<int>::max() : static_cast<int>(rounded);
+	}
 
 	/// Get millisecond, without centisecond round
 	int GetMillisecond() const noexcept { return time; }

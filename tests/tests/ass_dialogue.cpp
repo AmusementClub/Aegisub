@@ -102,6 +102,38 @@ TEST(ass_dialogue, exact_millisecond_dialogue_text_roundtrips_through_parser) {
 	EXPECT_EQ("exact", parsed.Text.get());
 }
 
+TEST(ass_dialogue, parses_file_times_with_multi_digit_hours) {
+	AssDialogue parsed("Dialogue: 0,12:00:00.00,12:00:01.23,Default,,0,0,0,,long");
+
+	EXPECT_EQ(12 * 60 * 60 * 1000, parsed.Start.GetMillisecond());
+	EXPECT_EQ(12 * 60 * 60 * 1000 + 1230, parsed.End.GetMillisecond());
+	EXPECT_EQ(
+		"Dialogue: 0,12:00:00.00,12:00:01.23,Default,,0,0,0,,long",
+		parsed.GetEntryData());
+}
+
+TEST(ass_dialogue, parses_aegisub_millisecond_precision_times) {
+	AssDialogue parsed("Dialogue: 0,0:00:18.497,0:00:20.499,Default,,0,0,0,,exact");
+
+	EXPECT_EQ(18497, parsed.Start.GetMillisecond());
+	EXPECT_EQ(20499, parsed.End.GetMillisecond());
+}
+
+TEST(ass_dialogue, rejects_malformed_file_times) {
+	EXPECT_THROW(
+		AssDialogue("Dialogue: 0,1a:b2c3d:e4f5g.!6&7,0:00:01.00,Default,,0,0,0,,bad"),
+		SubtitleFormatParseError);
+}
+
+TEST(ass_dialogue, rejects_hexadecimal_file_time_components) {
+	EXPECT_THROW(
+		AssDialogue("Dialogue: 0,0x0A:0x0B:0x0C.0x0D,0:00:01.00,Default,,0,0,0,,bad"),
+		SubtitleFormatParseError);
+	EXPECT_THROW(
+		AssDialogue("Dialogue: 0,&H0A:&H0B:&H0C.&H0D,0:00:01.00,Default,,0,0,0,,bad"),
+		SubtitleFormatParseError);
+}
+
 TEST(ass_dialogue, parses_compatible_integer_fields_and_normalizes_output) {
 	AssDialogue parsed("Dialogue: 0x10junk,0:00:00.00,0:00:01.00,Default,,&H 20px,-15tail,+30more,,text");
 

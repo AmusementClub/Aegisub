@@ -157,3 +157,49 @@ TEST(ass_io_core, ass_writer_uses_legacy_rounding_instead_of_frame_safe_projecti
 	EXPECT_NE(std::string::npos, text.find("Dialogue: 0,0:00:00.02,0:00:00.02,Default,,0,0,0,,short"));
 	EXPECT_EQ(std::string::npos, text.find("Dialogue: 0,0:00:00.01,0:00:00.02,Default,,0,0,0,,short"));
 }
+
+TEST(ass_io_core, ass_writer_roundtrip_preserves_shared_boundary_display) {
+	AssFile file;
+	file.Info.emplace_back("ScriptType", "v4.00+");
+	AssStyle style;
+	file.Styles.push_back(style);
+
+	AssDialogue first;
+	first.Start = 0;
+	first.End = 18;
+	first.Style = "Default";
+	first.Text = "first";
+	file.Events.push_back(first);
+
+	AssDialogue second;
+	second.Start = 18;
+	second.End = 30;
+	second.Style = "Default";
+	second.Text = "second";
+	file.Events.push_back(second);
+
+	auto path = std::filesystem::temp_directory_path() / "aegisub-ass-writer-shared-boundary.ass";
+	WriteAssFileForCore(&file, path, agi::vfr::Framerate(100.0), "UTF-8", AssWriteOptions{});
+
+	std::string text;
+	{
+		std::ifstream input(path, std::ios::binary);
+		text.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+	}
+
+	AssFile parsed = ReadAssFileForCore(path, "UTF-8");
+	std::filesystem::remove(path);
+
+	EXPECT_NE(std::string::npos, text.find("Dialogue: 0,0:00:00.00,0:00:00.02,Default,,0,0,0,,first"));
+	EXPECT_NE(std::string::npos, text.find("Dialogue: 0,0:00:00.02,0:00:00.03,Default,,0,0,0,,second"));
+
+	ASSERT_EQ(2, std::distance(parsed.Events.begin(), parsed.Events.end()));
+	auto line = parsed.Events.begin();
+	auto const& parsed_first = *line++;
+	auto const& parsed_second = *line;
+
+	EXPECT_EQ(parsed_first.End.GetMillisecond(), parsed_second.Start.GetMillisecond());
+	EXPECT_EQ(20, parsed_first.End.GetMillisecond());
+	EXPECT_EQ("0:00:00.02", parsed_first.End.GetAssFormatted());
+	EXPECT_EQ(parsed_first.End.GetAssFormatted(), parsed_second.Start.GetAssFormatted());
+}

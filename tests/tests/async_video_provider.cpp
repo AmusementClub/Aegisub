@@ -657,6 +657,39 @@ TEST(async_video_provider, request_frame_keeps_only_latest_pending_render) {
 	EXPECT_EQ((std::vector<int>{1, 4}), state->requested_frames);
 }
 
+TEST(async_video_provider, cancel_pending_frame_requests_drops_in_flight_render) {
+	auto state = std::make_shared<VideoProviderState>();
+	state->block_next = true;
+	auto *subs = new FakeSubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		recorder);
+
+	provider.RequestFrame(1, 1000);
+
+	{
+		std::unique_lock<std::mutex> lock(state->mutex);
+		ASSERT_TRUE(state->cv.wait_for(lock, std::chrono::seconds(2), [&] { return state->entered; }));
+	}
+
+	provider.CancelPendingFrameRequests();
+
+	{
+		std::lock_guard<std::mutex> lock(state->mutex);
+		state->released = true;
+	}
+	state->cv.notify_all();
+
+	provider.GetRenderPacket(2, 2000);
+	EXPECT_TRUE(recorder.Snapshot().empty());
+
+	std::lock_guard<std::mutex> lock(state->mutex);
+	EXPECT_EQ((std::vector<int>{1, 2}), state->requested_frames);
+}
+
 TEST(async_video_provider, load_subtitles_invalidates_stale_render_result) {
 	auto state = std::make_shared<VideoProviderState>();
 	state->block_next = true;

@@ -130,6 +130,7 @@ void VideoController::ResetPlaybackState() {
 void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 	Stop();
 	provider = new_provider;
+	presented_frame_n = -1;
 	color_matrix = provider ? provider->GetColorSpace() : "";
 	ResetPlaybackState();
 }
@@ -470,9 +471,16 @@ void VideoController::StartPlaybackTimer() {
 }
 
 void VideoController::StartPlayback(PlaybackMode mode, int range_end_ms) {
+	if (mode == PlaybackMode::ToEnd && presented_frame_n >= 0)
+		frame_n = presented_frame_n;
+
+	if (provider)
+		provider->CancelPendingFrameRequests();
+
 	if (!PreparePlayback(mode, frame_n, range_end_ms))
 		return;
 
+	RequestFrame();
 	StartPlaybackTimer();
 }
 
@@ -498,6 +506,8 @@ void VideoController::PlayLine() {
 
 	// Round-trip conversion to convert start to exact
 	int startFrame = FrameAtTime(curline->Start, agi::vfr::START);
+	if (provider)
+		provider->CancelPendingFrameRequests();
 	if (!PreparePlayback(PlaybackMode::LineRange, startFrame, curline->End))
 		return;
 
@@ -633,6 +643,9 @@ void VideoController::HandleSubtitlesError(std::string const& message) {
 }
 
 void VideoController::DeliverFrameReady(VideoRenderPacket packet, double time) {
+	if (packet.frame_number != frame_n)
+		return;
+
 	FrameReady(packet, time);
 }
 

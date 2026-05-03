@@ -44,8 +44,6 @@
 #include <algorithm>
 
 AssStyle::AssStyle() {
-	std::fill(Margin.begin(), Margin.end(), 10);
-
 	UpdateData();
 }
 
@@ -155,10 +153,10 @@ AssStyle::AssStyle(std::string const& str, int version) {
 		underline = false;
 		strikeout = false;
 
-		scalex = 100;
-		scaley = 100;
-		spacing = 0;
-		angle = 0.0;
+		scalex = DefaultScale;
+		scaley = DefaultScale;
+		spacing = DefaultSpacing;
+		angle = DefaultAngle;
 	}
 
 	borderstyle = p.next_int();
@@ -169,9 +167,9 @@ AssStyle::AssStyle(std::string const& str, int version) {
 	if (version == 0)
 		alignment = SsaToAss(alignment);
 
-	Margin[0] = agi::util::mid(-9999, p.next_int(), 99999);
-	Margin[1] = agi::util::mid(-9999, p.next_int(), 99999);
-	Margin[2] = agi::util::mid(-9999, p.next_int(), 99999);
+	Margin[0] = agi::util::mid(MinMargin, p.next_int(), MaxMargin);
+	Margin[1] = agi::util::mid(MinMargin, p.next_int(), MaxMargin);
+	Margin[2] = agi::util::mid(MinMargin, p.next_int(), MaxMargin);
 
 	// Skip alpha level
 	if (version == 0)

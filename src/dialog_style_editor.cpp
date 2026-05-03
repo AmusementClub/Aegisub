@@ -181,11 +181,11 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 		sizer->Add(ctrl, wxSizerFlags(1).Left().Expand());
 	};
 
-	auto num_text_ctrl = [&](double *value, double min, double max, double step) -> wxSpinCtrlDouble * {
+	auto num_text_ctrl = [&](double *value, double min, double max, double step, double default_value) -> wxSpinCtrlDouble * {
 		auto scd = new wxSpinCtrlDouble(this, -1, wxEmptyString, wxDefaultPosition,
 			wxDefaultSize, wxSP_ARROW_KEYS, min, max, *value, step);
 		scd->SetDigits(1);
-		scd->SetValidator(DoubleSpinValidator(value));
+		scd->SetValidator(DoubleSpinValidator(value, default_value));
 		scd->Bind(wxEVT_SPINCTRLDOUBLE, [=](wxSpinDoubleEvent &evt) {
 			evt.Skip();
 			if (updating) return;
@@ -218,7 +218,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	// Create controls
 	StyleName = new wxTextCtrl(this, -1, to_wx(style->name));
 	FontName = new wxComboBox(this, -1, to_wx(style->font), wxDefaultPosition, wxSize(150, -1), 0, nullptr, wxCB_DROPDOWN);
-	auto FontSize = num_text_ctrl(&work->fontsize, 0, 10000.0, 0.1);
+	auto FontSize = num_text_ctrl(&work->fontsize, 0, 10000.0, 0.1, AssStyle::DefaultFontSize);
 	BoxBold = new wxCheckBox(this, -1, _("&Bold"));
 	BoxItalic = new wxCheckBox(this, -1, _("&Italic"));
 	BoxUnderline = new wxCheckBox(this, -1, _("&Underline"));
@@ -232,7 +232,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	for (int i = 0; i < 3; i++) {
 		margin[i] = new wxSpinCtrl(this, -1, std::to_wstring(style->Margin[i]),
 			wxDefaultPosition, wxDefaultSize,
-			wxSP_ARROW_KEYS, -9999, 99999, style->Margin[i]);
+			wxSP_ARROW_KEYS, AssStyle::MinMargin, AssStyle::MaxMargin, style->Margin[i]);
 #if wxCHECK_VERSION(3, 1, 3)
 		margin[i]->SetInitialSize(margin[i]->GetSizeFromText(wxS("00000")));
 #else
@@ -241,13 +241,13 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	}
 
 	Alignment = new wxRadioBox(this, -1, _("Alignment"), wxDefaultPosition, wxDefaultSize, 9, alignValues, 3, wxRA_SPECIFY_COLS);
-	auto Outline = num_text_ctrl(&work->outline_w, 0.0, 1000.0, 0.1);
-	auto Shadow = num_text_ctrl(&work->shadow_w, 0.0, 1000.0, 0.1);
+	auto Outline = num_text_ctrl(&work->outline_w, 0.0, 1000.0, 0.1, AssStyle::DefaultOutlineWidth);
+	auto Shadow = num_text_ctrl(&work->shadow_w, 0.0, 1000.0, 0.1, AssStyle::DefaultShadowWidth);
 	OutlineType = new wxCheckBox(this, -1, _("&Opaque box"));
-	auto ScaleX = num_text_ctrl(&work->scalex, 0.0, 10000.0, 0.1);
-	auto ScaleY = num_text_ctrl(&work->scaley, 0.0, 10000.0, 0.1);
-	auto Angle = num_text_ctrl(&work->angle, -360.0, 360.0, 0.1);
-	auto Spacing = num_text_ctrl(&work->spacing, 0.0, 1000.0, 0.1);
+	auto ScaleX = num_text_ctrl(&work->scalex, 0.0, 10000.0, 0.1, AssStyle::DefaultScale);
+	auto ScaleY = num_text_ctrl(&work->scaley, 0.0, 10000.0, 0.1, AssStyle::DefaultScale);
+	auto Angle = num_text_ctrl(&work->angle, -360.0, 360.0, 0.1, AssStyle::DefaultAngle);
+	auto Spacing = num_text_ctrl(&work->spacing, 0.0, 1000.0, 0.1, AssStyle::DefaultSpacing);
 	Encoding = new wxComboBox(this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, encodingStrings, wxCB_READONLY);
 
 	// Set control tooltips
@@ -528,8 +528,15 @@ void DialogStyleEditor::UpdateWorkStyle() {
 
 	work->alignment = ControlToAlign(Alignment->GetSelection());
 
-	for (size_t i = 0; i < 3; ++i)
+	for (size_t i = 0; i < 3; ++i) {
+		auto margin_text = margin[i]->GetTextValue();
+		margin_text.Trim(true);
+		margin_text.Trim(false);
+		if (margin_text.empty())
+			margin[i]->SetValue(AssStyle::DefaultMargin);
+
 		work->Margin[i] = margin[i]->GetValue();
+	}
 
 	work->bold = BoxBold->IsChecked();
 	work->italic = BoxItalic->IsChecked();

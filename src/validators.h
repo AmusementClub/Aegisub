@@ -63,13 +63,16 @@ public:
 
 class DoubleSpinValidator final : public wxValidator {
 	double *value;
-	wxValidator *Clone() const override { return new DoubleSpinValidator(value); }
+	bool has_default_value;
+	double default_value;
+	wxValidator *Clone() const override { return has_default_value ? new DoubleSpinValidator(value, default_value) : new DoubleSpinValidator(value); }
 	bool Validate(wxWindow*) override { return true; }
 	bool TransferToWindow() override;
 	bool TransferFromWindow() override;
 
 public:
-	DoubleSpinValidator(double *value) : value(value) { }
+	explicit DoubleSpinValidator(double *value) : value(value), has_default_value(false), default_value(0.0) { }
+	DoubleSpinValidator(double *value, double default_value) : value(value), has_default_value(true), default_value(default_value) { }
 };
 
 class EnumBinderBase : public wxValidator {

@@ -37,9 +37,22 @@ class AssStyle final : public AssEntry, public AssEntryListHook {
 	std::string data;
 
 public:
+	static constexpr double DefaultFontSize = 48.;
+	static constexpr double DefaultScale = 100.;
+	static constexpr double DefaultSpacing = 0.;
+	static constexpr double DefaultAngle = 0.;
+	static constexpr int DefaultBorderStyle = 1;
+	static constexpr double DefaultOutlineWidth = 2.;
+	static constexpr double DefaultShadowWidth = 2.;
+	static constexpr int DefaultAlignment = 2;
+	static constexpr int DefaultMargin = 10;
+	static constexpr int MinMargin = -9999;
+	static constexpr int MaxMargin = 99999;
+	static constexpr int DefaultEncoding = 1;
+
 	std::string name = "Default"; ///< Name of the style; must be case-insensitively unique within a file despite being case-sensitive
 	std::string font = "Arial";   ///< Font face name
-	double fontsize = 48.;        ///< Font size
+	double fontsize = DefaultFontSize; ///< Font size
 
 	agi::Color primary{ 255, 255, 255 }; ///< Default text color
 	agi::Color secondary{ 255, 0, 0 };   ///< Text color for not-yet-reached karaoke syllables
@@ -51,16 +64,16 @@ public:
 	bool underline = false;
 	bool strikeout = false;
 
-	double scalex = 100.;      ///< Font x scale with 100 = 100%
-	double scaley = 100.;      ///< Font y scale with 100 = 100%
-	double spacing = 0.;       ///< Additional spacing between characters in pixels
-	double angle = 0.;         ///< Counterclockwise z rotation in degrees
-	int borderstyle = 1;       ///< 1: Normal; 3: Opaque box; others are unused in Aegisub
-	double outline_w = 2.;     ///< Outline width in pixels
-	double shadow_w = 2.;      ///< Shadow distance in pixels
-	int alignment = 2;         ///< \an-style line alignment
-	std::array<int, 3> Margin; ///< Left / Right / Vertical
-	int encoding = 1;          ///< ASS font encoding needed for some non-unicode fonts
+	double scalex = DefaultScale;      ///< Font x scale with 100 = 100%
+	double scaley = DefaultScale;      ///< Font y scale with 100 = 100%
+	double spacing = DefaultSpacing;   ///< Additional spacing between characters in pixels
+	double angle = DefaultAngle;       ///< Counterclockwise z rotation in degrees
+	int borderstyle = DefaultBorderStyle; ///< 1: Normal; 3: Opaque box; others are unused in Aegisub
+	double outline_w = DefaultOutlineWidth; ///< Outline width in pixels
+	double shadow_w = DefaultShadowWidth;   ///< Shadow distance in pixels
+	int alignment = DefaultAlignment;       ///< \an-style line alignment
+	std::array<int, 3> Margin{{ DefaultMargin, DefaultMargin, DefaultMargin }}; ///< Left / Right / Vertical
+	int encoding = DefaultEncoding;         ///< ASS font encoding needed for some non-unicode fonts
 
 	/// Update the raw line data after one or more of the public members have been changed
 	void UpdateData();

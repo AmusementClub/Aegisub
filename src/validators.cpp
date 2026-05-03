@@ -163,6 +163,13 @@ bool DoubleSpinValidator::TransferToWindow() {
 
 bool DoubleSpinValidator::TransferFromWindow() {
 	auto ctrl = static_cast<wxSpinCtrlDouble*>(GetWindow());
+	if (has_default_value) {
+		auto text_value = ctrl->GetTextValue();
+		text_value.Trim(true);
+		text_value.Trim(false);
+		if (text_value.empty())
+			ctrl->SetValue(default_value);
+	}
 #ifndef wxHAS_NATIVE_SPINCTRLDOUBLE
 	wxFocusEvent evt;
 	ctrl->OnTextLostFocus(evt);

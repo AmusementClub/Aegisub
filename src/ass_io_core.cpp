@@ -31,6 +31,7 @@
 
 #include <libaegisub/ass/uuencode.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/string_utils.h>
 #include <libaegisub/vfr.h>
 
 #ifdef _WIN32
@@ -78,6 +79,15 @@ struct Writer {
 			}
 
 			file.WriteLineToFile(line.GetEntryData());
+		}
+	}
+
+	void Write(std::vector<AssInfo> const& list) {
+		for (auto const& line : list) {
+			if (agi::util::strings::iequals(line.Key(), "scripttype"))
+				file.WriteLineToFile("ScriptType: v4.00+");
+			else
+				file.WriteLineToFile(line.GetEntryData());
 		}
 	}
 

@@ -47,6 +47,7 @@ if(GTEST_FOUND)
         src/ass_parser.cpp
         src/ass_dialogue.cpp
         src/ass_karaoke.cpp
+        src/ass_io_core.cpp
         src/ass_time_projection.cpp
         src/ass_entry.cpp
         src/ass_file.cpp
@@ -70,6 +71,7 @@ if(GTEST_FOUND)
         src/perf_trace.cpp
         src/resolution_resampler.cpp
         src/text_file_writer.cpp
+        src/text_file_reader.cpp
         src/string_codec.cpp
         src/time_display_mode.cpp
         src/threaded_ui_timer.cpp

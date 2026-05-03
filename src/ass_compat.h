@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <string>
@@ -133,8 +134,12 @@ inline bool ParseFloat(agi::util::strings::view text, double& out) {
 	if (p != end && *p == '+')
 		++p;
 
-	auto result = std::from_chars(p, end, out);
-	return result.ec == std::errc() && result.ptr != p;
+	double parsed = 0.0;
+	auto result = std::from_chars(p, end, parsed);
+	if (result.ec != std::errc() || result.ptr == p || !std::isfinite(parsed))
+		return false;
+	out = parsed;
+	return true;
 }
 
 inline bool ParseDecimalInteger(agi::util::strings::view text, int& out) {
@@ -277,6 +282,8 @@ inline std::string FormatUnsignedInteger(std::uint32_t value) {
 }
 
 inline std::string FormatFloat(double value) {
+	if (!std::isfinite(value))
+		return "0";
 	if (value == 0.0)
 		return "0";
 
@@ -295,6 +302,8 @@ inline std::string FormatFloat(double value) {
 		return "0";
 
 	text.erase(pos == dot ? dot : pos + 1);
+	if (text == "-0")
+		return "0";
 	return text;
 }
 

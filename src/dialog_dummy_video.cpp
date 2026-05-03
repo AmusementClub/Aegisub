@@ -25,6 +25,10 @@
 #include <libaegisub/ass/time.h>
 #include <libaegisub/color.h>
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 #include <wx/checkbox.h>
 #include <wx/combobox.h>
 #include <wx/dialog.h>
@@ -37,6 +41,18 @@
 #include <wx/valgen.h>
 
 namespace {
+constexpr int kMaxDummyVideoFrames = std::numeric_limits<int>::max();
+
+int clamp_dummy_duration_ms(int frames, double fps) {
+	if (frames <= 0 || fps <= 0.0 || !std::isfinite(fps))
+		return 0;
+
+	double const milliseconds = static_cast<double>(frames) / fps * 1000.0;
+	if (!std::isfinite(milliseconds) || milliseconds >= std::numeric_limits<int>::max())
+		return std::numeric_limits<int>::max();
+	return static_cast<int>(std::max(0.0, milliseconds));
+}
+
 struct DialogDummyVideo {
 	wxDialog d;
 
@@ -122,7 +138,7 @@ DialogDummyVideo::DialogDummyVideo(wxWindow *parent)
 	AddCtrl(wxEmptyString, res_sizer);
 	AddCtrl(_("Color:"), color_sizer);
 	AddCtrl(_("Frame rate (fps):"), spin_ctrl(&d, .1, 1000.0, &fps));
-	AddCtrl(_("Duration (frames):"), spin_ctrl(&d, 2, 36000000, &length)); // Ten hours of 1k FPS
+	AddCtrl(_("Duration (frames):"), spin_ctrl(&d, 2, kMaxDummyVideoFrames, &length));
 	AddCtrl(wxEmptyString, length_display = new wxStaticText(&d, -1, wxEmptyString));
 
 	auto btn_sizer = d.CreateStdDialogButtonSizer(wxOK | wxCANCEL | wxHELP);
@@ -168,7 +184,7 @@ void DialogDummyVideo::OnResolutionShortcut(wxCommandEvent &e) {
 }
 
 void DialogDummyVideo::UpdateLengthDisplay() {
-	length_display->SetLabel(fmt_tl("Resulting duration: %s", agi::Time(length / fps * 1000).GetAssFormatted(true)));
+	length_display->SetLabel(fmt_tl("Resulting duration: %s", agi::Time(clamp_dummy_duration_ms(length, fps)).GetAssFormatted(true)));
 }
 }
 

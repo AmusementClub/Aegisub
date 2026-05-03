@@ -70,6 +70,29 @@ TEST(lagi_character_count, line_length_ignores_drawings) {
 	EXPECT_EQ(0, agi::MaxLineLength("{\\p1}m 10 10", agi::IGNORE_NONE));
 }
 
+TEST(lagi_character_count, rendered_text_counts_ass_line_breaks_as_zero) {
+	EXPECT_EQ(0, agi::RenderedTextCharacterCount("\\N", agi::IGNORE_NONE));
+	EXPECT_EQ(0, agi::RenderedTextCharacterCount("\\n", agi::IGNORE_NONE));
+	EXPECT_EQ(2, agi::RenderedTextCharacterCount("a\\Nb", agi::IGNORE_NONE));
+	EXPECT_EQ(2, agi::RenderedTextCharacterCount("a\\nb", agi::IGNORE_PUNCTUATION));
+}
+
+TEST(lagi_character_count, rendered_text_counts_hard_space_as_whitespace) {
+	EXPECT_EQ(1, agi::RenderedTextCharacterCount("\\h", agi::IGNORE_NONE));
+	EXPECT_EQ(1, agi::RenderedTextCharacterCount("\\h", agi::IGNORE_PUNCTUATION));
+	EXPECT_EQ(0, agi::RenderedTextCharacterCount("\\h", agi::IGNORE_WHITESPACE));
+	EXPECT_EQ(2, agi::RenderedTextCharacterCount("a\\hb", agi::IGNORE_WHITESPACE));
+}
+
+TEST(lagi_character_count, rendered_text_ignores_overrides_and_drawings) {
+	EXPECT_EQ(5, agi::RenderedTextCharacterCount("{\\bord3}hello", agi::IGNORE_NONE));
+	EXPECT_EQ(0, agi::RenderedTextCharacterCount("{\\p1}m 10 10", agi::IGNORE_NONE));
+}
+
+TEST(lagi_character_count, rendered_text_counts_non_bmp_codepoints_as_one_character) {
+	EXPECT_EQ(1, agi::RenderedTextCharacterCount("\xF0\x9F\x98\x80", agi::IGNORE_NONE));
+}
+
 TEST(lagi_character_count, character_index) {
 	EXPECT_EQ(0, agi::IndexOfCharacter("", 0));
 	EXPECT_EQ(0, agi::IndexOfCharacter("", 1));

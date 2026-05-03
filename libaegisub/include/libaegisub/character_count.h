@@ -26,6 +26,8 @@ namespace agi {
 
 	/// Get the length in characters of the longest line in the given text
 	size_t MaxLineLength(std::string const& text, int ignore_mask);
+	/// Get the character count of ASS dialogue text as rendered
+	size_t RenderedTextCharacterCount(std::string const& text, int ignore_mask);
 	/// Get the total number of characters in the string
 	size_t CharacterCount(std::string const& str, int ignore_mask);
 	size_t CharacterCount(std::string::const_iterator begin, std::string::const_iterator end, int ignore_mask);

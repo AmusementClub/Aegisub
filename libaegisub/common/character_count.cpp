@@ -98,6 +98,14 @@ int ignore_mask_to_icu_mask(int mask) {
 		ret |= U_GC_Z_MASK;
 	return ret;
 }
+
+bool is_ass_hard_space(std::string const& text, size_t pos) {
+	return pos + 1 < text.size() && text[pos + 1] == 'h';
+}
+
+size_t ass_hard_space_length(int mask) {
+	return mask & U_GC_Z_MASK ? 0 : 1;
+}
 }
 
 namespace agi {
@@ -127,6 +135,27 @@ size_t CharacterCount(std::string const& str, int mask) {
 	return CharacterCount(begin(str), end(str), mask);
 }
 
+size_t RenderedTextCharacterCount(std::string const& text, int mask) {
+	mask = ignore_mask_to_icu_mask(mask);
+	auto tokens = agi::ass::TokenizeDialogueBody(text);
+	agi::ass::MarkDrawings(text, tokens);
+
+	size_t pos = 0;
+	size_t characters = 0;
+	for (auto token : tokens) {
+		if (token.type == agi::ass::DialogueTokenType::LINE_BREAK) {
+			if (is_ass_hard_space(text, pos))
+				characters += ass_hard_space_length(mask);
+		}
+		else if (token.type == agi::ass::DialogueTokenType::TEXT)
+			characters += count_in_range(begin(text) + pos, begin(text) + pos + token.length, mask);
+
+		pos += token.length;
+	}
+
+	return characters;
+}
+
 size_t MaxLineLength(std::string const& text, int mask) {
 	mask = ignore_mask_to_icu_mask(mask);
 	auto tokens = agi::ass::TokenizeDialogueBody(text);
@@ -137,10 +166,8 @@ size_t MaxLineLength(std::string const& text, int mask) {
 	size_t current_line_length = 0;
 	for (auto token : tokens) {
 		if (token.type == agi::ass::DialogueTokenType::LINE_BREAK) {
-			if (text[pos + 1] == 'h') {
-				if (!(mask & U_GC_Z_MASK))
-					current_line_length += 1;
-			}
+			if (is_ass_hard_space(text, pos))
+				current_line_length += ass_hard_space_length(mask);
 			else { // N or n
 				max_line_length = std::max(max_line_length, current_line_length);
 				current_line_length = 0;

@@ -333,7 +333,7 @@ public:
 		if (ignore_punctuation->GetBool())
 			ignore |= agi::IGNORE_PUNCTUATION;
 
-		return agi::CharacterCount(text, ignore) * 1000 / duration;
+		return agi::RenderedTextCharacterCount(text, ignore) * 1000 / duration;
 	}
 
 	int Width(const agi::Context *c, WidthHelper &helper) const override {

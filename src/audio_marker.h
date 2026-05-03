@@ -144,7 +144,7 @@ class VideoPositionMarkerProvider final : public AudioMarkerProvider {
 
 	std::unique_ptr<VideoPositionMarker> marker;
 
-	agi::signal::Connection video_seek_slot;
+	agi::signal::Connection video_frame_presented_slot;
 	agi::signal::Connection enable_opt_changed_slot;
 
 	void Update(int frame_number);

@@ -155,9 +155,16 @@ void AudioController::OnTimingControllerUpdatedPrimaryRange()
 
 void AudioController::PlayRange(const TimeRange &range)
 {
-	if (!player) return;
+	if (!player || !provider) return;
 
-	player->Play(SamplesFromMilliseconds(range.begin()), SamplesFromMilliseconds(range.length()));
+	int64_t const start_sample = SamplesFromMilliseconds(range.begin());
+	int64_t const sample_count = SamplesFromMilliseconds(range.length());
+	if (sample_count <= 0) {
+		Stop();
+		return;
+	}
+
+	player->Play(start_sample, sample_count);
 	playback_mode = PM_Range;
 	playback_timer.Start(20);
 
@@ -173,17 +180,29 @@ void AudioController::PlayPrimaryRange()
 
 void AudioController::PlayToEndOfPrimary(int start_ms)
 {
-	PlayRange(TimeRange(start_ms, GetPrimaryPlaybackRange().end()));
+	auto range = GetPrimaryPlaybackRange();
+	if (start_ms >= range.end()) {
+		Stop();
+		return;
+	}
+
+	PlayRange(TimeRange(start_ms, range.end()));
 	if (playback_mode == PM_Range)
 		playback_mode = PM_PrimaryRange;
 }
 
 void AudioController::PlayToEnd(int start_ms)
 {
-	if (!player) return;
+	if (!player || !provider) return;
 
 	int64_t start_sample = SamplesFromMilliseconds(start_ms);
-	player->Play(start_sample, provider->GetNumSamples()-start_sample);
+	int64_t sample_count = provider->GetNumSamples() - start_sample;
+	if (sample_count <= 0) {
+		Stop();
+		return;
+	}
+
+	player->Play(start_sample, sample_count);
 	playback_mode = PM_ToEnd;
 	playback_timer.Start(20);
 

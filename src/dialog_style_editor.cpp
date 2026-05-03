@@ -184,6 +184,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	auto num_text_ctrl = [&](double *value, double min, double max, double step) -> wxSpinCtrlDouble * {
 		auto scd = new wxSpinCtrlDouble(this, -1, wxEmptyString, wxDefaultPosition,
 			wxDefaultSize, wxSP_ARROW_KEYS, min, max, *value, step);
+		scd->SetDigits(1);
 		scd->SetValidator(DoubleSpinValidator(value));
 		scd->Bind(wxEVT_SPINCTRLDOUBLE, [=](wxSpinDoubleEvent &evt) {
 			evt.Skip();
@@ -217,7 +218,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	// Create controls
 	StyleName = new wxTextCtrl(this, -1, to_wx(style->name));
 	FontName = new wxComboBox(this, -1, to_wx(style->font), wxDefaultPosition, wxSize(150, -1), 0, nullptr, wxCB_DROPDOWN);
-	auto FontSize = num_text_ctrl(&work->fontsize, 0, 10000.0, 1.0);
+	auto FontSize = num_text_ctrl(&work->fontsize, 0, 10000.0, 0.1);
 	BoxBold = new wxCheckBox(this, -1, _("&Bold"));
 	BoxItalic = new wxCheckBox(this, -1, _("&Italic"));
 	BoxUnderline = new wxCheckBox(this, -1, _("&Underline"));
@@ -243,9 +244,9 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	auto Outline = num_text_ctrl(&work->outline_w, 0.0, 1000.0, 0.1);
 	auto Shadow = num_text_ctrl(&work->shadow_w, 0.0, 1000.0, 0.1);
 	OutlineType = new wxCheckBox(this, -1, _("&Opaque box"));
-	auto ScaleX = num_text_ctrl(&work->scalex, 0.0, 10000.0, 1.0);
-	auto ScaleY = num_text_ctrl(&work->scaley, 0.0, 10000.0, 1.0);
-	auto Angle = num_text_ctrl(&work->angle, -360.0, 360.0, 1.0);
+	auto ScaleX = num_text_ctrl(&work->scalex, 0.0, 10000.0, 0.1);
+	auto ScaleY = num_text_ctrl(&work->scaley, 0.0, 10000.0, 0.1);
+	auto Angle = num_text_ctrl(&work->angle, -360.0, 360.0, 0.1);
 	auto Spacing = num_text_ctrl(&work->spacing, 0.0, 1000.0, 0.1);
 	Encoding = new wxComboBox(this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, encodingStrings, wxCB_READONLY);
 

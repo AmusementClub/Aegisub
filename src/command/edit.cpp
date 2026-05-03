@@ -65,6 +65,7 @@
 #include <wx/dataobj.h>
 #include <wx/clipbrd.h>
 #include <wx/fontdlg.h>
+#include <wx/msgdlg.h>
 #include <wx/textentry.h>
 
 namespace {
@@ -170,6 +171,45 @@ bool parse_dialogue_clipboard_data(std::string const& data, EntryList<AssDialogu
 	return !parsed.empty();
 }
 
+size_t count_dialogue_lines(EntryList<AssDialogue> const& lines) {
+	size_t count = 0;
+	for (auto const& line : lines) {
+		(void)line;
+		++count;
+	}
+	return count;
+}
+
+size_t count_clipboard_paste_lines() {
+	EntryList<AssDialogue> parsed;
+	auto exact_data = get_exact_dialogue_clipboard_payload();
+	if (!exact_data.empty() && parse_dialogue_clipboard_data(exact_data, parsed)) {
+		auto count = count_dialogue_lines(parsed);
+		parsed.clear_and_dispose([](AssDialogue *e) { delete e; });
+		return count;
+	}
+
+	size_t count = 0;
+	agi::util::strings::for_each_split_any(GetClipboard(), "\r\n", [&](agi::util::strings::view) {
+		++count;
+	});
+	return count;
+}
+
+template<typename It>
+size_t count_lines_until(It pos, It end) {
+	size_t count = 0;
+	for (; pos != end; ++pos)
+		++count;
+	return count;
+}
+
+bool confirm_paste_over_count_mismatch(wxWindow *parent, wxString const& message) {
+	wxMessageDialog dialog(parent, message, _("Paste Lines Over"), wxYES_NO | wxNO_DEFAULT | wxICON_WARNING);
+	dialog.SetYesNoLabels(_("Continue"), _("Cancel"));
+	return dialog.ShowModal() == wxID_YES;
+}
+
 struct validate_sel_nonempty : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 	bool Validate(const agi::Context *c) override {
@@ -216,14 +256,16 @@ void paste_lines(agi::Context *c, bool paste_over, Paster&& paste_line) {
 	AssDialogue *first = nullptr;
 	Selection newsel;
 
-	auto handle_line = [&](AssDialogue *new_line) {
-		AssDialogue *inserted = paste_line(new_line);
+	auto handle_line = [&](std::unique_ptr<AssDialogue> new_line) {
+		AssDialogue *inserted = paste_line(new_line.get());
 		if (!inserted)
 			return false;
 
 		newsel.insert(inserted);
 		if (!first)
 			first = inserted;
+		if (inserted == new_line.get())
+			new_line.release();
 		return true;
 	};
 
@@ -231,10 +273,8 @@ void paste_lines(agi::Context *c, bool paste_over, Paster&& paste_line) {
 	auto exact_data = get_exact_dialogue_clipboard_payload();
 	if (!exact_data.empty() && parse_dialogue_clipboard_data(exact_data, exact_lines)) {
 		for (auto const& line : exact_lines) {
-			std::unique_ptr<AssDialogue> new_line(new AssDialogue(line));
-			if (!handle_line(new_line.get()))
+			if (!handle_line(agi::make_unique<AssDialogue>(line)))
 				break;
-			new_line.release();
 		}
 		exact_lines.clear_and_dispose([](AssDialogue *e) { delete e; });
 	}
@@ -247,11 +287,9 @@ void paste_lines(agi::Context *c, bool paste_over, Paster&& paste_line) {
 			if (stop)
 				return;
 
-			AssDialogue *new_line = get_dialogue(std::string(line));
-			if (!handle_line(new_line)) {
-				delete new_line;
+			std::unique_ptr<AssDialogue> new_line(get_dialogue(std::string(line)));
+			if (!handle_line(std::move(new_line)))
 				stop = true;
-			}
 		});
 	}
 
@@ -1094,14 +1132,23 @@ struct edit_line_paste_over final : public Command {
 		auto core = c->GetCore();
 		auto ui = c->GetUI();
 		auto const& sel = core.selectionController->GetSelectedSet();
+		auto clipboard_lines = count_clipboard_paste_lines();
+		if (!clipboard_lines)
+			return;
 		std::vector<bool> pasteOverOptions;
 
 		// Only one line selected, so paste over downwards from the active line
 		if (sel.size() < 2) {
 			auto pos = core.ass->iterator_to(*core.selectionController->GetActiveLine());
+			auto available_lines = count_lines_until(pos, core.ass->Events.end());
+			if (clipboard_lines > available_lines) {
+				if (!confirm_paste_over_count_mismatch(ui.parent, fmt_tl(
+					"Clipboard line count: %u\nAvailable target line count: %u\n\nContinue to paste over the available target lines and ignore the remaining clipboard content?",
+					clipboard_lines, available_lines)))
+					return;
+			}
 
 			paste_lines(c, true, [&](AssDialogue *new_line) -> AssDialogue * {
-				std::unique_ptr<AssDialogue> deleter(new_line);
 				if (pos == core.ass->Events.end()) return nullptr;
 
 				AssDialogue *ret = paste_over(ui.parent, pasteOverOptions, new_line, &*pos);
@@ -1113,9 +1160,19 @@ struct edit_line_paste_over final : public Command {
 		else {
 			// Multiple lines selected, so paste over the selection
 			auto sorted_selection = core.selectionController->GetSortedSelection();
+			if (clipboard_lines != sorted_selection.size()) {
+				if (!confirm_paste_over_count_mismatch(ui.parent, clipboard_lines > sorted_selection.size()
+					? fmt_tl(
+						"Clipboard line count: %u\nSelected line count: %u\n\nContinue to paste over all selected lines and ignore the remaining clipboard content?",
+						clipboard_lines, sorted_selection.size())
+					: fmt_tl(
+						"Clipboard line count: %u\nSelected line count: %u\n\nContinue to paste over selected lines until the clipboard is exhausted and leave the rest unchanged?",
+						clipboard_lines, sorted_selection.size())))
+					return;
+			}
+
 			auto pos = begin(sorted_selection);
 			paste_lines(c, true, [&](AssDialogue *new_line) -> AssDialogue * {
-				std::unique_ptr<AssDialogue> deleter(new_line);
 				if (pos == end(sorted_selection)) return nullptr;
 
 				AssDialogue *ret = paste_over(ui.parent, pasteOverOptions, new_line, *pos);

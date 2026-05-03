@@ -120,10 +120,6 @@ void RunGuiWxAppStartupSequence(
 	}
 	observe_phase("startup.sequence.first_start_prompt");
 
-	if (config::global_scripts)
-		config::global_scripts->ReloadAsync();
-	observe_phase("startup.sequence.global_scripts.reload_async_schedule");
-
 #ifdef WITH_UPDATE_CHECKER
 	PerformVersionCheck(false);
 #endif
@@ -137,4 +133,8 @@ void RunGuiWxAppStartupSequence(
 		open_files(startup_files);
 	}
 	observe_phase("startup.sequence.open_files");
+
+	if (config::global_scripts)
+		config::global_scripts->ReloadAsync();
+	observe_phase("startup.sequence.global_scripts.reload_async_schedule");
 }

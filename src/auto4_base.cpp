@@ -52,6 +52,7 @@
 #include <libaegisub/split.h>
 
 #include <chrono>
+#include <exception>
 #include <future>
 #include <utility>
 #include <vector>
@@ -130,6 +131,57 @@ namespace Automation4 {
 			int error_count = 0;
 		};
 
+		class FailedScript final : public Script {
+			std::string description;
+
+		public:
+			FailedScript(agi::fs::path const& filename, std::string description)
+			: Script(filename)
+			, description(std::move(description))
+			{
+			}
+
+			void Reload() override { }
+
+			std::string GetName() const override { return agi::fs::PathToString(GetFilename().stem()); }
+			std::string GetDescription() const override { return description; }
+			std::string GetAuthor() const override { return ""; }
+			std::string GetVersion() const override { return ""; }
+			bool GetLoadedState() const override { return false; }
+
+			std::vector<cmd::Command*> GetMacros() const override { return {}; }
+			std::vector<ExportFilter*> GetFilters() const override { return {}; }
+		};
+
+		std::string DescribeCurrentException()
+		{
+			try {
+				throw;
+			}
+			catch (agi::Exception const& e) {
+				return e.GetMessage();
+			}
+			catch (std::exception const& e) {
+				return e.what();
+			}
+			catch (...) {
+				return "Unknown error";
+			}
+		}
+
+		ScriptLoadAttempt LoadAutomationScript(agi::fs::path const& script_filename)
+		{
+			ScriptLoadAttempt attempt;
+			try {
+				attempt.script = ScriptFactory::CreateFromFile(script_filename, false, &attempt.recognised);
+			}
+			catch (...) {
+				attempt.recognised = true;
+				attempt.script = agi::make_unique<FailedScript>(script_filename, DescribeCurrentException());
+			}
+			return attempt;
+		}
+
 		void ReportFailedAutomationScriptLoad(agi::fs::path const& filename, std::string const& description)
 		{
 			wxLogError(_("Failed to load Automation script '%s':\n%s"), filename.wstring(), to_wx(description));
@@ -170,11 +222,19 @@ namespace Automation4 {
 
 			std::vector<std::future<ScriptLoadAttempt>> script_futures;
 			for (auto const& script_filename : script_filenames) {
-				script_futures.emplace_back(std::async(std::launch::async, [=] {
-					ScriptLoadAttempt attempt;
-					attempt.script = ScriptFactory::CreateFromFile(script_filename, false, &attempt.recognised);
-					return attempt;
-				}));
+				try {
+					script_futures.emplace_back(std::async(std::launch::async, [=] {
+						return LoadAutomationScript(script_filename);
+					}));
+				}
+				catch (...) {
+					auto attempt = LoadAutomationScript(script_filename);
+					if (attempt.script) {
+						if (!attempt.script->GetLoadedState())
+							++result.error_count;
+						result.scripts.emplace_back(std::move(attempt.script));
+					}
+				}
 			}
 
 			for (auto& future : script_futures) {
@@ -706,10 +766,17 @@ namespace Automation4 {
 		if (recognised_out)
 			*recognised_out = false;
 
-		if (auto script = WrapScriptInstance(AutomationEngineRegistry::CreateFromFile(filename))) {
+		try {
+			if (auto script = WrapScriptInstance(AutomationEngineRegistry::CreateFromFile(filename))) {
+				if (recognised_out)
+					*recognised_out = true;
+				return script;
+			}
+		}
+		catch (...) {
 			if (recognised_out)
 				*recognised_out = true;
-			return script;
+			return agi::make_unique<FailedScript>(filename, DescribeCurrentException());
 		}
 
 		return create_unknown ? agi::make_unique<UnknownScript>(filename) : nullptr;

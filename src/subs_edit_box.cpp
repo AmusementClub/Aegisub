@@ -802,6 +802,8 @@ void SubsEditBox::CommitTimes(TimeField field) {
 
 	start_time->SetTime(line->Start);
 	end_time->SetTime(line->End);
+	start_time->SetLinkedTime(line->End);
+	end_time->SetLinkedTime(line->Start);
 
 	if (field != TIME_DURATION)
 		SetDurationField();

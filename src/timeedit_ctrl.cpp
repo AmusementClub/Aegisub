@@ -250,7 +250,12 @@ void TimeEdit::OnChar(wxKeyEvent &event) {
 	text[start] = (char)key;
 	time = text;
 	input_changed = true;
-	SetValue(to_wx(GetDisplayedText()));
+	ChangeValue(to_wx(GetDisplayedText()));
+
+	wxCommandEvent evt(wxEVT_TEXT, GetId());
+	evt.SetEventObject(this);
+	HandleWindowEvent(evt);
+
 	SetInsertionPoint(start + 1);
 }
 

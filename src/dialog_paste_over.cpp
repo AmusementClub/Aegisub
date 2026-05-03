@@ -38,6 +38,15 @@
 #include <wx/stattext.h>
 
 namespace {
+constexpr size_t PASTE_OVER_FIELD_COUNT = 11;
+
+void normalize_paste_over_options(std::vector<bool>& options) {
+	if (options.size() == PASTE_OVER_FIELD_COUNT - 1)
+		options.insert(options.begin(), false);
+	if (options.size() < PASTE_OVER_FIELD_COUNT)
+		options.resize(PASTE_OVER_FIELD_COUNT, false);
+}
+
 struct DialogPasteOver {
 	wxDialog d;
 	wxCheckListBox *ListBox;
@@ -75,8 +84,9 @@ DialogPasteOver::DialogPasteOver(wxWindow *parent)
 	ListSizer->Add(ListBox, wxSizerFlags(0).Expand().Border(wxTOP));
 
 	std::vector<bool> options = OPT_GET("Tool/Paste Lines Over/Fields")->GetListBool();
-	if (options.size() != choices.size())
-		options.resize(choices.size(), false);
+	normalize_paste_over_options(options);
+	if (options.size() > choices.size())
+		options.resize(choices.size());
 
 	for (size_t i = 0; i < choices.size(); ++i)
 		ListBox->Check(i, options[i]);

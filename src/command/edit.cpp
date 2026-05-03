@@ -210,6 +210,15 @@ bool confirm_paste_over_count_mismatch(wxWindow *parent, wxString const& message
 	return dialog.ShowModal() == wxID_YES;
 }
 
+constexpr size_t PASTE_OVER_FIELD_COUNT = 11;
+
+void normalize_paste_over_options(std::vector<bool>& options) {
+	if (options.size() == PASTE_OVER_FIELD_COUNT - 1)
+		options.insert(options.begin(), false);
+	if (options.size() < PASTE_OVER_FIELD_COUNT)
+		options.resize(PASTE_OVER_FIELD_COUNT, false);
+}
+
 struct validate_sel_nonempty : public Command {
 	CMD_TYPE(COMMAND_VALIDATE)
 	bool Validate(const agi::Context *c) override {
@@ -306,6 +315,7 @@ AssDialogue *paste_over(wxWindow *parent, std::vector<bool>& pasteOverOptions, A
 		if (!ShowPasteOverDialog(parent)) return nullptr;
 		pasteOverOptions = OPT_GET("Tool/Paste Lines Over/Fields")->GetListBool();
 	}
+	normalize_paste_over_options(pasteOverOptions);
 
 	if (pasteOverOptions[0])  old_line->Comment   = new_line->Comment;
 	if (pasteOverOptions[1])  old_line->Layer     = new_line->Layer;
@@ -1132,6 +1142,20 @@ struct edit_line_paste_over final : public Command {
 		auto core = c->GetCore();
 		auto ui = c->GetUI();
 		auto const& sel = core.selectionController->GetSelectedSet();
+		if (sel.empty())
+			return;
+
+		AssDialogue *active_line = nullptr;
+		std::vector<AssDialogue *> sorted_selection;
+		for (auto& line : core.ass->Events) {
+			if (&line == core.selectionController->GetActiveLine())
+				active_line = &line;
+			if (sel.count(&line))
+				sorted_selection.push_back(&line);
+		}
+		if (sorted_selection.empty())
+			return;
+
 		auto clipboard_lines = count_clipboard_paste_lines();
 		if (!clipboard_lines)
 			return;
@@ -1139,7 +1163,10 @@ struct edit_line_paste_over final : public Command {
 
 		// Only one line selected, so paste over downwards from the active line
 		if (sel.size() < 2) {
-			auto pos = core.ass->iterator_to(*core.selectionController->GetActiveLine());
+			if (!active_line)
+				active_line = sorted_selection.front();
+
+			auto pos = core.ass->iterator_to(*active_line);
 			auto available_lines = count_lines_until(pos, core.ass->Events.end());
 			if (clipboard_lines > available_lines) {
 				if (!confirm_paste_over_count_mismatch(ui.parent, fmt_tl(
@@ -1159,7 +1186,6 @@ struct edit_line_paste_over final : public Command {
 		}
 		else {
 			// Multiple lines selected, so paste over the selection
-			auto sorted_selection = core.selectionController->GetSortedSelection();
 			if (clipboard_lines != sorted_selection.size()) {
 				if (!confirm_paste_over_count_mismatch(ui.parent, clipboard_lines > sorted_selection.size()
 					? fmt_tl(

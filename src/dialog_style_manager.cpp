@@ -30,6 +30,7 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_style.h"
+#include "ass_style_resolution.h"
 #include "ass_style_storage.h"
 #include "charset_detect.h"
 #include "compat.h"
@@ -91,6 +92,8 @@ class DialogStyleManager final : public wxDialog {
 
 	/// Styles in the current subtitle file
 	std::vector<AssStyle*> styleMap;
+	aegisub::ass_style_resolution::StyleResolutionGraph style_resolution;
+	std::vector<std::string> current_style_tooltips;
 
 	/// Style storage manager
 	AssStyleStorage Store;
@@ -118,6 +121,7 @@ class DialogStyleManager final : public wxDialog {
 	wxButton *CurrentEdit;
 	wxButton *CurrentCopy;
 	wxButton *CurrentDelete;
+	wxButton *CurrentClean;
 	wxButton *CurrentMoveUp;
 	wxButton *CurrentMoveDown;
 	wxButton *CurrentMoveTop;
@@ -130,6 +134,8 @@ class DialogStyleManager final : public wxDialog {
 	void LoadCurrentStyles(int commit_type);
 	/// Enable/disable all of the buttons as appropriate
 	void UpdateButtons();
+	wxString CurrentStyleDisplayName(size_t index) const;
+	bool SelectCurrentStyleName(std::string const& name, bool select = true);
 	/// Move styles up or down
 	/// @param storage Storage or current file styles
 	/// @param type 0: up; 1: top; 2: down; 3: bottom; 4: sort
@@ -160,6 +166,8 @@ class DialogStyleManager final : public wxDialog {
 	void OnCurrentEdit();
 	void OnCurrentImport();
 	void OnCurrentNew();
+	void OnCurrentClean();
+	void OnCurrentListMouseMove(wxMouseEvent &event);
 
 	void OnStorageCopy();
 	void OnStorageDelete();
@@ -265,6 +273,28 @@ bool confirm_action(agi::Context *context, wxString const& title, wxString const
 	}) == agi::InteractionResult::Yes;
 }
 
+bool confirm_copyable_action(wxWindow *parent, wxString const& title, wxString const& message) {
+	wxDialog dialog(parent, -1, title, wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER);
+	auto *sizer = new wxBoxSizer(wxVERTICAL);
+	auto *text = new wxTextCtrl(
+		&dialog,
+		-1,
+		message,
+		wxDefaultPosition,
+		dialog.FromDIP(wxSize(680, 360)),
+		wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
+	sizer->Add(text, wxSizerFlags(1).Expand().Border(wxALL, 5));
+
+	auto *buttons = dialog.CreateStdDialogButtonSizer(wxOK | wxCANCEL);
+	if (auto *ok = buttons->GetAffirmativeButton())
+		ok->SetLabel(_("Clean"));
+	sizer->Add(buttons, wxSizerFlags().Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 5));
+
+	dialog.SetSizerAndFit(sizer);
+	dialog.SetMinSize(dialog.GetSize());
+	return dialog.ShowModal() == wxID_OK;
+}
+
 bool confirm_delete(int n, agi::Context *context, wxString const& title) {
 	return confirm_action(
 		context,
@@ -326,11 +356,13 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 
 	// Local styles list
 	wxButton *CurrentImport = new wxButton(this, -1, _("&Import from script..."));
+	CurrentClean = new wxButton(this, -1, _("&Clean"));
 	wxSizer *CurrentButtons = make_edit_buttons(this, _("<- Copy to &storage"), &MoveToStorage, &CurrentNew, &CurrentEdit, &CurrentCopy, &CurrentDelete);
 
 	wxSizer *MoveImportSizer = new wxBoxSizer(wxHORIZONTAL);
 	MoveImportSizer->Add(MoveToStorage,1,wxEXPAND | wxRIGHT,5);
-	MoveImportSizer->Add(CurrentImport,1,wxEXPAND,0);
+	MoveImportSizer->Add(CurrentImport,1,wxEXPAND | wxRIGHT,5);
+	MoveImportSizer->Add(CurrentClean,0,wxEXPAND,0);
 
 	wxSizer *CurrentListSizer = new wxBoxSizer(wxHORIZONTAL);
 	CurrentList = new wxListBox(this, -1, wxDefaultPosition, FromDIP(wxSize(240, 250)), 0, nullptr, wxLB_EXTENDED);
@@ -407,6 +439,8 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 		CurrentDelete->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCurrentDelete(); });
 
 		CurrentImport->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCurrentImport(); });
+		CurrentClean->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCurrentClean(); });
+		CurrentList->Bind(wxEVT_MOTION, &DialogStyleManager::OnCurrentListMouseMove, this);
 
 		MoveToLocal->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCopyToCurrent(); });
 		MoveToStorage->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) { OnCopyToStorage(); });
@@ -421,25 +455,70 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 	CurrentList->Bind(wxEVT_LISTBOX_DCLICK, [=](wxCommandEvent&) { OnCurrentEdit(); });
 }
 
+wxString DialogStyleManager::CurrentStyleDisplayName(size_t index) const {
+	if (index >= styleMap.size())
+		return {};
+
+	auto name = to_wx(styleMap[index]->name);
+	if (index < current_style_tooltips.size() && !current_style_tooltips[index].empty())
+		return wxString::FromUTF8("\xE2\x9A\xA0 ") + name;
+	return name;
+}
+
+bool DialogStyleManager::SelectCurrentStyleName(std::string const& name, bool select) {
+	auto *resolved = c->GetCore().ass->GetStyle(name);
+	if (resolved) {
+		for (size_t i = 0; i < styleMap.size(); ++i) {
+			if (styleMap[i] == resolved) {
+				CurrentList->SetSelection(static_cast<int>(i), select);
+				return true;
+			}
+		}
+	}
+
+	for (size_t i = 0; i < styleMap.size(); ++i) {
+		if (styleMap[i]->name == name) {
+			CurrentList->SetSelection(static_cast<int>(i), select);
+			return true;
+		}
+	}
+
+	return false;
+}
+
 void DialogStyleManager::LoadCurrentStyles(int commit_type) {
 	auto core = c->GetCore();
+	bool reload_styles = commit_type & AssFile::COMMIT_STYLES || commit_type == AssFile::COMMIT_NEW;
+	bool refresh_resolution = reload_styles || (commit_type & (AssFile::COMMIT_DIAG_META | AssFile::COMMIT_DIAG_TEXT));
 
-	if (commit_type & AssFile::COMMIT_STYLES || commit_type == AssFile::COMMIT_NEW) {
+	if (refresh_resolution)
+		style_resolution = aegisub::ass_style_resolution::BuildStyleResolutionGraph(*core.ass);
+
+	if (reload_styles) {
 		CurrentList->Clear();
 		styleMap.clear();
+		current_style_tooltips.clear();
 
+		size_t index = 0;
 		for (auto& style : core.ass->Styles) {
-			CurrentList->Append(to_wx(style.name));
 			styleMap.push_back(&style);
+			current_style_tooltips.push_back(aegisub::ass_style_resolution::BuildStyleIssueTooltip(style_resolution, static_cast<int>(index)));
+			CurrentList->Append(CurrentStyleDisplayName(index));
+			++index;
+		}
+	}
+	else if (refresh_resolution) {
+		current_style_tooltips.clear();
+		for (size_t i = 0; i < styleMap.size(); ++i) {
+			current_style_tooltips.push_back(aegisub::ass_style_resolution::BuildStyleIssueTooltip(style_resolution, static_cast<int>(i)));
+			CurrentList->SetString(i, CurrentStyleDisplayName(i));
 		}
 	}
 
 	if (commit_type & AssFile::COMMIT_DIAG_META) {
 		AssDialogue *dia = core.selectionController->GetActiveLine();
 		CurrentList->DeselectAll();
-		if (dia && commit_type != AssFile::COMMIT_NEW)
-			CurrentList->SetStringSelection(to_wx(dia->Style));
-		else
+		if ((!dia || commit_type == AssFile::COMMIT_NEW || !SelectCurrentStyleName(dia->Style.get())) && CurrentList->GetCount())
 			CurrentList->SetSelection(0);
 	}
 
@@ -449,7 +528,7 @@ void DialogStyleManager::LoadCurrentStyles(int commit_type) {
 void DialogStyleManager::OnActiveLineChanged(AssDialogue *new_line) {
 	if (new_line) {
 		CurrentList->DeselectAll();
-		CurrentList->SetStringSelection(to_wx(new_line->Style));
+		SelectCurrentStyleName(new_line->Style.get());
 		UpdateButtons();
 	}
 }
@@ -552,16 +631,17 @@ void DialogStyleManager::OnCopyToStorage() {
 	wxArrayString copied;
 	copied.reserve(n);
 	for (int i = 0; i < n; i++) {
-		wxString styleName = CurrentList->GetString(selections[i]);
+		AssStyle *current = styleMap.at(selections[i]);
+		wxString styleName = to_wx(current->name);
 
-		if (AssStyle *style = Store.GetStyle(from_wx(styleName))) {
+		if (AssStyle *style = Store.GetStyle(current->name)) {
 			if (confirm_action(c, _("Style name collision"), fmt_tl("There is already a style with the name \"%s\" in the current storage. Overwrite?", styleName))) {
-				*style = *styleMap.at(selections[i]);
+				*style = *current;
 				copied.push_back(styleName);
 			}
 		}
 		else {
-			Store.push_back(agi::make_unique<AssStyle>(*styleMap.at(selections[i])));
+			Store.push_back(agi::make_unique<AssStyle>(*current));
 			copied.push_back(styleName);
 		}
 	}
@@ -598,7 +678,7 @@ void DialogStyleManager::OnCopyToCurrent() {
 
 	CurrentList->DeselectAll();
 	for (auto const& style_name : copied)
-		CurrentList->SetStringSelection(style_name, true);
+		SelectCurrentStyleName(from_wx(style_name), true);
 	UpdateButtons();
 }
 
@@ -683,7 +763,7 @@ void DialogStyleManager::ShowCurrentEditor(AssStyle *style, std::string const& n
 	DialogStyleEditor editor(this, style, c, nullptr, new_name, font_list.get());
 	if (editor.ShowModal()) {
 		CurrentList->DeselectAll();
-		CurrentList->SetStringSelection(to_wx(editor.GetStyleName()));
+		SelectCurrentStyleName(editor.GetStyleName());
 		UpdateButtons();
 	}
 }
@@ -792,6 +872,33 @@ void DialogStyleManager::OnCurrentImport() {
 		core.ass->Commit(from_wx(_("style import")), AssFile::COMMIT_STYLES);
 }
 
+void DialogStyleManager::OnCurrentClean() {
+	auto core = c->GetCore();
+	style_resolution = aegisub::ass_style_resolution::BuildStyleResolutionGraph(*core.ass);
+	auto plan = aegisub::ass_style_resolution::BuildStyleCleanPlan(style_resolution);
+
+	if (plan.empty()) {
+		c->ShowWarning(from_wx(_("No style conflicts can be cleaned automatically.")), from_wx(_("Clean styles")));
+		return;
+	}
+
+	auto preview = to_wx(aegisub::ass_style_resolution::BuildStyleCleanPreview(plan));
+	if (!confirm_copyable_action(this, _("Clean styles"), preview))
+		return;
+
+	aegisub::ass_style_resolution::ApplyStyleCleanPlan(plan);
+	core.ass->Commit(from_wx(_("style clean")), AssFile::COMMIT_STYLES | AssFile::COMMIT_DIAG_FULL);
+}
+
+void DialogStyleManager::OnCurrentListMouseMove(wxMouseEvent &event) {
+	int item = CurrentList->HitTest(event.GetPosition());
+	if (item >= 0 && item < static_cast<int>(current_style_tooltips.size()) && !current_style_tooltips[item].empty())
+		CurrentList->SetToolTip(to_wx(current_style_tooltips[item]));
+	else
+		CurrentList->SetToolTip(wxEmptyString);
+	event.Skip();
+}
+
 void DialogStyleManager::UpdateButtons() {
 	CatalogDelete->Enable(CatalogList->GetCount() > 1);
 
@@ -857,6 +964,12 @@ void DialogStyleManager::UpdateButtons() {
 	CurrentMoveDown->Enable(contCurr && lastCurr != -1 && lastCurr < itemsCurr-1);
 	CurrentMoveBottom->Enable(contCurr && lastCurr != -1 && lastCurr < itemsCurr-1);
 	CurrentSort->Enable(itemsCurr > 1);
+
+	auto clean_plan = aegisub::ass_style_resolution::BuildStyleCleanPlan(style_resolution);
+	CurrentClean->Enable(!clean_plan.empty());
+	CurrentClean->SetToolTip(clean_plan.empty()
+		? _("No style conflicts can be cleaned automatically.")
+		: to_wx(aegisub::ass_style_resolution::BuildStyleCleanPreview(clean_plan)));
 }
 
 struct cmp_name {

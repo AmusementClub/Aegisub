@@ -54,6 +54,7 @@
 #include <chrono>
 #include <future>
 #include <utility>
+#include <vector>
 
 #include <wx/dcmemory.h>
 #include <wx/log.h>
@@ -142,21 +143,38 @@ namespace Automation4 {
 		AutoloadReloadResult LoadAutoloadScripts(std::string const& path)
 		{
 			AutoloadReloadResult result;
-			std::vector<std::future<ScriptLoadAttempt>> script_futures;
+			std::vector<agi::fs::path> script_filenames;
 
 			for (auto tok : agi::Split(path, '|')) {
 				auto dirname = config::path->Decode(agi::str(tok));
 				if (!agi::fs::DirectoryExists(dirname)) continue;
 
-				for (auto filename : agi::fs::DirectoryIterator(dirname, "*.*"))
-					script_futures.emplace_back(std::async(std::launch::async, [=] {
-						ScriptLoadAttempt attempt;
-						attempt.script = ScriptFactory::CreateFromFile(
-							dirname / agi::fs::PathFromString(filename),
-							false,
-							&attempt.recognised);
-						return attempt;
-					}));
+				try {
+					dirname = agi::fs::Canonicalize(dirname);
+				}
+				catch (agi::fs::FileSystemError const&) {
+				}
+
+				for (auto filename : agi::fs::DirectoryIterator(dirname, "*.*")) {
+					auto script_filename = dirname / agi::fs::PathFromString(filename);
+					try {
+						script_filename = agi::fs::Canonicalize(script_filename);
+					}
+					catch (agi::fs::FileSystemError const&) {
+					}
+
+					if (find(script_filenames.begin(), script_filenames.end(), script_filename) == script_filenames.end())
+						script_filenames.emplace_back(std::move(script_filename));
+				}
+			}
+
+			std::vector<std::future<ScriptLoadAttempt>> script_futures;
+			for (auto const& script_filename : script_filenames) {
+				script_futures.emplace_back(std::async(std::launch::async, [=] {
+					ScriptLoadAttempt attempt;
+					attempt.script = ScriptFactory::CreateFromFile(script_filename, false, &attempt.recognised);
+					return attempt;
+				}));
 			}
 
 			for (auto& future : script_futures) {

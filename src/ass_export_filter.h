@@ -94,6 +94,8 @@ class AssExportFilterChain {
 public:
 	/// Register an export filter
 	static void Register(std::unique_ptr<AssExportFilter> filter);
+	/// Register an export filter owned elsewhere
+	static void Register(AssExportFilter *filter);
 	/// Unregister and delete all export filters
 	static void Clear();
 	/// Get a filter by name or nullptr if it doesn't exist

@@ -504,6 +504,7 @@ namespace Automation4 {
 	{
 		if (!script)
 			return;
+		script->CommitPendingFeatures();
 
 		if (find(scripts.begin(), scripts.end(), script) == scripts.end())
 			scripts.emplace_back(std::move(script));
@@ -529,7 +530,16 @@ namespace Automation4 {
 	void ScriptManager::Reload(Script *script)
 	{
 		script->Reload();
+		script->CommitPendingFeatures();
 		ScriptsChanged();
+	}
+
+	void CommitPendingFeatures(std::vector<std::unique_ptr<Script>>& scripts)
+	{
+		for (auto& script : scripts) {
+			if (script && script->GetLoadedState())
+				script->CommitPendingFeatures();
+		}
 	}
 
 	const std::vector<cmd::Command*>& ScriptManager::GetMacros()
@@ -555,6 +565,8 @@ namespace Automation4 {
 				ReportFailedAutomationScriptLoad(script->GetFilename(), script->GetDescription());
 		}
 
+		scripts.clear();
+		CommitPendingFeatures(loaded_scripts);
 		scripts = std::move(loaded_scripts);
 
 		if (error_count == 1) {
@@ -648,6 +660,7 @@ namespace Automation4 {
 			}
 		}
 
+		CommitPendingFeatures(scripts);
 		ScriptsChanged();
 	}
 

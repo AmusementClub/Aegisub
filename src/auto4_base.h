@@ -229,6 +229,8 @@ namespace Automation4 {
 		virtual std::vector<cmd::Command*> GetMacros() const=0;
 		/// Get a list of export filters provided by this script
 		virtual std::vector<ExportFilter*> GetFilters() const=0;
+		/// Commit features discovered while loading the script to the global registries.
+		virtual void CommitPendingFeatures() { }
 		/// Name of the runtime engine backing the script
 		virtual std::string GetEngineName() const { return ""; }
 		/// Get the current automation runtime snapshot when supported by the engine

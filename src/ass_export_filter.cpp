@@ -36,8 +36,15 @@
 
 #include <libaegisub/format.h>
 
+#include <vector>
+
 static FilterList& filters() {
 	static FilterList instance;
+	return instance;
+}
+
+static std::vector<std::unique_ptr<AssExportFilter>>& owned_filters() {
+	static std::vector<std::unique_ptr<AssExportFilter>> instance;
 	return instance;
 }
 
@@ -48,7 +55,7 @@ AssExportFilter::AssExportFilter(std::string name, std::string description, int 
 {
 }
 
-void AssExportFilterChain::Register(std::unique_ptr<AssExportFilter> filter) {
+void AssExportFilterChain::Register(AssExportFilter *filter) {
 	int filter_copy = 1;
 	std::string name = filter->name;
 	// Find a unique name
@@ -60,7 +67,13 @@ void AssExportFilterChain::Register(std::unique_ptr<AssExportFilter> filter) {
 	// Look for place to insert
 	auto begin(filters().begin()), end(filters().end());
 	while (begin != end && begin->priority >= filter->priority) ++begin;
-	filters().insert(begin, *filter.release());
+	filters().insert(begin, *filter);
+}
+
+void AssExportFilterChain::Register(std::unique_ptr<AssExportFilter> filter) {
+	auto *raw_filter = filter.get();
+	Register(raw_filter);
+	owned_filters().emplace_back(std::move(filter));
 }
 
 FilterList *AssExportFilterChain::GetFilterList() {
@@ -68,7 +81,8 @@ FilterList *AssExportFilterChain::GetFilterList() {
 }
 
 void AssExportFilterChain::Clear() {
-	filters().clear_and_dispose([](AssExportFilter *f) { delete f; });
+	filters().clear();
+	owned_filters().clear();
 }
 
 AssExportFilter *AssExportFilterChain::GetFilter(std::string const& name) {

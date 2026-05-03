@@ -74,7 +74,7 @@
 
 #include <algorithm>
 #include <cassert>
-#include <mutex>
+#include <unordered_set>
 #include <wx/clipbrd.h>
 #include <wx/log.h>
 #include <wx/msgdlg.h>
@@ -520,7 +520,9 @@ namespace {
 		std::string version;
 
 		std::vector<cmd::Command*> macros;
+		std::vector<std::unique_ptr<LuaCommand>> pending_macros;
 		std::vector<std::unique_ptr<ExportFilter>> filters;
+		std::vector<LuaExportFilter*> pending_filters;
 
 		/// load script and create internal structures etc.
 		void Create();
@@ -536,6 +538,8 @@ namespace {
 		void RegisterCommand(LuaCommand *command);
 		void UnregisterCommand(LuaCommand *command);
 		void RegisterFilter(LuaExportFilter *filter);
+		void QueueCommand(std::unique_ptr<LuaCommand> command);
+		void QueueFilter(std::unique_ptr<LuaExportFilter> filter);
 
 		static LuaScript* GetScriptObject(lua_State *L);
 		std::shared_ptr<AutomationHost> GetAutomationHost() const { return automation_host; }
@@ -557,6 +561,7 @@ namespace {
 
 		std::vector<cmd::Command*> GetMacros() const override { return macros; }
 		std::vector<ExportFilter*> GetFilters() const override;
+		void CommitPendingFeatures() override;
 		std::string GetEngineName() const override { return "Lua"; }
 		std::optional<AutomationRuntimeStateSnapshot> TryGetRuntimeStateSnapshot() const override;
 		void SetRuntimeTraceSink(AutomationRuntimeTraceSink *sink) override;
@@ -715,10 +720,14 @@ namespace {
 		if (!L) return;
 		debug_backend.reset();
 
+		pending_macros.clear();
+		pending_filters.clear();
+
 		// loops backwards because commands remove themselves from macros when
 		// they're unregistered
 		for (int i = macros.size() - 1; i >= 0; --i)
-			cmd::unreg(macros[i]->name());
+			if (cmd::get_if(macros[i]->name()) == macros[i])
+				cmd::unreg(macros[i]->name());
 
 		filters.clear();
 
@@ -800,6 +809,50 @@ namespace {
 	void LuaScript::RegisterFilter(LuaExportFilter *filter)
 	{
 		filters.emplace_back(filter);
+	}
+
+	void LuaScript::QueueCommand(std::unique_ptr<LuaCommand> command)
+	{
+		RegisterCommand(command.get());
+		pending_macros.emplace_back(std::move(command));
+	}
+
+	void LuaScript::QueueFilter(std::unique_ptr<LuaExportFilter> filter)
+	{
+		pending_filters.push_back(filter.get());
+		filters.emplace_back(std::move(filter));
+	}
+
+	void LuaScript::CommitPendingFeatures()
+	{
+		if (pending_macros.empty() && pending_filters.empty())
+			return;
+
+		std::unordered_set<std::string> committed_names;
+		for (auto *macro : macros) {
+			if (macro && find_if(pending_macros.begin(), pending_macros.end(), [&](std::unique_ptr<LuaCommand> const& pending) { return pending.get() == macro; }) == pending_macros.end())
+				committed_names.insert(macro->name());
+		}
+
+		for (auto it = pending_macros.begin(); it != pending_macros.end(); ) {
+			auto& macro = *it;
+			auto const name = std::string(macro->name());
+			if (committed_names.count(name) || cmd::get_if(name)) {
+				wxLogWarning(wxS("Skipping Automation macro '%s' from script '%s' because command '%s' is already registered."),
+					macro->StrDisplay(nullptr), GetFilename().wstring(), to_wx(name));
+				macros.erase(remove(macros.begin(), macros.end(), macro.get()), macros.end());
+				it = pending_macros.erase(it);
+				continue;
+			}
+
+			committed_names.insert(name);
+			cmd::reg(std::move(macro));
+			it = pending_macros.erase(it);
+		}
+
+		for (auto *filter : pending_filters)
+			AssExportFilterChain::Register(filter);
+		pending_filters.clear();
 	}
 
 	LuaScript* LuaScript::GetScriptObject(lua_State *L)
@@ -953,12 +1006,8 @@ namespace {
 	// LuaFeatureMacro
 	int LuaCommand::LuaRegister(lua_State *L)
 	{
-		static std::mutex mutex;
 		auto command = agi::make_unique<LuaCommand>(L);
-		{
-			std::lock_guard<std::mutex> lock(mutex);
-			cmd::reg(std::move(command));
-		}
+		LuaScript::GetScriptObject(L)->QueueCommand(std::move(command));
 		return 0;
 	}
 
@@ -1001,7 +1050,6 @@ namespace {
 		// store the table in the registry
 		RegisterFeature();
 
-		LuaScript::GetScriptObject(L)->RegisterCommand(this);
 	}
 
 	LuaCommand::~LuaCommand()
@@ -1266,17 +1314,12 @@ namespace {
 		// store the table in the registry
 		RegisterFeature();
 
-		LuaScript::GetScriptObject(L)->RegisterFilter(this);
 	}
 
 	int LuaExportFilter::LuaRegister(lua_State *L)
 	{
-		static std::mutex mutex;
 		auto filter = agi::make_unique<LuaExportFilter>(L);
-		{
-			std::lock_guard<std::mutex> lock(mutex);
-			AssExportFilterChain::Register(std::move(filter));
-		}
+		LuaScript::GetScriptObject(L)->QueueFilter(std::move(filter));
 		return 0;
 	}
 

@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include "ass_time_projection.h"
+
 #include <libaegisub/vfr.h>
 
 struct AssFramerateTransform {
@@ -40,7 +42,8 @@ AssFramerateTransform BuildAssFramerateTransform(
 	agi::vfr::Framerate const& source,
 	agi::vfr::Framerate const& destination,
 	int start_ms,
-	int end_ms);
+	int end_ms,
+	AssTimeOutputMode time_output_mode = AssTimeOutputMode::LegacyRounding);
 
 int TransformRelativeStartTagTimeForExport(
 	agi::vfr::Framerate const& source,

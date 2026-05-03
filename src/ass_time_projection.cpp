@@ -136,13 +136,31 @@ std::pair<int, int> ProjectAssDialogueTimesForStorage(agi::Time const& start, ag
 	return { projected_start, projected_end };
 }
 
-bool IsAssDialogueVisibleAtTimeForStorage(agi::Time const& start, agi::Time const& end, int time_ms, agi::vfr::Framerate const* fps) {
-	auto const projected = ProjectAssDialogueTimesForStorage(start, end, fps);
-	return !(projected.first > time_ms || projected.second <= time_ms);
+std::pair<int, int> GetAssDialogueTimesForOutput(
+	agi::Time const& start,
+	agi::Time const& end,
+	AssTimeOutputMode mode,
+	agi::vfr::Framerate const* fps) {
+	if (mode == AssTimeOutputMode::FrameSafeProjection)
+		return ProjectAssDialogueTimesForStorage(start, end, fps);
+	return { static_cast<int>(start), static_cast<int>(end) };
 }
 
-std::string SerializeAssDialogueForStorage(AssDialogue const& line, agi::vfr::Framerate const* fps) {
-	auto const projected = ProjectAssDialogueTimesForStorage(line.Start, line.End, fps);
+bool IsAssDialogueVisibleAtTimeForOutput(
+	agi::Time const& start,
+	agi::Time const& end,
+	int time_ms,
+	AssTimeOutputMode mode,
+	agi::vfr::Framerate const* fps) {
+	auto const output = GetAssDialogueTimesForOutput(start, end, mode, fps);
+	return !(output.first > time_ms || output.second <= time_ms);
+}
+
+std::string SerializeAssDialogueForOutput(
+	AssDialogue const& line,
+	AssTimeOutputMode mode,
+	agi::vfr::Framerate const* fps) {
+	auto const projected = GetAssDialogueTimesForOutput(line.Start, line.End, mode, fps);
 	return line.GetEntryData(
 		AssCompat::FormatTime(projected.first),
 		AssCompat::FormatTime(projected.second));

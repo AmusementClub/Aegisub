@@ -29,7 +29,25 @@ enum class AssStorageTimeBoundary {
 	End
 };
 
+enum class AssTimeOutputMode {
+	LegacyRounding,
+	FrameSafeProjection
+};
+
 int ProjectAssTimeForStorage(int time_ms, AssStorageTimeBoundary boundary, agi::vfr::Framerate const* fps = nullptr);
 std::pair<int, int> ProjectAssDialogueTimesForStorage(agi::Time const& start, agi::Time const& end, agi::vfr::Framerate const* fps = nullptr);
-bool IsAssDialogueVisibleAtTimeForStorage(agi::Time const& start, agi::Time const& end, int time_ms, agi::vfr::Framerate const* fps = nullptr);
-std::string SerializeAssDialogueForStorage(AssDialogue const& line, agi::vfr::Framerate const* fps = nullptr);
+std::pair<int, int> GetAssDialogueTimesForOutput(
+	agi::Time const& start,
+	agi::Time const& end,
+	AssTimeOutputMode mode,
+	agi::vfr::Framerate const* fps = nullptr);
+bool IsAssDialogueVisibleAtTimeForOutput(
+	agi::Time const& start,
+	agi::Time const& end,
+	int time_ms,
+	AssTimeOutputMode mode,
+	agi::vfr::Framerate const* fps = nullptr);
+std::string SerializeAssDialogueForOutput(
+	AssDialogue const& line,
+	AssTimeOutputMode mode,
+	agi::vfr::Framerate const* fps = nullptr);

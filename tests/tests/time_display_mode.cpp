@@ -14,13 +14,21 @@ TEST(time_display_mode, defaults_to_ass_for_ass_and_exact_for_other_formats) {
 	EXPECT_EQ(SubtitleTimeDisplayMode::Ass, DefaultTimeDisplayModeForFile({}));
 }
 
-TEST(time_display_mode, ass_display_reuses_dialogue_storage_projection) {
+TEST(time_display_mode, ass_display_uses_legacy_rounding_without_projection) {
 	auto const fps = agi::vfr::Framerate(100.0);
-	auto const displayed = GetDialogueTimesForDisplay(agi::Time(5), agi::Time(15), SubtitleTimeDisplayMode::Ass, &fps);
+	auto const displayed = GetDialogueTimesForDisplay(agi::Time(19), agi::Time(21), SubtitleTimeDisplayMode::Ass, &fps);
 
-	EXPECT_EQ(10, displayed.first);
+	EXPECT_EQ(20, displayed.first);
 	EXPECT_EQ(20, displayed.second);
-	EXPECT_EQ("0:00:00.01", FormatTimeForDisplay(displayed.first, SubtitleTimeDisplayMode::Ass));
+	EXPECT_EQ("0:00:00.02", FormatTimeForDisplay(displayed.first, SubtitleTimeDisplayMode::Ass));
+}
+
+TEST(time_display_mode, ass_display_can_collapse_short_intervals_like_legacy_storage_rounding) {
+	auto const fps = agi::vfr::Framerate(100.0);
+	auto const displayed = GetDialogueTimesForDisplay(agi::Time(18), agi::Time(19), SubtitleTimeDisplayMode::Ass, &fps);
+
+	EXPECT_EQ(20, displayed.first);
+	EXPECT_EQ(20, displayed.second);
 }
 
 TEST(time_display_mode, exact_display_preserves_internal_milliseconds) {
@@ -59,7 +67,7 @@ TEST(time_display_mode, ass_display_text_does_not_uniquely_identify_internal_tim
 		FormatTimeForDisplay(displayed_one_ms.first, SubtitleTimeDisplayMode::Ass));
 }
 
-TEST(time_display_mode, ass_displayed_start_can_depend_on_linked_end) {
+TEST(time_display_mode, ass_displayed_boundary_is_independent_of_the_other_boundary) {
 	auto const collapsed_interval = GetDialogueTimesForDisplay(
 		agi::Time(18),
 		agi::Time(19),
@@ -69,7 +77,7 @@ TEST(time_display_mode, ass_displayed_start_can_depend_on_linked_end) {
 		agi::Time(30),
 		SubtitleTimeDisplayMode::Ass);
 
-	EXPECT_EQ(10, collapsed_interval.first);
+	EXPECT_EQ(20, collapsed_interval.first);
 	EXPECT_EQ(20, regular_interval.first);
 }
 
@@ -87,12 +95,12 @@ TEST(time_display_mode, ass_duration_edit_keeps_existing_internal_end_for_same_d
 
 	auto const end = GetEndTimeForDisplayedDuration(
 		agi::Time(14),
-		agi::Time(40),
-		agi::Time(20),
+		agi::Time(24),
+		agi::Time(10),
 		SubtitleTimeDisplayMode::Ass,
 		&fps);
 
-	EXPECT_EQ(40, end.GetMillisecond());
+	EXPECT_EQ(24, end.GetMillisecond());
 }
 
 TEST(time_display_mode, ass_duration_edit_preserves_current_displayed_start_when_representable) {
@@ -106,12 +114,12 @@ TEST(time_display_mode, ass_duration_edit_preserves_current_displayed_start_when
 		&fps);
 	auto const displayed = GetDialogueTimesForDisplay(agi::Time(14), end, SubtitleTimeDisplayMode::Ass, &fps);
 
-	EXPECT_EQ(30, end.GetMillisecond());
-	EXPECT_EQ(20, displayed.first);
-	EXPECT_EQ(30, displayed.second);
+	EXPECT_EQ(20, end.GetMillisecond());
+	EXPECT_EQ(10, displayed.first);
+	EXPECT_EQ(20, displayed.second);
 }
 
-TEST(time_display_mode, ass_duration_edit_falls_back_to_canonical_start_when_collapsed_start_cannot_be_preserved) {
+TEST(time_display_mode, ass_duration_edit_adds_legacy_display_duration_to_internal_start) {
 	auto const fps = agi::vfr::Framerate(100.0);
 
 	auto const end = GetEndTimeForDisplayedDuration(
@@ -122,9 +130,9 @@ TEST(time_display_mode, ass_duration_edit_falls_back_to_canonical_start_when_col
 		&fps);
 	auto const displayed = GetDialogueTimesForDisplay(agi::Time(14), end, SubtitleTimeDisplayMode::Ass, &fps);
 
-	EXPECT_EQ(40, end.GetMillisecond());
-	EXPECT_EQ(20, displayed.first);
-	EXPECT_EQ(40, displayed.second);
+	EXPECT_EQ(30, end.GetMillisecond());
+	EXPECT_EQ(10, displayed.first);
+	EXPECT_EQ(30, displayed.second);
 }
 
 TEST(time_display_mode, ass_duration_edit_supports_times_past_ten_hours) {

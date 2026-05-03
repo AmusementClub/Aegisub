@@ -14,8 +14,6 @@
 
 #include "time_display_mode.h"
 
-#include "ass_time_projection.h"
-
 #include <libaegisub/fs.h>
 
 #include <algorithm>
@@ -60,9 +58,9 @@ std::pair<int, int> GetDialogueTimesForDisplay(
 	agi::Time const& start,
 	agi::Time const& end,
 	SubtitleTimeDisplayMode mode,
-	agi::vfr::Framerate const* fps) {
+	agi::vfr::Framerate const*) {
 	if (mode == SubtitleTimeDisplayMode::Ass)
-		return ProjectAssDialogueTimesForStorage(start, end, fps);
+		return { static_cast<int>(start), static_cast<int>(end) };
 	if (mode == SubtitleTimeDisplayMode::Exact)
 		return { start.GetMillisecond(), end.GetMillisecond() };
 	throw std::logic_error("Frame display mode does not expose millisecond timestamps");
@@ -94,33 +92,8 @@ agi::Time GetEndTimeForDisplayedDuration(
 	if (target_duration_ms == 0)
 		return start;
 
-	auto const current_displayed = GetDialogueTimesForDisplay(start, current_end, mode, fps);
-	int const current_start_ms = current_displayed.first;
-	int const target_end_from_current_start = clamp_internal_time_ms(
-		static_cast<long long>(current_start_ms) + target_duration_ms);
-
-	// If the existing ASS-projected start can still represent the requested
-	// duration, keep that displayed anchor and place the internal end directly
-	// on the requested ASS end timestamp.
-	auto const anchored_to_current = GetDialogueTimesForDisplay(
-		start,
-		agi::Time(target_end_from_current_start),
-		mode,
-		fps);
-	if (anchored_to_current.first == current_start_ms
-		&& anchored_to_current.second == target_end_from_current_start) {
-		return agi::Time(target_end_from_current_start);
-	}
-
-	// Otherwise the previous displayed start came from a short-interval collapse
-	// and cannot be preserved. Fall back to the canonical start projection for
-	// this internal start, then place the end on the requested ASS boundary.
-	int const canonical_start_ms = ProjectAssTimeForStorage(
-		start.GetMillisecond(),
-		AssStorageTimeBoundary::Start,
-		fps);
 	return agi::Time(clamp_internal_time_ms(
-		static_cast<long long>(canonical_start_ms) + target_duration_ms));
+		static_cast<long long>(static_cast<int>(start)) + target_duration_ms));
 }
 
 std::string FormatTimeForDisplay(int ms, SubtitleTimeDisplayMode mode) {

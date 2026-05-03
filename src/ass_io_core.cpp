@@ -101,7 +101,7 @@ struct Writer {
 				group = line.Group();
 			}
 
-			file.WriteLineToFile(SerializeAssDialogueForStorage(line, fps));
+			file.WriteLineToFile(SerializeAssDialogueForOutput(line, AssTimeOutputMode::LegacyRounding, fps));
 		}
 	}
 

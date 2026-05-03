@@ -113,18 +113,9 @@ void TimeEdit::SetDisplayMode(SubtitleTimeDisplayMode mode) {
 	UpdateText();
 }
 
-void TimeEdit::SetLinkedTime(agi::Time other_time) {
-	has_linked_time = true;
-	linked_time = other_time;
-	if (display_mode == SubtitleTimeDisplayMode::Ass)
-		UpdateText();
-}
+void TimeEdit::SetLinkedTime(agi::Time) { }
 
-void TimeEdit::ClearLinkedTime() {
-	has_linked_time = false;
-	if (display_mode == SubtitleTimeDisplayMode::Ass)
-		UpdateText();
-}
+void TimeEdit::ClearLinkedTime() { }
 
 void TimeEdit::SetByFrame(bool enableByFrame) {
 	SetDisplayMode(enableByFrame ? SubtitleTimeDisplayMode::Frame : SubtitleTimeDisplayMode::Ass);
@@ -133,13 +124,6 @@ void TimeEdit::SetByFrame(bool enableByFrame) {
 std::string TimeEdit::GetDisplayedText() const {
 	if (DisplaysFrames())
 		return std::to_string(c->GetCore().project->Timecodes().FrameAtTime(time, isEnd ? agi::vfr::END : agi::vfr::START));
-
-	if (display_mode == SubtitleTimeDisplayMode::Ass && has_linked_time) {
-		auto const displayed = isEnd
-			? GetDialogueTimesForDisplay(linked_time, time, display_mode, &c->GetCore().project->Timecodes())
-			: GetDialogueTimesForDisplay(time, linked_time, display_mode, &c->GetCore().project->Timecodes());
-		return FormatTimeForDisplay(isEnd ? displayed.second : displayed.first, display_mode);
-	}
 
 	return FormatTimeForDisplay(time, display_mode);
 }

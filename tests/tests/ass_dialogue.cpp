@@ -8,7 +8,7 @@
 #include <libaegisub/color.h>
 #include <libaegisub/vfr.h>
 
-TEST(ass_time_projection, generic_end_time_uses_symmetric_rounding_for_ass_storage) {
+TEST(ass_time_projection, legacy_output_uses_symmetric_rounding_for_ass_storage) {
 	AssDialogue line;
 	line.Comment = false;
 	line.Layer = 2;
@@ -22,7 +22,22 @@ TEST(ass_time_projection, generic_end_time_uses_symmetric_rounding_for_ass_stora
 
 	EXPECT_EQ(
 		"Dialogue: 2,0:00:14.19,0:17:39.27,Default,Actor,1,2,3,Effect,Hello",
-		SerializeAssDialogueForStorage(line));
+		SerializeAssDialogueForOutput(line, AssTimeOutputMode::LegacyRounding));
+}
+
+TEST(ass_time_projection, legacy_output_can_be_requested_when_projection_would_expand_interval) {
+	AssDialogue line;
+	line.Start = 18;
+	line.End = 19;
+	line.Style = "Default";
+	line.Text = "short";
+
+	EXPECT_EQ(
+		"Dialogue: 0,0:00:00.02,0:00:00.02,Default,,0,0,0,,short",
+		SerializeAssDialogueForOutput(line, AssTimeOutputMode::LegacyRounding));
+	EXPECT_EQ(
+		"Dialogue: 0,0:00:00.01,0:00:00.02,Default,,0,0,0,,short",
+		SerializeAssDialogueForOutput(line, AssTimeOutputMode::FrameSafeProjection));
 }
 
 TEST(ass_time_projection, frame_safe_times_preserve_100fps_snap_semantics) {
@@ -59,7 +74,7 @@ TEST(ass_time_projection, serializes_frame_safe_dialogue_using_projection_when_f
 
 	EXPECT_EQ(
 		"Dialogue: 0,0:00:00.01,0:00:00.02,Default,,0,0,0,,frame",
-		SerializeAssDialogueForStorage(line, &fps));
+		SerializeAssDialogueForOutput(line, AssTimeOutputMode::FrameSafeProjection, &fps));
 }
 
 TEST(ass_time_projection, short_unrepresentable_intervals_expand_to_a_non_empty_ass_bucket) {
@@ -71,7 +86,7 @@ TEST(ass_time_projection, short_unrepresentable_intervals_expand_to_a_non_empty_
 
 	EXPECT_EQ(
 		"Dialogue: 0,0:00:00.01,0:00:00.02,Default,,0,0,0,,short",
-		SerializeAssDialogueForStorage(line));
+		SerializeAssDialogueForOutput(line, AssTimeOutputMode::FrameSafeProjection));
 }
 
 TEST(ass_time_projection, short_boundary_crossing_intervals_project_to_a_single_ass_bucket) {
@@ -82,8 +97,12 @@ TEST(ass_time_projection, short_boundary_crossing_intervals_project_to_a_single_
 }
 
 TEST(ass_time_projection, projected_visibility_uses_storage_interval_not_original_ms_interval) {
-	EXPECT_TRUE(IsAssDialogueVisibleAtTimeForStorage(agi::Time(18), agi::Time(19), 19));
-	EXPECT_FALSE(IsAssDialogueVisibleAtTimeForStorage(agi::Time(18), agi::Time(19), 20));
+	EXPECT_TRUE(IsAssDialogueVisibleAtTimeForOutput(agi::Time(18), agi::Time(19), 19, AssTimeOutputMode::FrameSafeProjection));
+	EXPECT_FALSE(IsAssDialogueVisibleAtTimeForOutput(agi::Time(18), agi::Time(19), 20, AssTimeOutputMode::FrameSafeProjection));
+}
+
+TEST(ass_time_projection, legacy_visibility_uses_legacy_rounded_output_interval) {
+	EXPECT_FALSE(IsAssDialogueVisibleAtTimeForOutput(agi::Time(18), agi::Time(19), 19, AssTimeOutputMode::LegacyRounding));
 }
 
 TEST(ass_dialogue, exact_millisecond_dialogue_text_roundtrips_through_parser) {
@@ -125,7 +144,7 @@ TEST(ass_time_projection, storage_serialization_preserves_times_past_ten_hours) 
 
 	EXPECT_EQ(
 		"Dialogue: 0,12:00:00.00,12:00:01.23,Default,,0,0,0,,long",
-		SerializeAssDialogueForStorage(line));
+		SerializeAssDialogueForOutput(line, AssTimeOutputMode::LegacyRounding));
 }
 
 TEST(ass_dialogue, parses_aegisub_millisecond_precision_times) {

@@ -48,8 +48,6 @@ class TimeEdit final : public wxTextCtrl {
 	agi::Context *c; ///< Project context
 	bool isEnd;      ///< Should the time be treated as an end time for time <-> frame conversions?
 	agi::Time time;  ///< The time, which may be displayed as either a frame number or time
-	agi::Time linked_time; ///< The other boundary when ASS display needs interval projection
-	bool has_linked_time = false;
 	bool insert;     ///< If true, disable overwriting behavior in time mode
 	bool input_changed = false;
 
@@ -92,7 +90,7 @@ public:
 	/// Set the display mode for the control
 	void SetDisplayMode(SubtitleTimeDisplayMode mode);
 
-	/// Set the time used as the opposite boundary when displaying ASS-projected values
+	/// Retained for callers updating paired time controls; ASS display is boundary-local.
 	void SetLinkedTime(agi::Time other_time);
 	void ClearLinkedTime();
 

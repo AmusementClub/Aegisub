@@ -4,11 +4,30 @@
 
 #include <libaegisub/vfr.h>
 
-TEST(export_framerate_transform, dialogue_boundaries_preserve_start_and_end_frames) {
+TEST(export_framerate_transform, default_ass_anchors_use_legacy_rounding) {
 	auto const source = agi::vfr::Framerate(100.0);
 	auto const destination = agi::vfr::Framerate(50.0);
 
-	auto const transform = BuildAssFramerateTransform(source, destination, 5, 15);
+	auto const transform = BuildAssFramerateTransform(source, destination, 19, 21);
+
+	EXPECT_EQ(30, transform.new_start_ms);
+	EXPECT_EQ(50, transform.new_end_ms);
+	EXPECT_EQ(20, transform.old_ass_start_ms);
+	EXPECT_EQ(20, transform.old_ass_end_ms);
+	EXPECT_EQ(30, transform.new_ass_start_ms);
+	EXPECT_EQ(50, transform.new_ass_end_ms);
+}
+
+TEST(export_framerate_transform, frame_safe_ass_anchors_can_be_requested_explicitly) {
+	auto const source = agi::vfr::Framerate(100.0);
+	auto const destination = agi::vfr::Framerate(50.0);
+
+	auto const transform = BuildAssFramerateTransform(
+		source,
+		destination,
+		5,
+		15,
+		AssTimeOutputMode::FrameSafeProjection);
 
 	EXPECT_EQ(10, transform.new_start_ms);
 	EXPECT_EQ(30, transform.new_end_ms);
@@ -26,7 +45,12 @@ TEST(export_framerate_transform, instant_mapping_uses_frame_identity_not_frame_i
 TEST(export_framerate_transform, relative_start_tags_use_ass_storage_anchor) {
 	auto const source = agi::vfr::Framerate(100.0);
 	auto const destination = agi::vfr::Framerate(50.0);
-	auto const transform = BuildAssFramerateTransform(source, destination, 5, 15);
+	auto const transform = BuildAssFramerateTransform(
+		source,
+		destination,
+		5,
+		15,
+		AssTimeOutputMode::FrameSafeProjection);
 
 	EXPECT_EQ(50, TransformRelativeStartTagTimeForExport(source, destination, transform, 20));
 }
@@ -34,7 +58,12 @@ TEST(export_framerate_transform, relative_start_tags_use_ass_storage_anchor) {
 TEST(export_framerate_transform, relative_end_tags_use_ass_storage_anchor) {
 	auto const source = agi::vfr::Framerate(100.0);
 	auto const destination = agi::vfr::Framerate(50.0);
-	auto const transform = BuildAssFramerateTransform(source, destination, 5, 15);
+	auto const transform = BuildAssFramerateTransform(
+		source,
+		destination,
+		5,
+		15,
+		AssTimeOutputMode::FrameSafeProjection);
 
 	EXPECT_EQ(10, TransformRelativeEndTagTimeForExport(source, destination, transform, 5));
 }
@@ -42,7 +71,12 @@ TEST(export_framerate_transform, relative_end_tags_use_ass_storage_anchor) {
 TEST(export_framerate_transform, short_intervals_anchor_ass_tags_to_projected_transformed_dialogue) {
 	auto const source = agi::vfr::Framerate(100.0);
 	auto const destination = agi::vfr::Framerate(50.0);
-	auto const transform = BuildAssFramerateTransform(source, destination, 14, 15);
+	auto const transform = BuildAssFramerateTransform(
+		source,
+		destination,
+		14,
+		15,
+		AssTimeOutputMode::FrameSafeProjection);
 
 	EXPECT_EQ(30, transform.new_start_ms);
 	EXPECT_EQ(30, transform.new_end_ms);

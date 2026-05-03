@@ -817,7 +817,7 @@ static void copy_lines(agi::Context *c) {
 	text_lines.reserve(selection.size());
 	exact_lines.reserve(selection.size());
 	for (auto* dialogue : selection) {
-		text_lines.push_back(SerializeAssDialogueForStorage(*dialogue, &core.project->Timecodes()));
+		text_lines.push_back(SerializeAssDialogueForOutput(*dialogue, AssTimeOutputMode::LegacyRounding, &core.project->Timecodes()));
 		exact_lines.push_back(serialize_dialogue_for_exact_clipboard(*dialogue));
 	}
 	set_dialogue_clipboard(

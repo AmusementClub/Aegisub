@@ -78,7 +78,7 @@ SubtitleSceneSnapshot CaptureSubtitleSceneSnapshot(
 	for (auto const& line : lines) {
 		if (line.Comment)
 			continue;
-		if (!IsAssDialogueVisibleAtTimeForStorage(line.Start, line.End, frame_time_ms, &fps))
+		if (!IsAssDialogueVisibleAtTimeForOutput(line.Start, line.End, frame_time_ms, AssTimeOutputMode::LegacyRounding, &fps))
 			continue;
 		snapshot.push_back(MakeSubtitleSceneLineSnapshot(line));
 	}
@@ -95,7 +95,7 @@ bool CurrentFrameSubtitleSceneNeedsRefresh(
 	for (auto const& line : lines) {
 		if (line.Comment)
 			continue;
-		if (!IsAssDialogueVisibleAtTimeForStorage(line.Start, line.End, frame_time_ms, &fps))
+		if (!IsAssDialogueVisibleAtTimeForOutput(line.Start, line.End, frame_time_ms, AssTimeOutputMode::LegacyRounding, &fps))
 			continue;
 
 		if (snapshot_index >= displayed_snapshot.size())

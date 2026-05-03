@@ -169,8 +169,8 @@ void SubtitlesProvider::LoadSubtitles(AssFile *subs, int time, agi::vfr::Framera
 
 	push_header("[Events]\n");
 	for (auto const& line : subs->Events) {
-		if (!line.Comment && (time < 0 || IsAssDialogueVisibleAtTimeForStorage(line.Start, line.End, time, fps)))
-			push_line(SerializeAssDialogueForStorage(line, fps));
+		if (!line.Comment && (time < 0 || IsAssDialogueVisibleAtTimeForOutput(line.Start, line.End, time, AssTimeOutputMode::LegacyRounding, fps)))
+			push_line(SerializeAssDialogueForOutput(line, AssTimeOutputMode::LegacyRounding, fps));
 	}
 
 	LoadSubtitles(&buffer[0], buffer.size());

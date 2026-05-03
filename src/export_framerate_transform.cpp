@@ -55,19 +55,27 @@ AssFramerateTransform BuildAssFramerateTransform(
 	agi::vfr::Framerate const& source,
 	agi::vfr::Framerate const& destination,
 	int start_ms,
-	int end_ms) {
+	int end_ms,
+	AssTimeOutputMode time_output_mode) {
 	AssFramerateTransform result;
 	result.new_start_ms = TransformFrameBoundaryTimeForExport(source, destination, start_ms, agi::vfr::START);
 	result.new_end_ms = TransformFrameBoundaryTimeForExport(source, destination, end_ms, agi::vfr::END);
-	// ASS-relative tags are anchored to the serialized dialogue interval, so
-	// reuse the whole-line storage projection rather than projecting endpoints
-	// independently.
-	auto const old_projected = ProjectAssDialogueTimesForStorage(agi::Time(start_ms), agi::Time(end_ms), &source);
-	auto const new_projected = ProjectAssDialogueTimesForStorage(agi::Time(result.new_start_ms), agi::Time(result.new_end_ms), &destination);
-	result.old_ass_start_ms = old_projected.first;
-	result.old_ass_end_ms = old_projected.second;
-	result.new_ass_start_ms = new_projected.first;
-	result.new_ass_end_ms = new_projected.second;
+	// ASS-relative tags are anchored to the serialized dialogue interval, so use
+	// the same explicit output strategy that will write the dialogue boundaries.
+	auto const old_output = GetAssDialogueTimesForOutput(
+		agi::Time(start_ms),
+		agi::Time(end_ms),
+		time_output_mode,
+		&source);
+	auto const new_output = GetAssDialogueTimesForOutput(
+		agi::Time(result.new_start_ms),
+		agi::Time(result.new_end_ms),
+		time_output_mode,
+		&destination);
+	result.old_ass_start_ms = old_output.first;
+	result.old_ass_end_ms = old_output.second;
+	result.new_ass_start_ms = new_output.first;
+	result.new_ass_end_ms = new_output.second;
 	return result;
 }
 

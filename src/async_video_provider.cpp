@@ -872,7 +872,7 @@ bool AsyncVideoProvider::ProcessPending() {
 	if (subs) {
 		auto const& fps = subtitles_timecodes;
 		for (auto const& line : subs->Events) {
-			if (!line.Comment && IsAssDialogueVisibleAtTimeForStorage(line.Start, line.End, static_cast<int>(time), &fps))
+			if (!line.Comment && IsAssDialogueVisibleAtTimeForOutput(line.Start, line.End, static_cast<int>(time), AssTimeOutputMode::LegacyRounding, &fps))
 				visible_lines.push_back(&line);
 		}
 	}

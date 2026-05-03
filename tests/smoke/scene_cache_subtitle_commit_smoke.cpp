@@ -135,6 +135,7 @@ struct FakeSceneCache {
 	bool valid = false;
 	int cached_scene = 0;
 	int backend_render_count = 0;
+	bool playing = false;
 
 	void Invalidate() noexcept {
 		valid = false;
@@ -142,11 +143,12 @@ struct FakeSceneCache {
 	}
 
 	int Redraw(bool allow_scene_cache) {
-		if (allow_scene_cache && valid)
+		bool const can_use_scene_cache = allow_scene_cache && !playing;
+		if (can_use_scene_cache && valid)
 			return cached_scene;
 
 		int const rendered_scene = ++backend_render_count;
-		if (allow_scene_cache) {
+		if (can_use_scene_cache) {
 			valid = true;
 			cached_scene = rendered_scene;
 		}
@@ -263,6 +265,29 @@ bool RunStaticTimingChangeScenario() {
 	return ReportScenarioResult("static_timing_change_skips_wait", !wait);
 }
 
+bool RunPlaybackBypassesSceneCacheScenario() {
+	FakeSceneCache cache;
+	int const paused_initial = cache.Redraw(true);
+	int const paused_cached = cache.Redraw(true);
+
+	cache.playing = true;
+	int const playing_first = cache.Redraw(true);
+	int const playing_second = cache.Redraw(true);
+
+	cache.playing = false;
+	int const paused_after_playback = cache.Redraw(true);
+	int const paused_after_cached = cache.Redraw(true);
+
+	bool const passed =
+		paused_initial == 1
+		&& paused_cached == 1
+		&& playing_first == 2
+		&& playing_second == 3
+		&& paused_after_playback == 4
+		&& paused_after_cached == 4;
+	return ReportScenarioResult("playback_bypasses_scene_cache", passed);
+}
+
 bool RunAnimatedTimingChangeScenario() {
 	auto const fps = agi::vfr::Framerate(100.0);
 	std::vector<AssDialogueBase> lines = {
@@ -300,6 +325,7 @@ int main() try {
 	passed = RunInvisibleCommitScenario() && passed;
 	passed = RunStyleReloadScenario() && passed;
 	passed = RunStaticTimingChangeScenario() && passed;
+	passed = RunPlaybackBypassesSceneCacheScenario() && passed;
 	passed = RunAnimatedTimingChangeScenario() && passed;
 	return passed ? 0 : 1;
 }

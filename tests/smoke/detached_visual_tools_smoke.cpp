@@ -1,5 +1,17 @@
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#endif
+
+#include <libaegisub/exception.h>
+
 #include "../../src/ivideo_renderer.h"
 #include "../../src/gl_wrap.h"
+#include "../../src/legacy_gl_draw.h"
 #include "../../src/source_frame.h"
 #include "../../src/video_display_layout.h"
 #include "../../src/video_frame.h"
@@ -13,14 +25,14 @@
 
 #ifdef _WIN32
 
-#include <libaegisub/exception.h>
 #include <libaegisub/log.h>
-
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
 #include <windows.h>
 #include <eh.h>
+#ifdef GetMessage
+#undef GetMessage
+#endif
+
+#include "../../src/video_render_opengl_proc_loader.h"
 #ifdef GetMessage
 #undef GetMessage
 #endif
@@ -34,6 +46,9 @@
 #endif
 
 #include <wx/colour.h>
+#ifdef GetMessage
+#undef GetMessage
+#endif
 
 #include <algorithm>
 #include <array>
@@ -77,6 +92,36 @@ std::string float_to_string(double val) {
 
 namespace {
 using WglCreateContextAttribsArbProc = HGLRC(WINAPI*)(HDC, HGLRC, int const*);
+
+template <typename Proc>
+Proc LoadOptionalProc(char const *name, char const *fallback_name = nullptr) {
+	if (auto *proc = opengl::GetProcAddress(name))
+		return reinterpret_cast<Proc>(proc);
+	if (fallback_name) {
+		if (auto *proc = opengl::GetProcAddress(fallback_name))
+			return reinterpret_cast<Proc>(proc);
+	}
+	return nullptr;
+}
+
+struct FramebufferFunctions {
+	PFNGLBINDFRAMEBUFFERPROC BindFramebuffer = nullptr;
+	PFNGLDELETEFRAMEBUFFERSPROC DeleteFramebuffers = nullptr;
+	PFNGLGENFRAMEBUFFERSPROC GenFramebuffers = nullptr;
+	PFNGLFRAMEBUFFERTEXTURE2DPROC FramebufferTexture2D = nullptr;
+	PFNGLCHECKFRAMEBUFFERSTATUSPROC CheckFramebufferStatus = nullptr;
+};
+
+FramebufferFunctions const& GetFramebufferFunctions() {
+	static const FramebufferFunctions functions = {
+		LoadOptionalProc<PFNGLBINDFRAMEBUFFERPROC>("glBindFramebuffer", "glBindFramebufferEXT"),
+		LoadOptionalProc<PFNGLDELETEFRAMEBUFFERSPROC>("glDeleteFramebuffers", "glDeleteFramebuffersEXT"),
+		LoadOptionalProc<PFNGLGENFRAMEBUFFERSPROC>("glGenFramebuffers", "glGenFramebuffersEXT"),
+		LoadOptionalProc<PFNGLFRAMEBUFFERTEXTURE2DPROC>("glFramebufferTexture2D", "glFramebufferTexture2DEXT"),
+		LoadOptionalProc<PFNGLCHECKFRAMEBUFFERSTATUSPROC>("glCheckFramebufferStatus", "glCheckFramebufferStatusEXT"),
+	};
+	return functions;
+}
 
 void SehTranslator(unsigned int code, EXCEPTION_POINTERS*) {
 	char buffer[64];
@@ -366,6 +411,114 @@ bool PixelChangedEnough(
 	return false;
 }
 
+bool PixelHasVideoSignal(
+	std::vector<unsigned char> const& pixels,
+	int width,
+	int x,
+	int y) {
+	auto const sample_index = static_cast<std::size_t>(y * width + x) * 4;
+	int const sample_r = pixels[sample_index + 0];
+	int const sample_g = pixels[sample_index + 1];
+	int const sample_b = pixels[sample_index + 2];
+	return std::max({ sample_r, sample_g, sample_b }) > 20;
+}
+
+void SetupWindowRenderTarget(int width, int height) {
+	auto const& gl = GetFramebufferFunctions();
+	if (gl.BindFramebuffer)
+		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, 0);
+	glDrawBuffer(GL_BACK);
+	glReadBuffer(GL_BACK);
+	glViewport(0, 0, width, height);
+	legacy_gl::ResetCompatibilityState();
+}
+
+template<class RendererFactory>
+bool ValidateSceneCacheVisualToolSequence(
+	RendererFactory const& factory,
+	char const* renderer_name) {
+	constexpr int width = 224;
+	constexpr int height = 144;
+
+	HiddenGLWindow window(width, height);
+	window.MakeCurrent();
+	auto const& gl = GetFramebufferFunctions();
+	if (!gl.BindFramebuffer
+		|| !gl.DeleteFramebuffers
+		|| !gl.GenFramebuffers
+		|| !gl.FramebufferTexture2D
+		|| !gl.CheckFramebufferStatus) {
+		std::cout << renderer_name << "/scene_cache_visual_tools skipped: FBO functions unavailable\n";
+		return true;
+	}
+
+	auto renderer = factory();
+	auto frame = MakeBgraScenario(width, height);
+	renderer->UploadFrame(frame.frame);
+	renderer->UploadOverlay(nullptr);
+
+	GLuint scene_texture = 0;
+	GLuint scene_framebuffer = 0;
+	glGenTextures(1, &scene_texture);
+	gl.GenFramebuffers(1, &scene_framebuffer);
+
+	glBindTexture(GL_TEXTURE_2D, scene_texture);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+	glBindTexture(GL_TEXTURE_2D, 0);
+
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, scene_framebuffer);
+	gl.FramebufferTexture2D(GL_FRAMEBUFFER_EXT, GL_COLOR_ATTACHMENT0_EXT, GL_TEXTURE_2D, scene_texture, 0);
+	if (gl.CheckFramebufferStatus(GL_FRAMEBUFFER_EXT) != GL_FRAMEBUFFER_COMPLETE_EXT)
+		throw std::runtime_error("detached visual tools smoke could not create a scene cache framebuffer.");
+
+	bool passed = true;
+	for (int frame_index = 0; frame_index < 4; ++frame_index) {
+		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, scene_framebuffer);
+		glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
+		glReadBuffer(GL_COLOR_ATTACHMENT0_EXT);
+		renderer->Render({ 0, 0, width, height }, width, height);
+
+		SetupWindowRenderTarget(width, height);
+		glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+		glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+		legacy_gl::DrawTexturedQuad(scene_texture, width, height);
+
+		SetupOverlayProjection(width, height);
+		OpenGLWrapper glw;
+		DrawVisualToolCross(glw, width, height, Vector2D(34 + frame_index * 41, 28 + frame_index * 17));
+		glw.SetLineColour(wxColour(255, 32, 32), 1.0f, 3);
+		glw.SetFillColour(wxColour(255, 32, 32), 1.0f);
+		DrawVisualToolFeatureMarker(glw, Vector2D(70 + frame_index * 27, 84));
+
+		auto pixels = window.ReadBackRgbaTopLeft();
+		bool const video_left = PixelHasVideoSignal(pixels, width, width / 4, height / 2);
+		bool const video_right = PixelHasVideoSignal(pixels, width, width * 3 / 4, height / 2);
+		bool const feature_visible = PixelMatchesColor(
+			pixels,
+			width,
+			{ "scene_feature", 70 + frame_index * 27, 84, 200, 0, 0, 255, 80, 80 });
+
+		std::cout
+			<< renderer_name << "/scene_cache_visual_tools frame=" << frame_index
+			<< " video_left=" << video_left
+			<< " video_right=" << video_right
+			<< " feature=" << feature_visible
+			<< "\n";
+
+		passed = video_left && video_right && feature_visible && passed;
+	}
+
+	renderer->Reset();
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, 0);
+	gl.DeleteFramebuffers(1, &scene_framebuffer);
+	glDeleteTextures(1, &scene_texture);
+	return passed;
+}
+
 Vector2D ComputeFeaturePosition(
 	VideoDisplayViewportLayout const& layout,
 	Vector2D script_res,
@@ -552,12 +705,18 @@ int main() try {
 		"opengl",
 		[] { return std::make_unique<OpenGLVideoRenderer>(true, false, true); },
 		scenarios) && passed;
+	passed = ValidateSceneCacheVisualToolSequence(
+		[] { return std::make_unique<OpenGLVideoRenderer>(true, false, true); },
+		"opengl") && passed;
 
 #ifdef WITH_LIBPLACEBO
 	passed = ValidateRenderer(
 		"placebo",
 		[] { return std::make_unique<PlaceboRendererGL>(); },
 		scenarios) && passed;
+	passed = ValidateSceneCacheVisualToolSequence(
+		[] { return std::make_unique<PlaceboRendererGL>(); },
+		"placebo") && passed;
 #endif
 
 	delete agi::log::log;

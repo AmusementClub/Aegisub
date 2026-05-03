@@ -173,6 +173,7 @@ class VideoDisplay final : public wxGLCanvas {
 
 	double GetVideoScaleFactor() const;
 	void InvalidateSceneCache();
+	bool IsSceneCacheUsableForCurrentPlayback() const noexcept;
 	void ResetSceneCacheRetryBlock() noexcept;
 	void BlockSceneCacheUntilRetry(int canvas_width, int canvas_height) noexcept;
 	bool ShouldAttemptSceneCache(int canvas_width, int canvas_height) noexcept;

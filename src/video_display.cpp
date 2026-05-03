@@ -142,6 +142,31 @@ struct CaptureFramebufferFunctions {
 	PFNGLFRAMEBUFFERRENDERBUFFERPROC FramebufferRenderbuffer = nullptr;
 };
 
+struct ScopedFramebufferState {
+	CaptureFramebufferFunctions const& gl;
+	GLint framebuffer = 0;
+	GLint draw_buffer = GL_BACK;
+	GLint read_buffer = GL_BACK;
+	GLint viewport[4] = { 0, 0, 0, 0 };
+
+	explicit ScopedFramebufferState(CaptureFramebufferFunctions const& gl)
+	: gl(gl) {
+		glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &framebuffer);
+		glGetIntegerv(GL_DRAW_BUFFER, &draw_buffer);
+		glGetIntegerv(GL_READ_BUFFER, &read_buffer);
+		glGetIntegerv(GL_VIEWPORT, viewport);
+	}
+
+	~ScopedFramebufferState() {
+		if (gl.BindFramebuffer)
+			gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(framebuffer));
+		glDrawBuffer(static_cast<GLenum>(draw_buffer));
+		glReadBuffer(framebuffer == 0 ? GL_BACK : static_cast<GLenum>(read_buffer));
+		glViewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+		legacy_gl::ResetCompatibilityState();
+	}
+};
+
 CaptureFramebufferFunctions const& GetCaptureFramebufferFunctions() {
 	static const CaptureFramebufferFunctions functions = {
 		LoadOptionalProc<PFNGLBINDFRAMEBUFFERPROC>("glBindFramebuffer", "glBindFramebufferEXT"),
@@ -156,6 +181,18 @@ CaptureFramebufferFunctions const& GetCaptureFramebufferFunctions() {
 		LoadOptionalProc<PFNGLFRAMEBUFFERRENDERBUFFERPROC>("glFramebufferRenderbuffer", "glFramebufferRenderbufferEXT"),
 	};
 	return functions;
+}
+
+void BindWindowFramebufferForDisplayRender() {
+	auto const& gl = GetCaptureFramebufferFunctions();
+	if (gl.BindFramebuffer) {
+		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, 0);
+		if (GLenum err = glGetError())
+			throw OpenGlException("glBindFramebuffer", err);
+		E(glDrawBuffer(GL_BACK));
+		E(glReadBuffer(GL_BACK));
+	}
+	legacy_gl::ResetCompatibilityState();
 }
 
 wxImage GetBgraFallbackImage(agi::Context *context, int frame_number, double frame_time, bool raw) {
@@ -272,6 +309,7 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 , freeSize(freeSize)
 , retina_helper(agi::make_unique<RetinaHelper>(this))
 , scale_factor(retina_helper->GetScaleFactor())
+, scene_cache_enabled(ReadEnvFlagDefaultOn("AEGISUB_ENABLE_VIDEO_SCENE_CACHE"))
 , scale_factor_connection(retina_helper->AddScaleFactorListener([=](int new_scale_factor) {
 	scale_factor = new_scale_factor;
 	RefreshVideoScale();
@@ -353,6 +391,10 @@ void VideoDisplay::InvalidateSceneCache() {
 	scene_cache_valid = false;
 }
 
+bool VideoDisplay::IsSceneCacheUsableForCurrentPlayback() const noexcept {
+	return !con->videoController->IsPlaying();
+}
+
 void VideoDisplay::ResetDisplayedSubtitleScene() noexcept {
 	displayed_subtitle_scene.clear();
 	scene_cache_waiting_for_subtitle_packet = false;
@@ -425,17 +467,13 @@ bool VideoDisplay::EnsureSceneCache(int canvas_width, int canvas_height) {
 		&& scene_cache_texture
 		&& scene_cache_width == canvas_width
 		&& scene_cache_height == canvas_height) {
+		legacy_gl::ResetCompatibilityState();
 		return true;
 	}
 
 	DestroySceneCache();
 
-	GLint previous_framebuffer = 0;
-	E(glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &previous_framebuffer));
-
-	auto cleanup = agi::make_scope_exit([&] {
-		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(previous_framebuffer));
-	});
+	ScopedFramebufferState restore_state(gl);
 
 	GLuint framebuffer = 0;
 	GLuint texture = 0;
@@ -557,7 +595,7 @@ void VideoDisplay::UploadFrameData(VideoRenderPacket const& packet, double) {
 	pending_packet = packet;
 	has_pending_packet = true;
 	scene_cache_waiting_for_subtitle_packet = false;
-	if (!can_reuse_video_only_scene_cache)
+	if (!can_reuse_video_only_scene_cache || !IsSceneCacheUsableForCurrentPlayback())
 		InvalidateSceneCache();
 
 	// Instead of calling Render(), we force a render here to minimize delay
@@ -623,13 +661,11 @@ wxImage VideoDisplay::CapturePacketImage(VideoRenderPacket const& packet) {
 		return {};
 	}
 
-	GLint previous_framebuffer = 0;
-	E(glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &previous_framebuffer));
+	ScopedFramebufferState restore_state(gl);
 
 	GLuint framebuffer = 0;
 	GLuint texture = 0;
 	auto cleanup = agi::make_scope_exit([&] {
-		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(previous_framebuffer));
 		if (texture)
 			glDeleteTextures(1, &texture);
 		if (framebuffer)
@@ -723,13 +759,11 @@ wxImage VideoDisplay::CaptureCurrentRenderersImage() {
 		return {};
 	}
 
-	GLint previous_framebuffer = 0;
-	E(glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &previous_framebuffer));
+	ScopedFramebufferState restore_state(gl);
 
 	GLuint framebuffer = 0;
 	GLuint texture = 0;
 	auto cleanup = agi::make_scope_exit([&] {
-		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(previous_framebuffer));
 		if (texture)
 			glDeleteTextures(1, &texture);
 		if (framebuffer)
@@ -828,12 +862,7 @@ bool VideoDisplay::RenderSceneToCache(wxSize const&, int canvas_width, int canva
 		return false;
 
 	auto const& gl = GetCaptureFramebufferFunctions();
-	GLint previous_framebuffer = 0;
-	E(glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &previous_framebuffer));
-
-	auto cleanup = agi::make_scope_exit([&] {
-		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(previous_framebuffer));
-	});
+	ScopedFramebufferState restore_state(gl);
 
 	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(scene_cache_framebuffer));
 	if (GLenum err = glGetError())
@@ -860,6 +889,7 @@ void VideoDisplay::DrawSceneCache(wxSize const&, int canvas_width, int canvas_he
 	if (!scene_cache_valid || !scene_cache_texture || canvas_width <= 0 || canvas_height <= 0)
 		return;
 
+	BindWindowFramebufferForDisplayRender();
 	E(glDisable(GL_SCISSOR_TEST));
 	E(glDisable(GL_STENCIL_TEST));
 	E(glDisable(GL_CULL_FACE));
@@ -955,7 +985,7 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) {
 	auto restore_framebuffer = agi::make_scope_exit([&] {
 		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(previous_framebuffer));
 		glDrawBuffer(static_cast<GLenum>(previous_draw_buffer));
-		glReadBuffer(static_cast<GLenum>(previous_read_buffer));
+		glReadBuffer(previous_framebuffer == 0 ? GL_BACK : static_cast<GLenum>(previous_read_buffer));
 	});
 
 	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, skia_overlay_framebuffer);
@@ -1029,7 +1059,7 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) {
 	// tex coords so the overlay composites correctly.
 	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(previous_framebuffer));
 	glDrawBuffer(static_cast<GLenum>(previous_draw_buffer));
-	glReadBuffer(static_cast<GLenum>(previous_read_buffer));
+	glReadBuffer(previous_framebuffer == 0 ? GL_BACK : static_cast<GLenum>(previous_read_buffer));
 	glDisable(GL_SCISSOR_TEST);
 	glDisable(GL_STENCIL_TEST);
 	glDisable(GL_CULL_FACE);
@@ -1072,16 +1102,9 @@ void VideoDisplay::OnSubtitlesCommit(int type, AssDialogue const* changed) {
 	if (!video_subtitle_scene_cache::IsVisualSubtitleCommitType(type))
 		return;
 
-	// When the subtitle overlay is rendered by a separate pass, the scene cache
-	// only holds the video layer, so subtitle-only commits do not invalidate it.
-	if (last_frame_had_separate_overlay) {
-		Render();
-		return;
-	}
-
-	InvalidateSceneCache();
-
 	if (!has_displayed_packet) {
+		if (!last_frame_had_separate_overlay)
+			InvalidateSceneCache();
 		scene_cache_waiting_for_subtitle_packet = false;
 		return;
 	}
@@ -1089,6 +1112,8 @@ void VideoDisplay::OnSubtitlesCommit(int type, AssDialogue const* changed) {
 	auto *subs = con->ass.get();
 	auto *project = con->project.get();
 	if (!subs || !project) {
+		if (!last_frame_had_separate_overlay)
+			InvalidateSceneCache();
 		scene_cache_waiting_for_subtitle_packet = true;
 		Render();
 		return;
@@ -1102,6 +1127,13 @@ void VideoDisplay::OnSubtitlesCommit(int type, AssDialogue const* changed) {
 		project->Timecodes(),
 		static_cast<int>(displayed_packet.time),
 		displayed_subtitle_scene);
+
+	// Integrated subtitle rendering bakes the subtitle layer into the cached
+	// scene, so any visual commit invalidates the cache. In separate-overlay
+	// mode the cache is video-only and remains reusable; the wait flag above
+	// simply blocks reuse until a fresh overlay packet arrives when needed.
+	if (!last_frame_had_separate_overlay)
+		InvalidateSceneCache();
 	Render();
 }
 
@@ -1219,7 +1251,9 @@ void VideoDisplay::DoRender() try {
 	int const canvas_height = client_size.GetHeight() * scale_factor;
 
 	bool rendered_from_scene_cache = false;
-	if (!scene_cache_waiting_for_subtitle_packet && ShouldAttemptSceneCache(canvas_width, canvas_height)) {
+	if (!scene_cache_waiting_for_subtitle_packet
+		&& IsSceneCacheUsableForCurrentPlayback()
+		&& ShouldAttemptSceneCache(canvas_width, canvas_height)) {
 		try {
 			if (scene_cache_dirty
 				|| !scene_cache_valid
@@ -1247,8 +1281,8 @@ void VideoDisplay::DoRender() try {
 			BlockSceneCacheUntilRetry(canvas_width, canvas_height);
 		}
 	}
-
 	if (!rendered_from_scene_cache) {
+		BindWindowFramebufferForDisplayRender();
 		RenderBackendScene(canvas_width, canvas_height);
 		scene_cache_valid = false;
 		scene_cache_dirty = true;
@@ -1257,6 +1291,7 @@ void VideoDisplay::DoRender() try {
 	// When the scene cache is video-only (separate overlay mode), the subtitle
 	// overlay pass was skipped during cache fill and must be applied now.
 	if (rendered_from_scene_cache && last_frame_had_separate_overlay && subtitleOverlayRenderer) {
+		BindWindowFramebufferForDisplayRender();
 		subtitleOverlayRenderer->Render(
 			{ viewport_left, viewport_bottom, viewport_width, viewport_height },
 			canvas_width,
@@ -1401,11 +1436,7 @@ bool VideoDisplay::EnsureSkiaOverlayBacking(int canvas_width, int canvas_height)
 		return false;
 	}
 
-	GLint previous_framebuffer = 0;
-	glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &previous_framebuffer);
-	auto restore_framebuffer = agi::make_scope_exit([&] {
-		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, static_cast<GLuint>(previous_framebuffer));
-	});
+	ScopedFramebufferState restore_state(gl);
 
 	glGenTextures(1, &skia_overlay_texture);
 	glBindTexture(GL_TEXTURE_2D, skia_overlay_texture);

@@ -11,25 +11,32 @@
 
 namespace {
 
-constexpr int kAssMaxMs = 10 * 60 * 60 * 1000 - 10;
-constexpr int kAssInternalMaxMs = 10 * 60 * 60 * 1000 - 6;
+constexpr int kAssMaxMs = std::numeric_limits<int>::max() / 10 * 10;
 
-int ClampAssInternalMs(int ms) {
-	return std::clamp(ms, 0, kAssInternalMaxMs);
+int ClampNonnegativeMs(int ms) {
+	return std::max(0, ms);
 }
 
-int FloorCs(int ms) {
-	ms = ClampAssInternalMs(ms);
-	return std::clamp(ms / 10 * 10, 0, kAssMaxMs);
+int ClampAssCs(long long ms) {
+	return static_cast<int>(std::clamp(ms, 0LL, static_cast<long long>(kAssMaxMs)));
 }
 
-int CeilCs(int ms) {
-	ms = ClampAssInternalMs(ms);
+int FloorCs(long long ms) {
+	ms = std::max(0LL, ms);
+	return ClampAssCs(ms / 10 * 10);
+}
+
+int CeilCs(long long ms) {
 	if (ms <= 0)
 		return 0;
 	if (ms >= kAssMaxMs)
 		return kAssMaxMs;
-	return std::clamp(((ms + 9) / 10) * 10, 0, kAssMaxMs);
+	return ClampAssCs(((ms + 9) / 10) * 10);
+}
+
+int RoundCs(long long ms) {
+	ms = std::max(0LL, ms);
+	return ClampAssCs((ms + 5) / 10 * 10);
 }
 
 agi::vfr::Time ToVfrMode(AssStorageTimeBoundary boundary) {
@@ -62,13 +69,11 @@ int PreferFrameSafeCandidate(
 	if (!valid[0] && valid[1])
 		return candidates[1];
 
-	return boundary == AssStorageTimeBoundary::Start
-		? candidates[1]
-		: candidates[0];
+	return RoundCs(original_ms);
 }
 
 int ProjectShortIntervalToSingleAssBucket(int start_ms, int end_ms) {
-	int midpoint_ms = start_ms + (end_ms - start_ms) / 2;
+	long long midpoint_ms = static_cast<long long>(start_ms) + (static_cast<long long>(end_ms) - start_ms) / 2;
 	int projected_start = FloorCs(midpoint_ms);
 	if (projected_start >= kAssMaxMs)
 		projected_start = std::max(0, kAssMaxMs - 10);
@@ -79,7 +84,7 @@ int ProjectAssTimeForStorageSmoke(
 	int time_ms,
 	AssStorageTimeBoundary boundary,
 	agi::vfr::Framerate const* fps) {
-	time_ms = ClampAssInternalMs(time_ms);
+	time_ms = ClampNonnegativeMs(time_ms);
 
 	if (fps && fps->IsLoaded()) {
 		int const projected = PreferFrameSafeCandidate(time_ms, boundary, *fps);
@@ -87,9 +92,7 @@ int ProjectAssTimeForStorageSmoke(
 			return projected;
 	}
 
-	return boundary == AssStorageTimeBoundary::Start
-		? CeilCs(time_ms)
-		: FloorCs(time_ms);
+	return RoundCs(time_ms);
 }
 
 std::pair<int, int> ProjectAssDialogueTimesForStorageSmoke(

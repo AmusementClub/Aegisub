@@ -185,6 +185,83 @@ TEST(ass_time_projection, exact_cursor_snap_start_uses_saved_ass_start) {
 		AssTimeOutputMode::LegacyRounding));
 }
 
+TEST(ass_time_projection, exact_cursor_snap_does_not_use_frame_safe_projection_for_issue_421) {
+	auto const fps = agi::vfr::Framerate(24000, 1001);
+	int const cursor_ms = 1059268;
+
+	int const cursor_start = ProjectAssTimeForExactCursorSnap(cursor_ms, AssStorageTimeBoundary::Start);
+	int const cursor_end = ProjectAssTimeForExactCursorSnap(cursor_ms, AssStorageTimeBoundary::End);
+	int const frame_safe_start = ProjectAssTimeForStorage(cursor_ms, AssStorageTimeBoundary::Start, &fps);
+	int const frame_safe_end = ProjectAssTimeForStorage(cursor_ms, AssStorageTimeBoundary::End, &fps);
+
+	EXPECT_EQ(1059260, cursor_start);
+	EXPECT_EQ(1059260, cursor_end);
+	EXPECT_EQ(1059270, frame_safe_start);
+	EXPECT_EQ(1059270, frame_safe_end);
+
+	AssDialogue exact_cursor_line;
+	exact_cursor_line.Start = 1057540;
+	exact_cursor_line.End = cursor_end;
+	exact_cursor_line.Style = "Default";
+	exact_cursor_line.Text = "snap";
+	EXPECT_FALSE(IsAssDialogueVisibleAtTimeForOutput(
+		exact_cursor_line.Start,
+		exact_cursor_line.End,
+		cursor_ms,
+		AssTimeOutputMode::LegacyRounding));
+
+	AssDialogue frame_safe_line = exact_cursor_line;
+	frame_safe_line.End = frame_safe_end;
+	EXPECT_TRUE(IsAssDialogueVisibleAtTimeForOutput(
+		frame_safe_line.Start,
+		frame_safe_line.End,
+		cursor_ms,
+		AssTimeOutputMode::LegacyRounding));
+}
+
+TEST(ass_time_projection, frame_boundary_snap_uses_storage_projection_to_preserve_frame_semantics) {
+	auto const fps = agi::vfr::Framerate(24000, 1001);
+	int const frame = 25397;
+	int const start_ms = fps.TimeAtFrame(frame, agi::vfr::START);
+	int const end_ms = fps.TimeAtFrame(frame, agi::vfr::END);
+
+	int const projected_start = ProjectAssTimeForStorage(start_ms, AssStorageTimeBoundary::Start, &fps);
+	int const projected_end = ProjectAssTimeForStorage(end_ms, AssStorageTimeBoundary::End, &fps);
+
+	EXPECT_EQ(0, projected_start % 10);
+	EXPECT_EQ(0, projected_end % 10);
+	EXPECT_EQ(fps.FrameAtTime(start_ms, agi::vfr::START), fps.FrameAtTime(projected_start, agi::vfr::START));
+	EXPECT_EQ(fps.FrameAtTime(end_ms, agi::vfr::END), fps.FrameAtTime(projected_end, agi::vfr::END));
+}
+
+TEST(ass_time_projection, saved_ass_visibility_stays_contiguous_after_frame_split) {
+	auto const fps = agi::vfr::Framerate(24000, 1001);
+	int const split_after_frame = 25397;
+	int const split_ms = fps.TimeAtFrame(split_after_frame, agi::vfr::END);
+
+	AssDialogue first;
+	first.Start = fps.TimeAtFrame(split_after_frame, agi::vfr::START);
+	first.End = split_ms;
+	first.Style = "Default";
+	first.Text = "first";
+
+	AssDialogue second;
+	second.Start = split_ms;
+	second.End = fps.TimeAtFrame(split_after_frame + 1, agi::vfr::END);
+	second.Style = "Default";
+	second.Text = "second";
+
+	EXPECT_EQ(static_cast<int>(first.End), static_cast<int>(second.Start));
+	EXPECT_EQ(first.End.GetAssFormatted(), second.Start.GetAssFormatted());
+
+	int const split_frame_time = fps.TimeAtFrame(split_after_frame);
+	int const next_frame_time = fps.TimeAtFrame(split_after_frame + 1);
+	EXPECT_TRUE(IsAssDialogueVisibleAtTimeForOutput(first.Start, first.End, split_frame_time, AssTimeOutputMode::LegacyRounding, &fps));
+	EXPECT_FALSE(IsAssDialogueVisibleAtTimeForOutput(first.Start, first.End, next_frame_time, AssTimeOutputMode::LegacyRounding, &fps));
+	EXPECT_FALSE(IsAssDialogueVisibleAtTimeForOutput(second.Start, second.End, split_frame_time, AssTimeOutputMode::LegacyRounding, &fps));
+	EXPECT_TRUE(IsAssDialogueVisibleAtTimeForOutput(second.Start, second.End, next_frame_time, AssTimeOutputMode::LegacyRounding, &fps));
+}
+
 TEST(ass_dialogue, exact_millisecond_dialogue_text_roundtrips_through_parser) {
 	AssDialogue line;
 	line.Comment = false;

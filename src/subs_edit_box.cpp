@@ -540,8 +540,10 @@ void SubsEditBox::UpdateFields(int type, bool repopulate_lists) {
 	if (!line) return;
 
 	if (type & AssFile::COMMIT_DIAG_TIME) {
-		start_time->SetLinkedTime(line->End);
-		end_time->SetLinkedTime(line->Start);
+		// Linked-time ASS projection is no longer needed; keep calls commented
+		// as documentation of the historical paired-control relationship.
+		// start_time->SetLinkedTime(line->End);
+		// end_time->SetLinkedTime(line->Start);
 		start_time->SetTime(line->Start);
 		end_time->SetTime(line->End);
 		SetDurationField();
@@ -659,15 +661,16 @@ void SubsEditBox::ApplyTimeDisplayMode(SubtitleTimeDisplayMode mode, bool update
 	c->GetUI().subsGrid->SetDisplayMode(mode);
 
 	if (line) {
-		start_time->SetLinkedTime(line->End);
-		end_time->SetLinkedTime(line->Start);
+		// Linked-time ASS projection is no longer needed.
+		// start_time->SetLinkedTime(line->End);
+		// end_time->SetLinkedTime(line->Start);
 		start_time->SetTime(line->Start);
 		end_time->SetTime(line->End);
 		SetDurationField();
 	}
 	else {
-		start_time->ClearLinkedTime();
-		end_time->ClearLinkedTime();
+		// start_time->ClearLinkedTime();
+		// end_time->ClearLinkedTime();
 	}
 }
 
@@ -802,8 +805,9 @@ void SubsEditBox::CommitTimes(TimeField field) {
 
 	start_time->SetTime(line->Start);
 	end_time->SetTime(line->End);
-	start_time->SetLinkedTime(line->End);
-	end_time->SetLinkedTime(line->Start);
+	// Linked-time ASS projection is no longer needed.
+	// start_time->SetLinkedTime(line->End);
+	// end_time->SetLinkedTime(line->Start);
 
 	if (field != TIME_DURATION)
 		SetDurationField();
@@ -865,8 +869,8 @@ void SubsEditBox::SetControlsState(bool state) {
 	Enable(state);
 	if (!state) {
 		wxEventBlocker blocker(this);
-		start_time->ClearLinkedTime();
-		end_time->ClearLinkedTime();
+		// start_time->ClearLinkedTime();
+		// end_time->ClearLinkedTime();
 #ifdef WITH_WXSTC
 		if (use_stc) {
 			edit_ctrl_stc->SetTextTo(std::string());

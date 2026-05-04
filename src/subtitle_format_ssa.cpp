@@ -17,6 +17,7 @@
 #include "subtitle_format_ssa.h"
 
 #include "ass_attachment.h"
+#include "ass_compat.h"
 #include "ass_dialogue.h"
 #include "ass_time_projection.h"
 #include "ass_info.h"
@@ -87,7 +88,7 @@ void SsaSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filen
 		auto const output_times = GetAssDialogueTimesForOutput(line.Start, line.End, AssTimeOutputMode::LegacyRounding, output_fps);
 		file.WriteLineToFile(agi::format("%s: Marked=0,%s,%s,%s,%s,%d,%d,%d,%s,%s"
 			, (line.Comment ? "Comment" : "Dialogue")
-			, agi::Time(output_times.first).GetAssFormatted(), agi::Time(output_times.second).GetAssFormatted()
+			, AssCompat::FormatTime(output_times.first), AssCompat::FormatTime(output_times.second)
 			, replace_commas(line.Style), replace_commas(line.Actor)
 			, line.Margin[0], line.Margin[1], line.Margin[2]
 			, replace_commas(line.Effect)

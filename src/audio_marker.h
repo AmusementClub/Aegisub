@@ -42,6 +42,12 @@ class AudioMarker {
 protected:
 	~AudioMarker()=default;
 public:
+	enum class Kind {
+		Generic,
+		Keyframe,
+		VideoPosition
+	};
+
 	/// Describe which directions a marker has feet in
 	enum FeetStyle {
 		Feet_None = 0,
@@ -61,6 +67,9 @@ public:
 	/// @brief Get the marker's feet style
 	/// @return The marker's feet style
 	virtual FeetStyle GetFeet() const = 0;
+
+	/// @brief Get the semantic kind of the marker
+	virtual Kind GetKind() const { return Kind::Generic; }
 };
 
 typedef std::vector<const AudioMarker*> AudioMarkerVector;

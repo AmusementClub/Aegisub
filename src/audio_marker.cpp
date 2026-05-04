@@ -39,6 +39,7 @@ public:
 	int GetPosition() const override { return position; }
 	FeetStyle GetFeet() const override { return Feet_None; }
 	wxPen GetStyle() const override { return *style; }
+	Kind GetKind() const override { return Kind::Keyframe; }
 	operator int() const { return position; }
 };
 
@@ -94,6 +95,7 @@ public:
 	int GetPosition() const override { return position; }
 	FeetStyle GetFeet() const override { return Feet_None; }
 	wxPen GetStyle() const override { return style; }
+	Kind GetKind() const override { return Kind::VideoPosition; }
 	operator int() const { return position; }
 };
 

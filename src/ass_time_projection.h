@@ -35,6 +35,7 @@ enum class AssTimeOutputMode {
 };
 
 int ProjectAssTimeForStorage(int time_ms, AssStorageTimeBoundary boundary, agi::vfr::Framerate const* fps = nullptr);
+int ProjectAssTimeForExactCursorSnap(int time_ms, AssStorageTimeBoundary boundary);
 std::pair<int, int> ProjectAssDialogueTimesForStorage(agi::Time const& start, agi::Time const& end, agi::vfr::Framerate const* fps = nullptr);
 std::pair<int, int> GetAssDialogueTimesForOutput(
 	agi::Time const& start,

@@ -29,6 +29,7 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "ass_time_projection.h"
 #include "audio_marker.h"
 #include "audio_rendering_style.h"
 #include "audio_timing.h"
@@ -38,6 +39,7 @@
 #include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "pen.h"
+#include "project.h"
 #include "selection_controller.h"
 #include "subtitle_command_session.h"
 #include "utils.h"
@@ -890,12 +892,19 @@ int AudioTimingControllerDialogue::SnapMarkers(int snap_range, std::vector<Audio
 		add_inactive(active_line.GetRightMarker(), true);
 	}
 
+	auto boundary_for_marker = [](AudioMarker const* marker) {
+		return marker->GetFeet() == AudioMarker::Feet_Left ? AssStorageTimeBoundary::End : AssStorageTimeBoundary::Start;
+	};
+
+	int raw_snap_distance = INT_MAX;
 	int snap_distance = INT_MAX;
-	auto check = [&](int marker, int pos)
+	auto check = [&](int marker, int target, int pos)
 	{
-		auto dist = marker - pos;
-		if (tabs(dist) < tabs(snap_distance))
-			snap_distance = dist;
+		auto raw_dist = marker - pos;
+		if (tabs(raw_dist) < tabs(raw_snap_distance)) {
+			raw_snap_distance = raw_dist;
+			snap_distance = target - pos;
+		}
 	};
 
 	int prev = -1;
@@ -904,6 +913,7 @@ int AudioTimingControllerDialogue::SnapMarkers(int snap_range, std::vector<Audio
 	{
 		auto pos = active_marker->GetPosition();
 		if (pos == prev) continue;
+		auto const boundary = boundary_for_marker(active_marker);
 
 		snap_markers.clear();
 		TimeRange range(pos - snap_range, pos + snap_range);
@@ -912,19 +922,23 @@ int AudioTimingControllerDialogue::SnapMarkers(int snap_range, std::vector<Audio
 
 		for (const auto marker : snap_markers)
 		{
-			check(marker->GetPosition(), pos);
-			if (snap_distance == 0) return 0;
+			int target = marker->GetPosition();
+			if (marker->GetKind() == AudioMarker::Kind::VideoPosition)
+				target = ProjectAssTimeForExactCursorSnap(target, boundary);
+			else if (marker->GetKind() == AudioMarker::Kind::Keyframe)
+				target = ProjectAssTimeForStorage(target, boundary, &context->GetCore().project->Timecodes());
+
+			check(marker->GetPosition(), target, pos);
 		}
 
 		for (auto it = std::lower_bound(inactive_markers.begin(), inactive_markers.end(), range.begin()); it != end(inactive_markers); ++it)
 		{
-			check(*it, pos);
-			if (snap_distance == 0) return 0;
+			check(*it, *it, pos);
 			if (*it > pos) break;
 		}
 	}
 
-	if (tabs(snap_distance) > snap_range)
+	if (tabs(raw_snap_distance) > snap_range)
 		return 0;
 
 	for (auto m : active)

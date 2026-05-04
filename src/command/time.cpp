@@ -33,6 +33,7 @@
 
 #include "../ass_dialogue.h"
 #include "../ass_file.h"
+#include "../ass_time_projection.h"
 #include "../async_video_provider.h"
 #include "../audio_controller.h"
 #include "../audio_timing.h"
@@ -114,7 +115,10 @@ struct time_frame_current final : public validate_video_loaded {
 		auto core = c->GetCore();
 		const auto active_line = core.selectionController->GetActiveLine();
 
-		int target_start = std::max(0, core.videoController->TimeAtFrame(core.videoController->GetFrameN(), agi::vfr::START));
+		int target_start = ProjectAssTimeForStorage(
+			std::max(0, core.videoController->TimeAtFrame(core.videoController->GetFrameN(), agi::vfr::START)),
+			AssStorageTimeBoundary::Start,
+			&core.project->Timecodes());
 		if (!aegisub::subtitle_timing_ops::ShiftSelectionToStartTime(core.selectionController->GetSelectedSet(), active_line, target_start))
 			return;
 
@@ -136,8 +140,15 @@ struct time_shift final : public Command {
 
 static void snap_subs_video(agi::Context *c, bool set_start) {
 	auto core = c->GetCore();
-	int start = core.videoController->TimeAtFrame(core.videoController->GetFrameN(), agi::vfr::START);
-	int end = core.videoController->TimeAtFrame(core.videoController->GetFrameN(), agi::vfr::END);
+	auto const& fps = core.project->Timecodes();
+	int start = ProjectAssTimeForStorage(
+		core.videoController->TimeAtFrame(core.videoController->GetFrameN(), agi::vfr::START),
+		AssStorageTimeBoundary::Start,
+		&fps);
+	int end = ProjectAssTimeForStorage(
+		core.videoController->TimeAtFrame(core.videoController->GetFrameN(), agi::vfr::END),
+		AssStorageTimeBoundary::End,
+		&fps);
 	if (!aegisub::subtitle_timing_ops::SnapSelectionToVideoRange(core.selectionController->GetSelectedSet(), start, end, set_start))
 		return;
 
@@ -172,8 +183,15 @@ struct time_snap_scene final : public validate_video_loaded {
 			core.project->VideoProvider()->GetFrameCount());
 		if (!range) return;
 
-		int start_ms = con->TimeAtFrame(range->start_frame, agi::vfr::START);
-		int end_ms = con->TimeAtFrame(range->one_past_end_frame - 1, agi::vfr::END);
+		auto const& fps = core.project->Timecodes();
+		int start_ms = ProjectAssTimeForStorage(
+			con->TimeAtFrame(range->start_frame, agi::vfr::START),
+			AssStorageTimeBoundary::Start,
+			&fps);
+		int end_ms = ProjectAssTimeForStorage(
+			con->TimeAtFrame(range->one_past_end_frame - 1, agi::vfr::END),
+			AssStorageTimeBoundary::End,
+			&fps);
 		if (!aegisub::subtitle_timing_ops::ApplyTimeRangeToSelection(core.selectionController->GetSelectedSet(), start_ms, end_ms))
 			return;
 

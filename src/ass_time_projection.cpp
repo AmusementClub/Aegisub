@@ -118,6 +118,13 @@ int ProjectAssTimeForStorage(int time_ms, AssStorageTimeBoundary boundary, agi::
 	return round_cs(time_ms);
 }
 
+int ProjectAssTimeForExactCursorSnap(int time_ms, AssStorageTimeBoundary) {
+	// ASS events are [Start, End). When snapping to an exact video cursor time,
+	// choose the nearest representable boundary which is not after the cursor:
+	// starts are visible at the cursor, and ends are not.
+	return floor_cs(time_ms);
+}
+
 std::pair<int, int> ProjectAssDialogueTimesForStorage(agi::Time const& start, agi::Time const& end, agi::vfr::Framerate const* fps) {
 	int const start_ms = start.GetMillisecond();
 	int const end_ms = end.GetMillisecond();

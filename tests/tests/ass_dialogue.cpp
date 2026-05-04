@@ -105,6 +105,86 @@ TEST(ass_time_projection, legacy_visibility_uses_legacy_rounded_output_interval)
 	EXPECT_FALSE(IsAssDialogueVisibleAtTimeForOutput(agi::Time(18), agi::Time(19), 19, AssTimeOutputMode::LegacyRounding));
 }
 
+TEST(ass_time_projection, legacy_visibility_matches_saved_ass_for_cursor_snap_boundaries) {
+	auto exact_millisecond_visible = [](AssDialogue const& line, int time_ms) {
+		return !(line.Start.GetMillisecond() > time_ms || line.End.GetMillisecond() <= time_ms);
+	};
+
+	AssDialogue issue_boundary;
+	issue_boundary.Start = 1057540;
+	issue_boundary.End = 1059268;
+	issue_boundary.Style = "Default";
+	issue_boundary.Text = "snap";
+
+	EXPECT_EQ(
+		"Dialogue: 0,0:17:37.54,0:17:39.27,Default,,0,0,0,,snap",
+		SerializeAssDialogueForOutput(issue_boundary, AssTimeOutputMode::LegacyRounding));
+	EXPECT_FALSE(exact_millisecond_visible(issue_boundary, 1059268));
+	EXPECT_TRUE(IsAssDialogueVisibleAtTimeForOutput(
+		issue_boundary.Start,
+		issue_boundary.End,
+		1059268,
+		AssTimeOutputMode::LegacyRounding));
+	EXPECT_FALSE(IsAssDialogueVisibleAtTimeForOutput(
+		issue_boundary.Start,
+		issue_boundary.End,
+		1059270,
+		AssTimeOutputMode::LegacyRounding));
+
+	AssDialogue rounded_before_cursor;
+	rounded_before_cursor.Start = 11140;
+	rounded_before_cursor.End = 14181;
+	rounded_before_cursor.Style = "Default";
+	rounded_before_cursor.Text = "snap";
+
+	EXPECT_EQ(
+		"Dialogue: 0,0:00:11.14,0:00:14.18,Default,,0,0,0,,snap",
+		SerializeAssDialogueForOutput(rounded_before_cursor, AssTimeOutputMode::LegacyRounding));
+	EXPECT_FALSE(IsAssDialogueVisibleAtTimeForOutput(
+		rounded_before_cursor.Start,
+		rounded_before_cursor.End,
+		14181,
+		AssTimeOutputMode::LegacyRounding));
+}
+
+TEST(ass_time_projection, exact_cursor_snap_end_uses_saved_ass_cutoff) {
+	AssDialogue line;
+	line.Start = 1057540;
+	line.End = ProjectAssTimeForExactCursorSnap(1059268, AssStorageTimeBoundary::End);
+	line.Style = "Default";
+	line.Text = "snap";
+
+	EXPECT_EQ(1059260, line.End.GetMillisecond());
+	EXPECT_EQ(
+		"Dialogue: 0,0:17:37.54,0:17:39.26,Default,,0,0,0,,snap",
+		SerializeAssDialogueForOutput(line, AssTimeOutputMode::LegacyRounding));
+	EXPECT_FALSE(IsAssDialogueVisibleAtTimeForOutput(
+		line.Start,
+		line.End,
+		1059268,
+		AssTimeOutputMode::LegacyRounding));
+}
+
+TEST(ass_time_projection, exact_cursor_snap_start_uses_saved_ass_start) {
+	AssDialogue line;
+	line.Start = ProjectAssTimeForExactCursorSnap(1059268, AssStorageTimeBoundary::Start);
+	line.End = 1059300;
+	line.Style = "Default";
+	line.Text = "snap";
+
+	EXPECT_EQ(1059260, line.Start.GetMillisecond());
+	EXPECT_TRUE(IsAssDialogueVisibleAtTimeForOutput(
+		line.Start,
+		line.End,
+		1059268,
+		AssTimeOutputMode::LegacyRounding));
+	EXPECT_FALSE(IsAssDialogueVisibleAtTimeForOutput(
+		line.Start,
+		line.End,
+		1059259,
+		AssTimeOutputMode::LegacyRounding));
+}
+
 TEST(ass_dialogue, exact_millisecond_dialogue_text_roundtrips_through_parser) {
 	AssDialogue line;
 	line.Comment = false;

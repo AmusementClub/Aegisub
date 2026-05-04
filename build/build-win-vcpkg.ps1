@@ -97,6 +97,7 @@ function Configure-CMake([string]$CMakePath, [string]$GeneratorName) {
         "-DCMAKE_TOOLCHAIN_FILE=$resolvedVcpkgRoot/scripts/buildsystems/vcpkg.cmake",
         "-DVCPKG_TARGET_TRIPLET=$Triplet",
         "-DVCPKG_OVERLAY_TRIPLETS=$PSScriptRoot/../cmake",
+        "-DVCPKG_OVERLAY_PORTS=$PSScriptRoot/../cmake/overlay-ports",
         '-DLUA_WITH_LUASOCKET=ON',
         '-DAEGISUB_LUAJIT_SHARED=ON',
         '-DXAUDIO2_REDIST=ON',

@@ -12,6 +12,7 @@ vcpkg_from_github(
         fix-pcre2.patch
         gtk3-link-libraries.patch
         sdl2.patch
+        wxstc-pin-u2026-default-glyph.patch
 )
 
 # Submodule dependencies

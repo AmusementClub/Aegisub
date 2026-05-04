@@ -1,0 +1,178 @@
+diff --git a/src/stc/PlatWX.cpp b/src/stc/PlatWX.cpp
+index 0dc2bdb..0143d79 100644
+--- a/src/stc/PlatWX.cpp
++++ b/src/stc/PlatWX.cpp
+@@ -88,6 +88,136 @@ wxColour wxColourFromCA(ColourAlpha const& cd) {
+     return wxColour(cd.GetRed(), cd.GetGreen(), cd.GetBlue(), cd.GetAlpha());
+ }
+ 
++namespace {
++
++#if defined(__WXMSW__)
++
++bool GetPinnedEllipsisGlyph(HDC hdc, WORD& glyph, wxCoord& advance)
++{
++    const wchar_t ellipsisText[] = { 0x2026, 0 };
++    glyph = 0;
++
++    const DWORD glyphCount = ::GetGlyphIndicesW(
++        hdc,
++        ellipsisText,
++        1,
++        &glyph,
++        GGI_MARK_NONEXISTING_GLYPHS
++    );
++    if ( glyphCount == GDI_ERROR || glyph == 0xffff )
++        return false;
++
++    SIZE glyphSize = {};
++    if ( !::GetTextExtentPointI(hdc, &glyph, 1, &glyphSize) )
++        return false;
++
++    advance = glyphSize.cx;
++    return true;
++}
++
++void PinEllipsisPartialWidths(wxDC& dc, const wxString& text, wxArrayInt& widths)
++{
++    const wxUniChar ellipsisChar(0x2026);
++    if ( text.find(ellipsisChar) == wxString::npos )
++        return;
++
++    HDC hdc = static_cast<HDC>(dc.GetHDC());
++    if ( !hdc )
++        return;
++
++    WORD ellipsisGlyph = 0;
++    wxCoord ellipsisAdvance = 0;
++    if ( !GetPinnedEllipsisGlyph(hdc, ellipsisGlyph, ellipsisAdvance) )
++        return;
++
++    int cumulativeDelta = 0;
++    int previousOriginalWidth = 0;
++    const size_t count = text.length() < widths.size() ? text.length() : widths.size();
++    for ( size_t i = 0; i < count; ++i )
++    {
++        const int originalWidth = widths[i];
++        if ( text[i] == ellipsisChar )
++        {
++            const int originalAdvance = originalWidth - previousOriginalWidth;
++            cumulativeDelta += ellipsisAdvance - originalAdvance;
++        }
++
++        widths[i] = originalWidth + cumulativeDelta;
++        previousOriginalWidth = originalWidth;
++    }
++}
++
++#endif
++
++void DrawTextWithPinnedEllipsis(wxDC& dc, const wxString& text, int x, int y)
++{
++#if defined(__WXMSW__)
++    const wxUniChar ellipsisChar(0x2026);
++    if ( text.find(ellipsisChar) == wxString::npos )
++    {
++        dc.DrawText(text, x, y);
++        return;
++    }
++
++    HDC hdc = static_cast<HDC>(dc.GetHDC());
++    if ( !hdc )
++    {
++        dc.DrawText(text, x, y);
++        return;
++    }
++
++    WORD ellipsisGlyph = 0;
++    wxCoord ellipsisAdvance = 0;
++    const bool canDrawPinnedEllipsis =
++        GetPinnedEllipsisGlyph(hdc, ellipsisGlyph, ellipsisAdvance);
++    const wxString ellipsisString(ellipsisChar);
++
++    wxCoord currentX = x;
++    wxString::size_type segmentStart = 0;
++
++    auto drawAndAdvance = [&dc, y](const wxString& segment, wxCoord& xPos)
++    {
++        if ( segment.empty() )
++            return;
++
++        dc.DrawText(segment, xPos, y);
++
++        wxCoord width = 0;
++        dc.GetTextExtent(segment, &width, nullptr);
++        xPos += width;
++    };
++
++    while ( segmentStart < text.length() )
++    {
++        const wxString::size_type ellipsisPos = text.find(ellipsisChar, segmentStart);
++        if ( ellipsisPos == wxString::npos )
++        {
++            drawAndAdvance(text.Mid(segmentStart), currentX);
++            break;
++        }
++
++        drawAndAdvance(text.Mid(segmentStart, ellipsisPos - segmentStart), currentX);
++
++        if ( canDrawPinnedEllipsis &&
++             ::ExtTextOutW(hdc, currentX, y, ETO_GLYPH_INDEX, nullptr,
++                           reinterpret_cast<LPCWSTR>(&ellipsisGlyph), 1, nullptr) )
++        {
++            currentX += ellipsisAdvance;
++        }
++        else
++        {
++            drawAndAdvance(ellipsisString, currentX);
++        }
++
++        segmentStart = ellipsisPos + 1;
++    }
++#else
++    dc.DrawText(text, x, y);
++#endif
++}
++
++} // namespace
++
+ //----------------------------------------------------------------------
+ 
+ namespace Scintilla
+@@ -627,7 +757,7 @@ void SurfaceImpl::DrawTextNoClip(PRectangle rc, Font &font, XYPOSITION ybase,
+ 
+     // ybase is where the baseline should be, but wxWin uses the upper left
+     // corner, so I need to calculate the real position for the text...
+-    hdc->DrawText(stc2wx(s, len), wxRound(rc.left), wxRound(ybase - GetAscent(font)));
++    DrawTextWithPinnedEllipsis(*hdc, stc2wx(s, len), wxRound(rc.left), wxRound(ybase - GetAscent(font)));
+ }
+ 
+ void SurfaceImpl::DrawTextClipped(PRectangle rc, Font &font, XYPOSITION ybase,
+@@ -640,7 +770,7 @@ void SurfaceImpl::DrawTextClipped(PRectangle rc, Font &font, XYPOSITION ybase,
+     hdc->SetClippingRegion(wxRectFromPRectangle(rc));
+ 
+     // see comments above
+-    hdc->DrawText(stc2wx(s, len), wxRound(rc.left), wxRound(ybase - GetAscent(font)));
++    DrawTextWithPinnedEllipsis(*hdc, stc2wx(s, len), wxRound(rc.left), wxRound(ybase - GetAscent(font)));
+     hdc->DestroyClippingRegion();
+ }
+ 
+@@ -655,7 +785,7 @@ void SurfaceImpl::DrawTextTransparent(PRectangle rc, Font &font, XYPOSITION ybas
+ 
+     // ybase is where the baseline should be, but wxWin uses the upper left
+     // corner, so I need to calculate the real position for the text...
+-    hdc->DrawText(stc2wx(s, len), wxRound(rc.left), wxRound(ybase - GetAscent(font)));
++    DrawTextWithPinnedEllipsis(*hdc, stc2wx(s, len), wxRound(rc.left), wxRound(ybase - GetAscent(font)));
+ 
+     hdc->SetBackgroundMode(wxBRUSHSTYLE_SOLID);
+ }
+@@ -669,6 +799,9 @@ void SurfaceImpl::MeasureWidths(Font &font, const char *s, int len, XYPOSITION *
+     SetFont(font);
+ 
+     hdc->GetPartialTextExtents(str, tpos);
++#if defined(__WXMSW__)
++    PinEllipsisPartialWidths(*hdc, str, tpos);
++#endif
+ 
+     // Map the widths back to the UTF-8 input string
+     size_t utf8i = 0;

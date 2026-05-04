@@ -38,6 +38,12 @@ wxChar decimal_separator() {
 	auto sep = wxLocale::GetInfo(wxLOCALE_DECIMAL_POINT, wxLOCALE_CAT_NUMBER);
 	return sep.empty() ? '.' : sep[0];
 }
+
+bool is_blank(wxString text) {
+	text.Trim(true);
+	text.Trim(false);
+	return text.empty();
+}
 }
 
 IntValidator::IntValidator(int val, bool allow_negative)
@@ -163,13 +169,8 @@ bool DoubleSpinValidator::TransferToWindow() {
 
 bool DoubleSpinValidator::TransferFromWindow() {
 	auto ctrl = static_cast<wxSpinCtrlDouble*>(GetWindow());
-	if (has_default_value) {
-		auto text_value = ctrl->GetTextValue();
-		text_value.Trim(true);
-		text_value.Trim(false);
-		if (text_value.empty())
-			ctrl->SetValue(default_value);
-	}
+	if (has_default_value && is_blank(ctrl->GetTextValue()))
+		ctrl->SetValue(default_value);
 #ifndef wxHAS_NATIVE_SPINCTRLDOUBLE
 	wxFocusEvent evt;
 	ctrl->OnTextLostFocus(evt);

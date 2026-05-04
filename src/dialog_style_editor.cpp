@@ -56,6 +56,7 @@
 #include <libaegisub/make_unique.h>
 
 #include <algorithm>
+#include <memory>
 
 #include <wx/bmpbuttn.h>
 #include <wx/checkbox.h>
@@ -65,6 +66,32 @@
 #include <wx/stattext.h>
 
 namespace {
+bool IsBlank(wxString text) {
+	text.Trim(true);
+	text.Trim(false);
+	return text.empty();
+}
+
+template<typename Control, typename SpinEvent, typename ApplyDefault>
+void BindEmptyDefault(Control *ctrl, wxEventTypeTag<SpinEvent> spin_event, ApplyDefault apply_default) {
+	auto text_was_empty = std::make_shared<bool>(false);
+	ctrl->Bind(wxEVT_TEXT, [=](wxCommandEvent &evt) {
+		*text_was_empty = IsBlank(evt.GetString());
+		evt.Skip();
+	});
+	ctrl->Bind(wxEVT_KILL_FOCUS, [=](wxFocusEvent &evt) {
+		if (*text_was_empty || IsBlank(ctrl->GetTextValue())) {
+			apply_default();
+			*text_was_empty = false;
+		}
+		evt.Skip();
+	});
+	ctrl->Bind(spin_event, [=](SpinEvent &evt) {
+		*text_was_empty = false;
+		evt.Skip();
+	});
+}
+
 wxArrayString GetStyleEncodingStrings() {
 	wxArrayString encoding_strings;
 	encoding_strings.Add(wxS("0 - ") + _("ANSI"));
@@ -186,6 +213,12 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 			wxDefaultSize, wxSP_ARROW_KEYS, min, max, *value, step);
 		scd->SetDigits(1);
 		scd->SetValidator(DoubleSpinValidator(value, default_value));
+		BindEmptyDefault(scd, wxEVT_SPINCTRLDOUBLE, [=] {
+			scd->SetValue(default_value);
+			*value = default_value;
+			if (!updating)
+				SubsPreview->SetStyle(*work);
+		});
 		scd->Bind(wxEVT_SPINCTRLDOUBLE, [=](wxSpinDoubleEvent &evt) {
 			evt.Skip();
 			if (updating) return;
@@ -233,6 +266,12 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 		margin[i] = new wxSpinCtrl(this, -1, std::to_wstring(style->Margin[i]),
 			wxDefaultPosition, wxDefaultSize,
 			wxSP_ARROW_KEYS, AssStyle::MinMargin, AssStyle::MaxMargin, style->Margin[i]);
+		BindEmptyDefault(margin[i], wxEVT_SPINCTRL, [=] {
+			margin[i]->SetValue(AssStyle::DefaultMargin);
+			work->Margin[i] = AssStyle::DefaultMargin;
+			if (!updating)
+				SubsPreview->SetStyle(*work);
+		});
 #if wxCHECK_VERSION(3, 1, 3)
 		margin[i]->SetInitialSize(margin[i]->GetSizeFromText(wxS("00000")));
 #else
@@ -514,6 +553,11 @@ void DialogStyleEditor::Apply(bool apply, bool close) {
 }
 
 void DialogStyleEditor::UpdateWorkStyle() {
+	for (size_t i = 0; i < 3; ++i) {
+		if (IsBlank(margin[i]->GetTextValue()))
+			margin[i]->SetValue(AssStyle::DefaultMargin);
+	}
+
 	updating = true;
 	TransferDataFromWindow();
 	updating = false;
@@ -528,15 +572,8 @@ void DialogStyleEditor::UpdateWorkStyle() {
 
 	work->alignment = ControlToAlign(Alignment->GetSelection());
 
-	for (size_t i = 0; i < 3; ++i) {
-		auto margin_text = margin[i]->GetTextValue();
-		margin_text.Trim(true);
-		margin_text.Trim(false);
-		if (margin_text.empty())
-			margin[i]->SetValue(AssStyle::DefaultMargin);
-
+	for (size_t i = 0; i < 3; ++i)
 		work->Margin[i] = margin[i]->GetValue();
-	}
 
 	work->bold = BoxBold->IsChecked();
 	work->italic = BoxItalic->IsChecked();

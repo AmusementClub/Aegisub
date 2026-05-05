@@ -500,16 +500,14 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 			if (!frame)
 				throw AsyncVideoProviderSubtitlesError("Compatibility subtitles provider requires a BGRA source frame.");
 			packet.allow_source_frame_upload_reuse = false;
-			// Compatibility renderers draw in place, so keep the decoded frame
-			// immutable for subtitle-only rerenders and bake into a copy instead.
-			composited = acquire_buffer(composited_buffers);
-			*composited = *frame;
-			packet.source_frame_storage = composited;
-			packet.source_frame_owner = composited;
-			packet.source_frame = MakeSourceFrameView(*composited, source_provider->GetColorMetadata());
-			packet.source_frame.geometry = source_provider->GetFrameGeometry();
-			packet.source_frame.native_format = source_provider->GetNativeFormatIdentity();
-			subs_provider->DrawSubtitles(*composited, time / 1000.);
+			// This is already a worker-owned BGRA working copy: either decoded
+			// after refreshing the subtitle-free cache above, or copied from it.
+			// Draw into it directly like the legacy path to avoid a second
+			// full-frame copy on every CSRI rerender.
+			packet.source_frame_storage = frame;
+			packet.source_frame_owner = frame;
+			packet.source_frame = MakeSourceFrameView(*frame, packet.source_frame);
+			subs_provider->DrawSubtitles(*frame, time / 1000.);
 		}
 		else if (render_mode == SubtitleRenderMode::PremultipliedOverlay) {
 			auto overlay_storage = acquire_buffer(subtitle_overlay_buffers);
@@ -880,11 +878,22 @@ bool AsyncVideoProvider::ProcessPending() {
 	if (work.check_updated && !NeedUpdate(visible_lines))
 		return true;
 
-	last_lines.clear();
-	last_lines.reserve(visible_lines.size());
-	for (auto line : visible_lines)
-		last_lines.push_back(*line);
-	last_rendered = frame_number;
+	auto remember_rendered_lines = [&] {
+		last_lines.clear();
+		last_lines.reserve(visible_lines.size());
+		for (auto line : visible_lines)
+			last_lines.push_back(*line);
+		last_rendered = frame_number;
+	};
+
+	// Mouse-drag subtitle edits can outpace expensive compatibility renderers.
+	// If newer work arrived before entering the renderer, skip this stale pass
+	// instead of spending a long CSRI render only to drop the packet afterwards.
+	if (work.content_version != content_version.load(std::memory_order_relaxed)
+		|| work.request_version != request_version.load(std::memory_order_relaxed)) {
+		AdvanceOverlayUploadContinuity();
+		return true;
+	}
 
 	try {
 		auto const render_begin = std::chrono::steady_clock::now();
@@ -899,6 +908,7 @@ bool AsyncVideoProvider::ProcessPending() {
 		perf_trace::ObserveVideoFrameRenderDuration(frame_number, time, should_deliver, false, render_duration_ms);
 		perf_trace::ObserveFrameResult(frame_number, time, should_deliver, false);
 		if (should_deliver) {
+			remember_rendered_lines();
 			DeliverFrameReady(std::move(packet), time);
 		}
 		else {

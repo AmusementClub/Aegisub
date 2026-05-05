@@ -403,6 +403,24 @@ public:
 	int load_calls = 0;
 	int render_overlay_calls = 0;
 	int draw_calls = 0;
+	std::mutex mutex;
+	std::condition_variable cv;
+	bool block_next_draw = false;
+	bool draw_entered = false;
+	bool draw_released = false;
+
+	bool WaitForDrawEntered() {
+		std::unique_lock<std::mutex> lock(mutex);
+		return cv.wait_for(lock, std::chrono::seconds(2), [&] { return draw_entered; });
+	}
+
+	void ReleaseDraw() {
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			draw_released = true;
+		}
+		cv.notify_all();
+	}
 
 private:
 	void LoadSubtitles(const char *, size_t) override {
@@ -420,6 +438,17 @@ public:
 	}
 
 	void DrawSubtitles(VideoFrame &dst, double) override {
+		{
+			std::unique_lock<std::mutex> lock(mutex);
+			if (block_next_draw) {
+				draw_entered = true;
+				cv.notify_all();
+				cv.wait(lock, [&] { return draw_released; });
+				block_next_draw = false;
+				draw_released = false;
+			}
+		}
+
 		++draw_calls;
 		if (dst.data.size() < 2)
 			dst.data.resize(2);
@@ -1771,6 +1800,44 @@ TEST(async_video_provider, compatibility_backend_uses_only_baked_source_frames) 
 	ASSERT_TRUE(first.source_frame_storage);
 	ASSERT_TRUE(second.source_frame_storage);
 	EXPECT_EQ(first.source_frame_storage->data[1], second.source_frame_storage->data[1]);
+}
+
+TEST(async_video_provider, dropped_compatibility_render_does_not_mark_visible_lines_current) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeCompatibilityOnlySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		recorder);
+
+	auto initial = MakeSubtitleFile("before");
+	provider.LoadSubtitles(&initial);
+	provider.RequestFrame(4, 4000);
+	ASSERT_TRUE(recorder.WaitForCount(1));
+
+	{
+		std::lock_guard<std::mutex> lock(subs->mutex);
+		subs->block_next_draw = true;
+	}
+
+	auto updated = MakeSubtitleFile("after");
+	provider.UpdateSubtitles(&updated, &updated.Events.front());
+	bool const draw_entered = subs->WaitForDrawEntered();
+	if (!draw_entered)
+		subs->ReleaseDraw();
+	ASSERT_TRUE(draw_entered);
+
+	provider.UpdateSubtitles(&updated, &updated.Events.front());
+	subs->ReleaseDraw();
+
+	ASSERT_TRUE(recorder.WaitForCount(2));
+	auto frames = recorder.Snapshot();
+	ASSERT_EQ(2u, frames.size());
+	EXPECT_EQ(4, frames.back().frame_number);
+	EXPECT_GT(frames.back().subtitle_generation, frames.front().subtitle_generation);
+	EXPECT_EQ(3, subs->draw_calls);
 }
 
 TEST(async_video_provider, dropped_packet_advances_overlay_continuity_generation_on_next_delivered_event) {

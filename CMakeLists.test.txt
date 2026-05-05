@@ -345,6 +345,7 @@ if(WIN32)
             src/compat.cpp
             src/utils.cpp
             src/ffmpegsource_common.cpp
+            src/track_choice.cpp
             src/video_provider_ffmpegsource.cpp
             src/video_renderer_opengl.cpp
             src/video_renderer_opengl_tile.cpp

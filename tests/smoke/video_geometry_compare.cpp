@@ -69,6 +69,7 @@
 #endif
 
 namespace Automation4 { class AutoloadScriptManager; }
+namespace agi { class SingleChoiceInteractionSink; }
 namespace config {
 	agi::Options *opt = nullptr;
 	agi::MRUManager *mru = nullptr;
@@ -79,7 +80,8 @@ namespace config {
 std::unique_ptr<VideoProvider> CreateFFmpegSourceVideoProvider(
 	agi::fs::path const& path,
 	std::string const& colormatrix,
-	agi::BackgroundRunner *br);
+	agi::BackgroundRunner *br,
+	std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 
 namespace {
 using WglCreateContextAttribsArbProc = HGLRC (WINAPI *)(HDC, HGLRC, int const*);
@@ -822,7 +824,7 @@ SampleResult RunSample(
 	result.file_path = input.file_path.string();
 	result.has_geometry_expectation = input.has_geometry_expectation;
 
-	auto provider = CreateFFmpegSourceVideoProvider(result.file_path, "TV.709", &runner);
+	auto provider = CreateFFmpegSourceVideoProvider(result.file_path, "TV.709", &runner, {});
 	if (!provider)
 		throw std::runtime_error("Failed to create FFmpegSource video provider.");
 

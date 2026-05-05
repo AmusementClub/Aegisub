@@ -497,8 +497,6 @@ void VideoController::DeliverFrameReady(VideoRenderPacket packet, double time) {
 }
 
 void VideoController::NotifyFramePresented(int frame_number) {
-	if (presented_frame_n == frame_number)
-		return;
 	presented_frame_n = frame_number;
 	FramePresented(frame_number);
 }

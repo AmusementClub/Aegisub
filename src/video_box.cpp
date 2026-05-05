@@ -169,6 +169,11 @@ void VideoBox::UpdateTimeBoxes() {
 			time - active_line->Start,
 			time - active_line->End, active_line->End - active_line->Start));
 	}
+
+	VideoPosition->Refresh(false);
+	VideoPosition->Update();
+	VideoSubsPos->Refresh(false);
+	VideoSubsPos->Update();
 }
 
 void VideoBox::OnCurrentFrameChanged(int frame_number) {

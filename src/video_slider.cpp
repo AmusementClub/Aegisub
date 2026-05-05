@@ -109,11 +109,15 @@ void VideoSlider::UpdateScale() {
 }
 
 void VideoSlider::SetValue(int value) {
-	if (val == value) return;
 	value = mid(0, value, max);
-	if (GetXAtValue(val) != GetXAtValue(value))
-		Refresh(false);
+	if (val == value) return;
+
+	bool const cursor_moved = GetXAtValue(val) != GetXAtValue(value);
 	val = value;
+	if (cursor_moved) {
+		Refresh(false);
+		Update();
+	}
 }
 
 void VideoSlider::OnFramePresented(int value) {

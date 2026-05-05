@@ -131,9 +131,12 @@ void VideoController::RequestFrameImmediate() {
 		provider->CancelPendingFrameRequests();
 
 		// Frame stepping favors deterministic per-step display over latest-only coalescing.
+		int const requested_frame = frame_n;
 		auto packet = provider->GetRenderPacket(frame_n, frame_time);
 		perf_trace::ObserveFrameResult(frame_n, frame_time, true, true);
 		DeliverFrameReady(std::move(packet), frame_time);
+		if (presented_frame_n != requested_frame)
+			NotifyFramePresented(requested_frame);
 	}
 	catch (AsyncVideoProviderVideoError const& err) {
 		HandleVideoError(err.GetMessage());

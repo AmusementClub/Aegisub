@@ -128,11 +128,13 @@ class AsyncVideoProvider {
 	std::vector<std::shared_ptr<VideoFrame>> source_buffers;
 	std::vector<std::shared_ptr<VideoFrame>> composited_buffers;
 	std::vector<std::shared_ptr<SubtitleOverlayStorage>> subtitle_overlay_buffers;
+	/// Continuity generation for GPU overlay upload planning.
 	uint64_t overlay_continuity_generation = 1;
 
 	std::mutex pending_mutex;
 	std::unique_ptr<AssFile> pending_subs;
 	std::unique_ptr<AssDialogueBase> pending_changed_line;
+	bool pending_overlay_upload_continuity_invalidation = false;
 	bool pending_check_updated = false;
 	bool has_pending_frame = false;
 	int pending_frame_number = -1;
@@ -147,8 +149,7 @@ class AsyncVideoProvider {
 	void DeliverFrameReady(VideoRenderPacket packet, double time);
 	void DeliverVideoError(std::string const& message);
 	void DeliverSubtitlesError(std::string const& message);
-	void AdvanceOverlayContinuityGeneration();
-	void InvalidateProviderOverlayState();
+	void AdvanceOverlayUploadContinuity();
 	void TrimReusablePools();
 	bool ReconfigureSourceOutputMode();
 	void ScheduleProcessing();

@@ -395,6 +395,20 @@ bool VideoDisplay::IsSceneCacheUsableForCurrentPlayback() const noexcept {
 	return !con->videoController->IsPlaying();
 }
 
+bool VideoDisplay::ShouldUseSceneCacheForCurrentFrame() const noexcept {
+	if (!videoRenderer)
+		return false;
+	if (videoRenderer->PrefersSceneCacheForRepaint())
+		return true;
+	// Native source frames may require an expensive display-transform pass
+	// (e.g. libplacebo YUV→RGB conversion) even when the current backend
+	// does not explicitly declare a preference for scene caching.  Caching
+	// the composited result avoids repeating that transform on every visual
+	// tool repaint.
+	return has_displayed_packet
+		&& displayed_packet.source_frame.output_mode == SourceFrameOutputMode::Native;
+}
+
 void VideoDisplay::ResetDisplayedSubtitleScene() noexcept {
 	displayed_subtitle_scene.clear();
 	scene_cache_waiting_for_subtitle_packet = false;
@@ -416,6 +430,11 @@ void VideoDisplay::BlockSceneCacheUntilRetry(int canvas_width, int canvas_height
 bool VideoDisplay::ShouldAttemptSceneCache(int canvas_width, int canvas_height) noexcept {
 	if (!scene_cache_enabled || canvas_width <= 0 || canvas_height <= 0)
 		return false;
+	if (!ShouldUseSceneCacheForCurrentFrame()) {
+		if (scene_cache_framebuffer || scene_cache_texture)
+			DestroySceneCache();
+		return false;
+	}
 
 	if (scene_cache_retry_canvas_width != canvas_width
 		|| scene_cache_retry_canvas_height != canvas_height) {

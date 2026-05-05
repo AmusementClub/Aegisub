@@ -31,9 +31,27 @@ TEST(source_frame_format_selection, overlay_mode_prefers_native_when_supported) 
 	EXPECT_EQ(SourceFrameOutputMode::Native, mode);
 }
 
+TEST(source_frame_format_selection, bgra_renderer_preference_uses_bgra8_even_when_native_is_available) {
+	auto mode = SelectPreferredSourceFrameOutputMode(
+		{ SourceFrameOutputMode::Bgra8 },
+		{ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 },
+		false);
+
+	EXPECT_EQ(SourceFrameOutputMode::Bgra8, mode);
+}
+
 TEST(source_frame_format_selection, appends_bgra8_as_implicit_fallback) {
 	auto mode = SelectPreferredSourceFrameOutputMode(
 		{ SourceFrameOutputMode::Native },
+		{ SourceFrameOutputMode::Bgra8 },
+		false);
+
+	EXPECT_EQ(SourceFrameOutputMode::Bgra8, mode);
+}
+
+TEST(source_frame_format_selection, native_renderer_preference_falls_back_to_bgra8_when_native_is_unavailable) {
+	auto mode = SelectPreferredSourceFrameOutputMode(
+		{ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 },
 		{ SourceFrameOutputMode::Bgra8 },
 		false);
 

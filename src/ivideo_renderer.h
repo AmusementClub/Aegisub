@@ -27,6 +27,7 @@ public:
 	virtual ~IVideoRenderer() = default;
 
 	virtual bool SupportsDirectOverlay() const noexcept { return true; }
+	virtual bool PrefersSceneCacheForRepaint() const noexcept { return false; }
 	virtual char const* GetDebugName() const noexcept { return "Unknown"; }
 	virtual size_t EstimateTextureBytes() const noexcept { return 0; }
 	virtual std::vector<SourceFrameOutputMode> GetPreferredSourceModes() const {

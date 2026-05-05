@@ -30,7 +30,6 @@
 #pragma once
 
 #include "async_video_provider_host.h"
-#include "playback_transport_policy.h"
 #include "video_render_packet.h"
 
 #include <libaegisub/signal.h>
@@ -127,26 +126,7 @@ class VideoController final {
 	/// Cached option for audio playing when frame stepping
 	const agi::OptionValue* playAudioOnStep;
 
-	std::unique_ptr<PlaybackTransportPolicy> step_transport_policy;
-	std::unique_ptr<VideoControllerTimer> step_preview_timer;
-	std::unique_ptr<VideoControllerTimer> step_release_timer;
-	bool step_preview_enabled = true;
-	bool step_preview_active = false;
-	int step_preview_target_frame = -1;
-
-	bool has_step_last_input = false;
-	std::chrono::steady_clock::time_point step_last_input_time;
-	int step_burst_count = 0;
-	std::chrono::milliseconds step_preview_interval{ 33 };
-	std::chrono::milliseconds step_preview_interval_backward{ 100 };
-	std::chrono::milliseconds step_repeat_burst_window{ 1000 };
-	int step_repeat_burst_threshold = 3;
-	std::chrono::milliseconds step_repeat_release_delay{ 200 };
-	int step_transport_policy_direction = 0;
-
 	void OnPlayTimer();
-	void OnStepPreviewTimer();
-	void OnStepReleaseTimer();
 
 	void HandleVideoError(std::string const& message);
 	void HandleSubtitlesError(std::string const& message);
@@ -161,20 +141,8 @@ class VideoController final {
 	void RequestFrameImmediate();
 	void RequestFramePreview(int target_frame, bool trace, bool supersede_in_flight);
 	void ClearLatePreviewFrameAcceptance();
-	void CancelStepPreviewSession(bool clear_late_preview = true);
-	void StepFrames(int delta, bool immediate_inspection, bool play_audio_on_inspection);
-	int GetRepeatPreviewAnchorFrame() const;
-	void SubmitRepeatPreviewTarget(int target_frame);
+	void StepFrames(int delta, bool play_audio_on_inspection);
 	void HandleInspectionStepTarget(int target, bool immediate_request, bool play_audio, int delta);
-	void HandleStepTransportOutputs(
-		const std::vector<PlaybackTransportPolicy::Output> &outputs,
-		bool immediate_inspection,
-		bool play_audio_on_inspection,
-		int delta);
-	PlaybackTransportPolicy &EnsureStepTransportPolicy();
-	PlaybackTransportPolicy &EnsureStepPreviewTransportPolicy(int direction);
-	void ScheduleStepPreviewTimer(std::chrono::steady_clock::time_point now);
-	void ResetStepPreviewSessionState(bool clear_late_preview = true);
 	void StepSingleFrame(int delta);
 	void StartPlayback(PlaybackMode mode, int range_end_ms = 0);
 	bool PreparePlayback(PlaybackMode mode, int start_frame, int range_end_ms = 0);
@@ -220,7 +188,7 @@ public:
 	void JumpToFrame(int n);
 	/// @brief Preview-seek to the beginning of a frame
 	///
-	/// Used for high-frequency navigation (drag/step preview) where delivering
+	/// Used for high-frequency navigation (drag/seek preview) where delivering
 	/// an in-flight frame is better than dropping it under heavy decoder load.
 	void PreviewToFrame(int n);
 	/// @brief Jump to a time
@@ -230,15 +198,13 @@ public:
 
 	/// Navigate by a relative number of frames (paused only).
 	///
-	/// Designed for hotkey repeat scenarios (e.g. prev/next-large): uses the
-	/// same preview coalescing as single-frame stepping, but does not play
-	/// audio on each step.
+	/// Designed for hotkey repeat scenarios (e.g. prev/next-large): each step
+	/// deterministically presents the requested target frame.
 	void NavigateByFrames(int delta);
-	/// Navigate to an absolute frame while paused using the same repeat-preview
-	/// coalescing as frame stepping.
+	/// Navigate to an absolute frame while paused.
 	void NavigateToFrame(int frame);
 	/// Navigate to the previous or next keyframe while paused, accumulating the
-	/// target during key repeat before committing on release.
+	/// target deterministically on each input.
 	void NavigateToKeyframe(std::vector<int> const& keyframes, int direction);
 
 	/// Starting playing the video

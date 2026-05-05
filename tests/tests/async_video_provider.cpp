@@ -1593,6 +1593,22 @@ TEST(async_video_provider, preferred_source_modes_choose_native_for_overlay_path
 	EXPECT_EQ(SourceFrameOutputMode::Native, video->output_mode);
 }
 
+TEST(async_video_provider, bgra_renderer_preference_chooses_bgra8_without_subtitles) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		recorder);
+
+	EXPECT_FALSE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Bgra8 }));
+	EXPECT_EQ(SourceFrameOutputMode::Bgra8, provider.GetSelectedSourceMode());
+	EXPECT_EQ(SourceFrameOutputMode::Bgra8, video->output_mode);
+}
+
 TEST(async_video_provider, compatibility_subtitle_mode_forces_bgra8_output_mode) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *video = new FakeVideoProvider(state);
@@ -1606,6 +1622,28 @@ TEST(async_video_provider, compatibility_subtitle_mode_forces_bgra8_output_mode)
 		recorder);
 
 	EXPECT_FALSE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
+	EXPECT_EQ(SourceFrameOutputMode::Bgra8, provider.GetSelectedSourceMode());
+	EXPECT_EQ(SourceFrameOutputMode::Bgra8, video->output_mode);
+}
+
+TEST(async_video_provider, replacing_overlay_provider_with_compatibility_provider_reselects_bgra8) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->available_modes = { SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 };
+	auto *overlay_subs = new FakeOverlaySubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(overlay_subs),
+		recorder);
+
+	EXPECT_TRUE(provider.SetPreferredSourceModes({ SourceFrameOutputMode::Native, SourceFrameOutputMode::Bgra8 }));
+	EXPECT_EQ(SourceFrameOutputMode::Native, provider.GetSelectedSourceMode());
+	EXPECT_EQ(SourceFrameOutputMode::Native, video->output_mode);
+
+	provider.ReplaceSubtitlesProvider(agi::make_unique<FakeCompatibilityOnlySubtitlesProvider>());
+
 	EXPECT_EQ(SourceFrameOutputMode::Bgra8, provider.GetSelectedSourceMode());
 	EXPECT_EQ(SourceFrameOutputMode::Bgra8, video->output_mode);
 }

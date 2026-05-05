@@ -73,6 +73,7 @@ public:
 	~PlaceboRendererGL() override;
 
 	bool SupportsDirectOverlay() const noexcept override { return false; }
+	bool PrefersSceneCacheForRepaint() const noexcept override { return true; }
 	char const* GetDebugName() const noexcept override { return "libplacebo"; }
 	size_t EstimateTextureBytes() const noexcept override;
 	std::vector<SourceFrameOutputMode> GetPreferredSourceModes() const override {

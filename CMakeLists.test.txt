@@ -309,6 +309,9 @@ if(WIN32)
 
     add_executable(scene-cache-subtitle-commit-smoke EXCLUDE_FROM_ALL
         tests/smoke/scene_cache_subtitle_commit_smoke.cpp
+        src/ass_dialogue.cpp
+        src/ass_override.cpp
+        src/ass_time_projection.cpp
     )
     target_compile_definitions(scene-cache-subtitle-commit-smoke PRIVATE CMAKE_BUILD NOMINMAX WIN32_LEAN_AND_MEAN)
     target_link_libraries(scene-cache-subtitle-commit-smoke PRIVATE libaegisub)

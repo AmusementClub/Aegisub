@@ -110,7 +110,7 @@ TEST(video_cache, lru_eviction_removes_least_recently_used_frame) {
 	EXPECT_EQ(4, raw->get_frame_calls);
 }
 
-TEST(video_cache, sequential_reverse_access_warms_next_bgra_frame) {
+TEST(video_cache, sequential_reverse_access_does_not_warm_next_bgra_frame) {
 	auto raw = new CountingVideoProvider;
 	raw->frame_bytes = 8;
 	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 32);
@@ -118,54 +118,27 @@ TEST(video_cache, sequential_reverse_access_warms_next_bgra_frame) {
 
 	cache->GetFrame(10, frame);
 	cache->GetFrame(9, frame);
-	EXPECT_EQ((std::vector<int>{10, 9, 8}), raw->frame_requests);
+	EXPECT_EQ((std::vector<int>{10, 9}), raw->frame_requests);
 
 	cache->GetFrame(8, frame);
-	EXPECT_EQ((std::vector<int>{10, 9, 8, 7}), raw->frame_requests);
-}
-
-TEST(video_cache, sequential_forward_access_warms_next_bgra_frame) {
-	auto raw = new CountingVideoProvider;
-	raw->frame_bytes = 8;
-	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 32);
-	VideoFrame frame;
-
-	cache->GetFrame(10, frame);
-	cache->GetFrame(11, frame);
-	EXPECT_EQ((std::vector<int>{10, 11, 12}), raw->frame_requests);
-
-	cache->GetFrame(12, frame);
-	EXPECT_EQ((std::vector<int>{10, 11, 12, 13}), raw->frame_requests);
-}
-
-TEST(video_cache, fixed_step_forward_access_warms_matching_bgra_frame) {
-	auto raw = new CountingVideoProvider;
-	raw->frame_bytes = 8;
-	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 32);
-	VideoFrame frame;
-
-	cache->GetFrame(2, frame);
-	cache->GetFrame(4, frame);
-	EXPECT_EQ((std::vector<int>{2, 4, 6}), raw->frame_requests);
-
-	cache->GetFrame(6, frame);
-	EXPECT_EQ((std::vector<int>{2, 4, 6, 8}), raw->frame_requests);
-}
-
-TEST(video_cache, step_warm_resets_when_direction_changes) {
-	auto raw = new CountingVideoProvider;
-	raw->frame_bytes = 8;
-	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 32);
-	VideoFrame frame;
-
-	cache->GetFrame(10, frame);
-	cache->GetFrame(9, frame);
-	cache->GetFrame(10, frame);
-
 	EXPECT_EQ((std::vector<int>{10, 9, 8}), raw->frame_requests);
 }
 
-TEST(video_cache, step_warm_resets_when_delta_changes) {
+TEST(video_cache, sequential_forward_access_does_not_warm_next_bgra_frame) {
+	auto raw = new CountingVideoProvider;
+	raw->frame_bytes = 8;
+	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 32);
+	VideoFrame frame;
+
+	cache->GetFrame(10, frame);
+	cache->GetFrame(11, frame);
+	EXPECT_EQ((std::vector<int>{10, 11}), raw->frame_requests);
+
+	cache->GetFrame(12, frame);
+	EXPECT_EQ((std::vector<int>{10, 11, 12}), raw->frame_requests);
+}
+
+TEST(video_cache, fixed_step_forward_access_does_not_warm_matching_bgra_frame) {
 	auto raw = new CountingVideoProvider;
 	raw->frame_bytes = 8;
 	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 32);
@@ -173,39 +146,10 @@ TEST(video_cache, step_warm_resets_when_delta_changes) {
 
 	cache->GetFrame(2, frame);
 	cache->GetFrame(4, frame);
-	cache->GetFrame(7, frame);
+	EXPECT_EQ((std::vector<int>{2, 4}), raw->frame_requests);
 
-	EXPECT_EQ((std::vector<int>{2, 4, 6, 7}), raw->frame_requests);
-}
-
-TEST(video_cache, native_requests_do_not_reset_bgra_step_warm) {
-	auto raw = new CountingVideoProvider;
-	raw->frame_bytes = 8;
-	raw->provide_native_owner = true;
-	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 64);
-	VideoFrame frame;
-	SourceFrame native_frame;
-	std::shared_ptr<void> owner;
-
-	cache->GetFrame(10, frame);
-	cache->GetFrame(11, frame);
-	ASSERT_TRUE(cache->GetNativeFrame(20, native_frame, owner));
-	cache->GetFrame(12, frame);
-
-	EXPECT_EQ((std::vector<int>{10, 11, 12, 13}), raw->frame_requests);
-	EXPECT_EQ((std::vector<int>{20}), raw->native_frame_requests);
-}
-
-TEST(video_cache, step_warm_is_disabled_when_cache_cannot_hold_two_frames) {
-	auto raw = new CountingVideoProvider;
-	raw->frame_bytes = 32;
-	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 32);
-	VideoFrame frame;
-
-	cache->GetFrame(10, frame);
-	cache->GetFrame(9, frame);
-
-	EXPECT_EQ((std::vector<int>{10, 9}), raw->frame_requests);
+	cache->GetFrame(6, frame);
+	EXPECT_EQ((std::vector<int>{2, 4, 6}), raw->frame_requests);
 }
 
 TEST(video_cache, set_color_space_clears_cache) {
@@ -291,7 +235,7 @@ TEST(video_cache, native_lru_eviction_removes_least_recently_used_frame) {
 	EXPECT_EQ(4, raw->get_native_frame_calls);
 }
 
-TEST(video_cache, sequential_reverse_access_warms_next_native_frame) {
+TEST(video_cache, sequential_reverse_access_does_not_warm_next_native_frame) {
 	auto raw = new CountingVideoProvider;
 	raw->provide_native_owner = true;
 	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 64);
@@ -300,13 +244,13 @@ TEST(video_cache, sequential_reverse_access_warms_next_native_frame) {
 
 	cache->GetNativeFrame(10, frame, owner);
 	cache->GetNativeFrame(9, frame, owner);
-	EXPECT_EQ((std::vector<int>{10, 9, 8}), raw->native_frame_requests);
+	EXPECT_EQ((std::vector<int>{10, 9}), raw->native_frame_requests);
 
 	cache->GetNativeFrame(8, frame, owner);
-	EXPECT_EQ((std::vector<int>{10, 9, 8, 7}), raw->native_frame_requests);
+	EXPECT_EQ((std::vector<int>{10, 9, 8}), raw->native_frame_requests);
 }
 
-TEST(video_cache, sequential_forward_access_warms_next_native_frame) {
+TEST(video_cache, sequential_forward_access_does_not_warm_next_native_frame) {
 	auto raw = new CountingVideoProvider;
 	raw->provide_native_owner = true;
 	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 64);
@@ -315,13 +259,13 @@ TEST(video_cache, sequential_forward_access_warms_next_native_frame) {
 
 	cache->GetNativeFrame(10, frame, owner);
 	cache->GetNativeFrame(11, frame, owner);
-	EXPECT_EQ((std::vector<int>{10, 11, 12}), raw->native_frame_requests);
+	EXPECT_EQ((std::vector<int>{10, 11}), raw->native_frame_requests);
 
 	cache->GetNativeFrame(12, frame, owner);
-	EXPECT_EQ((std::vector<int>{10, 11, 12, 13}), raw->native_frame_requests);
+	EXPECT_EQ((std::vector<int>{10, 11, 12}), raw->native_frame_requests);
 }
 
-TEST(video_cache, fixed_step_forward_access_warms_matching_native_frame) {
+TEST(video_cache, fixed_step_forward_access_does_not_warm_matching_native_frame) {
 	auto raw = new CountingVideoProvider;
 	raw->provide_native_owner = true;
 	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 64);
@@ -330,26 +274,8 @@ TEST(video_cache, fixed_step_forward_access_warms_matching_native_frame) {
 
 	cache->GetNativeFrame(2, frame, owner);
 	cache->GetNativeFrame(4, frame, owner);
-	EXPECT_EQ((std::vector<int>{2, 4, 6}), raw->native_frame_requests);
+	EXPECT_EQ((std::vector<int>{2, 4}), raw->native_frame_requests);
 
 	cache->GetNativeFrame(6, frame, owner);
-	EXPECT_EQ((std::vector<int>{2, 4, 6, 8}), raw->native_frame_requests);
-}
-
-TEST(video_cache, bgra_requests_do_not_reset_native_step_warm) {
-	auto raw = new CountingVideoProvider;
-	raw->frame_bytes = 8;
-	raw->provide_native_owner = true;
-	auto cache = CreateCacheVideoProvider(std::unique_ptr<VideoProvider>(raw), 64);
-	VideoFrame bgra_frame;
-	SourceFrame native_frame;
-	std::shared_ptr<void> owner;
-
-	ASSERT_TRUE(cache->GetNativeFrame(20, native_frame, owner));
-	ASSERT_TRUE(cache->GetNativeFrame(21, native_frame, owner));
-	cache->GetFrame(10, bgra_frame);
-	ASSERT_TRUE(cache->GetNativeFrame(22, native_frame, owner));
-
-	EXPECT_EQ((std::vector<int>{20, 21, 22, 23}), raw->native_frame_requests);
-	EXPECT_EQ((std::vector<int>{10}), raw->frame_requests);
+	EXPECT_EQ((std::vector<int>{2, 4, 6}), raw->native_frame_requests);
 }

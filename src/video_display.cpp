@@ -400,6 +400,18 @@ bool VideoDisplay::ShouldUseSceneCacheForCurrentFrame() const noexcept {
 		return false;
 	if (videoRenderer->PrefersSceneCacheForRepaint())
 		return true;
+
+	// Compatibility subtitle providers bake subtitles into the uploaded BGRA
+	// frame; cache that composited scene so visual tool repaints do not have
+	// to redraw the full video backend on every mouse event.
+	if (has_displayed_packet && !displayed_packet.allow_source_frame_upload_reuse)
+		return true;
+	if (has_displayed_packet
+		&& DecideVideoRenderRouting(
+			displayed_packet,
+			videoRenderer->SupportsDirectOverlay()) == VideoRenderRoutingMode::FallbackCompositedFrame)
+		return true;
+
 	// Native source frames may require an expensive display-transform pass
 	// (e.g. libplacebo YUV→RGB conversion) even when the current backend
 	// does not explicitly declare a preference for scene caching.  Caching
@@ -407,6 +419,30 @@ bool VideoDisplay::ShouldUseSceneCacheForCurrentFrame() const noexcept {
 	// tool repaint.
 	return has_displayed_packet
 		&& displayed_packet.source_frame.output_mode == SourceFrameOutputMode::Native;
+}
+
+bool VideoDisplay::ShouldDeferIncomingSubtitlePacket(VideoRenderPacket const& packet) const noexcept {
+	if (!tool || !tool->IsInteracting())
+		return false;
+	if (!videoRenderer || !has_displayed_packet)
+		return false;
+	if (last_frame_had_separate_overlay)
+		return false;
+	if (!IsSceneCacheUsableForCurrentPlayback())
+		return false;
+	if (packet.frame_number != displayed_packet.frame_number)
+		return false;
+
+	// Compatibility providers such as CSRI have already produced a fresh baked
+	// frame on the worker. Deferring it keeps the visible subtitle frozen for
+	// the whole drag, so present it as soon as it arrives and let the scene
+	// cache cover repaint-only mouse events between packets.
+	if (!packet.allow_source_frame_upload_reuse)
+		return false;
+
+	auto const routing = DecideVideoRenderRouting(packet, videoRenderer->SupportsDirectOverlay());
+	bool const packet_uses_integrated_subtitles = routing == VideoRenderRoutingMode::FallbackCompositedFrame;
+	return packet_uses_integrated_subtitles && ShouldUseSceneCacheForCurrentFrame();
 }
 
 void VideoDisplay::ResetDisplayedSubtitleScene() noexcept {
@@ -566,6 +602,7 @@ void VideoDisplay::OnRendererBackendChanged(agi::OptionValue const&) {
 	if (!has_pending_packet && has_displayed_packet) {
 		pending_packet = displayed_packet;
 		has_pending_packet = true;
+		pending_packet_deferred_for_visual_interaction = false;
 	}
 
 	ResetRenderers();
@@ -578,6 +615,7 @@ void VideoDisplay::OnRendererBackendChanged(agi::OptionValue const&) {
 void VideoDisplay::ApplyVideoProvider(AsyncVideoProvider *provider) {
 	pending_packet = { };
 	has_pending_packet = false;
+	pending_packet_deferred_for_visual_interaction = false;
 	displayed_packet = { };
 	has_displayed_packet = false;
 	ResetDisplayedSubtitleScene();
@@ -600,6 +638,16 @@ void VideoDisplay::OnVideoProviderChanged(AsyncVideoProvider *provider) {
 }
 
 void VideoDisplay::UploadFrameData(VideoRenderPacket const& packet, double) {
+	bool const defer_interactive_subtitle_packet = ShouldDeferIncomingSubtitlePacket(packet);
+	if (defer_interactive_subtitle_packet) {
+		pending_packet = packet;
+		has_pending_packet = true;
+		pending_packet_deferred_for_visual_interaction = true;
+		scene_cache_waiting_for_subtitle_packet = false;
+		render_requested = true;
+		return;
+	}
+
 	bool const can_reuse_video_only_scene_cache = scene_cache_valid
 		&& !scene_cache_dirty
 		&& has_displayed_packet
@@ -613,6 +661,7 @@ void VideoDisplay::UploadFrameData(VideoRenderPacket const& packet, double) {
 
 	pending_packet = packet;
 	has_pending_packet = true;
+	pending_packet_deferred_for_visual_interaction = false;
 	scene_cache_waiting_for_subtitle_packet = false;
 	if (!can_reuse_video_only_scene_cache || !IsSceneCacheUsableForCurrentPlayback())
 		InvalidateSceneCache();
@@ -1138,20 +1187,26 @@ void VideoDisplay::OnSubtitlesCommit(int type, AssDialogue const* changed) {
 		return;
 	}
 
-	scene_cache_waiting_for_subtitle_packet = video_subtitle_scene_cache::ShouldWaitForFreshPacket(
-		type,
-		has_displayed_packet,
-		changed != nullptr,
-		subs->Events,
-		project->Timecodes(),
-		static_cast<int>(displayed_packet.time),
-		displayed_subtitle_scene);
+	bool const keep_interactive_cache = tool
+		&& tool->IsInteracting()
+		&& !last_frame_had_separate_overlay
+		&& ShouldUseSceneCacheForCurrentFrame();
+
+	scene_cache_waiting_for_subtitle_packet = !keep_interactive_cache
+		&& video_subtitle_scene_cache::ShouldWaitForFreshPacket(
+			type,
+			has_displayed_packet,
+			changed != nullptr,
+			subs->Events,
+			project->Timecodes(),
+			static_cast<int>(displayed_packet.time),
+			displayed_subtitle_scene);
 
 	// Integrated subtitle rendering bakes the subtitle layer into the cached
 	// scene, so any visual commit invalidates the cache. In separate-overlay
 	// mode the cache is video-only and remains reusable; the wait flag above
 	// simply blocks reuse until a fresh overlay packet arrives when needed.
-	if (!last_frame_had_separate_overlay)
+	if (!last_frame_had_separate_overlay && !keep_interactive_cache)
 		InvalidateSceneCache();
 	Render();
 }
@@ -1174,6 +1229,7 @@ void VideoDisplay::DoRender() try {
 		if (ApplyRendererSourceModePreference()) {
 			pending_packet = { };
 			has_pending_packet = false;
+			pending_packet_deferred_for_visual_interaction = false;
 			displayed_packet = { };
 			has_displayed_packet = false;
 			con->videoController->JumpToFrame(con->videoController->GetFrameN());
@@ -1185,7 +1241,7 @@ void VideoDisplay::DoRender() try {
 		cmd::call("video/tool/cross", con);
 
 	try {
-		if (has_pending_packet) {
+		if (has_pending_packet && !(pending_packet_deferred_for_visual_interaction && tool && tool->IsInteracting())) {
 			first_presented_frame = !has_displayed_packet;
 			bool const reuse_uploaded_source_frame =
 				pending_packet.allow_source_frame_upload_reuse
@@ -1236,6 +1292,7 @@ void VideoDisplay::DoRender() try {
 			has_displayed_packet = true;
 			pending_packet = { };
 			has_pending_packet = false;
+			pending_packet_deferred_for_visual_interaction = false;
 			RefreshDisplayedSubtitleSceneSnapshot();
 			presented_new_frame = true;
 			presented_frame_number = displayed_packet.frame_number;
@@ -1926,6 +1983,7 @@ void VideoDisplay::Unload() {
 	glContext.reset();
 	pending_packet = { };
 	has_pending_packet = false;
+	pending_packet_deferred_for_visual_interaction = false;
 	displayed_packet = { };
 	has_displayed_packet = false;
 	ResetDisplayedSubtitleScene();

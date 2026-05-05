@@ -133,6 +133,7 @@ class VideoDisplay final : public wxGLCanvas {
 	/// Render packet which will replace the currently visible frame on the next render
 	VideoRenderPacket pending_packet;
 	bool has_pending_packet = false;
+	bool pending_packet_deferred_for_visual_interaction = false;
 	/// Last packet successfully uploaded to the current renderer set; reused across backend reloads.
 	VideoRenderPacket displayed_packet;
 	bool has_displayed_packet = false;
@@ -175,6 +176,7 @@ class VideoDisplay final : public wxGLCanvas {
 	void InvalidateSceneCache();
 	bool IsSceneCacheUsableForCurrentPlayback() const noexcept;
 	bool ShouldUseSceneCacheForCurrentFrame() const noexcept;
+	bool ShouldDeferIncomingSubtitlePacket(VideoRenderPacket const& packet) const noexcept;
 	void ResetSceneCacheRetryBlock() noexcept;
 	void BlockSceneCacheUntilRetry(int canvas_width, int canvas_height) noexcept;
 	bool ShouldAttemptSceneCache(int canvas_width, int canvas_height) noexcept;

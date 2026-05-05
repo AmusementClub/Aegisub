@@ -349,7 +349,10 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 	if (active_line && left_double)
 		OnDoubleClick();
 
-	parent->Render();
+	if (holding || dragging)
+		parent->RenderNow();
+	else
+		parent->Render();
 
 	// Only coalesce the changes made in a single drag
 	if (!event.LeftIsDown())

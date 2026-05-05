@@ -159,6 +159,7 @@ public:
 	virtual void SetCanvasSize(int w, int h);
 	virtual void SetDisplayArea(int x, int y, int w, int h);
 	virtual void SetToolbar(wxToolBar *) { }
+	bool IsInteracting() const noexcept { return holding || dragging; }
 	virtual ~VisualToolBase() = default;
 };
 

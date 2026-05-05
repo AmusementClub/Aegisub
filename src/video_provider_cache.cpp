@@ -22,7 +22,6 @@
 
 #include <libaegisub/make_unique.h>
 
-#include <array>
 #include <list>
 #include <unordered_map>
 
@@ -61,16 +60,6 @@ struct CachedFrame {
 	CachedFrame& operator=(CachedFrame&&) = default;
 };
 
-struct StepWarmState {
-	CachedFrameKey last_key;
-	bool has_last_request = false;
-	int last_delta = 0;
-};
-
-constexpr size_t StepWarmStateIndex(CachedFrameKind kind) {
-	return static_cast<size_t>(kind);
-}
-
 size_t EstimateNativeFrameSize(SourceFrame const& frame) {
 	size_t total_size = 0;
 	for (int i = 0; i < frame.plane_count; ++i) {
@@ -97,13 +86,11 @@ class VideoProviderCache final : public VideoProvider {
 	std::list<CachedFrame> cache;
 	std::unordered_map<CachedFrameKey, std::list<CachedFrame>::iterator, CachedFrameKeyHash> cache_index;
 	size_t total_cache_size = 0;
-	std::array<StepWarmState, 2> step_warm = { };
 
 	void ClearCache() {
 		cache_index.clear();
 		cache.clear();
 		total_cache_size = 0;
-		step_warm = { };
 	}
 
 	std::list<CachedFrame>::iterator TouchCachedFrame(CachedFrameKey const& key) {
@@ -138,95 +125,6 @@ class VideoProviderCache final : public VideoProvider {
 		cache.begin()->size_bytes = size_bytes;
 		cache_index[key] = cache.begin();
 		total_cache_size += size_bytes;
-	}
-
-	bool CanWarmNeighbor(size_t frame_size_bytes) const {
-		return max_cache_size != 0
-			&& frame_size_bytes != 0
-			&& frame_size_bytes <= max_cache_size / 2;
-	}
-
-	int UpdateStepWarmState(CachedFrameKey const& key) {
-		auto& warm_state = step_warm[StepWarmStateIndex(key.kind)];
-		int warm_delta = 0;
-		if (warm_state.has_last_request) {
-			int delta = key.frame_number - warm_state.last_key.frame_number;
-			if (delta != 0) {
-				if (warm_state.last_delta == 0 || warm_state.last_delta == delta)
-					warm_delta = delta;
-				warm_state.last_delta = delta;
-			}
-			else {
-				warm_state.last_delta = 0;
-			}
-		}
-
-		warm_state.last_key = key;
-		warm_state.has_last_request = true;
-		return warm_delta;
-	}
-
-	void WarmBgraNeighbor(CachedFrameKey const& key, size_t frame_size_bytes) {
-		int const delta = UpdateStepWarmState(key);
-		if (delta == 0 || !CanWarmNeighbor(frame_size_bytes))
-			return;
-
-		int const target_frame = key.frame_number + delta;
-		if (target_frame < 0 || target_frame >= GetFrameCount())
-			return;
-
-		CachedFrameKey const target_key = { target_frame, CachedFrameKind::Bgra };
-		if (cache_index.find(target_key) != cache_index.end())
-			return;
-
-		try {
-			VideoFrame warmed;
-			master->GetFrame(target_frame, warmed);
-			StoreCachedFrame(
-				target_key,
-				warmed.data.size(),
-				[&](CachedFrame& cached) {
-					cached.frame = warmed;
-					cached.native_frame = { };
-					cached.native_owner.reset();
-				});
-		}
-		catch (VideoProviderError const&) {
-		}
-	}
-
-	void WarmNativeNeighbor(CachedFrameKey const& key, size_t frame_size_bytes) {
-		int const delta = UpdateStepWarmState(key);
-		if (delta == 0 || !CanWarmNeighbor(frame_size_bytes))
-			return;
-
-		int const target_frame = key.frame_number + delta;
-		if (target_frame < 0 || target_frame >= GetFrameCount())
-			return;
-
-		CachedFrameKey const target_key = { target_frame, CachedFrameKind::Native };
-		if (cache_index.find(target_key) != cache_index.end())
-			return;
-
-		try {
-			SourceFrame warmed;
-			std::shared_ptr<void> warmed_owner;
-			if (!master->GetNativeFrame(target_frame, warmed, warmed_owner))
-				return;
-			if (!warmed_owner || !warmed.IsValid())
-				return;
-
-			StoreCachedFrame(
-				target_key,
-				EstimateNativeFrameSize(warmed),
-				[&](CachedFrame& cached) {
-					cached.frame = { };
-					cached.native_frame = warmed;
-					cached.native_owner = warmed_owner;
-				});
-		}
-		catch (VideoProviderError const&) {
-		}
 	}
 
 public:
@@ -276,7 +174,6 @@ public:
 void VideoProviderCache::GetFrame(int n, VideoFrame &out) {
 	if (auto it = TouchCachedFrame({ n, CachedFrameKind::Bgra }); it != cache.end()) {
 		out = it->frame;
-		WarmBgraNeighbor(it->key, it->size_bytes);
 		return;
 	}
 
@@ -295,14 +192,12 @@ void VideoProviderCache::GetFrame(int n, VideoFrame &out) {
 			cached.native_frame = { };
 			cached.native_owner.reset();
 		});
-	WarmBgraNeighbor({ n, CachedFrameKind::Bgra }, frame_size);
 }
 
 bool VideoProviderCache::GetNativeFrame(int n, SourceFrame& out, std::shared_ptr<void>& owner) {
 	if (auto it = TouchCachedFrame({ n, CachedFrameKind::Native }); it != cache.end()) {
 		out = it->native_frame;
 		owner = it->native_owner;
-		WarmNativeNeighbor(it->key, it->size_bytes);
 		return true;
 	}
 
@@ -323,7 +218,6 @@ bool VideoProviderCache::GetNativeFrame(int n, SourceFrame& out, std::shared_ptr
 			cached.native_frame = out;
 			cached.native_owner = owner;
 		});
-	WarmNativeNeighbor({ n, CachedFrameKind::Native }, frame_size);
 	return true;
 }
 

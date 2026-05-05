@@ -420,10 +420,14 @@ struct video_frame_next_keyframe final : public validator_video_loaded {
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
 		auto const& kf = core.project->Keyframes();
-		core.videoController->JumpToFrame(aegisub::video_navigation_ops::ComputeNextKeyframe(
-			kf,
-			core.videoController->GetFrameN(),
-			core.project->VideoProvider()->GetFrameCount() - 1));
+		if (core.videoController->IsPlaying()) {
+			core.videoController->JumpToFrame(aegisub::video_navigation_ops::ComputeNextKeyframe(
+				kf,
+				core.videoController->GetFrameN(),
+				core.project->VideoProvider()->GetFrameCount() - 1));
+		}
+		else
+			core.videoController->NavigateToKeyframe(kf, 1);
 	}
 };
 
@@ -490,9 +494,12 @@ struct video_frame_prev_keyframe final : public validator_video_loaded {
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
-		core.videoController->JumpToFrame(aegisub::video_navigation_ops::ComputePreviousKeyframe(
-			core.project->Keyframes(),
-			core.videoController->GetFrameN()));
+		if (core.videoController->IsPlaying())
+			core.videoController->JumpToFrame(aegisub::video_navigation_ops::ComputePreviousKeyframe(
+				core.project->Keyframes(),
+				core.videoController->GetFrameN()));
+		else
+			core.videoController->NavigateToKeyframe(core.project->Keyframes(), -1);
 	}
 };
 

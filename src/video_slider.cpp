@@ -135,6 +135,7 @@ void VideoSlider::ScheduleSeek(int target_frame, bool force) {
 		if (seek_timer.IsRunning())
 			seek_timer.Stop();
 		pending_seek_frame = -1;
+		has_preview_seek_session = false;
 		videoController->JumpToFrame(target_frame);
 		last_seek_time = std::chrono::steady_clock::now();
 		last_seek_frame = target_frame;
@@ -148,6 +149,7 @@ void VideoSlider::ScheduleSeek(int target_frame, bool force) {
 			seek_timer.Stop();
 		pending_seek_frame = -1;
 		videoController->PreviewToFrame(target_frame);
+		has_preview_seek_session = true;
 		last_seek_time = now;
 		last_seek_frame = target_frame;
 		return;
@@ -174,6 +176,7 @@ void VideoSlider::OnSeekTimer(wxTimerEvent &) {
 	}
 
 	videoController->PreviewToFrame(pending_seek_frame);
+	has_preview_seek_session = true;
 	last_seek_time = std::chrono::steady_clock::now();
 	last_seek_frame = pending_seek_frame;
 	pending_seek_frame = -1;
@@ -260,6 +263,9 @@ void VideoSlider::OnMouse(wxMouseEvent &event) {
 			int go = GetValueAtX(event.GetX());
 			if (go != val)
 				SetValue(go);
+			ScheduleSeek(val, true);
+		}
+		else if (has_preview_seek_session) {
 			ScheduleSeek(val, true);
 		}
 	}

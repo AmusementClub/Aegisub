@@ -61,7 +61,7 @@ VisualToolBase::VisualToolBase(VideoDisplay *parent, agi::Context *context)
 	UpdateLayoutResolution();
 	active_line = GetActiveDialogueLine();
 	connections.push_back(core.selectionController->AddActiveLineListener(&VisualToolBase::OnActiveLineChanged, this));
-	connections.push_back(core.videoController->AddFramePresentedListener(&VisualToolBase::OnFramePresented, this));
+	connections.push_back(core.videoController->AddSeekListener(&VisualToolBase::OnSeek, this));
 	parent->Bind(wxEVT_MOUSE_CAPTURE_LOST, &VisualToolBase::OnMouseCaptureLost, this);
 }
 
@@ -134,7 +134,7 @@ void VisualToolBase::OnCommit(int type, AssDialogue const* changed) {
 		parent->Render();
 }
 
-void VisualToolBase::OnFramePresented(int new_frame) {
+void VisualToolBase::OnSeek(int new_frame) {
 	if (frame_number == new_frame) return;
 
 	frame_number = new_frame;

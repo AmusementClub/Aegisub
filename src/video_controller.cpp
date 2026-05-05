@@ -44,6 +44,7 @@
 #include "async_video_provider.h"
 #include "utils.h"
 #include "video_controller_timer.h"
+#include "video_navigation_ops.h"
 
 #include <libaegisub/ass/time.h>
 
@@ -125,12 +126,15 @@ void VideoController::ResetPlaybackState() {
 	playback_mode = PlaybackMode::None;
 	playback_end_ms = 0;
 	playback_uses_audio_authority = false;
+	playback_seek_frame_pending = -1;
 }
 
 void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 	Stop();
+	ResetStepPreviewSessionState();
 	provider = new_provider;
 	presented_frame_n = -1;
+	ClearLatePreviewFrameAcceptance();
 	color_matrix = provider ? provider->GetColorSpace() : "";
 	ResetPlaybackState();
 }
@@ -167,6 +171,8 @@ void VideoController::RequestFrame() {
 void VideoController::RequestFrame(bool supersede_in_flight) {
 	auto core = context->GetCore();
 	core.ass->Properties.video_position = frame_n;
+	if (supersede_in_flight)
+		ClearLatePreviewFrameAcceptance();
 	auto const frame_time = TimeAtFrame(frame_n);
 	perf_trace::ObserveFrameRequest(frame_n, frame_time, false);
 	provider->RequestFrame(frame_n, frame_time, supersede_in_flight);
@@ -175,6 +181,7 @@ void VideoController::RequestFrame(bool supersede_in_flight) {
 void VideoController::RequestFrameImmediate() {
 	auto core = context->GetCore();
 	core.ass->Properties.video_position = frame_n;
+	ClearLatePreviewFrameAcceptance();
 	auto const frame_time = TimeAtFrame(frame_n);
 	perf_trace::ObserveFrameRequest(frame_n, frame_time, true);
 
@@ -198,14 +205,27 @@ void VideoController::RequestFramePreview(int target_frame, bool trace, bool sup
 	if (!provider)
 		return;
 
+	if (!supersede_in_flight && !accept_late_preview_frames)
+		provider->CancelPendingFrameRequests();
+
 	frame_n = mid(0, target_frame, provider->GetFrameCount() - 1);
+	accept_late_preview_frames = !supersede_in_flight;
+	if (accept_late_preview_frames)
+		acceptable_late_preview_frames.insert(frame_n);
+	else
+		acceptable_late_preview_frames.clear();
 	if (trace)
 		perf_trace::TraceSeek(frame_n, false);
 	RequestFrame(supersede_in_flight);
 	Seek(frame_n);
 }
 
-void VideoController::CancelStepPreviewSession() {
+void VideoController::ClearLatePreviewFrameAcceptance() {
+	accept_late_preview_frames = false;
+	acceptable_late_preview_frames.clear();
+}
+
+void VideoController::CancelStepPreviewSession(bool clear_late_preview) {
 	if (step_preview_active)
 		perf_trace::TraceVideoStepPreviewCancel(frame_n);
 
@@ -218,12 +238,14 @@ void VideoController::CancelStepPreviewSession() {
 		}, std::chrono::steady_clock::now());
 	}
 
-	ResetStepPreviewSessionState();
+	ResetStepPreviewSessionState(clear_late_preview);
 }
 
-void VideoController::ResetStepPreviewSessionState() {
+void VideoController::ResetStepPreviewSessionState(bool clear_late_preview) {
 	step_preview_active = false;
 	step_preview_target_frame = -1;
+	if (clear_late_preview)
+		ClearLatePreviewFrameAcceptance();
 	has_step_last_input = false;
 	step_burst_count = 0;
 	step_transport_policy_direction = 0;
@@ -270,6 +292,7 @@ void VideoController::HandleInspectionStepTarget(int target, bool immediate_requ
 		return;
 
 	frame_n = target;
+	ClearLatePreviewFrameAcceptance();
 	perf_trace::TraceSeek(frame_n, false);
 	if (immediate_request)
 		RequestFrameImmediate();
@@ -304,7 +327,7 @@ void VideoController::HandleStepTransportOutputs(
 			case PlaybackTransportPolicy::OutputKind::Commit:
 				perf_trace::TraceVideoStepPreviewRelease(step_preview_target_frame);
 				RequestFramePreview(output.target, true, true);
-				ResetStepPreviewSessionState();
+				ResetStepPreviewSessionState(false);
 				break;
 
 			case PlaybackTransportPolicy::OutputKind::Inspection:
@@ -316,6 +339,49 @@ void VideoController::HandleStepTransportOutputs(
 				break;
 		}
 	}
+}
+
+int VideoController::GetRepeatPreviewAnchorFrame() const {
+	return step_preview_active && step_preview_target_frame >= 0
+		? step_preview_target_frame
+		: frame_n;
+}
+
+void VideoController::SubmitRepeatPreviewTarget(int target_frame) {
+	if (!provider || IsPlaying())
+		return;
+
+	int const frame_count = provider->GetFrameCount();
+	if (frame_count <= 0)
+		return;
+
+	int const current_target = GetRepeatPreviewAnchorFrame();
+	int const target = mid(0, target_frame, frame_count - 1);
+	if (target == current_target)
+		return;
+
+	auto const now = std::chrono::steady_clock::now();
+	int const direction = target < current_target ? -1 : 1;
+	bool const first_preview_input = !step_preview_active || step_transport_policy_direction != direction;
+	auto &transport = EnsureStepPreviewTransportPolicy(direction);
+
+	if (first_preview_input) {
+		ClearLatePreviewFrameAcceptance();
+		step_preview_target_frame = frame_n;
+		step_preview_active = true;
+		perf_trace::TraceVideoStepPreviewBegin(frame_n, target - frame_n, step_burst_count, step_repeat_burst_threshold);
+	}
+
+	step_preview_target_frame = target;
+	auto outputs = transport.Apply({
+		PlaybackTransportPolicy::InputKind::PreviewMotion,
+		PlaybackTransportPolicy::InteractionKind::StepRepeat,
+		step_preview_target_frame,
+		first_preview_input
+	}, now);
+	HandleStepTransportOutputs(outputs, false, false, direction);
+	ScheduleStepPreviewTimer(now);
+	step_release_timer->StartOnce(static_cast<int>(step_repeat_release_delay.count()));
 }
 
 void VideoController::StepFrames(int delta, bool immediate_inspection, bool play_audio_on_inspection) {
@@ -335,30 +401,7 @@ void VideoController::StepFrames(int delta, bool immediate_inspection, bool play
 	has_step_last_input = true;
 
 	if (step_preview_enabled && (step_preview_active || step_burst_count >= step_repeat_burst_threshold)) {
-		int const direction = delta < 0 ? -1 : 1;
-		auto &transport = EnsureStepPreviewTransportPolicy(direction);
-
-		bool const first_preview_input = !step_preview_active;
-		if (first_preview_input) {
-			step_preview_target_frame = frame_n;
-			step_preview_active = true;
-			perf_trace::TraceVideoStepPreviewBegin(frame_n, delta, step_burst_count, step_repeat_burst_threshold);
-		}
-
-		int const next_target = mid(0, step_preview_target_frame + delta, frame_count - 1);
-		if (next_target != step_preview_target_frame) {
-			step_preview_target_frame = next_target;
-			auto outputs = transport.Apply({
-				PlaybackTransportPolicy::InputKind::PreviewMotion,
-				PlaybackTransportPolicy::InteractionKind::StepRepeat,
-				step_preview_target_frame,
-				first_preview_input
-			}, now);
-			HandleStepTransportOutputs(outputs, immediate_inspection, play_audio_on_inspection, delta);
-		}
-
-		ScheduleStepPreviewTimer(now);
-		step_release_timer->StartOnce(static_cast<int>(step_repeat_release_delay.count()));
+		SubmitRepeatPreviewTarget(GetRepeatPreviewAnchorFrame() + delta);
 		return;
 	}
 
@@ -375,6 +418,21 @@ void VideoController::StepFrames(int delta, bool immediate_inspection, bool play
 	HandleStepTransportOutputs(outputs, immediate_inspection, play_audio_on_inspection, delta);
 }
 
+void VideoController::NavigateToFrame(int target_frame) {
+	SubmitRepeatPreviewTarget(target_frame);
+}
+
+void VideoController::NavigateToKeyframe(std::vector<int> const& keyframes, int direction) {
+	if (!provider || IsPlaying())
+		return;
+
+	int const anchor_frame = GetRepeatPreviewAnchorFrame();
+	int const target = direction < 0
+		? aegisub::video_navigation_ops::ComputePreviousKeyframe(keyframes, anchor_frame)
+		: aegisub::video_navigation_ops::ComputeNextKeyframe(keyframes, anchor_frame, provider->GetFrameCount() - 1);
+	SubmitRepeatPreviewTarget(target);
+}
+
 void VideoController::JumpToFrame(int n) {
 	if (!provider) return;
 
@@ -383,22 +441,32 @@ void VideoController::JumpToFrame(int n) {
 	bool was_playing = IsPlaying();
 	auto resume_mode = playback_mode;
 	auto resume_end_ms = playback_end_ms;
-	if (was_playing)
-		Stop();
 
 	frame_n = mid(0, n, provider->GetFrameCount() - 1);
+	ClearLatePreviewFrameAcceptance();
+	playback_seek_frame_pending = was_playing ? frame_n : -1;
 	perf_trace::TraceSeek(frame_n, was_playing);
 	RequestFrame();
 	Seek(frame_n);
 
-	if (was_playing && PreparePlayback(resume_mode, frame_n, resume_end_ms))
-		StartPlaybackTimer();
+	if (was_playing) {
+		if (!PreparePlayback(resume_mode, frame_n, resume_end_ms)) {
+			Stop();
+			return;
+		}
+		playback_start_time = std::chrono::steady_clock::now();
+		perf_trace::ResetVideoPlaybackInterval();
+	}
 }
 
 void VideoController::PreviewToFrame(int n) {
 	if (!provider) return;
 
-	CancelStepPreviewSession();
+	bool const already_accepting_late_preview = accept_late_preview_frames;
+	bool const had_step_preview = step_preview_active;
+	CancelStepPreviewSession(false);
+	if (had_step_preview || !already_accepting_late_preview)
+		ClearLatePreviewFrameAcceptance();
 
 	bool was_playing = IsPlaying();
 	auto resume_mode = playback_mode;
@@ -407,8 +475,13 @@ void VideoController::PreviewToFrame(int n) {
 		Stop();
 		provider->CancelPendingFrameRequests();
 	}
+	else if (had_step_preview || !already_accepting_late_preview) {
+		provider->CancelPendingFrameRequests();
+	}
 
 	frame_n = mid(0, n, provider->GetFrameCount() - 1);
+	accept_late_preview_frames = true;
+	acceptable_late_preview_frames.insert(frame_n);
 	perf_trace::TraceSeek(frame_n, was_playing);
 	RequestFrame(false);
 	Seek(frame_n);
@@ -474,8 +547,10 @@ void VideoController::StartPlayback(PlaybackMode mode, int range_end_ms) {
 	if (mode == PlaybackMode::ToEnd && presented_frame_n >= 0)
 		frame_n = presented_frame_n;
 
+	playback_seek_frame_pending = -1;
 	if (provider)
 		provider->CancelPendingFrameRequests();
+	ClearLatePreviewFrameAcceptance();
 
 	if (!PreparePlayback(mode, frame_n, range_end_ms))
 		return;
@@ -516,6 +591,7 @@ void VideoController::PlayLine() {
 }
 
 void VideoController::Stop() {
+	ClearLatePreviewFrameAcceptance();
 	if (IsPlaying()) {
 		perf_trace::TracePlayStop(frame_n);
 		perf_trace::ResetVideoPlaybackInterval();
@@ -563,6 +639,8 @@ void VideoController::OnStepReleaseTimer() {
 void VideoController::OnPlayTimer() {
 	using namespace std::chrono;
 	auto core = context->GetCore();
+	if (playback_seek_frame_pending >= 0)
+		return;
 
 	int authority_time_ms = start_ms + duration_cast<milliseconds>(steady_clock::now() - playback_start_time).count();
 	if (playback_uses_audio_authority) {
@@ -630,6 +708,7 @@ int VideoController::FrameAtTime(int time, agi::vfr::Time type) const {
 }
 
 void VideoController::HandleVideoError(std::string const& message) {
+	playback_seek_frame_pending = -1;
 	wxLogError(
 		wxS("Failed seeking video. The video file may be corrupt or incomplete.\n"
 		    "Error message reported: %s"),
@@ -637,13 +716,24 @@ void VideoController::HandleVideoError(std::string const& message) {
 }
 
 void VideoController::HandleSubtitlesError(std::string const& message) {
+	playback_seek_frame_pending = -1;
 	wxLogError(
 		wxS("Failed rendering subtitles. Error message reported: %s"),
 		to_wx(message));
 }
 
 void VideoController::DeliverFrameReady(VideoRenderPacket packet, double time) {
-	if (packet.frame_number != frame_n)
+	if (packet.frame_number != frame_n) {
+		if (!accept_late_preview_frames || !acceptable_late_preview_frames.count(packet.frame_number))
+			return;
+		acceptable_late_preview_frames.erase(packet.frame_number);
+		frame_n = packet.frame_number;
+		context->GetCore().ass->Properties.video_position = frame_n;
+		Seek(frame_n);
+	}
+	if (playback_seek_frame_pending == packet.frame_number)
+		playback_seek_frame_pending = -1;
+	else if (playback_seek_frame_pending >= 0)
 		return;
 
 	FrameReady(packet, time);

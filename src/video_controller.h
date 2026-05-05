@@ -105,12 +105,17 @@ class VideoController final {
 	PlaybackMode playback_mode = PlaybackMode::None;
 	int playback_end_ms = 0;
 	bool playback_uses_audio_authority = false;
+	int playback_seek_frame_pending = -1;
 
 	/// The frame number which was last requested from the video provider,
 	/// which may not be the same thing as the currently displayed frame
 	int frame_n = 0;
 	/// The frame number which was last presented by the video display.
 	int presented_frame_n = -1;
+	/// Preview navigation may present an already-rendered in-flight frame. When
+	/// that happens the controller treats the presented frame as the current one.
+	bool accept_late_preview_frames = false;
+	std::set<int> acceptable_late_preview_frames;
 
 	/// The picture aspect ratio of the video if the aspect ratio has been
 	/// overridden by the user
@@ -155,8 +160,11 @@ class VideoController final {
 	void RequestFrame(bool supersede_in_flight);
 	void RequestFrameImmediate();
 	void RequestFramePreview(int target_frame, bool trace, bool supersede_in_flight);
-	void CancelStepPreviewSession();
+	void ClearLatePreviewFrameAcceptance();
+	void CancelStepPreviewSession(bool clear_late_preview = true);
 	void StepFrames(int delta, bool immediate_inspection, bool play_audio_on_inspection);
+	int GetRepeatPreviewAnchorFrame() const;
+	void SubmitRepeatPreviewTarget(int target_frame);
 	void HandleInspectionStepTarget(int target, bool immediate_request, bool play_audio, int delta);
 	void HandleStepTransportOutputs(
 		const std::vector<PlaybackTransportPolicy::Output> &outputs,
@@ -166,7 +174,7 @@ class VideoController final {
 	PlaybackTransportPolicy &EnsureStepTransportPolicy();
 	PlaybackTransportPolicy &EnsureStepPreviewTransportPolicy(int direction);
 	void ScheduleStepPreviewTimer(std::chrono::steady_clock::time_point now);
-	void ResetStepPreviewSessionState();
+	void ResetStepPreviewSessionState(bool clear_late_preview = true);
 	void StepSingleFrame(int delta);
 	void StartPlayback(PlaybackMode mode, int range_end_ms = 0);
 	bool PreparePlayback(PlaybackMode mode, int start_frame, int range_end_ms = 0);
@@ -226,6 +234,12 @@ public:
 	/// same preview coalescing as single-frame stepping, but does not play
 	/// audio on each step.
 	void NavigateByFrames(int delta);
+	/// Navigate to an absolute frame while paused using the same repeat-preview
+	/// coalescing as frame stepping.
+	void NavigateToFrame(int frame);
+	/// Navigate to the previous or next keyframe while paused, accumulating the
+	/// target during key repeat before committing on release.
+	void NavigateToKeyframe(std::vector<int> const& keyframes, int direction);
 
 	/// Starting playing the video
 	void Play();

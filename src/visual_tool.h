@@ -50,7 +50,7 @@ namespace agi {
 /// of each method for no good reason (and four times as many error messages)
 class VisualToolBase {
 	void OnCommit(int type, AssDialogue const* changed);
-	void OnFramePresented(int new_frame);
+	void OnSeek(int new_frame);
 	void UpdateScriptResolution();
 	void UpdateLayoutResolution();
 

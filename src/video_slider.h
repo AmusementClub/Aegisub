@@ -55,6 +55,7 @@ class VideoSlider: public wxWindow {
 	std::chrono::steady_clock::time_point last_seek_time;
 	int last_seek_frame = -1;
 	int pending_seek_frame = -1;
+	bool has_preview_seek_session = false;
 
 	std::chrono::milliseconds seek_min_interval_forward{ 33 };
 	std::chrono::milliseconds seek_min_interval_backward{ 100 };

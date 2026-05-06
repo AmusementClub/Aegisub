@@ -145,6 +145,8 @@ class VideoDisplay final : public wxGLCanvas {
 	agi::signal::Connection renderer_backend_option_connection;
 
 	bool render_requested = false;
+	bool render_in_progress = false;
+	bool render_scheduled = false;
 	bool scene_cache_enabled = true;
 	bool scene_cache_retry_blocked = false;
 	bool scene_cache_valid = false;
@@ -240,6 +242,7 @@ class VideoDisplay final : public wxGLCanvas {
 	void OnSizeEvent(wxSizeEvent &event);
 	void OnContextMenu(wxContextMenuEvent&);
 	void OnIdle(wxIdleEvent&);
+	void ScheduleRender();
 	void DoRender();
 	void LayoutContainingSizers();
 

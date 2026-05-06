@@ -15,6 +15,7 @@
 #include "video_renderer_placebo_gl.h"
 
 #include "video_render_opengl_proc_loader.h"
+#include "legacy_gl_draw.h"
 #include "subtitle_overlay.h"
 #include "video_renderer_error.h"
 #include "video_renderer_placebo_runtime.h"
@@ -354,27 +355,14 @@ void PlaceboRendererGL::UploadOverlay(SubtitleOverlay const*) {
 }
 
 void PlaceboRendererGL::RestoreCompatibilityState() noexcept {
-	if (functions) {
-		if (functions->UseProgram)
-			functions->UseProgram(0);
-		if (functions->BindVertexArray)
-			functions->BindVertexArray(0);
-		// Visual tools still use legacy client-side arrays, so leave placebo's
-		// buffer bindings behind only if we want glVertexPointer to treat CPU
-		// pointers as VBO offsets and draw garbage.
-		if (functions->BindBuffer) {
-			functions->BindBuffer(GL_ARRAY_BUFFER, 0);
-			functions->BindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0);
-		}
-		if (functions->ActiveTexture)
-			functions->ActiveTexture(GL_TEXTURE0);
-		if (functions->BindFramebuffer)
-			functions->BindFramebuffer(GL_FRAMEBUFFER, target_framebuffer);
-	}
-	glBindTexture(GL_TEXTURE_2D, 0);
-	glDisable(GL_TEXTURE_2D);
-	glDisable(GL_BLEND);
-	glDisable(GL_DEPTH_TEST);
+	if (functions && functions->BindFramebuffer)
+		functions->BindFramebuffer(GL_FRAMEBUFFER, target_framebuffer);
+
+	// Visual tools still use fixed-function client-side arrays and matrix state.
+	// libplacebo may leave modern GL state bound, and on some Win10 drivers the
+	// partial cleanup was not enough when mouse-drag redraws interleaved with
+	// playback presentation.
+	legacy_gl::ResetCompatibilityState();
 }
 
 void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width, int canvas_height) {

@@ -645,8 +645,16 @@ void VideoDisplay::UploadFrameData(VideoRenderPacket const& packet, double) {
 		pending_packet_deferred_for_visual_interaction = true;
 		scene_cache_waiting_for_subtitle_packet = false;
 		render_requested = true;
+		ScheduleRender();
 		return;
 	}
+
+	bool const defer_interactive_playback_same_frame_packet =
+		con->videoController->IsPlaying()
+		&& tool
+		&& tool->IsInteracting()
+		&& has_displayed_packet
+		&& packet.frame_number == displayed_packet.frame_number;
 
 	bool const can_reuse_video_only_scene_cache = scene_cache_valid
 		&& !scene_cache_dirty
@@ -661,10 +669,12 @@ void VideoDisplay::UploadFrameData(VideoRenderPacket const& packet, double) {
 
 	pending_packet = packet;
 	has_pending_packet = true;
-	pending_packet_deferred_for_visual_interaction = false;
+	pending_packet_deferred_for_visual_interaction = defer_interactive_playback_same_frame_packet;
 	scene_cache_waiting_for_subtitle_packet = false;
 	if (!can_reuse_video_only_scene_cache || !IsSceneCacheUsableForCurrentPlayback())
 		InvalidateSceneCache();
+	if (defer_interactive_playback_same_frame_packet)
+		return;
 
 	// Instead of calling Render(), we force a render here to minimize delay
 	DoRender();
@@ -691,13 +701,24 @@ VideoDisplayMemoryStats VideoDisplay::CollectMemoryStats() const {
 
 void VideoDisplay::Render() {
 	render_requested = true;
+	ScheduleRender();
 }
 
 void VideoDisplay::RenderNow() {
 	// Mouse-drag visual tool updates can keep the UI too busy for idle-driven
-	// redraws; render synchronously so tool feedback is not gated on subtitle
-	// packet delivery cadence.
+	// redraws; render synchronously while paused so tool feedback is not gated
+	// on subtitle packet delivery cadence. During playback, video packet
+	// presentation owns the full redraw cadence; mouse-motion events just update
+	// tool state for the next frame instead of hammering the backend between
+	// packets, which is especially fragile with libplacebo on some Win10 drivers.
+	if (con->videoController->IsPlaying() && tool && tool->IsInteracting())
+		return;
+
 	render_requested = true;
+	if (render_in_progress || con->videoController->IsPlaying()) {
+		ScheduleRender();
+		return;
+	}
 	DoRender();
 }
 
@@ -910,6 +931,18 @@ wxImage VideoDisplay::GetFrameImage(bool raw) {
 void VideoDisplay::OnIdle(wxIdleEvent&) {
 	if (render_requested)
 		DoRender();
+}
+
+void VideoDisplay::ScheduleRender() {
+	if (render_scheduled)
+		return;
+
+	render_scheduled = true;
+	CallAfter([this] {
+		render_scheduled = false;
+		if (render_requested)
+			DoRender();
+	});
 }
 
 void VideoDisplay::RenderBackendScene(int canvas_width, int canvas_height) {
@@ -1136,7 +1169,7 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) {
 	glEnable(GL_BLEND);
 	glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 	glViewport(0, 0, canvas_width, canvas_height);
-	legacy_gl::DrawTexturedQuadTopLeft(static_cast<GLuint>(skia_overlay_texture), canvas_width, canvas_height);
+	legacy_gl::DrawPremultipliedTexturedQuadTopLeft(static_cast<GLuint>(skia_overlay_texture), canvas_width, canvas_height);
 	legacy_gl::DrawAlphaMaskedInvertQuadTopLeft(static_cast<GLuint>(skia_overlay_invert_texture), canvas_width, canvas_height);
 	return true;
 #endif
@@ -1170,6 +1203,12 @@ void VideoDisplay::OnSubtitlesCommit(int type, AssDialogue const* changed) {
 	if (!video_subtitle_scene_cache::IsVisualSubtitleCommitType(type))
 		return;
 
+	auto render_after_commit = [&] {
+		if (con->videoController->IsPlaying() && tool && tool->IsInteracting())
+			return;
+		Render();
+	};
+
 	if (!has_displayed_packet) {
 		if (!last_frame_had_separate_overlay)
 			InvalidateSceneCache();
@@ -1183,7 +1222,7 @@ void VideoDisplay::OnSubtitlesCommit(int type, AssDialogue const* changed) {
 		if (!last_frame_had_separate_overlay)
 			InvalidateSceneCache();
 		scene_cache_waiting_for_subtitle_packet = true;
-		Render();
+		render_after_commit();
 		return;
 	}
 
@@ -1208,10 +1247,23 @@ void VideoDisplay::OnSubtitlesCommit(int type, AssDialogue const* changed) {
 	// simply blocks reuse until a fresh overlay packet arrives when needed.
 	if (!last_frame_had_separate_overlay && !keep_interactive_cache)
 		InvalidateSceneCache();
-	Render();
+	render_after_commit();
 }
 
 void VideoDisplay::DoRender() try {
+	if (render_in_progress) {
+		render_requested = true;
+		ScheduleRender();
+		return;
+	}
+
+	render_in_progress = true;
+	render_scheduled = false;
+	auto finish_render = agi::make_scope_exit([&] {
+		render_in_progress = false;
+		if (render_requested)
+			ScheduleRender();
+	});
 	render_requested = false;
 
 	if (!con->project->VideoProvider() || !InitContext() || (!videoRenderer && !has_pending_packet))

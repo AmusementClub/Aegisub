@@ -153,8 +153,8 @@ void EmitCUsage(FontCollectorAssFontUsage const& usage,
 	c_usage.ass_facename = usage.ass_facename.c_str();
 	c_usage.ass_bold = usage.ass_bold;
 	c_usage.ass_italic = usage.ass_italic;
-	c_usage.chars = usage.chars.empty() ? nullptr : usage.chars.data();
-	c_usage.char_count = usage.chars.size();
+	c_usage.codepoints = usage.codepoints.empty() ? nullptr : usage.codepoints.data();
+	c_usage.codepoint_count = usage.codepoints.size();
 	c_usage.styles = styles.empty() ? nullptr : styles.data();
 	c_usage.style_count = styles.size();
 	c_usage.override_lines = usage.override_lines.empty() ? nullptr : usage.override_lines.data();
@@ -173,7 +173,9 @@ void EmitCUsage(FontCollectorAssFontUsage const& usage,
 	c_usage.matched.libass_fake_bold = usage.matched.libass_fake_bold;
 	c_usage.matched.libass_fake_italic = usage.matched.libass_fake_italic;
 	c_usage.matched.libass_score = usage.matched.libass_score;
-	c_usage.matched.missing_chars = usage.matched.missing_chars.c_str();
+	c_usage.matched.missing_text = usage.matched.missing_text.c_str();
+	c_usage.matched.missing_codepoints = usage.matched.missing_codepoints.empty() ? nullptr : usage.matched.missing_codepoints.data();
+	c_usage.matched.missing_codepoint_count = usage.matched.missing_codepoints.size();
 	c_usage.matched.requested_weight = usage.matched.requested_weight;
 
 	callback(&c_usage, user_data);

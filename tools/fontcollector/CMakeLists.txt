@@ -136,6 +136,7 @@ set(AEGISUB_FONTCOLLECTOR_SOURCES
     ${AEGISUB_ROOT}/src/ass_override.cpp
     ${AEGISUB_ROOT}/src/ass_parser.cpp
     ${AEGISUB_ROOT}/src/ass_style.cpp
+    ${AEGISUB_ROOT}/src/ass_style_resolution.cpp
     ${AEGISUB_ROOT}/src/ass_time_projection.cpp
     ${AEGISUB_ROOT}/src/font_collector_core.cpp
     ${AEGISUB_ROOT}/src/font_collector_unicode.cpp

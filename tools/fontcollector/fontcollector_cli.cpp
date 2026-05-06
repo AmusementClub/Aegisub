@@ -160,7 +160,9 @@ struct JsonMatchedFont {
 	bool libass_fake_bold = false;
 	bool libass_fake_italic = false;
 	int libass_score = 0;
-	std::string missing_chars;
+	std::string missing_text;
+	std::vector<uint32_t> missing_codepoints;
+	std::vector<std::string> missing_codepoint_names;
 	int requested_weight = 0;
 };
 
@@ -168,8 +170,8 @@ struct JsonUsage {
 	std::string ass_facename;
 	int ass_bold = 0;
 	bool ass_italic = false;
-	std::vector<uint32_t> chars;
-	std::vector<std::string> char_names;
+	std::vector<uint32_t> codepoints;
+	std::vector<std::string> codepoint_names;
 	std::vector<std::string> styles;
 	std::vector<int> override_lines;
 	JsonMatchedFont matched;
@@ -246,7 +248,9 @@ std::string FormatEvent(AegisubFontCollectorEvent const& event) {
 		case AEGISUB_FONTCOLLECTOR_EVENT_PARSING_FILE:
 			return "Parsing file";
 		case AEGISUB_FONTCOLLECTOR_EVENT_STYLE_MISSING:
-			return "Style missing: " + Safe(event.style);
+			return "Style missing: " + Safe(event.style) +
+			       (event.line_count == 1 ? " on line " + JoinLines(event) :
+			        event.line_count > 1 ? " on lines " + JoinLines(event) : std::string());
 		case AEGISUB_FONTCOLLECTOR_EVENT_SEARCHING_FOR_FONT_FILES:
 			return "Searching for font files";
 		case AEGISUB_FONTCOLLECTOR_EVENT_FONT_MISSING:
@@ -263,7 +267,8 @@ std::string FormatEvent(AegisubFontCollectorEvent const& event) {
 		case AEGISUB_FONTCOLLECTOR_EVENT_FAKE_ITALIC:
 			return "Fake italic required: " + Safe(event.face);
 		case AEGISUB_FONTCOLLECTOR_EVENT_MISSING_GLYPHS:
-			return "Missing glyphs in " + Safe(event.face) + ": " + std::to_string(event.count);
+			return "Missing glyphs in " + Safe(event.face) + ": " +
+			       (event.message && *event.message ? Safe(event.message) : std::to_string(event.count));
 		case AEGISUB_FONTCOLLECTOR_EVENT_USAGE: {
 			std::ostringstream out;
 			if (event.style_count)
@@ -357,12 +362,12 @@ std::string JoinPaths(AegisubFontCollectorMatchedFont const& font) {
 	return out.str();
 }
 
-std::string JoinChars(AegisubFontCollectorFontUsage const& usage) {
+std::string JoinCodepoints(AegisubFontCollectorFontUsage const& usage) {
 	std::ostringstream out;
-	for (size_t i = 0; i < usage.char_count; ++i) {
+	for (size_t i = 0; i < usage.codepoint_count; ++i) {
 		if (i)
 			out << ' ';
-		out << "U+" << std::uppercase << std::hex << usage.chars[i] << std::dec;
+		out << "U+" << std::uppercase << std::hex << usage.codepoints[i] << std::dec;
 	}
 	return out.str();
 }
@@ -386,7 +391,7 @@ void PrintUsage(AegisubFontCollectorFontUsage const *usage, void*) {
 		event.line_count = usage->override_line_count;
 		std::cout << "  override lines: " << JoinLines(event) << "\n";
 	}
-	std::cout << "  chars: " << JoinChars(*usage) << "\n";
+	std::cout << "  codepoints: " << JoinCodepoints(*usage) << "\n";
 	std::cout << "  matched: " << Safe(usage->matched.facename)
 		<< " face_index=" << usage->matched.face_index
 		<< " weight=" << usage->matched.weight
@@ -395,8 +400,8 @@ void PrintUsage(AegisubFontCollectorFontUsage const *usage, void*) {
 		<< " fake_italic=" << usage->matched.fake_italic << "\n";
 	if (usage->matched.path_count)
 		std::cout << "  paths: " << JoinPaths(usage->matched) << "\n";
-	if (usage->matched.missing_chars && *usage->matched.missing_chars)
-		std::cout << "  missing chars: " << usage->matched.missing_chars << "\n";
+	if (usage->matched.missing_text && *usage->matched.missing_text)
+		std::cout << "  missing codepoints: " << usage->matched.missing_text << "\n";
 }
 
 void CollectJsonUsage(AegisubFontCollectorFontUsage const *usage, void *user_data) {
@@ -408,11 +413,11 @@ void CollectJsonUsage(AegisubFontCollectorFontUsage const *usage, void *user_dat
 	item.ass_facename = Safe(usage->ass_facename);
 	item.ass_bold = usage->ass_bold;
 	item.ass_italic = usage->ass_italic != 0;
-	if (usage->char_count)
-		item.chars.assign(usage->chars, usage->chars + usage->char_count);
-	item.char_names.reserve(item.chars.size());
-	for (auto chr : item.chars)
-		item.char_names.push_back(FormatCodepoint(chr));
+	if (usage->codepoint_count)
+		item.codepoints.assign(usage->codepoints, usage->codepoints + usage->codepoint_count);
+	item.codepoint_names.reserve(item.codepoints.size());
+	for (auto codepoint : item.codepoints)
+		item.codepoint_names.push_back(FormatCodepoint(codepoint));
 	item.styles.reserve(usage->style_count);
 	for (size_t i = 0; i < usage->style_count; ++i)
 		item.styles.emplace_back(usage->styles[i]);
@@ -433,7 +438,12 @@ void CollectJsonUsage(AegisubFontCollectorFontUsage const *usage, void *user_dat
 	item.matched.libass_fake_bold = usage->matched.libass_fake_bold != 0;
 	item.matched.libass_fake_italic = usage->matched.libass_fake_italic != 0;
 	item.matched.libass_score = usage->matched.libass_score;
-	item.matched.missing_chars = Safe(usage->matched.missing_chars);
+	item.matched.missing_text = Safe(usage->matched.missing_text);
+	if (usage->matched.missing_codepoint_count)
+		item.matched.missing_codepoints.assign(usage->matched.missing_codepoints, usage->matched.missing_codepoints + usage->matched.missing_codepoint_count);
+	item.matched.missing_codepoint_names.reserve(item.matched.missing_codepoints.size());
+	for (auto codepoint : item.matched.missing_codepoints)
+		item.matched.missing_codepoint_names.push_back(FormatCodepoint(codepoint));
 	item.matched.requested_weight = usage->matched.requested_weight;
 }
 
@@ -518,11 +528,11 @@ void WriteJsonReport(std::ostream& out, int result, std::string const& error, Js
 		WriteJsonString(out, usage.ass_facename);
 		out << ",\n        \"bold\": " << usage.ass_bold << ",\n        \"italic\": ";
 		WriteJsonBool(out, usage.ass_italic);
-		out << "\n      },\n      \"chars\": {\n";
-		out << "        \"codepoints\": ";
-		WriteJsonUInt32Array(out, usage.chars);
+		out << "\n      },\n      \"codepoints\": {\n";
+		out << "        \"values\": ";
+		WriteJsonUInt32Array(out, usage.codepoints);
 		out << ",\n        \"names\": ";
-		WriteJsonStringArray(out, usage.char_names);
+		WriteJsonStringArray(out, usage.codepoint_names);
 		out << "\n      },\n      \"styles\": ";
 		WriteJsonStringArray(out, usage.styles);
 		out << ",\n      \"override_lines\": ";
@@ -552,8 +562,14 @@ void WriteJsonReport(std::ostream& out, int result, std::string const& error, Js
 		out << ",\n        \"libass_fake_italic\": ";
 		WriteJsonBool(out, usage.matched.libass_fake_italic);
 		out << ",\n        \"libass_score\": " << usage.matched.libass_score;
-		out << ",\n        \"missing_chars\": ";
-		WriteJsonString(out, usage.matched.missing_chars);
+		out << ",\n        \"missing_text\": ";
+		WriteJsonString(out, usage.matched.missing_text);
+		out << ",\n        \"missing_codepoints\": {\n";
+		out << "          \"values\": ";
+		WriteJsonUInt32Array(out, usage.matched.missing_codepoints);
+		out << ",\n          \"names\": ";
+		WriteJsonStringArray(out, usage.matched.missing_codepoint_names);
+		out << "\n        }";
 		out << "\n      }\n";
 		out << "    }" << (i + 1 == context.usages.size() ? "\n" : ",\n");
 	}

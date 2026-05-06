@@ -120,6 +120,16 @@ std::string FormatMissingGlyphs(std::string const& str) {
 	return printable + unprintable;
 }
 
+wxString FormatLineList(std::vector<int> const& lines) {
+	wxString text;
+	for (size_t i = 0; i < lines.size(); ++i) {
+		if (i)
+			text += wxS(", ");
+		text += fmt_wx("%d", lines[i]);
+	}
+	return text;
+}
+
 color_str_pair FormatFontCollectorEvent(FontCollectorEvent const& event) {
 	switch (event.type) {
 		case FontCollectorEventType::FontBackendInfo:
@@ -131,6 +141,10 @@ color_str_pair FormatFontCollectorEvent(FontCollectorEvent const& event) {
 		case FontCollectorEventType::ParsingFile:
 			return {0, _("Parsing file\n")};
 		case FontCollectorEventType::StyleMissing:
+			if (event.lines.size() == 1)
+				return {2, fmt_tl("Style '%s' does not exist on line %d\n", event.style, event.lines.front())};
+			if (event.lines.size() > 1)
+				return {2, fmt_tl("Style '%s' does not exist on lines: %s\n", event.style, FormatLineList(event.lines))};
 			return {2, fmt_tl("Style '%s' does not exist\n", event.style)};
 		case FontCollectorEventType::SearchingForFontFiles:
 			return {0, _("Searching for font files\n")};

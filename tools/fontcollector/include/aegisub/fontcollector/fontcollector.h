@@ -116,7 +116,9 @@ typedef struct AegisubFontCollectorMatchedFont {
 	int libass_fake_bold;
 	int libass_fake_italic;
 	int libass_score;
-	char const *missing_chars;
+	char const *missing_text;
+	uint32_t const *missing_codepoints;
+	size_t missing_codepoint_count;
 	int requested_weight;
 } AegisubFontCollectorMatchedFont;
 
@@ -124,8 +126,8 @@ typedef struct AegisubFontCollectorFontUsage {
 	char const *ass_facename;
 	int ass_bold;
 	int ass_italic;
-	uint32_t const *chars;
-	size_t char_count;
+	uint32_t const *codepoints;
+	size_t codepoint_count;
 	char const *const *styles;
 	size_t style_count;
 	int const *override_lines;

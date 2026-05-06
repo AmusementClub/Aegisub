@@ -58,6 +58,7 @@ VideoController::VideoController(agi::Context *c)
 	ui_activation.AddConnections(
 		core.ass->AddCommitListener(&VideoController::OnSubtitlesCommit, this),
 		core.project->AddVideoProviderListener(&VideoController::OnNewVideoProvider, this),
+		core.project->AddTimecodesListener(&VideoController::OnTimecodesChanged, this),
 		core.selectionController->AddActiveLineListener(&VideoController::OnActiveLineChanged, this));
 }
 
@@ -77,6 +78,7 @@ void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 	provider = new_provider;
 	presented_frame_n = -1;
 	ClearLatePreviewFrameAcceptance();
+	ClearRecentRenderPacketCache();
 	color_matrix = provider ? provider->GetColorSpace() : "";
 	ResetPlaybackState();
 }
@@ -84,6 +86,7 @@ void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
 	if (!provider) return;
 	auto core = context->GetCore();
+	ClearRecentRenderPacketCache();
 
 	if ((type & AssFile::COMMIT_SCRIPTINFO) || type == AssFile::COMMIT_NEW) {
 		auto new_matrix = core.ass->GetScriptInfo("YCbCr Matrix");
@@ -97,6 +100,10 @@ void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
 		provider->LoadSubtitles(core.ass.get());
 	else
 		provider->UpdateSubtitles(core.ass.get(), changed);
+}
+
+void VideoController::OnTimecodesChanged(agi::vfr::Framerate const&) {
+	ClearRecentRenderPacketCache();
 }
 
 void VideoController::OnActiveLineChanged(AssDialogue *line) {
@@ -177,9 +184,7 @@ void VideoController::HandleInspectionStepTarget(int target, bool immediate_requ
 	frame_n = target;
 	ClearLatePreviewFrameAcceptance();
 	perf_trace::TraceSeek(frame_n, false);
-	if (immediate_request)
-		RequestFrameImmediate();
-	else
+	if (!immediate_request || !TryDeliverRecentRenderPacket(frame_n))
 		RequestFrame();
 	Seek(frame_n);
 
@@ -469,6 +474,7 @@ int VideoController::FrameAtTime(int time, agi::vfr::Time type) const {
 
 void VideoController::HandleVideoError(std::string const& message) {
 	playback_seek_frame_pending = -1;
+	ClearRecentRenderPacketCache();
 	wxLogError(
 		wxS("Failed seeking video. The video file may be corrupt or incomplete.\n"
 		    "Error message reported: %s"),
@@ -477,9 +483,47 @@ void VideoController::HandleVideoError(std::string const& message) {
 
 void VideoController::HandleSubtitlesError(std::string const& message) {
 	playback_seek_frame_pending = -1;
+	ClearRecentRenderPacketCache();
 	wxLogError(
 		wxS("Failed rendering subtitles. Error message reported: %s"),
 		to_wx(message));
+}
+
+void VideoController::RememberRecentRenderPacket(VideoRenderPacket const& packet) {
+	if (packet.frame_number < 0)
+		return;
+
+	for (auto it = recent_render_packets.begin(); it != recent_render_packets.end(); ++it) {
+		if (it->frame_number == packet.frame_number) {
+			recent_render_packets.erase(it);
+			break;
+		}
+	}
+
+	recent_render_packets.push_front(packet);
+	constexpr size_t max_recent_packets = 8;
+	while (recent_render_packets.size() > max_recent_packets)
+		recent_render_packets.pop_back();
+}
+
+void VideoController::ClearRecentRenderPacketCache() {
+	recent_render_packets.clear();
+}
+
+bool VideoController::TryDeliverRecentRenderPacket(int frame) {
+	for (auto it = recent_render_packets.begin(); it != recent_render_packets.end(); ++it) {
+		if (it->frame_number != frame)
+			continue;
+
+		auto packet = *it;
+		recent_render_packets.erase(it);
+		recent_render_packets.push_front(packet);
+		double const packet_time = packet.time;
+		DeliverFrameReady(std::move(packet), packet_time);
+		return true;
+	}
+
+	return false;
 }
 
 void VideoController::DeliverFrameReady(VideoRenderPacket packet, double time) {
@@ -496,12 +540,17 @@ void VideoController::DeliverFrameReady(VideoRenderPacket packet, double time) {
 	else if (playback_seek_frame_pending >= 0)
 		return;
 
+	RememberRecentRenderPacket(packet);
 	FrameReady(packet, time);
 }
 
 void VideoController::NotifyFramePresented(int frame_number) {
 	presented_frame_n = frame_number;
 	FramePresented(frame_number);
+}
+
+void VideoController::InvalidateRenderPacketCache() {
+	ClearRecentRenderPacketCache();
 }
 
 AsyncVideoProviderEventSink VideoController::CreateAsyncVideoProviderEventSink() {

@@ -22,6 +22,8 @@
 
 #include <libaegisub/make_unique.h>
 
+#include <algorithm>
+#include <limits>
 #include <list>
 #include <unordered_map>
 
@@ -68,6 +70,47 @@ size_t EstimateNativeFrameSize(SourceFrame const& frame) {
 		total_size += static_cast<size_t>(stride) * static_cast<size_t>(plane.height);
 	}
 	return total_size;
+}
+
+size_t ConfiguredCacheSizeBytes() {
+	int const cache_size_mb = OPT_GET("Provider/Video/Cache/Size")->GetInt();
+	if (cache_size_mb <= 0)
+		return 0;
+
+	size_t const mb = static_cast<size_t>(cache_size_mb);
+	constexpr size_t bytes_per_mb = 1u << 20;
+	if (mb > std::numeric_limits<size_t>::max() / bytes_per_mb)
+		return std::numeric_limits<size_t>::max();
+	return mb * bytes_per_mb;
+}
+
+size_t EstimateBgraFrameSize(VideoProvider const& provider) {
+	int const width = provider.GetWidth();
+	int const height = provider.GetHeight();
+	if (width <= 0 || height <= 0)
+		return 0;
+
+	size_t const w = static_cast<size_t>(width);
+	size_t const h = static_cast<size_t>(height);
+	constexpr size_t bytes_per_pixel = 4;
+	if (w > std::numeric_limits<size_t>::max() / h)
+		return 0;
+	size_t const pixels = w * h;
+	if (pixels > std::numeric_limits<size_t>::max() / bytes_per_pixel)
+		return 0;
+	return pixels * bytes_per_pixel;
+}
+
+size_t EffectiveCacheSizeBytes(VideoProvider const& provider, size_t configured_size) {
+	if (configured_size == 0)
+		return 0;
+
+	constexpr size_t desired_recent_frames = 6;
+	size_t const frame_size = EstimateBgraFrameSize(provider);
+	if (frame_size == 0 || frame_size > std::numeric_limits<size_t>::max() / desired_recent_frames)
+		return configured_size;
+
+	return std::max(configured_size, frame_size * desired_recent_frames);
 }
 
 /// @class VideoProviderCache
@@ -130,7 +173,7 @@ class VideoProviderCache final : public VideoProvider {
 public:
 	VideoProviderCache(std::unique_ptr<VideoProvider> master)
 	: master(std::move(master))
-	, max_cache_size(OPT_GET("Provider/Video/Cache/Size")->GetInt() << 20) {
+	, max_cache_size(EffectiveCacheSizeBytes(*this->master, ConfiguredCacheSizeBytes())) {
 	}
 
 	VideoProviderCache(std::unique_ptr<VideoProvider> master, size_t max_cache_size)

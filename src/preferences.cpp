@@ -854,6 +854,9 @@ void BuildAdvancedVideoPage(OptionPage *p) {
 	wxArrayString sp_choice = to_wx(SubtitlesProviderFactory::GetClasses());
 	binder->AddChoice(_("Subtitles provider"), sp_choice, "Subtitle/Provider");
 
+	binder->AddCategory(_("Video"));
+	binder->AddInt(_("Frame cache memory max (MB)"), "Provider/Video/Cache/Size", 0, INT_MAX);
+
 #ifdef WITH_AVISYNTH
 	binder->AddCategory(wxS("Avisynth"));
 	binder->AddBool(_("Allow pre-2.56a Avisynth"), "Provider/Avisynth/Allow Ancient");

@@ -36,6 +36,7 @@
 #include <libaegisub/vfr.h>
 
 #include <chrono>
+#include <deque>
 #include <memory>
 #include <set>
 #include <string>
@@ -126,15 +127,21 @@ class VideoController final {
 	/// Cached option for audio playing when frame stepping
 	const agi::OptionValue* playAudioOnStep;
 
+	std::deque<VideoRenderPacket> recent_render_packets;
+
 	void OnPlayTimer();
 
 	void HandleVideoError(std::string const& message);
 	void HandleSubtitlesError(std::string const& message);
 	void DeliverFrameReady(VideoRenderPacket packet, double time);
+	void RememberRecentRenderPacket(VideoRenderPacket const& packet);
+	void ClearRecentRenderPacketCache();
+	bool TryDeliverRecentRenderPacket(int frame);
 
 	void OnSubtitlesCommit(int type, const AssDialogue *changed);
 	void OnNewVideoProvider(AsyncVideoProvider *provider);
 	void OnActiveLineChanged(AssDialogue *line);
+	void OnTimecodesChanged(agi::vfr::Framerate const&);
 
 	void RequestFrame();
 	void RequestFrame(bool supersede_in_flight);
@@ -166,6 +173,8 @@ public:
 
 	/// Notify the controller that the display presented a new frame
 	void NotifyFramePresented(int frame_number);
+	/// Drop cached render packets after external video render pipeline changes
+	void InvalidateRenderPacketCache();
 
 	/// Get the actual aspect ratio from a predefined AR type
 	double GetARFromType(AspectRatio type) const;

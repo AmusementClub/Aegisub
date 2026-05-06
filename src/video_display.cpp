@@ -592,7 +592,10 @@ bool VideoDisplay::ApplyRendererSourceModePreference() {
 	if (!provider || !videoRenderer)
 		return false;
 
-	return provider->SetPreferredSourceModes(videoRenderer->GetPreferredSourceModes());
+	bool const changed = provider->SetPreferredSourceModes(videoRenderer->GetPreferredSourceModes());
+	if (changed)
+		con->videoController->InvalidateRenderPacketCache();
+	return changed;
 }
 
 void VideoDisplay::OnRendererBackendChanged(agi::OptionValue const&) {

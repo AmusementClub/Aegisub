@@ -365,7 +365,7 @@
 		},
 		"Video" : {
 			"Cache" : {
-				"Size" : 32
+				"Size" : 128
 			},
 			"FFmpegSource" : {
 				"Decoding Threads" : -1,

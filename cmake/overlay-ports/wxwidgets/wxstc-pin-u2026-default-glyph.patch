@@ -2,7 +2,7 @@ diff --git a/src/stc/PlatWX.cpp b/src/stc/PlatWX.cpp
 index 0dc2bdb..0143d79 100644
 --- a/src/stc/PlatWX.cpp
 +++ b/src/stc/PlatWX.cpp
-@@ -88,6 +88,174 @@ wxColour wxColourFromCA(ColourAlpha const& cd) {
+@@ -88,6 +88,136 @@ wxColour wxColourFromCA(ColourAlpha const& cd) {
      return wxColour(cd.GetRed(), cd.GetGreen(), cd.GetBlue(), cd.GetAlpha());
  }
  
@@ -65,45 +65,6 @@ index 0dc2bdb..0143d79 100644
 +    }
 +}
 +
-+bool DrawPinnedEllipsisGlyph(wxDC& dc, HDC hdc, WORD glyph, wxCoord x, wxCoord y)
-+{
-+    const wxColour& foreground = dc.GetTextForeground();
-+    const wxColour& background = dc.GetTextBackground();
-+
-+    COLORREF oldForeground = CLR_INVALID;
-+    if ( foreground.IsOk() )
-+        oldForeground = ::SetTextColor(hdc, foreground.GetPixel());
-+
-+    COLORREF oldBackground = CLR_INVALID;
-+    if ( background.IsOk() )
-+        oldBackground = ::SetBkColor(hdc, background.GetPixel());
-+
-+    const int oldBackgroundMode =
-+        ::SetBkMode(hdc, dc.GetBackgroundMode() == wxBRUSHSTYLE_TRANSPARENT
-+                             ? TRANSPARENT
-+                             : OPAQUE);
-+
-+    const BOOL drew = ::ExtTextOutW(
-+        hdc,
-+        x,
-+        y,
-+        ETO_GLYPH_INDEX,
-+        nullptr,
-+        reinterpret_cast<LPCWSTR>(&glyph),
-+        1,
-+        nullptr
-+    );
-+
-+    if ( oldBackgroundMode )
-+        ::SetBkMode(hdc, oldBackgroundMode);
-+    if ( oldBackground != CLR_INVALID )
-+        ::SetBkColor(hdc, oldBackground);
-+    if ( oldForeground != CLR_INVALID )
-+        ::SetTextColor(hdc, oldForeground);
-+
-+    return drew != 0;
-+}
-+
 +#endif
 +
 +void DrawTextWithPinnedEllipsis(wxDC& dc, const wxString& text, int x, int y)
@@ -156,7 +117,8 @@ index 0dc2bdb..0143d79 100644
 +        drawAndAdvance(text.Mid(segmentStart, ellipsisPos - segmentStart), currentX);
 +
 +        if ( canDrawPinnedEllipsis &&
-+             DrawPinnedEllipsisGlyph(dc, hdc, ellipsisGlyph, currentX, y) )
++             ::ExtTextOutW(hdc, currentX, y, ETO_GLYPH_INDEX, nullptr,
++                           reinterpret_cast<LPCWSTR>(&ellipsisGlyph), 1, nullptr) )
 +        {
 +            currentX += ellipsisAdvance;
 +        }

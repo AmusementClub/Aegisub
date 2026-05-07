@@ -35,6 +35,7 @@
 #include "options.h"
 #include "persist_location.h"
 #include "project.h"
+#include "stc_compat.h"
 #include "subs_edit_ctrl.h"
 #include "subtitle_command_session.h"
 #ifdef WITH_WXSTC
@@ -88,6 +89,7 @@ DialogTranslation::DialogTranslation(agi::Context *c)
 		original_box->Add(line_number_display, 0, wxBOTTOM, 5);
 
 		original_text = new wxStyledTextCtrl(this, -1, wxDefaultPosition, FromDIP(wxSize(320, 80)));
+		aegisub::stc::ConfigureWindowsSelectionRendering(original_text);
 		original_text->SetWrapMode(wxSTC_WRAP_WORD);
 		original_text->SetMarginWidth(1, 0);
 		original_text->StyleSetForeground(1, wxColour(10, 60, 200));

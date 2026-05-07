@@ -38,6 +38,7 @@
 #include "include/aegisub/context_ui.h"
 #include "include/aegisub/spellchecker.h"
 #include "selection_controller.h"
+#include "stc_compat.h"
 #include "text_selection_controller.h"
 #include "thesaurus.h"
 #include "subtitle_edit_ops.h"
@@ -141,6 +142,8 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 , thesaurus(agi::make_unique<Thesaurus>())
 , context(context)
 {
+	aegisub::stc::ConfigureWindowsSelectionRendering(this);
+
 	// Set properties
 	SetWrapMode(wxSTC_WRAP_WORD);
 	SetMarginWidth(1,0);

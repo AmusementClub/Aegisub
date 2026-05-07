@@ -24,6 +24,7 @@
 #include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
+#include "stc_compat.h"
 #include "ui_dispatch.h"
 #include "ui_services.h"
 #include "utils.h"
@@ -313,6 +314,7 @@ DialogFontsCollector::DialogFontsCollector(agi::Context *c)
 
 	wxStaticBoxSizer *log_box = new wxStaticBoxSizer(wxVERTICAL, this, _("Log"));
 	collection_log = new wxStyledTextCtrl(this, -1, wxDefaultPosition, FromDIP(wxSize(600, 300)));
+	aegisub::stc::ConfigureWindowsSelectionRendering(collection_log);
 	collection_log->SetWrapMode(wxSTC_WRAP_WORD);
 	collection_log->SetMarginWidth(1, 0);
 	collection_log->SetReadOnly(true);

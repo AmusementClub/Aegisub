@@ -79,6 +79,7 @@ void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 	presented_frame_n = -1;
 	ClearLatePreviewFrameAcceptance();
 	ClearInspectionStepState();
+	ClearInteractiveSeekPreviewState();
 	ClearRecentRenderPacketCache();
 	color_matrix = provider ? provider->GetColorSpace() : "";
 	ResetPlaybackState();
@@ -88,6 +89,7 @@ void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
 	if (!provider) return;
 	auto core = context->GetCore();
 	ClearInspectionStepState();
+	ClearInteractiveSeekPreviewState();
 	ClearRecentRenderPacketCache();
 
 	if ((type & AssFile::COMMIT_SCRIPTINFO) || type == AssFile::COMMIT_NEW) {
@@ -106,6 +108,7 @@ void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
 
 void VideoController::OnTimecodesChanged(agi::vfr::Framerate const&) {
 	ClearInspectionStepState();
+	ClearInteractiveSeekPreviewState();
 	ClearRecentRenderPacketCache();
 }
 
@@ -133,6 +136,7 @@ void VideoController::RequestFrame(bool supersede_in_flight) {
 void VideoController::RequestFrameImmediate() {
 	auto core = context->GetCore();
 	ClearInspectionStepState();
+	ClearInteractiveSeekPreviewState();
 	core.ass->Properties.video_position = frame_n;
 	ClearLatePreviewFrameAcceptance();
 	auto const frame_time = TimeAtFrame(frame_n);
@@ -162,6 +166,7 @@ void VideoController::RequestFramePreview(int target_frame, bool trace, bool sup
 		return;
 
 	ClearInspectionStepState();
+	ClearInteractiveSeekPreviewState();
 	if (!supersede_in_flight && !accept_late_preview_frames)
 		provider->CancelPendingFrameRequests();
 
@@ -190,6 +195,13 @@ void VideoController::ClearInspectionStepState() {
 	pending_inspection_step_frame = -1;
 	pending_inspection_step_play_audio = false;
 	pending_inspection_step_delta = 0;
+}
+
+void VideoController::ClearInteractiveSeekPreviewState() {
+	interactive_seek_preview_active = false;
+	interactive_seek_preview_resume_playback = false;
+	interactive_seek_preview_resume_mode = PlaybackMode::None;
+	interactive_seek_preview_resume_end_ms = 0;
 }
 
 int VideoController::GetInspectionStepAnchorFrame() const {
@@ -298,7 +310,9 @@ void VideoController::NavigateToKeyframe(std::vector<int> const& keyframes, int 
 
 void VideoController::JumpToFrame(int n) {
 	if (!provider) return;
+	bool const resume_pending_for_interactive_seek = interactive_seek_preview_active && interactive_seek_preview_resume_playback;
 	ClearInspectionStepState();
+	ClearInteractiveSeekPreviewState();
 
 	bool was_playing = IsPlaying();
 	auto resume_mode = playback_mode;
@@ -306,7 +320,7 @@ void VideoController::JumpToFrame(int n) {
 
 	frame_n = mid(0, n, provider->GetFrameCount() - 1);
 	ClearLatePreviewFrameAcceptance();
-	playback_seek_frame_pending = was_playing ? frame_n : -1;
+	playback_seek_frame_pending = (was_playing || resume_pending_for_interactive_seek) ? frame_n : -1;
 	perf_trace::TraceSeek(frame_n, was_playing);
 	bool const delivered_from_cache = !was_playing && TrySeekAndDeliverRecentRenderPacket(frame_n);
 	if (!delivered_from_cache) {
@@ -327,6 +341,7 @@ void VideoController::JumpToFrame(int n) {
 void VideoController::PreviewToFrame(int n) {
 	if (!provider) return;
 	ClearInspectionStepState();
+	ClearInteractiveSeekPreviewState();
 
 	bool const already_accepting_late_preview = accept_late_preview_frames;
 	if (!already_accepting_late_preview)
@@ -360,18 +375,59 @@ void VideoController::PreviewToFrameLatest(int n) {
 	ClearInspectionStepState();
 	ClearLatePreviewFrameAcceptance();
 
+	bool const keep_playback_paused_for_preview = interactive_seek_preview_active;
 	bool was_playing = IsPlaying();
 	auto resume_mode = playback_mode;
 	auto resume_end_ms = playback_end_ms;
 	if (was_playing)
-		Stop();
+		StopPlayback(!keep_playback_paused_for_preview);
 
 	frame_n = mid(0, n, provider->GetFrameCount() - 1);
 	perf_trace::TraceSeek(frame_n, was_playing);
 	RequestFrame(true);
 	Seek(frame_n);
 
-	if (was_playing && PreparePlayback(resume_mode, frame_n, resume_end_ms))
+	if (was_playing && !keep_playback_paused_for_preview && PreparePlayback(resume_mode, frame_n, resume_end_ms))
+		StartPlaybackTimer();
+}
+
+void VideoController::BeginInteractiveSeekPreview() {
+	if (!provider || interactive_seek_preview_active)
+		return;
+
+	interactive_seek_preview_active = true;
+	interactive_seek_preview_resume_playback = IsPlaying();
+	interactive_seek_preview_resume_mode = playback_mode;
+	interactive_seek_preview_resume_end_ms = playback_end_ms;
+	if (interactive_seek_preview_resume_playback)
+		StopPlayback(false);
+}
+
+void VideoController::CommitInteractiveSeekPreviewToTime(int ms, agi::vfr::Time end) {
+	if (!provider) {
+		ClearInteractiveSeekPreviewState();
+		return;
+	}
+
+	bool const resume_playback = interactive_seek_preview_active && interactive_seek_preview_resume_playback;
+	auto const resume_mode = interactive_seek_preview_resume_mode;
+	int const resume_end_ms = interactive_seek_preview_resume_end_ms;
+
+	JumpToTime(ms, end);
+	if (resume_playback && PreparePlayback(resume_mode, frame_n, resume_end_ms))
+		StartPlaybackTimer();
+}
+
+void VideoController::CancelInteractiveSeekPreview() {
+	if (!interactive_seek_preview_active)
+		return;
+
+	bool const resume_playback = interactive_seek_preview_resume_playback;
+	auto const resume_mode = interactive_seek_preview_resume_mode;
+	int const resume_end_ms = interactive_seek_preview_resume_end_ms;
+	ClearInteractiveSeekPreviewState();
+
+	if (provider && resume_playback && PreparePlayback(resume_mode, frame_n, resume_end_ms))
 		StartPlaybackTimer();
 }
 
@@ -433,6 +489,7 @@ void VideoController::StartPlayback(PlaybackMode mode, int range_end_ms) {
 		frame_n = presented_frame_n;
 
 	ClearInspectionStepState();
+	ClearInteractiveSeekPreviewState();
 	playback_seek_frame_pending = -1;
 	if (provider)
 		provider->CancelPendingFrameRequests();
@@ -472,8 +529,10 @@ void VideoController::PlayLine() {
 	StartPlaybackTimer();
 }
 
-void VideoController::Stop() {
+void VideoController::StopPlayback(bool clear_interactive_seek_preview) {
 	ClearInspectionStepState();
+	if (clear_interactive_seek_preview)
+		ClearInteractiveSeekPreviewState();
 	ClearLatePreviewFrameAcceptance();
 	if (IsPlaying()) {
 		perf_trace::TracePlayStop(frame_n);
@@ -484,6 +543,10 @@ void VideoController::Stop() {
 		core.audioController->Stop();
 	}
 	ResetPlaybackState();
+}
+
+void VideoController::Stop() {
+	StopPlayback(true);
 }
 
 bool VideoController::IsPlaying() const {
@@ -564,6 +627,7 @@ int VideoController::FrameAtTime(int time, agi::vfr::Time type) const {
 void VideoController::HandleVideoError(std::string const& message) {
 	playback_seek_frame_pending = -1;
 	ClearInspectionStepState();
+	ClearInteractiveSeekPreviewState();
 	ClearRecentRenderPacketCache();
 	wxLogError(
 		wxS("Failed seeking video. The video file may be corrupt or incomplete.\n"
@@ -574,6 +638,7 @@ void VideoController::HandleVideoError(std::string const& message) {
 void VideoController::HandleSubtitlesError(std::string const& message) {
 	playback_seek_frame_pending = -1;
 	ClearInspectionStepState();
+	ClearInteractiveSeekPreviewState();
 	ClearRecentRenderPacketCache();
 	wxLogError(
 		wxS("Failed rendering subtitles. Error message reported: %s"),
@@ -673,6 +738,7 @@ void VideoController::RequestPendingInspectionStepTarget() {
 
 void VideoController::InvalidateRenderPacketCache() {
 	ClearInspectionStepState();
+	ClearInteractiveSeekPreviewState();
 	ClearRecentRenderPacketCache();
 }
 

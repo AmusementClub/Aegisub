@@ -1072,7 +1072,7 @@ void AudioDisplay::EmitMiddleSeekOutput(NavigationPreviewPolicy::Output const& o
 	int const frame = core.videoController->FrameAtTime(output.target, agi::vfr::EXACT);
 	if (output.kind == NavigationPreviewPolicy::OutputKind::Commit) {
 		perf_trace::TraceAudioMiddleSeek("commit", output.target, frame);
-		core.videoController->JumpToTime(output.target, agi::vfr::EXACT);
+		core.videoController->CommitInteractiveSeekPreviewToTime(output.target, agi::vfr::EXACT);
 	}
 	else {
 		perf_trace::TraceAudioMiddleSeek("preview", output.target, frame);
@@ -1099,6 +1099,9 @@ void AudioDisplay::ScheduleMiddleSeekTimer()
 void AudioDisplay::HandleMiddleSeekMotion(int time_ms, bool force)
 {
 	CaptureMiddleSeekMouse();
+	SetTrackCursor(AbsoluteXFromTime(time_ms), OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool());
+	if (!middle_seek_active)
+		context->videoController->BeginInteractiveSeekPreview();
 	middle_seek_active = true;
 	auto output = middle_seek_preview_policy.OnMotion(time_ms, NavigationPreviewPolicy::Clock::now(), force);
 	if (output)
@@ -1116,6 +1119,7 @@ void AudioDisplay::HandleMiddleSeekRelease(int time_ms)
 	auto output = middle_seek_preview_policy.OnRelease(time_ms, NavigationPreviewPolicy::Clock::now());
 	middle_seek_active = false;
 	ReleaseMiddleSeekMouse();
+	RemoveTrackCursor();
 	EmitMiddleSeekOutput(output);
 }
 
@@ -1126,6 +1130,8 @@ void AudioDisplay::CancelMiddleSeekPreview()
 	middle_seek_preview_policy.Cancel();
 	middle_seek_active = false;
 	ReleaseMiddleSeekMouse();
+	RemoveTrackCursor();
+	context->videoController->CancelInteractiveSeekPreview();
 }
 
 void AudioDisplay::OnMiddleSeekTimer(wxTimerEvent&)

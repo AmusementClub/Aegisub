@@ -123,6 +123,10 @@ class VideoController final {
 	int pending_inspection_step_frame = -1;
 	bool pending_inspection_step_play_audio = false;
 	int pending_inspection_step_delta = 0;
+	bool interactive_seek_preview_active = false;
+	bool interactive_seek_preview_resume_playback = false;
+	PlaybackMode interactive_seek_preview_resume_mode = PlaybackMode::None;
+	int interactive_seek_preview_resume_end_ms = 0;
 
 	/// The picture aspect ratio of the video if the aspect ratio has been
 	/// overridden by the user
@@ -156,6 +160,7 @@ class VideoController final {
 	void RequestFramePreview(int target_frame, bool trace, bool supersede_in_flight);
 	void ClearLatePreviewFrameAcceptance();
 	void ClearInspectionStepState();
+	void ClearInteractiveSeekPreviewState();
 	int GetInspectionStepAnchorFrame() const;
 	void StepFrames(int delta, bool play_audio_on_inspection);
 	void HandleInspectionStepTarget(int target, bool immediate_request, bool play_audio, int delta);
@@ -163,6 +168,7 @@ class VideoController final {
 	void PlayInspectionStepAudio(bool play_audio, int delta);
 	void RequestPendingInspectionStepTarget();
 	void StepSingleFrame(int delta);
+	void StopPlayback(bool clear_interactive_seek_preview);
 	void StartPlayback(PlaybackMode mode, int range_end_ms = 0);
 	bool PreparePlayback(PlaybackMode mode, int start_frame, int range_end_ms = 0);
 	void StartPlaybackTimer();
@@ -214,6 +220,12 @@ public:
 	void PreviewToFrame(int n);
 	/// Preview-seek while keeping only the newest requested frame.
 	void PreviewToFrameLatest(int n);
+	/// Begin an interactive seek preview, pausing playback once if needed.
+	void BeginInteractiveSeekPreview();
+	/// Commit an interactive seek preview and resume prior playback once if needed.
+	void CommitInteractiveSeekPreviewToTime(int ms, agi::vfr::Time end = DefaultJumpToTimeMode);
+	/// Cancel an interactive seek preview and resume prior playback once if needed.
+	void CancelInteractiveSeekPreview();
 	/// @brief Jump to a time
 	/// @param ms Time to jump to in milliseconds
 	/// @param end Type of time

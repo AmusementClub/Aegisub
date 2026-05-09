@@ -116,6 +116,13 @@ class VideoController final {
 	/// that happens the controller treats the presented frame as the current one.
 	bool accept_late_preview_frames = false;
 	std::set<int> acceptable_late_preview_frames;
+	bool inspection_step_in_flight = false;
+	int inspection_step_frame = -1;
+	int inspection_step_anchor_frame = -1;
+	bool has_pending_inspection_step = false;
+	int pending_inspection_step_frame = -1;
+	bool pending_inspection_step_play_audio = false;
+	int pending_inspection_step_delta = 0;
 
 	/// The picture aspect ratio of the video if the aspect ratio has been
 	/// overridden by the user
@@ -136,7 +143,7 @@ class VideoController final {
 	void DeliverFrameReady(VideoRenderPacket packet, double time);
 	void RememberRecentRenderPacket(VideoRenderPacket const& packet);
 	void ClearRecentRenderPacketCache();
-	bool TryDeliverRecentRenderPacket(int frame);
+	bool TrySeekAndDeliverRecentRenderPacket(int frame);
 
 	void OnSubtitlesCommit(int type, const AssDialogue *changed);
 	void OnNewVideoProvider(AsyncVideoProvider *provider);
@@ -148,8 +155,13 @@ class VideoController final {
 	void RequestFrameImmediate();
 	void RequestFramePreview(int target_frame, bool trace, bool supersede_in_flight);
 	void ClearLatePreviewFrameAcceptance();
+	void ClearInspectionStepState();
+	int GetInspectionStepAnchorFrame() const;
 	void StepFrames(int delta, bool play_audio_on_inspection);
 	void HandleInspectionStepTarget(int target, bool immediate_request, bool play_audio, int delta);
+	void RequestInspectionStepTarget(int target, bool immediate_request, bool play_audio, int delta);
+	void PlayInspectionStepAudio(bool play_audio, int delta);
+	void RequestPendingInspectionStepTarget();
 	void StepSingleFrame(int delta);
 	void StartPlayback(PlaybackMode mode, int range_end_ms = 0);
 	bool PreparePlayback(PlaybackMode mode, int start_frame, int range_end_ms = 0);
@@ -200,6 +212,8 @@ public:
 	/// Used for high-frequency navigation (drag/seek preview) where delivering
 	/// an in-flight frame is better than dropping it under heavy decoder load.
 	void PreviewToFrame(int n);
+	/// Preview-seek while keeping only the newest requested frame.
+	void PreviewToFrameLatest(int n);
 	/// @brief Jump to a time
 	/// @param ms Time to jump to in milliseconds
 	/// @param end Type of time
@@ -207,13 +221,13 @@ public:
 
 	/// Navigate by a relative number of frames (paused only).
 	///
-	/// Designed for hotkey repeat scenarios (e.g. prev/next-large): each step
-	/// deterministically presents the requested target frame.
+	/// Designed for hotkey repeat scenarios (e.g. prev/next-large): at most one
+	/// request is in flight while later repeat input is coalesced to the newest target.
 	void NavigateByFrames(int delta);
 	/// Navigate to an absolute frame while paused.
 	void NavigateToFrame(int frame);
-	/// Navigate to the previous or next keyframe while paused, accumulating the
-	/// target deterministically on each input.
+	/// Navigate to the previous or next keyframe while paused, accumulating repeat
+	/// input against the newest queued target.
 	void NavigateToKeyframe(std::vector<int> const& keyframes, int direction);
 
 	/// Starting playing the video

@@ -120,6 +120,26 @@ void VideoSlider::SetValue(int value) {
 	}
 }
 
+std::chrono::milliseconds VideoSlider::GetSeekMinInterval(int target_frame) const {
+	auto interval = seek_min_interval_forward;
+	if (last_seek_frame < 0 || target_frame >= last_seek_frame)
+		return interval;
+
+	interval = seek_min_interval_backward;
+	if (keyframes.empty())
+		return interval;
+
+	auto keyframe = std::upper_bound(keyframes.begin(), keyframes.end(), target_frame);
+	if (keyframe == keyframes.begin())
+		return interval;
+
+	--keyframe;
+	int const decode_distance = target_frame - *keyframe;
+	if (decode_distance > 120)
+		interval = std::max(interval, std::chrono::milliseconds(150));
+	return interval;
+}
+
 void VideoSlider::OnFramePresented(int value) {
 	if (is_dragging)
 		return;
@@ -131,13 +151,12 @@ void VideoSlider::ScheduleSeek(int target_frame, bool force) {
 	if (!videoController)
 		return;
 
-	auto min_interval = seek_min_interval_forward;
-	if (last_seek_frame >= 0 && target_frame < last_seek_frame)
-		min_interval = seek_min_interval_backward;
+	auto const min_interval = GetSeekMinInterval(target_frame);
 
 	if (force) {
 		if (seek_timer.IsRunning())
 			seek_timer.Stop();
+		pending_seek_deadline = {};
 		pending_seek_frame = -1;
 		has_preview_seek_session = false;
 		videoController->JumpToFrame(target_frame);
@@ -151,6 +170,7 @@ void VideoSlider::ScheduleSeek(int target_frame, bool force) {
 	if (elapsed >= min_interval) {
 		if (seek_timer.IsRunning())
 			seek_timer.Stop();
+		pending_seek_deadline = {};
 		pending_seek_frame = -1;
 		videoController->PreviewToFrame(target_frame);
 		has_preview_seek_session = true;
@@ -160,10 +180,14 @@ void VideoSlider::ScheduleSeek(int target_frame, bool force) {
 	}
 
 	pending_seek_frame = target_frame;
-	if (!seek_timer.IsRunning()) {
-		auto const remaining = min_interval - elapsed;
+	auto const remaining = min_interval - elapsed;
+	auto const deadline = now + remaining;
+	if (!seek_timer.IsRunning() || pending_seek_deadline == std::chrono::steady_clock::time_point{} || deadline < pending_seek_deadline) {
+		if (seek_timer.IsRunning())
+			seek_timer.Stop();
 		auto const remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count();
 		const int delay_ms = remaining_ms > 1 ? static_cast<int>(remaining_ms) : 1;
+		pending_seek_deadline = deadline;
 		seek_timer.Start(delay_ms, true);
 	}
 }
@@ -172,18 +196,34 @@ void VideoSlider::OnSeekTimer(wxTimerEvent &) {
 	auto *videoController = c->GetCore().videoController.get();
 	if (!videoController)
 		return;
-	if (pending_seek_frame < 0)
+	if (pending_seek_frame < 0) {
+		pending_seek_deadline = {};
 		return;
+	}
 	if (pending_seek_frame == videoController->GetFrameN()) {
 		pending_seek_frame = -1;
+		pending_seek_deadline = {};
+		return;
+	}
+
+	auto const now = std::chrono::steady_clock::now();
+	auto const min_interval = GetSeekMinInterval(pending_seek_frame);
+	auto const elapsed = now - last_seek_time;
+	if (elapsed < min_interval) {
+		auto const remaining = min_interval - elapsed;
+		auto const remaining_ms = std::chrono::duration_cast<std::chrono::milliseconds>(remaining).count();
+		const int delay_ms = remaining_ms > 1 ? static_cast<int>(remaining_ms) : 1;
+		pending_seek_deadline = now + remaining;
+		seek_timer.Start(delay_ms, true);
 		return;
 	}
 
 	videoController->PreviewToFrame(pending_seek_frame);
 	has_preview_seek_session = true;
-	last_seek_time = std::chrono::steady_clock::now();
+	last_seek_time = now;
 	last_seek_frame = pending_seek_frame;
 	pending_seek_frame = -1;
+	pending_seek_deadline = {};
 }
 
 void VideoSlider::VideoOpened(AsyncVideoProvider *provider) {

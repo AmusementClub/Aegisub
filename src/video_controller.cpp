@@ -78,6 +78,7 @@ void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 	provider = new_provider;
 	presented_frame_n = -1;
 	ClearLatePreviewFrameAcceptance();
+	ClearInspectionStepState();
 	ClearRecentRenderPacketCache();
 	color_matrix = provider ? provider->GetColorSpace() : "";
 	ResetPlaybackState();
@@ -86,6 +87,7 @@ void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
 	if (!provider) return;
 	auto core = context->GetCore();
+	ClearInspectionStepState();
 	ClearRecentRenderPacketCache();
 
 	if ((type & AssFile::COMMIT_SCRIPTINFO) || type == AssFile::COMMIT_NEW) {
@@ -103,6 +105,7 @@ void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
 }
 
 void VideoController::OnTimecodesChanged(agi::vfr::Framerate const&) {
+	ClearInspectionStepState();
 	ClearRecentRenderPacketCache();
 }
 
@@ -129,6 +132,7 @@ void VideoController::RequestFrame(bool supersede_in_flight) {
 
 void VideoController::RequestFrameImmediate() {
 	auto core = context->GetCore();
+	ClearInspectionStepState();
 	core.ass->Properties.video_position = frame_n;
 	ClearLatePreviewFrameAcceptance();
 	auto const frame_time = TimeAtFrame(frame_n);
@@ -137,7 +141,7 @@ void VideoController::RequestFrameImmediate() {
 	try {
 		provider->CancelPendingFrameRequests();
 
-		// Frame stepping favors deterministic per-step display over latest-only coalescing.
+		// Synchronous callers favor deterministic display over latest-only coalescing.
 		int const requested_frame = frame_n;
 		auto packet = provider->GetRenderPacket(frame_n, frame_time);
 		perf_trace::ObserveFrameResult(frame_n, frame_time, true, true);
@@ -157,6 +161,7 @@ void VideoController::RequestFramePreview(int target_frame, bool trace, bool sup
 	if (!provider)
 		return;
 
+	ClearInspectionStepState();
 	if (!supersede_in_flight && !accept_late_preview_frames)
 		provider->CancelPendingFrameRequests();
 
@@ -177,17 +182,73 @@ void VideoController::ClearLatePreviewFrameAcceptance() {
 	acceptable_late_preview_frames.clear();
 }
 
+void VideoController::ClearInspectionStepState() {
+	inspection_step_in_flight = false;
+	inspection_step_frame = -1;
+	inspection_step_anchor_frame = -1;
+	has_pending_inspection_step = false;
+	pending_inspection_step_frame = -1;
+	pending_inspection_step_play_audio = false;
+	pending_inspection_step_delta = 0;
+}
+
+int VideoController::GetInspectionStepAnchorFrame() const {
+	if ((inspection_step_in_flight || has_pending_inspection_step) && inspection_step_anchor_frame >= 0)
+		return inspection_step_anchor_frame;
+	return frame_n;
+}
+
 void VideoController::HandleInspectionStepTarget(int target, bool immediate_request, bool play_audio, int delta) {
-	if (!provider || target == frame_n)
+	if (!provider)
 		return;
 
+	if (inspection_step_in_flight) {
+		if (target == inspection_step_anchor_frame)
+			return;
+
+		inspection_step_anchor_frame = target;
+		if (target == inspection_step_frame) {
+			has_pending_inspection_step = false;
+			pending_inspection_step_frame = -1;
+			pending_inspection_step_play_audio = false;
+			pending_inspection_step_delta = 0;
+		}
+		else {
+			has_pending_inspection_step = true;
+			pending_inspection_step_frame = target;
+			pending_inspection_step_play_audio = play_audio;
+			pending_inspection_step_delta = delta;
+		}
+		return;
+	}
+
+	if (target == frame_n)
+		return;
+
+	RequestInspectionStepTarget(target, immediate_request, play_audio, delta);
+}
+
+void VideoController::RequestInspectionStepTarget(int target, bool immediate_request, bool play_audio, int delta) {
 	frame_n = target;
+	inspection_step_in_flight = true;
+	inspection_step_frame = frame_n;
+	inspection_step_anchor_frame = frame_n;
+	has_pending_inspection_step = false;
+	pending_inspection_step_frame = -1;
+	pending_inspection_step_play_audio = false;
+	pending_inspection_step_delta = 0;
 	ClearLatePreviewFrameAcceptance();
 	perf_trace::TraceSeek(frame_n, false);
-	if (!immediate_request || !TryDeliverRecentRenderPacket(frame_n))
+	bool const delivered_from_cache = immediate_request && TrySeekAndDeliverRecentRenderPacket(frame_n);
+	if (!delivered_from_cache) {
 		RequestFrame();
-	Seek(frame_n);
+		Seek(frame_n);
+	}
 
+	PlayInspectionStepAudio(play_audio, delta);
+}
+
+void VideoController::PlayInspectionStepAudio(bool play_audio, int delta) {
 	if (!play_audio)
 		return;
 
@@ -208,7 +269,7 @@ void VideoController::StepFrames(int delta, bool play_audio_on_inspection) {
 	if (frame_count <= 0)
 		return;
 
-	int const target = mid(0, frame_n + delta, frame_count - 1);
+	int const target = mid(0, GetInspectionStepAnchorFrame() + delta, frame_count - 1);
 	HandleInspectionStepTarget(target, true, play_audio_on_inspection, delta);
 }
 
@@ -221,14 +282,14 @@ void VideoController::NavigateToFrame(int target_frame) {
 		return;
 
 	int const target = mid(0, target_frame, frame_count - 1);
-	HandleInspectionStepTarget(target, true, false, target - frame_n);
+	HandleInspectionStepTarget(target, true, false, target - GetInspectionStepAnchorFrame());
 }
 
 void VideoController::NavigateToKeyframe(std::vector<int> const& keyframes, int direction) {
 	if (!provider || IsPlaying())
 		return;
 
-	int const anchor_frame = frame_n;
+	int const anchor_frame = GetInspectionStepAnchorFrame();
 	int const target = direction < 0
 		? aegisub::video_navigation_ops::ComputePreviousKeyframe(keyframes, anchor_frame)
 		: aegisub::video_navigation_ops::ComputeNextKeyframe(keyframes, anchor_frame, provider->GetFrameCount() - 1);
@@ -237,6 +298,7 @@ void VideoController::NavigateToKeyframe(std::vector<int> const& keyframes, int 
 
 void VideoController::JumpToFrame(int n) {
 	if (!provider) return;
+	ClearInspectionStepState();
 
 	bool was_playing = IsPlaying();
 	auto resume_mode = playback_mode;
@@ -246,8 +308,11 @@ void VideoController::JumpToFrame(int n) {
 	ClearLatePreviewFrameAcceptance();
 	playback_seek_frame_pending = was_playing ? frame_n : -1;
 	perf_trace::TraceSeek(frame_n, was_playing);
-	RequestFrame();
-	Seek(frame_n);
+	bool const delivered_from_cache = !was_playing && TrySeekAndDeliverRecentRenderPacket(frame_n);
+	if (!delivered_from_cache) {
+		RequestFrame();
+		Seek(frame_n);
+	}
 
 	if (was_playing) {
 		if (!PreparePlayback(resume_mode, frame_n, resume_end_ms)) {
@@ -261,6 +326,7 @@ void VideoController::JumpToFrame(int n) {
 
 void VideoController::PreviewToFrame(int n) {
 	if (!provider) return;
+	ClearInspectionStepState();
 
 	bool const already_accepting_late_preview = accept_late_preview_frames;
 	if (!already_accepting_late_preview)
@@ -282,6 +348,27 @@ void VideoController::PreviewToFrame(int n) {
 	acceptable_late_preview_frames.insert(frame_n);
 	perf_trace::TraceSeek(frame_n, was_playing);
 	RequestFrame(false);
+	Seek(frame_n);
+
+	if (was_playing && PreparePlayback(resume_mode, frame_n, resume_end_ms))
+		StartPlaybackTimer();
+}
+
+void VideoController::PreviewToFrameLatest(int n) {
+	if (!provider) return;
+
+	ClearInspectionStepState();
+	ClearLatePreviewFrameAcceptance();
+
+	bool was_playing = IsPlaying();
+	auto resume_mode = playback_mode;
+	auto resume_end_ms = playback_end_ms;
+	if (was_playing)
+		Stop();
+
+	frame_n = mid(0, n, provider->GetFrameCount() - 1);
+	perf_trace::TraceSeek(frame_n, was_playing);
+	RequestFrame(true);
 	Seek(frame_n);
 
 	if (was_playing && PreparePlayback(resume_mode, frame_n, resume_end_ms))
@@ -345,6 +432,7 @@ void VideoController::StartPlayback(PlaybackMode mode, int range_end_ms) {
 	if (mode == PlaybackMode::ToEnd && presented_frame_n >= 0)
 		frame_n = presented_frame_n;
 
+	ClearInspectionStepState();
 	playback_seek_frame_pending = -1;
 	if (provider)
 		provider->CancelPendingFrameRequests();
@@ -385,6 +473,7 @@ void VideoController::PlayLine() {
 }
 
 void VideoController::Stop() {
+	ClearInspectionStepState();
 	ClearLatePreviewFrameAcceptance();
 	if (IsPlaying()) {
 		perf_trace::TracePlayStop(frame_n);
@@ -474,6 +563,7 @@ int VideoController::FrameAtTime(int time, agi::vfr::Time type) const {
 
 void VideoController::HandleVideoError(std::string const& message) {
 	playback_seek_frame_pending = -1;
+	ClearInspectionStepState();
 	ClearRecentRenderPacketCache();
 	wxLogError(
 		wxS("Failed seeking video. The video file may be corrupt or incomplete.\n"
@@ -483,6 +573,7 @@ void VideoController::HandleVideoError(std::string const& message) {
 
 void VideoController::HandleSubtitlesError(std::string const& message) {
 	playback_seek_frame_pending = -1;
+	ClearInspectionStepState();
 	ClearRecentRenderPacketCache();
 	wxLogError(
 		wxS("Failed rendering subtitles. Error message reported: %s"),
@@ -510,19 +601,23 @@ void VideoController::ClearRecentRenderPacketCache() {
 	recent_render_packets.clear();
 }
 
-bool VideoController::TryDeliverRecentRenderPacket(int frame) {
+bool VideoController::TrySeekAndDeliverRecentRenderPacket(int frame) {
 	for (auto it = recent_render_packets.begin(); it != recent_render_packets.end(); ++it) {
 		if (it->frame_number != frame)
 			continue;
 
+		perf_trace::ObserveVideoRenderPacketCacheLookup(frame, true, "recent_render_packet");
 		auto packet = *it;
 		recent_render_packets.erase(it);
 		recent_render_packets.push_front(packet);
 		double const packet_time = packet.time;
+		context->GetCore().ass->Properties.video_position = frame;
+		Seek(frame);
 		DeliverFrameReady(std::move(packet), packet_time);
 		return true;
 	}
 
+	perf_trace::ObserveVideoRenderPacketCacheLookup(frame, false, "recent_render_packet");
 	return false;
 }
 
@@ -547,9 +642,37 @@ void VideoController::DeliverFrameReady(VideoRenderPacket packet, double time) {
 void VideoController::NotifyFramePresented(int frame_number) {
 	presented_frame_n = frame_number;
 	FramePresented(frame_number);
+	if (inspection_step_in_flight && frame_number == inspection_step_frame) {
+		inspection_step_in_flight = false;
+		inspection_step_frame = -1;
+		RequestPendingInspectionStepTarget();
+	}
+}
+
+void VideoController::RequestPendingInspectionStepTarget() {
+	if (!has_pending_inspection_step) {
+		inspection_step_anchor_frame = frame_n;
+		return;
+	}
+
+	int const target = pending_inspection_step_frame;
+	bool const play_audio = pending_inspection_step_play_audio;
+	int const delta = pending_inspection_step_delta;
+	has_pending_inspection_step = false;
+	pending_inspection_step_frame = -1;
+	pending_inspection_step_play_audio = false;
+	pending_inspection_step_delta = 0;
+
+	if (!provider || IsPlaying() || target == frame_n) {
+		inspection_step_anchor_frame = frame_n;
+		return;
+	}
+
+	RequestInspectionStepTarget(target, true, play_audio, delta);
 }
 
 void VideoController::InvalidateRenderPacketCache() {
+	ClearInspectionStepState();
 	ClearRecentRenderPacketCache();
 }
 

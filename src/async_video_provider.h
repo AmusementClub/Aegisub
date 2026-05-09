@@ -71,10 +71,11 @@ struct KeyPointRangeScanResult {
 	int right = -1;
 };
 
-/// A latest-only asynchronous helper for seek/drag preview requests.
+/// Asynchronous helper for video frame requests.
 ///
-/// Frame stepping in the editor uses a synchronous path in VideoController
-/// because frame-by-frame inspection favors showing each intermediate result.
+/// Drag/preview callers can supersede in-flight work. Inspection stepping is
+/// serialized by VideoController so at most one frame is in flight while later
+/// repeat input is coalesced to the newest target.
 class AsyncVideoProvider {
 	/// Asynchronous work queue
 	std::unique_ptr<agi::dispatch::Queue> worker;

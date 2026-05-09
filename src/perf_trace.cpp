@@ -476,6 +476,8 @@ struct Summary {
 	uint64_t frame_delivered = 0;
 	uint64_t frame_delivered_immediate = 0;
 	uint64_t frame_dropped = 0;
+	uint64_t video_render_packet_cache_hit = 0;
+	uint64_t video_render_packet_cache_miss = 0;
 	uint64_t window_open_success = 0;
 	uint64_t window_open_failure = 0;
 	uint64_t lua_dialog_success = 0;
@@ -832,6 +834,8 @@ void WriteSummaryLocked(Session const& session) {
 	write_int("frame.delivered.total", session.summary.frame_delivered);
 	write_int("frame.delivered.immediate", session.summary.frame_delivered_immediate);
 	write_int("frame.dropped.total", session.summary.frame_dropped);
+	write_int("video.render_packet_cache.hit", session.summary.video_render_packet_cache_hit);
+	write_int("video.render_packet_cache.miss", session.summary.video_render_packet_cache_miss);
 	write_int("window_open.success", session.summary.window_open_success);
 	write_int("window_open.failure", session.summary.window_open_failure);
 	write_int("lua_dialog.success", session.summary.lua_dialog_success);
@@ -1140,6 +1144,14 @@ void TraceSeek(int frame, bool was_playing) {
 	});
 }
 
+void TraceAudioMiddleSeek(char const* phase, int time_ms, int frame) {
+	RecordEntry(TraceCategory::Audio | TraceCategory::Video | TraceCategory::Ops, "op", "audio_middle_seek", false, [&](JsonObjectBuilder& payload) {
+		payload.AddString("phase", phase ? phase : "");
+		payload.AddInt("time_ms", time_ms);
+		payload.AddInt("frame", frame);
+	});
+}
+
 void TraceVideoStepPreviewConfig(bool enabled, int interval_ms, int interval_backward_ms, int burst_window_ms, int burst_threshold, int release_delay_ms) {
 	RecordEntry(TraceCategory::Video | TraceCategory::Ops, "op", "video_step_preview_config", true, [&](JsonObjectBuilder& payload) {
 		payload.AddBool("enabled", enabled);
@@ -1233,6 +1245,27 @@ void ObserveVideoFrameRenderDuration(int frame, double time, bool delivered, boo
 	payload.AddBool("immediate", immediate);
 	payload.AddDouble("duration_ms", duration_ms);
 	AppendEntryLocked(session, "metric", "video_frame_render_duration", payload.Finish(), false, NowNs());
+}
+
+void ObserveVideoRenderPacketCacheLookup(int frame, bool hit, char const* source) {
+	if (!trace_active.load(std::memory_order_relaxed))
+		return;
+
+	auto& session = GetSession();
+	std::lock_guard<std::mutex> lock(session.mutex);
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::Video))
+		return;
+
+	if (hit)
+		++session.summary.video_render_packet_cache_hit;
+	else
+		++session.summary.video_render_packet_cache_miss;
+
+	JsonObjectBuilder payload;
+	payload.AddInt("frame", frame);
+	payload.AddBool("hit", hit);
+	payload.AddString("source", source ? source : "");
+	AppendEntryLocked(session, "metric", hit ? "video_render_packet_cache_hit" : "video_render_packet_cache_miss", payload.Finish(), false, NowNs());
 }
 
 void ObserveAudioUiTimerPosition(int ms) {

@@ -1158,8 +1158,7 @@ VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bo
 		auto const render_duration_ms =
 			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - render_begin).count();
 		perf_trace::ObserveVideoFrameRenderDuration(frame, time, true, true, render_duration_ms);
-		// Synchronous frame requests are used for frame stepping, so keep the
-		// provider's current-frame context aligned with what was just rendered.
+		// Keep the provider's current-frame context aligned with synchronous callers.
 		frame_number = frame;
 		this->time = time;
 	});

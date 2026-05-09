@@ -40,6 +40,7 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/hotkey.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "project.h"
 #include "utils.h"
 #include "video_controller.h"
@@ -602,6 +603,7 @@ AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::C
 	Bind(wxEVT_MOTION, &AudioDisplay::OnMouseEvent, this);
 	Bind(wxEVT_ENTER_WINDOW, &AudioDisplay::OnMouseEnter, this);
 	Bind(wxEVT_LEAVE_WINDOW, &AudioDisplay::OnMouseLeave, this);
+	Bind(wxEVT_MOUSE_CAPTURE_LOST, &AudioDisplay::OnMouseCaptureLost, this);
 	Bind(wxEVT_PAINT, &AudioDisplay::OnPaint, this);
 	Bind(wxEVT_SIZE, &AudioDisplay::OnSize, this);
 	Bind(wxEVT_KILL_FOCUS, &AudioDisplay::OnFocus, this);
@@ -610,10 +612,12 @@ AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::C
 	Bind(wxEVT_KEY_DOWN, &AudioDisplay::OnKeyDown, this);
 	scroll_timer.Bind(wxEVT_TIMER, &AudioDisplay::OnScrollTimer, this);
 	load_timer.Bind(wxEVT_TIMER, &AudioDisplay::OnLoadTimer, this);
+	middle_seek_timer.Bind(wxEVT_TIMER, &AudioDisplay::OnMiddleSeekTimer, this);
 }
 
 AudioDisplay::~AudioDisplay()
 {
+	CancelMiddleSeekPreview();
 }
 
 void AudioDisplay::ScrollBy(int pixel_amount)
@@ -1053,12 +1057,124 @@ void AudioDisplay::OnMouseEnter(wxMouseEvent&)
 
 void AudioDisplay::OnMouseLeave(wxMouseEvent&)
 {
+	if (middle_seek_active && !wxGetMouseState().MiddleIsDown())
+		CancelMiddleSeekPreview();
 	if (!controller->IsPlaying())
 		RemoveTrackCursor();
 }
 
+void AudioDisplay::EmitMiddleSeekOutput(NavigationPreviewPolicy::Output const& output)
+{
+	auto core = context->GetCore();
+	if (!core.videoController || !core.project->VideoProvider())
+		return;
+
+	int const frame = core.videoController->FrameAtTime(output.target, agi::vfr::EXACT);
+	if (output.kind == NavigationPreviewPolicy::OutputKind::Commit) {
+		perf_trace::TraceAudioMiddleSeek("commit", output.target, frame);
+		core.videoController->JumpToTime(output.target, agi::vfr::EXACT);
+	}
+	else {
+		perf_trace::TraceAudioMiddleSeek("preview", output.target, frame);
+		core.videoController->PreviewToFrameLatest(frame);
+	}
+}
+
+void AudioDisplay::ScheduleMiddleSeekTimer()
+{
+	auto next = middle_seek_preview_policy.NextPreviewTime();
+	if (!middle_seek_active || !next) {
+		if (middle_seek_timer.IsRunning())
+			middle_seek_timer.Stop();
+		return;
+	}
+
+	auto const now = NavigationPreviewPolicy::Clock::now();
+	auto const remaining = *next > now
+		? std::chrono::duration_cast<std::chrono::milliseconds>(*next - now).count()
+		: 1;
+	middle_seek_timer.Start(std::max(1, static_cast<int>(remaining)), true);
+}
+
+void AudioDisplay::HandleMiddleSeekMotion(int time_ms, bool force)
+{
+	CaptureMiddleSeekMouse();
+	middle_seek_active = true;
+	auto output = middle_seek_preview_policy.OnMotion(time_ms, NavigationPreviewPolicy::Clock::now(), force);
+	if (output)
+		EmitMiddleSeekOutput(*output);
+	ScheduleMiddleSeekTimer();
+}
+
+void AudioDisplay::HandleMiddleSeekRelease(int time_ms)
+{
+	if (!middle_seek_active)
+		return;
+
+	if (middle_seek_timer.IsRunning())
+		middle_seek_timer.Stop();
+	auto output = middle_seek_preview_policy.OnRelease(time_ms, NavigationPreviewPolicy::Clock::now());
+	middle_seek_active = false;
+	ReleaseMiddleSeekMouse();
+	EmitMiddleSeekOutput(output);
+}
+
+void AudioDisplay::CancelMiddleSeekPreview()
+{
+	if (middle_seek_timer.IsRunning())
+		middle_seek_timer.Stop();
+	middle_seek_preview_policy.Cancel();
+	middle_seek_active = false;
+	ReleaseMiddleSeekMouse();
+}
+
+void AudioDisplay::OnMiddleSeekTimer(wxTimerEvent&)
+{
+	auto output = middle_seek_preview_policy.OnTimer(NavigationPreviewPolicy::Clock::now());
+	if (output)
+		EmitMiddleSeekOutput(*output);
+	ScheduleMiddleSeekTimer();
+}
+
+void AudioDisplay::CaptureMiddleSeekMouse()
+{
+	if (!middle_seek_has_mouse_capture && !HasCapture()) {
+		CaptureMouse();
+		middle_seek_has_mouse_capture = true;
+	}
+}
+
+void AudioDisplay::ReleaseMiddleSeekMouse()
+{
+	if (middle_seek_has_mouse_capture && HasCapture())
+		ReleaseMouse();
+	middle_seek_has_mouse_capture = false;
+}
+
+void AudioDisplay::OnMouseCaptureLost(wxMouseCaptureLostEvent&)
+{
+	CancelMiddleSeekPreview();
+}
+
 void AudioDisplay::OnMouseEvent(wxMouseEvent& event)
 {
+	const int mouse_x = event.GetPosition().x;
+
+	if (middle_seek_active && event.MiddleUp())
+	{
+		HandleMiddleSeekRelease(TimeFromRelativeX(mouse_x));
+		return;
+	}
+
+	if (middle_seek_active && event.MiddleIsDown())
+	{
+		HandleMiddleSeekMotion(TimeFromRelativeX(mouse_x), false);
+		return;
+	}
+
+	if (middle_seek_active)
+		CancelMiddleSeekPreview();
+
 	// If we have focus, we get mouse move events on Mac even when the mouse is
 	// outside our client rectangle, we don't want those.
 	if (event.Moving() && !GetClientRect().Contains(event.GetPosition()))
@@ -1069,8 +1185,6 @@ void AudioDisplay::OnMouseEvent(wxMouseEvent& event)
 
 	if (event.IsButton())
 		SetFocus();
-
-	const int mouse_x = event.GetPosition().x;
 
 	// Scroll the display after a mouse-up near one of the edges
 	if ((event.LeftUp() || event.RightUp()) && OPT_GET("Audio/Auto/Scroll")->GetBool())
@@ -1089,7 +1203,7 @@ void AudioDisplay::OnMouseEvent(wxMouseEvent& event)
 
 	if (event.MiddleIsDown())
 	{
-		context->videoController->JumpToTime(TimeFromRelativeX(mouse_x), agi::vfr::EXACT);
+		HandleMiddleSeekMotion(TimeFromRelativeX(mouse_x), event.MiddleDown());
 		return;
 	}
 

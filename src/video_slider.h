@@ -53,12 +53,15 @@ class VideoSlider: public wxWindow {
 
 	wxTimer seek_timer;
 	std::chrono::steady_clock::time_point last_seek_time;
+	std::chrono::steady_clock::time_point pending_seek_deadline;
 	int last_seek_frame = -1;
 	int pending_seek_frame = -1;
 	bool has_preview_seek_session = false;
 
 	std::chrono::milliseconds seek_min_interval_forward{ 33 };
 	std::chrono::milliseconds seek_min_interval_backward{ 100 };
+
+	std::chrono::milliseconds GetSeekMinInterval(int target_frame) const;
 
 	/// Get the frame number for the given x coordinate
 	int GetValueAtX(int x);

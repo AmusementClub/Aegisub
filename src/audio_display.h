@@ -30,6 +30,8 @@
 //
 #include <libaegisub/signal.h>
 
+#include "navigation_preview_policy.h"
+
 #include <chrono>
 #include <cstdint>
 #include <memory>
@@ -95,6 +97,10 @@ class AudioDisplay: public wxWindow {
 	wxTimer scroll_timer;
 
 	wxTimer load_timer;
+	wxTimer middle_seek_timer;
+	NavigationPreviewPolicy middle_seek_preview_policy{ std::chrono::milliseconds(33) };
+	bool middle_seek_active = false;
+	bool middle_seek_has_mouse_capture = false;
 	int64_t last_sample_decoded = 0;
 	/// Time at which audio loading began, for calculating loading speed
 	std::chrono::steady_clock::time_point audio_load_start_time;
@@ -192,8 +198,17 @@ class AudioDisplay: public wxWindow {
 	void OnKeyDown(wxKeyEvent& event);
 	void OnScrollTimer(wxTimerEvent &event);
 	void OnLoadTimer(wxTimerEvent &);
+	void OnMiddleSeekTimer(wxTimerEvent&);
 	void OnMouseEnter(wxMouseEvent&);
 	void OnMouseLeave(wxMouseEvent&);
+	void OnMouseCaptureLost(wxMouseCaptureLostEvent&);
+	void HandleMiddleSeekMotion(int time_ms, bool force);
+	void HandleMiddleSeekRelease(int time_ms);
+	void EmitMiddleSeekOutput(NavigationPreviewPolicy::Output const& output);
+	void ScheduleMiddleSeekTimer();
+	void CancelMiddleSeekPreview();
+	void CaptureMiddleSeekMouse();
+	void ReleaseMiddleSeekMouse();
 
 	int GetDuration() const;
 

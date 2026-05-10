@@ -87,6 +87,35 @@ uint32_t murmur3(const char *data, uint32_t len) {
 
 struct FauxResult { bool faux_bold = false; bool faux_italic = false; };
 
+std::wstring SelectedFaceName(HDC dc) {
+	wchar_t face[LF_FACESIZE] = {};
+	if (GetTextFaceW(dc, LF_FACESIZE, face) <= 0)
+		return {};
+	return face;
+}
+
+bool CreateFallbackFontProbe(HDC dc, LOGFONTW lf, std::wstring const& requested_face, std::wstring& fallback_face) {
+	if (requested_face.empty())
+		return false;
+
+	wcsncpy(lf.lfFaceName, requested_face.c_str(), LF_FACESIZE);
+	lf.lfFaceName[LF_FACESIZE - 1] = L'\0';
+	auto suffix = L"-NONEXISTENT-PROBE";
+	auto len = wcslen(lf.lfFaceName);
+	for (size_t i = 0; suffix[i] && len + i < LF_FACESIZE - 1; ++i)
+		lf.lfFaceName[len + i] = suffix[i];
+
+	auto probe = CreateFontIndirectW(&lf);
+	if (!probe)
+		return false;
+
+	auto previous = SelectObject(dc, probe);
+	fallback_face = SelectedFaceName(dc);
+	SelectObject(dc, previous);
+	DeleteObject(probe);
+	return !fallback_face.empty();
+}
+
 // FauxResult DetectFauxStyles(HDC dc, LOGFONTW& lf, TEXTMETRICW const& metrics,
 //                             int requested_bold, bool requested_italic) {
 // 	struct FamilyBits { bool bold = false; bool italic = false; };
@@ -238,6 +267,9 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 	lf.lfQuality = ANTIALIASED_QUALITY;
 	lf.lfPitchAndFamily = DEFAULT_PITCH|FF_DONTCARE;
 	ret.requested_weight = lf.lfWeight;
+	std::wstring requested_face = lf.lfFaceName;
+	std::wstring fallback_face;
+	CreateFallbackFontProbe(dc, lf, requested_face, fallback_face);
 
 	auto hfont = CreateFontIndirectW(&lf);
 	if (!hfont) return ret;
@@ -248,9 +280,13 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 	});
 
 	// Get the actual face name GDI selected.
-	wchar_t selected_face[LF_FACESIZE] = {};
-	if (GetTextFaceW(dc, LF_FACESIZE, selected_face) > 0)
+	auto selected_face = SelectedFaceName(dc);
+	if (!selected_face.empty())
 		ret.matched_facename = agi::charset::ConvertW(selected_face);
+
+	if (!fallback_face.empty() && selected_face == fallback_face && _wcsicmp(requested_face.c_str(), fallback_face.c_str()) != 0)
+		return ret;
+
 	TEXTMETRICW metrics = {};
 	if (GetTextMetricsW(dc, &metrics)) {
 		ret.matched_weight = metrics.tmWeight;

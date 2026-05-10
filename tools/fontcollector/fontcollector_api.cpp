@@ -39,6 +39,46 @@ void WriteError(char *buffer, size_t buffer_size, std::string const& message) {
 	std::snprintf(buffer, buffer_size, "%s", message.c_str());
 }
 
+void ResetSummary(AegisubFontCollectorSummary *summary) {
+	if (summary)
+		*summary = {};
+}
+
+void AccumulateSummary(AegisubFontCollectorSummary& summary, FontCollectorEvent const& event) {
+	switch (event.type) {
+		case FontCollectorEventType::StyleMissing:
+			++summary.missing_style_count;
+			break;
+		case FontCollectorEventType::FontFound:
+			++summary.found_font_count;
+			break;
+		case FontCollectorEventType::FontMissing:
+			++summary.missing_font_count;
+			break;
+		case FontCollectorEventType::MissingGlyphs:
+			++summary.missing_glyph_font_count;
+			break;
+		case FontCollectorEventType::FakeBold:
+			++summary.fake_bold_count;
+			break;
+		case FontCollectorEventType::FakeItalic:
+			++summary.fake_italic_count;
+			break;
+		case FontCollectorEventType::CollectionCopied:
+		case FontCollectorEventType::CollectionSymlinked:
+		case FontCollectorEventType::CollectionAlreadyExists:
+			++summary.copied_font_count;
+			break;
+		case FontCollectorEventType::CollectionFailedCreateDirectory:
+		case FontCollectorEventType::CollectionFailedOpen:
+		case FontCollectorEventType::CollectionFailedCopy:
+			++summary.collection_failure_count;
+			break;
+		default:
+			break;
+	}
+}
+
 bool ToCoreMode(AegisubFontCollectorMode mode, FontCollectionMode& out) {
 	switch (mode) {
 		case AEGISUB_FONTCOLLECTOR_MODE_CHECK:
@@ -157,8 +197,16 @@ void EmitCUsage(FontCollectorAssFontUsage const& usage,
 	c_usage.codepoint_count = usage.codepoints.size();
 	c_usage.styles = styles.empty() ? nullptr : styles.data();
 	c_usage.style_count = styles.size();
+	c_usage.lines = usage.lines.empty() ? nullptr : usage.lines.data();
+	c_usage.line_count = usage.lines.size();
 	c_usage.override_lines = usage.override_lines.empty() ? nullptr : usage.override_lines.data();
 	c_usage.override_line_count = usage.override_lines.size();
+	if (usage.matched.paths.empty() && usage.matched.raw_data.bytes.empty())
+		c_usage.matched.match_status = AEGISUB_FONTCOLLECTOR_MATCH_MISSING;
+	else if (usage.matched.paths.empty())
+		c_usage.matched.match_status = AEGISUB_FONTCOLLECTOR_MATCH_MEMORY_ONLY;
+	else
+		c_usage.matched.match_status = AEGISUB_FONTCOLLECTOR_MATCH_FOUND;
 	c_usage.matched.facename = usage.matched.facename.c_str();
 	c_usage.matched.face_index = usage.matched.face_index;
 	c_usage.matched.weight = usage.matched.weight;
@@ -177,6 +225,8 @@ void EmitCUsage(FontCollectorAssFontUsage const& usage,
 	c_usage.matched.missing_codepoints = usage.matched.missing_codepoints.empty() ? nullptr : usage.matched.missing_codepoints.data();
 	c_usage.matched.missing_codepoint_count = usage.matched.missing_codepoints.size();
 	c_usage.matched.requested_weight = usage.matched.requested_weight;
+	c_usage.matched.missing_lines = usage.matched.missing_lines.empty() ? nullptr : usage.matched.missing_lines.data();
+	c_usage.matched.missing_line_count = usage.matched.missing_lines.size();
 
 	callback(&c_usage, user_data);
 }
@@ -188,9 +238,11 @@ extern "C" int aegisub_fontcollector_collect(
 	void *user_data,
 	AegisubFontCollectorFontUsageCallback usage_callback,
 	void *usage_user_data,
+	AegisubFontCollectorSummary *summary,
 	char *error_buffer,
 	size_t error_buffer_size) {
 	WriteError(error_buffer, error_buffer_size, "");
+	ResetSummary(summary);
 
 	if (!request || !request->input_path || !*request->input_path) {
 		WriteError(error_buffer, error_buffer_size, "input_path is required");
@@ -247,18 +299,24 @@ extern "C" int aegisub_fontcollector_collect(
 			: agi::charset::Detect(input_path);
 		auto subs = ReadAssFileForCore(input_path, encoding);
 		FontCollectorDetails details;
+		AegisubFontCollectorSummary local_summary = {};
 
 		CollectFonts(
 			&subs,
 			destination,
 			mode,
 			[&](FontCollectorEvent const& event) {
+				AccumulateSummary(local_summary, event);
 				EmitCEvent(event, callback, user_data);
 			},
-			usage_callback ? &details : nullptr,
+			(usage_callback || summary) ? &details : nullptr,
 			{},
 			/* enable_libass_compat = */ true,
 			backend);
+
+		local_summary.font_usage_count = details.fonts.size();
+		if (summary)
+			*summary = local_summary;
 
 		for (auto const& usage : details.fonts)
 			EmitCUsage(usage, usage_callback, usage_user_data);

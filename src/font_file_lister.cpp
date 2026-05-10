@@ -332,6 +332,7 @@ void FontCollector::ResolveFontUsage(StyleInfo const& style, UsageData& data, Fo
 		usage.ass_italic = style.italic;
 		usage.codepoints = data.codepoints;
 		usage.styles = data.styles;
+		usage.lines = data.lines;
 		usage.override_lines = data.override_lines;
 		usage.matched.facename = res.matched_facename;
 		usage.matched.face_index = res.face_index;
@@ -446,11 +447,32 @@ void FontCollector::CollectMissingGlyphLines(AssFile const *file, int wrap_style
 	}
 }
 
+void FontCollector::StoreMissingGlyphLines(FontCollectorDetails *details, std::vector<MissingGlyphQuery> const& queries) {
+	if (!details || queries.empty())
+		return;
+
+	for (auto const& query : queries) {
+		if (!query.usage)
+			continue;
+
+		for (auto& usage : details->fonts) {
+			if (usage.ass_facename == query.style.facename &&
+			    usage.ass_bold == query.style.bold &&
+			    usage.ass_italic == query.style.italic) {
+				usage.matched.missing_lines = query.matching_lines;
+				break;
+			}
+		}
+	}
+}
+
 void FontCollector::ProcessDialogueLine(const AssDialogue *line, int index, int wrap_style) {
 	if (line->Comment) return;
 
 	ForEachLineTextSpan(*line, index, wrap_style, [&](StyleInfo const& style, bool overriden, std::string_view text) {
 		auto& usage = used_styles[style];
+		if (usage.lines.empty() || usage.lines.back() != index)
+			usage.lines.push_back(index);
 		if (overriden) {
 			auto& lines = usage.override_lines;
 			if (lines.empty() || lines.back() != index)
@@ -509,6 +531,7 @@ std::vector<agi::fs::path> FontCollector::GetFontPaths(const AssFile *file, Font
 	std::vector<MissingGlyphQuery> missing_queries;
 	for (auto& style : used_styles) ResolveFontUsage(style.first, style.second, details, missing_queries);
 	CollectMissingGlyphLines(file, wrap_style, missing_queries);
+	StoreMissingGlyphLines(details, missing_queries);
 	for (auto const& query : missing_queries) {
 		if (!query.usage)
 			continue;

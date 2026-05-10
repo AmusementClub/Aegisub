@@ -5,7 +5,9 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#if defined(_WIN32)
+#if defined(AEGISUB_FONTCOLLECTOR_STATIC)
+#define AEGISUB_FONTCOLLECTOR_API
+#elif defined(_WIN32)
 #if defined(AEGISUB_FONTCOLLECTOR_BUILD)
 #define AEGISUB_FONTCOLLECTOR_API __declspec(dllexport)
 #else
@@ -43,6 +45,12 @@ typedef enum AegisubFontCollectorResult {
 	AEGISUB_FONTCOLLECTOR_READ_FAILED = 5,
 	AEGISUB_FONTCOLLECTOR_COLLECT_FAILED = 6
 } AegisubFontCollectorResult;
+
+typedef enum AegisubFontCollectorMatchStatus {
+	AEGISUB_FONTCOLLECTOR_MATCH_FOUND = 0,
+	AEGISUB_FONTCOLLECTOR_MATCH_MISSING = 1,
+	AEGISUB_FONTCOLLECTOR_MATCH_MEMORY_ONLY = 2
+} AegisubFontCollectorMatchStatus;
 
 typedef enum AegisubFontCollectorEventType {
 	AEGISUB_FONTCOLLECTOR_EVENT_FONT_BACKEND_INFO,
@@ -85,6 +93,18 @@ typedef struct AegisubFontCollectorRequest {
 	AegisubFontCollectorBackend backend;
 } AegisubFontCollectorRequest;
 
+typedef struct AegisubFontCollectorSummary {
+	size_t font_usage_count;
+	size_t found_font_count;
+	size_t missing_style_count;
+	size_t missing_font_count;
+	size_t missing_glyph_font_count;
+	size_t fake_bold_count;
+	size_t fake_italic_count;
+	uint64_t copied_font_count;
+	uint64_t collection_failure_count;
+} AegisubFontCollectorSummary;
+
 typedef struct AegisubFontCollectorEvent {
 	AegisubFontCollectorEventType type;
 	char const *face;
@@ -101,6 +121,7 @@ typedef struct AegisubFontCollectorEvent {
 } AegisubFontCollectorEvent;
 
 typedef struct AegisubFontCollectorMatchedFont {
+	AegisubFontCollectorMatchStatus match_status;
 	char const *facename;
 	int face_index;
 	int weight;
@@ -120,6 +141,9 @@ typedef struct AegisubFontCollectorMatchedFont {
 	uint32_t const *missing_codepoints;
 	size_t missing_codepoint_count;
 	int requested_weight;
+	/* Added after 2026-05: missing_lines points to dialogue rows containing missing glyphs. */
+	int const *missing_lines;
+	size_t missing_line_count;
 } AegisubFontCollectorMatchedFont;
 
 typedef struct AegisubFontCollectorFontUsage {
@@ -133,6 +157,9 @@ typedef struct AegisubFontCollectorFontUsage {
 	int const *override_lines;
 	size_t override_line_count;
 	AegisubFontCollectorMatchedFont matched;
+	/* Added after 2026-05: lines contains all dialogue rows using this font request. */
+	int const *lines;
+	size_t line_count;
 } AegisubFontCollectorFontUsage;
 
 /* Event pointer fields are valid only for the duration of the callback. */
@@ -146,6 +173,7 @@ AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_collect(
 	void *user_data,
 	AegisubFontCollectorFontUsageCallback usage_callback,
 	void *usage_user_data,
+	AegisubFontCollectorSummary *summary,
 	char *error_buffer,
 	size_t error_buffer_size);
 

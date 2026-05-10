@@ -651,6 +651,7 @@ int main(int argc, char **argv) {
 	}
 
 	std::array<char, 4096> error = {};
+	AegisubFontCollectorSummary summary = {};
 	JsonContext json_context;
 	json_context.requested_backend = RequestedBackendName(request.backend);
 	json_context.resolved_backend = ResolvedBackendName(request.backend);
@@ -660,6 +661,7 @@ int main(int argc, char **argv) {
 		json ? static_cast<void *>(&json_context) : nullptr,
 		(json || details) ? (json ? &CollectJsonUsage : &PrintUsage) : nullptr,
 		json ? static_cast<void *>(&json_context) : nullptr,
+		&summary,
 		error.data(),
 		error.size());
 

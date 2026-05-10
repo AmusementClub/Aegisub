@@ -147,63 +147,91 @@ set(AEGISUB_FONTCOLLECTOR_SOURCES
     ${AEGISUB_ROOT}/src/text_file_writer.cpp
 )
 
-add_library(aegisub_fontcollector SHARED ${AEGISUB_FONTCOLLECTOR_SOURCES})
-aegisub_fontcollector_set_output_dirs(aegisub_fontcollector)
-set_target_properties(aegisub_fontcollector PROPERTIES
-    OUTPUT_NAME aegisub_fontcollector
-    POSITION_INDEPENDENT_CODE ON
-)
-if(MSVC AND AEGISUB_FONTCOLLECTOR_STATIC_RUNTIME)
-    set_property(TARGET aegisub_fontcollector PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
-target_compile_features(aegisub_fontcollector PRIVATE cxx_std_20)
-target_compile_definitions(aegisub_fontcollector
-    PRIVATE
-        AEGISUB_FONTCOLLECTOR_BUILD
-        CMAKE_BUILD
-)
-if(WIN32)
-    target_compile_definitions(aegisub_fontcollector PRIVATE NOMINMAX UNICODE _UNICODE)
-endif()
-target_include_directories(aegisub_fontcollector
-    PUBLIC
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
-    PRIVATE
-        "${AEGISUB_ROOT}/src"
-        ${Iconv_INCLUDE_DIR}
-)
-target_link_libraries(aegisub_fontcollector
-    PRIVATE
-        aegisub_fontcollector_libaegisub
-        Boost::headers
-        ${AEGISUB_FONTCOLLECTOR_ICONV_LIBRARIES}
-        Boost::regex
-)
-
-if(MSVC AND AEGISUB_FONTCOLLECTOR_STATIC_RUNTIME)
-    # Boost::regex from vcpkg static triplet may default to debug CRT,
-    # which conflicts with the target's Release /MT. Suppress the stale default lib.
-    target_link_options(aegisub_fontcollector PRIVATE
-        "$<$<NOT:$<CONFIG:Debug>>:/NODEFAULTLIB:LIBCMTD>"
+function(aegisub_fontcollector_configure_library target_name linkage)
+    aegisub_fontcollector_set_output_dirs(${target_name})
+    set_target_properties(${target_name} PROPERTIES
+        POSITION_INDEPENDENT_CODE ON
     )
-endif()
+    if(MSVC AND AEGISUB_FONTCOLLECTOR_STATIC_RUNTIME)
+        set_property(TARGET ${target_name} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+    target_compile_features(${target_name} PRIVATE cxx_std_20)
+    target_compile_definitions(${target_name}
+        PRIVATE
+            CMAKE_BUILD
+    )
+    if(linkage STREQUAL "SHARED")
+        target_compile_definitions(${target_name} PRIVATE AEGISUB_FONTCOLLECTOR_BUILD)
+    else()
+        target_compile_definitions(${target_name} PUBLIC AEGISUB_FONTCOLLECTOR_STATIC)
+    endif()
+    if(WIN32)
+        target_compile_definitions(${target_name} PRIVATE NOMINMAX UNICODE _UNICODE)
+    endif()
+    target_include_directories(${target_name}
+        PUBLIC
+            "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        PRIVATE
+            "${AEGISUB_ROOT}/src"
+            ${Iconv_INCLUDE_DIR}
+    )
+    target_link_libraries(${target_name}
+        PRIVATE
+            aegisub_fontcollector_libaegisub
+            Boost::headers
+            ${AEGISUB_FONTCOLLECTOR_ICONV_LIBRARIES}
+    )
+    if(linkage STREQUAL "STATIC")
+        target_link_libraries(${target_name} PUBLIC Boost::regex)
+    else()
+        target_link_libraries(${target_name} PRIVATE Boost::regex)
+    endif()
 
-if(WIN32)
-    find_package(Fontconfig REQUIRED)
-    target_compile_definitions(aegisub_fontcollector PRIVATE AEGISUB_FONTCOLLECTOR_ENABLE_FONTCONFIG)
-    target_sources(aegisub_fontcollector PRIVATE
-        ${AEGISUB_ROOT}/src/font_file_lister_gdi.cpp
-        ${AEGISUB_ROOT}/src/font_file_lister_dwrite.cpp
-        ${AEGISUB_ROOT}/src/font_file_lister_fontconfig.cpp)
-    target_link_libraries(aegisub_fontcollector PRIVATE Advapi32 Gdi32 Shell32 Usp10 dwrite Version Fontconfig::Fontconfig)
-elseif(APPLE)
-    target_sources(aegisub_fontcollector PRIVATE ${AEGISUB_ROOT}/src/font_file_lister_coretext.mm)
-    target_link_libraries(aegisub_fontcollector PRIVATE "-framework AppKit" "-framework CoreText")
-else()
-    find_package(Fontconfig REQUIRED)
-    target_sources(aegisub_fontcollector PRIVATE ${AEGISUB_ROOT}/src/font_file_lister_fontconfig.cpp)
-    target_link_libraries(aegisub_fontcollector PRIVATE Fontconfig::Fontconfig)
-endif()
+    if(MSVC AND AEGISUB_FONTCOLLECTOR_STATIC_RUNTIME)
+        # Boost::regex from vcpkg static triplet may default to debug CRT,
+        # which conflicts with the target's Release /MT. Suppress the stale default lib.
+        target_link_options(${target_name} PRIVATE
+            "$<$<NOT:$<CONFIG:Debug>>:/NODEFAULTLIB:LIBCMTD>"
+        )
+    endif()
+
+    if(WIN32)
+        find_package(Fontconfig REQUIRED)
+        target_compile_definitions(${target_name} PRIVATE AEGISUB_FONTCOLLECTOR_ENABLE_FONTCONFIG)
+        target_sources(${target_name} PRIVATE
+            ${AEGISUB_ROOT}/src/font_file_lister_gdi.cpp
+            ${AEGISUB_ROOT}/src/font_file_lister_dwrite.cpp
+            ${AEGISUB_ROOT}/src/font_file_lister_fontconfig.cpp)
+        if(linkage STREQUAL "STATIC")
+            target_link_libraries(${target_name} PUBLIC Advapi32 Gdi32 Shell32 Usp10 dwrite Version Fontconfig::Fontconfig)
+        else()
+            target_link_libraries(${target_name} PRIVATE Advapi32 Gdi32 Shell32 Usp10 dwrite Version Fontconfig::Fontconfig)
+        endif()
+    elseif(APPLE)
+        target_sources(${target_name} PRIVATE ${AEGISUB_ROOT}/src/font_file_lister_coretext.mm)
+        if(linkage STREQUAL "STATIC")
+            target_link_libraries(${target_name} PUBLIC "-framework AppKit" "-framework CoreText")
+        else()
+            target_link_libraries(${target_name} PRIVATE "-framework AppKit" "-framework CoreText")
+        endif()
+    else()
+        find_package(Fontconfig REQUIRED)
+        target_sources(${target_name} PRIVATE ${AEGISUB_ROOT}/src/font_file_lister_fontconfig.cpp)
+        if(linkage STREQUAL "STATIC")
+            target_link_libraries(${target_name} PUBLIC Fontconfig::Fontconfig)
+        else()
+            target_link_libraries(${target_name} PRIVATE Fontconfig::Fontconfig)
+        endif()
+    endif()
+endfunction()
+
+add_library(aegisub_fontcollector SHARED ${AEGISUB_FONTCOLLECTOR_SOURCES})
+set_target_properties(aegisub_fontcollector PROPERTIES OUTPUT_NAME aegisub_fontcollector)
+aegisub_fontcollector_configure_library(aegisub_fontcollector SHARED)
+
+add_library(aegisub_fontcollector_static STATIC ${AEGISUB_FONTCOLLECTOR_SOURCES})
+set_target_properties(aegisub_fontcollector_static PROPERTIES OUTPUT_NAME aegisub_fontcollector_static)
+aegisub_fontcollector_configure_library(aegisub_fontcollector_static STATIC)
 
 add_executable(fontcollector_cli fontcollector_cli.cpp)
 aegisub_fontcollector_set_output_dirs(fontcollector_cli)

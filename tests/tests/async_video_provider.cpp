@@ -1202,6 +1202,84 @@ TEST(async_video_provider, update_subtitles_reuses_latest_synchronous_render_fra
 	EXPECT_EQ((std::vector<int>{ 1, 9 }), state->requested_frames);
 }
 
+TEST(async_video_provider, update_subtitles_uses_external_current_frame_context) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeSubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		recorder);
+
+	auto initial = MakeSubtitleFile("before");
+	provider.LoadSubtitles(&initial);
+	provider.RequestFrame(1, 1000);
+
+	ASSERT_TRUE(recorder.WaitForCount(1));
+	auto frames = recorder.Snapshot();
+	ASSERT_EQ(1u, frames.size());
+	EXPECT_EQ(1, frames.back().frame_number);
+
+	provider.SetCurrentFrameContext(9, 9000);
+
+	auto updated = MakeSubtitleFile("after");
+	provider.UpdateSubtitles(&updated, &updated.Events.front());
+
+	ASSERT_TRUE(recorder.WaitForCount(2));
+	frames = recorder.Snapshot();
+	ASSERT_EQ(2u, frames.size());
+	EXPECT_EQ(9, frames.back().frame_number);
+	EXPECT_GT(frames.back().subtitle_generation, frames.front().subtitle_generation);
+
+	std::lock_guard<std::mutex> lock(state->mutex);
+	EXPECT_EQ((std::vector<int>{ 1, 9 }), state->requested_frames);
+}
+
+TEST(async_video_provider, current_frame_context_does_not_render_without_content_change) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeSubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		recorder);
+
+	provider.SetCurrentFrameContext(9, 9000);
+	provider.GetRenderPacket(2, 2000);
+
+	auto frames = recorder.Snapshot();
+	EXPECT_TRUE(frames.empty());
+
+	std::lock_guard<std::mutex> lock(state->mutex);
+	EXPECT_EQ((std::vector<int>{ 2 }), state->requested_frames);
+}
+
+TEST(async_video_provider, request_frame_overrides_pending_current_frame_context) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *subs = new FakeSubtitlesProvider;
+	EventRecorder recorder;
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		std::unique_ptr<SubtitlesProvider>(subs),
+		recorder);
+
+	auto subtitle_file = MakeSubtitleFile("sync");
+	provider.LoadSubtitles(&subtitle_file);
+	provider.SetCurrentFrameContext(9, 9000);
+	provider.RequestFrame(2, 2000);
+
+	ASSERT_TRUE(recorder.WaitForCount(1));
+	auto frames = recorder.Snapshot();
+	ASSERT_EQ(1u, frames.size());
+	EXPECT_EQ(2, frames.back().frame_number);
+
+	std::lock_guard<std::mutex> lock(state->mutex);
+	EXPECT_EQ((std::vector<int>{ 2 }), state->requested_frames);
+}
+
 TEST(async_video_provider, update_subtitles_reuses_latest_async_render_frame) {
 	auto state = std::make_shared<VideoProviderState>();
 	auto *subs = new FakeSubtitlesProvider;

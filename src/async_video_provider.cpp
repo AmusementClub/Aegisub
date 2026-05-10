@@ -726,6 +726,16 @@ void AsyncVideoProvider::CancelPendingFrameRequests() noexcept {
 	}
 }
 
+void AsyncVideoProvider::SetCurrentFrameContext(int current_frame, double current_time) throw() {
+	{
+		std::lock_guard<std::mutex> lock(pending_mutex);
+		pending_current_frame_number = current_frame;
+		pending_current_time = current_time;
+		has_pending_current_frame_context = true;
+	}
+	ScheduleProcessing();
+}
+
 bool AsyncVideoProvider::NeedUpdate(std::vector<AssDialogueBase const*> const& visible_lines) {
 	// Always need to render after a seek
 	if (single_frame != NEW_SUBS_FILE || frame_number != last_rendered)
@@ -796,6 +806,9 @@ bool AsyncVideoProvider::ProcessPending() {
 		bool has_frame = false;
 		int frame_number = -1;
 		double time = -1.;
+		bool has_current_frame_context = false;
+		int current_frame_number = -1;
+		double current_time = -1.;
 		bool has_color_space = false;
 		std::string color_space;
 		bool invalidate_overlay_upload_continuity = false;
@@ -806,7 +819,11 @@ bool AsyncVideoProvider::ProcessPending() {
 	PendingWork work;
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
-		if (!pending_subs && !pending_changed_line && !has_pending_frame && !has_pending_color_space) {
+		if (!pending_subs
+			&& !pending_changed_line
+			&& !has_pending_frame
+			&& !has_pending_current_frame_context
+			&& !has_pending_color_space) {
 			processing_scheduled = false;
 			return false;
 		}
@@ -822,6 +839,18 @@ bool AsyncVideoProvider::ProcessPending() {
 			work.frame_number = pending_frame_number;
 			work.time = pending_time;
 			has_pending_frame = false;
+			has_pending_current_frame_context = false;
+		}
+		else if (has_pending_current_frame_context) {
+			work.has_current_frame_context = true;
+			work.current_frame_number = pending_current_frame_number;
+			work.current_time = pending_current_time;
+			if (work.subs || work.changed_line) {
+				work.has_frame = true;
+				work.frame_number = pending_current_frame_number;
+				work.time = pending_current_time;
+			}
+			has_pending_current_frame_context = false;
 		}
 		else if ((work.subs || work.changed_line) && frame_number >= 0) {
 			work.has_frame = true;
@@ -842,6 +871,11 @@ bool AsyncVideoProvider::ProcessPending() {
 		source_provider->SetColorSpace(work.color_space);
 	if (work.has_color_space)
 		ResetCachedSourceFrame();
+
+	if (work.has_current_frame_context) {
+		frame_number = work.current_frame_number;
+		time = work.current_time;
+	}
 
 	if (work.invalidate_overlay_upload_continuity)
 		AdvanceOverlayUploadContinuity();

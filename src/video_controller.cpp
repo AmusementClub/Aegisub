@@ -677,6 +677,8 @@ bool VideoController::TrySeekAndDeliverRecentRenderPacket(int frame) {
 		recent_render_packets.push_front(packet);
 		double const packet_time = packet.time;
 		context->GetCore().ass->Properties.video_position = frame;
+		if (provider)
+			provider->SetCurrentFrameContext(frame, packet_time);
 		Seek(frame);
 		DeliverFrameReady(std::move(packet), packet_time);
 		return true;

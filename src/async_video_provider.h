@@ -137,6 +137,9 @@ class AsyncVideoProvider {
 	std::unique_ptr<AssDialogueBase> pending_changed_line;
 	bool pending_overlay_upload_continuity_invalidation = false;
 	bool pending_check_updated = false;
+	bool has_pending_current_frame_context = false;
+	int pending_current_frame_number = -1;
+	double pending_current_time = -1.;
 	bool has_pending_frame = false;
 	int pending_frame_number = -1;
 	double pending_time = -1.;
@@ -185,6 +188,9 @@ public:
 
 	/// Cancel any pending preview frame request and supersede in-flight work.
 	void CancelPendingFrameRequests() noexcept;
+	/// Align the provider's current-frame context with a frame presented from an
+	/// external cache, without requesting another render.
+	void SetCurrentFrameContext(int frame, double time) throw();
 
 	/// @brief Synchronously get a CPU-readable BGRA frame
 	/// @brief frame Frame number

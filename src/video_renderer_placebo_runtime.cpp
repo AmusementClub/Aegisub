@@ -37,6 +37,11 @@ void ResolveSymbol(agi::native::Library& library, T& out, char const *name) {
 	out = library.ResolveSymbol<T>(name);
 }
 
+template <typename T>
+void TryResolveSymbol(agi::native::Library& library, T& out, char const *name) {
+	out = library.TryResolveSymbol<T>(name);
+}
+
 void ResolveSymbols(agi::native::Library& library, Api& api) {
 	ResolveSymbol(library, api.log_create, kLogCreateSymbol);
 	ResolveSymbol(library, api.log_destroy, "pl_log_destroy");
@@ -54,6 +59,8 @@ void ResolveSymbols(agi::native::Library& library, Api& api) {
 	ResolveSymbol(library, api.tex_destroy, "pl_tex_destroy");
 	ResolveSymbol(library, api.frame_set_chroma_location, "pl_frame_set_chroma_location");
 	ResolveSymbol(library, api.render_image, "pl_render_image");
+	TryResolveSymbol(library, api.map_avframe, "pl_map_avframe");
+	TryResolveSymbol(library, api.unmap_avframe, "pl_unmap_avframe");
 }
 
 std::string FormatVersionDetailLocked() {

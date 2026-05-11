@@ -183,12 +183,33 @@ void PlaceboRendererGL::EnsureInitialized() {
 	}
 }
 
-void PlaceboRendererGL::DestroyImageResources() noexcept {
+void PlaceboRendererGL::DestroyMappedAVFrame() noexcept {
+	if (api && opengl && mapped_avframe && api->unmap_avframe)
+		api->unmap_avframe(opengl->gpu, mapped_avframe.get());
+	mapped_avframe.reset();
+}
+
+void PlaceboRendererGL::DestroyPlaneResources() noexcept {
 	for (auto& plane : image_planes) {
 		if (api && opengl && plane.texture)
 			api->tex_destroy(opengl->gpu, &plane.texture);
 		plane = {};
 	}
+}
+
+void PlaceboRendererGL::DestroyAVFrameTextures() noexcept {
+	for (auto& texture : image_avframe_textures) {
+		if (api && opengl && texture)
+			api->tex_destroy(opengl->gpu, &texture);
+		texture = nullptr;
+	}
+	image_avframe_texture_estimated_bytes = 0;
+}
+
+void PlaceboRendererGL::DestroyImageResources() noexcept {
+	DestroyMappedAVFrame();
+	DestroyPlaneResources();
+	DestroyAVFrameTextures();
 	image_width = 0;
 	image_height = 0;
 	image_plane_count = 0;
@@ -267,6 +288,35 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 	}
 
 	EnsureInitialized();
+	DestroyMappedAVFrame();
+
+	if (frame.output_mode == SourceFrameOutputMode::Native
+		&& frame.native_payload_kind == SourceFrameNativePayloadKind::FFmpegAVFrame
+		&& frame.native_payload
+		&& api->map_avframe
+		&& api->unmap_avframe) {
+		auto mapped = std::make_unique<pl_frame>();
+		if (api->map_avframe(opengl->gpu, mapped.get(), image_avframe_textures.data(), frame.native_payload)) {
+			DestroyPlaneResources();
+			mapped_avframe = std::move(mapped);
+			image_avframe_texture_estimated_bytes = 0;
+			for (auto texture : image_avframe_textures) {
+				if (texture)
+					image_avframe_texture_estimated_bytes += static_cast<size_t>(texture->params.w) * static_cast<size_t>(texture->params.h) * 4;
+			}
+			image_width = frame.width;
+			image_height = frame.height;
+			image_plane_count = mapped_avframe->num_planes;
+			image_output_mode = frame.output_mode;
+			image_format_info = frame.format_info;
+			image_color = frame.color;
+			image_chroma_location = frame.chroma_location;
+			image_geometry = frame.geometry;
+			has_frame = true;
+			return;
+		}
+	}
+	DestroyAVFrameTextures();
 
 	SourceFrame const* upload_frame = &frame;
 	SourceFrame transformed_frame;
@@ -348,6 +398,7 @@ size_t PlaceboRendererGL::EstimateTextureBytes() const noexcept {
 	size_t total_bytes = target_texture_estimated_bytes;
 	for (auto const& plane : image_planes)
 		total_bytes += plane.estimated_bytes;
+	total_bytes += image_avframe_texture_estimated_bytes;
 	return total_bytes;
 }
 
@@ -390,26 +441,28 @@ void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width,
 	frame_description.height = image_height;
 	frame_description.geometry = image_geometry;
 
-	struct pl_frame image = {};
-	image.num_planes = image_plane_count;
-	for (int i = 0; i < image_plane_count; ++i) {
-		auto const& plane_state = image_planes[static_cast<size_t>(i)];
-		auto& plane = image.planes[static_cast<size_t>(i)];
-		plane.texture = plane_state.texture;
-		plane.address_mode = PL_TEX_ADDRESS_CLAMP;
-		plane.flipped = plane_state.flipped;
-		plane.components = plane_state.components;
-		plane.shift_x = plane_state.shift_x;
-		plane.shift_y = plane_state.shift_y;
-		for (int component = 0; component < 4; ++component)
-			plane.component_mapping[component] = plane_state.component_mapping[static_cast<size_t>(component)];
+	struct pl_frame image = mapped_avframe ? *mapped_avframe : pl_frame{};
+	if (!mapped_avframe) {
+		image.num_planes = image_plane_count;
+		for (int i = 0; i < image_plane_count; ++i) {
+			auto const& plane_state = image_planes[static_cast<size_t>(i)];
+			auto& plane = image.planes[static_cast<size_t>(i)];
+			plane.texture = plane_state.texture;
+			plane.address_mode = PL_TEX_ADDRESS_CLAMP;
+			plane.flipped = plane_state.flipped;
+			plane.components = plane_state.components;
+			plane.shift_x = plane_state.shift_x;
+			plane.shift_y = plane_state.shift_y;
+			for (int component = 0; component < 4; ++component)
+				plane.component_mapping[component] = plane_state.component_mapping[static_cast<size_t>(component)];
+		}
+		image.repr = BuildPlaceboSourceFrameRepr(frame_description);
+		image.color = BuildPlaceboSourceFrameColorSpace(frame_description);
+		if (api->frame_set_chroma_location && PlaceboSourceFrameNeedsExplicitChromaLocation(frame_description))
+			api->frame_set_chroma_location(&image, ResolvePlaceboChromaLocation(frame_description));
 	}
-	image.repr = BuildPlaceboSourceFrameRepr(frame_description);
-	image.color = BuildPlaceboSourceFrameColorSpace(frame_description);
 	image.crop = BuildPlaceboSourceFrameCropRect(frame_description);
 	image.rotation = BuildPlaceboSourceFrameRotation(frame_description);
-	if (api->frame_set_chroma_location && PlaceboSourceFrameNeedsExplicitChromaLocation(frame_description))
-		api->frame_set_chroma_location(&image, ResolvePlaceboChromaLocation(frame_description));
 
 	struct pl_plane target_plane = {};
 	target_plane.texture = target_texture;

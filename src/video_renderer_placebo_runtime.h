@@ -47,6 +47,10 @@ struct Api {
 	decltype(&pl_tex_destroy) tex_destroy = nullptr;
 	decltype(&pl_frame_set_chroma_location) frame_set_chroma_location = nullptr;
 	decltype(&pl_render_image) render_image = nullptr;
+	using MapAVFrame = bool (*)(pl_gpu gpu, struct pl_frame *out_frame, pl_tex tex[4], const void *avframe);
+	using UnmapAVFrame = void (*)(pl_gpu gpu, struct pl_frame *frame);
+	MapAVFrame map_avframe = nullptr;
+	UnmapAVFrame unmap_avframe = nullptr;
 };
 
 void EnsureLoaded();

@@ -23,6 +23,7 @@
 struct SubtitleOverlay;
 struct pl_log_t;
 struct pl_opengl_t;
+struct pl_frame;
 struct pl_renderer_t;
 struct pl_tex_t;
 
@@ -46,6 +47,8 @@ class PlaceboRendererGL final : public IVideoRenderer {
 	pl_opengl_t const* opengl = nullptr;
 	pl_renderer_t* renderer = nullptr;
 	std::array<UploadedPlaneState, 4> image_planes = { };
+	std::array<pl_tex_t const*, 4> image_avframe_textures = { };
+	std::unique_ptr<pl_frame> mapped_avframe;
 	pl_tex_t const* target_texture = nullptr;
 	int image_width = 0;
 	int image_height = 0;
@@ -55,6 +58,7 @@ class PlaceboRendererGL final : public IVideoRenderer {
 	SourceFrameColorMetadata image_color;
 	SourceFrameChromaLocation image_chroma_location = SourceFrameChromaLocation::Unknown;
 	SourceFrameGeometry image_geometry;
+	size_t image_avframe_texture_estimated_bytes = 0;
 	int target_width = 0;
 	int target_height = 0;
 	unsigned int target_framebuffer = 0;
@@ -64,6 +68,9 @@ class PlaceboRendererGL final : public IVideoRenderer {
 	void EnsureInitialized();
 	void DestroyResources() noexcept;
 	void DestroyImageResources() noexcept;
+	void DestroyMappedAVFrame() noexcept;
+	void DestroyPlaneResources() noexcept;
+	void DestroyAVFrameTextures() noexcept;
 	void DestroyTargetResources() noexcept;
 	void RecreateTargetTexture(int canvas_width, int canvas_height);
 	void RestoreCompatibilityState() noexcept;

@@ -104,6 +104,11 @@ struct SourceFrameNativeFormatIdentity {
 	}
 };
 
+enum class SourceFrameNativePayloadKind {
+	None,
+	FFmpegAVFrame
+};
+
 inline constexpr int DivideRoundUp(int value, int divisor) {
 	return (value + divisor - 1) / divisor;
 }
@@ -267,6 +272,8 @@ struct SourceFrame {
 	SourceFramePixelFormat pixel_format = SourceFramePixelFormat::Unknown;
 	SourceFrameOutputMode output_mode = SourceFrameOutputMode::Bgra8;
 	SourceFrameNativeFormatIdentity native_format;
+	SourceFrameNativePayloadKind native_payload_kind = SourceFrameNativePayloadKind::None;
+	void const* native_payload = nullptr;
 	SourceFrameFormatInfo format_info;
 	int width = 0;
 	int height = 0;

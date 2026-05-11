@@ -1069,6 +1069,19 @@ elseif(NOT HAVE_FFMS2)
     )
 endif()
 
+set(HAVE_LSMASNATIVE OFF)
+option(WITH_LSMASNATIVE "Enable LsmasNative provider support" ON)
+if(WITH_LSMASNATIVE)
+    set(HAVE_LSMASNATIVE ON)
+    target_compile_definitions(Aegisub PRIVATE "WITH_LSMASNATIVE")
+    target_sources(Aegisub PRIVATE
+        src/lsmas_native_runtime.cpp
+        src/lsmas_provider_common.cpp
+        src/video_provider_lsmasnative.cpp
+        src/audio_provider_lsmasnative.cpp
+    )
+endif()
+
 find_package(FFTW)
 option(WITH_FFTW3 "Enable fftw support" ${FFTW_FOUND})
 if(WITH_FFTW3)
@@ -1288,6 +1301,7 @@ message(STATUS "\n"
     "Dynamic Loading\n"
     "  AviSynth:              ${HAVE_AVISYNTH}\n"
     "  FFMS2:                 ${HAVE_FFMS2}\n"
+    "  LsmasNative:           ${HAVE_LSMASNATIVE}\n"
     "  libplacebo:            ${HAVE_LIBPLACEBO}\n"
     "\n"
     "Options\n"

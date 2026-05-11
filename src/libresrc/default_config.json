@@ -348,6 +348,9 @@
 			"FFmpegSource" : {
 				"Decode Error Handling" : "ignore",
 				"Downmix" : true
+			},
+			"LsmasNative" : {
+				"Downmix" : false
 			}
 		},
 		"Avisynth" : {
@@ -369,6 +372,10 @@
 			},
 			"FFmpegSource" : {
 				"Decoding Threads" : -1,
+				"Unsafe Seeking" : false
+			},
+			"LsmasNative" : {
+				"Decoding Threads" : 0,
 				"Unsafe Seeking" : false
 			}
 		}

@@ -36,6 +36,8 @@ inline std::string CanonicalizeProviderName(std::string_view value) {
 	auto const normalized = NormalizeProviderToken(value);
 	if (normalized == "ffms2" || normalized == "ffmpegsource" || normalized == "ffmpegsource2")
 		return "FFmpegSource";
+	if (normalized == "lsmas" || normalized == "lsmasnative" || normalized == "lsmashworks" || normalized == "lwlibavsource")
+		return "LsmasNative";
 	if (normalized == "avisynth" || normalized == "avs")
 		return "Avisynth";
 	if (normalized == "yuv4mpeg" || normalized == "y4m")

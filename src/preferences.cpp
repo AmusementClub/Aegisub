@@ -810,6 +810,11 @@ void BuildAdvancedAudioPage(OptionPage *p) {
 	binder->AddBool(_("Downmix to 16bit mono audio"), "Provider/Audio/FFmpegSource/Downmix");
 #endif
 
+#ifdef WITH_LSMASNATIVE
+	binder->AddCategory(wxS("LsmasNative"));
+	binder->AddBool(_("Downmix to 16bit mono audio"), "Provider/Audio/LsmasNative/Downmix");
+#endif
+
 #ifdef WITH_PORTAUDIO
 	binder->AddCategory(wxS("Portaudio"));
 	binder->AddChoice(_("Portaudio device"), PortAudioPlayer::GetOutputDevices(), "Player/Audio/PortAudio/Device Name");
@@ -881,6 +886,12 @@ void BuildAdvancedVideoPage(OptionPage *p) {
 
 	binder->AddInt(_("Decoding threads"), "Provider/Video/FFmpegSource/Decoding Threads", -1, INT_MAX);
 	binder->AddBool(_("Enable unsafe seeking"), "Provider/Video/FFmpegSource/Unsafe Seeking");
+#endif
+
+#ifdef WITH_LSMASNATIVE
+	binder->AddCategory(wxS("LsmasNative"));
+	binder->AddInt(_("Decoding threads"), "Provider/Video/LsmasNative/Decoding Threads", 0, INT_MAX);
+	binder->AddBool(_("Enable unsafe seeking"), "Provider/Video/LsmasNative/Unsafe Seeking");
 #endif
 
 	p->sizer->Add(grid, 1, wxEXPAND);

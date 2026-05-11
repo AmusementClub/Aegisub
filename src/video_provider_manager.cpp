@@ -19,6 +19,9 @@
 #include "factory_manager.h"
 #include "include/aegisub/video_provider.h"
 #include "options.h"
+#ifdef WITH_LSMASNATIVE
+#include "lsmas_native_api.h"
+#endif
 #ifdef WITH_FFMS2
 #include "ffmpegsource_common.h"
 #endif
@@ -32,6 +35,7 @@
 
 std::unique_ptr<VideoProvider> CreateDummyVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
 std::unique_ptr<VideoProvider> CreateYUV4MPEGVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
+std::unique_ptr<VideoProvider> CreateLsmasNativeVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 std::unique_ptr<VideoProvider> CreateFFmpegSourceVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 std::unique_ptr<VideoProvider> CreateAvisynthVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
 
@@ -73,6 +77,17 @@ namespace {
 	}
 #endif
 
+#ifdef WITH_LSMASNATIVE
+	bool IsLsmasNativeAvailable() {
+		return lsmas::IsAvailable();
+	}
+
+	std::string GetLsmasNativeAvailabilityError() {
+		auto err = lsmas::GetLoadError();
+		return err.empty() ? "runtime library is unavailable." : err;
+	}
+#endif
+
 #ifdef WITH_AVISYNTH
 	bool IsAvisynthAvailable() {
 		return avisynth::IsAvailable();
@@ -96,6 +111,9 @@ std::string GetDisplayName(factory const& provider) {
 		{"YUV4MPEG", CreateYUV4MPEGVideoProviderWithChoice, nullptr, nullptr, true},
 #ifdef WITH_FFMS2
 		{"FFmpegSource", CreateFFmpegSourceVideoProvider, IsFFmpegSourceAvailable, GetFFmpegSourceAvailabilityError, false},
+#endif
+#ifdef WITH_LSMASNATIVE
+		{"LsmasNative", CreateLsmasNativeVideoProvider, IsLsmasNativeAvailable, GetLsmasNativeAvailabilityError, false},
 #endif
 #ifdef WITH_AVISYNTH
 		{"Avisynth", CreateAvisynthVideoProviderWithChoice, IsAvisynthAvailable, GetAvisynthAvailabilityError, false},

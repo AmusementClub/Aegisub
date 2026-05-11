@@ -21,6 +21,9 @@
 #include "options.h"
 #include "ui_services.h"
 #include "utils.h"
+#ifdef WITH_LSMASNATIVE
+#include "lsmas_native_api.h"
+#endif
 #ifdef WITH_FFMS2
 #include "ffmpegsource_common.h"
 #endif
@@ -39,6 +42,7 @@
 using namespace agi;
 
 std::unique_ptr<AudioProvider> CreateAvisynthAudioProvider(fs::path const& filename, BackgroundRunner *);
+std::unique_ptr<AudioProvider> CreateLsmasNativeAudioProvider(fs::path const& filename, BackgroundRunner *, std::shared_ptr<SingleChoiceInteractionSink> choice_sink);
 std::unique_ptr<AudioProvider> CreateFFmpegSourceAudioProvider(fs::path const& filename, BackgroundRunner *, std::shared_ptr<SingleChoiceInteractionSink> choice_sink);
 
 namespace {
@@ -77,6 +81,17 @@ std::string GetFFmpegSourceAvailabilityError() {
 }
 #endif
 
+#ifdef WITH_LSMASNATIVE
+bool IsLsmasNativeAvailable() {
+	return lsmas::IsAvailable();
+}
+
+std::string GetLsmasNativeAvailabilityError() {
+	auto err = lsmas::GetLoadError();
+	return err.empty() ? "runtime library is unavailable." : err;
+}
+#endif
+
 #ifdef WITH_AVISYNTH
 bool IsAvisynthAvailable() {
 	return avisynth::IsAvailable();
@@ -100,6 +115,9 @@ const factory providers[] = {
 	{"PCM", CreatePCMAudioProviderWithChoice, nullptr, nullptr, true},
 #ifdef WITH_FFMS2
 	{"FFmpegSource", CreateFFmpegSourceAudioProvider, IsFFmpegSourceAvailable, GetFFmpegSourceAvailabilityError, false},
+#endif
+#ifdef WITH_LSMASNATIVE
+	{"LsmasNative", CreateLsmasNativeAudioProvider, IsLsmasNativeAvailable, GetLsmasNativeAvailabilityError, false},
 #endif
 #ifdef WITH_AVISYNTH
 	{"Avisynth", CreateAvisynthAudioProviderWithChoice, IsAvisynthAvailable, GetAvisynthAvailabilityError, false},

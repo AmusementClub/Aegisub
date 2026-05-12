@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+<svg
+   xmlns:svg="http://www.w3.org/2000/svg"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   version="1.0"
+   width="64"
+   height="64"
+   id="svg2385">
+  <defs
+     id="defs2387">
+    <linearGradient
+       id="linearGradient2425">
+      <stop
+         id="stop2427"
+         style="stop-color:#ffffff;stop-opacity:1"
+         offset="0" />
+      <stop
+         id="stop2429"
+         style="stop-color:#0044aa;stop-opacity:1"
+         offset="1" />
+    </linearGradient>
+    <radialGradient
+       cx="-49"
+       cy="22"
+       r="29"
+       fx="-49"
+       fy="22"
+       id="radialGradient2431"
+       xlink:href="#linearGradient2425"
+       gradientUnits="userSpaceOnUse"
+       gradientTransform="matrix(-1.6,2,-1.9,-1.5,-25.1,137.2)" />
+  </defs>
+  <path
+     d="M 10,8 L 54,8 C 57.5,8 60,10.5 60,14 L 60,36 C 60,39.5 57.5,42 54,42 L 10,42 C 6.5,42 4,39.5 4,36 L 4,14 C 4,10.5 6.5,8 10,8 z"
+     id="rect2380"
+     style="fill:url(#radialGradient2431);stroke:#000000;stroke-width:2;stroke-linecap:round;stroke-linejoin:round" />
+  <path
+     d="M 14,31 L 50,31"
+     id="path2381"
+     style="fill:none;stroke:#ffffff;stroke-width:4;stroke-linecap:round;stroke-linejoin:round" />
+  <path
+     d="M 16,37 L 48,37"
+     id="path2382"
+     style="fill:none;stroke:#ffffff;stroke-width:3;stroke-linecap:round;stroke-linejoin:round" />
+  <path
+     d="M 9,46 L 55,46 C 57.5,46 60,48.5 60,51 L 60,56 C 60,58.5 57.5,61 55,61 L 9,61 C 6.5,61 4,58.5 4,56 L 4,51 C 4,48.5 6.5,46 9,46 z"
+     id="rect2383"
+     style="fill:#ffdd55;stroke:#000000;stroke-width:2;stroke-linecap:round;stroke-linejoin:round" />
+  <path
+     d="M 13,51.5 L 35,51.5 M 13,56 L 51,56"
+     id="path2384"
+     style="fill:none;stroke:#803300;stroke-width:3;stroke-linecap:round;stroke-linejoin:round" />
+  <path
+     d="M 44,47 L 44,61 L 60,61 L 60,47 L 44,47 z"
+     id="rect2385"
+     style="fill:#0044aa;fill-opacity:0.9;stroke:none" />
+  <path
+     d="M 50,51 C 50,53 53,53 53,51 C 53,49 50,49 50,51 z M 49,58 C 52,55.5 55,55 55,52 C 55,48 48,48 48,52 L 50.5,52 C 50.5,50.5 52.5,50.5 52.5,52 C 52.5,53.5 49,55 48,58 L 55.5,58 L 55.5,56 L 51.5,56 C 52,55 55,54 55,51 C 55,48 48,48 48,51 L 50,51 z"
+     id="text2386"
+     style="fill:#ffffff;stroke:none" />
+</svg>

@@ -711,7 +711,7 @@ struct video_opt_scale_with_dpi final : public Command {
 
 struct video_secondary_subtitles_toggle final : public validator_video_loaded {
 	CMD_NAME("video/secondary_subtitles/toggle")
-	CMD_ICON(show_video_details_menu)
+	CMD_ICON(toggle_video_secondary_subtitles)
 	STR_MENU("Show Secondary Subtitle Strip")
 	STR_DISP("Toggle Secondary Subtitle Strip")
 	STR_HELP("Show or hide the secondary subtitle strip below the main video")

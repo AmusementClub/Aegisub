@@ -491,6 +491,11 @@ button/toggle_video_autoscroll_24.png
 button/toggle_video_autoscroll_32.png
 button/toggle_video_autoscroll_48.png
 button/toggle_video_autoscroll_64.png
+button/toggle_video_secondary_subtitles_16.png
+button/toggle_video_secondary_subtitles_24.png
+button/toggle_video_secondary_subtitles_32.png
+button/toggle_video_secondary_subtitles_48.png
+button/toggle_video_secondary_subtitles_64.png
 button/translation_toolbutton_16.png
 button/translation_toolbutton_24.png
 button/translation_toolbutton_32.png

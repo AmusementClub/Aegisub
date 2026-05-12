@@ -384,6 +384,12 @@
 			"Width" : 1280
 		},
 		"Edit Box" : {
+			"Command Buttons" : {
+				"Commands" : [
+					{"string": ""}
+				],
+				"Enabled" : false
+			},
 			"Font Face" : "",
 			"Font Size" : 13
 		},

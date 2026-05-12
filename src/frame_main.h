@@ -39,6 +39,7 @@ class AsyncVideoProvider;
 class AudioBox;
 class VideoBox;
 class wxPanel;
+class wxToolBar;
 namespace agi { class AudioProvider; }
 namespace agi { struct Context; class OptionValue; }
 
@@ -92,11 +93,13 @@ class FrameMain : public wxFrame {
 	void OnVideoOpen(AsyncVideoProvider *provider);
 	void OnVideoDetach(agi::OptionValue const& opt);
 	void OnSubtitlesOpen();
+	void OnSubtitleCommandToolbarVisibleChanged(agi::OptionValue const& opt);
 
 	void EnableToolBar(agi::OptionValue const& opt);
 
 	AudioBox *audioBox = nullptr;      ///< The audio area
 	VideoBox *videoBox = nullptr;      ///< The video area
+	wxToolBar *subtitleCommandToolbar = nullptr; ///< Configurable command buttons below the edit box
 
 	wxSizer *MainSizer;  ///< Arranges things from top to bottom in the window
 	wxSizer *TopSizer;   ///< Arranges video box and tool box from left to right

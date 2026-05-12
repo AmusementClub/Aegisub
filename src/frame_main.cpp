@@ -392,11 +392,20 @@ void FrameMain::InitContents() {
 	StartupLog("Create subtitle editing box");
 	auto EditBox = new SubsEditBox(contentsPanel, context.get());
 	ui.subsEditBox = EditBox;
+	subtitleCommandToolbar = toolbar::GetOptionToolbar(
+		contentsPanel,
+		"subtitle_command_buttons",
+		"Subtitle/Edit Box/Command Buttons/Commands",
+		context.get(),
+		"Subtitle Edit Box");
 	observe_phase("startup.frame.contents.create_base_controls");
 
 	StartupLog("Arrange main sizers");
 	ToolsSizer = new wxBoxSizer(wxVERTICAL);
 	ToolsSizer->Add(EditBox, 1, wxEXPAND);
+	ToolsSizer->Add(subtitleCommandToolbar, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 3);
+	ToolsSizer->Show(subtitleCommandToolbar, OPT_GET("Subtitle/Edit Box/Command Buttons/Enabled")->GetBool(), true);
+	ui_activation.AddConnection(OPT_SUB("Subtitle/Edit Box/Command Buttons/Enabled", &FrameMain::OnSubtitleCommandToolbarVisibleChanged, this));
 	TopSizer = new wxBoxSizer(wxHORIZONTAL);
 	TopSizer->Add(ToolsSizer, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 5);
 	MainSizer = new wxBoxSizer(wxVERTICAL);
@@ -575,6 +584,15 @@ void FrameMain::OnVideoDetach(agi::OptionValue const& opt) {
 		SetDisplayMode(0, -1);
 	else if (core.project->VideoProvider())
 		SetDisplayMode(1, -1);
+}
+
+void FrameMain::OnSubtitleCommandToolbarVisibleChanged(agi::OptionValue const& opt) {
+	if (!subtitleCommandToolbar || !ToolsSizer)
+		return;
+
+	ToolsSizer->Show(subtitleCommandToolbar, opt.GetBool(), true);
+	MainSizer->Layout();
+	Layout();
 }
 
 void FrameMain::StatusTimeout(wxString text,int ms) {

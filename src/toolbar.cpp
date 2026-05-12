@@ -32,13 +32,18 @@
 #include <libaegisub/signal.h>
 #include <libaegisub/string_utils.h>
 
+#include <algorithm>
 #include <boost/interprocess/streams/bufferstream.hpp>
 #include <vector>
 
+#include <wx/dcmemory.h>
 #include <wx/frame.h>
+#include <wx/settings.h>
 #include <wx/toolbar.h>
 
 namespace {
+	constexpr size_t kMaxConfigurableToolbarItems = 64;
+
 	json::Object const& get_root() {
 		static json::Object root;
 		if (root.empty()) {
@@ -48,12 +53,121 @@ namespace {
 		return root;
 	}
 
+	void add_toolbar_item(std::vector<std::string>& out, std::string item) {
+		agi::util::strings::trim_inplace(item);
+		if (item.empty() || item == "-") {
+			if (!out.empty() && !out.back().empty())
+				out.emplace_back();
+			return;
+		}
+
+		out.emplace_back(std::move(item));
+	}
+
+	std::vector<std::string> parse_configurable_toolbar_items(std::string const& raw) {
+		std::vector<std::string> items;
+		agi::util::strings::for_each_split_any(raw, "\r\n", false, [&](agi::util::strings::view line) {
+			agi::util::strings::for_each_split_any(line, ",;", false, [&](agi::util::strings::view item) {
+				add_toolbar_item(items, std::string(item));
+			});
+		});
+
+		while (!items.empty() && items.back().empty())
+			items.pop_back();
+
+		return items;
+	}
+
+	std::vector<std::string> normalize_configurable_toolbar_items(std::vector<std::string> const& raw) {
+		std::vector<std::string> items;
+		items.reserve(raw.size());
+		for (auto const& item : raw)
+			add_toolbar_item(items, item);
+
+		while (!items.empty() && items.back().empty())
+			items.pop_back();
+
+		return items;
+	}
+
+	wxString strip_accelerators(wxString label) {
+		label.Replace(wxS("&&"), wxS("\001"));
+		label.Replace(wxS("&"), wxS(""));
+		label.Replace(wxS("\001"), wxS("&"));
+		label.Trim(true);
+		label.Trim(false);
+		return label;
+	}
+
+	bool is_badge_separator(wxUniChar ch) {
+		auto const value = ch.GetValue();
+		return value == ' ' || value == '\t' || value == '\r' || value == '\n' ||
+			value == '/' || value == '\\' || value == '_' || value == '-' || value == '.';
+	}
+
+	wxString make_badge_text(wxString const& display, std::string const& command_name) {
+		wxString label = strip_accelerators(display);
+		if (label.empty())
+			label = to_wx(command_name);
+
+		wxString badge;
+		for (size_t i = 0; i < label.length() && badge.length() < 2; ++i) {
+			wxUniChar ch = label[i];
+			if (is_badge_separator(ch))
+				continue;
+			wxString character;
+			character += ch;
+			badge += character.Upper();
+		}
+
+		return badge.empty() ? wxString(wxS("?")) : badge;
+	}
+
+	wxBitmap make_text_tool_bitmap(wxWindow *window, wxString const& display, std::string const& command_name, int icon_size) {
+		int const size = std::max(icon_size, window->FromDIP(18));
+		int const inset = std::max(1, size / 8);
+		wxBitmap bitmap(size, size);
+		wxMemoryDC dc(bitmap);
+
+		auto const face = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
+		dc.SetBackground(wxBrush(face));
+		dc.Clear();
+
+		dc.SetPen(wxPen(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNSHADOW)));
+		dc.SetBrush(wxBrush(face));
+		dc.DrawRoundedRectangle(inset, inset, size - inset * 2, size - inset * 2, std::max(2, size / 5));
+
+		wxFont font = window->GetFont();
+		if (font.IsOk()) {
+			font.SetWeight(wxFONTWEIGHT_BOLD);
+			dc.SetFont(font);
+		}
+		dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNTEXT));
+
+		wxString const badge = make_badge_text(display, command_name);
+		wxSize text_size = dc.GetTextExtent(badge);
+		if (font.IsOk()) {
+			int point_size = font.GetPointSize();
+			while (point_size > 6 && (text_size.x > size - inset * 2 || text_size.y > size - inset * 2)) {
+				font.SetPointSize(--point_size);
+				dc.SetFont(font);
+				text_size = dc.GetTextExtent(badge);
+			}
+		}
+
+		dc.DrawText(badge, (size - text_size.x) / 2, (size - text_size.y) / 2);
+		dc.SelectObject(wxNullBitmap);
+		return bitmap;
+	}
+
 	class Toolbar final : public wxToolBar {
 		/// Window ID of first toolbar control
 		static const int TOOL_ID_BASE = 5000;
 
 		/// Toolbar name in config file
 		std::string name;
+		/// Option containing a user-editable command list, if this toolbar is configurable
+		std::string command_option;
 		/// Project context
 		agi::Context *context;
 		/// Commands for each of the buttons
@@ -68,6 +182,8 @@ namespace {
 
 		/// Listener for icon size change signal
 		agi::signal::Connection icon_size_slot;
+
+		agi::signal::Connection command_list_slot;
 
 		/// Listener for hotkey change signal
 		agi::signal::Connection hotkeys_changed_slot;
@@ -111,6 +227,10 @@ namespace {
 			RegenerateToolbar();
 		}
 
+		void OnCommandListChange(agi::OptionValue const&) {
+			RegenerateToolbar();
+		}
+
 		/// Clear the toolbar and recreate it
 		void RegenerateToolbar() {
 			Unbind(wxEVT_IDLE, &Toolbar::OnIdle, this);
@@ -119,8 +239,14 @@ namespace {
 			Populate();
 		}
 
-		/// Populate the toolbar with buttons
-		void Populate() {
+		std::vector<std::string> GetConfiguredCommands() const {
+			if (!command_option.empty()) {
+				auto opt = OPT_GET(command_option);
+				if (opt->GetType() == agi::OptionType::ListString)
+					return normalize_configurable_toolbar_items(opt->GetListString());
+				return parse_configurable_toolbar_items(opt->GetString());
+			}
+
 			json::Object const& root = get_root();
 			auto root_it = root.find(name);
 			if (root_it == root.end()) {
@@ -129,7 +255,18 @@ namespace {
 			}
 
 			json::Array const& arr = root_it->second;
-			commands.reserve(arr.size());
+			std::vector<std::string> command_names;
+			command_names.reserve(arr.size());
+			for (json::String const& command_name : arr)
+				command_names.emplace_back(command_name);
+
+			return command_names;
+		}
+
+		/// Populate the toolbar with buttons
+		void Populate() {
+			auto command_names = GetConfiguredCommands();
+			commands.reserve(command_names.size());
 			bool needs_onidle = false;
 			bool last_was_sep = false;
 			if (UsesVideoUiToolbarIcons()) {
@@ -137,7 +274,14 @@ namespace {
 				SetToolBitmapSize(wxSize(tool_icon_size, tool_icon_size));
 			}
 
-			for (json::String const& command_name : arr) {
+			size_t item_count = 0;
+			for (std::string const& command_name : command_names) {
+				if (!command_option.empty() && item_count++ >= kMaxConfigurableToolbarItems) {
+					LOG_W("toolbar/configurable/too_many_items") << "Toolbar '" << name << "' has more than "
+						<< kMaxConfigurableToolbarItems << " configured items; ignoring the rest";
+					break;
+				}
+
 				if (command_name.empty()) {
 					if (!last_was_sep)
 						AddSeparator();
@@ -159,10 +303,22 @@ namespace {
 					flags & cmd::COMMAND_TOGGLE ? wxITEM_CHECK :
 					wxITEM_NORMAL;
 
-				if (UsesVideoUiToolbarIcons())
-					AddTool(TOOL_ID_BASE + commands.size(), command->StrDisplay(context), command->Icon(GetVideoToolbarIconSize(), GetLayoutDirection()), GetTooltip(command), kind);
-				else
-					AddTool(TOOL_ID_BASE + commands.size(), command->StrDisplay(context), command->IconBundle(GetLayoutDirection()), GetTooltip(command), kind);
+				wxString const display = command->StrDisplay(context);
+				auto const layout_direction = GetLayoutDirection();
+				if (UsesVideoUiToolbarIcons()) {
+					int const tool_icon_size = GetVideoToolbarIconSize();
+					wxBitmap bitmap = command->Icon(tool_icon_size, layout_direction);
+					if (!bitmap.IsOk())
+						bitmap = make_text_tool_bitmap(this, display, command_name, tool_icon_size);
+					AddTool(TOOL_ID_BASE + commands.size(), display, bitmap, GetTooltip(command), kind);
+				}
+				else {
+					wxBitmap bitmap = command->Icon(icon_size, layout_direction);
+					wxBitmapBundle bundle = bitmap.IsOk()
+						? command->IconBundle(layout_direction)
+						: wxBitmapBundle::FromBitmap(make_text_tool_bitmap(this, display, command_name, icon_size));
+					AddTool(TOOL_ID_BASE + commands.size(), display, bundle, GetTooltip(command), kind);
+				}
 
 				commands.push_back(command);
 				needs_onidle = needs_onidle || flags != cmd::COMMAND_NORMAL;
@@ -187,9 +343,10 @@ namespace {
 		}
 
 	public:
-		Toolbar(wxWindow *parent, std::string name, agi::Context *c, std::string ht_context, bool vertical)
+		Toolbar(wxWindow *parent, std::string name, std::string command_option, agi::Context *c, std::string ht_context, bool vertical)
 		: wxToolBar(parent, -1, wxDefaultPosition, wxDefaultSize, wxTB_NODIVIDER | wxTB_FLAT | (vertical ? wxTB_VERTICAL : wxTB_HORIZONTAL))
 		, name(std::move(name))
+		, command_option(std::move(command_option))
 		, context(c)
 		, ht_context(std::move(ht_context))
 		, retina_helper(parent)
@@ -202,6 +359,8 @@ namespace {
 		, hotkeys_changed_slot(hotkey::inst->AddHotkeyChangeListener(&Toolbar::RegenerateToolbar, this))
 		, video_dpi_slot(UsesVideoUiToolbarIcons() ? OPT_SUB("Video/Scale with DPI", [=](agi::OptionValue const&) { RegenerateToolbar(); }) : agi::signal::Connection())
 		{
+			if (!this->command_option.empty())
+				command_list_slot = OPT_SUB(this->command_option, &Toolbar::OnCommandListChange, this);
 			Populate();
 			Bind(wxEVT_TOOL, &Toolbar::OnClick, this);
 		}
@@ -242,6 +401,10 @@ namespace toolbar {
 	}
 
 	wxToolBar *GetToolbar(wxWindow *parent, std::string const& name, agi::Context *c, std::string const& hotkey, bool vertical) {
-		return new Toolbar(parent, name, c, hotkey, vertical);
+		return new Toolbar(parent, name, std::string(), c, hotkey, vertical);
+	}
+
+	wxToolBar *GetOptionToolbar(wxWindow *parent, std::string const& name, std::string const& command_option, agi::Context *c, std::string const& hotkey, bool vertical) {
+		return new Toolbar(parent, name, command_option, c, hotkey, vertical);
 	}
 }

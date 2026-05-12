@@ -44,6 +44,7 @@
 #include <libaegisub/fs_fwd.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
+#include <libaegisub/string_utils.h>
 
 #include <algorithm>
 #include <unordered_set>
@@ -66,6 +67,8 @@
 #include <wx/treebook.h>
 
 namespace {
+constexpr char const *kCommandButtonCommandsOption = "Subtitle/Edit Box/Command Buttons/Commands";
+
 wxColour BlendColour(wxColour const& base, wxColour const& accent, int accent_percent) {
 	int const base_percent = 100 - accent_percent;
 	return wxColour(
@@ -611,6 +614,8 @@ void BuildVideoPage(OptionPage *p) {
 	p->SetSizerAndFit(p->sizer);
 }
 
+void AddCommandButtonEditor(OptionPage *p);
+
 /// Interface preferences page
 void BuildInterfacePage(OptionPage *p) {
 	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
@@ -647,6 +652,15 @@ void BuildInterfacePage(OptionPage *p) {
 	binder->AddBool(_("Skip over whitespace"), "Tool/Translation Assistant/Skip Whitespace");
 
 	p->sizer->Add(grid, 1, wxEXPAND);
+	p->SetSizerAndFit(p->sizer);
+}
+
+/// Interface command buttons preferences subpage
+void BuildCommandButtonsPage(OptionPage *p) {
+	auto general = p->PageSizer(_("Options"));
+	p->OptionAdd(general, _("Show command button row"), "Subtitle/Edit Box/Command Buttons/Enabled");
+	p->CellSkip(general);
+	AddCommandButtonEditor(p);
 	p->SetSizerAndFit(p->sizer);
 }
 
@@ -926,6 +940,8 @@ public:
 		iconText << value;
 
 		wxString text = iconText.GetText();
+		if (text == wxS("-"))
+			text.clear();
 		int iconWidth = GetIconWidth();
 
 		// adjust the label rect to take the width of the icon into account
@@ -974,6 +990,202 @@ public:
 	bool GetValue(wxVariant &) const override { return false; }
 	bool HasEditorCtrl() const override { return true; }
 };
+
+std::string NormalizeCommandButtonValue(std::string value) {
+	agi::util::strings::trim_inplace(value);
+	return value == "-" ? std::string() : value;
+}
+
+std::vector<std::string> LoadCommandButtonCommands() {
+	auto opt = OPT_GET(kCommandButtonCommandsOption);
+	if (opt->GetType() == agi::OptionType::ListString)
+		return opt->GetListString();
+
+	std::vector<std::string> commands;
+	agi::util::strings::for_each_split_any(opt->GetString(), "\r\n,;", false, [&](agi::util::strings::view item) {
+		commands.emplace_back(NormalizeCommandButtonValue(std::string(item)));
+	});
+	return commands;
+}
+
+class CommandButtonDataViewModel final : public wxDataViewVirtualListModel {
+	Preferences *parent;
+	std::vector<std::string> commands;
+	bool has_pending_changes = false;
+
+	void MarkDirty() {
+		if (!has_pending_changes) {
+			has_pending_changes = true;
+			parent->AddPendingChange([this] { Apply(); });
+		}
+	}
+
+	void Apply() {
+		OPT_SET(kCommandButtonCommandsOption)->SetListString(commands);
+		has_pending_changes = false;
+	}
+
+public:
+	explicit CommandButtonDataViewModel(Preferences *parent)
+	: wxDataViewVirtualListModel(static_cast<unsigned int>(LoadCommandButtonCommands().size()))
+	, parent(parent)
+	, commands(LoadCommandButtonCommands())
+	{
+	}
+
+	unsigned int GetColumnCount() const override { return 2; }
+	wxString GetColumnType(unsigned int col) const override { return col == 0 ? wxS("wxDataViewIconText") : wxS("string"); }
+
+	void GetValueByRow(wxVariant &variant, unsigned row, unsigned col) const override {
+		if (row >= commands.size())
+			return;
+
+		auto const& command = commands[row];
+		if (col == 0) {
+			wxBitmapBundle icon;
+			if (!command.empty()) {
+				if (auto *cmd = cmd::get_if(command))
+					icon = cmd->IconBundle();
+			}
+			wxString label = command.empty() ? wxString(wxS("-")) : to_wx(command);
+			variant << wxDataViewIconText(label, icon);
+			return;
+		}
+
+		if (command.empty())
+			variant = _("Separator");
+		else if (auto *cmd = cmd::get_if(command))
+			variant = cmd->StrHelp();
+		else
+			variant = _("Unknown command");
+	}
+
+	bool SetValueByRow(wxVariant const& variant, unsigned row, unsigned col) override {
+		if (row >= commands.size() || col != 0)
+			return false;
+
+		wxDataViewIconText text;
+		text << variant;
+		commands[row] = NormalizeCommandButtonValue(from_wx(text.GetText()));
+		MarkDirty();
+		RowChanged(row);
+		return true;
+	}
+
+	unsigned AppendCommand(std::string command) {
+		commands.emplace_back(NormalizeCommandButtonValue(std::move(command)));
+		RowAppended();
+		MarkDirty();
+		return static_cast<unsigned>(commands.size() - 1);
+	}
+
+	void DeleteCommand(unsigned row) {
+		if (row >= commands.size())
+			return;
+
+		commands.erase(commands.begin() + row);
+		RowDeleted(row);
+		MarkDirty();
+	}
+
+	unsigned MoveCommand(unsigned row, int direction) {
+		if (row >= commands.size())
+			return row;
+
+		int new_row = static_cast<int>(row) + direction;
+		if (new_row < 0 || new_row >= static_cast<int>(commands.size()))
+			return row;
+
+		std::swap(commands[row], commands[new_row]);
+		Reset(static_cast<unsigned>(commands.size()));
+		MarkDirty();
+		return static_cast<unsigned>(new_row);
+	}
+};
+
+void AddCommandButtonEditor(OptionPage *p) {
+	p->parent->AddChangeableOption(kCommandButtonCommandsOption);
+
+	auto box = new wxStaticBoxSizer(wxVERTICAL, p, _("Commands Bar"));
+	auto *model = new CommandButtonDataViewModel(p->parent);
+	auto *dvc = new wxDataViewCtrl(p, -1, wxDefaultPosition, wxDefaultSize, wxDV_ROW_LINES | wxDV_VERT_RULES | wxDV_SINGLE);
+	dvc->AssociateModel(model);
+	model->DecRef();
+
+	dvc->AppendColumn(new wxDataViewColumn(_("Command"), new CommandRenderer, 0, 250, wxALIGN_LEFT, wxCOL_RESIZABLE));
+	dvc->AppendTextColumn(_("Description"), 1, wxDATAVIEW_CELL_INERT, 300, wxALIGN_LEFT, wxCOL_RESIZABLE);
+	dvc->SetMinSize(p->FromDIP(wxSize(520, 240)));
+	box->Add(dvc, wxSizerFlags(1).Expand().Border(wxLEFT | wxRIGHT | wxTOP, 5));
+
+	auto selected_row = [dvc, model]() -> int {
+		auto item = dvc->GetSelection();
+		if (!item.IsOk())
+			return -1;
+		return static_cast<int>(model->GetRow(item));
+	};
+
+	auto buttons = new wxBoxSizer(wxHORIZONTAL);
+	auto add_button = new wxButton(p, -1, _("&New"));
+	auto separator_button = new wxButton(p, -1, _("&Separator"));
+	auto edit_button = new wxButton(p, -1, _("&Edit"));
+	auto delete_button = new wxButton(p, -1, _("&Delete"));
+	auto up_button = new wxButton(p, -1, _("&Up"));
+	auto down_button = new wxButton(p, -1, _("&Down"));
+
+	add_button->Bind(wxEVT_BUTTON, [dvc, model](wxCommandEvent&) {
+		unsigned row = model->AppendCommand(std::string());
+		auto item = model->GetItem(row);
+		dvc->Select(item);
+		dvc->EnsureVisible(item);
+		dvc->EditItem(item, dvc->GetColumn(0));
+	});
+	separator_button->Bind(wxEVT_BUTTON, [dvc, model](wxCommandEvent&) {
+		unsigned row = model->AppendCommand(std::string());
+		auto item = model->GetItem(row);
+		dvc->Select(item);
+		dvc->EnsureVisible(item);
+	});
+	edit_button->Bind(wxEVT_BUTTON, [dvc](wxCommandEvent&) {
+		auto item = dvc->GetSelection();
+		if (item.IsOk())
+			dvc->EditItem(item, dvc->GetColumn(0));
+	});
+	delete_button->Bind(wxEVT_BUTTON, [dvc, model, selected_row](wxCommandEvent&) {
+		int row = selected_row();
+		if (row < 0)
+			return;
+		model->DeleteCommand(static_cast<unsigned>(row));
+		if (model->GetCount()) {
+			unsigned select = static_cast<unsigned>(std::min<int>(row, static_cast<int>(model->GetCount()) - 1));
+			dvc->Select(model->GetItem(select));
+		}
+	});
+	up_button->Bind(wxEVT_BUTTON, [dvc, model, selected_row](wxCommandEvent&) {
+		int row = selected_row();
+		if (row < 0)
+			return;
+		unsigned new_row = model->MoveCommand(static_cast<unsigned>(row), -1);
+		dvc->Select(model->GetItem(new_row));
+	});
+	down_button->Bind(wxEVT_BUTTON, [dvc, model, selected_row](wxCommandEvent&) {
+		int row = selected_row();
+		if (row < 0)
+			return;
+		unsigned new_row = model->MoveCommand(static_cast<unsigned>(row), 1);
+		dvc->Select(model->GetItem(new_row));
+	});
+
+	buttons->Add(add_button, wxSizerFlags().Border(wxALL, 5));
+	buttons->Add(separator_button, wxSizerFlags().Border(wxTOP | wxBOTTOM | wxRIGHT, 5));
+	buttons->Add(edit_button, wxSizerFlags().Border(wxTOP | wxBOTTOM | wxRIGHT, 5));
+	buttons->Add(delete_button, wxSizerFlags().Border(wxTOP | wxBOTTOM | wxRIGHT, 5));
+	buttons->AddStretchSpacer(1);
+	buttons->Add(up_button, wxSizerFlags().Border(wxTOP | wxBOTTOM | wxRIGHT, 5));
+	buttons->Add(down_button, wxSizerFlags().Border(wxTOP | wxBOTTOM | wxRIGHT, 5));
+	box->Add(buttons, wxSizerFlags().Expand());
+
+	p->sizer->Add(box, 0, wxEXPAND | wxALL, p->FromDIP(5));
+}
 
 class HotkeyRenderer final : public wxDataViewCustomRenderer {
 	wxString value;
@@ -1266,6 +1478,7 @@ Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"
 	register_deferred_page("page_video", _("Video"), OptionPage::PAGE_DEFAULT, BuildVideoPage);
 	register_deferred_page("page_interface", _("Interface"), OptionPage::PAGE_DEFAULT, BuildInterfacePage);
 	register_deferred_page("page_interface_colours", _("Colors"), OptionPage::PAGE_SCROLL | OptionPage::PAGE_SUB, BuildInterfaceColoursPage);
+	register_deferred_page("page_interface_command_buttons", _("Commands Bar"), OptionPage::PAGE_SUB, BuildCommandButtonsPage);
 	observe_phase("page_hotkeys", [&] { new Interface_Hotkeys(book, this); });
 	RegisterDeferredPageBuilder({}, true);
 	register_deferred_page("page_backup", _("Backup"), OptionPage::PAGE_DEFAULT, BuildBackupPage);

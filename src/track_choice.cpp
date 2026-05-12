@@ -1,5 +1,8 @@
 #include "track_choice.h"
 
+#include <iomanip>
+#include <sstream>
+
 namespace aegisub::track_choice {
 namespace {
 std::string BuildRequestId(DialogKind kind) {
@@ -40,6 +43,23 @@ std::string BuildMessage(DialogKind kind) {
 
 	return {};
 }
+}
+
+std::string FormatTrackLabel(TrackLabel const& label) {
+	std::ostringstream text;
+	text << "Track " << std::setw(2) << std::setfill('0') << label.index << ": "
+		<< (label.codec.empty() ? "unknown" : label.codec);
+
+	for (auto const& detail : label.details) {
+		if (detail.empty())
+			continue;
+		text << ", " << detail;
+	}
+
+	if (!label.title.empty())
+		text << ": " << label.title;
+
+	return text.str();
 }
 
 agi::SingleChoiceInteractionRequest BuildRequest(DialogKind kind, std::vector<std::string> const& choices) {

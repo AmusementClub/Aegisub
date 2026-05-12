@@ -15,6 +15,14 @@ enum class DialogKind {
 	Video,
 };
 
+struct TrackLabel {
+	int index = -1;
+	std::string codec;
+	std::vector<std::string> details;
+	std::string title;
+};
+
+std::string FormatTrackLabel(TrackLabel const& label);
 agi::SingleChoiceInteractionRequest BuildRequest(DialogKind kind, std::vector<std::string> const& choices);
 std::optional<int> ResolveSelection(size_t choice_count, std::optional<int> selection);
 

@@ -40,16 +40,14 @@
 #include "mkv_wrap.h"
 #include <libaegisub/native_library.h>
 #include "options.h"
+#include "provider_index_cache.h"
 #include "track_choice.h"
 #include "ui_services.h"
-#include "utils.h"
 
 #include <libaegisub/background_runner.h>
-#include <libaegisub/crc32.h>
 #include <libaegisub/log.h>
 #include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
-#include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
 
 #include <filesystem>
@@ -171,20 +169,12 @@ FFmpegSourceProvider::FFmpegSourceProvider(agi::BackgroundRunner *br, std::share
 
 namespace {
 std::string FormatTrackLabel(int ffms_track_index, std::string const& codec_name, std::string const& channels = {}, std::string const& language = {}, std::string const& title = {}) {
-	std::string label = from_wx(agi::wxformat(_("Track %02d: %s"), ffms_track_index, codec_name));
-	if (!channels.empty()) {
-		label += ", ";
-		label += channels;
-	}
-	if (!language.empty()) {
-		label += ", ";
-		label += language;
-	}
-	if (!title.empty()) {
-		label += ": ";
-		label += title;
-	}
-	return label;
+	aegisub::track_choice::TrackLabel label;
+	label.index = ffms_track_index;
+	label.codec = codec_name;
+	label.details = { channels, language };
+	label.title = title;
+	return aegisub::track_choice::FormatTrackLabel(label);
 }
 
 bool IsMatroskaLikePath(agi::fs::path const& filename) {
@@ -437,26 +427,14 @@ FFMS_IndexErrorHandling FFmpegSourceProvider::GetErrorHandlingMode() {
 /// @param filename	The name of the source file
 /// @return			Returns the generated filename.
 agi::fs::path FFmpegSourceProvider::GetCacheFilename(agi::fs::path const& filename) {
-	// Get the size of the file to be hashed
-	uintmax_t len = agi::fs::Size(filename);
-
-	// Get the hash of the filename
-	auto hash = agi::util::crc32(agi::fs::PathToString(filename));
-
-	// Generate the filename
-	auto result = config::path->Decode(std::string("?local/ffms2cache/") + std::to_string(hash) + "_" + std::to_string(len) + "_" + std::to_string(agi::fs::ModifiedTime(filename)) + ".ffindex");
-
-	// Ensure that folder exists
-	agi::fs::CreateDirectory(result.parent_path());
-
-	return result;
+	return aegisub::provider_index_cache::BuildFilename(filename, "?local/ffms2cache/", ".ffindex");
 }
 
 void FFmpegSourceProvider::CleanCache() {
-	::CleanCache(config::path->Decode("?local/ffms2cache/"),
+	aegisub::provider_index_cache::Clean("?local/ffms2cache/",
 		"*.ffindex",
-		OPT_GET("Provider/FFmpegSource/Cache/Size")->GetInt(),
-		OPT_GET("Provider/FFmpegSource/Cache/Files")->GetInt());
+		"Provider/FFmpegSource/Cache/Size",
+		"Provider/FFmpegSource/Cache/Files");
 }
 
 #endif // WITH_FFMS2

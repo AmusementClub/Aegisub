@@ -61,6 +61,7 @@
 #include <wx/bmpbuttn.h>
 #include <wx/checkbox.h>
 #include <wx/msgdlg.h>
+#include <wx/numformatter.h>
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
 #include <wx/stattext.h>
@@ -115,6 +116,36 @@ wxArrayString GetStyleEncodingStrings() {
 	encoding_strings.Add(wxS("255 - ") + _("OEM"));
 	return encoding_strings;
 }
+
+#if defined(__WXGTK__)
+class TrimmedDoubleSpinCtrl : public wxSpinCtrlDouble {
+public:
+	using wxSpinCtrlDouble::wxSpinCtrlDouble;
+
+	bool GTKOutput(wxString *text) const override {
+		if (wxSpinCtrlDouble::GTKOutput(text))
+			return true;
+
+		*text = wxNumberFormatter::ToString(GetValue(), GetDigits());
+		wxNumberFormatter::RemoveTrailingZeroes(*text);
+		return true;
+	}
+};
+#elif !defined(wxHAS_NATIVE_SPINCTRLDOUBLE)
+class TrimmedDoubleSpinCtrl : public wxSpinCtrlDouble {
+public:
+	using wxSpinCtrlDouble::wxSpinCtrlDouble;
+
+protected:
+	wxString DoValueToText(double val) override {
+		auto text = wxSpinCtrlDouble::DoValueToText(val);
+		wxNumberFormatter::RemoveTrailingZeroes(text);
+		return text;
+	}
+};
+#else
+using TrimmedDoubleSpinCtrl = wxSpinCtrlDouble;
+#endif
 }
 
 /// Style rename helper that walks a file searching for a style and optionally
@@ -208,9 +239,12 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 		sizer->Add(ctrl, wxSizerFlags(1).Left().Expand());
 	};
 
-	auto num_text_ctrl = [&](double *value, double min, double max, double step, double default_value) -> wxSpinCtrlDouble * {
-		auto scd = new wxSpinCtrlDouble(this, -1, wxEmptyString, wxDefaultPosition,
-			wxDefaultSize, wxSP_ARROW_KEYS, min, max, *value, step);
+	auto num_text_ctrl = [&](double *value, double min, double max, double step, double default_value, bool trim_trailing_zeroes=false) -> wxSpinCtrlDouble * {
+		wxSpinCtrlDouble *scd = trim_trailing_zeroes ?
+			static_cast<wxSpinCtrlDouble *>(new TrimmedDoubleSpinCtrl(this, -1, wxEmptyString, wxDefaultPosition,
+				wxDefaultSize, wxSP_ARROW_KEYS, min, max, *value, step)) :
+			new wxSpinCtrlDouble(this, -1, wxEmptyString, wxDefaultPosition,
+				wxDefaultSize, wxSP_ARROW_KEYS, min, max, *value, step);
 		scd->SetDigits(1);
 		scd->SetValidator(DoubleSpinValidator(value, default_value));
 		BindEmptyDefault(scd, wxEVT_SPINCTRLDOUBLE, [=] {
@@ -251,7 +285,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	// Create controls
 	StyleName = new wxTextCtrl(this, -1, to_wx(style->name));
 	FontName = new wxComboBox(this, -1, to_wx(style->font), wxDefaultPosition, wxSize(150, -1), 0, nullptr, wxCB_DROPDOWN);
-	auto FontSize = num_text_ctrl(&work->fontsize, 0, 10000.0, 0.1, AssStyle::DefaultFontSize);
+	auto FontSize = num_text_ctrl(&work->fontsize, 0, 10000.0, 1.0, AssStyle::DefaultFontSize, true);
 	BoxBold = new wxCheckBox(this, -1, _("&Bold"));
 	BoxItalic = new wxCheckBox(this, -1, _("&Italic"));
 	BoxUnderline = new wxCheckBox(this, -1, _("&Underline"));

@@ -64,6 +64,7 @@ void VisualToolVectorClip::SetToolbar(wxToolBar *toolBar) {
 #define ICON(name) wxBitmapBundle::FromBitmap(CMD_ICON_GET(name, wxLayout_Default, icon_size))
 	toolBar->AddTool(BUTTON_DRAG, _("Drag"), ICON(visual_vector_clip_drag), _("Drag control points"), wxITEM_CHECK);
 	toolBar->AddTool(BUTTON_LINE, _("Line"), ICON(visual_vector_clip_line), _("Appends a line"), wxITEM_CHECK);
+	toolBar->AddTool(BUTTON_MOVE, _("Move"), ICON(visual_vector_clip_move), _("Appends a move point"), wxITEM_CHECK);
 	toolBar->AddTool(BUTTON_BICUBIC, _("Bicubic"), ICON(visual_vector_clip_bicubic), _("Appends a bezier bicubic curve"), wxITEM_CHECK);
 	toolBar->AddSeparator();
 	toolBar->AddTool(BUTTON_CONVERT, _("Convert"), ICON(visual_vector_clip_convert), _("Converts a segment between line and bicubic"), wxITEM_CHECK);
@@ -72,8 +73,6 @@ void VisualToolVectorClip::SetToolbar(wxToolBar *toolBar) {
 	toolBar->AddSeparator();
 	toolBar->AddTool(BUTTON_FREEHAND, _("Freehand"), ICON(visual_vector_clip_freehand), _("Draws a freehand shape"), wxITEM_CHECK);
 	toolBar->AddTool(BUTTON_FREEHAND_SMOOTH, _("Freehand smooth"), ICON(visual_vector_clip_freehand_smooth), _("Draws a smoothed freehand shape"), wxITEM_CHECK);
-	toolBar->AddSeparator();
-	toolBar->AddTool(BUTTON_MOVE, _("Move"), ICON(visual_vector_clip_line), _("Appends a move point"), wxITEM_CHECK);
 	toolBar->ToggleTool(BUTTON_DRAG, true);
 	toolBar->Realize();
 	toolBar->Show(true);

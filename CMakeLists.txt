@@ -357,6 +357,9 @@ add_custom_command(
 
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.cpp" "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.h"
+    DEPENDS
+        "${PROJECT_SOURCE_DIR}/src/bitmaps/manifest.respack"
+        "${PROJECT_SOURCE_DIR}/tools/respack.lua"
     COMMAND luajit-minilua ../../tools/respack.lua manifest.respack "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.cpp" "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.h"
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/src/bitmaps
 )

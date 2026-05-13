@@ -18,14 +18,15 @@ agi::fs::path BuildFilename(agi::fs::path const& media_filename,
                             std::string const& cache_directory_token,
                             std::string const& extension,
                             std::vector<std::string> const& parts) {
-	auto result = config::path->Decode(cache_directory_token)
+	auto filename = cache_directory_token
 		+ std::to_string(agi::util::crc32(agi::fs::PathToString(media_filename)))
 		+ "_" + std::to_string(agi::fs::Size(media_filename))
 		+ "_" + std::to_string(agi::fs::ModifiedTime(media_filename));
 	for (auto const& part : parts)
-		result += "_" + part;
-	result += extension;
+		filename += "_" + part;
+	filename += extension;
 
+	auto result = config::path->Decode(filename);
 	agi::fs::CreateDirectory(result.parent_path());
 	return result;
 }

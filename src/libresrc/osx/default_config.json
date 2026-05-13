@@ -355,6 +355,12 @@
 			"Index All Tracks" : true,
 			"Log Level" : "quiet"
 		},
+		"LsmasNative" : {
+			"Cache" : {
+				"Files" : 20,
+				"Size" : 42
+			}
+		},
 		"Video" : {
 			"Cache" : {
 				"Size" : 128
@@ -364,8 +370,7 @@
 				"Unsafe Seeking" : false
 			},
 			"LsmasNative" : {
-				"Decoding Threads" : 0,
-				"Unsafe Seeking" : false
+				"Decoding Threads" : 0
 			}
 		}
 	},

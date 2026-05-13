@@ -905,7 +905,6 @@ void BuildAdvancedVideoPage(OptionPage *p) {
 #ifdef WITH_LSMASNATIVE
 	binder->AddCategory(wxS("LsmasNative"));
 	binder->AddInt(_("Decoding threads"), "Provider/Video/LsmasNative/Decoding Threads", 0, INT_MAX);
-	binder->AddBool(_("Enable unsafe seeking"), "Provider/Video/LsmasNative/Unsafe Seeking");
 #endif
 
 	p->sizer->Add(grid, 1, wxEXPAND);

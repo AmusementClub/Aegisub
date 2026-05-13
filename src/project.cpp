@@ -130,7 +130,6 @@ Project::Project(agi::Context *c) : context(c) {
 		OPT_SUB("Provider/Video/FFmpegSource/Decoding Threads", &Project::ReloadVideo, this),
 		OPT_SUB("Provider/Video/FFmpegSource/Unsafe Seeking", &Project::ReloadVideo, this),
 		OPT_SUB("Provider/Video/LsmasNative/Decoding Threads", &Project::ReloadVideo, this),
-		OPT_SUB("Provider/Video/LsmasNative/Unsafe Seeking", &Project::ReloadVideo, this),
 		OPT_SUB("Subtitle/Provider", &Project::ReloadSubtitlesProvider, this),
 		OPT_SUB("Video/Provider", &Project::ReloadVideo, this),
 	});

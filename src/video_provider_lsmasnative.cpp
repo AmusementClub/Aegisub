@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -204,6 +205,7 @@ class LsmasVideoProvider final : public VideoProvider {
     SourceFrameFormatInfo native_format_info;
     int native_pix_fmt = -1;
     std::string native_format_name;
+    std::string cache_filename_utf8;
     std::vector<int> keyframes;
     agi::vfr::Framerate timecodes;
     bool has_audio = false;
@@ -211,7 +213,10 @@ class LsmasVideoProvider final : public VideoProvider {
 
 public:
     LsmasVideoProvider(agi::fs::path const& filename, std::string const&, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
-    ~LsmasVideoProvider() override;
+    ~LsmasVideoProvider() override {
+        if (handle)
+            lsmas::GetApi().av_close(handle);
+    }
 
     void GetFrame(int n, VideoFrame &frame) override;
     bool GetNativeFrame(int n, SourceFrame& frame, std::shared_ptr<void>& owner) override;
@@ -301,40 +306,43 @@ LsmasVideoProvider::LsmasVideoProvider(agi::fs::path const& filename, std::strin
     int stream_index = lsmas_provider::SelectTrack(filename, lsmas_provider::TrackType::Video, choice_sink);
     if (stream_index < 0)
         throw VideoNotSupported("no video tracks found");
-    has_audio = !lsmas_provider::ProbeTracks(filename, lsmas_provider::TrackType::Audio).empty();
 
-    lsmas_video_open_options_t options = {};
-    options.stream_index = stream_index;
-    options.threads = OPT_GET("Provider/Video/LsmasNative/Decoding Threads")->GetInt();
-    options.seek_mode = OPT_GET("Provider/Video/LsmasNative/Unsafe Seeking")->GetBool() ? LSMAS_SEEK_UNSAFE : LSMAS_SEEK_NORMAL;
-    options.seek_threshold = 10;
-    options.fpsden = 1;
-    options.prefer_hw = LSMAS_HW_NONE;
-    options.cache_index = 1;
-    options.soft_reset = 1;
-    options.repeat = 1;
-    options.dominance = LSMAS_DOMINANCE_OBEY;
+    auto cache_name = lsmas_provider::GetIndexCacheFilename(filename);
+    cache_filename_utf8 = agi::fs::PathToString(cache_name);
+
+    auto video_options = lsmas_provider::MakeVideoOpenOptions(stream_index);
+    video_options.cachefile = cache_filename_utf8.c_str();
+
+    auto audio_options = lsmas_provider::MakeAudioOpenOptions(-1, OPT_GET("Provider/Audio/LsmasNative/Downmix")->GetBool());
+    audio_options.cachefile = cache_filename_utf8.c_str();
 
     lsmas_provider::ErrorString error;
     if (br) {
         br->Run([&](agi::ProgressSink *ps) {
             ps->SetTitle("Indexing");
-            ps->SetMessage("Reading timecodes and frame data");
-            handle = api.video_open_with_progress_utf8(filename_utf8.c_str(), &options, lsmas_provider::ProgressCallback, ps, error.Out());
+            ps->SetMessage("Reading audio, timecodes and frame data");
+            handle = api.av_open_with_progress_utf8(filename_utf8.c_str(), &video_options, &audio_options, lsmas_provider::ProgressCallback, ps, error.Out());
         });
     }
     else {
-        handle = api.video_open_with_progress_utf8(filename_utf8.c_str(), &options, nullptr, nullptr, error.Out());
+        handle = api.av_open_with_progress_utf8(filename_utf8.c_str(), &video_options, &audio_options, nullptr, nullptr, error.Out());
     }
     if (!handle)
         throw VideoOpenError(error.Message("failed to open video"));
     auto close_handle_on_error = agi::make_scope_exit([&] {
         if (handle) {
-            api.video_close(handle);
+            api.av_close(handle);
             handle = nullptr;
         }
     });
+    agi::fs::Touch(cache_name);
+    lsmas_provider::CleanIndexCache();
 
+    lsmas_audio_info_t audio_info = {};
+    error.Reset();
+    has_audio = api.audio_get_info(handle, &audio_info, error.Out()) >= 0;
+
+    error.Reset();
     if (api.video_get_info(handle, &info, error.Out()) < 0 || info.width <= 0 || info.height <= 0 || info.num_frames <= 0)
         throw VideoOpenError(error.Message("failed to query video info"));
 
@@ -364,11 +372,6 @@ LsmasVideoProvider::LsmasVideoProvider(agi::fs::path const& filename, std::strin
     close_handle_on_error.release();
 }
 
-LsmasVideoProvider::~LsmasVideoProvider() {
-    if (handle)
-        lsmas::GetApi().video_close(handle);
-}
-
 bool LsmasVideoProvider::SetOutputMode(SourceFrameOutputMode mode) {
     if (mode != SourceFrameOutputMode::Native && mode != SourceFrameOutputMode::Bgra8)
         return false;
@@ -379,15 +382,37 @@ bool LsmasVideoProvider::SetOutputMode(SourceFrameOutputMode mode) {
 void LsmasVideoProvider::GetFrame(int n, VideoFrame &frame) {
     auto const& api = lsmas::GetApi();
     n = std::clamp(n, 0, info.num_frames - 1);
-    frame.width = info.width;
-    frame.height = info.height;
-    frame.pitch = info.width * 4;
-    frame.flipped = false;
-    frame.data.resize(static_cast<size_t>(frame.pitch) * static_cast<size_t>(frame.height));
 
     lsmas_provider::ErrorString error;
-    if (api.video_get_frame_bgra(handle, n, frame.data.data(), static_cast<int32_t>(frame.pitch), error.Out()) < 0)
+    lsmas_video_frame_buffer_layout_t layout = {};
+    int64_t required = api.video_get_frame(handle, n, LSMAS_VIDEO_FRAME_OUTPUT_BGRA, nullptr, 0, &layout, error.Out());
+    if (required < 0)
         throw VideoDecodeError(error.Message("failed to decode BGRA frame"));
+
+    if (layout.width <= 0 || layout.height <= 0 || layout.plane_count != 1 || layout.plane_stride[0] <= 0 || required <= 0)
+        throw VideoDecodeError("invalid BGRA frame layout returned by LsmasNative");
+    if (static_cast<uint64_t>(required) > static_cast<uint64_t>(std::numeric_limits<size_t>::max()))
+        throw VideoDecodeError("BGRA frame is too large");
+
+    auto const pitch = static_cast<size_t>(layout.plane_stride[0]);
+    auto const height = static_cast<size_t>(layout.height);
+    if (height && pitch > std::numeric_limits<size_t>::max() / height)
+        throw VideoDecodeError("BGRA frame dimensions are too large");
+    if (static_cast<size_t>(required) < pitch * height)
+        throw VideoDecodeError("invalid BGRA frame buffer size returned by LsmasNative");
+
+    frame.width = static_cast<size_t>(layout.width);
+    frame.height = height;
+    frame.pitch = pitch;
+    frame.flipped = false;
+    frame.data.resize(static_cast<size_t>(required));
+
+    error.Reset();
+    required = api.video_get_frame(handle, n, LSMAS_VIDEO_FRAME_OUTPUT_BGRA, frame.data.data(), layout.plane_stride[0], &layout, error.Out());
+    if (required < 0)
+        throw VideoDecodeError(error.Message("failed to decode BGRA frame"));
+    if (static_cast<uint64_t>(required) > static_cast<uint64_t>(frame.data.size()))
+        throw VideoDecodeError("BGRA frame grew during decode");
 }
 
 bool LsmasVideoProvider::GetNativeFrame(int n, SourceFrame& out, std::shared_ptr<void>& owner) {

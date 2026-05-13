@@ -655,6 +655,7 @@ add_executable(Aegisub WIN32
     src/persist_location.cpp
     src/preferences.cpp
     src/preferences_base.cpp
+    src/provider_index_cache.cpp
     src/project.cpp
     src/resolution_resampler.cpp
     src/search_replace_engine.cpp
@@ -1075,8 +1076,20 @@ endif()
 set(HAVE_LSMASNATIVE OFF)
 option(WITH_LSMASNATIVE "Enable LsmasNative provider support" ON)
 if(WITH_LSMASNATIVE)
+    set(LSMASNATIVE_GENERATED_API "${CMAKE_CURRENT_SOURCE_DIR}/src/lsmas_native_api.generated.h")
+    set(LSMASNATIVE_FUNCTIONS_INC "${CMAKE_CURRENT_SOURCE_DIR}/vendor/lsmasnative/lsmas_native_api.functions.inc")
+    if(NOT EXISTS "${LSMASNATIVE_GENERATED_API}" OR NOT EXISTS "${LSMASNATIVE_FUNCTIONS_INC}")
+        message(FATAL_ERROR
+            "WITH_LSMASNATIVE is ON, but generated LsmasNative API files are missing.\n"
+            "Run: dotnet vendor/lsmasnative/gen_lsmas_native_api.cs -- --mode used --header /path/to/lsmas_native.h"
+        )
+    endif()
+
     set(HAVE_LSMASNATIVE ON)
     target_compile_definitions(Aegisub PRIVATE "WITH_LSMASNATIVE")
+    target_include_directories(Aegisub PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/lsmasnative"
+    )
     target_sources(Aegisub PRIVATE
         src/lsmas_native_runtime.cpp
         src/lsmas_provider_common.cpp

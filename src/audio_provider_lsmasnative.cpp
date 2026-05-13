@@ -13,10 +13,12 @@
 
 #include <algorithm>
 #include <memory>
+#include <string>
 
 namespace {
 class LsmasAudioProvider final : public agi::AudioProvider {
     lsmas_handle_t *handle = nullptr;
+    std::string cache_filename_utf8;
 
     void FillBuffer(void *buf, int64_t start, int64_t count) const override {
         lsmas_provider::ErrorString error;
@@ -45,19 +47,17 @@ public:
 LsmasAudioProvider::LsmasAudioProvider(agi::fs::path const& filename, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
     auto const& api = lsmas::GetApi();
     auto const filename_utf8 = agi::fs::PathToString(filename);
+    bool const downmix = OPT_GET("Provider/Audio/LsmasNative/Downmix")->GetBool();
 
     int stream_index = lsmas_provider::SelectTrack(filename, lsmas_provider::TrackType::Audio, choice_sink);
     if (stream_index < 0)
         throw agi::AudioDataNotFound("no audio tracks found");
 
-    lsmas_audio_open_options_t options = {};
-    options.stream_index = stream_index;
-    options.threads = 0;
-    options.av_sync = 1;
-    options.cache_index = 1;
-    options.sample_format = LSMAS_AUDIO_S16;
-    if (OPT_GET("Provider/Audio/LsmasNative/Downmix")->GetBool())
-        options.channel_layout = 0x4; // AV_CH_FRONT_CENTER
+    auto cache_name = lsmas_provider::GetIndexCacheFilename(filename);
+    cache_filename_utf8 = agi::fs::PathToString(cache_name);
+
+    auto options = lsmas_provider::MakeAudioOpenOptions(stream_index, downmix);
+    options.cachefile = cache_filename_utf8.c_str();
 
     lsmas_provider::ErrorString error;
     if (br) {
@@ -78,6 +78,8 @@ LsmasAudioProvider::LsmasAudioProvider(agi::fs::path const& filename, agi::Backg
             handle = nullptr;
         }
     });
+    agi::fs::Touch(cache_name);
+    lsmas_provider::CleanIndexCache();
 
     lsmas_audio_info_t info = {};
     error.Reset();

@@ -3,7 +3,9 @@
 #include <libaegisub/exception.h>
 #include <libaegisub/native_library.h>
 
+#include <cstdint>
 #include <mutex>
+#include <string>
 
 namespace lsmas {
 namespace {
@@ -22,36 +24,72 @@ void ResolveSymbol(agi::native::Library& library, T& out, char const *name) {
     out = library.ResolveSymbol<T>(name);
 }
 
+template <typename T>
+void TryResolveSymbol(agi::native::Library& library, T& out, char const *name) {
+    out = library.TryResolveSymbol<T>(name);
+}
+
 void ResolveSymbols(agi::native::Library& library, Api& loaded) {
-    ResolveSymbol(library, loaded.probe_streams_json_utf8, "lsmas_probe_streams_json_utf8");
-    ResolveSymbol(library, loaded.get_versions_json_utf8, "lsmas_get_versions_json_utf8");
-    ResolveSymbol(library, loaded.video_open_with_progress_utf8, "lsmas_video_open_with_progress_utf8");
-    ResolveSymbol(library, loaded.video_close, "lsmas_video_close");
-    ResolveSymbol(library, loaded.video_get_info, "lsmas_video_get_info");
-    ResolveSymbol(library, loaded.video_get_stream_props, "lsmas_video_get_stream_props");
-    ResolveSymbol(library, loaded.video_get_time_base, "lsmas_video_get_time_base");
-    ResolveSymbol(library, loaded.video_get_pts_list, "lsmas_video_get_pts_list");
-    ResolveSymbol(library, loaded.video_get_source_frame_count, "lsmas_video_get_source_frame_count");
-    ResolveSymbol(library, loaded.video_get_source_keyframe_flags, "lsmas_video_get_source_keyframe_flags");
-    ResolveSymbol(library, loaded.video_get_frame_bgra, "lsmas_video_get_frame_bgra");
-    ResolveSymbol(library, loaded.video_acquire_avframe, "lsmas_video_acquire_avframe");
-    ResolveSymbol(library, loaded.video_frame_get_avframe, "lsmas_video_frame_get_avframe");
-    ResolveSymbol(library, loaded.video_frame_get_pix_fmt_name, "lsmas_video_frame_get_pix_fmt_name");
-    ResolveSymbol(library, loaded.video_frame_get_props, "lsmas_video_frame_get_props");
-    ResolveSymbol(library, loaded.video_frame_get_format_info, "lsmas_video_frame_get_format_info");
-    ResolveSymbol(library, loaded.video_frame_get_plane, "lsmas_video_frame_get_plane");
-    ResolveSymbol(library, loaded.video_frame_get_side_data, "lsmas_video_frame_get_side_data");
-    ResolveSymbol(library, loaded.video_release_frame, "lsmas_video_release_frame");
-    ResolveSymbol(library, loaded.audio_open_with_progress_utf8, "lsmas_audio_open_with_progress_utf8");
-    ResolveSymbol(library, loaded.audio_close, "lsmas_audio_close");
-    ResolveSymbol(library, loaded.audio_get_info, "lsmas_audio_get_info");
-    ResolveSymbol(library, loaded.audio_get_samples, "lsmas_audio_get_samples");
-    ResolveSymbol(library, loaded.free, "lsmas_free");
+#define AGI_LSMAS_REQUIRED(symbol, member) ResolveSymbol(library, loaded.member, #symbol);
+#define AGI_LSMAS_OPTIONAL(symbol, member) TryResolveSymbol(library, loaded.member, #symbol);
+#include "lsmas_native_api.functions.inc"
+#undef AGI_LSMAS_OPTIONAL
+#undef AGI_LSMAS_REQUIRED
+}
+
+std::string FormatApiVersion(int32_t version) {
+    return std::to_string((version >> 16) & 0xff) + "."
+        + std::to_string((version >> 8) & 0xff) + "."
+        + std::to_string(version & 0xff);
+}
+
+void ValidateApiVersion(Api const& loaded) {
+    int32_t const actual = loaded.get_api_version();
+    if (actual == static_cast<int32_t>(LSMAS_NATIVE_API_VERSION))
+        return;
+
+    throw agi::EnvironmentError(
+        "LsmasNative API version mismatch: loaded " + FormatApiVersion(actual)
+        + " (" + std::to_string(actual) + "), expected "
+        + std::string(LSMAS_NATIVE_API_VERSION_STRING)
+        + " (" + std::to_string(static_cast<int32_t>(LSMAS_NATIVE_API_VERSION)) + ").");
+}
+
+std::string GetRuntimeVersionDetail() {
+    Api loaded;
+    {
+        std::lock_guard<std::mutex> lock(api_mutex);
+        loaded = api;
+    }
+
+    if (!loaded.get_api_version || !loaded.get_versions_json_utf8 || !loaded.free)
+        return {};
+
+    int32_t const actual = loaded.get_api_version();
+    std::string detail = "api=" + FormatApiVersion(actual)
+        + ", expected-api=" + std::string(LSMAS_NATIVE_API_VERSION_STRING);
+
+    char *error = nullptr;
+    char *versions = loaded.get_versions_json_utf8(&error);
+    if (versions && *versions)
+        detail += ", versions=" + std::string(versions);
+    else if (error && *error)
+        detail += ", versions-error=" + std::string(error);
+    else
+        detail += ", versions unavailable";
+
+    if (versions)
+        loaded.free(versions);
+    if (error)
+        loaded.free(error);
+
+    return detail;
 }
 
 void InitializeRuntime(agi::native::Library& library) {
     Api loaded;
     ResolveSymbols(library, loaded);
+    ValidateApiVersion(loaded);
 
     std::lock_guard<std::mutex> lock(api_mutex);
     api = loaded;
@@ -62,7 +100,7 @@ agi::native::CachedLibrary runtime_library(
     "LsmasNative runtime",
     kLogTag,
     InitializeRuntime,
-    agi::native::CachedLibrary::DetailFunction(),
+    GetRuntimeVersionDetail,
     GetRuntimeLoadOptions());
 
 std::string FormatLoadError(std::string const& message) {

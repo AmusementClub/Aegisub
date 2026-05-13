@@ -44,6 +44,12 @@ int SelectTrack(agi::fs::path const& filename,
                 TrackType type,
                 std::shared_ptr<agi::SingleChoiceInteractionSink> const& choice_sink);
 
+agi::fs::path GetIndexCacheFilename(agi::fs::path const& filename);
+void CleanIndexCache();
+
+lsmas_video_open_options_t MakeVideoOpenOptions(int stream_index);
+lsmas_audio_open_options_t MakeAudioOpenOptions(int stream_index, bool downmix);
+
 int ProgressCallback(void *userdata, const char *message_utf8, int32_t percent);
 
 }

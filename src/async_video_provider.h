@@ -227,6 +227,8 @@ public:
 	std::string GetNativeFormatDescription() const { return source_provider->GetNativeFormatDescription(); }
 	bool ShouldSetVideoProperties() const { return source_provider->ShouldSetVideoProperties(); }
 	bool HasAudio() const                 { return source_provider->HasAudio(); }
+	bool CanGenerateSceneChangeKeyframes() const;
+	void GenerateSceneChangeKeyframes(agi::fs::path const& output_path, agi::BackgroundRunner *br);
 
 	/// @brief Constructor
 	/// @param videoFileName File to open

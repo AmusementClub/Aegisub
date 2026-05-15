@@ -29,6 +29,7 @@
 #include "video_provider_manager.h"
 #include "perf_trace.h"
 
+#include <libaegisub/background_runner.h>
 #include <libaegisub/dispatch.h>
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
@@ -655,6 +656,29 @@ AsyncVideoProviderMemoryStats AsyncVideoProvider::CollectMemoryStats() {
 		}
 	});
 	return stats;
+}
+
+bool AsyncVideoProvider::CanGenerateSceneChangeKeyframes() const {
+	bool result = false;
+	worker->Sync([&] {
+		result = source_provider->CanGenerateSceneChangeKeyframes();
+	});
+	return result;
+}
+
+void AsyncVideoProvider::GenerateSceneChangeKeyframes(agi::fs::path const& output_path, agi::BackgroundRunner *br) {
+	auto run = [&](agi::ProgressSink *ps) {
+		worker->Sync([&] {
+			while (ProcessPending()) { }
+			source_provider->GenerateSceneChangeKeyframes(output_path, ps);
+			ResetCachedSourceFrame();
+		});
+	};
+
+	if (br)
+		br->Run(run);
+	else
+		run(nullptr);
 }
 
 void AsyncVideoProvider::LoadSubtitles(const AssFile *new_subs) throw() {

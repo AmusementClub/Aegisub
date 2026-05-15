@@ -105,6 +105,7 @@ function Configure-CMake([string]$CMakePath, [string]$GeneratorName) {
         '-DWITH_FFMS2=ON',
         "-DFFMS2_INCLUDE_DIR=$resolvedFFMS2IncludeDir",
         "-DWITH_LSMASNATIVE=ON",
+        "-DWITH_SCENECHANGE=ON",
         '-DWITH_LIBPLACEBO=ON',
         "-DLibPlacebo_INCLUDE_DIR=$resolvedLibPlaceboIncludeDir",
         '-DAEGISUB_MATROSKA_PARSING=ON',

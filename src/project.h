@@ -61,6 +61,9 @@ class Project {
 	bool DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops::OpenedVideoSummary* summary = nullptr);
 	void DoLoadTimecodes(agi::fs::path const& path);
 	void DoLoadKeyframes(agi::fs::path const& path);
+#ifdef WITH_SCENECHANGE
+	bool TryLoadSceneChangeKeyframes(agi::fs::path const& video_path);
+#endif
 
 	void LoadUnloadFiles(ProjectProperties properties);
 	void UpdateRelativePaths();

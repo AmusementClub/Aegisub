@@ -1098,6 +1098,16 @@ if(WITH_LSMASNATIVE)
     )
 endif()
 
+set(HAVE_SCENECHANGE OFF)
+option(WITH_SCENECHANGE "Enable SceneChange NativeAOT runtime support" ON)
+if(WITH_SCENECHANGE)
+    set(HAVE_SCENECHANGE ON)
+    target_compile_definitions(Aegisub PRIVATE "WITH_SCENECHANGE")
+    target_sources(Aegisub PRIVATE
+        src/scenechange_native_runtime.cpp
+    )
+endif()
+
 find_package(FFTW)
 option(WITH_FFTW3 "Enable fftw support" ${FFTW_FOUND})
 if(WITH_FFTW3)
@@ -1318,6 +1328,7 @@ message(STATUS "\n"
     "  AviSynth:              ${HAVE_AVISYNTH}\n"
     "  FFMS2:                 ${HAVE_FFMS2}\n"
     "  LsmasNative:           ${HAVE_LSMASNATIVE}\n"
+    "  SceneChange:           ${HAVE_SCENECHANGE}\n"
     "  libplacebo:            ${HAVE_LIBPLACEBO}\n"
     "\n"
     "Options\n"

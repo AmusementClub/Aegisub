@@ -372,6 +372,12 @@
 				"Size" : 42
 			}
 		},
+		"SceneChange" : {
+			"Cache" : {
+				"Files" : 20,
+				"Size" : 42
+			}
+		},
 		"Video" : {
 			"Cache" : {
 				"Size" : 128

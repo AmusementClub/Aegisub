@@ -31,6 +31,9 @@
 #include "mkv_wrap.h"
 #include "options.h"
 #include "perf_trace.h"
+#ifdef WITH_SCENECHANGE
+#include "provider_index_cache.h"
+#endif
 #include "provider_selection_diagnostics.h"
 #include "project_session_ops.h"
 #include "selection_controller.h"
@@ -55,6 +58,7 @@
 #include <libaegisub/string_utils.h>
 
 #include <chrono>
+#include <exception>
 #include <filesystem>
 
 namespace {
@@ -112,6 +116,33 @@ void ApplyPostOpenVideoPlan(agi::Context *context, aegisub::video_session_ops::P
 		video_controller->SetAspectRatio(AspectRatio::Default);
 	video_controller->JumpToFrame(plan.initial_frame);
 }
+
+#ifdef WITH_SCENECHANGE
+char const *kSceneChangeKeyframeCacheToken = "?local/scenechangekeyframes/";
+
+agi::fs::path GetSceneChangeKeyframeCacheFilename(agi::fs::path const& filename) {
+	return aegisub::provider_index_cache::BuildFilename(filename,
+		kSceneChangeKeyframeCacheToken,
+		".kf.txt",
+		{ "wwxd" });
+}
+
+void CleanSceneChangeKeyframeCache() {
+	aegisub::provider_index_cache::Clean(kSceneChangeKeyframeCacheToken,
+		"*.kf.txt",
+		"Provider/SceneChange/Cache/Size",
+		"Provider/SceneChange/Cache/Files");
+}
+
+void RemoveSceneChangeKeyframeCacheFile(agi::fs::path const& path) {
+	try {
+		if (!path.empty())
+			agi::fs::Remove(path);
+	}
+	catch (...) {
+	}
+}
+#endif
 }
 
 Project::Project(agi::Context *c) : context(c) {
@@ -513,6 +544,11 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 	timecodes = opened_video.timecodes;
 	keyframes = opened_video.keyframes;
 	video_provider->SetSubtitlesTimecodes(timecodes);
+#ifdef WITH_SCENECHANGE
+	bool scenechange_keyframes_loaded = TryLoadSceneChangeKeyframes(path);
+#else
+	bool scenechange_keyframes_loaded = false;
+#endif
 
 	std::string warning = opened_video.warning;
 	if (!warning.empty())
@@ -522,7 +558,8 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 	if (summary)
 		*summary = opened_video;
 
-	AnnounceKeyframesModified(keyframes);
+	if (!scenechange_keyframes_loaded)
+		AnnounceKeyframesModified(keyframes);
 	AnnounceTimecodesModified(timecodes);
 	auto const duration_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - load_started).count();
 	perf_trace::TraceVideoOpen(path, video_provider->GetWidth(), video_provider->GetHeight(), video_provider->GetFrameCount(), video_provider->HasAudio(), video_provider->GetDecoderName(), duration_ms);
@@ -588,6 +625,71 @@ void Project::CloseTimecodes() {
 	RefreshVideoFrameForTimecodesChange();
 	AnnounceTimecodesModified(timecodes);
 }
+
+#ifdef WITH_SCENECHANGE
+bool Project::TryLoadSceneChangeKeyframes(agi::fs::path const& video_path) {
+	if (!video_provider || video_provider->GetDecoderName() != "LsmasNative")
+		return false;
+
+	auto cache_path = GetSceneChangeKeyframeCacheFilename(video_path);
+	if (agi::fs::FileExists(cache_path)) {
+		try {
+			DoLoadKeyframes(cache_path);
+			agi::fs::Touch(cache_path);
+			CleanSceneChangeKeyframeCache();
+			return true;
+		}
+		catch (agi::Exception const& err) {
+			LOG_W("project/scenechange")
+				<< "Ignoring invalid SceneChange keyframe cache "
+				<< agi::fs::PathToString(cache_path)
+				<< ": " << err.GetMessage();
+			RemoveSceneChangeKeyframeCacheFile(cache_path);
+		}
+		catch (std::exception const& err) {
+			LOG_W("project/scenechange")
+				<< "Ignoring invalid SceneChange keyframe cache "
+				<< agi::fs::PathToString(cache_path)
+				<< ": " << err.what();
+			RemoveSceneChangeKeyframeCacheFile(cache_path);
+		}
+	}
+
+	if (!video_provider->CanGenerateSceneChangeKeyframes())
+		return false;
+
+	auto answer = context->RequestInteraction({
+		from_wx(_("Generate keyframes?")),
+		from_wx(_("No cached SceneChange keyframe file was found for this video.\n\nGenerating it may use a lot of CPU and take a long time. Generate it now?")),
+		agi::InteractionButtons::YesNo,
+		agi::InteractionIcon::Question
+	});
+	if (answer != agi::InteractionResult::Yes)
+		return false;
+
+	try {
+		video_provider->GenerateSceneChangeKeyframes(cache_path,
+			GetProgressRunner("Generating keyframes", "Scanning scene changes"));
+		CleanSceneChangeKeyframeCache();
+		DoLoadKeyframes(cache_path);
+		return true;
+	}
+	catch (agi::UserCancelException const&) {
+		RemoveSceneChangeKeyframeCacheFile(cache_path);
+		return false;
+	}
+	catch (agi::Exception const& err) {
+		RemoveSceneChangeKeyframeCacheFile(cache_path);
+		ShowError(err.GetMessage(), "Error generating keyframes");
+	}
+	catch (std::exception const& err) {
+		RemoveSceneChangeKeyframeCacheFile(cache_path);
+		ShowError(err.what(), "Error generating keyframes");
+	}
+
+	return false;
+}
+#endif
 
 void Project::DoLoadKeyframes(agi::fs::path const& path) {
 	keyframes = agi::keyframe::Load(path);

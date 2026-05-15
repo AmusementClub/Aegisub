@@ -38,6 +38,7 @@
 #include "video_color_metadata.h"
 
 #include <libaegisub/exception.h>
+#include <libaegisub/fs_fwd.h>
 #include <libaegisub/vfr.h>
 
 #include <memory>
@@ -45,6 +46,16 @@
 #include <vector>
 
 struct VideoFrame;
+namespace agi { class BackgroundRunner; }
+namespace agi { class ProgressSink; }
+
+DEFINE_EXCEPTION(VideoProviderError, agi::Exception);
+/// File could be opened, but is not a supported format
+DEFINE_EXCEPTION(VideoNotSupported, VideoProviderError);
+/// File appears to be a supported format, but could not be opened
+DEFINE_EXCEPTION(VideoOpenError, VideoProviderError);
+/// Error of some sort occurred while decoding a frame
+DEFINE_EXCEPTION(VideoDecodeError, VideoProviderError);
 
 struct VideoProviderMemoryStats {
 	size_t cache_total_bytes = 0;
@@ -137,13 +148,11 @@ public:
 
 	/// Does the file which this provider is reading have an audio track?
 	virtual bool HasAudio() const { return false; }
+
+	virtual bool CanGenerateSceneChangeKeyframes() const { return false; }
+	virtual void GenerateSceneChangeKeyframes(agi::fs::path const& output_path, agi::ProgressSink *ps) {
+		(void)output_path;
+		(void)ps;
+		throw VideoProviderError("This video provider cannot generate SceneChange keyframes.");
+	}
 };
-
-DEFINE_EXCEPTION(VideoProviderError, agi::Exception);
-/// File could be opened, but is not a supported format
-DEFINE_EXCEPTION(VideoNotSupported, VideoProviderError);
-/// File appears to be a supported format, but could not be opened
-DEFINE_EXCEPTION(VideoOpenError, VideoProviderError);
-
-/// Error of some sort occurred while decoding a frame
-DEFINE_EXCEPTION(VideoDecodeError, VideoProviderError);

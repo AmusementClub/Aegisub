@@ -5,16 +5,23 @@
 #include "lsmas_native_api.h"
 #include "lsmas_provider_common.h"
 #include "options.h"
+#ifdef WITH_SCENECHANGE
+#include "scenechange_native_api.h"
+#endif
 #include "source_frame.h"
 #include "video_frame.h"
 
 #include <libaegisub/background_runner.h>
+#include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
+#ifdef WITH_SCENECHANGE
+#include <libaegisub/keyframe.h>
+#endif
 #include <libaegisub/make_unique.h>
+#include <libaegisub/log.h>
 #include <libaegisub/scope_exit.h>
 
 #include <algorithm>
-#include <array>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -239,6 +246,10 @@ public:
     std::string GetDecoderName() const override { return "LsmasNative"; }
     bool WantsCaching() const override { return false; }
     bool HasAudio() const override { return has_audio; }
+#ifdef WITH_SCENECHANGE
+    bool CanGenerateSceneChangeKeyframes() const override;
+    void GenerateSceneChangeKeyframes(agi::fs::path const& output_path, agi::ProgressSink *ps) override;
+#endif
 };
 
 class LsmasFrameOwner {
@@ -372,12 +383,152 @@ LsmasVideoProvider::LsmasVideoProvider(agi::fs::path const& filename, std::strin
     close_handle_on_error.release();
 }
 
+#ifdef WITH_SCENECHANGE
+std::string SceneChangeError(char const *error, std::string const& fallback) {
+    if (error && *error)
+        return error;
+    return fallback;
+}
+
+void ThrowSceneChangeError(char const *error, std::string const& fallback) {
+    throw VideoProviderError(SceneChangeError(error, fallback));
+}
+
+constexpr int32_t kSceneChangeCanceled = 1;
+
+struct SceneChangeProgressState {
+    agi::ProgressSink *sink = nullptr;
+    int total_frames = 0;
+};
+
+int32_t SCENECHANGE_NATIVE_CALL SceneChangeProgressCallback(void *user_data, int32_t processed_frames, int32_t) {
+    auto *state = static_cast<SceneChangeProgressState *>(user_data);
+    if (!state || !state->sink)
+        return 0;
+
+    try {
+        if (state->sink->IsCancelled())
+            return kSceneChangeCanceled;
+
+        state->sink->SetProgress(std::min(processed_frames, state->total_frames), state->total_frames);
+
+        return state->sink->IsCancelled() ? kSceneChangeCanceled : 0;
+    }
+    catch (...) {
+        return kSceneChangeCanceled;
+    }
+}
+
+std::vector<int> ScanSceneChangeKeyframes(lsmas_handle_t *handle,
+                                          lsmas_video_info_t const& info,
+                                          agi::ProgressSink *ps) {
+    if (!handle)
+        throw VideoProviderError("LsmasNative handle is not open.");
+    if (info.width <= 0 || info.height <= 0 || info.num_frames <= 0)
+        throw VideoProviderError("LsmasNative returned invalid video dimensions for SceneChange.");
+
+    auto const& sc = scenechange::GetApi();
+    auto const& lsm = lsmas::GetApi();
+
+    SceneChangeProgressState progress_state { ps, info.num_frames };
+
+    char sc_error[4096] = {};
+    scenechange_wwxd_context_t *ctx = sc.wwxd_create(info.width, info.height, sc_error, sizeof(sc_error));
+    if (!ctx)
+        ThrowSceneChangeError(sc_error, "Failed to create SceneChange detector.");
+    auto destroy_ctx = agi::make_scope_exit([&] { sc.wwxd_destroy(ctx); });
+
+    int const rounded_width = (info.width + 15) & ~15;
+    int const rounded_height = (info.height + 15) & ~15;
+
+    std::vector<int> result;
+    result.reserve(std::min(std::max(info.num_frames / 20, 16), 4096));
+
+    if (ps) {
+        ps->SetTitle("Generating keyframes");
+        ps->SetMessage("Scanning scene changes");
+        ps->SetProgress(0, info.num_frames);
+    }
+
+    if (ps) {
+        int32_t const rc = sc.wwxd_set_progress_callback(ctx, SceneChangeProgressCallback, &progress_state, sc_error, sizeof(sc_error));
+        if (rc != 0)
+            ThrowSceneChangeError(sc_error, "Failed to set SceneChange progress callback.");
+    }
+
+    for (int frame = 0; frame < info.num_frames; ++frame) {
+        if (ps && ps->IsCancelled())
+            throw agi::UserCancelException("SceneChange keyframe generation canceled by user.");
+
+        int32_t stride = 0;
+        auto *dst = sc.wwxd_get_write_buffer(ctx, &stride, sc_error, sizeof(sc_error));
+        if (!dst)
+            ThrowSceneChangeError(sc_error, "Failed to get SceneChange write buffer.");
+
+        lsmas_provider::ErrorString error;
+        lsmas_video_frame_buffer_layout_t layout = {};
+        int64_t const bytes = lsm.video_get_frame(
+            handle,
+            frame,
+            LSMAS_VIDEO_FRAME_OUTPUT_GRAY8_PADDED16,
+            dst,
+            stride,
+            &layout,
+            error.Out());
+        if (bytes <= 0)
+            throw VideoDecodeError(error.Message("failed to decode Gray8Padded16 frame for SceneChange"));
+
+        if (layout.output_format != LSMAS_VIDEO_FRAME_OUTPUT_GRAY8_PADDED16 ||
+            layout.width != info.width ||
+            layout.height != info.height ||
+            layout.plane_count != 1 ||
+            layout.plane_stride[0] != stride ||
+            layout.plane_width[0] != rounded_width ||
+            layout.plane_height[0] != rounded_height ||
+            layout.required_bytes != bytes)
+            throw VideoDecodeError("LsmasNative returned invalid Gray8Padded16 frame layout for SceneChange.");
+
+        int32_t scene = 0;
+        int32_t const rc = sc.wwxd_commit_written_frame_no_pad(ctx, &scene, sc_error, sizeof(sc_error));
+        if (rc == kSceneChangeCanceled)
+            throw agi::UserCancelException("SceneChange keyframe generation canceled by user.");
+        if (rc != 0)
+            ThrowSceneChangeError(sc_error, "SceneChange failed while analyzing a frame.");
+        if (scene)
+            result.push_back(frame);
+    }
+
+    lsmas_provider::ErrorString flush_error;
+    if (lsm.video_flush)
+        lsm.video_flush(handle, flush_error.Out());
+
+    return result;
+}
+#endif
+
 bool LsmasVideoProvider::SetOutputMode(SourceFrameOutputMode mode) {
     if (mode != SourceFrameOutputMode::Native && mode != SourceFrameOutputMode::Bgra8)
         return false;
     output_mode = mode;
     return true;
 }
+
+#ifdef WITH_SCENECHANGE
+bool LsmasVideoProvider::CanGenerateSceneChangeKeyframes() const {
+    return scenechange::IsAvailable();
+}
+
+void LsmasVideoProvider::GenerateSceneChangeKeyframes(agi::fs::path const& output_path, agi::ProgressSink *ps) {
+    if (output_path.empty())
+        throw VideoProviderError("SceneChange keyframe output path is empty.");
+
+    auto generated = ScanSceneChangeKeyframes(handle, info, ps);
+    agi::keyframe::Save(output_path, generated);
+    LOG_I("provider/lsmasnative/scenechange")
+        << "Generated " << generated.size() << " SceneChange keyframes: "
+        << agi::fs::PathToString(output_path);
+}
+#endif
 
 void LsmasVideoProvider::GetFrame(int n, VideoFrame &frame) {
     auto const& api = lsmas::GetApi();

@@ -171,6 +171,28 @@
           "target": "runtimes/libplacebo.dll"
         }
       ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "lsmasnative",
+      "url": "https://github.com/MIRIMIRIM/LsmasSharp/releases/download/202605/lsmasnative-win64-akarinvs_202605.zip",
+      "path": [
+        {
+          "source": "lsmasnative.dll",
+          "target": "runtimes/lsmasnative.dll"
+        }
+      ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "scenechange_native",
+      "url": "https://github.com/MIRIMIRIM/SceneChangeSharp/releases/download/v0.0.2/scenechange_native-win-x64.7z",
+      "path": [
+        {
+          "source": "scenechange_native.dll",
+          "target": "runtimes/scenechange_native.dll"
+        }
+      ]
     }
   ]
 }

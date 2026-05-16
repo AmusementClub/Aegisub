@@ -36,6 +36,7 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	perf_trace::ResetAudioUiTimerInterval();
 	perf_trace::ObserveAudioUiTimerPosition(100);
 	perf_trace::ObserveAudioUiTimerPosition(120);
+	perf_trace::ObserveAudioUiDuration("audio_display.paint", 3.5, 640, 2, false);
 	perf_trace::AudioOutputSnapshot output_snapshot;
 	output_snapshot.backend_name = "xaudio2";
 	output_snapshot.reason = "unit_test";
@@ -90,6 +91,8 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_frame_delivered\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_frame_dropped\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_ui_timer_interval\""));
+	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_ui_duration\""));
+	EXPECT_NE(std::string::npos, trace.find("\"phase\":\"audio_display.paint\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_output_snapshot\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_memory_snapshot\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"window_open_phase_duration\""));
@@ -112,6 +115,8 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, summary.find("audio_ui_timer_interval.requested_ms=20"));
 	EXPECT_NE(std::string::npos, summary.find("audio_ui_timer_interval.jitter_target_ms="));
 	EXPECT_NE(std::string::npos, summary.find("audio_ui_timer_interval.count=1"));
+	EXPECT_NE(std::string::npos, summary.find("audio_ui_phase.audio_display.paint.count=1"));
+	EXPECT_NE(std::string::npos, summary.find("audio_ui_phase.audio_display.paint.total_ms=3.5"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output.samples=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output.low_water.count=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output_backend=xaudio2"));
@@ -149,6 +154,7 @@ TEST(PerfTrace, SupportsNamedTraceSelection) {
 	output_snapshot.fill_duration_ms = 0.5;
 	output_snapshot.starved = true;
 	output_snapshot.recovered = true;
+	perf_trace::ObserveAudioUiDuration("audio_display.scroll", 1.25, 128, 1, false);
 	perf_trace::ObserveAudioOutputSnapshot(output_snapshot);
 	LOG_W("perf_trace/test") << "warning event";
 	perf_trace::Shutdown();
@@ -160,10 +166,12 @@ TEST(PerfTrace, SupportsNamedTraceSelection) {
 	EXPECT_EQ(std::string::npos, trace.find("\"name\":\"video_frame_request\""));
 	EXPECT_EQ(std::string::npos, trace.find("\"kind\":\"log\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"lua_dialog_open_duration\""));
+	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_ui_duration\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_output_snapshot\""));
 
 	EXPECT_NE(std::string::npos, summary.find("trace.selection=audio,lua-dialog"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output.samples=1"));
+	EXPECT_NE(std::string::npos, summary.find("audio_ui_phase.audio_display.scroll.count=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output.starved.count=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output.recovered.count=1"));
 	EXPECT_EQ(std::string::npos, summary.find("frame.request.total=1"));

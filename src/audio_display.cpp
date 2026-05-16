@@ -51,8 +51,30 @@
 
 #include <algorithm>
 
+#include <chrono>
+
 #include <wx/dcbuffer.h>
 #include <wx/mousestate.h>
+
+namespace {
+using AudioTraceClock = std::chrono::steady_clock;
+constexpr double kAudioTraceSlowDurationMs = 8.0;
+
+AudioTraceClock::time_point AudioTraceStart() {
+	return perf_trace::IsEnabled() ? AudioTraceClock::now() : AudioTraceClock::time_point{};
+}
+
+double AudioTraceElapsedMs(AudioTraceClock::time_point started) {
+	return std::chrono::duration<double, std::milli>(AudioTraceClock::now() - started).count();
+}
+
+void ObserveAudioTraceDuration(char const* phase, AudioTraceClock::time_point started, int detail_a = -1, int detail_b = -1) {
+	if (started == AudioTraceClock::time_point{})
+		return;
+	auto const duration_ms = AudioTraceElapsedMs(started);
+	perf_trace::ObserveAudioUiDuration(phase, duration_ms, detail_a, detail_b, duration_ms >= kAudioTraceSlowDurationMs);
+}
+}
 
 /// @class AudioDisplayInteractionObject
 /// @brief Interface for objects on the audio display that can respond to mouse events
@@ -633,6 +655,7 @@ void AudioDisplay::ScrollBy(int pixel_amount, int mouse_x)
 
 void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 {
+	auto const trace_started = AudioTraceStart();
 	const wxSize client_size = GetClientSize();
 	const int client_width = client_size.GetWidth();
 
@@ -650,13 +673,14 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 	visible_marker_rects_precise = UpdateVisibleMarkerRectsForScroll(old_scroll_left, scroll_delta, client_width);
 
 	const wxRect audio_bounds(0, audio_top, client_width, audio_height);
-	if (scroll_delta != 0
+	bool const used_scroll_window = scroll_delta != 0
 		&& audio_bounds.GetWidth() > 0
 		&& audio_bounds.GetHeight() > 0
 		&& scroll_delta > -audio_bounds.GetWidth()
 		&& scroll_delta < audio_bounds.GetWidth()
 		&& !controller->IsPlaying()
-		&& track_cursor_label.empty())
+		&& track_cursor_label.empty();
+	if (used_scroll_window)
 	{
 		ScrollWindow(-scroll_delta, 0, &audio_bounds);
 		if (scroll_delta > 0)
@@ -670,6 +694,12 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 	{
 		Refresh();
 	}
+
+	ObserveAudioTraceDuration(
+		"audio_display.scroll",
+		trace_started,
+		scroll_delta >= 0 ? scroll_delta : -scroll_delta,
+		used_scroll_window ? 1 : 0);
 }
 
 void AudioDisplay::ScrollTimeRangeInView(const TimeRange &range)
@@ -871,15 +901,19 @@ void AudioDisplay::OnLoadTimer(wxTimerEvent&)
 void AudioDisplay::OnPaint(wxPaintEvent&)
 {
 	if (!audio_renderer_provider || !provider) return;
+	auto const trace_started = AudioTraceStart();
 
 	wxAutoBufferedPaintDC dc(this);
 
 	wxRect audio_bounds(0, audio_top, GetClientSize().GetWidth(), audio_height);
 	bool redraw_scrollbar = false;
 	bool redraw_timeline = false;
+	int region_count = 0;
+	int audio_region_count = 0;
 
 	for (wxRegionIterator region(GetUpdateRegion()); region; ++region)
 	{
+		++region_count;
 		wxRect updrect = region.GetRect();
 
 		redraw_scrollbar |= scrollbar->GetBounds().Intersects(updrect);
@@ -887,6 +921,7 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 
 		if (audio_bounds.Intersects(updrect))
 		{
+			++audio_region_count;
 			TimeRange updtime(
 				std::max(0, TimeFromRelativeX(updrect.x - foot_size)),
 				std::max(0, TimeFromRelativeX(updrect.x + updrect.width + foot_size)));
@@ -904,13 +939,17 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 		scrollbar->Paint(dc, HasFocus(), audio_load_position);
 	if (redraw_timeline)
 		timeline->Paint(dc);
+
+	ObserveAudioTraceDuration("audio_display.paint", trace_started, region_count, audio_region_count);
 }
 
 void AudioDisplay::PaintAudio(wxDC &dc, const TimeRange updtime, const wxRect updrect)
 {
+	auto const trace_started = AudioTraceStart();
 	auto pt = begin(style_ranges), pe = end(style_ranges);
 	while (pt != pe && pt + 1 != pe && (pt + 1)->first < updtime.begin()) ++pt;
 
+	int rendered_segment_count = 0;
 	while (pt != pe && pt->first < updtime.end())
 	{
 		const auto range_style = static_cast<AudioRenderingStyle>(pt->second);
@@ -919,10 +958,14 @@ void AudioDisplay::PaintAudio(wxDC &dc, const TimeRange updtime, const wxRect up
 		if (++pt != pe)
 			range_x2 = std::min(range_x2, RelativeXFromTime(pt->first));
 
-		if (range_x2 > range_x1)
+		if (range_x2 > range_x1) {
+			++rendered_segment_count;
 			audio_renderer->Render(dc, wxPoint(range_x1, audio_top),
 				range_x1 + scroll_left, range_x2 - range_x1, range_style);
+		}
 	}
+
+	ObserveAudioTraceDuration("audio_display.paint_audio", trace_started, updrect.width, rendered_segment_count);
 }
 
 void AudioDisplay::PaintMarkers(wxDC &dc, TimeRange updtime)

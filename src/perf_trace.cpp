@@ -168,6 +168,10 @@ std::string MakeWindowPhaseSummaryKey(char const* window_kind, char const* phase
 	return key;
 }
 
+std::string MakeAudioUiPhaseSummaryKey(char const* phase) {
+	return NormalizeSummaryKey(phase ? phase : "phase");
+}
+
 bool IsFalseyToken(std::string const& value) {
 	auto lowered = ToLower(Trim(value));
 	if (lowered.empty()) return true;
@@ -527,6 +531,8 @@ struct Summary {
 	std::string audio_output_backend;
 	std::map<std::string, DurationSummary> window_phase_durations;
 	std::vector<std::string> window_phase_order;
+	std::map<std::string, DurationSummary> audio_ui_phase_durations;
+	std::vector<std::string> audio_ui_phase_order;
 	IntervalSummary audio_ui_timer_interval;
 	IntervalSummary video_playback_tick_interval;
 	DurationSummary window_open_duration;
@@ -854,6 +860,17 @@ void WriteSummaryLocked(Session const& session) {
 	write_double("audio_ui_timer_interval.max_ms", session.summary.audio_ui_timer_interval.max_ms);
 	write_mean("audio_ui_timer_interval.mean_ms", session.summary.audio_ui_timer_interval.total_ms, session.summary.audio_ui_timer_interval.count);
 	write_mean("audio_ui_timer_interval.mean_abs_jitter_ms", session.summary.audio_ui_timer_interval.total_abs_jitter_ms, session.summary.audio_ui_timer_interval.count);
+	for (auto const& key : session.summary.audio_ui_phase_order) {
+		auto const it = session.summary.audio_ui_phase_durations.find(key);
+		if (it == session.summary.audio_ui_phase_durations.end())
+			continue;
+		auto const& phase = it->second;
+		out << "audio_ui_phase." << key << ".count=" << phase.count << "\n";
+		out << "audio_ui_phase." << key << ".total_ms=" << ToStringDouble(phase.total_ms) << "\n";
+		out << "audio_ui_phase." << key << ".min_ms=" << ToStringDouble(phase.min_ms) << "\n";
+		out << "audio_ui_phase." << key << ".max_ms=" << ToStringDouble(phase.max_ms) << "\n";
+		out << "audio_ui_phase." << key << ".mean_ms=" << ToStringDouble(phase.count ? phase.total_ms / phase.count : 0.0) << "\n";
+	}
 
 	write_int("video_playback_tick_interval.count", session.summary.video_playback_tick_interval.count);
 	write_double("video_playback_tick_interval.min_ms", session.summary.video_playback_tick_interval.min_ms);
@@ -1286,6 +1303,32 @@ void ObserveAudioUiTimerPosition(int ms) {
 	payload.AddInt("position_ms", ms);
 	payload.AddDouble("delta_ms", interval_ms);
 	AppendEntryLocked(session, "metric", "audio_ui_timer_interval", payload.Finish(), false, timestamp_ns);
+}
+
+void ObserveAudioUiDuration(char const* phase, double duration_ms, int detail_a, int detail_b, bool immediate) {
+	if (!trace_active.load(std::memory_order_relaxed))
+		return;
+
+	auto const timestamp_ns = NowNs();
+	auto& session = GetSession();
+	std::lock_guard<std::mutex> lock(session.mutex);
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::Audio))
+		return;
+
+	auto const summary_key = MakeAudioUiPhaseSummaryKey(phase);
+	auto [it, inserted] = session.summary.audio_ui_phase_durations.emplace(summary_key, DurationSummary{});
+	if (inserted)
+		session.summary.audio_ui_phase_order.emplace_back(summary_key);
+	it->second.Observe(duration_ms);
+
+	JsonObjectBuilder payload;
+	payload.AddString("phase", phase ? phase : "");
+	payload.AddDouble("duration_ms", duration_ms);
+	if (detail_a >= 0)
+		payload.AddInt("detail_a", detail_a);
+	if (detail_b >= 0)
+		payload.AddInt("detail_b", detail_b);
+	AppendEntryLocked(session, "metric", "audio_ui_duration", payload.Finish(), immediate, timestamp_ns);
 }
 
 void ObserveAudioOutputSnapshot(AudioOutputSnapshot const& snapshot) {

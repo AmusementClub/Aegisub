@@ -34,6 +34,7 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "project.h"
 #include "ui_services.h"
 
@@ -41,8 +42,27 @@
 #include <libaegisub/log.h>
 
 #include <algorithm>
+#include <chrono>
 
 namespace {
+using AudioTraceClock = std::chrono::steady_clock;
+constexpr double kAudioTraceSlowDurationMs = 8.0;
+
+AudioTraceClock::time_point AudioTraceStart() {
+	return perf_trace::IsEnabled() ? AudioTraceClock::now() : AudioTraceClock::time_point{};
+}
+
+double AudioTraceElapsedMs(AudioTraceClock::time_point started) {
+	return std::chrono::duration<double, std::milli>(AudioTraceClock::now() - started).count();
+}
+
+void ObserveAudioTraceDuration(char const* phase, AudioTraceClock::time_point started, int detail_a = -1, int detail_b = -1) {
+	if (started == AudioTraceClock::time_point{})
+		return;
+	auto const duration_ms = AudioTraceElapsedMs(started);
+	perf_trace::ObserveAudioUiDuration(phase, duration_ms, detail_a, detail_b, duration_ms >= kAudioTraceSlowDurationMs);
+}
+
 bool ShouldAutoRecoverXAudio2Output() {
 #ifdef WITH_XAUDIO2
 	return OPT_GET("Audio/Player")->GetString() == "XAudio2";
@@ -75,8 +95,15 @@ AudioController::~AudioController()
 void AudioController::OnPlaybackTimer(wxTimerEvent &)
 {
 	if (!player) return;
+	auto const trace_started = AudioTraceStart();
 
 	int64_t pos = player->GetCurrentPosition();
+	int pos_ms = -1;
+	auto const trace_mode = playback_mode;
+	if (trace_started != AudioTraceClock::time_point{} && provider) {
+		pos_ms = MillisecondsFromSamples(pos);
+		perf_trace::ObserveAudioUiTimerPosition(pos_ms);
+	}
 	if (!player->IsPlaying() ||
 		(playback_mode != PM_ToEnd && pos >= player->GetEndPosition()+200))
 	{
@@ -86,8 +113,12 @@ void AudioController::OnPlaybackTimer(wxTimerEvent &)
 	}
 	else
 	{
-		AnnouncePlaybackPosition(MillisecondsFromSamples(pos));
+		if (pos_ms < 0)
+			pos_ms = MillisecondsFromSamples(pos);
+		AnnouncePlaybackPosition(pos_ms);
 	}
+
+	ObserveAudioTraceDuration("audio_controller.playback_timer", trace_started, pos_ms, static_cast<int>(trace_mode));
 }
 
 #ifdef wxHAS_POWER_EVENTS
@@ -156,6 +187,7 @@ void AudioController::OnTimingControllerUpdatedPrimaryRange()
 void AudioController::PlayRange(const TimeRange &range)
 {
 	if (!player || !provider) return;
+	auto const trace_started = AudioTraceStart();
 
 	int64_t const start_sample = SamplesFromMilliseconds(range.begin());
 	int64_t const sample_count = SamplesFromMilliseconds(range.length());
@@ -164,11 +196,13 @@ void AudioController::PlayRange(const TimeRange &range)
 		return;
 	}
 
+	perf_trace::ResetAudioUiTimerInterval();
 	player->Play(start_sample, sample_count);
 	playback_mode = PM_Range;
 	playback_timer.Start(20);
 
 	AnnouncePlaybackPosition(range.begin());
+	ObserveAudioTraceDuration("audio_controller.play_range", trace_started, range.length(), range.begin());
 }
 
 void AudioController::PlayPrimaryRange()
@@ -194,6 +228,7 @@ void AudioController::PlayToEndOfPrimary(int start_ms)
 void AudioController::PlayToEnd(int start_ms)
 {
 	if (!player || !provider) return;
+	auto const trace_started = AudioTraceStart();
 
 	int64_t start_sample = SamplesFromMilliseconds(start_ms);
 	int64_t sample_count = provider->GetNumSamples() - start_sample;
@@ -202,22 +237,27 @@ void AudioController::PlayToEnd(int start_ms)
 		return;
 	}
 
+	perf_trace::ResetAudioUiTimerInterval();
 	player->Play(start_sample, sample_count);
 	playback_mode = PM_ToEnd;
 	playback_timer.Start(20);
 
 	AnnouncePlaybackPosition(start_ms);
+	ObserveAudioTraceDuration("audio_controller.play_to_end", trace_started, start_ms);
 }
 
 void AudioController::Stop()
 {
 	if (!player) return;
+	auto const trace_started = AudioTraceStart();
 
 	player->Stop();
 	playback_mode = PM_NotPlaying;
 	playback_timer.Stop();
+	perf_trace::ResetAudioUiTimerInterval();
 
 	AnnouncePlaybackStop();
+	ObserveAudioTraceDuration("audio_controller.stop", trace_started);
 }
 
 bool AudioController::IsPlaying()

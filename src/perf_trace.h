@@ -62,6 +62,7 @@ void ObserveFrameResult(int frame, double time, bool delivered, bool immediate);
 void ObserveVideoFrameRenderDuration(int frame, double time, bool delivered, bool immediate, double duration_ms);
 void ObserveVideoRenderPacketCacheLookup(int frame, bool hit, char const* source);
 void ObserveAudioUiTimerPosition(int ms);
+void ObserveAudioUiDuration(char const* phase, double duration_ms, int detail_a = -1, int detail_b = -1, bool immediate = false);
 void ObserveAudioOutputSnapshot(AudioOutputSnapshot const& snapshot);
 void ObserveVideoPlaybackTick(int frame);
 

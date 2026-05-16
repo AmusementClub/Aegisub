@@ -103,11 +103,7 @@ bool CreateFallbackFontProbe(HDC dc, LOGFONTW lf, std::wstring const& requested_
 	if (requested_face.empty())
 		return false;
 
-	copy_logfont_face(lf, requested_face);
-	auto suffix = L"-NONEXISTENT-PROBE";
-	auto len = wcslen(lf.lfFaceName);
-	for (size_t i = 0; suffix[i] && len + i < LF_FACESIZE - 1; ++i)
-		lf.lfFaceName[len + i] = suffix[i];
+	copy_logfont_face(lf, L"AegisubMissingFontProbe");
 
 	auto probe = CreateFontIndirectW(&lf);
 	if (!probe)

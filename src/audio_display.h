@@ -143,11 +143,15 @@ class AudioDisplay: public wxWindow {
 	/// @param new_pos   New absolute pixel position of the tracking cursor
 	/// @param show_time Display timestamp by the tracking cursor?
 	void SetTrackCursor(int new_pos, bool show_time);
+	void UpdateTrackCursorFromMouse(int mouse_x);
+	void UpdateTrackCursorFromCurrentMouse();
 	/// @brief Remove the tracking cursor from the display
 	void RemoveTrackCursor();
 
 	/// Previous style ranges for optimizing redraw when ranges change
 	std::vector<std::pair<int, int>> style_ranges;
+	std::vector<wxRect> visible_marker_rects;
+	bool visible_marker_rects_precise = true;
 
 	/// @brief Reload all rendering settings from Options and reset caches
 	///
@@ -181,6 +185,15 @@ class AudioDisplay: public wxWindow {
 	/// Paint the track cursor
 	/// @param dc DC to paint to
 	void PaintTrackCursor(wxDC &dc);
+	TimeRange VisibleTimeRange() const;
+	TimeRange TimeRangeFromAbsolutePixels(int left, int right) const;
+	bool HasLabels(TimeRange const& range) const;
+	bool HasVisibleLabels() const;
+	bool AppendMarkerRects(TimeRange const& range, std::vector<wxRect> &rects) const;
+	bool CaptureVisibleMarkerRects(std::vector<wxRect> &rects) const;
+	bool UpdateVisibleMarkerRectsForScroll(int old_scroll_left, int scroll_delta, int client_width);
+	void RefreshChangedStyleRanges(std::vector<std::pair<int, int>> const& old_ranges, std::vector<std::pair<int, int>> const& new_ranges);
+	void RefreshVisibleMarkerRects(std::vector<wxRect> const& old_rects, bool old_precise, std::vector<wxRect> const& new_rects, bool new_precise);
 
 	/// Forward the mouse event to the appropriate child control, if any
 	/// @return Was the mouse event forwarded somewhere?
@@ -230,6 +243,7 @@ public:
 	///
 	/// A positive amount moves the display to the right, making later parts of the audio visible.
 	void ScrollBy(int pixel_amount);
+	void ScrollBy(int pixel_amount, int mouse_x);
 
 	/// @brief Scroll the audio display
 	/// @param pixel_position Absolute pixel to put at left edge of the audio display

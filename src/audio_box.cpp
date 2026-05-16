@@ -158,7 +158,7 @@ void AudioBox::OnMouseWheel(wxMouseEvent &evt) {
 		// Reset any accumulated zoom
 		mouse_zoom_accum = 0;
 
-		audioDisplay->ScrollBy(amount);
+		audioDisplay->ScrollBy(amount, evt.GetPosition().x);
 	}
 	else if (evt.GetWheelAxis() == 0) {
 		mouse_zoom_accum += evt.GetWheelRotation();

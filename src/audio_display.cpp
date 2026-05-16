@@ -625,19 +625,51 @@ void AudioDisplay::ScrollBy(int pixel_amount)
 	ScrollPixelToLeft(scroll_left + pixel_amount);
 }
 
+void AudioDisplay::ScrollBy(int pixel_amount, int mouse_x)
+{
+	ScrollPixelToLeft(scroll_left + pixel_amount);
+	UpdateTrackCursorFromMouse(mouse_x);
+}
+
 void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 {
-	const int client_width = GetClientRect().GetWidth();
+	const wxSize client_size = GetClientSize();
+	const int client_width = client_size.GetWidth();
 
 	if (pixel_position + client_width >= pixel_audio_width)
 		pixel_position = pixel_audio_width - client_width;
 	if (pixel_position < 0)
 		pixel_position = 0;
 
+	const int old_scroll_left = scroll_left;
 	scroll_left = pixel_position;
 	scrollbar->SetPosition(scroll_left);
 	timeline->SetPosition(scroll_left);
-	Refresh();
+
+	const int scroll_delta = scroll_left - old_scroll_left;
+	visible_marker_rects_precise = UpdateVisibleMarkerRectsForScroll(old_scroll_left, scroll_delta, client_width);
+
+	const wxRect audio_bounds(0, audio_top, client_width, audio_height);
+	if (scroll_delta != 0
+		&& audio_bounds.GetWidth() > 0
+		&& audio_bounds.GetHeight() > 0
+		&& scroll_delta > -audio_bounds.GetWidth()
+		&& scroll_delta < audio_bounds.GetWidth()
+		&& !controller->IsPlaying()
+		&& track_cursor_label.empty())
+	{
+		ScrollWindow(-scroll_delta, 0, &audio_bounds);
+		if (scroll_delta > 0)
+			RefreshRect(wxRect(audio_bounds.GetRight() - scroll_delta + 1, audio_top, scroll_delta, audio_height), false);
+		else
+			RefreshRect(wxRect(audio_bounds.GetLeft(), audio_top, -scroll_delta, audio_height), false);
+		RefreshRect(timeline->GetBounds(), false);
+		RefreshRect(scrollbar->GetBounds(), false);
+	}
+	else
+	{
+		Refresh();
+	}
 }
 
 void AudioDisplay::ScrollTimeRangeInView(const TimeRange &range)
@@ -1004,6 +1036,156 @@ void AudioDisplay::PaintTrackCursor(wxDC &dc) {
 		RefreshRect(track_cursor_label_rect, false);
 }
 
+TimeRange AudioDisplay::VisibleTimeRange() const
+{
+	return TimeRange(
+		std::max(0, TimeFromRelativeX(-foot_size)),
+		std::max(0, TimeFromRelativeX(GetClientSize().GetWidth() + foot_size)));
+}
+
+TimeRange AudioDisplay::TimeRangeFromAbsolutePixels(int left, int right) const
+{
+	left = std::max(0, left);
+	right = std::max(left, right);
+	return TimeRange(TimeFromAbsoluteX(left), TimeFromAbsoluteX(right));
+}
+
+bool AudioDisplay::HasLabels(TimeRange const& range) const
+{
+	if (!controller->GetTimingController() || audio_height <= 0)
+		return false;
+	std::vector<AudioLabelProvider::AudioLabel> labels;
+	controller->GetTimingController()->GetLabels(range, labels);
+	return !labels.empty();
+}
+
+bool AudioDisplay::HasVisibleLabels() const
+{
+	return HasLabels(VisibleTimeRange());
+}
+
+bool AudioDisplay::AppendMarkerRects(TimeRange const& range, std::vector<wxRect> &rects) const
+{
+	constexpr size_t max_marker_rects = 96;
+	if (!controller->GetTimingController() || audio_height <= 0)
+		return true;
+	if (HasLabels(range))
+		return false;
+
+	AudioMarkerVector markers;
+	controller->GetTimingController()->GetMarkers(range, markers);
+	if (rects.size() + markers.size() > max_marker_rects)
+		return false;
+
+	rects.reserve(rects.size() + markers.size());
+	for (auto const marker : markers)
+	{
+		int const marker_x = RelativeXFromTime(marker->GetPosition());
+		int const pen_width = std::max(1, marker->GetStyle().GetWidth());
+		int const left = marker_x - (pen_width + 1) / 2 - foot_size;
+		int const width = pen_width + foot_size * 2 + 2;
+		rects.emplace_back(left, audio_top, width, audio_height);
+	}
+	return true;
+}
+
+bool AudioDisplay::CaptureVisibleMarkerRects(std::vector<wxRect> &rects) const
+{
+	rects.clear();
+	return AppendMarkerRects(VisibleTimeRange(), rects);
+}
+
+bool AudioDisplay::UpdateVisibleMarkerRectsForScroll(int old_scroll_left, int scroll_delta, int client_width)
+{
+	if (scroll_delta == 0)
+		return CaptureVisibleMarkerRects(visible_marker_rects);
+	if (!visible_marker_rects_precise || std::abs(scroll_delta) >= client_width)
+		return CaptureVisibleMarkerRects(visible_marker_rects);
+
+	for (auto &rect : visible_marker_rects)
+		rect.Offset(-scroll_delta, 0);
+
+	visible_marker_rects.erase(
+		std::remove_if(visible_marker_rects.begin(), visible_marker_rects.end(), [client_width](wxRect const& rect) {
+			return rect.GetRight() < 0 || rect.GetLeft() >= client_width;
+		}),
+		visible_marker_rects.end());
+
+	if (scroll_delta > 0)
+		return AppendMarkerRects(
+			TimeRangeFromAbsolutePixels(old_scroll_left + client_width + foot_size, scroll_left + client_width + foot_size),
+			visible_marker_rects);
+	return AppendMarkerRects(
+		TimeRangeFromAbsolutePixels(scroll_left - foot_size, old_scroll_left - foot_size),
+		visible_marker_rects);
+}
+
+void AudioDisplay::RefreshChangedStyleRanges(std::vector<std::pair<int, int>> const& old_ranges, std::vector<std::pair<int, int>> const& new_ranges)
+{
+	constexpr size_t max_style_rects = 64;
+	if (old_ranges.empty() || new_ranges.empty() || HasVisibleLabels()) {
+		RefreshRect(wxRect(0, audio_top, GetClientSize().GetWidth(), audio_height), false);
+		return;
+	}
+
+	const int client_width = GetClientSize().GetWidth();
+	auto old_it = old_ranges.begin();
+	auto new_it = new_ranges.begin();
+	size_t refresh_count = 0;
+	std::vector<wxRect> dirty_rects;
+
+	while (old_it != old_ranges.end() && new_it != new_ranges.end())
+	{
+		const int next_old = old_it + 1 != old_ranges.end() ? (old_it + 1)->first : GetDuration();
+		const int next_new = new_it + 1 != new_ranges.end() ? (new_it + 1)->first : GetDuration();
+		const int begin_ms = std::max(old_it->first, new_it->first);
+		const int end_ms = std::min(next_old, next_new);
+
+		if (end_ms > begin_ms && old_it->second != new_it->second)
+		{
+			const int left = std::max(0, RelativeXFromTime(begin_ms) - foot_size);
+			const int right = std::min(client_width, RelativeXFromTime(end_ms) + foot_size);
+			if (right > left)
+			{
+				if (dirty_rects.empty() || left > dirty_rects.back().GetRight() + 1)
+					dirty_rects.emplace_back(left, audio_top, right - left, audio_height);
+				else
+					dirty_rects.back().SetRight(std::max(dirty_rects.back().GetRight(), right - 1));
+
+				if (++refresh_count > max_style_rects || dirty_rects.size() > max_style_rects) {
+					RefreshRect(wxRect(0, audio_top, client_width, audio_height), false);
+					return;
+				}
+			}
+		}
+
+		if (next_old <= end_ms)
+			++old_it;
+		if (next_new <= end_ms)
+			++new_it;
+	}
+
+	for (auto const& rect : dirty_rects)
+		RefreshRect(rect, false);
+}
+
+void AudioDisplay::RefreshVisibleMarkerRects(
+	std::vector<wxRect> const& old_rects,
+	bool old_precise,
+	std::vector<wxRect> const& new_rects,
+	bool new_precise)
+{
+	if (!old_precise || !new_precise) {
+		RefreshRect(wxRect(0, audio_top, GetClientSize().GetWidth(), audio_height), false);
+		return;
+	}
+
+	for (auto const& rect : old_rects)
+		RefreshRect(rect, false);
+	for (auto const& rect : new_rects)
+		RefreshRect(rect, false);
+}
+
 void AudioDisplay::SetDraggedObject(AudioDisplayInteractionObject *new_obj)
 {
 	dragged_object = new_obj;
@@ -1042,6 +1224,20 @@ void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 		track_cursor_label_rect.SetSize(wxSize(0,0));
 		track_cursor_label.Clear();
 	}
+}
+
+void AudioDisplay::UpdateTrackCursorFromMouse(int mouse_x)
+{
+	if (!controller->IsPlaying())
+		SetTrackCursor(scroll_left + mouse_x, OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool());
+}
+
+void AudioDisplay::UpdateTrackCursorFromCurrentMouse()
+{
+	wxPoint const mouse_pos = ScreenToClient(wxGetMousePosition());
+	if (controller->IsPlaying() || !GetClientRect().Contains(mouse_pos))
+		return;
+	UpdateTrackCursorFromMouse(mouse_pos.x);
 }
 
 void AudioDisplay::RemoveTrackCursor()
@@ -1213,10 +1409,8 @@ void AudioDisplay::OnMouseEvent(wxMouseEvent& event)
 		return;
 	}
 
-	if (event.Moving() && !controller->IsPlaying())
-	{
-		SetTrackCursor(scroll_left + mouse_x, OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool());
-	}
+	if (event.Moving())
+		UpdateTrackCursorFromMouse(mouse_x);
 
 	AudioTimingController *timing = controller->GetTimingController();
 	if (!timing) return;
@@ -1326,6 +1520,7 @@ void AudioDisplay::OnSize(wxSizeEvent &)
 	audio_renderer->SetHeight(audio_height);
 
 	audio_top = timeline->GetHeight();
+	visible_marker_rects_precise = CaptureVisibleMarkerRects(visible_marker_rects);
 
 	Refresh();
 }
@@ -1411,12 +1606,16 @@ void AudioDisplay::OnTimingController()
 		OnMarkerMoved();
 		OnSelectionChanged();
 	}
+	else
+	{
+		visible_marker_rects.clear();
+		visible_marker_rects_precise = true;
+	}
 }
 
 void AudioDisplay::OnPlaybackPosition(int ms)
 {
 	int pixel_position = AbsoluteXFromTime(ms);
-	SetTrackCursor(pixel_position, false);
 
 	if (OPT_GET("Audio/Lock Scroll on Cursor")->GetBool())
 	{
@@ -1431,6 +1630,8 @@ void AudioDisplay::OnPlaybackPosition(int ms)
 			ScrollPixelToLeft(std::min(pixel_position - client_width + edge_size, pixel_audio_width - client_width - 1));
 		}
 	}
+
+	SetTrackCursor(pixel_position, false);
 }
 
 void AudioDisplay::OnSelectionChanged()
@@ -1456,6 +1657,7 @@ void AudioDisplay::OnSelectionChanged()
 	else if (OPT_GET("Audio/Auto/Scroll")->GetBool() && sel.end() != 0)
 	{
 		ScrollTimeRangeInView(sel);
+		UpdateTrackCursorFromCurrentMouse();
 	}
 
 	RefreshRect(scrollbar->GetBounds(), false);
@@ -1483,6 +1685,7 @@ void AudioDisplay::OnScrollTimer(wxTimerEvent &event)
 void AudioDisplay::OnStyleRangesChanged()
 {
 	if (!controller->GetTimingController()) return;
+	std::vector<std::pair<int, int>> old_ranges = style_ranges;
 
 	AudioStyleRangeMerger asrm;
 	controller->GetTimingController()->GetRenderingStyles(asrm);
@@ -1490,10 +1693,14 @@ void AudioDisplay::OnStyleRangesChanged()
 	style_ranges.clear();
 	for (auto pair : asrm) style_ranges.push_back(pair);
 
-	RefreshRect(wxRect(0, audio_top, GetClientSize().GetWidth(), audio_height), false);
+	RefreshChangedStyleRanges(old_ranges, style_ranges);
 }
 
 void AudioDisplay::OnMarkerMoved()
 {
-	RefreshRect(wxRect(0, audio_top, GetClientSize().GetWidth(), audio_height), false);
+	std::vector<wxRect> new_marker_rects;
+	bool const new_marker_rects_precise = CaptureVisibleMarkerRects(new_marker_rects);
+	RefreshVisibleMarkerRects(visible_marker_rects, visible_marker_rects_precise, new_marker_rects, new_marker_rects_precise);
+	visible_marker_rects = std::move(new_marker_rects);
+	visible_marker_rects_precise = new_marker_rects_precise;
 }

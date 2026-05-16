@@ -53,6 +53,11 @@ void append_utf16_pair_to_utf8(std::string& out, wchar_t lead, wchar_t trail) {
 	if (len > 0) out.append(buf, len);
 }
 
+void copy_logfont_face(LOGFONTW& lf, std::wstring const& face) {
+	wcsncpy(lf.lfFaceName, face.c_str(), LF_FACESIZE - 1);
+	lf.lfFaceName[LF_FACESIZE - 1] = L'\0';
+}
+
 uint32_t murmur3(const char *data, uint32_t len) {
 	static const uint32_t c1 = 0xcc9e2d51;
 	static const uint32_t c2 = 0x1b873593;
@@ -98,8 +103,7 @@ bool CreateFallbackFontProbe(HDC dc, LOGFONTW lf, std::wstring const& requested_
 	if (requested_face.empty())
 		return false;
 
-	wcsncpy(lf.lfFaceName, requested_face.c_str(), LF_FACESIZE);
-	lf.lfFaceName[LF_FACESIZE - 1] = L'\0';
+	copy_logfont_face(lf, requested_face);
 	auto suffix = L"-NONEXISTENT-PROBE";
 	auto len = wcslen(lf.lfFaceName);
 	for (size_t i = 0; suffix[i] && len + i < LF_FACESIZE - 1; ++i)
@@ -256,7 +260,8 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 
 	LOGFONTW lf{};
 	lf.lfCharSet = DEFAULT_CHARSET;
-	wcsncpy(lf.lfFaceName, agi::charset::ConvertW(facename).c_str(), LF_FACESIZE);
+	auto const requested_face_full = agi::charset::ConvertW(facename);
+	copy_logfont_face(lf, requested_face_full);
 	lf.lfItalic = italic ? -1 : 0;
 	lf.lfWeight = bold == 0 ? 400 :
 	              bold == 1 ? 700 :

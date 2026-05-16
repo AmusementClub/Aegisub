@@ -30,6 +30,8 @@
 #include <array>
 #include <boost/container/map.hpp>
 #include <boost/flyweight/flyweight_fwd.hpp>
+#include <optional>
+#include <utility>
 #include <vector>
 
 #include <wx/combobox.h>
@@ -224,6 +226,8 @@ public:
 	void FocusEditControl();
 	/// Return the current selection in the main subtitle text editor.
 	std::string GetEditControlSelectedText() const;
+	/// Return the current caret as the arguments accepted by SetEditControlCaret.
+	std::optional<std::pair<int, bool>> GetEditControlCaret() const;
 	/// Set the caret before or after the 1-based character index in the main editor.
 	void SetEditControlCaret(int character_index, bool after);
 };

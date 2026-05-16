@@ -62,6 +62,23 @@ Returns: 1 value, boolean.
 
 ---
 
+Getting the subtitle edit box cursor
+
+function aegisub.get_edit_box_cursor()
+
+Returns the current text cursor position in the main subtitle text edit box.
+The returned values can be passed directly to aegisub.set_edit_box_cursor.
+
+Returns: 2 values.
+  1. 1-based character index.
+  2. Boolean. false means the cursor is before character_index, true means it
+     is after character_index.
+
+Returns nil if the current Automation host does not have a readable subtitle
+edit box cursor.
+
+---
+
 Moving the subtitle edit box cursor
 
 function aegisub.set_edit_box_cursor(character_index, after)

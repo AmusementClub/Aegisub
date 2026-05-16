@@ -47,6 +47,11 @@ namespace Automation4 {
 		int end = 0;
 	};
 
+	struct AutomationSubtitleEditBoxCursor {
+		int character_index = 1;
+		bool after = false;
+	};
+
 	struct AutomationUiAnchor {
 		// Opaque UI handle passed through the GUI seam to avoid leaking wx types
 		// into engine-agnostic automation contracts.
@@ -92,6 +97,7 @@ namespace Automation4 {
 		virtual agi::fs::path RequestSaveFile(ProgressSink& sink, AutomationSaveFileDialogRequest const& request) = 0;
 		virtual std::shared_ptr<agi::FileDialogService> GetFileDialogService() const = 0;
 		virtual bool CanFocusSubtitleEditBox() const = 0;
+		virtual std::optional<AutomationSubtitleEditBoxCursor> TryGetSubtitleEditBoxCursor() const = 0;
 		virtual bool FocusSubtitleEditBox() = 0;
 		virtual bool SetSubtitleEditBoxCursor(int character_index, bool after) = 0;
 	};

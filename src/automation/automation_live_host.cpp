@@ -203,6 +203,24 @@ public:
 		});
 	}
 
+	std::optional<AutomationSubtitleEditBoxCursor> TryGetSubtitleEditBoxCursor() const override
+	{
+		return agi::ui::MainInvoke([this]() -> std::optional<AutomationSubtitleEditBoxCursor> {
+			if (!context)
+				return std::nullopt;
+
+			auto ui = context->GetUI();
+			if (!ui.subsEditBox)
+				return std::nullopt;
+
+			auto cursor = ui.subsEditBox->GetEditControlCaret();
+			if (!cursor)
+				return std::nullopt;
+
+			return AutomationSubtitleEditBoxCursor{ cursor->first, cursor->second };
+		});
+	}
+
 	bool FocusSubtitleEditBox() override
 	{
 		return agi::ui::MainInvoke([this] {

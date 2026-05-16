@@ -405,6 +405,20 @@ namespace {
 		return 1;
 	}
 
+	int lua_get_edit_box_cursor(lua_State *L)
+	{
+		if (auto *host = get_host(L)) {
+			if (auto cursor = host->Ui().TryGetSubtitleEditBoxCursor()) {
+				push_value(L, cursor->character_index);
+				push_value(L, cursor->after);
+				return 2;
+			}
+		}
+
+		lua_pushnil(L);
+		return 1;
+	}
+
 	int lua_set_edit_box_cursor(lua_State *L)
 	{
 		int character_index = check_int(L, 1);
@@ -664,6 +678,7 @@ namespace {
 		set_field<lua_get_audio_selection>(L, "get_audio_selection");
 		set_field<lua_set_status_text>(L, "set_status_text");
 		set_field<lua_focus_edit_box>(L, "focus_edit_box");
+		set_field<lua_get_edit_box_cursor>(L, "get_edit_box_cursor");
 		set_field<lua_set_edit_box_cursor>(L, "set_edit_box_cursor");
 
 		// store aegisub table to globals

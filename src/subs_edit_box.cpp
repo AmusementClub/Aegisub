@@ -393,6 +393,40 @@ std::string SubsEditBox::GetEditControlSelectedText() const {
 	return from_wx(edit_ctrl_tc->GetRange(sel_start, sel_end));
 }
 
+std::optional<std::pair<int, bool>> SubsEditBox::GetEditControlCaret() const {
+	if (!CanFocusEditControl())
+		return std::nullopt;
+
+	std::string text;
+	long insertion_point = 0;
+#ifdef WITH_WXSTC
+	if (use_stc) {
+		if (!edit_ctrl_stc)
+			return std::nullopt;
+
+		auto data = edit_ctrl_stc->GetTextRaw();
+		text.assign(data.data(), data.length());
+		insertion_point = edit_ctrl_stc->GetInsertionPoint();
+	}
+	else {
+#endif
+		if (!edit_ctrl_tc)
+			return std::nullopt;
+
+		insertion_point = edit_ctrl_tc->GetInsertionPoint();
+		text = from_wx(edit_ctrl_tc->GetValue());
+		insertion_point = static_cast<long>(edit_ctrl_tc->GetRange(0, insertion_point).utf8_str().length());
+#ifdef WITH_WXSTC
+	}
+#endif
+
+	auto const byte_position = std::min(static_cast<size_t>(std::max<long>(0, insertion_point)), text.size());
+	auto const character_offset = static_cast<int>(agi::CharacterCount(text.begin(), text.begin() + byte_position, 0));
+	if (character_offset <= 0)
+		return std::make_pair(1, false);
+	return std::make_pair(character_offset, true);
+}
+
 void SubsEditBox::SetEditControlCaret(int character_index, bool after) {
 	size_t character_offset = 0;
 	if (character_index > 0)

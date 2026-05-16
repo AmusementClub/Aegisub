@@ -160,6 +160,8 @@ typedef struct AegisubFontCollectorFontUsage {
 	/* Added after 2026-05: lines contains all dialogue rows using this font request. */
 	int const *lines;
 	size_t line_count;
+	/* Diagnostic only: full realized matched face name when the platform can report it. */
+	char const *matched_facename_full;
 } AegisubFontCollectorFontUsage;
 
 /* Event pointer fields are valid only for the duration of the callback. */

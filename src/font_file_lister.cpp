@@ -335,6 +335,7 @@ void FontCollector::ResolveFontUsage(StyleInfo const& style, UsageData& data, Fo
 		usage.lines = data.lines;
 		usage.override_lines = data.override_lines;
 		usage.matched.facename = res.matched_facename;
+		usage.matched.facename_full = res.matched_facename_full;
 		usage.matched.face_index = res.face_index;
 		usage.matched.weight = res.matched_weight;
 		usage.matched.bold = res.matched_bold;

@@ -147,6 +147,7 @@ struct JsonEvent {
 
 struct JsonMatchedFont {
 	std::string facename;
+	std::string facename_full;
 	int face_index = -1;
 	int weight = 0;
 	bool bold = false;
@@ -392,7 +393,9 @@ void PrintUsage(AegisubFontCollectorFontUsage const *usage, void*) {
 		std::cout << "  override lines: " << JoinLines(event) << "\n";
 	}
 	std::cout << "  codepoints: " << JoinCodepoints(*usage) << "\n";
+	auto facename_full = Safe(usage->matched_facename_full);
 	std::cout << "  matched: " << Safe(usage->matched.facename)
+		<< (!facename_full.empty() && facename_full != Safe(usage->matched.facename) ? " full=" + facename_full : std::string())
 		<< " face_index=" << usage->matched.face_index
 		<< " weight=" << usage->matched.weight
 		<< " italic=" << usage->matched.italic
@@ -424,6 +427,7 @@ void CollectJsonUsage(AegisubFontCollectorFontUsage const *usage, void *user_dat
 	if (usage->override_line_count)
 		item.override_lines.assign(usage->override_lines, usage->override_lines + usage->override_line_count);
 	item.matched.facename = Safe(usage->matched.facename);
+	item.matched.facename_full = Safe(usage->matched_facename_full);
 	item.matched.face_index = usage->matched.face_index;
 	item.matched.weight = usage->matched.weight;
 	item.matched.bold = usage->matched.bold != 0;
@@ -540,6 +544,8 @@ void WriteJsonReport(std::ostream& out, int result, std::string const& error, Js
 		out << ",\n      \"matched_font\": {\n";
 		out << "        \"facename\": ";
 		WriteJsonString(out, usage.matched.facename);
+		out << ",\n        \"facename_full\": ";
+		WriteJsonString(out, usage.matched.facename_full);
 		out << ",\n        \"face_index\": " << usage.matched.face_index;
 		out << ",\n        \"weight\": " << usage.matched.weight;
 		out << ",\n        \"requested_weight\": " << usage.matched.requested_weight;

@@ -99,6 +99,13 @@ std::wstring SelectedFaceName(HDC dc) {
 	return face;
 }
 
+std::wstring SelectedFaceNameFull(HDC dc) {
+	wchar_t face[256] = {};
+	if (GetTextFaceW(dc, static_cast<int>(sizeof(face) / sizeof(face[0])), face) <= 0)
+		return {};
+	return face;
+}
+
 bool CreateFallbackFontProbe(HDC dc, LOGFONTW lf, std::wstring const& requested_face, std::wstring& fallback_face) {
 	if (requested_face.empty())
 		return false;
@@ -284,6 +291,9 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 	auto selected_face = SelectedFaceName(dc);
 	if (!selected_face.empty())
 		ret.matched_facename = agi::charset::ConvertW(selected_face);
+	auto selected_face_full = SelectedFaceNameFull(dc);
+	if (!selected_face_full.empty())
+		ret.matched_facename_full = agi::charset::ConvertW(selected_face_full);
 
 	if (!fallback_face.empty() && selected_face == fallback_face && _wcsicmp(requested_face.c_str(), fallback_face.c_str()) != 0)
 		return ret;

@@ -50,6 +50,8 @@ struct FontRawData {
 struct CollectionResult {
 	/// Font face selected by the platform matcher.
 	std::string matched_facename;
+	/// Full font face selected by the platform matcher, when available.
+	std::string matched_facename_full;
 	int face_index = -1;
 	/// Font weight selected by the platform matcher.
 	int matched_weight = 0;
@@ -75,6 +77,7 @@ struct CollectionResult {
 
 struct FontCollectorMatchedFont {
 	std::string facename;
+	std::string facename_full;
 	int face_index = -1;
 	int weight = 0;
 	bool bold = false;

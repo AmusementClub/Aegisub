@@ -227,6 +227,7 @@ void EmitCUsage(FontCollectorAssFontUsage const& usage,
 	c_usage.matched.requested_weight = usage.matched.requested_weight;
 	c_usage.matched.missing_lines = usage.matched.missing_lines.empty() ? nullptr : usage.matched.missing_lines.data();
 	c_usage.matched.missing_line_count = usage.matched.missing_lines.size();
+	c_usage.matched_facename_full = usage.matched.facename_full.c_str();
 
 	callback(&c_usage, user_data);
 }

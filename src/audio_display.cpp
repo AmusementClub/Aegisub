@@ -678,7 +678,6 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 		&& audio_bounds.GetHeight() > 0
 		&& scroll_delta > -audio_bounds.GetWidth()
 		&& scroll_delta < audio_bounds.GetWidth()
-		&& !controller->IsPlaying()
 		&& track_cursor_label.empty();
 	if (used_scroll_window)
 	{

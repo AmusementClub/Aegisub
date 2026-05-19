@@ -818,8 +818,8 @@ void AudioDisplay::ReloadRenderingSettings()
 		auto audio_spectrum_renderer = agi::make_unique<AudioSpectrumRenderer>(colour_scheme_name);
 
 		int64_t spectrum_quality = OPT_GET("Audio/Renderer/Spectrum/Quality")->GetInt();
-#ifdef WITH_FFTW3
-		// FFTW is so fast we can afford to upgrade quality by two levels
+#if defined(WITH_PFFFT) || defined(WITH_FFTW3)
+		// Fast FFT backends can afford to upgrade quality by two levels
 		spectrum_quality += 2;
 #endif
 		spectrum_quality = mid<int64_t>(0, spectrum_quality, 5);

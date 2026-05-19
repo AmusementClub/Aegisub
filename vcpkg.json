@@ -21,7 +21,6 @@
       ]
     },
     "boost-spirit",
-    "fftw3",
     "gtest",
     "highway",
     "hunspell",
@@ -29,9 +28,18 @@
     "libass",
     "libiconv",
     "matroska",
+    "pffft",
     "stringzilla",
     "uchardet",
     "wxwidgets",
     "xaudio2redist"
-  ]
+  ],
+  "features": {
+    "fftw3": {
+      "description": "Install FFTW3 files for app-local runtime testing.",
+      "dependencies": [
+        "fftw3"
+      ]
+    }
+  }
 }

@@ -12,8 +12,14 @@
 #include "audio_display_source.h"
 #include "audio_mix_policy.h"
 
+#ifdef WITH_PFFFT
+#include <pffft/pffft.h>
+#endif
+
 #ifdef WITH_FFTW3
-#include <fftw3.h>
+namespace audio::spectrum {
+class Fftw3SpectrumTransform;
+}
 #endif
 
 struct AudioSpectrumAnalysisCacheMetrics {
@@ -69,12 +75,16 @@ class AudioSpectrumAnalysisCache {
 	size_t rolling_window_block_index = 0;
 
 #ifdef WITH_FFTW3
-	fftw_plan dft_plan = nullptr;
-	double *dft_input = nullptr;
-	fftw_complex *dft_output = nullptr;
-#else
-	std::vector<float> fft_scratch;
+	std::unique_ptr<audio::spectrum::Fftw3SpectrumTransform> fftw3_transform;
 #endif
+
+#ifdef WITH_PFFFT
+	PFFFT_Setup *pffft_setup = nullptr;
+	float *pffft_input = nullptr;
+	float *pffft_output = nullptr;
+	float *pffft_work = nullptr;
+#endif
+	std::vector<float> fft_scratch;
 
 	uint64_t metrics_generation = 0;
 	uint64_t metrics_cache_hits = 0;
@@ -91,6 +101,7 @@ class AudioSpectrumAnalysisCache {
 	size_t BlockBytes() const { return sizeof(float) * BinCount(); }
 
 	void RecreateCache();
+	void DestroyFftResources();
 	CacheBlock BuildBlock(size_t block_index);
 	void TouchLocked(size_t block_index);
 	void TrimLocked();

@@ -137,6 +137,9 @@ void ShowAboutDialog(wxWindow *parent) {
 #ifdef WITH_FFTW3
 	aboutString += wxS("    FFTW - Copyright (c) Matteo Frigo, Massachusetts Institute of Technology;\n");
 #endif
+#ifdef WITH_PFFFT
+	aboutString += wxS("    PFFFT/FFTPACK - Copyright (c) Dario Mambro, Hayati Ayguen, Julien Pommier, University Corporation for Atmospheric Research;\n");
+#endif
 	aboutString += _("\nSee the help file for full credits.\n");
 #ifdef BUILD_CREDIT
 	aboutString += fmt_tl("Built by %s on %s.", GetAegisubBuildCredit(), GetAegisubBuildTime());

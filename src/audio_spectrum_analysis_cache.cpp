@@ -1,21 +1,67 @@
 #include "audio_spectrum_analysis_cache.h"
 
+#ifdef WITH_FFTW3
+#include "audio_spectrum_fftw3.h"
+#endif
+
 #include "fft.h"
 
 #include <algorithm>
 #include <cmath>
 
+namespace {
+void FillBlockWithBuiltinFft(
+	std::vector<float> &fft_scratch,
+	std::vector<float> const& mono_scratch,
+	float *block,
+	size_t sample_count,
+	size_t bin_count)
+{
+	float *fft_input = fft_scratch.data();
+	float *fft_real = fft_scratch.data() + sample_count;
+	float *fft_imag = fft_scratch.data() + sample_count * 2;
+	std::copy(mono_scratch.begin(), mono_scratch.end(), fft_input);
+
+	FFT fft;
+	fft.Transform(sample_count, fft_input, fft_real, fft_imag);
+
+	const float scale_factor = 9 / std::sqrt(2 * static_cast<float>(sample_count));
+	for (size_t i = 0; i < bin_count; ++i) {
+		float power = std::sqrt(fft_real[i] * fft_real[i] + fft_imag[i] * fft_imag[i]) * scale_factor;
+		block[i] = std::log10(power + 1.f);
+	}
+}
+
+}
+
 AudioSpectrumAnalysisCache::AudioSpectrumAnalysisCache() {
 }
 
 AudioSpectrumAnalysisCache::~AudioSpectrumAnalysisCache() {
+	DestroyFftResources();
+}
+
+void AudioSpectrumAnalysisCache::DestroyFftResources() {
 #ifdef WITH_FFTW3
-	if (dft_plan) {
-		fftw_destroy_plan(dft_plan);
-		fftw_free(dft_input);
-		fftw_free(dft_output);
-	}
+	fftw3_transform.reset();
 #endif
+
+#ifdef WITH_PFFFT
+	if (pffft_setup)
+		pffft_destroy_setup(pffft_setup);
+	pffft_setup = nullptr;
+
+	if (pffft_input)
+		pffft_aligned_free(pffft_input);
+	if (pffft_output)
+		pffft_aligned_free(pffft_output);
+	if (pffft_work)
+		pffft_aligned_free(pffft_work);
+	pffft_input = nullptr;
+	pffft_output = nullptr;
+	pffft_work = nullptr;
+#endif
+	fft_scratch.clear();
 }
 
 void AudioSpectrumAnalysisCache::ClearLocked() {
@@ -31,17 +77,7 @@ void AudioSpectrumAnalysisCache::ClearLocked() {
 void AudioSpectrumAnalysisCache::RecreateCache() {
 	std::lock_guard<std::mutex> lock(cache_mutex);
 	ClearLocked();
-
-#ifdef WITH_FFTW3
-	if (dft_plan) {
-		fftw_destroy_plan(dft_plan);
-		fftw_free(dft_input);
-		fftw_free(dft_output);
-		dft_plan = nullptr;
-		dft_input = nullptr;
-		dft_output = nullptr;
-	}
-#endif
+	DestroyFftResources();
 
 	if (!source || source->GetSampleRate() <= 0 || source->GetNumSamples() <= 0 || derivation_size == 0) {
 		block_count = 0;
@@ -55,15 +91,29 @@ void AudioSpectrumAnalysisCache::RecreateCache() {
 	max_cache_bytes = std::max(max_cache_bytes, BlockBytes());
 
 #ifdef WITH_FFTW3
-	dft_input = fftw_alloc_real(static_cast<int>(WindowSampleCount()));
-	dft_output = fftw_alloc_complex(static_cast<int>(WindowSampleCount()));
-	dft_plan = fftw_plan_dft_r2c_1d(
-		static_cast<int>(WindowSampleCount()),
-		dft_input,
-		dft_output,
-		FFTW_ESTIMATE);
+	fftw3_transform = audio::spectrum::TryCreateFftw3SpectrumTransform(WindowSampleCount());
+	const bool has_fftw_plan = !!fftw3_transform;
 #else
-	fft_scratch.resize(WindowSampleCount() * 3);
+	const bool has_fftw_plan = false;
+#endif
+
+#ifdef WITH_PFFFT
+	if (!has_fftw_plan) {
+		const size_t pffft_bytes = WindowSampleCount() * sizeof(float);
+		pffft_setup = pffft_new_setup(static_cast<int>(WindowSampleCount()), PFFFT_REAL);
+		if (pffft_setup) {
+			pffft_input = static_cast<float *>(pffft_aligned_malloc(pffft_bytes));
+			pffft_output = static_cast<float *>(pffft_aligned_malloc(pffft_bytes));
+			pffft_work = static_cast<float *>(pffft_aligned_malloc(pffft_bytes));
+			if (!pffft_input || !pffft_output || !pffft_work)
+				DestroyFftResources();
+		}
+		if (!pffft_setup)
+			fft_scratch.resize(WindowSampleCount() * 3);
+	}
+#else
+	if (!has_fftw_plan)
+		fft_scratch.resize(WindowSampleCount() * 3);
 #endif
 
 	++metrics_generation;
@@ -157,31 +207,38 @@ AudioSpectrumAnalysisCache::CacheBlock AudioSpectrumAnalysisCache::BuildBlock(si
 	rolling_window_block_index = block_index;
 
 #ifdef WITH_FFTW3
-	for (size_t i = 0; i < sample_count; ++i)
-		dft_input[i] = mono_scratch[i];
-
-	fftw_execute(dft_plan);
-
-	double scale_factor = 9 / std::sqrt(2 << (derivation_size + 1));
-	fftw_complex *out = dft_output;
-	for (size_t i = 0; i < bin_count; ++i, ++out)
-		block[i] = std::log10(std::sqrt(static_cast<float>(out[0][0] * out[0][0] + out[0][1] * out[0][1])) * static_cast<float>(scale_factor) + 1.f);
+	if (fftw3_transform) {
+		double scale_factor = 9 / std::sqrt(2 << (derivation_size + 1));
+		if (fftw3_transform->Execute(mono_scratch.data(), block.get(), bin_count, scale_factor))
+			return block;
+		fftw3_transform.reset();
+#ifdef WITH_PFFFT
+		if (!pffft_setup)
+			fft_scratch.resize(WindowSampleCount() * 3);
 #else
-	float *fft_input = fft_scratch.data();
-	float *fft_real = fft_scratch.data() + sample_count;
-	float *fft_imag = fft_scratch.data() + sample_count * 2;
-	std::copy(mono_scratch.begin(), mono_scratch.end(), fft_input);
-
-	FFT fft;
-	fft.Transform(sample_count, fft_input, fft_real, fft_imag);
-
-	const float scale_factor = 9 / std::sqrt(2 * static_cast<float>(sample_count));
-	for (size_t i = 0; i < bin_count; ++i) {
-		float power = std::sqrt(fft_real[i] * fft_real[i] + fft_imag[i] * fft_imag[i]) * scale_factor;
-		block[i] = std::log10(power + 1.f);
+		fft_scratch.resize(WindowSampleCount() * 3);
+#endif
 	}
 #endif
 
+#ifdef WITH_PFFFT
+	if (pffft_setup) {
+		std::copy(mono_scratch.begin(), mono_scratch.end(), pffft_input);
+		pffft_transform_ordered(pffft_setup, pffft_input, pffft_output, pffft_work, PFFFT_FORWARD);
+
+		const float scale_factor = 9 / std::sqrt(2 * static_cast<float>(sample_count));
+		block[0] = std::log10(std::abs(pffft_output[0]) * scale_factor + 1.f);
+		for (size_t i = 1; i < bin_count; ++i) {
+			const float real = pffft_output[i * 2];
+			const float imag = pffft_output[i * 2 + 1];
+			const float power = std::sqrt(real * real + imag * imag) * scale_factor;
+			block[i] = std::log10(power + 1.f);
+		}
+		return block;
+	}
+#endif
+
+	FillBlockWithBuiltinFft(fft_scratch, mono_scratch, block.get(), sample_count, bin_count);
 	return block;
 }
 

@@ -593,6 +593,7 @@ add_executable(Aegisub WIN32
     src/audio_display_source.cpp
     src/audio_mix_policy.cpp
     src/audio_spectrum_analysis_cache.cpp
+    src/audio_spectrum_fftw3.cpp
     src/audio_display.cpp
     src/audio_karaoke.cpp
     src/audio_marker.cpp
@@ -1108,13 +1109,18 @@ if(WITH_SCENECHANGE)
     )
 endif()
 
-find_package(FFTW)
-option(WITH_FFTW3 "Enable fftw support" ${FFTW_FOUND})
+find_package(pffft CONFIG QUIET)
+option(WITH_PFFFT "Enable PFFFT spectrum FFT support" ${pffft_FOUND})
+option(WITH_FFTW3 "Enable app-local runtime loading of FFTW3 for spectrum FFT support" ON)
+
 if(WITH_FFTW3)
-    find_package(FFTW REQUIRED)
     target_compile_definitions(Aegisub PRIVATE "WITH_FFTW3")
-    target_include_directories(Aegisub PRIVATE ${FFTW_INCLUDES})
-    target_link_libraries(Aegisub LINK_PRIVATE ${FFTW_LIBRARIES})
+endif()
+
+if(WITH_PFFFT)
+    find_package(pffft CONFIG REQUIRED)
+    target_compile_definitions(Aegisub PRIVATE "WITH_PFFFT")
+    target_link_libraries(Aegisub PRIVATE pffft::pffft)
 endif()
 
 find_package(Hunspell)
@@ -1315,7 +1321,8 @@ message(STATUS "\n"
     "\n"
     "Misc Packages\n"
     "  CSRI:                  ${WITH_CSRI}\n"
-    "  FFTW3:                 ${WITH_FFTW3}\n"
+    "  FFTW3:             ${WITH_FFTW3}\n"
+    "  PFFFT:                 ${WITH_PFFFT}\n"
     "  Hunspell:              ${WITH_HUNSPELL}\n"
     "  uchardet:              ${WITH_UCHARDET}\n"
     "  wxStyledTextCtrl:      ${WITH_WXSTC}\n"

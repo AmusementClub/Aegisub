@@ -6,6 +6,8 @@
 
 #include "fft.h"
 
+#include <libaegisub/log.h>
+
 #include <algorithm>
 #include <cmath>
 
@@ -97,8 +99,10 @@ void AudioSpectrumAnalysisCache::RecreateCache() {
 	const bool has_fftw_plan = false;
 #endif
 
+	if (has_fftw_plan) {
+		LOG_I("audio/spectrum/fft") << "Using FFTW3 backend";
+	} else {
 #ifdef WITH_PFFFT
-	if (!has_fftw_plan) {
 		const size_t pffft_bytes = WindowSampleCount() * sizeof(float);
 		pffft_setup = pffft_new_setup(static_cast<int>(WindowSampleCount()), PFFFT_REAL);
 		if (pffft_setup) {
@@ -108,12 +112,24 @@ void AudioSpectrumAnalysisCache::RecreateCache() {
 			if (!pffft_input || !pffft_output || !pffft_work)
 				DestroyFftResources();
 		}
-		if (!pffft_setup)
+		if (pffft_setup) {
+			LOG_I("audio/spectrum/fft") << "Using PFFFT backend";
+		} else {
+			LOG_I("audio/spectrum/fft") << "Using built-in FFT backend";
 			fft_scratch.resize(WindowSampleCount() * 3);
-	}
+		}
 #else
-	if (!has_fftw_plan)
+		LOG_I("audio/spectrum/fft") << "Using built-in FFT backend";
 		fft_scratch.resize(WindowSampleCount() * 3);
+#endif
+	}
+
+#ifdef WITH_FFTW3
+	if (!has_fftw_plan) {
+		auto error = audio::spectrum::GetFftw3LoadError();
+		if (!error.empty())
+			LOG_D("audio/spectrum/fft") << "FFTW3 not available: " << error;
+	}
 #endif
 
 	++metrics_generation;

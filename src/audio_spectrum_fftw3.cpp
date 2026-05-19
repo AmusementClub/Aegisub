@@ -5,6 +5,7 @@
 #include <libaegisub/native_library.h>
 
 #include <cmath>
+#include <string>
 #include <utility>
 
 namespace audio::spectrum {
@@ -53,6 +54,10 @@ Api *TryGetApi() noexcept {
 	return RuntimeLibrary().IsAvailable() ? &api : nullptr;
 }
 
+}
+
+std::string GetFftw3LoadError() {
+	return RuntimeLibrary().GetLoadError();
 }
 
 struct Fftw3SpectrumTransform::Impl {

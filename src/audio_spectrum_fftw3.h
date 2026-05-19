@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <string>
 
 #ifdef WITH_FFTW3
 
@@ -9,6 +10,7 @@ namespace audio::spectrum {
 
 class Fftw3SpectrumTransform;
 std::unique_ptr<Fftw3SpectrumTransform> TryCreateFftw3SpectrumTransform(size_t sample_count);
+std::string GetFftw3LoadError();
 
 class Fftw3SpectrumTransform {
 	struct Impl;

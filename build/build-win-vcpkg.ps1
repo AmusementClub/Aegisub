@@ -108,6 +108,8 @@ function Configure-CMake([string]$CMakePath, [string]$GeneratorName) {
         "-DWITH_SCENECHANGE=ON",
         '-DWITH_LIBPLACEBO=ON',
         "-DLibPlacebo_INCLUDE_DIR=$resolvedLibPlaceboIncludeDir",
+        "-DWITH_FFTW3=ON",
+        "-DWITH_PFFFT=ON",
         '-DAEGISUB_MATROSKA_PARSING=ON',
         "-DWITH_SKIA=OFF",
         "-DZ_VCPKG_POWERSHELL_PATH:FILEPATH=$resolvedPowerShellExecutable",

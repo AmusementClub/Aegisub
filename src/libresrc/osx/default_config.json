@@ -395,6 +395,7 @@
 				],
 				"Enabled" : false
 			},
+			"Display Height" : -1,
 			"Font Face" : "",
 			"Font Size" : 13
 		},

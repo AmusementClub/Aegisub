@@ -40,6 +40,7 @@
 #include "command/command.h"
 #include "compat.h"
 #include "format.h"
+#include "frame_main.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
@@ -1782,7 +1783,10 @@ void VideoDisplay::UpdateSize() {
 		SetMinClientSize(videoSize / scale_factor);
 		SetMaxClientSize(videoSize / scale_factor);
 
-		LayoutContainingSizers();
+		if (auto frame = con->GetUI().frame)
+			frame->UpdateEditGridSplitterForContentChange();
+		else
+			LayoutContainingSizers();
 	}
 
 	PositionVideo();

@@ -76,6 +76,7 @@
 #include <wx/settings.h>
 #include <wx/sizer.h>
 #include <wx/statline.h>
+#include <wx/splitter.h>
 #include <wx/sysopt.h>
 
 #ifdef _WIN32
@@ -408,11 +409,43 @@ void FrameMain::InitContents() {
 	ui_activation.AddConnection(OPT_SUB("Subtitle/Edit Box/Command Buttons/Enabled", &FrameMain::OnSubtitleCommandToolbarVisibleChanged, this));
 	TopSizer = new wxBoxSizer(wxHORIZONTAL);
 	TopSizer->Add(ToolsSizer, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 5);
+	editGridSplitter = new wxSplitterWindow(contentsPanel, wxID_ANY,
+		wxDefaultPosition, wxDefaultSize, wxSP_NOBORDER);
+	editAreaPanel = new wxPanel(editGridSplitter, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxCLIP_CHILDREN);
+	editGridSplitter->SetDoubleBuffered(true);
+	editAreaPanel->SetDoubleBuffered(true);
+
+	auto editAreaSizer = new wxBoxSizer(wxVERTICAL);
+	editAreaSizer->Add(new wxStaticLine(editAreaPanel), 0, wxEXPAND);
+	editAreaSizer->Add(TopSizer, 1, wxEXPAND);
+	editAreaPanel->SetSizer(editAreaSizer);
+
+	ui.subsGrid->Reparent(editGridSplitter);
+	EditBox->Reparent(editAreaPanel);
+
+	editAreaPanel->Layout();
+	int minHeight = editAreaPanel->GetBestSize().GetHeight();
+	int savedHeight = OPT_GET("Subtitle/Edit Box/Display Height")->GetInt();
+	int sashPos = savedHeight > minHeight ? savedHeight : minHeight;
+
+	editGridSplitter->SetMinimumPaneSize(ui.subsGrid->FromDIP(40));
+	editGridSplitter->SplitHorizontally(editAreaPanel, ui.subsGrid, sashPos);
+	editGridSplitter->Bind(wxEVT_SPLITTER_SASH_POS_CHANGING,
+		&FrameMain::OnEditGridSplitterSashPosChanging, this);
+	editGridSplitter->Bind(wxEVT_SPLITTER_SASH_POS_CHANGED,
+		&FrameMain::OnEditGridSplitterSashPosChanged, this);
+	auto queue_edit_grid_splitter_minimum_update = [this](agi::OptionValue const&) {
+		QueueEditGridSplitterMinimumUpdate();
+	};
+	ui_activation.AddConnection(OPT_SUB("Audio/Display Height", queue_edit_grid_splitter_minimum_update));
+	ui_activation.AddConnection(OPT_SUB("Subtitle/Show Original", queue_edit_grid_splitter_minimum_update));
+	ui_activation.AddConnection(OPT_SUB("Video/Secondary Subtitles/Enabled", queue_edit_grid_splitter_minimum_update));
+	ui_activation.AddConnection(OPT_SUB("Video/Secondary Subtitles/Height", queue_edit_grid_splitter_minimum_update));
+
 	MainSizer = new wxBoxSizer(wxVERTICAL);
-	MainSizer->Add(new wxStaticLine(contentsPanel),0,wxEXPAND | wxALL,0);
-	MainSizer->Add(TopSizer,0,wxEXPAND | wxALL,0);
-	MainSizer->Add(ui.subsGrid,1,wxEXPAND | wxALL,0);
+	MainSizer->Add(editGridSplitter, 1, wxEXPAND);
 	contentsPanel->SetSizer(MainSizer);
+	UpdateEditGridSplitterMinimum();
 	observe_phase("startup.frame.contents.create_sizers");
 
 	StartupLog("Perform layout");
@@ -429,7 +462,7 @@ void FrameMain::EnsureVideoBoxCreated() {
 	if (didFreeze)
 		contentsPanel->Freeze();
 
-	videoBox = new VideoBox(contentsPanel, false, context.get());
+	videoBox = new VideoBox(editAreaPanel, false, context.get());
 	videoBox->Hide();
 	TopSizer->Insert(0, videoBox, 0, wxEXPAND, 0);
 	TopSizer->Show(videoBox, false, true);
@@ -448,7 +481,7 @@ void FrameMain::EnsureAudioBoxCreated() {
 		contentsPanel->Freeze();
 
 	auto ui = context->GetUI();
-	ui.audioBox = audioBox = new AudioBox(contentsPanel, context.get());
+	ui.audioBox = audioBox = new AudioBox(editAreaPanel, context.get());
 	ToolsSizer->Insert(0, audioBox, 0, wxEXPAND);
 	ToolsSizer->Show(audioBox, false, true);
 	audioBox->SyncToContextState();
@@ -537,6 +570,7 @@ void FrameMain::SetDisplayMode(int video, int audio) {
 	if (audioBox)
 		ToolsSizer->Show(audioBox, showAudio, true);
 
+	UpdateEditGridSplitterMinimum();
 	MainSizer->Layout();
 	Layout();
 
@@ -591,7 +625,83 @@ void FrameMain::OnSubtitleCommandToolbarVisibleChanged(agi::OptionValue const& o
 		return;
 
 	ToolsSizer->Show(subtitleCommandToolbar, opt.GetBool(), true);
+	QueueEditGridSplitterMinimumUpdate();
 	MainSizer->Layout();
+	Layout();
+}
+
+void FrameMain::OnEditGridSplitterSashPosChanged(wxSplitterEvent& event) {
+	if (updating_edit_grid_splitter_sash)
+		return;
+
+	int minPosition = GetEditGridSplitterMinimumPosition();
+	int sashPosition = event.GetSashPosition();
+	if (sashPosition < minPosition) {
+		sashPosition = minPosition;
+		editGridSplitter->SetSashPosition(sashPosition);
+	}
+
+	OPT_SET("Subtitle/Edit Box/Display Height")->SetInt(sashPosition);
+}
+
+void FrameMain::OnEditGridSplitterSashPosChanging(wxSplitterEvent& event) {
+	int minPosition = GetEditGridSplitterMinimumPosition();
+	if (event.GetSashPosition() < minPosition)
+		event.SetSashPosition(minPosition);
+}
+
+void FrameMain::QueueEditGridSplitterMinimumUpdate() {
+	if (pending_edit_grid_splitter_minimum_update)
+		return;
+
+	pending_edit_grid_splitter_minimum_update = true;
+	CallAfter([this] {
+		pending_edit_grid_splitter_minimum_update = false;
+		UpdateEditGridSplitterForContentChange();
+	});
+}
+
+int FrameMain::GetEditGridSplitterMinimumPosition() {
+	if (edit_grid_splitter_minimum_position > 0)
+		return edit_grid_splitter_minimum_position;
+	return UpdateEditGridSplitterMinimumPosition();
+}
+
+int FrameMain::UpdateEditGridSplitterMinimumPosition() {
+	if (!editAreaPanel)
+		return 0;
+
+	editAreaPanel->SetMinSize(wxDefaultSize);
+	for (wxWindow *window = editAreaPanel; window; window = window->GetParent())
+		window->InvalidateBestSize();
+
+	editAreaPanel->Layout();
+	int minPosition = editAreaPanel->GetBestSize().GetHeight();
+	editAreaPanel->SetMinSize(wxSize(-1, minPosition));
+	edit_grid_splitter_minimum_position = minPosition;
+	return edit_grid_splitter_minimum_position;
+}
+
+void FrameMain::UpdateEditGridSplitterMinimum() {
+	if (!editGridSplitter || !editAreaPanel)
+		return;
+
+	int minPosition = UpdateEditGridSplitterMinimumPosition();
+	int preferredPosition = OPT_GET("Subtitle/Edit Box/Display Height")->GetInt();
+	int targetPosition = preferredPosition > minPosition ? preferredPosition : minPosition;
+	int sashPosition = editGridSplitter->GetSashPosition();
+
+	if (editGridSplitter->IsSplit() && sashPosition != targetPosition) {
+		updating_edit_grid_splitter_sash = true;
+		editGridSplitter->SetSashPosition(targetPosition);
+		updating_edit_grid_splitter_sash = false;
+	}
+}
+
+void FrameMain::UpdateEditGridSplitterForContentChange() {
+	UpdateEditGridSplitterMinimum();
+	if (MainSizer)
+		MainSizer->Layout();
 	Layout();
 }
 

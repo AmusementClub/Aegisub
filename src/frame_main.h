@@ -31,6 +31,7 @@
 #include <string>
 #include <wx/frame.h>
 #include <wx/timer.h>
+#include <wx/splitter.h>
 
 #include "ui_dispatch.h"
 
@@ -39,6 +40,7 @@ class AsyncVideoProvider;
 class AudioBox;
 class VideoBox;
 class wxPanel;
+class wxSplitterWindow;
 class wxToolBar;
 namespace agi { class AudioProvider; }
 namespace agi { struct Context; class OptionValue; }
@@ -94,6 +96,12 @@ class FrameMain : public wxFrame {
 	void OnVideoDetach(agi::OptionValue const& opt);
 	void OnSubtitlesOpen();
 	void OnSubtitleCommandToolbarVisibleChanged(agi::OptionValue const& opt);
+	void OnEditGridSplitterSashPosChanged(wxSplitterEvent& event);
+	void OnEditGridSplitterSashPosChanging(wxSplitterEvent& event);
+	void QueueEditGridSplitterMinimumUpdate();
+	int GetEditGridSplitterMinimumPosition();
+	int UpdateEditGridSplitterMinimumPosition();
+	void UpdateEditGridSplitterMinimum();
 
 	void EnableToolBar(agi::OptionValue const& opt);
 
@@ -104,6 +112,11 @@ class FrameMain : public wxFrame {
 	wxSizer *MainSizer;  ///< Arranges things from top to bottom in the window
 	wxSizer *TopSizer;   ///< Arranges video box and tool box from left to right
 	wxSizer *ToolsSizer; ///< Arranges audio and editing areas top to bottom
+	wxSplitterWindow *editGridSplitter = nullptr; ///< Splitter between edit area and grid
+	wxPanel *editAreaPanel = nullptr; ///< Panel containing the edit area (top pane of splitter)
+	int edit_grid_splitter_minimum_position = 0;
+	bool pending_edit_grid_splitter_minimum_update = false;
+	bool updating_edit_grid_splitter_sash = false;
 
 public:
 	FrameMain();
@@ -122,6 +135,8 @@ public:
 	/// @param video -1: leave unchanged; 0: hide; 1: show
 	/// @param audio -1: leave unchanged; 0: hide; 1: show
 	void SetDisplayMode(int showVid,int showAudio);
+	/// Recalculate the edit/grid splitter after edit area contents change size
+	void UpdateEditGridSplitterForContentChange();
 
 	bool IsVideoShown() const { return showVideo; }
 	bool IsAudioShown() const { return showAudio; }

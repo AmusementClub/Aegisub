@@ -112,7 +112,7 @@ const auto AssDialogue_Effect = &AssDialogue::Effect;
 }
 
 SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
-: wxPanel(parent, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxRAISED_BORDER, wxS("SubsEditBox"))
+: wxPanel(parent, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxRAISED_BORDER | wxCLIP_CHILDREN, wxS("SubsEditBox"))
 , c(context)
 , command_session(context->GetCore().ass.get())
 , undo_timer(GetEventHandler())
@@ -121,6 +121,8 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 #endif
 {
 	using std::bind;
+
+	SetDoubleBuffered(true);
 
 	// Top controls
 	top_sizer = new wxBoxSizer(wxHORIZONTAL);

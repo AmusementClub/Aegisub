@@ -189,6 +189,9 @@ FrameMain::FrameMain()
 		[this](std::string const& message, int timeout_ms) {
 			StatusTimeout(to_wx(message), timeout_ms);
 		},
+		[this](std::string const& command_name) {
+			SetLastCommand(to_wx(command_name));
+		},
 		GetAsyncUiLifetime());
 	core.notificationSink = agi::MakeFrameMainNotificationSink(this, GetAsyncUiLifetime());
 	core.interactionSink = agi::MakeFrameMainInteractionSink(this, GetAsyncUiLifetime());
@@ -226,7 +229,7 @@ FrameMain::FrameMain()
 	observe_phase("startup.frame.menu.attach");
 
 	StartupLog("Create status bar");
-	CreateStatusBar(2);
+	CreateStatusBar(3);
 
 	StartupLog("Set icon");
 #ifdef _WIN32
@@ -709,6 +712,10 @@ void FrameMain::StatusTimeout(wxString text,int ms) {
 	SetStatusText(text,1);
 	StatusClear.SetOwner(this, ID_APP_TIMER_STATUSCLEAR);
 	StatusClear.Start(ms,true);
+}
+
+void FrameMain::SetLastCommand(wxString text) {
+	SetStatusText(text, 2);
 }
 
 BEGIN_EVENT_TABLE(FrameMain, wxFrame)

@@ -61,17 +61,28 @@ public:
 
 class WxFrameMainStatusSink final : public StatusSink {
 	std::function<void(std::string const&, int)> show_status;
+	std::function<void(std::string const&)> set_last_command;
 	ui::WeakLifetime lifetime;
 
 public:
-	WxFrameMainStatusSink(std::function<void(std::string const&, int)> show_status, ui::WeakLifetime lifetime)
+	WxFrameMainStatusSink(
+		std::function<void(std::string const&, int)> show_status,
+		std::function<void(std::string const&)> set_last_command,
+		ui::WeakLifetime lifetime)
 	: show_status(std::move(show_status))
+	, set_last_command(std::move(set_last_command))
 	, lifetime(std::move(lifetime)) {
 	}
 
 	void ShowStatus(std::string const& message, int timeout_ms) override {
 		ui::MainAsyncIfAlive(lifetime, [show_status = show_status, message, timeout_ms] {
 			show_status(message, timeout_ms);
+		});
+	}
+
+	void SetLastCommand(std::string const& command_name) override {
+		ui::MainAsyncIfAlive(lifetime, [set_last_command = set_last_command, command_name] {
+			set_last_command(command_name);
 		});
 	}
 };
@@ -142,8 +153,9 @@ inline std::shared_ptr<BackgroundRunnerFactory> MakeFrameMainBackgroundRunnerFac
 
 inline std::shared_ptr<StatusSink> MakeFrameMainStatusSink(
 	std::function<void(std::string const&, int)> show_status,
+	std::function<void(std::string const&)> set_last_command,
 	ui::WeakLifetime lifetime) {
-	return std::make_shared<WxFrameMainStatusSink>(std::move(show_status), std::move(lifetime));
+	return std::make_shared<WxFrameMainStatusSink>(std::move(show_status), std::move(set_last_command), std::move(lifetime));
 }
 
 inline std::shared_ptr<ProjectUiStateSink> MakeFrameMainProjectUiStateSink(

@@ -16,6 +16,8 @@
 
 #include "../compat.h"
 #include "../format.h"
+#include "../include/aegisub/context.h"
+#include "../status_sink.h"
 
 #include <libaegisub/log.h>
 
@@ -51,8 +53,11 @@ namespace cmd {
 
 	void call(std::string const& name, agi::Context*c) {
 		Command &cmd = *find_command(name)->second;
-		if (cmd.Validate(c))
+		if (cmd.Validate(c)) {
+			auto sink = c->GetStatusSink();
+			if (sink) sink->SetLastCommand(from_wx(cmd.StrDisplay(c)));
 			cmd(c);
+		}
 	}
 
 	std::vector<std::string> get_registered_commands() {

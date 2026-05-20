@@ -131,6 +131,10 @@ public:
 	/// @param ms Time in milliseconds that the message should be visible
 	void StatusTimeout(wxString text,int ms=10000);
 
+	/// Set the last executed command name on the status bar
+	/// @param text Command display name
+	void SetLastCommand(wxString text);
+
 	/// @brief Set the video and audio display visibility
 	/// @param video -1: leave unchanged; 0: hide; 1: show
 	/// @param audio -1: leave unchanged; 0: hide; 1: show

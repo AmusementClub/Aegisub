@@ -16,11 +16,14 @@
 
 #include "libaegisub/ass/dialogue_parser.h"
 
+#include "libaegisub/ass/drawing.h"
 #include "libaegisub/spellchecker.h"
 
 #include <boost/locale/boundary/index.hpp>
 #include <boost/locale/boundary/segment.hpp>
 #include <boost/locale/boundary/types.hpp>
+
+#include <string_view>
 
 namespace {
 
@@ -28,6 +31,52 @@ typedef std::vector<agi::ass::DialogueToken> TokenVec;
 using namespace agi::ass;
 namespace dt = DialogueTokenType;
 namespace ss = SyntaxStyle;
+
+bool IsClipTag(std::string const& str, size_t pos, size_t len) {
+	return (len == 4 && str.compare(pos, 4, "clip") == 0) ||
+		(len == 5 && str[pos] == 'i' && str.compare(pos + 1, 4, "clip") == 0);
+}
+
+bool TryMarkVectorClipDrawing(std::string const& str, std::vector<DialogueToken>& tokens, size_t tag_index, size_t tag_pos, size_t& last_ovr_end) {
+	size_t len = tokens[tag_index].length;
+	if (!IsClipTag(str, tag_pos, len) || tag_index + 3 >= last_ovr_end || tokens[tag_index + 1].type != dt::OPEN_PAREN)
+		return false;
+
+	size_t drawing_start = 0;
+	size_t drawing_end = 0;
+
+	for (size_t j = tag_index + 2; j < last_ovr_end; ++j) {
+		if (tokens[j].type == dt::ARG_SEP) {
+			if (drawing_start)
+				break;
+			drawing_start = j + 1;
+		}
+		else if (tokens[j].type == dt::CLOSE_PAREN) {
+			drawing_end = j;
+			break;
+		}
+		else if (tokens[j].type != dt::WHITESPACE && tokens[j].type != dt::ARG) {
+			break;
+		}
+	}
+
+	if (!drawing_end)
+		return false;
+	if (!drawing_start)
+		drawing_start = tag_index + 2;
+	if (drawing_end == drawing_start)
+		return false;
+
+	size_t token_len = 0;
+	for (size_t j = drawing_start; j < drawing_end; ++j)
+		token_len += tokens[j].length;
+
+	tokens[drawing_start].length = token_len;
+	tokens[drawing_start].type = dt::DRAWING;
+	tokens.erase(tokens.begin() + drawing_start + 1, tokens.begin() + drawing_end);
+	last_ovr_end -= drawing_end - drawing_start - 1;
+	return true;
+}
 
 class SyntaxHighlighter {
 	TokenVec ranges;
@@ -39,6 +88,20 @@ class SyntaxHighlighter {
 			ranges.back().length += len;
 		else
 			ranges.push_back(DialogueToken{type, len});
+	}
+
+	void HighlightDrawing(size_t pos, size_t len) {
+		for (auto const& lexeme : drawing::LexDrawing(std::string_view(text).substr(pos, len))) {
+			switch (lexeme.type) {
+				case drawing::LexemeType::Normal:    SetStyling(lexeme.length, ss::NORMAL);             break;
+				case drawing::LexemeType::Command:   SetStyling(lexeme.length, ss::DRAWING_CMD);        break;
+				case drawing::LexemeType::X:         SetStyling(lexeme.length, ss::DRAWING_X);          break;
+				case drawing::LexemeType::Y:         SetStyling(lexeme.length, ss::DRAWING_Y);          break;
+				case drawing::LexemeType::EndpointX: SetStyling(lexeme.length, ss::DRAWING_ENDPOINT_X); break;
+				case drawing::LexemeType::EndpointY: SetStyling(lexeme.length, ss::DRAWING_ENDPOINT_Y); break;
+				case drawing::LexemeType::Error:     SetStyling(lexeme.length, ss::ERROR);              break;
+			}
+		}
 	}
 
 public:
@@ -60,7 +123,7 @@ public:
 				case dt::ERROR:      SetStyling(tok.length, ss::ERROR);      break;
 				case dt::ARG:        SetStyling(tok.length, ss::PARAMETER);  break;
 				case dt::COMMENT:    SetStyling(tok.length, ss::COMMENT);    break;
-				case dt::DRAWING:    SetStyling(tok.length, ss::DRAWING);    break;
+				case dt::DRAWING:    HighlightDrawing(pos, tok.length);      break;
 				case dt::TEXT:       SetStyling(tok.length, ss::NORMAL);     break;
 				case dt::TAG_NAME:   SetStyling(tok.length, ss::TAG);        break;
 				case dt::OPEN_PAREN: case dt::CLOSE_PAREN: case dt::ARG_SEP: case dt::TAG_START:
@@ -166,6 +229,8 @@ void MarkDrawings(std::string const& str, std::vector<DialogueToken> &tokens) {
 					tokens[i].type = dt::DRAWING;
 				break;
 			case dt::TAG_NAME:
+				TryMarkVectorClipDrawing(str, tokens, i, pos, last_ovr_end);
+
 				if (len != 1 || i + 1 >= tokens.size() || str[pos] != 'p')
 					break;
 

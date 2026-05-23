@@ -683,7 +683,10 @@ void BuildInterfaceColoursPage(OptionPage *p) {
 	binder->AddColour(_("Normal"), "Colour/Subtitle/Syntax/Normal");
 #ifdef WITH_WXSTC
 	binder->AddColour(_("Comments"), "Colour/Subtitle/Syntax/Comment");
-	binder->AddColour(_("Drawings"), "Colour/Subtitle/Syntax/Drawing");
+	binder->AddColour(_("Drawing commands"), "Colour/Subtitle/Syntax/Drawing Command");
+	binder->AddColour(_("Drawing X coordinates"), "Colour/Subtitle/Syntax/Drawing X");
+	binder->AddColour(_("Drawing Y coordinates"), "Colour/Subtitle/Syntax/Drawing Y");
+	binder->AddBool(_("Underline drawing curve endpoints"), "Colour/Subtitle/Syntax/Underline/Drawing Endpoint");
 	binder->AddColour(_("Brackets"), "Colour/Subtitle/Syntax/Brackets");
 	binder->AddColour(_("Slashes and Parentheses"), "Colour/Subtitle/Syntax/Slashes");
 	binder->AddColour(_("Tags"), "Colour/Subtitle/Syntax/Tags");

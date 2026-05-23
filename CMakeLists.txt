@@ -243,6 +243,7 @@ endif()
 ## libaegisub
 add_library(libaegisub STATIC
     libaegisub/common/parser.cpp
+    libaegisub/ass/drawing.cpp
     libaegisub/ass/dialogue_parser.cpp
     libaegisub/ass/time.cpp
     libaegisub/ass/uuencode.cpp

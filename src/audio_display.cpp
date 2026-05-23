@@ -1320,10 +1320,25 @@ void AudioDisplay::EmitMiddleSeekOutput(NavigationPreviewPolicy::Output const& o
 
 void AudioDisplay::ScheduleMiddleSeekTimer()
 {
-	auto next = middle_seek_preview_policy.NextPreviewTime();
-	if (!middle_seek_active || !next) {
+	if (!middle_seek_active) {
 		if (middle_seek_timer.IsRunning())
 			middle_seek_timer.Stop();
+		return;
+	}
+
+	// Detect middle button release when the cursor is outside the window
+	// (without mouse capture, MiddleUp events won't arrive in that case).
+	if (!wxGetMouseState().MiddleIsDown()) {
+		HandleMiddleSeekRelease(MiddleSeekTimeFromCurrentMouse());
+		return;
+	}
+
+	auto next = middle_seek_preview_policy.NextPreviewTime();
+	if (!next) {
+		// No preview pending but seek is still active; keep polling for
+		// release and for motion outside the window.
+		if (!middle_seek_timer.IsRunning())
+			middle_seek_timer.Start(33, true);
 		return;
 	}
 
@@ -1359,6 +1374,12 @@ void AudioDisplay::HandleMiddleSeekRelease(int time_ms)
 	ReleaseMiddleSeekMouse();
 	RemoveTrackCursor();
 	EmitMiddleSeekOutput(output);
+	UpdateTrackCursorFromCurrentMouse();
+}
+
+int AudioDisplay::MiddleSeekTimeFromCurrentMouse() const
+{
+	return TimeFromRelativeX(ScreenToClient(wxGetMousePosition()).x);
 }
 
 void AudioDisplay::CancelMiddleSeekPreview()
@@ -1374,6 +1395,19 @@ void AudioDisplay::CancelMiddleSeekPreview()
 
 void AudioDisplay::OnMiddleSeekTimer(wxTimerEvent&)
 {
+	if (middle_seek_active) {
+		if (!wxGetMouseState().MiddleIsDown()) {
+			HandleMiddleSeekRelease(MiddleSeekTimeFromCurrentMouse());
+			return;
+		}
+
+		int const time_ms = MiddleSeekTimeFromCurrentMouse();
+		SetTrackCursor(AbsoluteXFromTime(time_ms), OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool());
+		auto motion_output = middle_seek_preview_policy.OnMotion(time_ms, NavigationPreviewPolicy::Clock::now(), false);
+		if (motion_output)
+			EmitMiddleSeekOutput(*motion_output);
+	}
+
 	auto output = middle_seek_preview_policy.OnTimer(NavigationPreviewPolicy::Clock::now());
 	if (output)
 		EmitMiddleSeekOutput(*output);
@@ -1382,17 +1416,13 @@ void AudioDisplay::OnMiddleSeekTimer(wxTimerEvent&)
 
 void AudioDisplay::CaptureMiddleSeekMouse()
 {
-	if (!middle_seek_has_mouse_capture && !HasCapture()) {
-		CaptureMouse();
-		middle_seek_has_mouse_capture = true;
-	}
+	// Intentionally not calling CaptureMouse() here. Mouse capture on Windows
+	// prevents keyboard events from reaching this window, breaking shortcuts
+	// like Ctrl+3/4 during middle seek.
 }
 
 void AudioDisplay::ReleaseMiddleSeekMouse()
 {
-	if (middle_seek_has_mouse_capture && HasCapture())
-		ReleaseMouse();
-	middle_seek_has_mouse_capture = false;
 }
 
 void AudioDisplay::OnMouseCaptureLost(wxMouseCaptureLostEvent&)
@@ -1416,8 +1446,10 @@ void AudioDisplay::OnMouseEvent(wxMouseEvent& event)
 		return;
 	}
 
-	if (middle_seek_active)
-		CancelMiddleSeekPreview();
+	if (middle_seek_active) {
+		HandleMiddleSeekRelease(TimeFromRelativeX(mouse_x));
+		return;
+	}
 
 	// If we have focus, we get mouse move events on Mac even when the mouse is
 	// outside our client rectangle, we don't want those.

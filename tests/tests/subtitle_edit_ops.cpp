@@ -144,9 +144,26 @@ TEST(subtitle_edit_ops, autoclose_parentheses_only_inside_override_blocks) {
 	EXPECT_FALSE(aegisub::subtitle_edit_ops::BuildAutoCloseEdit("plain ) text", 6, 6, AutoCloseKey::CloseParen).handled);
 }
 
-TEST(subtitle_edit_ops, autoclose_ignores_selected_text) {
+TEST(subtitle_edit_ops, autoclose_wraps_selected_text_with_braces) {
 	using aegisub::subtitle_edit_ops::AutoCloseKey;
 
-	EXPECT_FALSE(aegisub::subtitle_edit_ops::BuildAutoCloseEdit("abc", 0, 2, AutoCloseKey::OpenBrace).handled);
+	auto edit = aegisub::subtitle_edit_ops::BuildAutoCloseEdit("abc", 0, 1, AutoCloseKey::OpenBrace);
+	EXPECT_TRUE(edit.handled);
+	EXPECT_EQ(0, edit.replace_start);
+	EXPECT_EQ(1, edit.replace_end);
+	EXPECT_EQ("{a}", edit.replacement);
+	EXPECT_EQ(3, edit.caret);
+
+	edit = aegisub::subtitle_edit_ops::BuildAutoCloseEdit("abc", 1, 3, AutoCloseKey::OpenBrace);
+	EXPECT_TRUE(edit.handled);
+	EXPECT_EQ(1, edit.replace_start);
+	EXPECT_EQ(3, edit.replace_end);
+	EXPECT_EQ("{bc}", edit.replacement);
+	EXPECT_EQ(5, edit.caret);
+}
+
+TEST(subtitle_edit_ops, autoclose_ignores_selected_text_for_parentheses) {
+	using aegisub::subtitle_edit_ops::AutoCloseKey;
+
 	EXPECT_FALSE(aegisub::subtitle_edit_ops::BuildAutoCloseEdit("{\\pos}", 1, 5, AutoCloseKey::OpenParen).handled);
 }

@@ -239,12 +239,16 @@ AutoCloseEdit BuildAutoCloseEdit(std::string_view text, int selection_start, int
 	if (selection_start > selection_end)
 		std::swap(selection_start, selection_end);
 
-	if (selection_start != selection_end)
+	if (selection_start != selection_end && key != AutoCloseKey::OpenBrace)
 		return {};
 
 	int const pos = selection_start;
 	switch (key) {
 	case AutoCloseKey::OpenBrace:
+		if (selection_start != selection_end) {
+			auto selected = text.substr(static_cast<size_t>(selection_start), static_cast<size_t>(selection_end - selection_start));
+			return make_replace_edit(selection_start, selection_end, "{" + std::string(selected) + "}", selection_end + 2);
+		}
 		return make_replace_edit(pos, pos, "{}", pos + 1);
 	case AutoCloseKey::OpenParen:
 		if (is_inside_override_block(text, pos))

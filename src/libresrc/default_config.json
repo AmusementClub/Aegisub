@@ -406,7 +406,8 @@
 			"Ignore Whitespace" : true,
 			"Ignore Punctuation" : true,
 			"CPS Warning Threshold" : 15,
-			"CPS Error Threshold" : 30
+			"CPS Error Threshold" : 30,
+			"Show Decimal CPS" : false
 		},
 		"Character Limit" : 40,
 		"Default Resolution" : {

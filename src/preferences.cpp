@@ -640,6 +640,7 @@ void BuildInterfacePage(OptionPage *p) {
 	binder->AddInt(_("Characters Per Second Error Threshold"), "Subtitle/Character Counter/CPS Error Threshold", 0, 1000);
 	binder->AddBool(_("Ignore whitespace"), "Subtitle/Character Counter/Ignore Whitespace");
 	binder->AddBool(_("Ignore punctuation"), "Subtitle/Character Counter/Ignore Punctuation");
+	binder->AddBool(_("Show CPS with one decimal place"), "Subtitle/Character Counter/Show Decimal CPS");
 
 	binder->AddCategory(_("Grid"));
 	binder->AddBool(_("Focus grid on click"), "Subtitle/Grid/Focus Allow");

@@ -303,6 +303,7 @@ class GridColumnCPS final : public GridColumn {
 	const agi::OptionValue *ignore_punctuation = OPT_GET("Subtitle/Character Counter/Ignore Punctuation");
 	const agi::OptionValue *cps_warn = OPT_GET("Subtitle/Character Counter/CPS Warning Threshold");
 	const agi::OptionValue *cps_error = OPT_GET("Subtitle/Character Counter/CPS Error Threshold");
+	const agi::OptionValue *show_decimal_cps = OPT_GET("Subtitle/Character Counter/Show Decimal CPS");
 	const agi::OptionValue *bg_color = OPT_GET("Colour/Subtitle Grid/CPS Error");
 	SubtitleTimeDisplayMode display_mode = SubtitleTimeDisplayMode::Ass;
 
@@ -317,7 +318,7 @@ public:
 		return wxS("");
 	}
 
-	int CPS(const AssDialogue *d, const agi::Context *c) const {
+	double CPS(const AssDialogue *d, const agi::Context *c) const {
 		auto const duration_mode = display_mode == SubtitleTimeDisplayMode::Ass
 			? SubtitleTimeDisplayMode::Ass
 			: SubtitleTimeDisplayMode::Exact;
@@ -333,18 +334,21 @@ public:
 		if (ignore_punctuation->GetBool())
 			ignore |= agi::IGNORE_PUNCTUATION;
 
-		return agi::RenderedTextCharacterCount(text, ignore) * 1000 / duration;
+		auto const characters = agi::RenderedTextCharacterCount(text, ignore);
+		if (show_decimal_cps->GetBool())
+			return characters * 1000.0 / duration;
+		return characters * 1000 / duration;
 	}
 
 	int Width(const agi::Context *c, WidthHelper &helper) const override {
-		return helper(wxS("999"));
+		return helper(show_decimal_cps->GetBool() ? wxS("100.0") : wxS("999"));
 	}
 
 	void Paint(wxDC &dc, int x, int y, const AssDialogue *d, const agi::Context *c) const override {
-		int cps = CPS(d, c);
+		double cps = CPS(d, c);
 		if (cps < 0 || cps > 100) return;
 
-		wxString str = std::to_wstring(cps);
+		wxString str = show_decimal_cps->GetBool() ? wxString::Format(wxS("%.1f"), cps) : std::to_wstring(static_cast<int>(cps));
 		wxSize ext = dc.GetTextExtent(str);
 		auto tc = dc.GetTextForeground();
 

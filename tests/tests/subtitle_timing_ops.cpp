@@ -86,14 +86,56 @@ TEST(subtitle_timing_ops, shift_selection_to_start_time_moves_all_selected_lines
 	second.End = 4000;
 
 	Selection selection = {&first, &second};
-	agi::vfr::Framerate fps(10.); // 10 fps: frame 10 = 1000ms
 
-	ASSERT_TRUE(aegisub::subtitle_timing_ops::ShiftSelectionToStartFrame(selection, &first, 7, fps));
+	ASSERT_TRUE(aegisub::subtitle_timing_ops::ShiftSelectionToStartTime(selection, &first, 700));
 
 	EXPECT_EQ(700, static_cast<int>(first.Start));
 	EXPECT_EQ(1700, static_cast<int>(first.End));
 	EXPECT_EQ(2700, static_cast<int>(second.Start));
 	EXPECT_EQ(3700, static_cast<int>(second.End));
+}
+
+TEST(subtitle_timing_ops, shift_selection_to_start_frame_cfr_shifts_all_selected_lines_by_same_frame_delta) {
+	AssDialogue first;
+	first.Start = 1000;
+	first.End = 2000;
+	AssDialogue second;
+	second.Start = 3000;
+	second.End = 4000;
+
+	Selection selection = {&first, &second};
+	agi::vfr::Framerate fps(10.); // 10 fps: frame 10 = 1000ms
+
+	ASSERT_TRUE(aegisub::subtitle_timing_ops::ShiftSelectionToStartFrame(selection, &first, 7, fps));
+
+	EXPECT_EQ(650, static_cast<int>(first.Start));
+	EXPECT_EQ(1650, static_cast<int>(first.End));
+	EXPECT_EQ(2650, static_cast<int>(second.Start));
+	EXPECT_EQ(3650, static_cast<int>(second.End));
+}
+
+TEST(subtitle_timing_ops, shift_selection_to_start_frame_vfr_shifts_all_selected_lines_by_same_frame_delta) {
+	AssDialogue first;
+	first.Start = 100;
+	first.End = 200;
+	AssDialogue second;
+	second.Start = 500;
+	second.End = 700;
+
+	Selection selection = {&first, &second};
+	// VFR: frames at 0, 100, 200, 350, 500, 700, 900 ms
+	agi::vfr::Framerate fps({0, 100, 200, 350, 500, 700, 900});
+
+	ASSERT_TRUE(aegisub::subtitle_timing_ops::ShiftSelectionToStartFrame(selection, &first, 2, fps));
+
+	EXPECT_EQ(150, first.Start.GetMillisecond());
+	EXPECT_EQ(275, first.End.GetMillisecond());
+	EXPECT_EQ(600, second.Start.GetMillisecond());
+	EXPECT_EQ(800, second.End.GetMillisecond());
+	EXPECT_EQ(2, fps.FrameAtTime(first.Start, agi::vfr::START));
+	EXPECT_EQ(2, fps.FrameAtTime(first.End, agi::vfr::END));
+	EXPECT_EQ(5, fps.FrameAtTime(second.Start, agi::vfr::START));
+	EXPECT_EQ(5, fps.FrameAtTime(second.End, agi::vfr::END));
 }
 
 TEST(subtitle_timing_ops, snap_selection_to_video_range_preserves_non_conflicting_start_times) {

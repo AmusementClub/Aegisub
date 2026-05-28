@@ -18,6 +18,7 @@ struct SceneSnapFrameRange {
 
 bool IsAdjoinableSelection(std::vector<AssDialogue *> const& sorted_selection, size_t event_count);
 bool AdjoinSelection(std::vector<AssDialogue *> const& ordered_events, std::set<AssDialogue *> const& selection, bool set_start);
+bool ShiftSelectionToStartTime(std::set<AssDialogue *> const& selection, AssDialogue const* active_line, int target_start);
 bool ShiftSelectionToStartFrame(std::set<AssDialogue *> const& selection, AssDialogue const* active_line, int target_frame, agi::vfr::Framerate const& fps);
 bool SnapSelectionToVideoRange(std::set<AssDialogue *> const& selection, int start, int end, bool set_start);
 std::optional<SceneSnapFrameRange> ComputeSceneSnapFrameRange(std::vector<int> const& keyframes, int current_frame, int frame_count);

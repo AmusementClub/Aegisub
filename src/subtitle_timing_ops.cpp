@@ -46,6 +46,17 @@ bool AdjoinSelection(std::vector<AssDialogue *> const& ordered_events, std::set<
 	return true;
 }
 
+bool ShiftSelectionToStartTime(std::set<AssDialogue *> const& selection, AssDialogue const* active_line, int target_start) {
+	if (selection.empty() || !active_line) return false;
+
+	int shift_by = target_start - active_line->Start;
+	for (auto line : selection) {
+		line->Start = line->Start + shift_by;
+		line->End = line->End + shift_by;
+	}
+	return true;
+}
+
 bool ShiftSelectionToStartFrame(std::set<AssDialogue *> const& selection, AssDialogue const* active_line, int target_frame, agi::vfr::Framerate const& fps) {
 	if (selection.empty() || !active_line) return false;
 

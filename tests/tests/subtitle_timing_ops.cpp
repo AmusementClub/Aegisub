@@ -86,8 +86,9 @@ TEST(subtitle_timing_ops, shift_selection_to_start_time_moves_all_selected_lines
 	second.End = 4000;
 
 	Selection selection = {&first, &second};
+	agi::vfr::Framerate fps(10.); // 10 fps: frame 10 = 1000ms
 
-	ASSERT_TRUE(aegisub::subtitle_timing_ops::ShiftSelectionToStartTime(selection, &first, 700));
+	ASSERT_TRUE(aegisub::subtitle_timing_ops::ShiftSelectionToStartFrame(selection, &first, 7, fps));
 
 	EXPECT_EQ(700, static_cast<int>(first.Start));
 	EXPECT_EQ(1700, static_cast<int>(first.End));

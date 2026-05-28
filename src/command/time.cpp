@@ -115,11 +115,8 @@ struct time_frame_current final : public validate_video_loaded {
 		auto core = c->GetCore();
 		const auto active_line = core.selectionController->GetActiveLine();
 
-		int target_start = ProjectAssTimeForStorage(
-			std::max(0, core.videoController->TimeAtFrame(core.videoController->GetFrameN(), agi::vfr::START)),
-			AssStorageTimeBoundary::Start,
-			&core.project->Timecodes());
-		if (!aegisub::subtitle_timing_ops::ShiftSelectionToStartTime(core.selectionController->GetSelectedSet(), active_line, target_start))
+		int target_frame = std::max(0, core.videoController->GetFrameN());
+		if (!aegisub::subtitle_timing_ops::ShiftSelectionToStartFrame(core.selectionController->GetSelectedSet(), active_line, target_frame, core.project->Timecodes()))
 			return;
 
 		core.ass->Commit(from_wx(_("shift to frame")), AssFile::COMMIT_DIAG_TIME);

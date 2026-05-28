@@ -65,9 +65,8 @@ jobs:
       uses: actions/cache/restore@v5
       with:
         path: ${{ env.PROJECT_VCPKG_BINARY_CACHE }}
-        key: windows-vcpkg-binary-cache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ steps.vcpkg-baseline.outputs.ref }}-${{ steps.runner-image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'cmake/x64-windows-release.cmake') }}
+        key: windows-vcpkg-binary-cache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ steps.vcpkg-baseline.outputs.ref }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'cmake/x64-windows-release.cmake') }}
         restore-keys: |
-          windows-vcpkg-binary-cache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ steps.vcpkg-baseline.outputs.ref }}-${{ steps.runner-image.outputs.image_version }}-
           windows-vcpkg-binary-cache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ steps.vcpkg-baseline.outputs.ref }}-
 
     - name: bootstrap vcpkg
@@ -86,7 +85,7 @@ jobs:
       uses: actions/cache/save@v5
       with:
         path: ${{ env.PROJECT_VCPKG_BINARY_CACHE }}
-        key: windows-vcpkg-binary-cache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ steps.vcpkg-baseline.outputs.ref }}-${{ steps.runner-image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'cmake/x64-windows-release.cmake') }}
+        key: windows-vcpkg-binary-cache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ steps.vcpkg-baseline.outputs.ref }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'cmake/x64-windows-release.cmake') }}
 
     - name: test
       id: test

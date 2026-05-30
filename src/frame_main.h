@@ -35,6 +35,8 @@
 
 #include "ui_dispatch.h"
 
+#include <libaegisub/signal.h>
+
 class AegisubApp;
 class AsyncVideoProvider;
 class AudioBox;
@@ -63,6 +65,7 @@ class FrameMain : public wxFrame {
 	bool pending_audio_open_ui_sync = false;
 	wxPanel *contentsPanel = nullptr;
 	wxTimer StatusClear;   ///< Status bar timeout timer
+	agi::signal::Connection selection_changed_connection;
 #ifdef _WIN32
 	wxTimer FontChangeDebounce; ///< Debounces WM_FONTCHANGE bursts before refreshing subtitles
 	wxTimer AudioOutputRecoveryDebounce; ///< Debounces session/device-change bursts before rebuilding XAudio2 output
@@ -82,6 +85,7 @@ class FrameMain : public wxFrame {
 	void OnMouseWheel(wxMouseEvent &evt);
 
 	void OnStatusClear(wxTimerEvent &event);
+	void OnSelectedSetChanged();
 #ifdef _WIN32
 	void OnFontChangeDebounce(wxTimerEvent &event);
 	void OnAudioOutputRecoveryDebounce(wxTimerEvent &event);

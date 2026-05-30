@@ -46,6 +46,7 @@
 #include "base_grid.h"
 #include "compat.h"
 #include "command/command.h"
+#include "selection_controller.h"
 #include "dialog_detached_video.h"
 #include "dialog_manager.h"
 #include "libresrc/libresrc.h"
@@ -193,6 +194,7 @@ FrameMain::FrameMain()
 			SetLastCommand(to_wx(command_name));
 		},
 		GetAsyncUiLifetime());
+	selection_changed_connection = core.selectionController->AddSelectionListener(&FrameMain::OnSelectedSetChanged, this);
 	core.notificationSink = agi::MakeFrameMainNotificationSink(this, GetAsyncUiLifetime());
 	core.interactionSink = agi::MakeFrameMainInteractionSink(this, GetAsyncUiLifetime());
 	core.singleChoiceInteractionSink = agi::MakeFrameMainSingleChoiceInteractionSink(this, GetAsyncUiLifetime());
@@ -759,6 +761,12 @@ void FrameMain::OnCloseWindow(wxCloseEvent &event) {
 
 void FrameMain::OnStatusClear(wxTimerEvent &) {
 	SetStatusText(wxString(),1);
+}
+
+void FrameMain::OnSelectedSetChanged() {
+	auto const& sel = context->GetCore().selectionController->GetSelectedSet();
+	int count = sel.size();
+	SetStatusText(count <= 1 ? wxString() : wxString::Format(_("%d lines selected"), count), 0);
 }
 
 #ifdef _WIN32

@@ -12,11 +12,11 @@ jobs:
     env:
       PROJECT_VCPKG_ROOT: ${{ github.workspace }}\vcpkg
       PROJECT_VCPKG_INSTALLED_ROOT: ${{ github.workspace }}\vcpkg_installed
-      PROJECT_VCPKG_BINARY_CACHE: ${{ github.workspace }}\.cache\vcpkg\archives
       VCPKG_ROOT: ${{ github.workspace }}\vcpkg
       VCPKG_DEFAULT_TRIPLET: x64-windows-release
-      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.cache\vcpkg\archives,readwrite
+      VCPKG_BINARY_SOURCES: 'clear;nuget,https://nuget.pkg.github.com/AmusementClub/index.json,readwrite'
       VCPKG_DISABLE_METRICS: '1'
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
     - name: checkout code
       uses: actions/checkout@v6
@@ -43,50 +43,28 @@ jobs:
       with:
         dotnet-version: 10.0.x
 
-    - name: capture runner image version
-      id: runner-image
-      shell: pwsh
-      run: |
-        $imageVersion = if ($env:ImageVersion) { $env:ImageVersion } else { 'unknown-image' }
-        "image_version=$imageVersion" >> $env:GITHUB_OUTPUT
-
     - name: prepare dependencies
       shell: pwsh
       run: |
         dotnet build/package-win-portable.cs -- --mode prepare-dependency --cache-dir .cache/package-win-portable
-
-    - name: ensure vcpkg binary cache directory
-      shell: pwsh
-      run: |
-        New-Item -ItemType Directory -Force -Path $env:PROJECT_VCPKG_BINARY_CACHE | Out-Null
-
-    - name: restore vcpkg binary cache
-      id: restore-vcpkg-binary-cache
-      uses: actions/cache/restore@v5
-      with:
-        path: ${{ env.PROJECT_VCPKG_BINARY_CACHE }}
-        key: windows-vcpkg-binary-cache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ steps.vcpkg-baseline.outputs.ref }}-${{ steps.runner-image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'cmake/x64-windows-release.cmake') }}
-        restore-keys: |
-          windows-vcpkg-binary-cache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ steps.vcpkg-baseline.outputs.ref }}-${{ steps.runner-image.outputs.image_version }}-
-          windows-vcpkg-binary-cache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ steps.vcpkg-baseline.outputs.ref }}-
 
     - name: bootstrap vcpkg
       shell: pwsh
       run: |
         & "$env:PROJECT_VCPKG_ROOT\bootstrap-vcpkg.bat" -disableMetrics
 
+    - name: configure nuget credentials
+      shell: pwsh
+      run: |
+        $nugetPath = & "$env:PROJECT_VCPKG_ROOT\vcpkg" fetch nuget
+        & $nugetPath sources add -Source 'https://nuget.pkg.github.com/AmusementClub/index.json' -Name 'GitHub' -UserName 'AmusementClub' -Password $env:GITHUB_TOKEN -StorePasswordInClearText
+        & $nugetPath setapikey $env:GITHUB_TOKEN -Source 'https://nuget.pkg.github.com/AmusementClub/index.json'
+
     - name: build
       id: build
       shell: pwsh
       run: |
         ./build/build-win-vcpkg.ps1 -Mode build -VcpkgRoot $env:PROJECT_VCPKG_ROOT -VcpkgInstalledRoot $env:PROJECT_VCPKG_INSTALLED_ROOT
-
-    - name: save vcpkg binary cache
-      if: success() && steps.restore-vcpkg-binary-cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v5
-      with:
-        path: ${{ env.PROJECT_VCPKG_BINARY_CACHE }}
-        key: windows-vcpkg-binary-cache-${{ env.VCPKG_DEFAULT_TRIPLET }}-${{ steps.vcpkg-baseline.outputs.ref }}-${{ steps.runner-image.outputs.image_version }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'cmake/x64-windows-release.cmake') }}
 
     - name: test
       id: test

@@ -61,6 +61,8 @@ void ResolveSymbols(agi::native::Library& library, Api& api) {
 	ResolveSymbol(library, api.render_image, "pl_render_image");
 	TryResolveSymbol(library, api.map_avframe, "pl_map_avframe");
 	TryResolveSymbol(library, api.unmap_avframe, "pl_unmap_avframe");
+
+	TryResolveSymbol(library, api.color_space_is_hdr, "pl_color_space_is_hdr");
 }
 
 std::string FormatVersionDetailLocked() {

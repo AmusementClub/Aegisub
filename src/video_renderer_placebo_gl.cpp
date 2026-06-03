@@ -482,7 +482,21 @@ void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width,
 	target.crop = BuildPlaceboRenderTargetCropRect(viewport, canvas_width, canvas_height);
 	target.rotation = PL_ROTATION_0;
 
+	// HDR video is always rendered into an SDR preview target. Subtitles are
+	// composited after this pass, so they match the tone-mapped image instead
+	// of an HDR signal that Aegisub cannot preserve end-to-end.
+	bool source_is_hdr = false;
+	if (api->color_space_is_hdr)
+		source_is_hdr = api->color_space_is_hdr(&image.color);
+	else
+		source_is_hdr = (image.color.transfer == PL_COLOR_TRC_PQ || image.color.transfer == PL_COLOR_TRC_HLG);
+
 	struct pl_render_params params = {};
+
+	if (source_is_hdr) {
+		target.color = BuildPlaceboSDRRenderTargetColorSpace();
+	}
+
 	if (!api->render_image(renderer, &image, &target, &params)) {
 		RestoreCompatibilityState();
 		throw VideoOutRenderException("libplacebo failed to render the video frame.");

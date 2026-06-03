@@ -51,6 +51,10 @@ struct Api {
 	using UnmapAVFrame = void (*)(pl_gpu gpu, struct pl_frame *frame);
 	MapAVFrame map_avframe = nullptr;
 	UnmapAVFrame unmap_avframe = nullptr;
+
+	// Optional helper used when HDR sources are tone-mapped to the SDR preview target.
+	using ColorSpaceIsHDR = bool (*)(const struct pl_color_space *csp);
+	ColorSpaceIsHDR color_space_is_hdr = nullptr;
 };
 
 void EnsureLoaded();

@@ -225,6 +225,14 @@ inline bool PlaceboSourceFrameNeedsExplicitChromaLocation(SourceFrame const& fra
 		&& SourceFrameHasSubsampledChroma(frame);
 }
 
+/// SDR preview target color space for libplacebo HDR-to-SDR tone mapping.
+inline struct pl_color_space BuildPlaceboSDRRenderTargetColorSpace() {
+	struct pl_color_space space = {};
+	space.primaries = PL_COLOR_PRIM_BT_709;
+	space.transfer = PL_COLOR_TRC_SRGB;
+	return space;
+}
+
 inline struct pl_color_repr BuildPlaceboRenderTargetRepr() {
 	struct pl_color_repr repr = {};
 	repr.sys = PL_COLOR_SYSTEM_RGB;

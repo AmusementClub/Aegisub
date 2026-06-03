@@ -1382,8 +1382,11 @@ void VideoDisplay::DoRender() try {
 	int const canvas_width = client_size.GetWidth() * scale_factor;
 	int const canvas_height = client_size.GetHeight() * scale_factor;
 
+	bool const skip_scene_cache_for_renderer_warmup = first_presented_frame || renderer_was_just_created;
+
 	bool rendered_from_scene_cache = false;
-	if (!scene_cache_waiting_for_subtitle_packet
+	if (!skip_scene_cache_for_renderer_warmup
+		&& !scene_cache_waiting_for_subtitle_packet
 		&& IsSceneCacheUsableForCurrentPlayback()
 		&& ShouldAttemptSceneCache(canvas_width, canvas_height)) {
 		try {

@@ -160,7 +160,7 @@ FrameMain::FrameMain()
 		phase_started = std::chrono::steady_clock::now();
 	};
 
-	SetSize(FromDIP(wxSize(920, 700)));
+	SetSize(FromDIP(wxSize(950, 700)));
 	StartupLog("Entering FrameMain constructor");
 
 #ifdef __WXGTK__

@@ -639,12 +639,23 @@ void FrameMain::OnEditGridSplitterSashPosChanged(wxSplitterEvent& event) {
 	if (updating_edit_grid_splitter_sash)
 		return;
 
-	int minPosition = GetEditGridSplitterMinimumPosition();
 	int sashPosition = event.GetSashPosition();
+	int minPosition = GetEditGridSplitterMinimumPosition();
+
 	if (sashPosition < minPosition) {
 		sashPosition = minPosition;
 		editGridSplitter->SetSashPosition(sashPosition);
+		return;
 	}
+
+	// Don't save when the sash is at the content-forced minimum (e.g. video or
+	// secondary subtitle strip pushed the minimum above the user's saved
+	// preference).  This prevents content-driven layout changes from
+	// corrupting "Subtitle/Edit Box/Display Height" so that the edit area
+	// correctly shrinks back when the content is removed or reduced.
+	int preferredPosition = OPT_GET("Subtitle/Edit Box/Display Height")->GetInt();
+	if (sashPosition == minPosition && minPosition > preferredPosition)
+		return;
 
 	OPT_SET("Subtitle/Edit Box/Display Height")->SetInt(sashPosition);
 }

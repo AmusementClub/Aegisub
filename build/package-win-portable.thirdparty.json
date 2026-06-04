@@ -175,7 +175,7 @@
     {
       "sourceType": "archive",
       "name": "lsmasnative",
-      "url": "https://github.com/MIRIMIRIM/LsmasSharp/releases/download/202605/lsmasnative-win64-akarinvs_202605.zip",
+      "url": "https://github.com/MIRIMIRIM/LsmasSharp/releases/download/202606/lsmasnative-win64-hoe_202606.zip",
       "path": [
         {
           "source": "lsmasnative.dll",

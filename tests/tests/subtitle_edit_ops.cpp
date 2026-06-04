@@ -63,6 +63,24 @@ std::vector<int> WalkHomeBlocks(std::string const& text, int start_pos, bool kar
 	return positions;
 }
 
+std::vector<int> WalkEndBlocks(std::string const& text, int start_pos, bool karaoke_templater = false) {
+	auto tokens = agi::ass::TokenizeDialogueBody(text, karaoke_templater);
+	agi::ass::SplitWords(text, tokens);
+
+	std::vector<int> positions;
+	int pos = start_pos;
+	while (true) {
+		int next = aegisub::subtitle_edit_ops::GetNextBlockEnd(tokens, pos);
+		if (next == pos && !positions.empty())
+			break;
+		positions.push_back(next);
+		if (next == pos)
+			break;
+		pos = next;
+	}
+	return positions;
+}
+
 }
 
 TEST(subtitle_edit_ops, join_selection_into_first_adds_karaoke_tags_and_extends_end) {
@@ -207,4 +225,25 @@ TEST(subtitle_edit_ops, home_blocks_stop_at_zero) {
 
 TEST(subtitle_edit_ops, home_blocks_include_line_breaks) {
 	EXPECT_EQ((std::vector<int>{7, 5, 0}), WalkHomeBlocks("hello\\Nthere", 12));
+}
+
+TEST(subtitle_edit_ops, end_blocks_step_over_ass_blocks) {
+	std::string const text = "hello{\\i1}world";
+
+	EXPECT_EQ((std::vector<int>{5, 10, 15}), WalkEndBlocks(text, 0));
+	EXPECT_EQ(10, aegisub::subtitle_edit_ops::GetNextBlockEnd(
+		agi::ass::TokenizeDialogueBody(text),
+		5));
+}
+
+TEST(subtitle_edit_ops, end_blocks_treat_plain_text_as_one_block) {
+	EXPECT_EQ((std::vector<int>{11}), WalkEndBlocks("hello there", 0));
+}
+
+TEST(subtitle_edit_ops, end_blocks_stay_at_end) {
+	EXPECT_EQ((std::vector<int>{5}), WalkEndBlocks("hello", 5));
+}
+
+TEST(subtitle_edit_ops, end_blocks_include_line_breaks) {
+	EXPECT_EQ((std::vector<int>{5, 7, 12}), WalkEndBlocks("hello\\Nthere", 0));
 }

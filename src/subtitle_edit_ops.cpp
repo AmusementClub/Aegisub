@@ -351,4 +351,71 @@ int GetPreviousBlockStart(std::vector<agi::ass::DialogueToken> const& tokens, in
 	return target;
 }
 
+int GetNextBlockEnd(std::vector<agi::ass::DialogueToken> const& tokens, int pos) {
+	namespace dt = agi::ass::DialogueTokenType;
+
+	if (tokens.empty())
+		return 0;
+
+	std::vector<int> block_ends;
+	int offset = 0;
+	bool in_override = false;
+	bool in_text_block = false;
+
+	auto add_block_end = [&] {
+		if (block_ends.empty() || block_ends.back() != offset)
+			block_ends.push_back(offset);
+	};
+
+	for (auto const& tok : tokens) {
+		int const len = static_cast<int>(tok.length);
+
+		if (!in_override) {
+			if (is_text_block_token(tok.type)) {
+				if (!in_text_block)
+					in_text_block = true;
+			}
+			else {
+				if (in_text_block) {
+					add_block_end();
+					in_text_block = false;
+				}
+
+				if (tok.type == dt::OVR_BEGIN) {
+					in_override = true;
+				}
+				else if (tok.type == dt::LINE_BREAK) {
+					offset += len;
+					add_block_end();
+					continue;
+				}
+			}
+		}
+		else {
+			if (tok.type == dt::OVR_END) {
+				offset += len;
+				add_block_end();
+				in_override = false;
+				continue;
+			}
+		}
+
+		offset += len;
+	}
+
+	if (in_text_block)
+		add_block_end();
+
+	if (block_ends.empty())
+		return 0;
+
+	int text_len = offset;
+	for (int be : block_ends) {
+		if (be > pos)
+			return be;
+	}
+
+	return text_len;
+}
+
 }

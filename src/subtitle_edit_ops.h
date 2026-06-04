@@ -52,4 +52,8 @@ AutoCloseEdit BuildAutoCloseEdit(std::string_view text, int selection_start, int
 /// Blocks are override tags ({...}), line breaks (\N, \n), and runs of text.
 int GetPreviousBlockStart(std::vector<agi::ass::DialogueToken> const& tokens, int pos);
 
+/// Get the end position to move to when pressing End at the given position.
+/// Blocks are override tags ({...}), line breaks (\N, \n), and runs of text.
+int GetNextBlockEnd(std::vector<agi::ass::DialogueToken> const& tokens, int pos);
+
 }

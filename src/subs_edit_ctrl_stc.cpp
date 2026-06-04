@@ -169,6 +169,8 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 	CmdKeyClear('U', wxSTC_KEYMOD_CTRL);
 	CmdKeyClear(wxSTC_KEY_HOME, wxSTC_KEYMOD_NORM);
 	CmdKeyClear(wxSTC_KEY_HOME, wxSTC_KEYMOD_SHIFT);
+	CmdKeyClear(wxSTC_KEY_END, wxSTC_KEYMOD_NORM);
+	CmdKeyClear(wxSTC_KEY_END, wxSTC_KEYMOD_SHIFT);
 #else
 	CmdKeyClear(wxSTC_KEY_RETURN,wxSTC_SCMOD_CTRL);
 	CmdKeyClear(wxSTC_KEY_RETURN,wxSTC_SCMOD_SHIFT);
@@ -183,6 +185,8 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 	CmdKeyClear('U',wxSTC_SCMOD_CTRL);
 	CmdKeyClear(wxSTC_KEY_HOME,wxSTC_SCMOD_NORM);
 	CmdKeyClear(wxSTC_KEY_HOME,wxSTC_SCMOD_SHIFT);
+	CmdKeyClear(wxSTC_KEY_END,wxSTC_SCMOD_NORM);
+	CmdKeyClear(wxSTC_KEY_END,wxSTC_SCMOD_SHIFT);
 #endif
 
 	using std::bind;
@@ -302,6 +306,27 @@ void SubsStyledTextEditCtrl::OnKeyDown(wxKeyEvent &event) {
 		int anchor = GetAnchor();
 		int pos = GetCurrentPos();
 		int target = aegisub::subtitle_edit_ops::GetPreviousBlockStart(tokenized_line, pos);
+
+		// Use CallAfter to set selection after all CHAR_HOOK handlers have run,
+		// since the parent SubsEditBox::OnKeyDown re-skips the event via hotkey::check.
+		if (shift)
+			CallAfter([this, anchor, target] {
+				SetAnchor(anchor);
+				SetCurrentPos(target);
+			});
+		else
+			CallAfter([this, target] { SetSelection(target, target); });
+
+		event.Skip(false);
+		return;
+	}
+
+	// Smart End: navigate forward through ASS text blocks.
+	if (event.GetKeyCode() == WXK_END && !event.CmdDown() && !event.AltDown()) {
+		bool shift = event.ShiftDown();
+		int anchor = GetAnchor();
+		int pos = GetCurrentPos();
+		int target = aegisub::subtitle_edit_ops::GetNextBlockEnd(tokenized_line, pos);
 
 		// Use CallAfter to set selection after all CHAR_HOOK handlers have run,
 		// since the parent SubsEditBox::OnKeyDown re-skips the event via hotkey::check.

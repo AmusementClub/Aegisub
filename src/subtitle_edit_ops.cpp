@@ -1,5 +1,6 @@
 #include "subtitle_edit_ops.h"
 
+#include <libaegisub/ass/dialogue_parser.h>
 #include <libaegisub/string_utils.h>
 
 #include <algorithm>
@@ -120,6 +121,21 @@ void apply_join(AssDialogue *first, AssDialogue *second, aegisub::subtitle_edit_
 		break;
 	case aegisub::subtitle_edit_ops::JoinMode::KeepFirst:
 		break;
+	}
+}
+
+bool is_text_block_token(int type) {
+	namespace dt = agi::ass::DialogueTokenType;
+
+	switch (type) {
+	case dt::TEXT:
+	case dt::WORD:
+	case dt::DRAWING:
+	case dt::KARAOKE_TEMPLATE:
+	case dt::KARAOKE_VARIABLE:
+		return true;
+	default:
+		return false;
 	}
 }
 
@@ -271,6 +287,68 @@ AutoCloseEdit BuildAutoCloseEdit(std::string_view text, int selection_start, int
 	}
 
 	return {};
+}
+
+int GetPreviousBlockStart(std::vector<agi::ass::DialogueToken> const& tokens, int pos) {
+	namespace dt = agi::ass::DialogueTokenType;
+
+	if (tokens.empty() || pos <= 0)
+		return 0;
+
+	std::vector<int> block_starts;
+	int offset = 0;
+	bool in_override = false;
+	bool in_text_block = false;
+
+	auto add_block_start = [&] {
+		if (block_starts.empty() || block_starts.back() != offset)
+			block_starts.push_back(offset);
+	};
+
+	for (auto const& tok : tokens) {
+		int const len = static_cast<int>(tok.length);
+
+		if (!in_override) {
+			if (tok.type == dt::OVR_BEGIN) {
+				add_block_start();
+				in_override = true;
+				in_text_block = false;
+			}
+			else if (tok.type == dt::LINE_BREAK) {
+				add_block_start();
+				in_text_block = false;
+			}
+			else if (is_text_block_token(tok.type)) {
+				if (!in_text_block)
+					add_block_start();
+				in_text_block = true;
+			}
+			else {
+				in_text_block = false;
+			}
+		}
+		else {
+			if (tok.type == dt::OVR_END) {
+				in_override = false;
+				in_text_block = false;
+			}
+		}
+
+		offset += len;
+	}
+
+	if (block_starts.empty())
+		return 0;
+
+	int target = 0;
+	for (int bs : block_starts) {
+		if (bs < pos)
+			target = bs;
+		else
+			break;
+	}
+
+	return target;
 }
 
 }

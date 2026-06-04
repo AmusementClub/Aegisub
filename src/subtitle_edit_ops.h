@@ -8,6 +8,10 @@
 #include <utility>
 #include <vector>
 
+namespace agi::ass {
+	struct DialogueToken;
+}
+
 namespace aegisub::subtitle_edit_ops {
 
 enum class JoinMode {
@@ -43,5 +47,9 @@ std::optional<int> EstimateSplitTime(int start_ms, int end_ms, std::string const
 std::string BuildTagOnlyText(AssDialogue const& line);
 std::string ReplaceRangeWithText(std::string text, int start, int end, std::string const& replacement);
 AutoCloseEdit BuildAutoCloseEdit(std::string_view text, int selection_start, int selection_end, AutoCloseKey key);
+
+/// Get the start position to move to when pressing Home at the given position.
+/// Blocks are override tags ({...}), line breaks (\N, \n), and runs of text.
+int GetPreviousBlockStart(std::vector<agi::ass::DialogueToken> const& tokens, int pos);
 
 }

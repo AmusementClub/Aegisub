@@ -2,6 +2,8 @@
 
 #include "../../src/subtitle_edit_ops.h"
 
+#include <libaegisub/ass/dialogue_parser.h>
+
 #include <memory>
 #include <utility>
 #include <vector>
@@ -41,6 +43,24 @@ std::string ApplyAutoClose(std::string marked, aegisub::subtitle_edit_ops::AutoC
 	auto text = aegisub::subtitle_edit_ops::ReplaceRangeWithText(input.text, edit.replace_start, edit.replace_end, edit.replacement);
 	text.insert(static_cast<size_t>(edit.caret), "|");
 	return text;
+}
+
+std::vector<int> WalkHomeBlocks(std::string const& text, int start_pos, bool karaoke_templater = false) {
+	auto tokens = agi::ass::TokenizeDialogueBody(text, karaoke_templater);
+	agi::ass::SplitWords(text, tokens);
+
+	std::vector<int> positions;
+	int pos = start_pos;
+	while (true) {
+		int next = aegisub::subtitle_edit_ops::GetPreviousBlockStart(tokens, pos);
+		if (next == pos && !positions.empty())
+			break;
+		positions.push_back(next);
+		if (next == pos)
+			break;
+		pos = next;
+	}
+	return positions;
 }
 
 }
@@ -166,4 +186,25 @@ TEST(subtitle_edit_ops, autoclose_ignores_selected_text_for_parentheses) {
 	using aegisub::subtitle_edit_ops::AutoCloseKey;
 
 	EXPECT_FALSE(aegisub::subtitle_edit_ops::BuildAutoCloseEdit("{\\pos}", 1, 5, AutoCloseKey::OpenParen).handled);
+}
+
+TEST(subtitle_edit_ops, home_blocks_step_over_ass_blocks) {
+	std::string const text = "hello{\\i1}world";
+
+	EXPECT_EQ((std::vector<int>{10, 5, 0}), WalkHomeBlocks(text, text.size()));
+	EXPECT_EQ(5, aegisub::subtitle_edit_ops::GetPreviousBlockStart(
+		agi::ass::TokenizeDialogueBody(text),
+		10));
+}
+
+TEST(subtitle_edit_ops, home_blocks_treat_plain_text_as_one_block) {
+	EXPECT_EQ((std::vector<int>{0}), WalkHomeBlocks("hello there", 11));
+}
+
+TEST(subtitle_edit_ops, home_blocks_stop_at_zero) {
+	EXPECT_EQ((std::vector<int>{0}), WalkHomeBlocks("hello", 0));
+}
+
+TEST(subtitle_edit_ops, home_blocks_include_line_breaks) {
+	EXPECT_EQ((std::vector<int>{7, 5, 0}), WalkHomeBlocks("hello\\Nthere", 12));
 }

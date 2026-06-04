@@ -47,6 +47,10 @@ struct Api {
 	decltype(&pl_tex_destroy) tex_destroy = nullptr;
 	decltype(&pl_frame_set_chroma_location) frame_set_chroma_location = nullptr;
 	decltype(&pl_render_image) render_image = nullptr;
+	using HdrRescale = float (*)(enum pl_hdr_scaling from, enum pl_hdr_scaling to, float x);
+	HdrRescale hdr_rescale = nullptr;
+	using HdrMetadataFromDoviRpu = void (*)(struct pl_hdr_metadata *out, const uint8_t *buf, size_t size);
+	HdrMetadataFromDoviRpu hdr_metadata_from_dovi_rpu = nullptr;
 	using MapAVFrame = bool (*)(pl_gpu gpu, struct pl_frame *out_frame, pl_tex tex[4], const void *avframe);
 	using UnmapAVFrame = void (*)(pl_gpu gpu, struct pl_frame *frame);
 	MapAVFrame map_avframe = nullptr;

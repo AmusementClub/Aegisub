@@ -59,6 +59,8 @@ void ResolveSymbols(agi::native::Library& library, Api& api) {
 	ResolveSymbol(library, api.tex_destroy, "pl_tex_destroy");
 	ResolveSymbol(library, api.frame_set_chroma_location, "pl_frame_set_chroma_location");
 	ResolveSymbol(library, api.render_image, "pl_render_image");
+	TryResolveSymbol(library, api.hdr_rescale, "pl_hdr_rescale");
+	TryResolveSymbol(library, api.hdr_metadata_from_dovi_rpu, "pl_hdr_metadata_from_dovi_rpu");
 	TryResolveSymbol(library, api.map_avframe, "pl_map_avframe");
 	TryResolveSymbol(library, api.unmap_avframe, "pl_unmap_avframe");
 

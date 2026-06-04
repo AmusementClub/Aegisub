@@ -24,14 +24,15 @@ File.WriteAllText(
     abiOutputPath,
     Generator.RenderAbiHeader(repoRoot, headerPath, header),
     new UTF8Encoding(false));
+var functionList = Generator.RenderFunctionList(repoRoot, headerPath, header, requiredMembers, options.Mode);
 File.WriteAllText(
     functionsOutputPath,
-    Generator.RenderFunctionList(repoRoot, headerPath, header, requiredMembers, options.Mode),
+    functionList,
     new UTF8Encoding(false));
 
 Console.WriteLine($"Wrote LsmasNative ABI declarations to {abiOutputPath}");
 Console.WriteLine($"Wrote {header.Functions.Count} LsmasNative functions to {functionsOutputPath}");
-Console.WriteLine($"Required symbols: {requiredMembers.Count}; optional symbols: {header.Functions.Count - requiredMembers.Count}");
+Console.WriteLine($"Required symbols: {Generator.CountRequiredFunctionListEntries(functionList)}; optional symbols: {Generator.CountOptionalFunctionListEntries(functionList)}");
 
 enum GenerationMode {
     UsedRequired,
@@ -214,6 +215,10 @@ sealed record HeaderModel(string Body, string VersionDefines, string Sha256, IRe
 static class Generator {
     private static readonly Regex ApiMemberPattern = new(@"\b(?:api|loaded)\.([A-Za-z_][A-Za-z0-9_]*)\b", RegexOptions.Compiled);
     private static readonly Regex GetApiMemberPattern = new(@"\bGetApi\(\)\.([A-Za-z_][A-Za-z0-9_]*)\b", RegexOptions.Compiled);
+    private static readonly HashSet<string> AlwaysOptionalMembers = new(StringComparer.Ordinal) {
+        "video_frame_get_side_data",
+        "video_frame_get_dovi_metadata"
+    };
 
     public static HashSet<string> GetUsedApiMembers(IReadOnlyList<string> sourcePaths, IReadOnlyList<HeaderFunction> functions) {
         var exportedMembers = functions.Select(function => function.MemberName).ToHashSet(StringComparer.Ordinal);
@@ -269,12 +274,19 @@ static class Generator {
         builder.AppendLine($" * Mode: {(mode == GenerationMode.AllRequired ? "all" : "used")}");
         builder.AppendLine(" */");
         foreach (var function in header.Functions) {
-            var macro = requiredMembers.Contains(function.MemberName) ? "AGI_LSMAS_REQUIRED" : "AGI_LSMAS_OPTIONAL";
+            var forceOptional = mode == GenerationMode.UsedRequired && AlwaysOptionalMembers.Contains(function.MemberName);
+            var macro = requiredMembers.Contains(function.MemberName) && !forceOptional ? "AGI_LSMAS_REQUIRED" : "AGI_LSMAS_OPTIONAL";
             builder.AppendLine($"{macro}({function.SymbolName}, {function.MemberName})");
         }
 
         return builder.ToString();
     }
+
+    public static int CountRequiredFunctionListEntries(string functionList) =>
+        Regex.Matches(functionList, @"^AGI_LSMAS_REQUIRED\(", RegexOptions.Multiline).Count;
+
+    public static int CountOptionalFunctionListEntries(string functionList) =>
+        Regex.Matches(functionList, @"^AGI_LSMAS_OPTIONAL\(", RegexOptions.Multiline).Count;
 
     private static string FormatSourcePath(string repoRoot, string headerPath) {
         var fullRepoRoot = Path.GetFullPath(repoRoot);

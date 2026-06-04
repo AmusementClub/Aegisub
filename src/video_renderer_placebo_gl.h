@@ -21,6 +21,7 @@
 #include <memory>
 
 struct SubtitleOverlay;
+struct pl_dovi_metadata;
 struct pl_log_t;
 struct pl_opengl_t;
 struct pl_frame;
@@ -56,8 +57,10 @@ class PlaceboRendererGL final : public IVideoRenderer {
 	SourceFrameOutputMode image_output_mode = SourceFrameOutputMode::Bgra8;
 	SourceFrameFormatInfo image_format_info;
 	SourceFrameColorMetadata image_color;
+	SourceFrameDolbyVisionMetadata image_dolby_vision;
 	SourceFrameChromaLocation image_chroma_location = SourceFrameChromaLocation::Unknown;
 	SourceFrameGeometry image_geometry;
+	std::unique_ptr<pl_dovi_metadata> image_placebo_dovi_metadata;
 	size_t image_avframe_texture_estimated_bytes = 0;
 	int target_width = 0;
 	int target_height = 0;

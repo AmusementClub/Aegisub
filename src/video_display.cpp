@@ -69,7 +69,9 @@
 #include <libaegisub/scope_exit.h>
 
 #include <algorithm>
+#include <array>
 #include <cctype>
+#include <cmath>
 #include <cstdlib>
 #include <wx/combobox.h>
 #include <wx/dcclient.h>
@@ -262,6 +264,77 @@ bool SourceFrameNativeFormatIdentityEquals(
 		&& lhs.format_id == rhs.format_id;
 }
 
+bool SourceFrameFloatEquals(float lhs, float rhs) {
+	return std::fabs(lhs - rhs) <= 0.000001f;
+}
+
+inline bool SourceFrameValueEquals(float lhs, float rhs) {
+	return SourceFrameFloatEquals(lhs, rhs);
+}
+
+template <typename T>
+bool SourceFrameValueEquals(T const& lhs, T const& rhs);
+
+template <typename T, size_t N>
+bool SourceFrameValueEquals(std::array<T, N> const& lhs, std::array<T, N> const& rhs);
+
+template <typename T, size_t N>
+bool SourceFrameArrayEquals(std::array<T, N> const& lhs, std::array<T, N> const& rhs) {
+	for (size_t i = 0; i < N; ++i) {
+		if (!SourceFrameValueEquals(lhs[i], rhs[i]))
+			return false;
+	}
+	return true;
+}
+
+template <typename T, size_t N>
+bool SourceFrameValueEquals(std::array<T, N> const& lhs, std::array<T, N> const& rhs) {
+	return SourceFrameArrayEquals(lhs, rhs);
+}
+
+template <typename T>
+bool SourceFrameValueEquals(T const& lhs, T const& rhs) {
+	return lhs == rhs;
+}
+
+bool SourceFrameDolbyVisionComponentEquals(
+	SourceFrameDolbyVisionReshapeComponent const& lhs,
+	SourceFrameDolbyVisionReshapeComponent const& rhs) {
+	return lhs.num_pivots == rhs.num_pivots
+		&& SourceFrameArrayEquals(lhs.pivots, rhs.pivots)
+		&& SourceFrameArrayEquals(lhs.method, rhs.method)
+		&& SourceFrameArrayEquals(lhs.poly_coeffs, rhs.poly_coeffs)
+		&& SourceFrameArrayEquals(lhs.mmr_order, rhs.mmr_order)
+		&& SourceFrameArrayEquals(lhs.mmr_constant, rhs.mmr_constant)
+		&& SourceFrameArrayEquals(lhs.mmr_coeffs, rhs.mmr_coeffs);
+}
+
+bool SourceFrameDolbyVisionMetadataEquals(
+	SourceFrameDolbyVisionMetadata const& lhs,
+	SourceFrameDolbyVisionMetadata const& rhs) {
+	if (lhs.valid != rhs.valid)
+		return false;
+	if (!lhs.valid)
+		return true;
+	if (lhs.bl_bit_depth != rhs.bl_bit_depth
+		|| lhs.coefficient_log2_denom != rhs.coefficient_log2_denom
+		|| lhs.has_l1 != rhs.has_l1
+		|| !SourceFrameArrayEquals(lhs.nonlinear_offset, rhs.nonlinear_offset)
+		|| !SourceFrameArrayEquals(lhs.nonlinear, rhs.nonlinear)
+		|| !SourceFrameArrayEquals(lhs.linear, rhs.linear)
+		|| !SourceFrameFloatEquals(lhs.source_min_pq, rhs.source_min_pq)
+		|| !SourceFrameFloatEquals(lhs.source_max_pq, rhs.source_max_pq)
+		|| !SourceFrameFloatEquals(lhs.max_pq_y, rhs.max_pq_y)
+		|| !SourceFrameFloatEquals(lhs.avg_pq_y, rhs.avg_pq_y)
+		|| lhs.rpu != rhs.rpu)
+		return false;
+	for (size_t i = 0; i < lhs.comp.size(); ++i) {
+		if (!SourceFrameDolbyVisionComponentEquals(lhs.comp[i], rhs.comp[i]))
+			return false;
+	}
+	return true;
+}
+
 bool SourceFrameEquivalentForUpload(
 	SourceFrame const& lhs,
 	SourceFrame const& rhs) {
@@ -274,6 +347,7 @@ bool SourceFrameEquivalentForUpload(
 		&& lhs.flipped == rhs.flipped
 		&& lhs.plane_count == rhs.plane_count
 		&& SourceFrameColorMetadataEquals(lhs.color, rhs.color)
+		&& SourceFrameDolbyVisionMetadataEquals(lhs.dolby_vision, rhs.dolby_vision)
 		&& lhs.chroma_location == rhs.chroma_location
 		&& SourceFrameGeometryEquals(lhs.geometry, rhs.geometry);
 }

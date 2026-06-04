@@ -22,6 +22,7 @@
 #include <libaegisub/scope_exit.h>
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -83,6 +84,73 @@ enum AvChromaLocation {
     AVCHROMA_LOC_BOTTOMLEFT = 5,
     AVCHROMA_LOC_BOTTOM = 6
 };
+
+SourceFrameDolbyVisionMetadata BuildDolbyVisionMetadata(
+    lsmas::Api const& api,
+    lsmas_video_frame_t const *frame) {
+    SourceFrameDolbyVisionMetadata out;
+    if (!api.video_frame_get_dovi_metadata)
+        return out;
+
+    lsmas_provider::ErrorString error;
+    lsmas_dovi_metadata_t metadata = {};
+    int metadata_rc = api.video_frame_get_dovi_metadata(frame, &metadata, error.Out());
+    if (metadata_rc != 0 || !metadata.valid)
+        return out;
+
+    out.bl_bit_depth = metadata.bl_bit_depth;
+    out.coefficient_log2_denom = metadata.coefficient_log2_denom;
+    out.has_l1 = metadata.has_l1 != 0;
+    for (int i = 0; i < 3; ++i)
+        out.nonlinear_offset[static_cast<size_t>(i)] = metadata.nonlinear_offset[i];
+    for (int i = 0; i < 9; ++i) {
+        out.nonlinear[static_cast<size_t>(i)] = metadata.nonlinear[i];
+        out.linear[static_cast<size_t>(i)] = metadata.linear[i];
+    }
+
+    for (int c = 0; c < 3; ++c) {
+        auto const& src = metadata.comp[c];
+        auto& dst = out.comp[static_cast<size_t>(c)];
+        dst.num_pivots = src.num_pivots;
+        for (int i = 0; i < 9; ++i)
+            dst.pivots[static_cast<size_t>(i)] = src.pivots[i];
+        int const pieces = std::max(0, std::min<int>(dst.num_pivots, 9) - 1);
+        for (int i = 0; i < pieces; ++i) {
+            dst.method[static_cast<size_t>(i)] = src.method[i];
+            for (int k = 0; k < 3; ++k)
+                dst.poly_coeffs[static_cast<size_t>(i)][static_cast<size_t>(k)] = src.poly_coeffs[i][k];
+            dst.mmr_order[static_cast<size_t>(i)] = src.mmr_order[i];
+            dst.mmr_constant[static_cast<size_t>(i)] = src.mmr_constant[i];
+            for (int j = 0; j < 3; ++j) {
+                for (int k = 0; k < 7; ++k)
+                    dst.mmr_coeffs[static_cast<size_t>(i)][static_cast<size_t>(j)][static_cast<size_t>(k)] =
+                        src.mmr_coeffs[i][j][k];
+            }
+        }
+    }
+
+    out.source_min_pq = metadata.source_min_pq;
+    out.source_max_pq = metadata.source_max_pq;
+    out.max_pq_y = metadata.max_pq_y;
+    out.avg_pq_y = metadata.avg_pq_y;
+
+    const uint8_t *rpu_data = nullptr;
+    int32_t rpu_size = 0;
+    error.Reset();
+    if (api.video_frame_get_side_data) {
+        int rpu_rc = api.video_frame_get_side_data(
+            frame,
+            LSMAS_FRAME_SIDE_DATA_DOVI_RPU,
+            &rpu_data,
+            &rpu_size,
+            error.Out());
+        if (rpu_rc > 0 && rpu_data && rpu_size > 0)
+            out.rpu.assign(rpu_data, rpu_data + rpu_size);
+    }
+
+    out.valid = true;
+    return out;
+}
 
 std::string MatrixName(int cs, int cr, int width, int height) {
     if (cs == AVCOL_SPC_RGB)
@@ -369,9 +437,11 @@ LsmasVideoProvider::LsmasVideoProvider(agi::fs::path const& filename, std::strin
     if (api.video_frame_get_format_info(first, &fmt, error.Out()) < 0)
         throw VideoOpenError(error.Message("failed to query first frame format"));
 
+    auto format_info = ConvertFormatInfo(fmt);
+
     color = ColorMetadata(first_props);
     geometry = BuildGeometry(first_props);
-    native_format_info = ConvertFormatInfo(fmt);
+    native_format_info = format_info;
     native_pix_fmt = first_props.pix_fmt;
     if (auto *name = api.video_frame_get_pix_fmt_name(first))
         native_format_name = std::string(name) + " (ffmpeg:" + std::to_string(native_pix_fmt) + ")";
@@ -596,6 +666,7 @@ bool LsmasVideoProvider::GetNativeFrame(int n, SourceFrame& out, std::shared_ptr
     out.plane_count = format_info.plane_count;
     out.geometry = BuildGeometry(props);
     out.color = ColorMetadata(props);
+    out.dolby_vision = BuildDolbyVisionMetadata(api, native);
     out.chroma_location = ChromaLocation(props.chroma_location);
 
     for (int i = 0; i < out.plane_count; ++i) {

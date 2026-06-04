@@ -20,7 +20,9 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <utility>
+#include <vector>
 
 enum class SourceFramePixelFormat {
 	Unknown,
@@ -107,6 +109,32 @@ struct SourceFrameNativeFormatIdentity {
 enum class SourceFrameNativePayloadKind {
 	None,
 	FFmpegAVFrame
+};
+
+struct SourceFrameDolbyVisionReshapeComponent {
+	uint8_t num_pivots = 0;
+	std::array<float, 9> pivots = { };
+	std::array<uint8_t, 8> method = { };
+	std::array<std::array<float, 3>, 8> poly_coeffs = { };
+	std::array<uint8_t, 8> mmr_order = { };
+	std::array<float, 8> mmr_constant = { };
+	std::array<std::array<std::array<float, 7>, 3>, 8> mmr_coeffs = { };
+};
+
+struct SourceFrameDolbyVisionMetadata {
+	bool valid = false;
+	int bl_bit_depth = 0;
+	int coefficient_log2_denom = 0;
+	bool has_l1 = false;
+	std::array<float, 3> nonlinear_offset = { };
+	std::array<float, 9> nonlinear = { };
+	std::array<float, 9> linear = { };
+	std::array<SourceFrameDolbyVisionReshapeComponent, 3> comp = { };
+	float source_min_pq = 0.0f;
+	float source_max_pq = 0.0f;
+	float max_pq_y = 0.0f;
+	float avg_pq_y = 0.0f;
+	std::vector<uint8_t> rpu;
 };
 
 inline constexpr int DivideRoundUp(int value, int divisor) {
@@ -281,6 +309,7 @@ struct SourceFrame {
 	int plane_count = 0;
 	std::array<SourceFramePlaneView, 4> planes = { };
 	SourceFrameColorMetadata color;
+	SourceFrameDolbyVisionMetadata dolby_vision;
 	SourceFrameChromaLocation chroma_location = SourceFrameChromaLocation::Unknown;
 	SourceFrameGeometry geometry;
 

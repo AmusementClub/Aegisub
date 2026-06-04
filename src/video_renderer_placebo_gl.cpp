@@ -23,6 +23,9 @@
 
 #include <libaegisub/log.h>
 
+#include <libplacebo/colorspace.h>
+#include <libplacebo/utils/dolbyvision.h>
+
 #include <array>
 #include <string>
 
@@ -118,6 +121,59 @@ bool BuildBgra8PlaneData(placebo::runtime::Api const& api, SourceFrame const& fr
 	api.plane_data_from_mask(&data, masks);
 	return true;
 }
+
+void CopyDolbyVisionComponent(pl_dovi_metadata::pl_reshape_data& dst, SourceFrameDolbyVisionReshapeComponent const& src) {
+	dst.num_pivots = src.num_pivots;
+	for (int i = 0; i < 9; ++i)
+		dst.pivots[i] = src.pivots[static_cast<size_t>(i)];
+	for (int i = 0; i < 8; ++i) {
+		dst.method[i] = src.method[static_cast<size_t>(i)];
+		for (int k = 0; k < 3; ++k)
+			dst.poly_coeffs[i][k] = src.poly_coeffs[static_cast<size_t>(i)][static_cast<size_t>(k)];
+		dst.mmr_order[i] = src.mmr_order[static_cast<size_t>(i)];
+		dst.mmr_constant[i] = src.mmr_constant[static_cast<size_t>(i)];
+		for (int j = 0; j < 3; ++j) {
+			for (int k = 0; k < 7; ++k)
+				dst.mmr_coeffs[i][j][k] = src.mmr_coeffs[static_cast<size_t>(i)][static_cast<size_t>(j)][static_cast<size_t>(k)];
+		}
+	}
+}
+
+void FillDolbyVisionMetadata(pl_dovi_metadata& dst, SourceFrameDolbyVisionMetadata const& src) {
+	for (int i = 0; i < 3; ++i)
+		dst.nonlinear_offset[i] = src.nonlinear_offset[static_cast<size_t>(i)];
+	auto *nonlinear = &dst.nonlinear.m[0][0];
+	auto *linear = &dst.linear.m[0][0];
+	for (int i = 0; i < 9; ++i) {
+		nonlinear[i] = src.nonlinear[static_cast<size_t>(i)];
+		linear[i] = src.linear[static_cast<size_t>(i)];
+	}
+	for (int c = 0; c < 3; ++c)
+		CopyDolbyVisionComponent(dst.comp[c], src.comp[static_cast<size_t>(c)]);
+}
+
+void ApplyDolbyVisionMetadata(
+	placebo::runtime::Api const& api,
+	struct pl_frame& image,
+	SourceFrameDolbyVisionMetadata const& dovi,
+	struct pl_dovi_metadata const *metadata) {
+	if (!dovi.valid || !metadata)
+		return;
+
+	image.repr.sys = PL_COLOR_SYSTEM_DOLBYVISION;
+	image.repr.dovi = metadata;
+	image.color.primaries = PL_COLOR_PRIM_BT_2020;
+	image.color.transfer = PL_COLOR_TRC_PQ;
+	if (api.hdr_rescale) {
+		image.color.hdr.min_luma = api.hdr_rescale(PL_HDR_PQ, PL_HDR_NITS, dovi.source_min_pq);
+		image.color.hdr.max_luma = api.hdr_rescale(PL_HDR_PQ, PL_HDR_NITS, dovi.source_max_pq);
+	}
+	image.color.hdr.max_pq_y = dovi.max_pq_y;
+	image.color.hdr.avg_pq_y = dovi.avg_pq_y;
+	if (api.hdr_metadata_from_dovi_rpu && !dovi.rpu.empty())
+		api.hdr_metadata_from_dovi_rpu(&image.color.hdr, dovi.rpu.data(), dovi.rpu.size());
+}
+
 }
 
 struct PlaceboRendererGL::Functions {
@@ -216,8 +272,10 @@ void PlaceboRendererGL::DestroyImageResources() noexcept {
 	image_output_mode = SourceFrameOutputMode::Bgra8;
 	image_format_info = {};
 	image_color = {};
+	image_dolby_vision = {};
 	image_chroma_location = SourceFrameChromaLocation::Unknown;
 	image_geometry = {};
+	image_placebo_dovi_metadata.reset();
 	has_frame = false;
 }
 
@@ -296,7 +354,8 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 		&& api->map_avframe
 		&& api->unmap_avframe) {
 		auto mapped = std::make_unique<pl_frame>();
-		if (api->map_avframe(opengl->gpu, mapped.get(), image_avframe_textures.data(), frame.native_payload)) {
+		bool mapped_ok = api->map_avframe(opengl->gpu, mapped.get(), image_avframe_textures.data(), frame.native_payload);
+		if (mapped_ok) {
 			DestroyPlaneResources();
 			mapped_avframe = std::move(mapped);
 			image_avframe_texture_estimated_bytes = 0;
@@ -310,6 +369,14 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 			image_output_mode = frame.output_mode;
 			image_format_info = frame.format_info;
 			image_color = frame.color;
+			image_dolby_vision = frame.dolby_vision;
+			if (image_dolby_vision.valid) {
+				image_placebo_dovi_metadata = std::make_unique<pl_dovi_metadata>();
+				FillDolbyVisionMetadata(*image_placebo_dovi_metadata, image_dolby_vision);
+			}
+			else {
+				image_placebo_dovi_metadata.reset();
+			}
 			image_chroma_location = frame.chroma_location;
 			image_geometry = frame.geometry;
 			has_frame = true;
@@ -389,6 +456,14 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 	image_output_mode = upload_frame->output_mode;
 	image_format_info = upload_frame->format_info;
 	image_color = upload_frame->color;
+	image_dolby_vision = upload_frame->dolby_vision;
+	if (image_dolby_vision.valid) {
+		image_placebo_dovi_metadata = std::make_unique<pl_dovi_metadata>();
+		FillDolbyVisionMetadata(*image_placebo_dovi_metadata, image_dolby_vision);
+	}
+	else {
+		image_placebo_dovi_metadata.reset();
+	}
 	image_chroma_location = upload_frame->chroma_location;
 	image_geometry = upload_frame->geometry;
 	has_frame = true;
@@ -436,6 +511,7 @@ void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width,
 	frame_description.output_mode = image_output_mode;
 	frame_description.format_info = image_format_info;
 	frame_description.color = image_color;
+	frame_description.dolby_vision = image_dolby_vision;
 	frame_description.chroma_location = image_chroma_location;
 	frame_description.width = image_width;
 	frame_description.height = image_height;
@@ -461,6 +537,7 @@ void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width,
 		if (api->frame_set_chroma_location && PlaceboSourceFrameNeedsExplicitChromaLocation(frame_description))
 			api->frame_set_chroma_location(&image, ResolvePlaceboChromaLocation(frame_description));
 	}
+	ApplyDolbyVisionMetadata(*api, image, image_dolby_vision, image_placebo_dovi_metadata.get());
 	image.crop = BuildPlaceboSourceFrameCropRect(frame_description);
 	image.rotation = BuildPlaceboSourceFrameRotation(frame_description);
 

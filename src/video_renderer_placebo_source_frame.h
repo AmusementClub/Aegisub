@@ -229,7 +229,13 @@ inline bool PlaceboSourceFrameNeedsExplicitChromaLocation(SourceFrame const& fra
 inline struct pl_color_space BuildPlaceboSDRRenderTargetColorSpace() {
 	struct pl_color_space space = {};
 	space.primaries = PL_COLOR_PRIM_BT_709;
-	space.transfer = PL_COLOR_TRC_SRGB;
+	// Match mpv's SDR reference display assumptions: BT.709 at 203 nits with
+	// a gamma 2.2 response. This is static target metadata, unlike peak detect.
+	space.transfer = PL_COLOR_TRC_GAMMA22;
+	space.hdr.max_luma = PL_COLOR_SDR_WHITE;
+	space.hdr.min_luma = PL_COLOR_SDR_WHITE / PL_COLOR_SDR_CONTRAST;
+	space.hdr.max_cll = PL_COLOR_SDR_WHITE;
+	space.hdr.max_fall = 0.0f;
 	return space;
 }
 

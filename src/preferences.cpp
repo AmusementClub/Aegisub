@@ -343,9 +343,9 @@ public:
 		auto *prop = grid->Append(new wxColourProperty(label, to_wx(opt_name), to_wx(opt->GetColor())));
 		std::string name = opt_name;
 		updaters.emplace(prop, [this, name](wxVariant const& value) {
-			wxColourPropertyValue colour;
+			wxColour colour;
 			colour << value;
-			QueueOptionChange<agi::OptionValueColor>(name, from_wx(colour.m_colour));
+			QueueOptionChange<agi::OptionValueColor>(name, from_wx(colour));
 		});
 		return prop;
 	}

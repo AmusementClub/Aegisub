@@ -215,6 +215,7 @@ struct GridColumnStyle final : GridColumn {
 	COLUMN_HEADER(_("Style"))
 	COLUMN_DESCRIPTION(_("Style"))
 	bool Centered() const override { return false; }
+	bool RefreshOnTextChange() const override { return true; }
 
 	wxString Value(const AssDialogue *d, const agi::Context *c) const override {
 		return to_wx(d->Style);
@@ -229,6 +230,7 @@ struct GridColumnEffect final : GridColumn {
 	COLUMN_HEADER(_("Effect"))
 	COLUMN_DESCRIPTION(_("Effect"))
 	bool Centered() const override { return false; }
+	bool RefreshOnTextChange() const override { return true; }
 
 	wxString Value(const AssDialogue *d, const agi::Context *) const override {
 		return to_wx(d->Effect);
@@ -243,6 +245,7 @@ struct GridColumnActor final : GridColumn {
 	COLUMN_HEADER(_("Actor"))
 	COLUMN_DESCRIPTION(_("Actor"))
 	bool Centered() const override { return false; }
+	bool RefreshOnTextChange() const override { return true; }
 
 	wxString Value(const AssDialogue *d, const agi::Context *) const override {
 		return to_wx(d->Actor);

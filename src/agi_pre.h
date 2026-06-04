@@ -66,14 +66,18 @@
 // Common C++
 #include <algorithm>
 #include <array>
+#include <charconv>
+#include <chrono>
 #include <functional>
 #include <iterator>
 #include <limits>
 #include <list>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <type_traits>
 #include <typeinfo>
@@ -194,6 +198,11 @@
 #else
 #include <GL/gl.h>
 #endif
+
+// libaegisub headers
+#include <libaegisub/option_value.h>
+#include <libaegisub/string_utils.h>
+#include <libaegisub/log.h>
 
 #ifndef _CRT_SECURE_NO_WARNINGS_DEFINED
 #undef _CRT_SECURE_NO_WARNINGS

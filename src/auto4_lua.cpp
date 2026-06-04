@@ -93,6 +93,9 @@ namespace {
 		bool has_cursor = false;
 		int character_index = 0;
 		bool after = false;
+		bool has_selection = false;
+		int selection_start = 0;
+		int selection_stop = 0;
 	};
 
 	wxString get_wxstring(lua_State *L, int idx)
@@ -153,7 +156,10 @@ namespace {
 			request.has_cursor = table_bool_field(L, -1, "has_cursor");
 			request.character_index = table_int_field(L, -1, "character_index");
 			request.after = table_bool_field(L, -1, "after");
-			request.requested = request.focus || request.has_cursor;
+			request.has_selection = table_bool_field(L, -1, "has_selection");
+			request.selection_start = table_int_field(L, -1, "selection_start");
+			request.selection_stop = table_int_field(L, -1, "selection_stop");
+			request.requested = request.focus || request.has_cursor || request.has_selection;
 		}
 		lua_pop(L, 1);
 		clear_pending_edit_box_request(L);
@@ -177,13 +183,25 @@ namespace {
 		lua_pop(L, 1);
 	}
 
+	void queue_pending_edit_box_selection(lua_State *L, int start, int stop)
+	{
+		ensure_edit_box_request_table(L);
+		set_field(L, "focus", true);
+		set_field(L, "has_selection", true);
+		set_field(L, "selection_start", start);
+		set_field(L, "selection_stop", stop);
+		lua_pop(L, 1);
+	}
+
 	void apply_pending_edit_box_request(lua_State *L, AutomationHost *host)
 	{
 		auto request = take_pending_edit_box_request(L);
 		if (!request.requested || !host)
 			return;
 
-		if (request.has_cursor)
+		if (request.has_selection)
+			host->Ui().SetSubtitleEditBoxSelection(request.selection_start, request.selection_stop);
+		else if (request.has_cursor)
 			host->Ui().SetSubtitleEditBoxCursor(request.character_index, request.after);
 		else if (request.focus)
 			host->Ui().FocusSubtitleEditBox();
@@ -409,8 +427,8 @@ namespace {
 	{
 		if (auto *host = get_host(L)) {
 			if (auto cursor = host->Ui().TryGetSubtitleEditBoxCursor()) {
-				push_value(L, cursor->character_index);
-				push_value(L, cursor->after);
+				push_value(L, cursor->start);
+				push_value(L, cursor->stop);
 				return 2;
 			}
 		}
@@ -421,13 +439,30 @@ namespace {
 
 	int lua_set_edit_box_cursor(lua_State *L)
 	{
-		int character_index = check_int(L, 1);
-		bool after = lua_gettop(L) >= 2 && !!lua_toboolean(L, 2);
-
 		auto *host = get_host(L);
 		bool available = can_queue_edit_box_request(L, host);
-		if (available)
-			queue_pending_edit_box_cursor(L, character_index, after);
+
+		if (available) {
+			int top = lua_gettop(L);
+			if (top >= 2 && lua_isboolean(L, 2)) {
+				// (character_index, after) — legacy cursor mode
+				int character_index = check_int(L, 1);
+				bool after = !!lua_toboolean(L, 2);
+				queue_pending_edit_box_cursor(L, character_index, after);
+			}
+			else if (top >= 2) {
+				// (start, stop) — selection mode
+				int start = check_int(L, 1);
+				int stop = check_int(L, 2);
+				queue_pending_edit_box_selection(L, start, stop);
+			}
+			else {
+				// (character_index) — cursor at offset, after=false
+				int character_index = check_int(L, 1);
+				queue_pending_edit_box_cursor(L, character_index, false);
+			}
+		}
+
 		push_value(L, available);
 		return 1;
 	}

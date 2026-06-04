@@ -395,12 +395,12 @@ std::string SubsEditBox::GetEditControlSelectedText() const {
 	return from_wx(edit_ctrl_tc->GetRange(sel_start, sel_end));
 }
 
-std::optional<std::pair<int, bool>> SubsEditBox::GetEditControlCaret() const {
+std::optional<std::pair<int, int>> SubsEditBox::GetEditControlCaret() const {
 	if (!CanFocusEditControl())
 		return std::nullopt;
 
 	std::string text;
-	long insertion_point = 0;
+	long sel_start = 0, sel_end = 0;
 #ifdef WITH_WXSTC
 	if (use_stc) {
 		if (!edit_ctrl_stc)
@@ -408,25 +408,37 @@ std::optional<std::pair<int, bool>> SubsEditBox::GetEditControlCaret() const {
 
 		auto data = edit_ctrl_stc->GetTextRaw();
 		text.assign(data.data(), data.length());
-		insertion_point = edit_ctrl_stc->GetInsertionPoint();
+		sel_start = edit_ctrl_stc->GetSelectionStart();
+		sel_end = edit_ctrl_stc->GetSelectionEnd();
 	}
 	else {
 #endif
 		if (!edit_ctrl_tc)
 			return std::nullopt;
 
-		insertion_point = edit_ctrl_tc->GetInsertionPoint();
 		text = from_wx(edit_ctrl_tc->GetValue());
-		insertion_point = static_cast<long>(edit_ctrl_tc->GetRange(0, insertion_point).utf8_str().length());
+		edit_ctrl_tc->GetSelection(&sel_start, &sel_end);
+		// wxTextCtrl selection positions are in wxString units, convert to UTF-8 bytes
+		sel_start = static_cast<long>(edit_ctrl_tc->GetRange(0, sel_start).utf8_str().length());
+		sel_end = static_cast<long>(edit_ctrl_tc->GetRange(0, sel_end).utf8_str().length());
 #ifdef WITH_WXSTC
 	}
 #endif
 
-	auto const byte_position = std::min(static_cast<size_t>(std::max<long>(0, insertion_point)), text.size());
-	auto const character_offset = static_cast<int>(agi::CharacterCount(text.begin(), text.begin() + byte_position, 0));
-	if (character_offset <= 0)
-		return std::make_pair(1, false);
-	return std::make_pair(character_offset, true);
+	// Normalize so sel_start <= sel_end
+	if (sel_start > sel_end)
+		std::swap(sel_start, sel_end);
+
+	// Clamp to text bounds
+	auto text_len = static_cast<long>(text.size());
+	sel_start = std::clamp(sel_start, 0L, text_len);
+	sel_end = std::clamp(sel_end, 0L, text_len);
+
+	// Convert byte offsets to 0-based character offsets
+	auto char_start = static_cast<int>(agi::CharacterCount(text.begin(), text.begin() + sel_start, 0));
+	auto char_end = static_cast<int>(agi::CharacterCount(text.begin(), text.begin() + sel_end, 0));
+
+	return std::make_pair(char_start, char_end);
 }
 
 void SubsEditBox::SetEditControlCaret(int character_index, bool after) {
@@ -451,6 +463,31 @@ void SubsEditBox::SetEditControlCaret(int character_index, bool after) {
 	auto core = c->GetCore();
 	core.textSelectionController->SetSelection(caret_position, caret_position);
 	core.textSelectionController->SetInsertionPoint(caret_position);
+	FocusEditControl();
+}
+
+void SubsEditBox::SetEditControlSelection(int start, int stop) {
+	if (start > stop)
+		std::swap(start, stop);
+
+	std::string text;
+#ifdef WITH_WXSTC
+	if (use_stc) {
+		auto data = edit_ctrl_stc->GetTextRaw();
+		text.assign(data.data(), data.length());
+	}
+	else {
+#endif
+	text = from_wx(edit_ctrl_tc->GetValue());
+#ifdef WITH_WXSTC
+	}
+#endif
+
+	auto const byte_start = static_cast<long>(agi::IndexOfCharacter(text, std::max(0, start)));
+	auto const byte_stop = static_cast<long>(agi::IndexOfCharacter(text, std::max(0, stop)));
+	auto core = c->GetCore();
+	core.textSelectionController->SetSelection(byte_start, byte_stop);
+	core.textSelectionController->SetInsertionPoint(byte_stop);
 	FocusEditControl();
 }
 

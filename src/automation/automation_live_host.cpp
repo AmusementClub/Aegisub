@@ -246,6 +246,19 @@ public:
 			return true;
 		});
 	}
+
+	bool SetSubtitleEditBoxSelection(int start, int stop) override
+	{
+		return agi::ui::MainInvoke([this, start, stop] {
+			if (!context)
+				return false;
+			auto ui = context->GetUI();
+			if (!ui.subsEditBox || !ui.subsEditBox->CanFocusEditControl())
+				return false;
+			ui.subsEditBox->SetEditControlSelection(start, stop);
+			return true;
+		});
+	}
 };
 
 class LiveAutomationHost final : public AutomationHost {

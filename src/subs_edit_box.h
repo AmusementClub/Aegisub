@@ -226,8 +226,11 @@ public:
 	void FocusEditControl();
 	/// Return the current selection in the main subtitle text editor.
 	std::string GetEditControlSelectedText() const;
-	/// Return the current caret as the arguments accepted by SetEditControlCaret.
-	std::optional<std::pair<int, bool>> GetEditControlCaret() const;
+	/// Return the current caret/selection as 0-based character offsets [start, stop).
+	/// No selection: start == stop.
+	std::optional<std::pair<int, int>> GetEditControlCaret() const;
 	/// Set the caret before or after the 1-based character index in the main editor.
 	void SetEditControlCaret(int character_index, bool after);
+	/// Set a selection range in the main editor as 0-based character offsets [start, stop).
+	void SetEditControlSelection(int start, int stop);
 };

@@ -48,8 +48,8 @@ namespace Automation4 {
 	};
 
 	struct AutomationSubtitleEditBoxCursor {
-		int character_index = 1;
-		bool after = false;
+		int start = 0;
+		int stop = 0;
 	};
 
 	struct AutomationUiAnchor {
@@ -100,6 +100,7 @@ namespace Automation4 {
 		virtual std::optional<AutomationSubtitleEditBoxCursor> TryGetSubtitleEditBoxCursor() const = 0;
 		virtual bool FocusSubtitleEditBox() = 0;
 		virtual bool SetSubtitleEditBoxCursor(int character_index, bool after) = 0;
+		virtual bool SetSubtitleEditBoxSelection(int start, int stop) = 0;
 	};
 
 	class AutomationHost {

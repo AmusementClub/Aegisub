@@ -66,13 +66,18 @@ Getting the subtitle edit box cursor
 
 function aegisub.get_edit_box_cursor()
 
-Returns the current text cursor position in the main subtitle text edit box.
-The returned values can be passed directly to aegisub.set_edit_box_cursor.
+Returns the current cursor/selection position in the main subtitle text edit
+box as a half-open range [start, stop) of 0-based character offsets.
 
 Returns: 2 values.
-  1. 1-based character index.
-  2. Boolean. false means the cursor is before character_index, true means it
-     is after character_index.
+  1. start (number). 0-based offset of the first selected character, or the
+     cursor position when nothing is selected.
+  2. stop (number). 0-based offset after the last selected character, or equal
+     to start when nothing is selected.
+
+When no text is selected, start and stop are equal, representing the cursor
+position. When text is selected, start < stop, and the selected characters are
+those at offsets start through stop - 1.
 
 Returns nil if the current Automation host does not have a readable subtitle
 edit box cursor.
@@ -81,20 +86,22 @@ edit box cursor.
 
 Moving the subtitle edit box cursor
 
-function aegisub.set_edit_box_cursor(character_index, after)
+function aegisub.set_edit_box_cursor(...)
 
-Requests the text cursor to be moved in the main subtitle text edit box when
-the current macro finishes. Setting the cursor also focuses the edit box.
+Requests the text cursor or selection to be changed in the main subtitle
+text edit box when the current macro finishes. This also focuses the edit box.
 
-@character_index (number)
-  1-based character index. Passing 1 with after=false puts the cursor before
-  the first character. Passing 1 with after=true puts the cursor after the
-  first character. Values outside the current line are clamped to the line
-  bounds.
-
-@after (boolean)
-  Optional. false or nil places the cursor before character_index. true places
-  it after character_index.
+The second parameter's type determines the mode:
+  - set_edit_box_cursor(character_index, after)
+    Legacy cursor mode. character_index is a 1-based character index. after is a
+    boolean: false places the cursor before character_index, true after it.
+    Values outside the current line are clamped.
+  - set_edit_box_cursor(start, stop)
+    Selection mode. Both start and stop are 0-based character offsets defining a
+    half-open range [start, stop). When start == stop, the cursor is moved to
+    that offset with no selection.
+  - set_edit_box_cursor(character_index)
+    Cursor mode with after=false.
 
 Returns: 1 value, boolean.
   true if the request can be applied in the current Automation host, false

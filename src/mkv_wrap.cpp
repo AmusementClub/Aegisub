@@ -198,6 +198,13 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 	target->SetTransientFonts({});
 
 	MkvStdIO input(filename);
+
+	if (input.file.size() < 4)
+		throw MatroskaException("File is too small to be a Matroska file");
+	auto magic = input.file.read(0, 4);
+	if (magic[0] != 0x1A || magic[1] != 0x45 || magic[2] != 0xDF || magic[3] != 0xA3)
+		throw MatroskaException("File is not a Matroska file");
+
 	char err[2048];
 	agi::scoped_holder<MatroskaFile*, decltype(&mkv_Close)> file(mkv_Open(&input, err, sizeof(err)), mkv_Close);
 	if (!file) throw MatroskaException(err);

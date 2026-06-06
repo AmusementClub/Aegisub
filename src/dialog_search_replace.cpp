@@ -172,6 +172,7 @@ void DialogSearchReplace::FindReplace(bool (SearchReplaceEngine::*func)()) {
 	OPT_SET("Tool/Search Replace/Affect")->SetInt(static_cast<int>(settings->limit_to));
 
 	UpdateDropDowns();
+	find_edit->SetFocus();
 }
 
 static void update_mru(wxComboBox *cb, const char *mru_name) {

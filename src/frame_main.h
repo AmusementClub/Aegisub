@@ -111,7 +111,7 @@ class FrameMain : public wxFrame {
 
 	AudioBox *audioBox = nullptr;      ///< The audio area
 	VideoBox *videoBox = nullptr;      ///< The video area
-	wxToolBar *subtitleCommandToolbar = nullptr; ///< Configurable command buttons below the edit box
+	wxWindow *subtitleCommandToolbar = nullptr; ///< Configurable command buttons below the edit box
 
 	wxSizer *MainSizer;  ///< Arranges things from top to bottom in the window
 	wxSizer *TopSizer;   ///< Arranges video box and tool box from left to right

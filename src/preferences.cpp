@@ -28,6 +28,7 @@
 #include "include/aegisub/audio_player.h"
 #include "include/aegisub/hotkey.h"
 #include "include/aegisub/subtitles_provider.h"
+#include "include/aegisub/toolbar.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "perf_trace.h"
@@ -1037,40 +1038,66 @@ public:
 	{
 	}
 
-	unsigned int GetColumnCount() const override { return 2; }
-	wxString GetColumnType(unsigned int col) const override { return col == 0 ? wxS("wxDataViewIconText") : wxS("string"); }
+	unsigned int GetColumnCount() const override { return 3; }
+	wxString GetColumnType(unsigned int col) const override {
+		return col == 1 ? wxS("wxDataViewIconText") : wxS("string");
+	}
 
 	void GetValueByRow(wxVariant &variant, unsigned row, unsigned col) const override {
 		if (row >= commands.size())
 			return;
 
 		auto const& command = commands[row];
+		auto [cmd_name, display_name] = toolbar::ParseCommandEntry(command);
 		if (col == 0) {
+			// Display Name
+			variant = to_wx(display_name);
+			return;
+		}
+
+		if (col == 1) {
+			// Command name with icon
 			wxBitmapBundle icon;
-			if (!command.empty()) {
-				if (auto *cmd = cmd::get_if(command))
+			if (!cmd_name.empty()) {
+				if (auto *cmd = cmd::get_if(cmd_name))
 					icon = cmd->IconBundle();
 			}
-			wxString label = command.empty() ? wxString(wxS("-")) : to_wx(command);
+			wxString label = cmd_name.empty() ? wxString(wxS("-")) : to_wx(cmd_name);
 			variant << wxDataViewIconText(label, icon);
 			return;
 		}
 
-		if (command.empty())
-			variant = _("Separator");
-		else if (auto *cmd = cmd::get_if(command))
-			variant = cmd->StrHelp();
-		else
-			variant = _("Unknown command");
+		if (col == 2) {
+			// Description
+			if (cmd_name.empty())
+				variant = _("Separator");
+			else if (auto *cmd = cmd::get_if(cmd_name))
+				variant = cmd->StrHelp();
+			else
+				variant = _("Unknown command");
+		}
 	}
 
 	bool SetValueByRow(wxVariant const& variant, unsigned row, unsigned col) override {
-		if (row >= commands.size() || col != 0)
+		if (row >= commands.size())
 			return false;
 
-		wxDataViewIconText text;
-		text << variant;
-		commands[row] = NormalizeCommandButtonValue(from_wx(text.GetText()));
+		auto [cmd_name, display_name] = toolbar::ParseCommandEntry(commands[row]);
+		if (col == 0) {
+			std::string new_display = from_wx(variant.GetString());
+			agi::util::strings::trim_inplace(new_display);
+			display_name = std::move(new_display);
+		}
+		else if (col == 1) {
+			wxDataViewIconText text;
+			text << variant;
+			cmd_name = NormalizeCommandButtonValue(from_wx(text.GetText()));
+		}
+		else {
+			return false;
+		}
+
+		commands[row] = toolbar::MakeCommandEntry(cmd_name, display_name);
 		MarkDirty();
 		RowChanged(row);
 		return true;
@@ -1116,8 +1143,9 @@ void AddCommandButtonEditor(OptionPage *p) {
 	dvc->AssociateModel(model);
 	model->DecRef();
 
-	dvc->AppendColumn(new wxDataViewColumn(_("Command"), new CommandRenderer, 0, 250, wxALIGN_LEFT, wxCOL_RESIZABLE));
-	dvc->AppendTextColumn(_("Description"), 1, wxDATAVIEW_CELL_INERT, 300, wxALIGN_LEFT, wxCOL_RESIZABLE);
+	dvc->AppendTextColumn(_("Display Name"), 0, wxDATAVIEW_CELL_EDITABLE, 120, wxALIGN_LEFT, wxCOL_RESIZABLE);
+	dvc->AppendColumn(new wxDataViewColumn(_("Command"), new CommandRenderer, 1, 250, wxALIGN_LEFT, wxCOL_RESIZABLE));
+	dvc->AppendTextColumn(_("Description"), 2, wxDATAVIEW_CELL_INERT, 300, wxALIGN_LEFT, wxCOL_RESIZABLE);
 	dvc->SetMinSize(p->FromDIP(wxSize(520, 240)));
 	box->Add(dvc, wxSizerFlags(1).Expand().Border(wxLEFT | wxRIGHT | wxTOP, 5));
 

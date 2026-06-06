@@ -36,10 +36,16 @@
 #include <boost/interprocess/streams/bufferstream.hpp>
 #include <vector>
 
+#include <wx/button.h>
 #include <wx/dcmemory.h>
 #include <wx/frame.h>
+#include <wx/panel.h>
 #include <wx/settings.h>
+#include <wx/sizer.h>
+#include <wx/statline.h>
+#include <wx/tglbtn.h>
 #include <wx/toolbar.h>
+#include <wx/wrapsizer.h>
 
 namespace {
 	constexpr size_t kMaxConfigurableToolbarItems = 64;
@@ -123,10 +129,11 @@ namespace {
 		return badge.empty() ? wxString(wxS("?")) : badge;
 	}
 
-	wxBitmap make_text_tool_bitmap(wxWindow *window, wxString const& display, std::string const& command_name, int icon_size) {
+	wxBitmap make_text_tool_bitmap(wxWindow *window, wxString const& display, std::string const& command_name, int icon_size, bool wide = false) {
 		int const size = std::max(icon_size, window->FromDIP(18));
+		int const width = wide ? std::max(size, window->FromDIP(100)) : size;
 		int const inset = std::max(1, size / 8);
-		wxBitmap bitmap(size, size);
+		wxBitmap bitmap(width, size);
 		wxMemoryDC dc(bitmap);
 
 		auto const face = wxSystemSettings::GetColour(wxSYS_COLOUR_BTNFACE);
@@ -135,7 +142,7 @@ namespace {
 
 		dc.SetPen(wxPen(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNSHADOW)));
 		dc.SetBrush(wxBrush(face));
-		dc.DrawRoundedRectangle(inset, inset, size - inset * 2, size - inset * 2, std::max(2, size / 5));
+		dc.DrawRectangle(inset, inset, width - inset * 2, size - inset * 2);
 
 		wxFont font = window->GetFont();
 		if (font.IsOk()) {
@@ -144,18 +151,30 @@ namespace {
 		}
 		dc.SetTextForeground(wxSystemSettings::GetColour(wxSYS_COLOUR_BTNTEXT));
 
-		wxString const badge = make_badge_text(display, command_name);
-		wxSize text_size = dc.GetTextExtent(badge);
+		wxString label = wide ? strip_accelerators(display) : make_badge_text(display, command_name);
+		if (label.empty() && !wide)
+			label = to_wx(command_name);
+
+		wxSize text_size = dc.GetTextExtent(label);
 		if (font.IsOk()) {
 			int point_size = font.GetPointSize();
-			while (point_size > 6 && (text_size.x > size - inset * 2 || text_size.y > size - inset * 2)) {
-				font.SetPointSize(--point_size);
-				dc.SetFont(font);
-				text_size = dc.GetTextExtent(badge);
+			if (wide) {
+				while (point_size > 6 && text_size.x > width - inset * 4) {
+					font.SetPointSize(--point_size);
+					dc.SetFont(font);
+					text_size = dc.GetTextExtent(label);
+				}
+			}
+			else {
+				while (point_size > 6 && (text_size.x > size - inset * 2 || text_size.y > size - inset * 2)) {
+					font.SetPointSize(--point_size);
+					dc.SetFont(font);
+					text_size = dc.GetTextExtent(label);
+				}
 			}
 		}
 
-		dc.DrawText(badge, (size - text_size.x) / 2, (size - text_size.y) / 2);
+		dc.DrawText(label, (width - text_size.x) / 2, (size - text_size.y) / 2);
 		dc.SelectObject(wxNullBitmap);
 		return bitmap;
 	}
@@ -218,7 +237,10 @@ namespace {
 
 		/// Toolbar button click handler
 		void OnClick(wxCommandEvent &evt) {
-			(*commands[evt.GetId() - TOOL_ID_BASE])(context);
+			auto *cmd = commands[evt.GetId() - TOOL_ID_BASE];
+			if (cmd->Type() & cmd::COMMAND_VALIDATE && !cmd->Validate(context))
+				return;
+			(*cmd)(context);
 		}
 
 		/// Regenerate the toolbar when the icon size changes
@@ -275,27 +297,36 @@ namespace {
 			}
 
 			size_t item_count = 0;
-			for (std::string const& command_name : command_names) {
+			for (std::string const& raw_name : command_names) {
 				if (!command_option.empty() && item_count++ >= kMaxConfigurableToolbarItems) {
 					LOG_W("toolbar/configurable/too_many_items") << "Toolbar '" << name << "' has more than "
 						<< kMaxConfigurableToolbarItems << " configured items; ignoring the rest";
 					break;
 				}
 
-				if (command_name.empty()) {
+				// Parse "command_name|Display Name" format for configurable toolbars
+				auto [cmd_name, custom_display] = command_option.empty()
+					? std::pair(raw_name, std::string())
+					: toolbar::ParseCommandEntry(raw_name);
+
+				if (cmd_name.empty()) {
 					if (!last_was_sep)
 						AddSeparator();
 					last_was_sep = true;
 					continue;
 				}
 
-				auto *command = cmd::get_if(command_name);
+				auto *command = cmd::get_if(cmd_name);
 				if (!command) {
-					LOG_D("toolbar/command/not_found") << "Command '" << command_name << "' not found; skipping";
+					LOG_D("toolbar/command/not_found") << "Command '" << cmd_name << "' not found; skipping";
 					continue;
 				}
 
 				last_was_sep = false;
+
+				wxString const display = !custom_display.empty()
+					? to_wx(custom_display)
+					: command->StrDisplay(context);
 
 				int flags = command->Type();
 				wxItemKind kind =
@@ -303,20 +334,19 @@ namespace {
 					flags & cmd::COMMAND_TOGGLE ? wxITEM_CHECK :
 					wxITEM_NORMAL;
 
-				wxString const display = command->StrDisplay(context);
 				auto const layout_direction = GetLayoutDirection();
 				if (UsesVideoUiToolbarIcons()) {
 					int const tool_icon_size = GetVideoToolbarIconSize();
 					wxBitmap bitmap = command->Icon(tool_icon_size, layout_direction);
 					if (!bitmap.IsOk())
-						bitmap = make_text_tool_bitmap(this, display, command_name, tool_icon_size);
+						bitmap = make_text_tool_bitmap(this, display, cmd_name, tool_icon_size, !command_option.empty());
 					AddTool(TOOL_ID_BASE + commands.size(), display, bitmap, GetTooltip(command), kind);
 				}
 				else {
 					wxBitmap bitmap = command->Icon(icon_size, layout_direction);
 					wxBitmapBundle bundle = bitmap.IsOk()
 						? command->IconBundle(layout_direction)
-						: wxBitmapBundle::FromBitmap(make_text_tool_bitmap(this, display, command_name, icon_size));
+						: wxBitmapBundle::FromBitmap(make_text_tool_bitmap(this, display, cmd_name, icon_size, !command_option.empty()));
 					AddTool(TOOL_ID_BASE + commands.size(), display, bundle, GetTooltip(command), kind);
 				}
 
@@ -393,6 +423,159 @@ namespace {
 			Bind(wxEVT_TOOL, &Toolbar::OnClick, this);
 		}
 	};
+
+	class WrappingCommandPanel : public wxPanel {
+		static const int CMD_ID_BASE = 6000;
+
+		std::string command_option;
+		agi::Context *context;
+		std::vector<cmd::Command *> commands;
+		std::vector<wxWindow *> buttons;
+		std::string ht_context;
+
+		agi::signal::Connection command_list_slot;
+
+		void Regenerate() {
+			Unbind(wxEVT_IDLE, &WrappingCommandPanel::OnIdle, this);
+			DestroyChildren();
+			commands.clear();
+			buttons.clear();
+			Populate();
+		}
+
+		void OnIdle(wxIdleEvent &) {
+			for (size_t i = 0; i < commands.size(); ++i) {
+				auto *btn = buttons[i];
+				if (!btn) continue;
+
+				if (commands[i]->Type() & cmd::COMMAND_VALIDATE) {
+					bool enabled = commands[i]->Validate(context);
+					if (btn->IsThisEnabled() != enabled)
+						btn->Enable(enabled);
+				}
+				if (commands[i]->Type() & cmd::COMMAND_TOGGLE) {
+					auto *tgl = dynamic_cast<wxToggleButton *>(btn);
+					if (tgl) {
+						bool active = commands[i]->IsActive(context);
+						if (tgl->GetValue() != active)
+							tgl->SetValue(active);
+					}
+				}
+				// COMMAND_RADIO is not supported in the wrapping panel;
+				// radio button groups require mutual exclusion logic
+				// that is not available with individual wxButtons.
+			}
+		}
+
+		void OnCommandEvent(wxCommandEvent &evt) {
+			auto idx = evt.GetId() - CMD_ID_BASE;
+			if (idx < 0 || static_cast<size_t>(idx) >= commands.size())
+				return;
+			auto *cmd = commands[idx];
+			if (cmd->Type() & cmd::COMMAND_VALIDATE && !cmd->Validate(context))
+				return;
+			(*cmd)(context);
+		}
+
+		void Populate() {
+			auto opt = OPT_GET(command_option);
+			std::vector<std::string> command_names;
+			if (opt->GetType() == agi::OptionType::ListString)
+				command_names = normalize_configurable_toolbar_items(opt->GetListString());
+			else
+				command_names = parse_configurable_toolbar_items(opt->GetString());
+
+			commands.reserve(command_names.size());
+			bool needs_onidle = false;
+
+			auto *sizer = new wxWrapSizer(wxHORIZONTAL, wxREMOVE_LEADING_SPACES);
+			size_t item_count = 0;
+			bool last_was_sep = false;
+			for (std::string const& raw_name : command_names) {
+				if (item_count++ >= kMaxConfigurableToolbarItems)
+					break;
+
+				auto [cmd_name, custom_display] = toolbar::ParseCommandEntry(raw_name);
+
+				if (cmd_name.empty()) {
+					last_was_sep = true;
+					continue;
+				}
+
+				if (last_was_sep) {
+					auto *sep = new wxStaticLine(this, wxID_ANY, wxDefaultPosition, wxSize(FromDIP(2), -1), wxLI_VERTICAL);
+					sizer->Add(sep, 0, wxEXPAND | wxLEFT | wxRIGHT, FromDIP(3));
+					last_was_sep = false;
+				}
+
+				auto *command = cmd::get_if(cmd_name);
+				if (!command) continue;
+
+				wxString display;
+				if (!custom_display.empty()) {
+					display = to_wx(custom_display);
+				}
+				else {
+					display = strip_accelerators(command->StrDisplay(context));
+					if (display.empty())
+						display = to_wx(cmd_name);
+				}
+				wxWindow *btn;
+				if (command->Type() & cmd::COMMAND_TOGGLE)
+					btn = new wxToggleButton(this, CMD_ID_BASE + static_cast<int>(commands.size()), display,
+						wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+				else
+					// COMMAND_RADIO commands are treated as regular wxButton;
+					// radio group mutual exclusion is not implemented here
+					btn = new wxButton(this, CMD_ID_BASE + static_cast<int>(commands.size()), display,
+						wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
+				btn->SetToolTip(GetTooltip(command));
+				sizer->Add(btn, 0, wxALL, FromDIP(1));
+				commands.push_back(command);
+				buttons.push_back(btn);
+				needs_onidle = needs_onidle || command->Type() != cmd::COMMAND_NORMAL;
+			}
+
+			auto *outer_sizer = new wxBoxSizer(wxVERTICAL);
+			outer_sizer->Add(sizer, 0, wxEXPAND | wxTOP | wxBOTTOM, FromDIP(2));
+			SetSizer(outer_sizer);
+			Layout();
+			if (needs_onidle)
+				Bind(wxEVT_IDLE, &WrappingCommandPanel::OnIdle, this);
+		}
+
+		wxString GetTooltip(cmd::Command *command) {
+			wxString ret = command->StrHelp();
+			std::vector<std::string> hotkeys = hotkey::get_hotkey_strs(ht_context, command->name());
+			if (!hotkeys.empty())
+				ret += to_wx(" (" + agi::util::strings::join(hotkeys, "/") + ")");
+			return ret;
+		}
+
+	public:
+		WrappingCommandPanel(wxWindow *parent, std::string const& cmd_opt, agi::Context *c, std::string const& hk_ctx)
+		: wxPanel(parent, -1)
+		, command_option(cmd_opt)
+		, context(c)
+		, ht_context(hk_ctx)
+		, command_list_slot(OPT_SUB(command_option, [this](agi::OptionValue const&) { Regenerate(); })) {
+			Populate();
+			Bind(wxEVT_BUTTON, &WrappingCommandPanel::OnCommandEvent, this);
+			Bind(wxEVT_TOGGLEBUTTON, &WrappingCommandPanel::OnCommandEvent, this);
+		}
+
+	protected:
+		// Override DoGetBestSize to cap height to one row of buttons,
+		// preventing wxWrapSizer from stacking vertically at 0 width
+		wxSize DoGetBestSize() const override {
+			wxSize best = wxPanel::DoGetBestSize();
+			wxSize btn_size = wxButton::GetDefaultSize();
+			int single_row_height = btn_size.GetHeight() + FromDIP(6);
+			if (best.GetHeight() > single_row_height)
+				best.SetHeight(single_row_height);
+			return best;
+		}
+	};
 }
 
 namespace toolbar {
@@ -406,5 +589,9 @@ namespace toolbar {
 
 	wxToolBar *GetOptionToolbar(wxWindow *parent, std::string const& name, std::string const& command_option, agi::Context *c, std::string const& hotkey, bool vertical) {
 		return new Toolbar(parent, name, command_option, c, hotkey, vertical);
+	}
+
+	wxPanel *GetOptionToolbarWrapping(wxWindow *parent, std::string const& command_option, agi::Context *c, std::string const& hotkey) {
+		return new WrappingCommandPanel(parent, command_option, c, hotkey);
 	}
 }

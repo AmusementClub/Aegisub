@@ -17,11 +17,13 @@
 /// @ingroup menu toolbar
 
 #include <string>
+#include <utility>
 
 namespace agi { struct Context; }
 class wxFrame;
 class wxToolBar;
 class wxWindow;
+class wxPanel;
 
 namespace toolbar {
 	/// Add the named toolbar to a window
@@ -32,4 +34,22 @@ namespace toolbar {
 	void AttachToolbar(wxFrame *frame, std::string const& name, agi::Context *context, std::string const& hotkey);
 	wxToolBar *GetToolbar(wxWindow *parent, std::string const& name, agi::Context *context, std::string const& hotkey, bool vertical = false);
 	wxToolBar *GetOptionToolbar(wxWindow *parent, std::string const& name, std::string const& command_option, agi::Context *context, std::string const& hotkey, bool vertical = false);
+	/// Create a wrapping command button bar with wxWrapSizer
+	wxPanel *GetOptionToolbarWrapping(wxWindow *parent, std::string const& command_option, agi::Context *context, std::string const& hotkey);
+
+	/// Parse "command_name|Display Name" format for configurable command buttons
+	/// Returns {command_name, display_name_or_empty}
+	inline std::pair<std::string, std::string> ParseCommandEntry(std::string const& entry) {
+		auto pipe_pos = entry.find('|');
+		if (pipe_pos == std::string::npos)
+			return {entry, std::string()};
+		return {entry.substr(0, pipe_pos), entry.substr(pipe_pos + 1)};
+	}
+
+	/// Build "command_name|Display Name" string
+	inline std::string MakeCommandEntry(std::string const& command_name, std::string const& display_name) {
+		if (display_name.empty())
+			return command_name;
+		return command_name + "|" + display_name;
+	}
 }

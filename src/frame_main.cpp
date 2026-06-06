@@ -76,7 +76,6 @@
 #include <wx/dnd.h>
 #include <wx/settings.h>
 #include <wx/sizer.h>
-#include <wx/statline.h>
 #include <wx/splitter.h>
 #include <wx/sysopt.h>
 
@@ -398,20 +397,11 @@ void FrameMain::InitContents() {
 	StartupLog("Create subtitle editing box");
 	auto EditBox = new SubsEditBox(contentsPanel, context.get());
 	ui.subsEditBox = EditBox;
-	subtitleCommandToolbar = toolbar::GetOptionToolbar(
-		contentsPanel,
-		"subtitle_command_buttons",
-		"Subtitle/Edit Box/Command Buttons/Commands",
-		context.get(),
-		"Subtitle Edit Box");
 	observe_phase("startup.frame.contents.create_base_controls");
 
 	StartupLog("Arrange main sizers");
 	ToolsSizer = new wxBoxSizer(wxVERTICAL);
 	ToolsSizer->Add(EditBox, 1, wxEXPAND);
-	ToolsSizer->Add(subtitleCommandToolbar, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 3);
-	ToolsSizer->Show(subtitleCommandToolbar, OPT_GET("Subtitle/Edit Box/Command Buttons/Enabled")->GetBool(), true);
-	ui_activation.AddConnection(OPT_SUB("Subtitle/Edit Box/Command Buttons/Enabled", &FrameMain::OnSubtitleCommandToolbarVisibleChanged, this));
 	TopSizer = new wxBoxSizer(wxHORIZONTAL);
 	TopSizer->Add(ToolsSizer, 1, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 5);
 	editGridSplitter = new wxSplitterWindow(contentsPanel, wxID_ANY,
@@ -420,10 +410,20 @@ void FrameMain::InitContents() {
 	editGridSplitter->SetDoubleBuffered(true);
 	editAreaPanel->SetDoubleBuffered(true);
 
+	subtitleCommandToolbar = toolbar::GetOptionToolbarWrapping(
+		editAreaPanel,
+		"Subtitle/Edit Box/Command Buttons/Commands",
+		context.get(),
+		"Subtitle Edit Box");
+
 	auto editAreaSizer = new wxBoxSizer(wxVERTICAL);
-	editAreaSizer->Add(new wxStaticLine(editAreaPanel), 0, wxEXPAND);
 	editAreaSizer->Add(TopSizer, 1, wxEXPAND);
+	editAreaSizer->Add(subtitleCommandToolbar, 0, wxEXPAND | wxLEFT | wxRIGHT, 2);
+	editAreaSizer->Show(subtitleCommandToolbar,
+		OPT_GET("Subtitle/Edit Box/Command Buttons/Enabled")->GetBool(), true);
 	editAreaPanel->SetSizer(editAreaSizer);
+	ui_activation.AddConnection(OPT_SUB("Subtitle/Edit Box/Command Buttons/Enabled",
+		&FrameMain::OnSubtitleCommandToolbarVisibleChanged, this));
 
 	ui.subsGrid->Reparent(editGridSplitter);
 	EditBox->Reparent(editAreaPanel);
@@ -627,12 +627,17 @@ void FrameMain::OnVideoDetach(agi::OptionValue const& opt) {
 }
 
 void FrameMain::OnSubtitleCommandToolbarVisibleChanged(agi::OptionValue const& opt) {
-	if (!subtitleCommandToolbar || !ToolsSizer)
+	if (!subtitleCommandToolbar || !editAreaPanel)
 		return;
 
-	ToolsSizer->Show(subtitleCommandToolbar, opt.GetBool(), true);
-	QueueEditGridSplitterMinimumUpdate();
-	MainSizer->Layout();
+	editAreaPanel->GetSizer()->Show(subtitleCommandToolbar, opt.GetBool(), true);
+	if (opt.GetBool()) {
+		subtitleCommandToolbar->InvalidateBestSize();
+		for (wxWindow *w = subtitleCommandToolbar->GetParent(); w; w = w->GetParent())
+			w->InvalidateBestSize();
+	}
+	editAreaPanel->Layout();
+	editAreaPanel->GetParent()->Layout();
 	Layout();
 }
 

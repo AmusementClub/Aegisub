@@ -633,6 +633,7 @@ void BuildInterfacePage(OptionPage *p) {
 #endif
 	binder->AddDirectory(_("Dictionaries path"), "Path/Dictionary");
 	binder->AddFont(_("Font"), "Subtitle/Edit Box/");
+	binder->AddInt(_("Edit box height"), "Subtitle/Edit Box/Display Height", -1, 2000);
 
 	binder->AddCategory(_("Character Counter"));
 	binder->AddInt(_("Maximum characters per line"), "Subtitle/Character Limit", 0, 1000);

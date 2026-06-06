@@ -446,6 +446,7 @@ void FrameMain::InitContents() {
 	ui_activation.AddConnection(OPT_SUB("Subtitle/Show Original", queue_edit_grid_splitter_minimum_update));
 	ui_activation.AddConnection(OPT_SUB("Video/Secondary Subtitles/Enabled", queue_edit_grid_splitter_minimum_update));
 	ui_activation.AddConnection(OPT_SUB("Video/Secondary Subtitles/Height", queue_edit_grid_splitter_minimum_update));
+	ui_activation.AddConnection(OPT_SUB("Subtitle/Edit Box/Display Height", queue_edit_grid_splitter_minimum_update));
 
 	MainSizer = new wxBoxSizer(wxVERTICAL);
 	MainSizer->Add(editGridSplitter, 1, wxEXPAND);
@@ -647,17 +648,6 @@ void FrameMain::OnEditGridSplitterSashPosChanged(wxSplitterEvent& event) {
 		editGridSplitter->SetSashPosition(sashPosition);
 		return;
 	}
-
-	// Don't save when the sash is at the content-forced minimum (e.g. video or
-	// secondary subtitle strip pushed the minimum above the user's saved
-	// preference).  This prevents content-driven layout changes from
-	// corrupting "Subtitle/Edit Box/Display Height" so that the edit area
-	// correctly shrinks back when the content is removed or reduced.
-	int preferredPosition = OPT_GET("Subtitle/Edit Box/Display Height")->GetInt();
-	if (sashPosition == minPosition && minPosition > preferredPosition)
-		return;
-
-	OPT_SET("Subtitle/Edit Box/Display Height")->SetInt(sashPosition);
 }
 
 void FrameMain::OnEditGridSplitterSashPosChanging(wxSplitterEvent& event) {

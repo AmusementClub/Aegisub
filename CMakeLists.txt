@@ -244,6 +244,10 @@ endif()
 add_library(libaegisub STATIC
     libaegisub/common/parser.cpp
     libaegisub/ass/drawing.cpp
+    libaegisub/ass/drawing_backend.cpp
+    libaegisub/ass/drawing_emit.cpp
+    libaegisub/ass/drawing_geom.cpp
+    libaegisub/ass/drawing_shape.cpp
     libaegisub/ass/dialogue_parser.cpp
     libaegisub/ass/time.cpp
     libaegisub/ass/uuencode.cpp
@@ -262,6 +266,7 @@ add_library(libaegisub STATIC
     libaegisub/lua/modules/unicode.cpp
     libaegisub/lua/modules/lpeg.c
     libaegisub/lua/modules.cpp
+    libaegisub/lua/modules/drawing.cpp
     libaegisub/lua/script_reader.cpp
     libaegisub/lua/utils.cpp
     libaegisub/common/calltip_provider.cpp
@@ -891,7 +896,18 @@ if(WIN32)
 endif()
 
 find_package(unofficial-skia CONFIG QUIET)
+option(WITH_DRAWING_SKIA "Enable Skia-backed Lua drawing path operations" OFF)
 option(WITH_SKIA "Enable optional Skia-based 2D rendering infrastructure" OFF)
+if(WITH_DRAWING_SKIA)
+    if(NOT TARGET unofficial::skia::skia)
+        message(FATAL_ERROR
+            "WITH_DRAWING_SKIA is ON, but the Skia vcpkg package was not found.\n"
+            "Configure with -DVCPKG_MANIFEST_FEATURES=skia or pass -DWITH_DRAWING_SKIA=OFF."
+        )
+    endif()
+    target_compile_definitions(libaegisub PRIVATE WITH_DRAWING_SKIA)
+    target_link_libraries(libaegisub PRIVATE unofficial::skia::skia)
+endif()
 if(WITH_SKIA)
     if(NOT TARGET unofficial::skia::skia)
         message(FATAL_ERROR
@@ -1330,6 +1346,7 @@ message(STATUS "\n"
     "  LuaJIT Shared:         ${AEGISUB_LUAJIT_SHARED}\n"
     "  LuaSocket:             ${LUA_WITH_LUASOCKET}\n"
     "  Skia:                  ${WITH_SKIA}\n"
+    "  Drawing Skia:          ${WITH_DRAWING_SKIA}\n"
     "\n"
     "Dynamic Loading\n"
     "  AviSynth:              ${HAVE_AVISYNTH}\n"

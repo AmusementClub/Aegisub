@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -68,6 +69,26 @@ enum class AssDrawingPathMode {
 	PreserveOpenContours = 1,
 };
 
+enum class DrawingBooleanOp {
+	Union,
+	Intersect,
+	Subtract,
+	Xor,
+};
+
+enum class DrawingStrokeCap {
+	Flat,
+	Round,
+	Square,
+};
+
+enum class DrawingStrokeJoin {
+	Miter,
+	Bevel,
+	Round,
+	SvgMiter,
+};
+
 constexpr AssDrawingCompatMode kDefaultAssDrawingCompatMode = AssDrawingCompatMode::VsFilter;
 
 AssDrawingCompatMode SanitizeAssDrawingCompatMode(int raw_mode);
@@ -83,6 +104,39 @@ inline PathData ParseAssOpen(std::string_view ass_shape,
 
 Point TransformPoint(Point point, Matrix3x2 const& matrix);
 PathData TransformPath(PathData path, Matrix3x2 const& matrix);
+
+PathData LowerForAss(PathData const& path, bool implicit_close_contours = false);
+std::string SerializeAss(PathData const& path);
+std::string SerializeAssFilled(PathData const& path);
+std::string SerializeAssCompactFilled(PathData const& path);
+std::string CompactAss(std::string_view ass_shape,
+	AssDrawingCompatMode compat_mode = kDefaultAssDrawingCompatMode);
+bool TryGetBounds(PathData const& path, Rect& bounds);
+PathData FlattenPath(PathData const& path, double tolerance = 0.25);
+PathData ReversePath(PathData const& path);
+double PathLength(PathData const& path);
+double PercentAtLength(PathData const& path, double distance);
+bool TryGetPositionAtPercent(PathData const& path, double percent, Point& point, Point& tangent);
+bool TryGetPositionAtLength(PathData const& path, double distance, Point& point, Point& tangent);
+bool TryGetSignedAreaAndCentroid(PathData const& path, double& signed_area, Point& centroid, double tolerance = 0.25);
+PathData MakeRect(double x, double y, double width, double height);
+PathData MakeEllipse(double x, double y, double width, double height);
+PathData MakeRoundedRect(double x, double y, double width, double height, double radius_x, double radius_y);
+void AppendArcMoveTo(PathData& path, double x, double y, double width, double height, double angle);
+void AppendArcTo(PathData& path, double x, double y, double width, double height, double start_angle, double sweep_length);
+bool DrawingSkiaBackendAvailable();
+bool TryDrawingContainsPoint(PathData const& path, double x, double y, bool& contains);
+bool TryDrawingContainsRect(PathData const& path, double x, double y, double width, double height, bool& contains);
+bool TryDrawingBoolean(PathData const& lhs, PathData const& rhs, DrawingBooleanOp op, PathData& result);
+bool TryDrawingOutline(PathData const& path, double width, DrawingStrokeCap cap, DrawingStrokeJoin join, PathData& result);
+bool TryDrawingPatternOutline(PathData const& path,
+	double width,
+	DrawingStrokeCap cap,
+	DrawingStrokeJoin join,
+	double pattern_length,
+	double space_length,
+	double dash_offset,
+	PathData& result);
 
 enum class LexemeType {
 	Normal,

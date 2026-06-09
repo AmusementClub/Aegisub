@@ -87,6 +87,26 @@ target_include_directories(dispatch-micro-bench PRIVATE
 )
 target_link_libraries(dispatch-micro-bench PRIVATE libaegisub)
 
+add_executable(drawing-bench EXCLUDE_FROM_ALL
+    tools/drawing_bench_main.cpp
+)
+target_compile_features(drawing-bench PRIVATE cxx_std_20)
+target_include_directories(drawing-bench PRIVATE
+    "${PROJECT_SOURCE_DIR}/libaegisub/include"
+)
+target_link_libraries(drawing-bench PRIVATE libaegisub)
+
+add_executable(drawing-compare EXCLUDE_FROM_ALL
+    tools/drawing_compare_main.cpp
+)
+target_compile_features(drawing-compare PRIVATE cxx_std_20)
+target_include_directories(drawing-compare PRIVATE
+    "${PROJECT_SOURCE_DIR}/libaegisub/include"
+    "${PROJECT_SOURCE_DIR}/vendor/csri/include"
+    ${ass_INCLUDE_DIRS}
+)
+target_link_libraries(drawing-compare PRIVATE libaegisub ${ass_LIBRARIES} ${CMAKE_DL_LIBS})
+
 if(EXISTS "${PROJECT_SOURCE_DIR}/tools/dispatch_realworld_bench_main.cpp")
     add_executable(dispatch-realworld-bench EXCLUDE_FROM_ALL
         tools/dispatch_realworld_bench_main.cpp

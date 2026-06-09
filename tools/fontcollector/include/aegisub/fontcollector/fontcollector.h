@@ -141,7 +141,7 @@ typedef struct AegisubFontCollectorMatchedFont {
 	uint32_t const *missing_codepoints;
 	size_t missing_codepoint_count;
 	int requested_weight;
-	/* Added after 2026-05: missing_lines points to dialogue rows containing missing glyphs. */
+	/* Source line numbers containing missing glyphs; falls back to dialogue rows for in-memory scripts. */
 	int const *missing_lines;
 	size_t missing_line_count;
 } AegisubFontCollectorMatchedFont;
@@ -157,17 +157,34 @@ typedef struct AegisubFontCollectorFontUsage {
 	int const *override_lines;
 	size_t override_line_count;
 	AegisubFontCollectorMatchedFont matched;
-	/* Added after 2026-05: lines contains all dialogue rows using this font request. */
+	/* Source line numbers using this font request; falls back to dialogue rows for in-memory scripts. */
 	int const *lines;
 	size_t line_count;
 	/* Diagnostic only: full realized matched face name when the platform can report it. */
 	char const *matched_facename_full;
+	/* Diagnostic only: matched family aliases reported by the backend. */
+	char const *const *matched_names;
+	size_t matched_name_count;
 } AegisubFontCollectorFontUsage;
+
+typedef struct AegisubFontCollectorSession AegisubFontCollectorSession;
 
 /* Event pointer fields are valid only for the duration of the callback. */
 typedef void (*AegisubFontCollectorEventCallback)(AegisubFontCollectorEvent const *event, void *user_data);
 /* Usage pointer fields are valid only for the duration of the callback. */
 typedef void (*AegisubFontCollectorFontUsageCallback)(AegisubFontCollectorFontUsage const *usage, void *user_data);
+
+typedef struct AegisubFontCollectorBatchItem {
+	AegisubFontCollectorRequest request;
+	AegisubFontCollectorEventCallback event_callback;
+	void *event_user_data;
+	AegisubFontCollectorFontUsageCallback usage_callback;
+	void *usage_user_data;
+	AegisubFontCollectorSummary *summary;
+	char *error_buffer;
+	size_t error_buffer_size;
+	int result;
+} AegisubFontCollectorBatchItem;
 
 AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_collect(
 	AegisubFontCollectorRequest const *request,
@@ -178,6 +195,37 @@ AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_collect(
 	AegisubFontCollectorSummary *summary,
 	char *error_buffer,
 	size_t error_buffer_size);
+
+AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_session_create(
+	AegisubFontCollectorBackend backend,
+	AegisubFontCollectorEventCallback callback,
+	void *user_data,
+	AegisubFontCollectorSession **session,
+	char *error_buffer,
+	size_t error_buffer_size);
+
+/* request->backend is ignored for session calls; choose the backend in session_create. */
+AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_session_collect(
+	AegisubFontCollectorSession *session,
+	AegisubFontCollectorRequest const *request,
+	AegisubFontCollectorEventCallback callback,
+	void *user_data,
+	AegisubFontCollectorFontUsageCallback usage_callback,
+	void *usage_user_data,
+	AegisubFontCollectorSummary *summary,
+	char *error_buffer,
+	size_t error_buffer_size);
+
+/* Resolves merged font requests/codepoints across all valid items, then reports per item. */
+AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_session_collect_batch(
+	AegisubFontCollectorSession *session,
+	AegisubFontCollectorBatchItem *items,
+	size_t item_count,
+	char *error_buffer,
+	size_t error_buffer_size);
+
+AEGISUB_FONTCOLLECTOR_API void aegisub_fontcollector_session_destroy(
+	AegisubFontCollectorSession *session);
 
 #ifdef __cplusplus
 }

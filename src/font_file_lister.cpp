@@ -115,6 +115,48 @@ std::vector<uint32_t> DecodeUniqueUtf8Codepoints(std::string_view text) {
 	return codepoints;
 }
 
+std::string EncodeCodepointsToUtf8(std::vector<uint32_t> const& codepoints) {
+	std::string text;
+	for (auto codepoint : codepoints) {
+		font_collector::unicode::Rune rune;
+		if (font_collector::unicode::Rune::TryCreate(codepoint, rune))
+			font_collector::unicode::AppendRuneToUtf8(text, rune);
+	}
+	return text;
+}
+
+std::vector<uint32_t> IntersectSortedCodepoints(std::vector<uint32_t> const& left, std::vector<uint32_t> const& right) {
+	std::vector<uint32_t> result;
+	result.reserve(std::min(left.size(), right.size()));
+	std::set_intersection(begin(left), end(left), begin(right), end(right), std::back_inserter(result));
+	return result;
+}
+
+void MergeSortedCodepointsInto(std::vector<uint32_t>& destination, std::vector<uint32_t> const& source) {
+	if (source.empty())
+		return;
+
+	if (destination.empty()) {
+		destination = source;
+		return;
+	}
+
+	std::vector<uint32_t> merged;
+	merged.reserve(destination.size() + source.size());
+	std::set_union(begin(destination), end(destination), begin(source), end(source), std::back_inserter(merged));
+	destination.swap(merged);
+}
+
+int RequestedWeightForStyle(int bold) {
+	return bold == 0 ? 400 :
+	       bold == 1 ? 700 :
+	                   bold;
+}
+
+int SourceLineNumber(AssDialogue const& line, int dialogue_index) {
+	return line.Row >= 0 ? line.Row + 1 : dialogue_index;
+}
+
 std::unique_ptr<IFontFileLister> CreateDefaultFontFileLister(FontCollectorEventSink& event_sink) {
 	return std::make_unique<FontFileLister>(event_sink);
 }
@@ -122,13 +164,21 @@ std::unique_ptr<IFontFileLister> CreateDefaultFontFileLister(FontCollectorEventS
 
 FontCollector::FontCollector(FontCollectorEventSink event_sink)
 : event_sink(std::move(event_sink))
-, lister(CreateDefaultFontFileLister(this->event_sink))
+, owned_lister(CreateDefaultFontFileLister(this->event_sink))
+, lister(owned_lister.get())
 {
 }
 
 FontCollector::FontCollector(FontCollectorEventSink event_sink, std::unique_ptr<IFontFileLister> lister)
 : event_sink(std::move(event_sink))
-, lister(std::move(lister))
+, owned_lister(std::move(lister))
+, lister(owned_lister.get())
+{
+}
+
+FontCollector::FontCollector(FontCollectorEventSink event_sink, IFontFileLister& lister)
+: event_sink(std::move(event_sink))
+, lister(&lister)
 {
 }
 
@@ -140,7 +190,7 @@ FontCollector::StyleInfo FontCollector::MakeStyleInfo(AssStyle const& style) con
 	return info;
 }
 
-void FontCollector::RecordMissingStyle(std::string const& name, int line_index) {
+void FontCollector::RecordMissingStyle(MissingStyleLines& missing_style_lines, std::string const& name, int line_index) {
 	auto& lines = missing_style_lines[name];
 	if (line_index > 0 && (lines.empty() || lines.back() != line_index))
 		lines.push_back(line_index);
@@ -149,8 +199,8 @@ void FontCollector::RecordMissingStyle(std::string const& name, int line_index) 
 		lines.push_back(line_index);
 }
 
-void FontCollector::EmitMissingStyles() {
-	for (auto const& [name, lines] : missing_style_lines) {
+void FontCollector::EmitMissingStyles(FileAnalysis& analysis) {
+	for (auto const& [name, lines] : analysis.missing_style_lines) {
 		FontCollectorEvent event;
 		event.type = FontCollectorEventType::StyleMissing;
 		event.style = name;
@@ -159,17 +209,18 @@ void FontCollector::EmitMissingStyles() {
 			if (line > 0)
 				event.lines.push_back(line);
 		}
-		Emit(event_sink, std::move(event));
-		++missing;
+		Emit(analysis.event_sink, std::move(event));
+		++analysis.missing;
 	}
 }
 
 template<class Callback>
-bool FontCollector::ForEachLineTextSpan(AssDialogue const& line, int line_index, int wrap_style, Callback&& callback, bool report_missing_styles) {
-	auto *initial_style = aegisub::ass_style_resolution::ResolveEventStyle(*ass_file, line.Style);
+bool FontCollector::ForEachLineTextSpan(AssFile const& file, AssDialogue const& line, int line_index, int wrap_style,
+                                        Callback&& callback, MissingStyleLines *missing_style_lines) {
+	auto *initial_style = aegisub::ass_style_resolution::ResolveEventStyle(file, line.Style);
 	if (!initial_style) {
-		if (report_missing_styles)
-			RecordMissingStyle(line.Style, line_index);
+		if (missing_style_lines)
+			RecordMissingStyle(*missing_style_lines, line.Style, line_index);
 		return false;
 	}
 
@@ -192,7 +243,7 @@ bool FontCollector::ForEachLineTextSpan(AssDialogue const& line, int line_index,
 					}
 					else {
 						auto style_name = param.Get<std::string>();
-						auto *reset_style = aegisub::ass_style_resolution::ResolveResetStyle(*ass_file, style_name);
+						auto *reset_style = aegisub::ass_style_resolution::ResolveResetStyle(file, style_name);
 						if (reset_style) {
 							style = MakeStyleInfo(*reset_style);
 							style_valid = true;
@@ -201,8 +252,8 @@ bool FontCollector::ForEachLineTextSpan(AssDialogue const& line, int line_index,
 						else {
 							style_valid = false;
 							overriden = false;
-							if (report_missing_styles)
-								RecordMissingStyle(style_name, line_index);
+							if (missing_style_lines)
+								RecordMissingStyle(*missing_style_lines, style_name, line_index);
 						}
 					}
 				}
@@ -313,20 +364,31 @@ void FontCollector::FinalizeUsageCodepoints(UsageData& data) {
 	data.latin1_codepoints = {};
 }
 
-void FontCollector::ResolveFontUsage(StyleInfo const& style, UsageData& data, FontCollectorDetails *details,
-                                 std::vector<MissingGlyphQuery>& missing_queries) {
-	if (data.codepoints.empty()) return;
+FontCollector::ResolvedUsage FontCollector::ResolveMergedUsage(StyleInfo const& style, std::vector<uint32_t> const& codepoints) {
+	ResolvedUsage resolved;
+	if (codepoints.empty())
+		return resolved;
 
-	auto const requested_weight = style.bold == 0 ? 400 :
-	                              style.bold == 1 ? 700 :
-	                                               style.bold;
-
-	auto res = lister->GetFontPaths(style.facename, style.bold, style.italic, data.codepoints);
+	auto& res = resolved.result;
+	res = lister->GetFontPaths(style.facename, style.bold, style.italic, codepoints);
 	for (auto& path : res.paths)
 		path.make_preferred();
 
-	if (details) {
-		auto& usage = details->fonts.emplace_back();
+	resolved.missing_codepoints = DecodeUniqueUtf8Codepoints(res.missing);
+	return resolved;
+}
+
+void FontCollector::ApplyResolvedFontUsage(FileAnalysis& analysis, StyleInfo const& style, UsageData& data,
+                                           ResolvedUsage const& resolved, std::vector<MissingGlyphQuery>& missing_queries) {
+	if (data.codepoints.empty()) return;
+
+	auto const requested_weight = RequestedWeightForStyle(style.bold);
+	auto const& res = resolved.result;
+	auto missing_codepoints = IntersectSortedCodepoints(data.codepoints, resolved.missing_codepoints);
+	auto missing_text = EncodeCodepointsToUtf8(missing_codepoints);
+
+	if (analysis.details) {
+		auto& usage = analysis.details->fonts.emplace_back();
 		usage.ass_facename = style.facename;
 		usage.ass_bold = style.bold;
 		usage.ass_italic = style.italic;
@@ -336,6 +398,7 @@ void FontCollector::ResolveFontUsage(StyleInfo const& style, UsageData& data, Fo
 		usage.override_lines = data.override_lines;
 		usage.matched.facename = res.matched_facename;
 		usage.matched.facename_full = res.matched_facename_full;
+		usage.matched.names = res.matched_names;
 		usage.matched.face_index = res.face_index;
 		usage.matched.weight = res.matched_weight;
 		usage.matched.bold = res.matched_bold;
@@ -343,11 +406,12 @@ void FontCollector::ResolveFontUsage(StyleInfo const& style, UsageData& data, Fo
 		usage.matched.is_collection = res.is_collection;
 		usage.matched.paths = res.paths;
 		usage.matched.path_source = res.path_source;
-		usage.matched.raw_data = res.raw_data;
+		if (res.paths.empty())
+			usage.matched.raw_data = res.raw_data;
 		usage.matched.fake_bold = res.fake_bold;
 		usage.matched.fake_italic = res.fake_italic;
-		usage.matched.missing_text = res.missing;
-		usage.matched.missing_codepoints = DecodeUniqueUtf8Codepoints(res.missing);
+		usage.matched.missing_text = missing_text;
+		usage.matched.missing_codepoints = missing_codepoints;
 		usage.matched.requested_weight = res.requested_weight;
 
 		if (enable_libass_compat_) {
@@ -373,45 +437,45 @@ void FontCollector::ResolveFontUsage(StyleInfo const& style, UsageData& data, Fo
 	};
 
 	if (res.paths.empty() && res.raw_data.bytes.empty()) {
-		Emit(event_sink, make_event(FontCollectorEventType::FontMissing));
-		PrintUsage(data);
-		++missing;
+		Emit(analysis.event_sink, make_event(FontCollectorEventType::FontMissing));
+		PrintUsage(analysis.event_sink, data);
+		++analysis.missing;
 	}
 	else {
 		for (auto& elem : res.paths) {
-			if (std::find(begin(results), end(results), elem) == end(results)) {
+			if (std::find(begin(analysis.results), end(analysis.results), elem) == end(analysis.results)) {
 				auto event = make_event(FontCollectorEventType::FontFound);
 				event.path = elem;
 				event.message = res.path_source;
-				Emit(event_sink, std::move(event));
-				results.push_back(elem);
+				Emit(analysis.event_sink, std::move(event));
+				analysis.results.push_back(elem);
 			}
 		}
 
 		if (res.paths.empty() && !res.raw_data.bytes.empty()) {
 			auto event = make_event(FontCollectorEventType::FontFound);
 			event.message = "memory";
-			Emit(event_sink, std::move(event));
+			Emit(analysis.event_sink, std::move(event));
 		}
 
 		if (res.fake_bold)
-			Emit(event_sink, make_event(FontCollectorEventType::FakeBold));
+			Emit(analysis.event_sink, make_event(FontCollectorEventType::FakeBold));
 		if (res.fake_italic)
-			Emit(event_sink, make_event(FontCollectorEventType::FakeItalic));
+			Emit(analysis.event_sink, make_event(FontCollectorEventType::FakeItalic));
 
-		if (res.missing.size()) {
+		if (!missing_codepoints.empty()) {
 			MissingGlyphQuery query;
 			query.style = style;
-			query.missing_codepoints = DecodeUniqueUtf8Codepoints(res.missing);
+			query.missing_codepoints = missing_codepoints;
 			query.event = make_event(FontCollectorEventType::MissingGlyphs);
-			query.event.message = res.missing;
+			query.event.message = missing_text;
 			query.event.count = static_cast<int>(query.missing_codepoints.size());
 			query.usage = &data;
 			missing_queries.push_back(std::move(query));
-			++missing_glyphs;
+			++analysis.missing_glyphs;
 		}
 		else if (res.fake_bold || res.fake_italic)
-			PrintUsage(data);
+			PrintUsage(analysis.event_sink, data);
 	}
 }
 
@@ -431,20 +495,21 @@ void FontCollector::CollectMissingGlyphLines(AssFile const *file, int wrap_style
 	int index = 0;
 	for (auto const& diag : file->Events) {
 		++index;
+		auto const source_line = SourceLineNumber(diag, index);
 		if (diag.Comment)
 			continue;
 
-		ForEachLineTextSpan(diag, index, wrap_style, [&](StyleInfo const& style, bool, std::string_view text) {
+		ForEachLineTextSpan(*file, diag, source_line, wrap_style, [&](StyleInfo const& style, bool, std::string_view text) {
 			auto query_it = query_indices.find(style);
 			if (query_it == end(query_indices))
 				return false;
 
 			auto& query = queries[query_it->second];
 			if (TextContainsAnyCodepoint(text, wrap_style, query.missing_codepoints) &&
-			    (query.matching_lines.empty() || query.matching_lines.back() != index))
-				query.matching_lines.push_back(index);
+			    (query.matching_lines.empty() || query.matching_lines.back() != source_line))
+				query.matching_lines.push_back(source_line);
 			return false;
-		}, false);
+		}, nullptr);
 	}
 }
 
@@ -467,11 +532,47 @@ void FontCollector::StoreMissingGlyphLines(FontCollectorDetails *details, std::v
 	}
 }
 
-void FontCollector::ProcessDialogueLine(const AssDialogue *line, int index, int wrap_style) {
+FontCollector::FileAnalysis FontCollector::AnalyzeFile(FontCollectorBatchSource const& source) {
+	FileAnalysis analysis;
+	analysis.file = source.file;
+	analysis.event_sink = source.event_sink ? source.event_sink : event_sink;
+	analysis.details = source.details;
+	if (analysis.details)
+		analysis.details->fonts.clear();
+
+	FontCollectorEvent event;
+	event.type = FontCollectorEventType::ParsingFile;
+	Emit(analysis.event_sink, std::move(event));
+
+	if (!analysis.file)
+		return analysis;
+
+	for (auto const& style : analysis.file->Styles) {
+		StyleInfo info = MakeStyleInfo(style);
+		analysis.used_styles[info].styles.push_back(style.name);
+	}
+
+	analysis.wrap_style = analysis.file->GetScriptInfoAsInt("WrapStyle");
+	int index = 0;
+	for (auto const& diag : analysis.file->Events) {
+		++index;
+		ProcessDialogueLine(analysis, &diag, SourceLineNumber(diag, index));
+	}
+
+	EmitMissingStyles(analysis);
+	for (auto& style : analysis.used_styles)
+		FinalizeUsageCodepoints(style.second);
+	if (analysis.details)
+		analysis.details->fonts.reserve(analysis.used_styles.size());
+
+	return analysis;
+}
+
+void FontCollector::ProcessDialogueLine(FileAnalysis& analysis, const AssDialogue *line, int index) {
 	if (line->Comment) return;
 
-	ForEachLineTextSpan(*line, index, wrap_style, [&](StyleInfo const& style, bool overriden, std::string_view text) {
-		auto& usage = used_styles[style];
+	ForEachLineTextSpan(*analysis.file, *line, index, analysis.wrap_style, [&](StyleInfo const& style, bool overriden, std::string_view text) {
+		auto& usage = analysis.used_styles[style];
 		if (usage.lines.empty() || usage.lines.back() != index)
 			usage.lines.push_back(index);
 		if (overriden) {
@@ -480,91 +581,101 @@ void FontCollector::ProcessDialogueLine(const AssDialogue *line, int index, int 
 				lines.push_back(index);
 		}
 
-		AppendTextCodepoints(text, wrap_style, usage);
+		AppendTextCodepoints(text, analysis.wrap_style, usage);
 		return false;
-	}, true);
+	}, &analysis.missing_style_lines);
 }
 
-void FontCollector::PrintUsage(UsageData const& data) {
-	PrintUsage(data, data.override_lines);
+void FontCollector::PrintUsage(FontCollectorEventSink const& sink, UsageData const& data) {
+	PrintUsage(sink, data, data.lines);
 }
 
-void FontCollector::PrintUsage(UsageData const& data, std::vector<int> const& lines) {
+void FontCollector::PrintUsage(FontCollectorEventSink const& sink, UsageData const& data, std::vector<int> const& lines) {
 	FontCollectorEvent event;
 	event.type = FontCollectorEventType::Usage;
 	event.styles = data.styles;
 	event.lines = lines;
-	Emit(event_sink, std::move(event));
+	Emit(sink, std::move(event));
 }
 
 std::vector<agi::fs::path> FontCollector::GetFontPaths(const AssFile *file, FontCollectorDetails *details) {
-	missing = 0;
-	missing_glyphs = 0;
-	ass_file = file;
-	used_styles.clear();
-	missing_style_lines.clear();
-	results.clear();
-	if (details)
-		details->fonts.clear();
+	FontCollectorBatchSource source;
+	source.file = file;
+	source.event_sink = event_sink;
+	source.details = details;
+	auto results = GetFontPaths(std::vector<FontCollectorBatchSource>{source});
+	return results.empty() ? std::vector<agi::fs::path>() : std::move(results.front());
+}
 
-	FontCollectorEvent event;
-	event.type = FontCollectorEventType::ParsingFile;
-	Emit(event_sink, std::move(event));
+std::vector<std::vector<agi::fs::path>> FontCollector::GetFontPaths(std::vector<FontCollectorBatchSource> const& sources) {
+	std::vector<FileAnalysis> analyses;
+	analyses.reserve(sources.size());
+	for (auto const& source : sources)
+		analyses.push_back(AnalyzeFile(source));
 
-	for (auto const& style : file->Styles) {
-		StyleInfo info = MakeStyleInfo(style);
-		used_styles[info].styles.push_back(style.name);
+	for (auto& analysis : analyses) {
+		FontCollectorEvent event;
+		event.type = FontCollectorEventType::SearchingForFontFiles;
+		Emit(analysis.event_sink, std::move(event));
 	}
 
-	int wrap_style = file->GetScriptInfoAsInt("WrapStyle");
-	int index = 0;
-	for (auto const& diag : file->Events)
-		ProcessDialogueLine(&diag, ++index, wrap_style);
-	EmitMissingStyles();
-	for (auto& style : used_styles)
-		FinalizeUsageCodepoints(style.second);
-	if (details)
-		details->fonts.reserve(used_styles.size());
-
-	event = FontCollectorEvent();
-	event.type = FontCollectorEventType::SearchingForFontFiles;
-	Emit(event_sink, std::move(event));
-	std::vector<MissingGlyphQuery> missing_queries;
-	for (auto& style : used_styles) ResolveFontUsage(style.first, style.second, details, missing_queries);
-	CollectMissingGlyphLines(file, wrap_style, missing_queries);
-	StoreMissingGlyphLines(details, missing_queries);
-	for (auto const& query : missing_queries) {
-		if (!query.usage)
-			continue;
-		Emit(event_sink, query.event);
-		PrintUsage(*query.usage, query.matching_lines);
+	std::map<StyleInfo, std::vector<uint32_t>> merged_codepoints;
+	for (auto const& analysis : analyses) {
+		for (auto const& [style, data] : analysis.used_styles)
+			MergeSortedCodepointsInto(merged_codepoints[style], data.codepoints);
 	}
-	event = FontCollectorEvent();
-	event.type = FontCollectorEventType::SearchComplete;
-	Emit(event_sink, std::move(event));
 
-	std::vector<agi::fs::path> paths;
-	paths.reserve(results.size());
-	paths.insert(paths.end(), results.begin(), results.end());
+	std::map<StyleInfo, ResolvedUsage> resolved;
+	for (auto const& [style, codepoints] : merged_codepoints) {
+		if (!codepoints.empty())
+			resolved.emplace(style, ResolveMergedUsage(style, codepoints));
+	}
 
-	event = FontCollectorEvent();
-	if (missing == 0) {
-		event.type = FontCollectorEventType::AllFontsFound;
-		Emit(event_sink, std::move(event));
-	}
-	else {
-		event.type = FontCollectorEventType::FontsMissing;
-		event.count = missing;
-		Emit(event_sink, std::move(event));
-	}
-	if (missing_glyphs != 0) {
+	std::vector<std::vector<agi::fs::path>> paths_by_file;
+	paths_by_file.reserve(analyses.size());
+	for (auto& analysis : analyses) {
+		std::vector<MissingGlyphQuery> missing_queries;
+		for (auto& [style, data] : analysis.used_styles) {
+			auto resolved_it = resolved.find(style);
+			if (resolved_it != end(resolved))
+				ApplyResolvedFontUsage(analysis, style, data, resolved_it->second, missing_queries);
+		}
+
+		if (analysis.file)
+			CollectMissingGlyphLines(analysis.file, analysis.wrap_style, missing_queries);
+		StoreMissingGlyphLines(analysis.details, missing_queries);
+		for (auto const& query : missing_queries) {
+			if (!query.usage)
+				continue;
+			Emit(analysis.event_sink, query.event);
+			PrintUsage(analysis.event_sink, *query.usage, query.matching_lines);
+		}
+
+		FontCollectorEvent event;
+		event.type = FontCollectorEventType::SearchComplete;
+		Emit(analysis.event_sink, std::move(event));
+
 		event = FontCollectorEvent();
-		event.type = FontCollectorEventType::FontsMissingGlyphs;
-		event.count = missing_glyphs;
-		Emit(event_sink, std::move(event));
+		if (analysis.missing == 0) {
+			event.type = FontCollectorEventType::AllFontsFound;
+			Emit(analysis.event_sink, std::move(event));
+		}
+		else {
+			event.type = FontCollectorEventType::FontsMissing;
+			event.count = analysis.missing;
+			Emit(analysis.event_sink, std::move(event));
+		}
+		if (analysis.missing_glyphs != 0) {
+			event = FontCollectorEvent();
+			event.type = FontCollectorEventType::FontsMissingGlyphs;
+			event.count = analysis.missing_glyphs;
+			Emit(analysis.event_sink, std::move(event));
+		}
+
+		paths_by_file.push_back(analysis.results);
 	}
 
-	return paths;
+	return paths_by_file;
 }
 
 bool FontCollector::StyleInfo::operator<(StyleInfo const& rgt) const {

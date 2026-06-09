@@ -42,6 +42,9 @@ public:
 	
 	/// Create a face from LOGFONT via DWrite font system.
 	IDWriteFontFace *CreateFontFaceFromLogFont(LOGFONTW const &lf) const;
+
+	/// Get localized family aliases for a GDI-selected LOGFONT.
+	std::vector<std::string> GetFontFamilyNamesFromLogFont(LOGFONTW const &lf) const;
 	
 	/// Get the font file path from an IDWriteFontFace.
 	/// @param face DWrite font face

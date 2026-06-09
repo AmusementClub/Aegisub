@@ -9,6 +9,7 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     set(AEGISUB_FONTCOLLECTOR_STATIC_RUNTIME ON)
     project(AegisubFontCollector VERSION 1.0 LANGUAGES CXX)
     set(AEGISUB_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." CACHE PATH "Path to the Aegisub source tree")
+    include(CTest)
 else()
     set(AEGISUB_ROOT "${PROJECT_SOURCE_DIR}")
     if(DEFINED VCPKG_TARGET_TRIPLET AND VCPKG_TARGET_TRIPLET MATCHES "static")
@@ -46,18 +47,23 @@ if(WIN32 AND DEFINED VCPKG_TARGET_TRIPLET)
 endif()
 
 set(AEGISUB_FONTCOLLECTOR_RUNTIME_DIR "${CMAKE_BINARY_DIR}/fontcollector" CACHE PATH "Font collector runtime output directory")
+set(AEGISUB_FONTCOLLECTOR_STANDALONE_RUNTIME_DIR "${CMAKE_BINARY_DIR}/fontcollector-standalone" CACHE PATH "Standalone font collector CLI output directory")
 set(AEGISUB_FONTCOLLECTOR_ARCHIVE_DIR "${CMAKE_BINARY_DIR}/fontcollector-lib" CACHE PATH "Font collector import/static library output directory")
 
 function(aegisub_fontcollector_set_output_dirs target_name)
+    set(runtime_dir "${AEGISUB_FONTCOLLECTOR_RUNTIME_DIR}")
+    if(ARGC GREATER 1)
+        set(runtime_dir "${ARGV1}")
+    endif()
     set_target_properties(${target_name} PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY "${AEGISUB_FONTCOLLECTOR_RUNTIME_DIR}"
-        LIBRARY_OUTPUT_DIRECTORY "${AEGISUB_FONTCOLLECTOR_RUNTIME_DIR}"
+        RUNTIME_OUTPUT_DIRECTORY "${runtime_dir}"
+        LIBRARY_OUTPUT_DIRECTORY "${runtime_dir}"
         ARCHIVE_OUTPUT_DIRECTORY "${AEGISUB_FONTCOLLECTOR_ARCHIVE_DIR}"
     )
     foreach(config DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
         set_target_properties(${target_name} PROPERTIES
-            RUNTIME_OUTPUT_DIRECTORY_${config} "${AEGISUB_FONTCOLLECTOR_RUNTIME_DIR}"
-            LIBRARY_OUTPUT_DIRECTORY_${config} "${AEGISUB_FONTCOLLECTOR_RUNTIME_DIR}"
+            RUNTIME_OUTPUT_DIRECTORY_${config} "${runtime_dir}"
+            LIBRARY_OUTPUT_DIRECTORY_${config} "${runtime_dir}"
             ARCHIVE_OUTPUT_DIRECTORY_${config} "${AEGISUB_FONTCOLLECTOR_ARCHIVE_DIR}/${config}"
         )
     endforeach()
@@ -233,21 +239,55 @@ add_library(aegisub_fontcollector_static STATIC ${AEGISUB_FONTCOLLECTOR_SOURCES}
 set_target_properties(aegisub_fontcollector_static PROPERTIES OUTPUT_NAME aegisub_fontcollector_static)
 aegisub_fontcollector_configure_library(aegisub_fontcollector_static STATIC)
 
-add_executable(fontcollector_cli fontcollector_cli.cpp)
-aegisub_fontcollector_set_output_dirs(fontcollector_cli)
-set_target_properties(fontcollector_cli PROPERTIES OUTPUT_NAME fontcollector)
-if(MSVC AND AEGISUB_FONTCOLLECTOR_STATIC_RUNTIME)
-    set_property(TARGET fontcollector_cli PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-endif()
-target_compile_features(fontcollector_cli PRIVATE cxx_std_20)
-target_link_libraries(fontcollector_cli PRIVATE aegisub_fontcollector CLI11::CLI11)
-if(WIN32)
-    target_link_libraries(fontcollector_cli PRIVATE Shell32)
-endif()
-target_include_directories(fontcollector_cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+function(aegisub_fontcollector_add_cli target_name core_target runtime_dir)
+    add_executable(${target_name} fontcollector_cli.cpp)
+    aegisub_fontcollector_set_output_dirs(${target_name} "${runtime_dir}")
+    set_target_properties(${target_name} PROPERTIES OUTPUT_NAME fontcollector)
+    if(MSVC AND AEGISUB_FONTCOLLECTOR_STATIC_RUNTIME)
+        set_property(TARGET ${target_name} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    endif()
+    target_compile_features(${target_name} PRIVATE cxx_std_20)
+    target_sources(${target_name} PRIVATE
+        ${AEGISUB_ROOT}/libaegisub/common/cajun/elements.cpp
+        ${AEGISUB_ROOT}/libaegisub/common/cajun/writer.cpp
+    )
+    target_link_libraries(${target_name} PRIVATE ${core_target} CLI11::CLI11)
+    if(WIN32)
+        target_link_libraries(${target_name} PRIVATE Shell32)
+    endif()
+    target_include_directories(${target_name} PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/include"
+        "${AEGISUB_ROOT}/libaegisub/include"
+    )
+endfunction()
+
+# DLL wrapper: links the exported C API core DLL and writes both files to
+# AEGISUB_FONTCOLLECTOR_RUNTIME_DIR.
+aegisub_fontcollector_add_cli(fontcollector_cli aegisub_fontcollector "${AEGISUB_FONTCOLLECTOR_RUNTIME_DIR}")
+
+# Standalone CLI: links the static core into the executable and writes it to a
+# separate directory so its output does not collide with the DLL wrapper.
+aegisub_fontcollector_add_cli(fontcollector_cli_standalone aegisub_fontcollector_static "${AEGISUB_FONTCOLLECTOR_STANDALONE_RUNTIME_DIR}")
 
 add_custom_command(TARGET fontcollector_cli POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         $<TARGET_FILE:aegisub_fontcollector>
         $<TARGET_FILE_DIR:fontcollector_cli>
 )
+
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND BUILD_TESTING AND WIN32)
+    add_test(
+        NAME fontcollector_cli_smoke
+        COMMAND ${CMAKE_COMMAND}
+            "-DFONTCOLLECTOR_EXE=$<TARGET_FILE:fontcollector_cli>"
+            "-DTEST_WORK_DIR=${CMAKE_BINARY_DIR}/fontcollector-cli-smoke"
+            -P "${CMAKE_CURRENT_LIST_DIR}/tests/fontcollector_cli_smoke.cmake"
+    )
+    add_test(
+        NAME fontcollector_cli_standalone_smoke
+        COMMAND ${CMAKE_COMMAND}
+            "-DFONTCOLLECTOR_EXE=$<TARGET_FILE:fontcollector_cli_standalone>"
+            "-DTEST_WORK_DIR=${CMAKE_BINARY_DIR}/fontcollector-cli-standalone-smoke"
+            -P "${CMAKE_CURRENT_LIST_DIR}/tests/fontcollector_cli_smoke.cmake"
+    )
+endif()

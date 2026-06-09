@@ -52,6 +52,8 @@ struct CollectionResult {
 	std::string matched_facename;
 	/// Full font face selected by the platform matcher, when available.
 	std::string matched_facename_full;
+	/// Matched family aliases reported by the platform backend.
+	std::vector<std::string> matched_names;
 	int face_index = -1;
 	/// Font weight selected by the platform matcher.
 	int matched_weight = 0;
@@ -78,6 +80,7 @@ struct CollectionResult {
 struct FontCollectorMatchedFont {
 	std::string facename;
 	std::string facename_full;
+	std::vector<std::string> names;
 	int face_index = -1;
 	int weight = 0;
 	bool bold = false;
@@ -111,6 +114,12 @@ struct FontCollectorAssFontUsage {
 
 struct FontCollectorDetails {
 	std::vector<FontCollectorAssFontUsage> fonts;
+};
+
+struct FontCollectorBatchSource {
+	AssFile const *file = nullptr;
+	FontCollectorEventSink event_sink;
+	FontCollectorDetails *details = nullptr;
 };
 
 class IFontFileLister {
@@ -222,6 +231,25 @@ class FontCollector {
 		std::vector<std::string> styles;              ///< ASS styles which resolve to this font request
 	};
 
+	using MissingStyleLines = std::map<std::string, std::vector<int>>;
+
+	struct FileAnalysis {
+		AssFile const *file = nullptr;
+		int wrap_style = 0;
+		std::map<StyleInfo, UsageData> used_styles;
+		MissingStyleLines missing_style_lines;
+		std::vector<agi::fs::path> results;
+		FontCollectorEventSink event_sink;
+		FontCollectorDetails *details = nullptr;
+		int missing = 0;
+		int missing_glyphs = 0;
+	};
+
+	struct ResolvedUsage {
+		CollectionResult result;
+		std::vector<uint32_t> missing_codepoints;
+	};
+
 	/// Deferred line lookup for glyphs reported missing by the platform font lister
 	struct MissingGlyphQuery {
 		StyleInfo style;
@@ -234,44 +262,36 @@ class FontCollector {
 	/// Message callback provider by caller
 	FontCollectorEventSink event_sink;
 
-	std::unique_ptr<IFontFileLister> lister;
-	AssFile const *ass_file = nullptr;
-
-	/// Font usage keyed by resolved ASS facename/weight/italic request
-	std::map<StyleInfo, UsageData> used_styles;
-	/// Missing ASS style/reset style names collected during the first pass
-	std::map<std::string, std::vector<int>> missing_style_lines;
-	/// Paths to found required font files
-	std::vector<agi::fs::path> results;
-	/// Number of fonts which could not be found
-	int missing = 0;
-	/// Number of fonts which were found, but did not contain all used glyphs
-	int missing_glyphs = 0;
+	std::unique_ptr<IFontFileLister> owned_lister;
+	IFontFileLister *lister = nullptr;
 
 	/// When true, compute libass_fake_bold/italic/score from platform metadata
 	bool enable_libass_compat_ = false;
 
 	/// Walk plain text spans with their active resolved font request
 	StyleInfo MakeStyleInfo(AssStyle const& style) const;
-	void RecordMissingStyle(std::string const& name, int line_index);
-	void EmitMissingStyles();
+	void RecordMissingStyle(MissingStyleLines& missing_style_lines, std::string const& name, int line_index);
+	void EmitMissingStyles(FileAnalysis& analysis);
 	template<class Callback>
-	bool ForEachLineTextSpan(AssDialogue const& line, int line_index, int wrap_style, Callback&& callback, bool report_missing_styles);
-	void ProcessDialogueLine(const AssDialogue *line, int index, int wrap_style);
+	bool ForEachLineTextSpan(AssFile const& file, AssDialogue const& line, int line_index, int wrap_style,
+		Callback&& callback, MissingStyleLines *missing_style_lines);
+	void ProcessDialogueLine(FileAnalysis& analysis, const AssDialogue *line, int index);
 	void AddCodepoint(UsageData& data, uint32_t codepoint);
 	void AppendTextCodepoints(std::string_view text, int wrap_style, UsageData& data);
 	void MergePendingCodepoints(UsageData& data);
 	void FinalizeUsageCodepoints(UsageData& data);
+	FileAnalysis AnalyzeFile(FontCollectorBatchSource const& source);
 
 	/// Resolve font files for a single accumulated font request
-	void ResolveFontUsage(StyleInfo const& style, UsageData& data, FontCollectorDetails *details,
+	ResolvedUsage ResolveMergedUsage(StyleInfo const& style, std::vector<uint32_t> const& codepoints);
+	void ApplyResolvedFontUsage(FileAnalysis& analysis, StyleInfo const& style, UsageData& data, ResolvedUsage const& resolved,
 		std::vector<MissingGlyphQuery>& missing_queries);
 	void CollectMissingGlyphLines(AssFile const *file, int wrap_style, std::vector<MissingGlyphQuery>& queries);
 	void StoreMissingGlyphLines(FontCollectorDetails *details, std::vector<MissingGlyphQuery> const& queries);
 
 	/// Report the ASS styles and line numbers associated with a diagnostic
-	void PrintUsage(UsageData const& data);
-	void PrintUsage(UsageData const& data, std::vector<int> const& lines);
+	void PrintUsage(FontCollectorEventSink const& sink, UsageData const& data);
+	void PrintUsage(FontCollectorEventSink const& sink, UsageData const& data, std::vector<int> const& lines);
 
 public:
 	/// Constructor
@@ -279,6 +299,7 @@ public:
 	/// @param lister The actual font file lister
 	FontCollector(FontCollectorEventSink event_sink);
 	FontCollector(FontCollectorEventSink event_sink, std::unique_ptr<IFontFileLister> lister);
+	FontCollector(FontCollectorEventSink event_sink, IFontFileLister& lister);
 
 	/// Enable libass-style synthetic detection for cross-reference (opt-in).
 	/// When enabled, libass_fake_bold, libass_fake_italic, and libass_score
@@ -292,4 +313,5 @@ public:
 	/// @param status Callback function for messages
 	/// @return List of paths to fonts
 	std::vector<agi::fs::path> GetFontPaths(const AssFile *file, FontCollectorDetails *details = nullptr);
+	std::vector<std::vector<agi::fs::path>> GetFontPaths(std::vector<FontCollectorBatchSource> const& sources);
 };

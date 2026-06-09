@@ -4,9 +4,11 @@
 
 #include <dwrite.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <winver.h>
@@ -93,6 +95,34 @@ std::string wide_to_utf8(wchar_t const *wstr, UINT32 len) {
 	if (!result.empty() && result.back() == '\0')
 		result.pop_back();
 	return result;
+}
+
+void add_unique(std::vector<std::string>& values, std::string value) {
+	if (value.empty())
+		return;
+	if (std::find(values.begin(), values.end(), value) == values.end())
+		values.push_back(std::move(value));
+}
+
+std::vector<std::string> localized_strings_to_utf8(IDWriteLocalizedStrings *strings) {
+	std::vector<std::string> values;
+	if (!strings)
+		return values;
+
+	auto count = strings->GetCount();
+	values.reserve(count);
+	for (UINT32 i = 0; i < count; ++i) {
+		UINT32 len = 0;
+		if (FAILED(strings->GetStringLength(i, &len)) || !len)
+			continue;
+
+		std::vector<wchar_t> text(len + 1);
+		if (FAILED(strings->GetString(i, text.data(), len + 1)))
+			continue;
+
+		add_unique(values, wide_to_utf8(text.data(), len));
+	}
+	return values;
 }
 // Helper: get the first font file and its reference key from a font face.
 // On success, caller must Release() the returned file.
@@ -230,6 +260,33 @@ IDWriteFontFace *DWriteBridge::CreateFontFaceFromLogFont(LOGFONTW const &lf) con
 	if (FAILED(hr) || !face)
 		return nullptr;
 	return face;
+}
+
+std::vector<std::string> DWriteBridge::GetFontFamilyNamesFromLogFont(LOGFONTW const &lf) const {
+	std::vector<std::string> names;
+	if (!available_ || !gdi_interop)
+		return names;
+
+	IDWriteFont *font = nullptr;
+	auto hr = gdi_interop->CreateFontFromLOGFONT(&lf, &font);
+	if (FAILED(hr) || !font)
+		return names;
+
+	IDWriteFontFamily *family = nullptr;
+	hr = font->GetFontFamily(&family);
+	font->Release();
+	if (FAILED(hr) || !family)
+		return names;
+
+	IDWriteLocalizedStrings *family_names = nullptr;
+	hr = family->GetFamilyNames(&family_names);
+	family->Release();
+	if (FAILED(hr) || !family_names)
+		return names;
+
+	names = localized_strings_to_utf8(family_names);
+	family_names->Release();
+	return names;
 }
 
 bool DWriteBridge::GetFontFilePath(IDWriteFontFace *face, std::string &out_path, int &out_face_index) const {

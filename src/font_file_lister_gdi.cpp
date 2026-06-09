@@ -307,10 +307,12 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 
 	// --- DWrite bridge: try to get path, simulations and raw data ---
 	if (dwrite_bridge->available()) {
+		LOGFONTW lf_actual{};
+		GetObjectW(hfont, sizeof(LOGFONTW), &lf_actual);
+		ret.matched_names = dwrite_bridge->GetFontFamilyNamesFromLogFont(lf_actual);
+
 		IDWriteFontFace *dw_face;
 		if (dwrite_bridge->is_dwritecore()) {
-			LOGFONT lf_actual{};
-			GetObject(hfont, sizeof(LOGFONT), &lf_actual);
 			dw_face = dwrite_bridge->CreateFontFaceFromLogFont(lf_actual);
 		} else {
 			dw_face = dwrite_bridge->CreateFontFaceFromHdc(dc);

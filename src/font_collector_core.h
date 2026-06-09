@@ -23,8 +23,10 @@
 
 #include <functional>
 #include <memory>
+#include <vector>
 
 class AssFile;
+class IFontFileLister;
 struct FontCollectorDetails;
 
 enum class FontCollectionMode {
@@ -46,6 +48,13 @@ struct FontCollectionDestinationResult {
 	FontCollectionDestinationError error = FontCollectionDestinationError::None;
 };
 
+struct FontCollectionBatchSource {
+	AssFile const *subs = nullptr;
+	agi::fs::path destination;
+	FontCollectorEventSink font_event_sink;
+	FontCollectorDetails *details = nullptr;
+};
+
 class FontCollectionArchiveWriter {
 public:
 	virtual ~FontCollectionArchiveWriter() = default;
@@ -59,6 +68,28 @@ using FontCollectionArchiveFactory =
 
 FontCollectionDestinationResult PrepareFontCollectionDestination(FontCollectionMode mode, agi::fs::path const& destination);
 
+class FontCollectorSession {
+	FontCollectorBackend backend;
+	FontCollectorEventSink init_event_sink;
+	std::unique_ptr<IFontFileLister> lister;
+
+public:
+	FontCollectorSession(FontCollectorBackend backend, FontCollectorEventSink font_event_sink);
+	~FontCollectorSession();
+
+	FontCollectorSession(FontCollectorSession const&) = delete;
+	FontCollectorSession& operator=(FontCollectorSession const&) = delete;
+
+	std::vector<agi::fs::path> GetFontPaths(AssFile const *subs,
+	                                        FontCollectorEventSink font_event_sink,
+	                                        FontCollectorDetails *details = nullptr,
+	                                        bool enable_libass_compat = false);
+	std::vector<std::vector<agi::fs::path>> GetFontPaths(std::vector<FontCollectionBatchSource> const& sources,
+	                                                     bool enable_libass_compat = false);
+
+	FontCollectorBackend GetBackend() const { return backend; }
+};
+
 void CollectFonts(AssFile const *subs,
                   agi::fs::path const& destination,
                   FontCollectionMode mode,
@@ -67,3 +98,18 @@ void CollectFonts(AssFile const *subs,
                   FontCollectionArchiveFactory archive_factory = {},
                   bool enable_libass_compat = false,
                   FontCollectorBackend backend = FontCollectorBackend::Auto);
+
+void CollectFonts(FontCollectorSession& session,
+                  AssFile const *subs,
+                  agi::fs::path const& destination,
+                  FontCollectionMode mode,
+                  FontCollectorEventSink font_event_sink,
+                  FontCollectorDetails *details = nullptr,
+                  FontCollectionArchiveFactory archive_factory = {},
+                  bool enable_libass_compat = false);
+
+void CollectFonts(FontCollectorSession& session,
+                  std::vector<FontCollectionBatchSource> const& sources,
+                  FontCollectionMode mode,
+                  FontCollectionArchiveFactory archive_factory = {},
+                  bool enable_libass_compat = false);

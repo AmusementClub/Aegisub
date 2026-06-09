@@ -22,6 +22,7 @@
 #include <libaegisub/fs.h>
 
 #include <cstdint>
+#include <map>
 #include <stdexcept>
 #include <utility>
 
@@ -99,46 +100,37 @@ FileCollectionResult CopyFontToArchive(FontCollectionArchiveWriter& archive, agi
 		? FileCollectionResult::Copied
 		: FileCollectionResult::Failed;
 }
-}
 
-FontCollectionDestinationResult PrepareFontCollectionDestination(FontCollectionMode mode, agi::fs::path const& destination) {
-	FontCollectionDestinationResult result;
+struct FontCopyCache {
+	std::map<agi::fs::path, bool> existing_targets;
+};
 
-	if (mode == FontCollectionMode::CheckFontsOnly)
-		return result;
+FileCollectionResult CopyFontToFolderCached(agi::fs::path const& source,
+                                            agi::fs::path const& destination,
+                                            FontCollectionMode mode,
+                                            FontCopyCache *cache) {
+	if (!cache)
+		return CopyFontToFolder(source, destination, mode);
 
-	if (mode == FontCollectionMode::CopyToZip) {
-		if (agi::fs::DirectoryExists(destination) || destination.filename().empty())
-			result.error = FontCollectionDestinationError::InvalidArchivePath;
-		return result;
-	}
+	auto target = destination / source.filename();
+	if (cache->existing_targets.find(target) != cache->existing_targets.end())
+		return FileCollectionResult::AlreadyExists;
 
-	if (agi::fs::FileExists(destination))
-		result.invalid_destination = true;
-
-	try {
-		agi::fs::CreateDirectory(destination);
-	}
-	catch (agi::Exception const&) {
-		result.error = FontCollectionDestinationError::CouldNotCreateDestinationFolder;
-	}
+	auto result = CopyFontToFolder(source, destination, mode);
+	if (result == FileCollectionResult::Copied ||
+	    result == FileCollectionResult::AlreadyExists ||
+	    result == FileCollectionResult::Symlinked)
+		cache->existing_targets.emplace(std::move(target), true);
 
 	return result;
 }
 
-void CollectFonts(AssFile const *subs,
-                  agi::fs::path const& destination,
-                  FontCollectionMode mode,
-                  FontCollectorEventSink font_event_sink,
-                  FontCollectorDetails *details,
-                  FontCollectionArchiveFactory archive_factory,
-                  bool enable_libass_compat,
-                  FontCollectorBackend backend) {
-	auto lister = CreateFontFileLister(backend, font_event_sink);
-	FontCollector collector(font_event_sink, std::move(lister));
-	if (enable_libass_compat)
-		collector.EnableLibassCompat(true);
-	auto paths = collector.GetFontPaths(subs, details);
+void CollectResolvedFontPaths(std::vector<agi::fs::path> paths,
+                              agi::fs::path const& destination,
+                              FontCollectionMode mode,
+                              FontCollectorEventSink const& font_event_sink,
+                              FontCollectionArchiveFactory const& archive_factory,
+                              FontCopyCache *copy_cache = nullptr) {
 	if (paths.empty())
 		return;
 
@@ -191,7 +183,7 @@ void CollectFonts(AssFile const *subs,
 
 		auto result = mode == FontCollectionMode::CopyToZip
 			? CopyFontToArchive(*archive, path)
-			: CopyFontToFolder(path, destination, mode);
+			: CopyFontToFolderCached(path, destination, mode, copy_cache);
 
 		switch (result) {
 			case FileCollectionResult::Copied: {
@@ -235,4 +227,114 @@ void CollectFonts(AssFile const *subs,
 		Emit(font_event_sink, FontCollectorEventType::CollectionOver32MBWarning);
 
 	Emit(font_event_sink, FontCollectorEventType::CollectionNewline);
+}
+}
+
+FontCollectionDestinationResult PrepareFontCollectionDestination(FontCollectionMode mode, agi::fs::path const& destination) {
+	FontCollectionDestinationResult result;
+
+	if (mode == FontCollectionMode::CheckFontsOnly)
+		return result;
+
+	if (mode == FontCollectionMode::CopyToZip) {
+		if (agi::fs::DirectoryExists(destination) || destination.filename().empty())
+			result.error = FontCollectionDestinationError::InvalidArchivePath;
+		return result;
+	}
+
+	if (agi::fs::FileExists(destination))
+		result.invalid_destination = true;
+
+	try {
+		agi::fs::CreateDirectory(destination);
+	}
+	catch (agi::Exception const&) {
+		result.error = FontCollectionDestinationError::CouldNotCreateDestinationFolder;
+	}
+
+	return result;
+}
+
+FontCollectorSession::FontCollectorSession(FontCollectorBackend backend, FontCollectorEventSink font_event_sink)
+: backend(backend)
+, init_event_sink(std::move(font_event_sink))
+, lister(CreateFontFileLister(backend, init_event_sink))
+{
+}
+
+FontCollectorSession::~FontCollectorSession() = default;
+
+std::vector<agi::fs::path> FontCollectorSession::GetFontPaths(AssFile const *subs,
+                                                              FontCollectorEventSink font_event_sink,
+                                                              FontCollectorDetails *details,
+                                                              bool enable_libass_compat) {
+	FontCollector collector(font_event_sink, *lister);
+	if (enable_libass_compat)
+		collector.EnableLibassCompat(true);
+	return collector.GetFontPaths(subs, details);
+}
+
+std::vector<std::vector<agi::fs::path>> FontCollectorSession::GetFontPaths(std::vector<FontCollectionBatchSource> const& sources,
+                                                                           bool enable_libass_compat) {
+	FontCollector collector(init_event_sink, *lister);
+	if (enable_libass_compat)
+		collector.EnableLibassCompat(true);
+
+	std::vector<FontCollectorBatchSource> collector_sources;
+	collector_sources.reserve(sources.size());
+	for (auto const& source : sources) {
+		FontCollectorBatchSource collector_source;
+		collector_source.file = source.subs;
+		collector_source.event_sink = source.font_event_sink;
+		collector_source.details = source.details;
+		collector_sources.push_back(std::move(collector_source));
+	}
+
+	return collector.GetFontPaths(collector_sources);
+}
+
+void CollectFonts(AssFile const *subs,
+                  agi::fs::path const& destination,
+                  FontCollectionMode mode,
+                  FontCollectorEventSink font_event_sink,
+                  FontCollectorDetails *details,
+                  FontCollectionArchiveFactory archive_factory,
+                  bool enable_libass_compat,
+                  FontCollectorBackend backend) {
+	FontCollectorSession session(backend, font_event_sink);
+	CollectFonts(session, subs, destination, mode, std::move(font_event_sink), details, std::move(archive_factory), enable_libass_compat);
+}
+
+void CollectFonts(FontCollectorSession& session,
+                  AssFile const *subs,
+                  agi::fs::path const& destination,
+                  FontCollectionMode mode,
+                  FontCollectorEventSink font_event_sink,
+                  FontCollectorDetails *details,
+                  FontCollectionArchiveFactory archive_factory,
+                  bool enable_libass_compat) {
+	auto paths = session.GetFontPaths(subs, font_event_sink, details, enable_libass_compat);
+	CollectResolvedFontPaths(std::move(paths), destination, mode, font_event_sink, archive_factory);
+}
+
+void CollectFonts(FontCollectorSession& session,
+                  std::vector<FontCollectionBatchSource> const& sources,
+                  FontCollectionMode mode,
+                  FontCollectionArchiveFactory archive_factory,
+                  bool enable_libass_compat) {
+	auto paths_by_source = session.GetFontPaths(sources, enable_libass_compat);
+	FontCopyCache copy_cache;
+	auto *copy_cache_ptr = mode == FontCollectionMode::CopyToFolder ||
+	                       mode == FontCollectionMode::CopyToScriptFolder ||
+	                       mode == FontCollectionMode::SymlinkToFolder
+		? &copy_cache
+		: nullptr;
+	for (size_t i = 0; i < sources.size() && i < paths_by_source.size(); ++i)
+		CollectResolvedFontPaths(
+			std::move(paths_by_source[i]),
+			sources[i].destination,
+			mode,
+			sources[i].font_event_sink,
+			archive_factory,
+			copy_cache_ptr);
 }

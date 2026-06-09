@@ -248,6 +248,8 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 	FcChar8 *matched_family;
 	if (FcPatternGetString(match, FC_FAMILY, 0, &matched_family) == FcResultMatch)
 		ret.matched_facename = reinterpret_cast<char const *>(matched_family);
+	for (int i = 0; FcPatternGetString(match, FC_FAMILY, i, &matched_family) == FcResultMatch; ++i)
+		ret.matched_names.emplace_back(reinterpret_cast<char const *>(matched_family));
 	FcPatternGetInteger(match, FC_INDEX, 0, &ret.face_index);
 	ret.matched_weight = OpenTypeWeightFromFontconfig(match);
 	ret.matched_bold = ret.matched_weight > 550;

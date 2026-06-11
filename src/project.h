@@ -79,6 +79,7 @@ public:
 	~Project();
 
 	void LoadSubtitles(agi::fs::path path, std::string encoding="", bool load_linked=true);
+	bool ReloadSubtitles(agi::fs::path path, std::string encoding="", bool load_linked=false);
 	void CloseSubtitles();
 	bool CanLoadSubtitlesFromVideo() const { return video_has_subtitles; }
 

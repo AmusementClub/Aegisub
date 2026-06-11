@@ -36,16 +36,25 @@
 #include "subtitle_format.h"
 #include "text_selection_controller.h"
 #include "ui_services.h"
+#include "watched_file.h"
 
 #include <libaegisub/dispatch.h>
 #include <libaegisub/format_path.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
 #include <libaegisub/util.h>
 
 #include <wx/msgdlg.h>
+#include <wx/log.h>
+
+#include <array>
+#include <fstream>
 
 namespace {
+	constexpr uint64_t kFileWatchFnvOffset = 1469598103934665603ULL;
+	constexpr uint64_t kFileWatchFnvPrime = 1099511628211ULL;
+
 	void autosave_timer_changed(SubsControllerTimer *timer) {
 		if (!timer)
 			return;
@@ -68,6 +77,30 @@ namespace {
 			return wxNO;
 		}
 		return wxCANCEL;
+	}
+
+	bool try_hash_file(agi::fs::path const& path, uint64_t& hash) {
+		try {
+			std::ifstream stream(path, std::ios::binary);
+			if (!stream)
+				return false;
+
+			hash = kFileWatchFnvOffset;
+			std::array<char, 32768> buffer;
+			while (stream) {
+				stream.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+				auto const bytes_read = stream.gcount();
+				for (std::streamsize i = 0; i < bytes_read; ++i) {
+					hash ^= static_cast<unsigned char>(buffer[static_cast<size_t>(i)]);
+					hash *= kFileWatchFnvPrime;
+				}
+			}
+
+			return stream.eof();
+		}
+		catch (...) {
+			return false;
+		}
 	}
 }
 
@@ -178,6 +211,14 @@ SubsController::SubsController(agi::Context *context)
 	if (!IsGuiRuntimeShell())
 		return;
 
+	file_watch = agi::make_unique<WatchedFile>();
+	file_watch->SetChangedCallback([this](agi::fs::path const& path) {
+		OnWatchedFileChanged(path);
+	});
+	file_watch->SetErrorCallback([this](std::string const& message) {
+		OnFileWatchError(message);
+	});
+
 	autosave_timer = CreateSubsControllerTimer([this] { AutoSave(); });
 	autosave_timer_changed(autosave_timer.get());
 	OPT_SUB("App/Auto/Save", [=] { autosave_timer_changed(autosave_timer.get()); });
@@ -185,6 +226,7 @@ SubsController::SubsController(agi::Context *context)
 }
 
 SubsController::~SubsController() {
+	ClearFileWatch();
 	// Make sure there are no autosaves in progress
 	autosave_queue->Sync([]{ });
 }
@@ -224,6 +266,7 @@ ProjectProperties SubsController::Load(agi::fs::path const& filename, std::strin
 		agi::fs::Copy(filename, path / agi::fs::PathFromString(agi::fs::PathToString(filename.stem()) + ".ORIGINAL" + agi::fs::PathToString(filename.extension())));
 	}
 
+	UpdateFileWatch();
 	FileOpen(filename);
 	return props;
 }
@@ -232,6 +275,8 @@ void SubsController::Save(agi::fs::path const& filename, std::string const& enco
 	const SubtitleFormat *writer = SubtitleFormat::GetWriter(filename);
 	if (!writer)
 		throw agi::InvalidInputException("Unknown file type.");
+	if (!ConfirmOverwriteExternalChanges(filename))
+		return;
 
 	auto old_filename = this->filename;
 	auto old_properties = context->GetCore().ass->Properties;
@@ -256,6 +301,9 @@ void SubsController::Save(agi::fs::path const& filename, std::string const& enco
 
 		writer->WriteFile(save_source, filename, core.project->Timecodes(), encoding, context->GetSingleChoiceInteractionSink());
 		FileSave();
+
+		SetFileName(filename);
+		UpdateFileWatch();
 	}
 	catch (...) {
 		this->filename = old_filename;
@@ -265,8 +313,6 @@ void SubsController::Save(agi::fs::path const& filename, std::string const& enco
 		saved_commit_id = old_saved_commit_id;
 		throw;
 	}
-
-	SetFileName(filename);
 }
 
 void SubsController::Close() {
@@ -279,6 +325,7 @@ void SubsController::Close() {
 	blank.swap(*core.ass);
 	LoadDefaultAssFileWithAppOptions(*core.ass, true, OPT_GET("Subtitle Format/ASS/Default Style Catalog")->GetString());
 	core.ass->Commit("", AssFile::COMMIT_NEW);
+	ClearFileWatch();
 	FileOpen(filename);
 }
 
@@ -341,6 +388,180 @@ void SubsController::AutoSave() {
 		if (status_sink)
 			status_sink->ShowStatus(from_wx(msg));
 	});
+}
+
+void SubsController::UpdateFileWatch() {
+	if (!file_watch)
+		return;
+
+	if (filename.empty()) {
+		ClearFileWatch();
+		return;
+	}
+
+	file_watch->SetTargetPath(filename);
+	RecordCurrentFileSnapshot();
+}
+
+void SubsController::ClearFileWatch() {
+	if (file_watch)
+		file_watch->ClearTargetPath();
+
+	last_known_file_snapshot.reset();
+	last_prompted_file_snapshot.reset();
+	external_file_change_pending = false;
+	external_file_prompt_active = false;
+}
+
+SubsController::FileWatchSnapshot SubsController::MakeFileWatchSnapshot(agi::fs::path const& path) const {
+	FileWatchSnapshot snapshot;
+	if (path.empty())
+		return snapshot;
+
+	try {
+		snapshot.exists = agi::fs::FileExists(path);
+		if (snapshot.exists) {
+			snapshot.size = agi::fs::Size(path);
+			snapshot.modified_time = agi::fs::ModifiedTime(path);
+			snapshot.hash_valid = try_hash_file(path, snapshot.content_hash);
+		}
+	}
+	catch (agi::fs::FileSystemError const&) {
+		snapshot.exists = false;
+	}
+
+	return snapshot;
+}
+
+bool SubsController::FileWatchSnapshotsEqual(FileWatchSnapshot const& left, FileWatchSnapshot const& right) {
+	if (left.exists != right.exists || left.size != right.size || left.modified_time != right.modified_time)
+		return false;
+	if (!left.hash_valid || !right.hash_valid)
+		return false;
+	return left.content_hash == right.content_hash;
+}
+
+void SubsController::RecordCurrentFileSnapshot() {
+	last_known_file_snapshot = filename.empty() ? std::nullopt : std::make_optional(MakeFileWatchSnapshot(filename));
+	external_file_change_pending = false;
+}
+
+bool SubsController::HasFileChangedOnDisk() const {
+	if (filename.empty() || !last_known_file_snapshot)
+		return false;
+
+	auto current_snapshot = MakeFileWatchSnapshot(filename);
+	return !FileWatchSnapshotsEqual(current_snapshot, *last_known_file_snapshot);
+}
+
+void SubsController::OnWatchedFileChanged(agi::fs::path const&) {
+	if (filename.empty())
+		return;
+
+	if (external_file_prompt_active) {
+		external_file_change_pending = true;
+		return;
+	}
+
+	int prompt_count = 0;
+	constexpr int kMaxPromptLoopCount = 5;
+
+	for (;;) {
+		external_file_change_pending = false;
+		auto current_snapshot = MakeFileWatchSnapshot(filename);
+
+		if (last_known_file_snapshot && FileWatchSnapshotsEqual(current_snapshot, *last_known_file_snapshot))
+			return;
+
+		if (last_prompted_file_snapshot && FileWatchSnapshotsEqual(current_snapshot, *last_prompted_file_snapshot))
+			return;
+
+		if (++prompt_count > kMaxPromptLoopCount) {
+			wxLogWarning(wxS("File change detection loop limit reached for %s"), to_wx(agi::fs::PathToString(filename)));
+			last_prompted_file_snapshot = current_snapshot;
+			return;
+		}
+
+		external_file_prompt_active = true;
+		bool const reload = PromptReloadAfterExternalChange(current_snapshot);
+		bool const has_pending = external_file_change_pending;
+		external_file_prompt_active = false;
+
+		if (reload) {
+			ReloadFileFromDisk(false);
+			return;
+		}
+
+		last_prompted_file_snapshot = current_snapshot;
+		if (!has_pending)
+			return;
+	}
+}
+
+void SubsController::OnFileWatchError(std::string const& message) {
+	wxLogWarning(wxS("Subtitle file watcher error: %s"), to_wx(message));
+}
+
+bool SubsController::PromptReloadAfterExternalChange(FileWatchSnapshot const& current_snapshot) {
+	if (!current_snapshot.exists) {
+		context->ShowWarning(
+			from_wx(_("The subtitle file was deleted or moved by another program.\n\nThe current subtitles will be kept in memory. If you save, the file will be recreated.")),
+			from_wx(_("Subtitle file changed")));
+		saved_commit_id = -1;
+		UpdateTitleAfterExternalChange();
+		return false;
+	}
+
+	auto message = from_wx(_("The subtitle file has been modified by another program.\n\nDo you want to reload it?"));
+	if (IsModified()) {
+		message += "\n\n";
+		message += from_wx(_("You have unsaved edits in Aegisub. Reloading will discard the current in-memory changes."));
+	}
+	message += "\n\n";
+	message += from_wx(_("Reloading only updates the subtitle script. The currently loaded audio, video, timecodes, and keyframes will be kept."));
+
+	auto const result = context->RequestInteraction({
+		from_wx(_("Subtitle file changed")),
+		message,
+		agi::InteractionButtons::YesNo,
+		IsModified() ? agi::InteractionIcon::Warning : agi::InteractionIcon::Question
+	});
+	return result == agi::InteractionResult::Yes;
+}
+
+bool SubsController::ConfirmOverwriteExternalChanges(agi::fs::path const& target) const {
+	if (!HasFile() || target != filename || !HasFileChangedOnDisk())
+		return true;
+
+	std::string message;
+	if (agi::fs::FileExists(target)) {
+		message = from_wx(_("The subtitle file has been modified by another program since it was last loaded or saved.\n\nSaving now will overwrite those external changes. Continue?"));
+	} else {
+		message = from_wx(_("The subtitle file was deleted or moved by another program since it was last loaded or saved.\n\nSaving now will recreate it. Continue?"));
+	}
+
+	auto const result = context->RequestInteraction({
+		from_wx(_("Subtitle file changed")),
+		message,
+		agi::InteractionButtons::YesNo,
+		agi::InteractionIcon::Warning
+	});
+	return result == agi::InteractionResult::Yes;
+}
+
+void SubsController::UpdateTitleAfterExternalChange() {
+	auto const ui = context->GetUI();
+	if (ui.frame)
+		ui.frame->UpdateTitle();
+}
+
+void SubsController::ReloadFileFromDisk(bool load_linked_files) {
+	auto core = context->GetCore();
+	if (!core.project->ReloadSubtitles(filename, "", load_linked_files))
+		return;
+
+	RecordCurrentFileSnapshot();
+	context->ShowStatus(from_wx(_("Subtitles reloaded from disk.")));
 }
 
 bool SubsController::CanSave() const {

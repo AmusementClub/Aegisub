@@ -79,8 +79,6 @@ class FrameMain : public wxFrame {
 	void SyncAudioOpenUi();
 	void SyncVideoOpenUi();
 
-	void UpdateTitle();
-
 	void OnKeyDown(wxKeyEvent &event);
 	void OnMouseWheel(wxMouseEvent &evt);
 
@@ -145,6 +143,9 @@ public:
 	void SetDisplayMode(int showVid,int showAudio);
 	/// Recalculate the edit/grid splitter after edit area contents change size
 	void UpdateEditGridSplitterForContentChange();
+
+	/// Update the window title to reflect current filename and modified state
+	void UpdateTitle();
 
 	bool IsVideoShown() const { return showVideo; }
 	bool IsAudioShown() const { return showAudio; }

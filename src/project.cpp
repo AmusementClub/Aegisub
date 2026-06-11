@@ -315,6 +315,16 @@ void Project::LoadSubtitles(agi::fs::path path, std::string encoding, bool load_
 		LoadUnloadFiles(properties);
 }
 
+bool Project::ReloadSubtitles(agi::fs::path path, std::string encoding, bool load_linked) {
+	ProjectProperties properties;
+	if (!DoLoadSubtitles(path, encoding, properties))
+		return false;
+
+	if (load_linked)
+		LoadUnloadFiles(properties);
+	return true;
+}
+
 void Project::CloseSubtitles() {
 	auto core = context->GetCore();
 	auto const previous_transient_fonts = core.ass->GetTransientFonts();

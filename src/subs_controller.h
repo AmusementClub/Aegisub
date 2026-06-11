@@ -18,11 +18,15 @@
 #include <libaegisub/signal.h>
 
 #include <boost/container/list.hpp>
+#include <cstdint>
+#include <ctime>
 #include <filesystem>
+#include <optional>
 
 #include "subs_controller_timer.h"
 
 class SelectionController;
+class WatchedFile;
 namespace agi {
 	namespace dispatch {
 		class Queue;
@@ -60,6 +64,20 @@ class SubsController {
 	/// Queue which autosaves are performed on
 	std::unique_ptr<agi::dispatch::Queue> autosave_queue;
 
+	struct FileWatchSnapshot {
+		bool exists = false;
+		uintmax_t size = 0;
+		time_t modified_time = 0;
+		bool hash_valid = false;
+		uint64_t content_hash = 0;
+	};
+
+	std::unique_ptr<WatchedFile> file_watch;
+	std::optional<FileWatchSnapshot> last_known_file_snapshot;
+	std::optional<FileWatchSnapshot> last_prompted_file_snapshot;
+	bool external_file_change_pending = false;
+	bool external_file_prompt_active = false;
+
 	/// A new file has been opened (filename)
 	agi::signal::Signal<agi::fs::path> FileOpen;
 	/// The file has been saved
@@ -73,6 +91,19 @@ class SubsController {
 
 	/// Autosave the file if there have been any chances since the last autosave
 	void AutoSave();
+
+	void UpdateFileWatch();
+	void ClearFileWatch();
+	FileWatchSnapshot MakeFileWatchSnapshot(agi::fs::path const& path) const;
+	static bool FileWatchSnapshotsEqual(FileWatchSnapshot const& left, FileWatchSnapshot const& right);
+	void RecordCurrentFileSnapshot();
+	bool HasFileChangedOnDisk() const;
+	void OnWatchedFileChanged(agi::fs::path const& path);
+	void OnFileWatchError(std::string const& message);
+	bool PromptReloadAfterExternalChange(FileWatchSnapshot const& current_snapshot);
+	bool ConfirmOverwriteExternalChanges(agi::fs::path const& target) const;
+	void UpdateTitleAfterExternalChange();
+	void ReloadFileFromDisk(bool load_linked_files);
 
 	void OnCommit(AssFileCommit c);
 	void OnActiveLineChanged();

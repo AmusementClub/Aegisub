@@ -230,7 +230,12 @@ FrameMain::FrameMain()
 	observe_phase("startup.frame.menu.attach");
 
 	StartupLog("Create status bar");
-	CreateStatusBar(3);
+	CreateStatusBar(4);
+	if (auto *status_bar = GetStatusBar()) {
+		// Reserve a stable narrow pane for the selected-lines count.
+		int widths[] = { -4, -3, -3, FromDIP(140) };
+		status_bar->SetStatusWidths(4, widths);
+	}
 
 	StartupLog("Set icon");
 #ifdef _WIN32
@@ -772,7 +777,7 @@ void FrameMain::OnStatusClear(wxTimerEvent &) {
 void FrameMain::OnSelectedSetChanged() {
 	auto const& sel = context->GetCore().selectionController->GetSelectedSet();
 	int count = sel.size();
-	SetStatusText(count <= 1 ? wxString() : wxString::Format(_("%d lines selected"), count), 0);
+	SetStatusText(count <= 1 ? wxString() : wxString::Format(_("%d lines selected"), count), 3);
 }
 
 #ifdef _WIN32

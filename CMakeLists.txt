@@ -18,6 +18,22 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+# ------------------------------------------------------------------
+# Code quality: clang-tidy static analysis
+# Automatically enabled when clang-tidy is found in PATH.
+# Install LLVM/clang-tools and ensure clang-tidy is on PATH.
+# ------------------------------------------------------------------
+find_program(CLANG_TIDY clang-tidy)
+if(CLANG_TIDY)
+    if(NOT TARGET clang-tidy-custom-target)
+        add_custom_target(clang-tidy-custom-target)
+    endif()
+    set(CMAKE_CXX_CLANG_TIDY "${CLANG_TIDY}"
+        --extra-arg=-Wno-unknown-warning-option
+    )
+    message(STATUS "Found clang-tidy: ${CLANG_TIDY}")
+endif()
+
 ## Build bundled LuaJIT with aegisub specific patches
 add_executable(luajit-minilua vendor/luajit/src/host/minilua.c)
 if(NOT WIN32)

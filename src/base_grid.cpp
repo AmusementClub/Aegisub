@@ -38,6 +38,7 @@
 #include "ass_file.h"
 #include "audio_box.h"
 #include "compat.h"
+#include "grid_core/grid_layout.h"
 #include "grid_column.h"
 #include "grid_column_painter.h"
 #include "options.h"
@@ -288,10 +289,17 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 	int w = 0;
 	int h = 0;
 	GetClientSize(&w,&h);
-	w -= scrollBar->GetSize().GetWidth();
-
-	const int drawPerScreen = h/lineHeight + 1;
-	const int nDraw = mid(0, drawPerScreen, GetRows() - yPos);
+	auto const layout = aegisub::grid::CalculateGridLayout({
+		w,
+		h,
+		scrollBar->GetSize().GetWidth(),
+		lineHeight,
+		GetRows(),
+		yPos
+	});
+	w = layout.grid_width;
+	h = layout.client_height;
+	const int nDraw = layout.rows_to_draw;
 
 	// Find which columns and visible rows need to be repainted
 	std::vector<char> paint_columns;

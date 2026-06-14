@@ -662,6 +662,8 @@ add_executable(Aegisub WIN32
     src/gl_text.cpp
     src/gl_wrap.cpp
     ${AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES}
+    src/grid_core/grid_layout.cpp
+    src/grid_core/grid_layout.h
     src/grid_column.cpp
     src/grid_column_painter.cpp
     ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES}

@@ -40,6 +40,18 @@ bool IsBoundaryCandidate(std::string const& relative_path) {
 	return false;
 }
 
+bool IsPresentationContractSource(std::filesystem::path const& root, std::filesystem::path const& path) {
+	auto relative = std::filesystem::relative(path, root).generic_string();
+	return StartsWith(relative, "src/presentation/")
+		&& (EndsWith(relative, ".cpp") || EndsWith(relative, ".h"));
+}
+
+bool IsGridCoreSource(std::filesystem::path const& root, std::filesystem::path const& path) {
+	auto relative = std::filesystem::relative(path, root).generic_string();
+	return StartsWith(relative, "src/grid_core/")
+		&& (EndsWith(relative, ".cpp") || EndsWith(relative, ".h"));
+}
+
 std::vector<std::string> FindWxMarkers(std::filesystem::path const& path) {
 	static const std::regex wx_token_pattern(R"(\bwx[A-Z][A-Za-z0-9_]*\b)");
 
@@ -54,6 +66,35 @@ std::vector<std::string> FindWxMarkers(std::filesystem::path const& path) {
 		if (code.find("#include <wx/") != std::string::npos
 			|| code.find("#include \"wx/") != std::string::npos
 			|| std::regex_search(code, wx_token_pattern)) {
+			std::ostringstream hit;
+			hit << path.generic_string() << ":" << line_number << ": " << line;
+			hits.push_back(hit.str());
+		}
+	}
+	return hits;
+}
+
+std::vector<std::string> FindUiFrameworkMarkers(std::filesystem::path const& path) {
+	std::ifstream input(path);
+	std::vector<std::string> hits;
+	std::string line;
+	int line_number = 0;
+	while (std::getline(input, line)) {
+		++line_number;
+		auto comment = line.find("//");
+		auto code = line.substr(0, comment);
+		if (code.find("#include <wx/") != std::string::npos
+			|| code.find("#include \"wx/") != std::string::npos
+			|| code.find("#include <Q") != std::string::npos
+			|| code.find("#include \"Q") != std::string::npos
+			|| code.find("Avalonia") != std::string::npos
+			|| code.find("wxString") != std::string::npos
+			|| code.find("wxWindow") != std::string::npos
+			|| code.find("wxBitmap") != std::string::npos
+			|| code.find("wxDC") != std::string::npos
+			|| code.find("QString") != std::string::npos
+			|| code.find("QObject") != std::string::npos
+			|| code.find("QWidget") != std::string::npos) {
 			std::ostringstream hit;
 			hit << path.generic_string() << ":" << line_number << ": " << line;
 			hits.push_back(hit.str());
@@ -222,6 +263,40 @@ TEST(host_boundary_policy, ui_service_contract_stays_split_from_wx_adapter) {
 	EXPECT_FALSE(wx_single_choice_hits.empty());
 	EXPECT_FALSE(wx_file_dialog_hits.empty());
 	EXPECT_FALSE(std::filesystem::exists(legacy_wx_ui_services_h));
+}
+
+TEST(host_boundary_policy, presentation_contract_sources_stay_gui_framework_neutral) {
+	auto const root = ProjectRoot();
+	auto const presentation_root = root / "src" / "presentation";
+	ASSERT_TRUE(std::filesystem::exists(presentation_root));
+
+	std::vector<std::string> framework_hits;
+	for (auto const& entry : std::filesystem::recursive_directory_iterator(presentation_root)) {
+		if (!entry.is_regular_file() || !IsPresentationContractSource(root, entry.path()))
+			continue;
+
+		auto hits = FindUiFrameworkMarkers(entry.path());
+		framework_hits.insert(framework_hits.end(), hits.begin(), hits.end());
+	}
+
+	EXPECT_TRUE(framework_hits.empty()) << JoinLines(framework_hits);
+}
+
+TEST(host_boundary_policy, grid_core_sources_stay_gui_framework_neutral) {
+	auto const root = ProjectRoot();
+	auto const grid_core_root = root / "src" / "grid_core";
+	ASSERT_TRUE(std::filesystem::exists(grid_core_root));
+
+	std::vector<std::string> framework_hits;
+	for (auto const& entry : std::filesystem::recursive_directory_iterator(grid_core_root)) {
+		if (!entry.is_regular_file() || !IsGridCoreSource(root, entry.path()))
+			continue;
+
+		auto hits = FindUiFrameworkMarkers(entry.path());
+		framework_hits.insert(framework_hits.end(), hits.begin(), hits.end());
+	}
+
+	EXPECT_TRUE(framework_hits.empty()) << JoinLines(framework_hits);
 }
 
 TEST(host_boundary_policy, context_backed_file_dialog_callers_prefer_context_service) {

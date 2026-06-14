@@ -69,8 +69,7 @@ public:
 	virtual agi::Color CurrentRowBackground() const = 0;
 };
 
-/// Construct the wxDC-backed painter (the GDI / fallback path). The D2D path
-/// lives behind WITH_D2D_GRID and provides its own factory.
+/// Construct the wxDC-backed painter used by the current wx host.
 std::unique_ptr<GridColumnPainter> MakeWxDcGridColumnPainter(wxDC& dc);
 
 #endif // AEGISUB_GRID_COLUMN_PAINTER_H

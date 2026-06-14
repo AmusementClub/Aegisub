@@ -89,6 +89,8 @@ if(GTEST_FOUND)
         src/video_navigation_ops.cpp
         src/navigation_preview_policy.cpp
         src/playback_transport_policy.cpp
+        src/grid_core/grid_layout.cpp
+        src/grid_core/grid_layout.h
         src/video_controller_timer.cpp
         src/video_session_ops.cpp
         src/video_snapshot_ops.cpp
@@ -105,6 +107,7 @@ if(GTEST_FOUND)
         tests/tests/dialogue_lexer.cpp
         tests/tests/format.cpp
         tests/tests/fs.cpp
+        tests/tests/grid_layout_core.cpp
         tests/tests/hotkey.cpp
         tests/tests/host_boundary_policy.cpp
         tests/tests/iconv.cpp

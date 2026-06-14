@@ -19,6 +19,7 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "compat.h"
+#include "grid_column_painter.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "options.h"
@@ -29,7 +30,8 @@
 #include <libaegisub/character_count.h>
 #include <libaegisub/string_utils.h>
 
-#include <wx/dc.h>
+#include <wx/strconv.h>
+#include <wx/string.h>
 
 void WidthHelper::Age() {
 	for (auto it = begin(widths), e = end(widths); it != e; ) {
@@ -49,14 +51,19 @@ int WidthHelper::operator()(boost::flyweight<std::string> const& str) {
 		return it->second.width;
 	}
 
+	int width = 0;
+	int height = 0;
 #ifdef _WIN32
+	// Reuse the UTF-16 scratch buffer so we don't allocate a fresh wxString
+	// per measurement on the hot flyweight path. wxMBConvUTF8 matches the
+	// historical behavior of the wxDC path exactly.
 	wxMBConvUTF8 conv;
 	size_t len = conv.ToWChar(nullptr, 0, str.get().c_str(), str.get().size());
-	scratch.resize(len);
-	conv.ToWChar(const_cast<wchar_t *>(scratch.wx_str()), len, str.get().c_str(), str.get().size());
-	int width = dc->GetTextExtent(scratch).GetWidth();
+	scratch.assign(static_cast<size_t>(std::max<size_t>(len, 1)), L'\0');
+	conv.ToWChar(scratch.data(), len, str.get().c_str(), str.get().size());
+	painter->MeasureText(scratch, width, height);
 #else
-	int width = dc->GetTextExtent(to_wx(str)).GetWidth();
+	painter->MeasureText(str, width, height);
 #endif
 
 	widths[str] = {width, age};
@@ -64,19 +71,27 @@ int WidthHelper::operator()(boost::flyweight<std::string> const& str) {
 }
 
 int WidthHelper::operator()(std::string const& str) {
-	return dc->GetTextExtent(to_wx(str)).GetWidth();
+	int width = 0, height = 0;
+	painter->MeasureText(str, width, height);
+	return width;
 }
 
 int WidthHelper::operator()(wxString const& str) {
-	return dc->GetTextExtent(str).GetWidth();
+	int width = 0, height = 0;
+	painter->MeasureText(std::wstring(str.wx_str()), width, height);
+	return width;
 }
 
 int WidthHelper::operator()(const char *str) {
-	return dc->GetTextExtent(wxString::FromUTF8(str)).GetWidth();
+	int width = 0, height = 0;
+	painter->MeasureText(std::string(str), width, height);
+	return width;
 }
 
 int WidthHelper::operator()(const wchar_t *str) {
-	return dc->GetTextExtent(str).GetWidth();
+	int width = 0, height = 0;
+	painter->MeasureText(std::wstring(str), width, height);
+	return width;
 }
 
 void GridColumn::UpdateWidth(const agi::Context *c, WidthHelper &helper) {
@@ -90,11 +105,14 @@ void GridColumn::UpdateWidth(const agi::Context *c, WidthHelper &helper) {
 		width = 10 + std::max(width, helper(Header()));
 }
 
-void GridColumn::Paint(wxDC &dc, int x, int y, const AssDialogue *d, const agi::Context *c) const {
+void GridColumn::Paint(GridColumnPainter &painter, int x, int y, const AssDialogue *d, const agi::Context *c) const {
 	wxString str = Value(d, c);
-	if (Centered())
-		x += (width - 6 - dc.GetTextExtent(str).GetWidth()) / 2;
-	dc.DrawText(str, x + 4, y + 2);
+	if (Centered()) {
+		int w = 0, h = 0;
+		painter.MeasureText(std::wstring(str.wx_str()), w, h);
+		x += (width - 6 - w) / 2;
+	}
+	painter.DrawText(std::wstring(str.wx_str()), x + 4, y + 2);
 }
 
 namespace {
@@ -301,6 +319,19 @@ wxColor blend(wxColor fg, wxColor bg, double alpha) {
 		wxColor::AlphaBlend(fg.Blue(), bg.Blue(), alpha));
 }
 
+/// Backend-agnostic blend on agi::Color (the painter's color type). Matches
+/// the wxColor blend above byte-for-byte so the CPS column looks identical
+/// under wxDC and (future) D2D backends. wxColor::AlphaBlend uses
+/// bg + (fg - bg) * alpha with truncation (no rounding), so we match that
+/// exactly rather than rounding, to avoid 1-off differences.
+agi::Color blend(agi::Color fg, agi::Color bg, double alpha) {
+	auto ch = [](unsigned char f, unsigned char b, double a) -> unsigned char {
+		double l = static_cast<double>(b) + (static_cast<double>(f) - static_cast<double>(b)) * a;
+		return l < 0.0 ? 0 : (l > 255.0 ? 255 : static_cast<unsigned char>(l));
+	};
+	return agi::Color(ch(fg.r, bg.r, alpha), ch(fg.g, bg.g, alpha), ch(fg.b, bg.b, alpha), bg.a);
+}
+
 class GridColumnCPS final : public GridColumn {
 	const agi::OptionValue *ignore_whitespace = OPT_GET("Subtitle/Character Counter/Ignore Whitespace");
 	const agi::OptionValue *ignore_punctuation = OPT_GET("Subtitle/Character Counter/Ignore Punctuation");
@@ -347,27 +378,31 @@ public:
 		return helper(show_decimal_cps->GetBool() ? wxS("100.0") : wxS("999"));
 	}
 
-	void Paint(wxDC &dc, int x, int y, const AssDialogue *d, const agi::Context *c) const override {
+	void Paint(GridColumnPainter &painter, int x, int y, const AssDialogue *d, const agi::Context *c) const override {
 		double cps = CPS(d, c);
 		if (cps < 0 || cps > 100) return;
 
 		wxString str = show_decimal_cps->GetBool() ? wxString::Format(wxS("%.1f"), cps) : std::to_wstring(static_cast<int>(cps));
-		wxSize ext = dc.GetTextExtent(str);
-		auto tc = dc.GetTextForeground();
+		int ext_w = 0, ext_h = 0;
+		painter.MeasureText(std::wstring(str.wx_str()), ext_w, ext_h);
+		auto tc = painter.CurrentTextColor();
 
 		int cps_min = cps_warn->GetInt();
 		int cps_max = std::max<int>(cps_min, cps_error->GetInt());
 		if (cps > cps_min) {
 			double alpha = std::min((double)(cps - cps_min + 1) / (cps_max - cps_min + 1), 1.0);
-			dc.SetBrush(wxBrush(blend(to_wx(bg_color->GetColor()), dc.GetBrush().GetColour(), alpha)));
-			dc.SetPen(*wxTRANSPARENT_PEN);
-			dc.DrawRectangle(x, y + 1, width, ext.GetHeight() + 3);
-			dc.SetTextForeground(blend(*wxBLACK, tc, alpha));
+			// Blend the CPS warning color over the current row background, then
+			// blend the text color toward black at the same ratio -- mirrors
+			// the original dc.SetBrush(blend(...)) / dc.SetTextForeground(blend(...))
+			// sequence exactly, via the backend-agnostic blend overload.
+			painter.FillRectangle(x, y + 1, width, ext_h + 3,
+				blend(bg_color->GetColor(), painter.CurrentRowBackground(), alpha));
+			painter.SetTextColor(blend(from_wx(*wxBLACK), tc, alpha));
 		}
 
-		x += (width + 2 - ext.GetWidth()) / 2;
-		dc.DrawText(str, x, y + 2);
-		dc.SetTextForeground(tc);
+		x += (width + 2 - ext_w) / 2;
+		painter.DrawText(std::wstring(str.wx_str()), x, y + 2);
+		painter.SetTextColor(tc);
 	}
 };
 

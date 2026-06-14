@@ -23,7 +23,7 @@
 #include <unordered_map>
 
 class AssDialogue;
-class wxDC;
+class GridColumnPainter;
 class wxString;
 namespace agi { struct Context; }
 
@@ -33,14 +33,14 @@ class WidthHelper {
 		int age;
 	};
 	int age = 0;
-	wxDC *dc = nullptr;
+	GridColumnPainter *painter = nullptr;
 	std::unordered_map<boost::flyweight<std::string>, Entry> widths;
 #ifdef _WIN32
-	wxString scratch;
+	std::wstring scratch;  ///< reused UTF-16 buffer for the Windows measure path
 #endif
 
 public:
-	void SetDC(wxDC *dc) { this->dc = dc; }
+	void SetPainter(GridColumnPainter *p) { this->painter = p; }
 	void Age();
 
 	int operator()(boost::flyweight<std::string> const& str);
@@ -67,7 +67,7 @@ public:
 
 	virtual wxString const& Header() const = 0;
 	virtual wxString const& Description() const = 0;
-	virtual void Paint(wxDC &dc, int x, int y, const AssDialogue *d, const agi::Context *c) const;
+	virtual void Paint(GridColumnPainter &painter, int x, int y, const AssDialogue *d, const agi::Context *c) const;
 
 	int Width() const { return width; }
 	bool Visible() const { return visible; }

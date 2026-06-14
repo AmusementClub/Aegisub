@@ -39,6 +39,7 @@
 #include "audio_box.h"
 #include "compat.h"
 #include "grid_column.h"
+#include "grid_column_painter.h"
 #include "options.h"
 #include "project.h"
 #include "utils.h"
@@ -329,8 +330,9 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 		return;
 	}
 
-		wxBufferedPaintDC dc(this);
-	dc.SetFont(font);
+	wxBufferedPaintDC dc(this);
+	auto painter = MakeWxDcGridColumnPainter(dc);
+	painter->SetFont(font);
 
 	dc.SetBackground(row_colors.Default);
 	dc.Clear();
@@ -338,41 +340,38 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 	// Draw labels
 	bool const has_dirty_rows = first_dirty_row <= last_dirty_row;
 	if (has_dirty_rows) {
-		dc.SetPen(*wxTRANSPARENT_PEN);
-		dc.SetBrush(row_colors.LeftCol);
 		int const top = (first_dirty_row + 1) * lineHeight;
 		int const height = (last_dirty_row - first_dirty_row + 1) * lineHeight + 1;
-		dc.DrawRectangle(0, top, columns[0]->Width(), height);
+		painter->FillRectangle(0, top, columns[0]->Width(), height,
+			from_wx(row_colors.LeftCol.GetColour()));
 	}
 
 	// Row colors
-	wxColour text_standard(to_wx(OPT_GET("Colour/Subtitle Grid/Standard")->GetColor()));
-	wxColour text_selection(to_wx(OPT_GET("Colour/Subtitle Grid/Selection")->GetColor()));
-	wxColour text_collision(to_wx(OPT_GET("Colour/Subtitle Grid/Collision")->GetColor()));
+	auto const text_standard = OPT_GET("Colour/Subtitle Grid/Standard")->GetColor();
+	auto const text_selection = OPT_GET("Colour/Subtitle Grid/Selection")->GetColor();
+	auto const text_collision = OPT_GET("Colour/Subtitle Grid/Collision")->GetColor();
+	auto const grid_line_color = OPT_GET("Colour/Subtitle Grid/Lines")->GetColor();
 
 	// First grid row
-	wxPen grid_pen(to_wx(OPT_GET("Colour/Subtitle Grid/Lines")->GetColor()));
-	if (paint_header) {
-		dc.SetPen(grid_pen);
-		dc.DrawLine(0, 0, w, 0);
-		dc.SetPen(*wxTRANSPARENT_PEN);
-	}
+	if (paint_header)
+		painter->DrawLine(0, 0, w, 0, grid_line_color);
 
 	auto paint_text = [&](wxString const& str, int x, int y, int col) {
 		int left = x + 4;
 		if (columns[col]->Centered()) {
-			wxSize ext = dc.GetTextExtent(str);
-			left += (columns[col]->Width() - 6 - ext.GetWidth()) / 2;
+			int tw = 0, th = 0;
+			painter->MeasureText(std::wstring(str.wx_str()), tw, th);
+			left += (columns[col]->Width() - 6 - tw) / 2;
 		}
 
-		dc.DrawText(str, left, y + 2);
+		painter->DrawText(std::wstring(str.wx_str()), left, y + 2);
 	};
 
 	// Paint header
 	if (paint_header) {
-		dc.SetTextForeground(text_standard);
-		dc.SetBrush(row_colors.Header);
-		dc.DrawRectangle(0, 0, w, lineHeight);
+		painter->SetTextColor(text_standard);
+		painter->FillRectangle(0, 0, w, lineHeight,
+			from_wx(row_colors.Header.GetColour()));
 
 		int x = 0;
 		for (size_t i : agi::util::range(columns.size())) {
@@ -381,8 +380,7 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 			x += columns[i]->Width();
 		}
 
-		dc.SetPen(grid_pen);
-		dc.DrawLine(0, lineHeight, w, lineHeight);
+		painter->DrawLine(0, lineHeight, w, lineHeight, grid_line_color);
 	}
 
 	// Paint the rows
@@ -409,35 +407,32 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 			if (color == row_colors.Default)
 				color = row_colors.Visible;
 		}
-		dc.SetBrush(color);
+		auto const row_bg = from_wx(color.GetColour());
+		painter->SetRowBackground(row_bg);
 
 		// Draw row background color
-		if (color != row_colors.Default) {
-			dc.SetPen(*wxTRANSPARENT_PEN);
-			dc.DrawRectangle(grid_x, (i + 1) * lineHeight + 1, w, lineHeight);
-		}
+		if (color != row_colors.Default)
+			painter->FillRectangle(grid_x, (i + 1) * lineHeight + 1, w, lineHeight, row_bg);
 
 		if (active_line != curDiag && curDiag->CollidesWith(active_line))
-			dc.SetTextForeground(text_collision);
+			painter->SetTextColor(text_collision);
 		else if (inSel)
-			dc.SetTextForeground(text_selection);
+			painter->SetTextColor(text_selection);
 		else
-			dc.SetTextForeground(text_standard);
+			painter->SetTextColor(text_standard);
 
 		// Draw text
 		int x = 0;
 		int y = (i + 1) * lineHeight;
 		for (size_t j : agi::util::range(columns.size())) {
 			if (paint_columns[j])
-				columns[j]->Paint(dc, x, y, curDiag, context);
+				columns[j]->Paint(*painter, x, y, curDiag, context);
 			x += columns[j]->Width();
 		}
 
 		// Draw grid
-		dc.SetPen(grid_pen);
-		dc.DrawLine(0, y, w, y);
-		dc.DrawLine(0, y + lineHeight, w , y + lineHeight);
-		dc.SetPen(*wxTRANSPARENT_PEN);
+		painter->DrawLine(0, y, w, y, grid_line_color);
+		painter->DrawLine(0, y + lineHeight, w , y + lineHeight, grid_line_color);
 	}
 
 	// Draw grid columns
@@ -445,21 +440,19 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 		int minH = paint_header ? 0 : (first_dirty_row + 1) * lineHeight;
 		int maxH = has_dirty_rows ? (last_dirty_row + 2) * lineHeight : lineHeight;
 		int x = 0;
-		dc.SetPen(grid_pen);
 		for (auto const& column : columns) {
 			x += column->Width();
 			if (x < w)
-				dc.DrawLine(x, minH, x, maxH);
+				painter->DrawLine(x, minH, x, maxH, grid_line_color);
 		}
-		dc.DrawLine(0, minH, 0, maxH);
-		dc.DrawLine(w, minH, w, maxH);
+		painter->DrawLine(0, minH, 0, maxH, grid_line_color);
+		painter->DrawLine(w, minH, w, maxH, grid_line_color);
 	}
 
 	int const active_screen_row = active_line ? active_line->Row - yPos : -1;
 	if (active_screen_row >= first_dirty_row && active_screen_row <= last_dirty_row) {
-		dc.SetPen(wxPen(to_wx(OPT_GET("Colour/Subtitle Grid/Active Border")->GetColor())));
-		dc.SetBrush(*wxTRANSPARENT_BRUSH);
-		dc.DrawRectangle(0, (active_screen_row + 1) * lineHeight, w, lineHeight + 1);
+		painter->StrokeRectangle(0, (active_screen_row + 1) * lineHeight, w, lineHeight + 1,
+			OPT_GET("Colour/Subtitle Grid/Active Border")->GetColor());
 	}
 }
 
@@ -738,14 +731,15 @@ void BaseGrid::SetColumnWidths() {
 
 	// DC for text extents test
 	wxClientDC dc(this);
-	dc.SetFont(font);
+	auto painter = MakeWxDcGridColumnPainter(dc);
+	painter->SetFont(font);
 
 	text_refresh_rects.clear();
 	int x = 0;
 
 	if (!width_helper)
 		width_helper = agi::make_unique<WidthHelper>();
-	width_helper->SetDC(&dc);
+	width_helper->SetPainter(painter.get());
 
 	for (auto const& column : columns) {
 		column->UpdateWidth(context, *width_helper);

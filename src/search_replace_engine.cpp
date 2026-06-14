@@ -111,7 +111,7 @@ std::string prepare_search_text(SearchReplaceSettings const& settings) {
 
 template<typename Accessor>
 matcher get_matcher(SearchReplaceSettings const& settings, Accessor&& a) {
-	std::string prepared_find = prepare_search_text(settings);
+	std::string prepared_find = boost::locale::normalize(prepare_search_text(settings));
 
 	if (settings.use_regex) {
 		int flags = boost::u32regex::perl;

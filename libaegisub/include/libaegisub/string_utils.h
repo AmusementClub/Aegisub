@@ -126,6 +126,21 @@ inline bool iends_with(view haystack, view suffix) {
 		std::equal(suffix.data(), suffix.data() + suffix.size(), haystack.data() + haystack.size() - suffix.size(), ascii_iequals);
 }
 
+/// ASCII case-insensitive substring search. Returns the byte offset of the
+/// first occurrence of `needle` in `haystack` (ignoring ASCII case), or `npos`.
+/// Non-ASCII bytes are compared as-is (only ASCII A-Z/a-z are folded).
+inline std::size_t ascii_icase_find(view haystack, view needle) {
+	if (needle.empty()) return 0;
+	if (haystack.size() < needle.size()) return npos;
+	const std::size_t last = haystack.size() - needle.size();
+	for (std::size_t i = 0; i <= last; ++i) {
+		if (std::equal(needle.data(), needle.data() + needle.size(),
+		               haystack.data() + i, ascii_iequals))
+			return i;
+	}
+	return npos;
+}
+
 inline void to_lower_inplace(std::string& value) {
 #ifdef AEGISUB_USE_STRINGZILLA
 	if (!value.empty())
@@ -442,7 +457,10 @@ struct utf8_icase_searcher {
 		if (!ptr) return {};
 		return { static_cast<std::size_t>(ptr - haystack.data()), static_cast<std::size_t>(match_length) };
 #else
-		auto pos = agi::util::strings::find(haystack, view(needle));
+		// No StringZilla: fall back to ASCII case-insensitive search. Only
+		// ASCII letters fold; non-ASCII bytes compare as-is, matching the
+		// behavior of the standalone utf8_find_icase(view, view) below.
+		auto pos = ascii_icase_find(haystack, view(needle));
 		return pos == npos ? sized_match{} : sized_match{pos, needle.size()};
 #endif
 	}
@@ -468,7 +486,7 @@ inline sized_match utf8_find_icase(view haystack, view needle) {
 	if (!ptr) return {};
 	return { static_cast<std::size_t>(ptr - haystack.data()), static_cast<std::size_t>(match_length) };
 #else
-	auto pos = find(haystack, needle);
+	auto pos = ascii_icase_find(haystack, needle);
 	return pos == npos ? sized_match{} : sized_match{pos, needle.size()};
 #endif
 }

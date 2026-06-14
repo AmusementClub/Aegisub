@@ -567,6 +567,8 @@ add_executable(Aegisub WIN32
     src/subtitle_format_ttxt.cpp
     src/subtitle_format_txt.cpp
     src/project_session_ops.cpp
+    src/presentation/subtitle_grid_query_service.cpp
+    src/presentation/subtitle_grid_projection.cpp
     src/subtitle_edit_ops.cpp
     src/subtitle_editor_ops.cpp
     src/subtitle_grid_ops.cpp
@@ -661,6 +663,7 @@ add_executable(Aegisub WIN32
     src/gl_wrap.cpp
     ${AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES}
     src/grid_column.cpp
+    src/grid_column_painter.cpp
     ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES}
     ${AEGISUB_SHARED_SELECTION_REQUEST_SOURCES}
     ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES}

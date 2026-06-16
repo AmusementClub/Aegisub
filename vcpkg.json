@@ -29,6 +29,7 @@
     "libiconv",
     "matroska",
     "pffft",
+    "pugixml",
     "stringzilla",
     "uchardet",
     "wxwidgets",

@@ -49,13 +49,9 @@
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 
+#include "translation_service.h"
+
 #include <atomic>
-#include <climits>
-#include <chrono>
-#include <memory>
-#include <mutex>
-#include <utility>
-#include <wx/intl.h>
 
 extern "C" {
 #include <ass/ass.h>
@@ -138,8 +134,8 @@ class LibassSubtitlesProvider final : public SubtitlesProvider {
 				}
 
 				br->Run([=](agi::ProgressSink *ps) {
-					ps->SetTitle(from_wx(_("Updating font index")));
-					ps->SetMessage(from_wx(_("This may take several minutes")));
+					ps->SetTitle(TranslationContext::Get().Translate("Updating font index"));
+					ps->SetMessage(TranslationContext::Get().Translate("This may take several minutes"));
 					ps->SetIndeterminate();
 					shared->ready.Wait();
 				});

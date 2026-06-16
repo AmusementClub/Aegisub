@@ -15,6 +15,8 @@
 
 #include "playback_session_service.h"
 
+#include <iostream>
+
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "audio_controller.h"

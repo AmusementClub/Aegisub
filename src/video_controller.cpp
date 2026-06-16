@@ -46,8 +46,7 @@
 #include "video_navigation_ops.h"
 
 #include <libaegisub/ass/time.h>
-
-#include <wx/log.h>
+#include <libaegisub/log.h>
 
 VideoController::VideoController(agi::Context *c)
 : context(c)
@@ -629,10 +628,7 @@ void VideoController::HandleVideoError(std::string const& message) {
 	ClearInspectionStepState();
 	ClearInteractiveSeekPreviewState();
 	ClearRecentRenderPacketCache();
-	wxLogError(
-		wxS("Failed seeking video. The video file may be corrupt or incomplete.\n"
-		    "Error message reported: %s"),
-		to_wx(message));
+	LOG_E("video_controller") << "Failed seeking video. The video file may be corrupt or incomplete. Error: " << message;
 }
 
 void VideoController::HandleSubtitlesError(std::string const& message) {
@@ -640,9 +636,7 @@ void VideoController::HandleSubtitlesError(std::string const& message) {
 	ClearInspectionStepState();
 	ClearInteractiveSeekPreviewState();
 	ClearRecentRenderPacketCache();
-	wxLogError(
-		wxS("Failed rendering subtitles. Error message reported: %s"),
-		to_wx(message));
+	LOG_E("video_controller") << "Failed rendering subtitles. Error: " << message;
 }
 
 void VideoController::RememberRecentRenderPacket(VideoRenderPacket const& packet) {

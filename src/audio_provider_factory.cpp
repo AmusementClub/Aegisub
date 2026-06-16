@@ -16,9 +16,9 @@
 
 #include "audio_provider_factory.h"
 
-#include "compat.h"
 #include "factory_manager.h"
 #include "options.h"
+#include "translation_service.h"
 #include "ui_services.h"
 #include "utils.h"
 #ifdef WITH_LSMASNATIVE
@@ -304,14 +304,14 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 	// Convert to RAM
 	if (cache == 1) {
 		if (sizeof(void*) == 4 && (provider->GetNumSamples() * provider->GetChannels() * provider->GetBytesPerSample() >= (1 << 30))) {
-			auto message = from_wx(_(
+			auto message = _(
 				"Unable to create RAM audio cache: 32-bit memory limit exceeded. Fallback to hard disk cache.\n\n"
 				"Possible solutions:\n"
 				"- Use 64-bit version\n"
 				"- Turn off cache or switch to hard disk cache in Preferences -> Advanced -> Audio -> Cache -> Cache type\n"
 				"- Enable channel downmix in Preferences -> Advanced -> Audio"
-			));
-			notification_sink.ShowError(from_wx(_("Out of Memory")), message);
+			);
+			notification_sink.ShowError(_("Out of Memory"), message);
 			cache = 2;
 		}
 		else

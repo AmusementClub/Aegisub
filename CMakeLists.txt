@@ -363,6 +363,72 @@ if(LUA_WITH_LUASOCKET)
     target_link_libraries(libaegisub PRIVATE luasocket)
 endif()
 
+# --- Shared dependency discovery (consumed by both aegisub_core and Aegisub) ---
+# These find_package calls and the highway helper are hoisted here so they are
+# available before aegisub_core is defined below, and remain valid for Aegisub.
+find_package(ass REQUIRED)
+find_package(Boost CONFIG REQUIRED COMPONENTS container locale regex spirit)
+find_package(hwy REQUIRED CONFIG)
+# Boost::regex needs ICU on Boost < 1.76.0 without the dedicated regex_icu target.
+if(TARGET Boost::regex_icu)
+    set(AEGISUB_REGEX_TARGET "Boost::regex_icu")
+else()
+    set(AEGISUB_REGEX_TARGET "Boost::regex")
+    find_package(ICU REQUIRED uc dt in)
+endif()
+# ICU::uc is needed unconditionally (libaegisub charset/unicode, GUI locale).
+find_package(ICU REQUIRED uc)
+find_package(ZLIB REQUIRED)
+find_package(Iconv REQUIRED)
+find_package(pugixml CONFIG REQUIRED)
+option(WITH_LIBPLACEBO "Enable optional runtime-loaded libplacebo renderer support" ON)
+set(HAVE_LIBPLACEBO OFF)
+if(WITH_LIBPLACEBO)
+    find_package(LibPlacebo QUIET)
+    if(NOT LibPlacebo_FOUND)
+        message(FATAL_ERROR
+            "WITH_LIBPLACEBO is ON, but libplacebo headers were not found.\n"
+            "Install libplacebo development headers or pass -DLibPlacebo_INCLUDE_DIR=/path/to/include.\n"
+            "Set -DWITH_LIBPLACEBO=OFF to configure without libplacebo."
+        )
+    endif()
+    set(HAVE_LIBPLACEBO ON)
+    message(STATUS "Found libplacebo headers: ${LibPlacebo_INCLUDE_DIR}")
+endif()
+option(WITH_AVISYNTH "Enable AviSynth support" ON)
+if(WITH_AVISYNTH)
+    find_package(AviSynth QUIET)
+    if(NOT AviSynth_FOUND)
+        message(FATAL_ERROR
+            "WITH_AVISYNTH is ON, but AviSynth headers were not found.\n"
+            "Install AviSynth development headers or pass -DAviSynth_INCLUDE_DIR=/path/to/include.\n"
+            "Set -DWITH_AVISYNTH=OFF to configure without AviSynth."
+        )
+    endif()
+    set(HAVE_AVISYNTH ON)
+endif()
+option(WITH_CSRI "Enable CSRI support" ON)
+find_package(unofficial-skia CONFIG QUIET)
+option(WITH_DRAWING_SKIA "Enable Skia-backed Lua drawing path operations" OFF)
+option(WITH_SKIA "Enable optional Skia-based 2D rendering infrastructure" OFF)
+option(WITH_FFTW3 "Enable app-local runtime loading of FFTW3 for spectrum FFT support" ON)
+find_package(pffft CONFIG QUIET)
+option(WITH_PFFFT "Enable PFFFT spectrum FFT support" ${pffft_FOUND})
+function(aegisub_enable_highway target_name)
+    target_compile_definitions(${target_name} PRIVATE AEGISUB_WITH_HIGHWAY=1)
+    target_link_libraries(${target_name} PRIVATE hwy::hwy)
+endfunction()
+
+# libaegisub's own codec deps (Boost/regex/ICU/Iconv) -- linked here, after the
+# shared find_package calls above, so the imported targets exist.
+target_link_libraries(libaegisub PRIVATE "Boost::locale")
+target_link_libraries(libaegisub PUBLIC "Boost::headers" "Boost::container")
+target_link_libraries(libaegisub PRIVATE ${AEGISUB_REGEX_TARGET})
+if(NOT TARGET Boost::regex_icu)
+    target_link_libraries(libaegisub PRIVATE "ICU::uc" "ICU::dt" "ICU::in")
+endif()
+target_link_libraries(libaegisub PRIVATE "Iconv::Iconv")
+
 add_custom_command(
     OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config.cpp" "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config.h"
     DEPENDS
@@ -451,12 +517,16 @@ set(AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES
     src/trace_summary_service.cpp
 )
 
-set(AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES
-    ${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}
+set(AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_HOST_SOURCES
     src/headless_cli.cpp
     src/headless_cli_internal.cpp
     src/headless_cli_execute.cpp
     src/headless_playback_probe.cpp
+)
+
+set(AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES
+    ${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}
+    ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_HOST_SOURCES}
 )
 
 set(AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES
@@ -481,12 +551,16 @@ set(AEGISUB_SHARED_MKV_SUBTITLE_LIBMATROSKA_BACKEND_SOURCES
     src/mkv_wrap_libmatroska.cpp
 )
 
-set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES
+set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_HOST_SOURCES
     src/headless_playback_session_host.cpp
     src/playback_probe_timer.cpp
     src/playback_session_timer.cpp
-    ${AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES}
     src/project_query_service.cpp
+)
+
+set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES
+    ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_HOST_SOURCES}
+    ${AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES}
 )
 
 set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES
@@ -501,11 +575,259 @@ set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES
     ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES}
 )
 
+## aegisub_core
+#
+# wx-free (in intent) static library holding the framework-agnostic core:
+# ASS data model, controllers, services, providers, automation host, and the
+# presentation/grid_core/skia_runtime subdirs. Sources are migrated out of the
+# Aegisub executable target so they can be reused by the future C ABI facade
+# (and any non-wx host). The PCH is lagi_pre.h (not agi_pre.h) so that any
+# residual wx dependency that agi_pre.h used to mask surfaces as a compile
+# error -- this is the "debt list" the migration works through.
+set(AEGISUB_CORE_SOURCES
+    # Translation service (framework-agnostic i18n interface)
+    src/translation_service.cpp
+    # ASS data model
+    src/ass_attachment.cpp
+    src/ass_dialogue.cpp
+    src/ass_entry.cpp
+    # ass_export_filter/ass_exporter expose wxWindow*/wxSizer* in their public
+    # API and stay in the exe until abstracted (they are the export subsystem's
+    # coupling root, pulling in export_fixstyle/export_framerate/auto4_base).
+    src/ass_file.cpp
+    src/ass_file_app.cpp
+    # ass_info_service.cpp comes via AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES below.
+    src/ass_io_core.cpp
+    src/ass_karaoke.cpp
+    src/ass_override.cpp
+    src/ass_parser.cpp
+    src/ass_style.cpp
+    src/ass_style_resolution.cpp
+    src/ass_style_storage.cpp
+    src/ass_time_projection.cpp
+    # Subtitle formats
+    src/subtitle_format.cpp
+    src/subtitle_format_ass.cpp
+    src/subtitle_format_ebu3264.cpp
+    src/subtitle_format_encore.cpp
+    src/subtitle_format_microdvd.cpp
+    src/subtitle_format_mkv.cpp
+    src/subtitle_format_srt.cpp
+    src/subtitle_format_ssa.cpp
+    src/subtitle_format_transtation.cpp
+    src/subtitle_format_ttxt.cpp
+    # subtitle_format_txt.cpp calls ShowPlainTextImportDialog() (a wx dialog);
+    # stays in the exe until routed through an abstract interaction service.
+    # Export filters / operations
+    # NOTE: export_framerate_transform is wx-free (pure math/vfr), but
+    # export_fixstyle/export_framerate/ass_export_filter/ass_exporter expose
+    # wxWindow* in their public API (ProcessSubs/GetConfigDialogWindow) and are
+    # migrated to the exe until that surface is abstracted.
+    src/export_framerate_transform.cpp
+    # Subtitle edit / grid / timing ops (framework-agnostic)
+    src/subtitle_edit_ops.cpp
+    src/subtitle_editor_ops.cpp
+    src/subtitle_grid_ops.cpp
+    src/subtitle_timing_ops.cpp
+    # Controllers / context / services
+    src/context.cpp
+    src/initial_line_state.cpp
+    src/selection_controller.cpp
+    # project.h exposes wxString in ShowError's public signature; migrate to
+    # the exe until the API is switched to std::string.
+    # project_session_ops / search_replace_engine / secondary_subtitle_session
+    # / subs_controller / subs_controller_timer / ui_services stay in core
+    # (only light wx pollution in .cpp: wxLog / i18n / wxOK constants).
+    src/project_session_ops.cpp
+    src/search_replace_engine.cpp
+    # src/secondary_subtitle_session.cpp  ← moved to exe (GUI-only feature: dual subtitle preview)
+    src/subs_controller.cpp
+    # src/subs_controller_timer.cpp  ← moved to exe (wx Timer dependency)
+    src/ui_services.cpp
+    # Video / audio providers (decoding pipeline)
+    src/async_video_provider.cpp
+    src/async_video_provider_host.cpp
+    src/audio_provider_factory.cpp
+    src/video_provider_cache.cpp
+    src/video_provider_dummy.cpp
+    src/video_provider_manager.cpp
+    src/video_provider_yuv4mpeg.cpp
+    # Audio rendering / analysis / timing
+    # NOTE: audio_marker/audio_colorscheme/audio_renderer(+spectrum/waveform)
+    # expose wxPen/wxColour/wxDC/wxBitmap/wxArrayString in their public API, and
+    # audio_timing.h returns wxString from a pure virtual. The whole audio
+    # rendering cluster is coupled through these roots and stays in the exe
+    # until the rendering surface is abstracted (mirrors grid_column_painter).
+    # The wx-free analysis/source/player pieces below are kept in core.
+    src/audio_display_analysis.cpp
+    src/audio_display_source.cpp
+    src/audio_mix_policy.cpp
+    # audio_player.cpp's factory table requires the WITH_* audio-backend defines
+    # (ALSA/DirectSound/XAudio2/...) which are exe-only; stays in the exe.
+    src/audio_spectrum_analysis_cache.cpp
+    src/audio_spectrum_fftw3.cpp
+    # Video rendering / session ops
+    src/video_aspect_ratio_ops.cpp
+    src/video_controller.cpp
+    # src/video_frame.cpp  ← moved to exe (GetImage only used in GUI export/display)
+    src/video_navigation_ops.cpp
+    src/video_property_update.cpp
+    src/video_renderer_backend.cpp
+    src/video_session_ops.cpp
+    src/video_snapshot_ops.cpp
+    src/navigation_preview_policy.cpp
+    # Subtitle rendering providers
+    src/subtitles_provider.cpp
+    src/subtitles_provider_libass.cpp
+    src/subtitles_provider_plugin.cpp
+    src/subtitle_overlay_blend.cpp
+    # NOTE: auto4_base.h / auto4_lua.h expose wxWindow*/wxDialog*/wxString in
+    # their public/protected API (GenerateConfigDialog, CreateWindow, ShowDialog,
+    # ProcessingComplete(wxString)). The automation host subsystem is coupled
+    # through these roots and stays in the exe until abstracted. The wx-free
+    # automation debug subsystem below is kept in core.
+    src/automation/automation_breakpoint_store.cpp
+    src/automation/automation_context_snapshot.cpp
+    src/automation/automation_debug_adapter.cpp
+    src/automation/automation_debug_service.cpp
+    src/automation/automation_debug_session.cpp
+    src/automation/automation_live_host.cpp
+    src/automation/automation_lua_debug_backend.cpp
+    src/automation/automation_lua_runtime.cpp
+    src/automation/automation_mutation_journal.cpp
+    src/automation/automation_runtime_journal.cpp
+    src/automation/engine/automation_engine_registry.cpp
+    # CSRI bridge (renderer discovery + native library bridge)
+    src/csri_renderer_discovery.cpp
+    # Fonts (cross-platform core)
+    src/font_collector_core.cpp
+    src/font_collector_unicode.cpp
+    src/font_file_lister.cpp
+    src/font_matching_common.cpp
+    # Utility / math / codecs
+    # NOTE: spline/spline_curve depend on VisualToolBase (coord translator) and
+    # transitively on visual_tool.h which exposes wxString. They stay in the
+    # exe until the coord-translator is abstracted (part of the visual tool
+    # cluster cleanup).
+    src/colorspace.cpp
+    src/fft.cpp
+    src/string_codec.cpp
+    src/text_file_reader.cpp
+    src/text_file_writer.cpp
+    src/time_display_mode.cpp
+    src/vector2d.cpp
+    src/version.cpp
+    src/watched_file_core.cpp
+    # Framework-agnostic subdirs
+    src/grid_core/grid_layout.cpp
+    src/presentation/subtitle_grid_projection.cpp
+    src/presentation/subtitle_grid_query_service.cpp
+    # CLI inspect services (shared with headless; no wx)
+    ${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}
+    # Playback/project session services (shared; no wx)
+    ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES}
+    ${AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES}
+    # MKV (common; backends selected below)
+    ${AEGISUB_SHARED_MKV_SUBTITLE_COMMON_SOURCES}
+)
+
+add_library(aegisub_core STATIC ${AEGISUB_CORE_SOURCES})
+target_sources(aegisub_core PRIVATE
+    "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.h"
+    "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config.h"
+)
+
+# CSRI support - subtitles_provider_csri.cpp has no wx dependencies
+if(WITH_CSRI)
+    target_sources(aegisub_core PRIVATE src/subtitles_provider_csri.cpp)
+endif()
+
+target_compile_features(aegisub_core PUBLIC cxx_std_20)
+target_compile_definitions(aegisub_core PRIVATE CMAKE_BUILD)
+target_include_directories(aegisub_core PUBLIC src)
+target_include_directories(aegisub_core PRIVATE vendor)
+# version.cpp includes the generated git_version.h; mirror the exe's dependency.
+add_dependencies(aegisub_core git_version)
+target_include_directories(aegisub_core PRIVATE "build")
+# libresrc headers (bitmap.h, default_config.h) are generated and used by automation_session_service.cpp
+target_include_directories(aegisub_core PRIVATE "src/libresrc" "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc")
+set_target_properties(aegisub_core PROPERTIES PREFIX "")
+# lagi_pre.h instead of agi_pre.h: surface wx dependencies the PCH used to mask.
+if(APPLE)
+    target_compile_options(aegisub_core PRIVATE -include "${PROJECT_SOURCE_DIR}/libaegisub/lagi_pre.h")
+else()
+    target_precompile_headers(aegisub_core PRIVATE "libaegisub/lagi_pre.h")
+endif()
+# libaegisub is the foundation (signal, dispatch, option, hotkey, fs, ...).
+target_link_libraries(aegisub_core PUBLIC libaegisub)
+# luajit: the automation debug subsystem (automation_lua_*) includes lua.hpp
+# via libaegisub's lua/utils.h. libaegisub links luajit PRIVATE, so core must
+# link it directly to inherit the public include path (vendor/luajit/src).
+target_link_libraries(aegisub_core PRIVATE luajit)
+# Codec/format deps used by the core providers/renderers (discovered above).
+target_include_directories(aegisub_core PRIVATE ${ass_INCLUDE_DIRS})
+target_link_libraries(aegisub_core PUBLIC ${ass_LIBRARIES})
+target_link_libraries(aegisub_core PRIVATE "Boost::headers" "Boost::container" "Boost::locale")
+target_link_libraries(aegisub_core PRIVATE pugixml::pugixml)
+aegisub_enable_highway(aegisub_core)
+target_link_libraries(aegisub_core PRIVATE "ZLIB::ZLIB")
+# libplacebo headers are consumed by the placebo renderer sources below (added
+# only when WITH_LIBPLACEBO); keep the include available to the core target.
+if(WITH_LIBPLACEBO AND HAVE_LIBPLACEBO)
+    target_include_directories(aegisub_core PRIVATE ${LibPlacebo_INCLUDE_DIR})
+    target_compile_definitions(aegisub_core PRIVATE WITH_LIBPLACEBO WITH_LIBPLACEBO_RUNTIME_LOADING)
+    target_sources(aegisub_core PRIVATE
+        src/video_renderer_placebo_gl.cpp
+        src/video_renderer_placebo_runtime.cpp
+    )
+    set_source_files_properties(
+        src/video_renderer_placebo_gl.cpp
+        src/video_renderer_placebo_runtime.cpp
+        PROPERTIES SKIP_PRECOMPILE_HEADERS ON
+    )
+endif()
+# Optional Skia infra (gpu context host, surface provider, text cache, overlay).
+if(WITH_SKIA)
+    target_compile_definitions(aegisub_core PRIVATE WITH_SKIA)
+    target_link_libraries(aegisub_core PRIVATE unofficial::skia::skia)
+    target_sources(aegisub_core PRIVATE
+        src/video_overlay_draw_context_skia.cpp
+        src/skia_runtime/skia_gpu_context_host.cpp
+        src/skia_runtime/skia_surface_provider.cpp
+        src/skia_runtime/skia_text_layout_cache.cpp
+    )
+endif()
+# AviSynth providers are Windows-only and pull in <windows.h>/<vfw.h> via
+# avisynth.h; they stay out of core (which is meant to be platform-neutral and
+# compiles without the Windows SDK headers). The exe adds them below.
+if(WITH_AVISYNTH AND HAVE_AVISYNTH)
+    if(WIN32)
+        target_compile_definitions(aegisub_core PRIVATE "AVISYNTH_SO=\"AviSynth.dll\"")
+    else()
+        target_compile_definitions(aegisub_core PRIVATE "AVISYNTH_SO=\"libavisynth.so\"")
+    endif()
+endif()
+# CSRI subtitle renderer bridge (core, no wx).
+if(WITH_CSRI)
+    target_compile_definitions(aegisub_core PRIVATE WITH_CSRI)
+    target_link_libraries(aegisub_core PRIVATE csri)
+endif()
+# Spectrum FFT backends (audio_spectrum_analysis_cache / audio_spectrum_fftw3).
+if(WITH_FFTW3)
+    target_compile_definitions(aegisub_core PRIVATE WITH_FFTW3)
+endif()
+if(WITH_PFFFT)
+    find_package(pffft CONFIG REQUIRED)
+    target_compile_definitions(aegisub_core PRIVATE WITH_PFFFT)
+    target_link_libraries(aegisub_core PRIVATE pffft::pffft)
+endif()
+
 ## Aegisub
 add_executable(Aegisub WIN32
     "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.h"
     "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config.h"
-    
+
+    src/wx_translation_service.cpp
     src/command/app.cpp
     src/command/audio.cpp
     src/command/automation.cpp
@@ -555,30 +877,69 @@ add_executable(Aegisub WIN32
     src/dialog_translation.cpp
     src/dialog_video_details.cpp
     src/dialog_video_properties.cpp
-    src/subtitle_format.cpp
-    src/subtitle_format_ass.cpp
-    src/subtitle_format_ebu3264.cpp
-    src/subtitle_format_encore.cpp
-    src/subtitle_format_microdvd.cpp
-    src/subtitle_format_mkv.cpp
-    src/subtitle_format_srt.cpp
-    src/subtitle_format_ssa.cpp
-    src/subtitle_format_transtation.cpp
-    src/subtitle_format_ttxt.cpp
-    src/subtitle_format_txt.cpp
-    src/project_session_ops.cpp
-    src/presentation/subtitle_grid_query_service.cpp
-    src/presentation/subtitle_grid_projection.cpp
-    src/subtitle_edit_ops.cpp
-    src/subtitle_editor_ops.cpp
-    src/subtitle_grid_ops.cpp
-    src/subtitle_timing_ops.cpp
-    src/video_aspect_ratio_ops.cpp
-    src/video_navigation_ops.cpp
-    src/navigation_preview_policy.cpp
-    src/playback_transport_policy.cpp
-    src/video_session_ops.cpp
-    src/video_snapshot_ops.cpp
+    src/audio_box.cpp
+    src/audio_controller.cpp
+    src/wx_audio_controller_power_host.cpp
+    src/audio_controller_timer.cpp
+    src/threaded_ui_timer.cpp
+    src/audio_display.cpp
+    src/audio_karaoke.cpp
+    src/audio_player.cpp
+    src/base_grid.cpp
+    src/charset_detect.cpp
+    src/colour_button.cpp
+    src/compat.cpp
+    src/frame_main.cpp
+    src/gl_text.cpp
+    src/gl_wrap.cpp
+    ${AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES}
+    src/grid_column.cpp
+    src/grid_column_painter.cpp
+    ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_HOST_SOURCES}
+    ${AEGISUB_SHARED_SELECTION_REQUEST_SOURCES}
+    ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_HOST_SOURCES}
+    ${AEGISUB_GUI_BOOTSTRAP_WX_HOST_SOURCES}
+    src/help_button.cpp
+    src/hotkey.cpp
+    src/hotkey_data_view_model.cpp
+    src/image_position_picker.cpp
+    src/main.cpp
+    src/menu.cpp
+    src/pen.cpp
+    src/perf_trace.cpp
+    src/persist_location.cpp
+    src/preferences.cpp
+    src/preferences_base.cpp
+    src/provider_index_cache.cpp
+    src/resolution_resampler.cpp
+    src/secondary_subtitle_session.cpp
+    src/secondary_subtitle_session.h
+    src/secondary_subtitle_strip.cpp
+    src/spellchecker.cpp
+    src/subs_edit_box.cpp
+    src/subs_edit_ctrl.cpp
+    src/subs_preview.cpp
+    src/thesaurus.cpp
+    src/timeedit_ctrl.cpp
+    src/toggle_bitmap.cpp
+    src/toolbar.cpp
+    src/tooltip_manager.cpp
+    src/utils.cpp
+    src/ui_timer.cpp
+    src/validators.cpp
+    src/video_overlay_draw_context.h
+    src/video_overlay_draw_context_legacy_gl.cpp
+    src/video_overlay_draw_context_legacy_gl.h
+    src/video_box.cpp
+    src/watched_file_wx.cpp
+    src/video_controller_timer.cpp
+    src/video_display.cpp
+    src/video_frame.cpp
+    src/video_renderer_factory.cpp
+    src/video_renderer_opengl.cpp
+    src/video_renderer_opengl_tile.cpp
+    src/video_slider.cpp
+    src/visual_feature.cpp
     src/visual_tool.cpp
     src/visual_tool_clip.cpp
     src/visual_tool_cross.cpp
@@ -587,168 +948,55 @@ add_executable(Aegisub WIN32
     src/visual_tool_rotatez.cpp
     src/visual_tool_scale.cpp
     src/visual_tool_vector_clip.cpp
-    src/ass_attachment.cpp
-    src/ass_info_service.cpp
-    src/ass_dialogue.cpp
-    src/ass_time_projection.cpp
-    src/ass_entry.cpp
+    # src/watched_file.cpp  ← split into watched_file_core.cpp (core) and watched_file_wx.cpp (exe)
+    # --- Files moved back from aegisub_core (wx-coupled public APIs) ---
+    # Export subsystem (ass_export_filter is the coupling root)
     src/ass_export_filter.cpp
     src/ass_exporter.cpp
-    src/ass_file.cpp
-    src/ass_file_app.cpp
-    src/ass_karaoke.cpp
-    src/ass_override.cpp
-    src/ass_parser.cpp
-    src/ass_io_core.cpp
-    src/ass_style.cpp
-    src/ass_style_resolution.cpp
-    src/ass_style_storage.cpp
-    src/async_video_provider.cpp
-    src/async_video_provider_host.cpp
-    ${AEGISUB_SHARED_EXE_ENTRY_SOURCES}
-    ${AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES}
-    src/audio_box.cpp
+    src/export_fixstyle.cpp
+    src/export_framerate.cpp
+    # Audio rendering cluster (audio_marker / audio_renderer are coupling roots)
     src/audio_colorscheme.cpp
-    src/audio_controller.cpp
-    src/wx_audio_controller_power_host.cpp
-    src/audio_controller_timer.cpp
-    src/threaded_ui_timer.cpp
-    src/audio_display_analysis.cpp
-    src/audio_display_source.cpp
-    src/audio_mix_policy.cpp
-    src/audio_spectrum_analysis_cache.cpp
-    src/audio_spectrum_fftw3.cpp
-    src/audio_display.cpp
-    src/audio_karaoke.cpp
     src/audio_marker.cpp
-    src/audio_player.cpp
-    src/audio_provider_factory.cpp
     src/audio_renderer.cpp
     src/audio_renderer_spectrum.cpp
     src/audio_renderer_waveform.cpp
     src/audio_timing_dialogue.cpp
     src/audio_timing_karaoke.cpp
-    src/automation/automation_debug_adapter.cpp
-    src/automation/automation_breakpoint_store.cpp
-    src/automation/automation_context_snapshot.cpp
-    src/automation/engine/automation_engine_registry.cpp
-    src/automation/automation_debug_service.cpp
-    src/automation/automation_debug_session.cpp
-    src/automation/automation_live_host.cpp
-    src/automation/automation_lua_debug_backend.cpp
-    src/automation/automation_lua_runtime.cpp
-    src/automation/automation_mutation_journal.cpp
-    src/automation/automation_runtime_journal.cpp
+    # Automation host (auto4_base / auto4_lua are coupling roots)
     src/auto4_base.cpp
     src/auto4_lua.cpp
     src/auto4_lua_assfile.cpp
     src/auto4_lua_dialog.cpp
     src/auto4_lua_progresssink.cpp
-    src/base_grid.cpp
-    src/charset_detect.cpp
-    src/colorspace.cpp
-    src/colour_button.cpp
-    src/compat.cpp
-    src/context.cpp
-    src/export_fixstyle.cpp
-    src/export_framerate_transform.cpp
-    src/export_framerate.cpp
-    src/fft.cpp
-    src/font_collector_core.cpp
-    src/font_collector_unicode.cpp
-    src/font_file_lister.cpp
-    src/font_matching_common.cpp
-    src/frame_main.cpp
-    src/gl_text.cpp
-    src/gl_wrap.cpp
-    ${AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES}
-    src/grid_core/grid_layout.cpp
-    src/grid_core/grid_layout.h
-    src/grid_column.cpp
-    src/grid_column_painter.cpp
-    ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES}
-    ${AEGISUB_SHARED_SELECTION_REQUEST_SOURCES}
-    ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES}
-    ${AEGISUB_GUI_BOOTSTRAP_WX_HOST_SOURCES}
-    src/help_button.cpp
-    src/hotkey.cpp
-    src/hotkey_data_view_model.cpp
-    src/image_position_picker.cpp
-    src/initial_line_state.cpp
-    src/main.cpp
-    src/menu.cpp
-    src/csri_renderer_discovery.cpp
-    src/pen.cpp
-    src/perf_trace.cpp
-    src/persist_location.cpp
-    src/preferences.cpp
-    src/preferences_base.cpp
-    src/provider_index_cache.cpp
+    # Controllers with wx in public API
     src/project.cpp
-    src/resolution_resampler.cpp
-    src/search_replace_engine.cpp
-    src/secondary_subtitle_session.cpp
-    src/secondary_subtitle_strip.cpp
-    src/selection_controller.cpp
-    src/spellchecker.cpp
+    src/text_selection_controller.cpp
+    src/subs_controller_timer.cpp
+    # spline cluster (depends on VisualToolBase)
     src/spline.cpp
     src/spline_curve.cpp
-    src/string_codec.cpp
-    src/subs_controller.cpp
-    src/subs_controller_timer.cpp
-    src/subs_edit_box.cpp
-    src/subs_edit_ctrl.cpp
-    src/subs_preview.cpp
-    src/subtitle_overlay_blend.cpp
-    src/subtitles_provider.cpp
-    src/subtitles_provider_libass.cpp
-    src/subtitles_provider_plugin.cpp
-    src/text_file_reader.cpp
-    src/text_file_writer.cpp
-    src/text_selection_controller.cpp
-    src/thesaurus.cpp
-    src/time_display_mode.cpp
-    src/timeedit_ctrl.cpp
-    src/toggle_bitmap.cpp
-    src/toolbar.cpp
-    src/tooltip_manager.cpp
-    src/utils.cpp
-    src/ui_timer.cpp
-    src/ui_services.cpp
-    src/validators.cpp
-    src/vector2d.cpp
-    src/version.cpp
-    src/video_overlay_draw_context.h
-    src/video_overlay_draw_context_legacy_gl.cpp
-    src/video_overlay_draw_context_legacy_gl.h
-    src/video_box.cpp
-    src/video_controller.cpp
-    src/video_controller_timer.cpp
-    src/video_display.cpp
-    src/video_renderer_backend.cpp
-    src/video_renderer_factory.cpp
-    src/video_frame.cpp
-    src/video_property_update.cpp
-    src/video_renderer_opengl.cpp
-    src/video_renderer_opengl_tile.cpp
-    src/video_provider_cache.cpp
-    src/video_provider_dummy.cpp
-    src/video_provider_manager.cpp
-    src/video_provider_yuv4mpeg.cpp
-    src/video_slider.cpp
-    src/visual_feature.cpp
-    src/watched_file.cpp
+    # subtitle format that pops a wx import dialog
+    src/subtitle_format_txt.cpp
+    ${AEGISUB_SHARED_EXE_ENTRY_SOURCES}
+    ${AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES}
 )
 set_source_files_properties(libaegisub/common/native_library.cpp PROPERTIES
     SKIP_PRECOMPILE_HEADERS ON
 )
-target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} libaegisub luajit)
+# aegisub_core carries the framework-agnostic core (PUBLIC libaegisub + ass/boost/...).
+target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} aegisub_core luajit)
+# CSRI is used by subtitles_provider in aegisub_core but needs to be linked to exe too
+if(WITH_CSRI)
+    target_link_libraries(Aegisub PRIVATE csri)
+endif()
 target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
 target_compile_features(Aegisub PRIVATE cxx_std_20)
 target_include_directories(Aegisub PRIVATE src)
 target_include_directories(Aegisub PRIVATE vendor)
 option(AEGISUB_MATROSKA_PARSING "Enable MKV subtitle parsing via libebml/libmatroska" ON)
-target_sources(Aegisub PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_COMMON_SOURCES})
+# MKV common backend lives in aegisub_core; only the platform-selected backend
+# (libmatroska or legacy) is added to the exe here.
 if(AEGISUB_MATROSKA_PARSING)
     find_package(EBML REQUIRED CONFIG)
     find_package(Matroska REQUIRED CONFIG)
@@ -843,31 +1091,10 @@ else()
     target_sources(Aegisub PRIVATE src/font_file_lister_fontconfig.cpp)
 endif()
 
-find_package(ass REQUIRED)
-target_include_directories(Aegisub PRIVATE ${ass_INCLUDE_DIRS})
-target_link_libraries(Aegisub LINK_PRIVATE ${ass_LIBRARIES})
-
-find_package(Boost CONFIG REQUIRED COMPONENTS container locale regex spirit)
-find_package(hwy REQUIRED CONFIG)
-target_link_libraries(libaegisub PRIVATE "Boost::locale")
-target_link_libraries(libaegisub PUBLIC "Boost::headers" "Boost::container")
-target_link_libraries(Aegisub PRIVATE "Boost::headers" "Boost::container" "Boost::locale")
-# Handle Boost::regex with icu support for Boost >= 1.76.0. https://github.com/boostorg/regex/issues/143
-if(TARGET Boost::regex_icu)
-    target_link_libraries(libaegisub PRIVATE "Boost::regex_icu")
-    target_link_libraries(Aegisub PRIVATE "Boost::regex_icu")
-else()
-    target_link_libraries(libaegisub PRIVATE "Boost::regex")
-    target_link_libraries(Aegisub PRIVATE "Boost::regex")
-    find_package(ICU REQUIRED uc dt in)
-    target_link_libraries(libaegisub PRIVATE "ICU::uc" "ICU::dt" "ICU::in")
-    target_link_libraries(Aegisub PRIVATE "ICU::uc" "ICU::dt" "ICU::in")
-endif()
-
-function(aegisub_enable_highway target_name)
-    target_compile_definitions(${target_name} PRIVATE AEGISUB_WITH_HIGHWAY=1)
-    target_link_libraries(${target_name} PRIVATE hwy::hwy)
-endfunction()
+# ass / Boost / regex / ICU / Highway / Iconv / ZLIB are pulled in transitively
+# via aegisub_core (PUBLIC/PUBLIC-ish) and libaegisub. The exe additionally
+# needs Boost::locale (for GUI-side wx locale helpers) and ICU::uc.
+target_link_libraries(Aegisub PRIVATE "Boost::locale" "ICU::uc")
 
 aegisub_enable_highway(Aegisub)
 
@@ -916,9 +1143,9 @@ if(WIN32)
     endforeach()
 endif()
 
-find_package(unofficial-skia CONFIG QUIET)
-option(WITH_DRAWING_SKIA "Enable Skia-backed Lua drawing path operations" OFF)
-option(WITH_SKIA "Enable optional Skia-based 2D rendering infrastructure" OFF)
+# Skia: WITH_DRAWING_SKIA adds a Lua drawing backend to libaegisub; WITH_SKIA
+# adds the Skia rendering infra to aegisub_core (handled above). Both options
+# and the skia find_package are defined in the shared discovery block above.
 if(WITH_DRAWING_SKIA)
     if(NOT TARGET unofficial::skia::skia)
         message(FATAL_ERROR
@@ -929,63 +1156,8 @@ if(WITH_DRAWING_SKIA)
     target_compile_definitions(libaegisub PRIVATE WITH_DRAWING_SKIA)
     target_link_libraries(libaegisub PRIVATE unofficial::skia::skia)
 endif()
-if(WITH_SKIA)
-    if(NOT TARGET unofficial::skia::skia)
-        message(FATAL_ERROR
-            "WITH_SKIA is ON, but the Skia vcpkg package was not found.\n"
-            "Install the skia port in manifest mode or pass -DWITH_SKIA=OFF."
-        )
-    endif()
-    target_compile_definitions(Aegisub PRIVATE WITH_SKIA)
-    target_link_libraries(Aegisub PRIVATE unofficial::skia::skia)
-    target_sources(Aegisub PRIVATE
-        src/video_overlay_draw_context_skia.cpp
-        src/video_overlay_draw_context_skia.h
-        src/skia_runtime/skia_gpu_context_host.cpp
-        src/skia_runtime/skia_gpu_context_host.h
-        src/skia_runtime/skia_surface_provider.cpp
-        src/skia_runtime/skia_surface_provider.h
-        src/skia_runtime/skia_text_layout_cache.cpp
-        src/skia_runtime/skia_text_layout_cache.h
-    )
-endif()
 
-option(WITH_LIBPLACEBO "Enable optional runtime-loaded libplacebo renderer support" ON)
-set(HAVE_LIBPLACEBO OFF)
-if(WITH_LIBPLACEBO)
-    find_package(LibPlacebo QUIET)
-    if(NOT LibPlacebo_FOUND)
-        message(FATAL_ERROR
-            "WITH_LIBPLACEBO is ON, but libplacebo headers were not found.\n"
-            "Install libplacebo development headers or pass -DLibPlacebo_INCLUDE_DIR=/path/to/include.\n"
-            "Set -DWITH_LIBPLACEBO=OFF to configure without libplacebo."
-        )
-    endif()
-
-    set(HAVE_LIBPLACEBO ON)
-    message(STATUS "Found libplacebo headers: ${LibPlacebo_INCLUDE_DIR}")
-    target_include_directories(Aegisub PRIVATE ${LibPlacebo_INCLUDE_DIR})
-    target_compile_definitions(Aegisub PRIVATE WITH_LIBPLACEBO WITH_LIBPLACEBO_RUNTIME_LOADING)
-    target_sources(Aegisub PRIVATE
-        src/video_renderer_placebo_gl.cpp
-        src/video_renderer_placebo_runtime.cpp
-    )
-    set_source_files_properties(
-        src/video_renderer_placebo_gl.cpp
-        src/video_renderer_placebo_runtime.cpp
-        PROPERTIES
-        SKIP_PRECOMPILE_HEADERS ON
-    )
-endif()
-
-find_package(Iconv REQUIRED)
-target_link_libraries(libaegisub PRIVATE "Iconv::Iconv")
-
-find_package(ICU REQUIRED uc)
-target_link_libraries(libaegisub PRIVATE "ICU::uc")
-target_link_libraries(Aegisub PRIVATE "ICU::uc")
-
-find_package(wxWidgets REQUIRED adv base core gl propgrid stc xml)
+find_package(wxWidgets REQUIRED adv base core gl propgrid stc)
 option(WITH_WXSTC "Enable wxStyledTextCtrl support" ON)
 function(aegisub_enable_wx_utf8_guard target_name)
     if(TARGET ${target_name})
@@ -1001,7 +1173,9 @@ endif()
 include(${wxWidgets_USE_FILE})
 target_link_libraries(Aegisub LINK_PRIVATE ${wxWidgets_LIBRARIES})
 
-find_package(ZLIB REQUIRED)
+# ZLIB::ZLIB is already available (found in the shared discovery block above);
+# the exe pulls it in transitively via aegisub_core too, but link explicitly
+# for clarity since several GUI sources use zlib directly.
 target_link_libraries(Aegisub PRIVATE "ZLIB::ZLIB")
 
 find_package(ALSA)
@@ -1013,20 +1187,13 @@ if(WITH_ALSA)
     target_sources(Aegisub PRIVATE src/audio_player_alsa.cpp)
 endif()
 
-set(HAVE_AVISYNTH OFF)
-option(WITH_AVISYNTH "Enable AviSynth support" ON)
-if(WITH_AVISYNTH)
-    find_package(AviSynth QUIET)
-    if(NOT AviSynth_FOUND)
-        message(FATAL_ERROR
-            "WITH_AVISYNTH is ON, but AviSynth headers were not found.\n"
-            "Install AviSynth development headers or pass -DAviSynth_INCLUDE_DIR=/path/to/include.\n"
-            "Set -DWITH_AVISYNTH=OFF to configure without AviSynth."
-        )
-    endif()
-
-    set(HAVE_AVISYNTH ON)
-    target_compile_definitions(Aegisub PRIVATE "WITH_AVISYNTH")
+# AviSynth: option/find_package/HAVE_AVISYNTH live in the shared discovery
+# block above. The provider sources stay in the exe (they include avisynth.h
+# which pulls in <windows.h>/<vfw.h>, which is incompatible with core's
+# wx-free PCH). The exe wires the sources, the Vfw32 link, and the AVISYNTH_SO
+# define.
+if(WITH_AVISYNTH AND HAVE_AVISYNTH)
+    target_compile_definitions(Aegisub PRIVATE WITH_AVISYNTH)
     target_include_directories(Aegisub PRIVATE "${AviSynth_INCLUDE_DIR}")
     if(WIN32)
         target_link_libraries(Aegisub LINK_PRIVATE Vfw32)
@@ -1034,15 +1201,16 @@ if(WITH_AVISYNTH)
     else()
         target_compile_definitions(Aegisub PRIVATE "AVISYNTH_SO=\"libavisynth.so\"")
     endif()
-    target_sources(Aegisub PRIVATE src/audio_provider_avs.cpp src/avisynth_legacy_path.cpp src/avisynth_wrap.cpp src/video_provider_avs.cpp)
+    target_sources(Aegisub PRIVATE
+        src/audio_provider_avs.cpp
+        src/avisynth_legacy_path.cpp
+        src/avisynth_wrap.cpp
+        src/video_provider_avs.cpp
+    )
 endif()
 
-option(WITH_CSRI "Enable CSRI support" ON)
-if(WITH_CSRI)
-    target_compile_definitions(Aegisub PRIVATE "WITH_CSRI")
-    target_link_libraries(Aegisub PRIVATE csri)
-    target_sources(Aegisub PRIVATE src/subtitles_provider_csri.cpp)
-endif()
+# CSRI option is defined in the shared discovery block; the provider source is
+# compiled into aegisub_core so it is not also added to the executable.
 
 if(WIN32)
     target_link_libraries(Aegisub PRIVATE Wtsapi32)
@@ -1145,20 +1313,6 @@ if(WITH_SCENECHANGE)
     target_sources(Aegisub PRIVATE
         src/scenechange_native_runtime.cpp
     )
-endif()
-
-find_package(pffft CONFIG QUIET)
-option(WITH_PFFFT "Enable PFFFT spectrum FFT support" ${pffft_FOUND})
-option(WITH_FFTW3 "Enable app-local runtime loading of FFTW3 for spectrum FFT support" ON)
-
-if(WITH_FFTW3)
-    target_compile_definitions(Aegisub PRIVATE "WITH_FFTW3")
-endif()
-
-if(WITH_PFFFT)
-    find_package(pffft CONFIG REQUIRED)
-    target_compile_definitions(Aegisub PRIVATE "WITH_PFFFT")
-    target_link_libraries(Aegisub PRIVATE pffft::pffft)
 endif()
 
 find_package(Hunspell)

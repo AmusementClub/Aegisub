@@ -1,9 +1,3 @@
-// Copyright (c) 2026
-//
-// Permission to use, copy, modify, and distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
-
 #pragma once
 
 #include <libaegisub/fs_fwd.h>
@@ -42,6 +36,8 @@ public:
 };
 
 std::unique_ptr<FileSystemWatcherBackend> CreateDefaultFileSystemWatcherBackend();
+std::unique_ptr<FileSystemWatcherBackend> CreateNullFileSystemWatcherBackend();
+std::unique_ptr<FileSystemWatcherBackend> CreateWxFileSystemWatcherBackend();
 
 class WatchedFile final : private FileSystemWatcherListener {
 	std::unique_ptr<FileSystemWatcherBackend> backend;

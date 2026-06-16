@@ -45,7 +45,7 @@ constexpr char const *kSecondarySubtitleWarningTitle = "Secondary subtitles";
 
 SecondarySubtitleSession::SecondarySubtitleSession(agi::Context *context)
 : context(context)
-, external_subtitle_watch(agi::make_unique<WatchedFile>()) {
+, external_subtitle_watch(agi::make_unique<WatchedFile>(CreateWxFileSystemWatcherBackend())) {
 	auto core = context->GetCore();
 	auto ui = context->GetUI();
 	ui_activation.AddConnections(

@@ -217,6 +217,7 @@ TEST(host_boundary_policy, service_like_sources_keep_wx_at_host_edges) {
 		"src/wx_frame_main_runtime_host.h",
 		"src/wx_preferences_ui_host.h",
 		"src/wx_style_editor_ui_host.h",
+		"src/wx_translation_service.h",
 	};
 
 	std::set<std::string> actual_wx_candidates;
@@ -1084,21 +1085,26 @@ TEST(host_boundary_policy, shared_headless_cli_inspect_probe_sources_live_in_nam
 	auto const root = ProjectRoot();
 	auto const cmake_lists = root / "CMakeLists.txt";
 
-	std::set<std::string> const expected_entries = {
-		"${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}",
+	std::set<std::string> const expected_host_sources = {
 		"src/headless_cli.cpp",
 		"src/headless_cli_internal.cpp",
 		"src/headless_cli_execute.cpp",
 		"src/headless_playback_probe.cpp",
 	};
+	std::set<std::string> const expected_entries = {
+		"${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}",
+		"${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_HOST_SOURCES}",
+	};
 
+	auto host_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_HOST_SOURCES");
 	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES");
 	auto cli_inspect_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}");
-	auto expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES}");
+	auto host_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_HOST_SOURCES}");
 
+	EXPECT_EQ(expected_host_sources, host_sources);
 	EXPECT_EQ(expected_entries, sources);
 	EXPECT_FALSE(cli_inspect_expansion_hits.empty());
-	EXPECT_FALSE(expansion_hits.empty());
+	EXPECT_FALSE(host_expansion_hits.empty());
 }
 
 TEST(host_boundary_policy, shared_headless_bootstrap_depends_on_narrow_cli_headers) {
@@ -1141,12 +1147,15 @@ TEST(host_boundary_policy, shared_playback_project_session_sources_live_in_named
 	auto const root = ProjectRoot();
 	auto const cmake_lists = root / "CMakeLists.txt";
 
-	std::set<std::string> const expected_support_sources = {
+	std::set<std::string> const expected_host_sources = {
 		"src/headless_playback_session_host.cpp",
 		"src/playback_probe_timer.cpp",
 		"src/playback_session_timer.cpp",
-		"${AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES}",
 		"src/project_query_service.cpp",
+	};
+	std::set<std::string> const expected_support_sources = {
+		"${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_HOST_SOURCES}",
+		"${AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES}",
 	};
 	std::set<std::string> const expected_core_sources = {
 		"src/automation_session_service.cpp",
@@ -1159,21 +1168,23 @@ TEST(host_boundary_policy, shared_playback_project_session_sources_live_in_named
 		"${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES}",
 	};
 
+	auto host_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_HOST_SOURCES");
 	auto support_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES");
 	auto project_media_open_query_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES}");
 	auto core_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES");
 	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES");
+	auto host_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_HOST_SOURCES}");
 	auto support_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SUPPORT_SOURCES}");
 	auto core_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES}");
-	auto expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES}");
 
+	EXPECT_EQ(expected_host_sources, host_sources);
 	EXPECT_EQ(expected_support_sources, support_sources);
 	EXPECT_EQ(expected_core_sources, core_sources);
 	EXPECT_EQ(expected_aggregate_entries, sources);
 	EXPECT_FALSE(project_media_open_query_expansion_hits.empty());
+	EXPECT_FALSE(host_expansion_hits.empty());
 	EXPECT_FALSE(support_expansion_hits.empty());
 	EXPECT_FALSE(core_expansion_hits.empty());
-	EXPECT_FALSE(expansion_hits.empty());
 }
 
 TEST(host_boundary_policy, shared_project_media_open_query_sources_live_in_named_cmake_pack) {
@@ -1568,9 +1579,12 @@ TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 		"src/gui_wx_runtime_entry_host.h",
 		"src/gui_wx_runtime_host.cpp",
 		"src/gui_wx_runtime_host.h",
+		"src/watched_file_wx.cpp",
 		"src/wx_message_box_ui_services.h",
 		"src/wx_audio_controller_power_host.cpp",
 		"src/wx_single_choice_dialog.h",
+		"src/wx_translation_service.cpp",
+		"src/wx_translation_service.h",
 	};
 
 	std::set<std::string> actual_explicit_wx_surfaces;

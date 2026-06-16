@@ -1,12 +1,5 @@
-// Copyright (c) 2026
-//
-// Permission to use, copy, modify, and distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
-
 #include "watched_file.h"
 
-#include "compat.h"
 #include "threaded_ui_timer.h"
 #include "ui_timer.h"
 
@@ -16,9 +9,6 @@
 #include <cwctype>
 #include <utility>
 
-#include <wx/filename.h>
-#include <wx/fswatcher.h>
-
 namespace {
 constexpr int kWatchedFileDebounceMs = 150;
 
@@ -26,13 +16,6 @@ std::shared_ptr<UiTimerHost> ResolveUiTimerHost() {
 	if (auto host = GetUiTimerHost())
 		return host;
 	return CreateThreadedUiTimerHost();
-}
-
-agi::fs::path PathFromWxFileName(wxFileName const& value) {
-	auto full_path = value.GetFullPath();
-	if (full_path.empty())
-		full_path = value.GetPath();
-	return agi::fs::PathFromString(from_wx(full_path));
 }
 
 #ifdef _WIN32
@@ -76,77 +59,14 @@ public:
 	void Reset() override {
 	}
 };
+}
 
-#if wxUSE_FSWATCHER
-class WxFileSystemWatcherBackend final : public FileSystemWatcherBackend {
-	std::unique_ptr<wxFileSystemWatcher> watcher;
-	FileSystemWatcherListener *listener = nullptr;
-
-	void OnWatcherEvent(wxFileSystemWatcherEvent& event) {
-		if (!listener)
-			return;
-
-		if (event.IsError()) {
-			auto message = from_wx(event.GetErrorDescription());
-			if (message.empty())
-				message = "File system watcher reported an error.";
-			listener->OnFileSystemWatchError(message);
-			return;
-		}
-
-		auto const change_type = event.GetChangeType();
-		if (change_type & wxFSW_EVENT_ACCESS)
-			return;
-
-		FileSystemWatchEvent mapped;
-		mapped.path = PathFromWxFileName(event.GetPath());
-		mapped.new_path = PathFromWxFileName(event.GetNewPath());
-
-		if (change_type & wxFSW_EVENT_RENAME)
-			mapped.kind = FileSystemWatchEventKind::Renamed;
-		else if (change_type & wxFSW_EVENT_CREATE)
-			mapped.kind = FileSystemWatchEventKind::Created;
-		else if (change_type & wxFSW_EVENT_DELETE)
-			mapped.kind = FileSystemWatchEventKind::Deleted;
-		else if (change_type & wxFSW_EVENT_MODIFY)
-			mapped.kind = FileSystemWatchEventKind::Modified;
-		else
-			return;
-
-		listener->OnFileSystemWatchEvent(mapped);
-	}
-
-public:
-	bool WatchDirectory(agi::fs::path const& directory, FileSystemWatcherListener* new_listener) override {
-		Reset();
-		listener = new_listener;
-
-		watcher = std::make_unique<wxFileSystemWatcher>();
-		watcher->Bind(wxEVT_FSWATCHER, &WxFileSystemWatcherBackend::OnWatcherEvent, this);
-		if (!watcher->Add(wxFileName::DirName(to_wx(agi::fs::PathToString(directory))))) {
-			Reset();
-			return false;
-		}
-		return true;
-	}
-
-	void Reset() override {
-		if (watcher) {
-			watcher->Unbind(wxEVT_FSWATCHER, &WxFileSystemWatcherBackend::OnWatcherEvent, this);
-			watcher.reset();
-		}
-		listener = nullptr;
-	}
-};
-#endif
+std::unique_ptr<FileSystemWatcherBackend> CreateNullFileSystemWatcherBackend() {
+	return std::make_unique<NullFileSystemWatcherBackend>();
 }
 
 std::unique_ptr<FileSystemWatcherBackend> CreateDefaultFileSystemWatcherBackend() {
-#if wxUSE_FSWATCHER
-	return std::make_unique<WxFileSystemWatcherBackend>();
-#else
-	return std::make_unique<NullFileSystemWatcherBackend>();
-#endif
+	return CreateNullFileSystemWatcherBackend();
 }
 
 WatchedFile::WatchedFile(std::unique_ptr<FileSystemWatcherBackend> backend)

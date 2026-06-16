@@ -34,15 +34,16 @@
 
 #include "subtitle_format.h"
 
+namespace pugi { class xml_node; }
+
 class AssDialogue;
-class wxXmlNode;
 
 class TTXTSubtitleFormat final : public SubtitleFormat {
-	AssDialogue *ProcessLine(wxXmlNode *node, AssDialogue *prev, int version) const;
-	void ProcessHeader(wxXmlNode *node) const;
+	AssDialogue *ProcessLine(pugi::xml_node node, AssDialogue *prev, int version) const;
+	void ProcessHeader(pugi::xml_node node) const;
 
-	void WriteHeader(wxXmlNode *root) const;
-	void WriteLine(wxXmlNode *root, const AssDialogue *prev, const AssDialogue *line) const;
+	void WriteHeader(pugi::xml_node root) const;
+	void WriteLine(pugi::xml_node root, const AssDialogue *prev, const AssDialogue *line) const;
 
 	void ConvertToTTXT(AssFile &file) const;
 

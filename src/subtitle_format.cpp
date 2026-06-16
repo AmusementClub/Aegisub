@@ -56,8 +56,9 @@
 #include <libaegisub/string_utils.h>
 #include <libaegisub/vfr.h>
 
+#include "translation_service.h"
+
 #include <algorithm>
-#include <wx/intl.h>
 
 namespace {
 	std::vector<std::unique_ptr<SubtitleFormat>> formats;
@@ -268,5 +269,5 @@ std::string SubtitleFormat::GetWildcards(int mode) {
 		final += "|" + format->GetName() + " (" + agi::util::strings::join(cur, ",") + ")|" + agi::util::strings::join(cur, ";");
 	}
 
-	return from_wx(_("All Supported Formats")) + " (" + agi::util::strings::join(all, ",") + ")|" + agi::util::strings::join(all, ";") + final;
+	return TranslationContext::Get().Translate("All Supported Formats") + " (" + agi::util::strings::join(all, ",") + ")|" + agi::util::strings::join(all, ";") + final;
 }

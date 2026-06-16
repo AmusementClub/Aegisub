@@ -36,7 +36,9 @@
 
 #include "locale_choice.h"
 #include "locale_pick.h"
+#include "translation_service.h"
 #include "ui_services.h"
+#include "wx_translation_service.h"
 
 #include <clocale>
 
@@ -51,6 +53,11 @@ void AegisubLocale::Init(std::string const& language) {
 	setlocale(LC_NUMERIC, "C");
 	setlocale(LC_CTYPE, "C");
 	active_language = language;
+
+	// Set the global translation service for aegisub_core.
+	// The WxTranslationService bridges core's translation interface to wx i18n.
+	static WxTranslationService wx_translation_service;
+	TranslationContext::Set(&wx_translation_service);
 }
 
 bool AegisubLocale::HasLanguage(std::string const& language) {

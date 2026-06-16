@@ -41,8 +41,10 @@
 #include "options.h"
 
 #include <libaegisub/ass/time.h>
+#include <libaegisub/fs.h>
+#include <libaegisub/io.h>
 
-#include <wx/xml/xml.h>
+#include <pugixml.hpp>
 
 DEFINE_EXCEPTION(TTXTParseError, SubtitleFormatParseError);
 
@@ -64,35 +66,38 @@ void TTXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename
 	LoadDefaultAssFileWithAppOptions(*target, false, OPT_GET("Subtitle Format/TTXT/Default Style Catalog")->GetString());
 
 	// Load XML document
-	wxXmlDocument doc;
-	if (!doc.Load(filename.wstring())) throw TTXTParseError("Failed loading TTXT XML file.");
+	pugi::xml_document doc;
+	auto input = agi::io::Open(filename, true);
+	pugi::xml_parse_result result = doc.load(*input);
+	if (!result) throw TTXTParseError("Failed loading TTXT XML file.");
 
 	// Check root node name
-	if (doc.GetRoot()->GetName() != wxS("TextStream")) throw TTXTParseError("Invalid TTXT file.");
+	pugi::xml_node root = doc.child("TextStream");
+	if (!root) throw TTXTParseError("Invalid TTXT file.");
 
 	// Check version
-	wxString verStr = doc.GetRoot()->GetAttribute(wxS("version"), wxEmptyString);
+	std::string verStr = root.attribute("version").as_string("");
 	int version = -1;
-	if (verStr == wxS("1.0"))
+	if (verStr == "1.0")
 		version = 0;
-	else if (verStr == wxS("1.1"))
+	else if (verStr == "1.1")
 		version = 1;
 	else
-		throw TTXTParseError("Unknown TTXT version: " + from_wx(verStr));
+		throw TTXTParseError("Unknown TTXT version: " + verStr);
 
 	// Get children
 	AssDialogue *diag = nullptr;
 	int lines = 0;
-	for (wxXmlNode *child = doc.GetRoot()->GetChildren(); child; child = child->GetNext()) {
+	for (pugi::xml_node child : root.children()) {
 		// Line
-		if (child->GetName() == wxS("TextSample")) {
+		if (std::string(child.name()) == "TextSample") {
 			if ((diag = ProcessLine(child, diag, version))) {
 				lines++;
 				target->Events.push_back(*diag);
 			}
 		}
 		// Header
-		else if (child->GetName() == wxS("TextStreamHeader")) {
+		else if (std::string(child.name()) == "TextStreamHeader") {
 			ProcessHeader(child);
 		}
 	}
@@ -102,21 +107,21 @@ void TTXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename
 		target->Events.push_back(*new AssDialogue);
 }
 
-AssDialogue *TTXTSubtitleFormat::ProcessLine(wxXmlNode *node, AssDialogue *prev, int version) const {
+AssDialogue *TTXTSubtitleFormat::ProcessLine(pugi::xml_node node, AssDialogue *prev, int version) const {
 	// Get time
-	wxString sampleTime = node->GetAttribute(wxS("sampleTime"), wxS("00:00:00.000"));
-	agi::Time time(from_wx(sampleTime));
+	std::string sampleTime = node.attribute("sampleTime").as_string("00:00:00.000");
+	agi::Time time(sampleTime);
 
 	// Set end time of last line
 	if (prev)
 		prev->End = time;
 
 	// Get text
-	wxString text;
+	std::string text;
 	if (version == 0)
-		text = node->GetAttribute(wxS("text"), wxEmptyString);
+		text = node.attribute("text").as_string("");
 	else
-		text = node->GetNodeContent();
+		text = node.child_value();
 
 	// Create line
 	if (text.empty()) return nullptr;
@@ -128,32 +133,44 @@ AssDialogue *TTXTSubtitleFormat::ProcessLine(wxXmlNode *node, AssDialogue *prev,
 
 	// Process text for 1.0
 	if (version == 0) {
-		wxString finalText;
+		std::string finalText;
 		finalText.reserve(text.size());
 		bool in = false;
 		bool first = true;
-		for (auto chr : text) {
+		for (char chr : text) {
 			if (chr == '\'') {
-				if (!in && !first) finalText += wxS("\\N");
+				if (!in && !first) finalText += "\\N";
 				first = false;
 				in = !in;
 			}
 			else if (in) finalText += chr;
 		}
-		diag->Text = from_wx(finalText);
+		diag->Text = finalText;
 	}
 
 	// Process text for 1.1
 	else {
-		text.Replace(wxS("\r"), wxEmptyString);
-		text.Replace(wxS("\n"), wxS("\\N"));
-		diag->Text = from_wx(text);
+		// Replace \r\n and \n with \N
+		std::string processed;
+		processed.reserve(text.size());
+		for (size_t i = 0; i < text.size(); ++i) {
+			if (text[i] == '\r') {
+				// Skip \r
+			}
+			else if (text[i] == '\n') {
+				processed += "\\N";
+			}
+			else {
+				processed += text[i];
+			}
+		}
+		diag->Text = processed;
 	}
 
 	return diag;
 }
 
-void TTXTSubtitleFormat::ProcessHeader(wxXmlNode *node) const {
+void TTXTSubtitleFormat::ProcessHeader(pugi::xml_node node) const {
 	// TODO
 }
 
@@ -164,10 +181,9 @@ void TTXTSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& file
 	ConvertToTTXT(copy);
 
 	// Create XML structure
-	wxXmlDocument doc;
-	wxXmlNode *root = new wxXmlNode(nullptr, wxXML_ELEMENT_NODE, wxS("TextStream"));
-	root->AddAttribute(wxS("version"), wxS("1.1"));
-	doc.SetRoot(root);
+	pugi::xml_document doc;
+	pugi::xml_node root = doc.append_child("TextStream");
+	root.append_attribute("version").set_value("1.1");
 
 	// Create header
 	WriteHeader(root);
@@ -180,75 +196,65 @@ void TTXTSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& file
 	}
 
 	// Save XML
-	doc.Save(filename.wstring());
+	agi::io::Save output(filename, true);
+	doc.save(output.Get());
+	output.Close();
 }
 
-void TTXTSubtitleFormat::WriteHeader(wxXmlNode *root) const {
+void TTXTSubtitleFormat::WriteHeader(pugi::xml_node root) const {
 	// Write stream header
-	wxXmlNode *node = new wxXmlNode(wxXML_ELEMENT_NODE, wxS("TextStreamHeader"));
-	node->AddAttribute(wxS("width"), wxS("400"));
-	node->AddAttribute(wxS("height"), wxS("60"));
-	node->AddAttribute(wxS("layer"), wxS("0"));
-	node->AddAttribute(wxS("translation_x"), wxS("0"));
-	node->AddAttribute(wxS("translation_y"), wxS("0"));
-	root->AddChild(node);
-	root = node;
+	pugi::xml_node node = root.append_child("TextStreamHeader");
+	node.append_attribute("width").set_value("400");
+	node.append_attribute("height").set_value("60");
+	node.append_attribute("layer").set_value("0");
+	node.append_attribute("translation_x").set_value("0");
+	node.append_attribute("translation_y").set_value("0");
 
 	// Write sample description
-	node = new wxXmlNode(wxXML_ELEMENT_NODE, wxS("TextSampleDescription"));
-	node->AddAttribute(wxS("horizontalJustification"), wxS("center"));
-	node->AddAttribute(wxS("verticalJustification"), wxS("bottom"));
-	node->AddAttribute(wxS("backColor"), wxS("0 0 0 0"));
-	node->AddAttribute(wxS("verticalText"), wxS("no"));
-	node->AddAttribute(wxS("fillTextRegion"), wxS("no"));
-	node->AddAttribute(wxS("continuousKaraoke"), wxS("no"));
-	node->AddAttribute(wxS("scroll"), wxS("None"));
-	root->AddChild(node);
-	root = node;
+	pugi::xml_node desc = node.append_child("TextSampleDescription");
+	desc.append_attribute("horizontalJustification").set_value("center");
+	desc.append_attribute("verticalJustification").set_value("bottom");
+	desc.append_attribute("backColor").set_value("0 0 0 0");
+	desc.append_attribute("verticalText").set_value("no");
+	desc.append_attribute("fillTextRegion").set_value("no");
+	desc.append_attribute("continuousKaraoke").set_value("no");
+	desc.append_attribute("scroll").set_value("None");
 
 	// Write font table
-
-	node = new wxXmlNode(wxXML_ELEMENT_NODE, wxS("FontTable"));
-	root->AddChild(node);
-
-	wxXmlNode *subNode = new wxXmlNode(wxXML_ELEMENT_NODE, wxS("FontTableEntry"));
-	subNode->AddAttribute(wxS("fontName"), wxS("Sans"));
-	subNode->AddAttribute(wxS("fontID"), wxS("1"));
-	node->AddChild(subNode);
+	pugi::xml_node fontTable = desc.append_child("FontTable");
+	pugi::xml_node fontEntry = fontTable.append_child("FontTableEntry");
+	fontEntry.append_attribute("fontName").set_value("Sans");
+	fontEntry.append_attribute("fontID").set_value("1");
 
 	// Write text box
-	node = new wxXmlNode(wxXML_ELEMENT_NODE, wxS("TextBox"));
-	node->AddAttribute(wxS("top"), wxS("0"));
-	node->AddAttribute(wxS("left"), wxS("0"));
-	node->AddAttribute(wxS("bottom"), wxS("60"));
-	node->AddAttribute(wxS("right"), wxS("400"));
-	root->AddChild(node);
+	pugi::xml_node textBox = desc.append_child("TextBox");
+	textBox.append_attribute("top").set_value("0");
+	textBox.append_attribute("left").set_value("0");
+	textBox.append_attribute("bottom").set_value("60");
+	textBox.append_attribute("right").set_value("400");
 
 	// Write style
-	node = new wxXmlNode(wxXML_ELEMENT_NODE, wxS("Style"));
-	node->AddAttribute(wxS("styles"), wxS("Normal"));
-	node->AddAttribute(wxS("fontID"), wxS("1"));
-	node->AddAttribute(wxS("fontSize"), wxS("18"));
-	node->AddAttribute(wxS("color"), wxS("ff ff ff ff"));
-	root->AddChild(node);
+	pugi::xml_node style = desc.append_child("Style");
+	style.append_attribute("styles").set_value("Normal");
+	style.append_attribute("fontID").set_value("1");
+	style.append_attribute("fontSize").set_value("18");
+	style.append_attribute("color").set_value("ff ff ff ff");
 }
 
-void TTXTSubtitleFormat::WriteLine(wxXmlNode *root, const AssDialogue *prev, const AssDialogue *line) const {
+void TTXTSubtitleFormat::WriteLine(pugi::xml_node root, const AssDialogue *prev, const AssDialogue *line) const {
 	// If it doesn't start at the end of previous, add blank
 	if (prev && prev->End != line->Start) {
-		wxXmlNode *node = new wxXmlNode(wxXML_ELEMENT_NODE, wxS("TextSample"));
-		node->AddAttribute(wxS("sampleTime"), to_wx("0" + prev->End.GetAssFormatted(true)));
-		node->AddAttribute(wxS("xml:space"), wxS("preserve"));
-		root->AddChild(node);
-		node->AddChild(new wxXmlNode(wxXML_TEXT_NODE, wxEmptyString, wxEmptyString));
+		pugi::xml_node node = root.append_child("TextSample");
+		node.append_attribute("sampleTime").set_value(("0" + prev->End.GetAssFormatted(true)).c_str());
+		node.append_attribute("xml:space").set_value("preserve");
+		node.text().set("");
 	}
 
 	// Generate and insert node
-	wxXmlNode *node = new wxXmlNode(wxXML_ELEMENT_NODE, wxS("TextSample"));
-	node->AddAttribute(wxS("sampleTime"), to_wx("0" + line->Start.GetAssFormatted(true)));
-	node->AddAttribute(wxS("xml:space"), wxS("preserve"));
-	root->AddChild(node);
-	node->AddChild(new wxXmlNode(wxXML_TEXT_NODE, wxEmptyString, to_wx(line->Text)));
+	pugi::xml_node node = root.append_child("TextSample");
+	node.append_attribute("sampleTime").set_value(("0" + line->Start.GetAssFormatted(true)).c_str());
+	node.append_attribute("xml:space").set_value("preserve");
+	node.text().set(line->Text.get().c_str());
 }
 
 void TTXTSubtitleFormat::ConvertToTTXT(AssFile &file) const {

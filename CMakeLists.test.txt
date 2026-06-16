@@ -79,7 +79,8 @@ if(GTEST_FOUND)
         src/ui_timer.cpp
         src/utils.cpp
         src/ui_services.cpp
-        src/watched_file.cpp
+        src/watched_file_core.cpp
+        src/watched_file_wx.cpp
         src/project_session_ops.cpp
         src/subtitle_edit_ops.cpp
         src/subtitle_editor_ops.cpp
@@ -147,6 +148,7 @@ if(GTEST_FOUND)
         tests/tests/subtitle_overlay_blend.cpp
         tests/tests/subtitle_fps_choice.cpp
         tests/tests/subtitle_format_microdvd.cpp
+        tests/tests/subtitle_format_ttxt.cpp
         tests/tests/subtitle_grid_query_service.cpp
         tests/tests/subtitle_edit_ops.cpp
         tests/tests/subtitle_editor_ops.cpp
@@ -179,7 +181,9 @@ if(GTEST_FOUND)
         tests/tests/word_split.cpp
         tests/support/main.cpp
         tests/support/src_config_stubs.cpp
+        tests/support/subtitle_format_test_stubs.cpp
         tests/support/util.cpp
+        src/subtitle_format_ttxt.cpp
         src/subtitle_fps_choice.cpp
         src/subtitle_overlay_blend.cpp
         src/track_choice.cpp
@@ -216,7 +220,7 @@ if(GTEST_FOUND)
             "${FFMS2_INCLUDE_DIR}"
         )
     endif()
-    target_link_libraries(gtest-run PRIVATE libaegisub luajit "GTest::GTest" "Iconv::Iconv" "ZLIB::ZLIB" ${wxWidgets_LIBRARIES})
+    target_link_libraries(gtest-run PRIVATE libaegisub luajit "GTest::GTest" "Iconv::Iconv" pugixml::pugixml "ZLIB::ZLIB" ${wxWidgets_LIBRARIES})
     aegisub_enable_highway(gtest-run)
     if(WIN32)
         target_link_libraries(gtest-run PRIVATE Psapi)

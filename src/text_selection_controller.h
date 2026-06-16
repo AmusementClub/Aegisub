@@ -18,6 +18,10 @@
 
 class wxStyledTextCtrl;
 class wxStyledTextEvent;
+class wxTextEntryBase;
+class wxControl;
+class wxEvent;
+class wxTextCtrl;
 
 class TextSelectionController {
 	long selection_start = 0;

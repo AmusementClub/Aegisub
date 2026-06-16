@@ -41,12 +41,12 @@
 #include <libaegisub/dispatch.h>
 #include <libaegisub/format_path.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
 #include <libaegisub/util.h>
 
-#include <wx/msgdlg.h>
-#include <wx/log.h>
+// #include <wx/msgdlg.h>  ← unused, removed (using context->ShowWarning/RequestInteraction instead)
 
 #include <array>
 #include <fstream>
@@ -211,7 +211,7 @@ SubsController::SubsController(agi::Context *context)
 	if (!IsGuiRuntimeShell())
 		return;
 
-	file_watch = agi::make_unique<WatchedFile>();
+	file_watch = agi::make_unique<WatchedFile>(CreateWxFileSystemWatcherBackend());
 	file_watch->SetChangedCallback([this](agi::fs::path const& path) {
 		OnWatchedFileChanged(path);
 	});
@@ -477,7 +477,7 @@ void SubsController::OnWatchedFileChanged(agi::fs::path const&) {
 			return;
 
 		if (++prompt_count > kMaxPromptLoopCount) {
-			wxLogWarning(wxS("File change detection loop limit reached for %s"), to_wx(agi::fs::PathToString(filename)));
+			LOG_W("subs_controller") << "File change detection loop limit reached for " << filename;
 			last_prompted_file_snapshot = current_snapshot;
 			return;
 		}
@@ -499,7 +499,7 @@ void SubsController::OnWatchedFileChanged(agi::fs::path const&) {
 }
 
 void SubsController::OnFileWatchError(std::string const& message) {
-	wxLogWarning(wxS("Subtitle file watcher error: %s"), to_wx(message));
+	LOG_W("subs_controller") << "Subtitle file watcher error: " << message;
 }
 
 bool SubsController::PromptReloadAfterExternalChange(FileWatchSnapshot const& current_snapshot) {

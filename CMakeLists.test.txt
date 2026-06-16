@@ -1,3 +1,5 @@
+include(CTest)
+
 if(UNIX)
     add_executable(aegisub-lua EXCLUDE_FROM_ALL
         automation/tests/aegisub.cpp
@@ -240,8 +242,78 @@ if(GTEST_FOUND)
             WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests"
         )
     endif()
+    if(BUILD_TESTING)
+        if(WIN32)
+            add_test(
+                NAME aegisub_test_data_setup
+                COMMAND "${PROJECT_SOURCE_DIR}/tests/setup.bat"
+                WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests"
+            )
+        else()
+            add_test(
+                NAME aegisub_test_data_setup
+                COMMAND "${PROJECT_SOURCE_DIR}/tests/setup.sh"
+                WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests"
+            )
+        endif()
+        set_tests_properties(aegisub_test_data_setup PROPERTIES
+            FIXTURES_SETUP aegisub_test_data
+            LABELS "setup"
+        )
+
+        include(GoogleTest)
+        gtest_discover_tests(gtest-run
+            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests"
+            DISCOVERY_TIMEOUT 60
+            PROPERTIES
+                FIXTURES_REQUIRED aegisub_test_data
+                LABELS "gtest"
+        )
+    endif()
 else()
     add_custom_target(test-aegisub)
+endif()
+
+add_executable(aegisub_core_smoke EXCLUDE_FROM_ALL
+    tests/smoke/core_smoke.cpp
+)
+target_compile_features(aegisub_core_smoke PRIVATE cxx_std_20)
+target_compile_definitions(aegisub_core_smoke PRIVATE CMAKE_BUILD)
+target_link_libraries(aegisub_core_smoke PRIVATE aegisub_core libaegisub luajit)
+
+add_executable(aegisub_core_link_audit EXCLUDE_FROM_ALL
+    tests/smoke/core_smoke.cpp
+)
+target_compile_features(aegisub_core_link_audit PRIVATE cxx_std_20)
+target_compile_definitions(aegisub_core_link_audit PRIVATE CMAKE_BUILD)
+target_link_libraries(aegisub_core_link_audit PRIVATE aegisub_core libaegisub luajit)
+if(MSVC)
+    target_link_options(aegisub_core_link_audit PRIVATE "/WHOLEARCHIVE:$<TARGET_FILE:aegisub_core>")
+elseif(APPLE)
+    target_link_options(aegisub_core_link_audit PRIVATE "-Wl,-force_load,$<TARGET_FILE:aegisub_core>")
+elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_link_options(aegisub_core_link_audit PRIVATE
+        "-Wl,--whole-archive"
+        "$<TARGET_FILE:aegisub_core>"
+        "-Wl,--no-whole-archive"
+    )
+endif()
+
+add_custom_target(test-core-smoke
+    COMMAND aegisub_core_smoke
+    DEPENDS aegisub_core_smoke
+    WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+)
+
+add_custom_target(test-core-link-audit
+    COMMAND aegisub_core_link_audit
+    DEPENDS aegisub_core_link_audit
+    WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+)
+
+if(BUILD_TESTING)
+    add_test(NAME aegisub_core_smoke COMMAND aegisub_core_smoke)
+    set_tests_properties(aegisub_core_smoke PROPERTIES LABELS "smoke;core")
 endif()
 
 if(WITH_LIBPLACEBO)
@@ -401,4 +473,4 @@ if(STRINGZILLA_INCLUDE_DIRS)
 endif()
 target_link_libraries(search-replace-bench PRIVATE libaegisub)
 
-add_custom_target(test DEPENDS test-automation test-aegisub)
+add_custom_target(test-aegisub-all DEPENDS test-automation test-aegisub test-core-smoke)

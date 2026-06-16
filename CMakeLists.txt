@@ -730,6 +730,8 @@ set(AEGISUB_CORE_SOURCES
     src/watched_file_core.cpp
     # Framework-agnostic subdirs
     src/grid_core/grid_layout.cpp
+    src/presentation/subtitle_grid_display.cpp
+    src/presentation/subtitle_grid_diff.cpp
     src/presentation/subtitle_grid_projection.cpp
     src/presentation/subtitle_grid_query_service.cpp
     # CLI/media/session services still depend on the concrete Project,

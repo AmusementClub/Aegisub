@@ -16,19 +16,15 @@
 
 #include "grid_column.h"
 
-#include "ass_dialogue.h"
-#include "ass_file.h"
 #include "compat.h"
 #include "grid_column_painter.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "options.h"
+#include "presentation/subtitle_grid_display.h"
 #include "project.h"
 #include "time_display_mode.h"
 #include "video_controller.h"
-
-#include <libaegisub/character_count.h>
-#include <libaegisub/string_utils.h>
 
 #include <wx/strconv.h>
 #include <wx/string.h>
@@ -71,9 +67,7 @@ int WidthHelper::operator()(boost::flyweight<std::string> const& str) {
 }
 
 int WidthHelper::operator()(std::string const& str) {
-	int width = 0, height = 0;
-	painter->MeasureText(str, width, height);
-	return width;
+	return (*this)(boost::flyweight<std::string>(str));
 }
 
 int WidthHelper::operator()(wxString const& str) {
@@ -94,19 +88,19 @@ int WidthHelper::operator()(const wchar_t *str) {
 	return width;
 }
 
-void GridColumn::UpdateWidth(const agi::Context *c, WidthHelper &helper) {
+void GridColumn::UpdateWidth(const agi::Context *c, WidthHelper &helper, aegisub::presentation::SubtitleGridWindow const& rows) {
 	if (!visible) {
 		width = 0;
 		return;
 	}
 
-	width = Width(c, helper);
-	if (width) // 10 is an arbitrary amount of padding
+	width = WidthFromRows(c, helper, rows);
+	if (width)
 		width = 10 + std::max(width, helper(Header()));
 }
 
-void GridColumn::Paint(GridColumnPainter &painter, int x, int y, const AssDialogue *d, const agi::Context *c) const {
-	wxString str = Value(d, c);
+void GridColumn::Paint(GridColumnPainter &painter, int x, int y, aegisub::presentation::SubtitleGridRow const& row, const agi::Context *c) const {
+	wxString str = Value(row, c);
 	if (Centered()) {
 		int w = 0, h = 0;
 		painter.MeasureText(std::wstring(str.wx_str()), w, h);
@@ -122,43 +116,57 @@ namespace {
 #define COLUMN_DESCRIPTION(value) \
 	private: const wxString description = value; \
 	public: wxString const& Description() const override { return description; }
+#define COLUMN_PROJECTION_ID(value) \
+	public: char const *ProjectionColumnId() const override { return value; }
 
-struct GridColumnLineNumber final : GridColumn {
-	COLUMN_HEADER(_("#"))
-	COLUMN_DESCRIPTION(_("Line Number"))
-	bool Centered() const override { return true; }
-
-	wxString Value(const AssDialogue *d, const agi::Context * = nullptr) const override {
-		return std::to_wstring(d->Row + 1);
-	}
-
-	int Width(const agi::Context *c, WidthHelper &helper) const override {
-		auto core = c->GetCore();
-		return helper(Value(&core.ass->Events.back()));
-	}
-};
-
-template<typename T>
-T max_value(T AssDialogueBase::*field, EntryList<AssDialogue> const& lines) {
-	T value = 0;
-	for (AssDialogue const& line : lines) {
-		if (line.*field > value)
-			value = line.*field;
+int max_value(int aegisub::presentation::SubtitleGridRow::*field, aegisub::presentation::SubtitleGridWindow const& rows) {
+	int value = 0;
+	for (auto const& row : rows.rows) {
+		if (row.*field > value)
+			value = row.*field;
 	}
 	return value;
 }
 
+int max_width(std::string aegisub::presentation::SubtitleGridRow::*field, aegisub::presentation::SubtitleGridWindow const& rows, WidthHelper &helper) {
+	int w = 0;
+	for (auto const& row : rows.rows) {
+		auto const& v = row.*field;
+		if (v.empty()) continue;
+		int width = helper(v);
+		if (width > w)
+			w = width;
+	}
+	return w;
+}
+
+struct GridColumnLineNumber final : GridColumn {
+	COLUMN_HEADER(_("#"))
+	COLUMN_DESCRIPTION(_("Line Number"))
+	COLUMN_PROJECTION_ID(aegisub::presentation::SubtitleGridColumnIdLineNumber)
+	bool Centered() const override { return true; }
+
+	wxString Value(aegisub::presentation::SubtitleGridRow const& row, const agi::Context * = nullptr) const override {
+		return to_wx(aegisub::presentation::FormatSubtitleGridCell(row, ProjectionColumnId()));
+	}
+
+	int WidthFromRows(const agi::Context *, WidthHelper &helper, aegisub::presentation::SubtitleGridWindow const& rows) const override {
+		return rows.total_rows <= 0 ? 0 : helper(std::to_wstring(rows.total_rows));
+	}
+};
+
 struct GridColumnLayer final : GridColumn {
 	COLUMN_HEADER(_("L"))
 	COLUMN_DESCRIPTION(_("Layer"))
+	COLUMN_PROJECTION_ID(aegisub::presentation::SubtitleGridColumnIdLayer)
 	bool Centered() const override { return true; }
 
-	wxString Value(const AssDialogue *d, const agi::Context *) const override {
-		return d->Layer ? wxString(std::to_wstring(d->Layer)) : wxString();
+	wxString Value(aegisub::presentation::SubtitleGridRow const& row, const agi::Context *) const override {
+		return to_wx(aegisub::presentation::FormatSubtitleGridCell(row, ProjectionColumnId()));
 	}
 
-	int Width(const agi::Context *c, WidthHelper &helper) const override {
-		int max_layer = max_value(&AssDialogue::Layer, c->GetCore().ass->Events);
+	int WidthFromRows(const agi::Context *, WidthHelper &helper, aegisub::presentation::SubtitleGridWindow const& rows) const override {
+		int max_layer = max_value(&aegisub::presentation::SubtitleGridRow::layer, rows);
 		return max_layer == 0 ? 0 : helper(std::to_wstring(max_layer));
 	}
 };
@@ -168,27 +176,35 @@ struct GridColumnTime : GridColumn {
 
 	bool Centered() const override { return true; }
 	void SetDisplayMode(SubtitleTimeDisplayMode mode) override { display_mode = mode; }
+
+	aegisub::presentation::SubtitleGridDisplayOptions DisplayOptions(const agi::Context *c) const {
+		aegisub::presentation::SubtitleGridDisplayOptions options;
+		options.time_display_mode = display_mode;
+		options.timecodes = &c->GetCore().project->Timecodes();
+		return options;
+	}
 };
 
 struct GridColumnStartTime final : GridColumnTime {
 	COLUMN_HEADER(_("Start"))
 	COLUMN_DESCRIPTION(_("Start Time"))
-
-	wxString Value(const AssDialogue *d, const agi::Context *c) const override {
-		if (display_mode == SubtitleTimeDisplayMode::Frame)
-			return std::to_wstring(c->GetCore().videoController->FrameAtTime(d->Start, agi::vfr::START));
-
-		auto const displayed = GetDialogueTimesForDisplay(d->Start, d->End, display_mode, &c->GetCore().project->Timecodes());
-		return to_wx(FormatTimeForDisplay(displayed.first, display_mode));
+	COLUMN_PROJECTION_ID(aegisub::presentation::SubtitleGridColumnIdStart)
+	char const *ProjectionWidthColumnId() const override {
+		return display_mode == SubtitleTimeDisplayMode::Frame ? ProjectionColumnId() : nullptr;
 	}
 
-	int Width(const agi::Context *c, WidthHelper &helper) const override {
+	wxString Value(aegisub::presentation::SubtitleGridRow const& row, const agi::Context *c) const override {
+		return to_wx(aegisub::presentation::FormatSubtitleGridCell(row, ProjectionColumnId(), DisplayOptions(c)));
+	}
+
+	int WidthFromRows(const agi::Context *c, WidthHelper &helper, aegisub::presentation::SubtitleGridWindow const& rows) const override {
 		if (display_mode == SubtitleTimeDisplayMode::Ass)
 			return helper(wxS("0:00:00.00"));
 		if (display_mode == SubtitleTimeDisplayMode::Exact)
 			return helper(wxS("0:00:00.000"));
-		auto core = c->GetCore();
-		int frame = core.videoController->FrameAtTime(max_value(&AssDialogue::Start, core.ass->Events), agi::vfr::START);
+		int frame = c->GetCore().videoController->FrameAtTime(
+			agi::Time(max_value(&aegisub::presentation::SubtitleGridRow::start_ms, rows)),
+			agi::vfr::START);
 		return helper(std::to_wstring(frame));
 	}
 };
@@ -196,81 +212,72 @@ struct GridColumnStartTime final : GridColumnTime {
 struct GridColumnEndTime final : GridColumnTime {
 	COLUMN_HEADER(_("End"))
 	COLUMN_DESCRIPTION(_("End Time"))
-
-	wxString Value(const AssDialogue *d, const agi::Context *c) const override {
-		if (display_mode == SubtitleTimeDisplayMode::Frame)
-			return std::to_wstring(c->GetCore().videoController->FrameAtTime(d->End, agi::vfr::END));
-
-		auto const displayed = GetDialogueTimesForDisplay(d->Start, d->End, display_mode, &c->GetCore().project->Timecodes());
-		return to_wx(FormatTimeForDisplay(displayed.second, display_mode));
+	COLUMN_PROJECTION_ID(aegisub::presentation::SubtitleGridColumnIdEnd)
+	char const *ProjectionWidthColumnId() const override {
+		return display_mode == SubtitleTimeDisplayMode::Frame ? ProjectionColumnId() : nullptr;
 	}
 
-	int Width(const agi::Context *c, WidthHelper &helper) const override {
+	wxString Value(aegisub::presentation::SubtitleGridRow const& row, const agi::Context *c) const override {
+		return to_wx(aegisub::presentation::FormatSubtitleGridCell(row, ProjectionColumnId(), DisplayOptions(c)));
+	}
+
+	int WidthFromRows(const agi::Context *c, WidthHelper &helper, aegisub::presentation::SubtitleGridWindow const& rows) const override {
 		if (display_mode == SubtitleTimeDisplayMode::Ass)
 			return helper(wxS("0:00:00.00"));
 		if (display_mode == SubtitleTimeDisplayMode::Exact)
 			return helper(wxS("0:00:00.000"));
-		auto core = c->GetCore();
-		int frame = core.videoController->FrameAtTime(max_value(&AssDialogue::End, core.ass->Events), agi::vfr::END);
+		int frame = c->GetCore().videoController->FrameAtTime(
+			agi::Time(max_value(&aegisub::presentation::SubtitleGridRow::end_ms, rows)),
+			agi::vfr::END);
 		return helper(std::to_wstring(frame));
 	}
 };
 
-template<typename T>
-int max_width(T AssDialogueBase::*field, EntryList<AssDialogue> const& lines, WidthHelper &helper) {
-	int w = 0;
-	for (AssDialogue const& line : lines) {
-		auto const& v = line.*field;
-		if (v.get().empty()) continue;
-		int width = helper(v);
-		if (width > w)
-			w = width;
-	}
-	return w;
-}
-
 struct GridColumnStyle final : GridColumn {
 	COLUMN_HEADER(_("Style"))
 	COLUMN_DESCRIPTION(_("Style"))
+	COLUMN_PROJECTION_ID(aegisub::presentation::SubtitleGridColumnIdStyle)
 	bool Centered() const override { return false; }
 	bool RefreshOnTextChange() const override { return true; }
 
-	wxString Value(const AssDialogue *d, const agi::Context *c) const override {
-		return to_wx(d->Style);
+	wxString Value(aegisub::presentation::SubtitleGridRow const& row, const agi::Context *) const override {
+		return to_wx(aegisub::presentation::FormatSubtitleGridCell(row, ProjectionColumnId()));
 	}
 
-	int Width(const agi::Context *c, WidthHelper &helper) const override {
-		return max_width(&AssDialogue::Style, c->GetCore().ass->Events, helper);
+	int WidthFromRows(const agi::Context *, WidthHelper &helper, aegisub::presentation::SubtitleGridWindow const& rows) const override {
+		return max_width(&aegisub::presentation::SubtitleGridRow::style, rows, helper);
 	}
 };
 
 struct GridColumnEffect final : GridColumn {
 	COLUMN_HEADER(_("Effect"))
 	COLUMN_DESCRIPTION(_("Effect"))
+	COLUMN_PROJECTION_ID(aegisub::presentation::SubtitleGridColumnIdEffect)
 	bool Centered() const override { return false; }
 	bool RefreshOnTextChange() const override { return true; }
 
-	wxString Value(const AssDialogue *d, const agi::Context *) const override {
-		return to_wx(d->Effect);
+	wxString Value(aegisub::presentation::SubtitleGridRow const& row, const agi::Context *) const override {
+		return to_wx(aegisub::presentation::FormatSubtitleGridCell(row, ProjectionColumnId()));
 	}
 
-	int Width(const agi::Context *c, WidthHelper &helper) const override {
-		return max_width(&AssDialogue::Effect, c->GetCore().ass->Events, helper);
+	int WidthFromRows(const agi::Context *, WidthHelper &helper, aegisub::presentation::SubtitleGridWindow const& rows) const override {
+		return max_width(&aegisub::presentation::SubtitleGridRow::effect, rows, helper);
 	}
 };
 
 struct GridColumnActor final : GridColumn {
 	COLUMN_HEADER(_("Actor"))
 	COLUMN_DESCRIPTION(_("Actor"))
+	COLUMN_PROJECTION_ID(aegisub::presentation::SubtitleGridColumnIdActor)
 	bool Centered() const override { return false; }
 	bool RefreshOnTextChange() const override { return true; }
 
-	wxString Value(const AssDialogue *d, const agi::Context *) const override {
-		return to_wx(d->Actor);
+	wxString Value(aegisub::presentation::SubtitleGridRow const& row, const agi::Context *) const override {
+		return to_wx(aegisub::presentation::FormatSubtitleGridCell(row, ProjectionColumnId()));
 	}
 
-	int Width(const agi::Context *c, WidthHelper &helper) const override {
-		return max_width(&AssDialogue::Actor, c->GetCore().ass->Events, helper);
+	int WidthFromRows(const agi::Context *, WidthHelper &helper, aegisub::presentation::SubtitleGridWindow const& rows) const override {
+		return max_width(&aegisub::presentation::SubtitleGridRow::actor, rows, helper);
 	}
 };
 
@@ -280,15 +287,15 @@ struct GridColumnMargin : GridColumn {
 
 	bool Centered() const override { return true; }
 
-	wxString Value(const AssDialogue *d, const agi::Context *) const override {
-		return d->Margin[index] ? wxString(std::to_wstring(d->Margin[index])) : wxString();
+	wxString Value(aegisub::presentation::SubtitleGridRow const& row, const agi::Context *) const override {
+		return to_wx(aegisub::presentation::FormatSubtitleGridCell(row, ProjectionColumnId()));
 	}
 
-	int Width(const agi::Context *c, WidthHelper &helper) const override {
+	int WidthFromRows(const agi::Context *, WidthHelper &helper, aegisub::presentation::SubtitleGridWindow const& rows) const override {
 		int max = 0;
-		for (AssDialogue const& line : c->GetCore().ass->Events) {
-			if (line.Margin[index] > max)
-				max = line.Margin[index];
+		for (auto const& row : rows.rows) {
+			if (row.margins[index] > max)
+				max = row.margins[index];
 		}
 		return max == 0 ? 0 : helper(std::to_wstring(max));
 	}
@@ -298,18 +305,21 @@ struct GridColumnMarginLeft final : GridColumnMargin {
 	GridColumnMarginLeft() : GridColumnMargin(0) { }
 	COLUMN_HEADER(_("Left"))
 	COLUMN_DESCRIPTION(_("Left Margin"))
+	COLUMN_PROJECTION_ID(aegisub::presentation::SubtitleGridColumnIdMarginLeft)
 };
 
 struct GridColumnMarginRight final : GridColumnMargin {
 	GridColumnMarginRight() : GridColumnMargin(1) { }
 	COLUMN_HEADER(_("Right"))
 	COLUMN_DESCRIPTION(_("Right Margin"))
+	COLUMN_PROJECTION_ID(aegisub::presentation::SubtitleGridColumnIdMarginRight)
 };
 
 struct GridColumnMarginVert final : GridColumnMargin {
 	GridColumnMarginVert() : GridColumnMargin(2) { }
 	COLUMN_HEADER(_("Vert"))
 	COLUMN_DESCRIPTION(_("Vertical Margin"))
+	COLUMN_PROJECTION_ID(aegisub::presentation::SubtitleGridColumnIdMarginVertical)
 };
 
 wxColor blend(wxColor fg, wxColor bg, double alpha) {
@@ -344,45 +354,42 @@ class GridColumnCPS final : public GridColumn {
 public:
 	COLUMN_HEADER(_("CPS"))
 	COLUMN_DESCRIPTION(_("Characters Per Second"))
+	COLUMN_PROJECTION_ID(aegisub::presentation::SubtitleGridColumnIdCps)
 	bool Centered() const override { return true; }
 	bool RefreshOnTextChange() const override { return true; }
+	char const *ProjectionWidthColumnId() const override { return nullptr; }
 	void SetDisplayMode(SubtitleTimeDisplayMode mode) override { display_mode = mode; }
 
-	wxString Value(const AssDialogue *d, const agi::Context *) const override {
+	wxString Value(aegisub::presentation::SubtitleGridRow const&, const agi::Context *) const override {
 		return wxS("");
 	}
 
-	double CPS(const AssDialogue *d, const agi::Context *c) const {
-		auto const duration_mode = display_mode == SubtitleTimeDisplayMode::Ass
-			? SubtitleTimeDisplayMode::Ass
-			: SubtitleTimeDisplayMode::Exact;
-		int duration = GetDurationForDisplay(d->Start, d->End, duration_mode, &c->GetCore().project->Timecodes());
-		auto const& text = d->Text.get();
-
-		if (duration <= 100 || text.size() > static_cast<size_t>(duration))
-			return -1;
-
-		int ignore = agi::IGNORE_BLOCKS;
+	aegisub::presentation::SubtitleGridDisplayOptions DisplayOptions(const agi::Context *c) const {
+		aegisub::presentation::SubtitleGridDisplayOptions options;
+		options.time_display_mode = display_mode;
+		options.timecodes = &c->GetCore().project->Timecodes();
+		options.show_decimal_cps = show_decimal_cps->GetBool();
 		if (ignore_whitespace->GetBool())
-			ignore |= agi::IGNORE_WHITESPACE;
+			options.ignore_whitespace = true;
 		if (ignore_punctuation->GetBool())
-			ignore |= agi::IGNORE_PUNCTUATION;
-
-		auto const characters = agi::RenderedTextCharacterCount(text, ignore);
-		if (show_decimal_cps->GetBool())
-			return characters * 1000.0 / duration;
-		return characters * 1000 / duration;
+			options.ignore_punctuation = true;
+		return options;
 	}
 
-	int Width(const agi::Context *c, WidthHelper &helper) const override {
+	int WidthFromRows(const agi::Context *, WidthHelper &helper, aegisub::presentation::SubtitleGridWindow const&) const override {
 		return helper(show_decimal_cps->GetBool() ? wxS("100.0") : wxS("999"));
 	}
 
-	void Paint(GridColumnPainter &painter, int x, int y, const AssDialogue *d, const agi::Context *c) const override {
-		double cps = CPS(d, c);
+	void Paint(GridColumnPainter &painter, int x, int y, aegisub::presentation::SubtitleGridRow const& row, const agi::Context *c) const override {
+		auto const options = DisplayOptions(c);
+		double cps = aegisub::presentation::CalculateSubtitleGridCps(row, options);
+		PaintCps(painter, x, y, cps);
+	}
+
+	void PaintCps(GridColumnPainter &painter, int x, int y, double cps) const {
 		if (cps < 0 || cps > 100) return;
 
-		wxString str = show_decimal_cps->GetBool() ? wxString::Format(wxS("%.1f"), cps) : std::to_wstring(static_cast<int>(cps));
+		wxString str = to_wx(aegisub::presentation::FormatSubtitleGridCps(cps, show_decimal_cps->GetBool()));
 		int ext_w = 0, ext_h = 0;
 		painter.MeasureText(std::wstring(str.wx_str()), ext_w, ext_h);
 		auto tc = painter.CurrentTextColor();
@@ -408,60 +415,44 @@ public:
 
 class GridColumnText final : public GridColumn {
 	const agi::OptionValue *override_mode;
-	wxString replace_char;
+	std::string replace_char;
 
 	agi::signal::Connection replace_char_connection;
 
 public:
 	GridColumnText()
 	: override_mode(OPT_GET("Subtitle/Grid/Hide Overrides"))
-	, replace_char(to_wx(OPT_GET("Subtitle/Grid/Hide Overrides Char")->GetString()))
+	, replace_char(OPT_GET("Subtitle/Grid/Hide Overrides Char")->GetString())
 	, replace_char_connection(OPT_SUB("Subtitle/Grid/Hide Overrides Char",
-		[&](agi::OptionValue const& v) { replace_char = to_wx(v.GetString()); }))
+		[&](agi::OptionValue const& v) { replace_char = v.GetString(); }))
 	{
 	}
 
 	COLUMN_HEADER(_("Text"))
 	COLUMN_DESCRIPTION(_("Text"))
+	COLUMN_PROJECTION_ID(aegisub::presentation::SubtitleGridColumnIdText)
 	bool Centered() const override { return false; }
 	bool CanHide() const override { return false; }
 	bool RefreshOnTextChange() const override { return true; }
+	char const *ProjectionWidthColumnId() const override { return nullptr; }
 
-	wxString Value(const AssDialogue *d, const agi::Context *) const override {
-		wxString str;
-		int mode = override_mode->GetInt();
-
-		// Show overrides
-		if (mode == 0)
-			str = to_wx(d->Text);
-		// Hidden overrides
-		else {
-			auto const& text = d->Text.get();
-			str.reserve(text.size());
-			size_t start = 0;
-			while (true) {
-				auto pos = agi::util::strings::find(text, '{', start);
-				if (pos == agi::util::strings::npos)
-					break;
-				str += to_wx(text.substr(start, pos - start));
-				if (mode == 1)
-					str += replace_char;
-				start = agi::util::strings::find(text, '}', pos);
-				if (start == agi::util::strings::npos)
-					break;
-				++start;
-			}
-			if (start != agi::util::strings::npos)
-				str += to_wx(text.substr(start));
-		}
-
-		// Cap length and set text
+	wxString Value(aegisub::presentation::SubtitleGridRow const& row, const agi::Context *) const override {
+		auto str = to_wx(aegisub::presentation::FormatSubtitleGridText(row.text, OverrideMode(), replace_char));
 		if (str.size() > 512)
 			str = str.Left(512) + wxS("...");
 		return str;
 	}
 
-	int Width(const agi::Context *c, WidthHelper &helper) const override {
+	aegisub::presentation::SubtitleGridOverrideMode OverrideMode() const {
+		int mode = override_mode->GetInt();
+		if (mode == 0)
+			return aegisub::presentation::SubtitleGridOverrideMode::Show;
+		if (mode == 1)
+			return aegisub::presentation::SubtitleGridOverrideMode::Replace;
+		return aegisub::presentation::SubtitleGridOverrideMode::Hide;
+	}
+
+	int WidthFromRows(const agi::Context *, WidthHelper &, aegisub::presentation::SubtitleGridWindow const&) const override {
 		return 5000;
 	}
 };

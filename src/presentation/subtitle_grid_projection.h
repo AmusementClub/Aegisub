@@ -3,6 +3,7 @@
 #include "presentation_contract.h"
 
 #include <functional>
+#include <string>
 #include <vector>
 
 class AssDialogue;
@@ -15,6 +16,12 @@ SubtitleGridRow ProjectSubtitleGridRow(
 	AssDialogue const& line,
 	int row_index,
 	SubtitleGridRowState state = {});
+
+SubtitleGridRow ProjectSubtitleGridRow(
+	AssDialogue const& line,
+	int row_index,
+	SubtitleGridRowState state,
+	std::vector<std::string> const& column_ids);
 
 SubtitleGridWindow BuildSubtitleGridWindow(
 	std::vector<AssDialogue const*> const& rows,

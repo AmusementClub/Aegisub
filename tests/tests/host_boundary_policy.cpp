@@ -300,6 +300,59 @@ TEST(host_boundary_policy, grid_core_sources_stay_gui_framework_neutral) {
 	EXPECT_TRUE(framework_hits.empty()) << JoinLines(framework_hits);
 }
 
+TEST(host_boundary_policy, live_base_grid_consumes_presentation_projection_window) {
+	auto const root = ProjectRoot();
+	auto const base_grid_cpp = root / "src" / "base_grid.cpp";
+	auto const base_grid_h = root / "src" / "base_grid.h";
+	auto const grid_column_cpp = root / "src" / "grid_column.cpp";
+
+	ASSERT_TRUE(std::filesystem::exists(base_grid_cpp));
+	ASSERT_TRUE(std::filesystem::exists(base_grid_h));
+	ASSERT_TRUE(std::filesystem::exists(grid_column_cpp));
+
+	auto projection_include_hits = FindLiteralHits(base_grid_cpp, "presentation/subtitle_grid_projection.h");
+	auto diff_include_hits = FindLiteralHits(base_grid_cpp, "presentation/subtitle_grid_diff.h");
+	auto window_type_hits = FindLiteralHits(base_grid_h, "SubtitleGridWindow");
+	auto row_state_hits = FindLiteralHits(base_grid_h, "SubtitleGridRowState");
+	auto build_window_hits = FindLiteralHits(base_grid_cpp, "BuildSubtitleGridWindow(");
+	auto build_diff_hits = FindLiteralHits(base_grid_cpp, "BuildSubtitleGridDiffFromCommit(");
+	auto query_adapter_hits = FindLiteralHits(base_grid_cpp, "BaseGrid::QueryGridWindow(");
+	auto width_column_ids_hits = FindLiteralHits(base_grid_cpp, "BaseGrid::ProjectionColumnIdsForWidths(");
+	auto width_window_hits = FindLiteralHits(base_grid_cpp, "column->UpdateWidth(context, *width_helper, width_window)");
+	auto timing_local_queue_hits = FindLiteralHits(base_grid_cpp, "QueueSubtitleGridRowRefresh(single_line->Row)");
+	auto timing_visible_diff_hits = FindLiteralHits(base_grid_cpp, "QueueChangedVisibleRowsRefresh(visible_rows, new_visible_rows)");
+	auto timing_active_window_hits = FindLiteralHits(base_grid_cpp, "QueueVisibleWindowRefresh()");
+	auto collision_state_hits = FindLiteralHits(base_grid_cpp, "row_state.collides_with_active");
+	auto projected_row_map_hits = FindLiteralHits(base_grid_cpp, "projected_rows_by_screen_row");
+	auto projected_row_paint_hits = FindLiteralHits(base_grid_cpp, "columns[j]->Paint(*painter, x, y, *projected_row, context)");
+	auto string_width_cache_hits = FindLiteralHits(grid_column_cpp, "return (*this)(boost::flyweight<std::string>(str));");
+	auto grid_column_formatter_hits = FindLiteralHits(grid_column_cpp, "FormatSubtitleGridCell(row, ProjectionColumnId()");
+	auto grid_column_ass_scan_hits = FindLiteralHits(grid_column_cpp, "core.ass->Events");
+	auto grid_column_ass_paint_hits = FindLiteralHits(grid_column_cpp, "const AssDialogue *");
+	auto grid_column_ass_value_hits = FindLiteralHits(grid_column_cpp, "Value(const AssDialogue");
+
+	EXPECT_FALSE(projection_include_hits.empty());
+	EXPECT_FALSE(diff_include_hits.empty());
+	EXPECT_FALSE(window_type_hits.empty());
+	EXPECT_FALSE(row_state_hits.empty());
+	EXPECT_FALSE(build_window_hits.empty());
+	EXPECT_FALSE(build_diff_hits.empty());
+	EXPECT_FALSE(query_adapter_hits.empty());
+	EXPECT_FALSE(width_column_ids_hits.empty());
+	EXPECT_FALSE(width_window_hits.empty());
+	EXPECT_FALSE(timing_local_queue_hits.empty());
+	EXPECT_FALSE(timing_visible_diff_hits.empty());
+	EXPECT_FALSE(timing_active_window_hits.empty());
+	EXPECT_FALSE(collision_state_hits.empty());
+	EXPECT_FALSE(projected_row_map_hits.empty());
+	EXPECT_FALSE(projected_row_paint_hits.empty());
+	EXPECT_FALSE(string_width_cache_hits.empty());
+	EXPECT_FALSE(grid_column_formatter_hits.empty());
+	EXPECT_TRUE(grid_column_ass_scan_hits.empty()) << JoinLines(grid_column_ass_scan_hits);
+	EXPECT_TRUE(grid_column_ass_paint_hits.empty()) << JoinLines(grid_column_ass_paint_hits);
+	EXPECT_TRUE(grid_column_ass_value_hits.empty()) << JoinLines(grid_column_ass_value_hits);
+}
+
 TEST(host_boundary_policy, context_backed_file_dialog_callers_prefer_context_service) {
 	auto const root = ProjectRoot();
 
@@ -1216,6 +1269,8 @@ TEST(host_boundary_policy, aegisub_core_sources_keep_host_coupled_clusters_out) 
 		"src/ebu_export_settings.cpp",
 		"src/export_framerate_transform.cpp",
 		"src/numeric_utils.cpp",
+		"src/presentation/subtitle_grid_display.cpp",
+		"src/presentation/subtitle_grid_diff.cpp",
 		"src/presentation/subtitle_grid_projection.cpp",
 		"src/presentation/subtitle_grid_query_service.cpp",
 		"src/subtitle_format.cpp",

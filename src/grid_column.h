@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "flyweight_hash.h"
+#include "presentation/presentation_contract.h"
 #include "time_display_mode.h"
 
 #include <memory>
@@ -22,7 +23,6 @@
 #include <vector>
 #include <unordered_map>
 
-class AssDialogue;
 class GridColumnPainter;
 class wxString;
 namespace agi { struct Context; }
@@ -55,8 +55,8 @@ protected:
 	int width = 0;
 	bool visible = true;
 
-	virtual int Width(const agi::Context *c, WidthHelper &helper) const = 0;
-	virtual wxString Value(const AssDialogue *d, const agi::Context *c) const = 0;
+	virtual int WidthFromRows(const agi::Context *c, WidthHelper &helper, aegisub::presentation::SubtitleGridWindow const& rows) const = 0;
+	virtual wxString Value(aegisub::presentation::SubtitleGridRow const& row, const agi::Context *c) const = 0;
 
 public:
 	virtual ~GridColumn() = default;
@@ -65,14 +65,16 @@ public:
 	virtual bool CanHide() const { return true; }
 	virtual bool RefreshOnTextChange() const { return false; }
 
+	virtual char const *ProjectionColumnId() const = 0;
+	virtual char const *ProjectionWidthColumnId() const { return ProjectionColumnId(); }
 	virtual wxString const& Header() const = 0;
 	virtual wxString const& Description() const = 0;
-	virtual void Paint(GridColumnPainter &painter, int x, int y, const AssDialogue *d, const agi::Context *c) const;
+	virtual void Paint(GridColumnPainter &painter, int x, int y, aegisub::presentation::SubtitleGridRow const& row, const agi::Context *c) const;
 
 	int Width() const { return width; }
 	bool Visible() const { return visible; }
 
-	virtual void UpdateWidth(const agi::Context *c, WidthHelper &helper);
+	virtual void UpdateWidth(const agi::Context *c, WidthHelper &helper, aegisub::presentation::SubtitleGridWindow const& rows);
 	virtual void SetDisplayMode(SubtitleTimeDisplayMode /* mode */) { }
 	virtual void SetByFrame(bool by_frame) { SetDisplayMode(by_frame ? SubtitleTimeDisplayMode::Frame : SubtitleTimeDisplayMode::Ass); }
 	void SetVisible(bool new_value) { visible = new_value; }

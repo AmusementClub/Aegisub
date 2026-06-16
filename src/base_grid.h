@@ -34,6 +34,7 @@
 #include <vector>
 #include <wx/window.h>
 
+#include "presentation/presentation_contract.h"
 #include "time_display_mode.h"
 
 namespace agi {
@@ -66,6 +67,8 @@ class BaseGrid final : public wxWindow {
 
 	/// Rows which are visible on the current video frame
 	std::vector<int> visible_rows;
+	std::vector<int> selected_rows;
+	aegisub::presentation::Revision grid_revision = 0;
 
 	agi::Context *context; ///< Associated project context
 
@@ -75,6 +78,8 @@ class BaseGrid final : public wxWindow {
 	std::vector<wxRect> text_refresh_rects;
 
 	bool refresh_on_idle = false;
+	bool full_refresh_on_idle = false;
+	std::vector<int> subtitle_rows_refresh_on_idle;
 
 	/// Cached brushes used for row backgrounds
 	struct {
@@ -88,6 +93,7 @@ class BaseGrid final : public wxWindow {
 	} row_colors;
 
 	std::vector<AssDialogue*> index_line_map;  ///< Row number -> dialogue line
+	std::vector<AssDialogue const*> projection_line_map; ///< Row number -> dialogue line for presentation projection
 
 	/// Cached grid body context menu
 	std::unique_ptr<wxMenu> context_menu;
@@ -109,12 +115,21 @@ class BaseGrid final : public wxWindow {
 
 	void AdjustScrollbar();
 	std::vector<int> GetRowsDisplayedAtCurrentFrame() const;
+	std::vector<int> GetSelectedRowsInWindow() const;
 	wxRect GetScrollableRect() const;
 	void RefreshChangedVisibleRows(std::vector<int> const& old_visible_rows, std::vector<int> const& new_visible_rows);
+	void QueueChangedVisibleRowsRefresh(std::vector<int> const& old_visible_rows, std::vector<int> const& new_visible_rows);
+	void QueueSubtitleGridRowRefresh(int row_index);
+	void QueueVisibleWindowRefresh();
+	void FlushQueuedSubtitleGridRowRefreshes();
 	void RefreshAfterScroll(int old_y_pos);
-	void RefreshDialogueRow(const AssDialogue *line);
+	void RefreshSubtitleGridRow(int row_index);
 	void SetColumnWidths();
 
+	aegisub::presentation::SubtitleGridWindow QueryGridWindow(int first_row, int row_count, std::vector<std::string> column_ids = {}) const;
+	std::vector<std::string> ProjectionColumnIdsForPaint(std::vector<char> const& paint_columns) const;
+	std::vector<std::string> ProjectionColumnIdsForWidths() const;
+	aegisub::presentation::SubtitleGridRowState ResolveGridRowState(AssDialogue const& line) const;
 	bool IsDisplayed(const AssDialogue *line) const;
 
 	void UpdateMaps();

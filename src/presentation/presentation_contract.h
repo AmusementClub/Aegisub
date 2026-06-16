@@ -65,7 +65,22 @@ enum class SubtitleGridColumnKind {
 	MarginRight,
 	MarginVertical,
 	Text,
+	LineNumber,
+	Cps,
 };
+
+inline constexpr auto SubtitleGridColumnIdLineNumber = "line_number";
+inline constexpr auto SubtitleGridColumnIdLayer = "layer";
+inline constexpr auto SubtitleGridColumnIdStart = "start";
+inline constexpr auto SubtitleGridColumnIdEnd = "end";
+inline constexpr auto SubtitleGridColumnIdStyle = "style";
+inline constexpr auto SubtitleGridColumnIdActor = "actor";
+inline constexpr auto SubtitleGridColumnIdEffect = "effect";
+inline constexpr auto SubtitleGridColumnIdMarginLeft = "margin_left";
+inline constexpr auto SubtitleGridColumnIdMarginRight = "margin_right";
+inline constexpr auto SubtitleGridColumnIdMarginVertical = "margin_vertical";
+inline constexpr auto SubtitleGridColumnIdCps = "cps";
+inline constexpr auto SubtitleGridColumnIdText = "text";
 
 struct SubtitleGridColumnDescriptor {
 	std::string id;
@@ -78,6 +93,7 @@ struct SubtitleGridRowState {
 	bool selected = false;
 	bool active = false;
 	bool visible_at_current_frame = false;
+	bool collides_with_active = false;
 };
 
 struct SubtitleGridRow {

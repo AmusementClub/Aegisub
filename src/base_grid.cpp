@@ -42,6 +42,8 @@
 #include "grid_column.h"
 #include "grid_column_painter.h"
 #include "options.h"
+#include "presentation/subtitle_grid_diff.h"
+#include "presentation/subtitle_grid_projection.h"
 #include "project.h"
 #include "utils.h"
 #include "selection_controller.h"
@@ -95,7 +97,12 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 		core.ass->AddCommitListener(&BaseGrid::OnSubtitlesCommit, this),
 
 		core.selectionController->AddActiveLineListener(&BaseGrid::OnActiveLineChanged, this),
-		core.selectionController->AddSelectionListener([&]{ Refresh(false); }),
+		core.selectionController->AddSelectionListener([&]{
+			++grid_revision;
+			auto new_selected_rows = GetSelectedRowsInWindow();
+			RefreshChangedVisibleRows(selected_rows, new_selected_rows);
+			selected_rows = std::move(new_selected_rows);
+		}),
 		core.project->AddVideoProviderListener(&BaseGrid::OnVideoProviderChanged, this),
 		core.videoController->AddFramePresentedListener(&BaseGrid::OnCurrentFrameChanged, this),
 
@@ -136,23 +143,58 @@ BEGIN_EVENT_TABLE(BaseGrid,wxWindow)
 END_EVENT_TABLE()
 
 void BaseGrid::OnSubtitlesCommit(int type, const AssDialogue *single_line) {
-	if (type == AssFile::COMMIT_NEW || type & AssFile::COMMIT_ORDER || type & AssFile::COMMIT_DIAG_ADDREM)
-		UpdateMaps();
+	auto const before_revision = grid_revision;
+	++grid_revision;
+	std::vector<std::string> diff_column_ids;
+	if (type & AssFile::COMMIT_DIAG_TIME)
+		diff_column_ids = {
+			aegisub::presentation::SubtitleGridColumnIdStart,
+			aegisub::presentation::SubtitleGridColumnIdEnd,
+			aegisub::presentation::SubtitleGridColumnIdCps,
+		};
+	else if (type & AssFile::COMMIT_DIAG_TEXT)
+		diff_column_ids = {aegisub::presentation::SubtitleGridColumnIdText};
 
-	if (type & AssFile::COMMIT_DIAG_META) {
+	auto const diff = aegisub::presentation::BuildSubtitleGridDiffFromCommit(
+		type,
+		before_revision,
+		grid_revision,
+		single_line,
+		single_line ? ResolveGridRowState(*single_line) : aegisub::presentation::SubtitleGridRowState{},
+		diff_column_ids);
+
+	if (diff.kind == aegisub::presentation::SubtitleGridDiffKind::Reset) {
+		UpdateMaps();
+		return;
+	}
+
+	if (diff.requires_full_refresh && (type & AssFile::COMMIT_DIAG_META)) {
 		SetColumnWidths();
 		Refresh(false);
 		return;
 	}
-	if (type & AssFile::COMMIT_DIAG_TIME) {
+	if (diff.kind == aegisub::presentation::SubtitleGridDiffKind::RowsChanged && (type & AssFile::COMMIT_DIAG_TIME)) {
 		// Dragging start / end time in audio display can generate lots of commit in a short period of time.
 		// On the other hand, GDI painting time depends on area, and BaseGrid typically is very large. Therefore repainting BaseGrid can be expensive.
-		// To prevent GUI lag / FPS drop caused by frequent repaint of BaseGrid, we do not call Refresh(false) here. Instead, we set the refresh_on_idle flag, and only repaint BaseGrid when idle.
-		refresh_on_idle = true;
-	}
-	else if (type & AssFile::COMMIT_DIAG_TEXT) {
+		// To prevent GUI lag / FPS drop caused by frequent repaint of BaseGrid, collect row invalidations and repaint them when idle.
 		if (single_line) {
-			RefreshDialogueRow(single_line);
+			QueueSubtitleGridRowRefresh(single_line->Row);
+			auto new_visible_rows = GetRowsDisplayedAtCurrentFrame();
+			QueueChangedVisibleRowsRefresh(visible_rows, new_visible_rows);
+			visible_rows = std::move(new_visible_rows);
+
+			if (context->GetCore().selectionController->GetActiveLine() == single_line)
+				QueueVisibleWindowRefresh();
+		}
+		else {
+			refresh_on_idle = true;
+			full_refresh_on_idle = true;
+			subtitle_rows_refresh_on_idle.clear();
+		}
+	}
+	else if (diff.kind == aegisub::presentation::SubtitleGridDiffKind::RowsChanged && (type & AssFile::COMMIT_DIAG_TEXT)) {
+		if (!diff.upserted_rows.empty()) {
+			RefreshSubtitleGridRow(diff.upserted_rows.front().row_index);
 			return;
 		}
 
@@ -177,6 +219,7 @@ void BaseGrid::OnShowColMenu(wxCommandEvent &event) {
 
 void BaseGrid::OnHighlightVisibleChange(agi::OptionValue const& opt) {
 	(void)opt;
+	++grid_revision;
 	Refresh(false);
 }
 
@@ -210,17 +253,23 @@ void BaseGrid::UpdateStyle() {
 
 void BaseGrid::UpdateMaps() {
 	index_line_map.clear();
+	projection_line_map.clear();
 
 	auto core = context->GetCore();
-	for (auto& curdiag : core.ass->Events)
+	for (auto& curdiag : core.ass->Events) {
 		index_line_map.push_back(&curdiag);
+		projection_line_map.push_back(&curdiag);
+	}
 
 	SetColumnWidths();
 	AdjustScrollbar();
+	selected_rows = GetSelectedRowsInWindow();
 	Refresh(false);
 }
 
 void BaseGrid::OnActiveLineChanged(AssDialogue *new_active) {
+	++grid_revision;
+
 	if (new_active) {
 		if (new_active->Row != active_row)
 			MakeRowVisible(new_active->Row);
@@ -264,6 +313,7 @@ void BaseGrid::SelectRow(int row, bool addToSelected, bool select) {
 
 void BaseGrid::OnCurrentFrameChanged(int frame_number) {
 	current_frame = frame_number;
+	++grid_revision;
 	auto new_visible_rows = GetRowsDisplayedAtCurrentFrame();
 	if (new_visible_rows == visible_rows)
 		return;
@@ -275,13 +325,21 @@ void BaseGrid::OnCurrentFrameChanged(int frame_number) {
 void BaseGrid::OnVideoProviderChanged() {
 	auto core = context->GetCore();
 	current_frame = core.project->VideoProvider() ? core.videoController->GetFrameN() : -1;
+	++grid_revision;
 	Refresh(false);
 }
 
 void BaseGrid::OnIdle(wxIdleEvent&) {
 	if (refresh_on_idle) {
 		refresh_on_idle = false;
-		Refresh(false);
+		if (full_refresh_on_idle) {
+			full_refresh_on_idle = false;
+			subtitle_rows_refresh_on_idle.clear();
+			Refresh(false);
+		}
+		else {
+			FlushQueuedSubtitleGridRowRefreshes();
+		}
 	}
 }
 
@@ -394,24 +452,50 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 	// Paint the rows
 	const int grid_x = columns[0]->Width();
 
-	auto core = context->GetCore();
-	const auto active_line = core.selectionController->GetActiveLine();
-	auto const& selection = core.selectionController->GetSelectedSet();
-	visible_rows = GetRowsDisplayedAtCurrentFrame();
+	int const projected_lines = nDraw;
+	auto projected_window = QueryGridWindow(
+		yPos,
+		projected_lines,
+		has_dirty_rows
+			? ProjectionColumnIdsForPaint(paint_columns)
+			: std::vector<std::string>{aegisub::presentation::SubtitleGridColumnIdLineNumber});
+	visible_rows.clear();
+	selected_rows.clear();
+	visible_rows.reserve(projected_window.rows.size());
+	selected_rows.reserve(projected_window.rows.size());
+	std::vector<aegisub::presentation::SubtitleGridRow const*> projected_rows_by_screen_row(
+		static_cast<size_t>(projected_lines),
+		nullptr);
+	for (auto const& row : projected_window.rows) {
+		if (row.state.visible_at_current_frame)
+			visible_rows.push_back(row.row_index);
+		if (row.state.selected)
+			selected_rows.push_back(row.row_index);
+		int const screen_row = row.row_index - yPos;
+		if (screen_row >= 0 && screen_row < projected_lines)
+			projected_rows_by_screen_row[static_cast<size_t>(screen_row)] = &row;
+	}
+	int active_screen_row = -1;
 
 	for (int i = first_dirty_row; i <= last_dirty_row; ++i) {
 		wxBrush color = row_colors.Default;
-		AssDialogue *curDiag = index_line_map[i + yPos];
+		auto const* projected_row = projected_rows_by_screen_row[static_cast<size_t>(i)];
+		auto const row_state = projected_row
+			? projected_row->state
+			: aegisub::presentation::SubtitleGridRowState{};
+		bool const is_comment = projected_row && projected_row->comment;
+		if (row_state.active)
+			active_screen_row = i;
 
-		bool inSel = !!selection.count(curDiag);
-		if (inSel && curDiag->Comment)
+		bool inSel = row_state.selected;
+		if (inSel && is_comment)
 			color = row_colors.SelectedComment;
 		else if (inSel)
 			color = row_colors.Selection;
-		else if (curDiag->Comment)
+		else if (is_comment)
 			color = row_colors.Comment;
 
-		if (std::binary_search(begin(visible_rows), end(visible_rows), i + yPos)) {
+		if (row_state.visible_at_current_frame) {
 			if (color == row_colors.Default)
 				color = row_colors.Visible;
 		}
@@ -422,7 +506,7 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 		if (color != row_colors.Default)
 			painter->FillRectangle(grid_x, (i + 1) * lineHeight + 1, w, lineHeight, row_bg);
 
-		if (active_line != curDiag && curDiag->CollidesWith(active_line))
+		if (row_state.collides_with_active)
 			painter->SetTextColor(text_collision);
 		else if (inSel)
 			painter->SetTextColor(text_selection);
@@ -433,8 +517,8 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 		int x = 0;
 		int y = (i + 1) * lineHeight;
 		for (size_t j : agi::util::range(columns.size())) {
-			if (paint_columns[j])
-				columns[j]->Paint(*painter, x, y, curDiag, context);
+			if (paint_columns[j] && projected_row)
+				columns[j]->Paint(*painter, x, y, *projected_row, context);
 			x += columns[j]->Width();
 		}
 
@@ -457,7 +541,6 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 		painter->DrawLine(w, minH, w, maxH, grid_line_color);
 	}
 
-	int const active_screen_row = active_line ? active_line->Row - yPos : -1;
 	if (active_screen_row >= first_dirty_row && active_screen_row <= last_dirty_row) {
 		painter->StrokeRectangle(0, (active_screen_row + 1) * lineHeight, w, lineHeight + 1,
 			OPT_GET("Colour/Subtitle Grid/Active Border")->GetColor());
@@ -475,6 +558,7 @@ void BaseGrid::OnScroll(wxScrollEvent &event) {
 		int old_y_pos = yPos;
 		context->GetCore().ass->Properties.scroll_position = yPos = newPos;
 		visible_rows = GetRowsDisplayedAtCurrentFrame();
+		selected_rows = GetSelectedRowsInWindow();
 		RefreshAfterScroll(old_y_pos);
 	}
 }
@@ -617,6 +701,7 @@ void BaseGrid::ScrollTo(int y) {
 		context->GetCore().ass->Properties.scroll_position = yPos = nextY;
 		scrollBar->SetThumbPosition(yPos);
 		visible_rows = GetRowsDisplayedAtCurrentFrame();
+		selected_rows = GetSelectedRowsInWindow();
 		RefreshAfterScroll(old_y_pos);
 	}
 }
@@ -634,10 +719,31 @@ std::vector<int> BaseGrid::GetRowsDisplayedAtCurrentFrame() const {
 	lines = mid(0, lines, GetRows() - yPos);
 	rows.reserve(lines);
 
-	for (int i = yPos; i < yPos + lines; ++i) {
-		if (IsDisplayed(index_line_map[i]))
-			rows.push_back(i);
-	}
+	auto window = QueryGridWindow(
+		yPos,
+		lines,
+		std::vector<std::string>{aegisub::presentation::SubtitleGridColumnIdLineNumber});
+	for (auto const& row : window.rows)
+		if (row.state.visible_at_current_frame)
+			rows.push_back(row.row_index);
+
+	return rows;
+}
+
+std::vector<int> BaseGrid::GetSelectedRowsInWindow() const {
+	std::vector<int> rows;
+
+	int lines = GetClientSize().GetHeight() / lineHeight + 1;
+	lines = mid(0, lines, GetRows() - yPos);
+	rows.reserve(lines);
+
+	auto window = QueryGridWindow(
+		yPos,
+		lines,
+		std::vector<std::string>{aegisub::presentation::SubtitleGridColumnIdLineNumber});
+	for (auto const& row : window.rows)
+		if (row.state.selected)
+			rows.push_back(row.row_index);
 
 	return rows;
 }
@@ -672,8 +778,59 @@ void BaseGrid::RefreshChangedVisibleRows(std::vector<int> const& old_visible_row
 			continue;
 		}
 
-		RefreshDialogueRow(GetDialogue(row));
+		RefreshSubtitleGridRow(row);
 	}
+}
+
+void BaseGrid::QueueChangedVisibleRowsRefresh(std::vector<int> const& old_visible_rows, std::vector<int> const& new_visible_rows) {
+	auto old_it = begin(old_visible_rows);
+	auto new_it = begin(new_visible_rows);
+
+	while (old_it != end(old_visible_rows) || new_it != end(new_visible_rows)) {
+		int row = -1;
+		if (old_it == end(old_visible_rows))
+			row = *new_it++;
+		else if (new_it == end(new_visible_rows))
+			row = *old_it++;
+		else if (*old_it < *new_it)
+			row = *old_it++;
+		else if (*new_it < *old_it)
+			row = *new_it++;
+		else {
+			++old_it;
+			++new_it;
+			continue;
+		}
+
+		QueueSubtitleGridRowRefresh(row);
+	}
+}
+
+void BaseGrid::QueueSubtitleGridRowRefresh(int row_index) {
+	if (full_refresh_on_idle)
+		return;
+
+	refresh_on_idle = true;
+	subtitle_rows_refresh_on_idle.push_back(row_index);
+}
+
+void BaseGrid::QueueVisibleWindowRefresh() {
+	int lines = GetClientSize().GetHeight() / lineHeight + 1;
+	lines = mid(0, lines, GetRows() - yPos);
+	for (int i = 0; i < lines; ++i)
+		QueueSubtitleGridRowRefresh(yPos + i);
+}
+
+void BaseGrid::FlushQueuedSubtitleGridRowRefreshes() {
+	std::sort(begin(subtitle_rows_refresh_on_idle), end(subtitle_rows_refresh_on_idle));
+	subtitle_rows_refresh_on_idle.erase(
+		std::unique(begin(subtitle_rows_refresh_on_idle), end(subtitle_rows_refresh_on_idle)),
+		end(subtitle_rows_refresh_on_idle));
+
+	for (int row : subtitle_rows_refresh_on_idle)
+		RefreshSubtitleGridRow(row);
+
+	subtitle_rows_refresh_on_idle.clear();
 }
 
 void BaseGrid::RefreshAfterScroll(int old_y_pos) {
@@ -713,11 +870,8 @@ void BaseGrid::AdjustScrollbar() {
 	scrollBar->Thaw();
 }
 
-void BaseGrid::RefreshDialogueRow(const AssDialogue *line) {
-	if (!line)
-		return;
-
-	int const visible_row = line->Row - yPos;
+void BaseGrid::RefreshSubtitleGridRow(int row_index) {
+	int const visible_row = row_index - yPos;
 	if (visible_row < 0)
 		return;
 
@@ -749,8 +903,17 @@ void BaseGrid::SetColumnWidths() {
 		width_helper = agi::make_unique<WidthHelper>();
 	width_helper->SetPainter(painter.get());
 
+	aegisub::presentation::VisibleSubtitleRowsRequest request;
+	request.first_row = 0;
+	request.row_count = GetRows();
+	request.column_ids = ProjectionColumnIdsForWidths();
+	auto width_window = aegisub::presentation::BuildSubtitleGridWindow(
+		projection_line_map,
+		request,
+		grid_revision);
+
 	for (auto const& column : columns) {
-		column->UpdateWidth(context, *width_helper);
+		column->UpdateWidth(context, *width_helper, width_window);
 		if (column->Width() && column->RefreshOnTextChange())
 			text_refresh_rects.emplace_back(x, 0, column->Width(), h);
 		x += column->Width();
@@ -761,6 +924,76 @@ void BaseGrid::SetColumnWidths() {
 AssDialogue *BaseGrid::GetDialogue(int n) const {
 	if (static_cast<size_t>(n) >= index_line_map.size()) return nullptr;
 	return index_line_map[n];
+}
+
+aegisub::presentation::SubtitleGridWindow BaseGrid::QueryGridWindow(int first_row, int row_count, std::vector<std::string> column_ids) const {
+	aegisub::presentation::VisibleSubtitleRowsRequest request;
+	request.first_row = first_row;
+	request.row_count = row_count;
+	request.column_ids = std::move(column_ids);
+	return aegisub::presentation::BuildSubtitleGridWindow(
+		projection_line_map,
+		request,
+		grid_revision,
+		[&](AssDialogue const& line) {
+			return ResolveGridRowState(line);
+		});
+}
+
+std::vector<std::string> BaseGrid::ProjectionColumnIdsForPaint(std::vector<char> const& paint_columns) const {
+	std::vector<std::string> column_ids;
+	column_ids.reserve(columns.size());
+
+	for (size_t i : agi::util::range(columns.size())) {
+		if (i >= paint_columns.size() || !paint_columns[i] || columns[i]->Width() <= 0)
+			continue;
+
+		auto const* column_id = columns[i]->ProjectionColumnId();
+		if (std::find(column_ids.begin(), column_ids.end(), column_id) == column_ids.end())
+			column_ids.emplace_back(column_id);
+	}
+
+	if (column_ids.empty())
+		column_ids.emplace_back(aegisub::presentation::SubtitleGridColumnIdLineNumber);
+
+	return column_ids;
+}
+
+std::vector<std::string> BaseGrid::ProjectionColumnIdsForWidths() const {
+	std::vector<std::string> column_ids;
+	column_ids.reserve(columns.size());
+
+	for (auto const& column : columns) {
+		if (!column->Visible())
+			continue;
+
+		auto const* column_id = column->ProjectionWidthColumnId();
+		if (!column_id)
+			continue;
+
+		if (std::find(column_ids.begin(), column_ids.end(), column_id) == column_ids.end())
+			column_ids.emplace_back(column_id);
+	}
+
+	if (column_ids.empty())
+		column_ids.emplace_back(aegisub::presentation::SubtitleGridColumnIdLineNumber);
+
+	return column_ids;
+}
+
+aegisub::presentation::SubtitleGridRowState BaseGrid::ResolveGridRowState(AssDialogue const& line) const {
+	auto core = context->GetCore();
+	auto const& selection = core.selectionController->GetSelectedSet();
+
+	aegisub::presentation::SubtitleGridRowState state;
+	auto const* active_line = core.selectionController->GetActiveLine();
+	state.selected = selection.count(const_cast<AssDialogue*>(&line)) != 0;
+	state.active = active_line == &line;
+	state.visible_at_current_frame =
+		OPT_GET("Subtitle/Grid/Highlight Subtitles in Frame")->GetBool() &&
+		IsDisplayed(&line);
+	state.collides_with_active = active_line && active_line != &line && line.CollidesWith(active_line);
+	return state;
 }
 
 bool BaseGrid::IsDisplayed(const AssDialogue *line) const {

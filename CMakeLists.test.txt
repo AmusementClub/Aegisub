@@ -100,6 +100,8 @@ if(GTEST_FOUND)
         src/video_snapshot_ops.cpp
         src/subtitle_timing_ops.cpp
         src/presentation/subtitle_grid_query_service.cpp
+        src/presentation/subtitle_grid_display.cpp
+        src/presentation/subtitle_grid_diff.cpp
         src/presentation/subtitle_grid_projection.cpp
         tests/tests/cajun.cpp
         tests/tests/calltip_provider.cpp

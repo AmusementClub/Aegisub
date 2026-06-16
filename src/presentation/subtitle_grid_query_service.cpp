@@ -32,7 +32,7 @@ SubtitleGridWindow QueryVisibleSubtitleRowsFromFile(
 	int row_index = 0;
 	for (auto& line : file.Events) {
 		if (row_index >= first_row && rows_remaining > 0) {
-			window.rows.push_back(ProjectSubtitleGridRow(line, row_index, resolve_state(line)));
+			window.rows.push_back(ProjectSubtitleGridRow(line, row_index, resolve_state(line), request.column_ids));
 			--rows_remaining;
 		}
 
@@ -64,6 +64,7 @@ SubtitleGridWindow QueryVisibleSubtitleRowsImpl(
 		SubtitleGridRowState state;
 		state.selected = selected && selected->count(line_ptr) != 0;
 		state.active = &line == active_line;
+		state.collides_with_active = active_line && &line != active_line && line.CollidesWith(active_line);
 		return state;
 	});
 }

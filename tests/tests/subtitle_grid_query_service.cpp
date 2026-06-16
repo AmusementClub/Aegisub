@@ -114,3 +114,28 @@ TEST(subtitle_grid_query_service, const_file_clamps_window_edges) {
 	EXPECT_EQ(2, window.total_rows);
 	EXPECT_EQ(9u, window.revision);
 }
+
+TEST(subtitle_grid_query_service, honors_requested_column_ids) {
+	AssFile file;
+
+	AppendDialogue(file, 0, 300, true, 5, 100, 800, "Alt", "Actor", "fx", "visible text");
+
+	VisibleSubtitleRowsRequest request;
+	request.first_row = 0;
+	request.row_count = 1;
+	request.column_ids = {SubtitleGridColumnIdActor};
+
+	auto window = QueryVisibleSubtitleRows(file, request, 10);
+
+	ASSERT_EQ(1u, window.rows.size());
+	EXPECT_EQ(300, window.rows[0].line_id);
+	EXPECT_EQ(0, window.rows[0].row_index);
+	EXPECT_TRUE(window.rows[0].comment);
+	EXPECT_EQ("Actor", window.rows[0].actor);
+	EXPECT_EQ(0, window.rows[0].layer);
+	EXPECT_EQ(0, window.rows[0].start_ms);
+	EXPECT_EQ(0, window.rows[0].end_ms);
+	EXPECT_TRUE(window.rows[0].style.empty());
+	EXPECT_TRUE(window.rows[0].effect.empty());
+	EXPECT_TRUE(window.rows[0].text.empty());
+}

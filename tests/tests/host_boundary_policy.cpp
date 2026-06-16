@@ -1021,6 +1021,7 @@ TEST(host_boundary_policy, gui_runtime_wx_host_sources_live_in_named_cmake_pack)
 		"src/gui_wx_locale_host.cpp",
 		"src/gui_wx_runtime_entry_host.cpp",
 		"src/gui_wx_runtime_host.cpp",
+		"src/gui_wx_subtitle_format_host.cpp",
 	};
 
 	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES");
@@ -1201,6 +1202,65 @@ TEST(host_boundary_policy, shared_project_media_open_query_sources_live_in_named
 
 	EXPECT_EQ(expected_sources, sources);
 	EXPECT_FALSE(expansion_hits.empty());
+}
+
+TEST(host_boundary_policy, aegisub_core_sources_keep_host_coupled_clusters_out) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+
+	auto core_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_CORE_SOURCES");
+	std::set<std::string> const expected_core_sources = {
+		"src/app_process_config.cpp",
+		"src/ass_io_core.cpp",
+		"src/context_core_session.cpp",
+		"src/ebu_export_settings.cpp",
+		"src/export_framerate_transform.cpp",
+		"src/numeric_utils.cpp",
+		"src/presentation/subtitle_grid_projection.cpp",
+		"src/presentation/subtitle_grid_query_service.cpp",
+		"src/subtitle_format.cpp",
+		"src/subtitle_format_ass.cpp",
+		"src/subtitle_format_ebu3264.cpp",
+		"src/subtitle_format_encore.cpp",
+		"src/subtitle_format_microdvd.cpp",
+		"src/subtitle_format_mkv.cpp",
+		"src/subtitle_format_srt.cpp",
+		"src/subtitle_format_ssa.cpp",
+		"src/subtitle_format_transtation.cpp",
+		"src/subtitle_format_ttxt.cpp",
+		"src/subtitle_format_txt.cpp",
+		"${AEGISUB_SHARED_SELECTION_REQUEST_SOURCES}",
+		"src/ui_services.cpp",
+	};
+	std::set<std::string> const host_coupled_sources = {
+		"${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}",
+		"${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES}",
+		"${AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES}",
+		"src/async_video_provider.cpp",
+		"src/async_video_provider_host.cpp",
+		"src/audio_provider_factory.cpp",
+		"src/automation/automation_live_host.cpp",
+		"src/automation/automation_lua_debug_backend.cpp",
+		"src/context.cpp",
+		"src/project_session_ops.cpp",
+		"src/search_replace_engine.cpp",
+		"src/subs_controller.cpp",
+		"src/subtitles_provider.cpp",
+		"src/subtitles_provider_libass.cpp",
+		"src/subtitles_provider_plugin.cpp",
+		"src/video_controller.cpp",
+		"src/video_property_update.cpp",
+		"src/video_provider_cache.cpp",
+		"src/video_provider_dummy.cpp",
+		"src/video_provider_manager.cpp",
+		"src/video_provider_yuv4mpeg.cpp",
+		"src/video_session_ops.cpp",
+	};
+
+	for (auto const& source : expected_core_sources)
+		EXPECT_NE(core_sources.end(), core_sources.find(source)) << source;
+	for (auto const& source : host_coupled_sources)
+		EXPECT_EQ(core_sources.end(), core_sources.find(source)) << source;
 }
 
 TEST(host_boundary_policy, shared_selection_request_helpers_keep_wx_at_single_choice_adapter_edge) {
@@ -1579,6 +1639,8 @@ TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 		"src/gui_wx_runtime_entry_host.h",
 		"src/gui_wx_runtime_host.cpp",
 		"src/gui_wx_runtime_host.h",
+		"src/gui_wx_subtitle_format_host.cpp",
+		"src/gui_wx_subtitle_format_host.h",
 		"src/watched_file_wx.cpp",
 		"src/wx_message_box_ui_services.h",
 		"src/wx_audio_controller_power_host.cpp",

@@ -37,7 +37,6 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_file_app.h"
-#include "compat.h"
 #include "options.h"
 
 #include <libaegisub/ass/time.h>

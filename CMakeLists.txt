@@ -490,6 +490,7 @@ set(AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES
     src/gui_wx_runtime_entry_host.cpp
     src/gui_wx_locale_host.cpp
     src/gui_wx_runtime_host.cpp
+    src/gui_wx_subtitle_format_host.cpp
 )
 
 set(AEGISUB_GUI_BOOTSTRAP_WX_HOST_SOURCES
@@ -586,6 +587,10 @@ set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES
 # error -- this is the "debt list" the migration works through.
 set(AEGISUB_CORE_SOURCES
     # Translation service (framework-agnostic i18n interface)
+    src/app_process_config.cpp
+    src/context_core_session.cpp
+    src/ebu_export_settings.cpp
+    src/numeric_utils.cpp
     src/translation_service.cpp
     # ASS data model
     src/ass_attachment.cpp
@@ -596,7 +601,8 @@ set(AEGISUB_CORE_SOURCES
     # coupling root, pulling in export_fixstyle/export_framerate/auto4_base).
     src/ass_file.cpp
     src/ass_file_app.cpp
-    # ass_info_service.cpp comes via AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES below.
+    # ass_info_service.cpp stays with the executable while SubtitleFormat
+    # registry and media-inspect services are still host-coupled.
     src/ass_io_core.cpp
     src/ass_karaoke.cpp
     src/ass_override.cpp
@@ -616,8 +622,10 @@ set(AEGISUB_CORE_SOURCES
     src/subtitle_format_ssa.cpp
     src/subtitle_format_transtation.cpp
     src/subtitle_format_ttxt.cpp
-    # subtitle_format_txt.cpp calls ShowPlainTextImportDialog() (a wx dialog);
-    # stays in the exe until routed through an abstract interaction service.
+    src/subtitle_format_txt.cpp
+    ${AEGISUB_SHARED_SELECTION_REQUEST_SOURCES}
+    # GUI-specific subtitle format prompts are registered by the wx host
+    # extension as same-name overrides.
     # Export filters / operations
     # NOTE: export_framerate_transform is wx-free (pure math/vfr), but
     # export_fixstyle/export_framerate/ass_export_filter/ass_exporter expose
@@ -630,7 +638,8 @@ set(AEGISUB_CORE_SOURCES
     src/subtitle_grid_ops.cpp
     src/subtitle_timing_ops.cpp
     # Controllers / context / services
-    src/context.cpp
+    # context.cpp currently also constructs ContextUiState/DialogManager, so it
+    # remains with the wx executable until core/UI construction is split.
     src/initial_line_state.cpp
     src/selection_controller.cpp
     # project.h exposes wxString in ShowError's public signature; migrate to
@@ -638,20 +647,17 @@ set(AEGISUB_CORE_SOURCES
     # project_session_ops / search_replace_engine / secondary_subtitle_session
     # / subs_controller / subs_controller_timer / ui_services stay in core
     # (only light wx pollution in .cpp: wxLog / i18n / wxOK constants).
-    src/project_session_ops.cpp
-    src/search_replace_engine.cpp
+    # project_session_ops/search_replace_engine still format wx-translated
+    # prompts and call UI-facing Context methods.
     # src/secondary_subtitle_session.cpp  ← moved to exe (GUI-only feature: dual subtitle preview)
-    src/subs_controller.cpp
+    # subs_controller is still the GUI document controller: it calls
+    # SubtitleFormat, command dispatch, FrameMain, and wx file watching.
     # src/subs_controller_timer.cpp  ← moved to exe (wx Timer dependency)
     src/ui_services.cpp
     # Video / audio providers (decoding pipeline)
-    src/async_video_provider.cpp
-    src/async_video_provider_host.cpp
-    src/audio_provider_factory.cpp
-    src/video_provider_cache.cpp
-    src/video_provider_dummy.cpp
-    src/video_provider_manager.cpp
-    src/video_provider_yuv4mpeg.cpp
+    # Concrete media providers and async playback runtime still call export
+    # filters, perf tracing, config-heavy provider managers, and GUI lifecycle
+    # hooks. Keep them with the executable until that runtime has typed seams.
     # Audio rendering / analysis / timing
     # NOTE: audio_marker/audio_colorscheme/audio_renderer(+spectrum/waveform)
     # expose wxPen/wxColour/wxDC/wxBitmap/wxArrayString in their public API, and
@@ -668,18 +674,20 @@ set(AEGISUB_CORE_SOURCES
     src/audio_spectrum_fftw3.cpp
     # Video rendering / session ops
     src/video_aspect_ratio_ops.cpp
-    src/video_controller.cpp
+    # video_controller still owns playback/UI coordination and AudioController
+    # coupling; keep pure video ops below in core.
     # src/video_frame.cpp  ← moved to exe (GetImage only used in GUI export/display)
     src/video_navigation_ops.cpp
-    src/video_property_update.cpp
+    # video_property_update currently applies resolution resampling through the
+    # GUI resampler implementation.
     src/video_renderer_backend.cpp
-    src/video_session_ops.cpp
+    # video_session_ops owns AsyncVideoProvider lifetime and stays with the
+    # concrete media runtime.
     src/video_snapshot_ops.cpp
     src/navigation_preview_policy.cpp
     # Subtitle rendering providers
-    src/subtitles_provider.cpp
-    src/subtitles_provider_libass.cpp
-    src/subtitles_provider_plugin.cpp
+    # Concrete subtitle providers remain with the executable while provider
+    # selection/config is still host-owned.
     src/subtitle_overlay_blend.cpp
     # NOTE: auto4_base.h / auto4_lua.h expose wxWindow*/wxDialog*/wxString in
     # their public/protected API (GenerateConfigDialog, CreateWindow, ShowDialog,
@@ -691,8 +699,8 @@ set(AEGISUB_CORE_SOURCES
     src/automation/automation_debug_adapter.cpp
     src/automation/automation_debug_service.cpp
     src/automation/automation_debug_session.cpp
-    src/automation/automation_live_host.cpp
-    src/automation/automation_lua_debug_backend.cpp
+    # live automation/debug backend still depends on auto4 wx progress/dialog
+    # objects; the lower-level debug/session model remains in core.
     src/automation/automation_lua_runtime.cpp
     src/automation/automation_mutation_journal.cpp
     src/automation/automation_runtime_journal.cpp
@@ -715,6 +723,8 @@ set(AEGISUB_CORE_SOURCES
     src/text_file_reader.cpp
     src/text_file_writer.cpp
     src/time_display_mode.cpp
+    src/threaded_ui_timer.cpp
+    src/ui_timer.cpp
     src/vector2d.cpp
     src/version.cpp
     src/watched_file_core.cpp
@@ -722,11 +732,10 @@ set(AEGISUB_CORE_SOURCES
     src/grid_core/grid_layout.cpp
     src/presentation/subtitle_grid_projection.cpp
     src/presentation/subtitle_grid_query_service.cpp
-    # CLI inspect services (shared with headless; no wx)
-    ${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}
-    # Playback/project session services (shared; no wx)
-    ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES}
-    ${AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES}
+    # CLI/media/session services still depend on the concrete Project,
+    # AudioController, SubtitleFormat registry, and headless playback host. They
+    # stay with the wx exe until those dependencies are represented by wx-free
+    # typed interfaces.
     # MKV (common; backends selected below)
     ${AEGISUB_SHARED_MKV_SUBTITLE_COMMON_SOURCES}
 )
@@ -767,15 +776,17 @@ target_link_libraries(aegisub_core PRIVATE luajit)
 # Codec/format deps used by the core providers/renderers (discovered above).
 target_include_directories(aegisub_core PRIVATE ${ass_INCLUDE_DIRS})
 target_link_libraries(aegisub_core PUBLIC ${ass_LIBRARIES})
-target_link_libraries(aegisub_core PRIVATE "Boost::headers" "Boost::container" "Boost::locale")
+target_link_libraries(aegisub_core PRIVATE "Boost::headers" "Boost::container" "Boost::locale" ${AEGISUB_REGEX_TARGET})
 target_link_libraries(aegisub_core PRIVATE pugixml::pugixml)
 aegisub_enable_highway(aegisub_core)
 target_link_libraries(aegisub_core PRIVATE "ZLIB::ZLIB")
 # libplacebo headers are consumed by the placebo renderer sources below (added
 # only when WITH_LIBPLACEBO); keep the include available to the core target.
 if(WITH_LIBPLACEBO AND HAVE_LIBPLACEBO)
+    find_package(OpenGL REQUIRED)
     target_include_directories(aegisub_core PRIVATE ${LibPlacebo_INCLUDE_DIR})
     target_compile_definitions(aegisub_core PRIVATE WITH_LIBPLACEBO WITH_LIBPLACEBO_RUNTIME_LOADING)
+    target_link_libraries(aegisub_core PRIVATE OpenGL::GL)
     target_sources(aegisub_core PRIVATE
         src/video_renderer_placebo_gl.cpp
         src/video_renderer_placebo_runtime.cpp
@@ -828,6 +839,13 @@ add_executable(Aegisub WIN32
     "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config.h"
 
     src/wx_translation_service.cpp
+    src/context.cpp
+    src/async_video_provider.cpp
+    src/async_video_provider_host.cpp
+    src/audio_provider_factory.cpp
+    src/project_session_ops.cpp
+    src/search_replace_engine.cpp
+    src/subs_controller.cpp
     src/command/app.cpp
     src/command/audio.cpp
     src/command/automation.cpp
@@ -896,7 +914,9 @@ add_executable(Aegisub WIN32
     src/grid_column.cpp
     src/grid_column_painter.cpp
     ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_HOST_SOURCES}
-    ${AEGISUB_SHARED_SELECTION_REQUEST_SOURCES}
+    ${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}
+    ${AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES}
+    ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES}
     ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_HOST_SOURCES}
     ${AEGISUB_GUI_BOOTSTRAP_WX_HOST_SOURCES}
     src/help_button.cpp
@@ -933,6 +953,13 @@ add_executable(Aegisub WIN32
     src/video_box.cpp
     src/watched_file_wx.cpp
     src/video_controller_timer.cpp
+    src/video_controller.cpp
+    src/video_property_update.cpp
+    src/video_provider_cache.cpp
+    src/video_provider_dummy.cpp
+    src/video_provider_manager.cpp
+    src/video_provider_yuv4mpeg.cpp
+    src/video_session_ops.cpp
     src/video_display.cpp
     src/video_frame.cpp
     src/video_renderer_factory.cpp
@@ -969,6 +996,8 @@ add_executable(Aegisub WIN32
     src/auto4_lua_assfile.cpp
     src/auto4_lua_dialog.cpp
     src/auto4_lua_progresssink.cpp
+    src/automation/automation_live_host.cpp
+    src/automation/automation_lua_debug_backend.cpp
     # Controllers with wx in public API
     src/project.cpp
     src/text_selection_controller.cpp
@@ -976,8 +1005,9 @@ add_executable(Aegisub WIN32
     # spline cluster (depends on VisualToolBase)
     src/spline.cpp
     src/spline_curve.cpp
-    # subtitle format that pops a wx import dialog
-    src/subtitle_format_txt.cpp
+    src/subtitles_provider.cpp
+    src/subtitles_provider_libass.cpp
+    src/subtitles_provider_plugin.cpp
     ${AEGISUB_SHARED_EXE_ENTRY_SOURCES}
     ${AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES}
 )
@@ -995,17 +1025,17 @@ target_compile_features(Aegisub PRIVATE cxx_std_20)
 target_include_directories(Aegisub PRIVATE src)
 target_include_directories(Aegisub PRIVATE vendor)
 option(AEGISUB_MATROSKA_PARSING "Enable MKV subtitle parsing via libebml/libmatroska" ON)
-# MKV common backend lives in aegisub_core; only the platform-selected backend
-# (libmatroska or legacy) is added to the exe here.
+# MKV subtitle import is a core format capability; the selected backend is kept
+# in aegisub_core so GUI/headless hosts share the same parser.
 if(AEGISUB_MATROSKA_PARSING)
     find_package(EBML REQUIRED CONFIG)
     find_package(Matroska REQUIRED CONFIG)
-    target_link_libraries(Aegisub PRIVATE "EBML::ebml" "Matroska::matroska")
-    target_compile_definitions(Aegisub PRIVATE AEGISUB_MATROSKA_PARSING=1)
-    target_sources(Aegisub PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_LIBMATROSKA_BACKEND_SOURCES})
+    target_link_libraries(aegisub_core PRIVATE "EBML::ebml" "Matroska::matroska")
+    target_compile_definitions(aegisub_core PRIVATE AEGISUB_MATROSKA_PARSING=1)
+    target_sources(aegisub_core PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_LIBMATROSKA_BACKEND_SOURCES})
 else()
-    target_compile_definitions(Aegisub PRIVATE AEGISUB_MATROSKA_PARSING=0)
-    target_sources(Aegisub PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_LEGACY_BACKEND_SOURCES})
+    target_compile_definitions(aegisub_core PRIVATE AEGISUB_MATROSKA_PARSING=0)
+    target_sources(aegisub_core PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_LEGACY_BACKEND_SOURCES})
 endif()
 option(AEGISUB_USE_STRINGZILLA "Use StringZilla in selected string-heavy code paths" ON)
 if(AEGISUB_USE_STRINGZILLA)
@@ -1082,11 +1112,16 @@ else()
 endif()
 
 if(WIN32)
+    target_sources(aegisub_core PRIVATE src/font_file_lister_gdi.cpp src/font_file_lister_dwrite.cpp)
+    target_link_libraries(aegisub_core PRIVATE Usp10 dwrite Version)
     target_sources(Aegisub PRIVATE src/font_file_lister_gdi.cpp src/font_file_lister_dwrite.cpp)
 elseif(APPLE)
+    target_sources(aegisub_core PRIVATE src/font_file_lister_coretext.mm)
     target_sources(Aegisub PRIVATE src/font_file_lister_coretext.mm)
 else()
     find_package(Fontconfig REQUIRED)
+    target_link_libraries(aegisub_core PRIVATE "Fontconfig::Fontconfig")
+    target_sources(aegisub_core PRIVATE src/font_file_lister_fontconfig.cpp)
     target_link_libraries(Aegisub PRIVATE "Fontconfig::Fontconfig")
     target_sources(Aegisub PRIVATE src/font_file_lister_fontconfig.cpp)
 endif()

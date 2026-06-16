@@ -21,7 +21,7 @@
 
 #include "vector2d.h"
 
-#include "utils.h"
+#include "numeric_utils.h"
 
 #include <libaegisub/format.h>
 

@@ -1,33 +1,12 @@
-// Copyright (c) 2026, Aegisub Project
-//
-// Permission to use, copy, modify, and distribute this software for any
-// purpose with or without fee is hereby granted, provided that the above
-// copyright notice and this permission notice appear in all copies.
-//
-// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
-// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
-// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
-// ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
-// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
-// ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
-// OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
-//
-// Aegisub Project http://www.aegisub.org/
-
-/// @file mkv_wrap_libmatroska.cpp
-/// @brief High-level interface for obtaining various data from Matroska files
-/// @ingroup video_input
-///
-
 #include "mkv_wrap.h"
 
 #include "ass_file.h"
 #include "ass_file_app.h"
 #include "ass_parser.h"
-#include "compat.h"
 #include "mkv_wrap_common.h"
 #include "options.h"
 #include "track_choice.h"
+#include "translation_service.h"
 #include "transient_font_set.h"
 #include "ui_services.h"
 
@@ -960,7 +939,9 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 	std::string error;
 
 	auto runner_factory = background_runner_factory ? std::move(background_runner_factory) : std::make_shared<agi::InlineBackgroundRunnerFactory>();
-	auto runner = runner_factory->Create(from_wx(_("Parsing Matroska")), from_wx(_("Reading subtitles from Matroska file.")));
+	auto runner = runner_factory->Create(
+		_("Parsing Matroska"),
+		_("Reading subtitles from Matroska file."));
 	runner->Run([&](agi::ProgressSink *ps) {
 		try {
 			import_track(filename, *selected_track, scan.segment_timecode_scale, ps, lines, transient_fonts);

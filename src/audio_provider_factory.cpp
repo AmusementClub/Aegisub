@@ -20,7 +20,6 @@
 #include "options.h"
 #include "translation_service.h"
 #include "ui_services.h"
-#include "utils.h"
 #ifdef WITH_LSMASNATIVE
 #include "lsmas_native_api.h"
 #endif

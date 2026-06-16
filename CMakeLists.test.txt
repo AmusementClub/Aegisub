@@ -71,6 +71,7 @@ if(GTEST_FOUND)
         src/locale_pick.cpp
         src/mkv_wrap_common.cpp
         libaegisub/common/native_library.cpp
+        src/numeric_utils.cpp
         src/perf_trace.cpp
         src/resolution_resampler.cpp
         src/text_file_writer.cpp

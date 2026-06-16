@@ -36,7 +36,6 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
-#include "compat.h"
 #include "options.h"
 #include "subtitle_fps_choice.h"
 #include "subtitle_format_ass.h"
@@ -222,14 +221,26 @@ void SubtitleFormat::LoadFormats() {
 		formats.emplace_back(agi::make_unique<AssSubtitleFormat>());
 		formats.emplace_back(agi::make_unique<Ebu3264SubtitleFormat>());
 		formats.emplace_back(agi::make_unique<EncoreSubtitleFormat>());
-		formats.emplace_back(agi::make_unique<MKVSubtitleFormat>());
 		formats.emplace_back(agi::make_unique<MicroDVDSubtitleFormat>());
+		formats.emplace_back(agi::make_unique<MKVSubtitleFormat>());
 		formats.emplace_back(agi::make_unique<SRTSubtitleFormat>());
 		formats.emplace_back(agi::make_unique<SsaSubtitleFormat>());
 		formats.emplace_back(agi::make_unique<TTXTSubtitleFormat>());
 		formats.emplace_back(agi::make_unique<TXTSubtitleFormat>());
 		formats.emplace_back(agi::make_unique<TranStationSubtitleFormat>());
 	}
+}
+
+void SubtitleFormat::RegisterFormat(std::unique_ptr<SubtitleFormat> format) {
+	LoadFormats();
+	auto const& name = format->GetName();
+	auto duplicate = std::find_if(formats.begin(), formats.end(), [&](std::unique_ptr<SubtitleFormat> const& existing) {
+		return existing->GetName() == name;
+	});
+	if (duplicate == formats.end())
+		formats.emplace_back(std::move(format));
+	else
+		*duplicate = std::move(format);
 }
 
 template<class Cont, class Pred>
@@ -269,5 +280,5 @@ std::string SubtitleFormat::GetWildcards(int mode) {
 		final += "|" + format->GetName() + " (" + agi::util::strings::join(cur, ",") + ")|" + agi::util::strings::join(cur, ";");
 	}
 
-	return TranslationContext::Get().Translate("All Supported Formats") + " (" + agi::util::strings::join(all, ",") + ")|" + agi::util::strings::join(all, ";") + final;
+	return _("All Supported Formats") + " (" + agi::util::strings::join(all, ",") + ")|" + agi::util::strings::join(all, ";") + final;
 }

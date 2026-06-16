@@ -37,10 +37,10 @@
 #include "ass_file.h"
 #include "ass_file_app.h"
 #include "ass_parser.h"
-#include "compat.h"
 #include "MatroskaParser.h"
 #include "options.h"
 #include "track_choice.h"
+#include "translation_service.h"
 #include "ui_services.h"
 
 #include <libaegisub/ass/time.h>
@@ -283,7 +283,9 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 
 	auto totalTime = double(segInfo->Duration) / timecodeScale;
 	auto runner_factory = background_runner_factory ? std::move(background_runner_factory) : std::make_shared<agi::InlineBackgroundRunnerFactory>();
-	auto runner = runner_factory->Create(from_wx(_("Parsing Matroska")), from_wx(_("Reading subtitles from Matroska file.")));
+	auto runner = runner_factory->Create(
+		_("Parsing Matroska"),
+		_("Reading subtitles from Matroska file."));
 	runner->Run([&](agi::ProgressSink *ps) { read_subtitles(ps, file, &input, srt, totalTime, &parser); });
 }
 

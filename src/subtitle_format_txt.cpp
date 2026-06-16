@@ -37,7 +37,6 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_file_app.h"
-#include "dialogs.h"
 #include "options.h"
 #include "text_file_reader.h"
 #include "text_file_writer.h"
@@ -67,7 +66,6 @@ bool TXTSubtitleFormat::CanWriteFile(agi::fs::path const& filename) const {
 
 void TXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory>) const {
 	(void)choice_sink;
-	if (!ShowPlainTextImportDialog()) return;
 
 	TextFileReader file(filename, encoding, false);
 

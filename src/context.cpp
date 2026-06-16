@@ -36,54 +36,6 @@
 #include <libaegisub/path.h>
 
 namespace agi {
-ContextCoreSession::ContextCoreSession(Context& context)
-: ass(context.ass)
-, textSelectionController(context.textSelectionController)
-, subsController(context.subsController)
-, project(context.project)
-, local_scripts(context.local_scripts)
-, selectionController(context.selectionController)
-, videoController(context.videoController)
-, audioController(context.audioController)
-, initialLineState(context.initialLineState)
-, search(context.search)
-, path(context.path)
-, statusSink(context.statusSink)
-, notificationSink(context.notificationSink)
-, interactionSink(context.interactionSink)
-, singleChoiceInteractionSink(context.singleChoiceInteractionSink)
-, fileDialogService(context.fileDialogService)
-, videoSourceRequestService(context.videoSourceRequestService)
-, backgroundRunnerFactory(context.backgroundRunnerFactory)
-, projectUiStateSink(context.projectUiStateSink)
-, audioPlayerFactoryService(context.audioPlayerFactoryService)
-, automationBackgroundScriptRunnerFactory(context.automationBackgroundScriptRunnerFactory) {
-}
-
-ConstContextCoreSession::ConstContextCoreSession(Context const& context)
-: ass(context.ass)
-, textSelectionController(context.textSelectionController)
-, subsController(context.subsController)
-, project(context.project)
-, local_scripts(context.local_scripts)
-, selectionController(context.selectionController)
-, videoController(context.videoController)
-, audioController(context.audioController)
-, initialLineState(context.initialLineState)
-, search(context.search)
-, path(context.path)
-, statusSink(context.statusSink)
-, notificationSink(context.notificationSink)
-, interactionSink(context.interactionSink)
-, singleChoiceInteractionSink(context.singleChoiceInteractionSink)
-, fileDialogService(context.fileDialogService)
-, videoSourceRequestService(context.videoSourceRequestService)
-, backgroundRunnerFactory(context.backgroundRunnerFactory)
-, projectUiStateSink(context.projectUiStateSink)
-, audioPlayerFactoryService(context.audioPlayerFactoryService)
-, automationBackgroundScriptRunnerFactory(context.automationBackgroundScriptRunnerFactory) {
-}
-
 ContextUiState::ContextUiState()
 : dialog(make_unique<DialogManager>()) {
 }

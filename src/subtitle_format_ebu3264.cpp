@@ -26,11 +26,7 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_style.h"
-#include "compat.h"
-#include "dialog_export_ebu3264.h"
-#include "format.h"
-#include "options.h"
-#include "text_file_writer.h"
+#include "translation_service.h"
 
 #include <libaegisub/charset_conv.h>
 #include <libaegisub/exception.h>
@@ -38,8 +34,19 @@
 #include <libaegisub/line_wrap.h>
 #include <libaegisub/string_utils.h>
 
+#include <cstdarg>
+
 namespace
 {
+	std::string FormatSingleStringPlaceholder(std::string message, std::string const& value)
+	{
+		auto const placeholder = message.find("%s");
+		if (placeholder == std::string::npos)
+			return message + " " + value;
+		message.replace(placeholder, 2, value);
+		return message;
+	}
+
 #pragma pack(push, 1)
 	/// General Subtitle Information block as it appears in the file
 	struct BlockGSI
@@ -391,7 +398,10 @@ namespace
 			else if (!imline.CheckLineLengths(export_settings.max_line_length))
 			{
 				if (export_settings.line_wrapping_mode == EbuExportSettings::AbortOverLength)
-					throw Ebu3264SubtitleFormat::ConversionFailed(agi::format(_("Line over maximum length: %s"), line.Text));
+					throw Ebu3264SubtitleFormat::ConversionFailed(
+						FormatSingleStringPlaceholder(
+							_("Line over maximum length: %s"),
+							line.Text.get()));
 				else // skip over-long lines
 					subs_list.pop_back();
 			}
@@ -597,16 +607,6 @@ namespace
 		return gsi;
 	}
 
-	EbuExportSettings get_export_config(wxWindow *parent)
-	{
-		EbuExportSettings s("Subtitle Format/EBU STL");
-		auto configured = PromptForEbuExportSettings(parent, s);
-		if (!configured)
-			throw agi::UserCancelException("EBU/STL export");
-		configured->Save();
-		return *configured;
-	}
-
 } // namespace {
 
 Ebu3264SubtitleFormat::Ebu3264SubtitleFormat()
@@ -614,16 +614,22 @@ Ebu3264SubtitleFormat::Ebu3264SubtitleFormat()
 {
 }
 
+std::optional<EbuExportSettings> Ebu3264SubtitleFormat::GetExportSettings() const {
+	return EbuExportSettings("Subtitle Format/EBU STL");
+}
+
 void Ebu3264SubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const&, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const
 {
 	(void)choice_sink;
-	// collect data from user
-	EbuExportSettings export_settings = get_export_config(nullptr);
+	auto export_settings = GetExportSettings();
+	if (!export_settings)
+		throw agi::UserCancelException("EBU/STL export");
+
 	AssFile copy(*src);
 
-	std::vector<EbuSubtitle> subs_list = convert_subtitles(copy, export_settings);
-	std::vector<BlockTTI> tti = create_blocks(subs_list, export_settings);
-	BlockGSI gsi = create_header(copy, export_settings);
+	std::vector<EbuSubtitle> subs_list = convert_subtitles(copy, *export_settings);
+	std::vector<BlockTTI> tti = create_blocks(subs_list, *export_settings);
+	BlockGSI gsi = create_header(copy, *export_settings);
 
 	BlockTTI &block0 = tti.front();
 	fieldprintf(gsi.tcf, 8, "%02u%02u%02u%02u", (unsigned int)block0.tci.h, (unsigned int)block0.tci.m, (unsigned int)block0.tci.s, (unsigned int)block0.tci.f);

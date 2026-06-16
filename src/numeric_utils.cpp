@@ -1,4 +1,4 @@
-// Copyright (c) 2006, Rodrigo Braz Monteiro
+// Copyright (c) 2005-2006, Rodrigo Braz Monteiro
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -27,23 +27,14 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
-/// @file subtitle_format_txt.h
-/// @see subtitle_format_txt.cpp
-/// @ingroup subtitle_io
-///
+#include "numeric_utils.h"
 
-#include "subtitle_format.h"
+#include <libaegisub/format.h>
 
-class TXTSubtitleFormat : public SubtitleFormat {
-public:
-	TXTSubtitleFormat();
-	std::vector<std::string> GetReadWildcards() const override;
-	std::vector<std::string> GetWriteWildcards() const override;
-
-	// TXT format supports so little that it should always require an export
-	bool CanSave(const AssFile*) const override { return false; }
-
-	bool CanWriteFile(agi::fs::path const& filename) const override;
-	void ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& forceEncoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory) const override;
-	void WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const override;
-};
+std::string float_to_string(double val) {
+	std::string s = agi::format("%.3f", val);
+	size_t pos = s.find_last_not_of("0");
+	if (pos != s.find(".")) ++pos;
+	s.erase(begin(s) + pos, end(s));
+	return s;
+}

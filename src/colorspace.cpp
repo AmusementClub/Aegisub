@@ -33,7 +33,7 @@
 ///
 
 #include "colorspace.h"
-#include "utils.h"
+#include "numeric_utils.h"
 
 static inline unsigned int clip_colorval(int val)
 {

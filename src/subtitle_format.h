@@ -130,6 +130,8 @@ public:
 	static const SubtitleFormat *GetReader(agi::fs::path const& filename, std::string const& encoding);
 	/// Get a subtitle format that can write the given file or nullptr if none can
 	static const SubtitleFormat *GetWriter(agi::fs::path const& filename);
+	/// Register an additional subtitle format supplied by the active host.
+	static void RegisterFormat(std::unique_ptr<SubtitleFormat> format);
 	/// Initialize subtitle formats
 	static void LoadFormats();
 };

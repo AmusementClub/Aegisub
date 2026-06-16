@@ -82,14 +82,6 @@ wxString PrettySize(int bytes) {
 	return agi::wxformat(fmt, size) + wxS(" ") + suffix[i];
 }
 
-std::string float_to_string(double val) {
-	std::string s = agi::format("%.3f", val);
-	size_t pos = s.find_last_not_of("0");
-	if (pos != s.find(".")) ++pos;
-	s.erase(begin(s) + pos, end(s));
-	return s;
-}
-
 int SmallestPowerOf2(int x) {
 	x--;
 	x |= (x >> 1);

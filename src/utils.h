@@ -31,6 +31,8 @@
 
 #include <libaegisub/fs_fwd.h>
 
+#include "numeric_utils.h"
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -42,8 +44,6 @@ class wxMouseEvent;
 class wxWindow;
 
 wxString PrettySize(int bytes);
-
-std::string float_to_string(double val);
 
 /// @brief Get the smallest power of two that is greater or equal to x
 ///
@@ -84,15 +84,6 @@ void CleanCache(
 	uint64_t max_size,
 	uint64_t max_files = -1,
 	uint64_t preserve_recent_seconds = 0);
-
-/// @brief Templated abs() function
-template <typename T> T tabs(T x) { return x < 0 ? -x : x; }
-
-/// Get the middle value of a, b, and c (i.e. clamp b to [a,c])
-/// @precondition a <= c
-template<typename T> inline T mid(T a, T b, T c) {
-	return a > b ? a : (b > c ? c : b);
-}
 
 /// Get the text contents of the clipboard, or empty string on failure
 std::string GetClipboard();

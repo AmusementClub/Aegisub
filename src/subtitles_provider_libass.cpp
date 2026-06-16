@@ -34,7 +34,6 @@
 
 #include "subtitles_provider_libass.h"
 
-#include "compat.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "ready_flag.h"
 #include "subtitle_overlay_blend.h"
@@ -134,8 +133,8 @@ class LibassSubtitlesProvider final : public SubtitlesProvider {
 				}
 
 				br->Run([=](agi::ProgressSink *ps) {
-					ps->SetTitle(TranslationContext::Get().Translate("Updating font index"));
-					ps->SetMessage(TranslationContext::Get().Translate("This may take several minutes"));
+					ps->SetTitle(_("Updating font index"));
+					ps->SetMessage(_("This may take several minutes"));
 					ps->SetIndeterminate();
 					shared->ready.Wait();
 				});

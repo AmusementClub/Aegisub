@@ -77,7 +77,11 @@ public:
 // Convenience functions for aegisub_core.
 // wx-based translation adapters define AEGISUB_TRANSLATION_SERVICE_NO_SHORTHANDS
 // before including this header so they can use the platform translation macros.
-#if !defined(AEGISUB_TRANSLATION_SERVICE_NO_SHORTHANDS) && !defined(_)
+#if !defined(AEGISUB_TRANSLATION_SERVICE_NO_SHORTHANDS)
+	#ifdef _
+		#undef _
+	#endif
+
 	/// Translate a message ID (aegisub_core only).
 	inline std::string _(std::string const& msgid) {
 		return TranslationContext::Get().Translate(msgid);

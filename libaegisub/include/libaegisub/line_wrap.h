@@ -16,7 +16,7 @@
 /// @brief Generic paragraph formatting logic
 
 #include <algorithm>
-#include <climits>
+#include <limits>
 #include <numeric>
 #include <vector>
 
@@ -42,12 +42,13 @@ namespace agi {
 
 		template<class StartCont, class Iter, class WidthCont>
 		inline void get_line_widths(StartCont const& line_start_points, Iter begin, Iter end, WidthCont &line_widths) {
+			using Width = typename WidthCont::value_type;
 			size_t line_start = 0;
 			for (auto & line_start_point : line_start_points) {
-				line_widths.push_back(std::accumulate(begin + line_start, begin + line_start_point, 0));
+				line_widths.push_back(std::accumulate(begin + line_start, begin + line_start_point, Width{}));
 				line_start = line_start_point;
 			}
-			line_widths.push_back(std::accumulate(begin + line_start, end, 0));
+			line_widths.push_back(std::accumulate(begin + line_start, end, Width{}));
 		}
 
 		// For first-longer and last-longer, bubble words forward/backwards when
@@ -85,11 +86,11 @@ namespace agi {
 		void break_greedy(StartCont &ret, WidthCont const& widths, Width max_width) {
 			// Simple greedy matching that just starts a new line every time the
 			// max length is exceeded
-			Width cur_line_width = 0;
+			Width cur_line_width = Width{};
 			for (size_t i = 0; i < widths.size(); ++i) {
 				if (cur_line_width > 0 && widths[i] + cur_line_width > max_width) {
 					ret.push_back(i);
-					cur_line_width = 0;
+					cur_line_width = Width{};
 				}
 
 				cur_line_width += widths[i];
@@ -114,7 +115,7 @@ namespace agi {
 			return ret;
 
 		// Check if any wrapping is actually needed
-		Width total_width = std::accumulate(widths.begin(), widths.end(), 0);
+		Width total_width = std::accumulate(widths.begin(), widths.end(), Width{});
 		if (total_width <= max_width)
 			return ret;
 
@@ -127,14 +128,14 @@ namespace agi {
 		size_t num_words = distance(widths.begin(), widths.end());
 
 		// the cost of the optimal arrangement of words [0..i]
-		std::vector<Width> optimal_costs(num_words, INT_MAX);
+		std::vector<Width> optimal_costs(num_words, std::numeric_limits<Width>::max());
 
 		// the optimal start word for a line ending at i
-		std::vector<size_t> line_starts(num_words, INT_MAX);
+		std::vector<size_t> line_starts(num_words, std::numeric_limits<size_t>::max());
 
 		// O(num_words * min(num_words, max_width))
 		for (size_t end_word = 0; end_word < num_words; ++end_word) {
-			Width current_line_width = 0;
+			Width current_line_width = Width{};
 			for (int start_word = end_word; start_word >= 0; --start_word) {
 				current_line_width += widths[start_word];
 

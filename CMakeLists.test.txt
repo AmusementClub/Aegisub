@@ -362,24 +362,45 @@ if(WITH_LIBPLACEBO)
     endif()
 endif()
 
-if(WIN32)
-    if(WITH_AVISYNTH)
-        add_executable(avisynth-autoload-runtime-smoke EXCLUDE_FROM_ALL
-            tests/smoke/avisynth_autoload_runtime_smoke.cpp
-            tests/support/src_config_stubs.cpp
-            src/avisynth_legacy_path.cpp
-            src/avisynth_wrap.cpp
-            libaegisub/common/native_library.cpp
-        )
-        target_compile_definitions(avisynth-autoload-runtime-smoke PRIVATE
-            CMAKE_BUILD
-            WITH_AVISYNTH
-            NOMINMAX
-        )
-        target_include_directories(avisynth-autoload-runtime-smoke PRIVATE ${AviSynth_INCLUDE_DIR})
-        target_link_libraries(avisynth-autoload-runtime-smoke PRIVATE libaegisub Psapi)
+if(WITH_AVISYNTH)
+    add_executable(avisynth-autoload-runtime-smoke EXCLUDE_FROM_ALL
+        tests/smoke/avisynth_autoload_runtime_smoke.cpp
+        tests/support/src_config_stubs.cpp
+        src/avisynth_legacy_path.cpp
+        src/avisynth_wrap.cpp
+        libaegisub/common/native_library.cpp
+    )
+    target_compile_definitions(avisynth-autoload-runtime-smoke PRIVATE
+        CMAKE_BUILD
+        WITH_AVISYNTH
+        NOMINMAX
+    )
+    target_include_directories(avisynth-autoload-runtime-smoke PRIVATE ${AviSynth_INCLUDE_DIR})
+    target_link_libraries(avisynth-autoload-runtime-smoke PRIVATE libaegisub)
+    if(WIN32)
+        target_link_libraries(avisynth-autoload-runtime-smoke PRIVATE Psapi)
     endif()
 
+    add_executable(avisynth-provider-registration-smoke EXCLUDE_FROM_ALL
+        tests/smoke/avisynth_provider_registration_smoke.cpp
+        src/audio_provider_avs.cpp
+        src/avisynth_legacy_path.cpp
+        src/avisynth_wrap.cpp
+        src/video_provider_avs.cpp
+    )
+    target_compile_definitions(avisynth-provider-registration-smoke PRIVATE
+        CMAKE_BUILD
+        WITH_AVISYNTH
+        NOMINMAX
+    )
+    target_include_directories(avisynth-provider-registration-smoke PRIVATE ${AviSynth_INCLUDE_DIR})
+    target_link_libraries(avisynth-provider-registration-smoke PRIVATE aegisub_core libaegisub)
+    if(WIN32)
+        target_link_libraries(avisynth-provider-registration-smoke PRIVATE Vfw32 Psapi)
+    endif()
+endif()
+
+if(WIN32)
     add_executable(opengl-overlay-smoke EXCLUDE_FROM_ALL
         tests/smoke/opengl_overlay_smoke.cpp
         src/video_renderer_opengl.cpp

@@ -39,9 +39,7 @@
 #include "avisynth.h"
 #include "avisynth_path_helper.h"
 #include "avisynth_wrap.h"
-#include "audio_controller.h"
 #include "options.h"
-#include "utils.h"
 
 #include <libaegisub/access.h>
 #include <libaegisub/charset_conv.h>

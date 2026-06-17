@@ -1241,11 +1241,10 @@ if(WITH_ALSA)
     target_sources(Aegisub PRIVATE src/audio_player_alsa.cpp)
 endif()
 
-# AviSynth: option/find_package/HAVE_AVISYNTH live in the shared discovery
-# block above. The provider sources stay in the exe (they include avisynth.h
-# which pulls in <windows.h>/<vfw.h>, which is incompatible with core's
-# wx-free PCH). The exe wires the sources, the Vfw32 link, and the AVISYNTH_SO
-# define.
+# AviSynth+: option/find_package/HAVE_AVISYNTH live in the shared discovery
+# block above. The provider sources stay in the exe because the runtime wrapper
+# is host-registered at the provider-manager edge; only Windows needs Vfw32 for
+# legacy AVI keyframe probing.
 if(WITH_AVISYNTH AND HAVE_AVISYNTH)
     target_compile_definitions(Aegisub PRIVATE WITH_AVISYNTH)
     target_include_directories(Aegisub PRIVATE "${AviSynth_INCLUDE_DIR}")

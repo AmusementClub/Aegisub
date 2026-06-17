@@ -26,6 +26,16 @@
 #endif
 
 namespace {
+#ifdef _WIN32
+std::string CurrentCodePage() {
+	return std::to_string(GetACP());
+}
+#else
+std::string CurrentCodePage() {
+	return "non-windows";
+}
+#endif
+
 std::mutex main_queue_mutex;
 std::deque<agi::dispatch::Thunk> main_queue;
 std::thread::id main_thread_id;
@@ -216,7 +226,7 @@ int main(int argc, char **argv) {
 	auto const executable_dir = executable.parent_path();
 	ScopedLogging logging(executable_dir / "avisynth-smoke-logs");
 
-	std::cout << "current_acp=" << GetACP() << "\n";
+	std::cout << "current_acp=" << CurrentCodePage() << "\n";
 	std::cout << "session_log_file=" << agi::fs::PathToString(agi::log::GetSessionLogFile()) << "\n";
 
 	auto const workspace_root = executable_dir / "avisynth-autoload-runtime-smoke-work";

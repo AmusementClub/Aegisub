@@ -152,7 +152,17 @@ constexpr char kRuntimesSearchDir[] = "runtimes";
 
 	NativeHandle TryLoadLibrary(std::string const& candidate) {
 #ifdef _WIN32
-		return LoadLibraryW(agi::charset::ConvertW(candidate).c_str());
+		auto wide_candidate = agi::charset::ConvertW(candidate);
+		auto path = stdfs::path(wide_candidate);
+		if (path.has_parent_path()) {
+			auto handle = LoadLibraryExW(
+				wide_candidate.c_str(),
+				nullptr,
+				LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+			if (handle)
+				return handle;
+		}
+		return LoadLibraryW(wide_candidate.c_str());
 #else
 		return dlopen(candidate.c_str(), RTLD_LAZY | RTLD_LOCAL);
 #endif

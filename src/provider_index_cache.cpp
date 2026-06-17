@@ -1,8 +1,7 @@
 #include "provider_index_cache.h"
 
-#include "compat.h"
+#include "cache_cleanup.h"
 #include "options.h"
-#include "utils.h"
 
 #include <libaegisub/crc32.h>
 #include <libaegisub/fs.h>

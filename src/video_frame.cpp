@@ -14,7 +14,7 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
-#include "video_frame.h"
+#include "video_frame_wx.h"
 
 #if BOOST_VERSION >= 106900
 #include <boost/gil.hpp>

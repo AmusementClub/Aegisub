@@ -21,7 +21,7 @@
 #include "subtitle_format.h"
 #include "ui_services.h"
 #include "video_controller.h"
-#include "video_frame.h"
+#include "video_frame_wx.h"
 #include "video_provider_dummy.h"
 #include "watched_file.h"
 

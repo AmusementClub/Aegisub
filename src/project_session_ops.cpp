@@ -1,10 +1,11 @@
 #include "project_session_ops.h"
 
-#include "format.h"
+#include "translation_service.h"
 
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/format.h>
 #include <libaegisub/format_path.h>
 
 #include <exception>
@@ -23,6 +24,11 @@ void remove_mru_if_requested(char const* category,
 
 void show_missing_subtitle_path_error(agi::fs::path const& path, agi::NotificationSink& notification_sink) {
 	notification_sink.ShowError(kErrorLoadingFileTitle, agi::format("%s not found.", path));
+}
+
+template<typename... Args>
+std::string format_translated(std::string const& fmt, Args&&... args) {
+	return agi::format(fmt.c_str(), std::forward<Args>(args)...);
 }
 
 template<typename SaveAction>
@@ -122,7 +128,7 @@ bool HandleUnreadableAudioOpenPath(agi::fs::path const& path,
                                    agi::NotificationSink& notification_sink,
                                    MruRemoveAction const& remove_mru) {
 	remove_mru_if_requested("Audio", path, remove_mru);
-	notification_sink.ShowError(kErrorLoadingFileTitle, agi::format(_("The audio file was not found: %s"), access_error));
+	notification_sink.ShowError(kErrorLoadingFileTitle, format_translated(_("The audio file was not found: %s"), access_error));
 	return false;
 }
 
@@ -146,7 +152,7 @@ std::unique_ptr<agi::AudioProvider> CreateAudioProviderWithErrorHandling(agi::fs
 
 	case media_open::OpenStatus::FileNotFound:
 		remove_mru_if_requested("Audio", path, remove_mru);
-		notification_sink.ShowError(kErrorLoadingFileTitle, agi::format(_("The audio file was not found: %s"), opened.result.error));
+		notification_sink.ShowError(kErrorLoadingFileTitle, format_translated(_("The audio file was not found: %s"), opened.result.error));
 		break;
 
 	case media_open::OpenStatus::NoMedia:
@@ -158,7 +164,7 @@ std::unique_ptr<agi::AudioProvider> CreateAudioProviderWithErrorHandling(agi::fs
 		else {
 			notification_sink.ShowError(
 				kErrorLoadingFileTitle,
-				agi::format(_("None of the available audio providers recognised the selected file as containing audio data.\n\nThe following providers were tried:\n%s"), opened.result.error));
+				format_translated(_("None of the available audio providers recognised the selected file as containing audio data.\n\nThe following providers were tried:\n%s"), opened.result.error));
 		}
 		break;
 
@@ -166,7 +172,7 @@ std::unique_ptr<agi::AudioProvider> CreateAudioProviderWithErrorHandling(agi::fs
 		remove_mru_if_requested("Audio", path, remove_mru);
 		notification_sink.ShowError(
 			kErrorLoadingFileTitle,
-			agi::format(_("None of the available audio providers have a codec available to handle the selected file.\n\nThe following providers were tried:\n%s"), opened.result.error));
+			format_translated(_("None of the available audio providers have a codec available to handle the selected file.\n\nThe following providers were tried:\n%s"), opened.result.error));
 		break;
 
 	case media_open::OpenStatus::FileSystemError:

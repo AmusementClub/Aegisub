@@ -1,11 +1,10 @@
 #pragma once
 
-#pragma once
-
 #include <optional>
 #include <string>
 
 class AssFile;
+class AsyncVideoProvider;
 enum class ScriptResolutionType : int;
 enum class ResampleARMode : int;
 
@@ -51,6 +50,9 @@ struct VideoPropertyUpdatePlan {
 	}
 };
 
+VideoPropertyUpdateInput BuildVideoPropertyUpdateInput(AssFile const* file,
+                                                       AsyncVideoProvider const* provider,
+                                                       VideoResolutionMismatchMode mismatch_mode);
 VideoPropertyUpdatePlan PlanVideoPropertyUpdate(VideoPropertyUpdateInput const& input);
 std::optional<VideoResolutionMismatchChoice> ParseVideoResolutionMismatchChoice(int selection, bool aspect_ratio_changed);
 VideoPropertyUpdatePlan ResolveVideoResolutionMismatchChoice(VideoPropertyUpdatePlan plan, VideoResolutionMismatchChoice choice);

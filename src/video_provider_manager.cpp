@@ -16,17 +16,16 @@
 
 #include "video_provider_manager.h"
 
-#include "factory_manager.h"
 #include "include/aegisub/video_provider.h"
 #include "options.h"
+#include "provider_catalog_builder.h"
+#include "provider_factory_entry.h"
+#include "provider_open_policy.h"
 #ifdef WITH_LSMASNATIVE
 #include "lsmas_native_api.h"
 #endif
 #ifdef WITH_FFMS2
 #include "ffmpegsource_common.h"
-#endif
-#ifdef WITH_AVISYNTH
-#include "avisynth_wrap.h"
 #endif
 
 #include <libaegisub/exception.h>
@@ -34,27 +33,24 @@
 #include <libaegisub/log.h>
 #include <libaegisub/string_utils.h>
 
+#include <algorithm>
 #include <exception>
+#include <iterator>
+#include <mutex>
+#include <string>
 #include <utility>
 
 std::unique_ptr<VideoProvider> CreateDummyVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
 std::unique_ptr<VideoProvider> CreateYUV4MPEGVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
 std::unique_ptr<VideoProvider> CreateLsmasNativeVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
 std::unique_ptr<VideoProvider> CreateFFmpegSourceVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
-std::unique_ptr<VideoProvider> CreateAvisynthVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
 
 std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoProvider>);
 
 namespace {
 	thread_local aegisub::provider_selection_diagnostics::SelectionReport last_video_provider_selection_report;
 
-	struct factory {
-		const char *name;
-		std::unique_ptr<VideoProvider> (*create)(agi::fs::path const&, std::string const&, agi::BackgroundRunner *, std::shared_ptr<agi::SingleChoiceInteractionSink>);
-		bool (*is_available)();
-		std::string (*availability_error)();
-		bool hidden;
-	};
+	using Factory = VideoProviderFactoryEntry;
 
 	std::unique_ptr<VideoProvider> CreateDummyVideoProviderWithChoice(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink>) {
 		return CreateDummyVideoProvider(filename, colormatrix, br);
@@ -63,12 +59,6 @@ namespace {
 	std::unique_ptr<VideoProvider> CreateYUV4MPEGVideoProviderWithChoice(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink>) {
 		return CreateYUV4MPEGVideoProvider(filename, colormatrix, br);
 	}
-
-#ifdef WITH_AVISYNTH
-	std::unique_ptr<VideoProvider> CreateAvisynthVideoProviderWithChoice(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink>) {
-		return CreateAvisynthVideoProvider(filename, colormatrix, br);
-	}
-#endif
 
 #ifdef WITH_FFMS2
 	bool IsFFmpegSourceAvailable() {
@@ -92,61 +82,7 @@ namespace {
 	}
 #endif
 
-#ifdef WITH_AVISYNTH
-	bool IsAvisynthAvailable() {
-		return avisynth::IsAvailable();
-	}
-
-	std::string GetAvisynthAvailabilityError() {
-		auto err = avisynth::GetLoadError();
-		return err.empty() ? "runtime library is unavailable." : err;
-	}
-#endif
-
-std::string GetAvailabilityError(factory const& provider) {
-	if (!provider.availability_error)
-		return "runtime library is unavailable.";
-
-	try {
-		return provider.availability_error();
-	}
-	catch (agi::Exception const& err) {
-		return err.GetMessage();
-	}
-	catch (std::exception const& err) {
-		return err.what();
-	}
-	catch (...) {
-		return "unknown availability error";
-	}
-}
-
-bool IsProviderAvailable(factory const& provider, std::string& availability_error) {
-	if (!provider.is_available)
-		return true;
-
-	try {
-		if (provider.is_available())
-			return true;
-	}
-	catch (agi::Exception const& err) {
-		availability_error = err.GetMessage();
-		return false;
-	}
-	catch (std::exception const& err) {
-		availability_error = err.what();
-		return false;
-	}
-	catch (...) {
-		availability_error = "unknown availability exception";
-		return false;
-	}
-
-	availability_error = GetAvailabilityError(provider);
-	return false;
-}
-
-	const factory providers[] = {
+	const Factory builtin_providers[] = {
 		{"Dummy", CreateDummyVideoProviderWithChoice, nullptr, nullptr, true},
 		{"YUV4MPEG", CreateYUV4MPEGVideoProviderWithChoice, nullptr, nullptr, true},
 #ifdef WITH_FFMS2
@@ -155,49 +91,50 @@ bool IsProviderAvailable(factory const& provider, std::string& availability_erro
 #ifdef WITH_LSMASNATIVE
 		{"LsmasNative", CreateLsmasNativeVideoProvider, IsLsmasNativeAvailable, GetLsmasNativeAvailabilityError, false},
 #endif
-#ifdef WITH_AVISYNTH
-		{"Avisynth", CreateAvisynthVideoProviderWithChoice, IsAvisynthAvailable, GetAvisynthAvailabilityError, false},
-#endif
 	};
 
-	void RecordAttempt(aegisub::provider_selection_diagnostics::SelectionReport& report,
-	                   char const* provider_name,
-	                   char const* outcome,
-	                   std::string detail = {}) {
-		report.attempts.push_back({provider_name ? provider_name : "", outcome ? outcome : "", std::move(detail)});
+	std::vector<Factory>& RegisteredProviders() {
+		static std::vector<Factory> providers;
+		return providers;
 	}
+
+	std::mutex& RegisteredProvidersMutex() {
+		static std::mutex mutex;
+		return mutex;
+	}
+
+	std::vector<Factory> ProviderFactories() {
+		std::vector<Factory> factories(std::begin(builtin_providers), std::end(builtin_providers));
+		std::lock_guard<std::mutex> lock(RegisteredProvidersMutex());
+		auto const& registered = RegisteredProviders();
+		factories.insert(factories.end(), registered.begin(), registered.end());
+		return factories;
+	}
+}
+
+void RegisterVideoProviderFactory(VideoProviderFactoryEntry factory) {
+	std::lock_guard<std::mutex> lock(RegisteredProvidersMutex());
+	auto& providers = RegisteredProviders();
+	auto name = factory.name ? factory.name : "";
+	auto existing = std::find_if(providers.begin(), providers.end(), [&](auto const& provider) {
+		return name == std::string(provider.name ? provider.name : "");
+	});
+	if (existing == providers.end())
+		providers.push_back(factory);
 }
 
 aegisub::provider_catalog::ProviderCatalog VideoProviderFactory::GetCatalog(std::string const& preferred_provider) {
-	auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(preferred_provider);
-	auto sorted = GetSorted(providers, preferred);
-
-	aegisub::provider_catalog::ProviderCatalog catalog;
-	catalog.kind = aegisub::provider_catalog::ProviderKind::Video;
-	catalog.preferred_provider = preferred;
-	catalog.providers.reserve(sorted.size());
-
-	for (auto const* provider : sorted) {
-		std::string availability_error;
-		bool available = IsProviderAvailable(*provider, availability_error);
-
-		aegisub::provider_catalog::ProviderDescriptor descriptor;
-		descriptor.kind = catalog.kind;
-		descriptor.name = provider->name;
-		descriptor.display_name = provider->name;
-		descriptor.hidden = provider->hidden;
-		descriptor.available = available;
-		descriptor.unavailable_reason = std::move(availability_error);
-		if (!descriptor.hidden && !descriptor.available)
-			descriptor.display_name.append(" (Unavailable)");
-		catalog.providers.push_back(std::move(descriptor));
-	}
-
-	return catalog;
+	auto providers = ProviderFactories();
+	return aegisub::provider_catalog::BuildCatalog(
+		aegisub::provider_catalog::ProviderKind::Video,
+		providers,
+		preferred_provider,
+		aegisub::provider_catalog::DescribeProviderFactoryEntry<VideoProviderCreate>);
 }
 
 std::vector<std::string> VideoProviderFactory::GetClasses() {
-	return ::GetClasses(providers);
+	auto providers = ProviderFactories();
+	return aegisub::provider_catalog::VisibleFactoryNames(providers, aegisub::provider_catalog::DescribeProviderFactoryEntry<VideoProviderCreate>);
 }
 
 std::vector<std::pair<std::string, std::string>> VideoProviderFactory::GetChoices() {
@@ -206,70 +143,85 @@ std::vector<std::pair<std::string, std::string>> VideoProviderFactory::GetChoice
 
 std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
 	auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(OPT_GET("Video/Provider")->GetString());
-	auto sorted = GetSorted(providers, preferred);
+	auto providers = ProviderFactories();
+	auto sorted = aegisub::provider_catalog::SortFactories(providers, preferred, aegisub::provider_catalog::DescribeProviderFactoryEntry<VideoProviderCreate>);
 	aegisub::provider_selection_diagnostics::SelectionReport diagnostics;
 	diagnostics.preferred_provider = preferred;
 	last_video_provider_selection_report = diagnostics;
 
-	bool found = false;
-	bool supported = false;
-	std::string errors;
-	errors.reserve(1024);
+	aegisub::provider_catalog::VideoProviderOpenFailureReport open_failures;
+	open_failures.errors.reserve(1024);
 
 	for (auto factory : sorted) {
 		std::string err;
-		char const* attempt_outcome = "error";
-		if (factory->is_available && !factory->is_available()) {
-			err = factory->availability_error ? factory->availability_error() : "runtime library is unavailable.";
-			errors.append(factory->name);
-			errors.append(": ");
-			errors.append(err);
-			errors.push_back('\n');
-			LOG_D("manager/video/provider") << factory->name << ": " << err;
-			RecordAttempt(diagnostics, factory->name, "unavailable", err);
-			continue;
-		}
 
 		try {
-			auto provider = factory->create(filename, colormatrix, br, choice_sink);
-			if (!provider) {
-				RecordAttempt(diagnostics, factory->name, "returned_null", "provider factory returned null");
+			auto attempt = aegisub::provider_catalog::TryOpenProviderFactory(
+				*factory,
+				aegisub::provider_catalog::DescribeProviderFactoryEntry<VideoProviderCreate>,
+				diagnostics,
+				[&](Factory const& provider_factory) {
+					return provider_factory.create(filename, colormatrix, br, choice_sink);
+				});
+
+			if (attempt.state == aegisub::provider_catalog::ProviderOpenAttemptState::Unavailable) {
+				aegisub::provider_catalog::RecordVideoProviderOpenFailureAttempt(
+					open_failures,
+					diagnostics,
+					factory->name,
+					attempt.unavailable_reason,
+					aegisub::provider_catalog::VideoProviderOpenAttemptFailure::Unavailable);
+				LOG_D("manager/video/provider") << factory->name << ": " << attempt.unavailable_reason;
 				continue;
 			}
-			diagnostics.selected_provider = factory->name;
-			RecordAttempt(diagnostics, factory->name, "opened");
+			if (attempt.state == aegisub::provider_catalog::ProviderOpenAttemptState::ReturnedNull)
+				continue;
+
+			auto provider = std::move(attempt.provider);
 			last_video_provider_selection_report = diagnostics;
 			LOG_I("manager/video/provider") << factory->name << ": opened " << filename;
 			return provider->WantsCaching() ? CreateCacheVideoProvider(std::move(provider)) : std::move(provider);
 		}
 		catch (agi::fs::FileNotFound const&) {
 			err = "file not found.";
-			attempt_outcome = "file_not_found";
 			// Keep trying other providers as this one may just not be able to
 			// open a valid path
+			aegisub::provider_catalog::RecordVideoProviderOpenFailureAttempt(
+				open_failures,
+				diagnostics,
+				factory->name,
+				err,
+				aegisub::provider_catalog::VideoProviderOpenAttemptFailure::FileNotFound);
 		}
 		catch (VideoNotSupported const&) {
-			found = true;
 			err = "video is not in a supported format.";
-			attempt_outcome = "not_supported";
+			aegisub::provider_catalog::RecordVideoProviderOpenFailureAttempt(
+				open_failures,
+				diagnostics,
+				factory->name,
+				err,
+				aegisub::provider_catalog::VideoProviderOpenAttemptFailure::NotSupported);
 		}
 		catch (VideoOpenError const& ex) {
-			supported = true;
 			err = ex.GetMessage();
-			attempt_outcome = "error";
+			aegisub::provider_catalog::RecordVideoProviderOpenFailureAttempt(
+				open_failures,
+				diagnostics,
+				factory->name,
+				err,
+				aegisub::provider_catalog::VideoProviderOpenAttemptFailure::OpenError);
 		}
 		catch (agi::vfr::Error const& ex) {
-			supported = true;
 			err = ex.GetMessage();
-			attempt_outcome = "error";
+			aegisub::provider_catalog::RecordVideoProviderOpenFailureAttempt(
+				open_failures,
+				diagnostics,
+				factory->name,
+				err,
+				aegisub::provider_catalog::VideoProviderOpenAttemptFailure::OpenError);
 		}
 
-		errors.append(factory->name);
-		errors.append(": ");
-		errors.append(err);
-		errors.push_back('\n');
 		LOG_D("manager/video/provider") << factory->name << ": " << err;
-		RecordAttempt(diagnostics, factory->name, attempt_outcome, err);
 	}
 
 	last_video_provider_selection_report = diagnostics;
@@ -279,10 +231,16 @@ std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path c
 	std::string msg = "Could not open ";
 	msg.append(agi::fs::PathToString(filename));
 	msg.append(":\n");
-	msg.append(errors);
+	msg.append(open_failures.errors);
 
-	if (!found) throw agi::fs::FileNotFound(filename);
-	if (!supported) throw VideoNotSupported(msg);
+	switch (aegisub::provider_catalog::FinalVideoProviderOpenFailure(open_failures)) {
+	case aegisub::provider_catalog::VideoProviderOpenFailure::FileNotFound:
+		throw agi::fs::FileNotFound(filename);
+	case aegisub::provider_catalog::VideoProviderOpenFailure::NotSupported:
+		throw VideoNotSupported(msg);
+	case aegisub::provider_catalog::VideoProviderOpenFailure::OpenError:
+		throw VideoOpenError(msg);
+	}
 	throw VideoOpenError(msg);
 }
 

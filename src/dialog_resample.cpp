@@ -15,15 +15,13 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "ass_file.h"
-#include "ass_file_app.h"
-#include "ass_dialogue.h"
-#include "async_video_provider.h"
 #include "compat.h"
 #include "help_button.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "project.h"
+#include "resample_dialog_policy.h"
 #include "resolution_resampler.h"
 #include "validators.h"
 
@@ -46,12 +44,7 @@ struct DialogResample {
 	wxDialog d;
 	agi::Context *c; ///< Project context
 
-	int script_w;
-	int script_h;
-	YCbCrMatrix script_mat;
-	int video_w = 0;
-	int video_h = 0;
-	YCbCrMatrix video_mat;
+	ResampleDialogReference reference;
 
 	wxSpinCtrl *source_x;
 	wxSpinCtrl *source_y;
@@ -96,23 +89,8 @@ DialogResample::DialogResample(agi::Context *c, ResampleSettings &settings)
 	auto core = c->GetCore();
 	d.SetIcon(GETICON(resample_toolbutton_16));
 
-	memset(&settings, 0, sizeof(settings));
-	core.ass->GetResolution(ScriptResolutionType::PlayRes, script_w, script_h);
-	settings.source_x = script_w;
-	settings.source_y = script_h;
-	settings.source_matrix = script_mat = MatrixFromString(core.ass->GetScriptInfo("YCbCr Matrix"));
-
-	if (auto provider = core.project->VideoProvider()) {
-		settings.dest_x = video_w = provider->GetWidth();
-		settings.dest_y = video_h = provider->GetHeight();
-		settings.dest_matrix = video_mat = MatrixFromString(provider->GetRealColorSpace());
-	}
-	else {
-		settings.dest_x = script_w;
-		settings.dest_y = script_h;
-		settings.dest_matrix = script_mat;
-		video_mat = YCbCrMatrix::rgb;
-	}
+	reference = BuildResampleDialogReference(*core.ass, core.project->VideoProvider());
+	InitializeResampleSettings(settings, reference);
 
 	// Create all controls and set validators
 	for (size_t i = 0; i < 4; ++i) {
@@ -219,35 +197,34 @@ DialogResample::DialogResample(agi::Context *c, ResampleSettings &settings)
 }
 
 void DialogResample::SetDestFromVideo(wxCommandEvent &) {
-	dest_x->SetValue(video_w);
-	dest_y->SetValue(video_h);
-	dest_matrix->SetSelection((int)video_mat);
+	dest_x->SetValue(reference.video_w);
+	dest_y->SetValue(reference.video_h);
+	dest_matrix->SetSelection((int)reference.video_matrix);
 }
 
 void DialogResample::SetSourceFromScript(wxCommandEvent&) {
-	source_x->SetValue(script_w);
-	source_y->SetValue(script_h);
-	source_matrix->SetSelection((int)script_mat);
+	source_x->SetValue(reference.script_w);
+	source_y->SetValue(reference.script_h);
+	source_matrix->SetSelection((int)reference.script_matrix);
 }
 
 void DialogResample::UpdateButtons() {
-	auto core = c->GetCore();
-	from_video->Enable(core.project->VideoProvider() &&
-		(dest_x->GetValue() != video_w || dest_y->GetValue() != video_h));
-	from_script->Enable(source_x->GetValue() != script_w || source_y->GetValue() != script_h);
+	ResampleSettings current = {};
+	current.source_x = source_x->GetValue();
+	current.source_y = source_y->GetValue();
+	current.dest_x = dest_x->GetValue();
+	current.dest_y = dest_y->GetValue();
+	current.ar_mode = static_cast<ResampleARMode>(ar_mode->GetSelection());
 
-	auto source_ar = double(source_x->GetValue()) / source_y->GetValue();
-	auto dest_ar = double(dest_x->GetValue()) / dest_y->GetValue();
-	bool ar_changed = std::abs(source_ar - dest_ar) / dest_ar > .01;
-
-	ar_mode->Enable(ar_changed);
-
-	bool margins = ar_changed && ar_mode->GetSelection() == (int)ResampleARMode::Manual;
-	symmetrical->Enable(margins);
-	margin_ctrl[LEFT]->Enable(margins);
-	margin_ctrl[TOP]->Enable(margins);
-	margin_ctrl[RIGHT]->Enable(margins && !symmetrical->GetValue());
-	margin_ctrl[BOTTOM]->Enable(margins && !symmetrical->GetValue());
+	auto state = BuildResampleDialogButtonState(reference, current, symmetrical->GetValue());
+	from_video->Enable(state.from_video_enabled);
+	from_script->Enable(state.from_script_enabled);
+	ar_mode->Enable(state.ar_mode_enabled);
+	symmetrical->Enable(state.symmetrical_enabled);
+	margin_ctrl[LEFT]->Enable(state.margin_left_enabled);
+	margin_ctrl[TOP]->Enable(state.margin_top_enabled);
+	margin_ctrl[RIGHT]->Enable(state.margin_right_enabled);
+	margin_ctrl[BOTTOM]->Enable(state.margin_bottom_enabled);
 }
 
 void DialogResample::OnSymmetrical(wxCommandEvent &) {
@@ -267,27 +244,10 @@ void DialogResample::OnMarginChange(wxSpinCtrl *src, wxSpinCtrl *dst) {
 		dst->SetValue(src->GetValue());
 }
 
-/// Check if the file uses tags whose rendering depends on LayoutRes:
-/// - \frx / \fry: 3D perspective uses camera distance scaled from LayoutResY.
-///   Changing LayoutRes will alter the 3D effect even if angle values stay the same.
-/// - \be: not scaled by libass at all; changing resolution may produce unexpected results.
-/// See libass ass_render.c: calc_transform_matrix() and init_font_scale().
-static bool file_has_layoutres_sensitive_tags(AssFile const& ass) {
-	for (auto const& line : ass.Events) {
-		if (line.Comment) continue;
-		auto const& text = line.Text.get();
-		// \frx and \fry are standalone tags (no sub-tag prefix)
-		if (text.find("\\frx") != std::string::npos) return true;
-		if (text.find("\\fry") != std::string::npos) return true;
-		// \be is also standalone
-		if (text.find("\\be") != std::string::npos) return true;
-	}
-	return false;
-}
 }
 
 bool PromptForResampleSettings(agi::Context *c, ResampleSettings &settings) {
-	if (file_has_layoutres_sensitive_tags(*c->GetCore().ass)) {
+	if (HasLayoutResSensitiveTags(*c->GetCore().ass)) {
 		auto result = wxMessageBox(
 			_("This script contains \\frx, \\fry, or \\be tags whose rendering depends on the LayoutRes headers. Changing the resolution may alter their appearance in ways that cannot be automatically corrected.\n\nContinue anyway?"),
 			_("LayoutRes-dependent tags detected"),

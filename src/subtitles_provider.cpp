@@ -22,8 +22,9 @@
 #include "ass_file.h"
 #include "ass_info.h"
 #include "ass_style.h"
-#include "factory_manager.h"
 #include "options.h"
+#include "provider_catalog_builder.h"
+#include "provider_open_policy.h"
 #include "subtitles_provider_csri.h"
 #include "subtitles_provider_libass.h"
 #include "subtitles_provider_plugin.h"
@@ -61,33 +62,14 @@ namespace {
 		return factories;
 	}
 
-	aegisub::provider_catalog::ProviderCatalog MakeCatalog(std::vector<factory> const& factories,
-	                                                       std::string const& preferred_provider) {
-		auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(preferred_provider);
-		auto sorted = GetSorted(factories, preferred);
-
-		aegisub::provider_catalog::ProviderCatalog catalog;
-		catalog.kind = aegisub::provider_catalog::ProviderKind::Subtitles;
-		catalog.preferred_provider = std::move(preferred);
-		catalog.providers.reserve(sorted.size());
-
-		for (auto const* provider : sorted) {
-			aegisub::provider_catalog::ProviderDescriptor descriptor;
-			descriptor.kind = catalog.kind;
-			descriptor.name = provider->name;
-			descriptor.display_name = provider->name;
-			descriptor.hidden = provider->hidden;
-			descriptor.available = true;
-			catalog.providers.push_back(std::move(descriptor));
-		}
-
-		return catalog;
+	aegisub::provider_catalog::ProviderFactoryDescriptor DescribeProvider(factory const& provider) {
+		return { provider.name.c_str(), provider.hidden, nullptr, nullptr };
 	}
 }
 
 std::vector<std::string> SubtitlesProviderFactory::GetClasses() {
 	auto available_factories = ass_renderer_factories();
-	return ::GetClasses(available_factories);
+	return aegisub::provider_catalog::VisibleFactoryNames(available_factories, DescribeProvider);
 }
 
 aegisub::provider_catalog::ProviderCatalog SubtitlesProviderFactory::GetCatalog(std::string const& preferred_provider,
@@ -95,7 +77,11 @@ aegisub::provider_catalog::ProviderCatalog SubtitlesProviderFactory::GetCatalog(
 	auto available_factories = external_file_providers
 		? subtitle_file_factories()
 		: ass_renderer_factories();
-	return MakeCatalog(available_factories, preferred_provider);
+	return aegisub::provider_catalog::BuildCatalog(
+		aegisub::provider_catalog::ProviderKind::Subtitles,
+		available_factories,
+		preferred_provider,
+		DescribeProvider);
 }
 
 bool SubtitlesProviderFactory::HasExternalFileProviderFor(agi::fs::path const& filename) {
@@ -113,7 +99,7 @@ std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(Subtitl
 	auto available_factories = env.require_external_file_provider
 		? subtitle_file_factories()
 		: ass_renderer_factories();
-	auto sorted = GetSorted(available_factories, preferred);
+	auto sorted = aegisub::provider_catalog::SortFactories(available_factories, preferred, DescribeProvider);
 	LOG_I(kSubtitleProviderSelectLogTag) << "Selecting subtitles provider"
 		<< (preferred.empty() ? "" : ": preferred=" + preferred);
 
@@ -130,16 +116,12 @@ std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(Subtitl
 		catch (agi::Exception const& err) {
 			LOG_W(kSubtitleProviderSelectLogTag) << "Subtitle provider unavailable: "
 				<< factory->name << ": " << err.GetMessage();
-			error.append(factory->name);
-			error.append(": ");
-			error.append(err.GetMessage());
-			error.push_back('\n');
+			aegisub::provider_catalog::AppendAttemptErrorLine(error, factory->name.c_str(), err.GetMessage());
 		}
 		catch (...) {
 			LOG_W(kSubtitleProviderSelectLogTag) << "Subtitle provider unavailable: "
 				<< factory->name << ": Unknown error";
-			error.append(factory->name);
-			error.append(": Unknown error\n");
+			aegisub::provider_catalog::AppendAttemptErrorLine(error, factory->name.c_str(), "Unknown error");
 		}
 	}
 

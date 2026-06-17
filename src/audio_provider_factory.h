@@ -16,6 +16,7 @@
 
 #include "provider_selection_diagnostics.h"
 #include "provider_catalog.h"
+#include "provider_factory_entry.h"
 
 #include <libaegisub/fs_fwd.h>
 
@@ -32,6 +33,12 @@ namespace agi {
 	class SingleChoiceInteractionSink;
 }
 
+using AudioProviderCreate = std::unique_ptr<agi::AudioProvider> (*)(agi::fs::path const&,
+                                                                    agi::BackgroundRunner *,
+                                                                    std::shared_ptr<agi::SingleChoiceInteractionSink>);
+using AudioProviderFactory = aegisub::provider_catalog::ProviderFactoryEntry<AudioProviderCreate>;
+
+void RegisterAudioProviderFactory(AudioProviderFactory factory);
 std::unique_ptr<agi::AudioProvider> GetAudioProvider(agi::fs::path const& filename,
                                                      agi::Path const& path_helper,
                                                      agi::BackgroundRunner *br,

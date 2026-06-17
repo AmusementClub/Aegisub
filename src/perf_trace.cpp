@@ -14,6 +14,7 @@
 
 #include "perf_trace.h"
 
+#include "async_video_trace.h"
 #include "options.h"
 
 #include <libaegisub/fs.h>
@@ -545,6 +546,17 @@ public:
 	void log(agi::log::SinkMessage const& sm) override;
 };
 
+class AsyncVideoPerfTraceSink final : public aegisub::async_video_trace::Sink {
+public:
+	void ObserveFrameResult(int frame, double time, bool delivered, bool immediate) override {
+		perf_trace::ObserveFrameResult(frame, time, delivered, immediate);
+	}
+
+	void ObserveVideoFrameRenderDuration(int frame, double time, bool delivered, bool immediate, double duration_ms) override {
+		perf_trace::ObserveVideoFrameRenderDuration(frame, time, delivered, immediate, duration_ms);
+	}
+};
+
 struct Session {
 	std::mutex mutex;
 	bool enabled = false;
@@ -566,6 +578,8 @@ struct Session {
 	TraceLogEmitter* log_emitter = nullptr;
 	Summary summary;
 };
+
+AsyncVideoPerfTraceSink async_video_perf_trace_sink;
 
 struct StartupTimingSession {
 	std::mutex mutex;
@@ -1073,6 +1087,7 @@ void InitializeAt(agi::fs::path const& session_dir, std::string const& build_lab
 		session.summary = Summary{};
 
 		WriteManifest(session);
+		aegisub::async_video_trace::SetSink(&async_video_perf_trace_sink);
 		trace_active.store(true, std::memory_order_relaxed);
 	}
 	catch (...) {
@@ -1080,6 +1095,8 @@ void InitializeAt(agi::fs::path const& session_dir, std::string const& build_lab
 }
 
 void Shutdown() {
+	aegisub::async_video_trace::SetSink(nullptr);
+
 	auto& session = GetSession();
 	if (!session.enabled && !trace_active.load(std::memory_order_relaxed))
 		return;

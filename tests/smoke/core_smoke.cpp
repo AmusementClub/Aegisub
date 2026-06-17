@@ -1,12 +1,20 @@
 #include "ass_file.h"
+#include "audio_provider_factory.h"
 #include "export_framerate_transform.h"
 #include "options.h"
 #include "presentation/subtitle_grid_query_service.h"
 #include "include/aegisub/subtitles_provider.h"
+#include "include/aegisub/video_provider.h"
 #include "subtitle_format.h"
+#include "ui_services.h"
+#include "video_session_core_ops.h"
+#include "video_provider_manager.h"
 
 #include <libaegisub/dispatch.h>
+#include <libaegisub/audio/provider.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/option.h>
+#include <libaegisub/path.h>
 #include <libaegisub/vfr.h>
 
 #include <algorithm>
@@ -49,6 +57,15 @@ std::filesystem::path MakeTempStlPath() {
 }
 
 constexpr char kCoreSmokeOptionDefaults[] = R"({
+	"Audio" : {
+		"Cache" : {
+			"HD" : {
+				"Location" : "default"
+			},
+			"Type" : 0
+		},
+		"Provider" : "Dummy"
+	},
 	"Subtitle" : {
 		"Default Resolution" : {
 			"Auto" : true,
@@ -88,6 +105,9 @@ constexpr char kCoreSmokeOptionDefaults[] = R"({
 	},
 	"Timing" : {
 		"Default Duration" : 2000
+	},
+	"Video" : {
+		"Provider" : "Dummy"
 	}
 })";
 
@@ -198,6 +218,48 @@ int RunSmoke() {
 		throw std::runtime_error("core subtitles provider factory did not create libass");
 	subtitles_provider->LoadSubtitles(&file, -1, nullptr);
 
+	auto audio_provider_catalog = GetAudioProviderCatalog("Dummy");
+	auto audio_dummy = std::find_if(audio_provider_catalog.providers.begin(), audio_provider_catalog.providers.end(), [](auto const& provider) {
+		return provider.name == "Dummy" && provider.hidden && provider.available;
+	});
+	if (audio_dummy == audio_provider_catalog.providers.end())
+		throw std::runtime_error("Dummy audio provider was not present in the core provider catalog");
+
+	agi::Path path_helper;
+	agi::NullNotificationSink notification_sink;
+	auto choice_sink = std::make_shared<agi::NullSingleChoiceInteractionSink>();
+	auto audio_provider = GetAudioProvider("dummy-audio:", path_helper, nullptr, notification_sink, choice_sink);
+	if (!audio_provider || audio_provider->GetSampleRate() != 44100 || audio_provider->GetChannels() != 1)
+		throw std::runtime_error("core audio provider manager did not create Dummy audio");
+
+	auto video_provider_catalog = VideoProviderFactory::GetCatalog("Dummy");
+	auto video_dummy = std::find_if(video_provider_catalog.providers.begin(), video_provider_catalog.providers.end(), [](auto const& provider) {
+		return provider.name == "Dummy" && provider.hidden && provider.available;
+	});
+	if (video_dummy == video_provider_catalog.providers.end())
+		throw std::runtime_error("Dummy video provider was not present in the core provider catalog");
+
+	auto video_provider = VideoProviderFactory::GetProvider("?dummy:24:2:16:8:10:20:30:", "", nullptr, choice_sink);
+	if (!video_provider || video_provider->GetDecoderName() != "Dummy Video Provider" || video_provider->GetFrameCount() != 2 || video_provider->GetWidth() != 16 || video_provider->GetHeight() != 8)
+		throw std::runtime_error("core video provider manager did not create Dummy video");
+
+	aegisub::video_session_ops::OpenedVideoMetadata video_metadata;
+	video_metadata.timecodes = video_provider->GetFPS();
+	video_metadata.keyframes = video_provider->GetKeyFrames();
+	video_metadata.warning = video_provider->GetWarning();
+	video_metadata.has_audio = true;
+	auto video_summary = aegisub::video_session_ops::BuildOpenedVideoSummary(
+		video_metadata,
+		agi::fs::PathFromString("movie.mkv"),
+		[](agi::fs::path const&) { return true; });
+	auto post_open_plan = aegisub::video_session_ops::PlanPostOpen(
+		video_summary,
+		true,
+		agi::fs::PathFromString("audio.wav"),
+		agi::fs::PathFromString("movie.mkv"));
+	if (!video_summary.has_subtitles || !post_open_plan.auto_load_linked_audio)
+		throw std::runtime_error("core video session policy did not build expected post-open plan");
+
 	ScopedFile txt_path(MakeTempTxtPath());
 	WriteSmokeTxt(txt_path.get());
 
@@ -234,6 +296,8 @@ int RunSmoke() {
 		<< " txt_rows=" << txt_window.total_rows
 		<< " stl_bytes=" << std::filesystem::file_size(stl_path.get())
 		<< " subtitle_provider=\"" << subtitles_provider->GetDebugName() << "\""
+		<< " audio_rate=" << audio_provider->GetSampleRate()
+		<< " video_frames=" << video_provider->GetFrameCount()
 		<< " first_text=\"" << window.rows[0].text << "\""
 		<< " transformed=[" << transform.new_start_ms << ", " << transform.new_end_ms << "]\n";
 	return 0;

@@ -34,8 +34,7 @@
 
 #include "export_fixstyle.h"
 
-#include "ass_file.h"
-#include "ass_dialogue.h"
+#include "ass_fixstyle_core.h"
 #include "compat.h"
 
 #include <wx/intl.h>
@@ -46,8 +45,5 @@ AssFixStylesFilter::AssFixStylesFilter()
 }
 
 void AssFixStylesFilter::ProcessSubs(AssFile *subs) {
-	for (auto& diag : subs->Events) {
-		if (!subs->GetStyle(diag.Style))
-			diag.Style = "Default";
-	}
+	aegisub::ass_fixstyle::ReplaceMissingStylesWithDefault(subs);
 }

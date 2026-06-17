@@ -51,7 +51,7 @@
 #include "../utils.h"
 #include "../video_controller.h"
 #include "../video_display.h"
-#include "../video_frame.h"
+#include "../video_frame_wx.h"
 #include "../video_aspect_ratio_ops.h"
 #include "../video_navigation_ops.h"
 #include "../video_snapshot_ops.h"

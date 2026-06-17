@@ -16,6 +16,7 @@
 
 #include "provider_selection_diagnostics.h"
 #include "provider_catalog.h"
+#include "provider_factory_entry.h"
 
 #include <libaegisub/fs_fwd.h>
 
@@ -31,6 +32,13 @@ namespace agi {
 	class SingleChoiceInteractionSink;
 }
 
+using VideoProviderCreate = std::unique_ptr<VideoProvider> (*)(agi::fs::path const&,
+                                                               std::string const&,
+                                                               agi::BackgroundRunner *,
+                                                               std::shared_ptr<agi::SingleChoiceInteractionSink>);
+using VideoProviderFactoryEntry = aegisub::provider_catalog::ProviderFactoryEntry<VideoProviderCreate>;
+
+void RegisterVideoProviderFactory(VideoProviderFactoryEntry factory);
 std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoProvider> parent);
 std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoProvider> parent, size_t max_cache_size_bytes);
 

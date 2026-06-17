@@ -1,6 +1,5 @@
 #include "lsmas_provider_common.h"
 
-#include "compat.h"
 #include "options.h"
 #include "provider_index_cache.h"
 #include "track_choice.h"

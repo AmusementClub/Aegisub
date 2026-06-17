@@ -17,6 +17,9 @@
 #include <main.h>
 
 #include "../../src/provider_catalog.h"
+#include "../../src/provider_catalog_builder.h"
+#include "../../src/provider_factory_entry.h"
+#include "../../src/provider_open_policy.h"
 #include "../../src/provider_selection_diagnostics.h"
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/fs.h>
@@ -29,7 +32,9 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 
 template<typename Predicate>
@@ -172,6 +177,364 @@ TEST(provider_catalog, exposes_visible_choices_and_availability_without_gui_type
 	ASSERT_EQ(2u, choices.size());
 	EXPECT_EQ("FFmpegSource", choices[0].first);
 	EXPECT_EQ("FFmpegSource", choices[0].second);
+}
+
+TEST(provider_catalog_builder, reports_unavailable_runtime_without_gui_types) {
+	auto unavailable = [] { return false; };
+	auto load_error = []() -> std::string { return "missing runtime"; };
+	aegisub::provider_catalog::ProviderFactoryDescriptor provider {
+		"FFmpegSource",
+		false,
+		unavailable,
+		load_error
+	};
+
+	std::string availability_error;
+	EXPECT_FALSE(aegisub::provider_catalog::IsProviderAvailable(provider, availability_error));
+	EXPECT_EQ("missing runtime", availability_error);
+
+	auto descriptor = aegisub::provider_catalog::BuildProviderDescriptor(
+		aegisub::provider_catalog::ProviderKind::Audio,
+		provider,
+		false,
+		availability_error);
+	EXPECT_EQ("FFmpegSource (Unavailable)", descriptor.display_name);
+	EXPECT_EQ("missing runtime", descriptor.unavailable_reason);
+}
+
+TEST(provider_catalog_builder, captures_availability_exceptions_as_errors) {
+	auto throws = []() -> bool { throw std::runtime_error("probe failed"); };
+	aegisub::provider_catalog::ProviderFactoryDescriptor provider {
+		"LsmasNative",
+		false,
+		throws,
+		nullptr
+	};
+
+	std::string availability_error;
+	EXPECT_FALSE(aegisub::provider_catalog::IsProviderAvailable(provider, availability_error));
+	EXPECT_EQ("probe failed", availability_error);
+}
+
+TEST(provider_catalog_builder, returns_optional_unavailable_reason_with_default_fallback) {
+	auto unavailable = [] { return false; };
+	auto empty_load_error = []() -> std::string { return ""; };
+	aegisub::provider_catalog::ProviderFactoryDescriptor provider {
+		"FFmpegSource",
+		false,
+		unavailable,
+		empty_load_error
+	};
+
+	auto reason = aegisub::provider_catalog::ProviderUnavailableReason(provider);
+
+	ASSERT_TRUE(reason);
+	EXPECT_EQ("runtime library is unavailable.", *reason);
+}
+
+TEST(provider_catalog_builder, returns_no_unavailable_reason_when_provider_is_available) {
+	aegisub::provider_catalog::ProviderFactoryDescriptor provider {
+		"PCM",
+		false,
+		nullptr,
+		nullptr
+	};
+
+	EXPECT_FALSE(aegisub::provider_catalog::ProviderUnavailableReason(provider));
+}
+
+TEST(provider_catalog_builder, describes_typed_factory_entries_without_host_types) {
+	using CreateFn = void (*)();
+	aegisub::provider_catalog::ProviderFactoryEntry<CreateFn> provider {
+		"FFmpegSource",
+		nullptr,
+		nullptr,
+		nullptr,
+		false
+	};
+
+	auto descriptor = aegisub::provider_catalog::DescribeProviderFactoryEntry(provider);
+
+	EXPECT_EQ("FFmpegSource", aegisub::provider_catalog::ProviderName(descriptor));
+	EXPECT_FALSE(descriptor.hidden);
+	EXPECT_EQ(nullptr, descriptor.is_available);
+	EXPECT_EQ(nullptr, descriptor.availability_error);
+}
+
+TEST(provider_open_policy, records_attempts_with_empty_safe_defaults) {
+	aegisub::provider_selection_diagnostics::SelectionReport report;
+
+	aegisub::provider_catalog::RecordAttempt(report, nullptr, nullptr);
+
+	ASSERT_EQ(1u, report.attempts.size());
+	EXPECT_TRUE(report.attempts[0].provider_name.empty());
+	EXPECT_TRUE(report.attempts[0].outcome.empty());
+	EXPECT_TRUE(report.attempts[0].detail.empty());
+}
+
+TEST(provider_open_policy, records_returned_null_and_open_success_with_shared_helpers) {
+	aegisub::provider_selection_diagnostics::SelectionReport report;
+
+	aegisub::provider_catalog::RecordProviderReturnedNull(report, "FFmpegSource");
+	aegisub::provider_catalog::RecordProviderOpenSuccess(report, "LsmasNative");
+
+	EXPECT_EQ("LsmasNative", report.selected_provider);
+	ASSERT_EQ(2u, report.attempts.size());
+	EXPECT_EQ("FFmpegSource", report.attempts[0].provider_name);
+	EXPECT_EQ("returned_null", report.attempts[0].outcome);
+	EXPECT_EQ("provider factory returned null", report.attempts[0].detail);
+	EXPECT_EQ("LsmasNative", report.attempts[1].provider_name);
+	EXPECT_EQ("opened", report.attempts[1].outcome);
+	EXPECT_TRUE(report.attempts[1].detail.empty());
+}
+
+TEST(provider_open_policy, try_open_provider_factory_handles_unavailable_null_and_success) {
+	auto unavailable = [] { return false; };
+	auto load_error = []() -> std::string { return "missing runtime"; };
+	auto describe = [](aegisub::provider_catalog::ProviderFactoryDescriptor const& provider) {
+		return provider;
+	};
+
+	aegisub::provider_selection_diagnostics::SelectionReport report;
+	aegisub::provider_catalog::ProviderFactoryDescriptor unavailable_provider {
+		"FFmpegSource",
+		false,
+		unavailable,
+		load_error
+	};
+	auto unavailable_result = aegisub::provider_catalog::TryOpenProviderFactory(
+		unavailable_provider,
+		describe,
+		report,
+		[](auto const&) {
+			return std::unique_ptr<int>(new int(1));
+		});
+	EXPECT_EQ(aegisub::provider_catalog::ProviderOpenAttemptState::Unavailable, unavailable_result.state);
+	EXPECT_EQ("missing runtime", unavailable_result.unavailable_reason);
+	EXPECT_TRUE(report.attempts.empty());
+
+	aegisub::provider_catalog::ProviderFactoryDescriptor null_provider {
+		"PCM",
+		false,
+		nullptr,
+		nullptr
+	};
+	auto null_result = aegisub::provider_catalog::TryOpenProviderFactory(
+		null_provider,
+		describe,
+		report,
+		[](auto const&) {
+			return std::unique_ptr<int>();
+		});
+	EXPECT_EQ(aegisub::provider_catalog::ProviderOpenAttemptState::ReturnedNull, null_result.state);
+	ASSERT_EQ(1u, report.attempts.size());
+	EXPECT_EQ("PCM", report.attempts[0].provider_name);
+	EXPECT_EQ("returned_null", report.attempts[0].outcome);
+
+	aegisub::provider_catalog::ProviderFactoryDescriptor opened_provider {
+		"LsmasNative",
+		false,
+		nullptr,
+		nullptr
+	};
+	auto opened_result = aegisub::provider_catalog::TryOpenProviderFactory(
+		opened_provider,
+		describe,
+		report,
+		[](auto const&) {
+			return std::unique_ptr<int>(new int(42));
+		});
+	EXPECT_EQ(aegisub::provider_catalog::ProviderOpenAttemptState::Opened, opened_result.state);
+	ASSERT_TRUE(opened_result.provider);
+	EXPECT_EQ(42, *opened_result.provider);
+	EXPECT_EQ("LsmasNative", report.selected_provider);
+	ASSERT_EQ(2u, report.attempts.size());
+	EXPECT_EQ("LsmasNative", report.attempts[1].provider_name);
+	EXPECT_EQ("opened", report.attempts[1].outcome);
+}
+
+TEST(provider_open_policy, formats_attempt_error_lines_for_shared_open_reports) {
+	EXPECT_EQ("FFmpegSource: missing runtime\n",
+		aegisub::provider_catalog::FormatAttemptErrorLine("FFmpegSource", "missing runtime"));
+	EXPECT_EQ(": missing provider name\n",
+		aegisub::provider_catalog::FormatAttemptErrorLine(nullptr, "missing provider name"));
+
+	std::string errors;
+	aegisub::provider_catalog::AppendAttemptErrorLine(errors, "LsmasNative", "not supported");
+	aegisub::provider_catalog::AppendAttemptErrorLine(errors, "Avisynth", "plugin failed");
+	EXPECT_EQ("LsmasNative: not supported\nAvisynth: plugin failed\n", errors);
+}
+
+TEST(provider_open_policy, selects_audio_open_failure_from_recorded_attempts) {
+	aegisub::provider_catalog::AudioProviderOpenFailureReport report;
+
+	aegisub::provider_catalog::RecordAudioProviderOpenFailure(
+		report,
+		"FFmpegSource",
+		"missing runtime",
+		aegisub::provider_catalog::AudioProviderOpenAttemptFailure::Unavailable);
+	EXPECT_EQ(aegisub::provider_catalog::AudioProviderOpenFailure::FileNotFound,
+		aegisub::provider_catalog::FinalAudioProviderOpenFailure(report));
+	EXPECT_EQ("FFmpegSource: missing runtime\n", report.all_errors);
+
+	aegisub::provider_catalog::RecordAudioProviderOpenFailure(
+		report,
+		"PCM",
+		"no audio track",
+		aegisub::provider_catalog::AudioProviderOpenAttemptFailure::AudioNotFound);
+	EXPECT_EQ(aegisub::provider_catalog::AudioProviderOpenFailure::AudioNotFound,
+		aegisub::provider_catalog::FinalAudioProviderOpenFailure(report));
+	EXPECT_EQ("FFmpegSource: missing runtime\nPCM: no audio track\n",
+		aegisub::provider_catalog::FinalAudioProviderOpenErrorDetail(report));
+
+	aegisub::provider_catalog::RecordAudioProviderOpenFailure(
+		report,
+		"LsmasNative",
+		"codec failed",
+		aegisub::provider_catalog::AudioProviderOpenAttemptFailure::ProviderError);
+	EXPECT_EQ(aegisub::provider_catalog::AudioProviderOpenFailure::ProviderError,
+		aegisub::provider_catalog::FinalAudioProviderOpenFailure(report));
+	EXPECT_EQ("LsmasNative: codec failed\n",
+		aegisub::provider_catalog::FinalAudioProviderOpenErrorDetail(report));
+	EXPECT_EQ("FFmpegSource: missing runtime\nPCM: no audio track\nLsmasNative: codec failed\n",
+		report.all_errors);
+}
+
+TEST(provider_open_policy, records_audio_open_failure_attempts_with_diagnostics) {
+	aegisub::provider_catalog::AudioProviderOpenFailureReport report;
+	aegisub::provider_selection_diagnostics::SelectionReport diagnostics;
+
+	aegisub::provider_catalog::RecordAudioProviderOpenFailureAttempt(
+		report,
+		diagnostics,
+		"PCM",
+		"missing.wav not found.",
+		aegisub::provider_catalog::AudioProviderOpenAttemptFailure::FileNotFound,
+		nullptr,
+		"missing.wav");
+	aegisub::provider_catalog::RecordAudioProviderOpenFailureAttempt(
+		report,
+		diagnostics,
+		"FFmpegSource",
+		"decoder crashed",
+		aegisub::provider_catalog::AudioProviderOpenAttemptFailure::ProviderError,
+		"std_exception");
+
+	EXPECT_EQ("PCM: missing.wav not found.\nFFmpegSource: decoder crashed\n", report.all_errors);
+	EXPECT_EQ("FFmpegSource: decoder crashed\n", report.partial_errors);
+	ASSERT_EQ(2u, diagnostics.attempts.size());
+	EXPECT_EQ("PCM", diagnostics.attempts[0].provider_name);
+	EXPECT_EQ("file_not_found", diagnostics.attempts[0].outcome);
+	EXPECT_EQ("missing.wav", diagnostics.attempts[0].detail);
+	EXPECT_EQ("FFmpegSource", diagnostics.attempts[1].provider_name);
+	EXPECT_EQ("std_exception", diagnostics.attempts[1].outcome);
+	EXPECT_EQ("decoder crashed", diagnostics.attempts[1].detail);
+}
+
+TEST(provider_open_policy, selects_video_open_failure_from_recorded_attempts) {
+	aegisub::provider_catalog::VideoProviderOpenFailureReport report;
+
+	aegisub::provider_catalog::RecordVideoProviderOpenFailure(
+		report,
+		"FFmpegSource",
+		"missing runtime",
+		aegisub::provider_catalog::VideoProviderOpenAttemptFailure::Unavailable);
+	EXPECT_EQ(aegisub::provider_catalog::VideoProviderOpenFailure::FileNotFound,
+		aegisub::provider_catalog::FinalVideoProviderOpenFailure(report));
+
+	aegisub::provider_catalog::RecordVideoProviderOpenFailure(
+		report,
+		"YUV4MPEG",
+		"video is not in a supported format.",
+		aegisub::provider_catalog::VideoProviderOpenAttemptFailure::NotSupported);
+	EXPECT_EQ(aegisub::provider_catalog::VideoProviderOpenFailure::NotSupported,
+		aegisub::provider_catalog::FinalVideoProviderOpenFailure(report));
+
+	aegisub::provider_catalog::RecordVideoProviderOpenFailure(
+		report,
+		"LsmasNative",
+		"index failed",
+		aegisub::provider_catalog::VideoProviderOpenAttemptFailure::OpenError);
+	EXPECT_EQ(aegisub::provider_catalog::VideoProviderOpenFailure::OpenError,
+		aegisub::provider_catalog::FinalVideoProviderOpenFailure(report));
+	EXPECT_EQ("FFmpegSource: missing runtime\nYUV4MPEG: video is not in a supported format.\nLsmasNative: index failed\n",
+		report.errors);
+}
+
+TEST(provider_open_policy, records_video_open_failure_attempts_with_diagnostics) {
+	aegisub::provider_catalog::VideoProviderOpenFailureReport report;
+	aegisub::provider_selection_diagnostics::SelectionReport diagnostics;
+
+	aegisub::provider_catalog::RecordVideoProviderOpenFailureAttempt(
+		report,
+		diagnostics,
+		"YUV4MPEG",
+		"video is not in a supported format.",
+		aegisub::provider_catalog::VideoProviderOpenAttemptFailure::NotSupported);
+	aegisub::provider_catalog::RecordVideoProviderOpenFailureAttempt(
+		report,
+		diagnostics,
+		"LsmasNative",
+		"index failed",
+		aegisub::provider_catalog::VideoProviderOpenAttemptFailure::OpenError);
+
+	EXPECT_EQ(aegisub::provider_catalog::VideoProviderOpenFailure::OpenError,
+		aegisub::provider_catalog::FinalVideoProviderOpenFailure(report));
+	EXPECT_EQ("YUV4MPEG: video is not in a supported format.\nLsmasNative: index failed\n", report.errors);
+	ASSERT_EQ(2u, diagnostics.attempts.size());
+	EXPECT_EQ("YUV4MPEG", diagnostics.attempts[0].provider_name);
+	EXPECT_EQ("not_supported", diagnostics.attempts[0].outcome);
+	EXPECT_EQ("video is not in a supported format.", diagnostics.attempts[0].detail);
+	EXPECT_EQ("LsmasNative", diagnostics.attempts[1].provider_name);
+	EXPECT_EQ("error", diagnostics.attempts[1].outcome);
+	EXPECT_EQ("index failed", diagnostics.attempts[1].detail);
+}
+
+TEST(provider_catalog_builder, sorts_factories_with_hidden_first_then_preferred) {
+	std::vector<aegisub::provider_catalog::ProviderFactoryDescriptor> providers {
+		{"Dummy", true, nullptr, nullptr},
+		{"FFmpegSource", false, nullptr, nullptr},
+		{"LsmasNative", false, nullptr, nullptr}
+	};
+	auto describe = [](auto const& provider) { return provider; };
+
+	auto names = aegisub::provider_catalog::VisibleFactoryNames(providers, describe);
+	EXPECT_EQ((std::vector<std::string>{"FFmpegSource", "LsmasNative"}), names);
+
+	auto sorted = aegisub::provider_catalog::SortFactories(providers, "LsmasNative", describe);
+	ASSERT_EQ(3u, sorted.size());
+	EXPECT_EQ("Dummy", sorted[0]->name);
+	EXPECT_EQ("LsmasNative", sorted[1]->name);
+	EXPECT_EQ("FFmpegSource", sorted[2]->name);
+}
+
+TEST(provider_catalog_builder, builds_catalog_with_canonical_preferred_and_availability) {
+	auto unavailable = [] { return false; };
+	auto load_error = []() -> std::string { return "missing ffms2.dll"; };
+	std::vector<aegisub::provider_catalog::ProviderFactoryDescriptor> providers {
+		{"Dummy", true, nullptr, nullptr},
+		{"FFmpegSource", false, unavailable, load_error},
+		{"LsmasNative", false, nullptr, nullptr}
+	};
+	auto describe = [](auto const& provider) { return provider; };
+
+	auto catalog = aegisub::provider_catalog::BuildCatalog(
+		aegisub::provider_catalog::ProviderKind::Video,
+		providers,
+		"lsmas",
+		describe);
+
+	EXPECT_EQ(aegisub::provider_catalog::ProviderKind::Video, catalog.kind);
+	EXPECT_EQ("LsmasNative", catalog.preferred_provider);
+	ASSERT_EQ(3u, catalog.providers.size());
+	EXPECT_EQ("Dummy", catalog.providers[0].name);
+	EXPECT_TRUE(catalog.providers[0].hidden);
+	EXPECT_EQ("LsmasNative", catalog.providers[1].name);
+	EXPECT_TRUE(catalog.providers[1].available);
+	EXPECT_EQ("FFmpegSource", catalog.providers[2].name);
+	EXPECT_FALSE(catalog.providers[2].available);
+	EXPECT_EQ("FFmpegSource (Unavailable)", catalog.providers[2].display_name);
+	EXPECT_EQ("missing ffms2.dll", catalog.providers[2].unavailable_reason);
 }
 
 struct BlockingSequenceAudioProvider : agi::AudioProvider {

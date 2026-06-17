@@ -49,7 +49,7 @@ public:
 /// Set by the host (GUI or headless) before calling into core services.
 /// Defaults to NullTranslationService if not set.
 class TranslationContext {
-	static TranslationService const* service;
+	static thread_local TranslationService const* service;
 	static NullTranslationService null_service;
 
 public:

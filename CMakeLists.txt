@@ -629,6 +629,7 @@ set(AEGISUB_CORE_SOURCES
     src/ass_attachment.cpp
     src/ass_dialogue.cpp
     src/ass_entry.cpp
+    src/ass_fixstyle_core.cpp
     # ass_export_filter/ass_exporter expose wxWindow*/wxSizer* in their public
     # API and stay in the exe until abstracted (they are the export subsystem's
     # coupling root, pulling in export_fixstyle/export_framerate/auto4_base).
@@ -677,11 +678,11 @@ set(AEGISUB_CORE_SOURCES
     src/selection_controller.cpp
     # project.h exposes wxString in ShowError's public signature; migrate to
     # the exe until the API is switched to std::string.
-    # project_session_ops / search_replace_engine / secondary_subtitle_session
-    # / subs_controller / subs_controller_timer / ui_services stay in core
-    # (only light wx pollution in .cpp: wxLog / i18n / wxOK constants).
-    # project_session_ops/search_replace_engine still format wx-translated
-    # prompts and call UI-facing Context methods.
+    # project_session_ops is a core-owned media/subtitle session policy layer:
+    # it communicates through typed callbacks and NotificationSink.
+    # search_replace_engine / secondary_subtitle_session / subs_controller /
+    # subs_controller_timer still call UI-facing Context or GUI-only features.
+    src/project_session_ops.cpp
     # src/secondary_subtitle_session.cpp  ← moved to exe (GUI-only feature: dual subtitle preview)
     # subs_controller is still the GUI document controller: it calls
     # SubtitleFormat, command dispatch, FrameMain, and wx file watching.
@@ -705,17 +706,25 @@ set(AEGISUB_CORE_SOURCES
     # (ALSA/DirectSound/XAudio2/...) which are exe-only; stays in the exe.
     src/audio_spectrum_analysis_cache.cpp
     src/audio_spectrum_fftw3.cpp
+    src/resample_dialog_policy.cpp
+    src/resolution_resampler.cpp
     # Video rendering / session ops
     src/video_aspect_ratio_ops.cpp
     # video_controller still owns playback/UI coordination and AudioController
     # coupling; keep pure video ops below in core.
     # src/video_frame.cpp  ← moved to exe (GetImage only used in GUI export/display)
+    src/async_video_provider.cpp
+    src/async_video_provider_host.cpp
+    src/async_video_trace.cpp
     src/video_navigation_ops.cpp
-    # video_property_update currently applies resolution resampling through the
-    # GUI resampler implementation.
+    # video_property_update and resolution_resampler are core-owned subtitle
+    # document transforms; dialogs/controllers only gather user choices.
+    src/video_property_update.cpp
+    src/video_property_update_policy.cpp
+    src/video_property_update_requests.cpp
     src/video_renderer_backend.cpp
-    # video_session_ops owns AsyncVideoProvider lifetime and stays with the
-    # concrete media runtime.
+    src/video_session_core_ops.cpp
+    src/video_session_ops.cpp
     src/video_snapshot_ops.cpp
     src/navigation_preview_policy.cpp
     # Subtitle rendering providers
@@ -723,17 +732,32 @@ set(AEGISUB_CORE_SOURCES
     # - core-owned now: subtitles_provider.cpp/libass/plugin; dependencies are
     #   wx-free metadata/catalog, options, libass, native_library, dispatch,
     #   SourceFrame/SubtitleOverlay, and BackgroundRunner.
-    # - adapter-required next: audio/video provider managers still depend on
-    #   choice/background/notification seams plus codec runtime discovery.
-    # - host-owned for now: async playback/controllers/render display pieces
-    #   which coordinate UI lifetime, audio controller, and visible windows.
+    # - core-owned now: built-in Dummy/YUV4MPEG plus FFMS and LSMAS concrete
+    #   audio/video providers;
+    #   dependencies are wx-free track-choice/background seams, runtime loading,
+    #   optional SceneChange keyframe generation, and index cache.
+    # - core-owned now: audio/video provider managers select from core-owned
+    #   built-ins/FFMS/LSMAS plus host-registered providers.
+    # - host-owned for now: playback/controllers/render display pieces which
+    #   coordinate UI lifetime, audio controller, and visible windows.
     # libass/plugin subtitle providers are wx-free and form the first concrete
-    # provider cluster owned by aegisub_core. Audio/video providers stay in the
-    # exe until their decoder/runtime dependencies have the same typed seams.
+    # provider cluster owned by aegisub_core. Built-in Dummy/YUV4MPEG plus
+    # FFMS/LSMAS and provider managers are concrete video/audio provider
+    # clusters owned by aegisub_core; AVS stays in the exe due to
+    # windows.h/vfw.h/PCH coupling and registers itself with the managers.
+    src/audio_provider_factory.cpp
     src/subtitle_overlay_blend.cpp
     src/subtitles_provider.cpp
     src/subtitles_provider_libass.cpp
     src/subtitles_provider_plugin.cpp
+    src/video_provider_manager.cpp
+    src/video_provider_dummy.cpp
+    src/video_provider_cache.cpp
+    src/video_provider_yuv4mpeg.cpp
+    src/cache_cleanup.cpp
+    src/provider_index_cache.cpp
+    src/provider_catalog_builder.cpp
+    src/provider_open_policy.cpp
     # NOTE: auto4_base.h / auto4_lua.h expose wxWindow*/wxDialog*/wxString in
     # their public/protected API (GenerateConfigDialog, CreateWindow, ShowDialog,
     # ProcessingComplete(wxString)). The automation host subsystem is coupled
@@ -847,16 +871,6 @@ if(WITH_SKIA)
         src/skia_runtime/skia_text_layout_cache.cpp
     )
 endif()
-# AviSynth providers are Windows-only and pull in <windows.h>/<vfw.h> via
-# avisynth.h; they stay out of core (which is meant to be platform-neutral and
-# compiles without the Windows SDK headers). The exe adds them below.
-if(WITH_AVISYNTH AND HAVE_AVISYNTH)
-    if(WIN32)
-        target_compile_definitions(aegisub_core PRIVATE "AVISYNTH_SO=\"AviSynth.dll\"")
-    else()
-        target_compile_definitions(aegisub_core PRIVATE "AVISYNTH_SO=\"libavisynth.so\"")
-    endif()
-endif()
 ## Aegisub
 add_executable(Aegisub WIN32
     "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.h"
@@ -864,10 +878,6 @@ add_executable(Aegisub WIN32
 
     src/wx_translation_service.cpp
     src/context.cpp
-    src/async_video_provider.cpp
-    src/async_video_provider_host.cpp
-    src/audio_provider_factory.cpp
-    src/project_session_ops.cpp
     src/search_replace_engine.cpp
     src/subs_controller.cpp
     src/command/app.cpp
@@ -954,8 +964,6 @@ add_executable(Aegisub WIN32
     src/persist_location.cpp
     src/preferences.cpp
     src/preferences_base.cpp
-    src/provider_index_cache.cpp
-    src/resolution_resampler.cpp
     src/secondary_subtitle_session.cpp
     src/secondary_subtitle_session.h
     src/secondary_subtitle_strip.cpp
@@ -978,12 +986,6 @@ add_executable(Aegisub WIN32
     src/watched_file_wx.cpp
     src/video_controller_timer.cpp
     src/video_controller.cpp
-    src/video_property_update.cpp
-    src/video_provider_cache.cpp
-    src/video_provider_dummy.cpp
-    src/video_provider_manager.cpp
-    src/video_provider_yuv4mpeg.cpp
-    src/video_session_ops.cpp
     src/video_display.cpp
     src/video_frame.cpp
     src/video_renderer_factory.cpp
@@ -1315,12 +1317,16 @@ if(WITH_FFMS2)
 
     set(HAVE_FFMS2 ON)
     message(STATUS "Found FFMS2 headers: ${FFMS2_INCLUDE_DIR}")
-    target_compile_definitions(Aegisub PRIVATE "WITH_FFMS2" "WITH_FFMS2_RUNTIME_LOADING")
-    target_include_directories(Aegisub PRIVATE
+    target_compile_definitions(aegisub_features INTERFACE "WITH_FFMS2" "WITH_FFMS2_RUNTIME_LOADING")
+    target_include_directories(aegisub_features INTERFACE
         "${FFMS2_INCLUDE_DIR}"
         "${CMAKE_CURRENT_SOURCE_DIR}/vendor/ffms2"
     )
-    target_sources(Aegisub PRIVATE src/audio_provider_ffmpegsource.cpp ${AEGISUB_SHARED_PROVIDER_TRACK_SELECTION_SOURCES} src/video_provider_ffmpegsource.cpp)
+    target_sources(aegisub_core PRIVATE
+        src/audio_provider_ffmpegsource.cpp
+        ${AEGISUB_SHARED_PROVIDER_TRACK_SELECTION_SOURCES}
+        src/video_provider_ffmpegsource.cpp
+    )
 elseif(NOT HAVE_FFMS2)
     message(WARNING
         "No supported video/audio reader interface was enabled.\n"
@@ -1345,11 +1351,11 @@ if(WITH_LSMASNATIVE)
     endif()
 
     set(HAVE_LSMASNATIVE ON)
-    target_compile_definitions(Aegisub PRIVATE "WITH_LSMASNATIVE")
-    target_include_directories(Aegisub PRIVATE
+    target_compile_definitions(aegisub_features INTERFACE "WITH_LSMASNATIVE")
+    target_include_directories(aegisub_features INTERFACE
         "${CMAKE_CURRENT_SOURCE_DIR}/vendor/lsmasnative"
     )
-    target_sources(Aegisub PRIVATE
+    target_sources(aegisub_core PRIVATE
         src/lsmas_native_runtime.cpp
         src/lsmas_provider_common.cpp
         src/video_provider_lsmasnative.cpp
@@ -1361,8 +1367,8 @@ set(HAVE_SCENECHANGE OFF)
 option(WITH_SCENECHANGE "Enable SceneChange NativeAOT runtime support" ON)
 if(WITH_SCENECHANGE)
     set(HAVE_SCENECHANGE ON)
-    target_compile_definitions(Aegisub PRIVATE "WITH_SCENECHANGE")
-    target_sources(Aegisub PRIVATE
+    target_compile_definitions(aegisub_features INTERFACE "WITH_SCENECHANGE")
+    target_sources(aegisub_core PRIVATE
         src/scenechange_native_runtime.cpp
     )
 endif()

@@ -49,6 +49,7 @@ if(GTEST_FOUND)
         src/ass_attachment.cpp
         src/ass_parser.cpp
         src/ass_dialogue.cpp
+        src/ass_fixstyle_core.cpp
         src/ass_karaoke.cpp
         src/ass_io_core.cpp
         src/ass_time_projection.cpp
@@ -60,6 +61,7 @@ if(GTEST_FOUND)
         src/ass_style_storage.cpp
         src/async_video_provider.cpp
         src/async_video_provider_host.cpp
+        src/async_video_trace.cpp
         src/audio_controller_timer.cpp
         src/avisynth_legacy_path.cpp
         src/charset_choice.cpp
@@ -73,6 +75,7 @@ if(GTEST_FOUND)
         libaegisub/common/native_library.cpp
         src/numeric_utils.cpp
         src/perf_trace.cpp
+        src/resample_dialog_policy.cpp
         src/resolution_resampler.cpp
         src/text_file_writer.cpp
         src/text_file_reader.cpp
@@ -81,6 +84,7 @@ if(GTEST_FOUND)
         src/threaded_ui_timer.cpp
         src/ui_timer.cpp
         src/utils.cpp
+        src/translation_service.cpp
         src/ui_services.cpp
         src/watched_file_core.cpp
         src/watched_file_wx.cpp
@@ -88,6 +92,8 @@ if(GTEST_FOUND)
         src/subtitle_edit_ops.cpp
         src/subtitle_editor_ops.cpp
         src/subtitle_grid_ops.cpp
+        src/video_property_update_policy.cpp
+        src/video_property_update_requests.cpp
         src/video_property_update.cpp
         src/video_aspect_ratio_ops.cpp
         src/video_navigation_ops.cpp
@@ -96,6 +102,7 @@ if(GTEST_FOUND)
         src/grid_core/grid_layout.cpp
         src/grid_core/grid_layout.h
         src/video_controller_timer.cpp
+        src/video_session_core_ops.cpp
         src/video_session_ops.cpp
         src/video_snapshot_ops.cpp
         src/subtitle_timing_ops.cpp
@@ -195,6 +202,8 @@ if(GTEST_FOUND)
         src/video_renderer_opengl_tile.cpp
         src/video_renderer_backend.cpp
         src/video_provider_cache.cpp
+        src/provider_catalog_builder.cpp
+        src/provider_open_policy.cpp
     )
     if(WITH_LIBPLACEBO)
         target_sources(gtest-run PRIVATE

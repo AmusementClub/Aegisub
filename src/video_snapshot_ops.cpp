@@ -1,8 +1,7 @@
 #include "video_snapshot_ops.h"
 
-#include "format.h"
-
 #include <libaegisub/fs.h>
+#include <libaegisub/format.h>
 #include <libaegisub/string_utils.h>
 
 namespace aegisub::video_snapshot_ops {

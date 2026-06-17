@@ -16,8 +16,10 @@
 
 #include "audio_provider_factory.h"
 
-#include "factory_manager.h"
 #include "options.h"
+#include "provider_catalog_builder.h"
+#include "provider_factory_entry.h"
+#include "provider_open_policy.h"
 #include "translation_service.h"
 #include "ui_services.h"
 #ifdef WITH_LSMASNATIVE
@@ -26,9 +28,6 @@
 #ifdef WITH_FFMS2
 #include "ffmpegsource_common.h"
 #endif
-#ifdef WITH_AVISYNTH
-#include "avisynth_wrap.h"
-#endif
 
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/fs.h>
@@ -36,25 +35,22 @@
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
 
+#include <algorithm>
 #include <exception>
+#include <iterator>
+#include <mutex>
+#include <string>
 #include <utility>
 
 using namespace agi;
 
-std::unique_ptr<AudioProvider> CreateAvisynthAudioProvider(fs::path const& filename, BackgroundRunner *);
 std::unique_ptr<AudioProvider> CreateLsmasNativeAudioProvider(fs::path const& filename, BackgroundRunner *, std::shared_ptr<SingleChoiceInteractionSink> choice_sink);
 std::unique_ptr<AudioProvider> CreateFFmpegSourceAudioProvider(fs::path const& filename, BackgroundRunner *, std::shared_ptr<SingleChoiceInteractionSink> choice_sink);
 
 namespace {
 thread_local aegisub::provider_selection_diagnostics::SelectionReport last_audio_provider_selection_report;
 
-struct factory {
-	const char *name;
-	std::unique_ptr<AudioProvider> (*create)(fs::path const&, BackgroundRunner *, std::shared_ptr<SingleChoiceInteractionSink>);
-	bool (*is_available)();
-	std::string (*availability_error)();
-	bool hidden;
-};
+using Factory = AudioProviderFactory;
 
 std::unique_ptr<AudioProvider> CreateDummyAudioProviderWithChoice(fs::path const& filename, BackgroundRunner *br, std::shared_ptr<SingleChoiceInteractionSink>) {
 	return CreateDummyAudioProvider(filename, br);
@@ -63,12 +59,6 @@ std::unique_ptr<AudioProvider> CreateDummyAudioProviderWithChoice(fs::path const
 std::unique_ptr<AudioProvider> CreatePCMAudioProviderWithChoice(fs::path const& filename, BackgroundRunner *br, std::shared_ptr<SingleChoiceInteractionSink>) {
 	return CreatePCMAudioProvider(filename, br);
 }
-
-#ifdef WITH_AVISYNTH
-std::unique_ptr<AudioProvider> CreateAvisynthAudioProviderWithChoice(fs::path const& filename, BackgroundRunner *br, std::shared_ptr<SingleChoiceInteractionSink>) {
-	return CreateAvisynthAudioProvider(filename, br);
-}
-#endif
 
 #ifdef WITH_FFMS2
 bool IsFFmpegSourceAvailable() {
@@ -92,18 +82,7 @@ std::string GetLsmasNativeAvailabilityError() {
 }
 #endif
 
-#ifdef WITH_AVISYNTH
-bool IsAvisynthAvailable() {
-	return avisynth::IsAvailable();
-}
-
-std::string GetAvisynthAvailabilityError() {
-	auto err = avisynth::GetLoadError();
-	return err.empty() ? "runtime library is unavailable." : err;
-}
-#endif
-
-const factory providers[] = {
+const Factory builtin_providers[] = {
 	{"Dummy", CreateDummyAudioProviderWithChoice, nullptr, nullptr, true},
 	{"PCM", CreatePCMAudioProviderWithChoice, nullptr, nullptr, true},
 #ifdef WITH_FFMS2
@@ -112,92 +91,51 @@ const factory providers[] = {
 #ifdef WITH_LSMASNATIVE
 	{"LsmasNative", CreateLsmasNativeAudioProvider, IsLsmasNativeAvailable, GetLsmasNativeAvailabilityError, false},
 #endif
-#ifdef WITH_AVISYNTH
-	{"Avisynth", CreateAvisynthAudioProviderWithChoice, IsAvisynthAvailable, GetAvisynthAvailabilityError, false},
-#endif
 };
 
-void RecordAttempt(aegisub::provider_selection_diagnostics::SelectionReport& report,
-                   char const* provider_name,
-                   char const* outcome,
-                   std::string detail = {}) {
-	report.attempts.push_back({provider_name ? provider_name : "", outcome ? outcome : "", std::move(detail)});
+std::vector<Factory>& RegisteredProviders() {
+	static std::vector<Factory> providers;
+	return providers;
 }
 
-std::string GetAvailabilityError(factory const& provider) {
-	if (!provider.availability_error)
-		return "runtime library is unavailable.";
-
-	try {
-		return provider.availability_error();
-	}
-	catch (agi::Exception const& err) {
-		return err.GetMessage();
-	}
-	catch (std::exception const& err) {
-		return err.what();
-	}
-	catch (...) {
-		return "unknown availability error";
-	}
+std::mutex& RegisteredProvidersMutex() {
+	static std::mutex mutex;
+	return mutex;
 }
 
-bool IsProviderAvailable(factory const& provider, std::string& availability_error) {
-	if (!provider.is_available)
-		return true;
-
-	try {
-		if (provider.is_available())
-			return true;
-	}
-	catch (agi::Exception const& err) {
-		availability_error = err.GetMessage();
-		return false;
-	}
-	catch (std::exception const& err) {
-		availability_error = err.what();
-		return false;
-	}
-	catch (...) {
-		availability_error = "unknown availability exception";
-		return false;
-	}
-
-	availability_error = GetAvailabilityError(provider);
-	return false;
+std::vector<Factory> ProviderFactories() {
+	std::vector<Factory> factories(std::begin(builtin_providers), std::end(builtin_providers));
+	std::lock_guard<std::mutex> lock(RegisteredProvidersMutex());
+	auto const& registered = RegisteredProviders();
+	factories.insert(factories.end(), registered.begin(), registered.end());
+	return factories;
 }
+
+}
+
+void RegisterAudioProviderFactory(AudioProviderFactory factory) {
+	std::lock_guard<std::mutex> lock(RegisteredProvidersMutex());
+	auto& providers = RegisteredProviders();
+	auto name = factory.name ? factory.name : "";
+	auto existing = std::find_if(providers.begin(), providers.end(), [&](auto const& provider) {
+		return name == std::string(provider.name ? provider.name : "");
+	});
+	if (existing == providers.end())
+		providers.push_back(factory);
 }
 
 aegisub::provider_catalog::ProviderCatalog GetAudioProviderCatalog(std::string const& preferred_provider) {
-	auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(preferred_provider);
-	auto sorted = GetSorted(providers, preferred);
-
-	aegisub::provider_catalog::ProviderCatalog catalog;
-	catalog.kind = aegisub::provider_catalog::ProviderKind::Audio;
-	catalog.preferred_provider = preferred;
-	catalog.providers.reserve(sorted.size());
-
-	for (auto const* provider : sorted) {
-		std::string availability_error;
-		bool available = IsProviderAvailable(*provider, availability_error);
-
-		aegisub::provider_catalog::ProviderDescriptor descriptor;
-		descriptor.kind = catalog.kind;
-		descriptor.name = provider->name;
-		descriptor.display_name = provider->name;
-		descriptor.hidden = provider->hidden;
-		descriptor.available = available;
-		descriptor.unavailable_reason = std::move(availability_error);
-		if (!descriptor.hidden && !descriptor.available)
-			descriptor.display_name.append(" (Unavailable)");
-		catalog.providers.push_back(std::move(descriptor));
-	}
-
-	return catalog;
+	auto providers = ProviderFactories();
+	return aegisub::provider_catalog::BuildCatalog(
+		aegisub::provider_catalog::ProviderKind::Audio,
+		providers,
+		preferred_provider,
+		aegisub::provider_catalog::DescribeProviderFactoryEntry<AudioProviderCreate>);
 }
 
 std::vector<std::string> GetAudioProviderNames() {
-	return ::GetClasses(providers);
+	auto providers = ProviderFactories();
+	return aegisub::provider_catalog::VisibleFactoryNames(providers, aegisub::provider_catalog::DescribeProviderFactoryEntry<AudioProviderCreate>);
 }
 
 std::vector<std::pair<std::string, std::string>> GetAudioProviderChoices() {
@@ -210,124 +148,108 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
                                                      NotificationSink& notification_sink,
                                                      std::shared_ptr<SingleChoiceInteractionSink> choice_sink) {
 	auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(OPT_GET("Audio/Provider")->GetString());
-	auto sorted = GetSorted(providers, preferred);
+	auto providers = ProviderFactories();
+	auto sorted = aegisub::provider_catalog::SortFactories(providers, preferred, aegisub::provider_catalog::DescribeProviderFactoryEntry<AudioProviderCreate>);
 	aegisub::provider_selection_diagnostics::SelectionReport diagnostics;
 	diagnostics.preferred_provider = preferred;
 	last_audio_provider_selection_report = diagnostics;
 	std::unique_ptr<AudioProvider> provider;
-	bool found_file = false;
-	bool found_audio = false;
-	std::string msg_all;     // error messages from all attempted providers
-	std::string msg_partial; // error messages from providers that could partially load the file (knows container, missing codec)
+	aegisub::provider_catalog::AudioProviderOpenFailureReport open_failures;
 
 	for (auto const& factory : sorted) {
-		bool provider_available = true;
-		std::string availability_error;
-		if (factory->is_available) {
-			try {
-				provider_available = factory->is_available();
-			}
-			catch (agi::Exception const& err) {
-				provider_available = false;
-				availability_error = err.GetMessage();
-			}
-			catch (std::exception const& err) {
-				provider_available = false;
-				availability_error = err.what();
-			}
-			catch (...) {
-				provider_available = false;
-				availability_error = "unknown availability exception";
-			}
-		}
-		if (!provider_available) {
-			if (availability_error.empty())
-				availability_error = GetAvailabilityError(*factory);
-			std::string err;
-			err.append(factory->name);
-			err.append(": ");
-			err.append(availability_error);
-			LOG_D("audio_provider") << err;
-			msg_all.append(err);
-			msg_all.push_back('\n');
-			RecordAttempt(diagnostics, factory->name, "unavailable", availability_error);
-			continue;
-		}
-
 		try {
-			provider = factory->create(filename, br, choice_sink);
-			if (!provider) {
-				RecordAttempt(diagnostics, factory->name, "returned_null", "provider factory returned null");
+			auto attempt = aegisub::provider_catalog::TryOpenProviderFactory(
+				*factory,
+				aegisub::provider_catalog::DescribeProviderFactoryEntry<AudioProviderCreate>,
+				diagnostics,
+				[&](Factory const& provider_factory) {
+					return provider_factory.create(filename, br, choice_sink);
+				});
+
+			if (attempt.state == aegisub::provider_catalog::ProviderOpenAttemptState::Unavailable) {
+				std::string err;
+				err.append(factory->name);
+				err.append(": ");
+				err.append(attempt.unavailable_reason);
+				LOG_D("audio_provider") << err;
+				aegisub::provider_catalog::RecordAudioProviderOpenFailureAttempt(
+					open_failures,
+					diagnostics,
+					factory->name,
+					attempt.unavailable_reason,
+					aegisub::provider_catalog::AudioProviderOpenAttemptFailure::Unavailable);
 				continue;
 			}
-			diagnostics.selected_provider = factory->name;
-			RecordAttempt(diagnostics, factory->name, "opened");
+			if (attempt.state == aegisub::provider_catalog::ProviderOpenAttemptState::ReturnedNull)
+				continue;
+
+			provider = std::move(attempt.provider);
 			LOG_I("audio_provider") << "Using audio provider: " << factory->name;
 			break;
 		}
 		catch (fs::FileNotFound const& err) {
 			LOG_D("audio_provider") << err.GetMessage();
-			msg_all.append(factory->name);
-			msg_all.append(": ");
-			msg_all.append(err.GetMessage());
-			msg_all.append(" not found.\n");
-			RecordAttempt(diagnostics, factory->name, "file_not_found", err.GetMessage());
+			auto line_detail = err.GetMessage() + " not found.";
+			aegisub::provider_catalog::RecordAudioProviderOpenFailureAttempt(
+				open_failures,
+				diagnostics,
+				factory->name,
+				line_detail,
+				aegisub::provider_catalog::AudioProviderOpenAttemptFailure::FileNotFound,
+				nullptr,
+				err.GetMessage());
 		}
 		catch (AudioDataNotFound const& err) {
 			LOG_D("audio_provider") << err.GetMessage();
-			found_file = true;
-			msg_all.append(factory->name);
-			msg_all.append(": ");
-			msg_all.append(err.GetMessage());
-			msg_all.push_back('\n');
-			RecordAttempt(diagnostics, factory->name, "no_audio", err.GetMessage());
+			aegisub::provider_catalog::RecordAudioProviderOpenFailureAttempt(
+				open_failures,
+				diagnostics,
+				factory->name,
+				err.GetMessage(),
+				aegisub::provider_catalog::AudioProviderOpenAttemptFailure::AudioNotFound);
 		}
 		catch (AudioProviderError const& err) {
 			LOG_D("audio_provider") << err.GetMessage();
-			found_audio = true;
-			found_file = true;
-			std::string thismsg;
-			thismsg.append(factory->name);
-			thismsg.append(": ");
-			thismsg.append(err.GetMessage());
-			thismsg.push_back('\n');
-			msg_all.append(thismsg);
-			msg_partial.append(thismsg);
-			RecordAttempt(diagnostics, factory->name, "error", err.GetMessage());
+			aegisub::provider_catalog::RecordAudioProviderOpenFailureAttempt(
+				open_failures,
+				diagnostics,
+				factory->name,
+				err.GetMessage(),
+				aegisub::provider_catalog::AudioProviderOpenAttemptFailure::ProviderError);
 		}
 		catch (std::exception const& err) {
 			LOG_W("audio_provider") << factory->name << " threw std::exception: " << err.what();
-			found_audio = true;
-			found_file = true;
-			std::string thismsg;
-			thismsg.append(factory->name);
-			thismsg.append(": ");
-			thismsg.append(err.what());
-			thismsg.push_back('\n');
-			msg_all.append(thismsg);
-			msg_partial.append(thismsg);
-			RecordAttempt(diagnostics, factory->name, "std_exception", err.what());
+			aegisub::provider_catalog::RecordAudioProviderOpenFailureAttempt(
+				open_failures,
+				diagnostics,
+				factory->name,
+				err.what(),
+				aegisub::provider_catalog::AudioProviderOpenAttemptFailure::ProviderError,
+				"std_exception");
 		}
 		catch (...) {
 			LOG_W("audio_provider") << factory->name << " threw unknown exception";
-			found_audio = true;
-			found_file = true;
-			std::string thismsg;
-			thismsg.append(factory->name);
-			thismsg.append(": unknown exception\n");
-			msg_all.append(thismsg);
-			msg_partial.append(thismsg);
-			RecordAttempt(diagnostics, factory->name, "unknown_exception", "unknown exception");
+			aegisub::provider_catalog::RecordAudioProviderOpenFailureAttempt(
+				open_failures,
+				diagnostics,
+				factory->name,
+				"unknown exception",
+				aegisub::provider_catalog::AudioProviderOpenAttemptFailure::ProviderError,
+				"unknown_exception");
 		}
 	}
 
 	last_audio_provider_selection_report = diagnostics;
 
 	if (!provider) {
-		if (found_audio)
-			throw AudioProviderError(msg_partial);
-		if (found_file)
-			throw AudioDataNotFound(msg_all);
+		switch (aegisub::provider_catalog::FinalAudioProviderOpenFailure(open_failures)) {
+		case aegisub::provider_catalog::AudioProviderOpenFailure::ProviderError:
+			throw AudioProviderError(aegisub::provider_catalog::FinalAudioProviderOpenErrorDetail(open_failures));
+		case aegisub::provider_catalog::AudioProviderOpenFailure::AudioNotFound:
+			throw AudioDataNotFound(aegisub::provider_catalog::FinalAudioProviderOpenErrorDetail(open_failures));
+		case aegisub::provider_catalog::AudioProviderOpenFailure::FileNotFound:
+			break;
+		}
 		throw fs::FileNotFound(filename);
 	}
 

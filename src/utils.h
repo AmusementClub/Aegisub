@@ -31,6 +31,7 @@
 
 #include <libaegisub/fs_fwd.h>
 
+#include "cache_cleanup.h"
 #include "numeric_utils.h"
 
 #include <cstdint>
@@ -72,18 +73,6 @@ int ScaleVideoUi(wxWindow *window, int value);
 wxSize ScaleVideoUi(wxWindow *window, wxSize const& value);
 int GetVideoUiIconSize(wxWindow *window, int logical_size = 16);
 double GetWindowScaleFactor(wxWindow *window);
-
-/// Clean up the given cache directory, limiting the size to max_size
-/// @param directory Directory to clean
-/// @param file_type Wildcard pattern for files to clean up
-/// @param max_size Maximum size of directory in MB
-/// @param max_files Maximum number of files
-void CleanCache(
-	agi::fs::path const& directory,
-	std::string const& file_type,
-	uint64_t max_size,
-	uint64_t max_files = -1,
-	uint64_t preserve_recent_seconds = 0);
 
 /// Get the text contents of the clipboard, or empty string on failure
 std::string GetClipboard();

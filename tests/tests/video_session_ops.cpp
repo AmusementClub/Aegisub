@@ -84,6 +84,33 @@ TEST(video_session_ops, build_opened_video_summary_collects_provider_metadata) {
 	EXPECT_EQ(1, subtitle_probe_count);
 }
 
+TEST(video_session_ops, build_opened_video_summary_from_metadata_is_async_free) {
+	aegisub::video_session_ops::OpenedVideoMetadata metadata;
+	metadata.display_aspect_ratio_override = 2.35;
+	metadata.timecodes = agi::vfr::Framerate(25.0);
+	metadata.keyframes = {1, 25};
+	metadata.warning = "metadata warning";
+	metadata.has_audio = true;
+
+	int subtitle_probe_count = 0;
+	auto summary = aegisub::video_session_ops::BuildOpenedVideoSummary(
+		metadata,
+		agi::fs::PathFromString("movie.mkv"),
+		[&](agi::fs::path const&) {
+			++subtitle_probe_count;
+			return false;
+		});
+
+	ASSERT_TRUE(summary.display_aspect_ratio_override.has_value());
+	EXPECT_DOUBLE_EQ(2.35, *summary.display_aspect_ratio_override);
+	EXPECT_DOUBLE_EQ(25.0, summary.timecodes.FPS());
+	EXPECT_EQ((std::vector<int>{1, 25}), summary.keyframes);
+	EXPECT_EQ("metadata warning", summary.warning);
+	EXPECT_TRUE(summary.has_audio);
+	EXPECT_FALSE(summary.has_subtitles);
+	EXPECT_EQ(1, subtitle_probe_count);
+}
+
 TEST(video_session_ops, build_opened_video_summary_skips_subtitle_probe_for_non_mkv_and_missing_dar) {
 	auto provider = agi::make_unique<FakeVideoProvider>();
 	provider->dar = 0.0;

@@ -34,7 +34,7 @@
 #include "format.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
-#include "video_frame.h"
+#include "video_frame_wx.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
 #include "project.h"

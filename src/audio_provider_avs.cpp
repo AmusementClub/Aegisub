@@ -35,6 +35,7 @@
 #ifdef WITH_AVISYNTH
 #include <libaegisub/audio/provider.h>
 
+#include "audio_provider_factory.h"
 #include "avisynth.h"
 #include "avisynth_path_helper.h"
 #include "avisynth_wrap.h"
@@ -147,5 +148,31 @@ void AvisynthAudioProvider::FillBuffer(void *buf, int64_t start, int64_t count) 
 
 std::unique_ptr<agi::AudioProvider> CreateAvisynthAudioProvider(agi::fs::path const& file, agi::BackgroundRunner *) {
 	return agi::make_unique<AvisynthAudioProvider>(file);
+}
+
+namespace {
+std::unique_ptr<agi::AudioProvider> CreateAvisynthAudioProviderWithChoice(
+	agi::fs::path const& file,
+	agi::BackgroundRunner *br,
+	std::shared_ptr<agi::SingleChoiceInteractionSink>) {
+	return CreateAvisynthAudioProvider(file, br);
+}
+
+bool IsAvisynthAvailable() {
+	return avisynth::IsAvailable();
+}
+
+std::string GetAvisynthAvailabilityError() {
+	auto err = avisynth::GetLoadError();
+	return err.empty() ? "runtime library is unavailable." : err;
+}
+
+}
+
+void RegisterAvisynthAudioProviderFactory() {
+	static std::once_flag register_once;
+	std::call_once(register_once, [] {
+		RegisterAudioProviderFactory({"Avisynth", CreateAvisynthAudioProviderWithChoice, IsAvisynthAvailable, GetAvisynthAvailabilityError, false});
+	});
 }
 #endif

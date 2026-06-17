@@ -16,10 +16,11 @@
 
 #include "async_video_provider.h"
 
+#include "ass_fixstyle_core.h"
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_time_projection.h"
-#include "export_fixstyle.h"
+#include "async_video_trace.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "source_frame.h"
 #include "subtitle_overlay.h"
@@ -27,7 +28,6 @@
 #include "video_frame.h"
 #include "video_memory_stats.h"
 #include "video_provider_manager.h"
-#include "perf_trace.h"
 
 #include <libaegisub/background_runner.h>
 #include <libaegisub/dispatch.h>
@@ -487,7 +487,7 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 				single_frame = SUBS_FILE_ALREADY_LOADED;
 			}
 			else {
-				AssFixStylesFilter::ProcessSubs(subs.get());
+				aegisub::ass_fixstyle::ReplaceMissingStylesWithDefault(subs.get());
 				single_frame = frame_number;
 				subs_provider->LoadSubtitles(subs.get(), static_cast<int>(time), &fps);
 			}
@@ -963,8 +963,8 @@ bool AsyncVideoProvider::ProcessPending() {
 		bool should_deliver =
 			work.content_version == current_content_version &&
 			work.request_version == current_request_version;
-		perf_trace::ObserveVideoFrameRenderDuration(frame_number, time, should_deliver, false, render_duration_ms);
-		perf_trace::ObserveFrameResult(frame_number, time, should_deliver, false);
+		aegisub::async_video_trace::ObserveVideoFrameRenderDuration(frame_number, time, should_deliver, false, render_duration_ms);
+		aegisub::async_video_trace::ObserveFrameResult(frame_number, time, should_deliver, false);
 		if (should_deliver) {
 			remember_rendered_lines();
 			DeliverFrameReady(std::move(packet), time);
@@ -1215,7 +1215,7 @@ VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bo
 		ret = ProcRenderPacket(frame, time, raw);
 		auto const render_duration_ms =
 			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - render_begin).count();
-		perf_trace::ObserveVideoFrameRenderDuration(frame, time, true, true, render_duration_ms);
+		aegisub::async_video_trace::ObserveVideoFrameRenderDuration(frame, time, true, true, render_duration_ms);
 		// Keep the provider's current-frame context aligned with synchronous callers.
 		frame_number = frame;
 		this->time = time;

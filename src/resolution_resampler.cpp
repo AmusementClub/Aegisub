@@ -20,8 +20,8 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_style.h"
-#include "compat.h"
-#include "utils.h"
+#include "numeric_utils.h"
+#include "translation_service.h"
 
 #include <libaegisub/exception.h>
 #include <libaegisub/of_type_adaptor.h>
@@ -32,7 +32,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <wx/intl.h>
 
 enum {
 	LEFT = 0,
@@ -319,5 +318,5 @@ void ResampleResolution(AssFile *ass, ResampleSettings settings) {
 	if (resample_colors)
 		ass->SetScriptInfo("YCbCr Matrix", MatrixToString(settings.dest_matrix));
 
-	ass->Commit(from_wx(_("resolution resampling")), AssFile::COMMIT_SCRIPTINFO | AssFile::COMMIT_DIAG_FULL);
+	ass->Commit(_("resolution resampling"), AssFile::COMMIT_SCRIPTINFO | AssFile::COMMIT_DIAG_FULL);
 }

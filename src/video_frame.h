@@ -19,8 +19,6 @@
 #include <cstddef>
 #include <vector>
 
-class wxImage;
-
 struct VideoFrame {
 	std::vector<unsigned char> data;
 	size_t width;
@@ -28,5 +26,3 @@ struct VideoFrame {
 	size_t pitch;
 	bool flipped;
 };
-
-wxImage GetImage(VideoFrame const& frame);

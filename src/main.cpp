@@ -39,6 +39,7 @@
 
 #include "auto4_base.h"
 #include "app_runtime.h"
+#include "avisynth_provider_registration.h"
 #include "compat.h"
 #include "crash_writer.h"
 #include "format.h"
@@ -158,6 +159,7 @@ bool AegisubApp::OnInit() {
 		ShowGuiWxBootstrapUiError("Fatal error while initializing", runtime_error);
 		return false;
 	}
+	RegisterAvisynthProviderFactories();
 	perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.total", duration_ms(runtime_initialize_started));
 	phase_started = std::chrono::steady_clock::now();
 

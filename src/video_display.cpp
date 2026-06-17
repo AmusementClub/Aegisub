@@ -61,7 +61,7 @@
 #include "video_memory_stats.h"
 #include "video_zoom.h"
 #include "video_controller.h"
-#include "video_frame.h"
+#include "video_frame_wx.h"
 #include "visual_tool.h"
 
 #include <libaegisub/make_unique.h>

@@ -42,7 +42,7 @@
 #include "subs_preview.h"
 #include "ui_services.h"
 #include "include/aegisub/subtitles_provider.h"
-#include "video_frame.h"
+#include "video_frame_wx.h"
 #include "video_provider_dummy.h"
 
 #include <libaegisub/make_unique.h>

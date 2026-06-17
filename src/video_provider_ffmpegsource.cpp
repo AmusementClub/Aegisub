@@ -40,9 +40,9 @@
 #include "include/aegisub/video_provider.h"
 
 #include "options.h"
-#include "utils.h"
 #include "video_frame.h"
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 
@@ -477,7 +477,7 @@ double FFmpegSourceVideoProvider::GetDAR() const {
 }
 
 void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
-	n = mid(0, n, GetFrameCount() - 1);
+	n = std::clamp(n, 0, GetFrameCount() - 1);
 
 	SourceFrameOutputMode const previous_mode = OutputMode;
 	bool restore_output_mode = previous_mode != SourceFrameOutputMode::Bgra8;
@@ -552,7 +552,7 @@ bool FFmpegSourceVideoProvider::GetNativeFrame(int n, SourceFrame& out, std::sha
 	if (OutputMode != SourceFrameOutputMode::Native)
 		return false;
 
-	n = mid(0, n, GetFrameCount() - 1);
+	n = std::clamp(n, 0, GetFrameCount() - 1);
 
 	auto frame = ffms::GetFrame(VideoSource, n, &ErrInfo);
 	if (!frame)

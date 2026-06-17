@@ -32,6 +32,7 @@
 
 #include "options.h"
 #include "video_frame.h"
+#include "video_provider_manager.h"
 
 #include <libaegisub/access.h>
 #include <libaegisub/charset_conv.h>
@@ -317,5 +318,32 @@ void AvisynthVideoProvider::GetFrame(int n, VideoFrame &out) {
 namespace agi { class BackgroundRunner; }
 std::unique_ptr<VideoProvider> CreateAvisynthVideoProvider(agi::fs::path const& path, std::string const& colormatrix, agi::BackgroundRunner *) {
 	return agi::make_unique<AvisynthVideoProvider>(path, colormatrix);
+}
+
+namespace {
+std::unique_ptr<VideoProvider> CreateAvisynthVideoProviderWithChoice(
+	agi::fs::path const& path,
+	std::string const& colormatrix,
+	agi::BackgroundRunner *br,
+	std::shared_ptr<agi::SingleChoiceInteractionSink>) {
+	return CreateAvisynthVideoProvider(path, colormatrix, br);
+}
+
+bool IsAvisynthAvailable() {
+	return avisynth::IsAvailable();
+}
+
+std::string GetAvisynthAvailabilityError() {
+	auto err = avisynth::GetLoadError();
+	return err.empty() ? "runtime library is unavailable." : err;
+}
+
+}
+
+void RegisterAvisynthVideoProviderFactory() {
+	static std::once_flag register_once;
+	std::call_once(register_once, [] {
+		RegisterVideoProviderFactory({"Avisynth", CreateAvisynthVideoProviderWithChoice, IsAvisynthAvailable, GetAvisynthAvailabilityError, false});
+	});
 }
 #endif // HAVE_AVISYNTH

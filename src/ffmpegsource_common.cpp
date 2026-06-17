@@ -35,13 +35,12 @@
 #ifdef WITH_FFMS2
 #include "ffmpegsource_common.h"
 
-#include "compat.h"
-#include "format.h"
 #include "mkv_wrap.h"
 #include <libaegisub/native_library.h>
 #include "options.h"
 #include "provider_index_cache.h"
 #include "track_choice.h"
+#include "translation_service.h"
 #include "ui_services.h"
 
 #include <libaegisub/background_runner.h>
@@ -56,7 +55,6 @@
 #include <mutex>
 #include <string>
 #include <vector>
-#include <wx/intl.h>
 
 #ifdef CreateDirectory
 #undef CreateDirectory
@@ -96,15 +94,14 @@ namespace {
 	std::string FormatFFMSVersion(int version) {
 		if (version < 0)
 			return "unknown";
-		return agi::format("%d.%d.%d.%d",
-			(version >> 24) & 0xFF,
-			(version >> 16) & 0xFF,
-			(version >> 8) & 0xFF,
-			version & 0xFF);
+		return std::to_string((version >> 24) & 0xFF)
+			+ "." + std::to_string((version >> 16) & 0xFF)
+			+ "." + std::to_string((version >> 8) & 0xFF)
+			+ "." + std::to_string(version & 0xFF);
 	}
 
 	std::string GetVersionContext() {
-		return agi::format("headers=%s, dll=%s", FormatFFMSVersion(FFMS_VERSION), FormatFFMSVersion(loaded_version));
+		return "headers=" + FormatFFMSVersion(FFMS_VERSION) + ", dll=" + FormatFFMSVersion(loaded_version);
 	}
 
 	std::string GetVersionContextForCache() {
@@ -298,8 +295,8 @@ FFMS_Index *FFmpegSourceProvider::DoIndexing(FFMS_Indexer *Indexer,
 	// index all audio tracks
 	FFMS_Index *Index;
 	br->Run([&](agi::ProgressSink *ps) {
-		ps->SetTitle(from_wx(_("Indexing")));
-		ps->SetMessage(from_wx(_("Reading timecodes and frame/sample data")));
+		ps->SetTitle(_("Indexing"));
+		ps->SetMessage(_("Reading timecodes and frame/sample data"));
 		TIndexCallback callback = [](int64_t Current, int64_t Total, void *Private) -> int {
 			auto ps = static_cast<agi::ProgressSink *>(Private);
 			ps->SetProgress(Current, Total);

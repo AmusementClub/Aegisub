@@ -414,6 +414,36 @@ option(WITH_SKIA "Enable optional Skia-based 2D rendering infrastructure" OFF)
 option(WITH_FFTW3 "Enable app-local runtime loading of FFTW3 for spectrum FFT support" ON)
 find_package(pffft CONFIG QUIET)
 option(WITH_PFFFT "Enable PFFFT spectrum FFT support" ${pffft_FOUND})
+
+add_library(aegisub_features INTERFACE)
+if(WITH_LIBPLACEBO AND HAVE_LIBPLACEBO)
+    find_package(OpenGL REQUIRED)
+    target_compile_definitions(aegisub_features INTERFACE WITH_LIBPLACEBO WITH_LIBPLACEBO_RUNTIME_LOADING)
+    target_include_directories(aegisub_features INTERFACE ${LibPlacebo_INCLUDE_DIR})
+    target_link_libraries(aegisub_features INTERFACE OpenGL::GL)
+endif()
+if(WITH_CSRI)
+    target_compile_definitions(aegisub_features INTERFACE WITH_CSRI)
+endif()
+if(WITH_SKIA)
+    if(NOT TARGET unofficial::skia::skia)
+        message(FATAL_ERROR
+            "WITH_SKIA is ON, but the Skia vcpkg package was not found.\n"
+            "Configure with -DVCPKG_MANIFEST_FEATURES=skia or pass -DWITH_SKIA=OFF."
+        )
+    endif()
+    target_compile_definitions(aegisub_features INTERFACE WITH_SKIA)
+    target_link_libraries(aegisub_features INTERFACE unofficial::skia::skia)
+endif()
+if(WITH_FFTW3)
+    target_compile_definitions(aegisub_features INTERFACE WITH_FFTW3)
+endif()
+if(WITH_PFFFT)
+    find_package(pffft CONFIG REQUIRED)
+    target_compile_definitions(aegisub_features INTERFACE WITH_PFFFT)
+    target_link_libraries(aegisub_features INTERFACE pffft::pffft)
+endif()
+
 function(aegisub_enable_highway target_name)
     target_compile_definitions(${target_name} PRIVATE AEGISUB_WITH_HIGHWAY=1)
     target_link_libraries(${target_name} PRIVATE hwy::hwy)
@@ -456,6 +486,9 @@ add_subdirectory("vendor/csri")
 target_sources(csri PRIVATE src/csri_native_library_bridge.cpp)
 target_include_directories(csri PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/libaegisub/include")
 target_compile_features(csri PRIVATE cxx_std_20)
+if(WITH_CSRI)
+    target_link_libraries(aegisub_features INTERFACE csri)
+endif()
 
 set(AEGISUB_SHARED_EXE_ENTRY_SOURCES
     src/app_entry.cpp
@@ -790,17 +823,11 @@ target_link_libraries(aegisub_core PRIVATE luajit)
 # Codec/format deps used by the core providers/renderers (discovered above).
 target_include_directories(aegisub_core PRIVATE ${ass_INCLUDE_DIRS})
 target_link_libraries(aegisub_core PUBLIC ${ass_LIBRARIES})
-target_link_libraries(aegisub_core PRIVATE "Boost::headers" "Boost::container" "Boost::locale" ${AEGISUB_REGEX_TARGET})
+target_link_libraries(aegisub_core PRIVATE aegisub_features "Boost::headers" "Boost::container" "Boost::locale" ${AEGISUB_REGEX_TARGET})
 target_link_libraries(aegisub_core PRIVATE pugixml::pugixml)
 aegisub_enable_highway(aegisub_core)
 target_link_libraries(aegisub_core PRIVATE "ZLIB::ZLIB")
-# libplacebo headers are consumed by the placebo renderer sources below (added
-# only when WITH_LIBPLACEBO); keep the include available to the core target.
 if(WITH_LIBPLACEBO AND HAVE_LIBPLACEBO)
-    find_package(OpenGL REQUIRED)
-    target_include_directories(aegisub_core PRIVATE ${LibPlacebo_INCLUDE_DIR})
-    target_compile_definitions(aegisub_core PRIVATE WITH_LIBPLACEBO WITH_LIBPLACEBO_RUNTIME_LOADING)
-    target_link_libraries(aegisub_core PRIVATE OpenGL::GL)
     target_sources(aegisub_core PRIVATE
         src/video_renderer_placebo_gl.cpp
         src/video_renderer_placebo_runtime.cpp
@@ -813,8 +840,6 @@ if(WITH_LIBPLACEBO AND HAVE_LIBPLACEBO)
 endif()
 # Optional Skia infra (gpu context host, surface provider, text cache, overlay).
 if(WITH_SKIA)
-    target_compile_definitions(aegisub_core PRIVATE WITH_SKIA)
-    target_link_libraries(aegisub_core PRIVATE unofficial::skia::skia)
     target_sources(aegisub_core PRIVATE
         src/video_overlay_draw_context_skia.cpp
         src/skia_runtime/skia_gpu_context_host.cpp
@@ -832,21 +857,6 @@ if(WITH_AVISYNTH AND HAVE_AVISYNTH)
         target_compile_definitions(aegisub_core PRIVATE "AVISYNTH_SO=\"libavisynth.so\"")
     endif()
 endif()
-# CSRI subtitle renderer bridge (core, no wx).
-if(WITH_CSRI)
-    target_compile_definitions(aegisub_core PRIVATE WITH_CSRI)
-    target_link_libraries(aegisub_core PRIVATE csri)
-endif()
-# Spectrum FFT backends (audio_spectrum_analysis_cache / audio_spectrum_fftw3).
-if(WITH_FFTW3)
-    target_compile_definitions(aegisub_core PRIVATE WITH_FFTW3)
-endif()
-if(WITH_PFFFT)
-    find_package(pffft CONFIG REQUIRED)
-    target_compile_definitions(aegisub_core PRIVATE WITH_PFFFT)
-    target_link_libraries(aegisub_core PRIVATE pffft::pffft)
-endif()
-
 ## Aegisub
 add_executable(Aegisub WIN32
     "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.h"
@@ -1026,12 +1036,7 @@ set_source_files_properties(libaegisub/common/native_library.cpp PROPERTIES
     SKIP_PRECOMPILE_HEADERS ON
 )
 # aegisub_core carries the framework-agnostic core (PUBLIC libaegisub + ass/boost/...).
-target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} aegisub_core luajit)
-# CSRI may be used by the subtitles provider cluster in aegisub_core; mirror the
-# link on the exe so static-link consumers keep the backend available.
-if(WITH_CSRI)
-    target_link_libraries(Aegisub PRIVATE csri)
-endif()
+target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} aegisub_core aegisub_features luajit)
 target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
 target_compile_features(Aegisub PRIVATE cxx_std_20)
 target_include_directories(Aegisub PRIVATE src)
@@ -1043,10 +1048,10 @@ if(AEGISUB_MATROSKA_PARSING)
     find_package(EBML REQUIRED CONFIG)
     find_package(Matroska REQUIRED CONFIG)
     target_link_libraries(aegisub_core PRIVATE "EBML::ebml" "Matroska::matroska")
-    target_compile_definitions(aegisub_core PRIVATE AEGISUB_MATROSKA_PARSING=1)
+    target_compile_definitions(aegisub_features INTERFACE AEGISUB_MATROSKA_PARSING=1)
     target_sources(aegisub_core PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_LIBMATROSKA_BACKEND_SOURCES})
 else()
-    target_compile_definitions(aegisub_core PRIVATE AEGISUB_MATROSKA_PARSING=0)
+    target_compile_definitions(aegisub_features INTERFACE AEGISUB_MATROSKA_PARSING=0)
     target_sources(aegisub_core PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_LEGACY_BACKEND_SOURCES})
 endif()
 option(AEGISUB_USE_STRINGZILLA "Use StringZilla in selected string-heavy code paths" ON)

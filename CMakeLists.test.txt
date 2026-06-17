@@ -201,8 +201,9 @@ if(GTEST_FOUND)
             tests/tests/video_renderer_placebo_runtime.cpp
             src/video_renderer_placebo_runtime.cpp
         )
-        target_compile_definitions(gtest-run PRIVATE WITH_LIBPLACEBO)
-        target_include_directories(gtest-run PRIVATE ${LibPlacebo_INCLUDE_DIR})
+    endif()
+    if(WITH_FFTW3)
+        target_sources(gtest-run PRIVATE src/audio_spectrum_fftw3.cpp)
     endif()
     target_compile_definitions(gtest-run PRIVATE
         CMAKE_BUILD
@@ -225,7 +226,7 @@ if(GTEST_FOUND)
             "${FFMS2_INCLUDE_DIR}"
         )
     endif()
-    target_link_libraries(gtest-run PRIVATE libaegisub luajit "GTest::GTest" "Iconv::Iconv" pugixml::pugixml "ZLIB::ZLIB" ${wxWidgets_LIBRARIES})
+    target_link_libraries(gtest-run PRIVATE aegisub_features libaegisub luajit "GTest::GTest" "Iconv::Iconv" pugixml::pugixml "ZLIB::ZLIB" ${wxWidgets_LIBRARIES})
     aegisub_enable_highway(gtest-run)
     if(WIN32)
         target_link_libraries(gtest-run PRIVATE Psapi)
@@ -325,9 +326,8 @@ if(WITH_LIBPLACEBO)
         libaegisub/common/native_library.cpp
         src/video_renderer_placebo_runtime.cpp
     )
-    target_compile_definitions(placebo-runtime-smoke PRIVATE CMAKE_BUILD WITH_LIBPLACEBO)
-    target_include_directories(placebo-runtime-smoke PRIVATE ${LibPlacebo_INCLUDE_DIR})
-    target_link_libraries(placebo-runtime-smoke PRIVATE libaegisub)
+    target_compile_definitions(placebo-runtime-smoke PRIVATE CMAKE_BUILD)
+    target_link_libraries(placebo-runtime-smoke PRIVATE aegisub_features libaegisub)
 
     if(WIN32)
         add_executable(placebo-legacy-state-smoke EXCLUDE_FROM_ALL
@@ -336,9 +336,8 @@ if(WITH_LIBPLACEBO)
             src/video_renderer_placebo_gl.cpp
             src/video_renderer_placebo_runtime.cpp
         )
-        target_compile_definitions(placebo-legacy-state-smoke PRIVATE CMAKE_BUILD WITH_LIBPLACEBO)
-        target_include_directories(placebo-legacy-state-smoke PRIVATE ${LibPlacebo_INCLUDE_DIR})
-        target_link_libraries(placebo-legacy-state-smoke PRIVATE libaegisub OpenGL::GL)
+        target_compile_definitions(placebo-legacy-state-smoke PRIVATE CMAKE_BUILD)
+        target_link_libraries(placebo-legacy-state-smoke PRIVATE aegisub_features libaegisub OpenGL::GL)
     endif()
 
     add_executable(placebo-render-bench EXCLUDE_FROM_ALL
@@ -347,9 +346,8 @@ if(WITH_LIBPLACEBO)
         src/video_renderer_placebo_gl.cpp
         src/video_renderer_placebo_runtime.cpp
     )
-    target_compile_definitions(placebo-render-bench PRIVATE CMAKE_BUILD WITH_LIBPLACEBO)
-    target_include_directories(placebo-render-bench PRIVATE ${LibPlacebo_INCLUDE_DIR})
-    target_link_libraries(placebo-render-bench PRIVATE libaegisub OpenGL::GL)
+    target_compile_definitions(placebo-render-bench PRIVATE CMAKE_BUILD)
+    target_link_libraries(placebo-render-bench PRIVATE aegisub_features libaegisub OpenGL::GL)
     if(WIN32)
         target_link_libraries(placebo-render-bench PRIVATE Psapi)
     endif()
@@ -416,15 +414,13 @@ if(WIN32)
     if(MSVC)
         set_source_files_properties(src/gl_wrap.cpp PROPERTIES COMPILE_OPTIONS /FIwindows.h)
     endif()
-    target_link_libraries(detached-visual-tools-smoke PRIVATE libaegisub OpenGL::GL ${wxWidgets_LIBRARIES})
+    target_link_libraries(detached-visual-tools-smoke PRIVATE aegisub_features libaegisub OpenGL::GL ${wxWidgets_LIBRARIES})
     if(WITH_LIBPLACEBO)
         target_sources(detached-visual-tools-smoke PRIVATE
             libaegisub/common/native_library.cpp
             src/video_renderer_placebo_gl.cpp
             src/video_renderer_placebo_runtime.cpp
         )
-        target_compile_definitions(detached-visual-tools-smoke PRIVATE WITH_LIBPLACEBO)
-        target_include_directories(detached-visual-tools-smoke PRIVATE ${LibPlacebo_INCLUDE_DIR})
     endif()
 
     if(WITH_FFMS2 AND WITH_LIBPLACEBO)
@@ -445,17 +441,16 @@ if(WIN32)
             CMAKE_BUILD
             WITH_FFMS2
             WITH_FFMS2_RUNTIME_LOADING
-            WITH_LIBPLACEBO
             WIN32_LEAN_AND_MEAN
             NOMINMAX
         )
         target_include_directories(video-geometry-compare PRIVATE
             ${FFMS2_INCLUDE_DIR}
-            ${LibPlacebo_INCLUDE_DIR}
             "${PROJECT_SOURCE_DIR}/vendor/ffms2"
         )
         aegisub_enable_wx_utf8_guard(video-geometry-compare)
         target_link_libraries(video-geometry-compare PRIVATE
+            aegisub_features
             libaegisub
             OpenGL::GL
             ${wxWidgets_LIBRARIES}

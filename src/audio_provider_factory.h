@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "provider_selection_diagnostics.h"
+#include "provider_catalog.h"
 
 #include <libaegisub/fs_fwd.h>
 
@@ -36,6 +37,7 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(agi::fs::path const& filena
                                                      agi::BackgroundRunner *br,
                                                      agi::NotificationSink& notification_sink,
                                                      std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
+aegisub::provider_catalog::ProviderCatalog GetAudioProviderCatalog(std::string const& preferred_provider = {});
 std::vector<std::string> GetAudioProviderNames();
 std::vector<std::pair<std::string, std::string>> GetAudioProviderChoices();
 aegisub::provider_selection_diagnostics::SelectionReport GetLastAudioProviderSelectionReport();

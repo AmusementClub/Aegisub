@@ -36,6 +36,7 @@
 
 #include "../../source_frame.h"
 #include "../../subtitle_overlay.h"
+#include "../../provider_catalog.h"
 
 #include <libaegisub/fs_fwd.h>
 
@@ -82,6 +83,7 @@ struct SubtitleRenderEnvironment {
 
 struct SubtitlesProviderFactory {
 	static std::unique_ptr<SubtitlesProvider> GetProvider(SubtitleRenderEnvironment const& env);
+	static aegisub::provider_catalog::ProviderCatalog GetCatalog(std::string const& preferred_provider = {}, bool external_file_providers = false);
 	static std::vector<std::string> GetClasses();
 	static bool HasExternalFileProviderFor(agi::fs::path const& filename);
 	static std::vector<std::string> GetExternalFileProviderWildcards();

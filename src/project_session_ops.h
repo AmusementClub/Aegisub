@@ -1,5 +1,6 @@
 #pragma once
 
+#include "media_open_contract.h"
 #include "ui_services.h"
 
 #include <libaegisub/fs_fwd.h>
@@ -57,6 +58,17 @@ bool HandleUnreadableAudioOpenPath(agi::fs::path const& path,
 
 using CreateAudioProviderAction = std::function<std::unique_ptr<agi::AudioProvider>()>;
 using QuietAudioDataMissingAction = std::function<void(std::string const&)>;
+using AudioProviderSelectionReportSupplier = std::function<aegisub::provider_selection_diagnostics::SelectionReport()>;
+
+struct AudioProviderOpenResult {
+	std::unique_ptr<agi::AudioProvider> provider;
+	media_open::MediaOpenResult result;
+};
+
+AudioProviderOpenResult OpenAudioProvider(media_open::MediaOpenRequest const& request,
+                                          CreateAudioProviderAction const& create_provider,
+                                          AudioProviderSelectionReportSupplier const& provider_report_supplier = {});
+
 std::unique_ptr<agi::AudioProvider> CreateAudioProviderWithErrorHandling(agi::fs::path const& path,
                                                                          bool quiet,
                                                                          CreateAudioProviderAction const& create_provider,

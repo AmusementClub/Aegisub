@@ -8,6 +8,7 @@
 #include <libaegisub/format_path.h>
 
 #include <exception>
+#include <utility>
 
 namespace {
 
@@ -131,43 +132,135 @@ std::unique_ptr<agi::AudioProvider> CreateAudioProviderWithErrorHandling(agi::fs
                                                                          agi::NotificationSink& notification_sink,
                                                                          QuietAudioDataMissingAction const& on_quiet_no_audio,
                                                                          MruRemoveAction const& remove_mru) {
-	if (!create_provider)
+	media_open::MediaOpenRequest request;
+	request.kind = media_open::MediaKind::Audio;
+	request.path = path;
+	auto opened = OpenAudioProvider(request, create_provider);
+	if (opened.provider)
+		return std::move(opened.provider);
+
+	switch (opened.result.status) {
+	case media_open::OpenStatus::Cancelled:
+	case media_open::OpenStatus::NotStarted:
 		return {};
 
-	try {
-		return create_provider();
-	}
-	catch (agi::UserCancelException const&) {
-		return {};
-	}
-	catch (agi::fs::FileNotFound const& err) {
+	case media_open::OpenStatus::FileNotFound:
 		remove_mru_if_requested("Audio", path, remove_mru);
-		notification_sink.ShowError(kErrorLoadingFileTitle, agi::format(_("The audio file was not found: %s"), err.GetMessage()));
-	}
-	catch (agi::AudioDataNotFound const& err) {
+		notification_sink.ShowError(kErrorLoadingFileTitle, agi::format(_("The audio file was not found: %s"), opened.result.error));
+		break;
+
+	case media_open::OpenStatus::NoMedia:
 		remove_mru_if_requested("Audio", path, remove_mru);
 		if (quiet) {
 			if (on_quiet_no_audio)
-				on_quiet_no_audio(err.GetMessage());
+				on_quiet_no_audio(opened.result.error);
 		}
 		else {
 			notification_sink.ShowError(
 				kErrorLoadingFileTitle,
-				agi::format(_("None of the available audio providers recognised the selected file as containing audio data.\n\nThe following providers were tried:\n%s"), err.GetMessage()));
+				agi::format(_("None of the available audio providers recognised the selected file as containing audio data.\n\nThe following providers were tried:\n%s"), opened.result.error));
 		}
-	}
-	catch (agi::AudioProviderError const& err) {
+		break;
+
+	case media_open::OpenStatus::NotSupported:
 		remove_mru_if_requested("Audio", path, remove_mru);
 		notification_sink.ShowError(
 			kErrorLoadingFileTitle,
-			agi::format(_("None of the available audio providers have a codec available to handle the selected file.\n\nThe following providers were tried:\n%s"), err.GetMessage()));
-	}
-	catch (agi::Exception const& err) {
+			agi::format(_("None of the available audio providers have a codec available to handle the selected file.\n\nThe following providers were tried:\n%s"), opened.result.error));
+		break;
+
+	case media_open::OpenStatus::FileSystemError:
+	case media_open::OpenStatus::Error:
 		remove_mru_if_requested("Audio", path, remove_mru);
-		notification_sink.ShowError(kErrorLoadingFileTitle, err.GetMessage());
+		notification_sink.ShowError(kErrorLoadingFileTitle, opened.result.error);
+		break;
+
+	case media_open::OpenStatus::Opened:
+		break;
 	}
 
 	return {};
+}
+
+AudioProviderOpenResult OpenAudioProvider(media_open::MediaOpenRequest const& request,
+                                          CreateAudioProviderAction const& create_provider,
+                                          AudioProviderSelectionReportSupplier const& provider_report_supplier) {
+	auto current_report = [&] {
+		return provider_report_supplier ? provider_report_supplier() : provider_selection_diagnostics::SelectionReport{};
+	};
+
+	AudioProviderOpenResult opened;
+	opened.result.kind = request.kind;
+	opened.result.provider_report = current_report();
+
+	if (!create_provider)
+		return opened;
+
+	try {
+		opened.provider = create_provider();
+		if (!opened.provider) {
+			opened.result = media_open::Failed(
+				request.kind,
+				media_open::OpenStatus::Error,
+				"audio provider factory returned null",
+				current_report());
+			return opened;
+		}
+
+		auto report = current_report();
+		auto memory_stats = opened.provider->GetMemoryStats();
+		auto selected_provider = report.selected_provider.empty() ? memory_stats.provider_name : report.selected_provider;
+		opened.result = media_open::Opened(
+			request.kind,
+			selected_provider,
+			std::move(report));
+		opened.result.decoder_name = std::move(memory_stats.provider_name);
+		return opened;
+	}
+	catch (agi::UserCancelException const&) {
+		opened.result = media_open::Failed(
+			request.kind,
+			media_open::OpenStatus::Cancelled,
+			{},
+			current_report());
+	}
+	catch (agi::fs::FileNotFound const& err) {
+		opened.result = media_open::Failed(
+			request.kind,
+			media_open::OpenStatus::FileNotFound,
+			err.GetMessage(),
+			current_report());
+	}
+	catch (agi::fs::FileSystemError const& err) {
+		opened.result = media_open::Failed(
+			request.kind,
+			media_open::OpenStatus::FileSystemError,
+			err.GetMessage(),
+			current_report());
+	}
+	catch (agi::AudioDataNotFound const& err) {
+		opened.result = media_open::Failed(
+			request.kind,
+			media_open::OpenStatus::NoMedia,
+			err.GetMessage(),
+			current_report());
+	}
+	catch (agi::AudioProviderError const& err) {
+		opened.result = media_open::Failed(
+			request.kind,
+			media_open::OpenStatus::NotSupported,
+			err.GetMessage(),
+			current_report());
+	}
+	catch (agi::Exception const& err) {
+		opened.result = media_open::Failed(
+			request.kind,
+			media_open::OpenStatus::Error,
+			err.GetMessage(),
+			current_report());
+	}
+
+	return opened;
 }
 
 SubtitleSessionTarget ResolveSubtitleSessionTarget(bool open_in_new_session, bool close_cancelled) {

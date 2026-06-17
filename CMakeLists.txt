@@ -686,9 +686,21 @@ set(AEGISUB_CORE_SOURCES
     src/video_snapshot_ops.cpp
     src/navigation_preview_policy.cpp
     # Subtitle rendering providers
-    # Concrete subtitle providers remain with the executable while provider
-    # selection/config is still host-owned.
+    # Provider dependency audit:
+    # - core-owned now: subtitles_provider.cpp/libass/plugin; dependencies are
+    #   wx-free metadata/catalog, options, libass, native_library, dispatch,
+    #   SourceFrame/SubtitleOverlay, and BackgroundRunner.
+    # - adapter-required next: audio/video provider managers still depend on
+    #   choice/background/notification seams plus codec runtime discovery.
+    # - host-owned for now: async playback/controllers/render display pieces
+    #   which coordinate UI lifetime, audio controller, and visible windows.
+    # libass/plugin subtitle providers are wx-free and form the first concrete
+    # provider cluster owned by aegisub_core. Audio/video providers stay in the
+    # exe until their decoder/runtime dependencies have the same typed seams.
     src/subtitle_overlay_blend.cpp
+    src/subtitles_provider.cpp
+    src/subtitles_provider_libass.cpp
+    src/subtitles_provider_plugin.cpp
     # NOTE: auto4_base.h / auto4_lua.h expose wxWindow*/wxDialog*/wxString in
     # their public/protected API (GenerateConfigDialog, CreateWindow, ShowDialog,
     # ProcessingComplete(wxString)). The automation host subsystem is coupled
@@ -1007,9 +1019,6 @@ add_executable(Aegisub WIN32
     # spline cluster (depends on VisualToolBase)
     src/spline.cpp
     src/spline_curve.cpp
-    src/subtitles_provider.cpp
-    src/subtitles_provider_libass.cpp
-    src/subtitles_provider_plugin.cpp
     ${AEGISUB_SHARED_EXE_ENTRY_SOURCES}
     ${AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES}
 )
@@ -1018,7 +1027,8 @@ set_source_files_properties(libaegisub/common/native_library.cpp PROPERTIES
 )
 # aegisub_core carries the framework-agnostic core (PUBLIC libaegisub + ass/boost/...).
 target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} aegisub_core luajit)
-# CSRI is used by subtitles_provider in aegisub_core but needs to be linked to exe too
+# CSRI may be used by the subtitles provider cluster in aegisub_core; mirror the
+# link on the exe so static-link consumers keep the backend available.
 if(WITH_CSRI)
     target_link_libraries(Aegisub PRIVATE csri)
 endif()

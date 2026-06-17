@@ -143,6 +143,65 @@ TEST(video_session_ops, create_video_provider_with_error_handling_returns_provid
 	EXPECT_TRUE(sink.errors.empty());
 }
 
+TEST(video_session_ops, open_video_provider_returns_typed_success_result) {
+	aegisub::media_open::MediaOpenRequest request;
+	request.kind = aegisub::media_open::MediaKind::Video;
+	request.path = agi::fs::PathFromString("ok.mkv");
+
+	aegisub::provider_selection_diagnostics::SelectionReport report;
+	report.preferred_provider = "FFmpegSource";
+	report.selected_provider = "YUV4MPEG";
+	report.attempts = {
+		{"FFmpegSource", "not_supported", "not y4m"},
+		{"YUV4MPEG", "opened", ""}
+	};
+
+	auto opened = aegisub::video_session_ops::OpenVideoProvider(
+		request,
+		[] {
+			return agi::make_unique<AsyncVideoProvider>(
+				agi::make_unique<FakeVideoProvider>(),
+				agi::make_unique<FakeSubtitlesProvider>(),
+				AsyncVideoProviderEventSink{});
+		},
+		[&] { return report; });
+
+	ASSERT_TRUE(opened.provider);
+	EXPECT_TRUE(opened.result.opened);
+	EXPECT_EQ(aegisub::media_open::OpenStatus::Opened, opened.result.status);
+	EXPECT_EQ("YUV4MPEG", opened.result.selected_provider);
+	EXPECT_EQ("FakeVideoProvider", opened.result.decoder_name);
+	EXPECT_EQ("FFmpegSource", opened.result.provider_report.preferred_provider);
+	EXPECT_EQ(2u, opened.result.provider_report.attempts.size());
+}
+
+TEST(video_session_ops, open_video_provider_returns_typed_failure_without_notifications) {
+	aegisub::media_open::MediaOpenRequest request;
+	request.kind = aegisub::media_open::MediaKind::Video;
+	request.path = agi::fs::PathFromString("broken.mkv");
+
+	auto provider_error = aegisub::video_session_ops::OpenVideoProvider(
+		request,
+		[]() -> std::unique_ptr<AsyncVideoProvider> {
+			throw VideoOpenError("decoder failed");
+		});
+
+	EXPECT_FALSE(provider_error.provider);
+	EXPECT_FALSE(provider_error.result.opened);
+	EXPECT_EQ(aegisub::media_open::OpenStatus::Error, provider_error.result.status);
+	EXPECT_EQ("decoder failed", provider_error.result.error);
+
+	auto fs_error = aegisub::video_session_ops::OpenVideoProvider(
+		request,
+		[]() -> std::unique_ptr<AsyncVideoProvider> {
+			throw agi::fs::FileNotFound(agi::fs::PathFromString("missing.mkv"));
+		});
+
+	EXPECT_FALSE(fs_error.provider);
+	EXPECT_EQ(aegisub::media_open::OpenStatus::FileNotFound, fs_error.result.status);
+	EXPECT_FALSE(fs_error.result.error.empty());
+}
+
 TEST(video_session_ops, create_video_provider_with_error_handling_swallows_cancel_without_error) {
 	capture_notification_sink sink;
 

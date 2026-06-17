@@ -37,6 +37,7 @@
 #include <libaegisub/string_utils.h>
 
 #include <exception>
+#include <utility>
 
 using namespace agi;
 
@@ -102,13 +103,6 @@ std::string GetAvisynthAvailabilityError() {
 }
 #endif
 
-std::string GetDisplayName(factory const& provider) {
-	std::string name = provider.name;
-	if (!provider.hidden && provider.is_available && !provider.is_available())
-		name.append(" (Unavailable)");
-	return name;
-}
-
 const factory providers[] = {
 	{"Dummy", CreateDummyAudioProviderWithChoice, nullptr, nullptr, true},
 	{"PCM", CreatePCMAudioProviderWithChoice, nullptr, nullptr, true},
@@ -147,6 +141,59 @@ std::string GetAvailabilityError(factory const& provider) {
 		return "unknown availability error";
 	}
 }
+
+bool IsProviderAvailable(factory const& provider, std::string& availability_error) {
+	if (!provider.is_available)
+		return true;
+
+	try {
+		if (provider.is_available())
+			return true;
+	}
+	catch (agi::Exception const& err) {
+		availability_error = err.GetMessage();
+		return false;
+	}
+	catch (std::exception const& err) {
+		availability_error = err.what();
+		return false;
+	}
+	catch (...) {
+		availability_error = "unknown availability exception";
+		return false;
+	}
+
+	availability_error = GetAvailabilityError(provider);
+	return false;
+}
+}
+
+aegisub::provider_catalog::ProviderCatalog GetAudioProviderCatalog(std::string const& preferred_provider) {
+	auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(preferred_provider);
+	auto sorted = GetSorted(providers, preferred);
+
+	aegisub::provider_catalog::ProviderCatalog catalog;
+	catalog.kind = aegisub::provider_catalog::ProviderKind::Audio;
+	catalog.preferred_provider = preferred;
+	catalog.providers.reserve(sorted.size());
+
+	for (auto const* provider : sorted) {
+		std::string availability_error;
+		bool available = IsProviderAvailable(*provider, availability_error);
+
+		aegisub::provider_catalog::ProviderDescriptor descriptor;
+		descriptor.kind = catalog.kind;
+		descriptor.name = provider->name;
+		descriptor.display_name = provider->name;
+		descriptor.hidden = provider->hidden;
+		descriptor.available = available;
+		descriptor.unavailable_reason = std::move(availability_error);
+		if (!descriptor.hidden && !descriptor.available)
+			descriptor.display_name.append(" (Unavailable)");
+		catalog.providers.push_back(std::move(descriptor));
+	}
+
+	return catalog;
 }
 
 std::vector<std::string> GetAudioProviderNames() {
@@ -154,12 +201,7 @@ std::vector<std::string> GetAudioProviderNames() {
 }
 
 std::vector<std::pair<std::string, std::string>> GetAudioProviderChoices() {
-	std::vector<std::pair<std::string, std::string>> choices;
-	for (auto const& provider : providers) {
-		if (!provider.hidden)
-			choices.emplace_back(GetDisplayName(provider), provider.name);
-	}
-	return choices;
+	return aegisub::provider_catalog::VisibleProviderChoices(GetAudioProviderCatalog());
 }
 
 std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,

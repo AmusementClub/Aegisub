@@ -296,6 +296,69 @@ TEST(project_session_ops, create_audio_provider_with_error_handling_returns_prov
 	EXPECT_TRUE(removed.empty());
 }
 
+TEST(project_session_ops, open_audio_provider_returns_typed_success_result) {
+	aegisub::media_open::MediaOpenRequest request;
+	request.kind = aegisub::media_open::MediaKind::Audio;
+	request.path = agi::fs::path("ok.wav");
+
+	aegisub::provider_selection_diagnostics::SelectionReport report;
+	report.preferred_provider = "FFmpegSource";
+	report.selected_provider = "PCM";
+	report.attempts = {
+		{"FFmpegSource", "not_supported", "not pcm"},
+		{"PCM", "opened", ""}
+	};
+
+	auto opened = aegisub::project_session_ops::OpenAudioProvider(
+		request,
+		[]() -> std::unique_ptr<agi::AudioProvider> {
+			return std::make_unique<FakeAudioProvider>();
+		},
+		[&] { return report; });
+
+	ASSERT_TRUE(opened.provider);
+	EXPECT_TRUE(opened.result.opened);
+	EXPECT_EQ(aegisub::media_open::MediaKind::Audio, opened.result.kind);
+	EXPECT_EQ(aegisub::media_open::OpenStatus::Opened, opened.result.status);
+	EXPECT_EQ("PCM", opened.result.selected_provider);
+	EXPECT_EQ("FFmpegSource", opened.result.provider_report.preferred_provider);
+	EXPECT_EQ(2u, opened.result.provider_report.attempts.size());
+}
+
+TEST(project_session_ops, open_audio_provider_returns_typed_failures_without_notifications) {
+	aegisub::media_open::MediaOpenRequest request;
+	request.kind = aegisub::media_open::MediaKind::Audio;
+	request.path = agi::fs::path("broken.wav");
+
+	auto no_audio = aegisub::project_session_ops::OpenAudioProvider(
+		request,
+		[]() -> std::unique_ptr<agi::AudioProvider> {
+			throw agi::AudioDataNotFound("No audio found.");
+		});
+	EXPECT_FALSE(no_audio.provider);
+	EXPECT_FALSE(no_audio.result.opened);
+	EXPECT_EQ(aegisub::media_open::OpenStatus::NoMedia, no_audio.result.status);
+	EXPECT_EQ("No audio found.", no_audio.result.error);
+
+	auto codec_error = aegisub::project_session_ops::OpenAudioProvider(
+		request,
+		[]() -> std::unique_ptr<agi::AudioProvider> {
+			throw agi::AudioProviderError("CodecA");
+		});
+	EXPECT_FALSE(codec_error.provider);
+	EXPECT_EQ(aegisub::media_open::OpenStatus::NotSupported, codec_error.result.status);
+	EXPECT_EQ("CodecA", codec_error.result.error);
+
+	auto missing = aegisub::project_session_ops::OpenAudioProvider(
+		request,
+		[]() -> std::unique_ptr<agi::AudioProvider> {
+			throw agi::fs::FileNotFound(agi::fs::path("missing.wav"));
+		});
+	EXPECT_FALSE(missing.provider);
+	EXPECT_EQ(aegisub::media_open::OpenStatus::FileNotFound, missing.result.status);
+	EXPECT_FALSE(missing.result.error.empty());
+}
+
 TEST(project_session_ops, create_audio_provider_with_error_handling_reports_expected_errors) {
 	capture_notification_sink sink;
 	std::vector<std::pair<std::string, agi::fs::path>> removed;

@@ -2,17 +2,21 @@
 #include "export_framerate_transform.h"
 #include "options.h"
 #include "presentation/subtitle_grid_query_service.h"
+#include "include/aegisub/subtitles_provider.h"
 #include "subtitle_format.h"
 
+#include <libaegisub/dispatch.h>
 #include <libaegisub/option.h>
 #include <libaegisub/vfr.h>
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <thread>
 
 namespace {
 
@@ -50,7 +54,8 @@ constexpr char kCoreSmokeOptionDefaults[] = R"({
 			"Auto" : true,
 			"Width" : 640,
 			"Height" : 480
-		}
+		},
+		"Provider" : "libass"
 	},
 	"Subtitle Format" : {
 		"EBU STL" : {
@@ -102,6 +107,26 @@ public:
 	}
 };
 
+class ScopedCoreSmokeDispatch {
+	std::thread::id main_thread_id = std::this_thread::get_id();
+
+public:
+	ScopedCoreSmokeDispatch() {
+		agi::dispatch::Init(
+			[](agi::dispatch::Thunk thunk) {
+				if (thunk)
+					thunk();
+			},
+			[this] {
+				return std::this_thread::get_id() == main_thread_id;
+			});
+	}
+
+	~ScopedCoreSmokeDispatch() {
+		agi::dispatch::Shutdown();
+	}
+};
+
 void WriteSmokeAss(std::filesystem::path const& path) {
 	std::ofstream file(path, std::ios::binary);
 	if (!file)
@@ -137,6 +162,7 @@ void WriteSmokeTxt(std::filesystem::path const& path) {
 }
 
 int RunSmoke() {
+	ScopedCoreSmokeDispatch dispatch;
 	ScopedCoreSmokeOptions options;
 
 	ScopedFile ass_path(MakeTempAssPath());
@@ -159,6 +185,18 @@ int RunSmoke() {
 		throw std::runtime_error("unexpected projected subtitle text");
 	if (!window.rows[1].comment)
 		throw std::runtime_error("comment dialogue did not project as comment row");
+
+	auto subtitle_provider_catalog = SubtitlesProviderFactory::GetCatalog("libass");
+	auto subtitle_provider_names = aegisub::provider_catalog::VisibleProviderNames(subtitle_provider_catalog);
+	if (std::find(subtitle_provider_names.begin(), subtitle_provider_names.end(), "libass") == subtitle_provider_names.end())
+		throw std::runtime_error("libass subtitles provider was not present in the core provider catalog");
+
+	SubtitleRenderEnvironment render_environment;
+	render_environment.preferred_provider = "libass";
+	auto subtitles_provider = SubtitlesProviderFactory::GetProvider(render_environment);
+	if (!subtitles_provider || subtitles_provider->GetDebugName() != "libass")
+		throw std::runtime_error("core subtitles provider factory did not create libass");
+	subtitles_provider->LoadSubtitles(&file, -1, nullptr);
 
 	ScopedFile txt_path(MakeTempTxtPath());
 	WriteSmokeTxt(txt_path.get());
@@ -195,6 +233,7 @@ int RunSmoke() {
 		<< "aegisub_core_smoke: rows=" << window.total_rows
 		<< " txt_rows=" << txt_window.total_rows
 		<< " stl_bytes=" << std::filesystem::file_size(stl_path.get())
+		<< " subtitle_provider=\"" << subtitles_provider->GetDebugName() << "\""
 		<< " first_text=\"" << window.rows[0].text << "\""
 		<< " transformed=[" << transform.new_start_ms << ", " << transform.new_end_ms << "]\n";
 	return 0;

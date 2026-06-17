@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "provider_selection_diagnostics.h"
+#include "provider_catalog.h"
 
 #include <libaegisub/fs_fwd.h>
 
@@ -34,6 +35,7 @@ std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoPro
 std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoProvider> parent, size_t max_cache_size_bytes);
 
 struct VideoProviderFactory {
+	static aegisub::provider_catalog::ProviderCatalog GetCatalog(std::string const& preferred_provider = {});
 	static std::vector<std::string> GetClasses();
 	static std::vector<std::pair<std::string, std::string>> GetChoices();
 	static std::unique_ptr<VideoProvider> GetProvider(agi::fs::path const& video_file, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);

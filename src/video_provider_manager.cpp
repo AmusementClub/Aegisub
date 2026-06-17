@@ -29,9 +29,13 @@
 #include "avisynth_wrap.h"
 #endif
 
+#include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
 #include <libaegisub/log.h>
 #include <libaegisub/string_utils.h>
+
+#include <exception>
+#include <utility>
 
 std::unique_ptr<VideoProvider> CreateDummyVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
 std::unique_ptr<VideoProvider> CreateYUV4MPEGVideoProvider(agi::fs::path const&, std::string const&, agi::BackgroundRunner *);
@@ -99,11 +103,47 @@ namespace {
 	}
 #endif
 
-std::string GetDisplayName(factory const& provider) {
-	std::string name = provider.name;
-	if (!provider.hidden && provider.is_available && !provider.is_available())
-		name.append(" (Unavailable)");
-	return name;
+std::string GetAvailabilityError(factory const& provider) {
+	if (!provider.availability_error)
+		return "runtime library is unavailable.";
+
+	try {
+		return provider.availability_error();
+	}
+	catch (agi::Exception const& err) {
+		return err.GetMessage();
+	}
+	catch (std::exception const& err) {
+		return err.what();
+	}
+	catch (...) {
+		return "unknown availability error";
+	}
+}
+
+bool IsProviderAvailable(factory const& provider, std::string& availability_error) {
+	if (!provider.is_available)
+		return true;
+
+	try {
+		if (provider.is_available())
+			return true;
+	}
+	catch (agi::Exception const& err) {
+		availability_error = err.GetMessage();
+		return false;
+	}
+	catch (std::exception const& err) {
+		availability_error = err.what();
+		return false;
+	}
+	catch (...) {
+		availability_error = "unknown availability exception";
+		return false;
+	}
+
+	availability_error = GetAvailabilityError(provider);
+	return false;
 }
 
 	const factory providers[] = {
@@ -128,17 +168,40 @@ std::string GetDisplayName(factory const& provider) {
 	}
 }
 
+aegisub::provider_catalog::ProviderCatalog VideoProviderFactory::GetCatalog(std::string const& preferred_provider) {
+	auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(preferred_provider);
+	auto sorted = GetSorted(providers, preferred);
+
+	aegisub::provider_catalog::ProviderCatalog catalog;
+	catalog.kind = aegisub::provider_catalog::ProviderKind::Video;
+	catalog.preferred_provider = preferred;
+	catalog.providers.reserve(sorted.size());
+
+	for (auto const* provider : sorted) {
+		std::string availability_error;
+		bool available = IsProviderAvailable(*provider, availability_error);
+
+		aegisub::provider_catalog::ProviderDescriptor descriptor;
+		descriptor.kind = catalog.kind;
+		descriptor.name = provider->name;
+		descriptor.display_name = provider->name;
+		descriptor.hidden = provider->hidden;
+		descriptor.available = available;
+		descriptor.unavailable_reason = std::move(availability_error);
+		if (!descriptor.hidden && !descriptor.available)
+			descriptor.display_name.append(" (Unavailable)");
+		catalog.providers.push_back(std::move(descriptor));
+	}
+
+	return catalog;
+}
+
 std::vector<std::string> VideoProviderFactory::GetClasses() {
 	return ::GetClasses(providers);
 }
 
 std::vector<std::pair<std::string, std::string>> VideoProviderFactory::GetChoices() {
-	std::vector<std::pair<std::string, std::string>> choices;
-	for (auto const& provider : providers) {
-		if (!provider.hidden)
-			choices.emplace_back(GetDisplayName(provider), provider.name);
-	}
-	return choices;
+	return aegisub::provider_catalog::VisibleProviderChoices(GetCatalog());
 }
 
 std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {

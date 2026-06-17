@@ -31,6 +31,8 @@
 #include <libaegisub/log.h>
 #include <libaegisub/string_utils.h>
 
+#include <utility>
+
 namespace {
 	constexpr char kSubtitleProviderSelectLogTag[] = "subtitle/provider/select";
 
@@ -58,11 +60,42 @@ namespace {
 		factories.push_back(factory{"libass", "", libass::Create, false, false});
 		return factories;
 	}
+
+	aegisub::provider_catalog::ProviderCatalog MakeCatalog(std::vector<factory> const& factories,
+	                                                       std::string const& preferred_provider) {
+		auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(preferred_provider);
+		auto sorted = GetSorted(factories, preferred);
+
+		aegisub::provider_catalog::ProviderCatalog catalog;
+		catalog.kind = aegisub::provider_catalog::ProviderKind::Subtitles;
+		catalog.preferred_provider = std::move(preferred);
+		catalog.providers.reserve(sorted.size());
+
+		for (auto const* provider : sorted) {
+			aegisub::provider_catalog::ProviderDescriptor descriptor;
+			descriptor.kind = catalog.kind;
+			descriptor.name = provider->name;
+			descriptor.display_name = provider->name;
+			descriptor.hidden = provider->hidden;
+			descriptor.available = true;
+			catalog.providers.push_back(std::move(descriptor));
+		}
+
+		return catalog;
+	}
 }
 
 std::vector<std::string> SubtitlesProviderFactory::GetClasses() {
 	auto available_factories = ass_renderer_factories();
 	return ::GetClasses(available_factories);
+}
+
+aegisub::provider_catalog::ProviderCatalog SubtitlesProviderFactory::GetCatalog(std::string const& preferred_provider,
+                                                                                bool external_file_providers) {
+	auto available_factories = external_file_providers
+		? subtitle_file_factories()
+		: ass_renderer_factories();
+	return MakeCatalog(available_factories, preferred_provider);
 }
 
 bool SubtitlesProviderFactory::HasExternalFileProviderFor(agi::fs::path const& filename) {

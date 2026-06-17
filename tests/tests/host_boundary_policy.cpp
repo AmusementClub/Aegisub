@@ -1284,6 +1284,10 @@ TEST(host_boundary_policy, aegisub_core_sources_keep_host_coupled_clusters_out) 
 		"src/subtitle_format_transtation.cpp",
 		"src/subtitle_format_ttxt.cpp",
 		"src/subtitle_format_txt.cpp",
+		"src/subtitle_overlay_blend.cpp",
+		"src/subtitles_provider.cpp",
+		"src/subtitles_provider_libass.cpp",
+		"src/subtitles_provider_plugin.cpp",
 		"${AEGISUB_SHARED_SELECTION_REQUEST_SOURCES}",
 		"src/ui_services.cpp",
 	};
@@ -1300,9 +1304,6 @@ TEST(host_boundary_policy, aegisub_core_sources_keep_host_coupled_clusters_out) 
 		"src/project_session_ops.cpp",
 		"src/search_replace_engine.cpp",
 		"src/subs_controller.cpp",
-		"src/subtitles_provider.cpp",
-		"src/subtitles_provider_libass.cpp",
-		"src/subtitles_provider_plugin.cpp",
 		"src/video_controller.cpp",
 		"src/video_property_update.cpp",
 		"src/video_provider_cache.cpp",
@@ -1316,6 +1317,36 @@ TEST(host_boundary_policy, aegisub_core_sources_keep_host_coupled_clusters_out) 
 		EXPECT_NE(core_sources.end(), core_sources.find(source)) << source;
 	for (auto const& source : host_coupled_sources)
 		EXPECT_EQ(core_sources.end(), core_sources.find(source)) << source;
+}
+
+TEST(host_boundary_policy, concrete_subtitle_provider_cluster_is_core_owned_and_wx_free) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+	auto core_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_CORE_SOURCES");
+	std::vector<std::filesystem::path> const expected_provider_paths = {
+		root / "src" / "include" / "aegisub" / "subtitles_provider.h",
+		root / "src" / "subtitles_provider.cpp",
+		root / "src" / "subtitles_provider_libass.cpp",
+		root / "src" / "subtitles_provider_plugin.cpp",
+	};
+
+	for (auto const& source : {
+		"src/subtitles_provider.cpp",
+		"src/subtitles_provider_libass.cpp",
+		"src/subtitles_provider_plugin.cpp",
+	}) {
+		EXPECT_NE(core_sources.end(), core_sources.find(source)) << source;
+	}
+
+	for (auto const& path : expected_provider_paths) {
+		auto hits = FindWxMarkers(path);
+		EXPECT_TRUE(hits.empty()) << JoinLines(hits);
+	}
+
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "Provider dependency audit:").empty());
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "core-owned now: subtitles_provider.cpp/libass/plugin").empty());
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "adapter-required next: audio/video provider managers").empty());
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "host-owned for now: async playback/controllers/render display pieces").empty());
 }
 
 TEST(host_boundary_policy, shared_selection_request_helpers_keep_wx_at_single_choice_adapter_edge) {
@@ -1407,8 +1438,10 @@ TEST(host_boundary_policy, shared_inspect_open_query_services_and_provider_diagn
 		root / "src" / "app_runtime_init.cpp",
 		root / "src" / "locale_pick.cpp",
 		root / "src" / "media_inspect_service.cpp",
+		root / "src" / "media_open_contract.h",
 		root / "src" / "playback_query_service.cpp",
 		root / "src" / "project_open_service.cpp",
+		root / "src" / "provider_catalog.h",
 		root / "src" / "provider_selection_diagnostics.h",
 	};
 

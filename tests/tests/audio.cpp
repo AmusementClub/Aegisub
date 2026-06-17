@@ -16,6 +16,7 @@
 
 #include <main.h>
 
+#include "../../src/provider_catalog.h"
 #include "../../src/provider_selection_diagnostics.h"
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/fs.h>
@@ -145,6 +146,32 @@ TEST(provider_selection_diagnostics, does_not_report_fallback_for_equivalent_ali
 
 	EXPECT_FALSE(aegisub::provider_selection_diagnostics::UsedFallback(report));
 	EXPECT_TRUE(aegisub::provider_selection_diagnostics::DescribeFallbackReason(report).empty());
+}
+
+TEST(provider_catalog, exposes_visible_choices_and_availability_without_gui_types) {
+	aegisub::provider_catalog::ProviderCatalog catalog;
+	catalog.kind = aegisub::provider_catalog::ProviderKind::Audio;
+	catalog.preferred_provider = "FFmpegSource";
+	catalog.providers = {
+		{catalog.kind, "Dummy", "Dummy", true, true, ""},
+		{catalog.kind, "FFmpegSource", "FFmpegSource", false, false, "missing ffms2.dll"},
+		{catalog.kind, "PCM", "PCM", false, true, ""}
+	};
+
+	auto visible = aegisub::provider_catalog::VisibleProviders(catalog);
+	ASSERT_EQ(2u, visible.size());
+	EXPECT_EQ("FFmpegSource", visible[0].name);
+	EXPECT_FALSE(visible[0].available);
+	EXPECT_EQ("missing ffms2.dll", visible[0].unavailable_reason);
+	EXPECT_TRUE(aegisub::provider_catalog::IsPreferred(visible[0], "ffms2"));
+
+	auto names = aegisub::provider_catalog::VisibleProviderNames(catalog);
+	EXPECT_EQ((std::vector<std::string>{"FFmpegSource", "PCM"}), names);
+
+	auto choices = aegisub::provider_catalog::VisibleProviderChoices(catalog);
+	ASSERT_EQ(2u, choices.size());
+	EXPECT_EQ("FFmpegSource", choices[0].first);
+	EXPECT_EQ("FFmpegSource", choices[0].second);
 }
 
 struct BlockingSequenceAudioProvider : agi::AudioProvider {

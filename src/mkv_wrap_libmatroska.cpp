@@ -911,7 +911,7 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 
 	AssParser parser(target, selected_track->subtitle_codec != MkvTextSubtitleCodec::Ssa);
 	if (selected_track->subtitle_codec == MkvTextSubtitleCodec::Utf8) {
-		LoadDefaultAssFileWithAppOptions(*target, false, OPT_GET("Subtitle Format/SRT/Default Style Catalog")->GetString());
+		LoadDefaultAssFileWithAppOptions(*target, false, GetSubtitleFormatDefaultStyleCatalog("SRT"));
 	}
 	else {
 		std::string decoded_error;

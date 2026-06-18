@@ -12,7 +12,7 @@ function(aegisub_add_luasocket_target)
         message(FATAL_ERROR "LuaSocket source tree not found at ${AEGISUB_LUASOCKET_ROOT}. Initialize the submodule or set AEGISUB_LUASOCKET_ROOT.")
     endif()
 
-    set(luasocket_include_dirs
+    set(luasocket_private_include_dirs
         "${AEGISUB_LUASOCKET_ROOT}/src"
         "${PROJECT_SOURCE_DIR}/vendor/luajit/src"
     )
@@ -63,19 +63,22 @@ function(aegisub_add_luasocket_target)
     endif()
 
     add_library(socket_core OBJECT ${socket_core_sources})
-    target_include_directories(socket_core PRIVATE ${luasocket_include_dirs})
+    target_include_directories(socket_core PRIVATE ${luasocket_private_include_dirs})
     target_compile_definitions(socket_core PRIVATE ${luasocket_compile_definitions})
 
     add_library(mime_core OBJECT
         "${AEGISUB_LUASOCKET_ROOT}/src/mime.c"
     )
-    target_include_directories(mime_core PRIVATE ${luasocket_include_dirs})
+    target_include_directories(mime_core PRIVATE ${luasocket_private_include_dirs})
     target_compile_definitions(mime_core PRIVATE ${luasocket_compile_definitions})
 
     add_library(luasocket STATIC
         $<TARGET_OBJECTS:socket_core>
         $<TARGET_OBJECTS:mime_core>
     )
-    target_include_directories(luasocket PUBLIC ${luasocket_include_dirs})
+    target_include_directories(luasocket PUBLIC
+        "$<BUILD_INTERFACE:${AEGISUB_LUASOCKET_ROOT}/src>"
+        "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/vendor/luajit/src>"
+    )
     target_link_libraries(luasocket PUBLIC ${socket_libraries})
 endfunction()

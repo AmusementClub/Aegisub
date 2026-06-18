@@ -14,6 +14,8 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#pragma once
+
 #include "provider_selection_diagnostics.h"
 #include "provider_catalog.h"
 #include "provider_factory_entry.h"
@@ -38,12 +40,20 @@ using AudioProviderCreate = std::unique_ptr<agi::AudioProvider> (*)(agi::fs::pat
                                                                     std::shared_ptr<agi::SingleChoiceInteractionSink>);
 using AudioProviderFactory = aegisub::provider_catalog::ProviderFactoryEntry<AudioProviderCreate>;
 
+bool TryRegisterAudioProviderFactory(AudioProviderFactory factory);
 void RegisterAudioProviderFactory(AudioProviderFactory factory);
+void FreezeAudioProviderFactoryRegistry();
+bool IsAudioProviderFactoryRegistryFrozen();
 std::unique_ptr<agi::AudioProvider> GetAudioProvider(agi::fs::path const& filename,
                                                      agi::Path const& path_helper,
                                                      agi::BackgroundRunner *br,
                                                      agi::NotificationSink& notification_sink,
                                                      std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
+std::unique_ptr<agi::AudioProvider> GetAudioProviderWithPreferred(agi::fs::path const& filename,
+                                                                  std::string const& preferred_provider,
+                                                                  agi::BackgroundRunner *br,
+                                                                  std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink,
+                                                                  bool *source_needs_cache = nullptr);
 aegisub::provider_catalog::ProviderCatalog GetAudioProviderCatalog(std::string const& preferred_provider = {});
 std::vector<std::string> GetAudioProviderNames();
 std::vector<std::pair<std::string, std::string>> GetAudioProviderChoices();

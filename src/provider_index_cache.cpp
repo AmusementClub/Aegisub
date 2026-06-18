@@ -7,7 +7,56 @@
 #include <libaegisub/fs.h>
 #include <libaegisub/path.h>
 
+#include <filesystem>
+#include <string_view>
+
 namespace aegisub::provider_index_cache {
+namespace {
+
+constexpr int kDefaultCacheSizeMb = 42;
+constexpr int kDefaultCacheFiles = 20;
+
+bool IsTokenPath(std::string const& path) {
+	return !path.empty() && path[0] == '?';
+}
+
+agi::fs::path FallbackCachePath(std::string path) {
+	if (IsTokenPath(path))
+		path.erase(0, 1);
+	for (auto& ch : path) {
+		if (ch == '?' || ch == ':')
+			ch = '_';
+	}
+	return std::filesystem::temp_directory_path() / "aegisub-core-cache" / agi::fs::PathFromString(path);
+}
+
+agi::fs::path DecodeCachePath(std::string const& path) {
+	if (config::path) {
+		auto decoded = config::path->Decode(path);
+		if (!IsTokenPath(path) || !IsTokenPath(agi::fs::PathToString(decoded)))
+			return decoded;
+	}
+
+	if (IsTokenPath(path))
+		return FallbackCachePath(path);
+
+	return agi::fs::PathFromString(path);
+}
+
+int GetCacheOptionInt(char const *option_name, int default_value) {
+	return config::GetIntOptionOrDefault(option_name, default_value);
+}
+
+int DefaultCacheOptionValue(char const *option_name) {
+	std::string_view name(option_name ? option_name : "");
+	if (name.ends_with("/Files"))
+		return kDefaultCacheFiles;
+	if (name.ends_with("/Size"))
+		return kDefaultCacheSizeMb;
+	return 0;
+}
+
+}
 
 std::string StreamPart(char prefix, int stream_index) {
 	return std::string(1, prefix) + (stream_index < 0 ? std::string("none") : std::to_string(stream_index));
@@ -25,7 +74,7 @@ agi::fs::path BuildFilename(agi::fs::path const& media_filename,
 		filename += "_" + part;
 	filename += extension;
 
-	auto result = config::path->Decode(filename);
+	auto result = DecodeCachePath(filename);
 	agi::fs::CreateDirectory(result.parent_path());
 	return result;
 }
@@ -34,10 +83,12 @@ void Clean(std::string const& cache_directory_token,
            std::string const& file_pattern,
            char const *size_option,
            char const *files_option) {
-	::CleanCache(config::path->Decode(cache_directory_token),
+	auto directory = DecodeCachePath(cache_directory_token);
+	agi::fs::CreateDirectory(directory);
+	::CleanCache(directory,
 		file_pattern,
-		OPT_GET(size_option)->GetInt(),
-		OPT_GET(files_option)->GetInt());
+		GetCacheOptionInt(size_option, DefaultCacheOptionValue(size_option)),
+		GetCacheOptionInt(files_option, DefaultCacheOptionValue(files_option)));
 }
 
 }

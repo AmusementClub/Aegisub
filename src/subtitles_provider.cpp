@@ -65,6 +65,10 @@ namespace {
 	aegisub::provider_catalog::ProviderFactoryDescriptor DescribeProvider(factory const& provider) {
 		return { provider.name.c_str(), provider.hidden, nullptr, nullptr };
 	}
+
+	std::string GetConfiguredSubtitleProvider() {
+		return config::GetStringOptionOrDefault("Subtitle/Provider", "libass");
+	}
 }
 
 std::vector<std::string> SubtitlesProviderFactory::GetClasses() {
@@ -94,7 +98,7 @@ std::vector<std::string> SubtitlesProviderFactory::GetExternalFileProviderWildca
 
 std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(SubtitleRenderEnvironment const& env) {
 	auto preferred = env.preferred_provider.empty()
-		? OPT_GET("Subtitle/Provider")->GetString()
+		? GetConfiguredSubtitleProvider()
 		: env.preferred_provider;
 	auto available_factories = env.require_external_file_provider
 		? subtitle_file_factories()

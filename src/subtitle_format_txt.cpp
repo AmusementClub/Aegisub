@@ -69,16 +69,17 @@ void TXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename,
 
 	TextFileReader file(filename, encoding, false);
 
-	LoadDefaultAssFileWithAppOptions(*target, false, OPT_GET("Subtitle Format/TXT/Default Style Catalog")->GetString());
+	LoadDefaultAssFileWithAppOptions(*target, false, GetSubtitleFormatDefaultStyleCatalog("TXT"));
 
 	std::string actor;
-	std::string separator = OPT_GET("Tool/Import/Text/Actor Separator")->GetString();
-	std::string comment = OPT_GET("Tool/Import/Text/Comment Starter")->GetString();
+	std::string separator = GetTextImportActorSeparator();
+	std::string comment = GetTextImportCommentStarter();
+	bool include_blank = GetTextImportIncludeBlank();
 
 	// Parse file
 	while (file.HasMoreLines()) {
 		std::string value = file.ReadLineFromFile();
-		if (value.empty() && !OPT_GET("Tool/Import/Text/Include Blank")->GetBool()) continue;
+		if (value.empty() && !include_blank) continue;
 
 		// Check if this isn't a timecodes file
 		if (agi::util::strings::starts_with(value, "# timecode"))

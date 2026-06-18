@@ -48,6 +48,7 @@
 #include "utils.h"
 #include "selection_controller.h"
 #include "subs_controller.h"
+#include "subtitle_grid_selection_policy.h"
 #include "video_controller.h"
 
 #include <libaegisub/make_unique.h>
@@ -287,28 +288,6 @@ void BaseGrid::MakeRowVisible(int row) {
 		ScrollTo(row - 1);
 	else if (row > yPos + h/lineHeight - 3)
 		ScrollTo(row - h/lineHeight + 3);
-}
-
-void BaseGrid::SelectRow(int row, bool addToSelected, bool select) {
-	if (row < 0 || (size_t)row >= index_line_map.size()) return;
-
-	AssDialogue *line = index_line_map[row];
-	auto core = context->GetCore();
-
-	if (!addToSelected) {
-		core.selectionController->SetSelectedSet(Selection{line});
-		return;
-	}
-
-	bool selected = !!core.selectionController->GetSelectedSet().count(line);
-	if (select != selected) {
-		auto selection = core.selectionController->GetSelectedSet();
-		if (select)
-			selection.insert(line);
-		else
-			selection.erase(line);
-		core.selectionController->SetSelectedSet(std::move(selection));
-	}
 }
 
 void BaseGrid::OnCurrentFrameChanged(int frame_number) {
@@ -612,58 +591,49 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 	if ((click || holding || dclick) && dlg) {
 		int old_extend = extendRow;
 
-		// SetActiveLine will scroll the grid if the row is only half-visible,
-		// but we don't want to scroll until the mouse moves or the button is
-		// released, to avoid selecting multiple lines on a click
-		int old_y_pos = yPos;
-		core.selectionController->SetActiveLine(dlg);
-		ScrollTo(old_y_pos);
-		extendRow = row;
-
 		auto const& selection = core.selectionController->GetSelectedSet();
+		std::vector<int> selected_rows;
+		selected_rows.reserve(selection.size());
+		for (auto *line : selection)
+			if (line)
+				selected_rows.push_back(line->Row);
 
-		// Toggle selected
-		if (click && ctrl && !shift && !alt) {
-			bool isSel = !!selection.count(dlg);
-			if (isSel && selection.size() == 1) return;
-			SelectRow(row, true, !isSel);
-			return;
-		}
+		auto plan = aegisub::subtitle_grid_selection_policy::PlanMouseSelection({
+			GetRows(),
+			row,
+			old_extend,
+			std::move(selected_rows),
+			click,
+			dclick,
+			holding,
+			{shift, ctrl, alt},
+		});
+		if (plan.handled) {
+			if (plan.set_active) {
+				// SetActiveLine will scroll the grid if the row is only half-visible,
+				// but we don't want to scroll until the mouse moves or the button is
+				// released, to avoid selecting multiple lines on a click
+				int old_y_pos = yPos;
+				core.selectionController->SetActiveLine(GetDialogue(plan.active_row));
+				ScrollTo(old_y_pos);
+				extendRow = plan.anchor_row;
+			}
 
-		// Normal click
-		if ((click || dclick) && !shift && !ctrl && !alt) {
-			if (dclick) {
+			if (plan.set_selection) {
+				Selection newsel;
+				for (int selected_row : plan.selected_rows)
+					if (auto *line = GetDialogue(selected_row))
+						newsel.insert(line);
+				core.selectionController->SetSelectedSet(std::move(newsel));
+			}
+
+			if (plan.activate_media) {
 				if (ui.audioBox)
 					ui.audioBox->ScrollToActiveLine();
 				core.videoController->JumpToTime(dlg->Start);
 			}
-			SelectRow(row, false);
 			return;
 		}
-
-		// Change active line only
-		if (click && !shift && !ctrl && alt)
-			return;
-
-		// Block select
-		if ((click && shift && !alt) || holding) {
-			extendRow = old_extend;
-			int i1 = row;
-			int i2 = extendRow;
-
-			if (i1 > i2)
-				std::swap(i1, i2);
-
-			// Toggle each
-			Selection newsel;
-			if (ctrl) newsel = selection;
-			for (int i = i1; i <= i2; i++)
-				newsel.insert(GetDialogue(i));
-			core.selectionController->SetSelectedSet(std::move(newsel));
-			return;
-		}
-
-		return;
 	}
 
 	// Mouse wheel
@@ -1059,38 +1029,42 @@ void BaseGrid::OnKeyDown(wxKeyEvent &event) {
 	auto core = context->GetCore();
 	auto active_line = core.selectionController->GetActiveLine();
 	int old_extend = extendRow;
-	int next = mid(0, (active_line ? active_line->Row : 0) + dir * step, GetRows() - 1);
-	core.selectionController->SetActiveLine(GetDialogue(next));
+	auto const& selection = core.selectionController->GetSelectedSet();
+	std::vector<int> selected_rows;
+	selected_rows.reserve(selection.size());
+	for (auto *line : selection)
+		if (line)
+			selected_rows.push_back(line->Row);
 
-	// Move selection
-	if (!ctrl && !shift && !alt) {
-		SelectRow(next);
+	auto plan = aegisub::subtitle_grid_selection_policy::PlanKeyboardSelection({
+		GetRows(),
+		active_line ? active_line->Row : -1,
+		old_extend,
+		std::move(selected_rows),
+		dir,
+		step,
+		{shift, ctrl, alt},
+	});
+	if (!plan.handled) {
+		event.Skip();
 		return;
 	}
 
-	// Move active only
-	if (alt && !shift && !ctrl)
-		return;
+	if (plan.set_active) {
+		core.selectionController->SetActiveLine(GetDialogue(plan.active_row));
+		extendRow = plan.anchor_row;
+	}
 
-	// Shift-selection
-	if (shift && !ctrl && !alt) {
-		extendRow = old_extend;
-		// Set range
-		int begin = next;
-		int end = extendRow;
-		if (end < begin)
-			std::swap(begin, end);
-
-		// Select range
+	if (plan.set_selection) {
 		Selection newsel;
-		for (int i = begin; i <= end; i++)
-			newsel.insert(GetDialogue(i));
-
+		for (int selected_row : plan.selected_rows)
+			if (auto *line = GetDialogue(selected_row))
+				newsel.insert(line);
 		core.selectionController->SetSelectedSet(std::move(newsel));
-
-		MakeRowVisible(next);
-		return;
 	}
+
+	if (plan.make_active_visible)
+		MakeRowVisible(plan.active_row);
 }
 
 void BaseGrid::SetByFrame(bool state) {

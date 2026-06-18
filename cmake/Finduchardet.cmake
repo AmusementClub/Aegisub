@@ -18,3 +18,11 @@ find_package_handle_standard_args(uchardet
     uchardet_INCLUDE_DIRS
   VERSION_VAR uchardet_VERSION
 )
+
+if(uchardet_FOUND AND NOT TARGET uchardet::libuchardet)
+  add_library(uchardet::libuchardet UNKNOWN IMPORTED)
+  set_target_properties(uchardet::libuchardet PROPERTIES
+    IMPORTED_LOCATION "${uchardet_LIBRARIES}"
+    INTERFACE_INCLUDE_DIRECTORIES "${uchardet_INCLUDE_DIRS}"
+  )
+endif()

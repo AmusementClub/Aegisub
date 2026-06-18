@@ -81,7 +81,7 @@ bool MicroDVDSubtitleFormat::CanReadFile(agi::fs::path const& filename, std::str
 void MicroDVDSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& vfps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory>) const {
 	TextFileReader file(filename, encoding);
 
-	LoadDefaultAssFileWithAppOptions(*target, false, OPT_GET("Subtitle Format/MicroDVD/Default Style Catalog")->GetString());
+	LoadDefaultAssFileWithAppOptions(*target, false, GetSubtitleFormatDefaultStyleCatalog("MicroDVD"));
 
 	agi::vfr::Framerate fps;
 

@@ -30,6 +30,10 @@ std::string AegisubGeneratorHeader() {
 		+ "; http://www.aegisub.org/"
 		+ AssStorageLineBreak();
 }
+
+bool GetConfiguredSaveUiState() {
+	return config::GetBoolOptionOrDefault("App/Save UI State", true);
+}
 }
 
 void AssSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory>) const {
@@ -44,7 +48,7 @@ void AssSubtitleFormat::WriteFile(const AssFile *src, agi::fs::path const& filen
 	options.write_generator = true;
 	options.generator_header = AegisubGeneratorHeader();
 	options.write_project_garbage = true;
-	options.write_ui_state = OPT_GET("App/Save UI State")->GetBool();
+	options.write_ui_state = GetConfiguredSaveUiState();
 	options.write_extradata = true;
 	WriteAssFileForCore(src, filename, fps, ResolveWriteEncoding(encoding), options);
 }

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <string>
 
 /// Translation service interface for aegisub_core (wx-free).
@@ -51,26 +52,47 @@ public:
 class TranslationContext {
 	static thread_local TranslationService const* service;
 	static NullTranslationService null_service;
+	static std::atomic<TranslationService const*> default_service;
+
+	static TranslationService const* NullService() {
+		return &null_service;
+	}
 
 public:
 	/// Set the translation service for the current thread.
 	/// @param svc Translation service pointer; must remain valid until Reset() or another Set()
 	static void Set(TranslationService const* svc) {
-		service = svc ? svc : &null_service;
+		service = svc ? svc : NullService();
 	}
 
-	/// Reset to the default null translation service.
+	/// Reset the current thread to the process-wide default translation service.
 	static void Reset() {
-		service = &null_service;
+		service = nullptr;
+	}
+
+	/// Set the process-wide default translation service used by threads without overrides.
+	static void SetDefault(TranslationService const* svc) {
+		default_service.store(svc ? svc : NullService(), std::memory_order_release);
+	}
+
+	/// Reset the process-wide default to the null translation service.
+	static void ResetDefault() {
+		default_service.store(NullService(), std::memory_order_release);
 	}
 
 	/// Get the current translation service.
 	static TranslationService const& Get() {
-		return service ? *service : null_service;
+		auto const* current = service ? service : default_service.load(std::memory_order_acquire);
+		return current ? *current : null_service;
 	}
 
 	static TranslationService const* CurrentService() {
-		return service ? service : &null_service;
+		auto const* current = service ? service : default_service.load(std::memory_order_acquire);
+		return current ? current : NullService();
+	}
+
+	static TranslationService const* CurrentThreadServiceOverride() {
+		return service;
 	}
 };
 

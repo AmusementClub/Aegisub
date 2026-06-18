@@ -14,12 +14,15 @@ class TranslationContextGuard {
 
 public:
 	explicit TranslationContextGuard(TranslationService const* service)
-		: previous(TranslationContext::CurrentService()) {
+		: previous(TranslationContext::CurrentThreadServiceOverride()) {
 		TranslationContext::Set(service);
 	}
 
 	~TranslationContextGuard() {
-		TranslationContext::Set(previous);
+		if (previous)
+			TranslationContext::Set(previous);
+		else
+			TranslationContext::Reset();
 	}
 
 	TranslationContextGuard(TranslationContextGuard const&) = delete;

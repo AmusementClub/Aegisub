@@ -20,6 +20,9 @@
 #include <libaegisub/option.h>
 #include <libaegisub/option_value.h>
 
+#include <string>
+#include <utility>
+
 namespace agi { class Path; }
 namespace Automation4 { class AutoloadScriptManager; }
 namespace Automation4 { class AutomationDebugService; }
@@ -31,6 +34,51 @@ namespace config {
 	extern agi::Path *path;
 	extern Automation4::AutoloadScriptManager *global_scripts;
 	extern Automation4::AutomationDebugService *automation_debug_service;
+
+	inline bool GetBoolOptionOrDefault(char const *name, bool default_value) {
+		if (!opt)
+			return default_value;
+		try {
+			return opt->Get(name)->GetBool();
+		}
+		catch (...) {
+			return default_value;
+		}
+	}
+
+	inline int GetIntOptionOrDefault(char const *name, int default_value) {
+		if (!opt)
+			return default_value;
+		try {
+			return opt->Get(name)->GetInt();
+		}
+		catch (...) {
+			return default_value;
+		}
+	}
+
+	inline bool GetBoolOptionOrDefault(std::string const& name, bool default_value) {
+		return GetBoolOptionOrDefault(name.c_str(), default_value);
+	}
+
+	inline int GetIntOptionOrDefault(std::string const& name, int default_value) {
+		return GetIntOptionOrDefault(name.c_str(), default_value);
+	}
+
+	inline std::string GetStringOptionOrDefault(char const *name, std::string default_value) {
+		if (!opt)
+			return default_value;
+		try {
+			return opt->Get(name)->GetString();
+		}
+		catch (...) {
+			return default_value;
+		}
+	}
+
+	inline std::string GetStringOptionOrDefault(std::string const& name, std::string default_value) {
+		return GetStringOptionOrDefault(name.c_str(), std::move(default_value));
+	}
 }
 
 /// Macro to get OptionValue object

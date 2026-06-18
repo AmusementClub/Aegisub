@@ -37,6 +37,8 @@
 #include <exception>
 #include <iterator>
 #include <mutex>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -93,14 +95,27 @@ namespace {
 #endif
 	};
 
+	std::string GetConfiguredVideoProvider() {
+		return config::GetStringOptionOrDefault("Video/Provider", {});
+	}
+
 	std::vector<Factory>& RegisteredProviders() {
 		static std::vector<Factory> providers;
 		return providers;
 	}
 
+	bool& RegisteredProvidersFrozen() {
+		static bool frozen = false;
+		return frozen;
+	}
+
 	std::mutex& RegisteredProvidersMutex() {
 		static std::mutex mutex;
 		return mutex;
+	}
+
+	bool IsValidFactory(Factory const& factory) {
+		return factory.name && *factory.name && factory.create;
 	}
 
 	std::vector<Factory> ProviderFactories() {
@@ -112,8 +127,13 @@ namespace {
 	}
 }
 
-void RegisterVideoProviderFactory(VideoProviderFactoryEntry factory) {
+bool TryRegisterVideoProviderFactory(VideoProviderFactoryEntry factory) {
 	std::lock_guard<std::mutex> lock(RegisteredProvidersMutex());
+	if (RegisteredProvidersFrozen())
+		return false;
+	if (!IsValidFactory(factory))
+		return false;
+
 	auto& providers = RegisteredProviders();
 	auto name = factory.name ? factory.name : "";
 	auto existing = std::find_if(providers.begin(), providers.end(), [&](auto const& provider) {
@@ -121,6 +141,26 @@ void RegisterVideoProviderFactory(VideoProviderFactoryEntry factory) {
 	});
 	if (existing == providers.end())
 		providers.push_back(factory);
+	return true;
+}
+
+void RegisterVideoProviderFactory(VideoProviderFactoryEntry factory) {
+	if (!factory.name || !*factory.name)
+		throw std::invalid_argument("video provider factory requires a non-empty name");
+	if (!factory.create)
+		throw std::invalid_argument("video provider factory requires a create callback");
+	if (!TryRegisterVideoProviderFactory(factory))
+		throw std::logic_error("video provider registry is frozen");
+}
+
+void FreezeVideoProviderFactoryRegistry() {
+	std::lock_guard<std::mutex> lock(RegisteredProvidersMutex());
+	RegisteredProvidersFrozen() = true;
+}
+
+bool IsVideoProviderFactoryRegistryFrozen() {
+	std::lock_guard<std::mutex> lock(RegisteredProvidersMutex());
+	return RegisteredProvidersFrozen();
 }
 
 aegisub::provider_catalog::ProviderCatalog VideoProviderFactory::GetCatalog(std::string const& preferred_provider) {
@@ -141,8 +181,14 @@ std::vector<std::pair<std::string, std::string>> VideoProviderFactory::GetChoice
 	return aegisub::provider_catalog::VisibleProviderChoices(GetCatalog());
 }
 
-std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path const& filename, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
-	auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(OPT_GET("Video/Provider")->GetString());
+std::unique_ptr<VideoProvider> VideoProviderFactory::GetProviderWithPreferred(
+	agi::fs::path const& filename,
+	std::string const& colormatrix,
+	std::string const& preferred_provider,
+	agi::BackgroundRunner *br,
+	std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink,
+	std::optional<size_t> max_cache_size_bytes) {
+	auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(preferred_provider);
 	auto providers = ProviderFactories();
 	auto sorted = aegisub::provider_catalog::SortFactories(providers, preferred, aegisub::provider_catalog::DescribeProviderFactoryEntry<VideoProviderCreate>);
 	aegisub::provider_selection_diagnostics::SelectionReport diagnostics;
@@ -180,7 +226,11 @@ std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path c
 			auto provider = std::move(attempt.provider);
 			last_video_provider_selection_report = diagnostics;
 			LOG_I("manager/video/provider") << factory->name << ": opened " << filename;
-			return provider->WantsCaching() ? CreateCacheVideoProvider(std::move(provider)) : std::move(provider);
+			if (!provider->WantsCaching())
+				return provider;
+			if (max_cache_size_bytes)
+				return *max_cache_size_bytes == 0 ? std::move(provider) : CreateCacheVideoProvider(std::move(provider), *max_cache_size_bytes);
+			return CreateCacheVideoProvider(std::move(provider));
 		}
 		catch (agi::fs::FileNotFound const&) {
 			err = "file not found.";
@@ -242,6 +292,19 @@ std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path c
 		throw VideoOpenError(msg);
 	}
 	throw VideoOpenError(msg);
+}
+
+std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(
+	agi::fs::path const& filename,
+	std::string const& colormatrix,
+	agi::BackgroundRunner *br,
+	std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
+	return GetProviderWithPreferred(
+		filename,
+		colormatrix,
+		GetConfiguredVideoProvider(),
+		br,
+		std::move(choice_sink));
 }
 
 aegisub::provider_selection_diagnostics::SelectionReport GetLastVideoProviderSelectionReport() {

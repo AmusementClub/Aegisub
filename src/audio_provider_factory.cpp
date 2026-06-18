@@ -39,6 +39,7 @@
 #include <exception>
 #include <iterator>
 #include <mutex>
+#include <stdexcept>
 #include <string>
 #include <utility>
 
@@ -93,14 +94,35 @@ const Factory builtin_providers[] = {
 #endif
 };
 
+std::string GetConfiguredAudioProvider() {
+	return config::GetStringOptionOrDefault("Audio/Provider", {});
+}
+
+int GetConfiguredAudioCacheType() {
+	return config::GetIntOptionOrDefault("Audio/Cache/Type", 0);
+}
+
+std::string GetConfiguredHDAudioCacheLocation() {
+	return config::GetStringOptionOrDefault("Audio/Cache/HD/Location", "default");
+}
+
 std::vector<Factory>& RegisteredProviders() {
 	static std::vector<Factory> providers;
 	return providers;
 }
 
+bool& RegisteredProvidersFrozen() {
+	static bool frozen = false;
+	return frozen;
+}
+
 std::mutex& RegisteredProvidersMutex() {
 	static std::mutex mutex;
 	return mutex;
+}
+
+bool IsValidFactory(Factory const& factory) {
+	return factory.name && *factory.name && factory.create;
 }
 
 std::vector<Factory> ProviderFactories() {
@@ -113,8 +135,13 @@ std::vector<Factory> ProviderFactories() {
 
 }
 
-void RegisterAudioProviderFactory(AudioProviderFactory factory) {
+bool TryRegisterAudioProviderFactory(AudioProviderFactory factory) {
 	std::lock_guard<std::mutex> lock(RegisteredProvidersMutex());
+	if (RegisteredProvidersFrozen())
+		return false;
+	if (!IsValidFactory(factory))
+		return false;
+
 	auto& providers = RegisteredProviders();
 	auto name = factory.name ? factory.name : "";
 	auto existing = std::find_if(providers.begin(), providers.end(), [&](auto const& provider) {
@@ -122,6 +149,26 @@ void RegisterAudioProviderFactory(AudioProviderFactory factory) {
 	});
 	if (existing == providers.end())
 		providers.push_back(factory);
+	return true;
+}
+
+void RegisterAudioProviderFactory(AudioProviderFactory factory) {
+	if (!factory.name || !*factory.name)
+		throw std::invalid_argument("audio provider factory requires a non-empty name");
+	if (!factory.create)
+		throw std::invalid_argument("audio provider factory requires a create callback");
+	if (!TryRegisterAudioProviderFactory(factory))
+		throw std::logic_error("audio provider registry is frozen");
+}
+
+void FreezeAudioProviderFactoryRegistry() {
+	std::lock_guard<std::mutex> lock(RegisteredProvidersMutex());
+	RegisteredProvidersFrozen() = true;
+}
+
+bool IsAudioProviderFactoryRegistryFrozen() {
+	std::lock_guard<std::mutex> lock(RegisteredProvidersMutex());
+	return RegisteredProvidersFrozen();
 }
 
 aegisub::provider_catalog::ProviderCatalog GetAudioProviderCatalog(std::string const& preferred_provider) {
@@ -142,12 +189,12 @@ std::vector<std::pair<std::string, std::string>> GetAudioProviderChoices() {
 	return aegisub::provider_catalog::VisibleProviderChoices(GetAudioProviderCatalog());
 }
 
-std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
-                                                     Path const& path_helper,
-                                                     BackgroundRunner *br,
-                                                     NotificationSink& notification_sink,
-                                                     std::shared_ptr<SingleChoiceInteractionSink> choice_sink) {
-	auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(OPT_GET("Audio/Provider")->GetString());
+std::unique_ptr<AudioProvider> OpenAudioProviderWithPreferred(fs::path const& filename,
+                                                              std::string const& preferred_provider,
+                                                              BackgroundRunner *br,
+                                                              std::shared_ptr<SingleChoiceInteractionSink> choice_sink,
+                                                              bool& source_needs_cache) {
+	auto preferred = aegisub::provider_selection_diagnostics::CanonicalizeProviderName(preferred_provider);
 	auto providers = ProviderFactories();
 	auto sorted = aegisub::provider_catalog::SortFactories(providers, preferred, aegisub::provider_catalog::DescribeProviderFactoryEntry<AudioProviderCreate>);
 	aegisub::provider_selection_diagnostics::SelectionReport diagnostics;
@@ -253,14 +300,42 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 		throw fs::FileNotFound(filename);
 	}
 
-	bool needs_cache = provider->NeedsCache();
+	source_needs_cache = provider->NeedsCache();
 
 	// Give it a converter if needed
 	if (provider->GetBytesPerSample() != 2 || provider->GetSampleRate() < 32000 || provider->GetChannels() != 1)
 		provider = CreateConvertAudioProvider(std::move(provider));
 
+	return provider;
+}
+
+std::unique_ptr<agi::AudioProvider> GetAudioProviderWithPreferred(fs::path const& filename,
+                                                                  std::string const& preferred_provider,
+                                                                  BackgroundRunner *br,
+                                                                  std::shared_ptr<SingleChoiceInteractionSink> choice_sink,
+                                                                  bool *source_needs_cache) {
+	bool needs_cache = false;
+	auto provider = OpenAudioProviderWithPreferred(filename, preferred_provider, br, std::move(choice_sink), needs_cache);
+	if (source_needs_cache)
+		*source_needs_cache = needs_cache;
+	return CreateLockAudioProvider(std::move(provider));
+}
+
+std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
+                                                     Path const& path_helper,
+                                                     BackgroundRunner *br,
+                                                     NotificationSink& notification_sink,
+                                                     std::shared_ptr<SingleChoiceInteractionSink> choice_sink) {
+	bool needs_cache = false;
+	auto provider = OpenAudioProviderWithPreferred(
+		filename,
+		GetConfiguredAudioProvider(),
+		br,
+		std::move(choice_sink),
+		needs_cache);
+
 	// Change provider to RAM/HD cache if needed
-	int cache = OPT_GET("Audio/Cache/Type")->GetInt();
+	int cache = GetConfiguredAudioCacheType();
 	if (!cache || !needs_cache)
 		return CreateLockAudioProvider(std::move(provider));
 
@@ -283,7 +358,7 @@ std::unique_ptr<agi::AudioProvider> GetAudioProvider(fs::path const& filename,
 
 	// Convert to HD
 	if (cache == 2) {
-		auto path = OPT_GET("Audio/Cache/HD/Location")->GetString();
+		auto path = GetConfiguredHDAudioCacheLocation();
 		if (path == "default")
 			path = "?temp";
 		auto cache_dir = path_helper.MakeAbsolute(path_helper.Decode(path), "?temp");

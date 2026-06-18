@@ -80,12 +80,9 @@ unsigned short NormalizeListenPort(int value)
 AutomationDebugListenerConfig LoadListenerConfig()
 {
 	AutomationDebugListenerConfig config;
-	if (!config::opt)
-		return config;
-
-	config.port = NormalizeListenPort(OPT_GET("Automation/Debug/Listen Port")->GetInt());
-	config.require_token = OPT_GET("Automation/Debug/Require Token")->GetBool();
-	config.token = Trim(OPT_GET("Automation/Debug/Token")->GetString());
+	config.port = NormalizeListenPort(config::GetIntOptionOrDefault("Automation/Debug/Listen Port", config.port));
+	config.require_token = config::GetBoolOptionOrDefault("Automation/Debug/Require Token", config.require_token);
+	config.token = Trim(config::GetStringOptionOrDefault("Automation/Debug/Token", config.token));
 	return config;
 }
 

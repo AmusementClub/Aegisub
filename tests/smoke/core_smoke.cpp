@@ -1,8 +1,10 @@
 #include "ass_file.h"
+#include "ass_file_app.h"
 #include "audio_provider_factory.h"
 #include "export_framerate_transform.h"
 #include "options.h"
 #include "presentation/subtitle_grid_query_service.h"
+#include "provider_index_cache.h"
 #include "include/aegisub/subtitles_provider.h"
 #include "include/aegisub/video_provider.h"
 #include "subtitle_format.h"
@@ -111,6 +113,11 @@ constexpr char kCoreSmokeOptionDefaults[] = R"({
 	}
 })";
 
+constexpr char kCoreSmokePartialOptionDefaults[] = R"({
+	"Subtitle" : {
+	}
+})";
+
 class ScopedCoreSmokeOptions {
 	agi::Options options;
 	agi::Options *previous = nullptr;
@@ -124,6 +131,70 @@ public:
 
 	~ScopedCoreSmokeOptions() {
 		config::opt = previous;
+	}
+};
+
+class ScopedCoreSmokePartialOptions {
+	agi::Options options;
+	agi::Options *previous = nullptr;
+
+public:
+	ScopedCoreSmokePartialOptions()
+	: options("", kCoreSmokePartialOptionDefaults, agi::Options::FLUSH_SKIP)
+	, previous(config::opt) {
+		config::opt = &options;
+	}
+
+	~ScopedCoreSmokePartialOptions() {
+		config::opt = previous;
+	}
+};
+
+class ScopedNullCoreSmokeOptions {
+	agi::Options *previous = nullptr;
+
+public:
+	ScopedNullCoreSmokeOptions()
+	: previous(config::opt) {
+		config::opt = nullptr;
+	}
+
+	~ScopedNullCoreSmokeOptions() {
+		config::opt = previous;
+	}
+};
+
+class ScopedNullCoreSmokeRuntime {
+	agi::Options *previous_options = nullptr;
+	agi::Path *previous_path = nullptr;
+
+public:
+	ScopedNullCoreSmokeRuntime()
+	: previous_options(config::opt)
+	, previous_path(config::path) {
+		config::opt = nullptr;
+		config::path = nullptr;
+	}
+
+	~ScopedNullCoreSmokeRuntime() {
+		config::opt = previous_options;
+		config::path = previous_path;
+	}
+};
+
+class ScopedUnresolvedCoreSmokeLocalPath {
+	agi::Path path;
+	agi::Path *previous_path = nullptr;
+
+public:
+	ScopedUnresolvedCoreSmokeLocalPath()
+	: previous_path(config::path) {
+		path.SetToken("?local", "");
+		config::path = &path;
+	}
+
+	~ScopedUnresolvedCoreSmokeLocalPath() {
+		config::path = previous_path;
 	}
 };
 
@@ -218,6 +289,14 @@ int RunSmoke() {
 		throw std::runtime_error("core subtitles provider factory did not create libass");
 	subtitles_provider->LoadSubtitles(&file, -1, nullptr);
 
+	{
+		ScopedNullCoreSmokeOptions null_options;
+		SubtitleRenderEnvironment default_render_environment;
+		auto default_subtitles_provider = SubtitlesProviderFactory::GetProvider(default_render_environment);
+		if (!default_subtitles_provider || default_subtitles_provider->GetDebugName() != "libass")
+			throw std::runtime_error("core subtitles provider factory did not default to libass without global options");
+	}
+
 	auto audio_provider_catalog = GetAudioProviderCatalog("Dummy");
 	auto audio_dummy = std::find_if(audio_provider_catalog.providers.begin(), audio_provider_catalog.providers.end(), [](auto const& provider) {
 		return provider.name == "Dummy" && provider.hidden && provider.available;
@@ -242,6 +321,37 @@ int RunSmoke() {
 	auto video_provider = VideoProviderFactory::GetProvider("?dummy:24:2:16:8:10:20:30:", "", nullptr, choice_sink);
 	if (!video_provider || video_provider->GetDecoderName() != "Dummy Video Provider" || video_provider->GetFrameCount() != 2 || video_provider->GetWidth() != 16 || video_provider->GetHeight() != 8)
 		throw std::runtime_error("core video provider manager did not create Dummy video");
+
+	{
+		ScopedNullCoreSmokeOptions null_options;
+		auto audio_without_options = GetAudioProvider("dummy-audio:", path_helper, nullptr, notification_sink, choice_sink);
+		if (!audio_without_options || audio_without_options->GetSampleRate() != 44100 || audio_without_options->GetChannels() != 1)
+			throw std::runtime_error("core audio provider manager did not create Dummy audio without global options");
+
+		auto video_without_options = VideoProviderFactory::GetProvider("?dummy:24:2:16:8:10:20:30:", "", nullptr, choice_sink);
+		if (!video_without_options || video_without_options->GetDecoderName() != "Dummy Video Provider" || video_without_options->GetFrameCount() != 2)
+			throw std::runtime_error("core video provider manager did not create Dummy video without global options");
+	}
+
+	{
+		ScopedNullCoreSmokeRuntime null_runtime;
+		auto cache_path = aegisub::provider_index_cache::BuildFilename(ass_path.get(), "?local/core-smoke-cache/", ".idx");
+		if (cache_path.empty() || !std::filesystem::exists(cache_path.parent_path()))
+			throw std::runtime_error("core provider index cache did not create a fallback cache directory without app runtime");
+		aegisub::provider_index_cache::Clean(
+			"?local/core-smoke-cache/",
+			"*.idx",
+			"Provider/FFmpegSource/Cache/Size",
+			"Provider/FFmpegSource/Cache/Files");
+	}
+
+	{
+		ScopedUnresolvedCoreSmokeLocalPath unresolved_local_path;
+		auto cache_path = aegisub::provider_index_cache::BuildFilename(ass_path.get(), "?local/core-smoke-cache/", ".idx");
+		auto cache_path_text = agi::fs::PathToString(cache_path);
+		if (cache_path_text.empty() || cache_path_text[0] == '?' || !std::filesystem::exists(cache_path.parent_path()))
+			throw std::runtime_error("core provider index cache did not fall back when the ?local token was unresolved");
+	}
 
 	aegisub::video_session_ops::OpenedVideoMetadata video_metadata;
 	video_metadata.timecodes = video_provider->GetFPS();
@@ -276,6 +386,28 @@ int RunSmoke() {
 		throw std::runtime_error("TXT reader did not parse actor/text fields");
 	if (!txt_window.rows[1].comment || txt_window.rows[1].text != "Internal note")
 		throw std::runtime_error("TXT reader did not parse comment prefix");
+
+	{
+		ScopedCoreSmokePartialOptions partial_options;
+		AssFile partial_default_file;
+		LoadDefaultAssFileWithAppOptions(partial_default_file, true, GetSubtitleFormatDefaultStyleCatalog("TXT"));
+		if (partial_default_file.Events.empty())
+			throw std::runtime_error("default ASS file did not load with partial global options");
+
+		AssFile partial_txt_file;
+		txt_reader->ReadFile(&partial_txt_file, txt_path.get(), agi::vfr::Framerate(), "utf-8", {});
+		auto partial_txt_window = aegisub::presentation::QueryVisibleSubtitleRows(partial_txt_file, request, 1);
+		if (partial_txt_window.total_rows != 3 || partial_txt_window.rows[0].actor != "Alice" || !partial_txt_window.rows[1].comment)
+			throw std::runtime_error("TXT reader did not use import defaults with partial global options");
+
+		auto partial_audio = GetAudioProvider("dummy-audio:", path_helper, nullptr, notification_sink, choice_sink);
+		if (!partial_audio || partial_audio->GetSampleRate() != 44100)
+			throw std::runtime_error("core audio provider manager did not create Dummy audio with partial global options");
+
+		auto partial_video = VideoProviderFactory::GetProvider("?dummy:24:2:16:8:10:20:30:", "", nullptr, choice_sink);
+		if (!partial_video || partial_video->GetDecoderName() != "Dummy Video Provider")
+			throw std::runtime_error("core video provider manager did not create Dummy video with partial global options");
+	}
 
 	ScopedFile stl_path(MakeTempStlPath());
 	auto const* stl_writer = SubtitleFormat::GetWriter(stl_path.get());

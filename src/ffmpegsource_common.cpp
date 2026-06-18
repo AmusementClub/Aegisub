@@ -165,6 +165,14 @@ FFmpegSourceProvider::FFmpegSourceProvider(agi::BackgroundRunner *br, std::share
 }
 
 namespace {
+std::string GetConfiguredFFmpegSourceLogLevel() {
+	return config::GetStringOptionOrDefault("Provider/FFmpegSource/Log Level", "quiet");
+}
+
+std::string GetConfiguredFFmpegSourceDecodeErrorHandling() {
+	return config::GetStringOptionOrDefault("Provider/Audio/FFmpegSource/Decode Error Handling", "ignore");
+}
+
 std::string FormatTrackLabel(int ffms_track_index, std::string const& codec_name, std::string const& channels = {}, std::string const& language = {}, std::string const& title = {}) {
 	aegisub::track_choice::TrackLabel label;
 	label.index = ffms_track_index;
@@ -384,7 +392,7 @@ FFmpegSourceProvider::AskForTrackSelection(std::vector<TrackChoice> const& Track
 
 /// @brief Set ffms2 log level according to setting in config.dat
 void FFmpegSourceProvider::SetLogLevel() {
-	auto LogLevel = OPT_GET("Provider/FFmpegSource/Log Level")->GetString();
+	auto LogLevel = GetConfiguredFFmpegSourceLogLevel();
 	agi::util::strings::to_lower_inplace(LogLevel);
 
 	if (LogLevel == "panic")
@@ -406,7 +414,7 @@ void FFmpegSourceProvider::SetLogLevel() {
 }
 
 FFMS_IndexErrorHandling FFmpegSourceProvider::GetErrorHandlingMode() {
-	auto Mode = OPT_GET("Provider/Audio/FFmpegSource/Decode Error Handling")->GetString();
+	auto Mode = GetConfiguredFFmpegSourceDecodeErrorHandling();
 	agi::util::strings::to_lower_inplace(Mode);
 
 	if (Mode == "ignore")

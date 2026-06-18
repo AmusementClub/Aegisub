@@ -26,6 +26,36 @@
 #include <libaegisub/charset_conv.h>
 #include <libaegisub/make_unique.h>
 
+namespace {
+int GetOptionInt(std::string const& name, int default_value) {
+	return config::GetIntOptionOrDefault(name, default_value);
+}
+
+bool GetOptionBool(std::string const& name, bool default_value) {
+	return config::GetBoolOptionOrDefault(name, default_value);
+}
+
+void SetOptionIntIfPresent(std::string const& name, int value) {
+	if (!config::opt)
+		return;
+	try {
+		OPT_SET(name)->SetInt(value);
+	}
+	catch (...) {
+	}
+}
+
+void SetOptionBoolIfPresent(std::string const& name, bool value) {
+	if (!config::opt)
+		return;
+	try {
+		OPT_SET(name)->SetBool(value);
+	}
+	catch (...) {
+	}
+}
+}
+
 agi::vfr::Framerate EbuExportSettings::GetFramerate() const {
 	switch (tv_standard) {
 		case STL24:     return agi::vfr::Framerate(24, 1);
@@ -53,30 +83,33 @@ std::unique_ptr<agi::charset::IconvWrapper> EbuExportSettings::GetTextEncoder() 
 
 EbuExportSettings::EbuExportSettings(std::string const& prefix)
 : prefix(prefix)
-, tv_standard((TvStandard)OPT_GET(prefix + "/TV Standard")->GetInt())
-, text_encoding((TextEncoding)OPT_GET(prefix + "/Text Encoding")->GetInt())
-, max_line_length(OPT_GET(prefix + "/Max Line Length")->GetInt())
-, line_wrapping_mode((LineWrappingMode)OPT_GET(prefix + "/Line Wrapping Mode")->GetInt())
-, translate_alignments(OPT_GET(prefix + "/Translate Alignments")->GetBool())
-, inclusive_end_times(OPT_GET(prefix + "/Inclusive End Times")->GetBool())
-, display_standard((DisplayStandard)OPT_GET(prefix + "/Display Standard")->GetInt())
+, tv_standard((TvStandard)GetOptionInt(prefix + "/TV Standard", 0))
+, text_encoding((TextEncoding)GetOptionInt(prefix + "/Text Encoding", 0))
+, max_line_length(GetOptionInt(prefix + "/Max Line Length", 42))
+, line_wrapping_mode((LineWrappingMode)GetOptionInt(prefix + "/Line Wrapping Mode", 1))
+, translate_alignments(GetOptionBool(prefix + "/Translate Alignments", true))
+, inclusive_end_times(GetOptionBool(prefix + "/Inclusive End Times", true))
+, display_standard((DisplayStandard)GetOptionInt(prefix + "/Display Standard", 0))
 {
-	timecode_offset.h = OPT_GET(prefix + "/Timecode Offset/H")->GetInt();
-	timecode_offset.m = OPT_GET(prefix + "/Timecode Offset/M")->GetInt();
-	timecode_offset.s = OPT_GET(prefix + "/Timecode Offset/S")->GetInt();
-	timecode_offset.f = OPT_GET(prefix + "/Timecode Offset/F")->GetInt();
+	timecode_offset.h = GetOptionInt(prefix + "/Timecode Offset/H", 0);
+	timecode_offset.m = GetOptionInt(prefix + "/Timecode Offset/M", 0);
+	timecode_offset.s = GetOptionInt(prefix + "/Timecode Offset/S", 0);
+	timecode_offset.f = GetOptionInt(prefix + "/Timecode Offset/F", 0);
 }
 
 void EbuExportSettings::Save() const {
-	OPT_SET(prefix + "/TV Standard")->SetInt(tv_standard);
-	OPT_SET(prefix + "/Text Encoding")->SetInt(text_encoding);
-	OPT_SET(prefix + "/Max Line Length")->SetInt(max_line_length);
-	OPT_SET(prefix + "/Line Wrapping Mode")->SetInt(line_wrapping_mode);
-	OPT_SET(prefix + "/Translate Alignments")->SetBool(translate_alignments);
-	OPT_SET(prefix + "/Inclusive End Times")->SetBool(inclusive_end_times);
-	OPT_SET(prefix + "/Display Standard")->SetInt(display_standard);
-	OPT_SET(prefix + "/Timecode Offset/H")->SetInt(timecode_offset.h);
-	OPT_SET(prefix + "/Timecode Offset/M")->SetInt(timecode_offset.m);
-	OPT_SET(prefix + "/Timecode Offset/S")->SetInt(timecode_offset.s);
-	OPT_SET(prefix + "/Timecode Offset/F")->SetInt(timecode_offset.f);
+	if (!config::opt)
+		return;
+
+	SetOptionIntIfPresent(prefix + "/TV Standard", tv_standard);
+	SetOptionIntIfPresent(prefix + "/Text Encoding", text_encoding);
+	SetOptionIntIfPresent(prefix + "/Max Line Length", max_line_length);
+	SetOptionIntIfPresent(prefix + "/Line Wrapping Mode", line_wrapping_mode);
+	SetOptionBoolIfPresent(prefix + "/Translate Alignments", translate_alignments);
+	SetOptionBoolIfPresent(prefix + "/Inclusive End Times", inclusive_end_times);
+	SetOptionIntIfPresent(prefix + "/Display Standard", display_standard);
+	SetOptionIntIfPresent(prefix + "/Timecode Offset/H", timecode_offset.h);
+	SetOptionIntIfPresent(prefix + "/Timecode Offset/M", timecode_offset.m);
+	SetOptionIntIfPresent(prefix + "/Timecode Offset/S", timecode_offset.s);
+	SetOptionIntIfPresent(prefix + "/Timecode Offset/F", timecode_offset.f);
 }

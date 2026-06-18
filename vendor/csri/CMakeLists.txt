@@ -32,7 +32,9 @@ add_library(csri STATIC
     lib/wrap.c
     subhelp/logging.c
 )
-target_include_directories(csri PUBLIC "include")
+target_include_directories(csri PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
+)
 if(WIN32)
     target_include_directories(csri PRIVATE "lib/win32")
 else()

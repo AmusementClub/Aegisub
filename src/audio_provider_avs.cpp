@@ -48,8 +48,17 @@
 #include <libaegisub/make_unique.h>
 
 #include <mutex>
+#include <string>
 
 namespace {
+std::string GetDownmixerOption() {
+	return config::GetStringOptionOrDefault("Audio/Downmixer", "None");
+}
+
+int GetAvisynthSampleRateOption() {
+	return config::GetIntOptionOrDefault("Provider/Audio/AVS/Sample Rate", 0);
+}
+
 class AvisynthAudioProvider final : public agi::AudioProvider {
 	AviSynthWrapper avs_wrapper;
 	PClip clip;
@@ -109,15 +118,16 @@ void AvisynthAudioProvider::LoadFromClip(AVSValue clip) {
 	AVSValue script;
 
 	// Convert to one channel
-	if (OPT_GET("Audio/Downmixer")->GetString() != "None")
-		script = env->Invoke(OPT_GET("Audio/Downmixer")->GetString().c_str(), clip);
+	auto downmixer = GetDownmixerOption();
+	if (downmixer != "None")
+		script = env->Invoke(downmixer.c_str(), clip);
 	else
 		script = clip;
 
 	vi = script.AsClip()->GetVideoInfo();
 
 	// Convert sample rate
-	int setsample = OPT_GET("Provider/Audio/AVS/Sample Rate")->GetInt();
+	int setsample = GetAvisynthSampleRateOption();
 	if (setsample == 0 && vi.SamplesPerSecond() < 32000)
 		setsample = 44100;
 	if (setsample != 0) {

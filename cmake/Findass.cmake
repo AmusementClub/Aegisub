@@ -18,3 +18,11 @@ find_package_handle_standard_args(ass
     ass_INCLUDE_DIRS
   VERSION_VAR ass_VERSION
 )
+
+if(ass_FOUND AND NOT TARGET ass::ass)
+  add_library(ass::ass UNKNOWN IMPORTED)
+  set_target_properties(ass::ass PROPERTIES
+    IMPORTED_LOCATION "${ass_LIBRARIES}"
+    INTERFACE_INCLUDE_DIRECTORIES "${ass_INCLUDE_DIRS}"
+  )
+endif()

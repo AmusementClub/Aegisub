@@ -31,8 +31,8 @@ inline std::string GetDefaultRuntimeLibraryName() {
 
 using RuntimePathResolver = std::function<std::string(std::string_view)>;
 
-inline bool UsesAppLocalRuntime(std::string_view configured_runtime_path) {
-	return configured_runtime_path.empty();
+inline bool LooksLikeTokenPath(std::string_view path) {
+	return !path.empty() && path[0] == '?';
 }
 
 inline std::string ResolveConfiguredRuntimePath(std::string_view configured_runtime_path, RuntimePathResolver const& path_resolver = RuntimePathResolver()) {
@@ -40,7 +40,14 @@ inline std::string ResolveConfiguredRuntimePath(std::string_view configured_runt
 		return {};
 
 	auto configured_path = std::string(configured_runtime_path);
-	return path_resolver ? path_resolver(configured_runtime_path) : configured_path;
+	auto resolved_path = path_resolver ? path_resolver(configured_runtime_path) : configured_path;
+	if (LooksLikeTokenPath(configured_runtime_path) && LooksLikeTokenPath(resolved_path))
+		return {};
+	return resolved_path;
+}
+
+inline bool UsesAppLocalRuntime(std::string_view configured_runtime_path, RuntimePathResolver const& path_resolver = RuntimePathResolver()) {
+	return ResolveConfiguredRuntimePath(configured_runtime_path, path_resolver).empty();
 }
 
 inline RuntimeLoadRequest BuildRuntimeLoadRequest(std::string_view configured_runtime_path, RuntimePathResolver const& path_resolver = RuntimePathResolver()) {

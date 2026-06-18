@@ -14,6 +14,8 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#pragma once
+
 #include "provider_selection_diagnostics.h"
 #include "provider_catalog.h"
 #include "provider_factory_entry.h"
@@ -22,6 +24,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -38,7 +41,10 @@ using VideoProviderCreate = std::unique_ptr<VideoProvider> (*)(agi::fs::path con
                                                                std::shared_ptr<agi::SingleChoiceInteractionSink>);
 using VideoProviderFactoryEntry = aegisub::provider_catalog::ProviderFactoryEntry<VideoProviderCreate>;
 
+bool TryRegisterVideoProviderFactory(VideoProviderFactoryEntry factory);
 void RegisterVideoProviderFactory(VideoProviderFactoryEntry factory);
+void FreezeVideoProviderFactoryRegistry();
+bool IsVideoProviderFactoryRegistryFrozen();
 std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoProvider> parent);
 std::unique_ptr<VideoProvider> CreateCacheVideoProvider(std::unique_ptr<VideoProvider> parent, size_t max_cache_size_bytes);
 
@@ -47,6 +53,12 @@ struct VideoProviderFactory {
 	static std::vector<std::string> GetClasses();
 	static std::vector<std::pair<std::string, std::string>> GetChoices();
 	static std::unique_ptr<VideoProvider> GetProvider(agi::fs::path const& video_file, std::string const& colormatrix, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink);
+	static std::unique_ptr<VideoProvider> GetProviderWithPreferred(agi::fs::path const& video_file,
+	                                                               std::string const& colormatrix,
+	                                                               std::string const& preferred_provider,
+	                                                               agi::BackgroundRunner *br,
+	                                                               std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink,
+	                                                               std::optional<size_t> max_cache_size_bytes = std::nullopt);
 };
 
 aegisub::provider_selection_diagnostics::SelectionReport GetLastVideoProviderSelectionReport();

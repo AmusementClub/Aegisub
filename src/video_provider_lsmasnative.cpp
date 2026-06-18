@@ -30,6 +30,10 @@
 #include <vector>
 
 namespace {
+bool GetConfiguredLsmasNativeAudioDownmix() {
+    return config::GetBoolOptionOrDefault("Provider/Audio/LsmasNative/Downmix", false);
+}
+
 enum AvColorSpace {
     AVCOL_SPC_RGB = 0,
     AVCOL_SPC_BT709 = 1,
@@ -392,7 +396,7 @@ LsmasVideoProvider::LsmasVideoProvider(agi::fs::path const& filename, std::strin
     auto video_options = lsmas_provider::MakeVideoOpenOptions(stream_index);
     video_options.cachefile = cache_filename_utf8.c_str();
 
-    auto audio_options = lsmas_provider::MakeAudioOpenOptions(-1, OPT_GET("Provider/Audio/LsmasNative/Downmix")->GetBool());
+    auto audio_options = lsmas_provider::MakeAudioOpenOptions(-1, GetConfiguredLsmasNativeAudioDownmix());
     audio_options.cachefile = cache_filename_utf8.c_str();
 
     lsmas_provider::ErrorString error;

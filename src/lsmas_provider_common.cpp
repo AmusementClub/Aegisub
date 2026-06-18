@@ -31,6 +31,10 @@ std::string ErrorString::Message(std::string const& fallback) const {
 }
 
 namespace {
+int GetConfiguredLsmasNativeVideoThreads() {
+    return config::GetIntOptionOrDefault("Provider/Video/LsmasNative/Decoding Threads", 0);
+}
+
 std::string TrackTypeName(TrackType type) {
     return type == TrackType::Video ? "video" : "audio";
 }
@@ -142,7 +146,7 @@ void CleanIndexCache() {
 lsmas_video_open_options_t MakeVideoOpenOptions(int stream_index) {
     lsmas_video_open_options_t options = {};
     options.stream_index = stream_index;
-    options.threads = OPT_GET("Provider/Video/LsmasNative/Decoding Threads")->GetInt();
+    options.threads = GetConfiguredLsmasNativeVideoThreads();
     options.seek_mode = LSMAS_SEEK_NORMAL;
     options.seek_threshold = 10;
     options.fpsden = 1;

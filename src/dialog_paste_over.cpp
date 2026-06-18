@@ -29,6 +29,7 @@
 
 #include "help_button.h"
 #include "options.h"
+#include "paste_over_policy.h"
 
 #include <functional>
 #include <wx/button.h>
@@ -38,20 +39,12 @@
 #include <wx/stattext.h>
 
 namespace {
-constexpr size_t PASTE_OVER_FIELD_COUNT = 11;
-
-void normalize_paste_over_options(std::vector<bool>& options) {
-	if (options.size() == PASTE_OVER_FIELD_COUNT - 1)
-		options.insert(options.begin(), false);
-	if (options.size() < PASTE_OVER_FIELD_COUNT)
-		options.resize(PASTE_OVER_FIELD_COUNT, false);
-}
-
 struct DialogPasteOver {
 	wxDialog d;
 	wxCheckListBox *ListBox;
 
 	void CheckAll(bool check);
+	void SetFields(std::vector<bool> const& fields);
 
 	void OnOK(wxCommandEvent &);
 	void OnTimes(wxCommandEvent &);
@@ -83,13 +76,7 @@ DialogPasteOver::DialogPasteOver(wxWindow *parent)
 	ListBox = new wxCheckListBox(&d, -1, wxDefaultPosition, wxDefaultSize, choices);
 	ListSizer->Add(ListBox, wxSizerFlags(0).Expand().Border(wxTOP));
 
-	std::vector<bool> options = OPT_GET("Tool/Paste Lines Over/Fields")->GetListBool();
-	normalize_paste_over_options(options);
-	if (options.size() > choices.size())
-		options.resize(choices.size());
-
-	for (size_t i = 0; i < choices.size(); ++i)
-		ListBox->Check(i, options[i]);
+	SetFields(aegisub::paste_over_policy::NormalizeFields(OPT_GET("Tool/Paste Lines Over/Fields")->GetListBool()));
 
 	// Top buttons
 	wxButton *btn;
@@ -128,19 +115,20 @@ void DialogPasteOver::OnOK(wxCommandEvent &) {
 }
 
 void DialogPasteOver::OnText(wxCommandEvent &) {
-	CheckAll(false);
-	ListBox->Check(10, true);
+	SetFields(aegisub::paste_over_policy::BuildTextFields());
 }
 
 void DialogPasteOver::OnTimes(wxCommandEvent &) {
-	CheckAll(false);
-	ListBox->Check(2, true);
-	ListBox->Check(3, true);
+	SetFields(aegisub::paste_over_policy::BuildTimesFields());
 }
 
 void DialogPasteOver::CheckAll(bool check) {
+	SetFields(aegisub::paste_over_policy::BuildAllFields(check));
+}
+
+void DialogPasteOver::SetFields(std::vector<bool> const& fields) {
 	for (size_t i = 0; i < ListBox->GetCount(); ++i)
-		ListBox->Check(i, check);
+		ListBox->Check(i, i < fields.size() && fields[i]);
 }
 }
 

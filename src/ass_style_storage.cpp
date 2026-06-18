@@ -81,6 +81,8 @@ void AssStyleStorage::Load(agi::fs::path const& filename) {
 }
 
 void AssStyleStorage::LoadCatalog(std::string const& catalogname) {
+	if (!config::path)
+		return;
 	auto filename = config::path->Decode("?user/catalog/" + catalogname + ".sty");
 	Load(filename);
 }
@@ -106,6 +108,8 @@ AssStyle *AssStyleStorage::GetStyle(std::string const& name) {
 
 std::vector<std::string> AssStyleStorage::GetCatalogs() {
 	std::vector<std::string> catalogs;
+	if (!config::path)
+		return catalogs;
 	for (auto const& file : agi::fs::DirectoryIterator(config::path->Decode("?user/catalog/"), "*.sty"))
 		catalogs.push_back(agi::fs::PathToString(agi::fs::PathFromString(file).stem()));
 	return catalogs;
@@ -113,6 +117,7 @@ std::vector<std::string> AssStyleStorage::GetCatalogs() {
 
 bool AssStyleStorage::CatalogExists(std::string const& catalogname) {
 	if (catalogname.empty()) return false;
+	if (!config::path) return false;
 	auto filename = config::path->Decode("?user/catalog/" + catalogname + ".sty");
 	return agi::fs::FileExists(filename);
 }

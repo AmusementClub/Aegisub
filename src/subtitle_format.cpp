@@ -106,7 +106,7 @@ agi::vfr::Framerate SubtitleFormat::AskForFPS(bool allow_vfr, bool show_smpte, a
 
 std::string SubtitleFormat::ResolveWriteEncoding(std::string encoding) {
 	if (encoding.empty())
-		encoding = OPT_GET("App/Save Charset")->GetString();
+		encoding = config::GetStringOptionOrDefault("App/Save Charset", "UTF-8");
 	return encoding;
 }
 

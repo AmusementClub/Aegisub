@@ -20,4 +20,8 @@
 #include "ass_file.h"
 
 void LoadDefaultAssFileWithAppOptions(AssFile& file, bool include_dialogue_line = true, std::string const& style_catalog = std::string());
+std::string GetSubtitleFormatDefaultStyleCatalog(std::string const& format_name);
+std::string GetTextImportActorSeparator();
+std::string GetTextImportCommentStarter();
+bool GetTextImportIncludeBlank();
 ScriptResolutionType GetAppScriptResolutionPreference();

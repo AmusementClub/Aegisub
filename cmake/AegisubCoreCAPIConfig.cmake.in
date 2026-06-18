@@ -1,0 +1,74 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/modules")
+set_and_check(AegisubCoreCAPI_RUNTIME_DIR "${PACKAGE_PREFIX_DIR}/bin")
+
+macro(_aegisub_core_c_api_find_static_dependencies)
+	# The shared C API target is self-contained apart from its runtime DLLs.
+	# The static target links the same core code into the host process, so
+	# consumers that request the Static component need the native dependency
+	# packages available to CMake as well.
+	find_dependency(ass REQUIRED)
+	find_dependency(Boost CONFIG REQUIRED COMPONENTS container locale regex)
+	find_dependency(hwy CONFIG REQUIRED)
+	find_dependency(ICU REQUIRED COMPONENTS uc dt in)
+	find_dependency(ZLIB REQUIRED)
+	find_dependency(Iconv REQUIRED)
+	find_dependency(pugixml CONFIG REQUIRED)
+	if(@WITH_UCHARDET@)
+		find_dependency(uchardet REQUIRED)
+	endif()
+
+	if(@AEGISUB_MATROSKA_PARSING@)
+		find_dependency(EBML CONFIG REQUIRED)
+		find_dependency(Matroska CONFIG REQUIRED)
+	endif()
+
+	if(@WITH_PFFFT@)
+		find_dependency(pffft CONFIG REQUIRED)
+	endif()
+
+	if(@WITH_SKIA@)
+		find_dependency(unofficial-skia CONFIG REQUIRED)
+	endif()
+
+endmacro()
+
+include("${CMAKE_CURRENT_LIST_DIR}/AegisubCoreCAPITargets.cmake")
+
+foreach(_aegisub_core_c_api_target
+		Aegisub::core_c_api
+		Aegisub::core_c_api_static
+		Aegisub::aegisub_core
+		Aegisub::libaegisub
+		Aegisub::luajit
+		Aegisub::luabins
+		Aegisub::luasocket
+		Aegisub::csri)
+	if(TARGET ${_aegisub_core_c_api_target})
+		set_target_properties(${_aegisub_core_c_api_target} PROPERTIES
+			MAP_IMPORTED_CONFIG_DEBUG RelWithDebInfo
+			MAP_IMPORTED_CONFIG_RELEASE RelWithDebInfo
+			MAP_IMPORTED_CONFIG_MINSIZEREL RelWithDebInfo
+		)
+	endif()
+endforeach()
+unset(_aegisub_core_c_api_target)
+
+set(AegisubCoreCAPI_Shared_FOUND TRUE)
+set(AegisubCoreCAPI_Static_FOUND TRUE)
+foreach(_aegisub_core_c_api_component IN LISTS AegisubCoreCAPI_FIND_COMPONENTS)
+	if(_aegisub_core_c_api_component STREQUAL "Shared")
+		set(AegisubCoreCAPI_Shared_FOUND TRUE)
+	elseif(_aegisub_core_c_api_component STREQUAL "Static")
+		_aegisub_core_c_api_find_static_dependencies()
+		set(AegisubCoreCAPI_Static_FOUND TRUE)
+	else()
+		set(AegisubCoreCAPI_${_aegisub_core_c_api_component}_FOUND FALSE)
+	endif()
+endforeach()
+unset(_aegisub_core_c_api_component)
+unset(_aegisub_core_c_api_find_static_dependencies)
+
+check_required_components(AegisubCoreCAPI)

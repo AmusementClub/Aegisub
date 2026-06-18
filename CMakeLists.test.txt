@@ -66,6 +66,7 @@ if(GTEST_FOUND)
         src/avisynth_legacy_path.cpp
         src/charset_choice.cpp
         src/compat.cpp
+        src/core_host_context.cpp
         src/export_framerate_transform.cpp
         src/csri_renderer_discovery.cpp
         src/fft.cpp
@@ -92,12 +93,14 @@ if(GTEST_FOUND)
         src/subtitle_edit_ops.cpp
         src/subtitle_editor_ops.cpp
         src/subtitle_grid_ops.cpp
+        src/subtitle_grid_selection_policy.cpp
         src/video_property_update_policy.cpp
         src/video_property_update_requests.cpp
         src/video_property_update.cpp
         src/video_aspect_ratio_ops.cpp
         src/video_navigation_ops.cpp
         src/navigation_preview_policy.cpp
+        src/paste_over_policy.cpp
         src/playback_transport_policy.cpp
         src/grid_core/grid_layout.cpp
         src/grid_core/grid_layout.h
@@ -115,6 +118,7 @@ if(GTEST_FOUND)
         tests/tests/charset_choice.cpp
         tests/tests/character_count.cpp
         tests/tests/compat.cpp
+        tests/tests/core_host_context.cpp
         tests/tests/color.cpp
         tests/tests/csri_renderer_discovery.cpp
         tests/tests/dialogue_lexer.cpp
@@ -146,6 +150,7 @@ if(GTEST_FOUND)
         tests/tests/mru.cpp
         tests/tests/option.cpp
         tests/tests/path.cpp
+        tests/tests/paste_over_policy.cpp
         tests/tests/perf_trace.cpp
         tests/tests/presentation_contract.cpp
         tests/tests/project_session_ops.cpp
@@ -165,6 +170,7 @@ if(GTEST_FOUND)
         tests/tests/subtitle_edit_ops.cpp
         tests/tests/subtitle_editor_ops.cpp
         tests/tests/subtitle_grid_ops.cpp
+        tests/tests/subtitle_grid_selection_policy.cpp
         tests/tests/subtitle_timing_ops.cpp
         tests/tests/syntax_highlight.cpp
         tests/tests/thesaurus.cpp
@@ -294,6 +300,29 @@ target_compile_features(aegisub_core_smoke PRIVATE cxx_std_20)
 target_compile_definitions(aegisub_core_smoke PRIVATE CMAKE_BUILD)
 target_link_libraries(aegisub_core_smoke PRIVATE aegisub_core libaegisub luajit)
 
+add_executable(core-api-facade-smoke EXCLUDE_FROM_ALL
+    tests/smoke/core_api_facade_smoke.cpp
+)
+target_compile_features(core-api-facade-smoke PRIVATE cxx_std_20)
+target_compile_definitions(core-api-facade-smoke PRIVATE CMAKE_BUILD)
+target_link_libraries(core-api-facade-smoke PRIVATE aegisub_core libaegisub luajit)
+
+add_executable(core-c-api-smoke EXCLUDE_FROM_ALL
+    tests/smoke/core_c_api_smoke.cpp
+    tests/smoke/core_c_api_header_smoke.c
+)
+target_compile_features(core-c-api-smoke PRIVATE cxx_std_20)
+target_compile_definitions(core-c-api-smoke PRIVATE CMAKE_BUILD)
+target_link_libraries(core-c-api-smoke PRIVATE aegisub_core_c_api_static)
+
+add_executable(core-c-api-shared-smoke EXCLUDE_FROM_ALL
+    tests/smoke/core_c_api_smoke.cpp
+    tests/smoke/core_c_api_header_smoke.c
+)
+target_compile_features(core-c-api-shared-smoke PRIVATE cxx_std_20)
+target_compile_definitions(core-c-api-shared-smoke PRIVATE AEGISUB_CORE_USE_SHARED)
+target_link_libraries(core-c-api-shared-smoke PRIVATE aegisub_core_c_api)
+
 add_executable(aegisub_core_link_audit EXCLUDE_FROM_ALL
     tests/smoke/core_smoke.cpp
 )
@@ -314,7 +343,10 @@ endif()
 
 add_custom_target(test-core-smoke
     COMMAND aegisub_core_smoke
-    DEPENDS aegisub_core_smoke
+    COMMAND core-api-facade-smoke
+    COMMAND core-c-api-smoke
+    COMMAND core-c-api-shared-smoke
+    DEPENDS aegisub_core_smoke core-api-facade-smoke core-c-api-smoke core-c-api-shared-smoke
     WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
 )
 
@@ -324,9 +356,30 @@ add_custom_target(test-core-link-audit
     WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
 )
 
+add_executable(provider-manager-registry-smoke EXCLUDE_FROM_ALL
+    tests/smoke/provider_manager_registry_smoke.cpp
+)
+target_compile_features(provider-manager-registry-smoke PRIVATE cxx_std_20)
+target_compile_definitions(provider-manager-registry-smoke PRIVATE CMAKE_BUILD)
+target_link_libraries(provider-manager-registry-smoke PRIVATE aegisub_core libaegisub luajit)
+
+add_custom_target(test-provider-manager-registry
+    COMMAND provider-manager-registry-smoke
+    DEPENDS provider-manager-registry-smoke
+    WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+)
+
 if(BUILD_TESTING)
     add_test(NAME aegisub_core_smoke COMMAND aegisub_core_smoke)
     set_tests_properties(aegisub_core_smoke PROPERTIES LABELS "smoke;core")
+    add_test(NAME core_api_facade_smoke COMMAND core-api-facade-smoke)
+    set_tests_properties(core_api_facade_smoke PROPERTIES LABELS "smoke;core;abi")
+    add_test(NAME core_c_api_smoke COMMAND core-c-api-smoke)
+    set_tests_properties(core_c_api_smoke PROPERTIES LABELS "smoke;core;abi")
+    add_test(NAME core_c_api_shared_smoke COMMAND core-c-api-shared-smoke)
+    set_tests_properties(core_c_api_shared_smoke PROPERTIES LABELS "smoke;core;abi;shared")
+    add_test(NAME provider_manager_registry_smoke COMMAND provider-manager-registry-smoke)
+    set_tests_properties(provider_manager_registry_smoke PROPERTIES LABELS "smoke;core;provider")
 endif()
 
 if(WITH_LIBPLACEBO)
@@ -383,10 +436,6 @@ if(WITH_AVISYNTH)
 
     add_executable(avisynth-provider-registration-smoke EXCLUDE_FROM_ALL
         tests/smoke/avisynth_provider_registration_smoke.cpp
-        src/audio_provider_avs.cpp
-        src/avisynth_legacy_path.cpp
-        src/avisynth_wrap.cpp
-        src/video_provider_avs.cpp
     )
     target_compile_definitions(avisynth-provider-registration-smoke PRIVATE
         CMAKE_BUILD
@@ -501,4 +550,11 @@ if(STRINGZILLA_INCLUDE_DIRS)
 endif()
 target_link_libraries(search-replace-bench PRIVATE libaegisub)
 
-add_custom_target(test-aegisub-all DEPENDS test-automation test-aegisub test-core-smoke)
+add_executable(core-host-boundary-bench EXCLUDE_FROM_ALL
+    tests/smoke/core_host_boundary_bench.cpp
+)
+target_compile_features(core-host-boundary-bench PRIVATE cxx_std_20)
+target_compile_definitions(core-host-boundary-bench PRIVATE CMAKE_BUILD)
+target_link_libraries(core-host-boundary-bench PRIVATE aegisub_core libaegisub)
+
+add_custom_target(test-aegisub-all DEPENDS test-automation test-aegisub test-core-smoke test-provider-manager-registry)

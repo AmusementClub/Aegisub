@@ -25,10 +25,10 @@
 void LoadDefaultAssFileWithAppOptions(AssFile& file, bool include_dialogue_line, std::string const& style_catalog) {
 	AssFileLoadDefaultOptions options;
 	options.include_dialogue_line = false;
-	if (!OPT_GET("Subtitle/Default Resolution/Auto")->GetBool()) {
+	if (!config::GetBoolOptionOrDefault("Subtitle/Default Resolution/Auto", true)) {
 		options.set_resolution = true;
-		options.resolution_width = OPT_GET("Subtitle/Default Resolution/Width")->GetInt();
-		options.resolution_height = OPT_GET("Subtitle/Default Resolution/Height")->GetInt();
+		options.resolution_width = config::GetIntOptionOrDefault("Subtitle/Default Resolution/Width", 640);
+		options.resolution_height = config::GetIntOptionOrDefault("Subtitle/Default Resolution/Height", 480);
 	}
 
 	file.LoadDefault(options);
@@ -41,6 +41,22 @@ void LoadDefaultAssFileWithAppOptions(AssFile& file, bool include_dialogue_line,
 
 	if (include_dialogue_line)
 		file.Events.push_back(*new AssDialogue);
+}
+
+std::string GetSubtitleFormatDefaultStyleCatalog(std::string const& format_name) {
+	return config::GetStringOptionOrDefault("Subtitle Format/" + format_name + "/Default Style Catalog", {});
+}
+
+std::string GetTextImportActorSeparator() {
+	return config::GetStringOptionOrDefault("Tool/Import/Text/Actor Separator", ":");
+}
+
+std::string GetTextImportCommentStarter() {
+	return config::GetStringOptionOrDefault("Tool/Import/Text/Comment Starter", "#");
+}
+
+bool GetTextImportIncludeBlank() {
+	return config::GetBoolOptionOrDefault("Tool/Import/Text/Include Blank", false);
 }
 
 ScriptResolutionType GetAppScriptResolutionPreference() {

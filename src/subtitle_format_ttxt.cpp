@@ -52,6 +52,12 @@ TTXTSubtitleFormat::TTXTSubtitleFormat()
 {
 }
 
+namespace {
+int GetConfiguredDefaultDuration() {
+	return config::GetIntOptionOrDefault("Timing/Default Duration", 3000);
+}
+}
+
 std::vector<std::string> TTXTSubtitleFormat::GetReadWildcards() const {
 	return {"ttxt"};
 }
@@ -62,7 +68,7 @@ std::vector<std::string> TTXTSubtitleFormat::GetWriteWildcards() const {
 
 void TTXTSubtitleFormat::ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory>) const {
 	(void)choice_sink;
-	LoadDefaultAssFileWithAppOptions(*target, false, OPT_GET("Subtitle Format/TTXT/Default Style Catalog")->GetString());
+	LoadDefaultAssFileWithAppOptions(*target, false, GetSubtitleFormatDefaultStyleCatalog("TTXT"));
 
 	// Load XML document
 	pugi::xml_document doc;
@@ -272,6 +278,6 @@ void TTXTSubtitleFormat::ConvertToTTXT(AssFile &file) const {
 	// Insert blank line at the end
 	auto diag = new AssDialogue;
 	diag->Start = lastTime;
-	diag->End = lastTime+OPT_GET("Timing/Default Duration")->GetInt();
+	diag->End = lastTime + GetConfiguredDefaultDuration();
 	file.Events.push_back(*diag);
 }

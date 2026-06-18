@@ -40,6 +40,10 @@ constexpr char kDebugServiceOptionConfig[] = R"({
 		}
 	}
 })";
+constexpr char kDebugServicePartialOptionConfig[] = R"({
+	"Automation" : {
+	}
+})";
 
 class ScopedDebugServiceOptions final {
 	bool owns_options = false;
@@ -62,6 +66,26 @@ public:
 
 	ScopedDebugServiceOptions(ScopedDebugServiceOptions const&) = delete;
 	ScopedDebugServiceOptions& operator=(ScopedDebugServiceOptions const&) = delete;
+};
+
+class ScopedReplaceDebugServiceOptions final {
+	agi::Options *previous = nullptr;
+public:
+	template<size_t N>
+	explicit ScopedReplaceDebugServiceOptions(char const (&option_config)[N])
+	: previous(config::opt)
+	{
+		config::opt = new agi::Options("", option_config, agi::Options::FLUSH_SKIP);
+	}
+
+	~ScopedReplaceDebugServiceOptions()
+	{
+		delete config::opt;
+		config::opt = previous;
+	}
+
+	ScopedReplaceDebugServiceOptions(ScopedReplaceDebugServiceOptions const&) = delete;
+	ScopedReplaceDebugServiceOptions& operator=(ScopedReplaceDebugServiceOptions const&) = delete;
 };
 
 class ScopedIntOption final {
@@ -902,6 +926,22 @@ TEST(AutomationDebugService, disable_without_client_returns_promptly) {
 
 	auto endpoint = service.GetEndpoint();
 	EXPECT_TRUE(endpoint.available);
+	EXPECT_GT(endpoint.port, 0);
+	EXPECT_FALSE(endpoint.token.empty());
+
+	EXPECT_FALSE(service.SetEnabled(false));
+	EXPECT_FALSE(service.IsEnabled());
+}
+
+TEST(AutomationDebugService, missing_debug_options_use_listener_defaults) {
+	ScopedReplaceDebugServiceOptions options(kDebugServicePartialOptionConfig);
+
+	Automation4::AutomationDebugService service;
+	ASSERT_TRUE(service.SetEnabled(true));
+
+	auto endpoint = service.GetEndpoint();
+	EXPECT_TRUE(endpoint.available);
+	EXPECT_EQ("127.0.0.1", endpoint.host);
 	EXPECT_GT(endpoint.port, 0);
 	EXPECT_FALSE(endpoint.token.empty());
 

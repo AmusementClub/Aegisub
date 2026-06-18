@@ -66,8 +66,26 @@ namespace {
 	avisynth::RuntimeLoadRequest runtime_request;
 	bool plugin_autoload_dirs_configured = false;
 
+	std::string GetConfiguredRuntimePathOption() {
+		return config::GetStringOptionOrDefault("Provider/Avisynth/Runtime Path", {});
+	}
+
+	bool GetAllowAncientRuntimeOption() {
+		return config::GetBoolOptionOrDefault("Provider/Avisynth/Allow Ancient", false);
+	}
+
+	int GetMemoryMaxOption() {
+		return config::GetIntOptionOrDefault("Provider/Avisynth/Memory Max", 0);
+	}
+
+	std::string ResolveRuntimePathOption(std::string_view configured_runtime_path) {
+		return config::path
+			? agi::fs::PathToString(config::path->Decode(std::string(configured_runtime_path)))
+			: std::string(configured_runtime_path);
+	}
+
 	bool UsesAppLocalPluginLoading() {
-		return avisynth::UsesAppLocalRuntime(OPT_GET("Provider/Avisynth/Runtime Path")->GetString());
+		return avisynth::UsesAppLocalRuntime(GetConfiguredRuntimePathOption(), ResolveRuntimePathOption);
 	}
 
 	void InitializeAvisynthRuntime(agi::native::Library& library) {
@@ -76,12 +94,8 @@ namespace {
 
 	avisynth::RuntimeLoadRequest GetConfiguredRuntimeRequest() {
 		return avisynth::BuildRuntimeLoadRequest(
-			OPT_GET("Provider/Avisynth/Runtime Path")->GetString(),
-			[](std::string_view configured_runtime_path) {
-				return config::path
-					? agi::fs::PathToString(config::path->Decode(std::string(configured_runtime_path)))
-					: std::string(configured_runtime_path);
-			});
+			GetConfiguredRuntimePathOption(),
+			ResolveRuntimePathOption);
 	}
 
 	agi::native::CachedLibrary& GetRuntimeLibrary() {
@@ -222,7 +236,7 @@ AviSynthWrapper::AviSynthWrapper() {
 
 	if (!avs_refcount++) {
 		// Require Avisynth 2.5.6+?
-		if (OPT_GET("Provider/Avisynth/Allow Ancient")->GetBool())
+		if (GetAllowAncientRuntimeOption())
 			env = CreateScriptEnv(AVISYNTH_INTERFACE_VERSION-1);
 		else
 			env = CreateScriptEnv(AVISYNTH_INTERFACE_VERSION);
@@ -233,7 +247,7 @@ AviSynthWrapper::AviSynthWrapper() {
 		ConfigurePluginAutoloadDirectories();
 
 		// Set memory limit
-		const int memoryMax = OPT_GET("Provider/Avisynth/Memory Max")->GetInt();
+		const int memoryMax = GetMemoryMaxOption();
 		if (memoryMax)
 			env->SetMemoryMax(memoryMax);
 	}

@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
 cmake_policy(SET CMP0074 NEW)
+if(POLICY CMP0207)
+    cmake_policy(SET CMP0207 NEW)
+endif()
 include(CheckIncludeFiles)
+include(CMakePackageConfigHelpers)
 
 project(Aegisub)
 
@@ -228,7 +232,10 @@ add_library(luajit ${AEGISUB_LUAJIT_LIBRARY_TYPE}
     # "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/jit/vmdef.lua"
 )
 target_compile_definitions(luajit PRIVATE LUAJIT_ENABLE_LUA52COMPAT)
-target_include_directories(luajit PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen" PUBLIC "vendor/luajit/src")
+target_include_directories(luajit
+    PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/vendor/luajit/src/gen"
+    PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/vendor/luajit/src>"
+)
 if(WIN32 AND AEGISUB_LUAJIT_SHARED)
     target_compile_definitions(luajit PRIVATE LUA_BUILD_AS_DLL)
     set_target_properties(luajit PROPERTIES OUTPUT_NAME lua51)
@@ -350,7 +357,9 @@ target_compile_definitions(libaegisub PRIVATE CMAKE_BUILD)
 if(WIN32 AND AEGISUB_LUAJIT_SHARED)
     target_compile_definitions(libaegisub PRIVATE LUA_BUILD_AS_DLL)
 endif()
-target_include_directories(libaegisub PUBLIC "libaegisub/include")
+target_include_directories(libaegisub PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/libaegisub/include>"
+)
 if(APPLE)
     # CMake on macOS currently does not support pch with objc, so use the old way
     target_compile_options(libaegisub PRIVATE -include "${PROJECT_SOURCE_DIR}/libaegisub/lagi_pre.h")
@@ -415,15 +424,18 @@ option(WITH_FFTW3 "Enable app-local runtime loading of FFTW3 for spectrum FFT su
 find_package(pffft CONFIG QUIET)
 option(WITH_PFFFT "Enable PFFFT spectrum FFT support" ${pffft_FOUND})
 
+add_library(aegisub_core_features INTERFACE)
 add_library(aegisub_features INTERFACE)
+target_link_libraries(aegisub_features INTERFACE aegisub_core_features)
 if(WITH_LIBPLACEBO AND HAVE_LIBPLACEBO)
     find_package(OpenGL REQUIRED)
-    target_compile_definitions(aegisub_features INTERFACE WITH_LIBPLACEBO WITH_LIBPLACEBO_RUNTIME_LOADING)
-    target_include_directories(aegisub_features INTERFACE ${LibPlacebo_INCLUDE_DIR})
-    target_link_libraries(aegisub_features INTERFACE OpenGL::GL)
+    target_compile_definitions(aegisub_core_features INTERFACE WITH_LIBPLACEBO WITH_LIBPLACEBO_RUNTIME_LOADING)
+    target_include_directories(aegisub_core_features INTERFACE
+        "$<BUILD_INTERFACE:${LibPlacebo_INCLUDE_DIR}>"
+    )
 endif()
 if(WITH_CSRI)
-    target_compile_definitions(aegisub_features INTERFACE WITH_CSRI)
+    target_compile_definitions(aegisub_core_features INTERFACE WITH_CSRI)
 endif()
 if(WITH_SKIA)
     if(NOT TARGET unofficial::skia::skia)
@@ -432,16 +444,16 @@ if(WITH_SKIA)
             "Configure with -DVCPKG_MANIFEST_FEATURES=skia or pass -DWITH_SKIA=OFF."
         )
     endif()
-    target_compile_definitions(aegisub_features INTERFACE WITH_SKIA)
-    target_link_libraries(aegisub_features INTERFACE unofficial::skia::skia)
+    target_compile_definitions(aegisub_core_features INTERFACE WITH_SKIA)
+    target_link_libraries(aegisub_core_features INTERFACE unofficial::skia::skia)
 endif()
 if(WITH_FFTW3)
-    target_compile_definitions(aegisub_features INTERFACE WITH_FFTW3)
+    target_compile_definitions(aegisub_core_features INTERFACE WITH_FFTW3)
 endif()
 if(WITH_PFFFT)
     find_package(pffft CONFIG REQUIRED)
-    target_compile_definitions(aegisub_features INTERFACE WITH_PFFFT)
-    target_link_libraries(aegisub_features INTERFACE pffft::pffft)
+    target_compile_definitions(aegisub_core_features INTERFACE WITH_PFFFT)
+    target_link_libraries(aegisub_core_features INTERFACE pffft::pffft)
 endif()
 
 function(aegisub_enable_highway target_name)
@@ -487,7 +499,7 @@ target_sources(csri PRIVATE src/csri_native_library_bridge.cpp)
 target_include_directories(csri PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/libaegisub/include")
 target_compile_features(csri PRIVATE cxx_std_20)
 if(WITH_CSRI)
-    target_link_libraries(aegisub_features INTERFACE csri)
+    target_link_libraries(aegisub_core_features INTERFACE csri)
 endif()
 
 set(AEGISUB_SHARED_EXE_ENTRY_SOURCES
@@ -622,6 +634,8 @@ set(AEGISUB_CORE_SOURCES
     # Translation service (framework-agnostic i18n interface)
     src/app_process_config.cpp
     src/context_core_session.cpp
+    src/core_api_facade.cpp
+    src/core_host_context.cpp
     src/ebu_export_settings.cpp
     src/numeric_utils.cpp
     src/translation_service.cpp
@@ -670,6 +684,7 @@ set(AEGISUB_CORE_SOURCES
     src/subtitle_edit_ops.cpp
     src/subtitle_editor_ops.cpp
     src/subtitle_grid_ops.cpp
+    src/subtitle_grid_selection_policy.cpp
     src/subtitle_timing_ops.cpp
     # Controllers / context / services
     # context.cpp currently also constructs ContextUiState/DialogManager, so it
@@ -727,6 +742,7 @@ set(AEGISUB_CORE_SOURCES
     src/video_session_ops.cpp
     src/video_snapshot_ops.cpp
     src/navigation_preview_policy.cpp
+    src/paste_over_policy.cpp
     # Subtitle rendering providers
     # Provider dependency audit:
     # - core-owned now: subtitles_provider.cpp/libass/plugin; dependencies are
@@ -737,14 +753,14 @@ set(AEGISUB_CORE_SOURCES
     #   dependencies are wx-free track-choice/background seams, runtime loading,
     #   optional SceneChange keyframe generation, and index cache.
     # - core-owned now: audio/video provider managers select from core-owned
-    #   built-ins/FFMS/LSMAS plus host-registered providers.
+    #   built-ins/FFMS/LSMAS/AVS plus host-registered providers.
     # - host-owned for now: playback/controllers/render display pieces which
     #   coordinate UI lifetime, audio controller, and visible windows.
     # libass/plugin subtitle providers are wx-free and form the first concrete
     # provider cluster owned by aegisub_core. Built-in Dummy/YUV4MPEG plus
-    # FFMS/LSMAS and provider managers are concrete video/audio provider
-    # clusters owned by aegisub_core; AVS stays in the exe due to
-    # windows.h/vfw.h/PCH coupling and registers itself with the managers.
+    # FFMS/LSMAS/AVS and provider managers are concrete video/audio provider
+    # clusters owned by aegisub_core. AVS still registers at the host edge so
+    # app startup controls provider availability and registry finalization.
     src/audio_provider_factory.cpp
     src/subtitle_overlay_blend.cpp
     src/subtitles_provider.cpp
@@ -822,9 +838,29 @@ if(WITH_CSRI)
     target_sources(aegisub_core PRIVATE src/subtitles_provider_csri.cpp)
 endif()
 
+if(WITH_AVISYNTH AND HAVE_AVISYNTH)
+    target_compile_definitions(aegisub_core PRIVATE WITH_AVISYNTH)
+    target_include_directories(aegisub_core PRIVATE "${AviSynth_INCLUDE_DIR}")
+    if(WIN32)
+        target_compile_definitions(aegisub_core PRIVATE "AVISYNTH_SO=\"AviSynth.dll\"")
+        target_link_libraries(aegisub_core PRIVATE Vfw32)
+    else()
+        target_compile_definitions(aegisub_core PRIVATE "AVISYNTH_SO=\"libavisynth.so\"")
+    endif()
+    target_sources(aegisub_core PRIVATE
+        src/audio_provider_avs.cpp
+        src/avisynth_legacy_path.cpp
+        src/avisynth_wrap.cpp
+        src/video_provider_avs.cpp
+    )
+endif()
+
 target_compile_features(aegisub_core PUBLIC cxx_std_20)
 target_compile_definitions(aegisub_core PRIVATE CMAKE_BUILD)
-target_include_directories(aegisub_core PUBLIC src)
+target_include_directories(aegisub_core PUBLIC
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>"
+    "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/include>"
+)
 target_include_directories(aegisub_core PRIVATE vendor)
 # version.cpp includes the generated git_version.h; mirror the exe's dependency.
 add_dependencies(aegisub_core git_version)
@@ -838,6 +874,54 @@ if(APPLE)
 else()
     target_precompile_headers(aegisub_core PRIVATE "libaegisub/lagi_pre.h")
 endif()
+
+set(AEGISUB_CORE_C_API_SOURCES
+    src/core_c_api.cpp
+)
+
+add_library(aegisub_core_c_api_static STATIC ${AEGISUB_CORE_C_API_SOURCES})
+target_compile_features(aegisub_core_c_api_static PRIVATE cxx_std_20)
+target_compile_definitions(aegisub_core_c_api_static PRIVATE CMAKE_BUILD)
+target_include_directories(aegisub_core_c_api_static
+    PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/include>"
+        "$<INSTALL_INTERFACE:include>"
+    PRIVATE src vendor)
+target_link_libraries(aegisub_core_c_api_static PUBLIC aegisub_core libaegisub luajit)
+set_target_properties(aegisub_core_c_api_static PROPERTIES
+    EXPORT_NAME core_c_api_static
+    PREFIX ""
+    OUTPUT_NAME "aegisub_core_c_api_static"
+)
+set_target_properties(luajit libaegisub aegisub_core aegisub_core_c_api_static PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+)
+
+add_library(aegisub_core_c_api SHARED ${AEGISUB_CORE_C_API_SOURCES})
+target_compile_features(aegisub_core_c_api PRIVATE cxx_std_20)
+target_compile_definitions(aegisub_core_c_api PRIVATE CMAKE_BUILD AEGISUB_CORE_BUILD_SHARED)
+target_include_directories(aegisub_core_c_api
+    PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/include>"
+        "$<INSTALL_INTERFACE:include>"
+    PRIVATE src vendor)
+target_link_libraries(aegisub_core_c_api PRIVATE aegisub_core libaegisub luajit)
+set_target_properties(aegisub_core_c_api PROPERTIES
+    EXPORT_NAME core_c_api
+    PREFIX ""
+    C_VISIBILITY_PRESET hidden
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+)
+if(UNIX AND NOT APPLE)
+    target_link_options(aegisub_core_c_api PRIVATE
+        "LINKER:--version-script,${CMAKE_CURRENT_SOURCE_DIR}/src/aegisub_core_c_api.version"
+    )
+elseif(APPLE)
+    target_link_options(aegisub_core_c_api PRIVATE
+        "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/src/aegisub_core_c_api.exports"
+    )
+endif()
 # libaegisub is the foundation (signal, dispatch, option, hotkey, fs, ...).
 target_link_libraries(aegisub_core PUBLIC libaegisub)
 # luajit: the automation debug subsystem (automation_lua_*) includes lua.hpp
@@ -845,19 +929,16 @@ target_link_libraries(aegisub_core PUBLIC libaegisub)
 # link it directly to inherit the public include path (vendor/luajit/src).
 target_link_libraries(aegisub_core PRIVATE luajit)
 # Codec/format deps used by the core providers/renderers (discovered above).
-target_include_directories(aegisub_core PRIVATE ${ass_INCLUDE_DIRS})
-target_link_libraries(aegisub_core PUBLIC ${ass_LIBRARIES})
-target_link_libraries(aegisub_core PRIVATE aegisub_features "Boost::headers" "Boost::container" "Boost::locale" ${AEGISUB_REGEX_TARGET})
+target_link_libraries(aegisub_core PUBLIC ass::ass)
+target_link_libraries(aegisub_core PRIVATE aegisub_core_features "Boost::headers" "Boost::container" "Boost::locale" ${AEGISUB_REGEX_TARGET})
 target_link_libraries(aegisub_core PRIVATE pugixml::pugixml)
 aegisub_enable_highway(aegisub_core)
 target_link_libraries(aegisub_core PRIVATE "ZLIB::ZLIB")
 if(WITH_LIBPLACEBO AND HAVE_LIBPLACEBO)
     target_sources(aegisub_core PRIVATE
-        src/video_renderer_placebo_gl.cpp
         src/video_renderer_placebo_runtime.cpp
     )
     set_source_files_properties(
-        src/video_renderer_placebo_gl.cpp
         src/video_renderer_placebo_runtime.cpp
         PROPERTIES SKIP_PRECOMPILE_HEADERS ON
     )
@@ -933,7 +1014,6 @@ add_executable(Aegisub WIN32
     src/audio_controller.cpp
     src/wx_audio_controller_power_host.cpp
     src/audio_controller_timer.cpp
-    src/threaded_ui_timer.cpp
     src/audio_display.cpp
     src/audio_karaoke.cpp
     src/audio_player.cpp
@@ -977,7 +1057,6 @@ add_executable(Aegisub WIN32
     src/toolbar.cpp
     src/tooltip_manager.cpp
     src/utils.cpp
-    src/ui_timer.cpp
     src/validators.cpp
     src/video_overlay_draw_context.h
     src/video_overlay_draw_context_legacy_gl.cpp
@@ -1034,6 +1113,13 @@ add_executable(Aegisub WIN32
     ${AEGISUB_SHARED_EXE_ENTRY_SOURCES}
     ${AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES}
 )
+if(WITH_LIBPLACEBO AND HAVE_LIBPLACEBO)
+    target_sources(Aegisub PRIVATE src/video_renderer_placebo_gl.cpp)
+    set_source_files_properties(
+        src/video_renderer_placebo_gl.cpp
+        PROPERTIES SKIP_PRECOMPILE_HEADERS ON
+    )
+endif()
 set_source_files_properties(libaegisub/common/native_library.cpp PROPERTIES
     SKIP_PRECOMPILE_HEADERS ON
 )
@@ -1050,10 +1136,10 @@ if(AEGISUB_MATROSKA_PARSING)
     find_package(EBML REQUIRED CONFIG)
     find_package(Matroska REQUIRED CONFIG)
     target_link_libraries(aegisub_core PRIVATE "EBML::ebml" "Matroska::matroska")
-    target_compile_definitions(aegisub_features INTERFACE AEGISUB_MATROSKA_PARSING=1)
+    target_compile_definitions(aegisub_core_features INTERFACE AEGISUB_MATROSKA_PARSING=1)
     target_sources(aegisub_core PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_LIBMATROSKA_BACKEND_SOURCES})
 else()
-    target_compile_definitions(aegisub_features INTERFACE AEGISUB_MATROSKA_PARSING=0)
+    target_compile_definitions(aegisub_core_features INTERFACE AEGISUB_MATROSKA_PARSING=0)
     target_sources(aegisub_core PRIVATE ${AEGISUB_SHARED_MKV_SUBTITLE_LEGACY_BACKEND_SOURCES})
 endif()
 option(AEGISUB_USE_STRINGZILLA "Use StringZilla in selected string-heavy code paths" ON)
@@ -1133,16 +1219,13 @@ endif()
 if(WIN32)
     target_sources(aegisub_core PRIVATE src/font_file_lister_gdi.cpp src/font_file_lister_dwrite.cpp)
     target_link_libraries(aegisub_core PRIVATE Usp10 dwrite Version)
-    target_sources(Aegisub PRIVATE src/font_file_lister_gdi.cpp src/font_file_lister_dwrite.cpp)
 elseif(APPLE)
     target_sources(aegisub_core PRIVATE src/font_file_lister_coretext.mm)
-    target_sources(Aegisub PRIVATE src/font_file_lister_coretext.mm)
 else()
     find_package(Fontconfig REQUIRED)
     target_link_libraries(aegisub_core PRIVATE "Fontconfig::Fontconfig")
     target_sources(aegisub_core PRIVATE src/font_file_lister_fontconfig.cpp)
     target_link_libraries(Aegisub PRIVATE "Fontconfig::Fontconfig")
-    target_sources(Aegisub PRIVATE src/font_file_lister_fontconfig.cpp)
 endif()
 
 # ass / Boost / regex / ICU / Highway / Iconv / ZLIB are pulled in transitively
@@ -1242,24 +1325,16 @@ if(WITH_ALSA)
 endif()
 
 # AviSynth+: option/find_package/HAVE_AVISYNTH live in the shared discovery
-# block above. The provider sources stay in the exe because the runtime wrapper
-# is host-registered at the provider-manager edge; only Windows needs Vfw32 for
-# legacy AVI keyframe probing.
+# block above. Provider implementation is compiled into aegisub_core; the wx
+# host keeps only the explicit registration decision during startup.
 if(WITH_AVISYNTH AND HAVE_AVISYNTH)
     target_compile_definitions(Aegisub PRIVATE WITH_AVISYNTH)
     target_include_directories(Aegisub PRIVATE "${AviSynth_INCLUDE_DIR}")
     if(WIN32)
-        target_link_libraries(Aegisub LINK_PRIVATE Vfw32)
         target_compile_definitions(Aegisub PRIVATE "AVISYNTH_SO=\"AviSynth.dll\"")
     else()
         target_compile_definitions(Aegisub PRIVATE "AVISYNTH_SO=\"libavisynth.so\"")
     endif()
-    target_sources(Aegisub PRIVATE
-        src/audio_provider_avs.cpp
-        src/avisynth_legacy_path.cpp
-        src/avisynth_wrap.cpp
-        src/video_provider_avs.cpp
-    )
 endif()
 
 # CSRI option is defined in the shared discovery block; the provider source is
@@ -1316,10 +1391,10 @@ if(WITH_FFMS2)
 
     set(HAVE_FFMS2 ON)
     message(STATUS "Found FFMS2 headers: ${FFMS2_INCLUDE_DIR}")
-    target_compile_definitions(aegisub_features INTERFACE "WITH_FFMS2" "WITH_FFMS2_RUNTIME_LOADING")
-    target_include_directories(aegisub_features INTERFACE
-        "${FFMS2_INCLUDE_DIR}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/ffms2"
+    target_compile_definitions(aegisub_core_features INTERFACE "WITH_FFMS2" "WITH_FFMS2_RUNTIME_LOADING")
+    target_include_directories(aegisub_core_features INTERFACE
+        "$<BUILD_INTERFACE:${FFMS2_INCLUDE_DIR}>"
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/vendor/ffms2>"
     )
     target_sources(aegisub_core PRIVATE
         src/audio_provider_ffmpegsource.cpp
@@ -1350,9 +1425,9 @@ if(WITH_LSMASNATIVE)
     endif()
 
     set(HAVE_LSMASNATIVE ON)
-    target_compile_definitions(aegisub_features INTERFACE "WITH_LSMASNATIVE")
-    target_include_directories(aegisub_features INTERFACE
-        "${CMAKE_CURRENT_SOURCE_DIR}/vendor/lsmasnative"
+    target_compile_definitions(aegisub_core_features INTERFACE "WITH_LSMASNATIVE")
+    target_include_directories(aegisub_core_features INTERFACE
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/vendor/lsmasnative>"
     )
     target_sources(aegisub_core PRIVATE
         src/lsmas_native_runtime.cpp
@@ -1366,7 +1441,7 @@ set(HAVE_SCENECHANGE OFF)
 option(WITH_SCENECHANGE "Enable SceneChange NativeAOT runtime support" ON)
 if(WITH_SCENECHANGE)
     set(HAVE_SCENECHANGE ON)
-    target_compile_definitions(aegisub_features INTERFACE "WITH_SCENECHANGE")
+    target_compile_definitions(aegisub_core_features INTERFACE "WITH_SCENECHANGE")
     target_sources(aegisub_core PRIVATE
         src/scenechange_native_runtime.cpp
     )
@@ -1430,8 +1505,7 @@ option(WITH_UCHARDET "Enable uchardet support" ${uchardet_FOUND})
 if(WITH_UCHARDET)
     find_package(uchardet REQUIRED)
     target_compile_definitions(libaegisub PRIVATE "WITH_UCHARDET")
-    target_include_directories(libaegisub PRIVATE ${uchardet_INCLUDE_DIRS})
-    target_link_libraries(libaegisub PRIVATE ${uchardet_LIBRARIES})
+    target_link_libraries(libaegisub PRIVATE uchardet::libuchardet)
 endif()
 
 option(WITH_UPDATE_CHECKER "Enable update checker")
@@ -1508,13 +1582,71 @@ if(NOT WIN32)
     install(FILES "packages/desktop/scalable.svg" DESTINATION "share/icons/hicolor/scalable/apps" RENAME aegisub.svg)
 endif()
 install(TARGETS Aegisub DESTINATION bin)
-if(WIN32 AND AEGISUB_LUAJIT_SHARED)
-    install(TARGETS luajit
-        RUNTIME DESTINATION bin
-        LIBRARY DESTINATION bin
-        ARCHIVE DESTINATION lib
+
+set(AEGISUB_CORE_API_EXPORT_TARGETS
+    aegisub_core_c_api
+    aegisub_core_c_api_static
+    aegisub_core
+    libaegisub
+    luajit
+    luabins
+    aegisub_core_features
+)
+if(LUA_WITH_LUASOCKET)
+    list(APPEND AEGISUB_CORE_API_EXPORT_TARGETS luasocket)
+endif()
+if(WITH_CSRI)
+    list(APPEND AEGISUB_CORE_API_EXPORT_TARGETS csri)
+endif()
+
+set(AEGISUB_CORE_API_RUNTIME_DEPENDENCY_ARGS)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.21)
+    set(AEGISUB_CORE_API_RUNTIME_DEPENDENCY_ARGS
+        RUNTIME_DEPENDENCY_SET AegisubCoreCAPIRuntimeDeps
     )
 endif()
+install(TARGETS ${AEGISUB_CORE_API_EXPORT_TARGETS}
+    EXPORT AegisubCoreCAPITargets
+    ${AEGISUB_CORE_API_RUNTIME_DEPENDENCY_ARGS}
+    RUNTIME DESTINATION bin COMPONENT CoreAPI
+    LIBRARY DESTINATION lib COMPONENT CoreAPI
+    ARCHIVE DESTINATION lib COMPONENT CoreAPI
+)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.21)
+    install(RUNTIME_DEPENDENCY_SET AegisubCoreCAPIRuntimeDeps
+        PRE_EXCLUDE_REGEXES
+            [[api-ms-.*]]
+            [[ext-ms-.*]]
+        POST_EXCLUDE_REGEXES
+            [[.*[\\/]System32[\\/].*]]
+            [[.*[\\/]SysWOW64[\\/].*]]
+            [[.*[\\/]system32[\\/].*]]
+            [[.*[\\/]syswow64[\\/].*]]
+        RUNTIME DESTINATION bin
+        COMPONENT CoreAPI
+    )
+endif()
+install(FILES src/include/aegisub/core_c_api.h DESTINATION include/aegisub COMPONENT CoreAPI)
+
+configure_package_config_file(
+    cmake/AegisubCoreCAPIConfig.cmake.in
+    "${CMAKE_CURRENT_BINARY_DIR}/AegisubCoreCAPIConfig.cmake"
+    INSTALL_DESTINATION lib/cmake/AegisubCoreCAPI
+)
+install(EXPORT AegisubCoreCAPITargets
+    NAMESPACE Aegisub::
+    FILE AegisubCoreCAPITargets.cmake
+    DESTINATION lib/cmake/AegisubCoreCAPI
+    COMPONENT CoreAPI
+)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/AegisubCoreCAPIConfig.cmake"
+    DESTINATION lib/cmake/AegisubCoreCAPI
+    COMPONENT CoreAPI
+)
+install(FILES cmake/Findass.cmake cmake/Finduchardet.cmake
+    DESTINATION lib/cmake/AegisubCoreCAPI/modules
+    COMPONENT CoreAPI
+)
 
 # Build translations
 find_package(Gettext)

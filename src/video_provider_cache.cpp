@@ -28,6 +28,10 @@
 #include <unordered_map>
 
 namespace {
+int GetConfiguredVideoCacheSizeMb() {
+	return config::GetIntOptionOrDefault("Provider/Video/Cache/Size", 128);
+}
+
 enum class CachedFrameKind {
 	Bgra,
 	Native
@@ -73,7 +77,7 @@ size_t EstimateNativeFrameSize(SourceFrame const& frame) {
 }
 
 size_t ConfiguredCacheSizeBytes() {
-	int const cache_size_mb = OPT_GET("Provider/Video/Cache/Size")->GetInt();
+	int const cache_size_mb = GetConfiguredVideoCacheSizeMb();
 	if (cache_size_mb <= 0)
 		return 0;
 

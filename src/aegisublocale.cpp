@@ -57,6 +57,7 @@ void AegisubLocale::Init(std::string const& language) {
 	// Set the global translation service for aegisub_core.
 	// The WxTranslationService bridges core's translation interface to wx i18n.
 	static WxTranslationService wx_translation_service;
+	TranslationContext::SetDefault(&wx_translation_service);
 	TranslationContext::Set(&wx_translation_service);
 }
 

@@ -44,6 +44,14 @@
 #include <map>
 
 namespace {
+bool GetConfiguredFFmpegSourceIndexAllTracks() {
+	return config::GetBoolOptionOrDefault("Provider/FFmpegSource/Index All Tracks", false);
+}
+
+bool GetConfiguredFFmpegSourceAudioDownmix() {
+	return config::GetBoolOptionOrDefault("Provider/Audio/FFmpegSource/Downmix", true);
+}
+
 class FFmpegSourceAudioProvider final : public agi::AudioProvider, FFmpegSourceProvider {
 	/// audio source object
 	agi::scoped_holder<FFMS_AudioSource*, void (FFMS_CC *)(FFMS_AudioSource*)> AudioSource;
@@ -137,7 +145,7 @@ void FFmpegSourceAudioProvider::LoadAudio(agi::fs::path const& filename) {
 	// moment of truth
 	if (!Index) {
 		TrackSelection TrackMask = static_cast<TrackSelection>(TrackNumber);
-		if (OPT_GET("Provider/FFmpegSource/Index All Tracks")->GetBool())
+		if (GetConfiguredFFmpegSourceIndexAllTracks())
 			TrackMask = TrackSelection::All;
 		Index = DoIndexing(Indexer, CacheName, TrackMask, ErrorHandling);
 	}
@@ -171,7 +179,7 @@ void FFmpegSourceAudioProvider::LoadAudio(agi::fs::path const& filename) {
 	}
 
 #if FFMS_VERSION >= ((2 << 24) | (17 << 16) | (4 << 8) | 0)
-	if (OPT_GET("Provider/Audio/FFmpegSource/Downmix")->GetBool()) {
+	if (GetConfiguredFFmpegSourceAudioDownmix()) {
 		if (channels > 1 || bytes_per_sample != 2 || float_samples) {
 			std::unique_ptr<FFMS_ResampleOptions, decltype(ffms::DestroyResampleOptions)>
 				opt(ffms::CreateResampleOptions(AudioSource), ffms::DestroyResampleOptions);

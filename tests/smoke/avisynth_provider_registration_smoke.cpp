@@ -16,6 +16,12 @@ int CountName(std::vector<std::string> const& names, char const* name) {
 	return static_cast<int>(std::count(names.begin(), names.end(), std::string(name)));
 }
 
+int CountCatalogName(aegisub::provider_catalog::ProviderCatalog const& catalog, char const* name) {
+	return static_cast<int>(std::count_if(catalog.providers.begin(), catalog.providers.end(), [&](auto const& provider) {
+		return provider.name == name;
+	}));
+}
+
 void RequireSingleAvisynth(std::vector<std::string> const& names, char const* kind) {
 	auto count = CountName(names, "Avisynth");
 	if (count != 1) {
@@ -45,15 +51,23 @@ int main() {
 
 	RequireSingleAvisynth(GetAudioProviderNames(), "audio");
 	RequireSingleAvisynth(VideoProviderFactory::GetClasses(), "video");
-
-	if (AreProviderFactoryRegistriesFrozen()) {
-		std::cerr << "provider registries were frozen before host initialization completed\n";
+	if (CountCatalogName(GetAudioProviderCatalog(), "Avisynth") != 1) {
+		std::cerr << "audio catalog did not include exactly one Avisynth provider\n";
+		return 1;
+	}
+	if (CountCatalogName(VideoProviderFactory::GetCatalog(), "Avisynth") != 1) {
+		std::cerr << "video catalog did not include exactly one Avisynth provider\n";
 		return 1;
 	}
 
-	FreezeProviderFactoryRegistries();
-	if (!AreProviderFactoryRegistriesFrozen()) {
-		std::cerr << "provider registries did not report frozen after FreezeProviderFactoryRegistries\n";
+	if (AreProviderFactoryRegistriesFinalized()) {
+		std::cerr << "provider registries were finalized before host initialization completed\n";
+		return 1;
+	}
+
+	FinalizeProviderFactoryRegistries();
+	if (!AreProviderFactoryRegistriesFinalized()) {
+		std::cerr << "provider registries did not report finalized after FinalizeProviderFactoryRegistries\n";
 		return 1;
 	}
 	if (TryRegisterAudioProviderFactory({"LateAudio", nullptr, nullptr, nullptr, false})) {
@@ -65,7 +79,7 @@ int main() {
 		return 1;
 	}
 
-	std::cout << "avisynth_provider_registration_smoke: explicit registration is visible, idempotent, and frozen after host init\n";
+	std::cout << "avisynth_provider_registration_smoke: explicit registration is visible, idempotent, and finalized after host init\n";
 	return 0;
 }
 

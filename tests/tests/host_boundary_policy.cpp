@@ -11,6 +11,15 @@
 #include <string_view>
 #include <vector>
 
+// NOTE: This file is a SECOND SOURCE OF TRUTH for the core/GUI boundary. It
+// hardcodes expected host filenames, CMake source-set names, and the wx-surface
+// inventory, and asserts them against the actual CMakeLists.txt source sets and
+// src/ contents. Renaming a host file, splitting a CMake set, or moving a wx
+// surface REQUIRES updating the matching expectations here in lockstep. This
+// coupling is intentional: the brittleness is the enforcement. When you change
+// boundary structure, grep this file for the affected name and update the
+// expectation alongside CMakeLists.txt.
+
 namespace {
 
 bool StartsWith(std::string const& value, std::string_view prefix) {
@@ -121,6 +130,20 @@ std::vector<std::string> FindLiteralHits(std::filesystem::path const& path, std:
 	return hits;
 }
 
+std::vector<std::string> ReadCoreCApiExportedFunctionNames(std::filesystem::path const& header) {
+	std::ifstream input(header);
+	std::vector<std::string> names;
+	std::string line;
+	static const std::regex export_pattern(R"(AEGISUB_CORE_API\s+.*\bAEGISUB_CORE_CALL\s+([A-Za-z_][A-Za-z0-9_]*)\s*\()");
+
+	while (std::getline(input, line)) {
+		std::smatch match;
+		if (std::regex_search(line, match, export_pattern))
+			names.push_back(match[1].str());
+	}
+	return names;
+}
+
 std::set<std::string> FindFilesContainingLiteralInTree(
 	std::filesystem::path const& project_root,
 	std::filesystem::path const& search_root,
@@ -195,6 +218,50 @@ std::set<std::string> ReadNamedCMakeSetEntries(std::filesystem::path const& path
 		if (trimmed.empty() || StartsWith(trimmed, "#"))
 			continue;
 		entries.insert(trimmed);
+	}
+
+	return entries;
+}
+
+std::set<std::string> ReadCMakeTargetSourceEntries(std::filesystem::path const& path, std::string const& target_name) {
+	std::ifstream input(path);
+	std::set<std::string> entries;
+	std::string line;
+	bool in_block = false;
+	auto const begin_marker = "target_sources(" + target_name;
+
+	auto add_tokens = [&](std::string value) {
+		for (auto& ch : value) {
+			if (ch == '(' || ch == ')')
+				ch = ' ';
+		}
+
+		std::istringstream tokens(value);
+		std::string token;
+		while (tokens >> token) {
+			if (token == "target_sources" || token == target_name || token == "PRIVATE" || token == "PUBLIC" || token == "INTERFACE")
+				continue;
+			if (StartsWith(token, "src/") || StartsWith(token, "${"))
+				entries.insert(token);
+		}
+	};
+
+	while (std::getline(input, line)) {
+		auto trimmed = TrimCopy(line);
+		if (!in_block) {
+			if (!StartsWith(trimmed, begin_marker))
+				continue;
+
+			in_block = true;
+			add_tokens(trimmed);
+			if (trimmed.find(')') != std::string::npos)
+				in_block = false;
+			continue;
+		}
+
+		add_tokens(trimmed);
+		if (trimmed == ")" || trimmed.find(')') != std::string::npos)
+			in_block = false;
 	}
 
 	return entries;
@@ -1397,6 +1464,73 @@ TEST(host_boundary_policy, aegisub_core_sources_keep_host_coupled_clusters_out) 
 		EXPECT_EQ(core_sources.end(), core_sources.find(source)) << source;
 }
 
+TEST(host_boundary_policy, display_renderer_implementations_stay_out_of_aegisub_core) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+	auto const core_c_api_config_template = root / "cmake" / "AegisubCoreCAPIConfig.cmake.in";
+
+	auto core_target_sources = ReadCMakeTargetSourceEntries(cmake_lists, "aegisub_core");
+	auto app_target_sources = ReadCMakeTargetSourceEntries(cmake_lists, "Aegisub");
+
+	EXPECT_NE(core_target_sources.end(), core_target_sources.find("src/video_renderer_placebo_runtime.cpp"));
+	EXPECT_EQ(core_target_sources.end(), core_target_sources.find("src/video_renderer_placebo_gl.cpp"));
+	EXPECT_NE(app_target_sources.end(), app_target_sources.find("src/video_renderer_placebo_gl.cpp"));
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "target_link_libraries(aegisub_features INTERFACE OpenGL::GL)").empty());
+	EXPECT_TRUE(FindLiteralHits(core_c_api_config_template, "find_dependency(OpenGL").empty());
+}
+
+TEST(host_boundary_policy, core_links_core_feature_target_not_gui_feature_facade) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+	auto core_api_export_targets = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_CORE_API_EXPORT_TARGETS");
+
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "add_library(aegisub_core_features INTERFACE)").empty());
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "target_link_libraries(aegisub_features INTERFACE aegisub_core_features)").empty());
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "target_link_libraries(aegisub_core PRIVATE aegisub_core_features").empty());
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "target_link_libraries(aegisub_core PRIVATE aegisub_features").empty());
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "aegisub_core_features").empty());
+	EXPECT_NE(core_api_export_targets.end(), core_api_export_targets.find("aegisub_core_features"));
+	EXPECT_EQ(core_api_export_targets.end(), core_api_export_targets.find("aegisub_features"));
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "install(TARGETS ${AEGISUB_CORE_API_EXPORT_TARGETS}").empty());
+}
+
+TEST(host_boundary_policy, platform_font_listers_are_core_owned_not_recompiled_by_gui) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+
+	auto core_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_CORE_SOURCES");
+	auto core_target_sources = ReadCMakeTargetSourceEntries(cmake_lists, "aegisub_core");
+	auto app_target_sources = ReadCMakeTargetSourceEntries(cmake_lists, "Aegisub");
+
+	EXPECT_NE(core_sources.end(), core_sources.find("src/font_file_lister.cpp"));
+	for (auto const& source : {
+		"src/font_file_lister_gdi.cpp",
+		"src/font_file_lister_dwrite.cpp",
+		"src/font_file_lister_coretext.mm",
+		"src/font_file_lister_fontconfig.cpp",
+	}) {
+		EXPECT_NE(core_target_sources.end(), core_target_sources.find(source)) << source;
+		EXPECT_EQ(app_target_sources.end(), app_target_sources.find(source)) << source;
+	}
+}
+
+TEST(host_boundary_policy, ui_timer_core_contract_is_not_recompiled_by_gui) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+
+	auto core_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_CORE_SOURCES");
+	auto app_target_sources = ReadCMakeTargetSourceEntries(cmake_lists, "Aegisub");
+
+	for (auto const& source : {
+		"src/ui_timer.cpp",
+		"src/threaded_ui_timer.cpp",
+	}) {
+		EXPECT_NE(core_sources.end(), core_sources.find(source)) << source;
+		EXPECT_EQ(app_target_sources.end(), app_target_sources.find(source)) << source;
+	}
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "${AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES}").empty());
+}
+
 TEST(host_boundary_policy, aegisub_core_sources_do_not_include_wx_format_adapter) {
 	auto const root = ProjectRoot();
 	auto const cmake_lists = root / "CMakeLists.txt";
@@ -1464,6 +1598,65 @@ TEST(host_boundary_policy, aegisub_core_src_local_include_closure_stays_wx_free)
 		auto hits = FindWxMarkers(path);
 		EXPECT_TRUE(hits.empty()) << JoinLines(hits);
 	}
+}
+
+TEST(host_boundary_policy, core_api_facade_and_c_wrapper_are_core_owned_and_wx_free) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+	auto core_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_CORE_SOURCES");
+	auto c_api_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_CORE_C_API_SOURCES");
+	std::vector<std::filesystem::path> const expected_wx_free_paths = {
+		root / "src" / "core_api_facade.h",
+		root / "src" / "core_api_facade.cpp",
+		root / "src" / "include" / "aegisub" / "core_c_api.h",
+		root / "src" / "core_c_api.cpp",
+	};
+
+	EXPECT_NE(core_sources.end(), core_sources.find("src/core_api_facade.cpp"));
+	EXPECT_NE(c_api_sources.end(), c_api_sources.find("src/core_c_api.cpp"));
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "add_library(aegisub_core_c_api_static STATIC").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "add_library(aegisub_core_c_api SHARED").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "set_target_properties(luajit libaegisub aegisub_core aegisub_core_c_api_static PROPERTIES").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "POSITION_INDEPENDENT_CODE ON").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "C_VISIBILITY_PRESET hidden").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "CXX_VISIBILITY_PRESET hidden").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "VISIBILITY_INLINES_HIDDEN ON").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "src/aegisub_core_c_api.version").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "src/aegisub_core_c_api.exports").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "set(AEGISUB_CORE_API_EXPORT_TARGETS").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "install(TARGETS ${AEGISUB_CORE_API_EXPORT_TARGETS}").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "install(EXPORT AegisubCoreCAPITargets").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "RUNTIME DESTINATION bin").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "LIBRARY DESTINATION lib").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "ARCHIVE DESTINATION lib").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "install(FILES src/include/aegisub/core_c_api.h DESTINATION include/aegisub").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "target_sources(Aegisub PRIVATE src/core_api_facade.cpp").empty());
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "target_sources(Aegisub PRIVATE src/core_c_api.cpp").empty());
+
+	auto const core_api_facade_cpp = root / "src" / "core_api_facade.cpp";
+	for (auto const& path : expected_wx_free_paths) {
+		ASSERT_TRUE(std::filesystem::exists(path)) << path;
+		auto hits = FindWxMarkers(path);
+		EXPECT_TRUE(hits.empty()) << JoinLines(hits);
+	}
+	EXPECT_TRUE(FindLiteralHits(core_api_facade_cpp, "OPT_GET(").empty());
+	EXPECT_TRUE(FindLiteralHits(core_api_facade_cpp, "OPT_SET(").empty());
+	EXPECT_TRUE(FindLiteralHits(core_api_facade_cpp, "#include \"options.h\"").empty());
+	EXPECT_FALSE(FindLiteralHits(core_api_facade_cpp, "WriteAssFileForCore(").empty());
+	EXPECT_FALSE(FindLiteralHits(core_api_facade_cpp, "AssWriteOptions write_options").empty());
+	EXPECT_TRUE(FindLiteralHits(core_api_facade_cpp, "AssSubtitleFormat").empty());
+
+	auto const elf_exports = root / "src" / "aegisub_core_c_api.version";
+	auto const macos_exports = root / "src" / "aegisub_core_c_api.exports";
+	ASSERT_TRUE(std::filesystem::exists(elf_exports));
+	ASSERT_TRUE(std::filesystem::exists(macos_exports));
+	auto const exported_symbols = ReadCoreCApiExportedFunctionNames(root / "src" / "include" / "aegisub" / "core_c_api.h");
+	ASSERT_FALSE(exported_symbols.empty());
+	for (auto const& symbol : exported_symbols) {
+		EXPECT_TRUE(FindLiteralHits(elf_exports, symbol).empty() == false) << symbol;
+		EXPECT_TRUE(FindLiteralHits(macos_exports, std::string("_") + symbol).empty() == false) << symbol;
+	}
+	EXPECT_TRUE(FindLiteralHits(elf_exports, "local:").empty() == false);
 }
 
 TEST(host_boundary_policy, concrete_subtitle_provider_cluster_is_core_owned_and_wx_free) {
@@ -1689,6 +1882,36 @@ TEST(host_boundary_policy, resample_dialog_policy_is_core_owned_while_wx_dialog_
 	}
 }
 
+TEST(host_boundary_policy, paste_over_policy_is_core_owned_while_wx_dialog_only_binds_controls) {
+	auto const root = ProjectRoot();
+	auto const cmake_lists = root / "CMakeLists.txt";
+	auto core_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_CORE_SOURCES");
+	std::vector<std::filesystem::path> const expected_wx_free_paths = {
+		root / "src" / "paste_over_policy.h",
+		root / "src" / "paste_over_policy.cpp",
+	};
+	auto const dialog_paste_over_cpp = root / "src" / "dialog_paste_over.cpp";
+
+	for (auto const& path : expected_wx_free_paths)
+		ASSERT_TRUE(std::filesystem::exists(path)) << path;
+	ASSERT_TRUE(std::filesystem::exists(dialog_paste_over_cpp));
+
+	EXPECT_NE(core_sources.end(), core_sources.find("src/paste_over_policy.cpp"));
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "target_sources(Aegisub PRIVATE src/paste_over_policy.cpp").empty());
+	EXPECT_FALSE(FindLiteralHits(dialog_paste_over_cpp, "paste_over_policy.h").empty());
+	EXPECT_FALSE(FindLiteralHits(dialog_paste_over_cpp, "NormalizeFields").empty());
+	EXPECT_FALSE(FindLiteralHits(dialog_paste_over_cpp, "BuildAllFields").empty());
+	EXPECT_FALSE(FindLiteralHits(dialog_paste_over_cpp, "BuildTimesFields").empty());
+	EXPECT_FALSE(FindLiteralHits(dialog_paste_over_cpp, "BuildTextFields").empty());
+	EXPECT_TRUE(FindLiteralHits(dialog_paste_over_cpp, "normalize_paste_over_options").empty());
+	EXPECT_TRUE(FindLiteralHits(dialog_paste_over_cpp, "PASTE_OVER_FIELD_COUNT").empty());
+
+	for (auto const& path : expected_wx_free_paths) {
+		auto hits = FindWxMarkers(path);
+		EXPECT_TRUE(hits.empty()) << JoinLines(hits);
+	}
+}
+
 TEST(host_boundary_policy, shared_selection_request_helpers_keep_wx_at_single_choice_adapter_edge) {
 	auto const root = ProjectRoot();
 	auto const charset_choice_cpp = root / "src" / "charset_choice.cpp";
@@ -1826,18 +2049,36 @@ TEST(host_boundary_policy, provider_managers_are_core_owned_and_register_host_pr
 	std::vector<std::filesystem::path> const expected_wx_free_paths = {
 		root / "src" / "audio_provider_factory.h",
 		root / "src" / "audio_provider_factory.cpp",
+		root / "src" / "audio_provider_avs.cpp",
+		root / "src" / "avisynth_legacy_path.h",
+		root / "src" / "avisynth_legacy_path.cpp",
 		root / "src" / "avisynth_provider_registration.h",
+		root / "src" / "avisynth_runtime_policy.h",
+		root / "src" / "avisynth_wrap.h",
+		root / "src" / "avisynth_wrap.cpp",
+		root / "src" / "video_provider_avs.cpp",
 		root / "src" / "video_provider_manager.h",
 		root / "src" / "video_provider_manager.cpp",
 	};
 
 	EXPECT_NE(core_sources.end(), core_sources.find("src/audio_provider_factory.cpp"));
 	EXPECT_NE(core_sources.end(), core_sources.find("src/video_provider_manager.cpp"));
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "target_sources(aegisub_core PRIVATE").empty());
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "src/audio_provider_avs.cpp").empty());
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "src/avisynth_legacy_path.cpp").empty());
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "src/avisynth_wrap.cpp").empty());
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "src/video_provider_avs.cpp").empty());
 	EXPECT_TRUE(FindLiteralHits(cmake_lists, "target_sources(Aegisub PRIVATE src/audio_provider_factory.cpp").empty());
 	EXPECT_TRUE(FindLiteralHits(cmake_lists, "target_sources(Aegisub PRIVATE src/video_provider_manager.cpp").empty());
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "target_sources(Aegisub PRIVATE src/audio_provider_avs.cpp").empty());
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "target_sources(Aegisub PRIVATE src/avisynth_legacy_path.cpp").empty());
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "target_sources(Aegisub PRIVATE src/avisynth_wrap.cpp").empty());
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "target_sources(Aegisub PRIVATE src/video_provider_avs.cpp").empty());
 	EXPECT_FALSE(FindLiteralHits(root / "src" / "audio_provider_avs.cpp", "RegisterAudioProviderFactory").empty());
 	EXPECT_FALSE(FindLiteralHits(root / "src" / "video_provider_avs.cpp", "RegisterVideoProviderFactory").empty());
 	EXPECT_FALSE(FindLiteralHits(root / "src" / "main.cpp", "RegisterAvisynthProviderFactories();").empty());
+	EXPECT_TRUE(FindLiteralHits(root / "src" / "main.cpp", "FreezeProviderFactoryRegistries();").empty());
+	EXPECT_TRUE(FindLiteralHits(root / "src" / "main.cpp", "FinalizeProviderFactoryRegistries();").empty());
 	EXPECT_TRUE(FindLiteralHits(root / "src" / "audio_provider_avs.cpp", "AvisynthAudioProviderRegistration").empty());
 	EXPECT_TRUE(FindLiteralHits(root / "src" / "audio_provider_avs.cpp", "avisynth_audio_provider_registration").empty());
 	EXPECT_TRUE(FindLiteralHits(root / "src" / "video_provider_avs.cpp", "AvisynthVideoProviderRegistration").empty());
@@ -1849,6 +2090,50 @@ TEST(host_boundary_policy, provider_managers_are_core_owned_and_register_host_pr
 		auto hits = FindWxMarkers(path);
 		EXPECT_TRUE(hits.empty()) << JoinLines(hits);
 	}
+}
+
+TEST(host_boundary_policy, host_thread_and_registry_lifecycle_boundaries_stay_out_of_media_hot_paths) {
+	auto const root = ProjectRoot();
+	std::vector<std::filesystem::path> const hot_paths = {
+		root / "src" / "async_video_provider.cpp",
+		root / "src" / "audio_display_source.cpp",
+		root / "src" / "audio_renderer.cpp",
+		root / "src" / "audio_renderer_spectrum.cpp",
+		root / "src" / "audio_renderer_waveform.cpp",
+		root / "src" / "audio_tile_compositor.cpp",
+		root / "src" / "subtitles_provider_csri.cpp",
+		root / "src" / "subtitles_provider_libass.cpp",
+		root / "src" / "video_display.cpp",
+		root / "src" / "video_provider_cache.cpp",
+		root / "src" / "video_provider_dummy.cpp",
+		root / "src" / "video_provider_ffmpegsource.cpp",
+		root / "src" / "video_provider_lsmasnative.cpp",
+		root / "src" / "video_provider_yuv4mpeg.cpp",
+		root / "src" / "video_renderer_opengl.cpp",
+		root / "src" / "video_renderer_placebo_gl.cpp",
+	};
+	std::vector<std::string_view> const forbidden_boundary_markers = {
+		"core_host_context.h",
+		"CoreHostThreadContext",
+		"CoreHostThreadHooks",
+		"InvokeOnMain(",
+		"PostToMain(",
+		"FlushMainJobsForHost(",
+		"provider_factory_registry.h",
+		"FinalizeProviderFactoryRegistries(",
+		"FreezeProviderFactoryRegistries(",
+	};
+
+	std::vector<std::string> unexpected_hits;
+	for (auto const& path : hot_paths) {
+		ASSERT_TRUE(std::filesystem::exists(path)) << path;
+		for (auto const marker : forbidden_boundary_markers) {
+			auto hits = FindLiteralHits(path, marker);
+			unexpected_hits.insert(unexpected_hits.end(), hits.begin(), hits.end());
+		}
+	}
+
+	EXPECT_TRUE(unexpected_hits.empty()) << JoinLines(unexpected_hits);
 }
 
 TEST(host_boundary_policy, shared_mkv_subtitle_conditional_backend_sources_live_in_named_cmake_packs) {

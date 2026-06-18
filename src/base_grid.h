@@ -135,8 +135,6 @@ class BaseGrid final : public wxWindow {
 	void UpdateMaps();
 	void UpdateStyle();
 
-	void SelectRow(int row, bool addToSelected = false, bool select=true);
-
 	int GetRows() const { return index_line_map.size(); }
 	void MakeRowVisible(int row);
 

@@ -16,6 +16,10 @@
 #include <string>
 
 namespace {
+bool GetConfiguredLsmasNativeAudioDownmix() {
+    return config::GetBoolOptionOrDefault("Provider/Audio/LsmasNative/Downmix", false);
+}
+
 class LsmasAudioProvider final : public agi::AudioProvider {
     lsmas_handle_t *handle = nullptr;
     std::string cache_filename_utf8;
@@ -47,7 +51,7 @@ public:
 LsmasAudioProvider::LsmasAudioProvider(agi::fs::path const& filename, agi::BackgroundRunner *br, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) {
     auto const& api = lsmas::GetApi();
     auto const filename_utf8 = agi::fs::PathToString(filename);
-    bool const downmix = OPT_GET("Provider/Audio/LsmasNative/Downmix")->GetBool();
+    bool const downmix = GetConfiguredLsmasNativeAudioDownmix();
 
     int stream_index = lsmas_provider::SelectTrack(filename, lsmas_provider::TrackType::Audio, choice_sink);
     if (stream_index < 0)

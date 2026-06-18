@@ -51,6 +51,22 @@
 #include <libaegisub/scope_exit.h>
 
 namespace {
+bool GetConfiguredFFmpegSourceIndexAllTracks() {
+	return config::GetBoolOptionOrDefault("Provider/FFmpegSource/Index All Tracks", false);
+}
+
+bool GetConfiguredVideoOpenAudio() {
+	return config::GetBoolOptionOrDefault("Video/Open Audio", true);
+}
+
+int GetConfiguredFFmpegSourceVideoThreads() {
+	return config::GetIntOptionOrDefault("Provider/Video/FFmpegSource/Decoding Threads", -1);
+}
+
+bool GetConfiguredFFmpegSourceUnsafeSeeking() {
+	return config::GetBoolOptionOrDefault("Provider/Video/FFmpegSource/Unsafe Seeking", false);
+}
+
 typedef enum AGI_ColorSpaces {
 	AGI_CS_RGB = 0,
 	AGI_CS_BT709 = 1,
@@ -303,7 +319,7 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 	// moment of truth
 	if (!Index) {
 		auto TrackMask = TrackSelection::None;
-		if (OPT_GET("Provider/FFmpegSource/Index All Tracks")->GetBool() || OPT_GET("Video/Open Audio")->GetBool())
+		if (GetConfiguredFFmpegSourceIndexAllTracks() || GetConfiguredVideoOpenAudio())
 			TrackMask = TrackSelection::All;
 		Index = DoIndexing(Indexer, CacheName, TrackMask, GetErrorHandlingMode());
 	}
@@ -329,7 +345,7 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 	has_audio = ffms::GetFirstTrackOfType(Index, FFMS_TYPE_AUDIO, nullptr) != -1;
 
 	// set thread count
-	int Threads = OPT_GET("Provider/Video/FFmpegSource/Decoding Threads")->GetInt();
+	int Threads = GetConfiguredFFmpegSourceVideoThreads();
 #if FFMS_VERSION < ((2 << 24) | (17 << 16) | (2 << 8) | 1)
 	if (ffms::GetSourceType(Index) == FFMS_SOURCE_LAVF)
 		Threads = 1;
@@ -338,7 +354,7 @@ void FFmpegSourceVideoProvider::LoadVideo(agi::fs::path const& filename, std::st
 	// set seekmode
 	// TODO: give this its own option?
 	int SeekMode;
-	if (OPT_GET("Provider/Video/FFmpegSource/Unsafe Seeking")->GetBool())
+	if (GetConfiguredFFmpegSourceUnsafeSeeking())
 		SeekMode = FFMS_SEEK_UNSAFE;
 	else
 		SeekMode = FFMS_SEEK_NORMAL;

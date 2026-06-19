@@ -1238,11 +1238,23 @@ public:
 		ctrl->SetInsertionPointEnd();
 		ctrl->SelectAll();
 		ctrl->Bind(wxEVT_CHAR_HOOK, &HotkeyRenderer::OnKeyDown, this);
+		ctrl->Bind(wxEVT_AUX1_DOWN, &HotkeyRenderer::OnMouse, this);
+		ctrl->Bind(wxEVT_AUX2_DOWN, &HotkeyRenderer::OnMouse, this);
 		return ctrl;
 	}
 
 	void OnKeyDown(wxKeyEvent &evt) {
 		ctrl->ChangeValue(to_wx(hotkey::keypress_to_str(evt.GetKeyCode(), evt.GetModifiers())));
+	}
+
+	void OnMouse(wxMouseEvent &evt) {
+		auto combo = hotkey::mousepress_to_str(evt);
+		if (combo.empty()) {
+			evt.Skip();
+			return;
+		}
+
+		ctrl->ChangeValue(to_wx(combo));
 	}
 
 	bool SetValue(wxVariant const& var) override {

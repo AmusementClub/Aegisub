@@ -543,6 +543,9 @@ void BaseGrid::OnScroll(wxScrollEvent &event) {
 }
 
 void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
+	if (hotkey::check("Subtitle Grid", context, event))
+		return;
+
 	int h = GetClientSize().GetHeight();
 	bool shift = event.ShiftDown();
 	bool alt = event.AltDown();

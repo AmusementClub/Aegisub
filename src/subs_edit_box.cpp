@@ -231,16 +231,22 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 	if (use_stc) {
 		edit_ctrl_stc = new SubsStyledTextEditCtrl(this, wxDefaultSize, wxBORDER_SUNKEN, c);
 		edit_ctrl_stc->Bind(wxEVT_CHAR_HOOK, &SubsEditBox::OnKeyDown, this);
+		edit_ctrl_stc->Bind(wxEVT_AUX1_DOWN, &SubsEditBox::OnMouse, this);
+		edit_ctrl_stc->Bind(wxEVT_AUX2_DOWN, &SubsEditBox::OnMouse, this);
 	}
 	else {
 #endif
 		edit_ctrl_tc = new SubsTextEditCtrl(this, wxDefaultSize, wxBORDER_SUNKEN, c);
 		edit_ctrl_tc->Bind(wxEVT_CHAR_HOOK, &SubsEditBox::OnKeyDown, this);
+		edit_ctrl_tc->Bind(wxEVT_AUX1_DOWN, &SubsEditBox::OnMouse, this);
+		edit_ctrl_tc->Bind(wxEVT_AUX2_DOWN, &SubsEditBox::OnMouse, this);
 #ifdef WITH_WXSTC
 	}
 #endif
 
 	secondary_editor = new SubsTextEditCtrl(this, wxDefaultSize, wxBORDER_SUNKEN | wxTE_MULTILINE | wxTE_READONLY, nullptr);
+	secondary_editor->Bind(wxEVT_AUX1_DOWN, &SubsEditBox::OnMouse, this);
+	secondary_editor->Bind(wxEVT_AUX2_DOWN, &SubsEditBox::OnMouse, this);
 #ifdef WITH_WXSTC
 	if (use_stc) {
 		// Here we use the height of secondary_editor as the initial size of edit_ctrl_stc,
@@ -770,6 +776,10 @@ void SubsEditBox::UpdateTimeDisplayModeFromFile(bool force_apply) {
 }
 
 void SubsEditBox::OnKeyDown(wxKeyEvent &event) {
+	hotkey::check("Subtitle Edit Box", c, event);
+}
+
+void SubsEditBox::OnMouse(wxMouseEvent &event) {
 	hotkey::check("Subtitle Edit Box", c, event);
 }
 

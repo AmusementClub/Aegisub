@@ -266,6 +266,9 @@ BEGIN_EVENT_TABLE(VideoSlider, wxWindow)
 END_EVENT_TABLE()
 
 void VideoSlider::OnMouse(wxMouseEvent &event) {
+	if (hotkey::check("Video", c, event))
+		return;
+
 	is_dragging = event.LeftIsDown();
 
 	bool had_focus = HasFocus();

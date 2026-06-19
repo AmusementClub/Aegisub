@@ -233,19 +233,39 @@ static const char *keycode_name(int code) {
 	}
 }
 
-std::string keypress_to_str(int key_code, int modifier) {
-	std::string combo;
+static void append_modifiers(std::string& combo, int modifier) {
 	if ((modifier != wxMOD_NONE)) {
 		if ((modifier & wxMOD_CMD) != 0) combo.append("Ctrl-");
 		if ((modifier & wxMOD_ALT) != 0) combo.append("Alt-");
 		if ((modifier & wxMOD_SHIFT) != 0) combo.append("Shift-");
 	}
+}
+
+std::string keypress_to_str(int key_code, int modifier) {
+	std::string combo;
+	append_modifiers(combo, modifier);
 
 	if (key_code > 32 && key_code < 127)
 		combo += (char)key_code;
 	else
 		combo += keycode_name(key_code);
 
+	return combo;
+}
+
+std::string mousepress_to_str(wxMouseEvent const& evt) {
+	std::string combo;
+	char const *button_name = nullptr;
+	if (evt.Aux1Down())
+		button_name = "MouseBack";
+	else if (evt.Aux2Down())
+		button_name = "MouseForward";
+
+	if (!button_name)
+		return combo;
+
+	append_modifiers(combo, evt.GetModifiers());
+	combo += button_name;
 	return combo;
 }
 
@@ -268,6 +288,27 @@ bool check(std::string const& context, agi::Context *c, wxKeyEvent &evt) {
 			return false;
 		}
 		return true;
+	}
+	catch (cmd::CommandNotFound const& e) {
+		c->ShowError(e.GetMessage(), from_wx(_("Invalid command name for hotkey")));
+		return true;
+	}
+}
+
+bool check(std::string const& context, agi::Context *c, wxMouseEvent &evt) {
+	try {
+		std::string combo = mousepress_to_str(evt);
+		if (combo.empty())
+			return false;
+
+		std::string command = inst->Scan(context, combo, OPT_GET("Audio/Medusa Timing Hotkeys")->GetBool());
+		if (!command.empty()) {
+			cmd::call(command, c);
+			return true;
+		}
+
+		evt.Skip();
+		return false;
 	}
 	catch (cmd::CommandNotFound const& e) {
 		c->ShowError(e.GetMessage(), from_wx(_("Invalid command name for hotkey")));

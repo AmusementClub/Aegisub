@@ -52,6 +52,7 @@ class SubsStyledTextEditCtrl;
 class TimeEdit;
 class wxButton;
 class wxCheckBox;
+class wxMouseEvent;
 class wxRadioButton;
 class wxSizer;
 class wxSpinCtrl;
@@ -148,6 +149,7 @@ class SubsEditBox final : public wxPanel {
 #endif
 	void OnChangeTc(wxCommandEvent& event);
 	void OnKeyDown(wxKeyEvent &event);
+	void OnMouse(wxMouseEvent &event);
 
 	void OnActiveLineChanged(AssDialogue *new_line);
 	void OnSelectedSetChanged();

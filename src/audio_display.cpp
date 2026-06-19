@@ -622,6 +622,8 @@ AudioDisplay::AudioDisplay(wxWindow *parent, AudioController *controller, agi::C
 	Bind(wxEVT_LEFT_UP, &AudioDisplay::OnMouseEvent, this);
 	Bind(wxEVT_MIDDLE_UP, &AudioDisplay::OnMouseEvent, this);
 	Bind(wxEVT_RIGHT_UP, &AudioDisplay::OnMouseEvent, this);
+	Bind(wxEVT_AUX1_DOWN, &AudioDisplay::OnMouseEvent, this);
+	Bind(wxEVT_AUX2_DOWN, &AudioDisplay::OnMouseEvent, this);
 	Bind(wxEVT_MOTION, &AudioDisplay::OnMouseEvent, this);
 	Bind(wxEVT_ENTER_WINDOW, &AudioDisplay::OnMouseEnter, this);
 	Bind(wxEVT_LEAVE_WINDOW, &AudioDisplay::OnMouseLeave, this);
@@ -1432,6 +1434,9 @@ void AudioDisplay::OnMouseCaptureLost(wxMouseCaptureLostEvent&)
 
 void AudioDisplay::OnMouseEvent(wxMouseEvent& event)
 {
+	if (hotkey::check("Audio", context, event))
+		return;
+
 	const int mouse_x = event.GetPosition().x;
 
 	if (middle_seek_active && event.MiddleUp())

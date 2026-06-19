@@ -417,6 +417,8 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 	Bind(wxEVT_LEFT_UP, &VideoDisplay::OnMouseEvent, this);
 	Bind(wxEVT_MIDDLE_DOWN, &VideoDisplay::OnMouseEvent, this);
 	Bind(wxEVT_MIDDLE_UP, &VideoDisplay::OnMouseEvent, this);
+	Bind(wxEVT_AUX1_DOWN, &VideoDisplay::OnMouseEvent, this);
+	Bind(wxEVT_AUX2_DOWN, &VideoDisplay::OnMouseEvent, this);
 	Bind(wxEVT_MOTION, &VideoDisplay::OnMouseEvent, this);
 	Bind(wxEVT_MOUSEWHEEL, &VideoDisplay::OnMouseWheel, this);
 
@@ -1909,6 +1911,9 @@ void VideoDisplay::OnSizeEvent(wxSizeEvent &event) {
 }
 
 void VideoDisplay::OnMouseEvent(wxMouseEvent& event) {
+	if (hotkey::check("Video", con, event))
+		return;
+
 	wxPoint pt = event.GetPosition();
 	Vector2D current_pos(pt.x, pt.y);
 

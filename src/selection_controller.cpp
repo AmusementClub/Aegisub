@@ -25,6 +25,56 @@
 
 SelectionController::SelectionController(agi::Context *c) : context(c) { }
 
+int SelectionController::GetActiveLineId() const {
+	return active_line ? active_line->Id : 0;
+}
+
+AssDialogue *SelectionController::GetDialogueById(int line_id) const {
+	if (line_id <= 0)
+		return nullptr;
+
+	auto core = context->GetCore();
+	for (auto& line : core.ass->Events) {
+		if (line.Id == line_id)
+			return &line;
+	}
+	return nullptr;
+}
+
+bool SelectionController::IsLiveDialogueId(int line_id) const {
+	return GetDialogueById(line_id) != nullptr;
+}
+
+aegisub::selection_navigation_history::History::LineIdIsValid SelectionController::GetLiveLineValidator() const {
+	return [this](int line_id) { return IsLiveDialogueId(line_id); };
+}
+
+void SelectionController::RecordActiveLineChange(AssDialogue *old_line, AssDialogue *new_line) {
+	if (restoring_selection_history)
+		return;
+
+	selection_history.RecordTransition(old_line ? old_line->Id : 0, new_line ? new_line->Id : 0);
+}
+
+bool SelectionController::NavigateSelectionHistory(bool forward) {
+	auto const is_live = GetLiveLineValidator();
+	auto target_line_id = forward
+		? selection_history.GoForward(GetActiveLineId(), is_live)
+		: selection_history.GoBack(GetActiveLineId(), is_live);
+	if (!target_line_id)
+		return false;
+
+	auto *target = GetDialogueById(*target_line_id);
+	if (!target)
+		return false;
+
+	bool const old_restoring = restoring_selection_history;
+	restoring_selection_history = true;
+	SetSelectionAndActive({target}, target);
+	restoring_selection_history = old_restoring;
+	return true;
+}
+
 void SelectionController::SetSelectedSet(Selection new_selection) {
 	selection = std::move(new_selection);
 	AnnounceSelectedSetChanged();
@@ -32,6 +82,7 @@ void SelectionController::SetSelectedSet(Selection new_selection) {
 
 void SelectionController::SetActiveLine(AssDialogue *new_line) {
 	if (new_line != active_line) {
+		RecordActiveLineChange(active_line, new_line);
 		active_line = new_line;
 		if (active_line) {
 			auto core = context->GetCore();
@@ -43,6 +94,8 @@ void SelectionController::SetActiveLine(AssDialogue *new_line) {
 
 void SelectionController::SetSelectionAndActive(Selection new_selection, AssDialogue *new_line) {
 	bool active_line_changed = new_line != active_line;
+	if (active_line_changed)
+		RecordActiveLineChange(active_line, new_line);
 	selection = std::move(new_selection);
 	active_line = new_line;
 	if (active_line) {
@@ -59,6 +112,31 @@ std::vector<AssDialogue *> SelectionController::GetSortedSelection() const {
 	std::vector<AssDialogue *> ret(selection.begin(), selection.end());
 	sort(begin(ret), end(ret), [](AssDialogue *a, AssDialogue *b) { return a->Row < b->Row; });
 	return ret;
+}
+
+void SelectionController::ClearSelectionHistory() {
+	selection_history.Clear();
+}
+
+void SelectionController::RecordEditedLine(AssDialogue *line) {
+	if (!restoring_selection_history && line)
+		selection_history.RecordVisit(line->Id);
+}
+
+bool SelectionController::CanNavigateSelectionBack() const {
+	return selection_history.CanGoBack(GetActiveLineId(), GetLiveLineValidator());
+}
+
+bool SelectionController::CanNavigateSelectionForward() const {
+	return selection_history.CanGoForward(GetActiveLineId(), GetLiveLineValidator());
+}
+
+bool SelectionController::NavigateSelectionBack() {
+	return NavigateSelectionHistory(false);
+}
+
+bool SelectionController::NavigateSelectionForward() {
+	return NavigateSelectionHistory(true);
 }
 
 void SelectionController::PrevLine() {

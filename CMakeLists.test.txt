@@ -109,6 +109,7 @@ if(GTEST_FOUND)
         src/video_session_ops.cpp
         src/video_snapshot_ops.cpp
         src/subtitle_timing_ops.cpp
+        src/selection_navigation_history.cpp
         src/presentation/subtitle_grid_query_service.cpp
         src/presentation/subtitle_grid_display.cpp
         src/presentation/subtitle_grid_diff.cpp
@@ -156,6 +157,7 @@ if(GTEST_FOUND)
         tests/tests/project_session_ops.cpp
         tests/tests/ready_flag.cpp
         tests/tests/secondary_subtitle_strip_layout.cpp
+        tests/tests/selection_navigation_history.cpp
         tests/tests/scope_exit.cpp
         tests/tests/signals.cpp
         tests/tests/split.cpp

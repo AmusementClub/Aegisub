@@ -97,6 +97,38 @@ struct grid_line_prev final : public Command {
 	}
 };
 
+struct grid_selection_back final : public Command {
+	CMD_NAME("grid/selection/back")
+	STR_MENU("Back in Selection History")
+	STR_DISP("Back in Selection History")
+	STR_HELP("Return to the previously selected or edited subtitle line")
+	CMD_TYPE(COMMAND_VALIDATE)
+
+	bool Validate(const agi::Context *c) override {
+		return c->GetCore().selectionController->CanNavigateSelectionBack();
+	}
+
+	void operator()(agi::Context *c) override {
+		c->GetCore().selectionController->NavigateSelectionBack();
+	}
+};
+
+struct grid_selection_forward final : public Command {
+	CMD_NAME("grid/selection/forward")
+	STR_MENU("Forward in Selection History")
+	STR_DISP("Forward in Selection History")
+	STR_HELP("Return to the subtitle line active before selection history moved back")
+	CMD_TYPE(COMMAND_VALIDATE)
+
+	bool Validate(const agi::Context *c) override {
+		return c->GetCore().selectionController->CanNavigateSelectionForward();
+	}
+
+	void operator()(agi::Context *c) override {
+		c->GetCore().selectionController->NavigateSelectionForward();
+	}
+};
+
 struct grid_sort_actor final : public Command {
 	CMD_NAME("grid/sort/actor")
 	STR_MENU("&Actor Name")
@@ -396,6 +428,8 @@ namespace cmd {
 		reg(agi::make_unique<grid_line_next>());
 		reg(agi::make_unique<grid_line_next_create>());
 		reg(agi::make_unique<grid_line_prev>());
+		reg(agi::make_unique<grid_selection_back>());
+		reg(agi::make_unique<grid_selection_forward>());
 		reg(agi::make_unique<grid_sort_actor>());
 		reg(agi::make_unique<grid_sort_effect>());
 		reg(agi::make_unique<grid_sort_end>());

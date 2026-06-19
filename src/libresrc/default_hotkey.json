@@ -149,6 +149,12 @@
 		"grid/line/prev" : [
 			"Ctrl-KP_8"
 		],
+		"grid/selection/back" : [
+			"MouseBack"
+		],
+		"grid/selection/forward" : [
+			"MouseForward"
+		],
 		"grid/move/down" : [
 			"Alt-Down"
 		],

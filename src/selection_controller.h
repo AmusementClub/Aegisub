@@ -29,6 +29,8 @@
 
 #pragma once
 
+#include "selection_navigation_history.h"
+
 #include <libaegisub/signal.h>
 
 #include <set>
@@ -47,6 +49,15 @@ class SelectionController {
 
 	Selection selection; ///< Currently selected lines
 	AssDialogue *active_line = nullptr; ///< The currently active line or 0 if none
+	aegisub::selection_navigation_history::History selection_history;
+	bool restoring_selection_history = false;
+
+	int GetActiveLineId() const;
+	AssDialogue *GetDialogueById(int line_id) const;
+	bool IsLiveDialogueId(int line_id) const;
+	aegisub::selection_navigation_history::History::LineIdIsValid GetLiveLineValidator() const;
+	void RecordActiveLineChange(AssDialogue *old_line, AssDialogue *new_line);
+	bool NavigateSelectionHistory(bool forward);
 
 public:
 	SelectionController(agi::Context *context);
@@ -85,6 +96,20 @@ public:
 
 	/// Get the selection sorted by row number
 	std::vector<AssDialogue *> GetSortedSelection() const;
+
+	/// Clear back/forward selection navigation history
+	void ClearSelectionHistory();
+
+	/// Add an edited line to the selection navigation history
+	void RecordEditedLine(AssDialogue *line);
+
+	/// Check whether selection history can navigate back/forward
+	bool CanNavigateSelectionBack() const;
+	bool CanNavigateSelectionForward() const;
+
+	/// Navigate selection history without touching subtitle undo/redo state
+	bool NavigateSelectionBack();
+	bool NavigateSelectionForward();
 
 	/// @brief Set both the selected set and active line
 	/// @param new_line Subtitle line to become the new active line

@@ -584,6 +584,9 @@ void SubsController::SetFileName(agi::fs::path const& path) {
 void SubsController::OnCommit(AssFileCommit c) {
 	if (c.message.empty() && !undo_stack.empty()) return;
 
+	if (c.single_line && c.single_line->Group() == AssEntryGroup::DIALOGUE)
+		context->GetCore().selectionController->RecordEditedLine(c.single_line);
+
 	commit_id = next_commit_id++;
 	// Allow coalescing only if it's the last change and the file has not been
 	// saved since the last change

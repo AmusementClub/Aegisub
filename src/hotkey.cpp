@@ -50,6 +50,12 @@ namespace {
 		{nullptr}
 	};
 
+	const char *added_hotkeys_selection_history[][3] = {
+		{"grid/selection/back", "Default", "MouseBack"},
+		{"grid/selection/forward", "Default", "MouseForward"},
+		{nullptr}
+	};
+
 #ifdef __WXMAC__
 	const char *added_hotkeys_minimize[][3] = {
 		{"app/minimize", "Default", "Ctrl-M"},
@@ -104,6 +110,11 @@ void init() {
 	if (std::find(begin(migrations), end(migrations), "edit/line/duplicate/shift_back") == end(migrations)) {
 		migrate_hotkeys(added_hotkeys_shift_back);
 		migrations.emplace_back("edit/line/duplicate/shift_back");
+	}
+
+	if (std::find(begin(migrations), end(migrations), "grid/selection/history") == end(migrations)) {
+		migrate_hotkeys(added_hotkeys_selection_history);
+		migrations.emplace_back("grid/selection/history");
 	}
 
 	if (std::find(begin(migrations), end(migrations), "duplicate -> split") == end(migrations)) {

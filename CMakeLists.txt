@@ -691,6 +691,7 @@ set(AEGISUB_CORE_SOURCES
     # remains with the wx executable until core/UI construction is split.
     src/initial_line_state.cpp
     src/selection_controller.cpp
+    src/selection_navigation_history.cpp
     # project.h exposes wxString in ShowError's public signature; migrate to
     # the exe until the API is switched to std::string.
     # project_session_ops is a core-owned media/subtitle session policy layer:

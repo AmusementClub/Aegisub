@@ -301,6 +301,7 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 		sel.insert(active_line);
 	}
 	core.selectionController->SetSelectionAndActive(std::move(sel), active_line);
+	core.selectionController->ClearSelectionHistory();
 	RestoreProjectUiState(context, BuildSubtitleUiStateSnapshot(properties));
 
 	if (video_provider)
@@ -334,6 +335,7 @@ void Project::CloseSubtitles() {
 	LoadUnloadFiles(core.ass->Properties);
 	auto line = &*core.ass->Events.begin();
 	core.selectionController->SetSelectionAndActive({line}, line);
+	core.selectionController->ClearSelectionHistory();
 	if (video_provider)
 		RefreshSubtitlesProvider(!transient_font_environment_matches(previous_transient_fonts, core.ass->GetTransientFonts()));
 }

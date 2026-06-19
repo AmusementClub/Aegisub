@@ -28,6 +28,7 @@
 #include <wx/dcbuffer.h>
 #include <wx/dcmemory.h>
 #include <wx/dialog.h>
+#include <wx/image.h>
 #include <wx/intl.h>
 #include <wx/menu.h>
 #include <wx/scrolbar.h>
@@ -598,19 +599,39 @@ void SecondarySubtitleStrip::OnPaint(wxPaintEvent &) {
 				content_rect.height);
 			int draw_y = content_rect.y + content_rect.height - draw_height;
 
+			wxBitmap source_bitmap = bitmap.GetSubBitmap(wxRect(0, layout.source_top, bitmap.GetWidth(), layout.source_height));
+			bool drew_bitmap = false;
+			if (source_bitmap.IsOk()) {
+				if (source_bitmap.GetWidth() == content_rect.width && source_bitmap.GetHeight() == draw_height) {
+					dc.DrawBitmap(source_bitmap, content_rect.x, draw_y, false);
+					drew_bitmap = true;
+				}
+				else {
+					wxImage source_image = source_bitmap.ConvertToImage();
+					if (source_image.IsOk()) {
+						wxImage scaled_image = source_image.Scale(content_rect.width, draw_height, wxIMAGE_QUALITY_HIGH);
+						if (scaled_image.IsOk()) {
+							dc.DrawBitmap(wxBitmap(scaled_image), content_rect.x, draw_y, false);
+							drew_bitmap = true;
+						}
+					}
+				}
+			}
+			if (!drew_bitmap) {
 				wxBitmap paint_bitmap = bitmap;
 				wxMemoryDC memory_dc;
 				memory_dc.SelectObject(paint_bitmap);
-			dc.StretchBlit(
-				content_rect.x,
-				draw_y,
-				content_rect.width,
-				draw_height,
-				&memory_dc,
-				0,
-				layout.source_top,
-				bitmap.GetWidth(),
-				layout.source_height);
+				dc.StretchBlit(
+					content_rect.x,
+					draw_y,
+					content_rect.width,
+					draw_height,
+					&memory_dc,
+					0,
+					layout.source_top,
+					bitmap.GetWidth(),
+					layout.source_height);
+			}
 
 			wxRect ruler_rect = GetRulerOverlayRect(content_rect);
 			if (ruler_rect.width > 0 && ruler_rect.height > 0) {

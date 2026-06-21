@@ -158,7 +158,7 @@
 		{ "command" : "video/opt/scale_with_dpi" },
 		{ "submenu" : "main/video/override ar", "text" : "Override &AR" },
         { "command" : "video/show_overscan" },
-        { "command" : "video/reset_pan" },
+        { "command" : "video/pan_reset" },
         {},
         { "command" : "video/jump" },
         { "command" : "video/jump/start" },
@@ -223,6 +223,6 @@
         {},
         { "command" : "video/copy_coordinates" },
         {},
-        { "command" : "video/reset_pan" }
+        { "command" : "video/pan_reset" }
     ]
 }

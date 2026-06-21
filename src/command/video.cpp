@@ -727,8 +727,8 @@ struct video_secondary_subtitles_toggle final : public validator_video_loaded {
 	}
 };
 
-struct video_reset_pan final : public validator_video_loaded {
-	CMD_NAME("video/reset_pan")
+struct video_pan_reset final : public validator_video_loaded {
+	CMD_NAME("video/pan_reset")
 	STR_MENU("Reset Video &Pan")
 	STR_DISP("Reset Video Pan")
 	STR_HELP("Reset the video's position in the video display")
@@ -913,7 +913,7 @@ namespace cmd {
 		reg(agi::make_unique<video_opt_scale_with_dpi>());
 		reg(agi::make_unique<video_play>());
 		reg(agi::make_unique<video_play_line>());
-		reg(agi::make_unique<video_reset_pan>());
+		reg(agi::make_unique<video_pan_reset>());
 		reg(agi::make_unique<video_secondary_subtitles_toggle>());
 		reg(agi::make_unique<video_show_overscan>());
 		reg(agi::make_unique<video_stop>());

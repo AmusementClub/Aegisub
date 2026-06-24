@@ -8,7 +8,9 @@
 #include <libaegisub/path.h>
 
 #include <filesystem>
+#include <functional>
 #include <string_view>
+#include <utility>
 
 namespace aegisub::provider_index_cache {
 namespace {
@@ -79,16 +81,24 @@ agi::fs::path BuildFilename(agi::fs::path const& media_filename,
 	return result;
 }
 
+agi::fs::path CacheDirectory(std::string const& cache_directory_token) {
+	auto directory = DecodeCachePath(cache_directory_token);
+	agi::fs::CreateDirectory(directory);
+	return directory;
+}
+
 void Clean(std::string const& cache_directory_token,
            std::string const& file_pattern,
            char const *size_option,
-           char const *files_option) {
-	auto directory = DecodeCachePath(cache_directory_token);
-	agi::fs::CreateDirectory(directory);
+           char const *files_option,
+           std::function<void()> after_clean) {
+	auto directory = CacheDirectory(cache_directory_token);
 	::CleanCache(directory,
 		file_pattern,
 		GetCacheOptionInt(size_option, DefaultCacheOptionValue(size_option)),
-		GetCacheOptionInt(files_option, DefaultCacheOptionValue(files_option)));
+		GetCacheOptionInt(files_option, DefaultCacheOptionValue(files_option)),
+		0,
+		std::move(after_clean));
 }
 
 }

@@ -48,6 +48,7 @@ class Project {
 	std::vector<agi::signal::Connection> option_connections;
 
 	bool video_has_subtitles = false;
+	bool can_generate_scene_change_keyframes = false;
 	std::unique_ptr<agi::BackgroundRunner> progress_runner;
 	agi::Context *context = nullptr;
 
@@ -63,6 +64,7 @@ class Project {
 	void DoLoadKeyframes(agi::fs::path const& path);
 #ifdef WITH_SCENECHANGE
 	bool TryLoadSceneChangeKeyframes(agi::fs::path const& video_path);
+	bool PromptAndGenerateSceneChangeKeyframes(agi::fs::path const& cache_path, bool cache_exists);
 #endif
 
 	void LoadUnloadFiles(ProjectProperties properties);
@@ -105,6 +107,8 @@ public:
 	bool CanCloseKeyframes() const { return !keyframes_file.empty(); }
 	agi::fs::path const& KeyframesName() const { return keyframes_file; }
 	std::vector<int> const& Keyframes() const { return keyframes; }
+	bool CanGenerateSceneChangeKeyframes() const;
+	bool GenerateSceneChangeKeyframes();
 
 	void LoadList(std::vector<agi::fs::path> const& files);
 

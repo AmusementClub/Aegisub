@@ -308,6 +308,22 @@ struct video_focus_seek final : public validator_video_loaded {
 	}
 };
 
+struct video_generate_scene_change_keyframes final : public Command {
+	CMD_NAME("video/keyframes/generate")
+	STR_MENU("Generate Scene Change Keyframes...")
+	STR_DISP("Generate Scene Change Keyframes")
+	STR_HELP("Generate keyframes by scanning scene changes in the current video")
+	CMD_TYPE(COMMAND_VALIDATE)
+
+	bool Validate(const agi::Context *c) override {
+		return c->GetCore().project->CanGenerateSceneChangeKeyframes();
+	}
+
+	void operator()(agi::Context *c) override {
+		c->GetCore().project->GenerateSceneChangeKeyframes();
+	}
+};
+
 wxImage get_image(agi::Context *c, bool raw) {
 	auto core = c->GetCore();
 	auto ui = c->GetUI();
@@ -892,6 +908,7 @@ namespace cmd {
 		reg(agi::make_unique<video_detach>());
 		reg(agi::make_unique<video_details>());
 		reg(agi::make_unique<video_focus_seek>());
+		reg(agi::make_unique<video_generate_scene_change_keyframes>());
 		reg(agi::make_unique<video_frame_copy>());
 		reg(agi::make_unique<video_frame_copy_raw>());
 		reg(agi::make_unique<video_frame_next>());

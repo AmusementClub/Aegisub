@@ -148,6 +148,7 @@
         { "command" : "timecode/close" },
         { "recent" : "Timecodes" },
         {},
+        { "command" : "video/keyframes/generate" },
         { "command" : "keyframe/open" },
         { "command" : "keyframe/save" },
         { "command" : "keyframe/close" },

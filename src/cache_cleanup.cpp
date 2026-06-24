@@ -7,6 +7,8 @@
 
 #include <algorithm>
 #include <ctime>
+#include <exception>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <vector>
@@ -16,7 +18,8 @@ void CleanCache(
 	std::string const& file_type,
 	uint64_t max_size,
 	uint64_t max_files,
-	uint64_t preserve_recent_seconds) {
+	uint64_t preserve_recent_seconds,
+	std::function<void()> after_clean) {
 	static std::unique_ptr<agi::dispatch::Queue> queue;
 	if (!queue)
 		queue = agi::dispatch::Create();
@@ -25,6 +28,24 @@ void CleanCache(
 	if (max_files == 0)
 		max_files = std::numeric_limits<uint64_t>::max();
 	queue->Async([=] {
+		auto run_after_clean = [&] {
+			if (!after_clean)
+				return;
+
+			try {
+				after_clean();
+			}
+			catch (agi::Exception const& e) {
+				LOG_D("utils/clean_cache") << "post-clean callback failed: " << e.GetMessage();
+			}
+			catch (std::exception const& e) {
+				LOG_D("utils/clean_cache") << "post-clean callback failed: " << e.what();
+			}
+			catch (...) {
+				LOG_D("utils/clean_cache") << "post-clean callback failed";
+			}
+		};
+
 		LOG_D("utils/clean_cache") << "cleaning " << directory / file_type;
 		uint64_t total_size = 0;
 		time_t const preserve_recent_cutoff = preserve_recent_seconds == 0
@@ -54,6 +75,7 @@ void CleanCache(
 				<< ", maxfiles=" << max_files
 				<< ", numfiles=" << cachefiles.size()
 				<< "), exiting";
+			run_after_clean();
 			return;
 		}
 
@@ -83,5 +105,6 @@ void CleanCache(
 		}
 
 		LOG_D("utils/clean_cache") << "deleted " << deleted << " files, exiting";
+		run_after_clean();
 	});
 }

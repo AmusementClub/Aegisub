@@ -49,17 +49,23 @@
 
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/access.h>
+#include <libaegisub/cajun/elements.h>
+#include <libaegisub/cajun/reader.h>
+#include <libaegisub/cajun/writer.h>
 #include <libaegisub/format_path.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/io.h>
 #include <libaegisub/keyframe.h>
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
 
+#include <algorithm>
 #include <chrono>
 #include <exception>
 #include <filesystem>
+#include <mutex>
 
 namespace {
 bool transient_font_environment_matches(std::shared_ptr<const TransientFontSet> const& left, std::shared_ptr<const TransientFontSet> const& right) {
@@ -119,6 +125,13 @@ void ApplyPostOpenVideoPlan(agi::Context *context, aegisub::video_session_ops::P
 
 #ifdef WITH_SCENECHANGE
 char const *kSceneChangeKeyframeCacheToken = "?local/scenechangekeyframes/";
+char const *kSceneChangeKeyframeManifestName = "manifest.json";
+
+struct SceneChangeKeyframeCacheManifestEntry {
+	std::string keyframes_filename;
+	std::string video_path;
+	std::string video_name;
+};
 
 agi::fs::path GetSceneChangeKeyframeCacheFilename(agi::fs::path const& filename) {
 	return aegisub::provider_index_cache::BuildFilename(filename,
@@ -127,17 +140,176 @@ agi::fs::path GetSceneChangeKeyframeCacheFilename(agi::fs::path const& filename)
 		{ "wwxd" });
 }
 
+agi::fs::path GetSceneChangeKeyframeManifestPath() {
+	return aegisub::provider_index_cache::CacheDirectory(kSceneChangeKeyframeCacheToken)
+		/ kSceneChangeKeyframeManifestName;
+}
+
+std::mutex& SceneChangeKeyframeManifestMutex() {
+	static std::mutex mutex;
+	return mutex;
+}
+
+std::string JsonStringValue(json::Object const& object, char const *key) {
+	auto it = object.find(key);
+	if (it == object.end())
+		return {};
+
+	try {
+		return static_cast<json::String const&>(it->second);
+	}
+	catch (json::Exception const&) {
+		return {};
+	}
+}
+
+json::Array const& SceneChangeKeyframeManifestEntries(json::UnknownElement const& root) {
+	try {
+		return static_cast<json::Array const&>(root);
+	}
+	catch (json::Exception const&) {
+		json::Object const& root_object = root;
+		auto entries_it = root_object.find("entries");
+		if (entries_it == root_object.end())
+			throw;
+		return static_cast<json::Array const&>(entries_it->second);
+	}
+}
+
+std::vector<SceneChangeKeyframeCacheManifestEntry> LoadSceneChangeKeyframeManifest() {
+	auto manifest_path = GetSceneChangeKeyframeManifestPath();
+	if (!agi::fs::FileExists(manifest_path))
+		return {};
+
+	try {
+		auto stream = agi::io::Open(manifest_path);
+		json::UnknownElement root;
+		json::Reader::Read(root, *stream);
+
+		json::Array const& entries_array = SceneChangeKeyframeManifestEntries(root);
+		std::vector<SceneChangeKeyframeCacheManifestEntry> entries;
+		entries.reserve(entries_array.size());
+		for (auto const& item : entries_array) {
+			json::Object const& object = item;
+			SceneChangeKeyframeCacheManifestEntry entry;
+			entry.keyframes_filename = JsonStringValue(object, "keyframes");
+			entry.video_path = JsonStringValue(object, "video_path");
+			entry.video_name = JsonStringValue(object, "video_name");
+			if (!entry.keyframes_filename.empty())
+				entries.push_back(std::move(entry));
+		}
+		return entries;
+	}
+	catch (json::Exception const& err) {
+		LOG_W("project/scenechange")
+			<< "Ignoring invalid SceneChange keyframe manifest "
+			<< agi::fs::PathToString(manifest_path)
+			<< ": " << err.what();
+	}
+	catch (agi::Exception const& err) {
+		LOG_W("project/scenechange")
+			<< "Ignoring unreadable SceneChange keyframe manifest "
+			<< agi::fs::PathToString(manifest_path)
+			<< ": " << err.GetMessage();
+	}
+	catch (std::exception const& err) {
+		LOG_W("project/scenechange")
+			<< "Ignoring unreadable SceneChange keyframe manifest "
+			<< agi::fs::PathToString(manifest_path)
+			<< ": " << err.what();
+	}
+
+	return {};
+}
+
+void SaveSceneChangeKeyframeManifest(std::vector<SceneChangeKeyframeCacheManifestEntry> const& entries) {
+	auto manifest_path = GetSceneChangeKeyframeManifestPath();
+
+	try {
+		json::Array root;
+		root.reserve(entries.size());
+		for (auto const& entry : entries) {
+			json::Object object;
+			object["keyframes"] = entry.keyframes_filename;
+			object["video_path"] = entry.video_path;
+			object["video_name"] = entry.video_name;
+			root.push_back(std::move(object));
+		}
+
+		agi::JsonWriter::Write(root, agi::io::Save(manifest_path).Get());
+	}
+	catch (agi::Exception const& err) {
+		LOG_W("project/scenechange")
+			<< "Failed to write SceneChange keyframe manifest "
+			<< agi::fs::PathToString(manifest_path)
+			<< ": " << err.GetMessage();
+	}
+	catch (std::exception const& err) {
+		LOG_W("project/scenechange")
+			<< "Failed to write SceneChange keyframe manifest "
+			<< agi::fs::PathToString(manifest_path)
+			<< ": " << err.what();
+	}
+}
+
+template<typename Update>
+void UpdateSceneChangeKeyframeManifest(Update&& update) {
+	std::lock_guard<std::mutex> lock(SceneChangeKeyframeManifestMutex());
+	auto entries = LoadSceneChangeKeyframeManifest();
+	if (update(entries))
+		SaveSceneChangeKeyframeManifest(entries);
+}
+
+void PruneSceneChangeKeyframeManifest() {
+	auto directory = aegisub::provider_index_cache::CacheDirectory(kSceneChangeKeyframeCacheToken);
+	UpdateSceneChangeKeyframeManifest([&](auto& entries) {
+		if (entries.empty())
+			return false;
+
+		auto const old_size = entries.size();
+		entries.erase(
+			std::remove_if(entries.begin(), entries.end(), [&](auto const& entry) {
+				auto cache_filename = agi::fs::PathFromString(entry.keyframes_filename).filename();
+				return cache_filename.empty() || !agi::fs::FileExists(directory / cache_filename);
+			}),
+			entries.end());
+		return entries.size() != old_size;
+	});
+}
+
+void RecordSceneChangeKeyframeCache(agi::fs::path const& cache_path, agi::fs::path const& video_path) {
+	auto const keyframes_filename = agi::fs::PathToGenericString(cache_path.filename());
+	auto const video_path_text = agi::fs::PathToGenericString(video_path);
+	auto const video_name = agi::fs::PathToString(video_path.filename());
+
+	UpdateSceneChangeKeyframeManifest([&](auto& entries) {
+		auto existing = std::find_if(entries.begin(), entries.end(), [&](auto const& entry) {
+			return entry.keyframes_filename == keyframes_filename;
+		});
+
+		if (existing == entries.end())
+			entries.push_back({ keyframes_filename, video_path_text, video_name });
+		else if (existing->video_path != video_path_text || existing->video_name != video_name)
+			*existing = { keyframes_filename, video_path_text, video_name };
+		else
+			return false;
+		return true;
+	});
+}
+
 void CleanSceneChangeKeyframeCache() {
 	aegisub::provider_index_cache::Clean(kSceneChangeKeyframeCacheToken,
 		"*.kf.txt",
 		"Provider/SceneChange/Cache/Size",
-		"Provider/SceneChange/Cache/Files");
+		"Provider/SceneChange/Cache/Files",
+		[] { PruneSceneChangeKeyframeManifest(); });
 }
 
 void RemoveSceneChangeKeyframeCacheFile(agi::fs::path const& path) {
 	try {
 		if (!path.empty())
 			agi::fs::Remove(path);
+		PruneSceneChangeKeyframeManifest();
 	}
 	catch (...) {
 	}
@@ -499,6 +671,7 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 	}
 
 	auto const load_started = std::chrono::steady_clock::now();
+	can_generate_scene_change_keyframes = false;
 	video_provider = aegisub::video_session_ops::CreateVideoProviderWithErrorHandling(
 		path,
 		[&] {
@@ -557,6 +730,9 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 	keyframes = opened_video.keyframes;
 	video_provider->SetSubtitlesTimecodes(timecodes);
 #ifdef WITH_SCENECHANGE
+	can_generate_scene_change_keyframes =
+		video_provider->GetDecoderName() == "LsmasNative"
+		&& video_provider->CanGenerateSceneChangeKeyframes();
 	bool scenechange_keyframes_loaded = TryLoadSceneChangeKeyframes(path);
 #else
 	bool scenechange_keyframes_loaded = false;
@@ -603,6 +779,7 @@ void Project::CloseVideo() {
 	auto core = context->GetCore();
 	AnnounceVideoProviderModified(nullptr);
 	video_provider.reset();
+	can_generate_scene_change_keyframes = false;
 	SetPath(video_file, "?video", "", "");
 	video_has_subtitles = false;
 	core.ass->Properties.ar_mode = 0;
@@ -648,6 +825,7 @@ bool Project::TryLoadSceneChangeKeyframes(agi::fs::path const& video_path) {
 		try {
 			DoLoadKeyframes(cache_path);
 			agi::fs::Touch(cache_path);
+			RecordSceneChangeKeyframeCache(cache_path, video_path);
 			CleanSceneChangeKeyframeCache();
 			return true;
 		}
@@ -667,12 +845,21 @@ bool Project::TryLoadSceneChangeKeyframes(agi::fs::path const& video_path) {
 		}
 	}
 
-	if (!video_provider->CanGenerateSceneChangeKeyframes())
+	if (!CanGenerateSceneChangeKeyframes())
+		return false;
+
+	return PromptAndGenerateSceneChangeKeyframes(cache_path, false);
+}
+
+bool Project::PromptAndGenerateSceneChangeKeyframes(agi::fs::path const& cache_path, bool cache_exists) {
+	if (!video_provider || !CanGenerateSceneChangeKeyframes())
 		return false;
 
 	auto answer = context->RequestInteraction({
 		from_wx(_("Generate keyframes?")),
-		from_wx(_("No cached SceneChange keyframe file was found for this video.\n\nGenerating it may use a lot of CPU and take a long time. Generate it now?")),
+		from_wx(cache_exists
+			? _("A cached SceneChange keyframe file already exists for this video.\n\nRegenerating it may use a lot of CPU and take a long time. Regenerate it now?")
+			: _("No cached SceneChange keyframe file was found for this video.\n\nGenerating it may use a lot of CPU and take a long time. Generate it now?")),
 		agi::InteractionButtons::YesNo,
 		agi::InteractionIcon::Question
 	});
@@ -682,6 +869,7 @@ bool Project::TryLoadSceneChangeKeyframes(agi::fs::path const& video_path) {
 	try {
 		video_provider->GenerateSceneChangeKeyframes(cache_path,
 			GetProgressRunner("Generating keyframes", "Scanning scene changes"));
+		RecordSceneChangeKeyframeCache(cache_path, video_file);
 		CleanSceneChangeKeyframeCache();
 		DoLoadKeyframes(cache_path);
 		return true;
@@ -702,6 +890,22 @@ bool Project::TryLoadSceneChangeKeyframes(agi::fs::path const& video_path) {
 	return false;
 }
 #endif
+
+bool Project::CanGenerateSceneChangeKeyframes() const {
+	return can_generate_scene_change_keyframes;
+}
+
+bool Project::GenerateSceneChangeKeyframes() {
+#ifdef WITH_SCENECHANGE
+	if (video_file.empty() || !CanGenerateSceneChangeKeyframes())
+		return false;
+
+	auto cache_path = GetSceneChangeKeyframeCacheFilename(video_file);
+	return PromptAndGenerateSceneChangeKeyframes(cache_path, agi::fs::FileExists(cache_path));
+#else
+	return false;
+#endif
+}
 
 void Project::DoLoadKeyframes(agi::fs::path const& path) {
 	keyframes = agi::keyframe::Load(path);

@@ -73,6 +73,33 @@ inline GLint GetCompatibilityTextureUnitResetCount() {
 	return texture_units;
 }
 
+inline void ResetPixelStoreState() {
+	glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+	glPixelStorei(GL_PACK_ALIGNMENT, 4);
+	glPixelStorei(GL_UNPACK_SWAP_BYTES, GL_FALSE);
+	glPixelStorei(GL_PACK_SWAP_BYTES, GL_FALSE);
+	glPixelStorei(GL_UNPACK_LSB_FIRST, GL_FALSE);
+	glPixelStorei(GL_PACK_LSB_FIRST, GL_FALSE);
+#ifdef GL_UNPACK_ROW_LENGTH
+	glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+#endif
+#ifdef GL_UNPACK_SKIP_ROWS
+	glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
+#endif
+#ifdef GL_UNPACK_SKIP_PIXELS
+	glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
+#endif
+#ifdef GL_PACK_ROW_LENGTH
+	glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+#endif
+#ifdef GL_PACK_SKIP_ROWS
+	glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+#endif
+#ifdef GL_PACK_SKIP_PIXELS
+	glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+#endif
+}
+
 inline void ResetCompatibilityState() {
 	auto const& gl = GetCompatibilityFunctions();
 	if (gl.UseProgram)
@@ -118,6 +145,7 @@ inline void ResetCompatibilityState() {
 	glLineWidth(1.0f);
 	glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
 	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	ResetPixelStoreState();
 }
 
 inline void SetupBottomLeftOrtho(int canvas_width, int canvas_height) {

@@ -22,6 +22,7 @@
 #include "video_renderer_placebo_source_frame.h"
 
 #include <libaegisub/log.h>
+#include <libaegisub/scope_exit.h>
 
 #include <libplacebo/colorspace.h>
 #include <libplacebo/utils/dolbyvision.h>
@@ -347,6 +348,8 @@ void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
 
 	EnsureInitialized();
 	DestroyMappedAVFrame();
+	legacy_gl::ResetPixelStoreState();
+	auto restore_pixel_store = agi::make_scope_exit([] { legacy_gl::ResetPixelStoreState(); });
 
 	if (frame.output_mode == SourceFrameOutputMode::Native
 		&& frame.native_payload_kind == SourceFrameNativePayloadKind::FFmpegAVFrame

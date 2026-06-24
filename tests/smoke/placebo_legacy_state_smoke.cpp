@@ -208,9 +208,9 @@ struct BgraScenario {
 void FillBgraScenario(BgraScenario& scenario, int width, int height, int frame_index) {
 	scenario.storage.width = static_cast<std::size_t>(width);
 	scenario.storage.height = static_cast<std::size_t>(height);
-	scenario.storage.pitch = static_cast<std::size_t>(width) * 4;
+	scenario.storage.pitch = static_cast<std::size_t>(width + 16) * 4;
 	scenario.storage.flipped = false;
-	scenario.storage.data.resize(scenario.storage.pitch * scenario.storage.height);
+	scenario.storage.data.assign(scenario.storage.pitch * (scenario.storage.height + 2), 0);
 
 	int const x_bias = frame_index * 7;
 	int const y_bias = frame_index * 11;
@@ -393,6 +393,80 @@ Point2 TriangleCentroid(LegacyPrimitiveLayout const& layout) {
 	};
 }
 
+bool ValidatePixelStoreState(char const* phase, int frame_index) {
+	GLint unpack_alignment = -1;
+	GLint pack_alignment = -1;
+	GLint unpack_swap_bytes = -1;
+	GLint pack_swap_bytes = -1;
+	GLint unpack_lsb_first = -1;
+	GLint pack_lsb_first = -1;
+	glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpack_alignment);
+	glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
+	glGetIntegerv(GL_UNPACK_SWAP_BYTES, &unpack_swap_bytes);
+	glGetIntegerv(GL_PACK_SWAP_BYTES, &pack_swap_bytes);
+	glGetIntegerv(GL_UNPACK_LSB_FIRST, &unpack_lsb_first);
+	glGetIntegerv(GL_PACK_LSB_FIRST, &pack_lsb_first);
+
+	GLint unpack_row_length = 0;
+#ifdef GL_UNPACK_ROW_LENGTH
+	glGetIntegerv(GL_UNPACK_ROW_LENGTH, &unpack_row_length);
+#endif
+	GLint unpack_skip_rows = 0;
+#ifdef GL_UNPACK_SKIP_ROWS
+	glGetIntegerv(GL_UNPACK_SKIP_ROWS, &unpack_skip_rows);
+#endif
+	GLint unpack_skip_pixels = 0;
+#ifdef GL_UNPACK_SKIP_PIXELS
+	glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &unpack_skip_pixels);
+#endif
+	GLint pack_row_length = 0;
+#ifdef GL_PACK_ROW_LENGTH
+	glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row_length);
+#endif
+	GLint pack_skip_rows = 0;
+#ifdef GL_PACK_SKIP_ROWS
+	glGetIntegerv(GL_PACK_SKIP_ROWS, &pack_skip_rows);
+#endif
+	GLint pack_skip_pixels = 0;
+#ifdef GL_PACK_SKIP_PIXELS
+	glGetIntegerv(GL_PACK_SKIP_PIXELS, &pack_skip_pixels);
+#endif
+
+	bool const restored =
+		unpack_alignment == 4
+		&& pack_alignment == 4
+		&& unpack_swap_bytes == GL_FALSE
+		&& pack_swap_bytes == GL_FALSE
+		&& unpack_lsb_first == GL_FALSE
+		&& pack_lsb_first == GL_FALSE
+		&& unpack_row_length == 0
+		&& unpack_skip_rows == 0
+		&& unpack_skip_pixels == 0
+		&& pack_row_length == 0
+		&& pack_skip_rows == 0
+		&& pack_skip_pixels == 0;
+	if (!restored) {
+		std::cout
+			<< "frame=" << frame_index
+			<< " phase=" << phase
+			<< " unpack_alignment=" << unpack_alignment
+			<< " pack_alignment=" << pack_alignment
+			<< " unpack_swap_bytes=" << unpack_swap_bytes
+			<< " pack_swap_bytes=" << pack_swap_bytes
+			<< " unpack_lsb_first=" << unpack_lsb_first
+			<< " pack_lsb_first=" << pack_lsb_first
+			<< " unpack_row_length=" << unpack_row_length
+			<< " unpack_skip_rows=" << unpack_skip_rows
+			<< " unpack_skip_pixels=" << unpack_skip_pixels
+			<< " pack_row_length=" << pack_row_length
+			<< " pack_skip_rows=" << pack_skip_rows
+			<< " pack_skip_pixels=" << pack_skip_pixels
+			<< "\n";
+		return false;
+	}
+	return true;
+}
+
 bool ValidateLegacyClientArraysDuringPlaybackLikeSequence() {
 	constexpr int width = 192;
 	constexpr int height = 96;
@@ -412,7 +486,33 @@ bool ValidateLegacyClientArraysDuringPlaybackLikeSequence() {
 		auto const current_layout = MakePrimitiveLayout(frame_index);
 
 		glViewport(0, 0, width, height);
+#ifdef GL_UNPACK_ROW_LENGTH
+		glPixelStorei(GL_UNPACK_ROW_LENGTH, 17);
+#endif
+#ifdef GL_UNPACK_SKIP_ROWS
+		glPixelStorei(GL_UNPACK_SKIP_ROWS, 1);
+#endif
+#ifdef GL_UNPACK_SKIP_PIXELS
+		glPixelStorei(GL_UNPACK_SKIP_PIXELS, 1);
+#endif
+#ifdef GL_PACK_ROW_LENGTH
+		glPixelStorei(GL_PACK_ROW_LENGTH, 19);
+#endif
+#ifdef GL_PACK_SKIP_ROWS
+		glPixelStorei(GL_PACK_SKIP_ROWS, 1);
+#endif
+#ifdef GL_PACK_SKIP_PIXELS
+		glPixelStorei(GL_PACK_SKIP_PIXELS, 1);
+#endif
+		glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+		glPixelStorei(GL_PACK_ALIGNMENT, 1);
+		glPixelStorei(GL_UNPACK_SWAP_BYTES, GL_TRUE);
+		glPixelStorei(GL_PACK_SWAP_BYTES, GL_TRUE);
+		glPixelStorei(GL_UNPACK_LSB_FIRST, GL_TRUE);
+		glPixelStorei(GL_PACK_LSB_FIRST, GL_TRUE);
 		renderer.UploadFrame(bgra.frame);
+		if (!ValidatePixelStoreState("after_upload", frame_index))
+			return false;
 		renderer.UploadOverlay(nullptr);
 		renderer.Render({ 0, 0, width, height }, width, height);
 
@@ -420,14 +520,51 @@ bool ValidateLegacyClientArraysDuringPlaybackLikeSequence() {
 		GLint array_buffer = -1;
 		GLint element_array_buffer = -1;
 		GLint active_texture = -1;
+		GLint unpack_alignment = -1;
+		GLint pack_alignment = -1;
+		GLint unpack_swap_bytes = -1;
+		GLint pack_swap_bytes = -1;
+		GLint unpack_lsb_first = -1;
+		GLint pack_lsb_first = -1;
 		glGetIntegerv(GL_CURRENT_PROGRAM, &current_program);
 		glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &array_buffer);
 		glGetIntegerv(GL_ELEMENT_ARRAY_BUFFER_BINDING, &element_array_buffer);
 		glGetIntegerv(GL_ACTIVE_TEXTURE, &active_texture);
+		glGetIntegerv(GL_UNPACK_ALIGNMENT, &unpack_alignment);
+		glGetIntegerv(GL_PACK_ALIGNMENT, &pack_alignment);
+		glGetIntegerv(GL_UNPACK_SWAP_BYTES, &unpack_swap_bytes);
+		glGetIntegerv(GL_PACK_SWAP_BYTES, &pack_swap_bytes);
+		glGetIntegerv(GL_UNPACK_LSB_FIRST, &unpack_lsb_first);
+		glGetIntegerv(GL_PACK_LSB_FIRST, &pack_lsb_first);
 
 		GLint vertex_array = 0;
 #ifdef GL_VERTEX_ARRAY_BINDING
 		glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &vertex_array);
+#endif
+
+		GLint unpack_row_length = 0;
+#ifdef GL_UNPACK_ROW_LENGTH
+		glGetIntegerv(GL_UNPACK_ROW_LENGTH, &unpack_row_length);
+#endif
+		GLint unpack_skip_rows = 0;
+#ifdef GL_UNPACK_SKIP_ROWS
+		glGetIntegerv(GL_UNPACK_SKIP_ROWS, &unpack_skip_rows);
+#endif
+		GLint unpack_skip_pixels = 0;
+#ifdef GL_UNPACK_SKIP_PIXELS
+		glGetIntegerv(GL_UNPACK_SKIP_PIXELS, &unpack_skip_pixels);
+#endif
+		GLint pack_row_length = 0;
+#ifdef GL_PACK_ROW_LENGTH
+		glGetIntegerv(GL_PACK_ROW_LENGTH, &pack_row_length);
+#endif
+		GLint pack_skip_rows = 0;
+#ifdef GL_PACK_SKIP_ROWS
+		glGetIntegerv(GL_PACK_SKIP_ROWS, &pack_skip_rows);
+#endif
+		GLint pack_skip_pixels = 0;
+#ifdef GL_PACK_SKIP_PIXELS
+		glGetIntegerv(GL_PACK_SKIP_PIXELS, &pack_skip_pixels);
 #endif
 
 		bool const bindings_restored =
@@ -435,7 +572,19 @@ bool ValidateLegacyClientArraysDuringPlaybackLikeSequence() {
 			&& array_buffer == 0
 			&& element_array_buffer == 0
 			&& active_texture == GL_TEXTURE0
-			&& vertex_array == 0;
+			&& vertex_array == 0
+			&& unpack_alignment == 4
+			&& pack_alignment == 4
+			&& unpack_swap_bytes == GL_FALSE
+			&& pack_swap_bytes == GL_FALSE
+			&& unpack_lsb_first == GL_FALSE
+			&& pack_lsb_first == GL_FALSE
+			&& unpack_row_length == 0
+			&& unpack_skip_rows == 0
+			&& unpack_skip_pixels == 0
+			&& pack_row_length == 0
+			&& pack_skip_rows == 0
+			&& pack_skip_pixels == 0;
 		if (!bindings_restored) {
 			std::cout
 				<< "frame=" << frame_index
@@ -444,6 +593,18 @@ bool ValidateLegacyClientArraysDuringPlaybackLikeSequence() {
 				<< " element_array_buffer=" << element_array_buffer
 				<< " vertex_array=" << vertex_array
 				<< " active_texture=0x" << std::hex << active_texture << std::dec
+				<< " unpack_alignment=" << unpack_alignment
+				<< " pack_alignment=" << pack_alignment
+				<< " unpack_swap_bytes=" << unpack_swap_bytes
+				<< " pack_swap_bytes=" << pack_swap_bytes
+				<< " unpack_lsb_first=" << unpack_lsb_first
+				<< " pack_lsb_first=" << pack_lsb_first
+				<< " unpack_row_length=" << unpack_row_length
+				<< " unpack_skip_rows=" << unpack_skip_rows
+				<< " unpack_skip_pixels=" << unpack_skip_pixels
+				<< " pack_row_length=" << pack_row_length
+				<< " pack_skip_rows=" << pack_skip_rows
+				<< " pack_skip_pixels=" << pack_skip_pixels
 				<< "\n";
 			return false;
 		}

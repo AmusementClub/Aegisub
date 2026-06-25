@@ -17,6 +17,7 @@
 #include <functional>
 #include <boost/regex/icu.hpp>
 #include <string>
+#include <vector>
 
 namespace agi { struct Context; }
 class AssDialogue;
@@ -53,6 +54,9 @@ struct SearchReplaceSettings {
 	bool ignore_comments;
 	bool skip_tags;
 	bool exact_match;
+
+	/// Styles to search within. Empty means search all rows.
+	std::vector<std::string> match_styles;
 };
 
 class SearchReplaceEngine {

@@ -261,6 +261,13 @@ bool SearchReplaceEngine::FindReplace(bool replace) {
 	do {
 		if (selection_only && !sel.count(&*it)) continue;
 		if (settings.ignore_comments && it->Comment) continue;
+		if (!settings.match_styles.empty()) {
+			bool ok = false;
+			for (auto const& s : settings.match_styles) {
+				if (it->Style.get() == s) { ok = true; break; }
+			}
+			if (!ok) continue;
+		}
 
 		if (MatchState ms = matches(&*it, pos)) {
 			if (selection_only)
@@ -299,6 +306,13 @@ bool SearchReplaceEngine::ReplaceAll() {
 	for (auto& diag : core.ass->Events) {
 		if (selection_only && !sel.count(&diag)) continue;
 		if (settings.ignore_comments && diag.Comment) continue;
+		if (!settings.match_styles.empty()) {
+			bool ok = false;
+			for (auto const& s : settings.match_styles) {
+				if (diag.Style.get() == s) { ok = true; break; }
+			}
+			if (!ok) continue;
+		}
 
 		if (settings.use_regex) {
 			if (MatchState ms = matches(&diag, 0)) {

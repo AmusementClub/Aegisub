@@ -22,6 +22,7 @@
 #include "dialog_search_replace.h"
 
 #include "ass_dialogue.h"
+#include "ass_file.h"
 #include "compat.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
@@ -38,15 +39,19 @@
 
 #include <algorithm>
 #include <functional>
+#include <unordered_set>
 
 #include <wx/button.h>
 #include <wx/checkbox.h>
+#include <wx/checklst.h>
 #include <wx/combobox.h>
 #include <wx/radiobox.h>
 #include <wx/sizer.h>
+#include <wx/statbox.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
 #include <wx/valgen.h>
+#include <wx/wupdlock.h>
 
 DialogSearchReplace::DialogSearchReplace(agi::Context* c, bool replace)
 : wxDialog(c->GetUI().parent, -1, replace ? _("Replace") : _("Find"))
@@ -94,9 +99,31 @@ DialogSearchReplace::DialogSearchReplace(agi::Context* c, bool replace)
 
 	wxString field[] = { _("&Text"), _("St&yle"), _("A&ctor"), _("&Effect") };
 	wxString affect[] = { _("A&ll rows"), _("Selected &rows") };
-	auto limit_sizer = new wxBoxSizer(wxHORIZONTAL);
-	limit_sizer->Add(new wxRadioBox(this, -1, _("In Field"), wxDefaultPosition, wxDefaultSize, countof(field), field, 0, wxRA_SPECIFY_COLS, MakeEnumBinder(&settings->field)), wxSizerFlags().Border(wxRIGHT));
-	limit_sizer->Add(new wxRadioBox(this, -1, _("Limit to"), wxDefaultPosition, wxDefaultSize, countof(affect), affect, 0, wxRA_SPECIFY_COLS, MakeEnumBinder(&settings->limit_to)));
+
+	// Bottom filter row: left column (In Field / Limit to stacked), right column (style filter)
+	auto field_radio = new wxRadioBox(this, -1, _("In Field"), wxDefaultPosition, wxDefaultSize, countof(field), field, 0, wxRA_SPECIFY_COLS, MakeEnumBinder(&settings->field));
+	auto limit_radio = new wxRadioBox(this, -1, _("Limit to"), wxDefaultPosition, wxDefaultSize, countof(affect), affect, 0, wxRA_SPECIFY_COLS, MakeEnumBinder(&settings->limit_to));
+
+	auto field_col = new wxBoxSizer(wxVERTICAL);
+	field_col->Add(field_radio, wxSizerFlags().Expand().Border(wxBOTTOM));
+	field_col->Add(limit_radio, wxSizerFlags().Expand());
+
+	auto style_filter_sizer = new wxStaticBoxSizer(wxVERTICAL, this, _("Filter by style"));
+	style_filter_box = new wxCheckListBox(this, -1, wxDefaultPosition, FromDIP(wxSize(150, 60)),
+	                                     to_wx(c->GetCore().ass->GetStyles()));
+	style_filter_box->SetToolTip(_("Only search within events that use the checked styles. Leave all unchecked to search every row."));
+	style_filter_sizer->Add(style_filter_box, wxSizerFlags(1).Expand().Border(wxBOTTOM));
+
+	auto style_btn_sizer = new wxBoxSizer(wxHORIZONTAL);
+	auto style_all_btn = new wxButton(this, -1, _("&All"));
+	auto style_none_btn = new wxButton(this, -1, _("&None"));
+	style_btn_sizer->Add(style_all_btn, wxSizerFlags().Border(wxRIGHT));
+	style_btn_sizer->Add(style_none_btn);
+	style_filter_sizer->Add(style_btn_sizer, wxSizerFlags().Center());
+
+	auto filter_sizer = new wxBoxSizer(wxHORIZONTAL);
+	filter_sizer->Add(field_col, wxSizerFlags().Border(wxRIGHT));
+	filter_sizer->Add(style_filter_sizer, wxSizerFlags(1).Expand());
 
 	auto find_next = new wxButton(this, -1, _("&Find next"));
 	auto replace_next = new wxButton(this, -1, _("Replace &next"));
@@ -120,7 +147,7 @@ DialogSearchReplace::DialogSearchReplace(agi::Context* c, bool replace)
 
 	auto main_sizer = new wxBoxSizer(wxVERTICAL);
 	main_sizer->Add(top_sizer);
-	main_sizer->Add(limit_sizer, wxSizerFlags().Border());
+	main_sizer->Add(filter_sizer, wxSizerFlags().Border());
 	SetSizerAndFit(main_sizer);
 	CenterOnParent();
 
@@ -134,6 +161,17 @@ DialogSearchReplace::DialogSearchReplace(agi::Context* c, bool replace)
 	find_next->Bind(wxEVT_BUTTON, std::bind(&DialogSearchReplace::FindReplace, this, &SearchReplaceEngine::FindNext));
 	replace_next->Bind(wxEVT_BUTTON, std::bind(&DialogSearchReplace::FindReplace, this, &SearchReplaceEngine::ReplaceNext));
 	replace_all->Bind(wxEVT_BUTTON, std::bind(&DialogSearchReplace::FindReplace, this, &SearchReplaceEngine::ReplaceAll));
+
+	style_all_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+		for (unsigned int i = 0; i < style_filter_box->GetCount(); ++i)
+			style_filter_box->Check(i, true);
+	});
+	style_none_btn->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
+		for (unsigned int i = 0; i < style_filter_box->GetCount(); ++i)
+			style_filter_box->Check(i, false);
+	});
+
+	file_changed_slot = c->GetCore().ass->AddCommitListener(&DialogSearchReplace::OnCommit, this);
 }
 
 DialogSearchReplace::~DialogSearchReplace() {
@@ -144,6 +182,11 @@ void DialogSearchReplace::FindReplace(bool (SearchReplaceEngine::*func)()) {
 
 	if (settings->find.empty())
 		return;
+
+	settings->match_styles.clear();
+	for (unsigned int i = 0; i < style_filter_box->GetCount(); ++i)
+		if (style_filter_box->IsChecked(i))
+			settings->match_styles.push_back(from_wx(style_filter_box->GetString(i)));
 
 	auto core = c->GetCore();
 	core.search->Configure(*settings);
@@ -212,6 +255,27 @@ void DialogSearchReplace::UpdateDropDowns() {
 
 	if (has_replace)
 		update_mru(replace_edit, "Replace");
+}
+
+void DialogSearchReplace::PopulateStyleFilter() {
+	wxWindowUpdateLocker freeze(style_filter_box);
+
+	std::unordered_set<std::string> checked;
+	for (unsigned int i = 0; i < style_filter_box->GetCount(); ++i)
+		if (style_filter_box->IsChecked(i))
+			checked.insert(from_wx(style_filter_box->GetString(i)));
+
+	style_filter_box->Clear();
+	style_filter_box->Append(to_wx(c->GetCore().ass->GetStyles()));
+
+	for (unsigned int i = 0; i < style_filter_box->GetCount(); ++i)
+		if (checked.count(from_wx(style_filter_box->GetString(i))))
+			style_filter_box->Check(i, true);
+}
+
+void DialogSearchReplace::OnCommit(int type, AssDialogue const* /*changed*/) {
+	if (type == AssFile::COMMIT_NEW || type & AssFile::COMMIT_STYLES)
+		PopulateStyleFilter();
 }
 
 void DialogSearchReplace::Show(agi::Context *context, bool replace) {

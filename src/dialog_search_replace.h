@@ -21,12 +21,15 @@
 
 #include <memory>
 
+#include <libaegisub/signal.h>
 #include <wx/dialog.h>
 
 namespace agi { struct Context; }
+class AssDialogue;
 class SearchReplaceEngine;
 struct SearchReplaceSettings;
 class wxComboBox;
+class wxCheckListBox;
 
 class DialogSearchReplace final : public wxDialog {
 	agi::Context *c;
@@ -34,8 +37,12 @@ class DialogSearchReplace final : public wxDialog {
 	bool has_replace;
 	wxComboBox *find_edit;
 	wxComboBox *replace_edit;
+	wxCheckListBox *style_filter_box;
+	agi::signal::Connection file_changed_slot;
 
 	void UpdateDropDowns();
+	void PopulateStyleFilter();
+	void OnCommit(int type, AssDialogue const* changed);
 	void FindReplace(bool (SearchReplaceEngine::*func)());
 
 public:

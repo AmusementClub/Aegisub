@@ -961,6 +961,7 @@ add_executable(Aegisub WIN32
     src/wx_translation_service.cpp
     src/context.cpp
     src/search_replace_engine.cpp
+    src/subtitle_matcher.cpp
     src/subs_controller.cpp
     src/command/app.cpp
     src/command/audio.cpp

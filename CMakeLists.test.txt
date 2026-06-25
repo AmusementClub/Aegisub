@@ -81,6 +81,7 @@ if(GTEST_FOUND)
         src/text_file_writer.cpp
         src/text_file_reader.cpp
         src/string_codec.cpp
+        src/subtitle_matcher.cpp
         src/time_display_mode.cpp
         src/threaded_ui_timer.cpp
         src/ui_timer.cpp
@@ -174,6 +175,7 @@ if(GTEST_FOUND)
         tests/tests/subtitle_grid_ops.cpp
         tests/tests/subtitle_grid_selection_policy.cpp
         tests/tests/subtitle_timing_ops.cpp
+        tests/tests/subtitle_matcher.cpp
         tests/tests/syntax_highlight.cpp
         tests/tests/thesaurus.cpp
         tests/tests/time.cpp
@@ -243,7 +245,7 @@ if(GTEST_FOUND)
             "${FFMS2_INCLUDE_DIR}"
         )
     endif()
-    target_link_libraries(gtest-run PRIVATE aegisub_features libaegisub luajit "GTest::GTest" "Iconv::Iconv" pugixml::pugixml "ZLIB::ZLIB" ${wxWidgets_LIBRARIES})
+    target_link_libraries(gtest-run PRIVATE aegisub_features libaegisub luajit "GTest::GTest" "Iconv::Iconv" pugixml::pugixml "ZLIB::ZLIB" "Boost::locale" ${wxWidgets_LIBRARIES})
     aegisub_enable_highway(gtest-run)
     if(WIN32)
         target_link_libraries(gtest-run PRIVATE Psapi)

@@ -27,9 +27,6 @@
 
 #include <libaegisub/exception.h>
 #include <libaegisub/string_utils.h>
-#include <libaegisub/util.h>
-
-#include <boost/locale/conversion.hpp>
 
 namespace {
 static const size_t bad_pos = -1;
@@ -45,137 +42,6 @@ auto get_dialogue_field(SearchReplaceSettings::Field field) -> decltype(&AssDial
 	throw agi::InternalError("Bad field for search");
 }
 
-std::string const& get_field_text(const AssDialogue *diag, decltype(&AssDialogueBase::Text) field) {
-	return (diag->*field).get();
-}
-
-typedef std::function<MatchState (const AssDialogue*, size_t)> matcher;
-
-class noop_accessor {
-	boost::flyweight<std::string> AssDialogueBase::*field;
-	size_t start = 0;
-	std::string normalized;
-
-public:
-	noop_accessor(SearchReplaceSettings::Field f) : field(get_dialogue_field(f)) { }
-
-	agi::util::strings::view get_view(const AssDialogue *d, size_t s) {
-		start = s;
-		normalized = boost::locale::normalize(get_field_text(d, field));
-		return agi::util::strings::subview(normalized, s);
-	}
-
-	std::string get_string(const AssDialogue *d, size_t s) {
-		return std::string(get_view(d, s));
-	}
-
-	MatchState make_match_state(size_t s, size_t e, boost::u32regex *r = nullptr) {
-		return {r, s + start, e + start};
-	}
-};
-
-class skip_tags_accessor {
-	boost::flyweight<std::string> AssDialogueBase::*field;
-	agi::util::tagless_find_helper helper;
-	std::string normalized;
-	std::string stripped;
-
-public:
-	skip_tags_accessor(SearchReplaceSettings::Field f) : field(get_dialogue_field(f)) { }
-
-	agi::util::strings::view get_view(const AssDialogue *d, size_t s) {
-		normalized = boost::locale::normalize(get_field_text(d, field));
-		stripped = helper.strip_tags(normalized, s);
-		return stripped;
-	}
-
-	std::string get_string(const AssDialogue *d, size_t s) {
-		return std::string(get_view(d, s));
-	}
-
-	MatchState make_match_state(size_t s, size_t e, boost::u32regex *r = nullptr) {
-		helper.map_range(s, e);
-		return {r, s, e};
-	}
-};
-
-std::string prepare_search_text(SearchReplaceSettings const& settings) {
-	if (!settings.use_unicode_escapes)
-		return settings.find;
-
-	std::string expanded;
-	if (!agi::util::strings::expand_unicode_codepoint_escapes(settings.find, expanded))
-		throw agi::InvalidInputException("Invalid Unicode escape. Use \\uXXXX, \\UXXXXXXXX, u+XXXX, or U+XXXX.");
-	return expanded;
-}
-
-template<typename Accessor>
-matcher get_matcher(SearchReplaceSettings const& settings, Accessor&& a) {
-	std::string prepared_find = boost::locale::normalize(prepare_search_text(settings));
-
-	if (settings.use_regex) {
-		int flags = boost::u32regex::perl;
-		if (!settings.match_case)
-			flags |= boost::u32regex::icase;
-
-		auto regex = boost::make_u32regex(prepared_find, flags);
-
-		return [=](const AssDialogue *diag, size_t start) mutable -> MatchState {
-			boost::smatch result;
-			auto str = a.get_string(diag, start);
-			if (!u32regex_search(str, result, regex, start > 0 ? boost::match_not_bol : boost::match_default))
-				return bad_match;
-			return a.make_match_state(result.position(), result.position() + result.length(), &regex);
-		};
-	}
-
-	bool full_match_only = settings.exact_match;
-	bool match_case = settings.match_case;
-	std::string look_for = std::move(prepared_find);
-	agi::util::strings::view look_for_view(look_for);
-#ifdef AEGISUB_USE_STRINGZILLA
-	agi::util::strings::utf8_icase_searcher icase_searcher(look_for_view);
-#endif
-
-	return [=](const AssDialogue *diag, size_t start) mutable -> MatchState {
-		const auto str = a.get_view(diag, start);
-
-		if (full_match_only) {
-			if (match_case) {
-				return str == look_for_view
-					? a.make_match_state(0, str.size())
-					: bad_match;
-			}
-#ifdef AEGISUB_USE_STRINGZILLA
-			const auto match = agi::util::strings::utf8_find_icase(str, icase_searcher);
-			return match && match.offset == 0 && match.length == str.size()
-				? a.make_match_state(0, str.size())
-				: bad_match;
-#else
-			const auto pos = agi::util::ifind(std::string(str), look_for);
-			return pos.first == 0 && pos.second == str.size()
-				? a.make_match_state(pos.first, pos.second)
-				: bad_match;
-#endif
-		}
-
-		if (match_case) {
-			const auto pos = agi::util::strings::find(str, look_for_view);
-			return pos == agi::util::strings::npos ? bad_match : a.make_match_state(pos, pos + look_for_view.size());
-		}
-
-#ifdef AEGISUB_USE_STRINGZILLA
-		const auto match = agi::util::strings::utf8_find_icase(str, icase_searcher);
-		return match
-			? a.make_match_state(match.offset, match.offset + match.length)
-			: bad_match;
-#else
-		const auto pos = agi::util::ifind(std::string(str), look_for);
-		return pos.first == bad_pos ? bad_match : a.make_match_state(pos.first, pos.second);
-#endif
-	};
-}
-
 template<typename Iterator, typename Container>
 Iterator circular_next(Iterator it, Container& c) {
 	++it;
@@ -184,12 +50,6 @@ Iterator circular_next(Iterator it, Container& c) {
 	return it;
 }
 
-}
-
-std::function<MatchState (const AssDialogue*, size_t)> SearchReplaceEngine::GetMatcher(SearchReplaceSettings const& settings) {
-	if (settings.skip_tags)
-		return get_matcher(settings, skip_tags_accessor(settings.field));
-	return get_matcher(settings, noop_accessor(settings.field));
 }
 
 SearchReplaceEngine::SearchReplaceEngine(agi::Context *c)

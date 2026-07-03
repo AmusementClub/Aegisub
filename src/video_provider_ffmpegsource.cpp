@@ -40,6 +40,10 @@
 #include "include/aegisub/video_provider.h"
 
 #include "options.h"
+#include "simd/bgra_transform.h"
+#ifdef AEGISUB_WITH_HIGHWAY
+#include "simd/bgra_transform_simd.h"
+#endif
 #include "video_frame.h"
 
 #include <algorithm>
@@ -513,47 +517,36 @@ void FFmpegSourceVideoProvider::GetFrame(int n, VideoFrame &out) {
 	out.width = Width;
 	out.height = Height;
 	out.pitch = frame->Linesize[0];
-	// Handle flip
-	if (Flip > 0)
-		for (int x = 0; x < Height; ++x)
-			for (int y = 0; y < Width / 2; ++y)
-				for (int ch = 0; ch < 4; ++ch)
-					std::swap(out.data[frame->Linesize[0] * x + 4 * y + ch], out.data[frame->Linesize[0] * x + 4 * (Width - 1 - y) + ch]);
-
+	// Handle flip / rotation via the extracted pure functions in simd/bgra_transform.h
+	// (kept byte-for-byte equivalent to the former inline loops). FFMS2's linesize may
+	// include row padding, so pass it through as the source stride.
+	const ptrdiff_t src_stride = frame->Linesize[0];
+	if (Flip > 0) {
+#ifdef AEGISUB_WITH_HIGHWAY
+		// SIMD path is ~2.3-2.9x faster than the scalar reference at HD/4K
+		// (see bgra-transform-bench) and is byte-identical to it
+		// (see BgraTransformSimdConsistency.*). Fall back to scalar only when
+		// Highway is disabled for the target.
+		aegisub::bgra::FlipHorizontalSimd(out.data, Width, Height, src_stride);
+#else
+		aegisub::bgra::FlipHorizontal(out.data, Width, Height, src_stride);
+#endif
+	}
 	else if (Flip < 0)
-		for (int x = 0; x < Height / 2; ++x)
-			for (int y = 0; y < Width; ++y)
-				for (int ch = 0; ch < 4; ++ch)
-					std::swap(out.data[frame->Linesize[0] * x + 4 * y + ch], out.data[frame->Linesize[0] * (Height - 1 - x) + 4 * y + ch]);
+		aegisub::bgra::FlipVertical(out.data, Width, Height, src_stride);
 
-	// Handle rotation
 	if (IsHalfTurn(Rotation)) {
-		std::vector<unsigned char> data(std::move(out.data));
-		out.data.resize(Width * Height * 4);
-		for (int x = 0; x < Height; ++x)
-			for (int y = 0; y < Width; ++y)
-				for (int ch = 0; ch < 4; ++ch)
-					out.data[4 * (Width * x + y) + ch] = data[frame->Linesize[0] * (Height - 1 - x) + 4 * (Width - 1 - y) + ch];
+		out.data = aegisub::bgra::RotateHalfTurn(std::move(out.data), Width, Height, src_stride);
 		out.pitch = 4 * Width;
 	}
 	else if (IsClockwiseQuarterTurn(Rotation)) {
-		std::vector<unsigned char> data(std::move(out.data));
-		out.data.resize(Width * Height * 4);
-		for (int x = 0; x < Width; ++x)
-			for (int y = 0; y < Height; ++y)
-				for (int ch = 0; ch < 4; ++ch)
-					out.data[4 * (Height * x + y) + ch] = data[frame->Linesize[0] * y + 4 * (Width - 1 - x) + ch];
+		out.data = aegisub::bgra::RotateQuarterClockwise(std::move(out.data), Width, Height, src_stride);
 		out.width = Height;
 		out.height = Width;
 		out.pitch = 4 * Height;
 	}
 	else if (IsCounterClockwiseQuarterTurn(Rotation)) {
-		std::vector<unsigned char> data(std::move(out.data));
-		out.data.resize(Width * Height * 4);
-		for (int x = 0; x < Width; ++x)
-			for (int y = 0; y < Height; ++y)
-				for (int ch = 0; ch < 4; ++ch)
-					out.data[4 * (Height * x + y) + ch] = data[frame->Linesize[0] * (Height - 1 - y) + 4 * x + ch];
+		out.data = aegisub::bgra::RotateQuarterCounterClockwise(std::move(out.data), Width, Height, src_stride);
 		out.width = Height;
 		out.height = Width;
 		out.pitch = 4 * Height;

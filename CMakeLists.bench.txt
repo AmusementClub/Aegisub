@@ -205,6 +205,16 @@ target_include_directories(csri-overlay-bench PRIVATE
 target_link_libraries(csri-overlay-bench PRIVATE "Boost::headers")
 aegisub_enable_highway(csri-overlay-bench)
 
+add_executable(bgra-transform-bench EXCLUDE_FROM_ALL
+    tests/smoke/bgra_transform_bench.cpp
+)
+target_compile_features(bgra-transform-bench PRIVATE cxx_std_20)
+target_include_directories(bgra-transform-bench PRIVATE
+    "${PROJECT_SOURCE_DIR}/src"
+    "${PROJECT_SOURCE_DIR}/libaegisub/include"
+)
+aegisub_enable_highway(bgra-transform-bench)
+
 find_package(benchmark CONFIG QUIET)
 if(benchmark_FOUND)
     add_executable(audio-micro-bench EXCLUDE_FROM_ALL

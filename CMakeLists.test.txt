@@ -29,6 +29,7 @@ if(GTEST_FOUND)
         tests/tests/audio.cpp
         tests/tests/avisynth_legacy_path.cpp
         tests/tests/avisynth_runtime_policy.cpp
+        tests/tests/bgra_transform_test.cpp
         tests/tests/automation_debug_adapter.cpp
         tests/tests/automation_edit_box_request_policy.cpp
         tests/tests/audio_display.cpp

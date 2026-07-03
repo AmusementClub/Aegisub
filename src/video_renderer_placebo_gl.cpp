@@ -153,6 +153,17 @@ void FillDolbyVisionMetadata(pl_dovi_metadata& dst, SourceFrameDolbyVisionMetada
 		CopyDolbyVisionComponent(dst.comp[c], src.comp[static_cast<size_t>(c)]);
 }
 
+void ThrowGlRenderError(char const* operation, GLenum err) {
+	if (agi::log::log)
+		LOG_E(kPlaceboLogTag) << operation << " failed with error code " << err;
+	throw VideoOutRenderException(operation, err);
+}
+
+void CheckGlRenderError(char const* operation) {
+	if (GLenum err = glGetError())
+		ThrowGlRenderError(operation, err);
+}
+
 void ApplyDolbyVisionMetadata(
 	placebo::runtime::Api const& api,
 	struct pl_frame& image,
@@ -183,6 +194,10 @@ struct PlaceboRendererGL::Functions {
 	PFNGLUSEPROGRAMPROC UseProgram = nullptr;
 	PFNGLBINDFRAMEBUFFERPROC BindFramebuffer = nullptr;
 	PFNGLBINDVERTEXARRAYPROC BindVertexArray = nullptr;
+	PFNGLDELETEFRAMEBUFFERSPROC DeleteFramebuffers = nullptr;
+	PFNGLGENFRAMEBUFFERSPROC GenFramebuffers = nullptr;
+	PFNGLFRAMEBUFFERTEXTURE2DPROC FramebufferTexture2D = nullptr;
+	PFNGLCHECKFRAMEBUFFERSTATUSPROC CheckFramebufferStatus = nullptr;
 };
 
 PlaceboRendererGL::PlaceboRendererGL() {
@@ -228,6 +243,10 @@ void PlaceboRendererGL::EnsureInitialized() {
 		functions->UseProgram = LoadOptionalProc<PFNGLUSEPROGRAMPROC>("glUseProgram");
 		functions->BindFramebuffer = LoadOptionalProc<PFNGLBINDFRAMEBUFFERPROC>("glBindFramebuffer", "glBindFramebufferEXT");
 		functions->BindVertexArray = LoadOptionalProc<PFNGLBINDVERTEXARRAYPROC>("glBindVertexArray");
+		functions->DeleteFramebuffers = LoadOptionalProc<PFNGLDELETEFRAMEBUFFERSPROC>("glDeleteFramebuffers", "glDeleteFramebuffersEXT");
+		functions->GenFramebuffers = LoadOptionalProc<PFNGLGENFRAMEBUFFERSPROC>("glGenFramebuffers", "glGenFramebuffersEXT");
+		functions->FramebufferTexture2D = LoadOptionalProc<PFNGLFRAMEBUFFERTEXTURE2DPROC>("glFramebufferTexture2D", "glFramebufferTexture2DEXT");
+		functions->CheckFramebufferStatus = LoadOptionalProc<PFNGLCHECKFRAMEBUFFERSTATUSPROC>("glCheckFramebufferStatus", "glCheckFramebufferStatusEXT");
 
 		LogInfo("Activated libplacebo video renderer using "
 			+ placebo::runtime::GetLoadedLibrary()
@@ -284,6 +303,16 @@ void PlaceboRendererGL::DestroyTargetResources() noexcept {
 	if (api && opengl && target_texture)
 		api->tex_destroy(opengl->gpu, &target_texture);
 	target_texture = nullptr;
+	if (functions && functions->DeleteFramebuffers && target_render_framebuffer) {
+		auto framebuffer = static_cast<GLuint>(target_render_framebuffer);
+		functions->DeleteFramebuffers(1, &framebuffer);
+	}
+	target_render_framebuffer = 0;
+	if (target_gl_texture) {
+		auto texture = static_cast<GLuint>(target_gl_texture);
+		glDeleteTextures(1, &texture);
+	}
+	target_gl_texture = 0;
 	target_width = 0;
 	target_height = 0;
 	target_framebuffer = 0;
@@ -320,24 +349,94 @@ void PlaceboRendererGL::RecreateTargetTexture(int canvas_width, int canvas_heigh
 	auto const framebuffer_id = static_cast<unsigned int>(framebuffer);
 	if (target_texture
 		&& target_width == canvas_width
-		&& target_height == canvas_height
-		&& target_framebuffer == framebuffer_id)
+		&& target_height == canvas_height) {
+		target_framebuffer = framebuffer_id;
 		return;
+	}
 
 	DestroyTargetResources();
+	target_framebuffer = framebuffer_id;
+
+	// Render libplacebo into our own RGBA texture, then present it using the
+	// same fixed-function textured quad path as the legacy OpenGL renderer.
+	if (!functions
+		|| !functions->BindFramebuffer
+		|| !functions->DeleteFramebuffers
+		|| !functions->GenFramebuffers
+		|| !functions->FramebufferTexture2D
+		|| !functions->CheckFramebufferStatus)
+		throw VideoOutInitException("OpenGL framebuffer objects are required for libplacebo offscreen rendering.");
+
+	GLuint texture = 0;
+	GLuint framebuffer_object = 0;
+	auto cleanup = agi::make_scope_exit([&] {
+		if (framebuffer_object)
+			functions->DeleteFramebuffers(1, &framebuffer_object);
+		if (texture)
+			glDeleteTextures(1, &texture);
+	});
+
+	GLint previous_framebuffer = 0;
+	GLint previous_draw_buffer = GL_BACK;
+	glGetIntegerv(GL_FRAMEBUFFER_BINDING, &previous_framebuffer);
+	glGetIntegerv(GL_DRAW_BUFFER, &previous_draw_buffer);
+	auto restore_framebuffer = agi::make_scope_exit([&] {
+		functions->BindFramebuffer(GL_FRAMEBUFFER, static_cast<GLuint>(previous_framebuffer));
+		glDrawBuffer(static_cast<GLenum>(previous_draw_buffer));
+	});
+
+	glGenTextures(1, &texture);
+	CheckGlRenderError("glGenTextures");
+	glBindTexture(GL_TEXTURE_2D, texture);
+	CheckGlRenderError("glBindTexture");
+	auto restore_texture = agi::make_scope_exit([] { glBindTexture(GL_TEXTURE_2D, 0); });
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	CheckGlRenderError("glTexParameteri(GL_TEXTURE_MIN_FILTER)");
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+	CheckGlRenderError("glTexParameteri(GL_TEXTURE_MAG_FILTER)");
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	CheckGlRenderError("glTexParameteri(GL_TEXTURE_WRAP_S)");
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	CheckGlRenderError("glTexParameteri(GL_TEXTURE_WRAP_T)");
+	glTexImage2D(
+		GL_TEXTURE_2D,
+		0,
+		GL_RGBA8,
+		canvas_width,
+		canvas_height,
+		0,
+		GL_RGBA,
+		GL_UNSIGNED_BYTE,
+		nullptr);
+	CheckGlRenderError("glTexImage2D");
+
+	functions->GenFramebuffers(1, &framebuffer_object);
+	CheckGlRenderError("glGenFramebuffers");
+	functions->BindFramebuffer(GL_FRAMEBUFFER, framebuffer_object);
+	CheckGlRenderError("glBindFramebuffer");
+	functions->FramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+	CheckGlRenderError("glFramebufferTexture2D");
+	if (functions->CheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+		throw VideoOutInitException("Failed to create libplacebo offscreen render framebuffer.");
 
 	struct pl_opengl_wrap_params params = {};
-	params.framebuffer = framebuffer_id;
+	params.texture = texture;
+	params.framebuffer = framebuffer_object;
 	params.width = canvas_width;
 	params.height = canvas_height;
+	params.target = GL_TEXTURE_2D;
+	params.iformat = GL_RGBA8;
 	target_texture = api->opengl_wrap(opengl->gpu, &params);
 	if (!target_texture)
-		throw VideoOutInitException("Failed to wrap the current OpenGL framebuffer for libplacebo rendering.");
+		throw VideoOutInitException("Failed to wrap the offscreen OpenGL texture for libplacebo rendering.");
 
+	target_gl_texture = texture;
+	target_render_framebuffer = framebuffer_object;
 	target_width = canvas_width;
 	target_height = canvas_height;
-	target_framebuffer = framebuffer_id;
 	target_texture_estimated_bytes = static_cast<size_t>(canvas_width) * static_cast<size_t>(canvas_height) * 4;
+	texture = 0;
+	framebuffer_object = 0;
 }
 
 void PlaceboRendererGL::UploadFrame(SourceFrame const& frame) {
@@ -483,17 +582,6 @@ size_t PlaceboRendererGL::EstimateTextureBytes() const noexcept {
 void PlaceboRendererGL::UploadOverlay(SubtitleOverlay const*) {
 }
 
-void PlaceboRendererGL::RestoreCompatibilityState() noexcept {
-	if (functions && functions->BindFramebuffer)
-		functions->BindFramebuffer(GL_FRAMEBUFFER, target_framebuffer);
-
-	// Visual tools still use fixed-function client-side arrays and matrix state.
-	// libplacebo may leave modern GL state bound, and on some Win10 drivers the
-	// partial cleanup was not enough when mouse-drag redraws interleaved with
-	// playback presentation.
-	legacy_gl::ResetCompatibilityState();
-}
-
 void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width, int canvas_height) {
 	if (!has_frame || viewport.width <= 0 || viewport.height <= 0)
 		return;
@@ -501,6 +589,22 @@ void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width,
 	EnsureInitialized();
 	RecreateTargetTexture(canvas_width, canvas_height);
 
+	GLint output_draw_buffer = GL_BACK;
+	glGetIntegerv(GL_DRAW_BUFFER, &output_draw_buffer);
+	auto restore_output_framebuffer = agi::make_scope_exit([&] {
+		if (functions && functions->BindFramebuffer) {
+			functions->BindFramebuffer(GL_FRAMEBUFFER, target_framebuffer);
+			glDrawBuffer(static_cast<GLenum>(output_draw_buffer));
+		}
+		legacy_gl::ResetCompatibilityState();
+	});
+
+	if (functions && functions->BindFramebuffer) {
+		functions->BindFramebuffer(GL_FRAMEBUFFER, target_render_framebuffer);
+		CheckGlRenderError("glBindFramebuffer");
+		glDrawBuffer(GL_COLOR_ATTACHMENT0);
+		CheckGlRenderError("glDrawBuffer");
+	}
 	glDisable(GL_SCISSOR_TEST);
 	glDisable(GL_STENCIL_TEST);
 	glDisable(GL_CULL_FACE);
@@ -577,10 +681,27 @@ void PlaceboRendererGL::Render(RenderViewport const& viewport, int canvas_width,
 		target.color = BuildPlaceboSDRRenderTargetColorSpace();
 	}
 
-	if (!api->render_image(renderer, &image, &target, &params)) {
-		RestoreCompatibilityState();
+	if (!api->render_image(renderer, &image, &target, &params))
 		throw VideoOutRenderException("libplacebo failed to render the video frame.");
-	}
 
-	RestoreCompatibilityState();
+	if (functions && functions->BindFramebuffer) {
+		functions->BindFramebuffer(GL_FRAMEBUFFER, target_framebuffer);
+		CheckGlRenderError("glBindFramebuffer");
+		glDrawBuffer(static_cast<GLenum>(output_draw_buffer));
+		CheckGlRenderError("glDrawBuffer");
+	}
+	legacy_gl::ResetCompatibilityState();
+
+	glDisable(GL_SCISSOR_TEST);
+	glDisable(GL_STENCIL_TEST);
+	glDisable(GL_CULL_FACE);
+	glDisable(GL_BLEND);
+	glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+	glViewport(0, 0, canvas_width, canvas_height);
+	glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+	glClearStencil(0);
+	glClear(GL_COLOR_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+	legacy_gl::DrawTexturedQuad(target_gl_texture, canvas_width, canvas_height);
+	if (GLenum err = glGetError())
+		ThrowGlRenderError("legacy_gl::DrawTexturedQuad", err);
 }

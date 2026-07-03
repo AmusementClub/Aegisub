@@ -51,6 +51,8 @@ class PlaceboRendererGL final : public IVideoRenderer {
 	std::array<pl_tex_t const*, 4> image_avframe_textures = { };
 	std::unique_ptr<pl_frame> mapped_avframe;
 	pl_tex_t const* target_texture = nullptr;
+	unsigned int target_gl_texture = 0;
+	unsigned int target_render_framebuffer = 0;
 	int image_width = 0;
 	int image_height = 0;
 	int image_plane_count = 0;
@@ -76,7 +78,6 @@ class PlaceboRendererGL final : public IVideoRenderer {
 	void DestroyAVFrameTextures() noexcept;
 	void DestroyTargetResources() noexcept;
 	void RecreateTargetTexture(int canvas_width, int canvas_height);
-	void RestoreCompatibilityState() noexcept;
 
 public:
 	PlaceboRendererGL();

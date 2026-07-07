@@ -24,6 +24,9 @@ struct TrackLabel {
 
 std::string FormatTrackLabel(TrackLabel const& label);
 agi::SingleChoiceInteractionRequest BuildRequest(DialogKind kind, std::vector<std::string> const& choices);
+// When loading an embedded track into the secondary subtitle strip, pass
+// secondary = true so the dialog title/message identify it as such.
+agi::SingleChoiceInteractionRequest BuildRequest(DialogKind kind, std::vector<std::string> const& choices, bool secondary);
 std::optional<int> ResolveSelection(size_t choice_count, std::optional<int> selection);
 
 }

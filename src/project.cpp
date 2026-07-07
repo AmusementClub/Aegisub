@@ -710,8 +710,11 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 
 	timecodes_file.clear();
 	keyframes_file.clear();
-	// Video-open listeners read Project::VideoName(), so publish the new path first.
+	// Video-open listeners read Project::VideoName() and
+	// CanLoadSubtitlesFromVideo(), so publish the new path and the
+	// embedded-subtitles flag before notifying them.
 	SetPath(video_file, "?video", "Video", path);
+	video_has_subtitles = opened_video.has_subtitles;
 
 	AnnounceVideoProviderModified(video_provider.get());
 
@@ -742,7 +745,6 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 	if (!warning.empty())
 		ShowWarning(warning, "Warning");
 
-	video_has_subtitles = opened_video.has_subtitles;
 	if (summary)
 		*summary = opened_video;
 
@@ -777,11 +779,12 @@ void Project::LoadVideo(agi::fs::path path) {
 
 void Project::CloseVideo() {
 	auto core = context->GetCore();
+	// Clear state before notifying so listeners see the closed video.
+	video_has_subtitles = false;
 	AnnounceVideoProviderModified(nullptr);
 	video_provider.reset();
 	can_generate_scene_change_keyframes = false;
 	SetPath(video_file, "?video", "", "");
-	video_has_subtitles = false;
 	core.ass->Properties.ar_mode = 0;
 	core.ass->Properties.ar_value = 0.0;
 	core.ass->Properties.video_position = 0;

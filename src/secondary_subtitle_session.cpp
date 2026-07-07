@@ -15,6 +15,7 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "include/aegisub/subtitles_provider.h"
+#include "mkv_wrap.h"
 #include "options.h"
 #include "project.h"
 #include "subs_controller.h"
@@ -38,6 +39,7 @@
 #include <wx/bitmap.h>
 #include <wx/intl.h>
 #include <wx/log.h>
+#include <wx/msgdlg.h>
 
 namespace {
 constexpr char const *kSecondarySubtitleWarningTitle = "Secondary subtitles";
@@ -192,6 +194,12 @@ AssFile *SecondarySubtitleSession::ResolveSubtitlesForProvider(AsyncVideoProvide
 	auto core = context->GetCore();
 	if (source_mode == SecondarySubtitleSourceMode::CurrentScript)
 		return core.ass.get();
+	if (source_mode == SecondarySubtitleSourceMode::VideoEmbedded) {
+		// Already loaded into memory by LoadVideoEmbeddedSubtitles; never
+		// re-reads from disk and does not consult external_subtitle_path.
+		UpdateExternalSubtitleResolution(main_provider);
+		return external_subtitles.get();
+	}
 	if (external_subtitles_use_plugin_provider)
 		return nullptr;
 
@@ -308,6 +316,81 @@ void SecondarySubtitleSession::UpdateExternalSubtitleResolution(AsyncVideoProvid
 	external_subtitles->SetResolution(ScriptResolutionType::None, main_provider->GetWidth(), main_provider->GetHeight());
 }
 
+bool SecondarySubtitleSession::LoadVideoEmbeddedSubtitles(bool show_errors) {
+	auto core = context->GetCore();
+	auto const& video_path = core.project->VideoName();
+	if (video_path.empty())
+		return false;
+
+	// Only Matroska containers expose embedded subtitle tracks in this codebase.
+	bool const is_matroska = agi::fs::HasExtension(video_path, "mkv")
+		|| agi::fs::HasExtension(video_path, "mka")
+		|| agi::fs::HasExtension(video_path, "mks");
+	if (!is_matroska)
+		return false;
+
+	try {
+		AssFile temp;
+		MatroskaWrapper::GetSubtitles(
+			video_path,
+			&temp,
+			context->GetSingleChoiceInteractionSink(),
+			core.backgroundRunnerFactory,
+			/*secondary_track_choice=*/true);
+
+		auto const follow_video_resolution = temp.GetResolutionType(ScriptResolutionType::PlayRes) == ScriptResolutionType::None;
+		if (follow_video_resolution) {
+			if (auto *main_provider = core.project->VideoProvider())
+				temp.SetResolution(ScriptResolutionType::None, main_provider->GetWidth(), main_provider->GetHeight());
+		}
+
+		external_subtitles = agi::make_unique<AssFile>();
+		external_subtitles->swap(temp);
+		loaded_external_subtitle_path.clear();
+		external_subtitles_follow_video_resolution = follow_video_resolution;
+		external_subtitles_use_plugin_provider = false;
+		external_subtitle_path.clear();
+		return true;
+	}
+	catch (agi::UserCancelException const&) {
+		return false;
+	}
+	catch (agi::Exception const& err) {
+		if (show_errors)
+			context->ShowError(err.GetMessage(), kSecondarySubtitleWarningTitle);
+	}
+	catch (std::exception const& err) {
+		if (show_errors)
+			context->ShowError(err.what(), kSecondarySubtitleWarningTitle);
+	}
+	catch (...) {
+		if (show_errors)
+			context->ShowError("Unknown error while loading embedded subtitles.", kSecondarySubtitleWarningTitle);
+	}
+	return false;
+}
+
+void SecondarySubtitleSession::OnVideoHasSubtitlesAvailable() {
+	if (!active || video_embedded_auto_prompted)
+		return;
+	if (source_mode == SecondarySubtitleSourceMode::VideoEmbedded)
+		return;
+	if (!OPT_GET("Video/Secondary Subtitles/Auto Load From Video")->GetBool())
+		return;
+
+	auto core = context->GetCore();
+	if (!core.project->CanLoadSubtitlesFromVideo())
+		return;
+
+	video_embedded_auto_prompted = true;
+	auto answer = wxMessageBox(
+		_("The current video contains embedded subtitles. Load them into the secondary subtitle strip?"),
+		_("Secondary subtitles"),
+		wxYES_NO | wxICON_QUESTION);
+	if (answer == wxYES)
+		OpenVideoEmbeddedSubtitles();
+}
+
 void SecondarySubtitleSession::RebuildProvider(AsyncVideoProvider *main_provider) {
 	ReleaseProvider();
 	ClearBitmap();
@@ -369,6 +452,18 @@ void SecondarySubtitleSession::RebuildProvider(AsyncVideoProvider *main_provider
 }
 
 void SecondarySubtitleSession::OnVideoProviderChanged(AsyncVideoProvider *main_provider) {
+	// VideoEmbedded is bound to a specific video; switching the video
+	// invalidates the previously-extracted tracks. Fall back to the default
+	// source so the strip keeps rendering something sensible.
+	if (source_mode == SecondarySubtitleSourceMode::VideoEmbedded) {
+		source_mode = SecondarySubtitleSourceMode::CurrentScript;
+		external_subtitle_path.clear();
+		ClearExternalSubtitles();
+		SyncExternalSubtitleProjectProperty();
+		UpdateExternalSubtitleWatch();
+	}
+
+	video_embedded_auto_prompted = false;
 	if (!active) {
 		ReleaseProvider();
 		ClearBitmap();
@@ -376,6 +471,12 @@ void SecondarySubtitleSession::OnVideoProviderChanged(AsyncVideoProvider *main_p
 	}
 
 	RebuildProvider(main_provider);
+
+	// After the new video is wired up, offer to load its embedded subtitles.
+	// OnVideoHasSubtitlesAvailable guards against re-prompting and against the
+	// disabled option. If the user accepts, OpenVideoEmbeddedSubtitles rebuilds
+	// the provider again with the freshly-extracted tracks.
+	OnVideoHasSubtitlesAvailable();
 }
 
 void SecondarySubtitleSession::OnTimecodesChanged(agi::vfr::Framerate const&) {
@@ -388,6 +489,8 @@ void SecondarySubtitleSession::OnTimecodesChanged(agi::vfr::Framerate const&) {
 		return;
 	}
 
+	// CurrentScript and VideoEmbedded keep their existing subtitles and just
+	// re-sync the timecodes handed to the provider.
 	provider->SetSubtitlesTimecodes(core.project->Timecodes());
 	if (active)
 		RequestFrame(core.videoController->GetFrameN());
@@ -489,12 +592,46 @@ bool SecondarySubtitleSession::OpenExternalSubtitlesFromPath(agi::fs::path const
 	return true;
 }
 
+bool SecondarySubtitleSession::CanOpenVideoEmbedded() const {
+	return context->GetCore().project->CanLoadSubtitlesFromVideo();
+}
+
+bool SecondarySubtitleSession::OpenVideoEmbeddedSubtitles() {
+	auto core = context->GetCore();
+	if (!core.project->VideoProvider()) {
+		context->ShowError("Open a video first.", kSecondarySubtitleWarningTitle);
+		return false;
+	}
+	if (!core.project->CanLoadSubtitlesFromVideo()) {
+		context->ShowError("The current video has no embedded subtitle tracks.", kSecondarySubtitleWarningTitle);
+		return false;
+	}
+
+	if (!LoadVideoEmbeddedSubtitles(true))
+		return false;
+
+	source_mode = SecondarySubtitleSourceMode::VideoEmbedded;
+	external_subtitle_path.clear();
+	SyncExternalSubtitleProjectProperty();
+	UpdateExternalSubtitleWatch();
+	if (active)
+		RebuildProvider(core.project->VideoProvider());
+	return true;
+}
+
 bool SecondarySubtitleSession::ReloadSubtitles() {
 	if (source_mode == SecondarySubtitleSourceMode::CurrentScript) {
 		SyncConfiguredSubtitlesSource();
 		if (provider)
 			RequestFrame(context->GetCore().videoController->GetFrameN());
 		return true;
+	}
+
+	if (source_mode == SecondarySubtitleSourceMode::VideoEmbedded) {
+		bool const reloaded = LoadVideoEmbeddedSubtitles(true);
+		if (active)
+			RebuildProvider(context->GetCore().project->VideoProvider());
+		return reloaded;
 	}
 
 	bool const reloaded = LoadConfiguredExternalSubtitles(true, true);
@@ -540,6 +677,10 @@ void SecondarySubtitleSession::SetActive(bool value) {
 
 	if (provider)
 		RequestFrame(core.videoController->GetFrameN());
+
+	// If the strip is being enabled after a video was opened while hidden,
+	// offer to load its embedded subtitles.
+	OnVideoHasSubtitlesAvailable();
 }
 
 void SecondarySubtitleSession::UseGlobalSubtitlesProvider() {

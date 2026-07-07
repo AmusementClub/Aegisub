@@ -63,11 +63,22 @@ std::string FormatTrackLabel(TrackLabel const& label) {
 }
 
 agi::SingleChoiceInteractionRequest BuildRequest(DialogKind kind, std::vector<std::string> const& choices) {
+	return BuildRequest(kind, choices, false);
+}
+
+agi::SingleChoiceInteractionRequest BuildRequest(DialogKind kind, std::vector<std::string> const& choices, bool secondary) {
 	agi::SingleChoiceInteractionRequest request;
-	request.title = BuildTitle(kind);
-	request.message = BuildMessage(kind);
+	if (secondary && kind == DialogKind::Subtitle) {
+		request.title = "Load embedded subtitles into the secondary subtitle strip";
+		request.message = "Choose which embedded subtitle track to load into the secondary subtitle strip:";
+		request.request_id = "track_choice.subtitle.secondary";
+	}
+	else {
+		request.title = BuildTitle(kind);
+		request.message = BuildMessage(kind);
+		request.request_id = BuildRequestId(kind);
+	}
 	request.choices = choices;
-	request.request_id = BuildRequestId(kind);
 	return request;
 }
 

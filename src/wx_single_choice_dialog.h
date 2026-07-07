@@ -80,6 +80,12 @@ inline SingleChoiceInteractionRequest LocalizeKnownSingleChoiceRequest(SingleCho
 		return request;
 	}
 
+	if (request.request_id == "track_choice.subtitle.secondary") {
+		request.title = from_wx(_("Load embedded subtitles into the secondary subtitle strip"));
+		request.message = from_wx(_("Choose which embedded subtitle track to load into the secondary subtitle strip:"));
+		return request;
+	}
+
 	if (request.request_id == "track_choice.video") {
 		request.title = from_wx(_("Choose video track"));
 		request.message = from_wx(_("Multiple video tracks detected, please choose the one you wish to load:"));

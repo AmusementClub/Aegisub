@@ -193,7 +193,7 @@ static void read_subtitles(agi::ProgressSink *ps, MatroskaFile *file, MkvStdIO *
 		parser->AddLine(order_value_pair.second);
 }
 
-void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory) {
+void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory, bool secondary_track_choice) {
 	LogMkvParserBackendOnce();
 	target->SetTransientFonts({});
 
@@ -244,7 +244,7 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 		if (!choice_sink)
 			throw agi::UserCancelException("canceled");
 		auto choice = choice_sink->RequestSingleChoice(
-			aegisub::track_choice::BuildRequest(aegisub::track_choice::DialogKind::Subtitle, tracksNames));
+			aegisub::track_choice::BuildRequest(aegisub::track_choice::DialogKind::Subtitle, tracksNames, secondary_track_choice));
 		auto resolved = aegisub::track_choice::ResolveSelection(tracksFound.size(), choice);
 		if (!resolved)
 			throw agi::UserCancelException("canceled");

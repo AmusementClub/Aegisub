@@ -663,6 +663,7 @@
 			"Backend" : "opengl"
 		},
 		"Secondary Subtitles" : {
+			"Auto Load From Video" : true,
 			"Dummy" : {
 				"Pattern" : false
 			},

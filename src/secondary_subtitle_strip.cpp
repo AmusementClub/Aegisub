@@ -42,6 +42,7 @@ namespace {
 enum SecondarySubtitleStripMenuId {
 	MenuUseCurrentScript = wxID_HIGHEST + 1200,
 	MenuOpenExternalSubtitles,
+	MenuOpenVideoEmbeddedSubtitles,
 	MenuConfigureSecondarySubtitleStrip,
 	MenuSecondarySubtitleStripOptionsButton,
 	MenuSecondarySubtitleStripReloadButton,
@@ -80,11 +81,13 @@ class SecondarySubtitleStripSettingsDialog final : public wxDialog {
 	wxSpinCtrl *height = nullptr;
 	ColourButton *dummy_background = nullptr;
 	wxCheckBox *dummy_checkerboard = nullptr;
+	wxCheckBox *auto_load_from_video = nullptr;
 	wxCheckBox *show_vertical_ruler = nullptr;
 	wxButton *apply = nullptr;
 	int applied_height = 0;
 	agi::Color applied_dummy_background;
 	bool applied_dummy_checkerboard = false;
+	bool applied_auto_load_from_video = false;
 	bool applied_show_vertical_ruler = false;
 
 	void MarkDirty() {
@@ -93,6 +96,7 @@ class SecondarySubtitleStripSettingsDialog final : public wxDialog {
 				height->GetValue() != applied_height ||
 				dummy_background->GetColor() != applied_dummy_background ||
 				dummy_checkerboard->GetValue() != applied_dummy_checkerboard ||
+				auto_load_from_video->GetValue() != applied_auto_load_from_video ||
 				show_vertical_ruler->GetValue() != applied_show_vertical_ruler);
 	}
 
@@ -100,6 +104,7 @@ class SecondarySubtitleStripSettingsDialog final : public wxDialog {
 		int new_height = height->GetValue();
 		auto new_dummy_background = dummy_background->GetColor();
 		bool new_dummy_checkerboard = dummy_checkerboard->GetValue();
+		bool new_auto_load_from_video = auto_load_from_video->GetValue();
 		bool new_show_vertical_ruler = show_vertical_ruler->GetValue();
 		if (new_height != applied_height) {
 			OPT_SET("Video/Secondary Subtitles/Height")->SetInt(new_height);
@@ -112,6 +117,10 @@ class SecondarySubtitleStripSettingsDialog final : public wxDialog {
 		if (new_dummy_checkerboard != applied_dummy_checkerboard) {
 			OPT_SET("Video/Secondary Subtitles/Dummy/Pattern")->SetBool(new_dummy_checkerboard);
 			applied_dummy_checkerboard = new_dummy_checkerboard;
+		}
+		if (new_auto_load_from_video != applied_auto_load_from_video) {
+			OPT_SET("Video/Secondary Subtitles/Auto Load From Video")->SetBool(new_auto_load_from_video);
+			applied_auto_load_from_video = new_auto_load_from_video;
 		}
 		if (new_show_vertical_ruler != applied_show_vertical_ruler) {
 			OPT_SET("Video/Secondary Subtitles/Show Vertical Ruler")->SetBool(new_show_vertical_ruler);
@@ -129,6 +138,7 @@ public:
 		max_height))
 	, applied_dummy_background(OPT_GET("Colour/Secondary Subtitle Strip/Dummy Background")->GetColor())
 	, applied_dummy_checkerboard(OPT_GET("Video/Secondary Subtitles/Dummy/Pattern")->GetBool())
+	, applied_auto_load_from_video(OPT_GET("Video/Secondary Subtitles/Auto Load From Video")->GetBool())
 	, applied_show_vertical_ruler(OPT_GET("Video/Secondary Subtitles/Show Vertical Ruler")->GetBool()) {
 		auto *height_label = new wxStaticText(this, wxID_ANY, _("Strip height"));
 		height = new wxSpinCtrl(
@@ -149,11 +159,15 @@ public:
 		dummy_checkerboard = new wxCheckBox(this, wxID_ANY, _("Checkerboard pattern"));
 		dummy_checkerboard->SetValue(applied_dummy_checkerboard);
 
+		auto *auto_load_from_video_label = new wxStaticText(this, wxID_ANY, _("Embedded subtitles"));
+		auto_load_from_video = new wxCheckBox(this, wxID_ANY, _("Ask to load from video"));
+		auto_load_from_video->SetValue(applied_auto_load_from_video);
+
 		auto *show_vertical_ruler_label = new wxStaticText(this, wxID_ANY, _("Vertical ruler"));
 		show_vertical_ruler = new wxCheckBox(this, wxID_ANY, _("Show coordinates"));
 		show_vertical_ruler->SetValue(applied_show_vertical_ruler);
 
-		auto *grid = new wxFlexGridSizer(4, 3, FromDIP(6), FromDIP(8));
+		auto *grid = new wxFlexGridSizer(5, 3, FromDIP(6), FromDIP(8));
 		grid->Add(height_label, wxSizerFlags().Align(wxALIGN_CENTER_VERTICAL));
 		grid->Add(height, wxSizerFlags().Expand());
 		grid->Add(height_unit, wxSizerFlags().Align(wxALIGN_CENTER_VERTICAL));
@@ -162,6 +176,9 @@ public:
 		grid->AddSpacer(1);
 		grid->Add(dummy_checkerboard_label, wxSizerFlags().Align(wxALIGN_CENTER_VERTICAL));
 		grid->Add(dummy_checkerboard, wxSizerFlags().Align(wxALIGN_CENTER_VERTICAL));
+		grid->AddSpacer(1);
+		grid->Add(auto_load_from_video_label, wxSizerFlags().Align(wxALIGN_CENTER_VERTICAL));
+		grid->Add(auto_load_from_video, wxSizerFlags().Align(wxALIGN_CENTER_VERTICAL));
 		grid->AddSpacer(1);
 		grid->Add(show_vertical_ruler_label, wxSizerFlags().Align(wxALIGN_CENTER_VERTICAL));
 		grid->Add(show_vertical_ruler, wxSizerFlags().Align(wxALIGN_CENTER_VERTICAL));
@@ -183,6 +200,7 @@ public:
 		height->Bind(wxEVT_TEXT, [this](wxCommandEvent&) { MarkDirty(); });
 		dummy_background->Bind(EVT_COLOR, [this](ValueEvent<agi::Color>&) { MarkDirty(); });
 		dummy_checkerboard->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent&) { MarkDirty(); });
+		auto_load_from_video->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent&) { MarkDirty(); });
 		show_vertical_ruler->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent&) { MarkDirty(); });
 		Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { ApplyChanges(); }, wxID_APPLY);
 		Bind(wxEVT_BUTTON, [this](wxCommandEvent&) {
@@ -466,6 +484,8 @@ void SecondarySubtitleStrip::OnEntryButton(wxCommandEvent &) {
 	bool const follows_preferences = session->IsFollowingGlobalSubtitlesProvider();
 	menu.Append(MenuUseCurrentScript, _("Use Current Script"));
 	menu.Append(MenuOpenExternalSubtitles, _("Open Secondary Subtitles..."));
+	auto *open_from_video_item = menu.Append(MenuOpenVideoEmbeddedSubtitles, _("Open from Video..."));
+	open_from_video_item->Enable(session->CanOpenVideoEmbedded());
 	menu.AppendSeparator();
 	auto *provider_menu = new wxMenu;
 	provider_menu->AppendCheckItem(
@@ -495,6 +515,9 @@ void SecondarySubtitleStrip::OnEntryButton(wxCommandEvent &) {
 		break;
 	case MenuOpenExternalSubtitles:
 		session->OpenExternalSubtitles();
+		break;
+	case MenuOpenVideoEmbeddedSubtitles:
+		session->OpenVideoEmbeddedSubtitles();
 		break;
 	case MenuFollowPreferencesSubtitlesProvider:
 		session->UseGlobalSubtitlesProvider();

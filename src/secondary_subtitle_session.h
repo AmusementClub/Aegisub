@@ -30,7 +30,10 @@ namespace agi {
 class SecondarySubtitleSession final {
 	enum class SecondarySubtitleSourceMode : int {
 		CurrentScript = 0,
-		ExternalFile = 1
+		ExternalFile = 1,
+		// Subtitles embedded in the currently-open video container (e.g. MKV).
+		// Session-level only: never persisted, never file-watched.
+		VideoEmbedded = 2
 	};
 
 	agi::Context *context;
@@ -46,6 +49,9 @@ class SecondarySubtitleSession final {
 	std::string loaded_external_subtitle_path;
 	bool external_subtitles_follow_video_resolution = false;
 	bool external_subtitles_use_plugin_provider = false;
+	// Guards the "video has embedded subtitles" auto-prompt so it asks at most
+	// once per video. Reset whenever the video provider changes.
+	bool video_embedded_auto_prompted = false;
 
 	wxBitmap current_bitmap;
 	bool has_bitmap = false;
@@ -74,6 +80,8 @@ class SecondarySubtitleSession final {
 	bool LoadExternalSubtitlesFromPath(std::string const& path_string, bool show_errors);
 	bool ShouldUsePluginProviderForExternalFile(std::string const& path_string) const;
 	void UpdateExternalSubtitleResolution(AsyncVideoProvider *main_provider);
+	bool LoadVideoEmbeddedSubtitles(bool show_errors);
+	void OnVideoHasSubtitlesAvailable();
 
 	void OnVideoProviderChanged(AsyncVideoProvider *main_provider);
 	void OnTimecodesChanged(agi::vfr::Framerate const& timecodes);
@@ -91,6 +99,8 @@ public:
 
 	bool OpenExternalSubtitles();
 	bool OpenExternalSubtitlesFromPath(agi::fs::path const& path, bool show_errors = true);
+	bool OpenVideoEmbeddedSubtitles();
+	bool CanOpenVideoEmbedded() const;
 	bool ReloadSubtitles();
 	bool IsFollowingGlobalSubtitlesProvider() const;
 	std::string GetConfiguredSubtitlesProvider() const;

@@ -311,7 +311,7 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 		core.selectionController->AddActiveLineListener(&SubsEditBox::OnActiveLineChanged, this),
 		core.selectionController->AddSelectionListener(&SubsEditBox::OnSelectedSetChanged, this),
 		core.initialLineState->AddChangeListener(&SubsEditBox::OnLineInitialTextChanged, this),
-		core.subsController->AddFileOpenListener([this](agi::fs::path const&) { UpdateTimeDisplayModeFromFile(true); }),
+		core.subsController->AddFileOpenListener([this](agi::fs::path const&, bool) { UpdateTimeDisplayModeFromFile(true); }),
 		core.subsController->AddFileSaveListener([this] { UpdateTimeDisplayModeFromFile(false); }),
 	 });
 

@@ -67,7 +67,7 @@ class SecondarySubtitleSession final {
 	void OnDummyBackgroundPatternChanged(agi::OptionValue const& opt);
 	void OnConfiguredProviderChanged(agi::OptionValue const& opt);
 	void OnGlobalProviderChanged(agi::OptionValue const& opt);
-	void OnMainSubtitlesFileChanged(agi::fs::path const& filename);
+	void OnMainSubtitlesFileChanged(agi::fs::path const& filename, bool is_reload);
 	void OnUpdateProperties();
 	void RestoreSourceFromProjectProperties();
 	void SyncExternalSubtitleProjectProperty();

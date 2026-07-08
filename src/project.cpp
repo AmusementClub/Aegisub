@@ -431,7 +431,7 @@ void Project::SetPath(agi::fs::path& var, const char *token, const char *mru, ag
 	UpdateRelativePaths();
 }
 
-bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, ProjectProperties &properties) {
+bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, ProjectProperties &properties, bool is_reload) {
 	auto core = context->GetCore();
 	auto const previous_transient_fonts = core.ass->GetTransientFonts();
 	auto remove_mru = [](char const* category, agi::fs::path const& candidate) {
@@ -459,7 +459,7 @@ bool Project::DoLoadSubtitles(agi::fs::path const& path, std::string encoding, P
 
 	if (!aegisub::project_session_ops::LoadSubtitlesWithErrorHandling(
 		path,
-		[&] { properties = core.subsController->Load(path, encoding); },
+		[&] { properties = core.subsController->Load(path, encoding, is_reload); },
 		*context->GetNotificationSink(),
 		remove_mru)) {
 		return false;
@@ -488,9 +488,9 @@ void Project::LoadSubtitles(agi::fs::path path, std::string encoding, bool load_
 		LoadUnloadFiles(properties);
 }
 
-bool Project::ReloadSubtitles(agi::fs::path path, std::string encoding, bool load_linked) {
+bool Project::ReloadSubtitles(agi::fs::path path, std::string encoding, bool load_linked, bool is_reload) {
 	ProjectProperties properties;
-	if (!DoLoadSubtitles(path, encoding, properties))
+	if (!DoLoadSubtitles(path, encoding, properties, is_reload))
 		return false;
 
 	if (load_linked)

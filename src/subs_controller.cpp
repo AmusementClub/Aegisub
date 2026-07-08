@@ -237,7 +237,7 @@ void SubsController::SetSelectionController(SelectionController *selection_contr
 	selection_connection = core.selectionController->AddSelectionListener(&SubsController::OnSelectionChanged, this);
 }
 
-ProjectProperties SubsController::Load(agi::fs::path const& filename, std::string charset) {
+ProjectProperties SubsController::Load(agi::fs::path const& filename, std::string charset, bool is_reload) {
 	AssFile temp;
 	auto core = context->GetCore();
 
@@ -267,7 +267,7 @@ ProjectProperties SubsController::Load(agi::fs::path const& filename, std::strin
 	}
 
 	UpdateFileWatch();
-	FileOpen(filename);
+	FileOpen(filename, is_reload);
 	return props;
 }
 
@@ -326,7 +326,7 @@ void SubsController::Close() {
 	LoadDefaultAssFileWithAppOptions(*core.ass, true, OPT_GET("Subtitle Format/ASS/Default Style Catalog")->GetString());
 	core.ass->Commit("", AssFile::COMMIT_NEW);
 	ClearFileWatch();
-	FileOpen(filename);
+	FileOpen(filename, false);
 }
 
 int SubsController::TryToClose(bool allow_cancel) const {

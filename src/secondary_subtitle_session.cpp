@@ -54,7 +54,7 @@ SecondarySubtitleSession::SecondarySubtitleSession(agi::Context *context)
 		core.project->AddVideoProviderListener(&SecondarySubtitleSession::OnVideoProviderChanged, this),
 		core.project->AddTimecodesListener(&SecondarySubtitleSession::OnTimecodesChanged, this),
 		core.ass->AddCommitListener(&SecondarySubtitleSession::OnAssCommit, this),
-		core.subsController->AddFileOpenListener(&SecondarySubtitleSession::OnMainSubtitlesFileChanged, this),
+		core.subsController->AddFileOpenListener([this](agi::fs::path const& filename, bool is_reload) { OnMainSubtitlesFileChanged(filename, is_reload); }),
 		core.subsController->AddUpdatePropertiesListener(&SecondarySubtitleSession::OnUpdateProperties, this),
 		core.videoController->AddFramePresentedListener(&SecondarySubtitleSession::OnPrimaryFramePresented, this),
 		OPT_SUB("Colour/Secondary Subtitle Strip/Dummy Background", &SecondarySubtitleSession::OnDummyBackgroundColorChanged, this),
@@ -129,7 +129,18 @@ void SecondarySubtitleSession::OnGlobalProviderChanged(agi::OptionValue const&) 
 	RebuildProvider(context->GetCore().project->VideoProvider());
 }
 
-void SecondarySubtitleSession::OnMainSubtitlesFileChanged(agi::fs::path const&) {
+void SecondarySubtitleSession::OnMainSubtitlesFileChanged(agi::fs::path const&, bool is_reload) {
+	// A reload of the primary subtitle file must not disturb the secondary
+	// subtitle source. ExternalFile / VideoEmbedded keep their in-memory data
+	// and source mode; CurrentScript refreshes itself via OnAssCommit, which
+	// runs from the COMMIT_NEW fired by SubsController::Load. Only a freshly
+	// opened (different) file re-establishes the source from its properties.
+	if (is_reload) {
+		if (active)
+			RequestFrame(context->GetCore().videoController->GetFrameN());
+		return;
+	}
+
 	RestoreSourceFromProjectProperties();
 
 	if (active)

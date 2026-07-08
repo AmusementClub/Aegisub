@@ -78,8 +78,10 @@ class SubsController {
 	bool external_file_change_pending = false;
 	bool external_file_prompt_active = false;
 
-	/// A new file has been opened (filename)
-	agi::signal::Signal<agi::fs::path> FileOpen;
+	/// A new file has been opened (filename, is_reload)
+	/// is_reload is true when the file was reloaded from disk due to an
+	/// external modification rather than freshly opened.
+	agi::signal::Signal<agi::fs::path, bool> FileOpen;
 	/// The file has been saved
 	agi::signal::Signal<> FileSave;
 
@@ -130,7 +132,9 @@ public:
 	/// @brief Load from a file
 	/// @param file File name
 	/// @param charset Character set of file
-	ProjectProperties Load(agi::fs::path const& file, std::string charset);
+	/// @param is_reload True when reloading the current file from disk after an
+	///                  external modification, rather than opening a new file.
+	ProjectProperties Load(agi::fs::path const& file, std::string charset, bool is_reload = false);
 
 	/// @brief Save to a file
 	/// @param file Path to save to

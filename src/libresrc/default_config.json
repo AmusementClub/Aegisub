@@ -6,7 +6,8 @@
 			"Load Linked Files" : 2,
 			"Save" : true,
 			"Save Every Seconds" : 60,
-			"Save on Every Change" : false
+			"Save on Every Change" : false,
+			"Reload External Changes" : true
 		},
 		"Call Tips" : false,
 		"First Start" : true,

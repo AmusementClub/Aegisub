@@ -211,13 +211,20 @@ SubsController::SubsController(agi::Context *context)
 	if (!IsGuiRuntimeShell())
 		return;
 
-	file_watch = agi::make_unique<WatchedFile>(CreateWxFileSystemWatcherBackend());
-	file_watch->SetChangedCallback([this](agi::fs::path const& path) {
-		OnWatchedFileChanged(path);
-	});
-	file_watch->SetErrorCallback([this](std::string const& message) {
-		OnFileWatchError(message);
-	});
+	// When external-change reloading is disabled, behave as before commit
+	// 07937528: do not create a file watcher at all, so no background I/O
+	// (directory watches, file hashing on load/save) ever happens. The option
+	// is read only at construction; toggling it requires a restart, matching
+	// the granularity of the other App/Auto/* options.
+	if (OPT_GET("App/Auto/Reload External Changes")->GetBool()) {
+		file_watch = agi::make_unique<WatchedFile>(CreateWxFileSystemWatcherBackend());
+		file_watch->SetChangedCallback([this](agi::fs::path const& path) {
+			OnWatchedFileChanged(path);
+		});
+		file_watch->SetErrorCallback([this](std::string const& message) {
+			OnFileWatchError(message);
+		});
+	}
 
 	autosave_timer = CreateSubsControllerTimer([this] { AutoSave(); });
 	autosave_timer_changed(autosave_timer.get());

@@ -327,7 +327,7 @@ void SecondarySubtitleSession::UpdateExternalSubtitleResolution(AsyncVideoProvid
 	external_subtitles->SetResolution(ScriptResolutionType::None, main_provider->GetWidth(), main_provider->GetHeight());
 }
 
-bool SecondarySubtitleSession::LoadVideoEmbeddedSubtitles(bool show_errors) {
+bool SecondarySubtitleSession::LoadVideoEmbeddedSubtitles(bool show_errors, std::string *selected_track_label) {
 	auto core = context->GetCore();
 	auto const& video_path = core.project->VideoName();
 	if (video_path.empty())
@@ -347,7 +347,8 @@ bool SecondarySubtitleSession::LoadVideoEmbeddedSubtitles(bool show_errors) {
 			&temp,
 			context->GetSingleChoiceInteractionSink(),
 			core.backgroundRunnerFactory,
-			/*secondary_track_choice=*/true);
+			/*secondary_track_choice=*/true,
+			selected_track_label);
 
 		auto const follow_video_resolution = temp.GetResolutionType(ScriptResolutionType::PlayRes) == ScriptResolutionType::None;
 		if (follow_video_resolution) {
@@ -463,6 +464,18 @@ void SecondarySubtitleSession::RebuildProvider(AsyncVideoProvider *main_provider
 }
 
 void SecondarySubtitleSession::OnVideoProviderChanged(AsyncVideoProvider *main_provider) {
+	auto core = context->GetCore();
+	// Drop session sources bound to a video that is no longer open so the
+	// "Loaded" menu never offers tracks that no longer exist.
+	// - On video switch: VideoName() already holds the new path, so sources
+	//   bound to a different video are dropped while the new video's are kept.
+	// - On video close (main_provider == nullptr): VideoName() still holds the
+	//   stale path at notify time, so pass an empty match to drop everything.
+	std::string const keep_video = main_provider
+		? agi::fs::PathToString(core.project->VideoName())
+		: std::string{};
+	RemoveVideoEmbeddedSources(keep_video);
+
 	// VideoEmbedded is bound to a specific video; switching the video
 	// invalidates the previously-extracted tracks. Fall back to the default
 	// source so the strip keeps rendering something sensible.
@@ -472,6 +485,7 @@ void SecondarySubtitleSession::OnVideoProviderChanged(AsyncVideoProvider *main_p
 		ClearExternalSubtitles();
 		SyncExternalSubtitleProjectProperty();
 		UpdateExternalSubtitleWatch();
+		current_source_index = static_cast<size_t>(-1);
 	}
 
 	video_embedded_auto_prompted = false;
@@ -581,6 +595,7 @@ bool SecondarySubtitleSession::OpenExternalSubtitles() {
 	external_subtitle_path = path_string;
 	SyncExternalSubtitleProjectProperty();
 	UpdateExternalSubtitleWatch();
+	RegisterExternalSource(path);
 	if (active)
 		RebuildProvider(context->GetCore().project->VideoProvider());
 	return true;
@@ -598,6 +613,7 @@ bool SecondarySubtitleSession::OpenExternalSubtitlesFromPath(agi::fs::path const
 	external_subtitle_path = path_string;
 	SyncExternalSubtitleProjectProperty();
 	UpdateExternalSubtitleWatch();
+	RegisterExternalSource(path);
 	if (active)
 		RebuildProvider(context->GetCore().project->VideoProvider());
 	return true;
@@ -618,13 +634,19 @@ bool SecondarySubtitleSession::OpenVideoEmbeddedSubtitles() {
 		return false;
 	}
 
-	if (!LoadVideoEmbeddedSubtitles(true))
+	std::string selected_track_label;
+	if (!LoadVideoEmbeddedSubtitles(true, &selected_track_label))
 		return false;
 
 	source_mode = SecondarySubtitleSourceMode::VideoEmbedded;
 	external_subtitle_path.clear();
 	SyncExternalSubtitleProjectProperty();
 	UpdateExternalSubtitleWatch();
+	if (external_subtitles) {
+		auto const video_path = core.project->VideoName();
+		if (!video_path.empty())
+			RegisterVideoEmbeddedSource(video_path, selected_track_label, *external_subtitles);
+	}
 	if (active)
 		RebuildProvider(core.project->VideoProvider());
 	return true;
@@ -707,6 +729,105 @@ void SecondarySubtitleSession::UseCurrentScriptSource() {
 	external_subtitle_path.clear();
 	ClearExternalSubtitles();
 	SyncExternalSubtitleProjectProperty();
+	UpdateExternalSubtitleWatch();
+	current_source_index = static_cast<size_t>(-1);
+	if (active)
+		RebuildProvider(context->GetCore().project->VideoProvider());
+}
+
+void SecondarySubtitleSession::RegisterExternalSource(agi::fs::path const& path) {
+	auto const path_string = agi::fs::PathToString(path);
+	// De-duplicate: drop any existing entry for the same path so it moves to
+	// the end (most recent). Also drop any VideoEmbedded entry bound to a
+	// different video that no longer matches the open file.
+	loaded_sources.erase(
+		std::remove_if(loaded_sources.begin(), loaded_sources.end(),
+			[&](LoadedSecondarySource const& s) {
+				return s.kind == LoadedSecondarySource::Kind::ExternalFile
+					&& s.file_path == path_string;
+			}),
+		loaded_sources.end());
+
+	LoadedSecondarySource src;
+	src.kind = LoadedSecondarySource::Kind::ExternalFile;
+	src.label = agi::fs::PathToString(path.filename());
+	src.file_path = path_string;
+	loaded_sources.push_back(std::move(src));
+	current_source_index = loaded_sources.size() - 1;
+}
+
+void SecondarySubtitleSession::RegisterVideoEmbeddedSource(agi::fs::path const& video_path, std::string const& track_label, AssFile const& subtitles) {
+	// Hold a private copy so switching back to this source does not re-extract
+	// the track or re-prompt for a track choice. The menu label prefixes the
+	// track description (codec/language/name) with "embedded" to distinguish
+	// it from external-file sources.
+	LoadedSecondarySource src;
+	src.kind = LoadedSecondarySource::Kind::VideoEmbedded;
+	src.label = from_wx(_("embedded")) + " " + track_label;
+	src.file_path.clear();
+	src.held_subtitle = agi::make_unique<AssFile>(subtitles);
+	src.video_origin = agi::fs::PathToString(video_path);
+	loaded_sources.push_back(std::move(src));
+	current_source_index = loaded_sources.size() - 1;
+}
+
+void SecondarySubtitleSession::RemoveVideoEmbeddedSources(std::string const& except_video) {
+	// Capture the identity of the currently-active source by value (not by
+	// pointer/index) so it survives the erase that shifts elements.
+	auto const active_kind = (current_source_index != static_cast<size_t>(-1)
+		&& current_source_index < loaded_sources.size())
+		? loaded_sources[current_source_index].kind
+		: LoadedSecondarySource::Kind::ExternalFile;
+	auto const active_path = (current_source_index != static_cast<size_t>(-1)
+		&& current_source_index < loaded_sources.size())
+		? loaded_sources[current_source_index].file_path
+		: std::string{};
+
+	loaded_sources.erase(
+		std::remove_if(loaded_sources.begin(), loaded_sources.end(),
+			[&](LoadedSecondarySource const& s) {
+				return s.kind == LoadedSecondarySource::Kind::VideoEmbedded
+					&& s.video_origin != except_video;
+			}),
+		loaded_sources.end());
+
+	// Re-locate the previously-active external source by path. Video sources
+	// only survive if they matched the open video, and a still-active video
+	// source would not reach here (OnVideoProviderChanged resets it).
+	current_source_index = static_cast<size_t>(-1);
+	if (active_kind == LoadedSecondarySource::Kind::ExternalFile) {
+		for (size_t i = 0; i < loaded_sources.size(); ++i) {
+			if (loaded_sources[i].file_path == active_path) {
+				current_source_index = i;
+				break;
+			}
+		}
+	}
+}
+
+void SecondarySubtitleSession::ActivateLoadedSource(size_t index) {
+	if (index >= loaded_sources.size())
+		return;
+
+	auto const& src = loaded_sources[index];
+	if (src.kind == LoadedSecondarySource::Kind::ExternalFile) {
+		// Re-read from disk. OpenExternalSubtitlesFromPath re-registers the
+		// source (moving it to the end and updating current_source_index).
+		OpenExternalSubtitlesFromPath(agi::fs::PathFromString(src.file_path));
+		return;
+	}
+
+	// VideoEmbedded: switch from the held copy without re-extracting.
+	if (!src.held_subtitle)
+		return;
+
+	external_subtitles = agi::make_unique<AssFile>(*src.held_subtitle);
+	source_mode = SecondarySubtitleSourceMode::VideoEmbedded;
+	external_subtitle_path.clear();
+	external_subtitles_use_plugin_provider = false;
+	loaded_external_subtitle_path.clear();
+	current_source_index = index;
+	SyncExternalSubtitleProjectProperty(); // VideoEmbedded clears the property
 	UpdateExternalSubtitleWatch();
 	if (active)
 		RebuildProvider(context->GetCore().project->VideoProvider());

@@ -193,7 +193,7 @@ static void read_subtitles(agi::ProgressSink *ps, MatroskaFile *file, MkvStdIO *
 		parser->AddLine(order_value_pair.second);
 }
 
-void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory, bool secondary_track_choice) {
+void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory, bool secondary_track_choice, std::string *selected_track_label) {
 	LogMkvParserBackendOnce();
 	target->SetTransientFonts({});
 
@@ -258,6 +258,15 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 	std::string CodecID(trackInfo->CodecID);
 	bool srt = CodecID == "S_TEXT/UTF8";
 	bool ssa = CodecID == "S_TEXT/SSA";
+
+	if (selected_track_label) {
+		auto label = agi::format("%d (%s %s)", trackToRead, CodecID, trackInfo->Language);
+		if (trackInfo->Name) {
+			label += ": ";
+			label += trackInfo->Name;
+		}
+		*selected_track_label = std::move(label);
+	}
 
 	AssParser parser(target, !ssa);
 

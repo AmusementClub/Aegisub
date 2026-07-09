@@ -25,6 +25,7 @@
 #include "mkv_wrap_common.h"
 
 #include <memory>
+#include <string>
 
 DEFINE_EXCEPTION(MatroskaException, agi::Exception);
 
@@ -41,5 +42,8 @@ public:
 	/// Load subtitles from a matroska file
 	/// @param secondary_track_choice when true the multi-track choice dialog is
 	///        labelled as loading into the secondary subtitle strip.
-	static void GetSubtitles(agi::fs::path const& filename, AssFile *target, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory = {}, bool secondary_track_choice = false);
+	/// @param selected_track_label if non-null, receives a human-readable
+	///        description of the track that was actually imported (the same
+	///        string shown in the track-choice dialog).
+	static void GetSubtitles(agi::fs::path const& filename, AssFile *target, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory = {}, bool secondary_track_choice = false, std::string *selected_track_label = nullptr);
 };

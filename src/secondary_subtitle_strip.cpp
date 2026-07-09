@@ -47,7 +47,11 @@ enum SecondarySubtitleStripMenuId {
 	MenuSecondarySubtitleStripOptionsButton,
 	MenuSecondarySubtitleStripReloadButton,
 	MenuFollowPreferencesSubtitlesProvider,
-	MenuSecondarySubtitleProviderFirst = wxID_HIGHEST + 1300
+	MenuSecondarySubtitleProviderFirst = wxID_HIGHEST + 1300,
+	// "Loaded" quick-switch submenu: one radio item per session source.
+	// Placed well clear of the provider range to avoid ID collisions even if
+	// many subtitle providers are registered.
+	MenuSecondaryLoadedFirst = wxID_HIGHEST + 1400
 };
 
 int GetScrollBarWidth(wxWindow *window) {
@@ -486,6 +490,26 @@ void SecondarySubtitleStrip::OnEntryButton(wxCommandEvent &) {
 	menu.Append(MenuOpenExternalSubtitles, _("Open Secondary Subtitles..."));
 	auto *open_from_video_item = menu.Append(MenuOpenVideoEmbeddedSubtitles, _("Open from Video..."));
 	open_from_video_item->Enable(session->CanOpenVideoEmbedded());
+
+	// "Loaded" quick-switch submenu: lists session sources (external files and
+	// video-embedded tracks). Radio items mark the active source; selecting
+	// "Use Current Script" above deselects all of them.
+	auto const& loaded_sources = session->GetLoadedSources();
+	auto const current_loaded_index = session->GetCurrentLoadedSourceIndex();
+	auto *loaded_menu = new wxMenu;
+	if (loaded_sources.empty()) {
+		auto *empty_item = loaded_menu->Append(MenuSecondaryLoadedFirst, _("Empty"));
+		empty_item->Enable(false);
+	}
+	else {
+		for (size_t i = 0; i < loaded_sources.size(); ++i) {
+			int item_id = MenuSecondaryLoadedFirst + static_cast<int>(i);
+			auto *item = loaded_menu->AppendRadioItem(item_id, to_wx(loaded_sources[i].label));
+			item->Check(i == current_loaded_index);
+		}
+	}
+	menu.AppendSubMenu(loaded_menu, _("Loaded"));
+
 	menu.AppendSeparator();
 	auto *provider_menu = new wxMenu;
 	provider_menu->AppendCheckItem(
@@ -526,6 +550,11 @@ void SecondarySubtitleStrip::OnEntryButton(wxCommandEvent &) {
 		ShowSecondarySubtitleStripSettings(this, kMinimumPanelHeight, kMaximumPanelHeight);
 		break;
 	default:
+		if (selection >= MenuSecondaryLoadedFirst
+			&& selection < MenuSecondaryLoadedFirst + static_cast<int>(loaded_sources.size())) {
+			session->ActivateLoadedSource(selection - MenuSecondaryLoadedFirst);
+			break;
+		}
 		if (selection >= MenuSecondarySubtitleProviderFirst
 			&& selection < MenuSecondarySubtitleProviderFirst + static_cast<int>(subtitles_providers.size())) {
 			session->UseIndependentSubtitlesProvider(

@@ -878,7 +878,7 @@ MkvTrackScanResult MatroskaWrapper::ScanTracks(agi::fs::path const& filename) {
 	return scan_tracks(filename);
 }
 
-void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory, bool secondary_track_choice) {
+void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory, bool secondary_track_choice, std::string *selected_track_label) {
 	LogMkvParserBackendOnce();
 	target->SetTransientFonts({});
 
@@ -904,6 +904,9 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 
 		selected_track = subtitle_tracks[*resolved];
 	}
+
+	if (selected_track_label)
+		*selected_track_label = DescribeMkvTrack(*selected_track);
 
 	LOG_I(kMkvLogSection) << "Importing MKV subtitle track " << selected_track->track_number << " (" << selected_track->codec_id << ") from " << agi::fs::PathToString(filename);
 	if (!selected_track->content_encodings.empty())

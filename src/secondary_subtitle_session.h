@@ -10,9 +10,11 @@
 
 #include <libaegisub/fs_fwd.h>
 
+#include <cstddef>
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 #include <wx/bitmap.h>
 
 class AssDialogue;
@@ -20,6 +22,19 @@ class AssFile;
 class AsyncVideoProvider;
 class WatchedFile;
 struct VideoRenderPacket;
+
+/// A secondary-subtitle source recorded for fast switching within the
+/// current session. Never persisted to disk.
+struct LoadedSecondarySource {
+	enum class Kind { ExternalFile, VideoEmbedded };
+	Kind kind;
+	std::string label;     ///< Menu display name (filename / "video.mkv: embedded")
+	std::string file_path; ///< Absolute path; empty for VideoEmbedded
+	/// Held subtitle data. Only populated for VideoEmbedded (external sources
+	/// are re-read from disk on activation); always non-null when present.
+	std::unique_ptr<AssFile> held_subtitle;
+	std::string video_origin; ///< Video path the source was extracted from; empty for ExternalFile
+};
 namespace agi {
 	struct Context;
 	class BackgroundRunner;
@@ -53,6 +68,16 @@ class SecondarySubtitleSession final {
 	// once per video. Reset whenever the video provider changes.
 	bool video_embedded_auto_prompted = false;
 
+	/// Session-level list of loaded secondary-subtitle sources for the
+	/// "Loaded" quick-switch submenu. Not persisted. SIZE_MAX index means the
+	/// current source is CurrentScript (nothing in the list is active).
+	std::vector<LoadedSecondarySource> loaded_sources;
+	size_t current_source_index = static_cast<size_t>(-1);
+
+	void RegisterExternalSource(agi::fs::path const& path);
+	void RegisterVideoEmbeddedSource(agi::fs::path const& video_path, std::string const& track_label, AssFile const& subtitles);
+	void RemoveVideoEmbeddedSources(std::string const& except_video);
+
 	wxBitmap current_bitmap;
 	bool has_bitmap = false;
 	bool active = false;
@@ -80,7 +105,7 @@ class SecondarySubtitleSession final {
 	bool LoadExternalSubtitlesFromPath(std::string const& path_string, bool show_errors);
 	bool ShouldUsePluginProviderForExternalFile(std::string const& path_string) const;
 	void UpdateExternalSubtitleResolution(AsyncVideoProvider *main_provider);
-	bool LoadVideoEmbeddedSubtitles(bool show_errors);
+	bool LoadVideoEmbeddedSubtitles(bool show_errors, std::string *selected_track_label = nullptr);
 	void OnVideoHasSubtitlesAvailable();
 
 	void OnVideoProviderChanged(AsyncVideoProvider *main_provider);
@@ -109,6 +134,16 @@ public:
 	void UseGlobalSubtitlesProvider();
 	void UseIndependentSubtitlesProvider(std::string const& provider_name);
 	void UseCurrentScriptSource();
+
+	/// Session-level "Loaded" quick-switch sources (see LoadedSecondarySource).
+	std::vector<LoadedSecondarySource> const& GetLoadedSources() const { return loaded_sources; }
+	/// Index of the currently active source in GetLoadedSources(), or
+	/// SIZE_MAX when the active source is CurrentScript.
+	size_t GetCurrentLoadedSourceIndex() const { return current_source_index; }
+	/// Switch to a source in the "Loaded" list. External files are re-read from
+	/// disk; VideoEmbedded sources reuse their held subtitle data.
+	void ActivateLoadedSource(size_t index);
+
 	bool HasBitmap() const { return has_bitmap && current_bitmap.IsOk(); }
 	wxBitmap const& GetBitmap() const { return current_bitmap; }
 	void SetBitmapUpdatedCallback(std::function<void()> callback) { bitmap_updated = std::move(callback); }

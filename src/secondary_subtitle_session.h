@@ -34,6 +34,11 @@ struct LoadedSecondarySource {
 	/// are re-read from disk on activation); always non-null when present.
 	std::unique_ptr<AssFile> held_subtitle;
 	std::string video_origin; ///< Video path the source was extracted from; empty for ExternalFile
+	/// Whether this source's subtitles should be scaled to the video resolution
+	/// on every resolve (true for formats without an intrinsic PlayRes, e.g.
+	/// SRT). ASS/SSA carry their own PlayRes and set this false. Only meaningful
+	/// for VideoEmbedded sources.
+	bool follow_video_resolution = false;
 };
 namespace agi {
 	struct Context;
@@ -68,6 +73,17 @@ class SecondarySubtitleSession final {
 	// once per video. Reset whenever the video provider changes.
 	bool video_embedded_auto_prompted = false;
 
+	// Liveness token for the deferred auto-prompt. OnVideoHasSubtitlesAvailable
+	// runs its modal dialog through CallAfter (so it never nests inside a
+	// video-provider notification); the queued lambda captures a weak_ptr to
+	// this and bails if the session was destroyed before it fired.
+	std::shared_ptr<int> alive = std::make_shared<int>(0);
+	// Monotonic id of the most recently queued auto-prompt. Bumped on every
+	// queue; the deferred lambda captures its own id and bails if a newer
+	// provider change has since superseded it, so rapidly opening two videos
+	// before the event loop turns cannot stack up two dialogs.
+	unsigned video_embedded_prompt_generation = 0;
+
 	/// Session-level list of loaded secondary-subtitle sources for the
 	/// "Loaded" quick-switch submenu. Not persisted. SIZE_MAX index means the
 	/// current source is CurrentScript (nothing in the list is active).
@@ -75,7 +91,7 @@ class SecondarySubtitleSession final {
 	size_t current_source_index = static_cast<size_t>(-1);
 
 	void RegisterExternalSource(agi::fs::path const& path);
-	void RegisterVideoEmbeddedSource(agi::fs::path const& video_path, std::string const& track_label, AssFile const& subtitles);
+	void RegisterVideoEmbeddedSource(agi::fs::path const& video_path, std::string const& track_label, AssFile const& subtitles, bool follow_video_resolution);
 	void RemoveVideoEmbeddedSources(std::string const& except_video);
 
 	wxBitmap current_bitmap;

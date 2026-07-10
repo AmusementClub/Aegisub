@@ -36,6 +36,8 @@
 
 #include <algorithm>
 #include <exception>
+#include <memory>
+#include <wx/app.h>
 #include <wx/bitmap.h>
 #include <wx/intl.h>
 #include <wx/log.h>
@@ -394,13 +396,44 @@ void SecondarySubtitleSession::OnVideoHasSubtitlesAvailable() {
 	if (!core.project->CanLoadSubtitlesFromVideo())
 		return;
 
+	// Claim the prompt now so a second provider-changed notification arriving
+	// before the deferred dialog runs cannot queue a duplicate.
 	video_embedded_auto_prompted = true;
-	auto answer = wxMessageBox(
-		_("The current video contains embedded subtitles. Load them into the secondary subtitle strip?"),
-		_("Secondary subtitles"),
-		wxYES_NO | wxICON_QUESTION);
-	if (answer == wxYES)
-		OpenVideoEmbeddedSubtitles();
+
+	// Stamp this queued prompt so a later provider change (which bumps the
+	// generation again) supersedes it: only the newest queued lambda runs.
+	auto const generation = ++video_embedded_prompt_generation;
+
+	// Defer the modal out of the current notification stack: this is invoked
+	// from a video-provider-modified callback, and running a modal dialog (plus
+	// the track-choice dialog and background I/O behind OpenVideoEmbeddedSubtitles)
+	// synchronously inside that callback would re-enter the load path. CallAfter
+	// pushes it to the next event-loop turn instead.
+	std::weak_ptr<int> guard = alive;
+	wxTheApp->CallAfter([this, guard, generation] {
+		// The session may have been destroyed while the call was queued.
+		if (guard.expired())
+			return;
+		// A newer provider change queued a fresher prompt; drop this stale one so
+		// two rapid video opens do not stack up two dialogs.
+		if (generation != video_embedded_prompt_generation)
+			return;
+		// Re-validate: state may have changed between queueing and firing (video
+		// closed, source switched, strip deactivated, auto-load disabled).
+		if (!active || source_mode == SecondarySubtitleSourceMode::VideoEmbedded)
+			return;
+		if (!OPT_GET("Video/Secondary Subtitles/Auto Load From Video")->GetBool())
+			return;
+		if (!context->GetCore().project->CanLoadSubtitlesFromVideo())
+			return;
+
+		auto answer = wxMessageBox(
+			_("The current video contains embedded subtitles. Load them into the secondary subtitle strip?"),
+			_("Secondary subtitles"),
+			wxYES_NO | wxICON_QUESTION);
+		if (answer == wxYES)
+			OpenVideoEmbeddedSubtitles();
+	});
 }
 
 void SecondarySubtitleSession::RebuildProvider(AsyncVideoProvider *main_provider) {
@@ -476,16 +509,19 @@ void SecondarySubtitleSession::OnVideoProviderChanged(AsyncVideoProvider *main_p
 		: std::string{};
 	RemoveVideoEmbeddedSources(keep_video);
 
-	// VideoEmbedded is bound to a specific video; switching the video
-	// invalidates the previously-extracted tracks. Fall back to the default
-	// source so the strip keeps rendering something sensible.
-	if (source_mode == SecondarySubtitleSourceMode::VideoEmbedded) {
+	// VideoEmbedded is bound to a specific video. If the active embedded source
+	// was dropped (video switched to a different file, or closed),
+	// RemoveVideoEmbeddedSources leaves current_source_index == SIZE_MAX; fall
+	// back to CurrentScript so the strip keeps rendering something sensible. If
+	// it survived (same-path reprovider, e.g. reindex/reopen), keep the source
+	// active and let RebuildProvider below re-load its held subtitle data.
+	if (source_mode == SecondarySubtitleSourceMode::VideoEmbedded
+		&& current_source_index == static_cast<size_t>(-1)) {
 		source_mode = SecondarySubtitleSourceMode::CurrentScript;
 		external_subtitle_path.clear();
 		ClearExternalSubtitles();
 		SyncExternalSubtitleProjectProperty();
 		UpdateExternalSubtitleWatch();
-		current_source_index = static_cast<size_t>(-1);
 	}
 
 	video_embedded_auto_prompted = false;
@@ -645,7 +681,7 @@ bool SecondarySubtitleSession::OpenVideoEmbeddedSubtitles() {
 	if (external_subtitles) {
 		auto const video_path = core.project->VideoName();
 		if (!video_path.empty())
-			RegisterVideoEmbeddedSource(video_path, selected_track_label, *external_subtitles);
+			RegisterVideoEmbeddedSource(video_path, selected_track_label, *external_subtitles, external_subtitles_follow_video_resolution);
 	}
 	if (active)
 		RebuildProvider(core.project->VideoProvider());
@@ -661,7 +697,20 @@ bool SecondarySubtitleSession::ReloadSubtitles() {
 	}
 
 	if (source_mode == SecondarySubtitleSourceMode::VideoEmbedded) {
-		bool const reloaded = LoadVideoEmbeddedSubtitles(true);
+		std::string selected_track_label;
+		bool const reloaded = LoadVideoEmbeddedSubtitles(true, &selected_track_label);
+		// Refresh the snapshot so switching away and back no longer resurrects
+		// the pre-reload track; also reflects a re-picked track's label/policy.
+		if (reloaded && external_subtitles
+			&& current_source_index != static_cast<size_t>(-1)
+			&& current_source_index < loaded_sources.size()
+			&& loaded_sources[current_source_index].kind == LoadedSecondarySource::Kind::VideoEmbedded) {
+			auto &src = loaded_sources[current_source_index];
+			src.held_subtitle = agi::make_unique<AssFile>(*external_subtitles);
+			src.follow_video_resolution = external_subtitles_follow_video_resolution;
+			if (!selected_track_label.empty())
+				src.label = from_wx(_("embedded")) + " " + selected_track_label;
+		}
 		if (active)
 			RebuildProvider(context->GetCore().project->VideoProvider());
 		return reloaded;
@@ -756,7 +805,7 @@ void SecondarySubtitleSession::RegisterExternalSource(agi::fs::path const& path)
 	current_source_index = loaded_sources.size() - 1;
 }
 
-void SecondarySubtitleSession::RegisterVideoEmbeddedSource(agi::fs::path const& video_path, std::string const& track_label, AssFile const& subtitles) {
+void SecondarySubtitleSession::RegisterVideoEmbeddedSource(agi::fs::path const& video_path, std::string const& track_label, AssFile const& subtitles, bool follow_video_resolution) {
 	// Hold a private copy so switching back to this source does not re-extract
 	// the track or re-prompt for a track choice. The menu label prefixes the
 	// track description (codec/language/name) with "embedded" to distinguish
@@ -767,42 +816,43 @@ void SecondarySubtitleSession::RegisterVideoEmbeddedSource(agi::fs::path const& 
 	src.file_path.clear();
 	src.held_subtitle = agi::make_unique<AssFile>(subtitles);
 	src.video_origin = agi::fs::PathToString(video_path);
+	// Record whether this track lacks an intrinsic PlayRes (SRT etc.) so it can
+	// be re-scaled to the video resolution when re-activated, while ASS/SSA
+	// tracks keep their own PlayRes untouched.
+	src.follow_video_resolution = follow_video_resolution;
 	loaded_sources.push_back(std::move(src));
 	current_source_index = loaded_sources.size() - 1;
 }
 
 void SecondarySubtitleSession::RemoveVideoEmbeddedSources(std::string const& except_video) {
-	// Capture the identity of the currently-active source by value (not by
-	// pointer/index) so it survives the erase that shifts elements.
-	auto const active_kind = (current_source_index != static_cast<size_t>(-1)
-		&& current_source_index < loaded_sources.size())
-		? loaded_sources[current_source_index].kind
-		: LoadedSecondarySource::Kind::ExternalFile;
-	auto const active_path = (current_source_index != static_cast<size_t>(-1)
-		&& current_source_index < loaded_sources.size())
-		? loaded_sources[current_source_index].file_path
-		: std::string{};
+	auto const had_active = current_source_index != static_cast<size_t>(-1)
+		&& current_source_index < loaded_sources.size();
 
-	loaded_sources.erase(
-		std::remove_if(loaded_sources.begin(), loaded_sources.end(),
-			[&](LoadedSecondarySource const& s) {
-				return s.kind == LoadedSecondarySource::Kind::VideoEmbedded
-					&& s.video_origin != except_video;
-			}),
-		loaded_sources.end());
+	// std::remove_if preserves the relative order of surviving elements, so the
+	// active source's new index is simply the number of survivors that precede
+	// its old position. Compute that while the old indices are still valid, then
+	// relocate after the erase. This works for VideoEmbedded sources too (an
+	// entry bound to the still-open video survives), not just ExternalFile.
+	auto const should_drop = [&](LoadedSecondarySource const& s) {
+		return s.kind == LoadedSecondarySource::Kind::VideoEmbedded
+			&& s.video_origin != except_video;
+	};
 
-	// Re-locate the previously-active external source by path. Video sources
-	// only survive if they matched the open video, and a still-active video
-	// source would not reach here (OnVideoProviderChanged resets it).
-	current_source_index = static_cast<size_t>(-1);
-	if (active_kind == LoadedSecondarySource::Kind::ExternalFile) {
-		for (size_t i = 0; i < loaded_sources.size(); ++i) {
-			if (loaded_sources[i].file_path == active_path) {
-				current_source_index = i;
-				break;
-			}
+	bool active_survives = false;
+	size_t relocated_index = 0;
+	if (had_active) {
+		active_survives = !should_drop(loaded_sources[current_source_index]);
+		for (size_t i = 0; i < current_source_index; ++i) {
+			if (!should_drop(loaded_sources[i]))
+				++relocated_index;
 		}
 	}
+
+	loaded_sources.erase(
+		std::remove_if(loaded_sources.begin(), loaded_sources.end(), should_drop),
+		loaded_sources.end());
+
+	current_source_index = active_survives ? relocated_index : static_cast<size_t>(-1);
 }
 
 void SecondarySubtitleSession::ActivateLoadedSource(size_t index) {
@@ -825,6 +875,11 @@ void SecondarySubtitleSession::ActivateLoadedSource(size_t index) {
 	source_mode = SecondarySubtitleSourceMode::VideoEmbedded;
 	external_subtitle_path.clear();
 	external_subtitles_use_plugin_provider = false;
+	// Restore this source's own resolution policy rather than inheriting a stale
+	// value from the previously-active source. SRT-style tracks (no intrinsic
+	// PlayRes) keep following the video resolution; ASS/SSA tracks keep their
+	// own PlayRes and are never re-scaled.
+	external_subtitles_follow_video_resolution = src.follow_video_resolution;
 	loaded_external_subtitle_path.clear();
 	current_source_index = index;
 	SyncExternalSubtitleProjectProperty(); // VideoEmbedded clears the property

@@ -42,6 +42,24 @@ TEST(lagi_vfr, constructors_good) {
 	EXPECT_NO_THROW(Framerate("data/vfr/in/v1_out_of_order.txt"));
 }
 
+TEST(lagi_vfr, fps_description_rational_vs_double) {
+	auto const ntsc = Framerate(24000, 1001);
+	EXPECT_EQ(std::make_pair(int64_t(24000), int64_t(1001)), ntsc.FPSFraction());
+	EXPECT_EQ("24000/1001 (23.976 fps)", ntsc.FPSDescription());
+
+	// Literal doubles stay decimal; do not rewrite as 2997/125.
+	auto const rounded = Framerate(23.976);
+	EXPECT_EQ("23.976 fps", rounded.FPSDescription());
+
+	auto const via_double = Framerate(24000.0 / 1001.0);
+	EXPECT_EQ("23.976 fps", via_double.FPSDescription());
+
+	// 1000 ms/frame average → 1 fps
+	auto const vfr = Framerate({0, 1000, 2000, 3000});
+	EXPECT_TRUE(vfr.IsVFR());
+	EXPECT_EQ("VFR, avg 1.000 fps", vfr.FPSDescription());
+}
+
 TEST(lagi_vfr, constructors_bad_cfr) {
 	EXPECT_THROW(Framerate(-1.), InvalidFramerate);
 	EXPECT_THROW(Framerate(1000.1), InvalidFramerate);

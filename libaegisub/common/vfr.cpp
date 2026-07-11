@@ -19,6 +19,7 @@
 #include "libaegisub/vfr.h"
 
 #include "libaegisub/charset.h"
+#include "libaegisub/format.h"
 #include "libaegisub/io.h"
 #include "libaegisub/line_iterator.h"
 
@@ -27,6 +28,8 @@
 #include <cmath>
 #include <functional>
 #include <iterator>
+#include <numeric>
+#include <utility>
 
 namespace {
 static const int64_t default_denominator = 1000000000;
@@ -318,6 +321,31 @@ int Framerate::FrameAtSmpte(int h, int m, int s, int f) const {
 
 int Framerate::TimeAtSmpte(int h, int m, int s, int f) const {
 	return TimeAtFrame(FrameAtSmpte(h, m, s, f));
+}
+
+std::pair<int64_t, int64_t> Framerate::FPSFraction() const {
+	if (numerator <= 0 || denominator <= 0)
+		return {0, 1};
+
+	int64_t n = numerator;
+	int64_t d = denominator;
+	int64_t g = std::gcd(n, d);
+	return {n / g, d / g};
+}
+
+std::string Framerate::FPSDescription() const {
+	if (!IsLoaded())
+		return "0.000 fps";
+
+	// Double ctor, v1 Assume, and v2 averages store FPS against den=1e9. Show those
+	// (and all VFR averages) as decimals so 23.976 is not rewritten as 2997/125.
+	if (IsVFR())
+		return format("VFR, avg %.3f fps", FPS());
+	if (denominator == default_denominator)
+		return format("%.3f fps", FPS());
+
+	auto [n, d] = FPSFraction();
+	return format("%d/%d (%.3f fps)", n, d, FPS());
 }
 
 } }

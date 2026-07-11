@@ -15,6 +15,8 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include <libaegisub/exception.h>
@@ -200,6 +202,17 @@ public:
 
 	/// Get average FPS of this frame rate
 	double FPS() const { return double(numerator) / denominator; }
+
+	/// @brief Reduced numerator/denominator of the stored FPS fraction
+	std::pair<int64_t, int64_t> FPSFraction() const;
+
+	/// @brief Human-readable FPS description
+	///
+	/// Rational CFR (e.g. 24000/1001) is shown as a fraction. Rates stored via the
+	/// double constructor or as a VFR average are shown as a plain decimal so
+	/// values like 23.976 are not rewritten as 2997/125.
+	/// @return e.g. "24000/1001 (23.976 fps)", "23.976 fps", or "VFR, avg 23.976 fps"
+	std::string FPSDescription() const;
 
 	/// Does this frame rate need drop frames for SMPTE timeish frame numbers?
 	bool NeedsDropFrames() const { return drop; }

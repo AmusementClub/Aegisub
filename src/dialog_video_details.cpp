@@ -81,7 +81,9 @@ void ShowVideoDetailsDialog(agi::Context *c) {
 		fg->Add(new wxTextCtrl(&d, -1, value, wxDefaultPosition, wxSize(300,-1), wxTE_READONLY), 0, wxALIGN_CENTRE_VERTICAL | wxEXPAND);
 	};
 	make_field(_("File name:"), core.project->VideoName().wstring());
-	make_field(_("FPS:"), fmt_wx("%.3f", fps.FPS()));
+	// Prefer rational form (e.g. 24000/1001) so NTSC film is not mistaken for
+	// the rounded decimal 23.976 used by some tools/providers.
+	make_field(_("FPS:"), to_wx(fps.FPSDescription()));
 	make_field(_("Resolution:"), fmt_wx("%dx%d (%d:%d)", width, height, ar_width, ar_height));
 	make_field(_("Length:"), fmt_plural(framecount, "1 frame", "%d frames (%s)",
 		framecount, agi::Time(fps.TimeAtFrame(framecount - 1)).GetAssFormatted(true)));

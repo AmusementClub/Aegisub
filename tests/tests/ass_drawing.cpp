@@ -439,6 +439,17 @@ TEST(lagi_ass_drawing, compacts_mixed_closed_contours_without_reversing_curves) 
 	EXPECT_LT(compact.size(), SerializeAssFilled(ParseAss(shape)).size());
 }
 
+TEST(lagi_ass_drawing, compact_rotation_selection_is_canonical) {
+	auto first = CompactAss("m 20 0 l 20 20 0 20 0 0 10 0 20 0");
+	auto rotated = CompactAss("m 0 20 l 0 0 10 0 20 0 20 20 0 20");
+	EXPECT_EQ("m 0 0 l 20 0 20 20 0 20", first);
+	EXPECT_EQ(first, rotated);
+
+	auto mixed = CompactAss("m 0 0 l 1 1 b 10 9 13 9 2 2 l 100000 100000");
+	auto mixed_rotated = CompactAss("m 2 2 l 100000 100000 0 0 1 1 b 10 9 13 9 2 2");
+	EXPECT_EQ(mixed, mixed_rotated);
+}
+
 TEST(lagi_ass_drawing, resets_pen_after_implicit_close_when_path_continues) {
 	PathData path;
 	path.commands.push_back({PathVerb::MoveTo, {0.0, 0.0}, {}, {}});

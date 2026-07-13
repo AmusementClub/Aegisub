@@ -59,24 +59,6 @@ struct FormattedPoint {
 	std::string y;
 };
 
-struct FormattedCompactSegment {
-	PathVerb verb = PathVerb::LineTo;
-	FormattedPoint start;
-	FormattedPoint c1;
-	FormattedPoint c2;
-	FormattedPoint end;
-};
-
-struct RotatedSegmentTokenCursor {
-	std::vector<FormattedCompactSegment> const& segments;
-	std::size_t first = 0;
-	std::size_t segment_offset = 0;
-	int phase = 0;
-	char last_command = 0;
-
-	bool Next(std::string_view& token);
-};
-
 std::int64_t QuantizeCoordinate(double value) {
 	if (!std::isfinite(value))
 		return 0;
@@ -526,101 +508,6 @@ int CompareFormattedPoint(FormattedPoint const& lhs, FormattedPoint const& rhs) 
 	return CompareToken(lhs.y, rhs.y);
 }
 
-void AddTokenSize(std::size_t& chars, std::size_t& tokens, std::string_view token) {
-	chars += token.size();
-	++tokens;
-}
-
-void AddPointTokenSize(std::size_t& chars, std::size_t& tokens, FormattedPoint const& point) {
-	AddTokenSize(chars, tokens, point.x);
-	AddTokenSize(chars, tokens, point.y);
-}
-
-std::size_t JoinedTokenSize(std::size_t chars, std::size_t tokens) {
-	return tokens == 0 ? 0 : chars + tokens - 1;
-}
-
-bool RotatedSegmentTokenCursor::Next(std::string_view& token) {
-	if (phase == 0) {
-		token = "m";
-		phase = 1;
-		return true;
-	}
-
-	if (phase == 1) {
-		token = segments[first].start.x;
-		phase = 2;
-		return true;
-	}
-
-	if (phase == 2) {
-		token = segments[first].start.y;
-		phase = 3;
-		return true;
-	}
-
-	while (segment_offset + 1 < segments.size()) {
-		auto const& segment = segments[(first + segment_offset) % segments.size()];
-		char command = segment.verb == PathVerb::LineTo ? 'l' : 'b';
-		if (phase == 3) {
-			phase = 4;
-			if (last_command != command) {
-				last_command = command;
-				token = command == 'l' ? "l" : "b";
-				return true;
-			}
-		}
-
-		if (segment.verb == PathVerb::LineTo) {
-			if (phase == 4) {
-				token = segment.end.x;
-				phase = 5;
-				return true;
-			}
-			if (phase == 5) {
-				token = segment.end.y;
-				phase = 3;
-				++segment_offset;
-				return true;
-			}
-		} else {
-			if (phase == 4) {
-				token = segment.c1.x;
-				phase = 5;
-				return true;
-			}
-			if (phase == 5) {
-				token = segment.c1.y;
-				phase = 6;
-				return true;
-			}
-			if (phase == 6) {
-				token = segment.c2.x;
-				phase = 7;
-				return true;
-			}
-			if (phase == 7) {
-				token = segment.c2.y;
-				phase = 8;
-				return true;
-			}
-			if (phase == 8) {
-				token = segment.end.x;
-				phase = 9;
-				return true;
-			}
-			if (phase == 9) {
-				token = segment.end.y;
-				phase = 3;
-				++segment_offset;
-				return true;
-			}
-		}
-	}
-
-	return false;
-}
-
 std::string SerializeLoweredAss(PathData const& lowered) {
 	std::string text;
 	text.reserve(lowered.commands.size() * 24);
@@ -725,28 +612,32 @@ std::vector<FormattedPoint> FormatContourPoints(std::vector<Point> const& points
 	return formatted;
 }
 
-bool RotatedLineContourTextLess(std::vector<FormattedPoint> const& points, std::size_t lhs, std::size_t rhs) {
-	if (int value = CompareFormattedPoint(points[lhs], points[rhs]))
-		return value < 0;
-
-	for (std::size_t offset = 1; offset < points.size(); ++offset) {
-		std::size_t lhs_index = (lhs + offset) % points.size();
-		std::size_t rhs_index = (rhs + offset) % points.size();
-		if (int value = CompareFormattedPoint(points[lhs_index], points[rhs_index]))
-			return value < 0;
-	}
-
-	return false;
-}
-
 std::size_t BestLineContourStart(std::vector<Point> const& points) {
-	std::size_t best = 0;
 	auto formatted = FormatContourPoints(points);
-	for (std::size_t index = 1; index < points.size(); ++index) {
-		if (RotatedLineContourTextLess(formatted, index, best))
-			best = index;
+	std::size_t lhs = 0;
+	std::size_t rhs = 1;
+	std::size_t offset = 0;
+	while (lhs < points.size() && rhs < points.size() && offset < points.size()) {
+		int comparison = CompareFormattedPoint(
+			formatted[(lhs + offset) % points.size()],
+			formatted[(rhs + offset) % points.size()]);
+		if (comparison == 0) {
+			++offset;
+			continue;
+		}
+
+		if (comparison > 0) {
+			lhs += offset + 1;
+			if (lhs == rhs)
+				++lhs;
+		} else {
+			rhs += offset + 1;
+			if (lhs == rhs)
+				++rhs;
+		}
+		offset = 0;
 	}
-	return best;
+	return std::min(lhs, rhs);
 }
 
 void AppendLineContour(PathData& result, std::vector<Point> const& points) {
@@ -800,68 +691,6 @@ void AppendRotatedSegments(PathData& result, std::vector<CompactSegment> const& 
 	}
 }
 
-std::vector<FormattedCompactSegment> FormatCompactSegments(std::vector<CompactSegment> const& segments) {
-	std::vector<FormattedCompactSegment> formatted;
-	formatted.reserve(segments.size());
-	for (auto const& segment : segments) {
-		FormattedCompactSegment item;
-		item.verb = segment.verb;
-		item.start = FormatPoint(segment.start);
-		item.end = FormatPoint(segment.end);
-		if (segment.verb == PathVerb::CubicTo) {
-			item.c1 = FormatPoint(segment.c1);
-			item.c2 = FormatPoint(segment.c2);
-		}
-		formatted.push_back(std::move(item));
-	}
-	return formatted;
-}
-
-std::size_t RotatedSegmentTextSize(std::vector<FormattedCompactSegment> const& segments, std::size_t omitted_line) {
-	std::size_t chars = 0;
-	std::size_t tokens = 0;
-	std::size_t first = (omitted_line + 1) % segments.size();
-
-	AddTokenSize(chars, tokens, "m");
-	AddPointTokenSize(chars, tokens, segments[first].start);
-
-	char last_command = 0;
-	for (std::size_t offset = 0; offset + 1 < segments.size(); ++offset) {
-		auto const& segment = segments[(first + offset) % segments.size()];
-		char command = segment.verb == PathVerb::LineTo ? 'l' : 'b';
-		if (last_command != command) {
-			AddTokenSize(chars, tokens, command == 'l' ? "l" : "b");
-			last_command = command;
-		}
-
-		if (segment.verb == PathVerb::LineTo) {
-			AddPointTokenSize(chars, tokens, segment.end);
-		} else {
-			AddPointTokenSize(chars, tokens, segment.c1);
-			AddPointTokenSize(chars, tokens, segment.c2);
-			AddPointTokenSize(chars, tokens, segment.end);
-		}
-	}
-
-	return JoinedTokenSize(chars, tokens);
-}
-
-bool RotatedSegmentTextLess(std::vector<FormattedCompactSegment> const& segments, std::size_t lhs, std::size_t rhs) {
-	RotatedSegmentTokenCursor lhs_cursor {segments, (lhs + 1) % segments.size()};
-	RotatedSegmentTokenCursor rhs_cursor {segments, (rhs + 1) % segments.size()};
-
-	std::string_view lhs_token;
-	std::string_view rhs_token;
-	for (;;) {
-		bool has_lhs = lhs_cursor.Next(lhs_token);
-		bool has_rhs = rhs_cursor.Next(rhs_token);
-		if (!has_lhs || !has_rhs)
-			return has_rhs;
-		if (int value = CompareToken(lhs_token, rhs_token))
-			return value < 0;
-	}
-}
-
 bool TryAppendCompactMixedContour(PathData& result, PathData const& path, ContourSlice contour) {
 	std::vector<CompactSegment> segments;
 	if (!BuildCompactSegments(path, contour, segments))
@@ -873,17 +702,34 @@ bool TryAppendCompactMixedContour(PathData& result, PathData const& path, Contou
 	if (!has_cubic)
 		return false;
 
-	auto formatted = FormatCompactSegments(segments);
+	std::size_t cyclic_transitions = 0;
+	for (std::size_t index = 0; index < segments.size(); ++index) {
+		if (segments[index].verb != segments[(index + 1) % segments.size()].verb)
+			++cyclic_transitions;
+	}
+
 	std::size_t best_omitted = segments.size();
-	std::size_t best_cost = std::numeric_limits<std::size_t>::max();
+	std::size_t best_runs = std::numeric_limits<std::size_t>::max();
+	FormattedPoint best_start;
 	for (std::size_t index = 0; index < segments.size(); ++index) {
 		if (segments[index].verb != PathVerb::LineTo)
 			continue;
 
-		std::size_t cost = RotatedSegmentTextSize(formatted, index);
-		if (cost < best_cost || (cost == best_cost && (best_omitted == segments.size() || RotatedSegmentTextLess(formatted, index, best_omitted)))) {
+		auto previous = (index + segments.size() - 1) % segments.size();
+		auto next = (index + 1) % segments.size();
+		std::size_t runs = 1 + cyclic_transitions;
+		runs -= segments[previous].verb != segments[index].verb ? 1 : 0;
+		runs -= segments[index].verb != segments[next].verb ? 1 : 0;
+
+		// The omitted line endpoint becomes the new move point, so all candidate
+		// rotations contain the same coordinate tokens. Only command runs change
+		// their serialized size; the move point is a stable linear-time tie-break.
+		auto start = FormatPoint(segments[next].start);
+		if (runs < best_runs ||
+			(runs == best_runs && (best_omitted == segments.size() || CompareFormattedPoint(start, best_start) < 0))) {
 			best_omitted = index;
-			best_cost = cost;
+			best_runs = runs;
+			best_start = std::move(start);
 		}
 	}
 

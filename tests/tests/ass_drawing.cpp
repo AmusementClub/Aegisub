@@ -305,6 +305,69 @@ TEST(lagi_ass_drawing, appends_ellipse_arc_commands) {
 	ExpectRect(bounds, 0.0, 0.0, 20.0, 10.0);
 }
 
+TEST(lagi_ass_drawing, arc_angles_wrap_and_signed_dimensions_mirror_geometry) {
+	PathData path;
+	AppendArcMoveTo(path, 0.0, 0.0, 20.0, 10.0, 450.0);
+	ASSERT_EQ(1u, path.commands.size());
+	ExpectPoint(path.commands[0].p1, 10.0, 0.0);
+
+	path = {};
+	AppendArcMoveTo(path, 20.0, 0.0, -20.0, 10.0, 0.0);
+	ASSERT_EQ(1u, path.commands.size());
+	ExpectPoint(path.commands[0].p1, 0.0, 5.0);
+	AppendArcTo(path, 20.0, 0.0, -20.0, 10.0, 0.0, 90.0);
+	ASSERT_EQ(PathVerb::CubicTo, path.commands.back().verb);
+	ExpectPoint(path.commands.back().p3, 10.0, 0.0);
+
+	path = {};
+	AppendArcMoveTo(path, 0.0, 10.0, 20.0, -10.0, 90.0);
+	ASSERT_EQ(1u, path.commands.size());
+	ExpectPoint(path.commands[0].p1, 10.0, 10.0);
+}
+
+TEST(lagi_ass_drawing, arc_zero_sweep_preserves_connection_without_curve) {
+	PathData empty;
+	AppendArcTo(empty, 0.0, 0.0, 20.0, 10.0, 0.0, 0.0);
+	ASSERT_EQ(2u, empty.commands.size());
+	EXPECT_EQ(PathVerb::MoveTo, empty.commands[0].verb);
+	ExpectPoint(empty.commands[0].p1, 0.0, 0.0);
+	EXPECT_EQ(PathVerb::LineTo, empty.commands[1].verb);
+	ExpectPoint(empty.commands[1].p1, 20.0, 5.0);
+
+	auto matching = ParseAssOpen("m 20 5");
+	AppendArcTo(matching, 0.0, 0.0, 20.0, 10.0, 0.0, 0.0);
+	ASSERT_EQ(1u, matching.commands.size());
+
+	auto mismatched = ParseAssOpen("m 1 1");
+	AppendArcTo(mismatched, 0.0, 0.0, 20.0, 10.0, 0.0, 0.0);
+	ASSERT_EQ(2u, mismatched.commands.size());
+	EXPECT_EQ(PathVerb::LineTo, mismatched.commands.back().verb);
+}
+
+TEST(lagi_ass_drawing, arc_sweep_is_clamped_to_one_turn_in_both_directions) {
+	for (double sweep : {450.0, -450.0}) {
+		PathData path;
+		AppendArcTo(path, 0.0, 0.0, 20.0, 10.0, 0.0, sweep);
+		ASSERT_EQ(6u, path.commands.size());
+		EXPECT_EQ(PathVerb::MoveTo, path.commands[0].verb);
+		EXPECT_EQ(PathVerb::LineTo, path.commands[1].verb);
+		for (std::size_t index = 2; index < path.commands.size(); ++index)
+			EXPECT_EQ(PathVerb::CubicTo, path.commands[index].verb);
+		ExpectPoint(path.commands.back().p3, 20.0, 5.0);
+	}
+}
+
+TEST(lagi_ass_drawing, arc_after_close_connects_from_subpath_start) {
+	auto path = MakeRect(1.0, 1.0, 1.0, 1.0);
+	ASSERT_EQ(PathVerb::Close, path.commands.back().verb);
+	AppendArcTo(path, 0.0, 0.0, 20.0, 10.0, 0.0, 90.0);
+	ASSERT_GE(path.commands.size(), 7u);
+	EXPECT_EQ(PathVerb::LineTo, path.commands[5].verb);
+	ExpectPoint(path.commands[5].p1, 20.0, 5.0);
+	EXPECT_EQ(PathVerb::CubicTo, path.commands[6].verb);
+	ExpectPoint(path.commands[6].p3, 10.0, 0.0);
+}
+
 TEST(lagi_ass_drawing, computes_exact_cubic_bounds) {
 	auto path = ParseAssOpen("m 0 0 b 0 10 10 10 10 0");
 	Rect bounds;

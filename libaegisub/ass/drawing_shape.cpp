@@ -433,7 +433,7 @@ PathData MakeRoundedRect(double x, double y, double width, double height, double
 void AppendArcMoveTo(PathData& path, double x, double y, double width, double height, double angle) {
 	if (!std::isfinite(angle))
 		return;
-	Rect rect = NormalizeRect(x, y, width, height);
+	Rect rect {x, y, width, height};
 	if (!RectIsFinite(rect))
 		return;
 	PathState state = AnalyzePath(path);
@@ -441,7 +441,7 @@ void AppendArcMoveTo(PathData& path, double x, double y, double width, double he
 }
 
 void AppendArcTo(PathData& path, double x, double y, double width, double height, double start_angle, double sweep_length) {
-	Rect rect = NormalizeRect(x, y, width, height);
+	Rect rect {x, y, width, height};
 	if (!RectIsFinite(rect))
 		return;
 	PathState state = AnalyzePath(path);

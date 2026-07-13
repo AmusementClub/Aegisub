@@ -9,6 +9,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -45,6 +46,7 @@ constexpr double kScalarTolerance = 1e-3;
 constexpr std::uint64_t kRenderAbsSumTolerance = 20000;
 constexpr int kRenderPixelTolerance = 150;
 constexpr int kRenderMaxDiffTolerance = 96;
+constexpr std::string_view kDefaultDumpDirectory = "drawing-compare-diffs";
 
 struct Options {
 	std::string reference_dll;
@@ -631,6 +633,75 @@ std::string Truncate(std::string const& text) {
 	return text.substr(0, max_length) + "...";
 }
 
+std::string SafeFileStem(std::string_view name) {
+	std::string stem;
+	stem.reserve(name.size());
+	for (unsigned char c : name)
+		stem.push_back(std::isalnum(c) || c == '-' || c == '_' ? static_cast<char>(c) : '_');
+	return stem.empty() ? "unnamed" : stem;
+}
+
+bool WritePgm(std::filesystem::path const& path,
+	std::vector<std::uint8_t> const& mask,
+	int width,
+	int height,
+	std::string& error) {
+	if (mask.size() != static_cast<std::size_t>(width) * static_cast<std::size_t>(height)) {
+		error = "mask size does not match image dimensions";
+		return false;
+	}
+
+	std::ofstream file(path, std::ios::binary);
+	if (!file) {
+		error = "failed to open " + path.string();
+		return false;
+	}
+
+	file << "P5\n" << width << " " << height << "\n255\n";
+	file.write(reinterpret_cast<char const *>(mask.data()), static_cast<std::streamsize>(mask.size()));
+	if (!file) {
+		error = "failed to write " + path.string();
+		return false;
+	}
+	return true;
+}
+
+bool DumpMaskComparison(Options const& options,
+	std::string_view name,
+	std::vector<std::uint8_t> const& current,
+	std::vector<std::uint8_t> const& reference,
+	std::string& detail) {
+	std::error_code ec;
+	auto directory = std::filesystem::absolute(kDefaultDumpDirectory, ec);
+	if (ec) {
+		detail = "failed to resolve dump directory: " + ec.message();
+		return false;
+	}
+	std::filesystem::create_directories(directory, ec);
+	if (ec) {
+		detail = "failed to create " + directory.string() + ": " + ec.message();
+		return false;
+	}
+
+	std::vector<std::uint8_t> diff(std::min(current.size(), reference.size()));
+	std::transform(current.begin(), current.begin() + diff.size(), reference.begin(), diff.begin(),
+		[](std::uint8_t lhs, std::uint8_t rhs) {
+			return static_cast<std::uint8_t>(std::abs(static_cast<int>(lhs) - static_cast<int>(rhs)));
+		});
+
+	auto base = directory / SafeFileStem(name);
+	std::string error;
+	if (!WritePgm(base.string() + "-current.pgm", current, options.width, options.height, error) ||
+		!WritePgm(base.string() + "-reference.pgm", reference, options.width, options.height, error) ||
+		!WritePgm(base.string() + "-diff.pgm", diff, options.width, options.height, error)) {
+		detail = std::move(error);
+		return false;
+	}
+
+	detail = base.string() + "-{current,reference,diff}.pgm";
+	return true;
+}
+
 PathData ParseShapeForMode(std::string_view text, AssDrawingPathMode mode) {
 	return agi::ass::drawing::ParseAss(text, AssDrawingCompatMode::VsFilter, mode);
 }
@@ -808,6 +879,13 @@ void CompareShape(Counters& counters,
 		counters.Pass(name, options, "render close, " + RenderDetail(metrics));
 	else {
 		std::string detail = path_detail + "; render diff " + RenderDetail(metrics);
+		if (options.dump_failures) {
+			std::string dump_detail;
+			if (DumpMaskComparison(options, name, current_mask, reference_mask, dump_detail))
+				detail += "; artifacts=" + dump_detail;
+			else
+				detail += "; artifact error=" + dump_detail;
+		}
 		if (options.strict_reference)
 			counters.Fail(name, detail);
 		else

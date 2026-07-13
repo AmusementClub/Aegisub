@@ -691,6 +691,87 @@ void AppendRotatedSegments(PathData& result, std::vector<CompactSegment> const& 
 	}
 }
 
+void AppendSegmentKeyToken(std::string& key, std::string_view token) {
+	key.append(token);
+	key.push_back('\0');
+}
+
+std::string CompactSegmentKey(CompactSegment const& segment) {
+	std::string key;
+	key.reserve(segment.verb == PathVerb::LineTo ? 24 : 64);
+	AppendSegmentKeyToken(key, segment.verb == PathVerb::LineTo ? "l" : "b");
+	auto append_point = [&](Point const& point) {
+		auto formatted = FormatPoint(point);
+		AppendSegmentKeyToken(key, formatted.x);
+		AppendSegmentKeyToken(key, formatted.y);
+	};
+	if (segment.verb == PathVerb::CubicTo) {
+		append_point(segment.c1);
+		append_point(segment.c2);
+	}
+	append_point(segment.end);
+	return key;
+}
+
+std::vector<std::size_t> CyclicSegmentRanks(std::vector<CompactSegment> const& segments) {
+	std::size_t count = segments.size();
+	std::vector<std::string> keys;
+	std::vector<std::size_t> order(count);
+	keys.reserve(count);
+	for (std::size_t index = 0; index < count; ++index) {
+		keys.push_back(CompactSegmentKey(segments[index]));
+		order[index] = index;
+	}
+	std::sort(order.begin(), order.end(), [&](std::size_t lhs, std::size_t rhs) {
+		if (keys[lhs] != keys[rhs])
+			return keys[lhs] < keys[rhs];
+		return lhs < rhs;
+	});
+
+	std::vector<std::size_t> ranks(count);
+	std::size_t rank_count = 0;
+	for (std::size_t index = 0; index < count; ++index) {
+		if (index == 0 || keys[order[index]] != keys[order[index - 1]])
+			++rank_count;
+		ranks[order[index]] = rank_count - 1;
+	}
+
+	std::vector<std::size_t> shifted(count);
+	std::vector<std::size_t> next_ranks(count);
+	for (std::size_t span = 1; span < count && rank_count < count; span *= 2) {
+		for (std::size_t index = 0; index < count; ++index)
+			shifted[index] = order[index] >= span ? order[index] - span : order[index] + count - span;
+
+		std::vector<std::size_t> offsets(rank_count, 0);
+		for (auto index : shifted)
+			++offsets[ranks[index]];
+		std::size_t position = 0;
+		for (auto& offset : offsets) {
+			std::size_t class_size = offset;
+			offset = position;
+			position += class_size;
+		}
+		for (auto index : shifted)
+			order[offsets[ranks[index]]++] = index;
+
+		std::size_t next_rank_count = 1;
+		next_ranks[order[0]] = 0;
+		for (std::size_t index = 1; index < count; ++index) {
+			auto previous = order[index - 1];
+			auto current = order[index];
+			if (ranks[previous] != ranks[current] ||
+				ranks[(previous + span) % count] != ranks[(current + span) % count])
+				++next_rank_count;
+			next_ranks[current] = next_rank_count - 1;
+		}
+		ranks.swap(next_ranks);
+		rank_count = next_rank_count;
+		if (span >= count - span)
+			break;
+	}
+	return ranks;
+}
+
 bool TryAppendCompactMixedContour(PathData& result, PathData const& path, ContourSlice contour) {
 	std::vector<CompactSegment> segments;
 	if (!BuildCompactSegments(path, contour, segments))
@@ -701,6 +782,7 @@ bool TryAppendCompactMixedContour(PathData& result, PathData const& path, Contou
 	});
 	if (!has_cubic)
 		return false;
+	auto cyclic_ranks = CyclicSegmentRanks(segments);
 
 	std::size_t cyclic_transitions = 0;
 	for (std::size_t index = 0; index < segments.size(); ++index) {
@@ -710,6 +792,7 @@ bool TryAppendCompactMixedContour(PathData& result, PathData const& path, Contou
 
 	std::size_t best_omitted = segments.size();
 	std::size_t best_runs = std::numeric_limits<std::size_t>::max();
+	std::size_t best_rank = std::numeric_limits<std::size_t>::max();
 	FormattedPoint best_start;
 	for (std::size_t index = 0; index < segments.size(); ++index) {
 		if (segments[index].verb != PathVerb::LineTo)
@@ -721,14 +804,18 @@ bool TryAppendCompactMixedContour(PathData& result, PathData const& path, Contou
 		runs -= segments[previous].verb != segments[index].verb ? 1 : 0;
 		runs -= segments[index].verb != segments[next].verb ? 1 : 0;
 
-		// The omitted line endpoint becomes the new move point, so all candidate
-		// rotations contain the same coordinate tokens. Only command runs change
-		// their serialized size; the move point is a stable linear-time tie-break.
+		// The omitted line endpoint becomes the new move point. Minimize command
+		// runs first, then choose a canonical rotation of the formatted segments.
 		auto start = FormatPoint(segments[next].start);
+		int start_comparison = best_omitted == segments.size()
+			? -1
+			: CompareFormattedPoint(start, best_start);
 		if (runs < best_runs ||
-			(runs == best_runs && (best_omitted == segments.size() || CompareFormattedPoint(start, best_start) < 0))) {
+			(runs == best_runs && (start_comparison < 0 ||
+				(start_comparison == 0 && cyclic_ranks[next] < best_rank)))) {
 			best_omitted = index;
 			best_runs = runs;
+			best_rank = cyclic_ranks[next];
 			best_start = std::move(start);
 		}
 	}

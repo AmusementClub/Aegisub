@@ -489,6 +489,12 @@ TEST(lagi_ass_drawing, compact_rotation_selection_is_canonical) {
 	auto mixed = CompactAss("m 0 0 l 1 1 b 10 9 13 9 2 2 l 100000 100000");
 	auto mixed_rotated = CompactAss("m 2 2 l 100000 100000 0 0 1 1 b 10 9 13 9 2 2");
 	EXPECT_EQ(mixed, mixed_rotated);
+
+	auto repeated_start = CompactAss(
+		"m 0 0 b 1 1 2 -1 3 0 l 0 0 b 1 1 -1 2 0 3 l 0 0");
+	auto repeated_start_rotated = CompactAss(
+		"m 0 0 b 1 1 -1 2 0 3 l 0 0 b 1 1 2 -1 3 0 l 0 0");
+	EXPECT_EQ(repeated_start, repeated_start_rotated);
 }
 
 TEST(lagi_ass_drawing, resets_pen_after_implicit_close_when_path_continues) {

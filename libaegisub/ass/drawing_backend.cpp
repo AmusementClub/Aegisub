@@ -391,75 +391,149 @@ std::vector<PathData> SplitBackendContours(PathData const& path) {
 	return contours;
 }
 
-Point BackendContourSample(PathData const& contour) {
-	Point anchor = contour.commands.front().p1;
-	for (std::size_t index = 1; index < contour.commands.size(); ++index) {
-		Point endpoint;
-		switch (contour.commands[index].verb) {
-			case PathVerb::LineTo:
-				endpoint = contour.commands[index].p1;
-				break;
-			case PathVerb::QuadTo:
-			case PathVerb::ConicTo:
-				endpoint = contour.commands[index].p2;
-				break;
-			case PathVerb::CubicTo:
-				endpoint = contour.commands[index].p3;
-				break;
-			case PathVerb::MoveTo:
-			case PathVerb::Close:
-				continue;
-		}
-		if (!SamePoint(endpoint, anchor))
-			return endpoint;
-	}
-	return anchor;
-}
-
 bool NormalizeSkPathFill(SkPath const& source, BackendCoordinates const& coordinates, PathData& result) {
 	result = {};
 	SkPath simplified;
 	if (!Simplify(source, &simplified))
 		return false;
-	// Once intersections are resolved, even-odd describes the same boundary
-	// nesting without retaining the source's winding magnitudes.
-	simplified.setFillType(SkPathFillType::kEvenOdd);
 	auto winding = AsWinding(simplified);
 	if (!winding)
 		return false;
+	return FromSkPath(*winding, coordinates, result);
+}
+
+bool TryFindInteriorSample(PathData const& contour,
+	SkPath const& sk_contour,
+	BackendCoordinates const& coordinates,
+	Point const& area_centroid,
+	SkPoint& sample) {
+	struct Edge {
+		SkPoint start {};
+		SkPoint end {};
+		double length_squared = 0.0;
+	};
+	std::vector<Edge> edges;
+	auto flattened = FlattenPath(contour, 1.0 / 1024.0);
+	bool has_current = false;
+	SkPoint current {};
+	SkPoint start {};
+	for (auto const& command : flattened.commands) {
+		SkPoint point;
+		switch (command.verb) {
+			case PathVerb::MoveTo:
+				if (!coordinates.ToSkPoint(command.p1, point))
+					return false;
+				current = start = point;
+				has_current = true;
+				break;
+			case PathVerb::LineTo:
+				if (!coordinates.ToSkPoint(command.p1, point))
+					return false;
+				if (has_current) {
+					double dx = static_cast<double>(point.x()) - current.x();
+					double dy = static_cast<double>(point.y()) - current.y();
+					edges.push_back({current, point, dx * dx + dy * dy});
+				}
+				current = point;
+				has_current = true;
+				break;
+			case PathVerb::Close:
+				if (has_current) {
+					double dx = static_cast<double>(start.x()) - current.x();
+					double dy = static_cast<double>(start.y()) - current.y();
+					edges.push_back({current, start, dx * dx + dy * dy});
+					current = start;
+				}
+				break;
+			case PathVerb::QuadTo:
+			case PathVerb::ConicTo:
+			case PathVerb::CubicTo:
+				break;
+		}
+	}
+
+	std::sort(edges.begin(), edges.end(), [](Edge const& lhs, Edge const& rhs) {
+		return lhs.length_squared > rhs.length_squared;
+	});
+	for (auto const& edge : edges) {
+		double length = std::sqrt(edge.length_squared);
+		if (!(length > 0.0) || !std::isfinite(length))
+			continue;
+		double midpoint_x = (static_cast<double>(edge.start.x()) + edge.end.x()) * 0.5;
+		double midpoint_y = (static_cast<double>(edge.start.y()) + edge.end.y()) * 0.5;
+		double normal_x = -(static_cast<double>(edge.end.y()) - edge.start.y()) / length;
+		double normal_y = (static_cast<double>(edge.end.x()) - edge.start.x()) / length;
+		double offset = length * 1.0e-3;
+		for (int attempt = 0; attempt < 16; ++attempt) {
+			SkPoint positive = SkPoint::Make(
+				static_cast<SkScalar>(midpoint_x + normal_x * offset),
+				static_cast<SkScalar>(midpoint_y + normal_y * offset));
+			SkPoint negative = SkPoint::Make(
+				static_cast<SkScalar>(midpoint_x - normal_x * offset),
+				static_cast<SkScalar>(midpoint_y - normal_y * offset));
+			bool positive_inside = sk_contour.contains(positive.x(), positive.y());
+			bool negative_inside = sk_contour.contains(negative.x(), negative.y());
+			if (positive_inside != negative_inside) {
+				sample = positive_inside ? positive : negative;
+				return true;
+			}
+			offset *= 0.25;
+		}
+	}
+
+	if (!coordinates.ToSkPoint(area_centroid, sample))
+		return false;
+	return sk_contour.contains(sample.x(), sample.y());
+}
+
+bool TrySkPathFilledAreaAndCentroid(SkPath const& source,
+	BackendCoordinates const& coordinates,
+	double tolerance,
+	double& area,
+	Point& centroid,
+	bool& measurable) {
+	area = 0.0;
+	centroid = {};
+	measurable = false;
+	SkPath simplified;
+	if (!Simplify(source, &simplified))
+		return false;
 
 	PathData converted;
-	if (!FromSkPath(*winding, coordinates, converted))
+	if (!FromSkPath(simplified, coordinates, converted))
 		return false;
 	auto contours = SplitBackendContours(converted);
-
 	struct ContourInfo {
-		PathData path;
 		SkPath sk_path;
 		SkPoint sample {};
 		SkRect bounds {};
-		double signed_area = 0.0;
-		bool has_area = false;
+		double area = 0.0;
+		Point centroid {};
 	};
 	std::vector<ContourInfo> info;
 	info.reserve(contours.size());
 	for (auto& contour : contours) {
 		if (contour.commands.empty() || contour.commands.front().verb != PathVerb::MoveTo)
 			continue;
-
+		contour.winding_fill = true;
+		double signed_area;
 		ContourInfo item;
-		item.path = std::move(contour);
-		item.path.winding_fill = true;
-		if (!coordinates.ToSkPoint(BackendContourSample(item.path), item.sample) ||
-			!ToSkPath(item.path, true, coordinates, item.sk_path))
+		if (!TryGetSignedAreaAndCentroid(contour, signed_area, item.centroid, tolerance))
+			continue;
+		item.area = std::abs(signed_area);
+		if (!ToSkPath(contour, true, coordinates, item.sk_path) ||
+			!TryFindInteriorSample(contour, item.sk_path, coordinates, item.centroid, item.sample))
 			return false;
 		item.bounds = item.sk_path.getBounds();
-		Point centroid;
-		item.has_area = TryGetSignedAreaAndCentroid(item.path, item.signed_area, centroid, 1.0 / 1024.0);
 		info.push_back(std::move(item));
 	}
 
-	result.winding_fill = true;
+	if (info.empty())
+		return true;
+	Point reference = info.front().centroid;
+	double weighted_area = 0.0;
+	double moment_x = 0.0;
+	double moment_y = 0.0;
 	for (std::size_t index = 0; index < info.size(); ++index) {
 		std::size_t depth = 0;
 		for (std::size_t outer = 0; outer < info.size(); ++outer) {
@@ -468,14 +542,21 @@ bool NormalizeSkPathFill(SkPath const& source, BackendCoordinates const& coordin
 			if (info[outer].sk_path.contains(info[index].sample.x(), info[index].sample.y()))
 				++depth;
 		}
-
-		bool wants_positive_area = depth % 2 == 0;
-		if (info[index].has_area && (info[index].signed_area > 0.0) != wants_positive_area)
-			info[index].path = ReversePath(info[index].path);
-		result.commands.insert(result.commands.end(),
-			info[index].path.commands.begin(), info[index].path.commands.end());
+		double weight = depth % 2 == 0 ? info[index].area : -info[index].area;
+		weighted_area += weight;
+		moment_x += (info[index].centroid.x - reference.x) * weight;
+		moment_y += (info[index].centroid.y - reference.y) * weight;
 	}
-	return true;
+
+	if (!(weighted_area > kPointEpsilon) || !std::isfinite(weighted_area))
+		return true;
+	area = weighted_area;
+	centroid = {
+		reference.x + moment_x / weighted_area,
+		reference.y + moment_y / weighted_area,
+	};
+	measurable = std::isfinite(centroid.x) && std::isfinite(centroid.y);
+	return measurable;
 }
 
 } // namespace
@@ -578,6 +659,33 @@ bool TryNormalizeFilledPath(PathData const& path, PathData& result) {
 #else
 	(void)path;
 	result = {};
+	return false;
+#endif
+}
+
+bool TryDrawingFilledAreaAndCentroid(PathData const& path,
+	double tolerance,
+	double& area,
+	Point& centroid,
+	bool& measurable) {
+#if defined(WITH_DRAWING_SKIA)
+	area = 0.0;
+	centroid = {};
+	measurable = false;
+	if (path.commands.empty())
+		return true;
+
+	BackendCoordinates coordinates;
+	SkPath source;
+	if (!PrepareBackendCoordinates(path, coordinates) || !ToSkPath(path, true, coordinates, source))
+		return false;
+	return TrySkPathFilledAreaAndCentroid(source, coordinates, tolerance, area, centroid, measurable);
+#else
+	(void)path;
+	(void)tolerance;
+	area = 0.0;
+	centroid = {};
+	measurable = false;
 	return false;
 #endif
 }

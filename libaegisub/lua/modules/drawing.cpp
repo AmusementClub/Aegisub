@@ -470,20 +470,19 @@ int DrawingPathCentroid(lua_State *L) {
 }
 
 int PushFilledMetric(lua_State *L, PathData const& path, double tolerance, bool return_centroid, char const *name) {
-	PathData normalized;
-	if (!agi::ass::drawing::TryNormalizeFilledPath(path, normalized))
-		return BackendOperationError(L, name);
-
-	double signed_area;
+	double area;
 	Point centroid;
-	if (!agi::ass::drawing::TryGetSignedAreaAndCentroid(normalized, signed_area, centroid, tolerance)) {
+	bool measurable = false;
+	if (!agi::ass::drawing::TryDrawingFilledAreaAndCentroid(path, tolerance, area, centroid, measurable))
+		return BackendOperationError(L, name);
+	if (!measurable) {
 		lua_pushnil(L);
 		return 1;
 	}
 
 	if (return_centroid)
 		return PushPointOrNil(L, true, centroid);
-	lua_pushnumber(L, std::abs(signed_area));
+	lua_pushnumber(L, area);
 	return 1;
 }
 

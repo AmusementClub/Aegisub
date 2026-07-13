@@ -598,6 +598,12 @@ TEST(lagi_ass_drawing, skia_backend_reports_unavailable_without_feature) {
 
 	PathData result;
 	EXPECT_FALSE(TryNormalizeFilledPath(ParseAss("m 0 0 l 10 0 l 10 10 l 0 10"), result));
+	double area;
+	Point centroid;
+	bool measurable = true;
+	EXPECT_FALSE(TryDrawingFilledAreaAndCentroid(
+		ParseAss("m 0 0 l 10 0 l 10 10 l 0 10"), 0.25, area, centroid, measurable));
+	EXPECT_FALSE(measurable);
 	EXPECT_FALSE(TryDrawingBoolean(ParseAss("m 0 0 l 10 0 l 10 10 l 0 10"),
 		ParseAss("m 5 5 l 15 5 l 15 15 l 5 15"),
 		DrawingBooleanOp::Union,
@@ -679,26 +685,35 @@ TEST(lagi_ass_drawing, skia_backend_normalizes_filled_topology_for_metrics) {
 	ASSERT_TRUE(TryGetSignedAreaAndCentroid(normalized, signed_area, centroid));
 	EXPECT_DOUBLE_EQ(150.0, std::abs(signed_area));
 	ExpectPoint(centroid, 7.5, 5.0);
+	double area;
+	bool measurable = false;
+	ASSERT_TRUE(TryDrawingFilledAreaAndCentroid(overlapping, 0.25, area, centroid, measurable));
+	ASSERT_TRUE(measurable);
+	EXPECT_DOUBLE_EQ(150.0, area);
+	ExpectPoint(centroid, 7.5, 5.0);
 
 	auto bowtie = ParseAss("m 0 0 l 20 20 0 20 20 0");
 	EXPECT_FALSE(TryGetSignedAreaAndCentroid(bowtie, signed_area, centroid));
 	ASSERT_TRUE(TryNormalizeFilledPath(bowtie, normalized));
-	ASSERT_TRUE(TryGetSignedAreaAndCentroid(normalized, signed_area, centroid));
-	EXPECT_DOUBLE_EQ(200.0, std::abs(signed_area));
+	ASSERT_TRUE(TryDrawingFilledAreaAndCentroid(bowtie, 0.25, area, centroid, measurable));
+	ASSERT_TRUE(measurable);
+	EXPECT_DOUBLE_EQ(200.0, area);
 	ExpectPoint(centroid, 10.0, 10.0);
 
 	overlapping.winding_fill = false;
 	ASSERT_TRUE(TryNormalizeFilledPath(overlapping, normalized));
-	ASSERT_TRUE(TryGetSignedAreaAndCentroid(normalized, signed_area, centroid));
-	EXPECT_DOUBLE_EQ(100.0, std::abs(signed_area));
+	ASSERT_TRUE(TryDrawingFilledAreaAndCentroid(overlapping, 0.25, area, centroid, measurable));
+	ASSERT_TRUE(measurable);
+	EXPECT_DOUBLE_EQ(100.0, area);
 	ExpectPoint(centroid, 7.5, 5.0);
 
 	auto donut = ParseAss(
 		"m 0 0 l 40 0 40 40 0 40 "
 		"m 10 10 l 10 30 30 30 30 10");
 	ASSERT_TRUE(TryNormalizeFilledPath(donut, normalized));
-	ASSERT_TRUE(TryGetSignedAreaAndCentroid(normalized, signed_area, centroid));
-	EXPECT_DOUBLE_EQ(1200.0, std::abs(signed_area));
+	ASSERT_TRUE(TryDrawingFilledAreaAndCentroid(donut, 0.25, area, centroid, measurable));
+	ASSERT_TRUE(measurable);
+	EXPECT_DOUBLE_EQ(1200.0, area);
 	ExpectPoint(centroid, 20.0, 20.0);
 }
 

@@ -7,6 +7,7 @@
 #include <cmath>
 #include <limits>
 #include <new>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -18,6 +19,7 @@ using agi::ass::drawing::DrawingStrokeCap;
 using agi::ass::drawing::DrawingStrokeJoin;
 using agi::ass::drawing::Matrix3x2;
 using agi::ass::drawing::PathData;
+using agi::ass::drawing::PathMeasure;
 using agi::ass::drawing::Point;
 using agi::ass::drawing::Rect;
 
@@ -26,6 +28,7 @@ char const *const kDrawingPathMetatable = "aegisub.drawing.path";
 struct LuaDrawingPath {
 	PathData path;
 	bool filled_output = false;
+	std::optional<PathMeasure> measure;
 };
 
 AssDrawingCompatMode CheckCompatMode(lua_State *L, int idx) {
@@ -99,9 +102,24 @@ LuaDrawingPath *CheckDrawingPath(lua_State *L, int idx) {
 	return static_cast<LuaDrawingPath *>(luaL_checkudata(L, idx, kDrawingPathMetatable));
 }
 
+PathMeasure const& MeasureDrawingPath(LuaDrawingPath& path) {
+	if (!path.measure)
+		path.measure.emplace(path.path);
+	return *path.measure;
+}
+
+void InvalidateDrawingPathMeasure(LuaDrawingPath& path) {
+	path.measure.reset();
+}
+
+void ReplaceDrawingPath(LuaDrawingPath& path, PathData replacement) {
+	path.path = std::move(replacement);
+	InvalidateDrawingPathMeasure(path);
+}
+
 int PushDrawingPath(lua_State *L, PathData path, bool filled_output) {
 	auto *storage = lua_newuserdata(L, sizeof(LuaDrawingPath));
-	auto *drawing_path = new (storage) LuaDrawingPath {std::move(path), filled_output};
+	auto *drawing_path = new (storage) LuaDrawingPath {std::move(path), filled_output, std::nullopt};
 	(void)drawing_path;
 	luaL_getmetatable(L, kDrawingPathMetatable);
 	lua_setmetatable(L, -2);
@@ -291,7 +309,7 @@ int DrawingPathSetOpen(lua_State *L) {
 
 int TransformDrawingPath(lua_State *L, Matrix3x2 const& matrix) {
 	auto *path = CheckDrawingPath(L, 1);
-	path->path = agi::ass::drawing::TransformPath(std::move(path->path), matrix);
+	ReplaceDrawingPath(*path, agi::ass::drawing::TransformPath(std::move(path->path), matrix));
 	return ReturnDrawingPath(L);
 }
 
@@ -339,6 +357,7 @@ int DrawingPathArcMoveTo(lua_State *L) {
 		luaL_checknumber(L, 4),
 		luaL_checknumber(L, 5),
 		luaL_checknumber(L, 6));
+	InvalidateDrawingPathMeasure(*path);
 	return ReturnDrawingPath(L);
 }
 
@@ -351,18 +370,19 @@ int DrawingPathArcTo(lua_State *L) {
 		luaL_checknumber(L, 5),
 		luaL_checknumber(L, 6),
 		luaL_checknumber(L, 7));
+	InvalidateDrawingPathMeasure(*path);
 	return ReturnDrawingPath(L);
 }
 
 int DrawingPathFlatten(lua_State *L) {
 	auto *path = CheckDrawingPath(L, 1);
-	path->path = agi::ass::drawing::FlattenPath(path->path, luaL_optnumber(L, 2, 0.25));
+	ReplaceDrawingPath(*path, agi::ass::drawing::FlattenPath(path->path, luaL_optnumber(L, 2, 0.25)));
 	return ReturnDrawingPath(L);
 }
 
 int DrawingPathReverse(lua_State *L) {
 	auto *path = CheckDrawingPath(L, 1);
-	path->path = agi::ass::drawing::ReversePath(path->path);
+	ReplaceDrawingPath(*path, agi::ass::drawing::ReversePath(path->path));
 	return ReturnDrawingPath(L);
 }
 
@@ -385,35 +405,34 @@ int DrawingPathControlBounds(lua_State *L) {
 }
 
 int DrawingPathLength(lua_State *L) {
-	lua_pushnumber(L, agi::ass::drawing::PathLength(CheckDrawingPath(L, 1)->path));
+	lua_pushnumber(L, MeasureDrawingPath(*CheckDrawingPath(L, 1)).Length());
 	return 1;
 }
 
 int DrawingPathPercentAtLength(lua_State *L) {
-	lua_pushnumber(L, agi::ass::drawing::PercentAtLength(
-		CheckDrawingPath(L, 1)->path, luaL_checknumber(L, 2)));
+	lua_pushnumber(L, MeasureDrawingPath(*CheckDrawingPath(L, 1)).PercentAtLength(luaL_checknumber(L, 2)));
 	return 1;
 }
 
 int DrawingPathPointAtPercent(lua_State *L) {
 	Point point;
 	Point tangent;
-	return PushPointOrNil(L, agi::ass::drawing::TryGetPositionAtPercent(
-		CheckDrawingPath(L, 1)->path, luaL_checknumber(L, 2), point, tangent), point);
+	return PushPointOrNil(L, MeasureDrawingPath(*CheckDrawingPath(L, 1)).TryGetPositionAtPercent(
+		luaL_checknumber(L, 2), point, tangent), point);
 }
 
 int DrawingPathPointAtLength(lua_State *L) {
 	Point point;
 	Point tangent;
-	return PushPointOrNil(L, agi::ass::drawing::TryGetPositionAtLength(
-		CheckDrawingPath(L, 1)->path, luaL_checknumber(L, 2), point, tangent), point);
+	return PushPointOrNil(L, MeasureDrawingPath(*CheckDrawingPath(L, 1)).TryGetPositionAtLength(
+		luaL_checknumber(L, 2), point, tangent), point);
 }
 
 int DrawingPathAngleAtPercent(lua_State *L) {
 	Point point;
 	Point tangent;
-	if (!agi::ass::drawing::TryGetPositionAtPercent(
-		CheckDrawingPath(L, 1)->path, luaL_checknumber(L, 2), point, tangent))
+	if (!MeasureDrawingPath(*CheckDrawingPath(L, 1)).TryGetPositionAtPercent(
+		luaL_checknumber(L, 2), point, tangent))
 		lua_pushnumber(L, 0.0);
 	else
 		lua_pushnumber(L, AngleFromTangent(tangent));
@@ -423,8 +442,8 @@ int DrawingPathAngleAtPercent(lua_State *L) {
 int DrawingPathSlopeAtPercent(lua_State *L) {
 	Point point;
 	Point tangent;
-	if (!agi::ass::drawing::TryGetPositionAtPercent(
-		CheckDrawingPath(L, 1)->path, luaL_checknumber(L, 2), point, tangent))
+	if (!MeasureDrawingPath(*CheckDrawingPath(L, 1)).TryGetPositionAtPercent(
+		luaL_checknumber(L, 2), point, tangent))
 		lua_pushnumber(L, 0.0);
 	else
 		lua_pushnumber(L, SlopeFromTangent(tangent));
@@ -475,7 +494,7 @@ int DrawingPathBoolean(lua_State *L, DrawingBooleanOp op, char const *name) {
 	PathData result;
 	if (!agi::ass::drawing::TryDrawingBoolean(path->path, other->path, op, result))
 		return BackendOperationError(L, name);
-	path->path = std::move(result);
+	ReplaceDrawingPath(*path, std::move(result));
 	path->filled_output = true;
 	return ReturnDrawingPath(L);
 }
@@ -507,7 +526,7 @@ int DrawingPathOutline(lua_State *L) {
 		if (tolerance > 0.0)
 			result = agi::ass::drawing::FlattenPath(result, tolerance);
 	}
-	path->path = std::move(result);
+	ReplaceDrawingPath(*path, std::move(result));
 	path->filled_output = true;
 	return ReturnDrawingPath(L);
 }
@@ -524,7 +543,7 @@ int DrawingPathPatternOutline(lua_State *L) {
 		luaL_checknumber(L, 7),
 		result))
 		return BackendOperationError(L, "drawing path pattern_outline");
-	path->path = std::move(result);
+	ReplaceDrawingPath(*path, std::move(result));
 	path->filled_output = true;
 	return ReturnDrawingPath(L);
 }

@@ -165,6 +165,22 @@ TEST(lagi_ass_drawing, measures_cubic_position_by_arc_length) {
 	EXPECT_NEAR(7.5, point.y, 0.01);
 }
 
+TEST(lagi_ass_drawing, path_measure_is_a_reusable_geometry_snapshot) {
+	auto path = ParseAssOpen("m 0 0 l 3 4 l 6 8");
+	PathMeasure measure(path);
+	Point point;
+	Point tangent;
+
+	EXPECT_DOUBLE_EQ(10.0, measure.Length());
+	EXPECT_DOUBLE_EQ(0.5, measure.PercentAtLength(5.0));
+	ASSERT_TRUE(measure.TryGetPositionAtLength(7.5, point, tangent));
+	ExpectPoint(point, 4.5, 6.0);
+
+	path = TransformPath(std::move(path), {2.0, 0.0, 0.0, 2.0, 10.0, 0.0});
+	EXPECT_DOUBLE_EQ(10.0, measure.Length());
+	EXPECT_DOUBLE_EQ(20.0, PathMeasure(path).Length());
+}
+
 TEST(lagi_ass_drawing, separates_modern_arc_length_and_legacy_qt_percent_mappings) {
 	auto path = ParseAssOpen("m 0 0 b 0 10 20 10 30 0");
 	Point modern_point;

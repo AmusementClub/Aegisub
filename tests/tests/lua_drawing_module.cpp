@@ -381,3 +381,28 @@ TEST(lua_drawing_module, exposes_skia_backed_legacy_shape_api) {
 		assert(not shape.contains_rect(rect, 1, 1, -2, 2))
 	)");
 }
+
+TEST(lua_drawing_module, path_measurement_cache_follows_mutations) {
+	auto L = MakeLuaState();
+	RunLua(L.get(), R"(
+		local drawing = require 'aegisub.drawing'
+		local function near(a, b)
+			return math.abs(a - b) < 0.000001
+		end
+
+		local path = drawing.path('m 0 0 l 3 4')
+		assert(near(path:length(), 5))
+		assert(near(path:length(), 5))
+		local x, y = path:point_at_percent(0.5)
+		assert(near(x, 1.5) and near(y, 2))
+
+		path:scale(2, 2)
+		assert(near(path:length(), 10))
+		x, y = path:point_at_length(5)
+		assert(near(x, 3) and near(y, 4))
+
+		path:translate(10, 0)
+		x, y = path:point_at_percent(0.5)
+		assert(near(x, 13) and near(y, 4))
+	)");
+}

@@ -65,6 +65,8 @@ result into an ASS tag or event. Path methods mutate the object, so use
   `length`, `percent_at_length`, `point_at_percent`, `point_at_length`,
   `angle_at_percent`, `slope_at_percent`, `area`, `centroid`,
   `contains_point`, and `contains_rect`.
+- Path length and position methods share a lazy segment-measurement cache.
+  Geometry mutations invalidate it automatically.
 - `ass()` emits open ASS for an open path and checked compact filled ASS for a
   filled path. `filled_ass()` and `open_ass()` select the output explicitly;
   `fill()` and `open()` change the default.

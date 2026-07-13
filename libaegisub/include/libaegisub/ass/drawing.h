@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -125,6 +126,23 @@ bool TryGetBounds(PathData const& path, Rect& bounds);
 bool TryGetControlPointBounds(PathData const& path, Rect& bounds);
 PathData FlattenPath(PathData const& path, double tolerance = 0.25);
 PathData ReversePath(PathData const& path);
+
+class PathMeasure {
+public:
+	struct Impl;
+
+	explicit PathMeasure(PathData const& path);
+	double Length() const;
+	double PercentAtLength(double distance) const;
+	double LegacyPercentAtLength(double distance) const;
+	bool TryGetPositionAtPercent(double percent, Point& point, Point& tangent) const;
+	bool TryGetLegacyPositionAtPercent(double percent, Point& point, Point& tangent) const;
+	bool TryGetPositionAtLength(double distance, Point& point, Point& tangent) const;
+
+private:
+	std::shared_ptr<Impl const> impl_;
+};
+
 double PathLength(PathData const& path);
 // Modern normalized arc-length mapping.
 double PercentAtLength(PathData const& path, double distance);

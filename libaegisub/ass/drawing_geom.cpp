@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <vector>
 
@@ -81,6 +82,7 @@ struct MeasuredSegment {
 	CubicBezier cubic {};
 	RationalConic conic {};
 	double length = 0.0;
+	double end_length = 0.0;
 };
 
 struct MeasuredPath {
@@ -534,8 +536,9 @@ void AppendMeasuredLine(MeasuredPath& measured, Point const& start, Point const&
 	segment.kind = MeasuredSegmentKind::Line;
 	segment.cubic = {start, start, end, end};
 	segment.length = length;
-	measured.segments.push_back(segment);
 	measured.total_length += length;
+	segment.end_length = measured.total_length;
+	measured.segments.push_back(segment);
 }
 
 void AppendMeasuredCubic(MeasuredPath& measured, CubicBezier const& cubic) {
@@ -547,8 +550,9 @@ void AppendMeasuredCubic(MeasuredPath& measured, CubicBezier const& cubic) {
 	segment.kind = MeasuredSegmentKind::Cubic;
 	segment.cubic = cubic;
 	segment.length = length;
-	measured.segments.push_back(segment);
 	measured.total_length += length;
+	segment.end_length = measured.total_length;
+	measured.segments.push_back(segment);
 }
 
 void AppendMeasuredConic(MeasuredPath& measured, RationalConic const& conic) {
@@ -567,8 +571,9 @@ void AppendMeasuredConic(MeasuredPath& measured, RationalConic const& conic) {
 	segment.kind = MeasuredSegmentKind::Conic;
 	segment.conic = conic;
 	segment.length = length;
-	measured.segments.push_back(segment);
 	measured.total_length += length;
+	segment.end_length = measured.total_length;
+	measured.segments.push_back(segment);
 }
 
 void EnsureRawCurrent(bool& has_current,
@@ -680,24 +685,27 @@ Point SegmentEnd(MeasuredSegment const& segment) {
 	return segment.kind == MeasuredSegmentKind::Conic ? segment.conic.p2 : segment.cubic.p3;
 }
 
+MeasuredSegment const *FindMeasuredSegment(MeasuredPath const& measured, double target, double& consumed) {
+	auto it = std::lower_bound(measured.segments.begin(), measured.segments.end(), target,
+		[](MeasuredSegment const& segment, double distance) { return segment.end_length < distance; });
+	if (it == measured.segments.end())
+		return nullptr;
+
+	consumed = it == measured.segments.begin() ? 0.0 : std::prev(it)->end_length;
+	return &*it;
+}
+
 bool TryGetPositionAtDistance(MeasuredPath const& measured, double distance, Point& point, Point& tangent) {
 	if (measured.segments.empty() || !(measured.total_length > kLengthEpsilon) || !std::isfinite(measured.total_length) || !std::isfinite(distance))
 		return false;
 
 	double target = std::clamp(distance, 0.0, measured.total_length);
 	double consumed = 0.0;
-	for (std::size_t index = 0; index < measured.segments.size(); ++index) {
-		auto const& segment = measured.segments[index];
-		bool is_last = index + 1 == measured.segments.size();
-		if (!is_last && consumed + segment.length < target) {
-			consumed += segment.length;
-			continue;
-		}
-
-		double local_length = std::clamp(target - consumed, 0.0, segment.length);
-		double t = SegmentTAtLength(segment, local_length);
-		point = SegmentPointAt(segment, t);
-		tangent = SegmentTangentAt(segment, t);
+	if (auto const *segment = FindMeasuredSegment(measured, target, consumed)) {
+		double local_length = std::clamp(target - consumed, 0.0, segment->length);
+		double t = SegmentTAtLength(*segment, local_length);
+		point = SegmentPointAt(*segment, t);
+		tangent = SegmentTangentAt(*segment, t);
 		return true;
 	}
 
@@ -713,20 +721,13 @@ bool TryGetPositionAtLegacyPercent(MeasuredPath const& measured, double percent,
 
 	double target = percent * measured.total_length;
 	double consumed = 0.0;
-	for (std::size_t index = 0; index < measured.segments.size(); ++index) {
-		auto const& segment = measured.segments[index];
-		bool is_last = index + 1 == measured.segments.size();
-		if (!is_last && consumed + segment.length < target) {
-			consumed += segment.length;
-			continue;
-		}
-
+	if (auto const *segment = FindMeasuredSegment(measured, target, consumed)) {
 		// QPainterPath allocates the global percentage by measured segment
 		// length, but uses that segment-local allocation directly as the
 		// Bezier parameter rather than as a local arc-length percentage.
-		double t = std::clamp((target - consumed) / segment.length, 0.0, 1.0);
-		point = SegmentPointAt(segment, t);
-		tangent = SegmentTangentAt(segment, t);
+		double t = std::clamp((target - consumed) / segment->length, 0.0, 1.0);
+		point = SegmentPointAt(*segment, t);
+		tangent = SegmentTangentAt(*segment, t);
 		return true;
 	}
 
@@ -1076,13 +1077,25 @@ PathData ReversePath(PathData const& path) {
 	return reversed;
 }
 
-double PathLength(PathData const& path) {
-	return BuildMeasuredPath(path).total_length;
+struct PathMeasure::Impl {
+	MeasuredPath measured;
+	bool has_degenerate_position = false;
+	Point degenerate_position {};
+};
+
+PathMeasure::PathMeasure(PathData const& path) {
+	auto impl = std::make_shared<Impl>();
+	impl->measured = BuildMeasuredPath(path);
+	impl->has_degenerate_position = TryGetDegeneratePathPosition(path, impl->degenerate_position);
+	impl_ = std::move(impl);
 }
 
-double PercentAtLength(PathData const& path, double distance) {
-	auto measured = BuildMeasuredPath(path);
-	double total = measured.total_length;
+double PathMeasure::Length() const {
+	return impl_->measured.total_length;
+}
+
+double PathMeasure::PercentAtLength(double distance) const {
+	double total = impl_->measured.total_length;
 	if (!(total > kLengthEpsilon) || !std::isfinite(distance))
 		return 0.0;
 	if (distance <= 0.0)
@@ -1093,8 +1106,8 @@ double PercentAtLength(PathData const& path, double distance) {
 	return distance / total;
 }
 
-double LegacyPercentAtLength(PathData const& path, double distance) {
-	auto measured = BuildMeasuredPath(path);
+double PathMeasure::LegacyPercentAtLength(double distance) const {
+	auto const& measured = impl_->measured;
 	double total = measured.total_length;
 	if (!(total > kLengthEpsilon) || !std::isfinite(total) || std::isnan(distance))
 		return 0.0;
@@ -1104,48 +1117,68 @@ double LegacyPercentAtLength(PathData const& path, double distance) {
 		return 1.0;
 
 	double consumed = 0.0;
-	for (std::size_t index = 0; index < measured.segments.size(); ++index) {
-		auto const& segment = measured.segments[index];
-		bool is_last = index + 1 == measured.segments.size();
-		if (!is_last && consumed + segment.length < distance) {
-			consumed += segment.length;
-			continue;
-		}
-
-		double local_length = std::clamp(distance - consumed, 0.0, segment.length);
-		double t = SegmentTAtLength(segment, local_length);
-		return std::clamp((consumed + t * segment.length) / total, 0.0, 1.0);
+	if (auto const *segment = FindMeasuredSegment(measured, distance, consumed)) {
+		double local_length = std::clamp(distance - consumed, 0.0, segment->length);
+		double t = SegmentTAtLength(*segment, local_length);
+		return std::clamp((consumed + t * segment->length) / total, 0.0, 1.0);
 	}
 
 	return 0.0;
 }
 
-bool TryGetPositionAtPercent(PathData const& path, double percent, Point& point, Point& tangent) {
+bool PathMeasure::TryGetPositionAtPercent(double percent, Point& point, Point& tangent) const {
 	if (!std::isfinite(percent))
 		return false;
 
-	auto measured = BuildMeasuredPath(path);
+	auto const& measured = impl_->measured;
 	return TryGetPositionAtDistance(measured, std::clamp(percent, 0.0, 1.0) * measured.total_length, point, tangent);
 }
 
-bool TryGetLegacyPositionAtPercent(PathData const& path, double percent, Point& point, Point& tangent) {
+bool PathMeasure::TryGetLegacyPositionAtPercent(double percent, Point& point, Point& tangent) const {
 	point = {};
 	tangent = {};
 	if (!std::isfinite(percent) || percent < 0.0 || percent > 1.0)
 		return false;
 
-	auto measured = BuildMeasuredPath(path);
+	auto const& measured = impl_->measured;
 	if (TryGetPositionAtLegacyPercent(measured, percent, point, tangent))
 		return true;
 
 	// QPainterPath::pointAtPercent returns its only MoveTo anchor for a
 	// move-only path.  Keep that useful degenerate-path behavior while
 	// angle/slope naturally remain zero through the zero tangent.
-	return TryGetDegeneratePathPosition(path, point);
+	if (!impl_->has_degenerate_position)
+		return false;
+	point = impl_->degenerate_position;
+	return true;
+}
+
+bool PathMeasure::TryGetPositionAtLength(double distance, Point& point, Point& tangent) const {
+	return TryGetPositionAtDistance(impl_->measured, distance, point, tangent);
+}
+
+double PathLength(PathData const& path) {
+	return PathMeasure(path).Length();
+}
+
+double PercentAtLength(PathData const& path, double distance) {
+	return PathMeasure(path).PercentAtLength(distance);
+}
+
+double LegacyPercentAtLength(PathData const& path, double distance) {
+	return PathMeasure(path).LegacyPercentAtLength(distance);
+}
+
+bool TryGetPositionAtPercent(PathData const& path, double percent, Point& point, Point& tangent) {
+	return PathMeasure(path).TryGetPositionAtPercent(percent, point, tangent);
+}
+
+bool TryGetLegacyPositionAtPercent(PathData const& path, double percent, Point& point, Point& tangent) {
+	return PathMeasure(path).TryGetLegacyPositionAtPercent(percent, point, tangent);
 }
 
 bool TryGetPositionAtLength(PathData const& path, double distance, Point& point, Point& tangent) {
-	return TryGetPositionAtDistance(BuildMeasuredPath(path), distance, point, tangent);
+	return PathMeasure(path).TryGetPositionAtLength(distance, point, tangent);
 }
 
 bool TryGetSignedAreaAndCentroid(PathData const& path, double& signed_area, Point& centroid, double tolerance) {

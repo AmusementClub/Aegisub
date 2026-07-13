@@ -181,6 +181,25 @@ TEST(lagi_ass_drawing, path_measure_is_a_reusable_geometry_snapshot) {
 	EXPECT_DOUBLE_EQ(20.0, PathMeasure(path).Length());
 }
 
+TEST(lagi_ass_drawing, path_measure_inverts_rational_arc_length_across_cached_intervals) {
+	constexpr double pi = 3.14159265358979323846;
+	PathData path;
+	path.commands.push_back({PathVerb::MoveTo, {1.0, 0.0}, {}, {}});
+	path.commands.push_back({PathVerb::ConicTo, {1.0, 1.0}, {0.0, 1.0}, {}, std::sqrt(0.5)});
+	PathMeasure measure(path);
+
+	EXPECT_NEAR(pi * 0.5, measure.Length(), 1e-5);
+	for (int index = 0; index <= 64; ++index) {
+		double percent = static_cast<double>(index) / 64.0;
+		double angle = percent * pi * 0.5;
+		Point point;
+		Point tangent;
+		ASSERT_TRUE(measure.TryGetPositionAtPercent(percent, point, tangent));
+		EXPECT_NEAR(std::cos(angle), point.x, 1e-5);
+		EXPECT_NEAR(std::sin(angle), point.y, 1e-5);
+	}
+}
+
 TEST(lagi_ass_drawing, separates_modern_arc_length_and_legacy_qt_percent_mappings) {
 	auto path = ParseAssOpen("m 0 0 b 0 10 20 10 30 0");
 	Point modern_point;

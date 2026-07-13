@@ -18,7 +18,8 @@ constexpr double kLengthEpsilon = 1e-9;
 constexpr double kLengthIntegrationEpsilon = 1e-5;
 constexpr int kMaxFlattenDepth = 16;
 constexpr int kLengthIntegrationMaxDepth = 12;
-constexpr int kLengthInverseIterations = 32;
+constexpr int kLengthLutMinimumDepth = 5;
+constexpr int kLengthInverseIterations = 16;
 
 struct BoundsAccumulator {
 	bool has_point = false;
@@ -77,12 +78,18 @@ enum class MeasuredSegmentKind {
 	Conic,
 };
 
+struct ArcLengthSample {
+	double t = 0.0;
+	double length = 0.0;
+};
+
 struct MeasuredSegment {
 	MeasuredSegmentKind kind = MeasuredSegmentKind::Line;
 	CubicBezier cubic {};
 	RationalConic conic {};
 	double length = 0.0;
 	double end_length = 0.0;
+	std::vector<ArcLengthSample> arc_length_lut;
 };
 
 struct MeasuredPath {
@@ -319,45 +326,67 @@ double SimpsonIntegral(CubicBezier const& cubic, double start, double end) {
 	return (end - start) * (speed(start) + 4.0 * speed(middle) + speed(end)) / 6.0;
 }
 
-double AdaptiveSimpson(CubicBezier const& cubic, double start, double end, double epsilon, double whole, int depth) {
+template<typename Simpson>
+double AdaptiveIntegral(Simpson const& simpson, double start, double end, double epsilon, double whole, int depth) {
 	double middle = (start + end) * 0.5;
-	double left = SimpsonIntegral(cubic, start, middle);
-	double right = SimpsonIntegral(cubic, middle, end);
+	double left = simpson(start, middle);
+	double right = simpson(middle, end);
 	double delta = left + right - whole;
 
 	if (depth <= 0 || std::abs(delta) <= 15.0 * epsilon)
 		return left + right + delta / 15.0;
 
-	return AdaptiveSimpson(cubic, start, middle, epsilon * 0.5, left, depth - 1) +
-		AdaptiveSimpson(cubic, middle, end, epsilon * 0.5, right, depth - 1);
+	return AdaptiveIntegral(simpson, start, middle, epsilon * 0.5, left, depth - 1) +
+		AdaptiveIntegral(simpson, middle, end, epsilon * 0.5, right, depth - 1);
 }
 
-double CubicLength(CubicBezier const& cubic, double end_t = 1.0) {
-	double clamped_t = std::clamp(end_t, 0.0, 1.0);
-	if (clamped_t <= 0.0)
+template<typename Simpson>
+double IntegrateInterval(Simpson const& simpson, double start, double end) {
+	if (!(end > start))
 		return 0.0;
 
-	double whole = SimpsonIntegral(cubic, 0.0, clamped_t);
-	return AdaptiveSimpson(cubic, 0.0, clamped_t, kLengthIntegrationEpsilon, whole, kLengthIntegrationMaxDepth);
+	double whole = simpson(start, end);
+	return AdaptiveIntegral(simpson, start, end,
+		kLengthIntegrationEpsilon, whole, kLengthIntegrationMaxDepth);
 }
 
-double CubicTAtLength(CubicBezier const& cubic, double target_length, double total_length) {
-	if (target_length <= 0.0)
-		return 0.0;
-	if (target_length >= total_length || total_length <= kLengthEpsilon)
-		return 1.0;
+template<typename Simpson>
+void AppendArcLengthSamples(Simpson const& simpson,
+	double start,
+	double end,
+	double epsilon,
+	double whole,
+	int depth,
+	int minimum_depth,
+	double& cumulative_length,
+	std::vector<ArcLengthSample>& samples) {
+	double middle = (start + end) * 0.5;
+	double left = simpson(start, middle);
+	double right = simpson(middle, end);
+	double delta = left + right - whole;
 
-	double low = 0.0;
-	double high = 1.0;
-	for (int iteration = 0; iteration < kLengthInverseIterations; ++iteration) {
-		double middle = (low + high) * 0.5;
-		if (CubicLength(cubic, middle) < target_length)
-			low = middle;
-		else
-			high = middle;
+	if (depth <= 0 || (minimum_depth <= 0 && std::abs(delta) <= 15.0 * epsilon)) {
+		cumulative_length += left + right + delta / 15.0;
+		samples.push_back({end, cumulative_length});
+		return;
 	}
 
-	return (low + high) * 0.5;
+	AppendArcLengthSamples(simpson, start, middle, epsilon * 0.5, left,
+		depth - 1, minimum_depth - 1, cumulative_length, samples);
+	AppendArcLengthSamples(simpson, middle, end, epsilon * 0.5, right,
+		depth - 1, minimum_depth - 1, cumulative_length, samples);
+}
+
+template<typename Simpson>
+std::vector<ArcLengthSample> BuildArcLengthLut(Simpson const& simpson) {
+	std::vector<ArcLengthSample> samples;
+	samples.reserve((1 << kLengthLutMinimumDepth) + 1);
+	samples.push_back({0.0, 0.0});
+	double cumulative_length = 0.0;
+	double whole = simpson(0.0, 1.0);
+	AppendArcLengthSamples(simpson, 0.0, 1.0, kLengthIntegrationEpsilon, whole,
+		kLengthIntegrationMaxDepth, kLengthLutMinimumDepth, cumulative_length, samples);
+	return samples;
 }
 
 double ConicSimpsonIntegral(RationalConic const& conic, double start, double end) {
@@ -370,55 +399,89 @@ double ConicSimpsonIntegral(RationalConic const& conic, double start, double end
 	return (end - start) * (speed(start) + 4.0 * speed(middle) + speed(end)) / 6.0;
 }
 
-double AdaptiveConicSimpson(RationalConic const& conic,
-	double start,
-	double end,
-	double epsilon,
-	double whole,
-	int depth) {
-	double middle = (start + end) * 0.5;
-	double left = ConicSimpsonIntegral(conic, start, middle);
-	double right = ConicSimpsonIntegral(conic, middle, end);
-	double delta = left + right - whole;
-
-	if (depth <= 0 || std::abs(delta) <= 15.0 * epsilon)
-		return left + right + delta / 15.0;
-
-	return AdaptiveConicSimpson(conic, start, middle, epsilon * 0.5, left, depth - 1) +
-		AdaptiveConicSimpson(conic, middle, end, epsilon * 0.5, right, depth - 1);
-}
-
-double ConicLength(RationalConic const& conic, double end_t = 1.0) {
-	double clamped_t = std::clamp(end_t, 0.0, 1.0);
-	if (clamped_t <= 0.0)
-		return 0.0;
-
-	double whole = ConicSimpsonIntegral(conic, 0.0, clamped_t);
-	return AdaptiveConicSimpson(conic,
-		0.0,
-		clamped_t,
-		kLengthIntegrationEpsilon,
-		whole,
-		kLengthIntegrationMaxDepth);
-}
-
-double ConicTAtLength(RationalConic const& conic, double target_length, double total_length) {
+template<typename Simpson, typename Speed>
+double CurveTAtLength(std::vector<ArcLengthSample> const& lut,
+	double target_length,
+	double total_length,
+	Simpson const& simpson,
+	Speed const& speed) {
 	if (target_length <= 0.0)
 		return 0.0;
-	if (target_length >= total_length || total_length <= kLengthEpsilon)
+	if (target_length >= total_length || total_length <= kLengthEpsilon || lut.size() < 2)
 		return 1.0;
 
-	double low = 0.0;
-	double high = 1.0;
+	auto upper = std::lower_bound(lut.begin() + 1, lut.end(), target_length,
+		[](ArcLengthSample const& sample, double length) { return sample.length < length; });
+	if (upper == lut.end())
+		return 1.0;
+	auto const& anchor = *std::prev(upper);
+
+	double low = anchor.t;
+	double high = upper->t;
+	double interval_length = upper->length - anchor.length;
+	double t = interval_length > kLengthEpsilon
+		? low + (high - low) * (target_length - anchor.length) / interval_length
+		: (low + high) * 0.5;
+
 	for (int iteration = 0; iteration < kLengthInverseIterations; ++iteration) {
-		double middle = (low + high) * 0.5;
-		if (ConicLength(conic, middle) < target_length)
-			low = middle;
+		double current_length = anchor.length + IntegrateInterval(simpson, anchor.t, t);
+		double error = current_length - target_length;
+		if (std::abs(error) <= kLengthIntegrationEpsilon * 0.25)
+			return t;
+
+		if (error < 0.0)
+			low = t;
 		else
-			high = middle;
+			high = t;
+
+		double candidate = t;
+		double current_speed = speed(t);
+		if (current_speed > kLengthEpsilon && std::isfinite(current_speed))
+			candidate -= error / current_speed;
+
+		double margin = (high - low) * 0.05;
+		if (!(candidate > low + margin && candidate < high - margin) || !std::isfinite(candidate))
+			candidate = (low + high) * 0.5;
+		t = candidate;
 	}
 
 	return (low + high) * 0.5;
+}
+
+std::vector<ArcLengthSample> BuildCubicArcLengthLut(CubicBezier const& cubic) {
+	return BuildArcLengthLut([&](double start, double end) {
+		return SimpsonIntegral(cubic, start, end);
+	});
+}
+
+std::vector<ArcLengthSample> BuildConicArcLengthLut(RationalConic const& conic) {
+	return BuildArcLengthLut([&](double start, double end) {
+		return ConicSimpsonIntegral(conic, start, end);
+	});
+}
+
+double CubicTAtLength(CubicBezier const& cubic,
+	std::vector<ArcLengthSample> const& lut,
+	double target_length,
+	double total_length) {
+	return CurveTAtLength(lut, target_length, total_length,
+		[&](double start, double end) { return SimpsonIntegral(cubic, start, end); },
+		[&](double t) {
+			Point derivative = CubicDerivativeAt(cubic, t);
+			return std::hypot(derivative.x, derivative.y);
+		});
+}
+
+double ConicTAtLength(RationalConic const& conic,
+	std::vector<ArcLengthSample> const& lut,
+	double target_length,
+	double total_length) {
+	return CurveTAtLength(lut, target_length, total_length,
+		[&](double start, double end) { return ConicSimpsonIntegral(conic, start, end); },
+		[&](double t) {
+			Point derivative = ConicDerivativeAt(conic, t);
+			return std::hypot(derivative.x, derivative.y);
+		});
 }
 
 bool CubicIsFlatEnough(CubicBezier const& cubic, double tolerance_squared) {
@@ -542,7 +605,8 @@ void AppendMeasuredLine(MeasuredPath& measured, Point const& start, Point const&
 }
 
 void AppendMeasuredCubic(MeasuredPath& measured, CubicBezier const& cubic) {
-	double length = CubicLength(cubic);
+	auto arc_length_lut = BuildCubicArcLengthLut(cubic);
+	double length = arc_length_lut.back().length;
 	if (length <= kLengthEpsilon || !std::isfinite(length))
 		return;
 
@@ -550,9 +614,10 @@ void AppendMeasuredCubic(MeasuredPath& measured, CubicBezier const& cubic) {
 	segment.kind = MeasuredSegmentKind::Cubic;
 	segment.cubic = cubic;
 	segment.length = length;
+	segment.arc_length_lut = std::move(arc_length_lut);
 	measured.total_length += length;
 	segment.end_length = measured.total_length;
-	measured.segments.push_back(segment);
+	measured.segments.push_back(std::move(segment));
 }
 
 void AppendMeasuredConic(MeasuredPath& measured, RationalConic const& conic) {
@@ -561,7 +626,8 @@ void AppendMeasuredConic(MeasuredPath& measured, RationalConic const& conic) {
 		return;
 	}
 
-	double length = ConicLength(conic);
+	auto arc_length_lut = BuildConicArcLengthLut(conic);
+	double length = arc_length_lut.back().length;
 	if (length <= kLengthEpsilon || !std::isfinite(length)) {
 		AppendMeasuredLine(measured, conic.p0, conic.p2);
 		return;
@@ -571,9 +637,10 @@ void AppendMeasuredConic(MeasuredPath& measured, RationalConic const& conic) {
 	segment.kind = MeasuredSegmentKind::Conic;
 	segment.conic = conic;
 	segment.length = length;
+	segment.arc_length_lut = std::move(arc_length_lut);
 	measured.total_length += length;
 	segment.end_length = measured.total_length;
-	measured.segments.push_back(segment);
+	measured.segments.push_back(std::move(segment));
 }
 
 void EnsureRawCurrent(bool& has_current,
@@ -674,9 +741,9 @@ double SegmentTAtLength(MeasuredSegment const& segment, double local_length) {
 		case MeasuredSegmentKind::Line:
 			return local_length / segment.length;
 		case MeasuredSegmentKind::Cubic:
-			return CubicTAtLength(segment.cubic, local_length, segment.length);
+			return CubicTAtLength(segment.cubic, segment.arc_length_lut, local_length, segment.length);
 		case MeasuredSegmentKind::Conic:
-			return ConicTAtLength(segment.conic, local_length, segment.length);
+			return ConicTAtLength(segment.conic, segment.arc_length_lut, local_length, segment.length);
 	}
 	return 0.0;
 }

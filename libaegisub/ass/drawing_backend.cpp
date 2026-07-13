@@ -501,7 +501,9 @@ bool TryDrawingOutline(PathData const& path, double width, DrawingStrokeCap cap,
 	result = {};
 	if (!std::isfinite(width))
 		return false;
-	if (width <= 0.0) {
+	if (width < 0.0)
+		return false;
+	if (width == 0.0 || path.commands.empty()) {
 		return true;
 	}
 
@@ -536,9 +538,13 @@ bool TryDrawingPatternOutline(PathData const& path,
 	result = {};
 	if (!std::isfinite(width) || !std::isfinite(pattern_length) || !std::isfinite(space_length) || !std::isfinite(dash_offset))
 		return false;
-	if (width <= 0.0 || pattern_length <= 0.0 || space_length < 0.0) {
+	if (width < 0.0 || pattern_length < 0.0 || space_length < 0.0)
+		return false;
+	if (width == 0.0 || pattern_length == 0.0 || path.commands.empty()) {
 		return true;
 	}
+	if (space_length == 0.0)
+		return TryDrawingOutline(path, width, cap, join, result);
 
 	double interval_on = pattern_length * width;
 	double interval_off = space_length * width;

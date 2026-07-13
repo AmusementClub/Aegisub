@@ -351,5 +351,33 @@ TEST(lua_drawing_module, exposes_skia_backed_legacy_shape_api) {
 		path_pattern:pattern_outline(2, 'flat', 'bevel', 2.5, 2.5, 0)
 		assert(path_pattern:contains_point(2, 0))
 		assert(not path_pattern:contains_point(7, 0))
+
+		assert(drawing.shape_outline('m 0 0 l 10 0', 0, 'flat', 'bevel') == '')
+		assert(drawing.shape_pattern_outline('m 0 0 l 10 0', 2, 'flat', 'bevel', 0, 1, 0) == '')
+		assert(drawing.shape_pattern_outline('', 2, 'flat', 'bevel', 1, 1, 0) == '')
+		assert(not drawing.shape_contains_rect(rect, 1, 1, 0, 2))
+		assert(not drawing.shape_contains_rect(rect, 1, 1, -2, 2))
+
+		assert(not pcall(function()
+			drawing.shape_outline('m 0 0 l 10 0', -1, 'flat', 'bevel')
+		end))
+		assert(not pcall(function()
+			drawing.shape_pattern_outline('m 0 0 l 10 0', 2, 'flat', 'bevel', -1, 1, 0)
+		end))
+		assert(not pcall(function()
+			drawing.shape_pattern_outline('m 0 0 l 10 0', 2, 'flat', 'bevel', 1, -1, 0)
+		end))
+		assert(not pcall(function()
+			drawing.shape_outline('m 0 0 l 10 0', 0 / 0, 'flat', 'bevel')
+		end))
+
+		local continuous = drawing.shape_pattern_outline('m 0 0 l 10 0', 2, 'flat', 'bevel', 1, 0, -3)
+		assert(drawing.shape_contains_point(continuous, 5, 0))
+
+		local shape = require 'shape'
+		assert(shape.outline('m 0 0 l 10 0', -1, 'flat', 'bevel') == '')
+		assert(shape.pattern_outline('m 0 0 l 10 0', 2, 'flat', 'bevel', -1, 1, 0) == '')
+		assert(shape.pattern_outline('m 0 0 l 10 0', 2, 'flat', 'bevel', 1, -1, 0) == '')
+		assert(not shape.contains_rect(rect, 1, 1, -2, 2))
 	)");
 }

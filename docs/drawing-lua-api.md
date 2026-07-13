@@ -100,6 +100,7 @@ When omitted, VSFilter-style handling is used.
 - `bounds(shape[, mode]) -> x, y, width, height`
   Returns tight geometric bounds (curve extrema included), or `nil` for an empty drawing.
 - `flatten(shape[, tolerance[, mode]]) -> shape`
+  Non-positive or non-finite tolerances use the default `0.25` tolerance.
 - `reverse(shape[, mode]) -> shape`
 - `length(shape[, mode]) -> number`
 - `percent_at_length(shape, distance[, mode]) -> number`
@@ -196,6 +197,18 @@ ASS emission do not depend on this backend.
 
 `cap` accepts `"flat"`, `"butt"`, `"round"`, or `"square"`.
 `join` accepts `"miter"`, `"svgmiter"`, `"round"`, or `"bevel"`.
+
+Outline parameters have explicit boundary behavior. A zero width, or a zero
+`pattern_length`, succeeds with an empty result. Negative widths and negative
+pattern or space lengths are errors. A zero `space_length` is a continuous
+outline, and `dash_offset` may be negative. Non-finite values are errors. An
+empty source with otherwise valid parameters succeeds with an empty result.
+The modern `aegisub.drawing` API raises these errors; the `require "shape"`
+compatibility functions return an empty string instead.
+
+`contains_rect` treats a rectangle with a zero or negative width or height as
+empty and returns `false`. Non-finite coordinates or dimensions are errors in
+the modern API and return `false` through the compatibility module.
 
 ## Example
 

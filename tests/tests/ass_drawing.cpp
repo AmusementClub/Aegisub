@@ -772,11 +772,13 @@ TEST(lagi_ass_drawing, skia_backend_handles_degenerate_outline_parameters) {
 	if (!DrawingSkiaBackendAvailable())
 		GTEST_SKIP() << "drawing Skia backend is not enabled";
 
+	auto line = ParseAssOpen("m 0 0 l 10 0");
 	PathData result;
-	ASSERT_TRUE(TryDrawingOutline(ParseAssOpen("m 0 0 l 10 0"), 0.0, DrawingStrokeCap::Flat, DrawingStrokeJoin::Bevel, result));
+	ASSERT_TRUE(TryDrawingOutline(line, 0.0, DrawingStrokeCap::Flat, DrawingStrokeJoin::Bevel, result));
 	EXPECT_TRUE(result.commands.empty());
+	EXPECT_FALSE(TryDrawingOutline(line, -1.0, DrawingStrokeCap::Flat, DrawingStrokeJoin::Bevel, result));
 
-	ASSERT_TRUE(TryDrawingPatternOutline(ParseAssOpen("m 0 0 l 10 0"),
+	ASSERT_TRUE(TryDrawingPatternOutline(line,
 		2.0,
 		DrawingStrokeCap::Flat,
 		DrawingStrokeJoin::Bevel,
@@ -786,7 +788,7 @@ TEST(lagi_ass_drawing, skia_backend_handles_degenerate_outline_parameters) {
 		result));
 	EXPECT_TRUE(result.commands.empty());
 
-	ASSERT_TRUE(TryDrawingPatternOutline(ParseAssOpen("m 0 0 l 10 0"),
+	EXPECT_FALSE(TryDrawingPatternOutline(line,
 		2.0,
 		DrawingStrokeCap::Flat,
 		DrawingStrokeJoin::Bevel,
@@ -794,11 +796,31 @@ TEST(lagi_ass_drawing, skia_backend_handles_degenerate_outline_parameters) {
 		-1.0,
 		0.0,
 		result));
+	EXPECT_FALSE(TryDrawingPatternOutline(line,
+		-1.0, DrawingStrokeCap::Flat, DrawingStrokeJoin::Bevel, 1.0, 1.0, 0.0, result));
+	EXPECT_FALSE(TryDrawingPatternOutline(line,
+		2.0, DrawingStrokeCap::Flat, DrawingStrokeJoin::Bevel, -1.0, 1.0, 0.0, result));
+
+	ASSERT_TRUE(TryDrawingPatternOutline(line,
+		2.0, DrawingStrokeCap::Flat, DrawingStrokeJoin::Bevel, 1.0, 0.0, -3.0, result));
+	ExpectSkiaContains(result, 5.0, 0.0, true);
+	ExpectSkiaContains(result, 5.0, 2.0, false);
+
+	ASSERT_TRUE(TryDrawingOutline({}, 2.0, DrawingStrokeCap::Flat, DrawingStrokeJoin::Bevel, result));
+	EXPECT_TRUE(result.commands.empty());
+	ASSERT_TRUE(TryDrawingPatternOutline({},
+		2.0, DrawingStrokeCap::Flat, DrawingStrokeJoin::Bevel, 1.0, 1.0, 0.0, result));
 	EXPECT_TRUE(result.commands.empty());
 
 	bool contains = false;
+	ASSERT_TRUE(TryDrawingContainsRect(MakeRect(0.0, 0.0, 10.0, 10.0), 1.0, 1.0, 0.0, 2.0, contains));
+	EXPECT_FALSE(contains);
+	ASSERT_TRUE(TryDrawingContainsRect(MakeRect(0.0, 0.0, 10.0, 10.0), 1.0, 1.0, -2.0, 2.0, contains));
+	EXPECT_FALSE(contains);
+	EXPECT_FALSE(TryDrawingContainsRect(MakeRect(0.0, 0.0, 10.0, 10.0),
+		1.0, 1.0, std::numeric_limits<double>::quiet_NaN(), 2.0, contains));
 	EXPECT_FALSE(TryDrawingContainsPoint(MakeRect(0.0, 0.0, 10.0, 10.0),
 		std::numeric_limits<double>::infinity(), 5.0, contains));
-	EXPECT_FALSE(TryDrawingOutline(ParseAssOpen("m 0 0 l 10 0"),
+	EXPECT_FALSE(TryDrawingOutline(line,
 		std::numeric_limits<double>::quiet_NaN(), DrawingStrokeCap::Flat, DrawingStrokeJoin::Bevel, result));
 }

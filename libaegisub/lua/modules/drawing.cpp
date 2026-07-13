@@ -469,6 +469,34 @@ int DrawingPathCentroid(lua_State *L) {
 		CheckDrawingPath(L, 1)->path, signed_area, centroid, luaL_optnumber(L, 2, 0.25)), centroid);
 }
 
+int PushFilledMetric(lua_State *L, PathData const& path, double tolerance, bool return_centroid, char const *name) {
+	PathData normalized;
+	if (!agi::ass::drawing::TryNormalizeFilledPath(path, normalized))
+		return BackendOperationError(L, name);
+
+	double signed_area;
+	Point centroid;
+	if (!agi::ass::drawing::TryGetSignedAreaAndCentroid(normalized, signed_area, centroid, tolerance)) {
+		lua_pushnil(L);
+		return 1;
+	}
+
+	if (return_centroid)
+		return PushPointOrNil(L, true, centroid);
+	lua_pushnumber(L, std::abs(signed_area));
+	return 1;
+}
+
+int DrawingPathFilledArea(lua_State *L) {
+	return PushFilledMetric(L, CheckDrawingPath(L, 1)->path,
+		luaL_optnumber(L, 2, 0.25), false, "drawing path filled_area");
+}
+
+int DrawingPathFilledCentroid(lua_State *L) {
+	return PushFilledMetric(L, CheckDrawingPath(L, 1)->path,
+		luaL_optnumber(L, 2, 0.25), true, "drawing path filled_centroid");
+}
+
 int DrawingPathContainsPoint(lua_State *L) {
 	bool contains = false;
 	if (!agi::ass::drawing::TryDrawingContainsPoint(CheckDrawingPath(L, 1)->path,
@@ -803,6 +831,18 @@ int Centroid(lua_State *L) {
 		centroid);
 }
 
+int FilledArea(lua_State *L) {
+	auto options = CheckToleranceAndMode(L, 2);
+	return PushFilledMetric(L, ParseFilled(L, 1, options.mode_idx),
+		options.tolerance, false, "filled_area");
+}
+
+int FilledCentroid(lua_State *L) {
+	auto options = CheckToleranceAndMode(L, 2);
+	return PushFilledMetric(L, ParseFilled(L, 1, options.mode_idx),
+		options.tolerance, true, "filled_centroid");
+}
+
 int ShapeContainsPoint(lua_State *L) {
 	bool contains = false;
 	if (!agi::ass::drawing::TryDrawingContainsPoint(ParseFilled(L, 1, 4), luaL_checknumber(L, 2), luaL_checknumber(L, 3), contains))
@@ -996,6 +1036,8 @@ luaL_Reg const DrawingPathMethods[] = {
 	{"slope_at_percent", DrawingPathSlopeAtPercent},
 	{"area", DrawingPathArea},
 	{"centroid", DrawingPathCentroid},
+	{"filled_area", DrawingPathFilledArea},
+	{"filled_centroid", DrawingPathFilledCentroid},
 	{"contains_point", DrawingPathContainsPoint},
 	{"contains_rect", DrawingPathContainsRect},
 	{"unite", DrawingPathUnite},
@@ -1063,6 +1105,8 @@ luaL_Reg const DrawingFunctions[] = {
 	{"shape_slope_at_percent", ShapeSlopeAtPercent},
 	{"area", Area},
 	{"centroid", Centroid},
+	{"filled_area", FilledArea},
+	{"filled_centroid", FilledCentroid},
 	{"shape_contains_point", ShapeContainsPoint},
 	{"shape_contains_rect", ShapeContainsRect},
 	{"shape_united", ShapeUnited},

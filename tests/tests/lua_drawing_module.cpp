@@ -382,6 +382,50 @@ TEST(lua_drawing_module, exposes_skia_backed_legacy_shape_api) {
 	)");
 }
 
+TEST(lua_drawing_module, exposes_filled_topology_metrics) {
+	auto L = MakeLuaState();
+
+	if (!agi::ass::drawing::DrawingSkiaBackendAvailable()) {
+		RunLua(L.get(), R"(
+			local drawing = require 'aegisub.drawing'
+			assert(not pcall(function()
+				drawing.filled_area('m 0 0 l 10 0 10 10 0 10')
+			end))
+			assert(not pcall(function()
+				drawing.filled_path('m 0 0 l 10 0 10 10 0 10'):filled_centroid()
+			end))
+		)");
+		return;
+	}
+
+	RunLua(L.get(), R"(
+		local drawing = require 'aegisub.drawing'
+		local function near(a, b)
+			return math.abs(a - b) < 0.000001
+		end
+
+		local overlapping =
+			'm 0 0 l 10 0 10 10 0 10 ' ..
+			'm 5 0 l 15 0 15 10 5 10'
+		assert(near(drawing.area(overlapping), 200))
+		assert(near(drawing.filled_area(overlapping), 150))
+		local x, y = drawing.filled_centroid(overlapping)
+		assert(near(x, 7.5) and near(y, 5))
+
+		local bowtie = 'm 0 0 l 20 20 0 20 20 0'
+		assert(drawing.area(bowtie) == nil)
+		assert(near(drawing.filled_area(bowtie), 200))
+		x, y = drawing.filled_centroid(bowtie)
+		assert(near(x, 10) and near(y, 10))
+
+		local path = drawing.filled_path(overlapping)
+		assert(near(path:filled_area(), 150))
+		x, y = path:filled_centroid()
+		assert(near(x, 7.5) and near(y, 5))
+		assert(drawing.filled_area('') == nil)
+	)");
+}
+
 TEST(lua_drawing_module, path_measurement_cache_follows_mutations) {
 	auto L = MakeLuaState();
 	RunLua(L.get(), R"(

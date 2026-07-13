@@ -285,6 +285,12 @@ TEST(lagi_ass_drawing, computes_filled_area_and_centroid) {
 	ASSERT_TRUE(TryGetSignedAreaAndCentroid(path, signed_area, centroid));
 	EXPECT_DOUBLE_EQ(100.0, signed_area);
 	ExpectPoint(centroid, 5.0, 5.0);
+
+	constexpr double base = 1.0e12;
+	path = MakeRect(base, base, 2.0, 4.0);
+	ASSERT_TRUE(TryGetSignedAreaAndCentroid(path, signed_area, centroid));
+	EXPECT_DOUBLE_EQ(8.0, signed_area);
+	ExpectPoint(centroid, base + 1.0, base + 2.0);
 }
 
 TEST(lagi_ass_drawing, builds_basic_shapes_without_backend_dependencies) {
@@ -591,6 +597,7 @@ TEST(lagi_ass_drawing, skia_backend_reports_unavailable_without_feature) {
 	EXPECT_FALSE(contains);
 
 	PathData result;
+	EXPECT_FALSE(TryNormalizeFilledPath(ParseAss("m 0 0 l 10 0 l 10 10 l 0 10"), result));
 	EXPECT_FALSE(TryDrawingBoolean(ParseAss("m 0 0 l 10 0 l 10 10 l 0 10"),
 		ParseAss("m 5 5 l 15 5 l 15 15 l 5 15"),
 		DrawingBooleanOp::Union,
@@ -652,6 +659,47 @@ TEST(lagi_ass_drawing, skia_backend_evaluates_boolean_operations) {
 	auto xor_roundtrip = ParseAss(SerializeAssFilled(result));
 	ExpectSkiaContains(xor_roundtrip, 2.0, 2.0, true);
 	ExpectSkiaContains(xor_roundtrip, 7.0, 7.0, false);
+}
+
+TEST(lagi_ass_drawing, skia_backend_normalizes_filled_topology_for_metrics) {
+	if (!DrawingSkiaBackendAvailable())
+		GTEST_SKIP() << "drawing Skia backend is not enabled";
+
+	auto overlapping = ParseAss(
+		"m 0 0 l 10 0 10 10 0 10 "
+		"m 5 0 l 15 0 15 10 5 10");
+	PathData normalized;
+	double signed_area;
+	Point centroid;
+
+	ASSERT_TRUE(TryGetSignedAreaAndCentroid(overlapping, signed_area, centroid));
+	EXPECT_DOUBLE_EQ(200.0, std::abs(signed_area));
+	ASSERT_TRUE(TryNormalizeFilledPath(overlapping, normalized));
+	ASSERT_TRUE(normalized.winding_fill);
+	ASSERT_TRUE(TryGetSignedAreaAndCentroid(normalized, signed_area, centroid));
+	EXPECT_DOUBLE_EQ(150.0, std::abs(signed_area));
+	ExpectPoint(centroid, 7.5, 5.0);
+
+	auto bowtie = ParseAss("m 0 0 l 20 20 0 20 20 0");
+	EXPECT_FALSE(TryGetSignedAreaAndCentroid(bowtie, signed_area, centroid));
+	ASSERT_TRUE(TryNormalizeFilledPath(bowtie, normalized));
+	ASSERT_TRUE(TryGetSignedAreaAndCentroid(normalized, signed_area, centroid));
+	EXPECT_DOUBLE_EQ(200.0, std::abs(signed_area));
+	ExpectPoint(centroid, 10.0, 10.0);
+
+	overlapping.winding_fill = false;
+	ASSERT_TRUE(TryNormalizeFilledPath(overlapping, normalized));
+	ASSERT_TRUE(TryGetSignedAreaAndCentroid(normalized, signed_area, centroid));
+	EXPECT_DOUBLE_EQ(100.0, std::abs(signed_area));
+	ExpectPoint(centroid, 7.5, 5.0);
+
+	auto donut = ParseAss(
+		"m 0 0 l 40 0 40 40 0 40 "
+		"m 10 10 l 10 30 30 30 30 10");
+	ASSERT_TRUE(TryNormalizeFilledPath(donut, normalized));
+	ASSERT_TRUE(TryGetSignedAreaAndCentroid(normalized, signed_area, centroid));
+	EXPECT_DOUBLE_EQ(1200.0, std::abs(signed_area));
+	ExpectPoint(centroid, 20.0, 20.0);
 }
 
 TEST(lagi_ass_drawing, skia_backend_generates_outlines) {

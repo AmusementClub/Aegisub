@@ -63,7 +63,8 @@ result into an ASS tag or event. Path methods mutate the object, so use
   flattening-tolerance argument.
 - Geometry queries are available as methods: `bounds`, `control_bounds`,
   `length`, `percent_at_length`, `point_at_percent`, `point_at_length`,
-  `angle_at_percent`, `slope_at_percent`, `area`, `centroid`,
+  `angle_at_percent`, `slope_at_percent`, `area`, `centroid`, `filled_area`,
+  `filled_centroid`,
   `contains_point`, and `contains_rect`.
 - Path length and position methods share a lazy segment-measurement cache.
   Geometry mutations invalidate it automatically.
@@ -122,6 +123,12 @@ When omitted, VSFilter-style handling is used.
 - `centroid(shape[, tolerance[, mode]]) -> x, y`
   Returns the centroid of the same algebraic contour area, or `nil` if none is
   available.
+- `filled_area(shape[, tolerance[, mode]]) -> number`
+- `filled_centroid(shape[, tolerance[, mode]]) -> x, y`
+  These resolve overlaps and self-intersections according to the path's fill
+  rule before measuring, so repeated coverage is counted once. They return
+  `nil` when the resolved fill has no measurable area and require the optional
+  drawing geometry backend.
 
 ## Public shape_* API
 
@@ -196,6 +203,10 @@ ASS emission do not depend on this backend.
 - `shape_outline(shape, width, cap, join[, mode]) -> shape`
 - `shape_outline_with_flatten(shape, width, cap, join, tolerance[, mode]) -> shape`
 - `shape_pattern_outline(shape, width, cap, join, pattern_length, space_length, dash_offset[, mode]) -> shape`
+
+The unprefixed `filled_area` and `filled_centroid` functions and the matching
+Path methods also use this backend. They are modern additions rather than
+`shape_*` compatibility aliases.
 
 `cap` accepts `"flat"`, `"butt"`, `"round"`, or `"square"`.
 `join` accepts `"miter"`, `"svgmiter"`, `"round"`, or `"bevel"`.

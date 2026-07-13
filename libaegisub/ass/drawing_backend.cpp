@@ -379,6 +379,105 @@ bool StrokePath(SkPath const& source,
 	return true;
 }
 
+std::vector<PathData> SplitBackendContours(PathData const& path) {
+	std::vector<PathData> contours;
+	for (auto const& command : path.commands) {
+		if (command.verb == PathVerb::MoveTo && !contours.empty() && !contours.back().commands.empty())
+			contours.push_back({});
+		if (contours.empty())
+			contours.push_back({});
+		contours.back().commands.push_back(command);
+	}
+	return contours;
+}
+
+Point BackendContourSample(PathData const& contour) {
+	Point anchor = contour.commands.front().p1;
+	for (std::size_t index = 1; index < contour.commands.size(); ++index) {
+		Point endpoint;
+		switch (contour.commands[index].verb) {
+			case PathVerb::LineTo:
+				endpoint = contour.commands[index].p1;
+				break;
+			case PathVerb::QuadTo:
+			case PathVerb::ConicTo:
+				endpoint = contour.commands[index].p2;
+				break;
+			case PathVerb::CubicTo:
+				endpoint = contour.commands[index].p3;
+				break;
+			case PathVerb::MoveTo:
+			case PathVerb::Close:
+				continue;
+		}
+		if (!SamePoint(endpoint, anchor))
+			return endpoint;
+	}
+	return anchor;
+}
+
+bool NormalizeSkPathFill(SkPath const& source, BackendCoordinates const& coordinates, PathData& result) {
+	result = {};
+	SkPath simplified;
+	if (!Simplify(source, &simplified))
+		return false;
+	// Once intersections are resolved, even-odd describes the same boundary
+	// nesting without retaining the source's winding magnitudes.
+	simplified.setFillType(SkPathFillType::kEvenOdd);
+	auto winding = AsWinding(simplified);
+	if (!winding)
+		return false;
+
+	PathData converted;
+	if (!FromSkPath(*winding, coordinates, converted))
+		return false;
+	auto contours = SplitBackendContours(converted);
+
+	struct ContourInfo {
+		PathData path;
+		SkPath sk_path;
+		SkPoint sample {};
+		SkRect bounds {};
+		double signed_area = 0.0;
+		bool has_area = false;
+	};
+	std::vector<ContourInfo> info;
+	info.reserve(contours.size());
+	for (auto& contour : contours) {
+		if (contour.commands.empty() || contour.commands.front().verb != PathVerb::MoveTo)
+			continue;
+
+		ContourInfo item;
+		item.path = std::move(contour);
+		item.path.winding_fill = true;
+		if (!coordinates.ToSkPoint(BackendContourSample(item.path), item.sample) ||
+			!ToSkPath(item.path, true, coordinates, item.sk_path))
+			return false;
+		item.bounds = item.sk_path.getBounds();
+		Point centroid;
+		item.has_area = TryGetSignedAreaAndCentroid(item.path, item.signed_area, centroid, 1.0 / 1024.0);
+		info.push_back(std::move(item));
+	}
+
+	result.winding_fill = true;
+	for (std::size_t index = 0; index < info.size(); ++index) {
+		std::size_t depth = 0;
+		for (std::size_t outer = 0; outer < info.size(); ++outer) {
+			if (outer == index || !info[outer].bounds.contains(info[index].sample.x(), info[index].sample.y()))
+				continue;
+			if (info[outer].sk_path.contains(info[index].sample.x(), info[index].sample.y()))
+				++depth;
+		}
+
+		bool wants_positive_area = depth % 2 == 0;
+		if (info[index].has_area && (info[index].signed_area > 0.0) != wants_positive_area)
+			info[index].path = ReversePath(info[index].path);
+		result.commands.insert(result.commands.end(),
+			info[index].path.commands.begin(), info[index].path.commands.end());
+	}
+	return true;
+}
+
 } // namespace
 #endif
 
@@ -464,6 +563,25 @@ bool TryDrawingContainsRect(PathData const& path, double x, double y, double wid
 #endif
 }
 
+bool TryNormalizeFilledPath(PathData const& path, PathData& result) {
+#if defined(WITH_DRAWING_SKIA)
+	result = {};
+	if (path.commands.empty())
+		return true;
+
+	BackendCoordinates coordinates;
+	SkPath source;
+	if (!PrepareBackendCoordinates(path, coordinates) || !ToSkPath(path, true, coordinates, source))
+		return false;
+
+	return NormalizeSkPathFill(source, coordinates, result);
+#else
+	(void)path;
+	result = {};
+	return false;
+#endif
+}
+
 bool TryDrawingBoolean(PathData const& lhs, PathData const& rhs, DrawingBooleanOp op, PathData& result) {
 #if defined(WITH_DRAWING_SKIA)
 	result = {};
@@ -480,13 +598,7 @@ bool TryDrawingBoolean(PathData const& lhs, PathData const& rhs, DrawingBooleanO
 	// PathOps can return even-odd contours which touch at shared vertices.
 	// Simplify first produces equivalent non-overlapping contours; direct
 	// AsWinding on the touching XOR representation can fill its intended hole.
-	SkPath simplified;
-	if (!Simplify(sk_result, &simplified))
-		return false;
-	auto winding_result = AsWinding(simplified);
-	if (!winding_result)
-		return false;
-	return FromSkPath(*winding_result, coordinates, result);
+	return NormalizeSkPathFill(sk_result, coordinates, result);
 #else
 	(void)lhs;
 	(void)rhs;

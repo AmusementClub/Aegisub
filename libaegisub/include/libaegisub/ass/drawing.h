@@ -163,6 +163,9 @@ bool DrawingBackendAvailable();
 bool DrawingSkiaBackendAvailable();
 bool TryDrawingContainsPoint(PathData const& path, double x, double y, bool& contains);
 bool TryDrawingContainsRect(PathData const& path, double x, double y, double width, double height, bool& contains);
+// Resolves overlaps and self-intersections according to the input fill rule,
+// then converts the result to nonzero winding contours.
+bool TryNormalizeFilledPath(PathData const& path, PathData& result);
 bool TryDrawingBoolean(PathData const& lhs, PathData const& rhs, DrawingBooleanOp op, PathData& result);
 bool TryDrawingOutline(PathData const& path, double width, DrawingStrokeCap cap, DrawingStrokeJoin join, PathData& result);
 bool TryDrawingPatternOutline(PathData const& path,

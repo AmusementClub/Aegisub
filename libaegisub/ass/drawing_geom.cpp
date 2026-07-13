@@ -773,11 +773,18 @@ bool TryGetDegeneratePathPosition(PathData const& path, Point& point) {
 	return true;
 }
 
-void IncludeAreaEdge(Point const& start, Point const& end, double& cross_sum, double& centroid_x_sum, double& centroid_y_sum) {
-	double cross = start.x * end.y - end.x * start.y;
+void IncludeAreaEdge(Point const& start,
+	Point const& end,
+	Point const& origin,
+	double& cross_sum,
+	double& centroid_x_sum,
+	double& centroid_y_sum) {
+	Point local_start {start.x - origin.x, start.y - origin.y};
+	Point local_end {end.x - origin.x, end.y - origin.y};
+	double cross = local_start.x * local_end.y - local_end.x * local_start.y;
 	cross_sum += cross;
-	centroid_x_sum += (start.x + end.x) * cross;
-	centroid_y_sum += (start.y + end.y) * cross;
+	centroid_x_sum += (local_start.x + local_end.x) * cross;
+	centroid_y_sum += (local_start.y + local_end.y) * cross;
 }
 
 void FlushReversedContour(PathData& reversed, Contour& contour) {
@@ -1184,18 +1191,36 @@ bool TryGetPositionAtLength(PathData const& path, double distance, Point& point,
 bool TryGetSignedAreaAndCentroid(PathData const& path, double& signed_area, Point& centroid, double tolerance) {
 	PathData flattened = FlattenPath(path, tolerance);
 	double cross_sum = 0.0;
-	double centroid_x_sum = 0.0;
-	double centroid_y_sum = 0.0;
+	double centroid_x_cross_sum = 0.0;
+	double centroid_y_cross_sum = 0.0;
 
 	bool has_current = false;
 	bool contour_has_edge = false;
+	bool has_reference = false;
+	Point reference {};
 	Point contour_start {};
 	Point current {};
+	double contour_cross_sum = 0.0;
+	double contour_centroid_x_sum = 0.0;
+	double contour_centroid_y_sum = 0.0;
 
 	auto close_contour = [&] {
 		if (has_current && contour_has_edge && !SamePoint(current, contour_start))
-			IncludeAreaEdge(current, contour_start, cross_sum, centroid_x_sum, centroid_y_sum);
+			IncludeAreaEdge(current, contour_start, contour_start,
+				contour_cross_sum, contour_centroid_x_sum, contour_centroid_y_sum);
+		if (contour_has_edge) {
+			if (!has_reference) {
+				reference = contour_start;
+				has_reference = true;
+			}
+			cross_sum += contour_cross_sum;
+			centroid_x_cross_sum += (contour_start.x - reference.x) * contour_cross_sum + contour_centroid_x_sum / 3.0;
+			centroid_y_cross_sum += (contour_start.y - reference.y) * contour_cross_sum + contour_centroid_y_sum / 3.0;
+		}
 		contour_has_edge = false;
+		contour_cross_sum = 0.0;
+		contour_centroid_x_sum = 0.0;
+		contour_centroid_y_sum = 0.0;
 	};
 
 	for (auto const& command : flattened.commands) {
@@ -1212,7 +1237,8 @@ bool TryGetSignedAreaAndCentroid(PathData const& path, double& signed_area, Poin
 					current = {};
 					has_current = true;
 				}
-				IncludeAreaEdge(current, command.p1, cross_sum, centroid_x_sum, centroid_y_sum);
+				IncludeAreaEdge(current, command.p1, contour_start,
+					contour_cross_sum, contour_centroid_x_sum, contour_centroid_y_sum);
 				current = command.p1;
 				contour_has_edge = true;
 				break;
@@ -1234,8 +1260,8 @@ bool TryGetSignedAreaAndCentroid(PathData const& path, double& signed_area, Poin
 
 	signed_area = cross_sum * 0.5;
 	centroid = {
-		centroid_x_sum / (3.0 * cross_sum),
-		centroid_y_sum / (3.0 * cross_sum),
+		reference.x + centroid_x_cross_sum / cross_sum,
+		reference.y + centroid_y_cross_sum / cross_sum,
 	};
 	return PointIsFinite(centroid);
 }

@@ -42,8 +42,17 @@
         "fftw3"
       ]
     },
+    "drawing-skia": {
+      "description": "Install core-only Skia for Lua drawing path operations.",
+      "dependencies": [
+        {
+          "name": "skia",
+          "default-features": false
+        }
+      ]
+    },
     "skia": {
-      "description": "Install Skia for optional Lua drawing path operations.",
+      "description": "Install full Skia for optional 2D rendering infrastructure.",
       "dependencies": [
         "skia"
       ]

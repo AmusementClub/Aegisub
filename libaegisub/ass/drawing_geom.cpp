@@ -34,23 +34,52 @@ struct CubicBezier {
 	Point p3 {};
 };
 
+struct RationalConic {
+	Point p0 {};
+	Point p1 {};
+	Point p2 {};
+	double weight = 1.0;
+};
+
+struct HomogeneousPoint {
+	double x = 0.0;
+	double y = 0.0;
+	double weight = 1.0;
+};
+
+struct HomogeneousConic {
+	HomogeneousPoint p0 {};
+	HomogeneousPoint p1 {};
+	HomogeneousPoint p2 {};
+};
+
 struct Segment {
 	PathVerb verb = PathVerb::LineTo;
 	Point start {};
 	Point c1 {};
 	Point c2 {};
 	Point end {};
+	double weight = 1.0;
 };
 
 struct Contour {
 	bool has_anchor = false;
+	bool preserve_empty_anchor = false;
+	bool closed = false;
 	Point anchor {};
 	std::vector<Segment> segments;
 };
 
+enum class MeasuredSegmentKind {
+	Line,
+	Cubic,
+	Conic,
+};
+
 struct MeasuredSegment {
-	bool is_line = true;
+	MeasuredSegmentKind kind = MeasuredSegmentKind::Line;
 	CubicBezier cubic {};
+	RationalConic conic {};
 	double length = 0.0;
 };
 
@@ -93,6 +122,68 @@ Point CubicDerivativeAt(CubicBezier const& cubic, double t) {
 	return {
 		a * (cubic.p1.x - cubic.p0.x) + b * (cubic.p2.x - cubic.p1.x) + c * (cubic.p3.x - cubic.p2.x),
 		a * (cubic.p1.y - cubic.p0.y) + b * (cubic.p2.y - cubic.p1.y) + c * (cubic.p3.y - cubic.p2.y),
+	};
+}
+
+CubicBezier QuadAsCubic(Point const& start, Point const& control, Point const& end) {
+	return {
+		start,
+		{
+			start.x + (control.x - start.x) * (2.0 / 3.0),
+			start.y + (control.y - start.y) * (2.0 / 3.0),
+		},
+		{
+			end.x + (control.x - end.x) * (2.0 / 3.0),
+			end.y + (control.y - end.y) * (2.0 / 3.0),
+		},
+		end,
+	};
+}
+
+bool ConicIsValid(RationalConic const& conic) {
+	return PointIsFinite(conic.p0) && PointIsFinite(conic.p1) && PointIsFinite(conic.p2) &&
+		conic.weight > 0.0 && std::isfinite(conic.weight);
+}
+
+Point ConicPointAt(RationalConic const& conic, double t) {
+	double mt = 1.0 - t;
+	double a = mt * mt;
+	double b = 2.0 * conic.weight * t * mt;
+	double c = t * t;
+	double denominator = a + b + c;
+	if (!(denominator > 0.0) || !std::isfinite(denominator))
+		return conic.p2;
+
+	return {
+		(a * conic.p0.x + b * conic.p1.x + c * conic.p2.x) / denominator,
+		(a * conic.p0.y + b * conic.p1.y + c * conic.p2.y) / denominator,
+	};
+}
+
+Point ConicDerivativeAt(RationalConic const& conic, double t) {
+	double mt = 1.0 - t;
+	double a = mt * mt;
+	double b = 2.0 * conic.weight * t * mt;
+	double c = t * t;
+	double da = -2.0 * mt;
+	double db = 2.0 * conic.weight * (1.0 - 2.0 * t);
+	double dc = 2.0 * t;
+	double denominator = a + b + c;
+	if (!(denominator > 0.0) || !std::isfinite(denominator))
+		return {};
+
+	Point numerator {
+		a * conic.p0.x + b * conic.p1.x + c * conic.p2.x,
+		a * conic.p0.y + b * conic.p1.y + c * conic.p2.y,
+	};
+	Point numerator_derivative {
+		da * conic.p0.x + db * conic.p1.x + dc * conic.p2.x,
+		da * conic.p0.y + db * conic.p1.y + dc * conic.p2.y,
+	};
+	double inverse_denominator_squared = 1.0 / (denominator * denominator);
+	return {
+		(numerator_derivative.x * denominator - numerator.x * (da + db + dc)) * inverse_denominator_squared,
+		(numerator_derivative.y * denominator - numerator.y * (da + db + dc)) * inverse_denominator_squared,
 	};
 }
 
@@ -139,6 +230,62 @@ void IncludeCubicBounds(BoundsAccumulator& bounds, CubicBezier const& cubic) {
 	IncludeCubicCoordinateExtrema(bounds, cubic, cubic.p0.y, cubic.p1.y, cubic.p2.y, cubic.p3.y);
 }
 
+void IncludeConicRoot(BoundsAccumulator& bounds, RationalConic const& conic, double t) {
+	if (t > 0.0 && t < 1.0 && std::isfinite(t))
+		IncludePoint(bounds, ConicPointAt(conic, t));
+}
+
+void IncludeConicCoordinateExtrema(BoundsAccumulator& bounds,
+	RationalConic const& conic,
+	double p0,
+	double p1,
+	double p2) {
+	// N(t) / D(t), where N and D are quadratics.  The cubic terms
+	// cancel in N'D - ND', leaving this quadratic derivative numerator.
+	double numerator_a = p0 - 2.0 * conic.weight * p1 + p2;
+	double numerator_b = -2.0 * p0 + 2.0 * conic.weight * p1;
+	double numerator_c = p0;
+	double denominator_a = 2.0 * (1.0 - conic.weight);
+	double denominator_b = 2.0 * (conic.weight - 1.0);
+	double derivative_a = numerator_a * denominator_b - numerator_b * denominator_a;
+	double derivative_b = 2.0 * (numerator_a - numerator_c * denominator_a);
+	double derivative_c = numerator_b - numerator_c * denominator_b;
+
+	if (!std::isfinite(derivative_a) || !std::isfinite(derivative_b) || !std::isfinite(derivative_c))
+		return;
+
+	double scale = std::max({1.0, std::abs(derivative_a), std::abs(derivative_b), std::abs(derivative_c)});
+	double epsilon = std::numeric_limits<double>::epsilon() * scale * 16.0;
+	if (std::abs(derivative_a) <= epsilon) {
+		if (std::abs(derivative_b) > epsilon)
+			IncludeConicRoot(bounds, conic, -derivative_c / derivative_b);
+		return;
+	}
+
+	double discriminant = derivative_b * derivative_b - 4.0 * derivative_a * derivative_c;
+	double discriminant_epsilon = std::numeric_limits<double>::epsilon() *
+		(std::abs(derivative_b * derivative_b) + std::abs(4.0 * derivative_a * derivative_c)) * 16.0;
+	if (discriminant < -discriminant_epsilon)
+		return;
+
+	double root = std::sqrt(std::max(0.0, discriminant));
+	double q = -0.5 * (derivative_b + std::copysign(root, derivative_b));
+	if (std::abs(q) <= epsilon) {
+		IncludeConicRoot(bounds, conic, -derivative_b / (2.0 * derivative_a));
+		return;
+	}
+
+	IncludeConicRoot(bounds, conic, q / derivative_a);
+	IncludeConicRoot(bounds, conic, derivative_c / q);
+}
+
+void IncludeConicBounds(BoundsAccumulator& bounds, RationalConic const& conic) {
+	IncludePoint(bounds, conic.p0);
+	IncludePoint(bounds, conic.p2);
+	IncludeConicCoordinateExtrema(bounds, conic, conic.p0.x, conic.p1.x, conic.p2.x);
+	IncludeConicCoordinateExtrema(bounds, conic, conic.p0.y, conic.p1.y, conic.p2.y);
+}
+
 double DistanceSquared(Point const& lhs, Point const& rhs) {
 	double dx = lhs.x - rhs.x;
 	double dy = lhs.y - rhs.y;
@@ -149,15 +296,15 @@ double LineLength(Point const& start, Point const& end) {
 	return std::hypot(end.x - start.x, end.y - start.y);
 }
 
-double PointLineDistanceSquared(Point const& point, Point const& line_start, Point const& line_end) {
-	double dx = line_end.x - line_start.x;
-	double dy = line_end.y - line_start.y;
+double PointSegmentDistanceSquared(Point const& point, Point const& segment_start, Point const& segment_end) {
+	double dx = segment_end.x - segment_start.x;
+	double dy = segment_end.y - segment_start.y;
 	double denominator = dx * dx + dy * dy;
 	if (denominator <= kPointEpsilon)
-		return DistanceSquared(point, line_start);
+		return DistanceSquared(point, segment_start);
 
-	double cross = (point.x - line_start.x) * dy - (point.y - line_start.y) * dx;
-	return cross * cross / denominator;
+	double projection = ((point.x - segment_start.x) * dx + (point.y - segment_start.y) * dy) / denominator;
+	return DistanceSquared(point, Lerp(segment_start, segment_end, std::clamp(projection, 0.0, 1.0)));
 }
 
 double SimpsonIntegral(CubicBezier const& cubic, double start, double end) {
@@ -211,10 +358,71 @@ double CubicTAtLength(CubicBezier const& cubic, double target_length, double tot
 	return (low + high) * 0.5;
 }
 
+double ConicSimpsonIntegral(RationalConic const& conic, double start, double end) {
+	auto speed = [&conic](double t) {
+		Point derivative = ConicDerivativeAt(conic, t);
+		return std::hypot(derivative.x, derivative.y);
+	};
+
+	double middle = (start + end) * 0.5;
+	return (end - start) * (speed(start) + 4.0 * speed(middle) + speed(end)) / 6.0;
+}
+
+double AdaptiveConicSimpson(RationalConic const& conic,
+	double start,
+	double end,
+	double epsilon,
+	double whole,
+	int depth) {
+	double middle = (start + end) * 0.5;
+	double left = ConicSimpsonIntegral(conic, start, middle);
+	double right = ConicSimpsonIntegral(conic, middle, end);
+	double delta = left + right - whole;
+
+	if (depth <= 0 || std::abs(delta) <= 15.0 * epsilon)
+		return left + right + delta / 15.0;
+
+	return AdaptiveConicSimpson(conic, start, middle, epsilon * 0.5, left, depth - 1) +
+		AdaptiveConicSimpson(conic, middle, end, epsilon * 0.5, right, depth - 1);
+}
+
+double ConicLength(RationalConic const& conic, double end_t = 1.0) {
+	double clamped_t = std::clamp(end_t, 0.0, 1.0);
+	if (clamped_t <= 0.0)
+		return 0.0;
+
+	double whole = ConicSimpsonIntegral(conic, 0.0, clamped_t);
+	return AdaptiveConicSimpson(conic,
+		0.0,
+		clamped_t,
+		kLengthIntegrationEpsilon,
+		whole,
+		kLengthIntegrationMaxDepth);
+}
+
+double ConicTAtLength(RationalConic const& conic, double target_length, double total_length) {
+	if (target_length <= 0.0)
+		return 0.0;
+	if (target_length >= total_length || total_length <= kLengthEpsilon)
+		return 1.0;
+
+	double low = 0.0;
+	double high = 1.0;
+	for (int iteration = 0; iteration < kLengthInverseIterations; ++iteration) {
+		double middle = (low + high) * 0.5;
+		if (ConicLength(conic, middle) < target_length)
+			low = middle;
+		else
+			high = middle;
+	}
+
+	return (low + high) * 0.5;
+}
+
 bool CubicIsFlatEnough(CubicBezier const& cubic, double tolerance_squared) {
 	return std::max(
-		PointLineDistanceSquared(cubic.p1, cubic.p0, cubic.p3),
-		PointLineDistanceSquared(cubic.p2, cubic.p0, cubic.p3)) <= tolerance_squared;
+		PointSegmentDistanceSquared(cubic.p1, cubic.p0, cubic.p3),
+		PointSegmentDistanceSquared(cubic.p2, cubic.p0, cubic.p3)) <= tolerance_squared;
 }
 
 Point Midpoint(Point const& lhs, Point const& rhs) {
@@ -256,6 +464,60 @@ void FlattenCubic(PathData& path, CubicBezier const& cubic, double tolerance_squ
 	FlattenCubic(path, right, tolerance_squared, remaining_depth - 1);
 }
 
+HomogeneousPoint HomogeneousMidpoint(HomogeneousPoint const& lhs, HomogeneousPoint const& rhs) {
+	return {
+		(lhs.x + rhs.x) * 0.5,
+		(lhs.y + rhs.y) * 0.5,
+		(lhs.weight + rhs.weight) * 0.5,
+	};
+}
+
+Point Project(HomogeneousPoint const& point) {
+	if (!(point.weight > 0.0) || !std::isfinite(point.weight))
+		return {};
+	return {point.x / point.weight, point.y / point.weight};
+}
+
+bool MakeHomogeneousConic(RationalConic const& conic, HomogeneousConic& homogeneous) {
+	if (!ConicIsValid(conic))
+		return false;
+
+	homogeneous = {
+		{conic.p0.x, conic.p0.y, 1.0},
+		{conic.p1.x * conic.weight, conic.p1.y * conic.weight, conic.weight},
+		{conic.p2.x, conic.p2.y, 1.0},
+	};
+	return std::isfinite(homogeneous.p1.x) && std::isfinite(homogeneous.p1.y);
+}
+
+void SplitConic(HomogeneousConic const& conic, HomogeneousConic& left, HomogeneousConic& right) {
+	HomogeneousPoint p01 = HomogeneousMidpoint(conic.p0, conic.p1);
+	HomogeneousPoint p12 = HomogeneousMidpoint(conic.p1, conic.p2);
+	HomogeneousPoint p012 = HomogeneousMidpoint(p01, p12);
+	left = {conic.p0, p01, p012};
+	right = {p012, p12, conic.p2};
+}
+
+bool ConicIsFlatEnough(HomogeneousConic const& conic, double tolerance_squared) {
+	Point start = Project(conic.p0);
+	Point control = Project(conic.p1);
+	Point end = Project(conic.p2);
+	return PointSegmentDistanceSquared(control, start, end) <= tolerance_squared;
+}
+
+void FlattenConic(PathData& path, HomogeneousConic const& conic, double tolerance_squared, int remaining_depth) {
+	if (remaining_depth <= 0 || ConicIsFlatEnough(conic, tolerance_squared)) {
+		AppendLine(path, Project(conic.p2));
+		return;
+	}
+
+	HomogeneousConic left;
+	HomogeneousConic right;
+	SplitConic(conic, left, right);
+	FlattenConic(path, left, tolerance_squared, remaining_depth - 1);
+	FlattenConic(path, right, tolerance_squared, remaining_depth - 1);
+}
+
 double SanitizeFlattenTolerance(double tolerance) {
 	if (!(tolerance > 0.0) || !std::isfinite(tolerance))
 		return kDefaultFlattenTolerance;
@@ -263,47 +525,106 @@ double SanitizeFlattenTolerance(double tolerance) {
 	return std::max(tolerance, kMinimumFlattenTolerance);
 }
 
-void AppendMeasuredSegment(MeasuredPath& measured, CubicBezier const& cubic, bool is_line) {
-	double length = is_line ? LineLength(cubic.p0, cubic.p3) : CubicLength(cubic);
+void AppendMeasuredLine(MeasuredPath& measured, Point const& start, Point const& end) {
+	double length = LineLength(start, end);
 	if (length <= kLengthEpsilon || !std::isfinite(length))
 		return;
 
-	measured.segments.push_back({is_line, cubic, length});
+	MeasuredSegment segment;
+	segment.kind = MeasuredSegmentKind::Line;
+	segment.cubic = {start, start, end, end};
+	segment.length = length;
+	measured.segments.push_back(segment);
 	measured.total_length += length;
 }
 
+void AppendMeasuredCubic(MeasuredPath& measured, CubicBezier const& cubic) {
+	double length = CubicLength(cubic);
+	if (length <= kLengthEpsilon || !std::isfinite(length))
+		return;
+
+	MeasuredSegment segment;
+	segment.kind = MeasuredSegmentKind::Cubic;
+	segment.cubic = cubic;
+	segment.length = length;
+	measured.segments.push_back(segment);
+	measured.total_length += length;
+}
+
+void AppendMeasuredConic(MeasuredPath& measured, RationalConic const& conic) {
+	if (!ConicIsValid(conic)) {
+		AppendMeasuredLine(measured, conic.p0, conic.p2);
+		return;
+	}
+
+	double length = ConicLength(conic);
+	if (length <= kLengthEpsilon || !std::isfinite(length)) {
+		AppendMeasuredLine(measured, conic.p0, conic.p2);
+		return;
+	}
+
+	MeasuredSegment segment;
+	segment.kind = MeasuredSegmentKind::Conic;
+	segment.conic = conic;
+	segment.length = length;
+	measured.segments.push_back(segment);
+	measured.total_length += length;
+}
+
+void EnsureRawCurrent(bool& has_current,
+	Point& current,
+	bool& has_contour_start,
+	Point& contour_start) {
+	if (has_current)
+		return;
+
+	has_current = true;
+	current = {};
+	has_contour_start = true;
+	contour_start = {};
+}
+
 MeasuredPath BuildMeasuredPath(PathData const& path) {
-	PathData lowered = LowerForAss(path, false);
 	MeasuredPath measured;
-	measured.segments.reserve(lowered.commands.size());
+	measured.segments.reserve(path.commands.size());
 
 	bool has_current = false;
+	bool has_contour_start = false;
+	Point contour_start {};
 	Point current {};
-	for (auto const& command : lowered.commands) {
+	for (auto const& command : path.commands) {
 		switch (command.verb) {
 			case PathVerb::MoveTo:
 				current = command.p1;
 				has_current = true;
+				contour_start = command.p1;
+				has_contour_start = true;
 				break;
 			case PathVerb::LineTo:
-				if (!has_current) {
-					current = {};
-					has_current = true;
-				}
-				AppendMeasuredSegment(measured, {current, current, command.p1, command.p1}, true);
+				EnsureRawCurrent(has_current, current, has_contour_start, contour_start);
+				AppendMeasuredLine(measured, current, command.p1);
 				current = command.p1;
 				break;
+			case PathVerb::QuadTo:
+				EnsureRawCurrent(has_current, current, has_contour_start, contour_start);
+				AppendMeasuredCubic(measured, QuadAsCubic(current, command.p1, command.p2));
+				current = command.p2;
+				break;
+			case PathVerb::ConicTo:
+				EnsureRawCurrent(has_current, current, has_contour_start, contour_start);
+				AppendMeasuredConic(measured, {current, command.p1, command.p2, command.weight});
+				current = command.p2;
+				break;
 			case PathVerb::CubicTo:
-				if (!has_current) {
-					current = {};
-					has_current = true;
-				}
-				AppendMeasuredSegment(measured, {current, command.p1, command.p2, command.p3}, false);
+				EnsureRawCurrent(has_current, current, has_contour_start, contour_start);
+				AppendMeasuredCubic(measured, {current, command.p1, command.p2, command.p3});
 				current = command.p3;
 				break;
-			case PathVerb::QuadTo:
-			case PathVerb::ConicTo:
 			case PathVerb::Close:
+				if (has_current && has_contour_start) {
+					AppendMeasuredLine(measured, current, contour_start);
+					current = contour_start;
+				}
 				break;
 		}
 	}
@@ -312,27 +633,51 @@ MeasuredPath BuildMeasuredPath(PathData const& path) {
 }
 
 Point SegmentPointAt(MeasuredSegment const& segment, double t) {
-	if (segment.is_line)
-		return Lerp(segment.cubic.p0, segment.cubic.p3, t);
-
-	return CubicPointAt(segment.cubic, t);
+	switch (segment.kind) {
+		case MeasuredSegmentKind::Line:
+			return Lerp(segment.cubic.p0, segment.cubic.p3, t);
+		case MeasuredSegmentKind::Cubic:
+			return CubicPointAt(segment.cubic, t);
+		case MeasuredSegmentKind::Conic:
+			return ConicPointAt(segment.conic, t);
+	}
+	return {};
 }
 
 Point SegmentTangentAt(MeasuredSegment const& segment, double t) {
-	if (segment.is_line)
+	if (segment.kind == MeasuredSegmentKind::Line)
 		return {
 			segment.cubic.p3.x - segment.cubic.p0.x,
 			segment.cubic.p3.y - segment.cubic.p0.y,
 		};
 
-	Point tangent = CubicDerivativeAt(segment.cubic, t);
+	Point tangent = segment.kind == MeasuredSegmentKind::Cubic ?
+		CubicDerivativeAt(segment.cubic, t) : ConicDerivativeAt(segment.conic, t);
 	if (std::hypot(tangent.x, tangent.y) > kLengthEpsilon)
 		return tangent;
 
+	Point start = segment.kind == MeasuredSegmentKind::Cubic ? segment.cubic.p0 : segment.conic.p0;
+	Point end = segment.kind == MeasuredSegmentKind::Cubic ? segment.cubic.p3 : segment.conic.p2;
 	return {
-		segment.cubic.p3.x - segment.cubic.p0.x,
-		segment.cubic.p3.y - segment.cubic.p0.y,
+		end.x - start.x,
+		end.y - start.y,
 	};
+}
+
+double SegmentTAtLength(MeasuredSegment const& segment, double local_length) {
+	switch (segment.kind) {
+		case MeasuredSegmentKind::Line:
+			return local_length / segment.length;
+		case MeasuredSegmentKind::Cubic:
+			return CubicTAtLength(segment.cubic, local_length, segment.length);
+		case MeasuredSegmentKind::Conic:
+			return ConicTAtLength(segment.conic, local_length, segment.length);
+	}
+	return 0.0;
+}
+
+Point SegmentEnd(MeasuredSegment const& segment) {
+	return segment.kind == MeasuredSegmentKind::Conic ? segment.conic.p2 : segment.cubic.p3;
 }
 
 bool TryGetPositionAtDistance(MeasuredPath const& measured, double distance, Point& point, Point& tangent) {
@@ -350,15 +695,80 @@ bool TryGetPositionAtDistance(MeasuredPath const& measured, double distance, Poi
 		}
 
 		double local_length = std::clamp(target - consumed, 0.0, segment.length);
-		double t = segment.is_line ? local_length / segment.length : CubicTAtLength(segment.cubic, local_length, segment.length);
+		double t = SegmentTAtLength(segment, local_length);
 		point = SegmentPointAt(segment, t);
 		tangent = SegmentTangentAt(segment, t);
 		return true;
 	}
 
 	auto const& last = measured.segments.back();
-	point = last.cubic.p3;
+	point = SegmentEnd(last);
 	tangent = SegmentTangentAt(last, 1.0);
+	return true;
+}
+
+bool TryGetPositionAtLegacyPercent(MeasuredPath const& measured, double percent, Point& point, Point& tangent) {
+	if (measured.segments.empty() || !(measured.total_length > kLengthEpsilon) || !std::isfinite(measured.total_length))
+		return false;
+
+	double target = percent * measured.total_length;
+	double consumed = 0.0;
+	for (std::size_t index = 0; index < measured.segments.size(); ++index) {
+		auto const& segment = measured.segments[index];
+		bool is_last = index + 1 == measured.segments.size();
+		if (!is_last && consumed + segment.length < target) {
+			consumed += segment.length;
+			continue;
+		}
+
+		// QPainterPath allocates the global percentage by measured segment
+		// length, but uses that segment-local allocation directly as the
+		// Bezier parameter rather than as a local arc-length percentage.
+		double t = std::clamp((target - consumed) / segment.length, 0.0, 1.0);
+		point = SegmentPointAt(segment, t);
+		tangent = SegmentTangentAt(segment, t);
+		return true;
+	}
+
+	return false;
+}
+
+bool TryGetDegeneratePathPosition(PathData const& path, Point& point) {
+	bool has_current = false;
+	bool has_contour_start = false;
+	Point current {};
+	Point contour_start {};
+	for (auto const& command : path.commands) {
+		switch (command.verb) {
+			case PathVerb::MoveTo:
+				current = command.p1;
+				contour_start = command.p1;
+				has_current = true;
+				has_contour_start = true;
+				break;
+			case PathVerb::LineTo:
+				EnsureRawCurrent(has_current, current, has_contour_start, contour_start);
+				current = command.p1;
+				break;
+			case PathVerb::QuadTo:
+			case PathVerb::ConicTo:
+				EnsureRawCurrent(has_current, current, has_contour_start, contour_start);
+				current = command.p2;
+				break;
+			case PathVerb::CubicTo:
+				EnsureRawCurrent(has_current, current, has_contour_start, contour_start);
+				current = command.p3;
+				break;
+			case PathVerb::Close:
+				if (has_current && has_contour_start)
+					current = contour_start;
+				break;
+		}
+	}
+
+	if (!has_current || !PointIsFinite(current))
+		return false;
+	point = current;
 	return true;
 }
 
@@ -371,19 +781,37 @@ void IncludeAreaEdge(Point const& start, Point const& end, double& cross_sum, do
 
 void FlushReversedContour(PathData& reversed, Contour& contour) {
 	if (contour.segments.empty()) {
-		if (contour.has_anchor)
+		if (contour.has_anchor && contour.preserve_empty_anchor) {
 			reversed.commands.push_back({PathVerb::MoveTo, contour.anchor, {}, {}});
+			if (contour.closed)
+				reversed.commands.push_back({PathVerb::Close, {}, {}, {}});
+		}
 		contour = {};
 		return;
 	}
 
 	reversed.commands.push_back({PathVerb::MoveTo, contour.segments.back().end, {}, {}});
 	for (auto it = contour.segments.rbegin(); it != contour.segments.rend(); ++it) {
-		if (it->verb == PathVerb::CubicTo)
-			reversed.commands.push_back({PathVerb::CubicTo, it->c2, it->c1, it->start});
-		else
-			reversed.commands.push_back({PathVerb::LineTo, it->start, {}, {}});
+		switch (it->verb) {
+			case PathVerb::LineTo:
+				reversed.commands.push_back({PathVerb::LineTo, it->start, {}, {}});
+				break;
+			case PathVerb::QuadTo:
+				reversed.commands.push_back({PathVerb::QuadTo, it->c1, it->start, {}});
+				break;
+			case PathVerb::ConicTo:
+				reversed.commands.push_back({PathVerb::ConicTo, it->c1, it->start, {}, it->weight});
+				break;
+			case PathVerb::CubicTo:
+				reversed.commands.push_back({PathVerb::CubicTo, it->c2, it->c1, it->start});
+				break;
+			case PathVerb::MoveTo:
+			case PathVerb::Close:
+				break;
+		}
 	}
+	if (contour.closed)
+		reversed.commands.push_back({PathVerb::Close, {}, {}, {}});
 
 	contour = {};
 }
@@ -391,34 +819,95 @@ void FlushReversedContour(PathData& reversed, Contour& contour) {
 } // namespace
 
 bool TryGetBounds(PathData const& path, Rect& bounds) {
-	PathData lowered = LowerForAss(path, false);
 	BoundsAccumulator accumulator;
 	bool has_current = false;
+	bool has_contour_start = false;
+	Point contour_start {};
 	Point current {};
 
-	for (auto const& command : lowered.commands) {
+	for (auto const& command : path.commands) {
 		switch (command.verb) {
 			case PathVerb::MoveTo:
 				IncludePoint(accumulator, command.p1);
 				current = command.p1;
 				has_current = true;
+				contour_start = command.p1;
+				has_contour_start = true;
 				break;
 			case PathVerb::LineTo:
-				if (has_current)
-					IncludePoint(accumulator, current);
+				EnsureRawCurrent(has_current, current, has_contour_start, contour_start);
+				IncludePoint(accumulator, current);
 				IncludePoint(accumulator, command.p1);
 				current = command.p1;
-				has_current = true;
 				break;
+			case PathVerb::QuadTo:
+				EnsureRawCurrent(has_current, current, has_contour_start, contour_start);
+				IncludeCubicBounds(accumulator, QuadAsCubic(current, command.p1, command.p2));
+				current = command.p2;
+				break;
+			case PathVerb::ConicTo: {
+				EnsureRawCurrent(has_current, current, has_contour_start, contour_start);
+				RationalConic conic {current, command.p1, command.p2, command.weight};
+				if (ConicIsValid(conic))
+					IncludeConicBounds(accumulator, conic);
+				else {
+					// Invalid/non-positive rational weights have no stable conic
+					// interpretation; match the other geometry queries by using
+					// a line to the declared endpoint.
+					IncludePoint(accumulator, current);
+					IncludePoint(accumulator, command.p2);
+				}
+				current = command.p2;
+				break;
+			}
 			case PathVerb::CubicTo:
-				if (!has_current)
-					current = {};
+				EnsureRawCurrent(has_current, current, has_contour_start, contour_start);
 				IncludeCubicBounds(accumulator, {current, command.p1, command.p2, command.p3});
 				current = command.p3;
-				has_current = true;
+				break;
+			case PathVerb::Close:
+				if (has_current && has_contour_start) {
+					IncludePoint(accumulator, current);
+					IncludePoint(accumulator, contour_start);
+					current = contour_start;
+				}
+				break;
+		}
+	}
+
+	if (!accumulator.has_point)
+		return false;
+
+	bounds = {
+		accumulator.min_x,
+		accumulator.min_y,
+		accumulator.max_x - accumulator.min_x,
+		accumulator.max_y - accumulator.min_y,
+	};
+	return true;
+}
+
+bool TryGetControlPointBounds(PathData const& path, Rect& bounds) {
+	// Legacy controlPointRect semantics visit only stored command points.
+	// Curve extrema are intentionally ignored for shape_bouding* compatibility.
+	BoundsAccumulator accumulator;
+
+	for (auto const& command : path.commands) {
+		switch (command.verb) {
+			case PathVerb::MoveTo:
+			case PathVerb::LineTo:
+				IncludePoint(accumulator, command.p1);
 				break;
 			case PathVerb::QuadTo:
 			case PathVerb::ConicTo:
+				IncludePoint(accumulator, command.p1);
+				IncludePoint(accumulator, command.p2);
+				break;
+			case PathVerb::CubicTo:
+				IncludePoint(accumulator, command.p1);
+				IncludePoint(accumulator, command.p2);
+				IncludePoint(accumulator, command.p3);
+				break;
 			case PathVerb::Close:
 				break;
 		}
@@ -437,44 +926,66 @@ bool TryGetBounds(PathData const& path, Rect& bounds) {
 }
 
 PathData FlattenPath(PathData const& path, double tolerance) {
-	PathData lowered = LowerForAss(path, false);
 	PathData flattened;
-	flattened.winding_fill = lowered.winding_fill;
-	flattened.commands.reserve(lowered.commands.size());
+	flattened.winding_fill = path.winding_fill;
+	flattened.commands.reserve(path.commands.size());
 
 	double sanitized_tolerance = SanitizeFlattenTolerance(tolerance);
 	double tolerance_squared = sanitized_tolerance * sanitized_tolerance;
 	bool has_current = false;
+	bool has_contour_start = false;
+	Point contour_start {};
 	Point current {};
 
-	for (auto const& command : lowered.commands) {
+	auto ensure_output_current = [&] {
+		if (has_current)
+			return;
+		flattened.commands.push_back({PathVerb::MoveTo, {}, {}, {}});
+		EnsureRawCurrent(has_current, current, has_contour_start, contour_start);
+	};
+
+	for (auto const& command : path.commands) {
 		switch (command.verb) {
 			case PathVerb::MoveTo:
 				flattened.commands.push_back(command);
 				current = command.p1;
 				has_current = true;
+				contour_start = command.p1;
+				has_contour_start = true;
 				break;
 			case PathVerb::LineTo:
-				if (!has_current) {
-					flattened.commands.push_back({PathVerb::MoveTo, {}, {}, {}});
-					current = {};
-					has_current = true;
-				}
+				ensure_output_current();
 				AppendLine(flattened, command.p1);
 				current = command.p1;
 				break;
+			case PathVerb::QuadTo:
+				ensure_output_current();
+				FlattenCubic(flattened,
+					QuadAsCubic(current, command.p1, command.p2),
+					tolerance_squared,
+					kMaxFlattenDepth);
+				current = command.p2;
+				break;
+			case PathVerb::ConicTo: {
+				ensure_output_current();
+				RationalConic conic {current, command.p1, command.p2, command.weight};
+				HomogeneousConic homogeneous;
+				if (MakeHomogeneousConic(conic, homogeneous))
+					FlattenConic(flattened, homogeneous, tolerance_squared, kMaxFlattenDepth);
+				else
+					AppendLine(flattened, command.p2);
+				current = command.p2;
+				break;
+			}
 			case PathVerb::CubicTo:
-				if (!has_current) {
-					flattened.commands.push_back({PathVerb::MoveTo, {}, {}, {}});
-					current = {};
-					has_current = true;
-				}
+				ensure_output_current();
 				FlattenCubic(flattened, {current, command.p1, command.p2, command.p3}, tolerance_squared, kMaxFlattenDepth);
 				current = command.p3;
 				break;
-			case PathVerb::QuadTo:
-			case PathVerb::ConicTo:
 			case PathVerb::Close:
+				flattened.commands.push_back(command);
+				if (has_current && has_contour_start)
+					current = contour_start;
 				break;
 		}
 	}
@@ -483,48 +994,81 @@ PathData FlattenPath(PathData const& path, double tolerance) {
 }
 
 PathData ReversePath(PathData const& path) {
-	PathData lowered = LowerForAss(path, false);
 	PathData reversed;
-	reversed.winding_fill = lowered.winding_fill;
-	reversed.commands.reserve(lowered.commands.size());
+	reversed.winding_fill = path.winding_fill;
+	reversed.commands.reserve(path.commands.size());
 
 	Contour contour;
 	bool has_current = false;
+	bool has_contour_start = false;
+	Point contour_start {};
 	Point current {};
 
-	for (auto const& command : lowered.commands) {
+	auto ensure_contour = [&] {
+		if (has_current)
+			return;
+		has_current = true;
+		current = {};
+		has_contour_start = true;
+		contour_start = {};
+		contour.has_anchor = true;
+		contour.anchor = {};
+	};
+
+	for (auto const& command : path.commands) {
 		switch (command.verb) {
 			case PathVerb::MoveTo:
 				FlushReversedContour(reversed, contour);
 				contour.has_anchor = true;
+				contour.preserve_empty_anchor = true;
 				contour.anchor = command.p1;
 				current = command.p1;
 				has_current = true;
+				contour_start = command.p1;
+				has_contour_start = true;
 				break;
 			case PathVerb::LineTo:
-				if (!has_current) {
-					contour.has_anchor = true;
-					contour.anchor = {};
-					current = {};
-					has_current = true;
-				}
+				ensure_contour();
 				contour.segments.push_back({PathVerb::LineTo, current, {}, {}, command.p1});
 				current = command.p1;
 				break;
+			case PathVerb::QuadTo:
+				ensure_contour();
+				contour.segments.push_back({PathVerb::QuadTo, current, command.p1, {}, command.p2});
+				current = command.p2;
+				break;
+			case PathVerb::ConicTo:
+				ensure_contour();
+				contour.segments.push_back({PathVerb::ConicTo, current, command.p1, {}, command.p2, command.weight});
+				current = command.p2;
+				break;
 			case PathVerb::CubicTo:
-				if (!has_current) {
-					contour.has_anchor = true;
-					contour.anchor = {};
-					current = {};
-					has_current = true;
-				}
+				ensure_contour();
 				contour.segments.push_back({PathVerb::CubicTo, current, command.p1, command.p2, command.p3});
 				current = command.p3;
 				break;
-			case PathVerb::QuadTo:
-			case PathVerb::ConicTo:
-			case PathVerb::Close:
+			case PathVerb::Close: {
+				if (!has_current || !has_contour_start) {
+					FlushReversedContour(reversed, contour);
+					reversed.commands.push_back(command);
+					break;
+				}
+
+				Point closed_start = contour_start;
+				contour.closed = true;
+				FlushReversedContour(reversed, contour);
+
+				// A command following Close continues at the just-closed
+				// contour's start.  Keep that point as an implicit anchor,
+				// but do not emit an extra move when no command follows.
+				has_current = true;
+				current = closed_start;
+				has_contour_start = true;
+				contour_start = closed_start;
+				contour.has_anchor = true;
+				contour.anchor = closed_start;
 				break;
+			}
 		}
 	}
 
@@ -549,12 +1093,55 @@ double PercentAtLength(PathData const& path, double distance) {
 	return distance / total;
 }
 
+double LegacyPercentAtLength(PathData const& path, double distance) {
+	auto measured = BuildMeasuredPath(path);
+	double total = measured.total_length;
+	if (!(total > kLengthEpsilon) || !std::isfinite(total) || std::isnan(distance))
+		return 0.0;
+	if (distance <= 0.0)
+		return 0.0;
+	if (distance >= total)
+		return 1.0;
+
+	double consumed = 0.0;
+	for (std::size_t index = 0; index < measured.segments.size(); ++index) {
+		auto const& segment = measured.segments[index];
+		bool is_last = index + 1 == measured.segments.size();
+		if (!is_last && consumed + segment.length < distance) {
+			consumed += segment.length;
+			continue;
+		}
+
+		double local_length = std::clamp(distance - consumed, 0.0, segment.length);
+		double t = SegmentTAtLength(segment, local_length);
+		return std::clamp((consumed + t * segment.length) / total, 0.0, 1.0);
+	}
+
+	return 0.0;
+}
+
 bool TryGetPositionAtPercent(PathData const& path, double percent, Point& point, Point& tangent) {
 	if (!std::isfinite(percent))
 		return false;
 
 	auto measured = BuildMeasuredPath(path);
 	return TryGetPositionAtDistance(measured, std::clamp(percent, 0.0, 1.0) * measured.total_length, point, tangent);
+}
+
+bool TryGetLegacyPositionAtPercent(PathData const& path, double percent, Point& point, Point& tangent) {
+	point = {};
+	tangent = {};
+	if (!std::isfinite(percent) || percent < 0.0 || percent > 1.0)
+		return false;
+
+	auto measured = BuildMeasuredPath(path);
+	if (TryGetPositionAtLegacyPercent(measured, percent, point, tangent))
+		return true;
+
+	// QPainterPath::pointAtPercent returns its only MoveTo anchor for a
+	// move-only path.  Keep that useful degenerate-path behavior while
+	// angle/slope naturally remain zero through the zero tangent.
+	return TryGetDegeneratePathPosition(path, point);
 }
 
 bool TryGetPositionAtLength(PathData const& path, double distance, Point& point, Point& tangent) {
@@ -599,7 +1186,11 @@ bool TryGetSignedAreaAndCentroid(PathData const& path, double& signed_area, Poin
 			case PathVerb::QuadTo:
 			case PathVerb::ConicTo:
 			case PathVerb::CubicTo:
+				break;
 			case PathVerb::Close:
+				close_contour();
+				if (has_current)
+					current = contour_start;
 				break;
 		}
 	}

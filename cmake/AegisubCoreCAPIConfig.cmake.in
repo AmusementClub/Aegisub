@@ -29,7 +29,7 @@ macro(_aegisub_core_c_api_find_static_dependencies)
 		find_dependency(pffft CONFIG REQUIRED)
 	endif()
 
-	if(@WITH_SKIA@)
+	if(@AEGISUB_CORE_API_NEEDS_SKIA@)
 		find_dependency(unofficial-skia CONFIG REQUIRED)
 	endif()
 

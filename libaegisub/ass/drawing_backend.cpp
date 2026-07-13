@@ -7,15 +7,15 @@
 #include "include/core/SkPathBuilder.h"
 #include "include/core/SkPathUtils.h"
 #include "include/core/SkRect.h"
+#include "include/core/SkSpan.h"
 #include "include/effects/SkDashPathEffect.h"
 #include "include/pathops/SkPathOps.h"
 #endif
 
 #include <algorithm>
 #include <cmath>
-#include <optional>
+#include <limits>
 #include <utility>
-#include <vector>
 
 namespace agi {
 namespace ass {
@@ -27,46 +27,112 @@ namespace {
 constexpr SkScalar kStrokeMiterLimit = 2.0f;
 constexpr SkScalar kStrokeResScale = 1.0f;
 constexpr SkScalar kDashStrokeResScale = 2.0f;
-constexpr SkScalar kContourInteractionEpsilon = 1e-6f;
-constexpr SkScalar kCanonicalBoundsTolerance = 1.0f / 64.0f;
 
-struct FilledContour {
-	SkPath path;
-	SkRect bounds {};
+struct BackendDomain {
+	bool has_point = false;
+	double min_x = std::numeric_limits<double>::infinity();
+	double min_y = std::numeric_limits<double>::infinity();
+	double max_x = -std::numeric_limits<double>::infinity();
+	double max_y = -std::numeric_limits<double>::infinity();
+
+	bool Include(Point const& point) {
+		if (!std::isfinite(point.x) || !std::isfinite(point.y))
+			return false;
+		has_point = true;
+		min_x = std::min(min_x, point.x);
+		min_y = std::min(min_y, point.y);
+		max_x = std::max(max_x, point.x);
+		max_y = std::max(max_y, point.y);
+		return true;
+	}
 };
 
-struct FilledContourCluster {
-	int root = 0;
-	SkPath path;
-	SkRect bounds {};
-	int contour_count = 0;
-};
+bool ExtendBackendDomain(BackendDomain& domain, PathData const& path) {
+	bool has_current = false;
+	for (auto const& command : path.commands) {
+		auto ensure_implicit_origin = [&] {
+			if (has_current)
+				return true;
+			has_current = true;
+			return domain.Include({});
+		};
 
-struct PendingFilledContourCluster {
-	int root = 0;
-	SkRect bounds {};
-	std::vector<std::size_t> contour_indices;
-};
-
-struct CanonicalizedCluster {
-	SkPath path;
-	std::size_t contour_count = 0;
-};
-
-SkPoint ToSkPoint(Point const& point) {
-	return SkPoint::Make(static_cast<SkScalar>(point.x), static_cast<SkScalar>(point.y));
+		switch (command.verb) {
+			case PathVerb::MoveTo:
+				has_current = true;
+				if (!domain.Include(command.p1))
+					return false;
+				break;
+			case PathVerb::LineTo:
+				if (!ensure_implicit_origin() || !domain.Include(command.p1))
+					return false;
+				break;
+			case PathVerb::QuadTo:
+				if (!ensure_implicit_origin() || !domain.Include(command.p1) || !domain.Include(command.p2))
+					return false;
+				break;
+			case PathVerb::ConicTo:
+				if (!ensure_implicit_origin() || !domain.Include(command.p1) || !domain.Include(command.p2) ||
+					!(command.weight > 0.0) || !std::isfinite(command.weight))
+					return false;
+				break;
+			case PathVerb::CubicTo:
+				if (!ensure_implicit_origin() || !domain.Include(command.p1) || !domain.Include(command.p2) || !domain.Include(command.p3))
+					return false;
+				break;
+			case PathVerb::Close:
+				break;
+		}
+	}
+	return true;
 }
 
-Point FromSkPoint(SkPoint const& point) {
-	return {static_cast<double>(point.x()), static_cast<double>(point.y())};
+struct BackendCoordinates {
+	Point origin {};
+
+	bool ToSkPoint(Point const& point, SkPoint& converted) const {
+		double local_x = point.x - origin.x;
+		double local_y = point.y - origin.y;
+		SkScalar x = static_cast<SkScalar>(local_x);
+		SkScalar y = static_cast<SkScalar>(local_y);
+		if (!std::isfinite(local_x) || !std::isfinite(local_y) || !std::isfinite(x) || !std::isfinite(y))
+			return false;
+		converted = SkPoint::Make(x, y);
+		return true;
+	}
+
+	bool FromSkPoint(SkPoint const& point, Point& converted) const {
+		converted = {
+			origin.x + static_cast<double>(point.x()),
+			origin.y + static_cast<double>(point.y()),
+		};
+		return std::isfinite(converted.x) && std::isfinite(converted.y);
+	}
+};
+
+bool MakeBackendCoordinates(BackendDomain const& domain, BackendCoordinates& coordinates) {
+	if (!domain.has_point) {
+		coordinates = {};
+		return true;
+	}
+
+	// SkScalar is normally float. Removing the common translation before the
+	// conversion preserves ASS's 1/64 grid for small geometry placed at very
+	// large absolute coordinates. Half-sums avoid overflowing wide domains.
+	coordinates.origin = {
+		domain.min_x * 0.5 + domain.max_x * 0.5,
+		domain.min_y * 0.5 + domain.max_y * 0.5,
+	};
+	if (!std::isfinite(coordinates.origin.x) || !std::isfinite(coordinates.origin.y))
+		return false;
+
+	SkPoint ignored;
+	return coordinates.ToSkPoint({domain.min_x, domain.min_y}, ignored) &&
+		coordinates.ToSkPoint({domain.max_x, domain.max_y}, ignored);
 }
 
 SkPathFillType ToSkFillType(bool winding_fill) {
 	return winding_fill ? SkPathFillType::kWinding : SkPathFillType::kEvenOdd;
-}
-
-bool IsWindingFill(SkPathFillType fill_type) {
-	return fill_type == SkPathFillType::kWinding || fill_type == SkPathFillType::kInverseWinding;
 }
 
 SkPaint::Cap ToSkCap(DrawingStrokeCap cap) {
@@ -108,60 +174,99 @@ SkPathOp ToSkPathOp(DrawingBooleanOp op) {
 	return kUnion_SkPathOp;
 }
 
-SkPath ToSkPath(PathData const& path_data, bool close_implicitly) {
+bool ToSkPath(PathData const& path_data,
+	bool close_implicitly,
+	BackendCoordinates const& coordinates,
+	SkPath& converted_path) {
 	SkPathBuilder builder(ToSkFillType(path_data.winding_fill));
 	bool figure_open = false;
 	bool figure_has_segments = false;
 	bool figure_explicitly_closed = false;
+	bool has_current_point = false;
+	SkPoint current_point = SkPoint::Make(0.0f, 0.0f);
+	SkPoint figure_start = current_point;
 
-	auto begin_origin_figure = [&] {
-		builder.moveTo(0.0f, 0.0f);
+	auto begin_current_figure = [&] {
+		if (!has_current_point) {
+			if (!coordinates.ToSkPoint({}, current_point))
+				return false;
+			has_current_point = true;
+		}
+		builder.moveTo(current_point);
+		figure_start = current_point;
 		figure_open = true;
 		figure_has_segments = false;
 		figure_explicitly_closed = false;
+		return true;
 	};
 
 	auto end_figure = [&](bool close_at_boundary) {
 		if (!figure_open)
 			return;
-		if (figure_explicitly_closed || (close_at_boundary && close_implicitly && figure_has_segments))
+		if (figure_explicitly_closed || (close_at_boundary && close_implicitly && figure_has_segments)) {
 			builder.close();
+			current_point = figure_start;
+		}
 		figure_open = false;
 		figure_has_segments = false;
 		figure_explicitly_closed = false;
 	};
 
 	for (auto const& command : path_data.commands) {
+		SkPoint p1;
+		SkPoint p2;
+		SkPoint p3;
 		switch (command.verb) {
 			case PathVerb::MoveTo:
 				end_figure(true);
-				builder.moveTo(ToSkPoint(command.p1));
+				if (!coordinates.ToSkPoint(command.p1, current_point))
+					return false;
+				has_current_point = true;
+				figure_start = current_point;
+				builder.moveTo(current_point);
 				figure_open = true;
 				figure_has_segments = false;
 				figure_explicitly_closed = false;
 				break;
 			case PathVerb::LineTo:
-				if (!figure_open)
-					begin_origin_figure();
-				builder.lineTo(ToSkPoint(command.p1));
+				if (!figure_open && !begin_current_figure())
+					return false;
+				if (!coordinates.ToSkPoint(command.p1, current_point))
+					return false;
+				builder.lineTo(current_point);
 				figure_has_segments = true;
 				break;
 			case PathVerb::QuadTo:
-				if (!figure_open)
-					begin_origin_figure();
-				builder.quadTo(ToSkPoint(command.p1), ToSkPoint(command.p2));
+				if (!figure_open && !begin_current_figure())
+					return false;
+				if (!coordinates.ToSkPoint(command.p1, p1) || !coordinates.ToSkPoint(command.p2, p2))
+					return false;
+				builder.quadTo(p1, p2);
+				current_point = p2;
 				figure_has_segments = true;
 				break;
 			case PathVerb::ConicTo:
-				if (!figure_open)
-					begin_origin_figure();
-				builder.conicTo(ToSkPoint(command.p1), ToSkPoint(command.p2), static_cast<SkScalar>(command.weight));
+				if (!figure_open && !begin_current_figure())
+					return false;
+				if (!coordinates.ToSkPoint(command.p1, p1) || !coordinates.ToSkPoint(command.p2, p2))
+					return false;
+				{
+					SkScalar weight = static_cast<SkScalar>(command.weight);
+					if (!(weight > 0.0f) || !std::isfinite(weight))
+						return false;
+					builder.conicTo(p1, p2, weight);
+				}
+				current_point = p2;
 				figure_has_segments = true;
 				break;
 			case PathVerb::CubicTo:
-				if (!figure_open)
-					begin_origin_figure();
-				builder.cubicTo(ToSkPoint(command.p1), ToSkPoint(command.p2), ToSkPoint(command.p3));
+				if (!figure_open && !begin_current_figure())
+					return false;
+				if (!coordinates.ToSkPoint(command.p1, p1) || !coordinates.ToSkPoint(command.p2, p2) ||
+					!coordinates.ToSkPoint(command.p3, p3))
+					return false;
+				builder.cubicTo(p1, p2, p3);
+				current_point = p3;
 				figure_has_segments = true;
 				break;
 			case PathVerb::Close:
@@ -174,37 +279,53 @@ SkPath ToSkPath(PathData const& path_data, bool close_implicitly) {
 	}
 
 	end_figure(true);
-	return builder.detach();
+	converted_path = builder.detach();
+	return true;
 }
 
-PathData FromSkPath(SkPath const& sk_path) {
+bool FromSkPath(SkPath const& sk_path, BackendCoordinates const& coordinates, PathData& result) {
 	PathData path;
 	path.winding_fill = sk_path.getFillType() != SkPathFillType::kEvenOdd;
 
 	SkPath::Iter iter(sk_path, false);
 	SkPoint points[4];
 	for (SkPath::Verb verb = iter.next(points); verb != SkPath::kDone_Verb; verb = iter.next(points)) {
+		Point p1;
+		Point p2;
+		Point p3;
 		switch (verb) {
 			case SkPath::kMove_Verb:
-				path.commands.push_back({PathVerb::MoveTo, FromSkPoint(points[0]), {}, {}});
+				if (!coordinates.FromSkPoint(points[0], p1))
+					return false;
+				path.commands.push_back({PathVerb::MoveTo, p1, {}, {}});
 				break;
 			case SkPath::kLine_Verb:
-				path.commands.push_back({PathVerb::LineTo, FromSkPoint(points[1]), {}, {}});
+				if (!coordinates.FromSkPoint(points[1], p1))
+					return false;
+				path.commands.push_back({PathVerb::LineTo, p1, {}, {}});
 				break;
 			case SkPath::kQuad_Verb:
-				path.commands.push_back({PathVerb::QuadTo, FromSkPoint(points[1]), FromSkPoint(points[2]), {}});
+				if (!coordinates.FromSkPoint(points[1], p1) || !coordinates.FromSkPoint(points[2], p2))
+					return false;
+				path.commands.push_back({PathVerb::QuadTo, p1, p2, {}});
 				break;
 			case SkPath::kConic_Verb:
+				if (!coordinates.FromSkPoint(points[1], p1) || !coordinates.FromSkPoint(points[2], p2) ||
+					!(iter.conicWeight() > 0.0f) || !std::isfinite(iter.conicWeight()))
+					return false;
 				path.commands.push_back({
 					PathVerb::ConicTo,
-					FromSkPoint(points[1]),
-					FromSkPoint(points[2]),
+					p1,
+					p2,
 					{},
 					static_cast<double>(iter.conicWeight()),
 				});
 				break;
 			case SkPath::kCubic_Verb:
-				path.commands.push_back({PathVerb::CubicTo, FromSkPoint(points[1]), FromSkPoint(points[2]), FromSkPoint(points[3])});
+				if (!coordinates.FromSkPoint(points[1], p1) || !coordinates.FromSkPoint(points[2], p2) ||
+					!coordinates.FromSkPoint(points[3], p3))
+					return false;
+				path.commands.push_back({PathVerb::CubicTo, p1, p2, p3});
 				break;
 			case SkPath::kClose_Verb:
 				path.commands.push_back({PathVerb::Close, {}, {}, {}});
@@ -214,330 +335,19 @@ PathData FromSkPath(SkPath const& sk_path) {
 		}
 	}
 
-	return path;
+	result = std::move(path);
+	return true;
 }
 
-std::optional<SkPath> AsWindingPath(SkPath const& path) {
-	SkPath winding;
-	if (AsWinding(path, &winding)) {
-		winding.setFillType(SkPathFillType::kWinding);
-		return winding;
-	}
-
-	if (IsWindingFill(path.getFillType())) {
-		winding = path;
-		winding.setFillType(SkPathFillType::kWinding);
-		return winding;
-	}
-
-	return std::nullopt;
+bool PrepareBackendCoordinates(PathData const& path, BackendCoordinates& coordinates) {
+	BackendDomain domain;
+	return ExtendBackendDomain(domain, path) && MakeBackendCoordinates(domain, coordinates);
 }
 
-std::vector<FilledContour> SplitClosedFilledContours(SkPath const& path) {
-	std::vector<FilledContour> contours;
-	SkPathBuilder builder(SkPathFillType::kWinding);
-	bool has_contour = false;
-	bool contour_has_segments = false;
-	bool contour_closed = false;
-
-	auto reset_builder = [&] {
-		builder = SkPathBuilder(SkPathFillType::kWinding);
-		has_contour = false;
-		contour_has_segments = false;
-		contour_closed = false;
-	};
-
-	auto ensure_contour = [&](SkPoint const& start) {
-		if (has_contour)
-			return;
-		builder.moveTo(start);
-		has_contour = true;
-	};
-
-	auto flush_contour = [&] {
-		if (!has_contour)
-			return;
-
-		if (contour_has_segments) {
-			if (!contour_closed)
-				builder.close();
-
-			SkPath contour = builder.detach();
-			contour.setFillType(SkPathFillType::kWinding);
-			if (!contour.isEmpty())
-				contours.push_back({contour, contour.getBounds()});
-		}
-
-		reset_builder();
-	};
-
-	SkPath::Iter iter(path, false);
-	SkPoint points[4];
-	for (SkPath::Verb verb = iter.next(points); verb != SkPath::kDone_Verb; verb = iter.next(points)) {
-		switch (verb) {
-			case SkPath::kMove_Verb:
-				flush_contour();
-				builder.moveTo(points[0]);
-				has_contour = true;
-				break;
-			case SkPath::kLine_Verb:
-				ensure_contour(points[0]);
-				builder.lineTo(points[1]);
-				contour_has_segments = true;
-				break;
-			case SkPath::kQuad_Verb:
-				ensure_contour(points[0]);
-				builder.quadTo(points[1], points[2]);
-				contour_has_segments = true;
-				break;
-			case SkPath::kConic_Verb:
-				ensure_contour(points[0]);
-				builder.conicTo(points[1], points[2], iter.conicWeight());
-				contour_has_segments = true;
-				break;
-			case SkPath::kCubic_Verb:
-				ensure_contour(points[0]);
-				builder.cubicTo(points[1], points[2], points[3]);
-				contour_has_segments = true;
-				break;
-			case SkPath::kClose_Verb:
-				if (has_contour) {
-					builder.close();
-					contour_closed = true;
-					flush_contour();
-				}
-				break;
-			case SkPath::kDone_Verb:
-				break;
-		}
-	}
-
-	flush_contour();
-	return contours;
-}
-
-bool BoundsMayInteract(SkRect const& lhs, SkRect const& rhs) {
-	return lhs.left() <= rhs.right() + kContourInteractionEpsilon &&
-		rhs.left() <= lhs.right() + kContourInteractionEpsilon &&
-		lhs.top() <= rhs.bottom() + kContourInteractionEpsilon &&
-		rhs.top() <= lhs.bottom() + kContourInteractionEpsilon;
-}
-
-bool FilledContoursMayInteract(FilledContour const& lhs, FilledContour const& rhs) {
-	if (!BoundsMayInteract(lhs.bounds, rhs.bounds))
-		return false;
-
-	SkPath intersection;
-	if (!Op(lhs.path, rhs.path, kIntersect_SkPathOp, &intersection))
-		return true;
-
-	return !intersection.isEmpty();
-}
-
-std::vector<FilledContourCluster> BuildFilledContourClusters(std::vector<FilledContour> const& contours) {
-	if (contours.empty())
-		return {};
-
-	std::vector<int> parent(contours.size());
-	for (std::size_t index = 0; index < parent.size(); ++index)
-		parent[index] = static_cast<int>(index);
-
-	auto find_root = [&](int value) {
-		int root = value;
-		while (parent[root] != root)
-			root = parent[root];
-		while (parent[value] != value) {
-			int next = parent[value];
-			parent[value] = root;
-			value = next;
-		}
-		return root;
-	};
-
-	auto unite_roots = [&](int lhs, int rhs) {
-		int lhs_root = find_root(lhs);
-		int rhs_root = find_root(rhs);
-		if (lhs_root != rhs_root)
-			parent[rhs_root] = lhs_root;
-	};
-
-	std::vector<std::size_t> order(contours.size());
-	for (std::size_t index = 0; index < order.size(); ++index)
-		order[index] = index;
-
-	std::sort(order.begin(), order.end(), [&contours](std::size_t lhs, std::size_t rhs) {
-		return contours[lhs].bounds.left() < contours[rhs].bounds.left();
-	});
-
-	std::vector<std::size_t> active;
-	active.reserve(contours.size());
-	for (std::size_t rhs : order) {
-		SkScalar left_limit = contours[rhs].bounds.left() - kContourInteractionEpsilon;
-		active.erase(std::remove_if(active.begin(), active.end(), [&contours, left_limit](std::size_t lhs) {
-			return contours[lhs].bounds.right() < left_limit;
-		}), active.end());
-
-		for (std::size_t lhs : active) {
-			if (FilledContoursMayInteract(contours[lhs], contours[rhs]))
-				unite_roots(static_cast<int>(lhs), static_cast<int>(rhs));
-		}
-		active.push_back(rhs);
-	}
-
-	std::vector<PendingFilledContourCluster> pending;
-	std::vector<int> cluster_by_root(contours.size(), -1);
-	for (std::size_t index = 0; index < contours.size(); ++index) {
-		int root = find_root(static_cast<int>(index));
-		int cluster_index = cluster_by_root[root];
-		if (cluster_index < 0) {
-			PendingFilledContourCluster created;
-			created.root = root;
-			created.bounds = contours[index].bounds;
-			created.contour_indices.push_back(index);
-			cluster_by_root[root] = static_cast<int>(pending.size());
-			pending.push_back(std::move(created));
-			continue;
-		}
-
-		auto& cluster = pending[cluster_index];
-		cluster.bounds.join(contours[index].bounds);
-		cluster.contour_indices.push_back(index);
-	}
-
-	std::vector<FilledContourCluster> clusters;
-	clusters.reserve(pending.size());
-	for (auto const& source : pending) {
-		SkPathBuilder builder(SkPathFillType::kWinding);
-		for (std::size_t index : source.contour_indices)
-			builder.addPath(contours[index].path, SkPath::kAppend_AddPathMode);
-
-		SkPath path = builder.detach();
-		path.setFillType(SkPathFillType::kWinding);
-
-		FilledContourCluster cluster;
-		cluster.root = source.root;
-		cluster.path = path;
-		cluster.bounds = source.bounds;
-		cluster.contour_count = static_cast<int>(source.contour_indices.size());
-		clusters.push_back(std::move(cluster));
-	}
-
-	return clusters;
-}
-
-std::size_t CountFilledContours(SkPath const& path) {
-	return SplitClosedFilledContours(path).size();
-}
-
-std::optional<SkPath> CanonicalizeFilledPathWithPathOps(SkPath const& path) {
-	if (path.isEmpty()) {
-		SkPath empty;
-		empty.setFillType(SkPathFillType::kWinding);
-		return empty;
-	}
-
-	SkPath canonical;
-	if (Op(path, SkPath(), kUnion_SkPathOp, &canonical)) {
-		if (auto winding = AsWindingPath(canonical))
-			return winding;
-	}
-
-	if (Simplify(path, &canonical)) {
-		if (auto winding = AsWindingPath(canonical))
-			return winding;
-	}
-
-	return AsWindingPath(path);
-}
-
-bool BoundsCloseEnough(SkRect const& lhs, SkRect const& rhs) {
-	return std::abs(lhs.left() - rhs.left()) <= kCanonicalBoundsTolerance &&
-		std::abs(lhs.top() - rhs.top()) <= kCanonicalBoundsTolerance &&
-		std::abs(lhs.right() - rhs.right()) <= kCanonicalBoundsTolerance &&
-		std::abs(lhs.bottom() - rhs.bottom()) <= kCanonicalBoundsTolerance;
-}
-
-std::optional<CanonicalizedCluster> CanonicalizeFilledContourCluster(FilledContourCluster const& cluster) {
-	if (cluster.contour_count <= 1) {
-		if (cluster.path.isEmpty())
-			return std::nullopt;
-
-		SkPath preserved = cluster.path;
-		preserved.setFillType(SkPathFillType::kWinding);
-		return CanonicalizedCluster{preserved, 1};
-	}
-
-	auto canonical = CanonicalizeFilledPathWithPathOps(cluster.path);
-	if (!canonical)
-		return std::nullopt;
-
-	std::size_t canonical_contours = CountFilledContours(*canonical);
-	if (!BoundsCloseEnough(canonical->getBounds(), cluster.bounds) ||
-		canonical_contours != static_cast<std::size_t>(cluster.contour_count)) {
-		SkPath preserved = cluster.path;
-		preserved.setFillType(SkPathFillType::kWinding);
-		return CanonicalizedCluster{preserved, static_cast<std::size_t>(cluster.contour_count)};
-	}
-
-	return CanonicalizedCluster{*canonical, canonical_contours};
-}
-
-std::optional<SkPath> CanonicalizeFilledPathByContourClusters(SkPath const& path) {
-	auto contours = SplitClosedFilledContours(path);
-	if (contours.empty())
-		return std::nullopt;
-
-	if (contours.size() == 1) {
-		SkPath preserved = contours.front().path;
-		preserved.setFillType(SkPathFillType::kWinding);
-		return preserved;
-	}
-
-	auto clusters = BuildFilledContourClusters(contours);
-	SkPathBuilder builder(SkPathFillType::kWinding);
-	for (auto const& cluster : clusters) {
-		auto canonical = CanonicalizeFilledContourCluster(cluster);
-		if (!canonical)
-			return std::nullopt;
-		builder.addPath(canonical->path, SkPath::kAppend_AddPathMode);
-	}
-
-	SkPath result = builder.detach();
-	if (result.isEmpty())
-		return std::nullopt;
-
-	result.setFillType(SkPathFillType::kWinding);
-	return result;
-}
-
-std::optional<SkPath> CanonicalizeFilledPath(SkPath const& path) {
-	if (path.isEmpty()) {
-		SkPath empty;
-		empty.setFillType(SkPathFillType::kWinding);
-		return empty;
-	}
-
-	if (auto clustered = CanonicalizeFilledPathByContourClusters(path))
-		return clustered;
-
-	return CanonicalizeFilledPathWithPathOps(path);
-}
-
-PathData FromCanonicalOrWindingFallback(SkPath const& sk_path, std::optional<SkPath> canonical) {
-	if (canonical)
-		return FromSkPath(*canonical);
-
-	SkPath fallback = sk_path;
-	fallback.setFillType(SkPathFillType::kWinding);
-	return FromSkPath(fallback);
-}
-
-PathData FromSkPathForAssExport(SkPath const& sk_path) {
-	return FromCanonicalOrWindingFallback(sk_path, CanonicalizeFilledPath(sk_path));
-}
-
-PathData FromSkPathForBooleanExport(SkPath const& sk_path) {
-	return FromCanonicalOrWindingFallback(sk_path, CanonicalizeFilledPathWithPathOps(sk_path));
+bool PrepareBackendCoordinates(PathData const& lhs, PathData const& rhs, BackendCoordinates& coordinates) {
+	BackendDomain domain;
+	return ExtendBackendDomain(domain, lhs) && ExtendBackendDomain(domain, rhs) &&
+		MakeBackendCoordinates(domain, coordinates);
 }
 
 bool StrokePath(SkPath const& source,
@@ -547,12 +357,13 @@ bool StrokePath(SkPath const& source,
 	SkScalar res_scale,
 	sk_sp<SkPathEffect> effect,
 	SkPath& stroked) {
-	if (width <= 0.0)
+	SkScalar stroke_width = static_cast<SkScalar>(width);
+	if (!(width > 0.0) || !std::isfinite(width) || !std::isfinite(stroke_width))
 		return false;
 
 	SkPaint paint;
 	paint.setStyle(SkPaint::kStroke_Style);
-	paint.setStrokeWidth(static_cast<SkScalar>(width));
+	paint.setStrokeWidth(stroke_width);
 	paint.setStrokeCap(ToSkCap(cap));
 	paint.setStrokeJoin(ToSkJoin(join));
 	paint.setStrokeMiter(kStrokeMiterLimit);
@@ -571,7 +382,7 @@ bool StrokePath(SkPath const& source,
 } // namespace
 #endif
 
-bool DrawingSkiaBackendAvailable() {
+bool DrawingBackendAvailable() {
 #if defined(WITH_DRAWING_SKIA)
 	return true;
 #else
@@ -579,9 +390,25 @@ bool DrawingSkiaBackendAvailable() {
 #endif
 }
 
+bool DrawingSkiaBackendAvailable() {
+	return DrawingBackendAvailable();
+}
+
 bool TryDrawingContainsPoint(PathData const& path, double x, double y, bool& contains) {
 #if defined(WITH_DRAWING_SKIA)
-	contains = ToSkPath(path, true).contains(static_cast<SkScalar>(x), static_cast<SkScalar>(y));
+	contains = false;
+	if (!std::isfinite(x) || !std::isfinite(y))
+		return false;
+
+	BackendCoordinates coordinates;
+	SkPath shape;
+	if (!PrepareBackendCoordinates(path, coordinates) || !ToSkPath(path, true, coordinates, shape))
+		return false;
+
+	SkPoint query;
+	if (!coordinates.ToSkPoint({x, y}, query))
+		return true;
+	contains = shape.contains(query.x(), query.y());
 	return true;
 #else
 	(void)path;
@@ -594,15 +421,28 @@ bool TryDrawingContainsPoint(PathData const& path, double x, double y, bool& con
 
 bool TryDrawingContainsRect(PathData const& path, double x, double y, double width, double height, bool& contains) {
 #if defined(WITH_DRAWING_SKIA)
+	contains = false;
+	if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(width) || !std::isfinite(height))
+		return false;
 	if (width <= 0.0 || height <= 0.0) {
-		contains = false;
 		return true;
 	}
 
-	SkPath shape = ToSkPath(path, true);
-	SkRect rect = SkRect::MakeXYWH(static_cast<SkScalar>(x), static_cast<SkScalar>(y), static_cast<SkScalar>(width), static_cast<SkScalar>(height));
+	BackendCoordinates coordinates;
+	SkPath shape;
+	if (!PrepareBackendCoordinates(path, coordinates) || !ToSkPath(path, true, coordinates, shape))
+		return false;
+
+	SkPoint top_left;
+	SkScalar sk_width = static_cast<SkScalar>(width);
+	SkScalar sk_height = static_cast<SkScalar>(height);
+	if (!coordinates.ToSkPoint({x, y}, top_left))
+		return true;
+	if (!(sk_width > 0.0f) || !(sk_height > 0.0f) || !std::isfinite(sk_width) || !std::isfinite(sk_height))
+		return false;
+
+	SkRect rect = SkRect::MakeXYWH(top_left.x(), top_left.y(), sk_width, sk_height);
 	if (!shape.getBounds().contains(rect)) {
-		contains = false;
 		return true;
 	}
 
@@ -626,11 +466,27 @@ bool TryDrawingContainsRect(PathData const& path, double x, double y, double wid
 
 bool TryDrawingBoolean(PathData const& lhs, PathData const& rhs, DrawingBooleanOp op, PathData& result) {
 #if defined(WITH_DRAWING_SKIA)
-	SkPath sk_result;
-	if (!Op(ToSkPath(lhs, true), ToSkPath(rhs, true), ToSkPathOp(op), &sk_result))
+	result = {};
+	BackendCoordinates coordinates;
+	SkPath sk_lhs;
+	SkPath sk_rhs;
+	if (!PrepareBackendCoordinates(lhs, rhs, coordinates) ||
+		!ToSkPath(lhs, true, coordinates, sk_lhs) || !ToSkPath(rhs, true, coordinates, sk_rhs))
 		return false;
-	result = FromSkPathForBooleanExport(sk_result);
-	return true;
+
+	SkPath sk_result;
+	if (!Op(sk_lhs, sk_rhs, ToSkPathOp(op), &sk_result))
+		return false;
+	// PathOps can return even-odd contours which touch at shared vertices.
+	// Simplify first produces equivalent non-overlapping contours; direct
+	// AsWinding on the touching XOR representation can fill its intended hole.
+	SkPath simplified;
+	if (!Simplify(sk_result, &simplified))
+		return false;
+	auto winding_result = AsWinding(simplified);
+	if (!winding_result)
+		return false;
+	return FromSkPath(*winding_result, coordinates, result);
 #else
 	(void)lhs;
 	(void)rhs;
@@ -642,16 +498,22 @@ bool TryDrawingBoolean(PathData const& lhs, PathData const& rhs, DrawingBooleanO
 
 bool TryDrawingOutline(PathData const& path, double width, DrawingStrokeCap cap, DrawingStrokeJoin join, PathData& result) {
 #if defined(WITH_DRAWING_SKIA)
+	result = {};
+	if (!std::isfinite(width))
+		return false;
 	if (width <= 0.0) {
-		result = {};
 		return true;
 	}
 
-	SkPath stroked;
-	if (!StrokePath(ToSkPath(path, false), width, cap, join, kStrokeResScale, nullptr, stroked))
+	BackendCoordinates coordinates;
+	SkPath source;
+	if (!PrepareBackendCoordinates(path, coordinates) || !ToSkPath(path, false, coordinates, source))
 		return false;
-	result = FromSkPathForAssExport(stroked);
-	return true;
+
+	SkPath stroked;
+	if (!StrokePath(source, width, cap, join, kStrokeResScale, nullptr, stroked))
+		return false;
+	return FromSkPath(stroked, coordinates, result);
 #else
 	(void)path;
 	(void)width;
@@ -671,24 +533,37 @@ bool TryDrawingPatternOutline(PathData const& path,
 	double dash_offset,
 	PathData& result) {
 #if defined(WITH_DRAWING_SKIA)
+	result = {};
+	if (!std::isfinite(width) || !std::isfinite(pattern_length) || !std::isfinite(space_length) || !std::isfinite(dash_offset))
+		return false;
 	if (width <= 0.0 || pattern_length <= 0.0 || space_length < 0.0) {
-		result = {};
 		return true;
 	}
 
+	double interval_on = pattern_length * width;
+	double interval_off = space_length * width;
+	double phase = dash_offset * width;
 	SkScalar intervals[] = {
-		static_cast<SkScalar>(pattern_length * width),
-		static_cast<SkScalar>(space_length * width),
+		static_cast<SkScalar>(interval_on),
+		static_cast<SkScalar>(interval_off),
 	};
-	auto dash = SkDashPathEffect::Make(intervals, static_cast<SkScalar>(dash_offset * width));
+	SkScalar sk_phase = static_cast<SkScalar>(phase);
+	if (!std::isfinite(interval_on) || !std::isfinite(interval_off) || !std::isfinite(phase) ||
+		!std::isfinite(intervals[0]) || !std::isfinite(intervals[1]) || !std::isfinite(sk_phase))
+		return false;
+	auto dash = SkDashPathEffect::Make(SkSpan<const SkScalar>(intervals, 2), sk_phase);
 	if (!dash)
 		return false;
 
-	SkPath stroked;
-	if (!StrokePath(ToSkPath(path, false), width, cap, join, kDashStrokeResScale, std::move(dash), stroked))
+	BackendCoordinates coordinates;
+	SkPath source;
+	if (!PrepareBackendCoordinates(path, coordinates) || !ToSkPath(path, false, coordinates, source))
 		return false;
-	result = FromSkPathForAssExport(stroked);
-	return true;
+
+	SkPath stroked;
+	if (!StrokePath(source, width, cap, join, kDashStrokeResScale, std::move(dash), stroked))
+		return false;
+	return FromSkPath(stroked, coordinates, result);
 #else
 	(void)path;
 	(void)width;

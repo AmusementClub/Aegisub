@@ -417,9 +417,52 @@ if(WITH_AVISYNTH)
     set(HAVE_AVISYNTH ON)
 endif()
 option(WITH_CSRI "Enable CSRI support" ON)
-find_package(unofficial-skia CONFIG QUIET)
 option(WITH_DRAWING_SKIA "Enable Skia-backed Lua drawing path operations" OFF)
 option(WITH_SKIA "Enable optional Skia-based 2D rendering infrastructure" OFF)
+if(WITH_SKIA OR WITH_DRAWING_SKIA)
+    # unofficial-skia resolves a few Windows system import libraries while its
+    # package config is loaded. Seed those lookups before find_package so a
+    # fresh configure does not silently omit them.
+    if(WIN32)
+        function(aegisub_seed_skia_windows_sdk_import lib_name cache_var)
+            if(DEFINED ${cache_var} AND EXISTS "${${cache_var}}")
+                return()
+            endif()
+
+            if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+                set(_aegisub_sdk_arch "x64")
+            else()
+                set(_aegisub_sdk_arch "x86")
+            endif()
+
+            file(GLOB _aegisub_sdk_um_dirs LIST_DIRECTORIES true
+                "C:/Program Files (x86)/Windows Kits/10/Lib/*/um/${_aegisub_sdk_arch}")
+            list(SORT _aegisub_sdk_um_dirs COMPARE NATURAL ORDER DESCENDING)
+
+            foreach(_aegisub_sdk_um_dir IN LISTS _aegisub_sdk_um_dirs)
+                unset(_aegisub_sdk_lib CACHE)
+                unset(_aegisub_sdk_lib)
+                find_library(_aegisub_sdk_lib
+                    NAMES "${lib_name}"
+                    NAMES_PER_DIR
+                    PATHS "${_aegisub_sdk_um_dir}"
+                    NO_DEFAULT_PATH)
+                if(_aegisub_sdk_lib)
+                    set(${cache_var} "${_aegisub_sdk_lib}" CACHE FILEPATH
+                        "Windows SDK import preseeded for unofficial-skia" FORCE)
+                    break()
+                endif()
+            endforeach()
+        endfunction()
+
+        foreach(_aegisub_cfg RELEASE DEBUG)
+            aegisub_seed_skia_windows_sdk_import("FontSub.lib" "z_vcpkg_skia_link_libs_FontSub_lib_${_aegisub_cfg}")
+            aegisub_seed_skia_windows_sdk_import("Usp10.lib" "z_vcpkg_skia_link_libs_Usp10_lib_${_aegisub_cfg}")
+        endforeach()
+    endif()
+
+    find_package(unofficial-skia CONFIG QUIET)
+endif()
 option(WITH_FFTW3 "Enable app-local runtime loading of FFTW3 for spectrum FFT support" ON)
 find_package(pffft CONFIG QUIET)
 option(WITH_PFFFT "Enable PFFFT spectrum FFT support" ${pffft_FOUND})
@@ -1244,44 +1287,6 @@ if(HAVE_OPENGL_GL_H)
     target_compile_definitions(Aegisub PRIVATE "HAVE_OPENGL_GL_H")
 endif()
 
-if(WIN32)
-    function(aegisub_seed_skia_windows_sdk_import lib_name cache_var)
-        if(DEFINED ${cache_var} AND EXISTS "${${cache_var}}")
-            return()
-        endif()
-
-        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-            set(_aegisub_sdk_arch "x64")
-        else()
-            set(_aegisub_sdk_arch "x86")
-        endif()
-
-        file(GLOB _aegisub_sdk_um_dirs LIST_DIRECTORIES true
-            "C:/Program Files (x86)/Windows Kits/10/Lib/*/um/${_aegisub_sdk_arch}")
-        list(SORT _aegisub_sdk_um_dirs COMPARE NATURAL ORDER DESCENDING)
-
-        foreach(_aegisub_sdk_um_dir IN LISTS _aegisub_sdk_um_dirs)
-            unset(_aegisub_sdk_lib CACHE)
-            unset(_aegisub_sdk_lib)
-            find_library(_aegisub_sdk_lib
-                NAMES "${lib_name}"
-                NAMES_PER_DIR
-                PATHS "${_aegisub_sdk_um_dir}"
-                NO_DEFAULT_PATH)
-            if(_aegisub_sdk_lib)
-                set(${cache_var} "${_aegisub_sdk_lib}" CACHE FILEPATH
-                    "Windows SDK import preseeded for unofficial-skia" FORCE)
-                break()
-            endif()
-        endforeach()
-    endfunction()
-
-    foreach(_aegisub_cfg RELEASE DEBUG)
-        aegisub_seed_skia_windows_sdk_import("FontSub.lib" "z_vcpkg_skia_link_libs_FontSub_lib_${_aegisub_cfg}")
-        aegisub_seed_skia_windows_sdk_import("Usp10.lib" "z_vcpkg_skia_link_libs_Usp10_lib_${_aegisub_cfg}")
-    endforeach()
-endif()
-
 # Skia: WITH_DRAWING_SKIA adds a Lua drawing backend to libaegisub; WITH_SKIA
 # adds the Skia rendering infra to aegisub_core (handled above). Both options
 # and the skia find_package are defined in the shared discovery block above.
@@ -1289,7 +1294,7 @@ if(WITH_DRAWING_SKIA)
     if(NOT TARGET unofficial::skia::skia)
         message(FATAL_ERROR
             "WITH_DRAWING_SKIA is ON, but the Skia vcpkg package was not found.\n"
-            "Configure with -DVCPKG_MANIFEST_FEATURES=skia or pass -DWITH_DRAWING_SKIA=OFF."
+            "Configure with -DVCPKG_MANIFEST_FEATURES=drawing-skia or pass -DWITH_DRAWING_SKIA=OFF."
         )
     endif()
     target_compile_definitions(libaegisub PRIVATE WITH_DRAWING_SKIA)
@@ -1629,6 +1634,11 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.21)
     )
 endif()
 install(FILES src/include/aegisub/core_c_api.h DESTINATION include/aegisub COMPONENT CoreAPI)
+
+set(AEGISUB_CORE_API_NEEDS_SKIA OFF)
+if(WITH_SKIA OR WITH_DRAWING_SKIA)
+    set(AEGISUB_CORE_API_NEEDS_SKIA ON)
+endif()
 
 configure_package_config_file(
     cmake/AegisubCoreCAPIConfig.cmake.in

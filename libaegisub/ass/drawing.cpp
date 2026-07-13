@@ -2,10 +2,10 @@
 
 #include <array>
 #include <cassert>
+#include <charconv>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <limits>
 #include <string>
 #include <vector>
@@ -43,7 +43,7 @@ struct DrawingCompatBehavior {
 	bool bridge_pending_move_nc = false;
 };
 
-struct HighFidelityPathBehavior {
+struct PathBuildBehavior {
 	bool auto_close_contours = true;
 	bool preserve_dangling_anchor = true;
 };
@@ -98,14 +98,23 @@ bool ReadNumber(char const* cursor, char const* end, char const*& number_end, do
 	if (cursor >= end || std::isalpha(static_cast<unsigned char>(*cursor)) != 0)
 		return false;
 
-	char* parsed_end = nullptr;
-	double parsed = std::strtod(cursor, &parsed_end);
-	if (parsed_end == cursor || parsed_end > end)
+	// Floating-point from_chars is bounded and locale independent. It follows
+	// the strtod grammar except for a leading '+', which ASS accepts.
+	char const* parse_start = cursor;
+	if (*parse_start == '+') {
+		++parse_start;
+		if (parse_start == end)
+			return false;
+	}
+
+	double parsed = 0.0;
+	auto parsed_result = std::from_chars(parse_start, end, parsed, std::chars_format::general);
+	if (parsed_result.ptr == parse_start || parsed_result.ec != std::errc() || !std::isfinite(parsed))
 		return false;
 
 	if (value)
 		*value = parsed;
-	number_end = parsed_end;
+	number_end = parsed_result.ptr;
 	return true;
 }
 
@@ -125,28 +134,33 @@ DrawingCompatBehavior GetDrawingCompatBehavior(AssDrawingCompatMode compat_mode)
 	return behavior;
 }
 
-HighFidelityPathBehavior GetHighFidelityPathBehavior(AssDrawingPathMode path_mode) {
-	HighFidelityPathBehavior behavior;
+PathBuildBehavior GetPathBuildBehavior(AssDrawingPathMode path_mode) {
+	PathBuildBehavior behavior;
 	behavior.auto_close_contours = path_mode == AssDrawingPathMode::FilledContours;
 	behavior.preserve_dangling_anchor = path_mode == AssDrawingPathMode::PreserveOpenContours;
 	return behavior;
 }
 
-double QuantizeToD6(double value, AssDrawingCompatMode compat_mode) {
+bool QuantizeToD6(double value, AssDrawingCompatMode compat_mode, double& quantized) {
+	double input = value * kD6Scale;
+	if (!std::isfinite(input))
+		return false;
+
 	double scaled = 0.0;
 	switch (compat_mode) {
 		case AssDrawingCompatMode::VsFilter:
-			scaled = std::trunc(value * kD6Scale);
+			scaled = std::trunc(input);
 			break;
 		case AssDrawingCompatMode::Libass:
-			scaled = std::lrint(value * kD6Scale);
+			scaled = std::nearbyint(input);
 			break;
 		default:
-			scaled = std::trunc(value * kD6Scale);
+			scaled = std::trunc(input);
 			break;
 	}
 
-	return scaled / kD6Scale;
+	quantized = scaled / kD6Scale;
+	return std::isfinite(quantized);
 }
 
 bool TryReadPoint(char const*& cursor, char const* end, Point& point, AssDrawingCompatMode compat_mode) {
@@ -155,8 +169,7 @@ bool TryReadPoint(char const*& cursor, char const* end, Point& point, AssDrawing
 	if (!TryReadDouble(cursor, end, x) || !TryReadDouble(cursor, end, y))
 		return false;
 
-	point = {QuantizeToD6(x, compat_mode), QuantizeToD6(y, compat_mode)};
-	return true;
+	return QuantizeToD6(x, compat_mode, point.x) && QuantizeToD6(y, compat_mode, point.y);
 }
 
 void AppendToken(std::vector<DrawingToken>& tokens, DrawingTokenType type, Point const& point) {
@@ -386,7 +399,7 @@ void AppendCurveFromTokens(PathData& path,
 	AppendCubicTo(path, state, c1, c2, c3);
 }
 
-void EndHighFidelityContour(PathData& path, PathState& state, bool auto_close_contours, bool& started) {
+void EndContour(PathData& path, PathState& state, bool auto_close_contours, bool& started) {
 	if (!started)
 		return;
 
@@ -395,9 +408,9 @@ void EndHighFidelityContour(PathData& path, PathState& state, bool auto_close_co
 	started = false;
 }
 
-PathData BuildHighFidelityPathFromTokens(std::vector<DrawingToken> const& tokens,
+PathData BuildPathFromTokens(std::vector<DrawingToken> const& tokens,
 	DrawingCompatBehavior const& compat_behavior,
-	HighFidelityPathBehavior const& path_behavior) {
+	PathBuildBehavior const& path_behavior) {
 	PathData path;
 	PathState state;
 	bool started = false;
@@ -417,7 +430,7 @@ PathData BuildHighFidelityPathFromTokens(std::vector<DrawingToken> const& tokens
 			case DrawingTokenType::Move:
 				pen = token.point;
 				has_pending_pen = true;
-				EndHighFidelityContour(path, state, path_behavior.auto_close_contours, started);
+				EndContour(path, state, path_behavior.auto_close_contours, started);
 				pending_vsfilter_bridge = false;
 				++index;
 				break;
@@ -483,7 +496,7 @@ PathData BuildHighFidelityPathFromTokens(std::vector<DrawingToken> const& tokens
 		}
 	}
 
-	EndHighFidelityContour(path, state, path_behavior.auto_close_contours, started);
+	EndContour(path, state, path_behavior.auto_close_contours, started);
 	if (!started && has_pending_pen && path_behavior.preserve_dangling_anchor)
 		AppendMoveTo(path, state, pen);
 
@@ -672,7 +685,7 @@ AssDrawingCompatMode SanitizeAssDrawingCompatMode(int raw_mode) {
 
 PathData ParseAss(std::string_view ass_shape, AssDrawingCompatMode compat_mode, AssDrawingPathMode path_mode) {
 	auto tokens = TokenizeCompatibleDrawingTokens(ass_shape, compat_mode);
-	return BuildHighFidelityPathFromTokens(tokens, GetDrawingCompatBehavior(compat_mode), GetHighFidelityPathBehavior(path_mode));
+	return BuildPathFromTokens(tokens, GetDrawingCompatBehavior(compat_mode), GetPathBuildBehavior(path_mode));
 }
 
 Point TransformPoint(Point point, Matrix3x2 const& matrix) {

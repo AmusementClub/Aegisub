@@ -63,11 +63,69 @@ TEST(lua_drawing_module, exposes_string_transform_api) {
 	)");
 }
 
+TEST(lua_drawing_module, path_userdata_serializes_once_after_chained_geometry) {
+	auto L = MakeLuaState();
+	RunLua(L.get(), R"(
+		local drawing = require 'aegisub.drawing'
+		local path = drawing.rect(0, 0, 2, 2)
+		for _ = 1, 50 do
+			path:translate(0.01, 0)
+		end
+		assert(path:ass() == 'm 0.5 0 l 2.5 0 2.5 2 0.5 2')
+
+		local clone = path:clone():rotate(90):translate(1, 2)
+		assert(path:ass() == 'm 0.5 0 l 2.5 0 2.5 2 0.5 2')
+		assert(clone:ass() ~= path:ass())
+		assert(math.abs(path:length() - 8) < 0.000001)
+
+		local open = drawing.path():arc_move_to(0, 0, 20, 20, 0)
+		assert(open:ass() == 'm 20 10')
+		assert(tostring(open) == 'm 20 10')
+	)");
+}
+
+TEST(lua_drawing_module, preloads_original_shape_lua_compatibility_surface) {
+	auto L = MakeLuaState();
+	RunLua(L.get(), R"(
+		local shape = require 'shape'
+		assert(shape == _G.shape)
+		local expected = {
+			'ellipse', 'rect', 'rounded_rect', 'arc_move_to', 'arc_to',
+			'angle_at_percent', 'length', 'percent_at_length',
+			'point_at_percent', 'slope_at_percent', 'bounding',
+			'bounding_coords', 'contains_point', 'contains_rect',
+			'translate', 'rotate', 'scale', 'shear', 'united',
+			'intersected', 'subtracted', 'outline', 'pattern_outline',
+		}
+		for _, name in ipairs(expected) do
+			assert(type(shape[name]) == 'function', name)
+		end
+
+		assert(shape.rect(0, 0, 10, 10) == 'm 0 0 l 10 0 10 10 0 10')
+		local x, y = shape.point_at_percent('m 0 0 b 0 10 20 10 30 0', 0.25)
+		assert(math.abs(x - 3.28125) < 0.000001)
+		assert(math.abs(y - 5.625) < 0.000001)
+	)");
+
+	if (agi::ass::drawing::DrawingSkiaBackendAvailable()) {
+		RunLua(L.get(), R"(
+			local shape = require 'shape'
+			assert(shape.united(shape.rect(0, 0, 10, 10), shape.rect(5, 5, 10, 10)) ~= '')
+		)");
+	} else {
+		RunLua(L.get(), R"(
+			local shape = require 'shape'
+			assert(shape.united(shape.rect(0, 0, 10, 10), shape.rect(5, 5, 10, 10)) == '')
+			assert(shape.contains_point(shape.rect(0, 0, 10, 10), 5, 5) == false)
+		)");
+	}
+}
+
 TEST(lua_drawing_module, accepts_named_compatibility_modes) {
 	auto L = MakeLuaState();
 	RunLua(L.get(), R"(
 		local drawing = require 'aegisub.drawing'
-		assert(drawing.normalize_open('m 0.01 0 l 1.01 0', 'libass') == 'm 0.016 0 l 1.016 0')
+		assert(drawing.normalize_open('m 0.01 0 l 1.01 0', 'libass') == 'm 0.02 0 l 1.02 0')
 		assert(drawing.normalize_open('m 0.01 0 l 1.01 0', 'vsfilter') == 'm 0 0 l 1 0')
 	)");
 }
@@ -137,12 +195,49 @@ TEST(lua_drawing_module, exposes_legacy_shape_named_api) {
 		assert(near(x, 2.5))
 		assert(near(y, 0))
 
+		local curve = 'm 0 0 b 0 10 20 10 30 0'
+		local legacy_x, legacy_y = drawing.shape_point_at_percent(curve, 0.25)
+		assert(near(legacy_x, 3.28125))
+		assert(near(legacy_y, 5.625))
+		local modern_x, modern_y = drawing.point_at_percent(curve, 0.25)
+		assert(math.abs(modern_x - legacy_x) + math.abs(modern_y - legacy_y) > 0.01)
+		assert(near(drawing.shape_slope_at_percent(curve, 0.25), 15 / 24.375))
+		assert(math.abs(drawing.shape_angle_at_percent(curve, 0.25) - drawing.angle_at_percent(curve, 0.25)) > 0.01)
+		assert(math.abs(drawing.shape_percent_at_length(curve, drawing.length(curve) * 0.25) - 0.25) > 0.0001)
+
+		x, y = drawing.shape_point_at_percent(curve, -0.01)
+		assert(near(x, 0) and near(y, 0))
+		x, y = drawing.shape_point_at_percent(curve, 1.01)
+		assert(near(x, 0) and near(y, 0))
+		assert(near(drawing.shape_angle_at_percent(curve, -0.01), 0))
+		assert(near(drawing.shape_slope_at_percent(curve, 1.01), 0))
+		assert(near(drawing.shape_percent_at_length(curve, -1), 0))
+		assert(near(drawing.shape_percent_at_length(curve, math.huge), 1))
+
+		-- The non-shape API retains modern clamped, normalized arc-length semantics.
+		x, y = drawing.point_at_percent(curve, 1.01)
+		assert(near(x, 30) and near(y, 0))
+
 		local w, h
 		x, y, w, h = drawing.shape_bouding(drawing.shape_ellipse(0, 0, 20, 10))
 		assert(near(x, 0))
 		assert(near(y, 0))
 		assert(near(w, 20))
 		assert(near(h, 10))
+
+		-- Legacy control-point bounds, not tight curve extrema.
+		x, y, w, h = drawing.shape_bouding('m 0 0 b 0 10 10 10 10 0')
+		assert(near(x, 0))
+		assert(near(y, 0))
+		assert(near(w, 10))
+		assert(near(h, 10))
+
+		-- Public bounds() stays geometric/tight.
+		x, y, w, h = drawing.bounds('m 0 0 b 0 10 10 10 10 0')
+		assert(near(x, 0))
+		assert(near(y, 0))
+		assert(near(w, 10))
+		assert(near(h, 7.5))
 
 		local x1, y1, x2, y2 = drawing.shape_bouding_coords(drawing.shape_rect(0, 0, 10, 10))
 		assert(near(x1, 0))
@@ -172,6 +267,7 @@ TEST(lua_drawing_module, exposes_requested_public_shape_api_without_debug_helper
 			'shape_normalize_ass',
 			'shape_normalize_ass_with_mode',
 			'shape_outline',
+			'shape_outline_with_flatten',
 			'shape_pattern_outline',
 			'shape_percent_at_length',
 			'shape_point_at_percent',
@@ -239,5 +335,21 @@ TEST(lua_drawing_module, exposes_skia_backed_legacy_shape_api) {
 		local dashed = drawing.shape_pattern_outline('m 0 0 l 20 0', 2, 'flat', 'bevel', 2.5, 2.5, 0)
 		assert(drawing.shape_contains_point(dashed, 2, 0))
 		assert(not drawing.shape_contains_point(dashed, 7, 0))
+
+		local path_lhs = drawing.rect(0, 0, 10, 10)
+		local path_rhs = drawing.rect(5, 5, 10, 10)
+		path_lhs:unite(path_rhs)
+		assert(path_lhs:contains_point(12, 12))
+		assert(path_lhs:ass() ~= '')
+
+		local path_outline = drawing.path('m 0 0 l 20 0')
+		path_outline:outline(2, 'flat', 'bevel')
+		assert(path_outline:contains_point(5, 0))
+		assert(path_outline:ass() ~= '')
+
+		local path_pattern = drawing.path('m 0 0 l 20 0')
+		path_pattern:pattern_outline(2, 'flat', 'bevel', 2.5, 2.5, 0)
+		assert(path_pattern:contains_point(2, 0))
+		assert(not path_pattern:contains_point(7, 0))
 	)");
 }

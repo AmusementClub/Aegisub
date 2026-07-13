@@ -984,14 +984,14 @@ void AddGeometryChecks(std::vector<std::function<void()>>& checks,
 
 	checks.push_back([&, open_shape] {
 		CompareDouble(counters, options, "shape_percent_at_length",
-			agi::ass::drawing::PercentAtLength(agi::ass::drawing::ParseAssOpen(open_shape), 95.0),
+			agi::ass::drawing::LegacyPercentAtLength(agi::ass::drawing::ParseAssOpen(open_shape), 95.0),
 			reference && reference->shape_percent_at_length ? std::optional<double>(reference->shape_percent_at_length(open_shape.c_str(), 95.0)) : std::nullopt);
 	});
 
 	checks.push_back([&, open_shape] {
 		Point point;
 		Point tangent;
-		agi::ass::drawing::TryGetPositionAtPercent(agi::ass::drawing::ParseAssOpen(open_shape), 0.35, point, tangent);
+		agi::ass::drawing::TryGetLegacyPositionAtPercent(agi::ass::drawing::ParseAssOpen(open_shape), 0.35, point, tangent);
 		std::optional<double> ref_x;
 		std::optional<double> ref_y;
 		if (reference && reference->shape_point_at_percent) {
@@ -1008,7 +1008,7 @@ void AddGeometryChecks(std::vector<std::function<void()>>& checks,
 	checks.push_back([&, open_shape] {
 		Point point;
 		Point tangent;
-		agi::ass::drawing::TryGetPositionAtPercent(agi::ass::drawing::ParseAssOpen(open_shape), 0.65, point, tangent);
+		agi::ass::drawing::TryGetLegacyPositionAtPercent(agi::ass::drawing::ParseAssOpen(open_shape), 0.65, point, tangent);
 		CompareDouble(counters, options, "shape_angle_at_percent",
 			AngleFromTangent(tangent),
 			reference && reference->shape_angle_at_percent ? std::optional<double>(reference->shape_angle_at_percent(open_shape.c_str(), 0.65)) : std::nullopt);
@@ -1019,7 +1019,7 @@ void AddGeometryChecks(std::vector<std::function<void()>>& checks,
 
 	checks.push_back([&, filled_shape] {
 		Rect bounds;
-		agi::ass::drawing::TryGetBounds(agi::ass::drawing::ParseAss(filled_shape), bounds);
+		agi::ass::drawing::TryGetControlPointBounds(agi::ass::drawing::ParseAss(filled_shape), bounds);
 		std::optional<Rect> ref_bounds;
 		if (reference && reference->shape_bouding) {
 			Rect rect;

@@ -34,7 +34,7 @@ describe 'drawing', ->
     assert.is.equal 'm 5 7 l 7 10', drawing.transform 'm 1 1 l 2 2', 2, 0, 0, 3, 3, 4
 
   it 'accepts libass compatibility mode', ->
-    assert.is.equal 'm 0.016 0 l 1.016 0', drawing.normalize_open 'm 0.01 0 l 1.01 0', 'libass'
+    assert.is.equal 'm 0.02 0 l 1.02 0', drawing.normalize_open 'm 0.01 0 l 1.01 0', 'libass'
 
   it 'computes drawing bounds', ->
     x, y, width, height = drawing.bounds 'm 0 0 b 0 10 10 10 10 0'
@@ -42,6 +42,13 @@ describe 'drawing', ->
     assert.is.equal 0, y
     assert.is.equal 10, width
     assert.is.equal 7.5, height
+
+  it 'uses control-point bounds for legacy shape_bouding', ->
+    x, y, width, height = drawing.shape_bouding 'm 0 0 b 0 10 10 10 10 0'
+    assert.is.equal 0, x
+    assert.is.equal 0, y
+    assert.is.equal 10, width
+    assert.is.equal 10, height
 
   it 'flattens drawings', ->
     assert.is.equal 'm 0 0 l 10 0', drawing.flatten 'm 0 0 b 0 10 10 10 10 0', 100
@@ -54,6 +61,21 @@ describe 'drawing', ->
     assert.is.equal 0.25, drawing.percent_at_length 'm 0 0 l 10 0', 2.5
     x, y = drawing.point_at_percent 'm 0 0 l 10 0', 0.25
     assert.is.equal 2.5, x
+    assert.is.equal 0, y
+
+  it 'keeps Qt percent semantics behind shape aliases', ->
+    curve = 'm 0 0 b 0 10 20 10 30 0'
+    legacy_x, legacy_y = drawing.shape_point_at_percent curve, 0.25
+    assert.is.equal 3.28125, legacy_x
+    assert.is.equal 5.625, legacy_y
+    modern_x, modern_y = drawing.point_at_percent curve, 0.25
+    assert.is.truthy math.abs(modern_x - legacy_x) + math.abs(modern_y - legacy_y) > 0.01
+
+    x, y = drawing.shape_point_at_percent curve, -0.01
+    assert.is.equal 0, x
+    assert.is.equal 0, y
+    x, y = drawing.shape_point_at_percent curve, 1.01
+    assert.is.equal 0, x
     assert.is.equal 0, y
 
   it 'computes area and centroid', ->
@@ -84,6 +106,7 @@ describe 'drawing', ->
       'shape_normalize_ass'
       'shape_normalize_ass_with_mode'
       'shape_outline'
+      'shape_outline_with_flatten'
       'shape_pattern_outline'
       'shape_percent_at_length'
       'shape_point_at_percent'

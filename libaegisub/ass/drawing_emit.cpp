@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -17,7 +18,6 @@ namespace {
 
 constexpr double kAssGridScale = 64.0;
 constexpr std::int64_t kAssGridScaleInt = 64;
-constexpr std::int64_t kAssDecimalScale = 1000;
 constexpr double kConicApproximationTolerance = 1.0 / 128.0;
 constexpr int kConicMaxRecursionDepth = 10;
 
@@ -80,6 +80,12 @@ struct RotatedSegmentTokenCursor {
 std::int64_t QuantizeCoordinate(double value) {
 	if (!std::isfinite(value))
 		return 0;
+	constexpr double max_coordinate = static_cast<double>(std::numeric_limits<std::int64_t>::max()) / kAssGridScale;
+	constexpr double min_coordinate = static_cast<double>(std::numeric_limits<std::int64_t>::min()) / kAssGridScale;
+	if (value >= max_coordinate)
+		return std::numeric_limits<std::int64_t>::max();
+	if (value <= min_coordinate)
+		return std::numeric_limits<std::int64_t>::min();
 
 	return static_cast<std::int64_t>(std::llround(value * kAssGridScale));
 }
@@ -434,30 +440,59 @@ std::string FormatCoordinate(double value) {
 		? static_cast<std::uint64_t>(-(grid + 1)) + 1
 		: static_cast<std::uint64_t>(grid);
 
-	auto whole = magnitude / kAssGridScaleInt;
-	auto remainder = magnitude % kAssGridScaleInt;
-	auto decimals = (remainder * kAssDecimalScale + kAssGridScaleInt / 2) / kAssGridScaleInt;
-	if (decimals == kAssDecimalScale) {
-		++whole;
-		decimals = 0;
+
+	// Emit the shortest decimal which both renderer parsers map back to `grid`:
+	// xy-VSFilter truncates token*64 while libass rounds it to nearest.  Moving
+	// the decimal slightly away from zero gives their safe interval an overlap;
+	// three fractional digits are sufficient for every 32-bit D6 coordinate.
+	constexpr std::uint64_t scales[] = {1, 10, 100, 1000};
+	if (magnitude <= static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max())) {
+		for (std::size_t digits = 0; digits < std::size(scales); ++digits) {
+			auto scale = scales[digits];
+			auto decimal = (magnitude * scale + kAssGridScaleInt - 1) / kAssGridScaleInt;
+			// Strict comparison rejects the half-grid tie, making the result
+			// independent of the renderer's tie-breaking mode.
+			if (128 * decimal >= (2 * magnitude + 1) * scale)
+				continue;
+
+			std::string text;
+			if (negative)
+				text.push_back('-');
+			text += std::to_string(decimal / scale);
+			auto fraction = decimal % scale;
+			if (fraction == 0)
+				return text;
+
+			std::string fraction_text = std::to_string(fraction);
+			if (fraction_text.size() < digits)
+				fraction_text.insert(fraction_text.begin(), digits - fraction_text.size(), '0');
+			while (!fraction_text.empty() && fraction_text.back() == '0')
+				fraction_text.pop_back();
+			text.push_back('.');
+			text += fraction_text;
+			return text;
+		}
 	}
 
-	std::string text;
-	if (negative)
-		text.push_back('-');
+	// Defensive fallback for coordinates outside the renderer-supported range:
+	// exact D6 is always representable with at most six fractional digits.
+	auto whole = magnitude / kAssGridScaleInt;
+	auto remainder = magnitude % kAssGridScaleInt;
+	std::string text = negative ? "-" : "";
 	text += std::to_string(whole);
-	if (decimals == 0)
-		return text == "-0" ? "0" : text;
+	if (remainder == 0)
+		return text;
 
-	std::string fraction = std::to_string(decimals);
-	if (fraction.size() < 3)
-		fraction.insert(fraction.begin(), 3 - fraction.size(), '0');
-	while (!fraction.empty() && fraction.back() == '0')
-		fraction.pop_back();
-
-	text.push_back('.');
-	text += fraction;
-	return text == "-0" ? "0" : text;
+	std::uint64_t decimal = remainder * 15625;
+	std::size_t digits = 6;
+	while (decimal % 10 == 0) {
+		decimal /= 10;
+		--digits;
+	}
+	std::string fraction = std::to_string(decimal);
+	if (fraction.size() < digits)
+		fraction.insert(fraction.begin(), digits - fraction.size(), '0');
+	return text + "." + fraction;
 }
 
 FormattedPoint FormatPoint(Point const& point) {
@@ -969,6 +1004,24 @@ std::string SerializeAssFilled(PathData const& path) {
 
 std::string SerializeAssCompactFilled(PathData const& path) {
 	return SerializeLoweredAss(CompactFilledPath(path));
+}
+
+bool TrySerializeAssFilled(PathData const& path, std::string& output) {
+	output.clear();
+	if (!path.winding_fill)
+		return false;
+
+	output = SerializeAssFilled(path);
+	return true;
+}
+
+bool TrySerializeAssCompactFilled(PathData const& path, std::string& output) {
+	output.clear();
+	if (!path.winding_fill)
+		return false;
+
+	output = SerializeAssCompactFilled(path);
+	return true;
 }
 
 std::string CompactAss(std::string_view ass_shape, AssDrawingCompatMode compat_mode) {

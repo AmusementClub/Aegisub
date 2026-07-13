@@ -25,10 +25,19 @@ using agi::ass::drawing::Rect;
 
 char const *const kDrawingPathMetatable = "aegisub.drawing.path";
 
+struct FilledMetrics {
+	double tolerance = 0.25;
+	bool operation_succeeded = false;
+	bool measurable = false;
+	double area = 0.0;
+	Point centroid {};
+};
+
 struct LuaDrawingPath {
 	PathData path;
 	bool filled_output = false;
 	std::optional<PathMeasure> measure;
+	std::optional<FilledMetrics> filled_metrics;
 };
 
 AssDrawingCompatMode CheckCompatMode(lua_State *L, int idx) {
@@ -108,18 +117,38 @@ PathMeasure const& MeasureDrawingPath(LuaDrawingPath& path) {
 	return *path.measure;
 }
 
-void InvalidateDrawingPathMeasure(LuaDrawingPath& path) {
+FilledMetrics MeasureFilledPath(PathData const& path, double tolerance) {
+	FilledMetrics metrics;
+	metrics.tolerance = tolerance;
+	metrics.operation_succeeded = agi::ass::drawing::TryDrawingFilledAreaAndCentroid(
+		path, tolerance, metrics.area, metrics.centroid, metrics.measurable);
+	return metrics;
+}
+
+bool SameTolerance(double lhs, double rhs) {
+	return lhs == rhs || (std::isnan(lhs) && std::isnan(rhs));
+}
+
+FilledMetrics const& MeasureFilledDrawingPath(LuaDrawingPath& path, double tolerance) {
+	if (!path.filled_metrics || !SameTolerance(path.filled_metrics->tolerance, tolerance))
+		path.filled_metrics = MeasureFilledPath(path.path, tolerance);
+	return *path.filled_metrics;
+}
+
+void InvalidateDrawingPathCaches(LuaDrawingPath& path) {
 	path.measure.reset();
+	path.filled_metrics.reset();
 }
 
 void ReplaceDrawingPath(LuaDrawingPath& path, PathData replacement) {
 	path.path = std::move(replacement);
-	InvalidateDrawingPathMeasure(path);
+	InvalidateDrawingPathCaches(path);
 }
 
 int PushDrawingPath(lua_State *L, PathData path, bool filled_output) {
 	auto *storage = lua_newuserdata(L, sizeof(LuaDrawingPath));
-	auto *drawing_path = new (storage) LuaDrawingPath {std::move(path), filled_output, std::nullopt};
+	auto *drawing_path = new (storage) LuaDrawingPath {
+		std::move(path), filled_output, std::nullopt, std::nullopt};
 	(void)drawing_path;
 	luaL_getmetatable(L, kDrawingPathMetatable);
 	lua_setmetatable(L, -2);
@@ -357,7 +386,7 @@ int DrawingPathArcMoveTo(lua_State *L) {
 		luaL_checknumber(L, 4),
 		luaL_checknumber(L, 5),
 		luaL_checknumber(L, 6));
-	InvalidateDrawingPathMeasure(*path);
+	InvalidateDrawingPathCaches(*path);
 	return ReturnDrawingPath(L);
 }
 
@@ -370,7 +399,7 @@ int DrawingPathArcTo(lua_State *L) {
 		luaL_checknumber(L, 5),
 		luaL_checknumber(L, 6),
 		luaL_checknumber(L, 7));
-	InvalidateDrawingPathMeasure(*path);
+	InvalidateDrawingPathCaches(*path);
 	return ReturnDrawingPath(L);
 }
 
@@ -469,31 +498,30 @@ int DrawingPathCentroid(lua_State *L) {
 		CheckDrawingPath(L, 1)->path, signed_area, centroid, luaL_optnumber(L, 2, 0.25)), centroid);
 }
 
-int PushFilledMetric(lua_State *L, PathData const& path, double tolerance, bool return_centroid, char const *name) {
-	double area;
-	Point centroid;
-	bool measurable = false;
-	if (!agi::ass::drawing::TryDrawingFilledAreaAndCentroid(path, tolerance, area, centroid, measurable))
+int PushFilledMetric(lua_State *L, FilledMetrics const& metrics, bool return_centroid, char const *name) {
+	if (!metrics.operation_succeeded)
 		return BackendOperationError(L, name);
-	if (!measurable) {
+	if (!metrics.measurable) {
 		lua_pushnil(L);
 		return 1;
 	}
 
 	if (return_centroid)
-		return PushPointOrNil(L, true, centroid);
-	lua_pushnumber(L, area);
+		return PushPointOrNil(L, true, metrics.centroid);
+	lua_pushnumber(L, metrics.area);
 	return 1;
 }
 
 int DrawingPathFilledArea(lua_State *L) {
-	return PushFilledMetric(L, CheckDrawingPath(L, 1)->path,
-		luaL_optnumber(L, 2, 0.25), false, "drawing path filled_area");
+	auto *path = CheckDrawingPath(L, 1);
+	return PushFilledMetric(L, MeasureFilledDrawingPath(*path, luaL_optnumber(L, 2, 0.25)),
+		false, "drawing path filled_area");
 }
 
 int DrawingPathFilledCentroid(lua_State *L) {
-	return PushFilledMetric(L, CheckDrawingPath(L, 1)->path,
-		luaL_optnumber(L, 2, 0.25), true, "drawing path filled_centroid");
+	auto *path = CheckDrawingPath(L, 1);
+	return PushFilledMetric(L, MeasureFilledDrawingPath(*path, luaL_optnumber(L, 2, 0.25)),
+		true, "drawing path filled_centroid");
 }
 
 int DrawingPathContainsPoint(lua_State *L) {
@@ -832,14 +860,14 @@ int Centroid(lua_State *L) {
 
 int FilledArea(lua_State *L) {
 	auto options = CheckToleranceAndMode(L, 2);
-	return PushFilledMetric(L, ParseFilled(L, 1, options.mode_idx),
-		options.tolerance, false, "filled_area");
+	return PushFilledMetric(L, MeasureFilledPath(ParseFilled(L, 1, options.mode_idx), options.tolerance),
+		false, "filled_area");
 }
 
 int FilledCentroid(lua_State *L) {
 	auto options = CheckToleranceAndMode(L, 2);
-	return PushFilledMetric(L, ParseFilled(L, 1, options.mode_idx),
-		options.tolerance, true, "filled_centroid");
+	return PushFilledMetric(L, MeasureFilledPath(ParseFilled(L, 1, options.mode_idx), options.tolerance),
+		true, "filled_centroid");
 }
 
 int ShapeContainsPoint(lua_State *L) {

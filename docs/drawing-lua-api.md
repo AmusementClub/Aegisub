@@ -67,7 +67,8 @@ result into an ASS tag or event. Path methods mutate the object, so use
   `filled_centroid`,
   `contains_point`, and `contains_rect`.
 - Path length and position methods share a lazy segment-measurement cache.
-  Geometry mutations invalidate it automatically.
+  `filled_area` and `filled_centroid` share a separate cache for the requested
+  tolerance. Geometry mutations invalidate both automatically.
 - `ass()` emits open ASS for an open path and checked compact filled ASS for a
   filled path. `filled_ass()` and `open_ass()` select the output explicitly;
   `fill()` and `open()` change the default.

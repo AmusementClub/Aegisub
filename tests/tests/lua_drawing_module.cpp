@@ -422,6 +422,23 @@ TEST(lua_drawing_module, exposes_filled_topology_metrics) {
 		assert(near(path:filled_area(), 150))
 		x, y = path:filled_centroid()
 		assert(near(x, 7.5) and near(y, 5))
+		assert(near(path:filled_area(), 150))
+		path:scale(2, 1)
+		assert(near(path:filled_area(), 300))
+		x, y = path:filled_centroid()
+		assert(near(x, 15) and near(y, 5))
+
+		local curved = drawing.filled_path('m 0 0 b 0 20 20 20 20 0')
+		local coarse_area = curved:filled_area(10)
+		local fine_area = curved:filled_area(0.01)
+		assert(math.abs(coarse_area - fine_area) > 0.01)
+		assert(near(curved:filled_area(0.01), fine_area))
+		curved:scale(2, 1)
+		assert(near(curved:filled_area(0.01), fine_area * 2))
+
+		local empty = drawing.filled_path()
+		assert(empty:filled_area() == nil)
+		assert(empty:filled_centroid() == nil)
 		assert(drawing.filled_area('') == nil)
 	)");
 }

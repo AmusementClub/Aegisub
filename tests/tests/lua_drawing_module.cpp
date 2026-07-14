@@ -84,6 +84,28 @@ TEST(lua_drawing_module, path_userdata_serializes_once_after_chained_geometry) {
 	)");
 }
 
+TEST(lua_drawing_module, path_userdata_exposes_bounds_and_serialization_modes) {
+	auto L = MakeLuaState();
+	RunLua(L.get(), R"(
+		local drawing = require 'aegisub.drawing'
+		local path = drawing.path('m 10 10 l 0 10 0 0 10 0 10 10')
+		local open_ass = path:open_ass()
+		local filled_ass = path:filled_ass()
+		assert(open_ass ~= filled_ass)
+		assert(path:ass() == open_ass)
+		path:fill()
+		assert(path:ass() == filled_ass)
+		path:open()
+		assert(path:ass() == open_ass)
+
+		local curve = drawing.path('m 0 0 b 0 10 10 10 10 0')
+		local x, y, width, height = curve:control_bounds()
+		assert(x == 0 and y == 0 and width == 10 and height == 10)
+		x, y, width, height = curve:bounds()
+		assert(x == 0 and y == 0 and width == 10 and height == 7.5)
+	)");
+}
+
 TEST(lua_drawing_module, preloads_original_shape_lua_compatibility_surface) {
 	auto L = MakeLuaState();
 	RunLua(L.get(), R"(
@@ -465,5 +487,62 @@ TEST(lua_drawing_module, path_measurement_cache_follows_mutations) {
 		path:translate(10, 0)
 		x, y = path:point_at_percent(0.5)
 		assert(near(x, 13) and near(y, 4))
+
+		local reversed = drawing.path('m 0 0 l 10 0')
+		x, y = reversed:point_at_percent(0.25)
+		assert(near(x, 2.5) and near(y, 0))
+		reversed:reverse()
+		x, y = reversed:point_at_percent(0.25)
+		assert(near(x, 7.5) and near(y, 0))
+
+		local curve = drawing.path('m 0 0 b 0 10 10 10 10 0')
+		local curve_length = curve:length()
+		curve:flatten(100)
+		assert(curve:length() < curve_length - 1)
+
+		local arc = drawing.path('m 20 5')
+		assert(near(arc:length(), 0))
+		arc:arc_to(0, 0, 20, 10, 0, 90)
+		assert(arc:length() > 10)
+	)");
+
+	if (agi::ass::drawing::DrawingSkiaBackendAvailable()) {
+		RunLua(L.get(), R"(
+			local drawing = require 'aegisub.drawing'
+			local function near(a, b)
+				return math.abs(a - b) < 0.000001
+			end
+
+			local combined = drawing.rect(0, 0, 10, 10)
+			assert(near(combined:filled_area(), 100))
+			combined:unite(drawing.rect(5, 0, 10, 10))
+			assert(near(combined:filled_area(), 150))
+
+			local stroked = drawing.path('m 0 0 l 10 0')
+			assert(stroked:filled_area() == nil)
+			stroked:outline(2, 'flat', 'bevel')
+			assert(near(stroked:filled_area(), 20))
+
+			local arc = drawing.filled_path('m 20 5')
+			assert(arc:filled_area() == nil)
+			arc:arc_to(0, 0, 20, 10, 0, 90)
+			assert(arc:filled_area() > 0)
+		)");
+	}
+}
+
+TEST(lua_drawing_module, path_userdata_is_reclaimed_across_gc_cycles) {
+	auto L = MakeLuaState();
+	RunLua(L.get(), R"(
+		local drawing = require 'aegisub.drawing'
+		for index = 1, 1000 do
+			local path = drawing.rect(index, index, 10, 10)
+			path:length()
+			if index % 25 == 0 then
+				collectgarbage('collect')
+			end
+		end
+		collectgarbage('collect')
+		collectgarbage('collect')
 	)");
 }

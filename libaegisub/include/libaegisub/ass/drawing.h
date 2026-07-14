@@ -153,9 +153,11 @@ double LegacyPercentAtLength(PathData const& path, double distance);
 bool TryGetLegacyPositionAtPercent(PathData const& path, double percent, Point& point, Point& tangent);
 bool TryGetPositionAtLength(PathData const& path, double distance, Point& point, Point& tangent);
 bool TryGetSignedAreaAndCentroid(PathData const& path, double& signed_area, Point& centroid, double tolerance = 0.25);
+// Shape constructors normalize negative dimensions into a positive rectangle.
 PathData MakeRect(double x, double y, double width, double height);
 PathData MakeEllipse(double x, double y, double width, double height);
 PathData MakeRoundedRect(double x, double y, double width, double height, double radius_x, double radius_y);
+// Arc helpers preserve signed dimensions, which mirror the ellipse axes.
 void AppendArcMoveTo(PathData& path, double x, double y, double width, double height, double angle);
 void AppendArcTo(PathData& path, double x, double y, double width, double height, double start_angle, double sweep_length);
 bool DrawingBackendAvailable();

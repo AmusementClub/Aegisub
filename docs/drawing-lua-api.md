@@ -68,7 +68,7 @@ result into an ASS tag or event. Path methods mutate the object, so use
   `contains_point`, and `contains_rect`.
 - Path length and position methods share a lazy segment-measurement cache.
   `filled_area` and `filled_centroid` share a separate cache for the requested
-  tolerance. Geometry mutations invalidate both automatically.
+  tolerance and fill rule. Geometry mutations invalidate both automatically.
 - `ass()` emits open ASS for an open path and checked compact filled ASS for a
   filled path. `filled_ass()` and `open_ass()` select the output explicitly;
   `fill()` and `open()` change the default.
@@ -158,6 +158,12 @@ These names are exposed for script compatibility:
 - `shape_point_at_percent(shape, percent[, mode]) -> x, y`
 - `shape_angle_at_percent(shape, percent[, mode]) -> degrees`
 - `shape_slope_at_percent(shape, percent[, mode]) -> number`
+
+Rectangle-based constructors and arc helpers intentionally use different
+signed-dimension conventions. `rect`, `ellipse`, and `rounded_rect` normalize a
+negative width or height by moving the rectangle origin. `arc_move_to` and
+`arc_to` preserve signed dimensions, so a negative width or height mirrors the
+ellipse around the corresponding axis.
 
 The four percent-based `shape_*` aliases reproduce the legacy QPainterPath
 semantics. Segment ranges are allocated according to measured arc length, but

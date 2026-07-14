@@ -713,7 +713,9 @@ std::string CompactSegmentKey(CompactSegment const& segment) {
 	return key;
 }
 
-std::vector<std::size_t> CyclicSegmentRanks(std::vector<CompactSegment> const& segments) {
+// Rank every cyclic rotation with prefix doubling so mixed contours have a
+// stable final tie-breaker without comparing every full rotation.
+std::vector<std::size_t> RankCyclicSegmentRotations(std::vector<CompactSegment> const& segments) {
 	std::size_t count = segments.size();
 	std::vector<std::string> keys;
 	std::vector<std::size_t> order(count);
@@ -782,7 +784,7 @@ bool TryAppendCompactMixedContour(PathData& result, PathData const& path, Contou
 	});
 	if (!has_cubic)
 		return false;
-	auto cyclic_ranks = CyclicSegmentRanks(segments);
+	auto cyclic_ranks = RankCyclicSegmentRotations(segments);
 
 	std::size_t cyclic_transitions = 0;
 	for (std::size_t index = 0; index < segments.size(); ++index) {

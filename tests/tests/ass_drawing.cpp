@@ -316,6 +316,12 @@ TEST(lagi_ass_drawing, builds_basic_shapes_without_backend_dependencies) {
 	Rect bounds;
 
 	EXPECT_EQ("m 0 0 l 10 0 10 10 0 10", SerializeAssFilled(MakeRect(0.0, 0.0, 10.0, 10.0)));
+	EXPECT_EQ(SerializeAssFilled(MakeRect(0.0, 0.0, 20.0, 10.0)),
+		SerializeAssFilled(MakeRect(20.0, 0.0, -20.0, 10.0)));
+	EXPECT_EQ(SerializeAssFilled(MakeEllipse(0.0, 0.0, 20.0, 10.0)),
+		SerializeAssFilled(MakeEllipse(20.0, 10.0, -20.0, -10.0)));
+	EXPECT_EQ(SerializeAssFilled(MakeRoundedRect(0.0, 0.0, 20.0, 10.0, 3.0, 2.0)),
+		SerializeAssFilled(MakeRoundedRect(20.0, 10.0, -20.0, -10.0, 3.0, 2.0)));
 	ASSERT_TRUE(TryGetBounds(MakeEllipse(0.0, 0.0, 20.0, 10.0), bounds));
 	ExpectRect(bounds, 0.0, 0.0, 20.0, 10.0);
 	ASSERT_TRUE(TryGetBounds(MakeRoundedRect(0.0, 0.0, 20.0, 10.0, 3.0, 2.0), bounds));
@@ -742,6 +748,20 @@ TEST(lagi_ass_drawing, skia_backend_normalizes_filled_topology_for_metrics) {
 	ExpectPoint(centroid, 20.0, 20.0);
 }
 
+TEST(lagi_ass_drawing, skia_backend_reports_degenerate_fill_metrics_as_success) {
+	if (!DrawingSkiaBackendAvailable())
+		GTEST_SKIP() << "drawing Skia backend is not enabled";
+
+	double area = 1.0;
+	Point centroid {1.0, 1.0};
+	bool measurable = true;
+	ASSERT_TRUE(TryDrawingFilledAreaAndCentroid(
+		ParseAss("m 0 0 l 10 0"), 0.25, area, centroid, measurable));
+	EXPECT_FALSE(measurable);
+	EXPECT_DOUBLE_EQ(0.0, area);
+	ExpectPoint(centroid, 0.0, 0.0);
+}
+
 TEST(lagi_ass_drawing, skia_backend_generates_outlines) {
 	if (!DrawingSkiaBackendAvailable())
 		GTEST_SKIP() << "drawing Skia backend is not enabled";
@@ -931,6 +951,9 @@ TEST(lagi_ass_drawing, skia_backend_handles_degenerate_outline_parameters) {
 	ASSERT_TRUE(TryDrawingContainsRect(MakeRect(0.0, 0.0, 10.0, 10.0), 1.0, 1.0, 0.0, 2.0, contains));
 	EXPECT_FALSE(contains);
 	ASSERT_TRUE(TryDrawingContainsRect(MakeRect(0.0, 0.0, 10.0, 10.0), 1.0, 1.0, -2.0, 2.0, contains));
+	EXPECT_FALSE(contains);
+	ASSERT_TRUE(TryDrawingContainsRect(MakeRect(0.0, 0.0, 10.0, 10.0),
+		std::numeric_limits<double>::max(), 1.0, 1.0, 1.0, contains));
 	EXPECT_FALSE(contains);
 	EXPECT_FALSE(TryDrawingContainsRect(MakeRect(0.0, 0.0, 10.0, 10.0),
 		1.0, 1.0, std::numeric_limits<double>::quiet_NaN(), 2.0, contains));

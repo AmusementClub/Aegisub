@@ -27,6 +27,7 @@ char const *const kDrawingPathMetatable = "aegisub.drawing.path";
 
 struct FilledMetrics {
 	double tolerance = 0.25;
+	bool winding_fill = true;
 	bool operation_succeeded = false;
 	bool measurable = false;
 	double area = 0.0;
@@ -120,6 +121,7 @@ PathMeasure const& MeasureDrawingPath(LuaDrawingPath& path) {
 FilledMetrics MeasureFilledPath(PathData const& path, double tolerance) {
 	FilledMetrics metrics;
 	metrics.tolerance = tolerance;
+	metrics.winding_fill = path.winding_fill;
 	metrics.operation_succeeded = agi::ass::drawing::TryDrawingFilledAreaAndCentroid(
 		path, tolerance, metrics.area, metrics.centroid, metrics.measurable);
 	return metrics;
@@ -130,7 +132,9 @@ bool SameTolerance(double lhs, double rhs) {
 }
 
 FilledMetrics const& MeasureFilledDrawingPath(LuaDrawingPath& path, double tolerance) {
-	if (!path.filled_metrics || !SameTolerance(path.filled_metrics->tolerance, tolerance))
+	if (!path.filled_metrics ||
+		!SameTolerance(path.filled_metrics->tolerance, tolerance) ||
+		path.filled_metrics->winding_fill != path.path.winding_fill)
 		path.filled_metrics = MeasureFilledPath(path.path, tolerance);
 	return *path.filled_metrics;
 }

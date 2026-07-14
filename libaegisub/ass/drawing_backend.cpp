@@ -27,6 +27,9 @@ namespace {
 constexpr SkScalar kStrokeMiterLimit = 2.0f;
 constexpr SkScalar kStrokeResScale = 1.0f;
 constexpr SkScalar kDashStrokeResScale = 2.0f;
+// Filled area is measured in squared drawing units. This deliberately loose
+// floor rejects near-cancelled contour sums whose centroid would be unstable.
+constexpr double kFilledAreaEpsilon = 1e-9;
 
 struct BackendDomain {
 	bool has_point = false;
@@ -548,7 +551,7 @@ bool TrySkPathFilledAreaAndCentroid(SkPath const& source,
 		moment_y += (info[index].centroid.y - reference.y) * weight;
 	}
 
-	if (!(weighted_area > kPointEpsilon) || !std::isfinite(weighted_area))
+	if (!(weighted_area > kFilledAreaEpsilon) || !std::isfinite(weighted_area))
 		return true;
 	area = weighted_area;
 	centroid = {
@@ -556,7 +559,7 @@ bool TrySkPathFilledAreaAndCentroid(SkPath const& source,
 		reference.y + moment_y / weighted_area,
 	};
 	measurable = std::isfinite(centroid.x) && std::isfinite(centroid.y);
-	return measurable;
+	return true;
 }
 
 } // namespace
@@ -616,6 +619,8 @@ bool TryDrawingContainsRect(PathData const& path, double x, double y, double wid
 	SkPoint top_left;
 	SkScalar sk_width = static_cast<SkScalar>(width);
 	SkScalar sk_height = static_cast<SkScalar>(height);
+	// The path domain was converted successfully around the same origin, so an
+	// unrepresentable top-left point is necessarily outside its bounds.
 	if (!coordinates.ToSkPoint({x, y}, top_left))
 		return true;
 	if (!(sk_width > 0.0f) || !(sk_height > 0.0f) || !std::isfinite(sk_width) || !std::isfinite(sk_height))

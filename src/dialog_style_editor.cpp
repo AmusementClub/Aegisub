@@ -148,6 +148,10 @@ using TrimmedDoubleSpinCtrl = wxSpinCtrlDouble;
 #endif
 }
 
+static constexpr int    EmptyMargin = 0;  //AssStyle::DefaultMargin
+static constexpr double EmptyOutlineWidth = 0.; // AssStyle::DefaultOutlineWidth
+static constexpr double EmptyShadowWidth = 0.; // AssStyle::DefaultShadowWidth
+
 /// Style rename helper that walks a file searching for a style and optionally
 /// updating references to it
 class StyleRenamer {
@@ -301,8 +305,8 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 			wxDefaultPosition, wxDefaultSize,
 			wxSP_ARROW_KEYS, AssStyle::MinMargin, AssStyle::MaxMargin, style->Margin[i]);
 		BindEmptyDefault(margin[i], wxEVT_SPINCTRL, [=] {
-			margin[i]->SetValue(AssStyle::DefaultMargin);
-			work->Margin[i] = AssStyle::DefaultMargin;
+			margin[i]->SetValue(EmptyMargin);
+			work->Margin[i] = EmptyMargin;
 			if (!updating)
 				SubsPreview->SetStyle(*work);
 		});
@@ -314,8 +318,8 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	}
 
 	Alignment = new wxRadioBox(this, -1, _("Alignment"), wxDefaultPosition, wxDefaultSize, 9, alignValues, 3, wxRA_SPECIFY_COLS);
-	auto Outline = num_text_ctrl(&work->outline_w, 0.0, 1000.0, 0.1, AssStyle::DefaultOutlineWidth);
-	auto Shadow = num_text_ctrl(&work->shadow_w, 0.0, 1000.0, 0.1, AssStyle::DefaultShadowWidth);
+	auto Outline = num_text_ctrl(&work->outline_w, 0.0, 1000.0, 0.1, EmptyOutlineWidth);
+	auto Shadow = num_text_ctrl(&work->shadow_w, 0.0, 1000.0, 0.1, EmptyShadowWidth);
 	OutlineType = new wxCheckBox(this, -1, _("&Opaque box"));
 	auto ScaleX = num_text_ctrl(&work->scalex, 0.0, 10000.0, 0.1, AssStyle::DefaultScale);
 	auto ScaleY = num_text_ctrl(&work->scaley, 0.0, 10000.0, 0.1, AssStyle::DefaultScale);
@@ -589,7 +593,7 @@ void DialogStyleEditor::Apply(bool apply, bool close) {
 void DialogStyleEditor::UpdateWorkStyle() {
 	for (size_t i = 0; i < 3; ++i) {
 		if (IsBlank(margin[i]->GetTextValue()))
-			margin[i]->SetValue(AssStyle::DefaultMargin);
+			margin[i]->SetValue(EmptyMargin);
 	}
 
 	updating = true;

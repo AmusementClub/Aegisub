@@ -133,13 +133,29 @@ MkvTextSubtitleCodec ClassifyMkvTextSubtitleCodec(std::string_view codec_id) {
 	return MkvTextSubtitleCodec::Unsupported;
 }
 
+MkvBitmapSubtitleCodec ClassifyMkvBitmapSubtitleCodec(std::string_view codec_id) {
+	return codec_id == "S_HDMV/PGS"
+		? MkvBitmapSubtitleCodec::HdmvPgs
+		: MkvBitmapSubtitleCodec::Unsupported;
+}
+
 bool IsSupportedMkvTextSubtitleCodec(std::string_view codec_id) {
 	return ClassifyMkvTextSubtitleCodec(codec_id) != MkvTextSubtitleCodec::Unsupported;
+}
+
+bool IsSupportedMkvBitmapSubtitleCodec(std::string_view codec_id) {
+	return ClassifyMkvBitmapSubtitleCodec(codec_id) != MkvBitmapSubtitleCodec::Unsupported;
 }
 
 bool IsImportableMkvSubtitleTrack(MkvTrackInfo const& track) {
 	return track.type == MkvTrackType::Subtitle
 		&& track.subtitle_codec != MkvTextSubtitleCodec::Unsupported
+		&& track.unsupported_content_encoding_reason.empty();
+}
+
+bool IsDecodableMkvBitmapSubtitleTrack(MkvTrackInfo const& track) {
+	return track.type == MkvTrackType::Subtitle
+		&& track.bitmap_subtitle_codec != MkvBitmapSubtitleCodec::Unsupported
 		&& track.unsupported_content_encoding_reason.empty();
 }
 

@@ -21,6 +21,7 @@ class AssDialogue;
 class AssFile;
 class AsyncVideoProvider;
 class WatchedFile;
+struct SecondarySubtitlePacketStream;
 struct VideoRenderPacket;
 
 /// A secondary-subtitle source recorded for fast switching within the
@@ -33,6 +34,7 @@ struct LoadedSecondarySource {
 	/// Held subtitle data. Only populated for VideoEmbedded (external sources
 	/// are re-read from disk on activation); always non-null when present.
 	std::unique_ptr<AssFile> held_subtitle;
+	std::shared_ptr<const SecondarySubtitlePacketStream> held_bitmap_subtitle;
 	std::string video_origin; ///< Video path the source was extracted from; empty for ExternalFile
 	/// Whether this source's subtitles should be scaled to the video resolution
 	/// on every resolve (true for formats without an intrinsic PlayRes, e.g.
@@ -63,12 +65,12 @@ class SecondarySubtitleSession final {
 	std::unique_ptr<agi::BackgroundRunner> background_runner;
 	std::unique_ptr<AsyncVideoProvider> provider;
 	std::unique_ptr<AssFile> external_subtitles;
+	std::shared_ptr<const SecondarySubtitlePacketStream> bitmap_subtitles;
 	std::unique_ptr<WatchedFile> external_subtitle_watch;
 	SecondarySubtitleSourceMode source_mode = SecondarySubtitleSourceMode::CurrentScript;
 	std::string external_subtitle_path;
 	std::string loaded_external_subtitle_path;
 	bool external_subtitles_follow_video_resolution = false;
-	bool external_subtitles_use_plugin_provider = false;
 	// Guards the "video has embedded subtitles" auto-prompt so it asks at most
 	// once per video. Reset whenever the video provider changes.
 	bool video_embedded_auto_prompted = false;
@@ -92,6 +94,7 @@ class SecondarySubtitleSession final {
 
 	void RegisterExternalSource(agi::fs::path const& path);
 	void RegisterVideoEmbeddedSource(agi::fs::path const& video_path, std::string const& track_label, AssFile const& subtitles, bool follow_video_resolution);
+	void RegisterVideoEmbeddedBitmapSource(agi::fs::path const& video_path, std::string const& track_label, std::shared_ptr<const SecondarySubtitlePacketStream> subtitles);
 	void RemoveVideoEmbeddedSources(std::string const& except_video);
 
 	wxBitmap current_bitmap;
@@ -119,7 +122,6 @@ class SecondarySubtitleSession final {
 	void SyncConfiguredSubtitlesSource(AsyncVideoProvider *main_provider = nullptr);
 	bool LoadConfiguredExternalSubtitles(bool show_errors, bool force_reload = false);
 	bool LoadExternalSubtitlesFromPath(std::string const& path_string, bool show_errors);
-	bool ShouldUsePluginProviderForExternalFile(std::string const& path_string) const;
 	void UpdateExternalSubtitleResolution(AsyncVideoProvider *main_provider);
 	bool LoadVideoEmbeddedSubtitles(bool show_errors, std::string *selected_track_label = nullptr);
 	void OnVideoHasSubtitlesAvailable();

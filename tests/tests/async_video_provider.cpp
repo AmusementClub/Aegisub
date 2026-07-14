@@ -214,6 +214,23 @@ public:
 	}
 };
 
+class ThrowingOverlaySubtitlesProvider final : public SubtitlesProvider {
+	void LoadSubtitles(const char *, size_t) override { }
+
+public:
+	SubtitleRenderMode GetRenderMode() const override {
+		return SubtitleRenderMode::PremultipliedOverlay;
+	}
+
+	bool RenderOverlay(SourceFrame const&, SubtitleOverlay&, double) override {
+		throw agi::InternalError("synthetic overlay render failure");
+	}
+
+	void DrawSubtitles(VideoFrame &, double) override {
+		FAIL() << "legacy subtitle path should not be used";
+	}
+};
+
 class FakeGeometryAwareOverlaySubtitlesProvider final : public SubtitlesProvider {
 public:
 	int load_calls = 0;
@@ -514,6 +531,7 @@ class EventRecorder {
 	std::mutex mutex;
 	std::condition_variable cv;
 	std::vector<RecordedFrame> frames;
+	std::vector<std::string> subtitle_errors;
 
 public:
 	void operator()(VideoRenderPacket packet, double time) {
@@ -539,6 +557,13 @@ public:
 		sink.on_frame_ready = [this](VideoRenderPacket packet, double time) {
 			(*this)(std::move(packet), time);
 		};
+		sink.on_subtitles_error = [this](std::string const& message) {
+			{
+				std::lock_guard<std::mutex> lock(mutex);
+				subtitle_errors.push_back(message);
+			}
+			cv.notify_all();
+		};
 		return sink;
 	}
 
@@ -550,6 +575,16 @@ public:
 	std::vector<RecordedFrame> Snapshot() {
 		std::lock_guard<std::mutex> lock(mutex);
 		return frames;
+	}
+
+	bool WaitForSubtitleErrorCount(size_t count) {
+		std::unique_lock<std::mutex> lock(mutex);
+		return cv.wait_for(lock, std::chrono::seconds(2), [&] { return subtitle_errors.size() >= count; });
+	}
+
+	std::vector<std::string> SubtitleErrors() {
+		std::lock_guard<std::mutex> lock(mutex);
+		return subtitle_errors;
 	}
 };
 
@@ -590,8 +625,6 @@ std::unique_ptr<VideoProvider> VideoProviderFactory::GetProvider(agi::fs::path c
 	return nullptr;
 }
 std::vector<std::string> SubtitlesProviderFactory::GetClasses() { return {}; }
-bool SubtitlesProviderFactory::HasExternalFileProviderFor(agi::fs::path const&) { return false; }
-std::vector<std::string> SubtitlesProviderFactory::GetExternalFileProviderWildcards() { return {}; }
 std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(SubtitleRenderEnvironment const& env) {
 	g_last_factory_background_runner = env.background_runner;
 	g_last_factory_transient_fonts = env.transient_fonts;
@@ -1200,6 +1233,27 @@ TEST(async_video_provider, update_subtitles_reuses_latest_synchronous_render_fra
 
 	std::lock_guard<std::mutex> lock(state->mutex);
 	EXPECT_EQ((std::vector<int>{ 1, 9 }), state->requested_frames);
+}
+
+TEST(async_video_provider, overlay_renderer_exceptions_use_subtitle_error_sink_and_queue_recovers) {
+	auto state = std::make_shared<VideoProviderState>();
+	EventRecorder recorder;
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		agi::make_unique<ThrowingOverlaySubtitlesProvider>(),
+		recorder);
+
+	auto subtitles = MakeSubtitleFile("failure path");
+	provider.LoadSubtitles(&subtitles);
+	provider.RequestFrame(1, 1000);
+	ASSERT_TRUE(recorder.WaitForSubtitleErrorCount(1));
+
+	provider.RequestFrame(2, 2000);
+	ASSERT_TRUE(recorder.WaitForSubtitleErrorCount(2));
+	auto errors = recorder.SubtitleErrors();
+	ASSERT_EQ(2u, errors.size());
+	EXPECT_NE(std::string::npos, errors[0].find("synthetic overlay render failure"));
+	EXPECT_NE(std::string::npos, errors[1].find("synthetic overlay render failure"));
 }
 
 TEST(async_video_provider, update_subtitles_uses_external_current_frame_context) {

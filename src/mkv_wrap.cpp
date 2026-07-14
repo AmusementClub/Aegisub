@@ -303,30 +303,37 @@ MkvTrackScanResult MatroskaWrapper::ScanTracks(agi::fs::path const&) {
 	throw MatroskaException("Track scanning is unavailable with the legacy Matroska parser backend.");
 }
 
-bool MatroskaWrapper::HasSubtitles(agi::fs::path const& filename) {
+MkvSubtitleAvailability MatroskaWrapper::GetSubtitleAvailability(agi::fs::path const& filename) {
 	LogMkvParserBackendOnce();
-
 	char err[2048];
 	try {
 		MkvStdIO input(filename);
 		agi::scoped_holder<MatroskaFile*, decltype(&mkv_Close)> file(mkv_Open(&input, err, sizeof(err)), mkv_Close);
-		if (!file) return false;
+		if (!file) return {};
 
-		// Find tracks
-		auto tracks = mkv_GetNumTracks(file);
-		for (unsigned track = 0; track < tracks; ++track) {
-			auto trackInfo = mkv_GetTrackInfo(file, track);
-
-			if (trackInfo->Type == 0x11 && !trackInfo->CompEnabled) {
-				std::string CodecID(trackInfo->CodecID);
-				if (CodecID == "S_TEXT/SSA" || CodecID == "S_TEXT/ASS" || CodecID == "S_TEXT/UTF8")
-					return true;
-			}
+		for (unsigned track = 0; track < mkv_GetNumTracks(file); ++track) {
+			auto track_info = mkv_GetTrackInfo(file, track);
+			if (track_info->Type != 0x11 || track_info->CompEnabled)
+				continue;
+			std::string codec_id(track_info->CodecID);
+			if (codec_id == "S_TEXT/SSA" || codec_id == "S_TEXT/ASS" || codec_id == "S_TEXT/UTF8")
+				return { true, false };
 		}
 	}
-	catch (...) {
-		// We don't care about why we couldn't read subtitles here
-	}
+	catch (...) { }
+	return {};
+}
 
-	return false;
+void MatroskaWrapper::GetTextSubtitlesForTrack(agi::fs::path const&, uint64_t, AssFile *, std::shared_ptr<agi::BackgroundRunnerFactory>) {
+	LogMkvParserBackendOnce();
+	throw MatroskaException("Track-specific subtitle loading is unavailable with the legacy Matroska parser backend.");
+}
+
+SecondarySubtitlePacketStream MatroskaWrapper::GetBitmapSubtitlePacketsForTrack(agi::fs::path const&, uint64_t, std::shared_ptr<agi::BackgroundRunnerFactory>) {
+	LogMkvParserBackendOnce();
+	throw MatroskaException("Bitmap subtitle extraction is unavailable with the legacy Matroska parser backend.");
+}
+
+bool MatroskaWrapper::HasSubtitles(agi::fs::path const& filename) {
+	return GetSubtitleAvailability(filename).text;
 }

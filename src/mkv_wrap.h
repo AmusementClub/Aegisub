@@ -23,6 +23,7 @@
 #include <libaegisub/fs_fwd.h>
 
 #include "mkv_wrap_common.h"
+#include "secondary_subtitle_packet_stream.h"
 
 #include <memory>
 #include <string>
@@ -39,6 +40,8 @@ public:
 	static bool HasSubtitles(agi::fs::path const& filename);
 	/// Scan all tracks in a Matroska file and return their metadata
 	static MkvTrackScanResult ScanTracks(agi::fs::path const& filename);
+	/// Report text and bitmap subtitle availability without importing a track.
+	static MkvSubtitleAvailability GetSubtitleAvailability(agi::fs::path const& filename);
 	/// Load subtitles from a matroska file
 	/// @param secondary_track_choice when true the multi-track choice dialog is
 	///        labelled as loading into the secondary subtitle strip.
@@ -46,4 +49,8 @@ public:
 	///        description of the track that was actually imported (the same
 	///        string shown in the track-choice dialog).
 	static void GetSubtitles(agi::fs::path const& filename, AssFile *target, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory = {}, bool secondary_track_choice = false, std::string *selected_track_label = nullptr);
+	/// Load one already-selected text subtitle track.
+	static void GetTextSubtitlesForTrack(agi::fs::path const& filename, uint64_t track_number, AssFile *target, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory = {});
+	/// Extract one already-selected PGS track as normalized packets.
+	static SecondarySubtitlePacketStream GetBitmapSubtitlePacketsForTrack(agi::fs::path const& filename, uint64_t track_number, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory = {});
 };

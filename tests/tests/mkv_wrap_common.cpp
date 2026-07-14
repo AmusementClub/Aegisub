@@ -52,6 +52,13 @@ TEST(mkv_wrap_common, classify_supported_codecs) {
 	EXPECT_EQ(MkvTextSubtitleCodec::Unsupported, ClassifyMkvTextSubtitleCodec("S_TEXT/WEBVTT"));
 }
 
+TEST(mkv_wrap_common, classify_supported_bitmap_codecs) {
+	EXPECT_EQ(MkvBitmapSubtitleCodec::HdmvPgs, ClassifyMkvBitmapSubtitleCodec("S_HDMV/PGS"));
+	EXPECT_EQ(MkvBitmapSubtitleCodec::Unsupported, ClassifyMkvBitmapSubtitleCodec("S_VOBSUB"));
+	EXPECT_TRUE(IsSupportedMkvBitmapSubtitleCodec("S_HDMV/PGS"));
+	EXPECT_FALSE(IsSupportedMkvBitmapSubtitleCodec("S_TEXT/ASS"));
+}
+
 TEST(mkv_wrap_common, classify_track_types) {
 	EXPECT_EQ(MkvTrackType::Video, ClassifyMkvTrackType(0x1));
 	EXPECT_EQ(MkvTrackType::Audio, ClassifyMkvTrackType(0x2));

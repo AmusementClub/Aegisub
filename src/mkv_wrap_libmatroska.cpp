@@ -279,15 +279,6 @@ std::string describe_content_encodings(std::vector<MkvContentEncoding> const& en
 	return joined;
 }
 
-bool has_content_encoding_target(std::vector<MkvContentEncoding> const& encodings, MkvContentEncodingTarget target) {
-	auto const mask = target == MkvContentEncodingTarget::Block
-		? kMkvContentEncodingScopeBlock
-		: kMkvContentEncodingScopePrivate;
-	return std::any_of(encodings.begin(), encodings.end(), [&](auto const& encoding) {
-		return (encoding.scope & mask) != 0;
-	});
-}
-
 void append_block_lines(MkvTrackInfo const& track, RawBlockPayload const& raw_block, bool have_duration, uint64_t duration_units, std::vector<std::pair<int, std::string>> &lines, int &fallback_sort_key, uint64_t segment_timecode_scale) {
 	if (raw_block.packets.empty())
 		return;
@@ -322,6 +313,39 @@ void append_block_lines(MkvTrackInfo const& track, RawBlockPayload const& raw_bl
 
 		if (frame_count > 1 && track.default_duration)
 			start_ns += track.default_duration;
+	}
+}
+
+void append_block_packets(MkvTrackInfo const& track, RawBlockPayload const& raw_block, bool have_duration, uint64_t duration_units, uint64_t segment_timecode_scale, std::vector<SecondarySubtitlePacket>& packets) {
+	if (raw_block.packets.empty())
+		return;
+
+	auto pts_ns = raw_block.start_ns;
+	auto const frame_count = raw_block.packets.size();
+	auto const block_duration = have_duration
+		? scale_block_duration_ns(duration_units, segment_timecode_scale, track.timecode_scale)
+		: 0;
+	uint64_t per_frame_duration = 0;
+	if (block_duration && frame_count == 1)
+		per_frame_duration = block_duration;
+	else if (track.default_duration)
+		per_frame_duration = track.default_duration;
+	else if (block_duration && frame_count > 0)
+		per_frame_duration = block_duration / frame_count;
+
+	for (size_t index = 0; index < frame_count; ++index) {
+		SecondarySubtitlePacket packet;
+		packet.pts_ns = pts_ns > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())
+			? std::numeric_limits<int64_t>::max()
+			: static_cast<int64_t>(pts_ns);
+		packet.duration_ns = per_frame_duration > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())
+			? std::numeric_limits<int64_t>::max()
+			: static_cast<int64_t>(per_frame_duration);
+		packet.payload = raw_block.packets[index];
+		packets.emplace_back(std::move(packet));
+		pts_ns = per_frame_duration > std::numeric_limits<uint64_t>::max() - pts_ns
+			? std::numeric_limits<uint64_t>::max()
+			: pts_ns + per_frame_duration;
 	}
 }
 
@@ -596,6 +620,7 @@ Cursor parse_track_entry(EbmlStream &stream, EbmlElement &entry_element, MkvTrac
 			value.ReadData(stream.I_O());
 			track.codec_id = value.GetValue();
 			track.subtitle_codec = ClassifyMkvTextSubtitleCodec(track.codec_id);
+			track.bitmap_subtitle_codec = ClassifyMkvBitmapSubtitleCodec(track.codec_id);
 		}
 		else if (EbmlId(child) == EBML_ID(libmatroska::KaxTrackLanguage)) {
 			auto &value = *static_cast<libmatroska::KaxTrackLanguage*>(cursor.element.get());
@@ -767,6 +792,18 @@ std::vector<MkvTrackInfo const*> collect_importable_subtitle_tracks(MkvTrackScan
 	return tracks;
 }
 
+std::vector<MkvTrackInfo const*> collect_bitmap_subtitle_tracks(MkvTrackScanResult const& scan, bool log_tracks) {
+	std::vector<MkvTrackInfo const*> tracks;
+	for (auto const& track : scan.tracks) {
+		if (!IsDecodableMkvBitmapSubtitleTrack(track))
+			continue;
+		if (log_tracks)
+			LOG_I(kMkvLogSection) << "Found packet-backed MKV subtitle track " << track.track_number << " (" << track.codec_id << ")";
+		tracks.push_back(&track);
+	}
+	return tracks;
+}
+
 Cursor parse_block_group(EbmlStream &stream, EbmlElement &group_element, libmatroska::KaxCluster &cluster, MkvTrackInfo const& track, std::vector<std::pair<int, std::string>> &lines, int &fallback_sort_key, uint64_t segment_timecode_scale) {
 	auto const& group_context = EBML_CONTEXT(&group_element);
 	auto cursor = next_child(stream, group_context);
@@ -796,6 +833,35 @@ Cursor parse_block_group(EbmlStream &stream, EbmlElement &group_element, libmatr
 	if (raw_block)
 		append_block_lines(track, *raw_block, have_duration, duration_units, lines, fallback_sort_key, segment_timecode_scale);
 
+	return cursor;
+}
+
+Cursor parse_packet_block_group(EbmlStream &stream, EbmlElement &group_element, libmatroska::KaxCluster &cluster, MkvTrackInfo const& track, uint64_t segment_timecode_scale, std::vector<SecondarySubtitlePacket>& packets) {
+	auto const& group_context = EBML_CONTEXT(&group_element);
+	auto cursor = next_child(stream, group_context);
+	std::optional<RawBlockPayload> raw_block;
+	uint64_t duration_units = 0;
+	bool have_duration = false;
+
+	while (cursor.element && cursor.upper <= 0) {
+		if (EbmlId(*cursor.element) == EBML_ID(libmatroska::KaxBlockDuration)) {
+			auto &duration = *static_cast<libmatroska::KaxBlockDuration*>(cursor.element.get());
+			duration.ReadData(stream.I_O());
+			duration_units = duration.GetValue();
+			have_duration = true;
+		}
+		else if (EbmlId(*cursor.element) == EBML_ID(libmatroska::KaxBlock)) {
+			auto &block = *static_cast<libmatroska::KaxBlock*>(cursor.element.get());
+			raw_block = read_selected_block(stream, block, cluster, track);
+		}
+		else {
+			cursor.element->SkipData(stream, EBML_CONTEXT(cursor.element.get()));
+		}
+		cursor = next_child(stream, group_context);
+	}
+
+	if (raw_block)
+		append_block_packets(track, *raw_block, have_duration, duration_units, segment_timecode_scale, packets);
 	return cursor;
 }
 
@@ -871,11 +937,185 @@ void import_track(agi::fs::path const& filename, MkvTrackInfo const& track, uint
 		}
 	}
 }
+
+void import_packet_track(agi::fs::path const& filename, MkvTrackInfo const& track, uint64_t segment_timecode_scale, agi::ProgressSink *ps, std::vector<SecondarySubtitlePacket>& packets) {
+	PathIOCallback input(filename);
+	EbmlStream stream(input);
+	auto segment = open_segment(stream);
+	if (!segment)
+		throw MatroskaException("File is not a Matroska file.");
+
+	auto const file_size = std::max<uint64_t>(agi::fs::Size(filename), 1);
+	auto const& segment_context = EBML_CONTEXT(segment.get());
+	auto cursor = next_child(stream, segment_context);
+
+	while (cursor.element && cursor.upper <= 0) {
+		throw_if_cancelled(ps);
+		if (EbmlId(*cursor.element) == EBML_ID(libmatroska::KaxCluster)) {
+			auto &cluster = *static_cast<libmatroska::KaxCluster*>(cursor.element.get());
+			auto const& cluster_context = EBML_CONTEXT(cursor.element.get());
+			auto child = next_child(stream, cluster_context);
+			bool cluster_initialized = false;
+
+			while (child.element && child.upper <= 0) {
+				throw_if_cancelled(ps);
+				if (EbmlId(*child.element) == EBML_ID(libmatroska::KaxClusterTimecode)) {
+					auto &timestamp = *static_cast<libmatroska::KaxClusterTimecode*>(child.element.get());
+					timestamp.ReadData(stream.I_O());
+					cluster.InitTimecode(timestamp.GetValue(), segment_timecode_scale);
+					cluster_initialized = true;
+					child = next_child(stream, cluster_context);
+				}
+				else if (EbmlId(*child.element) == EBML_ID(libmatroska::KaxBlockGroup)) {
+					if (cluster_initialized)
+						child = continue_after_nested(stream, cluster_context, parse_packet_block_group(stream, *child.element, cluster, track, segment_timecode_scale, packets));
+					else {
+						child.element->SkipData(stream, EBML_CONTEXT(child.element.get()));
+						child = next_child(stream, cluster_context);
+					}
+				}
+				else if (EbmlId(*child.element) == EBML_ID(libmatroska::KaxSimpleBlock)) {
+					if (cluster_initialized) {
+						auto &block = *static_cast<libmatroska::KaxSimpleBlock*>(child.element.get());
+						auto raw_block = read_selected_block(stream, block, cluster, track);
+						if (raw_block)
+							append_block_packets(track, *raw_block, false, 0, segment_timecode_scale, packets);
+						child = next_child(stream, cluster_context);
+					}
+					else {
+						child.element->SkipData(stream, EBML_CONTEXT(child.element.get()));
+						child = next_child(stream, cluster_context);
+					}
+				}
+				else {
+					child.element->SkipData(stream, EBML_CONTEXT(child.element.get()));
+					child = next_child(stream, cluster_context);
+				}
+
+				if (ps)
+					ps->SetProgress(stream.I_O().getFilePointer(), file_size);
+			}
+			cursor = continue_after_nested(stream, segment_context, std::move(child));
+		}
+		else {
+			cursor.element->SkipData(stream, EBML_CONTEXT(cursor.element.get()));
+			cursor = next_child(stream, segment_context);
+		}
+	}
+}
+
+void load_text_track(agi::fs::path const& filename, MkvTrackInfo const& track, uint64_t segment_timecode_scale, AssFile *target, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory) {
+	target->SetTransientFonts({});
+	LOG_I(kMkvLogSection) << "Importing MKV subtitle track " << track.track_number << " (" << track.codec_id << ") from " << agi::fs::PathToString(filename);
+	if (!track.content_encodings.empty())
+		LOG_I(kMkvLogSection) << "Decoding MKV content encodings for track " << track.track_number << ": " << describe_content_encodings(track.content_encodings);
+
+	AssParser parser(target, track.subtitle_codec != MkvTextSubtitleCodec::Ssa);
+	if (track.subtitle_codec == MkvTextSubtitleCodec::Utf8) {
+		LoadDefaultAssFileWithAppOptions(*target, false, GetSubtitleFormatDefaultStyleCatalog("SRT"));
+	}
+	else {
+		std::string decoded_error;
+		auto decoded_codec_private = DecodeMkvContentEncodedData(track.codec_private, track.content_encodings, MkvContentEncodingTarget::Private, &decoded_error);
+		if (!decoded_codec_private) {
+			throw MatroskaException(agi::format(
+				"Failed to decode MKV CodecPrivate for track %u: %s",
+				static_cast<unsigned>(track.track_number), decoded_error));
+		}
+		for (auto const& line : SplitMkvCodecPrivateLines(*decoded_codec_private))
+			parser.AddLine(line);
+	}
+	parser.AddLine("[Events]");
+
+	std::vector<std::pair<int, std::string>> lines;
+	std::shared_ptr<TransientFontSet> transient_fonts;
+	std::string error;
+	auto runner_factory = background_runner_factory ? std::move(background_runner_factory) : std::make_shared<agi::InlineBackgroundRunnerFactory>();
+	auto runner = runner_factory->Create(_("Parsing Matroska"), _("Reading subtitles from Matroska file."));
+	runner->Run([&](agi::ProgressSink *ps) {
+		try {
+			import_track(filename, track, segment_timecode_scale, ps, lines, transient_fonts);
+		}
+		catch (agi::UserCancelException const&) { throw; }
+		catch (agi::Exception const& e) { error = e.GetMessage(); ps->Log(error); }
+		catch (std::exception const& e) { error = e.what(); ps->Log(error); }
+		catch (...) { error = "Unknown Matroska parsing error."; ps->Log(error); }
+	});
+	if (!error.empty())
+		throw MatroskaException(error);
+
+	std::stable_sort(lines.begin(), lines.end(), [](auto const& left, auto const& right) { return left.first < right.first; });
+	for (auto &line : lines)
+		parser.AddLine(line.second);
+	target->SetTransientFonts(transient_fonts);
+	LOG_I(kMkvLogSection) << "Imported " << lines.size() << " subtitle lines from MKV track " << track.track_number;
+}
 }
 
 MkvTrackScanResult MatroskaWrapper::ScanTracks(agi::fs::path const& filename) {
 	LogMkvParserBackendOnce();
 	return scan_tracks(filename);
+}
+
+MkvSubtitleAvailability MatroskaWrapper::GetSubtitleAvailability(agi::fs::path const& filename) {
+	LogMkvParserBackendOnce();
+	try {
+		auto scan = scan_tracks(filename);
+		return {
+			!collect_importable_subtitle_tracks(scan, false).empty(),
+			!collect_bitmap_subtitle_tracks(scan, false).empty()
+		};
+	}
+	catch (...) {
+		return {};
+	}
+}
+
+void MatroskaWrapper::GetTextSubtitlesForTrack(agi::fs::path const& filename, uint64_t track_number, AssFile *target, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory) {
+	LogMkvParserBackendOnce();
+	auto scan = scan_tracks(filename);
+	auto track = std::find_if(scan.tracks.begin(), scan.tracks.end(), [&](MkvTrackInfo const& value) {
+		return value.track_number == track_number && IsImportableMkvSubtitleTrack(value);
+	});
+	if (track == scan.tracks.end())
+		throw MatroskaException("Selected Matroska text subtitle track is unavailable.");
+	load_text_track(filename, *track, scan.segment_timecode_scale, target, std::move(background_runner_factory));
+}
+
+SecondarySubtitlePacketStream MatroskaWrapper::GetBitmapSubtitlePacketsForTrack(agi::fs::path const& filename, uint64_t track_number, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory) {
+	LogMkvParserBackendOnce();
+	auto scan = scan_tracks(filename);
+	auto track = std::find_if(scan.tracks.begin(), scan.tracks.end(), [&](MkvTrackInfo const& value) {
+		return value.track_number == track_number && IsDecodableMkvBitmapSubtitleTrack(value);
+	});
+	if (track == scan.tracks.end() || track->bitmap_subtitle_codec != MkvBitmapSubtitleCodec::HdmvPgs)
+		throw MatroskaException("Selected Matroska bitmap subtitle track is unavailable.");
+
+	SecondarySubtitlePacketStream stream;
+	stream.codec_id = kSecondarySubtitleCodecHdmvPgs;
+	std::string decoded_error;
+	auto codec_private = DecodeMkvContentEncodedData(track->codec_private, track->content_encodings, MkvContentEncodingTarget::Private, &decoded_error);
+	if (!codec_private)
+		throw MatroskaException("Failed to decode Matroska subtitle CodecPrivate: " + decoded_error);
+	stream.codec_private = std::move(*codec_private);
+
+	std::string error;
+	auto runner_factory = background_runner_factory ? std::move(background_runner_factory) : std::make_shared<agi::InlineBackgroundRunnerFactory>();
+	auto runner = runner_factory->Create(_("Parsing Matroska"), _("Reading bitmap subtitles from Matroska file."));
+	runner->Run([&](agi::ProgressSink *ps) {
+		try {
+			import_packet_track(filename, *track, scan.segment_timecode_scale, ps, stream.packets);
+		}
+		catch (agi::UserCancelException const&) { throw; }
+		catch (agi::Exception const& e) { error = e.GetMessage(); ps->Log(error); }
+		catch (std::exception const& e) { error = e.what(); ps->Log(error); }
+		catch (...) { error = "Unknown Matroska packet extraction error."; ps->Log(error); }
+	});
+	if (!error.empty())
+		throw MatroskaException(error);
+	if (stream.packets.empty())
+		throw MatroskaException("Selected Matroska PGS track contains no packets.");
+	return stream;
 }
 
 void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *target, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory, bool secondary_track_choice, std::string *selected_track_label) {
@@ -908,91 +1148,9 @@ void MatroskaWrapper::GetSubtitles(agi::fs::path const& filename, AssFile *targe
 	if (selected_track_label)
 		*selected_track_label = DescribeMkvTrack(*selected_track);
 
-	LOG_I(kMkvLogSection) << "Importing MKV subtitle track " << selected_track->track_number << " (" << selected_track->codec_id << ") from " << agi::fs::PathToString(filename);
-	if (!selected_track->content_encodings.empty())
-		LOG_I(kMkvLogSection) << "Decoding MKV content encodings for track " << selected_track->track_number << ": " << describe_content_encodings(selected_track->content_encodings);
-
-	AssParser parser(target, selected_track->subtitle_codec != MkvTextSubtitleCodec::Ssa);
-	if (selected_track->subtitle_codec == MkvTextSubtitleCodec::Utf8) {
-		LoadDefaultAssFileWithAppOptions(*target, false, GetSubtitleFormatDefaultStyleCatalog("SRT"));
-	}
-	else {
-		std::string decoded_error;
-		auto decoded_codec_private = DecodeMkvContentEncodedData(
-			selected_track->codec_private,
-			selected_track->content_encodings,
-			MkvContentEncodingTarget::Private,
-			&decoded_error);
-		if (!decoded_codec_private) {
-			throw MatroskaException(agi::format(
-				"Failed to decode MKV CodecPrivate for track %u: %s",
-				static_cast<unsigned>(selected_track->track_number),
-				decoded_error));
-		}
-		if (has_content_encoding_target(selected_track->content_encodings, MkvContentEncodingTarget::Private)) {
-			LOG_I(kMkvLogSection) << "Decoded MKV CodecPrivate for track " << selected_track->track_number;
-		}
-		for (auto const& line : SplitMkvCodecPrivateLines(*decoded_codec_private))
-			parser.AddLine(line);
-	}
-	parser.AddLine("[Events]");
-
-	std::vector<std::pair<int, std::string>> lines;
-	std::shared_ptr<TransientFontSet> transient_fonts;
-	std::string error;
-
-	auto runner_factory = background_runner_factory ? std::move(background_runner_factory) : std::make_shared<agi::InlineBackgroundRunnerFactory>();
-	auto runner = runner_factory->Create(
-		_("Parsing Matroska"),
-		_("Reading subtitles from Matroska file."));
-	runner->Run([&](agi::ProgressSink *ps) {
-		try {
-			import_track(filename, *selected_track, scan.segment_timecode_scale, ps, lines, transient_fonts);
-		}
-		catch (agi::UserCancelException const&) {
-			throw;
-		}
-		catch (agi::Exception const& e) {
-			error = e.GetMessage();
-			ps->Log(error);
-		}
-		catch (std::exception const& e) {
-			error = e.what();
-			ps->Log(error);
-		}
-		catch (...) {
-			error = "Unknown Matroska parsing error.";
-			ps->Log(error);
-		}
-	});
-
-	if (!error.empty())
-		throw MatroskaException(error);
-
-	std::stable_sort(lines.begin(), lines.end(), [](auto const& left, auto const& right) {
-		return left.first < right.first;
-	});
-
-	for (auto &line : lines)
-		parser.AddLine(line.second);
-
-	target->SetTransientFonts(transient_fonts);
-	if (transient_fonts && !transient_fonts->empty()) {
-		LOG_I(kMkvLogSection) << "Collected " << transient_fonts->fonts.size()
-			<< " transient MKV font attachment(s) for track " << selected_track->track_number
-			<< ", generation " << transient_fonts->generation;
-	}
-
-	LOG_I(kMkvLogSection) << "Imported " << lines.size() << " subtitle lines from MKV track " << selected_track->track_number;
+	load_text_track(filename, *selected_track, scan.segment_timecode_scale, target, std::move(background_runner_factory));
 }
 
 bool MatroskaWrapper::HasSubtitles(agi::fs::path const& filename) {
-	LogMkvParserBackendOnce();
-
-	try {
-		return !collect_importable_subtitle_tracks(scan_tracks(filename), false).empty();
-	}
-	catch (...) {
-		return false;
-	}
+	return GetSubtitleAvailability(filename).text;
 }

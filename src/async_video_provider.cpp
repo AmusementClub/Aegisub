@@ -37,6 +37,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <exception>
+#include <string>
 
 enum {
 	NEW_SUBS_FILE = -1,
@@ -569,6 +571,19 @@ VideoRenderPacket AsyncVideoProvider::ProcRenderPacket(int frame_number, double 
 		}
 	}
 	catch (agi::UserCancelException const&) { }
+	catch (AsyncVideoProviderSubtitlesError const&) { throw; }
+	catch (agi::Exception const& err) {
+		throw AsyncVideoProviderSubtitlesError(err.GetMessage());
+	}
+	catch (std::string const& err) {
+		throw AsyncVideoProviderSubtitlesError(err);
+	}
+	catch (std::exception const& err) {
+		throw AsyncVideoProviderSubtitlesError(err.what());
+	}
+	catch (...) {
+		throw AsyncVideoProviderSubtitlesError("Unknown subtitle renderer error.");
+	}
 
 	return packet;
 }

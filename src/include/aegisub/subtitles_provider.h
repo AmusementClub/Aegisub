@@ -77,14 +77,10 @@ struct SubtitleRenderEnvironment {
 	agi::BackgroundRunner *background_runner = nullptr;
 	std::shared_ptr<const TransientFontSet> transient_fonts;
 	std::string preferred_provider;
-	agi::fs::path external_subtitle_file;
-	bool require_external_file_provider = false;
 };
 
 struct SubtitlesProviderFactory {
 	static std::unique_ptr<SubtitlesProvider> GetProvider(SubtitleRenderEnvironment const& env);
-	static aegisub::provider_catalog::ProviderCatalog GetCatalog(std::string const& preferred_provider = {}, bool external_file_providers = false);
+	static aegisub::provider_catalog::ProviderCatalog GetCatalog(std::string const& preferred_provider = {});
 	static std::vector<std::string> GetClasses();
-	static bool HasExternalFileProviderFor(agi::fs::path const& filename);
-	static std::vector<std::string> GetExternalFileProviderWildcards();
 };

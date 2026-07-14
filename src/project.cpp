@@ -701,11 +701,13 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 		perf_trace::ObserveVideoMemorySnapshot("video_provider_ready", snapshot, true);
 	}
 
+	MkvSubtitleAvailability subtitle_availability;
 	auto opened_video = aegisub::video_session_ops::BuildOpenedVideoSummary(
 		*video_provider,
 		path,
-		[](agi::fs::path const& candidate) {
-			return MatroskaWrapper::HasSubtitles(candidate);
+		[&](agi::fs::path const& candidate) {
+			subtitle_availability = MatroskaWrapper::GetSubtitleAvailability(candidate);
+			return subtitle_availability.text;
 		});
 
 	timecodes_file.clear();
@@ -715,6 +717,7 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 	// embedded-subtitles flag before notifying them.
 	SetPath(video_file, "?video", "Video", path);
 	video_has_subtitles = opened_video.has_subtitles;
+	video_has_bitmap_subtitles = subtitle_availability.bitmap;
 
 	AnnounceVideoProviderModified(video_provider.get());
 
@@ -781,6 +784,7 @@ void Project::CloseVideo() {
 	auto core = context->GetCore();
 	// Clear state before notifying so listeners see the closed video.
 	video_has_subtitles = false;
+	video_has_bitmap_subtitles = false;
 	AnnounceVideoProviderModified(nullptr);
 	video_provider.reset();
 	can_generate_scene_change_keyframes = false;

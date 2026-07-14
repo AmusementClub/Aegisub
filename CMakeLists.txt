@@ -789,7 +789,7 @@ set(AEGISUB_CORE_SOURCES
     src/paste_over_policy.cpp
     # Subtitle rendering providers
     # Provider dependency audit:
-    # - core-owned now: subtitles_provider.cpp/libass/plugin; dependencies are
+    # - core-owned now: subtitles_provider.cpp/libass/secondary decoder; dependencies are
     #   wx-free metadata/catalog, options, libass, native_library, dispatch,
     #   SourceFrame/SubtitleOverlay, and BackgroundRunner.
     # - core-owned now: built-in Dummy/YUV4MPEG plus FFMS and LSMAS concrete
@@ -806,10 +806,11 @@ set(AEGISUB_CORE_SOURCES
     # clusters owned by aegisub_core. AVS still registers at the host edge so
     # app startup controls provider availability and registry finalization.
     src/audio_provider_factory.cpp
+    src/pgs_sup_packet_stream.cpp
+    src/secondary_subtitle_decoder.cpp
     src/subtitle_overlay_blend.cpp
     src/subtitles_provider.cpp
     src/subtitles_provider_libass.cpp
-    src/subtitles_provider_plugin.cpp
     src/video_provider_manager.cpp
     src/video_provider_dummy.cpp
     src/video_provider_cache.cpp

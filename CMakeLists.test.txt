@@ -74,6 +74,7 @@ if(GTEST_FOUND)
         src/locale_choice.cpp
         src/locale_pick.cpp
         src/mkv_wrap_common.cpp
+        src/pgs_sup_packet_stream.cpp
         libaegisub/common/native_library.cpp
         src/numeric_utils.cpp
         src/perf_trace.cpp
@@ -142,6 +143,7 @@ if(GTEST_FOUND)
         tests/tests/lua_drawing_module.cpp
         tests/tests/lua_script_reader.cpp
         tests/tests/mkv_wrap_common.cpp
+        tests/tests/pgs_sup_packet_stream.cpp
         tests/tests/media_load_precheck.cpp
         tests/tests/native_library.cpp
         tests/tests/text_file_writer.cpp

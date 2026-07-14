@@ -1432,7 +1432,7 @@ TEST(host_boundary_policy, aegisub_core_sources_keep_host_coupled_clusters_out) 
 		"src/subtitle_overlay_blend.cpp",
 		"src/subtitles_provider.cpp",
 		"src/subtitles_provider_libass.cpp",
-		"src/subtitles_provider_plugin.cpp",
+		"src/secondary_subtitle_decoder.cpp",
 		"src/video_provider_manager.cpp",
 		"src/video_provider_cache.cpp",
 		"src/video_provider_dummy.cpp",
@@ -1667,7 +1667,7 @@ TEST(host_boundary_policy, concrete_subtitle_provider_cluster_is_core_owned_and_
 		root / "src" / "include" / "aegisub" / "subtitles_provider.h",
 		root / "src" / "subtitles_provider.cpp",
 		root / "src" / "subtitles_provider_libass.cpp",
-		root / "src" / "subtitles_provider_plugin.cpp",
+		root / "src" / "secondary_subtitle_decoder.cpp",
 		root / "src" / "provider_catalog_builder.h",
 		root / "src" / "provider_catalog_builder.cpp",
 		root / "src" / "provider_factory_entry.h",
@@ -1678,7 +1678,7 @@ TEST(host_boundary_policy, concrete_subtitle_provider_cluster_is_core_owned_and_
 	for (auto const& source : {
 		"src/subtitles_provider.cpp",
 		"src/subtitles_provider_libass.cpp",
-		"src/subtitles_provider_plugin.cpp",
+		"src/secondary_subtitle_decoder.cpp",
 		"src/provider_catalog_builder.cpp",
 		"src/provider_open_policy.cpp",
 	}) {
@@ -1691,7 +1691,7 @@ TEST(host_boundary_policy, concrete_subtitle_provider_cluster_is_core_owned_and_
 	}
 
 	EXPECT_FALSE(FindLiteralHits(cmake_lists, "Provider dependency audit:").empty());
-	EXPECT_FALSE(FindLiteralHits(cmake_lists, "core-owned now: subtitles_provider.cpp/libass/plugin").empty());
+	EXPECT_FALSE(FindLiteralHits(cmake_lists, "core-owned now: subtitles_provider.cpp/libass/secondary decoder").empty());
 	EXPECT_FALSE(FindLiteralHits(cmake_lists, "core-owned now: audio/video provider managers").empty());
 	EXPECT_FALSE(FindLiteralHits(cmake_lists, "host-owned for now: playback/controllers/render display pieces").empty());
 }

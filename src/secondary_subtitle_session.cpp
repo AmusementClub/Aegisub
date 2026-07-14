@@ -18,8 +18,11 @@
 #include "mkv_wrap.h"
 #include "options.h"
 #include "project.h"
+#include "pgs_sup_packet_stream.h"
+#include "secondary_subtitle_decoder.h"
 #include "subs_controller.h"
 #include "subtitle_format.h"
+#include "track_choice.h"
 #include "ui_services.h"
 #include "video_controller.h"
 #include "video_frame_wx.h"
@@ -37,6 +40,7 @@
 #include <algorithm>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <wx/app.h>
 #include <wx/bitmap.h>
 #include <wx/intl.h>
@@ -92,9 +96,9 @@ void SecondarySubtitleSession::ClearBitmap() {
 
 void SecondarySubtitleSession::ClearExternalSubtitles() {
 	external_subtitles.reset();
+	bitmap_subtitles.reset();
 	loaded_external_subtitle_path.clear();
 	external_subtitles_follow_video_resolution = false;
-	external_subtitles_use_plugin_provider = false;
 }
 
 void SecondarySubtitleSession::ReleaseProvider() {
@@ -213,7 +217,7 @@ AssFile *SecondarySubtitleSession::ResolveSubtitlesForProvider(AsyncVideoProvide
 		UpdateExternalSubtitleResolution(main_provider);
 		return external_subtitles.get();
 	}
-	if (external_subtitles_use_plugin_provider)
+	if (bitmap_subtitles)
 		return nullptr;
 
 	if (LoadConfiguredExternalSubtitles(false)) {
@@ -235,11 +239,10 @@ void SecondarySubtitleSession::SyncConfiguredSubtitlesSource(AsyncVideoProvider 
 	else {
 		AssFile empty_subtitles;
 		provider->LoadSubtitles(&empty_subtitles);
-		// Plugin providers decode from external files; their overlay
-		// may still be valid while the file is being re-read.
+		// Bitmap decoders consume packet streams rather than AssFile data.
 		// Only clear the bitmap for ASS-based providers that load
 		// their data through this call.
-		if (!external_subtitles_use_plugin_provider)
+		if (!bitmap_subtitles)
 			ClearBitmap();
 	}
 }
@@ -248,35 +251,26 @@ bool SecondarySubtitleSession::LoadConfiguredExternalSubtitles(bool show_errors,
 	auto path_string = external_subtitle_path;
 	if (path_string.empty())
 		return false;
-	if (ShouldUsePluginProviderForExternalFile(path_string)) {
-		external_subtitles.reset();
-		loaded_external_subtitle_path = path_string;
-		external_subtitles_follow_video_resolution = false;
-		external_subtitles_use_plugin_provider = true;
-		return true;
-	}
-
-	if (!force_reload && external_subtitles && loaded_external_subtitle_path == path_string)
+	if (!force_reload && (external_subtitles || bitmap_subtitles) && loaded_external_subtitle_path == path_string)
 		return true;
 
 	return LoadExternalSubtitlesFromPath(path_string, show_errors);
 }
 
-bool SecondarySubtitleSession::ShouldUsePluginProviderForExternalFile(std::string const& path_string) const {
-	return SubtitlesProviderFactory::HasExternalFileProviderFor(agi::fs::PathFromString(path_string));
-}
-
 bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& path_string, bool show_errors) {
-	if (ShouldUsePluginProviderForExternalFile(path_string)) {
-		external_subtitles.reset();
-		loaded_external_subtitle_path = path_string;
-		external_subtitles_follow_video_resolution = false;
-		external_subtitles_use_plugin_provider = true;
-		return true;
-	}
-
 	auto const path = agi::fs::PathFromString(path_string);
 	try {
+		if (IsPgsSupSubtitlePath(path)) {
+			if (!secondary_subtitle_decoder::IsAvailable(kSecondarySubtitleCodecHdmvPgs))
+				throw agi::EnvironmentError("No PGS decoder plugin is available in the runtimes directory.");
+			auto stream = std::make_shared<SecondarySubtitlePacketStream>(ReadPgsSupPacketStream(path));
+			external_subtitles.reset();
+			bitmap_subtitles = std::move(stream);
+			loaded_external_subtitle_path = path_string;
+			external_subtitles_follow_video_resolution = false;
+			return true;
+		}
+
 		auto charset = CharSetDetect::GetEncoding(path, context->GetSingleChoiceInteractionSink());
 		auto const *reader = SubtitleFormat::GetReader(path, charset);
 		if (!reader)
@@ -299,9 +293,9 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 
 		external_subtitles = agi::make_unique<AssFile>();
 		external_subtitles->swap(temp);
+		bitmap_subtitles.reset();
 		loaded_external_subtitle_path = path_string;
 		external_subtitles_follow_video_resolution = follow_video_resolution;
-		external_subtitles_use_plugin_provider = false;
 		return true;
 	}
 	catch (agi::UserCancelException const&) {
@@ -344,13 +338,64 @@ bool SecondarySubtitleSession::LoadVideoEmbeddedSubtitles(bool show_errors, std:
 
 	try {
 		AssFile temp;
-		MatroskaWrapper::GetSubtitles(
-			video_path,
-			&temp,
-			context->GetSingleChoiceInteractionSink(),
-			core.backgroundRunnerFactory,
-			/*secondary_track_choice=*/true,
-			selected_track_label);
+		std::optional<MkvTrackScanResult> scanned_tracks;
+		try {
+			scanned_tracks = MatroskaWrapper::ScanTracks(video_path);
+		}
+		catch (MatroskaException const&) {
+			// The legacy Matroska backend cannot scan or load a numbered track.
+			// Preserve its existing text-only path.
+			MatroskaWrapper::GetSubtitles(
+				video_path, &temp, context->GetSingleChoiceInteractionSink(),
+				core.backgroundRunnerFactory, true, selected_track_label);
+		}
+
+		if (scanned_tracks) {
+			std::vector<MkvTrackInfo const*> candidates;
+			bool const bitmap_decoder_available = secondary_subtitle_decoder::IsAvailable(kSecondarySubtitleCodecHdmvPgs);
+			for (auto const& track : scanned_tracks->tracks) {
+				if (IsImportableMkvSubtitleTrack(track)
+					|| (bitmap_decoder_available && IsDecodableMkvBitmapSubtitleTrack(track))) {
+					candidates.push_back(&track);
+				}
+			}
+			if (candidates.empty())
+				throw MatroskaException("File has no supported secondary subtitle tracks.");
+
+			auto const *selected = candidates.front();
+			if (candidates.size() > 1) {
+				std::vector<std::string> choices;
+				choices.reserve(candidates.size());
+				for (auto const *track : candidates)
+					choices.emplace_back(DescribeMkvTrack(*track));
+				auto choice = context->GetSingleChoiceInteractionSink()->RequestSingleChoice(
+					aegisub::track_choice::BuildRequest(aegisub::track_choice::DialogKind::Subtitle, choices, true));
+				auto resolved = aegisub::track_choice::ResolveSelection(candidates.size(), choice);
+				if (!resolved)
+					throw agi::UserCancelException("canceled");
+				selected = candidates[*resolved];
+			}
+
+			if (selected_track_label)
+				*selected_track_label = DescribeMkvTrack(*selected);
+			if (IsDecodableMkvBitmapSubtitleTrack(*selected)) {
+				auto packet_stream = MatroskaWrapper::GetBitmapSubtitlePacketsForTrack(
+					video_path, selected->track_number, core.backgroundRunnerFactory);
+				if (auto *main_provider = core.project->VideoProvider()) {
+					packet_stream.fallback_canvas_width = main_provider->GetWidth();
+					packet_stream.fallback_canvas_height = main_provider->GetHeight();
+				}
+				external_subtitles.reset();
+				bitmap_subtitles = std::make_shared<SecondarySubtitlePacketStream>(std::move(packet_stream));
+				loaded_external_subtitle_path.clear();
+				external_subtitles_follow_video_resolution = false;
+				external_subtitle_path.clear();
+				return true;
+			}
+
+			MatroskaWrapper::GetTextSubtitlesForTrack(
+				video_path, selected->track_number, &temp, core.backgroundRunnerFactory);
+		}
 
 		auto const follow_video_resolution = temp.GetResolutionType(ScriptResolutionType::PlayRes) == ScriptResolutionType::None;
 		if (follow_video_resolution) {
@@ -360,9 +405,9 @@ bool SecondarySubtitleSession::LoadVideoEmbeddedSubtitles(bool show_errors, std:
 
 		external_subtitles = agi::make_unique<AssFile>();
 		external_subtitles->swap(temp);
+		bitmap_subtitles.reset();
 		loaded_external_subtitle_path.clear();
 		external_subtitles_follow_video_resolution = follow_video_resolution;
-		external_subtitles_use_plugin_provider = false;
 		external_subtitle_path.clear();
 		return true;
 	}
@@ -393,7 +438,7 @@ void SecondarySubtitleSession::OnVideoHasSubtitlesAvailable() {
 		return;
 
 	auto core = context->GetCore();
-	if (!core.project->CanLoadSubtitlesFromVideo())
+	if (!CanOpenVideoEmbedded())
 		return;
 
 	// Claim the prompt now so a second provider-changed notification arriving
@@ -424,7 +469,7 @@ void SecondarySubtitleSession::OnVideoHasSubtitlesAvailable() {
 			return;
 		if (!OPT_GET("Video/Secondary Subtitles/Auto Load From Video")->GetBool())
 			return;
-		if (!context->GetCore().project->CanLoadSubtitlesFromVideo())
+		if (!CanOpenVideoEmbedded())
 			return;
 
 		auto answer = wxMessageBox(
@@ -465,11 +510,9 @@ void SecondarySubtitleSession::RebuildProvider(AsyncVideoProvider *main_provider
 		render_environment.background_runner = background_runner.get();
 		render_environment.transient_fonts = subtitles ? subtitles->GetTransientFonts() : core.ass->GetTransientFonts();
 		render_environment.preferred_provider = OPT_GET("Video/Secondary Subtitles/Provider")->GetString();
-		if (source_mode == SecondarySubtitleSourceMode::ExternalFile && external_subtitles_use_plugin_provider) {
-			render_environment.external_subtitle_file = agi::fs::PathFromString(external_subtitle_path);
-			render_environment.require_external_file_provider = true;
-		}
-		auto subtitles_provider = SubtitlesProviderFactory::GetProvider(render_environment);
+		auto subtitles_provider = bitmap_subtitles
+			? secondary_subtitle_decoder::Create(bitmap_subtitles)
+			: SubtitlesProviderFactory::GetProvider(render_environment);
 		auto dummy_video_provider = agi::make_unique<DummyVideoProvider>(
 			main_provider->GetFPS().FPS(),
 			main_provider->GetFrameCount(),
@@ -603,12 +646,9 @@ void SecondarySubtitleSession::OnSubtitlesError(std::string const& message) {
 }
 
 bool SecondarySubtitleSession::OpenExternalSubtitles() {
-	auto external_plugin_wildcards = SubtitlesProviderFactory::GetExternalFileProviderWildcards();
 	auto wildcards = SubtitleFormat::GetWildcards(0);
-	if (!external_plugin_wildcards.empty()) {
-		auto joined = agi::util::strings::join(external_plugin_wildcards, ";");
-		wildcards = "Dynamic Subtitle Plugins (" + agi::util::strings::join(external_plugin_wildcards, ",") + ")|" + joined + "|" + wildcards;
-	}
+	if (secondary_subtitle_decoder::IsAvailable(kSecondarySubtitleCodecHdmvPgs))
+		wildcards = "PGS bitmap subtitles (*.sup,*.pgs)|*.sup;*.pgs|" + wildcards;
 	// Prepend "All files" so the dialog defaults to showing everything
 	// instead of filtering to the first entry.
 	wildcards = "All files (*.*)|*.*|" + wildcards;
@@ -656,7 +696,10 @@ bool SecondarySubtitleSession::OpenExternalSubtitlesFromPath(agi::fs::path const
 }
 
 bool SecondarySubtitleSession::CanOpenVideoEmbedded() const {
-	return context->GetCore().project->CanLoadSubtitlesFromVideo();
+	auto const& project = *context->GetCore().project;
+	return project.CanLoadSubtitlesFromVideo()
+		|| (project.CanLoadBitmapSubtitlesFromVideo()
+			&& secondary_subtitle_decoder::IsAvailable(kSecondarySubtitleCodecHdmvPgs));
 }
 
 bool SecondarySubtitleSession::OpenVideoEmbeddedSubtitles() {
@@ -665,7 +708,7 @@ bool SecondarySubtitleSession::OpenVideoEmbeddedSubtitles() {
 		context->ShowError("Open a video first.", kSecondarySubtitleWarningTitle);
 		return false;
 	}
-	if (!core.project->CanLoadSubtitlesFromVideo()) {
+	if (!CanOpenVideoEmbedded()) {
 		context->ShowError("The current video has no embedded subtitle tracks.", kSecondarySubtitleWarningTitle);
 		return false;
 	}
@@ -682,6 +725,11 @@ bool SecondarySubtitleSession::OpenVideoEmbeddedSubtitles() {
 		auto const video_path = core.project->VideoName();
 		if (!video_path.empty())
 			RegisterVideoEmbeddedSource(video_path, selected_track_label, *external_subtitles, external_subtitles_follow_video_resolution);
+	}
+	else if (bitmap_subtitles) {
+		auto const video_path = core.project->VideoName();
+		if (!video_path.empty())
+			RegisterVideoEmbeddedBitmapSource(video_path, selected_track_label, bitmap_subtitles);
 	}
 	if (active)
 		RebuildProvider(core.project->VideoProvider());
@@ -701,12 +749,13 @@ bool SecondarySubtitleSession::ReloadSubtitles() {
 		bool const reloaded = LoadVideoEmbeddedSubtitles(true, &selected_track_label);
 		// Refresh the snapshot so switching away and back no longer resurrects
 		// the pre-reload track; also reflects a re-picked track's label/policy.
-		if (reloaded && external_subtitles
+		if (reloaded && (external_subtitles || bitmap_subtitles)
 			&& current_source_index != static_cast<size_t>(-1)
 			&& current_source_index < loaded_sources.size()
 			&& loaded_sources[current_source_index].kind == LoadedSecondarySource::Kind::VideoEmbedded) {
 			auto &src = loaded_sources[current_source_index];
-			src.held_subtitle = agi::make_unique<AssFile>(*external_subtitles);
+			src.held_subtitle = external_subtitles ? agi::make_unique<AssFile>(*external_subtitles) : nullptr;
+			src.held_bitmap_subtitle = bitmap_subtitles;
 			src.follow_video_resolution = external_subtitles_follow_video_resolution;
 			if (!selected_track_label.empty())
 				src.label = from_wx(_("embedded")) + " " + selected_track_label;
@@ -824,6 +873,16 @@ void SecondarySubtitleSession::RegisterVideoEmbeddedSource(agi::fs::path const& 
 	current_source_index = loaded_sources.size() - 1;
 }
 
+void SecondarySubtitleSession::RegisterVideoEmbeddedBitmapSource(agi::fs::path const& video_path, std::string const& track_label, std::shared_ptr<const SecondarySubtitlePacketStream> subtitles) {
+	LoadedSecondarySource src;
+	src.kind = LoadedSecondarySource::Kind::VideoEmbedded;
+	src.label = from_wx(_("embedded")) + " " + track_label;
+	src.held_bitmap_subtitle = std::move(subtitles);
+	src.video_origin = agi::fs::PathToString(video_path);
+	loaded_sources.push_back(std::move(src));
+	current_source_index = loaded_sources.size() - 1;
+}
+
 void SecondarySubtitleSession::RemoveVideoEmbeddedSources(std::string const& except_video) {
 	auto const had_active = current_source_index != static_cast<size_t>(-1)
 		&& current_source_index < loaded_sources.size();
@@ -868,13 +927,13 @@ void SecondarySubtitleSession::ActivateLoadedSource(size_t index) {
 	}
 
 	// VideoEmbedded: switch from the held copy without re-extracting.
-	if (!src.held_subtitle)
+	if (!src.held_subtitle && !src.held_bitmap_subtitle)
 		return;
 
-	external_subtitles = agi::make_unique<AssFile>(*src.held_subtitle);
+	external_subtitles = src.held_subtitle ? agi::make_unique<AssFile>(*src.held_subtitle) : nullptr;
+	bitmap_subtitles = src.held_bitmap_subtitle;
 	source_mode = SecondarySubtitleSourceMode::VideoEmbedded;
 	external_subtitle_path.clear();
-	external_subtitles_use_plugin_provider = false;
 	// Restore this source's own resolution policy rather than inheriting a stale
 	// value from the previously-active source. SRT-style tracks (no intrinsic
 	// PlayRes) keep following the video resolution; ASS/SSA tracks keep their
@@ -895,7 +954,13 @@ void SecondarySubtitleSession::OnExternalSubtitleFileChanged(agi::fs::path const
 	if (!LoadConfiguredExternalSubtitles(false, true))
 		return;
 
-	if (provider) {
+	// Text providers can replace their AssFile in place. A bitmap provider owns
+	// the decoder session created from the previous immutable packet stream, so
+	// a changed SUP/PGS file requires a new provider/session.
+	if (provider && bitmap_subtitles) {
+		RebuildProvider(context->GetCore().project->VideoProvider());
+	}
+	else if (provider) {
 		SyncConfiguredSubtitlesSource(context->GetCore().project->VideoProvider());
 		RequestFrame(context->GetCore().videoController->GetFrameN());
 	}

@@ -27,6 +27,11 @@ enum class MkvTextSubtitleCodec {
 	Utf8,
 };
 
+enum class MkvBitmapSubtitleCodec {
+	Unsupported,
+	HdmvPgs,
+};
+
 enum class MkvTrackType {
 	Other,
 	Video,
@@ -77,6 +82,7 @@ struct MkvTrackInfo {
 	std::string codec_private;
 	std::vector<MkvContentEncoding> content_encodings;
 	MkvTextSubtitleCodec subtitle_codec = MkvTextSubtitleCodec::Unsupported;
+	MkvBitmapSubtitleCodec bitmap_subtitle_codec = MkvBitmapSubtitleCodec::Unsupported;
 	std::optional<int> audio_channels;
 	std::string unsupported_content_encoding_reason;
 };
@@ -86,10 +92,18 @@ struct MkvTrackScanResult {
 	std::vector<MkvTrackInfo> tracks;
 };
 
+struct MkvSubtitleAvailability {
+	bool text = false;
+	bool bitmap = false;
+};
+
 MkvTrackType ClassifyMkvTrackType(uint64_t track_type);
 MkvTextSubtitleCodec ClassifyMkvTextSubtitleCodec(std::string_view codec_id);
+MkvBitmapSubtitleCodec ClassifyMkvBitmapSubtitleCodec(std::string_view codec_id);
 bool IsSupportedMkvTextSubtitleCodec(std::string_view codec_id);
+bool IsSupportedMkvBitmapSubtitleCodec(std::string_view codec_id);
 bool IsImportableMkvSubtitleTrack(MkvTrackInfo const& track);
+bool IsDecodableMkvBitmapSubtitleTrack(MkvTrackInfo const& track);
 std::string GetPreferredMkvTrackLanguage(MkvTrackInfo const& track);
 std::string DescribeMkvTrack(MkvTrackInfo const& track);
 std::string FormatMkvAudioChannelCount(std::optional<int> channels);

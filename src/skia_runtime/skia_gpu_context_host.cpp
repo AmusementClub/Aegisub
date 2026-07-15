@@ -3,14 +3,14 @@
 
 #include "skia_runtime/skia_gpu_context_host.h"
 
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 #include <include/gpu/ganesh/GrDirectContext.h>
 #include <include/gpu/ganesh/gl/GrGLDirectContext.h>
 #include <include/gpu/ganesh/gl/GrGLInterface.h>
 #endif
 
 bool SkiaGpuContextHost::EnsureCurrentContext() {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	if (context)
 		return true;
 
@@ -26,7 +26,7 @@ bool SkiaGpuContextHost::EnsureCurrentContext() {
 }
 
 GrDirectContext *SkiaGpuContextHost::Get() const {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	return context.get();
 #else
 	return nullptr;
@@ -34,28 +34,28 @@ GrDirectContext *SkiaGpuContextHost::Get() const {
 }
 
 void SkiaGpuContextHost::SyncExternalState() {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	if (context)
 		context->resetContext();
 #endif
 }
 
 void SkiaGpuContextHost::ResetTextureBindingsForExternalUse() {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	if (context)
 		context->resetGLTextureBindings();
 #endif
 }
 
 void SkiaGpuContextHost::FlushAndSubmit() {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	if (context)
 		context->flushAndSubmit();
 #endif
 }
 
 void SkiaGpuContextHost::Reset() {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	if (context) {
 		context->releaseResourcesAndAbandonContext();
 		context.reset();

@@ -3,14 +3,14 @@
 
 #pragma once
 
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 #include <include/core/SkRefCnt.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
 #include <include/gpu/ganesh/gl/GrGLInterface.h>
 #endif
 
 class SkiaGpuContextHost {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	sk_sp<const GrGLInterface> gl_interface;
 	sk_sp<GrDirectContext> context;
 #endif

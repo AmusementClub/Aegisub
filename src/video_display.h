@@ -51,7 +51,7 @@
 class AssDialogue;
 class RetinaHelper;
 class AsyncVideoProvider;
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 class SkCanvas;
 class SkiaGpuContextHost;
 class SkiaSurfaceProvider;
@@ -160,7 +160,8 @@ class VideoDisplay final : public wxGLCanvas {
 	unsigned int scene_cache_framebuffer = 0;
 	unsigned int scene_cache_texture = 0;
 	video_subtitle_scene_cache::SubtitleSceneSnapshot displayed_subtitle_scene;
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+	bool use_skia_video_tools = false;
 	std::unique_ptr<SkiaGpuContextHost> skia_overlay_context_host;
 	std::unique_ptr<SkiaSurfaceProvider> skia_overlay_surface_provider;
 	std::unique_ptr<SkiaTextLayoutCache> skia_overlay_text_cache;
@@ -189,7 +190,9 @@ class VideoDisplay final : public wxGLCanvas {
 	void DrawSceneCache(wxSize const& client_size, int canvas_width, int canvas_height);
 	void DrawLegacyOverlayPass(wxSize const& client_size);
 	void DrawOverlayPass(wxSize const& client_size);
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	bool TryDrawSkiaOverlayPass(wxSize const& client_size);
+#endif
 	void ResetDisplayedSubtitleScene() noexcept;
 	void RefreshDisplayedSubtitleSceneSnapshot();
 	void OnSubtitlesCommit(int type, AssDialogue const* changed);
@@ -198,7 +201,7 @@ class VideoDisplay final : public wxGLCanvas {
 	/// @param horizontal_percent The percent of the video reserved horizontally
 	/// @param vertical_percent The percent of the video reserved vertically
 	void DrawOverscanMask(float horizontal_percent, float vertical_percent) const;
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	void DrawOverscanMaskSkia(SkCanvas &canvas, float horizontal_percent, float vertical_percent) const;
 	bool EnsureSkiaOverlayBacking(int canvas_width, int canvas_height);
 	void DestroySkiaOverlayBacking() noexcept;

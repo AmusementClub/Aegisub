@@ -3,7 +3,7 @@
 
 #include "skia_runtime/skia_surface_provider.h"
 
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 #ifdef HAVE_OPENGL_GL_H
 #include <OpenGL/gl.h>
 #else
@@ -23,7 +23,7 @@
 sk_sp<SkSurface> SkiaSurfaceProvider::AcquireFramebufferSurface(
 	GrDirectContext *context,
 	SkiaFramebufferSurfaceDescriptor const& descriptor) const {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	if (!context || descriptor.width <= 0 || descriptor.height <= 0)
 		return nullptr;
 

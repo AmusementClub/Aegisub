@@ -5,7 +5,7 @@
 
 #include "skia_runtime/skia_text_layout_cache.h"
 
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 #include <include/core/SkBlendMode.h>
 #include <include/core/SkCanvas.h>
 #include <include/core/SkColor.h>
@@ -18,7 +18,7 @@
 #include <algorithm>
 
 namespace {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 SkColor ToSkColor(wxColour const& colour, float alpha) {
 	return SkColorSetARGB(
 		static_cast<U8CPU>(std::clamp(alpha, 0.0f, 1.0f) * colour.Alpha()),
@@ -55,7 +55,7 @@ void SkiaVideoOverlayDrawContext::ClearInvert() {
 	invert = false;
 }
 
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 SkCanvas &SkiaVideoOverlayDrawContext::GetTargetCanvas() const {
 	return (invert && invert_canvas) ? *invert_canvas : canvas;
 }
@@ -97,7 +97,7 @@ SkPaint SkiaVideoOverlayDrawContext::MakeFillPaint() const {
 #endif
 
 void SkiaVideoOverlayDrawContext::DrawLine(Vector2D p1, Vector2D p2) {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	GetTargetCanvas().drawLine(p1.X(), p1.Y(), p2.X(), p2.Y(), MakeStrokePaint());
 #else
 	(void)p1;
@@ -106,7 +106,7 @@ void SkiaVideoOverlayDrawContext::DrawLine(Vector2D p1, Vector2D p2) {
 }
 
 void SkiaVideoOverlayDrawContext::DrawLines(size_t dim, float const *lines, size_t n) {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	if (dim != 2 || !lines || n < 2)
 		return;
 
@@ -124,7 +124,7 @@ void SkiaVideoOverlayDrawContext::DrawLines(size_t dim, float const *lines, size
 }
 
 void SkiaVideoOverlayDrawContext::DrawLineStrip(Vector2D const *points, size_t n) {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	if (!points || n < 2)
 		return;
 
@@ -140,7 +140,7 @@ void SkiaVideoOverlayDrawContext::DrawLineStrip(Vector2D const *points, size_t n
 }
 
 void SkiaVideoOverlayDrawContext::DrawRectangle(Vector2D p1, Vector2D p2) {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	SkRect const rect = SkRect::MakeLTRB(p1.X(), p1.Y(), p2.X(), p2.Y());
 	SkCanvas &target = GetTargetCanvas();
 	if (fill_alpha > 0.0f)
@@ -154,7 +154,7 @@ void SkiaVideoOverlayDrawContext::DrawRectangle(Vector2D p1, Vector2D p2) {
 }
 
 void SkiaVideoOverlayDrawContext::DrawPolygon(Vector2D const *points, size_t n) {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	if (!points || n < 3)
 		return;
 
@@ -177,7 +177,7 @@ void SkiaVideoOverlayDrawContext::DrawPolygon(Vector2D const *points, size_t n) 
 }
 
 void SkiaVideoOverlayDrawContext::DrawMultiPolygon(std::vector<float> const& points, std::vector<int> const& start, std::vector<int> const& count, Vector2D video_pos, Vector2D video_size, bool invert) {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	if (points.empty() || start.empty() || count.empty() || start.size() != count.size())
 		return;
 
@@ -244,7 +244,7 @@ void SkiaVideoOverlayDrawContext::DrawMultiPolygon(std::vector<float> const& poi
 }
 
 void SkiaVideoOverlayDrawContext::DrawCircle(Vector2D center, float radius) {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	SkCanvas &target = GetTargetCanvas();
 	if (fill_alpha > 0.0f)
 		target.drawCircle(center.X(), center.Y(), radius, MakeFillPaint());
@@ -257,7 +257,7 @@ void SkiaVideoOverlayDrawContext::DrawCircle(Vector2D center, float radius) {
 }
 
 void SkiaVideoOverlayDrawContext::DrawTriangle(Vector2D p1, Vector2D p2, Vector2D p3) {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	SkPathBuilder builder;
 	SkPoint points[] = {
 		SkPoint::Make(p1.X(), p1.Y()),
@@ -283,7 +283,7 @@ wxSize SkiaVideoOverlayDrawContext::MeasureText(std::string const& value, VideoO
 }
 
 void SkiaVideoOverlayDrawContext::DrawText(std::string const& value, int x, int y, VideoOverlayTextStyle const& style) {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	if (invert && invert_canvas) {
 		VideoOverlayTextStyle invert_style = style;
 		invert_style.colour = *wxWHITE;

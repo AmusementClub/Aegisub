@@ -3,7 +3,7 @@
 
 #include "skia_runtime/skia_text_layout_cache.h"
 
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 #include <include/core/SkCanvas.h>
 #include <include/core/SkColor.h>
 #include <include/core/SkFont.h>
@@ -23,7 +23,7 @@
 #include <functional>
 
 namespace {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 SkColor ToSkColor(wxColour const& colour) {
 	return SkColorSetARGB(colour.Alpha(), colour.Red(), colour.Green(), colour.Blue());
 }
@@ -70,7 +70,7 @@ size_t SkiaTextLayoutCache::FontKeyHash::operator()(FontKey const& key) const no
 }
 
 sk_sp<SkTypeface> SkiaTextLayoutCache::ResolveTypeface(VideoOverlayTextStyle const& style) {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	FontKey const key { style.face, style.size, style.bold, style.italic };
 	auto const existing = typefaces.find(key);
 	if (existing != typefaces.end())
@@ -97,7 +97,7 @@ sk_sp<SkTypeface> SkiaTextLayoutCache::ResolveTypeface(VideoOverlayTextStyle con
 }
 
 wxSize SkiaTextLayoutCache::MeasureText(std::string const& text, VideoOverlayTextStyle const& style) {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	auto typeface = ResolveTypeface(style);
 	if (!typeface)
 		return wxSize(0, 0);
@@ -125,7 +125,7 @@ wxSize SkiaTextLayoutCache::MeasureText(std::string const& text, VideoOverlayTex
 }
 
 void SkiaTextLayoutCache::DrawText(SkCanvas &canvas, std::string const& text, int x, int y, VideoOverlayTextStyle const& style) {
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	auto typeface = ResolveTypeface(style);
 	if (!typeface)
 		return;

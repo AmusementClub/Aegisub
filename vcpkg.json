@@ -52,7 +52,7 @@
       ]
     },
     "skia": {
-      "description": "Install full Skia for optional 2D rendering infrastructure.",
+      "description": "Install full Skia for opt-in GUI rendering features such as video tools.",
       "dependencies": [
         "skia"
       ]

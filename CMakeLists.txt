@@ -418,8 +418,31 @@ if(WITH_AVISYNTH)
 endif()
 option(WITH_CSRI "Enable CSRI support" ON)
 option(WITH_DRAWING_SKIA "Enable Skia-backed Lua drawing path operations" OFF)
-option(WITH_SKIA "Enable optional Skia-based 2D rendering infrastructure" OFF)
-if(WITH_SKIA OR WITH_DRAWING_SKIA)
+option(WITH_SKIA_VIDEO_TOOLS "Build the opt-in Skia video tools overlay" OFF)
+option(WITH_SKIA_VIDEO_SUBTITLES "Build the opt-in Skia video subtitle compositor (not implemented)" OFF)
+option(WITH_SKIA_SUBTITLE_DIRTY_EXPERIMENTAL "Build the Skia-only subtitle dirty experiment (not implemented)" OFF)
+option(WITH_SKIA_AUDIO_DISPLAY "Build the opt-in Skia audio display (not implemented)" OFF)
+option(WITH_SKIA_SOFTWARE_VIDEO "Build the Skia software video presenter (not implemented)" OFF)
+
+if(WITH_SKIA_SUBTITLE_DIRTY_EXPERIMENTAL AND NOT WITH_SKIA_VIDEO_SUBTITLES)
+    message(FATAL_ERROR
+        "WITH_SKIA_SUBTITLE_DIRTY_EXPERIMENTAL requires WITH_SKIA_VIDEO_SUBTITLES."
+    )
+endif()
+
+foreach(_aegisub_unimplemented_skia_feature IN ITEMS
+    WITH_SKIA_VIDEO_SUBTITLES
+    WITH_SKIA_SUBTITLE_DIRTY_EXPERIMENTAL
+    WITH_SKIA_AUDIO_DISPLAY
+    WITH_SKIA_SOFTWARE_VIDEO)
+    if(${_aegisub_unimplemented_skia_feature})
+        message(FATAL_ERROR
+            "${_aegisub_unimplemented_skia_feature} is reserved for a later isolated phase and is not implemented in P0."
+        )
+    endif()
+endforeach()
+
+if(WITH_SKIA_VIDEO_TOOLS OR WITH_DRAWING_SKIA)
     # unofficial-skia resolves a few Windows system import libraries while its
     # package config is loaded. Seed those lookups before find_package so a
     # fresh configure does not silently omit them.
@@ -480,15 +503,13 @@ endif()
 if(WITH_CSRI)
     target_compile_definitions(aegisub_core_features INTERFACE WITH_CSRI)
 endif()
-if(WITH_SKIA)
+if(WITH_SKIA_VIDEO_TOOLS)
     if(NOT TARGET unofficial::skia::skia)
         message(FATAL_ERROR
-            "WITH_SKIA is ON, but the Skia vcpkg package was not found.\n"
-            "Configure with -DVCPKG_MANIFEST_FEATURES=skia or pass -DWITH_SKIA=OFF."
+            "WITH_SKIA_VIDEO_TOOLS is ON, but the Skia vcpkg package was not found.\n"
+            "Configure with -DVCPKG_MANIFEST_FEATURES=skia or pass -DWITH_SKIA_VIDEO_TOOLS=OFF."
         )
     endif()
-    target_compile_definitions(aegisub_core_features INTERFACE WITH_SKIA)
-    target_link_libraries(aegisub_core_features INTERFACE unofficial::skia::skia)
 endif()
 if(WITH_FFTW3)
     target_compile_definitions(aegisub_core_features INTERFACE WITH_FFTW3)
@@ -668,7 +689,7 @@ set(AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_SOURCES
 #
 # wx-free (in intent) static library holding the framework-agnostic core:
 # ASS data model, controllers, services, providers, automation host, and the
-# presentation/grid_core/skia_runtime subdirs. Sources are migrated out of the
+# presentation/grid_core subdirs. Sources are migrated out of the
 # Aegisub executable target so they can be reused by the future C ABI facade
 # (and any non-wx host). The PCH is lagi_pre.h (not agi_pre.h) so that any
 # residual wx dependency that agi_pre.h used to mask surfaces as a compile
@@ -988,15 +1009,6 @@ if(WITH_LIBPLACEBO AND HAVE_LIBPLACEBO)
         PROPERTIES SKIP_PRECOMPILE_HEADERS ON
     )
 endif()
-# Optional Skia infra (gpu context host, surface provider, text cache, overlay).
-if(WITH_SKIA)
-    target_sources(aegisub_core PRIVATE
-        src/video_overlay_draw_context_skia.cpp
-        src/skia_runtime/skia_gpu_context_host.cpp
-        src/skia_runtime/skia_surface_provider.cpp
-        src/skia_runtime/skia_text_layout_cache.cpp
-    )
-endif()
 ## Aegisub
 add_executable(Aegisub WIN32
     "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.h"
@@ -1159,6 +1171,16 @@ add_executable(Aegisub WIN32
     ${AEGISUB_SHARED_EXE_ENTRY_SOURCES}
     ${AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES}
 )
+if(WITH_SKIA_VIDEO_TOOLS)
+    target_sources(Aegisub PRIVATE
+        src/video_overlay_draw_context_skia.cpp
+        src/skia_runtime/skia_gpu_context_host.cpp
+        src/skia_runtime/skia_surface_provider.cpp
+        src/skia_runtime/skia_text_layout_cache.cpp
+    )
+    target_compile_definitions(Aegisub PRIVATE AEGISUB_WITH_SKIA_VIDEO_TOOLS=1)
+    target_link_libraries(Aegisub PRIVATE unofficial::skia::skia)
+endif()
 if(WITH_LIBPLACEBO AND HAVE_LIBPLACEBO)
     target_sources(Aegisub PRIVATE src/video_renderer_placebo_gl.cpp)
     set_source_files_properties(
@@ -1288,9 +1310,8 @@ if(HAVE_OPENGL_GL_H)
     target_compile_definitions(Aegisub PRIVATE "HAVE_OPENGL_GL_H")
 endif()
 
-# Skia: WITH_DRAWING_SKIA adds a Lua drawing backend to libaegisub; WITH_SKIA
-# adds the Skia rendering infra to aegisub_core (handled above). Both options
-# and the skia find_package are defined in the shared discovery block above.
+# Skia: WITH_DRAWING_SKIA adds a Lua drawing backend to libaegisub. GUI Skia
+# features are executable-private and configured independently above.
 if(WITH_DRAWING_SKIA)
     if(NOT TARGET unofficial::skia::skia)
         message(FATAL_ERROR
@@ -1637,7 +1658,7 @@ endif()
 install(FILES src/include/aegisub/core_c_api.h DESTINATION include/aegisub COMPONENT CoreAPI)
 
 set(AEGISUB_CORE_API_NEEDS_SKIA OFF)
-if(WITH_SKIA OR WITH_DRAWING_SKIA)
+if(WITH_DRAWING_SKIA)
     set(AEGISUB_CORE_API_NEEDS_SKIA ON)
 endif()
 
@@ -1722,8 +1743,12 @@ message(STATUS "\n"
     "  LuaJIT:                bundled\n"
     "  LuaJIT Shared:         ${AEGISUB_LUAJIT_SHARED}\n"
     "  LuaSocket:             ${LUA_WITH_LUASOCKET}\n"
-    "  Skia:                  ${WITH_SKIA}\n"
     "  Drawing Skia:          ${WITH_DRAWING_SKIA}\n"
+    "  Video tools Skia:      ${WITH_SKIA_VIDEO_TOOLS}\n"
+    "  Video subtitle Skia:   ${WITH_SKIA_VIDEO_SUBTITLES}\n"
+    "  Subtitle dirty Skia:   ${WITH_SKIA_SUBTITLE_DIRTY_EXPERIMENTAL}\n"
+    "  Audio display Skia:    ${WITH_SKIA_AUDIO_DISPLAY}\n"
+    "  Software video Skia:   ${WITH_SKIA_SOFTWARE_VIDEO}\n"
     "\n"
     "Dynamic Loading\n"
     "  AviSynth:              ${HAVE_AVISYNTH}\n"

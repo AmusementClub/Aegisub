@@ -22,7 +22,7 @@ class SkiaVideoOverlayDrawContext final : public VideoOverlayDrawContext {
 	float fill_alpha = 1.0f;
 	bool invert = false;
 
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	SkCanvas &GetTargetCanvas() const;
 	SkPaint MakeStrokePaint() const;
 	SkPaint MakeFillPaint() const;

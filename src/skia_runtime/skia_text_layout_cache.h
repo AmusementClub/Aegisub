@@ -5,7 +5,7 @@
 
 #include "video_overlay_draw_context.h"
 
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 #include <include/core/SkRefCnt.h>
 #include <include/core/SkTypeface.h>
 #endif
@@ -29,7 +29,7 @@ class SkiaTextLayoutCache {
 		size_t operator()(FontKey const& key) const noexcept;
 	};
 
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	std::unordered_map<FontKey, sk_sp<SkTypeface>, FontKeyHash> typefaces;
 #endif
 

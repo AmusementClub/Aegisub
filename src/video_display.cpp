@@ -88,7 +88,7 @@
 #include <GL/glext.h>
 #endif
 
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 #include "skia_runtime/skia_gpu_context_host.h"
 #include "skia_runtime/skia_surface_provider.h"
 #include "skia_runtime/skia_text_layout_cache.h"
@@ -361,13 +361,20 @@ bool ReadEnvFlagDefaultOn(char const *name) {
 	return first != '0' && first != 'f' && first != 'n';
 }
 
-bool IsSkiaVideoOverlayEnabled() {
-#ifdef WITH_SKIA
-	return ReadEnvFlagDefaultOn("AEGISUB_ENABLE_SKIA_VIDEO_OVERLAY");
-#else
-	return false;
-#endif
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+bool ReadEnvFlagDefaultOff(char const *name) {
+	auto const* value = std::getenv(name);
+	if (!value || !*value)
+		return false;
+
+	char const first = static_cast<char>(std::tolower(static_cast<unsigned char>(*value)));
+	return first != '0' && first != 'f' && first != 'n';
 }
+
+bool IsSkiaVideoOverlayEnabled() {
+	return ReadEnvFlagDefaultOff("AEGISUB_ENABLE_SKIA_VIDEO_TOOLS");
+}
+#endif
 
 }
 
@@ -392,6 +399,9 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 , dpi_scale_option_connection(OPT_SUB("Video/Scale with DPI", [=](agi::OptionValue const&) { RefreshVideoScale(); }))
 , renderer_backend_option_connection(OPT_SUB("Video/Renderer/Backend", &VideoDisplay::OnRendererBackendChanged, this))
 {
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+	use_skia_video_tools = IsSkiaVideoOverlayEnabled();
+#endif
 	zoomBox->SetValue(fmt_wx("%g%%", zoomValue * 100.));
 	zoomBox->Bind(wxEVT_COMBOBOX, &VideoDisplay::SetZoomFromBox, this);
 	zoomBox->Bind(wxEVT_TEXT_ENTER, &VideoDisplay::SetZoomFromBoxText, this);
@@ -655,7 +665,7 @@ void VideoDisplay::ResetRenderers() {
 	if (subtitleOverlayRenderer)
 		subtitleOverlayRenderer->Reset();
 	subtitleOverlayRenderer.reset();
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	if (skia_overlay_context_host)
 		skia_overlay_context_host->Reset();
 #endif
@@ -1126,12 +1136,9 @@ void VideoDisplay::DrawLegacyOverlayPass(wxSize const& client_size) {
 		tool->Draw();
 }
 
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) {
-#ifndef WITH_SKIA
-	(void)client_size;
-	return false;
-#else
-	if (!IsSkiaVideoOverlayEnabled())
+	if (!use_skia_video_tools)
 		return false;
 
 	if ((mouse_pos || !autohideTools->GetBool()) && tool && !tool->SupportsOverlayContext())
@@ -1252,12 +1259,15 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) {
 	legacy_gl::DrawPremultipliedTexturedQuadTopLeft(static_cast<GLuint>(skia_overlay_texture), canvas_width, canvas_height);
 	legacy_gl::DrawAlphaMaskedInvertQuadTopLeft(static_cast<GLuint>(skia_overlay_invert_texture), canvas_width, canvas_height);
 	return true;
-#endif
 }
+#endif
 
 void VideoDisplay::DrawOverlayPass(wxSize const& client_size) {
-	if (!TryDrawSkiaOverlayPass(client_size))
-		DrawLegacyOverlayPass(client_size);
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+	if (TryDrawSkiaOverlayPass(client_size))
+		return;
+#endif
+	DrawLegacyOverlayPass(client_size);
 }
 
 void VideoDisplay::RefreshDisplayedSubtitleSceneSnapshot() {
@@ -1571,7 +1581,7 @@ void VideoDisplay::DrawOverscanMask(float horizontal_percent, float vertical_per
 	gl.DrawMultiPolygon(points, vstart, vcount, viewport_pos, viewport_size, true);
 }
 
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 void VideoDisplay::DrawOverscanMaskSkia(SkCanvas &canvas, float horizontal_percent, float vertical_percent) const {
 	Vector2D viewport_pos = Vector2D(viewport_left, viewport_top) / scale_factor;
 	Vector2D viewport_size = Vector2D(viewport_width, viewport_height) / scale_factor;
@@ -2114,7 +2124,7 @@ void VideoDisplay::Unload() {
 	if (glContext)
 		SetCurrent(*glContext);
 	DestroySceneCache();
-#ifdef WITH_SKIA
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	DestroySkiaOverlayBacking();
 	skia_overlay_context_host.reset();
 	skia_overlay_surface_provider.reset();

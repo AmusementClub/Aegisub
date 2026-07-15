@@ -1,20 +1,17 @@
 #pragma once
 
+#include "audio_waveform_summary_cache.h"
+
 #include <cstddef>
 #include <vector>
 
-#include "audio_waveform_summary_cache.h"
-
-#include <wx/bitmap.h>
-
-class AudioColorScheme;
 struct AudioWaveformSummaryColumnRef {
 	size_t block_index = 0;
 	size_t summary_index = 0;
 };
 
 inline AudioWaveformSummaryColumnRef GetWaveformSummaryColumnRef(int pixel_index) {
-	const int absolute_pixel = pixel_index < 0 ? 0 : pixel_index;
+	auto const absolute_pixel = pixel_index < 0 ? 0 : pixel_index;
 	return {
 		static_cast<size_t>(absolute_pixel / static_cast<int>(AudioWaveformSummaryBlock::width)),
 		static_cast<size_t>(absolute_pixel % static_cast<int>(AudioWaveformSummaryBlock::width))
@@ -31,17 +28,3 @@ inline std::vector<AudioWaveformSummaryColumnRef> BuildWaveformSummaryColumnRefs
 		refs.emplace_back(GetWaveformSummaryColumnRef(start + x));
 	return refs;
 }
-
-void RenderWaveformSummaryColumnsToBitmap(
-	wxBitmap &bmp,
-	const std::vector<const AudioWaveformSummary *> &summaries,
-	const AudioColorScheme &palette,
-	bool render_averages,
-	float amplitude_scale);
-
-void RenderWaveformSummaryBlockToBitmap(
-	wxBitmap &bmp,
-	const AudioWaveformSummaryBlock &block,
-	const AudioColorScheme &palette,
-	bool render_averages,
-	float amplitude_scale);

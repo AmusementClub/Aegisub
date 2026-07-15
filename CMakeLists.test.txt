@@ -235,6 +235,10 @@ if(GTEST_FOUND)
             src/skia/skia_video_overlay_command_buffer.cpp
         )
     endif()
+    if(WITH_SKIA_AUDIO_DISPLAY)
+        target_sources(gtest-run PRIVATE
+            tests/tests/skia_audio_display_contract.cpp
+            src/skia/audio/skia_audio_display_contract.cpp
         )
     endif()
     target_compile_definitions(gtest-run PRIVATE

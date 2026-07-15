@@ -2100,7 +2100,6 @@ TEST(host_boundary_policy, host_thread_and_registry_lifecycle_boundaries_stay_ou
 		root / "src" / "audio_renderer.cpp",
 		root / "src" / "audio_renderer_spectrum.cpp",
 		root / "src" / "audio_renderer_waveform.cpp",
-		root / "src" / "audio_tile_compositor.cpp",
 		root / "src" / "subtitles_provider_csri.cpp",
 		root / "src" / "subtitles_provider_libass.cpp",
 		root / "src" / "video_display.cpp",

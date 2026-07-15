@@ -419,11 +419,10 @@ endif()
 option(WITH_CSRI "Enable CSRI support" ON)
 option(WITH_DRAWING_SKIA "Enable Skia-backed Lua drawing path operations" OFF)
 option(WITH_SKIA_VIDEO_TOOLS "Build the opt-in Skia video tools overlay" OFF)
-option(WITH_SKIA_AUDIO_DISPLAY "Build the opt-in Skia audio display (not implemented)" OFF)
+option(WITH_SKIA_AUDIO_DISPLAY "Build the opt-in full Skia audio display" OFF)
 option(WITH_SKIA_SOFTWARE_VIDEO "Build the Skia software video presenter (not implemented)" OFF)
 
 foreach(_aegisub_unimplemented_skia_feature IN ITEMS
-    WITH_SKIA_AUDIO_DISPLAY
     WITH_SKIA_SOFTWARE_VIDEO)
     if(${_aegisub_unimplemented_skia_feature})
         message(FATAL_ERROR
@@ -432,7 +431,7 @@ foreach(_aegisub_unimplemented_skia_feature IN ITEMS
     endif()
 endforeach()
 
-if(WITH_SKIA_VIDEO_TOOLS OR WITH_DRAWING_SKIA)
+if(WITH_SKIA_VIDEO_TOOLS OR WITH_SKIA_AUDIO_DISPLAY OR WITH_DRAWING_SKIA)
     # unofficial-skia resolves a few Windows system import libraries while its
     # package config is loaded. Seed those lookups before find_package so a
     # fresh configure does not silently omit them.
@@ -493,11 +492,11 @@ endif()
 if(WITH_CSRI)
     target_compile_definitions(aegisub_core_features INTERFACE WITH_CSRI)
 endif()
-if(WITH_SKIA_VIDEO_TOOLS)
+if(WITH_SKIA_VIDEO_TOOLS OR WITH_SKIA_AUDIO_DISPLAY)
     if(NOT TARGET unofficial::skia::skia)
         message(FATAL_ERROR
-            "WITH_SKIA_VIDEO_TOOLS is ON, but the Skia vcpkg package was not found.\n"
-            "Configure with -DVCPKG_MANIFEST_FEATURES=skia or pass -DWITH_SKIA_VIDEO_TOOLS=OFF."
+            "A GUI Skia feature is ON, but the Skia vcpkg package was not found.\n"
+            "Configure with -DVCPKG_MANIFEST_FEATURES=skia or disable the GUI Skia feature."
         )
     endif()
 endif()
@@ -1176,6 +1175,15 @@ if(WITH_SKIA_VIDEO_TOOLS)
         AEGISUB_WITH_SKIA_GPU_GL=1
         AEGISUB_WITH_SKIA_VIDEO_COMPOSITOR=1
         AEGISUB_WITH_SKIA_VIDEO_TOOLS=1
+    )
+    target_link_libraries(Aegisub PRIVATE unofficial::skia::skia)
+endif()
+if(WITH_SKIA_AUDIO_DISPLAY)
+    target_sources(Aegisub PRIVATE
+        src/skia/audio/skia_audio_display_contract.cpp
+    )
+    target_compile_definitions(Aegisub PRIVATE
+        AEGISUB_WITH_SKIA_AUDIO_DISPLAY=1
     )
     target_link_libraries(Aegisub PRIVATE unofficial::skia::skia)
 endif()

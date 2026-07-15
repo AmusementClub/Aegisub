@@ -8,7 +8,7 @@
 #include "../../src/audio_display_source.h"
 #include "../../src/audio_mix_policy.h"
 #include "../../src/audio_spectrum_analysis_cache.h"
-#include "../../src/audio_waveform_bitmap_tile_renderer.h"
+#include "../../src/audio_waveform_column_ref.h"
 #include "../../src/audio_waveform_summary_cache.h"
 
 #include <libaegisub/audio/provider.h>

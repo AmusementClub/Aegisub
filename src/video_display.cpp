@@ -89,7 +89,7 @@
 #endif
 
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
-#include "skia_runtime/skia_gpu_context_host.h"
+#include "skia/skia_video_compositor.h"
 #include "skia_runtime/skia_surface_provider.h"
 #include "skia_runtime/skia_text_layout_cache.h"
 #include "video_overlay_draw_context_skia.h"
@@ -374,6 +374,15 @@ bool ReadEnvFlagDefaultOff(char const *name) {
 bool IsSkiaVideoOverlayEnabled() {
 	return ReadEnvFlagDefaultOff("AEGISUB_ENABLE_SKIA_VIDEO_TOOLS");
 }
+
+bool IsSkiaVideoCompositorProbeEnabled() {
+	return ReadEnvFlagDefaultOff("AEGISUB_ENABLE_SKIA_VIDEO_COMPOSITOR_PROBE");
+}
+
+SkiaVideoFailureInjection GetSkiaVideoFailureInjection() {
+	auto const *value = std::getenv("AEGISUB_SKIA_VIDEO_FAILURE_INJECTION");
+	return ParseSkiaVideoFailureInjection(value ? value : "");
+}
 #endif
 
 }
@@ -401,6 +410,8 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 {
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	use_skia_video_tools = IsSkiaVideoOverlayEnabled();
+	use_skia_video_compositor_probe = IsSkiaVideoCompositorProbeEnabled();
+	skia_video_failure_injection = GetSkiaVideoFailureInjection();
 #endif
 	zoomBox->SetValue(fmt_wx("%g%%", zoomValue * 100.));
 	zoomBox->Bind(wxEVT_COMBOBOX, &VideoDisplay::SetZoomFromBox, this);
@@ -466,10 +477,26 @@ bool VideoDisplay::InitContext() {
 	if (GetClientSize() == wxSize(0, 0))
 		return false;
 
-	if (!glContext)
+	if (!glContext) {
 		glContext = agi::make_unique<wxGLContext>(this);
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+		++gl_context_generation;
+		if (!gl_context_generation)
+			++gl_context_generation;
+#endif
+	}
 
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+	bool const made_current = SetCurrent(*glContext);
+	if (IsSkiaVideoRuntimeRequested() && (!glContext->IsOK() || !made_current)) {
+		if (auto *compositor = EnsureSkiaVideoCompositor())
+			compositor->NotifyContextActivationFailure(CurrentSkiaGlContextToken());
+		LogSkiaVideoFailureOnce();
+		return false;
+	}
+#else
 	SetCurrent(*glContext);
+#endif
 	return true;
 }
 
@@ -665,10 +692,6 @@ void VideoDisplay::ResetRenderers() {
 	if (subtitleOverlayRenderer)
 		subtitleOverlayRenderer->Reset();
 	subtitleOverlayRenderer.reset();
-#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
-	if (skia_overlay_context_host)
-		skia_overlay_context_host->Reset();
-#endif
 	ResetDisplayedSubtitleScene();
 	ResetSceneCacheRetryBlock();
 	InvalidateSceneCache();
@@ -1137,32 +1160,121 @@ void VideoDisplay::DrawLegacyOverlayPass(wxSize const& client_size) {
 }
 
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
-bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) {
-	if (!use_skia_video_tools)
+bool VideoDisplay::IsSkiaVideoRuntimeRequested() const noexcept {
+	return use_skia_video_tools || use_skia_video_compositor_probe;
+}
+
+SkiaVideoCompositor *VideoDisplay::EnsureSkiaVideoCompositor() {
+	if (!IsSkiaVideoRuntimeRequested())
+		return nullptr;
+	if (!skia_video_compositor)
+		skia_video_compositor = agi::make_unique<SkiaVideoCompositor>(skia_video_failure_injection);
+	return skia_video_compositor.get();
+}
+
+SkiaGlContextToken VideoDisplay::CurrentSkiaGlContextToken() const noexcept {
+	return { glContext.get(), gl_context_generation };
+}
+
+SkiaVideoFrameTarget VideoDisplay::BuildSkiaVideoFrameTarget(wxSize const& client_size) {
+	GLint framebuffer = 0;
+	GLint sample_count = 0;
+	GLint stencil_bits = 0;
+	glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &framebuffer);
+	glGetIntegerv(GL_SAMPLES, &sample_count);
+	glGetIntegerv(GL_STENCIL_BITS, &stencil_bits);
+
+	++skia_present_generation;
+	if (!skia_present_generation)
+		++skia_present_generation;
+
+	SkiaVideoFrameTarget target;
+	target.framebuffer_id = static_cast<unsigned int>(std::max(0, framebuffer));
+	target.context_generation = gl_context_generation;
+	target.width = client_size.GetWidth() * scale_factor;
+	target.height = client_size.GetHeight() * scale_factor;
+	target.viewport = { 0, 0, target.width, target.height };
+	target.origin = SkiaVideoTargetOrigin::BottomLeft;
+	target.sample_count = std::max(0, sample_count);
+	target.stencil_bits = std::max(0, stencil_bits);
+	target.pixel_format = SkiaVideoTargetPixelFormat::Rgba8;
+	target.color_space = SkiaVideoTargetColorSpace::SdrPreview;
+	target.hdr_to_sdr_complete = true;
+	target.present_generation = skia_present_generation;
+	return target;
+}
+
+void VideoDisplay::LogSkiaVideoFailureOnce() {
+	if (!skia_video_compositor)
+		return;
+	auto message = skia_video_compositor->TakeFailureLogMessage();
+	if (!message.empty())
+		LOG_W("video/display/skia") << message;
+}
+
+void VideoDisplay::ProbeSkiaVideoCompositor(wxSize const& client_size) {
+	if (!use_skia_video_compositor_probe || use_skia_video_tools)
+		return;
+	auto *compositor = EnsureSkiaVideoCompositor();
+	if (!compositor)
+		return;
+
+	BindWindowFramebufferForDisplayRender();
+	auto const context = CurrentSkiaGlContextToken();
+	auto const target = BuildSkiaVideoFrameTarget(client_size);
+	if (!compositor->ProbeFrame(context, target))
+		LogSkiaVideoFailureOnce();
+
+	// The P1 probe never draws. Restore the explicit legacy boundary anyway so
+	// context creation or a failure injection cannot leak GL state into tools.
+	BindWindowFramebufferForDisplayRender();
+}
+
+bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) try {
+	if (!use_skia_video_tools) {
+		if (use_skia_video_compositor_probe)
+			ProbeSkiaVideoCompositor(client_size);
 		return false;
+	}
 
 	if ((mouse_pos || !autohideTools->GetBool()) && tool && !tool->SupportsOverlayContext())
 		return false;
 
-	if (!skia_overlay_context_host)
-		skia_overlay_context_host = agi::make_unique<SkiaGpuContextHost>();
+	auto *compositor = EnsureSkiaVideoCompositor();
+	if (!compositor)
+		return false;
+	auto const context = CurrentSkiaGlContextToken();
+	auto const target = BuildSkiaVideoFrameTarget(client_size);
+	if (!compositor->BeginFrame(context, target)) {
+		LogSkiaVideoFailureOnce();
+		return false;
+	}
+
 	if (!skia_overlay_surface_provider)
 		skia_overlay_surface_provider = agi::make_unique<SkiaSurfaceProvider>();
 	if (!skia_overlay_text_cache)
 		skia_overlay_text_cache = agi::make_unique<SkiaTextLayoutCache>();
 
-	if (!skia_overlay_context_host->EnsureCurrentContext())
-		return false;
-	skia_overlay_context_host->SyncExternalState();
-
 	int const canvas_width = client_size.GetWidth() * scale_factor;
 	int const canvas_height = client_size.GetHeight() * scale_factor;
-	if (!EnsureSkiaOverlayBacking(canvas_width, canvas_height))
+	if (!EnsureSkiaOverlayBacking(canvas_width, canvas_height)) {
+		compositor->FailFrame(
+			context,
+			SkiaGlDeviceFailure::SurfaceAllocationFailed,
+			"the Skia video tools framebuffer backing could not be allocated");
+		LogSkiaVideoFailureOnce();
 		return false;
+	}
 
 	auto const& gl = GetCaptureFramebufferFunctions();
-	if (!gl.BindFramebuffer)
+	if (!gl.BindFramebuffer) {
+		compositor->FailFrame(
+			context,
+			SkiaGlDeviceFailure::SurfaceAllocationFailed,
+			"the framebuffer binding entry point is unavailable");
+		LogSkiaVideoFailureOnce();
 		return false;
+	}
 
 	GLint previous_framebuffer = 0;
 	GLint previous_draw_buffer = GL_BACK;
@@ -1188,10 +1300,16 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) {
 	descriptor.framebuffer_id = skia_overlay_framebuffer;
 	descriptor.bottom_left_origin = false;
 	auto surface = skia_overlay_surface_provider->AcquireFramebufferSurface(
-		skia_overlay_context_host->Get(),
+		compositor->Device().Get(),
 		descriptor);
-	if (!surface)
+	if (!surface) {
+		compositor->FailFrame(
+			context,
+			SkiaGlDeviceFailure::SurfaceAcquisitionFailed,
+			"Skia could not wrap the tools framebuffer as a Ganesh surface");
+		LogSkiaVideoFailureOnce();
 		return false;
+	}
 
 	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, skia_overlay_invert_framebuffer);
 	glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
@@ -1200,17 +1318,27 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) {
 	SkiaFramebufferSurfaceDescriptor invert_descriptor = descriptor;
 	invert_descriptor.framebuffer_id = skia_overlay_invert_framebuffer;
 	auto invert_surface = skia_overlay_surface_provider->AcquireFramebufferSurface(
-		skia_overlay_context_host->Get(),
+		compositor->Device().Get(),
 		invert_descriptor);
-	if (!invert_surface)
+	if (!invert_surface) {
+		compositor->FailFrame(
+			context,
+			SkiaGlDeviceFailure::SurfaceAcquisitionFailed,
+			"Skia could not wrap the invert framebuffer as a Ganesh surface");
+		LogSkiaVideoFailureOnce();
 		return false;
+	}
 
 	SkCanvas *canvas = surface.get()->getCanvas();
 	SkCanvas *invert_canvas = invert_surface.get()->getCanvas();
-	if (!canvas)
+	if (!canvas || !invert_canvas) {
+		compositor->FailFrame(
+			context,
+			SkiaGlDeviceFailure::SurfaceAcquisitionFailed,
+			"Skia returned a framebuffer surface without a canvas");
+		LogSkiaVideoFailureOnce();
 		return false;
-	if (!invert_canvas)
-		return false;
+	}
 
 	canvas->clear(SK_ColorTRANSPARENT);
 	invert_canvas->clear(SK_ColorTRANSPARENT);
@@ -1238,8 +1366,11 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) {
 
 	canvas->restore();
 	invert_canvas->restore();
-	skia_overlay_context_host->FlushAndSubmit();
-	skia_overlay_context_host->ResetTextureBindingsForExternalUse();
+	bool const frame_succeeded = compositor->FinishFrame(context, true);
+	if (!frame_succeeded) {
+		LogSkiaVideoFailureOnce();
+		return false;
+	}
 
 	// Composite the Skia-drawn overlay texture back to the window framebuffer.
 	// The Skia surface uses kTopLeft origin, so the texture content is already
@@ -1259,6 +1390,42 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) {
 	legacy_gl::DrawPremultipliedTexturedQuadTopLeft(static_cast<GLuint>(skia_overlay_texture), canvas_width, canvas_height);
 	legacy_gl::DrawAlphaMaskedInvertQuadTopLeft(static_cast<GLuint>(skia_overlay_invert_texture), canvas_width, canvas_height);
 	return true;
+}
+catch (agi::Exception const& err) {
+	if (auto *compositor = EnsureSkiaVideoCompositor()) {
+		compositor->FailFrame(
+			CurrentSkiaGlContextToken(),
+			SkiaGlDeviceFailure::SurfaceAllocationFailed,
+			err.GetMessage());
+	}
+	DestroySkiaOverlayBacking();
+	LogSkiaVideoFailureOnce();
+	BindWindowFramebufferForDisplayRender();
+	return false;
+}
+catch (std::exception const& err) {
+	if (auto *compositor = EnsureSkiaVideoCompositor()) {
+		compositor->FailFrame(
+			CurrentSkiaGlContextToken(),
+			SkiaGlDeviceFailure::SurfaceAcquisitionFailed,
+			err.what());
+	}
+	DestroySkiaOverlayBacking();
+	LogSkiaVideoFailureOnce();
+	BindWindowFramebufferForDisplayRender();
+	return false;
+}
+catch (...) {
+	if (auto *compositor = EnsureSkiaVideoCompositor()) {
+		compositor->FailFrame(
+			CurrentSkiaGlContextToken(),
+			SkiaGlDeviceFailure::SurfaceAcquisitionFailed,
+			"an unknown exception escaped the Skia video tools frame");
+	}
+	DestroySkiaOverlayBacking();
+	LogSkiaVideoFailureOnce();
+	BindWindowFramebufferForDisplayRender();
+	return false;
 }
 #endif
 
@@ -1761,11 +1928,6 @@ bool VideoDisplay::EnsureSkiaOverlayBacking(int canvas_width, int canvas_height)
 }
 
 void VideoDisplay::DestroySkiaOverlayBacking() noexcept {
-	// Release Skia GPU resources first so Skia drops any internal references
-	// to the GL objects we are about to delete.
-	if (skia_overlay_context_host)
-		skia_overlay_context_host->FlushAndSubmit();
-
 	auto const& gl = GetCaptureFramebufferFunctions();
 
 	if (skia_overlay_framebuffer) {
@@ -2126,7 +2288,9 @@ void VideoDisplay::Unload() {
 	DestroySceneCache();
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	DestroySkiaOverlayBacking();
-	skia_overlay_context_host.reset();
+	if (skia_video_compositor)
+		skia_video_compositor->Release(CurrentSkiaGlContextToken());
+	skia_video_compositor.reset();
 	skia_overlay_surface_provider.reset();
 	skia_overlay_text_cache.reset();
 #endif

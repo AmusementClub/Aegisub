@@ -227,6 +227,12 @@ if(GTEST_FOUND)
     if(WITH_FFTW3)
         target_sources(gtest-run PRIVATE src/audio_spectrum_fftw3.cpp)
     endif()
+    if(WITH_SKIA_VIDEO_TOOLS)
+        target_sources(gtest-run PRIVATE
+            tests/tests/skia_video_compositor_contract.cpp
+            src/skia/video/skia_video_compositor_contract.cpp
+        )
+    endif()
     target_compile_definitions(gtest-run PRIVATE
         CMAKE_BUILD
         "AEGISUB_PROJECT_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\""
@@ -457,6 +463,19 @@ if(WITH_AVISYNTH)
 endif()
 
 if(WIN32)
+    if(WITH_SKIA_VIDEO_TOOLS)
+        add_executable(skia-video-compositor-smoke EXCLUDE_FROM_ALL
+            tests/smoke/skia_video_compositor_smoke.cpp
+            src/skia/video/skia_video_compositor_contract.cpp
+            src/skia/video/skia_gl_device.cpp
+            src/skia/video/skia_video_compositor.cpp
+        )
+        target_compile_definitions(skia-video-compositor-smoke PRIVATE CMAKE_BUILD NOMINMAX WIN32_LEAN_AND_MEAN)
+        target_compile_features(skia-video-compositor-smoke PRIVATE cxx_std_20)
+        target_include_directories(skia-video-compositor-smoke PRIVATE src)
+        target_link_libraries(skia-video-compositor-smoke PRIVATE unofficial::skia::skia OpenGL::GL)
+    endif()
+
     add_executable(opengl-overlay-smoke EXCLUDE_FROM_ALL
         tests/smoke/opengl_overlay_smoke.cpp
         src/video_renderer_opengl.cpp

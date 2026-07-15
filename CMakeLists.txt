@@ -1174,11 +1174,17 @@ add_executable(Aegisub WIN32
 if(WITH_SKIA_VIDEO_TOOLS)
     target_sources(Aegisub PRIVATE
         src/video_overlay_draw_context_skia.cpp
-        src/skia_runtime/skia_gpu_context_host.cpp
+        src/skia/skia_video_compositor_contract.cpp
+        src/skia/skia_gl_device.cpp
+        src/skia/skia_video_compositor.cpp
         src/skia_runtime/skia_surface_provider.cpp
         src/skia_runtime/skia_text_layout_cache.cpp
     )
-    target_compile_definitions(Aegisub PRIVATE AEGISUB_WITH_SKIA_VIDEO_TOOLS=1)
+    target_compile_definitions(Aegisub PRIVATE
+        AEGISUB_WITH_SKIA_GPU_GL=1
+        AEGISUB_WITH_SKIA_VIDEO_COMPOSITOR=1
+        AEGISUB_WITH_SKIA_VIDEO_TOOLS=1
+    )
     target_link_libraries(Aegisub PRIVATE unofficial::skia::skia)
 endif()
 if(WITH_LIBPLACEBO AND HAVE_LIBPLACEBO)

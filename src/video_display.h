@@ -42,6 +42,7 @@
 
 #include "vector2d.h"
 
+#include <cstdint>
 #include <memory>
 #include <typeinfo>
 #include <vector>
@@ -53,9 +54,12 @@ class RetinaHelper;
 class AsyncVideoProvider;
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 class SkCanvas;
-class SkiaGpuContextHost;
 class SkiaSurfaceProvider;
 class SkiaTextLayoutCache;
+class SkiaVideoCompositor;
+struct SkiaGlContextToken;
+struct SkiaVideoFrameTarget;
+enum class SkiaVideoFailureInjection;
 #endif
 class VideoController;
 class VisualToolBase;
@@ -162,7 +166,11 @@ class VideoDisplay final : public wxGLCanvas {
 	video_subtitle_scene_cache::SubtitleSceneSnapshot displayed_subtitle_scene;
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	bool use_skia_video_tools = false;
-	std::unique_ptr<SkiaGpuContextHost> skia_overlay_context_host;
+	bool use_skia_video_compositor_probe = false;
+	SkiaVideoFailureInjection skia_video_failure_injection;
+	std::uint64_t gl_context_generation = 0;
+	std::uint64_t skia_present_generation = 0;
+	std::unique_ptr<SkiaVideoCompositor> skia_video_compositor;
 	std::unique_ptr<SkiaSurfaceProvider> skia_overlay_surface_provider;
 	std::unique_ptr<SkiaTextLayoutCache> skia_overlay_text_cache;
 	unsigned int skia_overlay_framebuffer = 0;
@@ -192,6 +200,12 @@ class VideoDisplay final : public wxGLCanvas {
 	void DrawOverlayPass(wxSize const& client_size);
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	bool TryDrawSkiaOverlayPass(wxSize const& client_size);
+	bool IsSkiaVideoRuntimeRequested() const noexcept;
+	SkiaVideoCompositor *EnsureSkiaVideoCompositor();
+	SkiaGlContextToken CurrentSkiaGlContextToken() const noexcept;
+	SkiaVideoFrameTarget BuildSkiaVideoFrameTarget(wxSize const& client_size);
+	void ProbeSkiaVideoCompositor(wxSize const& client_size);
+	void LogSkiaVideoFailureOnce();
 #endif
 	void ResetDisplayedSubtitleScene() noexcept;
 	void RefreshDisplayedSubtitleSceneSnapshot();

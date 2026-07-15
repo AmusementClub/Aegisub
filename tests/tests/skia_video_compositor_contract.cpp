@@ -31,6 +31,16 @@ TEST(skia_video_compositor_contract, valid_sdr_frame_target_is_accepted) {
 	EXPECT_TRUE(validation.valid) << validation.detail;
 }
 
+TEST(skia_video_compositor_contract, ganesh_desktop_gl_floor_is_explicit) {
+	EXPECT_FALSE(SupportsSkiaGaneshDesktopGl(""));
+	EXPECT_FALSE(SupportsSkiaGaneshDesktopGl("1.1.0"));
+	EXPECT_FALSE(SupportsSkiaGaneshDesktopGl("OpenGL ES 3.0"));
+	EXPECT_FALSE(SupportsSkiaGaneshDesktopGl("2"));
+	EXPECT_TRUE(SupportsSkiaGaneshDesktopGl("2.0"));
+	EXPECT_TRUE(SupportsSkiaGaneshDesktopGl("  2.1 Mesa"));
+	EXPECT_TRUE(SupportsSkiaGaneshDesktopGl("4.6.0 NVIDIA 591.86"));
+}
+
 TEST(skia_video_compositor_contract, frame_target_requires_exact_context_generation) {
 	auto const validation = ValidateSkiaVideoFrameTarget(MakeTarget(2), MakeContext(1, 1));
 	EXPECT_FALSE(validation.valid);

@@ -1176,10 +1176,12 @@ SkiaGlContextToken VideoDisplay::CurrentSkiaGlContextToken() const noexcept {
 
 SkiaVideoFrameTarget VideoDisplay::BuildSkiaVideoFrameTarget(wxSize const& client_size) {
 	GLint framebuffer = 0;
-	GLint sample_count = 0;
 	GLint stencil_bits = 0;
-	glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &framebuffer);
-	glGetIntegerv(GL_SAMPLES, &sample_count);
+	// GL_FRAMEBUFFER_BINDING is not a valid query on Windows' software GL 1.1.
+	// The wx canvas does not request multisampling, so leave sample_count at zero
+	// and only query the FBO binding when the extension/core entry point exists.
+	if (GetCaptureFramebufferFunctions().BindFramebuffer)
+		glGetIntegerv(GL_FRAMEBUFFER_BINDING_EXT, &framebuffer);
 	glGetIntegerv(GL_STENCIL_BITS, &stencil_bits);
 
 	++skia_present_generation;
@@ -1193,7 +1195,7 @@ SkiaVideoFrameTarget VideoDisplay::BuildSkiaVideoFrameTarget(wxSize const& clien
 	target.height = client_size.GetHeight() * scale_factor;
 	target.viewport = { 0, 0, target.width, target.height };
 	target.origin = SkiaVideoTargetOrigin::BottomLeft;
-	target.sample_count = std::max(0, sample_count);
+	target.sample_count = 0;
 	target.stencil_bits = std::max(0, stencil_bits);
 	target.pixel_format = SkiaVideoTargetPixelFormat::Rgba8;
 	target.color_space = SkiaVideoTargetColorSpace::SdrPreview;
@@ -2010,12 +2012,10 @@ bool VideoDisplay::EnsureSkiaOverlayBacking(
 
 		gl.GenRenderbuffers(1, &stencil);
 		gl.BindRenderbuffer(GL_RENDERBUFFER_EXT, stencil);
-		gl.RenderbufferStorage(GL_RENDERBUFFER_EXT, GL_DEPTH24_STENCIL8, target_width, target_height);
-		gl.FramebufferRenderbuffer(
-			GL_FRAMEBUFFER_EXT,
-			GL_DEPTH_ATTACHMENT_EXT,
-			GL_RENDERBUFFER_EXT,
-			stencil);
+		// Visual tools never depth-test. A stencil-only attachment avoids making
+		// GL_EXT_packed_depth_stencil an accidental requirement on GL 2.x drivers
+		// and reduces bounded backing memory without changing Ganesh semantics.
+		gl.RenderbufferStorage(GL_RENDERBUFFER_EXT, GL_STENCIL_INDEX8, target_width, target_height);
 		gl.FramebufferRenderbuffer(
 			GL_FRAMEBUFFER_EXT,
 			GL_STENCIL_ATTACHMENT_EXT,
@@ -2024,7 +2024,13 @@ bool VideoDisplay::EnsureSkiaOverlayBacking(
 		gl.BindRenderbuffer(GL_RENDERBUFFER_EXT, 0);
 
 		GLenum const status = gl.CheckFramebufferStatus(GL_FRAMEBUFFER_EXT);
-		return status == GL_FRAMEBUFFER_COMPLETE || status == GL_FRAMEBUFFER_COMPLETE_EXT;
+		// Consume errors raised by this isolated allocation attempt so a rejected
+		// old-driver format cannot poison the same-frame legacy fallback.
+		bool allocation_error = false;
+		while (glGetError() != GL_NO_ERROR)
+			allocation_error = true;
+		return !allocation_error
+			&& (status == GL_FRAMEBUFFER_COMPLETE || status == GL_FRAMEBUFFER_COMPLETE_EXT);
 	};
 
 	if (!has_normal_target

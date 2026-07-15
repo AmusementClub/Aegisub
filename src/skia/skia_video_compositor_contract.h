@@ -26,6 +26,7 @@ enum class SkiaGlDeviceFailure {
 	ContextGenerationMismatch,
 	WrongThread,
 	ContextInitializationInjected,
+	GlVersionUnsupported,
 	GlInterfaceUnavailable,
 	GaneshContextUnavailable,
 	GaneshContextAbandoned,
@@ -43,6 +44,11 @@ enum class SkiaGlDeviceFailure {
 
 char const *ToString(SkiaGlDeviceHealth health) noexcept;
 char const *ToString(SkiaGlDeviceFailure failure) noexcept;
+
+/// Skia M146's Ganesh desktop interface rejects contexts older than GL 2.0.
+/// Keep this check independent of the driver-facing device so unsupported
+/// Windows software/remote contexts fail before Skia probes entry points.
+bool SupportsSkiaGaneshDesktopGl(std::string_view version) noexcept;
 
 class SkiaGlDeviceState {
 	bool owner_bound = false;

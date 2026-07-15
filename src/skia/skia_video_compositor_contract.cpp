@@ -22,6 +22,7 @@ char const *ToString(SkiaGlDeviceFailure failure) noexcept {
 		case SkiaGlDeviceFailure::ContextGenerationMismatch: return "context-generation-mismatch";
 		case SkiaGlDeviceFailure::WrongThread: return "wrong-thread";
 		case SkiaGlDeviceFailure::ContextInitializationInjected: return "context-initialization-injected";
+		case SkiaGlDeviceFailure::GlVersionUnsupported: return "gl-version-unsupported";
 		case SkiaGlDeviceFailure::GlInterfaceUnavailable: return "gl-interface-unavailable";
 		case SkiaGlDeviceFailure::GaneshContextUnavailable: return "ganesh-context-unavailable";
 		case SkiaGlDeviceFailure::GaneshContextAbandoned: return "ganesh-context-abandoned";
@@ -37,6 +38,33 @@ char const *ToString(SkiaGlDeviceFailure failure) noexcept {
 		case SkiaGlDeviceFailure::UnsupportedFailureInjection: return "unsupported-failure-injection";
 	}
 	return "unknown";
+}
+
+bool SupportsSkiaGaneshDesktopGl(std::string_view version) noexcept {
+	std::size_t position = 0;
+	while (position < version.size() && (version[position] == ' ' || version[position] == '\t'))
+		++position;
+	if (position == version.size() || version[position] < '0' || version[position] > '9')
+		return false;
+
+	unsigned int major = 0;
+	while (position < version.size() && version[position] >= '0' && version[position] <= '9') {
+		major = major * 10 + static_cast<unsigned int>(version[position] - '0');
+		if (major > 99)
+			return false;
+		++position;
+	}
+	if (position == version.size() || version[position] != '.')
+		return false;
+	++position;
+	if (position == version.size() || version[position] < '0' || version[position] > '9')
+		return false;
+
+	// The minor component only needs to be syntactically valid. Every desktop
+	// GL version with a major component of two or newer satisfies Ganesh's floor.
+	while (position < version.size() && version[position] >= '0' && version[position] <= '9')
+		++position;
+	return major >= 2;
 }
 
 bool SkiaGlDeviceState::BeginAccess(SkiaGlContextToken token, std::thread::id current_thread) {

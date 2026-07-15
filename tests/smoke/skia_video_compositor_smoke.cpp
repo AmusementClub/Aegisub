@@ -76,7 +76,7 @@ class OffscreenTarget final {
 public:
 	GLuint framebuffer = 0;
 	GLuint texture = 0;
-	GLuint depth_stencil = 0;
+	GLuint stencil = 0;
 	int width = 0;
 	int height = 0;
 
@@ -105,19 +105,14 @@ public:
 			texture,
 			0);
 
-		gl.GenRenderbuffers(1, &depth_stencil);
-		gl.BindRenderbuffer(GL_RENDERBUFFER_EXT, depth_stencil);
-		gl.RenderbufferStorage(GL_RENDERBUFFER_EXT, GL_DEPTH24_STENCIL8, width, height);
-		gl.FramebufferRenderbuffer(
-			GL_FRAMEBUFFER_EXT,
-			GL_DEPTH_ATTACHMENT_EXT,
-			GL_RENDERBUFFER_EXT,
-			depth_stencil);
+		gl.GenRenderbuffers(1, &stencil);
+		gl.BindRenderbuffer(GL_RENDERBUFFER_EXT, stencil);
+		gl.RenderbufferStorage(GL_RENDERBUFFER_EXT, GL_STENCIL_INDEX8, width, height);
 		gl.FramebufferRenderbuffer(
 			GL_FRAMEBUFFER_EXT,
 			GL_STENCIL_ATTACHMENT_EXT,
 			GL_RENDERBUFFER_EXT,
-			depth_stencil);
+			stencil);
 		gl.BindRenderbuffer(GL_RENDERBUFFER_EXT, 0);
 
 		auto const status = gl.CheckFramebufferStatus(GL_FRAMEBUFFER_EXT);
@@ -126,8 +121,8 @@ public:
 	}
 
 	~OffscreenTarget() {
-		if (depth_stencil)
-			gl.DeleteRenderbuffers(1, &depth_stencil);
+		if (stencil)
+			gl.DeleteRenderbuffers(1, &stencil);
 		if (framebuffer)
 			gl.DeleteFramebuffers(1, &framebuffer);
 		if (texture)

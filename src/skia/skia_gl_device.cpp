@@ -59,10 +59,23 @@ struct SkiaGlDevice::Impl {
 			return true;
 		}
 
+		// Read these before any capability failure so the one-shot fallback log is
+		// useful on old vendor drivers, Remote Desktop and Windows' GL 1.1
+		// software implementation as well as on successful contexts.
+		gl_vendor = ReadGlString(GL_VENDOR);
+		gl_renderer = ReadGlString(GL_RENDERER);
+		gl_version = ReadGlString(GL_VERSION);
+
 		if (failure_injection == SkiaVideoFailureInjection::ContextInitialization) {
 			TripFailure(
 				SkiaGlDeviceFailure::ContextInitializationInjected,
 				"AEGISUB_SKIA_VIDEO_FAILURE_INJECTION requested context-init");
+			return false;
+		}
+		if (!SupportsSkiaGaneshDesktopGl(gl_version)) {
+			TripFailure(
+				SkiaGlDeviceFailure::GlVersionUnsupported,
+				"Skia Ganesh requires a desktop OpenGL 2.0 or newer context");
 			return false;
 		}
 
@@ -78,9 +91,6 @@ struct SkiaGlDevice::Impl {
 			return false;
 		}
 
-		gl_vendor = ReadGlString(GL_VENDOR);
-		gl_renderer = ReadGlString(GL_RENDERER);
-		gl_version = ReadGlString(GL_VERSION);
 		state.MarkHealthy();
 		return true;
 	}

@@ -419,20 +419,10 @@ endif()
 option(WITH_CSRI "Enable CSRI support" ON)
 option(WITH_DRAWING_SKIA "Enable Skia-backed Lua drawing path operations" OFF)
 option(WITH_SKIA_VIDEO_TOOLS "Build the opt-in Skia video tools overlay" OFF)
-option(WITH_SKIA_VIDEO_SUBTITLES "Build the opt-in Skia video subtitle compositor (not implemented)" OFF)
-option(WITH_SKIA_SUBTITLE_DIRTY_EXPERIMENTAL "Build the Skia-only subtitle dirty experiment (not implemented)" OFF)
 option(WITH_SKIA_AUDIO_DISPLAY "Build the opt-in Skia audio display (not implemented)" OFF)
 option(WITH_SKIA_SOFTWARE_VIDEO "Build the Skia software video presenter (not implemented)" OFF)
 
-if(WITH_SKIA_SUBTITLE_DIRTY_EXPERIMENTAL AND NOT WITH_SKIA_VIDEO_SUBTITLES)
-    message(FATAL_ERROR
-        "WITH_SKIA_SUBTITLE_DIRTY_EXPERIMENTAL requires WITH_SKIA_VIDEO_SUBTITLES."
-    )
-endif()
-
 foreach(_aegisub_unimplemented_skia_feature IN ITEMS
-    WITH_SKIA_VIDEO_SUBTITLES
-    WITH_SKIA_SUBTITLE_DIRTY_EXPERIMENTAL
     WITH_SKIA_AUDIO_DISPLAY
     WITH_SKIA_SOFTWARE_VIDEO)
     if(${_aegisub_unimplemented_skia_feature})
@@ -1753,8 +1743,6 @@ message(STATUS "\n"
     "  LuaSocket:             ${LUA_WITH_LUASOCKET}\n"
     "  Drawing Skia:          ${WITH_DRAWING_SKIA}\n"
     "  Video tools Skia:      ${WITH_SKIA_VIDEO_TOOLS}\n"
-    "  Video subtitle Skia:   ${WITH_SKIA_VIDEO_SUBTITLES}\n"
-    "  Subtitle dirty Skia:   ${WITH_SKIA_SUBTITLE_DIRTY_EXPERIMENTAL}\n"
     "  Audio display Skia:    ${WITH_SKIA_AUDIO_DISPLAY}\n"
     "  Software video Skia:   ${WITH_SKIA_SOFTWARE_VIDEO}\n"
     "\n"

@@ -1177,6 +1177,8 @@ if(WITH_SKIA_VIDEO_TOOLS)
         src/skia/skia_video_compositor_contract.cpp
         src/skia/skia_gl_device.cpp
         src/skia/skia_video_compositor.cpp
+        src/skia/skia_video_overlay_command_buffer.cpp
+        src/skia/skia_video_overlay_gl.cpp
         src/skia_runtime/skia_surface_provider.cpp
         src/skia_runtime/skia_text_layout_cache.cpp
     )

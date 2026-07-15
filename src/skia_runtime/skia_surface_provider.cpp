@@ -4,6 +4,12 @@
 #include "skia_runtime/skia_surface_provider.h"
 
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #ifdef HAVE_OPENGL_GL_H
 #include <OpenGL/gl.h>
 #else

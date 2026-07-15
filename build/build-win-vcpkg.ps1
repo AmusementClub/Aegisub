@@ -113,7 +113,6 @@ function Configure-CMake([string]$CMakePath, [string]$GeneratorName) {
         "-DWITH_PFFFT=ON",
         '-DAEGISUB_MATROSKA_PARSING=ON',
         "-DWITH_DRAWING_SKIA=ON",
-        "-DWITH_SKIA=OFF",
         "-DZ_VCPKG_POWERSHELL_PATH:FILEPATH=$resolvedPowerShellExecutable",
         "-DCMAKE_CXX_FLAGS=$CMakeCxxFlags",
         "-DCMAKE_C_FLAGS=$CMakeCFlags",

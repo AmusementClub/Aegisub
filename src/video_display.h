@@ -53,15 +53,16 @@ class AssDialogue;
 class RetinaHelper;
 class AsyncVideoProvider;
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
-class SkCanvas;
 class SkiaSurfaceProvider;
 class SkiaTextLayoutCache;
 class SkiaVideoCompositor;
+class SkiaVideoOverlayCommandBuffer;
 struct SkiaGlContextToken;
 struct SkiaVideoFrameTarget;
 enum class SkiaVideoFailureInjection;
 #endif
 class VideoController;
+class VideoOverlayDrawContext;
 class VisualToolBase;
 class wxComboBox;
 class wxTextCtrl;
@@ -179,8 +180,20 @@ class VideoDisplay final : public wxGLCanvas {
 	unsigned int skia_overlay_invert_framebuffer = 0;
 	unsigned int skia_overlay_invert_texture = 0;
 	unsigned int skia_overlay_invert_stencil_renderbuffer = 0;
+	std::unique_ptr<SkiaVideoOverlayCommandBuffer> skia_overlay_cached_commands;
+	bool skia_overlay_cache_valid = false;
+	std::uint64_t skia_overlay_cache_context_generation = 0;
+	int skia_overlay_cache_canvas_width = 0;
+	int skia_overlay_cache_canvas_height = 0;
+	int skia_overlay_cache_scale_factor = 0;
+	int skia_overlay_origin_x = 0;
+	int skia_overlay_origin_y = 0;
 	int skia_overlay_width = 0;
 	int skia_overlay_height = 0;
+	int skia_overlay_invert_origin_x = 0;
+	int skia_overlay_invert_origin_y = 0;
+	int skia_overlay_invert_width = 0;
+	int skia_overlay_invert_height = 0;
 #endif
 
 	double GetVideoScaleFactor() const;
@@ -216,8 +229,13 @@ class VideoDisplay final : public wxGLCanvas {
 	/// @param vertical_percent The percent of the video reserved vertically
 	void DrawOverscanMask(float horizontal_percent, float vertical_percent) const;
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
-	void DrawOverscanMaskSkia(SkCanvas &canvas, float horizontal_percent, float vertical_percent) const;
-	bool EnsureSkiaOverlayBacking(int canvas_width, int canvas_height);
+	void DrawOverscanMaskSkia(VideoOverlayDrawContext &draw_context, float horizontal_percent, float vertical_percent) const;
+	bool EnsureSkiaOverlayBacking(
+		int normal_width,
+		int normal_height,
+		int invert_width,
+		int invert_height,
+		bool need_invert);
 	void DestroySkiaOverlayBacking() noexcept;
 #endif
 

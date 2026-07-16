@@ -37,6 +37,7 @@ namespace agi { struct Context; }
 namespace agi { class OptionValue; }
 class SecondarySubtitleStrip;
 class VideoDisplay;
+class wxSpinCtrl;
 class wxTextCtrl;
 class wxStaticLine;
 
@@ -45,7 +46,8 @@ class wxStaticLine;
 class VideoBox final : public wxPanel {
 	std::vector<agi::signal::Connection> connections;
 	agi::Context *context;     ///< Project context
-	wxTextCtrl *VideoPosition; ///< Current frame/time
+	wxTextCtrl *VideoPosition; ///< Current frame time
+	wxSpinCtrl *VideoFrameInput; ///< Current frame and frame jump input
 	wxTextCtrl *VideoSubsPos;  ///< Time relative to the active subtitle line
 	SecondarySubtitleStrip *secondarySubtitleStrip = nullptr;
 	wxStaticLine *secondarySubtitleStripSeparator = nullptr;
@@ -56,6 +58,7 @@ class VideoBox final : public wxPanel {
 
 	/// Update VideoPosition and VideoSubsPos
 	void UpdateTimeBoxes();
+	void JumpToInputFrame();
 	void ApplyVideoProvider();
 	void UpdateSecondarySubtitleStripGutter();
 	void UpdateSecondarySubtitleStripVisibility();

@@ -31,6 +31,7 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "async_video_provider.h"
 #include "compat.h"
 #include "format.h"
 #include "include/aegisub/context.h"
@@ -46,6 +47,7 @@
 
 #include <wx/combobox.h>
 #include <wx/sizer.h>
+#include <wx/spinctrl.h>
 #include <wx/statline.h>
 #include <wx/textctrl.h>
 #include <wx/toplevel.h>
@@ -62,7 +64,26 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 	auto mainToolbar = toolbar::GetToolbar(this, "video", context, "Video", false);
 
 	VideoPosition = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
-	VideoPosition->SetToolTip(_("Current frame time and number"));
+	VideoPosition->SetToolTip(_("Current frame time"));
+
+	VideoFrameInput = new wxSpinCtrl(
+		this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize,
+		wxSP_ARROW_KEYS | wxTE_PROCESS_ENTER, 0, 0, std::max(current_frame, 0));
+#ifdef __WXGTK3__
+	// GTK3 does not reliably shrink spin controls to their requested text width.
+#elif wxCHECK_VERSION(3, 1, 3)
+	VideoFrameInput->SetInitialSize(VideoFrameInput->GetSizeFromText(wxS("000000")));
+#else
+	VideoFrameInput->SetInitialSize(VideoFrameInput->GetSizeFromTextSize(GetTextExtent(wxS("000000"))));
+#endif
+	VideoFrameInput->SetToolTip(_("Current frame; enter a frame number to jump"));
+	VideoFrameInput->Bind(wxEVT_TEXT_ENTER, [this](wxCommandEvent &) { JumpToInputFrame(); });
+	VideoFrameInput->Bind(wxEVT_SPINCTRL, [this](wxSpinEvent &) { JumpToInputFrame(); });
+	VideoFrameInput->Bind(wxEVT_KILL_FOCUS, [this](wxFocusEvent &event) {
+		if (current_frame >= 0)
+			VideoFrameInput->SetValue(current_frame);
+		event.Skip();
+	});
 
 	VideoSubsPos = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
 	VideoSubsPos->SetToolTip(_("Time of this frame relative to start and end of current subs"));
@@ -88,6 +109,7 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 
 	auto videoBottomSizer = new wxBoxSizer(wxHORIZONTAL);
 	videoBottomSizer->Add(mainToolbar, wxSizerFlags(0).Center());
+	videoBottomSizer->Add(VideoFrameInput, wxSizerFlags(0).Center().Border(wxLEFT));
 	videoBottomSizer->Add(VideoPosition, wxSizerFlags(1).Center().Border(wxLEFT));
 	videoBottomSizer->Add(VideoSubsPos, wxSizerFlags(1).Center().Border(wxLEFT));
 	videoBottomSizer->Add(zoomBox, wxSizerFlags(0).Center().Border(wxLEFT | wxRIGHT));
@@ -109,7 +131,7 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 	SetSizer(VideoSizer);
 	Bind(wxEVT_SIZE, &VideoBox::OnSize, this);
 
-	UpdateTimeBoxes();
+	ApplyVideoProvider();
 	UpdateSecondarySubtitleStripVisibility();
 
 	auto core = context->GetCore();
@@ -133,8 +155,31 @@ void VideoBox::SyncToContextState() {
 
 void VideoBox::ApplyVideoProvider() {
 	auto core = context->GetCore();
-	current_frame = core.project->VideoProvider() ? core.videoController->GetFrameN() : -1;
+	auto provider = core.project->VideoProvider();
+	current_frame = provider ? core.videoController->GetFrameN() : -1;
+	if (provider) {
+		VideoFrameInput->SetRange(0, provider->GetFrameCount() - 1);
+		VideoFrameInput->SetValue(current_frame);
+		VideoFrameInput->Enable();
+	}
+	else {
+		VideoFrameInput->SetRange(0, 0);
+		VideoFrameInput->SetValue(0);
+		VideoFrameInput->Disable();
+	}
 	UpdateTimeBoxes();
+}
+
+void VideoBox::JumpToInputFrame() {
+	auto core = context->GetCore();
+	auto provider = core.project->VideoProvider();
+	if (!provider)
+		return;
+
+	int const target_frame = std::clamp(VideoFrameInput->GetValue(), 0, provider->GetFrameCount() - 1);
+	VideoFrameInput->SetValue(target_frame);
+	core.videoController->Stop();
+	core.videoController->JumpToFrame(target_frame);
 }
 
 bool VideoBox::OpenSecondarySubtitlesFromPath(agi::fs::path const& path, bool show_errors) {
@@ -148,8 +193,8 @@ void VideoBox::UpdateTimeBoxes() {
 	int frame = current_frame >= 0 ? current_frame : core.videoController->GetFrameN();
 	int time = core.videoController->TimeAtFrame(frame, agi::vfr::EXACT);
 
-	// Set the text box for frame number and time
-	VideoPosition->SetValue(fmt_wx("%s - %d", agi::Time(time).GetAssFormatted(true), frame));
+	// Set the text box for the current frame time
+	VideoPosition->SetValue(to_wx(agi::Time(time).GetAssFormatted(true)));
 	if (std::binary_search(core.project->Keyframes().begin(), core.project->Keyframes().end(), frame)) {
 		// Set the background color to indicate this is a keyframe
 		VideoPosition->SetBackgroundColour(to_wx(OPT_GET("Colour/Subtitle Grid/Background/Selection")->GetColor()));
@@ -178,6 +223,8 @@ void VideoBox::UpdateTimeBoxes() {
 
 void VideoBox::OnCurrentFrameChanged(int frame_number) {
 	current_frame = frame_number;
+	if (!VideoFrameInput->HasFocus())
+		VideoFrameInput->SetValue(frame_number);
 	UpdateTimeBoxes();
 }
 

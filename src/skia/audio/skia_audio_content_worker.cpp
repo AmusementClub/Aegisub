@@ -43,15 +43,20 @@ bool ContentAnalysisConfig::IsValid() const noexcept {
 }
 
 struct ContentWorker::Impl {
-	explicit Impl(ReadyCallback ready_callback, std::size_t content_budget_bytes)
+	explicit Impl(
+		ReadyCallback ready_callback,
+		FailureCallback failure_callback,
+		std::size_t content_budget_bytes)
 	: store(content_budget_bytes)
-	, ready_callback(std::move(ready_callback)) {
+	, ready_callback(std::move(ready_callback))
+	, failure_callback(std::move(failure_callback)) {
 	}
 
 	mutable std::mutex mutex;
 	std::condition_variable wake;
 	ContentTileStore store;
 	ReadyCallback ready_callback;
+	FailureCallback failure_callback;
 	std::thread thread;
 	agi::AudioProvider *provider = nullptr;
 	ContentGeneration generation;
@@ -150,6 +155,7 @@ struct ContentWorker::Impl {
 						request.key = key;
 						request.milliseconds_per_pixel = plan.analysis.milliseconds_per_pixel;
 						request.mix_policy = plan.analysis.mix_policy;
+						request.channel_mode = plan.analysis.spectrum_channel_mode;
 						request.derivation_size = plan.analysis.spectrum_derivation_size;
 						request.derivation_distance = plan.analysis.spectrum_derivation_distance;
 						built = analyzer->BuildSpectrum(request, [this, serial = plan.serial](ContentGeneration value) {
@@ -182,9 +188,21 @@ struct ContentWorker::Impl {
 					}
 				}
 			}
+			catch (std::exception const& err) {
+				{
+					std::lock_guard<std::mutex> lock(mutex);
+					++metrics.builds_invalid;
+				}
+				if (failure_callback)
+					failure_callback(err.what());
+			}
 			catch (...) {
-				std::lock_guard<std::mutex> lock(mutex);
-				++metrics.builds_invalid;
+				{
+					std::lock_guard<std::mutex> lock(mutex);
+					++metrics.builds_invalid;
+				}
+				if (failure_callback)
+					failure_callback("an unknown exception escaped the Audio content worker");
 			}
 
 			{
@@ -197,8 +215,14 @@ struct ContentWorker::Impl {
 	}
 };
 
-ContentWorker::ContentWorker(ReadyCallback ready_callback, std::size_t content_budget_bytes)
-: impl(std::make_unique<Impl>(std::move(ready_callback), content_budget_bytes)) {
+ContentWorker::ContentWorker(
+	ReadyCallback ready_callback,
+	FailureCallback failure_callback,
+	std::size_t content_budget_bytes)
+: impl(std::make_unique<Impl>(
+	std::move(ready_callback),
+	std::move(failure_callback),
+	content_budget_bytes)) {
 }
 
 ContentWorker::~ContentWorker() {

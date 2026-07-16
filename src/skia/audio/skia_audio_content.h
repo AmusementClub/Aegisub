@@ -103,6 +103,8 @@ struct ContentViewportRequest {
 	std::uint32_t column_count = 0;
 	std::uint32_t tile_column_count = 0;
 	std::uint32_t spectrum_bin_count = 0;
+
+	friend bool operator==(ContentViewportRequest const&, ContentViewportRequest const&) = default;
 };
 
 std::vector<ContentTileKey> PlanVisibleContentTiles(ContentViewportRequest const& request);

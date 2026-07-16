@@ -1,6 +1,7 @@
 #include "skia_audio_content_analysis.h"
 
 #include "../../audio_display_source.h"
+#include "../../audio_display_analysis.h"
 #include "../../audio_spectrum_analysis_cache.h"
 
 #include <algorithm>
@@ -108,6 +109,9 @@ struct ContentAnalyzer::Impl {
 	AudioMixPolicy spectrum_mix_policy = AudioMixPolicy::MonoAverage;
 	std::size_t spectrum_derivation_size = 0;
 	std::size_t spectrum_derivation_distance = 0;
+	SpectrumChannelMode spectrum_channel_mode = SpectrumChannelMode::MixedMono;
+	std::vector<std::unique_ptr<AudioDisplaySource>> per_channel_sources;
+	std::vector<std::unique_ptr<AudioSpectrumAnalysisCache>> per_channel_caches;
 
 	explicit Impl(AudioDisplaySource& source)
 	: source(source) {
@@ -117,17 +121,50 @@ struct ContentAnalyzer::Impl {
 		if (!spectrum_cache
 			|| spectrum_mix_policy != request.mix_policy
 			|| spectrum_derivation_size != request.derivation_size
-			|| spectrum_derivation_distance != request.derivation_distance) {
+			|| spectrum_derivation_distance != request.derivation_distance
+			|| spectrum_channel_mode != SpectrumChannelMode::MixedMono) {
 			spectrum_cache = std::make_unique<AudioSpectrumAnalysisCache>();
 			spectrum_mix_policy = request.mix_policy;
 			spectrum_derivation_size = request.derivation_size;
 			spectrum_derivation_distance = request.derivation_distance;
+			spectrum_channel_mode = SpectrumChannelMode::MixedMono;
 			spectrum_cache->SetMixPolicy(request.mix_policy);
 			spectrum_cache->SetSource(&source);
 			spectrum_cache->SetResolution(request.derivation_size, request.derivation_distance);
 			spectrum_cache->Age(kSpectrumAnalysisCacheBudget);
 		}
 		return *spectrum_cache;
+	}
+
+	void EnsurePerChannelCaches(SpectrumBuildRequest const& request) {
+		if (request.channel_mode == SpectrumChannelMode::MixedMono || source.GetChannels() <= 1) {
+			per_channel_sources.clear();
+			per_channel_caches.clear();
+			return;
+		}
+
+		if (spectrum_channel_mode != request.channel_mode
+			|| spectrum_derivation_size != request.derivation_size
+			|| spectrum_derivation_distance != request.derivation_distance
+			|| per_channel_caches.size() != static_cast<std::size_t>(source.GetChannels())) {
+			per_channel_sources.clear();
+			per_channel_caches.clear();
+			spectrum_cache.reset();
+			spectrum_channel_mode = request.channel_mode;
+			spectrum_derivation_size = request.derivation_size;
+			spectrum_derivation_distance = request.derivation_distance;
+			auto const per_channel_budget = std::max<std::size_t>(
+				1,
+				kSpectrumAnalysisCacheBudget / static_cast<std::size_t>(source.GetChannels()));
+			for (int channel = 0; channel < source.GetChannels(); ++channel) {
+				per_channel_sources.push_back(CreateSingleChannelAudioDisplaySource(&source, channel));
+				auto cache = std::make_unique<AudioSpectrumAnalysisCache>();
+				cache->SetSource(per_channel_sources.back().get());
+				cache->SetResolution(request.derivation_size, request.derivation_distance);
+				cache->Age(per_channel_budget);
+				per_channel_caches.push_back(std::move(cache));
+			}
+		}
 	}
 };
 
@@ -209,7 +246,9 @@ ContentBuildResult ContentAnalyzer::BuildSpectrum(
 		|| request.derivation_size >= std::numeric_limits<std::size_t>::digits
 		|| request.derivation_distance > request.derivation_size
 		|| request.key.spectrum_bin_count > kMaximumSpectrumBins
-		|| request.key.spectrum_bin_count != (static_cast<std::size_t>(1) << request.derivation_size)) {
+		|| request.key.spectrum_bin_count != (static_cast<std::size_t>(1) << request.derivation_size)
+		|| (request.channel_mode != SpectrumChannelMode::MixedMono
+			&& source.GetChannels() <= 1)) {
 		return {};
 	}
 	if (!Current(request.key.generation, is_current))
@@ -220,16 +259,34 @@ ContentBuildResult ContentAnalyzer::BuildSpectrum(
 	if (!std::isfinite(samples_per_pixel) || samples_per_pixel <= 0.0L)
 		return {};
 
-	auto& cache = impl->SpectrumCache(request);
-	if (!cache.IsReady())
-		return {};
 	auto const bin_count = static_cast<std::size_t>(request.key.spectrum_bin_count);
+	impl->EnsurePerChannelCaches(request);
+	AudioSpectrumAnalysisCache *cache = nullptr;
+	if (request.channel_mode == SpectrumChannelMode::MixedMono || source.GetChannels() <= 1) {
+		cache = &impl->SpectrumCache(request);
+		if (!cache->IsReady())
+			return {};
+	}
+	else {
+		if (impl->per_channel_caches.empty())
+			return {};
+		for (auto const& channel_cache : impl->per_channel_caches) {
+			if (!channel_cache || !channel_cache->IsReady())
+				return {};
+		}
+	}
 
 	auto tile = std::make_shared<ContentTile>();
 	tile->key = request.key;
 	tile->spectrum_power.resize(static_cast<std::size_t>(request.key.column_count) * bin_count);
 	std::size_t previous_block = std::numeric_limits<std::size_t>::max();
 	float const *previous_power = nullptr;
+	std::vector<float> merged_power;
+	std::vector<const float *> channel_power_inputs;
+	if (!cache) {
+		merged_power.resize(bin_count);
+		channel_power_inputs.resize(impl->per_channel_caches.size());
+	}
 	for (std::uint32_t column = 0; column < request.key.column_count; ++column) {
 		if (!Current(request.key.generation, is_current))
 			return { ContentBuildStatus::Cancelled, {} };
@@ -241,14 +298,25 @@ ContentBuildResult ContentAnalyzer::BuildSpectrum(
 			return {};
 		auto const block_index = static_cast<std::size_t>(block_index_u64);
 		if (block_index != previous_block) {
-			previous_power = cache.Get(block_index);
+			if (cache) {
+				previous_power = cache->Get(block_index);
+			}
+			else {
+				for (std::size_t channel = 0; channel < impl->per_channel_caches.size(); ++channel)
+					channel_power_inputs[channel] = impl->per_channel_caches[channel]->Get(block_index);
+				if (request.channel_mode == SpectrumChannelMode::PerBinMaxPower)
+					MergeSpectrumPowerBinsMax(channel_power_inputs, bin_count, merged_power.data());
+				else
+					MergeSpectrumPowerBinsAverage(channel_power_inputs, bin_count, merged_power.data());
+			}
 			previous_block = block_index;
 		}
-		if (!previous_power)
+		if (cache && !previous_power)
 			return {};
-		std::copy(
-			previous_power,
-			previous_power + bin_count,
+		if (!cache && merged_power.empty())
+			return {};
+		auto const *power = cache ? previous_power : merged_power.data();
+		std::copy(power, power + bin_count,
 			tile->spectrum_power.begin() + static_cast<std::size_t>(column) * bin_count);
 	}
 	if (!tile->IsValid())

@@ -1,17 +1,20 @@
 #pragma once
 
 #include "skia_audio_display_contract.h"
+#include "skia_audio_frame_model.h"
 
 #include <wx/glcanvas.h>
 
 #include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 class wxEraseEvent;
 class wxPaintEvent;
 class wxSizeEvent;
 class wxThreadEvent;
+class TimeRange;
 
 namespace agi { class AudioProvider; struct Context; }
 
@@ -27,7 +30,12 @@ class SkiaAudioDisplay final : public wxGLCanvas {
 	void OnEraseBackground(wxEraseEvent& event);
 	void OnSize(wxSizeEvent& event);
 	void OnContentReady(wxThreadEvent& event);
+	void OnContentFailure(wxThreadEvent& event);
 	void OnAudioOpen(agi::AudioProvider *provider);
+	void OnRenderingSettingsChanged();
+	void ReconfigureAnalysis();
+	void RebuildViewport();
+	void RequestVisibleContent();
 	void RequestFallback(std::string message);
 
 public:
@@ -45,6 +53,12 @@ public:
 
 	void ClearFailureCallback();
 	void SyncToCurrentAudioProvider();
+	void ScrollBy(int pixel_amount);
+	void ScrollBy(int pixel_amount, int mouse_x);
+	void ScrollTimeRangeInView(TimeRange const& range);
+	void SetZoomLevel(int zoom_level);
+	int GetZoomLevel() const;
+	void SetAmplitudeScale(float scale);
 };
 
 }

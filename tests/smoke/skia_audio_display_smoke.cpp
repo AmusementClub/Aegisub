@@ -170,6 +170,21 @@ std::shared_ptr<aegisub::skia::audio::SpectrumPalette const> MakePalette(
 	return palette;
 }
 
+std::shared_ptr<aegisub::skia::audio::SpectrumBandPlan const> MakeBandPlan(
+	std::uint32_t bins,
+	int height,
+	aegisub::skia::audio::SpectrumScaleMode mode) {
+	using namespace aegisub::skia::audio;
+	SpectrumBandPlanRequest request;
+	request.bin_count = bins;
+	request.output_height = height;
+	request.sample_rate = 48000;
+	request.mode = mode;
+	request.frequency_reference_position = SpectrumFrequencyReferenceForPreset(2);
+	auto plan = std::make_shared<SpectrumBandPlan>(BuildSpectrumBandPlan(request));
+	return plan->IsValid() ? plan : nullptr;
+}
+
 bool ValidateWaveformContent(
 	aegisub::skia::audio::FrameTarget const& target,
 	SkiaGlContextToken context,
@@ -256,6 +271,7 @@ bool ValidateSpectrumContent(
 	frame.height = target.height;
 	frame.background_color = 0xFF101010;
 	frame.spectrum_palette = MakePalette(1, false);
+	frame.spectrum_band_plan = MakeBandPlan(32, target.height, SpectrumScaleMode::LegacyLinear);
 	frame.tiles = { tile };
 
 	if (!presenter.RenderContentFrame(context, target, frame)) {
@@ -278,14 +294,19 @@ bool ValidateSpectrumContent(
 		std::cerr << "spectrum palette/amplitude update did not apply without content upload\n";
 		return false;
 	}
+	frame.spectrum_band_plan = MakeBandPlan(32, target.height, SpectrumScaleMode::FrequencyCurve);
+	if (!presenter.RenderContentFrame(context, target, frame)) {
+		std::cerr << "spectrum band-plan change failed to remap retained power\n";
+		return false;
+	}
 
 	final_metrics = presenter.Metrics();
 	bool const passed = final_metrics.surface_acquisitions == 1
-		&& final_metrics.submits == 3
-		&& final_metrics.content_tiles_drawn == 3
+		&& final_metrics.submits == 4
+		&& final_metrics.content_tiles_drawn == 4
 		&& final_metrics.content_cache_hits == 2
-		&& final_metrics.content_cache_misses == 1
-		&& final_metrics.content_uploads == 1
+		&& final_metrics.content_cache_misses == 2
+		&& final_metrics.content_uploads == 2
 		&& final_metrics.palette_uploads == 2;
 	if (!passed)
 		std::cerr << "spectrum retained cache metrics were unexpected\n";

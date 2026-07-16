@@ -2,6 +2,7 @@
 
 #include "skia_audio_content.h"
 #include "skia_audio_display_contract.h"
+#include "skia_audio_frame_model.h"
 #include "../skia_gl_device.h"
 
 #include <array>
@@ -41,10 +42,11 @@ struct ContentFrame {
 	ContentGeneration generation;
 	ContentKind kind = ContentKind::Waveform;
 	std::uint64_t first_column = 0;
-	int x = 0;
-	int y = 0;
-	int width = 0;
-	int height = 0;
+	float x = 0.f;
+	float y = 0.f;
+	float width = 0.f;
+	float height = 0.f;
+	float first_column_offset = 0.f;
 	float amplitude = 1.f;
 	std::uint32_t background_color = 0xFF182230;
 	std::uint32_t waveform_peak_color = 0xFF2A9D8F;
@@ -52,6 +54,7 @@ struct ContentFrame {
 	std::uint32_t waveform_zero_color = 0xFF8CA0B3;
 	bool draw_waveform_average = true;
 	std::shared_ptr<SpectrumPalette const> spectrum_palette;
+	std::shared_ptr<SpectrumBandPlan const> spectrum_band_plan;
 	std::vector<std::shared_ptr<ContentTile const>> tiles;
 };
 

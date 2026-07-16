@@ -133,6 +133,10 @@ void AudioDisplaySlot::SyncToCurrentAudioProvider() {
 void AudioDisplaySlot::ScrollBy(int pixel_amount) {
 	if (display)
 		display->ScrollBy(pixel_amount);
+	else if (skia_display) {
+		skia_display->ScrollBy(pixel_amount);
+		pending_scroll_pixels += pixel_amount;
+	}
 	else
 		pending_scroll_pixels += pixel_amount;
 }
@@ -140,6 +144,10 @@ void AudioDisplaySlot::ScrollBy(int pixel_amount) {
 void AudioDisplaySlot::ScrollBy(int pixel_amount, int mouse_x) {
 	if (display)
 		display->ScrollBy(pixel_amount, mouse_x);
+	else if (skia_display) {
+		skia_display->ScrollBy(pixel_amount, mouse_x);
+		pending_scroll_pixels += pixel_amount;
+	}
 	else
 		pending_scroll_pixels += pixel_amount;
 }
@@ -151,6 +159,8 @@ void AudioDisplaySlot::ScrollTimeRangeInView(TimeRange const& range) {
 	pending_scroll_pixels = 0;
 	if (display)
 		display->ScrollTimeRangeInView(range);
+	else if (skia_display)
+		skia_display->ScrollTimeRangeInView(range);
 }
 
 void AudioDisplaySlot::SetZoomLevel(int zoom_level) {
@@ -158,6 +168,8 @@ void AudioDisplaySlot::SetZoomLevel(int zoom_level) {
 	this->zoom_level = zoom_level;
 	if (display)
 		display->SetZoomLevel(zoom_level);
+	else if (skia_display)
+		skia_display->SetZoomLevel(zoom_level);
 }
 
 int AudioDisplaySlot::GetZoomLevel() const {
@@ -169,6 +181,8 @@ void AudioDisplaySlot::SetAmplitudeScale(float scale) {
 	amplitude_scale = scale;
 	if (display)
 		display->SetAmplitudeScale(scale);
+	else if (skia_display)
+		skia_display->SetAmplitudeScale(scale);
 }
 
 }

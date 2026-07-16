@@ -31,10 +31,17 @@ struct WaveformBuildRequest {
 	AudioMixPolicy mix_policy = AudioMixPolicy::MonoMaxAbs;
 };
 
+enum class SpectrumChannelMode {
+	MixedMono,
+	PerBinMaxPower,
+	PerBinAveragePower,
+};
+
 struct SpectrumBuildRequest {
 	ContentTileKey key;
 	double milliseconds_per_pixel = 0.0;
 	AudioMixPolicy mix_policy = AudioMixPolicy::MonoAverage;
+	SpectrumChannelMode channel_mode = SpectrumChannelMode::MixedMono;
 	std::size_t derivation_size = 0;
 	std::size_t derivation_distance = 0;
 };

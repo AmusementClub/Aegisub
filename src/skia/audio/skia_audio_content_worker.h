@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <string>
 
 namespace agi { class AudioProvider; }
 
@@ -22,6 +23,7 @@ struct ContentAnalysisConfig {
 	ContentSourceMode source_mode = ContentSourceMode::FloatInterleaved;
 	double milliseconds_per_pixel = 0.0;
 	AudioMixPolicy mix_policy = AudioMixPolicy::MonoAverage;
+	SpectrumChannelMode spectrum_channel_mode = SpectrumChannelMode::MixedMono;
 	std::size_t spectrum_derivation_size = 0;
 	std::size_t spectrum_derivation_distance = 0;
 
@@ -55,9 +57,11 @@ class ContentWorker final {
 
 public:
 	using ReadyCallback = std::function<void(ContentGeneration)>;
+	using FailureCallback = std::function<void(std::string)>;
 
 	explicit ContentWorker(
 		ReadyCallback ready_callback = {},
+		FailureCallback failure_callback = {},
 		std::size_t content_budget_bytes = 32 * 1024 * 1024);
 	~ContentWorker();
 

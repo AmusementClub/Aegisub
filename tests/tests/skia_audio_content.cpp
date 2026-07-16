@@ -301,3 +301,29 @@ TEST(skia_audio_content, spectrum_builder_rejects_transform_sizes_below_pffft_fl
 	EXPECT_EQ(audio::ContentBuildStatus::InvalidRequest, result.status);
 	EXPECT_EQ(nullptr, result.tile);
 }
+
+TEST(skia_audio_content, spectrum_builder_supports_per_channel_power_aggregation) {
+	std::vector<float> samples(64 * 2, 0.f);
+	for (std::size_t frame = 0; frame < 64; ++frame)
+		samples[frame * 2 + 1] = 1.f;
+	TestAudioSource source(std::move(samples), 64, 2, 1000);
+
+	audio::SpectrumBuildRequest request;
+	request.key = { { 13, 2 }, audio::ContentKind::Spectrum, 0, 1, 16 };
+	request.milliseconds_per_pixel = 16.0;
+	request.derivation_size = 4;
+	request.derivation_distance = 4;
+	request.channel_mode = audio::SpectrumChannelMode::PerBinMaxPower;
+	audio::ContentAnalyzer analyzer(source);
+	auto const max_result = analyzer.BuildSpectrum(request);
+	ASSERT_EQ(audio::ContentBuildStatus::Ready, max_result.status);
+	ASSERT_NE(max_result.tile, nullptr);
+
+	request.key.generation.analysis = 3;
+	request.channel_mode = audio::SpectrumChannelMode::PerBinAveragePower;
+	auto const average_result = analyzer.BuildSpectrum(request);
+	ASSERT_EQ(audio::ContentBuildStatus::Ready, average_result.status);
+	ASSERT_NE(average_result.tile, nullptr);
+	EXPECT_GT(max_result.tile->spectrum_power[0], 0.f);
+	EXPECT_GT(max_result.tile->spectrum_power[0], average_result.tile->spectrum_power[0]);
+}

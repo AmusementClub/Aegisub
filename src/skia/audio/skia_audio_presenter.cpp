@@ -123,19 +123,30 @@ std::vector<std::uint8_t> BuildWaveformMask(ContentTile const& tile, bool averag
 	return mask;
 }
 
-std::vector<std::uint8_t> EncodeSpectrumPower(ContentTile const& tile) {
+std::vector<std::uint8_t> EncodeSpectrumPower(ContentTile const& tile, SpectrumBandPlan const& plan) {
 	auto const width = static_cast<std::size_t>(tile.key.column_count);
-	auto const bins = static_cast<std::size_t>(tile.key.spectrum_bin_count);
-	std::vector<std::uint8_t> pixels(width * bins * 4);
+	auto const height = static_cast<std::size_t>(plan.output_height);
+	std::vector<std::uint8_t> pixels(width * height * 4);
 	for (std::size_t x = 0; x < width; ++x) {
-		for (std::size_t bin = 0; bin < bins; ++bin) {
-			auto const power = std::clamp(
-				tile.spectrum_power[x * bins + bin],
-				0.f,
-				kSpectrumPowerEncodingMaximum);
+		for (std::size_t y = 0; y < height; ++y) {
+			auto const& band = plan.bands[y];
+			float power = 0.f;
+			if (plan.interpolated) {
+				auto const lower = tile.spectrum_power[
+					x * tile.key.spectrum_bin_count + band.first];
+				auto const upper = tile.spectrum_power[
+					x * tile.key.spectrum_bin_count + band.last];
+				power = (1.f - band.fraction) * lower + band.fraction * upper;
+			}
+			else {
+				for (auto bin = band.first; bin <= band.last; ++bin)
+					power = std::max(power, tile.spectrum_power[
+						x * tile.key.spectrum_bin_count + bin]);
+			}
+			power = std::clamp(power, 0.f, kSpectrumPowerEncodingMaximum);
 			auto const encoded = static_cast<std::uint16_t>(std::lround(
 				power / kSpectrumPowerEncodingMaximum * std::numeric_limits<std::uint16_t>::max()));
-			auto const image_y = bins - 1 - bin;
+			auto const image_y = height - 1 - y;
 			auto *pixel = pixels.data() + (image_y * width + x) * 4;
 			pixel[0] = static_cast<std::uint8_t>(encoded >> 8);
 			pixel[1] = static_cast<std::uint8_t>(encoded & 0xFF);
@@ -161,15 +172,27 @@ std::vector<std::uint8_t> EncodePalette(SpectrumPalette const& palette) {
 std::string ValidateContentFrame(FrameTarget const& target, ContentFrame const& frame) {
 	if (!frame.generation.provider || !frame.generation.analysis)
 		return "the Audio content generation is zero";
-	if (frame.x < 0 || frame.y < 0 || frame.width <= 0 || frame.height <= 0)
+	if (!std::isfinite(frame.x)
+		|| !std::isfinite(frame.y)
+		|| !std::isfinite(frame.width)
+		|| !std::isfinite(frame.height)
+		|| !std::isfinite(frame.first_column_offset)
+		|| frame.x < 0.f
+		|| frame.y < 0.f
+		|| frame.width <= 0.f
+		|| frame.height <= 0.f
+		|| frame.first_column_offset > 0.f
+		|| frame.first_column_offset <= -1.f)
 		return "the Audio content bounds are invalid";
 	if (frame.x > target.width - frame.width || frame.y > target.height - frame.height)
 		return "the Audio content bounds exceed the frame target";
 	if (!std::isfinite(frame.amplitude) || frame.amplitude < 0.f)
 		return "the Audio content amplitude is invalid";
 	if (frame.kind == ContentKind::Spectrum
-		&& (!frame.spectrum_palette || !frame.spectrum_palette->revision)) {
-		return "the spectrum palette or its revision is missing";
+		&& (!frame.spectrum_palette || !frame.spectrum_palette->revision
+			|| !frame.spectrum_band_plan || !frame.spectrum_band_plan->IsValid()
+			|| frame.spectrum_band_plan->output_height != static_cast<int>(std::lround(frame.height)))) {
+		return "the spectrum palette, band plan, or its revision is missing";
 	}
 	return {};
 }
@@ -182,6 +205,7 @@ struct Presenter::Impl {
 		sk_sp<SkImage> secondary;
 		std::size_t bytes = 0;
 		std::uint64_t touch = 0;
+		std::uint64_t spectrum_revision = 0;
 	};
 	struct GpuContentTouch {
 		std::uint64_t touch = 0;
@@ -373,7 +397,9 @@ struct Presenter::Impl {
 		return true;
 	}
 
-	std::optional<GpuContentEntry> UploadContentTile(ContentTile const& tile) {
+	std::optional<GpuContentEntry> UploadContentTile(
+		ContentTile const& tile,
+		SpectrumBandPlan const *spectrum_band_plan) {
 		auto *context = device.Get();
 		if (!context)
 			return std::nullopt;
@@ -404,10 +430,12 @@ struct Presenter::Impl {
 				uploaded.bytes = peak_mask.size() + average_mask.size();
 		}
 		else {
-			auto pixels = EncodeSpectrumPower(tile);
+			if (!spectrum_band_plan || !spectrum_band_plan->IsValid())
+				return std::nullopt;
+			auto pixels = EncodeSpectrumPower(tile, *spectrum_band_plan);
 			auto const info = SkImageInfo::Make(
 				static_cast<int>(tile.key.column_count),
-				static_cast<int>(tile.key.spectrum_bin_count),
+				spectrum_band_plan->output_height,
 				kRGBA_8888_SkColorType,
 				kOpaque_SkAlphaType,
 				nullptr);
@@ -419,6 +447,7 @@ struct Presenter::Impl {
 				static_cast<std::size_t>(tile.key.column_count) * 4);
 			if (!uploaded.primary)
 				return std::nullopt;
+			uploaded.spectrum_revision = spectrum_band_plan->revision;
 			uploaded.bytes = uploaded.primary->textureSize();
 			if (!uploaded.bytes)
 				uploaded.bytes = pixels.size();
@@ -426,18 +455,26 @@ struct Presenter::Impl {
 		return uploaded;
 	}
 
-	std::optional<GpuContentEntry> AcquireContentTile(ContentTile const& tile) {
+	std::optional<GpuContentEntry> AcquireContentTile(
+		ContentTile const& tile,
+		SpectrumBandPlan const *spectrum_band_plan) {
 		auto found = content_cache.find(tile.key);
 		if (found != content_cache.end()) {
-			TouchContent(found->first, found->second);
-			++metrics.content_cache_hits;
-			return found->second;
+			if (tile.key.kind != ContentKind::Spectrum
+				|| (spectrum_band_plan && found->second.spectrum_revision == spectrum_band_plan->revision)) {
+				TouchContent(found->first, found->second);
+				++metrics.content_cache_hits;
+				return found->second;
+			}
+			content_cache_bytes -= found->second.bytes;
+			content_cache.erase(found);
+			UpdateContentMetrics();
 		}
 
 		++metrics.content_cache_misses;
 		if (!tile.IsValid())
 			return std::nullopt;
-		auto uploaded = UploadContentTile(tile);
+		auto uploaded = UploadContentTile(tile, spectrum_band_plan);
 		if (!uploaded)
 			return std::nullopt;
 		if (uploaded->bytes > content_cache_budget)
@@ -531,6 +568,7 @@ bool Presenter::RenderContentFrame(
 	}
 
 	auto *canvas = impl->surface->getCanvas();
+	canvas->clear(static_cast<SkColor>(frame.background_color));
 	SkRect const content_bounds = SkRect::MakeXYWH(
 		static_cast<float>(frame.x),
 		static_cast<float>(frame.y),
@@ -564,6 +602,8 @@ bool Presenter::RenderContentFrame(
 			|| !tile->HasValidShape()
 			|| tile->key.generation != frame.generation
 			|| tile->key.kind != frame.kind
+			|| (frame.kind == ContentKind::Spectrum
+				&& tile->key.spectrum_bin_count != frame.spectrum_band_plan->bin_count)
 			|| tile->key.tile_index > std::numeric_limits<std::uint64_t>::max() / tile->key.column_count) {
 			++impl->metrics.content_tiles_skipped;
 			continue;
@@ -578,12 +618,14 @@ bool Presenter::RenderContentFrame(
 			continue;
 		}
 
-		auto gpu_tile = impl->AcquireContentTile(*tile);
+		auto gpu_tile = impl->AcquireContentTile(
+			*tile,
+			frame.kind == ContentKind::Spectrum ? frame.spectrum_band_plan.get() : nullptr);
 		if (!gpu_tile) {
 			impl->Fail(context, SkiaGlDeviceFailure::ContentUploadFailed, "failed to upload or retain an Audio content tile");
 			return false;
 		}
-		auto const destination_x = static_cast<float>(frame.x + relative_x);
+		auto const destination_x = frame.x + frame.first_column_offset + static_cast<float>(relative_x);
 
 		if (frame.kind == ContentKind::Waveform) {
 			auto const amplitude = std::clamp(frame.amplitude, 0.f, 64.f);
@@ -640,14 +682,13 @@ bool Presenter::RenderContentFrame(
 				return false;
 			}
 
-			canvas->save();
-			canvas->translate(destination_x, static_cast<float>(frame.y));
-			canvas->scale(1.f, static_cast<float>(frame.height) / tile->key.spectrum_bin_count);
 			paint.reset();
 			paint.setShader(std::move(shader));
+			canvas->save();
+			canvas->translate(destination_x, frame.y);
 			canvas->drawRect(SkRect::MakeWH(
 				static_cast<float>(tile->key.column_count),
-				static_cast<float>(tile->key.spectrum_bin_count)), paint);
+				frame.height), paint);
 			canvas->restore();
 		}
 		++impl->metrics.content_tiles_drawn;

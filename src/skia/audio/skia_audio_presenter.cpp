@@ -19,6 +19,7 @@
 #include <include/core/SkColor.h>
 #include <include/core/SkColorSpace.h>
 #include <include/core/SkData.h>
+#include <include/core/SkFont.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
 #include <include/core/SkPaint.h>
@@ -194,7 +195,120 @@ std::string ValidateContentFrame(FrameTarget const& target, ContentFrame const& 
 			|| frame.spectrum_band_plan->output_height != static_cast<int>(std::lround(frame.height)))) {
 		return "the spectrum palette, band plan, or its revision is missing";
 	}
+	for (auto const& style : frame.styles) {
+		if (!std::isfinite(style.x) || !std::isfinite(style.width)
+			|| style.width <= 0.f || style.x < frame.x
+			|| style.x > frame.x + frame.width - style.width)
+			return "an Audio rendering style span is invalid";
+		if (frame.kind == ContentKind::Spectrum
+			&& (!style.spectrum_palette || !style.spectrum_palette->revision))
+			return "an Audio spectrum rendering style palette is missing";
+	}
 	return {};
+}
+
+void DrawAudioFrameLayers(
+	SkCanvas *canvas,
+	FrameTarget const& target,
+	ContentFrame const& frame) {
+	if (!canvas)
+		return;
+
+	SkPaint paint;
+	paint.setAntiAlias(false);
+
+	// Timeline is deliberately drawn after content in the same canvas submit.
+	// Its scroll origin is expressed in device pixels, matching FrameViewport.
+	if (frame.timeline && frame.timeline->height > 0) {
+		auto const timeline_y = static_cast<float>(frame.timeline->y);
+		auto const timeline_height = static_cast<float>(frame.timeline->height);
+		paint.setColor(static_cast<SkColor>(frame.timeline->background_color));
+		canvas->drawRect(SkRect::MakeXYWH(frame.x, timeline_y, frame.width, timeline_height), paint);
+
+		paint.setColor(static_cast<SkColor>(frame.timeline->foreground_color));
+		paint.setStrokeWidth(1.f);
+		auto const ms_per_pixel = frame.timeline->milliseconds_per_pixel;
+		if (std::isfinite(ms_per_pixel) && ms_per_pixel > 0.0 && frame.timeline->duration_ms > 0) {
+			constexpr int tick_ms = 1000;
+			auto const first_tick = std::max(0, frame.timeline->scroll_left * static_cast<int>(ms_per_pixel) / tick_ms);
+			for (auto ms = first_tick * tick_ms; ms <= frame.timeline->duration_ms; ms += tick_ms) {
+				auto const x = frame.x + (static_cast<float>(ms) / static_cast<float>(ms_per_pixel))
+					- static_cast<float>(frame.timeline->scroll_left);
+				if (x < frame.x - 1.f || x > frame.x + frame.width + 1.f)
+					continue;
+				canvas->drawLine(x, timeline_y, x, timeline_y + timeline_height * 0.45f, paint);
+			}
+		}
+	}
+
+	// Marker lines, feet and labels are all batched into this frame. The frame
+	// builder supplies device-space x coordinates, so no extra time conversion
+	// or intermediate surface is needed here.
+	canvas->save();
+	canvas->clipRect(SkRect::MakeXYWH(frame.x, frame.y, frame.width, frame.height));
+	for (auto const& marker : frame.markers) {
+		if (!std::isfinite(marker.x) || marker.x < frame.x - 2.f || marker.x > frame.x + frame.width + 2.f)
+			continue;
+		paint.setColor(static_cast<SkColor>(marker.color));
+		paint.setStrokeWidth(static_cast<float>(std::max(1, marker.width)));
+		canvas->drawLine(marker.x, frame.y, marker.x, frame.y + frame.height, paint);
+		if (marker.feet & 1u)
+			canvas->drawLine(marker.x, frame.y + frame.height - 1.f, marker.x - 4.f, frame.y + frame.height, paint);
+		if (marker.feet & 2u)
+			canvas->drawLine(marker.x, frame.y + frame.height - 1.f, marker.x + 4.f, frame.y + frame.height, paint);
+	}
+	if (frame.cursor && std::isfinite(frame.cursor->x)) {
+		paint.setColor(static_cast<SkColor>(frame.cursor->color));
+		paint.setStrokeWidth(1.f);
+		canvas->drawLine(frame.cursor->x, frame.y, frame.cursor->x, frame.y + frame.height, paint);
+	}
+	canvas->restore();
+
+	if (!frame.labels.empty() || (frame.cursor && !frame.cursor->label.empty())) {
+		SkFont font;
+		font.setSize(11.f);
+		paint.setAntiAlias(true);
+		paint.setColor(SK_ColorWHITE);
+		auto const label_y = frame.y + 12.f;
+		for (auto const& label : frame.labels) {
+			if (label.text.empty() || !std::isfinite(label.x)
+				|| !std::isfinite(label.width) || label.width <= 0.f)
+				continue;
+			canvas->save();
+			canvas->clipRect(SkRect::MakeXYWH(label.x, frame.y, label.width, frame.height));
+			canvas->drawSimpleText(label.text.data(), label.text.size(), SkTextEncoding::kUTF8,
+				label.x, label_y, font, paint);
+			canvas->restore();
+		}
+		if (frame.cursor && !frame.cursor->label.empty() && std::isfinite(frame.cursor->x)) {
+			canvas->drawSimpleText(frame.cursor->label.data(), frame.cursor->label.size(), SkTextEncoding::kUTF8,
+				frame.cursor->x + 3.f, frame.y + 12.f, font, paint);
+		}
+	}
+
+	if (frame.scrollbar && frame.scrollbar->height > 0) {
+		auto const scrollbar = *frame.scrollbar;
+		auto const y = static_cast<float>(std::clamp(scrollbar.y, 0, target.height - scrollbar.height));
+		auto const h = static_cast<float>(scrollbar.height);
+		paint.setAntiAlias(false);
+		paint.setColor(static_cast<SkColor>(scrollbar.background_color));
+		canvas->drawRect(SkRect::MakeXYWH(0.f, y, static_cast<float>(target.width), h), paint);
+		auto const total = std::max(1, scrollbar.total);
+		auto const page = std::clamp(scrollbar.page, 1, total);
+		auto const track = std::max(1.f, static_cast<float>(target.width));
+		auto const thumb_width = std::max(8.f, track * static_cast<float>(page) / static_cast<float>(total));
+		auto const max_position = std::max(0, total - page);
+		auto const thumb_x = max_position == 0 ? 0.f : (track - thumb_width)
+			* static_cast<float>(std::clamp(scrollbar.position, 0, max_position)) / static_cast<float>(max_position);
+		paint.setColor(static_cast<SkColor>(scrollbar.thumb_color));
+		canvas->drawRect(SkRect::MakeXYWH(thumb_x, y, thumb_width, h), paint);
+		if (scrollbar.selection_start >= 0 && scrollbar.selection_length > 0) {
+			auto const selection_x = track * static_cast<float>(scrollbar.selection_start) / static_cast<float>(total);
+			auto const selection_width = track * static_cast<float>(scrollbar.selection_length) / static_cast<float>(total);
+			paint.setColor(static_cast<SkColor>(scrollbar.selection_color));
+			canvas->drawRect(SkRect::MakeXYWH(selection_x, y, std::max(1.f, selection_width), h), paint);
+		}
+	}
 }
 
 }
@@ -249,6 +363,7 @@ struct Presenter::Impl {
 	std::string spectrum_effect_error;
 	std::uint64_t palette_revision = 0;
 	sk_sp<SkImage> palette_image;
+	std::unordered_map<std::uint64_t, sk_sp<SkImage>> palette_images;
 	PresenterMetrics metrics;
 	SkiaGlContextToken last_context;
 	bool failure_logged = false;
@@ -270,6 +385,7 @@ struct Presenter::Impl {
 		content_cache_bytes = 0;
 		content_touch_counter = 0;
 		palette_image.reset();
+		palette_images.clear();
 		palette_revision = 0;
 		UpdateContentMetrics();
 	}
@@ -493,8 +609,8 @@ struct Presenter::Impl {
 	}
 
 	sk_sp<SkImage> AcquirePalette(SpectrumPalette const& palette) {
-		if (palette_image && palette_revision == palette.revision)
-			return palette_image;
+		if (auto found = palette_images.find(palette.revision); found != palette_images.end())
+			return found->second;
 
 		auto pixels = EncodePalette(palette);
 		auto const info = SkImageInfo::Make(
@@ -513,6 +629,9 @@ struct Presenter::Impl {
 			return nullptr;
 		palette_image = uploaded;
 		palette_revision = palette.revision;
+		if (palette_images.size() >= 8)
+			palette_images.erase(palette_images.begin());
+		palette_images.emplace(palette.revision, uploaded);
 		++metrics.palette_uploads;
 		return palette_image;
 	}
@@ -576,10 +695,24 @@ bool Presenter::RenderContentFrame(
 		static_cast<float>(frame.height));
 	SkPaint paint;
 	paint.setAntiAlias(false);
-	paint.setColor(static_cast<SkColor>(frame.background_color));
-	canvas->drawRect(content_bounds, paint);
+	std::vector<StyleFrame> styles = frame.styles;
+	if (styles.empty()) {
+		StyleFrame style;
+		style.x = frame.x;
+		style.width = frame.width;
+		style.background_color = frame.background_color;
+		style.waveform_peak_color = frame.waveform_peak_color;
+		style.waveform_average_color = frame.waveform_average_color;
+		style.waveform_zero_color = frame.waveform_zero_color;
+		style.spectrum_palette = frame.spectrum_palette;
+		styles.push_back(std::move(style));
+	}
+	for (auto const& style : styles) {
+		paint.setColor(static_cast<SkColor>(style.background_color));
+		canvas->drawRect(SkRect::MakeXYWH(style.x, frame.y, style.width, frame.height), paint);
+	}
 
-	sk_sp<SkImage> palette;
+	std::unordered_map<std::uint64_t, sk_sp<SkImage>> palettes;
 	if (frame.kind == ContentKind::Spectrum) {
 		if (!impl->spectrum_effect) {
 			impl->Fail(
@@ -588,10 +721,16 @@ bool Presenter::RenderContentFrame(
 				"Skia spectrum runtime effect failed to compile: " + impl->spectrum_effect_error);
 			return false;
 		}
-		palette = impl->AcquirePalette(*frame.spectrum_palette);
-		if (!palette) {
-			impl->Fail(context, SkiaGlDeviceFailure::ContentUploadFailed, "failed to upload the spectrum palette");
-			return false;
+		for (auto const& style : styles) {
+			auto const revision = style.spectrum_palette->revision;
+			if (palettes.contains(revision))
+				continue;
+			auto palette = impl->AcquirePalette(*style.spectrum_palette);
+			if (!palette) {
+				impl->Fail(context, SkiaGlDeviceFailure::ContentUploadFailed, "failed to upload an Audio spectrum style palette");
+				return false;
+			}
+			palettes.emplace(revision, std::move(palette));
 		}
 	}
 
@@ -639,73 +778,95 @@ bool Presenter::RenderContentFrame(
 				static_cast<float>(tile->key.column_count),
 				scaled_height);
 			if (destination.height() > 0.f) {
-				paint.reset();
-				paint.setAntiAlias(false);
-				paint.setColor(static_cast<SkColor>(frame.waveform_peak_color));
-				canvas->drawImageRect(
-					gpu_tile->primary,
-					source,
-					destination,
-					SkSamplingOptions(SkFilterMode::kNearest),
-					&paint,
-					SkCanvas::kStrict_SrcRectConstraint);
-				if (frame.draw_waveform_average) {
-					paint.setColor(static_cast<SkColor>(frame.waveform_average_color));
+				for (auto const& style : styles) {
+					auto const style_bounds = SkRect::MakeXYWH(style.x, frame.y, style.width, frame.height);
+					if (!SkRect::Intersects(style_bounds, destination))
+						continue;
+					canvas->save();
+					canvas->clipRect(style_bounds);
+					paint.reset();
+					paint.setAntiAlias(false);
+					paint.setColor(static_cast<SkColor>(style.waveform_peak_color));
 					canvas->drawImageRect(
-						gpu_tile->secondary,
+						gpu_tile->primary,
 						source,
 						destination,
 						SkSamplingOptions(SkFilterMode::kNearest),
 						&paint,
 						SkCanvas::kStrict_SrcRectConstraint);
+					if (frame.draw_waveform_average) {
+						paint.setColor(static_cast<SkColor>(style.waveform_average_color));
+						canvas->drawImageRect(
+							gpu_tile->secondary,
+							source,
+							destination,
+							SkSamplingOptions(SkFilterMode::kNearest),
+							&paint,
+							SkCanvas::kStrict_SrcRectConstraint);
+					}
+					canvas->restore();
 				}
 			}
 		}
 		else {
-			auto power_shader = gpu_tile->primary->makeRawShader(
-				SkSamplingOptions(SkFilterMode::kLinear),
-				nullptr);
-			auto palette_shader = palette->makeShader(
-				SkSamplingOptions(SkFilterMode::kLinear),
-				nullptr);
-			if (!power_shader || !palette_shader) {
-				impl->Fail(context, SkiaGlDeviceFailure::ContentShaderUnavailable, "failed to create a spectrum child shader");
-				return false;
-			}
-			SkRuntimeShaderBuilder builder(impl->spectrum_effect);
-			builder.child("power_texture") = std::move(power_shader);
-			builder.child("palette_texture") = std::move(palette_shader);
-			builder.uniform("amplitude") = std::clamp(frame.amplitude, 0.f, 64.f);
-			auto shader = builder.makeShader();
-			if (!shader) {
-				impl->Fail(context, SkiaGlDeviceFailure::ContentShaderUnavailable, "failed to instantiate the spectrum runtime shader");
-				return false;
-			}
-
-			paint.reset();
-			paint.setShader(std::move(shader));
-			canvas->save();
-			canvas->translate(destination_x, frame.y);
-			canvas->drawRect(SkRect::MakeWH(
+			SkRect const destination = SkRect::MakeXYWH(
+				destination_x,
+				frame.y,
 				static_cast<float>(tile->key.column_count),
-				frame.height), paint);
-			canvas->restore();
+				frame.height);
+			for (auto const& style : styles) {
+				auto const style_bounds = SkRect::MakeXYWH(style.x, frame.y, style.width, frame.height);
+				if (!SkRect::Intersects(style_bounds, destination))
+					continue;
+				auto power_shader = gpu_tile->primary->makeRawShader(
+					SkSamplingOptions(SkFilterMode::kLinear),
+					nullptr);
+				auto palette_shader = palettes.at(style.spectrum_palette->revision)->makeShader(
+					SkSamplingOptions(SkFilterMode::kLinear),
+					nullptr);
+				if (!power_shader || !palette_shader) {
+					impl->Fail(context, SkiaGlDeviceFailure::ContentShaderUnavailable, "failed to create a spectrum child shader");
+					return false;
+				}
+				SkRuntimeShaderBuilder builder(impl->spectrum_effect);
+				builder.child("power_texture") = std::move(power_shader);
+				builder.child("palette_texture") = std::move(palette_shader);
+				builder.uniform("amplitude") = std::clamp(frame.amplitude, 0.f, 64.f);
+				auto shader = builder.makeShader();
+				if (!shader) {
+					impl->Fail(context, SkiaGlDeviceFailure::ContentShaderUnavailable, "failed to instantiate the spectrum runtime shader");
+					return false;
+				}
+
+				paint.reset();
+				paint.setShader(std::move(shader));
+				canvas->save();
+				canvas->clipRect(style_bounds);
+				canvas->translate(destination_x, frame.y);
+				canvas->drawRect(SkRect::MakeWH(
+					static_cast<float>(tile->key.column_count),
+					frame.height), paint);
+				canvas->restore();
+			}
 		}
 		++impl->metrics.content_tiles_drawn;
 	}
 
 	if (frame.kind == ContentKind::Waveform) {
-		paint.reset();
-		paint.setAntiAlias(false);
-		paint.setColor(static_cast<SkColor>(frame.waveform_zero_color));
-		canvas->drawLine(
-			static_cast<float>(frame.x),
-			frame.y + frame.height * 0.5f,
-			static_cast<float>(frame.x + frame.width),
-			frame.y + frame.height * 0.5f,
-			paint);
+		for (auto const& style : styles) {
+			paint.reset();
+			paint.setAntiAlias(false);
+			paint.setColor(static_cast<SkColor>(style.waveform_zero_color));
+			canvas->drawLine(
+				style.x,
+				frame.y + frame.height * 0.5f,
+				style.x + style.width,
+				frame.y + frame.height * 0.5f,
+				paint);
+		}
 	}
 	canvas->restore();
+	DrawAudioFrameLayers(canvas, target, frame);
 	return impl->FinishFrame(context);
 }
 catch (std::exception const& err) {

@@ -38,6 +38,16 @@ struct SpectrumPalette {
 	std::array<std::uint32_t, 256> colors {};
 };
 
+struct StyleFrame {
+	float x = 0.f;
+	float width = 0.f;
+	std::uint32_t background_color = 0xFF182230;
+	std::uint32_t waveform_peak_color = 0xFF2A9D8F;
+	std::uint32_t waveform_average_color = 0xFFE9C46A;
+	std::uint32_t waveform_zero_color = 0xFF8CA0B3;
+	std::shared_ptr<SpectrumPalette const> spectrum_palette;
+};
+
 struct MarkerFrame {
 	float x = 0.f;
 	std::uint32_t color = 0xFFFFFFFF;
@@ -58,6 +68,7 @@ struct CursorFrame {
 };
 
 struct TimelineFrame {
+	int y = 0;
 	int height = 0;
 	int scroll_left = 0;
 	int duration_ms = 0;
@@ -97,6 +108,7 @@ struct ContentFrame {
 	std::shared_ptr<SpectrumPalette const> spectrum_palette;
 	std::shared_ptr<SpectrumBandPlan const> spectrum_band_plan;
 	std::vector<std::shared_ptr<ContentTile const>> tiles;
+	std::vector<StyleFrame> styles;
 	std::vector<MarkerFrame> markers;
 	std::vector<LabelFrame> labels;
 	std::shared_ptr<CursorFrame const> cursor;

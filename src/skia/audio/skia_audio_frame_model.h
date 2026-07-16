@@ -47,6 +47,31 @@ int AudioZoomFactor(int zoom_level) noexcept;
 double AudioMillisecondsPerLogicalPixel(int zoom_level) noexcept;
 FrameViewport BuildFrameViewport(FrameViewportRequest const& request) noexcept;
 
+enum class FrameStyle : std::uint8_t {
+	Normal,
+	Inactive,
+	Selected,
+	Primary,
+};
+
+struct TimeStyleRange {
+	int start_ms = 0;
+	int end_ms = 0;
+	FrameStyle style = FrameStyle::Normal;
+};
+
+struct DeviceStyleSpan {
+	float x = 0.f;
+	float width = 0.f;
+	FrameStyle style = FrameStyle::Normal;
+
+	friend bool operator==(DeviceStyleSpan const&, DeviceStyleSpan const&) = default;
+};
+
+std::vector<DeviceStyleSpan> BuildDeviceStyleSpans(
+	std::vector<TimeStyleRange> const& ranges,
+	FrameViewport const& viewport);
+
 enum class SpectrumScaleMode {
 	LegacyLinear,
 	FrequencyCurve,

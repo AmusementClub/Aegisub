@@ -39,7 +39,7 @@ AudioDisplaySlot::AudioDisplaySlot(
 	auto const *injection_value = std::getenv("AEGISUB_SKIA_AUDIO_FAILURE_INJECTION");
 	auto const injection = ParseFailureInjection(injection_value ? injection_value : "");
 	try {
-		skia_display = new SkiaAudioDisplay(parent, context, injection, [this](std::string message) {
+		skia_display = new SkiaAudioDisplay(parent, controller, context, injection, [this](std::string message) {
 			RequestWxFallback(std::move(message));
 		});
 		active_window = skia_display;

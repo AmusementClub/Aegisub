@@ -158,6 +158,71 @@ FrameViewport BuildFrameViewport(FrameViewportRequest const& request) noexcept {
 	return viewport.IsValid() ? viewport : FrameViewport {};
 }
 
+std::vector<DeviceStyleSpan> BuildDeviceStyleSpans(
+	std::vector<TimeStyleRange> const& ranges,
+	FrameViewport const& viewport) {
+	std::vector<DeviceStyleSpan> result;
+	if (!viewport.IsValid() || viewport.milliseconds_per_column <= 0.0)
+		return result;
+
+	// Use the same exact logical scroll origin as the content request. Keeping
+	// the calculation in milliseconds until the final conversion avoids style
+	// seams at fractional-DPI boundaries.
+	// The request's logical/physical conversion is represented by the exact
+	// first column and physical milliseconds-per-column pair.
+	auto const visible_first_ms = viewport.first_column_exact * viewport.milliseconds_per_column;
+	auto const visible_last_ms = visible_first_ms
+		+ static_cast<double>(viewport.content.width) * viewport.milliseconds_per_column;
+	if (!std::isfinite(visible_first_ms) || !std::isfinite(visible_last_ms)
+		|| visible_last_ms <= visible_first_ms)
+		return result;
+
+	std::vector<double> points { visible_first_ms, visible_last_ms };
+	for (auto const& range : ranges) {
+		if (range.end_ms <= range.start_ms)
+			continue;
+		auto const start = std::max<double>(visible_first_ms, range.start_ms);
+		auto const end = std::min<double>(visible_last_ms, range.end_ms);
+		if (end > start) {
+			points.push_back(start);
+			points.push_back(end);
+		}
+	}
+	std::sort(points.begin(), points.end());
+	points.erase(std::unique(points.begin(), points.end()), points.end());
+
+	auto const style_at = [&ranges](double time) {
+		FrameStyle style = FrameStyle::Normal;
+		for (auto const& range : ranges) {
+			if (range.start_ms <= time && time < range.end_ms
+				&& static_cast<std::uint8_t>(range.style) > static_cast<std::uint8_t>(style))
+				style = range.style;
+		}
+		return style;
+	};
+	for (std::size_t i = 1; i < points.size(); ++i) {
+		auto const start = points[i - 1];
+		auto const end = points[i];
+		if (!(end > start))
+			continue;
+		auto const x1 = static_cast<float>(viewport.content.x
+			+ (start - visible_first_ms) / viewport.milliseconds_per_column);
+		auto const x2 = static_cast<float>(viewport.content.x
+			+ (end - visible_first_ms) / viewport.milliseconds_per_column);
+		if (!(x2 > x1))
+			continue;
+		auto const style = style_at((start + end) * 0.5);
+		if (!result.empty() && result.back().style == style
+			&& std::abs(result.back().x + result.back().width - x1) < 0.001f) {
+			result.back().width = x2 - result.back().x;
+		}
+		else {
+			result.push_back({ x1, x2 - x1, style });
+		}
+	}
+	return result;
+}
+
 bool SpectrumBandPlan::IsValid() const noexcept {
 	if (!revision
 		|| bin_count < 4

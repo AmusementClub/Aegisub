@@ -5,13 +5,15 @@
 
 #include "../../include/aegisub/context.h"
 #include "../../project.h"
+#include "../../audio_controller.h"
 #include "../../audio_colorscheme.h"
 #include "../../audio_renderer_spectrum.h"
+#include "../../audio_timing.h"
 #include "../../options.h"
-#include "../../time_range.h"
 
 #include <libaegisub/signal.h>
 #include <libaegisub/audio/provider.h>
+#include <libaegisub/color.h>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -48,6 +50,24 @@ std::uint32_t ToArgb(wxColour const& color) {
 		| (static_cast<std::uint32_t>(color.Green()) << 8)
 		| static_cast<std::uint32_t>(color.Blue());
 }
+
+std::uint32_t ToArgb(agi::Color const& color) {
+	return 0xFF000000u
+		| (static_cast<std::uint32_t>(color.r) << 16)
+		| (static_cast<std::uint32_t>(color.g) << 8)
+		| static_cast<std::uint32_t>(color.b);
+}
+
+class StyleRangeCollector final : public AudioRenderingStyleRanges {
+public:
+	std::vector<TimeStyleRange> ranges;
+
+	void AddRange(int start, int end, AudioRenderingStyle style) override {
+		if (end <= start || style < AudioStyle_Normal || style >= AudioStyle_MAX)
+			return;
+		ranges.push_back({ std::max(0, start), std::max(0, end), static_cast<FrameStyle>(style) });
+	}
+};
 
 int ProviderDurationMs(agi::AudioProvider const *provider) {
 	if (!provider || provider->GetSampleRate() <= 0)
@@ -92,6 +112,7 @@ int gl_attributes[] = { WX_GL_RGBA, WX_GL_DOUBLEBUFFER, WX_GL_STENCIL_SIZE, 8, 0
 struct SkiaAudioDisplay::Impl {
 	Impl(
 		SkiaAudioDisplay *owner,
+		AudioController *audio_controller,
 		agi::Context *project_context,
 		FailureInjection failure_injection,
 		FailureCallback failure_callback)
@@ -104,6 +125,7 @@ struct SkiaAudioDisplay::Impl {
 		wxQueueEvent(owner, event);
 	})
 	, failure_callback(std::move(failure_callback)) {
+		this->audio_controller = audio_controller;
 		this->project_context = project_context;
 	}
 
@@ -111,9 +133,14 @@ struct SkiaAudioDisplay::Impl {
 	std::unique_ptr<Presenter> presenter;
 	ContentWorker content_worker;
 	agi::signal::Connection audio_open_connection;
+	agi::signal::Connection playback_position_connection;
+	agi::signal::Connection playback_stop_connection;
+	agi::signal::Connection timing_controller_connection;
+	std::vector<agi::signal::Connection> timing_connections;
 	std::vector<agi::signal::Connection> option_connections;
 	agi::Context *project_context = nullptr;
 	agi::AudioProvider *provider = nullptr;
+	AudioController *audio_controller = nullptr;
 	ContentAnalysisConfig content_analysis;
 	ContentGeneration content_generation;
 	ContentViewportRequest last_content_request;
@@ -123,13 +150,14 @@ struct SkiaAudioDisplay::Impl {
 	int scroll_left = 0;
 	float amplitude_scale = 1.f;
 	std::uint64_t presentation_revision = 1;
-	std::array<std::uint32_t, 4> waveform_colors {};
+	std::array<std::array<std::uint32_t, 4>, AudioStyle_MAX> waveform_style_colors {};
 	bool presentation_colors_ready = false;
-	std::shared_ptr<SpectrumPalette const> spectrum_palette;
+	std::array<std::shared_ptr<SpectrumPalette const>, AudioStyle_MAX> spectrum_style_palettes;
 	std::shared_ptr<SpectrumBandPlan const> spectrum_band_plan;
 	FailureCallback failure_callback;
 	std::uint64_t context_generation = 0;
 	bool fallback_requested = false;
+	int playback_position_ms = -1;
 
 	SkiaGlContextToken ContextToken() const noexcept {
 		return { context.get(), context_generation };
@@ -139,7 +167,8 @@ struct SkiaAudioDisplay::Impl {
 		++presentation_revision;
 		if (!presentation_revision)
 			++presentation_revision;
-		spectrum_palette.reset();
+		for (auto& palette : spectrum_style_palettes)
+			palette.reset();
 		spectrum_band_plan.reset();
 		presentation_colors_ready = false;
 	}
@@ -147,15 +176,25 @@ struct SkiaAudioDisplay::Impl {
 
 SkiaAudioDisplay::SkiaAudioDisplay(
 	wxWindow *parent,
+	AudioController *controller,
 	agi::Context *context,
 	FailureInjection failure_injection,
 	FailureCallback failure_callback)
 : wxGLCanvas(parent, wxID_ANY, gl_attributes, wxDefaultPosition, wxDefaultSize, wxFULL_REPAINT_ON_RESIZE)
-, impl(std::make_unique<Impl>(this, context, failure_injection, std::move(failure_callback)))
+, impl(std::make_unique<Impl>(this, controller, context, failure_injection, std::move(failure_callback)))
 {
 	impl->project_context = context;
 	impl->audio_open_connection = context->GetCore().project->AddAudioProviderListener(
 		&SkiaAudioDisplay::OnAudioOpen,
+		this);
+	impl->playback_position_connection = controller->AddPlaybackPositionListener(
+		&SkiaAudioDisplay::OnPlaybackPosition,
+		this);
+	impl->playback_stop_connection = controller->AddPlaybackStopListener(
+		&SkiaAudioDisplay::OnPlaybackStop,
+		this);
+	impl->timing_controller_connection = controller->AddTimingControllerListener(
+		&SkiaAudioDisplay::OnTimingControllerChanged,
 		this);
 	impl->option_connections = agi::signal::make_vector({
 		OPT_SUB("Audio/Spectrum", &SkiaAudioDisplay::OnRenderingSettingsChanged, this),
@@ -176,6 +215,7 @@ SkiaAudioDisplay::SkiaAudioDisplay(
 	Bind(wxEVT_SIZE, &SkiaAudioDisplay::OnSize, this);
 	Bind(EVT_SKIA_AUDIO_CONTENT_READY, &SkiaAudioDisplay::OnContentReady, this);
 	Bind(EVT_SKIA_AUDIO_CONTENT_FAILURE, &SkiaAudioDisplay::OnContentFailure, this);
+	OnTimingControllerChanged();
 }
 
 SkiaAudioDisplay::~SkiaAudioDisplay() {
@@ -248,7 +288,8 @@ void SkiaAudioDisplay::ReconfigureAnalysis() {
 	impl->content_generation = impl->content_worker.SetAnalysis(config);
 	if (impl->content_generation != old_generation)
 		impl->has_last_content_request = false;
-	impl->spectrum_palette.reset();
+	for (auto& palette : impl->spectrum_style_palettes)
+		palette.reset();
 	impl->spectrum_band_plan.reset();
 	RebuildViewport();
 	RequestVisibleContent();
@@ -337,39 +378,57 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 		frame.height = static_cast<float>(impl->viewport.content.height);
 		frame.first_column_offset = static_cast<float>(impl->viewport.first_column_offset);
 		frame.amplitude = impl->amplitude_scale;
+		auto timeline = std::make_shared<TimelineFrame>();
+		timeline->y = impl->viewport.timeline.y;
+		timeline->height = impl->viewport.timeline.height;
+		timeline->scroll_left = impl->viewport.scroll_left;
+		timeline->duration_ms = ProviderDurationMs(impl->provider);
+		timeline->milliseconds_per_pixel = impl->viewport.milliseconds_per_column;
+		frame.timeline = std::move(timeline);
+		auto scrollbar = std::make_shared<ScrollbarFrame>();
+		scrollbar->y = impl->viewport.scrollbar.y;
+		scrollbar->height = impl->viewport.scrollbar.height;
+		scrollbar->total = impl->viewport.logical_audio_width;
+		scrollbar->page = impl->viewport.target_width;
+		scrollbar->position = impl->viewport.scroll_left;
+		frame.scrollbar = std::move(scrollbar);
 
 		if (!impl->presentation_colors_ready) {
-			AudioColorScheme waveform_scheme(
-				8,
-				OPT_GET("Colour/Audio Display/Waveform")->GetString(),
-				AudioStyle_Normal);
-			impl->waveform_colors = {
-				ToArgb(waveform_scheme.get(0.f)),
-				ToArgb(waveform_scheme.get(0.4f)),
-				ToArgb(waveform_scheme.get(0.7f)),
-				ToArgb(waveform_scheme.get(1.f)),
-			};
+			for (int style = AudioStyle_Normal; style < AudioStyle_MAX; ++style) {
+				AudioColorScheme waveform_scheme(
+					8,
+					OPT_GET("Colour/Audio Display/Waveform")->GetString(),
+					static_cast<AudioRenderingStyle>(style));
+				impl->waveform_style_colors[style] = {
+					ToArgb(waveform_scheme.get(0.f)),
+					ToArgb(waveform_scheme.get(0.4f)),
+					ToArgb(waveform_scheme.get(0.7f)),
+					ToArgb(waveform_scheme.get(1.f)),
+				};
+			}
 			impl->presentation_colors_ready = true;
 		}
-		frame.background_color = impl->waveform_colors[0];
-		frame.waveform_peak_color = impl->waveform_colors[1];
-		frame.waveform_average_color = impl->waveform_colors[2];
-		frame.waveform_zero_color = impl->waveform_colors[3];
+		frame.background_color = impl->waveform_style_colors[AudioStyle_Normal][0];
+		frame.waveform_peak_color = impl->waveform_style_colors[AudioStyle_Normal][1];
+		frame.waveform_average_color = impl->waveform_style_colors[AudioStyle_Normal][2];
+		frame.waveform_zero_color = impl->waveform_style_colors[AudioStyle_Normal][3];
 		frame.draw_waveform_average = OPT_GET("Audio/Display/Waveform Style")->GetInt() != 0;
 
 		if (frame.kind == ContentKind::Spectrum) {
-			if (!impl->spectrum_palette) {
+			for (int style = AudioStyle_Normal; style < AudioStyle_MAX; ++style) {
+				if (impl->spectrum_style_palettes[style])
+					continue;
 				auto palette = std::make_shared<SpectrumPalette>();
-				palette->revision = impl->presentation_revision;
+				palette->revision = (impl->presentation_revision << 3) | static_cast<std::uint64_t>(style + 1);
 				AudioColorScheme spectrum_scheme(
 					8,
 					OPT_GET("Colour/Audio Display/Spectrum")->GetString(),
-					AudioStyle_Normal);
+					static_cast<AudioRenderingStyle>(style));
 				for (std::size_t i = 0; i < palette->colors.size(); ++i)
 					palette->colors[i] = ToArgb(spectrum_scheme.get(static_cast<float>(i) / 255.f));
-				impl->spectrum_palette = std::move(palette);
+				impl->spectrum_style_palettes[style] = std::move(palette);
 			}
-			frame.spectrum_palette = impl->spectrum_palette;
+			frame.spectrum_palette = impl->spectrum_style_palettes[AudioStyle_Normal];
 			frame.background_color = frame.spectrum_palette->colors.front();
 			auto const bin_count = static_cast<std::uint32_t>(
 				std::size_t { 1 } << impl->content_analysis.spectrum_derivation_size);
@@ -393,6 +452,82 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 				impl->spectrum_band_plan = std::move(band_plan);
 			}
 			frame.spectrum_band_plan = impl->spectrum_band_plan;
+		}
+
+		StyleRangeCollector style_collector;
+		auto *timing = impl->audio_controller ? impl->audio_controller->GetTimingController() : nullptr;
+		if (timing)
+			timing->GetRenderingStyles(style_collector);
+		for (auto const& span : BuildDeviceStyleSpans(style_collector.ranges, impl->viewport)) {
+			auto const style_index = std::clamp(
+				static_cast<int>(span.style),
+				static_cast<int>(AudioStyle_Normal),
+				static_cast<int>(AudioStyle_MAX - 1));
+			StyleFrame style;
+			style.x = span.x;
+			style.width = span.width;
+			style.background_color = impl->waveform_style_colors[style_index][0];
+			style.waveform_peak_color = impl->waveform_style_colors[style_index][1];
+			style.waveform_average_color = impl->waveform_style_colors[style_index][2];
+			style.waveform_zero_color = impl->waveform_style_colors[style_index][3];
+			if (frame.kind == ContentKind::Spectrum) {
+				style.spectrum_palette = impl->spectrum_style_palettes[style_index];
+				style.background_color = style.spectrum_palette->colors.front();
+			}
+			frame.styles.push_back(std::move(style));
+		}
+
+		if (timing) {
+			auto const first_visible_ms = std::max(0, static_cast<int>(std::floor(
+				impl->viewport.first_column_exact * impl->viewport.milliseconds_per_column)));
+			auto const last_visible_ms = std::max(first_visible_ms, static_cast<int>(std::ceil(
+				(impl->viewport.first_column_exact + impl->viewport.content.width)
+					* impl->viewport.milliseconds_per_column)));
+			TimeRange const visible_range(first_visible_ms, last_visible_ms);
+			auto const x_from_ms = [this](int time_ms) {
+				return static_cast<float>(impl->viewport.content.x
+					+ time_ms / impl->viewport.milliseconds_per_column
+					- impl->viewport.first_column_exact);
+			};
+
+			AudioMarkerVector markers;
+			timing->GetMarkers(visible_range, markers);
+			frame.markers.reserve(markers.size());
+			for (auto const *marker : markers) {
+				auto const pen = marker->GetStyle();
+				frame.markers.push_back({
+					x_from_ms(marker->GetPosition()),
+					ToArgb(pen.GetColour()),
+					std::max(1, static_cast<int>(std::lround(pen.GetWidth() * GetContentScaleFactor()))),
+					static_cast<std::uint8_t>(marker->GetFeet()),
+				});
+			}
+
+			std::vector<AudioLabelProvider::AudioLabel> labels;
+			timing->GetLabels(visible_range, labels);
+			frame.labels.reserve(labels.size());
+			for (auto const& label : labels) {
+				frame.labels.push_back({
+					x_from_ms(label.range.begin()),
+					static_cast<float>(label.range.length() / impl->viewport.milliseconds_per_column),
+					label.text.utf8_string(),
+				});
+			}
+
+			auto const selection = timing->GetPrimaryPlaybackRange();
+			auto selection_scrollbar = std::const_pointer_cast<ScrollbarFrame>(frame.scrollbar);
+			selection_scrollbar->selection_start = std::max(0, static_cast<int>(std::floor(
+				selection.begin() / AudioMillisecondsPerLogicalPixel(impl->zoom_level))));
+			selection_scrollbar->selection_length = std::max(0, static_cast<int>(std::ceil(
+				selection.length() / AudioMillisecondsPerLogicalPixel(impl->zoom_level))));
+		}
+		if (impl->playback_position_ms >= 0) {
+			auto cursor = std::make_shared<CursorFrame>();
+			cursor->x = static_cast<float>(impl->viewport.content.x
+				+ impl->playback_position_ms / impl->viewport.milliseconds_per_column
+				- impl->viewport.first_column_exact);
+			cursor->color = ToArgb(OPT_GET("Colour/Audio Display/Play Cursor")->GetColor());
+			frame.cursor = std::move(cursor);
 		}
 
 		ContentViewportRequest request;
@@ -449,6 +584,52 @@ void SkiaAudioDisplay::OnContentReady(wxThreadEvent&) {
 
 void SkiaAudioDisplay::OnContentFailure(wxThreadEvent& event) {
 	RequestFallback(event.GetString().utf8_string());
+}
+
+void SkiaAudioDisplay::OnPlaybackPosition(int position_ms) {
+	if (!impl)
+		return;
+	impl->playback_position_ms = std::max(0, position_ms);
+	if (OPT_GET("Audio/Lock Scroll on Cursor")->GetBool() && impl->viewport.IsValid()) {
+		auto const logical_ms_per_pixel = AudioMillisecondsPerLogicalPixel(impl->zoom_level);
+		auto const pixel_position = static_cast<int>(std::floor(position_ms / logical_ms_per_pixel));
+		auto const client_width = std::max(1, GetClientSize().GetWidth());
+		auto const edge = std::max(1, client_width / 20);
+		if (impl->scroll_left > 0 && pixel_position < impl->scroll_left + edge)
+			impl->scroll_left = std::max(0, pixel_position - edge);
+		else if (pixel_position >= impl->scroll_left + client_width - edge)
+			impl->scroll_left = pixel_position - client_width + edge;
+		RebuildViewport();
+		RequestVisibleContent();
+	}
+	Refresh(false);
+}
+
+void SkiaAudioDisplay::OnPlaybackStop() {
+	if (!impl)
+		return;
+	impl->playback_position_ms = -1;
+	Refresh(false);
+}
+
+void SkiaAudioDisplay::OnTimingControllerChanged() {
+	if (!impl || !impl->audio_controller)
+		return;
+	impl->timing_connections.clear();
+	if (auto *timing = impl->audio_controller->GetTimingController()) {
+		impl->timing_connections = agi::signal::make_vector({
+			timing->AddMarkerMovedListener(&SkiaAudioDisplay::OnTimingDataChanged, this),
+			timing->AddLabelChangedListener(&SkiaAudioDisplay::OnTimingDataChanged, this),
+			timing->AddUpdatedPrimaryRangeListener(&SkiaAudioDisplay::OnTimingDataChanged, this),
+			timing->AddUpdatedStyleRangesListener(&SkiaAudioDisplay::OnTimingDataChanged, this),
+		});
+	}
+	OnTimingDataChanged();
+}
+
+void SkiaAudioDisplay::OnTimingDataChanged() {
+	if (impl)
+		Refresh(false);
 }
 
 void SkiaAudioDisplay::OnAudioOpen(agi::AudioProvider *provider) {

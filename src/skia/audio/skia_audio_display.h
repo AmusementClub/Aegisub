@@ -15,6 +15,7 @@ class wxPaintEvent;
 class wxSizeEvent;
 class wxThreadEvent;
 class TimeRange;
+class AudioController;
 
 namespace agi { class AudioProvider; struct Context; }
 
@@ -32,6 +33,10 @@ class SkiaAudioDisplay final : public wxGLCanvas {
 	void OnContentReady(wxThreadEvent& event);
 	void OnContentFailure(wxThreadEvent& event);
 	void OnAudioOpen(agi::AudioProvider *provider);
+	void OnPlaybackPosition(int position_ms);
+	void OnPlaybackStop();
+	void OnTimingControllerChanged();
+	void OnTimingDataChanged();
 	void OnRenderingSettingsChanged();
 	void ReconfigureAnalysis();
 	void RebuildViewport();
@@ -43,6 +48,7 @@ public:
 
 	SkiaAudioDisplay(
 		wxWindow *parent,
+		AudioController *controller,
 		agi::Context *context,
 		FailureInjection failure_injection,
 		FailureCallback failure_callback);

@@ -75,6 +75,56 @@ TEST(skia_audio_frame_model, invalid_or_collapsed_viewports_are_rejected) {
 	EXPECT_FALSE(audio::BuildFrameViewport(request).IsValid());
 }
 
+TEST(skia_audio_frame_model, style_spans_clip_merge_and_apply_priority_in_device_pixels) {
+	audio::FrameViewportRequest request;
+	request.logical_width = 100;
+	request.logical_height = 120;
+	request.content_scale = 1.25;
+	request.timeline_height = 10;
+	request.scrollbar_height = 10;
+	request.scroll_left = 3;
+	request.duration_ms = 3000;
+	request.milliseconds_per_logical_pixel = 20.0;
+	auto const viewport = audio::BuildFrameViewport(request);
+	ASSERT_TRUE(viewport.IsValid());
+
+	std::vector<audio::TimeStyleRange> ranges {
+		{ 0, 200, audio::FrameStyle::Inactive },
+		{ 100, 180, audio::FrameStyle::Selected },
+		{ 120, 140, audio::FrameStyle::Primary },
+	};
+	auto const spans = audio::BuildDeviceStyleSpans(ranges, viewport);
+	ASSERT_EQ(6u, spans.size());
+	EXPECT_EQ(audio::FrameStyle::Inactive, spans[0].style);
+	EXPECT_NEAR(0.f, spans[0].x, 0.001f);
+	EXPECT_NEAR(2.5f, spans[0].width, 0.001f);
+	EXPECT_EQ(audio::FrameStyle::Selected, spans[1].style);
+	EXPECT_EQ(audio::FrameStyle::Primary, spans[2].style);
+	EXPECT_EQ(audio::FrameStyle::Selected, spans[3].style);
+	EXPECT_EQ(audio::FrameStyle::Inactive, spans[4].style);
+	EXPECT_EQ(audio::FrameStyle::Normal, spans[5].style);
+	EXPECT_NEAR(static_cast<float>(viewport.content.width),
+		spans.back().x + spans.back().width, 0.001f);
+}
+
+TEST(skia_audio_frame_model, empty_style_ranges_cover_the_visible_content_as_normal) {
+	audio::FrameViewportRequest request;
+	request.logical_width = 320;
+	request.logical_height = 120;
+	request.content_scale = 1.5;
+	request.timeline_height = 10;
+	request.scrollbar_height = 10;
+	request.duration_ms = 3000;
+	request.milliseconds_per_logical_pixel = 20.0;
+	auto const viewport = audio::BuildFrameViewport(request);
+	ASSERT_TRUE(viewport.IsValid());
+	auto const spans = audio::BuildDeviceStyleSpans({}, viewport);
+	ASSERT_EQ(1u, spans.size());
+	EXPECT_EQ(audio::FrameStyle::Normal, spans[0].style);
+	EXPECT_FLOAT_EQ(static_cast<float>(viewport.content.x), spans[0].x);
+	EXPECT_FLOAT_EQ(static_cast<float>(viewport.content.width), spans[0].width);
+}
+
 TEST(skia_audio_frame_model, legacy_linear_band_plan_matches_range_and_interpolation_rules) {
 	audio::SpectrumBandPlanRequest request;
 	request.bin_count = 16;

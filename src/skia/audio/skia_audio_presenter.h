@@ -38,6 +38,47 @@ struct SpectrumPalette {
 	std::array<std::uint32_t, 256> colors {};
 };
 
+struct MarkerFrame {
+	float x = 0.f;
+	std::uint32_t color = 0xFFFFFFFF;
+	int width = 1;
+	std::uint8_t feet = 0;
+};
+
+struct LabelFrame {
+	float x = 0.f;
+	float width = 0.f;
+	std::string text;
+};
+
+struct CursorFrame {
+	float x = 0.f;
+	std::uint32_t color = 0xFFFFFFFF;
+	std::string label;
+};
+
+struct TimelineFrame {
+	int height = 0;
+	int scroll_left = 0;
+	int duration_ms = 0;
+	double milliseconds_per_pixel = 0.0;
+	std::uint32_t background_color = 0xFF202020;
+	std::uint32_t foreground_color = 0xFFB0B0B0;
+};
+
+struct ScrollbarFrame {
+	int y = 0;
+	int height = 0;
+	int total = 1;
+	int page = 1;
+	int position = 0;
+	int selection_start = -1;
+	int selection_length = 0;
+	std::uint32_t background_color = 0xFF202020;
+	std::uint32_t thumb_color = 0xFF808080;
+	std::uint32_t selection_color = 0xFFB0B0B0;
+};
+
 struct ContentFrame {
 	ContentGeneration generation;
 	ContentKind kind = ContentKind::Waveform;
@@ -56,6 +97,11 @@ struct ContentFrame {
 	std::shared_ptr<SpectrumPalette const> spectrum_palette;
 	std::shared_ptr<SpectrumBandPlan const> spectrum_band_plan;
 	std::vector<std::shared_ptr<ContentTile const>> tiles;
+	std::vector<MarkerFrame> markers;
+	std::vector<LabelFrame> labels;
+	std::shared_ptr<CursorFrame const> cursor;
+	std::shared_ptr<TimelineFrame const> timeline;
+	std::shared_ptr<ScrollbarFrame const> scrollbar;
 };
 
 // Backend-only fixed-frame presenter used by P3.3. It owns a Ganesh device for

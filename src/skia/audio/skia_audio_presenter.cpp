@@ -249,6 +249,10 @@ void DrawAudioFrameLayers(
 		paint.setStrokeWidth(1.f);
 		auto const ms_per_pixel = frame.timeline->milliseconds_per_pixel;
 		if (std::isfinite(ms_per_pixel) && ms_per_pixel > 0.0 && frame.timeline->duration_ms > 0) {
+			auto const scroll_left = std::isfinite(frame.timeline->scroll_left_exact)
+				&& (frame.timeline->scroll_left_exact != 0.0 || frame.timeline->scroll_left == 0)
+				? frame.timeline->scroll_left_exact
+				: static_cast<double>(frame.timeline->scroll_left);
 			auto const pixels_per_second = 1000.0 / ms_per_pixel;
 			int tick_ms = 1000;
 			if (pixels_per_second > 3000.0) tick_ms = 1;
@@ -260,18 +264,17 @@ void DrawAudioFrameLayers(
 			else if (pixels_per_second > 1.0 / 90.0) tick_ms = 600000;
 			else tick_ms = 3600000;
 			auto const visible_start = std::max<std::int64_t>(
-				0, static_cast<std::int64_t>(std::floor(frame.timeline->scroll_left * ms_per_pixel)));
+				0, static_cast<std::int64_t>(std::floor(scroll_left * ms_per_pixel)));
 			auto const visible_end = std::min<std::int64_t>(
 				frame.timeline->duration_ms,
-				static_cast<std::int64_t>(std::ceil((frame.timeline->scroll_left + frame.width) * ms_per_pixel)));
+				static_cast<std::int64_t>(std::ceil((scroll_left + frame.width) * ms_per_pixel)));
 			auto ms = visible_start / tick_ms * tick_ms;
 			if (ms < visible_start) ms += tick_ms;
 			SkFont timeline_font;
 			timeline_font.setSize(11.f);
 			float last_label_right = frame.x - 1.f;
 			for (; ms <= visible_end; ms += tick_ms) {
-				auto const x = frame.x + static_cast<float>(ms / ms_per_pixel)
-					- static_cast<float>(frame.timeline->scroll_left);
+				auto const x = frame.x + static_cast<float>(ms / ms_per_pixel - scroll_left);
 				if (x < frame.x - 1.f || x > frame.x + frame.width + 1.f)
 					continue;
 				auto const major = ((ms / tick_ms) % 10) == 0;

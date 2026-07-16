@@ -71,6 +71,7 @@ struct TimelineFrame {
 	int y = 0;
 	int height = 0;
 	int scroll_left = 0;
+	double scroll_left_exact = 0.0;
 	int duration_ms = 0;
 	double milliseconds_per_pixel = 0.0;
 	std::uint32_t background_color = 0xFF202020;

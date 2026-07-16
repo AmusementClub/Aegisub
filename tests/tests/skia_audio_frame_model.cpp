@@ -75,6 +75,37 @@ TEST(skia_audio_frame_model, invalid_or_collapsed_viewports_are_rejected) {
 	EXPECT_FALSE(audio::BuildFrameViewport(request).IsValid());
 }
 
+TEST(skia_audio_frame_model, scrollbar_geometry_matches_legacy_layer_positions_and_minimum_thumb) {
+	auto const geometry = audio::BuildScrollbarGeometry(
+		100.f,
+		10.f,
+		25.f,
+		1000,
+		20,
+		200,
+		500,
+		300,
+		200);
+
+	ASSERT_TRUE(geometry.valid);
+	EXPECT_FLOAT_EQ(16.f, geometry.thumb_x);
+	EXPECT_FLOAT_EQ(2.f, geometry.nominal_thumb_width);
+	EXPECT_FLOAT_EQ(10.f, geometry.thumb_width);
+	EXPECT_TRUE(geometry.selection_visible);
+	EXPECT_FLOAT_EQ(30.f, geometry.selection_x);
+	EXPECT_FLOAT_EQ(20.f, geometry.selection_width);
+	EXPECT_TRUE(geometry.load_visible);
+	EXPECT_FLOAT_EQ(25.f, geometry.load_x);
+	EXPECT_FLOAT_EQ(25.f, geometry.load_width);
+}
+
+TEST(skia_audio_frame_model, presentation_interval_tracks_high_refresh_displays_without_a_60hz_cap) {
+	EXPECT_EQ(std::chrono::nanoseconds(16'666'666), audio::PresentationFrameInterval(60));
+	EXPECT_EQ(std::chrono::nanoseconds(6'944'444), audio::PresentationFrameInterval(144));
+	EXPECT_EQ(std::chrono::nanoseconds(4'166'666), audio::PresentationFrameInterval(240));
+	EXPECT_EQ(audio::PresentationFrameInterval(60), audio::PresentationFrameInterval(0));
+}
+
 TEST(skia_audio_frame_model, style_spans_clip_merge_and_apply_priority_in_device_pixels) {
 	audio::FrameViewportRequest request;
 	request.logical_width = 100;
@@ -123,6 +154,19 @@ TEST(skia_audio_frame_model, empty_style_ranges_cover_the_visible_content_as_nor
 	EXPECT_EQ(audio::FrameStyle::Normal, spans[0].style);
 	EXPECT_FLOAT_EQ(static_cast<float>(viewport.content.x), spans[0].x);
 	EXPECT_FLOAT_EQ(static_cast<float>(viewport.content.width), spans[0].width);
+}
+
+TEST(skia_audio_frame_model, style_span_validation_tolerates_float_boundary_reconstruction) {
+	constexpr float content_width = 300.f;
+	constexpr float span_x = 61.00827789306640625f;
+	constexpr float span_width = 238.991729736328125f;
+
+	// Rearranging the right-bound check as x <= right - width loses one ULP
+	// here even though the reconstructed endpoint is the content boundary.
+	EXPECT_GT(span_x, content_width - span_width);
+	EXPECT_TRUE(audio::IsValidDeviceStyleSpan(0.f, content_width, span_x, span_width));
+	EXPECT_FALSE(audio::IsValidDeviceStyleSpan(0.f, content_width, span_x, span_width + 1.f));
+	EXPECT_FALSE(audio::IsValidDeviceStyleSpan(0.f, content_width, span_x, 0.f));
 }
 
 TEST(skia_audio_frame_model, legacy_linear_band_plan_matches_range_and_interpolation_rules) {

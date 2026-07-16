@@ -28,6 +28,7 @@
 #include <include/core/SkSamplingOptions.h>
 #include <include/core/SkString.h>
 #include <include/core/SkSurface.h>
+#include <include/effects/SkGradient.h>
 #include <include/effects/SkRuntimeEffect.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
 #include <include/gpu/ganesh/SkImageGanesh.h>
@@ -198,9 +199,7 @@ std::string ValidateContentFrame(FrameTarget const& target, ContentFrame const& 
 		return "the spectrum palette, band plan, or its revision is missing";
 	}
 	for (auto const& style : frame.styles) {
-		if (!std::isfinite(style.x) || !std::isfinite(style.width)
-			|| style.width <= 0.f || style.x < frame.x
-			|| style.x > frame.x + frame.width - style.width)
+		if (!IsValidDeviceStyleSpan(frame.x, frame.width, style.x, style.width))
 			return "an Audio rendering style span is invalid";
 		if (frame.kind == ContentKind::Spectrum
 			&& (!style.spectrum_palette || !style.spectrum_palette->revision))
@@ -347,31 +346,76 @@ void DrawAudioFrameLayers(
 		auto const scrollbar = *frame.scrollbar;
 		auto const y = static_cast<float>(std::clamp(scrollbar.y, 0, target.height - scrollbar.height));
 		auto const h = static_cast<float>(scrollbar.height);
+		auto const scale = std::isfinite(scrollbar.content_scale)
+			? std::clamp(scrollbar.content_scale, 1.f, 8.f) : 1.f;
+		auto const track = std::max(1.f, static_cast<float>(target.width));
+		auto const geometry = BuildScrollbarGeometry(
+			track,
+			10.f * scale,
+			25.f * scale,
+			scrollbar.total,
+			scrollbar.page,
+			scrollbar.position,
+			scrollbar.load_position,
+			scrollbar.selection_start,
+			scrollbar.selection_length);
+		if (!geometry.valid)
+			return;
+
+		canvas->save();
+		canvas->clipRect(SkRect::MakeXYWH(0.f, y, track, h));
+		paint.reset();
 		paint.setAntiAlias(false);
 		paint.setColor(static_cast<SkColor>(scrollbar.background_color));
-		canvas->drawRect(SkRect::MakeXYWH(0.f, y, static_cast<float>(target.width), h), paint);
-		auto const total = std::max(1, scrollbar.total);
-		auto const page = std::clamp(scrollbar.page, 1, total);
-		auto const track = std::max(1.f, static_cast<float>(target.width));
-		if (scrollbar.load_position >= 0 && scrollbar.load_position < scrollbar.total) {
-			auto const loaded_x = track * static_cast<float>(scrollbar.load_position)
-				/ static_cast<float>(std::max(1, scrollbar.total));
-			paint.setColor(static_cast<SkColor>(scrollbar.thumb_color));
-			canvas->drawRect(SkRect::MakeXYWH(
-				std::max(0.f, loaded_x - 25.f), y + 1.f, std::min(25.f, loaded_x), std::max(1.f, h - 2.f)), paint);
-		}
-		auto const thumb_width = std::max(8.f, track * static_cast<float>(page) / static_cast<float>(total));
-		auto const max_position = std::max(0, total - page);
-		auto const thumb_x = max_position == 0 ? 0.f : (track - thumb_width)
-			* static_cast<float>(std::clamp(scrollbar.position, 0, max_position)) / static_cast<float>(max_position);
-		paint.setColor(static_cast<SkColor>(scrollbar.thumb_color));
-		canvas->drawRect(SkRect::MakeXYWH(thumb_x, y, thumb_width, h), paint);
-		if (scrollbar.selection_start >= 0 && scrollbar.selection_length > 0) {
-			auto const selection_x = track * static_cast<float>(scrollbar.selection_start) / static_cast<float>(total);
-			auto const selection_width = track * static_cast<float>(scrollbar.selection_length) / static_cast<float>(total);
+		canvas->drawRect(SkRect::MakeXYWH(0.f, y, track, h), paint);
+
+		// Match wx AudioDisplayScrollbar z-order: selection is part of the
+		// track and must never obscure the load marker or draggable thumb.
+		if (geometry.selection_visible) {
 			paint.setColor(static_cast<SkColor>(scrollbar.selection_color));
-			canvas->drawRect(SkRect::MakeXYWH(selection_x, y, std::max(1.f, selection_width), h), paint);
+			canvas->drawRect(SkRect::MakeXYWH(
+				geometry.selection_x, y, geometry.selection_width, h), paint);
 		}
+
+		auto const border_width = std::max(1.f, scale);
+		auto const border_inset = border_width * 0.5f;
+		paint.setStyle(SkPaint::kStroke_Style);
+		paint.setStrokeWidth(border_width);
+		paint.setColor(static_cast<SkColor>(scrollbar.thumb_color));
+		canvas->drawRect(SkRect::MakeLTRB(
+			border_inset,
+			y + border_inset,
+			std::max(border_inset, track - border_inset),
+			std::max(y + border_inset, y + h - border_inset)), paint);
+
+		if (geometry.load_visible) {
+			std::array<SkColor4f, 2> colors {
+				SkColor4f::FromColor(static_cast<SkColor>(scrollbar.background_color)),
+				SkColor4f::FromColor(static_cast<SkColor>(scrollbar.thumb_color)),
+			};
+			SkPoint points[] {
+				{ geometry.load_x, y },
+				{ geometry.load_x + geometry.load_width, y },
+			};
+			SkGradient gradient(
+				SkGradient::Colors(SkSpan<const SkColor4f>(colors), SkTileMode::kClamp),
+				{});
+			paint.reset();
+			paint.setAntiAlias(false);
+			paint.setShader(SkShaders::LinearGradient(points, gradient));
+			canvas->drawRect(SkRect::MakeXYWH(
+				geometry.load_x,
+				y + scale,
+				geometry.load_width,
+				std::max(1.f, h - 2.f * scale)), paint);
+		}
+
+		paint.reset();
+		paint.setAntiAlias(false);
+		paint.setColor(static_cast<SkColor>(scrollbar.thumb_color));
+		canvas->drawRect(SkRect::MakeXYWH(
+			geometry.thumb_x, y, geometry.thumb_width, h), paint);
+		canvas->restore();
 	}
 }
 

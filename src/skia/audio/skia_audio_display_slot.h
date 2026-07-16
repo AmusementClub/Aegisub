@@ -18,8 +18,9 @@ namespace aegisub::skia::audio {
 class SkiaAudioDisplay;
 
 // AudioBox-private ownership seam. Build-time inclusion and runtime opt-in may
-// select the Skia sibling; its first real GL/Ganesh failure replaces the whole
-// widget with the unchanged wx AudioDisplay on the next event-loop turn.
+// select the Skia sibling. Failures before the first content frame replace it
+// with the unchanged wx AudioDisplay; later failures require user confirmation
+// so a working Skia session never silently changes renderer.
 class AudioDisplaySlot final : public wxEvtHandler {
 	bool runtime_requested = false;
 	bool create_skia_widget = false;
@@ -43,6 +44,7 @@ class AudioDisplaySlot final : public wxEvtHandler {
 
 	void CreateWxDisplay(wxWindow *replaced_window = nullptr);
 	void RequestWxFallback(std::string message);
+	bool ConfirmRuntimeFallback(std::string const& message);
 	void ApplyStateToWxDisplay();
 
 public:

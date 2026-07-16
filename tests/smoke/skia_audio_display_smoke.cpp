@@ -113,6 +113,22 @@ bool ContainsColor(
 	return false;
 }
 
+bool PixelIsColor(
+	std::vector<unsigned char> const& pixels,
+	int width,
+	int x,
+	int y,
+	unsigned char red,
+	unsigned char green,
+	unsigned char blue) {
+	auto const offset = (static_cast<std::size_t>(y) * width + x) * 4;
+	return offset + 3 < pixels.size()
+		&& Near(pixels[offset], red)
+		&& Near(pixels[offset + 1], green)
+		&& Near(pixels[offset + 2], blue)
+		&& pixels[offset + 3] >= 250;
+}
+
 std::vector<unsigned char> ReadBack(aegisub::skia::audio::FrameTarget const& target) {
 	std::vector<unsigned char> pixels(static_cast<std::size_t>(target.width) * target.height * 4);
 	glReadBuffer(GL_BACK);
@@ -369,7 +385,10 @@ bool ValidateFrameLayerComposition(
 		&& ContainsColor(pixels, 64, 32, 32)
 		&& ContainsColor(pixels, 16, 32, 48)
 		&& ContainsColor(pixels, 48, 48, 48)
-		&& ContainsColor(pixels, 255, 255, 0);
+		&& ContainsColor(pixels, 255, 255, 0)
+		// Selection overlaps the thumb in this frame. The wx-compatible
+		// z-order requires the thumb to remain the visible top layer.
+		&& PixelIsColor(pixels, target.width, 30, 7, 176, 176, 176);
 	presenter.Release(context);
 	return passed;
 }

@@ -106,6 +106,12 @@ Selection SelectBackend(bool runtime_requested, Capabilities const& capabilities
 	return { Backend::Skia, SelectionReason::SkiaAvailable };
 }
 
+RuntimeFallbackDisposition PlanRuntimeFallback(bool content_frame_presented) noexcept {
+	return content_frame_presented
+		? RuntimeFallbackDisposition::Confirm
+		: RuntimeFallbackDisposition::Automatic;
+}
+
 TransitionPlan PlanTransition(Revisions const& current, Change change) {
 	TransitionPlan plan;
 	plan.next = current;

@@ -37,6 +37,13 @@ bool IsDesktopGlAtLeast(int major, int minor, int required_major, int required_m
 bool IsSoftwareLikeGlRenderer(std::string_view vendor, std::string_view renderer);
 Selection SelectBackend(bool runtime_requested, Capabilities const& capabilities);
 
+enum class RuntimeFallbackDisposition {
+	Automatic,
+	Confirm,
+};
+
+RuntimeFallbackDisposition PlanRuntimeFallback(bool content_frame_presented) noexcept;
+
 enum class FailureInjection {
 	None,
 	ContextInitialization,

@@ -158,6 +158,89 @@ FrameViewport BuildFrameViewport(FrameViewportRequest const& request) noexcept {
 	return viewport.IsValid() ? viewport : FrameViewport {};
 }
 
+ScrollbarGeometry BuildScrollbarGeometry(
+	float track_width,
+	float minimum_thumb_width,
+	float load_marker_width,
+	int total,
+	int page,
+	int position,
+	int load_position,
+	int selection_start,
+	int selection_length) noexcept {
+	ScrollbarGeometry geometry;
+	if (!std::isfinite(track_width)
+		|| !std::isfinite(minimum_thumb_width)
+		|| !std::isfinite(load_marker_width)
+		|| track_width <= 0.f
+		|| minimum_thumb_width <= 0.f
+		|| load_marker_width <= 0.f
+		|| total <= 0) {
+		return geometry;
+	}
+
+	page = std::clamp(page, 1, total);
+	position = std::clamp(position, 0, total - page);
+	auto const nominal_width = std::floor(
+		track_width * static_cast<float>(page) / static_cast<float>(total));
+	auto const nominal_x = std::floor(
+		track_width * static_cast<float>(position) / static_cast<float>(total));
+	geometry.nominal_thumb_width = nominal_width;
+	geometry.thumb_width = std::max(minimum_thumb_width, nominal_width);
+	geometry.thumb_x = nominal_x - std::floor((geometry.thumb_width - nominal_width) * 0.5f);
+
+	if (selection_start >= 0 && selection_length > 0) {
+		geometry.selection_x = std::floor(
+			track_width * static_cast<float>(selection_start) / static_cast<float>(total));
+		geometry.selection_width = std::floor(
+			track_width * static_cast<float>(selection_length) / static_cast<float>(total));
+		geometry.selection_visible = geometry.selection_width > 0.f;
+	}
+	if (load_position > 0 && load_position < total) {
+		auto const loaded_x = std::floor(
+			track_width * static_cast<float>(load_position) / static_cast<float>(total));
+		geometry.load_x = loaded_x - load_marker_width;
+		geometry.load_width = load_marker_width;
+		geometry.load_visible = true;
+	}
+	geometry.valid = true;
+	return geometry;
+}
+
+std::chrono::nanoseconds PresentationFrameInterval(int display_refresh_rate) noexcept {
+	if (display_refresh_rate < 24 || display_refresh_rate > 1000)
+		display_refresh_rate = 60;
+	return std::chrono::nanoseconds { 1'000'000'000LL / display_refresh_rate };
+}
+
+bool IsValidDeviceStyleSpan(
+	float content_x,
+	float content_width,
+	float span_x,
+	float span_width) noexcept {
+	if (!std::isfinite(content_x)
+		|| !std::isfinite(content_width)
+		|| !std::isfinite(span_x)
+		|| !std::isfinite(span_width)
+		|| content_width <= 0.f
+		|| span_width <= 0.f) {
+		return false;
+	}
+
+	auto const content_right = static_cast<double>(content_x) + content_width;
+	auto const span_right = static_cast<double>(span_x) + span_width;
+	auto const magnitude = std::max({
+		1.0,
+		std::abs(static_cast<double>(content_x)),
+		std::abs(content_right),
+	});
+	auto const tolerance = std::max(
+		0.001,
+		8.0 * std::numeric_limits<float>::epsilon() * magnitude);
+	return static_cast<double>(span_x) >= static_cast<double>(content_x) - tolerance
+		&& span_right <= content_right + tolerance;
+}
+
 std::vector<DeviceStyleSpan> BuildDeviceStyleSpans(
 	std::vector<TimeStyleRange> const& ranges,
 	FrameViewport const& viewport) {

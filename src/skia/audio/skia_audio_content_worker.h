@@ -46,11 +46,13 @@ struct ContentWorkerMetrics {
 	bool build_active = false;
 };
 
-// One latest-only analysis worker for one AudioProvider lifetime. SetProvider
+// One coalescing analysis worker for one AudioProvider lifetime. SetProvider
 // synchronously stops and joins the previous worker before returning, which is
 // required because Project destroys its raw AudioProvider immediately after
-// announcing nullptr. Request only replaces queued/in-flight viewport work;
-// it never performs provider I/O on the caller thread.
+// announcing nullptr. Request replaces queued viewport work; an in-flight tile
+// is completed before the latest viewport takes over. Provider and analysis
+// generation changes still cancel in-flight work. Provider I/O never runs on
+// the caller thread.
 class ContentWorker final {
 	struct Impl;
 	std::unique_ptr<Impl> impl;

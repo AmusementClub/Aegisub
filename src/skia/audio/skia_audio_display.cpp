@@ -34,13 +34,17 @@
 #endif
 
 #include <wx/dcclient.h>
+#include <wx/display.h>
 #include <wx/mousestate.h>
 #include <wx/thread.h>
 #include <wx/timer.h>
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <exception>
 #include <limits>
 #include <utility>
@@ -50,6 +54,31 @@ namespace {
 
 wxDEFINE_EVENT(EVT_SKIA_AUDIO_CONTENT_READY, wxThreadEvent);
 wxDEFINE_EVENT(EVT_SKIA_AUDIO_CONTENT_FAILURE, wxThreadEvent);
+
+int RequestedAudioSwapInterval() noexcept {
+	auto const *value = std::getenv("AEGISUB_SKIA_AUDIO_SWAP_INTERVAL");
+	if (!value || !*value)
+		return 0;
+	char *end = nullptr;
+	auto const parsed = std::strtol(value, &end, 10);
+	return end != value && *end == '\0'
+		? static_cast<int>(std::clamp<long>(parsed, 0, 4))
+		: 0;
+}
+
+bool ConfigureCurrentSwapInterval(int interval) noexcept {
+#ifdef _WIN32
+	auto const address = wglGetProcAddress("wglSwapIntervalEXT");
+	auto const raw = reinterpret_cast<std::intptr_t>(address);
+	if (!address || raw == 1 || raw == 2 || raw == 3 || raw == -1)
+		return false;
+	using SwapIntervalProc = BOOL (WINAPI *)(int);
+	return reinterpret_cast<SwapIntervalProc>(address)(interval) == TRUE;
+#else
+	(void)interval;
+	return false;
+#endif
+}
 
 std::uint32_t ToArgb(wxColour const& color) {
 	return 0xFF000000u
@@ -124,8 +153,9 @@ struct SkiaAudioDisplay::Impl {
 		FailureInjection failure_injection,
 		FailureCallback failure_callback)
 	: presenter(std::make_unique<Presenter>(failure_injection))
-	, content_worker([owner](ContentGeneration) {
-		wxQueueEvent(owner, new wxThreadEvent(EVT_SKIA_AUDIO_CONTENT_READY));
+	, content_worker([this, owner](ContentGeneration) {
+		if (!content_ready_event_pending.exchange(true, std::memory_order_acq_rel))
+			wxQueueEvent(owner, new wxThreadEvent(EVT_SKIA_AUDIO_CONTENT_READY));
 	}, [owner](std::string message) {
 		auto *event = new wxThreadEvent(EVT_SKIA_AUDIO_CONTENT_FAILURE);
 		event->SetString(wxString::FromUTF8(message));
@@ -134,10 +164,12 @@ struct SkiaAudioDisplay::Impl {
 	, failure_callback(std::move(failure_callback)) {
 		this->audio_controller = audio_controller;
 		this->project_context = project_context;
+		presentation_timer.SetOwner(owner);
 		load_timer.SetOwner(owner);
 		middle_seek_timer.SetOwner(owner);
 	}
 
+	std::atomic<bool> content_ready_event_pending { false };
 	std::unique_ptr<wxGLContext> context;
 	std::unique_ptr<Presenter> presenter;
 	ContentWorker content_worker;
@@ -157,19 +189,32 @@ struct SkiaAudioDisplay::Impl {
 	FrameViewport viewport;
 	int zoom_level = 0;
 	int scroll_left = 0;
+	int content_scroll_left = 0;
 	float amplitude_scale = 1.f;
 	std::uint64_t presentation_revision = 1;
 	std::array<std::array<std::uint32_t, 4>, AudioStyle_MAX> waveform_style_colors {};
 	bool presentation_colors_ready = false;
 	std::array<std::shared_ptr<SpectrumPalette const>, AudioStyle_MAX> spectrum_style_palettes;
 	std::shared_ptr<SpectrumBandPlan const> spectrum_band_plan;
+	std::shared_ptr<ContentFrame const> last_complete_content_frame;
 	FailureCallback failure_callback;
 	wxTimer load_timer;
 	wxTimer middle_seek_timer;
+	wxTimer presentation_timer;
+	bool repaint_pending = false;
+	bool paint_queued = false;
+	bool swap_interval_attempted = false;
+	bool swap_interval_configured = false;
+	int swap_interval = 0;
 	NavigationPreviewPolicy middle_seek_policy;
 	std::int64_t last_decoded_samples = 0;
 	std::uint64_t context_generation = 0;
 	bool fallback_requested = false;
+	bool content_frame_presented = false;
+	bool has_present_timestamp = false;
+	std::chrono::steady_clock::time_point last_present;
+	int presentation_display = wxNOT_FOUND;
+	int presentation_refresh_rate = 60;
 	int playback_position_ms = -1;
 	int mouse_position_ms = -1;
 	std::vector<AudioMarker *> dragged_markers;
@@ -235,6 +280,7 @@ SkiaAudioDisplay::SkiaAudioDisplay(
 	Bind(wxEVT_SIZE, &SkiaAudioDisplay::OnSize, this);
 	Bind(EVT_SKIA_AUDIO_CONTENT_READY, &SkiaAudioDisplay::OnContentReady, this);
 	Bind(EVT_SKIA_AUDIO_CONTENT_FAILURE, &SkiaAudioDisplay::OnContentFailure, this);
+	Bind(wxEVT_TIMER, &SkiaAudioDisplay::OnPresentationTimer, this, impl->presentation_timer.GetId());
 	Bind(wxEVT_TIMER, &SkiaAudioDisplay::OnLoadTimer, this, impl->load_timer.GetId());
 	Bind(wxEVT_TIMER, &SkiaAudioDisplay::OnMiddleSeekTimer, this, impl->middle_seek_timer.GetId());
 	Bind(wxEVT_LEFT_DOWN, &SkiaAudioDisplay::OnMouseEvent, this);
@@ -277,13 +323,17 @@ void SkiaAudioDisplay::RebuildViewport() {
 	request.content_scale = std::max(1.0, static_cast<double>(GetContentScaleFactor()));
 	request.timeline_height = text_height + 4;
 	request.scrollbar_height = 15;
-	request.scroll_left = impl->scroll_left;
+	request.scroll_left = impl->content_scroll_left;
 	request.duration_ms = ProviderDurationMs(impl->provider);
 	request.milliseconds_per_logical_pixel =
 		AudioMillisecondsPerLogicalPixel(impl->zoom_level);
 	impl->viewport = BuildFrameViewport(request);
-	if (impl->viewport.IsValid())
-		impl->scroll_left = impl->viewport.scroll_left;
+	if (impl->viewport.IsValid()) {
+		impl->content_scroll_left = impl->viewport.scroll_left;
+		auto const maximum_scroll = std::max(0,
+			impl->viewport.logical_audio_width - request.logical_width);
+		impl->scroll_left = std::clamp(impl->scroll_left, 0, maximum_scroll);
+	}
 }
 
 void SkiaAudioDisplay::ReconfigureAnalysis() {
@@ -321,8 +371,10 @@ void SkiaAudioDisplay::ReconfigureAnalysis() {
 	impl->content_analysis = config;
 	auto const old_generation = impl->content_generation;
 	impl->content_generation = impl->content_worker.SetAnalysis(config);
-	if (impl->content_generation != old_generation)
+	if (impl->content_generation != old_generation) {
 		impl->has_last_content_request = false;
+		impl->last_complete_content_frame.reset();
+	}
 	for (auto& palette : impl->spectrum_style_palettes)
 		palette.reset();
 	impl->spectrum_band_plan.reset();
@@ -339,6 +391,7 @@ void SkiaAudioDisplay::RequestVisibleContent() {
 	request.first_column = impl->viewport.first_column;
 	request.column_count = impl->viewport.visible_column_count;
 	request.tile_column_count = 256;
+	request.prefetch_tile_count = 1;
 	if (request.kind == ContentKind::Spectrum)
 		request.spectrum_bin_count = static_cast<std::uint32_t>(
 			std::size_t { 1 } << impl->content_analysis.spectrum_derivation_size);
@@ -349,20 +402,58 @@ void SkiaAudioDisplay::RequestVisibleContent() {
 	impl->content_worker.Request(request);
 }
 
+bool SkiaAudioDisplay::HasCompleteVisibleContent() const {
+	if (!impl || !impl->provider || !impl->viewport.IsValid() || !impl->content_analysis.IsValid())
+		return false;
+	ContentViewportRequest request;
+	request.generation = impl->content_generation;
+	request.kind = impl->content_analysis.kind;
+	request.first_column = impl->viewport.first_column;
+	request.column_count = impl->viewport.visible_column_count;
+	request.tile_column_count = 256;
+	if (request.kind == ContentKind::Spectrum)
+		request.spectrum_bin_count = static_cast<std::uint32_t>(
+			std::size_t { 1 } << impl->content_analysis.spectrum_derivation_size);
+	auto const visible_tiles = PlanVisibleContentTiles(request);
+	return !visible_tiles.empty()
+		&& std::all_of(visible_tiles.begin(), visible_tiles.end(), [this](ContentTileKey const& key) {
+			return static_cast<bool>(impl->content_worker.Find(key));
+		});
+}
+
+void SkiaAudioDisplay::CommitScrollbarContentViewport() {
+	if (!impl)
+		return;
+	perf_trace::AudioUiDurationScope trace("audio_display.scrollbar_content_commit");
+	auto const old_content_scroll_left = impl->content_scroll_left;
+	impl->content_scroll_left = impl->scroll_left;
+	RebuildViewport();
+	RequestVisibleContent();
+	trace.SetDetails(
+		std::abs(impl->content_scroll_left - old_content_scroll_left),
+		impl->content_analysis.kind == ContentKind::Spectrum ? 1 : 0);
+}
+
 void SkiaAudioDisplay::OnRenderingSettingsChanged() {
 	impl->InvalidatePresentation();
 	ReconfigureAnalysis();
-	Refresh(false);
+	RequestRepaint(true);
 }
 
 void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 	wxPaintDC paint_dc(this);
+	impl->repaint_pending = false;
+	impl->paint_queued = false;
+	if (impl->presentation_timer.IsRunning())
+		impl->presentation_timer.Stop();
 	if (impl->fallback_requested)
 		return;
 
 	auto const logical_size = GetClientSize();
 	if (logical_size.GetWidth() <= 0 || logical_size.GetHeight() <= 0)
 		return;
+	if (impl->presentation_display == wxNOT_FOUND)
+		UpdatePresentationTiming();
 	perf_trace::AudioUiDurationScope paint_trace("audio_display.paint", 1, impl->provider ? 1 : 0);
 	RebuildViewport();
 	if (!impl->viewport.IsValid())
@@ -376,13 +467,24 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 	}
 
 	auto const context = impl->ContextToken();
-	if (!impl->context->IsOK() || !SetCurrent(*impl->context)) {
+	bool context_active = false;
+	{
+		perf_trace::AudioUiDurationScope context_trace("audio_display.context_activate");
+		context_active = impl->context->IsOK() && SetCurrent(*impl->context);
+		context_trace.SetDetails(context_active ? 1 : 0, impl->swap_interval_configured ? 1 : 0);
+	}
+	if (!context_active) {
 		impl->presenter->Fail(
 			context,
 			SkiaGlDeviceFailure::ContextActivationFailed,
 			"wxGLCanvas could not activate the Audio Display context");
 		RequestFallback(impl->presenter->TakeFailureLogMessage());
 		return;
+	}
+	if (!impl->swap_interval_attempted) {
+		impl->swap_interval_attempted = true;
+		impl->swap_interval = RequestedAudioSwapInterval();
+		impl->swap_interval_configured = ConfigureCurrentSwapInterval(impl->swap_interval);
 	}
 
 	FrameTarget target;
@@ -396,6 +498,8 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 	target.framebuffer_id = 0;
 	target.bottom_left_origin = true;
 
+	bool content_frame_rendered = false;
+	bool complete_content_viewport = false;
 	if (!impl->provider) {
 		if (!impl->presenter->RenderDiagnosticFrame(context, target)) {
 			RequestFallback(impl->presenter->TakeFailureLogMessage());
@@ -431,11 +535,13 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 		auto scrollbar_frame = std::make_shared<ScrollbarFrame>();
 		scrollbar_frame->y = impl->viewport.scrollbar.y;
 		scrollbar_frame->height = impl->viewport.scrollbar.height;
+		scrollbar_frame->content_scale = static_cast<float>(
+			std::max(1.0, static_cast<double>(GetContentScaleFactor())));
 		scrollbar_frame->total = static_cast<int>(std::lround(
 		impl->viewport.logical_audio_width * std::max(1.0, static_cast<double>(GetContentScaleFactor()))));
 		scrollbar_frame->page = impl->viewport.target_width;
 		scrollbar_frame->position = static_cast<int>(std::lround(
-			impl->viewport.scroll_left * std::max(1.0, static_cast<double>(GetContentScaleFactor()))));
+			impl->scroll_left * std::max(1.0, static_cast<double>(GetContentScaleFactor()))));
 		if (impl->provider && impl->provider->GetNumSamples() > 0) {
 			auto const decoded = impl->provider->GetDecodedSamples();
 			if (decoded >= impl->provider->GetNumSamples())
@@ -601,15 +707,39 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 		if (request.kind == ContentKind::Spectrum)
 			request.spectrum_bin_count = static_cast<std::uint32_t>(
 				std::size_t { 1 } << impl->content_analysis.spectrum_derivation_size);
+		std::size_t visible_tile_count = 0;
 		{
 			perf_trace::AudioUiDurationScope lookup_trace("audio_display.content_lookup");
 			auto const visible_tiles = PlanVisibleContentTiles(request);
+			visible_tile_count = visible_tiles.size();
 			for (auto const& key : visible_tiles)
 				if (auto tile = impl->content_worker.Find(key))
 					frame.tiles.push_back(std::move(tile));
 			lookup_trace.SetDetails(
 				static_cast<int>(frame.tiles.size()),
 				static_cast<int>(visible_tiles.size() - frame.tiles.size()));
+		}
+
+		complete_content_viewport = visible_tile_count > 0
+			&& frame.tiles.size() == visible_tile_count;
+		if (complete_content_viewport) {
+			impl->last_complete_content_frame = std::make_shared<ContentFrame>(frame);
+		}
+		else if (auto const& retained = impl->last_complete_content_frame;
+			retained
+			&& retained->generation == frame.generation
+			&& retained->kind == frame.kind
+			&& retained->x == frame.x
+			&& retained->y == frame.y
+			&& retained->width == frame.width
+			&& retained->height == frame.height) {
+			// A large scrollbar jump can outrun waveform/FFT analysis. Keep the
+			// last complete viewport visible instead of submitting an empty black
+			// content layer; the current scrollbar remains live and shows where the
+			// requested viewport is while analysis catches up.
+			auto retained_frame = *retained;
+			retained_frame.scrollbar = frame.scrollbar;
+			frame = std::move(retained_frame);
 		}
 
 		bool rendered = false;
@@ -628,10 +758,29 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 			RequestFallback(impl->presenter->TakeFailureLogMessage());
 			return;
 		}
+		content_frame_rendered = true;
 	}
-	if (!SwapBuffers()) {
+	bool swapped = false;
+	{
+		perf_trace::AudioUiDurationScope swap_trace("audio_display.swap");
+		swapped = SwapBuffers();
+		swap_trace.SetDetails(swapped ? 1 : 0, impl->swap_interval_configured ? impl->swap_interval + 1 : 0);
+	}
+	if (!swapped) {
 		impl->presenter->Fail(context, SkiaGlDeviceFailure::SwapBuffersFailed, "wxGLCanvas::SwapBuffers failed");
 		RequestFallback(impl->presenter->TakeFailureLogMessage());
+	}
+	else if (content_frame_rendered) {
+		impl->content_frame_presented = true;
+	}
+	if (swapped) {
+		impl->last_present = std::chrono::steady_clock::now();
+		impl->has_present_timestamp = true;
+		if (complete_content_viewport
+			&& impl->scrollbar_dragging
+			&& impl->content_scroll_left != impl->scroll_left) {
+			CommitScrollbarContentViewport();
+		}
 	}
 }
 catch (std::exception const& err) {
@@ -654,12 +803,81 @@ void SkiaAudioDisplay::OnEraseBackground(wxEraseEvent&) {
 }
 
 void SkiaAudioDisplay::OnSize(wxSizeEvent& event) {
+	UpdatePresentationTiming();
 	ReconfigureAnalysis();
-	Refresh(false);
+	RequestRepaint();
 	event.Skip();
 }
 
 void SkiaAudioDisplay::OnContentReady(wxThreadEvent&) {
+	if (impl)
+		impl->content_ready_event_pending.store(false, std::memory_order_release);
+	if (impl && impl->scrollbar_dragging) {
+		if (HasCompleteVisibleContent())
+			RequestRepaint(true);
+		return;
+	}
+	RequestRepaint();
+}
+
+void SkiaAudioDisplay::UpdatePresentationTiming() {
+	if (!impl)
+		return;
+	auto const display_index = wxDisplay::GetFromWindow(this);
+	if (display_index == wxNOT_FOUND)
+		return;
+	wxDisplay display(static_cast<unsigned int>(display_index));
+	if (!display.IsOk())
+		return;
+	auto const refresh_rate = display.GetCurrentMode().GetRefresh();
+	impl->presentation_display = display_index;
+	impl->presentation_refresh_rate = refresh_rate >= 24 && refresh_rate <= 1000
+		? refresh_rate : 60;
+}
+
+void SkiaAudioDisplay::RequestRepaint(bool interactive) {
+	if (!impl || impl->fallback_requested)
+		return;
+	impl->repaint_pending = true;
+	if (impl->paint_queued)
+		return;
+	if (interactive) {
+		if (impl->presentation_timer.IsRunning())
+			impl->presentation_timer.Stop();
+		impl->paint_queued = true;
+		Refresh(false);
+		return;
+	}
+	if (!impl->has_present_timestamp) {
+		impl->paint_queued = true;
+		Refresh(false);
+		return;
+	}
+
+	auto const now = std::chrono::steady_clock::now();
+	auto const deadline = impl->last_present
+		+ PresentationFrameInterval(impl->presentation_refresh_rate);
+	if (now >= deadline) {
+		if (impl->presentation_timer.IsRunning())
+			impl->presentation_timer.Stop();
+		impl->paint_queued = true;
+		Refresh(false);
+		return;
+	}
+	if (impl->presentation_timer.IsRunning())
+		return;
+	auto const remaining = deadline - now;
+	auto const delay = std::max<std::int64_t>(
+		1,
+		std::chrono::duration_cast<std::chrono::milliseconds>(
+			remaining + std::chrono::milliseconds(1) - std::chrono::nanoseconds(1)).count());
+	impl->presentation_timer.StartOnce(static_cast<int>(std::min<std::int64_t>(delay, 1000)));
+}
+
+void SkiaAudioDisplay::OnPresentationTimer(wxTimerEvent&) {
+	if (!impl || !impl->repaint_pending || impl->fallback_requested)
+		return;
+	impl->paint_queued = true;
 	Refresh(false);
 }
 
@@ -673,7 +891,7 @@ void SkiaAudioDisplay::OnLoadTimer(wxTimerEvent&) {
 	auto const decoded = impl->provider->GetDecodedSamples();
 	if (decoded != impl->last_decoded_samples) {
 		impl->last_decoded_samples = decoded;
-		Refresh(false);
+	RequestRepaint();
 	}
 	if (decoded >= impl->provider->GetNumSamples())
 		impl->load_timer.Stop();
@@ -725,7 +943,7 @@ void SkiaAudioDisplay::FinishMiddleSeek(int time_ms) {
 	impl->middle_seek_policy.OnRelease(time_ms, NavigationPreviewPolicy::Clock::now());
 	EmitMiddleSeekOutput(time_ms, true);
 	impl->mouse_position_ms = -1;
-	Refresh(false);
+	RequestRepaint(true);
 }
 
 void SkiaAudioDisplay::OnMiddleSeekTimer(wxTimerEvent&) {
@@ -758,17 +976,18 @@ void SkiaAudioDisplay::OnPlaybackPosition(int position_ms) {
 			impl->scroll_left = std::max(0, pixel_position - edge);
 		else if (pixel_position >= impl->scroll_left + client_width - edge)
 			impl->scroll_left = pixel_position - client_width + edge;
+		impl->content_scroll_left = impl->scroll_left;
 		RebuildViewport();
 		RequestVisibleContent();
 	}
-	Refresh(false);
+	RequestRepaint();
 }
 
 void SkiaAudioDisplay::OnPlaybackStop() {
 	if (!impl)
 		return;
 	impl->playback_position_ms = -1;
-	Refresh(false);
+	RequestRepaint();
 }
 
 void SkiaAudioDisplay::OnTimingControllerChanged() {
@@ -788,7 +1007,7 @@ void SkiaAudioDisplay::OnTimingControllerChanged() {
 
 void SkiaAudioDisplay::OnTimingDataChanged() {
 	if (impl)
-		Refresh(false);
+	RequestRepaint();
 }
 
 void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
@@ -824,7 +1043,7 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 				time_ms, NavigationPreviewPolicy::Clock::now(), event.MiddleDown()))
 				EmitMiddleSeekOutput(output->target, false);
 			ScheduleMiddleSeekTimer();
-			Refresh(false);
+	RequestRepaint(true);
 		}
 		return;
 	}
@@ -848,17 +1067,34 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 		if (event.LeftIsDown()) {
 			auto const total = std::max(1, impl->viewport.logical_audio_width);
 			auto const page = std::clamp(GetClientSize().GetWidth(), 1, total);
-			auto const thumb_width = std::max(10.0, client_width * static_cast<double>(page) / total);
-			auto const shaft = std::max(1.0, client_width - thumb_width);
+			auto const geometry = BuildScrollbarGeometry(
+				static_cast<float>(client_width),
+				10.f,
+				25.f,
+				total,
+				page,
+				impl->scroll_left,
+				-1,
+				-1,
+				0);
+			auto const shaft = std::max(1.f,
+				static_cast<float>(client_width) - geometry.nominal_thumb_width);
 			auto const maximum = std::max(0, total - page);
-			impl->scroll_left = static_cast<int>(std::lround(maximum
-				* std::clamp(mouse.x - thumb_width * 0.5, 0.0, shaft) / shaft));
-			RebuildViewport();
-			RequestVisibleContent();
-			Refresh(false);
+			impl->scroll_left = static_cast<int>(maximum
+				* std::clamp(
+					static_cast<float>(mouse.x) - geometry.nominal_thumb_width * 0.5f,
+					0.f,
+					shaft)
+				/ shaft);
+			if (HasCompleteVisibleContent())
+				CommitScrollbarContentViewport();
+	RequestRepaint(true);
 		}
 		else {
 			impl->scrollbar_dragging = false;
+			if (impl->content_scroll_left != impl->scroll_left)
+				CommitScrollbarContentViewport();
+			RequestRepaint(true);
 			if (HasCapture()) ReleaseMouse();
 		}
 		return;
@@ -876,7 +1112,7 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 					* AudioMillisecondsPerLogicalPixel(impl->zoom_level))
 				: 0;
 			timing->OnMarkerDrag(impl->dragged_markers, time_from_x(mouse.x), snap);
-			Refresh(false);
+	RequestRepaint(true);
 		}
 		else {
 			impl->dragged_markers.clear();
@@ -908,7 +1144,7 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 		if (!impl->audio_controller->IsPlaying()) {
 			impl->mouse_position_ms = mouse.y >= timeline_bottom && mouse.y < scrollbar_top
 				? time_from_x(mouse.x) : -1;
-			Refresh(false);
+	RequestRepaint(true);
 		}
 		if (timing && mouse.y >= timeline_bottom && mouse.y < scrollbar_top) {
 			auto const sensitivity = static_cast<int>(
@@ -937,7 +1173,7 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 			impl->mouse_position_ms = -1;
 			if (!HasCapture()) CaptureMouse();
 		}
-		Refresh(false);
+	RequestRepaint(true);
 	}
 }
 
@@ -950,7 +1186,7 @@ void SkiaAudioDisplay::OnMouseEnter(wxMouseEvent& event) {
 void SkiaAudioDisplay::OnMouseLeave(wxMouseEvent& event) {
 	if (impl && !impl->middle_seek_active && impl->audio_controller && !impl->audio_controller->IsPlaying()) {
 		impl->mouse_position_ms = -1;
-		Refresh(false);
+	RequestRepaint(true);
 	}
 	event.Skip();
 }
@@ -958,10 +1194,14 @@ void SkiaAudioDisplay::OnMouseLeave(wxMouseEvent& event) {
 void SkiaAudioDisplay::OnMouseCaptureLost(wxMouseCaptureLostEvent&) {
 	if (!impl)
 		return;
+	auto const commit_scrollbar_target = impl->scrollbar_dragging
+		&& impl->content_scroll_left != impl->scroll_left;
 	impl->dragged_markers.clear();
 	impl->dragged_button = wxMOUSE_BTN_NONE;
 	impl->timeline_dragging = false;
 	impl->scrollbar_dragging = false;
+	if (commit_scrollbar_target)
+		CommitScrollbarContentViewport();
 	if (impl->middle_seek_active) {
 		if (auto core = impl->project_context->GetCore(); core.videoController)
 			core.videoController->CancelInteractiveSeekPreview();
@@ -973,7 +1213,7 @@ void SkiaAudioDisplay::OnMouseCaptureLost(wxMouseCaptureLostEvent&) {
 }
 
 void SkiaAudioDisplay::OnFocus(wxFocusEvent& event) {
-	Refresh(false);
+	RequestRepaint(true);
 	event.Skip();
 }
 
@@ -985,6 +1225,8 @@ void SkiaAudioDisplay::OnKeyDown(wxKeyEvent& event) {
 void SkiaAudioDisplay::OnAudioOpen(agi::AudioProvider *provider) {
 	try {
 		impl->provider = provider;
+		impl->last_complete_content_frame.reset();
+		impl->content_scroll_left = impl->scroll_left;
 		impl->last_decoded_samples = provider ? provider->GetDecodedSamples() : 0;
 		if (provider && provider->GetDecodedSamples() < provider->GetNumSamples())
 			impl->load_timer.Start(100);
@@ -995,7 +1237,7 @@ void SkiaAudioDisplay::OnAudioOpen(agi::AudioProvider *provider) {
 			impl->has_last_content_request = false;
 		impl->content_generation = generation;
 		ReconfigureAnalysis();
-		Refresh(false);
+		RequestRepaint();
 	}
 	catch (std::exception const& err) {
 		RequestFallback(std::string("Skia Audio content worker initialization failed: ") + err.what());
@@ -1019,6 +1261,10 @@ void SkiaAudioDisplay::ClearFailureCallback() {
 	impl->failure_callback = {};
 }
 
+bool SkiaAudioDisplay::HasPresentedContentFrame() const noexcept {
+	return impl && impl->content_frame_presented;
+}
+
 void SkiaAudioDisplay::SyncToCurrentAudioProvider() {
 	OnAudioOpen(impl->project_context->GetCore().project->AudioProvider());
 }
@@ -1027,8 +1273,10 @@ void SkiaAudioDisplay::ScrollBy(int pixel_amount) {
 	perf_trace::AudioUiDurationScope trace("audio_display.scroll");
 	auto const old_scroll_left = impl->scroll_left;
 	impl->scroll_left += pixel_amount;
+	impl->content_scroll_left = impl->scroll_left;
 	RebuildViewport();
-	Refresh(false);
+	RequestVisibleContent();
+	RequestRepaint(true);
 	trace.SetDetails(std::abs(impl->scroll_left - old_scroll_left), impl->viewport.IsValid() ? 1 : 0);
 }
 
@@ -1053,14 +1301,16 @@ void SkiaAudioDisplay::ScrollTimeRangeInView(TimeRange const& range) {
 		impl->scroll_left = end - page - margin;
 	else
 		impl->scroll_left = begin - margin;
+	impl->content_scroll_left = impl->scroll_left;
 	RebuildViewport();
-	Refresh(false);
+	RequestVisibleContent();
+	RequestRepaint(true);
 }
 
 void SkiaAudioDisplay::SetZoomLevel(int zoom_level) {
 	impl->zoom_level = zoom_level;
 	ReconfigureAnalysis();
-	Refresh(false);
+	RequestRepaint(true);
 }
 
 int SkiaAudioDisplay::GetZoomLevel() const {
@@ -1069,7 +1319,7 @@ int SkiaAudioDisplay::GetZoomLevel() const {
 
 void SkiaAudioDisplay::SetAmplitudeScale(float scale) {
 	impl->amplitude_scale = std::max(0.f, scale);
-	Refresh(false);
+	RequestRepaint(true);
 }
 
 }

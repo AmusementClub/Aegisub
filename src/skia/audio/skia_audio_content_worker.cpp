@@ -19,6 +19,20 @@
 namespace aegisub::skia::audio {
 namespace {
 
+constexpr std::uint32_t kMaximumPrefetchTileCount = 4;
+
+std::size_t EstimatedTileBytes(ContentTileKey const& key) noexcept {
+	auto const elements = key.kind == ContentKind::Waveform
+		? static_cast<std::size_t>(key.column_count)
+		: static_cast<std::size_t>(key.column_count) * key.spectrum_bin_count;
+	auto const element_size = key.kind == ContentKind::Waveform
+		? sizeof(WaveformColumn)
+		: sizeof(float);
+	if (elements > (std::numeric_limits<std::size_t>::max() - sizeof(ContentTile)) / element_size)
+		return std::numeric_limits<std::size_t>::max();
+	return sizeof(ContentTile) + elements * element_size;
+}
+
 std::uint64_t NextGeneration(std::uint64_t value) noexcept {
 	++value;
 	return value ? value : 1;
@@ -28,8 +42,41 @@ struct WorkPlan {
 	std::uint64_t serial = 0;
 	ContentGeneration generation;
 	ContentAnalysisConfig analysis;
+	std::size_t visible_tile_count = 0;
 	std::vector<ContentTileKey> tiles;
 };
+
+void AppendPrefetchTiles(
+	ContentViewportRequest const& request,
+	std::size_t content_budget_bytes,
+	std::vector<ContentTileKey>& tiles) {
+	if (tiles.empty() || request.prefetch_tile_count == 0)
+		return;
+
+	auto const tile_bytes = EstimatedTileBytes(tiles.front());
+	if (tile_bytes == 0 || tile_bytes > content_budget_bytes)
+		return;
+	auto const maximum_resident_tiles = content_budget_bytes / tile_bytes;
+	if (tiles.size() >= maximum_resident_tiles)
+		return;
+
+	auto const count = std::min(request.prefetch_tile_count, kMaximumPrefetchTileCount);
+	auto const first_tile = tiles.front().tile_index;
+	auto const last_tile = tiles.back().tile_index;
+	for (std::uint64_t distance = 1; distance <= count; ++distance) {
+		if (tiles.size() < maximum_resident_tiles
+			&& last_tile <= std::numeric_limits<std::uint64_t>::max() - distance) {
+			auto key = tiles.front();
+			key.tile_index = last_tile + distance;
+			tiles.push_back(key);
+		}
+		if (tiles.size() < maximum_resident_tiles && first_tile >= distance) {
+			auto key = tiles.front();
+			key.tile_index = first_tile - distance;
+			tiles.push_back(key);
+		}
+	}
+}
 
 }
 
@@ -68,7 +115,14 @@ struct ContentWorker::Impl {
 	std::uint64_t active_serial = 0;
 	bool stop = false;
 
-	bool IsCurrent(std::uint64_t serial, ContentGeneration candidate) const {
+	bool IsGenerationCurrent(ContentGeneration candidate) const {
+		std::lock_guard<std::mutex> lock(mutex);
+		return !stop
+			&& candidate == generation
+			&& provider;
+	}
+
+	bool IsRequestCurrent(std::uint64_t serial, ContentGeneration candidate) const {
 		std::lock_guard<std::mutex> lock(mutex);
 		return !stop
 			&& serial == request_serial
@@ -130,8 +184,9 @@ struct ContentWorker::Impl {
 					source_mode = plan.analysis.source_mode;
 				}
 
-				for (auto const& key : plan.tiles) {
-					if (!IsCurrent(plan.serial, plan.generation))
+				for (std::size_t tile_offset = 0; tile_offset < plan.tiles.size(); ++tile_offset) {
+					auto const& key = plan.tiles[tile_offset];
+					if (!IsRequestCurrent(plan.serial, plan.generation))
 						break;
 					if (store.Find(key))
 						continue;
@@ -149,8 +204,8 @@ struct ContentWorker::Impl {
 						request.key = key;
 						request.milliseconds_per_pixel = plan.analysis.milliseconds_per_pixel;
 						request.mix_policy = plan.analysis.mix_policy;
-						built = analyzer->BuildWaveform(request, [this, serial = plan.serial](ContentGeneration value) {
-							return IsCurrent(serial, value);
+						built = analyzer->BuildWaveform(request, [this](ContentGeneration value) {
+							return IsGenerationCurrent(value);
 						});
 					}
 					else if (analyzer) {
@@ -161,8 +216,8 @@ struct ContentWorker::Impl {
 						request.channel_mode = plan.analysis.spectrum_channel_mode;
 						request.derivation_size = plan.analysis.spectrum_derivation_size;
 						request.derivation_distance = plan.analysis.spectrum_derivation_distance;
-						built = analyzer->BuildSpectrum(request, [this, serial = plan.serial](ContentGeneration value) {
-							return IsCurrent(serial, value);
+						built = analyzer->BuildSpectrum(request, [this](ContentGeneration value) {
+							return IsGenerationCurrent(value);
 						});
 					}
 					build_trace.SetDetails(
@@ -186,7 +241,9 @@ struct ContentWorker::Impl {
 						std::lock_guard<std::mutex> lock(mutex);
 						++metrics.builds_ready;
 					}
-					if (ready_callback && IsCurrent(plan.serial, plan.generation)) {
+					if (tile_offset < plan.visible_tile_count
+						&& ready_callback
+						&& IsGenerationCurrent(plan.generation)) {
 						ready_callback(plan.generation);
 						std::lock_guard<std::mutex> lock(mutex);
 						++metrics.ready_notifications;
@@ -287,6 +344,8 @@ void ContentWorker::Request(ContentViewportRequest request) {
 	auto tiles = PlanVisibleContentTiles(request);
 	if (tiles.empty())
 		return;
+	auto const visible_tile_count = tiles.size();
+	AppendPrefetchTiles(request, impl->store.Metrics().budget_bytes, tiles);
 
 	{
 		std::lock_guard<std::mutex> lock(impl->mutex);
@@ -309,6 +368,7 @@ void ContentWorker::Request(ContentViewportRequest request) {
 		plan.serial = ++impl->request_serial;
 		plan.generation = impl->generation;
 		plan.analysis = impl->analysis;
+		plan.visible_tile_count = visible_tile_count;
 		plan.tiles = std::move(tiles);
 		impl->latest = std::move(plan);
 		++impl->metrics.requests;

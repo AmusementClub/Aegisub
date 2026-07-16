@@ -81,6 +81,7 @@ struct TimelineFrame {
 struct ScrollbarFrame {
 	int y = 0;
 	int height = 0;
+	float content_scale = 1.f;
 	int total = 1;
 	int page = 1;
 	int position = 0;

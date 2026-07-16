@@ -119,6 +119,20 @@ public:
 	}
 };
 
+bool WaitForBuilds(
+	ContentWorker const& worker,
+	std::uint64_t expected,
+	std::chrono::milliseconds timeout = 2s) {
+	auto const deadline = std::chrono::steady_clock::now() + timeout;
+	while (std::chrono::steady_clock::now() < deadline) {
+		auto const metrics = worker.Metrics();
+		if (metrics.builds_ready >= expected && !metrics.build_active && !metrics.request_pending)
+			return true;
+		std::this_thread::sleep_for(1ms);
+	}
+	return false;
+}
+
 }
 
 TEST(skia_audio_content_worker, request_builds_only_on_worker_and_notifies_ready) {
@@ -143,7 +157,7 @@ TEST(skia_audio_content_worker, request_builds_only_on_worker_and_notifies_ready
 	worker.SetProvider(nullptr);
 }
 
-TEST(skia_audio_content_worker, latest_viewport_cancels_inflight_obsolete_tile) {
+TEST(skia_audio_content_worker, latest_viewport_takes_over_after_inflight_tile_completes) {
 	GateAudioProvider provider(true);
 	ReadyLatch ready;
 	ContentWorker worker([&](ContentGeneration generation) { ready.Notify(generation); });
@@ -159,13 +173,67 @@ TEST(skia_audio_content_worker, latest_viewport_cancels_inflight_obsolete_tile) 
 	ASSERT_TRUE(provider.WaitUntilEntered());
 	worker.Request(latest);
 	provider.Release();
-	ASSERT_TRUE(ready.WaitFor(1));
+	ASSERT_TRUE(ready.WaitFor(2));
 
-	EXPECT_EQ(worker.Find(obsolete_key), nullptr);
+	EXPECT_NE(worker.Find(obsolete_key), nullptr);
 	EXPECT_NE(worker.Find(latest_key), nullptr);
 	auto const metrics = worker.Metrics();
 	EXPECT_GE(metrics.superseded_requests, 1u);
-	EXPECT_GE(metrics.builds_cancelled, 1u);
+	EXPECT_EQ(metrics.builds_cancelled, 0u);
+	worker.SetProvider(nullptr);
+}
+
+TEST(skia_audio_content_worker, request_builds_adjacent_prefetch_without_extra_notifications) {
+	GateAudioProvider provider;
+	ReadyLatch ready;
+	ContentWorker worker([&](ContentGeneration generation) { ready.Notify(generation); });
+
+	worker.SetProvider(&provider);
+	auto const generation = worker.SetAnalysis(WaveformAnalysis());
+	auto viewport = WaveformViewport(generation, 64, 64);
+	viewport.prefetch_tile_count = 1;
+	worker.Request(viewport);
+	ASSERT_TRUE(ready.WaitFor(1));
+	ASSERT_TRUE(WaitForBuilds(worker, 3));
+
+	auto visible = FirstKey(viewport);
+	auto before = visible;
+	--before.tile_index;
+	auto after = visible;
+	++after.tile_index;
+	EXPECT_NE(worker.Find(visible), nullptr);
+	EXPECT_NE(worker.Find(before), nullptr);
+	EXPECT_NE(worker.Find(after), nullptr);
+	EXPECT_EQ(worker.Metrics().ready_notifications, 1u);
+	worker.SetProvider(nullptr);
+}
+
+TEST(skia_audio_content_worker, prefetch_never_evicts_visible_tile_from_tight_budget) {
+	GateAudioProvider provider;
+	ReadyLatch ready;
+	auto const one_tile_budget = sizeof(ContentTile) + 64 * sizeof(WaveformColumn);
+	ContentWorker worker(
+		[&](ContentGeneration generation) { ready.Notify(generation); },
+		{},
+		one_tile_budget);
+
+	worker.SetProvider(&provider);
+	auto const generation = worker.SetAnalysis(WaveformAnalysis());
+	auto viewport = WaveformViewport(generation, 64, 64);
+	viewport.prefetch_tile_count = 1;
+	worker.Request(viewport);
+	ASSERT_TRUE(ready.WaitFor(1));
+	ASSERT_TRUE(WaitForBuilds(worker, 1));
+
+	auto visible = FirstKey(viewport);
+	auto before = visible;
+	--before.tile_index;
+	auto after = visible;
+	++after.tile_index;
+	EXPECT_NE(worker.Find(visible), nullptr);
+	EXPECT_EQ(worker.Find(before), nullptr);
+	EXPECT_EQ(worker.Find(after), nullptr);
+	EXPECT_EQ(worker.StoreMetrics().evictions, 0u);
 	worker.SetProvider(nullptr);
 }
 
@@ -185,6 +253,31 @@ TEST(skia_audio_content_worker, provider_detach_waits_for_inflight_read_before_r
 	auto const detached_generation = detached.get();
 	EXPECT_NE(detached_generation.provider, generation.provider);
 	EXPECT_FALSE(worker.Metrics().provider_attached);
+}
+
+TEST(skia_audio_content_worker, analysis_change_still_cancels_inflight_generation) {
+	GateAudioProvider provider(true);
+	ReadyLatch ready;
+	ContentWorker worker([&](ContentGeneration generation) { ready.Notify(generation); });
+
+	worker.SetProvider(&provider);
+	auto const old_generation = worker.SetAnalysis(WaveformAnalysis());
+	auto const old_viewport = WaveformViewport(old_generation, 0, 64);
+	worker.Request(old_viewport);
+	ASSERT_TRUE(provider.WaitUntilEntered());
+
+	auto changed = WaveformAnalysis();
+	changed.milliseconds_per_pixel = 2.0;
+	auto const new_generation = worker.SetAnalysis(changed);
+	auto const new_viewport = WaveformViewport(new_generation, 0, 64);
+	worker.Request(new_viewport);
+	provider.Release();
+	ASSERT_TRUE(ready.WaitFor(1));
+
+	EXPECT_EQ(worker.Find(FirstKey(old_viewport)), nullptr);
+	EXPECT_NE(worker.Find(FirstKey(new_viewport)), nullptr);
+	EXPECT_GE(worker.Metrics().builds_cancelled, 1u);
+	worker.SetProvider(nullptr);
 }
 
 TEST(skia_audio_content_worker, analysis_change_drops_old_generation_and_rejects_old_request) {

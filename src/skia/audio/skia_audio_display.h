@@ -37,6 +37,7 @@ class SkiaAudioDisplay final : public wxGLCanvas {
 	void OnSize(wxSizeEvent& event);
 	void OnContentReady(wxThreadEvent& event);
 	void OnContentFailure(wxThreadEvent& event);
+	void OnPresentationTimer(wxTimerEvent& event);
 	void OnLoadTimer(wxTimerEvent& event);
 	void OnMiddleSeekTimer(wxTimerEvent& event);
 	void OnAudioOpen(agi::AudioProvider *provider);
@@ -57,6 +58,10 @@ class SkiaAudioDisplay final : public wxGLCanvas {
 	void ReconfigureAnalysis();
 	void RebuildViewport();
 	void RequestVisibleContent();
+	bool HasCompleteVisibleContent() const;
+	void CommitScrollbarContentViewport();
+	void UpdatePresentationTiming();
+	void RequestRepaint(bool interactive = false);
 	void RequestFallback(std::string message);
 
 public:
@@ -74,6 +79,7 @@ public:
 	SkiaAudioDisplay& operator=(SkiaAudioDisplay const&) = delete;
 
 	void ClearFailureCallback();
+	bool HasPresentedContentFrame() const noexcept;
 	void SyncToCurrentAudioProvider();
 	void ScrollBy(int pixel_amount);
 	void ScrollBy(int pixel_amount, int mouse_x);

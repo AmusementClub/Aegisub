@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <vector>
 
@@ -47,6 +48,32 @@ int AudioZoomFactor(int zoom_level) noexcept;
 double AudioMillisecondsPerLogicalPixel(int zoom_level) noexcept;
 FrameViewport BuildFrameViewport(FrameViewportRequest const& request) noexcept;
 
+struct ScrollbarGeometry {
+	float selection_x = 0.f;
+	float selection_width = 0.f;
+	float load_x = 0.f;
+	float load_width = 0.f;
+	float thumb_x = 0.f;
+	float thumb_width = 0.f;
+	float nominal_thumb_width = 0.f;
+	bool selection_visible = false;
+	bool load_visible = false;
+	bool valid = false;
+};
+
+ScrollbarGeometry BuildScrollbarGeometry(
+	float track_width,
+	float minimum_thumb_width,
+	float load_marker_width,
+	int total,
+	int page,
+	int position,
+	int load_position,
+	int selection_start,
+	int selection_length) noexcept;
+
+std::chrono::nanoseconds PresentationFrameInterval(int display_refresh_rate) noexcept;
+
 enum class FrameStyle : std::uint8_t {
 	Normal,
 	Inactive,
@@ -67,6 +94,12 @@ struct DeviceStyleSpan {
 
 	friend bool operator==(DeviceStyleSpan const&, DeviceStyleSpan const&) = default;
 };
+
+bool IsValidDeviceStyleSpan(
+	float content_x,
+	float content_width,
+	float span_x,
+	float span_width) noexcept;
 
 std::vector<DeviceStyleSpan> BuildDeviceStyleSpans(
 	std::vector<TimeStyleRange> const& ranges,

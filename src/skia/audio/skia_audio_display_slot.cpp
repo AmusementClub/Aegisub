@@ -15,6 +15,7 @@
 #include <libaegisub/log.h>
 
 #include <wx/sizer.h>
+#include <wx/msgdlg.h>
 #include <wx/window.h>
 
 namespace aegisub::skia::audio {
@@ -63,6 +64,9 @@ AudioDisplaySlot::~AudioDisplaySlot() {
 }
 
 void AudioDisplaySlot::CreateWxDisplay(wxWindow *replaced_window) {
+	if (replaced_window && replaced_window->HasCapture())
+		replaced_window->ReleaseMouse();
+
 	auto *new_display = new AudioDisplay(parent, controller, context);
 	display = new_display;
 	active_window = new_display;
@@ -93,14 +97,36 @@ void AudioDisplaySlot::RequestWxFallback(std::string message) {
 		return;
 	fallback_pending = true;
 	LOG_W("audio/display/skia") << message;
-	CallAfter([this] {
+	auto const disposition = PlanRuntimeFallback(
+		skia_display && skia_display->HasPresentedContentFrame());
+	CallAfter([this, message = std::move(message), disposition] {
 		if (!display && skia_display) {
 			auto *failed_display = skia_display;
 			failed_display->ClearFailureCallback();
+			if (failed_display->HasCapture())
+				failed_display->ReleaseMouse();
+			if (disposition == RuntimeFallbackDisposition::Confirm
+				&& !ConfirmRuntimeFallback(message)) {
+				LOG_W("audio/display/skia") << "User kept the failed Skia Audio Display instead of switching to wx";
+				return;
+			}
 			CreateWxDisplay(failed_display);
 		}
 	});
 
+}
+
+bool AudioDisplaySlot::ConfirmRuntimeFallback(std::string const& message) {
+	auto const detail = wxString::FromUTF8(message);
+	wxMessageDialog dialog(
+		wxGetTopLevelParent(parent),
+		wxString::Format(
+			wxS("Skia Audio Display encountered an error after it had started successfully.\n\n%s\n\nSwitch to the wx compatibility renderer?"),
+			detail),
+		wxS("Skia Audio Display runtime error"),
+		wxYES_NO | wxYES_DEFAULT | wxICON_ERROR | wxCENTER);
+	dialog.SetYesNoLabels(wxS("Switch to wx"), wxS("Keep Skia stopped"));
+	return dialog.ShowModal() == wxID_YES;
 }
 
 void AudioDisplaySlot::ApplyStateToWxDisplay() {

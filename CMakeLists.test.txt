@@ -509,6 +509,7 @@ if(WIN32)
     if(WITH_SKIA_AUDIO_DISPLAY)
         add_executable(skia-audio-display-smoke EXCLUDE_FROM_ALL
             tests/smoke/skia_audio_display_smoke.cpp
+            tests/smoke/perf_trace_audio_stub.cpp
             src/skia/skia_gl_contract.cpp
             src/skia/skia_gl_device.cpp
             src/skia/audio/skia_audio_content.cpp
@@ -525,7 +526,10 @@ if(WIN32)
             WIN32_LEAN_AND_MEAN
         )
         target_compile_features(skia-audio-display-smoke PRIVATE cxx_std_20)
-        target_include_directories(skia-audio-display-smoke PRIVATE src)
+        target_include_directories(skia-audio-display-smoke PRIVATE
+            src
+            "${PROJECT_SOURCE_DIR}/libaegisub/include"
+        )
         target_link_libraries(skia-audio-display-smoke PRIVATE unofficial::skia::skia OpenGL::GL)
     endif()
 

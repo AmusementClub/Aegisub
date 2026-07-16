@@ -81,6 +81,15 @@ TEST(skia_audio_display_contract, selection_requires_runtime_context_gl_and_hard
 	EXPECT_EQ(audio::SelectionReason::SkiaAvailable, selected.reason);
 }
 
+TEST(skia_audio_display_contract, runtime_failure_prompts_only_after_content_was_presented) {
+	EXPECT_EQ(
+		audio::RuntimeFallbackDisposition::Automatic,
+		audio::PlanRuntimeFallback(false));
+	EXPECT_EQ(
+		audio::RuntimeFallbackDisposition::Confirm,
+		audio::PlanRuntimeFallback(true));
+}
+
 TEST(skia_audio_display_contract, cursor_update_is_overlay_only) {
 	audio::Revisions current;
 	auto const plan = audio::PlanTransition(current, audio::Change::Cursor);

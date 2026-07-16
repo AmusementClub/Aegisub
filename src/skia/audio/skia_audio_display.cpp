@@ -416,6 +416,7 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 		timeline->y = impl->viewport.timeline.y;
 		timeline->height = impl->viewport.timeline.height;
 		timeline->scroll_left = impl->viewport.scroll_left;
+		timeline->scroll_left_exact = impl->viewport.first_column_exact;
 		timeline->duration_ms = ProviderDurationMs(impl->provider);
 		timeline->milliseconds_per_pixel = impl->viewport.milliseconds_per_column;
 		auto const scheme_name = OPT_GET(frame.kind == ContentKind::Spectrum

@@ -441,6 +441,7 @@ namespace {
 			commands.clear();
 			buttons.clear();
 			Populate();
+			InvalidateBestSize();
 		}
 
 		void OnIdle(wxIdleEvent &) {

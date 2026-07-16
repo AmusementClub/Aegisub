@@ -447,6 +447,7 @@ void FrameMain::InitContents() {
 	auto queue_edit_grid_splitter_minimum_update = [this](agi::OptionValue const&) {
 		QueueEditGridSplitterMinimumUpdate();
 	};
+	ui_activation.AddConnection(OPT_SUB("Subtitle/Edit Box/Command Buttons/Commands", queue_edit_grid_splitter_minimum_update));
 	ui_activation.AddConnection(OPT_SUB("Audio/Display Height", queue_edit_grid_splitter_minimum_update));
 	ui_activation.AddConnection(OPT_SUB("Subtitle/Show Original", queue_edit_grid_splitter_minimum_update));
 	ui_activation.AddConnection(OPT_SUB("Video/Secondary Subtitles/Enabled", queue_edit_grid_splitter_minimum_update));
@@ -641,6 +642,7 @@ void FrameMain::OnSubtitleCommandToolbarVisibleChanged(agi::OptionValue const& o
 		for (wxWindow *w = subtitleCommandToolbar->GetParent(); w; w = w->GetParent())
 			w->InvalidateBestSize();
 	}
+	QueueEditGridSplitterMinimumUpdate();
 	editAreaPanel->Layout();
 	editAreaPanel->GetParent()->Layout();
 	Layout();

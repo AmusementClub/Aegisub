@@ -12,6 +12,7 @@
 #include "../../include/aegisub/hotkey.h"
 #include "../../navigation_preview_policy.h"
 #include "../../options.h"
+#include "../../perf_trace.h"
 #include "../../video_controller.h"
 
 #include <libaegisub/signal.h>
@@ -362,6 +363,7 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 	auto const logical_size = GetClientSize();
 	if (logical_size.GetWidth() <= 0 || logical_size.GetHeight() <= 0)
 		return;
+	perf_trace::AudioUiDurationScope paint_trace("audio_display.paint", 1, impl->provider ? 1 : 0);
 	RebuildViewport();
 	if (!impl->viewport.IsValid())
 		return;
@@ -599,11 +601,30 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 		if (request.kind == ContentKind::Spectrum)
 			request.spectrum_bin_count = static_cast<std::uint32_t>(
 				std::size_t { 1 } << impl->content_analysis.spectrum_derivation_size);
-		for (auto const& key : PlanVisibleContentTiles(request))
-			if (auto tile = impl->content_worker.Find(key))
-				frame.tiles.push_back(std::move(tile));
+		{
+			perf_trace::AudioUiDurationScope lookup_trace("audio_display.content_lookup");
+			auto const visible_tiles = PlanVisibleContentTiles(request);
+			for (auto const& key : visible_tiles)
+				if (auto tile = impl->content_worker.Find(key))
+					frame.tiles.push_back(std::move(tile));
+			lookup_trace.SetDetails(
+				static_cast<int>(frame.tiles.size()),
+				static_cast<int>(visible_tiles.size() - frame.tiles.size()));
+		}
 
-		if (!impl->presenter->RenderContentFrame(context, target, frame)) {
+		bool rendered = false;
+		{
+			perf_trace::AudioUiDurationScope content_trace("audio_display.paint_audio");
+			auto const before = content_trace.IsActive() ? impl->presenter->Metrics() : PresenterMetrics{};
+			rendered = impl->presenter->RenderContentFrame(context, target, frame);
+			if (content_trace.IsActive()) {
+				auto const after = impl->presenter->Metrics();
+				content_trace.SetDetails(
+					static_cast<int>(after.content_tiles_drawn - before.content_tiles_drawn),
+					static_cast<int>(after.content_uploads - before.content_uploads));
+			}
+		}
+		if (!rendered) {
 			RequestFallback(impl->presenter->TakeFailureLogMessage());
 			return;
 		}
@@ -1003,9 +1024,12 @@ void SkiaAudioDisplay::SyncToCurrentAudioProvider() {
 }
 
 void SkiaAudioDisplay::ScrollBy(int pixel_amount) {
+	perf_trace::AudioUiDurationScope trace("audio_display.scroll");
+	auto const old_scroll_left = impl->scroll_left;
 	impl->scroll_left += pixel_amount;
 	RebuildViewport();
 	Refresh(false);
+	trace.SetDetails(std::abs(impl->scroll_left - old_scroll_left), impl->viewport.IsValid() ? 1 : 0);
 }
 
 void SkiaAudioDisplay::ScrollBy(int pixel_amount, int) {

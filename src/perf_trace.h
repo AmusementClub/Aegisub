@@ -19,6 +19,24 @@ enum class Category {
 	Log,
 };
 
+class AudioUiDurationScope {
+	char const* phase = nullptr;
+	int64_t started_ns = 0;
+	int detail_a = -1;
+	int detail_b = -1;
+
+public:
+	explicit AudioUiDurationScope(char const* phase, int detail_a = -1, int detail_b = -1) noexcept;
+	~AudioUiDurationScope() noexcept;
+
+	AudioUiDurationScope(AudioUiDurationScope const&) = delete;
+	AudioUiDurationScope& operator=(AudioUiDurationScope const&) = delete;
+
+	bool IsActive() const noexcept { return started_ns != 0; }
+	void SetDetails(int first, int second = -1) noexcept;
+	void Cancel() noexcept { started_ns = 0; }
+};
+
 struct AudioOutputSnapshot {
 	std::string backend_name;
 	std::string reason;

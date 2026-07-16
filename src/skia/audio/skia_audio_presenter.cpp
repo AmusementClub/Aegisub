@@ -1,5 +1,6 @@
 #include "skia_audio_presenter.h"
 
+#include "../../perf_trace.h"
 #include "../../skia_runtime/skia_surface_provider.h"
 
 #ifdef _WIN32
@@ -464,6 +465,12 @@ struct Presenter::Impl {
 	void TouchContent(ContentTileKey const& key, GpuContentEntry& entry) {
 		entry.touch = ++content_touch_counter;
 		content_touches.push({ entry.touch, key });
+		if (content_touches.size() > content_cache.size() * 4 + 64) {
+			decltype(content_touches) compacted;
+			for (auto const& [current_key, current_entry] : content_cache)
+				compacted.push({ current_entry.touch, current_key });
+			content_touches.swap(compacted);
+		}
 	}
 
 	void TrimContentCache() {
@@ -567,12 +574,15 @@ struct Presenter::Impl {
 	}
 
 	bool FinishFrame(SkiaGlContextToken context) {
+		perf_trace::AudioUiDurationScope trace("audio_display.submit");
 		if (!device.FlushAndSubmit(context)) {
+			trace.SetDetails(0);
 			device.ResetTextureBindingsForExternalUse(context);
 			return false;
 		}
 		++metrics.submits;
 		device.ResetTextureBindingsForExternalUse(context);
+		trace.SetDetails(1);
 		return true;
 	}
 

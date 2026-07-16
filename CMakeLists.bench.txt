@@ -225,6 +225,9 @@ if(benchmark_FOUND)
         src/audio_mix_policy.cpp
         src/audio_spectrum_analysis_cache.cpp
         src/audio_waveform_summary_cache.cpp
+        src/fft.cpp
+        src/skia/audio/skia_audio_content.cpp
+        src/skia/audio/skia_audio_frame_model.cpp
     )
     target_include_directories(audio-micro-bench PRIVATE
         "${PROJECT_SOURCE_DIR}/src"

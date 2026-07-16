@@ -37,6 +37,13 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	perf_trace::ObserveAudioUiTimerPosition(100);
 	perf_trace::ObserveAudioUiTimerPosition(120);
 	perf_trace::ObserveAudioUiDuration("audio_display.paint", 3.5, 640, 2, false);
+	{
+		perf_trace::AudioUiDurationScope trace("audio_display.scoped_test", 7, 9);
+	}
+	{
+		perf_trace::AudioUiDurationScope trace("audio_display.cancelled_test");
+		trace.Cancel();
+	}
 	perf_trace::AudioOutputSnapshot output_snapshot;
 	output_snapshot.backend_name = "xaudio2";
 	output_snapshot.reason = "unit_test";
@@ -93,6 +100,10 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_ui_timer_interval\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_ui_duration\""));
 	EXPECT_NE(std::string::npos, trace.find("\"phase\":\"audio_display.paint\""));
+	EXPECT_NE(std::string::npos, trace.find("\"phase\":\"audio_display.scoped_test\""));
+	EXPECT_NE(std::string::npos, trace.find("\"detail_a\":7"));
+	EXPECT_NE(std::string::npos, trace.find("\"detail_b\":9"));
+	EXPECT_EQ(std::string::npos, trace.find("audio_display.cancelled_test"));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_output_snapshot\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_memory_snapshot\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"window_open_phase_duration\""));
@@ -117,6 +128,7 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, summary.find("audio_ui_timer_interval.count=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_ui_phase.audio_display.paint.count=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_ui_phase.audio_display.paint.total_ms=3.5"));
+	EXPECT_NE(std::string::npos, summary.find("audio_ui_phase.audio_display.scoped_test.count=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output.samples=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output.low_water.count=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output_backend=xaudio2"));

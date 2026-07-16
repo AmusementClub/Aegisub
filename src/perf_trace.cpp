@@ -1009,6 +1009,27 @@ bool IsCategoryEnabled(Category category) {
 	return IsCategoryEnabledLocked(session, ToTraceCategory(category));
 }
 
+AudioUiDurationScope::AudioUiDurationScope(char const* phase, int detail_a, int detail_b) noexcept
+: phase(phase)
+, detail_a(detail_a)
+, detail_b(detail_b)
+{
+	if (IsEnabled())
+		started_ns = NowNs();
+}
+
+AudioUiDurationScope::~AudioUiDurationScope() noexcept {
+	if (!started_ns)
+		return;
+	auto const duration_ms = static_cast<double>(NowNs() - started_ns) / 1'000'000.0;
+	ObserveAudioUiDuration(phase, duration_ms, detail_a, detail_b, duration_ms >= 8.0);
+}
+
+void AudioUiDurationScope::SetDetails(int first, int second) noexcept {
+	detail_a = first;
+	detail_b = second;
+}
+
 bool ShouldSampleVideoMemory(bool force) {
 	if (!trace_active.load(std::memory_order_relaxed))
 		return false;

@@ -36,6 +36,12 @@
     "xaudio2redist"
   ],
   "features": {
+    "bench": {
+      "description": "Install Google Benchmark for opt-in local microbenchmarks.",
+      "dependencies": [
+        "benchmark"
+      ]
+    },
     "fftw3": {
       "description": "Install FFTW3 files for app-local runtime testing.",
       "dependencies": [

@@ -112,6 +112,12 @@ struct ContentTileStore::Impl {
 	void TouchEntry(ContentTileKey const& key, Entry& entry) {
 		entry.touch = ++touch_counter;
 		touches.push({ entry.touch, key });
+		if (touches.size() > entries.size() * 4 + 64) {
+			decltype(touches) compacted;
+			for (auto const& [current_key, current_entry] : entries)
+				compacted.push({ current_entry.touch, current_key });
+			touches.swap(compacted);
+		}
 	}
 
 	void Trim() {

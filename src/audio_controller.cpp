@@ -42,27 +42,7 @@
 #include <libaegisub/log.h>
 
 #include <algorithm>
-#include <chrono>
-
 namespace {
-using AudioTraceClock = std::chrono::steady_clock;
-constexpr double kAudioTraceSlowDurationMs = 8.0;
-
-AudioTraceClock::time_point AudioTraceStart() {
-	return perf_trace::IsEnabled() ? AudioTraceClock::now() : AudioTraceClock::time_point{};
-}
-
-double AudioTraceElapsedMs(AudioTraceClock::time_point started) {
-	return std::chrono::duration<double, std::milli>(AudioTraceClock::now() - started).count();
-}
-
-void ObserveAudioTraceDuration(char const* phase, AudioTraceClock::time_point started, int detail_a = -1, int detail_b = -1) {
-	if (started == AudioTraceClock::time_point{})
-		return;
-	auto const duration_ms = AudioTraceElapsedMs(started);
-	perf_trace::ObserveAudioUiDuration(phase, duration_ms, detail_a, detail_b, duration_ms >= kAudioTraceSlowDurationMs);
-}
-
 bool ShouldAutoRecoverXAudio2Output() {
 #ifdef WITH_XAUDIO2
 	return OPT_GET("Audio/Player")->GetString() == "XAudio2";
@@ -95,12 +75,12 @@ AudioController::~AudioController()
 void AudioController::OnPlaybackTimer(wxTimerEvent &)
 {
 	if (!player) return;
-	auto const trace_started = AudioTraceStart();
+	perf_trace::AudioUiDurationScope trace("audio_controller.playback_timer");
 
 	int64_t pos = player->GetCurrentPosition();
 	int pos_ms = -1;
 	auto const trace_mode = playback_mode;
-	if (trace_started != AudioTraceClock::time_point{} && provider) {
+	if (trace.IsActive() && provider) {
 		pos_ms = MillisecondsFromSamples(pos);
 		perf_trace::ObserveAudioUiTimerPosition(pos_ms);
 	}
@@ -118,7 +98,7 @@ void AudioController::OnPlaybackTimer(wxTimerEvent &)
 		AnnouncePlaybackPosition(pos_ms);
 	}
 
-	ObserveAudioTraceDuration("audio_controller.playback_timer", trace_started, pos_ms, static_cast<int>(trace_mode));
+	trace.SetDetails(pos_ms, static_cast<int>(trace_mode));
 }
 
 #ifdef wxHAS_POWER_EVENTS
@@ -187,11 +167,12 @@ void AudioController::OnTimingControllerUpdatedPrimaryRange()
 void AudioController::PlayRange(const TimeRange &range)
 {
 	if (!player || !provider) return;
-	auto const trace_started = AudioTraceStart();
+	perf_trace::AudioUiDurationScope trace("audio_controller.play_range");
 
 	int64_t const start_sample = SamplesFromMilliseconds(range.begin());
 	int64_t const sample_count = SamplesFromMilliseconds(range.length());
 	if (sample_count <= 0) {
+		trace.Cancel();
 		Stop();
 		return;
 	}
@@ -202,7 +183,7 @@ void AudioController::PlayRange(const TimeRange &range)
 	playback_timer.Start(20);
 
 	AnnouncePlaybackPosition(range.begin());
-	ObserveAudioTraceDuration("audio_controller.play_range", trace_started, range.length(), range.begin());
+	trace.SetDetails(range.length(), range.begin());
 }
 
 void AudioController::PlayPrimaryRange()
@@ -228,11 +209,12 @@ void AudioController::PlayToEndOfPrimary(int start_ms)
 void AudioController::PlayToEnd(int start_ms)
 {
 	if (!player || !provider) return;
-	auto const trace_started = AudioTraceStart();
+	perf_trace::AudioUiDurationScope trace("audio_controller.play_to_end");
 
 	int64_t start_sample = SamplesFromMilliseconds(start_ms);
 	int64_t sample_count = provider->GetNumSamples() - start_sample;
 	if (sample_count <= 0) {
+		trace.Cancel();
 		Stop();
 		return;
 	}
@@ -243,13 +225,13 @@ void AudioController::PlayToEnd(int start_ms)
 	playback_timer.Start(20);
 
 	AnnouncePlaybackPosition(start_ms);
-	ObserveAudioTraceDuration("audio_controller.play_to_end", trace_started, start_ms);
+	trace.SetDetails(start_ms);
 }
 
 void AudioController::Stop()
 {
 	if (!player) return;
-	auto const trace_started = AudioTraceStart();
+	perf_trace::AudioUiDurationScope trace("audio_controller.stop");
 
 	player->Stop();
 	playback_mode = PM_NotPlaying;
@@ -257,7 +239,6 @@ void AudioController::Stop()
 	perf_trace::ResetAudioUiTimerInterval();
 
 	AnnouncePlaybackStop();
-	ObserveAudioTraceDuration("audio_controller.stop", trace_started);
 }
 
 bool AudioController::IsPlaying()

@@ -56,26 +56,6 @@
 #include <wx/dcbuffer.h>
 #include <wx/mousestate.h>
 
-namespace {
-using AudioTraceClock = std::chrono::steady_clock;
-constexpr double kAudioTraceSlowDurationMs = 8.0;
-
-AudioTraceClock::time_point AudioTraceStart() {
-	return perf_trace::IsEnabled() ? AudioTraceClock::now() : AudioTraceClock::time_point{};
-}
-
-double AudioTraceElapsedMs(AudioTraceClock::time_point started) {
-	return std::chrono::duration<double, std::milli>(AudioTraceClock::now() - started).count();
-}
-
-void ObserveAudioTraceDuration(char const* phase, AudioTraceClock::time_point started, int detail_a = -1, int detail_b = -1) {
-	if (started == AudioTraceClock::time_point{})
-		return;
-	auto const duration_ms = AudioTraceElapsedMs(started);
-	perf_trace::ObserveAudioUiDuration(phase, duration_ms, detail_a, detail_b, duration_ms >= kAudioTraceSlowDurationMs);
-}
-}
-
 /// @class AudioDisplayInteractionObject
 /// @brief Interface for objects on the audio display that can respond to mouse events
 class AudioDisplayInteractionObject {
@@ -657,7 +637,7 @@ void AudioDisplay::ScrollBy(int pixel_amount, int mouse_x)
 
 void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 {
-	auto const trace_started = AudioTraceStart();
+	perf_trace::AudioUiDurationScope trace("audio_display.scroll");
 	const wxSize client_size = GetClientSize();
 	const int client_width = client_size.GetWidth();
 
@@ -696,9 +676,7 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 		Refresh();
 	}
 
-	ObserveAudioTraceDuration(
-		"audio_display.scroll",
-		trace_started,
+	trace.SetDetails(
 		scroll_delta >= 0 ? scroll_delta : -scroll_delta,
 		used_scroll_window ? 1 : 0);
 }
@@ -902,7 +880,7 @@ void AudioDisplay::OnLoadTimer(wxTimerEvent&)
 void AudioDisplay::OnPaint(wxPaintEvent&)
 {
 	if (!audio_renderer_provider || !provider) return;
-	auto const trace_started = AudioTraceStart();
+	perf_trace::AudioUiDurationScope trace("audio_display.paint");
 
 	wxAutoBufferedPaintDC dc(this);
 
@@ -941,12 +919,12 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 	if (redraw_timeline)
 		timeline->Paint(dc);
 
-	ObserveAudioTraceDuration("audio_display.paint", trace_started, region_count, audio_region_count);
+	trace.SetDetails(region_count, audio_region_count);
 }
 
 void AudioDisplay::PaintAudio(wxDC &dc, const TimeRange updtime, const wxRect updrect)
 {
-	auto const trace_started = AudioTraceStart();
+	perf_trace::AudioUiDurationScope trace("audio_display.paint_audio");
 	auto pt = begin(style_ranges), pe = end(style_ranges);
 	while (pt != pe && pt + 1 != pe && (pt + 1)->first < updtime.begin()) ++pt;
 
@@ -966,7 +944,7 @@ void AudioDisplay::PaintAudio(wxDC &dc, const TimeRange updtime, const wxRect up
 		}
 	}
 
-	ObserveAudioTraceDuration("audio_display.paint_audio", trace_started, updrect.width, rendered_segment_count);
+	trace.SetDetails(updrect.width, rendered_segment_count);
 }
 
 void AudioDisplay::PaintMarkers(wxDC &dc, TimeRange updtime)

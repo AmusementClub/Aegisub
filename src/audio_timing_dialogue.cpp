@@ -48,29 +48,9 @@
 #include <libaegisub/ass/time.h>
 #include <libaegisub/make_unique.h>
 
-#include <chrono>
-
 #include <wx/pen.h>
 
 namespace {
-using AudioTraceClock = std::chrono::steady_clock;
-constexpr double kAudioTraceSlowDurationMs = 8.0;
-
-AudioTraceClock::time_point AudioTraceStart() {
-	return perf_trace::IsEnabled() ? AudioTraceClock::now() : AudioTraceClock::time_point{};
-}
-
-double AudioTraceElapsedMs(AudioTraceClock::time_point started) {
-	return std::chrono::duration<double, std::milli>(AudioTraceClock::now() - started).count();
-}
-
-void ObserveAudioTraceDuration(char const* phase, AudioTraceClock::time_point started, int detail_a = -1, int detail_b = -1) {
-	if (started == AudioTraceClock::time_point{})
-		return;
-	auto const duration_ms = AudioTraceElapsedMs(started);
-	perf_trace::ObserveAudioUiDuration(phase, duration_ms, detail_a, detail_b, duration_ms >= kAudioTraceSlowDurationMs);
-}
-
 class TimeableLine;
 
 /// @class DialogueTimingMarker
@@ -501,12 +481,11 @@ void AudioTimingControllerDialogue::GetRenderingStyles(AudioRenderingStyleRanges
 
 void AudioTimingControllerDialogue::Next(NextMode mode)
 {
-	auto const trace_started = AudioTraceStart();
+	perf_trace::AudioUiDurationScope trace("audio_timing.next", static_cast<int>(mode));
 	if (mode == TIMING_UNIT)
 	{
 		auto core = context->GetCore();
 		core.selectionController->NextLine();
-		ObserveAudioTraceDuration("audio_timing.next", trace_started, static_cast<int>(mode));
 		return;
 	}
 
@@ -525,7 +504,6 @@ void AudioTimingControllerDialogue::Next(NextMode mode)
 		UpdateSelection();
 	}
 
-	ObserveAudioTraceDuration("audio_timing.next", trace_started, static_cast<int>(mode));
 }
 
 void AudioTimingControllerDialogue::Prev()
@@ -536,8 +514,9 @@ void AudioTimingControllerDialogue::Prev()
 
 void AudioTimingControllerDialogue::DoCommit(bool user_triggered)
 {
-	auto const trace_started = AudioTraceStart();
 	int const modified_line_count = static_cast<int>(modified_lines.size());
+	perf_trace::AudioUiDurationScope trace(
+		"audio_timing.commit", modified_line_count, user_triggered ? 1 : 0);
 	// Store back new times
 	if (modified_lines.size())
 	{
@@ -560,7 +539,6 @@ void AudioTimingControllerDialogue::DoCommit(bool user_triggered)
 		modified_lines.clear();
 	}
 
-	ObserveAudioTraceDuration("audio_timing.commit", trace_started, modified_line_count, user_triggered ? 1 : 0);
 }
 
 void AudioTimingControllerDialogue::Revert()

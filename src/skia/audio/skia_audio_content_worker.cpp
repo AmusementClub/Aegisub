@@ -1,6 +1,7 @@
 #include "skia_audio_content_worker.h"
 
 #include "../../audio_display_source.h"
+#include "../../perf_trace.h"
 
 #include <libaegisub/audio/provider.h>
 
@@ -141,6 +142,8 @@ struct ContentWorker::Impl {
 					}
 
 					ContentBuildResult built;
+					perf_trace::AudioUiDurationScope build_trace(
+						"audio_display.content_build", static_cast<int>(plan.analysis.kind));
 					if (analyzer && plan.analysis.kind == ContentKind::Waveform) {
 						WaveformBuildRequest request;
 						request.key = key;
@@ -162,6 +165,8 @@ struct ContentWorker::Impl {
 							return IsCurrent(serial, value);
 						});
 					}
+					build_trace.SetDetails(
+						static_cast<int>(plan.analysis.kind), static_cast<int>(built.status));
 
 					if (built.status == ContentBuildStatus::Cancelled) {
 						std::lock_guard<std::mutex> lock(mutex);

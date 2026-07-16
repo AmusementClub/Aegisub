@@ -42,6 +42,10 @@
 #include "toggle_bitmap.h"
 #include "utils.h"
 
+#ifdef AEGISUB_WITH_SKIA_AUDIO_DISPLAY
+#include "skia/audio/skia_audio_display_slot.h"
+#endif
+
 #include <cmath>
 #include <wx/button.h>
 #include <wx/menu.h>
@@ -66,7 +70,15 @@ AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 , context(context)
 , audio_open_connection(context->GetCore().audioController->AddAudioPlayerOpenListener(&AudioBox::OnAudioOpen, this))
 , panel(new wxPanel(this, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxBORDER_RAISED))
+#ifdef AEGISUB_WITH_SKIA_AUDIO_DISPLAY
+, audioDisplay(std::make_unique<aegisub::skia::audio::AudioDisplaySlot>(
+	panel,
+	context->GetCore().audioController.get(),
+	context,
+	[this](wxWindow *window) { BindAudioDisplayWindow(window); }))
+#else
 , audioDisplay(new AudioDisplay(panel, context->GetCore().audioController.get(), context))
+#endif
 , HorizontalZoom(new wxSlider(panel, Audio_Horizontal_Zoom, -OPT_GET("Audio/Zoom/Horizontal")->GetInt(), -50, 30, wxDefaultPosition, wxDefaultSize, wxSL_VERTICAL|wxSL_BOTH))
 , VerticalZoom(new wxSlider(panel, Audio_Vertical_Zoom, OPT_GET("Audio/Zoom/Vertical")->GetInt(), 0, 100, wxDefaultPosition, wxDefaultSize, wxSL_VERTICAL|wxSL_BOTH|wxSL_INVERSE))
 , VolumeBar(new wxSlider(panel, Audio_Volume, OPT_GET("Audio/Volume")->GetInt(), 0, 100, wxDefaultPosition, wxDefaultSize, wxSL_VERTICAL|wxSL_BOTH|wxSL_INVERSE))
@@ -104,7 +116,11 @@ AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 
 	// Top sizer
 	wxSizer *TopSizer = new wxBoxSizer(wxHORIZONTAL);
+#ifdef AEGISUB_WITH_SKIA_AUDIO_DISPLAY
+	TopSizer->Add(GetAudioDisplayWindow(),1,wxEXPAND,0);
+#else
 	TopSizer->Add(audioDisplay,1,wxEXPAND,0);
+#endif
 	TopSizer->Add(HorizontalZoom,0,wxEXPAND,0);
 	TopSizer->Add(VertVolArea,0,wxEXPAND,0);
 
@@ -124,11 +140,27 @@ AudioBox::AudioBox(wxWindow *parent, agi::Context *context)
 	SetMinSize(wxSize(-1, OPT_GET("Audio/Display Height")->GetInt()));
 	SetMinimumSizeY(panel->GetSize().GetHeight());
 
+#ifdef AEGISUB_WITH_SKIA_AUDIO_DISPLAY
+	BindAudioDisplayWindow(GetAudioDisplayWindow());
+#else
 	audioDisplay->Bind(wxEVT_MOUSEWHEEL, &AudioBox::OnMouseWheel, this);
+#endif
 
 	audioDisplay->SetZoomLevel(-HorizontalZoom->GetValue());
 	audioDisplay->SetAmplitudeScale(pow(mid(1, VerticalZoom->GetValue(), 100) / 50.0, 3));
 }
+
+#ifdef AEGISUB_WITH_SKIA_AUDIO_DISPLAY
+AudioBox::~AudioBox() = default;
+
+wxWindow *AudioBox::GetAudioDisplayWindow() const {
+	return audioDisplay->Window();
+}
+
+void AudioBox::BindAudioDisplayWindow(wxWindow *window) {
+	window->Bind(wxEVT_MOUSEWHEEL, &AudioBox::OnMouseWheel, this);
+}
+#endif
 
 void AudioBox::SyncToContextState() {
 	context->GetUI().karaoke->SyncToContextState();
@@ -146,7 +178,11 @@ BEGIN_EVENT_TABLE(AudioBox,wxSashWindow)
 END_EVENT_TABLE()
 
 void AudioBox::OnMouseWheel(wxMouseEvent &evt) {
+#ifdef AEGISUB_WITH_SKIA_AUDIO_DISPLAY
+	if (!ForwardMouseWheelEvent(GetAudioDisplayWindow(), evt))
+#else
 	if (!ForwardMouseWheelEvent(audioDisplay, evt))
+#endif
 		return;
 	bool zoom = evt.CmdDown() != OPT_GET("Audio/Wheel Default to Zoom")->GetBool();
 	if (!zoom) {

@@ -2,6 +2,7 @@
 
 #include <cctype>
 #include <limits>
+#include <string>
 
 namespace aegisub::skia::audio {
 namespace {
@@ -24,10 +25,73 @@ bool ParseRuntimeOptIn(char const *value) {
 	return first != '0' && first != 'f' && first != 'n';
 }
 
+bool ShouldCreateSkiaWidget(bool runtime_requested, bool presenter_available) {
+	return runtime_requested && presenter_available;
+}
+
+bool IsSoftwareLikeGlRenderer(std::string_view vendor, std::string_view renderer) {
+	std::string value;
+	value.reserve(vendor.size() + renderer.size() + 1);
+	value.append(vendor);
+	value.push_back(' ');
+	value.append(renderer);
+	for (char& ch : value)
+		ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+
+	for (auto const token : {
+		"gdi generic",
+		"microsoft basic render driver",
+		"llvmpipe",
+		"softpipe",
+		"software rasterizer",
+		"swiftshader",
+	}) {
+		if (value.find(token) != std::string::npos)
+			return true;
+	}
+	return false;
+}
+
 bool IsDesktopGlAtLeast(int major, int minor, int required_major, int required_minor) {
 	if (major != required_major)
 		return major > required_major;
 	return minor >= required_minor;
+}
+
+FailureInjection ParseFailureInjection(std::string_view value) noexcept {
+	if (value.empty() || value == "none")
+		return FailureInjection::None;
+	if (value == "context-init")
+		return FailureInjection::ContextInitialization;
+	if (value == "frame-begin")
+		return FailureInjection::FrameBegin;
+	if (value == "flush-submit")
+		return FailureInjection::FlushSubmit;
+	return FailureInjection::Unsupported;
+}
+
+FrameTargetValidation ValidateFrameTarget(FrameTarget const& target, std::uint64_t context_generation) {
+	if (!context_generation)
+		return { false, "the context generation is zero" };
+	if (target.context_generation != context_generation)
+		return { false, "the frame target context generation does not match the device token" };
+	if (target.width <= 0 || target.height <= 0)
+		return { false, "the frame target dimensions are not positive" };
+	if (target.sample_count < 0 || target.stencil_bits < 0)
+		return { false, "the frame target sample or stencil count is negative" };
+	return { true, {} };
+}
+
+SurfaceKey MakeSurfaceKey(FrameTarget const& target) {
+	return {
+		target.context_generation,
+		target.width,
+		target.height,
+		target.sample_count,
+		target.stencil_bits,
+		target.framebuffer_id,
+		target.bottom_left_origin,
+	};
 }
 
 Selection SelectBackend(bool runtime_requested, Capabilities const& capabilities) {

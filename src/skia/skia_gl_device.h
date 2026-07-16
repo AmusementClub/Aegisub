@@ -1,18 +1,24 @@
 #pragma once
 
-#include "skia/skia_video_compositor_contract.h"
+#include "skia/skia_gl_contract.h"
 
 #include <memory>
 #include <string>
 
 class GrDirectContext;
 
+enum class SkiaGlFailureInjection {
+	None,
+	ContextInitialization,
+	FlushSubmit,
+};
+
 class SkiaGlDevice final {
 	struct Impl;
 	std::unique_ptr<Impl> impl;
 
 public:
-	explicit SkiaGlDevice(SkiaVideoFailureInjection failure_injection);
+	explicit SkiaGlDevice(SkiaGlFailureInjection failure_injection);
 	~SkiaGlDevice();
 
 	SkiaGlDevice(SkiaGlDevice const&) = delete;

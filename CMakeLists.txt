@@ -493,6 +493,7 @@ if(WITH_CSRI)
     target_compile_definitions(aegisub_core_features INTERFACE WITH_CSRI)
 endif()
 if(WITH_SKIA_VIDEO_TOOLS OR WITH_SKIA_AUDIO_DISPLAY)
+    find_package(OpenGL REQUIRED)
     if(NOT TARGET unofficial::skia::skia)
         message(FATAL_ERROR
             "A GUI Skia feature is ON, but the Skia vcpkg package was not found.\n"
@@ -1160,32 +1161,44 @@ add_executable(Aegisub WIN32
     ${AEGISUB_SHARED_EXE_ENTRY_SOURCES}
     ${AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES}
 )
+if(WITH_SKIA_VIDEO_TOOLS OR WITH_SKIA_AUDIO_DISPLAY)
+    target_sources(Aegisub PRIVATE
+        src/skia/skia_gl_contract.cpp
+        src/skia/skia_gl_device.cpp
+        src/skia_runtime/skia_surface_provider.cpp
+    )
+    target_compile_definitions(Aegisub PRIVATE
+        AEGISUB_WITH_SKIA_GPU_GL=1
+    )
+    target_link_libraries(Aegisub PRIVATE unofficial::skia::skia OpenGL::GL)
+endif()
 if(WITH_SKIA_VIDEO_TOOLS)
     target_sources(Aegisub PRIVATE
         src/video_overlay_draw_context_skia.cpp
         src/skia/skia_video_compositor_contract.cpp
-        src/skia/skia_gl_device.cpp
         src/skia/skia_video_compositor.cpp
         src/skia/skia_video_overlay_command_buffer.cpp
         src/skia/skia_video_overlay_gl.cpp
-        src/skia_runtime/skia_surface_provider.cpp
         src/skia_runtime/skia_text_layout_cache.cpp
     )
     target_compile_definitions(Aegisub PRIVATE
-        AEGISUB_WITH_SKIA_GPU_GL=1
         AEGISUB_WITH_SKIA_VIDEO_COMPOSITOR=1
         AEGISUB_WITH_SKIA_VIDEO_TOOLS=1
     )
-    target_link_libraries(Aegisub PRIVATE unofficial::skia::skia)
 endif()
 if(WITH_SKIA_AUDIO_DISPLAY)
     target_sources(Aegisub PRIVATE
+        src/skia/audio/skia_audio_content.cpp
+        src/skia/audio/skia_audio_content_analysis.cpp
+        src/skia/audio/skia_audio_content_worker.cpp
         src/skia/audio/skia_audio_display_contract.cpp
+        src/skia/audio/skia_audio_display.cpp
+        src/skia/audio/skia_audio_presenter.cpp
+        src/skia/audio/skia_audio_display_slot.cpp
     )
     target_compile_definitions(Aegisub PRIVATE
         AEGISUB_WITH_SKIA_AUDIO_DISPLAY=1
     )
-    target_link_libraries(Aegisub PRIVATE unofficial::skia::skia)
 endif()
 if(WITH_LIBPLACEBO AND HAVE_LIBPLACEBO)
     target_sources(Aegisub PRIVATE src/video_renderer_placebo_gl.cpp)

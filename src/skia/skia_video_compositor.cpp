@@ -4,9 +4,25 @@
 #include <thread>
 #include <utility>
 
+namespace {
+SkiaGlFailureInjection DeviceFailureInjection(SkiaVideoFailureInjection injection) noexcept {
+	switch (injection) {
+		case SkiaVideoFailureInjection::ContextInitialization:
+			return SkiaGlFailureInjection::ContextInitialization;
+		case SkiaVideoFailureInjection::FlushSubmit:
+			return SkiaGlFailureInjection::FlushSubmit;
+		case SkiaVideoFailureInjection::None:
+		case SkiaVideoFailureInjection::FrameBegin:
+		case SkiaVideoFailureInjection::Unsupported:
+			return SkiaGlFailureInjection::None;
+	}
+	return SkiaGlFailureInjection::None;
+}
+}
+
 SkiaVideoCompositor::SkiaVideoCompositor(SkiaVideoFailureInjection failure_injection)
 : failure_injection(failure_injection)
-, device(failure_injection) {
+, device(DeviceFailureInjection(failure_injection)) {
 }
 
 SkiaVideoCompositor::~SkiaVideoCompositor() = default;

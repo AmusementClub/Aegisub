@@ -3,7 +3,7 @@
 
 #include "skia_runtime/skia_surface_provider.h"
 
-#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+#ifdef AEGISUB_WITH_SKIA_GPU_GL
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -29,7 +29,7 @@
 sk_sp<SkSurface> SkiaSurfaceProvider::AcquireFramebufferSurface(
 	GrDirectContext *context,
 	SkiaFramebufferSurfaceDescriptor const& descriptor) const {
-#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+#ifdef AEGISUB_WITH_SKIA_GPU_GL
 	if (!context || descriptor.width <= 0 || descriptor.height <= 0)
 		return nullptr;
 

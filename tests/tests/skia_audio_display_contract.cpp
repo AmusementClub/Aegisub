@@ -15,10 +15,51 @@ TEST(skia_audio_display_contract, runtime_opt_in_is_default_off) {
 	EXPECT_TRUE(audio::ParseRuntimeOptIn("yes"));
 }
 
+TEST(skia_audio_display_contract, widget_creation_requires_runtime_opt_in_and_presenter_availability) {
+	EXPECT_FALSE(audio::ShouldCreateSkiaWidget(false, false));
+	EXPECT_FALSE(audio::ShouldCreateSkiaWidget(true, false));
+	EXPECT_FALSE(audio::ShouldCreateSkiaWidget(false, true));
+	EXPECT_TRUE(audio::ShouldCreateSkiaWidget(true, true));
+}
+
 TEST(skia_audio_display_contract, desktop_gl_floor_is_explicit) {
 	EXPECT_FALSE(audio::IsDesktopGlAtLeast(1, 1, 2, 0));
 	EXPECT_TRUE(audio::IsDesktopGlAtLeast(2, 0, 2, 0));
 	EXPECT_TRUE(audio::IsDesktopGlAtLeast(4, 6, 2, 0));
+}
+
+TEST(skia_audio_display_contract, software_and_remote_gl_renderers_are_rejected) {
+	EXPECT_TRUE(audio::IsSoftwareLikeGlRenderer("Microsoft Corporation", "GDI Generic"));
+	EXPECT_TRUE(audio::IsSoftwareLikeGlRenderer("Mesa", "llvmpipe (LLVM 20.1.0, 256 bits)"));
+	EXPECT_TRUE(audio::IsSoftwareLikeGlRenderer("Google Inc.", "ANGLE (Microsoft Basic Render Driver)"));
+	EXPECT_FALSE(audio::IsSoftwareLikeGlRenderer("NVIDIA Corporation", "NVIDIA GeForce RTX 2080 Ti"));
+	EXPECT_FALSE(audio::IsSoftwareLikeGlRenderer("Intel", "Intel(R) UHD Graphics"));
+}
+
+TEST(skia_audio_display_contract, audio_failure_injection_parser_is_exact) {
+	EXPECT_EQ(audio::FailureInjection::None, audio::ParseFailureInjection(""));
+	EXPECT_EQ(audio::FailureInjection::None, audio::ParseFailureInjection("none"));
+	EXPECT_EQ(audio::FailureInjection::ContextInitialization, audio::ParseFailureInjection("context-init"));
+	EXPECT_EQ(audio::FailureInjection::FrameBegin, audio::ParseFailureInjection("frame-begin"));
+	EXPECT_EQ(audio::FailureInjection::FlushSubmit, audio::ParseFailureInjection("flush-submit"));
+	EXPECT_EQ(audio::FailureInjection::Unsupported, audio::ParseFailureInjection("flush"));
+}
+
+TEST(skia_audio_display_contract, frame_target_and_surface_key_require_exact_generation_and_size) {
+	audio::FrameTarget target;
+	target.context_generation = 7;
+	target.width = 1920;
+	target.height = 240;
+	target.stencil_bits = 8;
+
+	auto const valid = audio::ValidateFrameTarget(target, 7);
+	EXPECT_TRUE(valid.valid) << valid.detail;
+	EXPECT_FALSE(audio::ValidateFrameTarget(target, 8).valid);
+
+	auto const first = audio::MakeSurfaceKey(target);
+	EXPECT_EQ(first, audio::MakeSurfaceKey(target));
+	target.width = 3840;
+	EXPECT_NE(first, audio::MakeSurfaceKey(target));
 }
 
 TEST(skia_audio_display_contract, selection_requires_runtime_context_gl_and_hardware_renderer) {

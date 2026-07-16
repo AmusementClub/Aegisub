@@ -3,7 +3,7 @@
 
 #pragma once
 
-#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+#ifdef AEGISUB_WITH_SKIA_GPU_GL
 #include <include/core/SkRefCnt.h>
 #endif
 

@@ -29,11 +29,11 @@ std::string ReadGlString(GLenum name) {
 }
 
 struct SkiaGlDevice::Impl {
-	explicit Impl(SkiaVideoFailureInjection failure_injection)
+	explicit Impl(SkiaGlFailureInjection failure_injection)
 	: failure_injection(failure_injection) {
 	}
 
-	SkiaVideoFailureInjection failure_injection = SkiaVideoFailureInjection::None;
+	SkiaGlFailureInjection failure_injection = SkiaGlFailureInjection::None;
 	SkiaGlDeviceState state;
 	sk_sp<const GrGLInterface> gl_interface;
 	sk_sp<GrDirectContext> context;
@@ -66,10 +66,10 @@ struct SkiaGlDevice::Impl {
 		gl_renderer = ReadGlString(GL_RENDERER);
 		gl_version = ReadGlString(GL_VERSION);
 
-		if (failure_injection == SkiaVideoFailureInjection::ContextInitialization) {
+		if (failure_injection == SkiaGlFailureInjection::ContextInitialization) {
 			TripFailure(
 				SkiaGlDeviceFailure::ContextInitializationInjected,
-				"AEGISUB_SKIA_VIDEO_FAILURE_INJECTION requested context-init");
+				"context initialization failure was injected");
 			return false;
 		}
 		if (!SupportsSkiaGaneshDesktopGl(gl_version)) {
@@ -96,7 +96,7 @@ struct SkiaGlDevice::Impl {
 	}
 };
 
-SkiaGlDevice::SkiaGlDevice(SkiaVideoFailureInjection failure_injection)
+SkiaGlDevice::SkiaGlDevice(SkiaGlFailureInjection failure_injection)
 : impl(std::make_unique<Impl>(failure_injection)) {
 }
 
@@ -119,10 +119,10 @@ bool SkiaGlDevice::BeginExternalFrame(SkiaGlContextToken token) {
 bool SkiaGlDevice::FlushAndSubmit(SkiaGlContextToken token) {
 	if (!impl->state.BeginAccess(token, std::this_thread::get_id()) || !impl->context)
 		return false;
-	if (impl->failure_injection == SkiaVideoFailureInjection::FlushSubmit) {
+	if (impl->failure_injection == SkiaGlFailureInjection::FlushSubmit) {
 		impl->TripFailure(
 			SkiaGlDeviceFailure::FlushInjected,
-			"AEGISUB_SKIA_VIDEO_FAILURE_INJECTION requested flush-submit");
+			"flush/submit failure was injected");
 		return false;
 	}
 

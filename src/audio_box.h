@@ -32,6 +32,10 @@
 
 #include <libaegisub/signal.h>
 
+#ifdef AEGISUB_WITH_SKIA_AUDIO_DISPLAY
+#include <memory>
+#endif
+
 namespace agi {
 	struct Context;
 	class OptionValue;
@@ -46,6 +50,10 @@ class wxPanel;
 class wxScrollEvent;
 class wxSizer;
 class wxSlider;
+
+#ifdef AEGISUB_WITH_SKIA_AUDIO_DISPLAY
+namespace aegisub::skia::audio { class AudioDisplaySlot; }
+#endif
 
 /// @class AudioBox
 /// @brief Panel with audio playback and timing controls, also containing an AudioDisplay
@@ -64,7 +72,11 @@ class AudioBox final : public wxSashWindow {
 	wxPanel *panel;
 
 	/// The audio display in the box
+#ifdef AEGISUB_WITH_SKIA_AUDIO_DISPLAY
+	std::unique_ptr<aegisub::skia::audio::AudioDisplaySlot> audioDisplay;
+#else
 	AudioDisplay *audioDisplay;
+#endif
 
 	wxSlider *HorizontalZoom;
 	wxSlider *VerticalZoom;
@@ -85,8 +97,17 @@ class AudioBox final : public wxSashWindow {
 	void OnVerticalZoom(wxScrollEvent &event);
 	void OnVolume(wxScrollEvent &event);
 
+#ifdef AEGISUB_WITH_SKIA_AUDIO_DISPLAY
+	wxWindow *GetAudioDisplayWindow() const;
+	void BindAudioDisplayWindow(wxWindow *window);
+#endif
+
 public:
 	AudioBox(wxWindow *parent, agi::Context *context);
+
+#ifdef AEGISUB_WITH_SKIA_AUDIO_DISPLAY
+	~AudioBox();
+#endif
 
 	void SyncToContextState();
 	void ShowKaraokeBar(bool show);

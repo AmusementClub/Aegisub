@@ -1,6 +1,7 @@
 #pragma once
 
 #include "skia/skia_gl_device.h"
+#include "skia/skia_video_compositor_contract.h"
 
 #include <cstdint>
 #include <string>

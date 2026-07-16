@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
+#include <string_view>
 
 namespace aegisub::skia::audio {
 
@@ -30,8 +32,51 @@ struct Selection {
 };
 
 bool ParseRuntimeOptIn(char const *value);
+bool ShouldCreateSkiaWidget(bool runtime_requested, bool presenter_available);
 bool IsDesktopGlAtLeast(int major, int minor, int required_major, int required_minor);
+bool IsSoftwareLikeGlRenderer(std::string_view vendor, std::string_view renderer);
 Selection SelectBackend(bool runtime_requested, Capabilities const& capabilities);
+
+enum class FailureInjection {
+	None,
+	ContextInitialization,
+	FrameBegin,
+	FlushSubmit,
+	Unsupported,
+};
+
+FailureInjection ParseFailureInjection(std::string_view value) noexcept;
+
+struct FrameTarget {
+	std::uint64_t context_generation = 0;
+	int width = 0;
+	int height = 0;
+	int sample_count = 0;
+	int stencil_bits = 0;
+	unsigned int framebuffer_id = 0;
+	bool bottom_left_origin = true;
+};
+
+struct FrameTargetValidation {
+	bool valid = false;
+	std::string detail;
+};
+
+FrameTargetValidation ValidateFrameTarget(FrameTarget const& target, std::uint64_t context_generation);
+
+struct SurfaceKey {
+	std::uint64_t context_generation = 0;
+	int width = 0;
+	int height = 0;
+	int sample_count = 0;
+	int stencil_bits = 0;
+	unsigned int framebuffer_id = 0;
+	bool bottom_left_origin = true;
+
+	friend bool operator==(SurfaceKey const&, SurfaceKey const&) = default;
+};
+
+SurfaceKey MakeSurfaceKey(FrameTarget const& target);
 
 enum class Layer : uint32_t {
 	None = 0,

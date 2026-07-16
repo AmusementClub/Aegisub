@@ -227,6 +227,12 @@ if(GTEST_FOUND)
     if(WITH_FFTW3)
         target_sources(gtest-run PRIVATE src/audio_spectrum_fftw3.cpp)
     endif()
+    if(WITH_SKIA_VIDEO_TOOLS OR WITH_SKIA_AUDIO_DISPLAY)
+        target_sources(gtest-run PRIVATE
+            tests/tests/skia_gl_contract.cpp
+            src/skia/skia_gl_contract.cpp
+        )
+    endif()
     if(WITH_SKIA_VIDEO_TOOLS)
         target_sources(gtest-run PRIVATE
             tests/tests/skia_video_compositor_contract.cpp
@@ -237,7 +243,12 @@ if(GTEST_FOUND)
     endif()
     if(WITH_SKIA_AUDIO_DISPLAY)
         target_sources(gtest-run PRIVATE
+            tests/tests/skia_audio_content.cpp
+            tests/tests/skia_audio_content_worker.cpp
             tests/tests/skia_audio_display_contract.cpp
+            src/skia/audio/skia_audio_content.cpp
+            src/skia/audio/skia_audio_content_analysis.cpp
+            src/skia/audio/skia_audio_content_worker.cpp
             src/skia/audio/skia_audio_display_contract.cpp
         )
     endif()
@@ -474,6 +485,7 @@ if(WIN32)
     if(WITH_SKIA_VIDEO_TOOLS)
         add_executable(skia-video-compositor-smoke EXCLUDE_FROM_ALL
             tests/smoke/skia_video_compositor_smoke.cpp
+            src/skia/skia_gl_contract.cpp
             src/skia/skia_video_compositor_contract.cpp
             src/skia/skia_gl_device.cpp
             src/skia/skia_video_compositor.cpp
@@ -481,6 +493,7 @@ if(WIN32)
             src/skia_runtime/skia_surface_provider.cpp
         )
         target_compile_definitions(skia-video-compositor-smoke PRIVATE
+            AEGISUB_WITH_SKIA_GPU_GL=1
             AEGISUB_WITH_SKIA_VIDEO_TOOLS=1
             CMAKE_BUILD
             NOMINMAX
@@ -489,6 +502,28 @@ if(WIN32)
         target_compile_features(skia-video-compositor-smoke PRIVATE cxx_std_20)
         target_include_directories(skia-video-compositor-smoke PRIVATE src)
         target_link_libraries(skia-video-compositor-smoke PRIVATE unofficial::skia::skia OpenGL::GL)
+    endif()
+
+    if(WITH_SKIA_AUDIO_DISPLAY)
+        add_executable(skia-audio-display-smoke EXCLUDE_FROM_ALL
+            tests/smoke/skia_audio_display_smoke.cpp
+            src/skia/skia_gl_contract.cpp
+            src/skia/skia_gl_device.cpp
+            src/skia/audio/skia_audio_content.cpp
+            src/skia/audio/skia_audio_display_contract.cpp
+            src/skia/audio/skia_audio_presenter.cpp
+            src/skia_runtime/skia_surface_provider.cpp
+        )
+        target_compile_definitions(skia-audio-display-smoke PRIVATE
+            AEGISUB_WITH_SKIA_GPU_GL=1
+            AEGISUB_WITH_SKIA_AUDIO_DISPLAY=1
+            CMAKE_BUILD
+            NOMINMAX
+            WIN32_LEAN_AND_MEAN
+        )
+        target_compile_features(skia-audio-display-smoke PRIVATE cxx_std_20)
+        target_include_directories(skia-audio-display-smoke PRIVATE src)
+        target_link_libraries(skia-audio-display-smoke PRIVATE unofficial::skia::skia OpenGL::GL)
     endif()
 
     add_executable(opengl-overlay-smoke EXCLUDE_FROM_ALL

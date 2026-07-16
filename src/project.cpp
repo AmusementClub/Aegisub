@@ -622,13 +622,13 @@ void Project::DoLoadAudio(agi::fs::path const& path, bool quiet) {
 		},
 		*context->GetNotificationSink(),
 		[&](std::string const& error) {
-			LOG_D("video/open/audio") << "File " << video_file << " has no audio data: " << error;
+			LOG_D("video/open/audio") << "File " << agi::fs::PathToString(video_file) << " has no audio data: " << error;
 		},
 		remove_mru);
 	if (!audio_provider)
 	{
 		auto const report = GetLastAudioProviderSelectionReport();
-		LOG_W("project/audio") << "failed to open audio path=" << path
+		LOG_W("project/audio") << "failed to open audio path=" << agi::fs::PathToString(path)
 			<< " preferred_provider=" << report.preferred_provider
 			<< " selected_provider=" << (report.selected_provider.empty() ? std::string("<none>") : report.selected_provider)
 			<< " attempts=" << aegisub::provider_selection_diagnostics::FormatAttempts(report);

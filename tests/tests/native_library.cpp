@@ -1,5 +1,7 @@
 #include <libaegisub/native_library.h>
 
+#include <libaegisub/fs.h>
+
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -14,12 +16,12 @@ using agi::native::DefaultAppLocalLoadOptions;
 using agi::native::EnumerateLibrariesInExecutableRelativeDirectory;
 
 std::string Join(std::string_view left, std::string_view right) {
-	return (std::filesystem::path(std::string(left)) / std::filesystem::path(std::string(right))).string();
+	return agi::fs::PathToString(agi::fs::PathFromString(std::string(left)) / agi::fs::PathFromString(std::string(right)));
 }
 
 std::vector<std::string> NormalizePaths(std::vector<std::string> paths) {
 	for (auto& path : paths)
-		path = std::filesystem::path(path).lexically_normal().generic_string();
+		path = agi::fs::PathToGenericString(agi::fs::PathFromString(path).lexically_normal());
 	return paths;
 }
 
@@ -42,7 +44,7 @@ struct TempDirectory {
 
 void TouchFile(std::filesystem::path const& path) {
 	std::filesystem::create_directories(path.parent_path());
-	std::ofstream file(path.string(), std::ios::binary);
+	std::ofstream file(path, std::ios::binary);
 	file << "x";
 }
 }
@@ -286,21 +288,21 @@ TEST(native_library, executable_relative_directory_enumeration_filters_dynamic_l
 	TouchFile(plugin_dir / "ignore.dylib");
 #endif
 
-	auto libraries = EnumerateLibrariesInExecutableRelativeDirectory("csri", app_dir.string());
+	auto libraries = EnumerateLibrariesInExecutableRelativeDirectory("csri", agi::fs::PathToString(app_dir));
 #ifdef _WIN32
 	EXPECT_EQ(NormalizePaths(std::vector<std::string>{
-		(plugin_dir / "a_first.dll").string(),
-		(plugin_dir / "m_middle.dll").string(),
+		agi::fs::PathToString(plugin_dir / "a_first.dll"),
+		agi::fs::PathToString(plugin_dir / "m_middle.dll"),
 	}), NormalizePaths(libraries));
 #elif defined(__APPLE__)
 	EXPECT_EQ(NormalizePaths(std::vector<std::string>{
-		(plugin_dir / "a_first.dylib").string(),
-		(plugin_dir / "m_middle.dylib").string(),
+		agi::fs::PathToString(plugin_dir / "a_first.dylib"),
+		agi::fs::PathToString(plugin_dir / "m_middle.dylib"),
 	}), NormalizePaths(libraries));
 #else
 	EXPECT_EQ(NormalizePaths(std::vector<std::string>{
-		(plugin_dir / "a_first.so").string(),
-		(plugin_dir / "m_middle.so.1").string(),
+		agi::fs::PathToString(plugin_dir / "a_first.so"),
+		agi::fs::PathToString(plugin_dir / "m_middle.so.1"),
 	}), NormalizePaths(libraries));
 #endif
 }
@@ -309,7 +311,7 @@ TEST(native_library, executable_relative_directory_enumeration_rejects_parent_se
 	TempDirectory temp;
 	auto app_dir = temp.path / "app";
 	std::filesystem::create_directories(app_dir / "csri");
-	EXPECT_TRUE(EnumerateLibrariesInExecutableRelativeDirectory("../csri", app_dir.string()).empty());
+	EXPECT_TRUE(EnumerateLibrariesInExecutableRelativeDirectory("../csri", agi::fs::PathToString(app_dir)).empty());
 }
 
 TEST(native_library, system_fallback_is_only_added_when_requested) {

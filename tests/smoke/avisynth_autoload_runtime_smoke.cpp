@@ -107,10 +107,10 @@ public:
 )json", agi::Options::FLUSH_SKIP)
 	, user_root(scenario_root / "user")
 	, data_root(scenario_root / "data") {
-		path_tokens.SetToken("?local", (scenario_root / "cache").string());
-		path_tokens.SetToken("?temp", (scenario_root / "temp").string());
-		path_tokens.SetToken("?user", user_root.string());
-		path_tokens.SetToken("?data", data_root.string());
+		path_tokens.SetToken("?local", agi::fs::PathToString(scenario_root / "cache"));
+		path_tokens.SetToken("?temp", agi::fs::PathToString(scenario_root / "temp"));
+		path_tokens.SetToken("?user", agi::fs::PathToString(user_root));
+		path_tokens.SetToken("?data", agi::fs::PathToString(data_root));
 		config::opt = &options;
 		config::path = &path_tokens;
 	}

@@ -484,7 +484,7 @@ void SubsController::OnWatchedFileChanged(agi::fs::path const&) {
 			return;
 
 		if (++prompt_count > kMaxPromptLoopCount) {
-			LOG_W("subs_controller") << "File change detection loop limit reached for " << filename;
+			LOG_W("subs_controller") << "File change detection loop limit reached for " << agi::fs::PathToString(filename);
 			last_prompted_file_snapshot = current_snapshot;
 			return;
 		}

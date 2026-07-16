@@ -2,6 +2,8 @@
 
 #include "../../src/csri_renderer_discovery.h"
 
+#include <libaegisub/fs.h>
+
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -12,7 +14,7 @@
 namespace {
 std::vector<std::string> NormalizePaths(std::vector<std::string> paths) {
 	for (auto& path : paths)
-		path = std::filesystem::path(path).lexically_normal().generic_string();
+		path = agi::fs::PathToGenericString(agi::fs::PathFromString(path).lexically_normal());
 	return paths;
 }
 
@@ -35,7 +37,7 @@ struct TempDirectory {
 
 void TouchFile(std::filesystem::path const& path) {
 	std::filesystem::create_directories(path.parent_path());
-	std::ofstream file(path.string(), std::ios::binary);
+	std::ofstream file(path, std::ios::binary);
 	file << "x";
 }
 }
@@ -48,19 +50,19 @@ TEST(csri_renderer_discovery, enumerates_only_app_relative_csri_directory) {
 	TouchFile(csri_dir / "vsfilter.dll");
 	TouchFile(csri_dir / "other.txt");
 	EXPECT_EQ(NormalizePaths(std::vector<std::string>{
-		(csri_dir / "vsfilter.dll").string(),
-	}), NormalizePaths(csri::EnumerateRendererLibraryFiles(app_dir.string())));
+		agi::fs::PathToString(csri_dir / "vsfilter.dll"),
+	}), NormalizePaths(csri::EnumerateRendererLibraryFiles(agi::fs::PathToString(app_dir))));
 #elif defined(__APPLE__)
 	TouchFile(csri_dir / "vsfilter.dylib");
 	TouchFile(csri_dir / "other.txt");
 	EXPECT_EQ(NormalizePaths(std::vector<std::string>{
-		(csri_dir / "vsfilter.dylib").string(),
-	}), NormalizePaths(csri::EnumerateRendererLibraryFiles(app_dir.string())));
+		agi::fs::PathToString(csri_dir / "vsfilter.dylib"),
+	}), NormalizePaths(csri::EnumerateRendererLibraryFiles(agi::fs::PathToString(app_dir))));
 #else
 	TouchFile(csri_dir / "vsfilter.so");
 	TouchFile(csri_dir / "other.txt");
 	EXPECT_EQ(NormalizePaths(std::vector<std::string>{
-		(csri_dir / "vsfilter.so").string(),
-	}), NormalizePaths(csri::EnumerateRendererLibraryFiles(app_dir.string())));
+		agi::fs::PathToString(csri_dir / "vsfilter.so"),
+	}), NormalizePaths(csri::EnumerateRendererLibraryFiles(agi::fs::PathToString(app_dir))));
 #endif
 }

@@ -31,7 +31,7 @@ namespace agi {
 	namespace io {
 
 std::unique_ptr<std::istream> Open(fs::path const& file, bool binary) {
-	LOG_D("agi/io/open/file") << file;
+	LOG_D("agi/io/open/file") << fs::PathToString(file);
 
 	auto stream = agi::make_unique<std::ifstream>();
 	OpenFileStream(*stream, file, binary ? std::ios::binary : std::ios::in);
@@ -47,7 +47,7 @@ Save::Save(fs::path const& file, bool binary)
 : file_name(file)
 , tmp_name(fs::UniquePath(file.parent_path() / fs::PathFromString(fs::PathToString(file.stem()) + "_tmp_%%%%%%%%" + fs::PathToString(file.extension()))))
 {
-	LOG_D("agi/io/save/file") << file;
+	LOG_D("agi/io/save/file") << fs::PathToString(file);
 
 	auto output = agi::make_unique<std::ofstream>();
 	OpenFileStream(*output, tmp_name, binary ? std::ios::binary : std::ios::out);

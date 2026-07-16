@@ -1,5 +1,7 @@
 #include <main.h>
 
+#include <libaegisub/fs.h>
+
 #include <cctype>
 #include <deque>
 #include <filesystem>
@@ -36,7 +38,7 @@ std::filesystem::path ProjectRoot() {
 }
 
 bool IsBoundaryCandidate(std::string const& relative_path) {
-	auto filename = std::filesystem::path(relative_path).filename().string();
+	auto filename = agi::fs::PathToString(agi::fs::PathFromString(relative_path).filename());
 	if (filename == "app_runtime.cpp" || filename == "app_runtime.h")
 		return true;
 	if (StartsWith(filename, "headless_") && (EndsWith(filename, ".cpp") || EndsWith(filename, ".h")))
@@ -51,13 +53,13 @@ bool IsBoundaryCandidate(std::string const& relative_path) {
 }
 
 bool IsPresentationContractSource(std::filesystem::path const& root, std::filesystem::path const& path) {
-	auto relative = std::filesystem::relative(path, root).generic_string();
+	auto relative = agi::fs::PathToGenericString(std::filesystem::relative(path, root));
 	return StartsWith(relative, "src/presentation/")
 		&& (EndsWith(relative, ".cpp") || EndsWith(relative, ".h"));
 }
 
 bool IsGridCoreSource(std::filesystem::path const& root, std::filesystem::path const& path) {
-	auto relative = std::filesystem::relative(path, root).generic_string();
+	auto relative = agi::fs::PathToGenericString(std::filesystem::relative(path, root));
 	return StartsWith(relative, "src/grid_core/")
 		&& (EndsWith(relative, ".cpp") || EndsWith(relative, ".h"));
 }
@@ -77,7 +79,7 @@ std::vector<std::string> FindWxMarkers(std::filesystem::path const& path) {
 			|| code.find("#include \"wx/") != std::string::npos
 			|| std::regex_search(code, wx_token_pattern)) {
 			std::ostringstream hit;
-			hit << path.generic_string() << ":" << line_number << ": " << line;
+			hit << agi::fs::PathToGenericString(path) << ":" << line_number << ": " << line;
 			hits.push_back(hit.str());
 		}
 	}
@@ -106,7 +108,7 @@ std::vector<std::string> FindUiFrameworkMarkers(std::filesystem::path const& pat
 			|| code.find("QObject") != std::string::npos
 			|| code.find("QWidget") != std::string::npos) {
 			std::ostringstream hit;
-			hit << path.generic_string() << ":" << line_number << ": " << line;
+			hit << agi::fs::PathToGenericString(path) << ":" << line_number << ": " << line;
 			hits.push_back(hit.str());
 		}
 	}
@@ -124,7 +126,7 @@ std::vector<std::string> FindLiteralHits(std::filesystem::path const& path, std:
 			continue;
 
 		std::ostringstream hit;
-		hit << path.generic_string() << ":" << line_number << ": " << line;
+		hit << agi::fs::PathToGenericString(path) << ":" << line_number << ": " << line;
 		hits.push_back(hit.str());
 	}
 	return hits;
@@ -153,12 +155,12 @@ std::set<std::string> FindFilesContainingLiteralInTree(
 		if (!entry.is_regular_file())
 			continue;
 
-		auto const extension = entry.path().extension().string();
+		auto const extension = agi::fs::PathToString(entry.path().extension());
 		if (extension != ".cpp" && extension != ".h")
 			continue;
 
 		if (!FindLiteralHits(entry.path(), needle).empty())
-			files.insert(std::filesystem::relative(entry.path(), project_root).generic_string());
+			files.insert(agi::fs::PathToGenericString(std::filesystem::relative(entry.path(), project_root)));
 	}
 	return files;
 }
@@ -171,7 +173,7 @@ std::vector<std::string> FindLiteralHitsRecursive(
 		if (!entry.is_regular_file())
 			continue;
 
-		auto const extension = entry.path().extension().string();
+		auto const extension = agi::fs::PathToString(entry.path().extension());
 		if (extension != ".cpp" && extension != ".h")
 			continue;
 
@@ -294,7 +296,7 @@ std::filesystem::path ResolveSrcLocalInclude(
 	for (auto const& candidate : candidates) {
 		auto normalized = candidate.lexically_normal();
 		if (std::filesystem::exists(normalized)
-			&& StartsWith(std::filesystem::relative(normalized, root).generic_string(), "src/"))
+			&& StartsWith(agi::fs::PathToGenericString(std::filesystem::relative(normalized, root)), "src/"))
 			return normalized;
 	}
 
@@ -359,7 +361,7 @@ TEST(host_boundary_policy, service_like_sources_keep_wx_at_host_edges) {
 		if (!entry.is_regular_file())
 			continue;
 
-		auto relative = std::filesystem::relative(entry.path(), root).generic_string();
+		auto relative = agi::fs::PathToGenericString(std::filesystem::relative(entry.path(), root));
 		if (!IsBoundaryCandidate(relative))
 			continue;
 
@@ -901,12 +903,12 @@ TEST(host_boundary_policy, shared_dispatch_timers_stay_wx_free_and_no_longer_use
 	for (auto const& entry : std::filesystem::directory_iterator(src_root)) {
 		if (!entry.is_regular_file())
 			continue;
-		auto const filename = entry.path().filename().string();
+		auto const filename = agi::fs::PathToString(entry.path().filename());
 		if (filename.find("_timer_host.") == std::string::npos)
 			continue;
 
 		std::ostringstream hit;
-		hit << std::filesystem::relative(entry.path(), root).generic_string();
+		hit << agi::fs::PathToGenericString(std::filesystem::relative(entry.path(), root));
 		unexpected_legacy_host_files.push_back(hit.str());
 	}
 
@@ -2486,8 +2488,8 @@ TEST(host_boundary_policy, explicit_wx_surface_inventory_stays_current) {
 		if (!entry.is_regular_file())
 			continue;
 
-		auto relative = std::filesystem::relative(entry.path(), root).generic_string();
-		auto const filename = entry.path().filename().string();
+		auto relative = agi::fs::PathToGenericString(std::filesystem::relative(entry.path(), root));
+		auto const filename = agi::fs::PathToString(entry.path().filename());
 		if (filename.find("wx") == std::string::npos)
 			continue;
 		actual_explicit_wx_surfaces.insert(relative);

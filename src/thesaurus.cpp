@@ -99,7 +99,7 @@ void Thesaurus::OnLanguageChanged() {
 			return;
 	}
 
-	LOG_I("thesaurus/file") << "Using thesaurus: " << dat;
+	LOG_I("thesaurus/file") << "Using thesaurus: " << agi::fs::PathToString(dat);
 
 	if (cancel_load)
 		cancel_load->store(true, std::memory_order_relaxed);

@@ -46,7 +46,7 @@ void CleanCache(
 			}
 		};
 
-		LOG_D("utils/clean_cache") << "cleaning " << directory / file_type;
+		LOG_D("utils/clean_cache") << "cleaning " << agi::fs::PathToString(directory / file_type);
 		uint64_t total_size = 0;
 		time_t const preserve_recent_cutoff = preserve_recent_seconds == 0
 			? 0
@@ -93,10 +93,10 @@ void CleanCache(
 			uint64_t size = agi::fs::Size(i.path);
 			try {
 				agi::fs::Remove(i.path);
-				LOG_D("utils/clean_cache") << "deleted " << i.path;
+				LOG_D("utils/clean_cache") << "deleted " << agi::fs::PathToString(i.path);
 			}
 			catch (agi::Exception const& e) {
-				LOG_D("utils/clean_cache") << "failed to delete file " << i.path << ": " << e.GetMessage();
+				LOG_D("utils/clean_cache") << "failed to delete file " << agi::fs::PathToString(i.path) << ": " << e.GetMessage();
 				continue;
 			}
 

@@ -124,7 +124,7 @@ void AddUnique(std::vector<std::string>& values, std::string value) {
 }
 
 bool IsSubtitleFile(std::filesystem::path const& path) {
-	auto ext = path.extension().string();
+	auto ext = PathToUtf8(path.extension());
 	std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
 		return static_cast<char>(std::tolower(ch));
 	});

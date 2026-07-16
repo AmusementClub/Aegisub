@@ -5,6 +5,7 @@
 #include "ragbag/subtitle_plugin_api.h"
 
 #include <libaegisub/exception.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/log.h>
 #include <libaegisub/native_library.h>
 #include <libaegisub/string_utils.h>
@@ -118,16 +119,16 @@ void DiscoverPlugins() {
 					g_decoders.emplace_back(std::move(decoder));
 			}
 
-			LOG_I(kLogTag) << "Loaded secondary subtitle decoder plugin from " << path;
+			LOG_I(kLogTag) << "Loaded secondary subtitle decoder plugin from " << agi::fs::PathToString(path);
 		}
 		catch (agi::Exception const& err) {
-			LOG_D(kLogTag) << "Ignoring non-decoder runtime " << path << ": " << err.GetMessage();
+			LOG_D(kLogTag) << "Ignoring non-decoder runtime " << agi::fs::PathToString(path) << ": " << err.GetMessage();
 		}
 		catch (std::exception const& err) {
-			LOG_D(kLogTag) << "Ignoring non-decoder runtime " << path << ": " << err.what();
+			LOG_D(kLogTag) << "Ignoring non-decoder runtime " << agi::fs::PathToString(path) << ": " << err.what();
 		}
 		catch (...) {
-			LOG_D(kLogTag) << "Ignoring non-decoder runtime " << path << ": unknown error";
+			LOG_D(kLogTag) << "Ignoring non-decoder runtime " << agi::fs::PathToString(path) << ": unknown error";
 		}
 	}
 }

@@ -1,6 +1,8 @@
 #include "core_api_facade.h"
 #include "options.h"
 
+#include <libaegisub/fs.h>
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -276,7 +278,7 @@ void CheckSubtitleOpen(aegisub::core_api::Context& context) {
 	WriteSmokeAss(ass_path.get());
 
 	aegisub::core_api::SubtitleOpenOptions options;
-	options.path = ass_path.get().string();
+	options.path = agi::fs::PathToString(ass_path.get());
 	options.encoding = "utf-8";
 
 	std::unique_ptr<aegisub::core_api::SubtitleSession> session;
@@ -673,7 +675,7 @@ void CheckSubtitleOpen(aegisub::core_api::Context& context) {
 
 	ScopedFile saved_path(MakeTempAssPath());
 	aegisub::core_api::SubtitleSaveOptions save_options;
-	save_options.path = saved_path.get().string();
+	save_options.path = agi::fs::PathToString(saved_path.get());
 	{
 		ScopedNullOptions null_options;
 		RequireStatus(aegisub::core_api::SaveSubtitles(context, *session, save_options),
@@ -692,7 +694,7 @@ void CheckSubtitleOpen(aegisub::core_api::Context& context) {
 		throw std::runtime_error("subtitle save did not clear dirty state while preserving revision");
 
 	aegisub::core_api::SubtitleOpenOptions reopen_options;
-	reopen_options.path = saved_path.get().string();
+	reopen_options.path = agi::fs::PathToString(saved_path.get());
 	reopen_options.encoding = "utf-8";
 	std::unique_ptr<aegisub::core_api::SubtitleSession> reopened;
 	RequireStatus(aegisub::core_api::OpenSubtitles(context, reopen_options, reopened),
@@ -752,7 +754,7 @@ void CheckTextSubtitleOpenWithoutAppOptions(aegisub::core_api::Context& context)
 	WriteSmokeTxt(txt_path.get());
 
 	aegisub::core_api::SubtitleOpenOptions options;
-	options.path = txt_path.get().string();
+	options.path = agi::fs::PathToString(txt_path.get());
 	options.encoding = "utf-8";
 
 	std::unique_ptr<aegisub::core_api::SubtitleSession> session;

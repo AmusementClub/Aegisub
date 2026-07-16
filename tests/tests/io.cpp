@@ -72,3 +72,22 @@ TEST(lagi_io, save_destructor_commits_file_without_leftovers) {
 	EXPECT_EQ("written-via-destructor", read_all(target));
 	EXPECT_TRUE(list_matching("data", "save_destructor_tmp_*.txt").empty());
 }
+
+TEST(lagi_io, unicode_path_survives_logging_and_round_trips) {
+	auto const target = std::filesystem::path("data") /
+		agi::fs::PathFromString("io-unicode-\xF0\x9F\x98\x80.txt");
+	std::filesystem::remove(target);
+
+	{
+		agi::io::Save save(target, true);
+		save.Get() << "unicode-path-content";
+	}
+
+	auto input = agi::io::Open(target, true);
+	std::ostringstream contents;
+	contents << input->rdbuf();
+	EXPECT_EQ("unicode-path-content", contents.str());
+
+	input.reset();
+	std::filesystem::remove(target);
+}

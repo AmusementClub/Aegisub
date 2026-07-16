@@ -9,6 +9,7 @@
 
 #include <libaegisub/background_runner.h>
 #include <libaegisub/exception.h>
+#include <libaegisub/fs.h>
 #include <libaegisub/log.h>
 #include <libaegisub/option.h>
 #include <libaegisub/path.h>
@@ -204,10 +205,10 @@ public:
   }
 }
 )json", agi::Options::FLUSH_SKIP) {
-		path_tokens.SetToken("?local", (root / "cache").string());
-		path_tokens.SetToken("?temp", (root / "temp").string());
-		path_tokens.SetToken("?data", root.string());
-		path_tokens.SetToken("?user", root.string());
+		path_tokens.SetToken("?local", agi::fs::PathToString(root / "cache"));
+		path_tokens.SetToken("?temp", agi::fs::PathToString(root / "temp"));
+		path_tokens.SetToken("?data", agi::fs::PathToString(root));
+		path_tokens.SetToken("?user", agi::fs::PathToString(root));
 		config::opt = &options;
 		config::path = &path_tokens;
 	}
@@ -405,7 +406,7 @@ std::string TrimAscii(std::string value) {
 std::vector<SampleInput> LoadSampleManifest(std::filesystem::path const& manifest_path) {
 	std::ifstream in(manifest_path, std::ios::binary);
 	if (!in)
-		throw std::runtime_error("Failed to open sample manifest: " + manifest_path.string());
+		throw std::runtime_error("Failed to open sample manifest: " + agi::fs::PathToString(manifest_path));
 
 	std::vector<SampleInput> inputs;
 	std::string line;
@@ -439,7 +440,7 @@ std::vector<SampleInput> LoadSampleManifest(std::filesystem::path const& manifes
 	}
 
 	if (inputs.empty())
-		throw std::runtime_error("Sample manifest did not contain any usable lines: " + manifest_path.string());
+		throw std::runtime_error("Sample manifest did not contain any usable lines: " + agi::fs::PathToString(manifest_path));
 
 	return inputs;
 }
@@ -821,7 +822,7 @@ SampleResult RunSample(
 	InlineBackgroundRunner& runner) {
 	SampleResult result;
 	result.sample_name = input.sample_name;
-	result.file_path = input.file_path.string();
+	result.file_path = agi::fs::PathToString(input.file_path);
 	result.has_geometry_expectation = input.has_geometry_expectation;
 
 	auto provider = CreateFFmpegSourceVideoProvider(result.file_path, "TV.709", &runner, {});
@@ -957,7 +958,7 @@ int main(int argc, char** argv) try {
 	bool passed = true;
 	for (auto const& input : sample_inputs) {
 		if (!std::filesystem::exists(input.file_path))
-			throw std::runtime_error("Missing sample file: " + input.file_path.string());
+			throw std::runtime_error("Missing sample file: " + agi::fs::PathToString(input.file_path));
 
 		auto result = RunSample(input, runner);
 		std::cout

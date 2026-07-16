@@ -135,14 +135,14 @@ TEST(lua_script_reader, ffi_load_resolves_bare_library_names_using_package_cpath
 	TouchFile(library);
 
 	auto const current_cpath = GetPackageField(state.get(), "cpath");
-	SetPackageField(state.get(), "cpath", library.parent_path().generic_string() + "/?.dll;" + current_cpath);
+	SetPackageField(state.get(), "cpath", agi::fs::PathToGenericString(library.parent_path()) + "/?.dll;" + current_cpath);
 
 	auto const [resolved_name, resolved_global] = CallFfiLoad(state.get(), "sample", true);
-	EXPECT_EQ(library.generic_string(), std::filesystem::path(resolved_name).generic_string());
+	EXPECT_EQ(agi::fs::PathToGenericString(library), agi::fs::PathToGenericString(agi::fs::PathFromString(resolved_name)));
 	EXPECT_TRUE(resolved_global);
 
 	auto const [resolved_suffixed_name, resolved_suffixed_global] = CallFfiLoad(state.get(), "sample.dll", false);
-	EXPECT_EQ(library.generic_string(), std::filesystem::path(resolved_suffixed_name).generic_string());
+	EXPECT_EQ(agi::fs::PathToGenericString(library), agi::fs::PathToGenericString(agi::fs::PathFromString(resolved_suffixed_name)));
 	EXPECT_FALSE(resolved_suffixed_global);
 #endif
 }

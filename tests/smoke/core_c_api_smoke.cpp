@@ -13,6 +13,11 @@ extern "C" int aegisub_core_c_header_smoke(void);
 
 namespace {
 
+std::string PathToUtf8(std::filesystem::path const& path) {
+	auto const utf8 = path.u8string();
+	return {reinterpret_cast<char const *>(utf8.data()), utf8.size()};
+}
+
 class ScopedFile {
 	std::filesystem::path path;
 
@@ -126,7 +131,7 @@ void RequireTexts(aegisub_core_subtitle_session const *session,
 	aegisub_core_context *context,
 	std::filesystem::path const& path,
 	char const *context_name) {
-	auto path_text = path.string();
+	auto path_text = PathToUtf8(path);
 	aegisub_core_subtitle_open_options options{};
 	options.abi_version = AEGISUB_CORE_ABI_VERSION;
 	options.path = {path_text.data(), path_text.size()};
@@ -595,7 +600,7 @@ void RequireSubtitleOpen(aegisub_core_context *context) {
 
 	ScopedFile ass_path(MakeTempAssPath());
 	WriteSmokeAss(ass_path.get());
-	auto path = ass_path.get().string();
+	auto path = PathToUtf8(ass_path.get());
 
 	aegisub_core_subtitle_open_options options{};
 	options.abi_version = AEGISUB_CORE_ABI_VERSION;
@@ -1554,7 +1559,7 @@ void RequireSubtitleOpen(aegisub_core_context *context) {
 		throw std::runtime_error("subtitle same paste-over changed state");
 
 	ScopedFile saved_path(MakeTempAssPath());
-	auto saved_path_text = saved_path.get().string();
+	auto saved_path_text = PathToUtf8(saved_path.get());
 	aegisub_core_subtitle_save_options save_options{};
 	save_options.abi_version = AEGISUB_CORE_ABI_VERSION;
 	save_options.path = {saved_path_text.data(), saved_path_text.size()};

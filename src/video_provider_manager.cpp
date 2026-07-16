@@ -225,7 +225,7 @@ std::unique_ptr<VideoProvider> VideoProviderFactory::GetProviderWithPreferred(
 
 			auto provider = std::move(attempt.provider);
 			last_video_provider_selection_report = diagnostics;
-			LOG_I("manager/video/provider") << factory->name << ": opened " << filename;
+			LOG_I("manager/video/provider") << factory->name << ": opened " << agi::fs::PathToString(filename);
 			if (!provider->WantsCaching())
 				return provider;
 			if (max_cache_size_bytes)
@@ -277,7 +277,7 @@ std::unique_ptr<VideoProvider> VideoProviderFactory::GetProviderWithPreferred(
 	last_video_provider_selection_report = diagnostics;
 
 	// No provider could open the file
-	LOG_E("manager/video/provider") << "Could not open " << filename;
+	LOG_E("manager/video/provider") << "Could not open " << agi::fs::PathToString(filename);
 	std::string msg = "Could not open ";
 	msg.append(agi::fs::PathToString(filename));
 	msg.append(":\n");

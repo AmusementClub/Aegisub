@@ -1,4 +1,5 @@
 #include <libaegisub/ass/drawing.h>
+#include <libaegisub/fs.h>
 
 #include <ass/ass.h>
 #include <csri/csri.h>
@@ -653,14 +654,14 @@ bool WritePgm(std::filesystem::path const& path,
 
 	std::ofstream file(path, std::ios::binary);
 	if (!file) {
-		error = "failed to open " + path.string();
+		error = "failed to open " + agi::fs::PathToString(path);
 		return false;
 	}
 
 	file << "P5\n" << width << " " << height << "\n255\n";
 	file.write(reinterpret_cast<char const *>(mask.data()), static_cast<std::streamsize>(mask.size()));
 	if (!file) {
-		error = "failed to write " + path.string();
+		error = "failed to write " + agi::fs::PathToString(path);
 		return false;
 	}
 	return true;
@@ -679,7 +680,7 @@ bool DumpMaskComparison(Options const& options,
 	}
 	std::filesystem::create_directories(directory, ec);
 	if (ec) {
-		detail = "failed to create " + directory.string() + ": " + ec.message();
+		detail = "failed to create " + agi::fs::PathToString(directory) + ": " + ec.message();
 		return false;
 	}
 
@@ -690,15 +691,21 @@ bool DumpMaskComparison(Options const& options,
 		});
 
 	auto base = directory / SafeFileStem(name);
+	auto current_path = base;
+	current_path += "-current.pgm";
+	auto reference_path = base;
+	reference_path += "-reference.pgm";
+	auto diff_path = base;
+	diff_path += "-diff.pgm";
 	std::string error;
-	if (!WritePgm(base.string() + "-current.pgm", current, options.width, options.height, error) ||
-		!WritePgm(base.string() + "-reference.pgm", reference, options.width, options.height, error) ||
-		!WritePgm(base.string() + "-diff.pgm", diff, options.width, options.height, error)) {
+	if (!WritePgm(current_path, current, options.width, options.height, error) ||
+		!WritePgm(reference_path, reference, options.width, options.height, error) ||
+		!WritePgm(diff_path, diff, options.width, options.height, error)) {
 		detail = std::move(error);
 		return false;
 	}
 
-	detail = base.string() + "-{current,reference,diff}.pgm";
+	detail = agi::fs::PathToString(base) + "-{current,reference,diff}.pgm";
 	return true;
 }
 

@@ -53,7 +53,7 @@ json::UnknownElement file(agi::fs::path const& file, std::pair<const char *, siz
 		// Already logged in parse
 	}
 	catch (agi::Exception& e) {
-		LOG_E("json/file") << "Unexpected error when reading config file " << file << ": " << e.GetMessage();
+		LOG_E("json/file") << "Unexpected error when reading config file " << fs::PathToString(file) << ": " << e.GetMessage();
 	}
 	boost::interprocess::ibufferstream stream(default_config.first, default_config.second);
 	return parse(stream);

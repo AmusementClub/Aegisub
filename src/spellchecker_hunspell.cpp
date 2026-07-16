@@ -212,7 +212,7 @@ void HunspellSpellChecker::OnLanguageChanged() {
 			return;
 	}
 
-	LOG_I("dictionary/file") << dic;
+	LOG_I("dictionary/file") << agi::fs::PathToString(dic);
 
 	auto const aff_utf8 = agi::fs::PathToString(aff);
 	auto const dic_utf8 = agi::fs::PathToString(dic);

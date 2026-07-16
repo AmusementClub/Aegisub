@@ -83,6 +83,7 @@ struct ScrollbarFrame {
 	int total = 1;
 	int page = 1;
 	int position = 0;
+	int load_position = -1;
 	int selection_start = -1;
 	int selection_length = 0;
 	std::uint32_t background_color = 0xFF202020;

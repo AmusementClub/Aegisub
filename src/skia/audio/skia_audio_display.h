@@ -12,8 +12,13 @@
 
 class wxEraseEvent;
 class wxPaintEvent;
+class wxMouseEvent;
+class wxMouseCaptureLostEvent;
+class wxFocusEvent;
+class wxKeyEvent;
 class wxSizeEvent;
 class wxThreadEvent;
+class wxTimerEvent;
 class TimeRange;
 class AudioController;
 
@@ -32,11 +37,22 @@ class SkiaAudioDisplay final : public wxGLCanvas {
 	void OnSize(wxSizeEvent& event);
 	void OnContentReady(wxThreadEvent& event);
 	void OnContentFailure(wxThreadEvent& event);
+	void OnLoadTimer(wxTimerEvent& event);
+	void OnMiddleSeekTimer(wxTimerEvent& event);
 	void OnAudioOpen(agi::AudioProvider *provider);
 	void OnPlaybackPosition(int position_ms);
 	void OnPlaybackStop();
 	void OnTimingControllerChanged();
 	void OnTimingDataChanged();
+	void OnMouseEvent(wxMouseEvent& event);
+	void OnMouseEnter(wxMouseEvent& event);
+	void OnMouseLeave(wxMouseEvent& event);
+	void OnMouseCaptureLost(wxMouseCaptureLostEvent& event);
+	void OnFocus(wxFocusEvent& event);
+	void OnKeyDown(wxKeyEvent& event);
+	void EmitMiddleSeekOutput(int time_ms, bool commit);
+	void ScheduleMiddleSeekTimer();
+	void FinishMiddleSeek(int time_ms);
 	void OnRenderingSettingsChanged();
 	void ReconfigureAnalysis();
 	void RebuildViewport();

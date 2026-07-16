@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <iomanip>
 #include <limits>
 #include <optional>
 #include <queue>
@@ -207,6 +208,25 @@ std::string ValidateContentFrame(FrameTarget const& target, ContentFrame const& 
 	return {};
 }
 
+std::string FormatTimelineLabel(std::int64_t milliseconds) {
+	milliseconds = std::max<std::int64_t>(0, milliseconds);
+	auto const hours = milliseconds / 3600000;
+	milliseconds %= 3600000;
+	auto const minutes = milliseconds / 60000;
+	milliseconds %= 60000;
+	auto const seconds = milliseconds / 1000;
+	auto const centiseconds = (milliseconds % 1000) / 10;
+	std::ostringstream out;
+	if (hours > 0)
+		out << hours << ':' << std::setfill('0') << std::setw(2) << minutes << ':'
+			<< std::setw(2) << seconds;
+	else if (minutes > 0)
+		out << minutes << ':' << std::setfill('0') << std::setw(2) << seconds;
+	else
+		out << seconds << '.' << std::setfill('0') << std::setw(2) << centiseconds;
+	return out.str();
+}
+
 void DrawAudioFrameLayers(
 	SkCanvas *canvas,
 	FrameTarget const& target,
@@ -229,14 +249,43 @@ void DrawAudioFrameLayers(
 		paint.setStrokeWidth(1.f);
 		auto const ms_per_pixel = frame.timeline->milliseconds_per_pixel;
 		if (std::isfinite(ms_per_pixel) && ms_per_pixel > 0.0 && frame.timeline->duration_ms > 0) {
-			constexpr int tick_ms = 1000;
-			auto const first_tick = std::max(0, frame.timeline->scroll_left * static_cast<int>(ms_per_pixel) / tick_ms);
-			for (auto ms = first_tick * tick_ms; ms <= frame.timeline->duration_ms; ms += tick_ms) {
-				auto const x = frame.x + (static_cast<float>(ms) / static_cast<float>(ms_per_pixel))
+			auto const pixels_per_second = 1000.0 / ms_per_pixel;
+			int tick_ms = 1000;
+			if (pixels_per_second > 3000.0) tick_ms = 1;
+			else if (pixels_per_second > 300.0) tick_ms = 10;
+			else if (pixels_per_second > 30.0) tick_ms = 100;
+			else if (pixels_per_second > 3.0) tick_ms = 1000;
+			else if (pixels_per_second > 1.0 / 3.0) tick_ms = 10000;
+			else if (pixels_per_second > 1.0 / 9.0) tick_ms = 60000;
+			else if (pixels_per_second > 1.0 / 90.0) tick_ms = 600000;
+			else tick_ms = 3600000;
+			auto const visible_start = std::max<std::int64_t>(
+				0, static_cast<std::int64_t>(std::floor(frame.timeline->scroll_left * ms_per_pixel)));
+			auto const visible_end = std::min<std::int64_t>(
+				frame.timeline->duration_ms,
+				static_cast<std::int64_t>(std::ceil((frame.timeline->scroll_left + frame.width) * ms_per_pixel)));
+			auto ms = visible_start / tick_ms * tick_ms;
+			if (ms < visible_start) ms += tick_ms;
+			SkFont timeline_font;
+			timeline_font.setSize(11.f);
+			float last_label_right = frame.x - 1.f;
+			for (; ms <= visible_end; ms += tick_ms) {
+				auto const x = frame.x + static_cast<float>(ms / ms_per_pixel)
 					- static_cast<float>(frame.timeline->scroll_left);
 				if (x < frame.x - 1.f || x > frame.x + frame.width + 1.f)
 					continue;
-				canvas->drawLine(x, timeline_y, x, timeline_y + timeline_height * 0.45f, paint);
+				auto const major = ((ms / tick_ms) % 10) == 0;
+				canvas->drawLine(x, timeline_y + timeline_height - (major ? 7.f : 4.f),
+					x, timeline_y + timeline_height - 1.f, paint);
+				if (major) {
+					auto const label = FormatTimelineLabel(ms);
+					auto const label_width = timeline_font.measureText(label.data(), label.size(), SkTextEncoding::kUTF8);
+					if (x >= last_label_right && x + label_width <= frame.x + frame.width + 1.f) {
+						canvas->drawSimpleText(label.data(), label.size(), SkTextEncoding::kUTF8,
+							x, timeline_y + 11.f, timeline_font, paint);
+						last_label_right = x + label_width + 2.f;
+					}
+				}
 			}
 		}
 	}
@@ -296,6 +345,13 @@ void DrawAudioFrameLayers(
 		auto const total = std::max(1, scrollbar.total);
 		auto const page = std::clamp(scrollbar.page, 1, total);
 		auto const track = std::max(1.f, static_cast<float>(target.width));
+		if (scrollbar.load_position >= 0 && scrollbar.load_position < scrollbar.total) {
+			auto const loaded_x = track * static_cast<float>(scrollbar.load_position)
+				/ static_cast<float>(std::max(1, scrollbar.total));
+			paint.setColor(static_cast<SkColor>(scrollbar.thumb_color));
+			canvas->drawRect(SkRect::MakeXYWH(
+				std::max(0.f, loaded_x - 25.f), y + 1.f, std::min(25.f, loaded_x), std::max(1.f, h - 2.f)), paint);
+		}
 		auto const thumb_width = std::max(8.f, track * static_cast<float>(page) / static_cast<float>(total));
 		auto const max_position = std::max(0, total - page);
 		auto const thumb_x = max_position == 0 ? 0.f : (track - thumb_width)

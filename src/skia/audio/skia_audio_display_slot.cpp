@@ -4,6 +4,8 @@
 #include "skia_audio_display.h"
 
 #include "../../audio_display.h"
+#include "../../options.h"
+#include "../../skia_runtime/skia_runtime_feature.h"
 #include "../../time_range.h"
 
 #include <algorithm>
@@ -25,7 +27,9 @@ AudioDisplaySlot::AudioDisplaySlot(
 	AudioController *controller,
 	agi::Context *context,
 	std::function<void(wxWindow *)> replacement_callback)
-: runtime_requested(ParseRuntimeOptIn(std::getenv("AEGISUB_ENABLE_SKIA_AUDIO_DISPLAY")))
+: runtime_requested(ResolveRuntimeFeatureEnabled(
+	std::getenv("AEGISUB_ENABLE_SKIA_AUDIO_DISPLAY"),
+	OPT_GET("Audio/Display/Skia/Enabled")->GetBool()))
 , create_skia_widget(ShouldCreateSkiaWidget(runtime_requested, true))
 , parent(parent)
 , controller(controller)

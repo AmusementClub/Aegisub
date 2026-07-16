@@ -93,6 +93,7 @@
 #include "skia/skia_video_overlay_command_buffer.h"
 #include "skia/skia_video_overlay_gl.h"
 #include "skia_runtime/skia_surface_provider.h"
+#include "skia_runtime/skia_runtime_feature.h"
 #include "skia_runtime/skia_text_layout_cache.h"
 #include "video_overlay_draw_context_skia.h"
 
@@ -370,7 +371,9 @@ bool ReadEnvFlagDefaultOff(char const *name) {
 }
 
 bool IsSkiaVideoOverlayEnabled() {
-	return ReadEnvFlagDefaultOff("AEGISUB_ENABLE_SKIA_VIDEO_TOOLS");
+	return aegisub::skia::ResolveRuntimeFeatureEnabled(
+		std::getenv("AEGISUB_ENABLE_SKIA_VIDEO_TOOLS"),
+		OPT_GET("Video/Skia Tools/Enabled")->GetBool());
 }
 
 bool IsSkiaVideoCompositorProbeEnabled() {

@@ -31,7 +31,6 @@ struct Selection {
 	SelectionReason reason = SelectionReason::RuntimeDisabled;
 };
 
-bool ParseRuntimeOptIn(char const *value);
 bool ShouldCreateSkiaWidget(bool runtime_requested, bool presenter_available);
 bool IsDesktopGlAtLeast(int major, int minor, int required_major, int required_minor);
 bool IsSoftwareLikeGlRenderer(std::string_view vendor, std::string_view renderer);

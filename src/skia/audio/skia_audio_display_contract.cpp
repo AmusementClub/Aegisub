@@ -17,14 +17,6 @@ void Bump(uint64_t& revision) {
 
 }
 
-bool ParseRuntimeOptIn(char const *value) {
-	if (!value || !*value)
-		return false;
-
-	auto const first = static_cast<char>(std::tolower(static_cast<unsigned char>(*value)));
-	return first != '0' && first != 'f' && first != 'n';
-}
-
 bool ShouldCreateSkiaWidget(bool runtime_requested, bool presenter_available) {
 	return runtime_requested && presenter_available;
 }

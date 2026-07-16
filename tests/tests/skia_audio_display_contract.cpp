@@ -1,18 +1,23 @@
 #include "../../src/skia/audio/skia_audio_display_contract.h"
+#include "../../src/skia_runtime/skia_runtime_feature.h"
 
 #include <gtest/gtest.h>
 
 namespace audio = aegisub::skia::audio;
 
-TEST(skia_audio_display_contract, runtime_opt_in_is_default_off) {
-	EXPECT_FALSE(audio::ParseRuntimeOptIn(nullptr));
-	EXPECT_FALSE(audio::ParseRuntimeOptIn(""));
-	EXPECT_FALSE(audio::ParseRuntimeOptIn("0"));
-	EXPECT_FALSE(audio::ParseRuntimeOptIn("false"));
-	EXPECT_FALSE(audio::ParseRuntimeOptIn("No"));
-	EXPECT_TRUE(audio::ParseRuntimeOptIn("1"));
-	EXPECT_TRUE(audio::ParseRuntimeOptIn("true"));
-	EXPECT_TRUE(audio::ParseRuntimeOptIn("yes"));
+TEST(skia_runtime_feature, environment_override_precedes_persistent_setting) {
+	using aegisub::skia::ResolveRuntimeFeatureEnabled;
+
+	EXPECT_FALSE(ResolveRuntimeFeatureEnabled(nullptr, false));
+	EXPECT_TRUE(ResolveRuntimeFeatureEnabled(nullptr, true));
+	EXPECT_FALSE(ResolveRuntimeFeatureEnabled("", false));
+	EXPECT_TRUE(ResolveRuntimeFeatureEnabled("", true));
+	EXPECT_FALSE(ResolveRuntimeFeatureEnabled("0", true));
+	EXPECT_FALSE(ResolveRuntimeFeatureEnabled("false", true));
+	EXPECT_FALSE(ResolveRuntimeFeatureEnabled("No", true));
+	EXPECT_TRUE(ResolveRuntimeFeatureEnabled("1", false));
+	EXPECT_TRUE(ResolveRuntimeFeatureEnabled("true", false));
+	EXPECT_TRUE(ResolveRuntimeFeatureEnabled("yes", false));
 }
 
 TEST(skia_audio_display_contract, widget_creation_requires_runtime_opt_in_and_presenter_availability) {

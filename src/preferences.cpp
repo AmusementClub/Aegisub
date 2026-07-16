@@ -491,6 +491,14 @@ void BuildAudioPage(OptionPage *p) {
 	binder->BindEvents(binder);
 
 	binder->AddCategory(_("Options"));
+#ifdef AEGISUB_WITH_SKIA_AUDIO_DISPLAY
+	auto *skia_audio = binder->AddBool(
+		_("Use Skia Audio Display (restart required)"),
+		"Audio/Display/Skia/Enabled");
+	skia_audio->SetHelpString(_(
+		"Use the experimental Skia renderer for the complete audio display. "
+		"The legacy renderer remains the default. Restart Aegisub after changing this option."));
+#endif
 	binder->AddBool(_("Default mouse wheel to zoom"), "Audio/Wheel Default to Zoom");
 	binder->AddBool(_("Lock scroll on cursor"), "Audio/Lock Scroll on Cursor");
 	binder->AddBool(_("Snap markers by default"), "Audio/Snap/Enable");
@@ -556,6 +564,14 @@ void BuildVideoPage(OptionPage *p) {
 	binder->BindEvents(binder);
 
 	binder->AddCategory(_("Options"));
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+	auto *skia_video_tools = binder->AddBool(
+		_("Use Skia video tools (restart required)"),
+		"Video/Skia Tools/Enabled");
+	skia_video_tools->SetHelpString(_(
+		"Use Skia for interactive video tool overlays. Video frame rendering and subtitles "
+		"continue to use their existing renderers. Restart Aegisub after changing this option."));
+#endif
 	binder->AddBool(_("Show keyframes in slider"), "Video/Slider/Show Keyframes");
 	binder->AddBool(_("Only show visual tools when mouse is over video"), "Tool/Visual/Autohide");
 	binder->AddInt(_("Visual tools coordinate font size"), "Tool/Visual/Coordinate Font Size", 6, 72);

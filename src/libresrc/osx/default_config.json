@@ -47,6 +47,9 @@
 				"Seconds" : true,
 				"Video Position" : true
 			},
+			"Skia" : {
+				"Enabled" : false
+			},
 			"Waveform Style" : 0
 		},
 		"Downmixer" : "ConvertToMono",
@@ -662,6 +665,9 @@
 		"Provider" : "ffmpegsource",
 		"Renderer" : {
 			"Backend" : "opengl"
+		},
+		"Skia Tools" : {
+			"Enabled" : false
 		},
 		"Secondary Subtitles" : {
 			"Auto Load From Video" : false,

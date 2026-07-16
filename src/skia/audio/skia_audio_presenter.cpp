@@ -301,10 +301,14 @@ void DrawAudioFrameLayers(
 		paint.setColor(static_cast<SkColor>(marker.color));
 		paint.setStrokeWidth(static_cast<float>(std::max(1, marker.width)));
 		canvas->drawLine(marker.x, frame.y, marker.x, frame.y + frame.height, paint);
-		if (marker.feet & 1u)
-			canvas->drawLine(marker.x, frame.y + frame.height - 1.f, marker.x - 4.f, frame.y + frame.height, paint);
-		if (marker.feet & 2u)
-			canvas->drawLine(marker.x, frame.y + frame.height - 1.f, marker.x + 4.f, frame.y + frame.height, paint);
+		if (marker.feet & 1u) {
+			canvas->drawLine(marker.x, frame.y, marker.x - 4.f, frame.y + 4.f, paint);
+			canvas->drawLine(marker.x, frame.y + frame.height, marker.x - 4.f, frame.y + frame.height - 4.f, paint);
+		}
+		if (marker.feet & 2u) {
+			canvas->drawLine(marker.x, frame.y, marker.x + 4.f, frame.y + 4.f, paint);
+			canvas->drawLine(marker.x, frame.y + frame.height, marker.x + 4.f, frame.y + frame.height - 4.f, paint);
+		}
 	}
 	if (frame.cursor && std::isfinite(frame.cursor->x)) {
 		paint.setColor(static_cast<SkColor>(frame.cursor->color));

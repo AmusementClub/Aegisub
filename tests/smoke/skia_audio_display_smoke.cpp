@@ -314,6 +314,66 @@ bool ValidateSpectrumContent(
 	return passed;
 }
 
+bool ValidateFrameLayerComposition(
+	aegisub::skia::audio::FrameTarget const& target,
+	SkiaGlContextToken context) {
+	using namespace aegisub::skia::audio;
+	ContentGeneration const generation { 17, 23 };
+	Presenter presenter(FailureInjection::None);
+	ContentFrame frame;
+	frame.generation = generation;
+	frame.kind = ContentKind::Waveform;
+	frame.x = 0.f;
+	frame.y = 20.f;
+	frame.width = static_cast<float>(target.width);
+	frame.height = static_cast<float>(target.height - 35);
+	frame.tiles = { MakeWaveformTile(generation, 0, 64) };
+	frame.styles = {
+		{ 0.f, target.width * 0.5f, 0xFF202040, 0xFF00FF00, 0xFF00AA00, 0xFFFFFFFF, nullptr },
+		{ target.width * 0.5f, target.width * 0.5f, 0xFF402020, 0xFFFF0000, 0xFFAA0000, 0xFFFFFFFF, nullptr },
+	};
+	auto timeline = std::make_shared<TimelineFrame>();
+	timeline->height = 20;
+	timeline->duration_ms = 4000;
+	timeline->milliseconds_per_pixel = 10.0;
+	timeline->background_color = 0xFF102030;
+	timeline->foreground_color = 0xFFFFFFFF;
+	frame.timeline = timeline;
+	auto scrollbar = std::make_shared<ScrollbarFrame>();
+	scrollbar->y = target.height - 15;
+	scrollbar->height = 15;
+	scrollbar->total = target.width * 2;
+	scrollbar->page = target.width;
+	scrollbar->position = target.width / 4;
+	scrollbar->load_position = target.width;
+	scrollbar->selection_start = target.width / 3;
+	scrollbar->selection_length = target.width / 5;
+	scrollbar->background_color = 0xFF303030;
+	scrollbar->thumb_color = 0xFFB0B0B0;
+	scrollbar->selection_color = 0xFFFFFFFF;
+	frame.scrollbar = scrollbar;
+	frame.markers.push_back({ target.width * 0.25f, 0xFFFFFFFF, 2, 3 });
+	frame.labels.push_back({ target.width * 0.5f, target.width * 0.25f, "label" });
+	auto cursor = std::make_shared<CursorFrame>();
+	cursor->x = target.width * 0.75f;
+	cursor->color = 0xFFFFFF00;
+	cursor->label = "cursor";
+	frame.cursor = cursor;
+
+	if (!presenter.RenderContentFrame(context, target, frame)) {
+		std::cerr << presenter.TakeFailureLogMessage() << '\n';
+		return false;
+	}
+	auto const pixels = ReadBack(target);
+	bool const passed = ContainsColor(pixels, 32, 32, 64)
+		&& ContainsColor(pixels, 64, 32, 32)
+		&& ContainsColor(pixels, 16, 32, 48)
+		&& ContainsColor(pixels, 48, 48, 48)
+		&& ContainsColor(pixels, 255, 255, 0);
+	presenter.Release(context);
+	return passed;
+}
+
 bool ValidateInjectedFailure(
 	aegisub::skia::audio::FrameTarget const& target,
 	SkiaGlContextToken context,
@@ -382,6 +442,8 @@ int main() try {
 	PresenterMetrics spectrum_metrics;
 	if (!ValidateSpectrumContent(target, context, spectrum_metrics))
 		throw std::runtime_error("spectrum retained content smoke failed");
+	if (!ValidateFrameLayerComposition(target, context))
+		throw std::runtime_error("audio frame layer composition smoke failed");
 
 	bool passed = true;
 	passed = ValidateInjectedFailure(

@@ -858,6 +858,7 @@ set(AEGISUB_CORE_SOURCES
     # Fonts (cross-platform core)
     src/font_collector_core.cpp
     src/font_collector_unicode.cpp
+    src/font_face_selection.cpp
     src/font_family_catalog.cpp
     src/font_family_catalog_cache.cpp
     src/font_file_lister.cpp
@@ -1076,6 +1077,7 @@ add_executable(Aegisub WIN32
     src/dialog_dummy_video.cpp
     src/dialog_export.cpp
     src/dialog_export_ebu3264.cpp
+    src/dialog_font_face.cpp
     src/dialog_fonts_collector.cpp
     src/dialog_jumpto.cpp
     src/dialog_kara_timing_copy.cpp
@@ -1097,6 +1099,7 @@ add_executable(Aegisub WIN32
     src/dialog_translation.cpp
     src/dialog_video_details.cpp
     src/dialog_video_properties.cpp
+    src/font_family_catalog_ui.cpp
     src/audio_box.cpp
     src/audio_controller.cpp
     src/wx_audio_controller_power_host.cpp

@@ -1,6 +1,7 @@
 #include "font_family_catalog_cache.h"
 
 #include <chrono>
+#include <functional>
 #include <future>
 #include <mutex>
 #include <utility>
@@ -21,6 +22,8 @@ SnapshotFuture g_inflight;
 // blocks on the last async shared_future destructor). Incomplete futures stay
 // here until they are ready so Invalidate remains non-blocking.
 std::vector<SnapshotFuture> g_retired;
+using CatalogBuilder = std::function<FontFamilyCatalog()>;
+CatalogBuilder g_builder = [] { return BuildFontFamilyCatalog(); };
 
 void ReapRetiredLocked() {
 	// Caller holds g_mutex. Only destroy futures that will not block.
@@ -54,8 +57,9 @@ void RetireInflightLocked() {
 
 SnapshotFuture StartBuildLocked(std::uint64_t generation) {
 	// Caller holds g_mutex. Must not hold the lock while BuildFontFamilyCatalog runs.
-	return std::async(std::launch::async, [generation]() {
-		auto built = std::make_shared<FontFamilyCatalog const>(BuildFontFamilyCatalog());
+	auto builder = g_builder;
+	return std::async(std::launch::async, [generation, builder = std::move(builder)]() {
+		auto built = std::make_shared<FontFamilyCatalog const>(builder());
 		std::lock_guard lock(g_mutex);
 		if (generation == g_generation) {
 			// Only publish if this build still matches the current generation.
@@ -121,5 +125,39 @@ std::shared_ptr<FontFamilyCatalog const> Rebuild() {
 	Invalidate();
 	return GetSnapshot();
 }
+
+namespace testing {
+
+void Reset() {
+	std::vector<SnapshotFuture> futures;
+	{
+		std::lock_guard lock(g_mutex);
+		++g_generation;
+		g_snapshot.reset();
+		if (g_inflight.valid())
+			futures.push_back(std::move(g_inflight));
+		g_inflight = {};
+		for (auto& future : g_retired)
+			futures.push_back(std::move(future));
+		g_retired.clear();
+	}
+	// The last std::async future reference may wait. Destroy it only after
+	// releasing g_mutex so builders can finish their publication check.
+	futures.clear();
+}
+
+void SetBuilder(std::function<FontFamilyCatalog()> builder) {
+	Reset();
+	std::lock_guard lock(g_mutex);
+	g_builder = std::move(builder);
+}
+
+void RestoreDefaultBuilder() {
+	Reset();
+	std::lock_guard lock(g_mutex);
+	g_builder = [] { return BuildFontFamilyCatalog(); };
+}
+
+} // namespace testing
 
 } // namespace font_family_catalog_cache

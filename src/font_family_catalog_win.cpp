@@ -5,6 +5,7 @@
 //    (file path + face index) and is unique across the catalog
 
 #include "font_family_catalog.h"
+#include "font_family_catalog_win_detail.h"
 #include "font_file_lister_dwrite.h"
 
 #include <libaegisub/charset_conv_win.h>
@@ -136,18 +137,8 @@ bool gdi_select_face(std::string const& facename, std::string& out_selected, LOG
 	return !out_selected.empty();
 }
 
-/// Stable identity for a GDI-selected face: DWrite file path + collection index.
-struct FontEntityKey {
-	std::string path_lower;
-	int face_index = -1;
-	bool valid = false;
-};
-
-bool same_entity(FontEntityKey const& a, FontEntityKey const& b) {
-	return a.valid && b.valid
-	    && a.face_index == b.face_index
-	    && a.path_lower == b.path_lower;
-}
+using font_family_catalog_win_detail::FontEntityKey;
+using font_family_catalog_win_detail::SameEntity;
 
 bool resolve_entity(DWriteBridge const& dwrite, std::string const& facename, FontEntityKey& out) {
 	out = {};
@@ -189,7 +180,7 @@ bool candidate_maps_to_entity(DWriteBridge const& dwrite,
 	FontEntityKey candidate_entity;
 	if (!resolve_entity(dwrite, candidate, candidate_entity))
 		return false;
-	return same_entity(candidate_entity, localized_entity);
+	return SameEntity(candidate_entity, localized_entity);
 }
 
 std::string pick_english_name(DWriteBridge const& dwrite,
@@ -327,7 +318,7 @@ FontFamilyCatalog BuildFontFamilyCatalog() {
 			FontEntityKey eng_entity;
 			if (!resolve_entity(dwrite, rec.localized_family_name, seed_entity)
 			    || !resolve_entity(dwrite, rec.english_win32_family_name, eng_entity)
-			    || !same_entity(seed_entity, eng_entity)) {
+			    || !SameEntity(seed_entity, eng_entity)) {
 				rec.english_win32_family_name.clear();
 			}
 		}

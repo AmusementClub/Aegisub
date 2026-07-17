@@ -40,6 +40,7 @@
 #include "ass_style_storage.h"
 #include "colour_button.h"
 #include "compat.h"
+#include "font_family_catalog_ui.h"
 #include "help_button.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
@@ -215,7 +216,7 @@ public:
 	}
 };
 
-DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Context *c, AssStyleStorage *store, std::string const& new_name, wxArrayString const& font_list)
+DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Context *c, AssStyleStorage *store, std::string const& new_name, FontFamilyCatalogUiModel const& font_model)
 : wxDialog (parent, -1, _("Style Editor"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 , c(c)
 , style(style)
@@ -357,8 +358,8 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	Alignment->SetSelection(AlignToControl(style->alignment));
 	// Fill font face list box
 	FontName->Freeze();
-	FontName->Append(font_list);
-	FontName->SetValue(to_wx(style->font));
+	FontName->Append(font_model.choices);
+	FontName->SetValue(to_wx(font_model.PreferredName(style->font)));
 	FontName->Thaw();
 
 	// Set encoding value

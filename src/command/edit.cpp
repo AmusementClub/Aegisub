@@ -38,9 +38,11 @@
 #include "../ass_style.h"
 #include "../ass_time_projection.h"
 #include "../compat.h"
+#include "../dialog_font_face.h"
 #include "../dialog_search_replace.h"
 #include "../dialogs.h"
-#include "../font_family_catalog_cache.h"
+#include "../font_face_selection.h"
+#include "../font_family_catalog_ui.h"
 #include "../format.h"
 #include "../include/aegisub/context.h"
 #include "../include/aegisub/context_ui.h"
@@ -65,7 +67,6 @@
 
 #include <wx/dataobj.h>
 #include <wx/clipbrd.h>
-#include <wx/fontdlg.h>
 #include <wx/msgdlg.h>
 #include <wx/textentry.h>
 
@@ -744,11 +745,18 @@ struct edit_font final : public Command {
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
 		auto ui = c->GetUI();
+		auto font_model = BuildFontFamilyCatalogUiModel();
 		const parsed_line active(core.selectionController->GetActiveLine());
 		const int active_insertion_point = normalize_pos(active.line->Text, core.textSelectionController->GetInsertionPoint());
 		const size_t insertion_chars = character_pos(active.line->Text, core.textSelectionController->GetInsertionPoint());
 
-		auto font_for_line = [&](parsed_line const& line, int insertion_point) -> wxFont {
+		struct line_font_state {
+			FontFaceDialogSelection displayed;
+			std::string stored_face_name;
+			bool has_explicit_face_override = false;
+		};
+
+		auto font_for_line = [&](parsed_line const& line, int insertion_point) -> line_font_state {
 			const int blockn = line.block_at_pos(insertion_point);
 
 			const AssStyle *style = core.ass->GetStyle(line.line->Style);
@@ -756,38 +764,47 @@ struct edit_font final : public Command {
 			if (!style)
 				style = &default_style;
 
-			return wxFont(
-				line.get_value(blockn, (int)style->fontsize, "\\fs"),
-				wxFONTFAMILY_DEFAULT,
-				line.get_value(blockn, style->italic, "\\i") ? wxFONTSTYLE_ITALIC : wxFONTSTYLE_NORMAL,
-				line.get_value(blockn, style->bold, "\\b") ? wxFONTWEIGHT_BOLD : wxFONTWEIGHT_NORMAL,
-				line.get_value(blockn, style->underline, "\\u"),
-				to_wx(line.get_value(blockn, style->font, "\\fn")));
+			line_font_state state;
+			state.stored_face_name = line.get_value(blockn, style->font, "\\fn");
+			state.has_explicit_face_override = line.find_tag(blockn, "\\fn", "") != nullptr;
+			state.displayed.face_name = font_model.PreferredName(state.stored_face_name);
+			state.displayed.point_size = line.get_value(blockn, (int)style->fontsize, "\\fs");
+			state.displayed.bold = line.get_value(blockn, style->bold, "\\b");
+			state.displayed.italic = line.get_value(blockn, style->italic, "\\i");
+			state.displayed.underline = line.get_value(blockn, style->underline, "\\u");
+			return state;
 		};
 
-		const wxFont initial = font_for_line(active, active_insertion_point);
-		const wxFont font = wxGetFontFromUser(ui.parent, initial);
-		if (!font.Ok() || font == initial) return;
+		auto initial = font_for_line(active, active_insertion_point);
+		auto selected = ShowFontFaceDialog(ui.parent, c, initial.displayed, font_model);
+		if (!selected)
+			return;
 
-		// Always pre-map the dialog face under the current preference. Multi-
-		// line edits can write \\fn on non-active lines even when the active
-		// line's family is unchanged (e.g. size-only edit on the active line);
-		// gating the map on the active-line comparison would leave those
-		// lines with a localized name while prefer-localized is off.
-		// Whether each line actually receives a \\fn rewrite still depends on
-		// per-line family comparison below.
-		std::string chosen_face = from_wx(font.GetFaceName());
-		bool prefer_localized = true;
-		try {
-			prefer_localized = OPT_GET("Subtitle/Font/Prefer Localized Family Names")->GetBool();
-		} catch (...) {
-			prefer_localized = true;
+		auto selection_changes_line = [&](line_font_state const& startfont) {
+			return ShouldWriteFontFace(
+					startfont.stored_face_name,
+					startfont.displayed.face_name,
+					startfont.has_explicit_face_override,
+					selected->face_name)
+				|| selected->point_size != startfont.displayed.point_size
+				|| selected->bold != startfont.displayed.bold
+				|| selected->italic != startfont.displayed.italic
+				|| selected->underline != startfont.displayed.underline;
+		};
+
+		bool has_changes = false;
+		for (auto *line : core.selectionController->GetSelectedSet()) {
+			parsed_line parsed(line);
+			int line_insertion_point = active_insertion_point;
+			if (line != active.line)
+				line_insertion_point = remap_pos_for_line(line, insertion_chars).plain;
+			if (selection_changes_line(font_for_line(parsed, line_insertion_point))) {
+				has_changes = true;
+				break;
+			}
 		}
-		if (!prefer_localized) {
-			auto catalog = font_family_catalog_cache::GetSnapshot();
-			if (catalog && !catalog->empty())
-				chosen_face = catalog->MapToPreferredWriteName(chosen_face, /*prefer_localized=*/false);
-		}
+		if (!has_changes)
+			return;
 
 		update_lines(c, from_wx(_("set font")), [&](AssDialogue *line, int sel_start, int sel_end, int norm_sel_start, int norm_sel_end) {
 			parsed_line parsed(line);
@@ -795,22 +812,26 @@ struct edit_font final : public Command {
 			if (line != active.line)
 				line_insertion_point = remap_pos_for_line(line, insertion_chars).plain;
 
-			const wxFont startfont = font_for_line(parsed, line_insertion_point);
+			const auto startfont = font_for_line(parsed, line_insertion_point);
 			int shift = 0;
 			auto do_set_tag = [&](const char *tag_name, std::string const& value) {
 				shift += parsed.set_tag(tag_name, value, norm_sel_start, sel_start + shift);
 			};
 
-			if (font.GetFaceName() != startfont.GetFaceName())
-				do_set_tag("\\fn", chosen_face);
-			if (font.GetPointSize() != startfont.GetPointSize())
-				do_set_tag("\\fs", std::to_string(font.GetPointSize()));
-			if (font.GetWeight() != startfont.GetWeight())
-				do_set_tag("\\b", std::to_string(font.GetWeight() == wxFONTWEIGHT_BOLD));
-			if (font.GetStyle() != startfont.GetStyle())
-				do_set_tag("\\i", std::to_string(font.GetStyle() == wxFONTSTYLE_ITALIC));
-			if (font.GetUnderlined() != startfont.GetUnderlined())
-				do_set_tag("\\u", std::to_string(font.GetUnderlined()));
+			if (ShouldWriteFontFace(
+					startfont.stored_face_name,
+					startfont.displayed.face_name,
+					startfont.has_explicit_face_override,
+					selected->face_name))
+				do_set_tag("\\fn", selected->face_name);
+			if (selected->point_size != startfont.displayed.point_size)
+				do_set_tag("\\fs", std::to_string(selected->point_size));
+			if (selected->bold != startfont.displayed.bold)
+				do_set_tag("\\b", std::to_string(selected->bold));
+			if (selected->italic != startfont.displayed.italic)
+				do_set_tag("\\i", std::to_string(selected->italic));
+			if (selected->underline != startfont.displayed.underline)
+				do_set_tag("\\u", std::to_string(selected->underline));
 
 			return shift;
 		});

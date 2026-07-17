@@ -33,6 +33,7 @@
 
 class AssStyle;
 class AssStyleStorage;
+struct FontFamilyCatalogUiModel;
 class PersistLocation;
 class SubtitlesPreview;
 class wxArrayString;
@@ -104,7 +105,7 @@ class DialogStyleEditor final : public wxDialog {
 	void OnSetColor(ValueEvent<agi::Color>& evt);
 
 public:
-	DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Context *c, AssStyleStorage *store, std::string const& new_name, wxArrayString const& font_list);
+	DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Context *c, AssStyleStorage *store, std::string const& new_name, FontFamilyCatalogUiModel const& font_model);
 	~DialogStyleEditor();
 
 	std::string GetStyleName() const;

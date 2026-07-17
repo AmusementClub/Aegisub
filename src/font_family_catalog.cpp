@@ -41,8 +41,14 @@ void FontFamilyCatalog::BuildIndex() {
 
 		add_alias(rec.localized_family_name);
 		add_alias(rec.english_win32_family_name);
-		for (auto const& n : rec.names)
-			add_alias(n.value);
+		// Only Win32 family names are safe ASS family aliases. Other name
+		// records are informational metadata for diagnostics and UI display;
+		// indexing them here would make Full/PostScript/typographic names
+		// eligible for automatic normalization.
+		for (auto const& n : rec.names) {
+			if (n.kind == FontFamilyNameKind::Win32Family)
+				add_alias(n.value);
+		}
 
 		// Also index bare names without '@' so vertical aliases resolve.
 		auto bare_local = SplitVerticalPrefix(rec.localized_family_name).second;

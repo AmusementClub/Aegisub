@@ -41,6 +41,7 @@
 #include "compat.h"
 #include "dialog_style_editor.h"
 #include "flyweight_hash.h"
+#include "font_family_catalog_ui.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
@@ -73,7 +74,6 @@
 #include <wx/bmpbuttn.h>
 #include <wx/button.h>
 #include <wx/checkbox.h>
-#include <wx/fontenum.h>
 #include <wx/radiobut.h>
 #include <wx/settings.h>
 #include <wx/sizer.h>
@@ -140,9 +140,8 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 	style_edit_button = new wxButton(this, -1, _("Edit"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
 	style_edit_button->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) {
 		if (active_style) {
-			wxArrayString font_list = wxFontEnumerator::GetFacenames();
-			font_list.Sort();
-			DialogStyleEditor(this, active_style, c, nullptr, std::string(), font_list).ShowModal();
+			auto font_model = BuildFontFamilyCatalogUiModel();
+			DialogStyleEditor(this, active_style, c, nullptr, std::string(), font_model).ShowModal();
 		}
 	});
 	top_sizer->Add(style_edit_button, wxSizerFlags().Expand().Border(wxRIGHT));

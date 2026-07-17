@@ -36,6 +36,8 @@ if(GTEST_FOUND)
         tests/tests/async_video_provider.cpp
         tests/tests/dispatch.cpp
         tests/tests/export_framerate_transform.cpp
+        tests/tests/font_family_catalog.cpp
+        tests/tests/font_family_catalog_cache.cpp
         tests/tests/time_display_mode.cpp
         src/automation/automation_breakpoint_store.cpp
         src/automation/automation_debug_adapter.cpp
@@ -69,6 +71,10 @@ if(GTEST_FOUND)
         src/compat.cpp
         src/core_host_context.cpp
         src/export_framerate_transform.cpp
+        src/font_face_selection.cpp
+        src/font_family_catalog.cpp
+        src/font_family_catalog_cache.cpp
+        src/font_family_catalog_ui.cpp
         src/csri_renderer_discovery.cpp
         src/fft.cpp
         src/locale_choice.cpp
@@ -205,6 +211,7 @@ if(GTEST_FOUND)
         tests/tests/video_renderer_backend.cpp
         tests/tests/word_split.cpp
         tests/support/main.cpp
+        tests/support/font_family_catalog_platform_stub.cpp
         tests/support/src_config_stubs.cpp
         tests/support/subtitle_format_test_stubs.cpp
         tests/support/util.cpp

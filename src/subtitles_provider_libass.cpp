@@ -35,6 +35,7 @@
 #include "subtitles_provider_libass.h"
 
 #include "include/aegisub/subtitles_provider.h"
+#include "libass_runtime.h"
 #include "ready_flag.h"
 #include "subtitle_overlay_blend.h"
 #include "transient_font_set.h"
@@ -51,10 +52,8 @@
 #include "translation_service.h"
 
 #include <atomic>
-
-extern "C" {
-#include <ass/ass.h>
-}
+#include <cstdarg>
+#include <mutex>
 
 namespace {
 std::unique_ptr<agi::dispatch::Queue> cache_queue;
@@ -98,9 +97,9 @@ void LogTransientLibassFontsDebug(char const* action, std::shared_ptr<const Tran
 	}
 }
 
-void ConfigureRenderer(ASS_Renderer *renderer) {
-	ass_set_font_scale(renderer, 1.);
-	ass_set_fonts(renderer, nullptr, "Sans", 1, nullptr, true);
+void ConfigureRenderer(libass::runtime::Api const& api, ASS_Renderer *renderer) {
+	api.ass_set_font_scale(renderer, 1.);
+	api.ass_set_fonts(renderer, nullptr, "Sans", 1, nullptr, true);
 }
 
 struct cache_thread_shared {
@@ -110,8 +109,15 @@ struct cache_thread_shared {
 	std::mutex mutex;
 	ReadyFlag ready;
 	~cache_thread_shared() {
-		if (renderer) ass_renderer_done(renderer);
-		if (library) ass_library_done(library);
+		// If construction failed before EnsureLoaded() completed, there are no
+		// libass objects to free and GetApi() would rethrow from a destructor.
+		if (!renderer && !library)
+			return;
+
+		// Runtime stays loaded for process lifetime; only destroy libass objects.
+		auto const& api = libass::runtime::GetApi();
+		if (renderer) api.ass_renderer_done(renderer);
+		if (library) api.ass_library_done(library);
 	}
 };
 
@@ -168,9 +174,10 @@ public:
 
 	std::string GetDebugName() const override { return "libass"; }
 	void LoadSubtitles(const char *data, size_t len) override {
+		auto const& api = libass::runtime::GetApi();
 		auto *ass_library = library();
-		if (ass_track) ass_free_track(ass_track);
-		ass_track = ass_read_memory(ass_library, const_cast<char *>(data), len, nullptr);
+		if (ass_track) api.ass_free_track(ass_track);
+		ass_track = api.ass_read_memory(ass_library, const_cast<char *>(data), len, nullptr);
 		if (!ass_track) throw agi::InternalError("libass failed to load subtitles.");
 	}
 
@@ -188,14 +195,15 @@ public:
 		if (!shared->library || !shared->renderer)
 			return;
 
-		auto *new_renderer = ass_renderer_init(shared->library);
+		auto const& api = libass::runtime::GetApi();
+		auto *new_renderer = api.ass_renderer_init(shared->library);
 		if (!new_renderer) {
 			LOG_E("subtitle/provider/libass/init") << "Failed to reinitialize libass renderer.";
 			return;
 		}
 
-		ConfigureRenderer(new_renderer);
-		ass_renderer_done(shared->renderer);
+		ConfigureRenderer(api, new_renderer);
+		api.ass_renderer_done(shared->renderer);
 		shared->renderer = new_renderer;
 	}
 };
@@ -205,26 +213,31 @@ LibassSubtitlesProvider::LibassSubtitlesProvider(SubtitleRenderEnvironment const
 , transient_fonts(env.transient_fonts)
 , shared(std::make_shared<cache_thread_shared>())
 {
+	// Synchronously resolve the runtime before returning so factory selection can
+	// fall back to CSRI when libass is missing or incomplete.
+	libass::runtime::EnsureLoaded();
+
 	auto state = shared;
 	auto fonts = transient_fonts;
 	GetCacheQueue().Async([state, fonts] {
+		auto const& api = libass::runtime::GetApi();
 		ASS_Library *library = nullptr;
 		ASS_Renderer *renderer = nullptr;
 		std::string error;
 
-		library = ass_library_init();
+		library = api.ass_library_init();
 		if (!library)
 			error = "libass failed to initialize.";
 		else {
-			ass_set_message_cb(library, msg_callback, nullptr);
-			ass_set_extract_fonts(library, 0);
+			api.ass_set_message_cb(library, msg_callback, nullptr);
+			api.ass_set_extract_fonts(library, 0);
 			if (fonts && !fonts->empty()) {
 				size_t loaded = 0;
 				for (size_t i = 0; i < fonts->fonts.size(); ++i) {
 					auto const& font = fonts->fonts[i];
 					if (font.bytes.empty() || font.bytes.size() > INT_MAX)
 						continue;
-					ass_add_font(library, font.original_name.c_str(), font.bytes.data(), static_cast<int>(font.bytes.size()));
+					api.ass_add_font(library, font.original_name.c_str(), font.bytes.data(), static_cast<int>(font.bytes.size()));
 					LOG_D("subtitle/provider/libass") << "Registered transient libass font: " << font.original_name
 						<< agi::format(" (%u/%u, %u bytes, generation %u)",
 							static_cast<unsigned>(i + 1),
@@ -236,14 +249,14 @@ LibassSubtitlesProvider::LibassSubtitlesProvider(SubtitleRenderEnvironment const
 				LOG_I("subtitle/provider/libass") << "Registered " << loaded << " transient font(s) with libass"
 					<< (fonts->generation ? agi::format(" (generation %u)", static_cast<unsigned>(fonts->generation)) : "");
 			}
-			renderer = ass_renderer_init(library);
+			renderer = api.ass_renderer_init(library);
 			if (!renderer) {
 				error = "libass failed to initialize the renderer.";
-				ass_library_done(library);
+				api.ass_library_done(library);
 				library = nullptr;
 			}
 			else {
-				ConfigureRenderer(renderer);
+				ConfigureRenderer(api, renderer);
 			}
 		}
 
@@ -258,7 +271,10 @@ LibassSubtitlesProvider::LibassSubtitlesProvider(SubtitleRenderEnvironment const
 }
 
 LibassSubtitlesProvider::~LibassSubtitlesProvider() {
-	if (ass_track) ass_free_track(ass_track);
+	if (ass_track) {
+		auto const& api = libass::runtime::GetApi();
+		api.ass_free_track(ass_track);
+	}
 	if (transient_fonts && !transient_fonts->empty()) {
 		LOG_I("subtitle/provider/libass") << "Releasing transient font registration from libass"
 			<< agi::format(" (%u font(s), generation %u)",
@@ -272,6 +288,7 @@ bool LibassSubtitlesProvider::RenderOverlay(SourceFrame const& source, SubtitleO
 	if (!overlay.IsValid() || overlay.pixel_format != SubtitleOverlayPixelFormat::Bgra8)
 		return false;
 
+	auto const& api = libass::runtime::GetApi();
 	auto *ass_renderer = renderer();
 
 	int render_width = overlay.width;
@@ -281,10 +298,10 @@ bool LibassSubtitlesProvider::RenderOverlay(SourceFrame const& source, SubtitleO
 		render_height = source.height;
 	}
 
-	ass_set_frame_size(ass_renderer, render_width, render_height);
-	ass_set_storage_size(ass_renderer, render_width, render_height);
+	api.ass_set_frame_size(ass_renderer, render_width, render_height);
+	api.ass_set_storage_size(ass_renderer, render_width, render_height);
 
-	ASS_Image* img = ass_render_frame(ass_renderer, ass_track, int(time * 1000), nullptr);
+	ASS_Image* img = api.ass_render_frame(ass_renderer, ass_track, int(time * 1000), nullptr);
 	BgraSubtitleTargetView target {
 		overlay.planes[0].data,
 		overlay.planes[0].stride,
@@ -334,27 +351,48 @@ std::unique_ptr<SubtitlesProvider> Create(std::string const&, SubtitleRenderEnvi
 	return agi::make_unique<LibassSubtitlesProvider>(env);
 }
 
+bool IsAvailable() noexcept {
+	return libass::runtime::IsAvailable();
+}
+
+std::string GetAvailabilityError() {
+	auto err = libass::runtime::GetLoadError();
+	return err.empty() ? "runtime library is unavailable." : err;
+}
+
 void CacheFonts() {
+	if (!libass::runtime::IsAvailable()) {
+		static std::once_flag missing_runtime_log_once;
+		std::call_once(missing_runtime_log_once, [] {
+			auto err = libass::runtime::GetLoadError();
+			if (err.empty())
+				err = "runtime library is unavailable.";
+			LOG_W("subtitle/provider/libass/warmup") << "Skipping libass font cache warmup: " << err;
+		});
+		return;
+	}
+
 	std::call_once(cache_warmup_once, [] {
 		GetCacheQueue().Async([] {
-			auto *library = ass_library_init();
+			auto const& api = libass::runtime::GetApi();
+			auto *library = api.ass_library_init();
 			if (!library) {
 				LOG_E("subtitle/provider/libass/warmup") << "Failed to initialize libass for warmup.";
 				return;
 			}
 
-			ass_set_message_cb(library, msg_callback, nullptr);
+			api.ass_set_message_cb(library, msg_callback, nullptr);
 
-			auto *renderer = ass_renderer_init(library);
+			auto *renderer = api.ass_renderer_init(library);
 			if (!renderer) {
 				LOG_E("subtitle/provider/libass/warmup") << "Failed to initialize libass renderer for warmup.";
-				ass_library_done(library);
+				api.ass_library_done(library);
 				return;
 			}
 
-			ConfigureRenderer(renderer);
-			ass_renderer_done(renderer);
-			ass_library_done(library);
+			ConfigureRenderer(api, renderer);
+			api.ass_renderer_done(renderer);
+			api.ass_library_done(library);
 		});
 	});
 }

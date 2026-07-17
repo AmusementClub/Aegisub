@@ -22,5 +22,7 @@ struct SubtitleRenderEnvironment;
 
 namespace libass {
 	std::unique_ptr<SubtitlesProvider> Create(std::string const&, SubtitleRenderEnvironment const& env);
+	bool IsAvailable() noexcept;
+	std::string GetAvailabilityError();
 	void CacheFonts();
 }

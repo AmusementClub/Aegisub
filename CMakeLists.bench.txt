@@ -96,16 +96,20 @@ target_include_directories(drawing-bench PRIVATE
 )
 target_link_libraries(drawing-bench PRIVATE libaegisub)
 
-add_executable(drawing-compare EXCLUDE_FROM_ALL
-    tools/drawing_compare_main.cpp
-)
-target_compile_features(drawing-compare PRIVATE cxx_std_20)
-target_include_directories(drawing-compare PRIVATE
-    "${PROJECT_SOURCE_DIR}/libaegisub/include"
-    "${PROJECT_SOURCE_DIR}/vendor/csri/include"
-    ${ass_INCLUDE_DIRS}
-)
-target_link_libraries(drawing-compare PRIVATE libaegisub ${ass_LIBRARIES} ${CMAKE_DL_LIBS})
+if(NOT ass_LIBRARIES)
+    message(STATUS "drawing-compare: ass link library not found; benchmark target disabled")
+else()
+    add_executable(drawing-compare EXCLUDE_FROM_ALL
+        tools/drawing_compare_main.cpp
+    )
+    target_compile_features(drawing-compare PRIVATE cxx_std_20)
+    target_include_directories(drawing-compare PRIVATE
+        "${PROJECT_SOURCE_DIR}/libaegisub/include"
+        "${PROJECT_SOURCE_DIR}/vendor/csri/include"
+        ${ass_INCLUDE_DIRS}
+    )
+    target_link_libraries(drawing-compare PRIVATE libaegisub ${ass_LIBRARIES} ${CMAKE_DL_LIBS})
+endif()
 
 if(EXISTS "${PROJECT_SOURCE_DIR}/tools/dispatch_realworld_bench_main.cpp")
     add_executable(dispatch-realworld-bench EXCLUDE_FROM_ALL

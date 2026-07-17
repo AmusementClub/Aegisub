@@ -9,7 +9,7 @@ macro(_aegisub_core_c_api_find_static_dependencies)
 	# The static target links the same core code into the host process, so
 	# consumers that request the Static component need the native dependency
 	# packages available to CMake as well.
-	find_dependency(ass REQUIRED)
+	# libass is loaded dynamically at runtime; consumers do not link ass.
 	find_dependency(Boost CONFIG REQUIRED COMPONENTS container locale regex)
 	find_dependency(hwy CONFIG REQUIRED)
 	find_dependency(ICU REQUIRED COMPONENTS uc dt in)

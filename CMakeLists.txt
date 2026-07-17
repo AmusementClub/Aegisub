@@ -822,6 +822,7 @@ set(AEGISUB_CORE_SOURCES
     src/subtitle_overlay_blend.cpp
     src/subtitles_provider.cpp
     src/subtitles_provider_libass.cpp
+    src/libass_runtime.cpp
     src/video_provider_manager.cpp
     src/video_provider_dummy.cpp
     src/video_provider_cache.cpp
@@ -984,8 +985,13 @@ target_link_libraries(aegisub_core PUBLIC libaegisub)
 # via libaegisub's lua/utils.h. libaegisub links luajit PRIVATE, so core must
 # link it directly to inherit the public include path (vendor/luajit/src).
 target_link_libraries(aegisub_core PRIVATE luajit)
-# Codec/format deps used by the core providers/renderers (discovered above).
-target_link_libraries(aegisub_core PUBLIC ass::ass)
+# libass is loaded at runtime; only public headers are needed at compile time.
+# Use BUILD_INTERFACE includes instead of linking ass::headers: aegisub_core is a
+# static library, so PRIVATE target deps are still exported as $<LINK_ONLY:...>
+# and would force Static Core C API consumers to provide ass::headers.
+target_include_directories(aegisub_core PRIVATE
+	$<BUILD_INTERFACE:${ass_INCLUDE_DIRS}>
+)
 target_link_libraries(aegisub_core PRIVATE aegisub_core_features "Boost::headers" "Boost::container" "Boost::locale" ${AEGISUB_REGEX_TARGET})
 target_link_libraries(aegisub_core PRIVATE pugixml::pugixml)
 aegisub_enable_highway(aegisub_core)
@@ -999,6 +1005,31 @@ if(WITH_LIBPLACEBO AND HAVE_LIBPLACEBO)
         PROPERTIES SKIP_PRECOMPILE_HEADERS ON
     )
 endif()
+
+# Stage app-local libass runtime next to consumers (Aegisub + core smokes).
+# Without an import dependency, vcpkg/CMake will not copy ass.dll automatically.
+function(aegisub_stage_libass_runtime target_name)
+    if(NOT WIN32 OR NOT ass_RUNTIME_LIBRARY)
+        return()
+    endif()
+    if(NOT TARGET ${target_name})
+        return()
+    endif()
+    add_custom_command(TARGET ${target_name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:${target_name}>/runtimes"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${ass_RUNTIME_LIBRARY}"
+            "$<TARGET_FILE_DIR:${target_name}>/runtimes/ass.dll"
+        # Prefer the app-local runtimes/ layout only; a leftover root ass.dll
+        # can mask missing-runtimes failures and version drift.
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            "$<TARGET_FILE_DIR:${target_name}>/ass.dll"
+        COMMENT "Staging runtimes/ass.dll for ${target_name}"
+        VERBATIM
+    )
+endfunction()
+
 ## Aegisub
 add_executable(Aegisub WIN32
     "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.h"
@@ -1211,8 +1242,11 @@ endif()
 set_source_files_properties(libaegisub/common/native_library.cpp PROPERTIES
     SKIP_PRECOMPILE_HEADERS ON
 )
-# aegisub_core carries the framework-agnostic core (PUBLIC libaegisub + ass/boost/...).
+# aegisub_core carries the framework-agnostic core (PUBLIC libaegisub + boost/...).
+# libass is runtime-loaded (headers via BUILD_INTERFACE only); see aegisub_stage_libass_runtime.
 target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} aegisub_core aegisub_features luajit)
+aegisub_stage_libass_runtime(Aegisub)
+aegisub_stage_libass_runtime(aegisub_core_c_api)
 target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
 target_compile_features(Aegisub PRIVATE cxx_std_20)
 target_include_directories(Aegisub PRIVATE src)
@@ -1316,9 +1350,10 @@ else()
     target_link_libraries(Aegisub PRIVATE "Fontconfig::Fontconfig")
 endif()
 
-# ass / Boost / regex / ICU / Highway / Iconv / ZLIB are pulled in transitively
-# via aegisub_core (PUBLIC/PUBLIC-ish) and libaegisub. The exe additionally
-# needs Boost::locale (for GUI-side wx locale helpers) and ICU::uc.
+# Boost / regex / ICU / Highway / Iconv / ZLIB are pulled in transitively via
+# aegisub_core and libaegisub. libass is NOT linked: the core only needs
+# compile-time headers (BUILD_INTERFACE) and loads ass.dll / libass at runtime.
+# The exe additionally needs Boost::locale (GUI-side wx locale helpers) and ICU::uc.
 target_link_libraries(Aegisub PRIVATE "Boost::locale" "ICU::uc")
 
 aegisub_enable_highway(Aegisub)
@@ -1675,6 +1710,14 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.21)
         COMPONENT CoreAPI
     )
 endif()
+# libass is LoadLibrary'd at runtime and is invisible to RUNTIME_DEPENDENCY_SET.
+if(WIN32 AND ass_RUNTIME_LIBRARY)
+    install(FILES "${ass_RUNTIME_LIBRARY}"
+        DESTINATION bin/runtimes
+        COMPONENT CoreAPI
+        RENAME ass.dll
+    )
+endif()
 install(FILES src/include/aegisub/core_c_api.h DESTINATION include/aegisub COMPONENT CoreAPI)
 
 set(AEGISUB_CORE_API_NEEDS_SKIA OFF)
@@ -1697,7 +1740,9 @@ install(FILES "${CMAKE_CURRENT_BINARY_DIR}/AegisubCoreCAPIConfig.cmake"
     DESTINATION lib/cmake/AegisubCoreCAPI
     COMPONENT CoreAPI
 )
-install(FILES cmake/Findass.cmake cmake/Finduchardet.cmake
+# Findass.cmake is no longer required by the Core C API package (libass is
+# runtime-loaded). Keep Finduchardet for static consumers that still need it.
+install(FILES cmake/Finduchardet.cmake
     DESTINATION lib/cmake/AegisubCoreCAPI/modules
     COMPONENT CoreAPI
 )

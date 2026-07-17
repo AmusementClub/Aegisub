@@ -40,21 +40,29 @@ namespace {
 		std::string name;
 		std::string subtype;
 		std::unique_ptr<SubtitlesProvider> (*create)(std::string const& subtype, SubtitleRenderEnvironment const& env);
-		bool hidden;
+		bool (*is_available)() = nullptr;
+		std::string (*availability_error)() = nullptr;
+		bool hidden = false;
 	};
 
 	std::vector<factory> ass_renderer_factories() {
 		std::vector<factory> factories;
 #ifdef WITH_CSRI
 		for (auto const& subtype : csri::List())
-			factories.push_back(factory{"CSRI/" + subtype, subtype, csri::Create, false});
+			factories.push_back(factory{"CSRI/" + subtype, subtype, csri::Create, nullptr, nullptr, false});
 #endif
-		factories.push_back(factory{"libass", "", libass::Create, false});
+		factories.push_back(factory{
+			"libass",
+			"",
+			libass::Create,
+			libass::IsAvailable,
+			libass::GetAvailabilityError,
+			false});
 		return factories;
 	}
 
 	aegisub::provider_catalog::ProviderFactoryDescriptor DescribeProvider(factory const& provider) {
-		return { provider.name.c_str(), provider.hidden, nullptr, nullptr };
+		return { provider.name.c_str(), provider.hidden, provider.is_available, provider.availability_error };
 	}
 
 	std::string GetConfiguredSubtitleProvider() {
@@ -87,6 +95,14 @@ std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(Subtitl
 
 	std::string error;
 	for (auto factory : sorted) {
+		auto descriptor = DescribeProvider(*factory);
+		if (auto unavailable_reason = aegisub::provider_catalog::ProviderUnavailableReason(descriptor)) {
+			LOG_W(kSubtitleProviderSelectLogTag) << "Subtitle provider unavailable: "
+				<< factory->name << ": " << *unavailable_reason;
+			aegisub::provider_catalog::AppendAttemptErrorLine(error, factory->name.c_str(), *unavailable_reason);
+			continue;
+		}
+
 		try {
 			auto provider = factory->create(factory->subtype, env);
 			if (provider) {

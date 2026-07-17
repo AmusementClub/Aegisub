@@ -3,8 +3,7 @@ set(VCPKG_CRT_LINKAGE dynamic)
 
 set(VCPKG_LIBRARY_LINKAGE static)
 
-if(PORT STREQUAL "libass"
-   OR PORT STREQUAL "boost-locale"
+if(PORT STREQUAL "boost-locale"
    OR PORT STREQUAL "fftw3"
    OR PORT STREQUAL "hunspell"
    OR PORT STREQUAL "icu"

@@ -376,6 +376,12 @@ endif()
 # These find_package calls and the highway helper are hoisted here so they are
 # available before aegisub_core is defined below, and remain valid for Aegisub.
 find_package(ass REQUIRED)
+message(STATUS "Found libass headers: ${ass_INCLUDE_DIR}")
+if(ass_RUNTIME_LIBRARY)
+    message(STATUS "Found libass runtime for staging: ${ass_RUNTIME_LIBRARY}")
+else()
+    message(STATUS "libass runtime not provided; the provider will be unavailable unless a runtime is installed at deployment time")
+endif()
 find_package(Boost CONFIG REQUIRED COMPONENTS container locale regex spirit)
 find_package(hwy REQUIRED CONFIG)
 # Boost::regex needs ICU on Boost < 1.76.0 without the dedicated regex_icu target.
@@ -990,7 +996,7 @@ target_link_libraries(aegisub_core PRIVATE luajit)
 # static library, so PRIVATE target deps are still exported as $<LINK_ONLY:...>
 # and would force Static Core C API consumers to provide ass::headers.
 target_include_directories(aegisub_core PRIVATE
-	$<BUILD_INTERFACE:${ass_INCLUDE_DIRS}>
+	$<BUILD_INTERFACE:${ass_INCLUDE_DIR}>
 )
 target_link_libraries(aegisub_core PRIVATE aegisub_core_features "Boost::headers" "Boost::container" "Boost::locale" ${AEGISUB_REGEX_TARGET})
 target_link_libraries(aegisub_core PRIVATE pugixml::pugixml)
@@ -1818,6 +1824,7 @@ message(STATUS "\n"
     "  FFMS2:                 ${HAVE_FFMS2}\n"
     "  LsmasNative:           ${HAVE_LSMASNATIVE}\n"
     "  SceneChange:           ${HAVE_SCENECHANGE}\n"
+    "  libass:                ${ass_FOUND}\n"
     "  libplacebo:            ${HAVE_LIBPLACEBO}\n"
     "  FFTW3:                 ${WITH_FFTW3}\n"
     "\n"

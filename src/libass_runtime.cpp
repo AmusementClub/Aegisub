@@ -160,7 +160,7 @@ void ResolveSymbol(agi::native::Library& library, T& out, char const *name) {
 
 void ResolveSymbols(agi::native::Library& library, Api& loaded) {
 #define AGI_LIBASS_FN(name) ResolveSymbol(library, loaded.name, #name);
-#include "libass_functions.inc"
+#include "libass/libass_functions.inc"
 #undef AGI_LIBASS_FN
 }
 

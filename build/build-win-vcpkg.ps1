@@ -9,6 +9,8 @@ param(
     [string]$AviSynthIncludeDir = './include/avisynth',
     [string]$FFMS2IncludeDir = './include/ffms2',
     [string]$LibPlaceboIncludeDir = './include/libplacebo',
+    [string]$LibassIncludeDir = './include',
+    [string]$LibassRuntimeLibrary = './runtimes/ass.dll',
     [string]$CMakeCxxFlags = '/DWIN32 /D_WINDOWS /GR /EHsc /DUNICODE /D_UNICODE /MP',
     [string]$CMakeCFlags = '/DWIN32 /D_WINDOWS /DUNICODE /D_UNICODE /MP',
     [switch]$Fresh
@@ -103,6 +105,8 @@ function Configure-CMake([string]$CMakePath, [string]$GeneratorName) {
         '-DXAUDIO2_REDIST=ON',
         '-DWITH_AVISYNTH=ON',
         "-DAviSynth_INCLUDE_DIR=$resolvedAviSynthIncludeDir",
+        "-Dass_INCLUDE_DIR=$resolvedLibassIncludeDir",
+        "-Dass_RUNTIME_LIBRARY=$resolvedLibassRuntimeLibrary",
         '-DWITH_FFMS2=ON',
         "-DFFMS2_INCLUDE_DIR=$resolvedFFMS2IncludeDir",
         "-DWITH_LSMASNATIVE=ON",
@@ -184,6 +188,8 @@ else {
 $resolvedAviSynthIncludeDir = Resolve-RepoPath $AviSynthIncludeDir
 $resolvedFFMS2IncludeDir = Resolve-RepoPath $FFMS2IncludeDir
 $resolvedLibPlaceboIncludeDir = Resolve-RepoPath $LibPlaceboIncludeDir
+$resolvedLibassIncludeDir = Resolve-RepoPath $LibassIncludeDir
+$resolvedLibassRuntimeLibrary = Resolve-RepoPath $LibassRuntimeLibrary
 
 $cmake = Get-CMake
 $generator = Get-VsGenerator

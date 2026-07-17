@@ -10,7 +10,7 @@ namespace libass::runtime {
 
 struct Api {
 #define AGI_LIBASS_FN(name) decltype(&name) name = nullptr;
-#include "libass_functions.inc"
+#include "libass/libass_functions.inc"
 #undef AGI_LIBASS_FN
 };
 

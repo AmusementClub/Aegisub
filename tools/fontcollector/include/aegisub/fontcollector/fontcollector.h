@@ -186,6 +186,87 @@ typedef struct AegisubFontCollectorBatchItem {
 	int result;
 } AegisubFontCollectorBatchItem;
 
+typedef enum AegisubFontNameNormalizationTarget {
+	AEGISUB_FONT_NAME_TARGET_LOCALIZED = 0,
+	AEGISUB_FONT_NAME_TARGET_ENGLISH_WIN32 = 1
+} AegisubFontNameNormalizationTarget;
+
+typedef enum AegisubFontNameSourceKind {
+	AEGISUB_FONT_NAME_SOURCE_STYLE = 0,
+	AEGISUB_FONT_NAME_SOURCE_OVERRIDE = 1
+} AegisubFontNameSourceKind;
+
+typedef enum AegisubFontFamilyMatchKind {
+	AEGISUB_FONT_FAMILY_MATCH_NONE = 0,
+	AEGISUB_FONT_FAMILY_MATCH_EXACT = 1,
+	AEGISUB_FONT_FAMILY_MATCH_CASE_INSENSITIVE_EXACT = 2,
+	AEGISUB_FONT_FAMILY_MATCH_AMBIGUOUS = 3
+} AegisubFontFamilyMatchKind;
+
+/* Versioned, read-only font-name normalization API. */
+typedef struct AegisubFontNameNormalizationRequest {
+	size_t struct_size;
+	/* Paths and encoding names are UTF-8 strings. */
+	char const *input_path;
+	char const *encoding;
+	AegisubFontNameNormalizationTarget target;
+} AegisubFontNameNormalizationRequest;
+
+#define AEGISUB_FONT_NAME_NORMALIZATION_REQUEST_V1_SIZE \
+	(offsetof(AegisubFontNameNormalizationRequest, target) + \
+	 sizeof(((AegisubFontNameNormalizationRequest *)0)->target))
+
+typedef struct AegisubFontNameNormalizationChange {
+	size_t struct_size;
+	AegisubFontNameSourceKind source_kind;
+	char const *style;
+	int line;
+	size_t override_index;
+	int comment;
+	char const *current_name;
+	char const *recommended_name;
+	AegisubFontFamilyMatchKind match_kind;
+	char const *reason_code;
+	int safe_to_apply;
+} AegisubFontNameNormalizationChange;
+
+#define AEGISUB_FONT_NAME_NORMALIZATION_CHANGE_V1_SIZE \
+	(offsetof(AegisubFontNameNormalizationChange, safe_to_apply) + \
+	 sizeof(((AegisubFontNameNormalizationChange *)0)->safe_to_apply))
+
+typedef struct AegisubFontNameNormalizationSummary {
+	size_t struct_size;
+	int catalog_available;
+	size_t scanned_name_count;
+	size_t finding_count;
+	size_t safe_change_count;
+	size_t unsafe_finding_count;
+} AegisubFontNameNormalizationSummary;
+
+#define AEGISUB_FONT_NAME_NORMALIZATION_SUMMARY_V1_SIZE \
+	(offsetof(AegisubFontNameNormalizationSummary, unsafe_finding_count) + \
+	 sizeof(((AegisubFontNameNormalizationSummary *)0)->unsafe_finding_count))
+
+/* Change pointer fields are valid only for the duration of the callback. */
+typedef void (*AegisubFontNameNormalizationCallback)(
+	AegisubFontNameNormalizationChange const *change,
+	void *user_data);
+
+typedef struct AegisubFontNameNormalizationBatchItem {
+	size_t struct_size;
+	AegisubFontNameNormalizationRequest const *request;
+	AegisubFontNameNormalizationCallback callback;
+	void *user_data;
+	AegisubFontNameNormalizationSummary *summary;
+	char *error_buffer;
+	size_t error_buffer_size;
+	int result;
+} AegisubFontNameNormalizationBatchItem;
+
+#define AEGISUB_FONT_NAME_NORMALIZATION_BATCH_ITEM_V1_SIZE \
+	(offsetof(AegisubFontNameNormalizationBatchItem, result) + \
+	 sizeof(((AegisubFontNameNormalizationBatchItem *)0)->result))
+
 AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_collect(
 	AegisubFontCollectorRequest const *request,
 	AegisubFontCollectorEventCallback callback,
@@ -226,6 +307,22 @@ AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_session_collect_batch(
 
 AEGISUB_FONTCOLLECTOR_API void aegisub_fontcollector_session_destroy(
 	AegisubFontCollectorSession *session);
+
+/* Builds a plan only; never modifies input_path. */
+AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_build_normalization_plan(
+	AegisubFontNameNormalizationRequest const *request,
+	AegisubFontNameNormalizationCallback callback,
+	void *user_data,
+	AegisubFontNameNormalizationSummary *summary,
+	char *error_buffer,
+	size_t error_buffer_size);
+
+/* Builds all plans against one immutable font-family catalog snapshot. */
+AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_build_normalization_plan_batch(
+	AegisubFontNameNormalizationBatchItem *const *items,
+	size_t item_count,
+	char *error_buffer,
+	size_t error_buffer_size);
 
 #ifdef __cplusplus
 }

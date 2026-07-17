@@ -316,6 +316,65 @@ struct JsonFileReport {
 	JsonContext context;
 };
 
+struct NormalizationChange {
+	AegisubFontNameSourceKind source_kind = AEGISUB_FONT_NAME_SOURCE_STYLE;
+	std::string style;
+	int line = 0;
+	size_t override_index = 0;
+	bool comment = false;
+	std::string current_name;
+	std::string recommended_name;
+	AegisubFontFamilyMatchKind match_kind = AEGISUB_FONT_FAMILY_MATCH_NONE;
+	std::string reason_code;
+	bool safe_to_apply = false;
+};
+
+struct NormalizationFileReport {
+	std::string input;
+	int result = AEGISUB_FONTCOLLECTOR_OK;
+	std::string error;
+	AegisubFontNameNormalizationSummary summary = {};
+	std::vector<NormalizationChange> changes;
+};
+
+std::string NormalizationTargetName(AegisubFontNameNormalizationTarget target) {
+	return target == AEGISUB_FONT_NAME_TARGET_ENGLISH_WIN32 ? "english" : "localized";
+}
+
+std::string NormalizationSourceKindName(AegisubFontNameSourceKind kind) {
+	return kind == AEGISUB_FONT_NAME_SOURCE_OVERRIDE ? "override" : "style";
+}
+
+std::string FontFamilyMatchKindName(AegisubFontFamilyMatchKind kind) {
+	switch (kind) {
+		case AEGISUB_FONT_FAMILY_MATCH_NONE: return "none";
+		case AEGISUB_FONT_FAMILY_MATCH_EXACT: return "exact";
+		case AEGISUB_FONT_FAMILY_MATCH_CASE_INSENSITIVE_EXACT: return "case_insensitive_exact";
+		case AEGISUB_FONT_FAMILY_MATCH_AMBIGUOUS: return "ambiguous";
+	}
+	return "none";
+}
+
+void CollectNormalizationChange(
+	AegisubFontNameNormalizationChange const *change,
+	void *user_data)
+{
+	if (!change || !user_data)
+		return;
+	auto& changes = *static_cast<std::vector<NormalizationChange> *>(user_data);
+	auto& item = changes.emplace_back();
+	item.source_kind = change->source_kind;
+	item.style = Safe(change->style);
+	item.line = change->line;
+	item.override_index = change->override_index;
+	item.comment = change->comment != 0;
+	item.current_name = Safe(change->current_name);
+	item.recommended_name = Safe(change->recommended_name);
+	item.match_kind = change->match_kind;
+	item.reason_code = Safe(change->reason_code);
+	item.safe_to_apply = change->safe_to_apply != 0;
+}
+
 std::string RequestedBackendName(AegisubFontCollectorBackend backend) {
 	switch (backend) {
 		case AEGISUB_FONTCOLLECTOR_BACKEND_AUTO: return "auto";
@@ -1306,6 +1365,227 @@ void WriteJsonReports(std::ostream& out,
 	out << "\n";
 }
 
+json::Object NormalizationSummaryJson(AegisubFontNameNormalizationSummary const& summary) {
+	json::Object object;
+	object["catalog_available"] = summary.catalog_available != 0;
+	object["finding_count"] = JsonInt(summary.finding_count);
+	object["safe_change_count"] = JsonInt(summary.safe_change_count);
+	object["scanned_name_count"] = JsonInt(summary.scanned_name_count);
+	object["unsafe_finding_count"] = JsonInt(summary.unsafe_finding_count);
+	return object;
+}
+
+json::Object NormalizationChangeJson(NormalizationChange const& change) {
+	json::Object source;
+	source["comment"] = change.comment;
+	source["kind"] = NormalizationSourceKindName(change.source_kind);
+	source["line"] = change.line;
+	source["override_index"] = JsonInt(change.override_index);
+	source["style"] = change.style;
+
+	json::Object object;
+	object["current_name"] = change.current_name;
+	object["match"] = FontFamilyMatchKindName(change.match_kind);
+	object["reason"] = change.reason_code;
+	object["recommended_name"] = change.recommended_name;
+	object["safe_to_apply"] = change.safe_to_apply;
+	object["source"] = std::move(source);
+	return object;
+}
+
+json::Object NormalizationReportJson(NormalizationFileReport const& report) {
+	json::Array changes;
+	changes.reserve(report.changes.size());
+	for (auto const& change : report.changes)
+		changes.emplace_back(NormalizationChangeJson(change));
+
+	json::Object object;
+	object["changes"] = std::move(changes);
+	object["error"] = report.error;
+	object["input"] = report.input;
+	object["ok"] = report.result == AEGISUB_FONTCOLLECTOR_OK;
+	object["result"] = report.result;
+	object["summary"] = NormalizationSummaryJson(report.summary);
+	return object;
+}
+
+void WriteNormalizationJson(
+	std::ostream& out,
+	std::vector<NormalizationFileReport> const& reports,
+	AegisubFontNameNormalizationTarget target,
+	int result)
+{
+	json::Array files;
+	files.reserve(reports.size());
+	std::size_t scanned = 0;
+	std::size_t findings = 0;
+	std::size_t safe = 0;
+	std::size_t unsafe = 0;
+	// Root catalog_available is true only when every successfully analyzed
+	// file reported a usable family catalog (batch shares one snapshot).
+	bool saw_ok_report = false;
+	bool catalog_available = true;
+	for (auto const& report : reports) {
+		files.emplace_back(NormalizationReportJson(report));
+		scanned += report.summary.scanned_name_count;
+		findings += report.summary.finding_count;
+		safe += report.summary.safe_change_count;
+		unsafe += report.summary.unsafe_finding_count;
+		if (report.result == AEGISUB_FONTCOLLECTOR_OK) {
+			saw_ok_report = true;
+			if (!report.summary.catalog_available)
+				catalog_available = false;
+		}
+	}
+	if (!saw_ok_report)
+		catalog_available = false;
+
+	json::Object summary;
+	summary["catalog_available"] = catalog_available;
+	summary["finding_count"] = JsonInt(findings);
+	summary["safe_change_count"] = JsonInt(safe);
+	summary["scanned_name_count"] = JsonInt(scanned);
+	summary["unsafe_finding_count"] = JsonInt(unsafe);
+
+	json::Object root;
+	root["command"] = "normalize";
+	root["files"] = std::move(files);
+	root["ok"] = result == AEGISUB_FONTCOLLECTOR_OK;
+	root["result"] = result;
+	root["schema_version"] = 2;
+	root["summary"] = std::move(summary);
+	root["target"] = NormalizationTargetName(target);
+	agi::JsonWriter::Write(root, out);
+	out << "\n";
+}
+
+std::string NormalizationLocation(NormalizationChange const& change) {
+	std::ostringstream out;
+	if (change.source_kind == AEGISUB_FONT_NAME_SOURCE_STYLE) {
+		out << "style '" << change.style << "'";
+		if (change.line > 0)
+			out << " (line " << change.line << ")";
+	}
+	else {
+		out << (change.comment ? "comment" : "dialogue") << " line " << change.line;
+		out << " (\\fn #" << change.override_index + 1 << ")";
+	}
+	return out.str();
+}
+
+void PrintNormalizationReport(NormalizationFileReport const& report, bool show_header, bool details) {
+	if (show_header)
+		std::cout << report.input << ":\n";
+	if (report.result != AEGISUB_FONTCOLLECTOR_OK) {
+		std::cout << "ERROR: " << report.input;
+		if (!report.error.empty())
+			std::cout << ": " << report.error;
+		std::cout << "\n";
+		return;
+	}
+
+	for (auto const& change : report.changes) {
+		std::cout << (change.safe_to_apply ? "CHANGE" : "ISSUE") << ": ";
+		std::cout << NormalizationLocation(change) << ": '" << change.current_name << "'";
+		if (!change.recommended_name.empty())
+			std::cout << " -> '" << change.recommended_name << "'";
+		std::cout << " [" << change.reason_code << "]";
+		if (details)
+			std::cout << " match=" << FontFamilyMatchKindName(change.match_kind);
+		std::cout << "\n";
+	}
+
+	if (report.changes.empty())
+		std::cout << "OK: " << report.input << ": no font name changes\n";
+	else
+		std::cout << "Summary: " << report.summary.safe_change_count << " safe changes, "
+		          << report.summary.unsafe_finding_count << " issues, "
+		          << report.summary.scanned_name_count << " names scanned\n";
+}
+
+struct NormalizationCliOptions {
+	std::vector<std::string> input_args;
+	std::string encoding;
+	std::string target = "localized";
+	bool details = false;
+	bool json = false;
+	bool recursive = false;
+};
+
+int RunNormalization(NormalizationCliOptions const& options) {
+	auto inputs = ExpandInputs(options.input_args, options.recursive);
+	auto target = options.target == "english"
+		? AEGISUB_FONT_NAME_TARGET_ENGLISH_WIN32
+		: AEGISUB_FONT_NAME_TARGET_LOCALIZED;
+	if (inputs.empty()) {
+		if (options.json)
+			WriteNormalizationJson(std::cout, {}, target, AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT);
+		else
+			std::cerr << "fontcollector normalize failed: no ASS/SSA files found\n";
+		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+	}
+
+	std::vector<NormalizationFileReport> reports(inputs.size());
+	std::vector<AegisubFontNameNormalizationRequest> requests(inputs.size());
+	std::vector<AegisubFontNameNormalizationBatchItem> items(inputs.size());
+	std::vector<AegisubFontNameNormalizationBatchItem *> item_pointers(inputs.size());
+	std::vector<std::array<char, 4096>> errors(inputs.size());
+	for (size_t i = 0; i < inputs.size(); ++i) {
+		auto& report = reports[i];
+		report.input = inputs[i];
+		report.summary.struct_size = sizeof(report.summary);
+
+		auto& request = requests[i];
+		request.struct_size = sizeof(request);
+		request.input_path = inputs[i].c_str();
+		request.encoding = options.encoding.c_str();
+		request.target = target;
+
+		auto& item = items[i];
+		item.struct_size = sizeof(item);
+		item.request = &request;
+		item.callback = &CollectNormalizationChange;
+		item.user_data = &report.changes;
+		item.summary = &report.summary;
+		item.error_buffer = errors[i].data();
+		item.error_buffer_size = errors[i].size();
+		item_pointers[i] = &item;
+	}
+
+	std::array<char, 4096> batch_error = {};
+	auto batch_result = aegisub_fontcollector_build_normalization_plan_batch(
+		item_pointers.data(), item_pointers.size(), batch_error.data(), batch_error.size());
+	if (batch_result != AEGISUB_FONTCOLLECTOR_OK) {
+		for (auto& report : reports) {
+			report.result = batch_result;
+			report.error = batch_error.data();
+		}
+		if (options.json)
+			WriteNormalizationJson(std::cout, reports, target, batch_result);
+		else
+			std::cerr << "fontcollector normalize failed: " << batch_error.data() << "\n";
+		return batch_result;
+	}
+
+	int exit_code = AEGISUB_FONTCOLLECTOR_OK;
+	for (size_t i = 0; i < reports.size(); ++i) {
+		reports[i].result = items[i].result;
+		reports[i].error = errors[i].data();
+		exit_code = std::max(exit_code, reports[i].result);
+	}
+
+	if (options.json)
+		WriteNormalizationJson(std::cout, reports, target, exit_code);
+	else {
+		for (size_t i = 0; i < reports.size(); ++i) {
+			if (i)
+				std::cout << "\n";
+			PrintNormalizationReport(reports[i], reports.size() > 1, options.details);
+		}
+	}
+	return exit_code;
+}
+
 struct CliOptions {
 	std::vector<std::string> input_args;
 	std::string encoding;
@@ -1500,6 +1780,18 @@ void AddCommonOptions(CLI::App& app, CliOptions& options) {
 	app.add_flag("--json", options.json, "Print structured JSON output for automation");
 	app.add_flag("-r,--recursive", options.recursive, "Recursively scan input directories for .ass/.ssa files");
 }
+
+void AddNormalizationOptions(CLI::App& app, NormalizationCliOptions& options) {
+	app.add_option("inputs", options.input_args, "ASS/SSA subtitle files or directories")
+		->required()
+		->expected(1, -1);
+	app.add_option("--encoding", options.encoding, "Input subtitle encoding; omitted enables BOM/UTF-8 detection");
+	app.add_option("--target", options.target, "Preferred family name: localized or english")
+		->check(CLI::IsMember({"localized", "english"}));
+	app.add_flag("--details", options.details, "Include match evidence in text output");
+	app.add_flag("--json", options.json, "Print structured JSON normalization plans");
+	app.add_flag("-r,--recursive", options.recursive, "Recursively scan input directories for .ass/.ssa files");
+}
 }
 
 int main(int argc, char **argv) {
@@ -1514,6 +1806,22 @@ int main(int argc, char **argv) {
 #endif
 
 	std::string command = argc > 1 ? argv[1] : "";
+	if (command == "normalize") {
+		NormalizationCliOptions options;
+		std::vector<std::string> command_args;
+		command_args.reserve(static_cast<size_t>(argc - 1));
+		command_args.emplace_back(std::string(argv[0]) + " " + command);
+		for (int i = 2; i < argc; ++i)
+			command_args.emplace_back(argv[i]);
+		auto command_argv = MakeArgv(command_args);
+		int command_argc = static_cast<int>(command_argv.size());
+
+		CLI::App app{"Build a read-only ASS font-name normalization plan"};
+		AddNormalizationOptions(app, options);
+		CLI11_PARSE(app, command_argc, command_argv.data());
+		return RunNormalization(options);
+	}
+
 	if (command == "check" || command == "collect" || command == "validate" || command == "list") {
 		CliOptions options;
 		std::vector<std::string> command_args;
@@ -1560,7 +1868,7 @@ int main(int argc, char **argv) {
 		return RunFontCollector(options);
 	}
 
-	CLI::App app{"Collect or check font files used by ASS/SSA subtitle scripts. Subcommands: check, collect, validate, list. Legacy flags are also supported."};
+	CLI::App app{"Collect or check font files used by ASS/SSA subtitle scripts. Subcommands: check, collect, validate, list, normalize. Legacy flags are also supported."};
 
 	CliOptions options;
 	bool check = false;

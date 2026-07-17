@@ -146,6 +146,8 @@ set(AEGISUB_FONTCOLLECTOR_SOURCES
     ${AEGISUB_ROOT}/src/ass_time_projection.cpp
     ${AEGISUB_ROOT}/src/font_collector_core.cpp
     ${AEGISUB_ROOT}/src/font_collector_unicode.cpp
+    ${AEGISUB_ROOT}/src/font_family_catalog.cpp
+    ${AEGISUB_ROOT}/src/font_name_normalization.cpp
     ${AEGISUB_ROOT}/src/font_file_lister.cpp
     ${AEGISUB_ROOT}/src/font_matching_common.cpp
     ${AEGISUB_ROOT}/src/string_codec.cpp
@@ -205,6 +207,7 @@ function(aegisub_fontcollector_configure_library target_name linkage)
         find_package(Fontconfig REQUIRED)
         target_compile_definitions(${target_name} PRIVATE AEGISUB_FONTCOLLECTOR_ENABLE_FONTCONFIG)
         target_sources(${target_name} PRIVATE
+            ${AEGISUB_ROOT}/src/font_family_catalog_win.cpp
             ${AEGISUB_ROOT}/src/font_file_lister_gdi.cpp
             ${AEGISUB_ROOT}/src/font_file_lister_dwrite.cpp
             ${AEGISUB_ROOT}/src/font_file_lister_fontconfig.cpp)
@@ -276,6 +279,13 @@ add_custom_command(TARGET fontcollector_cli POST_BUILD
 )
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND BUILD_TESTING AND WIN32)
+    add_executable(fontcollector_api_smoke tests/fontcollector_api_smoke.cpp)
+    aegisub_fontcollector_set_output_dirs(fontcollector_api_smoke "${AEGISUB_FONTCOLLECTOR_RUNTIME_DIR}")
+    target_compile_features(fontcollector_api_smoke PRIVATE cxx_std_20)
+    target_link_libraries(fontcollector_api_smoke PRIVATE aegisub_fontcollector)
+    target_include_directories(fontcollector_api_smoke PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+    add_test(NAME fontcollector_api_smoke COMMAND fontcollector_api_smoke)
     add_test(
         NAME fontcollector_cli_smoke
         COMMAND ${CMAKE_COMMAND}

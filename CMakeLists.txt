@@ -861,6 +861,7 @@ set(AEGISUB_CORE_SOURCES
     src/font_face_selection.cpp
     src/font_family_catalog.cpp
     src/font_family_catalog_cache.cpp
+    src/font_name_normalization.cpp
     src/font_file_lister.cpp
     src/font_matching_common.cpp
     # Utility / math / codecs

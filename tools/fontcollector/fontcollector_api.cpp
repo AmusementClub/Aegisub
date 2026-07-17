@@ -6,7 +6,9 @@
 #include "ass_io_core.h"
 #include "ass_dialogue.h"
 #include "font_collector_core.h"
+#include "font_family_catalog.h"
 #include "font_file_lister.h"
+#include "font_name_normalization.h"
 #include "text_file_reader.h"
 
 #include <libaegisub/charset.h>
@@ -36,6 +38,16 @@ static_assert(static_cast<int>(FontCollectorBackend::Fontconfig) == AEGISUB_FONT
 static_assert(static_cast<int>(FontCollectorBackend::CoreText) == AEGISUB_FONTCOLLECTOR_BACKEND_CORETEXT);
 static_assert(static_cast<int>(FontCollectorEventType::FontBackendInfo) == AEGISUB_FONTCOLLECTOR_EVENT_FONT_BACKEND_INFO);
 static_assert(static_cast<int>(FontCollectorEventType::CollectionNewline) == AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_NEWLINE);
+static_assert(static_cast<int>(FontNameNormalizationTarget::Localized) == AEGISUB_FONT_NAME_TARGET_LOCALIZED);
+static_assert(static_cast<int>(FontNameNormalizationTarget::EnglishWin32) == AEGISUB_FONT_NAME_TARGET_ENGLISH_WIN32);
+static_assert(static_cast<int>(FontNameSourceKind::Style) == AEGISUB_FONT_NAME_SOURCE_STYLE);
+static_assert(static_cast<int>(FontNameSourceKind::Override) == AEGISUB_FONT_NAME_SOURCE_OVERRIDE);
+static_assert(static_cast<int>(FontFamilyMatchKind::None) == AEGISUB_FONT_FAMILY_MATCH_NONE);
+static_assert(static_cast<int>(FontFamilyMatchKind::Ambiguous) == AEGISUB_FONT_FAMILY_MATCH_AMBIGUOUS);
+static_assert(AEGISUB_FONT_NAME_NORMALIZATION_REQUEST_V1_SIZE <= sizeof(AegisubFontNameNormalizationRequest));
+static_assert(AEGISUB_FONT_NAME_NORMALIZATION_CHANGE_V1_SIZE <= sizeof(AegisubFontNameNormalizationChange));
+static_assert(AEGISUB_FONT_NAME_NORMALIZATION_SUMMARY_V1_SIZE <= sizeof(AegisubFontNameNormalizationSummary));
+static_assert(AEGISUB_FONT_NAME_NORMALIZATION_BATCH_ITEM_V1_SIZE <= sizeof(AegisubFontNameNormalizationBatchItem));
 
 void WriteError(char *buffer, size_t buffer_size, std::string const& message) {
 	if (!buffer || buffer_size == 0)
@@ -52,9 +64,23 @@ bool IsEventLine(std::string_view line) {
 	return StartsWith(line, "Dialogue:") || StartsWith(line, "Comment:");
 }
 
+std::string_view TrimAsciiWhitespace(std::string_view line) {
+	while (!line.empty() && std::isspace(static_cast<unsigned char>(line.front())))
+		line.remove_prefix(1);
+	while (!line.empty() && std::isspace(static_cast<unsigned char>(line.back())))
+		line.remove_suffix(1);
+	return line;
+}
+
 bool IsSectionHeader(std::string_view line) {
 	return line.size() >= 2 && line.front() == '[' && line.back() == ']';
 }
+
+enum class SourceSection {
+	Other,
+	Styles,
+	Events
+};
 
 std::string LowerAscii(std::string_view value) {
 	std::string result(value);
@@ -64,23 +90,180 @@ std::string LowerAscii(std::string_view value) {
 	return result;
 }
 
-void AssignSourceLineNumbers(AssFile& subs, agi::fs::path const& input_path, std::string const& encoding) {
+std::vector<int> AssignSourceLineNumbers(
+	AssFile& subs,
+	agi::fs::path const& input_path,
+	std::string const& encoding)
+{
 	TextFileReader reader(input_path, encoding);
+	auto style = subs.Styles.begin();
 	auto event = subs.Events.begin();
-	bool in_events = false;
-	for (int line_number = 1; reader.HasMoreLines() && event != subs.Events.end(); ++line_number) {
+	SourceSection section = SourceSection::Other;
+	std::vector<int> style_lines;
+	style_lines.reserve(subs.Styles.size());
+	for (int line_number = 1; reader.HasMoreLines(); ++line_number) {
 		auto line = reader.ReadLineFromFile();
-		if (IsSectionHeader(line)) {
-			in_events = LowerAscii(line) == "[events]";
+		auto const trimmed_line = TrimAsciiWhitespace(line);
+		if (IsSectionHeader(trimmed_line)) {
+			auto const header = LowerAscii(trimmed_line);
+			if (header == "[v4 styles]" || header == "[v4+ styles]")
+				section = SourceSection::Styles;
+			else if (header == "[events]")
+				section = SourceSection::Events;
+			else
+				section = SourceSection::Other;
 			continue;
 		}
 
-		if (!in_events || !IsEventLine(line))
+		if (section == SourceSection::Styles && StartsWith(line, "Style:")) {
+			if (style != subs.Styles.end()) {
+				style_lines.push_back(line_number);
+				++style;
+			}
 			continue;
+		}
 
-		event->Row = line_number - 1;
-		++event;
+		if (section == SourceSection::Events && IsEventLine(line) && event != subs.Events.end()) {
+			event->Row = line_number - 1;
+			++event;
+		}
 	}
+	return style_lines;
+}
+
+bool IsNormalizationTargetValid(AegisubFontNameNormalizationTarget target) {
+	return target == AEGISUB_FONT_NAME_TARGET_LOCALIZED ||
+	       target == AEGISUB_FONT_NAME_TARGET_ENGLISH_WIN32;
+}
+
+int ValidateNormalizationRequest(
+	AegisubFontNameNormalizationRequest const *request,
+	char *error_buffer,
+	size_t error_buffer_size)
+{
+	if (!request || request->struct_size < AEGISUB_FONT_NAME_NORMALIZATION_REQUEST_V1_SIZE) {
+		WriteError(error_buffer, error_buffer_size, "normalization request with a valid struct_size is required");
+		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+	}
+	if (!request->input_path || !*request->input_path) {
+		WriteError(error_buffer, error_buffer_size, "input_path is required");
+		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+	}
+	if (!IsNormalizationTargetValid(request->target)) {
+		WriteError(error_buffer, error_buffer_size, "invalid font-name normalization target");
+		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+	}
+	return AEGISUB_FONTCOLLECTOR_OK;
+}
+
+int ValidateNormalizationSummary(
+	AegisubFontNameNormalizationSummary const *summary,
+	char *error_buffer,
+	size_t error_buffer_size)
+{
+	if (summary && summary->struct_size < AEGISUB_FONT_NAME_NORMALIZATION_SUMMARY_V1_SIZE) {
+		WriteError(error_buffer, error_buffer_size, "normalization summary struct_size is too small");
+		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+	}
+	return AEGISUB_FONTCOLLECTOR_OK;
+}
+
+void ResetNormalizationSummary(AegisubFontNameNormalizationSummary *summary) {
+	if (!summary)
+		return;
+	auto const capacity = summary->struct_size;
+	std::memset(summary, 0, std::min(capacity, sizeof(*summary)));
+	summary->struct_size = capacity;
+}
+
+void WriteNormalizationSummary(
+	AegisubFontNameNormalizationSummary *destination,
+	AegisubFontNameNormalizationSummary const& source)
+{
+	if (!destination)
+		return;
+	auto const capacity = destination->struct_size;
+	std::memcpy(destination, &source, std::min(capacity, sizeof(source)));
+	destination->struct_size = capacity;
+}
+
+void EmitNormalizationChange(
+	FontNameNormalizationChange const& change,
+	AegisubFontNameNormalizationCallback callback,
+	void *user_data)
+{
+	if (!callback)
+		return;
+
+	AegisubFontNameNormalizationChange c_change = {};
+	c_change.struct_size = sizeof(c_change);
+	c_change.source_kind = static_cast<AegisubFontNameSourceKind>(change.source.kind);
+	c_change.style = change.source.style.c_str();
+	c_change.line = change.source.line;
+	c_change.override_index = change.source.override_index;
+	c_change.comment = change.source.comment;
+	c_change.current_name = change.current_name.c_str();
+	c_change.recommended_name = change.recommended_name.c_str();
+	c_change.match_kind = static_cast<AegisubFontFamilyMatchKind>(change.match_kind);
+	c_change.reason_code = change.reason_code.c_str();
+	c_change.safe_to_apply = change.safe_to_apply;
+	callback(&c_change, user_data);
+}
+
+int BuildNormalizationPlanWithCatalog(
+	FontFamilyCatalog const& catalog,
+	AegisubFontNameNormalizationRequest const *request,
+	AegisubFontNameNormalizationCallback callback,
+	void *user_data,
+	AegisubFontNameNormalizationSummary *summary,
+	char *error_buffer,
+	size_t error_buffer_size)
+{
+	WriteError(error_buffer, error_buffer_size, "");
+	if (auto result = ValidateNormalizationSummary(summary, error_buffer, error_buffer_size))
+		return result;
+	ResetNormalizationSummary(summary);
+	if (auto result = ValidateNormalizationRequest(request, error_buffer, error_buffer_size))
+		return result;
+
+	try {
+		auto input_path = agi::fs::PathFromString(request->input_path);
+		auto encoding = request->encoding && *request->encoding
+			? std::string(request->encoding)
+			: agi::charset::Detect(input_path);
+		auto subs = ReadAssFileForCore(input_path, encoding);
+		auto style_source_lines = AssignSourceLineNumbers(subs, input_path, encoding);
+		auto plan = BuildFontNameNormalizationPlan(
+			subs,
+			catalog,
+			static_cast<FontNameNormalizationTarget>(request->target),
+			style_source_lines);
+
+		AegisubFontNameNormalizationSummary local_summary = {};
+		local_summary.struct_size = sizeof(local_summary);
+		local_summary.catalog_available = plan.catalog_available;
+		local_summary.scanned_name_count = plan.scanned_name_count;
+		local_summary.finding_count = plan.changes.size();
+		for (auto const& change : plan.changes) {
+			if (change.safe_to_apply)
+				++local_summary.safe_change_count;
+			else
+				++local_summary.unsafe_finding_count;
+			EmitNormalizationChange(change, callback, user_data);
+		}
+		WriteNormalizationSummary(summary, local_summary);
+		return AEGISUB_FONTCOLLECTOR_OK;
+	}
+	catch (agi::Exception const& e) {
+		WriteError(error_buffer, error_buffer_size, e.GetMessage());
+	}
+	catch (std::exception const& e) {
+		WriteError(error_buffer, error_buffer_size, e.what());
+	}
+	catch (...) {
+		WriteError(error_buffer, error_buffer_size, "unknown error");
+	}
+	return AEGISUB_FONTCOLLECTOR_READ_FAILED;
 }
 
 void ResetSummary(AegisubFontCollectorSummary *summary) {
@@ -753,4 +936,83 @@ extern "C" int aegisub_fontcollector_collect(
 		WriteError(error_buffer, error_buffer_size, "unknown error");
 		return AEGISUB_FONTCOLLECTOR_COLLECT_FAILED;
 	}
+}
+
+extern "C" int aegisub_fontcollector_build_normalization_plan(
+	AegisubFontNameNormalizationRequest const *request,
+	AegisubFontNameNormalizationCallback callback,
+	void *user_data,
+	AegisubFontNameNormalizationSummary *summary,
+	char *error_buffer,
+	size_t error_buffer_size)
+{
+	WriteError(error_buffer, error_buffer_size, "");
+	if (auto result = ValidateNormalizationSummary(summary, error_buffer, error_buffer_size))
+		return result;
+	ResetNormalizationSummary(summary);
+	if (auto result = ValidateNormalizationRequest(request, error_buffer, error_buffer_size))
+		return result;
+
+	try {
+		auto catalog = BuildFontFamilyCatalog();
+		return BuildNormalizationPlanWithCatalog(
+			catalog, request, callback, user_data, summary, error_buffer, error_buffer_size);
+	}
+	catch (std::exception const& e) {
+		WriteError(error_buffer, error_buffer_size, e.what());
+	}
+	catch (...) {
+		WriteError(error_buffer, error_buffer_size, "failed to build font-family catalog");
+	}
+	return AEGISUB_FONTCOLLECTOR_COLLECT_FAILED;
+}
+
+extern "C" int aegisub_fontcollector_build_normalization_plan_batch(
+	AegisubFontNameNormalizationBatchItem *const *items,
+	size_t item_count,
+	char *error_buffer,
+	size_t error_buffer_size)
+{
+	WriteError(error_buffer, error_buffer_size, "");
+	if (!items && item_count) {
+		WriteError(error_buffer, error_buffer_size, "normalization batch items are required");
+		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+	}
+	for (size_t i = 0; i < item_count; ++i) {
+		if (!items[i]) {
+			WriteError(error_buffer, error_buffer_size, "normalization batch item is required");
+			return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+		}
+		if (items[i]->struct_size < AEGISUB_FONT_NAME_NORMALIZATION_BATCH_ITEM_V1_SIZE) {
+			WriteError(error_buffer, error_buffer_size, "normalization batch item struct_size is too small");
+			return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+		}
+		items[i]->result = AEGISUB_FONTCOLLECTOR_COLLECT_FAILED;
+	}
+
+	FontFamilyCatalog catalog;
+	try {
+		catalog = BuildFontFamilyCatalog();
+	}
+	catch (std::exception const& e) {
+		WriteError(error_buffer, error_buffer_size, e.what());
+		return AEGISUB_FONTCOLLECTOR_COLLECT_FAILED;
+	}
+	catch (...) {
+		WriteError(error_buffer, error_buffer_size, "failed to build font-family catalog");
+		return AEGISUB_FONTCOLLECTOR_COLLECT_FAILED;
+	}
+
+	for (size_t i = 0; i < item_count; ++i) {
+		auto& item = *items[i];
+		item.result = BuildNormalizationPlanWithCatalog(
+			catalog,
+			item.request,
+			item.callback,
+			item.user_data,
+			item.summary,
+			item.error_buffer,
+			item.error_buffer_size);
+	}
+	return AEGISUB_FONTCOLLECTOR_OK;
 }

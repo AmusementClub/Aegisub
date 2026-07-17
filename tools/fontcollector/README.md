@@ -43,6 +43,7 @@ The preferred command form is:
 fontcollector list <file-or-dir> [more...] [--recursive] [--details] [--json]
 fontcollector check <file-or-dir> [more...] [--recursive] [--details] [--json] [--strict]
 fontcollector validate <file-or-dir> [more...] [--recursive] [--details] [--json]
+fontcollector normalize <file-or-dir> [more...] [--target localized|english] [--recursive] [--details] [--json]
 fontcollector collect <file-or-dir> [more...] --to <dir> [--recursive] [--details] [--json] [--strict]
 fontcollector collect <file-or-dir> [more...] --to-script-dir [--recursive] [--details] [--json] [--strict]
 ```
@@ -56,6 +57,8 @@ fontcollector <file-or-dir> [more...] --copy-to-script-dir
 ```
 
 Directory inputs scan immediate `.ass` and `.ssa` children; add `--recursive` to include subdirectories. `validate` is strict by default and exits with `20` when fonts, styles, glyphs, or copies are missing.
+
+`normalize` is read-only. It scans style font names and non-empty explicit `\fn` tags, then reports safe canonical-name changes and unsafe findings without writing the input file. `--target` defaults to `localized`; use `--target english` for verified English Win32 family names. Full, PostScript, and typographic names remain informational and are never treated as safe ASS family aliases.
 
 Output defaults to concise human-readable text. It reports actionable issues with input file paths and source line numbers, then prints one summary line per input file. Use `--details` to include backend/cache/search events plus full ASS font usage and matched font details. Use `--json` for automation.
 
@@ -98,3 +101,27 @@ int aegisub_fontcollector_session_collect_batch(
 ```
 
 Each `AegisubFontCollectorBatchItem` owns its callbacks, summary pointer, error buffer, and result code. Invalid items report their own errors and do not prevent valid items in the same batch from being resolved.
+
+Font-name normalization uses a separate versioned, read-only C API. Every new request, result, summary, and batch item begins with `struct_size`. Initialize it to `sizeof(struct)` for current headers; the public `*_V1_SIZE` constants describe the stable v1 prefixes accepted by newer libraries:
+
+```c
+int aegisub_fontcollector_build_normalization_plan(
+    AegisubFontNameNormalizationRequest const *request,
+    AegisubFontNameNormalizationCallback callback,
+    void *user_data,
+    AegisubFontNameNormalizationSummary *summary,
+    char *error_buffer,
+    size_t error_buffer_size);
+
+int aegisub_fontcollector_build_normalization_plan_batch(
+    AegisubFontNameNormalizationBatchItem *const *items,
+    size_t item_count,
+    char *error_buffer,
+    size_t error_buffer_size);
+```
+
+The batch API takes an array of item pointers, constructs one immutable family catalog, and uses it for every input plan. Each item's request pointer must remain valid for the call. Callback strings are valid only for the callback duration. Neither function writes subtitle files.
+
+Callers must inspect each `AegisubFontNameNormalizationBatchItem::result` (and that item's error buffer). The batch function return value is only for argument/catalog-level failures; individual input read or analysis failures do not make the batch return non-zero by themselves.
+
+JSON output for `fontcollector normalize --json` uses `schema_version: 2`. The root `summary` aggregates counts across files and includes `catalog_available` (true only when every successfully analyzed file had a usable family catalog).

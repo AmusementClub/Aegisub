@@ -15,12 +15,14 @@ set(A_ASS "${TEST_WORK_DIR}/a.ass")
 set(B_ASS "${TEST_WORK_DIR}/b.ass")
 set(MISSING_ASS "${TEST_WORK_DIR}/missing.ass")
 set(SIMHEI_ASS "${TEST_WORK_DIR}/simhei.ass")
+set(SIMHEI_LOCALIZED_ASS "${TEST_WORK_DIR}/simhei-localized.ass")
 set(COPY_DIR "${TEST_WORK_DIR}/copy")
 
 file(WRITE "${A_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,ASCII only\n")
 file(WRITE "${B_ASS}" "${COMMON_HEADER}; physical line padding\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,Missing maybe 一\n")
 file(WRITE "${MISSING_ASS}" "[Script Info]\nScriptType: v4.00+\nWrapStyle: 0\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,DefinitelyMissingAegisubFont,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n; padding\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,Hello\n")
 file(WRITE "${SIMHEI_ASS}" "[Script Info]\nScriptType: v4.00+\nWrapStyle: 0\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,SimHei,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,Hello\n")
+file(WRITE "${SIMHEI_LOCALIZED_ASS}" "[Script Info]\nScriptType: v4.00+\nWrapStyle: 0\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,黑体,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\fn黑体}Hello\n")
 
 function(run_fontcollector EXPECTED_RESULT)
 	execute_process(
@@ -88,6 +90,28 @@ function(require_json_array_contains JSON_TEXT EXPECTED LABEL)
 	message(FATAL_ERROR "json ${LABEL} did not contain ${EXPECTED}\njson:\n${JSON_TEXT}")
 endfunction()
 
+file(READ "${MISSING_ASS}" MISSING_ASS_BEFORE_NORMALIZE)
+run_fontcollector(0 normalize "${MISSING_ASS}" --target english --json)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "2" "normalize schema version" schema_version)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "normalize" "normalize command" command)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "english" "normalize target" target)
+# CMake string(JSON GET) reports JSON true as ON.
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "ON" "normalize root catalog available" summary catalog_available)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "ON" "normalize file catalog available" files 0 summary catalog_available)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "1" "normalize unsafe finding count" summary unsafe_finding_count)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "unrecognized_family_name" "normalize reason" files 0 changes 0 reason)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "style" "normalize source kind" files 0 changes 0 source kind)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "Default" "normalize source style" files 0 changes 0 source style)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "7" "normalize style source line" files 0 changes 0 source line)
+file(READ "${MISSING_ASS}" MISSING_ASS_AFTER_NORMALIZE)
+if(NOT MISSING_ASS_BEFORE_NORMALIZE STREQUAL MISSING_ASS_AFTER_NORMALIZE)
+	message(FATAL_ERROR "normalize command modified its input file")
+endif()
+
+run_fontcollector(0 normalize "${MISSING_ASS}" --target localized --details)
+require_contains("${FONTCOLLECTOR_STDOUT}" "ISSUE: style 'Default' (line 7)" "normalize human style line")
+require_contains("${FONTCOLLECTOR_STDOUT}" "unrecognized_family_name" "normalize human reason")
+
 run_fontcollector(0 check "${A_ASS}" "${B_ASS}" --json)
 require_json_equals("${FONTCOLLECTOR_STDOUT}" "1" "json schema version" schema_version)
 json_length(file_count "${FONTCOLLECTOR_STDOUT}" files)
@@ -115,6 +139,16 @@ require_contains("${FONTCOLLECTOR_STDOUT}" "DefinitelyMissingAegisubFont" "list 
 require_not_contains("${FONTCOLLECTOR_STDOUT}" "not installed" "old list missing suffix")
 
 if(WIN32 AND EXISTS "$ENV{WINDIR}/Fonts/simhei.ttf")
+	run_fontcollector(0 normalize "${SIMHEI_ASS}" --target localized --json)
+	require_json_equals("${FONTCOLLECTOR_STDOUT}" "1" "localized normalize safe change count" summary safe_change_count)
+	require_json_equals("${FONTCOLLECTOR_STDOUT}" "黑体" "localized normalize recommendation" files 0 changes 0 recommended_name)
+
+	run_fontcollector(0 normalize "${SIMHEI_LOCALIZED_ASS}" --target english --json)
+	require_json_equals("${FONTCOLLECTOR_STDOUT}" "2" "English normalize safe change count" summary safe_change_count)
+	require_json_equals("${FONTCOLLECTOR_STDOUT}" "SimHei" "English normalize style recommendation" files 0 changes 0 recommended_name)
+	require_json_equals("${FONTCOLLECTOR_STDOUT}" "SimHei" "English normalize override recommendation" files 0 changes 1 recommended_name)
+	require_json_equals("${FONTCOLLECTOR_STDOUT}" "11" "English normalize override line" files 0 changes 1 source line)
+
 	run_fontcollector(0 list "${SIMHEI_ASS}")
 	require_contains("${FONTCOLLECTOR_STDOUT}" "黑体 <SimHei>" "list localized display font")
 

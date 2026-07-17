@@ -475,7 +475,8 @@ bool VideoDisplay::InitContext() {
 	if (GetClientSize() == wxSize(0, 0))
 		return false;
 
-	if (!glContext) {
+	bool const created_context = !glContext;
+	if (created_context) {
 		glContext = agi::make_unique<wxGLContext>(this);
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 		++gl_context_generation;
@@ -484,8 +485,13 @@ bool VideoDisplay::InitContext() {
 #endif
 	}
 
+	bool made_current = false;
+	{
+		perf_trace::VideoUiDurationScope trace("video_display.context_activate");
+		made_current = SetCurrent(*glContext);
+		trace.SetDetails(made_current ? 1 : 0, created_context ? 1 : 0);
+	}
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
-	bool const made_current = SetCurrent(*glContext);
 	if (IsSkiaVideoRuntimeRequested() && (!glContext->IsOK() || !made_current)) {
 		if (auto *compositor = EnsureSkiaVideoCompositor())
 			compositor->NotifyContextActivationFailure(CurrentSkiaGlContextToken());
@@ -493,7 +499,7 @@ bool VideoDisplay::InitContext() {
 		return false;
 	}
 #else
-	SetCurrent(*glContext);
+	(void)made_current;
 #endif
 	return true;
 }
@@ -1615,6 +1621,7 @@ void VideoDisplay::DoRender() try {
 		ScheduleRender();
 		return;
 	}
+	perf_trace::VideoUiDurationScope render_trace("video_display.render");
 
 	render_in_progress = true;
 	render_scheduled = false;
@@ -1790,7 +1797,13 @@ void VideoDisplay::DoRender() try {
 
 	DrawOverlayPass(client_size);
 
-	SwapBuffers();
+	bool swapped = false;
+	{
+		perf_trace::VideoUiDurationScope swap_trace("video_display.swap");
+		swapped = SwapBuffers();
+		swap_trace.SetDetails(swapped ? 1 : 0, presented_new_frame ? 1 : 0);
+	}
+	render_trace.SetDetails(presented_new_frame ? 1 : 0, swapped ? 1 : 0);
 
 	if (presented_new_frame) {
 		FramePresented(presented_frame_number);

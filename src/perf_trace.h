@@ -37,6 +37,24 @@ public:
 	void Cancel() noexcept { started_ns = 0; }
 };
 
+class VideoUiDurationScope {
+	char const* phase = nullptr;
+	int64_t started_ns = 0;
+	int detail_a = -1;
+	int detail_b = -1;
+
+public:
+	explicit VideoUiDurationScope(char const* phase, int detail_a = -1, int detail_b = -1) noexcept;
+	~VideoUiDurationScope() noexcept;
+
+	VideoUiDurationScope(VideoUiDurationScope const&) = delete;
+	VideoUiDurationScope& operator=(VideoUiDurationScope const&) = delete;
+
+	bool IsActive() const noexcept { return started_ns != 0; }
+	void SetDetails(int first, int second = -1) noexcept;
+	void Cancel() noexcept { started_ns = 0; }
+};
+
 struct AudioOutputSnapshot {
 	std::string backend_name;
 	std::string reason;
@@ -79,6 +97,7 @@ void ObserveFrameRequest(int frame, double time, bool immediate);
 void ObserveFrameResult(int frame, double time, bool delivered, bool immediate);
 void ObserveVideoFrameRenderDuration(int frame, double time, bool delivered, bool immediate, double duration_ms);
 void ObserveVideoRenderPacketCacheLookup(int frame, bool hit, char const* source);
+void ObserveVideoUiDuration(char const* phase, double duration_ms, int detail_a = -1, int detail_b = -1, bool immediate = false);
 void ObserveAudioUiTimerPosition(int ms);
 void ObserveAudioUiDuration(char const* phase, double duration_ms, int detail_a = -1, int detail_b = -1, bool immediate = false);
 void ObserveAudioOutputSnapshot(AudioOutputSnapshot const& snapshot);

@@ -44,6 +44,9 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 		perf_trace::AudioUiDurationScope trace("audio_display.cancelled_test");
 		trace.Cancel();
 	}
+	{
+		perf_trace::VideoUiDurationScope trace("video_display.scoped_test", 3, 4);
+	}
 	perf_trace::AudioOutputSnapshot output_snapshot;
 	output_snapshot.backend_name = "xaudio2";
 	output_snapshot.reason = "unit_test";
@@ -104,6 +107,8 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, trace.find("\"detail_a\":7"));
 	EXPECT_NE(std::string::npos, trace.find("\"detail_b\":9"));
 	EXPECT_EQ(std::string::npos, trace.find("audio_display.cancelled_test"));
+	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_ui_duration\""));
+	EXPECT_NE(std::string::npos, trace.find("\"phase\":\"video_display.scoped_test\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_output_snapshot\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_memory_snapshot\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"window_open_phase_duration\""));
@@ -129,6 +134,7 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, summary.find("audio_ui_phase.audio_display.paint.count=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_ui_phase.audio_display.paint.total_ms=3.5"));
 	EXPECT_NE(std::string::npos, summary.find("audio_ui_phase.audio_display.scoped_test.count=1"));
+	EXPECT_NE(std::string::npos, summary.find("video_ui_phase.video_display.scoped_test.count=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output.samples=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output.low_water.count=1"));
 	EXPECT_NE(std::string::npos, summary.find("audio_output_backend=xaudio2"));

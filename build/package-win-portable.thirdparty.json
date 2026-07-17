@@ -32,6 +32,17 @@
           "target": "include/libplacebo/*"
         }
       ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "libass",
+      "url": "https://github.com/AmusementClub/assrender/releases/download/libass-0.17.5/libass-0.17.5-windows-x64-2e66df8-20260717T155846Z.zip",
+      "path": [
+        {
+          "source": "include/ass/*",
+          "target": "include/ass/*"
+        }
+      ]
     }
   ],
   "package": [
@@ -159,6 +170,17 @@
         {
           "source": "ffms2-5.0-msvc/x64/ffms2.dll",
           "target": "runtimes/ffms2.dll"
+        }
+      ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "libass",
+      "path": [
+        {
+          "source": "bin/ass.dll",
+          "target": "runtimes/ass.dll",
+          "required": true
         }
       ]
     },

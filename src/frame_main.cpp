@@ -49,6 +49,7 @@
 #include "selection_controller.h"
 #include "dialog_detached_video.h"
 #include "dialog_manager.h"
+#include "font_family_catalog_cache.h"
 #include "libresrc/libresrc.h"
 #include "main.h"
 #include "options.h"
@@ -339,6 +340,9 @@ FrameMain::FrameMain()
 #ifdef _WIN32
 	RegisterSessionNotifications();
 #endif
+	// Prebuild the family catalog off the UI thread so \\fn remapping and the
+	// English style-editor list usually do not block on first use.
+	font_family_catalog_cache::WarmAsync();
 	observe_phase("startup.frame.show");
 	auto startup_lifetime = GetAsyncUiLifetime();
 	auto main_loop_turn_started = std::chrono::steady_clock::now();
@@ -784,6 +788,11 @@ void FrameMain::OnSelectedSetChanged() {
 
 #ifdef _WIN32
 void FrameMain::OnFontChangeDebounce(wxTimerEvent &) {
+	// Drop cached family catalog so style editor / \\fn preference remapping
+	// pick up newly installed or removed fonts on next open/use.
+	font_family_catalog_cache::Invalidate();
+	// Kick a background rebuild so the next interactive use is warm.
+	font_family_catalog_cache::WarmAsync();
 	context->GetCore().project->ReloadSubtitlesProvider();
 }
 

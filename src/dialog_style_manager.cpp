@@ -42,6 +42,7 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
+#include "font_family_catalog_cache.h"
 #include "options.h"
 #include "perf_trace.h"
 #include "persist_location.h"
@@ -315,8 +316,37 @@ DialogStyleManager::DialogStyleManager(agi::Context *context)
 , commit_connection(context->GetCore().ass->AddCommitListener(&DialogStyleManager::LoadCurrentStyles, this))
 , active_line_connection(context->GetCore().selectionController->AddActiveLineListener(&DialogStyleManager::OnActiveLineChanged, this))
 , font_list(std::async(std::launch::async, []() -> wxArrayString {
-	wxArrayString fontList = wxFontEnumerator::GetFacenames();
-	fontList.Sort();
+	// Default (prefer localized): keep the historical wxFontEnumerator path so
+	// default users see zero behavior change. English preference uses the
+	// process-shared FontFamilyCatalog snapshot.
+	bool prefer_localized = true;
+	try {
+		prefer_localized = OPT_GET("Subtitle/Font/Prefer Localized Family Names")->GetBool();
+	} catch (...) {
+		prefer_localized = true;
+	}
+
+	if (prefer_localized) {
+		// Still warm the catalog so \\fn English remapping is ready later.
+		font_family_catalog_cache::WarmAsync();
+		wxArrayString fontList = wxFontEnumerator::GetFacenames();
+		fontList.Sort();
+		return fontList;
+	}
+
+	auto catalog = font_family_catalog_cache::GetSnapshot();
+	if (!catalog || catalog->empty()) {
+		wxArrayString fontList = wxFontEnumerator::GetFacenames();
+		fontList.Sort();
+		return fontList;
+	}
+
+	wxArrayString fontList;
+	auto names = catalog->DisplayNames(/*prefer_localized=*/false);
+	fontList.reserve(names.size());
+	for (auto const& name : names)
+		fontList.Add(to_wx(name));
+	// DisplayNames already sorts and deduplicates.
 	return fontList;
 }))
 {

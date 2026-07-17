@@ -419,6 +419,9 @@
 			"Height" : 720,
 			"Width" : 1280
 		},
+		"Font" : {
+			"Prefer Localized Family Names" : true
+		},
 		"Edit Box" : {
 			"Command Buttons" : {
 				"Commands" : [

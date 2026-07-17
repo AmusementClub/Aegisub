@@ -124,6 +124,59 @@ std::vector<std::string> localized_strings_to_utf8(IDWriteLocalizedStrings *stri
 	}
 	return values;
 }
+
+std::vector<DWriteLocalizedName> localized_strings_with_locale(IDWriteLocalizedStrings *strings) {
+	std::vector<DWriteLocalizedName> values;
+	if (!strings)
+		return values;
+
+	auto count = strings->GetCount();
+	values.reserve(count);
+	for (UINT32 i = 0; i < count; ++i) {
+		UINT32 len = 0;
+		if (FAILED(strings->GetStringLength(i, &len)) || !len)
+			continue;
+
+		std::vector<wchar_t> text(len + 1);
+		if (FAILED(strings->GetString(i, text.data(), len + 1)))
+			continue;
+
+		std::string locale;
+		UINT32 locale_len = 0;
+		if (SUCCEEDED(strings->GetLocaleNameLength(i, &locale_len)) && locale_len) {
+			std::vector<wchar_t> locale_buf(locale_len + 1);
+			if (SUCCEEDED(strings->GetLocaleName(i, locale_buf.data(), locale_len + 1)))
+				locale = wide_to_utf8(locale_buf.data(), locale_len);
+		}
+
+		DWriteLocalizedName entry;
+		entry.value = wide_to_utf8(text.data(), len);
+		entry.locale = std::move(locale);
+		if (entry.value.empty())
+			continue;
+
+		bool duplicate = false;
+		for (auto const& existing : values) {
+			if (existing.value == entry.value && existing.locale == entry.locale) {
+				duplicate = true;
+				break;
+			}
+		}
+		if (!duplicate)
+			values.push_back(std::move(entry));
+	}
+	return values;
+}
+
+IDWriteFont *font_from_logfont(IDWriteGdiInterop *interop, LOGFONTW const &lf) {
+	if (!interop)
+		return nullptr;
+	IDWriteFont *font = nullptr;
+	auto hr = interop->CreateFontFromLOGFONT(&lf, &font);
+	if (FAILED(hr) || !font)
+		return nullptr;
+	return font;
+}
 // Helper: get the first font file and its reference key from a font face.
 // On success, caller must Release() the returned file.
 bool get_font_file_and_key(IDWriteFontFace *face, IDWriteFontFile **out_file,
@@ -267,11 +320,53 @@ std::vector<std::string> DWriteBridge::GetFontFamilyNamesFromLogFont(LOGFONTW co
 	if (!available_ || !gdi_interop)
 		return names;
 
-	IDWriteFont *font = nullptr;
-	auto hr = gdi_interop->CreateFontFromLOGFONT(&lf, &font);
-	if (FAILED(hr) || !font)
+	IDWriteFont *font = font_from_logfont(gdi_interop, lf);
+	if (!font)
 		return names;
 
+	IDWriteFontFamily *family = nullptr;
+	auto hr = font->GetFontFamily(&family);
+	font->Release();
+	if (FAILED(hr) || !family)
+		return names;
+
+	IDWriteLocalizedStrings *family_names = nullptr;
+	hr = family->GetFamilyNames(&family_names);
+	family->Release();
+	if (FAILED(hr) || !family_names)
+		return names;
+
+	names = localized_strings_to_utf8(family_names);
+	family_names->Release();
+	return names;
+}
+
+std::vector<DWriteLocalizedName> DWriteBridge::GetWin32FamilyNamesFromLogFont(LOGFONTW const &lf) const {
+	std::vector<DWriteLocalizedName> names;
+	if (!available_ || !gdi_interop)
+		return names;
+
+	IDWriteFont *font = font_from_logfont(gdi_interop, lf);
+	if (!font)
+		return names;
+
+	// Prefer explicit Win32 family informational strings (matches libass DW path).
+	IDWriteLocalizedStrings *win32_names = nullptr;
+	BOOL exists = FALSE;
+	auto hr = font->GetInformationalStrings(
+		DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES, &win32_names, &exists);
+	if (SUCCEEDED(hr) && exists && win32_names) {
+		names = localized_strings_with_locale(win32_names);
+		win32_names->Release();
+		if (!names.empty()) {
+			font->Release();
+			return names;
+		}
+	} else if (win32_names) {
+		win32_names->Release();
+	}
+
+	// Fallback: family display names from IDWriteFontFamily.
 	IDWriteFontFamily *family = nullptr;
 	hr = font->GetFontFamily(&family);
 	font->Release();
@@ -284,7 +379,7 @@ std::vector<std::string> DWriteBridge::GetFontFamilyNamesFromLogFont(LOGFONTW co
 	if (FAILED(hr) || !family_names)
 		return names;
 
-	names = localized_strings_to_utf8(family_names);
+	names = localized_strings_with_locale(family_names);
 	family_names->Release();
 	return names;
 }

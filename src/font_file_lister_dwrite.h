@@ -16,6 +16,12 @@ struct IDWriteFactory;
 struct IDWriteGdiInterop;
 struct IDWriteFontFace;
 
+/// One localized string entry from DirectWrite (value + locale tag).
+struct DWriteLocalizedName {
+	std::string value;
+	std::string locale;
+};
+
 /// @class DWriteBridge
 /// @brief Bridges GDI font selection to DirectWrite for file path and metadata.
 class DWriteBridge {
@@ -45,6 +51,11 @@ public:
 
 	/// Get localized family aliases for a GDI-selected LOGFONT.
 	std::vector<std::string> GetFontFamilyNamesFromLogFont(LOGFONTW const &lf) const;
+
+	/// Get Win32 family names (all locales) for a GDI-selected LOGFONT.
+	/// Prefer DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES; fall back to
+	/// IDWriteFontFamily::GetFamilyNames when informational strings are absent.
+	std::vector<DWriteLocalizedName> GetWin32FamilyNamesFromLogFont(LOGFONTW const &lf) const;
 	
 	/// Get the font file path from an IDWriteFontFace.
 	/// @param face DWrite font face

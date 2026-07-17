@@ -858,6 +858,8 @@ set(AEGISUB_CORE_SOURCES
     # Fonts (cross-platform core)
     src/font_collector_core.cpp
     src/font_collector_unicode.cpp
+    src/font_family_catalog.cpp
+    src/font_family_catalog_cache.cpp
     src/font_file_lister.cpp
     src/font_matching_common.cpp
     # Utility / math / codecs
@@ -1345,7 +1347,10 @@ else()
 endif()
 
 if(WIN32)
-    target_sources(aegisub_core PRIVATE src/font_file_lister_gdi.cpp src/font_file_lister_dwrite.cpp)
+    target_sources(aegisub_core PRIVATE
+        src/font_file_lister_gdi.cpp
+        src/font_file_lister_dwrite.cpp
+        src/font_family_catalog_win.cpp)
     target_link_libraries(aegisub_core PRIVATE Usp10 dwrite Version)
 elseif(APPLE)
     target_sources(aegisub_core PRIVATE src/font_file_lister_coretext.mm)

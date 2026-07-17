@@ -40,6 +40,7 @@
 #include "../compat.h"
 #include "../dialog_search_replace.h"
 #include "../dialogs.h"
+#include "../font_family_catalog_cache.h"
 #include "../format.h"
 #include "../include/aegisub/context.h"
 #include "../include/aegisub/context_ui.h"
@@ -768,6 +769,26 @@ struct edit_font final : public Command {
 		const wxFont font = wxGetFontFromUser(ui.parent, initial);
 		if (!font.Ok() || font == initial) return;
 
+		// Always pre-map the dialog face under the current preference. Multi-
+		// line edits can write \\fn on non-active lines even when the active
+		// line's family is unchanged (e.g. size-only edit on the active line);
+		// gating the map on the active-line comparison would leave those
+		// lines with a localized name while prefer-localized is off.
+		// Whether each line actually receives a \\fn rewrite still depends on
+		// per-line family comparison below.
+		std::string chosen_face = from_wx(font.GetFaceName());
+		bool prefer_localized = true;
+		try {
+			prefer_localized = OPT_GET("Subtitle/Font/Prefer Localized Family Names")->GetBool();
+		} catch (...) {
+			prefer_localized = true;
+		}
+		if (!prefer_localized) {
+			auto catalog = font_family_catalog_cache::GetSnapshot();
+			if (catalog && !catalog->empty())
+				chosen_face = catalog->MapToPreferredWriteName(chosen_face, /*prefer_localized=*/false);
+		}
+
 		update_lines(c, from_wx(_("set font")), [&](AssDialogue *line, int sel_start, int sel_end, int norm_sel_start, int norm_sel_end) {
 			parsed_line parsed(line);
 			int line_insertion_point = active_insertion_point;
@@ -781,7 +802,7 @@ struct edit_font final : public Command {
 			};
 
 			if (font.GetFaceName() != startfont.GetFaceName())
-				do_set_tag("\\fn", from_wx(font.GetFaceName()));
+				do_set_tag("\\fn", chosen_face);
 			if (font.GetPointSize() != startfont.GetPointSize())
 				do_set_tag("\\fs", std::to_string(font.GetPointSize()));
 			if (font.GetWeight() != startfont.GetWeight())

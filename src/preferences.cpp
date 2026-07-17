@@ -652,6 +652,20 @@ void BuildInterfacePage(OptionPage *p) {
 	binder->AddFont(_("Font"), "Subtitle/Edit Box/");
 	binder->AddInt(_("Edit box height"), "Subtitle/Edit Box/Display Height", -1, 2000);
 
+#ifdef _WIN32
+	// Name preference only has a full Windows implementation in P1.
+	// Other platforms keep the default config key but hide the control.
+	binder->AddCategory(_("ASS Font Names"));
+	auto *prefer_localized = binder->AddBool(
+		_("Prefer localized font family names"),
+		"Subtitle/Font/Prefer Localized Family Names");
+	prefer_localized->SetHelpString(_(
+		"When enabled, the style editor and \\fn font picker write the system-localized "
+		"family name (current behavior). When disabled, newly chosen fonts prefer the "
+		"English Win32 family name for better cross-language portability. Existing "
+		"styles and override tags are not rewritten automatically."));
+#endif
+
 	binder->AddCategory(_("Character Counter"));
 	binder->AddInt(_("Maximum characters per line"), "Subtitle/Character Limit", 0, 1000);
 	binder->AddInt(_("Characters Per Second Warning Threshold"), "Subtitle/Character Counter/CPS Warning Threshold", 0, 1000);

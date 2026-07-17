@@ -42,6 +42,9 @@ enum class RuntimeFallbackDisposition {
 };
 
 RuntimeFallbackDisposition PlanRuntimeFallback(bool content_frame_presented) noexcept;
+bool ShouldRetainLastCompleteContentFrame(
+	bool content_viewport_complete,
+	bool scrollbar_dragging) noexcept;
 
 enum class FailureInjection {
 	None,
@@ -84,6 +87,8 @@ struct SurfaceKey {
 
 SurfaceKey MakeSurfaceKey(FrameTarget const& target);
 
+// Design-level invalidation model. Production painting currently uses its own
+// retained-content scheduling rather than consuming these transition plans.
 enum class Layer : uint32_t {
 	None = 0,
 	Content = 1u << 0,

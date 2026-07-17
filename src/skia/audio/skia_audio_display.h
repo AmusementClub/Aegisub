@@ -26,8 +26,9 @@ namespace agi { class AudioProvider; struct Context; }
 
 namespace aegisub::skia::audio {
 
-// P3.3 visible sibling. It presents only a fixed diagnostic frame; real Audio
-// frame models, content and interaction intentionally begin in later phases.
+// Opt-in retained Audio Display. Audio analysis runs on a coalescing worker;
+// the UI thread composes cached content tiles with live timing overlays and
+// requests a wx AudioDisplay fallback if the Skia/GL boundary fails.
 class SkiaAudioDisplay final : public wxGLCanvas {
 	struct Impl;
 	std::unique_ptr<Impl> impl;
@@ -54,6 +55,7 @@ class SkiaAudioDisplay final : public wxGLCanvas {
 	void EmitMiddleSeekOutput(int time_ms, bool commit);
 	void ScheduleMiddleSeekTimer();
 	void FinishMiddleSeek(int time_ms);
+	void CancelMiddleSeek();
 	void OnRenderingSettingsChanged();
 	void ReconfigureAnalysis();
 	void RebuildViewport();

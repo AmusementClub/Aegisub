@@ -46,6 +46,12 @@ struct FrameViewport {
 
 int AudioZoomFactor(int zoom_level) noexcept;
 double AudioMillisecondsPerLogicalPixel(int zoom_level) noexcept;
+int AudioScrollLeftAfterZoom(
+	int scroll_left,
+	int client_width,
+	double old_milliseconds_per_pixel,
+	double new_milliseconds_per_pixel,
+	double anchor_time_ms = -1.0) noexcept;
 FrameViewport BuildFrameViewport(FrameViewportRequest const& request) noexcept;
 
 struct ScrollbarGeometry {

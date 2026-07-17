@@ -93,6 +93,35 @@ double AudioMillisecondsPerLogicalPixel(int zoom_level) noexcept {
 	return 2000.0 / AudioZoomFactor(zoom_level);
 }
 
+int AudioScrollLeftAfterZoom(
+	int scroll_left,
+	int client_width,
+	double old_milliseconds_per_pixel,
+	double new_milliseconds_per_pixel,
+	double anchor_time_ms) noexcept {
+	if (client_width <= 0
+		|| !std::isfinite(old_milliseconds_per_pixel)
+		|| old_milliseconds_per_pixel <= 0.0
+		|| !std::isfinite(new_milliseconds_per_pixel)
+		|| new_milliseconds_per_pixel <= 0.0) {
+		return scroll_left;
+	}
+
+	double anchor_x = client_width / 2.0;
+	if (std::isfinite(anchor_time_ms) && anchor_time_ms >= 0.0)
+		anchor_x = anchor_time_ms / old_milliseconds_per_pixel - scroll_left;
+	else
+		anchor_time_ms = (scroll_left + anchor_x) * old_milliseconds_per_pixel;
+
+	auto const value = anchor_time_ms / new_milliseconds_per_pixel - anchor_x;
+	if (!std::isfinite(value))
+		return scroll_left;
+	return static_cast<int>(std::clamp(
+		value,
+		static_cast<double>(std::numeric_limits<int>::min()),
+		static_cast<double>(std::numeric_limits<int>::max())));
+}
+
 FrameViewport BuildFrameViewport(FrameViewportRequest const& request) noexcept {
 	FrameViewport viewport;
 	if (request.logical_width <= 0

@@ -104,6 +104,12 @@ RuntimeFallbackDisposition PlanRuntimeFallback(bool content_frame_presented) noe
 		: RuntimeFallbackDisposition::Automatic;
 }
 
+bool ShouldRetainLastCompleteContentFrame(
+	bool content_viewport_complete,
+	bool scrollbar_dragging) noexcept {
+	return scrollbar_dragging && !content_viewport_complete;
+}
+
 TransitionPlan PlanTransition(Revisions const& current, Change change) {
 	TransitionPlan plan;
 	plan.next = current;

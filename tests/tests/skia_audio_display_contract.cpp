@@ -95,6 +95,12 @@ TEST(skia_audio_display_contract, runtime_failure_prompts_only_after_content_was
 		audio::PlanRuntimeFallback(true));
 }
 
+TEST(skia_audio_display_contract, full_frame_retention_is_limited_to_active_scrollbar_drag) {
+	EXPECT_TRUE(audio::ShouldRetainLastCompleteContentFrame(false, true));
+	EXPECT_FALSE(audio::ShouldRetainLastCompleteContentFrame(false, false));
+	EXPECT_FALSE(audio::ShouldRetainLastCompleteContentFrame(true, true));
+}
+
 TEST(skia_audio_display_contract, cursor_update_is_overlay_only) {
 	audio::Revisions current;
 	auto const plan = audio::PlanTransition(current, audio::Change::Cursor);

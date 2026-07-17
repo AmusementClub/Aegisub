@@ -17,6 +17,14 @@ TEST(skia_audio_frame_model, zoom_math_matches_legacy_audio_display) {
 	EXPECT_DOUBLE_EQ(audio::AudioMillisecondsPerLogicalPixel(1), 16.0);
 }
 
+TEST(skia_audio_frame_model, zoom_preserves_cursor_or_viewport_center_time) {
+	EXPECT_EQ(225, audio::AudioScrollLeftAfterZoom(100, 200, 20.0, 10.0, 2500.0));
+	EXPECT_EQ(300, audio::AudioScrollLeftAfterZoom(100, 200, 20.0, 10.0));
+	EXPECT_EQ(100, audio::AudioScrollLeftAfterZoom(100, 200, 20.0, 20.0, 2501.0));
+	EXPECT_EQ(100, audio::AudioScrollLeftAfterZoom(
+		100, 0, 20.0, 10.0, 2500.0));
+}
+
 TEST(skia_audio_frame_model, viewport_preserves_fractional_dpi_scroll_alignment) {
 	audio::FrameViewportRequest request;
 	request.logical_width = 801;

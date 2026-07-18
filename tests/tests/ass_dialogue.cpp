@@ -8,6 +8,17 @@
 #include <libaegisub/color.h>
 #include <libaegisub/vfr.h>
 
+TEST(ass_dialogue, escaped_braces_remain_plain_text) {
+	AssDialogue line;
+	line.Text = R"(A\{B\}C)";
+
+	auto blocks = line.ParseTags();
+	ASSERT_EQ(1u, blocks.size());
+	EXPECT_EQ(AssBlockType::PLAIN, blocks.front()->GetType());
+	EXPECT_EQ(line.Text, blocks.front()->GetText());
+	EXPECT_EQ(line.Text, line.GetStrippedText());
+}
+
 TEST(ass_time_projection, legacy_output_uses_symmetric_rounding_for_ass_storage) {
 	AssDialogue line;
 	line.Comment = false;

@@ -38,8 +38,12 @@ void Emit(FontCollectorEventSink const& sink, FontCollectorEvent event) {
 		sink(event);
 }
 
-std::string_view PlainTextView(AssDialogueBlock& block) {
-	return static_cast<AssDialogueBlockPlain&>(block).text;
+std::string_view TextBlockView(AssDialogueBlock& block) {
+	if (block.GetType() == AssBlockType::PLAIN)
+		return static_cast<AssDialogueBlockPlain&>(block).text;
+	if (block.GetType() == AssBlockType::DRAWING)
+		return static_cast<AssDialogueBlockDrawing&>(block).text;
+	return {};
 }
 
 template<class Callback>
@@ -48,7 +52,12 @@ bool ForEachAssTextCodepoint(std::string_view text, int wrap_style, Callback&& c
 	auto const size = text.size();
 	for (size_t i = 0; i < size; ) {
 		uint32_t value = 0;
-		if (text[i] == '\\' && i + 1 < size) {
+		if (text[i] == '\t') {
+			// libass treats literal tab characters as ordinary spaces.
+			value = 0x20;
+			++i;
+		}
+		else if (text[i] == '\\' && i + 1 < size) {
 			char next = text[++i];
 			if (next == 'N' || next == 'n') {
 				++i;
@@ -60,6 +69,10 @@ bool ForEachAssTextCodepoint(std::string_view text, int wrap_style, Callback&& c
 			else if (next == 'h') {
 				++i;
 				value = 0xA0;
+			}
+			else if (next == '{' || next == '}') {
+				++i;
+				value = static_cast<unsigned char>(next);
 			}
 			else {
 				value = '\\';
@@ -229,11 +242,11 @@ bool FontCollector::ForEachLineTextSpan(AssFile const& file, AssDialogue const& 
 	bool style_valid = true;
 
 	bool overriden = false;
+	int active_wrap_style = wrap_style;
+	int active_drawing_level = 0;
 
-	for (auto& block : line.ParseTags()) {
-		switch (block->GetType()) {
-		case AssBlockType::OVERRIDE:
-			for (auto const& tag : static_cast<AssDialogueBlockOverride&>(*block).Tags) {
+	auto process_tags = [&](auto&& self, std::vector<AssOverrideTag> const& tags) -> void {
+			for (auto const& tag : tags) {
 				if (tag.Name == "\\r") {
 					auto const& param = tag.Params[0];
 					if (param.omitted || param.empty) {
@@ -275,19 +288,42 @@ bool FontCollector::ForEachLineTextSpan(AssFile const& file, AssDialogue const& 
 					style.facename = tag.Params[0].Get(initial.facename);
 					overriden = true;
 				}
+				else if (tag.Name == "\\q") {
+					auto value = tag.Params[0].Get(wrap_style);
+					active_wrap_style = value >= 0 && value <= 3 ? value : wrap_style;
+				}
+				else if (tag.Name == "\\p") {
+					auto value = tag.Params[0].Get(0);
+					active_drawing_level = value > 0 ? value : 0;
+				}
+				else if (tag.Name == "\\t" && tag.Params.size() > 3 &&
+				         !tag.Params[3].omitted && !tag.Params[3].empty) {
+					// libass applies font-affecting tags nested in \t, including
+					// \fn/\b/\i/\r, even though most transforms are animated.
+					if (auto *nested = tag.Params[3].Get<AssDialogueBlockOverride*>())
+						self(self, nested->Tags);
+				}
 			}
+	};
+
+	for (auto& block : line.ParseTags()) {
+		switch (block->GetType()) {
+		case AssBlockType::OVERRIDE:
+			process_tags(process_tags, static_cast<AssDialogueBlockOverride&>(*block).Tags);
 			break;
-		case AssBlockType::PLAIN: {
-			auto text = PlainTextView(*block);
+		case AssBlockType::PLAIN:
+		case AssBlockType::DRAWING: {
+			if (active_drawing_level != 0)
+				break;
+			auto text = TextBlockView(*block);
 
 			if (text.empty() || !style_valid)
 				continue;
 
-			if (callback(style, overriden, text))
+			if (callback(style, overriden, active_wrap_style, text))
 				return true;
 			break;
 		}
-		case AssBlockType::DRAWING:
 		case AssBlockType::COMMENT:
 			break;
 		}
@@ -499,13 +535,13 @@ void FontCollector::CollectMissingGlyphLines(AssFile const *file, int wrap_style
 		if (diag.Comment)
 			continue;
 
-		ForEachLineTextSpan(*file, diag, source_line, wrap_style, [&](StyleInfo const& style, bool, std::string_view text) {
+		ForEachLineTextSpan(*file, diag, source_line, wrap_style, [&](StyleInfo const& style, bool, int span_wrap_style, std::string_view text) {
 			auto query_it = query_indices.find(style);
 			if (query_it == end(query_indices))
 				return false;
 
 			auto& query = queries[query_it->second];
-			if (TextContainsAnyCodepoint(text, wrap_style, query.missing_codepoints) &&
+			if (TextContainsAnyCodepoint(text, span_wrap_style, query.missing_codepoints) &&
 			    (query.matching_lines.empty() || query.matching_lines.back() != source_line))
 				query.matching_lines.push_back(source_line);
 			return false;
@@ -571,7 +607,7 @@ FontCollector::FileAnalysis FontCollector::AnalyzeFile(FontCollectorBatchSource 
 void FontCollector::ProcessDialogueLine(FileAnalysis& analysis, const AssDialogue *line, int index) {
 	if (line->Comment) return;
 
-	ForEachLineTextSpan(*analysis.file, *line, index, analysis.wrap_style, [&](StyleInfo const& style, bool overriden, std::string_view text) {
+	ForEachLineTextSpan(*analysis.file, *line, index, analysis.wrap_style, [&](StyleInfo const& style, bool overriden, int span_wrap_style, std::string_view text) {
 		auto& usage = analysis.used_styles[style];
 		if (usage.lines.empty() || usage.lines.back() != index)
 			usage.lines.push_back(index);
@@ -581,7 +617,7 @@ void FontCollector::ProcessDialogueLine(FileAnalysis& analysis, const AssDialogu
 				lines.push_back(index);
 		}
 
-		AppendTextCodepoints(text, analysis.wrap_style, usage);
+		AppendTextCodepoints(text, span_wrap_style, usage);
 		return false;
 	}, &analysis.missing_style_lines);
 }

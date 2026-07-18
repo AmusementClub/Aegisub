@@ -206,6 +206,23 @@ std::string AssDialogue::GetEntryData(std::string const& formatted_start, std::s
 	return str;
 }
 
+static bool is_escaped_brace(std::string const& text, size_t position) {
+	size_t slash_count = 0;
+	while (position > slash_count && text[position - slash_count - 1] == '\\')
+		++slash_count;
+	return (slash_count & 1) != 0;
+}
+
+static size_t find_unescaped_open_brace(std::string const& text, size_t start) {
+	for (auto position = text.find('{', start);
+	     position != std::string::npos;
+	     position = text.find('{', position + 1)) {
+		if (!is_escaped_brace(text, position))
+			return position;
+	}
+	return std::string::npos;
+}
+
 std::vector<std::unique_ptr<AssDialogueBlock>> AssDialogue::ParseTags() const {
 	std::vector<std::unique_ptr<AssDialogueBlock>> Blocks;
 
@@ -220,7 +237,7 @@ std::vector<std::unique_ptr<AssDialogueBlock>> AssDialogue::ParseTags() const {
 
 	for (size_t len = text.size(), cur = 0; cur < len; ) {
 		// Overrides block
-		if (text[cur] == '{') {
+		if (text[cur] == '{' && !is_escaped_brace(text, cur)) {
 			size_t end = agi::util::strings::find(text, '}', cur);
 
 			// VSFilter requires that override blocks be closed, while libass
@@ -257,7 +274,7 @@ std::vector<std::unique_ptr<AssDialogueBlock>> AssDialogue::ParseTags() const {
 		// Plain-text/drawing block
 plain:
 		std::string work;
-		size_t end = agi::util::strings::find(text, '{', cur + 1);
+		size_t end = find_unescaped_open_brace(text, cur + 1);
 		if (end == agi::util::strings::npos) {
 			work = text.substr(cur);
 			cur = len;

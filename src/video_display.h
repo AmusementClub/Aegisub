@@ -43,8 +43,12 @@
 #include "vector2d.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
+#include <string>
 #include <typeinfo>
+#include <utility>
 #include <vector>
 #include <wx/glcanvas.h>
 
@@ -93,6 +97,16 @@ class VideoDisplay final : public wxGLCanvas {
 	wxSize videoSize;
 
 	Vector2D last_mouse_pos, mouse_pos;
+
+	struct PointSelectionSession {
+		std::string owner;
+		int point_count = 0;
+		bool script_coordinates = true;
+		std::vector<std::pair<double, double>> points;
+		std::function<void(
+			std::vector<std::pair<double, double>>, int, bool)> completed;
+	};
+	std::optional<PointSelectionSession> point_selection;
 
 	/// Base viewport before attached-mode content pan/zoom is applied
 	VideoDisplayViewportLayout baseViewport;
@@ -280,6 +294,7 @@ class VideoDisplay final : public wxGLCanvas {
 	void ScheduleRender();
 	void DoRender();
 	void LayoutContainingSizers();
+	void FinishPointSelection(bool cancelled, bool notify);
 
 public:
 	/// @brief Constructor
@@ -311,6 +326,18 @@ public:
 
 	/// Get the last seen position of the mouse in script coordinates
 	Vector2D GetMousePosition() const;
+
+	/// Begin a host-owned video point-selection session. Coordinates are
+	/// returned in script resolution when script_coordinates is true, otherwise
+	/// in source-frame pixels. Starting a new session cancels the old one.
+	void BeginPointSelection(
+		std::string owner,
+		int point_count,
+		bool script_coordinates,
+		std::function<void(
+			std::vector<std::pair<double, double>>, int, bool)> completed);
+	/// Cancel the active selection only when its opaque owner matches.
+	void CancelPointSelection(std::string const& owner, bool notify = true);
 
 	void SetTool(std::unique_ptr<VisualToolBase> new_tool);
 

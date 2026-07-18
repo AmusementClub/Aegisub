@@ -100,6 +100,7 @@ void CleanupRuntime() {
 		runtime_commands_initialized = false;
 	}
 
+	ShutdownRuntimeApplicationServices();
 	ResetUiTimerHost();
 	agi::dispatch::Shutdown();
 	CleanupRuntimeProcessState();

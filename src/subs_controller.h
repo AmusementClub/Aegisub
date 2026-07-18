@@ -128,6 +128,8 @@ public:
 
 	/// Does the file have unsaved changes?
 	bool IsModified() const { return commit_id != saved_commit_id; };
+	/// Current subtitle document revision used by snapshot/transaction clients.
+	int64_t GetDocumentRevision() const { return commit_id; }
 
 	/// @brief Load from a file
 	/// @param file File name

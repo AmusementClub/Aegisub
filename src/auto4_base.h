@@ -50,6 +50,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 class AssStyle;
@@ -289,12 +290,18 @@ namespace Automation4 {
 	/// Manager for scripts in the autoload directory
 	class AutoloadScriptManager final : public ScriptManager {
 		std::string path;
+		agi::fs::path managed_plugin_root;
 		std::shared_ptr<char> reload_lifetime = std::make_shared<char>();
 		std::shared_ptr<std::atomic<uint64_t>> reload_generation = std::make_shared<std::atomic<uint64_t>>(0);
 
-		void ApplyReloadedScripts(std::vector<std::unique_ptr<Script>> loaded_scripts, int error_count);
+		void ApplyReloadedScripts(
+			std::vector<std::unique_ptr<Script>> loaded_scripts,
+			int error_count,
+			std::vector<std::pair<std::string, bool>> diagnostics);
 	public:
-		AutoloadScriptManager(std::string path);
+		AutoloadScriptManager(
+			std::string path,
+			agi::fs::path managed_plugin_root = {});
 		void Reload() override;
 		void ReloadAsync();
 	};

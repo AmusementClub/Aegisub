@@ -777,7 +777,11 @@ class Runner final {
 			auto core = runtime.GetCore();
 			AppendHostLog("script.load.begin");
 			std::string load_error;
+			auto const persisted_automation_scripts = core.ass->Properties.automation_scripts;
 			auto *script = EnsureScriptLoaded(core, request.script_path, &load_error);
+			// --script selects code for this invocation; it does not attach that
+			// script to the subtitle document being processed.
+			core.ass->Properties.automation_scripts = persisted_automation_scripts;
 			if (!script) {
 				Finish(40, load_error.empty() ? "could not load automation script: " + ToGenericString(request.script_path) : load_error);
 				return;

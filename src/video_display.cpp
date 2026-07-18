@@ -454,6 +454,7 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 }
 
 VideoDisplay::~VideoDisplay () {
+	FinishPointSelection(true, false);
 	Unload();
 }
 
@@ -2248,6 +2249,40 @@ void VideoDisplay::OnSizeEvent(wxSizeEvent &event) {
 }
 
 void VideoDisplay::OnMouseEvent(wxMouseEvent& event) {
+	if (point_selection && event.LeftDown()) {
+		SetFocus();
+		auto point = event.GetPosition();
+		auto left = static_cast<double>(viewport_left) / scale_factor;
+		auto top = static_cast<double>(viewport_top) / scale_factor;
+		auto width = static_cast<double>(viewport_width) / scale_factor;
+		auto height = static_cast<double>(viewport_height) / scale_factor;
+		if (width > 0.0 && height > 0.0 && point.x >= left && point.y >= top &&
+			point.x <= left + width && point.y <= top + height) {
+			double target_width = 0.0;
+			double target_height = 0.0;
+			if (point_selection->script_coordinates) {
+				int script_width = 0;
+				int script_height = 0;
+				con->ass->GetResolution(script_width, script_height);
+				target_width = script_width;
+				target_height = script_height;
+			}
+			else if (auto* provider = con->project->VideoProvider()) {
+				target_width = provider->GetWidth();
+				target_height = provider->GetHeight();
+			}
+			if (target_width > 0.0 && target_height > 0.0) {
+				point_selection->points.emplace_back(
+					(point.x - left) * target_width / width,
+					(point.y - top) * target_height / height);
+				if (static_cast<int>(point_selection->points.size()) >=
+					point_selection->point_count)
+					FinishPointSelection(false, true);
+			}
+		}
+		return;
+	}
+
 	if (hotkey::check("Video", con, event))
 		return;
 
@@ -2336,7 +2371,48 @@ void VideoDisplay::OnContextMenu(wxContextMenuEvent&) {
 }
 
 void VideoDisplay::OnKeyDown(wxKeyEvent &event) {
+	if (point_selection && event.GetKeyCode() == WXK_ESCAPE) {
+		FinishPointSelection(true, true);
+		return;
+	}
 	hotkey::check("Video", con, event);
+}
+
+void VideoDisplay::BeginPointSelection(
+	std::string owner,
+	int point_count,
+	bool script_coordinates,
+	std::function<void(std::vector<std::pair<double, double>>, int, bool)> completed) {
+	if (owner.empty() || point_count <= 0 || !completed)
+		throw std::invalid_argument("Invalid video point-selection session");
+	if (!con->project->VideoProvider())
+		throw std::runtime_error("Video point selection requires an open video");
+	FinishPointSelection(true, true);
+	point_selection = PointSelectionSession{
+		std::move(owner), point_count, script_coordinates, {}, std::move(completed)};
+	SetCursor(wxCursor(wxCURSOR_CROSS));
+	SetFocus();
+	con->ShowStatus(
+		"Select " + std::to_string(point_count) +
+		" point(s) in the video; press Escape to cancel.");
+}
+
+void VideoDisplay::CancelPointSelection(std::string const& owner, bool notify) {
+	if (point_selection && point_selection->owner == owner)
+		FinishPointSelection(true, notify);
+}
+
+void VideoDisplay::FinishPointSelection(bool cancelled, bool notify) {
+	if (!point_selection) return;
+	auto session = std::move(*point_selection);
+	point_selection.reset();
+	SetCursor(wxNullCursor);
+	if (notify) {
+		auto frame = con && con->videoController
+			? con->videoController->GetFrameN()
+			: 0;
+		session.completed(std::move(session.points), frame, cancelled);
+	}
 }
 
 void VideoDisplay::SetZoom(double value) {

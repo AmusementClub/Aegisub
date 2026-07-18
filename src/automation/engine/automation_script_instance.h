@@ -45,6 +45,9 @@ namespace Automation4 {
 		virtual std::vector<cmd::Command*> GetMacros() const = 0;
 		virtual std::vector<ExportFilter*> GetFilters() const = 0;
 		virtual std::string GetEngineName() const = 0;
+		/// Eagerly validate and activate an application-managed installation.
+		/// Traditional Automation autoload does not call this and remains lazy.
+		virtual void ValidateApplicationActivation() { }
 
 		virtual std::optional<AutomationRuntimeStateSnapshot> TryGetRuntimeStateSnapshot() const { return std::nullopt; }
 		virtual void SetRuntimeTraceSink(AutomationRuntimeTraceSink*) { }

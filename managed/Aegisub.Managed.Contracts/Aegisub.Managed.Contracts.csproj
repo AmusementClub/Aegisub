@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsAotCompatible>true</IsAotCompatible>
+    <Version>0.1.0</Version>
+    <AssemblyVersion>0.1.0.0</AssemblyVersion>
+    <AssemblyName>Aegisub.Managed.Contracts</AssemblyName>
+    <RootNamespace>Aegisub.Managed.Contracts</RootNamespace>
+    <PackageId>Aegisub.Managed.Contracts</PackageId>
+    <Authors>Aegisub</Authors>
+    <Description>Framework-neutral contracts for Aegisub managed plugins and Automation contributions.</Description>
+    <PackageLicenseExpression>BSD-3-Clause</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <PackageTags>aegisub;plugin;automation;extension;subtitles</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="PACKAGE_README.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+</Project>

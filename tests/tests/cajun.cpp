@@ -178,6 +178,27 @@ TEST(lagi_cajun, Read) {
 	EXPECT_NO_THROW(static_cast<json::Null>(obj["Null"]));
 }
 
+TEST(lagi_cajun, reads_unicode_escape_sequences_as_utf8) {
+	json::UnknownElement root;
+	std::istringstream doc(R"({"text":"\u4E2D\uD83D\uDE00"})");
+	ASSERT_NO_THROW(json::Reader::Read(root, doc));
+	auto& object = static_cast<json::Object&>(root);
+	EXPECT_EQ("\xE4\xB8\xAD\xF0\x9F\x98\x80", static_cast<std::string>(object["text"]));
+}
+
+TEST(lagi_cajun, rejects_invalid_unicode_escape_sequences) {
+	for (auto const* value : {
+		R"("\u12xz")",
+		R"("\uD83D")",
+		R"("\uD83D\u0041")",
+		R"("\uDE00")"
+	}) {
+		json::UnknownElement root;
+		std::istringstream doc(value);
+		EXPECT_THROW(json::Reader::Read(root, doc), json::Exception);
+	}
+}
+
 TEST(lagi_cajun, Write) {
 	json::Object obj;
 	obj["Boolean"] = true;

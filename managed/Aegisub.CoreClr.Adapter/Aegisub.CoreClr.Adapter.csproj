@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+    <RollForward>Major</RollForward>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <AssemblyName>Aegisub.CoreClr.Adapter</AssemblyName>
+    <RootNamespace>Aegisub.CoreClr.Adapter</RootNamespace>
+    <DefineConstants Condition="'$(AegisubNativeAotBuild)' == 'true'">$(DefineConstants);AEGISUB_NATIVEAOT</DefineConstants>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Aegisub.Managed.Contracts\Aegisub.Managed.Contracts.csproj" />
+  </ItemGroup>
+</Project>

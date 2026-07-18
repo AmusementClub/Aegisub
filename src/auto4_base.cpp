@@ -34,6 +34,9 @@
 #include "automation/engine/automation_engine_registry.h"
 #include "automation/automation_live_host.h"
 #include "compat.h"
+#ifdef WITH_PLUGIN_BRIDGE
+#include "coreclr/managed_plugin_activation.h"
+#endif
 #include "dialog_progress.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
@@ -89,6 +92,7 @@ namespace Automation4 {
 			std::vector<cmd::Command*> GetMacros() const override { return impl->GetMacros(); }
 			std::vector<ExportFilter*> GetFilters() const override { return impl->GetFilters(); }
 			std::string GetEngineName() const override { return impl->GetEngineName(); }
+			void ValidateApplicationActivation() override { impl->ValidateApplicationActivation(); }
 			std::optional<AutomationRuntimeStateSnapshot> TryGetRuntimeStateSnapshot() const override { return impl->TryGetRuntimeStateSnapshot(); }
 			void SetRuntimeTraceSink(AutomationRuntimeTraceSink *sink) override { impl->SetRuntimeTraceSink(sink); }
 			void SetAutomationHost(std::shared_ptr<AutomationHost> host) override { impl->SetAutomationHost(std::move(host)); }
@@ -129,6 +133,11 @@ namespace Automation4 {
 		struct AutoloadReloadResult {
 			std::vector<std::unique_ptr<Script>> scripts;
 			int error_count = 0;
+			struct Diagnostic {
+				std::string message;
+				bool error = false;
+			};
+			std::vector<Diagnostic> diagnostics;
 		};
 
 		class FailedScript final : public Script {
@@ -182,6 +191,21 @@ namespace Automation4 {
 			return attempt;
 		}
 
+		ScriptLoadAttempt LoadManagedApplicationPlugin(
+			agi::fs::path const& script_filename) {
+			auto attempt = LoadAutomationScript(script_filename);
+			if (!attempt.script || !attempt.script->GetLoadedState()) return attempt;
+			try {
+				attempt.script->ValidateApplicationActivation();
+			}
+			catch (...) {
+				attempt.recognised = true;
+				attempt.script = agi::make_unique<FailedScript>(
+					script_filename, DescribeCurrentException());
+			}
+			return attempt;
+		}
+
 		void ReportFailedAutomationScriptLoad(agi::fs::path const& filename, std::string const& description)
 		{
 			wxLogError(_("Failed to load Automation script '%s':\n%s"), filename.wstring(), to_wx(description));
@@ -192,7 +216,9 @@ namespace Automation4 {
 			wxLogError(_("The file was not recognised as an Automation script: %s"), filename.wstring());
 		}
 
-		AutoloadReloadResult LoadAutoloadScripts(std::string const& path)
+		AutoloadReloadResult LoadAutoloadScripts(
+			std::string const& path,
+			agi::fs::path const& managed_plugin_root)
 		{
 			AutoloadReloadResult result;
 			std::vector<agi::fs::path> script_filenames;
@@ -246,6 +272,108 @@ namespace Automation4 {
 					++result.error_count;
 				result.scripts.emplace_back(std::move(attempt.script));
 			}
+
+#ifdef WITH_PLUGIN_BRIDGE
+			if (!managed_plugin_root.empty()) {
+				agi::coreclr::ManagedPluginActivationStore store(managed_plugin_root);
+				auto discovery = store.Discover();
+				for (auto& diagnostic : discovery.diagnostics) {
+					if (diagnostic.error) ++result.error_count;
+					result.diagnostics.push_back({
+						"Managed plugin" +
+							(diagnostic.plugin_id.empty()
+								? std::string()
+								: " '" + diagnostic.plugin_id + "'") +
+							": " + diagnostic.message,
+						diagnostic.error});
+				}
+
+				for (auto const& candidate : discovery.candidates) {
+					auto commit_automatic_rollback = [&](std::string const& failed_version,
+						std::string const& fallback_version) {
+						try {
+							if (store.CommitAutomaticRollback(
+								candidate.plugin_id,
+								candidate.generation,
+								failed_version,
+								fallback_version))
+								return true;
+							result.diagnostics.push_back({
+								"Managed plugin '" + candidate.plugin_id +
+								"' activation state changed while its fallback was loading; "
+								"the stale fallback result was ignored",
+								true});
+						}
+						catch (std::exception const& error) {
+							result.diagnostics.push_back({
+								"Managed plugin '" + candidate.plugin_id +
+								"' loaded its fallback but could not persist rollback: " +
+								error.what(),
+								true});
+						}
+						++result.error_count;
+						return false;
+					};
+
+					auto active_attempt = LoadManagedApplicationPlugin(
+						candidate.manifest_path);
+					if (active_attempt.script && active_attempt.script->GetLoadedState()) {
+						if (candidate.rollback_from_version) {
+							if (!commit_automatic_rollback(
+									*candidate.rollback_from_version, candidate.version))
+								continue;
+							result.diagnostics.push_back({
+								"Managed plugin '" + candidate.plugin_id +
+								"' rolled back from version '" +
+								*candidate.rollback_from_version + "' to '" +
+								candidate.version + "'", false});
+						}
+						result.scripts.emplace_back(std::move(active_attempt.script));
+						continue;
+					}
+
+					if (candidate.fallback) {
+						auto fallback_attempt = LoadManagedApplicationPlugin(
+							candidate.fallback->manifest_path);
+						if (fallback_attempt.script &&
+							fallback_attempt.script->GetLoadedState()) {
+							if (!commit_automatic_rollback(
+									candidate.version, candidate.fallback->version))
+								continue;
+							result.diagnostics.push_back({
+								"Managed plugin '" + candidate.plugin_id +
+								"' failed to load version '" + candidate.version +
+								"' and rolled back to '" +
+								candidate.fallback->version + "'", false});
+							result.scripts.emplace_back(std::move(fallback_attempt.script));
+							continue;
+						}
+						result.diagnostics.push_back({
+							"Managed plugin '" + candidate.plugin_id +
+							"' fallback version '" + candidate.fallback->version +
+							"' also failed to load" +
+							(fallback_attempt.script
+								? ": " + fallback_attempt.script->GetDescription()
+								: std::string(": manifest was not recognized")),
+							true});
+					}
+
+					if (active_attempt.script) {
+						++result.error_count;
+						result.scripts.emplace_back(std::move(active_attempt.script));
+					}
+					else {
+						++result.error_count;
+						result.diagnostics.push_back({
+							"Managed plugin '" + candidate.plugin_id +
+							"' manifest was not recognized by an Automation engine",
+							true});
+					}
+				}
+			}
+#else
+			(void)managed_plugin_root;
+#endif
 
 			return result;
 		}
@@ -613,12 +741,18 @@ namespace Automation4 {
 	}
 
 	// AutoloadScriptManager
-	AutoloadScriptManager::AutoloadScriptManager(std::string path)
+	AutoloadScriptManager::AutoloadScriptManager(
+		std::string path,
+		agi::fs::path managed_plugin_root)
 	: path(std::move(path))
+	, managed_plugin_root(std::move(managed_plugin_root))
 	{
 	}
 
-	void AutoloadScriptManager::ApplyReloadedScripts(std::vector<std::unique_ptr<Script>> loaded_scripts, int error_count)
+	void AutoloadScriptManager::ApplyReloadedScripts(
+		std::vector<std::unique_ptr<Script>> loaded_scripts,
+		int error_count,
+		std::vector<std::pair<std::string, bool>> diagnostics)
 	{
 		for (auto& script : loaded_scripts) {
 			if (!script->GetLoadedState())
@@ -628,6 +762,13 @@ namespace Automation4 {
 		scripts.clear();
 		CommitPendingFeatures(loaded_scripts);
 		scripts = std::move(loaded_scripts);
+
+		for (auto const& [message, error] : diagnostics) {
+			if (error)
+				wxLogError(wxS("%s"), to_wx(message));
+			else
+				wxLogWarning(wxS("%s"), to_wx(message));
+		}
 
 		if (error_count == 1) {
 			wxLogWarning(wxS("A script in the Automation autoload directory failed to load.\nPlease review the errors, fix them and use the Rescan Autoload Dir button in Automation Manager to load the scripts again."));
@@ -642,8 +783,12 @@ namespace Automation4 {
 	void AutoloadScriptManager::Reload()
 	{
 		reload_generation->fetch_add(1, std::memory_order_relaxed);
-		auto result = LoadAutoloadScripts(path);
-		ApplyReloadedScripts(std::move(result.scripts), result.error_count);
+		auto result = LoadAutoloadScripts(path, managed_plugin_root);
+		std::vector<std::pair<std::string, bool>> diagnostics;
+		for (auto& diagnostic : result.diagnostics)
+			diagnostics.emplace_back(std::move(diagnostic.message), diagnostic.error);
+		ApplyReloadedScripts(
+			std::move(result.scripts), result.error_count, std::move(diagnostics));
 	}
 
 	void AutoloadScriptManager::ReloadAsync()
@@ -651,16 +796,27 @@ namespace Automation4 {
 		auto lifetime = std::weak_ptr<char>(reload_lifetime);
 		auto generation = reload_generation;
 		auto path_copy = path;
+		auto managed_plugin_root_copy = managed_plugin_root;
 		auto const reload_id = generation->fetch_add(1, std::memory_order_relaxed) + 1;
 
-		agi::dispatch::Background().Async([this, lifetime, generation, reload_id, path_copy = std::move(path_copy)] {
-			auto result = std::make_shared<AutoloadReloadResult>(LoadAutoloadScripts(path_copy));
+		agi::dispatch::Background().Async([this, lifetime, generation, reload_id,
+			path_copy = std::move(path_copy),
+			managed_plugin_root_copy = std::move(managed_plugin_root_copy)] {
+			auto result = std::make_shared<AutoloadReloadResult>(
+				LoadAutoloadScripts(path_copy, managed_plugin_root_copy));
 			agi::dispatch::Main().Async([this, lifetime, generation, reload_id, result] {
 				if (!lifetime.lock())
 					return;
 				if (generation->load(std::memory_order_relaxed) != reload_id)
 					return;
-				ApplyReloadedScripts(std::move(result->scripts), result->error_count);
+				std::vector<std::pair<std::string, bool>> diagnostics;
+				for (auto& diagnostic : result->diagnostics)
+					diagnostics.emplace_back(
+						std::move(diagnostic.message), diagnostic.error);
+				ApplyReloadedScripts(
+					std::move(result->scripts),
+					result->error_count,
+					std::move(diagnostics));
 			});
 		});
 	}
@@ -700,8 +856,13 @@ namespace Automation4 {
 				basepath = autobasefn;
 			} else if (first_char == '/') {
 			} else {
-				wxLogWarning(wxS("Automation Script referenced with unknown location specifier character.\nLocation specifier found: %c\nFilename specified: %s"),
-					first_char, to_wx(trimmed));
+				context->ShowWarning(
+					agi::format(
+						"Automation Script referenced with unknown location specifier character.\n"
+						"Location specifier found: %c\nFilename specified: %s",
+						first_char,
+						trimmed),
+					"Automation");
 				continue;
 			}
 			auto sfname = basepath / agi::fs::PathFromString(trimmed);
@@ -709,14 +870,27 @@ namespace Automation4 {
 				bool recognised = false;
 				auto script = Automation4::ScriptFactory::CreateFromFile(sfname, true, &recognised);
 				if (!recognised)
-					ReportUnrecognisedAutomationScript(sfname);
+					context->ShowError(
+						"The file was not recognised as an Automation script: " +
+							agi::fs::PathToString(sfname),
+						"Automation");
 				else if (script && !script->GetLoadedState())
-					ReportFailedAutomationScriptLoad(sfname, script->GetDescription());
+					context->ShowError(
+						"Failed to load Automation script '" + agi::fs::PathToString(sfname) +
+							"':\n" + script->GetDescription(),
+						"Automation");
 				scripts.emplace_back(std::move(script));
 			}
 			else {
-				wxLogWarning(wxS("Automation Script referenced could not be found.\nFilename specified: %c%s\nSearched relative to: %s\nResolved filename: %s"),
-					first_char, to_wx(trimmed), basepath.wstring(), sfname.wstring());
+				context->ShowWarning(
+					agi::format(
+						"Automation Script referenced could not be found.\n"
+						"Filename specified: %c%s\nSearched relative to: %s\nResolved filename: %s",
+						first_char,
+						trimmed,
+						agi::fs::PathToString(basepath),
+						agi::fs::PathToString(sfname)),
+					"Automation");
 			}
 		}
 

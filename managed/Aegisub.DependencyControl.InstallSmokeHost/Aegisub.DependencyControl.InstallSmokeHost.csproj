@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>Aegisub.DependencyControl.InstallSmokeHost</AssemblyName>
+    <RootNamespace>Aegisub.DependencyControl.InstallSmokeHost</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Aegisub.DependencyControl.Plugin\Aegisub.DependencyControl.Plugin.csproj" />
+    <ProjectReference Include="..\Aegisub.Managed.Contracts\Aegisub.Managed.Contracts.csproj" />
+  </ItemGroup>
+</Project>

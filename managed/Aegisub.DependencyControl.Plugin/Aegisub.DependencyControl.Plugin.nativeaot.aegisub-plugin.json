@@ -1,0 +1,71 @@
+{
+  "manifestVersion": 2,
+  "id": "aegisub.dependency-control",
+  "name": "DependencyControl",
+  "description": "Manages compatible Lua Automation dependencies and updates.",
+  "author": "Aegisub",
+  "version": "0.1.0",
+  "contractsVersion": "0.1.0",
+  "runtime": {
+    "kind": "native",
+    "entryPoint": "aegisub_plugin_init_v1",
+    "libraries": {
+      "win-x64": "runtimes/win-x64/native/Aegisub.DependencyControl.NativeAot.dll",
+      "win-arm64": "runtimes/win-arm64/native/Aegisub.DependencyControl.NativeAot.dll",
+      "linux-x64": "runtimes/linux-x64/native/Aegisub.DependencyControl.NativeAot.so",
+      "linux-arm64": "runtimes/linux-arm64/native/Aegisub.DependencyControl.NativeAot.so",
+      "osx-x64": "runtimes/osx-x64/native/Aegisub.DependencyControl.NativeAot.dylib",
+      "osx-arm64": "runtimes/osx-arm64/native/Aegisub.DependencyControl.NativeAot.dylib"
+    }
+  },
+  "contributions": [
+    {
+      "kind": "automation",
+      "id": "aegisub.dependency-control.automation",
+      "name": "DependencyControl package manager",
+      "description": "Opens the host-rendered DependencyControl package manager.",
+      "macros": [
+        {
+          "id": "aegisub.dependency-control.package-manager",
+          "name": "DependencyControl/Package Manager",
+          "description": "Opens the host-rendered DependencyControl package manager.",
+          "requiresProject": false,
+          "subtitleAccess": "none"
+        }
+      ]
+    },
+    {
+      "kind": "serviceProvider",
+      "id": "aegisub.dependency-control.service",
+      "name": "DependencyControl application service",
+      "description": "Application-level transport used while Lua Automation scripts are loading.",
+      "operations": [
+        "compatibility.probe",
+        "record.register",
+        "module.ensure",
+        "installed.list",
+        "installed.get",
+        "catalog.lookup",
+        "catalog.list",
+        "packages.install",
+        "updates.check",
+        "updates.apply",
+        "packages.uninstall",
+        "feeds.list",
+        "feeds.upsert",
+        "feeds.remove",
+        "feeds.test",
+        "feeds.inspect",
+        "logs.append",
+        "logs.list",
+        "logs.trim",
+        "config.read",
+        "config.write",
+        "config.delete",
+        "network.settings.get",
+        "network.settings.update",
+        "network.test"
+      ]
+    }
+  ]
+}

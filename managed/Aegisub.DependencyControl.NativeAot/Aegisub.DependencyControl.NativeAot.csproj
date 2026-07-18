@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PublishAot>true</PublishAot>
+    <NativeLib>Shared</NativeLib>
+    <SelfContained>true</SelfContained>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <DisableRuntimeMarshalling>true</DisableRuntimeMarshalling>
+    <AssemblyName>Aegisub.DependencyControl.NativeAot</AssemblyName>
+    <RootNamespace>Aegisub.DependencyControl.NativeAot</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Aegisub.CoreClr.Adapter\Aegisub.CoreClr.Adapter.csproj"
+                      AdditionalProperties="AegisubNativeAotBuild=true" />
+    <ProjectReference Include="..\Aegisub.DependencyControl.Plugin\Aegisub.DependencyControl.Plugin.csproj" />
+  </ItemGroup>
+</Project>

@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <exception>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -157,6 +158,7 @@ class SecondaryBitmapSubtitlesProvider final : public SubtitlesProvider {
 	std::shared_ptr<const SecondarySubtitlePacketStream> stream;
 	RagbagSubtitleDecoderV1 *decoder = nullptr;
 	bool stream_ready = false;
+	std::exception_ptr stream_error;
 
 	std::string LastError() const {
 		if (!record || !record->plugin || !record->plugin->api.get_last_error)
@@ -184,45 +186,54 @@ class SecondaryBitmapSubtitlesProvider final : public SubtitlesProvider {
 	void EnsureStream() {
 		if (stream_ready)
 			return;
+		if (stream_error)
+			std::rethrow_exception(stream_error);
 		if (!stream)
 			throw agi::InternalError("Secondary bitmap subtitle packet stream is missing.");
 
-		auto& api = record->plugin->api;
-		if (!decoder) {
-			auto status = api.create_decoder(record->decoder_id.c_str(), &decoder);
+		try {
+			auto& api = record->plugin->api;
+			if (!decoder) {
+				auto status = api.create_decoder(record->decoder_id.c_str(), &decoder);
+				if (status != RAGBAG_SUBTITLE_STATUS_OK)
+					ThrowStatus("Creating secondary subtitle decoder", status);
+			}
+
+			RagbagSubtitleStreamInfoV1 info = {};
+			info.struct_size = sizeof(info);
+			info.codec_id = stream->codec_id.c_str();
+			info.codec_private = reinterpret_cast<uint8_t const*>(stream->codec_private.data());
+			info.codec_private_size = stream->codec_private.size();
+			info.fallback_canvas_width = stream->fallback_canvas_width;
+			info.fallback_canvas_height = stream->fallback_canvas_height;
+			auto status = api.begin_stream(decoder, &info);
 			if (status != RAGBAG_SUBTITLE_STATUS_OK)
-				ThrowStatus("Creating secondary subtitle decoder", status);
-		}
+				ThrowStatus("Opening secondary subtitle packet stream", status);
 
-		RagbagSubtitleStreamInfoV1 info = {};
-		info.struct_size = sizeof(info);
-		info.codec_id = stream->codec_id.c_str();
-		info.codec_private = reinterpret_cast<uint8_t const*>(stream->codec_private.data());
-		info.codec_private_size = stream->codec_private.size();
-		info.fallback_canvas_width = stream->fallback_canvas_width;
-		info.fallback_canvas_height = stream->fallback_canvas_height;
-		auto status = api.begin_stream(decoder, &info);
-		if (status != RAGBAG_SUBTITLE_STATUS_OK)
-			ThrowStatus("Opening secondary subtitle packet stream", status);
+			for (auto const& source_packet : stream->packets) {
+				RagbagSubtitlePacketV1 packet = {};
+				packet.struct_size = sizeof(packet);
+				packet.pts_ns = source_packet.pts_ns;
+				packet.dts_ns = source_packet.dts_ns;
+				packet.duration_ns = source_packet.duration_ns;
+				packet.flags = source_packet.flags;
+				packet.payload = reinterpret_cast<uint8_t const*>(source_packet.payload.data());
+				packet.payload_size = source_packet.payload.size();
+				status = api.push_packet(decoder, &packet);
+				if (status != RAGBAG_SUBTITLE_STATUS_OK)
+					ThrowStatus("Decoding secondary subtitle packet", status);
+			}
 
-		for (auto const& source_packet : stream->packets) {
-			RagbagSubtitlePacketV1 packet = {};
-			packet.struct_size = sizeof(packet);
-			packet.pts_ns = source_packet.pts_ns;
-			packet.dts_ns = source_packet.dts_ns;
-			packet.duration_ns = source_packet.duration_ns;
-			packet.flags = source_packet.flags;
-			packet.payload = reinterpret_cast<uint8_t const*>(source_packet.payload.data());
-			packet.payload_size = source_packet.payload.size();
-			status = api.push_packet(decoder, &packet);
+			status = api.end_stream(decoder);
 			if (status != RAGBAG_SUBTITLE_STATUS_OK)
-				ThrowStatus("Decoding secondary subtitle packet", status);
+				ThrowStatus("Finishing secondary subtitle packet stream", status);
+			stream_ready = true;
 		}
-
-		status = api.end_stream(decoder);
-		if (status != RAGBAG_SUBTITLE_STATUS_OK)
-			ThrowStatus("Finishing secondary subtitle packet stream", status);
-		stream_ready = true;
+		catch (...) {
+			stream_error = std::current_exception();
+			DestroyDecoder();
+			std::rethrow_exception(stream_error);
+		}
 	}
 
 	void LoadSubtitles(const char*, size_t) override { }

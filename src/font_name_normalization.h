@@ -23,6 +23,7 @@ struct FontNameSourceLocation {
 	FontNameSourceKind kind = FontNameSourceKind::Style;
 	std::string style;
 	int line = 0;
+	std::size_t entry_index = 0;
 	std::size_t override_index = 0;
 	bool comment = false;
 };
@@ -43,6 +44,14 @@ struct FontNameNormalizationPlan {
 	std::vector<FontNameNormalizationChange> changes;
 };
 
+struct FontNameNormalizationApplyResult {
+	bool success = false;
+	bool styles_changed = false;
+	bool dialogue_text_changed = false;
+	std::size_t applied_change_count = 0;
+	std::string error;
+};
+
 /// Analyze style font names and non-empty explicit \fn tags. This function is
 /// read-only: it never modifies the AssFile.
 FontNameNormalizationPlan BuildFontNameNormalizationPlan(
@@ -50,3 +59,10 @@ FontNameNormalizationPlan BuildFontNameNormalizationPlan(
 	FontFamilyCatalog const& catalog,
 	FontNameNormalizationTarget target,
 	std::span<int const> style_source_lines = {});
+
+/// Apply selected safe changes after verifying that every source still has
+/// the value recorded in the plan. Validation finishes before any mutation.
+FontNameNormalizationApplyResult ApplyFontNameNormalizationChanges(
+	AssFile& file,
+	FontNameNormalizationPlan const& plan,
+	std::span<std::size_t const> selected_change_indices);

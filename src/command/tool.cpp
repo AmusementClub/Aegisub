@@ -92,6 +92,17 @@ struct tool_font_collector final : public Command {
 	}
 };
 
+struct tool_font_name_normalization final : public Command {
+	CMD_NAME("tool/font_collector/normalize")
+	STR_MENU("&Normalize Font Names...")
+	STR_DISP("Normalize Font Names")
+	STR_HELP("Check and normalize style and override font family names")
+
+	void operator()(agi::Context *c) override {
+		ShowFontNameNormalizationDialog(c);
+	}
+};
+
 struct tool_line_select final : public Command {
 	CMD_NAME("tool/line/select")
 	CMD_ICON(select_lines_button)
@@ -286,6 +297,7 @@ namespace cmd {
 	void init_tool() {
 		reg(agi::make_unique<tool_export>());
 		reg(agi::make_unique<tool_font_collector>());
+		reg(agi::make_unique<tool_font_name_normalization>());
 		reg(agi::make_unique<tool_line_select>());
 		reg(agi::make_unique<tool_resampleres>());
 		reg(agi::make_unique<tool_style_assistant>());

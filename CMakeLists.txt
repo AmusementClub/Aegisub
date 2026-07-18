@@ -1079,6 +1079,7 @@ add_executable(Aegisub WIN32
     src/dialog_export.cpp
     src/dialog_export_ebu3264.cpp
     src/dialog_font_face.cpp
+    src/dialog_font_name_normalization.cpp
     src/dialog_fonts_collector.cpp
     src/dialog_jumpto.cpp
     src/dialog_kara_timing_copy.cpp

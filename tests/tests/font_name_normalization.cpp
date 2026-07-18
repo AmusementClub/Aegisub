@@ -67,15 +67,18 @@ TEST(font_name_normalization, reports_safe_style_and_override_changes_without_mo
 	ASSERT_EQ(4u, plan.changes.size());
 	EXPECT_EQ(FontNameSourceKind::Style, plan.changes[0].source.kind);
 	EXPECT_EQ("Default", plan.changes[0].source.style);
+	EXPECT_EQ(0u, plan.changes[0].source.entry_index);
 	EXPECT_EQ(7, plan.changes[0].source.line);
 	EXPECT_EQ("English Family", plan.changes[0].recommended_name);
 	EXPECT_TRUE(plan.changes[0].safe_to_apply);
 	EXPECT_EQ("localized_win32_family_alias", plan.changes[0].reason_code);
 	EXPECT_EQ(41, plan.changes[1].source.line);
 	EXPECT_EQ(FontNameSourceKind::Override, plan.changes[1].source.kind);
+	EXPECT_EQ(0u, plan.changes[1].source.entry_index);
 	EXPECT_EQ(1u, plan.changes[1].source.override_index);
 	EXPECT_EQ(3u, plan.changes[2].source.override_index);
 	EXPECT_TRUE(plan.changes[3].source.comment);
+	EXPECT_EQ(1u, plan.changes[3].source.entry_index);
 	EXPECT_EQ(original_text, dialogue.Text.get());
 }
 
@@ -122,4 +125,86 @@ TEST(font_name_normalization, reports_unavailable_and_overlong_english_names_as_
 	EXPECT_FALSE(plan.changes[1].safe_to_apply);
 	EXPECT_EQ("@" + long_name, plan.changes[1].recommended_name);
 	EXPECT_EQ("gdi_family_name_too_long", plan.changes[1].reason_code);
+}
+
+TEST(font_name_normalization, applies_selected_style_and_nested_override_changes) {
+	FontFamilyCatalog catalog({family(1, "Localized Family", "English Family")});
+	AssFile file;
+	add_style(file, "Default", "Localized Family");
+	auto& dialogue = add_event(
+		file, "{\\fnLocalized Family}a{\\t(0,100,\\fnLocalized Family)}b", 4);
+
+	auto plan = BuildFontNameNormalizationPlan(
+		file, catalog, FontNameNormalizationTarget::EnglishWin32);
+	ASSERT_EQ(3u, plan.changes.size());
+	std::array<std::size_t, 3> const selected{0, 1, 2};
+
+	auto result = ApplyFontNameNormalizationChanges(file, plan, selected);
+
+	EXPECT_TRUE(result.success) << result.error;
+	EXPECT_TRUE(result.styles_changed);
+	EXPECT_TRUE(result.dialogue_text_changed);
+	EXPECT_EQ(3u, result.applied_change_count);
+	EXPECT_EQ("English Family", file.Styles.front().font);
+	EXPECT_EQ("{\\fnEnglish Family}a{\\t(0,100,\\fnEnglish Family)}b", dialogue.Text.get());
+
+	auto after = BuildFontNameNormalizationPlan(
+		file, catalog, FontNameNormalizationTarget::EnglishWin32);
+	EXPECT_TRUE(after.changes.empty());
+}
+
+TEST(font_name_normalization, stale_source_rejects_all_changes_before_mutation) {
+	FontFamilyCatalog catalog({family(1, "Localized Family", "English Family")});
+	AssFile file;
+	add_style(file, "Default", "Localized Family");
+	auto& dialogue = add_event(file, "{\\fnLocalized Family}x", 7);
+	auto const original_text = dialogue.Text.get();
+
+	auto plan = BuildFontNameNormalizationPlan(
+		file, catalog, FontNameNormalizationTarget::EnglishWin32);
+	ASSERT_EQ(2u, plan.changes.size());
+	file.Styles.front().font = "Changed Elsewhere";
+	std::array<std::size_t, 2> const selected{0, 1};
+
+	auto result = ApplyFontNameNormalizationChanges(file, plan, selected);
+
+	EXPECT_FALSE(result.success);
+	EXPECT_EQ(0u, result.applied_change_count);
+	EXPECT_EQ(original_text, dialogue.Text.get());
+}
+
+TEST(font_name_normalization, stale_override_rejects_style_change_before_mutation) {
+	FontFamilyCatalog catalog({family(1, "Localized Family", "English Family")});
+	AssFile file;
+	add_style(file, "Default", "Localized Family");
+	auto& dialogue = add_event(file, "{\\fnLocalized Family}x", 7);
+
+	auto plan = BuildFontNameNormalizationPlan(
+		file, catalog, FontNameNormalizationTarget::EnglishWin32);
+	ASSERT_EQ(2u, plan.changes.size());
+	dialogue.Text = "{\\fnChanged Elsewhere}x";
+	std::array<std::size_t, 2> const selected{0, 1};
+
+	auto result = ApplyFontNameNormalizationChanges(file, plan, selected);
+
+	EXPECT_FALSE(result.success);
+	EXPECT_EQ(0u, result.applied_change_count);
+	EXPECT_EQ("Localized Family", file.Styles.front().font);
+	EXPECT_EQ("{\\fnChanged Elsewhere}x", dialogue.Text.get());
+}
+
+TEST(font_name_normalization, rejects_unsafe_findings) {
+	FontFamilyCatalog catalog({family(1, "Localized Family", "English Family")});
+	AssFile file;
+	add_style(file, "Default", "Unknown Family");
+	auto plan = BuildFontNameNormalizationPlan(
+		file, catalog, FontNameNormalizationTarget::EnglishWin32);
+	ASSERT_EQ(1u, plan.changes.size());
+	ASSERT_FALSE(plan.changes[0].safe_to_apply);
+	std::array<std::size_t, 1> const selected{0};
+
+	auto result = ApplyFontNameNormalizationChanges(file, plan, selected);
+
+	EXPECT_FALSE(result.success);
+	EXPECT_EQ("Unknown Family", file.Styles.front().font);
 }

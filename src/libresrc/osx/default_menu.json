@@ -55,6 +55,7 @@
         { "command" : "subtitle/properties" },
         { "command" : "subtitle/attachment" },
         { "command" : "tool/font_collector" },
+        { "command" : "tool/font_collector/normalize" },
         {},
         { "command" : "app/exit", "special" : "exit" }
     ],

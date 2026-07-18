@@ -62,6 +62,7 @@ void ShowAboutDialog(wxWindow *parent);
 void ShowAttachmentsDialog(agi::Context *c);
 void ShowAutomationDialog(agi::Context *c);
 void ShowExportDialog(agi::Context *c);
+void ShowFontNameNormalizationDialog(agi::Context *c);
 void ShowFontsCollectorDialog(agi::Context *c);
 void ShowJumpToDialog(agi::Context *c);
 void ShowKanjiTimerDialog(agi::Context *c);

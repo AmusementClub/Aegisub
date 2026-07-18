@@ -20,6 +20,7 @@
 #include "project.h"
 #include "pgs_sup_packet_stream.h"
 #include "secondary_subtitle_decoder.h"
+#include "subtitle_fps_choice.h"
 #include "subs_controller.h"
 #include "subtitle_format.h"
 #include "track_choice.h"
@@ -41,6 +42,7 @@
 #include <exception>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <wx/app.h>
 #include <wx/bitmap.h>
 #include <wx/intl.h>
@@ -49,6 +51,92 @@
 
 namespace {
 constexpr char const *kSecondarySubtitleWarningTitle = "Secondary subtitles";
+
+constexpr char const *kSubtitleFpsChoiceRequestId = "subtitle_fps_choice.selection";
+
+bool SameFixedFramerate(agi::vfr::Framerate const& fps, SecondarySubtitleFpsSelection const& selection) {
+	if (selection.follow_video || !fps.IsLoaded() || fps.IsVFR())
+		return false;
+	auto const [numerator, denominator] = fps.FPSFraction();
+	return numerator == selection.numerator
+		&& denominator == selection.denominator
+		&& fps.NeedsDropFrames() == selection.drop;
+}
+
+class SecondarySubtitleChoiceSink final : public agi::SingleChoiceInteractionSink {
+	std::shared_ptr<agi::SingleChoiceInteractionSink> delegate;
+	agi::vfr::Framerate const& video_fps;
+	std::optional<SecondarySubtitleFpsSelection> existing_selection;
+	std::optional<SecondarySubtitleFpsSelection> recorded_selection;
+
+	std::optional<int> FindExistingSelection(SubtitleFpsChoiceModel const& model) const {
+		if (!existing_selection)
+			return std::nullopt;
+		if (existing_selection->follow_video)
+			return model.includes_video_choice ? std::optional<int>(0) : std::nullopt;
+
+		for (int i = 0; i < static_cast<int>(model.choices.size()); ++i) {
+			auto resolved = ResolveSubtitleFpsChoiceSelection(model, i, video_fps);
+			if (SameFixedFramerate(resolved, *existing_selection))
+				return i;
+		}
+		return std::nullopt;
+	}
+
+	void RecordSelection(SubtitleFpsChoiceModel const& model, int selection) {
+		if (model.includes_video_choice && selection == 0) {
+			recorded_selection = SecondarySubtitleFpsSelection{true, 0, 1, false};
+			return;
+		}
+
+		auto resolved = ResolveSubtitleFpsChoiceSelection(model, selection, video_fps);
+		auto const [numerator, denominator] = resolved.FPSFraction();
+		recorded_selection = SecondarySubtitleFpsSelection{
+			false,
+			numerator,
+			denominator,
+			resolved.NeedsDropFrames()
+		};
+	}
+
+public:
+	SecondarySubtitleChoiceSink(
+		std::shared_ptr<agi::SingleChoiceInteractionSink> delegate,
+		agi::vfr::Framerate const& video_fps,
+		std::optional<SecondarySubtitleFpsSelection> existing_selection)
+	: delegate(std::move(delegate))
+	, video_fps(video_fps)
+	, existing_selection(std::move(existing_selection)) { }
+
+	std::optional<int> RequestSingleChoice(agi::SingleChoiceInteractionRequest const& request) override {
+		if (request.request_id != kSubtitleFpsChoiceRequestId) {
+			return delegate
+				? delegate->RequestSingleChoice(request)
+				: std::nullopt;
+		}
+
+		SubtitleFpsChoiceModel model;
+		model.choices = request.choices;
+		// The MicroDVD reader calls AskForFPS(true, false, ...), so the video
+		// choice is present for both CFR and VFR timecodes.
+		model.includes_video_choice = video_fps.IsLoaded();
+		if (auto selection = FindExistingSelection(model)) {
+			recorded_selection = existing_selection;
+			return *selection;
+		}
+
+		auto selection = delegate
+			? delegate->RequestSingleChoice(request)
+			: std::nullopt;
+		if (selection && *selection >= 0 && *selection < static_cast<int>(model.choices.size()))
+			RecordSelection(model, *selection);
+		return selection;
+	}
+
+	std::optional<SecondarySubtitleFpsSelection> const& GetRecordedSelection() const {
+		return recorded_selection;
+	}
+};
 }
 
 SecondarySubtitleSession::SecondarySubtitleSession(agi::Context *context)
@@ -100,6 +188,8 @@ void SecondarySubtitleSession::ClearExternalSubtitles() {
 	loaded_external_subtitle_path.clear();
 	external_subtitles_follow_video_resolution = false;
 	external_subtitle_reload_pending = false;
+	external_subtitle_fps_selection.reset();
+	external_subtitles_follow_video_timecodes = false;
 }
 
 void SecondarySubtitleSession::ReleaseProvider() {
@@ -287,6 +377,8 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 			loaded_external_subtitle_path = path_string;
 			external_subtitles_follow_video_resolution = false;
 			external_subtitle_reload_pending = false;
+			external_subtitle_fps_selection.reset();
+			external_subtitles_follow_video_timecodes = false;
 			return true;
 		}
 
@@ -295,14 +387,23 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 		if (!reader)
 			throw UnknownSubtitleFormatError("Subtitle format for extension not found");
 
+		auto core = context->GetCore();
+		auto const reuse_fps_selection = loaded_external_subtitle_path == path_string
+			? external_subtitle_fps_selection
+			: std::nullopt;
+		auto choice_sink = std::make_shared<SecondarySubtitleChoiceSink>(
+			context->GetSingleChoiceInteractionSink(),
+			core.project->Timecodes(),
+			reuse_fps_selection);
+
 		AssFile temp;
 		reader->ReadFile(
 			&temp,
 			path,
-			context->GetCore().project->Timecodes(),
+			core.project->Timecodes(),
 			charset,
-			context->GetSingleChoiceInteractionSink(),
-			context->GetCore().backgroundRunnerFactory);
+			choice_sink,
+			core.backgroundRunnerFactory);
 
 		auto const follow_video_resolution = temp.GetResolutionType(ScriptResolutionType::PlayRes) == ScriptResolutionType::None;
 		if (follow_video_resolution) {
@@ -316,6 +417,9 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 		loaded_external_subtitle_path = path_string;
 		external_subtitles_follow_video_resolution = follow_video_resolution;
 		external_subtitle_reload_pending = false;
+		external_subtitle_fps_selection = choice_sink->GetRecordedSelection();
+		external_subtitles_follow_video_timecodes =
+			external_subtitle_fps_selection && external_subtitle_fps_selection->follow_video;
 		return true;
 	}
 	catch (agi::UserCancelException const&) {
@@ -410,6 +514,8 @@ bool SecondarySubtitleSession::LoadVideoEmbeddedSubtitles(bool show_errors, std:
 				loaded_external_subtitle_path.clear();
 				external_subtitles_follow_video_resolution = false;
 				external_subtitle_reload_pending = false;
+				external_subtitle_fps_selection.reset();
+				external_subtitles_follow_video_timecodes = false;
 				external_subtitle_path.clear();
 				return true;
 			}
@@ -430,6 +536,8 @@ bool SecondarySubtitleSession::LoadVideoEmbeddedSubtitles(bool show_errors, std:
 		loaded_external_subtitle_path.clear();
 		external_subtitles_follow_video_resolution = follow_video_resolution;
 		external_subtitle_reload_pending = false;
+		external_subtitle_fps_selection.reset();
+		external_subtitles_follow_video_timecodes = false;
 		external_subtitle_path.clear();
 		return true;
 	}
@@ -606,12 +714,27 @@ void SecondarySubtitleSession::OnVideoProviderChanged(AsyncVideoProvider *main_p
 }
 
 void SecondarySubtitleSession::OnTimecodesChanged(agi::vfr::Framerate const&) {
-	if (!provider)
+	if (!provider) {
+		if (source_mode == SecondarySubtitleSourceMode::ExternalFile
+			&& !bitmap_subtitles
+			&& external_subtitles_follow_video_timecodes)
+			external_subtitle_reload_pending = true;
 		return;
+	}
 
 	auto core = context->GetCore();
-	if (source_mode == SecondarySubtitleSourceMode::ExternalFile && !bitmap_subtitles && active) {
-		RebuildProvider(core.project->VideoProvider());
+	if (source_mode == SecondarySubtitleSourceMode::ExternalFile
+		&& !bitmap_subtitles
+		&& external_subtitles_follow_video_timecodes) {
+		external_subtitle_reload_pending = true;
+		if (active && LoadConfiguredExternalSubtitles(false, true)) {
+			RebuildProvider(core.project->VideoProvider());
+			return;
+		}
+
+		provider->SetSubtitlesTimecodes(core.project->Timecodes());
+		if (active)
+			RequestFrame(core.videoController->GetFrameN());
 		return;
 	}
 

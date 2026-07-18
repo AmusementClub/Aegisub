@@ -11,8 +11,10 @@
 #include <libaegisub/fs_fwd.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 #include <wx/bitmap.h>
@@ -23,6 +25,13 @@ class AsyncVideoProvider;
 class WatchedFile;
 struct SecondarySubtitlePacketStream;
 struct VideoRenderPacket;
+
+struct SecondarySubtitleFpsSelection {
+	bool follow_video = false;
+	int64_t numerator = 0;
+	int64_t denominator = 1;
+	bool drop = false;
+};
 
 /// A secondary-subtitle source recorded for fast switching within the
 /// current session. Never persisted to disk.
@@ -73,6 +82,8 @@ class SecondarySubtitleSession final {
 	bool external_subtitles_follow_video_resolution = false;
 	// File changes detected while hidden are consumed on the next activation.
 	bool external_subtitle_reload_pending = false;
+	std::optional<SecondarySubtitleFpsSelection> external_subtitle_fps_selection;
+	bool external_subtitles_follow_video_timecodes = false;
 	// Guards the "video has embedded subtitles" auto-prompt so it asks at most
 	// once per video. Reset whenever the video provider changes.
 	bool video_embedded_auto_prompted = false;

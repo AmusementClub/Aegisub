@@ -9,7 +9,21 @@
     "boost-regex",
     "boost-spirit",
     "cli11",
-    "fontconfig",
+    {
+      "name": "fontconfig",
+      "platform": "!windows & !osx"
+    },
     "libiconv"
-  ]
+  ],
+  "features": {
+    "fontconfig": {
+      "description": "Enable the optional Fontconfig-backed libass font matcher on macOS.",
+      "dependencies": [
+        {
+          "name": "fontconfig",
+          "platform": "osx"
+        }
+      ]
+    }
+  }
 }

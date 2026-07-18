@@ -149,7 +149,9 @@ set(AEGISUB_FONTCOLLECTOR_SOURCES
     ${AEGISUB_ROOT}/src/font_family_catalog.cpp
     ${AEGISUB_ROOT}/src/font_name_normalization.cpp
     ${AEGISUB_ROOT}/src/font_file_lister.cpp
+    ${AEGISUB_ROOT}/src/font_file_lister_libass.cpp
     ${AEGISUB_ROOT}/src/font_matching_common.cpp
+    ${AEGISUB_ROOT}/src/font_matching_libass.cpp
     ${AEGISUB_ROOT}/src/string_codec.cpp
     ${AEGISUB_ROOT}/src/text_file_reader.cpp
     ${AEGISUB_ROOT}/src/text_file_writer.cpp
@@ -159,6 +161,7 @@ function(aegisub_fontcollector_configure_library target_name linkage)
     aegisub_fontcollector_set_output_dirs(${target_name})
     set_target_properties(${target_name} PROPERTIES
         POSITION_INDEPENDENT_CODE ON
+        AEGISUB_FONTCOLLECTOR_HAS_FONTCONFIG FALSE
     )
     if(MSVC AND AEGISUB_FONTCOLLECTOR_STATIC_RUNTIME)
         set_property(TARGET ${target_name} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -204,27 +207,45 @@ function(aegisub_fontcollector_configure_library target_name linkage)
     endif()
 
     if(WIN32)
-        find_package(Fontconfig REQUIRED)
-        target_compile_definitions(${target_name} PRIVATE AEGISUB_FONTCOLLECTOR_ENABLE_FONTCONFIG)
+        # Platform: GDI/DirectWrite. Libass: DirectWrite. No Fontconfig.
         target_sources(${target_name} PRIVATE
             ${AEGISUB_ROOT}/src/font_family_catalog_win.cpp
             ${AEGISUB_ROOT}/src/font_file_lister_gdi.cpp
-            ${AEGISUB_ROOT}/src/font_file_lister_dwrite.cpp
-            ${AEGISUB_ROOT}/src/font_file_lister_fontconfig.cpp)
+            ${AEGISUB_ROOT}/src/font_file_lister_dwrite.cpp)
         if(linkage STREQUAL "STATIC")
-            target_link_libraries(${target_name} PUBLIC Advapi32 Gdi32 Shell32 Usp10 dwrite Version Fontconfig::Fontconfig)
+            target_link_libraries(${target_name} PUBLIC Advapi32 Gdi32 Shell32 Usp10 dwrite Version)
         else()
-            target_link_libraries(${target_name} PRIVATE Advapi32 Gdi32 Shell32 Usp10 dwrite Version Fontconfig::Fontconfig)
+            target_link_libraries(${target_name} PRIVATE Advapi32 Gdi32 Shell32 Usp10 dwrite Version)
         endif()
     elseif(APPLE)
-        target_sources(${target_name} PRIVATE ${AEGISUB_ROOT}/src/font_file_lister_coretext.mm)
-        if(linkage STREQUAL "STATIC")
-            target_link_libraries(${target_name} PUBLIC "-framework AppKit" "-framework CoreText")
+        # Platform: CoreText. Libass: optional Fontconfig (not REQUIRED).
+        target_sources(${target_name} PRIVATE
+            ${AEGISUB_ROOT}/src/font_file_lister_coretext.mm)
+        find_package(Fontconfig)
+        if(Fontconfig_FOUND)
+            target_compile_definitions(${target_name} PRIVATE AEGISUB_FONTCOLLECTOR_ENABLE_FONTCONFIG)
+            set_property(TARGET ${target_name} PROPERTY AEGISUB_FONTCOLLECTOR_HAS_FONTCONFIG TRUE)
+            target_sources(${target_name} PRIVATE
+                ${AEGISUB_ROOT}/src/font_file_lister_fontconfig.cpp)
+            if(linkage STREQUAL "STATIC")
+                target_link_libraries(${target_name} PUBLIC "-framework AppKit" "-framework CoreText" Fontconfig::Fontconfig)
+            else()
+                target_link_libraries(${target_name} PRIVATE "-framework AppKit" "-framework CoreText" Fontconfig::Fontconfig)
+            endif()
         else()
-            target_link_libraries(${target_name} PRIVATE "-framework AppKit" "-framework CoreText")
+            message(STATUS
+                "Fontconfig not found: fontcollector libass matcher disabled on Apple; "
+                "enable the vcpkg manifest feature 'fontconfig' to install it")
+            if(linkage STREQUAL "STATIC")
+                target_link_libraries(${target_name} PUBLIC "-framework AppKit" "-framework CoreText")
+            else()
+                target_link_libraries(${target_name} PRIVATE "-framework AppKit" "-framework CoreText")
+            endif()
         endif()
     else()
+        # Linux: Fontconfig serves platform and libass matchers.
         find_package(Fontconfig REQUIRED)
+        set_property(TARGET ${target_name} PROPERTY AEGISUB_FONTCOLLECTOR_HAS_FONTCONFIG TRUE)
         target_sources(${target_name} PRIVATE ${AEGISUB_ROOT}/src/font_file_lister_fontconfig.cpp)
         if(linkage STREQUAL "STATIC")
             target_link_libraries(${target_name} PUBLIC Fontconfig::Fontconfig)
@@ -250,6 +271,10 @@ function(aegisub_fontcollector_add_cli target_name core_target runtime_dir)
         set_property(TARGET ${target_name} PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
     endif()
     target_compile_features(${target_name} PRIVATE cxx_std_20)
+    get_target_property(fontconfig_enabled ${core_target} AEGISUB_FONTCOLLECTOR_HAS_FONTCONFIG)
+    if(fontconfig_enabled)
+        target_compile_definitions(${target_name} PRIVATE AEGISUB_FONTCOLLECTOR_ENABLE_FONTCONFIG)
+    endif()
     target_sources(${target_name} PRIVATE
         ${AEGISUB_ROOT}/libaegisub/common/cajun/elements.cpp
         ${AEGISUB_ROOT}/libaegisub/common/cajun/writer.cpp

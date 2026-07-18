@@ -39,18 +39,15 @@ enum class FontCollectorEventType {
 	AllFontsFound,
 	FontsMissing,
 	FontsMissingGlyphs,
-	CollectionSymlinkingFontsToFolder,
 	CollectionCopyingFontsToFolder,
 	CollectionCopyingFontsToArchive,
 	CollectionFailedCreateDirectory,
 	CollectionFailedOpen,
 	CollectionCopied,
 	CollectionAlreadyExists,
-	CollectionSymlinked,
 	CollectionFailedCopy,
 	CollectionDoneAllCopied,
 	CollectionDoneSomeNotCopied,
-	CollectionOver32MBWarning,
 	CollectionNewline
 };
 

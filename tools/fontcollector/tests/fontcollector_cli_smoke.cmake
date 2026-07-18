@@ -16,6 +16,14 @@ set(B_ASS "${TEST_WORK_DIR}/b.ass")
 set(MISSING_ASS "${TEST_WORK_DIR}/missing.ass")
 set(SIMHEI_ASS "${TEST_WORK_DIR}/simhei.ass")
 set(SIMHEI_LOCALIZED_ASS "${TEST_WORK_DIR}/simhei-localized.ass")
+set(NESTED_TRANSFORM_ASS "${TEST_WORK_DIR}/nested-transform.ass")
+set(TAB_ASS "${TEST_WORK_DIR}/tab.ass")
+set(SPACES_ASS "${TEST_WORK_DIR}/spaces.ass")
+set(WRAP_RESET_ASS "${TEST_WORK_DIR}/wrap-reset.ass")
+set(ESCAPED_BRACES_ASS "${TEST_WORK_DIR}/escaped-braces.ass")
+set(DRAWING_ASS "${TEST_WORK_DIR}/drawing.ass")
+set(NESTED_DRAWING_ASS "${TEST_WORK_DIR}/nested-drawing.ass")
+set(NESTED_TEXT_ASS "${TEST_WORK_DIR}/nested-text.ass")
 set(COPY_DIR "${TEST_WORK_DIR}/copy")
 
 file(WRITE "${A_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,ASCII only\n")
@@ -23,6 +31,14 @@ file(WRITE "${B_ASS}" "${COMMON_HEADER}; physical line padding\nDialogue: 0,0:00
 file(WRITE "${MISSING_ASS}" "[Script Info]\nScriptType: v4.00+\nWrapStyle: 0\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,DefinitelyMissingAegisubFont,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n; padding\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,Hello\n")
 file(WRITE "${SIMHEI_ASS}" "[Script Info]\nScriptType: v4.00+\nWrapStyle: 0\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,SimHei,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,Hello\n")
 file(WRITE "${SIMHEI_LOCALIZED_ASS}" "[Script Info]\nScriptType: v4.00+\nWrapStyle: 0\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\nStyle: Default,黑体,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\fn黑体}Hello\n")
+file(WRITE "${NESTED_TRANSFORM_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\t(0,1000,\\fnDefinitelyMissingNestedFont)}X\n")
+file(WRITE "${TAB_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,A\tB\n")
+file(WRITE "${SPACES_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,A\\hB C\n")
+file(WRITE "${WRAP_RESET_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\q2}A{\\q}B\\nC\n")
+file(WRITE "${ESCAPED_BRACES_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,A\\{B\\}C\n")
+file(WRITE "${DRAWING_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\p1}m 0 0 l 10 0 10 10 0 10{\\p0}\n")
+file(WRITE "${NESTED_DRAWING_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\t(0,1000,\\p1)}m 0 0 l 10 0 10 10 0 10\n")
+file(WRITE "${NESTED_TEXT_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\p1\\t(0,1000,\\p0)}A\n")
 
 function(run_fontcollector EXPECTED_RESULT)
 	execute_process(
@@ -113,7 +129,9 @@ require_contains("${FONTCOLLECTOR_STDOUT}" "ISSUE: style 'Default' (line 7)" "no
 require_contains("${FONTCOLLECTOR_STDOUT}" "unrecognized_family_name" "normalize human reason")
 
 run_fontcollector(0 check "${A_ASS}" "${B_ASS}" --json)
-require_json_equals("${FONTCOLLECTOR_STDOUT}" "1" "json schema version" schema_version)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "2" "json schema version" schema_version)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "platform" "default matcher root" matcher)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "platform" "default matcher file" files 0 matcher)
 json_length(file_count "${FONTCOLLECTOR_STDOUT}" files)
 if(NOT file_count EQUAL 2)
 	message(FATAL_ERROR "expected two file reports, got ${file_count}\njson:\n${FONTCOLLECTOR_STDOUT}")
@@ -132,6 +150,78 @@ run_fontcollector(0 check "${A_ASS}" --details)
 require_contains("${FONTCOLLECTOR_STDOUT}" "Parsing file" "detailed human events")
 require_contains("${FONTCOLLECTOR_STDOUT}" "Font usage:" "detailed human usage")
 require_contains("${FONTCOLLECTOR_STDOUT}" "names:" "detailed human font names")
+
+run_fontcollector(0 list "${NESTED_TRANSFORM_ASS}" --json)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "missing" "nested transform font status" files 0 font_usage 0 matched_font match_status)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "DefinitelyMissingNestedFont" "nested transform font name" files 0 font_usage 0 ass_font facename)
+
+run_fontcollector(0 check "${TAB_ASS}" --json)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "0" "literal tab missing glyph count" files 0 summary missing_glyph_font_count)
+
+run_fontcollector(0 list "${SPACES_ASS}" --json)
+json_length(space_codepoint_count "${FONTCOLLECTOR_STDOUT}" files 0 font_usage 0 codepoints values)
+if(NOT space_codepoint_count EQUAL 4)
+	message(FATAL_ERROR "expected A/B/C and one shared NBSP codepoint, got ${space_codepoint_count}\njson:\n${FONTCOLLECTOR_STDOUT}")
+endif()
+require_json_array_contains("${FONTCOLLECTOR_STDOUT}" "160" "literal NBSP and \\h codepoint" files 0 font_usage 0 codepoints values)
+
+run_fontcollector(0 list "${WRAP_RESET_ASS}" --json)
+json_length(wrap_reset_codepoint_count "${FONTCOLLECTOR_STDOUT}" files 0 font_usage 0 codepoints values)
+if(NOT wrap_reset_codepoint_count EQUAL 4)
+	message(FATAL_ERROR "expected omitted \\q to restore WrapStyle and collect a space, got ${wrap_reset_codepoint_count}\njson:\n${FONTCOLLECTOR_STDOUT}")
+endif()
+require_json_array_contains("${FONTCOLLECTOR_STDOUT}" "32" "omitted \\q restores WrapStyle" files 0 font_usage 0 codepoints values)
+
+run_fontcollector(0 list "${ESCAPED_BRACES_ASS}" --json)
+json_length(escaped_codepoint_count "${FONTCOLLECTOR_STDOUT}" files 0 font_usage 0 codepoints values)
+if(NOT escaped_codepoint_count EQUAL 5)
+	message(FATAL_ERROR "expected escaped braces without a backslash glyph, got ${escaped_codepoint_count}\njson:\n${FONTCOLLECTOR_STDOUT}")
+endif()
+
+run_fontcollector(0 list "${DRAWING_ASS}" --json)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "0" "pure drawing font usage" files 0 summary font_usage_count)
+
+run_fontcollector(0 list "${NESTED_DRAWING_ASS}" --json)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "0" "nested pure drawing font usage" files 0 summary font_usage_count)
+
+run_fontcollector(0 list "${NESTED_TEXT_ASS}" --json)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "1" "nested drawing reset font usage" files 0 summary font_usage_count)
+
+run_fontcollector(0 check "${A_ASS}" --matcher libass --json)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "libass" "explicit libass matcher" matcher)
+if(WIN32)
+	require_json_equals("${FONTCOLLECTOR_STDOUT}" "directwrite" "libass matcher provider" provider)
+else()
+	require_json_equals("${FONTCOLLECTOR_STDOUT}" "fontconfig" "libass matcher provider" provider)
+endif()
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "0" "libass matcher clean file" files 0 summary missing_glyph_font_count)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "lower_is_better" "libass score direction" files 0 font_usage 0 matched_font match_analysis score_order)
+json_length(libass_candidate_count "${FONTCOLLECTOR_STDOUT}" files 0 font_usage 0 matched_font match_analysis candidates)
+if(libass_candidate_count LESS 1)
+	message(FATAL_ERROR "expected libass matcher candidate evidence\njson:\n${FONTCOLLECTOR_STDOUT}")
+endif()
+
+# Empty private catalog must fail closed (CLI + API).
+run_fontcollector(1 check "${A_ASS}" --matcher libass --exclude-system-fonts)
+require_contains("${FONTCOLLECTOR_STDERR}${FONTCOLLECTOR_STDOUT}" "exclude-system-fonts" "empty private catalog rejected")
+
+# Unknown family under libass falls through to the configured default and then
+# the provider fallback. DirectWrite does not substitute Aegisub's literal "Sans".
+run_fontcollector(0 check "${MISSING_ASS}" --matcher libass --json)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "libass" "libass missing-font matcher" matcher)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "0" "libass default-family path not a hard miss" files 0 summary missing_font_count)
+if(WIN32)
+	require_json_equals("${FONTCOLLECTOR_STDOUT}" "fallback" "libass uses DirectWrite fallback for unknown name" files 0 font_usage 0 matched_font match_analysis candidates 0 match_source)
+endif()
+
+# Private-only fallback must select from the private catalog, not a system family.
+if(WIN32 AND EXISTS "$ENV{WINDIR}/Fonts/arial.ttf")
+	run_fontcollector(0 check "${MISSING_ASS}" --matcher libass
+	                  --additional-fonts "$ENV{WINDIR}/Fonts/arial.ttf"
+	                  --exclude-system-fonts --json)
+	require_json_equals("${FONTCOLLECTOR_STDOUT}" "0" "private fallback finds an additional font" files 0 summary missing_font_count)
+	require_json_equals("${FONTCOLLECTOR_STDOUT}" "fallback" "private catalog fallback source" files 0 font_usage 0 matched_font match_analysis candidates 0 match_source)
+endif()
 
 run_fontcollector(0 list "${A_ASS}" "${MISSING_ASS}")
 require_contains("${FONTCOLLECTOR_STDOUT}" "Arial <Arial>" "list installed font")

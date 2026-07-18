@@ -13,6 +13,20 @@
 #pragma once
 
 #include <string>
+#include <vector>
+
+struct FontMatchCandidate {
+	std::vector<std::string> families;
+	std::vector<std::string> fullnames;
+	std::string postscript_name;
+	std::string extended_family;
+	std::string path;
+	int face_index = 0;
+	int weight = 400;
+	bool bold = false;
+	bool italic = false;
+	bool postscript_outlines = false;
+};
 
 struct FontMatchRequest {
 	std::string facename;

@@ -60,6 +60,7 @@ class DialogFontsCollector final : public wxDialog {
 	AssFile *subs;
 	agi::Path &path;
 	FontCollectionMode mode = FontCollectionMode::CheckFontsOnly;
+	FontCollectorMatcher matcher = FontCollectorMatcher::Platform;
 	agi::ui::UiActivationScope ui_activation;
 
 	wxStyledTextCtrl *collection_log;
@@ -67,6 +68,7 @@ class DialogFontsCollector final : public wxDialog {
 	wxButton *dest_browse_button;
 	wxButton *start_btn;
 	wxRadioBox *collection_mode;
+	wxRadioBox *font_matcher;
 	wxStaticText *dest_label;
 	wxTextCtrl *dest_ctrl;
 
@@ -134,7 +136,7 @@ wxString FormatLineList(std::vector<int> const& lines) {
 color_str_pair FormatFontCollectorEvent(FontCollectorEvent const& event) {
 	switch (event.type) {
 		case FontCollectorEventType::FontBackendInfo:
-			return {0, fmt_wx("Font backend: %s\n", event.message)};
+			return {0, fmt_wx("Font provider: %s\n", event.message)};
 		case FontCollectorEventType::UpdatingFontCache:
 			return {0, _("Updating font cache\n")};
 		case FontCollectorEventType::FontCacheError:
@@ -152,6 +154,8 @@ color_str_pair FormatFontCollectorEvent(FontCollectorEvent const& event) {
 		case FontCollectorEventType::FontMissing:
 			return {2, fmt_tl("Could not find font '%s'\n", event.face)};
 		case FontCollectorEventType::FontFound: {
+			if (event.message == "memory")
+				return {0, fmt_tl("Found '%s' in memory; it will be dumped when collecting.\n", event.face)};
 			auto src = event.message.empty() ? wxString{} : fmt_wx(" [%s]", event.message);
 			return {0, fmt_tl("Found '%s' at '%s'%s\n", event.face, event.path, src)};
 		}
@@ -195,8 +199,6 @@ color_str_pair FormatFontCollectorEvent(FontCollectorEvent const& event) {
 				"One font was found, but was missing glyphs used in the script.\n",
 				"%d fonts were found, but were missing glyphs used in the script.\n",
 				event.count)};
-		case FontCollectorEventType::CollectionSymlinkingFontsToFolder:
-			return {0, _("Symlinking fonts to folder...\n")};
 		case FontCollectorEventType::CollectionCopyingFontsToFolder:
 			return {0, _("Copying fonts to folder...\n")};
 		case FontCollectorEventType::CollectionCopyingFontsToArchive:
@@ -209,16 +211,12 @@ color_str_pair FormatFontCollectorEvent(FontCollectorEvent const& event) {
 			return {1, fmt_tl("* Copied %s.\n", event.path)};
 		case FontCollectorEventType::CollectionAlreadyExists:
 			return {3, fmt_tl("* %s already exists on destination.\n", event.path.filename())};
-		case FontCollectorEventType::CollectionSymlinked:
-			return {1, fmt_tl("* Symlinked %s.\n", event.path)};
 		case FontCollectorEventType::CollectionFailedCopy:
 			return {2, fmt_tl("* Failed to copy %s.\n", event.path)};
 		case FontCollectorEventType::CollectionDoneAllCopied:
 			return {1, _("Done. All fonts copied.")};
 		case FontCollectorEventType::CollectionDoneSomeNotCopied:
 			return {2, _("Done. Some fonts could not be copied.")};
-		case FontCollectorEventType::CollectionOver32MBWarning:
-			return {2, _("\nOver 32 MB of fonts were copied. Some of the fonts may not be loaded by the player if they are all attached to a Matroska file.")};
 		case FontCollectorEventType::CollectionNewline:
 			return {0, wxS("\n")};
 	}
@@ -253,9 +251,18 @@ public:
 		zip->Write(in);
 		return zip->IsOk();
 	}
+
+	bool AddMemory(agi::fs::path const& name, std::span<char const> data) override {
+		if (!zip->PutNextEntry(name.wstring()))
+			return false;
+		zip->Write(data.data(), data.size());
+		return zip->IsOk();
+	}
 };
 
-void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FontCollectionMode oper, wxEvtHandler *collector, agi::ui::WeakLifetime lifetime) {
+void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FontCollectionMode oper,
+                          FontCollectorMatcher matcher, wxEvtHandler *collector,
+                          agi::ui::WeakLifetime lifetime) {
 	agi::dispatch::BackgroundExecutor().Post([=]{
 		auto AppendFontEvent = [&](FontCollectorEvent const& event) {
 			agi::ui::MainAsyncIfAlive(lifetime, [collector, event] {
@@ -265,7 +272,7 @@ void FontsCollectorThread(AssFile *subs, agi::fs::path const& destination, FontC
 
 		CollectFonts(subs, destination, oper, AppendFontEvent, nullptr, [](agi::fs::path const& archive) {
 			return agi::make_unique<WxZipArchiveWriter>(archive);
-		});
+		}, matcher);
 
 		agi::ui::MainAsyncIfAlive(lifetime, [collector] {
 			collector->AddPendingEvent(wxThreadEvent(EVT_COLLECTION_DONE));
@@ -287,14 +294,16 @@ DialogFontsCollector::DialogFontsCollector(agi::Context *c)
 		,_("Copy fonts to folder")
 		,_("Copy fonts to subtitle file's folder")
 		,_("Copy fonts to zipped archive")
-#ifndef _WIN32
-		,_("Symlink fonts to folder")
-#endif
 	};
 
 	mode = static_cast<FontCollectionMode>(mid<int>(0, OPT_GET("Tool/Fonts Collector/Action")->GetInt(), countof(modes) - 1));
 	collection_mode = new wxRadioBox(this, -1, _("Action"), wxDefaultPosition, wxDefaultSize, countof(modes), modes, 1);
 	collection_mode->SetSelection(static_cast<int>(mode));
+
+	wxString matchers[] = {_("Platform"), wxS("libass")};
+	matcher = static_cast<FontCollectorMatcher>(mid<int>(0, OPT_GET("Tool/Fonts Collector/Matcher")->GetInt(), countof(matchers) - 1));
+	font_matcher = new wxRadioBox(this, -1, _("Font matcher"), wxDefaultPosition, wxDefaultSize, countof(matchers), matchers, 1);
+	font_matcher->SetSelection(static_cast<int>(matcher));
 
 	if (core.path->Decode("?script") == "?script")
 		collection_mode->Enable(2, false);
@@ -331,6 +340,7 @@ DialogFontsCollector::DialogFontsCollector(agi::Context *c)
 
 	wxSizer *main_sizer = new wxBoxSizer(wxVERTICAL);
 	main_sizer->Add(collection_mode, wxSizerFlags().Expand().Border());
+	main_sizer->Add(font_matcher, wxSizerFlags().Expand().Border(wxALL & ~wxTOP));
 	main_sizer->Add(destination_box, wxSizerFlags().Expand().Border(wxALL & ~wxTOP));
 	main_sizer->Add(log_box, wxSizerFlags().Border(wxALL & ~wxTOP));
 	main_sizer->Add(button_sizer, wxSizerFlags().Right().Border(wxALL & ~wxTOP));
@@ -344,6 +354,10 @@ DialogFontsCollector::DialogFontsCollector(agi::Context *c)
 	start_btn->Bind(wxEVT_BUTTON, &DialogFontsCollector::OnStart, this);
 	dest_browse_button->Bind(wxEVT_BUTTON, &DialogFontsCollector::OnBrowse, this);
 	collection_mode->Bind(wxEVT_RADIOBOX, &DialogFontsCollector::OnRadio, this);
+	font_matcher->Bind(wxEVT_RADIOBOX, [this](wxCommandEvent& event) {
+		matcher = static_cast<FontCollectorMatcher>(event.GetInt());
+		OPT_SET("Tool/Fonts Collector/Matcher")->SetInt(event.GetInt());
+	});
 	button_sizer->GetHelpButton()->Bind(wxEVT_BUTTON, std::bind(&HelpButton::OpenPage, "Fonts Collector"));
 	Bind(EVT_ADD_TEXT, &DialogFontsCollector::OnAddText, this);
 	Bind(EVT_COLLECTION_DONE, &DialogFontsCollector::OnCollectionComplete, this);
@@ -376,7 +390,7 @@ void DialogFontsCollector::OnStart(wxCommandEvent &) {
 		}
 	}
 
-	if (mode == FontCollectionMode::CopyToFolder || mode == FontCollectionMode::SymlinkToFolder || mode == FontCollectionMode::CopyToZip) {
+	if (mode == FontCollectionMode::CopyToFolder || mode == FontCollectionMode::CopyToZip) {
 		auto stored_destination = path.Encode(dest);
 		if (!destination_text.empty() && destination_text[0] == '?')
 			stored_destination = destination_text;
@@ -390,9 +404,10 @@ void DialogFontsCollector::OnStart(wxCommandEvent &) {
 	dest_ctrl->Enable(false);
 	close_btn->Enable(false);
 	collection_mode->Enable(false);
+	font_matcher->Enable(false);
 	dest_label->Enable(false);
 
-	FontsCollectorThread(subs, dest, mode, GetEventHandler(), GetAsyncUiLifetime());
+	FontsCollectorThread(subs, dest, mode, matcher, GetEventHandler(), GetAsyncUiLifetime());
 }
 
 void DialogFontsCollector::OnBrowse(wxCommandEvent &) {
@@ -439,7 +454,7 @@ void DialogFontsCollector::UpdateControls() {
 		dest_browse_button->Enable(true);
 		dest_label->Enable(true);
 
-		if (mode == FontCollectionMode::CopyToFolder || mode == FontCollectionMode::SymlinkToFolder) {
+		if (mode == FontCollectionMode::CopyToFolder) {
 			dest_label->SetLabel(_("Choose the folder where the fonts will be collected to. It will be created if it doesn't exist."));
 
 			// Remove filename from browse box
@@ -488,6 +503,7 @@ void DialogFontsCollector::OnCollectionComplete(wxThreadEvent &) {
 	start_btn->Enable();
 	close_btn->Enable();
 	collection_mode->Enable();
+	font_matcher->Enable();
 	if (path.Decode("?script") == "?script")
 		collection_mode->Enable(2, false);
 

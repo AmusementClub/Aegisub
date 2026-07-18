@@ -305,7 +305,7 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 		ret.matched_italic = metrics.tmItalic != 0;
 	}
 
-	// --- DWrite bridge: try to get path, simulations and raw data ---
+	// --- DWrite bridge: try to get path, names and simulations ---
 	if (dwrite_bridge->available()) {
 		LOGFONTW lf_actual{};
 		GetObjectW(hfont, sizeof(LOGFONTW), &lf_actual);
@@ -331,7 +331,16 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 			if (ret.face_index < 0)
 				ret.face_index = static_cast<int>(dw_face->GetIndex());
 
-			dwrite_bridge->ReadFontData(dw_face, ret.raw_data.bytes);
+			if (ret.paths.empty()) {
+				std::vector<char> bytes;
+				if (dwrite_bridge->ReadFontData(dw_face, bytes) && !bytes.empty()) {
+					FontMemoryFont memory_font;
+					memory_font.facename = !ret.matched_facename_full.empty() ? ret.matched_facename_full :
+					                           !ret.matched_facename.empty() ? ret.matched_facename : facename;
+					memory_font.data = std::make_shared<std::vector<char> const>(std::move(bytes));
+					ret.memory_fonts.push_back(std::move(memory_font));
+				}
+			}
 
 			auto dw_faux = DetectFauxStylesDWrite(dw_face);
 			if (dw_faux.faux_bold) ret.fake_bold = true;
@@ -346,14 +355,11 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 	// 	ret.fake_italic = faux.faux_italic;
 	// }
 
-	// --- GDI fallback: path via registry + hash, raw_data via GetFontData ---
-	if (ret.paths.empty() || ret.raw_data.bytes.empty()) {
-		// Ensure we have the raw GDI font data.
-		if (ret.raw_data.bytes.empty())
-			get_font_data(buffer, dc);
-
+	// --- GDI fallback: path via registry + font-data hash ---
+	if (ret.paths.empty()) {
+		get_font_data(buffer, dc);
 		// Try to find the file path from the registry index.
-		if (ret.paths.empty() && !buffer.empty()) {
+		if (!buffer.empty()) {
 			auto range = index.equal_range(murmur3(buffer.c_str(), std::min<size_t>(buffer.size(), 1024U)));
 			std::unique_ptr<char[]> file_buffer(new char[buffer.size()]);
 			for (auto it = range.first; it != range.second; ++it) {
@@ -369,13 +375,16 @@ CollectionResult GdiFontFileLister::GetFontPaths(std::string const& facename, in
 			}
 		}
 
-		// Fill raw_data from GDI if DWrite didn't provide it.
-		if (ret.raw_data.bytes.empty() && !buffer.empty()) {
-			ret.raw_data.bytes.assign(buffer.begin(), buffer.end());
+		if (ret.paths.empty() && ret.memory_fonts.empty() && !buffer.empty()) {
+			FontMemoryFont memory_font;
+			memory_font.facename = !ret.matched_facename_full.empty() ? ret.matched_facename_full :
+			                           !ret.matched_facename.empty() ? ret.matched_facename : facename;
+			memory_font.data = std::make_shared<std::vector<char> const>(buffer.begin(), buffer.end());
+			ret.memory_fonts.push_back(std::move(memory_font));
 		}
 	}
-	if (ret.raw_data.bytes.size() >= 4 && ret.raw_data.bytes.data())
-		ret.is_collection = (DetermineFontFormat(std::span<const char, 4>(ret.raw_data.bytes.data(), 4)) == FontFormat::Collection);
+	if (!ret.paths.empty())
+		ret.memory_fonts.clear();
 
 	// Convert the characters to a utf-16 string
 	std::wstring utf16characters;

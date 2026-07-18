@@ -30,12 +30,9 @@ namespace {
 static_assert(static_cast<int>(FontCollectionMode::CheckFontsOnly) == AEGISUB_FONTCOLLECTOR_MODE_CHECK);
 static_assert(static_cast<int>(FontCollectionMode::CopyToFolder) == AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_FOLDER);
 static_assert(static_cast<int>(FontCollectionMode::CopyToScriptFolder) == AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_SCRIPT_FOLDER);
-static_assert(static_cast<int>(FontCollectionMode::CopyToZip) == AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_ZIP);
-static_assert(static_cast<int>(FontCollectionMode::SymlinkToFolder) == AEGISUB_FONTCOLLECTOR_MODE_SYMLINK_TO_FOLDER);
-static_assert(static_cast<int>(FontCollectorBackend::Auto) == AEGISUB_FONTCOLLECTOR_BACKEND_AUTO);
-static_assert(static_cast<int>(FontCollectorBackend::PlatformDefault) == AEGISUB_FONTCOLLECTOR_BACKEND_PLATFORM_DEFAULT);
-static_assert(static_cast<int>(FontCollectorBackend::Fontconfig) == AEGISUB_FONTCOLLECTOR_BACKEND_FONTCONFIG);
-static_assert(static_cast<int>(FontCollectorBackend::CoreText) == AEGISUB_FONTCOLLECTOR_BACKEND_CORETEXT);
+static_assert(static_cast<int>(FontCollectorMatcher::Platform) == AEGISUB_FONTCOLLECTOR_MATCHER_PLATFORM);
+static_assert(static_cast<int>(FontCollectorMatcher::Libass) == AEGISUB_FONTCOLLECTOR_MATCHER_LIBASS);
+static_assert(AEGISUB_FONTCOLLECTOR_MATCH_MEMORY_ONLY == 2);
 static_assert(static_cast<int>(FontCollectorEventType::FontBackendInfo) == AEGISUB_FONTCOLLECTOR_EVENT_FONT_BACKEND_INFO);
 static_assert(static_cast<int>(FontCollectorEventType::CollectionNewline) == AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_NEWLINE);
 static_assert(static_cast<int>(FontNameNormalizationTarget::Localized) == AEGISUB_FONT_NAME_TARGET_LOCALIZED);
@@ -292,7 +289,6 @@ void AccumulateSummary(AegisubFontCollectorSummary& summary, FontCollectorEvent 
 			++summary.fake_italic_count;
 			break;
 		case FontCollectorEventType::CollectionCopied:
-		case FontCollectorEventType::CollectionSymlinked:
 		case FontCollectorEventType::CollectionAlreadyExists:
 			++summary.copied_font_count;
 			break;
@@ -317,29 +313,17 @@ bool ToCoreMode(AegisubFontCollectorMode mode, FontCollectionMode& out) {
 		case AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_SCRIPT_FOLDER:
 			out = FontCollectionMode::CopyToScriptFolder;
 			return true;
-		case AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_ZIP:
-			out = FontCollectionMode::CopyToZip;
-			return true;
-		case AEGISUB_FONTCOLLECTOR_MODE_SYMLINK_TO_FOLDER:
-			out = FontCollectionMode::SymlinkToFolder;
-			return true;
 	}
 	return false;
 }
 
-bool ToCoreBackend(AegisubFontCollectorBackend backend, FontCollectorBackend& out) {
-	switch (backend) {
-		case AEGISUB_FONTCOLLECTOR_BACKEND_AUTO:
-			out = FontCollectorBackend::Auto;
+bool ToCoreMatcher(AegisubFontCollectorMatcher matcher, FontCollectorMatcher& out) {
+	switch (matcher) {
+		case AEGISUB_FONTCOLLECTOR_MATCHER_PLATFORM:
+			out = FontCollectorMatcher::Platform;
 			return true;
-		case AEGISUB_FONTCOLLECTOR_BACKEND_PLATFORM_DEFAULT:
-			out = FontCollectorBackend::PlatformDefault;
-			return true;
-		case AEGISUB_FONTCOLLECTOR_BACKEND_FONTCONFIG:
-			out = FontCollectorBackend::Fontconfig;
-			return true;
-		case AEGISUB_FONTCOLLECTOR_BACKEND_CORETEXT:
-			out = FontCollectorBackend::CoreText;
+		case AEGISUB_FONTCOLLECTOR_MATCHER_LIBASS:
+			out = FontCollectorMatcher::Libass;
 			return true;
 	}
 	return false;
@@ -421,6 +405,31 @@ void EmitCUsage(FontCollectorAssFontUsage const& usage,
 	for (auto const& style : usage.styles)
 		styles.push_back(style.c_str());
 
+	std::vector<AegisubFontCollectorMatchCandidate> match_candidates;
+	match_candidates.reserve(usage.matched.match_candidates.size());
+	for (auto const& source : usage.matched.match_candidates) {
+		AegisubFontCollectorMatchCandidate candidate = {};
+		candidate.facename = source.facename.c_str();
+		candidate.facename_full = source.facename_full.c_str();
+		candidate.matched_name = source.matched_name.c_str();
+		candidate.match_source = source.match_source.c_str();
+		candidate.name_match = source.name_match.c_str();
+		candidate.path = source.path.c_str();
+		candidate.provider_order = source.provider_order;
+		candidate.face_index = source.face_index;
+		candidate.score = source.score;
+		candidate.weight = source.weight;
+		candidate.bold = source.bold;
+		candidate.italic = source.italic;
+		candidate.considered_codepoints = source.considered_codepoints.empty() ? nullptr : source.considered_codepoints.data();
+		candidate.considered_codepoint_count = source.considered_codepoints.size();
+		candidate.supported_codepoints = source.supported_codepoints.empty() ? nullptr : source.supported_codepoints.data();
+		candidate.supported_codepoint_count = source.supported_codepoints.size();
+		candidate.selected_codepoints = source.selected_codepoints.empty() ? nullptr : source.selected_codepoints.data();
+		candidate.selected_codepoint_count = source.selected_codepoints.size();
+		match_candidates.push_back(candidate);
+	}
+
 	AegisubFontCollectorFontUsage c_usage = {};
 	c_usage.ass_facename = usage.ass_facename.c_str();
 	c_usage.ass_bold = usage.ass_bold;
@@ -433,7 +442,7 @@ void EmitCUsage(FontCollectorAssFontUsage const& usage,
 	c_usage.line_count = usage.lines.size();
 	c_usage.override_lines = usage.override_lines.empty() ? nullptr : usage.override_lines.data();
 	c_usage.override_line_count = usage.override_lines.size();
-	if (usage.matched.paths.empty() && usage.matched.raw_data.bytes.empty())
+	if (usage.matched.paths.empty() && usage.matched.memory_fonts.empty())
 		c_usage.matched.match_status = AEGISUB_FONTCOLLECTOR_MATCH_MISSING;
 	else if (usage.matched.paths.empty())
 		c_usage.matched.match_status = AEGISUB_FONTCOLLECTOR_MATCH_MEMORY_ONLY;
@@ -444,15 +453,11 @@ void EmitCUsage(FontCollectorAssFontUsage const& usage,
 	c_usage.matched.weight = usage.matched.weight;
 	c_usage.matched.bold = usage.matched.bold;
 	c_usage.matched.italic = usage.matched.italic;
-	c_usage.matched.is_collection = usage.matched.is_collection;
 	c_usage.matched.path_source = usage.matched.path_source.c_str();
 	c_usage.matched.paths = paths.empty() ? nullptr : paths.data();
 	c_usage.matched.path_count = paths.size();
 	c_usage.matched.fake_bold = usage.matched.fake_bold;
 	c_usage.matched.fake_italic = usage.matched.fake_italic;
-	c_usage.matched.libass_fake_bold = usage.matched.libass_fake_bold;
-	c_usage.matched.libass_fake_italic = usage.matched.libass_fake_italic;
-	c_usage.matched.libass_score = usage.matched.libass_score;
 	c_usage.matched.missing_text = usage.matched.missing_text.c_str();
 	c_usage.matched.missing_codepoints = usage.matched.missing_codepoints.empty() ? nullptr : usage.matched.missing_codepoints.data();
 	c_usage.matched.missing_codepoint_count = usage.matched.missing_codepoints.size();
@@ -462,108 +467,11 @@ void EmitCUsage(FontCollectorAssFontUsage const& usage,
 	c_usage.matched_facename_full = usage.matched.facename_full.c_str();
 	c_usage.matched_names = matched_names.empty() ? nullptr : matched_names.data();
 	c_usage.matched_name_count = matched_names.size();
+	c_usage.match_candidates = match_candidates.empty() ? nullptr : match_candidates.data();
+	c_usage.match_candidate_count = match_candidates.size();
+	c_usage.match_ambiguous = usage.matched.match_ambiguous;
 
 	callback(&c_usage, user_data);
-}
-
-int CollectWithSession(FontCollectorSession& session,
-                       AegisubFontCollectorRequest const *request,
-                       AegisubFontCollectorEventCallback callback,
-                       void *user_data,
-                       AegisubFontCollectorFontUsageCallback usage_callback,
-                       void *usage_user_data,
-                       AegisubFontCollectorSummary *summary,
-                       char *error_buffer,
-                       size_t error_buffer_size) {
-	WriteError(error_buffer, error_buffer_size, "");
-	ResetSummary(summary);
-
-	if (!request || !request->input_path || !*request->input_path) {
-		WriteError(error_buffer, error_buffer_size, "input_path is required");
-		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
-	}
-
-	FontCollectionMode mode;
-	if (!ToCoreMode(request->mode, mode)) {
-		WriteError(error_buffer, error_buffer_size, "invalid collection mode");
-		return AEGISUB_FONTCOLLECTOR_INVALID_MODE;
-	}
-
-	if (mode == FontCollectionMode::CopyToZip) {
-		WriteError(error_buffer, error_buffer_size, "zip collection is not implemented by this library yet");
-		return AEGISUB_FONTCOLLECTOR_UNSUPPORTED_MODE;
-	}
-
-#ifdef _WIN32
-	if (mode == FontCollectionMode::SymlinkToFolder) {
-		WriteError(error_buffer, error_buffer_size, "symlink collection is not supported on Windows");
-		return AEGISUB_FONTCOLLECTOR_UNSUPPORTED_MODE;
-	}
-#endif
-
-	try {
-		auto input_path = agi::fs::PathFromString(request->input_path);
-		auto destination = request->destination_path && *request->destination_path
-			? agi::fs::PathFromString(request->destination_path)
-			: agi::fs::path();
-
-		if (mode == FontCollectionMode::CopyToScriptFolder) {
-			destination = input_path.parent_path();
-			if (destination.empty())
-				destination = std::filesystem::current_path();
-		}
-
-		if ((mode == FontCollectionMode::CopyToFolder || mode == FontCollectionMode::SymlinkToFolder) && destination.empty()) {
-			WriteError(error_buffer, error_buffer_size, "destination_path is required for this collection mode");
-			return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
-		}
-
-		auto destination_result = PrepareFontCollectionDestination(mode, destination);
-		if (auto error = DestinationError(destination_result, error_buffer, error_buffer_size))
-			return error;
-
-		auto encoding = request->encoding && *request->encoding
-			? std::string(request->encoding)
-			: agi::charset::Detect(input_path);
-		auto subs = ReadAssFileForCore(input_path, encoding);
-		AssignSourceLineNumbers(subs, input_path, encoding);
-		FontCollectorDetails details;
-		AegisubFontCollectorSummary local_summary = {};
-
-		CollectFonts(
-			session,
-			&subs,
-			destination,
-			mode,
-			[&](FontCollectorEvent const& event) {
-				AccumulateSummary(local_summary, event);
-				EmitCEvent(event, callback, user_data);
-			},
-			(usage_callback || summary) ? &details : nullptr,
-			{},
-			/* enable_libass_compat = */ true);
-
-		local_summary.font_usage_count = details.fonts.size();
-		if (summary)
-			*summary = local_summary;
-
-		for (auto const& usage : details.fonts)
-			EmitCUsage(usage, usage_callback, usage_user_data);
-
-		return AEGISUB_FONTCOLLECTOR_OK;
-	}
-	catch (agi::Exception const& e) {
-		WriteError(error_buffer, error_buffer_size, e.GetMessage());
-		return AEGISUB_FONTCOLLECTOR_COLLECT_FAILED;
-	}
-	catch (std::exception const& e) {
-		WriteError(error_buffer, error_buffer_size, e.what());
-		return AEGISUB_FONTCOLLECTOR_COLLECT_FAILED;
-	}
-	catch (...) {
-		WriteError(error_buffer, error_buffer_size, "unknown error");
-		return AEGISUB_FONTCOLLECTOR_COLLECT_FAILED;
-	}
 }
 
 struct BatchLoadedItem {
@@ -597,43 +505,76 @@ void FinishBatchItem(BatchLoadedItem& loaded) {
 
 struct AegisubFontCollectorSession {
 	FontCollectorSession core;
-	AegisubFontCollectorBackend backend;
 
-	AegisubFontCollectorSession(FontCollectorBackend core_backend,
-	                            AegisubFontCollectorBackend api_backend,
-	                            FontCollectorEventSink event_sink)
-	: core(core_backend, std::move(event_sink))
-	, backend(api_backend)
+	AegisubFontCollectorSession(FontCollectorMatcher core_matcher,
+	                            FontCollectorEventSink event_sink,
+	                            FontProviderOptions provider_options = {})
+	: core(std::move(event_sink), core_matcher, std::move(provider_options))
 	{
 	}
 };
 
-extern "C" int aegisub_fontcollector_session_create(
-	AegisubFontCollectorBackend backend,
+extern "C" int aegisub_fontcollector_session_create_with_options(
+	AegisubFontCollectorSessionOptions const *options,
 	AegisubFontCollectorEventCallback callback,
 	void *user_data,
 	AegisubFontCollectorSession **session,
 	char *error_buffer,
 	size_t error_buffer_size) {
 	WriteError(error_buffer, error_buffer_size, "");
-
+	if (!options || options->struct_size < AEGISUB_FONTCOLLECTOR_SESSION_OPTIONS_V1_SIZE) {
+		WriteError(error_buffer, error_buffer_size, "valid session options are required");
+		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+	}
 	if (!session) {
 		WriteError(error_buffer, error_buffer_size, "session output pointer is required");
 		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
 	}
 	*session = nullptr;
 
-	FontCollectorBackend core_backend;
-	if (!ToCoreBackend(backend, core_backend)) {
-		WriteError(error_buffer, error_buffer_size, "invalid font backend");
+	FontCollectorMatcher core_matcher;
+	if (!ToCoreMatcher(options->matcher, core_matcher)) {
+		WriteError(error_buffer, error_buffer_size, "invalid font matcher");
 		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+	}
+	if (options->additional_font_file_count && !options->additional_font_files) {
+		WriteError(error_buffer, error_buffer_size, "additional font file array is required");
+		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+	}
+	if (options->matcher != AEGISUB_FONTCOLLECTOR_MATCHER_LIBASS &&
+	    (options->additional_font_file_count || !options->include_system_fonts)) {
+		WriteError(error_buffer, error_buffer_size, "private font options require the libass matcher");
+		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+	}
+	if (options->matcher == AEGISUB_FONTCOLLECTOR_MATCHER_LIBASS &&
+	    !options->include_system_fonts &&
+	    options->additional_font_file_count == 0) {
+		WriteError(error_buffer, error_buffer_size,
+		           "libass private catalog requires additional font files (include_system_fonts is 0; set it to 1 or supply additional_font_files)");
+		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+	}
+
+	FontProviderOptions provider_options;
+	provider_options.include_system_fonts = options->include_system_fonts != 0;
+	provider_options.collect_match_candidates = options->collect_match_candidates != 0;
+	provider_options.additional_font_files.reserve(options->additional_font_file_count);
+	for (size_t i = 0; i < options->additional_font_file_count; ++i) {
+		auto path = options->additional_font_files[i];
+		if (!path || !*path) {
+			WriteError(error_buffer, error_buffer_size, "additional font file path must not be empty");
+			return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+		}
+		provider_options.additional_font_files.emplace_back(path);
 	}
 
 	try {
 		auto event_sink = [callback, user_data](FontCollectorEvent const& event) {
 			EmitCEvent(event, callback, user_data);
 		};
-		auto handle = std::make_unique<AegisubFontCollectorSession>(core_backend, backend, std::move(event_sink));
+		auto handle = std::make_unique<AegisubFontCollectorSession>(
+			core_matcher,
+			std::move(event_sink),
+			std::move(provider_options));
 		*session = handle.release();
 		return AEGISUB_FONTCOLLECTOR_OK;
 	}
@@ -645,34 +586,6 @@ extern "C" int aegisub_fontcollector_session_create(
 		WriteError(error_buffer, error_buffer_size, "unknown error");
 		return AEGISUB_FONTCOLLECTOR_COLLECT_FAILED;
 	}
-}
-
-extern "C" int aegisub_fontcollector_session_collect(
-	AegisubFontCollectorSession *session,
-	AegisubFontCollectorRequest const *request,
-	AegisubFontCollectorEventCallback callback,
-	void *user_data,
-	AegisubFontCollectorFontUsageCallback usage_callback,
-	void *usage_user_data,
-	AegisubFontCollectorSummary *summary,
-	char *error_buffer,
-	size_t error_buffer_size) {
-	if (!session) {
-		WriteError(error_buffer, error_buffer_size, "session is required");
-		ResetSummary(summary);
-		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
-	}
-
-	return CollectWithSession(
-		session->core,
-		request,
-		callback,
-		user_data,
-		usage_callback,
-		usage_user_data,
-		summary,
-		error_buffer,
-		error_buffer_size);
 }
 
 extern "C" int aegisub_fontcollector_session_collect_batch(
@@ -715,18 +628,6 @@ extern "C" int aegisub_fontcollector_session_collect_batch(
 			continue;
 		}
 
-		if (mode == FontCollectionMode::CopyToZip) {
-			SetBatchItemResult(item, AEGISUB_FONTCOLLECTOR_UNSUPPORTED_MODE, "zip collection is not implemented by this library yet");
-			continue;
-		}
-
-#ifdef _WIN32
-		if (mode == FontCollectionMode::SymlinkToFolder) {
-			SetBatchItemResult(item, AEGISUB_FONTCOLLECTOR_UNSUPPORTED_MODE, "symlink collection is not supported on Windows");
-			continue;
-		}
-#endif
-
 		if (!have_batch_mode) {
 			batch_mode = mode;
 			have_batch_mode = true;
@@ -748,7 +649,7 @@ extern "C" int aegisub_fontcollector_session_collect_batch(
 					destination = std::filesystem::current_path();
 			}
 
-			if ((mode == FontCollectionMode::CopyToFolder || mode == FontCollectionMode::SymlinkToFolder) && destination.empty()) {
+			if (mode == FontCollectionMode::CopyToFolder && destination.empty()) {
 				SetBatchItemResult(item, AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT, "destination_path is required for this collection mode");
 				continue;
 			}
@@ -806,8 +707,7 @@ extern "C" int aegisub_fontcollector_session_collect_batch(
 			session->core,
 			sources,
 			batch_mode,
-			{},
-			/* enable_libass_compat = */ true);
+			{});
 
 		for (auto& loaded : loaded_items)
 			FinishBatchItem(loaded);
@@ -830,112 +730,6 @@ extern "C" int aegisub_fontcollector_session_collect_batch(
 
 extern "C" void aegisub_fontcollector_session_destroy(AegisubFontCollectorSession *session) {
 	delete session;
-}
-
-extern "C" int aegisub_fontcollector_collect(
-	AegisubFontCollectorRequest const *request,
-	AegisubFontCollectorEventCallback callback,
-	void *user_data,
-	AegisubFontCollectorFontUsageCallback usage_callback,
-	void *usage_user_data,
-	AegisubFontCollectorSummary *summary,
-	char *error_buffer,
-	size_t error_buffer_size) {
-	WriteError(error_buffer, error_buffer_size, "");
-	ResetSummary(summary);
-
-	if (!request || !request->input_path || !*request->input_path) {
-		WriteError(error_buffer, error_buffer_size, "input_path is required");
-		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
-	}
-
-	FontCollectionMode mode;
-	if (!ToCoreMode(request->mode, mode)) {
-		WriteError(error_buffer, error_buffer_size, "invalid collection mode");
-		return AEGISUB_FONTCOLLECTOR_INVALID_MODE;
-	}
-
-	FontCollectorBackend backend;
-	if (!ToCoreBackend(request->backend, backend)) {
-		WriteError(error_buffer, error_buffer_size, "invalid font backend");
-		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
-	}
-
-	if (mode == FontCollectionMode::CopyToZip) {
-		WriteError(error_buffer, error_buffer_size, "zip collection is not implemented by this library yet");
-		return AEGISUB_FONTCOLLECTOR_UNSUPPORTED_MODE;
-	}
-
-#ifdef _WIN32
-	if (mode == FontCollectionMode::SymlinkToFolder) {
-		WriteError(error_buffer, error_buffer_size, "symlink collection is not supported on Windows");
-		return AEGISUB_FONTCOLLECTOR_UNSUPPORTED_MODE;
-	}
-#endif
-
-	try {
-		auto input_path = agi::fs::PathFromString(request->input_path);
-		auto destination = request->destination_path && *request->destination_path
-			? agi::fs::PathFromString(request->destination_path)
-			: agi::fs::path();
-
-		if (mode == FontCollectionMode::CopyToScriptFolder) {
-			destination = input_path.parent_path();
-			if (destination.empty())
-				destination = std::filesystem::current_path();
-		}
-
-		if ((mode == FontCollectionMode::CopyToFolder || mode == FontCollectionMode::SymlinkToFolder) && destination.empty()) {
-			WriteError(error_buffer, error_buffer_size, "destination_path is required for this collection mode");
-			return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
-		}
-
-		auto destination_result = PrepareFontCollectionDestination(mode, destination);
-		if (auto error = DestinationError(destination_result, error_buffer, error_buffer_size))
-			return error;
-
-		auto encoding = request->encoding && *request->encoding
-			? std::string(request->encoding)
-			: agi::charset::Detect(input_path);
-		auto subs = ReadAssFileForCore(input_path, encoding);
-		AssignSourceLineNumbers(subs, input_path, encoding);
-		FontCollectorDetails details;
-		AegisubFontCollectorSummary local_summary = {};
-
-		CollectFonts(
-			&subs,
-			destination,
-			mode,
-			[&](FontCollectorEvent const& event) {
-				AccumulateSummary(local_summary, event);
-				EmitCEvent(event, callback, user_data);
-			},
-			(usage_callback || summary) ? &details : nullptr,
-			{},
-			/* enable_libass_compat = */ true,
-			backend);
-
-		local_summary.font_usage_count = details.fonts.size();
-		if (summary)
-			*summary = local_summary;
-
-		for (auto const& usage : details.fonts)
-			EmitCUsage(usage, usage_callback, usage_user_data);
-
-		return AEGISUB_FONTCOLLECTOR_OK;
-	}
-	catch (agi::Exception const& e) {
-		WriteError(error_buffer, error_buffer_size, e.GetMessage());
-		return AEGISUB_FONTCOLLECTOR_COLLECT_FAILED;
-	}
-	catch (std::exception const& e) {
-		WriteError(error_buffer, error_buffer_size, e.what());
-		return AEGISUB_FONTCOLLECTOR_COLLECT_FAILED;
-	}
-	catch (...) {
-		WriteError(error_buffer, error_buffer_size, "unknown error");
-		return AEGISUB_FONTCOLLECTOR_COLLECT_FAILED;
-	}
 }
 
 extern "C" int aegisub_fontcollector_build_normalization_plan(

@@ -864,7 +864,9 @@ set(AEGISUB_CORE_SOURCES
     src/font_family_catalog_cache.cpp
     src/font_name_normalization.cpp
     src/font_file_lister.cpp
+    src/font_file_lister_libass.cpp
     src/font_matching_common.cpp
+    src/font_matching_libass.cpp
     # Utility / math / codecs
     # NOTE: spline/spline_curve depend on VisualToolBase (coord translator) and
     # transitively on visual_tool.h which exposes wxString. They stay in the
@@ -1353,14 +1355,29 @@ else()
 endif()
 
 if(WIN32)
+    # Platform: GDI/DirectWrite. Libass matcher: DirectWrite provider. No Fontconfig.
     target_sources(aegisub_core PRIVATE
         src/font_file_lister_gdi.cpp
         src/font_file_lister_dwrite.cpp
         src/font_family_catalog_win.cpp)
     target_link_libraries(aegisub_core PRIVATE Usp10 dwrite Version)
 elseif(APPLE)
+    # Platform: CoreText always. Libass matcher: optional Fontconfig catalog
+    # (there is no CoreText ILibassFontProvider yet). Do not hard-require Fontconfig
+    # so CoreText-only builds still work; libass mode errors at runtime if missing.
     target_sources(aegisub_core PRIVATE src/font_file_lister_coretext.mm)
+    find_package(Fontconfig)
+    if(Fontconfig_FOUND)
+        target_compile_definitions(aegisub_core PRIVATE AEGISUB_FONTCOLLECTOR_ENABLE_FONTCONFIG)
+        target_sources(aegisub_core PRIVATE src/font_file_lister_fontconfig.cpp)
+        target_link_libraries(aegisub_core PRIVATE Fontconfig::Fontconfig)
+    else()
+        message(STATUS
+            "Fontconfig not found: macOS libass font matcher disabled (platform/CoreText only); "
+            "enable the vcpkg manifest feature 'fontconfig' to install it")
+    endif()
 else()
+    # Linux/Unix: Fontconfig is both the platform provider and the libass catalog.
     find_package(Fontconfig REQUIRED)
     target_link_libraries(aegisub_core PRIVATE "Fontconfig::Fontconfig")
     target_sources(aegisub_core PRIVATE src/font_file_lister_fontconfig.cpp)

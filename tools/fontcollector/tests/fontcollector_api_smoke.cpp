@@ -12,6 +12,9 @@ bool Contains(char const *text, char const *needle) {
 } // namespace
 
 int main() {
+	static_assert(AEGISUB_FONTCOLLECTOR_MATCH_MEMORY_ONLY == 2);
+	static_assert(AEGISUB_FONTCOLLECTOR_SESSION_OPTIONS_V1_SIZE <=
+	              sizeof(AegisubFontCollectorSessionOptions));
 	static_assert(AEGISUB_FONT_NAME_NORMALIZATION_REQUEST_V1_SIZE <=
 	              sizeof(AegisubFontNameNormalizationRequest));
 	static_assert(AEGISUB_FONT_NAME_NORMALIZATION_CHANGE_V1_SIZE <=
@@ -52,6 +55,40 @@ int main() {
 	if (item.result != AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT ||
 	    !Contains(error.data(), "invalid font-name normalization target"))
 		return 4;
+
+	AegisubFontCollectorSessionOptions session_options = {};
+	session_options.struct_size = sizeof(session_options);
+	session_options.matcher = AEGISUB_FONTCOLLECTOR_MATCHER_PLATFORM;
+	session_options.include_system_fonts = 0;
+	AegisubFontCollectorSession *session = nullptr;
+	result = aegisub_fontcollector_session_create_with_options(
+		&session_options,
+		nullptr,
+		nullptr,
+		&session,
+		error.data(),
+		error.size());
+	if (result != AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT || session ||
+	    !Contains(error.data(), "private font options require the libass matcher"))
+		return 5;
+
+	// Zero-init leaves include_system_fonts = 0; empty private libass catalog must fail closed.
+	session_options = {};
+	session_options.struct_size = sizeof(session_options);
+	session_options.matcher = AEGISUB_FONTCOLLECTOR_MATCHER_LIBASS;
+	session_options.include_system_fonts = 0;
+	session = nullptr;
+	error = {};
+	result = aegisub_fontcollector_session_create_with_options(
+		&session_options,
+		nullptr,
+		nullptr,
+		&session,
+		error.data(),
+		error.size());
+	if (result != AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT || session ||
+	    !Contains(error.data(), "libass private catalog requires additional font files"))
+		return 6;
 
 	return 0;
 }

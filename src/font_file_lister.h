@@ -15,7 +15,17 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#include "font_collector_backend.h"
 #include "font_collector_events.h"
+
+// Libass provider surface lives in font_matching_libass.h. Pull it only for
+// Fontconfig-backed builds (Linux always; Apple when Fontconfig is enabled).
+// Windows uses a forward declaration and includes the full header in .cpp files.
+#if !defined(_WIN32) && !defined(__APPLE__) || defined(AEGISUB_FONTCOLLECTOR_ENABLE_FONTCONFIG)
+#include "font_matching_libass.h"
+#else
+class ILibassFontProvider;
+#endif
 
 #include <libaegisub/fs_fwd.h>
 #include <libaegisub/scoped_ptr.h>
@@ -42,9 +52,27 @@ class AssDialogue;
 class AssFile;
 class AssStyle;
 
-struct FontRawData {
-	/// Raw font file bytes (from GetFontData or IDWriteFontFileStream).
-	std::vector<char> bytes;
+struct FontCollectorMatchCandidate {
+	std::string facename;
+	std::string facename_full;
+	std::string matched_name;
+	std::string match_source;
+	std::string name_match;
+	std::string path;
+	int provider_order = -1;
+	int face_index = -1;
+	int score = 0;
+	int weight = 0;
+	bool bold = false;
+	bool italic = false;
+	std::vector<uint32_t> considered_codepoints;
+	std::vector<uint32_t> supported_codepoints;
+	std::vector<uint32_t> selected_codepoints;
+};
+
+struct FontMemoryFont {
+	std::string facename;
+	std::shared_ptr<std::vector<char> const> data;
 };
 
 struct CollectionResult {
@@ -52,7 +80,7 @@ struct CollectionResult {
 	std::string matched_facename;
 	/// Full font face selected by the platform matcher, when available.
 	std::string matched_facename_full;
-	/// Matched family aliases reported by the platform backend.
+	/// Matched family aliases reported by the platform provider.
 	std::vector<std::string> matched_names;
 	int face_index = -1;
 	/// Font weight selected by the platform matcher.
@@ -61,20 +89,20 @@ struct CollectionResult {
 	bool matched_bold = false;
 	/// Whether the selected platform font is italic.
 	bool matched_italic = false;
-	/// Whether the font is in a TrueType/OpenType collection.
-	bool is_collection = false;
 	/// Characters which could not be found in any font files
 	std::string missing;
 	/// Paths to the file(s) containing the requested font
 	std::vector<agi::fs::path> paths;
+	/// Selected fonts whose bytes are available but whose file path is not.
+	std::vector<FontMemoryFont> memory_fonts;
 	/// How the font file path was resolved: "dwritecore", "dwrite", "gdi", or empty.
 	std::string path_source;
-	/// Raw font data, usable when the file path is unavailable.
-	FontRawData raw_data;
 	bool fake_bold = false;
 	bool fake_italic = false;
 	/// The lfWeight value passed to CreateFontIndirectW.
 	int requested_weight = 0;
+	std::vector<FontCollectorMatchCandidate> match_candidates;
+	bool match_ambiguous = false;
 };
 
 struct FontCollectorMatchedFont {
@@ -85,20 +113,17 @@ struct FontCollectorMatchedFont {
 	int weight = 0;
 	bool bold = false;
 	bool italic = false;
-	bool is_collection = false;
 	std::vector<agi::fs::path> paths;
+	std::vector<FontMemoryFont> memory_fonts;
 	std::string path_source;
-	FontRawData raw_data;
 	bool fake_bold = false;
 	bool fake_italic = false;
-	/// libass-style synthetic detection from platform-neutral common layer (opt-in)
-	bool libass_fake_bold = false;
-	bool libass_fake_italic = false;
-	int libass_score = 0;
 	std::string missing_text;
 	std::vector<uint32_t> missing_codepoints;
 	std::vector<int> missing_lines;
 	int requested_weight = 0;
+	std::vector<FontCollectorMatchCandidate> match_candidates;
+	bool match_ambiguous = false;
 };
 
 struct FontCollectorAssFontUsage {
@@ -128,16 +153,32 @@ public:
 	virtual CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters) = 0;
 };
 
+class LibassFontFileLister final : public IFontFileLister {
+	std::unique_ptr<ILibassFontProvider> provider;
+	bool collect_match_candidates = false;
+
+public:
+	LibassFontFileLister(FontCollectorEventSink& event_sink,
+	                     std::unique_ptr<ILibassFontProvider> provider,
+	                     bool collect_match_candidates = false);
+	~LibassFontFileLister() override;
+
+	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic,
+	                              std::vector<uint32_t> const& characters) override;
+};
+
 class DWriteBridge;
 
 #ifdef _WIN32
+std::unique_ptr<ILibassFontProvider> CreateDWriteLibassFontProvider(
+	FontCollectorEventSink& event_sink,
+	FontProviderOptions const& options = {});
+
 class GdiFontFileLister : public IFontFileLister {
 	std::unique_ptr<DWriteBridge> dwrite_bridge;
 	std::unordered_multimap<uint32_t, agi::fs::path> index;
 	agi::scoped_holder<HDC> dc;
 	std::string buffer;
-
-	bool ProcessLogFont(LOGFONTW const& expected, LOGFONTW const& actual, std::vector<uint32_t> const& characters);
 
 public:
 	/// Constructor
@@ -177,8 +218,15 @@ typedef struct _FcFontSet FcFontSet;
 
 /// @class FontConfigFontFileLister
 /// @brief fontconfig powered font lister
-class FontConfigFontFileLister : public IFontFileLister {
+class FontConfigFontFileLister : public IFontFileLister, public ILibassFontProvider {
 	agi::scoped_holder<FcConfig*> config;
+	std::vector<LibassFontFace> libass_faces;
+	std::vector<void *> libass_patterns;
+	std::vector<void *> libass_charsets;
+	FcFontSet *libass_fallbacks = nullptr;
+	void *libass_fallback_chars = nullptr;
+
+	void BuildLibassCatalog();
 
 	/// @brief Case-insensitive match ASS/SSA font family against full name. (also known as "name for humans")
 	/// @param family font fullname
@@ -189,7 +237,16 @@ class FontConfigFontFileLister : public IFontFileLister {
 public:
 	/// Constructor
 	/// @param cb Callback for status logging
-	FontConfigFontFileLister(FontCollectorEventSink &cb);
+	FontConfigFontFileLister(FontCollectorEventSink &cb,
+	                         bool build_libass_catalog = false,
+	                         FontProviderOptions const& options = {});
+	~FontConfigFontFileLister();
+
+	std::span<LibassFontFace const> GetLibassFaces() const override { return libass_faces; }
+	bool HasLibassGlyph(size_t face_index, uint32_t codepoint) const override;
+	std::vector<std::string> GetLibassSubstitutions(std::string_view family) const override;
+	std::optional<std::string> GetLibassFallback(std::string_view family, uint32_t codepoint) override;
+	std::string_view GetLibassProviderName() const override { return "fontconfig"; }
 
 	/// @brief Get the path to the font with the given styles
 	/// @param facename Name of font face
@@ -265,9 +322,6 @@ class FontCollector {
 	std::unique_ptr<IFontFileLister> owned_lister;
 	IFontFileLister *lister = nullptr;
 
-	/// When true, compute libass_fake_bold/italic/score from platform metadata
-	bool enable_libass_compat_ = false;
-
 	/// Walk plain text spans with their active resolved font request
 	StyleInfo MakeStyleInfo(AssStyle const& style) const;
 	void RecordMissingStyle(MissingStyleLines& missing_style_lines, std::string const& name, int line_index);
@@ -300,13 +354,6 @@ public:
 	FontCollector(FontCollectorEventSink event_sink);
 	FontCollector(FontCollectorEventSink event_sink, std::unique_ptr<IFontFileLister> lister);
 	FontCollector(FontCollectorEventSink event_sink, IFontFileLister& lister);
-
-	/// Enable libass-style synthetic detection for cross-reference (opt-in).
-	/// When enabled, libass_fake_bold, libass_fake_italic, and libass_score
-	/// are computed from the platform lister's matched_weight/bold/italic
-	/// using the platform-neutral common layer.
-	/// Disabled by default; set to true for diagnostic/CLI use.
-	void EnableLibassCompat(bool enable) { enable_libass_compat_ = enable; }
 
 	/// @brief Get a list of the locations of all font files used in the file
 	/// @param file Lines in the subtitle file to check

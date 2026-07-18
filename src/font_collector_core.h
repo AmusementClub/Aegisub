@@ -23,6 +23,7 @@
 
 #include <functional>
 #include <memory>
+#include <span>
 #include <vector>
 
 class AssFile;
@@ -33,8 +34,7 @@ enum class FontCollectionMode {
 	CheckFontsOnly = 0,
 	CopyToFolder = 1,
 	CopyToScriptFolder = 2,
-	CopyToZip = 3,
-	SymlinkToFolder = 4
+	CopyToZip = 3
 };
 
 enum class FontCollectionDestinationError {
@@ -61,6 +61,7 @@ public:
 
 	virtual bool IsOk() const = 0;
 	virtual bool AddFile(agi::fs::path const& source, agi::fs::path const& name) = 0;
+	virtual bool AddMemory(agi::fs::path const& name, std::span<char const> data) = 0;
 };
 
 using FontCollectionArchiveFactory =
@@ -69,12 +70,14 @@ using FontCollectionArchiveFactory =
 FontCollectionDestinationResult PrepareFontCollectionDestination(FontCollectionMode mode, agi::fs::path const& destination);
 
 class FontCollectorSession {
-	FontCollectorBackend backend;
+	FontCollectorMatcher matcher;
 	FontCollectorEventSink init_event_sink;
 	std::unique_ptr<IFontFileLister> lister;
 
 public:
-	FontCollectorSession(FontCollectorBackend backend, FontCollectorEventSink font_event_sink);
+	FontCollectorSession(FontCollectorEventSink font_event_sink,
+	                     FontCollectorMatcher matcher = FontCollectorMatcher::Platform,
+	                     FontProviderOptions provider_options = {});
 	~FontCollectorSession();
 
 	FontCollectorSession(FontCollectorSession const&) = delete;
@@ -82,12 +85,10 @@ public:
 
 	std::vector<agi::fs::path> GetFontPaths(AssFile const *subs,
 	                                        FontCollectorEventSink font_event_sink,
-	                                        FontCollectorDetails *details = nullptr,
-	                                        bool enable_libass_compat = false);
-	std::vector<std::vector<agi::fs::path>> GetFontPaths(std::vector<FontCollectionBatchSource> const& sources,
-	                                                     bool enable_libass_compat = false);
+	                                        FontCollectorDetails *details = nullptr);
+	std::vector<std::vector<agi::fs::path>> GetFontPaths(std::vector<FontCollectionBatchSource> const& sources);
 
-	FontCollectorBackend GetBackend() const { return backend; }
+	FontCollectorMatcher GetMatcher() const { return matcher; }
 };
 
 void CollectFonts(AssFile const *subs,
@@ -96,8 +97,7 @@ void CollectFonts(AssFile const *subs,
                   FontCollectorEventSink font_event_sink,
                   FontCollectorDetails *details = nullptr,
                   FontCollectionArchiveFactory archive_factory = {},
-                  bool enable_libass_compat = false,
-                  FontCollectorBackend backend = FontCollectorBackend::Auto);
+                  FontCollectorMatcher matcher = FontCollectorMatcher::Platform);
 
 void CollectFonts(FontCollectorSession& session,
                   AssFile const *subs,
@@ -105,11 +105,9 @@ void CollectFonts(FontCollectorSession& session,
                   FontCollectionMode mode,
                   FontCollectorEventSink font_event_sink,
                   FontCollectorDetails *details = nullptr,
-                  FontCollectionArchiveFactory archive_factory = {},
-                  bool enable_libass_compat = false);
+                  FontCollectionArchiveFactory archive_factory = {});
 
 void CollectFonts(FontCollectorSession& session,
                   std::vector<FontCollectionBatchSource> const& sources,
                   FontCollectionMode mode,
-                  FontCollectionArchiveFactory archive_factory = {},
-                  bool enable_libass_compat = false);
+                  FontCollectionArchiveFactory archive_factory = {});

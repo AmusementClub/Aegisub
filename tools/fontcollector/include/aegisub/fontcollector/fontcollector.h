@@ -24,24 +24,20 @@ extern "C" {
 typedef enum AegisubFontCollectorMode {
 	AEGISUB_FONTCOLLECTOR_MODE_CHECK = 0,
 	AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_FOLDER = 1,
-	AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_SCRIPT_FOLDER = 2,
-	AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_ZIP = 3,
-	AEGISUB_FONTCOLLECTOR_MODE_SYMLINK_TO_FOLDER = 4
+	AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_SCRIPT_FOLDER = 2
 } AegisubFontCollectorMode;
 
-typedef enum AegisubFontCollectorBackend {
-	AEGISUB_FONTCOLLECTOR_BACKEND_AUTO = 0,
-	AEGISUB_FONTCOLLECTOR_BACKEND_PLATFORM_DEFAULT = 1,
-	AEGISUB_FONTCOLLECTOR_BACKEND_FONTCONFIG = 2,
-	AEGISUB_FONTCOLLECTOR_BACKEND_CORETEXT = 3
-} AegisubFontCollectorBackend;
+typedef enum AegisubFontCollectorMatcher {
+	AEGISUB_FONTCOLLECTOR_MATCHER_PLATFORM = 0,
+	AEGISUB_FONTCOLLECTOR_MATCHER_LIBASS = 1
+} AegisubFontCollectorMatcher;
 
 typedef enum AegisubFontCollectorResult {
 	AEGISUB_FONTCOLLECTOR_OK = 0,
 	AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT = 1,
 	AEGISUB_FONTCOLLECTOR_INVALID_MODE = 2,
 	AEGISUB_FONTCOLLECTOR_INVALID_DESTINATION = 3,
-	AEGISUB_FONTCOLLECTOR_UNSUPPORTED_MODE = 4,
+	AEGISUB_FONTCOLLECTOR_RESULT_RESERVED_4 = 4,
 	AEGISUB_FONTCOLLECTOR_READ_FAILED = 5,
 	AEGISUB_FONTCOLLECTOR_COLLECT_FAILED = 6
 } AegisubFontCollectorResult;
@@ -69,18 +65,15 @@ typedef enum AegisubFontCollectorEventType {
 	AEGISUB_FONTCOLLECTOR_EVENT_ALL_FONTS_FOUND,
 	AEGISUB_FONTCOLLECTOR_EVENT_FONTS_MISSING,
 	AEGISUB_FONTCOLLECTOR_EVENT_FONTS_MISSING_GLYPHS,
-	AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_SYMLINKING_FONTS_TO_FOLDER,
 	AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_COPYING_FONTS_TO_FOLDER,
 	AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_COPYING_FONTS_TO_ARCHIVE,
 	AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_FAILED_CREATE_DIRECTORY,
 	AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_FAILED_OPEN,
 	AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_COPIED,
 	AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_ALREADY_EXISTS,
-	AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_SYMLINKED,
 	AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_FAILED_COPY,
 	AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_DONE_ALL_COPIED,
 	AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_DONE_SOME_NOT_COPIED,
-	AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_OVER_32MB_WARNING,
 	AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_NEWLINE
 } AegisubFontCollectorEventType;
 
@@ -90,7 +83,6 @@ typedef struct AegisubFontCollectorRequest {
 	char const *destination_path;
 	char const *encoding;
 	AegisubFontCollectorMode mode;
-	AegisubFontCollectorBackend backend;
 } AegisubFontCollectorRequest;
 
 typedef struct AegisubFontCollectorSummary {
@@ -127,16 +119,11 @@ typedef struct AegisubFontCollectorMatchedFont {
 	int weight;
 	int bold;
 	int italic;
-	int is_collection;
 	char const *path_source;
 	char const *const *paths;
 	size_t path_count;
 	int fake_bold;
 	int fake_italic;
-	/// libass-style synthetic detection from platform-neutral common layer (opt-in)
-	int libass_fake_bold;
-	int libass_fake_italic;
-	int libass_score;
 	char const *missing_text;
 	uint32_t const *missing_codepoints;
 	size_t missing_codepoint_count;
@@ -145,6 +132,31 @@ typedef struct AegisubFontCollectorMatchedFont {
 	int const *missing_lines;
 	size_t missing_line_count;
 } AegisubFontCollectorMatchedFont;
+
+typedef struct AegisubFontCollectorMatchCandidate {
+	char const *facename;
+	char const *facename_full;
+	char const *matched_name;
+	/* "requested", "default", or "fallback". */
+	char const *match_source;
+	/* Family/full-name/PostScript match category used by the selector. */
+	char const *name_match;
+	char const *path;
+	/* Zero-based order in the provider catalog; libass uses this to break equal scores. */
+	int provider_order;
+	int face_index;
+	/* libass attribute distance; lower values are preferred. */
+	int score;
+	int weight;
+	int bold;
+	int italic;
+	uint32_t const *considered_codepoints;
+	size_t considered_codepoint_count;
+	uint32_t const *supported_codepoints;
+	size_t supported_codepoint_count;
+	uint32_t const *selected_codepoints;
+	size_t selected_codepoint_count;
+} AegisubFontCollectorMatchCandidate;
 
 typedef struct AegisubFontCollectorFontUsage {
 	char const *ass_facename;
@@ -165,9 +177,35 @@ typedef struct AegisubFontCollectorFontUsage {
 	/* Diagnostic only: matched family aliases reported by the backend. */
 	char const *const *matched_names;
 	size_t matched_name_count;
+	/* Diagnostic-only libass candidate evidence. Pointers are callback-scoped. */
+	AegisubFontCollectorMatchCandidate const *match_candidates;
+	size_t match_candidate_count;
+	/* True when equal-score candidates could serve at least one selected codepoint. */
+	int match_ambiguous;
 } AegisubFontCollectorFontUsage;
 
 typedef struct AegisubFontCollectorSession AegisubFontCollectorSession;
+
+typedef struct AegisubFontCollectorSessionOptions {
+	size_t struct_size;
+	AegisubFontCollectorMatcher matcher;
+	/* UTF-8 font file paths. Directories must be expanded by the caller. */
+	char const *const *additional_font_files;
+	size_t additional_font_file_count;
+	/*
+	 * Non-zero: include the system font catalog.
+	 * Zero: private catalog only; additional_font_file_count must be > 0 for
+	 * the libass matcher. Zero-init of this struct leaves the field at 0, so
+	 * callers of session_create_with_options must set include_system_fonts
+	 * explicitly (use 1 unless building a private-font catalog).
+	 */
+	int include_system_fonts;
+	int collect_match_candidates;
+} AegisubFontCollectorSessionOptions;
+
+#define AEGISUB_FONTCOLLECTOR_SESSION_OPTIONS_V1_SIZE \
+	(offsetof(AegisubFontCollectorSessionOptions, collect_match_candidates) + \
+	 sizeof(((AegisubFontCollectorSessionOptions *)0)->collect_match_candidates))
 
 /* Event pointer fields are valid only for the duration of the callback. */
 typedef void (*AegisubFontCollectorEventCallback)(AegisubFontCollectorEvent const *event, void *user_data);
@@ -267,33 +305,11 @@ typedef struct AegisubFontNameNormalizationBatchItem {
 	(offsetof(AegisubFontNameNormalizationBatchItem, result) + \
 	 sizeof(((AegisubFontNameNormalizationBatchItem *)0)->result))
 
-AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_collect(
-	AegisubFontCollectorRequest const *request,
-	AegisubFontCollectorEventCallback callback,
-	void *user_data,
-	AegisubFontCollectorFontUsageCallback usage_callback,
-	void *usage_user_data,
-	AegisubFontCollectorSummary *summary,
-	char *error_buffer,
-	size_t error_buffer_size);
-
-AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_session_create(
-	AegisubFontCollectorBackend backend,
+AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_session_create_with_options(
+	AegisubFontCollectorSessionOptions const *options,
 	AegisubFontCollectorEventCallback callback,
 	void *user_data,
 	AegisubFontCollectorSession **session,
-	char *error_buffer,
-	size_t error_buffer_size);
-
-/* request->backend is ignored for session calls; choose the backend in session_create. */
-AEGISUB_FONTCOLLECTOR_API int aegisub_fontcollector_session_collect(
-	AegisubFontCollectorSession *session,
-	AegisubFontCollectorRequest const *request,
-	AegisubFontCollectorEventCallback callback,
-	void *user_data,
-	AegisubFontCollectorFontUsageCallback usage_callback,
-	void *usage_user_data,
-	AegisubFontCollectorSummary *summary,
 	char *error_buffer,
 	size_t error_buffer_size);
 

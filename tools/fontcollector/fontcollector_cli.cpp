@@ -131,6 +131,14 @@ bool IsSubtitleFile(std::filesystem::path const& path) {
 	return ext == ".ass" || ext == ".ssa";
 }
 
+bool IsFontFile(std::filesystem::path const& path) {
+	auto ext = PathToUtf8(path.extension());
+	std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char ch) {
+		return static_cast<char>(std::tolower(ch));
+	});
+	return ext == ".ttf" || ext == ".otf" || ext == ".ttc" || ext == ".otc";
+}
+
 std::string DedupeKey(std::filesystem::path const& path) {
 	std::error_code ec;
 	auto canonical = std::filesystem::weakly_canonical(path, ec);
@@ -216,18 +224,15 @@ std::string EventTypeName(AegisubFontCollectorEventType type) {
 		case AEGISUB_FONTCOLLECTOR_EVENT_ALL_FONTS_FOUND: return "all_fonts_found";
 		case AEGISUB_FONTCOLLECTOR_EVENT_FONTS_MISSING: return "fonts_missing";
 		case AEGISUB_FONTCOLLECTOR_EVENT_FONTS_MISSING_GLYPHS: return "fonts_missing_glyphs";
-		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_SYMLINKING_FONTS_TO_FOLDER: return "collection_symlinking_fonts_to_folder";
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_COPYING_FONTS_TO_FOLDER: return "collection_copying_fonts_to_folder";
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_COPYING_FONTS_TO_ARCHIVE: return "collection_copying_fonts_to_archive";
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_FAILED_CREATE_DIRECTORY: return "collection_failed_create_directory";
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_FAILED_OPEN: return "collection_failed_open";
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_COPIED: return "collection_copied";
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_ALREADY_EXISTS: return "collection_already_exists";
-		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_SYMLINKED: return "collection_symlinked";
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_FAILED_COPY: return "collection_failed_copy";
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_DONE_ALL_COPIED: return "collection_done_all_copied";
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_DONE_SOME_NOT_COPIED: return "collection_done_some_not_copied";
-		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_OVER_32MB_WARNING: return "collection_over_32mb_warning";
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_NEWLINE: return "collection_newline";
 	}
 	return "unknown";
@@ -262,6 +267,24 @@ struct JsonEvent {
 	int requested_italic = 0;
 };
 
+struct JsonMatchCandidate {
+	std::string facename;
+	std::string facename_full;
+	std::string matched_name;
+	std::string match_source;
+	std::string name_match;
+	std::string path;
+	int provider_order = -1;
+	int face_index = -1;
+	int score = 0;
+	int weight = 0;
+	bool bold = false;
+	bool italic = false;
+	std::vector<uint32_t> considered_codepoints;
+	std::vector<uint32_t> supported_codepoints;
+	std::vector<uint32_t> selected_codepoints;
+};
+
 struct JsonMatchedFont {
 	AegisubFontCollectorMatchStatus match_status = AEGISUB_FONTCOLLECTOR_MATCH_FOUND;
 	std::string facename;
@@ -272,15 +295,10 @@ struct JsonMatchedFont {
 	int weight = 0;
 	bool bold = false;
 	bool italic = false;
-	bool is_collection = false;
 	std::string path_source;
 	std::vector<std::string> paths;
 	bool fake_bold = false;
 	bool fake_italic = false;
-	/// libass-style synthetic detection from platform-neutral common layer (opt-in)
-	bool libass_fake_bold = false;
-	bool libass_fake_italic = false;
-	int libass_score = 0;
 	std::string missing_text;
 	std::vector<uint32_t> missing_codepoints;
 	std::vector<std::string> missing_codepoint_names;
@@ -298,11 +316,13 @@ struct JsonUsage {
 	std::vector<int> lines;
 	std::vector<int> override_lines;
 	JsonMatchedFont matched;
+	std::vector<JsonMatchCandidate> match_candidates;
+	bool match_ambiguous = false;
 };
 
 struct JsonContext {
-	std::string requested_backend;
-	std::string resolved_backend;
+	std::string provider;
+	std::string matcher;
 	std::vector<JsonEvent> events;
 	std::vector<JsonUsage> usages;
 };
@@ -375,17 +395,7 @@ void CollectNormalizationChange(
 	item.safe_to_apply = change->safe_to_apply != 0;
 }
 
-std::string RequestedBackendName(AegisubFontCollectorBackend backend) {
-	switch (backend) {
-		case AEGISUB_FONTCOLLECTOR_BACKEND_AUTO: return "auto";
-		case AEGISUB_FONTCOLLECTOR_BACKEND_PLATFORM_DEFAULT: return "platform";
-		case AEGISUB_FONTCOLLECTOR_BACKEND_FONTCONFIG: return "fontconfig";
-		case AEGISUB_FONTCOLLECTOR_BACKEND_CORETEXT: return "coretext";
-	}
-	return "unknown";
-}
-
-std::string PlatformBackendName() {
+std::string PlatformProviderName() {
 #if defined(_WIN32)
 	return "gdi-dwrite";
 #elif defined(__APPLE__)
@@ -395,15 +405,61 @@ std::string PlatformBackendName() {
 #endif
 }
 
-std::string ResolvedBackendName(AegisubFontCollectorBackend backend) {
-	switch (backend) {
-		case AEGISUB_FONTCOLLECTOR_BACKEND_AUTO:
-		case AEGISUB_FONTCOLLECTOR_BACKEND_PLATFORM_DEFAULT:
-			return PlatformBackendName();
-		case AEGISUB_FONTCOLLECTOR_BACKEND_FONTCONFIG:
-			return "fontconfig";
-		case AEGISUB_FONTCOLLECTOR_BACKEND_CORETEXT:
-			return "coretext";
+std::string ProviderName(AegisubFontCollectorMatcher matcher) {
+	if (matcher == AEGISUB_FONTCOLLECTOR_MATCHER_LIBASS) {
+#if defined(_WIN32)
+		return "directwrite";
+#else
+		return "fontconfig";
+#endif
+	}
+	return PlatformProviderName();
+}
+
+std::vector<std::string> ExpandFontInputs(
+	std::vector<std::string> const& arguments,
+	bool recursive) {
+	std::vector<std::string> inputs;
+	std::set<std::string> seen;
+	for (auto const& argument : arguments) {
+		auto path = Utf8ToPath(argument);
+		std::error_code ec;
+		if (std::filesystem::is_regular_file(path, ec)) {
+			if (IsFontFile(path))
+				AddInputFile(path, inputs, seen);
+			continue;
+		}
+		if (!std::filesystem::is_directory(path, ec))
+			continue;
+
+		if (recursive) {
+			std::filesystem::recursive_directory_iterator it(
+				path, std::filesystem::directory_options::skip_permission_denied, ec);
+			std::filesystem::recursive_directory_iterator end;
+			for (; !ec && it != end; it.increment(ec)) {
+				std::error_code file_ec;
+				if (it->is_regular_file(file_ec) && !file_ec && IsFontFile(it->path()))
+					AddInputFile(it->path(), inputs, seen);
+			}
+		}
+		else {
+			std::filesystem::directory_iterator it(
+				path, std::filesystem::directory_options::skip_permission_denied, ec);
+			std::filesystem::directory_iterator end;
+			for (; !ec && it != end; it.increment(ec)) {
+				std::error_code file_ec;
+				if (it->is_regular_file(file_ec) && !file_ec && IsFontFile(it->path()))
+					AddInputFile(it->path(), inputs, seen);
+			}
+		}
+	}
+	return inputs;
+}
+
+std::string MatcherName(AegisubFontCollectorMatcher matcher) {
+	switch (matcher) {
+		case AEGISUB_FONTCOLLECTOR_MATCHER_PLATFORM: return "platform";
+		case AEGISUB_FONTCOLLECTOR_MATCHER_LIBASS: return "libass";
 	}
 	return "unknown";
 }
@@ -430,8 +486,8 @@ std::string JoinLines(AegisubFontCollectorEvent const& event) {
 
 std::string FormatEvent(AegisubFontCollectorEvent const& event) {
 	switch (event.type) {
-		case AEGISUB_FONTCOLLECTOR_EVENT_FONT_BACKEND_INFO:
-			return "Font backend: " + Safe(event.message);
+	case AEGISUB_FONTCOLLECTOR_EVENT_FONT_BACKEND_INFO:
+			return "Font provider: " + Safe(event.message);
 		case AEGISUB_FONTCOLLECTOR_EVENT_UPDATING_FONT_CACHE:
 			return "Updating font cache";
 		case AEGISUB_FONTCOLLECTOR_EVENT_FONT_CACHE_ERROR:
@@ -449,7 +505,7 @@ std::string FormatEvent(AegisubFontCollectorEvent const& event) {
 		case AEGISUB_FONTCOLLECTOR_EVENT_FONT_FOUND: {
 			auto src = Safe(event.message);
 			if (src == "memory")
-				return "Found font: " + Safe(event.face) + " (memory)";
+				return "Found font: " + Safe(event.face) + " (memory; collectable as dumped data)";
 			return "Found font: " + Safe(event.face) + " -> " + Safe(event.path) +
 			       (src.empty() ? "" : " [" + src + "]");
 		}
@@ -479,8 +535,6 @@ std::string FormatEvent(AegisubFontCollectorEvent const& event) {
 			return "Fonts missing: " + std::to_string(event.count);
 		case AEGISUB_FONTCOLLECTOR_EVENT_FONTS_MISSING_GLYPHS:
 			return "Fonts with missing glyphs: " + std::to_string(event.count);
-		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_SYMLINKING_FONTS_TO_FOLDER:
-			return "Symlinking fonts to folder";
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_COPYING_FONTS_TO_FOLDER:
 			return "Copying fonts to folder";
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_COPYING_FONTS_TO_ARCHIVE:
@@ -493,16 +547,12 @@ std::string FormatEvent(AegisubFontCollectorEvent const& event) {
 			return "Copied: " + Safe(event.path);
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_ALREADY_EXISTS:
 			return "Already exists at destination: " + Safe(event.path);
-		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_SYMLINKED:
-			return "Symlinked: " + Safe(event.path);
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_FAILED_COPY:
 			return "Failed to copy: " + Safe(event.path);
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_DONE_ALL_COPIED:
 			return "Done. All fonts copied";
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_DONE_SOME_NOT_COPIED:
 			return "Done. Some fonts could not be copied";
-		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_OVER_32MB_WARNING:
-			return "Warning: copied fonts exceed 32 MB";
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_NEWLINE:
 			return {};
 	}
@@ -565,16 +615,12 @@ void CollectJsonUsage(AegisubFontCollectorFontUsage const *usage, void *user_dat
 	item.matched.weight = usage->matched.weight;
 	item.matched.bold = usage->matched.bold != 0;
 	item.matched.italic = usage->matched.italic != 0;
-	item.matched.is_collection = usage->matched.is_collection != 0;
 	item.matched.path_source = Safe(usage->matched.path_source);
 	item.matched.paths.reserve(usage->matched.path_count);
 	for (size_t i = 0; i < usage->matched.path_count; ++i)
 		item.matched.paths.emplace_back(usage->matched.paths[i]);
 	item.matched.fake_bold = usage->matched.fake_bold != 0;
 	item.matched.fake_italic = usage->matched.fake_italic != 0;
-	item.matched.libass_fake_bold = usage->matched.libass_fake_bold != 0;
-	item.matched.libass_fake_italic = usage->matched.libass_fake_italic != 0;
-	item.matched.libass_score = usage->matched.libass_score;
 	item.matched.missing_text = Safe(usage->matched.missing_text);
 	if (usage->matched.missing_codepoint_count)
 		item.matched.missing_codepoints.assign(usage->matched.missing_codepoints, usage->matched.missing_codepoints + usage->matched.missing_codepoint_count);
@@ -584,6 +630,36 @@ void CollectJsonUsage(AegisubFontCollectorFontUsage const *usage, void *user_dat
 	if (usage->matched.missing_line_count)
 		item.matched.missing_lines.assign(usage->matched.missing_lines, usage->matched.missing_lines + usage->matched.missing_line_count);
 	item.matched.requested_weight = usage->matched.requested_weight;
+	item.match_candidates.reserve(usage->match_candidate_count);
+	for (size_t i = 0; i < usage->match_candidate_count; ++i) {
+		auto const& source = usage->match_candidates[i];
+		auto& candidate = item.match_candidates.emplace_back();
+		candidate.facename = Safe(source.facename);
+		candidate.facename_full = Safe(source.facename_full);
+		candidate.matched_name = Safe(source.matched_name);
+		candidate.match_source = Safe(source.match_source);
+		candidate.name_match = Safe(source.name_match);
+		candidate.path = Safe(source.path);
+		candidate.provider_order = source.provider_order;
+		candidate.face_index = source.face_index;
+		candidate.score = source.score;
+		candidate.weight = source.weight;
+		candidate.bold = source.bold != 0;
+		candidate.italic = source.italic != 0;
+		if (source.considered_codepoint_count)
+			candidate.considered_codepoints.assign(
+				source.considered_codepoints,
+				source.considered_codepoints + source.considered_codepoint_count);
+		if (source.supported_codepoint_count)
+			candidate.supported_codepoints.assign(
+				source.supported_codepoints,
+				source.supported_codepoints + source.supported_codepoint_count);
+		if (source.selected_codepoint_count)
+			candidate.selected_codepoints.assign(
+				source.selected_codepoints,
+				source.selected_codepoints + source.selected_codepoint_count);
+	}
+	item.match_ambiguous = usage->match_ambiguous != 0;
 }
 
 std::string JoinStrings(std::vector<std::string> const& values) {
@@ -712,6 +788,22 @@ void PrintStoredUsage(JsonUsage const& usage) {
 		std::cout << "  missing codepoints: " << usage.matched.missing_text << "\n";
 	if (!usage.matched.missing_lines.empty())
 		std::cout << "  missing lines: " << JoinInts(usage.matched.missing_lines) << "\n";
+	if (!usage.match_candidates.empty()) {
+		std::cout << "  match candidates (lower score is better)"
+		          << (usage.match_ambiguous ? " [ambiguous]" : "") << ":\n";
+		for (auto const& candidate : usage.match_candidates) {
+			std::cout << "    " << candidate.facename
+			          << " score=" << candidate.score
+			          << " source=" << candidate.match_source
+			          << " name_match=" << candidate.name_match
+			          << " provider_order=" << candidate.provider_order
+			          << " weight=" << candidate.weight
+			          << " italic=" << candidate.italic
+			          << " supported=" << candidate.supported_codepoints.size()
+			          << "/" << candidate.considered_codepoints.size()
+			          << " selected=" << candidate.selected_codepoints.size() << "\n";
+		}
+	}
 }
 
 std::string ListStatus(JsonUsage const& usage) {
@@ -967,9 +1059,6 @@ bool PrintHumanDiagnostic(JsonFileReport const& report, size_t index) {
 		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_DONE_SOME_NOT_COPIED:
 			std::cout << "ERROR: Some fonts could not be copied for " << report.input << "\n";
 			return true;
-		case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_OVER_32MB_WARNING:
-			std::cout << "WARN: Copied fonts exceed 32 MB for " << report.input << "\n";
-			return true;
 		default:
 			return false;
 	}
@@ -1011,6 +1100,11 @@ void PrintStoredReport(JsonFileReport const& report, bool show_header, bool deta
 
 	for (size_t i = 0; i < report.context.events.size(); ++i)
 		PrintHumanDiagnostic(report, i);
+	for (auto const& usage : report.context.usages) {
+		if (usage.match_ambiguous)
+			std::cout << "WARN: ambiguous libass font match for " << usage.ass_facename
+			          << "; use --details or --json to inspect equal-score candidates\n";
+	}
 
 	PrintHumanSummary(report);
 }
@@ -1039,6 +1133,8 @@ struct JsonDiagnostic {
 	std::string path;
 	bool has_result = false;
 	int result = AEGISUB_FONTCOLLECTOR_OK;
+	size_t match_candidate_count = 0;
+	bool match_ambiguous = false;
 };
 
 JsonDiagnostic MakeDiagnostic(std::string type, std::string severity, std::string const& file, std::string message) {
@@ -1116,11 +1212,43 @@ json::Object SummaryJson(AegisubFontCollectorSummary const& summary) {
 	return object;
 }
 
-json::Object BackendJson(std::string const& requested, std::string const& resolved) {
+std::vector<std::string> CodepointNames(std::vector<uint32_t> const& values) {
+	std::vector<std::string> names;
+	names.reserve(values.size());
+	for (auto value : values)
+		names.push_back(FormatCodepoint(value));
+	return names;
+}
+
+json::Object ToJson(JsonMatchCandidate const& candidate) {
 	json::Object object;
-	object["requested"] = requested;
-	object["resolved"] = resolved;
+	object["bold"] = candidate.bold;
+	object["considered_codepoints"] = CodepointsJson(
+		candidate.considered_codepoints, CodepointNames(candidate.considered_codepoints));
+	object["face_index"] = candidate.face_index;
+	object["facename"] = candidate.facename;
+	object["facename_full"] = candidate.facename_full;
+	object["italic"] = candidate.italic;
+	object["match_source"] = candidate.match_source;
+	object["matched_name"] = candidate.matched_name;
+	object["name_match"] = candidate.name_match;
+	object["path"] = candidate.path;
+	object["provider_order"] = candidate.provider_order;
+	object["score"] = candidate.score;
+	object["selected_codepoints"] = CodepointsJson(
+		candidate.selected_codepoints, CodepointNames(candidate.selected_codepoints));
+	object["supported_codepoints"] = CodepointsJson(
+		candidate.supported_codepoints, CodepointNames(candidate.supported_codepoints));
+	object["weight"] = candidate.weight;
 	return object;
+}
+
+json::Array MatchCandidatesJson(std::vector<JsonMatchCandidate> const& candidates) {
+	json::Array array;
+	array.reserve(candidates.size());
+	for (auto const& candidate : candidates)
+		array.emplace_back(ToJson(candidate));
+	return array;
 }
 
 json::Object ToJson(JsonDiagnosticFont const& font) {
@@ -1145,6 +1273,13 @@ json::Object ToJson(JsonDiagnostic const& diagnostic) {
 	object["style"] = JsonStringOrNull(diagnostic.has_style, diagnostic.style);
 	object["text"] = diagnostic.text;
 	object["type"] = diagnostic.type;
+	if (diagnostic.match_candidate_count) {
+		json::Object match_analysis;
+		match_analysis["ambiguous"] = diagnostic.match_ambiguous;
+		match_analysis["candidate_count"] = JsonInt(diagnostic.match_candidate_count);
+		match_analysis["score_order"] = "lower_is_better";
+		object["match_analysis"] = std::move(match_analysis);
+	}
 	return object;
 }
 
@@ -1190,17 +1325,28 @@ std::vector<JsonDiagnostic> BuildDiagnostics(JsonFileReport const& report) {
 				diagnostics.push_back(std::move(diagnostic));
 				break;
 			}
-			case AEGISUB_FONTCOLLECTOR_EVENT_COLLECTION_OVER_32MB_WARNING: {
-				auto diagnostic = MakeDiagnostic("collection_over_32mb_warning", "warning", report.input, event.text);
-				diagnostics.push_back(std::move(diagnostic));
-				break;
-			}
 			default:
 				break;
 		}
 	}
 
 	for (auto const& usage : report.context.usages) {
+		if (usage.match_candidates.size() > 1) {
+			auto diagnostic = MakeDiagnostic(
+				usage.match_ambiguous ? "ambiguous_font_match" : "font_match_candidates",
+				usage.match_ambiguous ? "warning" : "info",
+				report.input,
+				usage.match_ambiguous
+					? "equal-score candidates can serve the same codepoint; provider order selected the face"
+					: "font was selected from multiple candidates; the libass score is a ranking, not proof of identity");
+			diagnostic.lines = usage.lines;
+			diagnostic.has_font = true;
+			diagnostic.font = UsageFont(usage);
+			diagnostic.match_candidate_count = usage.match_candidates.size();
+			diagnostic.match_ambiguous = usage.match_ambiguous;
+			diagnostics.push_back(std::move(diagnostic));
+		}
+
 		if (usage.matched.match_status == AEGISUB_FONTCOLLECTOR_MATCH_MISSING) {
 			auto diagnostic = MakeDiagnostic("missing_font", "error", report.input, "font request could not be resolved");
 			diagnostic.lines = usage.lines;
@@ -1287,11 +1433,7 @@ json::Object ToJson(JsonUsage const& usage) {
 	matched["facename_full"] = usage.matched.facename_full;
 	matched["fake_bold"] = usage.matched.fake_bold;
 	matched["fake_italic"] = usage.matched.fake_italic;
-	matched["is_collection"] = usage.matched.is_collection;
 	matched["italic"] = usage.matched.italic;
-	matched["libass_fake_bold"] = usage.matched.libass_fake_bold;
-	matched["libass_fake_italic"] = usage.matched.libass_fake_italic;
-	matched["libass_score"] = usage.matched.libass_score;
 	matched["match_status"] = MatchStatusName(usage.matched.match_status);
 	matched["missing_codepoints"] = CodepointsJson(usage.matched.missing_codepoints, usage.matched.missing_codepoint_names);
 	matched["missing_lines"] = ToJson(usage.matched.missing_lines);
@@ -1301,6 +1443,12 @@ json::Object ToJson(JsonUsage const& usage) {
 	matched["paths"] = ToJson(usage.matched.paths);
 	matched["requested_weight"] = usage.matched.requested_weight;
 	matched["weight"] = usage.matched.weight;
+	json::Object match_analysis;
+	match_analysis["ambiguous"] = usage.match_ambiguous;
+	match_analysis["candidates"] = MatchCandidatesJson(usage.match_candidates);
+	match_analysis["score_order"] = "lower_is_better";
+	if (!usage.match_candidates.empty())
+		matched["match_analysis"] = std::move(match_analysis);
 
 	json::Object object;
 	object["ass_font"] = std::move(ass_font);
@@ -1324,7 +1472,8 @@ json::Array ToJsonArray(std::vector<T> const& values) {
 json::Object ReportJson(JsonFileReport const& report) {
 	auto diagnostics = BuildDiagnostics(report);
 	json::Object object;
-	object["backend"] = BackendJson(report.context.requested_backend, report.context.resolved_backend);
+	object["matcher"] = report.context.matcher;
+	object["provider"] = report.context.provider;
 	object["diagnostics"] = DiagnosticsJson(diagnostics);
 	object["error"] = report.error;
 	object["events"] = ToJsonArray(report.context.events);
@@ -1340,8 +1489,8 @@ json::Object ReportJson(JsonFileReport const& report) {
 void WriteJsonReports(std::ostream& out,
                       std::vector<JsonFileReport> const& reports,
                       int result,
-                      std::string const& requested_backend,
-                      std::string const& resolved_backend,
+                      std::string const& provider,
+	                  std::string const& matcher,
                       std::vector<JsonDiagnostic> extra_diagnostics = {}) {
 	auto summary = AggregateSummary(reports);
 	auto diagnostics = std::move(extra_diagnostics);
@@ -1354,12 +1503,13 @@ void WriteJsonReports(std::ostream& out,
 	}
 
 	json::Object root;
-	root["backend"] = BackendJson(requested_backend, resolved_backend);
+	root["matcher"] = matcher;
+	root["provider"] = provider;
 	root["diagnostics"] = DiagnosticsJson(diagnostics);
 	root["files"] = std::move(files);
 	root["ok"] = result == AEGISUB_FONTCOLLECTOR_OK;
 	root["result"] = result;
-	root["schema_version"] = 1;
+	root["schema_version"] = 2;
 	root["summary"] = SummaryJson(summary);
 	agi::JsonWriter::Write(root, out);
 	out << "\n";
@@ -1589,31 +1739,66 @@ int RunNormalization(NormalizationCliOptions const& options) {
 struct CliOptions {
 	std::vector<std::string> input_args;
 	std::string encoding;
-	std::string backend = "auto";
+	std::string matcher = "platform";
 	bool details = false;
 	bool json = false;
 	bool list = false;
 	bool quiet = false;
 	bool recursive = false;
 	bool strict = false;
+	std::vector<std::string> additional_fonts;
+	std::vector<std::string> additional_fonts_recursive;
+	bool exclude_system_fonts = false;
 	AegisubFontCollectorMode mode = AEGISUB_FONTCOLLECTOR_MODE_CHECK;
 	std::string destination;
 };
 
-AegisubFontCollectorBackend ParseBackendOption(std::string const& backend) {
-	if (backend == "platform")
-		return AEGISUB_FONTCOLLECTOR_BACKEND_PLATFORM_DEFAULT;
-	if (backend == "fontconfig")
-		return AEGISUB_FONTCOLLECTOR_BACKEND_FONTCONFIG;
-	if (backend == "coretext")
-		return AEGISUB_FONTCOLLECTOR_BACKEND_CORETEXT;
-	return AEGISUB_FONTCOLLECTOR_BACKEND_AUTO;
+AegisubFontCollectorMatcher ParseMatcherOption(std::string const& matcher) {
+	return matcher == "libass"
+		? AEGISUB_FONTCOLLECTOR_MATCHER_LIBASS
+		: AEGISUB_FONTCOLLECTOR_MATCHER_PLATFORM;
 }
 
 int RunFontCollector(CliOptions const& options) {
-	auto requested_backend = ParseBackendOption(options.backend);
-	auto requested_backend_name = RequestedBackendName(requested_backend);
-	auto resolved_backend_name = ResolvedBackendName(requested_backend);
+	auto requested_matcher = ParseMatcherOption(options.matcher);
+	auto provider_name = ProviderName(requested_matcher);
+	auto matcher_name = MatcherName(requested_matcher);
+	auto fail_invalid_option = [&](std::string message) {
+		if (!options.json)
+			std::cerr << "fontcollector failed: " << message << "\n";
+		else {
+			auto diagnostic = MakeDiagnostic("invalid_argument", "error", std::string(), message);
+			diagnostic.has_result = true;
+			diagnostic.result = AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+			WriteJsonReports(
+				std::cout,
+				{},
+				AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT,
+				provider_name,
+				matcher_name,
+				{std::move(diagnostic)});
+		}
+		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+	};
+	if (requested_matcher != AEGISUB_FONTCOLLECTOR_MATCHER_LIBASS &&
+	    (!options.additional_fonts.empty() || !options.additional_fonts_recursive.empty() ||
+	     options.exclude_system_fonts)) {
+		return fail_invalid_option("private font options require --matcher libass");
+	}
+	auto additional_font_files = ExpandFontInputs(options.additional_fonts, false);
+	auto recursive_font_files = ExpandFontInputs(options.additional_fonts_recursive, true);
+	for (auto& path : recursive_font_files)
+		AddUnique(additional_font_files, std::move(path));
+	if (requested_matcher == AEGISUB_FONTCOLLECTOR_MATCHER_LIBASS &&
+	    (!options.additional_fonts.empty() || !options.additional_fonts_recursive.empty()) &&
+	    additional_font_files.empty()) {
+		return fail_invalid_option("no supported files found in additional font paths");
+	}
+	if (requested_matcher == AEGISUB_FONTCOLLECTOR_MATCHER_LIBASS &&
+	    options.exclude_system_fonts &&
+	    additional_font_files.empty()) {
+		return fail_invalid_option("--exclude-system-fonts requires --additional-fonts");
+	}
 	auto inputs = ExpandInputs(options.input_args, options.recursive);
 	if (inputs.empty()) {
 		if (!options.json)
@@ -1626,8 +1811,8 @@ int RunFontCollector(CliOptions const& options) {
 				std::cout,
 				{},
 				AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT,
-				requested_backend_name,
-				resolved_backend_name,
+				provider_name,
+				matcher_name,
 				{std::move(diagnostic)});
 		}
 		return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
@@ -1638,10 +1823,23 @@ int RunFontCollector(CliOptions const& options) {
 	std::array<char, 4096> session_error = {};
 	AegisubFontCollectorSession *session = nullptr;
 	JsonContext session_context;
-	session_context.requested_backend = requested_backend_name;
-	session_context.resolved_backend = resolved_backend_name;
-	int session_result = aegisub_fontcollector_session_create(
-		requested_backend,
+	session_context.provider = provider_name;
+	session_context.matcher = matcher_name;
+	std::vector<char const *> additional_font_file_pointers;
+	additional_font_file_pointers.reserve(additional_font_files.size());
+	for (auto const& path : additional_font_files)
+		additional_font_file_pointers.push_back(path.c_str());
+	AegisubFontCollectorSessionOptions session_options = {};
+	session_options.struct_size = sizeof(session_options);
+	session_options.matcher = requested_matcher;
+	session_options.additional_font_files = additional_font_file_pointers.empty()
+		? nullptr
+		: additional_font_file_pointers.data();
+	session_options.additional_font_file_count = additional_font_file_pointers.size();
+	session_options.include_system_fonts = !options.exclude_system_fonts;
+	session_options.collect_match_candidates = options.details || options.json;
+	int session_result = aegisub_fontcollector_session_create_with_options(
+		&session_options,
 		&CollectJsonEvent,
 		static_cast<void *>(&session_context),
 		&session,
@@ -1665,8 +1863,8 @@ int RunFontCollector(CliOptions const& options) {
 				std::cout,
 				{},
 				session_result,
-				requested_backend_name,
-				resolved_backend_name,
+				provider_name,
+				matcher_name,
 				{std::move(diagnostic)});
 		}
 		return session_result;
@@ -1682,8 +1880,8 @@ int RunFontCollector(CliOptions const& options) {
 	for (size_t i = 0; i < inputs.size(); ++i) {
 		auto& report = json_reports[i];
 		report.input = inputs[i];
-		report.context.requested_backend = requested_backend_name;
-		report.context.resolved_backend = resolved_backend_name;
+		report.context.provider = provider_name;
+		report.context.matcher = matcher_name;
 		if (i == 0)
 			report.context.events = session_context.events;
 
@@ -1692,8 +1890,6 @@ int RunFontCollector(CliOptions const& options) {
 		request.destination_path = destination;
 		request.encoding = options.encoding.c_str();
 		request.mode = options.mode;
-		request.backend = requested_backend;
-
 		auto& item = batch_items[i];
 		item.request = request;
 		item.event_callback = &CollectJsonEvent;
@@ -1728,8 +1924,8 @@ int RunFontCollector(CliOptions const& options) {
 				std::cout,
 				json_reports,
 				batch_result,
-				requested_backend_name,
-				resolved_backend_name,
+				provider_name,
+				matcher_name,
 				{std::move(diagnostic)});
 		}
 		return batch_result;
@@ -1762,7 +1958,8 @@ int RunFontCollector(CliOptions const& options) {
 		}
 	}
 	else if (options.json)
-		WriteJsonReports(std::cout, json_reports, exit_code, requested_backend_name, resolved_backend_name);
+		WriteJsonReports(std::cout, json_reports, exit_code,
+		                 provider_name, matcher_name);
 	else if (options.list)
 		PrintListReports(json_reports, options.details, options.quiet);
 
@@ -1774,8 +1971,14 @@ void AddCommonOptions(CLI::App& app, CliOptions& options) {
 		->required()
 		->expected(1, -1);
 	app.add_option("--encoding", options.encoding, "Input subtitle encoding; omitted enables BOM/UTF-8 detection");
-	app.add_option("--backend", options.backend, "Font backend: auto, platform, fontconfig, or coretext")
-		->check(CLI::IsMember({"auto", "platform", "fontconfig", "coretext"}));
+	app.add_option("--matcher", options.matcher, "Font matcher: platform or libass")
+		->check(CLI::IsMember({"platform", "libass"}));
+	app.add_option("--additional-fonts", options.additional_fonts,
+	               "Additional font files or directories (non-recursive; libass matcher only)");
+	app.add_option("--additional-fonts-recursive", options.additional_fonts_recursive,
+	               "Additional font directories searched recursively (libass matcher only)");
+	app.add_flag("--exclude-system-fonts", options.exclude_system_fonts,
+	             "Match only additional fonts (libass matcher only)");
 	app.add_flag("--details", options.details, "Print ASS font usage and matched font details");
 	app.add_flag("--json", options.json, "Print structured JSON output for automation");
 	app.add_flag("-r,--recursive", options.recursive, "Recursively scan input directories for .ass/.ssa files");
@@ -1868,44 +2071,10 @@ int main(int argc, char **argv) {
 		return RunFontCollector(options);
 	}
 
-	CLI::App app{"Collect or check font files used by ASS/SSA subtitle scripts. Subcommands: check, collect, validate, list, normalize. Legacy flags are also supported."};
-
-	CliOptions options;
-	bool check = false;
-	bool copy_to_script = false;
-	std::string copy_dir;
-#ifndef _WIN32
-	std::string symlink_dir;
-#endif
-
-	AddCommonOptions(app, options);
-	app.add_flag("--strict", options.strict, "Exit non-zero when fonts, glyphs, styles, or copies are missing");
-
-	auto *mode = app.add_option_group("Mode");
-	mode->add_flag("--check", check, "Only check required fonts");
-	mode->add_option("--copy", copy_dir, "Copy fonts to directory")->option_text("DIR");
-	mode->add_flag("--copy-to-script-dir", copy_to_script, "Copy fonts next to the subtitle file");
-#ifndef _WIN32
-	mode->add_option("--symlink", symlink_dir, "Symlink fonts to directory")->option_text("DIR");
-#endif
-	mode->require_option(0, 1);
-
-	CLI11_PARSE(app, argc, argv);
-
-	if (!copy_dir.empty()) {
-		options.mode = AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_FOLDER;
-		options.destination = copy_dir;
+	if (command == "--help" || command == "-h" || command.empty()) {
+		std::cout << "Usage: fontcollector <check|collect|validate|list|normalize> ...\n";
+		return command.empty() ? AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT : AEGISUB_FONTCOLLECTOR_OK;
 	}
-	else if (copy_to_script)
-		options.mode = AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_SCRIPT_FOLDER;
-#ifndef _WIN32
-	else if (!symlink_dir.empty()) {
-		options.mode = AEGISUB_FONTCOLLECTOR_MODE_SYMLINK_TO_FOLDER;
-		options.destination = symlink_dir;
-	}
-#endif
-	else
-		(void)check;
-
-	return RunFontCollector(options);
+	std::cerr << "fontcollector failed: unknown command '" << command << "'\n";
+	return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
 }

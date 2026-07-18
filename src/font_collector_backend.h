@@ -2,10 +2,16 @@
 
 #pragma once
 
-enum class FontCollectorBackend {
-	Auto = 0,
-	PlatformDefault = 1,
-	Fontconfig = 2,
-	CoreText = 3,
+#include <string>
+#include <vector>
+
+enum class FontCollectorMatcher {
+	Platform = 0,
+	Libass = 1,
 };
 
+struct FontProviderOptions {
+	std::vector<std::string> additional_font_files;
+	bool include_system_fonts = true;
+	bool collect_match_candidates = false;
+};

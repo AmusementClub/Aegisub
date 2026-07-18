@@ -23,7 +23,6 @@
 #include "ass_style.h"
 #include "ass_style_resolution.h"
 #include "font_collector_unicode.h"
-#include "font_matching_common.h"
 
 #include <algorithm>
 #include <iterator>
@@ -439,28 +438,17 @@ void FontCollector::ApplyResolvedFontUsage(FileAnalysis& analysis, StyleInfo con
 		usage.matched.weight = res.matched_weight;
 		usage.matched.bold = res.matched_bold;
 		usage.matched.italic = res.matched_italic;
-		usage.matched.is_collection = res.is_collection;
 		usage.matched.paths = res.paths;
+		usage.matched.memory_fonts = res.memory_fonts;
 		usage.matched.path_source = res.path_source;
-		if (res.paths.empty())
-			usage.matched.raw_data = res.raw_data;
 		usage.matched.fake_bold = res.fake_bold;
 		usage.matched.fake_italic = res.fake_italic;
 		usage.matched.missing_text = missing_text;
 		usage.matched.missing_codepoints = missing_codepoints;
 		usage.matched.requested_weight = res.requested_weight;
+		usage.matched.match_candidates = res.match_candidates;
+		usage.matched.match_ambiguous = res.match_ambiguous;
 
-		if (enable_libass_compat_) {
-			auto request = NormalizeAssFontRequest(style.facename, style.bold, style.italic);
-			FontMatchFaceAttributes face_attributes;
-			face_attributes.weight = res.matched_weight ? res.matched_weight : request.requested_weight;
-			face_attributes.bold = res.matched_bold;
-			face_attributes.italic = res.matched_italic;
-			auto synthetic = DetectSyntheticStyle(face_attributes, request);
-			usage.matched.libass_fake_bold = synthetic.fake_bold;
-			usage.matched.libass_fake_italic = synthetic.fake_italic;
-			usage.matched.libass_score = FontAttributesSimilarity(face_attributes, request);
-		}
 	}
 
 	auto make_event = [&](FontCollectorEventType type) {
@@ -472,7 +460,7 @@ void FontCollector::ApplyResolvedFontUsage(FileAnalysis& analysis, StyleInfo con
 		return event;
 	};
 
-	if (res.paths.empty() && res.raw_data.bytes.empty()) {
+	if (res.paths.empty() && res.memory_fonts.empty()) {
 		Emit(analysis.event_sink, make_event(FontCollectorEventType::FontMissing));
 		PrintUsage(analysis.event_sink, data);
 		++analysis.missing;
@@ -487,8 +475,9 @@ void FontCollector::ApplyResolvedFontUsage(FileAnalysis& analysis, StyleInfo con
 				analysis.results.push_back(elem);
 			}
 		}
-
-		if (res.paths.empty() && !res.raw_data.bytes.empty()) {
+		for (auto const& memory_font : res.memory_fonts) {
+			if (!memory_font.data || memory_font.data->empty())
+				continue;
 			auto event = make_event(FontCollectorEventType::FontFound);
 			event.message = "memory";
 			Emit(analysis.event_sink, std::move(event));

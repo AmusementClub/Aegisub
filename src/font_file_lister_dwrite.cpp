@@ -2,12 +2,18 @@
 
 #include "font_file_lister_dwrite.h"
 
+#include "font_file_lister.h"
+#include "font_matching_libass.h"
+
 #include <dwrite.h>
+#include <dwrite_3.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -18,6 +24,51 @@
 
 namespace {
 using DWriteCreateFactoryFn = HRESULT (WINAPI *)(DWRITE_FACTORY_TYPE, REFIID, IUnknown **);
+
+uint16_t read_big_endian_16(uint8_t const *data) {
+	return static_cast<uint16_t>((static_cast<uint16_t>(data[0]) << 8) | data[1]);
+}
+
+int libass_weight_from_os2(uint16_t weight, bool bold) {
+	switch (weight) {
+		case 0: return bold ? 700 : 400;
+		case 1: return 100;
+		case 2: return 200;
+		case 3: return 300;
+		case 4: return 350;
+		case 5: return 400;
+		case 6: return 600;
+		case 7: return 700;
+		case 8: return 800;
+		case 9: return 900;
+		default: return weight;
+	}
+}
+
+void read_libass_attributes(IDWriteFontFace *face, IDWriteFont *font, FontMatchCandidate& metadata) {
+	metadata.weight = std::clamp(static_cast<int>(font->GetWeight()), 1, 999);
+	metadata.bold = font->GetWeight() >= DWRITE_FONT_WEIGHT_BOLD;
+	metadata.italic = font->GetStyle() != DWRITE_FONT_STYLE_NORMAL;
+
+	void const *table_data = nullptr;
+	UINT32 table_size = 0;
+	void *table_context = nullptr;
+	BOOL exists = FALSE;
+	if (SUCCEEDED(face->TryGetFontTable(
+		DWRITE_MAKE_OPENTYPE_TAG('O', 'S', '/', '2'),
+		&table_data,
+		&table_size,
+		&table_context,
+		&exists)) && exists && table_data && table_size >= 64) {
+		auto const *os2 = static_cast<uint8_t const *>(table_data);
+		auto const selection = read_big_endian_16(os2 + 62);
+		metadata.bold = (selection & (1u << 5)) != 0;
+		metadata.italic = (selection & 1u) != 0;
+		metadata.weight = libass_weight_from_os2(read_big_endian_16(os2 + 4), metadata.bold);
+	}
+	if (table_context)
+		face->ReleaseFontTable(table_context);
+}
 
 std::wstring utf8_to_wide(std::string_view utf8) {
 	if (utf8.empty()) return {};
@@ -177,6 +228,51 @@ IDWriteFont *font_from_logfont(IDWriteGdiInterop *interop, LOGFONTW const &lf) {
 		return nullptr;
 	return font;
 }
+
+std::vector<std::string> informational_strings(
+	IDWriteFont *font,
+	DWRITE_INFORMATIONAL_STRING_ID id) {
+	if (!font)
+		return {};
+	IDWriteLocalizedStrings *localized = nullptr;
+	BOOL exists = FALSE;
+	if (FAILED(font->GetInformationalStrings(id, &localized, &exists)) || !exists || !localized)
+		return {};
+	auto values = localized_strings_to_utf8(localized);
+	localized->Release();
+	return values;
+}
+
+std::vector<DWriteLocalizedName> win32_family_names(IDWriteFont *font) {
+	if (!font)
+		return {};
+
+	IDWriteLocalizedStrings *localized = nullptr;
+	BOOL exists = FALSE;
+	auto hr = font->GetInformationalStrings(
+		DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES, &localized, &exists);
+	if (SUCCEEDED(hr) && exists && localized) {
+		auto names = localized_strings_with_locale(localized);
+		localized->Release();
+		if (!names.empty())
+			return names;
+		localized = nullptr;
+	}
+	if (localized)
+		localized->Release();
+
+	IDWriteFontFamily *family = nullptr;
+	if (FAILED(font->GetFontFamily(&family)) || !family)
+		return {};
+	std::vector<DWriteLocalizedName> names;
+	if (SUCCEEDED(family->GetFamilyNames(&localized)) && localized)
+		names = localized_strings_with_locale(localized);
+	if (localized)
+		localized->Release();
+	family->Release();
+	return names;
+}
+
 // Helper: get the first font file and its reference key from a font face.
 // On success, caller must Release() the returned file.
 bool get_font_file_and_key(IDWriteFontFace *face, IDWriteFontFile **out_file,
@@ -230,29 +326,6 @@ std::string get_dll_description(HMODULE dll, bool is_dwritecore) {
 }
 
 } // anonymous namespace
-
-FontFormat DetermineFontFormat(std::span<const char, 4> data) {
-	auto sig = reinterpret_cast<const unsigned char *>(data.data());
-	// 'ttcf' covers both TTC (TrueType) and OTC (CFF) collections.
-	if (sig[0] == 't' && sig[1] == 't' && sig[2] == 'c' && sig[3] == 'f')
-		return FontFormat::Collection;
-	if (sig[0] == 'O' && sig[1] == 'T' && sig[2] == 'T' && sig[3] == 'O')
-		return FontFormat::OpenType;
-	if (sig[0] == 0 && sig[1] == 1 && sig[2] == 0 && sig[3] == 0)
-		return FontFormat::TrueType;
-	if (sig[0] == 'w' && sig[1] == 'O' && sig[2] == 'F' && sig[3] == 'F')
-		return FontFormat::Woff;
-	return FontFormat::Unknown;
-}
-
-const char *FontFormatExtension(FontFormat format) {
-	switch (format) {
-		case FontFormat::OpenType:   return ".otf";
-		case FontFormat::Collection: return ".ttc";
-		case FontFormat::Woff:       return ".woff";
-		default:                     return ".ttf";
-	}
-}
 
 DWriteBridge::DWriteBridge() {
 	DWriteCreateFactoryFn create_fn = nullptr;
@@ -315,6 +388,167 @@ IDWriteFontFace *DWriteBridge::CreateFontFaceFromLogFont(LOGFONTW const &lf) con
 	return face;
 }
 
+static bool ascii_case_insensitive_equals(std::string_view left, std::string_view right) {
+	if (left.size() != right.size())
+		return false;
+	for (size_t index = 0; index < left.size(); ++index) {
+		auto const left_char = static_cast<unsigned char>(left[index]);
+		auto const right_char = static_cast<unsigned char>(right[index]);
+		auto const normalized_left = left_char < 0x80 ? static_cast<unsigned char>(std::tolower(left_char)) : left_char;
+		auto const normalized_right = right_char < 0x80 ? static_cast<unsigned char>(std::tolower(right_char)) : right_char;
+		if (normalized_left != normalized_right)
+			return false;
+	}
+	return true;
+}
+
+IDWriteFontFace *DWriteBridge::CreateFontFaceFromFont(IDWriteFont *font) const {
+	if (!available_ || !font)
+		return nullptr;
+
+	IDWriteFontFace *face = nullptr;
+	if (FAILED(font->CreateFontFace(&face)) || !face)
+		return nullptr;
+	return face;
+}
+
+bool DWriteBridge::BuildFontCatalog(
+	std::vector<FontMatchCandidate>& faces,
+	std::vector<IDWriteFontFace *>& dwrite_faces,
+	std::vector<std::string> const& additional_font_files,
+	bool include_system_fonts,
+	std::string& error) const {
+	error.clear();
+	if (!available_ || !factory)
+		return false;
+	IDWriteFontCollection *collection = nullptr;
+	IDWriteFactory5 *factory5 = nullptr;
+	IDWriteFontSetBuilder1 *builder = nullptr;
+	IDWriteFontSet *font_set = nullptr;
+	IDWriteFontCollection1 *custom_collection = nullptr;
+	bool custom_catalog = !additional_font_files.empty() || !include_system_fonts;
+	bool added_private_file = false;
+	bool catalog_ready = false;
+	if (!additional_font_files.empty() || !include_system_fonts) {
+		if (FAILED(factory->QueryInterface(&factory5)) || !factory5 ||
+		    FAILED(factory5->CreateFontSetBuilder(&builder)) || !builder) {
+			error = "DirectWrite custom font-set API is unavailable";
+			goto cleanup;
+		}
+
+		if (include_system_fonts) {
+			IDWriteFontSet *system_set = nullptr;
+			if (SUCCEEDED(factory5->GetSystemFontSet(&system_set)) && system_set) {
+				if (FAILED(builder->AddFontSet(system_set)) && error.empty())
+					error = "failed to add the system DirectWrite font set";
+				system_set->Release();
+			}
+			else if (error.empty()) {
+				error = "failed to read the system DirectWrite font set";
+			}
+		}
+
+		for (auto const& path : additional_font_files) {
+			auto wide_path = utf8_to_wide(path);
+			if (wide_path.empty()) {
+				if (error.empty())
+					error = "an additional font path is not valid UTF-8";
+				continue;
+			}
+			IDWriteFontFile *file = nullptr;
+			if (SUCCEEDED(factory->CreateFontFileReference(wide_path.c_str(), nullptr, &file)) && file) {
+				if (SUCCEEDED(builder->AddFontFile(file)))
+					added_private_file = true;
+				else if (error.empty())
+					error = "failed to add an additional font file to DirectWrite: " + path;
+				file->Release();
+			}
+			else if (error.empty()) {
+				error = "failed to open an additional font file in DirectWrite: " + path;
+			}
+		}
+
+		if (FAILED(builder->CreateFontSet(&font_set)) || !font_set ||
+		    FAILED(factory5->CreateFontCollectionFromFontSet(font_set, &custom_collection)) ||
+		    !custom_collection) {
+			if (error.empty())
+				error = "failed to create the DirectWrite custom font collection";
+			goto cleanup;
+		}
+		collection = custom_collection;
+		collection->AddRef();
+	}
+	else if (FAILED(factory->GetSystemFontCollection(&collection, FALSE)) || !collection) {
+		error = "failed to read the system DirectWrite font collection";
+		goto cleanup;
+	}
+
+	for (UINT32 family_index = 0; family_index < collection->GetFontFamilyCount(); ++family_index) {
+		IDWriteFontFamily *family = nullptr;
+		if (FAILED(collection->GetFontFamily(family_index, &family)) || !family)
+			continue;
+
+		for (UINT32 font_index = 0; font_index < family->GetFontCount(); ++font_index) {
+			IDWriteFont *font = nullptr;
+			if (FAILED(family->GetFont(font_index, &font)) || !font)
+				continue;
+			if (font->GetSimulations() != DWRITE_FONT_SIMULATIONS_NONE) {
+				font->Release();
+				continue;
+			}
+
+			IDWriteFontFace *face = CreateFontFaceFromFont(font);
+			if (!face) {
+				font->Release();
+				continue;
+			}
+
+			FontMatchCandidate metadata;
+			for (auto const& name : GetWin32FamilyNamesFromFont(font))
+				add_unique(metadata.families, name.value);
+			metadata.fullnames = GetFullNamesFromFont(font);
+			metadata.postscript_name = GetPostScriptNameFromFont(font);
+			if (!metadata.families.empty())
+				metadata.extended_family = metadata.families.front();
+			metadata.face_index = static_cast<int>(face->GetIndex());
+			GetFontFilePath(face, metadata.path, metadata.face_index);
+			read_libass_attributes(face, font, metadata);
+			// Match libass ass_directwrite.c check_postscript (CFF / RAW_CFF / Type1).
+			auto const type = face->GetType();
+			metadata.postscript_outlines =
+				type == DWRITE_FONT_FACE_TYPE_CFF ||
+				type == DWRITE_FONT_FACE_TYPE_RAW_CFF ||
+				type == DWRITE_FONT_FACE_TYPE_TYPE1;
+
+			if (!metadata.families.empty()) {
+				faces.push_back(std::move(metadata));
+				dwrite_faces.push_back(face);
+			}
+			else
+				face->Release();
+			font->Release();
+		}
+		family->Release();
+	}
+	catalog_ready = true;
+	if (custom_catalog && faces.empty() && error.empty())
+		error = added_private_file
+			? "the DirectWrite custom font collection contains no usable font faces"
+			: "no additional font files were loaded by DirectWrite";
+	collection->Release();
+
+cleanup:
+	if (custom_collection)
+		custom_collection->Release();
+	if (font_set)
+		font_set->Release();
+	if (builder)
+		builder->Release();
+	if (factory5)
+		factory5->Release();
+	return catalog_ready;
+}
+
 std::vector<std::string> DWriteBridge::GetFontFamilyNamesFromLogFont(LOGFONTW const &lf) const {
 	std::vector<std::string> names;
 	if (!available_ || !gdi_interop)
@@ -342,46 +576,177 @@ std::vector<std::string> DWriteBridge::GetFontFamilyNamesFromLogFont(LOGFONTW co
 }
 
 std::vector<DWriteLocalizedName> DWriteBridge::GetWin32FamilyNamesFromLogFont(LOGFONTW const &lf) const {
-	std::vector<DWriteLocalizedName> names;
 	if (!available_ || !gdi_interop)
-		return names;
+		return {};
 
 	IDWriteFont *font = font_from_logfont(gdi_interop, lf);
 	if (!font)
-		return names;
+		return {};
+	auto names = win32_family_names(font);
+	font->Release();
+	return names;
+}
 
-	// Prefer explicit Win32 family informational strings (matches libass DW path).
-	IDWriteLocalizedStrings *win32_names = nullptr;
-	BOOL exists = FALSE;
-	auto hr = font->GetInformationalStrings(
-		DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES, &win32_names, &exists);
-	if (SUCCEEDED(hr) && exists && win32_names) {
-		names = localized_strings_with_locale(win32_names);
-		win32_names->Release();
-		if (!names.empty()) {
-			font->Release();
-			return names;
+std::vector<DWriteLocalizedName> DWriteBridge::GetWin32FamilyNamesFromFont(IDWriteFont *font) const {
+	return win32_family_names(font);
+}
+
+std::vector<std::string> DWriteBridge::GetFullNamesFromFont(IDWriteFont *font) const {
+	return informational_strings(font, DWRITE_INFORMATIONAL_STRING_FULL_NAME);
+}
+
+std::string DWriteBridge::GetPostScriptNameFromFont(IDWriteFont *font) const {
+	auto values = informational_strings(font, DWRITE_INFORMATIONAL_STRING_POSTSCRIPT_NAME);
+	return values.empty() ? std::string() : values.front();
+}
+
+namespace {
+// Minimal IDWriteTextRenderer that only captures the font used for the first glyph run.
+// Mirrors libass ass_directwrite.c FallbackLogTextRenderer.
+struct FallbackLogTextRenderer final : IDWriteTextRenderer {
+	ULONG ref_count = 1;
+	IDWriteFactory *factory = nullptr;
+
+	// IUnknown
+	HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppvObject) override {
+		if (!ppvObject)
+			return E_POINTER;
+		if (riid == __uuidof(IUnknown) ||
+		    riid == __uuidof(IDWritePixelSnapping) ||
+		    riid == __uuidof(IDWriteTextRenderer)) {
+			*ppvObject = static_cast<IDWriteTextRenderer *>(this);
+			AddRef();
+			return S_OK;
 		}
-	} else if (win32_names) {
-		win32_names->Release();
+		*ppvObject = nullptr;
+		return E_NOINTERFACE;
+	}
+	ULONG STDMETHODCALLTYPE AddRef() override {
+		return InterlockedIncrement(&ref_count);
+	}
+	ULONG STDMETHODCALLTYPE Release() override {
+		// Stack-owned; never delete.
+		return InterlockedDecrement(&ref_count);
 	}
 
-	// Fallback: family display names from IDWriteFontFamily.
-	IDWriteFontFamily *family = nullptr;
-	hr = font->GetFontFamily(&family);
+	// IDWritePixelSnapping
+	HRESULT STDMETHODCALLTYPE IsPixelSnappingDisabled(void *, BOOL *isDisabled) override {
+		if (!isDisabled)
+			return E_POINTER;
+		*isDisabled = TRUE;
+		return S_OK;
+	}
+	HRESULT STDMETHODCALLTYPE GetCurrentTransform(void *, DWRITE_MATRIX *) override {
+		return E_NOTIMPL;
+	}
+	HRESULT STDMETHODCALLTYPE GetPixelsPerDip(void *, FLOAT *) override {
+		return E_NOTIMPL;
+	}
+
+	// IDWriteTextRenderer
+	HRESULT STDMETHODCALLTYPE DrawGlyphRun(
+		void *clientDrawingContext,
+		FLOAT, FLOAT,
+		DWRITE_MEASURING_MODE,
+		DWRITE_GLYPH_RUN const *glyphRun,
+		DWRITE_GLYPH_RUN_DESCRIPTION const *,
+		IUnknown *) override {
+		if (!clientDrawingContext || !glyphRun || !glyphRun->fontFace || !factory)
+			return E_FAIL;
+		auto **out_font = static_cast<IDWriteFont **>(clientDrawingContext);
+		if (*out_font)
+			return S_OK;
+
+		IDWriteFontCollection *collection = nullptr;
+		if (FAILED(factory->GetSystemFontCollection(&collection, FALSE)) || !collection)
+			return E_FAIL;
+		IDWriteFont *font = nullptr;
+		auto const hr = collection->GetFontFromFontFace(glyphRun->fontFace, &font);
+		collection->Release();
+		if (FAILED(hr) || !font)
+			return E_FAIL;
+		*out_font = font;
+		return S_OK;
+	}
+	HRESULT STDMETHODCALLTYPE DrawUnderline(void *, FLOAT, FLOAT, DWRITE_UNDERLINE const *, IUnknown *) override {
+		return S_OK;
+	}
+	HRESULT STDMETHODCALLTYPE DrawStrikethrough(void *, FLOAT, FLOAT, DWRITE_STRIKETHROUGH const *, IUnknown *) override {
+		return S_OK;
+	}
+	HRESULT STDMETHODCALLTYPE DrawInlineObject(
+		void *, FLOAT, FLOAT, IDWriteInlineObject *, BOOL, BOOL, IUnknown *) override {
+		return S_OK;
+	}
+};
+
+int encode_utf16_codepoint(uint32_t codepoint, wchar_t out[2]) {
+	if (codepoint <= 0xFFFF) {
+		out[0] = static_cast<wchar_t>(codepoint);
+		return 1;
+	}
+	codepoint -= 0x10000;
+	out[0] = static_cast<wchar_t>(0xD800 + (codepoint >> 10));
+	out[1] = static_cast<wchar_t>(0xDC00 + (codepoint & 0x3FF));
+	return 2;
+}
+} // namespace
+
+std::optional<std::string> DWriteBridge::ResolveSystemFallbackFamily(uint32_t codepoint) const {
+	if (!available_ || !factory)
+		return std::nullopt;
+
+	// Match libass FALLBACK_DEFAULT_FONT (Arial) used as the layout seed font.
+	IDWriteTextFormat *text_format = nullptr;
+	if (FAILED(factory->CreateTextFormat(
+		L"Arial",
+		nullptr,
+		DWRITE_FONT_WEIGHT_MEDIUM,
+		DWRITE_FONT_STYLE_NORMAL,
+		DWRITE_FONT_STRETCH_NORMAL,
+		1.0f,
+		L"",
+		&text_format)) || !text_format)
+		return std::nullopt;
+
+	wchar_t char_string[2] = {};
+	int const char_len = encode_utf16_codepoint(codepoint, char_string);
+	IDWriteTextLayout *text_layout = nullptr;
+	if (FAILED(factory->CreateTextLayout(
+		char_string,
+		static_cast<UINT32>(char_len),
+		text_format,
+		0.0f,
+		0.0f,
+		&text_layout)) || !text_layout) {
+		text_format->Release();
+		return std::nullopt;
+	}
+
+	// Stack-allocated renderer; Draw only AddRefs if QI'd, which layout may not do.
+	FallbackLogTextRenderer renderer;
+	renderer.factory = factory;
+	IDWriteFont *font = nullptr;
+	auto const draw_hr = text_layout->Draw(&font, &renderer, 0.0f, 0.0f);
+	text_layout->Release();
+	text_format->Release();
+	if (FAILED(draw_hr) || !font)
+		return std::nullopt;
+
+	if (codepoint > 0) {
+		BOOL exists = FALSE;
+		if (FAILED(font->HasCharacter(codepoint, &exists)) || !exists) {
+			font->Release();
+			return std::nullopt;
+		}
+	}
+
+	std::optional<std::string> family;
+	auto names = win32_family_names(font);
+	if (!names.empty())
+		family = names.front().value;
 	font->Release();
-	if (FAILED(hr) || !family)
-		return names;
-
-	IDWriteLocalizedStrings *family_names = nullptr;
-	hr = family->GetFamilyNames(&family_names);
-	family->Release();
-	if (FAILED(hr) || !family_names)
-		return names;
-
-	names = localized_strings_with_locale(family_names);
-	family_names->Release();
-	return names;
+	return family;
 }
 
 bool DWriteBridge::GetFontFilePath(IDWriteFontFace *face, std::string &out_path, int &out_face_index) const {
@@ -468,16 +833,8 @@ bool DWriteBridge::GetFontFilePath(IDWriteFontFace *face, std::string &out_path,
 	return !out_path.empty();
 }
 
-bool DWriteBridge::HasGlyph(IDWriteFontFace *face, uint32_t codepoint) const {
-	if (!face || codepoint == 0)
-		return true;
-
-	UINT16 glyph_index = 0;
-	auto hr = face->GetGlyphIndices(&codepoint, 1, &glyph_index);
-	return SUCCEEDED(hr) && glyph_index != 0;
-}
-
-bool DWriteBridge::ReadFontData(IDWriteFontFace *face, std::vector<char> &out_bytes) const {
+bool DWriteBridge::ReadFontData(IDWriteFontFace *face, std::vector<char>& out_bytes) const {
+	out_bytes.clear();
 	if (!face)
 		return false;
 
@@ -511,19 +868,138 @@ bool DWriteBridge::ReadFontData(IDWriteFontFace *face, std::vector<char> &out_by
 	}
 
 	const void *fragment = nullptr;
-	void *fragment_ctx = nullptr;
-	hr = stream->ReadFileFragment(&fragment, 0, file_size, &fragment_ctx);
+	void *fragment_context = nullptr;
+	hr = stream->ReadFileFragment(&fragment, 0, file_size, &fragment_context);
 	if (FAILED(hr) || !fragment) {
 		stream->Release();
 		file->Release();
 		return false;
 	}
 
-	out_bytes.assign(static_cast<const char *>(fragment),
-	                 static_cast<const char *>(fragment) + file_size);
-	stream->ReleaseFileFragment(fragment_ctx);
+	auto const *begin = static_cast<char const *>(fragment);
+	out_bytes.assign(begin, begin + static_cast<size_t>(file_size));
+	stream->ReleaseFileFragment(fragment_context);
 	stream->Release();
 	file->Release();
-
 	return true;
+}
+
+bool DWriteBridge::HasGlyph(IDWriteFontFace *face, uint32_t codepoint) const {
+	if (!face || codepoint == 0)
+		return true;
+
+	UINT16 glyph_index = 0;
+	auto hr = face->GetGlyphIndices(&codepoint, 1, &glyph_index);
+	return SUCCEEDED(hr) && glyph_index != 0;
+}
+
+namespace {
+class DWriteLibassFontProvider final : public ILibassFontProvider {
+	std::unique_ptr<DWriteBridge> bridge;
+	std::vector<FontMatchCandidate> faces;
+	std::vector<IDWriteFontFace *> dwrite_faces;
+	std::unordered_map<uint32_t, std::optional<std::string>> fallback_cache;
+	mutable std::unordered_map<size_t, std::shared_ptr<std::vector<char> const>> font_data_cache;
+	bool include_system_fonts = true;
+
+public:
+	explicit DWriteLibassFontProvider(FontCollectorEventSink& event_sink, FontProviderOptions const& options)
+	: bridge(std::make_unique<DWriteBridge>())
+	, include_system_fonts(options.include_system_fonts) {
+		std::string error;
+		if (!bridge->available()) {
+			error = "DirectWrite is unavailable";
+		}
+		else {
+			// Eager system catalog matches current collector design: one-shot batch
+			// resolution benefits from a prebuilt face list. Real libass DirectWrite
+			// is lazy (match_fonts on demand); catalog order may differ from GDI enum.
+			bool const catalog_ready = bridge->BuildFontCatalog(
+				faces, dwrite_faces, options.additional_font_files, options.include_system_fonts, error);
+			if (!catalog_ready && error.empty())
+				error = "failed to build the DirectWrite font catalog";
+			if (catalog_ready && faces.empty() && error.empty()) {
+				error = options.include_system_fonts
+					? "DirectWrite system font catalog is empty"
+					: "DirectWrite private font catalog is empty";
+			}
+		}
+		if (!error.empty() && event_sink) {
+			FontCollectorEvent event;
+			event.type = FontCollectorEventType::FontCacheError;
+			event.message = error;
+			event_sink(event);
+		}
+	}
+
+	~DWriteLibassFontProvider() override {
+		for (auto *face : dwrite_faces)
+			face->Release();
+	}
+
+	std::span<LibassFontFace const> GetLibassFaces() const override { return faces; }
+
+	bool HasLibassGlyph(size_t face_index, uint32_t codepoint) const override {
+		return face_index < dwrite_faces.size() && bridge->HasGlyph(dwrite_faces[face_index], codepoint);
+	}
+
+	std::shared_ptr<std::vector<char> const> GetLibassFontData(size_t face_index) const override {
+		if (auto cached = font_data_cache.find(face_index); cached != font_data_cache.end())
+			return cached->second;
+
+		std::shared_ptr<std::vector<char> const> data;
+		if (face_index < dwrite_faces.size()) {
+			std::vector<char> bytes;
+			if (bridge->ReadFontData(dwrite_faces[face_index], bytes) && !bytes.empty())
+				data = std::make_shared<std::vector<char> const>(std::move(bytes));
+		}
+		font_data_cache.emplace(face_index, data);
+		return data;
+	}
+
+	std::vector<std::string> GetLibassSubstitutions(std::string_view family) const override {
+		// Match libass ass_directwrite.c font_substitutions exactly.
+		if (ascii_case_insensitive_equals(family, "sans-serif"))
+			return {"Arial"};
+		if (ascii_case_insensitive_equals(family, "serif"))
+			return {"Times New Roman"};
+		if (ascii_case_insensitive_equals(family, "monospace"))
+			return {"Courier New"};
+		return {};
+	}
+
+	std::optional<std::string> GetLibassFallback(std::string_view, uint32_t codepoint) override {
+		if (auto cached = fallback_cache.find(codepoint); cached != fallback_cache.end())
+			return cached->second;
+
+		// A private-only catalog must remain self-contained and deterministic.
+		if (include_system_fonts) {
+			if (auto layout = bridge->ResolveSystemFallbackFamily(codepoint)) {
+				fallback_cache.emplace(codepoint, layout);
+				return layout;
+			}
+		}
+
+		for (size_t index = 0; index < faces.size(); ++index) {
+			if (faces[index].families.empty())
+				continue;
+			if (!bridge->HasGlyph(dwrite_faces[index], codepoint))
+				continue;
+			auto fallback = std::optional<std::string>(faces[index].families.front());
+			fallback_cache.emplace(codepoint, fallback);
+			return fallback;
+		}
+
+		fallback_cache.emplace(codepoint, std::nullopt);
+		return std::nullopt;
+	}
+
+	std::string_view GetLibassProviderName() const override { return "directwrite"; }
+};
+}
+
+std::unique_ptr<ILibassFontProvider> CreateDWriteLibassFontProvider(
+	FontCollectorEventSink& event_sink,
+	FontProviderOptions const& options) {
+	return std::make_unique<DWriteLibassFontProvider>(event_sink, options);
 }

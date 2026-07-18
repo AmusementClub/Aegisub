@@ -21,6 +21,10 @@
       ]
     },
     "boost-spirit",
+    {
+      "name": "fontconfig",
+      "platform": "!windows & !osx"
+    },
     "gtest",
     "highway",
     "hunspell",
@@ -45,6 +49,15 @@
       "description": "Install FFTW3 files for app-local runtime testing.",
       "dependencies": [
         "fftw3"
+      ]
+    },
+    "fontconfig": {
+      "description": "Enable the optional Fontconfig-backed libass font matcher on macOS.",
+      "dependencies": [
+        {
+          "name": "fontconfig",
+          "platform": "osx"
+        }
       ]
     },
     "drawing-skia": {

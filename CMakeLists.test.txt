@@ -39,6 +39,7 @@ if(GTEST_FOUND)
         tests/tests/font_family_catalog.cpp
         tests/tests/font_family_catalog_cache.cpp
         tests/tests/font_name_normalization.cpp
+        tests/tests/font_matching_libass.cpp
         tests/tests/time_display_mode.cpp
         src/automation/automation_breakpoint_store.cpp
         src/automation/automation_debug_adapter.cpp
@@ -77,6 +78,8 @@ if(GTEST_FOUND)
         src/font_family_catalog_cache.cpp
         src/font_family_catalog_ui.cpp
         src/font_name_normalization.cpp
+        src/font_matching_common.cpp
+        src/font_matching_libass.cpp
         src/csri_renderer_discovery.cpp
         src/fft.cpp
         src/locale_choice.cpp

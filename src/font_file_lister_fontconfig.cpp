@@ -17,7 +17,9 @@
 #include "font_file_lister.h"
 
 #include "font_collector_unicode.h"
+#include "font_matching_common.h"
 
+#include <libaegisub/fs.h>
 #include <libaegisub/string_utils.h>
 
 #include <fontconfig/fontconfig.h>
@@ -114,6 +116,9 @@ void AddWindowsFontFiles(FcConfig *config) {
 }
 
 FcConfig *CreateFontConfig() {
+	if (auto config = FcInitLoadConfig())
+		return config;
+
 	auto config = FcConfigCreate();
 	if (!config)
 		return nullptr;
@@ -127,6 +132,25 @@ FcConfig *CreateFontConfig() {
 	return FcInitLoadConfig();
 }
 #endif
+
+void AddAdditionalFontFiles(FcConfig *config, FontProviderOptions const& options, FontCollectorEventSink const& sink) {
+	if (!config) {
+		if (!options.additional_font_files.empty() && sink) {
+			FontCollectorEvent event;
+			event.type = FontCollectorEventType::FontCacheError;
+			event.message = "failed to create the fontconfig configuration";
+			sink(event);
+		}
+		return;
+	}
+	for (auto const& path : options.additional_font_files)
+		if (FcConfigAppFontAddFile(config, reinterpret_cast<FcChar8 const *>(path.c_str())) == FcFalse && sink) {
+			FontCollectorEvent event;
+			event.type = FontCollectorEventType::FontCacheError;
+			event.message = "failed to load an additional font file in fontconfig: " + path;
+			sink(event);
+		}
+}
 
 bool pattern_matches(FcPattern *pat, const char *field, std::string const& name) {
 	FcChar8 *str;
@@ -188,19 +212,202 @@ int OpenTypeWeightFromFontconfig(FcPattern *pattern) {
 
 }
 
-FontConfigFontFileLister::FontConfigFontFileLister(FontCollectorEventSink &cb)
-: config(CreateFontConfig(), FcConfigDestroy)
+FontConfigFontFileLister::FontConfigFontFileLister(
+	FontCollectorEventSink &cb,
+	bool build_libass_catalog,
+	FontProviderOptions const& options)
+: config(options.include_system_fonts ? CreateFontConfig() : FcConfigCreate(), FcConfigDestroy)
 {
 	FontCollectorEvent event;
-	event.type = FontCollectorEventType::FontBackendInfo;
-	event.message = "fontconfig";
-	Emit(cb, std::move(event));
+	if (!build_libass_catalog) {
+		event.type = FontCollectorEventType::FontBackendInfo;
+		event.message = "fontconfig";
+		Emit(cb, std::move(event));
+	}
 
 	event = FontCollectorEvent();
 	event.type = FontCollectorEventType::UpdatingFontCache;
 	Emit(cb, std::move(event));
-	if (config)
-		FcConfigBuildFonts(config);
+	AddAdditionalFontFiles(config, options, cb);
+	if (config && FcConfigBuildFonts(config) == FcFalse) {
+		event.type = FontCollectorEventType::FontCacheError;
+		event.message = "fontconfig failed to build the font catalog";
+		Emit(cb, std::move(event));
+	}
+	if (build_libass_catalog)
+		BuildLibassCatalog();
+}
+
+FontConfigFontFileLister::~FontConfigFontFileLister() {
+	if (libass_fallback_chars)
+		FcCharSetDestroy(static_cast<FcCharSet *>(libass_fallback_chars));
+	if (libass_fallbacks)
+		FcFontSetDestroy(libass_fallbacks);
+	for (auto *pattern : libass_patterns)
+		FcPatternDestroy(static_cast<FcPattern *>(pattern));
+}
+
+void FontConfigFontFileLister::BuildLibassCatalog() {
+	if (!config)
+		return;
+
+	agi::scoped_holder<FcPattern *> sort_pattern(FcPatternCreate(), FcPatternDestroy);
+	if (!sort_pattern)
+		return;
+#if FC_VERSION >= 21700
+	FcConfigSetDefaultSubstitute(config, sort_pattern);
+#else
+	FcDefaultSubstitute(sort_pattern);
+#endif
+
+	FcResult sort_result = FcResultNoMatch;
+	agi::scoped_holder<FcFontSet *> fonts(
+		FcFontSort(config, sort_pattern, FcFalse, nullptr, &sort_result), FcFontSetDestroy);
+	if (!fonts || sort_result != FcResultMatch)
+		return;
+
+	for (int i = 0; i < fonts->nfont; ++i) {
+		auto *pattern = FcPatternDuplicate(fonts->fonts[i]);
+		if (!pattern)
+			continue;
+
+		FcBool outline = FcFalse;
+		FcChar8 *file = nullptr;
+		int face_index = 0;
+		int slant = FC_SLANT_ROMAN;
+		if (FcPatternGetBool(pattern, FC_OUTLINE, 0, &outline) != FcResultMatch || outline != FcTrue ||
+		    FcPatternGetString(pattern, FC_FILE, 0, &file) != FcResultMatch ||
+		    FcPatternGetInteger(pattern, FC_INDEX, 0, &face_index) != FcResultMatch ||
+		    FcPatternGetInteger(pattern, FC_SLANT, 0, &slant) != FcResultMatch) {
+			FcPatternDestroy(pattern);
+			continue;
+		}
+
+		LibassFontFace face;
+		for (int n = 0;; ++n) {
+			FcChar8 *value = nullptr;
+			if (FcPatternGetString(pattern, FC_FAMILY, n, &value) != FcResultMatch)
+				break;
+			face.families.emplace_back(reinterpret_cast<char const *>(value));
+		}
+		for (int n = 0;; ++n) {
+			FcChar8 *value = nullptr;
+			if (FcPatternGetString(pattern, FC_FULLNAME, n, &value) != FcResultMatch)
+				break;
+			face.fullnames.emplace_back(reinterpret_cast<char const *>(value));
+		}
+		FcChar8 *value = nullptr;
+		if (FcPatternGetString(pattern, FC_POSTSCRIPT_NAME, 0, &value) == FcResultMatch)
+			face.postscript_name = reinterpret_cast<char const *>(value);
+		face.path = reinterpret_cast<char const *>(file);
+		face.face_index = face_index;
+		face.weight = OpenTypeWeightFromFontconfig(pattern);
+		// libass's fontconfig provider only records italic in style_flags;
+		// bold is intentionally inferred later from the OpenType weight.
+		face.bold = false;
+		face.italic = slant >= FC_SLANT_ITALIC;
+		FcChar8 *format = nullptr;
+		if (FcPatternGetString(pattern, FC_FONTFORMAT, 0, &format) == FcResultMatch) {
+			std::string format_name(reinterpret_cast<char const *>(format));
+			face.postscript_outlines = format_name == "CFF" || format_name == "Type 1" ||
+			                           format_name == "Type 42" || format_name == "CID Type 1";
+		}
+
+		FcCharSet *charset = nullptr;
+		FcPatternGetCharSet(pattern, FC_CHARSET, 0, &charset);
+		libass_faces.push_back(std::move(face));
+		libass_patterns.push_back(pattern);
+		libass_charsets.push_back(charset);
+	}
+}
+
+std::vector<std::string> FontConfigFontFileLister::GetLibassSubstitutions(std::string_view family) const {
+	std::vector<std::string> result;
+	if (!config)
+		return result;
+
+	constexpr char delimiter[] = "__libass_delimiter";
+	agi::scoped_holder<FcPattern *> pattern(FcPatternCreate(), FcPatternDestroy);
+	if (!pattern)
+		return result;
+
+	auto name = std::string(family);
+	FcPatternAddString(pattern, FC_FAMILY, reinterpret_cast<FcChar8 const *>(name.c_str()));
+	FcPatternAddString(pattern, FC_FAMILY, reinterpret_cast<FcChar8 const *>(delimiter));
+	FcPatternAddBool(pattern, FC_OUTLINE, FcTrue);
+	if (!FcConfigSubstitute(config, pattern, FcMatchPattern))
+		return result;
+
+	for (int i = 0; i < 100; ++i) {
+		FcChar8 *alias = nullptr;
+		if (FcPatternGetString(pattern, FC_FAMILY, i, &alias) != FcResultMatch)
+			break;
+		auto value = reinterpret_cast<char const *>(alias);
+		if (std::string_view(value) == delimiter)
+			break;
+		result.emplace_back(value);
+	}
+	return result;
+}
+
+std::optional<std::string> FontConfigFontFileLister::GetLibassFallback(std::string_view, uint32_t codepoint) {
+	if (!config)
+		return std::nullopt;
+
+	if (!libass_fallbacks) {
+		agi::scoped_holder<FcPattern *> pattern(FcPatternCreate(), FcPatternDestroy);
+		if (!pattern)
+			return std::nullopt;
+		FcPatternAddString(pattern, FC_FAMILY, reinterpret_cast<FcChar8 const *>("sans-serif"));
+		FcPatternAddBool(pattern, FC_OUTLINE, FcTrue);
+		FcConfigSubstitute(config, pattern, FcMatchPattern);
+#if FC_VERSION >= 21700
+		FcConfigSetDefaultSubstitute(config, pattern);
+#else
+		FcDefaultSubstitute(pattern);
+#endif
+		FcPatternDel(pattern, FC_LANG);
+
+		FcResult match_result = FcResultNoMatch;
+		FcCharSet *fallback_chars = nullptr;
+		libass_fallbacks = FcFontSort(config, pattern, FcTrue, &fallback_chars, &match_result);
+		libass_fallback_chars = fallback_chars;
+		if (match_result != FcResultMatch) {
+			if (libass_fallbacks)
+				FcFontSetDestroy(libass_fallbacks);
+			libass_fallbacks = FcFontSetCreate();
+		}
+	}
+
+	if (!libass_fallbacks || libass_fallbacks->nfont == 0)
+		return std::nullopt;
+	if (codepoint && (!libass_fallback_chars ||
+	    FcCharSetHasChar(static_cast<FcCharSet *>(libass_fallback_chars), codepoint) == FcFalse))
+		return std::nullopt;
+
+	for (int i = 0; i < libass_fallbacks->nfont; ++i) {
+		auto *pattern = libass_fallbacks->fonts[i];
+		if (codepoint) {
+			FcCharSet *charset = nullptr;
+			if (FcPatternGetCharSet(pattern, FC_CHARSET, 0, &charset) != FcResultMatch ||
+			    FcCharSetHasChar(charset, codepoint) == FcFalse)
+				continue;
+		}
+
+		FcChar8 *family = nullptr;
+		if (FcPatternGetString(pattern, FC_FAMILY, 0, &family) == FcResultMatch)
+			return std::string(reinterpret_cast<char const *>(family));
+		return std::nullopt;
+	}
+	return std::nullopt;
+}
+
+bool FontConfigFontFileLister::HasLibassGlyph(size_t face_index, uint32_t codepoint) const {
+	if (codepoint == 0)
+		return true;
+	if (face_index >= libass_charsets.size() || !libass_charsets[face_index])
+		return false;
+	return FcCharSetHasChar(static_cast<FcCharSet *>(libass_charsets[face_index]), codepoint) == FcTrue;
 }
 
 CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters) {

@@ -492,7 +492,8 @@
 			"Maximized" : false
 		},
 		"Fonts Collector" : {
-			"Action" : 0
+			"Action" : 0,
+			"Matcher" : 0
 		},
 		"Import" : {
 			"Text" : {

@@ -40,6 +40,9 @@
 #include "../include/aegisub/context_ui.h"
 #include "../libresrc/libresrc.h"
 #include "../options.h"
+#ifdef WITH_PLUGIN_BRIDGE
+#include "../coreclr/dotnet_automation_engine.h"
+#endif
 
 #include <libaegisub/make_unique.h>
 
@@ -119,12 +122,28 @@ struct toggle_debug_mode final : public Command {
 	}
 };
 
+#ifdef WITH_PLUGIN_BRIDGE
+struct open_dependency_control final : public Command {
+	CMD_NAME("am/dependency-control")
+	STR_MENU("&DependencyControl...")
+	STR_DISP("DependencyControl Package Manager")
+	STR_HELP("Open the DependencyControl package manager")
+
+	void operator()(agi::Context *c) override {
+		Automation4::OpenDependencyControlPackageManager(c);
+	}
+};
+#endif
+
 }
 
 namespace cmd {
 	void init_automation() {
 		reg(agi::make_unique<meta>());
 		reg(agi::make_unique<open_manager>());
+#ifdef WITH_PLUGIN_BRIDGE
+		reg(agi::make_unique<open_dependency_control>());
+#endif
 		reg(agi::make_unique<reload_all>());
 		reg(agi::make_unique<reload_autoload>());
 		reg(agi::make_unique<toggle_debug_mode>());

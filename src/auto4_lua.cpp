@@ -50,6 +50,9 @@
 #include "audio_timing.h"
 #include "command/command.h"
 #include "compat.h"
+#ifdef WITH_PLUGIN_BRIDGE
+#include "coreclr/dependency_control_lua.h"
+#endif
 #include "frame_main.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
@@ -719,6 +722,10 @@ namespace {
 		// store aegisub table to globals
 		lua_settable(L, LUA_GLOBALSINDEX);
 		stackcheck.check_stack(0);
+#ifdef WITH_PLUGIN_BRIDGE
+		RegisterDependencyControlLuaFacade(L);
+		stackcheck.check_stack(0);
+#endif
 		debug_backend->CaptureRuntimeBaseline();
 
 		// load user script

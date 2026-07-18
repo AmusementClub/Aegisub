@@ -263,6 +263,20 @@ if(GTEST_FOUND)
             src/skia/audio/skia_audio_display_contract.cpp
         )
     endif()
+    if(WITH_PLUGIN_BRIDGE)
+        target_sources(gtest-run PRIVATE
+            tests/tests/plugin_bridge_error.cpp
+            tests/tests/csharp_declarative_ui.cpp
+            tests/tests/managed_plugin_activation.cpp
+            tests/tests/csharp_query_state.cpp
+            tests/tests/dependency_control_transaction.cpp
+            src/coreclr/bridge_error.cpp
+            src/coreclr/declarative_ui_model.cpp
+            src/coreclr/dependency_control_transaction.cpp
+            src/coreclr/dotnet_query_state.cpp
+            src/coreclr/managed_plugin_activation.cpp
+        )
+    endif()
     target_compile_definitions(gtest-run PRIVATE
         CMAKE_BUILD
         "AEGISUB_PROJECT_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\""

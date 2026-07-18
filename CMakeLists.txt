@@ -9,6 +9,7 @@ include(CMakePackageConfigHelpers)
 project(Aegisub)
 
 option(AEGISUB_LUAJIT_SHARED "Build bundled LuaJIT as a shared library on Windows" OFF)
+option(WITH_PLUGIN_BRIDGE "Build the optional Plugin Bridge and Automation support" OFF)
 if(AEGISUB_LUAJIT_SHARED AND NOT WIN32)
     message(FATAL_ERROR "AEGISUB_LUAJIT_SHARED is currently only supported on Windows")
 endif()
@@ -1785,6 +1786,10 @@ if(WITH_TRANSLATION)
     add_custom_target(translations ALL DEPENDS ${_gmoFiles})
 endif()
 
+if(WITH_PLUGIN_BRIDGE)
+    include(cmake/AegisubPluginBridge.cmake)
+endif()
+
 set(WITH_TEST OFF CACHE BOOL "Enable unit tests")
 if(WITH_TEST)
     include("CMakeLists.test.txt")
@@ -1842,6 +1847,7 @@ message(STATUS "\n"
     "  Translations:          ${WITH_TRANSLATION}\n"
     "  Startup log:           ${WITH_STARTUPLOG}\n"
     "  Update checker:        ${WITH_UPDATE_CHECKER}\n"
+    "  Plugin Bridge:         ${WITH_PLUGIN_BRIDGE}\n"
     "  Tests:                 ${WITH_TEST}\n"
     "\n"
 )

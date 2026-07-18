@@ -506,6 +506,7 @@ class AutomationMenu final : public wxMenu {
 	agi::signal::Connection global_slot;
 	agi::signal::Connection local_slot;
 	std::vector<wxMenuItem *> all_items;
+	size_t fixed_item_count = 0;
 
 	struct WorkItem {
 		std::string displayname;
@@ -557,9 +558,8 @@ class AutomationMenu final : public wxMenu {
 		all_items.clear();
 
 		wxMenuItemList &items = GetMenuItems();
-		// Remove everything but automation manager and the separator
-		for (size_t i = items.size() - 1; i >= 2; --i)
-			Delete(items[i]);
+		while (items.size() > fixed_item_count)
+			Delete(items[items.size() - 1]);
 
 		auto macros = config::global_scripts->GetMacros();
 		auto core = c->GetCore();
@@ -596,7 +596,11 @@ public:
 	, local_slot(c->GetCore().local_scripts->AddScriptChangeListener(&AutomationMenu::Regenerate, this))
 	{
 		cm->AddCommand(cmd::get("am/meta"), this);
+#ifdef WITH_PLUGIN_BRIDGE
+		cm->AddCommand(cmd::get("am/dependency-control"), this);
+#endif
 		AppendSeparator();
+		fixed_item_count = GetMenuItemCount();
 		Regenerate();
 	}
 };

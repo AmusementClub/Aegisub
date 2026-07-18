@@ -651,22 +651,43 @@ void SecondarySubtitleStrip::OnPaint(wxPaintEvent &) {
 				content_rect.height);
 			int draw_y = content_rect.y + content_rect.height - draw_height;
 
-			wxBitmap source_bitmap = bitmap.GetSubBitmap(wxRect(0, layout.source_top, bitmap.GetWidth(), layout.source_height));
 			bool drew_bitmap = false;
-			if (source_bitmap.IsOk()) {
-				if (source_bitmap.GetWidth() == content_rect.width && source_bitmap.GetHeight() == draw_height) {
-					dc.DrawBitmap(source_bitmap, content_rect.x, draw_y, false);
-					drew_bitmap = true;
-				}
-				else {
-					wxImage source_image = source_bitmap.ConvertToImage();
-					if (source_image.IsOk()) {
-						wxImage scaled_image = source_image.Scale(content_rect.width, draw_height, wxIMAGE_QUALITY_HIGH);
-						if (scaled_image.IsOk()) {
-							dc.DrawBitmap(wxBitmap(scaled_image), content_rect.x, draw_y, false);
-							drew_bitmap = true;
+			auto const bitmap_generation = session->GetBitmapGeneration();
+			bool const cache_matches = paint_bitmap_cache.IsOk()
+				&& paint_bitmap_cache_generation == bitmap_generation
+				&& paint_bitmap_cache_source_top == layout.source_top
+				&& paint_bitmap_cache_source_height == layout.source_height
+				&& paint_bitmap_cache_width == content_rect.width
+				&& paint_bitmap_cache_height == draw_height;
+			if (cache_matches) {
+				dc.DrawBitmap(paint_bitmap_cache, content_rect.x, draw_y, false);
+				drew_bitmap = true;
+			}
+			else {
+				wxBitmap rendered_bitmap;
+				wxBitmap source_bitmap = bitmap.GetSubBitmap(wxRect(0, layout.source_top, bitmap.GetWidth(), layout.source_height));
+				if (source_bitmap.IsOk()) {
+					if (source_bitmap.GetWidth() == content_rect.width && source_bitmap.GetHeight() == draw_height) {
+						rendered_bitmap = source_bitmap;
+					}
+					else {
+						wxImage source_image = source_bitmap.ConvertToImage();
+						if (source_image.IsOk()) {
+							wxImage scaled_image = source_image.Scale(content_rect.width, draw_height, wxIMAGE_QUALITY_HIGH);
+							if (scaled_image.IsOk())
+								rendered_bitmap = wxBitmap(scaled_image);
 						}
 					}
+				}
+				if (rendered_bitmap.IsOk()) {
+					paint_bitmap_cache = rendered_bitmap;
+					paint_bitmap_cache_generation = bitmap_generation;
+					paint_bitmap_cache_source_top = layout.source_top;
+					paint_bitmap_cache_source_height = layout.source_height;
+					paint_bitmap_cache_width = content_rect.width;
+					paint_bitmap_cache_height = draw_height;
+					dc.DrawBitmap(rendered_bitmap, content_rect.x, draw_y, false);
+					drew_bitmap = true;
 				}
 			}
 			if (!drew_bitmap) {

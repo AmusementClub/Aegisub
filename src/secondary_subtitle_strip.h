@@ -11,7 +11,9 @@
 #include <libaegisub/fs_fwd.h>
 #include <libaegisub/signal.h>
 
+#include <cstdint>
 #include <memory>
+#include <wx/bitmap.h>
 #include <wx/panel.h>
 
 class SecondarySubtitleSession;
@@ -41,6 +43,12 @@ class SecondarySubtitleStrip final : public wxPanel {
 	int resize_drag_initial_height = 0;
 	bool middle_dragging = false;
 	int last_drag_y = 0;
+	wxBitmap paint_bitmap_cache;
+	std::uint64_t paint_bitmap_cache_generation = 0;
+	int paint_bitmap_cache_source_top = 0;
+	int paint_bitmap_cache_source_height = 0;
+	int paint_bitmap_cache_width = 0;
+	int paint_bitmap_cache_height = 0;
 
 	static constexpr int kMinimumPanelHeight = 48;
 	static constexpr int kMaximumPanelHeight = 480;

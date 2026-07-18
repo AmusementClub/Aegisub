@@ -111,6 +111,7 @@ class SecondarySubtitleSession final {
 	void RemoveVideoEmbeddedSources(std::string const& except_video);
 
 	wxBitmap current_bitmap;
+	std::uint64_t bitmap_generation = 0;
 	bool has_bitmap = false;
 	bool active = false;
 	int current_frame = -1;
@@ -177,5 +178,6 @@ public:
 
 	bool HasBitmap() const { return has_bitmap && current_bitmap.IsOk(); }
 	wxBitmap const& GetBitmap() const { return current_bitmap; }
+	std::uint64_t GetBitmapGeneration() const { return bitmap_generation; }
 	void SetBitmapUpdatedCallback(std::function<void()> callback) { bitmap_updated = std::move(callback); }
 };

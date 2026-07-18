@@ -171,6 +171,7 @@ SecondarySubtitleSession::~SecondarySubtitleSession() {
 }
 
 void SecondarySubtitleSession::NotifyBitmapUpdated() {
+	++bitmap_generation;
 	if (bitmap_updated)
 		bitmap_updated();
 }

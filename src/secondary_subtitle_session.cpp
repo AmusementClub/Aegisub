@@ -160,6 +160,7 @@ void SecondarySubtitleSession::OnUpdateProperties() {
 void SecondarySubtitleSession::RestoreSourceFromProjectProperties() {
 	auto core = context->GetCore();
 	source_mode = SecondarySubtitleSourceMode::CurrentScript;
+	current_source_index = static_cast<size_t>(-1);
 	external_subtitle_path.clear();
 	ClearExternalSubtitles();
 
@@ -170,7 +171,9 @@ void SecondarySubtitleSession::RestoreSourceFromProjectProperties() {
 	}
 
 	source_mode = SecondarySubtitleSourceMode::ExternalFile;
-	external_subtitle_path = agi::fs::PathToString(core.path->MakeAbsolute(stored_path, "?script"));
+	auto const absolute_path = core.path->MakeAbsolute(stored_path, "?script");
+	external_subtitle_path = agi::fs::PathToString(absolute_path);
+	RegisterExternalSource(absolute_path);
 	UpdateExternalSubtitleWatch();
 }
 

@@ -71,6 +71,8 @@ class SecondarySubtitleSession final {
 	std::string external_subtitle_path;
 	std::string loaded_external_subtitle_path;
 	bool external_subtitles_follow_video_resolution = false;
+	// File changes detected while hidden are consumed on the next activation.
+	bool external_subtitle_reload_pending = false;
 	// Guards the "video has embedded subtitles" auto-prompt so it asks at most
 	// once per video. Reset whenever the video provider changes.
 	bool video_embedded_auto_prompted = false;

@@ -99,6 +99,7 @@ void SecondarySubtitleSession::ClearExternalSubtitles() {
 	bitmap_subtitles.reset();
 	loaded_external_subtitle_path.clear();
 	external_subtitles_follow_video_resolution = false;
+	external_subtitle_reload_pending = false;
 }
 
 void SecondarySubtitleSession::ReleaseProvider() {
@@ -108,29 +109,41 @@ void SecondarySubtitleSession::ReleaseProvider() {
 }
 
 void SecondarySubtitleSession::OnDummyBackgroundColorChanged(agi::OptionValue const&) {
-	if (!active)
+	if (!active) {
+		ReleaseProvider();
 		return;
+	}
 
 	RebuildProvider(context->GetCore().project->VideoProvider());
 }
 
 void SecondarySubtitleSession::OnDummyBackgroundPatternChanged(agi::OptionValue const&) {
-	if (!active)
+	if (!active) {
+		ReleaseProvider();
 		return;
+	}
 
 	RebuildProvider(context->GetCore().project->VideoProvider());
 }
 
 void SecondarySubtitleSession::OnConfiguredProviderChanged(agi::OptionValue const&) {
-	if (!active)
+	if (bitmap_subtitles)
 		return;
+	if (!active) {
+		ReleaseProvider();
+		return;
+	}
 
 	RebuildProvider(context->GetCore().project->VideoProvider());
 }
 
 void SecondarySubtitleSession::OnGlobalProviderChanged(agi::OptionValue const&) {
-	if (!active || !IsFollowingGlobalSubtitlesProvider())
+	if (!IsFollowingGlobalSubtitlesProvider() || bitmap_subtitles)
 		return;
+	if (!active) {
+		ReleaseProvider();
+		return;
+	}
 
 	RebuildProvider(context->GetCore().project->VideoProvider());
 }
@@ -151,6 +164,8 @@ void SecondarySubtitleSession::OnMainSubtitlesFileChanged(agi::fs::path const&, 
 
 	if (active)
 		RebuildProvider(context->GetCore().project->VideoProvider());
+	else
+		ReleaseProvider();
 }
 
 void SecondarySubtitleSession::OnUpdateProperties() {
@@ -202,7 +217,7 @@ void SecondarySubtitleSession::UpdateExternalSubtitleWatch() {
 	if (!external_subtitle_watch)
 		return;
 
-	if (!active || source_mode != SecondarySubtitleSourceMode::ExternalFile || external_subtitle_path.empty()) {
+	if (source_mode != SecondarySubtitleSourceMode::ExternalFile || external_subtitle_path.empty()) {
 		external_subtitle_watch->ClearTargetPath();
 		return;
 	}
@@ -271,6 +286,7 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 			bitmap_subtitles = std::move(stream);
 			loaded_external_subtitle_path = path_string;
 			external_subtitles_follow_video_resolution = false;
+			external_subtitle_reload_pending = false;
 			return true;
 		}
 
@@ -299,6 +315,7 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 		bitmap_subtitles.reset();
 		loaded_external_subtitle_path = path_string;
 		external_subtitles_follow_video_resolution = follow_video_resolution;
+		external_subtitle_reload_pending = false;
 		return true;
 	}
 	catch (agi::UserCancelException const&) {
@@ -392,6 +409,7 @@ bool SecondarySubtitleSession::LoadVideoEmbeddedSubtitles(bool show_errors, std:
 				bitmap_subtitles = std::make_shared<SecondarySubtitlePacketStream>(std::move(packet_stream));
 				loaded_external_subtitle_path.clear();
 				external_subtitles_follow_video_resolution = false;
+				external_subtitle_reload_pending = false;
 				external_subtitle_path.clear();
 				return true;
 			}
@@ -411,6 +429,7 @@ bool SecondarySubtitleSession::LoadVideoEmbeddedSubtitles(bool show_errors, std:
 		bitmap_subtitles.reset();
 		loaded_external_subtitle_path.clear();
 		external_subtitles_follow_video_resolution = follow_video_resolution;
+		external_subtitle_reload_pending = false;
 		external_subtitle_path.clear();
 		return true;
 	}
@@ -591,7 +610,7 @@ void SecondarySubtitleSession::OnTimecodesChanged(agi::vfr::Framerate const&) {
 		return;
 
 	auto core = context->GetCore();
-	if (source_mode == SecondarySubtitleSourceMode::ExternalFile && active) {
+	if (source_mode == SecondarySubtitleSourceMode::ExternalFile && !bitmap_subtitles && active) {
 		RebuildProvider(core.project->VideoProvider());
 		return;
 	}
@@ -677,6 +696,8 @@ bool SecondarySubtitleSession::OpenExternalSubtitles() {
 	RegisterExternalSource(path);
 	if (active)
 		RebuildProvider(context->GetCore().project->VideoProvider());
+	else
+		ReleaseProvider();
 	return true;
 }
 
@@ -695,6 +716,8 @@ bool SecondarySubtitleSession::OpenExternalSubtitlesFromPath(agi::fs::path const
 	RegisterExternalSource(path);
 	if (active)
 		RebuildProvider(context->GetCore().project->VideoProvider());
+	else
+		ReleaseProvider();
 	return true;
 }
 
@@ -736,6 +759,8 @@ bool SecondarySubtitleSession::OpenVideoEmbeddedSubtitles() {
 	}
 	if (active)
 		RebuildProvider(core.project->VideoProvider());
+	else
+		ReleaseProvider();
 	return true;
 }
 
@@ -765,12 +790,16 @@ bool SecondarySubtitleSession::ReloadSubtitles() {
 		}
 		if (active)
 			RebuildProvider(context->GetCore().project->VideoProvider());
+		else
+			ReleaseProvider();
 		return reloaded;
 	}
 
 	bool const reloaded = LoadConfiguredExternalSubtitles(true, true);
 	if (active)
 		RebuildProvider(context->GetCore().project->VideoProvider());
+	else
+		ReleaseProvider();
 	return reloaded;
 }
 
@@ -797,12 +826,20 @@ void SecondarySubtitleSession::SetActive(bool value) {
 	active = value;
 	if (!active) {
 		UpdateExternalSubtitleWatch();
-		ReleaseProvider();
+		if (provider) {
+			provider->CancelPendingFrameRequests();
+			if (!bitmap_subtitles)
+				ReleaseProvider();
+		}
 		ClearBitmap();
 		return;
 	}
 
 	auto core = context->GetCore();
+	if (source_mode == SecondarySubtitleSourceMode::ExternalFile && external_subtitle_reload_pending) {
+		if (LoadConfiguredExternalSubtitles(false, true))
+			ReleaseProvider();
+	}
 	UpdateExternalSubtitleWatch();
 	if (!provider && core.project->VideoProvider())
 		RebuildProvider(core.project->VideoProvider());
@@ -834,6 +871,8 @@ void SecondarySubtitleSession::UseCurrentScriptSource() {
 	current_source_index = static_cast<size_t>(-1);
 	if (active)
 		RebuildProvider(context->GetCore().project->VideoProvider());
+	else
+		ReleaseProvider();
 }
 
 void SecondarySubtitleSession::RegisterExternalSource(agi::fs::path const& path) {
@@ -948,11 +987,17 @@ void SecondarySubtitleSession::ActivateLoadedSource(size_t index) {
 	UpdateExternalSubtitleWatch();
 	if (active)
 		RebuildProvider(context->GetCore().project->VideoProvider());
+	else
+		ReleaseProvider();
 }
 
 void SecondarySubtitleSession::OnExternalSubtitleFileChanged(agi::fs::path const&) {
-	if (!active || source_mode != SecondarySubtitleSourceMode::ExternalFile || external_subtitle_path.empty())
+	if (source_mode != SecondarySubtitleSourceMode::ExternalFile || external_subtitle_path.empty())
 		return;
+	if (!active) {
+		external_subtitle_reload_pending = true;
+		return;
+	}
 
 	if (!LoadConfiguredExternalSubtitles(false, true))
 		return;

@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Aegisub",
+  "classifications": [
+    "Aegisub",
+    "Extension",
+    "C#"
+  ],
+  "identity": "Aegisub.Managed.Templates.CSharpExtension",
+  "name": "Aegisub CLR Plugin with Automation",
+  "shortName": "aegisub-csharp-extension",
+  "sourceName": "AegisubExtension",
+  "preferNameDirectory": true,
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  },
+  "primaryOutputs": [
+    {
+      "path": "AegisubExtension.csproj"
+    }
+  ],
+  "symbols": {
+    "extensionId": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "com.example.aegisub-extension",
+      "description": "Stable, untranslated plugin ID.",
+      "replaces": "sample.extension"
+    },
+    "authorName": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "Extension Author",
+      "description": "Extension author shown by Aegisub.",
+      "replaces": "Template Author"
+    },
+    "extensionDescription": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "An Aegisub CLR plugin with an Automation contribution.",
+      "description": "Plugin description shown by Aegisub.",
+      "replaces": "Template extension description."
+    },
+    "contractsProject": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "../../Aegisub.Managed.Contracts/Aegisub.Managed.Contracts.csproj",
+      "description": "Development path to Aegisub.Managed.Contracts.csproj.",
+      "replaces": "__AEGISUB_CONTRACTS_PROJECT__"
+    },
+    "devHostProject": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "../../Aegisub.Managed.DevHost/Aegisub.Managed.DevHost.csproj",
+      "description": "Development path to Aegisub.Managed.DevHost.csproj.",
+      "replaces": "__AEGISUB_DEVHOST_PROJECT__"
+    },
+    "aegisubDevelopmentRoot": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "../../../build-dir/RelWithDebInfo",
+      "description": "Directory containing the development Aegisub executable.",
+      "replaces": "__AEGISUB_DEVELOPMENT_ROOT__"
+    }
+  }
+}

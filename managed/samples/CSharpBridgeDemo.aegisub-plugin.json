@@ -1,0 +1,58 @@
+{
+  "manifestVersion": 2,
+  "id": "aegisub.plugin-bridge.demo",
+  "name": "Plugin Bridge Demo",
+  "description": "Validates lazy hostfxr activation through an Automation Macro.",
+  "author": "Aegisub",
+  "version": "0.2.0",
+  "contractsVersion": "0.1.0",
+  "runtime": {
+    "kind": "coreclr",
+    "entryAssembly": "CSharpBridgeDemo/Aegisub.Managed.SampleExtension.dll",
+    "entryType": "Aegisub.Managed.SampleExtension.SampleExtensionModule"
+  },
+  "contributions": [
+    {
+      "kind": "automation",
+      "id": "aegisub.plugin-bridge.demo.automation",
+      "name": "Plugin Bridge Demo Automation",
+      "description": "Automation Macros contributed by the Plugin Bridge demo.",
+      "macros": [
+        {
+          "id": "aegisub.plugin-bridge.demo.runtime-info",
+          "name": "Plugin Bridge Demo/Runtime 信息",
+          "description": "Loads an external C# extension in a collectible ALC and reports the selected CLR.",
+          "requiresProject": false,
+          "subtitleAccess": "none"
+        },
+        {
+          "id": "aegisub.plugin-bridge.demo.trim-selected-line-endings",
+          "name": "Plugin Bridge Demo/清理所选行行末空白",
+          "description": "Removes spaces and tabs before ASS line breaks and at the end of selected dialogue lines.",
+          "requiresProject": true,
+          "subtitleAccess": "readWrite",
+          "snapshotScope": "selection",
+          "queryState": {
+            "minimumSelectedEvents": 1
+          }
+        },
+        {
+          "id": "aegisub.plugin-bridge.demo.video-measurement",
+          "name": "Plugin Bridge Demo/视频两点测量工具",
+          "description": "Opens a host-rendered ToolView and measures two points in the video.",
+          "requiresProject": true,
+          "subtitleAccess": "none",
+          "queryState": {
+            "requiresVideo": true
+          }
+        }
+      ]
+    },
+    {
+      "kind": "settings",
+      "id": "aegisub.plugin-bridge.demo.settings",
+      "name": "Plugin Bridge Demo Settings",
+      "description": "Descriptor reserved for future host-rendered settings support."
+    }
+  ]
+}

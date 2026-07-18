@@ -1,0 +1,30 @@
+{
+  "$schema": "http://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "Managed fixture": {
+      "commandName": "Executable",
+      "executablePath": "dotnet",
+      "workingDirectory": "..",
+      "commandLineArgs": "run --project \"__AEGISUB_DEVHOST_PROJECT__\" -- --assembly \"bin/Debug/net10.0/AegisubExtension.dll\" --type \"AegisubExtension.ExtensionModule\" --macro \"sample.extension.hello\" --context \"fixtures/context.json\""
+    },
+    "Aegisub CLI integration": {
+      "commandName": "Executable",
+      "executablePath": "__AEGISUB_DEVELOPMENT_ROOT__/Aegisub.exe",
+      "workingDirectory": "__AEGISUB_DEVELOPMENT_ROOT__",
+      "commandLineArgs": "--cli session automation --script automation/autoload/sample.extension.aegisub-plugin.json --macro sample.extension.hello --trace-dir ../../obj/sample.extension-cli-debug",
+      "environmentVariables": {
+        "AEGISUB_CSHARP_CONTEXT_DUMP": "../../obj/sample.extension-debug-context.json",
+        "AEGISUB_CSHARP_DEBUG_WAIT_SECONDS": "120"
+      }
+    },
+    "Aegisub GUI integration": {
+      "commandName": "Executable",
+      "executablePath": "__AEGISUB_DEVELOPMENT_ROOT__/Aegisub.exe",
+      "workingDirectory": "__AEGISUB_DEVELOPMENT_ROOT__",
+      "environmentVariables": {
+        "AEGISUB_CSHARP_CONTEXT_DUMP": "../../obj/sample.extension-gui-debug-context.json",
+        "AEGISUB_CSHARP_DEBUG_WAIT_SECONDS": "120"
+      }
+    }
+  }
+}

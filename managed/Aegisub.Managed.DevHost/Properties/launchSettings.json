@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json.schemastore.org/launchsettings.json",
+  "profiles": {
+    "Managed snapshot fixture": {
+      "commandName": "Project"
+    },
+    "Aegisub CLI integration": {
+      "commandName": "Executable",
+      "executablePath": "../../build-dir/RelWithDebInfo/Aegisub.exe",
+      "workingDirectory": "../../build-dir/RelWithDebInfo",
+      "commandLineArgs": "--cli session automation --script automation/autoload/CSharpBridgeDemo.aegisub-plugin.json --macro aegisub.plugin-bridge.demo.trim-selected-line-endings --subtitle ../../tests/plugin-bridge-smoke/trim-selected-input.ass --output-subtitle ../../obj/csharp-debug-output.ass --selection 7 --active-row 7 --trace-dir ../../obj/csharp-cli-debug",
+      "environmentVariables": {
+        "AEGISUB_CSHARP_CONTEXT_DUMP": "../../obj/csharp-debug-context.json",
+        "AEGISUB_CSHARP_DEBUG_WAIT_SECONDS": "120"
+      }
+    },
+    "Aegisub GUI integration": {
+      "commandName": "Executable",
+      "executablePath": "../../build-dir/RelWithDebInfo/Aegisub.exe",
+      "workingDirectory": "../../build-dir/RelWithDebInfo",
+      "commandLineArgs": "../../tests/plugin-bridge-smoke/trim-selected-input.ass",
+      "environmentVariables": {
+        "AEGISUB_CSHARP_CONTEXT_DUMP": "../../obj/csharp-gui-debug-context.json",
+        "AEGISUB_CSHARP_DEBUG_WAIT_SECONDS": "120"
+      }
+    }
+  }
+}

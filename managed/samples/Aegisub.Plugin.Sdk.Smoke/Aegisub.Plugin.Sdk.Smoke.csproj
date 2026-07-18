@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsAotCompatible>true</IsAotCompatible>
+    <Version>0.1.0</Version>
+    <AssemblyName>Aegisub.Plugin.Sdk.Smoke</AssemblyName>
+    <RootNamespace>Aegisub.Plugin.Sdk.Smoke</RootNamespace>
+    <PackageId>Aegisub.Plugin.Sdk.Smoke</PackageId>
+    <Authors>Aegisub</Authors>
+    <Description>Build-time integration fixture for the Aegisub plugin SDK.</Description>
+    <PackageLicenseExpression>BSD-3-Clause</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <NoWarn>$(NoWarn);NU5100</NoWarn>
+
+    <AegisubPluginId>aegisub.plugin-sdk.smoke</AegisubPluginId>
+    <AegisubPluginName>Aegisub Plugin SDK smoke</AegisubPluginName>
+    <AegisubPluginDescription>Validates generated registration and manifest packaging.</AegisubPluginDescription>
+    <AegisubRuntimeKind>coreclr</AegisubRuntimeKind>
+    <AegisubEntryAssembly>$(AegisubPluginId)/$(AssemblyName).dll</AegisubEntryAssembly>
+    <AegisubEntryType>Aegisub.Plugin.Sdk.Smoke.SdkSmokePlugin</AegisubEntryType>
+    <AegisubManifestOutput>$(BaseIntermediateOutputPath)manifest\$(AegisubPluginId).aegisub-plugin.json</AegisubManifestOutput>
+    <AegisubContributionsFile>$(MSBuildProjectDirectory)\contributions.json</AegisubContributionsFile>
+    <AegisubBuildTasksAssembly>$(MSBuildThisFileDirectory)..\..\Aegisub.Plugin.BuildTasks\bin\$(Configuration)\net10.0\Aegisub.Plugin.BuildTasks.dll</AegisubBuildTasksAssembly>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Aegisub.Managed.Contracts\Aegisub.Managed.Contracts.csproj" />
+    <ProjectReference Include="..\..\Aegisub.Plugin.Sdk\Aegisub.Plugin.Sdk.csproj" />
+    <ProjectReference Include="..\..\Aegisub.Plugin.Generators\Aegisub.Plugin.Generators.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+    <None Include="$(AegisubManifestOutput)"
+          Pack="true"
+          PackagePath="aegisub\"
+          Visible="false" />
+    <None Include="$(TargetPath)"
+          Pack="true"
+          PackagePath="aegisub\$(AegisubPluginId)\"
+          Visible="false" />
+    <None Include="PACKAGE_README.md" Pack="true" PackagePath="README.md" />
+  </ItemGroup>
+
+  <Import Project="..\..\Aegisub.Plugin.BuildTasks\buildTransitive\Aegisub.Plugin.BuildTasks.targets" />
+</Project>

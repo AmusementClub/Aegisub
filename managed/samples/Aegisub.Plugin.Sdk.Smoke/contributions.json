@@ -1,0 +1,16 @@
+[
+  {
+    "kind": "automation",
+    "id": "aegisub.plugin-sdk.smoke.automation",
+    "name": "Plugin SDK smoke Automation",
+    "macros": [
+      {
+        "id": "aegisub.plugin-sdk.smoke.run",
+        "name": "Plugin SDK/Run smoke",
+        "description": "Runs the generated SDK smoke plugin.",
+        "requiresProject": false,
+        "subtitleAccess": "none"
+      }
+    ]
+  }
+]

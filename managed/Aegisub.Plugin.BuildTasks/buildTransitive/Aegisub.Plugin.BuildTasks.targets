@@ -1,0 +1,46 @@
+<Project>
+  <PropertyGroup>
+    <AegisubBuildTasksAssembly Condition="'$(AegisubBuildTasksAssembly)' == ''">$(MSBuildThisFileDirectory)..\tasks\net10.0\Aegisub.Plugin.BuildTasks.dll</AegisubBuildTasksAssembly>
+    <AegisubGenerateManifest Condition="'$(AegisubGenerateManifest)' == ''">true</AegisubGenerateManifest>
+    <AegisubContractsVersion Condition="'$(AegisubContractsVersion)' == ''">0.1.0</AegisubContractsVersion>
+    <AegisubRuntimeKind Condition="'$(AegisubRuntimeKind)' == ''">coreclr</AegisubRuntimeKind>
+    <AegisubNativeEntryPoint Condition="'$(AegisubNativeEntryPoint)' == ''">aegisub_plugin_init_v1</AegisubNativeEntryPoint>
+    <AegisubManifestOutput Condition="'$(AegisubManifestOutput)' == ''">$(IntermediateOutputPath)$(AegisubPluginId).aegisub-plugin.json</AegisubManifestOutput>
+    <AegisubEntryAssembly Condition="'$(AegisubEntryAssembly)' == '' and '$(AegisubRuntimeKind)' == 'coreclr'">$(AegisubPluginId)/$(AssemblyName).dll</AegisubEntryAssembly>
+  </PropertyGroup>
+
+  <UsingTask TaskName="Aegisub.Plugin.BuildTasks.GenerateAegisubPluginManifest"
+             AssemblyFile="$(AegisubBuildTasksAssembly)" />
+  <UsingTask TaskName="Aegisub.Plugin.BuildTasks.ValidateAegisubPluginPackage"
+             AssemblyFile="$(AegisubBuildTasksAssembly)" />
+
+  <Target Name="GenerateAegisubPluginManifest"
+          AfterTargets="Build"
+          Condition="'$(AegisubGenerateManifest)' == 'true'">
+    <Aegisub.Plugin.BuildTasks.GenerateAegisubPluginManifest
+        ManifestPath="$(AegisubManifestOutput)"
+        PluginId="$(AegisubPluginId)"
+        PluginName="$(AegisubPluginName)"
+        Description="$(AegisubPluginDescription)"
+        Author="$(Authors)"
+        PluginVersion="$(Version)"
+        ContractsVersion="$(AegisubContractsVersion)"
+        RuntimeKind="$(AegisubRuntimeKind)"
+        EntryAssembly="$(AegisubEntryAssembly)"
+        EntryType="$(AegisubEntryType)"
+        EntryPoint="$(AegisubNativeEntryPoint)"
+        RuntimeLibraries="@(AegisubRuntimeLibrary)"
+        ContributionsFile="$(AegisubContributionsFile)">
+      <Output TaskParameter="GeneratedManifestPath"
+              PropertyName="AegisubGeneratedManifestPath" />
+    </Aegisub.Plugin.BuildTasks.GenerateAegisubPluginManifest>
+  </Target>
+
+  <Target Name="ValidateAegisubPluginPackage"
+          DependsOnTargets="GenerateAegisubPluginManifest"
+          Condition="'$(AegisubPackageRoot)' != ''">
+    <Aegisub.Plugin.BuildTasks.ValidateAegisubPluginPackage
+        ManifestPath="$(AegisubManifestOutput)"
+        PackageRoot="$(AegisubPackageRoot)" />
+  </Target>
+</Project>

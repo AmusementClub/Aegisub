@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <PublishAot>true</PublishAot>
+    <NativeLib>Shared</NativeLib>
+    <SelfContained>true</SelfContained>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <DisableRuntimeMarshalling>true</DisableRuntimeMarshalling>
+    <AssemblyName>Aegisub.Plugin.Sdk.Smoke.NativeAot</AssemblyName>
+    <RootNamespace>Aegisub.Plugin.Sdk.Smoke.NativeAot</RootNamespace>
+    <Version>0.1.0</Version>
+    <Authors>Aegisub</Authors>
+    <AegisubPluginId>aegisub.plugin-sdk.smoke</AegisubPluginId>
+    <AegisubPluginName>Aegisub Plugin SDK smoke</AegisubPluginName>
+    <AegisubPluginDescription>Validates the source-generated NativeAOT entry point.</AegisubPluginDescription>
+    <AegisubRuntimeKind>native</AegisubRuntimeKind>
+    <AegisubManifestOutput>$(BaseIntermediateOutputPath)manifest\$(AegisubPluginId).aegisub-plugin.json</AegisubManifestOutput>
+    <AegisubContributionsFile>$(MSBuildThisFileDirectory)..\Aegisub.Plugin.Sdk.Smoke\contributions.json</AegisubContributionsFile>
+    <AegisubBuildTasksAssembly>$(MSBuildThisFileDirectory)..\..\Aegisub.Plugin.BuildTasks\bin\$(Configuration)\net10.0\Aegisub.Plugin.BuildTasks.dll</AegisubBuildTasksAssembly>
+    <AegisubPackageRoot>$(BaseIntermediateOutputPath)native-package\</AegisubPackageRoot>
+    <AegisubNativeLibraryName Condition="'$(RuntimeIdentifier)' == 'win-x64' or '$(RuntimeIdentifier)' == 'win-arm64'">$(AssemblyName).dll</AegisubNativeLibraryName>
+    <AegisubNativeLibraryName Condition="'$(RuntimeIdentifier)' == 'linux-x64' or '$(RuntimeIdentifier)' == 'linux-arm64'">$(AssemblyName).so</AegisubNativeLibraryName>
+    <AegisubNativeLibraryName Condition="'$(RuntimeIdentifier)' == 'osx-x64' or '$(RuntimeIdentifier)' == 'osx-arm64'">$(AssemblyName).dylib</AegisubNativeLibraryName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Aegisub.CoreClr.Adapter\Aegisub.CoreClr.Adapter.csproj"
+                      AdditionalProperties="AegisubNativeAotBuild=true" />
+    <ProjectReference Include="..\..\Aegisub.Plugin.Sdk\Aegisub.Plugin.Sdk.csproj" />
+    <ProjectReference Include="..\Aegisub.Plugin.Sdk.Smoke\Aegisub.Plugin.Sdk.Smoke.csproj" />
+    <ProjectReference Include="..\..\Aegisub.Plugin.Generators\Aegisub.Plugin.Generators.csproj"
+                      OutputItemType="Analyzer"
+                      ReferenceOutputAssembly="false" />
+    <AegisubRuntimeLibrary Include="runtimes/$(RuntimeIdentifier)/native/$(AegisubNativeLibraryName)"
+                           Rid="$(RuntimeIdentifier)" />
+  </ItemGroup>
+
+  <Import Project="..\..\Aegisub.Plugin.BuildTasks\buildTransitive\Aegisub.Plugin.BuildTasks.targets" />
+
+  <Target Name="StageAndValidateAegisubNativePackage"
+          AfterTargets="Publish"
+          DependsOnTargets="GenerateAegisubPluginManifest">
+    <PropertyGroup>
+      <_AegisubNativePackageDirectory>$(AegisubPackageRoot)runtimes\$(RuntimeIdentifier)\native</_AegisubNativePackageDirectory>
+    </PropertyGroup>
+    <MakeDir Directories="$(_AegisubNativePackageDirectory)" />
+    <Copy SourceFiles="$(PublishDir)$(AegisubNativeLibraryName)"
+          DestinationFiles="$(_AegisubNativePackageDirectory)\$(AegisubNativeLibraryName)" />
+    <Copy SourceFiles="$(AegisubManifestOutput)"
+          DestinationFiles="$(AegisubPackageRoot)$(AegisubPluginId).aegisub-plugin.json" />
+    <Aegisub.Plugin.BuildTasks.ValidateAegisubPluginPackage
+        ManifestPath="$(AegisubManifestOutput)"
+        PackageRoot="$(AegisubPackageRoot)" />
+  </Target>
+</Project>

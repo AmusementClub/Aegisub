@@ -332,13 +332,87 @@ internal sealed class DependencyControlToolViewController(
         UpdatePackagesAsync(SelectedPackages(), cancellationToken);
 
     private Task UpdateAllPackagesAsync(CancellationToken cancellationToken) =>
-        UpdatePackagesAsync(
-            _packages.Values
-                .Where(package => package.Feed.Length > 0)
-                .OrderBy(package => package.RecordType, StringComparer.Ordinal)
-                .ThenBy(package => package.Namespace, StringComparer.Ordinal)
-                .ToArray(),
-            cancellationToken);
+        UpdateAllPackagesAtomicallyAsync(cancellationToken);
+
+    private async Task UpdateAllPackagesAtomicallyAsync(
+        CancellationToken cancellationToken)
+    {
+        PackageViewModel[] packages = _packages.Values
+            .Where(package => package.Feed.Length > 0)
+            .OrderBy(package => package.RecordType, StringComparer.Ordinal)
+            .ThenBy(package => package.Namespace, StringComparer.Ordinal)
+            .ToArray();
+        if (packages.Length == 0)
+            throw new InvalidOperationException("No updatable packages were found.");
+
+        try
+        {
+            await PatchProgressAsync(
+                0, packages.Length, "Checking packages...", cancellationToken)
+                .ConfigureAwait(false);
+            using JsonDocument response = JsonDocument.Parse(await service.InvokeAsync(
+                "updates.apply",
+                BuildBatchPackageRequest(packages),
+                cancellationToken).ConfigureAwait(false));
+            JsonElement root = response.RootElement;
+            bool committed = root.GetProperty("committed").GetBoolean();
+            if (!root.TryGetProperty("packages", out JsonElement results) ||
+                results.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException(
+                    "DependencyControl batch update response is missing package results.");
+            Dictionary<string, JsonElement> byKey = new(StringComparer.Ordinal);
+            foreach (JsonElement item in results.EnumerateArray())
+            {
+                string key = $"{RequiredString(item, "recordType")}\n" +
+                    RequiredString(item, "namespace");
+                byKey[key] = item;
+            }
+            foreach (PackageViewModel package in packages)
+            {
+                string key = $"{package.RecordType}\n{package.Namespace}";
+                if (!byKey.TryGetValue(key, out JsonElement item))
+                    continue;
+                string status = RequiredString(item, "status");
+                string available = RequiredString(item, "availableVersion");
+                _packages[package.RowId] = package with
+                {
+                    Version = committed && status == "updated"
+                        ? available
+                        : package.Version,
+                    AvailableVersion = available,
+                    UpdateStatus = status
+                };
+            }
+            await PatchProgressRowsAsync(
+                packages.Length,
+                packages.Length,
+                committed ? "Update All committed atomically." : "All packages are current.",
+                cancellationToken).ConfigureAwait(false);
+            await ReloadPackagesAsync(cancellationToken).ConfigureAwait(false);
+            await ReloadAvailableAsync(refresh: false, cancellationToken)
+                .ConfigureAwait(false);
+            bool hasUnsupported = byKey.Values.Any(item =>
+                RequiredString(item, "status") == "unsupportedPlatform");
+            bool hasInstalledNewer = byKey.Values.Any(item =>
+                RequiredString(item, "status") == "installedNewer");
+            await PatchAllAsync(
+                committed
+                    ? "Updated all packages in one transaction; reload Automation to use them."
+                    : hasUnsupported
+                        ? "No updates applied; some packages are unsupported on this platform."
+                        : hasInstalledNewer
+                            ? "No updates applied; some installed versions are newer."
+                            : "All selected packages are current.",
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            await ReloadPackagesAsync(CancellationToken.None).ConfigureAwait(false);
+            await ReloadAvailableAsync(refresh: false, CancellationToken.None)
+                .ConfigureAwait(false);
+            throw;
+        }
+    }
 
     private async Task UpdatePackagesAsync(
         IReadOnlyList<PackageViewModel> packages,
@@ -1654,6 +1728,24 @@ internal sealed class DependencyControlToolViewController(
             writer.WriteString("namespace", package.Namespace);
             if (removeConfig is not null)
                 writer.WriteBoolean("removeConfig", removeConfig.Value);
+            writer.WriteEndObject();
+        });
+
+    private static string BuildBatchPackageRequest(
+        IReadOnlyList<PackageViewModel> packages) =>
+        DependencyControlServiceContribution.BuildJson(writer =>
+        {
+            writer.WriteStartObject();
+            writer.WritePropertyName("packages");
+            writer.WriteStartArray();
+            foreach (PackageViewModel package in packages)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("recordType", package.RecordType);
+                writer.WriteString("namespace", package.Namespace);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
             writer.WriteEndObject();
         });
 

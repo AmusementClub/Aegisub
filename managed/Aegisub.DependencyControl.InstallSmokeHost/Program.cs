@@ -16,6 +16,42 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length == 2 && args[0] == "--batch-update-atomicity")
+        {
+            try
+            {
+                string batchWorkDirectory = Path.GetFullPath(args[1]);
+                RecreateDirectory(batchWorkDirectory);
+                await RunBatchUpdateAtomicitySmokeAsync(batchWorkDirectory)
+                    .ConfigureAwait(false);
+                Console.WriteLine("DependencyControl batch update atomicity smoke passed.");
+                return 0;
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine(
+                    $"DependencyControl batch update atomicity smoke failed: {error}");
+                return 1;
+            }
+        }
+        if (args.Length == 2 && args[0] == "--managed-tool-view")
+        {
+            try
+            {
+                string toolViewWorkDirectory = Path.GetFullPath(args[1]);
+                RecreateDirectory(toolViewWorkDirectory);
+                await RunManagedToolViewSmokeAsync(toolViewWorkDirectory)
+                    .ConfigureAwait(false);
+                Console.WriteLine("DependencyControl managed ToolView smoke passed.");
+                return 0;
+            }
+            catch (Exception error)
+            {
+                Console.Error.WriteLine(
+                    $"DependencyControl managed ToolView smoke failed: {error}");
+                return 1;
+            }
+        }
         if (args.Length != 3)
         {
             Console.Error.WriteLine(
@@ -36,6 +72,7 @@ internal static class Program
         {
             RecreateDirectory(workDirectory);
             await RunManagedToolViewSmokeAsync(workDirectory).ConfigureAwait(false);
+            await RunBatchUpdateAtomicitySmokeAsync(workDirectory).ConfigureAwait(false);
             await RunSuccessAsync(executable, script, workDirectory).ConfigureAwait(false);
             await RunHashFailureAsync(executable, script, workDirectory).ConfigureAwait(false);
             await RunRollbackAsync(executable, script, workDirectory).ConfigureAwait(false);
@@ -1513,6 +1550,27 @@ internal static class Program
         string stateRoot = Path.Combine(
             Path.GetDirectoryName(automationRoot)!, "state");
         Directory.CreateDirectory(traceDirectory);
+        string scenarioPath = Path.Combine(automationRoot, "automation-scenario.json");
+        var scenario = new JsonObject
+        {
+            ["version"] = 1,
+            ["name"] = "dependency-control-install",
+            ["hosts"] = new JsonArray("headless"),
+            ["resources"] = new JsonObject { ["script"] = "" },
+            ["steps"] = new JsonArray
+            {
+                new JsonObject
+                {
+                    ["action"] = "run_automation",
+                    ["script"] = "script",
+                    ["macro"] = MacroName
+                }
+            }
+        };
+        File.WriteAllText(scenarioPath, scenario.ToJsonString(new JsonSerializerOptions
+        {
+            WriteIndented = true
+        }));
         ProcessStartInfo start = new(executable)
         {
             WorkingDirectory = Path.GetDirectoryName(executable)!,
@@ -1521,14 +1579,13 @@ internal static class Program
             RedirectStandardError = true,
             CreateNoWindow = true
         };
-        start.ArgumentList.Add("--cli");
-        start.ArgumentList.Add("session");
-        start.ArgumentList.Add("automation");
-        start.ArgumentList.Add("--script");
-        start.ArgumentList.Add(selectedScript);
-        start.ArgumentList.Add("--macro");
-        start.ArgumentList.Add(MacroName);
-        start.ArgumentList.Add("--trace-dir");
+        start.ArgumentList.Add("--headless");
+        start.ArgumentList.Add("run");
+        start.ArgumentList.Add("--scenario");
+        start.ArgumentList.Add(scenarioPath);
+        start.ArgumentList.Add("--input");
+        start.ArgumentList.Add($"script={selectedScript}");
+        start.ArgumentList.Add("--artifacts");
         start.ArgumentList.Add(traceDirectory);
         start.Environment["AEGISUB_DEPENDENCY_CONTROL_AUTOMATION_ROOT"] = automationRoot;
         start.Environment["AEGISUB_DEPENDENCY_CONTROL_STATE_ROOT"] = stateRoot;
@@ -2195,6 +2252,45 @@ internal static class Program
                 throw new InvalidOperationException(
                     "DependencyControl ToolView did not install the available package.");
 
+            byte[] updatedAvailablePayload = Encoding.UTF8.GetBytes(
+                "return { value = \"available-2\" }\n");
+            origin.Set("/available.lua", updatedAvailablePayload);
+            origin.Set("/feed.json", BuildFeed(
+                origin.BaseUrl,
+                availableNamespace,
+                [new FeedFile(
+                    ".lua", "/available.lua", Sha1(updatedAvailablePayload))],
+                version: "2.0.0"));
+            operationPatchStart = host.Patches.Count;
+            await eventHandler.HandleEventAsync(
+                ToolViewPluginEvent(
+                    eventId: "action",
+                    sourceId: "apply-all",
+                    values: ToolViewValues(search: "fixture", proxyMode: "Direct"),
+                    selectedRows: [],
+                    activeTabId: "installed"),
+                CancellationToken.None).ConfigureAwait(false);
+            await WaitForToolViewOperationAsync(
+                host, operationPatchStart, "atomic Update All").ConfigureAwait(false);
+            if (!File.ReadAllBytes(installedTarget).SequenceEqual(updatedAvailablePayload) ||
+                !host.Patches.Skip(operationPatchStart).Any(patch =>
+                    patch.Controls.Any(control => control.Id == "status" &&
+                        control.Text?.StartsWith(
+                            "Updated all packages in one transaction",
+                            StringComparison.Ordinal) == true)))
+                throw new InvalidOperationException(
+                    "DependencyControl ToolView Update All was not globally atomic.");
+            using (JsonDocument updatedInstalled = JsonDocument.Parse(File.ReadAllBytes(
+                       Path.Combine(stateRoot, "installed.json"))))
+            {
+                JsonElement updatedPackage = updatedInstalled.RootElement
+                    .GetProperty("packages").EnumerateArray().Single(package =>
+                        package.GetProperty("namespace").GetString() == availableNamespace);
+                if (updatedPackage.GetProperty("version").GetString() != "2.0.0")
+                    throw new InvalidOperationException(
+                        "DependencyControl ToolView Update All did not persist its package version.");
+            }
+
             await eventHandler.HandleEventAsync(
                 ToolViewPluginEvent(
                     eventId: "action",
@@ -2271,6 +2367,194 @@ internal static class Program
             await plugin.DeactivateAsync(CancellationToken.None).ConfigureAwait(false);
         }
     }
+
+    private static async Task RunBatchUpdateAtomicitySmokeAsync(string workDirectory)
+    {
+        const string firstNamespace = "fixture.batch.first";
+        const string secondNamespace = "fixture.batch.second";
+        byte[] firstOriginal = Encoding.UTF8.GetBytes("return { value = 'first-1' }\n");
+        byte[] secondOriginal = Encoding.UTF8.GetBytes("return { value = 'second-1' }\n");
+        byte[] firstUpdated = Encoding.UTF8.GetBytes("return { value = 'first-2' }\n");
+        byte[] secondUpdated = Encoding.UTF8.GetBytes("return { value = 'second-2' }\n");
+        await using LoopbackOrigin origin = new();
+        origin.Add("/first.lua", firstUpdated);
+        origin.Add("/second.lua", secondUpdated);
+        origin.Add("/first-feed.json", BuildFeed(
+            origin.BaseUrl,
+            firstNamespace,
+            [new FeedFile(".lua", "/first.lua", Sha1(firstUpdated))],
+            version: "2.0.0"));
+        origin.Add("/second-feed.json", BuildFeed(
+            origin.BaseUrl,
+            secondNamespace,
+            [new FeedFile(".lua", "/second.lua", new string('0', 40))],
+            version: "2.0.0"));
+
+        string root = Path.Combine(workDirectory, "batch-update-atomicity");
+        string stateRoot = Path.Combine(root, "state");
+        string automationRoot = Path.Combine(root, "automation");
+        string firstTarget = Path.Combine(automationRoot, "include", "fixture", "batch", "first.lua");
+        string secondTarget = Path.Combine(automationRoot, "include", "fixture", "batch", "second.lua");
+        Directory.CreateDirectory(Path.GetDirectoryName(firstTarget)!);
+        File.WriteAllBytes(firstTarget, firstOriginal);
+        File.WriteAllBytes(secondTarget, secondOriginal);
+        Directory.CreateDirectory(stateRoot);
+        File.WriteAllText(
+            Path.Combine(stateRoot, "installed.json"),
+            new JsonObject
+            {
+                ["schemaVersion"] = 1,
+                ["revision"] = 7,
+                ["packages"] = new JsonArray(
+                    BatchInstalledPackage(
+                        firstNamespace,
+                        origin.Url("/first-feed.json"),
+                        "include/fixture/batch/first.lua",
+                        Sha1(firstOriginal)),
+                    BatchInstalledPackage(
+                        secondNamespace,
+                        origin.Url("/second-feed.json"),
+                        "include/fixture/batch/second.lua",
+                        Sha1(secondOriginal)))
+            }.ToJsonString());
+
+        ManagedToolViewHost host = new(stateRoot, automationRoot, origin.Url("/first-feed.json"));
+        DependencyControlPlugin plugin = new();
+        await plugin.ActivateAsync(host, CancellationToken.None).ConfigureAwait(false);
+        try
+        {
+            IAegisubServiceProviderContribution service = plugin.Contributions
+                .OfType<IAegisubServiceProviderContribution>().Single();
+            string request = JsonSerializer.Serialize(new Dictionary<string, object>
+            {
+                ["packages"] = new object[]
+                {
+                    new Dictionary<string, string>
+                    {
+                        ["recordType"] = "module",
+                        ["namespace"] = firstNamespace
+                    },
+                    new Dictionary<string, string>
+                    {
+                        ["recordType"] = "module",
+                        ["namespace"] = secondNamespace
+                    }
+                }
+            });
+            bool failed = false;
+            try
+            {
+                await service.InvokeAsync("updates.apply", request, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch (InvalidOperationException)
+            {
+                failed = true;
+            }
+            if (!failed)
+                throw new InvalidOperationException(
+                    "DependencyControl batch update accepted the bad second package.");
+            if (host.BeginTransactionCount != 1 || host.CommitTransactionCount != 0)
+                throw new InvalidOperationException(
+                    "DependencyControl failed batch update crossed its transaction boundary.");
+            if (!File.ReadAllBytes(firstTarget).SequenceEqual(firstOriginal) ||
+                !File.ReadAllBytes(secondTarget).SequenceEqual(secondOriginal))
+                throw new InvalidOperationException(
+                    "DependencyControl batch update leaked a partial package commit.");
+            using JsonDocument state = JsonDocument.Parse(File.ReadAllBytes(
+                Path.Combine(stateRoot, "installed.json")));
+            if (state.RootElement.GetProperty("revision").GetInt64() != 7 ||
+                state.RootElement.GetProperty("packages").GetArrayLength() != 2)
+                throw new InvalidOperationException(
+                    "DependencyControl failed batch update changed installed state.");
+            string fakeStaging = Path.Combine(stateRoot, "staging");
+            string nativeStaging = Path.Combine(
+                automationRoot, ".dependency-control", "staging");
+            if (File.Exists(Path.Combine(stateRoot, "pending-install.json")) ||
+                Directory.Exists(fakeStaging) &&
+                Directory.EnumerateFileSystemEntries(fakeStaging).Any() ||
+                Directory.Exists(nativeStaging) &&
+                Directory.EnumerateFileSystemEntries(nativeStaging).Any())
+                throw new InvalidOperationException(
+                    "DependencyControl failed batch update left transaction state behind.");
+
+            origin.Set("/second-feed.json", BuildFeed(
+                origin.BaseUrl,
+                secondNamespace,
+                [new FeedFile(".lua", "/second.lua", Sha1(secondUpdated))],
+                version: "2.0.0"));
+            using JsonDocument response = JsonDocument.Parse(await service.InvokeAsync(
+                "updates.apply", request, CancellationToken.None).ConfigureAwait(false));
+            if (!response.RootElement.GetProperty("atomic").GetBoolean() ||
+                !response.RootElement.GetProperty("committed").GetBoolean() ||
+                response.RootElement.GetProperty("updatedCount").GetInt32() != 2 ||
+                response.RootElement.GetProperty("packages").GetArrayLength() != 2 ||
+                host.BeginTransactionCount != 2 || host.CommitTransactionCount != 1)
+                throw new InvalidOperationException(
+                    "DependencyControl successful batch update did not use one global transaction.");
+            if (!File.ReadAllBytes(firstTarget).SequenceEqual(firstUpdated) ||
+                !File.ReadAllBytes(secondTarget).SequenceEqual(secondUpdated))
+                throw new InvalidOperationException(
+                    "DependencyControl successful batch update did not commit both packages.");
+            using JsonDocument updatedState = JsonDocument.Parse(File.ReadAllBytes(
+                Path.Combine(stateRoot, "installed.json")));
+            if (updatedState.RootElement.GetProperty("revision").GetInt64() != 8 ||
+                updatedState.RootElement.GetProperty("packages")
+                    .EnumerateArray().Any(package =>
+                        package.GetProperty("version").GetString() != "2.0.0"))
+                throw new InvalidOperationException(
+                    "DependencyControl successful batch update did not persist atomically.");
+
+            string singleBatchRequest = JsonSerializer.Serialize(
+                new Dictionary<string, object>
+                {
+                    ["packages"] = new object[]
+                    {
+                        new Dictionary<string, string>
+                        {
+                            ["recordType"] = "module",
+                            ["namespace"] = firstNamespace
+                        }
+                    }
+                });
+            using JsonDocument singleBatch = JsonDocument.Parse(await service.InvokeAsync(
+                "updates.apply", singleBatchRequest, CancellationToken.None)
+                .ConfigureAwait(false));
+            if (!singleBatch.RootElement.GetProperty("atomic").GetBoolean() ||
+                singleBatch.RootElement.GetProperty("packages").GetArrayLength() != 1 ||
+                singleBatch.RootElement.GetProperty("committed").GetBoolean())
+                throw new InvalidOperationException(
+                    "DependencyControl one-item batch lost the batch response shape.");
+        }
+        finally
+        {
+            await plugin.DeactivateAsync(CancellationToken.None).ConfigureAwait(false);
+        }
+    }
+
+    private static JsonObject BatchInstalledPackage(
+        string packageNamespace,
+        string feed,
+        string target,
+        string sha1) => new()
+        {
+            ["recordType"] = "module",
+            ["namespace"] = packageNamespace,
+            ["name"] = packageNamespace,
+            ["version"] = "1.0.0",
+            ["description"] = "",
+            ["author"] = "",
+            ["feed"] = feed,
+            ["channel"] = "release",
+            ["configFile"] = packageNamespace + ".json",
+            ["source"] = "transaction",
+            ["requiredModules"] = new JsonArray(),
+            ["files"] = new JsonArray(new JsonObject
+            {
+                ["target"] = target,
+                ["sha1"] = sha1
+            })
+        };
 
     private static PluginEvent ToolViewPluginEvent(
         string eventId,
@@ -2384,6 +2668,8 @@ internal sealed class ManagedToolViewHost(
 
     public ToolViewDefinition? OpenedView { get; private set; }
     public OpenFormRequest? LastForm { get; private set; }
+    public int BeginTransactionCount { get; private set; }
+    public int CommitTransactionCount { get; private set; }
     public IReadOnlyList<ToolViewPatch> Patches
     {
         get
@@ -2503,6 +2789,7 @@ internal sealed class ManagedToolViewHost(
             throw new InvalidOperationException(
                 "Managed ToolView host already has a transaction.");
         _transactionId = Guid.NewGuid().ToString("N");
+        ++BeginTransactionCount;
         _stagingRoot = Path.Combine(stateRoot, "staging", _transactionId);
         Directory.CreateDirectory(_stagingRoot);
         return JsonSerializer.Serialize(new Dictionary<string, object>
@@ -2520,6 +2807,7 @@ internal sealed class ManagedToolViewHost(
         if (root.GetProperty("transactionId").GetString() != _transactionId)
             throw new InvalidOperationException(
                 "Managed ToolView host received the wrong transaction ID.");
+        ++CommitTransactionCount;
         foreach (JsonElement file in root.GetProperty("files").EnumerateArray())
         {
             string target = file.GetProperty("target").GetString()!;

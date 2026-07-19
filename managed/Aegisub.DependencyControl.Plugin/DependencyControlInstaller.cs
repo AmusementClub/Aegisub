@@ -66,23 +66,48 @@ internal sealed class DependencyControlInstaller(
         DependencyControlInstalledStateStore installedState,
         CancellationToken cancellationToken)
     {
-        if (record.Feed.Length == 0)
-            throw new InvalidOperationException(
-                $"DependencyControl package '{record.Namespace}' has no feed URL.");
-        DependencyControlPackageKind kind = record.RecordType == "module"
-            ? DependencyControlPackageKind.Module
-            : DependencyControlPackageKind.Macro;
-        await ResolvePackageAsync(
-            kind,
-            new RequiredModule(
-                record.Namespace,
-                targetVersion,
-                record.Feed,
-                requestedChannel,
-                false),
-            record.Feed,
-            depth: 0,
+        return await InstallPackagesAsync(
+            [new DependencyControlInstallRequest(record, requestedChannel, targetVersion)],
+            journal,
+            installedState,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<DependencyControlInstallResult> InstallPackagesAsync(
+        IReadOnlyList<DependencyControlInstallRequest> requests,
+        DependencyControlInstallJournal journal,
+        DependencyControlInstalledStateStore installedState,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(requests);
+        if (requests.Count == 0)
+            throw new InvalidOperationException(
+                "DependencyControl batch install requires at least one package.");
+        if (requests.Count > MaximumPackages)
+            throw new InvalidOperationException(
+                "DependencyControl batch install exceeds the package limit.");
+
+        foreach (DependencyControlInstallRequest request in requests)
+        {
+            RegisteredRecord record = request.Record;
+            if (record.Feed.Length == 0)
+                throw new InvalidOperationException(
+                    $"DependencyControl package '{record.Namespace}' has no feed URL.");
+            DependencyControlPackageKind kind = record.RecordType == "module"
+                ? DependencyControlPackageKind.Module
+                : DependencyControlPackageKind.Macro;
+            await ResolvePackageAsync(
+                kind,
+                new RequiredModule(
+                    record.Namespace,
+                    request.TargetVersion,
+                    record.Feed,
+                    request.RequestedChannel,
+                    false),
+                record.Feed,
+                depth: 0,
+                cancellationToken).ConfigureAwait(false);
+        }
         return await CommitAsync(
             journal, installedState, cancellationToken).ConfigureAwait(false);
     }
@@ -491,6 +516,11 @@ internal sealed class DependencyControlInstaller(
 
     private sealed record PlannedFile(DependencyControlFile File, string StagedName);
 }
+
+internal sealed record DependencyControlInstallRequest(
+    RegisteredRecord Record,
+    string RequestedChannel,
+    string TargetVersion);
 
 internal sealed record DependencyControlResolvedFile(
     string Target,

@@ -409,6 +409,18 @@ add_custom_target(run-aegisub-dependency-control-feed-smoke
     VERBATIM
 )
 
+add_custom_target(run-aegisub-dependency-control-public-feed-smoke
+    COMMAND "${CMAKE_COMMAND}"
+        "-DDOTNET_EXECUTABLE=${AEGISUB_DOTNET_EXECUTABLE}"
+        "-DSMOKE_DLL=${_aegisub_dependency_control_smoke_output}/Aegisub.DependencyControl.Smoke.dll"
+        "-DSMOKE_DIR=${CMAKE_CURRENT_BINARY_DIR}/dependency-control-public-feed-smoke/$<CONFIG>"
+        -P "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/run-dependency-control-public-feed-smoke.cmake"
+    DEPENDS aegisub-dependency-control-feed-smoke
+    COMMENT "Running the opt-in DependencyControl public feed corpus smoke"
+    USES_TERMINAL
+    VERBATIM
+)
+
 set(_aegisub_dependency_control_install_smoke_stamp
     "${_aegisub_managed_stamp_dir}/dependency-control-install-smoke.stamp")
 set(_aegisub_dependency_control_install_smoke_dll
@@ -431,6 +443,8 @@ add_custom_command(OUTPUT
         "${_aegisub_dependency_control_install_smoke_project}"
         "${PROJECT_SOURCE_DIR}/managed/Aegisub.DependencyControl.InstallSmokeHost/Program.cs"
         "${_aegisub_dependency_control_plugin_project}"
+        "${PROJECT_SOURCE_DIR}/managed/Aegisub.DependencyControl.Plugin/DependencyControlInstaller.cs"
+        "${PROJECT_SOURCE_DIR}/managed/Aegisub.DependencyControl.Plugin/DependencyControlPlugin.cs"
         "${PROJECT_SOURCE_DIR}/managed/Aegisub.DependencyControl.Plugin/DependencyControlToolView.cs"
         "${PROJECT_SOURCE_DIR}/managed/Aegisub.Managed.Contracts/DeclarativeUiContracts.cs"
     COMMAND "${CMAKE_COMMAND}" -E touch

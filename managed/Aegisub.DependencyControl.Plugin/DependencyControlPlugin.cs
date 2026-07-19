@@ -63,6 +63,7 @@ internal sealed class DependencyControlServiceContribution :
     IDisposable
 {
     private const int MaxRequiredModules = 256;
+    private const int MaxUpdateBatchPackages = 256;
     private const int MaxTextLength = 16 * 1024;
 
     private static readonly IReadOnlyList<string> RegisteredOperations =
@@ -1116,20 +1117,36 @@ internal sealed class DependencyControlServiceContribution :
         string requestJson,
         CancellationToken cancellationToken)
     {
-        string recordType;
-        string packageNamespace;
-        string requestedChannel;
-        string targetVersion;
+        List<UpdateRequest> requests;
+        bool batchRequest;
         try
         {
             using JsonDocument document = JsonDocument.Parse(requestJson);
             JsonElement root = document.RootElement;
-            recordType = ReadRequiredString(root, "recordType", 32);
-            packageNamespace = ReadRequiredString(root, "namespace", 512);
-            requestedChannel = ReadOptionalString(root, "channel", 256) ?? "";
-            targetVersion = ReadOptionalString(root, "targetVersion", 256) ?? "";
-            if (targetVersion.Length > 0)
-                _ = ParseComparableVersion(targetVersion);
+            if (root.ValueKind != JsonValueKind.Object)
+                throw new InvalidOperationException(
+                    "A DependencyControl updates.apply request must be an object.");
+            if (root.TryGetProperty("packages", out JsonElement packages))
+            {
+                batchRequest = true;
+                if (packages.ValueKind != JsonValueKind.Array || packages.GetArrayLength() == 0)
+                    throw new InvalidOperationException(
+                        "DependencyControl updates.apply packages must be a non-empty array.");
+                requests = packages.EnumerateArray().Select(ParseUpdateRequest).ToList();
+                if (requests.Count > MaxUpdateBatchPackages)
+                    throw new InvalidOperationException(
+                        "DependencyControl updates.apply exceeds the package limit.");
+                if (requests.Select(request =>
+                        $"{request.RecordType}\n{request.Namespace}")
+                    .Distinct(StringComparer.Ordinal).Count() != requests.Count)
+                    throw new InvalidOperationException(
+                        "DependencyControl updates.apply contains duplicate packages.");
+            }
+            else
+            {
+                batchRequest = false;
+                requests = [ParseUpdateRequest(root)];
+            }
         }
         catch (JsonException error)
         {
@@ -1137,99 +1154,116 @@ internal sealed class DependencyControlServiceContribution :
                 "The DependencyControl updates.apply request is not valid JSON.",
                 error);
         }
-        ValidateCatalogIdentity(recordType, packageNamespace);
 
         await _installGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             DependencyControlInstalledStateStore installedState =
                 GetInstalledStateStore();
-            if (!installedState.TryGet(
-                recordType, packageNamespace, out DependencyControlInstalledPackage? installed) ||
-                installed is null)
-                throw new InvalidOperationException(
-                    $"DependencyControl package '{packageNamespace}' is not installed.");
-            if (installed.Feed.Length == 0)
-                throw new InvalidOperationException(
-                    $"DependencyControl package '{packageNamespace}' has no update feed.");
-            DependencyControlPackageKind kind = recordType == "module"
-                ? DependencyControlPackageKind.Module
-                : DependencyControlPackageKind.Macro;
             DependencyControlFeedCatalog catalog = new(_transport);
-            (DependencyControlFeed source, DependencyControlPackage package) =
-                await catalog.FindPackageAsync(
-                    installed.Feed,
-                    kind,
-                    packageNamespace,
-                    cancellationToken).ConfigureAwait(false);
-            DependencyControlChannel channel = SelectUpdateChannel(
-                package,
-                requestedChannel.Length > 0 ? requestedChannel : installed.Channel);
-            bool supported = channel.Platforms.Count == 0 ||
-                channel.Platforms.Any(IsPlatformCompatible);
-            int comparison = CompareVersions(channel.Version, installed.Version);
-            if (targetVersion.Length > 0 && CompareVersions(channel.Version, targetVersion) < 0)
-                throw new InvalidOperationException(
-                    $"DependencyControl package '{packageNamespace}' does not provide " +
-                    $"the requested version '{targetVersion}'.");
-            string status = !supported
-                ? "unsupportedPlatform"
-                : comparison > 0
-                    ? "updateAvailable"
-                    : comparison == 0 ? "upToDate" : "installedNewer";
-            if (status != "updateAvailable")
-                return BuildUpdateApplyResponse(
-                    status,
-                    committed: false,
-                    recordType,
-                    packageNamespace,
-                    installed.Version,
-                    channel.Version,
-                    channel.Name,
-                    source.SourceUrl,
-                    "",
-                    []);
+            List<BatchUpdateItem> updates = [];
+            foreach (UpdateRequest request in requests)
+            {
+                ValidateCatalogIdentity(request.RecordType, request.Namespace);
+                if (!installedState.TryGet(
+                    request.RecordType,
+                    request.Namespace,
+                    out DependencyControlInstalledPackage? installed) ||
+                    installed is null)
+                    throw new InvalidOperationException(
+                        $"DependencyControl package '{request.Namespace}' is not installed.");
+                if (installed.Feed.Length == 0)
+                    throw new InvalidOperationException(
+                        $"DependencyControl package '{request.Namespace}' has no update feed.");
+                DependencyControlPackageKind kind = request.RecordType == "module"
+                    ? DependencyControlPackageKind.Module
+                    : DependencyControlPackageKind.Macro;
+                (DependencyControlFeed source, DependencyControlPackage package) =
+                    await catalog.FindPackageAsync(
+                        installed.Feed,
+                        kind,
+                        request.Namespace,
+                        cancellationToken).ConfigureAwait(false);
+                DependencyControlChannel channel = SelectUpdateChannel(
+                    package,
+                    request.Channel.Length > 0 ? request.Channel : installed.Channel);
+                bool supported = channel.Platforms.Count == 0 ||
+                    channel.Platforms.Any(IsPlatformCompatible);
+                int comparison = CompareVersions(channel.Version, installed.Version);
+                if (request.TargetVersion.Length > 0 &&
+                    CompareVersions(channel.Version, request.TargetVersion) < 0)
+                    throw new InvalidOperationException(
+                        $"DependencyControl package '{request.Namespace}' does not provide " +
+                        $"the requested version '{request.TargetVersion}'.");
+                string status = !supported
+                    ? "unsupportedPlatform"
+                    : comparison > 0
+                        ? "updateAvailable"
+                        : comparison == 0 ? "upToDate" : "installedNewer";
+                updates.Add(new(
+                    request,
+                    installed,
+                    source,
+                    channel,
+                    status));
+            }
 
-            RegisteredRecord record = new(
-                recordType,
-                packageNamespace,
-                installed.Name,
-                installed.Version,
-                installed.Description,
-                installed.Author,
-                installed.Feed,
-                channel.Name,
-                installed.ConfigFile,
-                false,
-                installed.RequiredModules);
-            DependencyControlInstaller installer = new(
-                GetPluginContext(), _transport);
-            DependencyControlInstallResult result = await installer.InstallPackageAsync(
-                record,
-                channel.Name,
-                targetVersion.Length > 0 ? targetVersion : channel.Version,
+            BatchUpdateItem[] pending = updates
+                .Where(item => item.Status == "updateAvailable")
+                .ToArray();
+            if (pending.Length == 0)
+                return BuildBatchUpdateResponse(
+                    updates, batchRequest, committed: false, "", [], null);
+
+            DependencyControlInstaller installer = new(GetPluginContext(), _transport);
+            DependencyControlInstallResult result = await installer.InstallPackagesAsync(
+                pending.Select(item => new DependencyControlInstallRequest(
+                    new RegisteredRecord(
+                        item.Request.RecordType,
+                        item.Request.Namespace,
+                        item.Installed.Name,
+                        item.Installed.Version,
+                        item.Installed.Description,
+                        item.Installed.Author,
+                        item.Installed.Feed,
+                        item.Channel.Name,
+                        item.Installed.ConfigFile,
+                        false,
+                        item.Installed.RequiredModules),
+                    item.Channel.Name,
+                    item.Request.TargetVersion.Length > 0
+                        ? item.Request.TargetVersion
+                        : item.Channel.Version)).ToArray(),
                 GetInstallJournal(),
                 installedState,
                 cancellationToken).ConfigureAwait(false);
             ExitAfterCommitForTest();
             installedState.ApplyInstall(result.Packages);
             GetInstallJournal().Complete(result.TransactionId);
-            return BuildUpdateApplyResponse(
-                "updated",
+            return BuildBatchUpdateResponse(
+                updates,
+                batchRequest,
                 committed: true,
-                recordType,
-                packageNamespace,
-                installed.Version,
-                channel.Version,
-                channel.Name,
-                source.SourceUrl,
                 result.AutomationRoot,
-                result.InstalledFiles);
+                result.InstalledFiles,
+                result.Packages);
         }
         finally
         {
             _installGate.Release();
         }
+    }
+
+    private static UpdateRequest ParseUpdateRequest(JsonElement root)
+    {
+        string targetVersion = ReadOptionalString(root, "targetVersion", 256) ?? "";
+        if (targetVersion.Length > 0)
+            _ = ParseComparableVersion(targetVersion);
+        return new(
+            ReadRequiredString(root, "recordType", 32),
+            ReadRequiredString(root, "namespace", 512),
+            ReadOptionalString(root, "channel", 256) ?? "",
+            targetVersion);
     }
 
     private async Task<string> UninstallPackageAsync(
@@ -2055,6 +2089,91 @@ internal sealed class DependencyControlServiceContribution :
         writer.WriteEndObject();
     });
 
+    private static string BuildBatchUpdateResponse(
+        IReadOnlyList<BatchUpdateItem> updates,
+        bool batchRequest,
+        bool committed,
+        string automationRoot,
+        IReadOnlyList<string> installedFiles,
+        IReadOnlyList<DependencyControlResolvedPackage>? committedPackages)
+    {
+        Dictionary<string, DependencyControlResolvedPackage> actualPackages =
+            committedPackages is null
+                ? new(StringComparer.Ordinal)
+                : committedPackages.ToDictionary(
+                    package => RecordKey(package.RecordType, package.Namespace),
+                    StringComparer.Ordinal);
+        if (!batchRequest)
+        {
+            BatchUpdateItem item = updates[0];
+            actualPackages.TryGetValue(
+                RecordKey(item.Request.RecordType, item.Request.Namespace),
+                out DependencyControlResolvedPackage? actual);
+            return BuildUpdateApplyResponse(
+                committed && item.Status == "updateAvailable" ? "updated" : item.Status,
+                committed,
+                item.Request.RecordType,
+                item.Request.Namespace,
+                item.Installed.Version,
+                actual?.Version ?? item.Channel.Version,
+                actual?.Channel ?? item.Channel.Name,
+                actual?.Feed ?? item.Source.SourceUrl,
+                automationRoot,
+                installedFiles);
+        }
+
+        return BuildJson(writer =>
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("schemaVersion", 1);
+            writer.WriteString("status", committed ? "updated" : BatchStatus(updates));
+            writer.WriteBoolean("committed", committed);
+            writer.WriteBoolean("atomic", true);
+            writer.WriteString("automationRoot", automationRoot);
+            writer.WriteNumber("packageCount", updates.Count);
+            writer.WriteNumber(
+                "updatedCount",
+                committed ? updates.Count(item => item.Status == "updateAvailable") : 0);
+            writer.WritePropertyName("packages");
+            writer.WriteStartArray();
+            foreach (BatchUpdateItem item in updates)
+            {
+                string status = committed && item.Status == "updateAvailable"
+                    ? "updated"
+                    : item.Status;
+                actualPackages.TryGetValue(
+                    RecordKey(item.Request.RecordType, item.Request.Namespace),
+                    out DependencyControlResolvedPackage? actual);
+                writer.WriteStartObject();
+                writer.WriteString("status", status);
+                writer.WriteString("recordType", item.Request.RecordType);
+                writer.WriteString("namespace", item.Request.Namespace);
+                writer.WriteString("installedVersion", item.Installed.Version);
+                writer.WriteString("availableVersion", actual?.Version ?? item.Channel.Version);
+                writer.WriteString("channel", actual?.Channel ?? item.Channel.Name);
+                writer.WriteString("feed", actual?.Feed ?? item.Source.SourceUrl);
+                writer.WriteBoolean("platformSupported", status != "unsupportedPlatform");
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WritePropertyName("installedFiles");
+            writer.WriteStartArray();
+            foreach (string target in installedFiles)
+                writer.WriteStringValue(target);
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+        });
+    }
+
+    private static string BatchStatus(IReadOnlyList<BatchUpdateItem> updates)
+    {
+        string[] statuses = updates
+            .Select(item => item.Status)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return statuses.Length == 1 ? statuses[0] : "mixed";
+    }
+
     private static string BuildEmptyEnsureResponse() => BuildJson(writer =>
     {
         writer.WriteStartObject();
@@ -2099,6 +2218,19 @@ internal sealed class DependencyControlServiceContribution :
         _transport.Dispose();
         _installGate.Dispose();
     }
+
+    private sealed record UpdateRequest(
+        string RecordType,
+        string Namespace,
+        string Channel,
+        string TargetVersion);
+
+    private sealed record BatchUpdateItem(
+        UpdateRequest Request,
+        DependencyControlInstalledPackage Installed,
+        DependencyControlFeed Source,
+        DependencyControlChannel Channel,
+        string Status);
 }
 
 internal sealed record RegisteredRecord(

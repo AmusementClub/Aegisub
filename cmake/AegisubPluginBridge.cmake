@@ -688,10 +688,10 @@ add_custom_target(run-aegisub-plugin-automation-smoke
     COMMAND "${CMAKE_COMMAND}" -E make_directory
         "${CMAKE_CURRENT_BINARY_DIR}/plugin-bridge-automation-smoke/$<CONFIG>"
     COMMAND "$<TARGET_FILE:Aegisub>"
-        --cli session automation
-        --script "$<TARGET_FILE_DIR:Aegisub>/automation/autoload/CSharpBridgeDemo.aegisub-plugin.json"
-        --macro "aegisub.plugin-bridge.demo.runtime-info"
-        --trace-dir "${CMAKE_CURRENT_BINARY_DIR}/plugin-bridge-automation-smoke/$<CONFIG>"
+        --headless run
+        --scenario "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/scenarios/runtime-info.json"
+        --input "script=$<TARGET_FILE_DIR:Aegisub>/automation/autoload/CSharpBridgeDemo.aegisub-plugin.json"
+        --artifacts "${CMAKE_CURRENT_BINARY_DIR}/plugin-bridge-automation-smoke/$<CONFIG>"
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:Aegisub>"
     DEPENDS Aegisub
     COMMENT "Running the Plugin Bridge Automation Macro end-to-end smoke"
@@ -705,17 +705,15 @@ add_custom_target(run-aegisub-dependency-control-lua-smoke
     COMMAND "${CMAKE_COMMAND}" -E env
         "AEGISUB_DEPENDENCY_CONTROL_STATE_ROOT=${CMAKE_CURRENT_BINARY_DIR}/dependency-control-lua-smoke/$<CONFIG>/state"
         "$<TARGET_FILE:Aegisub>"
-        --cli session automation
-        --script "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/fixtures/dependency-control-lua-compat.lua"
-        --macro "DependencyControl Lua compatibility smoke"
-        --trace-dir "${CMAKE_CURRENT_BINARY_DIR}/dependency-control-lua-smoke/$<CONFIG>"
+        --headless run
+        --scenario "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/scenarios/dependency-control-compat.json"
+        --artifacts "${CMAKE_CURRENT_BINARY_DIR}/dependency-control-lua-smoke/$<CONFIG>"
     COMMAND "${CMAKE_COMMAND}" -E env
         "AEGISUB_DEPENDENCY_CONTROL_STATE_ROOT=${CMAKE_CURRENT_BINARY_DIR}/dependency-control-lua-smoke/$<CONFIG>/state"
         "$<TARGET_FILE:Aegisub>"
-        --cli session automation
-        --script "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/fixtures/dependency-control-transport-limits.lua"
-        --macro "DependencyControl transport limits smoke"
-        --trace-dir "${CMAKE_CURRENT_BINARY_DIR}/dependency-control-transport-limits-smoke/$<CONFIG>"
+        --headless run
+        --scenario "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/scenarios/dependency-control-transport-limits.json"
+        --artifacts "${CMAKE_CURRENT_BINARY_DIR}/dependency-control-transport-limits-smoke/$<CONFIG>"
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:Aegisub>"
     DEPENDS Aegisub
     COMMENT "Running the DependencyControl Lua facade end-to-end smoke"
@@ -736,10 +734,9 @@ add_custom_target(run-aegisub-dependency-control-nativeaot-smoke
         "AEGISUB_DOTNET_ROOT=${_aegisub_dependency_control_nativeaot_isolation_dir}/missing-dotnet-root"
         "AEGISUB_DEPENDENCY_CONTROL_STATE_ROOT=${_aegisub_dependency_control_nativeaot_isolation_dir}/state"
         "$<TARGET_FILE:Aegisub>"
-        --cli session automation
-        --script "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/fixtures/dependency-control-lua-compat.lua"
-        --macro "DependencyControl Lua compatibility smoke"
-        --trace-dir "${_aegisub_dependency_control_nativeaot_isolation_dir}/trace"
+        --headless run
+        --scenario "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/scenarios/dependency-control-compat.json"
+        --artifacts "${_aegisub_dependency_control_nativeaot_isolation_dir}/trace"
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:Aegisub>"
     DEPENDS Aegisub
     COMMENT "Running the DependencyControl NativeAOT-only smoke without CoreCLR"

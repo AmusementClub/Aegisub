@@ -4,11 +4,11 @@
     "Managed snapshot fixture": {
       "commandName": "Project"
     },
-    "Aegisub CLI integration": {
+    "Aegisub headless integration": {
       "commandName": "Executable",
       "executablePath": "../../build-dir/RelWithDebInfo/Aegisub.exe",
       "workingDirectory": "../../build-dir/RelWithDebInfo",
-      "commandLineArgs": "--cli session automation --script automation/autoload/CSharpBridgeDemo.aegisub-plugin.json --macro aegisub.plugin-bridge.demo.trim-selected-line-endings --subtitle ../../tests/plugin-bridge-smoke/trim-selected-input.ass --output-subtitle ../../obj/csharp-debug-output.ass --selection 7 --active-row 7 --trace-dir ../../obj/csharp-cli-debug",
+      "commandLineArgs": "--headless run --scenario ../../tests/plugin-bridge-smoke/scenarios/trim-selected-batch.json --input script=automation/autoload/CSharpBridgeDemo.aegisub-plugin.json --input subtitle=../../tests/plugin-bridge-smoke/trim-selected-input.ass --input output=../../obj/csharp-debug-output.ass --artifacts ../../obj/csharp-headless-debug --keep-profile",
       "environmentVariables": {
         "AEGISUB_CSHARP_CONTEXT_DUMP": "../../obj/csharp-debug-context.json",
         "AEGISUB_CSHARP_DEBUG_WAIT_SECONDS": "120"

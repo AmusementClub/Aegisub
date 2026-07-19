@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "plugin-bridge-query-state",
+  "hosts": ["headless"],
+  "resources": {
+    "script": ""
+  },
+  "steps": [
+    {
+      "action": "run_automation",
+      "script": "script",
+      "macro": "aegisub.plugin-bridge.demo.trim-selected-line-endings"
+    }
+  ]
+}

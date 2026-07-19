@@ -7,11 +7,11 @@
       "workingDirectory": "..",
       "commandLineArgs": "run --project \"__AEGISUB_DEVHOST_PROJECT__\" -- --assembly \"bin/Debug/net10.0/AegisubExtension.dll\" --type \"AegisubExtension.ExtensionModule\" --macro \"sample.extension.hello\" --context \"fixtures/context.json\""
     },
-    "Aegisub CLI integration": {
+    "Aegisub headless integration": {
       "commandName": "Executable",
       "executablePath": "__AEGISUB_DEVELOPMENT_ROOT__/Aegisub.exe",
       "workingDirectory": "__AEGISUB_DEVELOPMENT_ROOT__",
-      "commandLineArgs": "--cli session automation --script automation/autoload/sample.extension.aegisub-plugin.json --macro sample.extension.hello --trace-dir ../../obj/sample.extension-cli-debug",
+      "commandLineArgs": "--headless run --scenario automation/autoload/sample.extension/aegisub-automation.json --artifacts ../../obj/sample.extension-headless-debug --keep-profile",
       "environmentVariables": {
         "AEGISUB_CSHARP_CONTEXT_DUMP": "../../obj/sample.extension-debug-context.json",
         "AEGISUB_CSHARP_DEBUG_WAIT_SECONDS": "120"

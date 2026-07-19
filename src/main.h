@@ -30,9 +30,12 @@
 #include <wx/app.h>
 
 #include <memory>
+#include <optional>
 
 #include "aegisublocale.h"
+#include "app_launch_plan.h"
 #include "app_runtime.h"
+#include "automation_runtime_profile.h"
 #include "ui_dispatch.h"
 
 #include <string>
@@ -85,6 +88,13 @@ public:
 
 private:
 	std::unique_ptr<AppRuntime> runtime;
+	std::optional<AppLaunchPlan> launch_plan;
+	std::unique_ptr<AutomationRuntimeProfile> automation_profile;
+	std::optional<int> gui_test_exit_code;
+	bool gui_test_close_scheduled = false;
+
+	void StartGuiTest();
+	void ScheduleGuiTestClose();
 };
 
 wxDECLARE_APP(AegisubApp);

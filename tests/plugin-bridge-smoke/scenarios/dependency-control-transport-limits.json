@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "dependency-control-transport-limits",
+  "hosts": ["headless"],
+  "resources": {
+    "script": "../fixtures/dependency-control-transport-limits.lua"
+  },
+  "steps": [
+    {
+      "action": "run_automation",
+      "script": "script",
+      "macro": "DependencyControl transport limits smoke"
+    }
+  ]
+}

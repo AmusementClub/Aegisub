@@ -11,7 +11,7 @@ translated names or C# type names.
 The project includes three IDE launch profiles:
 
 - `Managed fixture` runs the Macro in the standalone DevHost.
-- `Aegisub CLI integration` runs a repeatable real-host integration session.
+- `Aegisub headless integration` runs a repeatable real-host integration scenario.
 - `Aegisub GUI integration` starts the normal wx host for menu and UI checks.
 
 A Debug build deploys the DLL, PDB, dependencies, and manifest when

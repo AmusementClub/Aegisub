@@ -4,6 +4,7 @@
 #include <functional>
 #include <future>
 #include <mutex>
+#include <stdexcept>
 #include <utility>
 #include <vector>
 
@@ -18,6 +19,7 @@ std::mutex g_mutex;
 std::uint64_t g_generation = 0;
 Snapshot g_snapshot;
 SnapshotFuture g_inflight;
+bool g_shutdown = false;
 // Retired async futures that must not be destroyed under g_mutex (MSVC STL
 // blocks on the last async shared_future destructor). Incomplete futures stay
 // here until they are ready so Invalidate remains non-blocking.
@@ -61,7 +63,7 @@ SnapshotFuture StartBuildLocked(std::uint64_t generation) {
 	return std::async(std::launch::async, [generation, builder = std::move(builder)]() {
 		auto built = std::make_shared<FontFamilyCatalog const>(builder());
 		std::lock_guard lock(g_mutex);
-		if (generation == g_generation) {
+		if (!g_shutdown && generation == g_generation) {
 			// Only publish if this build still matches the current generation.
 			g_snapshot = built;
 		}
@@ -72,6 +74,8 @@ SnapshotFuture StartBuildLocked(std::uint64_t generation) {
 }
 
 SnapshotFuture EnsureInflightLocked() {
+	if (g_shutdown)
+		throw std::logic_error("Font family catalog cache is shut down");
 	if (g_snapshot) {
 		// Already published; synthesize a ready future for callers that wait.
 		std::promise<Snapshot> ready;
@@ -101,7 +105,7 @@ std::shared_ptr<FontFamilyCatalog const> GetSnapshot() {
 
 void WarmAsync() {
 	std::lock_guard lock(g_mutex);
-	if (g_snapshot)
+	if (g_shutdown || g_snapshot)
 		return;
 	ReapRetiredLocked();
 	if (!g_inflight.valid())
@@ -116,6 +120,8 @@ void Invalidate() {
 	// Keep unfinished futures in g_retired so Invalidate itself never blocks;
 	// only reaped when already ready.
 	std::lock_guard lock(g_mutex);
+	if (g_shutdown)
+		return;
 	++g_generation;
 	g_snapshot.reset();
 	RetireInflightLocked();
@@ -126,12 +132,37 @@ std::shared_ptr<FontFamilyCatalog const> Rebuild() {
 	return GetSnapshot();
 }
 
+void Shutdown() {
+	std::vector<SnapshotFuture> futures;
+	{
+		std::lock_guard lock(g_mutex);
+		if (g_shutdown)
+			return;
+		g_shutdown = true;
+		++g_generation;
+		g_snapshot.reset();
+		if (g_inflight.valid())
+			futures.push_back(std::move(g_inflight));
+		g_inflight = {};
+		for (auto& future : g_retired)
+			futures.push_back(std::move(future));
+		g_retired.clear();
+	}
+	// Explicitly wait rather than relying on last-reference destruction: a
+	// concurrent GetSnapshot caller may still hold another shared_future.
+	for (auto const& future : futures) {
+		if (future.valid())
+			future.wait();
+	}
+}
+
 namespace testing {
 
 void Reset() {
 	std::vector<SnapshotFuture> futures;
 	{
 		std::lock_guard lock(g_mutex);
+		g_shutdown = false;
 		++g_generation;
 		g_snapshot.reset();
 		if (g_inflight.valid())

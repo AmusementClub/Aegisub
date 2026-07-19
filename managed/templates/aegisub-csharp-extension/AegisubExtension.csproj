@@ -49,6 +49,8 @@
       <_AegisubDevelopmentFile Include="$(TargetDir)$(AssemblyName).deps.json"
                                DestinationSubPath="$(AssemblyName).deps.json"
                                Condition="Exists('$(TargetDir)$(AssemblyName).deps.json')" />
+      <_AegisubDevelopmentFile Include="$(MSBuildProjectDirectory)/fixtures/aegisub-automation.json"
+                               DestinationSubPath="aegisub-automation.json" />
       <_AegisubDevelopmentFile Include="@(ReferenceCopyLocalPaths)"
                                DestinationSubPath="%(ReferenceCopyLocalPaths.DestinationSubDirectory)%(ReferenceCopyLocalPaths.Filename)%(ReferenceCopyLocalPaths.Extension)"
                                Exclude="$(TargetDir)Aegisub.Managed.Contracts.dll;$(TargetDir)Aegisub.Managed.Contracts.pdb" />

@@ -66,6 +66,7 @@ struct AutomationSessionRequest {
 	int active_row = 0;
 	Automation4::AutomationDebugLaunchRequest debug;
 	std::shared_ptr<Automation4::AutomationDebugSession> debug_session;
+	bool emit_console_report = true;
 };
 
 struct AutomationSessionResult {

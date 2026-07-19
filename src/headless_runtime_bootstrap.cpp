@@ -15,21 +15,35 @@
 
 #include "headless_runtime_bootstrap.h"
 
+#include "app_launch_plan.h"
 #include "app_runtime.h"
+#include "automation_process_supervisor.h"
+#include "automation_runtime_profile.h"
+#include "automation_scenario.h"
+#include "automation_scenario_runner.h"
+#include "headless_automation_cli.h"
 #include "headless_cli_execute.h"
 #include "headless_cli_parse.h"
 #include "headless_playback_probe.h"
+#include "automation_session_service.h"
 #include "options.h"
 #include "threaded_ui_timer.h"
 #include "ui_services.h"
 
+#include <libaegisub/cajun/elements.h>
+#include <libaegisub/cajun/writer.h>
 #include <libaegisub/dispatch.h>
+#include <libaegisub/fs.h>
+#include <libaegisub/io.h>
+#include <libaegisub/path.h>
 
 #include <condition_variable>
 #include <deque>
 #include <iostream>
 #include <mutex>
 #include <optional>
+#include <sstream>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -119,11 +133,15 @@ class HeadlessRuntimeEnvironment {
 	HeadlessNotificationSink notification_sink;
 
 public:
-	bool Initialize(std::string& error) {
+	bool Initialize(
+		std::string& error,
+		RuntimePathOverrides path_overrides = {},
+		bool initialize_commands = false) {
 		try {
 			AppRuntimeInitOptions options;
 			options.shell_mode = RuntimeShellMode::Headless;
 			options.locale_policy = RuntimeLocalePolicy::UseConfiguredOrEnglish;
+			options.path_overrides = std::move(path_overrides);
 			options.main_queue_hooks = {
 				[this](agi::dispatch::Thunk thunk) {
 					main_thread_pump.Post(std::move(thunk));
@@ -137,7 +155,7 @@ public:
 			};
 			options.ui_timer_host = CreateThreadedUiTimerHost();
 			options.load_global_scripts = false;
-			options.initialize_commands = false;
+			options.initialize_commands = initialize_commands;
 			options.initialize_ui_locale = false;
 			options.register_automation_script_factory = true;
 			options.warm_subtitles_provider_font_cache = false;
@@ -175,6 +193,30 @@ private:
 };
 
 template<typename Result, typename Start>
+Result RunAsyncWithPump(HeadlessMainThreadPump& pump, Start&& start);
+
+aegisub::automation_scenario_runner::Result RunHeadlessScenario(
+	HeadlessRuntimeEnvironment& runtime,
+	aegisub::automation_scenario::Scenario const& scenario,
+	agi::fs::path const& artifacts,
+	aegisub::automation_scenario_runner::StepObserver observe_step = {}) {
+	return aegisub::automation_scenario_runner::Run(
+		scenario,
+		"headless",
+		artifacts,
+		[&](auto request) {
+			return RunAsyncWithPump<aegisub::automation_session_service::AutomationSessionResult>(
+				runtime.MainThreadPump(),
+				[request = std::move(request)](auto&& on_done) mutable {
+					aegisub::automation_session_service::RunAsync(
+						std::move(request), std::forward<decltype(on_done)>(on_done));
+				});
+		},
+		{},
+		std::move(observe_step));
+}
+
+template<typename Result, typename Start>
 Result RunAsyncWithPump(HeadlessMainThreadPump& pump, Start&& start) {
 	std::mutex mutex;
 	std::optional<Result> result;
@@ -194,6 +236,264 @@ Result RunAsyncWithPump(HeadlessMainThreadPump& pump, Start&& start) {
 
 	std::lock_guard<std::mutex> lock(mutex);
 	return std::move(*result);
+}
+
+int WriteHeadlessScenarioResult(
+	json::Object const& output,
+	agi::fs::path const& artifacts) {
+	std::ostringstream json_output;
+	agi::JsonWriter::Write(output, json_output);
+	std::cout << json_output.str() << std::endl;
+
+	try {
+		auto result_path = artifacts / agi::fs::PathFromString("result.json");
+		auto result_stream = agi::io::Save(result_path);
+		agi::JsonWriter::Write(output, result_stream.Get());
+		return 0;
+	}
+	catch (std::exception const& e) {
+		ReportHeadlessError("scenario-result", e.what());
+		return 2;
+	}
+}
+
+json::Object BuildHeadlessFailureOutput(
+	std::string const& scenario_name,
+	agi::fs::path const& profile,
+	agi::fs::path const& artifacts,
+	int exit_code,
+	std::string const& error,
+	std::string const& error_kind,
+	std::string const& phase,
+	bool timed_out = false,
+	std::optional<std::size_t> step_index = std::nullopt) {
+	aegisub::automation_scenario_runner::Result execution;
+	execution.exit_code = exit_code;
+	execution.passed = false;
+	json::Object step;
+	step["error"] = error;
+	step["error_kind"] = error_kind;
+	step["phase"] = phase;
+	if (timed_out)
+		step["timed_out"] = true;
+	if (step_index)
+		step["step_index"] = static_cast<int64_t>(*step_index);
+	execution.steps.emplace_back(std::move(step));
+	return aegisub::automation_scenario_runner::SerializeResult(
+		scenario_name,
+		"headless",
+		std::move(execution),
+		profile,
+		artifacts);
+}
+
+bool PrintHeadlessScenarioResult(agi::fs::path const& artifacts) {
+	try {
+		auto stream = agi::io::Open(
+			artifacts / agi::fs::PathFromString("result.json"));
+		std::cout << stream->rdbuf() << std::endl;
+		return true;
+	}
+	catch (...) {
+		return false;
+	}
+}
+
+int FinishHeadlessWorker(
+	AutomationRuntimeProfile& profile,
+	json::Object output,
+	bool passed,
+	int exit_code,
+	agi::fs::path const& control_directory) {
+	if (auto const write_result = WriteHeadlessScenarioResult(
+		output, profile.ArtifactsDirectory())) {
+		// Still emit the shutdown marker so the parent leaves the teardown budget.
+		try {
+			aegisub::automation_process_supervisor::MarkWorkerShutdownComplete(
+				control_directory);
+		}
+		catch (...) {
+		}
+		profile.Complete(false);
+		return write_result;
+	}
+
+	try {
+		aegisub::automation_process_supervisor::MarkWorkerShutdownComplete(
+			control_directory);
+	}
+	catch (std::exception const& e) {
+		ReportHeadlessError("automation-worker-marker", e.what());
+	}
+
+	profile.Complete(passed);
+	return passed ? 0 : exit_code == 0 ? 1 : exit_code;
+}
+
+int RunNewHeadlessAutomationWorker(
+	aegisub::headless_automation_cli::RunRequest const& request,
+	aegisub::automation_scenario::Scenario const& scenario,
+	AutomationRuntimeProfile& profile) {
+	auto const control_directory = profile.ArtifactsDirectory()
+		/ agi::fs::PathFromString(".automation-control");
+	aegisub::automation_scenario_runner::Result execution;
+	std::string runtime_error;
+	std::string worker_error;
+	std::string failure_phase;
+	bool runtime_ready_marked = false;
+
+	{
+		HeadlessRuntimeEnvironment runtime;
+		if (!runtime.Initialize(runtime_error, profile.PathOverrides(), false)) {
+			ReportHeadlessError("headless-init", runtime_error);
+			failure_phase = "init";
+		}
+		else {
+			try {
+				aegisub::automation_process_supervisor::MarkRuntimeReady(control_directory);
+				runtime_ready_marked = true;
+				execution = RunHeadlessScenario(
+					runtime,
+					scenario,
+					profile.ArtifactsDirectory(),
+					[control_directory](std::size_t index, bool started) {
+						aegisub::automation_process_supervisor::MarkStep(
+							control_directory, index, started);
+					});
+			}
+			catch (std::exception const& e) {
+				ReportHeadlessError("automation-worker", e.what());
+				worker_error = e.what();
+				failure_phase = "scenario";
+			}
+			catch (...) {
+				ReportHeadlessError("automation-worker", "unknown automation worker failure");
+				worker_error = "unknown automation worker failure";
+				failure_phase = "scenario";
+			}
+		}
+
+		// Scenario work is finished (success, schema failure, or caught exception).
+		// Switch the supervisor onto the long teardown budget *before* destroying
+		// the runtime — including paths that never wrote step-N-done.
+		if (runtime_ready_marked) {
+			try {
+				aegisub::automation_process_supervisor::MarkWorkerScenarioComplete(
+					control_directory);
+			}
+			catch (std::exception const& e) {
+				ReportHeadlessError("automation-worker-marker", e.what());
+			}
+		}
+		// Leaving this scope tears down HeadlessRuntimeEnvironment (managed
+		// plugins / CoreCLR / font cache / dispatch). Supervisor uses the
+		// teardown budget until worker-shutdown-complete below.
+	}
+
+	if (!failure_phase.empty()) {
+		auto const exit_code = 2;
+		auto output = BuildHeadlessFailureOutput(
+			scenario.name,
+			profile.Root(),
+			profile.ArtifactsDirectory(),
+			exit_code,
+			failure_phase == "init" ? runtime_error : worker_error,
+			failure_phase == "init" ? "init" : "runtime",
+			failure_phase);
+		return FinishHeadlessWorker(
+			profile, std::move(output), false, exit_code, control_directory);
+	}
+
+	auto const passed = execution.passed;
+	auto const exit_code = execution.exit_code;
+	auto output = aegisub::automation_scenario_runner::SerializeResult(
+		scenario.name,
+		"headless",
+		std::move(execution),
+		profile.Root(),
+		profile.ArtifactsDirectory());
+	return FinishHeadlessWorker(
+		profile, std::move(output), passed, exit_code, control_directory);
+}
+
+int RunNewHeadlessAutomation(
+	aegisub::headless_automation_cli::RunRequest const& request,
+	std::vector<std::string> const& original_args) {
+	auto scenario_result = aegisub::automation_scenario::Load(request.scenario_path, request.inputs);
+	if (!scenario_result.scenario) {
+		ReportHeadlessError("scenario-parse", scenario_result.error);
+		return 64;
+	}
+
+	std::string profile_error;
+	auto profile = AutomationRuntimeProfile::Create(
+		AutomationRuntimeProfileOptions{
+			request.profile_directory,
+			request.artifacts_directory,
+			request.keep_profile},
+		profile_error);
+	if (profile.Root().empty()) {
+		ReportHeadlessError("automation-profile", profile_error);
+		return 2;
+	}
+
+	if (request.internal_worker)
+		return RunNewHeadlessAutomationWorker(
+			request, *scenario_result.scenario, profile);
+
+	auto worker_args = original_args;
+	worker_args.emplace_back("--automation-worker");
+	worker_args.emplace_back("--profile-dir");
+	worker_args.emplace_back(agi::fs::PathToString(profile.Root()));
+	worker_args.emplace_back("--artifacts");
+	worker_args.emplace_back(agi::fs::PathToString(profile.ArtifactsDirectory()));
+
+	auto const control_directory = profile.ArtifactsDirectory()
+		/ agi::fs::PathFromString(".automation-control");
+	auto supervised = aegisub::automation_process_supervisor::Run(
+		worker_args,
+		control_directory,
+		scenario_result.scenario->default_timeout_ms,
+		scenario_result.scenario->steps.size());
+	if (supervised.timed_out || !supervised.started) {
+		auto output = BuildHeadlessFailureOutput(
+			scenario_result.scenario->name,
+			profile.Root(),
+			profile.ArtifactsDirectory(),
+			supervised.timed_out ? 1 : 2,
+			supervised.error.empty()
+				? (supervised.timed_out
+					? "automation worker timed out"
+					: "automation worker failed to start")
+				: supervised.error,
+			supervised.timed_out ? "timeout" : "start",
+			supervised.phase.empty()
+				? (supervised.timed_out ? "unknown" : "start")
+				: supervised.phase,
+			supervised.timed_out,
+			supervised.step_index);
+		if (WriteHeadlessScenarioResult(output, profile.ArtifactsDirectory()) == 2)
+			supervised.exit_code = 2;
+		profile.Complete(false);
+		return supervised.exit_code;
+	}
+
+	if (!PrintHeadlessScenarioResult(profile.ArtifactsDirectory())) {
+		auto output = BuildHeadlessFailureOutput(
+			scenario_result.scenario->name,
+			profile.Root(),
+			profile.ArtifactsDirectory(),
+			2,
+			"automation worker exited without writing result.json",
+			"missing_result",
+			supervised.phase.empty() ? "exit" : supervised.phase);
+		WriteHeadlessScenarioResult(output, profile.ArtifactsDirectory());
+		profile.Complete(false);
+		return 2;
+	}
+
+	profile.Complete(supervised.exit_code == 0);
+	return supervised.exit_code;
 }
 
 int RunParsedHeadlessCli(HeadlessRuntimeEnvironment& runtime, headless_cli::ParseResult const& parsed) {
@@ -279,14 +579,22 @@ int RunParsedLegacyProbe(HeadlessRuntimeEnvironment& runtime, headless_playback_
 
 }
 
-bool IsHeadlessCommandLine(std::vector<std::string> const& args) {
-	auto const cli_parse = headless_cli::ParseCommandLine(args);
-	if (cli_parse.requested)
-		return true;
-	return headless_playback_probe::ParseCommandLine(args).requested;
-}
+int RunHeadlessLaunchPlan(AppLaunchPlan const& plan) {
+	if (!plan.RequestedHeadless())
+		return 1;
 
-int RunHeadlessCommandLine(std::vector<std::string> const& args) {
+	auto const& args = plan.legacy_headless_args.empty()
+		? plan.original_args
+		: plan.legacy_headless_args;
+	if (plan.legacy_headless_args.empty()
+		&& args.size() > 1 && args[1] == "--headless") {
+		if (!plan.headless_run) {
+			std::cerr << plan.error << std::endl;
+			return 64;
+		}
+		return RunNewHeadlessAutomation(*plan.headless_run, args);
+	}
+
 	auto const cli_parse = headless_cli::ParseCommandLine(args);
 	if (cli_parse.requested) {
 		if (!cli_parse.command) {

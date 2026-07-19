@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "name": "plugin-bridge-trim-selected-batch",
+  "hosts": ["headless"],
+  "resources": {
+    "script": "",
+    "subtitle": "",
+    "output": ""
+  },
+  "steps": [
+    {
+      "action": "run_automation",
+      "script": "script",
+      "subtitle": "subtitle",
+      "output_subtitle": "output",
+      "selection": [7, 8],
+      "active_row": 7,
+      "macro": "aegisub.plugin-bridge.demo.trim-selected-line-endings"
+    }
+  ]
+}

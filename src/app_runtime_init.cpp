@@ -36,8 +36,12 @@
 #include <istream>
 #include <memory>
 
-void InitializeRuntimePathsAndOptions() {
+void InitializeRuntimePathsAndOptions(AppRuntimeInitOptions const& options) {
 	config::path = new agi::Path;
+	if (options.path_overrides.user_directory)
+		config::path->SetToken("?user", *options.path_overrides.user_directory);
+	if (options.path_overrides.local_directory)
+		config::path->SetToken("?local", *options.path_overrides.local_directory);
 	crash_writer::Initialize(config::path->Decode("?user"));
 
 	if (!agi::log::log) {
@@ -48,6 +52,7 @@ void InitializeRuntimePathsAndOptions() {
 	}
 
 #ifdef __WXMSW__
+	if (options.path_overrides.allow_portable_config) {
 	try {
 		auto conf_local(config::path->Decode("?data/config.json"));
 		std::unique_ptr<std::istream> local_config(agi::io::Open(conf_local));
@@ -57,6 +62,7 @@ void InitializeRuntimePathsAndOptions() {
 		crash_writer::Initialize(config::path->Decode("?user"));
 	}
 	catch (agi::fs::FileSystemError const&) {
+	}
 	}
 #endif
 

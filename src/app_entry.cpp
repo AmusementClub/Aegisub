@@ -14,6 +14,7 @@
 // PERFORMANCE OF THIS SOFTWARE.
 
 #include "headless_process_entry.h"
+#include "app_launch_plan.h"
 #include "perf_trace.h"
 
 #include <chrono>
@@ -114,11 +115,12 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wxCm
 	};
 
 	auto const args = CurrentProcessArgs();
+	auto const launch_plan = ParseAppLaunchPlan(args);
 	observe_phase("startup.entry.capture_process_args");
-	if (IsHeadlessEntryCommandLine(args)) {
+	if (launch_plan.RequestedHeadless()) {
 		observe_phase("startup.entry.headless_command_check");
 		EnsureHeadlessConsoleStreams();
-		return RunHeadlessCommandLineInPlainProcessHost(args);
+		return RunHeadlessLaunchPlanInPlainProcessHost(launch_plan);
 	}
 	observe_phase("startup.entry.headless_command_check");
 	observe_phase("startup.entry.before_wx_entry");
@@ -144,10 +146,11 @@ int main(int argc, char** argv) {
 	args.reserve(argc);
 	for (int i = 0; i < argc; ++i)
 		args.emplace_back(argv[i]);
+	auto const launch_plan = ParseAppLaunchPlan(args);
 	observe_phase("startup.entry.capture_process_args");
 
-	if (IsHeadlessEntryCommandLine(args))
-		return RunHeadlessCommandLineInPlainProcessHost(args);
+	if (launch_plan.RequestedHeadless())
+		return RunHeadlessLaunchPlanInPlainProcessHost(launch_plan);
 	observe_phase("startup.entry.headless_command_check");
 	observe_phase("startup.entry.before_wx_entry");
 

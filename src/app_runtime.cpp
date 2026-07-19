@@ -16,6 +16,7 @@
 #include "app_runtime.h"
 #include "app_runtime_facilities.h"
 #include "app_runtime_init.h"
+#include "font_family_catalog_cache.h"
 #include "ui_timer.h"
 
 #include "command/command.h"
@@ -94,6 +95,8 @@ void InitializeCommandsAndLocale(AppRuntimeInitOptions const& options, AegisubLo
 }
 
 void CleanupRuntime() {
+	font_family_catalog_cache::Shutdown();
+
 	if (runtime_commands_initialized) {
 		hotkey::clear();
 		cmd::clear();
@@ -143,7 +146,7 @@ public:
 
 			current_shell_mode = options.shell_mode;
 
-			InitializeRuntimePathsAndOptions();
+			InitializeRuntimePathsAndOptions(options);
 			auto const paths_and_options_ms = finish_phase();
 			InitializeRuntimeLoggingAndPerfTrace();
 			auto const logging_and_perf_trace_ms = finish_phase();

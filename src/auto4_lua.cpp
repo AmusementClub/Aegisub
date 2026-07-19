@@ -1290,9 +1290,15 @@ namespace {
 					new_active = &*it;
 			}
 
-			if (new_sel.empty() && !core.ass->Events.empty())
-				new_sel.insert(&core.ass->Events.front());
-			if (!new_sel.count(new_active))
+			if (new_sel.empty()) {
+				if (!core.ass->Events.empty()) {
+					new_active = &core.ass->Events.front();
+					new_sel.insert(new_active);
+				}
+				else
+					new_active = nullptr;
+			}
+			else if (!new_sel.count(new_active))
 				new_active = *new_sel.begin();
 			core.selectionController->SetSelectionAndActive(std::move(new_sel), new_active);
 		}

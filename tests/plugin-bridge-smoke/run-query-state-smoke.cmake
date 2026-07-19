@@ -11,6 +11,27 @@ endif()
 file(REMOVE_RECURSE "${SMOKE_DIR}")
 file(MAKE_DIRECTORY "${SMOKE_DIR}")
 set(invalid_runtime_root "${SMOKE_DIR}/missing-dotnet-root")
+set(runtime_info_scenario "${CMAKE_CURRENT_LIST_DIR}/scenarios/runtime-info.json")
+set(query_state_scenario "${CMAKE_CURRENT_LIST_DIR}/scenarios/query-state.json")
+
+function(run_automation_scenario scenario_file script_file trace_dir dotnet_root result_var stdout_var stderr_var)
+    set(command
+        "${AEGISUB_EXE}"
+        --headless run
+        --scenario "${scenario_file}"
+        --input "script=${script_file}"
+        --artifacts "${trace_dir}")
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E env
+            "AEGISUB_DOTNET_ROOT=${dotnet_root}"
+            ${command}
+        RESULT_VARIABLE local_result
+        OUTPUT_VARIABLE local_stdout
+        ERROR_VARIABLE local_stderr)
+    set(${result_var} "${local_result}" PARENT_SCOPE)
+    set(${stdout_var} "${local_stdout}" PARENT_SCOPE)
+    set(${stderr_var} "${local_stderr}" PARENT_SCOPE)
+endfunction()
 
 function(assert_contains value expected description)
     string(FIND "${value}" "${expected}" match)
@@ -21,18 +42,9 @@ endfunction()
 
 set(guarded_trace_dir "${SMOKE_DIR}/guarded")
 file(MAKE_DIRECTORY "${guarded_trace_dir}")
-execute_process(
-    COMMAND "${CMAKE_COMMAND}" -E env
-        "AEGISUB_DOTNET_ROOT=${invalid_runtime_root}"
-        "${AEGISUB_EXE}"
-        --cli session automation
-        --script "${SCRIPT_FILE}"
-        --macro aegisub.plugin-bridge.demo.trim-selected-line-endings
-        --trace-dir "${guarded_trace_dir}"
-    RESULT_VARIABLE guarded_result
-    OUTPUT_VARIABLE guarded_stdout
-    ERROR_VARIABLE guarded_stderr
-)
+run_automation_scenario(
+    "${query_state_scenario}" "${SCRIPT_FILE}" "${guarded_trace_dir}"
+    "${invalid_runtime_root}" guarded_result guarded_stdout guarded_stderr)
 if(NOT guarded_result EQUAL 41)
     message(FATAL_ERROR
         "Native QueryState guard returned ${guarded_result}, expected 41\n"
@@ -59,18 +71,9 @@ endif()
 # than merely an expected validation result.
 set(unconditional_trace_dir "${SMOKE_DIR}/unconditional")
 file(MAKE_DIRECTORY "${unconditional_trace_dir}")
-execute_process(
-    COMMAND "${CMAKE_COMMAND}" -E env
-        "AEGISUB_DOTNET_ROOT=${invalid_runtime_root}"
-        "${AEGISUB_EXE}"
-        --cli session automation
-        --script "${SCRIPT_FILE}"
-        --macro aegisub.plugin-bridge.demo.runtime-info
-        --trace-dir "${unconditional_trace_dir}"
-    RESULT_VARIABLE unconditional_result
-    OUTPUT_VARIABLE unconditional_stdout
-    ERROR_VARIABLE unconditional_stderr
-)
+run_automation_scenario(
+    "${runtime_info_scenario}" "${SCRIPT_FILE}" "${unconditional_trace_dir}"
+    "${invalid_runtime_root}" unconditional_result unconditional_stdout unconditional_stderr)
 if(NOT unconditional_result EQUAL 43)
     message(FATAL_ERROR
         "Unconditional Runtime probe returned ${unconditional_result}, expected 43\n"
@@ -87,18 +90,9 @@ if(NOT EXISTS "${app_local_runtime_root}")
     file(MAKE_DIRECTORY "${app_local_runtime_root}")
     set(fallback_trace_dir "${SMOKE_DIR}/app-local-fallback")
     file(MAKE_DIRECTORY "${fallback_trace_dir}")
-    execute_process(
-        COMMAND "${CMAKE_COMMAND}" -E env
-            "AEGISUB_DOTNET_ROOT="
-            "${AEGISUB_EXE}"
-            --cli session automation
-            --script "${SCRIPT_FILE}"
-            --macro aegisub.plugin-bridge.demo.runtime-info
-            --trace-dir "${fallback_trace_dir}"
-        RESULT_VARIABLE fallback_result
-        OUTPUT_VARIABLE fallback_stdout
-        ERROR_VARIABLE fallback_stderr
-    )
+    run_automation_scenario(
+        "${runtime_info_scenario}" "${SCRIPT_FILE}" "${fallback_trace_dir}"
+        "" fallback_result fallback_stdout fallback_stderr)
     file(REMOVE_RECURSE "${app_local_runtime_root}")
     if(NOT fallback_result EQUAL 0)
         message(FATAL_ERROR
@@ -125,16 +119,9 @@ file(COPY "${sample_manifest_dir}/CSharpBridgeDemo"
 file(READ "${SCRIPT_FILE}" valid_manifest)
 
 function(assert_manifest_rejected manifest expected description)
-    execute_process(
-        COMMAND "${AEGISUB_EXE}"
-            --cli session automation
-            --script "${manifest}"
-            --macro aegisub.plugin-bridge.demo.runtime-info
-            --trace-dir "${manifest}.trace"
-        RESULT_VARIABLE invalid_result
-        OUTPUT_VARIABLE invalid_stdout
-        ERROR_VARIABLE invalid_stderr
-    )
+    run_automation_scenario(
+        "${runtime_info_scenario}" "${manifest}" "${manifest}.trace"
+        "" invalid_result invalid_stdout invalid_stderr)
     if(NOT invalid_result EQUAL 40)
         message(FATAL_ERROR
             "${description} returned ${invalid_result}, expected 40\n"

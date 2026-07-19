@@ -41,6 +41,10 @@ if(GTEST_FOUND)
         tests/tests/font_name_normalization.cpp
         tests/tests/font_matching_libass.cpp
         tests/tests/time_display_mode.cpp
+        tests/tests/automation_process_supervisor.cpp
+        src/automation_process_supervisor.cpp
+        src/automation_scenario.cpp
+        src/automation_scenario_runner.cpp
         src/automation/automation_breakpoint_store.cpp
         src/automation/automation_debug_adapter.cpp
         src/automation/automation_debug_service.cpp

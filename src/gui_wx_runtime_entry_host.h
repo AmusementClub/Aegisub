@@ -35,4 +35,5 @@ void BindGuiWxMainQueueDispatchHandler(std::function<void()> on_exception);
 void RunGuiWxAppStartupSequence(
 	std::vector<std::string> const& args,
 	std::function<void()> create_project_context,
-	std::function<void(std::vector<std::string> const&)> open_files);
+	std::function<void(std::vector<std::string> const&)> open_files,
+	bool reload_global_scripts = true);

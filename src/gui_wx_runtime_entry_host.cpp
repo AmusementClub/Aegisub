@@ -86,7 +86,8 @@ void BindGuiWxMainQueueDispatchHandler(std::function<void()> on_exception) {
 void RunGuiWxAppStartupSequence(
 	std::vector<std::string> const& args,
 	std::function<void()> create_project_context,
-	std::function<void(std::vector<std::string> const&)> open_files) {
+	std::function<void(std::vector<std::string> const&)> open_files,
+	bool reload_global_scripts) {
 	auto phase_started = std::chrono::steady_clock::now();
 	auto observe_phase = [&](char const* phase) {
 		perf_trace::ObserveWindowOpenPhase(
@@ -134,7 +135,7 @@ void RunGuiWxAppStartupSequence(
 	}
 	observe_phase("startup.sequence.open_files");
 
-	if (config::global_scripts)
+	if (reload_global_scripts && config::global_scripts)
 		config::global_scripts->ReloadAsync();
 	observe_phase("startup.sequence.global_scripts.reload_async_schedule");
 }

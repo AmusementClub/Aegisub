@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "name": "plugin-bridge-trim-selected",
+  "hosts": ["headless"],
+  "resources": {
+    "script": "",
+    "subtitle": "",
+    "output": ""
+  },
+  "steps": [
+    {
+      "action": "run_automation",
+      "script": "script",
+      "subtitle": "subtitle",
+      "output_subtitle": "output",
+      "macro": "aegisub.plugin-bridge.demo.trim-selected-line-endings"
+    }
+  ]
+}

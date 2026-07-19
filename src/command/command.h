@@ -35,6 +35,8 @@ namespace agi { struct Context; }
 #define STR_DISP(a) wxString StrDisplay(const agi::Context *) const override { return _(a); }
 #define STR_HELP(a) wxString StrHelp() const override { return _(a); }
 #define CMD_TYPE(a) int Type() const override { using namespace cmd; return a; }
+#define CMD_HEADLESS_SAFE \
+	cmd::CommandExecutionScope AutomationScope() const noexcept override { return cmd::CommandExecutionScope::HeadlessSafe; }
 #define CMD_ICON(icon) \
 	wxBitmap Icon(int size, wxLayoutDirection dir = wxLayout_LeftToRight) const override { return CMD_ICON_GET(icon, dir, size); } \
 	wxBitmapBundle IconBundle(wxLayoutDirection dir = wxLayout_LeftToRight) const override { return CMD_ICON_BUNDLE_GET(icon, dir); }
@@ -85,6 +87,11 @@ DEFINE_EXCEPTION(CommandNotFound, CommandError);
 		COMMAND_DYNAMIC_ICON = 32
 	};
 
+	enum class CommandExecutionScope {
+		GuiOnly,
+		HeadlessSafe,
+	};
+
 	/// Holds an individual Command
 	class Command {
 	public:
@@ -132,6 +139,11 @@ DEFINE_EXCEPTION(CommandNotFound, CommandError);
 		/// This function should be overridden iff the command's type flags
 		/// include COMMAND_TOGGLE or COMMAND_RADIO
 		virtual bool IsActive(const agi::Context *c) { return false; }
+
+		/// Whether the command can execute without a populated UI context.
+		virtual CommandExecutionScope AutomationScope() const noexcept {
+			return CommandExecutionScope::GuiOnly;
+		}
 
 		/// Destructor
 		virtual ~Command() = default;

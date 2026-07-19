@@ -7,6 +7,7 @@
 #include "runtime_locale_host.h"
 
 #include <libaegisub/dispatch.h>
+#include <libaegisub/fs_fwd.h>
 
 #include <cstddef>
 #include <functional>
@@ -26,6 +27,12 @@ enum class RuntimeLocalePolicy {
 	UseConfiguredOrEnglish,
 };
 
+struct RuntimePathOverrides {
+	std::shared_ptr<agi::fs::path> user_directory;
+	std::shared_ptr<agi::fs::path> local_directory;
+	bool allow_portable_config = true;
+};
+
 struct AppRuntimeMainQueueHooks {
 	std::function<void(agi::dispatch::Thunk)> invoke_main;
 	std::function<bool()> is_main_thread;
@@ -35,6 +42,7 @@ struct AppRuntimeMainQueueHooks {
 struct AppRuntimeInitOptions {
 	RuntimeShellMode shell_mode = RuntimeShellMode::Unknown;
 	RuntimeLocalePolicy locale_policy = RuntimeLocalePolicy::UseConfiguredOrEnglish;
+	RuntimePathOverrides path_overrides;
 	AppRuntimeMainQueueHooks main_queue_hooks;
 	RuntimeLocaleHost locale_host;
 	bool load_global_scripts = false;

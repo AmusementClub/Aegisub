@@ -39,6 +39,9 @@
 
 #include "auto4_base.h"
 #include "app_runtime.h"
+#include "automation_command_executor.h"
+#include "automation_scenario.h"
+#include "automation_scenario_runner.h"
 #include "avisynth_provider_registration.h"
 #include "compat.h"
 #include "crash_writer.h"
@@ -53,13 +56,19 @@
 #include "subs_controller.h"
 #include "utils.h"
 #include <libaegisub/dispatch.h>
+#include <libaegisub/cajun/writer.h>
 #include <libaegisub/format_path.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/io.h>
 #include <libaegisub/log.h>
 #include <libaegisub/path.h>
 #include <libaegisub/util.h>
 
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
 #include <vector>
 #include <wx/arrstr.h>
 #include <wx/clipbrd.h>
@@ -141,6 +150,40 @@ bool AegisubApp::OnInit() {
 	SetAppName(wxS("aegisub"));
 #endif
 	observe_phase("startup.on_init.set_app_name");
+	auto const process_args = ToUtf8Args(argv.GetArguments());
+	launch_plan.emplace(ParseAppLaunchPlan(process_args));
+	if (launch_plan->mode == AppLaunchMode::GuiTest) {
+		if (!launch_plan->ParseSucceeded() || !launch_plan->gui_test_run) {
+			finish_startup_trace(false);
+			ShowGuiWxBootstrapUiError("Invalid GUI test command line", launch_plan->error);
+			return false;
+		}
+		std::string profile_error;
+		auto const& request = *launch_plan->gui_test_run;
+		automation_profile = std::make_unique<AutomationRuntimeProfile>(
+			AutomationRuntimeProfile::Create(
+				AutomationRuntimeProfileOptions{
+					request.profile_directory,
+					request.artifacts_directory,
+					request.keep_profile},
+				profile_error));
+		if (automation_profile->Root().empty()) {
+			finish_startup_trace(false);
+			ShowGuiWxBootstrapUiError("Could not create GUI test profile", profile_error);
+			return false;
+		}
+	}
+	auto record_gui_test_phase = [&](char const* phase) {
+		if (!automation_profile)
+			return;
+		try {
+			std::ofstream out(automation_profile->ArtifactsDirectory() / agi::fs::PathFromString("startup.log"), std::ios::app);
+			out << phase << "\n";
+		}
+		catch (...) {
+		}
+	};
+	record_gui_test_phase("launch-plan.ready");
 
 	BindGuiWxMainQueueDispatchHandler([this] { OnExceptionInMainLoop(); });
 	observe_phase("startup.on_init.bind_main_queue_handler");
@@ -149,6 +192,12 @@ bool AegisubApp::OnInit() {
 	observe_phase("startup.on_init.create_runtime");
 	std::string runtime_error;
 	auto runtime_options = BuildGuiWxAppRuntimeInitOptions();
+	if (automation_profile) {
+		runtime_options.path_overrides = automation_profile->PathOverrides();
+		runtime_options.locale_policy = RuntimeLocalePolicy::UseConfiguredOrEnglish;
+		runtime_options.load_global_scripts = true;
+	}
+	record_gui_test_phase("runtime-options.ready");
 	auto bootstrap_ui_host = runtime_options.bootstrap_ui_host;
 	runtime_options.bootstrap_ui_host = bootstrap_ui_host;
 	observe_phase("startup.on_init.build_runtime_options");
@@ -160,6 +209,12 @@ bool AegisubApp::OnInit() {
 		return false;
 	}
 	RegisterAvisynthProviderFactories();
+	if (automation_profile) {
+		OPT_SET("App/First Start")->SetBool(false);
+		OPT_SET("App/Auto/Check For Updates")->SetBool(false);
+		OPT_SET("App/Auto/Save")->SetBool(false);
+	}
+	record_gui_test_phase("runtime.initialized");
 	perf_trace::ObserveWindowOpenPhase("main", "startup.runtime.total", duration_ms(runtime_initialize_started));
 	phase_started = std::chrono::steady_clock::now();
 
@@ -188,7 +243,15 @@ bool AegisubApp::OnInit() {
 		StartupLog("Possibly perform automatic updates check");
 		StartupLog("Parse command line");
 		auto const startup_sequence_started = std::chrono::steady_clock::now();
-		RunGuiWxAppStartupSequence(ToUtf8Args(argv.GetArguments()),
+		auto startup_args = process_args;
+		if (launch_plan->mode == AppLaunchMode::GuiTest) {
+			startup_args.resize(1);
+			startup_args.insert(
+				startup_args.end(),
+				launch_plan->gui_test_open_files.begin(),
+				launch_plan->gui_test_open_files.end());
+		}
+		RunGuiWxAppStartupSequence(startup_args,
 			[this] { NewProjectContext(); },
 			[this](std::vector<std::string> const& files) {
 				std::vector<agi::fs::path> paths;
@@ -197,8 +260,12 @@ bool AegisubApp::OnInit() {
 					paths.push_back(PathFromUtf8(file));
 				if (!paths.empty())
 					frames[0]->context->GetCore().project->LoadList(paths);
-			});
+			},
+			launch_plan->mode != AppLaunchMode::GuiTest);
+		record_gui_test_phase("frame.created");
 		perf_trace::ObserveWindowOpenPhase("main", "startup.sequence.total", duration_ms(startup_sequence_started));
+		if (launch_plan->mode == AppLaunchMode::GuiTest)
+			CallAfter([this] { StartGuiTest(); });
 	}
 	catch (agi::Exception const& e) {
 		finish_startup_trace(false);
@@ -228,21 +295,147 @@ bool AegisubApp::OnInit() {
 	return true;
 }
 
+void AegisubApp::StartGuiTest() {
+	if (!automation_profile || !launch_plan || frames.empty())
+		return;
+
+	auto const artifacts = automation_profile->ArtifactsDirectory();
+	auto save_json = [&](std::string const& name, json::Object object) {
+		agi::fs::path temporary_path;
+		try {
+			auto final_path = artifacts / agi::fs::PathFromString(name);
+			temporary_path = agi::fs::UniquePath(
+				artifacts / agi::fs::PathFromString(name + ".tmp-%%%%%%%%"));
+			{
+				auto stream = agi::io::Save(temporary_path);
+				agi::JsonWriter::Write(object, stream.Get());
+				stream.Get().flush();
+			}
+			std::error_code error;
+			std::filesystem::remove(final_path, error);
+			std::filesystem::rename(temporary_path, final_path, error);
+			if (error)
+				throw std::system_error(error, "could not publish automation artifact");
+			return true;
+		}
+		catch (std::exception const& e) {
+			if (!temporary_path.empty()) {
+				std::error_code ignored;
+				std::filesystem::remove(temporary_path, ignored);
+			}
+			LOG_E("automation/gui_test") << "Could not save " << name << ": " << e.what();
+			return false;
+		}
+	};
+
+	json::Object ready;
+	ready["version"] = static_cast<int64_t>(1);
+	ready["host"] = "gui-test";
+	ready["state"] = "ready";
+	ready["process_id"] = static_cast<int64_t>(wxGetProcessId());
+	ready["window_title"] = from_wx(frames.front()->GetTitle());
+	ready["artifacts"] = agi::fs::PathToGenericString(artifacts);
+	if (!save_json("ready.json", std::move(ready))) {
+		gui_test_exit_code = 2;
+		ScheduleGuiTestClose();
+		return;
+	}
+
+	if (launch_plan->gui_test_host)
+		return;
+
+	auto const& request = *launch_plan->gui_test_run;
+	auto scenario_result = aegisub::automation_scenario::Load(request.scenario_path, request.inputs);
+	if (!scenario_result.scenario) {
+		json::Object failure;
+		failure["version"] = static_cast<int64_t>(1);
+		failure["host"] = "gui-test";
+		failure["passed"] = false;
+		failure["exit_code"] = static_cast<int64_t>(64);
+		failure["error"] = scenario_result.error;
+		save_json("result.json", std::move(failure));
+		gui_test_exit_code = 64;
+		ScheduleGuiTestClose();
+		return;
+	}
+
+	auto execution = aegisub::automation_scenario_runner::Run(
+		*scenario_result.scenario,
+		"gui-test",
+		artifacts,
+		{},
+		[context = frames.front()->context.get()](std::string const& command_id) {
+			return aegisub::automation_command_executor::Invoke(command_id, *context, true);
+		});
+	auto const passed = execution.passed;
+	auto const exit_code = execution.exit_code;
+	auto result = aegisub::automation_scenario_runner::SerializeResult(
+		scenario_result.scenario->name,
+		"gui-test",
+		std::move(execution),
+		automation_profile->Root(),
+		artifacts);
+	if (!save_json("result.json", std::move(result))) {
+		gui_test_exit_code = 2;
+		ScheduleGuiTestClose();
+		return;
+	}
+
+	gui_test_exit_code = passed ? 0 : (exit_code == 0 ? 1 : exit_code);
+	ScheduleGuiTestClose();
+}
+
+void AegisubApp::ScheduleGuiTestClose() {
+	if (gui_test_close_scheduled)
+		return;
+	gui_test_close_scheduled = true;
+	CallAfter([this] {
+		CallAfter([this] {
+			gui_test_close_scheduled = false;
+			CloseAll();
+		});
+	});
+}
+
 int AegisubApp::OnExit() {
+	auto record_exit_phase = [&](char const* phase) {
+		if (!automation_profile)
+			return;
+		try {
+			std::ofstream out(automation_profile->ArtifactsDirectory() / agi::fs::PathFromString("startup.log"), std::ios::app);
+			out << phase << "\n";
+		}
+		catch (...) {
+		}
+	};
+	record_exit_phase("exit.begin");
+	gui_test_close_scheduled = false;
+	record_exit_phase("exit.close-barrier-reset");
 	ui_activation.Deactivate();
+	record_exit_phase("exit.ui-deactivated");
 
 	for (auto frame : frames)
 		delete frame;
 	frames.clear();
+	record_exit_phase("exit.frames-cleared");
 
 	if (wxTheClipboard->Open()) {
 		wxTheClipboard->Flush();
 		wxTheClipboard->Close();
 	}
+	record_exit_phase("exit.clipboard-flushed");
 
 	runtime.reset();
+	record_exit_phase("exit.runtime-reset");
+	if (automation_profile) {
+		automation_profile->Complete(gui_test_exit_code.value_or(0) == 0);
+		record_exit_phase("exit.profile-complete");
+	}
 
-	return wxApp::OnExit();
+	auto result = wxApp::OnExit();
+	record_exit_phase("exit.wx-complete");
+	automation_profile.reset();
+	return result;
 }
 
 agi::Context& AegisubApp::NewProjectContext() {
@@ -255,6 +448,8 @@ agi::Context& AegisubApp::NewProjectContext() {
 
 		frames.erase(remove(begin(frames), end(frames), frame), end(frames));
 		if (frames.empty()) {
+			if (launch_plan && launch_plan->mode == AppLaunchMode::GuiTest && !gui_test_exit_code)
+				gui_test_exit_code = 0;
 			ExitMainLoop();
 		}
 	});
@@ -352,7 +547,8 @@ int AegisubApp::OnRun() {
 	std::string error;
 
 	try {
-		return MainLoop();
+		auto const result = MainLoop();
+		return gui_test_exit_code.value_or(result);
 	}
 	catch (const std::exception &e) { error = std::string("std::exception: ") + e.what(); }
 	catch (const agi::Exception &e) { error = "agi::exception: " + e.GetMessage(); }

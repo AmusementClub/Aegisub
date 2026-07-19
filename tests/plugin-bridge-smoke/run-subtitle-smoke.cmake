@@ -15,6 +15,7 @@ if(NOT DEFINED SMOKE_DIR)
 endif()
 
 file(MAKE_DIRECTORY "${SMOKE_DIR}")
+set(scenario_dir "${CMAKE_CURRENT_LIST_DIR}/scenarios")
 
 function(run_subtitle_case case_name input_file output_file expected_commit_count second_trimmed)
     set(trace_dir "${SMOKE_DIR}/${case_name}")
@@ -25,17 +26,19 @@ function(run_subtitle_case case_name input_file output_file expected_commit_coun
         "${trace_dir}/process.stdout.log"
         "${trace_dir}/process.stderr.log")
 
+    if(ARGC GREATER 5)
+        set(scenario_file "${scenario_dir}/trim-selected-batch.json")
+    else()
+        set(scenario_file "${scenario_dir}/trim-selected.json")
+    endif()
     set(command
         "${AEGISUB_EXE}"
-        --cli session automation
-        --script "${SCRIPT_FILE}"
-        --macro aegisub.plugin-bridge.demo.trim-selected-line-endings
-        --subtitle "${input_file}"
-        --output-subtitle "${output_file}"
-        --trace-dir "${trace_dir}")
-    if(ARGC GREATER 5)
-        list(APPEND command --selection "${ARGV5}" --active-row "${ARGV6}")
-    endif()
+        --headless run
+        --scenario "${scenario_file}"
+        --input "script=${SCRIPT_FILE}"
+        --input "subtitle=${input_file}"
+        --input "output=${output_file}"
+        --artifacts "${trace_dir}")
 
     if(case_name STREQUAL "mutate")
         set(context_dump "${trace_dir}/managed-debug-context.json")

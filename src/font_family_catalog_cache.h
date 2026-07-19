@@ -29,4 +29,9 @@ void Invalidate();
 /// Synchronously rebuild and publish a new snapshot. Returns the new snapshot.
 std::shared_ptr<FontFamilyCatalog const> Rebuild();
 
+/// Stop accepting new builds and wait for all background builds to finish.
+/// This is a terminal, process-shutdown operation. GetSnapshot and Rebuild
+/// throw after shutdown; WarmAsync and Invalidate become no-ops.
+void Shutdown();
+
 } // namespace font_family_catalog_cache

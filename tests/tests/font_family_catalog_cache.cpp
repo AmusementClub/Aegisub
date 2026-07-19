@@ -130,3 +130,25 @@ TEST_F(font_family_catalog_cache_test, consecutive_invalidations_publish_only_la
 	EXPECT_EQ(nullptr, current->Find(1));
 	EXPECT_EQ(nullptr, current->Find(2));
 }
+
+TEST_F(font_family_catalog_cache_test, shutdown_waits_for_build_and_prevents_restart) {
+	ControlledBuilders controlled;
+	font_family_catalog_cache::testing::SetBuilder([&] { return controlled.Build(); });
+
+	font_family_catalog_cache::WarmAsync();
+	ASSERT_EQ(std::future_status::ready, controlled.started[0].wait_for(5s));
+
+	auto shutdown = std::async(std::launch::async, [] {
+		font_family_catalog_cache::Shutdown();
+	});
+	EXPECT_EQ(std::future_status::timeout, shutdown.wait_for(100ms));
+
+	controlled.Release(0);
+	ASSERT_EQ(std::future_status::ready, shutdown.wait_for(5s));
+	shutdown.get();
+
+	font_family_catalog_cache::WarmAsync();
+	EXPECT_EQ(1, controlled.calls.load());
+	EXPECT_THROW(font_family_catalog_cache::GetSnapshot(), std::logic_error);
+	EXPECT_THROW(font_family_catalog_cache::Rebuild(), std::logic_error);
+}

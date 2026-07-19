@@ -672,7 +672,8 @@ class Runner final {
 		runtime.ShutdownTrace();
 		WriteManifest(result);
 		WriteSummary(result);
-		PrintReport(result);
+		if (request.emit_console_report)
+			PrintReport(result);
 		runtime.CloseMedia();
 		runtime.ReleaseResources();
 		AppendHostLog("finish.end");

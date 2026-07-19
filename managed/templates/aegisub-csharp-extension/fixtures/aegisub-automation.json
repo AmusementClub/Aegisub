@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "sample-extension-automation",
+  "hosts": ["headless"],
+  "resources": {
+    "script": "../sample.extension.aegisub-plugin.json"
+  },
+  "steps": [
+    {
+      "action": "run_automation",
+      "script": "script",
+      "macro": "sample.extension.hello"
+    }
+  ]
+}

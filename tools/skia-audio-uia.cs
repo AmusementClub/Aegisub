@@ -12,6 +12,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.ComponentModel;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Automation;
@@ -46,12 +47,16 @@ static async Task<int> RunAsync(string[] arguments)
     {
         app.DumpWindowTree();
         if (options.DryRun)
+        {
+            app.MarkScenarioSucceeded();
             return 0;
+        }
     }
 
     app.WaitForAudioCanvas();
     if (options.DryRun)
     {
+        app.MarkScenarioSucceeded();
         Console.WriteLine("uia.dry_run=ok");
         return 0;
     }
@@ -215,12 +220,17 @@ sealed class AegisubSession : IDisposable
     private AutomationElement? mainWindow;
     private string? automationProjectDirectory;
     private string? automationProjectPath;
+    private string? automationArtifactsDirectory;
     private nint audioCanvas;
     private WinRect audioCanvasRect;
     private readonly bool preferSkiaCanvas = IsRuntimeOptIn(
         Environment.GetEnvironmentVariable("AEGISUB_ENABLE_SKIA_AUDIO_DISPLAY"));
+    private bool scenarioSucceeded;
+    private bool cleanShutdown;
 
     public AegisubSession(DriverOptions options) => this.options = options;
+
+    public void MarkScenarioSucceeded() => scenarioSucceeded = true;
 
     public void Start()
     {
@@ -244,6 +254,8 @@ sealed class AegisubSession : IDisposable
         }
 
         automationProjectPath = PrepareAutomationProject();
+        automationArtifactsDirectory = Path.Combine(automationProjectDirectory!, "artifacts");
+        var automationProfileDirectory = Path.Combine(automationProjectDirectory!, "profile");
         Console.WriteLine($"uia.project={automationProjectPath}");
 
         var startInfo = new ProcessStartInfo
@@ -253,16 +265,84 @@ sealed class AegisubSession : IDisposable
             UseShellExecute = false,
             WindowStyle = ProcessWindowStyle.Minimized,
         };
+        startInfo.ArgumentList.Add("--gui-test");
+        startInfo.ArgumentList.Add("host");
+        startInfo.ArgumentList.Add("--profile-dir");
+        startInfo.ArgumentList.Add(automationProfileDirectory);
+        startInfo.ArgumentList.Add("--artifacts");
+        startInfo.ArgumentList.Add(automationArtifactsDirectory);
+        startInfo.ArgumentList.Add("--open");
         startInfo.ArgumentList.Add(automationProjectPath);
         if (!string.IsNullOrWhiteSpace(options.Audio))
+        {
+            startInfo.ArgumentList.Add("--open");
             startInfo.ArgumentList.Add(Path.GetFullPath(options.Audio));
+        }
         if (!string.IsNullOrWhiteSpace(options.Video))
+        {
+            startInfo.ArgumentList.Add("--open");
             startInfo.ArgumentList.Add(Path.GetFullPath(options.Video));
+        }
 
         process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start Aegisub");
         Console.WriteLine($"uia.pid={process.Id}");
+        WaitForReadyArtifact();
         WaitForMainWindow();
         SetWindowSize();
+    }
+
+    private void WaitForReadyArtifact()
+    {
+        var artifacts = automationArtifactsDirectory
+            ?? throw new InvalidOperationException("Automation artifacts directory was not prepared");
+        var ready = Path.Combine(artifacts, "ready.json");
+        var deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 30;
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            if (File.Exists(ready) && TryReadReadyArtifact(ready))
+            {
+                Console.WriteLine($"uia.ready={ready}");
+                return;
+            }
+            if (process is null || process.HasExited)
+                throw new InvalidOperationException("Aegisub exited before GUI-test host became ready");
+            Thread.Sleep(100);
+        }
+        throw new TimeoutException("GUI-test host did not produce ready.json");
+    }
+
+    private bool TryReadReadyArtifact(string path)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(path));
+            var root = document.RootElement;
+            return root.GetProperty("version").GetInt32() == 1
+                && root.GetProperty("host").GetString() == "gui-test"
+                && root.GetProperty("state").GetString() == "ready"
+                && root.GetProperty("process_id").GetInt32() == process?.Id;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (KeyNotFoundException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (IOException)
+        {
+            // Transient share/lock while ready.json is renamed or scanned.
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     public void WaitForAudioCanvas()
@@ -363,6 +443,7 @@ sealed class AegisubSession : IDisposable
             Console.WriteLine($"uia.scenario.end={scenario}");
         }
 
+        scenarioSucceeded = true;
         if (!options.KeepOpen)
             Close();
     }
@@ -855,6 +936,7 @@ sealed class AegisubSession : IDisposable
         Console.WriteLine($"uia.exit_code={process.ExitCode}");
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"Aegisub exited abnormally with code {process.ExitCode}");
+        cleanShutdown = true;
         Console.WriteLine("uia.close=clean");
     }
 
@@ -1031,6 +1113,8 @@ sealed class AegisubSession : IDisposable
     {
         if (string.IsNullOrWhiteSpace(automationProjectDirectory)
             || options.KeepOpen
+            || !scenarioSucceeded
+            || !cleanShutdown
             || (process is not null && !process.HasExited))
             return;
         try

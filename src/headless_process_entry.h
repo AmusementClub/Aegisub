@@ -18,7 +18,8 @@
 #include <string>
 #include <vector>
 
+struct AppLaunchPlan;
+
 // Plain headless entry seam: owns command-line detection and no-host
 // delegation into runtime bootstrap.
-bool IsHeadlessEntryCommandLine(std::vector<std::string> const& args);
-int RunHeadlessCommandLineInPlainProcessHost(std::vector<std::string> const& args);
+int RunHeadlessLaunchPlanInPlainProcessHost(AppLaunchPlan const& plan);

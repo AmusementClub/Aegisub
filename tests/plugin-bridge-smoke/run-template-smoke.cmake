@@ -262,8 +262,9 @@ endif()
 if(NOT EXISTS "${package_dir}/Aegisub.TemplateSmoke.Dependency.dll" OR
    NOT EXISTS "${package_dir}/runtimes/win-x64/native/template-smoke-native.txt" OR
    NOT EXISTS "${package_dir}/runtimes/win-x86/native/template-smoke-native.txt" OR
-   EXISTS "${package_dir}/template-smoke-native.txt")
-    message(FATAL_ERROR "Debug deployment flattened or omitted managed/RID dependencies")
+   EXISTS "${package_dir}/template-smoke-native.txt" OR
+   NOT EXISTS "${package_dir}/aegisub-automation.json")
+    message(FATAL_ERROR "Debug deployment omitted automation assets or flattened managed/RID dependencies")
 endif()
 file(READ "${package_dir}/runtimes/win-x64/native/template-smoke-native.txt" x64_native_marker)
 file(READ "${package_dir}/runtimes/win-x86/native/template-smoke-native.txt" x86_native_marker)
@@ -296,10 +297,9 @@ file(MAKE_DIRECTORY "${trace_dir}")
 get_filename_component(aegisub_working_directory "${AEGISUB_EXE}" DIRECTORY)
 execute_process(
     COMMAND "${AEGISUB_EXE}"
-        --cli session automation
-        --script "${deployed_manifest}"
-        --macro "${macro_id}"
-        --trace-dir "${trace_dir}"
+        --headless run
+        --scenario "${package_dir}/aegisub-automation.json"
+        --artifacts "${trace_dir}"
     WORKING_DIRECTORY "${aegisub_working_directory}"
     RESULT_VARIABLE aegisub_result
     OUTPUT_VARIABLE aegisub_stdout
@@ -326,7 +326,7 @@ foreach(expected
 endforeach()
 
 file(READ "${project_dir}/Properties/launchSettings.json" launch_settings)
-foreach(profile "Managed fixture" "Aegisub CLI integration" "Aegisub GUI integration")
+foreach(profile "Managed fixture" "Aegisub headless integration" "Aegisub GUI integration")
     string(FIND "${launch_settings}" "\"${profile}\"" profile_position)
     if(profile_position EQUAL -1)
         message(FATAL_ERROR "Generated launchSettings.json is missing '${profile}'")

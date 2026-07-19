@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "plugin-bridge-runtime-info",
+  "hosts": ["headless"],
+  "resources": {
+    "script": ""
+  },
+  "steps": [
+    {
+      "action": "run_automation",
+      "script": "script",
+      "macro": "aegisub.plugin-bridge.demo.runtime-info"
+    }
+  ]
+}

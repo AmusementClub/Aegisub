@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "dependency-control-lua-compatibility",
+  "hosts": ["headless"],
+  "resources": {
+    "script": "../fixtures/dependency-control-lua-compat.lua"
+  },
+  "steps": [
+    {
+      "action": "run_automation",
+      "script": "script",
+      "macro": "DependencyControl Lua compatibility smoke"
+    }
+  ]
+}

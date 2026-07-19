@@ -1012,14 +1012,16 @@ TEST(host_boundary_policy, headless_runtime_bootstrap_uses_minimal_runtime_init_
 	auto const root = ProjectRoot();
 	auto const headless_runtime_bootstrap_cpp = root / "src" / "headless_runtime_bootstrap.cpp";
 
-	auto commands_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.initialize_commands = false;");
+	auto command_default_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "bool initialize_commands = false");
+	auto command_assignment_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.initialize_commands = initialize_commands;");
 	auto locale_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.initialize_ui_locale = false;");
 	auto automation_factory_enabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.register_automation_script_factory = true;");
 	auto font_warmup_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.warm_subtitles_provider_font_cache = false;");
 	auto export_filters_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.register_export_filters = false;");
 	auto png_disabled_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "options.install_png_handler = false;");
 
-	EXPECT_FALSE(commands_disabled_hits.empty());
+	EXPECT_FALSE(command_default_hits.empty());
+	EXPECT_FALSE(command_assignment_hits.empty());
 	EXPECT_FALSE(locale_disabled_hits.empty());
 	EXPECT_FALSE(automation_factory_enabled_hits.empty());
 	EXPECT_FALSE(font_warmup_disabled_hits.empty());
@@ -1038,17 +1040,17 @@ TEST(host_boundary_policy, shared_exe_headless_entry_flows_directly_to_plain_pro
 	auto app_entry_initializer_hits = FindLiteralHits(app_entry_cpp, "wxInitializer");
 	auto app_entry_plain_entry_include_hits = FindLiteralHits(app_entry_cpp, "headless_process_entry.h");
 	auto app_entry_runtime_include_hits = FindLiteralHits(app_entry_cpp, "headless_runtime_bootstrap.h");
-	auto app_entry_plain_entry_call_hits = FindLiteralHits(app_entry_cpp, "IsHeadlessEntryCommandLine(args)");
-	auto app_entry_plain_host_call_hits = FindLiteralHits(app_entry_cpp, "RunHeadlessCommandLineInPlainProcessHost(args)");
+	auto app_entry_plan_parse_hits = FindLiteralHits(app_entry_cpp, "ParseAppLaunchPlan(args)");
+	auto app_entry_plain_host_call_hits = FindLiteralHits(app_entry_cpp, "RunHeadlessLaunchPlanInPlainProcessHost(launch_plan)");
 	auto process_entry_runtime_include_hits = FindLiteralHits(headless_process_entry_cpp, "headless_runtime_bootstrap.h");
-	auto process_entry_runtime_call_hits = FindLiteralHits(headless_process_entry_cpp, "RunHeadlessCommandLine(args)");
+	auto process_entry_runtime_call_hits = FindLiteralHits(headless_process_entry_cpp, "RunHeadlessLaunchPlan(plan)");
 	auto process_entry_wx_hits = FindWxMarkers(headless_process_entry_cpp);
 	auto bootstrap_initializer_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "wxInitializer");
 
 	EXPECT_TRUE(app_entry_initializer_hits.empty()) << JoinLines(app_entry_initializer_hits);
 	EXPECT_FALSE(app_entry_plain_entry_include_hits.empty());
 	EXPECT_TRUE(app_entry_runtime_include_hits.empty()) << JoinLines(app_entry_runtime_include_hits);
-	EXPECT_FALSE(app_entry_plain_entry_call_hits.empty());
+	EXPECT_FALSE(app_entry_plan_parse_hits.empty());
 	EXPECT_FALSE(app_entry_plain_host_call_hits.empty());
 	EXPECT_FALSE(process_entry_runtime_include_hits.empty());
 	EXPECT_FALSE(process_entry_runtime_call_hits.empty());
@@ -1098,6 +1100,12 @@ TEST(host_boundary_policy, shared_headless_entry_bootstrap_sources_live_in_named
 	std::set<std::string> const expected_headless_entry_bootstrap_entries = {
 		"${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES}",
 		"${AEGISUB_SHARED_RUNTIME_LOCALE_CORE_SOURCES}",
+		"src/app_launch_plan.cpp",
+		"src/automation_command_executor.cpp",
+		"src/automation_process_supervisor.cpp",
+		"src/automation_scenario.cpp",
+		"src/automation_scenario_runner.cpp",
+		"src/headless_automation_cli.cpp",
 		"src/headless_process_entry.cpp",
 		"src/headless_runtime_bootstrap.cpp",
 	};
@@ -1123,6 +1131,7 @@ TEST(host_boundary_policy, shared_runtime_common_init_sources_live_in_named_cmak
 		"${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SUPPORT_SOURCES}",
 		"src/app_process_config.cpp",
 		"src/app_runtime.cpp",
+		"src/automation_runtime_profile.cpp",
 	};
 
 	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES");

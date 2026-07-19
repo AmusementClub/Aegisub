@@ -15,12 +15,9 @@
 
 #include "headless_process_entry.h"
 
+#include "app_launch_plan.h"
 #include "headless_runtime_bootstrap.h"
 
-bool IsHeadlessEntryCommandLine(std::vector<std::string> const& args) {
-	return IsHeadlessCommandLine(args);
-}
-
-int RunHeadlessCommandLineInPlainProcessHost(std::vector<std::string> const& args) {
-	return RunHeadlessCommandLine(args);
+int RunHeadlessLaunchPlanInPlainProcessHost(AppLaunchPlan const& plan) {
+	return RunHeadlessLaunchPlan(plan);
 }

@@ -579,6 +579,7 @@ set(AEGISUB_SHARED_RUNTIME_COMMON_INIT_SUPPORT_SOURCES
 set(AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES
     src/app_process_config.cpp
     src/app_runtime.cpp
+    src/automation_runtime_profile.cpp
     ${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SUPPORT_SOURCES}
 )
 
@@ -606,6 +607,12 @@ set(AEGISUB_GUI_BOOTSTRAP_WX_HOST_SOURCES
 set(AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES
     ${AEGISUB_SHARED_RUNTIME_COMMON_INIT_SOURCES}
     ${AEGISUB_SHARED_RUNTIME_LOCALE_CORE_SOURCES}
+    src/app_launch_plan.cpp
+    src/automation_command_executor.cpp
+    src/automation_process_supervisor.cpp
+    src/automation_scenario.cpp
+    src/automation_scenario_runner.cpp
+    src/headless_automation_cli.cpp
     src/headless_process_entry.cpp
     src/headless_runtime_bootstrap.cpp
 )
@@ -1003,7 +1010,7 @@ target_link_libraries(aegisub_core PRIVATE luajit)
 # static library, so PRIVATE target deps are still exported as $<LINK_ONLY:...>
 # and would force Static Core C API consumers to provide ass::headers.
 target_include_directories(aegisub_core PRIVATE
-	$<BUILD_INTERFACE:${ass_INCLUDE_DIR}>
+    $<BUILD_INTERFACE:${ass_INCLUDE_DIR}>
 )
 target_link_libraries(aegisub_core PRIVATE aegisub_core_features "Boost::headers" "Boost::container" "Boost::locale" ${AEGISUB_REGEX_TARGET})
 target_link_libraries(aegisub_core PRIVATE pugixml::pugixml)
@@ -1267,6 +1274,18 @@ target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
 target_compile_features(Aegisub PRIVATE cxx_std_20)
 target_include_directories(Aegisub PRIVATE src)
 target_include_directories(Aegisub PRIVATE vendor)
+add_custom_target(run-aegisub-gui-test-command-smoke
+    COMMAND "${CMAKE_COMMAND}"
+        "-DAEGISUB_EXE=$<TARGET_FILE:Aegisub>"
+        "-DSCENARIO_FILE=${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/scenarios/gui-command.json"
+        "-DSMOKE_DIR=${CMAKE_CURRENT_BINARY_DIR}/gui-test-command-smoke/$<CONFIG>"
+        "-DWORKING_DIR=$<TARGET_FILE_DIR:Aegisub>"
+        -P "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/run-gui-test-smoke.cmake"
+    DEPENDS Aegisub
+    COMMENT "Running the wx GUI-test command smoke"
+    USES_TERMINAL
+    VERBATIM
+)
 option(AEGISUB_MATROSKA_PARSING "Enable MKV subtitle parsing via libebml/libmatroska" ON)
 # MKV subtitle import is a core format capability; the selected backend is kept
 # in aegisub_core so GUI/headless hosts share the same parser.

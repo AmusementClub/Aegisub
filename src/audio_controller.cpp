@@ -29,6 +29,7 @@
 
 #include "audio_controller.h"
 
+#include "audio_controller_timer.h"
 #include "audio_timing.h"
 #include "include/aegisub/audio_player.h"
 #include "include/aegisub/context.h"
@@ -54,11 +55,9 @@ bool ShouldAutoRecoverXAudio2Output() {
 
 AudioController::AudioController(agi::Context *context)
 : context(context)
-, playback_timer(this)
+, playback_timer(CreateAudioControllerTimer([this] { OnPlaybackTimer(); }))
 , provider_connection(context->GetCore().project->AddAudioProviderListener(&AudioController::OnAudioProvider, this))
 {
-	Bind(wxEVT_TIMER, &AudioController::OnPlaybackTimer, this, playback_timer.GetId());
-
 #ifdef wxHAS_POWER_EVENTS
 	Bind(wxEVT_POWER_SUSPENDED, &AudioController::OnComputerSuspending, this);
 	Bind(wxEVT_POWER_RESUME, &AudioController::OnComputerResuming, this);
@@ -72,7 +71,7 @@ AudioController::~AudioController()
 	Stop();
 }
 
-void AudioController::OnPlaybackTimer(wxTimerEvent &)
+void AudioController::OnPlaybackTimer()
 {
 	if (!player) return;
 	perf_trace::AudioUiDurationScope trace("audio_controller.playback_timer");
@@ -180,7 +179,7 @@ void AudioController::PlayRange(const TimeRange &range)
 	perf_trace::ResetAudioUiTimerInterval();
 	player->Play(start_sample, sample_count);
 	playback_mode = PM_Range;
-	playback_timer.Start(20);
+	playback_timer->Start(20);
 
 	AnnouncePlaybackPosition(range.begin());
 	trace.SetDetails(range.length(), range.begin());
@@ -222,7 +221,7 @@ void AudioController::PlayToEnd(int start_ms)
 	perf_trace::ResetAudioUiTimerInterval();
 	player->Play(start_sample, sample_count);
 	playback_mode = PM_ToEnd;
-	playback_timer.Start(20);
+	playback_timer->Start(20);
 
 	AnnouncePlaybackPosition(start_ms);
 	trace.SetDetails(start_ms);
@@ -235,7 +234,7 @@ void AudioController::Stop()
 
 	player->Stop();
 	playback_mode = PM_NotPlaying;
-	playback_timer.Stop();
+	playback_timer->Stop();
 	perf_trace::ResetAudioUiTimerInterval();
 
 	AnnouncePlaybackStop();

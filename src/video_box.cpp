@@ -41,6 +41,7 @@
 #include "project.h"
 #include "secondary_subtitle_strip.h"
 #include "selection_controller.h"
+#include "secondary_subtitle_session.h"
 #include "video_controller.h"
 #include "video_display.h"
 #include "video_slider.h"
@@ -53,11 +54,23 @@
 #include <wx/toplevel.h>
 #include <wx/toolbar.h>
 
-VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
+VideoBox::VideoBox(
+	wxWindow *parent,
+	bool isDetached,
+	agi::Context *context)
 : wxPanel(parent, -1)
 , context(context)
+, ownsSecondarySubtitleSession(!isDetached)
+, isDetached(isDetached)
 , current_frame(context->GetCore().videoController->GetFrameN())
 {
+	auto ui = context->GetUI();
+	if (!ui.secondarySubtitleSession) {
+		ui.secondarySubtitleSession = std::make_shared<SecondarySubtitleSession>(context);
+		ownsSecondarySubtitleSession = true;
+	}
+	secondarySubtitleSession = ui.secondarySubtitleSession;
+
 	auto videoSlider = new VideoSlider(this, context);
 	videoSlider->SetToolTip(_("Seek video"));
 
@@ -119,20 +132,21 @@ VideoBox::VideoBox(wxWindow *parent, bool isDetached, agi::Context *context)
 	VideoSizer->Add(new wxStaticLine(this), 0, wxEXPAND, 0);
 	VideoSizer->Add(videoSlider, 0, wxEXPAND, 0);
 	VideoSizer->Add(videoBottomSizer, 0, wxEXPAND | wxBOTTOM, 5);
-	if (!isDetached) {
-		secondarySubtitleStripSeparator = new wxStaticLine(this);
-		secondarySubtitleStrip = new SecondarySubtitleStrip(this, context);
-		VideoSizer->Add(secondarySubtitleStripSeparator, 0, wxEXPAND, 0);
-		VideoSizer->Add(secondarySubtitleStrip, 0, wxEXPAND, 0);
-		VideoSizer->Show(secondarySubtitleStripSeparator, false);
-		VideoSizer->Show(secondarySubtitleStrip, false);
-		secondarySubtitleStrip->SetSessionActive(false);
-	}
+	secondarySubtitleStripSeparator = new wxStaticLine(this);
+	secondarySubtitleStrip = new SecondarySubtitleStrip(this, context, secondarySubtitleSession);
+	VideoSizer->Add(secondarySubtitleStripSeparator, 0, wxEXPAND, 0);
+	VideoSizer->Add(secondarySubtitleStrip, 0, wxEXPAND, 0);
+	VideoSizer->Show(secondarySubtitleStripSeparator, false);
+	VideoSizer->Show(secondarySubtitleStrip, false);
+	secondarySubtitleStrip->SetPresentationActive(false);
 	SetSizer(VideoSizer);
 	Bind(wxEVT_SIZE, &VideoBox::OnSize, this);
 
 	ApplyVideoProvider();
-	UpdateSecondarySubtitleStripVisibility();
+	// Detached VideoBox is inserted into its top-level sizer after construction.
+	// Its owner synchronizes strip visibility once that sizer is in place.
+	if (!isDetached)
+		UpdateSecondarySubtitleStripVisibility();
 
 	auto core = context->GetCore();
 	connections = agi::signal::make_vector({
@@ -151,6 +165,11 @@ void VideoBox::SyncToContextState() {
 	ApplyVideoProvider();
 	if (auto video_display = context->GetUI().videoDisplay)
 		video_display->SyncToCurrentVideoProvider();
+	UpdateSecondarySubtitleStripVisibility();
+}
+
+void VideoBox::SyncSecondarySubtitleStripVisibility() {
+	UpdateSecondarySubtitleStripVisibility();
 }
 
 void VideoBox::ApplyVideoProvider() {
@@ -233,17 +252,23 @@ void VideoBox::UpdateSecondarySubtitleStripVisibility() {
 		return;
 
 	auto core = context->GetCore();
-	bool const show_strip =
-		static_cast<bool>(core.project->VideoProvider())
-		&& OPT_GET("Video/Secondary Subtitles/Enabled")->GetBool()
-		&& !OPT_GET("Video/Detached/Enabled")->GetBool();
+	bool const has_video = static_cast<bool>(core.project->VideoProvider());
+	bool const secondary_enabled = OPT_GET("Video/Secondary Subtitles/Enabled")->GetBool();
+	bool const detached_mode = OPT_GET("Video/Detached/Enabled")->GetBool();
+	bool const show_strip = ShouldShowSecondarySubtitleStrip(
+		has_video,
+		secondary_enabled,
+		isDetached,
+		detached_mode);
+	if (ownsSecondarySubtitleSession)
+		secondarySubtitleSession->SetActive(has_video && secondary_enabled);
 	bool const visibility_changed = secondarySubtitleStrip->IsShown() != show_strip;
 	int const preserved_video_height = videoDisplay ? videoDisplay->GetClientSize().GetHeight() : 0;
 	int const previous_min_height = GetSecondarySubtitleLayoutMinHeight();
 
 	GetSizer()->Show(secondarySubtitleStripSeparator, show_strip);
 	GetSizer()->Show(secondarySubtitleStrip, show_strip);
-	secondarySubtitleStrip->SetSessionActive(show_strip);
+	secondarySubtitleStrip->SetPresentationActive(show_strip);
 	if (visibility_changed) {
 		int const new_min_height = GetSecondarySubtitleLayoutMinHeight();
 		RelayoutAfterSecondarySubtitleStripChange(

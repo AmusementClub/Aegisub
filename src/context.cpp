@@ -52,7 +52,8 @@ ContextUiSession::ContextUiSession(ContextUiState& state)
 , subsEditBox(state.subsEditBox)
 , dialog(state.dialog)
 , frame(state.frame)
-, videoDisplay(state.videoDisplay) {
+, videoDisplay(state.videoDisplay)
+, secondarySubtitleSession(state.secondarySubtitleSession) {
 }
 
 ConstContextUiSession::ConstContextUiSession(ContextUiState const& state)
@@ -65,7 +66,8 @@ ConstContextUiSession::ConstContextUiSession(ContextUiState const& state)
 , subsEditBox(state.subsEditBox)
 , dialog(state.dialog)
 , frame(state.frame)
-, videoDisplay(state.videoDisplay) {
+, videoDisplay(state.videoDisplay)
+, secondarySubtitleSession(state.secondarySubtitleSession) {
 }
 
 Context::Context()

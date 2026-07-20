@@ -30,12 +30,14 @@
 #include <libaegisub/fs_fwd.h>
 #include <libaegisub/signal.h>
 
+#include <memory>
 #include <vector>
 #include <wx/panel.h>
 
 namespace agi { struct Context; }
 namespace agi { class OptionValue; }
 class SecondarySubtitleStrip;
+class SecondarySubtitleSession;
 class VideoDisplay;
 class wxSpinCtrl;
 class wxTextCtrl;
@@ -52,6 +54,11 @@ class VideoBox final : public wxPanel {
 	SecondarySubtitleStrip *secondarySubtitleStrip = nullptr;
 	wxStaticLine *secondarySubtitleStripSeparator = nullptr;
 	VideoDisplay *videoDisplay = nullptr;
+	std::shared_ptr<SecondarySubtitleSession> secondarySubtitleSession;
+	// The attached box owns provider activation; detached boxes are presenters
+	// for the same ContextUiState session and only switch view visibility.
+	bool ownsSecondarySubtitleSession = false;
+	bool isDetached = false;
 	int current_frame = -1;
 	bool secondarySubtitleStripHeightDragActive = false;
 	int secondarySubtitleStripHeightDragPreservedVideoHeight = 0;
@@ -71,8 +78,12 @@ class VideoBox final : public wxPanel {
 	void OnSize(wxSizeEvent &event);
 
 public:
-	VideoBox(wxWindow *parent, bool isDetached, agi::Context *context);
+	VideoBox(
+		wxWindow *parent,
+		bool isDetached,
+		agi::Context *context);
 	void SyncToContextState();
+	void SyncSecondarySubtitleStripVisibility();
 	bool OpenSecondarySubtitlesFromPath(agi::fs::path const& path, bool show_errors = true);
 	void OnSecondarySubtitleStripHeightChanged(int previous_height, int new_height);
 	void BeginSecondarySubtitleStripHeightDrag();

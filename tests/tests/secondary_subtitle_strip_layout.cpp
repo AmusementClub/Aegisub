@@ -73,3 +73,18 @@ TEST(secondary_subtitle_strip_layout, thumb_position_round_trips_back_to_scroll_
 		layout.clamped_scroll_offset_y,
 		SecondarySubtitleStripScrollOffsetFromThumbPosition(thumb_position, layout.max_scroll_offset_y));
 }
+
+TEST(secondary_subtitle_strip_layout, attached_box_is_visible_only_in_attached_mode) {
+	EXPECT_TRUE(ShouldShowSecondarySubtitleStrip(true, true, false, false));
+	EXPECT_FALSE(ShouldShowSecondarySubtitleStrip(true, true, false, true));
+}
+
+TEST(secondary_subtitle_strip_layout, detached_box_is_visible_only_in_detached_mode) {
+	EXPECT_FALSE(ShouldShowSecondarySubtitleStrip(true, true, true, false));
+	EXPECT_TRUE(ShouldShowSecondarySubtitleStrip(true, true, true, true));
+}
+
+TEST(secondary_subtitle_strip_layout, secondary_strip_requires_video_and_enable_option) {
+	EXPECT_FALSE(ShouldShowSecondarySubtitleStrip(false, true, false, false));
+	EXPECT_FALSE(ShouldShowSecondarySubtitleStrip(true, false, false, false));
+}

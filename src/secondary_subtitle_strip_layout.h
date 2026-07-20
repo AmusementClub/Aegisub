@@ -15,6 +15,14 @@ struct SecondarySubtitleStripLayout {
 	int clamped_scroll_offset_y = 0;
 };
 
+inline bool ShouldShowSecondarySubtitleStrip(
+	bool has_video,
+	bool enabled,
+	bool detached_video_box,
+	bool detached_mode) {
+	return has_video && enabled && detached_video_box == detached_mode;
+}
+
 inline SecondarySubtitleStripLayout BuildSecondarySubtitleStripLayout(
 	int content_height,
 	int visible_source_height,

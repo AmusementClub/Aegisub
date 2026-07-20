@@ -25,6 +25,7 @@ class AudioKaraoke;
 class BaseGrid;
 class DialogManager;
 class FrameMain;
+class SecondarySubtitleSession;
 class SubsEditBox;
 class VideoDisplay;
 class wxWindow;
@@ -42,6 +43,7 @@ struct ContextUiState {
 	std::unique_ptr<DialogManager> dialog;
 	FrameMain *frame = nullptr;
 	VideoDisplay *videoDisplay = nullptr;
+	std::shared_ptr<SecondarySubtitleSession> secondarySubtitleSession;
 
 	ContextUiState();
 	~ContextUiState();
@@ -58,6 +60,7 @@ struct ContextUiSession {
 	std::unique_ptr<DialogManager>& dialog;
 	FrameMain *&frame;
 	VideoDisplay *&videoDisplay;
+	std::shared_ptr<SecondarySubtitleSession>& secondarySubtitleSession;
 
 	explicit ContextUiSession(ContextUiState& state);
 };
@@ -73,6 +76,7 @@ struct ConstContextUiSession {
 	std::unique_ptr<DialogManager> const& dialog;
 	FrameMain *const& frame;
 	VideoDisplay *const& videoDisplay;
+	std::shared_ptr<SecondarySubtitleSession> const& secondarySubtitleSession;
 
 	explicit ConstContextUiSession(ContextUiState const& state);
 };

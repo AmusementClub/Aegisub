@@ -17,8 +17,6 @@
 #include "utils.h"
 #include "video_box.h"
 
-#include <libaegisub/make_unique.h>
-
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -37,6 +35,8 @@
 #include <wx/spinctrl.h>
 #include <wx/stattext.h>
 #include <wx/toolbar.h>
+
+#include <utility>
 
 namespace {
 enum SecondarySubtitleStripMenuId {
@@ -220,9 +220,9 @@ void ShowSecondarySubtitleStripSettings(wxWindow *parent, int min_height, int ma
 }
 }
 
-SecondarySubtitleStrip::SecondarySubtitleStrip(wxWindow *parent, agi::Context *context)
+SecondarySubtitleStrip::SecondarySubtitleStrip(wxWindow *parent, agi::Context *context, std::shared_ptr<SecondarySubtitleSession> session)
 : wxPanel(parent, -1)
-, session(agi::make_unique<SecondarySubtitleSession>(context))
+, session(std::move(session))
 , entry_button(new wxToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTB_FLAT | wxTB_NODIVIDER | wxTB_HORIZONTAL))
 , reload_button(new wxToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTB_FLAT | wxTB_NODIVIDER | wxTB_HORIZONTAL))
 , scroll_bar(new wxScrollBar(this, -1, wxDefaultPosition, wxDefaultSize, wxSB_VERTICAL)) {
@@ -232,7 +232,7 @@ SecondarySubtitleStrip::SecondarySubtitleStrip(wxWindow *parent, agi::Context *c
 		static_cast<int>(OPT_GET("Video/Secondary Subtitles/Scroll Offset Y")->GetInt()),
 		0);
 
-	session->SetBitmapUpdatedCallback([this] {
+	bitmap_updated_connection = session->AddBitmapUpdatedListener([this] {
 		UpdateScrollBar();
 		Refresh(false);
 	});
@@ -288,6 +288,10 @@ SecondarySubtitleStrip::SecondarySubtitleStrip(wxWindow *parent, agi::Context *c
 	scroll_bar->Bind(wxEVT_MOUSEWHEEL, &SecondarySubtitleStrip::OnMouseWheel, this);
 	entry_button->Bind(wxEVT_MOUSEWHEEL, &SecondarySubtitleStrip::OnMouseWheel, this);
 	reload_button->Bind(wxEVT_MOUSEWHEEL, &SecondarySubtitleStrip::OnMouseWheel, this);
+}
+
+SecondarySubtitleStrip::~SecondarySubtitleStrip() {
+	bitmap_updated_connection.Disconnect();
 }
 
 wxRect SecondarySubtitleStrip::GetGutterRect() const {
@@ -988,7 +992,7 @@ bool SecondarySubtitleStrip::OpenExternalSubtitlesFromPath(agi::fs::path const& 
 	return session && session->OpenExternalSubtitlesFromPath(path, show_errors);
 }
 
-void SecondarySubtitleStrip::SetSessionActive(bool active) {
+void SecondarySubtitleStrip::SetPresentationActive(bool active) {
 	if (!active) {
 		if (resize_dragging) {
 			if (auto *video_box = dynamic_cast<VideoBox *>(GetParent()))
@@ -997,7 +1001,6 @@ void SecondarySubtitleStrip::SetSessionActive(bool active) {
 		FinishMouseInteractions();
 	}
 
-	session->SetActive(active);
 	UpdateScrollBar();
 	Refresh(false);
 }

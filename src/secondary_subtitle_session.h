@@ -9,10 +9,10 @@
 #include "ui_dispatch.h"
 
 #include <libaegisub/fs_fwd.h>
+#include <libaegisub/signal.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -115,7 +115,7 @@ class SecondarySubtitleSession final {
 	bool has_bitmap = false;
 	bool active = false;
 	int current_frame = -1;
-	std::function<void()> bitmap_updated;
+	agi::signal::Signal<> bitmap_updated;
 
 	void NotifyBitmapUpdated();
 	void ClearBitmap();
@@ -179,5 +179,5 @@ public:
 	bool HasBitmap() const { return has_bitmap && current_bitmap.IsOk(); }
 	wxBitmap const& GetBitmap() const { return current_bitmap; }
 	std::uint64_t GetBitmapGeneration() const { return bitmap_generation; }
-	void SetBitmapUpdatedCallback(std::function<void()> callback) { bitmap_updated = std::move(callback); }
+	DEFINE_SIGNAL_ADDERS(bitmap_updated, AddBitmapUpdatedListener)
 };

@@ -25,10 +25,11 @@ namespace agi {
 }
 
 class SecondarySubtitleStrip final : public wxPanel {
-	std::unique_ptr<SecondarySubtitleSession> session;
+	std::shared_ptr<SecondarySubtitleSession> session;
 	wxToolBar *entry_button = nullptr;
 	wxToolBar *reload_button = nullptr;
 	wxScrollBar *scroll_bar = nullptr;
+	agi::signal::Connection bitmap_updated_connection;
 	agi::signal::Connection height_option_connection;
 	agi::signal::Connection scroll_offset_option_connection;
 	agi::signal::Connection toolbar_icon_size_option_connection;
@@ -88,9 +89,10 @@ class SecondarySubtitleStrip final : public wxPanel {
 	void OnMouseCaptureLost(wxMouseCaptureLostEvent &event);
 
 public:
-	SecondarySubtitleStrip(wxWindow *parent, agi::Context *context);
+	SecondarySubtitleStrip(wxWindow *parent, agi::Context *context, std::shared_ptr<SecondarySubtitleSession> session);
+	~SecondarySubtitleStrip();
 
 	bool OpenExternalSubtitlesFromPath(agi::fs::path const& path, bool show_errors = true);
-	void SetSessionActive(bool active);
+	void SetPresentationActive(bool active);
 	void SetLeftGutterWidth(int width);
 };

@@ -775,66 +775,69 @@ struct edit_font final : public Command {
 			return state;
 		};
 
-		auto initial = font_for_line(active, active_insertion_point);
-		auto selected = ShowFontFaceDialog(ui.parent, c, initial.displayed, font_model);
-		if (!selected)
-			return;
-
-		auto selection_changes_line = [&](line_font_state const& startfont) {
-			return ShouldWriteFontFace(
-					startfont.stored_face_name,
-					startfont.displayed.face_name,
-					startfont.has_explicit_face_override,
-					selected->face_name)
-				|| selected->point_size != startfont.displayed.point_size
-				|| selected->bold != startfont.displayed.bold
-				|| selected->italic != startfont.displayed.italic
-				|| selected->underline != startfont.displayed.underline;
-		};
-
-		bool has_changes = false;
-		for (auto *line : core.selectionController->GetSelectedSet()) {
-			parsed_line parsed(line);
-			int line_insertion_point = active_insertion_point;
-			if (line != active.line)
-				line_insertion_point = remap_pos_for_line(line, insertion_chars).plain;
-			if (selection_changes_line(font_for_line(parsed, line_insertion_point))) {
-				has_changes = true;
-				break;
-			}
-		}
-		if (!has_changes)
-			return;
-
-		update_lines(c, from_wx(_("set font")), [&](AssDialogue *line, int sel_start, int sel_end, int norm_sel_start, int norm_sel_end) {
-			parsed_line parsed(line);
-			int line_insertion_point = active_insertion_point;
-			if (line != active.line)
-				line_insertion_point = remap_pos_for_line(line, insertion_chars).plain;
-
-			const auto startfont = font_for_line(parsed, line_insertion_point);
-			int shift = 0;
-			auto do_set_tag = [&](const char *tag_name, std::string const& value) {
-				shift += parsed.set_tag(tag_name, value, norm_sel_start, sel_start + shift);
+		auto apply_selection = [&](FontFaceDialogSelection const& selected) {
+			auto selection_changes_line = [&](line_font_state const& startfont) {
+				return ShouldWriteFontFace(
+						startfont.stored_face_name,
+						startfont.displayed.face_name,
+						startfont.has_explicit_face_override,
+						selected.face_name)
+					|| selected.point_size != startfont.displayed.point_size
+					|| selected.bold != startfont.displayed.bold
+					|| selected.italic != startfont.displayed.italic
+					|| selected.underline != startfont.displayed.underline;
 			};
 
-			if (ShouldWriteFontFace(
-					startfont.stored_face_name,
-					startfont.displayed.face_name,
-					startfont.has_explicit_face_override,
-					selected->face_name))
-				do_set_tag("\\fn", selected->face_name);
-			if (selected->point_size != startfont.displayed.point_size)
-				do_set_tag("\\fs", std::to_string(selected->point_size));
-			if (selected->bold != startfont.displayed.bold)
-				do_set_tag("\\b", std::to_string(selected->bold));
-			if (selected->italic != startfont.displayed.italic)
-				do_set_tag("\\i", std::to_string(selected->italic));
-			if (selected->underline != startfont.displayed.underline)
-				do_set_tag("\\u", std::to_string(selected->underline));
+			bool has_changes = false;
+			for (auto *line : core.selectionController->GetSelectedSet()) {
+				parsed_line parsed(line);
+				int line_insertion_point = active_insertion_point;
+				if (line != active.line)
+					line_insertion_point = remap_pos_for_line(line, insertion_chars).plain;
+				if (selection_changes_line(font_for_line(parsed, line_insertion_point))) {
+					has_changes = true;
+					break;
+				}
+			}
+			if (!has_changes)
+				return;
 
-			return shift;
-		});
+			update_lines(c, from_wx(_("set font")), [&](AssDialogue *line, int sel_start, int sel_end, int norm_sel_start, int norm_sel_end) {
+				parsed_line parsed(line);
+				int line_insertion_point = active_insertion_point;
+				if (line != active.line)
+					line_insertion_point = remap_pos_for_line(line, insertion_chars).plain;
+
+				const auto startfont = font_for_line(parsed, line_insertion_point);
+				int shift = 0;
+				auto do_set_tag = [&](const char *tag_name, std::string const& value) {
+					shift += parsed.set_tag(tag_name, value, norm_sel_start, sel_start + shift);
+				};
+
+				if (ShouldWriteFontFace(
+						startfont.stored_face_name,
+						startfont.displayed.face_name,
+						startfont.has_explicit_face_override,
+						selected.face_name))
+					do_set_tag("\\fn", selected.face_name);
+				if (selected.point_size != startfont.displayed.point_size)
+					do_set_tag("\\fs", std::to_string(selected.point_size));
+				if (selected.bold != startfont.displayed.bold)
+					do_set_tag("\\b", std::to_string(selected.bold));
+				if (selected.italic != startfont.displayed.italic)
+					do_set_tag("\\i", std::to_string(selected.italic));
+				if (selected.underline != startfont.displayed.underline)
+					do_set_tag("\\u", std::to_string(selected.underline));
+
+				return shift;
+			});
+		};
+
+		auto initial = font_for_line(active, active_insertion_point);
+		auto selected = ShowFontFaceDialog(
+			ui.parent, c, initial.displayed, font_model, apply_selection);
+		if (selected)
+			apply_selection(*selected);
 	}
 };
 

@@ -14,6 +14,7 @@
 #include "wx_style_editor_ui_host.h"
 
 #include <algorithm>
+#include <functional>
 #include <set>
 #include <utility>
 
@@ -22,11 +23,19 @@
 #include <wx/combobox.h>
 #include <wx/dialog.h>
 #include <wx/font.h>
-#include <wx/fontdlg.h>
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <commdlg.h>
+#include <wx/fontutil.h>
+#endif
 
 namespace {
 
@@ -51,20 +60,12 @@ wxString NameKind(FontFamilyNameKind kind) {
 	return _("Other name");
 }
 
-std::optional<FontFaceDialogSelection> ShowNativeFontFaceDialog(
-	wxWindow *parent,
-	FontFaceDialogSelection const& initial)
-{
-	wxFont initial_font(
-		initial.point_size,
-		wxFONTFAMILY_DEFAULT,
-		initial.italic ? wxFONTSTYLE_ITALIC : wxFONTSTYLE_NORMAL,
-		initial.bold ? wxFONTWEIGHT_BOLD : wxFONTWEIGHT_NORMAL,
-		initial.underline,
-		to_wx(initial.face_name));
-	auto font = wxGetFontFromUser(parent, initial_font, _("Select Font"));
+#ifdef _WIN32
+
+FontFaceDialogSelection SelectionFromNativeFont(LOGFONTW const& logfont, wxWindow *parent) {
+	wxFont font(wxNativeFontInfo(logfont, parent));
 	if (!font.IsOk())
-		return std::nullopt;
+		return {};
 
 	FontFaceDialogSelection result;
 	result.face_name = from_wx(font.GetFaceName());
@@ -75,8 +76,103 @@ std::optional<FontFaceDialogSelection> ShowNativeFontFaceDialog(
 	return result;
 }
 
+struct NativeFontDialogState {
+	wxWindow *parent = nullptr;
+	std::function<void(FontFaceDialogSelection const&)> const *on_apply = nullptr;
+};
+
+constexpr wchar_t NativeFontDialogStateProperty[] = L"AegisubFontDialogState";
+constexpr int NativeFontDialogApplyButtonId = 0x0402; // psh3 in the common dialog template
+
+UINT_PTR CALLBACK NativeFontDialogHook(
+	HWND hwnd,
+	UINT message,
+	WPARAM wparam,
+	LPARAM lparam)
+{
+	if (message == WM_INITDIALOG) {
+		auto const *choose_font = reinterpret_cast<CHOOSEFONTW const *>(lparam);
+		auto *state = reinterpret_cast<NativeFontDialogState *>(choose_font->lCustData);
+		SetPropW(hwnd, NativeFontDialogStateProperty, state);
+		wxString title = _("Select Font");
+		SetWindowTextW(hwnd, title.wc_str());
+		return 0;
+	}
+
+	auto *state = reinterpret_cast<NativeFontDialogState *>(
+		GetPropW(hwnd, NativeFontDialogStateProperty));
+	if (!state)
+		return 0;
+
+	if (message == WM_COMMAND
+		&& LOWORD(wparam) == NativeFontDialogApplyButtonId
+		&& HIWORD(wparam) == BN_CLICKED) {
+		LOGFONTW logfont{};
+		SendMessageW(hwnd, WM_CHOOSEFONT_GETLOGFONT, 0,
+			reinterpret_cast<LPARAM>(&logfont));
+		if (state->on_apply) {
+			auto selection = SelectionFromNativeFont(logfont, state->parent);
+			if (!selection.face_name.empty())
+				state->on_apply->operator()(selection);
+		}
+		return 1;
+	}
+
+	if (message == WM_DESTROY)
+		RemovePropW(hwnd, NativeFontDialogStateProperty);
+	return 0;
+}
+
+std::optional<FontFaceDialogSelection> ShowNativeFontFaceDialog(
+	wxWindow *parent,
+	FontFaceDialogSelection const& initial,
+	FontFamilyCatalogUiModel const&,
+	std::function<void(FontFaceDialogSelection const&)> const& on_apply)
+{
+	wxFont initial_font(
+		initial.point_size,
+		wxFONTFAMILY_DEFAULT,
+		initial.italic ? wxFONTSTYLE_ITALIC : wxFONTSTYLE_NORMAL,
+		initial.bold ? wxFONTWEIGHT_BOLD : wxFONTWEIGHT_NORMAL,
+		initial.underline,
+		to_wx(initial.face_name));
+	LOGFONTW logfont = initial_font.GetNativeFontInfo()->lf;
+	NativeFontDialogState state{parent, &on_apply};
+
+	CHOOSEFONTW choose_font{};
+	choose_font.lStructSize = sizeof(choose_font);
+	choose_font.hwndOwner = parent ? parent->GetHWND() : nullptr;
+	choose_font.lpLogFont = &logfont;
+	choose_font.lCustData = reinterpret_cast<LPARAM>(&state);
+	choose_font.lpfnHook = NativeFontDialogHook;
+	choose_font.Flags = CF_SCREENFONTS
+		| CF_INITTOLOGFONTSTRUCT
+		| CF_EFFECTS
+		| CF_APPLY
+		| CF_ENABLEHOOK;
+
+	if (!ChooseFontW(&choose_font))
+		return std::nullopt;
+
+	auto result = SelectionFromNativeFont(logfont, parent);
+	if (result.face_name.empty())
+		return std::nullopt;
+	return result;
+}
+
+#else
+
+std::optional<FontFaceDialogSelection> ShowNativeFontFaceDialog(
+	wxWindow *parent,
+	FontFaceDialogSelection const& initial,
+	FontFamilyCatalogUiModel const& font_model,
+	std::function<void(FontFaceDialogSelection const&)> const& on_apply);
+
+#endif
+
 class FontFaceDialog final : public wxDialog {
 	FontFamilyCatalogUiModel const& font_model;
+	std::function<void(FontFaceDialogSelection const&)> on_apply;
 	wxComboBox *face_name;
 	wxSpinCtrl *point_size;
 	wxCheckBox *bold;
@@ -158,6 +254,8 @@ class FontFaceDialog final : public wxDialog {
 		value.Trim(true).Trim(false);
 		if (auto *ok = FindWindow(wxID_OK))
 			ok->Enable(!value.empty());
+		if (auto *apply = FindWindow(wxID_APPLY))
+			apply->Enable(!value.empty());
 	}
 
 	void UpdatePreview() {
@@ -209,15 +307,22 @@ class FontFaceDialog final : public wxDialog {
 		SetClipboard(from_wx(font_information->GetValue()));
 	}
 
+	void OnApply(wxCommandEvent &) {
+		if (on_apply)
+			on_apply(GetSelection());
+	}
+
 public:
 	FontFaceDialog(
 		wxWindow *parent,
 		agi::Context *context,
 		FontFaceDialogSelection const& initial,
-		FontFamilyCatalogUiModel const& font_model)
+		FontFamilyCatalogUiModel const& font_model,
+		std::function<void(FontFaceDialogSelection const&)> on_apply)
 	: wxDialog(parent, -1, _("Select Font"), wxDefaultPosition, wxDefaultSize,
 		wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 	, font_model(font_model)
+	, on_apply(std::move(on_apply))
 	{
 		face_name = new wxComboBox(
 			this, -1, to_wx(initial.face_name), wxDefaultPosition, wxSize(400, -1),
@@ -282,7 +387,7 @@ public:
 		main_sizer->Add(font_box, wxSizerFlags().Expand().Border(wxALL, 10));
 		main_sizer->Add(preview_box, wxSizerFlags(1).Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 10));
 		main_sizer->Add(information_box, wxSizerFlags(1).Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 10));
-		main_sizer->Add(CreateStdDialogButtonSizer(wxOK | wxCANCEL),
+		main_sizer->Add(CreateStdDialogButtonSizer(wxOK | wxCANCEL | wxAPPLY),
 			wxSizerFlags().Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 10));
 		SetSizerAndFit(main_sizer);
 		SetMinSize(GetSize());
@@ -299,6 +404,7 @@ public:
 		preview_text->Bind(wxEVT_TEXT, &FontFaceDialog::OnPreviewText, this);
 		preview_colour->Bind(EVT_COLOR, &FontFaceDialog::OnPreviewColour, this);
 		copy_information->Bind(wxEVT_BUTTON, &FontFaceDialog::OnCopyInformation, this);
+		Bind(wxEVT_BUTTON, &FontFaceDialog::OnApply, this, wxID_APPLY);
 
 		preview->SetText(from_wx(preview_text->GetValue()));
 		UpdateInformation();
@@ -320,18 +426,39 @@ public:
 	}
 };
 
+#ifndef _WIN32
+
+std::optional<FontFaceDialogSelection> ShowNativeFontFaceDialog(
+	wxWindow *parent,
+	FontFaceDialogSelection const& initial,
+	FontFamilyCatalogUiModel const& font_model,
+	std::function<void(FontFaceDialogSelection const&)> const& on_apply)
+{
+	FontFaceDialog dialog(parent, nullptr, initial, font_model,
+		[&on_apply](FontFaceDialogSelection const& selection) {
+			if (on_apply)
+				on_apply(selection);
+		});
+	if (dialog.ShowModal() != wxID_OK)
+		return std::nullopt;
+	return dialog.GetSelection();
+}
+
+#endif
+
 } // namespace
 
 std::optional<FontFaceDialogSelection> ShowFontFaceDialog(
 	wxWindow *parent,
 	agi::Context *context,
 	FontFaceDialogSelection const& initial,
-	FontFamilyCatalogUiModel const& font_model)
+	FontFamilyCatalogUiModel const& font_model,
+	std::function<void(FontFaceDialogSelection const&)> on_apply)
 {
 	if (font_model.prefer_localized || !font_model.catalog || font_model.catalog->empty())
-		return ShowNativeFontFaceDialog(parent, initial);
+		return ShowNativeFontFaceDialog(parent, initial, font_model, on_apply);
 
-	FontFaceDialog dialog(parent, context, initial, font_model);
+	FontFaceDialog dialog(parent, context, initial, font_model, std::move(on_apply));
 	auto const result = dialog.ShowModal();
 	OPT_SET("Tool/Style Editor/Preview Text")->SetString(dialog.GetPreviewText());
 	if (result != wxID_OK)

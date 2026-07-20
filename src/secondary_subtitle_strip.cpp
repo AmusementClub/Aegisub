@@ -233,9 +233,12 @@ SecondarySubtitleStrip::SecondarySubtitleStrip(wxWindow *parent, agi::Context *c
 		0);
 
 	bitmap_updated_connection = session->AddBitmapUpdatedListener([this] {
+		if (!presentation_active)
+			return;
 		UpdateScrollBar();
 		Refresh(false);
 	});
+	bitmap_updated_connection.Block();
 
 	height_option_connection = OPT_SUB("Video/Secondary Subtitles/Height", &SecondarySubtitleStrip::OnConfiguredHeightChanged, this);
 	scroll_offset_option_connection = OPT_SUB(
@@ -291,6 +294,11 @@ SecondarySubtitleStrip::SecondarySubtitleStrip(wxWindow *parent, agi::Context *c
 }
 
 SecondarySubtitleStrip::~SecondarySubtitleStrip() {
+	if (presentation_active) {
+		presentation_active = false;
+		if (session)
+			session->SetPresentationDemand(this, false);
+	}
 	bitmap_updated_connection.Disconnect();
 }
 
@@ -303,8 +311,16 @@ wxRect SecondarySubtitleStrip::GetGutterRect() const {
 wxRect SecondarySubtitleStrip::GetContentRect() const {
 	wxRect rect = GetClientRect();
 	int gutter_width = std::clamp(left_gutter_width, 0, rect.width);
-	rect.x += gutter_width;
-	rect.width = std::max(0, rect.width - gutter_width);
+	if (!has_content_bounds) {
+		rect.x += gutter_width;
+		rect.width = std::max(0, rect.width - gutter_width);
+		return rect;
+	}
+
+	int const left = std::clamp(content_left, gutter_width, rect.width);
+	int const right = std::clamp(content_left + std::max(content_width, 0), left, rect.width);
+	rect.x = left;
+	rect.width = right - left;
 	return rect;
 }
 
@@ -993,14 +1009,26 @@ bool SecondarySubtitleStrip::OpenExternalSubtitlesFromPath(agi::fs::path const& 
 }
 
 void SecondarySubtitleStrip::SetPresentationActive(bool active) {
+	if (presentation_active == active)
+		return;
+
 	if (!active) {
 		if (resize_dragging) {
 			if (auto *video_box = dynamic_cast<VideoBox *>(GetParent()))
 				video_box->CommitSecondarySubtitleStripHeightDrag();
 		}
 		FinishMouseInteractions();
+		presentation_active = false;
+		bitmap_updated_connection.Block();
+		if (session)
+			session->SetPresentationDemand(this, false);
+		return;
 	}
 
+	presentation_active = true;
+	bitmap_updated_connection.Unblock();
+	if (session)
+		session->SetPresentationDemand(this, true);
 	UpdateScrollBar();
 	Refresh(false);
 }
@@ -1012,5 +1040,24 @@ void SecondarySubtitleStrip::SetLeftGutterWidth(int width) {
 
 	left_gutter_width = clamped_width;
 	LayoutGutterControls();
+	Refresh(false);
+}
+
+void SecondarySubtitleStrip::SetHorizontalLayout(int gutter_width, int video_left, int video_width) {
+	int const clamped_gutter_width = std::max(gutter_width, 0);
+	int const clamped_video_left = std::max(video_left, 0);
+	int const clamped_video_width = std::max(video_width, 0);
+	if (left_gutter_width == clamped_gutter_width
+		&& has_content_bounds
+		&& content_left == clamped_video_left
+		&& content_width == clamped_video_width)
+		return;
+
+	left_gutter_width = clamped_gutter_width;
+	content_left = clamped_video_left;
+	content_width = clamped_video_width;
+	has_content_bounds = true;
+	LayoutGutterControls();
+	UpdateScrollBar();
 	Refresh(false);
 }

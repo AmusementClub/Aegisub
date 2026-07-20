@@ -82,6 +82,8 @@ class VideoDisplay final : public wxGLCanvas {
 	/// Signals the display is connected to
 	std::vector<agi::signal::Connection> connections;
 	agi::signal::Signal<int> FramePresented;
+	/// Signals when the untransformed video viewport changes (for presenters).
+	agi::signal::Signal<> BaseViewportChanged;
 
 	const agi::OptionValue* autohideTools;
 	const agi::OptionValue* scrollAction;
@@ -121,6 +123,7 @@ class VideoDisplay final : public wxGLCanvas {
 	int viewport_top = 0;
 	/// The height of the video in screen pixels
 	int viewport_height = 0;
+	int baseViewportScaleFactor = 1;
 
 	/// The current zoom level, where 1.0 = 100%
 	double zoomValue;
@@ -129,6 +132,10 @@ class VideoDisplay final : public wxGLCanvas {
 	/// Current content pan in units relative to the base viewport height
 	double pan_x = 0.0;
 	double pan_y = 0.0;
+	/// Host-owned sizer changes must not be mistaken for a user resize.
+	int internalLayoutResizeDepth = 0;
+	std::uint64_t internalLayoutResizeGeneration = 0;
+	bool internalLayoutResizePending = false;
 
 	/// The video renderer
 	std::unique_ptr<IVideoRenderer> videoRenderer;
@@ -323,6 +330,14 @@ public:
 	void SetWindowZoom(double value) { SetZoom(value); }
 	void SyncToCurrentVideoProvider();
 	void ResetContentZoom();
+	/// Preserve the content transform across host-owned layout resizes. Calls
+	/// may be nested; the final End keeps queued size events covered until idle.
+	void BeginInternalLayoutResize();
+	void EndInternalLayoutResize();
+	/// Get the video viewport before attached-mode pan/zoom, in logical pixels.
+	/// This includes detached-mode letterboxing and is stable across content transforms.
+	wxRect GetBaseViewportRect() const;
+	DEFINE_SIGNAL_ADDERS(BaseViewportChanged, AddBaseViewportChangedListener)
 
 	/// Get the last seen position of the mouse in script coordinates
 	Vector2D GetMousePosition() const;

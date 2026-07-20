@@ -295,7 +295,7 @@ void SecondarySubtitleSession::SyncExternalSubtitleProjectProperty() {
 }
 
 void SecondarySubtitleSession::RequestFrame(int frame_number) {
-	if (!provider || frame_number < 0)
+	if (!active || !presentation_demand.HasDemand() || !provider || frame_number < 0)
 		return;
 
 	current_frame = frame_number;
@@ -612,6 +612,7 @@ void SecondarySubtitleSession::OnVideoHasSubtitlesAvailable() {
 }
 
 void SecondarySubtitleSession::RebuildProvider(AsyncVideoProvider *main_provider) {
+	last_rebuilt_main_provider = nullptr;
 	ReleaseProvider();
 	ClearBitmap();
 
@@ -654,6 +655,7 @@ void SecondarySubtitleSession::RebuildProvider(AsyncVideoProvider *main_provider
 			std::move(dummy_video_provider),
 			std::move(subtitles_provider),
 			std::move(event_sink));
+		last_rebuilt_main_provider = main_provider;
 		SyncConfiguredSubtitlesSource(main_provider);
 		if (active)
 			RequestFrame(core.videoController->GetFrameN());
@@ -699,8 +701,17 @@ void SecondarySubtitleSession::OnVideoProviderChanged(AsyncVideoProvider *main_p
 
 	video_embedded_auto_prompted = false;
 	if (!active) {
+		last_rebuilt_main_provider = nullptr;
 		ReleaseProvider();
 		ClearBitmap();
+		return;
+	}
+
+	// With the current shared-session owner, VideoBox can activate and rebuild
+	// before this listener runs. The provider pointer is unique per open video,
+	// so consume that marker instead of rebuilding the same secondary provider twice.
+	if (last_rebuilt_main_provider == main_provider) {
+		last_rebuilt_main_provider = nullptr;
 		return;
 	}
 
@@ -768,7 +779,7 @@ void SecondarySubtitleSession::OnPrimaryFramePresented(int frame_number) {
 }
 
 void SecondarySubtitleSession::OnFrameReady(VideoRenderPacket packet, double) {
-	if (!active)
+	if (!active || !presentation_demand.HasDemand())
 		return;
 
 	auto frame = BakePacketForCpuReadback(packet);
@@ -948,6 +959,7 @@ void SecondarySubtitleSession::SetActive(bool value) {
 
 	active = value;
 	if (!active) {
+		last_rebuilt_main_provider = nullptr;
 		UpdateExternalSubtitleWatch();
 		if (provider) {
 			provider->CancelPendingFrameRequests();
@@ -975,6 +987,25 @@ void SecondarySubtitleSession::SetActive(bool value) {
 	// If the strip is being enabled after a video was opened while hidden,
 	// offer to load its embedded subtitles.
 	OnVideoHasSubtitlesAvailable();
+}
+
+void SecondarySubtitleSession::SetPresentationDemand(void const *presenter, bool demanded) {
+	auto const change = presentation_demand.Set(presenter, demanded);
+	if (change == SecondarySubtitlePresentationDemandChange::None)
+		return;
+
+	if (change == SecondarySubtitlePresentationDemandChange::BecameIdle) {
+		// Avoid doing work for a frame which can no longer be displayed. The
+		// provider remains alive so re-showing the strip does not rebuild it.
+		if (provider)
+			provider->CancelPendingFrameRequests();
+		return;
+	}
+
+	// A presenter becoming visible may be the first demand after activation;
+	// request exactly the current primary frame to repopulate the bitmap.
+	if (active && provider)
+		RequestFrame(context->GetCore().videoController->GetFrameN());
 }
 
 void SecondarySubtitleSession::UseGlobalSubtitlesProvider() {

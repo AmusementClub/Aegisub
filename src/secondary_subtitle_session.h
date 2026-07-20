@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "secondary_subtitle_presentation_demand.h"
 #include "ui_dispatch.h"
 
 #include <libaegisub/fs_fwd.h>
@@ -114,6 +115,11 @@ class SecondarySubtitleSession final {
 	std::uint64_t bitmap_generation = 0;
 	bool has_bitmap = false;
 	bool active = false;
+	// VideoBox may activate the session from the same provider-change signal
+	// that this session observes. Remember that rebuild so the later callback
+	// does not construct the secondary provider a second time.
+	AsyncVideoProvider *last_rebuilt_main_provider = nullptr;
+	SecondarySubtitlePresentationDemand presentation_demand;
 	int current_frame = -1;
 	agi::signal::Signal<> bitmap_updated;
 
@@ -163,6 +169,11 @@ public:
 	std::string GetConfiguredSubtitlesProvider() const;
 	std::string GetEffectiveSubtitlesProvider() const;
 	void SetActive(bool value);
+	/// Register whether a UI presenter currently needs rendered frames. This is
+	/// independent of SetActive(): the provider stays warm while all
+	/// presenters are hidden, but frame work is paused until one is visible.
+	void SetPresentationDemand(void const *presenter, bool demanded);
+	bool HasPresentationDemand() const { return presentation_demand.HasDemand(); }
 	void UseGlobalSubtitlesProvider();
 	void UseIndependentSubtitlesProvider(std::string const& provider_name);
 	void UseCurrentScriptSource();

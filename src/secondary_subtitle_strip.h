@@ -36,6 +36,9 @@ class SecondarySubtitleStrip final : public wxPanel {
 	agi::signal::Connection video_dpi_scale_option_connection;
 	agi::signal::Connection show_vertical_ruler_option_connection;
 	int left_gutter_width = 0;
+	int content_left = 0;
+	int content_width = 0;
+	bool has_content_bounds = false;
 	int scroll_offset_y = 0;
 	int wheel_scroll_accum = 0;
 	bool resize_dragging = false;
@@ -50,6 +53,7 @@ class SecondarySubtitleStrip final : public wxPanel {
 	int paint_bitmap_cache_source_height = 0;
 	int paint_bitmap_cache_width = 0;
 	int paint_bitmap_cache_height = 0;
+	bool presentation_active = false;
 
 	static constexpr int kMinimumPanelHeight = 48;
 	static constexpr int kMaximumPanelHeight = 480;
@@ -95,4 +99,7 @@ public:
 	bool OpenExternalSubtitlesFromPath(agi::fs::path const& path, bool show_errors = true);
 	void SetPresentationActive(bool active);
 	void SetLeftGutterWidth(int width);
+	/// Set the toolbar gutter and the video base viewport independently.
+	/// Coordinates are relative to this strip's client area.
+	void SetHorizontalLayout(int gutter_width, int video_left, int video_width);
 };

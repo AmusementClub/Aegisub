@@ -145,20 +145,20 @@ DialogDetachedVideo::DialogDetachedVideo(agi::Context *context)
 	old_display->Unload();
 
 	// Video area;
-	auto videoBox = new VideoBox(this, true, context);
+	video_box = new VideoBox(this, true, context);
 	ui.videoDisplay->SetMinClientSize(old_display->GetClientSize());
-	videoBox->Layout();
+	video_box->Layout();
 	RestoreVisualTool(ui.videoDisplay, context, initial_tool);
 
 	// Set sizer
 	wxSizer *mainSizer = new wxBoxSizer(wxVERTICAL);
-	mainSizer->Add(videoBox,1,wxEXPAND);
+	mainSizer->Add(video_box,1,wxEXPAND);
 	SetSizerAndFit(mainSizer);
-	videoBox->SyncSecondarySubtitleStripVisibility();
+	video_box->SyncSecondarySubtitleStripVisibility();
 
 	// Ensure we can grow smaller, without these the window is locked to at least the initial size
 	ui.videoDisplay->SetMinSize(wxSize(1,1));
-	videoBox->SetMinSize(wxSize(1,1));
+	video_box->SetMinSize(wxSize(1,1));
 	SetMinSize(wxSize(1,1));
 
 	persist = agi::make_unique<PersistLocation>(this, "Video/Detached");
@@ -183,11 +183,24 @@ DialogDetachedVideo::DialogDetachedVideo(agi::Context *context)
 DialogDetachedVideo::~DialogDetachedVideo() { }
 
 void DialogDetachedVideo::OnClose(wxCloseEvent &evt) {
+	if (close_started) {
+		evt.Skip();
+		return;
+	}
+	close_started = true;
+
 	auto core = context->GetCore();
 	auto ui = context->GetUI();
 	auto const current_tool = DetectVisualTool(ui.videoDisplay);
+	auto *detached_display = ui.videoDisplay != old_display ? ui.videoDisplay : nullptr;
 
-	ui.videoDisplay->Destroy();
+	// Stop the presenter before changing the shared option. The option signal
+	// is synchronous, and the detached VideoBox is still alive until the dialog
+	// is destroyed after this handler returns.
+	if (video_box)
+		video_box->PrepareForDetachedClose();
+	if (detached_display)
+		detached_display->Hide();
 
 	ui.videoDisplay = old_display;
 	ui.videoSlider = old_slider;
@@ -201,10 +214,16 @@ void DialogDetachedVideo::OnClose(wxCloseEvent &evt) {
 	core.videoController->JumpToFrame(core.videoController->GetFrameN());
 	ui.videoDisplay->Refresh(false);
 
+	if (detached_display)
+		detached_display->Destroy();
+
 	evt.Skip();
 }
 
 void DialogDetachedVideo::OnMinimize(wxIconizeEvent &event) {
+	if (video_box && !close_started)
+		video_box->SetSecondarySubtitlePresentationAvailable(!event.IsIconized());
+
 	if (event.IsIconized()) {
 		// Force the video display to repaint as otherwise the last displayed
 		// frame stays visible even though the dialog is minimized
@@ -218,6 +237,9 @@ void DialogDetachedVideo::OnKeyDown(wxKeyEvent &evt) {
 }
 
 void DialogDetachedVideo::OnVideoOpen(AsyncVideoProvider *new_provider) {
+	if (close_started)
+		return;
+
 	auto core = context->GetCore();
 
 	if (new_provider)

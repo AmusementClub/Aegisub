@@ -36,6 +36,7 @@
 
 namespace agi { struct Context; }
 namespace agi { class OptionValue; }
+class AsyncVideoProvider;
 class SecondarySubtitleStrip;
 class SecondarySubtitleSession;
 class VideoDisplay;
@@ -59,6 +60,9 @@ class VideoBox final : public wxPanel {
 	// for the same ContextUiState session and only switch view visibility.
 	bool ownsSecondarySubtitleSession = false;
 	bool isDetached = false;
+	bool hasVideoProvider = false;
+	bool presentationAvailable = true;
+	bool closing = false;
 	int current_frame = -1;
 	bool secondarySubtitleStripHeightDragActive = false;
 	int secondarySubtitleStripHeightDragPreservedVideoHeight = 0;
@@ -67,12 +71,13 @@ class VideoBox final : public wxPanel {
 	void UpdateTimeBoxes();
 	void JumpToInputFrame();
 	void ApplyVideoProvider();
+	void ApplyVideoProvider(AsyncVideoProvider *provider);
 	void UpdateSecondarySubtitleStripGutter();
 	void UpdateSecondarySubtitleStripVisibility();
 	int GetSecondarySubtitleLayoutMinHeight() const;
 	void RelayoutAfterSecondarySubtitleStripChange(int preserved_video_height, int preferred_client_height_delta);
 	void OnCurrentFrameChanged(int frame_number);
-	void OnVideoProviderChanged();
+	void OnVideoProviderChanged(AsyncVideoProvider *provider);
 	void OnDetachedVideoChanged(agi::OptionValue const&);
 	void OnSecondarySubtitleStripEnabledChanged(agi::OptionValue const&);
 	void OnSize(wxSizeEvent &event);
@@ -84,6 +89,8 @@ public:
 		agi::Context *context);
 	void SyncToContextState();
 	void SyncSecondarySubtitleStripVisibility();
+	void SetSecondarySubtitlePresentationAvailable(bool available);
+	void PrepareForDetachedClose();
 	bool OpenSecondarySubtitlesFromPath(agi::fs::path const& path, bool show_errors = true);
 	void OnSecondarySubtitleStripHeightChanged(int previous_height, int new_height);
 	void BeginSecondarySubtitleStripHeightDrag();

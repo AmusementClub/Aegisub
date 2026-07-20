@@ -47,6 +47,8 @@ class DialogDetachedVideo final : public wxDialog {
 	agi::Context *context;
 	VideoDisplay *old_display;
 	wxWindow *old_slider;
+	VideoBox *video_box = nullptr;
+	bool close_started = false;
 	agi::signal::Connection video_open;
 	std::unique_ptr<PersistLocation> persist;
 

@@ -1,4 +1,5 @@
 #include "../../src/secondary_subtitle_strip_layout.h"
+#include "../../src/secondary_subtitle_presentation_demand.h"
 
 #include <gtest/gtest.h>
 
@@ -87,4 +88,39 @@ TEST(secondary_subtitle_strip_layout, detached_box_is_visible_only_in_detached_m
 TEST(secondary_subtitle_strip_layout, secondary_strip_requires_video_and_enable_option) {
 	EXPECT_FALSE(ShouldShowSecondarySubtitleStrip(false, true, false, false));
 	EXPECT_FALSE(ShouldShowSecondarySubtitleStrip(true, false, false, false));
+}
+
+TEST(secondary_subtitle_presentation_demand, ignores_null_and_duplicate_presenters) {
+	SecondarySubtitlePresentationDemand demand;
+	int presenter = 0;
+
+	EXPECT_EQ(SecondarySubtitlePresentationDemandChange::None, demand.Set(nullptr, true));
+	EXPECT_FALSE(demand.HasDemand());
+	EXPECT_EQ(SecondarySubtitlePresentationDemandChange::BecameDemanded, demand.Set(&presenter, true));
+	EXPECT_TRUE(demand.HasDemand());
+	EXPECT_EQ(SecondarySubtitlePresentationDemandChange::None, demand.Set(&presenter, true));
+	EXPECT_EQ(SecondarySubtitlePresentationDemandChange::BecameIdle, demand.Set(&presenter, false));
+	EXPECT_FALSE(demand.HasDemand());
+	EXPECT_EQ(SecondarySubtitlePresentationDemandChange::None, demand.Set(&presenter, false));
+}
+
+TEST(secondary_subtitle_presentation_demand, remains_demanded_during_presenter_handoff) {
+	SecondarySubtitlePresentationDemand demand;
+	int attached_presenter = 0;
+	int detached_presenter = 0;
+
+	EXPECT_EQ(
+		SecondarySubtitlePresentationDemandChange::BecameDemanded,
+		demand.Set(&attached_presenter, true));
+	EXPECT_EQ(
+		SecondarySubtitlePresentationDemandChange::None,
+		demand.Set(&detached_presenter, true));
+	EXPECT_EQ(
+		SecondarySubtitlePresentationDemandChange::None,
+		demand.Set(&attached_presenter, false));
+	EXPECT_TRUE(demand.HasDemand());
+	EXPECT_EQ(
+		SecondarySubtitlePresentationDemandChange::BecameIdle,
+		demand.Set(&detached_presenter, false));
+	EXPECT_FALSE(demand.HasDemand());
 }

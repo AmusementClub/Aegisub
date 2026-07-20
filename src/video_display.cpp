@@ -79,6 +79,7 @@
 #include <wx/menu.h>
 #include <wx/textctrl.h>
 #include <wx/toolbar.h>
+#include <wx/weakref.h>
 
 #ifdef HAVE_OPENGL_GL_H
 #include <OpenGL/gl.h>
@@ -462,6 +463,19 @@ void VideoDisplay::SyncToCurrentVideoProvider() {
 	ApplyVideoProvider(con->project->VideoProvider());
 	if (con->project->VideoProvider())
 		con->videoController->JumpToFrame(con->videoController->GetFrameN());
+}
+
+wxRect VideoDisplay::GetBaseViewportRect() const {
+	int const factor = std::max(scale_factor, 1);
+	int const left = static_cast<int>(std::lround(
+		static_cast<double>(baseViewport.viewport_left) / factor));
+	int const right = static_cast<int>(std::lround(
+		static_cast<double>(baseViewport.viewport_left + baseViewport.viewport_width) / factor));
+	int const top = static_cast<int>(std::lround(
+		static_cast<double>(baseViewport.viewport_top) / factor));
+	int const bottom = static_cast<int>(std::lround(
+		static_cast<double>(baseViewport.viewport_top + baseViewport.viewport_height) / factor));
+	return wxRect(left, top, std::max(right - left, 0), std::max(bottom - top, 0));
 }
 
 double VideoDisplay::GetVideoScaleFactor() const {
@@ -2144,6 +2158,7 @@ void VideoDisplay::PositionVideo() {
 			? static_cast<double>(provider->GetWidth()) / provider->GetHeight()
 			: con->videoController->GetAspectRatioValue();
 	}
+	auto const previous_base_viewport = baseViewport;
 	baseViewport = BuildVideoDisplayViewportLayout(
 		canvas_width,
 		canvas_height,
@@ -2161,6 +2176,15 @@ void VideoDisplay::PositionVideo() {
 		enable_content_transform,
 		{ freeSize ? 1.0 : contentZoomValue, pan_x, pan_y });
 	ApplyViewportLayout(layout, viewport_left, viewport_width, viewport_bottom, viewport_top, viewport_height);
+	bool const base_viewport_changed = scale_factor != baseViewportScaleFactor
+		|| baseViewport.viewport_left != previous_base_viewport.viewport_left
+		|| baseViewport.viewport_width != previous_base_viewport.viewport_width
+		|| baseViewport.viewport_top != previous_base_viewport.viewport_top
+		|| baseViewport.viewport_height != previous_base_viewport.viewport_height;
+	if (base_viewport_changed) {
+		baseViewportScaleFactor = scale_factor;
+		BaseViewportChanged();
+	}
 
 	if (tool) {
 		wxSize client_size = GetClientSize();
@@ -2230,18 +2254,22 @@ void VideoDisplay::RefreshVideoScale() {
 void VideoDisplay::OnSizeEvent(wxSizeEvent &event) {
 	if (freeSize) {
 		wxSize newVideoSize = GetClientSize() * scale_factor;
-		// Only reset pan/zoom when the window size actually changed (user resize),
-		// not when an internal layout change (e.g. toolbar swap) re-enters here.
-		if (newVideoSize != videoSize) {
+		// Host-owned strip/layout changes resize the canvas without changing the
+		// user's view. Real window resizes retain the historical reset behavior.
+		if (newVideoSize != videoSize
+			&& !internalLayoutResizePending
+			&& internalLayoutResizeDepth == 0) {
 			contentZoomValue = 1.0;
 			pan_x = 0.0;
 			pan_y = 0.0;
 		}
 		videoSize = newVideoSize;
 		PositionVideo();
-		zoomValue = double(viewport_height) / con->project->VideoProvider()->GetHeight();
-		zoomBox->ChangeValue(fmt_wx("%g%%", zoomValue * 100.));
-		con->ass->Properties.video_zoom = zoomValue;
+		if (auto provider = con->project->VideoProvider(); provider && provider->GetHeight() > 0) {
+			zoomValue = double(viewport_height) / provider->GetHeight();
+			zoomBox->ChangeValue(fmt_wx("%g%%", zoomValue * 100.));
+			con->ass->Properties.video_zoom = zoomValue;
+		}
 	}
 	else {
 		PositionVideo();
@@ -2512,6 +2540,30 @@ void VideoDisplay::ResetContentZoom() {
 	pan_x = 0.0;
 	pan_y = 0.0;
 	PositionVideo();
+}
+
+void VideoDisplay::BeginInternalLayoutResize() {
+	++internalLayoutResizeDepth;
+	internalLayoutResizePending = true;
+	++internalLayoutResizeGeneration;
+}
+
+void VideoDisplay::EndInternalLayoutResize() {
+	if (internalLayoutResizeDepth <= 0)
+		return;
+
+	--internalLayoutResizeDepth;
+	if (internalLayoutResizeDepth > 0)
+		return;
+
+	std::uint64_t const generation = internalLayoutResizeGeneration;
+	wxWeakRef<VideoDisplay> weak_this(this);
+	CallAfter([weak_this, generation] {
+		if (auto *self = weak_this.get(); self
+			&& self->internalLayoutResizeDepth == 0
+			&& self->internalLayoutResizeGeneration == generation)
+			self->internalLayoutResizePending = false;
+	});
 }
 
 bool VideoDisplay::ToolIsType(std::type_info const& type) const {

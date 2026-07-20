@@ -440,8 +440,8 @@ void BuildGeneralPage(OptionPage *p) {
 	p->OptionAdd(recent, _("Files"), "Limits/MRU", 0, 16);
 	p->OptionAdd(recent, _("Find/Replace"), "Limits/Find Replace");
 
-#ifdef _WIN32
 	auto font_names = p->PageSizer(_("ASS Font Names"));
+#ifdef _WIN32
 	auto *prefer_localized = p->OptionAdd(
 		font_names,
 		_("Prefer localized font family names"),
@@ -451,6 +451,14 @@ void BuildGeneralPage(OptionPage *p) {
 		"system-localized family name. When disabled, they display and write the "
 		"English Win32 family name for better cross-language portability."));
 #endif
+	auto *contains_matching = p->OptionAdd(
+		font_names,
+		_("Use contains matching in custom font selectors"),
+		"Subtitle/Font/Use Contains Matching");
+	contains_matching->SetToolTip(_(
+		"When enabled, typing in Style Editor or the custom Select Font dialog "
+		"matches names containing the typed text anywhere. The Windows system "
+		"font dialog is not affected."));
 
 	p->SetSizerAndFit(p->sizer);
 }

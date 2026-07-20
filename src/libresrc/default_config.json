@@ -420,7 +420,8 @@
 			"Width" : 1280
 		},
 		"Font" : {
-			"Prefer Localized Family Names" : true
+			"Prefer Localized Family Names" : true,
+			"Use Contains Matching" : false
 		},
 		"Edit Box" : {
 			"Command Buttons" : {

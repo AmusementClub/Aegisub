@@ -402,6 +402,9 @@
 			"Height" : 720,
 			"Width" : 1280
 		},
+		"Font" : {
+			"Use Contains Matching" : false
+		},
 		"Edit Box" : {
 			"Command Buttons" : {
 				"Commands" : [

@@ -41,6 +41,7 @@
 #include "colour_button.h"
 #include "compat.h"
 #include "font_family_catalog_ui.h"
+#include "font_name_combo_box.h"
 #include "help_button.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
@@ -289,7 +290,9 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 
 	// Create controls
 	StyleName = new wxTextCtrl(this, -1, to_wx(style->name));
-	FontName = new wxComboBox(this, -1, to_wx(style->font), wxDefaultPosition, wxSize(150, -1), 0, nullptr, wxCB_DROPDOWN);
+	auto const contains_matching = OPT_GET("Subtitle/Font/Use Contains Matching")->GetBool();
+	FontName = new FontNameComboBox(
+		this, to_wx(style->font), wxSize(150, -1), font_model.choices, contains_matching);
 	auto FontSize = num_text_ctrl(&work->fontsize, 0, 10000.0, 1.0, AssStyle::DefaultFontSize, true);
 	BoxBold = new wxCheckBox(this, -1, _("&Bold"));
 	BoxItalic = new wxCheckBox(this, -1, _("&Italic"));
@@ -357,10 +360,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	OutlineType->SetValue(style->borderstyle == 3);
 	Alignment->SetSelection(AlignToControl(style->alignment));
 	// Fill font face list box
-	FontName->Freeze();
-	FontName->Append(font_model.choices);
-	FontName->SetValue(to_wx(font_model.PreferredName(style->font)));
-	FontName->Thaw();
+	FontName->ChangeValue(to_wx(font_model.PreferredName(style->font)));
 
 	// Set encoding value
 	bool found = false;

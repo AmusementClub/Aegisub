@@ -6,6 +6,7 @@
 #include "compat.h"
 #include "font_family_catalog.h"
 #include "font_family_catalog_ui.h"
+#include "font_name_combo_box.h"
 #include "include/aegisub/context.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
@@ -324,9 +325,10 @@ public:
 	, font_model(font_model)
 	, on_apply(std::move(on_apply))
 	{
-		face_name = new wxComboBox(
-			this, -1, to_wx(initial.face_name), wxDefaultPosition, wxSize(400, -1),
-			font_model.choices, wxCB_DROPDOWN | wxTE_PROCESS_ENTER);
+		auto const contains_matching = OPT_GET("Subtitle/Font/Use Contains Matching")->GetBool();
+		face_name = new FontNameComboBox(
+			this, to_wx(initial.face_name), wxSize(400, -1),
+			font_model.choices, contains_matching);
 		face_name->SetToolTip(_("Font face; this exact name will be written to ASS"));
 		point_size = new wxSpinCtrl(
 			this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize,

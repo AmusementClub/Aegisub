@@ -1001,7 +1001,7 @@ class DotNetAutomationRuntime final {
 		auto component_dir = executable_dir / "plugin_bridge";
 		auto runtime_config = component_dir / "Aegisub.CoreClr.Adapter.runtimeconfig.json";
 		auto nethost_path = component_dir / kNetHostFileName;
-		auto dotnet_root = std::filesystem::path();
+		agi::fs::path dotnet_root;
 		if (auto const* configured_root = std::getenv("AEGISUB_DOTNET_ROOT"); configured_root && *configured_root) {
 			dotnet_root = std::filesystem::absolute(std::filesystem::u8path(configured_root));
 			LOG_I("automation/plugin_bridge")

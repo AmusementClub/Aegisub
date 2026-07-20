@@ -77,7 +77,7 @@ std::string GetCurrentModuleDirectory() {
 	Dl_info info{};
 	if (!dladdr(reinterpret_cast<void *>(&ModuleAddressAnchor), &info) || !info.dli_fname)
 		return {};
-	return agi::fs::PathToString(stdfs::path(info.dli_fname).parent_path());
+	return agi::fs::PathToString(stdfs::path{info.dli_fname}.parent_path());
 #endif
 }
 

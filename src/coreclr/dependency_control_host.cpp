@@ -69,7 +69,7 @@ agi::fs::path ResolveAutomationRoot() {
 #ifdef _WIN32
 	if (auto value = ReadWideEnvironment(
 		L"AEGISUB_DEPENDENCY_CONTROL_AUTOMATION_ROOT"))
-		return agi::fs::path(*value);
+		return agi::fs::path{*value};
 #else
 	if (auto value = ReadEnvironment("AEGISUB_DEPENDENCY_CONTROL_AUTOMATION_ROOT"))
 		return agi::fs::PathFromString(*value);
@@ -84,7 +84,7 @@ agi::fs::path ResolveStateRoot() {
 #ifdef _WIN32
 	if (auto value = ReadWideEnvironment(
 		L"AEGISUB_DEPENDENCY_CONTROL_STATE_ROOT"))
-		return agi::fs::path(*value);
+		return agi::fs::path{*value};
 #else
 	if (auto value = ReadEnvironment("AEGISUB_DEPENDENCY_CONTROL_STATE_ROOT"))
 		return agi::fs::PathFromString(*value);
@@ -99,7 +99,7 @@ agi::fs::path ResolveLegacyConfigRoot() {
 #ifdef _WIN32
 	if (auto value = ReadWideEnvironment(
 		L"AEGISUB_DEPENDENCY_CONTROL_LEGACY_CONFIG_ROOT"))
-		return agi::fs::path(*value);
+		return agi::fs::path{*value};
 #else
 	if (auto value = ReadEnvironment("AEGISUB_DEPENDENCY_CONTROL_LEGACY_CONFIG_ROOT"))
 		return agi::fs::PathFromString(*value);

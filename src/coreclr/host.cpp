@@ -111,7 +111,7 @@ std::filesystem::path ResolveHostFxrPath(
 	if (status != 0)
 		throw std::runtime_error("get_hostfxr_path failed with status " + StatusHex(status));
 
-	return std::filesystem::path(buffer.data());
+	return std::filesystem::path{buffer.data()};
 }
 
 void ValidateHostOptions(HostOptions const& options) {
@@ -137,7 +137,7 @@ std::filesystem::path GetCurrentExecutableDirectory() {
 	if (!length || length >= path.size())
 		throw std::runtime_error("Could not resolve the executable path");
 	path.resize(length);
-	return std::filesystem::path(path).parent_path();
+	return std::filesystem::path{path}.parent_path();
 #elif defined(__APPLE__)
 	uint32_t size = 0;
 	_NSGetExecutablePath(nullptr, &size);
@@ -151,7 +151,7 @@ std::filesystem::path GetCurrentExecutableDirectory() {
 	if (length <= 0)
 		throw std::runtime_error("Could not resolve the executable path");
 	path[static_cast<size_t>(length)] = '\0';
-	return std::filesystem::path(path.data()).parent_path();
+	return std::filesystem::path{path.data()}.parent_path();
 #endif
 }
 

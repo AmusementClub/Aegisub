@@ -21,6 +21,7 @@
 
 #include <libaegisub/log.h>
 #include <libaegisub/native_library.h>
+#include <libaegisub/scope_exit.h>
 
 namespace {
 using DWriteCreateFactoryFn = HRESULT (WINAPI *)(DWRITE_FACTORY_TYPE, REFIID, IUnknown **);
@@ -589,6 +590,70 @@ std::vector<DWriteLocalizedName> DWriteBridge::GetWin32FamilyNamesFromLogFont(LO
 
 std::vector<DWriteLocalizedName> DWriteBridge::GetWin32FamilyNamesFromFont(IDWriteFont *font) const {
 	return win32_family_names(font);
+}
+
+bool DWriteBridge::ResolveEntityAndNamesViaHdc(LOGFONTW const& lf,
+                                               std::string& out_path,
+                                               int& out_face_index,
+                                               std::vector<DWriteLocalizedName>& out_win32_names) const {
+	out_path.clear();
+	out_face_index = -1;
+	out_win32_names.clear();
+
+	if (!available_ || !gdi_interop)
+		return false;
+
+	// The caller supplies a LOGFONT already built via gdi_select_face. We
+	// materialize it into an HFONT and select it into a temporary HDC, then
+	// let DWrite read the currently-selected physical font via HDC interop.
+	HDC hdc = CreateCompatibleDC(nullptr);
+	if (!hdc)
+		return false;
+	HFONT hfont = CreateFontIndirectW(&lf);
+	if (!hfont) {
+		DeleteDC(hdc);
+		return false;
+	}
+	HGDIOBJ prev = SelectObject(hdc, hfont);
+
+	auto release_all = agi::make_scope_exit([&] {
+		SelectObject(hdc, prev);
+		DeleteObject(hfont);
+		DeleteDC(hdc);
+	});
+
+	IDWriteFontFace *face = CreateFontFaceFromHdc(hdc);
+	if (!face)
+		return false;
+	auto release_face = agi::make_scope_exit([&] { face->Release(); });
+
+	// Resolve file path + face index (same path as GetFontFilePath).
+	int idx = -1;
+	if (!GetFontFilePath(face, out_path, idx) || out_path.empty())
+		return false;
+	out_face_index = idx >= 0 ? idx : static_cast<int>(face->GetIndex());
+
+	// QI to IDWriteFontFace3 (Win10 1809+) to read informational strings
+	// directly from the face. The base IDWriteFontFace interface lacks this.
+	// This avoids any FontCollection reverse lookup — the face itself
+	// carries its WIN32_FAMILY_NAMES.
+	IDWriteFontFace3 *face3 = nullptr;
+	auto hr = face->QueryInterface(&face3);
+	if (FAILED(hr) || !face3)
+		return false;
+	auto release_face3 = agi::make_scope_exit([&] { face3->Release(); });
+
+	IDWriteLocalizedStrings *strs = nullptr;
+	BOOL exists = FALSE;
+	hr = face3->GetInformationalStrings(DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES, &strs, &exists);
+	if (FAILED(hr) || !exists || !strs) {
+		if (strs) strs->Release();
+		return false;
+	}
+	out_win32_names = localized_strings_with_locale(strs);
+	strs->Release();
+
+	return !out_win32_names.empty();
 }
 
 std::vector<std::string> DWriteBridge::GetFullNamesFromFont(IDWriteFont *font) const {

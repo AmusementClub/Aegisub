@@ -69,6 +69,31 @@ public:
 	/// IDWriteFontFamily::GetFamilyNames when informational strings are absent.
 	std::vector<DWriteLocalizedName> GetWin32FamilyNamesFromLogFont(LOGFONTW const &lf) const;
 	std::vector<DWriteLocalizedName> GetWin32FamilyNamesFromFont(IDWriteFont *font) const;
+
+	/// Resolve the seed font entity (file path + face index) and its Win32
+	/// family names via the HDC path, bypassing CreateFontFromLOGFONT.
+	///
+	/// Used as a fallback when DWrite refuses a LOGFONT — typically because
+	/// the font's name table lacks name ID 2 (Subfamily) in the zh-CN locale,
+	/// so DWrite cannot build a RBIZ family entry and rejects the LOGFONT with
+	/// DWRITE_E_NOFONT. The HDC path reads the currently-selected HFONT
+	/// directly, bypassing the locale lookup, so it works for such fonts.
+	///
+	/// The caller must already have built a LOGFONT whose lfFaceName matches
+	/// the target family (via gdi_select_face or equivalent). This method
+	/// creates a fresh HFONT from the LOGFONT, selects it into a temporary
+	/// HDC, and reads the resulting physical font.
+	///
+	/// @param lf  LOGFONT whose lfFaceName selects the target font
+	/// @param[out] out_path  Receives the font file path (UTF-8)
+	/// @param[out] out_face_index  Receives the face index
+	/// @param[out] out_win32_names  Receives all locale WIN32_FAMILY_NAMES entries
+	/// @return true on success; false on any failure (incl. DWriteCore, where
+	///         CreateFontFaceFromHdc returns E_NOTIMPL)
+	bool ResolveEntityAndNamesViaHdc(LOGFONTW const& lf,
+	                                 std::string& out_path,
+	                                 int& out_face_index,
+	                                 std::vector<DWriteLocalizedName>& out_win32_names) const;
 	std::vector<std::string> GetFullNamesFromFont(IDWriteFont *font) const;
 	std::string GetPostScriptNameFromFont(IDWriteFont *font) const;
 	

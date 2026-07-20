@@ -234,6 +234,12 @@ FontFamilyCatalog BuildFontFamilyCatalog() {
 	// Track english names claimed by a family so we can mark collisions later.
 	std::unordered_map<std::string, std::vector<FontFamilyId>> english_owners;
 
+	// Cache of seed entities resolved during the main loop (keyed by localized
+	// family name). The final safety pass re-validates each retained English
+	// name against the seed entity, and reusing this cache avoids a second
+	// GDI+DWrite round-trip per font when the seed came from the HDC fallback.
+	std::unordered_map<std::string, FontEntityKey> seed_entity_cache;
+
 	for (auto const& seed_face : seeds) {
 		FontFamilyRecord rec;
 		rec.id = next_id++;
@@ -278,7 +284,57 @@ FontFamilyCatalog BuildFontFamilyCatalog() {
 		}
 
 		FontEntityKey seed_entity;
-		if (resolve_entity(dwrite, seed_face, seed_entity)) {
+		bool have_seed = resolve_entity(dwrite, seed_face, seed_entity);
+
+		// Fallback when DWrite rejects the LOGFONT (typical for fonts whose
+		// zh-CN name table lacks name ID 2 — Subfamily — so DWrite cannot build
+		// a RBIZ family entry and returns DWRITE_E_NOFONT). Recover the seed
+		// entity and English Win32 family names via the HDC path, which reads
+		// the currently-selected HFONT directly, bypassing the locale lookup.
+		//
+		// NOTE: DWriteCore returns E_NOTIMPL from CreateFontFaceFromHdc, so
+		// this fallback is skipped there. Fonts with incomplete zh-CN name
+		// tables will fall back to the localized family name on DWriteCore.
+		// Fixing that requires reading the name table directly (bypassing
+		// DWrite entirely) — out of scope for this change.
+		if (!have_seed && !dwrite.is_dwritecore()) {
+			std::string hd_path;
+			int hd_index = -1;
+			std::vector<DWriteLocalizedName> hd_names;
+			if (dwrite.ResolveEntityAndNamesViaHdc(lf, hd_path, hd_index, hd_names)) {
+				seed_entity.path_lower = ascii_lower(hd_path);
+				seed_entity.face_index = hd_index;
+				seed_entity.valid = true;
+				have_seed = true;
+
+				// Merge recovered Win32 family names into rec.names and the
+				// local win32_names list (deduplicated) so pick_english_name
+				// can see them.
+				for (auto const& wn : hd_names) {
+					if (wn.value.empty()) continue;
+					bool exists = false;
+					for (auto const& existing : rec.names) {
+						if (existing.value == wn.value && existing.locale == wn.locale) {
+							exists = true;
+							break;
+						}
+					}
+					if (!exists) {
+						FontFamilyName n;
+						n.value = wn.value;
+						n.locale = wn.locale;
+						n.kind = FontFamilyNameKind::Win32Family;
+						rec.names.push_back(std::move(n));
+						win32_names.push_back(wn);
+					}
+				}
+			}
+		}
+
+		if (have_seed)
+			seed_entity_cache.emplace(seed_face, seed_entity);
+
+		if (have_seed) {
 			rec.english_win32_family_name = pick_english_name(dwrite, win32_names, seed_entity);
 			if (!rec.english_win32_family_name.empty())
 				english_owners[ascii_lower(rec.english_win32_family_name)].push_back(rec.id);
@@ -309,18 +365,37 @@ FontFamilyCatalog BuildFontFamilyCatalog() {
 	}
 
 	// Final safety pass: each retained English name must still entity-map back
-	// to its owning family's localized seed (guards races / substitution).
+	// to its owning family's localized seed. The seed snapshot comes from
+	// seed_entity_cache (trusted, taken during the main loop) — only the
+	// English candidate is re-resolved here and compared for entity equality,
+	// which guards against races where the English face was uninstalled or
+	// substituted between the main loop and now.
 	if (dwrite.available()) {
 		for (auto& rec : records) {
 			if (rec.english_win32_family_name.empty())
 				continue;
+
+			// Reuse the seed entity cached during the main loop to avoid a
+			// duplicate GDI+DWrite round-trip per font. A record with a
+			// non-empty english_win32_family_name is guaranteed to have been
+			// through have_seed=true in the main loop, which always writes
+			// the cache — so cache miss here means something is inconsistent
+			// and we conservatively clear the English name.
 			FontEntityKey seed_entity;
-			FontEntityKey eng_entity;
-			if (!resolve_entity(dwrite, rec.localized_family_name, seed_entity)
-			    || !resolve_entity(dwrite, rec.english_win32_family_name, eng_entity)
-			    || !SameEntity(seed_entity, eng_entity)) {
-				rec.english_win32_family_name.clear();
+			bool seed_ok = false;
+			auto cached = seed_entity_cache.find(rec.localized_family_name);
+			if (cached != seed_entity_cache.end()) {
+				seed_entity = cached->second;
+				seed_ok = seed_entity.valid;
 			}
+
+			// The English candidate is an ASCII family name; CreateFontFromLOGFONT
+			// typically accepts it without needing the HDC fallback.
+			FontEntityKey eng_entity;
+			bool eng_ok = resolve_entity(dwrite, rec.english_win32_family_name, eng_entity);
+
+			if (!seed_ok || !eng_ok || !SameEntity(seed_entity, eng_entity))
+				rec.english_win32_family_name.clear();
 		}
 	}
 

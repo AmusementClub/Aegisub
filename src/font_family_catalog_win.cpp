@@ -166,6 +166,33 @@ bool resolve_entity(DWriteBridge const& dwrite, std::string const& facename, Fon
 	return true;
 }
 
+bool resolve_entity_via_hdc(DWriteBridge const& dwrite,
+                            LOGFONTW const& lf,
+                            FontEntityKey& out,
+                            std::vector<DWriteLocalizedName>* out_names = nullptr) {
+	out = {};
+	std::string path;
+	int index = -1;
+	std::vector<DWriteLocalizedName> names;
+	if (!dwrite.ResolveEntityAndNamesViaHdc(lf, path, index, names) || path.empty())
+		return false;
+
+	out.path_lower = ascii_lower(path);
+	out.face_index = index;
+	out.valid = index >= 0;
+	if (!out.valid)
+		return false;
+
+	if (out_names)
+		*out_names = std::move(names);
+	return true;
+}
+
+enum class SeedResolutionPath {
+	LogFont,
+	Hdc
+};
+
 /// True if GDI+DWrite resolution of `candidate` lands on the same font entity
 /// as `localized_entity` (already resolved for the seed family).
 bool candidate_maps_to_entity(DWriteBridge const& dwrite,
@@ -234,11 +261,9 @@ FontFamilyCatalog BuildFontFamilyCatalog() {
 	// Track english names claimed by a family so we can mark collisions later.
 	std::unordered_map<std::string, std::vector<FontFamilyId>> english_owners;
 
-	// Cache of seed entities resolved during the main loop (keyed by localized
-	// family name). The final safety pass re-validates each retained English
-	// name against the seed entity, and reusing this cache avoids a second
-	// GDI+DWrite round-trip per font when the seed came from the HDC fallback.
-	std::unordered_map<std::string, FontEntityKey> seed_entity_cache;
+	// Remember how each seed was resolved so the final safety pass can repeat
+	// the same live lookup instead of trusting a stale entity snapshot.
+	std::unordered_map<std::string, SeedResolutionPath> seed_resolution_paths;
 
 	for (auto const& seed_face : seeds) {
 		FontFamilyRecord rec;
@@ -285,6 +310,7 @@ FontFamilyCatalog BuildFontFamilyCatalog() {
 
 		FontEntityKey seed_entity;
 		bool have_seed = resolve_entity(dwrite, seed_face, seed_entity);
+		auto seed_resolution_path = SeedResolutionPath::LogFont;
 
 		// Fallback when DWrite rejects the LOGFONT (typical for fonts whose
 		// zh-CN name table lacks name ID 2 — Subfamily — so DWrite cannot build
@@ -298,14 +324,10 @@ FontFamilyCatalog BuildFontFamilyCatalog() {
 		// Fixing that requires reading the name table directly (bypassing
 		// DWrite entirely) — out of scope for this change.
 		if (!have_seed && !dwrite.is_dwritecore()) {
-			std::string hd_path;
-			int hd_index = -1;
 			std::vector<DWriteLocalizedName> hd_names;
-			if (dwrite.ResolveEntityAndNamesViaHdc(lf, hd_path, hd_index, hd_names)) {
-				seed_entity.path_lower = ascii_lower(hd_path);
-				seed_entity.face_index = hd_index;
-				seed_entity.valid = true;
+			if (resolve_entity_via_hdc(dwrite, lf, seed_entity, &hd_names)) {
 				have_seed = true;
+				seed_resolution_path = SeedResolutionPath::Hdc;
 
 				// Merge recovered Win32 family names into rec.names and the
 				// local win32_names list (deduplicated) so pick_english_name
@@ -332,7 +354,7 @@ FontFamilyCatalog BuildFontFamilyCatalog() {
 		}
 
 		if (have_seed)
-			seed_entity_cache.emplace(seed_face, seed_entity);
+			seed_resolution_paths.emplace(seed_face, seed_resolution_path);
 
 		if (have_seed) {
 			rec.english_win32_family_name = pick_english_name(dwrite, win32_names, seed_entity);
@@ -364,29 +386,28 @@ FontFamilyCatalog BuildFontFamilyCatalog() {
 		                             << clear_english.size() << " families";
 	}
 
-	// Final safety pass: each retained English name must still entity-map back
-	// to its owning family's localized seed. The seed snapshot comes from
-	// seed_entity_cache (trusted, taken during the main loop) — only the
-	// English candidate is re-resolved here and compared for entity equality,
-	// which guards against races where the English face was uninstalled or
-	// substituted between the main loop and now.
+	// Final safety pass: re-resolve both names so a font install, removal, or
+	// substitution during catalog construction cannot publish a stale alias.
+	// Seeds that required the HDC fallback must use that path again because
+	// CreateFontFromLOGFONT is known to reject them.
 	if (dwrite.available()) {
 		for (auto& rec : records) {
 			if (rec.english_win32_family_name.empty())
 				continue;
 
-			// Reuse the seed entity cached during the main loop to avoid a
-			// duplicate GDI+DWrite round-trip per font. A record with a
-			// non-empty english_win32_family_name is guaranteed to have been
-			// through have_seed=true in the main loop, which always writes
-			// the cache — so cache miss here means something is inconsistent
-			// and we conservatively clear the English name.
 			FontEntityKey seed_entity;
 			bool seed_ok = false;
-			auto cached = seed_entity_cache.find(rec.localized_family_name);
-			if (cached != seed_entity_cache.end()) {
-				seed_entity = cached->second;
-				seed_ok = seed_entity.valid;
+			auto resolution_path = seed_resolution_paths.find(rec.localized_family_name);
+			if (resolution_path != seed_resolution_paths.end()) {
+				if (resolution_path->second == SeedResolutionPath::LogFont) {
+					seed_ok = resolve_entity(dwrite, rec.localized_family_name, seed_entity);
+				}
+				else {
+					std::string selected;
+					LOGFONTW lf{};
+					seed_ok = gdi_select_face(rec.localized_family_name, selected, lf)
+					       && resolve_entity_via_hdc(dwrite, lf, seed_entity);
+				}
 			}
 
 			// The English candidate is an ASCII family name; CreateFontFromLOGFONT

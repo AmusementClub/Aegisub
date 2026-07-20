@@ -615,6 +615,11 @@ bool DWriteBridge::ResolveEntityAndNamesViaHdc(LOGFONTW const& lf,
 		return false;
 	}
 	HGDIOBJ prev = SelectObject(hdc, hfont);
+	if (!prev || prev == HGDI_ERROR) {
+		DeleteObject(hfont);
+		DeleteDC(hdc);
+		return false;
+	}
 
 	auto release_all = agi::make_scope_exit([&] {
 		SelectObject(hdc, prev);

@@ -22,6 +22,7 @@
 #include "ass_time_projection.h"
 #include "async_video_trace.h"
 #include "include/aegisub/subtitles_provider.h"
+#include "key_point_color.h"
 #include "source_frame.h"
 #include "subtitle_overlay.h"
 #include "subtitle_overlay_blend.h"
@@ -36,7 +37,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cmath>
 #include <exception>
 #include <string>
 
@@ -142,39 +142,12 @@ void TrimReusableBufferPool(std::vector<std::shared_ptr<T>>& buffers) {
 		buffers.end());
 }
 
-struct KeyPointLabColor {
-	double l = 0.0;
-	double a = 0.0;
-	double b = 0.0;
-};
-
 struct KeyPointBounds {
 	int left = 0;
 	int right = 0;
 	int up = 0;
 	int down = 0;
 };
-
-void BgrToLab(unsigned char b, unsigned char g, unsigned char r, KeyPointLabColor& lab) {
-	double X = (0.412453 * r + 0.357580 * g + 0.180423 * b) / 255.0;
-	double Y = (0.212671 * r + 0.715160 * g + 0.072169 * b) / 255.0;
-	double Z = (0.019334 * r + 0.119193 * g + 0.950227 * b) / 255.0;
-	double xr = X / 0.950456;
-	double yr = Y / 1.000;
-	double zr = Z / 1.088854;
-
-	if (yr > 0.008856)
-		lab.l = 116.0 * std::pow(yr, 1.0 / 3.0) - 16.0;
-	else
-		lab.l = 903.3 * yr;
-
-	double fxr = xr > 0.008856 ? std::pow(xr, 1.0 / 3.0) : 7.787 * xr + 16.0 / 116.0;
-	double fyr = yr > 0.008856 ? std::pow(yr, 1.0 / 3.0) : 7.787 * yr + 16.0 / 116.0;
-	double fzr = zr > 0.008856 ? std::pow(zr, 1.0 / 3.0) : 7.787 * zr + 16.0 / 116.0;
-
-	lab.a = 500.0 * (fxr - fyr);
-	lab.b = 200.0 * (fyr - fzr);
-}
 
 bool NormalizeFrameY(VideoFrame const& frame, int y, int& normalized_y) {
 	int const height = static_cast<int>(frame.height);
@@ -195,27 +168,16 @@ bool KeyPointPixelMatches(
 	VideoFrame const& frame,
 	int x,
 	int y,
-	KeyPointLabColor const& reference,
-	double tolerance_squared) {
+	aegisub::keypoint::ColorMatcher& matcher) {
 	auto const* pixel = GetFramePixel(frame, x, y);
-	KeyPointLabColor lab;
-	BgrToLab(pixel[0], pixel[1], pixel[2], lab);
-	double const delta_l = lab.l - reference.l;
-	double const delta_a = lab.a - reference.a;
-	double const delta_b = lab.b - reference.b;
-	double const distance_squared =
-		delta_l * delta_l
-		+ delta_a * delta_a
-		+ delta_b * delta_b;
-	return distance_squared <= tolerance_squared;
+	return matcher.Matches(pixel[0], pixel[1], pixel[2]);
 }
 
 bool CalculateKeyPointBounds(
 	VideoFrame const& frame,
 	int x,
 	int y,
-	KeyPointLabColor const& reference,
-	double tolerance_squared,
+	aegisub::keypoint::ColorMatcher& matcher,
 	KeyPointBounds& bounds) {
 	int const width = static_cast<int>(frame.width);
 	int const height = static_cast<int>(frame.height);
@@ -226,23 +188,23 @@ bool CalculateKeyPointBounds(
 	if (!NormalizeFrameY(frame, y, normalized_y))
 		return false;
 
-	if (!KeyPointPixelMatches(frame, x, normalized_y, reference, tolerance_squared))
+	if (!KeyPointPixelMatches(frame, x, normalized_y, matcher))
 		return false;
 
 	int left = x;
-	while (left > 0 && KeyPointPixelMatches(frame, left - 1, normalized_y, reference, tolerance_squared))
+	while (left > 0 && KeyPointPixelMatches(frame, left - 1, normalized_y, matcher))
 		--left;
 
 	int right = x;
-	while (right + 1 < width && KeyPointPixelMatches(frame, right + 1, normalized_y, reference, tolerance_squared))
+	while (right + 1 < width && KeyPointPixelMatches(frame, right + 1, normalized_y, matcher))
 		++right;
 
 	int up = normalized_y;
-	while (up > 0 && KeyPointPixelMatches(frame, x, up - 1, reference, tolerance_squared))
+	while (up > 0 && KeyPointPixelMatches(frame, x, up - 1, matcher))
 		--up;
 
 	int down = normalized_y;
-	while (down + 1 < height && KeyPointPixelMatches(frame, x, down + 1, reference, tolerance_squared))
+	while (down + 1 < height && KeyPointPixelMatches(frame, x, down + 1, matcher))
 		++down;
 
 	bounds = { left, right, up, down };
@@ -253,8 +215,7 @@ bool MatchesKeyPointBoundsWithinTolerance(
 	VideoFrame const& frame,
 	int x,
 	int y,
-	KeyPointLabColor const& reference,
-	double tolerance_squared,
+	aegisub::keypoint::ColorMatcher& matcher,
 	KeyPointBounds const& anchor_bounds,
 	int bounds_tolerance) {
 	int const width = static_cast<int>(frame.width);
@@ -266,11 +227,11 @@ bool MatchesKeyPointBoundsWithinTolerance(
 	if (!NormalizeFrameY(frame, y, normalized_y))
 		return false;
 
-	if (!KeyPointPixelMatches(frame, x, normalized_y, reference, tolerance_squared))
+	if (!KeyPointPixelMatches(frame, x, normalized_y, matcher))
 		return false;
 
 	auto const matches = [&](int px, int py) {
-		return KeyPointPixelMatches(frame, px, py, reference, tolerance_squared);
+		return KeyPointPixelMatches(frame, px, py, matcher);
 	};
 
 	int const min_left = std::max(0, anchor_bounds.left - bounds_tolerance);
@@ -1049,10 +1010,9 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 			return;
 		}
 
-		KeyPointLabColor reference;
-		BgrToLab(request.b, request.g, request.r, reference);
 		double const tolerance_squared =
 			static_cast<double>(request.tolerance) * static_cast<double>(request.tolerance);
+		aegisub::keypoint::ColorMatcher matcher(request.b, request.g, request.r, tolerance_squared);
 
 		VideoFrame frame;
 		auto load_frame = [&](int frame_number) -> KeyPointRangeScanStatus {
@@ -1079,7 +1039,7 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 			if (status != KeyPointRangeScanStatus::Success)
 				return status;
 
-			return CalculateKeyPointBounds(frame, request.x, request.y, reference, tolerance_squared, bounds)
+			return CalculateKeyPointBounds(frame, request.x, request.y, matcher, bounds)
 				? KeyPointRangeScanStatus::Success
 				: KeyPointRangeScanStatus::AnchorMismatch;
 		};
@@ -1093,8 +1053,7 @@ KeyPointRangeScanResult AsyncVideoProvider::FindKeyPointRange(KeyPointRangeScanR
 				frame,
 				request.x,
 				request.y,
-				reference,
-				tolerance_squared,
+				matcher,
 				anchor_bounds,
 				request.bounds_tolerance)
 				? KeyPointRangeScanStatus::Success

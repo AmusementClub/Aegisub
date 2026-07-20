@@ -219,6 +219,14 @@ target_include_directories(bgra-transform-bench PRIVATE
 )
 aegisub_enable_highway(bgra-transform-bench)
 
+add_executable(key-point-color-bench EXCLUDE_FROM_ALL
+    tools/key_point_color_bench_main.cpp
+)
+target_compile_features(key-point-color-bench PRIVATE cxx_std_20)
+target_include_directories(key-point-color-bench PRIVATE
+    "${PROJECT_SOURCE_DIR}/src"
+)
+
 find_package(benchmark CONFIG QUIET)
 if(benchmark_FOUND)
     add_executable(audio-micro-bench EXCLUDE_FROM_ALL

@@ -63,6 +63,44 @@
 // It should be above 100 (at least 242) and probably not more than 1000
 #define LANGS_MAX 1000
 
+namespace {
+	constexpr int BRACE_HIGHLIGHT_INDICATOR = 2;
+	constexpr int BRACE_BAD_INDICATOR = 3;
+
+	bool IsHighlightableBrace(int character) {
+		return character == '{' || character == '}' || character == '(' || character == ')';
+	}
+
+	bool IsEscapedOpenBrace(wxStyledTextCtrl const& ctrl, int position) {
+		if (ctrl.GetCharAt(position) != '{')
+			return false;
+
+		int slash_count = 0;
+		for (int pos = position - 1; pos >= 0 && ctrl.GetCharAt(pos) == '\\'; --pos)
+			++slash_count;
+		return (slash_count & 1) != 0;
+	}
+
+	int FindMatchingCurlyBrace(wxStyledTextCtrl const& ctrl, int brace_position) {
+		int const direction = ctrl.GetCharAt(brace_position) == '{' ? 1 : -1;
+		int const brace = ctrl.GetCharAt(brace_position);
+		int const opposite = brace == '{' ? '}' : '{';
+		int depth = 1;
+
+		for (int pos = brace_position + direction; pos >= 0 && pos < ctrl.GetTextLength(); pos += direction) {
+			int const character = ctrl.GetCharAt(pos);
+			if (character == '{' && IsEscapedOpenBrace(ctrl, pos))
+				continue;
+			if (character == brace)
+				++depth;
+			else if (character == opposite && --depth == 0)
+				return pos;
+		}
+
+		return wxSTC_INVALID_POSITION;
+	}
+}
+
 /// Event ids
 // Check menu.h for id range allocation before editing this enum
 enum {
@@ -207,6 +245,10 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 
 	Bind(wxEVT_CONTEXT_MENU, &SubsStyledTextEditCtrl::OnContextMenu, this);
 	Bind(wxEVT_IDLE, std::bind(&SubsStyledTextEditCtrl::UpdateCallTip, this));
+	Bind(wxEVT_STC_UPDATEUI, [this](wxStyledTextEvent& event) {
+		UpdateBraceHighlight();
+		event.Skip();
+	});
 	Bind(wxEVT_STC_DOUBLECLICK, &SubsStyledTextEditCtrl::OnDoubleClick, this);
 	Bind(wxEVT_STC_STYLENEEDED, [=](wxStyledTextEvent&) {
 		{
@@ -423,6 +465,20 @@ void SubsStyledTextEditCtrl::SetStyles() {
 	// IME pending text indicator
 	IndicatorSetStyle(1, wxSTC_INDIC_PLAIN);
 	IndicatorSetUnder(1, true);
+
+	// Matching brace indicators. Keep them separate from syntax and spelling
+	// styles so the active pair does not overwrite the existing ASS colours.
+	IndicatorSetStyle(BRACE_HIGHLIGHT_INDICATOR, wxSTC_INDIC_ROUNDBOX);
+	IndicatorSetForeground(BRACE_HIGHLIGHT_INDICATOR, to_wx(OPT_GET("Colour/Subtitle/Syntax/Brackets")->GetColor()));
+	IndicatorSetAlpha(BRACE_HIGHLIGHT_INDICATOR, 40);
+	IndicatorSetOutlineAlpha(BRACE_HIGHLIGHT_INDICATOR, 180);
+	IndicatorSetUnder(BRACE_HIGHLIGHT_INDICATOR, true);
+	BraceHighlightIndicator(true, BRACE_HIGHLIGHT_INDICATOR);
+
+	IndicatorSetStyle(BRACE_BAD_INDICATOR, wxSTC_INDIC_SQUIGGLE);
+	IndicatorSetForeground(BRACE_BAD_INDICATOR, to_wx(OPT_GET("Colour/Subtitle/Syntax/Error")->GetColor()));
+	IndicatorSetUnder(BRACE_BAD_INDICATOR, true);
+	BraceBadLightIndicator(true, BRACE_BAD_INDICATOR);
 }
 
 void SubsStyledTextEditCtrl::UpdateStyle() {
@@ -461,6 +517,28 @@ void SubsStyledTextEditCtrl::UpdateStyle() {
 		}
 		pos += style_range.length;
 	}
+}
+
+void SubsStyledTextEditCtrl::UpdateBraceHighlight() {
+	int const caret = GetCurrentPos();
+	int brace = wxSTC_INVALID_POSITION;
+	if (caret > 0 && IsHighlightableBrace(GetCharAt(caret - 1)) && !IsEscapedOpenBrace(*this, caret - 1))
+		brace = caret - 1;
+	else if (caret < GetTextLength() && IsHighlightableBrace(GetCharAt(caret)) && !IsEscapedOpenBrace(*this, caret))
+		brace = caret;
+
+	if (brace == wxSTC_INVALID_POSITION) {
+		BraceHighlight(wxSTC_INVALID_POSITION, wxSTC_INVALID_POSITION);
+		return;
+	}
+
+	int const match = GetCharAt(brace) == '{' || GetCharAt(brace) == '}'
+		? FindMatchingCurlyBrace(*this, brace)
+		: BraceMatch(brace);
+	if (match == wxSTC_INVALID_POSITION)
+		BraceBadLight(brace);
+	else
+		BraceHighlight(brace, match);
 }
 
 void SubsStyledTextEditCtrl::UpdateCallTip() {
@@ -510,6 +588,7 @@ void SubsStyledTextEditCtrl::SetTextTo(std::string const& text) {
 	}
 
 	SetEvtHandlerEnabled(true);
+	UpdateBraceHighlight();
 	Thaw();
 }
 

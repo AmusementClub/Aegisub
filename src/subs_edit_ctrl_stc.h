@@ -93,6 +93,7 @@ class SubsStyledTextEditCtrl final : public wxStyledTextCtrl {
 	void Subscribe(std::string const& name);
 
 	void UpdateCallTip();
+	void UpdateBraceHighlight();
 	void SetStyles();
 
 	void UpdateStyle();

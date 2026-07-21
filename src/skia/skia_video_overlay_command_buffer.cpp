@@ -360,6 +360,122 @@ SkiaOverlayDeviceBounds AlignSkiaOverlayDeviceBoundsForAllocation(
 	return { left, top, right - left, bottom - top };
 }
 
+SkiaOverlayDeviceBounds SelectSkiaOverlayBackingBounds(
+	SkiaOverlayDeviceBounds const& required_bounds,
+	SkiaOverlayDeviceBounds const& reusable_bounds,
+	int canvas_width,
+	int canvas_height,
+	int alignment,
+	int guard) noexcept {
+	if (required_bounds.IsEmpty()
+		|| canvas_width <= 0
+		|| canvas_height <= 0
+		|| alignment <= 0
+		|| guard < 0) {
+		return {};
+	}
+
+	auto const clamp = [](long long value, int limit) noexcept {
+		return static_cast<int>(std::clamp(value, 0LL, static_cast<long long>(limit)));
+	};
+	auto const clip = [&](SkiaOverlayDeviceBounds const& bounds) noexcept {
+		int const left = clamp(bounds.x, canvas_width);
+		int const top = clamp(bounds.y, canvas_height);
+		int const right = clamp(
+			static_cast<long long>(bounds.x) + bounds.width,
+			canvas_width);
+		int const bottom = clamp(
+			static_cast<long long>(bounds.y) + bounds.height,
+			canvas_height);
+		if (right <= left || bottom <= top)
+			return SkiaOverlayDeviceBounds {};
+		return SkiaOverlayDeviceBounds { left, top, right - left, bottom - top };
+	};
+	auto const required = clip(required_bounds);
+	if (required.IsEmpty())
+		return {};
+	auto const fit_origin = [](int required_start, int required_size, int capacity, int limit, int preferred) noexcept {
+		long long const min_origin = std::max(
+			0LL,
+			static_cast<long long>(required_start) + required_size - capacity);
+		long long const max_origin = std::min(
+			static_cast<long long>(required_start),
+			static_cast<long long>(limit) - capacity);
+		if (min_origin > max_origin)
+			return 0;
+		return static_cast<int>(std::clamp(static_cast<long long>(preferred), min_origin, max_origin));
+	};
+
+	auto const reusable_is_valid = [&]() noexcept {
+		return !reusable_bounds.IsEmpty()
+			&& reusable_bounds.x >= 0
+			&& reusable_bounds.y >= 0
+			&& reusable_bounds.width <= canvas_width
+			&& reusable_bounds.height <= canvas_height
+			&& static_cast<long long>(reusable_bounds.x) + reusable_bounds.width <= canvas_width
+			&& static_cast<long long>(reusable_bounds.y) + reusable_bounds.height <= canvas_height;
+	}();
+
+	// A backing texture can move without being reallocated. Keep its capacity
+	// while sliding the origin just far enough to contain the new content.
+	if (reusable_is_valid
+		&& reusable_bounds.width >= required.width
+		&& reusable_bounds.height >= required.height) {
+		return {
+			fit_origin(required.x, required.width, reusable_bounds.width, canvas_width, reusable_bounds.x),
+			fit_origin(required.y, required.height, reusable_bounds.height, canvas_height, reusable_bounds.y),
+			reusable_bounds.width,
+			reusable_bounds.height,
+		};
+	}
+
+	long long const required_right = static_cast<long long>(required.x) + required.width;
+	long long const required_bottom = static_cast<long long>(required.y) + required.height;
+	auto const guarded = SkiaOverlayDeviceBounds {
+		clamp(static_cast<long long>(required.x) - guard, canvas_width),
+		clamp(static_cast<long long>(required.y) - guard, canvas_height),
+		0,
+		0,
+	};
+	int const guarded_right = clamp(required_right + guard, canvas_width);
+	int const guarded_bottom = clamp(required_bottom + guard, canvas_height);
+	auto allocation = AlignSkiaOverlayDeviceBoundsForAllocation(
+		{
+			guarded.x,
+			guarded.y,
+			guarded_right - guarded.x,
+			guarded_bottom - guarded.y,
+		},
+		canvas_width,
+		canvas_height,
+		alignment);
+	if (allocation.IsEmpty())
+		return {};
+
+	// Preserve capacity on an axis which did not need to grow. This avoids
+	// reallocating both texture dimensions when only one dimension changed.
+	if (reusable_is_valid) {
+		allocation.width = std::max(allocation.width, reusable_bounds.width);
+		allocation.height = std::max(allocation.height, reusable_bounds.height);
+		allocation.width = std::min(allocation.width, canvas_width);
+		allocation.height = std::min(allocation.height, canvas_height);
+
+		allocation.x = fit_origin(
+			required.x,
+			required.width,
+			allocation.width,
+			canvas_width,
+			reusable_bounds.x);
+		allocation.y = fit_origin(
+			required.y,
+			required.height,
+			allocation.height,
+			canvas_height,
+			reusable_bounds.y);
+	}
+	return allocation;
+}
+
 SkiaVideoOverlayCommandBuffer::SkiaVideoOverlayCommandBuffer()
 : impl(std::make_unique<Impl>()) {
 }

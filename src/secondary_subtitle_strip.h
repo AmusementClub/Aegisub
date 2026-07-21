@@ -93,7 +93,7 @@ class SecondarySubtitleStrip final : public wxPanel {
 	void OnMouseCaptureLost(wxMouseCaptureLostEvent &event);
 
 public:
-	SecondarySubtitleStrip(wxWindow *parent, agi::Context *context, std::shared_ptr<SecondarySubtitleSession> session);
+	SecondarySubtitleStrip(wxWindow *parent, agi::Context *context, std::shared_ptr<SecondarySubtitleSession> shared_session);
 	~SecondarySubtitleStrip();
 
 	bool OpenExternalSubtitlesFromPath(agi::fs::path const& path, bool show_errors = true);

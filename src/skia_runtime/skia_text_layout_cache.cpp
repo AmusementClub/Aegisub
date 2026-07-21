@@ -54,7 +54,7 @@ SkFontMgr *GetFontManager() {
 #endif
 }
 
-bool SkiaTextLayoutCache::FontKey::operator==(FontKey const& other) const {
+bool SkiaTextLayoutCache::FontKey::operator==(FontKey const& other) const noexcept {
 	return face == other.face
 		&& size == other.size
 		&& bold == other.bold
@@ -98,9 +98,32 @@ sk_sp<SkTypeface> SkiaTextLayoutCache::ResolveTypeface(VideoOverlayTextStyle con
 
 wxSize SkiaTextLayoutCache::MeasureText(std::string const& text, VideoOverlayTextStyle const& style) {
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+	// The recorder calls MeasureText once for the label placement and once again
+	// while recording DrawText. Colour / outline are deliberately excluded from
+	// the key because they do not affect metrics.
+	if (last_measured_key
+		&& last_measured_key->text == text
+		&& last_measured_key->font.face == style.face
+		&& last_measured_key->font.size == style.size
+		&& last_measured_key->font.bold == style.bold
+		&& last_measured_key->font.italic == style.italic) {
+		return last_measured_size;
+	}
+	auto remember_measurement = [&](wxSize measured) {
+		if (!last_measured_key)
+			last_measured_key.emplace();
+		last_measured_key->text = text;
+		last_measured_key->font.face = style.face;
+		last_measured_key->font.size = style.size;
+		last_measured_key->font.bold = style.bold;
+		last_measured_key->font.italic = style.italic;
+		last_measured_size = measured;
+		return measured;
+	};
+
 	auto typeface = ResolveTypeface(style);
 	if (!typeface)
-		return wxSize(0, 0);
+		return remember_measurement(wxSize(0, 0));
 	SkFont font(typeface, style.size);
 	font.setEdging(SkFont::Edging::kAntiAlias);
 
@@ -114,9 +137,11 @@ wxSize SkiaTextLayoutCache::MeasureText(std::string const& text, VideoOverlayTex
 
 	SkFontMetrics metrics;
 	font.getMetrics(&metrics);
-	return wxSize(
+	wxSize const measured(
 		static_cast<int>(std::ceil(std::max(advance, bounds.width()))),
 		static_cast<int>(std::ceil(metrics.fDescent - metrics.fAscent)));
+
+	return remember_measurement(measured);
 #else
 	(void)text;
 	(void)style;

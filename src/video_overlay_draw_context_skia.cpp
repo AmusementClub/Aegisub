@@ -60,12 +60,14 @@ SkCanvas &SkiaVideoOverlayDrawContext::GetTargetCanvas() const {
 	return (invert && invert_canvas) ? *invert_canvas : canvas;
 }
 
-SkPaint SkiaVideoOverlayDrawContext::MakeStrokePaint() const {
-	SkPaint paint;
-	paint.setAntiAlias(!(invert && invert_canvas));
+SkPaint &SkiaVideoOverlayDrawContext::MakeStrokePaint() {
+	SkPaint &paint = stroke_paint;
+	bool const invert_target = invert && invert_canvas;
+	paint.setAntiAlias(!invert_target);
 	paint.setStyle(SkPaint::kStroke_Style);
 	paint.setStrokeWidth(std::max(1.0f, static_cast<float>(line_width)) / device_scale);
-	if (invert && invert_canvas) {
+	if (invert_target) {
+		paint.setBlendMode(SkBlendMode::kSrcOver);
 		paint.setColor(SK_ColorWHITE);
 	}
 	else if (invert) {
@@ -73,16 +75,19 @@ SkPaint SkiaVideoOverlayDrawContext::MakeStrokePaint() const {
 		paint.setColor(SK_ColorWHITE);
 	}
 	else {
+		paint.setBlendMode(SkBlendMode::kSrcOver);
 		paint.setColor(ToSkColor(line_colour, line_alpha));
 	}
 	return paint;
 }
 
-SkPaint SkiaVideoOverlayDrawContext::MakeFillPaint() const {
-	SkPaint paint;
-	paint.setAntiAlias(!(invert && invert_canvas));
+SkPaint &SkiaVideoOverlayDrawContext::MakeFillPaint() {
+	SkPaint &paint = fill_paint;
+	bool const invert_target = invert && invert_canvas;
+	paint.setAntiAlias(!invert_target);
 	paint.setStyle(SkPaint::kFill_Style);
-	if (invert && invert_canvas) {
+	if (invert_target) {
+		paint.setBlendMode(SkBlendMode::kSrcOver);
 		paint.setColor(SK_ColorWHITE);
 	}
 	else if (invert) {
@@ -90,6 +95,7 @@ SkPaint SkiaVideoOverlayDrawContext::MakeFillPaint() const {
 		paint.setColor(SK_ColorWHITE);
 	}
 	else {
+		paint.setBlendMode(SkBlendMode::kSrcOver);
 		paint.setColor(ToSkColor(fill_colour, fill_alpha));
 	}
 	return paint;
@@ -110,7 +116,7 @@ void SkiaVideoOverlayDrawContext::DrawLines(size_t dim, float const *lines, size
 	if (dim != 2 || !lines || n < 2)
 		return;
 
-	auto const paint = MakeStrokePaint();
+	SkPaint const& paint = MakeStrokePaint();
 	SkCanvas &target = GetTargetCanvas();
 	for (size_t i = 0; i + 1 < n; i += 2) {
 		size_t const offset = i * dim;
@@ -210,7 +216,7 @@ void SkiaVideoOverlayDrawContext::DrawMultiPolygon(std::vector<float> const& poi
 		target.drawPath(fill_path, MakeFillPaint());
 
 	if (line_alpha > 0.0f) {
-		SkPaint const stroke = MakeStrokePaint();
+		SkPaint const& stroke = MakeStrokePaint();
 		for (size_t poly = 0; poly < start.size(); ++poly) {
 			int const first = start[poly];
 			int const point_count = count[poly];

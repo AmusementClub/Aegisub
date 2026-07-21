@@ -6,6 +6,8 @@ struct SkiaOverlayLogicalBounds {
 	float top = 0.0f;
 	float right = 0.0f;
 	float bottom = 0.0f;
+
+	bool operator==(SkiaOverlayLogicalBounds const&) const = default;
 };
 
 struct SkiaOverlayDeviceBounds {

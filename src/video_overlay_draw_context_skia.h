@@ -5,6 +5,10 @@
 
 #include "video_overlay_draw_context.h"
 
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+#include <include/core/SkPaint.h>
+#endif
+
 class SkCanvas;
 class SkPaint;
 class SkiaTextLayoutCache;
@@ -23,9 +27,15 @@ class SkiaVideoOverlayDrawContext final : public VideoOverlayDrawContext {
 	bool invert = false;
 
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+	// Reused across draw calls within a single Replay() to avoid per-call SkPaint
+	// construction / destruction. Fields are reset on every Make*Paint() call so
+	// semantics are unchanged.
+	SkPaint stroke_paint;
+	SkPaint fill_paint;
+
 	SkCanvas &GetTargetCanvas() const;
-	SkPaint MakeStrokePaint() const;
-	SkPaint MakeFillPaint() const;
+	SkPaint &MakeStrokePaint();
+	SkPaint &MakeFillPaint();
 #endif
 
 public:

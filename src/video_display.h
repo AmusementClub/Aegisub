@@ -52,6 +52,10 @@
 #include <vector>
 #include <wx/glcanvas.h>
 
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+#include <include/core/SkRefCnt.h>  // for sk_sp<SkSurface> member
+#endif
+
 // Prototypes
 class AssDialogue;
 class RetinaHelper;
@@ -61,6 +65,7 @@ class SkiaSurfaceProvider;
 class SkiaTextLayoutCache;
 class SkiaVideoCompositor;
 class SkiaVideoOverlayCommandBuffer;
+class SkSurface;
 struct SkiaGlContextToken;
 struct SkiaVideoFrameTarget;
 enum class SkiaVideoFailureInjection;
@@ -215,6 +220,23 @@ class VideoDisplay final : public wxGLCanvas {
 	int skia_overlay_invert_origin_y = 0;
 	int skia_overlay_invert_width = 0;
 	int skia_overlay_invert_height = 0;
+	bool skia_overlay_backing_release_requested = false;
+	std::uint64_t skia_overlay_backing_context_generation = 0;
+	// Cached Ganesh surfaces wrapping the overlay FBOs. Re-acquired only when the
+	// backing FBO id / size / GL context generation changes (e.g. on a static
+	// overlay the same surface is reused across frames instead of re-wrapping
+	// the FBO every paint). Destroyed together with the GL backing in
+	// DestroySkiaOverlayBacking.
+	sk_sp<SkSurface> skia_overlay_surface;
+	sk_sp<SkSurface> skia_overlay_invert_surface;
+	std::uint64_t skia_overlay_surface_context_generation = 0;
+	unsigned int skia_overlay_surface_framebuffer = 0;
+	int skia_overlay_surface_width = 0;
+	int skia_overlay_surface_height = 0;
+	std::uint64_t skia_overlay_invert_surface_context_generation = 0;
+	unsigned int skia_overlay_invert_surface_framebuffer = 0;
+	int skia_overlay_invert_surface_width = 0;
+	int skia_overlay_invert_surface_height = 0;
 #endif
 
 	double GetVideoScaleFactor() const;
@@ -256,7 +278,8 @@ class VideoDisplay final : public wxGLCanvas {
 		int normal_height,
 		int invert_width,
 		int invert_height,
-		bool need_invert);
+		bool need_invert,
+		int& allocated_targets);
 	void DestroySkiaOverlayBacking() noexcept;
 #endif
 

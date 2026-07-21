@@ -340,9 +340,10 @@ FrameMain::FrameMain()
 #ifdef _WIN32
 	RegisterSessionNotifications();
 #endif
-	// Prebuild the family catalog off the UI thread so \\fn remapping and the
-	// English style-editor list usually do not block on first use.
-	font_family_catalog_cache::WarmAsync();
+	// GUI automation scenarios do not exercise the font catalog. Avoid making
+	// their deterministic shutdown wait on a potentially long system scan.
+	if (!wxGetApp().launch_plan || wxGetApp().launch_plan->mode != AppLaunchMode::GuiTest)
+		font_family_catalog_cache::WarmAsync();
 	observe_phase("startup.frame.show");
 	auto startup_lifetime = GetAsyncUiLifetime();
 	auto main_loop_turn_started = std::chrono::steady_clock::now();

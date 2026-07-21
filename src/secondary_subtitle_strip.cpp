@@ -220,9 +220,9 @@ void ShowSecondarySubtitleStripSettings(wxWindow *parent, int min_height, int ma
 }
 }
 
-SecondarySubtitleStrip::SecondarySubtitleStrip(wxWindow *parent, agi::Context *context, std::shared_ptr<SecondarySubtitleSession> session)
+SecondarySubtitleStrip::SecondarySubtitleStrip(wxWindow *parent, agi::Context *context, std::shared_ptr<SecondarySubtitleSession> shared_session)
 : wxPanel(parent, -1)
-, session(std::move(session))
+, session(std::move(shared_session))
 , entry_button(new wxToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTB_FLAT | wxTB_NODIVIDER | wxTB_HORIZONTAL))
 , reload_button(new wxToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTB_FLAT | wxTB_NODIVIDER | wxTB_HORIZONTAL))
 , scroll_bar(new wxScrollBar(this, -1, wxDefaultPosition, wxDefaultSize, wxSB_VERTICAL)) {

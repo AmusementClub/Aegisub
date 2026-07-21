@@ -143,3 +143,125 @@ TEST(skia_video_overlay_command_buffer, allocation_alignment_clips_at_canvas_edg
 
 	EXPECT_EQ((SkiaOverlayDeviceBounds { 64, 64, 36, 36 }), aligned);
 }
+
+TEST(skia_video_overlay_command_buffer, backing_bounds_add_guard_and_reuse_capacity) {
+	auto const first = SelectSkiaOverlayBackingBounds(
+		{ 100, 100, 20, 20 },
+		{},
+		640,
+		480);
+	EXPECT_EQ((SkiaOverlayDeviceBounds { 32, 32, 160, 160 }), first);
+
+	auto const contained = SelectSkiaOverlayBackingBounds(
+		{ 110, 110, 20, 20 },
+		first,
+		640,
+		480);
+	EXPECT_EQ(first, contained);
+
+	auto const moved = SelectSkiaOverlayBackingBounds(
+		{ 195, 110, 20, 20 },
+		first,
+		640,
+		480);
+	EXPECT_EQ(first.width, moved.width);
+	EXPECT_EQ(first.height, moved.height);
+	EXPECT_LE(moved.x, 195);
+	EXPECT_GE(moved.x + moved.width, 215);
+}
+
+TEST(skia_video_overlay_command_buffer, backing_bounds_clip_to_canvas_edges) {
+	auto const left = SelectSkiaOverlayBackingBounds(
+		{ 0, 20, 10, 10 },
+		{},
+		100,
+		80);
+	EXPECT_EQ((SkiaOverlayDeviceBounds { 0, 0, 96, 80 }), left);
+
+	auto const corner = SelectSkiaOverlayBackingBounds(
+		{ 95, 75, 5, 5 },
+		{},
+		100,
+		80);
+	EXPECT_EQ((SkiaOverlayDeviceBounds { 0, 0, 100, 80 }), corner);
+}
+
+TEST(skia_video_overlay_command_buffer, backing_bounds_grow_only_when_capacity_is_too_small) {
+	auto const initial = SelectSkiaOverlayBackingBounds(
+		{ 200, 150, 20, 20 },
+		{},
+		800,
+		600);
+	auto const grown = SelectSkiaOverlayBackingBounds(
+		{ 180, 140, initial.width + 1, initial.height + 1 },
+		initial,
+		800,
+		600);
+
+	EXPECT_GT(grown.width, initial.width);
+	EXPECT_GT(grown.height, initial.height);
+	auto const smaller = SelectSkiaOverlayBackingBounds(
+		{ 300, 200, 10, 10 },
+		grown,
+		800,
+		600);
+	EXPECT_EQ(grown.width, smaller.width);
+	EXPECT_EQ(grown.height, smaller.height);
+}
+
+TEST(skia_video_overlay_command_buffer, backing_capacity_stays_constant_while_content_moves) {
+	SkiaOverlayDeviceBounds previous;
+	int allocation_count = 0;
+	for (int x = 0; x <= 720; ++x) {
+		int const y = x * 560 / 720;
+		SkiaOverlayDeviceBounds const required { x, y, 80, 40 };
+		auto const selected = SelectSkiaOverlayBackingBounds(
+			required,
+			previous,
+			800,
+			600);
+
+		ASSERT_FALSE(selected.IsEmpty());
+		EXPECT_GE(selected.x, 0);
+		EXPECT_GE(selected.y, 0);
+		EXPECT_LE(selected.x + selected.width, 800);
+		EXPECT_LE(selected.y + selected.height, 600);
+		EXPECT_LE(selected.x, required.x);
+		EXPECT_LE(selected.y, required.y);
+		EXPECT_GE(selected.x + selected.width, required.x + required.width);
+		EXPECT_GE(selected.y + selected.height, required.y + required.height);
+		if (selected.width != previous.width || selected.height != previous.height)
+			++allocation_count;
+		previous = selected;
+	}
+
+	EXPECT_EQ(1, allocation_count);
+}
+
+TEST(skia_video_overlay_command_buffer, backing_bounds_reject_invalid_requests) {
+	EXPECT_TRUE(SelectSkiaOverlayBackingBounds({}, {}, 100, 100).IsEmpty());
+	EXPECT_TRUE(SelectSkiaOverlayBackingBounds({ 0, 0, 10, 10 }, {}, 0, 100).IsEmpty());
+	EXPECT_TRUE(SelectSkiaOverlayBackingBounds({ 200, 200, 10, 10 }, {}, 100, 100).IsEmpty());
+	EXPECT_TRUE(SelectSkiaOverlayBackingBounds({ 0, 0, 10, 10 }, {}, 100, 100, 0).IsEmpty());
+	EXPECT_TRUE(SelectSkiaOverlayBackingBounds({ 0, 0, 10, 10 }, {}, 100, 100, 32, -1).IsEmpty());
+}
+
+TEST(skia_video_overlay_command_buffer, backing_bounds_discard_capacity_outside_resized_canvas) {
+	auto const previous = SkiaOverlayDeviceBounds { 0, 0, 640, 480 };
+	auto const selected = SelectSkiaOverlayBackingBounds(
+		{ 20, 20, 40, 40 },
+		previous,
+		320,
+		240);
+
+	EXPECT_LE(selected.width, 320);
+	EXPECT_LE(selected.height, 240);
+	EXPECT_GE(selected.x, 0);
+	EXPECT_GE(selected.y, 0);
+	EXPECT_LE(selected.x + selected.width, 320);
+	EXPECT_LE(selected.y + selected.height, 240);
+	EXPECT_LE(selected.x, 20);
+	EXPECT_GE(selected.x + selected.width, 60);
+	EXPECT_LE(selected.y, 20);
+	EXPECT_GE(selected.y + selected.height, 60);
+}

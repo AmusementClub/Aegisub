@@ -20,6 +20,14 @@ SkiaOverlayDeviceBounds AlignSkiaOverlayDeviceBoundsForAllocation(
 	int canvas_height,
 	int alignment = 32) noexcept;
 
+SkiaOverlayDeviceBounds SelectSkiaOverlayBackingBounds(
+	SkiaOverlayDeviceBounds const& required_bounds,
+	SkiaOverlayDeviceBounds const& reusable_bounds,
+	int canvas_width,
+	int canvas_height,
+	int alignment = 32,
+	int guard = 64) noexcept;
+
 class SkiaVideoOverlayCommandBuffer final {
 	struct Impl;
 	std::unique_ptr<Impl> impl;

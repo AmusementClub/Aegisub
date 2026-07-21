@@ -53,7 +53,7 @@ static async Task<int> RunAsync(string[] arguments)
         }
     }
 
-    app.WaitForAudioCanvas();
+    app.WaitForRequiredCanvas();
     if (options.DryRun)
     {
         app.MarkScenarioSucceeded();
@@ -72,6 +72,7 @@ sealed record DriverOptions(
     string? Project,
     string? Audio,
     string? Video,
+    string? Artifacts,
     int Width,
     int Height,
     bool DumpTree,
@@ -84,6 +85,14 @@ sealed record DriverOptions(
 {
     public bool Help { get; init; }
 
+    public bool RequiresAudioCanvas =>
+        !Scenario.Equals("video-crosshair-sweep", StringComparison.OrdinalIgnoreCase);
+
+    public bool RequiresVideoCanvas =>
+        Scenario.Equals("video-crosshair-sweep", StringComparison.OrdinalIgnoreCase)
+        || Scenario.Equals("video-playback-audio-scroll", StringComparison.OrdinalIgnoreCase)
+        || Scenario.Equals("video-playback-audio-scrollbar-drag", StringComparison.OrdinalIgnoreCase);
+
     public static DriverOptions Parse(string[] args)
     {
         string? executable = null;
@@ -92,6 +101,7 @@ sealed record DriverOptions(
         string? project = null;
         string? audio = null;
         string? video = null;
+        string? artifacts = null;
         int width = 1280;
         int height = 900;
         bool dumpTree = false;
@@ -146,6 +156,9 @@ sealed record DriverOptions(
                 case "--video":
                     video = Value();
                     break;
+                case "--artifacts":
+                    artifacts = Value();
+                    break;
                 case "--width":
                     width = ParsePositive(Value(), arg);
                     break;
@@ -171,23 +184,35 @@ sealed record DriverOptions(
 
         if (help)
             return new DriverOptions(executable ?? "Aegisub.exe", scenario, duration, project, audio, video,
+                artifacts,
                 width, height, dumpTree, dryRun, keepOpen, warmup, scrollDelta, scrollIntervalMilliseconds,
                 allowGlobalInput) { Help = true };
         if (string.IsNullOrWhiteSpace(executable))
             throw new ArgumentException("--exe is required");
-        if (!dryRun && string.IsNullOrWhiteSpace(audio))
+        if (!dryRun && ScenarioRequiresAudioCanvas(scenario) && string.IsNullOrWhiteSpace(audio))
             throw new ArgumentException("--audio is required for an automated audio scenario");
+        if (!dryRun && ScenarioRequiresVideoCanvas(scenario) && string.IsNullOrWhiteSpace(video))
+            throw new ArgumentException("--video is required for an automated video scenario");
 
         return new DriverOptions(Path.GetFullPath(executable), scenario, duration, project, audio, video,
+            string.IsNullOrWhiteSpace(artifacts) ? null : Path.GetFullPath(artifacts),
             width, height, dumpTree, dryRun, keepOpen, warmup, scrollDelta, scrollIntervalMilliseconds,
             allowGlobalInput);
     }
 
+    private static bool ScenarioRequiresAudioCanvas(string scenario) =>
+        !scenario.Equals("video-crosshair-sweep", StringComparison.OrdinalIgnoreCase);
+
+    private static bool ScenarioRequiresVideoCanvas(string scenario) =>
+        scenario.Equals("video-crosshair-sweep", StringComparison.OrdinalIgnoreCase)
+        || scenario.Equals("video-playback-audio-scroll", StringComparison.OrdinalIgnoreCase)
+        || scenario.Equals("video-playback-audio-scrollbar-drag", StringComparison.OrdinalIgnoreCase);
+
     public static void PrintHelp()
     {
-        Console.WriteLine("Aegisub Audio Display background UIA driver");
+        Console.WriteLine("Aegisub background UIA driver");
         Console.WriteLine("  --exe PATH                         Aegisub.exe");
-        Console.WriteLine("  --scenario NAME                    audio-waveform-scroll, audio-scrollbar-drag, video-playback-audio-scroll, video-playback-audio-scrollbar-drag, audio-spectrum-scroll, audio-spectrum-scrollbar-drag, audio-cursor-marker, audio-spectrum-cursor-marker, audio-playback-cursor, all");
+        Console.WriteLine("  --scenario NAME                    audio-waveform-scroll, audio-scrollbar-drag, video-crosshair-sweep, video-playback-audio-scroll, video-playback-audio-scrollbar-drag, audio-spectrum-scroll, audio-spectrum-scrollbar-drag, audio-cursor-marker, audio-spectrum-cursor-marker, audio-playback-cursor, all");
         Console.WriteLine("  --duration-seconds N               active scenario duration (default 30)");
         Console.WriteLine("  --warmup-seconds N                 warmup before input (default 5)");
         Console.WriteLine("  --scroll-delta N                   wheel delta magnitude for scroll scenarios (default 120)");
@@ -195,6 +220,7 @@ sealed record DriverOptions(
         Console.WriteLine("  --project PATH                     optional ASS/project file passed at startup");
         Console.WriteLine("  --audio PATH                       optional audio file passed at startup");
         Console.WriteLine("  --video PATH                       optional video file passed at startup");
+        Console.WriteLine("  --artifacts PATH                   persistent artifacts directory for perf sessions");
         Console.WriteLine("  --width N --height N               fixed top-level window size (default 1280x900)");
         Console.WriteLine("  --dump-tree                        print UIA and Win32 child window inventory");
         Console.WriteLine("  --dry-run                          start, inspect and exit without input");
@@ -220,6 +246,7 @@ sealed class AegisubSession : IDisposable
     private AutomationElement? mainWindow;
     private string? automationProjectDirectory;
     private string? automationProjectPath;
+    private string? automationProfileDirectory;
     private string? automationArtifactsDirectory;
     private nint audioCanvas;
     private WinRect audioCanvasRect;
@@ -254,8 +281,12 @@ sealed class AegisubSession : IDisposable
         }
 
         automationProjectPath = PrepareAutomationProject();
-        automationArtifactsDirectory = Path.Combine(automationProjectDirectory!, "artifacts");
-        var automationProfileDirectory = Path.Combine(automationProjectDirectory!, "profile");
+        automationProfileDirectory = Path.Combine(automationProjectDirectory!, "profile");
+        automationArtifactsDirectory = string.IsNullOrWhiteSpace(options.Artifacts)
+            ? Path.Combine(automationProjectDirectory!, "artifacts")
+            : Path.GetFullPath(options.Artifacts);
+        Directory.CreateDirectory(automationArtifactsDirectory);
+        WriteAutomationConfig(automationProfileDirectory);
         Console.WriteLine($"uia.project={automationProjectPath}");
 
         var startInfo = new ProcessStartInfo
@@ -356,6 +387,9 @@ sealed class AegisubSession : IDisposable
         var deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 30;
         while (Stopwatch.GetTimestamp() < deadline)
         {
+            if (process is not null && process.HasExited)
+                throw new InvalidOperationException($"Aegisub exited before an audio canvas was ready (exit code {process.ExitCode})");
+            ThrowIfFatalDialog();
             if (root is null)
                 break;
             audioCanvas = FindAudioCanvas(root, preferSkiaCanvas);
@@ -385,6 +419,21 @@ sealed class AegisubSession : IDisposable
             : "Could not locate the Audio Display canvas");
     }
 
+    public void WaitForRequiredCanvas()
+    {
+        if (options.RequiresAudioCanvas)
+        {
+            WaitForAudioCanvas();
+            return;
+        }
+
+        var videoCanvas = WaitForVideoCanvas();
+        var rect = GetWindowRect(videoCanvas);
+        Console.WriteLine($"uia.video_canvas_hwnd=0x{videoCanvas:X}");
+        Console.WriteLine($"uia.video_canvas_class={GetClassName(videoCanvas)}");
+        Console.WriteLine($"uia.video_canvas_rect={rect.Left},{rect.Top},{rect.Width}x{rect.Height}");
+    }
+
     public async Task RunScenarioAsync()
     {
         if (options.WarmupSeconds > 0)
@@ -396,7 +445,8 @@ sealed class AegisubSession : IDisposable
         // AudioDisplaySlot may replace a failed startup Skia canvas with the
         // legacy widget while the audio provider is still settling. Resolve
         // the target again after warmup so input never uses the stale HWND.
-        WaitForAudioCanvas();
+        if (options.RequiresAudioCanvas)
+            WaitForAudioCanvas();
 
         var scenarios = options.Scenario.Equals("all", StringComparison.OrdinalIgnoreCase)
             ? new[] { "audio-waveform-scroll", "audio-scrollbar-drag", "audio-spectrum-scroll", "audio-cursor-marker", "audio-playback-cursor" }
@@ -418,6 +468,9 @@ sealed class AegisubSession : IDisposable
                     break;
                 case "video-playback-audio-scrollbar-drag":
                     await RunVideoPlaybackAudioScrollbarDragAsync();
+                    break;
+                case "video-crosshair-sweep":
+                    await RunVideoCrosshairSweepAsync();
                     break;
                 case "audio-spectrum-scroll":
                     await EnableSpectrumAsync();
@@ -579,6 +632,52 @@ sealed class AegisubSession : IDisposable
     private Task RunVideoPlaybackAudioScrollbarDragAsync() =>
         RunVideoPlaybackAudioActionAsync(RunScrollbarDragAsync);
 
+    private async Task RunVideoCrosshairSweepAsync()
+    {
+        var videoCanvas = WaitForVideoCanvas();
+        var rect = GetWindowRect(videoCanvas);
+        Console.WriteLine("uia.video_crosshair.input=background-window-messages");
+        Console.WriteLine($"uia.video_canvas_hwnd=0x{videoCanvas:X}");
+        Console.WriteLine($"uia.video_canvas_class={GetClassName(videoCanvas)}");
+        Console.WriteLine($"uia.video_canvas_rect={rect.Left},{rect.Top},{rect.Width}x{rect.Height}");
+
+        // The standard tool draws the crosshair and coordinate label for every
+        // mouse position. Sending the key directly to the canvas keeps the
+        // scenario isolated from foreground/global input.
+        SendKeyToWindow(videoCanvas, (ushort)'A');
+        Console.WriteLine("uia.video_tool=standard");
+        await Task.Delay(100);
+
+        var marginX = Math.Min(24, Math.Max(4, rect.Width / 10));
+        var marginY = Math.Min(24, Math.Max(4, rect.Height / 10));
+        var left = marginX;
+        var right = Math.Max(left + 1, rect.Width - marginX);
+        var top = marginY;
+        var bottom = Math.Max(top + 1, rect.Height - marginY);
+        var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency * options.DurationSeconds;
+        var forward = true;
+        var moves = 0;
+
+        while (Stopwatch.GetTimestamp() < end)
+        {
+            var startX = forward ? left : right;
+            var endX = forward ? right : left;
+            var startY = forward ? top : bottom;
+            var endY = forward ? bottom : top;
+            for (var step = 0; step <= 64 && Stopwatch.GetTimestamp() < end; ++step)
+            {
+                var x = startX + (endX - startX) * step / 64;
+                var y = startY + (endY - startY) * step / 64;
+                SendMouseToWindow(videoCanvas, WindowMessage.MouseMove, x, y, 0);
+                ++moves;
+                await Task.Delay(options.ScrollIntervalMilliseconds);
+            }
+            forward = !forward;
+        }
+
+        Console.WriteLine($"uia.video_crosshair.moves={moves} interval_ms={options.ScrollIntervalMilliseconds}");
+    }
+
     private async Task RunVideoPlaybackAudioActionAsync(Func<Task> action)
     {
         var videoCanvas = WaitForVideoCanvas();
@@ -610,6 +709,9 @@ sealed class AegisubSession : IDisposable
         var deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 45;
         while (Stopwatch.GetTimestamp() < deadline)
         {
+            if (process.HasExited)
+                throw new InvalidOperationException($"Aegisub exited before a video canvas was ready (exit code {process.ExitCode})");
+            ThrowIfFatalDialog();
             var candidate = EnumerateChildWindows(process.MainWindowHandle)
                 .Where(hwnd => hwnd != audioCanvas && IsWindowVisible(hwnd))
                 .Select(hwnd => (Hwnd: hwnd, Rect: GetWindowRect(hwnd), Class: GetClassName(hwnd)))
@@ -802,6 +904,37 @@ sealed class AegisubSession : IDisposable
         return AutomationElement.FromHandle(process.MainWindowHandle);
     }
 
+    private void ThrowIfFatalDialog()
+    {
+        var root = RefreshMainWindow();
+        if (root is null)
+            return;
+
+        try
+        {
+            var dialogs = root.FindAll(TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window));
+            foreach (AutomationElement dialog in dialogs)
+            {
+                var name = (dialog.Current.Name ?? string.Empty).Trim();
+                if (ContainsAny(name,
+                    "Program error",
+                    "Aegisub has crashed",
+                    "Aegisub crashed",
+                    "程序错误",
+                    "Aegisub 已崩溃"))
+                {
+                    throw new InvalidOperationException($"Aegisub reported a fatal error dialog: {name}");
+                }
+            }
+        }
+        catch (ElementNotAvailableException)
+        {
+            // The dialog can disappear while UIA is enumerating it. The next
+            // polling iteration observes the process state again.
+        }
+    }
+
     private void SetWindowSize()
     {
         if (process is null)
@@ -962,6 +1095,25 @@ sealed class AegisubSession : IDisposable
         var project = Path.Combine(automationProjectDirectory, "scenario.ass");
         File.WriteAllText(project, BuildAutomationProjectContent(BlankAutomationProject), new UTF8Encoding(false));
         return project;
+    }
+
+    private static void WriteAutomationConfig(string profileDirectory)
+    {
+        var userDirectory = Path.Combine(profileDirectory, "user");
+        Directory.CreateDirectory(userDirectory);
+        var configPath = Path.Combine(userDirectory, "config.json");
+        var config = new
+        {
+            Subtitle = new
+            {
+                Provider = "libass"
+            }
+        };
+        File.WriteAllText(
+            configPath,
+            JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }),
+            new UTF8Encoding(false));
+        Console.WriteLine("uia.config=subtitle-provider:libass");
     }
 
     private string BuildAutomationProjectContent(string source)
@@ -1129,6 +1281,44 @@ sealed class AegisubSession : IDisposable
         {
             Console.WriteLine($"uia.project_cleanup=deferred:{error.Message}");
         }
+    }
+
+    private void PreservePerfSessions()
+    {
+        if (string.IsNullOrWhiteSpace(automationProfileDirectory)
+            || string.IsNullOrWhiteSpace(automationArtifactsDirectory)
+            || process is null
+            || !process.HasExited)
+            return;
+
+        var source = Path.Combine(automationProfileDirectory, "user", "perf-sessions");
+        if (!Directory.Exists(source))
+        {
+            Console.WriteLine("uia.perf_sessions=none");
+            return;
+        }
+
+        var destination = Path.Combine(automationArtifactsDirectory, "perf-sessions");
+        Directory.CreateDirectory(destination);
+        var copied = 0;
+        foreach (var session in Directory.EnumerateDirectories(source))
+        {
+            var target = Path.Combine(destination, Path.GetFileName(session));
+            CopyDirectory(session, target);
+            ++copied;
+        }
+
+        Console.WriteLine($"uia.perf_sessions.count={copied}");
+        Console.WriteLine($"uia.perf_sessions.artifacts={destination}");
+    }
+
+    private static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (var file in Directory.EnumerateFiles(source))
+            File.Copy(file, Path.Combine(destination, Path.GetFileName(file)), overwrite: true);
+        foreach (var directory in Directory.EnumerateDirectories(source))
+            CopyDirectory(directory, Path.Combine(destination, Path.GetFileName(directory)));
     }
 
     private void Drag(WinPoint start, WinPoint end, int steps, int delayMs)
@@ -1343,10 +1533,18 @@ sealed class AegisubSession : IDisposable
         try
         {
             if (!options.KeepOpen && process is not null && !process.HasExited)
-                Close();
+            {
+                // Preserve the original scenario/startup exception instead of
+                // replacing it with a cleanup error from Close().
+                if (scenarioSucceeded)
+                    Close();
+                else
+                    TerminateAutomationProcess("scenario-failed");
+            }
         }
         finally
         {
+            PreservePerfSessions();
             DeleteAutomationProject();
             process?.Dispose();
         }

@@ -1260,6 +1260,10 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) try {
 			ProbeSkiaVideoCompositor(client_size);
 		return false;
 	}
+	if (skia_overlay_backing_release_requested) {
+		skia_overlay_backing_release_requested = false;
+		DestroySkiaOverlayBacking();
+	}
 
 	if ((mouse_pos || !autohideTools->GetBool()) && tool && !tool->SupportsOverlayContext())
 		return false;
@@ -1269,46 +1273,49 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) try {
 
 	int const canvas_width = client_size.GetWidth() * scale_factor;
 	int const canvas_height = client_size.GetHeight() * scale_factor;
-	SkiaVideoOverlayRecorder recorder(
-		[&](std::string const& text, VideoOverlayTextStyle const& style) {
-			return skia_overlay_text_cache->MeasureText(text, style);
-		},
-		static_cast<float>(scale_factor));
+	SkiaVideoOverlayCommandBuffer commands;
+	{
+		perf_trace::VideoUiDurationScope record_trace("video_display.overlay.record");
+		SkiaVideoOverlayRecorder recorder(
+			[&](std::string const& text, VideoOverlayTextStyle const& style) {
+				return skia_overlay_text_cache->MeasureText(text, style);
+			},
+			static_cast<float>(scale_factor));
 
-	if (OPT_GET("Video/Overscan Mask")->GetBool()) {
-		double const ar = con->videoController->GetAspectRatioValue();
-		if (ar > 1.75) {
-			DrawOverscanMaskSkia(recorder, .1f, .05f);
-			DrawOverscanMaskSkia(recorder, 0.035f, 0.035f);
+		if (OPT_GET("Video/Overscan Mask")->GetBool()) {
+			double const ar = con->videoController->GetAspectRatioValue();
+			if (ar > 1.75) {
+				DrawOverscanMaskSkia(recorder, .1f, .05f);
+				DrawOverscanMaskSkia(recorder, 0.035f, 0.035f);
+			}
+			else {
+				DrawOverscanMaskSkia(recorder, 0.067f, 0.05f);
+				DrawOverscanMaskSkia(recorder, 0.033f, 0.035f);
+			}
+			// Overscan previously drew directly to the canvas before a fresh tool
+			// context was constructed. Preserve that state boundary in the recorder.
+			recorder.SetLineColour(*wxWHITE, 1.0f, 1);
+			recorder.SetFillColour(*wxWHITE, 1.0f);
+			recorder.ClearInvert();
 		}
-		else {
-			DrawOverscanMaskSkia(recorder, 0.067f, 0.05f);
-			DrawOverscanMaskSkia(recorder, 0.033f, 0.035f);
-		}
-		// Overscan previously drew directly to the canvas before a fresh tool
-		// context was constructed. Preserve that state boundary in the recorder.
-		recorder.SetLineColour(*wxWHITE, 1.0f, 1);
-		recorder.SetFillColour(*wxWHITE, 1.0f);
-		recorder.ClearInvert();
+		if ((mouse_pos || !autohideTools->GetBool()) && tool)
+			tool->DrawOverlay(recorder);
+
+		commands = recorder.TakeBuffer();
+		record_trace.SetDetails(static_cast<int>(commands.CommandCount()), tool ? 1 : 0);
 	}
-	if ((mouse_pos || !autohideTools->GetBool()) && tool)
-		tool->DrawOverlay(recorder);
 
-	auto commands = recorder.TakeBuffer();
-	auto const plan_target_bounds = [&](SkiaOverlayLogicalBounds const& logical_bounds) {
-		return AlignSkiaOverlayDeviceBoundsForAllocation(
-			PlanSkiaOverlayDeviceBounds(
-				logical_bounds,
-				static_cast<float>(scale_factor),
-				canvas_width,
-				canvas_height),
+	auto const plan_content_bounds = [&](SkiaOverlayLogicalBounds const& logical_bounds) {
+		return PlanSkiaOverlayDeviceBounds(
+			logical_bounds,
+			static_cast<float>(scale_factor),
 			canvas_width,
 			canvas_height);
 	};
-	auto const normal_bounds = plan_target_bounds(commands.NormalBounds());
-	auto const invert_bounds = plan_target_bounds(commands.InvertBounds());
-	bool const has_normal_content = commands.HasNormalContent() && !normal_bounds.IsEmpty();
-	bool const has_invert_content = commands.HasInvertContent() && !invert_bounds.IsEmpty();
+	auto const normal_content_bounds = plan_content_bounds(commands.NormalBounds());
+	auto const invert_content_bounds = plan_content_bounds(commands.InvertBounds());
+	bool const has_normal_content = commands.HasNormalContent() && !normal_content_bounds.IsEmpty();
+	bool const has_invert_content = commands.HasInvertContent() && !invert_content_bounds.IsEmpty();
 	if (commands.Empty() || (!has_normal_content && !has_invert_content)) {
 		skia_overlay_cached_commands.reset();
 		skia_overlay_cache_valid = false;
@@ -1318,42 +1325,97 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) try {
 	// The draw context always has a normal canvas. An invert-only command stream
 	// uses the invert bounds for that unused normal target rather than allocating
 	// a second full-window surface.
-	auto const normal_target_bounds = has_normal_content ? normal_bounds : invert_bounds;
+	auto const normal_required_bounds = has_normal_content
+		? normal_content_bounds
+		: invert_content_bounds;
 	auto const context = CurrentSkiaGlContextToken();
-	bool const can_reuse_cached_texture =
-		skia_overlay_cache_valid
-		&& skia_overlay_cached_commands
-		&& skia_overlay_cached_commands->EquivalentTo(commands)
-		&& skia_overlay_cache_context_generation == context.generation
-		&& skia_overlay_cache_canvas_width == canvas_width
-		&& skia_overlay_cache_canvas_height == canvas_height
-		&& skia_overlay_cache_scale_factor == scale_factor
-		&& skia_overlay_origin_x == normal_target_bounds.x
-		&& skia_overlay_origin_y == normal_target_bounds.y
-		&& skia_overlay_width == normal_target_bounds.width
-		&& skia_overlay_height == normal_target_bounds.height
-		&& skia_overlay_framebuffer
+	if (skia_overlay_backing_context_generation
+		&& skia_overlay_backing_context_generation != context.generation) {
+		DestroySkiaOverlayBacking();
+	}
+	auto const current_normal_backing =
+		skia_overlay_framebuffer
 		&& skia_overlay_texture
 		&& skia_overlay_stencil_renderbuffer
-		&& (!has_invert_content
-			|| (skia_overlay_invert_framebuffer
-				&& skia_overlay_invert_texture
-				&& skia_overlay_invert_stencil_renderbuffer
-				&& skia_overlay_invert_origin_x == invert_bounds.x
-				&& skia_overlay_invert_origin_y == invert_bounds.y
-				&& skia_overlay_invert_width == invert_bounds.width
-				&& skia_overlay_invert_height == invert_bounds.height));
+			? SkiaOverlayDeviceBounds {
+				skia_overlay_origin_x,
+				skia_overlay_origin_y,
+				skia_overlay_width,
+				skia_overlay_height,
+			}
+			: SkiaOverlayDeviceBounds {};
+	auto const current_invert_backing =
+		skia_overlay_invert_framebuffer
+		&& skia_overlay_invert_texture
+		&& skia_overlay_invert_stencil_renderbuffer
+			? SkiaOverlayDeviceBounds {
+				skia_overlay_invert_origin_x,
+				skia_overlay_invert_origin_y,
+				skia_overlay_invert_width,
+				skia_overlay_invert_height,
+			}
+			: SkiaOverlayDeviceBounds {};
+	auto const normal_target_bounds = SelectSkiaOverlayBackingBounds(
+		normal_required_bounds,
+		current_normal_backing,
+		canvas_width,
+		canvas_height);
+	auto const invert_target_bounds = has_invert_content
+		? SelectSkiaOverlayBackingBounds(
+			invert_content_bounds,
+			current_invert_backing,
+			canvas_width,
+			canvas_height)
+		: SkiaOverlayDeviceBounds {};
+	// A failed Ganesh device abandons its context. Do not composite a texture
+	// cached before that failure: doing so would bypass BeginFrame and could
+	// present stale overlay pixels while the renderer has already fallen back.
+	bool const skia_device_healthy = skia_video_compositor
+		&& skia_video_compositor->Device().Health() == SkiaGlDeviceHealth::Healthy;
+	bool can_reuse_cached_texture = false;
+	{
+		perf_trace::VideoUiDurationScope cache_trace("video_display.overlay.cache_check");
+		can_reuse_cached_texture = skia_device_healthy
+			&& skia_overlay_cache_valid
+			&& skia_overlay_cached_commands
+			&& skia_overlay_cache_context_generation == context.generation
+			&& skia_overlay_cache_canvas_width == canvas_width
+			&& skia_overlay_cache_canvas_height == canvas_height
+			&& skia_overlay_cache_scale_factor == scale_factor
+			&& skia_overlay_origin_x == normal_target_bounds.x
+			&& skia_overlay_origin_y == normal_target_bounds.y
+			&& skia_overlay_width == normal_target_bounds.width
+			&& skia_overlay_height == normal_target_bounds.height
+			&& skia_overlay_framebuffer
+			&& skia_overlay_texture
+			&& skia_overlay_stencil_renderbuffer
+			&& (!has_invert_content
+				|| (skia_overlay_invert_framebuffer
+					&& skia_overlay_invert_texture
+					&& skia_overlay_invert_stencil_renderbuffer
+					&& skia_overlay_invert_origin_x == invert_target_bounds.x
+					&& skia_overlay_invert_origin_y == invert_target_bounds.y
+					&& skia_overlay_invert_width == invert_target_bounds.width
+					&& skia_overlay_invert_height == invert_target_bounds.height))
+			&& skia_overlay_cached_commands->NormalBounds() == commands.NormalBounds()
+			&& skia_overlay_cached_commands->InvertBounds() == commands.InvertBounds()
+			&& skia_overlay_cached_commands->EquivalentTo(commands);
+		cache_trace.SetDetails(
+			can_reuse_cached_texture ? 1 : 0,
+			static_cast<int>(commands.CommandCount()));
+	}
 
 	auto composite_overlay = [&] {
+		perf_trace::VideoUiDurationScope composite_trace("video_display.overlay.composite");
 		BindWindowFramebufferForDisplayRender();
 		glViewport(0, 0, canvas_width, canvas_height);
 		CompositeSkiaVideoOverlayTextures(
 			static_cast<GLuint>(skia_overlay_texture),
 			has_normal_content,
-			normal_bounds,
+			normal_target_bounds,
 			static_cast<GLuint>(skia_overlay_invert_texture),
 			has_invert_content,
-			invert_bounds,
+			invert_target_bounds,
 			canvas_width,
 			canvas_height);
 	};
@@ -1374,20 +1436,27 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) try {
 
 	if (!skia_overlay_surface_provider)
 		skia_overlay_surface_provider = agi::make_unique<SkiaSurfaceProvider>();
-	if (!EnsureSkiaOverlayBacking(
-		normal_target_bounds.width,
-		normal_target_bounds.height,
-		invert_bounds.width,
-		invert_bounds.height,
-		has_invert_content)) {
-		compositor->FailFrame(
-			context,
-			SkiaGlDeviceFailure::SurfaceAllocationFailed,
-			"the bounded Skia video tools framebuffer backing could not be allocated");
-		DestroySkiaOverlayBacking();
-		LogSkiaVideoFailureOnce();
-		return false;
+	int allocated_targets = 0;
+	{
+		perf_trace::VideoUiDurationScope backing_trace("video_display.overlay.backing");
+		if (!EnsureSkiaOverlayBacking(
+			normal_target_bounds.width,
+			normal_target_bounds.height,
+			invert_target_bounds.width,
+			invert_target_bounds.height,
+			has_invert_content,
+			allocated_targets)) {
+			compositor->FailFrame(
+				context,
+				SkiaGlDeviceFailure::SurfaceAllocationFailed,
+				"the bounded Skia video tools framebuffer backing could not be allocated");
+			DestroySkiaOverlayBacking();
+			LogSkiaVideoFailureOnce();
+			return false;
+		}
+		backing_trace.SetDetails(allocated_targets, has_invert_content ? 1 : 0);
 	}
+	skia_overlay_backing_context_generation = context.generation;
 
 	auto const& gl = GetCaptureFramebufferFunctions();
 	if (!gl.BindFramebuffer) {
@@ -1416,52 +1485,91 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) try {
 	glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
 	glReadBuffer(GL_COLOR_ATTACHMENT0_EXT);
 
-	SkiaFramebufferSurfaceDescriptor descriptor;
-	descriptor.width = normal_target_bounds.width;
-	descriptor.height = normal_target_bounds.height;
-	descriptor.sample_count = 0;
-	descriptor.stencil_bits = 8;
-	descriptor.framebuffer_id = skia_overlay_framebuffer;
-	descriptor.bottom_left_origin = false;
-	auto surface = skia_overlay_surface_provider->AcquireFramebufferSurface(
-		compositor->Device().Get(),
-		descriptor);
-	if (!surface) {
-		compositor->FailFrame(
-			context,
-			SkiaGlDeviceFailure::SurfaceAcquisitionFailed,
-			"Skia could not wrap the tools framebuffer as a Ganesh surface");
-		DestroySkiaOverlayBacking();
-		LogSkiaVideoFailureOnce();
-		return false;
-	}
-
-	sk_sp<SkSurface> invert_surface;
-	if (has_invert_content) {
-		gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, skia_overlay_invert_framebuffer);
-		glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
-		glReadBuffer(GL_COLOR_ATTACHMENT0_EXT);
-
-		SkiaFramebufferSurfaceDescriptor invert_descriptor = descriptor;
-		invert_descriptor.width = invert_bounds.width;
-		invert_descriptor.height = invert_bounds.height;
-		invert_descriptor.framebuffer_id = skia_overlay_invert_framebuffer;
-		invert_surface = skia_overlay_surface_provider->AcquireFramebufferSurface(
-			compositor->Device().Get(),
-			invert_descriptor);
-		if (!invert_surface) {
+	int surfaces_rewrapped = 0;
+	SkCanvas *canvas = nullptr;
+	SkCanvas *invert_canvas = nullptr;
+	{
+		perf_trace::VideoUiDurationScope surface_trace("video_display.overlay.surface");
+		SkiaFramebufferSurfaceDescriptor descriptor;
+		descriptor.width = normal_target_bounds.width;
+		descriptor.height = normal_target_bounds.height;
+		descriptor.sample_count = 0;
+		descriptor.stencil_bits = 8;
+		descriptor.framebuffer_id = skia_overlay_framebuffer;
+		descriptor.bottom_left_origin = false;
+		// Wrap the FBO as a Ganesh surface. Whenever the FBO id, requested size
+		// and GL context generation are unchanged (e.g. a static overlay between
+		// paints), the previously wrapped surface is reused instead of being
+		// re-created. The cached surface is dropped whenever any of those keys
+		// change.
+		bool const normal_surface_matches =
+			skia_overlay_surface
+			&& skia_overlay_surface_context_generation == context.generation
+			&& skia_overlay_surface_framebuffer == skia_overlay_framebuffer
+			&& skia_overlay_surface_width == normal_target_bounds.width
+			&& skia_overlay_surface_height == normal_target_bounds.height;
+		if (!normal_surface_matches) {
+			skia_overlay_surface = skia_overlay_surface_provider->AcquireFramebufferSurface(
+				compositor->Device().Get(),
+				descriptor);
+			skia_overlay_surface_context_generation = context.generation;
+			skia_overlay_surface_framebuffer = skia_overlay_framebuffer;
+			skia_overlay_surface_width = normal_target_bounds.width;
+			skia_overlay_surface_height = normal_target_bounds.height;
+			++surfaces_rewrapped;
+		}
+		if (!skia_overlay_surface) {
 			compositor->FailFrame(
 				context,
 				SkiaGlDeviceFailure::SurfaceAcquisitionFailed,
-				"Skia could not wrap the invert framebuffer as a Ganesh surface");
+				"Skia could not wrap the tools framebuffer as a Ganesh surface");
 			DestroySkiaOverlayBacking();
 			LogSkiaVideoFailureOnce();
 			return false;
 		}
-	}
 
-	SkCanvas *canvas = surface.get()->getCanvas();
-	SkCanvas *invert_canvas = invert_surface ? invert_surface->getCanvas() : nullptr;
+		if (has_invert_content) {
+			gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, skia_overlay_invert_framebuffer);
+			glDrawBuffer(GL_COLOR_ATTACHMENT0_EXT);
+			glReadBuffer(GL_COLOR_ATTACHMENT0_EXT);
+
+			bool const invert_surface_matches =
+				skia_overlay_invert_surface
+				&& skia_overlay_invert_surface_context_generation == context.generation
+				&& skia_overlay_invert_surface_framebuffer == skia_overlay_invert_framebuffer
+				&& skia_overlay_invert_surface_width == invert_target_bounds.width
+				&& skia_overlay_invert_surface_height == invert_target_bounds.height;
+			if (!invert_surface_matches) {
+				SkiaFramebufferSurfaceDescriptor invert_descriptor = descriptor;
+				invert_descriptor.width = invert_target_bounds.width;
+				invert_descriptor.height = invert_target_bounds.height;
+				invert_descriptor.framebuffer_id = skia_overlay_invert_framebuffer;
+				skia_overlay_invert_surface = skia_overlay_surface_provider->AcquireFramebufferSurface(
+					compositor->Device().Get(),
+					invert_descriptor);
+				skia_overlay_invert_surface_context_generation = context.generation;
+				skia_overlay_invert_surface_framebuffer = skia_overlay_invert_framebuffer;
+				skia_overlay_invert_surface_width = invert_target_bounds.width;
+				skia_overlay_invert_surface_height = invert_target_bounds.height;
+				++surfaces_rewrapped;
+			}
+			if (!skia_overlay_invert_surface) {
+				compositor->FailFrame(
+					context,
+					SkiaGlDeviceFailure::SurfaceAcquisitionFailed,
+					"Skia could not wrap the invert framebuffer as a Ganesh surface");
+				DestroySkiaOverlayBacking();
+				LogSkiaVideoFailureOnce();
+				return false;
+			}
+		}
+		surface_trace.SetDetails(surfaces_rewrapped, has_invert_content ? 1 : 0);
+
+		canvas = skia_overlay_surface->getCanvas();
+		invert_canvas = has_invert_content && skia_overlay_invert_surface
+			? skia_overlay_invert_surface->getCanvas()
+			: nullptr;
+	}
 	if (!canvas || (has_invert_content && !invert_canvas)) {
 		compositor->FailFrame(
 			context,
@@ -1483,8 +1591,8 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) try {
 		invert_canvas->save();
 		invert_canvas->scale(scale_factor, scale_factor);
 		invert_canvas->translate(
-			-static_cast<float>(invert_bounds.x) / scale_factor,
-			-static_cast<float>(invert_bounds.y) / scale_factor);
+			-static_cast<float>(invert_target_bounds.x) / scale_factor,
+			-static_cast<float>(invert_target_bounds.y) / scale_factor);
 	}
 
 	SkiaVideoOverlayDrawContext draw_context(
@@ -1492,12 +1600,21 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) try {
 		invert_canvas,
 		*skia_overlay_text_cache,
 		static_cast<float>(scale_factor));
-	commands.Replay(draw_context);
+	{
+		perf_trace::VideoUiDurationScope replay_trace("video_display.overlay.replay");
+		commands.Replay(draw_context);
+		replay_trace.SetDetails(static_cast<int>(commands.CommandCount()), has_invert_content ? 1 : 0);
+	}
 
 	canvas->restore();
 	if (invert_canvas)
 		invert_canvas->restore();
-	bool const frame_succeeded = compositor->FinishFrame(context, true);
+	bool frame_succeeded = false;
+	{
+		perf_trace::VideoUiDurationScope submit_trace("video_display.overlay.submit");
+		frame_succeeded = compositor->FinishFrame(context, true);
+		submit_trace.SetDetails(frame_succeeded ? 1 : 0, static_cast<int>(commands.CommandCount()));
+	}
 	if (!frame_succeeded) {
 		DestroySkiaOverlayBacking();
 		LogSkiaVideoFailureOnce();
@@ -1506,8 +1623,10 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) try {
 
 	skia_overlay_origin_x = normal_target_bounds.x;
 	skia_overlay_origin_y = normal_target_bounds.y;
-	skia_overlay_invert_origin_x = invert_bounds.x;
-	skia_overlay_invert_origin_y = invert_bounds.y;
+	if (has_invert_content) {
+		skia_overlay_invert_origin_x = invert_target_bounds.x;
+		skia_overlay_invert_origin_y = invert_target_bounds.y;
+	}
 	skia_overlay_cache_context_generation = context.generation;
 	skia_overlay_cache_canvas_width = canvas_width;
 	skia_overlay_cache_canvas_height = canvas_height;
@@ -1928,7 +2047,9 @@ bool VideoDisplay::EnsureSkiaOverlayBacking(
 	int normal_height,
 	int invert_width,
 	int invert_height,
-	bool need_invert) {
+	bool need_invert,
+	int& allocated_targets) {
+	allocated_targets = 0;
 	if (normal_width <= 0
 		|| normal_height <= 0
 		|| (need_invert && (invert_width <= 0 || invert_height <= 0))) {
@@ -1947,12 +2068,7 @@ bool VideoDisplay::EnsureSkiaOverlayBacking(
 		&& skia_overlay_invert_stencil_renderbuffer
 		&& skia_overlay_invert_width == invert_width
 		&& skia_overlay_invert_height == invert_height;
-	bool const has_any_invert_backing =
-		skia_overlay_invert_framebuffer
-		|| skia_overlay_invert_texture
-		|| skia_overlay_invert_stencil_renderbuffer;
-	if (has_normal_target
-		&& (need_invert ? has_invert_target : !has_any_invert_backing)) {
+	if (has_normal_target && (!need_invert || has_invert_target)) {
 		return true;
 	}
 
@@ -1987,6 +2103,14 @@ bool VideoDisplay::EnsureSkiaOverlayBacking(
 		stencil = 0;
 	};
 	if (!has_normal_target) {
+		// The cached Ganesh surface wraps the old FBO id; drop it so the next
+		// acquire re-wraps the freshly allocated FBO. It must be released before
+		// deleting the GL objects which it references.
+		skia_overlay_surface.reset();
+		skia_overlay_surface_context_generation = 0;
+		skia_overlay_surface_framebuffer = 0;
+		skia_overlay_surface_width = 0;
+		skia_overlay_surface_height = 0;
 		delete_target(
 			skia_overlay_framebuffer,
 			skia_overlay_texture,
@@ -1996,8 +2120,12 @@ bool VideoDisplay::EnsureSkiaOverlayBacking(
 		skia_overlay_width = 0;
 		skia_overlay_height = 0;
 	}
-	if ((!need_invert && has_any_invert_backing)
-		|| (need_invert && !has_invert_target)) {
+	if (need_invert && !has_invert_target) {
+		skia_overlay_invert_surface.reset();
+		skia_overlay_invert_surface_context_generation = 0;
+		skia_overlay_invert_surface_framebuffer = 0;
+		skia_overlay_invert_surface_width = 0;
+		skia_overlay_invert_surface_height = 0;
 		delete_target(
 			skia_overlay_invert_framebuffer,
 			skia_overlay_invert_texture,
@@ -2074,6 +2202,8 @@ bool VideoDisplay::EnsureSkiaOverlayBacking(
 		DestroySkiaOverlayBacking();
 		return false;
 	}
+	if (!has_normal_target)
+		++allocated_targets;
 	if (need_invert
 		&& !has_invert_target
 		&& !allocate_target(
@@ -2085,6 +2215,8 @@ bool VideoDisplay::EnsureSkiaOverlayBacking(
 		DestroySkiaOverlayBacking();
 		return false;
 	}
+	if (need_invert && !has_invert_target)
+		++allocated_targets;
 
 	skia_overlay_width = normal_width;
 	skia_overlay_height = normal_height;
@@ -2097,6 +2229,20 @@ bool VideoDisplay::EnsureSkiaOverlayBacking(
 
 void VideoDisplay::DestroySkiaOverlayBacking() noexcept {
 	auto const& gl = GetCaptureFramebufferFunctions();
+
+	// Drop the cached Ganesh surfaces first - they reference the GL FBOs below,
+	// and Ganesh must release its backend handles before the GL objects are
+	// deleted or the next flush on a recycled FBO id could target stale state.
+	skia_overlay_surface.reset();
+	skia_overlay_invert_surface.reset();
+	skia_overlay_surface_context_generation = 0;
+	skia_overlay_surface_framebuffer = 0;
+	skia_overlay_surface_width = 0;
+	skia_overlay_surface_height = 0;
+	skia_overlay_invert_surface_context_generation = 0;
+	skia_overlay_invert_surface_framebuffer = 0;
+	skia_overlay_invert_surface_width = 0;
+	skia_overlay_invert_surface_height = 0;
 
 	if (skia_overlay_framebuffer) {
 		if (gl.DeleteFramebuffers)
@@ -2141,6 +2287,8 @@ void VideoDisplay::DestroySkiaOverlayBacking() noexcept {
 	skia_overlay_cache_canvas_width = 0;
 	skia_overlay_cache_canvas_height = 0;
 	skia_overlay_cache_scale_factor = 0;
+	skia_overlay_backing_release_requested = false;
+	skia_overlay_backing_context_generation = 0;
 }
 #endif
 
@@ -2474,6 +2622,12 @@ void VideoDisplay::SetZoomFromBoxText(wxCommandEvent &) {
 }
 
 void VideoDisplay::SetTool(std::unique_ptr<VisualToolBase> new_tool) {
+	// Defer GL object destruction until the next render has made this canvas
+	// current. This releases a possibly full-window invert backing on tool
+	// switches without deleting it on every non-invert frame.
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+	skia_overlay_backing_release_requested = true;
+#endif
 	// Set the tool first to prevent repeated initialization from VideoDisplay::Render
 	tool = std::move(new_tool);
 

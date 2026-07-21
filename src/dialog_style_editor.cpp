@@ -40,8 +40,11 @@
 #include "ass_style_storage.h"
 #include "colour_button.h"
 #include "compat.h"
+#include "font_family_catalog.h"
 #include "font_family_catalog_ui.h"
 #include "font_name_combo_box.h"
+#include "font_variant_policy.h"
+#include "font_variant_resolver.h"
 #include "help_button.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
@@ -117,6 +120,21 @@ wxArrayString GetStyleEncodingStrings() {
 	encoding_strings.Add(wxS("238 - ") + _("East European"));
 	encoding_strings.Add(wxS("255 - ") + _("OEM"));
 	return encoding_strings;
+}
+
+wxString FontVariantLabel(FontVariantRole role) {
+	switch (role) {
+		case FontVariantRole::Regular: return _("Regular");
+		case FontVariantRole::Bold: return _("Bold");
+		case FontVariantRole::Italic: return _("Italic");
+		case FontVariantRole::BoldItalic: return _("Bold Italic");
+		case FontVariantRole::Unknown: break;
+	}
+	return _("Unknown");
+}
+
+bool ChoiceMatches(FontVariantChoice const& choice, bool bold, bool italic) {
+	return choice.weight == (bold ? 700 : 400) && choice.italic == italic;
 }
 
 #if defined(__WXGTK__)
@@ -217,11 +235,13 @@ public:
 	}
 };
 
-DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Context *c, AssStyleStorage *store, std::string const& new_name, FontFamilyCatalogUiModel const& font_model)
+DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Context *c, AssStyleStorage *store, std::string const& new_name, FontFamilySelectionModel const& font_model)
 : wxDialog (parent, -1, _("Style Editor"), wxDefaultPosition, wxDefaultSize, wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 , c(c)
 , style(style)
 , store(store)
+, font_catalog(font_model.catalog)
+, prefer_localized_font_names(font_model.prefer_localized)
 {
 	notification_sink = agi::ResolveStyleEditorNotificationSink(c, this);
 	interaction_sink = agi::ResolveStyleEditorInteractionSink(c, this);
@@ -292,8 +312,13 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	StyleName = new wxTextCtrl(this, -1, to_wx(style->name));
 	auto const contains_matching = OPT_GET("Subtitle/Font/Use Contains Matching")->GetBool();
 	FontName = new FontNameComboBox(
-		this, to_wx(style->font), wxSize(150, -1), font_model.choices, contains_matching);
-	auto FontSize = num_text_ctrl(&work->fontsize, 0, 10000.0, 1.0, AssStyle::DefaultFontSize, true);
+		this, to_wx(style->font), wxSize(150, -1), font_model.choices,
+		contains_matching);
+	FontStyle = new wxComboBox(
+		this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize,
+		0, nullptr, wxCB_READONLY);
+	FontVariantInfo = new wxStaticText(this, -1, wxEmptyString);
+	FontSize = num_text_ctrl(&work->fontsize, 0, 10000.0, 1.0, AssStyle::DefaultFontSize, true);
 	BoxBold = new wxCheckBox(this, -1, _("&Bold"));
 	BoxItalic = new wxCheckBox(this, -1, _("&Italic"));
 	BoxUnderline = new wxCheckBox(this, -1, _("&Underline"));
@@ -334,6 +359,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	// Set control tooltips
 	StyleName->SetToolTip(_("Style name"));
 	FontName->SetToolTip(_("Font face"));
+	FontStyle->SetToolTip(_("Font style"));
 	FontSize->SetToolTip(_("Font size"));
 	colorButton[0]->SetToolTip(_("Choose primary color"));
 	colorButton[1]->SetToolTip(_("Choose secondary color"));
@@ -361,6 +387,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	Alignment->SetSelection(AlignToControl(style->alignment));
 	// Fill font face list box
 	FontName->ChangeValue(to_wx(font_model.PreferredName(style->font)));
+	committed_font_family = from_wx(FontName->GetValue());
 
 	// Set encoding value
 	bool found = false;
@@ -380,6 +407,7 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	wxSizer *FontSizerTop = new wxBoxSizer(wxHORIZONTAL);
 	wxSizer *FontSizerBottom = new wxBoxSizer(wxHORIZONTAL);
 	FontSizerTop->Add(FontName, 1, wxALL, 0);
+	FontSizerTop->Add(FontStyle, 0, wxLEFT, 5);
 	FontSizerTop->Add(FontSize, 0, wxLEFT, 5);
 	FontSizerBottom->AddStretchSpacer(1);
 	FontSizerBottom->Add(BoxBold, 0, 0, 0);
@@ -389,6 +417,9 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	FontSizerBottom->AddStretchSpacer(1);
 	FontSizer->Add(FontSizerTop, 1, wxALL | wxEXPAND, 0);
 	FontSizer->Add(FontSizerBottom, 1, wxTOP | wxEXPAND, 5);
+	FontSizer->Add(FontVariantInfo, 0, wxTOP | wxEXPAND, 5);
+	FontStyle->Hide();
+	FontVariantInfo->Hide();
 
 	// Colors sizer
 	wxString colorLabels[] = { _("Primary"), _("Secondary"), _("Outline"), _("Shadow") };
@@ -502,7 +533,12 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	Bind(wxEVT_SPINCTRL, &DialogStyleEditor::OnCommandPreviewUpdate, this);
 
 	previewButton->Bind(EVT_COLOR, &DialogStyleEditor::OnPreviewColourChange, this);
-	FontName->Bind(wxEVT_TEXT_ENTER, &DialogStyleEditor::OnCommandPreviewUpdate, this);
+	FontName->Bind(wxEVT_TEXT_ENTER, &DialogStyleEditor::OnFontFamilyChanged, this);
+	FontName->Bind(wxEVT_COMBOBOX, &DialogStyleEditor::OnFontFamilyChanged, this);
+	FontName->Bind(wxEVT_KILL_FOCUS, &DialogStyleEditor::OnFontFamilyFocusLost, this);
+	FontStyle->Bind(wxEVT_COMBOBOX, &DialogStyleEditor::OnFontVariantChanged, this);
+	BoxBold->Bind(wxEVT_CHECKBOX, &DialogStyleEditor::OnFontVariantChanged, this);
+	BoxItalic->Bind(wxEVT_CHECKBOX, &DialogStyleEditor::OnFontVariantChanged, this);
 	PreviewText->Bind(wxEVT_TEXT, &DialogStyleEditor::OnPreviewTextChange, this);
 
 	Bind(wxEVT_BUTTON, std::bind(&DialogStyleEditor::Apply, this, true, true), wxID_OK);
@@ -512,6 +548,8 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 
 	for (auto const& elem : colorButton)
 		elem->Bind(EVT_COLOR, &DialogStyleEditor::OnSetColor, this);
+
+	UpdateFontVariantControls(false);
 }
 
 DialogStyleEditor::~DialogStyleEditor() {
@@ -566,7 +604,16 @@ void DialogStyleEditor::Apply(bool apply, bool close) {
 			work->name = new_name;
 		}
 
+		CommitFontFamilyChange();
+		ApplyLiveFontVariantProbe();
 		UpdateWorkStyle();
+		// The freshly probed state is now the committed user intent. A later
+		// family change must start from it rather than restoring an older pin.
+		font_family_selection_changed = false;
+		font_variant_user_modified = false;
+		font_variant_implicit_pinned = false;
+		font_variant_base_bold = BoxBold->GetValue();
+		font_variant_base_italic = BoxItalic->GetValue();
 
 		*style = *work;
 		style->UpdateData();
@@ -588,6 +635,182 @@ void DialogStyleEditor::Apply(bool apply, bool close) {
 		EndModal(apply);
 		if (PreviewText)
 			OPT_SET("Tool/Style Editor/Preview Text")->SetString(from_wx(PreviewText->GetValue()));
+	}
+}
+
+void DialogStyleEditor::UpdateFontVariantControls(bool family_changed) {
+	if (updating_font_variant)
+		return;
+	updating_font_variant = true;
+	auto finish = [&] { updating_font_variant = false; };
+
+	font_variant_choices.clear();
+	if (family_changed && !font_variant_user_modified) {
+		// A catalog profile is only a preview. Preserve the user's pre-family
+		// intent so Apply can replace a stale automatic pin with a fresh probe.
+		if (font_variant_implicit_pinned) {
+			BoxBold->SetValue(font_variant_base_bold);
+			BoxItalic->SetValue(font_variant_base_italic);
+		}
+		font_variant_base_bold = BoxBold->GetValue();
+		font_variant_base_italic = BoxItalic->GetValue();
+		font_variant_implicit_pinned = false;
+	}
+	auto const *record = SelectedFontRecord();
+	if (!record) {
+		FontStyle->Hide();
+		FontVariantInfo->Hide();
+		finish();
+		Layout();
+		return;
+	}
+
+	font_variant_choices = BuildVariantChoices(record->variant_profile);
+	if (family_changed && !font_variant_user_modified) {
+		FontVariantSelection current{
+			BoxBold->GetValue() ? 700 : 400,
+			BoxItalic->GetValue(),
+			false,
+			false};
+		auto adjusted = AdjustFamilySelection(
+			current, record->variant_profile, {true, false});
+		if (adjusted.applied_implicit_selection) {
+			BoxBold->SetValue(adjusted.selection.weight == 700);
+			BoxItalic->SetValue(adjusted.selection.italic);
+			font_variant_implicit_pinned = true;
+		}
+	}
+
+	FontStyle->Clear();
+	int selection = wxNOT_FOUND;
+	for (std::size_t index = 0; index < font_variant_choices.size(); ++index) {
+		FontStyle->Append(FontVariantLabel(font_variant_choices[index].role));
+		if (ChoiceMatches(font_variant_choices[index], BoxBold->GetValue(), BoxItalic->GetValue()))
+			selection = static_cast<int>(index);
+	}
+	if (selection != wxNOT_FOUND)
+		FontStyle->SetSelection(selection);
+	else
+		FontStyle->SetSelection(wxNOT_FOUND);
+	FontStyle->Show(font_variant_choices.size() > 1);
+
+	bool has_uncertain = !record->variant_profile.automatic_pinning_reliable;
+	for (auto const& outcome : record->variant_profile.outcomes) {
+		if (outcome.status == FontVariantStatus::Unknown ||
+		    outcome.status == FontVariantStatus::NonCanonical ||
+		    outcome.status == FontVariantStatus::Synthetic) {
+			has_uncertain = true;
+			break;
+		}
+	}
+	if (!record->variant_profile.automatic_pinning_reliable) {
+		FontVariantInfo->SetLabel(_("This variant profile is report-only; automatic pinning is disabled."));
+		FontVariantInfo->Show();
+	}
+	else if (has_uncertain) {
+		FontVariantInfo->SetLabel(_("Some font variants cannot be pinned safely."));
+		FontVariantInfo->Show();
+	}
+	else {
+		FontVariantInfo->Hide();
+	}
+	finish();
+	Layout();
+}
+
+FontFamilyRecord const* DialogStyleEditor::SelectedFontRecord() const {
+	if (!font_catalog || font_catalog->empty())
+		return nullptr;
+	if (auto const id = FontName->SelectedFamilyId())
+		return font_catalog->Find(*id);
+	auto const resolved = font_catalog->Resolve(from_wx(FontName->GetValue()));
+	return resolved.family ? font_catalog->Find(*resolved.family) : nullptr;
+}
+
+void DialogStyleEditor::CommitFontFamilyChange() {
+	auto const current_family = from_wx(FontName->GetValue());
+	auto const current_family_id = FontName->SelectedFamilyId();
+	if (current_family != committed_font_family || current_family_id != committed_font_family_id) {
+		committed_font_family = current_family;
+		committed_font_family_id = current_family_id;
+		font_family_selection_changed = true;
+		font_variant_user_modified = false;
+		UpdateFontVariantControls(true);
+	}
+
+	UpdateWorkStyle();
+	SubsPreview->SetStyle(*work);
+}
+
+void DialogStyleEditor::OnFontFamilyChanged(wxCommandEvent &event) {
+	CommitFontFamilyChange();
+	event.Skip();
+}
+
+void DialogStyleEditor::OnFontFamilyFocusLost(wxFocusEvent &event) {
+	CommitFontFamilyChange();
+	event.Skip();
+}
+
+void DialogStyleEditor::OnFontVariantChanged(wxCommandEvent &event) {
+	if (!updating_font_variant) {
+		font_variant_user_modified = true;
+		font_variant_implicit_pinned = false;
+		if (event.GetEventObject() == FontStyle) {
+			auto const selection = FontStyle->GetSelection();
+			if (selection >= 0 && static_cast<std::size_t>(selection) < font_variant_choices.size()) {
+				auto const& choice = font_variant_choices[selection];
+				updating_font_variant = true;
+				BoxBold->SetValue(choice.weight == 700);
+				BoxItalic->SetValue(choice.italic);
+				updating_font_variant = false;
+			}
+		}
+		else {
+			for (std::size_t index = 0; index < font_variant_choices.size(); ++index) {
+				if (ChoiceMatches(font_variant_choices[index], BoxBold->GetValue(), BoxItalic->GetValue())) {
+					FontStyle->SetSelection(static_cast<int>(index));
+					break;
+				}
+			}
+		}
+	}
+	event.Skip();
+}
+
+void DialogStyleEditor::ApplyLiveFontVariantProbe() {
+	if (!font_family_selection_changed || font_variant_user_modified ||
+	    !font_catalog || font_catalog->empty())
+		return;
+	auto const *record = SelectedFontRecord();
+	if (!record)
+		return;
+	long charset = aegisub::ass::DefaultCharset;
+	Encoding->GetValue().BeforeFirst('-').ToLong(&charset);
+	auto resolver = CreatePlatformFontVariantResolver();
+	auto live_profile = BuildFontVariantProfileForFamily(
+		*resolver, *record, static_cast<int>(charset), FontSize->GetValue());
+	if (!live_profile) {
+		BoxBold->SetValue(font_variant_base_bold);
+		BoxItalic->SetValue(font_variant_base_italic);
+		font_variant_implicit_pinned = false;
+		return;
+	}
+	auto adjusted = AdjustFamilySelection(
+		{font_variant_base_bold ? 700 : 400, font_variant_base_italic, false, false},
+		*live_profile,
+		{true, false});
+	if (adjusted.applied_implicit_selection) {
+		BoxBold->SetValue(adjusted.selection.weight == 700);
+		BoxItalic->SetValue(adjusted.selection.italic);
+		font_variant_implicit_pinned = true;
+	}
+	else {
+		// The immutable catalog may have become stale after a font install or
+		// removal. Never commit a pin that the current backend cannot prove.
+		BoxBold->SetValue(font_variant_base_bold);
+		BoxItalic->SetValue(font_variant_base_italic);
+		font_variant_implicit_pinned = false;
 	}
 }
 

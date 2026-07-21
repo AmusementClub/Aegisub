@@ -2,10 +2,7 @@
 
 #include "../../src/font_face_selection.h"
 #include "../../src/font_family_catalog.h"
-#include "../../src/font_family_catalog_ui.h"
-#ifdef _WIN32
-#include "../../src/font_family_catalog_win_detail.h"
-#endif
+#include "../../src/font_family_selection_model.h"
 
 #include <string>
 #include <memory>
@@ -49,7 +46,6 @@ TEST(font_family_catalog, falls_back_to_localized_name_when_english_name_is_unav
 
 	EXPECT_EQ("Localized Only", catalog.PreferredWriteName(1, false));
 	EXPECT_EQ("Localized Only", catalog.MapToPreferredWriteName("Localized Only", false));
-	EXPECT_EQ(std::vector<std::string>{"Localized Only"}, catalog.DisplayNames(false));
 }
 
 TEST(font_family_catalog, leaves_ambiguous_alias_unchanged) {
@@ -65,6 +61,16 @@ TEST(font_family_catalog, leaves_ambiguous_alias_unchanged) {
 	EXPECT_EQ("Shared Alias", catalog.MapToPreferredWriteName("Shared Alias", false));
 }
 
+TEST(font_family_catalog, diagnostic_platform_alias_is_not_auto_resolved) {
+	FontFamilyCatalog catalog({family(1, "Duplicated Family", "", {
+		{"Duplicated Family", "", FontFamilyNameKind::PlatformAlias},
+	})});
+
+	EXPECT_EQ(FontFamilyMatchKind::None, catalog.Resolve("Duplicated Family").match);
+	EXPECT_EQ("Duplicated Family", catalog.MapToPreferredWriteName(
+		"Duplicated Family", false));
+}
+
 TEST(font_family_catalog, exact_alias_wins_before_case_insensitive_ambiguity) {
 	FontFamilyCatalog catalog({
 		family(1, "Localized A", "Alias"),
@@ -75,6 +81,23 @@ TEST(font_family_catalog, exact_alias_wins_before_case_insensitive_ambiguity) {
 	EXPECT_EQ(2u, catalog.Resolve("ALIAS").family);
 	EXPECT_EQ(FontFamilyMatchKind::Ambiguous, catalog.Resolve("alias").match);
 }
+
+#ifdef _WIN32
+TEST(font_family_catalog, resolves_non_ascii_aliases_with_windows_ordinal_case_folding) {
+	FontFamilyCatalog catalog({family(
+		1,
+		"Font \xD0\x96",
+		"Gr\xC3\x85" "nd")});
+
+	auto cyrillic = catalog.Resolve("fONT \xD0\xB6");
+	ASSERT_EQ(FontFamilyMatchKind::CaseInsensitiveExact, cyrillic.match);
+	EXPECT_EQ(1u, cyrillic.family);
+
+	auto latin = catalog.Resolve("gr\xC3\xA5" "ND");
+	ASSERT_EQ(FontFamilyMatchKind::CaseInsensitiveExact, latin.match);
+	EXPECT_EQ(1u, latin.family);
+}
+#endif
 
 TEST(font_family_catalog, indexes_only_win32_family_names_as_ass_aliases) {
 	FontFamilyCatalog catalog({family(1, "Localized Family", "English Family", {
@@ -90,6 +113,42 @@ TEST(font_family_catalog, indexes_only_win32_family_names_as_ass_aliases) {
 	EXPECT_EQ(FontFamilyMatchKind::None, catalog.Resolve("Full Face Name").match);
 	EXPECT_EQ(FontFamilyMatchKind::None, catalog.Resolve("PostScript-Name").match);
 	EXPECT_EQ(FontFamilyMatchKind::None, catalog.Resolve("Platform Alias").match);
+}
+
+TEST(font_family_catalog, informational_names_resolve_only_with_unique_family_and_variant) {
+	FontFamilyName bold_full{
+		"Example Bold", "en-US", FontFamilyNameKind::FullName,
+		22, FontVariantRole::Bold};
+	FontFamilyCatalog catalog({
+		family(1, "Localized Example", "Example", {bold_full}),
+	});
+
+	EXPECT_EQ(FontFamilyMatchKind::None, catalog.Resolve("Example Bold").match);
+	auto resolved = catalog.ResolveInformationalName("@Example Bold");
+	ASSERT_EQ(FontFamilyMatchKind::Exact, resolved.match);
+	ASSERT_EQ(1u, resolved.family);
+	EXPECT_EQ(FontVariantRole::Bold, resolved.variant_role);
+
+	FontFamilyCatalog ambiguous({
+		family(1, "Family A", "A", {bold_full}),
+		family(2, "Family B", "B", {bold_full}),
+	});
+	EXPECT_EQ(
+		FontFamilyMatchKind::Ambiguous,
+		ambiguous.ResolveInformationalName("Example Bold").match);
+}
+
+TEST(font_family_catalog, informational_name_index_preserves_entity_ambiguity) {
+	FontFamilyName bold_a{
+		"Shared Bold", "en-US", FontFamilyNameKind::FullName,
+		22, FontVariantRole::Bold};
+	FontFamilyName bold_b = bold_a;
+	bold_b.entity_token = 23;
+	FontFamilyCatalog catalog({family(1, "Family A", "A", {bold_a, bold_b})});
+
+	EXPECT_EQ(
+		FontFamilyMatchKind::Ambiguous,
+		catalog.ResolveInformationalName("Shared Bold").match);
 }
 
 TEST(font_family_catalog, vertical_prefix_counts_toward_gdi_limit) {
@@ -118,10 +177,10 @@ TEST(font_face_selection, writes_displayed_name_for_explicit_alias_but_not_uncha
 		"English Family", "English Family", true, "English Family"));
 }
 
-TEST(font_family_catalog_ui, displayed_name_follows_preference_for_existing_style) {
+TEST(font_family_selection_model, displayed_name_follows_preference_for_existing_style) {
 	auto catalog = std::make_shared<FontFamilyCatalog>(
 		std::vector<FontFamilyRecord>{family(1, "Localized Family", "English Family")});
-	FontFamilyCatalogUiModel model;
+	FontFamilySelectionModel model;
 	model.catalog = catalog;
 
 	model.prefer_localized = false;
@@ -130,19 +189,46 @@ TEST(font_family_catalog_ui, displayed_name_follows_preference_for_existing_styl
 	EXPECT_EQ("Localized Family", model.PreferredName("English Family"));
 }
 
-#ifdef _WIN32
-TEST(font_family_catalog_win, rejects_same_name_candidate_resolving_to_different_entity) {
-	using font_family_catalog_win_detail::FontEntityKey;
-	using font_family_catalog_win_detail::SameEntity;
+TEST(font_family_selection_model, selected_choice_id_disambiguates_duplicate_display_aliases) {
+	auto catalog = std::make_shared<FontFamilyCatalog>(
+		std::vector<FontFamilyRecord>{
+			family(7, "Localized A", "Shared Alias"),
+			family(9, "Localized B", "Shared Alias")});
+	FontFamilySelectionModel model;
+	model.catalog = catalog;
+	model.choices = {{"Shared Alias", 7}, {"Shared Alias", 9}};
 
-	FontEntityKey localized{"collection.ttc", 0, true};
-	FontEntityKey same{"collection.ttc", 0, true};
-	FontEntityKey other_face{"collection.ttc", 1, true};
-	FontEntityKey other_file{"substitute.ttf", 0, true};
-
-	EXPECT_TRUE(SameEntity(localized, same));
-	EXPECT_FALSE(SameEntity(localized, other_face));
-	EXPECT_FALSE(SameEntity(localized, other_file));
-	EXPECT_FALSE(SameEntity(localized, FontEntityKey{}));
+	EXPECT_EQ(nullptr, model.ResolveRecord("Shared Alias"));
+	auto const *first = model.ResolveChoice(model.choices[0].family_id);
+	auto const *second = model.ResolveChoice(model.choices[1].family_id);
+	ASSERT_NE(nullptr, first);
+	ASSERT_NE(nullptr, second);
+	EXPECT_EQ("Localized A", first->localized_family_name);
+	EXPECT_EQ("Localized B", second->localized_family_name);
 }
-#endif
+
+TEST(font_family_selection_model, builds_sorted_catalog_choices_with_stable_ids) {
+	auto catalog = std::make_shared<FontFamilyCatalog>(
+		std::vector<FontFamilyRecord>{
+			family(9, "Localized B", "Shared Alias"),
+			family(7, "Localized A", "Shared Alias"),
+			family(3, "Localized C", "Earlier Alias")});
+
+	auto const model = BuildFontFamilySelectionModel(catalog, false);
+	EXPECT_EQ((std::vector<FontFamilyChoice>{
+		{"Earlier Alias", 3},
+		{"Shared Alias", 7},
+		{"Shared Alias", 9},
+	}), model.choices);
+}
+
+TEST(font_family_selection_model, preserves_ordered_fallback_names_without_catalog_ids) {
+	auto const model = BuildFontFamilySelectionModel(
+		nullptr, true, {"Fallback B", "Fallback A"});
+
+	EXPECT_EQ((std::vector<FontFamilyChoice>{
+		{"Fallback B", 0},
+		{"Fallback A", 0},
+	}), model.choices);
+	EXPECT_EQ(nullptr, model.ResolveChoice(0));
+}

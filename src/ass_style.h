@@ -77,6 +77,9 @@ public:
 
 	/// Update the raw line data after one or more of the public members have been changed
 	void UpdateData();
+	/// Atomically exchange the font-related fields and serialized data with a staged style.
+	/// The remaining style fields must already be equivalent.
+	void SwapFontState(AssStyle& other) noexcept;
 
 	AssStyle();
 	AssStyle(std::string const& data, int version=1);

@@ -7,6 +7,8 @@
 #include "font_family_catalog.h"
 #include "font_family_catalog_ui.h"
 #include "font_name_combo_box.h"
+#include "font_variant_policy.h"
+#include "font_variant_resolver.h"
 #include "include/aegisub/context.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
@@ -18,6 +20,7 @@
 #include <functional>
 #include <set>
 #include <utility>
+#include <vector>
 
 #include <wx/button.h>
 #include <wx/checkbox.h>
@@ -35,6 +38,8 @@
 #endif
 #include <windows.h>
 #include <commdlg.h>
+#include <libaegisub/charset_conv_win.h>
+#include "gdi_font_resolver.h"
 #include <wx/fontutil.h>
 #endif
 
@@ -61,24 +66,85 @@ wxString NameKind(FontFamilyNameKind kind) {
 	return _("Other name");
 }
 
+wxString VariantLabel(FontVariantRole role) {
+	switch (role) {
+		case FontVariantRole::Regular: return _("Regular");
+		case FontVariantRole::Bold: return _("Bold");
+		case FontVariantRole::Italic: return _("Italic");
+		case FontVariantRole::BoldItalic: return _("Bold Italic");
+		case FontVariantRole::Unknown: break;
+	}
+	return _("Unknown");
+}
+
+wxString VariantStatusLabel(FontVariantStatus status) {
+	switch (status) {
+		case FontVariantStatus::Canonical: return _("Canonical");
+		case FontVariantStatus::NonCanonical: return _("Noncanonical");
+		case FontVariantStatus::Synthetic: return _("Synthetic");
+		case FontVariantStatus::Unknown: return _("Unknown");
+	}
+	return _("Unknown");
+}
+
+bool VariantMatches(FontVariantChoice const& choice, int weight, bool italic) {
+	return choice.weight == weight && choice.italic == italic;
+}
+
 #ifdef _WIN32
 
 FontFaceDialogSelection SelectionFromNativeFont(LOGFONTW const& logfont, wxWindow *parent) {
 	wxFont font(wxNativeFontInfo(logfont, parent));
-	if (!font.IsOk())
+	if (!font.IsOk() || !logfont.lfFaceName[0])
 		return {};
 
 	FontFaceDialogSelection result;
-	result.face_name = from_wx(font.GetFaceName());
+	result.face_name = agi::charset::ConvertW(logfont.lfFaceName);
 	result.point_size = font.GetPointSize();
-	result.bold = font.GetWeight() == wxFONTWEIGHT_BOLD;
-	result.italic = font.GetStyle() == wxFONTSTYLE_ITALIC;
-	result.underline = font.GetUnderlined();
+	result.charset = logfont.lfCharSet;
+	result.effective_weight = std::clamp<int>(logfont.lfWeight, 0, 1000);
+	result.bold = result.effective_weight >= FW_BOLD;
+	result.italic = logfont.lfItalic != 0;
+	result.underline = logfont.lfUnderline != 0;
+	result.has_explicit_weight = true;
+	result.has_explicit_italic = true;
+	result.variant_modified = true;
+	result.from_native_dialog = true;
 	return result;
+}
+
+FontFaceDialogSelection NormalizeNativeSelection(
+	FontFaceDialogSelection selection,
+	FontFamilySelectionModel const& font_model,
+	int gdi_height) {
+	if (!font_model.catalog || font_model.catalog->empty())
+		return selection;
+	auto const *record = font_model.ResolveRecord(selection.face_name);
+	if (!record)
+		return selection;
+	GdiFontResolver resolver;
+	auto const probe = resolver.Probe(
+		record->localized_family_name,
+		selection.effective_weight,
+		selection.italic,
+		selection.charset,
+		gdi_height);
+	if (probe.outcome.status != FontVariantStatus::Canonical)
+		return selection;
+	selection.face_name = font_model.PreferredName(selection.face_name);
+	selection.selected_family_id = record->id;
+	selection.effective_weight =
+		probe.outcome.role == FontVariantRole::Bold ||
+		probe.outcome.role == FontVariantRole::BoldItalic ? 700 : 400;
+	selection.bold = selection.effective_weight == 700;
+	selection.italic = probe.outcome.role == FontVariantRole::Italic ||
+		probe.outcome.role == FontVariantRole::BoldItalic;
+	return selection;
 }
 
 struct NativeFontDialogState {
 	wxWindow *parent = nullptr;
+	FontFamilySelectionModel const *font_model = nullptr;
 	std::function<void(FontFaceDialogSelection const&)> const *on_apply = nullptr;
 };
 
@@ -113,6 +179,9 @@ UINT_PTR CALLBACK NativeFontDialogHook(
 			reinterpret_cast<LPARAM>(&logfont));
 		if (state->on_apply) {
 			auto selection = SelectionFromNativeFont(logfont, state->parent);
+			if (state->font_model)
+				selection = NormalizeNativeSelection(
+					std::move(selection), *state->font_model, logfont.lfHeight);
 			if (!selection.face_name.empty())
 				state->on_apply->operator()(selection);
 		}
@@ -127,7 +196,7 @@ UINT_PTR CALLBACK NativeFontDialogHook(
 std::optional<FontFaceDialogSelection> ShowNativeFontFaceDialog(
 	wxWindow *parent,
 	FontFaceDialogSelection const& initial,
-	FontFamilyCatalogUiModel const&,
+	FontFamilySelectionModel const& font_model,
 	std::function<void(FontFaceDialogSelection const&)> const& on_apply)
 {
 	wxFont initial_font(
@@ -138,7 +207,10 @@ std::optional<FontFaceDialogSelection> ShowNativeFontFaceDialog(
 		initial.underline,
 		to_wx(initial.face_name));
 	LOGFONTW logfont = initial_font.GetNativeFontInfo()->lf;
-	NativeFontDialogState state{parent, &on_apply};
+	logfont.lfWeight = std::clamp(initial.effective_weight, 0, 1000);
+	logfont.lfItalic = initial.italic ? TRUE : FALSE;
+	logfont.lfCharSet = static_cast<BYTE>(std::clamp(initial.charset, 0, 255));
+	NativeFontDialogState state{parent, &font_model, &on_apply};
 
 	CHOOSEFONTW choose_font{};
 	choose_font.lStructSize = sizeof(choose_font);
@@ -158,7 +230,7 @@ std::optional<FontFaceDialogSelection> ShowNativeFontFaceDialog(
 	auto result = SelectionFromNativeFont(logfont, parent);
 	if (result.face_name.empty())
 		return std::nullopt;
-	return result;
+	return NormalizeNativeSelection(std::move(result), font_model, logfont.lfHeight);
 }
 
 #else
@@ -166,23 +238,119 @@ std::optional<FontFaceDialogSelection> ShowNativeFontFaceDialog(
 std::optional<FontFaceDialogSelection> ShowNativeFontFaceDialog(
 	wxWindow *parent,
 	FontFaceDialogSelection const& initial,
-	FontFamilyCatalogUiModel const& font_model,
+	FontFamilySelectionModel const& font_model,
 	std::function<void(FontFaceDialogSelection const&)> const& on_apply);
 
 #endif
 
 class FontFaceDialog final : public wxDialog {
-	FontFamilyCatalogUiModel const& font_model;
+	FontFamilySelectionModel const& font_model;
 	std::function<void(FontFaceDialogSelection const&)> on_apply;
-	wxComboBox *face_name;
+	FontNameComboBox *face_name;
+	wxComboBox *font_style;
 	wxSpinCtrl *point_size;
 	wxCheckBox *bold;
 	wxCheckBox *italic;
 	wxCheckBox *underline;
+	wxCheckBox *allow_replace_explicit;
+	wxStaticText *variant_status;
 	SubtitlesPreview *preview;
 	wxTextCtrl *preview_text;
 	wxTextCtrl *font_information;
 	AssStyle preview_style;
+	std::vector<FontVariantChoice> variant_choices;
+	int effective_weight = 400;
+	int charset = 1;
+	bool variant_modified = false;
+	bool implicit_variant_pinned = false;
+	bool syncing_variant = false;
+	bool initial_explicit_weight = false;
+	bool initial_explicit_italic = false;
+	bool family_changed = false;
+	int implicit_base_weight = 400;
+	bool implicit_base_italic = false;
+	std::string committed_family;
+	std::optional<FontFamilyId> committed_family_id;
+
+	FontFamilyRecord const* SelectedRecord() const {
+		auto const selected = from_wx(face_name->GetValue());
+		if (auto const id = face_name->SelectedFamilyId())
+			return font_model.ResolveChoice(*id);
+		if (auto const *record = font_model.ResolveRecord(selected))
+			return record;
+		if (!font_model.catalog)
+			return nullptr;
+		auto informational = font_model.catalog->ResolveInformationalName(selected);
+		return informational.family
+			? font_model.catalog->Find(*informational.family)
+			: nullptr;
+	}
+
+	void UpdateVariantControls(bool family_changed) {
+		if (syncing_variant)
+			return;
+		syncing_variant = true;
+		auto const *record = SelectedRecord();
+		variant_choices = record
+			? BuildVariantChoices(record->variant_profile)
+			: std::vector<FontVariantChoice>{};
+
+		if (family_changed && !variant_modified) {
+			if (implicit_variant_pinned) {
+				effective_weight = implicit_base_weight;
+				bold->SetValue(effective_weight == 700);
+				italic->SetValue(implicit_base_italic);
+			}
+			implicit_base_weight = effective_weight;
+			implicit_base_italic = italic->GetValue();
+			implicit_variant_pinned = false;
+		}
+
+		if (record && family_changed && !variant_modified) {
+			auto adjusted = AdjustFamilySelection(
+				{implicit_base_weight, implicit_base_italic,
+				 initial_explicit_weight, initial_explicit_italic},
+				record->variant_profile,
+				{true, allow_replace_explicit->GetValue()});
+			if (adjusted.applied_implicit_selection) {
+				effective_weight = adjusted.selection.weight;
+				bold->SetValue(effective_weight == 700);
+				italic->SetValue(adjusted.selection.italic);
+				implicit_variant_pinned = true;
+			}
+		}
+
+		font_style->Clear();
+		int selection = wxNOT_FOUND;
+		for (std::size_t index = 0; index < variant_choices.size(); ++index) {
+			font_style->Append(VariantLabel(variant_choices[index].role));
+			if (VariantMatches(variant_choices[index], effective_weight, italic->GetValue()))
+				selection = static_cast<int>(index);
+		}
+		font_style->SetSelection(selection);
+		font_style->Show(variant_choices.size() > 1);
+
+		bool uncertain = record && !record->variant_profile.automatic_pinning_reliable;
+		if (record) {
+			for (auto const& outcome : record->variant_profile.outcomes) {
+				if (outcome.status != FontVariantStatus::Canonical) {
+					uncertain = true;
+					break;
+				}
+			}
+		}
+		if (!record)
+			variant_status->SetLabel(_("The selected name is not a confirmed font family alias."));
+		else if (!record->variant_profile.automatic_pinning_reliable)
+			variant_status->SetLabel(_("This variant profile is report-only; automatic pinning is disabled."));
+		else if (uncertain)
+			variant_status->SetLabel(_("Some requested variants are unknown, noncanonical, or synthetic."));
+		else
+			variant_status->SetLabel(wxEmptyString);
+		variant_status->Show(!variant_status->GetLabel().empty());
+		syncing_variant = false;
+		Layout();
+	}
 
 	std::string WithSelectedVerticalPrefix(std::string_view name) const {
 		bool const vertical = !FontFamilyCatalog::SplitVerticalPrefix(
@@ -209,7 +377,16 @@ class FontFaceDialog final : public wxDialog {
 			return text;
 		}
 
-		auto const resolved = font_model.catalog->Resolve(selected);
+		FontFamilyResolution resolved;
+		if (auto const id = face_name->SelectedFamilyId()) {
+			if (font_model.ResolveChoice(*id)) {
+				resolved.match = FontFamilyMatchKind::Exact;
+				resolved.family = id;
+			}
+		}
+		else {
+			resolved = font_model.catalog->Resolve(selected);
+		}
 		append(_("Catalog match"), MatchName(resolved.match));
 		if (!resolved.family)
 			return text;
@@ -224,6 +401,18 @@ class FontFaceDialog final : public wxDialog {
 			record->english_win32_family_name.empty()
 				? _("Not available")
 				: to_wx(WithSelectedVerticalPrefix(record->english_win32_family_name)));
+		if (effective_weight == 400 || effective_weight == 700) {
+			auto const& outcome = record->variant_profile.For(effective_weight == 700, italic->GetValue());
+			append(_("Variant status"), VariantStatusLabel(outcome.status));
+			if (outcome.realized_weight > 0)
+				append(_("Realized weight"), wxString::Format(wxS("%d"), outcome.realized_weight));
+			if (outcome.role != FontVariantRole::Unknown)
+				append(_("Physical style"), VariantLabel(outcome.role));
+		}
+		else {
+			append(_("Variant status"), _("Numeric weight preserved; automatic pinning disabled"));
+			append(_("Requested weight"), wxString::Format(wxS("%d"), effective_weight));
+		}
 
 		if (!record->names.empty()) {
 			text += _("Known font names");
@@ -262,6 +451,7 @@ class FontFaceDialog final : public wxDialog {
 	void UpdatePreview() {
 		preview_style.font = from_wx(face_name->GetValue());
 		preview_style.fontsize = point_size->GetValue();
+		preview_style.encoding = charset;
 		preview_style.bold = bold->GetValue();
 		preview_style.italic = italic->GetValue();
 		preview_style.underline = underline->GetValue();
@@ -273,18 +463,59 @@ class FontFaceDialog final : public wxDialog {
 		event.Skip();
 	}
 
-	void OnFaceUpdate(wxCommandEvent &event) {
+	void CommitFaceFamilyChange() {
+		auto const current = from_wx(face_name->GetValue());
+		auto const current_id = face_name->SelectedFamilyId();
+		if (current != committed_family || current_id != committed_family_id) {
+			committed_family = current;
+			committed_family_id = current_id;
+			family_changed = true;
+			variant_modified = false;
+			UpdateVariantControls(true);
+		}
 		UpdateInformation();
 		UpdatePreview();
+	}
+
+	void OnFaceUpdate(wxCommandEvent &event) {
+		CommitFaceFamilyChange();
 		event.Skip();
 	}
 
 	void OnFaceKillFocus(wxFocusEvent &event) {
-		UpdatePreview();
+		CommitFaceFamilyChange();
 		event.Skip();
 	}
 
 	void OnStyleUpdate(wxCommandEvent &event) {
+		auto *source = event.GetEventObject();
+		bool const changes_variant =
+			source == font_style || source == bold || source == italic;
+		if (!syncing_variant && changes_variant) {
+			variant_modified = true;
+			implicit_variant_pinned = false;
+			if (source == font_style) {
+				auto const selection = font_style->GetSelection();
+				if (selection >= 0 && static_cast<std::size_t>(selection) < variant_choices.size()) {
+					auto const& choice = variant_choices[selection];
+					effective_weight = choice.weight;
+					syncing_variant = true;
+					bold->SetValue(choice.weight == 700);
+					italic->SetValue(choice.italic);
+					syncing_variant = false;
+				}
+			}
+			else if (source == bold) {
+				effective_weight = bold->GetValue() ? 700 : 400;
+			}
+			for (std::size_t index = 0; index < variant_choices.size(); ++index) {
+				if (VariantMatches(variant_choices[index], effective_weight, italic->GetValue())) {
+					font_style->SetSelection(static_cast<int>(index));
+					break;
+				}
+			}
+		}
+		UpdateInformation();
 		UpdatePreview();
 		event.Skip();
 	}
@@ -318,18 +549,31 @@ public:
 		wxWindow *parent,
 		agi::Context *context,
 		FontFaceDialogSelection const& initial,
-		FontFamilyCatalogUiModel const& font_model,
+		FontFamilySelectionModel const& font_model,
 		std::function<void(FontFaceDialogSelection const&)> on_apply)
 	: wxDialog(parent, -1, _("Select Font"), wxDefaultPosition, wxDefaultSize,
 		wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 	, font_model(font_model)
 	, on_apply(std::move(on_apply))
+	, effective_weight(initial.effective_weight)
+	, charset(initial.charset)
+	, initial_explicit_weight(initial.has_explicit_weight)
+	, initial_explicit_italic(initial.has_explicit_italic)
 	{
+		if (effective_weight == 400 && initial.bold)
+			effective_weight = 700;
+		implicit_base_weight = effective_weight;
+		implicit_base_italic = initial.italic;
 		auto const contains_matching = OPT_GET("Subtitle/Font/Use Contains Matching")->GetBool();
 		face_name = new FontNameComboBox(
 			this, to_wx(initial.face_name), wxSize(400, -1),
 			font_model.choices, contains_matching);
+		committed_family = from_wx(face_name->GetValue());
 		face_name->SetToolTip(_("Font face; this exact name will be written to ASS"));
+		font_style = new wxComboBox(
+			this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize,
+			0, nullptr, wxCB_READONLY);
+		font_style->SetToolTip(_("Font style"));
 		point_size = new wxSpinCtrl(
 			this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize,
 			wxSP_ARROW_KEYS, 0, 10000, std::clamp(initial.point_size, 0, 10000));
@@ -337,12 +581,15 @@ public:
 		bold = new wxCheckBox(this, -1, _("&Bold"));
 		italic = new wxCheckBox(this, -1, _("&Italic"));
 		underline = new wxCheckBox(this, -1, _("&Underline"));
+		allow_replace_explicit = new wxCheckBox(this, -1, _("Allow replacing explicit weight/italic"));
+		variant_status = new wxStaticText(this, -1, wxEmptyString);
 		bold->SetValue(initial.bold);
 		italic->SetValue(initial.italic);
 		underline->SetValue(initial.underline);
 
 		auto *font_top = new wxBoxSizer(wxHORIZONTAL);
 		font_top->Add(face_name, wxSizerFlags(1).Expand());
+		font_top->Add(font_style, wxSizerFlags().Border(wxLEFT, 5));
 		font_top->Add(point_size, wxSizerFlags().Border(wxLEFT, 5));
 		auto *font_bottom = new wxBoxSizer(wxHORIZONTAL);
 		font_bottom->AddStretchSpacer();
@@ -353,6 +600,10 @@ public:
 		auto *font_box = new wxStaticBoxSizer(wxVERTICAL, this, _("Font"));
 		font_box->Add(font_top, wxSizerFlags().Expand());
 		font_box->Add(font_bottom, wxSizerFlags().Expand().Border(wxTOP, 5));
+		font_box->Add(allow_replace_explicit, wxSizerFlags().Border(wxTOP, 5));
+		font_box->Add(variant_status, wxSizerFlags().Expand().Border(wxTOP, 5));
+		font_style->Hide();
+		variant_status->Hide();
 
 		std::shared_ptr<const TransientFontSet> transient_fonts;
 		if (context)
@@ -403,6 +654,11 @@ public:
 		bold->Bind(wxEVT_CHECKBOX, &FontFaceDialog::OnStyleUpdate, this);
 		italic->Bind(wxEVT_CHECKBOX, &FontFaceDialog::OnStyleUpdate, this);
 		underline->Bind(wxEVT_CHECKBOX, &FontFaceDialog::OnStyleUpdate, this);
+		font_style->Bind(wxEVT_COMBOBOX, &FontFaceDialog::OnStyleUpdate, this);
+		allow_replace_explicit->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &event) {
+			UpdateVariantControls(true);
+			event.Skip();
+		});
 		preview_text->Bind(wxEVT_TEXT, &FontFaceDialog::OnPreviewText, this);
 		preview_colour->Bind(EVT_COLOR, &FontFaceDialog::OnPreviewColour, this);
 		copy_information->Bind(wxEVT_BUTTON, &FontFaceDialog::OnCopyInformation, this);
@@ -410,16 +666,79 @@ public:
 
 		preview->SetText(from_wx(preview_text->GetValue()));
 		UpdateInformation();
+		UpdateVariantControls(false);
 		UpdatePreview();
 	}
 
-	FontFaceDialogSelection GetSelection() const {
+	FontFaceDialogSelection GetSelection() {
+		CommitFaceFamilyChange();
 		FontFaceDialogSelection result;
 		result.face_name = from_wx(face_name->GetValue());
+		result.selected_family_id = face_name->SelectedFamilyId();
 		result.point_size = point_size->GetValue();
+		result.charset = charset;
+		result.effective_weight = effective_weight;
 		result.bold = bold->GetValue();
 		result.italic = italic->GetValue();
 		result.underline = underline->GetValue();
+		result.has_explicit_weight = initial_explicit_weight;
+		result.has_explicit_italic = initial_explicit_italic;
+		result.variant_modified = variant_modified;
+		result.implicit_variant_pinned = implicit_variant_pinned;
+		result.allow_replace_explicit = allow_replace_explicit->GetValue();
+		if (font_model.catalog && !face_name->SelectedFamilyId() &&
+		    !font_model.ResolveRecord(result.face_name)) {
+			auto informational = font_model.catalog->ResolveInformationalName(result.face_name);
+			if (informational.family && informational.variant_role != FontVariantRole::Unknown) {
+				auto const *record = font_model.catalog->Find(*informational.family);
+				if (record) {
+					result.selected_family_id = record->id;
+					bool const vertical = !FontFamilyCatalog::SplitVerticalPrefix(result.face_name).first.empty();
+					result.face_name = FontFamilyCatalog::JoinVerticalPrefix(
+						vertical,
+						font_model.catalog->PreferredWriteName(
+							*record, font_model.prefer_localized));
+					result.effective_weight =
+						informational.variant_role == FontVariantRole::Bold ||
+						informational.variant_role == FontVariantRole::BoldItalic ? 700 : 400;
+					result.bold = result.effective_weight == 700;
+					result.italic = informational.variant_role == FontVariantRole::Italic ||
+						informational.variant_role == FontVariantRole::BoldItalic;
+					result.variant_modified = true;
+				}
+			}
+		}
+		if ((family_changed || result.implicit_variant_pinned) &&
+		    !result.variant_modified) {
+			bool pin_confirmed = false;
+			auto const *record = SelectedRecord();
+			if (record && font_model.catalog) {
+				auto resolver = CreatePlatformFontVariantResolver();
+				auto profile = BuildFontVariantProfileForFamily(
+					*resolver, *record, result.charset,
+					static_cast<double>(result.point_size));
+				if (profile) {
+					auto adjusted = AdjustFamilySelection(
+						{implicit_base_weight, implicit_base_italic,
+						 result.has_explicit_weight, result.has_explicit_italic},
+						*profile,
+						{true, allow_replace_explicit->GetValue()});
+					if (adjusted.applied_implicit_selection) {
+						result.effective_weight = adjusted.selection.weight;
+						result.bold = result.effective_weight == 700;
+						result.italic = adjusted.selection.italic;
+						result.implicit_variant_pinned = true;
+						pin_confirmed = true;
+					}
+				}
+			}
+			if (!pin_confirmed) {
+				result.effective_weight = implicit_base_weight;
+				result.bold = result.effective_weight == 700;
+				result.italic = implicit_base_italic;
+				result.implicit_variant_pinned = false;
+			}
+		}
 		return result;
 	}
 
@@ -433,7 +752,7 @@ public:
 std::optional<FontFaceDialogSelection> ShowNativeFontFaceDialog(
 	wxWindow *parent,
 	FontFaceDialogSelection const& initial,
-	FontFamilyCatalogUiModel const& font_model,
+	FontFamilySelectionModel const& font_model,
 	std::function<void(FontFaceDialogSelection const&)> const& on_apply)
 {
 	FontFaceDialog dialog(parent, nullptr, initial, font_model,
@@ -454,7 +773,7 @@ std::optional<FontFaceDialogSelection> ShowFontFaceDialog(
 	wxWindow *parent,
 	agi::Context *context,
 	FontFaceDialogSelection const& initial,
-	FontFamilyCatalogUiModel const& font_model,
+	FontFamilySelectionModel const& font_model,
 	std::function<void(FontFaceDialogSelection const&)> on_apply)
 {
 	if (font_model.prefer_localized || !font_model.catalog || font_model.catalog->empty())

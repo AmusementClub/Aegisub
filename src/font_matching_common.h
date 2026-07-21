@@ -46,7 +46,8 @@ struct FontSyntheticStyle {
 	bool fake_italic = false;
 };
 
-FontMatchRequest NormalizeAssFontRequest(std::string facename, int bold, bool italic);
+int NormalizeLibassAssWeight(int bold) noexcept;
+FontMatchRequest NormalizeLibassFontRequest(std::string facename, int bold, bool italic);
 int FontAttributesSimilarity(FontMatchFaceAttributes const& face, FontMatchRequest const& request);
 FontSyntheticStyle DetectSyntheticStyle(FontMatchFaceAttributes const& face, FontMatchRequest const& request);
 

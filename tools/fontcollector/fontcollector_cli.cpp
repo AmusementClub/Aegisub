@@ -247,6 +247,27 @@ std::string MatchStatusName(AegisubFontCollectorMatchStatus status) {
 	return "unknown";
 }
 
+std::string VariantRoleName(AegisubFontCollectorVariantRole role) {
+	switch (role) {
+		case AEGISUB_FONTCOLLECTOR_VARIANT_REGULAR: return "regular";
+		case AEGISUB_FONTCOLLECTOR_VARIANT_BOLD: return "bold";
+		case AEGISUB_FONTCOLLECTOR_VARIANT_ITALIC: return "italic";
+		case AEGISUB_FONTCOLLECTOR_VARIANT_BOLD_ITALIC: return "bold_italic";
+		case AEGISUB_FONTCOLLECTOR_VARIANT_UNKNOWN: return "unknown";
+	}
+	return "unknown";
+}
+
+std::string VariantStatusName(AegisubFontCollectorVariantStatus status) {
+	switch (status) {
+		case AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_CANONICAL: return "canonical";
+		case AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_NONCANONICAL: return "noncanonical";
+		case AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_SYNTHETIC: return "synthetic";
+		case AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_UNKNOWN: return "unknown";
+	}
+	return "unknown";
+}
+
 std::string FormatCodepoint(uint32_t value) {
 	std::ostringstream out;
 	out << "U+" << std::uppercase << std::hex << value;
@@ -304,12 +325,35 @@ struct JsonMatchedFont {
 	std::vector<std::string> missing_codepoint_names;
 	std::vector<int> missing_lines;
 	int requested_weight = 0;
+	bool has_backend_requested_weight = false;
+	int backend_requested_weight = 0;
+	std::string realized_role;
+	std::string realized_status;
+	bool implicit_variant_fallback = false;
+	bool noncanonical_variant = false;
 };
 
 struct JsonUsage {
 	std::string ass_facename;
 	int ass_bold = 0;
 	bool ass_italic = false;
+	int ass_effective_weight = 400;
+	int ass_charset = 1;
+	double ass_height = 0.0;
+	std::string ass_raw_bold_tag;
+	std::string ass_raw_italic_tag;
+	std::string ass_raw_charset_tag;
+	std::string ass_raw_height_tag;
+	bool ass_has_explicit_family = false;
+	bool ass_has_explicit_bold = false;
+	bool ass_has_explicit_italic = false;
+	bool ass_has_explicit_charset = false;
+	bool ass_has_explicit_height = false;
+	std::string baseline_facename;
+	int baseline_weight = 400;
+	bool baseline_italic = false;
+	int baseline_charset = 1;
+	double baseline_height = 0.0;
 	std::vector<uint32_t> codepoints;
 	std::vector<std::string> codepoint_names;
 	std::vector<std::string> styles;
@@ -591,6 +635,23 @@ void CollectJsonUsage(AegisubFontCollectorFontUsage const *usage, void *user_dat
 	item.ass_facename = Safe(usage->ass_facename);
 	item.ass_bold = usage->ass_bold;
 	item.ass_italic = usage->ass_italic != 0;
+	item.ass_effective_weight = usage->ass_effective_weight;
+	item.ass_charset = usage->ass_charset;
+	item.ass_height = usage->ass_height;
+	item.ass_raw_bold_tag = Safe(usage->ass_raw_bold_tag);
+	item.ass_raw_italic_tag = Safe(usage->ass_raw_italic_tag);
+	item.ass_raw_charset_tag = Safe(usage->ass_raw_charset_tag);
+	item.ass_raw_height_tag = Safe(usage->ass_raw_height_tag);
+	item.ass_has_explicit_family = usage->ass_has_explicit_family != 0;
+	item.ass_has_explicit_bold = usage->ass_has_explicit_bold != 0;
+	item.ass_has_explicit_italic = usage->ass_has_explicit_italic != 0;
+	item.ass_has_explicit_charset = usage->ass_has_explicit_charset != 0;
+	item.ass_has_explicit_height = usage->ass_has_explicit_height != 0;
+	item.baseline_facename = Safe(usage->baseline_facename);
+	item.baseline_weight = usage->baseline_weight;
+	item.baseline_italic = usage->baseline_italic != 0;
+	item.baseline_charset = usage->baseline_charset;
+	item.baseline_height = usage->baseline_height;
 	if (usage->codepoint_count)
 		item.codepoints.assign(usage->codepoints, usage->codepoints + usage->codepoint_count);
 	item.codepoint_names.reserve(item.codepoints.size());
@@ -630,6 +691,14 @@ void CollectJsonUsage(AegisubFontCollectorFontUsage const *usage, void *user_dat
 	if (usage->matched.missing_line_count)
 		item.matched.missing_lines.assign(usage->matched.missing_lines, usage->matched.missing_lines + usage->matched.missing_line_count);
 	item.matched.requested_weight = usage->matched.requested_weight;
+	item.matched.has_backend_requested_weight = usage->matched_has_backend_requested_weight != 0;
+	item.matched.backend_requested_weight = usage->matched_backend_requested_weight;
+	if (usage->matched_realized_role != AEGISUB_FONTCOLLECTOR_VARIANT_UNKNOWN)
+		item.matched.realized_role = VariantRoleName(usage->matched_realized_role);
+	if (usage->matched_realized_status != AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_UNKNOWN)
+		item.matched.realized_status = VariantStatusName(usage->matched_realized_status);
+	item.matched.implicit_variant_fallback = usage->matched_implicit_variant_fallback != 0;
+	item.matched.noncanonical_variant = usage->matched_noncanonical_variant != 0;
 	item.match_candidates.reserve(usage->match_candidate_count);
 	for (size_t i = 0; i < usage->match_candidate_count; ++i) {
 		auto const& source = usage->match_candidates[i];
@@ -778,6 +847,13 @@ void PrintStoredUsage(JsonUsage const& usage) {
 		<< " italic=" << usage.matched.italic
 		<< " fake_bold=" << usage.matched.fake_bold
 		<< " fake_italic=" << usage.matched.fake_italic << "\n";
+	if (usage.matched.implicit_variant_fallback)
+		std::cout << "  portability risk: implicit non-regular variant fallback\n";
+	if (usage.matched.noncanonical_variant)
+		std::cout << "  portability risk: noncanonical realized variant\n";
+	if (!usage.matched.realized_role.empty() || !usage.matched.realized_status.empty())
+		std::cout << "  realized variant: " << usage.matched.realized_role
+		          << " status=" << usage.matched.realized_status << "\n";
 	if (!usage.matched.display_name.empty())
 		std::cout << "  display: " << usage.matched.display_name << "\n";
 	if (!usage.matched.names.empty())
@@ -955,6 +1031,13 @@ void PrintListEntry(ListFontEntry const& entry, bool details) {
 		}
 		if (!usage->matched.path_source.empty())
 			std::cout << "    source: " << usage->matched.path_source << "\n";
+		if (usage->matched.implicit_variant_fallback)
+			std::cout << "    portability risk: implicit non-regular variant fallback\n";
+		if (usage->matched.noncanonical_variant)
+			std::cout << "    portability risk: noncanonical realized variant\n";
+		if (!usage->matched.realized_role.empty() || !usage->matched.realized_status.empty())
+			std::cout << "    realized variant: " << usage->matched.realized_role
+			          << " status=" << usage->matched.realized_status << "\n";
 		if (!usage->styles.empty())
 			std::cout << "    styles: " << JoinStrings(usage->styles) << "\n";
 		if (!usage->lines.empty())
@@ -1104,6 +1187,12 @@ void PrintStoredReport(JsonFileReport const& report, bool show_header, bool deta
 		if (usage.match_ambiguous)
 			std::cout << "WARN: ambiguous libass font match for " << usage.ass_facename
 			          << "; use --details or --json to inspect equal-score candidates\n";
+		if (usage.matched.implicit_variant_fallback)
+			std::cout << "WARN: implicit non-regular variant fallback for " << usage.ass_facename
+			          << "; make the ASS variant explicit for portable rendering\n";
+		if (usage.matched.noncanonical_variant)
+			std::cout << "WARN: noncanonical realized font variant for " << usage.ass_facename
+			          << "; automatic ASS variant normalization is unsafe\n";
 	}
 
 	PrintHumanSummary(report);
@@ -1381,6 +1470,30 @@ std::vector<JsonDiagnostic> BuildDiagnostics(JsonFileReport const& report) {
 			diagnostic.font = UsageFont(usage);
 			diagnostics.push_back(std::move(diagnostic));
 		}
+
+		if (usage.matched.implicit_variant_fallback) {
+			auto diagnostic = MakeDiagnostic(
+				"implicit_variant_fallback",
+				"warning",
+				report.input,
+				"font family resolved to a non-regular variant without an explicit ASS variant");
+			diagnostic.lines = usage.lines;
+			diagnostic.has_font = true;
+			diagnostic.font = UsageFont(usage);
+			diagnostics.push_back(std::move(diagnostic));
+		}
+
+		if (usage.matched.noncanonical_variant) {
+			auto diagnostic = MakeDiagnostic(
+				"noncanonical_font_variant",
+				"warning",
+				report.input,
+				"realized font weight or style cannot be safely represented as Regular/Bold/Italic");
+			diagnostic.lines = usage.lines;
+			diagnostic.has_font = true;
+			diagnostic.font = UsageFont(usage);
+			diagnostics.push_back(std::move(diagnostic));
+		}
 	}
 
 	return diagnostics;
@@ -1422,8 +1535,28 @@ json::Object ToJson(JsonEvent const& event) {
 json::Object ToJson(JsonUsage const& usage) {
 	json::Object ass_font;
 	ass_font["bold"] = usage.ass_bold;
+	ass_font["charset"] = usage.ass_charset;
+	ass_font["effective_weight"] = usage.ass_effective_weight;
 	ass_font["facename"] = usage.ass_facename;
+	ass_font["height"] = usage.ass_height;
 	ass_font["italic"] = usage.ass_italic;
+	if (usage.ass_has_explicit_family)
+		ass_font["has_explicit_family"] = true;
+	if (usage.ass_has_explicit_bold)
+		ass_font["raw_bold_tag"] = usage.ass_raw_bold_tag;
+	if (usage.ass_has_explicit_italic)
+		ass_font["raw_italic_tag"] = usage.ass_raw_italic_tag;
+	if (usage.ass_has_explicit_charset)
+		ass_font["raw_charset_tag"] = usage.ass_raw_charset_tag;
+	if (usage.ass_has_explicit_height)
+		ass_font["raw_height_tag"] = usage.ass_raw_height_tag;
+	json::Object baseline;
+	baseline["charset"] = usage.baseline_charset;
+	baseline["facename"] = usage.baseline_facename;
+	baseline["height"] = usage.baseline_height;
+	baseline["italic"] = usage.baseline_italic;
+	baseline["weight"] = usage.baseline_weight;
+	ass_font["baseline"] = std::move(baseline);
 
 	json::Object matched;
 	matched["bold"] = usage.matched.bold;
@@ -1443,6 +1576,16 @@ json::Object ToJson(JsonUsage const& usage) {
 	matched["paths"] = ToJson(usage.matched.paths);
 	matched["requested_weight"] = usage.matched.requested_weight;
 	matched["weight"] = usage.matched.weight;
+	if (usage.matched.has_backend_requested_weight)
+		matched["backend_requested_weight"] = usage.matched.backend_requested_weight;
+	if (!usage.matched.realized_role.empty())
+		matched["realized_role"] = usage.matched.realized_role;
+	if (!usage.matched.realized_status.empty())
+		matched["realized_status"] = usage.matched.realized_status;
+	if (usage.matched.implicit_variant_fallback)
+		matched["implicit_variant_fallback"] = true;
+	if (usage.matched.noncanonical_variant)
+		matched["noncanonical_variant"] = true;
 	json::Object match_analysis;
 	match_analysis["ambiguous"] = usage.match_ambiguous;
 	match_analysis["candidates"] = MatchCandidatesJson(usage.match_candidates);

@@ -22,6 +22,7 @@
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -41,9 +42,43 @@ static_assert(static_cast<int>(FontNameSourceKind::Style) == AEGISUB_FONT_NAME_S
 static_assert(static_cast<int>(FontNameSourceKind::Override) == AEGISUB_FONT_NAME_SOURCE_OVERRIDE);
 static_assert(static_cast<int>(FontFamilyMatchKind::None) == AEGISUB_FONT_FAMILY_MATCH_NONE);
 static_assert(static_cast<int>(FontFamilyMatchKind::Ambiguous) == AEGISUB_FONT_FAMILY_MATCH_AMBIGUOUS);
+static_assert(static_cast<int>(FontVariantRole::Unknown) == AEGISUB_FONTCOLLECTOR_VARIANT_UNKNOWN);
+static_assert(static_cast<int>(FontVariantRole::Regular) == AEGISUB_FONTCOLLECTOR_VARIANT_REGULAR);
+static_assert(static_cast<int>(FontVariantRole::Bold) == AEGISUB_FONTCOLLECTOR_VARIANT_BOLD);
+static_assert(static_cast<int>(FontVariantRole::Italic) == AEGISUB_FONTCOLLECTOR_VARIANT_ITALIC);
+static_assert(static_cast<int>(FontVariantRole::BoldItalic) == AEGISUB_FONTCOLLECTOR_VARIANT_BOLD_ITALIC);
+static_assert(static_cast<int>(FontVariantStatus::Unknown) == AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_UNKNOWN);
+static_assert(static_cast<int>(FontVariantStatus::Canonical) == AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_CANONICAL);
+static_assert(static_cast<int>(FontVariantStatus::NonCanonical) == AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_NONCANONICAL);
+static_assert(static_cast<int>(FontVariantStatus::Synthetic) == AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_SYNTHETIC);
 static_assert(AEGISUB_FONT_NAME_NORMALIZATION_REQUEST_V1_SIZE <= sizeof(AegisubFontNameNormalizationRequest));
 static_assert(AEGISUB_FONT_NAME_NORMALIZATION_CHANGE_V1_SIZE <= sizeof(AegisubFontNameNormalizationChange));
 static_assert(AEGISUB_FONT_NAME_NORMALIZATION_SUMMARY_V1_SIZE <= sizeof(AegisubFontNameNormalizationSummary));
+
+AegisubFontCollectorVariantRole ToCVariantRole(std::optional<FontVariantRole> role) {
+	if (!role)
+		return AEGISUB_FONTCOLLECTOR_VARIANT_UNKNOWN;
+	switch (*role) {
+		case FontVariantRole::Regular: return AEGISUB_FONTCOLLECTOR_VARIANT_REGULAR;
+		case FontVariantRole::Bold: return AEGISUB_FONTCOLLECTOR_VARIANT_BOLD;
+		case FontVariantRole::Italic: return AEGISUB_FONTCOLLECTOR_VARIANT_ITALIC;
+		case FontVariantRole::BoldItalic: return AEGISUB_FONTCOLLECTOR_VARIANT_BOLD_ITALIC;
+		case FontVariantRole::Unknown: return AEGISUB_FONTCOLLECTOR_VARIANT_UNKNOWN;
+	}
+	return AEGISUB_FONTCOLLECTOR_VARIANT_UNKNOWN;
+}
+
+AegisubFontCollectorVariantStatus ToCVariantStatus(std::optional<FontVariantStatus> status) {
+	if (!status)
+		return AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_UNKNOWN;
+	switch (*status) {
+		case FontVariantStatus::Canonical: return AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_CANONICAL;
+		case FontVariantStatus::NonCanonical: return AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_NONCANONICAL;
+		case FontVariantStatus::Synthetic: return AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_SYNTHETIC;
+		case FontVariantStatus::Unknown: return AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_UNKNOWN;
+	}
+	return AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_UNKNOWN;
+}
 static_assert(AEGISUB_FONT_NAME_NORMALIZATION_BATCH_ITEM_V1_SIZE <= sizeof(AegisubFontNameNormalizationBatchItem));
 
 void WriteError(char *buffer, size_t buffer_size, std::string const& message) {
@@ -470,6 +505,29 @@ void EmitCUsage(FontCollectorAssFontUsage const& usage,
 	c_usage.match_candidates = match_candidates.empty() ? nullptr : match_candidates.data();
 	c_usage.match_candidate_count = match_candidates.size();
 	c_usage.match_ambiguous = usage.matched.match_ambiguous;
+	c_usage.ass_effective_weight = usage.ass_effective_weight;
+	c_usage.ass_charset = usage.ass_charset;
+	c_usage.ass_height = usage.ass_height;
+	c_usage.ass_raw_bold_tag = usage.ass_raw_bold_tag.c_str();
+	c_usage.ass_raw_italic_tag = usage.ass_raw_italic_tag.c_str();
+	c_usage.ass_raw_charset_tag = usage.ass_raw_charset_tag.c_str();
+	c_usage.ass_raw_height_tag = usage.ass_raw_height_tag.c_str();
+	c_usage.ass_has_explicit_family = usage.ass_has_explicit_family;
+	c_usage.ass_has_explicit_bold = usage.ass_has_explicit_bold;
+	c_usage.ass_has_explicit_italic = usage.ass_has_explicit_italic;
+	c_usage.ass_has_explicit_charset = usage.ass_has_explicit_charset;
+	c_usage.ass_has_explicit_height = usage.ass_has_explicit_height;
+	c_usage.baseline_facename = usage.baseline_facename.c_str();
+	c_usage.baseline_weight = usage.baseline_weight;
+	c_usage.baseline_italic = usage.baseline_italic;
+	c_usage.baseline_charset = usage.baseline_charset;
+	c_usage.baseline_height = usage.baseline_height;
+	c_usage.matched_has_backend_requested_weight = usage.matched.backend_requested_weight.has_value();
+	c_usage.matched_backend_requested_weight = usage.matched.backend_requested_weight.value_or(0);
+	c_usage.matched_realized_role = ToCVariantRole(usage.matched.realized_role);
+	c_usage.matched_realized_status = ToCVariantStatus(usage.matched.realized_status);
+	c_usage.matched_implicit_variant_fallback = usage.matched.implicit_variant_fallback;
+	c_usage.matched_noncanonical_variant = usage.matched.noncanonical_variant;
 
 	callback(&c_usage, user_data);
 }

@@ -212,6 +212,51 @@ int LibassFontAttributesSimilarity(LibassFontFace const& face, LibassFontRequest
 	return FontAttributesSimilarity(attributes, normalized_request);
 }
 
+LibassFamilyFaceRanking RankLibassFamilyFaces(
+	std::span<LibassFontFace const> faces,
+	LibassFontRequest const& request,
+	LibassFamilySubstituter const& substitute_family) {
+	LibassFamilyFaceRanking result;
+	if (request.family.empty())
+		return result;
+
+	auto names = requested_names(request.family, substitute_family);
+	for (auto const& name : names) {
+		int minimum_score = std::numeric_limits<int>::max();
+		std::optional<size_t> selected;
+		std::size_t equal_score_count = 0;
+
+		for (std::size_t index = 0; index < faces.size(); ++index) {
+			auto const name_match = match_font_name(faces[index], name, false);
+			if (!name_match)
+				continue;
+			auto const score = *name_match == LibassFontNameMatch::Family
+				? LibassFontAttributesSimilarity(faces[index], request)
+				: 0;
+			result.candidates.push_back({index, name, *name_match, score});
+			if (score < minimum_score) {
+				minimum_score = score;
+				selected = index;
+				equal_score_count = 1;
+			}
+			else if (score == minimum_score) {
+				++equal_score_count;
+			}
+		}
+
+		if (selected) {
+			result.face = selected;
+			// A provider may return the requested family as the first item and
+			// append aliases after it. That is still an exact family match; only
+			// the name which actually won the ranking is a substitution.
+			result.used_substitution = !ascii_iequals(name, request.family);
+			result.ambiguous = equal_score_count > 1;
+			return result;
+		}
+	}
+	return result;
+}
+
 LibassFontSelection SelectLibassFontFaces(
 	std::span<LibassFontFace const> faces,
 	LibassFontRequest const& request,

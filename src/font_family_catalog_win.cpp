@@ -1,427 +1,387 @@
-// Windows FontFamilyCatalog builder:
-// 1. Enumerate GDI families (same selectable set as style editor default path)
-// 2. Read DirectWrite Win32 family names with locales
-// 3. Pick English Win32 name only when it GDI-resolves to the same font entity
-//    (file path + face index) and is unique across the catalog
+// Windows FontFamilyCatalog builder. GDI selects the physical face; system
+// DirectWrite only supplements that already-selected HDC face with names and
+// an entity identity.
 
 #include "font_family_catalog.h"
-#include "font_family_catalog_win_detail.h"
-#include "font_file_lister_dwrite.h"
+#include "gdi_font_resolver.h"
 
 #include <libaegisub/charset_conv_win.h>
 #include <libaegisub/log.h>
-#include <libaegisub/scope_exit.h>
-
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <windows.h>
-#include <dwrite.h>
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace {
 
-// GDI lfFaceName limit in UTF-16 code units (excluding trailing NUL).
 constexpr std::size_t kGdiFaceNameMaxUnits = LF_FACESIZE - 1;
 
-std::string ascii_lower(std::string const& s) {
-	std::string out;
-	out.reserve(s.size());
-	for (unsigned char ch : s)
-		out.push_back(static_cast<char>(std::tolower(ch)));
-	return out;
+std::string ascii_lower(std::string_view text) {
+	std::string result;
+	result.reserve(text.size());
+	for (unsigned char ch : text)
+		result.push_back(static_cast<char>(std::tolower(ch)));
+	return result;
+}
+
+std::optional<std::wstring> to_utf16(std::string_view value) {
+	if (value.empty())
+		return std::wstring{};
+	try {
+		return agi::charset::ConvertW(std::string(value));
+	}
+	catch (...) {
+		return std::nullopt;
+	}
+}
+
+bool ordinal_icase_equal(std::string_view left, std::string_view right) {
+	auto const left_wide = to_utf16(left);
+	auto const right_wide = to_utf16(right);
+	return left_wide && right_wide &&
+		CompareStringOrdinal(
+			left_wide->data(), static_cast<int>(left_wide->size()),
+			right_wide->data(), static_cast<int>(right_wide->size()), TRUE) == CSTR_EQUAL;
 }
 
 bool is_english_locale(std::string const& locale) {
 	if (locale.size() < 2)
 		return false;
-	auto a = static_cast<char>(std::tolower(static_cast<unsigned char>(locale[0])));
-	auto b = static_cast<char>(std::tolower(static_cast<unsigned char>(locale[1])));
-	if (a != 'e' || b != 'n')
-		return false;
-	if (locale.size() == 2)
-		return true;
-	return locale[2] == '-' || locale[2] == '_';
+	auto const a = static_cast<char>(std::tolower(static_cast<unsigned char>(locale[0])));
+	auto const b = static_cast<char>(std::tolower(static_cast<unsigned char>(locale[1])));
+	return a == 'e' && b == 'n' &&
+		(locale.size() == 2 || locale[2] == '-' || locale[2] == '_');
 }
 
 bool is_en_us(std::string const& locale) {
-	return ascii_lower(locale) == "en-us" || ascii_lower(locale) == "en_us";
+	auto folded = ascii_lower(locale);
+	return folded == "en-us" || folded == "en_us";
 }
 
-struct EnumState {
-	std::vector<std::string> faces;
-	std::unordered_set<std::string> seen;
-};
-
-int CALLBACK enum_font_families_proc(LOGFONTW const* lplf, TEXTMETRICW const*, DWORD, LPARAM lParam) {
-	auto* state = reinterpret_cast<EnumState*>(lParam);
-	if (!lplf || !state)
-		return 1;
-
-	// Skip vertical '@' duplicates from GDI; catalog handles '@' as a prefix.
-	if (lplf->lfFaceName[0] == L'@')
-		return 1;
-	if (!lplf->lfFaceName[0])
-		return 1;
-
-	std::string utf8 = agi::charset::ConvertW(lplf->lfFaceName);
-	if (utf8.empty() || !state->seen.insert(utf8).second)
-		return 1;
-	state->faces.push_back(std::move(utf8));
-	return 1;
+void add_win32_name(FontFamilyRecord& record, DWriteLocalizedName const& name) {
+	if (name.value.empty())
+		return;
+	auto const duplicate = std::find_if(record.names.begin(), record.names.end(),
+		[&](FontFamilyName const& current) {
+			return current.kind == FontFamilyNameKind::Win32Family &&
+			       ordinal_icase_equal(current.value, name.value) &&
+			       current.locale == name.locale;
+		});
+	if (duplicate != record.names.end())
+		return;
+	record.names.push_back({name.value, name.locale, FontFamilyNameKind::Win32Family});
 }
 
-std::vector<std::string> enumerate_gdi_families() {
-	EnumState state;
-	HDC hdc = CreateCompatibleDC(nullptr);
-	if (!hdc)
-		return state.faces;
-	auto release_dc = agi::make_scope_exit([&] { DeleteDC(hdc); });
-
-	LOGFONTW lf{};
-	lf.lfCharSet = DEFAULT_CHARSET;
-	lf.lfFaceName[0] = L'\0';
-	lf.lfPitchAndFamily = 0;
-	EnumFontFamiliesExW(hdc, &lf, enum_font_families_proc, reinterpret_cast<LPARAM>(&state), 0);
-	return state.faces;
+void add_informational_name(
+	FontFamilyRecord& record,
+	DWriteLocalizedName const& name,
+	FontFamilyNameKind kind,
+	FontVariantOutcome const& outcome) {
+	if (name.value.empty() || outcome.status != FontVariantStatus::Canonical ||
+	    outcome.entity_token == 0 || outcome.role == FontVariantRole::Unknown)
+		return;
+	auto const duplicate = std::find_if(record.names.begin(), record.names.end(),
+		[&](FontFamilyName const& current) {
+			return current.kind == kind && current.value == name.value &&
+			       current.locale == name.locale &&
+			       current.entity_token == outcome.entity_token;
+		});
+	if (duplicate != record.names.end())
+		return;
+	record.names.push_back({
+		name.value,
+		name.locale,
+		kind,
+		outcome.entity_token,
+		outcome.role});
 }
 
-/// Create a GDI font for facename and return the face actually selected.
-bool gdi_select_face(std::string const& facename, std::string& out_selected, LOGFONTW& out_lf) {
-	out_selected.clear();
-	out_lf = {};
-	out_lf.lfCharSet = DEFAULT_CHARSET;
-	out_lf.lfOutPrecision = OUT_TT_PRECIS;
-	out_lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
-	out_lf.lfQuality = DEFAULT_QUALITY;
-	out_lf.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE;
-	out_lf.lfWeight = FW_NORMAL;
-
-	// Reject names that already exceed the GDI face buffer (bare or with @).
-	if (FontFamilyCatalog::Utf16CodeUnitLength(facename) > kGdiFaceNameMaxUnits)
-		return false;
-
-	auto wide = agi::charset::ConvertW(facename);
-	if (wide.empty() || wide.size() >= LF_FACESIZE)
-		return false;
-	wcsncpy(out_lf.lfFaceName, wide.c_str(), LF_FACESIZE - 1);
-	out_lf.lfFaceName[LF_FACESIZE - 1] = L'\0';
-
-	HDC hdc = CreateCompatibleDC(nullptr);
-	if (!hdc)
-		return false;
-	auto release_dc = agi::make_scope_exit([&] { DeleteDC(hdc); });
-
-	HFONT hfont = CreateFontIndirectW(&out_lf);
-	if (!hfont)
-		return false;
-	auto release_font = agi::make_scope_exit([&] {
-		SelectObject(hdc, nullptr);
-		DeleteObject(hfont);
-	});
-	SelectObject(hdc, hfont);
-
-	wchar_t selected[LF_FACESIZE] = {};
-	if (!GetTextFaceW(hdc, LF_FACESIZE, selected) || !selected[0])
-		return false;
-
-	// Refresh LOGFONT from the actual selected object (metrics may differ).
-	GetObjectW(hfont, sizeof(LOGFONTW), &out_lf);
-	out_selected = agi::charset::ConvertW(selected);
-	return !out_selected.empty();
+bool same_physical_outcome(
+	FontVariantOutcome const& left,
+	FontVariantOutcome const& right) noexcept {
+	// A missing entity makes identity unknowable. In that case duplicate rows
+	// are preferable to silently combining two unrelated family topologies.
+	return left.entity_token != 0 && right.entity_token != 0 &&
+	       left.entity_token == right.entity_token &&
+	       left.requested_weight == right.requested_weight &&
+	       left.requested_italic == right.requested_italic &&
+	       left.realized_weight == right.realized_weight &&
+	       left.realized_italic == right.realized_italic &&
+	       left.role == right.role && left.status == right.status;
 }
 
-using font_family_catalog_win_detail::FontEntityKey;
-using font_family_catalog_win_detail::SameEntity;
-
-bool resolve_entity(DWriteBridge const& dwrite, std::string const& facename, FontEntityKey& out) {
-	out = {};
-	if (!dwrite.available())
+bool same_physical_profile(
+	FontFamilyVariantProfile const& left,
+	FontFamilyVariantProfile const& right) noexcept {
+	if (left.backend != right.backend || left.evidence != right.evidence ||
+	    left.automatic_pinning_reliable != right.automatic_pinning_reliable)
 		return false;
-
-	std::string selected;
-	LOGFONTW lf{};
-	if (!gdi_select_face(facename, selected, lf))
-		return false;
-
-	IDWriteFontFace *face = dwrite.CreateFontFaceFromLogFont(lf);
-	if (!face)
-		return false;
-	auto release_face = agi::make_scope_exit([&] { face->Release(); });
-
-	std::string path;
-	int index = -1;
-	if (!dwrite.GetFontFilePath(face, path, index) || path.empty())
-		return false;
-
-	out.path_lower = ascii_lower(path);
-	out.face_index = index >= 0 ? index : static_cast<int>(face->GetIndex());
-	out.valid = true;
+	for (std::size_t index = 0; index < left.outcomes.size(); ++index) {
+		if (!same_physical_outcome(left.outcomes[index], right.outcomes[index]))
+			return false;
+	}
 	return true;
 }
 
-bool resolve_entity_via_hdc(DWriteBridge const& dwrite,
-                            LOGFONTW const& lf,
-                            FontEntityKey& out,
-                            std::vector<DWriteLocalizedName>* out_names = nullptr) {
-	out = {};
-	std::string path;
-	int index = -1;
-	std::vector<DWriteLocalizedName> names;
-	if (!dwrite.ResolveEntityAndNamesViaHdc(lf, path, index, names) || path.empty())
+bool maps_to_profile(
+	GdiFontResolver& resolver,
+	std::string const& candidate,
+	FontFamilyVariantProfile const& expected_profile) {
+	if (candidate.empty() ||
+	    FontFamilyCatalog::Utf16CodeUnitLength(candidate) > kGdiFaceNameMaxUnits)
 		return false;
-
-	out.path_lower = ascii_lower(path);
-	out.face_index = index;
-	out.valid = index >= 0;
-	if (!out.valid)
-		return false;
-
-	if (out_names)
-		*out_names = std::move(names);
+	for (std::size_t index = 0; index < expected_profile.outcomes.size(); ++index) {
+		auto const& expected = expected_profile.outcomes[index];
+		auto resolved = resolver.Probe(
+			candidate, expected.requested_weight, expected.requested_italic,
+			DEFAULT_CHARSET, 0);
+		if (!resolved.success || !resolved.matches_requested_family ||
+		    !same_physical_outcome(resolved.outcome, expected))
+			return false;
+	}
 	return true;
 }
 
-enum class SeedResolutionPath {
-	LogFont,
-	Hdc
-};
-
-/// True if GDI+DWrite resolution of `candidate` lands on the same font entity
-/// as `localized_entity` (already resolved for the seed family).
-bool candidate_maps_to_entity(DWriteBridge const& dwrite,
-                              std::string const& candidate,
-                              FontEntityKey const& localized_entity) {
-	if (candidate.empty() || !localized_entity.valid)
-		return false;
-	// Bare English name must fit GDI; vertical '@' form is re-checked at map time.
-	if (FontFamilyCatalog::Utf16CodeUnitLength(candidate) > kGdiFaceNameMaxUnits)
-		return false;
-
-	FontEntityKey candidate_entity;
-	if (!resolve_entity(dwrite, candidate, candidate_entity))
-		return false;
-	return SameEntity(candidate_entity, localized_entity);
-}
-
-std::string pick_english_name(DWriteBridge const& dwrite,
-                              std::vector<DWriteLocalizedName> const& names,
-                              FontEntityKey const& localized_entity) {
-	// Priority: en-US, other en-*, then empty.
-	std::string en_us;
-	std::string en_other;
-	for (auto const& n : names) {
-		if (n.value.empty())
+std::string pick_english_name(GdiFontResolver& resolver,
+	                          std::vector<DWriteLocalizedName> const& names,
+	                          FontFamilyVariantProfile const& expected_profile) {
+	std::vector<std::string> en_us;
+	std::vector<std::string> other_english;
+	for (auto const& name : names) {
+		if (name.value.empty() || !is_english_locale(name.locale))
 			continue;
-		if (!is_english_locale(n.locale))
-			continue;
-		if (is_en_us(n.locale)) {
-			if (en_us.empty())
-				en_us = n.value;
-		} else if (en_other.empty()) {
-			en_other = n.value;
-		}
+		auto& candidates = is_en_us(name.locale) ? en_us : other_english;
+		if (std::none_of(
+				candidates.begin(), candidates.end(), [&](std::string const& current) {
+					return ordinal_icase_equal(current, name.value);
+				}))
+			candidates.push_back(name.value);
 	}
 
-	auto try_name = [&](std::string const& candidate) -> std::string {
-		if (candidate.empty())
-			return {};
-		if (!candidate_maps_to_entity(dwrite, candidate, localized_entity))
-			return {};
-		return candidate;
-	};
-
-	if (auto s = try_name(en_us); !s.empty())
-		return s;
-	if (auto s = try_name(en_other); !s.empty())
-		return s;
+	for (auto const& candidate : en_us) {
+		if (maps_to_profile(resolver, candidate, expected_profile))
+			return candidate;
+	}
+	for (auto const& candidate : other_english) {
+		if (maps_to_profile(resolver, candidate, expected_profile))
+			return candidate;
+	}
 	return {};
+}
+
+std::string normalized_locale(std::string_view locale) {
+	auto result = ascii_lower(locale);
+	std::replace(result.begin(), result.end(), '_', '-');
+	return result;
+}
+
+std::string primary_language(std::string_view locale) {
+	auto normalized = normalized_locale(locale);
+	auto const separator = normalized.find('-');
+	if (separator != std::string::npos)
+		normalized.resize(separator);
+	return normalized;
+}
+
+std::string user_default_locale() {
+	wchar_t locale[LOCALE_NAME_MAX_LENGTH] = {};
+	if (GetUserDefaultLocaleName(locale, LOCALE_NAME_MAX_LENGTH) <= 0)
+		return {};
+	try {
+		return agi::charset::ConvertW(locale);
+	}
+	catch (...) {
+		return {};
+	}
+}
+
+std::string pick_localized_name(
+	GdiFontResolver& resolver,
+	FontFamilyRecord const& record,
+	std::string_view locale) {
+	if (locale.empty())
+		return record.localized_family_name;
+	auto const language = primary_language(locale);
+
+	// Prefer an exact user-locale Win32 name, then another name in the same
+	// language. Every candidate must still pass a live GDI entity check; DWrite
+	// metadata alone never makes a name a safe ASS alias.
+	for (int rank : {2, 1}) {
+		for (auto const& name : record.names) {
+			if (name.kind != FontFamilyNameKind::Win32Family || name.locale.empty())
+				continue;
+			auto const candidate_locale = normalized_locale(name.locale);
+			bool const matches = rank == 2
+				? candidate_locale == locale
+				: !language.empty() && primary_language(candidate_locale) == language;
+			if (matches && maps_to_profile(
+					resolver, name.value, record.variant_profile))
+				return name.value;
+		}
+	}
+	return record.localized_family_name;
+}
+
+void merge_record_names(FontFamilyRecord& target, FontFamilyRecord&& source) {
+	for (auto& candidate : source.names) {
+		auto const duplicate = std::find_if(
+			target.names.begin(), target.names.end(), [&](FontFamilyName const& current) {
+				return current.value == candidate.value &&
+				       current.locale == candidate.locale &&
+				       current.kind == candidate.kind &&
+				       current.entity_token == candidate.entity_token &&
+				       current.variant_role == candidate.variant_role;
+			});
+		if (duplicate == target.names.end())
+			target.names.push_back(std::move(candidate));
+	}
+}
+
+std::vector<DWriteLocalizedName> win32_names(FontFamilyRecord const& record) {
+	std::vector<DWriteLocalizedName> result;
+	result.reserve(record.names.size());
+	for (auto const& name : record.names) {
+		if (name.kind == FontFamilyNameKind::Win32Family)
+			result.push_back({name.value, name.locale});
+	}
+	return result;
 }
 
 } // namespace
 
 FontFamilyCatalog BuildFontFamilyCatalog() {
-	auto seeds = enumerate_gdi_families();
+	auto const build_started = std::chrono::steady_clock::now();
+	GdiFontResolver resolver;
+	auto seeds = resolver.EnumerateFamilies();
 	if (seeds.empty()) {
 		LOG_W("font/family_catalog") << "GDI family enumeration returned no fonts";
-		return FontFamilyCatalog{};
+		return {};
 	}
 
-	DWriteBridge dwrite;
 	std::vector<FontFamilyRecord> records;
 	records.reserve(seeds.size());
+	auto const locale = normalized_locale(user_default_locale());
+	// Usually an ordinary entity has one record. The vector handles the rare
+	// case where two logical families share a Regular face but route another
+	// canonical request to different physical faces.
+	std::unordered_map<std::uint64_t, std::vector<std::size_t>> profile_owners;
 	FontFamilyId next_id = 1;
 
-	// Track english names claimed by a family so we can mark collisions later.
-	std::unordered_map<std::string, std::vector<FontFamilyId>> english_owners;
+	for (auto const& seed : seeds) {
+		FontFamilyRecord record;
+		record.id = next_id++;
+		record.localized_family_name = seed;
+		record.names.push_back({seed, {}, FontFamilyNameKind::Win32Family});
+		std::array<FontVariantOutcome, 4> outcomes;
+		GdiFontProbeResult seed_probe;
+		bool profile_matches_requested_family = true;
+		for (std::size_t index = 0; index < outcomes.size(); ++index) {
+			bool const italic = index >= 2;
+			bool const bold = (index & 1u) != 0;
+			auto probe = resolver.ProbeWithSelection(
+				seed, bold ? FW_BOLD : FW_NORMAL, italic, DEFAULT_CHARSET, 0,
+				[&](GdiFontSelectionView const& selected) {
+					if (!selected.probe || !selected.dwrite_face || !selected.dwrite_bridge)
+						return;
+					for (auto const& name : selected.dwrite_bridge->GetFullNamesFromFace(
+						     selected.dwrite_face))
+						add_informational_name(
+							record, name, FontFamilyNameKind::FullName,
+							selected.probe->outcome);
+					for (auto const& name : selected.dwrite_bridge->GetPostScriptNamesFromFace(
+						     selected.dwrite_face))
+						add_informational_name(
+							record, name, FontFamilyNameKind::PostScript,
+							selected.probe->outcome);
+				});
+			outcomes[index] = probe.outcome;
+			profile_matches_requested_family =
+				profile_matches_requested_family && probe.success &&
+				probe.matches_requested_family && probe.outcome.entity_token != 0;
+			if (index == 0)
+				seed_probe = std::move(probe);
+		}
+		record.variant_profile = BuildFontFamilyVariantProfile(
+			std::move(outcomes), FontVariantBackend::VsFilterGdi,
+			FontSelectionEvidence::Observed,
+			profile_matches_requested_family);
 
-	// Remember how each seed was resolved so the final safety pass can repeat
-	// the same live lookup instead of trusting a stale entity snapshot.
-	std::unordered_map<std::string, SeedResolutionPath> seed_resolution_paths;
-
-	for (auto const& seed_face : seeds) {
-		FontFamilyRecord rec;
-		rec.id = next_id++;
-		rec.localized_family_name = seed_face;
-
-		// Always register the GDI face as a Win32 family alias.
-		{
-			FontFamilyName n;
-			n.value = seed_face;
-			n.locale = {};
-			n.kind = FontFamilyNameKind::Win32Family;
-			rec.names.push_back(std::move(n));
+		// Names are read from the IDWriteFontFace created from the currently
+		// selected HDC. No LOGFONT re-resolution is allowed in this path.
+		if (seed_probe.success && seed_probe.outcome.entity_token != 0) {
+			for (auto const& name : seed_probe.win32_family_names)
+				add_win32_name(record, name);
 		}
 
-		std::string selected;
-		LOGFONTW lf{};
-		if (!gdi_select_face(seed_face, selected, lf) || !dwrite.available()) {
-			// Without DWrite we cannot entity-validate English aliases safely.
-			records.push_back(std::move(rec));
+		bool merged = false;
+		if (profile_matches_requested_family) {
+			auto& candidates = profile_owners[seed_probe.outcome.entity_token];
+			for (auto const candidate_index : candidates) {
+				if (!same_physical_profile(
+						records[candidate_index].variant_profile,
+						record.variant_profile))
+					continue;
+				merge_record_names(records[candidate_index], std::move(record));
+				merged = true;
+				break;
+			}
+			if (!merged)
+				candidates.push_back(records.size());
+		}
+		if (merged)
 			continue;
-		}
-
-		auto win32_names = dwrite.GetWin32FamilyNamesFromLogFont(lf);
-		for (auto const& wn : win32_names) {
-			if (wn.value.empty())
-				continue;
-			// Avoid duplicating the seed face string with empty locale.
-			bool exists = false;
-			for (auto const& existing : rec.names) {
-				if (existing.value == wn.value && existing.locale == wn.locale) {
-					exists = true;
-					break;
-				}
-			}
-			if (exists)
-				continue;
-			FontFamilyName n;
-			n.value = wn.value;
-			n.locale = wn.locale;
-			n.kind = FontFamilyNameKind::Win32Family;
-			rec.names.push_back(std::move(n));
-		}
-
-		FontEntityKey seed_entity;
-		bool have_seed = resolve_entity(dwrite, seed_face, seed_entity);
-		auto seed_resolution_path = SeedResolutionPath::LogFont;
-
-		// Fallback when DWrite rejects the LOGFONT (typical for fonts whose
-		// zh-CN name table lacks name ID 2 — Subfamily — so DWrite cannot build
-		// a RBIZ family entry and returns DWRITE_E_NOFONT). Recover the seed
-		// entity and English Win32 family names via the HDC path, which reads
-		// the currently-selected HFONT directly, bypassing the locale lookup.
-		//
-		// NOTE: DWriteCore returns E_NOTIMPL from CreateFontFaceFromHdc, so
-		// this fallback is skipped there. Fonts with incomplete zh-CN name
-		// tables will fall back to the localized family name on DWriteCore.
-		// Fixing that requires reading the name table directly (bypassing
-		// DWrite entirely) — out of scope for this change.
-		if (!have_seed && !dwrite.is_dwritecore()) {
-			std::vector<DWriteLocalizedName> hd_names;
-			if (resolve_entity_via_hdc(dwrite, lf, seed_entity, &hd_names)) {
-				have_seed = true;
-				seed_resolution_path = SeedResolutionPath::Hdc;
-
-				// Merge recovered Win32 family names into rec.names and the
-				// local win32_names list (deduplicated) so pick_english_name
-				// can see them.
-				for (auto const& wn : hd_names) {
-					if (wn.value.empty()) continue;
-					bool exists = false;
-					for (auto const& existing : rec.names) {
-						if (existing.value == wn.value && existing.locale == wn.locale) {
-							exists = true;
-							break;
-						}
-					}
-					if (!exists) {
-						FontFamilyName n;
-						n.value = wn.value;
-						n.locale = wn.locale;
-						n.kind = FontFamilyNameKind::Win32Family;
-						rec.names.push_back(std::move(n));
-						win32_names.push_back(wn);
-					}
-				}
-			}
-		}
-
-		if (have_seed)
-			seed_resolution_paths.emplace(seed_face, seed_resolution_path);
-
-		if (have_seed) {
-			rec.english_win32_family_name = pick_english_name(dwrite, win32_names, seed_entity);
-			if (!rec.english_win32_family_name.empty())
-				english_owners[ascii_lower(rec.english_win32_family_name)].push_back(rec.id);
-		}
-
-		// If no English candidate, leave english_win32_family_name empty so
-		// PreferredWriteName falls back to localized.
-		records.push_back(std::move(rec));
+		records.push_back(std::move(record));
 	}
 
-	// Drop English names that map to multiple families (unresolvable ambiguity).
-	// String-level ownership is not enough by itself for entity safety, but it
-	// still catches two families publishing the same portable write name.
-	std::unordered_set<FontFamilyId> clear_english;
-	for (auto const& kv : english_owners) {
-		if (kv.second.size() > 1) {
-			for (auto id : kv.second)
-				clear_english.insert(id);
-		}
-	}
-	if (!clear_english.empty()) {
-		for (auto& rec : records) {
-			if (clear_english.count(rec.id))
-				rec.english_win32_family_name.clear();
-		}
-		LOG_D("font/family_catalog") << "Cleared ambiguous English Win32 family names for "
-		                             << clear_english.size() << " families";
-	}
-
-	// Final safety pass: re-resolve both names so a font install, removal, or
-	// substitution during catalog construction cannot publish a stale alias.
-	// Seeds that required the HDC fallback must use that path again because
-	// CreateFontFromLOGFONT is known to reject them.
-	if (dwrite.available()) {
-		for (auto& rec : records) {
-			if (rec.english_win32_family_name.empty())
-				continue;
-
-			FontEntityKey seed_entity;
-			bool seed_ok = false;
-			auto resolution_path = seed_resolution_paths.find(rec.localized_family_name);
-			if (resolution_path != seed_resolution_paths.end()) {
-				if (resolution_path->second == SeedResolutionPath::LogFont) {
-					seed_ok = resolve_entity(dwrite, rec.localized_family_name, seed_entity);
-				}
-				else {
-					std::string selected;
-					LOGFONTW lf{};
-					seed_ok = gdi_select_face(rec.localized_family_name, selected, lf)
-					       && resolve_entity_via_hdc(dwrite, lf, seed_entity);
-				}
-			}
-
-			// The English candidate is an ASCII family name; CreateFontFromLOGFONT
-			// typically accepts it without needing the HDC fallback.
-			FontEntityKey eng_entity;
-			bool eng_ok = resolve_entity(dwrite, rec.english_win32_family_name, eng_entity);
-
-			if (!seed_ok || !eng_ok || !SameEntity(seed_entity, eng_entity))
-				rec.english_win32_family_name.clear();
-		}
+	// Select presentation/write aliases only after physical aliases have been
+	// consolidated. This guarantees one catalog row per proven GDI family while
+	// retaining every independently validated Win32 spelling on that row.
+	std::vector<std::pair<std::string, std::vector<FontFamilyId>>> english_owners;
+	for (auto& record : records) {
+		if (record.variant_profile.For(false, false).entity_token == 0)
+			continue;
+		record.localized_family_name = pick_localized_name(resolver, record, locale);
+		record.english_win32_family_name = pick_english_name(
+			resolver, win32_names(record), record.variant_profile);
+		if (record.english_win32_family_name.empty())
+			continue;
+		auto owner = std::find_if(
+			english_owners.begin(), english_owners.end(), [&](auto const& entry) {
+				return ordinal_icase_equal(entry.first, record.english_win32_family_name);
+			});
+		if (owner == english_owners.end())
+			english_owners.push_back({record.english_win32_family_name, {record.id}});
+		else
+			owner->second.push_back(record.id);
 	}
 
-	LOG_I("font/family_catalog") << "Built Windows font family catalog with " << records.size()
-	                             << " families (DWrite "
-	                             << (dwrite.available() ? "available" : "unavailable") << ")";
+	// The same English spelling claimed by more than one GDI family is not a
+	// portable ASS alias even if both claims were individually resolvable.
+	std::unordered_set<FontFamilyId> ambiguous_english;
+	for (auto const& [name, owners] : english_owners) {
+		(void)name;
+		if (owners.size() > 1)
+			ambiguous_english.insert(owners.begin(), owners.end());
+	}
+	for (auto& record : records) {
+		if (ambiguous_english.contains(record.id))
+			record.english_win32_family_name.clear();
+	}
+
+	auto const elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+		std::chrono::steady_clock::now() - build_started);
+	auto const stats = resolver.stats();
+	LOG_I("font/family_catalog") << "Built Windows font family catalog with "
+	                             << records.size() << " families in "
+	                             << elapsed.count() << " ms ("
+	                             << stats.physical_probe_count << " physical probes, "
+	                             << stats.memo_hit_count << " memo hits, "
+	                             << stats.fingerprint_read_count << " fingerprint reads)";
 	return FontFamilyCatalog(std::move(records));
 }

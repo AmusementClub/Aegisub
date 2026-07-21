@@ -17,6 +17,8 @@
 
 #include "font_collector_backend.h"
 #include "font_collector_events.h"
+#include "ass_font_state.h"
+#include "font_family_catalog.h"
 
 // Libass provider surface lives in font_matching_libass.h. Pull it only for
 // Fontconfig-backed builds (Linux always; Apple when Fontconfig is enabled).
@@ -36,8 +38,10 @@ class ILibassFontProvider;
 #include <filesystem>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 #include <unordered_map>
 
@@ -85,7 +89,8 @@ struct CollectionResult {
 	int face_index = -1;
 	/// Font weight selected by the platform matcher.
 	int matched_weight = 0;
-	/// Whether the selected platform font is bold.
+	/// Whether the resolver proved a canonical Bold/BoldItalic role. Numeric
+	/// weights such as 600/800/900 and unknown entities remain false here.
 	bool matched_bold = false;
 	/// Whether the selected platform font is italic.
 	bool matched_italic = false;
@@ -101,6 +106,16 @@ struct CollectionResult {
 	bool fake_italic = false;
 	/// The lfWeight value passed to CreateFontIndirectW.
 	int requested_weight = 0;
+	/// The backend request after ASS normalization, when known. This is
+	/// optional to keep old/custom listers source-compatible.
+	std::optional<int> backend_requested_weight;
+	/// Canonical role/status of the realized face, when the backend can prove it.
+	std::optional<FontVariantRole> realized_role;
+	std::optional<FontVariantStatus> realized_status;
+	/// The backend selected a non-regular face without an explicit ASS variant.
+	bool implicit_variant_fallback = false;
+	/// The realized face is not safe to canonicalize as Regular/Bold/Italic.
+	bool noncanonical_variant = false;
 	std::vector<FontCollectorMatchCandidate> match_candidates;
 	bool match_ambiguous = false;
 };
@@ -122,6 +137,11 @@ struct FontCollectorMatchedFont {
 	std::vector<uint32_t> missing_codepoints;
 	std::vector<int> missing_lines;
 	int requested_weight = 0;
+	std::optional<int> backend_requested_weight;
+	std::optional<FontVariantRole> realized_role;
+	std::optional<FontVariantStatus> realized_status;
+	bool implicit_variant_fallback = false;
+	bool noncanonical_variant = false;
 	std::vector<FontCollectorMatchCandidate> match_candidates;
 	bool match_ambiguous = false;
 };
@@ -130,6 +150,23 @@ struct FontCollectorAssFontUsage {
 	std::string ass_facename;
 	int ass_bold = 0;
 	bool ass_italic = false;
+	int ass_effective_weight = 400;
+	int ass_charset = 1;
+	double ass_height = 0.0;
+	std::string ass_raw_bold_tag;
+	std::string ass_raw_italic_tag;
+	std::string ass_raw_charset_tag;
+	std::string ass_raw_height_tag;
+	bool ass_has_explicit_family = false;
+	bool ass_has_explicit_bold = false;
+	bool ass_has_explicit_italic = false;
+	bool ass_has_explicit_charset = false;
+	bool ass_has_explicit_height = false;
+	std::string baseline_facename;
+	int baseline_weight = 400;
+	bool baseline_italic = false;
+	int baseline_charset = 1;
+	double baseline_height = 0.0;
 	std::vector<uint32_t> codepoints;
 	std::vector<std::string> styles;
 	std::vector<int> lines;
@@ -147,10 +184,58 @@ struct FontCollectorBatchSource {
 	FontCollectorDetails *details = nullptr;
 };
 
+/// Backend-normalized identity of one physical font match request.
+///
+/// Raw ASS provenance deliberately does not live here. The collector keeps it
+/// in StyleInfo for reporting, while requests which a backend treats
+/// identically share one potentially expensive font lookup.
+struct FontFileListerMatchKey {
+	std::string family;
+	int weight = aegisub::ass::DefaultFontWeight;
+	bool italic = false;
+	std::optional<int> charset;
+	/// Backend-native height request. Windows GDI stores the quantized
+	/// LOGFONT.lfHeight here; outline backends leave it empty when size does
+	/// not participate in physical face matching.
+	std::optional<int> height;
+
+	bool operator<(FontFileListerMatchKey const& other) const {
+		return std::tie(family, weight, italic, charset, height) <
+		       std::tie(other.family, other.weight, other.italic, other.charset,
+		                 other.height);
+	}
+};
+
 class IFontFileLister {
 public:
 	virtual ~IFontFileLister() = default;
 	virtual CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters) = 0;
+
+	/// Return the fields which determine the backend's physical selection.
+	/// The default mirrors the rich-to-legacy adapter below. A lister which
+	/// overrides the rich entry point and consumes additional fields must also
+	/// override this method.
+	virtual FontFileListerMatchKey GetMatchKey(
+		aegisub::ass::AssFontRequest const& request) const {
+		return {
+			request.family,
+			aegisub::ass::LegacyAssBoldFromEffectiveWeight(request.effective_weight),
+			request.italic,
+		};
+	}
+
+	/// Rich request entry point. Existing/custom listers only need to
+	/// implement the legacy overload; this adapter preserves source
+	/// compatibility while allowing the collector to carry charset, size and
+	/// raw ASS provenance.
+	virtual CollectionResult GetFontPaths(aegisub::ass::AssFontRequest const& request, std::vector<uint32_t> const& characters) {
+		int const legacy_bold = aegisub::ass::LegacyAssBoldFromEffectiveWeight(
+			request.effective_weight);
+		auto result = GetFontPaths(request.family, legacy_bold, request.italic, characters);
+		if (!result.backend_requested_weight)
+			result.backend_requested_weight = request.effective_weight;
+		return result;
+	}
 };
 
 class LibassFontFileLister final : public IFontFileLister {
@@ -158,6 +243,8 @@ class LibassFontFileLister final : public IFontFileLister {
 	bool collect_match_candidates = false;
 
 public:
+	using IFontFileLister::GetFontPaths;
+
 	LibassFontFileLister(FontCollectorEventSink& event_sink,
 	                     std::unique_ptr<ILibassFontProvider> provider,
 	                     bool collect_match_candidates = false);
@@ -165,9 +252,13 @@ public:
 
 	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic,
 	                              std::vector<uint32_t> const& characters) override;
+	CollectionResult GetFontPaths(aegisub::ass::AssFontRequest const& request,
+	                              std::vector<uint32_t> const& characters) override;
+	FontFileListerMatchKey GetMatchKey(
+		aegisub::ass::AssFontRequest const& request) const override;
 };
 
-class DWriteBridge;
+class GdiFontResolver;
 
 #ifdef _WIN32
 std::unique_ptr<ILibassFontProvider> CreateDWriteLibassFontProvider(
@@ -175,12 +266,20 @@ std::unique_ptr<ILibassFontProvider> CreateDWriteLibassFontProvider(
 	FontProviderOptions const& options = {});
 
 class GdiFontFileLister : public IFontFileLister {
-	std::unique_ptr<DWriteBridge> dwrite_bridge;
+	std::unique_ptr<GdiFontResolver> resolver;
 	std::unordered_multimap<uint32_t, agi::fs::path> index;
-	agi::scoped_holder<HDC> dc;
 	std::string buffer;
+	CollectionResult GetFontPathsImpl(
+		std::string const& facename,
+		int bold,
+		bool italic,
+		int charset,
+		int height,
+		std::vector<uint32_t> const& characters);
 
 public:
+	using IFontFileLister::GetFontPaths;
+
 	/// Constructor
 	/// @param cb Callback for status logging
 	GdiFontFileLister(FontCollectorEventSink &cb);
@@ -193,11 +292,17 @@ public:
 	/// @param characters Characters in this style
 	/// @return Path to the matching font file(s), or empty if not found
 	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters) override;
+	CollectionResult GetFontPaths(aegisub::ass::AssFontRequest const& request,
+	                              std::vector<uint32_t> const& characters) override;
+	FontFileListerMatchKey GetMatchKey(
+		aegisub::ass::AssFontRequest const& request) const override;
 };
 
 #elif defined(__APPLE__)
 
 struct CoreTextFontFileLister : public IFontFileLister {
+	using IFontFileLister::GetFontPaths;
+
 	CoreTextFontFileLister(FontCollectorEventSink &cb);
 
 	/// @brief Get the path to the font with the given styles
@@ -235,6 +340,8 @@ class FontConfigFontFileLister : public IFontFileLister, public ILibassFontProvi
 	/// @return font set
 	FcFontSet *MatchFullname(const char *family, int weight, int slant);
 public:
+	using IFontFileLister::GetFontPaths;
+
 	/// Constructor
 	/// @param cb Callback for status logging
 	FontConfigFontFileLister(FontCollectorEventSink &cb,
@@ -255,6 +362,10 @@ public:
 	/// @param characters Characters in this style
 	/// @return Path to the matching font file(s), or empty if not found
 	CollectionResult GetFontPaths(std::string const& facename, int bold, bool italic, std::vector<uint32_t> const& characters) override;
+	CollectionResult GetFontPaths(aegisub::ass::AssFontRequest const& request,
+	                              std::vector<uint32_t> const& characters) override;
+	FontFileListerMatchKey GetMatchKey(
+		aegisub::ass::AssFontRequest const& request) const override;
 };
 
 #endif
@@ -272,9 +383,8 @@ using FontFileLister = FontConfigFontFileLister;
 class FontCollector {
 	/// All data needed to find the font file used to render text
 	struct StyleInfo {
-		std::string facename;
-		int bold;
-		bool italic;
+		aegisub::ass::AssFontRequest request;
+		aegisub::ass::AssFontStyleBaseline event_style;
 		bool operator<(StyleInfo const& rgt) const;
 	};
 

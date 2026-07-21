@@ -1,19 +1,33 @@
 #pragma once
 
 #include <functional>
+#include <cstdint>
 #include <optional>
 #include <string>
 
-struct FontFamilyCatalogUiModel;
+struct FontFamilySelectionModel;
 class wxWindow;
 namespace agi { struct Context; }
 
 struct FontFaceDialogSelection {
 	std::string face_name;
+	/// Catalog identity for an explicitly selected list item. This disambiguates
+	/// duplicate display aliases without serializing an implementation token.
+	std::optional<std::uint32_t> selected_family_id;
 	int point_size = 10;
+	int charset = 1;
+	/// Effective ASS/GDI weight. Values other than 400/700 are retained until
+	/// the user explicitly changes the variant controls.
+	int effective_weight = 400;
 	bool bold = false;
 	bool italic = false;
 	bool underline = false;
+	bool has_explicit_weight = false;
+	bool has_explicit_italic = false;
+	bool variant_modified = false;
+	bool implicit_variant_pinned = false;
+	bool allow_replace_explicit = false;
+	bool from_native_dialog = false;
 };
 
 /// Show the native wx selector for localized names, or Aegisub's
@@ -27,5 +41,5 @@ std::optional<FontFaceDialogSelection> ShowFontFaceDialog(
 	wxWindow *parent,
 	agi::Context *context,
 	FontFaceDialogSelection const& initial,
-	FontFamilyCatalogUiModel const& font_model,
+	FontFamilySelectionModel const& font_model,
 	std::function<void(FontFaceDialogSelection const&)> on_apply = {});

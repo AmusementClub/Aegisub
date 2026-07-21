@@ -206,3 +206,49 @@ TEST(font_matching_libass, candidate_evidence_distinguishes_glyph_rejection) {
 	EXPECT_EQ(std::vector<uint32_t>{codepoint}, selection.candidates[1].selected_codepoints);
 	EXPECT_FALSE(selection.ambiguous);
 }
+
+TEST(font_matching_libass_family_ranking, selects_best_attributes_in_provider_order) {
+	auto regular = face("Example", 400, false, "regular.ttf");
+	auto bold = face("Example", 700, false, "bold.ttf");
+	std::vector<LibassFontFace> faces{regular, bold};
+	LibassFontRequest request{"Example", 700, false, {}};
+
+	auto ranking = RankLibassFamilyFaces(faces, request);
+	ASSERT_TRUE(ranking.face.has_value());
+	EXPECT_EQ(1u, *ranking.face);
+	EXPECT_FALSE(ranking.ambiguous);
+	EXPECT_FALSE(ranking.used_substitution);
+	ASSERT_EQ(2u, ranking.candidates.size());
+	EXPECT_EQ(0u, ranking.candidates.front().face);
+	EXPECT_EQ(1u, ranking.candidates.back().face);
+}
+
+TEST(font_matching_libass_family_ranking, reports_equal_best_faces_as_ambiguous) {
+	auto first = face("Example", 400, false, "first.ttf");
+	auto second = face("Example", 400, false, "second.ttf");
+	std::vector<LibassFontFace> faces{first, second};
+	LibassFontRequest request{"Example", 400, false, {}};
+
+	auto ranking = RankLibassFamilyFaces(faces, request);
+	ASSERT_TRUE(ranking.face.has_value());
+	EXPECT_EQ(0u, *ranking.face);
+	EXPECT_TRUE(ranking.ambiguous);
+	EXPECT_FALSE(ranking.used_substitution);
+}
+
+TEST(font_matching_libass_family_ranking, marks_only_the_selected_alias_as_substitution) {
+	auto alias = face("Alias", 400, false, "alias.ttf");
+	auto unrelated = face("Other", 400, false, "other.ttf");
+	std::vector<LibassFontFace> faces{alias, unrelated};
+	LibassFontRequest request{"Requested", 400, false, {}};
+
+	auto ranking = RankLibassFamilyFaces(
+		faces, request, [](std::string_view) {
+			return std::vector<std::string>{"Alias"};
+		});
+	ASSERT_TRUE(ranking.face.has_value());
+	EXPECT_EQ(0u, *ranking.face);
+	EXPECT_TRUE(ranking.used_substitution);
+	ASSERT_EQ(1u, ranking.candidates.size());
+	EXPECT_EQ("Alias", ranking.candidates.front().matched_name);
+}

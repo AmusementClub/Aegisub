@@ -220,16 +220,6 @@ std::vector<DWriteLocalizedName> localized_strings_with_locale(IDWriteLocalizedS
 	return values;
 }
 
-IDWriteFont *font_from_logfont(IDWriteGdiInterop *interop, LOGFONTW const &lf) {
-	if (!interop)
-		return nullptr;
-	IDWriteFont *font = nullptr;
-	auto hr = interop->CreateFontFromLOGFONT(&lf, &font);
-	if (FAILED(hr) || !font)
-		return nullptr;
-	return font;
-}
-
 std::vector<std::string> informational_strings(
 	IDWriteFont *font,
 	DWRITE_INFORMATIONAL_STRING_ID id) {
@@ -328,10 +318,12 @@ std::string get_dll_description(HMODULE dll, bool is_dwritecore) {
 
 } // anonymous namespace
 
-DWriteBridge::DWriteBridge() {
+DWriteBridge::DWriteBridge(DWriteBridgeMode mode) {
 	DWriteCreateFactoryFn create_fn = nullptr;
-	dll_handle = try_load_dwrite_core(create_fn);
-	is_dwritecore_ = (dll_handle != nullptr);
+	if (mode != DWriteBridgeMode::SystemOnly) {
+		dll_handle = try_load_dwrite_core(create_fn);
+		is_dwritecore_ = (dll_handle != nullptr);
+	}
 
 	if (!dll_handle) {
 		dll_handle = try_load_system_dwrite(create_fn);
@@ -367,23 +359,6 @@ IDWriteFontFace *DWriteBridge::CreateFontFaceFromHdc(HDC hdc) const {
 
 	IDWriteFontFace *face = nullptr;
 	auto hr = gdi_interop->CreateFontFaceFromHdc(hdc, &face);
-	if (FAILED(hr) || !face)
-		return nullptr;
-	return face;
-}
-
-IDWriteFontFace *DWriteBridge::CreateFontFaceFromLogFont(LOGFONTW const &lf) const {
-	if (!available_ || !gdi_interop)
-		return nullptr;
-
-	IDWriteFont *font = nullptr;
-	auto hr = gdi_interop->CreateFontFromLOGFONT(&lf, &font);
-	if (FAILED(hr) || !font)
-		return nullptr;
-
-	IDWriteFontFace *face = nullptr;
-	hr = font->CreateFontFace(&face);
-	font->Release();
 	if (FAILED(hr) || !face)
 		return nullptr;
 	return face;
@@ -550,115 +525,65 @@ cleanup:
 	return catalog_ready;
 }
 
-std::vector<std::string> DWriteBridge::GetFontFamilyNamesFromLogFont(LOGFONTW const &lf) const {
-	std::vector<std::string> names;
-	if (!available_ || !gdi_interop)
-		return names;
-
-	IDWriteFont *font = font_from_logfont(gdi_interop, lf);
-	if (!font)
-		return names;
-
-	IDWriteFontFamily *family = nullptr;
-	auto hr = font->GetFontFamily(&family);
-	font->Release();
-	if (FAILED(hr) || !family)
-		return names;
-
-	IDWriteLocalizedStrings *family_names = nullptr;
-	hr = family->GetFamilyNames(&family_names);
-	family->Release();
-	if (FAILED(hr) || !family_names)
-		return names;
-
-	names = localized_strings_to_utf8(family_names);
-	family_names->Release();
-	return names;
-}
-
-std::vector<DWriteLocalizedName> DWriteBridge::GetWin32FamilyNamesFromLogFont(LOGFONTW const &lf) const {
-	if (!available_ || !gdi_interop)
-		return {};
-
-	IDWriteFont *font = font_from_logfont(gdi_interop, lf);
-	if (!font)
-		return {};
-	auto names = win32_family_names(font);
-	font->Release();
-	return names;
-}
-
 std::vector<DWriteLocalizedName> DWriteBridge::GetWin32FamilyNamesFromFont(IDWriteFont *font) const {
 	return win32_family_names(font);
 }
 
-bool DWriteBridge::ResolveEntityAndNamesViaHdc(LOGFONTW const& lf,
-                                               std::string& out_path,
-                                               int& out_face_index,
-                                               std::vector<DWriteLocalizedName>& out_win32_names) const {
-	out_path.clear();
-	out_face_index = -1;
-	out_win32_names.clear();
-
-	if (!available_ || !gdi_interop)
-		return false;
-
-	// The caller supplies a LOGFONT already built via gdi_select_face. We
-	// materialize it into an HFONT and select it into a temporary HDC, then
-	// let DWrite read the currently-selected physical font via HDC interop.
-	HDC hdc = CreateCompatibleDC(nullptr);
-	if (!hdc)
-		return false;
-	HFONT hfont = CreateFontIndirectW(&lf);
-	if (!hfont) {
-		DeleteDC(hdc);
-		return false;
-	}
-	HGDIOBJ prev = SelectObject(hdc, hfont);
-	if (!prev || prev == HGDI_ERROR) {
-		DeleteObject(hfont);
-		DeleteDC(hdc);
-		return false;
-	}
-
-	auto release_all = agi::make_scope_exit([&] {
-		SelectObject(hdc, prev);
-		DeleteObject(hfont);
-		DeleteDC(hdc);
-	});
-
-	IDWriteFontFace *face = CreateFontFaceFromHdc(hdc);
+std::vector<DWriteLocalizedName> DWriteBridge::GetWin32FamilyNamesFromFace(IDWriteFontFace *face) const {
 	if (!face)
-		return false;
-	auto release_face = agi::make_scope_exit([&] { face->Release(); });
+		return {};
 
-	// Resolve file path + face index (same path as GetFontFilePath).
-	int idx = -1;
-	if (!GetFontFilePath(face, out_path, idx) || out_path.empty())
-		return false;
-	out_face_index = idx >= 0 ? idx : static_cast<int>(face->GetIndex());
-
-	// QI to IDWriteFontFace3 (Win10 1809+) to read informational strings
-	// directly from the face. The base IDWriteFontFace interface lacks this.
-	// This avoids any FontCollection reverse lookup — the face itself
-	// carries its WIN32_FAMILY_NAMES.
+	// IDWriteFontFace does not expose informational strings directly. The
+	// face3 interface does, and unlike CreateFontFromLOGFONT this reads the
+	// exact physical face selected by the HDC interop call.
 	IDWriteFontFace3 *face3 = nullptr;
-	auto hr = face->QueryInterface(&face3);
-	if (FAILED(hr) || !face3)
-		return false;
+	if (FAILED(face->QueryInterface(&face3)) || !face3)
+		return {};
 	auto release_face3 = agi::make_scope_exit([&] { face3->Release(); });
 
-	IDWriteLocalizedStrings *strs = nullptr;
+	IDWriteLocalizedStrings *strings = nullptr;
 	BOOL exists = FALSE;
-	hr = face3->GetInformationalStrings(DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES, &strs, &exists);
-	if (FAILED(hr) || !exists || !strs) {
-		if (strs) strs->Release();
-		return false;
+	auto hr = face3->GetInformationalStrings(
+		DWRITE_INFORMATIONAL_STRING_WIN32_FAMILY_NAMES, &strings, &exists);
+	if (FAILED(hr) || !exists || !strings) {
+		if (strings)
+			strings->Release();
+		return {};
 	}
-	out_win32_names = localized_strings_with_locale(strs);
-	strs->Release();
+	auto names = localized_strings_with_locale(strings);
+	strings->Release();
+	return names;
+}
 
-	return !out_win32_names.empty();
+namespace {
+std::vector<DWriteLocalizedName> informational_names_from_face(
+	IDWriteFontFace *face, DWRITE_INFORMATIONAL_STRING_ID id) {
+	if (!face)
+		return {};
+	IDWriteFontFace3 *face3 = nullptr;
+	if (FAILED(face->QueryInterface(&face3)) || !face3)
+		return {};
+	IDWriteLocalizedStrings *strings = nullptr;
+	BOOL exists = FALSE;
+	auto hr = face3->GetInformationalStrings(id, &strings, &exists);
+	face3->Release();
+	if (FAILED(hr) || !exists || !strings) {
+		if (strings)
+			strings->Release();
+		return {};
+	}
+	auto result = localized_strings_with_locale(strings);
+	strings->Release();
+	return result;
+}
+}
+
+std::vector<DWriteLocalizedName> DWriteBridge::GetFullNamesFromFace(IDWriteFontFace *face) const {
+	return informational_names_from_face(face, DWRITE_INFORMATIONAL_STRING_FULL_NAME);
+}
+
+std::vector<DWriteLocalizedName> DWriteBridge::GetPostScriptNamesFromFace(IDWriteFontFace *face) const {
+	return informational_names_from_face(face, DWRITE_INFORMATIONAL_STRING_POSTSCRIPT_NAME);
 }
 
 std::vector<std::string> DWriteBridge::GetFullNamesFromFont(IDWriteFont *font) const {
@@ -861,7 +786,7 @@ bool DWriteBridge::GetFontFilePath(IDWriteFontFace *face, std::string &out_path,
 	if (FAILED(hr))
 		return false;
 
-	// DWrite may return the path in all-caps (e.g. C:\WINDOWS\FONTS\ARIAL.TTF).
+	// DWrite may return a font path with different casing than the filesystem.
 	{
 		std::wstring fixed;
 		fixed.reserve(path_len);

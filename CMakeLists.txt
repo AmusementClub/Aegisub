@@ -867,10 +867,17 @@ set(AEGISUB_CORE_SOURCES
     # Fonts (cross-platform core)
     src/font_collector_core.cpp
     src/font_collector_unicode.cpp
+    src/ass_font_state.cpp
     src/font_face_selection.cpp
     src/font_family_catalog.cpp
+    src/font_family_catalog_source.cpp
+    src/font_family_selection_model.cpp
     src/font_family_catalog_cache.cpp
+    src/font_variant_policy.cpp
+    src/font_variant_audit.cpp
+    src/font_variant_resolver.cpp
     src/font_name_normalization.cpp
+    src/font_portability_audit.cpp
     src/font_file_lister.cpp
     src/font_file_lister_libass.cpp
     src/font_matching_common.cpp
@@ -1090,7 +1097,7 @@ add_executable(Aegisub WIN32
     src/dialog_export.cpp
     src/dialog_export_ebu3264.cpp
     src/dialog_font_face.cpp
-    src/dialog_font_name_normalization.cpp
+    src/dialog_font_portability_audit.cpp
     src/dialog_fonts_collector.cpp
     src/dialog_jumpto.cpp
     src/dialog_kara_timing_copy.cpp
@@ -1379,7 +1386,9 @@ if(WIN32)
     target_sources(aegisub_core PRIVATE
         src/font_file_lister_gdi.cpp
         src/font_file_lister_dwrite.cpp
-        src/font_family_catalog_win.cpp)
+        src/gdi_font_resolver.cpp
+        src/font_family_catalog_win.cpp
+        src/font_variant_resolver_win.cpp)
     target_link_libraries(aegisub_core PRIVATE Usp10 dwrite Version)
 elseif(APPLE)
     # Platform: CoreText always. Libass matcher: optional Fontconfig catalog

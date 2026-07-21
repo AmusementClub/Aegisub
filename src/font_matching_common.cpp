@@ -15,13 +15,17 @@
 #include <cstdlib>
 #include <utility>
 
-FontMatchRequest NormalizeAssFontRequest(std::string facename, int bold, bool italic) {
+int NormalizeLibassAssWeight(int bold) noexcept {
+	return (bold == 1 || bold == -1) ? 700 : bold <= 0 ? 400 : bold;
+}
+
+FontMatchRequest NormalizeLibassFontRequest(std::string facename, int bold, bool italic) {
 	if (!facename.empty() && facename[0] == '@')
 		facename.erase(0, 1);
 
 	FontMatchRequest request;
 	request.facename = std::move(facename);
-	request.requested_weight = (bold == 1 || bold == -1) ? 700 : bold <= 0 ? 400 : bold;
+	request.requested_weight = NormalizeLibassAssWeight(bold);
 	request.requested_italic_value = italic ? 100 : 0;
 	request.requested_italic = italic;
 	return request;

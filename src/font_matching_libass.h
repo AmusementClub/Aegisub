@@ -63,6 +63,20 @@ struct LibassFontSelection {
 	bool ambiguous = false;
 };
 
+struct LibassRankedFamilyFace {
+	size_t face = 0;
+	std::string matched_name;
+	LibassFontNameMatch name_match = LibassFontNameMatch::Family;
+	int score = 0;
+};
+
+struct LibassFamilyFaceRanking {
+	std::optional<size_t> face;
+	std::vector<LibassRankedFamilyFace> candidates;
+	bool ambiguous = false;
+	bool used_substitution = false;
+};
+
 using LibassGlyphChecker = std::function<bool(size_t face_index, uint32_t codepoint)>;
 using LibassFamilySubstituter = std::function<std::vector<std::string>(std::string_view family)>;
 using LibassFallbackResolver =
@@ -81,6 +95,14 @@ public:
 };
 
 int LibassFontAttributesSimilarity(LibassFontFace const& face, LibassFontRequest const& request);
+
+/// Rank one requested family without glyph fallback. This models libass's
+/// family/name and attribute stages for variant diagnostics; it is not runtime
+/// renderer introspection and therefore supplies algorithmic evidence only.
+LibassFamilyFaceRanking RankLibassFamilyFaces(
+	std::span<LibassFontFace const> faces,
+	LibassFontRequest const& request,
+	LibassFamilySubstituter const& substitute_family = {});
 
 LibassFontSelection SelectLibassFontFaces(
 	std::span<LibassFontFace const> faces,

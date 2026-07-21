@@ -52,7 +52,7 @@
         { "command" : "subtitle/properties" },
         { "command" : "subtitle/attachment" },
         { "command" : "tool/font_collector" },
-        { "command" : "tool/font_collector/normalize" },
+        { "command" : "tool/font_portability_audit" },
         {},
         { "command" : "app/new_window" },
         { "command" : "app/exit", "special" : "exit" }

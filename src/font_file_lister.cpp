@@ -17,7 +17,6 @@
 
 #include "font_file_lister.h"
 
-#include "ass_compat.h"
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "ass_style.h"
@@ -159,10 +158,52 @@ void MergeSortedCodepointsInto(std::vector<uint32_t>& destination, std::vector<u
 	destination.swap(merged);
 }
 
-int RequestedWeightForStyle(int bold) {
-	return bold == 0 ? 400 :
-	       bold == 1 ? 700 :
-	                   bold;
+bool IsFontAffectingTag(std::string_view name) {
+	return name == "\\fn" || name == "\\b" || name == "\\i" ||
+	       name == "\\fe" || name == "\\fs" || name == "\\r";
+}
+
+bool TransformContainsFontTag(AssOverrideTag const& tag) {
+	if (tag.Name != "\\t" || tag.Params.size() <= 3 ||
+	    tag.Params[3].omitted || tag.Params[3].empty)
+		return false;
+
+	auto *nested = tag.Params[3].Get<AssDialogueBlockOverride*>();
+	if (!nested)
+		return false;
+	for (auto const& nested_tag : nested->Tags) {
+		if (IsFontAffectingTag(nested_tag.Name) || TransformContainsFontTag(nested_tag))
+			return true;
+	}
+	return false;
+}
+
+bool IsImplicitVariantFallback(
+	aegisub::ass::AssFontRequest const& request,
+	CollectionResult const& result) {
+	auto const requested_regular = request.effective_weight == aegisub::ass::DefaultFontWeight;
+
+	if (result.realized_status) {
+		if (*result.realized_status != FontVariantStatus::Canonical)
+			return false;
+
+		auto const role = result.realized_role.value_or(FontVariantRole::Unknown);
+		auto const realized_bold = role == FontVariantRole::Bold ||
+		                           role == FontVariantRole::BoldItalic;
+		auto const realized_italic = role == FontVariantRole::Italic ||
+		                             role == FontVariantRole::BoldItalic;
+		return (realized_bold && requested_regular && !request.has_explicit_bold) ||
+		       (realized_italic && !request.italic && !request.has_explicit_italic);
+	}
+
+	if (result.matched_bold || result.matched_italic) {
+		return (result.matched_bold && requested_regular && !request.has_explicit_bold) ||
+		       (result.matched_italic && !request.italic && !request.has_explicit_italic);
+	}
+
+	// Preserve the signal of legacy/custom listers which cannot expose enough
+	// realized-face metadata for the collector to derive it independently.
+	return result.implicit_variant_fallback;
 }
 
 int SourceLineNumber(AssDialogue const& line, int dialogue_index) {
@@ -196,9 +237,12 @@ FontCollector::FontCollector(FontCollectorEventSink event_sink, IFontFileLister&
 
 FontCollector::StyleInfo FontCollector::MakeStyleInfo(AssStyle const& style) const {
 	StyleInfo info;
-	info.facename = style.font;
-	info.bold = style.bold;
-	info.italic = style.italic;
+	info.event_style = aegisub::ass::MakeAssFontStyleBaseline(style);
+	info.request.family = info.event_style.family;
+	info.request.effective_weight = info.event_style.weight;
+	info.request.italic = info.event_style.italic;
+	info.request.charset = info.event_style.charset;
+	info.request.height = info.event_style.height;
 	return info;
 }
 
@@ -236,79 +280,74 @@ bool FontCollector::ForEachLineTextSpan(AssFile const& file, AssDialogue const& 
 		return false;
 	}
 
-	StyleInfo style = MakeStyleInfo(*initial_style);
-	StyleInfo initial = style;
-	bool style_valid = true;
+	auto const event_style = aegisub::ass::MakeAssFontStyleBaseline(*initial_style);
+	aegisub::ass::AssFontStateEvaluator font_state(event_style);
 
 	bool overriden = false;
 	int active_wrap_style = wrap_style;
 	int active_drawing_level = 0;
 
-	auto process_tags = [&](auto&& self, std::vector<AssOverrideTag> const& tags) -> void {
-			for (auto const& tag : tags) {
-				if (tag.Name == "\\r") {
-					auto const& param = tag.Params[0];
-					if (param.omitted || param.empty) {
-						style = initial;
-						style_valid = true;
-						overriden = false;
-					}
-					else {
-						auto style_name = param.Get<std::string>();
-						auto *reset_style = aegisub::ass_style_resolution::ResolveResetStyle(file, style_name);
-						if (reset_style) {
-							style = MakeStyleInfo(*reset_style);
-							style_valid = true;
-							overriden = false;
-						}
-						else {
-							style_valid = false;
-							overriden = false;
-							if (missing_style_lines)
-								RecordMissingStyle(*missing_style_lines, style_name, line_index);
-						}
-					}
-				}
-				else if (tag.Name == "\\b") {
-					if (!style_valid)
-						continue;
-					style.bold = tag.Params[0].Get(initial.bold);
-					overriden = true;
-				}
-				else if (tag.Name == "\\i") {
-					if (!style_valid)
-						continue;
-					style.italic = tag.Params[0].Get(initial.italic);
-					overriden = true;
-				}
-				else if (tag.Name == "\\fn") {
-					if (!style_valid)
-						continue;
-					style.facename = tag.Params[0].Get(initial.facename);
-					overriden = true;
-				}
-				else if (tag.Name == "\\q") {
-					auto value = tag.Params[0].Get(wrap_style);
-					active_wrap_style = value >= 0 && value <= 3 ? value : wrap_style;
-				}
-				else if (tag.Name == "\\p") {
-					auto value = tag.Params[0].Get(0);
-					active_drawing_level = value > 0 ? value : 0;
-				}
-				else if (tag.Name == "\\t" && tag.Params.size() > 3 &&
-				         !tag.Params[3].omitted && !tag.Params[3].empty) {
-					// libass applies font-affecting tags nested in \t, including
-					// \fn/\b/\i/\r, even though most transforms are animated.
-					if (auto *nested = tag.Params[3].Get<AssDialogueBlockOverride*>())
-						self(self, nested->Tags);
-				}
+	aegisub::ass::AssFontResetStyleResolver resolve_reset_style =
+		[&](std::string_view style_name) -> std::optional<aegisub::ass::AssFontStyleBaseline> {
+			auto *reset_style = aegisub::ass_style_resolution::ResolveResetStyle(
+				file, std::string(style_name));
+			if (!reset_style) {
+				if (missing_style_lines)
+					RecordMissingStyle(*missing_style_lines, std::string(style_name), line_index);
+				return std::nullopt;
 			}
+			return aegisub::ass::MakeAssFontStyleBaseline(*reset_style);
+		};
+
+	auto process_transform_controls = [&](auto&& self, std::vector<AssOverrideTag> const& tags) -> void {
+		for (auto const& tag : tags) {
+			if (tag.Name == "\\q") {
+				auto value = tag.Params[0].Get(wrap_style);
+				active_wrap_style = value >= 0 && value <= 3 ? value : wrap_style;
+			}
+			else if (tag.Name == "\\p") {
+				auto value = tag.Params[0].Get(0);
+				active_drawing_level = value > 0 ? value : 0;
+			}
+			else if (tag.Name == "\\t" && tag.Params.size() > 3 &&
+			         !tag.Params[3].omitted && !tag.Params[3].empty) {
+				if (auto *nested = tag.Params[3].Get<AssDialogueBlockOverride*>())
+					self(self, nested->Tags);
+			}
+		}
+	};
+
+	auto process_tags = [&](std::vector<AssOverrideTag> const& tags) {
+		for (auto const& tag : tags) {
+			if (tag.Name == "\\q") {
+				auto value = tag.Params[0].Get(wrap_style);
+				active_wrap_style = value >= 0 && value <= 3 ? value : wrap_style;
+				continue;
+			}
+			if (tag.Name == "\\p") {
+				auto value = tag.Params[0].Get(0);
+				active_drawing_level = value > 0 ? value : 0;
+				continue;
+			}
+
+			font_state.ApplyTag(tag, resolve_reset_style);
+			if (tag.Name == "\\t" && tag.Params.size() > 3 &&
+			    !tag.Params[3].omitted && !tag.Params[3].empty) {
+				if (auto *nested = tag.Params[3].Get<AssDialogueBlockOverride*>())
+					process_transform_controls(process_transform_controls, nested->Tags);
+			}
+			if (tag.Name == "\\r")
+				overriden = false;
+			else if (font_state.IsValid() &&
+			         (IsFontAffectingTag(tag.Name) || TransformContainsFontTag(tag)))
+				overriden = true;
+		}
 	};
 
 	for (auto& block : line.ParseTags()) {
 		switch (block->GetType()) {
 		case AssBlockType::OVERRIDE:
-			process_tags(process_tags, static_cast<AssDialogueBlockOverride&>(*block).Tags);
+			process_tags(static_cast<AssDialogueBlockOverride&>(*block).Tags);
 			break;
 		case AssBlockType::PLAIN:
 		case AssBlockType::DRAWING: {
@@ -316,9 +355,12 @@ bool FontCollector::ForEachLineTextSpan(AssFile const& file, AssDialogue const& 
 				break;
 			auto text = TextBlockView(*block);
 
-			if (text.empty() || !style_valid)
+			if (text.empty() || !font_state.IsValid())
 				continue;
 
+			StyleInfo style;
+			style.request = font_state.Request();
+			style.event_style = event_style;
 			if (callback(style, overriden, active_wrap_style, text))
 				return true;
 			break;
@@ -405,7 +447,14 @@ FontCollector::ResolvedUsage FontCollector::ResolveMergedUsage(StyleInfo const& 
 		return resolved;
 
 	auto& res = resolved.result;
-	res = lister->GetFontPaths(style.facename, style.bold, style.italic, codepoints);
+	res = lister->GetFontPaths(style.request, codepoints);
+	if (!res.backend_requested_weight)
+		res.backend_requested_weight = style.request.effective_weight;
+	if (!res.noncanonical_variant && res.matched_weight != 0 &&
+	    res.matched_weight != 400 && res.matched_weight != 700)
+		res.noncanonical_variant = true;
+	if (res.realized_status && *res.realized_status != FontVariantStatus::Canonical)
+		res.noncanonical_variant = true;
 	for (auto& path : res.paths)
 		path.make_preferred();
 
@@ -417,16 +466,35 @@ void FontCollector::ApplyResolvedFontUsage(FileAnalysis& analysis, StyleInfo con
                                            ResolvedUsage const& resolved, std::vector<MissingGlyphQuery>& missing_queries) {
 	if (data.codepoints.empty()) return;
 
-	auto const requested_weight = RequestedWeightForStyle(style.bold);
+	auto const& request = style.request;
+	auto const requested_weight = request.effective_weight;
 	auto const& res = resolved.result;
+	auto const implicit_variant_fallback = IsImplicitVariantFallback(request, res);
 	auto missing_codepoints = IntersectSortedCodepoints(data.codepoints, resolved.missing_codepoints);
 	auto missing_text = EncodeCodepointsToUtf8(missing_codepoints);
 
 	if (analysis.details) {
 		auto& usage = analysis.details->fonts.emplace_back();
-		usage.ass_facename = style.facename;
-		usage.ass_bold = style.bold;
-		usage.ass_italic = style.italic;
+		usage.ass_facename = request.family;
+		usage.ass_bold = aegisub::ass::LegacyAssBoldArgument(request);
+		usage.ass_italic = request.italic;
+		usage.ass_effective_weight = request.effective_weight;
+		usage.ass_charset = request.charset;
+		usage.ass_height = request.height;
+		usage.ass_raw_bold_tag = request.raw_bold_tag;
+		usage.ass_raw_italic_tag = request.raw_italic_tag;
+		usage.ass_raw_charset_tag = request.raw_charset_tag;
+		usage.ass_raw_height_tag = request.raw_height_tag;
+		usage.ass_has_explicit_family = request.has_explicit_family;
+		usage.ass_has_explicit_bold = request.has_explicit_bold;
+		usage.ass_has_explicit_italic = request.has_explicit_italic;
+		usage.ass_has_explicit_charset = request.has_explicit_charset;
+		usage.ass_has_explicit_height = request.has_explicit_height;
+		usage.baseline_facename = style.event_style.family;
+		usage.baseline_weight = style.event_style.weight;
+		usage.baseline_italic = style.event_style.italic;
+		usage.baseline_charset = style.event_style.charset;
+		usage.baseline_height = style.event_style.height;
 		usage.codepoints = data.codepoints;
 		usage.styles = data.styles;
 		usage.lines = data.lines;
@@ -446,6 +514,11 @@ void FontCollector::ApplyResolvedFontUsage(FileAnalysis& analysis, StyleInfo con
 		usage.matched.missing_text = missing_text;
 		usage.matched.missing_codepoints = missing_codepoints;
 		usage.matched.requested_weight = res.requested_weight;
+		usage.matched.backend_requested_weight = res.backend_requested_weight;
+		usage.matched.realized_role = res.realized_role;
+		usage.matched.realized_status = res.realized_status;
+		usage.matched.implicit_variant_fallback = implicit_variant_fallback;
+		usage.matched.noncanonical_variant = res.noncanonical_variant;
 		usage.matched.match_candidates = res.match_candidates;
 		usage.matched.match_ambiguous = res.match_ambiguous;
 
@@ -454,9 +527,9 @@ void FontCollector::ApplyResolvedFontUsage(FileAnalysis& analysis, StyleInfo con
 	auto make_event = [&](FontCollectorEventType type) {
 		FontCollectorEvent event;
 		event.type = type;
-		event.face = style.facename;
+		event.face = request.family;
 		event.requested_weight = requested_weight;
-		event.requested_italic = style.italic ? 1 : 0;
+		event.requested_italic = request.italic ? 1 : 0;
 		return event;
 	};
 
@@ -547,9 +620,25 @@ void FontCollector::StoreMissingGlyphLines(FontCollectorDetails *details, std::v
 			continue;
 
 		for (auto& usage : details->fonts) {
-			if (usage.ass_facename == query.style.facename &&
-			    usage.ass_bold == query.style.bold &&
-			    usage.ass_italic == query.style.italic) {
+			if (usage.ass_facename == query.style.request.family &&
+			    usage.ass_effective_weight == query.style.request.effective_weight &&
+			    usage.ass_italic == query.style.request.italic &&
+			    usage.ass_charset == query.style.request.charset &&
+			    usage.ass_height == query.style.request.height &&
+			    usage.ass_raw_bold_tag == query.style.request.raw_bold_tag &&
+			    usage.ass_raw_italic_tag == query.style.request.raw_italic_tag &&
+			    usage.ass_raw_charset_tag == query.style.request.raw_charset_tag &&
+			    usage.ass_raw_height_tag == query.style.request.raw_height_tag &&
+			    usage.ass_has_explicit_family == query.style.request.has_explicit_family &&
+			    usage.ass_has_explicit_bold == query.style.request.has_explicit_bold &&
+			    usage.ass_has_explicit_italic == query.style.request.has_explicit_italic &&
+			    usage.ass_has_explicit_charset == query.style.request.has_explicit_charset &&
+			    usage.ass_has_explicit_height == query.style.request.has_explicit_height &&
+			    usage.baseline_facename == query.style.event_style.family &&
+			    usage.baseline_weight == query.style.event_style.weight &&
+			    usage.baseline_italic == query.style.event_style.italic &&
+			    usage.baseline_charset == query.style.event_style.charset &&
+			    usage.baseline_height == query.style.event_style.height) {
 				usage.matched.missing_lines = query.matching_lines;
 				break;
 			}
@@ -644,16 +733,33 @@ std::vector<std::vector<agi::fs::path>> FontCollector::GetFontPaths(std::vector<
 		Emit(analysis.event_sink, std::move(event));
 	}
 
-	std::map<StyleInfo, std::vector<uint32_t>> merged_codepoints;
+	struct MergedMatchUsage {
+		StyleInfo representative;
+		std::vector<uint32_t> codepoints;
+	};
+
+	std::map<StyleInfo, FontFileListerMatchKey> match_keys;
+	std::map<FontFileListerMatchKey, MergedMatchUsage> merged_matches;
 	for (auto const& analysis : analyses) {
-		for (auto const& [style, data] : analysis.used_styles)
-			MergeSortedCodepointsInto(merged_codepoints[style], data.codepoints);
+		for (auto const& [style, data] : analysis.used_styles) {
+			if (data.codepoints.empty())
+				continue;
+
+			auto [key_it, inserted] = match_keys.try_emplace(style);
+			if (inserted)
+				key_it->second = lister->GetMatchKey(style.request);
+
+			auto [match_it, new_match] = merged_matches.try_emplace(key_it->second);
+			if (new_match)
+				match_it->second.representative = style;
+			MergeSortedCodepointsInto(match_it->second.codepoints, data.codepoints);
+		}
 	}
 
-	std::map<StyleInfo, ResolvedUsage> resolved;
-	for (auto const& [style, codepoints] : merged_codepoints) {
-		if (!codepoints.empty())
-			resolved.emplace(style, ResolveMergedUsage(style, codepoints));
+	std::map<FontFileListerMatchKey, ResolvedUsage> resolved;
+	for (auto const& [key, usage] : merged_matches) {
+		if (!usage.codepoints.empty())
+			resolved.emplace(key, ResolveMergedUsage(usage.representative, usage.codepoints));
 	}
 
 	std::vector<std::vector<agi::fs::path>> paths_by_file;
@@ -661,7 +767,10 @@ std::vector<std::vector<agi::fs::path>> FontCollector::GetFontPaths(std::vector<
 	for (auto& analysis : analyses) {
 		std::vector<MissingGlyphQuery> missing_queries;
 		for (auto& [style, data] : analysis.used_styles) {
-			auto resolved_it = resolved.find(style);
+			auto key_it = match_keys.find(style);
+			if (key_it == end(match_keys))
+				continue;
+			auto resolved_it = resolved.find(key_it->second);
 			if (resolved_it != end(resolved))
 				ApplyResolvedFontUsage(analysis, style, data, resolved_it->second, missing_queries);
 		}
@@ -704,5 +813,44 @@ std::vector<std::vector<agi::fs::path>> FontCollector::GetFontPaths(std::vector<
 }
 
 bool FontCollector::StyleInfo::operator<(StyleInfo const& rgt) const {
-	return std::tie(facename, bold, italic) < std::tie(rgt.facename, rgt.bold, rgt.italic);
+	return std::tie(
+		request.family,
+		request.effective_weight,
+		request.italic,
+		request.charset,
+		request.height,
+		request.raw_bold_tag,
+		request.raw_italic_tag,
+		request.raw_charset_tag,
+		request.raw_height_tag,
+		request.has_explicit_family,
+		request.has_explicit_bold,
+		request.has_explicit_italic,
+		request.has_explicit_charset,
+		request.has_explicit_height,
+		event_style.family,
+		event_style.weight,
+		event_style.italic,
+		event_style.charset,
+		event_style.height) <
+		std::tie(
+			rgt.request.family,
+			rgt.request.effective_weight,
+			rgt.request.italic,
+			rgt.request.charset,
+			rgt.request.height,
+			rgt.request.raw_bold_tag,
+			rgt.request.raw_italic_tag,
+			rgt.request.raw_charset_tag,
+			rgt.request.raw_height_tag,
+			rgt.request.has_explicit_family,
+			rgt.request.has_explicit_bold,
+			rgt.request.has_explicit_italic,
+			rgt.request.has_explicit_charset,
+			rgt.request.has_explicit_height,
+			rgt.event_style.family,
+			rgt.event_style.weight,
+			rgt.event_style.italic,
+			rgt.event_style.charset,
+			rgt.event_style.height);
 }

@@ -138,6 +138,7 @@ set(AEGISUB_FONTCOLLECTOR_SOURCES
     ${AEGISUB_ROOT}/src/ass_dialogue.cpp
     ${AEGISUB_ROOT}/src/ass_entry.cpp
     ${AEGISUB_ROOT}/src/ass_file.cpp
+    ${AEGISUB_ROOT}/src/ass_font_state.cpp
     ${AEGISUB_ROOT}/src/ass_io_core.cpp
     ${AEGISUB_ROOT}/src/ass_override.cpp
     ${AEGISUB_ROOT}/src/ass_parser.cpp
@@ -210,6 +211,7 @@ function(aegisub_fontcollector_configure_library target_name linkage)
         # Platform: GDI/DirectWrite. Libass: DirectWrite. No Fontconfig.
         target_sources(${target_name} PRIVATE
             ${AEGISUB_ROOT}/src/font_family_catalog_win.cpp
+            ${AEGISUB_ROOT}/src/gdi_font_resolver.cpp
             ${AEGISUB_ROOT}/src/font_file_lister_gdi.cpp
             ${AEGISUB_ROOT}/src/font_file_lister_dwrite.cpp)
         if(linkage STREQUAL "STATIC")

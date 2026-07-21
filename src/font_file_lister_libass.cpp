@@ -34,6 +34,53 @@ std::string NameMatchName(LibassFontNameMatch match) {
 	}
 	return "family";
 }
+
+struct LibassVariantMetadata {
+	FontVariantRole role = FontVariantRole::Unknown;
+	FontVariantStatus status = FontVariantStatus::Unknown;
+	bool matched_bold = false;
+	bool matched_italic = false;
+};
+
+LibassVariantMetadata ClassifyLibassVariant(
+	LibassFontFace const& face,
+	bool fake_bold,
+	bool fake_italic) {
+	LibassVariantMetadata result;
+	bool const canonical_weight =
+		face.weight == aegisub::ass::DefaultFontWeight ||
+		face.weight == aegisub::ass::BoldFontWeight;
+	bool const expected_bold = face.weight == aegisub::ass::BoldFontWeight;
+	// Italic is useful as a diagnostic even when weight metadata makes the
+	// variant non-canonical or synthetic. Automatic pinning still requires the
+	// canonical status below.
+	result.matched_italic = face.italic;
+	bool const metadata_consistent = canonical_weight && face.bold == expected_bold;
+	if (!metadata_consistent) {
+		// Numeric weights outside the ASS RBIZ pair and conflicting OS/2/style
+		// metadata are diagnostic-only. In particular, never turn 800/900 into
+		// a boolean Bold result for the collector's implicit-fallback heuristic.
+		result.status = FontVariantStatus::NonCanonical;
+		return result;
+	}
+	if (fake_bold || fake_italic) {
+		result.status = FontVariantStatus::Synthetic;
+		return result;
+	}
+
+	bool const bold = expected_bold;
+	if (bold && face.italic)
+		result.role = FontVariantRole::BoldItalic;
+	else if (bold)
+		result.role = FontVariantRole::Bold;
+	else if (face.italic)
+		result.role = FontVariantRole::Italic;
+	else
+		result.role = FontVariantRole::Regular;
+	result.status = FontVariantStatus::Canonical;
+	result.matched_bold = bold;
+	return result;
+}
 }
 
 LibassFontFileLister::LibassFontFileLister(
@@ -45,11 +92,26 @@ LibassFontFileLister::LibassFontFileLister(
 {
 	FontCollectorEvent event;
 	event.type = FontCollectorEventType::FontBackendInfo;
-	event.message = "libass selector (" + std::string(this->provider->GetLibassProviderName()) + " provider)";
+	event.message = this->provider
+		? "libass selector (" + std::string(this->provider->GetLibassProviderName()) + " provider)"
+		: "libass selector (unavailable provider)";
 	Emit(event_sink, std::move(event));
 }
 
 LibassFontFileLister::~LibassFontFileLister() = default;
+
+FontFileListerMatchKey LibassFontFileLister::GetMatchKey(
+	aegisub::ass::AssFontRequest const& request) const {
+	auto normalized = NormalizeLibassFontRequest(
+		request.family,
+		aegisub::ass::LegacyAssBoldArgument(request),
+		request.italic);
+	return {
+		std::move(normalized.facename),
+		normalized.requested_weight,
+		normalized.requested_italic,
+	};
+}
 
 CollectionResult LibassFontFileLister::GetFontPaths(
 	std::string const& facename,
@@ -57,17 +119,20 @@ CollectionResult LibassFontFileLister::GetFontPaths(
 	bool italic,
 	std::vector<uint32_t> const& characters) {
 	CollectionResult result;
-	auto const faces = provider->GetLibassFaces();
-	if (faces.empty())
-		return result;
-
-	auto normalized = NormalizeAssFontRequest(facename, bold, italic);
+	auto normalized = NormalizeLibassFontRequest(facename, bold, italic);
 	LibassFontRequest request;
 	request.family = std::move(normalized.facename);
 	request.weight = normalized.requested_weight;
 	request.italic = normalized.requested_italic;
 	request.default_family = "Sans";
 	result.requested_weight = request.weight;
+	result.backend_requested_weight = request.weight;
+	if (!provider)
+		return result;
+
+	auto const faces = provider->GetLibassFaces();
+	if (faces.empty())
+		return result;
 
 	auto selection = SelectLibassFontFaces(
 		faces,
@@ -123,10 +188,16 @@ CollectionResult LibassFontFileLister::GetFontPaths(
 	result.matched_names = first.families;
 	result.face_index = first.face_index;
 	result.matched_weight = first.weight;
-	result.matched_bold = first.bold;
-	result.matched_italic = first.italic;
 	result.fake_bold = request.weight > first.weight + 150 && !first.bold;
 	result.fake_italic = request.italic && !first.italic;
+	auto const variant = ClassifyLibassVariant(
+		first, result.fake_bold, result.fake_italic);
+	result.matched_bold = variant.matched_bold;
+	result.matched_italic = variant.matched_italic;
+	result.realized_status = variant.status;
+	if (variant.role != FontVariantRole::Unknown)
+		result.realized_role = variant.role;
+	result.noncanonical_variant = variant.status != FontVariantStatus::Canonical;
 	result.path_source = "libass-" + std::string(provider->GetLibassProviderName());
 
 	for (auto index : selection.faces) {
@@ -147,5 +218,18 @@ CollectionResult LibassFontFileLister::GetFontPaths(
 			result.paths.push_back(std::move(path));
 	}
 
+	return result;
+}
+
+CollectionResult LibassFontFileLister::GetFontPaths(
+	aegisub::ass::AssFontRequest const& request,
+	std::vector<uint32_t> const& characters) {
+	auto result = GetFontPaths(
+		request.family,
+		aegisub::ass::LegacyAssBoldArgument(request),
+		request.italic,
+		characters);
+	if (!result.backend_requested_weight)
+		result.backend_requested_weight = result.requested_weight;
 	return result;
 }

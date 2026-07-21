@@ -27,13 +27,20 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 #include <wx/dialog.h>
 
 class AssStyle;
 class AssStyleStorage;
-struct FontFamilyCatalogUiModel;
+struct FontFamilyCatalog;
+struct FontFamilyRecord;
+struct FontVariantChoice;
+struct FontFamilySelectionModel;
+class FontNameComboBox;
 class PersistLocation;
 class SubtitlesPreview;
 class wxArrayString;
@@ -41,8 +48,11 @@ class wxCheckBox;
 class wxChildFocusEvent;
 class wxComboBox;
 class wxCommandEvent;
+class wxFocusEvent;
 class wxRadioBox;
+class wxSpinCtrlDouble;
 class wxSpinCtrl;
+class wxStaticText;
 class wxTextCtrl;
 class wxThreadEvent;
 class wxWindow;
@@ -74,7 +84,10 @@ class DialogStyleEditor final : public wxDialog {
 	std::shared_ptr<agi::InteractionSink> interaction_sink;
 
 	wxTextCtrl *StyleName;
-	wxComboBox *FontName;
+	FontNameComboBox *FontName;
+	wxComboBox *FontStyle = nullptr;
+	wxStaticText *FontVariantInfo = nullptr;
+	wxSpinCtrlDouble *FontSize = nullptr;
 	wxCheckBox *BoxBold;
 	wxCheckBox *BoxItalic;
 	wxCheckBox *BoxUnderline;
@@ -85,11 +98,29 @@ class DialogStyleEditor final : public wxDialog {
 	wxComboBox *Encoding;
 	wxTextCtrl *PreviewText;
 	SubtitlesPreview *SubsPreview;
+	std::shared_ptr<FontFamilyCatalog const> font_catalog;
+	bool prefer_localized_font_names = true;
+	std::vector<FontVariantChoice> font_variant_choices;
+	bool updating_font_variant = false;
+	bool font_family_selection_changed = false;
+	bool font_variant_user_modified = false;
+	bool font_variant_implicit_pinned = false;
+	bool font_variant_base_bold = false;
+	bool font_variant_base_italic = false;
+	std::string committed_font_family;
+	std::optional<std::uint32_t> committed_font_family_id;
 
 	void SetBitmapColor(int n,wxColour color);
 	int AlignToControl(int n);
 	int ControlToAlign(int n);
 	void UpdateWorkStyle();
+	void UpdateFontVariantControls(bool family_changed);
+	FontFamilyRecord const* SelectedFontRecord() const;
+	void CommitFontFamilyChange();
+	void OnFontFamilyChanged(wxCommandEvent &event);
+	void OnFontFamilyFocusLost(wxFocusEvent &event);
+	void OnFontVariantChanged(wxCommandEvent &event);
+	void ApplyLiveFontVariantProbe();
 
 	void OnChildFocus(wxChildFocusEvent &event);
 	void OnCommandPreviewUpdate(wxCommandEvent &event);
@@ -105,7 +136,7 @@ class DialogStyleEditor final : public wxDialog {
 	void OnSetColor(ValueEvent<agi::Color>& evt);
 
 public:
-	DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Context *c, AssStyleStorage *store, std::string const& new_name, FontFamilyCatalogUiModel const& font_model);
+	DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Context *c, AssStyleStorage *store, std::string const& new_name, FontFamilySelectionModel const& font_model);
 	~DialogStyleEditor();
 
 	std::string GetStyleName() const;

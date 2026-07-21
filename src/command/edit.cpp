@@ -34,15 +34,20 @@
 #include "../ass_dialogue.h"
 #include "../ass_compat.h"
 #include "../ass_file.h"
+#include "../ass_font_state.h"
 #include "../ass_karaoke.h"
 #include "../ass_style.h"
+#include "../ass_style_resolution.h"
 #include "../ass_time_projection.h"
 #include "../compat.h"
 #include "../dialog_font_face.h"
 #include "../dialog_search_replace.h"
 #include "../dialogs.h"
 #include "../font_face_selection.h"
+#include "../font_family_catalog.h"
 #include "../font_family_catalog_ui.h"
+#include "../font_variant_policy.h"
+#include "../font_variant_resolver.h"
 #include "../format.h"
 #include "../include/aegisub/context.h"
 #include "../include/aegisub/context_ui.h"
@@ -64,6 +69,10 @@
 #include <libaegisub/string_utils.h>
 
 #include <algorithm>
+#include <cmath>
+#include <memory>
+#include <optional>
+#include <string_view>
 
 #include <wx/dataobj.h>
 #include <wx/clipbrd.h>
@@ -754,53 +763,210 @@ struct edit_font final : public Command {
 			FontFaceDialogSelection displayed;
 			std::string stored_face_name;
 			bool has_explicit_face_override = false;
+			bool valid = true;
 		};
 
 		auto font_for_line = [&](parsed_line const& line, int insertion_point) -> line_font_state {
 			const int blockn = line.block_at_pos(insertion_point);
 
-			const AssStyle *style = core.ass->GetStyle(line.line->Style);
+			const AssStyle *style = aegisub::ass_style_resolution::ResolveEventStyle(
+				*core.ass, line.line->Style);
 			const AssStyle default_style;
 			if (!style)
 				style = &default_style;
+			aegisub::ass::AssFontStateEvaluator evaluator(
+				aegisub::ass::MakeAssFontStyleBaseline(*style));
+			auto resolve_reset = [&](std::string_view name)
+				-> std::optional<aegisub::ass::AssFontStyleBaseline> {
+				auto const *reset = aegisub::ass_style_resolution::ResolveResetStyle(
+					*core.ass, std::string(name));
+				if (!reset)
+					return std::nullopt;
+				return aegisub::ass::MakeAssFontStyleBaseline(*reset);
+			};
+			for (int index = 0; index <= blockn && index < static_cast<int>(line.blocks.size()); ++index) {
+				if (auto const *override_block =
+						dynamic_cast<AssDialogueBlockOverride const *>(line.blocks[index].get()))
+					evaluator.ApplyBlock(*override_block, resolve_reset);
+			}
+			auto const& request = evaluator.Request();
 
 			line_font_state state;
-			state.stored_face_name = line.get_value(blockn, style->font, "\\fn");
-			state.has_explicit_face_override = line.find_tag(blockn, "\\fn", "") != nullptr;
+			state.stored_face_name = request.family;
+			state.has_explicit_face_override = request.has_explicit_family;
+			state.valid = request.valid;
 			state.displayed.face_name = font_model.PreferredName(state.stored_face_name);
-			state.displayed.point_size = line.get_value(blockn, (int)style->fontsize, "\\fs");
-			state.displayed.bold = line.get_value(blockn, style->bold, "\\b");
-			state.displayed.italic = line.get_value(blockn, style->italic, "\\i");
+			state.displayed.point_size = static_cast<int>(std::lround(request.height));
+			state.displayed.charset = request.charset;
+			state.displayed.effective_weight = request.effective_weight;
+			state.displayed.bold = request.effective_weight == 700;
+			state.displayed.italic = request.italic;
+			state.displayed.has_explicit_weight = request.has_explicit_bold;
+			state.displayed.has_explicit_italic = request.has_explicit_italic;
 			state.displayed.underline = line.get_value(blockn, style->underline, "\\u");
 			return state;
 		};
 
+		std::optional<bool> native_override_permission;
 		auto apply_selection = [&](FontFaceDialogSelection const& selected) {
-			auto selection_changes_line = [&](line_font_state const& startfont) {
+			bool allow_replace_explicit = selected.allow_replace_explicit;
+			if (selected.from_native_dialog && selected.variant_modified &&
+			    !allow_replace_explicit) {
+				bool has_conflict = false;
+				for (auto *line : core.selectionController->GetSelectedSet()) {
+					parsed_line parsed(line);
+					int line_insertion_point = line == active.line
+						? active_insertion_point
+						: remap_pos_for_line(line, insertion_chars).plain;
+					auto const current = font_for_line(parsed, line_insertion_point);
+					if ((current.displayed.has_explicit_weight &&
+					     current.displayed.effective_weight != selected.effective_weight) ||
+					    (current.displayed.has_explicit_italic &&
+					     current.displayed.italic != selected.italic)) {
+						has_conflict = true;
+						break;
+					}
+				}
+				if (has_conflict) {
+					if (!native_override_permission) {
+						native_override_permission = wxMessageBox(
+							_("The selected lines contain explicit \\b or \\i overrides. Replace those explicit variants for this operation?"),
+							_("Replace explicit font variants?"),
+							wxYES_NO | wxICON_QUESTION,
+							ui.parent) == wxYES;
+					}
+					allow_replace_explicit = *native_override_permission;
+				}
+			}
+
+			auto may_write_weight = [&](line_font_state const& startfont) {
+				return !startfont.displayed.has_explicit_weight || allow_replace_explicit;
+			};
+			auto may_write_italic = [&](line_font_state const& startfont) {
+				return !startfont.displayed.has_explicit_italic || allow_replace_explicit;
+			};
+
+			struct line_variant_selection {
+				int weight = 400;
+				bool italic = false;
+				bool automatic_variant_reliable = true;
+			};
+
+			std::unique_ptr<FontVariantResolver> live_resolver;
+			FontFamilyRecord const *selected_record = nullptr;
+			if (selected.implicit_variant_pinned && !selected.variant_modified &&
+			    font_model.catalog && !font_model.catalog->empty()) {
+				if (selected.selected_family_id)
+					selected_record = font_model.catalog->Find(*selected.selected_family_id);
+				if (!selected_record) {
+					auto resolved = font_model.catalog->Resolve(selected.face_name);
+					if (resolved.family)
+						selected_record = font_model.catalog->Find(*resolved.family);
+				}
+				if (selected_record)
+					live_resolver = CreatePlatformFontVariantResolver();
+			}
+
+			auto variant_for_line = [&](line_font_state const& startfont) {
+				line_variant_selection target{
+					selected.effective_weight,
+					selected.italic,
+					true};
+				if (!selected.implicit_variant_pinned || selected.variant_modified)
+					return target;
+
+				if (!startfont.valid || !selected_record || !live_resolver) {
+					target.automatic_variant_reliable = false;
+					return target;
+				}
+
+				auto profile = BuildFontVariantProfileForFamily(
+					*live_resolver, *selected_record,
+					startfont.displayed.charset,
+					static_cast<double>(selected.point_size));
+				if (!profile || !profile->automatic_pinning_reliable) {
+					target.automatic_variant_reliable = false;
+					return target;
+				}
+				FontVariantSelection current{
+					startfont.displayed.effective_weight,
+					startfont.displayed.italic,
+					startfont.displayed.has_explicit_weight,
+					startfont.displayed.has_explicit_italic};
+				auto adjusted = AdjustFamilySelection(
+					current, *profile, {true, allow_replace_explicit});
+				if (adjusted.applied_implicit_selection) {
+					target.weight = adjusted.selection.weight;
+					target.italic = adjusted.selection.italic;
+					return target;
+				}
+
+				// An explicit override remains authoritative. Likewise, a complete
+				// profile with no implicit fallback keeps this line's existing intent.
+				if (adjusted.blocked_by_explicit ||
+				    (current.weight != 400 && current.weight != 700)) {
+					target.weight = current.weight;
+					target.italic = current.italic;
+					return target;
+				}
+				auto const& outcome = profile->For(current.weight == 700, current.italic);
+				auto canonical = CanonicalizeFontVariant(outcome);
+				if (canonical && canonical->weight == current.weight &&
+				    canonical->italic == current.italic) {
+					target.weight = current.weight;
+					target.italic = current.italic;
+					return target;
+				}
+				target.automatic_variant_reliable = false;
+				return target;
+			};
+
+			auto selection_changes_line = [&](line_font_state const& startfont,
+			                                  line_variant_selection const& variant) {
 				return ShouldWriteFontFace(
 						startfont.stored_face_name,
 						startfont.displayed.face_name,
 						startfont.has_explicit_face_override,
 						selected.face_name)
 					|| selected.point_size != startfont.displayed.point_size
-					|| selected.bold != startfont.displayed.bold
-					|| selected.italic != startfont.displayed.italic
+					|| (variant.automatic_variant_reliable && may_write_weight(startfont) &&
+					    variant.weight != startfont.displayed.effective_weight)
+					|| (variant.automatic_variant_reliable && may_write_italic(startfont) &&
+					    variant.italic != startfont.displayed.italic)
 					|| selected.underline != startfont.displayed.underline;
 			};
 
 			bool has_changes = false;
+			int unknown_skipped = 0;
 			for (auto *line : core.selectionController->GetSelectedSet()) {
 				parsed_line parsed(line);
 				int line_insertion_point = active_insertion_point;
 				if (line != active.line)
 					line_insertion_point = remap_pos_for_line(line, insertion_chars).plain;
-				if (selection_changes_line(font_for_line(parsed, line_insertion_point))) {
+				auto const startfont = font_for_line(parsed, line_insertion_point);
+				auto const variant = variant_for_line(startfont);
+				if (!variant.automatic_variant_reliable) {
+					++unknown_skipped;
+					continue;
+				}
+				if (selection_changes_line(startfont, variant)) {
 					has_changes = true;
-					break;
 				}
 			}
-			if (!has_changes)
+
+			auto show_unknown_summary = [&] {
+				if (unknown_skipped == 0)
+					return;
+				wxMessageBox(
+					wxString::Format(_("%d line(s) were not changed because their font state could not be resolved reliably."), unknown_skipped),
+					_("Font variant not changed"),
+					wxOK | wxICON_WARNING,
+					ui.parent);
+			};
+			if (!has_changes) {
+				show_unknown_summary();
 				return;
+			}
 
 			update_lines(c, from_wx(_("set font")), [&](AssDialogue *line, int sel_start, int sel_end, int norm_sel_start, int norm_sel_end) {
 				parsed_line parsed(line);
@@ -809,6 +975,9 @@ struct edit_font final : public Command {
 					line_insertion_point = remap_pos_for_line(line, insertion_chars).plain;
 
 				const auto startfont = font_for_line(parsed, line_insertion_point);
+				auto const variant = variant_for_line(startfont);
+				if (!variant.automatic_variant_reliable)
+					return 0;
 				int shift = 0;
 				auto do_set_tag = [&](const char *tag_name, std::string const& value) {
 					shift += parsed.set_tag(tag_name, value, norm_sel_start, sel_start + shift);
@@ -822,15 +991,22 @@ struct edit_font final : public Command {
 					do_set_tag("\\fn", selected.face_name);
 				if (selected.point_size != startfont.displayed.point_size)
 					do_set_tag("\\fs", std::to_string(selected.point_size));
-				if (selected.bold != startfont.displayed.bold)
-					do_set_tag("\\b", std::to_string(selected.bold));
-				if (selected.italic != startfont.displayed.italic)
-					do_set_tag("\\i", std::to_string(selected.italic));
+				if (variant.automatic_variant_reliable && may_write_weight(startfont) &&
+				    variant.weight != startfont.displayed.effective_weight) {
+					std::string value = variant.weight == 400 ? "0" :
+					                    variant.weight == 700 ? "1" :
+					                    std::to_string(variant.weight);
+					do_set_tag("\\b", value);
+				}
+				if (variant.automatic_variant_reliable && may_write_italic(startfont) &&
+				    variant.italic != startfont.displayed.italic)
+					do_set_tag("\\i", std::to_string(variant.italic));
 				if (selected.underline != startfont.displayed.underline)
 					do_set_tag("\\u", std::to_string(selected.underline));
 
 				return shift;
 			});
+			show_unknown_summary();
 		};
 
 		auto initial = font_for_line(active, active_insertion_point);

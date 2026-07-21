@@ -48,6 +48,21 @@ typedef enum AegisubFontCollectorMatchStatus {
 	AEGISUB_FONTCOLLECTOR_MATCH_MEMORY_ONLY = 2
 } AegisubFontCollectorMatchStatus;
 
+typedef enum AegisubFontCollectorVariantRole {
+	AEGISUB_FONTCOLLECTOR_VARIANT_UNKNOWN = 0,
+	AEGISUB_FONTCOLLECTOR_VARIANT_REGULAR = 1,
+	AEGISUB_FONTCOLLECTOR_VARIANT_BOLD = 2,
+	AEGISUB_FONTCOLLECTOR_VARIANT_ITALIC = 3,
+	AEGISUB_FONTCOLLECTOR_VARIANT_BOLD_ITALIC = 4
+} AegisubFontCollectorVariantRole;
+
+typedef enum AegisubFontCollectorVariantStatus {
+	AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_UNKNOWN = 0,
+	AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_CANONICAL = 1,
+	AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_NONCANONICAL = 2,
+	AEGISUB_FONTCOLLECTOR_VARIANT_STATUS_SYNTHETIC = 3
+} AegisubFontCollectorVariantStatus;
+
 typedef enum AegisubFontCollectorEventType {
 	AEGISUB_FONTCOLLECTOR_EVENT_FONT_BACKEND_INFO,
 	AEGISUB_FONTCOLLECTOR_EVENT_UPDATING_FONT_CACHE,
@@ -182,6 +197,31 @@ typedef struct AegisubFontCollectorFontUsage {
 	size_t match_candidate_count;
 	/* True when equal-score candidates could serve at least one selected codepoint. */
 	int match_ambiguous;
+	/* Optional normalized ASS request and original style baseline. */
+	int ass_effective_weight;
+	int ass_charset;
+	double ass_height;
+	char const *ass_raw_bold_tag;
+	char const *ass_raw_italic_tag;
+	char const *ass_raw_charset_tag;
+	char const *ass_raw_height_tag;
+	int ass_has_explicit_family;
+	int ass_has_explicit_bold;
+	int ass_has_explicit_italic;
+	int ass_has_explicit_charset;
+	int ass_has_explicit_height;
+	char const *baseline_facename;
+	int baseline_weight;
+	int baseline_italic;
+	int baseline_charset;
+	double baseline_height;
+	/* Optional matched-font portability diagnostics, flattened to preserve the v1 nested layout. */
+	int matched_has_backend_requested_weight;
+	int matched_backend_requested_weight;
+	AegisubFontCollectorVariantRole matched_realized_role;
+	AegisubFontCollectorVariantStatus matched_realized_status;
+	int matched_implicit_variant_fallback;
+	int matched_noncanonical_variant;
 } AegisubFontCollectorFontUsage;
 
 typedef struct AegisubFontCollectorSession AegisubFontCollectorSession;

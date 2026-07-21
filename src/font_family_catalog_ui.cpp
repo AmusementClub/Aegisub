@@ -1,42 +1,39 @@
 #include "font_family_catalog_ui.h"
 
 #include "compat.h"
-#include "font_family_catalog.h"
 #include "font_family_catalog_cache.h"
 #include "options.h"
 
 #include <wx/fontenum.h>
 
-std::string FontFamilyCatalogUiModel::PreferredName(std::string_view stored_name) const {
-	if (!catalog || catalog->empty())
-		return std::string(stored_name);
-	return catalog->MapToPreferredWriteName(stored_name, prefer_localized);
-}
+#include <utility>
 
-FontFamilyCatalogUiModel BuildFontFamilyCatalogUiModel() {
-	FontFamilyCatalogUiModel model;
+FontFamilySelectionModel BuildFontFamilyCatalogUiModel() {
+	bool prefer_localized = true;
 	try {
-		model.prefer_localized = OPT_GET("Subtitle/Font/Prefer Localized Family Names")->GetBool();
+		prefer_localized = OPT_GET("Subtitle/Font/Prefer Localized Family Names")->GetBool();
 	}
 	catch (...) {
-		model.prefer_localized = true;
+		prefer_localized = true;
 	}
 
-	// Frame startup normally prewarms this snapshot. A snapshot is also needed
-	// in localized mode so an existing English ASS name can be displayed as the
-	// localized name without changing the document until the user accepts.
-	model.catalog = font_family_catalog_cache::GetSnapshot();
+	// Never wait for font enumeration on an interactive path. Start a build for
+	// the next invocation and use the legacy list until this generation is ready.
+	auto catalog = font_family_catalog_cache::GetReadySnapshot();
+	if (!catalog)
+		font_family_catalog_cache::WarmAsync();
 
-	if (model.prefer_localized || !model.catalog || model.catalog->empty()) {
-		model.choices = wxFontEnumerator::GetFacenames();
-		model.choices.Sort();
-		return model;
+	std::vector<std::string> fallback_names;
+	if (!catalog || catalog->empty()) {
+		// Preserve the legacy enumerator while the immutable catalog is not ready
+		// or cannot be built.
+		auto choices = wxFontEnumerator::GetFacenames();
+		choices.Sort();
+		fallback_names.reserve(choices.size());
+		for (auto const& choice : choices)
+			fallback_names.push_back(from_wx(choice));
 	}
 
-	auto names = model.catalog->DisplayNames(false);
-	model.choices.reserve(names.size());
-	for (auto const& name : names)
-		model.choices.Add(to_wx(name));
-	// DisplayNames already sorts and deduplicates.
-	return model;
+	return BuildFontFamilySelectionModel(
+		std::move(catalog), prefer_localized, std::move(fallback_names));
 }

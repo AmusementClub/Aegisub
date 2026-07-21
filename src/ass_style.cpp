@@ -215,6 +215,13 @@ void AssStyle::UpdateData() {
 	append(AssCompat::FormatInteger(encoding));
 }
 
+void AssStyle::SwapFontState(AssStyle& other) noexcept {
+	font.swap(other.font);
+	std::swap(bold, other.bold);
+	std::swap(italic, other.italic);
+	data.swap(other.data);
+}
+
 int AssStyle::AssToSsa(int ass_align) {
 	switch (ass_align) {
 		case 1:  return 1;

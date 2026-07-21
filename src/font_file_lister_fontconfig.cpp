@@ -176,10 +176,6 @@ void find_font(FcFontSet *src, FcFontSet *dst, std::string const& family) {
 	}
 }
 
-int NormalizeAssWeight(int bold) {
-	return (bold == 1 || bold == -1) ? 700 : bold <= 0 ? 400 : bold;
-}
-
 int FontconfigWeightFromOpenType(int weight) {
 #if FC_VERSION >= 21292
 	return static_cast<int>(std::lround(FcWeightFromOpenTypeDouble(weight)));
@@ -418,7 +414,7 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 	std::string family = facename[0] == '@' ? facename.substr(1) : facename;
 	agi::util::strings::to_lower_inplace(family);
 
-	int requested_weight = NormalizeAssWeight(bold);
+	int requested_weight = NormalizeLibassAssWeight(bold);
 	int weight = FontconfigWeightFromOpenType(requested_weight);
 	int slant  = italic ? 110 : 0;
 	ret.requested_weight = requested_weight;
@@ -488,4 +484,30 @@ CollectionResult FontConfigFontFileLister::GetFontPaths(std::string const& facen
 	ret.paths.emplace_back((const char *)file);
 	ret.path_source = "fontconfig";
 	return ret;
+}
+
+CollectionResult FontConfigFontFileLister::GetFontPaths(
+	aegisub::ass::AssFontRequest const& request,
+	std::vector<uint32_t> const& characters) {
+	auto result = GetFontPaths(
+		request.family,
+		aegisub::ass::LegacyAssBoldArgument(request),
+		request.italic,
+		characters);
+	if (!result.backend_requested_weight)
+		result.backend_requested_weight = result.requested_weight;
+	return result;
+}
+
+FontFileListerMatchKey FontConfigFontFileLister::GetMatchKey(
+	aegisub::ass::AssFontRequest const& request) const {
+	auto normalized = NormalizeLibassFontRequest(
+		request.family,
+		aegisub::ass::LegacyAssBoldArgument(request),
+		request.italic);
+	return {
+		std::move(normalized.facename),
+		normalized.requested_weight,
+		normalized.requested_italic,
+	};
 }

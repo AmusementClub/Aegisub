@@ -24,6 +24,7 @@ set(ESCAPED_BRACES_ASS "${TEST_WORK_DIR}/escaped-braces.ass")
 set(DRAWING_ASS "${TEST_WORK_DIR}/drawing.ass")
 set(NESTED_DRAWING_ASS "${TEST_WORK_DIR}/nested-drawing.ass")
 set(NESTED_TEXT_ASS "${TEST_WORK_DIR}/nested-text.ass")
+set(VARIANT_STATE_ASS "${TEST_WORK_DIR}/variant-state.ass")
 set(COPY_DIR "${TEST_WORK_DIR}/copy")
 
 file(WRITE "${A_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,ASCII only\n")
@@ -39,6 +40,7 @@ file(WRITE "${ESCAPED_BRACES_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:
 file(WRITE "${DRAWING_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\p1}m 0 0 l 10 0 10 10 0 10{\\p0}\n")
 file(WRITE "${NESTED_DRAWING_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\t(0,1000,\\p1)}m 0 0 l 10 0 10 10 0 10\n")
 file(WRITE "${NESTED_TEXT_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\p1\\t(0,1000,\\p0)}A\n")
+file(WRITE "${VARIANT_STATE_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\b600\\fe-1}A\n")
 
 function(run_fontcollector EXPECTED_RESULT)
 	execute_process(
@@ -186,6 +188,15 @@ require_json_equals("${FONTCOLLECTOR_STDOUT}" "0" "nested pure drawing font usag
 
 run_fontcollector(0 list "${NESTED_TEXT_ASS}" --json)
 require_json_equals("${FONTCOLLECTOR_STDOUT}" "1" "nested drawing reset font usage" files 0 summary font_usage_count)
+
+run_fontcollector(0 list "${VARIANT_STATE_ASS}" --json)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "600" "variant effective weight" files 0 font_usage 0 ass_font effective_weight)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "600" "variant raw bold" files 0 font_usage 0 ass_font raw_bold_tag)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "1" "variant charset" files 0 font_usage 0 ass_font charset)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "-1" "variant raw charset" files 0 font_usage 0 ass_font raw_charset_tag)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "400" "variant event baseline weight" files 0 font_usage 0 ass_font baseline weight)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "600" "variant backend request" files 0 font_usage 0 matched_font backend_requested_weight)
+require_not_contains("${FONTCOLLECTOR_STDOUT}" "\"realized_role\"" "unknown realized role is omitted")
 
 run_fontcollector(0 check "${A_ASS}" --matcher libass --json)
 require_json_equals("${FONTCOLLECTOR_STDOUT}" "libass" "explicit libass matcher" matcher)

@@ -103,6 +103,30 @@ struct tool_font_name_normalization final : public Command {
 	}
 };
 
+struct tool_font_portability_audit final : public Command {
+	CMD_NAME("tool/font_portability_audit")
+	CMD_ICON(font_collector_button)
+	STR_MENU("Audit Font &Portability...")
+	STR_DISP("Audit Font Portability")
+	STR_HELP("Check font family names and variants for portable ASS rendering")
+
+	void operator()(agi::Context *c) override {
+		ShowFontPortabilityAuditDialog(c);
+	}
+};
+
+struct tool_font_variant_audit final : public Command {
+	CMD_NAME("tool/font_variant_audit")
+	CMD_ICON(font_collector_button)
+	STR_MENU("Audit Font &Variants...")
+	STR_DISP("Audit Font Variants")
+	STR_HELP("Check ASS font variant requests against installed family profiles")
+
+	void operator()(agi::Context *c) override {
+		ShowFontVariantAuditDialog(c);
+	}
+};
+
 struct tool_line_select final : public Command {
 	CMD_NAME("tool/line/select")
 	CMD_ICON(select_lines_button)
@@ -298,6 +322,8 @@ namespace cmd {
 		reg(agi::make_unique<tool_export>());
 		reg(agi::make_unique<tool_font_collector>());
 		reg(agi::make_unique<tool_font_name_normalization>());
+		reg(agi::make_unique<tool_font_portability_audit>());
+		reg(agi::make_unique<tool_font_variant_audit>());
 		reg(agi::make_unique<tool_line_select>());
 		reg(agi::make_unique<tool_resampleres>());
 		reg(agi::make_unique<tool_style_assistant>());

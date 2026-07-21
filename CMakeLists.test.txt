@@ -36,10 +36,15 @@ if(GTEST_FOUND)
         tests/tests/async_video_provider.cpp
         tests/tests/dispatch.cpp
         tests/tests/export_framerate_transform.cpp
+        tests/tests/ass_font_state.cpp
         tests/tests/font_family_catalog.cpp
         tests/tests/font_family_catalog_cache.cpp
         tests/tests/font_name_normalization.cpp
+        tests/tests/font_portability_audit.cpp
         tests/tests/font_matching_libass.cpp
+        tests/tests/font_variant_policy.cpp
+        tests/tests/font_variant_resolver.cpp
+        tests/tests/font_variant_audit.cpp
         tests/tests/key_point_color.cpp
         tests/tests/time_display_mode.cpp
         tests/tests/automation_process_supervisor.cpp
@@ -65,6 +70,7 @@ if(GTEST_FOUND)
         src/ass_time_projection.cpp
         src/ass_entry.cpp
         src/ass_file.cpp
+        src/ass_font_state.cpp
         src/ass_override.cpp
         src/ass_style.cpp
         src/ass_style_resolution.cpp
@@ -80,9 +86,14 @@ if(GTEST_FOUND)
         src/export_framerate_transform.cpp
         src/font_face_selection.cpp
         src/font_family_catalog.cpp
+        src/font_family_catalog_source.cpp
+        src/font_family_selection_model.cpp
         src/font_family_catalog_cache.cpp
-        src/font_family_catalog_ui.cpp
+        src/font_variant_policy.cpp
+        src/font_variant_resolver.cpp
+        src/font_variant_audit.cpp
         src/font_name_normalization.cpp
+        src/font_portability_audit.cpp
         src/font_matching_common.cpp
         src/font_matching_libass.cpp
         src/csri_renderer_discovery.cpp
@@ -356,8 +367,100 @@ if(GTEST_FOUND)
                 LABELS "gtest"
         )
     endif()
+
+    add_executable(font-collector-state-test EXCLUDE_FROM_ALL
+        tests/tests/font_collector_state.cpp
+    )
+    target_compile_features(font-collector-state-test PRIVATE cxx_std_20)
+    target_compile_definitions(font-collector-state-test PRIVATE CMAKE_BUILD)
+    target_link_libraries(font-collector-state-test PRIVATE
+        aegisub_core
+        libaegisub
+        luajit
+        "GTest::GTest"
+        "GTest::Main"
+    )
+    if(BUILD_TESTING)
+        add_test(
+            NAME font_collector_state
+            COMMAND "$<TARGET_FILE:font-collector-state-test>"
+            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests"
+        )
+        set_tests_properties(font_collector_state PROPERTIES LABELS "gtest")
+    endif()
 else()
     add_custom_target(test-aegisub)
+endif()
+
+if(WIN32)
+    add_executable(gdi-font-resolver-smoke EXCLUDE_FROM_ALL
+        tests/smoke/gdi_font_resolver_smoke.cpp
+        tests/fixtures/gdi-fonts/generate.py
+        tests/fixtures/gdi-fonts/LICENSE.txt
+        tests/fixtures/gdi-fonts/regular.ttf
+        tests/fixtures/gdi-fonts/bold.ttf
+        tests/fixtures/gdi-fonts/italic.ttf
+        tests/fixtures/gdi-fonts/bold-italic.ttf
+    )
+    target_compile_features(gdi-font-resolver-smoke PRIVATE cxx_std_20)
+    target_compile_definitions(gdi-font-resolver-smoke PRIVATE CMAKE_BUILD)
+    target_link_libraries(gdi-font-resolver-smoke PRIVATE
+        aegisub_core
+        libaegisub
+        luajit
+        User32
+        Gdi32
+    )
+    aegisub_stage_libass_runtime(gdi-font-resolver-smoke)
+    add_custom_command(TARGET gdi-font-resolver-smoke POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:gdi-font-resolver-smoke>/gdi-font-fixtures"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/gdi-fonts/regular.ttf"
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/gdi-fonts/bold.ttf"
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/gdi-fonts/italic.ttf"
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/gdi-fonts/bold-italic.ttf"
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/gdi-fonts/LICENSE.txt"
+            "$<TARGET_FILE_DIR:gdi-font-resolver-smoke>/gdi-font-fixtures"
+    )
+    if(BUILD_TESTING)
+        add_test(
+            NAME gdi_font_resolver_smoke
+            COMMAND "$<TARGET_FILE:gdi-font-resolver-smoke>"
+        )
+        set_tests_properties(gdi_font_resolver_smoke PROPERTIES LABELS "smoke;font;windows")
+        add_test(
+            NAME gdi_font_resolver_bold_only
+            COMMAND "$<TARGET_FILE:gdi-font-resolver-smoke>"
+                --fixture-case bold-only
+        )
+        add_test(
+            NAME gdi_font_resolver_regular_bold
+            COMMAND "$<TARGET_FILE:gdi-font-resolver-smoke>"
+                --fixture-case regular-bold
+        )
+        add_test(
+            NAME gdi_font_resolver_italic_only
+            COMMAND "$<TARGET_FILE:gdi-font-resolver-smoke>"
+                --fixture-case italic-only
+        )
+        add_test(
+            NAME gdi_font_resolver_rbiz
+            COMMAND "$<TARGET_FILE:gdi-font-resolver-smoke>"
+                --fixture-case rbiz
+        )
+        set_tests_properties(
+            gdi_font_resolver_bold_only
+            gdi_font_resolver_regular_bold
+            gdi_font_resolver_italic_only
+            gdi_font_resolver_rbiz
+            PROPERTIES LABELS "smoke;font;windows;fixture")
+    endif()
+    add_custom_target(test-gdi-font-resolver
+        COMMAND gdi-font-resolver-smoke
+        DEPENDS gdi-font-resolver-smoke
+        WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+    )
 endif()
 
 add_executable(aegisub_core_smoke EXCLUDE_FROM_ALL

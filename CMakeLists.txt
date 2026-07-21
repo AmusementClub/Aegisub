@@ -832,6 +832,7 @@ set(AEGISUB_CORE_SOURCES
     # app startup controls provider availability and registry finalization.
     src/audio_provider_factory.cpp
     src/pgs_sup_packet_stream.cpp
+    src/vobsub_packet_stream.cpp
     src/secondary_subtitle_decoder.cpp
     src/subtitle_overlay_blend.cpp
     src/subtitles_provider.cpp

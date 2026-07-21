@@ -53,6 +53,7 @@
 #include "libresrc/libresrc.h"
 #include "main.h"
 #include "options.h"
+#include "pgs_sup_packet_stream.h"
 #include "project.h"
 #include "perf_trace.h"
 #include "status_sink.h"
@@ -61,6 +62,7 @@
 #include "ui_services.h"
 #include "utils.h"
 #include "version.h"
+#include "vobsub_packet_stream.h"
 #include "video_box.h"
 #include "video_controller.h"
 #include "video_display.h"
@@ -72,7 +74,9 @@
 #include <libaegisub/fs.h>
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/string_utils.h>
 
+#include <algorithm>
 #include <chrono>
 #include <wx/dnd.h>
 #include <wx/settings.h>
@@ -266,12 +270,14 @@ FrameMain::FrameMain()
 			}
 
 			auto is_subtitle_drop_file = [](agi::fs::path const& path) {
-				// Match the subtitle list in Project::LoadList. Avoid container
-				// formats like mkv which can be both video and subtitles.
+				// Match Project::LoadList text formats plus external bitmap formats.
+				// Avoid containers such as MKV which can also be videos.
 				return agi::fs::HasExtension(path, "ass")
 					|| agi::fs::HasExtension(path, "ssa")
 					|| agi::fs::HasExtension(path, "srt")
 					|| agi::fs::HasExtension(path, "sub")
+					|| IsVobSubIndexPath(path)
+					|| IsPgsSupSubtitlePath(path)
 					|| agi::fs::HasExtension(path, "ttxt");
 			};
 
@@ -288,6 +294,53 @@ FrameMain::FrameMain()
 
 			if (subtitle_files.empty()) {
 				core.project->LoadList(files);
+				return;
+			}
+
+			auto same_stem = [](agi::fs::path left, agi::fs::path right) {
+				left.replace_extension();
+				right.replace_extension();
+#ifdef _WIN32
+				return agi::util::strings::utf8_iequals(
+					agi::fs::PathToGenericString(left.lexically_normal()),
+					agi::fs::PathToGenericString(right.lexically_normal()));
+#else
+				return left.lexically_normal() == right.lexically_normal();
+#endif
+			};
+
+			auto selected_subtitle = subtitle_files.begin();
+			if (agi::fs::HasExtension(*selected_subtitle, "sub")) {
+				auto paired_index = std::find_if(
+					subtitle_files.begin(), subtitle_files.end(), [&](agi::fs::path const& candidate) {
+						return IsVobSubIndexPath(candidate)
+							&& same_stem(candidate, *selected_subtitle);
+					});
+				if (paired_index != subtitle_files.end())
+					selected_subtitle = paired_index;
+			}
+
+			auto logical_subtitle_count = subtitle_files.size();
+			if (IsVobSubIndexPath(*selected_subtitle)) {
+				logical_subtitle_count -= static_cast<size_t>(std::count_if(
+					subtitle_files.begin(), subtitle_files.end(), [&](agi::fs::path const& candidate) {
+						return agi::fs::HasExtension(candidate, "sub")
+							&& same_stem(candidate, *selected_subtitle);
+					}));
+			}
+
+			bool const selected_is_bitmap = IsVobSubIndexPath(*selected_subtitle)
+				|| IsPgsSupSubtitlePath(*selected_subtitle);
+			if (selected_is_bitmap) {
+				if (!other_files.empty())
+					core.project->LoadList(other_files);
+				if (videoBox)
+					videoBox->OpenSecondarySubtitlesFromPath(*selected_subtitle);
+				if (logical_subtitle_count > 1) {
+					ctx->ShowInfo(
+						from_wx(_("Multiple subtitle files were dropped. Only the first one was loaded as secondary.")),
+						from_wx(_("Secondary subtitles")));
+				}
 				return;
 			}
 
@@ -318,9 +371,9 @@ FrameMain::FrameMain()
 				core.project->LoadList(other_files);
 
 			if (videoBox)
-				videoBox->OpenSecondarySubtitlesFromPath(subtitle_files.front());
+				videoBox->OpenSecondarySubtitlesFromPath(*selected_subtitle);
 
-			if (subtitle_files.size() > 1) {
+			if (logical_subtitle_count > 1) {
 				ctx->ShowInfo(
 					from_wx(_("Multiple subtitle files were dropped. Only the first one was loaded as secondary.")),
 					from_wx(_("Secondary subtitles")));

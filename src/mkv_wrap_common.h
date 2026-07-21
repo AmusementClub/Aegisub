@@ -30,6 +30,7 @@ enum class MkvTextSubtitleCodec {
 enum class MkvBitmapSubtitleCodec {
 	Unsupported,
 	HdmvPgs,
+	VobSub,
 };
 
 enum class MkvTrackType {
@@ -95,11 +96,14 @@ struct MkvTrackScanResult {
 struct MkvSubtitleAvailability {
 	bool text = false;
 	bool bitmap = false;
+	bool hdmv_pgs = false;
+	bool vobsub = false;
 };
 
 MkvTrackType ClassifyMkvTrackType(uint64_t track_type);
 MkvTextSubtitleCodec ClassifyMkvTextSubtitleCodec(std::string_view codec_id);
 MkvBitmapSubtitleCodec ClassifyMkvBitmapSubtitleCodec(std::string_view codec_id);
+std::string_view GetSecondarySubtitleCodecId(MkvBitmapSubtitleCodec codec);
 bool IsSupportedMkvTextSubtitleCodec(std::string_view codec_id);
 bool IsSupportedMkvBitmapSubtitleCodec(std::string_view codec_id);
 bool IsImportableMkvSubtitleTrack(MkvTrackInfo const& track);

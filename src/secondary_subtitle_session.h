@@ -77,9 +77,12 @@ class SecondarySubtitleSession final {
 	std::unique_ptr<AssFile> external_subtitles;
 	std::shared_ptr<const SecondarySubtitlePacketStream> bitmap_subtitles;
 	std::unique_ptr<WatchedFile> external_subtitle_watch;
+	std::unique_ptr<WatchedFile> external_subtitle_companion_watch;
+	std::unique_ptr<WatchedFile> external_subtitle_alternate_companion_watch;
 	SecondarySubtitleSourceMode source_mode = SecondarySubtitleSourceMode::CurrentScript;
 	std::string external_subtitle_path;
 	std::string loaded_external_subtitle_path;
+	std::optional<int> external_vobsub_track_index;
 	bool external_subtitles_follow_video_resolution = false;
 	// File changes detected while hidden are consumed on the next activation.
 	bool external_subtitle_reload_pending = false;

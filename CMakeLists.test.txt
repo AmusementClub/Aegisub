@@ -97,6 +97,7 @@ if(GTEST_FOUND)
         src/resample_dialog_policy.cpp
         src/resolution_resampler.cpp
         src/text_file_writer.cpp
+        src/vobsub_packet_stream.cpp
         src/text_file_reader.cpp
         src/string_codec.cpp
         src/subtitle_matcher.cpp
@@ -166,6 +167,7 @@ if(GTEST_FOUND)
         tests/tests/video_renderer_opengl_overlay_upload_plan.cpp
         tests/tests/video_renderer_opengl_tile.cpp
         tests/tests/video_render_routing.cpp
+        tests/tests/vobsub_packet_stream.cpp
         tests/tests/video_subtitle_scene_cache.cpp
         tests/tests/video_renderer_placebo_source_frame.cpp
         tests/tests/mru.cpp

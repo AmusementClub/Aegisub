@@ -54,9 +54,16 @@ TEST(mkv_wrap_common, classify_supported_codecs) {
 
 TEST(mkv_wrap_common, classify_supported_bitmap_codecs) {
 	EXPECT_EQ(MkvBitmapSubtitleCodec::HdmvPgs, ClassifyMkvBitmapSubtitleCodec("S_HDMV/PGS"));
-	EXPECT_EQ(MkvBitmapSubtitleCodec::Unsupported, ClassifyMkvBitmapSubtitleCodec("S_VOBSUB"));
+	EXPECT_EQ(MkvBitmapSubtitleCodec::VobSub, ClassifyMkvBitmapSubtitleCodec("S_VOBSUB"));
 	EXPECT_TRUE(IsSupportedMkvBitmapSubtitleCodec("S_HDMV/PGS"));
+	EXPECT_TRUE(IsSupportedMkvBitmapSubtitleCodec("S_VOBSUB"));
 	EXPECT_FALSE(IsSupportedMkvBitmapSubtitleCodec("S_TEXT/ASS"));
+}
+
+TEST(mkv_wrap_common, maps_bitmap_codecs_to_secondary_decoder_ids) {
+	EXPECT_EQ(std::string_view("hdmv-pgs"), GetSecondarySubtitleCodecId(MkvBitmapSubtitleCodec::HdmvPgs));
+	EXPECT_EQ(std::string_view("dvd-subtitle"), GetSecondarySubtitleCodecId(MkvBitmapSubtitleCodec::VobSub));
+	EXPECT_TRUE(GetSecondarySubtitleCodecId(MkvBitmapSubtitleCodec::Unsupported).empty());
 }
 
 TEST(mkv_wrap_common, classify_track_types) {

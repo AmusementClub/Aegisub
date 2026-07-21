@@ -1061,10 +1061,17 @@ MkvSubtitleAvailability MatroskaWrapper::GetSubtitleAvailability(agi::fs::path c
 	LogMkvParserBackendOnce();
 	try {
 		auto scan = scan_tracks(filename);
-		return {
-			!collect_importable_subtitle_tracks(scan, false).empty(),
-			!collect_bitmap_subtitle_tracks(scan, false).empty()
-		};
+		MkvSubtitleAvailability availability;
+		availability.text = !collect_importable_subtitle_tracks(scan, false).empty();
+		auto const bitmap_tracks = collect_bitmap_subtitle_tracks(scan, false);
+		availability.bitmap = !bitmap_tracks.empty();
+		for (auto const *track : bitmap_tracks) {
+			availability.hdmv_pgs = availability.hdmv_pgs
+				|| track->bitmap_subtitle_codec == MkvBitmapSubtitleCodec::HdmvPgs;
+			availability.vobsub = availability.vobsub
+				|| track->bitmap_subtitle_codec == MkvBitmapSubtitleCodec::VobSub;
+		}
+		return availability;
 	}
 	catch (...) {
 		return {};
@@ -1088,11 +1095,14 @@ SecondarySubtitlePacketStream MatroskaWrapper::GetBitmapSubtitlePacketsForTrack(
 	auto track = std::find_if(scan.tracks.begin(), scan.tracks.end(), [&](MkvTrackInfo const& value) {
 		return value.track_number == track_number && IsDecodableMkvBitmapSubtitleTrack(value);
 	});
-	if (track == scan.tracks.end() || track->bitmap_subtitle_codec != MkvBitmapSubtitleCodec::HdmvPgs)
+	if (track == scan.tracks.end())
+		throw MatroskaException("Selected Matroska bitmap subtitle track is unavailable.");
+	auto const codec_id = GetSecondarySubtitleCodecId(track->bitmap_subtitle_codec);
+	if (codec_id.empty())
 		throw MatroskaException("Selected Matroska bitmap subtitle track is unavailable.");
 
 	SecondarySubtitlePacketStream stream;
-	stream.codec_id = kSecondarySubtitleCodecHdmvPgs;
+	stream.codec_id = codec_id;
 	std::string decoded_error;
 	auto codec_private = DecodeMkvContentEncodedData(track->codec_private, track->content_encodings, MkvContentEncodingTarget::Private, &decoded_error);
 	if (!codec_private)
@@ -1114,7 +1124,7 @@ SecondarySubtitlePacketStream MatroskaWrapper::GetBitmapSubtitlePacketsForTrack(
 	if (!error.empty())
 		throw MatroskaException(error);
 	if (stream.packets.empty())
-		throw MatroskaException("Selected Matroska PGS track contains no packets.");
+		throw MatroskaException("Selected Matroska bitmap subtitle track contains no packets.");
 	return stream;
 }
 

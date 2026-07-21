@@ -7,11 +7,15 @@ editing and rendering continue to use `AssFile` and `SubtitlesProvider`
 (libass/CSRI). Text secondary subtitles also continue to be imported into an
 `AssFile`.
 
-The first supported bitmap codec is HDMV PGS. Aegisub supports two sources:
+The supported bitmap codecs are HDMV PGS and DVD/VobSub. Aegisub supports:
 
 - external `.sup` / `.pgs` files, parsed by Aegisub's lightweight SUP reader;
+- external VobSub `.idx` files with a paired `.sub` MPEG-PS data file, parsed
+  and packetized by Aegisub's VobSub reader;
 - `S_HDMV/PGS` tracks in Matroska containers, demuxed by Aegisub's existing
-  libmatroska backend.
+  libmatroska backend;
+- `S_VOBSUB` tracks in Matroska containers, with the IDX-style CodecPrivate
+  header passed through to the decoder.
 
 Other containers are not delegated to the decoder plugin and are out of scope.
 
@@ -19,10 +23,12 @@ Other containers are not delegated to the decoder plugin and are out of scope.
 
 Aegisub owns file access, Matroska scanning, track selection, content-encoding
 removal, timestamps, source reload, target allocation, and display. It
-normalizes both supported sources into `SecondarySubtitlePacketStream` with
-nanosecond timestamps and the stable codec id `hdmv-pgs`.
+normalizes supported sources into `SecondarySubtitlePacketStream` with
+nanosecond timestamps and the stable codec ids `hdmv-pgs` or `dvd-subtitle`.
+For external VobSub, `.idx` is the canonical user-facing path; Aegisub watches
+both files and removes the `.sub` MPEG-PS/PES envelope before packet delivery.
 
-Ragbag owns only the libavcodec decoder session, decoded bitmap timeline, PGS
+Ragbag owns only the libavcodec decoder session, decoded bitmap timeline,
 authored-canvas discovery, random time lookup, palette expansion, scaling, and
 rendering into host-owned premultiplied BGRA8 storage. Ragbag deliberately does
 not link libavformat and cannot open source files or containers.
@@ -31,7 +37,7 @@ not link libavformat and cannot open source files or containers.
 
 The v1 dynamic ABI is a preload-and-render contract:
 
-1. discover a decoder that advertises `hdmv-pgs`;
+1. discover a decoder that advertises the stream's stable codec id;
 2. create a decoder session;
 3. call `begin_stream`, followed by ordered `push_packet` calls;
 4. call `end_stream` to finalize the random-access timeline;
@@ -50,9 +56,11 @@ is versioned as `ragbag_subtitle_decoder_init_v1`.
 ## Geometry and color
 
 PGS presentation composition segments are authoritative for authored width and
-height. The main video size is only a fallback for malformed streams. Ragbag
-scales authored bitmap rectangles to the target with nearest-neighbour sampling
-and returns premultiplied BGRA8 suitable for the wx secondary subtitle strip.
+height. VobSub uses the IDX/CodecPrivate `size:` line and its `palette:` line as
+the global DVD CLUT. The main video size is only a fallback for streams without
+authored dimensions. Ragbag scales authored bitmap rectangles to the target
+with nearest-neighbour sampling and returns premultiplied BGRA8 suitable for the
+wx secondary subtitle strip.
 
 HDR output, high-bit-depth targets, primary-video composition, dirty upload
 protocols, document inputs, and libass adapters are explicit non-goals.
@@ -63,4 +71,4 @@ The former Ragbag v0 `open_file` provider is replaced rather than extended.
 Ragbag is no longer registered in the global `SubtitlesProviderFactory`; the
 secondary subtitle session reaches it only through the private
 `secondary_subtitle_decoder` adapter. Missing decoder plugins therefore affect
-only PGS secondary sources and do not change normal ASS provider discovery.
+only bitmap secondary sources and do not change normal ASS provider discovery.

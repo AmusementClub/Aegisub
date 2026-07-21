@@ -6,6 +6,7 @@
 #include <vector>
 
 inline constexpr char const *kSecondarySubtitleCodecHdmvPgs = "hdmv-pgs";
+inline constexpr char const *kSecondarySubtitleCodecDvdSubtitle = "dvd-subtitle";
 inline constexpr int64_t kSecondarySubtitleTimestampUnknown = std::numeric_limits<int64_t>::min();
 
 enum SecondarySubtitlePacketFlag : uint32_t {

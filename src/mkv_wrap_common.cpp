@@ -14,6 +14,8 @@
 
 #include "mkv_wrap_common.h"
 
+#include "secondary_subtitle_packet_stream.h"
+
 #include <libaegisub/ass/time.h>
 #include <libaegisub/format.h>
 
@@ -134,9 +136,23 @@ MkvTextSubtitleCodec ClassifyMkvTextSubtitleCodec(std::string_view codec_id) {
 }
 
 MkvBitmapSubtitleCodec ClassifyMkvBitmapSubtitleCodec(std::string_view codec_id) {
-	return codec_id == "S_HDMV/PGS"
-		? MkvBitmapSubtitleCodec::HdmvPgs
-		: MkvBitmapSubtitleCodec::Unsupported;
+	if (codec_id == "S_HDMV/PGS")
+		return MkvBitmapSubtitleCodec::HdmvPgs;
+	if (codec_id == "S_VOBSUB")
+		return MkvBitmapSubtitleCodec::VobSub;
+	return MkvBitmapSubtitleCodec::Unsupported;
+}
+
+std::string_view GetSecondarySubtitleCodecId(MkvBitmapSubtitleCodec codec) {
+	switch (codec) {
+	case MkvBitmapSubtitleCodec::HdmvPgs:
+		return kSecondarySubtitleCodecHdmvPgs;
+	case MkvBitmapSubtitleCodec::VobSub:
+		return kSecondarySubtitleCodecDvdSubtitle;
+	case MkvBitmapSubtitleCodec::Unsupported:
+		break;
+	}
+	return {};
 }
 
 bool IsSupportedMkvTextSubtitleCodec(std::string_view codec_id) {

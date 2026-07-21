@@ -1,12 +1,11 @@
 #include "pgs_sup_packet_stream.h"
 
+#include "secondary_subtitle_packet_io.h"
+
 #include <libaegisub/fs.h>
-#include <libaegisub/io.h>
 
 #include <cstddef>
 #include <cstdint>
-#include <istream>
-#include <iterator>
 #include <limits>
 #include <string>
 
@@ -16,18 +15,6 @@ constexpr int64_t kPgsClockHz = 90000;
 constexpr int64_t kNanosecondsPerSecond = 1000000000;
 constexpr size_t kSupHeaderSize = 10;
 constexpr size_t kPgsSegmentHeaderSize = 3;
-
-uint16_t ReadBe16(std::string_view data, size_t offset) {
-	return static_cast<uint16_t>((static_cast<unsigned char>(data[offset]) << 8)
-		| static_cast<unsigned char>(data[offset + 1]));
-}
-
-uint32_t ReadBe32(std::string_view data, size_t offset) {
-	return (static_cast<uint32_t>(static_cast<unsigned char>(data[offset])) << 24)
-		| (static_cast<uint32_t>(static_cast<unsigned char>(data[offset + 1])) << 16)
-		| (static_cast<uint32_t>(static_cast<unsigned char>(data[offset + 2])) << 8)
-		| static_cast<uint32_t>(static_cast<unsigned char>(data[offset + 3]));
-}
 
 class TimestampUnwrapper {
 	uint64_t epoch = 0;
@@ -79,12 +66,12 @@ SecondarySubtitlePacketStream ParsePgsSupPacketStream(std::string_view data) {
 	for (size_t offset = 0; offset < data.size();) {
 		if (data.size() - offset < kSupHeaderSize + kPgsSegmentHeaderSize)
 			ThrowTruncated(offset);
-		if (ReadBe16(data, offset) != kSupMagic)
+		if (secondary_subtitle_packet_io::ReadBigEndian16(data, offset) != kSupMagic)
 			throw PgsSupParseError("Invalid SUP magic at byte " + std::to_string(offset) + ".");
 
-		auto const pts = ReadBe32(data, offset + 2);
-		auto const dts = ReadBe32(data, offset + 6);
-		auto const segment_size = static_cast<size_t>(ReadBe16(data, offset + kSupHeaderSize + 1));
+		auto const pts = secondary_subtitle_packet_io::ReadBigEndian32(data, offset + 2);
+		auto const dts = secondary_subtitle_packet_io::ReadBigEndian32(data, offset + 6);
+		auto const segment_size = static_cast<size_t>(secondary_subtitle_packet_io::ReadBigEndian16(data, offset + kSupHeaderSize + 1));
 		auto const packet_size = kSupHeaderSize + kPgsSegmentHeaderSize + segment_size;
 		if (packet_size < kSupHeaderSize + kPgsSegmentHeaderSize || data.size() - offset < packet_size)
 			ThrowTruncated(offset);
@@ -104,9 +91,5 @@ SecondarySubtitlePacketStream ParsePgsSupPacketStream(std::string_view data) {
 }
 
 SecondarySubtitlePacketStream ReadPgsSupPacketStream(agi::fs::path const& filename) {
-	auto input = agi::io::Open(filename, true);
-	std::string data((std::istreambuf_iterator<char>(*input)), std::istreambuf_iterator<char>());
-	if (input->bad())
-		throw agi::io::IOFatal("Failed while reading " + agi::fs::PathToString(filename));
-	return ParsePgsSupPacketStream(data);
+	return ParsePgsSupPacketStream(secondary_subtitle_packet_io::ReadFile(filename));
 }

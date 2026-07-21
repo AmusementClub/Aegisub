@@ -28,6 +28,7 @@ namespace agi { class AudioProvider; }
 namespace agi { class BackgroundRunner; }
 namespace agi { struct Context; }
 namespace aegisub::video_session_ops { struct OpenedVideoSummary; }
+enum class MkvBitmapSubtitleCodec;
 struct ProjectProperties;
 
 class Project {
@@ -49,6 +50,8 @@ class Project {
 
 	bool video_has_subtitles = false;
 	bool video_has_bitmap_subtitles = false;
+	bool video_has_pgs_subtitles = false;
+	bool video_has_vobsub_subtitles = false;
 	bool can_generate_scene_change_keyframes = false;
 	std::unique_ptr<agi::BackgroundRunner> progress_runner;
 	agi::Context *context = nullptr;
@@ -86,6 +89,7 @@ public:
 	void CloseSubtitles();
 	bool CanLoadSubtitlesFromVideo() const { return video_has_subtitles; }
 	bool CanLoadBitmapSubtitlesFromVideo() const { return video_has_bitmap_subtitles; }
+	bool CanLoadBitmapSubtitlesFromVideo(MkvBitmapSubtitleCodec codec) const;
 	bool CanLoadSecondarySubtitlesFromVideo() const { return video_has_subtitles || video_has_bitmap_subtitles; }
 
 	void LoadAudio(agi::fs::path path);

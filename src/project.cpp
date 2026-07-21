@@ -340,6 +340,18 @@ Project::Project(agi::Context *c) : context(c) {
 
 Project::~Project() { }
 
+bool Project::CanLoadBitmapSubtitlesFromVideo(MkvBitmapSubtitleCodec codec) const {
+	switch (codec) {
+	case MkvBitmapSubtitleCodec::HdmvPgs:
+		return video_has_pgs_subtitles;
+	case MkvBitmapSubtitleCodec::VobSub:
+		return video_has_vobsub_subtitles;
+	case MkvBitmapSubtitleCodec::Unsupported:
+		break;
+	}
+	return false;
+}
+
 void Project::UpdateRelativePaths() {
 	auto core = context->GetCore();
 	core.ass->Properties.audio_file     = agi::fs::PathToGenericString(core.path->MakeRelative(audio_file, "?script"));
@@ -718,6 +730,8 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 	SetPath(video_file, "?video", "Video", path);
 	video_has_subtitles = opened_video.has_subtitles;
 	video_has_bitmap_subtitles = subtitle_availability.bitmap;
+	video_has_pgs_subtitles = subtitle_availability.hdmv_pgs;
+	video_has_vobsub_subtitles = subtitle_availability.vobsub;
 
 	AnnounceVideoProviderModified(video_provider.get());
 
@@ -785,6 +799,8 @@ void Project::CloseVideo() {
 	// Clear state before notifying so listeners see the closed video.
 	video_has_subtitles = false;
 	video_has_bitmap_subtitles = false;
+	video_has_pgs_subtitles = false;
+	video_has_vobsub_subtitles = false;
 	AnnounceVideoProviderModified(nullptr);
 	video_provider.reset();
 	can_generate_scene_change_keyframes = false;

@@ -61,7 +61,8 @@ typedef struct RagbagSubtitleDecoderDescriptorV1 {
 	const char *display_name;
 	const char *debug_name;
 	// Stable, host-defined codec identifiers separated by semicolons. V1
-	// defines "hdmv-pgs". Container-specific codec IDs stay host-side.
+	// defines "hdmv-pgs" and "dvd-subtitle". Container-specific file/container
+	// IDs stay host-side; dvd-subtitle packets are complete raw DVD SPUs.
 	const char *codec_ids_semicolon;
 } RagbagSubtitleDecoderDescriptorV1;
 

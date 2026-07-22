@@ -386,6 +386,7 @@
 			}
 		},
 		"SceneChange" : {
+			"Backend" : "auto",
 			"Cache" : {
 				"Files" : 20,
 				"Size" : 42

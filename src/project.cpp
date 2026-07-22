@@ -33,6 +33,7 @@
 #include "perf_trace.h"
 #ifdef WITH_SCENECHANGE
 #include "provider_index_cache.h"
+#include "scenechange_native_api.h"
 #endif
 #include "provider_selection_diagnostics.h"
 #include "project_session_ops.h"
@@ -137,7 +138,7 @@ agi::fs::path GetSceneChangeKeyframeCacheFilename(agi::fs::path const& filename)
 	return aegisub::provider_index_cache::BuildFilename(filename,
 		kSceneChangeKeyframeCacheToken,
 		".kf.txt",
-		{ "wwxd" });
+		{ scenechange::GetCacheToken() });
 }
 
 agi::fs::path GetSceneChangeKeyframeManifestPath() {
@@ -333,6 +334,9 @@ Project::Project(agi::Context *c) : context(c) {
 		OPT_SUB("Provider/Video/FFmpegSource/Decoding Threads", &Project::ReloadVideo, this),
 		OPT_SUB("Provider/Video/FFmpegSource/Unsafe Seeking", &Project::ReloadVideo, this),
 		OPT_SUB("Provider/Video/LsmasNative/Decoding Threads", &Project::ReloadVideo, this),
+#ifdef WITH_SCENECHANGE
+		OPT_SUB("Provider/SceneChange/Backend", &Project::ReloadVideo, this),
+#endif
 		OPT_SUB("Subtitle/Provider", &Project::ReloadSubtitlesProvider, this),
 		OPT_SUB("Video/Provider", &Project::ReloadVideo, this),
 	});

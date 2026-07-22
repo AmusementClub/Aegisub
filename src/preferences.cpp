@@ -949,6 +949,13 @@ void BuildAdvancedVideoPage(OptionPage *p) {
 	binder->AddInt(_("Decoding threads"), "Provider/Video/LsmasNative/Decoding Threads", 0, INT_MAX);
 #endif
 
+#ifdef WITH_SCENECHANGE
+	binder->AddCategory(wxS("SceneChange"));
+	const wxString scenechange_backends[] = { wxS("auto"), wxS("scxvid"), wxS("wwxd") };
+	wxArrayString scenechange_backend_choices(3, scenechange_backends);
+	binder->AddChoice(_("SceneChange backend"), scenechange_backend_choices, "Provider/SceneChange/Backend");
+#endif
+
 	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
 }

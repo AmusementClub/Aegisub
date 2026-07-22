@@ -493,6 +493,105 @@ int32_t SCENECHANGE_NATIVE_CALL SceneChangeProgressCallback(void *user_data, int
     }
 }
 
+struct I420Layout {
+    size_t y_size = 0;
+    size_t chroma_size = 0;
+    size_t total_size = 0;
+};
+
+I420Layout GetI420Layout(lsmas_video_info_t const& info) {
+    if ((info.width & 1) != 0 || (info.height & 1) != 0)
+        throw VideoProviderError("YUV420P8 SceneChange input requires even video dimensions.");
+
+    auto const width = static_cast<size_t>(info.width);
+    auto const height = static_cast<size_t>(info.height);
+    auto const chroma_width = width / 2;
+    auto const chroma_height = height / 2;
+    auto const max_size = std::numeric_limits<size_t>::max();
+
+    if (height > max_size / width || chroma_height > max_size / chroma_width)
+        throw VideoProviderError("Video dimensions are too large for YUV420P8 SceneChange input.");
+
+    I420Layout layout;
+    layout.y_size = width * height;
+    layout.chroma_size = chroma_width * chroma_height;
+    if (layout.chroma_size > (max_size - layout.y_size) / 2)
+        throw VideoProviderError("Video dimensions are too large for YUV420P8 SceneChange input.");
+    layout.total_size = layout.y_size + layout.chroma_size * 2;
+    return layout;
+}
+
+I420Layout ValidateI420WriteFrame(scenechange_provider_frame_buffer const& frame,
+                                  lsmas_video_info_t const& info) {
+    auto const layout = GetI420Layout(info);
+    if (frame.struct_size != SCENECHANGE_PROVIDER_FRAME_BUFFER_V1_SIZE ||
+        frame.pixel_format != SCENECHANGE_PROVIDER_PIXEL_FORMAT_YUV420P8 ||
+        frame.plane_count != 3 ||
+        !frame.data ||
+        frame.data_size != layout.total_size ||
+        !frame.planes[0].data ||
+        !frame.planes[1].data ||
+        !frame.planes[2].data ||
+        frame.planes[0].data != frame.data ||
+        frame.planes[1].data != frame.data + layout.y_size ||
+        frame.planes[2].data != frame.data + layout.y_size + layout.chroma_size ||
+        frame.planes[0].stride != info.width ||
+        frame.planes[0].width != info.width ||
+        frame.planes[0].height != info.height ||
+        frame.planes[1].stride != info.width / 2 ||
+        frame.planes[1].width != info.width / 2 ||
+        frame.planes[1].height != info.height / 2 ||
+        frame.planes[2].stride != info.width / 2 ||
+        frame.planes[2].width != info.width / 2 ||
+        frame.planes[2].height != info.height / 2)
+        throw VideoProviderError("SceneChange provider returned an invalid YUV420P8 write buffer.");
+    return layout;
+}
+
+void ValidateGray8WriteFrame(scenechange_provider_frame_buffer const& frame,
+                             lsmas_video_info_t const& info) {
+    int const rounded_width = (info.width + 15) & ~15;
+    int const rounded_height = (info.height + 15) & ~15;
+    if (frame.struct_size != SCENECHANGE_PROVIDER_FRAME_BUFFER_V1_SIZE ||
+        frame.pixel_format != SCENECHANGE_PROVIDER_PIXEL_FORMAT_GRAY8_PADDED16 ||
+        frame.plane_count != 1 ||
+        !frame.data ||
+        !frame.planes[0].data ||
+        frame.planes[0].data != frame.data ||
+        frame.planes[0].stride < rounded_width ||
+        frame.planes[0].width != rounded_width ||
+        frame.planes[0].height != rounded_height ||
+        frame.data_size != static_cast<size_t>(frame.planes[0].stride) * static_cast<size_t>(rounded_height))
+        throw VideoProviderError("SceneChange provider returned an invalid Gray8Padded16 write buffer.");
+}
+
+void ValidateLsmasI420Layout(lsmas_video_frame_buffer_layout_t const& layout,
+                             int64_t required_bytes,
+                             scenechange_provider_frame_buffer const& frame,
+                             I420Layout const& expected,
+                             lsmas_video_info_t const& info) {
+    if (required_bytes <= 0 ||
+        layout.required_bytes != required_bytes ||
+        static_cast<uint64_t>(required_bytes) != static_cast<uint64_t>(frame.data_size) ||
+        layout.output_format != LSMAS_VIDEO_FRAME_OUTPUT_YUV420P8 ||
+        layout.width != info.width ||
+        layout.height != info.height ||
+        layout.plane_count != 3 ||
+        layout.plane_width[0] != frame.planes[0].width ||
+        layout.plane_height[0] != frame.planes[0].height ||
+        layout.plane_stride[0] != frame.planes[0].stride ||
+        layout.plane_offset[0] != 0 ||
+        layout.plane_width[1] != frame.planes[1].width ||
+        layout.plane_height[1] != frame.planes[1].height ||
+        layout.plane_stride[1] != frame.planes[1].stride ||
+        layout.plane_offset[1] != static_cast<int64_t>(expected.y_size) ||
+        layout.plane_width[2] != frame.planes[2].width ||
+        layout.plane_height[2] != frame.planes[2].height ||
+        layout.plane_stride[2] != frame.planes[2].stride ||
+        layout.plane_offset[2] != static_cast<int64_t>(expected.y_size + expected.chroma_size))
+        throw VideoDecodeError("LsmasNative returned an incompatible YUV420P8 frame layout for SceneChange.");
+}
+
 std::vector<int> ScanSceneChangeKeyframes(lsmas_handle_t *handle,
                                           lsmas_video_info_t const& info,
                                           agi::ProgressSink *ps) {
@@ -505,15 +604,11 @@ std::vector<int> ScanSceneChangeKeyframes(lsmas_handle_t *handle,
     auto const& lsm = lsmas::GetApi();
 
     SceneChangeProgressState progress_state { ps, info.num_frames };
-
-    char sc_error[4096] = {};
-    scenechange_wwxd_context_t *ctx = sc.wwxd_create(info.width, info.height, sc_error, sizeof(sc_error));
-    if (!ctx)
-        ThrowSceneChangeError(sc_error, "Failed to create SceneChange detector.");
-    auto destroy_ctx = agi::make_scope_exit([&] { sc.wwxd_destroy(ctx); });
-
-    int const rounded_width = (info.width + 15) & ~15;
-    int const rounded_height = (info.height + 15) & ~15;
+    auto flush_decoder = agi::make_scope_exit([&] {
+        lsmas_provider::ErrorString flush_error;
+        if (lsm.video_flush)
+            lsm.video_flush(handle, flush_error.Out());
+    });
 
     std::vector<int> result;
     result.reserve(std::min(std::max(info.num_frames / 20, 16), 4096));
@@ -524,58 +619,108 @@ std::vector<int> ScanSceneChangeKeyframes(lsmas_handle_t *handle,
         ps->SetProgress(0, info.num_frames);
     }
 
-    if (ps) {
-        int32_t const rc = sc.wwxd_set_progress_callback(ctx, SceneChangeProgressCallback, &progress_state, sc_error, sizeof(sc_error));
-        if (rc != 0)
-            ThrowSceneChangeError(sc_error, "Failed to set SceneChange progress callback.");
+    char sc_error[4096] = {};
+    if (sc.backend != scenechange::Api::Backend::ScxvidProvider &&
+        sc.backend != scenechange::Api::Backend::WwxdProvider)
+        throw VideoProviderError("No supported SceneChange provider is loaded.");
+
+    {
+        std::string const backend_name = scenechange::GetBackendName();
+        void *ctx = sc.provider.create(info.width, info.height, nullptr, 0, sc_error, sizeof(sc_error));
+        if (!ctx)
+            ThrowSceneChangeError(sc_error, "Failed to create " + backend_name + ".");
+        auto destroy_ctx = agi::make_scope_exit([&] { sc.provider.destroy(ctx); });
+
+        if (ps) {
+            int32_t const rc = sc.provider.set_progress_callback(
+                ctx, SceneChangeProgressCallback, &progress_state, sc_error, sizeof(sc_error));
+            if (rc != 0)
+                ThrowSceneChangeError(sc_error, "Failed to set SceneChange provider progress callback.");
+        }
+
+        for (int frame_index = 0; frame_index < info.num_frames; ++frame_index) {
+            if (ps && ps->IsCancelled())
+                throw agi::UserCancelException("SceneChange keyframe generation canceled by user.");
+
+            scenechange_provider_frame_buffer frame_buffer {};
+            frame_buffer.struct_size = SCENECHANGE_PROVIDER_FRAME_BUFFER_V1_SIZE;
+            int32_t rc = sc.provider.get_write_frame(ctx, &frame_buffer, sc_error, sizeof(sc_error));
+            if (rc != 0)
+                ThrowSceneChangeError(sc_error, "Failed to get SceneChange provider write buffer.");
+
+            lsmas_provider::ErrorString error;
+            lsmas_video_frame_buffer_layout_t layout = {};
+            if (sc.provider.input_pixel_format == SCENECHANGE_PROVIDER_PIXEL_FORMAT_YUV420P8) {
+                auto const expected_layout = ValidateI420WriteFrame(frame_buffer, info);
+                int64_t bytes = lsm.video_get_frame(
+                    handle,
+                    frame_index,
+                    LSMAS_VIDEO_FRAME_OUTPUT_YUV420P8,
+                    nullptr,
+                    frame_buffer.planes[0].stride,
+                    &layout,
+                    error.Out());
+                if (bytes <= 0)
+                    throw VideoDecodeError(error.Message("failed to query YUV420P8 frame layout for SceneChange"));
+                ValidateLsmasI420Layout(layout, bytes, frame_buffer, expected_layout, info);
+
+                error.Reset();
+                layout = {};
+                bytes = lsm.video_get_frame(
+                    handle,
+                    frame_index,
+                    LSMAS_VIDEO_FRAME_OUTPUT_YUV420P8,
+                    frame_buffer.data,
+                    frame_buffer.planes[0].stride,
+                    &layout,
+                    error.Out());
+                if (bytes <= 0)
+                    throw VideoDecodeError(error.Message("failed to decode YUV420P8 frame for SceneChange"));
+                ValidateLsmasI420Layout(layout, bytes, frame_buffer, expected_layout, info);
+            }
+            else if (sc.provider.input_pixel_format == SCENECHANGE_PROVIDER_PIXEL_FORMAT_GRAY8_PADDED16) {
+                ValidateGray8WriteFrame(frame_buffer, info);
+                int64_t const bytes = lsm.video_get_frame(
+                    handle,
+                    frame_index,
+                    LSMAS_VIDEO_FRAME_OUTPUT_GRAY8_PADDED16,
+                    frame_buffer.data,
+                    frame_buffer.planes[0].stride,
+                    &layout,
+                    error.Out());
+                if (bytes <= 0)
+                    throw VideoDecodeError(error.Message("failed to decode Gray8Padded16 frame for SceneChange"));
+                if (layout.output_format != LSMAS_VIDEO_FRAME_OUTPUT_GRAY8_PADDED16 ||
+                    layout.width != info.width ||
+                    layout.height != info.height ||
+                    layout.plane_count != 1 ||
+                    layout.plane_stride[0] != frame_buffer.planes[0].stride ||
+                    layout.plane_width[0] != frame_buffer.planes[0].width ||
+                    layout.plane_height[0] != frame_buffer.planes[0].height ||
+                    layout.plane_offset[0] != 0 ||
+                    layout.required_bytes != bytes ||
+                    static_cast<uint64_t>(bytes) != static_cast<uint64_t>(frame_buffer.data_size))
+                    throw VideoDecodeError("LsmasNative returned an incompatible Gray8Padded16 frame layout for SceneChange.");
+            }
+            else {
+                throw VideoProviderError("SceneChange provider selected an unsupported input pixel format.");
+            }
+
+            scenechange_provider_result frame_result {};
+            frame_result.struct_size = SCENECHANGE_PROVIDER_RESULT_V1_SIZE;
+            rc = sc.provider.commit_written_frame(ctx, &frame_result, sc_error, sizeof(sc_error));
+            if (rc == kSceneChangeCanceled)
+                throw agi::UserCancelException("SceneChange keyframe generation canceled by user.");
+            if (rc != 0)
+                ThrowSceneChangeError(sc_error, "SceneChange provider failed while analyzing a frame.");
+            if (frame_result.struct_size != SCENECHANGE_PROVIDER_RESULT_V1_SIZE ||
+                frame_result.frame_index != frame_index ||
+                (frame_result.is_scene_change != 0 && frame_result.is_scene_change != 1))
+                throw VideoProviderError("SceneChange provider returned an invalid frame result.");
+            if (frame_result.is_scene_change)
+                result.push_back(frame_index);
+        }
     }
-
-    for (int frame = 0; frame < info.num_frames; ++frame) {
-        if (ps && ps->IsCancelled())
-            throw agi::UserCancelException("SceneChange keyframe generation canceled by user.");
-
-        int32_t stride = 0;
-        auto *dst = sc.wwxd_get_write_buffer(ctx, &stride, sc_error, sizeof(sc_error));
-        if (!dst)
-            ThrowSceneChangeError(sc_error, "Failed to get SceneChange write buffer.");
-
-        lsmas_provider::ErrorString error;
-        lsmas_video_frame_buffer_layout_t layout = {};
-        int64_t const bytes = lsm.video_get_frame(
-            handle,
-            frame,
-            LSMAS_VIDEO_FRAME_OUTPUT_GRAY8_PADDED16,
-            dst,
-            stride,
-            &layout,
-            error.Out());
-        if (bytes <= 0)
-            throw VideoDecodeError(error.Message("failed to decode Gray8Padded16 frame for SceneChange"));
-
-        if (layout.output_format != LSMAS_VIDEO_FRAME_OUTPUT_GRAY8_PADDED16 ||
-            layout.width != info.width ||
-            layout.height != info.height ||
-            layout.plane_count != 1 ||
-            layout.plane_stride[0] != stride ||
-            layout.plane_width[0] != rounded_width ||
-            layout.plane_height[0] != rounded_height ||
-            layout.required_bytes != bytes)
-            throw VideoDecodeError("LsmasNative returned invalid Gray8Padded16 frame layout for SceneChange.");
-
-        int32_t scene = 0;
-        int32_t const rc = sc.wwxd_commit_written_frame_no_pad(ctx, &scene, sc_error, sizeof(sc_error));
-        if (rc == kSceneChangeCanceled)
-            throw agi::UserCancelException("SceneChange keyframe generation canceled by user.");
-        if (rc != 0)
-            ThrowSceneChangeError(sc_error, "SceneChange failed while analyzing a frame.");
-        if (scene)
-            result.push_back(frame);
-    }
-
-    lsmas_provider::ErrorString flush_error;
-    if (lsm.video_flush)
-        lsm.video_flush(handle, flush_error.Out());
-
     return result;
 }
 #endif
@@ -589,7 +734,7 @@ bool LsmasVideoProvider::SetOutputMode(SourceFrameOutputMode mode) {
 
 #ifdef WITH_SCENECHANGE
 bool LsmasVideoProvider::CanGenerateSceneChangeKeyframes() const {
-    return scenechange::IsAvailable();
+    return scenechange::SupportsDimensions(info.width, info.height);
 }
 
 void LsmasVideoProvider::GenerateSceneChangeKeyframes(agi::fs::path const& output_path, agi::ProgressSink *ps) {

@@ -51,7 +51,7 @@ AppRuntimeInitOptions BuildGuiWxAppRuntimeInitOptions() {
 	options.main_queue_hooks = std::move(gui_runtime_hosts.main_queue_hooks);
 	options.ui_timer_host = std::move(gui_runtime_hosts.ui_timer_host);
 	options.locale_host = std::move(gui_runtime_hosts.locale_host);
-	options.load_global_scripts = true;
+	options.create_global_script_manager = true;
 	options.initialize_commands = true;
 	options.initialize_ui_locale = true;
 	options.register_automation_script_factory = true;

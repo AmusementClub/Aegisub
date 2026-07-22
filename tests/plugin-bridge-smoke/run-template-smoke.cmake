@@ -311,19 +311,41 @@ if(NOT aegisub_result EQUAL 0)
         "stdout:\n${aegisub_stdout}\n"
         "stderr:\n${aegisub_stderr}")
 endif()
-foreach(expected
-    "script_loaded=true"
-    "feature_found=true"
-    "result=PASS"
-    "Generated C# extension executed successfully: dependency-loaded")
-    string(FIND "${aegisub_stdout}" "${expected}" expected_position)
-    if(expected_position EQUAL -1)
+set(aegisub_result_file "${trace_dir}/result.json")
+if(NOT EXISTS "${aegisub_result_file}")
+    message(FATAL_ERROR "Generated extension Aegisub run did not write result.json")
+endif()
+file(READ "${aegisub_result_file}" aegisub_result_json)
+foreach(boolean_field passed script_loaded feature_found validate_passed)
+    if(boolean_field STREQUAL "passed")
+        string(JSON boolean_value ERROR_VARIABLE json_error
+            GET "${aegisub_result_json}" passed)
+    else()
+        string(JSON boolean_value ERROR_VARIABLE json_error
+            GET "${aegisub_result_json}" steps 0 "${boolean_field}")
+    endif()
+    if(json_error OR NOT boolean_value)
         message(FATAL_ERROR
-            "Generated extension Aegisub output is missing '${expected}'\n"
+            "Generated extension result field '${boolean_field}' is not true\n"
+            "result.json:\n${aegisub_result_json}\n"
             "stdout:\n${aegisub_stdout}\n"
             "stderr:\n${aegisub_stderr}")
     endif()
 endforeach()
+string(JSON feature_name ERROR_VARIABLE json_error
+    GET "${aegisub_result_json}" steps 0 feature_name)
+if(json_error OR NOT feature_name STREQUAL "GeneratedExtension/Hello from C#")
+    message(FATAL_ERROR
+        "Generated extension result has an unexpected feature_name\n"
+        "result.json:\n${aegisub_result_json}")
+endif()
+string(JSON step_status ERROR_VARIABLE json_error
+    GET "${aegisub_result_json}" steps 0 status)
+if(json_error OR NOT step_status STREQUAL "passed")
+    message(FATAL_ERROR
+        "Generated extension result has an unexpected step status\n"
+        "result.json:\n${aegisub_result_json}")
+endif()
 
 file(READ "${project_dir}/Properties/launchSettings.json" launch_settings)
 foreach(profile "Managed fixture" "Aegisub headless integration" "Aegisub GUI integration")

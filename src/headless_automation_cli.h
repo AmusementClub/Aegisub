@@ -19,13 +19,4 @@ struct RunRequest {
 	bool internal_worker = false;
 };
 
-struct ParseResult {
-	bool requested = false;
-	std::optional<RunRequest> request;
-	std::string error;
-};
-
-ParseResult Parse(std::vector<std::string> const& args);
-std::string Usage();
-
 }

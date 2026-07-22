@@ -2,7 +2,10 @@
 
 #include <aegisub/fontcollector/fontcollector.h>
 
-#include <CLI/CLI.hpp>
+#include "fontcollector_subcommand.h"
+#include "fontcollector_cli_encoding.h"
+
+#include <libaegisub/fs.h>
 #include <libaegisub/cajun/elements.h>
 #include <libaegisub/cajun/writer.h>
 
@@ -29,71 +32,30 @@
 #endif
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
-#include <shellapi.h>
 #endif
 
 namespace {
 constexpr int ValidationFailedExitCode = 20;
 
-#ifdef _WIN32
-std::string WideToUtf8(std::wstring_view value) {
-	if (value.empty())
-		return {};
-
-	auto len = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
-	std::string text(len, '\0');
-	WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), text.data(), len, nullptr, nullptr);
-	return text;
-}
-
-std::vector<std::string> GetUtf8CommandLineArgs() {
-	int argc = 0;
-	auto argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-	if (!argv)
-		return {};
-
-	std::vector<std::string> args;
-	args.reserve(argc);
-	for (int i = 0; i < argc; ++i)
-		args.push_back(WideToUtf8(argv[i]));
-
-	LocalFree(argv);
-	return args;
-}
-
-std::wstring Utf8ToWide(std::string_view value) {
-	if (value.empty())
-		return {};
-
-	auto len = MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
-	std::wstring text(len, L'\0');
-	MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), text.data(), len);
-	return text;
-}
-
 std::filesystem::path Utf8ToPath(std::string_view value) {
-	return std::filesystem::path(Utf8ToWide(value));
+	return agi::fs::PathFromString(std::string(value));
 }
 
 std::string PathToUtf8(std::filesystem::path const& path) {
-	return WideToUtf8(path.wstring());
-}
-#else
-std::filesystem::path Utf8ToPath(std::string_view value) {
-	return std::filesystem::path(std::string(value));
+	return agi::fs::PathToString(path);
 }
 
-std::string PathToUtf8(std::filesystem::path const& path) {
-	return path.string();
-}
-#endif
-
-std::vector<char *> MakeArgv(std::vector<std::string>& args) {
-	std::vector<char *> argv;
-	argv.reserve(args.size());
-	for (auto& arg : args)
-		argv.push_back(arg.data());
-	return argv;
+std::vector<std::string> ResolveCliEncodings(
+	std::vector<std::string> const& inputs,
+	std::string const& explicit_encoding) {
+	std::vector<std::string> encodings;
+	encodings.reserve(inputs.size());
+	for (auto const& input : inputs) {
+		encodings.push_back(explicit_encoding.empty()
+			? aegisub::fontcollector_cli::PreferredAutomaticEncoding(Utf8ToPath(input))
+			: explicit_encoding);
+	}
+	return encodings;
 }
 
 std::string Safe(char const *text) {
@@ -1796,18 +1758,10 @@ void PrintNormalizationReport(NormalizationFileReport const& report, bool show_h
 		          << report.summary.scanned_name_count << " names scanned\n";
 }
 
-struct NormalizationCliOptions {
-	std::vector<std::string> input_args;
-	std::string encoding;
-	std::string target = "localized";
-	bool details = false;
-	bool json = false;
-	bool recursive = false;
-};
-
-int RunNormalization(NormalizationCliOptions const& options) {
-	auto inputs = ExpandInputs(options.input_args, options.recursive);
-	auto target = options.target == "english"
+int RunNormalization(aegisub::fontcollector_subcommand::Options const& options) {
+	auto inputs = ExpandInputs(options.inputs, options.recursive);
+	auto encodings = ResolveCliEncodings(inputs, options.encoding);
+	auto target = options.normalization_target == "english"
 		? AEGISUB_FONT_NAME_TARGET_ENGLISH_WIN32
 		: AEGISUB_FONT_NAME_TARGET_LOCALIZED;
 	if (inputs.empty()) {
@@ -1831,7 +1785,7 @@ int RunNormalization(NormalizationCliOptions const& options) {
 		auto& request = requests[i];
 		request.struct_size = sizeof(request);
 		request.input_path = inputs[i].c_str();
-		request.encoding = options.encoding.c_str();
+		request.encoding = encodings[i].c_str();
 		request.target = target;
 
 		auto& item = items[i];
@@ -1879,30 +1833,13 @@ int RunNormalization(NormalizationCliOptions const& options) {
 	return exit_code;
 }
 
-struct CliOptions {
-	std::vector<std::string> input_args;
-	std::string encoding;
-	std::string matcher = "platform";
-	bool details = false;
-	bool json = false;
-	bool list = false;
-	bool quiet = false;
-	bool recursive = false;
-	bool strict = false;
-	std::vector<std::string> additional_fonts;
-	std::vector<std::string> additional_fonts_recursive;
-	bool exclude_system_fonts = false;
-	AegisubFontCollectorMode mode = AEGISUB_FONTCOLLECTOR_MODE_CHECK;
-	std::string destination;
-};
-
 AegisubFontCollectorMatcher ParseMatcherOption(std::string const& matcher) {
 	return matcher == "libass"
 		? AEGISUB_FONTCOLLECTOR_MATCHER_LIBASS
 		: AEGISUB_FONTCOLLECTOR_MATCHER_PLATFORM;
 }
 
-int RunFontCollector(CliOptions const& options) {
+int RunFontCollector(aegisub::fontcollector_subcommand::Options const& options) {
 	auto requested_matcher = ParseMatcherOption(options.matcher);
 	auto provider_name = ProviderName(requested_matcher);
 	auto matcher_name = MatcherName(requested_matcher);
@@ -1942,7 +1879,8 @@ int RunFontCollector(CliOptions const& options) {
 	    additional_font_files.empty()) {
 		return fail_invalid_option("--exclude-system-fonts requires --additional-fonts");
 	}
-	auto inputs = ExpandInputs(options.input_args, options.recursive);
+	auto inputs = ExpandInputs(options.inputs, options.recursive);
+	auto encodings = ResolveCliEncodings(inputs, options.encoding);
 	if (inputs.empty()) {
 		if (!options.json)
 			std::cerr << "fontcollector failed: no ASS/SSA files found\n";
@@ -1962,6 +1900,14 @@ int RunFontCollector(CliOptions const& options) {
 	}
 
 	auto const *destination = options.destination.empty() ? nullptr : options.destination.c_str();
+	auto const mode = options.operation == aegisub::fontcollector_subcommand::Operation::Collect
+		? (options.copy_to_script_directory
+			? AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_SCRIPT_FOLDER
+			: AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_FOLDER)
+		: AEGISUB_FONTCOLLECTOR_MODE_CHECK;
+	auto const list = options.operation == aegisub::fontcollector_subcommand::Operation::List;
+	auto const strict = options.strict ||
+		options.operation == aegisub::fontcollector_subcommand::Operation::Validate;
 
 	std::array<char, 4096> session_error = {};
 	AegisubFontCollectorSession *session = nullptr;
@@ -2031,13 +1977,13 @@ int RunFontCollector(CliOptions const& options) {
 		auto& request = requests[i];
 		request.input_path = inputs[i].c_str();
 		request.destination_path = destination;
-		request.encoding = options.encoding.c_str();
-		request.mode = options.mode;
+		request.encoding = encodings[i].c_str();
+		request.mode = mode;
 		auto& item = batch_items[i];
 		item.request = request;
 		item.event_callback = &CollectJsonEvent;
 		item.event_user_data = static_cast<void *>(&report.context);
-		item.usage_callback = (options.json || options.details || options.list) ? &CollectJsonUsage : nullptr;
+		item.usage_callback = (options.json || options.details || list) ? &CollectJsonUsage : nullptr;
 		item.usage_user_data = static_cast<void *>(&report.context);
 		item.summary = &summaries[i];
 		item.error_buffer = errors[i].data();
@@ -2084,16 +2030,16 @@ int RunFontCollector(CliOptions const& options) {
 
 		if (report.result != AEGISUB_FONTCOLLECTOR_OK)
 			report.exit_result = report.result;
-		else if (options.strict && HasStrictFindings(report.summary))
+		else if (strict && HasStrictFindings(report.summary))
 			report.exit_result = ValidationFailedExitCode;
 
 		exit_code = std::max(exit_code, report.exit_result);
 	}
 
-	if (options.list || options.details)
+	if (list || options.details)
 		PopulateMatchedFontNames(json_reports);
 
-	if (!options.json && !options.list) {
+	if (!options.json && !list) {
 		for (size_t i = 0; i < json_reports.size(); ++i) {
 			if (i && inputs.size() > 1)
 				std::cout << "\n";
@@ -2103,121 +2049,28 @@ int RunFontCollector(CliOptions const& options) {
 	else if (options.json)
 		WriteJsonReports(std::cout, json_reports, exit_code,
 		                 provider_name, matcher_name);
-	else if (options.list)
+	else if (list)
 		PrintListReports(json_reports, options.details, options.quiet);
 
 	return exit_code;
 }
-
-void AddCommonOptions(CLI::App& app, CliOptions& options) {
-	app.add_option("inputs", options.input_args, "ASS/SSA subtitle files or directories")
-		->required()
-		->expected(1, -1);
-	app.add_option("--encoding", options.encoding, "Input subtitle encoding; omitted enables BOM/UTF-8 detection");
-	app.add_option("--matcher", options.matcher, "Font matcher: platform or libass")
-		->check(CLI::IsMember({"platform", "libass"}));
-	app.add_option("--additional-fonts", options.additional_fonts,
-	               "Additional font files or directories (non-recursive; libass matcher only)");
-	app.add_option("--additional-fonts-recursive", options.additional_fonts_recursive,
-	               "Additional font directories searched recursively (libass matcher only)");
-	app.add_flag("--exclude-system-fonts", options.exclude_system_fonts,
-	             "Match only additional fonts (libass matcher only)");
-	app.add_flag("--details", options.details, "Print ASS font usage and matched font details");
-	app.add_flag("--json", options.json, "Print structured JSON output for automation");
-	app.add_flag("-r,--recursive", options.recursive, "Recursively scan input directories for .ass/.ssa files");
 }
 
-void AddNormalizationOptions(CLI::App& app, NormalizationCliOptions& options) {
-	app.add_option("inputs", options.input_args, "ASS/SSA subtitle files or directories")
-		->required()
-		->expected(1, -1);
-	app.add_option("--encoding", options.encoding, "Input subtitle encoding; omitted enables BOM/UTF-8 detection");
-	app.add_option("--target", options.target, "Preferred family name: localized or english")
-		->check(CLI::IsMember({"localized", "english"}));
-	app.add_flag("--details", options.details, "Include match evidence in text output");
-	app.add_flag("--json", options.json, "Print structured JSON normalization plans");
-	app.add_flag("-r,--recursive", options.recursive, "Recursively scan input directories for .ass/.ssa files");
-}
-}
+namespace aegisub::fontcollector_subcommand {
 
-int main(int argc, char **argv) {
-#ifdef _WIN32
-	auto utf8_args = GetUtf8CommandLineArgs();
-	std::vector<char *> utf8_argv;
-	if (!utf8_args.empty()) {
-		utf8_argv = MakeArgv(utf8_args);
-		argc = static_cast<int>(utf8_argv.size());
-		argv = utf8_argv.data();
-	}
-#endif
-
-	std::string command = argc > 1 ? argv[1] : "";
-	if (command == "normalize") {
-		NormalizationCliOptions options;
-		std::vector<std::string> command_args;
-		command_args.reserve(static_cast<size_t>(argc - 1));
-		command_args.emplace_back(std::string(argv[0]) + " " + command);
-		for (int i = 2; i < argc; ++i)
-			command_args.emplace_back(argv[i]);
-		auto command_argv = MakeArgv(command_args);
-		int command_argc = static_cast<int>(command_argv.size());
-
-		CLI::App app{"Build a read-only ASS font-name normalization plan"};
-		AddNormalizationOptions(app, options);
-		CLI11_PARSE(app, command_argc, command_argv.data());
-		return RunNormalization(options);
-	}
-
-	if (command == "check" || command == "collect" || command == "validate" || command == "list") {
-		CliOptions options;
-		std::vector<std::string> command_args;
-		command_args.reserve(static_cast<size_t>(argc - 1));
-		command_args.emplace_back(std::string(argv[0]) + " " + command);
-		for (int i = 2; i < argc; ++i)
-			command_args.emplace_back(argv[i]);
-		auto command_argv = MakeArgv(command_args);
-		int command_argc = static_cast<int>(command_argv.size());
-
-		CLI::App app{"Collect, check, or list font files used by ASS/SSA subtitle scripts"};
-		AddCommonOptions(app, options);
-
-		if (command == "check") {
-			options.mode = AEGISUB_FONTCOLLECTOR_MODE_CHECK;
-			app.add_flag("--strict", options.strict, "Exit non-zero when fonts, glyphs, or styles are missing");
-		}
-		else if (command == "list") {
-			options.mode = AEGISUB_FONTCOLLECTOR_MODE_CHECK;
-			options.list = true;
-			app.add_flag("-q,--quiet", options.quiet, "Suppress normal font list output");
-		}
-		else if (command == "validate") {
-			options.mode = AEGISUB_FONTCOLLECTOR_MODE_CHECK;
-			options.strict = true;
-		}
-		else {
-			bool copy_to_script = false;
-			auto *destination = app.add_option_group("Destination");
-			destination->add_option("--to", options.destination, "Copy fonts to directory")->option_text("DIR");
-			destination->add_flag("--to-script-dir", copy_to_script, "Copy fonts next to each subtitle file");
-			destination->require_option(1);
-			app.add_flag("--strict", options.strict, "Exit non-zero when fonts, glyphs, styles, or copies are missing");
-
-			CLI11_PARSE(app, command_argc, command_argv.data());
-
-			options.mode = copy_to_script
-				? AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_SCRIPT_FOLDER
-				: AEGISUB_FONTCOLLECTOR_MODE_COPY_TO_FOLDER;
+int Run(Options const& options) {
+	switch (options.operation) {
+		case Operation::Check:
+		case Operation::Collect:
+		case Operation::Validate:
+		case Operation::List:
 			return RunFontCollector(options);
-		}
-
-		CLI11_PARSE(app, command_argc, command_argv.data());
-		return RunFontCollector(options);
+		case Operation::Normalize:
+			return RunNormalization(options);
 	}
 
-	if (command == "--help" || command == "-h" || command.empty()) {
-		std::cout << "Usage: fontcollector <check|collect|validate|list|normalize> ...\n";
-		return command.empty() ? AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT : AEGISUB_FONTCOLLECTOR_OK;
-	}
-	std::cerr << "fontcollector failed: unknown command '" << command << "'\n";
+	std::cerr << "fontcollector failed: invalid operation\n";
 	return AEGISUB_FONTCOLLECTOR_INVALID_ARGUMENT;
+}
+
 }

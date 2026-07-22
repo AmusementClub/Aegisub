@@ -1,0 +1,10 @@
+AEGISUB_FONTCOLLECTOR_1 {
+	global:
+		aegisub_fontcollector_session_create_with_options;
+		aegisub_fontcollector_session_collect_batch;
+		aegisub_fontcollector_session_destroy;
+		aegisub_fontcollector_build_normalization_plan;
+		aegisub_fontcollector_build_normalization_plan_batch;
+	local:
+		*;
+};

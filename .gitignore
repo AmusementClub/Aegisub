@@ -80,8 +80,11 @@ vendor/luajit/src/luajit
 /tools/*
 !/tools/drawing_bench_main.cpp
 !/tools/drawing_compare_main.cpp
-!/tools/fontcollector/
-!/tools/fontcollector/**
+!/tools/gui-automation-driver/
+!/tools/gui-automation-driver/**
+!/tools/gui-automation-uia-correctness.cs
+/tools/gui-automation-driver/bin/
+/tools/gui-automation-driver/obj/
 CMakePresets.json
 /data
 /artifacts

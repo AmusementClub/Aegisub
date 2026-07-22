@@ -25,6 +25,11 @@ Result Run(
 	int step_timeout_ms,
 	std::size_t step_count);
 
+/// Select the parent exit code when a worker exits without result.json.
+/// Preserve worker failures; a clean exit without a result is an
+/// infrastructure failure.
+int ExitCodeForMissingResult(int worker_exit_code);
+
 void MarkRuntimeReady(agi::fs::path const& control_directory);
 void MarkStep(agi::fs::path const& control_directory, std::size_t index, bool started);
 /// Emitted after scenario execution returns (success or handled failure),

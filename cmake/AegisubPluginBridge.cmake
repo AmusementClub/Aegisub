@@ -724,19 +724,12 @@ add_custom_target(run-aegisub-dependency-control-lua-smoke
 set(_aegisub_dependency_control_nativeaot_isolation_dir
     "${CMAKE_CURRENT_BINARY_DIR}/dependency-control-nativeaot-isolation/$<CONFIG>")
 add_custom_target(run-aegisub-dependency-control-nativeaot-smoke
-    COMMAND "${CMAKE_COMMAND}" -E remove_directory
-        "${_aegisub_dependency_control_nativeaot_isolation_dir}"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory
-        "${_aegisub_dependency_control_nativeaot_isolation_dir}/state"
-    COMMAND "${CMAKE_COMMAND}" -E make_directory
-        "${_aegisub_dependency_control_nativeaot_isolation_dir}/trace"
-    COMMAND "${CMAKE_COMMAND}" -E env
-        "AEGISUB_DOTNET_ROOT=${_aegisub_dependency_control_nativeaot_isolation_dir}/missing-dotnet-root"
-        "AEGISUB_DEPENDENCY_CONTROL_STATE_ROOT=${_aegisub_dependency_control_nativeaot_isolation_dir}/state"
-        "$<TARGET_FILE:Aegisub>"
-        --headless run
-        --scenario "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/scenarios/dependency-control-compat.json"
-        --artifacts "${_aegisub_dependency_control_nativeaot_isolation_dir}/trace"
+    COMMAND "${CMAKE_COMMAND}"
+        "-DAEGISUB_EXE=$<TARGET_FILE:Aegisub>"
+        "-DSCENARIO_FILE=${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/scenarios/dependency-control-compat.json"
+        "-DISOLATION_DIR=${_aegisub_dependency_control_nativeaot_isolation_dir}"
+        "-DWORKING_DIR=$<TARGET_FILE_DIR:Aegisub>"
+        -P "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/run-nativeaot-isolation-smoke.cmake"
     WORKING_DIRECTORY "$<TARGET_FILE_DIR:Aegisub>"
     DEPENDS Aegisub
     COMMENT "Running the DependencyControl NativeAOT-only smoke without CoreCLR"

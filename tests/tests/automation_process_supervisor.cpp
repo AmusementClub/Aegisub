@@ -100,6 +100,25 @@ TEST_F(automation_process_supervisor_test, start_failure_does_not_claim_started)
 	EXPECT_EQ(child.terminate_count, 0);
 }
 
+TEST_F(automation_process_supervisor_test, child_exit_code_is_preserved) {
+	FakeChild child;
+	child.exited = true;
+	child.exit_code = 86;
+	ManualClock clock;
+
+	auto result = testing_hooks::Run(
+		{"worker"}, control, 250, 1, MakeHooks(child, clock));
+
+	EXPECT_TRUE(result.started);
+	EXPECT_FALSE(result.timed_out);
+	EXPECT_EQ(result.exit_code, 86);
+}
+
+TEST(automation_process_supervisor_policy, missing_result_exit_code) {
+	EXPECT_EQ(supervisor::ExitCodeForMissingResult(86), 86);
+	EXPECT_EQ(supervisor::ExitCodeForMissingResult(0), 2);
+}
+
 TEST_F(automation_process_supervisor_test,
 	scenario_complete_without_step_done_enters_teardown_not_step_timeout) {
 	// Regression: schema/runtime failure never writes step-done. Short step

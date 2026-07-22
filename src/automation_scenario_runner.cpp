@@ -1,9 +1,13 @@
 #include "automation_scenario_runner.h"
 
+#include <libaegisub/cajun/reader.h>
+#include <libaegisub/cajun/writer.h>
 #include <libaegisub/path.h>
 
+#include <algorithm>
 #include <chrono>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -14,6 +18,53 @@ class ScenarioSchemaError final : public std::runtime_error {
 public:
 	using std::runtime_error::runtime_error;
 };
+
+class ScenarioTimeoutError final : public std::runtime_error {
+public:
+	ScenarioTimeoutError(
+		std::string message,
+		bool total,
+		std::optional<std::size_t> step)
+	: std::runtime_error(std::move(message))
+	, total(total)
+	, step(std::move(step)) {
+	}
+
+	bool total;
+	std::optional<std::size_t> step;
+};
+
+std::chrono::milliseconds PositiveTimeout(int value) {
+	return std::chrono::milliseconds(std::max(value, 1));
+}
+
+std::chrono::milliseconds TotalTimeout(
+	std::chrono::milliseconds step_timeout,
+	std::size_t step_count) {
+	if (step_count <= 1)
+		return step_timeout;
+	auto const max_count = std::chrono::milliseconds::max().count();
+	if (step_timeout.count() > max_count / static_cast<int64_t>(step_count))
+		return std::chrono::milliseconds::max();
+	return step_timeout * static_cast<int64_t>(step_count);
+}
+
+void CheckTimeout(
+	std::chrono::steady_clock::time_point now,
+	std::chrono::steady_clock::time_point scenario_deadline,
+	std::chrono::steady_clock::time_point step_deadline,
+	std::size_t step_index) {
+	if (now >= scenario_deadline)
+		throw ScenarioTimeoutError(
+			"automation scenario exceeded its total timeout",
+			true,
+			step_index);
+	if (now >= step_deadline)
+		throw ScenarioTimeoutError(
+			"automation scenario step " + std::to_string(step_index) + " exceeded its timeout",
+			false,
+			step_index);
+}
 
 json::UnknownElement const& RequireField(
 	json::Object const& object,
@@ -72,6 +123,37 @@ int OptionalInteger(
 	catch (...) {
 		throw ScenarioSchemaError(source + " field '" + key + "' must be an integer");
 	}
+}
+
+bool JsonValueEquals(json::UnknownElement const& left, json::UnknownElement const& right) {
+	std::ostringstream left_json;
+	std::ostringstream right_json;
+	agi::JsonWriter::Write(left, left_json);
+	agi::JsonWriter::Write(right, right_json);
+	return left_json.str() == right_json.str();
+}
+
+json::UnknownElement CloneJsonValue(json::UnknownElement const& value) {
+	std::stringstream serialized;
+	agi::JsonWriter::Write(value, serialized);
+	serialized.seekg(0);
+	json::UnknownElement clone;
+	json::Reader::Read(clone, serialized);
+	return clone;
+}
+
+std::string StepTarget(json::Object const& step, std::string const& source) {
+	auto target = RequiredString(step, "target", source);
+	if (target != "command")
+		throw ScenarioSchemaError(source + " has unsupported query target '" + target + "'");
+	return target;
+}
+
+std::string CaptureName(json::Object const& step, std::string const& source) {
+	auto name = RequiredString(step, "name", source);
+	if (name.find_first_of("/\\:") != std::string::npos || name == "." || name == "..")
+		throw ScenarioSchemaError(source + " capture name must be a plain file name");
+	return name;
 }
 
 agi::fs::path Resource(
@@ -143,7 +225,10 @@ void ValidateScenario(
 	std::string const& host,
 	agi::fs::path const& artifacts,
 	AutomationStepExecutor const& execute,
-	CommandStepExecutor const& execute_command) {
+	CommandStepExecutor const& execute_command,
+	QueryStepExecutor const& execute_query,
+	WaitStepExecutor const& execute_wait,
+	CaptureStepExecutor const& execute_capture) {
 	if (!automation_scenario::SupportsHost(scenario, host))
 		throw ScenarioSchemaError("scenario does not support the " + host + " host");
 
@@ -163,6 +248,32 @@ void ValidateScenario(
 			if (!execute_command)
 				throw ScenarioSchemaError(source + " command action is not supported by the " + host + " host");
 			(void)RequiredString(step, "id", source);
+		}
+		else if (action == "query") {
+			if (!execute_query)
+				throw ScenarioSchemaError(source + " query action is not supported by the " + host + " host");
+			(void)StepTarget(step, source);
+			(void)RequiredString(step, "id", source);
+		}
+		else if (action == "assert") {
+			if (!execute_query)
+				throw ScenarioSchemaError(source + " assert action is not supported by the " + host + " host");
+			(void)StepTarget(step, source);
+			(void)RequiredString(step, "id", source);
+			(void)RequiredString(step, "field", source);
+			(void)RequireField(step, "equals", source);
+		}
+		else if (action == "wait") {
+			if (!execute_wait)
+				throw ScenarioSchemaError(source + " wait action is not supported by the " + host + " host");
+			auto milliseconds = OptionalInteger(step, "milliseconds", 0, source);
+			if (milliseconds <= 0 || milliseconds > 120000)
+				throw ScenarioSchemaError(source + " wait milliseconds must be between 1 and 120000");
+		}
+		else if (action == "capture") {
+			if (!execute_capture)
+				throw ScenarioSchemaError(source + " capture action is not supported by the " + host + " host");
+			(void)CaptureName(step, source);
 		}
 		else {
 			throw ScenarioSchemaError(source + " has unsupported action '" + action + "'");
@@ -197,13 +308,32 @@ Result Run(
 	agi::fs::path const& artifacts,
 	AutomationStepExecutor execute,
 	CommandStepExecutor execute_command,
-	StepObserver observe_step) {
+	StepObserver observe_step,
+	QueryStepExecutor execute_query,
+	WaitStepExecutor execute_wait,
+	CaptureStepExecutor execute_capture) {
 	Result result;
 	auto const scenario_started = std::chrono::steady_clock::now();
+	auto const step_timeout = PositiveTimeout(scenario.default_timeout_ms);
+	auto const scenario_deadline = scenario_started + TotalTimeout(step_timeout, scenario.steps.size());
 	try {
-		ValidateScenario(scenario, host, artifacts, execute, execute_command);
+		ValidateScenario(
+			scenario,
+			host,
+			artifacts,
+			execute,
+			execute_command,
+			execute_query,
+			execute_wait,
+			execute_capture);
 
 		for (size_t index = 0; index < scenario.steps.size(); ++index) {
+			auto const step_deadline = std::chrono::steady_clock::now() + step_timeout;
+			CheckTimeout(
+				std::chrono::steady_clock::now(),
+				scenario_deadline,
+				step_deadline,
+				index);
 			if (observe_step)
 				observe_step(index, true);
 			auto const& step = scenario.steps[index];
@@ -237,14 +367,105 @@ Result Run(
 					std::chrono::steady_clock::now() - step_started).count();
 				result.steps.emplace_back(std::move(command_result));
 			}
+			else if (action == "query") {
+				auto target = StepTarget(step, source);
+				auto query_result = execute_query(target, step);
+				result.exit_code = 0;
+				result.passed = true;
+				query_result["index"] = static_cast<int64_t>(index);
+				query_result["action"] = action;
+				query_result["status"] = "passed";
+				query_result["duration_ms"] = std::chrono::duration<double, std::milli>(
+					std::chrono::steady_clock::now() - step_started).count();
+				result.steps.emplace_back(std::move(query_result));
+			}
+			else if (action == "assert") {
+				auto target = StepTarget(step, source);
+				auto field = RequiredString(step, "field", source);
+				auto query_result = execute_query(target, step);
+				auto expected = step.find("equals");
+				auto actual = query_result.find(field);
+				bool matched = actual != query_result.end() &&
+					JsonValueEquals(actual->second, expected->second);
+				json::Object assertion;
+				assertion["target"] = target;
+				assertion["field"] = field;
+				assertion["matched"] = matched;
+				assertion["expected"] = CloneJsonValue(expected->second);
+				if (actual != query_result.end())
+					assertion["actual"] = CloneJsonValue(actual->second);
+				else
+					assertion["error"] = "query did not return the asserted field";
+				result.exit_code = matched ? 0 : 1;
+				result.passed = matched;
+				assertion["index"] = static_cast<int64_t>(index);
+				assertion["action"] = action;
+				assertion["status"] = matched ? "passed" : "failed";
+				assertion["duration_ms"] = std::chrono::duration<double, std::milli>(
+					std::chrono::steady_clock::now() - step_started).count();
+				result.steps.emplace_back(std::move(assertion));
+			}
+			else if (action == "wait") {
+				auto milliseconds = OptionalInteger(step, "milliseconds", 0, source);
+				execute_wait(std::chrono::milliseconds(milliseconds));
+				json::Object wait_result;
+				wait_result["milliseconds"] = static_cast<int64_t>(milliseconds);
+				wait_result["index"] = static_cast<int64_t>(index);
+				wait_result["action"] = action;
+				wait_result["status"] = "passed";
+				wait_result["duration_ms"] = std::chrono::duration<double, std::milli>(
+					std::chrono::steady_clock::now() - step_started).count();
+				result.exit_code = 0;
+				result.passed = true;
+				result.steps.emplace_back(std::move(wait_result));
+			}
+			else if (action == "capture") {
+				auto name = CaptureName(step, source);
+				auto capture_result = execute_capture(
+					name,
+					artifacts / agi::fs::PathFromString(name + ".png"));
+				bool captured = false;
+				if (auto it = capture_result.find("captured"); it != capture_result.end()) {
+					try { captured = static_cast<json::Boolean const&>(it->second); }
+					catch (...) { captured = false; }
+				}
+				capture_result["name"] = name;
+				capture_result["index"] = static_cast<int64_t>(index);
+				capture_result["action"] = action;
+				capture_result["status"] = captured ? "passed" : "failed";
+				capture_result["duration_ms"] = std::chrono::duration<double, std::milli>(
+					std::chrono::steady_clock::now() - step_started).count();
+				result.exit_code = captured ? 0 : 1;
+				result.passed = captured;
+				result.steps.emplace_back(std::move(capture_result));
+			}
 			else {
 				throw ScenarioSchemaError(source + " has unsupported action '" + action + "'");
 			}
+			CheckTimeout(
+				std::chrono::steady_clock::now(),
+				scenario_deadline,
+				step_deadline,
+				index);
 			if (observe_step)
 				observe_step(index, false);
 			if (!result.passed)
 				break;
 		}
+	}
+	catch (ScenarioTimeoutError const& e) {
+		result.exit_code = 1;
+		result.passed = false;
+		result.timed_out = true;
+		result.timed_out_step = e.step;
+		json::Object error;
+		error["error"] = e.what();
+		error["error_kind"] = "timeout";
+		error["phase"] = e.total ? "scenario" : "step";
+		error["timed_out"] = true;
+		if (e.step)
+			error["step_index"] = static_cast<int64_t>(*e.step);
+		result.steps.emplace_back(std::move(error));
 	}
 	catch (ScenarioSchemaError const& e) {
 		result.exit_code = 64;
@@ -291,6 +512,9 @@ json::Object SerializeResult(
 	output["exit_code"] = static_cast<int64_t>(result.exit_code);
 	output["passed"] = result.passed;
 	output["duration_ms"] = result.duration_ms;
+	output["timed_out"] = result.timed_out;
+	if (result.timed_out_step)
+		output["timed_out_step"] = static_cast<int64_t>(*result.timed_out_step);
 	output["profile"] = agi::fs::PathToGenericString(profile);
 	output["artifacts"] = agi::fs::PathToGenericString(artifacts);
 	output["steps"] = std::move(result.steps);

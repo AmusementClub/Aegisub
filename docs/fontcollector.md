@@ -1,52 +1,67 @@
-# Font Collector Tool
+# Font Collector
 
-This directory builds the standalone font collector shared library and CLI.
+The command-line interface is part of the main `Aegisub` executable and is
+invoked as the `fontcollector` subcommand. There is no standalone font
+collector executable or second CMake project.
 
-Preferred standalone build, from the repository root:
+The main CMake build is the canonical integration. It provides:
+
+- `aegisub_fontcollector_api`, the static facade linked into `Aegisub`;
+- `aegisub_fontcollector`, the shared C API SDK target;
+- installed `Aegisub::fontcollector_static` and `Aegisub::fontcollector`
+  targets in the `AegisubCoreCAPI` package;
+- `include/aegisub/fontcollector/fontcollector.h` in the CoreAPI install
+  component.
+
+Build Aegisub and both C API smoke executables from the repository root:
 
 ```powershell
-cmake -S tools/fontcollector -B build-fontcollector-static `
-  -G "Visual Studio 18 2026" -A x64 `
-  -DCMAKE_TOOLCHAIN_FILE=$resolvedVcpkgRoot/scripts/buildsystems/vcpkg.cmake `
-  -DVCPKG_TARGET_TRIPLET=x64-windows-static `
-  -DVCPKG_APPLOCAL_DEPS=OFF
-cmake --build build-fontcollector-static --config Release --target fontcollector_cli
-cmake --build build-fontcollector-static --config Release --target fontcollector_cli_standalone
+cmake --build build-dir --config RelWithDebInfo --target `
+  Aegisub aegisub_fontcollector fontcollector_api_smoke fontcollector_api_shared_smoke
 ```
 
-Run the standalone smoke test after building:
+Run the process and API smoke tests after building:
 
 ```powershell
-ctest --test-dir build-fontcollector-static -C Release -R fontcollector_cli.*smoke --output-on-failure
+ctest --test-dir build-dir -C RelWithDebInfo `
+  -R "^fontcollector_(cli|api|api_shared)_smoke$" --output-on-failure
 ```
 
-The DLL wrapper output is written to `build-fontcollector-static/fontcollector` and should contain:
+The `aegisub_fontcollector` shared library exposes the C API declared in
+`include/aegisub/fontcollector/fontcollector.h`.
 
-- `aegisub_fontcollector.dll`
-- `fontcollector.exe`
+The main Aegisub build exposes the same implementation as
+`Aegisub::fontcollector` (shared) and `Aegisub::fontcollector_static` (static)
+through the CoreAPI install package. The GUI executable links the static
+target, so the command and external API smoke tests exercise one core
+implementation. The main build supplies CLI11 and links the command into
+`Aegisub`.
 
-The independent CLI output is written to `build-fontcollector-static/fontcollector-standalone` and should contain:
-
-- `fontcollector.exe`
-
-The `aegisub_fontcollector` shared library exposes the C API declared in `include/aegisub/fontcollector/fontcollector.h`. `fontcollector_cli` links to that DLL as a thin CLI wrapper. `fontcollector_cli_standalone` links the static core into the executable for redistribution as a single binary.
-
-The tool manifest intentionally excludes ICU, uchardet and Boost.Locale. The normal GUI build leaves `AEGISUB_BUILD_FONT_COLLECTOR_TOOL` off, so it does not find or link CLI11.
-
-When `--encoding` is omitted, the tool uses Aegisub's core charset detector without uchardet: BOMs are honored, otherwise non-binary text defaults to UTF-8.
+When `--encoding` is omitted, BOMs and strictly valid UTF-8 are handled
+deterministically before consulting the main build's charset detector for
+legacy byte encodings. Use `--encoding` when an ambiguous legacy file needs a
+specific interpretation.
 
 ## CLI
 
 The preferred command form is:
 
 ```powershell
-fontcollector list <file-or-dir> [more...] [--recursive] [--details] [--json]
-fontcollector check <file-or-dir> [more...] [--recursive] [--details] [--json] [--strict]
-fontcollector validate <file-or-dir> [more...] [--recursive] [--details] [--json]
-fontcollector normalize <file-or-dir> [more...] [--target localized|english] [--recursive] [--details] [--json]
-fontcollector collect <file-or-dir> [more...] --to <dir> [--recursive] [--details] [--json] [--strict]
-fontcollector collect <file-or-dir> [more...] --to-script-dir [--recursive] [--details] [--json] [--strict]
+Aegisub.exe fontcollector list <file-or-dir> [more...] [--recursive] [--details] [--json]
+Aegisub.exe fontcollector check <file-or-dir> [more...] [--recursive] [--details] [--json] [--strict]
+Aegisub.exe fontcollector validate <file-or-dir> [more...] [--recursive] [--details] [--json]
+Aegisub.exe fontcollector normalize <file-or-dir> [more...] [--target localized|english] [--recursive] [--details] [--json]
+Aegisub.exe fontcollector collect <file-or-dir> [more...] --to <dir> [--recursive] [--details] [--json] [--strict]
+Aegisub.exe fontcollector collect <file-or-dir> [more...] --to-script-dir [--recursive] [--details] [--json] [--strict]
 ```
+
+On Windows, `Aegisub.exe` remains a GUI-subsystem executable so normal GUI
+launches do not open a console. Automation which needs a reliable exit code
+must use a wait-capable process API such as CMake `execute_process`, Win32
+`CreateProcess` plus `WaitForSingleObject`, or PowerShell
+`Start-Process -Wait -PassThru -NoNewWindow`. Direct PowerShell `&` invocation
+does not wait for GUI-subsystem processes and therefore does not set
+`$LASTEXITCODE` reliably.
 
 All collection commands accept `--matcher platform|libass`. `platform` is the
 default and uses the native provider:

@@ -17,6 +17,7 @@ struct Scenario {
 	std::string name;
 	std::vector<std::string> hosts;
 	std::map<std::string, agi::fs::path> resources;
+	bool load_global_scripts = false;
 	/// Per-step wall clock for the process supervisor (not startup/teardown).
 	/// Cold CoreCLR / plugin-bridge runs need a generous default; pure-Lua
 	/// scenarios that should fail fast can set a shorter value explicitly.

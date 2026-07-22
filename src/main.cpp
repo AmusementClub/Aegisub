@@ -42,6 +42,7 @@
 #include "automation_command_executor.h"
 #include "automation_scenario.h"
 #include "automation_scenario_runner.h"
+#include "automation_session_service.h"
 #include "avisynth_provider_registration.h"
 #include "compat.h"
 #include "crash_writer.h"
@@ -64,14 +65,21 @@
 #include <libaegisub/path.h>
 #include <libaegisub/util.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
+#include <utility>
 #include <vector>
 #include <wx/arrstr.h>
+#include <wx/bitmap.h>
 #include <wx/clipbrd.h>
+#include <wx/dcclient.h>
+#include <wx/dcmemory.h>
+#include <wx/image.h>
 #include <wx/msgdlg.h>
 #include <wx/stackwalk.h>
 #include <wx/thread.h>
@@ -119,6 +127,22 @@ std::vector<std::string> ToUtf8Args(wxArrayString const& args) {
 	for (auto const& arg : args)
 		values.emplace_back(arg.ToStdString(wxConvUTF8));
 	return values;
+}
+
+aegisub::automation_session_service::AutomationSessionResult RunGuiAutomationStep(
+	aegisub::automation_session_service::AutomationSessionRequest request) {
+	// RunAsync currently invokes its completion callback before returning. Keep
+	// this adapter synchronous so the scenario runner can preserve step order
+	// and the GUI runtime remains the sole owner of automation-session cleanup.
+	std::optional<aegisub::automation_session_service::AutomationSessionResult> result;
+	aegisub::automation_session_service::RunAsync(
+		std::move(request),
+		[&result](aegisub::automation_session_service::AutomationSessionResult finished) {
+			result.emplace(std::move(finished));
+		});
+	if (!result)
+		throw std::runtime_error("GUI automation session did not complete");
+	return std::move(*result);
 }
 
 }
@@ -172,6 +196,12 @@ bool AegisubApp::OnInit() {
 			ShowGuiWxBootstrapUiError("Could not create GUI test profile", profile_error);
 			return false;
 		}
+		if (!launch_plan->gui_test_host) {
+			auto scenario_result = aegisub::automation_scenario::Load(
+				request.scenario_path, request.inputs);
+			gui_test_scenario = std::move(scenario_result.scenario);
+			gui_test_scenario_error = std::move(scenario_result.error);
+		}
 	}
 	auto record_gui_test_phase = [&](char const* phase) {
 		if (!automation_profile)
@@ -195,7 +225,6 @@ bool AegisubApp::OnInit() {
 	if (automation_profile) {
 		runtime_options.path_overrides = automation_profile->PathOverrides();
 		runtime_options.locale_policy = RuntimeLocalePolicy::UseConfiguredOrEnglish;
-		runtime_options.load_global_scripts = true;
 	}
 	record_gui_test_phase("runtime-options.ready");
 	auto bootstrap_ui_host = runtime_options.bootstrap_ui_host;
@@ -261,7 +290,8 @@ bool AegisubApp::OnInit() {
 				if (!paths.empty())
 					frames[0]->context->GetCore().project->LoadList(paths);
 			},
-			launch_plan->mode != AppLaunchMode::GuiTest);
+			launch_plan->mode != AppLaunchMode::GuiTest
+				|| (gui_test_scenario && gui_test_scenario->load_global_scripts));
 		record_gui_test_phase("frame.created");
 		perf_trace::ObserveWindowOpenPhase("main", "startup.sequence.total", duration_ms(startup_sequence_started));
 		if (launch_plan->mode == AppLaunchMode::GuiTest)
@@ -344,15 +374,17 @@ void AegisubApp::StartGuiTest() {
 	if (launch_plan->gui_test_host)
 		return;
 
-	auto const& request = *launch_plan->gui_test_run;
-	auto scenario_result = aegisub::automation_scenario::Load(request.scenario_path, request.inputs);
-	if (!scenario_result.scenario) {
+	if (!gui_test_scenario) {
 		json::Object failure;
 		failure["version"] = static_cast<int64_t>(1);
 		failure["host"] = "gui-test";
 		failure["passed"] = false;
 		failure["exit_code"] = static_cast<int64_t>(64);
-		failure["error"] = scenario_result.error;
+		failure["error"] = gui_test_scenario_error.empty()
+			? "GUI test scenario was not loaded"
+			: gui_test_scenario_error;
+		failure["error_kind"] = "schema";
+		failure["phase"] = "scenario";
 		save_json("result.json", std::move(failure));
 		gui_test_exit_code = 64;
 		ScheduleGuiTestClose();
@@ -360,17 +392,83 @@ void AegisubApp::StartGuiTest() {
 	}
 
 	auto execution = aegisub::automation_scenario_runner::Run(
-		*scenario_result.scenario,
+		*gui_test_scenario,
 		"gui-test",
 		artifacts,
-		{},
+		[](aegisub::automation_session_service::AutomationSessionRequest request) {
+			return RunGuiAutomationStep(std::move(request));
+		},
 		[context = frames.front()->context.get()](std::string const& command_id) {
-			return aegisub::automation_command_executor::Invoke(command_id, *context, true);
+			return aegisub::automation_command_executor::Invoke(command_id, context, true);
+		},
+		{},
+		[context = frames.front()->context.get()](
+			std::string const& target,
+			json::Object const& step) {
+			if (target != "command")
+				throw std::runtime_error("unsupported GUI query target: " + target);
+			auto const command_id = static_cast<json::String const&>(step.at("id"));
+			return aegisub::automation_command_executor::Inspect(command_id, context, true);
+		},
+		[](std::chrono::milliseconds duration) {
+			auto const deadline = std::chrono::steady_clock::now() + duration;
+			while (std::chrono::steady_clock::now() < deadline) {
+				wxYieldIfNeeded();
+				auto const remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+					deadline - std::chrono::steady_clock::now());
+				if (remaining.count() > 0)
+					wxMilliSleep(static_cast<unsigned long>(std::min<int64_t>(remaining.count(), 10)));
+			}
+		},
+		[frame = frames.front()](std::string const&, agi::fs::path const& output) {
+			json::Object result;
+			auto const size = frame->GetClientSize();
+			if (size.x <= 0 || size.y <= 0) {
+				result["captured"] = false;
+				result["error"] = "main window has no drawable client area";
+				return result;
+			}
+
+			frame->Update();
+			wxYieldIfNeeded();
+			wxBitmap bitmap(size.x, size.y, 24);
+			wxMemoryDC destination(bitmap);
+			wxClientDC source(frame);
+			auto const copied = destination.Blit(
+				0, 0, size.x, size.y, &source, 0, 0, wxCOPY, false);
+			destination.SelectObject(wxNullBitmap);
+			bool has_visible_pixels = false;
+			if (copied) {
+				auto image = bitmap.ConvertToImage();
+				auto const x_step = std::max(1, size.x / 32);
+				auto const y_step = std::max(1, size.y / 32);
+				for (int y = 0; y < size.y && !has_visible_pixels; y += y_step) {
+					for (int x = 0; x < size.x; x += x_step) {
+						if (image.GetRed(x, y) || image.GetGreen(x, y) || image.GetBlue(x, y)) {
+							has_visible_pixels = true;
+							break;
+						}
+					}
+				}
+			}
+			auto const saved = copied && has_visible_pixels && bitmap.SaveFile(
+				to_wx(agi::fs::PathToString(output)), wxBITMAP_TYPE_PNG);
+			result["captured"] = saved;
+			result["has_visible_pixels"] = has_visible_pixels;
+			result["scope"] = "client";
+			result["path"] = agi::fs::PathToGenericString(output);
+			if (!saved)
+				result["error"] = !copied
+					? "could not copy the main window client area"
+					: !has_visible_pixels
+						? "GUI capture contained only black pixels"
+						: "could not save GUI capture";
+			return result;
 		});
 	auto const passed = execution.passed;
 	auto const exit_code = execution.exit_code;
 	auto result = aegisub::automation_scenario_runner::SerializeResult(
-		scenario_result.scenario->name,
+		gui_test_scenario->name,
 		"gui-test",
 		std::move(execution),
 		automation_profile->Root(),

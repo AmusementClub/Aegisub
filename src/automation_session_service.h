@@ -119,6 +119,10 @@ struct AutomationSessionResult {
 	std::string audio_provider_attempts;
 };
 
+// Runs the session and invokes on_done before returning. The callback form is
+// shared with headless callers, which pump their main queue while this call
+// executes; GUI callers can therefore use the same service without a second
+// automation implementation.
 void RunAsync(AutomationSessionRequest request, std::function<void(AutomationSessionResult)> on_done);
 
 }

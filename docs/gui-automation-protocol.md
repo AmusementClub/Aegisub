@@ -18,6 +18,9 @@ in a checked-in scenario.
 | --- | --- | --- |
 | `run_automation` | yes | yes |
 | `command` | no (schema error) | yes (wx main thread) |
+| `query` / `assert` | no (schema error) | yes, command registry state |
+| `wait` | no (schema error) | yes, wx event pump |
+| `capture` | no (schema error) | best-effort wx client PNG |
 
 v1 headless supports only `run_automation`. Headless does not initialize the
 command system and does not execute `command` steps. The `CMD_HEADLESS_SAFE` /
@@ -26,6 +29,14 @@ command path once a shared non-UI `agi::Context` exists; they are not active in
 v1. `--gui-test` creates the normal wx frame and runs `command` actions on the
 wx main thread so the same command IDs can be exercised on Windows, macOS, and
 Linux.
+
+`load_global_scripts` is an explicit scenario root option and defaults to
+`false`; global scripts are loaded only when a GUI scenario opts in. `query`
+and `assert` currently use `target: "command"` with the command `id`.
+`capture` accepts a plain artifact file name and always writes beneath the
+run's artifacts directory. It fails rather than publishing an all-black image
+when the platform does not expose a printable wx client surface. Windows CI
+uses the external UIA correctness driver for reliable full-window evidence.
 
 ## Timeouts
 
@@ -61,7 +72,12 @@ diagnostics. `startup.log`, `ready.json`, `result.json`, UI trees, screenshots,
 and driver logs belong under the artifacts directory.
 
 The Windows driver in `tools/skia-audio-uia.cs` is intentionally a separate
-black-box adapter. It owns UIA discovery, Win32 custom-canvas messages,
-guarded `SendInput`, process waiting, and screenshots. It must not reach into
-Aegisub internals. Future AX and AT-SPI drivers consume the same host/result
-protocol without changing scenario semantics.
+black-box adapter. Its reusable protocol, UIA discovery, fatal-dialog, and PNG
+helpers live in `tools/gui-automation-driver`; the Skia entry retains only
+audio/video-specific input scenarios and guarded `SendInput`. It must not reach
+into Aegisub internals. `run-aegisub-uia-correctness-smoke` covers ready/PID
+validation, main-window discovery, focus, a UIA `TogglePattern` state change on
+the non-document `Show Original` control, fatal-dialog checks, PNG capture, and
+clean exit. The smoke opens the checked-in subtitle fixture so the control is
+deterministically available. Future AX and AT-SPI drivers consume the same
+host/result protocol without changing scenario semantics.

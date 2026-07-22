@@ -4,6 +4,7 @@
 #:property Nullable=enable
 #:property PublishAot=false
 #:property InvariantGlobalization=false
+#:project gui-automation-driver/Aegisub.GuiAutomation.Driver.csproj
 
 using System.Diagnostics;
 using System.Collections.Generic;
@@ -16,6 +17,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Automation;
+using Aegisub.GuiAutomation.Driver;
 
 try
 {
@@ -317,63 +319,14 @@ sealed class AegisubSession : IDisposable
 
         process = Process.Start(startInfo) ?? throw new InvalidOperationException("Could not start Aegisub");
         Console.WriteLine($"uia.pid={process.Id}");
-        WaitForReadyArtifact();
+        var readyPath = Path.Combine(automationArtifactsDirectory, "ready.json");
+        AutomationProtocol.WaitForReadyArtifact(
+            readyPath,
+            process,
+            TimeSpan.FromSeconds(30));
+        Console.WriteLine($"uia.ready={readyPath}");
         WaitForMainWindow();
         SetWindowSize();
-    }
-
-    private void WaitForReadyArtifact()
-    {
-        var artifacts = automationArtifactsDirectory
-            ?? throw new InvalidOperationException("Automation artifacts directory was not prepared");
-        var ready = Path.Combine(artifacts, "ready.json");
-        var deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 30;
-        while (Stopwatch.GetTimestamp() < deadline)
-        {
-            if (File.Exists(ready) && TryReadReadyArtifact(ready))
-            {
-                Console.WriteLine($"uia.ready={ready}");
-                return;
-            }
-            if (process is null || process.HasExited)
-                throw new InvalidOperationException("Aegisub exited before GUI-test host became ready");
-            Thread.Sleep(100);
-        }
-        throw new TimeoutException("GUI-test host did not produce ready.json");
-    }
-
-    private bool TryReadReadyArtifact(string path)
-    {
-        try
-        {
-            using var document = JsonDocument.Parse(File.ReadAllText(path));
-            var root = document.RootElement;
-            return root.GetProperty("version").GetInt32() == 1
-                && root.GetProperty("host").GetString() == "gui-test"
-                && root.GetProperty("state").GetString() == "ready"
-                && root.GetProperty("process_id").GetInt32() == process?.Id;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
-        catch (KeyNotFoundException)
-        {
-            return false;
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
-        catch (IOException)
-        {
-            // Transient share/lock while ready.json is renamed or scanned.
-            return false;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
     }
 
     public void WaitForAudioCanvas()
@@ -882,16 +835,7 @@ sealed class AegisubSession : IDisposable
     {
         if (process is null)
             throw new InvalidOperationException("Process was not started");
-        process.WaitForInputIdle(30000);
-        var deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 30;
-        while (Stopwatch.GetTimestamp() < deadline)
-        {
-            mainWindow = RefreshMainWindow();
-            if (mainWindow is not null)
-                return;
-            Thread.Sleep(250);
-        }
-        throw new TimeoutException("Aegisub main window was not discovered");
+        mainWindow = UiaDriver.WaitForMainWindow(process, TimeSpan.FromSeconds(30));
     }
 
     private AutomationElement? RefreshMainWindow()
@@ -906,33 +850,9 @@ sealed class AegisubSession : IDisposable
 
     private void ThrowIfFatalDialog()
     {
-        var root = RefreshMainWindow();
-        if (root is null)
+        if (process is null)
             return;
-
-        try
-        {
-            var dialogs = root.FindAll(TreeScope.Descendants,
-                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Window));
-            foreach (AutomationElement dialog in dialogs)
-            {
-                var name = (dialog.Current.Name ?? string.Empty).Trim();
-                if (ContainsAny(name,
-                    "Program error",
-                    "Aegisub has crashed",
-                    "Aegisub crashed",
-                    "程序错误",
-                    "Aegisub 已崩溃"))
-                {
-                    throw new InvalidOperationException($"Aegisub reported a fatal error dialog: {name}");
-                }
-            }
-        }
-        catch (ElementNotAvailableException)
-        {
-            // The dialog can disappear while UIA is enumerating it. The next
-            // polling iteration observes the process state again.
-        }
+        UiaDriver.ThrowIfFatalDialog(process);
     }
 
     private void SetWindowSize()

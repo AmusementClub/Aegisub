@@ -5,4 +5,4 @@
 
 struct AppLaunchPlan;
 
-int RunHeadlessLaunchPlan(AppLaunchPlan const& plan);
+int RunPlainProcessLaunchPlan(AppLaunchPlan const& plan);

@@ -21,6 +21,7 @@
       ]
     },
     "boost-spirit",
+    "cli11",
     {
       "name": "fontconfig",
       "platform": "!windows & !osx"

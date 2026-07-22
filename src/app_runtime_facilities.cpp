@@ -33,7 +33,7 @@ void InitializeRuntimeOptionalFacilities(AppRuntimeInitOptions const& options) {
 	if (options.warm_subtitles_provider_font_cache)
 		libass::CacheFonts();
 
-	if (options.load_global_scripts) {
+	if (options.create_global_script_manager) {
 		auto managed_plugin_root = agi::fs::path();
 #ifdef WITH_PLUGIN_BRIDGE
 		managed_plugin_root = config::path->Decode("?user/managed-plugins");

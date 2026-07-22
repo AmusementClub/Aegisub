@@ -2,7 +2,25 @@
   "version": 1,
   "name": "gui-command-smoke",
   "hosts": ["gui-test"],
+  "load_global_scripts": false,
+  "default_timeout_ms": 15000,
   "steps": [
+    {
+      "action": "query",
+      "target": "command",
+      "id": "app/display/subs"
+    },
+    {
+      "action": "assert",
+      "target": "command",
+      "id": "app/display/subs",
+      "field": "found",
+      "equals": true
+    },
+    {
+      "action": "wait",
+      "milliseconds": 10
+    },
     {
       "action": "command",
       "id": "app/display/subs"

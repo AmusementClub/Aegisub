@@ -20,6 +20,5 @@
 
 struct AppLaunchPlan;
 
-// Plain headless entry seam: owns command-line detection and no-host
-// delegation into runtime bootstrap.
-int RunHeadlessLaunchPlanInPlainProcessHost(AppLaunchPlan const& plan);
+// Plain-process entry seam: delegates parsed CLI commands without starting wx.
+int RunAppLaunchPlanInPlainProcessHost(AppLaunchPlan const& plan);

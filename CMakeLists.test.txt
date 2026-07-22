@@ -27,11 +27,17 @@ if(GTEST_FOUND)
         tests/tests/ass_style_resolution.cpp
         tests/tests/ass_style_parse.cpp
         tests/tests/audio.cpp
+        tests/tests/app_launch_plan.cpp
+        tests/tests/fontcollector_cli_encoding.cpp
+        tests/tests/headless_service_output.cpp
         tests/tests/avisynth_legacy_path.cpp
         tests/tests/avisynth_runtime_policy.cpp
         tests/tests/bgra_transform_test.cpp
         tests/tests/automation_debug_adapter.cpp
+        tests/tests/automation_command_executor.cpp
         tests/tests/automation_edit_box_request_policy.cpp
+        tests/tests/automation_runtime_profile.cpp
+        tests/tests/automation_scenario_contract.cpp
         tests/tests/audio_display.cpp
         tests/tests/async_video_provider.cpp
         tests/tests/dispatch.cpp
@@ -49,6 +55,11 @@ if(GTEST_FOUND)
         tests/tests/time_display_mode.cpp
         tests/tests/automation_process_supervisor.cpp
         src/automation_process_supervisor.cpp
+        src/app_launch_plan.cpp
+        src/fontcollector_cli_encoding.cpp
+        src/headless_service_output.cpp
+        src/automation_command_executor.cpp
+        src/automation_runtime_profile.cpp
         src/automation_scenario.cpp
         src/automation_scenario_runner.cpp
         src/automation/automation_breakpoint_store.cpp
@@ -319,7 +330,8 @@ if(GTEST_FOUND)
             "${FFMS2_INCLUDE_DIR}"
         )
     endif()
-    target_link_libraries(gtest-run PRIVATE aegisub_features libaegisub luajit "GTest::GTest" "Iconv::Iconv" pugixml::pugixml "ZLIB::ZLIB" "Boost::locale" ${wxWidgets_LIBRARIES})
+    target_link_libraries(gtest-run PRIVATE aegisub_features libaegisub luajit CLI11::CLI11 "GTest::GTest" "Iconv::Iconv" pugixml::pugixml "ZLIB::ZLIB" "Boost::locale" ${wxWidgets_LIBRARIES})
+    target_include_directories(gtest-run PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc")
     aegisub_enable_highway(gtest-run)
     if(WIN32)
         target_link_libraries(gtest-run PRIVATE Psapi)
@@ -820,4 +832,294 @@ target_compile_features(core-host-boundary-bench PRIVATE cxx_std_20)
 target_compile_definitions(core-host-boundary-bench PRIVATE CMAKE_BUILD)
 target_link_libraries(core-host-boundary-bench PRIVATE aegisub_core libaegisub)
 
-add_custom_target(test-aegisub-all DEPENDS test-automation test-aegisub test-core-smoke test-provider-manager-registry)
+if(BUILD_TESTING)
+    add_executable(fontcollector_api_smoke EXCLUDE_FROM_ALL
+        tests/smoke/fontcollector_api_smoke.cpp
+    )
+    target_compile_features(fontcollector_api_smoke PRIVATE cxx_std_20)
+    target_compile_definitions(fontcollector_api_smoke PRIVATE CMAKE_BUILD)
+    target_link_libraries(fontcollector_api_smoke PRIVATE aegisub_fontcollector_api)
+    target_include_directories(fontcollector_api_smoke PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/include"
+    )
+    add_executable(fontcollector_api_shared_smoke EXCLUDE_FROM_ALL
+        tests/smoke/fontcollector_api_smoke.cpp
+    )
+    target_compile_features(fontcollector_api_shared_smoke PRIVATE cxx_std_20)
+    target_compile_definitions(fontcollector_api_shared_smoke PRIVATE CMAKE_BUILD)
+    target_link_libraries(fontcollector_api_shared_smoke PRIVATE aegisub_fontcollector)
+    target_include_directories(fontcollector_api_shared_smoke PRIVATE
+        "${PROJECT_SOURCE_DIR}/src/include"
+    )
+    set_target_properties(fontcollector_api_smoke fontcollector_api_shared_smoke
+        PROPERTIES EXCLUDE_FROM_ALL FALSE)
+    aegisub_stage_libass_runtime(fontcollector_api_smoke)
+    aegisub_stage_libass_runtime(fontcollector_api_shared_smoke)
+    add_custom_target(test-fontcollector-api
+        COMMAND fontcollector_api_smoke
+        COMMAND fontcollector_api_shared_smoke
+        DEPENDS fontcollector_api_smoke fontcollector_api_shared_smoke
+        WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+    )
+else()
+    add_custom_target(test-fontcollector-api)
+endif()
+
+add_custom_target(test-aegisub-all
+    DEPENDS test-automation test-aegisub test-core-smoke test-provider-manager-registry test-fontcollector-api
+)
+
+if(BUILD_TESTING AND WIN32)
+    add_test(
+        NAME fontcollector_cli_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DFONTCOLLECTOR_EXE=$<TARGET_FILE:Aegisub>"
+            "-DFONTCOLLECTOR_SUBCOMMAND=fontcollector"
+            "-DTEST_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/fontcollector-cli-smoke/$<CONFIG>"
+            -P "${PROJECT_SOURCE_DIR}/tests/smoke/fontcollector_cli_smoke.cmake"
+    )
+    set_tests_properties(fontcollector_cli_smoke PROPERTIES
+        LABELS "smoke;fontcollector;process"
+        RUN_SERIAL TRUE
+        TIMEOUT 300
+    )
+endif()
+
+if(BUILD_TESTING)
+    # Keep the existing custom targets as developer entry points, but let CTest
+    # execute the smoke command itself so timeout and process cleanup are owned
+    # by the test runner rather than a nested build.
+    # Script-based tests intentionally follow the repository's build-then-test
+    # contract; CTest does not infer custom managed-output dependencies from
+    # paths passed as script arguments.
+    function(aegisub_set_smoke_test_properties test_name timeout_seconds labels)
+        set_tests_properties("${test_name}" PROPERTIES
+            LABELS "${labels}"
+            RUN_SERIAL TRUE
+            TIMEOUT "${timeout_seconds}"
+        )
+    endfunction()
+
+    add_test(
+        NAME fontcollector_api_smoke
+        COMMAND "$<TARGET_FILE:fontcollector_api_smoke>"
+        WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+    )
+    aegisub_set_smoke_test_properties(
+        fontcollector_api_smoke 180 "smoke;fontcollector;api;native")
+
+    add_test(
+        NAME fontcollector_api_shared_smoke
+        COMMAND "$<TARGET_FILE:fontcollector_api_shared_smoke>"
+        WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+    )
+    aegisub_set_smoke_test_properties(
+        fontcollector_api_shared_smoke 180 "smoke;fontcollector;api;shared;native")
+
+    # GUI process smoke is currently validated on Windows only. The custom
+    # target remains available on every platform for future host bring-up.
+    if(WIN32 AND TARGET Aegisub)
+        add_test(
+            NAME aegisub_gui_test_command_smoke
+            COMMAND "${CMAKE_COMMAND}"
+                "-DAEGISUB_EXE=$<TARGET_FILE:Aegisub>"
+                "-DSCENARIO_FILE=${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/scenarios/gui-command.json"
+                "-DSMOKE_DIR=${CMAKE_CURRENT_BINARY_DIR}/gui-test-command-smoke/$<CONFIG>"
+                "-DWORKING_DIR=$<TARGET_FILE_DIR:Aegisub>"
+                -P "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/run-gui-test-smoke.cmake"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_gui_test_command_smoke 300 "smoke;gui;automation;process;windows")
+    endif()
+
+    if(WIN32 AND TARGET Aegisub AND _aegisub_uia_dotnet10_available)
+        add_test(
+            NAME aegisub_uia_correctness_smoke
+            COMMAND "${AEGISUB_UIA_DOTNET_EXECUTABLE}" run
+                --file "${PROJECT_SOURCE_DIR}/tools/gui-automation-uia-correctness.cs"
+                --artifacts-path "${CMAKE_CURRENT_BINARY_DIR}/dotnet-artifacts/gui-automation-uia/$<CONFIG>"
+                --
+                --exe "$<TARGET_FILE:Aegisub>"
+                --open "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/trim-selected-input.ass"
+                --artifacts "${CMAKE_CURRENT_BINARY_DIR}/gui-automation-uia-correctness/$<CONFIG>"
+            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_uia_correctness_smoke 240 "smoke;gui;uia;windows;interactive;process")
+    endif()
+
+    if(WITH_PLUGIN_BRIDGE AND TARGET aegisub-plugin-bridge-smoke)
+        add_test(
+            NAME aegisub_plugin_bridge_smoke
+            COMMAND "$<TARGET_FILE:aegisub-plugin-bridge-smoke>"
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:aegisub-plugin-bridge-smoke>"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_plugin_bridge_smoke 300 "smoke;bridge;native;process")
+
+        add_test(
+            NAME aegisub_plugin_sdk_smoke
+            COMMAND "${CMAKE_COMMAND}"
+                "-DDOTNET_EXECUTABLE=${AEGISUB_DOTNET_EXECUTABLE}"
+                "-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+                "-DOUTPUT_DIR=${CMAKE_CURRENT_BINARY_DIR}/plugin-sdk-smoke/$<CONFIG>"
+                "-DRID=${_aegisub_dotnet_rid}"
+                "-DNATIVE_LIBRARY_NAME=Aegisub.Plugin.Sdk.Smoke.NativeAot${CMAKE_SHARED_LIBRARY_SUFFIX}"
+                -P "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/run-plugin-sdk-smoke.cmake"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_plugin_sdk_smoke 1200 "smoke;bridge;sdk;managed;process")
+
+        add_test(
+            NAME aegisub_managed_devhost_smoke
+            COMMAND "${CMAKE_COMMAND}"
+                "-DDOTNET_EXECUTABLE=${AEGISUB_DOTNET_EXECUTABLE}"
+                "-DDEVHOST_DLL=${_aegisub_managed_devhost_output}/Aegisub.Managed.DevHost.dll"
+                "-DSMOKE_DIR=${CMAKE_CURRENT_BINARY_DIR}/plugin-bridge-devhost-smoke/$<CONFIG>"
+                -P "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/run-devhost-smoke.cmake"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_managed_devhost_smoke 300 "smoke;bridge;managed;process")
+
+        add_test(
+            NAME aegisub_csharp_template_smoke
+            COMMAND "${CMAKE_COMMAND}"
+                "-DDOTNET_EXECUTABLE=${AEGISUB_DOTNET_EXECUTABLE}"
+                "-DTEMPLATE_DIR=${PROJECT_SOURCE_DIR}/managed/templates/aegisub-csharp-extension"
+                "-DCONTRACTS_PROJECT=${_aegisub_managed_contracts_project}"
+                "-DCONTRACTS_PACKAGE=${CMAKE_CURRENT_BINARY_DIR}/managed/packages/$<CONFIG>/Aegisub.Managed.Contracts.0.1.0.nupkg"
+                "-DDEVHOST_PROJECT=${_aegisub_managed_devhost_project}"
+                "-DDEVHOST_DLL=${_aegisub_managed_devhost_output}/Aegisub.Managed.DevHost.dll"
+                "-DAEGISUB_EXE=$<TARGET_FILE:Aegisub>"
+                "-DSMOKE_DIR=${CMAKE_CURRENT_BINARY_DIR}/csharp-extension-template-smoke/$<CONFIG>"
+                -P "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/run-template-smoke.cmake"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_csharp_template_smoke 1200 "smoke;bridge;template;managed;process")
+
+        add_test(
+            NAME aegisub_dependency_control_feed_smoke
+            COMMAND "${AEGISUB_DOTNET_EXECUTABLE}"
+                "${_aegisub_dependency_control_smoke_output}/Aegisub.DependencyControl.Smoke.dll"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_dependency_control_feed_smoke 300
+            "smoke;bridge;dependency-control;managed;process")
+
+        add_test(
+            NAME aegisub_dependency_control_install_smoke
+            COMMAND "${AEGISUB_DOTNET_EXECUTABLE}"
+                "${_aegisub_dependency_control_install_smoke_output}/Aegisub.DependencyControl.InstallSmokeHost.dll"
+                "$<TARGET_FILE:Aegisub>"
+                "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/fixtures/dependency-control-install.lua"
+                "${CMAKE_CURRENT_BINARY_DIR}/dependency-control-install-smoke/$<CONFIG>"
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:Aegisub>"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_dependency_control_install_smoke 600
+            "smoke;bridge;dependency-control;managed;process")
+
+        # The custom target runs these in sequence. CTest exposes them as two
+        # independent cases so each scenario owns its timeout and diagnostics.
+        add_test(
+            NAME aegisub_dependency_control_lua_compat_smoke
+            COMMAND "${CMAKE_COMMAND}" -E env
+                "AEGISUB_DEPENDENCY_CONTROL_STATE_ROOT=${CMAKE_CURRENT_BINARY_DIR}/dependency-control-lua-smoke/$<CONFIG>/compat/state"
+                "$<TARGET_FILE:Aegisub>"
+                --headless run
+                --scenario "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/scenarios/dependency-control-compat.json"
+                --artifacts "${CMAKE_CURRENT_BINARY_DIR}/dependency-control-lua-smoke/$<CONFIG>/compat"
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:Aegisub>"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_dependency_control_lua_compat_smoke 300
+            "smoke;bridge;dependency-control;lua;process")
+
+        add_test(
+            NAME aegisub_dependency_control_lua_transport_smoke
+            COMMAND "${CMAKE_COMMAND}" -E env
+                "AEGISUB_DEPENDENCY_CONTROL_STATE_ROOT=${CMAKE_CURRENT_BINARY_DIR}/dependency-control-lua-smoke/$<CONFIG>/transport/state"
+                "$<TARGET_FILE:Aegisub>"
+                --headless run
+                --scenario "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/scenarios/dependency-control-transport-limits.json"
+                --artifacts "${CMAKE_CURRENT_BINARY_DIR}/dependency-control-lua-smoke/$<CONFIG>/transport"
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:Aegisub>"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_dependency_control_lua_transport_smoke 300
+            "smoke;bridge;dependency-control;lua;process")
+
+        add_test(
+            NAME aegisub_dependency_control_nativeaot_smoke
+            COMMAND "${CMAKE_COMMAND}"
+                "-DAEGISUB_EXE=$<TARGET_FILE:Aegisub>"
+                "-DSCENARIO_FILE=${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/scenarios/dependency-control-compat.json"
+                "-DISOLATION_DIR=${_aegisub_dependency_control_nativeaot_isolation_dir}"
+                "-DPLUGIN_DIR=${_aegisub_dependency_control_component_dir}"
+                "-DNATIVE_LIBRARY=${_aegisub_dependency_control_component_dir}/${_aegisub_dependency_control_nativeaot_filename}"
+                "-DWORKING_DIR=$<TARGET_FILE_DIR:Aegisub>"
+                -P "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/run-nativeaot-isolation-smoke.cmake"
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:Aegisub>"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_dependency_control_nativeaot_smoke 300
+            "smoke;bridge;dependency-control;nativeaot;process")
+
+        add_test(
+            NAME aegisub_plugin_automation_smoke
+            COMMAND "$<TARGET_FILE:Aegisub>"
+                --headless run
+                --scenario "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/scenarios/runtime-info.json"
+                --input "script=$<TARGET_FILE_DIR:Aegisub>/automation/autoload/CSharpBridgeDemo.aegisub-plugin.json"
+                --artifacts "${CMAKE_CURRENT_BINARY_DIR}/plugin-bridge-automation-smoke/$<CONFIG>"
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:Aegisub>"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_plugin_automation_smoke 300 "smoke;bridge;automation;managed;process")
+
+        add_test(
+            NAME aegisub_plugin_query_state_smoke
+            COMMAND "${CMAKE_COMMAND}"
+                "-DAEGISUB_EXE=$<TARGET_FILE:Aegisub>"
+                "-DSCRIPT_FILE=$<TARGET_FILE_DIR:Aegisub>/automation/autoload/CSharpBridgeDemo.aegisub-plugin.json"
+                "-DSMOKE_DIR=${CMAKE_CURRENT_BINARY_DIR}/plugin-bridge-query-state-smoke/$<CONFIG>"
+                -P "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/run-query-state-smoke.cmake"
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:Aegisub>"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_plugin_query_state_smoke 300 "smoke;bridge;automation;managed;process")
+
+        add_test(
+            NAME aegisub_plugin_subtitle_smoke
+            COMMAND "${CMAKE_COMMAND}"
+                "-DAEGISUB_EXE=$<TARGET_FILE:Aegisub>"
+                "-DSCRIPT_FILE=$<TARGET_FILE_DIR:Aegisub>/automation/autoload/CSharpBridgeDemo.aegisub-plugin.json"
+                "-DINPUT_FILE=${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/trim-selected-input.ass"
+                "-DNOOP_INPUT_FILE=${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/trim-selected-noop-input.ass"
+                "-DSMOKE_DIR=${_aegisub_csharp_subtitle_smoke_dir}"
+                -P "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/run-subtitle-smoke.cmake"
+            WORKING_DIRECTORY "$<TARGET_FILE_DIR:Aegisub>"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_plugin_subtitle_smoke 600 "smoke;bridge;automation;managed;process")
+
+        option(AEGISUB_ENABLE_DEPENDENCY_CONTROL_PUBLIC_FEED_SMOKE
+            "Enable the network-dependent DependencyControl public feed smoke" OFF)
+        add_test(
+            NAME aegisub_dependency_control_public_feed_smoke
+            COMMAND "${CMAKE_COMMAND}"
+                "-DDOTNET_EXECUTABLE=${AEGISUB_DOTNET_EXECUTABLE}"
+                "-DSMOKE_DLL=${_aegisub_dependency_control_smoke_output}/Aegisub.DependencyControl.Smoke.dll"
+                "-DSMOKE_DIR=${CMAKE_CURRENT_BINARY_DIR}/dependency-control-public-feed-smoke/$<CONFIG>"
+                -P "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/run-dependency-control-public-feed-smoke.cmake"
+        )
+        aegisub_set_smoke_test_properties(
+            aegisub_dependency_control_public_feed_smoke 900
+            "smoke;bridge;dependency-control;network;process")
+        if(NOT AEGISUB_ENABLE_DEPENDENCY_CONTROL_PUBLIC_FEED_SMOKE)
+            set_tests_properties(aegisub_dependency_control_public_feed_smoke PROPERTIES
+                DISABLED TRUE)
+        endif()
+    endif()
+
+endif()

@@ -6,6 +6,11 @@ if(NOT DEFINED TEST_WORK_DIR)
 	set(TEST_WORK_DIR "${CMAKE_CURRENT_BINARY_DIR}/fontcollector-cli-smoke")
 endif()
 
+set(FONTCOLLECTOR_SUBCOMMAND_PREFIX)
+if(DEFINED FONTCOLLECTOR_SUBCOMMAND AND NOT FONTCOLLECTOR_SUBCOMMAND STREQUAL "")
+	list(APPEND FONTCOLLECTOR_SUBCOMMAND_PREFIX "${FONTCOLLECTOR_SUBCOMMAND}")
+endif()
+
 file(REMOVE_RECURSE "${TEST_WORK_DIR}")
 file(MAKE_DIRECTORY "${TEST_WORK_DIR}")
 
@@ -25,6 +30,7 @@ set(DRAWING_ASS "${TEST_WORK_DIR}/drawing.ass")
 set(NESTED_DRAWING_ASS "${TEST_WORK_DIR}/nested-drawing.ass")
 set(NESTED_TEXT_ASS "${TEST_WORK_DIR}/nested-text.ass")
 set(VARIANT_STATE_ASS "${TEST_WORK_DIR}/variant-state.ass")
+set(ISO2022_ASS "${TEST_WORK_DIR}/iso2022.ass")
 set(COPY_DIR "${TEST_WORK_DIR}/copy")
 
 file(WRITE "${A_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,ASCII only\n")
@@ -41,10 +47,13 @@ file(WRITE "${DRAWING_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,D
 file(WRITE "${NESTED_DRAWING_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\t(0,1000,\\p1)}m 0 0 l 10 0 10 10 0 10\n")
 file(WRITE "${NESTED_TEXT_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\p1\\t(0,1000,\\p0)}A\n")
 file(WRITE "${VARIANT_STATE_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,{\\b600\\fe-1}A\n")
+string(ASCII 27 36 66 36 34 27 40 66 ISO2022_CHARACTER)
+string(REPEAT "${ISO2022_CHARACTER}" 600 ISO2022_TEXT)
+file(WRITE "${ISO2022_ASS}" "${COMMON_HEADER}Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,${ISO2022_TEXT}\n")
 
 function(run_fontcollector EXPECTED_RESULT)
 	execute_process(
-		COMMAND "${FONTCOLLECTOR_EXE}" ${ARGN}
+		COMMAND "${FONTCOLLECTOR_EXE}" ${FONTCOLLECTOR_SUBCOMMAND_PREFIX} ${ARGN}
 		RESULT_VARIABLE actual_result
 		OUTPUT_VARIABLE output
 		ERROR_VARIABLE error
@@ -129,6 +138,9 @@ endif()
 run_fontcollector(0 normalize "${MISSING_ASS}" --target localized --details)
 require_contains("${FONTCOLLECTOR_STDOUT}" "ISSUE: style 'Default' (line 7)" "normalize human style line")
 require_contains("${FONTCOLLECTOR_STDOUT}" "unrecognized_family_name" "normalize human reason")
+
+run_fontcollector(0 normalize "${ISO2022_ASS}" --json)
+require_json_equals("${FONTCOLLECTOR_STDOUT}" "0" "ISO-2022-JP automatic encoding result" result)
 
 run_fontcollector(0 check "${A_ASS}" "${B_ASS}" --json)
 require_json_equals("${FONTCOLLECTOR_STDOUT}" "2" "json schema version" schema_version)

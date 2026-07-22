@@ -404,6 +404,10 @@ Result Run(
 	return RunWithHooks(arguments, control_directory, step_timeout_ms, step_count, std::move(hooks));
 }
 
+int ExitCodeForMissingResult(int worker_exit_code) {
+	return worker_exit_code == 0 ? 2 : worker_exit_code;
+}
+
 void MarkRuntimeReady(agi::fs::path const& control_directory) {
 	WriteMarker(Marker(control_directory, "runtime-ready"));
 }

@@ -76,7 +76,7 @@ bool HasBoundStdHandle(DWORD handle_id) {
 	return GetLastError() == ERROR_SUCCESS;
 }
 
-void EnsureHeadlessConsoleStreams() {
+void EnsurePlainProcessConsoleStreams() {
 	auto const needs_stdin = !HasBoundStdHandle(STD_INPUT_HANDLE);
 	auto const needs_stdout = !HasBoundStdHandle(STD_OUTPUT_HANDLE);
 	auto const needs_stderr = !HasBoundStdHandle(STD_ERROR_HANDLE);
@@ -117,10 +117,10 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wxCm
 	auto const args = CurrentProcessArgs();
 	auto const launch_plan = ParseAppLaunchPlan(args);
 	observe_phase("startup.entry.capture_process_args");
-	if (launch_plan.RequestedHeadless()) {
+	if (launch_plan.RequestedPlainProcess()) {
 		observe_phase("startup.entry.headless_command_check");
-		EnsureHeadlessConsoleStreams();
-		return RunHeadlessLaunchPlanInPlainProcessHost(launch_plan);
+		EnsurePlainProcessConsoleStreams();
+		return RunAppLaunchPlanInPlainProcessHost(launch_plan);
 	}
 	observe_phase("startup.entry.headless_command_check");
 	observe_phase("startup.entry.before_wx_entry");
@@ -149,8 +149,8 @@ int main(int argc, char** argv) {
 	auto const launch_plan = ParseAppLaunchPlan(args);
 	observe_phase("startup.entry.capture_process_args");
 
-	if (launch_plan.RequestedHeadless())
-		return RunHeadlessLaunchPlanInPlainProcessHost(launch_plan);
+	if (launch_plan.RequestedPlainProcess())
+		return RunAppLaunchPlanInPlainProcessHost(launch_plan);
 	observe_phase("startup.entry.headless_command_check");
 	observe_phase("startup.entry.before_wx_entry");
 

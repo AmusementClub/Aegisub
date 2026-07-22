@@ -8,54 +8,106 @@
 #include <exception>
 
 namespace aegisub::automation_command_executor {
+namespace {
 
-json::Object Invoke(std::string const& command_id, agi::Context& context, bool allow_gui_only) {
+json::Object InspectCommand(
+	std::string const& command_id,
+	agi::Context* context,
+	bool allow_gui_only,
+	cmd::Command*& command) {
 	json::Object result;
 	result["command"] = command_id;
-	result["invoked"] = false;
 	result["found"] = false;
 	result["validated"] = false;
 	result["allowed"] = false;
 
+	command = cmd::get_if(command_id);
+	if (!command) {
+		result["error"] = "command was not found";
+		return result;
+	}
+	result["found"] = true;
+	result["scope"] = command->AutomationScope() == cmd::CommandExecutionScope::HeadlessSafe
+		? "headless_safe"
+		: "gui_only";
+	if (!allow_gui_only && command->AutomationScope() != cmd::CommandExecutionScope::HeadlessSafe) {
+		result["error"] = "command is not allowed in headless mode";
+		return result;
+	}
+	result["allowed"] = true;
+
+	bool const tracks_active = (command->Type() & (cmd::COMMAND_TOGGLE | cmd::COMMAND_RADIO)) != 0;
+	if (tracks_active)
+		result["active"] = command->IsActive(context);
+	bool const valid = command->Validate(context);
+	result["validated"] = valid;
+	if (!valid)
+		result["error"] = "command validation rejected the invocation";
+	return result;
+}
+
+}
+
+json::Object Inspect(std::string const& command_id, agi::Context* context, bool allow_gui_only) {
 	try {
-		auto *command = cmd::get_if(command_id);
-		if (!command) {
-			result["error"] = "command was not found";
+		cmd::Command* command = nullptr;
+		return InspectCommand(command_id, context, allow_gui_only, command);
+	}
+	catch (std::exception const& e) {
+		json::Object result;
+		result["command"] = command_id;
+		result["error"] = e.what();
+		return result;
+	}
+	catch (...) {
+		json::Object result;
+		result["command"] = command_id;
+		result["error"] = "unknown command inspection failure";
+		return result;
+	}
+}
+
+json::Object Invoke(std::string const& command_id, agi::Context* context, bool allow_gui_only) {
+	try {
+		cmd::Command* command = nullptr;
+		auto result = InspectCommand(command_id, context, allow_gui_only, command);
+		result["invoked"] = false;
+		bool found = false;
+		bool allowed = false;
+		bool valid = false;
+		try { found = static_cast<json::Boolean const&>(result.at("found")); } catch (...) { }
+		try { allowed = static_cast<json::Boolean const&>(result.at("allowed")); } catch (...) { }
+		try { valid = static_cast<json::Boolean const&>(result.at("validated")); } catch (...) { }
+		if (!found || !allowed || !valid || !command)
 			return result;
-		}
-		result["found"] = true;
-		result["scope"] = command->AutomationScope() == cmd::CommandExecutionScope::HeadlessSafe
-			? "headless_safe"
-			: "gui_only";
-		if (!allow_gui_only && command->AutomationScope() != cmd::CommandExecutionScope::HeadlessSafe) {
-			result["error"] = "command is not allowed in headless mode";
-			return result;
-		}
-		result["allowed"] = true;
 
 		bool const tracks_active = (command->Type() & (cmd::COMMAND_TOGGLE | cmd::COMMAND_RADIO)) != 0;
 		if (tracks_active)
-			result["active_before"] = command->IsActive(&context);
-		bool const valid = command->Validate(&context);
-		result["validated"] = valid;
-		if (!valid) {
-			result["error"] = "command validation rejected the invocation";
-			return result;
+			result["active_before"] = command->IsActive(context);
+		if (context) {
+			if (auto sink = context->GetStatusSink())
+				sink->SetLastCommand(from_wx(command->StrDisplay(context)));
 		}
-		if (auto sink = context.GetStatusSink())
-			sink->SetLastCommand(from_wx(command->StrDisplay(&context)));
-		(*command)(&context);
+		(*command)(context);
 		result["invoked"] = true;
 		if (tracks_active)
-			result["active_after"] = command->IsActive(&context);
+			result["active_after"] = command->IsActive(context);
+		return result;
 	}
 	catch (std::exception const& e) {
+		json::Object result;
+		result["command"] = command_id;
+		result["invoked"] = false;
 		result["error"] = e.what();
+		return result;
 	}
 	catch (...) {
+		json::Object result;
+		result["command"] = command_id;
+		result["invoked"] = false;
 		result["error"] = "unknown command execution failure";
+		return result;
 	}
-	return result;
 }
 
 }

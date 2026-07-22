@@ -18,6 +18,6 @@
 #include "app_launch_plan.h"
 #include "headless_runtime_bootstrap.h"
 
-int RunHeadlessLaunchPlanInPlainProcessHost(AppLaunchPlan const& plan) {
-	return RunHeadlessLaunchPlan(plan);
+int RunAppLaunchPlanInPlainProcessHost(AppLaunchPlan const& plan) {
+	return RunPlainProcessLaunchPlan(plan);
 }

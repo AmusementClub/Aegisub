@@ -45,7 +45,7 @@ struct AppRuntimeInitOptions {
 	RuntimePathOverrides path_overrides;
 	AppRuntimeMainQueueHooks main_queue_hooks;
 	RuntimeLocaleHost locale_host;
-	bool load_global_scripts = false;
+	bool create_global_script_manager = false;
 	bool initialize_commands = true;
 	bool initialize_ui_locale = true;
 	bool register_automation_script_factory = true;

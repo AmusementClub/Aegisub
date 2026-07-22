@@ -1041,9 +1041,9 @@ TEST(host_boundary_policy, shared_exe_headless_entry_flows_directly_to_plain_pro
 	auto app_entry_plain_entry_include_hits = FindLiteralHits(app_entry_cpp, "headless_process_entry.h");
 	auto app_entry_runtime_include_hits = FindLiteralHits(app_entry_cpp, "headless_runtime_bootstrap.h");
 	auto app_entry_plan_parse_hits = FindLiteralHits(app_entry_cpp, "ParseAppLaunchPlan(args)");
-	auto app_entry_plain_host_call_hits = FindLiteralHits(app_entry_cpp, "RunHeadlessLaunchPlanInPlainProcessHost(launch_plan)");
+	auto app_entry_plain_host_call_hits = FindLiteralHits(app_entry_cpp, "RunAppLaunchPlanInPlainProcessHost(launch_plan)");
 	auto process_entry_runtime_include_hits = FindLiteralHits(headless_process_entry_cpp, "headless_runtime_bootstrap.h");
-	auto process_entry_runtime_call_hits = FindLiteralHits(headless_process_entry_cpp, "RunHeadlessLaunchPlan(plan)");
+	auto process_entry_runtime_call_hits = FindLiteralHits(headless_process_entry_cpp, "RunPlainProcessLaunchPlan(plan)");
 	auto process_entry_wx_hits = FindWxMarkers(headless_process_entry_cpp);
 	auto bootstrap_initializer_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "wxInitializer");
 
@@ -1105,7 +1105,8 @@ TEST(host_boundary_policy, shared_headless_entry_bootstrap_sources_live_in_named
 		"src/automation_process_supervisor.cpp",
 		"src/automation_scenario.cpp",
 		"src/automation_scenario_runner.cpp",
-		"src/headless_automation_cli.cpp",
+		"src/fontcollector_cli_encoding.cpp",
+		"src/headless_service_output.cpp",
 		"src/headless_process_entry.cpp",
 		"src/headless_runtime_bootstrap.cpp",
 	};
@@ -1279,66 +1280,30 @@ TEST(host_boundary_policy, shared_cli_inspect_service_sources_live_in_named_cmak
 	EXPECT_FALSE(expansion_hits.empty());
 }
 
-TEST(host_boundary_policy, shared_headless_cli_inspect_probe_sources_live_in_named_cmake_pack) {
+TEST(host_boundary_policy, app_launch_plan_owns_cli11_parsing) {
 	auto const root = ProjectRoot();
 	auto const cmake_lists = root / "CMakeLists.txt";
+	auto const app_launch_plan_cpp = root / "src" / "app_launch_plan.cpp";
 
-	std::set<std::string> const expected_host_sources = {
-		"src/headless_cli.cpp",
-		"src/headless_cli_internal.cpp",
-		"src/headless_cli_execute.cpp",
-		"src/headless_playback_probe.cpp",
-	};
-	std::set<std::string> const expected_entries = {
-		"${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}",
-		"${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_HOST_SOURCES}",
-	};
+	auto cli11_include_hits = FindLiteralHits(app_launch_plan_cpp, "CLI/CLI.hpp");
+	auto cli11_package_hits = FindLiteralHits(cmake_lists, "find_package(CLI11 CONFIG REQUIRED)");
+	auto legacy_probe_parser_hits = FindLiteralHits(cmake_lists, "src/headless_playback_probe.cpp");
 
-	auto host_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_HOST_SOURCES");
-	auto sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES");
-	auto cli_inspect_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}");
-	auto host_expansion_hits = FindLiteralHits(cmake_lists, "${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_HOST_SOURCES}");
-
-	EXPECT_EQ(expected_host_sources, host_sources);
-	EXPECT_EQ(expected_entries, sources);
-	EXPECT_FALSE(cli_inspect_expansion_hits.empty());
-	EXPECT_FALSE(host_expansion_hits.empty());
+	EXPECT_FALSE(cli11_include_hits.empty());
+	EXPECT_FALSE(cli11_package_hits.empty());
+	EXPECT_TRUE(legacy_probe_parser_hits.empty()) << JoinLines(legacy_probe_parser_hits);
 }
 
-TEST(host_boundary_policy, shared_headless_bootstrap_depends_on_narrow_cli_headers) {
+TEST(host_boundary_policy, shared_headless_bootstrap_depends_on_typed_service_headers) {
 	auto const root = ProjectRoot();
 	auto const headless_runtime_bootstrap_cpp = root / "src" / "headless_runtime_bootstrap.cpp";
-	auto const headless_cli_h = root / "src" / "headless_cli.h";
-	auto const headless_cli_parse_h = root / "src" / "headless_cli_parse.h";
-	auto const headless_cli_execute_h = root / "src" / "headless_cli_execute.h";
-	auto const headless_cli_internal_h = root / "src" / "headless_cli_internal.h";
-	auto const headless_cli_command_model_h = root / "src" / "headless_cli_command_model.h";
+	auto bootstrap_service_cli_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "headless_service_cli.h");
+	auto bootstrap_service_output_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "headless_service_output.h");
+	auto legacy_cli_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "headless_cli");
 
-	auto bootstrap_umbrella_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "headless_cli.h");
-	auto bootstrap_parse_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "headless_cli_parse.h");
-	auto bootstrap_execute_hits = FindLiteralHits(headless_runtime_bootstrap_cpp, "headless_cli_execute.h");
-
-	auto internal_umbrella_hits = FindLiteralHits(headless_cli_internal_h, "headless_cli.h");
-	auto internal_command_model_hits = FindLiteralHits(headless_cli_internal_h, "headless_cli_command_model.h");
-
-	auto umbrella_parse_hits = FindLiteralHits(headless_cli_h, "headless_cli_parse.h");
-	auto umbrella_execute_hits = FindLiteralHits(headless_cli_h, "headless_cli_execute.h");
-	auto umbrella_service_hits = FindLiteralHits(headless_cli_h, "playback_session_service.h");
-	auto parse_model_hits = FindLiteralHits(headless_cli_parse_h, "headless_cli_command_model.h");
-	auto execute_model_hits = FindLiteralHits(headless_cli_execute_h, "headless_cli_command_model.h");
-
-	EXPECT_TRUE(bootstrap_umbrella_hits.empty()) << JoinLines(bootstrap_umbrella_hits);
-	EXPECT_FALSE(bootstrap_parse_hits.empty());
-	EXPECT_FALSE(bootstrap_execute_hits.empty());
-
-	EXPECT_TRUE(internal_umbrella_hits.empty()) << JoinLines(internal_umbrella_hits);
-	EXPECT_FALSE(internal_command_model_hits.empty());
-
-	EXPECT_FALSE(umbrella_parse_hits.empty());
-	EXPECT_FALSE(umbrella_execute_hits.empty());
-	EXPECT_TRUE(umbrella_service_hits.empty()) << JoinLines(umbrella_service_hits);
-	EXPECT_FALSE(parse_model_hits.empty());
-	EXPECT_FALSE(execute_model_hits.empty());
+	EXPECT_FALSE(bootstrap_service_cli_hits.empty());
+	EXPECT_FALSE(bootstrap_service_output_hits.empty());
+	EXPECT_TRUE(legacy_cli_hits.empty()) << JoinLines(legacy_cli_hits);
 }
 
 TEST(host_boundary_policy, shared_playback_project_session_sources_live_in_named_cmake_pack) {
@@ -1494,16 +1459,20 @@ TEST(host_boundary_policy, display_renderer_implementations_stay_out_of_aegisub_
 TEST(host_boundary_policy, core_links_core_feature_target_not_gui_feature_facade) {
 	auto const root = ProjectRoot();
 	auto const cmake_lists = root / "CMakeLists.txt";
-	auto core_api_export_targets = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_CORE_API_EXPORT_TARGETS");
+	auto core_api_static_export_targets = ReadNamedCMakeSetEntries(
+		cmake_lists, "AEGISUB_CORE_API_STATIC_EXPORT_TARGETS");
 
 	EXPECT_FALSE(FindLiteralHits(cmake_lists, "add_library(aegisub_core_features INTERFACE)").empty());
 	EXPECT_FALSE(FindLiteralHits(cmake_lists, "target_link_libraries(aegisub_features INTERFACE aegisub_core_features)").empty());
 	EXPECT_FALSE(FindLiteralHits(cmake_lists, "target_link_libraries(aegisub_core PRIVATE aegisub_core_features").empty());
 	EXPECT_TRUE(FindLiteralHits(cmake_lists, "target_link_libraries(aegisub_core PRIVATE aegisub_features").empty());
 	EXPECT_FALSE(FindLiteralHits(cmake_lists, "aegisub_core_features").empty());
-	EXPECT_NE(core_api_export_targets.end(), core_api_export_targets.find("aegisub_core_features"));
-	EXPECT_EQ(core_api_export_targets.end(), core_api_export_targets.find("aegisub_features"));
-	EXPECT_FALSE(FindLiteralHits(cmake_lists, "install(TARGETS ${AEGISUB_CORE_API_EXPORT_TARGETS}").empty());
+	EXPECT_NE(core_api_static_export_targets.end(),
+		core_api_static_export_targets.find("aegisub_core_features"));
+	EXPECT_EQ(core_api_static_export_targets.end(),
+		core_api_static_export_targets.find("aegisub_features"));
+	EXPECT_FALSE(FindLiteralHits(cmake_lists,
+		"install(TARGETS ${AEGISUB_CORE_API_STATIC_EXPORT_TARGETS}").empty());
 }
 
 TEST(host_boundary_policy, platform_font_listers_are_core_owned_not_recompiled_by_gui) {
@@ -1615,6 +1584,7 @@ TEST(host_boundary_policy, aegisub_core_src_local_include_closure_stays_wx_free)
 TEST(host_boundary_policy, core_api_facade_and_c_wrapper_are_core_owned_and_wx_free) {
 	auto const root = ProjectRoot();
 	auto const cmake_lists = root / "CMakeLists.txt";
+	auto const core_c_api_config_template = root / "cmake" / "AegisubCoreCAPIConfig.cmake.in";
 	auto core_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_CORE_SOURCES");
 	auto c_api_sources = ReadNamedCMakeSetEntries(cmake_lists, "AEGISUB_CORE_C_API_SOURCES");
 	std::vector<std::filesystem::path> const expected_wx_free_paths = {
@@ -1635,13 +1605,25 @@ TEST(host_boundary_policy, core_api_facade_and_c_wrapper_are_core_owned_and_wx_f
 	EXPECT_TRUE(FindLiteralHits(cmake_lists, "VISIBILITY_INLINES_HIDDEN ON").empty() == false);
 	EXPECT_TRUE(FindLiteralHits(cmake_lists, "src/aegisub_core_c_api.version").empty() == false);
 	EXPECT_TRUE(FindLiteralHits(cmake_lists, "src/aegisub_core_c_api.exports").empty() == false);
-	EXPECT_TRUE(FindLiteralHits(cmake_lists, "set(AEGISUB_CORE_API_EXPORT_TARGETS").empty() == false);
-	EXPECT_TRUE(FindLiteralHits(cmake_lists, "install(TARGETS ${AEGISUB_CORE_API_EXPORT_TARGETS}").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "set(AEGISUB_CORE_API_SHARED_EXPORT_TARGETS").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "set(AEGISUB_CORE_API_STATIC_EXPORT_TARGETS").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "install(TARGETS ${AEGISUB_CORE_API_SHARED_EXPORT_TARGETS}").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "install(TARGETS ${AEGISUB_CORE_API_STATIC_EXPORT_TARGETS}").empty() == false);
 	EXPECT_TRUE(FindLiteralHits(cmake_lists, "install(EXPORT AegisubCoreCAPITargets").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists, "install(EXPORT AegisubCoreCAPISharedTargets").empty() == false);
+	EXPECT_FALSE(FindLiteralHits(core_c_api_config_template,
+		"include(\"${CMAKE_CURRENT_LIST_DIR}/AegisubCoreCAPISharedTargets.cmake\")").empty());
+	EXPECT_FALSE(FindLiteralHits(core_c_api_config_template,
+		"include(\"${CMAKE_CURRENT_LIST_DIR}/AegisubCoreCAPITargets.cmake\")").empty());
+	EXPECT_FALSE(FindLiteralHits(core_c_api_config_template,
+		"IN_LIST AegisubCoreCAPI_FIND_COMPONENTS").empty());
+	EXPECT_FALSE(FindLiteralHits(core_c_api_config_template,
+		"find_dependency(Fontconfig REQUIRED)").empty());
 	EXPECT_TRUE(FindLiteralHits(cmake_lists, "RUNTIME DESTINATION bin").empty() == false);
 	EXPECT_TRUE(FindLiteralHits(cmake_lists, "LIBRARY DESTINATION lib").empty() == false);
 	EXPECT_TRUE(FindLiteralHits(cmake_lists, "ARCHIVE DESTINATION lib").empty() == false);
-	EXPECT_TRUE(FindLiteralHits(cmake_lists, "install(FILES src/include/aegisub/core_c_api.h DESTINATION include/aegisub").empty() == false);
+	EXPECT_TRUE(FindLiteralHits(cmake_lists,
+		"install(FILES src/include/aegisub/core_c_api.h").empty() == false);
 	EXPECT_TRUE(FindLiteralHits(cmake_lists, "target_sources(Aegisub PRIVATE src/core_api_facade.cpp").empty());
 	EXPECT_TRUE(FindLiteralHits(cmake_lists, "target_sources(Aegisub PRIVATE src/core_c_api.cpp").empty());
 

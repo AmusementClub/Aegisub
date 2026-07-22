@@ -66,6 +66,22 @@ int OptionalPositiveInteger(
 	}
 }
 
+bool OptionalBoolean(
+	json::Object const& object,
+	std::string const& key,
+	bool fallback,
+	char const* source) {
+	auto it = object.find(key);
+	if (it == object.end())
+		return fallback;
+	try {
+		return static_cast<json::Boolean const&>(it->second);
+	}
+	catch (...) {
+		throw std::runtime_error(std::string(source) + " field '" + key + "' must be a boolean");
+	}
+}
+
 std::vector<std::string> ParseHosts(json::Object const& root) {
 	auto it = root.find("hosts");
 	if (it == root.end())
@@ -184,6 +200,8 @@ LoadResult Load(
 		scenario.name = RequireString(root, "name", "automation scenario");
 		scenario.hosts = ParseHosts(root);
 		scenario.resources = ParseResources(root, scenario.source_path, input_overrides);
+		scenario.load_global_scripts = OptionalBoolean(
+			root, "load_global_scripts", false, "automation scenario");
 		scenario.default_timeout_ms = OptionalPositiveInteger(
 			root, "default_timeout_ms", 120000, "automation scenario");
 		scenario.steps = ParseSteps(root);

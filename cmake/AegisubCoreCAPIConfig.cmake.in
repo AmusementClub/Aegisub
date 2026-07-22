@@ -33,13 +33,34 @@ macro(_aegisub_core_c_api_find_static_dependencies)
 		find_dependency(unofficial-skia CONFIG REQUIRED)
 	endif()
 
+	if(@AEGISUB_CORE_API_NEEDS_FONTCONFIG@)
+		find_dependency(Fontconfig REQUIRED)
+	endif()
+
 endmacro()
 
-include("${CMAKE_CURRENT_LIST_DIR}/AegisubCoreCAPITargets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/AegisubCoreCAPISharedTargets.cmake")
+
+set(_aegisub_core_c_api_wants_static FALSE)
+if(NOT AegisubCoreCAPI_FIND_COMPONENTS)
+	# Preserve the historical default: no components exposes both shared and
+	# static targets.  Explicit Shared keeps the package lightweight.
+	set(_aegisub_core_c_api_wants_static TRUE)
+elseif("Static" IN_LIST AegisubCoreCAPI_FIND_COMPONENTS)
+	set(_aegisub_core_c_api_wants_static TRUE)
+endif()
+if(_aegisub_core_c_api_wants_static)
+	# The static export contains aegisub_core and its native link interface;
+	# resolve those imported dependency targets before loading the export.
+	_aegisub_core_c_api_find_static_dependencies()
+	include("${CMAKE_CURRENT_LIST_DIR}/AegisubCoreCAPITargets.cmake")
+endif()
 
 foreach(_aegisub_core_c_api_target
 		Aegisub::core_c_api
 		Aegisub::core_c_api_static
+		Aegisub::fontcollector
+		Aegisub::fontcollector_static
 		Aegisub::aegisub_core
 		Aegisub::libaegisub
 		Aegisub::luajit
@@ -57,12 +78,11 @@ endforeach()
 unset(_aegisub_core_c_api_target)
 
 set(AegisubCoreCAPI_Shared_FOUND TRUE)
-set(AegisubCoreCAPI_Static_FOUND TRUE)
+set(AegisubCoreCAPI_Static_FOUND ${_aegisub_core_c_api_wants_static})
 foreach(_aegisub_core_c_api_component IN LISTS AegisubCoreCAPI_FIND_COMPONENTS)
 	if(_aegisub_core_c_api_component STREQUAL "Shared")
 		set(AegisubCoreCAPI_Shared_FOUND TRUE)
 	elseif(_aegisub_core_c_api_component STREQUAL "Static")
-		_aegisub_core_c_api_find_static_dependencies()
 		set(AegisubCoreCAPI_Static_FOUND TRUE)
 	else()
 		set(AegisubCoreCAPI_${_aegisub_core_c_api_component}_FOUND FALSE)
@@ -70,5 +90,6 @@ foreach(_aegisub_core_c_api_component IN LISTS AegisubCoreCAPI_FIND_COMPONENTS)
 endforeach()
 unset(_aegisub_core_c_api_component)
 unset(_aegisub_core_c_api_find_static_dependencies)
+unset(_aegisub_core_c_api_wants_static)
 
 check_required_components(AegisubCoreCAPI)

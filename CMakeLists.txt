@@ -397,6 +397,7 @@ find_package(ICU REQUIRED uc)
 find_package(ZLIB REQUIRED)
 find_package(Iconv REQUIRED)
 find_package(pugixml CONFIG REQUIRED)
+find_package(CLI11 CONFIG REQUIRED)
 option(WITH_LIBPLACEBO "Enable optional runtime-loaded libplacebo renderer support" ON)
 set(HAVE_LIBPLACEBO OFF)
 if(WITH_LIBPLACEBO)
@@ -612,7 +613,8 @@ set(AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES
     src/automation_process_supervisor.cpp
     src/automation_scenario.cpp
     src/automation_scenario_runner.cpp
-    src/headless_automation_cli.cpp
+    src/fontcollector_cli_encoding.cpp
+    src/headless_service_output.cpp
     src/headless_process_entry.cpp
     src/headless_runtime_bootstrap.cpp
 )
@@ -629,18 +631,6 @@ set(AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES
     src/media_inspect_service.cpp
     src/trace_inspect_service.cpp
     src/trace_summary_service.cpp
-)
-
-set(AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_HOST_SOURCES
-    src/headless_cli.cpp
-    src/headless_cli_internal.cpp
-    src/headless_cli_execute.cpp
-    src/headless_playback_probe.cpp
-)
-
-set(AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_SOURCES
-    ${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}
-    ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_HOST_SOURCES}
 )
 
 set(AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES
@@ -1137,7 +1127,6 @@ add_executable(Aegisub WIN32
     ${AEGISUB_GUI_RUNTIME_WX_HOST_SOURCES}
     src/grid_column.cpp
     src/grid_column_painter.cpp
-    ${AEGISUB_SHARED_HEADLESS_CLI_INSPECT_PROBE_HOST_SOURCES}
     ${AEGISUB_SHARED_CLI_INSPECT_SERVICE_SOURCES}
     ${AEGISUB_SHARED_PROJECT_MEDIA_OPEN_QUERY_SOURCES}
     ${AEGISUB_SHARED_PLAYBACK_PROJECT_SESSION_CORE_SOURCES}
@@ -1220,6 +1209,7 @@ add_executable(Aegisub WIN32
     # spline cluster (depends on VisualToolBase)
     src/spline.cpp
     src/spline_curve.cpp
+    src/fontcollector_subcommand.cpp
     ${AEGISUB_SHARED_EXE_ENTRY_SOURCES}
     ${AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES}
 )
@@ -1275,12 +1265,13 @@ set_source_files_properties(libaegisub/common/native_library.cpp PROPERTIES
 )
 # aegisub_core carries the framework-agnostic core (PUBLIC libaegisub + boost/...).
 # libass is runtime-loaded (headers via BUILD_INTERFACE only); see aegisub_stage_libass_runtime.
-target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} aegisub_core aegisub_features luajit)
+target_link_libraries(Aegisub PRIVATE ${CMAKE_DL_LIBS} aegisub_core aegisub_features luajit CLI11::CLI11)
 aegisub_stage_libass_runtime(Aegisub)
 aegisub_stage_libass_runtime(aegisub_core_c_api)
-target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD)
+target_compile_definitions(Aegisub PRIVATE CMAKE_BUILD AEGISUB_FONTCOLLECTOR_STATIC)
 target_compile_features(Aegisub PRIVATE cxx_std_20)
 target_include_directories(Aegisub PRIVATE src)
+target_include_directories(Aegisub PRIVATE src/include)
 target_include_directories(Aegisub PRIVATE vendor)
 add_custom_target(run-aegisub-gui-test-command-smoke
     COMMAND "${CMAKE_COMMAND}"
@@ -1294,6 +1285,53 @@ add_custom_target(run-aegisub-gui-test-command-smoke
     USES_TERMINAL
     VERBATIM
 )
+if(WIN32)
+    add_custom_target(run-aegisub-fontcollector-smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DFONTCOLLECTOR_EXE=$<TARGET_FILE:Aegisub>"
+            "-DFONTCOLLECTOR_SUBCOMMAND=fontcollector"
+            "-DTEST_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/fontcollector-cli-smoke/$<CONFIG>"
+            -P "${PROJECT_SOURCE_DIR}/tests/smoke/fontcollector_cli_smoke.cmake"
+        DEPENDS Aegisub
+        COMMENT "Running the Aegisub fontcollector subcommand smoke"
+        USES_TERMINAL
+        VERBATIM
+    )
+    find_program(AEGISUB_UIA_DOTNET_EXECUTABLE NAMES dotnet)
+    set(_aegisub_uia_dotnet10_available OFF)
+    if(AEGISUB_UIA_DOTNET_EXECUTABLE)
+        execute_process(
+            COMMAND "${AEGISUB_UIA_DOTNET_EXECUTABLE}" --list-sdks
+            OUTPUT_VARIABLE _aegisub_uia_dotnet_sdks
+            ERROR_VARIABLE _aegisub_uia_dotnet_error
+            RESULT_VARIABLE _aegisub_uia_dotnet_result
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if(_aegisub_uia_dotnet_result EQUAL 0 AND
+           _aegisub_uia_dotnet_sdks MATCHES "(^|\n)10\\.")
+            set(_aegisub_uia_dotnet10_available ON)
+        endif()
+    endif()
+    if(_aegisub_uia_dotnet10_available)
+        add_custom_target(run-aegisub-uia-correctness-smoke
+            COMMAND "${AEGISUB_UIA_DOTNET_EXECUTABLE}" run
+                --file "${PROJECT_SOURCE_DIR}/tools/gui-automation-uia-correctness.cs"
+                --artifacts-path "${CMAKE_CURRENT_BINARY_DIR}/dotnet-artifacts/gui-automation-uia/$<CONFIG>"
+                --
+                --exe "$<TARGET_FILE:Aegisub>"
+                --open "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/trim-selected-input.ass"
+                --artifacts "${CMAKE_CURRENT_BINARY_DIR}/gui-automation-uia-correctness/$<CONFIG>"
+            DEPENDS Aegisub
+            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+            COMMENT "Running the Windows UIA correctness smoke"
+            USES_TERMINAL
+            VERBATIM
+        )
+    else()
+        message(STATUS
+            "Windows UIA correctness smoke disabled: .NET 10 SDK was not found")
+    endif()
+endif()
 option(AEGISUB_MATROSKA_PARSING "Enable MKV subtitle parsing via libebml/libmatroska" ON)
 # MKV subtitle import is a core format capability; the selected backend is kept
 # in aegisub_core so GUI/headless hosts share the same parser.
@@ -1395,6 +1433,10 @@ elseif(APPLE)
     # (there is no CoreText ILibassFontProvider yet). Do not hard-require Fontconfig
     # so CoreText-only builds still work; libass mode errors at runtime if missing.
     target_sources(aegisub_core PRIVATE src/font_file_lister_coretext.mm)
+    # The fontcollector C API can be consumed without the wx executable. Keep
+    # the frameworks on the core target so both the in-tree facade and installed
+    # static consumers receive the CoreText link requirements.
+    target_link_libraries(aegisub_core PRIVATE "-framework AppKit" "-framework CoreText")
     find_package(Fontconfig)
     if(Fontconfig_FOUND)
         target_compile_definitions(aegisub_core PRIVATE AEGISUB_FONTCOLLECTOR_ENABLE_FONTCONFIG)
@@ -1730,20 +1772,109 @@ if(NOT WIN32)
 endif()
 install(TARGETS Aegisub DESTINATION bin)
 
-set(AEGISUB_CORE_API_EXPORT_TARGETS
+# Font collector C API
+#
+# The font collector implementation is already part of aegisub_core.  Keep
+# this facade in its own targets so the application can link the static form
+# without compiling a second copy of the core, while SDK consumers can use a
+# shared DLL from the same build. The main project owns both SDK forms so the
+# command and external API use one canonical implementation.
+add_library(aegisub_fontcollector_api STATIC
+    src/fontcollector_api.cpp
+)
+add_library(Aegisub::fontcollector_static ALIAS aegisub_fontcollector_api)
+set_target_properties(aegisub_fontcollector_api PROPERTIES
+    EXPORT_NAME fontcollector_static
+    PREFIX ""
+    OUTPUT_NAME "aegisub_fontcollector_static"
+    POSITION_INDEPENDENT_CODE ON
+)
+target_compile_features(aegisub_fontcollector_api PRIVATE cxx_std_20)
+target_compile_definitions(aegisub_fontcollector_api
+    PUBLIC AEGISUB_FONTCOLLECTOR_STATIC
+    PRIVATE CMAKE_BUILD
+)
+target_include_directories(aegisub_fontcollector_api
+    PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/include>"
+        "$<INSTALL_INTERFACE:include>"
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/libaegisub"
+)
+target_link_libraries(aegisub_fontcollector_api PUBLIC aegisub_core)
+
+add_library(aegisub_fontcollector SHARED
+    src/fontcollector_api.cpp
+)
+add_library(Aegisub::fontcollector ALIAS aegisub_fontcollector)
+set_target_properties(aegisub_fontcollector PROPERTIES
+    EXPORT_NAME fontcollector
+    PREFIX ""
+    OUTPUT_NAME "aegisub_fontcollector"
+    POSITION_INDEPENDENT_CODE ON
+    C_VISIBILITY_PRESET hidden
+    CXX_VISIBILITY_PRESET hidden
+    VISIBILITY_INLINES_HIDDEN ON
+)
+if(UNIX AND NOT APPLE)
+    target_link_options(aegisub_fontcollector PRIVATE
+        "LINKER:--version-script,${CMAKE_CURRENT_SOURCE_DIR}/cmake/aegisub_fontcollector.version"
+    )
+    set_property(TARGET aegisub_fontcollector APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/aegisub_fontcollector.version")
+elseif(APPLE)
+    target_link_options(aegisub_fontcollector PRIVATE
+        "LINKER:-exported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/cmake/aegisub_fontcollector.exports"
+    )
+    set_property(TARGET aegisub_fontcollector APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/aegisub_fontcollector.exports")
+endif()
+target_compile_features(aegisub_fontcollector PRIVATE cxx_std_20)
+target_compile_definitions(aegisub_fontcollector
+    PRIVATE CMAKE_BUILD AEGISUB_FONTCOLLECTOR_BUILD
+)
+target_include_directories(aegisub_fontcollector
+    PUBLIC
+        "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/include>"
+        "$<INSTALL_INTERFACE:include>"
+    PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/src"
+        "${CMAKE_CURRENT_SOURCE_DIR}/libaegisub"
+)
+target_link_libraries(aegisub_fontcollector PRIVATE aegisub_core)
+aegisub_stage_libass_runtime(aegisub_fontcollector)
+
+# Keep the GUI/CLI executable self-contained.  The shared target is an SDK
+# artifact and is not a runtime dependency of Aegisub.
+target_link_libraries(Aegisub PRIVATE aegisub_fontcollector_api)
+
+set(AEGISUB_CORE_API_SHARED_EXPORT_TARGETS
+    aegisub_fontcollector
     aegisub_core_c_api
+)
+
+set(AEGISUB_CORE_API_STATIC_EXPORT_TARGETS
+    aegisub_fontcollector_api
     aegisub_core_c_api_static
     aegisub_core
     libaegisub
-    luajit
     luabins
     aegisub_core_features
 )
+if(AEGISUB_LUAJIT_SHARED)
+    # Shared C API targets retain LuaJIT as an imported runtime dependency.
+    # Export it with the shared set so Shared-only package consumers can resolve
+    # that target before the optional static export is loaded.
+    list(APPEND AEGISUB_CORE_API_SHARED_EXPORT_TARGETS luajit)
+else()
+    list(APPEND AEGISUB_CORE_API_STATIC_EXPORT_TARGETS luajit)
+endif()
 if(LUA_WITH_LUASOCKET)
-    list(APPEND AEGISUB_CORE_API_EXPORT_TARGETS luasocket)
+    list(APPEND AEGISUB_CORE_API_STATIC_EXPORT_TARGETS luasocket)
 endif()
 if(WITH_CSRI)
-    list(APPEND AEGISUB_CORE_API_EXPORT_TARGETS csri)
+    list(APPEND AEGISUB_CORE_API_STATIC_EXPORT_TARGETS csri)
 endif()
 
 set(AEGISUB_CORE_API_RUNTIME_DEPENDENCY_ARGS)
@@ -1752,9 +1883,15 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.21)
         RUNTIME_DEPENDENCY_SET AegisubCoreCAPIRuntimeDeps
     )
 endif()
-install(TARGETS ${AEGISUB_CORE_API_EXPORT_TARGETS}
-    EXPORT AegisubCoreCAPITargets
+install(TARGETS ${AEGISUB_CORE_API_SHARED_EXPORT_TARGETS}
+    EXPORT AegisubCoreCAPISharedTargets
     ${AEGISUB_CORE_API_RUNTIME_DEPENDENCY_ARGS}
+    RUNTIME DESTINATION bin COMPONENT CoreAPI
+    LIBRARY DESTINATION lib COMPONENT CoreAPI
+    ARCHIVE DESTINATION lib COMPONENT CoreAPI
+)
+install(TARGETS ${AEGISUB_CORE_API_STATIC_EXPORT_TARGETS}
+    EXPORT AegisubCoreCAPITargets
     RUNTIME DESTINATION bin COMPONENT CoreAPI
     LIBRARY DESTINATION lib COMPONENT CoreAPI
     ARCHIVE DESTINATION lib COMPONENT CoreAPI
@@ -1781,11 +1918,29 @@ if(WIN32 AND ass_RUNTIME_LIBRARY)
         RENAME ass.dll
     )
 endif()
-install(FILES src/include/aegisub/core_c_api.h DESTINATION include/aegisub COMPONENT CoreAPI)
+install(FILES src/include/aegisub/core_c_api.h
+    DESTINATION include/aegisub
+    COMPONENT CoreAPI
+)
+install(FILES src/include/aegisub/fontcollector/fontcollector.h
+    DESTINATION include/aegisub/fontcollector
+    COMPONENT CoreAPI
+)
 
 set(AEGISUB_CORE_API_NEEDS_SKIA OFF)
 if(WITH_DRAWING_SKIA)
     set(AEGISUB_CORE_API_NEEDS_SKIA ON)
+endif()
+
+# The static export includes the platform font provider. Linux always links
+# Fontconfig; macOS does so only when its optional provider was found. Shared
+# consumers do not need this dependency because the provider is inside the
+# installed DLL.
+set(AEGISUB_CORE_API_NEEDS_FONTCONFIG OFF)
+if(UNIX AND NOT APPLE)
+    set(AEGISUB_CORE_API_NEEDS_FONTCONFIG ON)
+elseif(APPLE AND Fontconfig_FOUND)
+    set(AEGISUB_CORE_API_NEEDS_FONTCONFIG ON)
 endif()
 
 configure_package_config_file(
@@ -1796,6 +1951,12 @@ configure_package_config_file(
 install(EXPORT AegisubCoreCAPITargets
     NAMESPACE Aegisub::
     FILE AegisubCoreCAPITargets.cmake
+    DESTINATION lib/cmake/AegisubCoreCAPI
+    COMPONENT CoreAPI
+)
+install(EXPORT AegisubCoreCAPISharedTargets
+    NAMESPACE Aegisub::
+    FILE AegisubCoreCAPISharedTargets.cmake
     DESTINATION lib/cmake/AegisubCoreCAPI
     COMPONENT CoreAPI
 )

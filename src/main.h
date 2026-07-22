@@ -35,6 +35,7 @@
 #include "aegisublocale.h"
 #include "app_launch_plan.h"
 #include "app_runtime.h"
+#include "automation_scenario.h"
 #include "automation_runtime_profile.h"
 #include "ui_dispatch.h"
 
@@ -90,6 +91,8 @@ private:
 	std::unique_ptr<AppRuntime> runtime;
 	std::optional<AppLaunchPlan> launch_plan;
 	std::unique_ptr<AutomationRuntimeProfile> automation_profile;
+	std::optional<aegisub::automation_scenario::Scenario> gui_test_scenario;
+	std::string gui_test_scenario_error;
 	std::optional<int> gui_test_exit_code;
 	bool gui_test_close_scheduled = false;
 

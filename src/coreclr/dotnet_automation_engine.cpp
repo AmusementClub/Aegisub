@@ -998,7 +998,7 @@ class DotNetAutomationRuntime final {
 		if (bridge) return *bridge;
 
 		auto executable_dir = agi::coreclr::GetCurrentExecutableDirectory();
-		auto component_dir = executable_dir / "plugin_bridge";
+		auto component_dir = executable_dir / "plugins" / "coreclr";
 		auto runtime_config = component_dir / "Aegisub.CoreClr.Adapter.runtimeconfig.json";
 		auto nethost_path = component_dir / kNetHostFileName;
 		agi::fs::path dotnet_root;
@@ -1615,11 +1615,9 @@ std::shared_ptr<DotNetExtensionReference> GetDependencyControlExtension() {
 	std::lock_guard<std::mutex> lock(state.mutex);
 	if (!state.extension) {
 		auto component_dir =
-			agi::coreclr::GetCurrentExecutableDirectory() / "plugin_bridge" /
-			"dependency-control";
-		auto manifest = ParseManifest(
-			component_dir /
-				"Aegisub.DependencyControl.Plugin.aegisub-plugin.json");
+			agi::coreclr::GetCurrentExecutableDirectory() / "plugins" /
+			"aegisub.dependency-control";
+		auto manifest = ParseManifest(component_dir / "plugin.json");
 		state.extension = std::make_shared<DotNetExtensionReference>(
 			Runtime(),
 			manifest);

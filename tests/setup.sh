@@ -31,7 +31,7 @@ printf %s '1234567890' > data/ten_bytes
 touch -r $0 data/touch_mod_time
 
 mkdir data/options
-cp $d/options/* data/options
+cp $d/fixtures/options/* data/options
 
 mkdir data/dir_iterator
 touch data/dir_iterator/1.a
@@ -42,7 +42,7 @@ touch data/dir_iterator/2.b
 mkdir data/vfr
 mkdir data/vfr/in
 mkdir data/vfr/out
-cp $d/vfr/* data/vfr/in/
+cp $d/fixtures/vfr/* data/vfr/in/
 
 mkdir data/keyframe
-cp $d/keyframe/* data/keyframe
+cp $d/fixtures/keyframe/* data/keyframe

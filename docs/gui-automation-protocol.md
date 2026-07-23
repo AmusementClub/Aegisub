@@ -71,11 +71,11 @@ failure; `--keep-profile` or an explicit `--profile-dir` retains it for local
 diagnostics. `startup.log`, `ready.json`, `result.json`, UI trees, screenshots,
 and driver logs belong under the artifacts directory.
 
-The Windows driver in `tools/skia-audio-uia.cs` is intentionally a separate
+The Windows driver in `tests/gui-automation/skia-audio-uia.cs` is intentionally a separate
 black-box adapter. Its reusable protocol, UIA discovery, fatal-dialog, and PNG
-helpers live in `tools/gui-automation-driver`; the Skia entry retains only
+helpers live in `tests/gui-automation/driver`; the Skia entry retains only
 audio/video-specific input scenarios and guarded `SendInput`. It must not reach
-into Aegisub internals. `run-aegisub-uia-correctness-smoke` covers ready/PID
+into Aegisub internals. The external UIA correctness driver covers ready/PID
 validation, main-window discovery, focus, a UIA `TogglePattern` state change on
 the non-document `Show Original` control, fatal-dialog checks, PNG capture, and
 clean exit. The smoke opens the checked-in subtitle fixture so the control is

@@ -14,6 +14,7 @@
 *.idb
 *.ilk
 *.log
+!/tests/fixtures/keyframe/*.log
 *.manifest
 !src/dpi_aware.manifest
 *.mkv
@@ -37,14 +38,20 @@
 *.vsp
 *.y4m
 *.zip
+*.7z
 *~
 
-/bin
+**/bin/
+**/obj/
+/data
+/artifacts
 /include
 /ipch
 /lib
-/obj
 /tests/data
+/benchmarks
+/build-*
+/build/*.bat
 
 .lvimrc
 .syntastic_cpp_config
@@ -61,11 +68,6 @@ src/libresrc/default_config.h
 src/libresrc/default_config_platform.json
 svn-revision.h
 svn_revision
-tests/*.json
-tests/run
-tools/osx-bundle-restart-helper
-tools/repack-thes-dict
-tools/repack-thes-dict.dSYM
 vendor/fribidi
 vendor/luajit/src/host/buildvm
 vendor/luajit/src/host/minilua
@@ -74,19 +76,7 @@ vendor/luajit/src/gen
 vendor/luajit/src/lj_vm.s
 vendor/luajit/src/luajit
 
-.vs
+**/.vs/
 .vscode
-/build-*
-/tools/*
-!/tools/drawing_bench_main.cpp
-!/tools/drawing_compare_main.cpp
-!/tools/gui-automation-driver/
-!/tools/gui-automation-driver/**
-!/tools/gui-automation-uia-correctness.cs
-/tools/gui-automation-driver/bin/
-/tools/gui-automation-driver/obj/
-CMakePresets.json
-/data
-/artifacts
-/build/*.bat
-/tests/*.ps1
+.zcode
+.claude

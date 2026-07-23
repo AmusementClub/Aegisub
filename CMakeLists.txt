@@ -508,6 +508,18 @@ if(WITH_SKIA_VIDEO_TOOLS OR WITH_SKIA_AUDIO_DISPLAY)
             "Configure with -DVCPKG_MANIFEST_FEATURES=skia or disable the GUI Skia feature."
         )
     endif()
+    get_target_property(_aegisub_skia_compile_definitions
+        unofficial::skia::skia INTERFACE_COMPILE_DEFINITIONS)
+    if(NOT "${_aegisub_skia_compile_definitions}" MATCHES "(^|;)SK_GL(;|$)")
+        message(FATAL_ERROR
+            "GUI Skia requires the Skia gl feature, but the selected package does not "
+            "expose SK_GL. Create a fresh build directory (or remove the old "
+            "core-only Skia package) and configure with "
+            "-DVCPKG_MANIFEST_FEATURES=skia (and VCPKG_MANIFEST_INSTALL=ON), or "
+            "disable the GUI Skia feature."
+        )
+    endif()
+    unset(_aegisub_skia_compile_definitions)
 endif()
 if(WITH_FFTW3)
     target_compile_definitions(aegisub_core_features INTERFACE WITH_FFTW3)

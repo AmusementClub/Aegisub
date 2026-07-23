@@ -4,7 +4,7 @@
 #:property Nullable=enable
 #:property PublishAot=false
 #:property InvariantGlobalization=false
-#:project gui-automation-driver/Aegisub.GuiAutomation.Driver.csproj
+#:project driver/Aegisub.GuiAutomation.Driver.csproj
 
 using System.Diagnostics;
 using System.Collections.Generic;

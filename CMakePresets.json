@@ -1,0 +1,77 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-msvc-base",
+      "hidden": true,
+      "generator": "Visual Studio 18 2026",
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$penv{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_OVERLAY_TRIPLETS": "${sourceDir}/cmake",
+        "VCPKG_MANIFEST_FEATURES": "skia",
+        "VCPKG_APPLOCAL_DEPS": "ON",
+        "Z_VCPKG_PWSH_PATH": "$penv{LOCALAPPDATA}/Microsoft/WindowsApps/pwsh.exe",
+        "Z_VCPKG_POWERSHELL_PATH": "$penv{LOCALAPPDATA}/Microsoft/WindowsApps/pwsh.exe",
+        "XAUDIO2_REDIST": "ON",
+        "AEGISUB_LUAJIT_SHARED": "ON",
+        "LUA_WITH_LUASOCKET": "ON",
+        "WITH_AVISYNTH": "ON",
+        "AviSynth_INCLUDE_DIR": "${sourceDir}/include/avisynth",
+        "WITH_FFMS2": "ON",
+        "FFMS2_INCLUDE_DIR": "${sourceDir}/include/ffms2",
+        "WITH_LSMASNATIVE": "ON",
+        "WITH_SCENECHANGE": "ON",
+        "WITH_LIBPLACEBO": "ON",
+        "WITH_FFTW3": "ON",
+        "WITH_PFFFT": "ON",
+        "LibPlacebo_INCLUDE_DIR": "${sourceDir}/include",
+        "ass_INCLUDE_DIR": "${sourceDir}/include",
+        "ass_RUNTIME_LIBRARY": "${sourceDir}/runtimes/ass.dll",
+        "AEGISUB_MATROSKA_PARSING": "ON",
+        "WITH_DRAWING_SKIA": "ON",
+        "WITH_SKIA_VIDEO_TOOLS": "ON",
+        "WITH_SKIA_AUDIO_DISPLAY": "ON",
+        "WITH_PLUGIN_BRIDGE": "ON",
+        "WITH_TEST": "ON",
+        "WITH_SMOKE": "ON",
+        "CMAKE_CXX_FLAGS": "/DWIN32 /D_WINDOWS /GR /EHsc /DUNICODE /D_UNICODE /MP",
+        "CMAKE_C_FLAGS": "/DWIN32 /D_WINDOWS /DUNICODE /D_UNICODE /MP"
+      }
+    },
+    {
+      "name": "release-x64",
+      "displayName": "Release x64 (MSVC + vcpkg)",
+      "inherits": "windows-msvc-base",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build-dir",
+      "cacheVariables": {
+        "VCPKG_TARGET_TRIPLET": "x64-windows-release"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "relwithdebinfo-x64",
+      "displayName": "Build RelWithDebInfo x64",
+      "configurePreset": "release-x64",
+      "configuration": "RelWithDebInfo",
+      "targets": [
+        "Aegisub"
+      ]
+    },
+    {
+      "name": "release-x64",
+      "displayName": "Build Release x64",
+      "configurePreset": "release-x64",
+      "configuration": "Release",
+      "targets": [
+        "Aegisub"
+      ]
+    }
+  ]
+}

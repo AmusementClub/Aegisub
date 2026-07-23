@@ -1285,65 +1285,6 @@ target_compile_features(Aegisub PRIVATE cxx_std_20)
 target_include_directories(Aegisub PRIVATE src)
 target_include_directories(Aegisub PRIVATE src/include)
 target_include_directories(Aegisub PRIVATE vendor)
-add_custom_target(run-aegisub-gui-test-command-smoke
-    COMMAND "${CMAKE_COMMAND}"
-        "-DAEGISUB_EXE=$<TARGET_FILE:Aegisub>"
-        "-DSCENARIO_FILE=${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/scenarios/gui-command.json"
-        "-DSMOKE_DIR=${CMAKE_CURRENT_BINARY_DIR}/gui-test-command-smoke/$<CONFIG>"
-        "-DWORKING_DIR=$<TARGET_FILE_DIR:Aegisub>"
-        -P "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/run-gui-test-smoke.cmake"
-    DEPENDS Aegisub
-    COMMENT "Running the wx GUI-test command smoke"
-    USES_TERMINAL
-    VERBATIM
-)
-if(WIN32)
-    add_custom_target(run-aegisub-fontcollector-smoke
-        COMMAND "${CMAKE_COMMAND}"
-            "-DFONTCOLLECTOR_EXE=$<TARGET_FILE:Aegisub>"
-            "-DFONTCOLLECTOR_SUBCOMMAND=fontcollector"
-            "-DTEST_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/fontcollector-cli-smoke/$<CONFIG>"
-            -P "${PROJECT_SOURCE_DIR}/tests/smoke/fontcollector_cli_smoke.cmake"
-        DEPENDS Aegisub
-        COMMENT "Running the Aegisub fontcollector subcommand smoke"
-        USES_TERMINAL
-        VERBATIM
-    )
-    find_program(AEGISUB_UIA_DOTNET_EXECUTABLE NAMES dotnet)
-    set(_aegisub_uia_dotnet10_available OFF)
-    if(AEGISUB_UIA_DOTNET_EXECUTABLE)
-        execute_process(
-            COMMAND "${AEGISUB_UIA_DOTNET_EXECUTABLE}" --list-sdks
-            OUTPUT_VARIABLE _aegisub_uia_dotnet_sdks
-            ERROR_VARIABLE _aegisub_uia_dotnet_error
-            RESULT_VARIABLE _aegisub_uia_dotnet_result
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-        )
-        if(_aegisub_uia_dotnet_result EQUAL 0 AND
-           _aegisub_uia_dotnet_sdks MATCHES "(^|\n)10\\.")
-            set(_aegisub_uia_dotnet10_available ON)
-        endif()
-    endif()
-    if(_aegisub_uia_dotnet10_available)
-        add_custom_target(run-aegisub-uia-correctness-smoke
-            COMMAND "${AEGISUB_UIA_DOTNET_EXECUTABLE}" run
-                --file "${PROJECT_SOURCE_DIR}/tools/gui-automation-uia-correctness.cs"
-                --artifacts-path "${CMAKE_CURRENT_BINARY_DIR}/dotnet-artifacts/gui-automation-uia/$<CONFIG>"
-                --
-                --exe "$<TARGET_FILE:Aegisub>"
-                --open "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/trim-selected-input.ass"
-                --artifacts "${CMAKE_CURRENT_BINARY_DIR}/gui-automation-uia-correctness/$<CONFIG>"
-            DEPENDS Aegisub
-            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-            COMMENT "Running the Windows UIA correctness smoke"
-            USES_TERMINAL
-            VERBATIM
-        )
-    else()
-        message(STATUS
-            "Windows UIA correctness smoke disabled: .NET 10 SDK was not found")
-    endif()
-endif()
 option(AEGISUB_MATROSKA_PARSING "Enable MKV subtitle parsing via libebml/libmatroska" ON)
 # MKV subtitle import is a core format capability; the selected backend is kept
 # in aegisub_core so GUI/headless hosts share the same parser.
@@ -2009,14 +1950,22 @@ if(WITH_PLUGIN_BRIDGE)
     include(cmake/AegisubPluginBridge.cmake)
 endif()
 
-set(WITH_TEST OFF CACHE BOOL "Enable unit tests")
+set(WITH_TEST OFF CACHE BOOL "Enable unit tests (gtest / automation)")
+set(WITH_SMOKE OFF CACHE BOOL "Enable smoke / process test targets")
+if(WITH_TEST OR WITH_SMOKE)
+    include(CTest)
+endif()
 if(WITH_TEST)
-    include("CMakeLists.test.txt")
+    include("CMakeLists.unit.txt")
+endif()
+if(WITH_SMOKE)
+    include("CMakeLists.smoke.txt")
 endif()
 
-set(WITH_BENCH OFF CACHE BOOL "Enable benchmark targets")
-if(WITH_BENCH)
-    include("CMakeLists.bench.txt")
+# Optional developer overlay (gitignored). Example:
+#   include("${CMAKE_SOURCE_DIR}/benchmarks/CMakeLists.txt")
+if(EXISTS "${PROJECT_SOURCE_DIR}/CMakeLists.user.txt")
+    include("${PROJECT_SOURCE_DIR}/CMakeLists.user.txt")
 endif()
 
 message(STATUS "\n"
@@ -2067,6 +2016,7 @@ message(STATUS "\n"
     "  Startup log:           ${WITH_STARTUPLOG}\n"
     "  Update checker:        ${WITH_UPDATE_CHECKER}\n"
     "  Plugin Bridge:         ${WITH_PLUGIN_BRIDGE}\n"
-    "  Tests:                 ${WITH_TEST}\n"
+    "  Unit tests:            ${WITH_TEST}\n"
+    "  Smoke tests:           ${WITH_SMOKE}\n"
     "\n"
 )

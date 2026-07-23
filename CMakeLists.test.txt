@@ -1,4 +1,4 @@
-include(CTest)
+# Unit tests (gtest / automation). Included when WITH_TEST=ON.
 
 if(UNIX)
     add_executable(aegisub-lua EXCLUDE_FROM_ALL
@@ -34,8 +34,10 @@ if(GTEST_FOUND)
         tests/tests/avisynth_runtime_policy.cpp
         tests/tests/bgra_transform_test.cpp
         tests/tests/automation_debug_adapter.cpp
+        tests/tests/automation_debug_session.cpp
         tests/tests/automation_command_executor.cpp
         tests/tests/automation_edit_box_request_policy.cpp
+        tests/tests/automation_runtime_journal.cpp
         tests/tests/automation_runtime_profile.cpp
         tests/tests/automation_scenario_contract.cpp
         tests/tests/audio_display.cpp
@@ -66,6 +68,7 @@ if(GTEST_FOUND)
         src/automation/automation_debug_adapter.cpp
         src/automation/automation_debug_service.cpp
         src/automation/automation_debug_session.cpp
+        src/automation/automation_runtime_journal.cpp
         src/audio_display_analysis.cpp
         src/audio_latest_range_scheduler.cpp
         src/audio_display_source.cpp
@@ -337,18 +340,21 @@ if(GTEST_FOUND)
         target_link_libraries(gtest-run PRIVATE Psapi)
     endif()
     target_precompile_headers(gtest-run PRIVATE "${PROJECT_SOURCE_DIR}/tests/support/tests_pre.h")
+    # Generated fixtures and gtest CWD live under the build tree, not the source tree.
+    set(AEGISUB_TEST_RUNTIME_DIR "${CMAKE_CURRENT_BINARY_DIR}/tests-runtime")
+    file(MAKE_DIRECTORY "${AEGISUB_TEST_RUNTIME_DIR}")
     if(WIN32)
         target_link_libraries(gtest-run PRIVATE ws2_32)
         add_custom_target(test-aegisub
             COMMAND "${PROJECT_SOURCE_DIR}/tests/setup.bat"
             COMMAND gtest-run
-            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests"
+            WORKING_DIRECTORY "${AEGISUB_TEST_RUNTIME_DIR}"
         )
     else()
         add_custom_target(test-aegisub
             COMMAND "${PROJECT_SOURCE_DIR}/tests/setup.sh"
             COMMAND gtest-run
-            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests"
+            WORKING_DIRECTORY "${AEGISUB_TEST_RUNTIME_DIR}"
         )
     endif()
     if(BUILD_TESTING)
@@ -356,13 +362,13 @@ if(GTEST_FOUND)
             add_test(
                 NAME aegisub_test_data_setup
                 COMMAND "${PROJECT_SOURCE_DIR}/tests/setup.bat"
-                WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests"
+                WORKING_DIRECTORY "${AEGISUB_TEST_RUNTIME_DIR}"
             )
         else()
             add_test(
                 NAME aegisub_test_data_setup
                 COMMAND "${PROJECT_SOURCE_DIR}/tests/setup.sh"
-                WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests"
+                WORKING_DIRECTORY "${AEGISUB_TEST_RUNTIME_DIR}"
             )
         endif()
         set_tests_properties(aegisub_test_data_setup PROPERTIES
@@ -372,7 +378,7 @@ if(GTEST_FOUND)
 
         include(GoogleTest)
         gtest_discover_tests(gtest-run
-            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests"
+            WORKING_DIRECTORY "${AEGISUB_TEST_RUNTIME_DIR}"
             DISCOVERY_TIMEOUT 60
             PROPERTIES
                 FIXTURES_REQUIRED aegisub_test_data
@@ -396,566 +402,19 @@ if(GTEST_FOUND)
         add_test(
             NAME font_collector_state
             COMMAND "$<TARGET_FILE:font-collector-state-test>"
-            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}/tests"
+            WORKING_DIRECTORY "${AEGISUB_TEST_RUNTIME_DIR}"
         )
         set_tests_properties(font_collector_state PROPERTIES LABELS "gtest")
     endif()
 else()
     add_custom_target(test-aegisub)
 endif()
-
-if(WIN32)
-    add_executable(gdi-font-resolver-smoke EXCLUDE_FROM_ALL
-        tests/smoke/gdi_font_resolver_smoke.cpp
-        tests/fixtures/gdi-fonts/generate.py
-        tests/fixtures/gdi-fonts/LICENSE.txt
-        tests/fixtures/gdi-fonts/regular.ttf
-        tests/fixtures/gdi-fonts/bold.ttf
-        tests/fixtures/gdi-fonts/italic.ttf
-        tests/fixtures/gdi-fonts/bold-italic.ttf
-    )
-    target_compile_features(gdi-font-resolver-smoke PRIVATE cxx_std_20)
-    target_compile_definitions(gdi-font-resolver-smoke PRIVATE CMAKE_BUILD)
-    target_link_libraries(gdi-font-resolver-smoke PRIVATE
-        aegisub_core
-        libaegisub
-        luajit
-        User32
-        Gdi32
-    )
-    aegisub_stage_libass_runtime(gdi-font-resolver-smoke)
-    add_custom_command(TARGET gdi-font-resolver-smoke POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            "$<TARGET_FILE_DIR:gdi-font-resolver-smoke>/gdi-font-fixtures"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${PROJECT_SOURCE_DIR}/tests/fixtures/gdi-fonts/regular.ttf"
-            "${PROJECT_SOURCE_DIR}/tests/fixtures/gdi-fonts/bold.ttf"
-            "${PROJECT_SOURCE_DIR}/tests/fixtures/gdi-fonts/italic.ttf"
-            "${PROJECT_SOURCE_DIR}/tests/fixtures/gdi-fonts/bold-italic.ttf"
-            "${PROJECT_SOURCE_DIR}/tests/fixtures/gdi-fonts/LICENSE.txt"
-            "$<TARGET_FILE_DIR:gdi-font-resolver-smoke>/gdi-font-fixtures"
-    )
-    if(BUILD_TESTING)
-        add_test(
-            NAME gdi_font_resolver_smoke
-            COMMAND "$<TARGET_FILE:gdi-font-resolver-smoke>"
-        )
-        set_tests_properties(gdi_font_resolver_smoke PROPERTIES LABELS "smoke;font;windows")
-        add_test(
-            NAME gdi_font_resolver_bold_only
-            COMMAND "$<TARGET_FILE:gdi-font-resolver-smoke>"
-                --fixture-case bold-only
-        )
-        add_test(
-            NAME gdi_font_resolver_regular_bold
-            COMMAND "$<TARGET_FILE:gdi-font-resolver-smoke>"
-                --fixture-case regular-bold
-        )
-        add_test(
-            NAME gdi_font_resolver_italic_only
-            COMMAND "$<TARGET_FILE:gdi-font-resolver-smoke>"
-                --fixture-case italic-only
-        )
-        add_test(
-            NAME gdi_font_resolver_rbiz
-            COMMAND "$<TARGET_FILE:gdi-font-resolver-smoke>"
-                --fixture-case rbiz
-        )
-        set_tests_properties(
-            gdi_font_resolver_bold_only
-            gdi_font_resolver_regular_bold
-            gdi_font_resolver_italic_only
-            gdi_font_resolver_rbiz
-            PROPERTIES LABELS "smoke;font;windows;fixture")
-    endif()
-    add_custom_target(test-gdi-font-resolver
-        COMMAND gdi-font-resolver-smoke
-        DEPENDS gdi-font-resolver-smoke
-        WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
-    )
+# Aggregate target shared with smoke when both options are enabled.
+if(NOT TARGET test-aegisub-all)
+    add_custom_target(test-aegisub-all)
 endif()
-
-add_executable(aegisub_core_smoke EXCLUDE_FROM_ALL
-    tests/smoke/core_smoke.cpp
-)
-target_compile_features(aegisub_core_smoke PRIVATE cxx_std_20)
-target_compile_definitions(aegisub_core_smoke PRIVATE CMAKE_BUILD)
-target_link_libraries(aegisub_core_smoke PRIVATE aegisub_core libaegisub luajit)
-aegisub_stage_libass_runtime(aegisub_core_smoke)
-
-add_executable(core-api-facade-smoke EXCLUDE_FROM_ALL
-    tests/smoke/core_api_facade_smoke.cpp
-)
-target_compile_features(core-api-facade-smoke PRIVATE cxx_std_20)
-target_compile_definitions(core-api-facade-smoke PRIVATE CMAKE_BUILD)
-target_link_libraries(core-api-facade-smoke PRIVATE aegisub_core libaegisub luajit)
-aegisub_stage_libass_runtime(core-api-facade-smoke)
-
-add_executable(core-c-api-smoke EXCLUDE_FROM_ALL
-    tests/smoke/core_c_api_smoke.cpp
-    tests/smoke/core_c_api_header_smoke.c
-)
-target_compile_features(core-c-api-smoke PRIVATE cxx_std_20)
-target_compile_definitions(core-c-api-smoke PRIVATE CMAKE_BUILD)
-target_link_libraries(core-c-api-smoke PRIVATE aegisub_core_c_api_static)
-aegisub_stage_libass_runtime(core-c-api-smoke)
-
-add_executable(core-c-api-shared-smoke EXCLUDE_FROM_ALL
-    tests/smoke/core_c_api_smoke.cpp
-    tests/smoke/core_c_api_header_smoke.c
-)
-target_compile_features(core-c-api-shared-smoke PRIVATE cxx_std_20)
-target_compile_definitions(core-c-api-shared-smoke PRIVATE AEGISUB_CORE_USE_SHARED)
-target_link_libraries(core-c-api-shared-smoke PRIVATE aegisub_core_c_api)
-aegisub_stage_libass_runtime(core-c-api-shared-smoke)
-
-add_executable(aegisub_core_link_audit EXCLUDE_FROM_ALL
-    tests/smoke/core_smoke.cpp
-)
-target_compile_features(aegisub_core_link_audit PRIVATE cxx_std_20)
-target_compile_definitions(aegisub_core_link_audit PRIVATE CMAKE_BUILD)
-target_link_libraries(aegisub_core_link_audit PRIVATE aegisub_core libaegisub luajit)
-aegisub_stage_libass_runtime(aegisub_core_link_audit)
-if(MSVC)
-    target_link_options(aegisub_core_link_audit PRIVATE "/WHOLEARCHIVE:$<TARGET_FILE:aegisub_core>")
-elseif(APPLE)
-    target_link_options(aegisub_core_link_audit PRIVATE "-Wl,-force_load,$<TARGET_FILE:aegisub_core>")
-elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-    target_link_options(aegisub_core_link_audit PRIVATE
-        "-Wl,--whole-archive"
-        "$<TARGET_FILE:aegisub_core>"
-        "-Wl,--no-whole-archive"
-    )
-endif()
-
-add_custom_target(test-core-smoke
-    COMMAND aegisub_core_smoke
-    COMMAND core-api-facade-smoke
-    COMMAND core-c-api-smoke
-    COMMAND core-c-api-shared-smoke
-    DEPENDS aegisub_core_smoke core-api-facade-smoke core-c-api-smoke core-c-api-shared-smoke
-    WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
-)
-
-add_custom_target(test-core-link-audit
-    COMMAND aegisub_core_link_audit
-    DEPENDS aegisub_core_link_audit
-    WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
-)
-
-add_executable(provider-manager-registry-smoke EXCLUDE_FROM_ALL
-    tests/smoke/provider_manager_registry_smoke.cpp
-)
-target_compile_features(provider-manager-registry-smoke PRIVATE cxx_std_20)
-target_compile_definitions(provider-manager-registry-smoke PRIVATE CMAKE_BUILD)
-target_link_libraries(provider-manager-registry-smoke PRIVATE aegisub_core libaegisub luajit)
-
-if(HAVE_LSMASNATIVE AND HAVE_SCENECHANGE)
-    set(AEGISUB_SCENECHANGE_SMOKE_VIDEO "" CACHE FILEPATH
-        "Optional media fixture used by the LsmasNative/SceneChange integration smoke")
-    set(AEGISUB_SCENECHANGE_SMOKE_EXPECTED "" CACHE STRING
-        "Comma-separated expected SceneChange keyframes for the integration smoke")
-    set(AEGISUB_SCENECHANGE_SMOKE_BACKEND "scxvid" CACHE STRING
-        "Expected SceneChange backend for the integration smoke")
-    set_property(CACHE AEGISUB_SCENECHANGE_SMOKE_BACKEND PROPERTY STRINGS
-        scxvid wwxd-provider)
-    add_executable(scenechange-provider-smoke EXCLUDE_FROM_ALL
-        tests/smoke/scenechange_provider_smoke.cpp
-    )
-    target_compile_features(scenechange-provider-smoke PRIVATE cxx_std_20)
-    target_compile_definitions(scenechange-provider-smoke PRIVATE CMAKE_BUILD)
-    target_link_libraries(scenechange-provider-smoke PRIVATE aegisub_core libaegisub luajit)
-
-    if(BUILD_TESTING AND AEGISUB_SCENECHANGE_SMOKE_VIDEO AND
-       NOT AEGISUB_SCENECHANGE_SMOKE_EXPECTED STREQUAL "")
-        set_target_properties(scenechange-provider-smoke PROPERTIES EXCLUDE_FROM_ALL FALSE)
-        add_test(NAME scenechange_provider_smoke
-            COMMAND "$<TARGET_FILE:scenechange-provider-smoke>"
-                "${AEGISUB_SCENECHANGE_SMOKE_VIDEO}"
-                "${PROJECT_BINARY_DIR}/scenechange-provider-smoke.kf.txt"
-                "${AEGISUB_SCENECHANGE_SMOKE_EXPECTED}"
-                "${AEGISUB_SCENECHANGE_SMOKE_BACKEND}")
-        add_test(NAME scenechange_provider_cancel_smoke
-            COMMAND "$<TARGET_FILE:scenechange-provider-smoke>"
-                "${AEGISUB_SCENECHANGE_SMOKE_VIDEO}"
-                "${PROJECT_BINARY_DIR}/scenechange-provider-cancel-smoke.kf.txt"
-                "${AEGISUB_SCENECHANGE_SMOKE_EXPECTED}"
-                "${AEGISUB_SCENECHANGE_SMOKE_BACKEND}"
-                2)
-        set_tests_properties(
-            scenechange_provider_smoke
-            scenechange_provider_cancel_smoke
-            PROPERTIES LABELS "smoke;provider;scenechange;lsmas" RUN_SERIAL TRUE TIMEOUT 120)
+foreach(_aegisub_test_dep IN ITEMS test-automation test-aegisub)
+    if(TARGET ${_aegisub_test_dep})
+        add_dependencies(test-aegisub-all ${_aegisub_test_dep})
     endif()
-endif()
-
-add_custom_target(test-provider-manager-registry
-    COMMAND provider-manager-registry-smoke
-    DEPENDS provider-manager-registry-smoke
-    WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
-)
-
-if(BUILD_TESTING)
-    add_test(NAME aegisub_core_smoke COMMAND aegisub_core_smoke)
-    set_tests_properties(aegisub_core_smoke PROPERTIES LABELS "smoke;core")
-    add_test(NAME core_api_facade_smoke COMMAND core-api-facade-smoke)
-    set_tests_properties(core_api_facade_smoke PROPERTIES LABELS "smoke;core;abi")
-    add_test(NAME core_c_api_smoke COMMAND core-c-api-smoke)
-    set_tests_properties(core_c_api_smoke PROPERTIES LABELS "smoke;core;abi")
-    add_test(NAME core_c_api_shared_smoke COMMAND core-c-api-shared-smoke)
-    set_tests_properties(core_c_api_shared_smoke PROPERTIES LABELS "smoke;core;abi;shared")
-    add_test(NAME provider_manager_registry_smoke COMMAND provider-manager-registry-smoke)
-    set_tests_properties(provider_manager_registry_smoke PROPERTIES LABELS "smoke;core;provider")
-endif()
-
-if(WITH_LIBPLACEBO)
-    add_executable(placebo-runtime-smoke EXCLUDE_FROM_ALL
-        tests/smoke/placebo_runtime_smoke.cpp
-        libaegisub/common/native_library.cpp
-        src/video_renderer_placebo_runtime.cpp
-    )
-    target_compile_definitions(placebo-runtime-smoke PRIVATE CMAKE_BUILD)
-    target_link_libraries(placebo-runtime-smoke PRIVATE aegisub_features libaegisub)
-
-    if(WIN32)
-        add_executable(placebo-legacy-state-smoke EXCLUDE_FROM_ALL
-            tests/smoke/placebo_legacy_state_smoke.cpp
-            libaegisub/common/native_library.cpp
-            src/video_renderer_placebo_gl.cpp
-            src/video_renderer_placebo_runtime.cpp
-        )
-        target_compile_definitions(placebo-legacy-state-smoke PRIVATE CMAKE_BUILD)
-        target_link_libraries(placebo-legacy-state-smoke PRIVATE aegisub_features libaegisub OpenGL::GL)
-    endif()
-
-    add_executable(placebo-render-bench EXCLUDE_FROM_ALL
-        tests/smoke/placebo_render_bench.cpp
-        libaegisub/common/native_library.cpp
-        src/video_renderer_placebo_gl.cpp
-        src/video_renderer_placebo_runtime.cpp
-    )
-    target_compile_definitions(placebo-render-bench PRIVATE CMAKE_BUILD)
-    target_link_libraries(placebo-render-bench PRIVATE aegisub_features libaegisub OpenGL::GL)
-    if(WIN32)
-        target_link_libraries(placebo-render-bench PRIVATE Psapi)
-    endif()
-endif()
-
-if(WITH_AVISYNTH)
-    add_executable(avisynth-autoload-runtime-smoke EXCLUDE_FROM_ALL
-        tests/smoke/avisynth_autoload_runtime_smoke.cpp
-        tests/support/src_config_stubs.cpp
-        src/avisynth_legacy_path.cpp
-        src/avisynth_wrap.cpp
-        libaegisub/common/native_library.cpp
-    )
-    target_compile_definitions(avisynth-autoload-runtime-smoke PRIVATE
-        CMAKE_BUILD
-        WITH_AVISYNTH
-        NOMINMAX
-    )
-    target_include_directories(avisynth-autoload-runtime-smoke PRIVATE ${AviSynth_INCLUDE_DIR})
-    target_link_libraries(avisynth-autoload-runtime-smoke PRIVATE libaegisub)
-    if(WIN32)
-        target_link_libraries(avisynth-autoload-runtime-smoke PRIVATE Psapi)
-    endif()
-
-    add_executable(avisynth-provider-registration-smoke EXCLUDE_FROM_ALL
-        tests/smoke/avisynth_provider_registration_smoke.cpp
-    )
-    target_compile_definitions(avisynth-provider-registration-smoke PRIVATE
-        CMAKE_BUILD
-        WITH_AVISYNTH
-        NOMINMAX
-    )
-    target_include_directories(avisynth-provider-registration-smoke PRIVATE ${AviSynth_INCLUDE_DIR})
-    target_link_libraries(avisynth-provider-registration-smoke PRIVATE aegisub_core libaegisub)
-    if(WIN32)
-        target_link_libraries(avisynth-provider-registration-smoke PRIVATE Vfw32 Psapi)
-    endif()
-endif()
-
-if(WIN32)
-    if(WITH_SKIA_VIDEO_TOOLS)
-        add_executable(skia-video-compositor-smoke EXCLUDE_FROM_ALL
-            tests/smoke/skia_video_compositor_smoke.cpp
-            src/skia/skia_gl_contract.cpp
-            src/skia/skia_video_compositor_contract.cpp
-            src/skia/skia_gl_device.cpp
-            src/skia/skia_video_compositor.cpp
-            src/skia/skia_video_overlay_gl.cpp
-            src/skia_runtime/skia_surface_provider.cpp
-        )
-        target_compile_definitions(skia-video-compositor-smoke PRIVATE
-            AEGISUB_WITH_SKIA_GPU_GL=1
-            AEGISUB_WITH_SKIA_VIDEO_TOOLS=1
-            CMAKE_BUILD
-            NOMINMAX
-            WIN32_LEAN_AND_MEAN
-        )
-        target_compile_features(skia-video-compositor-smoke PRIVATE cxx_std_20)
-        target_include_directories(skia-video-compositor-smoke PRIVATE src)
-        target_link_libraries(skia-video-compositor-smoke PRIVATE unofficial::skia::skia OpenGL::GL)
-    endif()
-
-    if(WITH_SKIA_AUDIO_DISPLAY)
-        add_executable(skia-audio-display-smoke EXCLUDE_FROM_ALL
-            tests/smoke/skia_audio_display_smoke.cpp
-            tests/smoke/perf_trace_audio_stub.cpp
-            src/skia/skia_gl_contract.cpp
-            src/skia/skia_gl_device.cpp
-            src/skia/audio/skia_audio_content.cpp
-            src/skia/audio/skia_audio_display_contract.cpp
-            src/skia/audio/skia_audio_frame_model.cpp
-            src/skia/audio/skia_audio_presenter.cpp
-            src/skia_runtime/skia_surface_provider.cpp
-        )
-        target_compile_definitions(skia-audio-display-smoke PRIVATE
-            AEGISUB_WITH_SKIA_GPU_GL=1
-            AEGISUB_WITH_SKIA_AUDIO_DISPLAY=1
-            CMAKE_BUILD
-            NOMINMAX
-            WIN32_LEAN_AND_MEAN
-        )
-        target_compile_features(skia-audio-display-smoke PRIVATE cxx_std_20)
-        target_include_directories(skia-audio-display-smoke PRIVATE
-            src
-            "${PROJECT_SOURCE_DIR}/libaegisub/include"
-        )
-        target_link_libraries(skia-audio-display-smoke PRIVATE unofficial::skia::skia OpenGL::GL)
-    endif()
-
-    add_executable(opengl-overlay-smoke EXCLUDE_FROM_ALL
-        tests/smoke/opengl_overlay_smoke.cpp
-        src/video_renderer_opengl.cpp
-        src/video_renderer_opengl_tile.cpp
-    )
-    target_compile_definitions(opengl-overlay-smoke PRIVATE CMAKE_BUILD)
-    target_link_libraries(opengl-overlay-smoke PRIVATE libaegisub OpenGL::GL)
-
-    add_executable(opengl-overlay-bench EXCLUDE_FROM_ALL
-        tests/smoke/opengl_overlay_bench.cpp
-        src/video_renderer_opengl.cpp
-        src/video_renderer_opengl_tile.cpp
-    )
-    target_compile_definitions(opengl-overlay-bench PRIVATE CMAKE_BUILD)
-    target_link_libraries(opengl-overlay-bench PRIVATE libaegisub OpenGL::GL Psapi)
-
-    add_executable(scene-cache-playback-smoke EXCLUDE_FROM_ALL
-        tests/smoke/scene_cache_playback_smoke.cpp
-    )
-    target_compile_definitions(scene-cache-playback-smoke PRIVATE CMAKE_BUILD NOMINMAX WIN32_LEAN_AND_MEAN)
-    target_link_libraries(scene-cache-playback-smoke PRIVATE OpenGL::GL)
-
-    add_executable(scene-cache-subtitle-commit-smoke EXCLUDE_FROM_ALL
-        tests/smoke/scene_cache_subtitle_commit_smoke.cpp
-        src/ass_dialogue.cpp
-        src/ass_override.cpp
-        src/ass_time_projection.cpp
-    )
-    target_compile_definitions(scene-cache-subtitle-commit-smoke PRIVATE CMAKE_BUILD NOMINMAX WIN32_LEAN_AND_MEAN)
-    target_link_libraries(scene-cache-subtitle-commit-smoke PRIVATE libaegisub)
-
-    add_executable(detached-visual-tools-smoke EXCLUDE_FROM_ALL
-        tests/smoke/detached_visual_tools_smoke.cpp
-        src/gl_wrap.cpp
-        src/video_renderer_opengl.cpp
-        src/video_renderer_opengl_tile.cpp
-        src/vector2d.cpp
-        src/visual_feature.cpp
-    )
-    target_compile_definitions(detached-visual-tools-smoke PRIVATE CMAKE_BUILD NOMINMAX WIN32_LEAN_AND_MEAN)
-    if(MSVC)
-        set_source_files_properties(src/gl_wrap.cpp PROPERTIES COMPILE_OPTIONS /FIwindows.h)
-    endif()
-    target_link_libraries(detached-visual-tools-smoke PRIVATE aegisub_features libaegisub OpenGL::GL ${wxWidgets_LIBRARIES})
-    if(WITH_LIBPLACEBO)
-        target_sources(detached-visual-tools-smoke PRIVATE
-            libaegisub/common/native_library.cpp
-            src/video_renderer_placebo_gl.cpp
-            src/video_renderer_placebo_runtime.cpp
-        )
-    endif()
-
-    if(WITH_FFMS2 AND WITH_LIBPLACEBO)
-        add_executable(video-geometry-compare EXCLUDE_FROM_ALL
-            tests/smoke/video_geometry_compare.cpp
-            src/compat.cpp
-            src/utils.cpp
-            src/ffmpegsource_common.cpp
-            src/track_choice.cpp
-            src/video_provider_ffmpegsource.cpp
-            src/video_renderer_opengl.cpp
-            src/video_renderer_opengl_tile.cpp
-            libaegisub/common/native_library.cpp
-            src/video_renderer_placebo_gl.cpp
-            src/video_renderer_placebo_runtime.cpp
-        )
-        target_compile_definitions(video-geometry-compare PRIVATE
-            CMAKE_BUILD
-            WITH_FFMS2
-            WITH_FFMS2_RUNTIME_LOADING
-            WIN32_LEAN_AND_MEAN
-            NOMINMAX
-        )
-        target_include_directories(video-geometry-compare PRIVATE
-            ${FFMS2_INCLUDE_DIR}
-            "${PROJECT_SOURCE_DIR}/vendor/ffms2"
-        )
-        aegisub_enable_wx_utf8_guard(video-geometry-compare)
-        target_link_libraries(video-geometry-compare PRIVATE
-            aegisub_features
-            libaegisub
-            OpenGL::GL
-            ${wxWidgets_LIBRARIES}
-        )
-    endif()
-endif()
-
-add_executable(search-replace-bench EXCLUDE_FROM_ALL
-    tests/smoke/search_replace_bench.cpp
-)
-target_compile_features(search-replace-bench PRIVATE cxx_std_20)
-target_include_directories(search-replace-bench PRIVATE
-    "${PROJECT_SOURCE_DIR}/libaegisub/include"
-)
-if(STRINGZILLA_INCLUDE_DIRS)
-    target_include_directories(search-replace-bench PRIVATE ${STRINGZILLA_INCLUDE_DIRS})
-    target_compile_definitions(search-replace-bench PRIVATE AEGISUB_USE_STRINGZILLA=1)
-endif()
-target_link_libraries(search-replace-bench PRIVATE libaegisub)
-
-add_executable(core-host-boundary-bench EXCLUDE_FROM_ALL
-    tests/smoke/core_host_boundary_bench.cpp
-)
-target_compile_features(core-host-boundary-bench PRIVATE cxx_std_20)
-target_compile_definitions(core-host-boundary-bench PRIVATE CMAKE_BUILD)
-target_link_libraries(core-host-boundary-bench PRIVATE aegisub_core libaegisub)
-
-if(BUILD_TESTING)
-    add_executable(fontcollector_api_smoke EXCLUDE_FROM_ALL
-        tests/smoke/fontcollector_api_smoke.cpp
-    )
-    target_compile_features(fontcollector_api_smoke PRIVATE cxx_std_20)
-    target_compile_definitions(fontcollector_api_smoke PRIVATE CMAKE_BUILD)
-    target_link_libraries(fontcollector_api_smoke PRIVATE aegisub_fontcollector_api)
-    target_include_directories(fontcollector_api_smoke PRIVATE
-        "${PROJECT_SOURCE_DIR}/src/include"
-    )
-    add_executable(fontcollector_api_shared_smoke EXCLUDE_FROM_ALL
-        tests/smoke/fontcollector_api_smoke.cpp
-    )
-    target_compile_features(fontcollector_api_shared_smoke PRIVATE cxx_std_20)
-    target_compile_definitions(fontcollector_api_shared_smoke PRIVATE CMAKE_BUILD)
-    target_link_libraries(fontcollector_api_shared_smoke PRIVATE aegisub_fontcollector)
-    target_include_directories(fontcollector_api_shared_smoke PRIVATE
-        "${PROJECT_SOURCE_DIR}/src/include"
-    )
-    set_target_properties(fontcollector_api_smoke fontcollector_api_shared_smoke
-        PROPERTIES EXCLUDE_FROM_ALL FALSE)
-    aegisub_stage_libass_runtime(fontcollector_api_smoke)
-    aegisub_stage_libass_runtime(fontcollector_api_shared_smoke)
-    add_custom_target(test-fontcollector-api
-        COMMAND fontcollector_api_smoke
-        COMMAND fontcollector_api_shared_smoke
-        DEPENDS fontcollector_api_smoke fontcollector_api_shared_smoke
-        WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
-    )
-else()
-    add_custom_target(test-fontcollector-api)
-endif()
-
-add_custom_target(test-aegisub-all
-    DEPENDS test-automation test-aegisub test-core-smoke test-provider-manager-registry test-fontcollector-api
-)
-
-if(BUILD_TESTING AND WIN32)
-    add_test(
-        NAME fontcollector_cli_smoke
-        COMMAND "${CMAKE_COMMAND}"
-            "-DFONTCOLLECTOR_EXE=$<TARGET_FILE:Aegisub>"
-            "-DFONTCOLLECTOR_SUBCOMMAND=fontcollector"
-            "-DTEST_WORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/fontcollector-cli-smoke/$<CONFIG>"
-            -P "${PROJECT_SOURCE_DIR}/tests/smoke/fontcollector_cli_smoke.cmake"
-    )
-    set_tests_properties(fontcollector_cli_smoke PROPERTIES
-        LABELS "smoke;fontcollector;process"
-        RUN_SERIAL TRUE
-        TIMEOUT 300
-    )
-endif()
-
-if(BUILD_TESTING)
-    # Keep the existing custom targets as developer entry points, but let CTest
-    # execute the smoke command itself so timeout and process cleanup are owned
-    # by the test runner rather than a nested build.
-    # Script-based tests intentionally follow the repository's build-then-test
-    # contract; CTest does not infer custom managed-output dependencies from
-    # paths passed as script arguments.
-    function(aegisub_set_smoke_test_properties test_name timeout_seconds labels)
-        set_tests_properties("${test_name}" PROPERTIES
-            LABELS "${labels}"
-            RUN_SERIAL TRUE
-            TIMEOUT "${timeout_seconds}"
-        )
-    endfunction()
-
-    add_test(
-        NAME fontcollector_api_smoke
-        COMMAND "$<TARGET_FILE:fontcollector_api_smoke>"
-        WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
-    )
-    aegisub_set_smoke_test_properties(
-        fontcollector_api_smoke 180 "smoke;fontcollector;api;native")
-
-    add_test(
-        NAME fontcollector_api_shared_smoke
-        COMMAND "$<TARGET_FILE:fontcollector_api_shared_smoke>"
-        WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
-    )
-    aegisub_set_smoke_test_properties(
-        fontcollector_api_shared_smoke 180 "smoke;fontcollector;api;shared;native")
-
-    # GUI process smoke is currently validated on Windows only. The custom
-    # target remains available on every platform for future host bring-up.
-    if(WIN32 AND TARGET Aegisub)
-        add_test(
-            NAME aegisub_gui_test_command_smoke
-            COMMAND "${CMAKE_COMMAND}"
-                "-DAEGISUB_EXE=$<TARGET_FILE:Aegisub>"
-                "-DSCENARIO_FILE=${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/scenarios/gui-command.json"
-                "-DSMOKE_DIR=${CMAKE_CURRENT_BINARY_DIR}/gui-test-command-smoke/$<CONFIG>"
-                "-DWORKING_DIR=$<TARGET_FILE_DIR:Aegisub>"
-                -P "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/run-gui-test-smoke.cmake"
-        )
-        aegisub_set_smoke_test_properties(
-            aegisub_gui_test_command_smoke 300 "smoke;gui;automation;process;windows")
-    endif()
-
-    if(WIN32 AND TARGET Aegisub AND _aegisub_uia_dotnet10_available)
-        add_test(
-            NAME aegisub_uia_correctness_smoke
-            COMMAND "${AEGISUB_UIA_DOTNET_EXECUTABLE}" run
-                --file "${PROJECT_SOURCE_DIR}/tools/gui-automation-uia-correctness.cs"
-                --artifacts-path "${CMAKE_CURRENT_BINARY_DIR}/dotnet-artifacts/gui-automation-uia/$<CONFIG>"
-                --
-                --exe "$<TARGET_FILE:Aegisub>"
-                --open "${PROJECT_SOURCE_DIR}/tests/plugin-bridge-smoke/trim-selected-input.ass"
-                --artifacts "${CMAKE_CURRENT_BINARY_DIR}/gui-automation-uia-correctness/$<CONFIG>"
-            WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
-        )
-        aegisub_set_smoke_test_properties(
-            aegisub_uia_correctness_smoke 240 "smoke;gui;uia;windows;interactive;process")
-    endif()
-
-    if(WITH_PLUGIN_BRIDGE AND TARGET aegisub-plugin-bridge-smoke)
-        add_test(
-            NAME aegisub_plugin_bridge_smoke
-            COMMAND "$<TARGET_FILE:aegisub-plugin-bridge-smoke>"
-            WORKING_DIRECTORY "$<TARGET_FILE_DIR:aegisub-plugin-bridge-smoke>"
-        )
-        aegisub_set_smoke_test_properties(
-            aegisub_plugin_bridge_smoke 300 "smoke;bridge;native;process")
-    endif()
-
-endif()
+endforeach()

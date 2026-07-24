@@ -47,6 +47,7 @@ if(GTEST_FOUND)
         tests/tests/ass_font_state.cpp
         tests/tests/font_family_catalog.cpp
         tests/tests/font_family_catalog_cache.cpp
+        tests/tests/font_name_combo_box.cpp
         tests/tests/font_name_normalization.cpp
         tests/tests/font_portability_audit.cpp
         tests/tests/font_matching_libass.cpp
@@ -229,6 +230,7 @@ if(GTEST_FOUND)
         tests/tests/type_name.cpp
         tests/tests/ui_dispatch.cpp
         tests/tests/watched_file.cpp
+        tests/tests/reload_external_changes_policy.cpp
         tests/tests/ui_timer.cpp
         tests/tests/ui_services.cpp
         tests/tests/util.cpp

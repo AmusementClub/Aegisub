@@ -30,9 +30,10 @@ struct FontFaceDialogSelection {
 	bool from_native_dialog = false;
 };
 
-/// Show the native wx selector for localized names, or Aegisub's
-/// catalog-backed selector for English names. The displayed face name is also
-/// the exact face name returned for ASS writing.
+/// Show the native system font selector when prefer-localized is on, otherwise
+/// always Aegisub's custom selector (catalog English names, or enumerator
+/// fallback if the catalog is empty). The displayed face name is also the
+/// exact face name returned for ASS writing.
 ///
 /// The callback is called when the dialog's Apply button is pressed. Apply
 /// leaves the dialog open so callers can inspect the result and continue

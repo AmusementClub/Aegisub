@@ -776,7 +776,11 @@ std::optional<FontFaceDialogSelection> ShowFontFaceDialog(
 	FontFamilySelectionModel const& font_model,
 	std::function<void(FontFaceDialogSelection const&)> on_apply)
 {
-	if (font_model.prefer_localized || !font_model.catalog || font_model.catalog->empty())
+	// Prefer-localized: native system dialog (localized face names).
+	// Prefer off: always the custom dialog. BuildFontFamilyCatalogUiModel waits
+	// for the catalog when possible; if the catalog is still empty the model
+	// carries enumerator fallback choices so the custom UI still opens.
+	if (font_model.prefer_localized)
 		return ShowNativeFontFaceDialog(parent, initial, font_model, on_apply);
 
 	FontFaceDialog dialog(parent, context, initial, font_model, std::move(on_apply));

@@ -52,6 +52,7 @@
 /benchmarks
 /build-*
 /build/*.bat
+/CMakeUserPresets.json
 
 .lvimrc
 .syntastic_cpp_config

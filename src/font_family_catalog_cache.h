@@ -59,4 +59,8 @@ std::shared_ptr<FontFamilyCatalog const> Rebuild();
 /// throw after shutdown; WarmAsync and Invalidate become no-ops.
 void Shutdown();
 
+/// True after Shutdown() has been requested. Long platform builders should poll
+/// this and abort so process exit is not stuck inside GDI/DWrite enumeration.
+bool IsShutdownRequested() noexcept;
+
 } // namespace font_family_catalog_cache

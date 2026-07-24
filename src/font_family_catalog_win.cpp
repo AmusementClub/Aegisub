@@ -3,6 +3,7 @@
 // an entity identity.
 
 #include "font_family_catalog.h"
+#include "font_family_catalog_cache.h"
 #include "gdi_font_resolver.h"
 
 #include <libaegisub/charset_conv_win.h>
@@ -274,6 +275,15 @@ FontFamilyCatalog BuildFontFamilyCatalog() {
 	FontFamilyId next_id = 1;
 
 	for (auto const& seed : seeds) {
+		// Shutdown() sets this before waiting on the builder future. Abort the
+		// multi-second GDI/DWrite enumeration instead of racing process teardown
+		// inside CreateFontFaceFromHdc (observed as 0xFEEEFEEE / null COM this).
+		if (font_family_catalog_cache::IsShutdownRequested()) {
+			LOG_I("font/family_catalog") << "Aborting Windows font family catalog build: shutdown requested after "
+			                             << records.size() << " families";
+			return {};
+		}
+
 		FontFamilyRecord record;
 		record.id = next_id++;
 		record.localized_family_name = seed;

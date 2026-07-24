@@ -314,6 +314,37 @@ TEST_F(font_family_catalog_cache_test, shutdown_waits_for_build_and_prevents_res
 	EXPECT_THROW(font_family_catalog_cache::Rebuild(), std::logic_error);
 }
 
+TEST_F(font_family_catalog_cache_test, shutdown_is_visible_to_builders_before_wait_returns) {
+	// Platform builders poll IsShutdownRequested() so they can leave GDI/DWrite
+	// before process teardown. The flag must flip as soon as Shutdown starts,
+	// not only after outstanding futures complete.
+	std::promise<void> saw_shutdown;
+	auto saw_shutdown_future = saw_shutdown.get_future();
+	std::atomic<bool> promise_set{false};
+
+	font_family_catalog_cache::testing::SetBuilder([&] {
+		while (!font_family_catalog_cache::IsShutdownRequested())
+			std::this_thread::sleep_for(1ms);
+		if (!promise_set.exchange(true))
+			saw_shutdown.set_value();
+		// Keep the future alive until Shutdown collects it.
+		std::this_thread::sleep_for(20ms);
+		return FontFamilyCatalog{};
+	});
+
+	font_family_catalog_cache::WarmAsync();
+	// Give the builder a moment to enter its poll loop.
+	std::this_thread::sleep_for(20ms);
+
+	auto shutdown = std::async(std::launch::async, [] {
+		font_family_catalog_cache::Shutdown();
+	});
+	ASSERT_EQ(std::future_status::ready, saw_shutdown_future.wait_for(5s));
+	ASSERT_EQ(std::future_status::ready, shutdown.wait_for(5s));
+	shutdown.get();
+	EXPECT_TRUE(font_family_catalog_cache::IsShutdownRequested());
+}
+
 TEST_F(font_family_catalog_cache_test, injected_source_identity_is_not_cache_generation) {
 	auto source = std::make_shared<IdentifiedSource>(
 		FontFamilyCatalogSourceInfo{

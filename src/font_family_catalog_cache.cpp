@@ -9,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+// g_shutdown is atomic so catalog builders can poll without taking g_mutex.
+
 namespace font_family_catalog_cache {
 namespace {
 
@@ -46,7 +48,7 @@ SnapshotFuture g_inflight;
 std::uint64_t g_inflight_generation = 0;
 std::uint64_t g_inflight_attempt = 0;
 std::uint64_t g_next_attempt = 0;
-bool g_shutdown = false;
+std::atomic<bool> g_shutdown{false};
 // Retired async futures that must not be destroyed under g_mutex (MSVC STL
 // blocks on the last async shared_future destructor). Incomplete futures stay
 // here until they are ready so Invalidate remains non-blocking.
@@ -99,7 +101,7 @@ SnapshotFuture StartBuildLocked(std::uint64_t generation) {
 	return std::async(std::launch::async, [generation, source = std::move(source)]() {
 		auto built = std::make_shared<FontFamilyCatalog const>(source->Build());
 		std::lock_guard lock(g_mutex);
-		if (!g_shutdown && generation == g_generation) {
+		if (!g_shutdown.load(std::memory_order_acquire) && generation == g_generation) {
 			// Only publish if this build still matches the current generation.
 			g_snapshot.store(built, std::memory_order_release);
 		}
@@ -110,7 +112,7 @@ SnapshotFuture StartBuildLocked(std::uint64_t generation) {
 }
 
 SnapshotFuture EnsureInflightLocked() {
-	if (g_shutdown)
+	if (g_shutdown.load(std::memory_order_acquire))
 		throw std::logic_error("Font family catalog cache is shut down");
 	if (auto snapshot = g_snapshot.load(std::memory_order_acquire)) {
 		// Already published; synthesize a ready future for callers that wait.
@@ -134,7 +136,7 @@ void SetSource(FontFamilyCatalogSourcePtr source) {
 		throw std::invalid_argument("Font family catalog source must not be null");
 
 	std::lock_guard lock(g_mutex);
-	if (g_shutdown)
+	if (g_shutdown.load(std::memory_order_acquire))
 		throw std::logic_error("Font family catalog cache is shut down");
 	++g_generation;
 	g_snapshot.store(Snapshot{}, std::memory_order_release);
@@ -144,7 +146,7 @@ void SetSource(FontFamilyCatalogSourcePtr source) {
 
 FontFamilyCatalogSourceInfo GetSourceInfo() {
 	std::lock_guard lock(g_mutex);
-	if (g_shutdown)
+	if (g_shutdown.load(std::memory_order_acquire))
 		return {};
 	auto source = EnsureSourceLocked();
 	return source ? source->Info() : FontFamilyCatalogSourceInfo{};
@@ -200,7 +202,7 @@ std::shared_ptr<FontFamilyCatalog const> GetSnapshot() {
 		}
 
 		std::lock_guard lock(g_mutex);
-		if (g_shutdown)
+		if (g_shutdown.load(std::memory_order_acquire))
 			throw std::logic_error("Font family catalog cache is shut down");
 		if (generation != g_generation)
 			continue;
@@ -229,7 +231,7 @@ std::shared_ptr<FontFamilyCatalog const> GetReadySnapshot() noexcept {
 
 void WarmAsync() {
 	std::lock_guard lock(g_mutex);
-	if (g_shutdown || g_snapshot.load(std::memory_order_acquire))
+	if (g_shutdown.load(std::memory_order_acquire) || g_snapshot.load(std::memory_order_acquire))
 		return;
 	ReapRetiredLocked();
 	if (g_inflight.valid() &&
@@ -260,7 +262,7 @@ void Invalidate() {
 	// Keep unfinished futures in g_retired so Invalidate itself never blocks;
 	// only reaped when already ready.
 	std::lock_guard lock(g_mutex);
-	if (g_shutdown)
+	if (g_shutdown.load(std::memory_order_acquire))
 		return;
 	++g_generation;
 	g_snapshot.store(Snapshot{}, std::memory_order_release);
@@ -276,9 +278,11 @@ void Shutdown() {
 	std::vector<SnapshotFuture> futures;
 	{
 		std::lock_guard lock(g_mutex);
-		if (g_shutdown)
+		if (g_shutdown.load(std::memory_order_acquire))
 			return;
-		g_shutdown = true;
+		// Publish cancel before waiting so platform builders can abort GDI/DWrite
+		// work instead of racing process teardown inside CreateFontFaceFromHdc.
+		g_shutdown.store(true, std::memory_order_release);
 		++g_generation;
 		g_snapshot.store(Snapshot{}, std::memory_order_release);
 		if (g_inflight.valid())
@@ -298,13 +302,17 @@ void Shutdown() {
 	}
 }
 
+bool IsShutdownRequested() noexcept {
+	return g_shutdown.load(std::memory_order_acquire);
+}
+
 namespace testing {
 
 void Reset() {
 	std::vector<SnapshotFuture> futures;
 	{
 		std::lock_guard lock(g_mutex);
-		g_shutdown = false;
+		g_shutdown.store(false, std::memory_order_release);
 		++g_generation;
 		g_snapshot.store(Snapshot{}, std::memory_order_release);
 		if (g_inflight.valid())

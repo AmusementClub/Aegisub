@@ -115,6 +115,27 @@ HMODULE try_load_system_dwrite(DWriteCreateFactoryFn &out_create_fn) {
 	return mod;
 }
 
+/// Process-lifetime pin for system dwrite.dll.
+///
+/// Bridges borrow this module handle and must not FreeLibrary it. Per-instance
+/// LoadLibrary without a matching FreeLibrary used to leak a refcount on every
+/// GdiFontResolver construction; a single pin keeps SHARED factories valid for
+/// concurrent catalog builds without unbounded ref growth.
+struct SystemDWritePin {
+	HMODULE mod = nullptr;
+	DWriteCreateFactoryFn create_fn = nullptr;
+
+	SystemDWritePin() {
+		mod = try_load_system_dwrite(create_fn);
+		// Intentionally never FreeLibrary(mod): pin for process lifetime.
+	}
+};
+
+SystemDWritePin const& system_dwrite_pin() {
+	static SystemDWritePin const pin;
+	return pin;
+}
+
 bool init_dwrite_factory(DWriteCreateFactoryFn create_fn, IDWriteFactory **out_factory,
                           IDWriteGdiInterop **out_interop) {
 	IDWriteFactory *factory = nullptr;
@@ -320,17 +341,29 @@ std::string get_dll_description(HMODULE dll, bool is_dwritecore) {
 
 DWriteBridge::DWriteBridge(DWriteBridgeMode mode) {
 	DWriteCreateFactoryFn create_fn = nullptr;
+	// True only for app-local DWriteCore loads owned by this instance.
+	bool owns_module = false;
+
 	if (mode != DWriteBridgeMode::SystemOnly) {
 		dll_handle = try_load_dwrite_core(create_fn);
-		is_dwritecore_ = (dll_handle != nullptr);
+		if (dll_handle) {
+			is_dwritecore_ = true;
+			owns_module = true;
+		}
 	}
 
 	if (!dll_handle) {
-		dll_handle = try_load_system_dwrite(create_fn);
+		// Borrow the process pin; do not LoadLibrary per bridge instance.
+		auto const& pin = system_dwrite_pin();
+		dll_handle = pin.mod;
+		create_fn = pin.create_fn;
+		is_dwritecore_ = false;
+		owns_module = false;
 	}
 
 	if (!dll_handle || !create_fn) {
 		LOG_D("font/dwrite") << "DWrite bridge unavailable: failed to load DWrite DLL";
+		dll_handle = nullptr;
 		return;
 	}
 
@@ -338,23 +371,45 @@ DWriteBridge::DWriteBridge(DWriteBridgeMode mode) {
 		LOG_D("font/dwrite") << "DWrite bridge unavailable: failed to create factory or GDI interop";
 		if (gdi_interop) { gdi_interop->Release(); gdi_interop = nullptr; }
 		if (factory) { factory->Release(); factory = nullptr; }
-		if (dll_handle) { FreeLibrary(dll_handle); dll_handle = nullptr; }
+		if (owns_module && dll_handle) {
+			FreeLibrary(dll_handle);
+		}
+		dll_handle = nullptr;
 		return;
 	}
 
+	// Stash ownership in is_dwritecore_ for the destructor: only Core loads are
+	// instance-owned. System pin is never freed here.
 	available_ = true;
 	dll_description_ = get_dll_description(dll_handle, is_dwritecore_);
 	LOG_I("font/dwrite") << "DWrite bridge initialized: " << dll_description_;
 }
 
 DWriteBridge::~DWriteBridge() {
-	if (gdi_interop) gdi_interop->Release();
-	if (factory) factory->Release();
-	if (dll_handle) FreeLibrary(dll_handle);
+	// Drop COM first so no interface outlives the DLL mapping we still hold.
+	if (gdi_interop) {
+		gdi_interop->Release();
+		gdi_interop = nullptr;
+	}
+	if (factory) {
+		factory->Release();
+		factory = nullptr;
+	}
+	available_ = false;
+
+	// Only FreeLibrary instance-owned DWriteCore modules. System dwrite.dll is
+	// held by system_dwrite_pin() for process lifetime so concurrent catalog
+	// builds cannot unload it under another bridge's CreateFontFaceFromHdc.
+	if (dll_handle && is_dwritecore_)
+		FreeLibrary(dll_handle);
+	dll_handle = nullptr;
 }
 
 IDWriteFontFace *DWriteBridge::CreateFontFaceFromHdc(HDC hdc) const {
-	if (!available_)
+	// Defensive: never call through a null or half-torn interop pointer.
+	// Callers (GdiFontResolver) already select an HFONT into hdc; reject empty
+	// DCs early rather than letting DWrite AV inside CreateFontFaceFromHdc.
+	if (!available_ || !gdi_interop || !hdc)
 		return nullptr;
 
 	IDWriteFontFace *face = nullptr;

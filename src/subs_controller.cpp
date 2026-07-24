@@ -31,6 +31,7 @@
 #include "include/aegisub/context_ui.h"
 #include "options.h"
 #include "project.h"
+#include "reload_external_changes_policy.h"
 #include "selection_controller.h"
 #include "status_sink.h"
 #include "subtitle_format.h"
@@ -44,6 +45,7 @@
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
+#include <libaegisub/scope_exit.h>
 #include <libaegisub/util.h>
 
 // #include <wx/msgdlg.h>  ← unused, removed (using context->ShowWarning/RequestInteraction instead)
@@ -211,28 +213,36 @@ SubsController::SubsController(agi::Context *context)
 	if (!IsGuiRuntimeShell())
 		return;
 
-	// When external-change reloading is disabled, behave as before commit
-	// 07937528: do not create a file watcher at all, so no background I/O
-	// (directory watches, file hashing on load/save) ever happens. The option
-	// is read only at construction; toggling it requires a restart, matching
-	// the granularity of the other App/Auto/* options.
-	if (OPT_GET("App/Auto/Reload External Changes")->GetBool()) {
-		file_watch = agi::make_unique<WatchedFile>(CreateWxFileSystemWatcherBackend());
-		file_watch->SetChangedCallback([this](agi::fs::path const& path) {
-			OnWatchedFileChanged(path);
-		});
-		file_watch->SetErrorCallback([this](std::string const& message) {
-			OnFileWatchError(message);
-		});
-	}
+	// Explicit GUI-only flag: headless/automation must not hash open files or
+	// block Save() on overwrite interaction. Do not use file_watch==nullptr for
+	// this (nullptr also means "live reload option off" on a GUI shell).
+	tracks_external_file_state = reload_external_changes::ShouldTrackExternalFileSnapshots(true);
+
+	// Live directory watching is optional (App/Auto/Reload External Changes).
+	// ApplyReloadExternalChangesOption arms or disarms the watcher at runtime
+	// without restart. Subscriptions are scoped Connections so multi-frame
+	// project close cannot leave dangling this on process-global options.
+	ApplyReloadExternalChangesOption();
+	reload_external_changes_connection = OPT_SUB(
+		"App/Auto/Reload External Changes",
+		[this] { ApplyReloadExternalChangesOption(); });
 
 	autosave_timer = CreateSubsControllerTimer([this] { AutoSave(); });
 	autosave_timer_changed(autosave_timer.get());
-	OPT_SUB("App/Auto/Save", [=] { autosave_timer_changed(autosave_timer.get()); });
-	OPT_SUB("App/Auto/Save Every Seconds", [=] { autosave_timer_changed(autosave_timer.get()); });
+	autosave_enable_connection = OPT_SUB(
+		"App/Auto/Save",
+		[this] { autosave_timer_changed(autosave_timer.get()); });
+	autosave_interval_connection = OPT_SUB(
+		"App/Auto/Save Every Seconds",
+		[this] { autosave_timer_changed(autosave_timer.get()); });
 }
 
 SubsController::~SubsController() {
+	// Disconnect option slots before tearing down timer/watcher state.
+	reload_external_changes_connection.Disconnect();
+	autosave_enable_connection.Disconnect();
+	autosave_interval_connection.Disconnect();
+
 	ClearFileWatch();
 	// Make sure there are no autosaves in progress
 	autosave_queue->Sync([]{ });
@@ -398,7 +408,8 @@ void SubsController::AutoSave() {
 }
 
 void SubsController::UpdateFileWatch() {
-	if (!file_watch)
+	// Headless/automation: never snapshot or watch. Save must stay non-interactive.
+	if (!tracks_external_file_state)
 		return;
 
 	if (filename.empty()) {
@@ -406,7 +417,13 @@ void SubsController::UpdateFileWatch() {
 		return;
 	}
 
-	file_watch->SetTargetPath(filename);
+	// Live directory watching is optional. On GUI shells, disk snapshots for the
+	// save-time overwrite warning are maintained on load/save even when live
+	// reload is off (file_watch may be null or idle). Turning off
+	// App/Auto/Reload External Changes only stops continuous watches and reload
+	// prompts — not overwrite checks.
+	if (file_watch && OPT_GET("App/Auto/Reload External Changes")->GetBool())
+		file_watch->SetTargetPath(filename);
 	RecordCurrentFileSnapshot();
 }
 
@@ -418,6 +435,47 @@ void SubsController::ClearFileWatch() {
 	last_prompted_file_snapshot.reset();
 	external_file_change_pending = false;
 	external_file_prompt_active = false;
+}
+
+void SubsController::ApplyReloadExternalChangesOption() {
+	using namespace reload_external_changes;
+	if (!tracks_external_file_state)
+		return;
+
+	auto const plan = PlanWatchArm(
+		OPT_GET("App/Auto/Reload External Changes")->GetBool(),
+		static_cast<bool>(file_watch),
+		!filename.empty(),
+		last_known_file_snapshot.has_value());
+
+	if (plan.disarm_watcher && file_watch) {
+		// Clear the target only. Never file_watch.reset() here: option changes
+		// can nest inside OnWatchedFileChanged via a modal event loop while the
+		// call stack still owns frames on WatchedFile's debounce timer.
+		// The idle watcher is released in ClearFileWatch / ~SubsController.
+		file_watch->ClearTargetPath();
+	}
+	if (plan.clear_pending)
+		external_file_change_pending = false;
+
+	if (plan.create_watcher) {
+		file_watch = agi::make_unique<WatchedFile>(CreateWxFileSystemWatcherBackend());
+		file_watch->SetChangedCallback([this](agi::fs::path const& path) {
+			OnWatchedFileChanged(path);
+		});
+		file_watch->SetErrorCallback([this](std::string const& message) {
+			OnFileWatchError(message);
+		});
+	}
+
+	// Do not call UpdateFileWatch() here: it always rebaselines, and option
+	// ValueChanged fires even when Preferences Apply/Reset SetValue keeps the
+	// same bool. Rebaselining would hide external edits and weaken overwrite
+	// protection ("since last loaded or saved").
+	if (plan.bind_target && file_watch)
+		file_watch->SetTargetPath(filename);
+	if (plan.record_baseline_if_missing)
+		RecordCurrentFileSnapshot();
 }
 
 SubsController::FileWatchSnapshot SubsController::MakeFileWatchSnapshot(agi::fs::path const& path) const {
@@ -454,7 +512,7 @@ void SubsController::RecordCurrentFileSnapshot() {
 }
 
 bool SubsController::HasFileChangedOnDisk() const {
-	if (filename.empty() || !last_known_file_snapshot)
+	if (!tracks_external_file_state || filename.empty() || !last_known_file_snapshot)
 		return false;
 
 	auto current_snapshot = MakeFileWatchSnapshot(filename);
@@ -463,6 +521,10 @@ bool SubsController::HasFileChangedOnDisk() const {
 
 void SubsController::OnWatchedFileChanged(agi::fs::path const&) {
 	if (filename.empty())
+		return;
+	// Option may have been disabled while a debounce/callback was already queued,
+	// or while a modal prompt was open (multi-frame Preferences Apply).
+	if (!OPT_GET("App/Auto/Reload External Changes")->GetBool())
 		return;
 
 	if (external_file_prompt_active) {
@@ -474,6 +536,9 @@ void SubsController::OnWatchedFileChanged(agi::fs::path const&) {
 	constexpr int kMaxPromptLoopCount = 5;
 
 	for (;;) {
+		if (!OPT_GET("App/Auto/Reload External Changes")->GetBool())
+			return;
+
 		external_file_change_pending = false;
 		auto current_snapshot = MakeFileWatchSnapshot(filename);
 
@@ -490,18 +555,29 @@ void SubsController::OnWatchedFileChanged(agi::fs::path const&) {
 		}
 
 		external_file_prompt_active = true;
+		auto clear_prompt_flag = agi::make_scope_exit([this] {
+			external_file_prompt_active = false;
+		});
+
 		bool const reload = PromptReloadAfterExternalChange(current_snapshot);
 		bool const has_pending = external_file_change_pending;
-		external_file_prompt_active = false;
+		bool const option_still_on = OPT_GET("App/Auto/Reload External Changes")->GetBool();
 
-		if (reload) {
+		using reload_external_changes::AfterPromptAction;
+		using reload_external_changes::PlanAfterPrompt;
+		switch (PlanAfterPrompt(reload, option_still_on, has_pending)) {
+		case AfterPromptAction::Reload:
+			// Honor an explicit Yes even if detection was turned off while the
+			// modal was open. The option gates future watch/prompt only.
 			ReloadFileFromDisk(false);
 			return;
-		}
-
-		last_prompted_file_snapshot = current_snapshot;
-		if (!has_pending)
+		case AfterPromptAction::StampPromptedAndContinue:
+			last_prompted_file_snapshot = current_snapshot;
+			break;
+		case AfterPromptAction::StampPromptedAndStop:
+			last_prompted_file_snapshot = current_snapshot;
 			return;
+		}
 	}
 }
 

@@ -457,8 +457,9 @@ void BuildGeneralPage(OptionPage *p) {
 		"Subtitle/Font/Use Contains Matching");
 	contains_matching->SetToolTip(_(
 		"When enabled, typing in Style Editor or the custom Select Font dialog "
-		"matches names containing the typed text anywhere. The Windows system "
-		"font dialog is not affected."));
+		"uses contains matching instead of the native prefix matching. Other "
+		"combo behaviour is unchanged. The Windows system font dialog is not "
+		"affected."));
 
 	p->SetSizerAndFit(p->sizer);
 }

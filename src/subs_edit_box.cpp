@@ -542,6 +542,8 @@ void SubsEditBox::MakeButton(const char *cmd_name) {
 #else
 	wxBitmapButton *btn = new wxBitmapButton(this, -1, command->Icon(OPT_GET("App/Toolbar Icon Size")->GetInt()));
 #endif
+	btn->SetLabel(command->StrDisplay(c));
+	btn->SetName(command->StrDisplay(c));
 	ToolTipManager::Bind(btn, command->StrHelp(), "Subtitle Edit Box", cmd_name);
 
 	middle_right_sizer->Add(btn, wxSizerFlags().Expand());

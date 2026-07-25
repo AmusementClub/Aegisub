@@ -4,9 +4,14 @@ script_author = "Aegisub"
 script_version = "1.0.0"
 script_namespace = "aegisub.dependency-control.transport-smoke"
 
+local kService = "aegisub.dependency-control.service"
+local function native_call(operation, request)
+  return aegisub.plugin.invoke(kService, operation, request or {})
+end
+
 local function expect_rejection(value, expected)
   local succeeded, message = pcall(
-    aegisub.__dependency_control_call,
+    native_call,
     "record.register",
     value)
   assert(succeeded == false)

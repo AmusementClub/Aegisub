@@ -18,7 +18,12 @@ local version = DependencyControl {
 }
 
 version:registerMacro(function()
-  local native_call = assert(aegisub.__dependency_control_call)
+  local function native_call(operation, request)
+    return aegisub.plugin.invoke(
+      "aegisub.dependency-control.service",
+      operation,
+      request or {})
+  end
   local update_mode = os.getenv("AEGISUB_DEPENDENCY_CONTROL_FIXTURE_UPDATE_PROXY_MODE")
   if update_mode and update_mode ~= "" then
     local request = {

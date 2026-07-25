@@ -84,7 +84,7 @@ target_sources(Aegisub PRIVATE
     "${PROJECT_SOURCE_DIR}/src/coreclr/declarative_ui_host.cpp"
     "${PROJECT_SOURCE_DIR}/src/coreclr/declarative_ui_model.cpp"
     "${PROJECT_SOURCE_DIR}/src/coreclr/dependency_control_host.cpp"
-    "${PROJECT_SOURCE_DIR}/src/coreclr/dependency_control_lua.cpp"
+    "${PROJECT_SOURCE_DIR}/src/coreclr/plugin_lua_api.cpp"
     "${PROJECT_SOURCE_DIR}/src/coreclr/dependency_control_transaction.cpp"
     "${PROJECT_SOURCE_DIR}/src/coreclr/dotnet_automation_engine.cpp"
     "${PROJECT_SOURCE_DIR}/src/coreclr/dotnet_query_state.cpp"

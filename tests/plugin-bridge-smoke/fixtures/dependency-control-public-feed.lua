@@ -46,7 +46,12 @@ local packages = {
   },
 }
 
-local native_call = assert(aegisub.__dependency_control_call)
+local function native_call(operation, request)
+  return aegisub.plugin.invoke(
+    "aegisub.dependency-control.service",
+    operation,
+    request or {})
+end
 
 local function must(value, message)
   if not value then error(message or "assertion failed", 2) end

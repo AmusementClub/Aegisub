@@ -51,7 +51,7 @@
 #include "command/command.h"
 #include "compat.h"
 #ifdef WITH_PLUGIN_BRIDGE
-#include "coreclr/dependency_control_lua.h"
+#include "coreclr/plugin_lua_api.h"
 #endif
 #include "frame_main.h"
 #include "include/aegisub/context.h"
@@ -723,7 +723,7 @@ namespace {
 		lua_settable(L, LUA_GLOBALSINDEX);
 		stackcheck.check_stack(0);
 #ifdef WITH_PLUGIN_BRIDGE
-		RegisterDependencyControlLuaFacade(L);
+		RegisterPluginLuaApi(L);
 		stackcheck.check_stack(0);
 #endif
 		debug_backend->CaptureRuntimeBaseline();

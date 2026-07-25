@@ -32,13 +32,6 @@ std::string InvokePluginServiceContribution(
 	std::string const& operation_id,
 	std::string const& request_json);
 
-/// Thin wrapper for the l0.DependencyControl Lua facade. Resolves the
-/// DependencyControl serviceProvider contribution id and forwards to
-/// InvokePluginServiceContribution — no package path is hardcoded.
-std::string InvokeDependencyControlService(
-	std::string const& operation_id,
-	std::string const& request_json);
-
 void ShutdownManagedPluginRuntime() noexcept;
 
 } // namespace Automation4

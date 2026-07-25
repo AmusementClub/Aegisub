@@ -1887,17 +1887,6 @@ std::string InvokePluginServiceContribution(
 		request_json);
 }
 
-std::string InvokeDependencyControlService(
-	std::string const& operation_id,
-	std::string const& request_json) {
-	// Protocol contribution id for the DependencyControl managed plugin.
-	// Lookup is by registered serviceProvider id, not by install path.
-	return InvokePluginServiceContribution(
-		"aegisub.dependency-control.service",
-		operation_id,
-		request_json);
-}
-
 void ShutdownManagedPluginRuntime() noexcept {
 	ClearLazyServiceBootstrap();
 	Runtime()->Shutdown();

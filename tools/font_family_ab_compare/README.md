@@ -38,7 +38,7 @@ Exit codes:
 | Code | Meaning |
 |------|---------|
 | 0 | Structural match |
-| 1 | Differences (see `diff.txt`) |
+| 1 | Catalog or eligible-alias differences (see `diff.txt` and `alias-validation.txt`) |
 | 2 | Hard failure (args, I/O, incomplete observe) |
 
 ## Report artifacts
@@ -47,7 +47,8 @@ Exit codes:
 |------|---------|
 | `summary.txt` | `MATCH`/`DIFF` and counts |
 | `diff.txt` | Per-family structural differences |
-| `meta.txt` | Locale, `provider_fingerprint`, `os_build_fingerprint`, timings |
+| `alias-validation.txt` | Live four-way GDI check for every Derive-eligible alias |
+| `meta.txt` | Locale, discovery fingerprints, alias counts, timings |
 
 **Authoritative status:** read `build-dir/font-family-ab/summary.txt` (or the
 `--out-dir` you chose) after each run. Do not treat historical family counts as
@@ -69,6 +70,10 @@ Compared (per family, matched by sorted Win32 family name set):
 - Absolute `entity_token` numeric values
 - Ephemeral `FontFamilyId` values
 - Probe counts / wall time
+
+Recorded alias probes are also checked against fresh GDI selection in the same
+process. Alias candidates longer than GDI's 31 UTF-16-unit face-name limit are
+reported but skipped because Derive rejects them before using the observation.
 
 ## Expected edge differences (documented)
 
@@ -92,6 +97,7 @@ replace this legacy↔modern check.
 | Report | `build-dir/font-family-ab/summary.txt` |
 | Locale | zh-cn |
 | Families matched | 570 (legacy=570, modern=570, differing=0) |
+| Alias validation | 883 candidates, 8 over limit, 875 eligible, 3500 probes, 0 mismatches |
 | Modern wall | ~1.7 s (`modern_physical_probes=2384`) |
 | Notes | Includes parallel Observe workers + win32 alias seed-probe reuse |
 

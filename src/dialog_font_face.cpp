@@ -262,6 +262,7 @@ class FontFaceDialog final : public wxDialog {
 	std::vector<FontVariantChoice> variant_choices;
 	int effective_weight = 400;
 	int charset = 1;
+	bool vertical_requested = false;
 	bool variant_modified = false;
 	bool implicit_variant_pinned = false;
 	bool syncing_variant = false;
@@ -378,16 +379,17 @@ class FontFaceDialog final : public wxDialog {
 		else if (auto const *record = font_model.ResolveRecord(face))
 			id = record->id;
 		bool const capable = font_model.SupportsVerticalWriting(id, face);
-		bool const installed = id != 0 || font_model.ResolveRecord(face) != nullptr;
-		// Uninstalled: keep typed '@' visible in the text box; disable toggle.
-		// Installed without GDI '@': disable (no false capability).
-		vertical->Enable(capable && installed);
+		// An exact bare-name match came from the same live GDI enumeration that
+		// supplied fallback choices, so it is sufficient installation evidence
+		// when the catalog is unavailable.
+		vertical->Enable(capable);
 		syncing_variant = true;
-		vertical->SetValue(has_at);
+		vertical->SetValue(has_at || (vertical_requested && capable));
 		syncing_variant = false;
 	}
 
 	void ApplyVerticalToggle(bool want_vertical) {
+		vertical_requested = want_vertical;
 		auto const current = from_wx(face_name->GetValue());
 		auto bare = FontFamilyCatalog::SplitVerticalPrefix(current).second;
 		if (bare.empty())
@@ -502,6 +504,11 @@ class FontFaceDialog final : public wxDialog {
 	}
 
 	void OnFaceText(wxCommandEvent &event) {
+		if (vertical) {
+			vertical_requested = UpdateVerticalWritingIntent(
+				vertical_requested, from_wx(face_name->GetValue()),
+				face_name->IsCommittingListSelection());
+		}
 		// Refresh soft GDI-limit / match status while typing without committing.
 		UpdateVariantControls(false);
 		UpdateInformation();
@@ -509,15 +516,30 @@ class FontFaceDialog final : public wxDialog {
 	}
 
 	void CommitFaceFamilyChange() {
-		// Compact mode: list labels are bare; reapply '@' when Vertical is on.
-		if (vertical && vertical->IsEnabled() && vertical->GetValue()) {
-			auto const current = from_wx(face_name->GetValue());
+		// Compact mode: list labels are bare; preserve the toggle only when the
+		// newly selected family itself has a live GDI '@' face. This avoids
+		// carrying '@' from the previous family onto an unsupported selection.
+		auto current = from_wx(face_name->GetValue());
+		FontFamilyId resolved_family_id = 0;
+		if (auto const selected = face_name->SelectedFamilyId())
+			resolved_family_id = *selected;
+		else if (auto const *record = font_model.ResolveRecord(current))
+			resolved_family_id = record->id;
+		bool const has_at = !FontFamilyCatalog::SplitVerticalPrefix(current).first.empty();
+		bool const vertical_capable =
+			font_model.SupportsVerticalWriting(resolved_family_id, current);
+		if (vertical && vertical_requested && vertical_capable) {
 			auto bare = FontFamilyCatalog::SplitVerticalPrefix(current).second;
 			auto const next = FontFamilyCatalog::JoinVerticalPrefix(true, bare);
-			if (next != current && !bare.empty())
+			if (next != current && !bare.empty()) {
 				face_name->ChangeValue(to_wx(next));
+				current = next;
+			}
 		}
-		auto const current = from_wx(face_name->GetValue());
+		else if (vertical && !has_at) {
+			// A bare selection without a live '@' face ends the previous intent.
+			vertical_requested = false;
+		}
 		auto const current_id = face_name->SelectedFamilyId();
 		if (current != committed_family || current_id != committed_family_id) {
 			committed_family = current;
@@ -610,6 +632,8 @@ public:
 	, on_apply(std::move(on_apply))
 	, effective_weight(initial.effective_weight)
 	, charset(initial.charset)
+	, vertical_requested(!FontFamilyCatalog::SplitVerticalPrefix(
+		initial.face_name).first.empty())
 	, initial_explicit_weight(initial.has_explicit_weight)
 	, initial_explicit_italic(initial.has_explicit_italic)
 	{

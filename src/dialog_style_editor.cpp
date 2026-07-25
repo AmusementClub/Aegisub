@@ -766,6 +766,24 @@ FontFamilyRecord const* DialogStyleEditor::SelectedFontRecord() const {
 	return resolved.family ? font_catalog->Find(*resolved.family) : nullptr;
 }
 
+bool DialogStyleEditor::SupportsVerticalWriting(
+	FontFamilyId family_id,
+	std::string_view face_name) const {
+	if (family_id != 0 && vertical_capable_family_ids.contains(family_id))
+		return true;
+	auto const bare = FontFamilyCatalog::SplitVerticalPrefix(face_name).second;
+	if (bare.empty())
+		return false;
+	if (vertical_capable_bare_names.contains(std::string(bare)))
+		return true;
+	if (font_catalog && !font_catalog->empty()) {
+		auto const resolved = font_catalog->Resolve(bare);
+		return resolved.family &&
+			vertical_capable_family_ids.contains(*resolved.family);
+	}
+	return false;
+}
+
 void DialogStyleEditor::SyncVerticalControl() {
 	if (!BoxVertical)
 		return;
@@ -776,30 +794,31 @@ void DialogStyleEditor::SyncVerticalControl() {
 		id = *selected;
 	else if (auto const *record = SelectedFontRecord())
 		id = record->id;
-	bool capable = false;
-	if (id != 0 && vertical_capable_family_ids.contains(id))
-		capable = true;
-	else {
-		auto bare = FontFamilyCatalog::SplitVerticalPrefix(face).second;
-		capable = vertical_capable_bare_names.contains(std::string(bare));
-	}
-	bool const installed = id != 0 || SelectedFontRecord() != nullptr;
-	BoxVertical->Enable(capable && installed);
+	BoxVertical->Enable(SupportsVerticalWriting(id, face));
 	updating = true;
 	BoxVertical->SetValue(has_at);
 	updating = false;
 }
 
 void DialogStyleEditor::CommitFontFamilyChange() {
-	// Compact mode: list labels are bare; reapply '@' when Vertical is on.
-	if (BoxVertical && BoxVertical->IsEnabled() && BoxVertical->IsChecked()) {
-		auto const current = from_wx(FontName->GetValue());
+	// Compact mode: list labels are bare; preserve the toggle only when the
+	// newly selected family itself has a live GDI '@' face.
+	auto current = from_wx(FontName->GetValue());
+	FontFamilyId current_id = 0;
+	if (auto const selected = FontName->SelectedFamilyId())
+		current_id = *selected;
+	else if (auto const *record = SelectedFontRecord())
+		current_id = record->id;
+	if (BoxVertical && BoxVertical->IsChecked() &&
+	    SupportsVerticalWriting(current_id, current)) {
 		auto bare = FontFamilyCatalog::SplitVerticalPrefix(current).second;
 		auto const next = FontFamilyCatalog::JoinVerticalPrefix(true, bare);
-		if (next != current && !bare.empty())
+		if (next != current && !bare.empty()) {
 			FontName->ChangeValue(to_wx(next));
+			current = next;
+		}
 	}
-	auto const current_family = from_wx(FontName->GetValue());
+	auto const& current_family = current;
 	auto const current_family_id = FontName->SelectedFamilyId();
 	if (current_family != committed_font_family || current_family_id != committed_font_family_id) {
 		committed_font_family = current_family;

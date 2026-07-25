@@ -122,6 +122,51 @@ TEST(font_family_obs_repository_win, m1_rejects_unknown_face_identity) {
 	EXPECT_TRUE(ValidateWindowsFontFamilyFaceStamps({}));
 }
 
+TEST(font_family_obs_repository_win, m0_includes_font_registry_fingerprint) {
+	FontFamilyInputManifest left;
+	left.provider_fingerprint = 1;
+	left.os_build_fingerprint = 2;
+	left.font_registry_fingerprint = 3;
+	left.gdi_family_names = {"Example"};
+	auto right = left;
+
+	EXPECT_TRUE(WindowsFontFamilyManifestsMatchM0(left, right));
+	right.font_registry_fingerprint = 4;
+	EXPECT_FALSE(WindowsFontFamilyManifestsMatchM0(left, right));
+	right = left;
+	right.gdi_family_names = {"example"};
+	EXPECT_TRUE(WindowsFontFamilyManifestsMatchM0(left, right));
+}
+
+TEST(font_family_obs_repository_win, observe_stability_requires_full_m0_and_seed_match) {
+	FontFamilyInputManifest before;
+	before.provider_fingerprint = 1;
+	before.os_build_fingerprint = 2;
+	before.font_registry_fingerprint = 3;
+	before.gdi_family_names = {"Example"};
+	auto after = before;
+
+	EXPECT_TRUE(WindowsFontFamilyObservationM0Stable(
+		before, after, {"example"}));
+	after.font_registry_fingerprint = 4;
+	EXPECT_FALSE(WindowsFontFamilyObservationM0Stable(
+		before, after, {"Example"}));
+	after = before;
+	EXPECT_FALSE(WindowsFontFamilyObservationM0Stable(
+		before, after, {"Different"}));
+}
+
+TEST(font_family_obs_repository_win, default_cache_path_uses_fixed_afco_name) {
+	auto const root = (std::filesystem::current_path() /
+		"build-dir" / "font-family-obs-path-test").lexically_normal();
+	agi::fs::CreateDirectory(root);
+	ScopedLocalPath scoped(root);
+	auto const path = DefaultWindowsFontFamilyObsCachePath();
+
+	EXPECT_EQ("windows-font-observations.afco", path.filename().string());
+	EXPECT_EQ("font_family_catalog", path.parent_path().filename().string());
+}
+
 TEST(font_family_obs_repository_win, m1_dedupes_ttc_faces_on_same_file_identity) {
 	// Two face_index rows on an unknown file must still fail once, without
 	// requiring a second OpenFileById success path to exist on this host.

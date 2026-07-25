@@ -132,6 +132,76 @@ std::string NormalizedLocale(std::string_view locale) {
 	return result;
 }
 
+bool ProbeMatchesLive(
+	FontFamilyProbeObservation const& recorded,
+	GdiFontProbeResult const& live) {
+	auto const& left = recorded.outcome;
+	auto const& right = live.outcome;
+	return recorded.success == live.success &&
+		recorded.matches_requested_family == live.matches_requested_family &&
+		left.requested_weight == right.requested_weight &&
+		left.requested_italic == right.requested_italic &&
+		left.realized_weight == right.realized_weight &&
+		left.realized_italic == right.realized_italic &&
+		left.role == right.role && left.status == right.status &&
+		left.entity_token == right.entity_token;
+}
+
+struct AliasValidationResult {
+	std::size_t candidate_count = 0;
+	std::size_t over_gdi_limit = 0;
+	std::size_t probe_count = 0;
+	std::size_t mismatching_candidates = 0;
+	std::size_t mismatching_probes = 0;
+	std::vector<std::string> details;
+
+	std::size_t eligible_candidates() const noexcept {
+		return candidate_count - over_gdi_limit;
+	}
+};
+
+AliasValidationResult ValidateAliasObservations(
+	FontFamilyCatalogObservations const& observations) {
+	AliasValidationResult result;
+	result.candidate_count = observations.aliases.size();
+	GdiFontResolver resolver;
+	for (auto const& alias : observations.aliases) {
+		// Derive rejects these before consulting the recorded observation, so a
+		// truncated live LOGFONT request is not a meaningful equivalence check.
+		if (FontFamilyCatalog::ExceedsGdiFaceNameLimit(alias.candidate_name)) {
+			++result.over_gdi_limit;
+			continue;
+		}
+		bool candidate_mismatch = false;
+		for (std::size_t index = 0; index < alias.rbiz.size(); ++index) {
+			bool const italic = index >= 2;
+			bool const bold = (index & 1u) != 0;
+			auto const live = resolver.Probe(
+				alias.candidate_name, bold ? FW_BOLD : FW_NORMAL, italic,
+				DEFAULT_CHARSET, 0);
+			++result.probe_count;
+			if (ProbeMatchesLive(alias.rbiz[index], live))
+				continue;
+			candidate_mismatch = true;
+			++result.mismatching_probes;
+			std::ostringstream detail;
+			detail << alias.candidate_name << " rbiz=" << index
+			       << " recorded(success=" << alias.rbiz[index].success
+			       << ",match=" << alias.rbiz[index].matches_requested_family
+			       << ",token=" << alias.rbiz[index].outcome.entity_token
+			       << ",status=" << StatusName(alias.rbiz[index].outcome.status)
+			       << ") live(success=" << live.success
+			       << ",match=" << live.matches_requested_family
+			       << ",token=" << live.outcome.entity_token
+			       << ",status=" << StatusName(live.outcome.status) << ')';
+			result.details.push_back(detail.str());
+		}
+		if (candidate_mismatch)
+			++result.mismatching_candidates;
+	}
+	return result;
+}
+
 // Relative token partition: non-zero absolute tokens mapped to dense 1..N
 // within one record; zeros stay zero. Absolute values are never compared.
 std::array<std::uint32_t, 4> OutcomeTokenPartitions(
@@ -562,6 +632,18 @@ int main(int argc, char** argv) {
 	          << " physical_probes=" << modern_probes
 	          << " in " << modern_ms << " ms\n";
 
+	std::cout << "font-family-ab-compare: validating recorded aliases with live GDI...\n";
+	auto const alias_validation = ValidateAliasObservations(observations);
+	std::cout << "font-family-ab-compare: alias_validation candidates="
+	          << alias_validation.candidate_count
+	          << " over_gdi_limit=" << alias_validation.over_gdi_limit
+	          << " eligible=" << alias_validation.eligible_candidates()
+	          << " probes=" << alias_validation.probe_count
+	          << " mismatching_candidates="
+	          << alias_validation.mismatching_candidates
+	          << " mismatching_probes=" << alias_validation.mismatching_probes
+	          << '\n';
+
 	// Fingerprints for reproducibility notes (enumeration only; no extra probes).
 	GdiFontResolver manifest_resolver;
 	auto const manifest = CollectWindowsFontFamilyManifest(manifest_resolver);
@@ -586,7 +668,7 @@ int main(int argc, char** argv) {
 	if (encode_status == FontFamilyObsStoreStatus::Ok) {
 		// agi::fs::path accepts UTF-8 relative segments under the report dir.
 		auto const cache_path = agi::fs::PathFromString(
-			(out_dir / "profile-obs-cache.v1").string());
+			(out_dir / "profile-obs-cache.afco").string());
 		auto const save_started = std::chrono::steady_clock::now();
 		save_status = SaveFontFamilyObsStoreAtomic(cache_path, store_payload);
 		save_us = std::chrono::duration_cast<std::chrono::microseconds>(
@@ -607,14 +689,15 @@ int main(int argc, char** argv) {
 	fs::path const summary_path = out_dir / "summary.txt";
 	fs::path const diff_path = out_dir / "diff.txt";
 	fs::path const meta_path = out_dir / "meta.txt";
+	fs::path const alias_path = out_dir / "alias-validation.txt";
 
 	{
 		std::ofstream meta(meta_path, std::ios::binary);
 		meta << "locale=" << locale << '\n'
 		     << "provider_fingerprint=" << manifest.provider_fingerprint << '\n'
 		     << "os_build_fingerprint=" << manifest.os_build_fingerprint << '\n'
-		     << "substitute_registry_fingerprint="
-		     << manifest.substitute_registry_fingerprint << '\n'
+		     << "font_registry_fingerprint="
+		     << manifest.font_registry_fingerprint << '\n'
 		     << "gdi_family_names=" << manifest.gdi_family_names.size() << '\n'
 		     << "legacy_families=" << compare.legacy_count << '\n'
 		     << "modern_families=" << compare.modern_count << '\n'
@@ -624,6 +707,14 @@ int main(int argc, char** argv) {
 		     << "observation_faces=" << observations.faces.size() << '\n'
 		     << "observation_seeds=" << observations.seeds.size() << '\n'
 		     << "observation_aliases=" << observations.aliases.size() << '\n'
+		     << "alias_over_gdi_limit=" << alias_validation.over_gdi_limit << '\n'
+		     << "alias_eligible_candidates="
+		     << alias_validation.eligible_candidates() << '\n'
+		     << "alias_validation_probes=" << alias_validation.probe_count << '\n'
+		     << "alias_mismatching_candidates="
+		     << alias_validation.mismatching_candidates << '\n'
+		     << "alias_mismatching_probes="
+		     << alias_validation.mismatching_probes << '\n'
 		     << "matched=" << compare.matched << '\n'
 		     << "differing=" << compare.differing << '\n'
 		     << "only_legacy=" << compare.only_legacy << '\n'
@@ -644,7 +735,8 @@ int main(int argc, char** argv) {
 	{
 		std::ofstream summary(summary_path, std::ios::binary);
 		bool const ok = compare.differing == 0 && compare.only_legacy == 0 &&
-			compare.only_modern == 0 && compare.legacy_count == compare.modern_count;
+			compare.only_modern == 0 && compare.legacy_count == compare.modern_count &&
+			alias_validation.mismatching_probes == 0;
 		summary << (ok ? "MATCH\n" : "DIFF\n")
 		        << "legacy_families=" << compare.legacy_count << '\n'
 		        << "modern_families=" << compare.modern_count << '\n'
@@ -652,6 +744,24 @@ int main(int argc, char** argv) {
 		        << "differing=" << compare.differing << '\n'
 		        << "only_legacy=" << compare.only_legacy << '\n'
 		        << "only_modern=" << compare.only_modern << '\n';
+	}
+
+	{
+		std::ofstream aliases(alias_path, std::ios::binary);
+		aliases << "candidates=" << alias_validation.candidate_count << '\n'
+		        << "over_gdi_limit=" << alias_validation.over_gdi_limit << '\n'
+		        << "eligible=" << alias_validation.eligible_candidates() << '\n'
+		        << "probes=" << alias_validation.probe_count << '\n'
+		        << "mismatching_candidates="
+		        << alias_validation.mismatching_candidates << '\n'
+		        << "mismatching_probes=" << alias_validation.mismatching_probes
+		        << '\n';
+		if (alias_validation.details.empty())
+			aliases << "(all eligible aliases match live four-way GDI selection; "
+			           "over-limit aliases are rejected by Derive)\n";
+		else
+			for (auto const& detail : alias_validation.details)
+				aliases << detail << '\n';
 	}
 
 	{
@@ -664,7 +774,8 @@ int main(int argc, char** argv) {
 	}
 
 	bool const ok = compare.differing == 0 && compare.only_legacy == 0 &&
-		compare.only_modern == 0 && compare.legacy_count == compare.modern_count;
+		compare.only_modern == 0 && compare.legacy_count == compare.modern_count &&
+		alias_validation.mismatching_probes == 0;
 	std::cout << "font-family-ab-compare: "
 	          << (ok ? "MATCH" : "DIFF")
 	          << " matched=" << compare.matched

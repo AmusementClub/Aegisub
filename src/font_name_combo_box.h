@@ -95,6 +95,7 @@ class FontNameComboBox final : public wxComboBox {
 	wxString typed_query;
 	bool contains_matching = false;
 	bool applying = false;
+	bool committing_list_selection = false;
 	wxTimer settle_timer;
 
 	static wxArrayString ToWxChoices(std::vector<FontFamilyChoice> const& choices) {
@@ -351,11 +352,28 @@ class FontNameComboBox final : public wxComboBox {
 			selected_family_id.reset();
 	}
 
+#ifdef __WXMSW__
+	bool MSWCommand(WXUINT param, WXWORD id) override {
+		if (applying || param != CBN_SELCHANGE)
+			return wxComboBox::MSWCommand(param, id);
+
+		// wxComboBox can emit wxEVT_TEXT before wxEVT_COMBOBOX while handling
+		// this one native notification. Mark the entire native dispatch so both
+		// handlers know that a bare label is a list commit, not a manual edit.
+		struct ResetCommitFlag {
+			bool& flag;
+			~ResetCommitFlag() { flag = false; }
+		};
+		committing_list_selection = true;
+		ResetCommitFlag reset{committing_list_selection};
+		return wxComboBox::MSWCommand(param, id);
+	}
+#endif
+
 	bool ProcessEvent(wxEvent& event) override {
 		if (!applying && event.GetId() == GetId()
-			&& event.GetEventType() == wxEVT_COMBOBOX) {
+			&& event.GetEventType() == wxEVT_COMBOBOX)
 			CommitListSelection(static_cast<wxCommandEvent&>(event).GetInt());
-		}
 		return wxComboBox::ProcessEvent(event);
 	}
 
@@ -401,5 +419,11 @@ public:
 	/// Committed family only (explicit list pick or exact typed label).
 	std::optional<FontFamilyId> SelectedFamilyId() const noexcept {
 		return selected_family_id;
+	}
+
+	/// True while a native list pick is replacing the edit text and dispatching
+	/// its combo event. Text handlers can preserve state across the bare label.
+	bool IsCommittingListSelection() const noexcept {
+		return committing_list_selection;
 	}
 };

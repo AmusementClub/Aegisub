@@ -330,7 +330,7 @@ FontFamilyObsStoreStatus encode_payload(
 
 		body.write_le(payload.manifest.provider_fingerprint);
 		body.write_le(payload.manifest.os_build_fingerprint);
-		body.write_le(payload.manifest.substitute_registry_fingerprint);
+		body.write_le(payload.manifest.font_registry_fingerprint);
 		body.write_le(static_cast<std::uint32_t>(payload.manifest.gdi_family_names.size()));
 		for (auto const& name : payload.manifest.gdi_family_names)
 			body.write_le(pool.intern(name));
@@ -502,7 +502,7 @@ FontFamilyObsStoreStatus DecodeFontFamilyObsStore(
 		decoded.manifest.manifest_contract_version = header.manifest_contract_version;
 		decoded.manifest.provider_fingerprint = reader.read_le<std::uint64_t>();
 		decoded.manifest.os_build_fingerprint = reader.read_le<std::uint64_t>();
-		decoded.manifest.substitute_registry_fingerprint = reader.read_le<std::uint64_t>();
+		decoded.manifest.font_registry_fingerprint = reader.read_le<std::uint64_t>();
 		auto const family_count = reader.read_le<std::uint32_t>();
 		if (family_count > kFontFamilyObsMaxSeeds) {
 			reader.fail();

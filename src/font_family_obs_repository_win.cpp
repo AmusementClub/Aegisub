@@ -131,66 +131,153 @@ std::uint64_t os_build_fingerprint() {
 	return hash;
 }
 
-std::uint64_t substitute_registry_fingerprint() {
-	// RegEnumValueW order is not stable across boots. Collect then sort so M0
-	// does not thrash on pure enumeration order changes.
-	HKEY key = nullptr;
-	if (RegOpenKeyExW(
-			HKEY_LOCAL_MACHINE,
-			L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\FontSubstitutes", 0,
-			KEY_READ | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS)
-		return 0;
+struct RegistryValueSnapshot {
+	std::wstring name;
+	DWORD type = REG_NONE;
+	std::vector<unsigned char> data;
+};
 
-	struct Entry {
-		std::wstring name;
-		std::wstring value;
-	};
-	std::vector<Entry> entries;
-	DWORD index = 0;
-	wchar_t name[256];
-	wchar_t value[512];
-	for (;;) {
-		DWORD name_chars = static_cast<DWORD>(std::size(name));
-		DWORD value_bytes = static_cast<DWORD>(sizeof(value));
-		DWORD type = 0;
-		auto const status = RegEnumValueW(
-			key, index++, name, &name_chars, nullptr, &type,
-			reinterpret_cast<LPBYTE>(value), &value_bytes);
+std::uint64_t hash_registry_key(
+	HKEY root,
+	wchar_t const* path,
+	REGSAM access,
+	std::uint32_t key_tag,
+	std::uint64_t hash) {
+	hash = fnv1a64_u32(key_tag, hash);
+	HKEY key = nullptr;
+	auto const open_status = RegOpenKeyExW(root, path, 0, access, &key);
+	hash = fnv1a64_u32(static_cast<std::uint32_t>(open_status), hash);
+	if (open_status != ERROR_SUCCESS)
+		return hash;
+
+	DWORD value_count = 0;
+	DWORD max_name_chars = 0;
+	DWORD max_data_bytes = 0;
+	FILETIME initial_last_write{};
+	auto const info_status = RegQueryInfoKeyW(
+		key, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+		&value_count, &max_name_chars, &max_data_bytes, nullptr,
+		&initial_last_write);
+	hash = fnv1a64_u32(static_cast<std::uint32_t>(info_status), hash);
+	if (info_status != ERROR_SUCCESS) {
+		RegCloseKey(key);
+		return hash;
+	}
+	constexpr DWORD kMaxRegistryValues = 100000;
+	constexpr DWORD kMaxRegistryNameChars = 32767;
+	constexpr DWORD kMaxRegistryDataBytes = 4u * 1024u * 1024u;
+	hash = fnv1a64_u32(value_count, hash);
+	hash = fnv1a64_u32(max_name_chars, hash);
+	hash = fnv1a64_u32(max_data_bytes, hash);
+	hash = fnv1a64_u32(initial_last_write.dwLowDateTime, hash);
+	hash = fnv1a64_u32(initial_last_write.dwHighDateTime, hash);
+	if (value_count > kMaxRegistryValues ||
+	    max_name_chars > kMaxRegistryNameChars ||
+	    max_data_bytes > kMaxRegistryDataBytes) {
+		RegCloseKey(key);
+		return hash;
+	}
+
+	std::vector<RegistryValueSnapshot> entries;
+	entries.reserve(value_count);
+	std::vector<wchar_t> name(static_cast<std::size_t>(max_name_chars) + 1);
+	std::vector<unsigned char> data(
+		std::max<std::size_t>(max_data_bytes, 1));
+	for (DWORD index = 0;; ++index) {
+		LONG status = ERROR_MORE_DATA;
+		DWORD name_chars = 0;
+		DWORD data_bytes = 0;
+		DWORD type = REG_NONE;
+		for (int retry = 0; retry < 8 && status == ERROR_MORE_DATA; ++retry) {
+			name_chars = static_cast<DWORD>(name.size());
+			data_bytes = static_cast<DWORD>(data.size());
+			status = RegEnumValueW(
+				key, index, name.data(), &name_chars, nullptr, &type,
+				data.data(), &data_bytes);
+			if (status == ERROR_MORE_DATA) {
+				auto const next_name_size = std::min<std::size_t>(
+					std::max(name.size() * 2,
+						static_cast<std::size_t>(name_chars) + 1),
+					static_cast<std::size_t>(kMaxRegistryNameChars) + 1);
+				auto const next_data_size = std::min<std::size_t>(
+					std::max(data.size() * 2,
+						static_cast<std::size_t>(data_bytes)),
+					kMaxRegistryDataBytes);
+				if (next_name_size == name.size() &&
+				    next_data_size == data.size())
+					break;
+				name.resize(next_name_size);
+				data.resize(next_data_size);
+			}
+		}
 		if (status == ERROR_NO_MORE_ITEMS)
 			break;
-		if (status != ERROR_SUCCESS)
+		if (status != ERROR_SUCCESS) {
+			hash = fnv1a64_u32(static_cast<std::uint32_t>(status), hash);
 			continue;
-		if (type != REG_SZ && type != REG_EXPAND_SZ)
-			continue;
-		Entry entry;
-		entry.name.assign(name, name_chars);
-		auto value_chars = value_bytes / sizeof(wchar_t);
-		if (value_chars > 0 && value[value_chars - 1] == L'\0')
-			--value_chars;
-		entry.value.assign(value, value_chars);
+		}
+		RegistryValueSnapshot entry;
+		entry.name.assign(name.data(), name_chars);
+		entry.type = type;
+		entry.data.assign(data.begin(), data.begin() + data_bytes);
 		entries.push_back(std::move(entry));
+	}
+	FILETIME final_last_write{};
+	auto const final_info_status = RegQueryInfoKeyW(
+		key, nullptr, nullptr, nullptr, nullptr, nullptr, nullptr,
+		nullptr, nullptr, nullptr, nullptr, &final_last_write);
+	hash = fnv1a64_u32(static_cast<std::uint32_t>(final_info_status), hash);
+	if (final_info_status == ERROR_SUCCESS) {
+		hash = fnv1a64_u32(final_last_write.dwLowDateTime, hash);
+		hash = fnv1a64_u32(final_last_write.dwHighDateTime, hash);
 	}
 	RegCloseKey(key);
 
-	std::sort(entries.begin(), entries.end(), [](Entry const& left, Entry const& right) {
-		if (left.name != right.name)
-			return left.name < right.name;
-		return left.value < right.value;
+	// Registry enumeration order is not stable. Sort names case-insensitively,
+	// matching registry value-name semantics, then hash length-delimited bytes.
+	std::sort(entries.begin(), entries.end(), [](auto const& left, auto const& right) {
+		auto const order = CompareStringOrdinal(
+			left.name.data(), static_cast<int>(left.name.size()),
+			right.name.data(), static_cast<int>(right.name.size()), TRUE);
+		if (order != CSTR_EQUAL)
+			return order == CSTR_LESS_THAN;
+		if (left.type != right.type)
+			return left.type < right.type;
+		return left.data < right.data;
 	});
-
-	std::uint64_t hash = 14695981039346656037ull;
 	for (auto const& entry : entries) {
-		hash = fnv1a64(
-			std::string_view(
-				reinterpret_cast<char const*>(entry.name.data()),
-				entry.name.size() * sizeof(wchar_t)),
-			hash);
-		hash = fnv1a64(
-			std::string_view(
-				reinterpret_cast<char const*>(entry.value.data()),
-				entry.value.size() * sizeof(wchar_t)),
-			hash);
+		hash = fnv1a64_u32(static_cast<std::uint32_t>(entry.name.size()), hash);
+		hash = fnv1a64(std::string_view(
+			reinterpret_cast<char const*>(entry.name.data()),
+			entry.name.size() * sizeof(wchar_t)), hash);
+		hash = fnv1a64_u32(entry.type, hash);
+		hash = fnv1a64_u32(static_cast<std::uint32_t>(entry.data.size()), hash);
+		if (!entry.data.empty())
+			hash = fnv1a64(std::string_view(
+				reinterpret_cast<char const*>(entry.data.data()), entry.data.size()), hash);
 	}
+	return hash;
+}
+
+std::uint64_t font_registry_fingerprint() {
+	// Hash selection inputs from both persistent installation scopes. Only the
+	// digest is persisted; registry strings (including any file paths) are not.
+	constexpr auto machine_access = KEY_READ | KEY_WOW64_64KEY;
+	constexpr auto user_access = KEY_READ;
+	std::uint64_t hash = 14695981039346656037ull;
+	auto add_scope = [&](HKEY root, REGSAM access, std::uint32_t tag_base) {
+		hash = hash_registry_key(
+			root, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts",
+			access, tag_base + 0, hash);
+		hash = hash_registry_key(
+			root, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\FontSubstitutes",
+			access, tag_base + 1, hash);
+		hash = hash_registry_key(
+			root, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\FontLink\\SystemLink",
+			access, tag_base + 2, hash);
+	};
+	add_scope(HKEY_LOCAL_MACHINE, machine_access, 0x1000u);
+	add_scope(HKEY_CURRENT_USER, user_access, 0x2000u);
 	return hash;
 }
 
@@ -203,13 +290,13 @@ std::uint64_t provider_fingerprint(GdiFontResolver& resolver) {
 	return hash;
 }
 
-bool manifest_m0_equal(
+bool manifest_m0_equal_impl(
 	FontFamilyInputManifest const& left,
 	FontFamilyInputManifest const& right) {
 	if (left.manifest_contract_version != right.manifest_contract_version ||
 	    left.provider_fingerprint != right.provider_fingerprint ||
 	    left.os_build_fingerprint != right.os_build_fingerprint ||
-	    left.substitute_registry_fingerprint != right.substitute_registry_fingerprint ||
+	    left.font_registry_fingerprint != right.font_registry_fingerprint ||
 	    left.gdi_family_names.size() != right.gdi_family_names.size())
 		return false;
 	for (std::size_t i = 0; i < left.gdi_family_names.size(); ++i)
@@ -230,7 +317,7 @@ void fill_non_name_fingerprints(
 	manifest.manifest_contract_version = kFontFamilyObsManifestContractVersion;
 	manifest.provider_fingerprint = provider_fingerprint(resolver);
 	manifest.os_build_fingerprint = os_build_fingerprint();
-	manifest.substitute_registry_fingerprint = substitute_registry_fingerprint();
+	manifest.font_registry_fingerprint = font_registry_fingerprint();
 }
 
 void assess_probe_coverage(
@@ -308,6 +395,23 @@ ObservationCoverage AssessObservationCoverage(
 	return coverage;
 }
 
+bool WindowsFontFamilyManifestsMatchM0(
+	FontFamilyInputManifest const& left,
+	FontFamilyInputManifest const& right) {
+	return manifest_m0_equal_impl(left, right);
+}
+
+bool WindowsFontFamilyObservationM0Stable(
+	FontFamilyInputManifest const& before,
+	FontFamilyInputManifest const& after,
+	std::vector<std::string> const& observed_family_names) {
+	if (!manifest_m0_equal_impl(before, after))
+		return false;
+	auto observed = before;
+	observed.gdi_family_names = observed_family_names;
+	return manifest_m0_equal_impl(before, observed);
+}
+
 void SanitizeLoadedTransientTokens(FontFamilyCatalogObservations& observations) {
 	// After AssessObservationCoverage (entity_token classifies no_entity vs
 	// missing_face_ref) and after M1. Durable probes keep face_ref; Derive uses
@@ -350,7 +454,8 @@ agi::fs::path DefaultWindowsFontFamilyObsCachePath() {
 	if (!config::path)
 		return {};
 	try {
-		return config::path->Decode("?local/font_family_catalog/windows_gdi_obs.v1");
+		return config::path->Decode(
+			"?local/font_family_catalog/windows-font-observations.afco");
 	}
 	catch (...) {
 		return {};
@@ -443,9 +548,8 @@ FontFamilyObsRepositoryResult LoadOrRebuildWindowsFontFamilyCatalog(
 	std::function<bool()> const& shutdown_requested,
 	agi::fs::path const& cache_path) {
 	FontFamilyObsRepositoryResult result;
-	// M0 discovery snapshot before any rebuild probes. Family names may diverge
-	// from the Observe seed set if fonts change mid-build; rebuild rewrites M0
-	// from the observed seeds and retries once on mismatch.
+	// M0 discovery snapshot before any rebuild probes. The warm hit uses this
+	// directly; rebuild takes a fresh before/after pair under the lock.
 	auto current_manifest = CollectWindowsFontFamilyManifest(resolver);
 
 	// previous_for_incremental: complete disk body usable as Observe base when
@@ -458,6 +562,8 @@ FontFamilyObsRepositoryResult LoadOrRebuildWindowsFontFamilyCatalog(
 		result.weak_m1 = false;
 		result.wrote_cache = false;
 		FontFamilyCatalogObservations observations;
+		bool stable_m0 = false;
+		std::uint64_t total_physical_probe_count = 0;
 		constexpr int kMaxObserveAttempts = 2;
 		for (int attempt = 0; attempt < kMaxObserveAttempts; ++attempt) {
 			// Prefer shared seeds on attempt 0; re-enumerate on retry so M0
@@ -470,19 +576,30 @@ FontFamilyObsRepositoryResult LoadOrRebuildWindowsFontFamilyCatalog(
 				owned_seeds = resolver.EnumerateFamilies();
 				seeds = &owned_seeds;
 			}
+			auto const before_manifest =
+				CollectWindowsFontFamilyManifest(resolver, seeds);
 			// Incremental only on first attempt with a trusted previous body.
-			// Retry after mid-build M0 drift uses a full Observe.
+			// Recheck the manifest used to admit that body: external font changes
+			// do not take our rebuild lock. Retry or pre-Observe drift uses a full
+			// Observe so old facts are never published under a new M0.
 			ObserveWindowsFontFamiliesOptions observe_options;
 			observe_options.seeds = seeds;
 			if (attempt == 0 && previous_for_incremental &&
-			    previous_for_incremental->complete)
+			    previous_for_incremental->complete &&
+			    WindowsFontFamilyManifestsMatchM0(
+				    current_manifest, before_manifest))
 				observe_options.previous = previous_for_incremental;
+			auto const resolver_probes_before =
+				resolver.stats().physical_probe_count;
 			auto observe = ObserveWindowsFontFamilies(
 				resolver, shutdown_requested, observe_options);
 			observations = std::move(observe.observations);
-			result.physical_probe_count = observe.physical_probe_count
+			auto const resolver_probe_delta =
+				resolver.stats().physical_probe_count - resolver_probes_before;
+			total_physical_probe_count += observe.physical_probe_count
 				? observe.physical_probe_count
-				: resolver.stats().physical_probe_count;
+				: resolver_probe_delta;
+			result.physical_probe_count = total_physical_probe_count;
 			if (observe.used_incremental) {
 				LOG_I("font/family_catalog")
 					<< "Incremental Observe: reused_seeds="
@@ -497,25 +614,28 @@ FontFamilyObsRepositoryResult LoadOrRebuildWindowsFontFamilyCatalog(
 				result.coverage = {};
 				return result;
 			}
-			auto after_names = family_names_from_seeds(observations);
-			if (after_names == current_manifest.gdi_family_names ||
-				attempt + 1 == kMaxObserveAttempts) {
-				// Publish M0 from the seed set that produced these observations so
-				// disk facts stay self-consistent under the rebuild lock.
-				current_manifest.gdi_family_names = std::move(after_names);
-				fill_non_name_fingerprints(current_manifest, resolver);
+			auto const observed_names = family_names_from_seeds(observations);
+			auto after_manifest = CollectWindowsFontFamilyManifest(resolver);
+			stable_m0 = WindowsFontFamilyObservationM0Stable(
+				before_manifest, after_manifest, observed_names);
+			current_manifest = std::move(after_manifest);
+			if (stable_m0)
 				break;
+			if (attempt + 1 < kMaxObserveAttempts) {
+				LOG_I("font/family_catalog")
+					<< "Observation M0 changed during rebuild; retrying once";
 			}
-			LOG_I("font/family_catalog")
-				<< "Observation M0 family set changed during rebuild; retrying once ("
-				<< current_manifest.gdi_family_names.size() << " -> "
-				<< after_names.size() << " names)";
-			current_manifest.gdi_family_names = std::move(after_names);
-			fill_non_name_fingerprints(current_manifest, resolver);
 		}
 
 		result.face_count = observations.faces.size();
 		result.coverage = AssessObservationCoverage(observations);
+		if (!stable_m0) {
+			LOG_W("font/family_catalog")
+				<< "Observation M0 remained unstable after retry; not writing cache";
+			result.catalog = DeriveWindowsFontFamilyCatalog(observations, locale);
+			result.hit = FontFamilyObsHitKind::Rebuilt;
+			return result;
+		}
 		// complete && !strong: cold Derive still returns a catalog, but must not
 		// overwrite a formal strong cache with weak coverage facts.
 		if (!cache_path.empty() && result.coverage.strong) {
@@ -580,7 +700,7 @@ FontFamilyObsRepositoryResult LoadOrRebuildWindowsFontFamilyCatalog(
 			result.hit = FontFamilyObsHitKind::MissIncomplete;
 			return false;
 		}
-		if (!manifest_m0_equal(loaded.manifest, current_manifest)) {
+		if (!WindowsFontFamilyManifestsMatchM0(loaded.manifest, current_manifest)) {
 			result.hit = FontFamilyObsHitKind::MissM0;
 			return false;
 		}
@@ -614,7 +734,7 @@ FontFamilyObsRepositoryResult LoadOrRebuildWindowsFontFamilyCatalog(
 	};
 
 	// Load a complete previous body for incremental Observe when only family
-	// names / face stamps drifted. Provider/OS/substitutes mismatch forces full.
+	// names / face stamps drifted. Provider/OS/registry mismatch forces full.
 	auto load_incremental_base =
 		[&](FontFamilyCatalogObservations& out) -> bool {
 		if (cache_path.empty())
@@ -635,8 +755,8 @@ FontFamilyObsRepositoryResult LoadOrRebuildWindowsFontFamilyCatalog(
 		        current_manifest.provider_fingerprint ||
 		    loaded.manifest.os_build_fingerprint !=
 		        current_manifest.os_build_fingerprint ||
-		    loaded.manifest.substitute_registry_fingerprint !=
-		        current_manifest.substitute_registry_fingerprint)
+		    loaded.manifest.font_registry_fingerprint !=
+		        current_manifest.font_registry_fingerprint)
 			return false;
 		// Only strong snapshots are safe to reuse: weak bodies can look
 		// "complete" after token sanitize and would skip probes incorrectly.

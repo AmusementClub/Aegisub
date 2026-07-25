@@ -43,7 +43,7 @@ struct FontFamilySelectionModel {
 	}
 
 	/// True when GDI advertised a vertical face for this family / bare name.
-	/// Uninstalled or unknown faces return false (do not invent capability).
+	/// Unknown faces absent from both the catalog and live GDI set return false.
 	bool SupportsVerticalWriting(
 		FontFamilyId family_id,
 		std::string_view face_name) const;
@@ -75,3 +75,10 @@ void FillVerticalCapability(
 void AppendVerticalFacenameChoices(
 	FontFamilySelectionModel& model,
 	std::vector<std::string> const& vertical_faces);
+
+/// List labels in compact mode are deliberately bare, so a list commit keeps
+/// the current checkbox intent. Manual edits instead take intent from '@'.
+bool UpdateVerticalWritingIntent(
+	bool current_intent,
+	std::string_view face_name,
+	bool committing_list_selection) noexcept;

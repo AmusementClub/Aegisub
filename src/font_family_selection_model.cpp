@@ -129,3 +129,12 @@ void AppendVerticalFacenameChoices(
 				: left.family_id < right.family_id;
 		});
 }
+
+bool UpdateVerticalWritingIntent(
+	bool current_intent,
+	std::string_view face_name,
+	bool committing_list_selection) noexcept {
+	if (committing_list_selection)
+		return current_intent;
+	return !FontFamilyCatalog::SplitVerticalPrefix(face_name).first.empty();
+}

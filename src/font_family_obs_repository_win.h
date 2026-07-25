@@ -57,6 +57,19 @@ char const* FontFamilyObsHitKindName(FontFamilyObsHitKind kind) noexcept;
 ObservationCoverage AssessObservationCoverage(
 	FontFamilyCatalogObservations const& observations);
 
+/// Compare all M0 discovery inputs. Family names use Windows ordinal
+/// case-insensitive equality; every fingerprint must match exactly.
+bool WindowsFontFamilyManifestsMatchM0(
+	FontFamilyInputManifest const& left,
+	FontFamilyInputManifest const& right);
+
+/// True only when the M0 captured before and after Observe matches and the
+/// observations were built from that same family-name set.
+bool WindowsFontFamilyObservationM0Stable(
+	FontFamilyInputManifest const& before,
+	FontFamilyInputManifest const& after,
+	std::vector<std::string> const& observed_family_names);
+
 /// Clear serialized process tokens on a trusted loaded snapshot before Derive.
 /// Called only after coverage + M1 on the hit path. Exposed for unit tests so
 /// the isolation contract (no LiveVariantKey from disk tokens) stays locked.

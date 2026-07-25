@@ -236,6 +236,38 @@ TEST(font_family_selection_model, preserves_ordered_fallback_names_without_catal
 	EXPECT_EQ(nullptr, model.ResolveChoice(0));
 }
 
+TEST(font_family_selection_model, system_list_fallback_preserves_gdi_vertical_rows) {
+	auto model = BuildFontFamilySelectionModel(
+		nullptr, true, {"Family", "@Family"});
+	model.vertical_ui_mode = VerticalFontUiMode::SystemList;
+
+	EXPECT_EQ((std::vector<FontFamilyChoice>{
+		{"Family", 0},
+		{"@Family", 0},
+	}), model.choices);
+}
+
+TEST(font_family_selection_model, compact_fallback_uses_live_gdi_vertical_capability) {
+	auto model = BuildFontFamilySelectionModel(nullptr, true, {"Family"});
+	model.vertical_ui_mode = VerticalFontUiMode::CompactToggle;
+	FillVerticalCapability(model, {"@Family"});
+
+	ASSERT_EQ(1u, model.choices.size());
+	EXPECT_EQ("Family", model.choices.front().label);
+	EXPECT_EQ(0u, model.choices.front().family_id);
+	EXPECT_TRUE(model.SupportsVerticalWriting(0, "Family"));
+}
+
+TEST(font_family_selection_model, compact_list_commit_preserves_vertical_intent) {
+	EXPECT_TRUE(UpdateVerticalWritingIntent(true, "Family", true));
+	EXPECT_FALSE(UpdateVerticalWritingIntent(false, "@Family", true));
+}
+
+TEST(font_family_selection_model, manual_edit_updates_vertical_intent_from_prefix) {
+	EXPECT_FALSE(UpdateVerticalWritingIntent(true, "Family", false));
+	EXPECT_TRUE(UpdateVerticalWritingIntent(false, "@Family", false));
+}
+
 TEST(font_family_selection_model, supports_vertical_writing_by_family_id) {
 	FontFamilySelectionModel model;
 	model.vertical_capable_family_ids.insert(3);

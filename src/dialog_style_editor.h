@@ -121,6 +121,7 @@ class DialogStyleEditor final : public wxDialog {
 	void UpdateWorkStyle();
 	void UpdateFontVariantControls(bool family_changed);
 	FontFamilyRecord const* SelectedFontRecord() const;
+	bool SupportsVerticalWriting(FontFamilyId family_id, std::string_view face_name) const;
 	void CommitFontFamilyChange();
 	void SyncVerticalControl();
 	void OnFontFamilyChanged(wxCommandEvent &event);

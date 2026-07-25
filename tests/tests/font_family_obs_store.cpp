@@ -29,7 +29,7 @@ FontFamilyObsStorePayload sample_payload() {
 	payload.app_build_id = 42;
 	payload.manifest.provider_fingerprint = 0x1111;
 	payload.manifest.os_build_fingerprint = 0x2222;
-	payload.manifest.substitute_registry_fingerprint = 0x3333;
+	payload.manifest.font_registry_fingerprint = 0x3333;
 	payload.manifest.gdi_family_names = {"Arial", "Segoe UI"};
 
 	FontFamilyFaceIdentity face;
@@ -158,8 +158,8 @@ TEST(font_family_obs_store, round_trip_preserves_observations) {
 	EXPECT_EQ(original.manifest.provider_fingerprint, decoded.manifest.provider_fingerprint);
 	EXPECT_EQ(original.manifest.os_build_fingerprint, decoded.manifest.os_build_fingerprint);
 	EXPECT_EQ(
-		original.manifest.substitute_registry_fingerprint,
-		decoded.manifest.substitute_registry_fingerprint);
+		original.manifest.font_registry_fingerprint,
+		decoded.manifest.font_registry_fingerprint);
 	ASSERT_EQ(original.manifest.gdi_family_names, decoded.manifest.gdi_family_names);
 	ExpectSameObservations(original.observations, decoded.observations);
 }
@@ -208,7 +208,7 @@ TEST(font_family_obs_store, truncated_payload_is_a_miss) {
 TEST(font_family_obs_store, atomic_save_and_load_round_trip) {
 	auto dir = agi::fs::PathFromString("build-dir/font-family-obs-store-test");
 	agi::fs::CreateDirectory(dir);
-	auto path = dir / "windows_gdi_obs.v1";
+	auto path = dir / "windows-font-observations.afco";
 	auto const original = sample_payload();
 	ASSERT_EQ(
 		FontFamilyObsStoreStatus::Ok, SaveFontFamilyObsStoreAtomic(path, original));

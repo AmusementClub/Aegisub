@@ -24,7 +24,9 @@ inline constexpr std::uint32_t kFontFamilyObsObservationContractVersion = 2;
 /// tokens. storage_schema_version is unchanged; token fields remain diagnostic.
 inline constexpr std::uint32_t kFontFamilyObsDerivationContractVersion = 2;
 /// Manifest field set and comparison rules.
-inline constexpr std::uint32_t kFontFamilyObsManifestContractVersion = 1;
+/// v2: selection-related machine/user font registry values are fingerprinted,
+/// so adding a style to an existing family invalidates the observation cache.
+inline constexpr std::uint32_t kFontFamilyObsManifestContractVersion = 2;
 /// Little-endian magic "AFCO".
 inline constexpr std::uint32_t kFontFamilyObsMagic = 0x4F434641u;
 
@@ -102,7 +104,10 @@ struct FontFamilyInputManifest {
 	std::uint32_t manifest_contract_version = kFontFamilyObsManifestContractVersion;
 	std::uint64_t provider_fingerprint = 0;
 	std::uint64_t os_build_fingerprint = 0;
-	std::uint64_t substitute_registry_fingerprint = 0;
+	/// Path-free hash of selection-related HKLM/HKCU Fonts, FontSubstitutes,
+	/// and FontLink values. This detects face/style changes within an existing
+	/// family even when the enumerated family-name set is unchanged.
+	std::uint64_t font_registry_fingerprint = 0;
 	/// Sorted unique GDI-enumerated family names captured with the snapshot.
 	std::vector<std::string> gdi_family_names;
 };

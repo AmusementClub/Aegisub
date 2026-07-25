@@ -8,6 +8,15 @@ include(CMakePackageConfigHelpers)
 
 project(Aegisub)
 
+# Windows SDK target version (see sdkddkver.h).
+# 0x0A00 = Windows 10. With _WIN32_WINNT >= Win10, sdkddkver.h defaults
+# NTDDI_VERSION to the WDK latest, which exposes dwrite_3.h types we use
+# (IDWriteFactory5 / IDWriteFontSetBuilder1 need NTDDI_WIN10_RS2+).
+# Runtime still QueryInterfaces and falls back when the host lacks those APIs.
+if(WIN32)
+    add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00)
+endif()
+
 option(AEGISUB_LUAJIT_SHARED "Build bundled LuaJIT as a shared library on Windows" OFF)
 option(WITH_PLUGIN_BRIDGE "Build the optional Plugin Bridge and Automation support" OFF)
 if(AEGISUB_LUAJIT_SHARED AND NOT WIN32)

@@ -11,42 +11,42 @@
 
 namespace Automation4 {
 
-struct DependencyControlTransactionStart {
+struct PackageTransactionStart {
 	std::string transaction_id;
 	agi::fs::path staging_root;
 	agi::fs::path automation_root;
 };
 
-struct DependencyControlTransactionFile {
+struct PackageTransactionFile {
 	std::string staged_name;
 	std::string target;
 	bool remove = false;
 };
 
-struct DependencyControlTransactionCommitResult {
+struct PackageTransactionCommitResult {
 	size_t file_count = 0;
 	bool rescan_requested = false;
 };
 
-class DependencyControlTransactionStore final {
+class PackageTransactionStore final {
 public:
 	using RescanCallback = std::function<void()>;
 	using CommitFaultCallback = std::function<void(size_t)>;
 
-	DependencyControlTransactionStore(
+	PackageTransactionStore(
 		agi::fs::path automation_root,
 		RescanCallback rescan_callback = {},
 		CommitFaultCallback commit_fault_callback = {});
-	~DependencyControlTransactionStore();
+	~PackageTransactionStore();
 
-	DependencyControlTransactionStore(DependencyControlTransactionStore const&) = delete;
-	DependencyControlTransactionStore& operator=(DependencyControlTransactionStore const&) = delete;
+	PackageTransactionStore(PackageTransactionStore const&) = delete;
+	PackageTransactionStore& operator=(PackageTransactionStore const&) = delete;
 
-	DependencyControlTransactionStart Begin(uint64_t plugin_handle);
-	DependencyControlTransactionCommitResult Commit(
+	PackageTransactionStart Begin(uint64_t plugin_handle);
+	PackageTransactionCommitResult Commit(
 		uint64_t plugin_handle,
 		std::string const& transaction_id,
-		std::vector<DependencyControlTransactionFile> const& files);
+		std::vector<PackageTransactionFile> const& files);
 	void Abort(uint64_t plugin_handle, std::string const& transaction_id);
 	void AbortPlugin(uint64_t plugin_handle) noexcept;
 	void AbortAll() noexcept;

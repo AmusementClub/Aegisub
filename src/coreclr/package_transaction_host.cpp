@@ -1,6 +1,6 @@
-#include "dependency_control_host.h"
+#include "package_transaction_host.h"
 
-#include "dependency_control_transaction.h"
+#include "package_transaction.h"
 
 #include "auto4_base.h"
 #include "options.h"
@@ -31,15 +31,15 @@ namespace Automation4 {
 namespace {
 
 constexpr std::string_view kBeginService =
-	"aegisub.dependency-control.begin-transaction";
+	"aegisub.host.package-transaction.begin";
 constexpr std::string_view kCommitService =
-	"aegisub.dependency-control.commit-transaction";
+	"aegisub.host.package-transaction.commit";
 constexpr std::string_view kAbortService =
-	"aegisub.dependency-control.abort-transaction";
+	"aegisub.host.package-transaction.abort";
 constexpr std::string_view kStateRootService =
-	"aegisub.dependency-control.get-state-root";
+	"aegisub.host.package-transaction.get-state-root";
 constexpr std::string_view kReconcileService =
-	"aegisub.dependency-control.reconcile-transactions";
+	"aegisub.host.package-transaction.reconcile";
 
 std::optional<std::wstring> ReadWideEnvironment(wchar_t const* name) {
 #ifdef _WIN32
@@ -49,7 +49,7 @@ std::optional<std::wstring> ReadWideEnvironment(wchar_t const* name) {
 	std::wstring value(length, L'\0');
 	auto written = GetEnvironmentVariableW(name, value.data(), length);
 	if (!written || written >= length)
-		throw std::runtime_error("Could not read DependencyControl environment setting");
+		throw std::runtime_error("Could not read Package transaction environment setting");
 	value.resize(written);
 	return value;
 #else
@@ -76,7 +76,7 @@ agi::fs::path ResolveAutomationRoot() {
 #endif
 	if (!config::path)
 		throw std::runtime_error(
-			"DependencyControl Automation root is unavailable before path initialization");
+			"Package transaction Automation root is unavailable before path initialization");
 	return config::path->Decode("?user/automation");
 }
 
@@ -91,7 +91,7 @@ agi::fs::path ResolveStateRoot() {
 #endif
 	if (!config::path)
 		throw std::runtime_error(
-			"DependencyControl state root is unavailable before path initialization");
+			"Package transaction state root is unavailable before path initialization");
 	return config::path->Decode("?user/dependency-control");
 }
 
@@ -106,7 +106,7 @@ agi::fs::path ResolveLegacyConfigRoot() {
 #endif
 	if (!config::path)
 		throw std::runtime_error(
-			"DependencyControl legacy configuration root is unavailable before path initialization");
+			"Package transaction legacy configuration root is unavailable before path initialization");
 	return config::path->Decode("?user/config");
 }
 
@@ -131,7 +131,7 @@ size_t ReadCommitFailurePoint() {
 		value->data(), value->data() + value->size(), result);
 	if (error != std::errc{} || end != value->data() + value->size() || !result)
 		throw std::runtime_error(
-			"DependencyControl test commit failure point is invalid");
+			"Package transaction test commit failure point is invalid");
 	return result;
 }
 
@@ -150,7 +150,7 @@ json::Object ParseObject(std::string const& value, std::string const& descriptio
 	}
 	catch (std::exception const& error) {
 		throw std::runtime_error(
-			"DependencyControl " + description + " must be a JSON object: " + error.what());
+			"Package transaction " + description + " must be a JSON object: " + error.what());
 	}
 }
 
@@ -161,18 +161,18 @@ std::string RequireString(
 	auto it = object.find(key);
 	if (it == object.end())
 		throw std::runtime_error(
-			"DependencyControl host request requires field '" + key + "'");
+			"Package transaction host request requires field '" + key + "'");
 	std::string value;
 	try {
 		value = static_cast<json::String const&>(it->second);
 	}
 	catch (...) {
 		throw std::runtime_error(
-			"DependencyControl host request field '" + key + "' must be a string");
+			"Package transaction host request field '" + key + "' must be a string");
 	}
 	if (value.empty() || value.size() > maximum_length)
 		throw std::runtime_error(
-			"DependencyControl host request field '" + key + "' is invalid");
+			"Package transaction host request field '" + key + "' is invalid");
 	return value;
 }
 
@@ -189,11 +189,11 @@ std::string OptionalString(
 	}
 	catch (...) {
 		throw std::runtime_error(
-			"DependencyControl host request field '" + key + "' must be a string");
+			"Package transaction host request field '" + key + "' must be a string");
 	}
 	if (value.size() > maximum_length)
 		throw std::runtime_error(
-			"DependencyControl host request field '" + key + "' is too long");
+			"Package transaction host request field '" + key + "' is too long");
 	return value;
 }
 
@@ -206,7 +206,7 @@ bool OptionalBool(json::Object const& object, std::string const& key) {
 	}
 	catch (...) {
 		throw std::runtime_error(
-			"DependencyControl host request field '" + key + "' must be boolean");
+			"Package transaction host request field '" + key + "' must be boolean");
 	}
 }
 
@@ -216,19 +216,19 @@ json::Array const& RequireArray(
 	auto it = object.find(key);
 	if (it == object.end())
 		throw std::runtime_error(
-			"DependencyControl host request requires array '" + key + "'");
+			"Package transaction host request requires array '" + key + "'");
 	try {
 		return static_cast<json::Array const&>(it->second);
 	}
 	catch (...) {
 		throw std::runtime_error(
-			"DependencyControl host request field '" + key + "' must be an array");
+			"Package transaction host request field '" + key + "' must be an array");
 	}
 }
 
 struct HostState {
 	std::mutex mutex;
-	std::shared_ptr<DependencyControlTransactionStore> store;
+	std::shared_ptr<PackageTransactionStore> store;
 };
 
 HostState& State() {
@@ -236,12 +236,12 @@ HostState& State() {
 	return state;
 }
 
-std::shared_ptr<DependencyControlTransactionStore> Store() {
+std::shared_ptr<PackageTransactionStore> Store() {
 	auto& state = State();
 	std::lock_guard<std::mutex> lock(state.mutex);
 	if (!state.store) {
 		auto failure_point = ReadCommitFailurePoint();
-		DependencyControlTransactionStore::RescanCallback rescan;
+		PackageTransactionStore::RescanCallback rescan;
 		if (config::global_scripts) {
 			rescan = [] {
 				agi::dispatch::Main().Async([] {
@@ -250,15 +250,15 @@ std::shared_ptr<DependencyControlTransactionStore> Store() {
 				});
 			};
 		}
-		DependencyControlTransactionStore::CommitFaultCallback fault;
+		PackageTransactionStore::CommitFaultCallback fault;
 		if (failure_point) {
 			fault = [failure_point](size_t completed) {
 				if (completed == failure_point)
 					throw std::runtime_error(
-						"Injected DependencyControl commit failure");
+						"Injected Package transaction commit failure");
 			};
 		}
-		state.store = std::make_shared<DependencyControlTransactionStore>(
+		state.store = std::make_shared<PackageTransactionStore>(
 			ResolveAutomationRoot(), std::move(rescan), std::move(fault));
 	}
 	return state.store;
@@ -279,8 +279,8 @@ std::string Commit(uint64_t plugin_handle, std::string const& request_json) {
 	auto transaction_id = RequireString(request, "transactionId", 128);
 	auto const& items = RequireArray(request, "files");
 	if (items.size() > 2048)
-		throw std::runtime_error("DependencyControl commit request exceeds the file limit");
-	std::vector<DependencyControlTransactionFile> files;
+		throw std::runtime_error("Package transaction commit request exceeds the file limit");
+	std::vector<PackageTransactionFile> files;
 	files.reserve(items.size());
 	for (auto const& item : items) {
 		json::Object const* object = nullptr;
@@ -289,7 +289,7 @@ std::string Commit(uint64_t plugin_handle, std::string const& request_json) {
 		}
 		catch (...) {
 			throw std::runtime_error(
-				"DependencyControl commit file entries must be objects");
+				"Package transaction commit file entries must be objects");
 		}
 		files.push_back({
 			OptionalString(*object, "stagedName", 128),
@@ -336,7 +336,7 @@ std::string ReconcileTransactions() {
 
 } // namespace
 
-std::optional<std::string> InvokeDependencyControlHostService(
+std::optional<std::string> InvokePackageTransactionHostService(
 	uint64_t plugin_handle,
 	std::string const& service_id,
 	std::string const& request_json) {
@@ -353,8 +353,8 @@ std::optional<std::string> InvokeDependencyControlHostService(
 	return std::nullopt;
 }
 
-void AbortDependencyControlTransactions(uint64_t plugin_handle) noexcept {
-	std::shared_ptr<DependencyControlTransactionStore> store;
+void AbortPackageTransactions(uint64_t plugin_handle) noexcept {
+	std::shared_ptr<PackageTransactionStore> store;
 	{
 		auto& state = State();
 		std::lock_guard<std::mutex> lock(state.mutex);
@@ -364,8 +364,8 @@ void AbortDependencyControlTransactions(uint64_t plugin_handle) noexcept {
 		store->AbortPlugin(plugin_handle);
 }
 
-void ShutdownDependencyControlHost() noexcept {
-	std::shared_ptr<DependencyControlTransactionStore> store;
+void ShutdownPackageTransactionHost() noexcept {
+	std::shared_ptr<PackageTransactionStore> store;
 	{
 		auto& state = State();
 		std::lock_guard<std::mutex> lock(state.mutex);

@@ -6,12 +6,12 @@
 
 namespace Automation4 {
 
-std::optional<std::string> InvokeDependencyControlHostService(
+std::optional<std::string> InvokePackageTransactionHostService(
 	uint64_t plugin_handle,
 	std::string const& service_id,
 	std::string const& request_json);
 
-void AbortDependencyControlTransactions(uint64_t plugin_handle) noexcept;
-void ShutdownDependencyControlHost() noexcept;
+void AbortPackageTransactions(uint64_t plugin_handle) noexcept;
+void ShutdownPackageTransactionHost() noexcept;
 
 } // namespace Automation4

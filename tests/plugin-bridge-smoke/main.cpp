@@ -96,11 +96,11 @@ int32_t AEGISUB_PLUGIN_BRIDGE_CALL InvokeHostServiceUtf8(
 			++host_service_execution_count;
 			result = request;
 		}
-		else if (service == "aegisub.dependency-control.get-state-root" &&
+		else if (service == "aegisub.host.package-transaction.get-state-root" &&
 			!dependency_control_smoke_state_root.empty()) {
 			result = "{\"stateRoot\":\"" + dependency_control_smoke_state_root + "\"}";
 		}
-		else if (service == "aegisub.dependency-control.reconcile-transactions" &&
+		else if (service == "aegisub.host.package-transaction.reconcile" &&
 			!dependency_control_smoke_automation_root.empty()) {
 			result = "{\"automationRoot\":\"" +
 				dependency_control_smoke_automation_root +

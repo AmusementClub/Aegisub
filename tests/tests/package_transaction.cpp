@@ -1,6 +1,6 @@
 #include <main.h>
 
-#include "../../src/coreclr/dependency_control_transaction.h"
+#include "../../src/coreclr/package_transaction.h"
 
 #include <libaegisub/fs.h>
 
@@ -54,10 +54,10 @@ std::string ReadFile(agi::fs::path const& path) {
 
 } // namespace
 
-TEST(dependency_control_transaction, commits_replace_delete_and_rescan_once) {
+TEST(package_transaction, commits_replace_delete_and_rescan_once) {
 	TransactionTestRoot test_root;
 	int rescans = 0;
-	Automation4::DependencyControlTransactionStore store(
+	Automation4::PackageTransactionStore store(
 		test_root.Path(), [&] { ++rescans; });
 	auto existing = test_root.Path() / "include" / "sample" / "module.lua";
 	auto deleted = test_root.Path() / "include" / "sample" / "obsolete.lua";
@@ -79,10 +79,10 @@ TEST(dependency_control_transaction, commits_replace_delete_and_rescan_once) {
 	EXPECT_EQ(1, rescans);
 }
 
-TEST(dependency_control_transaction, commit_failure_restores_all_previous_files) {
+TEST(package_transaction, commit_failure_restores_all_previous_files) {
 	TransactionTestRoot test_root;
 	int rescans = 0;
-	Automation4::DependencyControlTransactionStore store(
+	Automation4::PackageTransactionStore store(
 		test_root.Path(),
 		[&] { ++rescans; },
 		[](size_t completed) {
@@ -109,9 +109,9 @@ TEST(dependency_control_transaction, commit_failure_restores_all_previous_files)
 	EXPECT_EQ(0, rescans);
 }
 
-TEST(dependency_control_transaction, rejects_unsafe_and_duplicate_targets) {
+TEST(package_transaction, rejects_unsafe_and_duplicate_targets) {
 	TransactionTestRoot test_root;
-	Automation4::DependencyControlTransactionStore store(test_root.Path());
+	Automation4::PackageTransactionStore store(test_root.Path());
 	auto transaction = store.Begin(11);
 	WriteFile(transaction.staging_root / "0001.payload", "one");
 	WriteFile(transaction.staging_root / "0002.payload", "two");
@@ -144,9 +144,9 @@ TEST(dependency_control_transaction, rejects_unsafe_and_duplicate_targets) {
 	EXPECT_FALSE(std::filesystem::exists(transaction.staging_root));
 }
 
-TEST(dependency_control_transaction, transaction_is_bound_to_plugin_handle) {
+TEST(package_transaction, transaction_is_bound_to_plugin_handle) {
 	TransactionTestRoot test_root;
-	Automation4::DependencyControlTransactionStore store(test_root.Path());
+	Automation4::PackageTransactionStore store(test_root.Path());
 	auto transaction = store.Begin(13);
 
 	EXPECT_THROW(store.Abort(14, transaction.transaction_id), std::runtime_error);
@@ -155,9 +155,9 @@ TEST(dependency_control_transaction, transaction_is_bound_to_plugin_handle) {
 	EXPECT_FALSE(std::filesystem::exists(transaction.staging_root));
 }
 
-TEST(dependency_control_transaction, supports_unicode_automation_root) {
+TEST(package_transaction, supports_unicode_automation_root) {
 	TransactionTestRoot test_root("dependency-control-\xF0\x9F\x98\x80");
-	Automation4::DependencyControlTransactionStore store(test_root.Path());
+	Automation4::PackageTransactionStore store(test_root.Path());
 	auto transaction = store.Begin(17);
 	WriteFile(transaction.staging_root / "payload.lua", "return true");
 
@@ -169,7 +169,7 @@ TEST(dependency_control_transaction, supports_unicode_automation_root) {
 		ReadFile(test_root.Path() / "include" / "unicode" / "module.lua"));
 }
 
-TEST(dependency_control_transaction, rejects_linked_target_directory) {
+TEST(package_transaction, rejects_linked_target_directory) {
 	TransactionTestRoot test_root;
 	auto outside = test_root.Path() / "outside";
 	auto include = test_root.Path() / "include";
@@ -179,7 +179,7 @@ TEST(dependency_control_transaction, rejects_linked_target_directory) {
 	if (error)
 		GTEST_SKIP() << "Directory symlinks are unavailable in this test environment";
 
-	Automation4::DependencyControlTransactionStore store(test_root.Path());
+	Automation4::PackageTransactionStore store(test_root.Path());
 	auto transaction = store.Begin(19);
 	WriteFile(transaction.staging_root / "payload.lua", "return true");
 	EXPECT_THROW(store.Commit(19, transaction.transaction_id, {
@@ -189,7 +189,7 @@ TEST(dependency_control_transaction, rejects_linked_target_directory) {
 	EXPECT_FALSE(std::filesystem::exists(outside / "escaped.lua"));
 }
 
-TEST(dependency_control_transaction, recovers_journaled_interrupted_commit) {
+TEST(package_transaction, recovers_journaled_interrupted_commit) {
 	TransactionTestRoot test_root;
 	auto staging = test_root.Path() / ".dependency-control" / "staging" / "tx-orphan";
 	auto backup = staging / ".native-backup";
@@ -205,14 +205,14 @@ TEST(dependency_control_transaction, recovers_journaled_interrupted_commit) {
 	WriteFile(staging / "payload-second", "new-second");
 	WriteFile(
 		staging / ".native-journal-v1",
-		"Aegisub.DependencyControl.Transaction/1\n"
+		"Aegisub.Package.Transaction/1\n"
 		"4\n"
 		"0\tpayload-first\tinclude/sample/first.lua\n"
 		"0\tpayload-second\tinclude/sample/second.lua\n"
 		"1\t\tinclude/sample/deleted.lua\n"
 		"0\tpayload-added\tinclude/sample/added.lua\n");
 
-	Automation4::DependencyControlTransactionStore store(test_root.Path());
+	Automation4::PackageTransactionStore store(test_root.Path());
 	EXPECT_EQ(1u, store.RecoveredTransactionCount());
 	EXPECT_EQ("old-first", ReadFile(first));
 	EXPECT_EQ("old-second", ReadFile(second));
@@ -221,23 +221,23 @@ TEST(dependency_control_transaction, recovers_journaled_interrupted_commit) {
 	EXPECT_FALSE(std::filesystem::exists(staging));
 }
 
-TEST(dependency_control_transaction, removes_unjournaled_abandoned_staging) {
+TEST(package_transaction, removes_unjournaled_abandoned_staging) {
 	TransactionTestRoot test_root;
 	auto staging = test_root.Path() / ".dependency-control" / "staging" / "tx-abandoned";
 	WriteFile(staging / "payload.lua", "not committed");
 
-	Automation4::DependencyControlTransactionStore store(test_root.Path());
+	Automation4::PackageTransactionStore store(test_root.Path());
 	EXPECT_EQ(0u, store.RecoveredTransactionCount());
 	EXPECT_FALSE(std::filesystem::exists(staging));
 }
 
-TEST(dependency_control_transaction, preserves_invalid_journal_for_manual_recovery) {
+TEST(package_transaction, preserves_invalid_journal_for_manual_recovery) {
 	TransactionTestRoot test_root;
 	auto staging = test_root.Path() / ".dependency-control" / "staging" / "tx-invalid";
 	WriteFile(staging / ".native-journal-v1", "invalid\n");
 
 	EXPECT_THROW(
-		Automation4::DependencyControlTransactionStore(test_root.Path()),
+		Automation4::PackageTransactionStore(test_root.Path()),
 		std::runtime_error);
 	EXPECT_TRUE(std::filesystem::exists(staging));
 }

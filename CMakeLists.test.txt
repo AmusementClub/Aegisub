@@ -325,10 +325,10 @@ if(GTEST_FOUND)
             tests/tests/csharp_declarative_ui.cpp
             tests/tests/managed_plugin_activation.cpp
             tests/tests/csharp_query_state.cpp
-            tests/tests/dependency_control_transaction.cpp
+            tests/tests/package_transaction.cpp
             src/coreclr/bridge_error.cpp
             src/coreclr/declarative_ui_model.cpp
-            src/coreclr/dependency_control_transaction.cpp
+            src/coreclr/package_transaction.cpp
             src/coreclr/dotnet_query_state.cpp
             src/coreclr/managed_plugin_activation.cpp
         )

@@ -2,7 +2,7 @@
 
 #include "adapter_bridge.h"
 #include "declarative_ui_host.h"
-#include "dependency_control_host.h"
+#include "package_transaction_host.h"
 #include "dotnet_query_state.h"
 #include "dotnet_subtitle_bridge.h"
 
@@ -840,7 +840,7 @@ int32_t AEGISUB_PLUGIN_BRIDGE_CALL InvokeManagedPluginHostService(
 			else if (service == "aegisub.host.info")
 				result = R"({"host":"Aegisub","transport":"coreclr"})";
 			else if (auto dependency_control_result =
-				InvokeDependencyControlHostService(plugin_handle, service, request))
+				InvokePackageTransactionHostService(plugin_handle, service, request))
 				result = std::move(*dependency_control_result);
 			else
 				return static_cast<int32_t>(BridgeStatus::NotFound);
@@ -1062,7 +1062,7 @@ class DotNetAutomationRuntime final {
 			// manifest/assembly metadata validation.
 			auto stale_handle = std::exchange(entry.handle, 0);
 			entry.metadata_validated = false;
-			AbortDependencyControlTransactions(stale_handle);
+			AbortPackageTransactions(stale_handle);
 			if (entry.native_bridge)
 				entry.native_bridge->UnloadPlugin(stale_handle);
 			else
@@ -1091,7 +1091,7 @@ class DotNetAutomationRuntime final {
 		}
 		catch (...) {
 			try {
-				AbortDependencyControlTransactions(loaded.handle);
+				AbortPackageTransactions(loaded.handle);
 				if (entry.native_bridge)
 					entry.native_bridge->UnloadPlugin(loaded.handle);
 				else
@@ -1110,7 +1110,7 @@ class DotNetAutomationRuntime final {
 
 public:
 	void Shutdown() noexcept {
-		ShutdownDependencyControlHost();
+		ShutdownPackageTransactionHost();
 		{
 			std::lock_guard<std::mutex> lock(service_mutex);
 			service_providers.clear();
@@ -1129,7 +1129,7 @@ public:
 			try {
 				if (entry->handle) {
 					agi::coreclr::ui::CloseDeclarativeUiViewsForPlugin(entry->handle);
-					AbortDependencyControlTransactions(entry->handle);
+					AbortPackageTransactions(entry->handle);
 					entry->native_bridge->UnloadPlugin(entry->handle);
 				}
 				entry->native_bridge->Shutdown();
@@ -1227,7 +1227,7 @@ public:
 		if (handle && bridge) {
 			try {
 				agi::coreclr::ui::CloseDeclarativeUiViewsForPlugin(handle);
-				AbortDependencyControlTransactions(handle);
+				AbortPackageTransactions(handle);
 				bridge->UnloadPlugin(handle);
 			}
 			catch (std::exception const& error) {

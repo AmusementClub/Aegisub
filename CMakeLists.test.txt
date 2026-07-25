@@ -326,9 +326,11 @@ if(GTEST_FOUND)
             tests/tests/managed_plugin_activation.cpp
             tests/tests/csharp_query_state.cpp
             tests/tests/package_transaction.cpp
+            tests/tests/plugin_service_registry.cpp
             src/coreclr/bridge_error.cpp
             src/coreclr/declarative_ui_model.cpp
             src/coreclr/package_transaction.cpp
+            src/coreclr/plugin_service_registry.cpp
             src/coreclr/dotnet_query_state.cpp
             src/coreclr/managed_plugin_activation.cpp
         )

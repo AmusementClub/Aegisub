@@ -5,6 +5,7 @@
 #include "package_transaction_host.h"
 #include "dotnet_query_state.h"
 #include "dotnet_subtitle_bridge.h"
+#include "plugin_service_registry.h"
 
 #include "auto4_base.h"
 #include "automation/automation_host.h"
@@ -912,17 +913,11 @@ class DotNetAutomationRuntime final {
 		std::unique_ptr<agi::coreclr::AdapterBridge> native_bridge;
 	};
 
-	struct ServiceProviderRegistration {
-		std::string extension_key;
-		std::vector<std::string> operations;
-	};
-
 	std::mutex registry_mutex;
 	std::mutex bridge_mutex;
-	mutable std::mutex service_mutex;
 	std::unique_ptr<agi::coreclr::AdapterBridge> bridge;
 	std::map<std::string, std::shared_ptr<ExtensionEntry>, std::less<>> extensions;
-	std::map<std::string, ServiceProviderRegistration, std::less<>> service_providers;
+	PluginServiceProviderRegistry service_providers;
 	std::atomic<uint64_t> next_native_handle{uint64_t{1} << 63};
 
 	static std::string ExtensionKey(ExtensionManifest const& manifest) {
@@ -1111,10 +1106,7 @@ class DotNetAutomationRuntime final {
 public:
 	void Shutdown() noexcept {
 		ShutdownPackageTransactionHost();
-		{
-			std::lock_guard<std::mutex> lock(service_mutex);
-			service_providers.clear();
-		}
+		service_providers.Clear();
 		std::vector<std::shared_ptr<ExtensionEntry>> native_entries;
 		{
 			std::lock_guard<std::mutex> lock(registry_mutex);
@@ -1317,80 +1309,42 @@ public:
 		std::string const& contribution_id,
 		std::string const& extension_key,
 		std::vector<std::string> operations) {
-		if (contribution_id.empty())
-			throw std::invalid_argument("Plugin service contribution ID cannot be empty");
-		if (extension_key.empty())
-			throw std::invalid_argument("Plugin service registration requires an extension key");
-
-		std::lock_guard<std::mutex> lock(service_mutex);
-		auto existing = service_providers.find(contribution_id);
-		if (existing != service_providers.end() &&
-			existing->second.extension_key != extension_key) {
-			throw std::runtime_error(
-				"Plugin service contribution '" + contribution_id +
-				"' is already registered by another plugin");
-		}
-		service_providers.insert_or_assign(
-			contribution_id,
-			ServiceProviderRegistration{
-				extension_key,
-				std::move(operations)});
+		service_providers.Register(
+			contribution_id, extension_key, std::move(operations));
 	}
 
 	void UnregisterServiceProvider(
 		std::string const& contribution_id,
 		std::string const& extension_key) noexcept {
-		std::lock_guard<std::mutex> lock(service_mutex);
-		auto existing = service_providers.find(contribution_id);
-		if (existing == service_providers.end())
-			return;
-		if (existing->second.extension_key != extension_key)
-			return;
-		service_providers.erase(existing);
-	}
-
-	void UnregisterServiceProvidersForExtension(std::string const& extension_key) noexcept {
-		std::lock_guard<std::mutex> lock(service_mutex);
-		for (auto it = service_providers.begin(); it != service_providers.end(); ) {
-			if (it->second.extension_key == extension_key)
-				it = service_providers.erase(it);
-			else
-				++it;
-		}
+		service_providers.Unregister(contribution_id, extension_key);
 	}
 
 	bool HasServiceProvider(std::string const& contribution_id) const {
-		std::lock_guard<std::mutex> lock(service_mutex);
-		return service_providers.find(contribution_id) != service_providers.end();
+		return service_providers.Contains(contribution_id);
 	}
 
 	std::string InvokeServiceContribution(
 		std::string const& contribution_id,
 		std::string const& operation_id,
 		std::string const& request_json) {
-		ServiceProviderRegistration registration;
-		{
-			std::lock_guard<std::mutex> lock(service_mutex);
-			auto it = service_providers.find(contribution_id);
-			if (it == service_providers.end())
-				throw std::runtime_error(
-					"No loaded plugin provides service contribution '" +
-					contribution_id + "'");
-			registration = it->second;
-		}
+		auto registration = service_providers.Find(contribution_id);
+		if (!registration)
+			throw std::runtime_error(
+				"No loaded plugin provides service contribution '" +
+				contribution_id + "'");
 
-		if (!registration.operations.empty() &&
+		if (!registration->operations.empty() &&
 			std::find(
-				registration.operations.begin(),
-				registration.operations.end(),
-				operation_id) == registration.operations.end()) {
+				registration->operations.begin(),
+				registration->operations.end(),
+				operation_id) == registration->operations.end()) {
 			throw std::runtime_error(
 				"Plugin service contribution '" + contribution_id +
 				"' does not declare operation '" + operation_id + "'");
 		}
 
 		return InvokeContribution(
-			registration.extension_key,
+			registration->extension_key,
 			contribution_id,
 			operation_id,
 			request_json);
@@ -1422,11 +1376,13 @@ public:
 	}
 
 	~DotNetExtensionReference() {
-		runtime->UnregisterServiceProvidersForExtension(key);
 		runtime->ReleaseExtension(key);
 	}
 
 	std::string const& Key() const noexcept { return key; }
+	void UnregisterServiceProvider(std::string const& contribution_id) noexcept {
+		runtime->UnregisterServiceProvider(contribution_id, key);
+	}
 
 	std::string InvokeContribution(
 		std::string const& contribution_id,
@@ -1447,9 +1403,22 @@ public:
 /// Keeps lazily bootstrapped extensions alive so their serviceProvider entries
 /// remain registered without an Autoload ScriptInstance (headless, pre-autoload
 /// Lua require("l0.DependencyControl"), etc.).
+struct LazyServiceBootstrapHold {
+	std::shared_ptr<DotNetExtensionReference> extension;
+	std::vector<std::string> service_ids;
+	size_t registered_count = 0;
+
+	~LazyServiceBootstrapHold() {
+		if (!extension)
+			return;
+		for (size_t index = 0; index < registered_count; ++index)
+			extension->UnregisterServiceProvider(service_ids[index]);
+	}
+};
+
 struct LazyServiceBootstrapState {
 	std::mutex mutex;
-	std::vector<std::shared_ptr<DotNetExtensionReference>> holds;
+	std::vector<std::unique_ptr<LazyServiceBootstrapHold>> holds;
 };
 
 LazyServiceBootstrapState& LazyServiceBootstrap() {
@@ -1529,18 +1498,31 @@ void EnsureServiceProviderFromAppLocalPlugins(std::string const& contribution_id
 				if (!provides)
 					continue;
 
-				auto extension = std::make_shared<DotNetExtensionReference>(
+				auto hold = std::make_unique<LazyServiceBootstrapHold>();
+				hold->extension = std::make_shared<DotNetExtensionReference>(
 					Runtime(), manifest);
-				extension->ValidateApplicationActivation();
+				hold->extension->ValidateApplicationActivation();
 				for (auto const& contribution : manifest.contributions) {
-					if (contribution.kind != "serviceProvider")
-						continue;
-					Runtime()->RegisterServiceProvider(
-						contribution.id,
-						extension->Key(),
-						contribution.operations);
+					if (contribution.kind == "serviceProvider")
+						hold->service_ids.push_back(contribution.id);
 				}
-				state.holds.push_back(std::move(extension));
+				state.holds.push_back(std::move(hold));
+				auto& registered_hold = *state.holds.back();
+				try {
+					for (auto const& contribution : manifest.contributions) {
+						if (contribution.kind != "serviceProvider")
+							continue;
+						Runtime()->RegisterServiceProvider(
+							contribution.id,
+							registered_hold.extension->Key(),
+							contribution.operations);
+						++registered_hold.registered_count;
+					}
+				}
+				catch (...) {
+					state.holds.pop_back();
+					throw;
+				}
 				LOG_I("automation/plugin_bridge")
 					<< "Lazily bootstrapped app-local plugin '" << dirname
 					<< "' for service contribution '" << contribution_id << "'";
@@ -1808,7 +1790,13 @@ public:
 					service.contribution_id,
 					extension->Key(),
 					service.operations);
-				committed_services.push_back(service.contribution_id);
+				try {
+					committed_services.push_back(service.contribution_id);
+				}
+				catch (...) {
+					extension->UnregisterServiceProvider(service.contribution_id);
+					throw;
+				}
 			}
 			catch (std::exception const& error) {
 				LOG_W("automation/plugin_bridge")

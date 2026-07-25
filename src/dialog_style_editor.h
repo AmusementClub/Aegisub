@@ -27,17 +27,18 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#include "font_family_catalog.h"
+
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_set>
 #include <vector>
 #include <wx/dialog.h>
 
 class AssStyle;
 class AssStyleStorage;
-struct FontFamilyCatalog;
-struct FontFamilyRecord;
 struct FontVariantChoice;
 struct FontFamilySelectionModel;
 class FontNameComboBox;
@@ -92,6 +93,7 @@ class DialogStyleEditor final : public wxDialog {
 	wxCheckBox *BoxItalic;
 	wxCheckBox *BoxUnderline;
 	wxCheckBox *BoxStrikeout;
+	wxCheckBox *BoxVertical = nullptr;
 	wxSpinCtrl *margin[3];
 	wxRadioBox *Alignment;
 	wxCheckBox *OutlineType;
@@ -100,6 +102,9 @@ class DialogStyleEditor final : public wxDialog {
 	SubtitlesPreview *SubsPreview;
 	std::shared_ptr<FontFamilyCatalog const> font_catalog;
 	bool prefer_localized_font_names = true;
+	bool compact_vertical_font_list = false;
+	std::unordered_set<FontFamilyId> vertical_capable_family_ids;
+	std::unordered_set<std::string> vertical_capable_bare_names;
 	std::vector<FontVariantChoice> font_variant_choices;
 	bool updating_font_variant = false;
 	bool font_family_selection_changed = false;
@@ -117,6 +122,7 @@ class DialogStyleEditor final : public wxDialog {
 	void UpdateFontVariantControls(bool family_changed);
 	FontFamilyRecord const* SelectedFontRecord() const;
 	void CommitFontFamilyChange();
+	void SyncVerticalControl();
 	void OnFontFamilyChanged(wxCommandEvent &event);
 	void OnFontFamilyFocusLost(wxFocusEvent &event);
 	void OnFontVariantChanged(wxCommandEvent &event);

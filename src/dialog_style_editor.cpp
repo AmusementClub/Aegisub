@@ -242,6 +242,10 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 , store(store)
 , font_catalog(font_model.catalog)
 , prefer_localized_font_names(font_model.prefer_localized)
+, compact_vertical_font_list(font_model.UsesCompactVerticalToggle())
+, vertical_capable_family_ids(font_model.vertical_capable_family_ids.begin(),
+	font_model.vertical_capable_family_ids.end())
+, vertical_capable_bare_names(font_model.vertical_capable_bare_names)
 {
 	notification_sink = agi::ResolveStyleEditorNotificationSink(c, this);
 	interaction_sink = agi::ResolveStyleEditorInteractionSink(c, this);
@@ -323,6 +327,12 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	BoxItalic = new wxCheckBox(this, -1, _("&Italic"));
 	BoxUnderline = new wxCheckBox(this, -1, _("&Underline"));
 	BoxStrikeout = new wxCheckBox(this, -1, _("&Strikeout"));
+	if (compact_vertical_font_list) {
+		BoxVertical = new wxCheckBox(this, -1, _("&Vertical"));
+		BoxVertical->SetToolTip(_(
+			"Write a leading '@' on the ASS font face (GDI vertical face). "
+			"Enabled only when GDI registered a vertical form of this family."));
+	}
 	ColourButton *colorButton[] = {
 		new ColourButton(this, wxSize(55, 16), true, style->primary, ColorValidator(&work->primary)),
 		new ColourButton(this, wxSize(55, 16), true, style->secondary, ColorValidator(&work->secondary)),
@@ -414,6 +424,8 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	FontSizerBottom->Add(BoxItalic, 0, wxLEFT, 5);
 	FontSizerBottom->Add(BoxUnderline, 0, wxLEFT, 5);
 	FontSizerBottom->Add(BoxStrikeout, 0, wxLEFT, 5);
+	if (BoxVertical)
+		FontSizerBottom->Add(BoxVertical, 0, wxLEFT, 5);
 	FontSizerBottom->AddStretchSpacer(1);
 	FontSizer->Add(FontSizerTop, 1, wxALL | wxEXPAND, 0);
 	FontSizer->Add(FontSizerBottom, 1, wxTOP | wxEXPAND, 5);
@@ -539,6 +551,20 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	FontStyle->Bind(wxEVT_COMBOBOX, &DialogStyleEditor::OnFontVariantChanged, this);
 	BoxBold->Bind(wxEVT_CHECKBOX, &DialogStyleEditor::OnFontVariantChanged, this);
 	BoxItalic->Bind(wxEVT_CHECKBOX, &DialogStyleEditor::OnFontVariantChanged, this);
+	if (BoxVertical) {
+		BoxVertical->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent&) {
+			if (updating)
+				return;
+			auto const current = from_wx(FontName->GetValue());
+			auto bare = FontFamilyCatalog::SplitVerticalPrefix(current).second;
+			auto const next = FontFamilyCatalog::JoinVerticalPrefix(
+				BoxVertical->IsChecked(), bare);
+			if (next != current && !bare.empty())
+				FontName->ChangeValue(to_wx(next));
+			CommitFontFamilyChange();
+		});
+		SyncVerticalControl();
+	}
 	PreviewText->Bind(wxEVT_TEXT, &DialogStyleEditor::OnPreviewTextChange, this);
 
 	Bind(wxEVT_BUTTON, std::bind(&DialogStyleEditor::Apply, this, true, true), wxID_OK);
@@ -656,10 +682,19 @@ void DialogStyleEditor::UpdateFontVariantControls(bool family_changed) {
 		font_variant_base_italic = BoxItalic->GetValue();
 		font_variant_implicit_pinned = false;
 	}
+	auto const face = from_wx(FontName->GetValue());
+	// Soft hint only: still enumerate and write names longer than 31 UTF-16 units.
+	bool const exceeds_gdi_limit = FontFamilyCatalog::ExceedsGdiFaceNameLimit(face);
+
 	auto const *record = SelectedFontRecord();
 	if (!record) {
 		FontStyle->Hide();
-		FontVariantInfo->Hide();
+		if (exceeds_gdi_limit) {
+			FontVariantInfo->SetLabel(_("Exceeds GDI face limit (31)"));
+			FontVariantInfo->Show();
+		} else {
+			FontVariantInfo->Hide();
+		}
 		finish();
 		Layout();
 		return;
@@ -703,7 +738,11 @@ void DialogStyleEditor::UpdateFontVariantControls(bool family_changed) {
 			break;
 		}
 	}
-	if (!record->variant_profile.automatic_pinning_reliable) {
+	if (exceeds_gdi_limit) {
+		FontVariantInfo->SetLabel(_("Exceeds GDI face limit (31)"));
+		FontVariantInfo->Show();
+	}
+	else if (!record->variant_profile.automatic_pinning_reliable) {
 		FontVariantInfo->SetLabel(_("This variant profile is report-only; automatic pinning is disabled."));
 		FontVariantInfo->Show();
 	}
@@ -727,7 +766,39 @@ FontFamilyRecord const* DialogStyleEditor::SelectedFontRecord() const {
 	return resolved.family ? font_catalog->Find(*resolved.family) : nullptr;
 }
 
+void DialogStyleEditor::SyncVerticalControl() {
+	if (!BoxVertical)
+		return;
+	auto const face = from_wx(FontName->GetValue());
+	bool const has_at = !FontFamilyCatalog::SplitVerticalPrefix(face).first.empty();
+	FontFamilyId id = 0;
+	if (auto const selected = FontName->SelectedFamilyId())
+		id = *selected;
+	else if (auto const *record = SelectedFontRecord())
+		id = record->id;
+	bool capable = false;
+	if (id != 0 && vertical_capable_family_ids.contains(id))
+		capable = true;
+	else {
+		auto bare = FontFamilyCatalog::SplitVerticalPrefix(face).second;
+		capable = vertical_capable_bare_names.contains(std::string(bare));
+	}
+	bool const installed = id != 0 || SelectedFontRecord() != nullptr;
+	BoxVertical->Enable(capable && installed);
+	updating = true;
+	BoxVertical->SetValue(has_at);
+	updating = false;
+}
+
 void DialogStyleEditor::CommitFontFamilyChange() {
+	// Compact mode: list labels are bare; reapply '@' when Vertical is on.
+	if (BoxVertical && BoxVertical->IsEnabled() && BoxVertical->IsChecked()) {
+		auto const current = from_wx(FontName->GetValue());
+		auto bare = FontFamilyCatalog::SplitVerticalPrefix(current).second;
+		auto const next = FontFamilyCatalog::JoinVerticalPrefix(true, bare);
+		if (next != current && !bare.empty())
+			FontName->ChangeValue(to_wx(next));
+	}
 	auto const current_family = from_wx(FontName->GetValue());
 	auto const current_family_id = FontName->SelectedFamilyId();
 	if (current_family != committed_font_family || current_family_id != committed_font_family_id) {
@@ -738,6 +809,7 @@ void DialogStyleEditor::CommitFontFamilyChange() {
 		UpdateFontVariantControls(true);
 	}
 
+	SyncVerticalControl();
 	UpdateWorkStyle();
 	SubsPreview->SetStyle(*work);
 }

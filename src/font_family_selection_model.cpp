@@ -1,7 +1,28 @@
 #include "font_family_selection_model.h"
 
 #include <algorithm>
+#include <unordered_set>
 #include <utility>
+
+bool FontFamilySelectionModel::SupportsVerticalWriting(
+	FontFamilyId family_id,
+	std::string_view face_name) const {
+	if (family_id != 0 && vertical_capable_family_ids.contains(family_id))
+		return true;
+	auto const bare = FontFamilyCatalog::SplitVerticalPrefix(face_name).second;
+	if (bare.empty())
+		return false;
+	if (vertical_capable_bare_names.contains(std::string(bare)))
+		return true;
+	// Catalog path may only have filled ids; try resolve bare once.
+	if (catalog && !catalog->empty()) {
+		auto const resolved = catalog->Resolve(bare);
+		if (resolved.family &&
+		    vertical_capable_family_ids.contains(*resolved.family))
+			return true;
+	}
+	return false;
+}
 
 std::string FontFamilySelectionModel::PreferredName(std::string_view stored_name) const {
 	if (!catalog || catalog->empty())
@@ -48,4 +69,63 @@ FontFamilySelectionModel BuildFontFamilySelectionModel(
 			: left.family_id < right.family_id;
 	});
 	return model;
+}
+
+void FillVerticalCapability(
+	FontFamilySelectionModel& model,
+	std::vector<std::string> const& vertical_faces) {
+	for (auto const& name : vertical_faces) {
+		if (name.empty() || name.front() != '@')
+			continue;
+		auto bare = name.substr(1);
+		if (bare.empty())
+			continue;
+		model.vertical_capable_bare_names.insert(bare);
+		if (!model.catalog || model.catalog->empty())
+			continue;
+		auto const resolved = model.catalog->Resolve(name);
+		if (resolved.family)
+			model.vertical_capable_family_ids.insert(*resolved.family);
+	}
+}
+
+void AppendVerticalFacenameChoices(
+	FontFamilySelectionModel& model,
+	std::vector<std::string> const& vertical_faces) {
+	if (!model.catalog || model.catalog->empty() || vertical_faces.empty())
+		return;
+
+	std::unordered_set<std::string> seen;
+	seen.reserve(model.choices.size() * 2);
+	for (auto const& choice : model.choices)
+		seen.insert(choice.label);
+
+	for (auto const& name : vertical_faces) {
+		if (name.empty() || name.front() != '@')
+			continue;
+		auto const resolved = model.catalog->Resolve(name);
+		if (resolved.match != FontFamilyMatchKind::Exact &&
+		    resolved.match != FontFamilyMatchKind::CaseInsensitiveExact)
+			continue;
+		if (!resolved.family)
+			continue;
+		auto const* record = model.catalog->Find(*resolved.family);
+		if (!record)
+			continue;
+		auto const preferred = model.catalog->PreferredWriteName(
+			*record, model.prefer_localized);
+		if (preferred.empty())
+			continue;
+		auto label = FontFamilyCatalog::JoinVerticalPrefix(true, preferred);
+		if (label.size() <= 1 || !seen.insert(label).second)
+			continue;
+		model.choices.push_back({std::move(label), *resolved.family});
+	}
+
+	std::sort(model.choices.begin(), model.choices.end(),
+		[](FontFamilyChoice const& left, FontFamilyChoice const& right) {
+			return left.label != right.label
+				? left.label < right.label
+				: left.family_id < right.family_id;
+		});
 }

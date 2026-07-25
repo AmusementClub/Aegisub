@@ -90,8 +90,22 @@ public:
 	std::string dwrite_description() const;
 	GdiFontResolverStats stats() const noexcept;
 
-	/// Enumerate the selectable family names from this resolver's private HDC.
+	/// One EnumFontFamiliesExW pass: horizontal faces and GDI-registered vertical
+	/// faces (leading '@'). Vertical names always include the '@' prefix; they
+	/// are not synthesized from horizontal names.
+	struct FamilyEnumeration {
+		std::vector<std::string> horizontal;
+		std::vector<std::string> vertical;
+	};
+	FamilyEnumeration EnumerateAllFamilies() const;
+
+	/// Horizontal faces only (no leading '@'). Equivalent to
+	/// EnumerateAllFamilies().horizontal.
 	std::vector<std::string> EnumerateFamilies() const;
+
+	/// GDI vertical faces only (each name includes leading '@'). Equivalent to
+	/// EnumerateAllFamilies().vertical.
+	std::vector<std::string> EnumerateVerticalFamilies() const;
 
 	/// Probe the physical face selected by GDI for a family/request pair.
 	/// `weight` is the exact LOGFONT request (normally 400 or 700).

@@ -164,6 +164,9 @@ TEST(font_family_catalog, vertical_prefix_counts_toward_gdi_limit) {
 	EXPECT_EQ("@" + thirty, catalog.MapToPreferredWriteName("@Local30", false));
 	EXPECT_EQ(31u, FontFamilyCatalog::Utf16CodeUnitLength("@" + thirty));
 	EXPECT_EQ(2u, FontFamilyCatalog::Utf16CodeUnitLength("\xF0\x9F\x98\x80"));
+	EXPECT_FALSE(FontFamilyCatalog::ExceedsGdiFaceNameLimit(thirty_one));
+	EXPECT_TRUE(FontFamilyCatalog::ExceedsGdiFaceNameLimit(thirty_one + "X"));
+	EXPECT_TRUE(FontFamilyCatalog::ExceedsGdiFaceNameLimit("@" + thirty_one));
 }
 
 TEST(font_face_selection, writes_displayed_name_for_explicit_alias_but_not_unchanged_inherited_font) {
@@ -231,4 +234,65 @@ TEST(font_family_selection_model, preserves_ordered_fallback_names_without_catal
 		{"Fallback A", 0},
 	}), model.choices);
 	EXPECT_EQ(nullptr, model.ResolveChoice(0));
+}
+
+TEST(font_family_selection_model, supports_vertical_writing_by_family_id) {
+	FontFamilySelectionModel model;
+	model.vertical_capable_family_ids.insert(3);
+	EXPECT_TRUE(model.SupportsVerticalWriting(3, "Anything"));
+	EXPECT_FALSE(model.SupportsVerticalWriting(4, "Anything"));
+	EXPECT_FALSE(model.SupportsVerticalWriting(0, "Anything"));
+}
+
+TEST(font_family_selection_model, supports_vertical_writing_by_bare_name) {
+	FontFamilySelectionModel model;
+	model.vertical_capable_bare_names.insert("MS Gothic");
+	EXPECT_TRUE(model.SupportsVerticalWriting(0, "MS Gothic"));
+	EXPECT_TRUE(model.SupportsVerticalWriting(0, "@MS Gothic"));
+	EXPECT_FALSE(model.SupportsVerticalWriting(0, "Arial"));
+	EXPECT_FALSE(model.SupportsVerticalWriting(0, "@"));
+	EXPECT_FALSE(model.SupportsVerticalWriting(0, ""));
+}
+
+TEST(font_family_selection_model, supports_vertical_writing_via_catalog_resolve) {
+	auto catalog = std::make_shared<FontFamilyCatalog>(
+		std::vector<FontFamilyRecord>{family(5, "Local Name", "English Name")});
+	FontFamilySelectionModel model;
+	model.catalog = catalog;
+	model.vertical_capable_family_ids.insert(5);
+	EXPECT_TRUE(model.SupportsVerticalWriting(0, "English Name"));
+	EXPECT_TRUE(model.SupportsVerticalWriting(0, "@Local Name"));
+	EXPECT_FALSE(model.SupportsVerticalWriting(0, "Missing"));
+}
+
+TEST(font_family_selection_model, fill_vertical_capability_strips_at_and_resolves_ids) {
+	auto catalog = std::make_shared<FontFamilyCatalog>(
+		std::vector<FontFamilyRecord>{family(8, "Local V", "English V")});
+	FontFamilySelectionModel model;
+	model.catalog = catalog;
+	FillVerticalCapability(model, {"@English V", "not-vertical", "@", "@English V"});
+	EXPECT_TRUE(model.vertical_capable_bare_names.contains("English V"));
+	EXPECT_TRUE(model.vertical_capable_family_ids.contains(8));
+	EXPECT_FALSE(model.vertical_capable_bare_names.contains("not-vertical"));
+}
+
+TEST(font_family_selection_model, append_vertical_facename_choices_dedupes_and_sorts) {
+	auto catalog = std::make_shared<FontFamilyCatalog>(
+		std::vector<FontFamilyRecord>{
+			family(1, "Local B", "English B"),
+			family(2, "Local A", "English A")});
+	auto model = BuildFontFamilySelectionModel(catalog, false);
+	// Pre-existing @ row for B should not be duplicated.
+	model.choices.push_back({"@English B", 1});
+	AppendVerticalFacenameChoices(model, {"@English A", "@English B", "@Missing"});
+	std::vector<FontFamilyChoice> at_rows;
+	for (auto const& choice : model.choices) {
+		if (!choice.label.empty() && choice.label.front() == '@')
+			at_rows.push_back(choice);
+	}
+	ASSERT_EQ(2u, at_rows.size());
+	EXPECT_EQ("@English A", at_rows[0].label);
+	EXPECT_EQ(2u, at_rows[0].family_id);
+	EXPECT_EQ("@English B", at_rows[1].label);
+	EXPECT_EQ(1u, at_rows[1].family_id);
 }

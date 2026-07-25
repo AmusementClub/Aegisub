@@ -163,6 +163,10 @@ public:
 	static std::string JoinVerticalPrefix(bool vertical, std::string_view bare_name);
 	/// UTF-16 code unit length of the name (for GDI LF_FACESIZE - 1 checks).
 	static std::size_t Utf16CodeUnitLength(std::string_view utf8);
+	/// True when the name exceeds GDI/VSFilter's 31 UTF-16 unit face limit.
+	static bool ExceedsGdiFaceNameLimit(std::string_view utf8) {
+		return Utf16CodeUnitLength(utf8) > 31;
+	}
 
 private:
 #if defined(_WIN32)

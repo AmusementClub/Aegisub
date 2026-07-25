@@ -264,6 +264,25 @@ if(GTEST_FOUND)
         src/provider_catalog_builder.cpp
         src/provider_open_policy.cpp
     )
+    if(WIN32)
+        # Observation replay is Windows-specific but intentionally has no live
+        # resolver dependency, so deterministic derivation tests stay in gtest.
+        target_sources(gtest-run PRIVATE
+            tests/tests/font_family_derive_win.cpp
+            tests/tests/font_family_obs_store.cpp
+            tests/tests/font_family_obs_repository_win.cpp
+            tests/tests/font_family_observe_win.cpp
+            src/font_family_derive_win.cpp
+            src/font_family_obs_store.cpp
+            src/font_family_obs_face_stamp_win.cpp
+            src/font_family_obs_repository_win.cpp
+            src/font_family_observe_win.cpp
+            src/gdi_font_resolver.cpp
+            src/font_file_lister_dwrite.cpp
+        )
+        target_link_libraries(gtest-run PRIVATE Usp10 dwrite Version ole32)
+
+    endif()
     if(WITH_LIBPLACEBO)
         target_sources(gtest-run PRIVATE
             tests/tests/video_renderer_placebo_runtime.cpp

@@ -358,14 +358,18 @@ GdiFontResolverStats GdiFontResolver::stats() const noexcept {
 	return impl_ ? impl_->stats : GdiFontResolverStats{};
 }
 
-std::vector<std::string> GdiFontResolver::EnumerateFamilies() const {
-	std::vector<std::string> result;
-	if (!available())
+GdiFontResolver::FamilyEnumeration GdiFontResolver::EnumerateAllFamilies() const {
+	FamilyEnumeration result;
+	if (!available() || !impl_->dc)
 		return result;
+
 	struct State {
-		std::vector<std::string> values;
-		std::set<std::wstring, OrdinalIcaseLess> seen;
+		std::vector<std::string> horizontal;
+		std::vector<std::string> vertical;
+		std::set<std::wstring, OrdinalIcaseLess> seen_h;
+		std::set<std::wstring, OrdinalIcaseLess> seen_v;
 	} state;
+
 	LOGFONTW lf{};
 	lf.lfCharSet = DEFAULT_CHARSET;
 	lf.lfOutPrecision = OUT_TT_PRECIS;
@@ -374,16 +378,40 @@ std::vector<std::string> GdiFontResolver::EnumerateFamilies() const {
 	EnumFontFamiliesExW(impl_->dc, &lf,
 		[](LOGFONTW const *font, TEXTMETRICW const *, DWORD, LPARAM data) -> int {
 			auto *state = reinterpret_cast<State *>(data);
-			if (!font || !font->lfFaceName[0] || font->lfFaceName[0] == L'@')
+			if (!font || !font->lfFaceName[0])
 				return 1;
 			std::wstring const key = font->lfFaceName;
 			auto name = agi::charset::ConvertW(font->lfFaceName);
-			if (!name.empty() && state->seen.insert(key).second)
-				state->values.push_back(std::move(name));
+			if (name.empty())
+				return 1;
+			if (font->lfFaceName[0] == L'@') {
+				if (state->seen_v.insert(key).second)
+					state->vertical.push_back(std::move(name));
+			} else if (state->seen_h.insert(key).second) {
+				state->horizontal.push_back(std::move(name));
+			}
 			return 1;
 		}, reinterpret_cast<LPARAM>(&state), 0);
-	std::sort(state.values.begin(), state.values.end());
-	return state.values;
+
+	std::sort(state.horizontal.begin(), state.horizontal.end());
+	std::sort(state.vertical.begin(), state.vertical.end());
+	result.horizontal = std::move(state.horizontal);
+	result.vertical = std::move(state.vertical);
+	return result;
+}
+
+std::vector<std::string> GdiFontResolver::EnumerateFamilies() const {
+	// Single EnumFontFamiliesExW pass that classifies both horizontal and '@'
+	// faces; callers that only need horizontal names pay the full walk cost.
+	// Prefer EnumerateAllFamilies when both lists are needed (UI), or pass a
+	// shared seed list into Observe/manifest to avoid a second full walk.
+	return EnumerateAllFamilies().horizontal;
+}
+
+std::vector<std::string> GdiFontResolver::EnumerateVerticalFamilies() const {
+	// Same single-pass cost as EnumerateFamilies; prefer EnumerateAllFamilies
+	// when both horizontal and vertical lists are required.
+	return EnumerateAllFamilies().vertical;
 }
 
 GdiFontProbeResult GdiFontResolver::Probe(

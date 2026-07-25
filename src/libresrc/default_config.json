@@ -422,7 +422,8 @@
 		},
 		"Font" : {
 			"Prefer Localized Family Names" : true,
-			"Use Contains Matching" : false
+			"Use Contains Matching" : false,
+			"Compact Vertical Font List" : false
 		},
 		"Edit Box" : {
 			"Command Buttons" : {

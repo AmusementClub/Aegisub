@@ -252,6 +252,7 @@ class FontFaceDialog final : public wxDialog {
 	wxCheckBox *bold;
 	wxCheckBox *italic;
 	wxCheckBox *underline;
+	wxCheckBox *vertical = nullptr;
 	wxCheckBox *allow_replace_explicit;
 	wxStaticText *variant_status;
 	SubtitlesPreview *preview;
@@ -339,7 +340,10 @@ class FontFaceDialog final : public wxDialog {
 				}
 			}
 		}
-		if (!record)
+		// GDI/VSFilter face slot is 31 UTF-16 units; still write the full name.
+		if (FontFamilyCatalog::ExceedsGdiFaceNameLimit(from_wx(face_name->GetValue())))
+			variant_status->SetLabel(_("Exceeds GDI face limit (31)"));
+		else if (!record)
 			variant_status->SetLabel(_("The selected name is not a confirmed font family alias."));
 		else if (!record->variant_profile.automatic_pinning_reliable)
 			variant_status->SetLabel(_("This variant profile is report-only; automatic pinning is disabled."));
@@ -352,11 +356,49 @@ class FontFaceDialog final : public wxDialog {
 		Layout();
 	}
 
-	std::string WithSelectedVerticalPrefix(std::string_view name) const {
-		bool const vertical = !FontFamilyCatalog::SplitVerticalPrefix(
+	bool FaceIsVertical() const {
+		return !FontFamilyCatalog::SplitVerticalPrefix(
 			from_wx(face_name->GetValue())).first.empty();
+	}
+
+	std::string WithSelectedVerticalPrefix(std::string_view name) const {
+		bool const vert = FaceIsVertical();
 		auto bare = FontFamilyCatalog::SplitVerticalPrefix(name).second;
-		return FontFamilyCatalog::JoinVerticalPrefix(vertical, bare);
+		return FontFamilyCatalog::JoinVerticalPrefix(vert, bare);
+	}
+
+	void SyncVerticalControl() {
+		if (!vertical)
+			return;
+		auto const face = from_wx(face_name->GetValue());
+		bool const has_at = FaceIsVertical();
+		FontFamilyId id = 0;
+		if (auto const selected = face_name->SelectedFamilyId())
+			id = *selected;
+		else if (auto const *record = font_model.ResolveRecord(face))
+			id = record->id;
+		bool const capable = font_model.SupportsVerticalWriting(id, face);
+		bool const installed = id != 0 || font_model.ResolveRecord(face) != nullptr;
+		// Uninstalled: keep typed '@' visible in the text box; disable toggle.
+		// Installed without GDI '@': disable (no false capability).
+		vertical->Enable(capable && installed);
+		syncing_variant = true;
+		vertical->SetValue(has_at);
+		syncing_variant = false;
+	}
+
+	void ApplyVerticalToggle(bool want_vertical) {
+		auto const current = from_wx(face_name->GetValue());
+		auto bare = FontFamilyCatalog::SplitVerticalPrefix(current).second;
+		if (bare.empty())
+			return;
+		auto next = FontFamilyCatalog::JoinVerticalPrefix(want_vertical, bare);
+		if (next == current)
+			return;
+		face_name->ChangeValue(to_wx(next));
+		committed_family = next;
+		UpdateInformation();
+		UpdatePreview();
 	}
 
 	wxString BuildFontInformation() const {
@@ -438,6 +480,7 @@ class FontFaceDialog final : public wxDialog {
 	}
 
 	void UpdateInformation() {
+		SyncVerticalControl();
 		font_information->ChangeValue(BuildFontInformation());
 
 		auto value = face_name->GetValue();
@@ -459,11 +502,21 @@ class FontFaceDialog final : public wxDialog {
 	}
 
 	void OnFaceText(wxCommandEvent &event) {
+		// Refresh soft GDI-limit / match status while typing without committing.
+		UpdateVariantControls(false);
 		UpdateInformation();
 		event.Skip();
 	}
 
 	void CommitFaceFamilyChange() {
+		// Compact mode: list labels are bare; reapply '@' when Vertical is on.
+		if (vertical && vertical->IsEnabled() && vertical->GetValue()) {
+			auto const current = from_wx(face_name->GetValue());
+			auto bare = FontFamilyCatalog::SplitVerticalPrefix(current).second;
+			auto const next = FontFamilyCatalog::JoinVerticalPrefix(true, bare);
+			if (next != current && !bare.empty())
+				face_name->ChangeValue(to_wx(next));
+		}
 		auto const current = from_wx(face_name->GetValue());
 		auto const current_id = face_name->SelectedFamilyId();
 		if (current != committed_family || current_id != committed_family_id) {
@@ -581,6 +634,13 @@ public:
 		bold = new wxCheckBox(this, -1, _("&Bold"));
 		italic = new wxCheckBox(this, -1, _("&Italic"));
 		underline = new wxCheckBox(this, -1, _("&Underline"));
+		if (font_model.UsesCompactVerticalToggle()) {
+			vertical = new wxCheckBox(this, -1, _("&Vertical"));
+			vertical->SetToolTip(_(
+				"Write a leading '@' on the ASS font face (GDI vertical face). "
+				"Enabled only when GDI registered a vertical form of this family. "
+				"The font text box shows the full name including '@' when on."));
+		}
 		allow_replace_explicit = new wxCheckBox(this, -1, _("Allow replacing explicit weight/italic"));
 		variant_status = new wxStaticText(this, -1, wxEmptyString);
 		bold->SetValue(initial.bold);
@@ -596,6 +656,8 @@ public:
 		font_bottom->Add(bold);
 		font_bottom->Add(italic, wxSizerFlags().Border(wxLEFT, 5));
 		font_bottom->Add(underline, wxSizerFlags().Border(wxLEFT, 5));
+		if (vertical)
+			font_bottom->Add(vertical, wxSizerFlags().Border(wxLEFT, 5));
 		font_bottom->AddStretchSpacer();
 		auto *font_box = new wxStaticBoxSizer(wxVERTICAL, this, _("Font"));
 		font_box->Add(font_top, wxSizerFlags().Expand());
@@ -654,6 +716,13 @@ public:
 		bold->Bind(wxEVT_CHECKBOX, &FontFaceDialog::OnStyleUpdate, this);
 		italic->Bind(wxEVT_CHECKBOX, &FontFaceDialog::OnStyleUpdate, this);
 		underline->Bind(wxEVT_CHECKBOX, &FontFaceDialog::OnStyleUpdate, this);
+		if (vertical) {
+			vertical->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent&) {
+				if (syncing_variant)
+					return;
+				ApplyVerticalToggle(vertical->GetValue());
+			});
+		}
 		font_style->Bind(wxEVT_COMBOBOX, &FontFaceDialog::OnStyleUpdate, this);
 		allow_replace_explicit->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &event) {
 			UpdateVariantControls(true);
@@ -665,8 +734,8 @@ public:
 		Bind(wxEVT_BUTTON, &FontFaceDialog::OnApply, this, wxID_APPLY);
 
 		preview->SetText(from_wx(preview_text->GetValue()));
-		UpdateInformation();
 		UpdateVariantControls(false);
+		UpdateInformation();
 		UpdatePreview();
 	}
 

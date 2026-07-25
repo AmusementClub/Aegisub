@@ -465,6 +465,21 @@ void BuildGeneralPage(OptionPage *p) {
 		"uses contains matching instead of the native prefix matching. Other "
 		"combo behaviour is unchanged. The Windows system font dialog is not "
 		"affected."));
+#ifdef _WIN32
+	auto *compact_vertical = p->OptionAdd(
+		font_names,
+		_("Compact vertical font list (use Vertical checkbox)"),
+		"Subtitle/Font/Compact Vertical Font List");
+	compact_vertical->SetToolTip(_(
+		"Default is off: custom font lists include both horizontal and GDI "
+		"'@' vertical face names, similar to the Windows font list.\n\n"
+		"When enabled, lists show only horizontal family names. A Vertical "
+		"checkbox appears for families GDI registered with a leading '@'; "
+		"the face text box still shows the full ASS name (with '@' when "
+		"vertical is on). Uninstalled fonts keep the typed name; Vertical is "
+		"disabled when capability cannot be verified. The Windows system font "
+		"dialog is not affected."));
+#endif
 
 	p->SetSizerAndFit(p->sizer);
 }

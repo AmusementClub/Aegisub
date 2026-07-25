@@ -1378,6 +1378,11 @@ if(WIN32)
         src/font_file_lister_gdi.cpp
         src/font_file_lister_dwrite.cpp
         src/gdi_font_resolver.cpp
+        src/font_family_observe_win.cpp
+        src/font_family_derive_win.cpp
+        src/font_family_obs_store.cpp
+        src/font_family_obs_face_stamp_win.cpp
+        src/font_family_obs_repository_win.cpp
         src/font_family_catalog_win.cpp
         src/font_variant_resolver_win.cpp)
     target_link_libraries(aegisub_core PRIVATE Usp10 dwrite Version)

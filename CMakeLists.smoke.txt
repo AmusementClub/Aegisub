@@ -93,6 +93,93 @@ if(WIN32)
         DEPENDS gdi-font-resolver-smoke
         WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
     )
+
+    # A/B equivalence: legacy single-pass builder vs Observe+Derive.
+    # EXCLUDE_FROM_ALL; not part of the CI test matrix (machine font set).
+    add_executable(font-family-ab-compare EXCLUDE_FROM_ALL
+        tools/font_family_ab_compare/font_family_ab_compare_main.cpp
+        tools/font_family_ab_compare/legacy/font_family_catalog_win_legacy.cpp
+    )
+    target_compile_features(font-family-ab-compare PRIVATE cxx_std_20)
+    target_compile_definitions(font-family-ab-compare PRIVATE CMAKE_BUILD)
+    target_include_directories(font-family-ab-compare PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+        "${PROJECT_SOURCE_DIR}/tools/font_family_ab_compare"
+    )
+    target_link_libraries(font-family-ab-compare PRIVATE
+        aegisub_core
+        libaegisub
+        luajit
+        User32
+        Gdi32
+        Usp10
+        dwrite
+        Version
+    )
+    aegisub_stage_libass_runtime(font-family-ab-compare)
+    add_custom_target(run-font-family-ab-compare
+        COMMAND font-family-ab-compare
+            --out-dir "${PROJECT_BINARY_DIR}/font-family-ab/$<CONFIG>"
+        DEPENDS font-family-ab-compare
+        WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+        COMMENT "A/B compare legacy font family catalog vs Observe+Derive"
+        USES_TERMINAL
+        VERBATIM
+    )
+
+    # Phase 3 dual-process rebuild lock: exactly one full Observe under contention.
+    add_executable(font-family-gdi-vertical-report EXCLUDE_FROM_ALL
+        tools/font_family_ab_compare/diag_vertical_gdi.cpp
+    )
+    target_compile_features(font-family-gdi-vertical-report PRIVATE cxx_std_20)
+    target_compile_definitions(font-family-gdi-vertical-report PRIVATE CMAKE_BUILD)
+    target_include_directories(font-family-gdi-vertical-report PRIVATE
+        "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(font-family-gdi-vertical-report PRIVATE
+        aegisub_core libaegisub luajit User32 Gdi32 Usp10 dwrite Version)
+    aegisub_stage_libass_runtime(font-family-gdi-vertical-report)
+
+    add_executable(font-family-obs-lock-smoke EXCLUDE_FROM_ALL
+        tests/smoke/font_family_obs_lock_smoke.cpp
+    )
+    target_compile_features(font-family-obs-lock-smoke PRIVATE cxx_std_20)
+    target_compile_definitions(font-family-obs-lock-smoke PRIVATE CMAKE_BUILD)
+    target_include_directories(font-family-obs-lock-smoke PRIVATE
+        "${PROJECT_SOURCE_DIR}/src"
+    )
+    target_link_libraries(font-family-obs-lock-smoke PRIVATE
+        aegisub_core
+        libaegisub
+        luajit
+        User32
+        Gdi32
+        Usp10
+        dwrite
+        Version
+    )
+    aegisub_stage_libass_runtime(font-family-obs-lock-smoke)
+    add_custom_target(run-font-family-obs-lock-smoke
+        COMMAND font-family-obs-lock-smoke
+            --work-dir "${PROJECT_BINARY_DIR}/font-family-obs-lock-smoke/$<CONFIG>"
+        DEPENDS font-family-obs-lock-smoke
+        WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+        COMMENT "Dual-process font family observation rebuild lock smoke"
+        USES_TERMINAL
+        VERBATIM
+    )
+    if(BUILD_TESTING)
+        add_test(
+            NAME font_family_obs_lock_smoke
+            COMMAND "$<TARGET_FILE:font-family-obs-lock-smoke>"
+                --work-dir "${PROJECT_BINARY_DIR}/font-family-obs-lock-smoke/$<CONFIG>"
+        )
+        set_tests_properties(font_family_obs_lock_smoke PROPERTIES
+            LABELS "smoke;font;windows"
+            TIMEOUT 240
+            RUN_SERIAL TRUE
+        )
+    endif()
+
 endif()
 
 add_executable(aegisub_core_smoke EXCLUDE_FROM_ALL

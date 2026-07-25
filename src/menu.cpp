@@ -596,9 +596,8 @@ public:
 	, local_slot(c->GetCore().local_scripts->AddScriptChangeListener(&AutomationMenu::Regenerate, this))
 	{
 		cm->AddCommand(cmd::get("am/meta"), this);
-#ifdef WITH_PLUGIN_BRIDGE
-		cm->AddCommand(cmd::get("am/dependency-control"), this);
-#endif
+		// Plugin macros (including DependencyControl) register themselves when
+		// their plugin payload loads successfully, the same way auto4 scripts do.
 		AppendSeparator();
 		fixed_item_count = GetMenuItemCount();
 		Regenerate();

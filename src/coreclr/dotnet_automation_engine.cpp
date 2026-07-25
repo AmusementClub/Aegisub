@@ -912,10 +912,17 @@ class DotNetAutomationRuntime final {
 		std::unique_ptr<agi::coreclr::AdapterBridge> native_bridge;
 	};
 
+	struct ServiceProviderRegistration {
+		std::string extension_key;
+		std::vector<std::string> operations;
+	};
+
 	std::mutex registry_mutex;
 	std::mutex bridge_mutex;
+	mutable std::mutex service_mutex;
 	std::unique_ptr<agi::coreclr::AdapterBridge> bridge;
 	std::map<std::string, std::shared_ptr<ExtensionEntry>, std::less<>> extensions;
+	std::map<std::string, ServiceProviderRegistration, std::less<>> service_providers;
 	std::atomic<uint64_t> next_native_handle{uint64_t{1} << 63};
 
 	static std::string ExtensionKey(ExtensionManifest const& manifest) {
@@ -1104,6 +1111,10 @@ class DotNetAutomationRuntime final {
 public:
 	void Shutdown() noexcept {
 		ShutdownDependencyControlHost();
+		{
+			std::lock_guard<std::mutex> lock(service_mutex);
+			service_providers.clear();
+		}
 		std::vector<std::shared_ptr<ExtensionEntry>> native_entries;
 		{
 			std::lock_guard<std::mutex> lock(registry_mutex);
@@ -1301,6 +1312,89 @@ public:
 		}
 		throw std::runtime_error("CLR plugin handle is no longer registered");
 	}
+
+	void RegisterServiceProvider(
+		std::string const& contribution_id,
+		std::string const& extension_key,
+		std::vector<std::string> operations) {
+		if (contribution_id.empty())
+			throw std::invalid_argument("Plugin service contribution ID cannot be empty");
+		if (extension_key.empty())
+			throw std::invalid_argument("Plugin service registration requires an extension key");
+
+		std::lock_guard<std::mutex> lock(service_mutex);
+		auto existing = service_providers.find(contribution_id);
+		if (existing != service_providers.end() &&
+			existing->second.extension_key != extension_key) {
+			throw std::runtime_error(
+				"Plugin service contribution '" + contribution_id +
+				"' is already registered by another plugin");
+		}
+		service_providers.insert_or_assign(
+			contribution_id,
+			ServiceProviderRegistration{
+				extension_key,
+				std::move(operations)});
+	}
+
+	void UnregisterServiceProvider(
+		std::string const& contribution_id,
+		std::string const& extension_key) noexcept {
+		std::lock_guard<std::mutex> lock(service_mutex);
+		auto existing = service_providers.find(contribution_id);
+		if (existing == service_providers.end())
+			return;
+		if (existing->second.extension_key != extension_key)
+			return;
+		service_providers.erase(existing);
+	}
+
+	void UnregisterServiceProvidersForExtension(std::string const& extension_key) noexcept {
+		std::lock_guard<std::mutex> lock(service_mutex);
+		for (auto it = service_providers.begin(); it != service_providers.end(); ) {
+			if (it->second.extension_key == extension_key)
+				it = service_providers.erase(it);
+			else
+				++it;
+		}
+	}
+
+	bool HasServiceProvider(std::string const& contribution_id) const {
+		std::lock_guard<std::mutex> lock(service_mutex);
+		return service_providers.find(contribution_id) != service_providers.end();
+	}
+
+	std::string InvokeServiceContribution(
+		std::string const& contribution_id,
+		std::string const& operation_id,
+		std::string const& request_json) {
+		ServiceProviderRegistration registration;
+		{
+			std::lock_guard<std::mutex> lock(service_mutex);
+			auto it = service_providers.find(contribution_id);
+			if (it == service_providers.end())
+				throw std::runtime_error(
+					"No loaded plugin provides service contribution '" +
+					contribution_id + "'");
+			registration = it->second;
+		}
+
+		if (!registration.operations.empty() &&
+			std::find(
+				registration.operations.begin(),
+				registration.operations.end(),
+				operation_id) == registration.operations.end()) {
+			throw std::runtime_error(
+				"Plugin service contribution '" + contribution_id +
+				"' does not declare operation '" + operation_id + "'");
+		}
+
+		return InvokeContribution(
+			registration.extension_key,
+			contribution_id,
+			operation_id,
+			request_json);
+	}
 };
 
 std::shared_ptr<DotNetAutomationRuntime> Runtime() {
@@ -1328,8 +1422,11 @@ public:
 	}
 
 	~DotNetExtensionReference() {
+		runtime->UnregisterServiceProvidersForExtension(key);
 		runtime->ReleaseExtension(key);
 	}
+
+	std::string const& Key() const noexcept { return key; }
 
 	std::string InvokeContribution(
 		std::string const& contribution_id,
@@ -1346,6 +1443,123 @@ public:
 		runtime->ValidateExtension(key);
 	}
 };
+
+/// Keeps lazily bootstrapped extensions alive so their serviceProvider entries
+/// remain registered without an Autoload ScriptInstance (headless, pre-autoload
+/// Lua require("l0.DependencyControl"), etc.).
+struct LazyServiceBootstrapState {
+	std::mutex mutex;
+	std::vector<std::shared_ptr<DotNetExtensionReference>> holds;
+};
+
+LazyServiceBootstrapState& LazyServiceBootstrap() {
+	static LazyServiceBootstrapState state;
+	return state;
+}
+
+void ClearLazyServiceBootstrap() noexcept {
+	auto& state = LazyServiceBootstrap();
+	std::lock_guard<std::mutex> lock(state.mutex);
+	state.holds.clear();
+}
+
+std::optional<agi::fs::path> FindAppLocalPluginManifestPath(agi::fs::path const& plugin_dir) {
+	static constexpr char const* names[] = {
+		"plugin.aegisub-plugin.json",
+		"plugin.json",
+	};
+	for (auto const* name : names) {
+		auto candidate = plugin_dir / name;
+		if (agi::fs::FileExists(candidate))
+			return candidate;
+	}
+	return std::nullopt;
+}
+
+/// On service registry miss, scan <exe>/plugins/*/ for a payload that declares
+/// the requested serviceProvider and load it. Does not register automation
+/// macros (menus stay autoload-only).
+void EnsureServiceProviderFromAppLocalPlugins(std::string const& contribution_id) {
+	if (contribution_id.empty())
+		return;
+	if (Runtime()->HasServiceProvider(contribution_id))
+		return;
+
+	auto& state = LazyServiceBootstrap();
+	std::lock_guard<std::mutex> lock(state.mutex);
+	if (Runtime()->HasServiceProvider(contribution_id))
+		return;
+
+	agi::fs::path plugins_root;
+	try {
+		plugins_root = agi::coreclr::GetCurrentExecutableDirectory() / "plugins";
+	}
+	catch (std::exception const& error) {
+		LOG_W("automation/plugin_bridge")
+			<< "Could not resolve app-local plugins for service bootstrap: "
+			<< error.what();
+		return;
+	}
+	if (!agi::fs::DirectoryExists(plugins_root))
+		return;
+
+	try {
+		for (auto entry : agi::fs::DirectoryIterator(plugins_root, "*")) {
+			auto plugin_dir = plugins_root / agi::fs::PathFromString(entry);
+			if (!agi::fs::DirectoryExists(plugin_dir))
+				continue;
+			auto dirname = agi::fs::PathToString(plugin_dir.filename());
+			if (dirname == "coreclr")
+				continue;
+
+			auto manifest_path = FindAppLocalPluginManifestPath(plugin_dir);
+			if (!manifest_path)
+				continue;
+
+			try {
+				auto manifest = ParseManifest(*manifest_path);
+				bool provides = false;
+				for (auto const& contribution : manifest.contributions) {
+					if (contribution.kind == "serviceProvider" &&
+						contribution.id == contribution_id) {
+						provides = true;
+						break;
+					}
+				}
+				if (!provides)
+					continue;
+
+				auto extension = std::make_shared<DotNetExtensionReference>(
+					Runtime(), manifest);
+				extension->ValidateApplicationActivation();
+				for (auto const& contribution : manifest.contributions) {
+					if (contribution.kind != "serviceProvider")
+						continue;
+					Runtime()->RegisterServiceProvider(
+						contribution.id,
+						extension->Key(),
+						contribution.operations);
+				}
+				state.holds.push_back(std::move(extension));
+				LOG_I("automation/plugin_bridge")
+					<< "Lazily bootstrapped app-local plugin '" << dirname
+					<< "' for service contribution '" << contribution_id << "'";
+				if (Runtime()->HasServiceProvider(contribution_id))
+					return;
+			}
+			catch (std::exception const& error) {
+				LOG_W("automation/plugin_bridge")
+					<< "App-local service bootstrap failed for '" << dirname
+					<< "': " << error.what();
+			}
+		}
+	}
+	catch (std::exception const& error) {
+		LOG_W("automation/plugin_bridge")
+			<< "Could not enumerate app-local plugins for service bootstrap: "
+			<< error.what();
+	}
+}
 
 struct DotNetAutomationHostState {
 	std::shared_ptr<AutomationHost> host;
@@ -1488,6 +1702,11 @@ public:
 };
 
 class DotNetAutomationScriptInstance final : public Script {
+	struct PendingServiceProvider {
+		std::string contribution_id;
+		std::vector<std::string> operations;
+	};
+
 	bool loaded = false;
 	std::string name;
 	std::string description;
@@ -1496,18 +1715,26 @@ class DotNetAutomationScriptInstance final : public Script {
 	std::vector<std::unique_ptr<DotNetMacro>> pending_macros;
 	std::vector<std::pair<std::string, DotNetMacro*>> committed_macros;
 	std::vector<cmd::Command*> macros;
+	std::vector<PendingServiceProvider> pending_services;
+	std::vector<std::string> committed_services;
 	std::shared_ptr<DotNetExtensionReference> extension;
 	std::shared_ptr<DotNetAutomationHostState> host_state =
 		std::make_shared<DotNetAutomationHostState>();
 
 	void DestroyMacros() {
 		pending_macros.clear();
+		pending_services.clear();
 		for (auto const& [command_name, command] : committed_macros) {
 			if (cmd::get_if(command_name) == command)
 				cmd::unreg(command_name);
 		}
 		committed_macros.clear();
 		macros.clear();
+		if (extension) {
+			for (auto const& contribution_id : committed_services)
+				Runtime()->UnregisterServiceProvider(contribution_id, extension->Key());
+		}
+		committed_services.clear();
 		extension.reset();
 	}
 
@@ -1529,15 +1756,21 @@ public:
 			author = std::move(manifest.author);
 			version = std::move(manifest.version);
 			for (auto& contribution : manifest.contributions) {
-				if (contribution.kind != "automation") continue;
-				for (auto& metadata : contribution.macros) {
-					auto macro = std::make_unique<DotNetMacro>(
-						extension,
-						host_state,
+				if (contribution.kind == "automation") {
+					for (auto& metadata : contribution.macros) {
+						auto macro = std::make_unique<DotNetMacro>(
+							extension,
+							host_state,
+							contribution.id,
+							std::move(metadata));
+						macros.push_back(macro.get());
+						pending_macros.emplace_back(std::move(macro));
+					}
+				}
+				else if (contribution.kind == "serviceProvider") {
+					pending_services.push_back(PendingServiceProvider{
 						contribution.id,
-						std::move(metadata));
-					macros.push_back(macro.get());
-					pending_macros.emplace_back(std::move(macro));
+						contribution.operations});
 				}
 			}
 			loaded = true;
@@ -1564,6 +1797,26 @@ public:
 			cmd::reg(std::move(macro));
 		}
 		pending_macros.clear();
+
+		if (!extension) {
+			pending_services.clear();
+			return;
+		}
+		for (auto& service : pending_services) {
+			try {
+				Runtime()->RegisterServiceProvider(
+					service.contribution_id,
+					extension->Key(),
+					service.operations);
+				committed_services.push_back(service.contribution_id);
+			}
+			catch (std::exception const& error) {
+				LOG_W("automation/plugin_bridge")
+					<< "Skipping plugin service contribution '"
+					<< service.contribution_id << "': " << error.what();
+			}
+		}
+		pending_services.clear();
 	}
 
 	std::string GetName() const override { return name; }
@@ -1584,92 +1837,70 @@ public:
 	}
 };
 
-bool HasCSharpManifestSuffix(agi::fs::path const& filename) {
+std::string LowerAsciiFilename(agi::fs::path const& filename) {
 	auto name = agi::fs::PathToString(filename.filename());
 	std::transform(name.begin(), name.end(), name.begin(), [](char value) {
 		return value >= 'A' && value <= 'Z'
 			? static_cast<char>(value - 'A' + 'a')
 			: value;
 	});
-	return name.ends_with(".aegisub-plugin.json");
+	return name;
+}
+
+/// Names accepted by explicit discovery (app-local plugins/ and managed store).
+bool IsPluginBridgeManifestName(agi::fs::path const& filename) {
+	auto const name = LowerAsciiFilename(filename);
+	return name.ends_with(".aegisub-plugin.json") || name == "plugin.json";
+}
+
+/// Names exposed to autoload globs / file dialogs. Bare plugin.json is only
+/// accepted via LoadPluginBridgeManifest after app-local directory discovery.
+bool HasCSharpManifestSuffix(agi::fs::path const& filename) {
+	return LowerAsciiFilename(filename).ends_with(".aegisub-plugin.json");
+}
+
+std::unique_ptr<AutomationScriptInstance> LoadPluginBridgeManifestImpl(
+	agi::fs::path const& filename) {
+	if (!IsPluginBridgeManifestName(filename))
+		return nullptr;
+	return std::make_unique<DotNetAutomationScriptInstance>(filename);
 }
 
 } // namespace
 
-namespace {
-
-struct DependencyControlServiceState {
-	std::mutex mutex;
-	std::shared_ptr<DotNetExtensionReference> extension;
-	std::shared_ptr<DotNetAutomationHostState> host_state =
-		std::make_shared<DotNetAutomationHostState>();
-};
-
-DependencyControlServiceState& GetDependencyControlServiceState() {
-	static DependencyControlServiceState state;
-	return state;
+std::unique_ptr<AutomationScriptInstance> LoadPluginBridgeManifest(
+	agi::fs::path const& filename) {
+	return LoadPluginBridgeManifestImpl(filename);
 }
 
-std::shared_ptr<DotNetExtensionReference> GetDependencyControlExtension() {
-	auto& state = GetDependencyControlServiceState();
-	std::lock_guard<std::mutex> lock(state.mutex);
-	if (!state.extension) {
-		auto component_dir =
-			agi::coreclr::GetCurrentExecutableDirectory() / "plugins" /
-			"aegisub.dependency-control";
-		auto manifest = ParseManifest(component_dir / "plugin.json");
-		state.extension = std::make_shared<DotNetExtensionReference>(
-			Runtime(),
-			manifest);
-	}
-	return state.extension;
+std::string InvokePluginServiceContribution(
+	std::string const& contribution_id,
+	std::string const& operation_id,
+	std::string const& request_json) {
+	// Menus/macros still come only from autoload registration. Services can be
+	// bootstrapped on demand so headless and early Lua require() work without a
+	// prior global autoload pass.
+	EnsureServiceProviderFromAppLocalPlugins(contribution_id);
+	return Runtime()->InvokeServiceContribution(
+		contribution_id,
+		operation_id,
+		request_json);
 }
-
-} // namespace
 
 std::string InvokeDependencyControlService(
 	std::string const& operation_id,
 	std::string const& request_json) {
-	auto extension = GetDependencyControlExtension();
-	return extension->InvokeContribution(
+	// Protocol contribution id for the DependencyControl managed plugin.
+	// Lookup is by registered serviceProvider id, not by install path.
+	return InvokePluginServiceContribution(
 		"aegisub.dependency-control.service",
 		operation_id,
 		request_json);
 }
 
-void OpenDependencyControlPackageManager(agi::Context* context) {
-	if (!context || !context->GetUI().parent)
-		throw std::runtime_error(
-			"DependencyControl Package Manager requires the graphical Aegisub UI");
-	auto extension = GetDependencyControlExtension();
-	std::shared_ptr<DotNetAutomationHostState> host_state;
-	{
-		auto& state = GetDependencyControlServiceState();
-		std::lock_guard<std::mutex> lock(state.mutex);
-		host_state = state.host_state;
-	}
-	MacroManifest metadata;
-	metadata.id = "aegisub.dependency-control.package-manager";
-	metadata.name = "DependencyControl/Package Manager";
-	metadata.description =
-		"Opens the host-rendered DependencyControl package manager.";
-	DotNetMacro(
-		extension,
-		std::move(host_state),
-		"aegisub.dependency-control.automation",
-		std::move(metadata))(context);
-}
-
 void ShutdownManagedPluginRuntime() noexcept {
-	std::shared_ptr<DotNetExtensionReference> extension;
-	{
-		auto& state = GetDependencyControlServiceState();
-		std::lock_guard<std::mutex> lock(state.mutex);
-		extension = std::move(state.extension);
-		state.host_state->host.reset();
-	}
+	ClearLazyServiceBootstrap();
 	Runtime()->Shutdown();
-	extension.reset();
 }
 
 std::string DotNetAutomationEngine::EngineName() const {

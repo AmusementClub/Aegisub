@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "dependency-control-public-feed",
+  "hosts": ["headless"],
+  "resources": {
+    "script": "../fixtures/dependency-control-public-feed.lua"
+  },
+  "steps": [
+    {
+      "action": "run_automation",
+      "script": "script",
+      "macro": "DependencyControl public feed smoke"
+    }
+  ]
+}

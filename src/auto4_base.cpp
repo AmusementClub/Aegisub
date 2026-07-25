@@ -35,6 +35,8 @@
 #include "automation/automation_live_host.h"
 #include "compat.h"
 #ifdef WITH_PLUGIN_BRIDGE
+#include "coreclr/dotnet_automation_engine.h"
+#include "coreclr/host.h"
 #include "coreclr/managed_plugin_activation.h"
 #endif
 #include "dialog_progress.h"
@@ -57,6 +59,7 @@
 #include <chrono>
 #include <exception>
 #include <future>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -216,6 +219,112 @@ namespace Automation4 {
 			wxLogError(_("The file was not recognised as an Automation script: %s"), filename.wstring());
 		}
 
+#ifdef WITH_PLUGIN_BRIDGE
+		/// Prefer the managed-store filename, then the shorter installed payload name.
+		std::optional<agi::fs::path> FindAppLocalPluginManifest(agi::fs::path const& plugin_dir)
+		{
+			static constexpr char const* names[] = {
+				"plugin.aegisub-plugin.json",
+				"plugin.json",
+			};
+			for (auto const* name : names) {
+				auto candidate = plugin_dir / name;
+				if (agi::fs::FileExists(candidate))
+					return candidate;
+			}
+			return std::nullopt;
+		}
+
+		/// Load a discovered Plugin Bridge manifest and eagerly validate the
+		/// runtime payload so menus/services only appear when the DLL matches.
+		ScriptLoadAttempt LoadValidatedPluginBridgeManifest(
+			agi::fs::path const& manifest_path)
+		{
+			ScriptLoadAttempt attempt;
+			try {
+				auto instance = LoadPluginBridgeManifest(manifest_path);
+				if (!instance) {
+					attempt.recognised = false;
+					return attempt;
+				}
+				attempt.recognised = true;
+				attempt.script = WrapScriptInstance(std::move(instance));
+				if (!attempt.script || !attempt.script->GetLoadedState())
+					return attempt;
+				attempt.script->ValidateApplicationActivation();
+			}
+			catch (...) {
+				attempt.recognised = true;
+				attempt.script = agi::make_unique<FailedScript>(
+					manifest_path, DescribeCurrentException());
+			}
+			return attempt;
+		}
+
+		/// Discover host-bundled plugins under <exe>/plugins/<id>/ and load them
+		/// through the normal Automation engine path. Macros self-register from
+		/// each plugin's manifest, so the host never hardcodes per-plugin menus.
+		void LoadAppLocalPlugins(AutoloadReloadResult& result)
+		{
+			agi::fs::path plugins_root;
+			try {
+				plugins_root = agi::coreclr::GetCurrentExecutableDirectory() / "plugins";
+			}
+			catch (...) {
+				result.diagnostics.push_back({
+					"Could not resolve the app-local plugins directory: " +
+						DescribeCurrentException(),
+					true});
+				++result.error_count;
+				return;
+			}
+
+			if (!agi::fs::DirectoryExists(plugins_root))
+				return;
+
+			try {
+				for (auto entry : agi::fs::DirectoryIterator(plugins_root, "*")) {
+					auto plugin_dir = plugins_root / agi::fs::PathFromString(entry);
+					if (!agi::fs::DirectoryExists(plugin_dir))
+						continue;
+
+					auto dirname = agi::fs::PathToString(plugin_dir.filename());
+					// Runtime host pack lives next to plugins; it is not a plugin.
+					if (dirname == "coreclr")
+						continue;
+
+					auto manifest = FindAppLocalPluginManifest(plugin_dir);
+					if (!manifest)
+						continue;
+
+					// Eager validate (same bar as managed-store plugins) so a
+					// broken or mismatched payload does not publish macros/services.
+					auto attempt = LoadValidatedPluginBridgeManifest(*manifest);
+					if (!attempt.script) {
+						if (attempt.recognised) {
+							++result.error_count;
+							result.diagnostics.push_back({
+								"App-local plugin '" + dirname +
+									"' was recognised but produced no script instance",
+								true});
+						}
+						continue;
+					}
+
+					if (!attempt.script->GetLoadedState())
+						++result.error_count;
+					result.scripts.emplace_back(std::move(attempt.script));
+				}
+			}
+			catch (...) {
+				result.diagnostics.push_back({
+					"Could not enumerate app-local plugins: " + DescribeCurrentException(),
+					true});
+				++result.error_count;
+			}
+		}
+#endif
+
 		AutoloadReloadResult LoadAutoloadScripts(
 			std::string const& path,
 			agi::fs::path const& managed_plugin_root)
@@ -235,6 +344,17 @@ namespace Automation4 {
 
 				for (auto filename : agi::fs::DirectoryIterator(dirname, "*.*")) {
 					auto script_filename = dirname / agi::fs::PathFromString(filename);
+					// Bare plugin.json is only for app-local plugins/<id>/ discovery.
+					// Traditional autoload uses *.* and must not pick it up.
+					auto leaf = agi::fs::PathToString(script_filename.filename());
+					std::transform(leaf.begin(), leaf.end(), leaf.begin(), [](char value) {
+						return value >= 'A' && value <= 'Z'
+							? static_cast<char>(value - 'A' + 'a')
+							: value;
+					});
+					if (leaf == "plugin.json")
+						continue;
+
 					try {
 						script_filename = agi::fs::Canonicalize(script_filename);
 					}
@@ -274,6 +394,10 @@ namespace Automation4 {
 			}
 
 #ifdef WITH_PLUGIN_BRIDGE
+			// Bundled plugins under <exe>/plugins/<id>/ register macros from their
+			// manifests. Missing packages simply do not appear (auto4 semantics).
+			LoadAppLocalPlugins(result);
+
 			if (!managed_plugin_root.empty()) {
 				agi::coreclr::ManagedPluginActivationStore store(managed_plugin_root);
 				auto discovery = store.Discover();

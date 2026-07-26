@@ -48,6 +48,7 @@
 #include "visual_tool_clip.h"
 #include "visual_tool_cross.h"
 #include "visual_tool_drag.h"
+#include "visual_tool_measure.h"
 #include "visual_tool_rotatexy.h"
 #include "visual_tool_rotatez.h"
 #include "visual_tool_scale.h"
@@ -66,6 +67,7 @@ enum class SavedVisualTool {
 	None,
 	Cross,
 	Drag,
+	Measure,
 	RotateZ,
 	RotateXY,
 	Scale,
@@ -80,6 +82,8 @@ SavedVisualTool DetectVisualTool(VideoDisplay *display) {
 		return SavedVisualTool::Cross;
 	if (display->ToolIsType(typeid(VisualToolDrag)))
 		return SavedVisualTool::Drag;
+	if (display->ToolIsType(typeid(VisualToolMeasure)))
+		return SavedVisualTool::Measure;
 	if (display->ToolIsType(typeid(VisualToolRotateZ)))
 		return SavedVisualTool::RotateZ;
 	if (display->ToolIsType(typeid(VisualToolRotateXY)))
@@ -103,6 +107,9 @@ void RestoreVisualTool(VideoDisplay *display, agi::Context *context, SavedVisual
 			break;
 		case SavedVisualTool::Drag:
 			display->SetTool(agi::make_unique<VisualToolDrag>(display, context));
+			break;
+		case SavedVisualTool::Measure:
+			display->SetTool(agi::make_unique<VisualToolMeasure>(display, context));
 			break;
 		case SavedVisualTool::RotateZ:
 			display->SetTool(agi::make_unique<VisualToolRotateZ>(display, context));

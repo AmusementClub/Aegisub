@@ -41,6 +41,63 @@ Returns: 2 values, all numbers.
 
 ---
 
+Getting a read-only visual-guide snapshot
+
+function aegisub.get_visual_guides()
+
+Returns one table. The table is always returned, including when the current
+Automation host has no live GUI, visual-guide controller, or video.
+
+The top-level fields are:
+  schema_version (number)
+    The snapshot schema version. This version is 1.
+  available (boolean)
+    True when the remaining fields describe a live visual-guide state. False
+    means visual-guide data is unavailable in the current host.
+  generation (number)
+    A monotonically changing state version when available. It can be used to
+    avoid processing an unchanged snapshot, but is not a guide ID.
+  frame (number)
+    The current video frame number, or -1 when unavailable.
+  script_resolution (table)
+    { width = number, height = number }, using the script PlayRes.
+  frame_resolution (table)
+    { width = number, height = number }, using source video pixels. This is
+    contextual metadata only; guide coordinates are not stored in frame space.
+  selected_id (string or nil)
+    The currently selected guide ID, when one is selected.
+  last_measurement_id (string or nil)
+    The most recently created measurement guide ID, when one exists. With only
+    measurement guides, this is always guides[#guides].id when the array is
+    non-empty.
+  guides (array)
+    Guides in the same order as the visual-guide overlay is drawn.
+
+When available is false, generation is 0, frame is -1, both resolutions are
+{ width = 0, height = 0 }, and guides is an empty array. selected_id and
+last_measurement_id are nil.
+
+Every guide has id, kind, coordinate_space, first, second, delta_x, delta_y,
+distance, and angle_degrees.
+
+kind is currently always "measurement_segment". coordinate_space is currently
+always "script" and identifies the units used by all coordinates (script
+PlayRes pixels). It is never a canvas, DPI, OpenGL, Skia, or source-frame
+coordinate system.
+
+Scripts should tolerate unknown future kind and coordinate_space values.
+
+distance is non-negative. angle_degrees uses atan2(delta_y, delta_x) in the
+range [-180, 180]; because the video and ASS y axis points down, positive
+angles appear clockwise on screen. Values are raw doubles and are not rounded
+to match an overlay label.
+
+The returned table is a value snapshot. It does not change after later guide
+edits, and the API cannot create, modify, delete, draw, or receive mouse events
+for guides. Scripts should read this API on demand rather than busy-polling it.
+
+---
+
 Setting the main frame's status bar text
 
 function aegisub.set_status_bar_text(text)

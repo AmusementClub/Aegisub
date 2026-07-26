@@ -34,6 +34,7 @@ class AssDialogue;
 class VideoDisplay;
 class VideoOverlayDrawContext;
 class wxMouseCaptureLostEvent;
+class wxKeyEvent;
 class wxMouseEvent;
 class wxToolBar;
 namespace agi {
@@ -53,8 +54,6 @@ class VisualToolBase {
 	void OnSeek(int new_frame);
 	void UpdateScriptResolution();
 	void UpdateLayoutResolution();
-
-	void OnMouseCaptureLost(wxMouseCaptureLostEvent &);
 
 	/// @brief Get the dialogue line currently in the edit box
 	/// @return nullptr if the line is not active on the current frame
@@ -84,6 +83,10 @@ class VisualToolBase {
 
 protected:
 	std::vector<agi::signal::Connection> connections;
+
+	/// Called if a mouse interaction is interrupted by wx losing capture. Tools
+	/// which keep their own edit transaction can override this to roll it back.
+	virtual void OnMouseCaptureLost(wxMouseCaptureLostEvent &);
 
 	OpenGLWrapper gl;
 
@@ -153,6 +156,8 @@ public:
 
 	// Stuff called by VideoDisplay
 	virtual void OnMouseEvent(wxMouseEvent &event)=0;
+	/// Return true when the tool consumed a keyboard event.
+	virtual bool OnKeyDown(wxKeyEvent &) { return false; }
 	virtual void Draw()=0;
 	virtual bool SupportsOverlayContext() const { return false; }
 	virtual void DrawOverlay(VideoOverlayDrawContext &) { }
@@ -160,7 +165,7 @@ public:
 	virtual void SetDisplayArea(int x, int y, int w, int h);
 	virtual void SetToolbar(wxToolBar *) { }
 	bool IsInteracting() const noexcept { return holding || dragging; }
-	virtual ~VisualToolBase() = default;
+	virtual ~VisualToolBase();
 };
 
 /// Visual tool base class containing all common feature-related functionality

@@ -17,6 +17,7 @@
 #include "automation_runtime_trace_sink.h"
 #include "automation_runtime_state_snapshot.h"
 #include "automation_template_debug_state.h"
+#include "automation_visual_guide_snapshot.h"
 
 #include <memory>
 #include <optional>
@@ -45,4 +46,8 @@ namespace Automation4 {
 
 	std::optional<AutomationRuntimeStateSnapshot> LuaGetAutomationRuntimeStateSnapshot(lua_State *L);
 	std::optional<AutomationTemplateDebugState> LuaGetAutomationTemplateDebugState(lua_State *L);
+
+	// Encodes an Automation value snapshot on the current Lua thread. The
+	// caller must obtain the snapshot from its host before entering Lua code.
+	void LuaPushVisualGuideSnapshot(lua_State *L, AutomationVisualGuideSnapshot const& snapshot);
 }

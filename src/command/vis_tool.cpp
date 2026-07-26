@@ -24,6 +24,7 @@
 #include "../visual_tool_clip.h"
 #include "../visual_tool_cross.h"
 #include "../visual_tool_drag.h"
+#include "../visual_tool_measure.h"
 #include "../visual_tool_rotatexy.h"
 #include "../visual_tool_rotatez.h"
 #include "../visual_tool_scale.h"
@@ -66,6 +67,14 @@ namespace {
 		STR_MENU("Drag")
 		STR_DISP("Drag")
 		STR_HELP("Drag subtitles")
+	};
+
+	struct visual_mode_measure final : public visual_tool_command<VisualToolMeasure> {
+		CMD_NAME("video/tool/measure")
+		CMD_ICON(visual_measure)
+		STR_MENU("Measure")
+		STR_DISP("Measure")
+		STR_HELP("Create and edit temporary measurement and axis guides")
 	};
 
 	struct visual_mode_rotate_z final : public visual_tool_command<VisualToolRotateZ> {
@@ -118,5 +127,6 @@ namespace cmd {
 		reg(agi::make_unique<visual_mode_scale>());
 		reg(agi::make_unique<visual_mode_clip>());
 		reg(agi::make_unique<visual_mode_vector_clip>());
+		reg(agi::make_unique<visual_mode_measure>());
 	}
 }

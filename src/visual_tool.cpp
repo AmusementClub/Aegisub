@@ -65,6 +65,10 @@ VisualToolBase::VisualToolBase(VideoDisplay *parent, agi::Context *context)
 	parent->Bind(wxEVT_MOUSE_CAPTURE_LOST, &VisualToolBase::OnMouseCaptureLost, this);
 }
 
+VisualToolBase::~VisualToolBase() {
+	parent->Unbind(wxEVT_MOUSE_CAPTURE_LOST, &VisualToolBase::OnMouseCaptureLost, this);
+}
+
 void VisualToolBase::UpdateScriptResolution() {
 	int script_w, script_h;
 	auto core = c->GetCore();

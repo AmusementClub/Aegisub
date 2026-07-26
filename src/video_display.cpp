@@ -41,6 +41,7 @@
 #include "compat.h"
 #include "format.h"
 #include "frame_main.h"
+#include "gl_text.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "include/aegisub/hotkey.h"
@@ -59,11 +60,14 @@
 #include "video_render_routing.h"
 #include "video_display_layout.h"
 #include "video_memory_stats.h"
+#include "video_overlay_draw_context_legacy_gl.h"
 #include "video_zoom.h"
 #include "video_controller.h"
 #include "video_frame_wx.h"
+#include "visual_guide_overlay.h"
 #include "visual_tool.h"
 
+#include <libaegisub/color.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/log.h>
 #include <libaegisub/scope_exit.h>
@@ -425,6 +429,23 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 		con->videoController->AddARChangeListener(&VideoDisplay::UpdateSize, this),
 		con->ass->AddCommitListener(&VideoDisplay::OnSubtitlesCommit, this),
 	});
+	if (auto controller = c->GetUI().visualGuideController) {
+		connections.push_back(controller->AddChangedListener([this] {
+			// The attached display stays alive while a detached display owns the
+			// shared context. Only the current display should render guide updates.
+			if (con->GetUI().videoDisplay == this)
+				Render();
+		}));
+	}
+	// Persistent guides read colours/font size each frame via OPT_GET, but a
+	// preference change does not otherwise schedule a repaint.
+	auto const render_if_active_display = [this](agi::OptionValue const&) {
+		if (con->GetUI().videoDisplay == this)
+			Render();
+	};
+	connections.push_back(OPT_SUB("Colour/Visual Tools/Lines Primary", render_if_active_display));
+	connections.push_back(OPT_SUB("Colour/Visual Tools/Highlight Primary", render_if_active_display));
+	connections.push_back(OPT_SUB("Tool/Visual/Coordinate Font Size", render_if_active_display));
 
 	SetBackgroundStyle(wxBG_STYLE_PAINT);
 	Bind(wxEVT_PAINT, &VideoDisplay::OnPaint, this);
@@ -476,6 +497,36 @@ wxRect VideoDisplay::GetBaseViewportRect() const {
 	int const bottom = static_cast<int>(std::lround(
 		static_cast<double>(baseViewport.viewport_top + baseViewport.viewport_height) / factor));
 	return wxRect(left, top, std::max(right - left, 0), std::max(bottom - top, 0));
+}
+
+VisualGuideViewport VideoDisplay::GetVisualGuideViewport() const {
+	VisualGuideViewport viewport;
+	int const factor = std::max(scale_factor, 1);
+	viewport.canvas_x = static_cast<double>(viewport_left) / factor;
+	viewport.canvas_y = static_cast<double>(viewport_top) / factor;
+	viewport.canvas_width = static_cast<double>(viewport_width) / factor;
+	viewport.canvas_height = static_cast<double>(viewport_height) / factor;
+
+	int script_width = 0;
+	int script_height = 0;
+	con->ass->GetResolution(ScriptResolutionType::PlayRes, script_width, script_height);
+	viewport.script_width = script_width;
+	viewport.script_height = script_height;
+	return viewport;
+}
+
+void VideoDisplay::DrawVisualGuides(VideoOverlayDrawContext &draw_context) {
+	auto controller = con->GetUI().visualGuideController;
+	if (!controller)
+		return;
+
+	VisualGuideOverlayStyle style;
+	style.line_colour = to_wx(OPT_GET("Colour/Visual Tools/Lines Primary")->GetColor());
+	style.highlight_colour = to_wx(OPT_GET("Colour/Visual Tools/Highlight Primary")->GetColor());
+	style.label_font_size = OPT_GET("Tool/Visual/Coordinate Font Size")->GetInt();
+
+	VisualGuideOverlay overlay;
+	overlay.Draw(draw_context, GetVisualGuideViewport(), controller->CaptureView(), style);
 }
 
 double VideoDisplay::GetVideoScaleFactor() const {
@@ -769,6 +820,8 @@ void VideoDisplay::ApplyVideoProvider(AsyncVideoProvider *provider) {
 }
 
 void VideoDisplay::OnVideoProviderChanged(AsyncVideoProvider *provider) {
+	if (auto controller = con->GetUI().visualGuideController)
+		controller->ResetForVideoChange();
 	ApplyVideoProvider(provider);
 }
 
@@ -1177,6 +1230,14 @@ void VideoDisplay::DrawLegacyOverlayPass(wxSize const& client_size) {
 		}
 	}
 
+	if (con->GetUI().visualGuideController) {
+		if (!visualGuideText)
+			visualGuideText = agi::make_unique<OpenGLText>();
+		OpenGLWrapper guide_gl;
+		LegacyVideoOverlayDrawContext guide_context(guide_gl, *visualGuideText);
+		DrawVisualGuides(guide_context);
+	}
+
 	if ((mouse_pos || !autohideTools->GetBool()) && tool)
 		tool->Draw();
 }
@@ -1298,6 +1359,7 @@ bool VideoDisplay::TryDrawSkiaOverlayPass(wxSize const& client_size) try {
 			recorder.SetFillColour(*wxWHITE, 1.0f);
 			recorder.ClearInvert();
 		}
+		DrawVisualGuides(recorder);
 		if ((mouse_pos || !autohideTools->GetBool()) && tool)
 			tool->DrawOverlay(recorder);
 
@@ -2551,6 +2613,8 @@ void VideoDisplay::OnKeyDown(wxKeyEvent &event) {
 		FinishPointSelection(true, true);
 		return;
 	}
+	if (tool && tool->OnKeyDown(event))
+		return;
 	hotkey::check("Video", con, event);
 }
 
@@ -2741,6 +2805,7 @@ void VideoDisplay::Unload() {
 	skia_overlay_surface_provider.reset();
 	skia_overlay_text_cache.reset();
 #endif
+	visualGuideText.reset();
 	tool.reset();
 	glContext.reset();
 	pending_packet = { };

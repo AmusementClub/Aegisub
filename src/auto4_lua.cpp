@@ -403,6 +403,18 @@ namespace {
 		return 1;
 	}
 
+	int lua_get_visual_guides(lua_State *L)
+	{
+		AutomationVisualGuideSnapshot snapshot;
+		if (auto *host = get_host(L)) {
+			if (auto guides = host->Ui().TryGetVisualGuides())
+				snapshot = std::move(*guides);
+		}
+
+		LuaPushVisualGuideSnapshot(L, snapshot);
+		return 1;
+	}
+
 	int lua_set_status_text(lua_State *L)
 	{
 		auto *host = get_host(L);
@@ -695,7 +707,7 @@ namespace {
 
 		// make "aegisub" table
 		lua_pushstring(L, "aegisub");
-		lua_createtable(L, 0, 13);
+		lua_createtable(L, 0, 22);
 
 		set_field<LuaCommand::LuaRegister>(L, "register_macro");
 		set_field<LuaExportFilter::LuaRegister>(L, "register_filter");
@@ -714,6 +726,7 @@ namespace {
 		set_field<get_translation>(L, "gettext");
 		set_field<project_properties>(L, "project_properties");
 		set_field<lua_get_audio_selection>(L, "get_audio_selection");
+		set_field<lua_get_visual_guides>(L, "get_visual_guides");
 		set_field<lua_set_status_text>(L, "set_status_text");
 		set_field<lua_focus_edit_box>(L, "focus_edit_box");
 		set_field<lua_get_edit_box_cursor>(L, "get_edit_box_cursor");

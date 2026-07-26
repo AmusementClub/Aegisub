@@ -557,6 +557,76 @@ namespace {
 		return state;
 	}
 
+	void push_visual_guide_point(lua_State *L, Automation4::AutomationVisualGuidePoint const& point)
+	{
+		lua_createtable(L, 0, 2);
+		set_field(L, "x", point.x);
+		set_field(L, "y", point.y);
+	}
+
+	void push_visual_guide(lua_State *L, Automation4::AutomationVisualGuide const& guide)
+	{
+		// id, kind, coordinate_space, first, second, delta_x, delta_y, distance,
+		// angle_degrees
+		lua_createtable(L, 0, 9);
+		set_field(L, "id", guide.id);
+		set_field(L, "kind", guide.kind);
+		set_field(L, "coordinate_space", guide.coordinate_space);
+		push_visual_guide_point(L, guide.first);
+		lua_setfield(L, -2, "first");
+		push_visual_guide_point(L, guide.second);
+		lua_setfield(L, -2, "second");
+		set_field(L, "delta_x", guide.delta_x);
+		set_field(L, "delta_y", guide.delta_y);
+		set_field(L, "distance", guide.distance);
+		set_field(L, "angle_degrees", guide.angle_degrees);
+	}
+
+	void push_visual_guide_resolution(lua_State *L, int width, int height)
+	{
+		lua_createtable(L, 0, 2);
+		set_field(L, "width", width);
+		set_field(L, "height", height);
+	}
+
+	void push_visual_guide_snapshot_table(lua_State *L, Automation4::AutomationVisualGuideSnapshot const& snapshot)
+	{
+		lua_createtable(L, 0, 9);
+		set_field(L, "schema_version", 1);
+		set_field(L, "available", snapshot.available);
+
+		if (!snapshot.available) {
+			set_field(L, "generation", 0);
+			set_field(L, "frame", -1);
+			push_visual_guide_resolution(L, 0, 0);
+			lua_setfield(L, -2, "script_resolution");
+			push_visual_guide_resolution(L, 0, 0);
+			lua_setfield(L, -2, "frame_resolution");
+			lua_createtable(L, 0, 0);
+			lua_setfield(L, -2, "guides");
+			return;
+		}
+
+		push_value(L, snapshot.generation);
+		lua_setfield(L, -2, "generation");
+		set_field(L, "frame", snapshot.frame);
+		push_visual_guide_resolution(L, snapshot.script_width, snapshot.script_height);
+		lua_setfield(L, -2, "script_resolution");
+		push_visual_guide_resolution(L, snapshot.frame_width, snapshot.frame_height);
+		lua_setfield(L, -2, "frame_resolution");
+		if (snapshot.selected_id)
+			set_field(L, "selected_id", *snapshot.selected_id);
+		if (snapshot.last_measurement_id)
+			set_field(L, "last_measurement_id", *snapshot.last_measurement_id);
+
+		lua_createtable(L, static_cast<int>(snapshot.guides.size()), 0);
+		for (size_t i = 0; i < snapshot.guides.size(); ++i) {
+			push_visual_guide(L, snapshot.guides[i]);
+			lua_rawseti(L, -2, static_cast<int>(i + 1));
+		}
+		lua_setfield(L, -2, "guides");
+	}
+
 	void push_invocation_table(lua_State *L, Automation4::AutomationInvocation const& invocation)
 	{
 		lua_createtable(L, 0, 5);
@@ -827,5 +897,10 @@ namespace Automation4 {
 	std::optional<AutomationTemplateDebugState> LuaGetAutomationTemplateDebugState(lua_State *L)
 	{
 		return load_runtime_template_debug_state(L);
+	}
+
+	void LuaPushVisualGuideSnapshot(lua_State *L, AutomationVisualGuideSnapshot const& snapshot)
+	{
+		push_visual_guide_snapshot_table(L, snapshot);
 	}
 }

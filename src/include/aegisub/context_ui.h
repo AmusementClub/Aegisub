@@ -28,6 +28,7 @@ class FrameMain;
 class SecondarySubtitleSession;
 class SubsEditBox;
 class VideoDisplay;
+class VisualGuideController;
 class wxWindow;
 
 namespace agi {
@@ -44,6 +45,7 @@ struct ContextUiState {
 	FrameMain *frame = nullptr;
 	VideoDisplay *videoDisplay = nullptr;
 	std::shared_ptr<SecondarySubtitleSession> secondarySubtitleSession;
+	std::shared_ptr<VisualGuideController> visualGuideController;
 
 	ContextUiState();
 	~ContextUiState();
@@ -61,6 +63,7 @@ struct ContextUiSession {
 	FrameMain *&frame;
 	VideoDisplay *&videoDisplay;
 	std::shared_ptr<SecondarySubtitleSession>& secondarySubtitleSession;
+	std::shared_ptr<VisualGuideController>& visualGuideController;
 
 	explicit ContextUiSession(ContextUiState& state);
 };
@@ -77,6 +80,7 @@ struct ConstContextUiSession {
 	FrameMain *const& frame;
 	VideoDisplay *const& videoDisplay;
 	std::shared_ptr<SecondarySubtitleSession> const& secondarySubtitleSession;
+	std::shared_ptr<VisualGuideController> const& visualGuideController;
 
 	explicit ConstContextUiSession(ContextUiState const& state);
 };

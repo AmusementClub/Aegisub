@@ -15,6 +15,7 @@
 #pragma once
 
 #include "automation_context_snapshot.h"
+#include "automation_visual_guide_snapshot.h"
 
 #include <libaegisub/fs_fwd.h>
 
@@ -98,6 +99,9 @@ namespace Automation4 {
 		virtual std::shared_ptr<agi::FileDialogService> GetFileDialogService() const = 0;
 		virtual bool CanFocusSubtitleEditBox() const = 0;
 		virtual std::optional<AutomationSubtitleEditBoxCursor> TryGetSubtitleEditBoxCursor() const = 0;
+		// Captures temporary visual-guide UI state as a value object. A missing
+		// value means that this host has no live GUI/controller/video snapshot.
+		virtual std::optional<AutomationVisualGuideSnapshot> TryGetVisualGuides() const = 0;
 		virtual bool FocusSubtitleEditBox() = 0;
 		virtual bool SetSubtitleEditBoxCursor(int character_index, bool after) = 0;
 		virtual bool SetSubtitleEditBoxSelection(int start, int stop) = 0;

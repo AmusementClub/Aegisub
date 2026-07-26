@@ -1,0 +1,60 @@
+#pragma once
+
+#include "visual_guide_controller.h"
+#include "visual_guide_overlay.h"
+
+#include <string>
+
+enum class VisualGuideHitPart {
+	None,
+	FirstEndpoint,
+	SecondEndpoint,
+	Line,
+};
+
+struct VisualGuideHit {
+	std::string id;
+	VisualGuideHitPart part = VisualGuideHitPart::None;
+
+	explicit operator bool() const noexcept {
+		return part != VisualGuideHitPart::None;
+	}
+};
+
+enum class VisualGuideDragAction {
+	MoveGuide,
+	MoveFirstEndpoint,
+	MoveSecondEndpoint,
+};
+
+/// Hit-test using canvas logical pixels. Selected measurement endpoints have
+/// priority, followed by other endpoints and then guide bodies in reverse draw
+/// order.
+[[nodiscard]] VisualGuideHit HitTestVisualGuides(
+	Vector2D point,
+	VisualGuideSnapshotView const& snapshot,
+	VisualGuideViewport const& viewport,
+	double tolerance) noexcept;
+
+/// Snap a measurement endpoint to 0, 45 or 90 degrees when enabled.
+[[nodiscard]] VisualGuidePoint SnapVisualGuideMeasurementPoint(
+	VisualGuidePoint fixed_point,
+	VisualGuidePoint candidate,
+	bool enabled) noexcept;
+
+/// Clamp a guide point into the script-resolution rectangle described by the
+/// viewport. Non-finite points are returned unchanged.
+[[nodiscard]] VisualGuidePoint ClampVisualGuidePointToScript(
+	VisualGuidePoint point,
+	VisualGuideViewport const& viewport) noexcept;
+
+/// Apply one drag motion relative to the original guide. Returning an updated
+/// value rather than mutating the controller keeps cancellation transactional.
+/// Endpoints and whole-guide moves are clamped to the script rectangle.
+[[nodiscard]] VisualGuide ApplyVisualGuideDrag(
+	VisualGuide const& original,
+	VisualGuideDragAction action,
+	VisualGuidePoint drag_start,
+	VisualGuidePoint current,
+	bool snap_measurement,
+	VisualGuideViewport const& viewport) noexcept;

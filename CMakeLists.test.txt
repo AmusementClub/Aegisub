@@ -37,6 +37,7 @@ if(GTEST_FOUND)
         tests/tests/automation_debug_session.cpp
         tests/tests/automation_command_executor.cpp
         tests/tests/automation_edit_box_request_policy.cpp
+        tests/tests/automation_visual_guide_snapshot.cpp
         tests/tests/automation_runtime_journal.cpp
         tests/tests/automation_runtime_profile.cpp
         tests/tests/automation_scenario_contract.cpp
@@ -66,9 +67,11 @@ if(GTEST_FOUND)
         src/automation_scenario.cpp
         src/automation_scenario_runner.cpp
         src/automation/automation_breakpoint_store.cpp
+        src/automation/automation_context_snapshot.cpp
         src/automation/automation_debug_adapter.cpp
         src/automation/automation_debug_service.cpp
         src/automation/automation_debug_session.cpp
+        src/automation/automation_lua_runtime.cpp
         src/automation/automation_runtime_journal.cpp
         src/audio_display_analysis.cpp
         src/audio_latest_range_scheduler.cpp
@@ -240,6 +243,10 @@ if(GTEST_FOUND)
         tests/tests/video_aspect_ratio_ops.cpp
         tests/tests/video_navigation_ops.cpp
         tests/tests/video_overlay_helpers.cpp
+        tests/tests/visual_guide_controller.cpp
+        tests/tests/visual_guide_interaction.cpp
+        tests/tests/visual_guide_model.cpp
+        tests/tests/visual_guide_overlay.cpp
         tests/tests/navigation_preview_policy.cpp
         tests/tests/playback_transport_policy.cpp
         tests/tests/video_session_ops.cpp
@@ -258,7 +265,12 @@ if(GTEST_FOUND)
         src/subtitle_fps_choice.cpp
         src/subtitle_overlay_blend.cpp
         src/track_choice.cpp
+        src/vector2d.cpp
         src/video_renderer_opengl_tile.cpp
+        src/visual_guide_controller.cpp
+        src/visual_guide_interaction.cpp
+        src/visual_guide_model.cpp
+        src/visual_guide_overlay.cpp
         src/video_renderer_backend.cpp
         src/video_provider_cache.cpp
         src/provider_catalog_builder.cpp
@@ -302,6 +314,7 @@ if(GTEST_FOUND)
         target_sources(gtest-run PRIVATE
             tests/tests/skia_video_compositor_contract.cpp
             tests/tests/skia_video_overlay_command_buffer.cpp
+            tests/tests/visual_guide_overlay_skia.cpp
             src/skia/skia_video_compositor_contract.cpp
             src/skia/skia_video_overlay_command_buffer.cpp
         )

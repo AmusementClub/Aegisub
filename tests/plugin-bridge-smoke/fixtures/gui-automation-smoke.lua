@@ -7,6 +7,14 @@ local function mutate(subtitles, selected_lines, active_line)
   assert(#selected_lines > 0)
   assert(active_line > 0)
 
+  local visual_guides = aegisub.get_visual_guides()
+  assert(type(visual_guides) == "table")
+  assert(visual_guides.schema_version == 1)
+  assert(visual_guides.available == false)
+  assert(visual_guides.generation == 0)
+  assert(visual_guides.frame == -1)
+  assert(#visual_guides.guides == 0)
+
   local line = subtitles[selected_lines[1]]
   line.text = "GUI automation smoke mutation"
   subtitles[selected_lines[1]] = line

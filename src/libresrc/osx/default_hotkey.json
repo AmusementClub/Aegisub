@@ -373,6 +373,9 @@
 		],
 		"video/tool/vector_clip" : [
 			"J"
+		],
+		"video/tool/measure" : [
+			"K"
 		]
 	}
 }

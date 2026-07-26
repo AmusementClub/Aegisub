@@ -60,6 +60,7 @@
 class AssDialogue;
 class RetinaHelper;
 class AsyncVideoProvider;
+class OpenGLText;
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 class SkiaSurfaceProvider;
 class SkiaTextLayoutCache;
@@ -72,6 +73,7 @@ enum class SkiaVideoFailureInjection;
 #endif
 class VideoController;
 class VideoOverlayDrawContext;
+struct VisualGuideViewport;
 class VisualToolBase;
 class wxComboBox;
 class wxTextCtrl;
@@ -149,6 +151,8 @@ class VideoDisplay final : public wxGLCanvas {
 
 	/// The active visual typesetting tool
 	std::unique_ptr<VisualToolBase> tool;
+	/// Text cache shared by persistent visual-guide labels on the legacy path.
+	std::unique_ptr<OpenGLText> visualGuideText;
 	/// The toolbar used by individual typesetting tools
 	wxToolBar* toolBar;
 
@@ -254,6 +258,7 @@ class VideoDisplay final : public wxGLCanvas {
 	void DrawSceneCache(wxSize const& client_size, int canvas_width, int canvas_height);
 	void DrawLegacyOverlayPass(wxSize const& client_size);
 	void DrawOverlayPass(wxSize const& client_size);
+	void DrawVisualGuides(VideoOverlayDrawContext &draw_context);
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
 	bool TryDrawSkiaOverlayPass(wxSize const& client_size);
 	bool IsSkiaVideoRuntimeRequested() const noexcept;
@@ -364,6 +369,8 @@ public:
 
 	/// Get the last seen position of the mouse in script coordinates
 	Vector2D GetMousePosition() const;
+	/// Get the current logical video-content viewport for visual-guide mapping.
+	VisualGuideViewport GetVisualGuideViewport() const;
 
 	/// Begin a host-owned video point-selection session. Coordinates are
 	/// returned in script resolution when script_coordinates is true, otherwise

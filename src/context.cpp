@@ -31,13 +31,15 @@
 #include "text_selection_controller.h"
 #include "ui_services.h"
 #include "video_controller.h"
+#include "visual_guide_controller.h"
 
 #include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
 
 namespace agi {
 ContextUiState::ContextUiState()
-: dialog(make_unique<DialogManager>()) {
+: dialog(make_unique<DialogManager>())
+, visualGuideController(std::make_shared<VisualGuideController>()) {
 }
 
 ContextUiState::~ContextUiState() = default;
@@ -53,7 +55,8 @@ ContextUiSession::ContextUiSession(ContextUiState& state)
 , dialog(state.dialog)
 , frame(state.frame)
 , videoDisplay(state.videoDisplay)
-, secondarySubtitleSession(state.secondarySubtitleSession) {
+, secondarySubtitleSession(state.secondarySubtitleSession)
+, visualGuideController(state.visualGuideController) {
 }
 
 ConstContextUiSession::ConstContextUiSession(ContextUiState const& state)
@@ -67,7 +70,8 @@ ConstContextUiSession::ConstContextUiSession(ContextUiState const& state)
 , dialog(state.dialog)
 , frame(state.frame)
 , videoDisplay(state.videoDisplay)
-, secondarySubtitleSession(state.secondarySubtitleSession) {
+, secondarySubtitleSession(state.secondarySubtitleSession)
+, visualGuideController(state.visualGuideController) {
 }
 
 Context::Context()

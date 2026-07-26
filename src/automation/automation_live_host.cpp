@@ -23,6 +23,7 @@
 #include "../audio_controller.h"
 #include "../audio_timing.h"
 #include "../auto4_base.h"
+#include "../frame_main.h"
 #include "../include/aegisub/context.h"
 #include "../include/aegisub/context_ui.h"
 #include "../options.h"
@@ -31,10 +32,13 @@
 #include "../subs_controller.h"
 #include "../ui_dispatch.h"
 #include "../video_controller.h"
+#include "../visual_guide_controller.h"
+#include "../visual_guide_model.h"
 
 #include <libaegisub/fs.h>
 #include <libaegisub/path.h>
 
+#include <string>
 #include <utility>
 
 namespace Automation4 {
@@ -43,6 +47,28 @@ namespace {
 agi::ConstContextCoreSession GetCore(agi::Context const* context)
 {
 	return context->GetCore();
+}
+
+// Stable Automation spellings. The C++ model only stores measurement
+// endpoints in script pixels; these strings keep the Lua schema extensible.
+constexpr char kAutomationVisualGuideKind[] = "measurement_segment";
+constexpr char kAutomationVisualGuideCoordinateSpace[] = "script";
+
+AutomationVisualGuide ToAutomationVisualGuide(VisualGuide const& guide)
+{
+	AutomationVisualGuide result;
+	result.id = guide.id;
+	result.kind = kAutomationVisualGuideKind;
+	result.coordinate_space = kAutomationVisualGuideCoordinateSpace;
+	result.first = { guide.first.x, guide.first.y };
+	result.second = { guide.second.x, guide.second.y };
+
+	auto const metrics = CalculateVisualGuideMetrics(guide);
+	result.delta_x = metrics.delta_x;
+	result.delta_y = metrics.delta_y;
+	result.distance = metrics.distance;
+	result.angle_degrees = metrics.angle_degrees;
+	return result;
 }
 
 class LiveAutomationMediaState final : public AutomationMediaState {
@@ -218,6 +244,43 @@ public:
 				return std::nullopt;
 
 			return AutomationSubtitleEditBoxCursor{ cursor->first, cursor->second };
+		});
+	}
+
+	std::optional<AutomationVisualGuideSnapshot> TryGetVisualGuides() const override
+	{
+		return agi::ui::MainInvoke([this]() -> std::optional<AutomationVisualGuideSnapshot> {
+			if (!context)
+				return std::nullopt;
+
+			auto ui = context->GetUI();
+			if (!ui.frame || ui.frame->GetAsyncUiLifetime().expired())
+				return std::nullopt;
+
+			auto controller = ui.visualGuideController;
+			if (!controller)
+				return std::nullopt;
+
+			auto core = GetCore(context);
+			auto provider = core.project->VideoProvider();
+			if (!provider || !core.videoController)
+				return std::nullopt;
+
+			auto source = controller->CaptureSnapshot();
+			AutomationVisualGuideSnapshot snapshot;
+			snapshot.available = true;
+			snapshot.generation = source.generation;
+			snapshot.frame = core.videoController->GetFrameN();
+			core.ass->GetResolution(
+				ScriptResolutionType::PlayRes, snapshot.script_width, snapshot.script_height);
+			snapshot.frame_width = provider->GetWidth();
+			snapshot.frame_height = provider->GetHeight();
+			snapshot.selected_id = std::move(source.selected_id);
+			snapshot.last_measurement_id = std::move(source.last_measurement_id);
+			snapshot.guides.reserve(source.guides.size());
+			for (auto const& guide : source.guides)
+				snapshot.guides.push_back(ToAutomationVisualGuide(guide));
+			return snapshot;
 		});
 	}
 

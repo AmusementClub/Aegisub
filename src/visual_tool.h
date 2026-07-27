@@ -218,6 +218,7 @@ protected:
 
 private:
 	bool sel_changed = false; /// Has the selection already been changed in the current click?
+	std::set<AssDialogue *> double_click_selection; ///< Selection targeted by the current click sequence
 
 	/// @brief Called when a hold is begun
 	/// @return Should the hold actually happen?
@@ -235,6 +236,9 @@ private:
 
 protected:
 	std::set<FeatureType *> sel_features; ///< Currently selected visual features
+
+	/// Restore the selection captured before a completed click narrowed it.
+	void RestoreDoubleClickSelection();
 
 	/// Topmost feature under the mouse; generally only valid during a drag
 	FeatureType *active_feature = nullptr;

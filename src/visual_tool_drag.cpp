@@ -361,6 +361,7 @@ void VisualToolDrag::UpdateDrag(Feature *feature) {
 }
 
 void VisualToolDrag::OnDoubleClick() {
+	RestoreDoubleClickSelection();
 	Vector2D d = ToScriptCoords(mouse_pos) - (primary ? ToScriptCoords(primary->pos) : GetLinePosition(active_line));
 
 	auto core = c->GetCore();

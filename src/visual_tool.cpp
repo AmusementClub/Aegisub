@@ -403,6 +403,7 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 		commit_id_reset_timer.Stop();
 		drag_start = mouse_pos;
 		auto core = c->GetCore();
+		double_click_selection = core.selectionController->GetSelectedSet();
 
 		// start drag
 		if (active_feature) {
@@ -412,6 +413,7 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 			}
 			else
 				sel_changed = false;
+			double_click_selection = core.selectionController->GetSelectedSet();
 
 			if (active_feature->line)
 				core.selectionController->SetActiveLine(active_feature->line);
@@ -501,6 +503,13 @@ void VisualTool<FeatureType>::DrawAllFeatures(VideoOverlayDrawContext &context) 
 		context.SetFillColour(fill, 0.3f);
 		feature.Draw(context);
 	}
+}
+
+template<class FeatureType>
+void VisualTool<FeatureType>::RestoreDoubleClickSelection() {
+	auto core = c->GetCore();
+	core.selectionController->SetSelectedSet(double_click_selection);
+	double_click_selection.clear();
 }
 
 template<class FeatureType>

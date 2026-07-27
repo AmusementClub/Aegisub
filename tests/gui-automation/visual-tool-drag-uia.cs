@@ -135,39 +135,56 @@ static int Run(DriverOptions options)
         var actualDeltaX = final.X - start.X;
         var actualDeltaY = final.Y - start.Y;
 
-        SendMouseToWindow(videoCanvas, WindowMessage.MouseMove, start, 0);
-        SendMouseToWindow(videoCanvas, WindowMessage.LeftButtonDown, start, NativeConstants.MouseKeyLeftButton);
-        WaitForCapture(videoCanvas, captured: true, process, options.TimeoutSeconds);
-
-        var points = BuildMotionPath(start, final, options.MotionCount, videoClient.Width, videoClient.Height);
-        var started = Stopwatch.GetTimestamp();
-        foreach (var point in points)
-            PostMouseToWindow(videoCanvas, WindowMessage.MouseMove, point, NativeConstants.MouseKeyLeftButton);
-        var posted = Stopwatch.GetTimestamp();
-
+        long started;
+        long posted;
+        long released;
         var motionBarrierReached = false;
         var captureRetainedDuringHold = false;
         var holdMilliseconds = 0.0;
-        if (options.InputMode == "paced-hold")
+        if (options.InputMode == "double-click")
         {
+            started = Stopwatch.GetTimestamp();
+            SendMouseToWindow(videoCanvas, WindowMessage.MouseMove, final, 0);
+            SendMouseToWindow(videoCanvas, WindowMessage.LeftButtonDown, final, NativeConstants.MouseKeyLeftButton);
+            SendMouseToWindow(videoCanvas, WindowMessage.LeftButtonUp, final, 0);
+            SendMouseToWindow(videoCanvas, WindowMessage.LeftButtonDoubleClick, final, NativeConstants.MouseKeyLeftButton);
+            SendMouseToWindow(videoCanvas, WindowMessage.LeftButtonUp, final, 0);
             SendWindowMessage(videoCanvas, WindowMessage.Null, 0, 0);
-            WaitForCapture(videoCanvas, captured: true, process, options.TimeoutSeconds);
-            motionBarrierReached = true;
-
-            var holdStarted = Stopwatch.GetTimestamp();
-            Thread.Sleep(options.HoldMilliseconds);
-            var holdEnded = Stopwatch.GetTimestamp();
-            holdMilliseconds = ElapsedMilliseconds(holdStarted, holdEnded);
-            WaitForCapture(videoCanvas, captured: true, process, options.TimeoutSeconds);
-            captureRetainedDuringHold = true;
+            posted = released = Stopwatch.GetTimestamp();
         }
+        else
+        {
+            SendMouseToWindow(videoCanvas, WindowMessage.MouseMove, start, 0);
+            SendMouseToWindow(videoCanvas, WindowMessage.LeftButtonDown, start, NativeConstants.MouseKeyLeftButton);
+            WaitForCapture(videoCanvas, captured: true, process, options.TimeoutSeconds);
 
-        PostMouseToWindow(videoCanvas, WindowMessage.LeftButtonUp, final, 0);
-        WaitForCapture(videoCanvas, captured: false, process, options.TimeoutSeconds);
-        // Capture is released before the final synchronous render. A cross-process
-        // WM_NULL cannot run until the mouse-up handler has returned.
-        SendWindowMessage(videoCanvas, WindowMessage.Null, 0, 0);
-        var released = Stopwatch.GetTimestamp();
+            var points = BuildMotionPath(start, final, options.MotionCount, videoClient.Width, videoClient.Height);
+            started = Stopwatch.GetTimestamp();
+            foreach (var point in points)
+                PostMouseToWindow(videoCanvas, WindowMessage.MouseMove, point, NativeConstants.MouseKeyLeftButton);
+            posted = Stopwatch.GetTimestamp();
+
+            if (options.InputMode == "paced-hold")
+            {
+                SendWindowMessage(videoCanvas, WindowMessage.Null, 0, 0);
+                WaitForCapture(videoCanvas, captured: true, process, options.TimeoutSeconds);
+                motionBarrierReached = true;
+
+                var holdStarted = Stopwatch.GetTimestamp();
+                Thread.Sleep(options.HoldMilliseconds);
+                var holdEnded = Stopwatch.GetTimestamp();
+                holdMilliseconds = ElapsedMilliseconds(holdStarted, holdEnded);
+                WaitForCapture(videoCanvas, captured: true, process, options.TimeoutSeconds);
+                captureRetainedDuringHold = true;
+            }
+
+            PostMouseToWindow(videoCanvas, WindowMessage.LeftButtonUp, final, 0);
+            WaitForCapture(videoCanvas, captured: false, process, options.TimeoutSeconds);
+            // Capture is released before the final synchronous render. A cross-process
+            // WM_NULL cannot run until the mouse-up handler has returned.
+            SendWindowMessage(videoCanvas, WindowMessage.Null, 0, 0);
+            released = Stopwatch.GetTimestamp();
+        }
 
         Thread.Sleep(500);
         EnsureSaved(mainWindow, process, fixturePath, options.TimeoutSeconds);
@@ -785,7 +802,7 @@ sealed record DriverOptions(
                 case "--exe": executable = Value(); break;
                 case "--video": video = Value(); break;
                 case "--artifacts": artifacts = Value(); break;
-                case "--input-mode": inputMode = Choice(Value(), option, "throughput", "paced-hold"); break;
+                case "--input-mode": inputMode = Choice(Value(), option, "throughput", "paced-hold", "double-click"); break;
                 case "--size": size = Choice(Value(), option, "small", "large"); break;
                 case "--selection": selection = Choice(Value(), option, "single", "multi"); break;
                 case "--trace": trace = Choice(Value(), option, "off", "on"); break;
@@ -823,6 +840,8 @@ sealed record DriverOptions(
                 throw new ArgumentException(
                     "--hold-ms must be between 100 and 250 for paced-hold input");
         }
+        if (inputMode == "double-click" && trace != "off")
+            throw new ArgumentException("--input-mode double-click requires --trace off");
 
         return new DriverOptions(
             Path.GetFullPath(executable),
@@ -868,7 +887,7 @@ sealed record DriverOptions(
     {
         Console.WriteLine("Legacy visual-tool drag GUI benchmark");
         Console.WriteLine("  --exe PATH --video PATH --artifacts PATH");
-        Console.WriteLine("  [--input-mode throughput|paced-hold] [--hold-ms N]");
+        Console.WriteLine("  [--input-mode throughput|paced-hold|double-click] [--hold-ms N]");
         Console.WriteLine("  [--size small|large] [--selection single|multi] [--trace off|on]");
         Console.WriteLine("  [--trace-window markers|legacy]");
         Console.WriteLine("  [--motions N>=100] [--small-events N] [--large-events N]");
@@ -1180,6 +1199,7 @@ enum WindowMessage : uint
     MouseMove = 0x0200,
     LeftButtonDown = 0x0201,
     LeftButtonUp = 0x0202,
+    LeftButtonDoubleClick = 0x0203,
 }
 
 [Flags]

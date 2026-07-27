@@ -63,10 +63,22 @@ VisualToolBase::VisualToolBase(VideoDisplay *parent, agi::Context *context)
 	connections.push_back(core.selectionController->AddActiveLineListener(&VisualToolBase::OnActiveLineChanged, this));
 	connections.push_back(core.videoController->AddSeekListener(&VisualToolBase::OnSeek, this));
 	parent->Bind(wxEVT_MOUSE_CAPTURE_LOST, &VisualToolBase::OnMouseCaptureLost, this);
+
+	// Coalesce keyboard-nudge undos while keys are held/repeated; split after idle.
+	// Explicit id so this handler does not receive every timer event on VideoDisplay.
+	commit_id_reset_timer_id = wxNewId();
+	commit_id_reset_timer.SetOwner(parent, commit_id_reset_timer_id);
+	parent->Bind(wxEVT_TIMER, &VisualToolBase::OnCommitIdResetTimer, this, commit_id_reset_timer_id);
 }
 
 VisualToolBase::~VisualToolBase() {
+	commit_id_reset_timer.Stop();
+	parent->Unbind(wxEVT_TIMER, &VisualToolBase::OnCommitIdResetTimer, this, commit_id_reset_timer_id);
 	parent->Unbind(wxEVT_MOUSE_CAPTURE_LOST, &VisualToolBase::OnMouseCaptureLost, this);
+}
+
+void VisualToolBase::OnCommitIdResetTimer(wxTimerEvent &) {
+	command_session.ResetCommitId();
 }
 
 void VisualToolBase::UpdateScriptResolution() {
@@ -195,6 +207,16 @@ void VisualToolBase::Commit(wxString message) {
 	command_session.Commit(from_wx(message), AssFile::COMMIT_DIAG_TEXT, command_session.GetCommitId(), GetCommitTargetLine());
 }
 
+void VisualToolBase::CommitNudge(wxString message) {
+	if (message.empty())
+		message = _("visual typesetting");
+
+	command_session.Commit(from_wx(message), AssFile::COMMIT_DIAG_TEXT, command_session.GetCommitId(), GetCommitTargetLine());
+	// Key-repeat merges into one undo; a short idle starts a new group.
+	commit_id_reset_timer.Start(500, wxTIMER_ONE_SHOT);
+	parent->Render();
+}
+
 void VisualToolBase::CommitAndRefresh(wxString message) {
 	if (message.empty())
 		message = _("visual typesetting");
@@ -316,6 +338,8 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 
 	}
 	else if (left_click) {
+		// A pending keyboard-nudge idle timer must not ResetCommitId mid-drag.
+		commit_id_reset_timer.Stop();
 		drag_start = mouse_pos;
 		auto core = c->GetCore();
 

@@ -116,6 +116,152 @@ namespace {
 		STR_DISP("Vector Clip")
 		STR_HELP("Clip subtitles to a vectorial area")
 	};
+
+	template<int dx, int dy, VisualNudgeMagnitude Mag>
+	struct visual_tool_nudge : public Command {
+		CMD_TYPE(COMMAND_VALIDATE)
+
+		bool Validate(const agi::Context *c) override {
+			return c->GetUI().videoDisplay->CanNudgeTool();
+		}
+
+		void operator()(agi::Context *c) override {
+			c->GetUI().videoDisplay->NudgeTool(Vector2D(dx, dy), Mag);
+		}
+	};
+
+	struct visual_tool_nudge_left final : public visual_tool_nudge<-1, 0, VisualNudgeMagnitude::Normal> {
+		CMD_NAME("video/tool/nudge/left")
+		STR_MENU("Nudge left")
+		STR_DISP("Nudge left")
+		STR_HELP("Nudge the current visual tool value left by one step")
+	};
+	struct visual_tool_nudge_right final : public visual_tool_nudge<1, 0, VisualNudgeMagnitude::Normal> {
+		CMD_NAME("video/tool/nudge/right")
+		STR_MENU("Nudge right")
+		STR_DISP("Nudge right")
+		STR_HELP("Nudge the current visual tool value right by one step")
+	};
+	struct visual_tool_nudge_up final : public visual_tool_nudge<0, -1, VisualNudgeMagnitude::Normal> {
+		CMD_NAME("video/tool/nudge/up")
+		STR_MENU("Nudge up")
+		STR_DISP("Nudge up")
+		STR_HELP("Nudge the current visual tool value up by one step")
+	};
+	struct visual_tool_nudge_down final : public visual_tool_nudge<0, 1, VisualNudgeMagnitude::Normal> {
+		CMD_NAME("video/tool/nudge/down")
+		STR_MENU("Nudge down")
+		STR_DISP("Nudge down")
+		STR_HELP("Nudge the current visual tool value down by one step")
+	};
+	struct visual_tool_nudge_left_large final : public visual_tool_nudge<-1, 0, VisualNudgeMagnitude::Large> {
+		CMD_NAME("video/tool/nudge/left/large")
+		STR_MENU("Nudge left (large)")
+		STR_DISP("Nudge left (large)")
+		STR_HELP("Nudge the current visual tool value left by a large step")
+	};
+	struct visual_tool_nudge_right_large final : public visual_tool_nudge<1, 0, VisualNudgeMagnitude::Large> {
+		CMD_NAME("video/tool/nudge/right/large")
+		STR_MENU("Nudge right (large)")
+		STR_DISP("Nudge right (large)")
+		STR_HELP("Nudge the current visual tool value right by a large step")
+	};
+	struct visual_tool_nudge_up_large final : public visual_tool_nudge<0, -1, VisualNudgeMagnitude::Large> {
+		CMD_NAME("video/tool/nudge/up/large")
+		STR_MENU("Nudge up (large)")
+		STR_DISP("Nudge up (large)")
+		STR_HELP("Nudge the current visual tool value up by a large step")
+	};
+	struct visual_tool_nudge_down_large final : public visual_tool_nudge<0, 1, VisualNudgeMagnitude::Large> {
+		CMD_NAME("video/tool/nudge/down/large")
+		STR_MENU("Nudge down (large)")
+		STR_DISP("Nudge down (large)")
+		STR_HELP("Nudge the current visual tool value down by a large step")
+	};
+
+	// mode values match VisualToolVectorClip button IDs minus BUTTON_DRAG:
+	// drag=0, line=1, bicubic=2, convert=3, insert=4, remove=5,
+	// freehand=6, freehand_smooth=7, move=8
+	template<int Mode>
+	struct vector_clip_submode : public Command {
+		CMD_TYPE(COMMAND_VALIDATE | COMMAND_RADIO)
+
+		bool Validate(const agi::Context *c) override {
+			return c->GetUI().videoDisplay->ToolIsType(typeid(VisualToolVectorClip));
+		}
+
+		bool IsActive(const agi::Context *c) override {
+			return Validate(c) && c->GetUI().videoDisplay->GetToolSubMode() == Mode;
+		}
+
+		void operator()(agi::Context *c) override {
+			c->GetUI().videoDisplay->SetToolSubMode(Mode);
+		}
+	};
+
+	struct vector_clip_mode_drag final : public vector_clip_submode<0> {
+		CMD_NAME("video/tool/vector_clip/drag")
+		CMD_ICON(visual_vector_clip_drag)
+		STR_MENU("Vector clip: Drag")
+		STR_DISP("Vector clip: Drag")
+		STR_HELP("Drag vector clip control points")
+	};
+	struct vector_clip_mode_line final : public vector_clip_submode<1> {
+		CMD_NAME("video/tool/vector_clip/line")
+		CMD_ICON(visual_vector_clip_line)
+		STR_MENU("Vector clip: Line")
+		STR_DISP("Vector clip: Line")
+		STR_HELP("Append a line to the vector clip")
+	};
+	struct vector_clip_mode_bicubic final : public vector_clip_submode<2> {
+		CMD_NAME("video/tool/vector_clip/bicubic")
+		CMD_ICON(visual_vector_clip_bicubic)
+		STR_MENU("Vector clip: Bicubic")
+		STR_DISP("Vector clip: Bicubic")
+		STR_HELP("Append a bicubic curve to the vector clip")
+	};
+	struct vector_clip_mode_convert final : public vector_clip_submode<3> {
+		CMD_NAME("video/tool/vector_clip/convert")
+		CMD_ICON(visual_vector_clip_convert)
+		STR_MENU("Vector clip: Convert")
+		STR_DISP("Vector clip: Convert")
+		STR_HELP("Convert a vector clip segment between line and bicubic")
+	};
+	struct vector_clip_mode_insert final : public vector_clip_submode<4> {
+		CMD_NAME("video/tool/vector_clip/insert")
+		CMD_ICON(visual_vector_clip_insert)
+		STR_MENU("Vector clip: Insert")
+		STR_DISP("Vector clip: Insert")
+		STR_HELP("Insert a control point into the vector clip")
+	};
+	struct vector_clip_mode_remove final : public vector_clip_submode<5> {
+		CMD_NAME("video/tool/vector_clip/remove")
+		CMD_ICON(visual_vector_clip_remove)
+		STR_MENU("Vector clip: Remove")
+		STR_DISP("Vector clip: Remove")
+		STR_HELP("Remove a control point from the vector clip")
+	};
+	struct vector_clip_mode_freehand final : public vector_clip_submode<6> {
+		CMD_NAME("video/tool/vector_clip/freehand")
+		CMD_ICON(visual_vector_clip_freehand)
+		STR_MENU("Vector clip: Freehand")
+		STR_DISP("Vector clip: Freehand")
+		STR_HELP("Draw a freehand vector clip shape")
+	};
+	struct vector_clip_mode_freehand_smooth final : public vector_clip_submode<7> {
+		CMD_NAME("video/tool/vector_clip/freehand_smooth")
+		CMD_ICON(visual_vector_clip_freehand_smooth)
+		STR_MENU("Vector clip: Freehand smooth")
+		STR_DISP("Vector clip: Freehand smooth")
+		STR_HELP("Draw a smoothed freehand vector clip shape")
+	};
+	struct vector_clip_mode_move final : public vector_clip_submode<8> {
+		CMD_NAME("video/tool/vector_clip/move")
+		CMD_ICON(visual_vector_clip_move)
+		STR_MENU("Vector clip: Move")
+		STR_DISP("Vector clip: Move")
+		STR_HELP("Append a move point to the vector clip")
+	};
 }
 
 namespace cmd {
@@ -128,5 +274,24 @@ namespace cmd {
 		reg(agi::make_unique<visual_mode_clip>());
 		reg(agi::make_unique<visual_mode_vector_clip>());
 		reg(agi::make_unique<visual_mode_measure>());
+
+		reg(agi::make_unique<visual_tool_nudge_left>());
+		reg(agi::make_unique<visual_tool_nudge_right>());
+		reg(agi::make_unique<visual_tool_nudge_up>());
+		reg(agi::make_unique<visual_tool_nudge_down>());
+		reg(agi::make_unique<visual_tool_nudge_left_large>());
+		reg(agi::make_unique<visual_tool_nudge_right_large>());
+		reg(agi::make_unique<visual_tool_nudge_up_large>());
+		reg(agi::make_unique<visual_tool_nudge_down_large>());
+
+		reg(agi::make_unique<vector_clip_mode_drag>());
+		reg(agi::make_unique<vector_clip_mode_line>());
+		reg(agi::make_unique<vector_clip_mode_move>());
+		reg(agi::make_unique<vector_clip_mode_bicubic>());
+		reg(agi::make_unique<vector_clip_mode_convert>());
+		reg(agi::make_unique<vector_clip_mode_insert>());
+		reg(agi::make_unique<vector_clip_mode_remove>());
+		reg(agi::make_unique<vector_clip_mode_freehand>());
+		reg(agi::make_unique<vector_clip_mode_freehand_smooth>());
 	}
 }

@@ -238,3 +238,46 @@ void VisualToolRotateZ::DoRefresh() {
 	GetLineRotation(active_line, rotation_x, rotation_y, angle);
 	GetLineScale(active_line, scale);
 }
+
+bool VisualToolRotateZ::Nudge(Vector2D direction, VisualNudgeMagnitude magnitude) {
+	if (!active_line)
+		return false;
+
+	bool changed = false;
+
+	if (direction.X() != 0.f) {
+		float const step = static_cast<float>(
+			magnitude == VisualNudgeMagnitude::Large
+				? OPT_GET("Tool/Visual/Nudge/Rotate Step Large")->GetInt()
+				: OPT_GET("Tool/Visual/Nudge/Rotate Step")->GetInt());
+		// Right = clockwise = +\frz in ASS
+		angle = fmodf(angle + direction.X() * step + 360.f, 360.f);
+		SetSelectedOverride("\\frz", agi::format("%.4g", angle));
+		changed = true;
+	}
+
+	if (direction.Y() != 0.f) {
+		float const step = static_cast<float>(
+			magnitude == VisualNudgeMagnitude::Large
+				? OPT_GET("Tool/Visual/Nudge/Origin Step Large")->GetInt()
+				: OPT_GET("Tool/Visual/Nudge/Origin Step")->GetInt());
+		// Up = negative script Y (same coordinate system as mouse drag of \\org)
+		Vector2D const delta(0.f, direction.Y() * step);
+
+		auto core = c->GetCore();
+		for (auto line : core.selectionController->GetSelectedSet()) {
+			auto line_org = GetLineOrigin(line);
+			if (!line_org)
+				line_org = GetLinePosition(line);
+			SetOverride(line, "\\org", (line_org + delta).PStr());
+		}
+		changed = true;
+	}
+
+	if (!changed)
+		return false;
+
+	DoRefresh();
+	CommitNudge();
+	return true;
+}

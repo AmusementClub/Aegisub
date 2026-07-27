@@ -649,7 +649,15 @@
 		},
 		"Visual" : {
 			"Autohide": false,
-			"Coordinate Font Size" : 12
+			"Coordinate Font Size" : 12,
+			"Nudge" : {
+				"Rotate Step" : 1,
+				"Rotate Step Large" : 15,
+				"Scale Step" : 1,
+				"Scale Step Large" : 10,
+				"Origin Step" : 1,
+				"Origin Step Large" : 10
+			}
 		},
 		"Align to Video" : {
 			"Tolerance" : 20,

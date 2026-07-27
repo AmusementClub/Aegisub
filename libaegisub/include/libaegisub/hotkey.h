@@ -98,6 +98,13 @@ public:
 	/// @return Name of command or "" if none match
 	std::string Scan(const std::string &context, const std::string &str, bool always) const;
 
+	/// Scan for a matching key in exactly one context.
+	/// Does not fall back to Default or Always. Empty context never matches.
+	/// @param context  Context requested (must match exactly).
+	/// @param str      Hyphen separated key sequence.
+	/// @return Name of command or "" if none match
+	std::string ScanExact(const std::string &context, const std::string &str) const;
+
 	bool HasHotkey(const std::string &context, const std::string &str) const;
 
 	/// Get the string representation of the hotkeys for the given command

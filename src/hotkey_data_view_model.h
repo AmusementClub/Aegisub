@@ -15,6 +15,8 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include <memory>
+#include <string>
+#include <vector>
 #include <wx/dataview.h>
 
 class HotkeyModelItem;
@@ -33,7 +35,11 @@ class HotkeyDataViewModel final : public wxDataViewModel {
 	/// Get the real item from the wrapper, or root if it's wrapping nullptr
 	HotkeyModelItem *get(wxDataViewItem const& item);
 public:
-	HotkeyDataViewModel(Preferences *parent);
+	/// @param parent Preferences dialog that owns pending-change registration
+	/// @param context_seed Contexts always created even if currently empty, so
+	///        users can add bindings before any default/migrated entry exists.
+	HotkeyDataViewModel(Preferences *parent,
+		std::vector<std::string> context_seed = {});
 
 	/// Create a new hotkey in the current context
 	/// @param item A context or hotkey entry

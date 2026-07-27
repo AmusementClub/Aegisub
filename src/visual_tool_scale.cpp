@@ -193,3 +193,22 @@ void VisualToolScale::DoRefresh() {
 	GetLineRotation(active_line, rx, ry, rz);
 	pos = FromScriptCoords(GetLinePosition(active_line));
 }
+
+bool VisualToolScale::Nudge(Vector2D direction, VisualNudgeMagnitude magnitude) {
+	if (!active_line)
+		return false;
+
+	float const step = static_cast<float>(
+		magnitude == VisualNudgeMagnitude::Large
+			? OPT_GET("Tool/Visual/Nudge/Scale Step Large")->GetInt()
+			: OPT_GET("Tool/Visual/Nudge/Scale Step")->GetInt());
+
+	// Same polarity as UpdateHold: right → +\fscx, up → +\fscy
+	scale = Vector2D(0, 0).Max(scale + Vector2D(direction.X(), -direction.Y()) * step);
+	SetSelectedOverride("\\fscx", std::to_string(static_cast<int>(scale.X())));
+	SetSelectedOverride("\\fscy", std::to_string(static_cast<int>(scale.Y())));
+
+	DoRefresh();
+	CommitNudge();
+	return true;
+}

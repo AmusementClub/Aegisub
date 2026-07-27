@@ -75,6 +75,7 @@ class VideoController;
 class VideoOverlayDrawContext;
 struct VisualGuideViewport;
 class VisualToolBase;
+enum class VisualNudgeMagnitude;
 class wxComboBox;
 class wxTextCtrl;
 class wxToolBar;
@@ -387,6 +388,15 @@ public:
 	void SetTool(std::unique_ptr<VisualToolBase> new_tool);
 
 	bool ToolIsType(std::type_info const& type) const;
+
+	/// Whether the current tool can receive keyboard nudges on an active line.
+	bool CanNudgeTool() const;
+	/// Forward a keyboard nudge to the current visual tool.
+	bool NudgeTool(Vector2D direction, VisualNudgeMagnitude magnitude);
+	/// Select a tool-specific sub-mode on the current visual tool.
+	bool SetToolSubMode(int mode);
+	/// Current tool sub-mode, or -1 when none.
+	int GetToolSubMode() const;
 
 	/// Discard all OpenGL state
 	void Unload();

@@ -96,6 +96,28 @@ TEST(lagi_hotkey, scan) {
 	EXPECT_STREQ("", h.Scan("Nonexistent", "C", true).c_str());
 }
 
+TEST(lagi_hotkey, scan_exact) {
+	Hotkey h("", simple_valid);
+
+	// Exact context only — no Default / Always fallback.
+	EXPECT_STREQ("cmd1", h.ScanExact("Always", "Ctrl-C").c_str());
+	EXPECT_STREQ("cmd2", h.ScanExact("Default", "Ctrl-C").c_str());
+	EXPECT_STREQ("", h.ScanExact("Other", "Ctrl-C").c_str());
+	EXPECT_STREQ("", h.ScanExact("Nonexistent", "Ctrl-C").c_str());
+
+	EXPECT_STREQ("", h.ScanExact("Always", "Alt-C").c_str());
+	EXPECT_STREQ("cmd1", h.ScanExact("Default", "Alt-C").c_str());
+	EXPECT_STREQ("", h.ScanExact("Other", "Alt-C").c_str());
+
+	EXPECT_STREQ("cmd1", h.ScanExact("Other", "Shift-C").c_str());
+	EXPECT_STREQ("cmd3", h.ScanExact("Other", "Q").c_str());
+	EXPECT_STREQ("", h.ScanExact("Default", "Q").c_str());
+
+	// Empty context never matches.
+	EXPECT_STREQ("", h.ScanExact("", "Ctrl-C").c_str());
+	EXPECT_STREQ("", h.ScanExact("", "Q").c_str());
+}
+
 TEST(lagi_hotkey, get_hotkey) {
 	Hotkey h("", simple_valid);
 

@@ -2615,6 +2615,10 @@ void VideoDisplay::OnKeyDown(wxKeyEvent &event) {
 	}
 	if (tool && tool->OnKeyDown(event))
 		return;
+	// Tool-owned context is exact-match only so Default frame-step bindings
+	// cannot steal arrow keys while a nudge-capable tool is active.
+	if (tool && hotkey::check_exact(tool->GetHotkeyContext(), con, event))
+		return;
 	hotkey::check("Video", con, event);
 }
 
@@ -2786,6 +2790,22 @@ void VideoDisplay::EndInternalLayoutResize() {
 
 bool VideoDisplay::ToolIsType(std::type_info const& type) const {
 	return tool && typeid(*tool) == type;
+}
+
+bool VideoDisplay::CanNudgeTool() const {
+	return tool && tool->SupportsNudge() && tool->HasActiveLine();
+}
+
+bool VideoDisplay::NudgeTool(Vector2D direction, VisualNudgeMagnitude magnitude) {
+	return tool && tool->Nudge(direction, magnitude);
+}
+
+bool VideoDisplay::SetToolSubMode(int mode) {
+	return tool && tool->SetSubMode(mode);
+}
+
+int VideoDisplay::GetToolSubMode() const {
+	return tool ? tool->GetSubMode() : -1;
 }
 
 Vector2D VideoDisplay::GetMousePosition() const {

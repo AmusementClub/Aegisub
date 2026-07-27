@@ -45,4 +45,7 @@ class VisualToolRotateZ final : public VisualTool<VisualDraggableFeature> {
 	void DrawOverlay(VideoOverlayDrawContext &context) override;
 public:
 	VisualToolRotateZ(VideoDisplay *parent, agi::Context *context);
+	bool Nudge(Vector2D direction, VisualNudgeMagnitude magnitude) override;
+	bool SupportsNudge() const override { return true; }
+	std::string GetHotkeyContext() const override { return "Visual Rotate Z"; }
 };

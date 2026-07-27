@@ -29,6 +29,9 @@
 #include <libaegisub/signal.h>
 
 #include <set>
+#include <string>
+
+#include <wx/timer.h>
 
 class AssDialogue;
 class VideoDisplay;
@@ -41,6 +44,12 @@ namespace agi {
 	struct Context;
 	class OptionValue;
 }
+
+/// Magnitude for keyboard nudge of visual typesetting tools.
+enum class VisualNudgeMagnitude {
+	Normal,
+	Large
+};
 
 /// @class VisualToolBase
 /// @brief Base class for visual tools containing all functionality that doesn't interact with features
@@ -88,6 +97,8 @@ protected:
 	/// which keep their own edit transaction can override this to roll it back.
 	virtual void OnMouseCaptureLost(wxMouseCaptureLostEvent &);
 
+	void OnCommitIdResetTimer(wxTimerEvent &);
+
 	OpenGLWrapper gl;
 
 	/// Called when the user double-clicks
@@ -122,6 +133,8 @@ protected:
 
 	aegisub::SubtitleCommandSession command_session;
 	agi::signal::Connection file_changed_connection;
+	int commit_id_reset_timer_id; ///< Distinct from other timers on VideoDisplay
+	wxTimer commit_id_reset_timer; ///< Splits keyboard-nudge undo after idle
 
 	/// @brief Identify the line to pass to AssFile::Commit when a single-line edit is likely
 	virtual AssDialogue *GetCommitTargetLine() const;
@@ -131,6 +144,9 @@ protected:
 	virtual void Commit(wxString message = wxString());
 	void CommitAndRefresh(wxString message = wxString());
 	bool IsDisplayed(AssDialogue const* line) const;
+
+	/// Commit a keyboard nudge and schedule undo-coalesce reset after idle.
+	void CommitNudge(wxString message = wxString());
 
 	/// Get the line's position if it's set, or it's default based on style if not
 	Vector2D GetLinePosition(AssDialogue *diag);
@@ -158,6 +174,18 @@ public:
 	virtual void OnMouseEvent(wxMouseEvent &event)=0;
 	/// Return true when the tool consumed a keyboard event.
 	virtual bool OnKeyDown(wxKeyEvent &) { return false; }
+	/// Apply a keyboard nudge. Return true when the tool applied the change.
+	virtual bool Nudge(Vector2D /*direction*/, VisualNudgeMagnitude /*magnitude*/) { return false; }
+	/// Whether this tool implements keyboard nudge (not merely has a hotkey context).
+	virtual bool SupportsNudge() const { return false; }
+	/// Select a tool-specific sub-mode. Return true when applied.
+	virtual bool SetSubMode(int /*mode*/) { return false; }
+	/// Current sub-mode, or -1 when the tool has none.
+	virtual int GetSubMode() const { return -1; }
+	/// Hotkey context owned by this tool; empty means it has none.
+	virtual std::string GetHotkeyContext() const { return {}; }
+	/// Whether the tool currently has an active (on-frame) dialogue line.
+	bool HasActiveLine() const { return active_line != nullptr; }
 	virtual void Draw()=0;
 	virtual bool SupportsOverlayContext() const { return false; }
 	virtual void DrawOverlay(VideoOverlayDrawContext &) { }

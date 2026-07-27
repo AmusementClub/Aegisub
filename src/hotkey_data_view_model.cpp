@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <list>
 #include <map>
+#include <set>
 #include <vector>
 
 using namespace agi::hotkey;
@@ -211,28 +212,42 @@ public:
 class HotkeyModelRoot final : public HotkeyModelItem {
 	std::list<HotkeyModelCategory> categories;
 public:
-	HotkeyModelRoot(wxDataViewModel *model) {
+	HotkeyModelRoot(wxDataViewModel *model, std::vector<std::string> const& context_seed)
+	{
 		Hotkey::HotkeyMap const& hk_map = hotkey::inst->GetHotkeyMap();
 		std::map<std::string, HotkeyModelCategory*> cat_map;
 
-		for (auto const& category : hk_map) {
-			std::string const& cat_name = category.second.Context();
-			HotkeyModelCategory *cat;
-			auto cat_it = cat_map.find(cat_name);
-			if (cat_it != cat_map.end())
-				cat = cat_it->second;
-			else {
-				categories.emplace_back(model, cat_name);
-				cat = cat_map[cat_name] = &categories.back();
-			}
+		// Default first, then remaining contexts by name (seed included).
+		std::set<std::string> names(context_seed.begin(), context_seed.end());
+		for (auto const& category : hk_map)
+			names.insert(category.second.Context());
 
-			cat->AddChild(category.second);
+		std::vector<std::string> ordered;
+		ordered.reserve(names.size());
+		if (names.erase("Default"))
+			ordered.emplace_back("Default");
+		ordered.insert(ordered.end(), names.begin(), names.end());
+
+		for (auto const& name : ordered) {
+			categories.emplace_back(model, name);
+			cat_map[name] = &categories.back();
 		}
+
+		for (auto const& category : hk_map)
+			cat_map[category.second.Context()]->AddChild(category.second);
 	}
 
 	void Apply(Hotkey::HotkeyMap *hk_map) {
 		for (auto& category : categories)
 			category.Apply(hk_map);
+	}
+
+	/// Contexts this model is responsible for when merging Apply results.
+	std::set<std::string> Contexts() const {
+		std::set<std::string> out;
+		for (auto const& category : categories)
+			out.insert(category.GetName());
+		return out;
 	}
 
 	void SetFilter(std::string const& filter) {
@@ -253,8 +268,9 @@ public:
 	}
 };
 
-HotkeyDataViewModel::HotkeyDataViewModel(Preferences *parent)
-: root(agi::make_unique<HotkeyModelRoot>(this))
+HotkeyDataViewModel::HotkeyDataViewModel(Preferences *parent,
+	std::vector<std::string> context_seed)
+: root(agi::make_unique<HotkeyModelRoot>(this, context_seed))
 , parent(parent)
 {
 }
@@ -317,9 +333,18 @@ void HotkeyDataViewModel::Delete(wxDataViewItem const& item) {
 }
 
 void HotkeyDataViewModel::Apply() {
-	Hotkey::HotkeyMap hk_map;
+	// Merge: replace only contexts this model currently owns (including seeded
+	// empty categories), preserving any context not present in the snapshot.
+	Hotkey::HotkeyMap hk_map = hotkey::inst->GetHotkeyMap();
+	auto const owned = root->Contexts();
+	for (auto it = hk_map.begin(); it != hk_map.end(); ) {
+		if (owned.count(it->second.Context()))
+			it = hk_map.erase(it);
+		else
+			++it;
+	}
 	root->Apply(&hk_map);
-	hotkey::inst->SetHotkeyMap(hk_map);
+	hotkey::inst->SetHotkeyMap(std::move(hk_map));
 	has_pending_changes = false;
 }
 

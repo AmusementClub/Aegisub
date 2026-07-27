@@ -135,6 +135,21 @@ std::string Hotkey::Scan(std::string const& context, std::string const& str, boo
 	return "";
 }
 
+std::string Hotkey::ScanExact(std::string const& context, std::string const& str) const {
+	if (context.empty())
+		return "";
+
+	std::vector<const Combo *>::const_iterator index, last;
+	for (std::tie(index, last) = std::equal_range(str_map.begin(), str_map.end(), str, combo_cmp()); index != last; ++index) {
+		if ((*index)->Context() == context) {
+			LOG_D("agi/hotkey/found") << "Found exact: " << str << "  Context: " << context << "  Command: " << (*index)->CmdName();
+			return (*index)->CmdName();
+		}
+	}
+
+	return "";
+}
+
 bool Hotkey::HasHotkey(std::string const& context, std::string const& str) const {
 	std::vector<const Combo *>::const_iterator index, last;
 	for (std::tie(index, last) = std::equal_range(str_map.begin(), str_map.end(), str, combo_cmp()); index != last; ++index) {

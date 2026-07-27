@@ -46,6 +46,9 @@ enum {
 	BUTTON_LAST // Leave this at the end and don't use it
 };
 
+static_assert(VisualToolVectorClip::kSubModeCount == BUTTON_LAST - BUTTON_DRAG,
+	"vector clip sub-mode count must match toolbar button range");
+
 VisualToolVectorClip::VisualToolVectorClip(VideoDisplay *parent, agi::Context *context)
 : VisualTool<VisualToolVectorClipDraggableFeature>(parent, context)
 , spline(*this)
@@ -86,12 +89,23 @@ void VisualToolVectorClip::OnSubTool(wxCommandEvent &event) {
 }
 
 void VisualToolVectorClip::SetMode(int new_mode) {
+	mode = new_mode;
+
+	// Toolbar is null until SetToolbar runs; command/hotkey paths may call earlier.
+	if (!toolBar)
+		return;
+
 	// Manually enforce radio behavior as we want one selection in the bar
 	// rather than one per group
 	for (int i = BUTTON_DRAG; i < BUTTON_LAST; i++)
 		toolBar->ToggleTool(i, i == new_mode + BUTTON_DRAG);
+}
 
-	mode = new_mode;
+bool VisualToolVectorClip::SetSubMode(int new_mode) {
+	if (new_mode < 0 || new_mode >= kSubModeCount)
+		return false;
+	SetMode(new_mode);
+	return true;
 }
 
 void VisualToolVectorClip::Draw() {

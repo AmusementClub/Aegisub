@@ -35,6 +35,10 @@ void clear();
 
 bool check(std::string const& context, agi::Context *c, wxKeyEvent &evt);
 bool check(std::string const& context, agi::Context *c, wxMouseEvent &evt);
+/// Match only the exact context (no Default/Always fallback).
+/// Returns false when there is no binding or the command fails Validate, so
+/// callers can fall through to another context without swallowing the key.
+bool check_exact(std::string const& context, agi::Context *c, wxKeyEvent &evt);
 std::string keypress_to_str(int key_code, int modifier);
 std::string mousepress_to_str(wxMouseEvent const& evt);
 std::string get_hotkey_str_first(std::string const& context, std::string const& command);

@@ -668,6 +668,14 @@ void BuildVideoPage(OptionPage *p) {
 	wxArrayString choice_res(4, cres_arr);
 	binder->AddChoice(_("Match video resolution on open"), choice_res, "Video/Script Resolution Mismatch");
 
+	binder->AddCategory(_("Visual tool nudge"));
+	binder->AddInt(_("Rotate step (degrees)"), "Tool/Visual/Nudge/Rotate Step", 1, 180);
+	binder->AddInt(_("Rotate large step (degrees)"), "Tool/Visual/Nudge/Rotate Step Large", 1, 180);
+	binder->AddInt(_("Scale step (percent)"), "Tool/Visual/Nudge/Scale Step", 1, 100);
+	binder->AddInt(_("Scale large step (percent)"), "Tool/Visual/Nudge/Scale Step Large", 1, 100);
+	binder->AddInt(_("Origin step (pixels)"), "Tool/Visual/Nudge/Origin Step", 1, 1000);
+	binder->AddInt(_("Origin large step (pixels)"), "Tool/Visual/Nudge/Origin Step Large", 1, 1000);
+
 	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
 }
@@ -1369,7 +1377,10 @@ public:
 /// Interface Hotkeys preferences subpage
 Interface_Hotkeys::Interface_Hotkeys(wxTreebook *book, Preferences *parent)
 : OptionPage(book, parent, _("Hotkeys"), OptionPage::PAGE_SUB)
-, model(new HotkeyDataViewModel(parent))
+// Seed tool contexts that may have no defaults yet so users can bind commands.
+, model(new HotkeyDataViewModel(parent, {
+	"Visual Vector Clip",
+}))
 {
 	quick_search = new wxSearchCtrl(this, -1);
 	auto new_button = new wxButton(this, -1, _("&New"));
@@ -1432,6 +1443,7 @@ void Interface_Hotkeys::OnUpdateFilter(wxCommandEvent&) {
 			dvc->Expand(context);
 	}
 }
+
 }
 
 void Preferences::RegisterDeferredPageBuilder(Thunk builder, bool built) {

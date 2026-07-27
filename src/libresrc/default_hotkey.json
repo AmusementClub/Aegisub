@@ -321,6 +321,36 @@
 			"Home"
 		]
 	},
+	"Visual Rotate Z" : {
+		"video/tool/nudge/left" : [ "Left" ],
+		"video/tool/nudge/right" : [ "Right" ],
+		"video/tool/nudge/up" : [ "Up" ],
+		"video/tool/nudge/down" : [ "Down" ],
+		"video/tool/nudge/left/large" : [ "Alt-Left" ],
+		"video/tool/nudge/right/large" : [ "Alt-Right" ],
+		"video/tool/nudge/up/large" : [ "Alt-Up" ],
+		"video/tool/nudge/down/large" : [ "Alt-Down" ]
+	},
+	"Visual Rotate XY" : {
+		"video/tool/nudge/left" : [ "Left" ],
+		"video/tool/nudge/right" : [ "Right" ],
+		"video/tool/nudge/up" : [ "Up" ],
+		"video/tool/nudge/down" : [ "Down" ],
+		"video/tool/nudge/left/large" : [ "Alt-Left" ],
+		"video/tool/nudge/right/large" : [ "Alt-Right" ],
+		"video/tool/nudge/up/large" : [ "Alt-Up" ],
+		"video/tool/nudge/down/large" : [ "Alt-Down" ]
+	},
+	"Visual Scale" : {
+		"video/tool/nudge/left" : [ "Left" ],
+		"video/tool/nudge/right" : [ "Right" ],
+		"video/tool/nudge/up" : [ "Up" ],
+		"video/tool/nudge/down" : [ "Down" ],
+		"video/tool/nudge/left/large" : [ "Alt-Left" ],
+		"video/tool/nudge/right/large" : [ "Alt-Right" ],
+		"video/tool/nudge/up/large" : [ "Alt-Up" ],
+		"video/tool/nudge/down/large" : [ "Alt-Down" ]
+	},
 	"Video" : {
 		"video/frame/next" : [
 			"Right"

@@ -267,3 +267,29 @@ void VisualToolRotateXY::DoRefresh() {
 	GetLineRotation(active_line, angle_x, angle_y, angle_z);
 	GetLineShear(active_line, fax, fay);
 }
+
+bool VisualToolRotateXY::Nudge(Vector2D direction, VisualNudgeMagnitude magnitude) {
+	if (!active_line)
+		return false;
+
+	float const step = static_cast<float>(
+		magnitude == VisualNudgeMagnitude::Large
+			? OPT_GET("Tool/Visual/Nudge/Rotate Step Large")->GetInt()
+			: OPT_GET("Tool/Visual/Nudge/Rotate Step")->GetInt());
+
+	// Same polarity as UpdateHold: right → +\fry, up → +\frx
+	if (direction.X() != 0.f) {
+		angle_y = fmodf(angle_y + direction.X() * step + 360.f, 360.f);
+		SetSelectedOverride("\\fry", agi::format("%.4g", angle_y));
+	}
+	if (direction.Y() != 0.f) {
+		// direction.Y is -1 for Up; UpdateHold uses angle_x = orig_x - delta.Y with
+		// screen-Y-down, so Up decreases screen Y → increases frx when mirrored as -direction.Y.
+		angle_x = fmodf(angle_x - direction.Y() * step + 360.f, 360.f);
+		SetSelectedOverride("\\frx", agi::format("%.4g", angle_x));
+	}
+
+	DoRefresh();
+	CommitNudge();
+	return true;
+}

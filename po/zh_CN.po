@@ -4802,6 +4802,144 @@ msgstr "解码器："
 msgid "Video"
 msgstr "视频"
 
+msgid "Visual Rotate Z"
+msgstr "可视化旋转 Z"
+
+msgid "Visual Rotate XY"
+msgstr "可视化旋转 XY"
+
+msgid "Visual Scale"
+msgstr "可视化缩放"
+
+msgid "Visual Vector Clip"
+msgstr "可视化矢量裁剪"
+
+msgid "Visual Tools"
+msgstr "可视化工具"
+
+msgid "Nudge step sizes"
+msgstr "微调步长"
+
+msgid "Rotate step (degrees)"
+msgstr "旋转步长（度）"
+
+msgid "Rotate large step (degrees)"
+msgstr "旋转大步长（度）"
+
+msgid "Scale step (percent)"
+msgstr "缩放步长（百分比）"
+
+msgid "Scale large step (percent)"
+msgstr "缩放大步长（百分比）"
+
+msgid "Origin step (pixels)"
+msgstr "原点步长（像素）"
+
+msgid "Origin large step (pixels)"
+msgstr "原点大步长（像素）"
+
+msgid "Nudge left"
+msgstr "向左微调"
+
+msgid "Nudge right"
+msgstr "向右微调"
+
+msgid "Nudge up"
+msgstr "向上微调"
+
+msgid "Nudge down"
+msgstr "向下微调"
+
+msgid "Nudge left (large)"
+msgstr "向左微调（大）"
+
+msgid "Nudge right (large)"
+msgstr "向右微调（大）"
+
+msgid "Nudge up (large)"
+msgstr "向上微调（大）"
+
+msgid "Nudge down (large)"
+msgstr "向下微调（大）"
+
+msgid "Nudge the current visual tool value left by one step"
+msgstr "将当前可视化工具的值向左微调一步"
+
+msgid "Nudge the current visual tool value right by one step"
+msgstr "将当前可视化工具的值向右微调一步"
+
+msgid "Nudge the current visual tool value up by one step"
+msgstr "将当前可视化工具的值向上微调一步"
+
+msgid "Nudge the current visual tool value down by one step"
+msgstr "将当前可视化工具的值向下微调一步"
+
+msgid "Nudge the current visual tool value left by a large step"
+msgstr "将当前可视化工具的值向左大幅微调"
+
+msgid "Nudge the current visual tool value right by a large step"
+msgstr "将当前可视化工具的值向右大幅微调"
+
+msgid "Nudge the current visual tool value up by a large step"
+msgstr "将当前可视化工具的值向上大幅微调"
+
+msgid "Nudge the current visual tool value down by a large step"
+msgstr "将当前可视化工具的值向下大幅微调"
+
+msgid "Vector clip: Drag"
+msgstr "矢量裁剪：拖动"
+
+msgid "Vector clip: Line"
+msgstr "矢量裁剪：直线"
+
+msgid "Vector clip: Move"
+msgstr "矢量裁剪：移动"
+
+msgid "Vector clip: Bicubic"
+msgstr "矢量裁剪：双三次"
+
+msgid "Vector clip: Convert"
+msgstr "矢量裁剪：转换"
+
+msgid "Vector clip: Insert"
+msgstr "矢量裁剪：插入"
+
+msgid "Vector clip: Remove"
+msgstr "矢量裁剪：删除"
+
+msgid "Vector clip: Freehand"
+msgstr "矢量裁剪：手绘"
+
+msgid "Vector clip: Freehand smooth"
+msgstr "矢量裁剪：平滑手绘"
+
+msgid "Drag vector clip control points"
+msgstr "拖动矢量裁剪控制点"
+
+msgid "Append a line to the vector clip"
+msgstr "向矢量裁剪追加直线"
+
+msgid "Append a move point to the vector clip"
+msgstr "向矢量裁剪追加移动点"
+
+msgid "Append a bicubic curve to the vector clip"
+msgstr "向矢量裁剪追加双三次曲线"
+
+msgid "Convert a vector clip segment between line and bicubic"
+msgstr "在直线与双三次之间转换矢量裁剪线段"
+
+msgid "Insert a control point into the vector clip"
+msgstr "在矢量裁剪中插入控制点"
+
+msgid "Remove a control point from the vector clip"
+msgstr "从矢量裁剪中删除控制点"
+
+msgid "Draw a freehand vector clip shape"
+msgstr "手绘矢量裁剪形状"
+
+msgid "Draw a smoothed freehand vector clip shape"
+msgstr "绘制平滑的手绘矢量裁剪形状"
+
 #: ../src/dialog_video_properties.cpp:44
 msgid "Resolution mismatch"
 msgstr "分辨率不匹配"

@@ -22,6 +22,7 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "options.h"
+#include "status_sink.h"
 
 #include <libaegisub/path.h>
 
@@ -56,6 +57,36 @@ namespace {
 		{nullptr}
 	};
 
+	// Large step uses Alt rather than Shift so Shift-Left/Right keep Video
+	// keyframe navigation while a visual tool is active.
+	const char *added_hotkeys_visual_tool_nudge[][3] = {
+		{"video/tool/nudge/left", "Visual Rotate Z", "Left"},
+		{"video/tool/nudge/right", "Visual Rotate Z", "Right"},
+		{"video/tool/nudge/up", "Visual Rotate Z", "Up"},
+		{"video/tool/nudge/down", "Visual Rotate Z", "Down"},
+		{"video/tool/nudge/left/large", "Visual Rotate Z", "Alt-Left"},
+		{"video/tool/nudge/right/large", "Visual Rotate Z", "Alt-Right"},
+		{"video/tool/nudge/up/large", "Visual Rotate Z", "Alt-Up"},
+		{"video/tool/nudge/down/large", "Visual Rotate Z", "Alt-Down"},
+		{"video/tool/nudge/left", "Visual Rotate XY", "Left"},
+		{"video/tool/nudge/right", "Visual Rotate XY", "Right"},
+		{"video/tool/nudge/up", "Visual Rotate XY", "Up"},
+		{"video/tool/nudge/down", "Visual Rotate XY", "Down"},
+		{"video/tool/nudge/left/large", "Visual Rotate XY", "Alt-Left"},
+		{"video/tool/nudge/right/large", "Visual Rotate XY", "Alt-Right"},
+		{"video/tool/nudge/up/large", "Visual Rotate XY", "Alt-Up"},
+		{"video/tool/nudge/down/large", "Visual Rotate XY", "Alt-Down"},
+		{"video/tool/nudge/left", "Visual Scale", "Left"},
+		{"video/tool/nudge/right", "Visual Scale", "Right"},
+		{"video/tool/nudge/up", "Visual Scale", "Up"},
+		{"video/tool/nudge/down", "Visual Scale", "Down"},
+		{"video/tool/nudge/left/large", "Visual Scale", "Alt-Left"},
+		{"video/tool/nudge/right/large", "Visual Scale", "Alt-Right"},
+		{"video/tool/nudge/up/large", "Visual Scale", "Alt-Up"},
+		{"video/tool/nudge/down/large", "Visual Scale", "Alt-Down"},
+		{nullptr}
+	};
+
 #ifdef __WXMAC__
 	const char *added_hotkeys_minimize[][3] = {
 		{"app/minimize", "Default", "Ctrl-M"},
@@ -79,6 +110,51 @@ namespace {
 
 		if (changed)
 			hotkey::inst->SetHotkeyMap(std::move(hk_map));
+	}
+
+	/// Remap default Shift-* large-nudge bindings to Alt-* so keyframe nav is free.
+	/// Only touches the shipped defaults; user-customized keys are left alone.
+	void migrate_visual_tool_nudge_large_to_alt() {
+		static const char *const large_cmds[] = {
+			"video/tool/nudge/left/large",
+			"video/tool/nudge/right/large",
+			"video/tool/nudge/up/large",
+			"video/tool/nudge/down/large",
+		};
+		static const char *const old_keys[] = {
+			"Shift-Left", "Shift-Right", "Shift-Up", "Shift-Down",
+		};
+		static const char *const new_keys[] = {
+			"Alt-Left", "Alt-Right", "Alt-Up", "Alt-Down",
+		};
+
+		auto hk_map = hotkey::inst->GetHotkeyMap();
+		bool changed = false;
+		agi::hotkey::Hotkey::HotkeyMap rebuilt;
+
+		for (auto const& entry : hk_map) {
+			auto const& cmd = entry.first;
+			auto const& combo = entry.second;
+			bool remapped = false;
+
+			for (size_t i = 0; i < 4; ++i) {
+				if (cmd != large_cmds[i] || combo.Str() != old_keys[i])
+					continue;
+				// Skip if the Alt binding is already taken in this context.
+				if (hotkey::inst->HasHotkey(combo.Context(), new_keys[i]))
+					break;
+				rebuilt.insert({cmd, agi::hotkey::Combo(combo.Context(), cmd, new_keys[i])});
+				changed = true;
+				remapped = true;
+				break;
+			}
+
+			if (!remapped)
+				rebuilt.insert(entry);
+		}
+
+		if (changed)
+			hotkey::inst->SetHotkeyMap(std::move(rebuilt));
 	}
 }
 
@@ -115,6 +191,18 @@ void init() {
 	if (std::find(begin(migrations), end(migrations), "grid/selection/history") == end(migrations)) {
 		migrate_hotkeys(added_hotkeys_selection_history);
 		migrations.emplace_back("grid/selection/history");
+	}
+
+	if (std::find(begin(migrations), end(migrations), "visual_tool_nudge") == end(migrations)) {
+		migrate_hotkeys(added_hotkeys_visual_tool_nudge);
+		migrations.emplace_back("visual_tool_nudge");
+		// First install already uses Alt large steps; mark remap done.
+		migrations.emplace_back("visual_tool_nudge_alt_large");
+	}
+
+	if (std::find(begin(migrations), end(migrations), "visual_tool_nudge_alt_large") == end(migrations)) {
+		migrate_visual_tool_nudge_large_to_alt();
+		migrations.emplace_back("visual_tool_nudge_alt_large");
 	}
 
 	if (std::find(begin(migrations), end(migrations), "duplicate -> split") == end(migrations)) {
@@ -298,6 +386,36 @@ bool check(std::string const& context, agi::Context *c, wxKeyEvent &evt) {
 			evt.Skip();
 			return false;
 		}
+		return true;
+	}
+	catch (cmd::CommandNotFound const& e) {
+		c->ShowError(e.GetMessage(), from_wx(_("Invalid command name for hotkey")));
+		return true;
+	}
+}
+
+bool check_exact(std::string const& context, agi::Context *c, wxKeyEvent &evt) {
+	if (context.empty())
+		return false;
+
+	try {
+		std::string combo = keypress_to_str(evt.GetKeyCode(), evt.GetModifiers());
+		if (combo.empty())
+			return false;
+
+		std::string command = inst->ScanExact(context, combo);
+		if (command.empty())
+			return false;
+
+		// Unlike check(), Validate failure must not swallow the key — fall through
+		// so outer contexts (e.g. Video frame step) can still handle it.
+		cmd::Command *cmd = cmd::get(command);
+		if (!cmd->Validate(c))
+			return false;
+
+		auto sink = c->GetStatusSink();
+		if (sink) sink->SetLastCommand(from_wx(cmd->StrDisplay(c)));
+		(*cmd)(c);
 		return true;
 	}
 	catch (cmd::CommandNotFound const& e) {

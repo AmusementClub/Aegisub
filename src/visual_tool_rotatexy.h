@@ -44,4 +44,7 @@ class VisualToolRotateXY final : public VisualTool<VisualDraggableFeature> {
 	void UpdateHold() override;
 public:
 	VisualToolRotateXY(VideoDisplay *parent, agi::Context *context);
+	bool Nudge(Vector2D direction, VisualNudgeMagnitude magnitude) override;
+	bool SupportsNudge() const override { return true; }
+	std::string GetHotkeyContext() const override { return "Visual Rotate XY"; }
 };

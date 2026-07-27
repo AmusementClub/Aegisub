@@ -33,7 +33,6 @@
 #include "perf_trace.h"
 #ifdef WITH_SCENECHANGE
 #include "provider_index_cache.h"
-#include "scenechange_native_api.h"
 #endif
 #include "provider_selection_diagnostics.h"
 #include "project_session_ops.h"
@@ -134,16 +133,43 @@ struct SceneChangeKeyframeCacheManifestEntry {
 	std::string video_name;
 };
 
-agi::fs::path GetSceneChangeKeyframeCacheFilename(agi::fs::path const& filename) {
+agi::fs::path GetSceneChangeKeyframeCacheFilename(agi::fs::path const& filename,
+	std::string const& backend_cache_token) {
 	return aegisub::provider_index_cache::BuildFilename(filename,
 		kSceneChangeKeyframeCacheToken,
 		".kf.txt",
-		{ scenechange::GetCacheToken() });
+		{ backend_cache_token });
+}
+
+agi::fs::path GetSceneChangeKeyframeCacheDirectory() {
+	return aegisub::provider_index_cache::CacheDirectory(kSceneChangeKeyframeCacheToken);
+}
+
+// True when path is a file produced under the SceneChange keyframe cache dir.
+// Note: CacheDirectory() may create the cache directory as a side effect.
+bool IsSceneChangeKeyframeCachePath(agi::fs::path const& path) {
+	if (path.empty())
+		return false;
+
+	auto const name = agi::fs::PathToString(path.filename());
+	if (!name.ends_with(".kf.txt"))
+		return false;
+
+	try {
+		auto const cache_dir = agi::fs::Canonicalize(GetSceneChangeKeyframeCacheDirectory());
+		auto const file = agi::fs::Canonicalize(path);
+		return file.parent_path() == cache_dir;
+	}
+	catch (...) {
+		// Do not re-enter CacheDirectory() here: CreateDirectory / path decode
+		// failures are a common reason we reached this catch, and rethrowing
+		// would escape the Preferences option-changed callback.
+		return false;
+	}
 }
 
 agi::fs::path GetSceneChangeKeyframeManifestPath() {
-	return aegisub::provider_index_cache::CacheDirectory(kSceneChangeKeyframeCacheToken)
-		/ kSceneChangeKeyframeManifestName;
+	return GetSceneChangeKeyframeCacheDirectory() / kSceneChangeKeyframeManifestName;
 }
 
 std::mutex& SceneChangeKeyframeManifestMutex() {
@@ -335,7 +361,9 @@ Project::Project(agi::Context *c) : context(c) {
 		OPT_SUB("Provider/Video/FFmpegSource/Unsafe Seeking", &Project::ReloadVideo, this),
 		OPT_SUB("Provider/Video/LsmasNative/Decoding Threads", &Project::ReloadVideo, this),
 #ifdef WITH_SCENECHANGE
-		OPT_SUB("Provider/SceneChange/Backend", &Project::ReloadVideo, this),
+		// Backend choice only changes SceneChange keyframe generation and its
+		// cache key — reopening the video would re-run LsmasNative indexing.
+		OPT_SUB("Provider/SceneChange/Backend", &Project::ReloadSceneChangeKeyframes, this),
 #endif
 		OPT_SUB("Subtitle/Provider", &Project::ReloadSubtitlesProvider, this),
 		OPT_SUB("Video/Provider", &Project::ReloadVideo, this),
@@ -754,10 +782,13 @@ bool Project::DoLoadVideo(agi::fs::path const& path, aegisub::video_session_ops:
 	keyframes = opened_video.keyframes;
 	video_provider->SetSubtitlesTimecodes(timecodes);
 #ifdef WITH_SCENECHANGE
-	can_generate_scene_change_keyframes =
-		video_provider->GetDecoderName() == "LsmasNative"
-		&& video_provider->CanGenerateSceneChangeKeyframes();
-	bool scenechange_keyframes_loaded = TryLoadSceneChangeKeyframes(path);
+	// One provider selection for capability + cache path (avoid double select).
+	std::string scenechange_cache_token;
+	if (video_provider->GetDecoderName() == "LsmasNative")
+		scenechange_cache_token = video_provider->GetSceneChangeKeyframeCacheToken();
+	can_generate_scene_change_keyframes = !scenechange_cache_token.empty();
+	bool scenechange_keyframes_loaded =
+		TryLoadSceneChangeKeyframes(path, true, scenechange_cache_token);
 #else
 	bool scenechange_keyframes_loaded = false;
 #endif
@@ -843,11 +874,19 @@ void Project::CloseTimecodes() {
 }
 
 #ifdef WITH_SCENECHANGE
-bool Project::TryLoadSceneChangeKeyframes(agi::fs::path const& video_path) {
+bool Project::TryLoadSceneChangeKeyframes(agi::fs::path const& video_path,
+	bool prompt_if_missing,
+	std::string const& cache_token) {
 	if (!video_provider || video_provider->GetDecoderName() != "LsmasNative")
 		return false;
 
-	auto cache_path = GetSceneChangeKeyframeCacheFilename(video_path);
+	auto token = cache_token;
+	if (token.empty())
+		token = video_provider->GetSceneChangeKeyframeCacheToken();
+	if (token.empty())
+		return false;
+
+	auto cache_path = GetSceneChangeKeyframeCacheFilename(video_path, token);
 	if (agi::fs::FileExists(cache_path)) {
 		try {
 			DoLoadKeyframes(cache_path);
@@ -872,7 +911,7 @@ bool Project::TryLoadSceneChangeKeyframes(agi::fs::path const& video_path) {
 		}
 	}
 
-	if (!CanGenerateSceneChangeKeyframes())
+	if (!prompt_if_missing || !CanGenerateSceneChangeKeyframes())
 		return false;
 
 	return PromptAndGenerateSceneChangeKeyframes(cache_path, false);
@@ -916,6 +955,29 @@ bool Project::PromptAndGenerateSceneChangeKeyframes(agi::fs::path const& cache_p
 
 	return false;
 }
+
+void Project::ReloadSceneChangeKeyframes() {
+	if (!video_provider || video_file.empty())
+		return;
+
+	// SceneChange backend is only meaningful for LsmasNative; other providers
+	// must not lose manually loaded keyframe files when this preference changes.
+	if (video_provider->GetDecoderName() != "LsmasNative")
+		return;
+
+	auto const cache_token = video_provider->GetSceneChangeKeyframeCacheToken();
+	can_generate_scene_change_keyframes = !cache_token.empty();
+
+	// Preference Apply must not prompt or start a full-file scan. Only adopt an
+	// existing backend-specific cache; generation stays on the menu command.
+	if (TryLoadSceneChangeKeyframes(video_file, false, cache_token))
+		return;
+
+	// Drop only SceneChange-sourced keyframes that no longer match the selected
+	// backend. Leave user-opened .kf.txt files alone.
+	if (IsSceneChangeKeyframeCachePath(keyframes_file))
+		CloseKeyframes();
+}
 #endif
 
 bool Project::CanGenerateSceneChangeKeyframes() const {
@@ -924,10 +986,14 @@ bool Project::CanGenerateSceneChangeKeyframes() const {
 
 bool Project::GenerateSceneChangeKeyframes() {
 #ifdef WITH_SCENECHANGE
-	if (video_file.empty() || !CanGenerateSceneChangeKeyframes())
+	if (video_file.empty() || !video_provider || !CanGenerateSceneChangeKeyframes())
 		return false;
 
-	auto cache_path = GetSceneChangeKeyframeCacheFilename(video_file);
+	auto const cache_token = video_provider->GetSceneChangeKeyframeCacheToken();
+	if (cache_token.empty())
+		return false;
+
+	auto cache_path = GetSceneChangeKeyframeCacheFilename(video_file, cache_token);
 	return PromptAndGenerateSceneChangeKeyframes(cache_path, agi::fs::FileExists(cache_path));
 #else
 	return false;

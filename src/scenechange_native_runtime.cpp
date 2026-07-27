@@ -3,6 +3,7 @@
 #include "options.h"
 
 #include <libaegisub/exception.h>
+#include <libaegisub/log.h>
 #include <libaegisub/native_library.h>
 
 #include <mutex>
@@ -15,18 +16,9 @@ constexpr char kLogTag[] = "provider/scenechange/runtime";
 constexpr char kScxvidLibraryName[] = "scenechange_xvid";
 constexpr char kWwxdLibraryName[] = "scenechange_wwxd";
 
-Api api;
 Api scxvid_api;
 Api wwxd_api;
 std::mutex api_mutex;
-
-char const *BackendName(Api::Backend backend) noexcept {
-	switch (backend) {
-		case Api::Backend::WwxdProvider: return "wwxd-provider";
-		case Api::Backend::ScxvidProvider: return "scxvid";
-		default: return "none";
-	}
-}
 
 void ResolveProvider(scenechange_provider_get_api_fn get_api, int32_t expected_backend, Api& loaded) {
 	scenechange_provider_api provider {};
@@ -90,8 +82,6 @@ void InitializeScxvidProvider(agi::native::Library& library) {
 
 	std::lock_guard<std::mutex> lock(api_mutex);
 	scxvid_api = loaded;
-	if (api.backend == Api::Backend::None)
-		api = loaded;
 }
 
 void InitializeWwxdProvider(agi::native::Library& library) {
@@ -101,8 +91,6 @@ void InitializeWwxdProvider(agi::native::Library& library) {
 
 	std::lock_guard<std::mutex> lock(api_mutex);
 	wwxd_api = loaded;
-	if (api.backend == Api::Backend::None)
-		api = loaded;
 }
 
 agi::native::CachedLibrary scxvid_provider_library(
@@ -121,13 +109,6 @@ agi::native::CachedLibrary wwxd_provider_library(
 	GetWwxdRuntimeVersionDetail,
 	agi::native::DefaultAppLocalLoadOptions(false));
 
-std::string FormatLoadError(std::string const& xvid_message, std::string const& wwxd_message) {
-	return "Could not load SceneChange Xvid provider '" + std::string(kScxvidLibraryName)
-		+ "' or WWXD provider '" + std::string(kWwxdLibraryName) + "'. xvid: "
-		+ (xvid_message.empty() ? "unavailable" : xvid_message)
-		+ "; wwxd: " + (wwxd_message.empty() ? "unavailable" : wwxd_message);
-}
-
 enum class BackendPreference {
 	Auto,
 	Scxvid,
@@ -135,133 +116,138 @@ enum class BackendPreference {
 };
 
 BackendPreference GetBackendPreference() noexcept {
-	auto const value = config::GetStringOptionOrDefault("Provider/SceneChange/Backend", "auto");
-	if (value == "scxvid")
-		return BackendPreference::Scxvid;
-	if (value == "wwxd")
-		return BackendPreference::Wwxd;
+	try {
+		auto const value = config::GetStringOptionOrDefault("Provider/SceneChange/Backend", "auto");
+		if (value == "scxvid")
+			return BackendPreference::Scxvid;
+		if (value == "wwxd")
+			return BackendPreference::Wwxd;
+	}
+	catch (...) {
+	}
 	return BackendPreference::Auto;
 }
 
-void Select(Api const& selected) {
-	std::lock_guard<std::mutex> lock(api_mutex);
-	api = selected;
+// Copy a candidate under the load mutex so callers hold a stable Api snapshot.
+BackendSelectionStatus TryCandidate(agi::native::CachedLibrary& library,
+	Api const& candidate,
+	InputPixelFormatMask supported_input_formats,
+	Api *out_selected) noexcept {
+	if (!library.IsAvailable())
+		return BackendSelectionStatus::Unavailable;
+
+	{
+		std::lock_guard<std::mutex> lock(api_mutex);
+		if (!SupportsInputPixelFormat(supported_input_formats, candidate.provider.input_pixel_format))
+			return BackendSelectionStatus::Unsupported;
+		if (out_selected)
+			*out_selected = candidate;
+	}
+	return BackendSelectionStatus::Selected;
+}
+
+void LogFallback(Api::Backend skipped, Api::Backend selected) {
+	try {
+		LOG_I(kLogTag) << "Fallback from " << BackendName(skipped)
+			<< " because its input pixel format is unsupported; using "
+			<< BackendName(selected) << ".";
+	}
+	catch (...) {
+	}
+}
+
+std::string DescribeLibraryStatus(agi::native::CachedLibrary& library) {
+	// Prefer a successful load over a stale error string.
+	if (library.IsAvailable()) {
+		auto const path = library.GetLoadedLibrary();
+		return path.empty() ? "loaded" : ("loaded (" + path + ")");
+	}
+	auto const error = library.GetLoadError();
+	if (!error.empty())
+		return error;
+	return "not loaded";
 }
 
 } // namespace
 
-void EnsureLoaded() {
-	{
-		std::lock_guard<std::mutex> lock(api_mutex);
-		if (api.backend != Api::Backend::None)
-			return;
-	}
-	if (scxvid_provider_library.IsAvailable()) {
-		std::lock_guard<std::mutex> lock(api_mutex);
-		if (api.backend == Api::Backend::None)
-			api = scxvid_api;
-		return;
-	}
-	if (wwxd_provider_library.IsAvailable()) {
-		std::lock_guard<std::mutex> lock(api_mutex);
-		if (api.backend == Api::Backend::None)
-			api = wwxd_api;
-		return;
-	}
-	throw agi::EnvironmentError(FormatLoadError(
-		scxvid_provider_library.GetLoadError(),
-		wwxd_provider_library.GetLoadError()));
+std::string FormatProviderLoadStatus() {
+	return "xvid '" + std::string(kScxvidLibraryName) + "': "
+		+ DescribeLibraryStatus(scxvid_provider_library)
+		+ "; wwxd '" + std::string(kWwxdLibraryName) + "': "
+		+ DescribeLibraryStatus(wwxd_provider_library);
 }
 
-bool IsAvailable() noexcept {
-	try {
-		EnsureLoaded();
-		return true;
-	}
-	catch (...) {
-		return false;
-	}
+std::string FormatUnavailableBackendMessage() {
+	bool const any_loaded =
+		scxvid_provider_library.IsAvailable() || wwxd_provider_library.IsAvailable();
+	std::string message = any_loaded
+		? "No SceneChange backend is compatible with this video "
+			"(scxvid requires even dimensions; check Provider/SceneChange/Backend preference)."
+		: "No SceneChange provider libraries are available.";
+	message += " ";
+	message += FormatProviderLoadStatus();
+	return message;
 }
 
-std::string GetLoadError() {
-	if (IsAvailable())
-		return {};
-	return FormatLoadError(
-		scxvid_provider_library.GetLoadError(),
-		wwxd_provider_library.GetLoadError());
-}
-
-std::string GetLoadedLibrary() {
-	EnsureLoaded();
-	Api::Backend backend;
-	{
-		std::lock_guard<std::mutex> lock(api_mutex);
-		backend = api.backend;
-	}
-	return backend == Api::Backend::ScxvidProvider
-		? scxvid_provider_library.GetLoadedLibrary()
-		: wwxd_provider_library.GetLoadedLibrary();
-}
-
-Api const& GetApi() {
-	EnsureLoaded();
-	return api;
-}
-
-std::string GetBackendName() {
-	EnsureLoaded();
-	std::lock_guard<std::mutex> lock(api_mutex);
-	return BackendName(api.backend);
-}
-
-std::string GetCacheToken() {
-	if (!IsAvailable())
-		return "wwxd";
-	std::lock_guard<std::mutex> lock(api_mutex);
-	return api.backend == Api::Backend::ScxvidProvider ? "scxvid" : "wwxd";
-}
-
-bool SupportsDimensions(int32_t width, int32_t height) noexcept {
+BackendSelection SelectBackendForDimensions(
+	int32_t width,
+	int32_t height,
+	InputPixelFormatMask supported_input_formats,
+	bool log_fallback) {
+	BackendSelection result;
 	if (width <= 0 || height <= 0)
-		return false;
+		return result;
 
 	const bool even_dimensions = (width & 1) == 0 && (height & 1) == 0;
 	const auto preference = GetBackendPreference();
-	const bool xvid_available = even_dimensions && scxvid_provider_library.IsAvailable();
-	const bool wwxd_available = wwxd_provider_library.IsAvailable();
+	bool saw_unsupported = false;
+	Api::Backend skipped_backend = Api::Backend::None;
+
+	auto try_select = [&](agi::native::CachedLibrary& library, Api const& candidate) {
+		Api selected;
+		auto const status = TryCandidate(library, candidate, supported_input_formats, &selected);
+		if (status == BackendSelectionStatus::Unsupported) {
+			saw_unsupported = true;
+			if (skipped_backend == Api::Backend::None)
+				skipped_backend = candidate.backend;
+		}
+		else if (status == BackendSelectionStatus::Selected) {
+			if (log_fallback && skipped_backend != Api::Backend::None)
+				LogFallback(skipped_backend, selected.backend);
+			result.status = BackendSelectionStatus::Selected;
+			result.selected = selected;
+		}
+		return status;
+	};
+	auto try_scxvid = [&] {
+		return even_dimensions
+			? try_select(scxvid_provider_library, scxvid_api)
+			: BackendSelectionStatus::Unavailable;
+	};
+	auto try_wwxd = [&] {
+		return try_select(wwxd_provider_library, wwxd_api);
+	};
 
 	if (preference == BackendPreference::Scxvid) {
-		if (xvid_available) {
-			Select(scxvid_api);
-			return true;
-		}
-		if (wwxd_available) {
-			Select(wwxd_api);
-			return true;
-		}
+		if (try_scxvid() == BackendSelectionStatus::Selected ||
+			try_wwxd() == BackendSelectionStatus::Selected)
+			return result;
 	}
 	else if (preference == BackendPreference::Wwxd) {
-		if (wwxd_available) {
-			Select(wwxd_api);
-			return true;
-		}
-		if (xvid_available) {
-			Select(scxvid_api);
-			return true;
-		}
+		if (try_wwxd() == BackendSelectionStatus::Selected ||
+			try_scxvid() == BackendSelectionStatus::Selected)
+			return result;
 	}
 	else {
-		if (xvid_available) {
-			Select(scxvid_api);
-			return true;
-		}
-		if (wwxd_available) {
-			Select(wwxd_api);
-			return true;
-		}
+		if (try_scxvid() == BackendSelectionStatus::Selected ||
+			try_wwxd() == BackendSelectionStatus::Selected)
+			return result;
 	}
 
-	return false;
+	result.status = saw_unsupported
+		? BackendSelectionStatus::Unsupported
+		: BackendSelectionStatus::Unavailable;
+	return result;
 }
 
 } // namespace scenechange

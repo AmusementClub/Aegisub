@@ -80,7 +80,8 @@ void PrintKeyframes(std::vector<int> const& keyframes) {
 
 int main(int argc, char **argv) {
 	if (argc < 3 || argc > 6) {
-		std::cerr << "usage: scenechange-provider-smoke <video> <output.kf.txt> [expected-frames] [scxvid|wwxd-provider] [cancel-at]\n";
+		std::cerr << "usage: scenechange-provider-smoke <video> <output.kf.txt> "
+			"[expected-frames] [scxvid|wwxd|wwxd-provider] [cancel-at]\n";
 		return 2;
 	}
 
@@ -95,13 +96,23 @@ int main(int argc, char **argv) {
 			throw std::runtime_error("SceneChange keyframe generation is unavailable");
 
 		std::string expected_backend = argc >= 5 ? argv[4] : "scxvid";
-		std::string const backend = scenechange::GetBackendName();
-		bool const wwxd_alias = expected_backend == "wwxd" && backend == "wwxd-provider";
-		if (backend != expected_backend && !wwxd_alias)
-			throw std::runtime_error("selected SceneChange backend does not match the expected backend");
-		std::string const expected_cache_token = backend == "scxvid" ? "scxvid" : "wwxd";
-		if (scenechange::GetCacheToken() != expected_cache_token)
+		// CMake STRINGS / CLI: scxvid, wwxd-provider (alias wwxd). Reject typos
+		// that would otherwise silently map to the wwxd cache token.
+		if (expected_backend != "scxvid" && expected_backend != "wwxd"
+			&& expected_backend != "wwxd-provider")
+			throw std::invalid_argument("unknown expected backend: " + expected_backend);
+
+		// argv is the independent source; provider token is the system under test.
+		std::string const expected_cache_token =
+			expected_backend == "scxvid" ? "scxvid" : "wwxd";
+		std::string const cache_token = provider->GetSceneChangeKeyframeCacheToken();
+		if (cache_token != expected_cache_token)
 			throw std::runtime_error("selected SceneChange backend returned an incompatible cache token");
+
+		// Display name only (token assert above is the real check).
+		std::string const backend = cache_token == "scxvid"
+			? scenechange::BackendName(scenechange::Api::Backend::ScxvidProvider)
+			: scenechange::BackendName(scenechange::Api::Backend::WwxdProvider);
 
 		int64_t cancel_at = argc == 6 ? std::stoll(argv[5]) : 0;
 		if (cancel_at < 0 || cancel_at > provider->GetFrameCount())
@@ -118,8 +129,11 @@ int main(int argc, char **argv) {
 			if (!canceled)
 				throw std::runtime_error("SceneChange scan ignored the requested cancellation");
 			progress.ValidateCancellation(static_cast<int>(cancel_at), provider->GetFrameCount());
-			bool const odd_supported = scenechange::SupportsDimensions(65, 49);
-			std::string const odd_backend = scenechange::GetBackendName();
+			// Odd dimensions must select WWXD when it is available (scxvid requires even sizes).
+			auto const odd = scenechange::SelectBackendForDimensions(
+				65, 49, scenechange::kAllInputPixelFormats);
+			bool const odd_supported = odd.status == scenechange::BackendSelectionStatus::Selected;
+			std::string const odd_backend = scenechange::BackendName(odd.selected.backend);
 			if (odd_supported != (odd_backend.rfind("wwxd-", 0) == 0))
 				throw std::runtime_error("selected SceneChange backend returned an invalid odd-dimension capability");
 			std::cout << "backend=" << backend << '\n';
@@ -135,8 +149,10 @@ int main(int argc, char **argv) {
 			throw std::runtime_error("generated keyframes are not sorted");
 		if (argc >= 4 && keyframes != ParseExpected(argv[3]))
 			throw std::runtime_error("generated keyframes do not match the expected list");
-		bool const odd_supported = scenechange::SupportsDimensions(65, 49);
-		std::string const odd_backend = scenechange::GetBackendName();
+		auto const odd = scenechange::SelectBackendForDimensions(
+			65, 49, scenechange::kAllInputPixelFormats);
+		bool const odd_supported = odd.status == scenechange::BackendSelectionStatus::Selected;
+		std::string const odd_backend = scenechange::BackendName(odd.selected.backend);
 		if (odd_supported != (odd_backend.rfind("wwxd-", 0) == 0))
 			throw std::runtime_error("selected SceneChange backend returned an invalid odd-dimension capability");
 

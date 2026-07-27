@@ -186,6 +186,7 @@ if(GTEST_FOUND)
         tests/tests/line_wrap.cpp
         tests/tests/locale_choice.cpp
         tests/tests/locale_pick.cpp
+        tests/tests/lsmas_native_api_version.cpp
         tests/tests/lua_drawing_module.cpp
         tests/tests/lua_script_reader.cpp
         tests/tests/mkv_wrap_common.cpp
@@ -207,9 +208,10 @@ if(GTEST_FOUND)
         tests/tests/presentation_contract.cpp
         tests/tests/project_session_ops.cpp
         tests/tests/ready_flag.cpp
+        tests/tests/scenechange_native_api.cpp
+        tests/tests/scope_exit.cpp
         tests/tests/secondary_subtitle_strip_layout.cpp
         tests/tests/selection_navigation_history.cpp
-        tests/tests/scope_exit.cpp
         tests/tests/signals.cpp
         tests/tests/split.cpp
         tests/tests/string_utils.cpp

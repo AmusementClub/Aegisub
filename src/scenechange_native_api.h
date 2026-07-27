@@ -23,7 +23,34 @@ using scenechange_progress_callback_fn = int32_t (SCENECHANGE_NATIVE_CALL *)(
 
 namespace scenechange {
 
-constexpr int32_t kApiVersion = 0x00010000;
+using InputPixelFormatMask = uint32_t;
+
+constexpr InputPixelFormatMask kInputPixelFormatGray8Padded16 = 1u << 0;
+constexpr InputPixelFormatMask kInputPixelFormatYuv420p8 = 1u << 1;
+constexpr InputPixelFormatMask kAllInputPixelFormats =
+	kInputPixelFormatGray8Padded16 | kInputPixelFormatYuv420p8;
+
+constexpr InputPixelFormatMask GetInputPixelFormatMask(int32_t input_pixel_format) noexcept {
+	switch (input_pixel_format) {
+	case SCENECHANGE_PROVIDER_PIXEL_FORMAT_GRAY8_PADDED16:
+		return kInputPixelFormatGray8Padded16;
+	case SCENECHANGE_PROVIDER_PIXEL_FORMAT_YUV420P8:
+		return kInputPixelFormatYuv420p8;
+	default:
+		return 0;
+	}
+}
+
+constexpr bool SupportsInputPixelFormat(InputPixelFormatMask supported_formats,
+	int32_t input_pixel_format) noexcept {
+	return (supported_formats & GetInputPixelFormatMask(input_pixel_format)) != 0;
+}
+
+enum class BackendSelectionStatus {
+	Selected,
+	Unsupported,
+	Unavailable,
+};
 
 struct Api {
 	enum class Backend {
@@ -36,14 +63,37 @@ struct Api {
 	scenechange_provider_api provider {};
 };
 
-void EnsureLoaded();
-bool IsAvailable() noexcept;
-std::string GetLoadError();
-std::string GetLoadedLibrary();
-Api const& GetApi();
-std::string GetBackendName();
-std::string GetCacheToken();
-// Selects the preferred compatible backend for the current video dimensions.
-bool SupportsDimensions(int32_t width, int32_t height) noexcept;
+struct BackendSelection {
+	BackendSelectionStatus status = BackendSelectionStatus::Unavailable;
+	Api selected;
+};
+
+inline char const *BackendName(Api::Backend backend) noexcept {
+	switch (backend) {
+		case Api::Backend::WwxdProvider: return "wwxd-provider";
+		case Api::Backend::ScxvidProvider: return "scxvid";
+		default: return "none";
+	}
+}
+
+inline char const *CacheTokenForBackend(Api::Backend backend) noexcept {
+	return backend == Api::Backend::ScxvidProvider ? "scxvid" : "wwxd";
+}
+
+// Selects the preferred compatible backend which accepts one of
+// supported_input_formats. Returns the selected Api by value so callers do not
+// depend on mutable process-global selection state.
+BackendSelection SelectBackendForDimensions(
+	int32_t width,
+	int32_t height,
+	InputPixelFormatMask supported_input_formats,
+	bool log_fallback = false);
+
+// Human-readable status of both provider DLLs (loaded path / load error / not loaded).
+std::string FormatProviderLoadStatus();
+
+// Message for SelectBackendForDimensions → Unavailable: distinguishes "no DLLs"
+// from "DLLs present but excluded by dimensions/preference".
+std::string FormatUnavailableBackendMessage();
 
 } // namespace scenechange

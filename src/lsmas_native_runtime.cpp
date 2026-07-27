@@ -43,16 +43,16 @@ std::string FormatApiVersion(int32_t version) {
         + std::to_string(version & 0xff);
 }
 
-void ValidateApiVersion(Api const& loaded) {
+int32_t ValidateApiVersion(Api const& loaded) {
     int32_t const actual = loaded.get_api_version();
-    if (actual == static_cast<int32_t>(LSMAS_NATIVE_API_VERSION))
-        return;
+    if (IsSupportedApiVersion(actual))
+        return actual;
 
     throw agi::EnvironmentError(
-        "LsmasNative API version mismatch: loaded " + FormatApiVersion(actual)
-        + " (" + std::to_string(actual) + "), expected "
-        + std::string(LSMAS_NATIVE_API_VERSION_STRING)
-        + " (" + std::to_string(static_cast<int32_t>(LSMAS_NATIVE_API_VERSION)) + ").");
+        "LsmasNative API version unsupported: loaded " + FormatApiVersion(actual)
+        + " (" + std::to_string(actual) + "), requires API "
+        + std::to_string(LSMAS_NATIVE_API_VERSION_MAJOR) + ".x (>= "
+        + FormatApiVersion(api_version::kMinimumCompatible) + ").");
 }
 
 std::string GetRuntimeVersionDetail() {
@@ -65,9 +65,8 @@ std::string GetRuntimeVersionDetail() {
     if (!loaded.get_api_version || !loaded.get_versions_json_utf8 || !loaded.free)
         return {};
 
-    int32_t const actual = loaded.get_api_version();
-    std::string detail = "api=" + FormatApiVersion(actual)
-        + ", expected-api=" + std::string(LSMAS_NATIVE_API_VERSION_STRING);
+    std::string detail = "api=" + FormatApiVersion(loaded.api_version)
+        + ", minimum-api=" + FormatApiVersion(api_version::kMinimumCompatible);
 
     char *error = nullptr;
     char *versions = loaded.get_versions_json_utf8(&error);
@@ -89,7 +88,7 @@ std::string GetRuntimeVersionDetail() {
 void InitializeRuntime(agi::native::Library& library) {
     Api loaded;
     ResolveSymbols(library, loaded);
-    ValidateApiVersion(loaded);
+    loaded.api_version = ValidateApiVersion(loaded);
 
     std::lock_guard<std::mutex> lock(api_mutex);
     api = loaded;

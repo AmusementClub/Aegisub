@@ -20,6 +20,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <string>
 #include <vector>
 
 class AsyncVideoProvider;
@@ -67,8 +68,17 @@ class Project {
 	void DoLoadTimecodes(agi::fs::path const& path);
 	void DoLoadKeyframes(agi::fs::path const& path);
 #ifdef WITH_SCENECHANGE
-	bool TryLoadSceneChangeKeyframes(agi::fs::path const& video_path);
+	// Loads backend-specific SceneChange keyframe cache. When prompt_if_missing
+	// is true (video open), offers to generate if no cache exists.
+	// cache_token: when non-empty, skips a second provider selection.
+	bool TryLoadSceneChangeKeyframes(agi::fs::path const& video_path,
+		bool prompt_if_missing = true,
+		std::string const& cache_token = {});
 	bool PromptAndGenerateSceneChangeKeyframes(agi::fs::path const& cache_path, bool cache_exists);
+	// SceneChange backend only affects keyframe generation/cache paths; do not
+	// reopen the video provider (that would re-index LsmasNative unnecessarily).
+	// Preference changes only load an existing cache — generation is via menu.
+	void ReloadSceneChangeKeyframes();
 #endif
 
 	void LoadUnloadFiles(ProjectProperties properties);

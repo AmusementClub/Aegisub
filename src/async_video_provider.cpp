@@ -642,6 +642,14 @@ bool AsyncVideoProvider::CanGenerateSceneChangeKeyframes() const {
 	return result;
 }
 
+std::string AsyncVideoProvider::GetSceneChangeKeyframeCacheToken() const {
+	std::string token;
+	worker->Sync([&] {
+		token = source_provider->GetSceneChangeKeyframeCacheToken();
+	});
+	return token;
+}
+
 void AsyncVideoProvider::GenerateSceneChangeKeyframes(agi::fs::path const& output_path, agi::BackgroundRunner *br) {
 	auto run = [&](agi::ProgressSink *ps) {
 		worker->Sync([&] {

@@ -150,6 +150,9 @@ public:
 	virtual bool HasAudio() const { return false; }
 
 	virtual bool CanGenerateSceneChangeKeyframes() const { return false; }
+	/// Cache-key token for SceneChange keyframe files (for example "scxvid" / "wwxd").
+	/// Empty when SceneChange generation is unavailable for this provider.
+	virtual std::string GetSceneChangeKeyframeCacheToken() const { return {}; }
 	virtual void GenerateSceneChangeKeyframes(agi::fs::path const& output_path, agi::ProgressSink *ps) {
 		(void)output_path;
 		(void)ps;

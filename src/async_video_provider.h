@@ -228,6 +228,7 @@ public:
 	bool ShouldSetVideoProperties() const { return source_provider->ShouldSetVideoProperties(); }
 	bool HasAudio() const                 { return source_provider->HasAudio(); }
 	bool CanGenerateSceneChangeKeyframes() const;
+	std::string GetSceneChangeKeyframeCacheToken() const;
 	void GenerateSceneChangeKeyframes(agi::fs::path const& output_path, agi::BackgroundRunner *br);
 
 	/// @brief Constructor

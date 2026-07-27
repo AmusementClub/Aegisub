@@ -48,6 +48,7 @@
 #include <unicode/unistr.h>
 #include <wx/clipbrd.h>
 #include <wx/dirdlg.h>
+#include <wx/event.h>
 #include <wx/filedlg.h>
 #include <wx/log.h>
 #include <wx/stdpaths.h>
@@ -190,6 +191,28 @@ void SetClipboard(wxBitmap const& new_data) {
 		}
 		wxMilliSleep(20);
 	}
+}
+
+void TextControlClipboardCharHook(wxKeyEvent &event, bool editable) {
+	// Block parent CHAR_HOOK hotkeys (edit/line/copy etc.) without suppressing
+	// native KEY_DOWN/CHAR — see wxEvent::DoAllowNextEvent.
+	if (!event.CmdDown() || event.AltDown()) {
+		event.Skip();
+		return;
+	}
+
+	int key = event.GetUnicodeKey();
+	if (key >= 'a' && key <= 'z')
+		key -= 'a' - 'A';
+	if (key != 'C' && key != 'X' && key != 'V') {
+		event.Skip();
+		return;
+	}
+
+	// Not Skip(): stop FrameMain / DialogDetachedVideo hooks.
+	// DoAllowNextEvent(): still generate normal key events for the control.
+	if (editable || key == 'C')
+		event.DoAllowNextEvent();
 }
 
 #ifndef __WXOSX_COCOA__

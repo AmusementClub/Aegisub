@@ -41,6 +41,7 @@
 #include <wx/bitmap.h>
 #include <wx/string.h>
 
+class wxKeyEvent;
 class wxMouseEvent;
 class wxWindow;
 
@@ -79,6 +80,16 @@ std::string GetClipboard();
 /// Try to set the clipboard to the given string
 void SetClipboard(std::string const& new_value);
 void SetClipboard(wxBitmap const& new_value);
+
+/// Handle Ctrl+C/X/V on a control CHAR_HOOK so frame-level hotkeys cannot steal them.
+///
+/// Does not Skip clipboard keys (blocks parent CHAR_HOOK / edit/line/*), but
+/// calls DoAllowNextEvent() so the native control still gets KEY_DOWN/CHAR and
+/// performs WM_COPY/CUT/PASTE with correct selection semantics.
+///
+/// @param editable If false, Ctrl+C is allowed through natively but Ctrl+X/V
+///                 are swallowed so they cannot fall through to edit/line/*.
+void TextControlClipboardCharHook(wxKeyEvent &event, bool editable);
 
 #define countof(array) (sizeof(array) / sizeof(array[0]))
 

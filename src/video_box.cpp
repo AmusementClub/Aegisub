@@ -42,6 +42,7 @@
 #include "secondary_subtitle_strip.h"
 #include "selection_controller.h"
 #include "secondary_subtitle_session.h"
+#include "utils.h"
 #include "video_controller.h"
 #include "video_display.h"
 #include "video_slider.h"
@@ -81,6 +82,10 @@ VideoBox::VideoBox(
 
 	VideoPosition = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
 	VideoPosition->SetToolTip(_("Current frame time"));
+	// Trump frame hotkeys (edit/line/copy etc.) so Ctrl+C copies the field text.
+	VideoPosition->Bind(wxEVT_CHAR_HOOK, [](wxKeyEvent &event) {
+		TextControlClipboardCharHook(event, false);
+	});
 
 	VideoFrameInput = new wxSpinCtrl(
 		this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize,
@@ -100,9 +105,15 @@ VideoBox::VideoBox(
 			VideoFrameInput->SetValue(current_frame);
 		event.Skip();
 	});
+	VideoFrameInput->Bind(wxEVT_CHAR_HOOK, [](wxKeyEvent &event) {
+		TextControlClipboardCharHook(event, true);
+	});
 
 	VideoSubsPos = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxSize(110, -1), wxTE_READONLY);
 	VideoSubsPos->SetToolTip(_("Time of this frame relative to start and end of current subs"));
+	VideoSubsPos->Bind(wxEVT_CHAR_HOOK, [](wxKeyEvent &event) {
+		TextControlClipboardCharHook(event, false);
+	});
 
 	wxArrayString choices;
 	for (int i = 1; i <= 24; ++i)

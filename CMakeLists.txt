@@ -643,6 +643,7 @@ set(AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES
 set(AEGISUB_SHARED_SELECTION_REQUEST_SOURCES
     src/charset_choice.cpp
     src/locale_choice.cpp
+    src/single_choice_layout.cpp
     src/subtitle_fps_choice.cpp
     src/track_choice.cpp
 )

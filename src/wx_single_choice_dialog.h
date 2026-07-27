@@ -1,12 +1,15 @@
 #pragma once
 
 #include "compat.h"
+#include "single_choice_layout.h"
 #include "ui_dispatch.h"
 #include "ui_services.h"
 #include "utils.h"
 
 #include <algorithm>
+#include <functional>
 #include <wx/dialog.h>
+#include <wx/listbox.h>
 #include <wx/radiobox.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
@@ -123,25 +126,105 @@ inline std::optional<int> ShowSingleChoiceDialog(wxWindow *parent, SingleChoiceI
 	if (localized.choices.empty())
 		return std::nullopt;
 
-	wxDialog dialog(parent, -1, to_wx(localized.title));
+	auto const layout = aegisub::single_choice_layout::PlanLayout(localized.choices.size());
+	bool const scrollable =
+		layout.presentation == aegisub::single_choice_layout::Presentation::ScrollableList;
+
+	long style = wxDEFAULT_DIALOG_STYLE;
+	if (scrollable)
+		style |= wxRESIZE_BORDER;
+
+	wxDialog dialog(parent, -1, to_wx(localized.title), wxDefaultPosition, wxDefaultSize, style);
 
 	auto sizer = new wxBoxSizer(wxVERTICAL);
 	sizer->Add(new wxStaticText(&dialog, -1, to_wx(localized.message)), wxSizerFlags().Border());
 
 	auto choices = to_wx(localized.choices);
-	auto *radio_box = new wxRadioBox(&dialog, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, choices, 1);
-	radio_box->SetSelection(std::clamp(localized.default_choice, 0, static_cast<int>(localized.choices.size() - 1)));
-	sizer->Add(radio_box, wxSizerFlags().Border(wxALL & ~wxTOP).Expand());
+	int const default_sel = std::clamp(
+		localized.default_choice, 0, static_cast<int>(localized.choices.size() - 1));
+
+	// Unified selection reader so ShowModal only samples once after dismiss.
+	std::function<int()> get_selection;
+	wxListBox *scroll_target = nullptr;
+
+	if (!scrollable) {
+		auto *radio_box = new wxRadioBox(
+			&dialog, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, choices, 1);
+		radio_box->SetSelection(default_sel);
+		sizer->Add(radio_box, wxSizerFlags().Border(wxALL & ~wxTOP).Expand());
+		get_selection = [radio_box] { return radio_box->GetSelection(); };
+	} else {
+		// wxLB_NEEDED_SB is 0 in wx 3.3 (documentary no-op); omit it. Vertical
+		// scrollbars appear as needed by default; HSCROLL covers long track labels.
+		auto *list_box = new wxListBox(
+			&dialog, -1, wxDefaultPosition, wxDefaultSize, choices,
+			wxLB_SINGLE | wxLB_HSCROLL);
+		list_box->SetSelection(default_sel);
+		scroll_target = list_box;
+
+		// Prefer a short, readable window; long track labels scroll horizontally.
+		int const row_h = list_box->GetCharHeight() + list_box->FromDIP(2);
+		int const min_h = layout.visible_rows * row_h + list_box->FromDIP(8);
+		auto best = list_box->GetBestSize();
+		int const min_w = list_box->FromDIP(360);
+		int const max_w = list_box->FromDIP(720);
+		int const width = std::clamp(best.GetWidth(), min_w, max_w);
+		list_box->SetMinSize(wxSize(width, min_h));
+
+		// Expand with the dialog when the user resizes.
+		sizer->Add(list_box, wxSizerFlags(1).Border(wxALL & ~wxTOP).Expand());
+
+		list_box->Bind(wxEVT_LISTBOX_DCLICK, [&dialog, list_box](wxCommandEvent&) {
+			if (list_box->GetSelection() != wxNOT_FOUND)
+				dialog.EndModal(wxID_OK);
+		});
+		get_selection = [list_box] { return list_box->GetSelection(); };
+	}
 
 	sizer->Add(dialog.CreateStdDialogButtonSizer(wxOK | wxCANCEL), wxSizerFlags().Border().Expand());
 
+	// List boxes (unlike radio boxes) can clear the selection; keep OK enabled
+	// only while a real index is selected so Enter/OK cannot confirm wxNOT_FOUND.
+	auto sync_ok_enabled = [&dialog, get_selection] {
+		if (auto *ok = dialog.FindWindow(wxID_OK))
+			ok->Enable(get_selection() != wxNOT_FOUND);
+	};
+	if (scroll_target) {
+		scroll_target->Bind(wxEVT_LISTBOX, [sync_ok_enabled](wxCommandEvent&) {
+			sync_ok_enabled();
+		});
+		sync_ok_enabled();
+	}
+
 	dialog.SetSizerAndFit(sizer);
+	if (scrollable)
+		dialog.SetMinSize(dialog.GetSize());
 	dialog.CenterOnParent();
+
+	if (scroll_target) {
+		// Scroll after layout: before SetSizerAndFit the list is still at its
+		// default size, so EnsureVisible would compute against the wrong height.
+		// EnsureVisible asserts on an invalid index, and default_sel is only in
+		// range because of the empty-choices early return above; re-check here so
+		// relaxing that guard cannot turn into a debug-build assert.
+		if (default_sel >= 0 && static_cast<size_t>(default_sel) < localized.choices.size())
+			scroll_target->EnsureVisible(default_sel);
+		scroll_target->SetFocus();
+	}
 
 	dialog.Bind(wxEVT_BUTTON, [&](wxCommandEvent&) { dialog.EndModal(wxID_OK); }, wxID_OK);
 	dialog.Bind(wxEVT_BUTTON, [&](wxCommandEvent&) { dialog.EndModal(wxID_CANCEL); }, wxID_CANCEL);
 
-	return dialog.ShowModal() == wxID_OK ? std::optional<int>(radio_box->GetSelection()) : std::nullopt;
+	if (dialog.ShowModal() != wxID_OK)
+		return std::nullopt;
+
+	// Defense in depth: list boxes can report wxNOT_FOUND, and a non-wx sink
+	// might still hand back a bare invalid index. Empty/out-of-range is cancel.
+	// AskForFPS also range-checks before ResolveSubtitleFpsChoiceSelection.
+	int const selection = get_selection();
+	if (selection < 0 || static_cast<size_t>(selection) >= localized.choices.size())
+		return std::nullopt;
+	return selection;
 }
 
 class WxSingleChoiceInteractionSink final : public SingleChoiceInteractionSink {

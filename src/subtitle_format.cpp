@@ -99,7 +99,10 @@ agi::vfr::Framerate SubtitleFormat::AskForFPS(bool allow_vfr, bool show_smpte, a
 		return agi::vfr::Framerate();
 
 	auto choice = choice_sink->RequestSingleChoice(BuildSubtitleFpsChoiceRequest(model));
-	if (!choice)
+	// optional has_value alone is not enough: a list-based chooser can surface
+	// wxNOT_FOUND (-1). Treat out-of-range like cancel rather than throwing in
+	// ResolveSubtitleFpsChoiceSelection.
+	if (!choice || *choice < 0 || static_cast<size_t>(*choice) >= model.choices.size())
 		return agi::vfr::Framerate();
 	return ResolveSubtitleFpsChoiceSelection(model, *choice, fps);
 }

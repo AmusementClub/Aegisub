@@ -1251,6 +1251,7 @@ TEST(host_boundary_policy, shared_selection_request_sources_live_in_named_cmake_
 	std::set<std::string> const expected_sources = {
 		"src/charset_choice.cpp",
 		"src/locale_choice.cpp",
+		"src/single_choice_layout.cpp",
 		"src/subtitle_fps_choice.cpp",
 		"src/track_choice.cpp",
 	};

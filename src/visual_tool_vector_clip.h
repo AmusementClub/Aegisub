@@ -40,6 +40,7 @@ private:
 	wxToolBar *toolBar = nullptr; /// The subtoolbar
 	int mode = 0; /// 0-8
 	bool inverse = false; /// is iclip?
+	std::string last_committed_clip;
 
 	std::set<Feature *> box_added;
 
@@ -48,7 +49,8 @@ private:
 	void SetMode(int mode);
 	void OnSubTool(wxCommandEvent &event);
 
-	void Save();
+	std::string BuildClipValue() const;
+	bool Save(std::string const& value);
 	void Commit(wxString message=wxString()) override;
 
 	void MakeFeature(size_t idx);

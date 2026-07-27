@@ -12,7 +12,9 @@
 #include <include/core/SkPaint.h>
 #include <include/core/SkPath.h>
 #include <include/core/SkPathBuilder.h>
+#include <include/core/SkPoint.h>
 #include <include/core/SkRect.h>
+#include <include/core/SkSpan.h>
 #endif
 
 #include <algorithm>
@@ -116,12 +118,23 @@ void SkiaVideoOverlayDrawContext::DrawLines(size_t dim, float const *lines, size
 	if (dim != 2 || !lines || n < 2)
 		return;
 
-	SkPaint const& paint = MakeStrokePaint();
-	SkCanvas &target = GetTargetCanvas();
-	for (size_t i = 0; i + 1 < n; i += 2) {
+	std::vector<SkPoint> points;
+	points.reserve(n);
+	for (size_t i = 0; i < n; ++i) {
 		size_t const offset = i * dim;
-		target.drawLine(lines[offset], lines[offset + 1], lines[offset + 2], lines[offset + 3], paint);
+		points.push_back(SkPoint::Make(lines[offset], lines[offset + 1]));
 	}
+	SkCanvas &target = GetTargetCanvas();
+	SkPaint const& paint = MakeStrokePaint();
+	if (invert && invert_canvas) {
+		for (size_t i = 0; i + 1 < points.size(); i += 2)
+			target.drawLine(points[i], points[i + 1], paint);
+		return;
+	}
+	target.drawPoints(
+		SkCanvas::kLines_PointMode,
+		SkSpan<const SkPoint>(points.data(), points.size()),
+		paint);
 #else
 	(void)dim;
 	(void)lines;
@@ -192,10 +205,13 @@ void SkiaVideoOverlayDrawContext::DrawMultiPolygon(std::vector<float> const& poi
 		fill_builder.addRect(SkRect::MakeXYWH(video_pos.X(), video_pos.Y(), video_size.X(), video_size.Y()));
 
 	std::vector<SkPoint> polygon;
+	std::vector<SkPath> outlines;
+	if (line_alpha > 0.0f)
+		outlines.reserve(start.size());
 	for (size_t poly = 0; poly < start.size(); ++poly) {
 		int const first = start[poly];
 		int const point_count = count[poly];
-		if (point_count < 3)
+		if (point_count < 2)
 			continue;
 
 		polygon.clear();
@@ -208,6 +224,11 @@ void SkiaVideoOverlayDrawContext::DrawMultiPolygon(std::vector<float> const& poi
 		}
 		if (polygon.size() >= 3)
 			fill_builder.addPolygon({ polygon.data(), polygon.size() }, true);
+		if (line_alpha > 0.0f && polygon.size() >= 2) {
+			SkPathBuilder outline_builder;
+			outline_builder.addPolygon({ polygon.data(), polygon.size() }, true);
+			outlines.push_back(outline_builder.detach());
+		}
 	}
 
 	SkCanvas &target = GetTargetCanvas();
@@ -215,29 +236,10 @@ void SkiaVideoOverlayDrawContext::DrawMultiPolygon(std::vector<float> const& poi
 	if (fill_alpha > 0.0f)
 		target.drawPath(fill_path, MakeFillPaint());
 
-	if (line_alpha > 0.0f) {
+	if (!outlines.empty()) {
 		SkPaint const& stroke = MakeStrokePaint();
-		for (size_t poly = 0; poly < start.size(); ++poly) {
-			int const first = start[poly];
-			int const point_count = count[poly];
-			if (point_count < 2)
-				continue;
-
-			polygon.clear();
-			polygon.reserve(point_count);
-			for (int i = 0; i < point_count; ++i) {
-				size_t const offset = static_cast<size_t>(first + i) * 2;
-				if (offset + 1 >= points.size())
-					break;
-				polygon.push_back(SkPoint::Make(points[offset], points[offset + 1]));
-			}
-			if (polygon.size() < 2)
-				continue;
-
-			SkPathBuilder outline_builder;
-			outline_builder.addPolygon({ polygon.data(), polygon.size() }, true);
-			target.drawPath(outline_builder.detach(), stroke);
-		}
+		for (auto const& outline : outlines)
+			target.drawPath(outline, stroke);
 	}
 #else
 	(void)points;

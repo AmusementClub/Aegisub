@@ -29,10 +29,48 @@
 
 #include "spline_curve.h"
 
+#include <limits>
+#include <span>
 #include <string>
 #include <vector>
 
 class VisualToolBase;
+
+namespace spline_detail {
+/// Returns curves.size() in curve_index when the implicit closing segment wins.
+inline bool FindClosestParametricPoint(
+	std::span<SplineCurve const> curves,
+	Vector2D reference,
+	std::size_t& curve_index,
+	float& t,
+	Vector2D& point) {
+	curve_index = 0;
+	if (curves.empty())
+		return false;
+
+	float closest = std::numeric_limits<float>::infinity();
+	bool found = false;
+	auto consider = [&](SplineCurve const& curve, std::size_t candidate_index) {
+		float const candidate_t = curve.GetClosestParam(reference);
+		Vector2D const candidate_point = curve.GetPoint(candidate_t);
+		float const distance = (candidate_point - reference).SquareLen();
+		if (distance < closest) {
+			closest = distance;
+			curve_index = candidate_index;
+			t = candidate_t;
+			point = candidate_point;
+			found = true;
+		}
+	};
+
+	for (std::size_t index = 0; index < curves.size(); ++index)
+		consider(curves[index], index);
+
+	SplineCurve const closing_curve(curves.back().EndPoint(), curves.front().p1);
+	consider(closing_curve, curves.size());
+	return found;
+}
+}
 
 class Spline final : private std::vector<SplineCurve> {
 	/// Visual tool to do the conversion between script and video pixels

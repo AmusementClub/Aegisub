@@ -22,6 +22,7 @@
 #include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "selection_controller.h"
 #include "utils.h"
 #include "video_overlay_draw_context.h"
@@ -142,9 +143,11 @@ void VisualToolVectorClip::Draw() {
 	}
 
 	Vector2D pt;
-	float t;
-	Spline::iterator highlighted_curve;
-	spline.GetClosestParametricPoint(mouse_pos, highlighted_curve, t, pt);
+	Spline::iterator highlighted_curve = spline.end();
+	if (mode == 4 || (mode == 3 && !active_feature && points.size() > 2)) {
+		float t;
+		spline.GetClosestParametricPoint(mouse_pos, highlighted_curve, t, pt);
+	}
 
 	// Draw highlighted line
 	if ((mode == 3 || mode == 4) && !active_feature && points.size() > 2) {
@@ -228,9 +231,11 @@ void VisualToolVectorClip::DrawOverlay(VideoOverlayDrawContext &context) {
 	}
 
 	Vector2D pt;
-	float t;
-	Spline::iterator highlighted_curve;
-	spline.GetClosestParametricPoint(mouse_pos, highlighted_curve, t, pt);
+	Spline::iterator highlighted_curve = spline.end();
+	if (mode == 4 || (mode == 3 && !active_feature && points.size() > 2)) {
+		float t;
+		spline.GetClosestParametricPoint(mouse_pos, highlighted_curve, t, pt);
+	}
 
 	if ((mode == 3 || mode == 4) && !active_feature && points.size() > 2) {
 		auto highlighted_points = spline.GetPointList(highlighted_curve);
@@ -334,24 +339,53 @@ void VisualToolVectorClip::MakeFeatures() {
 		MakeFeature(i);
 }
 
-void VisualToolVectorClip::Save() {
+std::string VisualToolVectorClip::BuildClipValue() const {
 	std::string value = "(";
 	if (spline.GetScale() != 1)
 		value += std::to_string(spline.GetScale()) + ",";
 	value += spline.EncodeToAss() + ")";
+	return value;
+}
 
+bool VisualToolVectorClip::Save(std::string const& value) {
 	auto core = c->GetCore();
+	bool changed = false;
 	for (auto line : core.selectionController->GetSelectedSet()) {
 		// This check is technically not correct as it could be outside of an
 		// override block... but that's rather unlikely
 		bool has_iclip = line->Text.get().find("\\iclip") != std::string::npos;
+		std::string const previous_text = line->Text.get();
 		SetOverride(line, has_iclip ? "\\iclip" : "\\clip", value);
+		changed |= previous_text != line->Text.get();
 	}
+	return changed;
 }
 
 void VisualToolVectorClip::Commit(wxString message) {
-	Save();
-	VisualToolBase::Commit(message);
+	std::string const value = BuildClipValue();
+	// Selection-only events must not rewrite other selected subtitle lines.
+	if (value == last_committed_clip)
+		return;
+
+	auto const& selected = c->GetCore().selectionController->GetSelectedSet();
+	bool const has_selection = !selected.empty();
+	perf_trace::VideoUiDurationScope total_trace(
+		"visual_tool.vector_clip.commit",
+		mode,
+		static_cast<int>(selected.size()));
+	bool changed = false;
+	{
+		perf_trace::VideoUiDurationScope save_trace(
+			"visual_tool.vector_clip.save",
+			static_cast<int>(spline.size()),
+			static_cast<int>(selected.size()));
+		changed = Save(value);
+	}
+	if (changed) {
+		VisualToolBase::Commit(message);
+	}
+	if (has_selection)
+		last_committed_clip = value;
 }
 
 void VisualToolVectorClip::UpdateDrag(Feature *feature) {
@@ -570,12 +604,18 @@ void VisualToolVectorClip::UpdateHold() {
 }
 
 void VisualToolVectorClip::DoRefresh() {
-	if (!active_line) return;
+	if (!active_line) {
+		spline.clear();
+		last_committed_clip.clear();
+		MakeFeatures();
+		return;
+	}
 
 	int scale;
 	std::string vect = GetLineVectorClip(active_line, scale, inverse);
 	spline.SetScale(scale);
 	spline.DecodeFromAss(vect);
+	last_committed_clip = BuildClipValue();
 
 	MakeFeatures();
 }

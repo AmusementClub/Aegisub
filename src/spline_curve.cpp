@@ -115,6 +115,15 @@ Vector2D& SplineCurve::EndPoint() {
 	}
 }
 
+Vector2D const& SplineCurve::EndPoint() const {
+	switch (type) {
+		case POINT:   return p1;
+		case LINE:    return p2;
+		case BICUBIC: return p4;
+		default:      return p1;
+	}
+}
+
 Vector2D SplineCurve::GetClosestPoint(Vector2D ref) const {
 	return GetPoint(GetClosestParam(ref));
 }

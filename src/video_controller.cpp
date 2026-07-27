@@ -99,6 +99,10 @@ void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
 		}
 	}
 
+	perf_trace::VideoUiDurationScope subtitle_update_trace(
+		"video_controller.subtitle_update",
+		changed ? 1 : 0,
+		static_cast<int>(core.ass->Events.size()));
 	if (!changed)
 		provider->LoadSubtitles(core.ass.get());
 	else

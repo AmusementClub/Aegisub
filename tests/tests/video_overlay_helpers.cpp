@@ -9,6 +9,8 @@ namespace {
 class CaptureOverlayContext final : public VideoOverlayDrawContext {
 public:
 	std::vector<std::pair<Vector2D, Vector2D>> lines;
+	size_t draw_line_calls = 0;
+	size_t draw_lines_calls = 0;
 
 	void SetLineColour(wxColour const&, float = 1.0f, int = 1) override { }
 	void SetFillColour(wxColour const&, float = 1.0f) override { }
@@ -16,10 +18,21 @@ public:
 	void ClearInvert() override { }
 
 	void DrawLine(Vector2D p1, Vector2D p2) override {
+		++draw_line_calls;
 		lines.emplace_back(p1, p2);
 	}
 
-	void DrawLines(size_t, float const *, size_t) override { }
+	void DrawLines(size_t dim, float const *points, size_t n) override {
+		++draw_lines_calls;
+		if (dim != 2 || !points)
+			return;
+		for (size_t i = 0; i + 1 < n; i += 2) {
+			size_t const offset = i * dim;
+			lines.emplace_back(
+				Vector2D(points[offset], points[offset + 1]),
+				Vector2D(points[offset + 2], points[offset + 3]));
+		}
+	}
 	void DrawLineStrip(Vector2D const *, size_t) override { }
 	void DrawRectangle(Vector2D, Vector2D) override { }
 	void DrawPolygon(Vector2D const *, size_t) override { }
@@ -137,4 +150,61 @@ TEST(video_overlay_helpers, projected_sheared_line_passes_adjusted_z_scale_to_ov
 		context.lines[0].second,
 		video_overlay_helpers::ProjectRotatedShearedPoint(
 			end, origin, 0.0f, 45.0f, 0.0f, 0.0f, 0.0f, adjusted_z_scale));
+}
+
+TEST(video_overlay_helpers, dashed_line_batches_exact_segments_into_one_draw_lines_call) {
+	CaptureOverlayContext context;
+
+	video_overlay_helpers::DrawDashedLine(
+		context,
+		Vector2D(0.0f, 3.0f),
+		Vector2D(13.0f, 3.0f),
+		3.0f);
+
+	EXPECT_EQ(0u, context.draw_line_calls);
+	EXPECT_EQ(1u, context.draw_lines_calls);
+	ASSERT_EQ(3u, context.lines.size());
+	ExpectVectorNear(context.lines[0].first, Vector2D(0.0f, 3.0f));
+	ExpectVectorNear(context.lines[0].second, Vector2D(3.0f, 3.0f));
+	ExpectVectorNear(context.lines[1].first, Vector2D(6.0f, 3.0f));
+	ExpectVectorNear(context.lines[1].second, Vector2D(9.0f, 3.0f));
+	ExpectVectorNear(context.lines[2].first, Vector2D(12.0f, 3.0f));
+	ExpectVectorNear(context.lines[2].second, Vector2D(13.0f, 3.0f));
+}
+
+TEST(video_overlay_helpers, dashed_line_preserves_diagonal_segment_endpoints) {
+	CaptureOverlayContext context;
+
+	video_overlay_helpers::DrawDashedLine(
+		context,
+		Vector2D(0.0f, 0.0f),
+		Vector2D(6.0f, 8.0f),
+		2.0f);
+
+	ASSERT_EQ(3u, context.lines.size());
+	ExpectVectorNear(context.lines[0].first, Vector2D(0.0f, 0.0f));
+	ExpectVectorNear(context.lines[0].second, Vector2D(1.2f, 1.6f));
+	ExpectVectorNear(context.lines[1].first, Vector2D(2.4f, 3.2f));
+	ExpectVectorNear(context.lines[1].second, Vector2D(3.6f, 4.8f));
+	ExpectVectorNear(context.lines[2].first, Vector2D(4.8f, 6.4f));
+	ExpectVectorNear(context.lines[2].second, Vector2D(6.0f, 8.0f));
+}
+
+TEST(video_overlay_helpers, dashed_line_skips_empty_or_invalid_ranges) {
+	CaptureOverlayContext context;
+
+	video_overlay_helpers::DrawDashedLine(
+		context,
+		Vector2D(4.0f, 5.0f),
+		Vector2D(4.0f, 5.0f),
+		2.0f);
+	video_overlay_helpers::DrawDashedLine(
+		context,
+		Vector2D(0.0f, 0.0f),
+		Vector2D(10.0f, 0.0f),
+		0.0f);
+
+	EXPECT_EQ(0u, context.draw_line_calls);
+	EXPECT_EQ(0u, context.draw_lines_calls);
+	EXPECT_TRUE(context.lines.empty());
 }

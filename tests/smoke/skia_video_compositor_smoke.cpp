@@ -1,7 +1,9 @@
 #include "../../src/skia/skia_video_compositor.h"
 #include "../../src/skia/skia_video_overlay_bounds.h"
 #include "../../src/skia/skia_video_overlay_gl.h"
+#include "../../src/skia_runtime/skia_text_layout_cache.h"
 #include "../../src/skia_runtime/skia_surface_provider.h"
+#include "../../src/video_overlay_draw_context_skia.h"
 
 #ifdef _WIN32
 
@@ -20,6 +22,7 @@
 #include <include/core/SkSurface.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -251,6 +254,133 @@ void ClearBackBuffer(HiddenGlWindow const& window) {
 	glClear(GL_COLOR_BUFFER_BIT);
 }
 
+std::vector<unsigned char> ReadFramebuffer(
+	FramebufferFunctions const& gl,
+	GLuint framebuffer,
+	int width,
+	int height) {
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, framebuffer);
+	glReadBuffer(GL_COLOR_ATTACHMENT0_EXT);
+	std::vector<unsigned char> pixels(static_cast<std::size_t>(width) * height * 4);
+	glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, 0);
+	glDrawBuffer(GL_BACK);
+	glReadBuffer(GL_BACK);
+	return pixels;
+}
+
+struct LineBatchScenario {
+	char const *name;
+	bool invert_target;
+	float device_scale;
+	int line_width;
+};
+
+std::vector<unsigned char> RenderLineBatchScenario(
+	HiddenGlWindow& window,
+	FramebufferFunctions const& gl,
+	SkiaVideoCompositor& compositor,
+	SkiaGlContextToken token,
+	LineBatchScenario const& scenario,
+	bool batched,
+	std::uint64_t present_generation) {
+	constexpr int width = 72;
+	constexpr int height = 48;
+	OffscreenTarget target(gl, width, height);
+	gl.BindFramebuffer(GL_FRAMEBUFFER_EXT, 0);
+	glDrawBuffer(GL_BACK);
+	glReadBuffer(GL_BACK);
+	if (!compositor.BeginFrame(token, window.Target(token.generation, present_generation)))
+		throw std::runtime_error("line batching BeginFrame failed");
+
+	SkiaSurfaceProvider surface_provider;
+	SkiaFramebufferSurfaceDescriptor descriptor;
+	descriptor.width = width;
+	descriptor.height = height;
+	descriptor.stencil_bits = 8;
+	descriptor.bottom_left_origin = false;
+	descriptor.framebuffer_id = target.framebuffer;
+	auto surface = surface_provider.AcquireFramebufferSurface(compositor.Device().Get(), descriptor);
+	if (!surface || !surface->getCanvas())
+		throw std::runtime_error("line batching Skia surface acquisition failed");
+
+	auto *canvas = surface->getCanvas();
+	canvas->clear(SK_ColorTRANSPARENT);
+	canvas->save();
+	canvas->scale(scenario.device_scale, scenario.device_scale);
+	SkiaTextLayoutCache text_cache;
+	SkiaVideoOverlayDrawContext draw_context(
+		*canvas,
+		scenario.invert_target ? canvas : nullptr,
+		text_cache,
+		scenario.device_scale);
+	draw_context.SetLineColour(
+		wxColour(28, 190, 235),
+		160.0f / 255.0f,
+		scenario.line_width);
+	if (scenario.invert_target)
+		draw_context.SetInvert();
+
+	std::array<float, 16> const points {{
+		2.25f, 2.75f, 27.5f, 9.25f,
+		3.0f, 14.0f, 24.0f, 14.0f,
+		29.0f, 3.0f, 18.0f, 17.0f,
+		5.5f, 20.5f, 31.0f, 20.5f,
+	}};
+	if (batched) {
+		draw_context.DrawLines(2, points.data(), points.size() / 2);
+	}
+	else {
+		for (std::size_t index = 0; index < points.size(); index += 4) {
+			draw_context.DrawLine(
+				Vector2D(points[index], points[index + 1]),
+				Vector2D(points[index + 2], points[index + 3]));
+		}
+	}
+	canvas->restore();
+	if (!compositor.FinishFrame(token, true))
+		throw std::runtime_error("line batching FinishFrame failed");
+
+	return ReadFramebuffer(gl, target.framebuffer, width, height);
+}
+
+bool ValidateLineBatchParity(HiddenGlWindow& window) {
+	FramebufferFunctions const gl;
+	if (!gl.Complete())
+		throw std::runtime_error("framebuffer functions are unavailable");
+
+	auto const token = window.Token(6);
+	SkiaVideoCompositor compositor(SkiaVideoFailureInjection::None);
+	std::array<LineBatchScenario, 8> const scenarios {{
+		{ "normal-width1-dpi1", false, 1.0f, 1 },
+		{ "normal-width2-dpi1", false, 1.0f, 2 },
+		{ "normal-width1-dpi2", false, 2.0f, 1 },
+		{ "normal-width2-dpi2", false, 2.0f, 2 },
+		{ "invert-width1-dpi1", true, 1.0f, 1 },
+		{ "invert-width2-dpi1", true, 1.0f, 2 },
+		{ "invert-width1-dpi2", true, 2.0f, 1 },
+		{ "invert-width2-dpi2", true, 2.0f, 2 },
+	}};
+	bool passed = true;
+	std::uint64_t present_generation = 1;
+	for (auto const& scenario : scenarios) {
+		auto const individual = RenderLineBatchScenario(
+			window, gl, compositor, token, scenario, false, present_generation++);
+		auto const batched = RenderLineBatchScenario(
+			window, gl, compositor, token, scenario, true, present_generation++);
+		std::size_t mismatch_count = 0;
+		for (std::size_t index = 0; index < individual.size(); ++index)
+			mismatch_count += individual[index] != batched[index];
+		std::cout
+			<< "line-batch-parity scenario=" << scenario.name
+			<< " mismatched-bytes=" << mismatch_count
+			<< '\n';
+		passed = mismatch_count == 0 && passed;
+	}
+	compositor.Release(token);
+	return passed;
+}
+
 struct OverlayRenderResult {
 	std::vector<unsigned char> pixels;
 	std::vector<unsigned char> cached_pixels;
@@ -478,6 +608,7 @@ int main() try {
 		SkiaGlDeviceFailure::FrameBeginInjected,
 		4) && passed;
 	passed = ValidateBoundedOverlayParity(window) && passed;
+	passed = ValidateLineBatchParity(window) && passed;
 	return passed ? 0 : 3;
 }
 catch (std::exception const& err) {

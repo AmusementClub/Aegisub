@@ -103,10 +103,14 @@ inline void DrawDashedLine(VideoOverlayDrawContext &context, Vector2D p1, Vector
 		return;
 
 	Vector2D const unit = delta / len;
+	std::vector<float> lines;
 	for (float offset = 0.0f; offset < len; offset += step * 2.0f) {
 		float const end_offset = std::min(len, offset + step);
-		context.DrawLine(p1 + unit * offset, p1 + unit * end_offset);
+		Vector2D const start = p1 + unit * offset;
+		Vector2D const end = p1 + unit * end_offset;
+		lines.insert(lines.end(), { start.X(), start.Y(), end.X(), end.Y() });
 	}
+	context.DrawLines(2, lines.data(), lines.size() / 2);
 }
 
 inline void DrawLineStripFromFloatPoints(VideoOverlayDrawContext &context, std::vector<float> const& points) {

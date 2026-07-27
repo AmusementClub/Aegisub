@@ -39,8 +39,6 @@
 #include <libaegisub/split.h>
 #include <libaegisub/util.h>
 
-#include <limits>
-
 Spline::Spline(const VisualToolBase &tl)
 : coord_translator(tl)
 {
@@ -234,26 +232,15 @@ void Spline::GetClosestParametricPoint(Vector2D reference, iterator &curve, floa
 	t = 0.f;
 	if (empty()) return;
 
-	// Close the shape
-	emplace_back(back().EndPoint(), front().p1);
-
-	float closest = std::numeric_limits<float>::infinity();
 	size_t idx = 0;
-	for (size_t i = 0; i < size(); ++i) {
-		auto& cur = (*this)[i];
-		float param = cur.GetClosestParam(reference);
-		Vector2D p1 = cur.GetPoint(param);
-		float dist = (p1-reference).SquareLen();
-		if (dist < closest) {
-			closest = dist;
-			t = param;
-			idx = i;
-			pt = p1;
-		}
-	}
-
-	pop_back();
-	curve = begin() + idx;
+	size_t const curve_count = size();
+	spline_detail::FindClosestParametricPoint(
+		std::span<SplineCurve const>(data(), curve_count),
+		reference,
+		idx,
+		t,
+		pt);
+	curve = idx == curve_count ? end() : begin() + idx;
 }
 
 Vector2D Spline::GetClosestPoint(Vector2D reference) {

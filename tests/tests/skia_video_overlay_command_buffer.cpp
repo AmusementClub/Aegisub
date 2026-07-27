@@ -1,6 +1,7 @@
 #include <main.h>
 
 #include "../../src/skia/skia_video_overlay_command_buffer.h"
+#include "../../src/video_overlay_helpers.h"
 
 namespace {
 wxSize MeasureTestText(std::string const& text, VideoOverlayTextStyle const& style) {
@@ -60,6 +61,22 @@ TEST(skia_video_overlay_command_buffer, replay_preserves_owned_commands_exactly)
 	EXPECT_EQ(original.CommandCount(), replayed.CommandCount());
 	EXPECT_TRUE(original.HasNormalContent());
 	EXPECT_TRUE(original.HasInvertContent());
+}
+
+TEST(skia_video_overlay_command_buffer, dashed_line_records_one_owned_draw_command) {
+	SkiaVideoOverlayRecorder recorder(MeasureTestText, 1.0f);
+
+	video_overlay_helpers::DrawDashedLine(
+		recorder,
+		Vector2D(0.0f, 0.0f),
+		Vector2D(100.0f, 0.0f),
+		3.0f);
+	auto buffer = recorder.TakeBuffer();
+
+	EXPECT_EQ(1u, buffer.CommandCount());
+	SkiaVideoOverlayRecorder replayed(MeasureTestText, 1.0f);
+	buffer.Replay(replayed);
+	EXPECT_TRUE(buffer.EquivalentTo(replayed.TakeBuffer()));
 }
 
 TEST(skia_video_overlay_command_buffer, equivalent_content_reuses_only_exact_commands) {

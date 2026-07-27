@@ -34,7 +34,6 @@
         "ass_RUNTIME_LIBRARY": "${sourceDir}/runtimes/ass.dll",
         "AEGISUB_MATROSKA_PARSING": "ON",
         "WITH_DRAWING_SKIA": "ON",
-        "WITH_SKIA_VIDEO_TOOLS": "ON",
         "WITH_SKIA_AUDIO_DISPLAY": "ON",
         "WITH_PLUGIN_BRIDGE": "ON",
         "WITH_TEST": "ON",

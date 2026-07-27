@@ -29,6 +29,7 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "project.h"
 #include "selection_controller.h"
 #include "video_controller.h"
@@ -167,6 +168,9 @@ void VisualToolBase::OnSeek(int new_frame) {
 void VisualToolBase::OnMouseCaptureLost(wxMouseCaptureLostEvent &) {
 	holding = false;
 	dragging = false;
+	command_session.ResetCommitId();
+	OnFileChanged();
+	parent->Render();
 }
 
 void VisualToolBase::OnActiveLineChanged(AssDialogue *new_line) {
@@ -204,7 +208,17 @@ void VisualToolBase::Commit(wxString message) {
 	if (message.empty())
 		message = _("visual typesetting");
 
-	command_session.Commit(from_wx(message), AssFile::COMMIT_DIAG_TEXT, command_session.GetCommitId(), GetCommitTargetLine());
+	auto const& selected = c->GetCore().selectionController->GetSelectedSet();
+	AssDialogue *target_line = GetCommitTargetLine();
+	perf_trace::VideoUiDurationScope commit_trace(
+		"visual_tool.commit",
+		static_cast<int>(selected.size()),
+		target_line ? 1 : 0);
+	command_session.Commit(
+		from_wx(message),
+		AssFile::COMMIT_DIAG_TEXT,
+		command_session.GetCommitId(),
+		target_line);
 }
 
 void VisualToolBase::CommitNudge(wxString message) {

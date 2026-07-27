@@ -38,6 +38,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -46,6 +47,8 @@ class AssDialogue;
 class AssInfo;
 class AssStyle;
 class TransientFontSet;
+
+using AssDialogueCommitSpan = std::span<AssDialogue const *const>;
 
 template<typename T>
 using EntryList = typename boost::intrusive::make_list<T, boost::intrusive::constant_time_size<false>, boost::intrusive::base_hook<AssEntryListHook>>::type;
@@ -60,6 +63,14 @@ struct AssFileCommit {
 	std::string const& message;
 	int *commit_id;
 	AssDialogue *single_line;
+	int type;
+	AssDialogueCommitSpan changed_lines;
+};
+
+struct AssFileCommitDetails {
+	int type;
+	AssDialogue *single_line;
+	AssDialogueCommitSpan changed_lines;
 };
 
 struct ProjectProperties {
@@ -99,6 +110,8 @@ struct AssFileLoadDefaultOptions {
 class AssFile {
 	/// A set of changes has been committed to the file (AssFile::COMMITType)
 	agi::signal::Signal<int, const AssDialogue*> AnnounceCommit;
+	/// Detailed commit metadata. Spans are valid only for the synchronous signal call.
+	agi::signal::Signal<AssFileCommitDetails> AnnounceCommitDetails;
 	agi::signal::Signal<AssFileCommit> PushState;
 public:
 	/// The lines in the file
@@ -199,6 +212,7 @@ public:
 	};
 
 	DEFINE_SIGNAL_ADDERS(AnnounceCommit, AddCommitListener)
+	DEFINE_SIGNAL_ADDERS(AnnounceCommitDetails, AddCommitDetailsListener)
 	DEFINE_SIGNAL_ADDERS(PushState, AddUndoManager)
 
 	/// @brief Flag the file as modified and push a copy onto the undo stack
@@ -208,6 +222,11 @@ public:
 	/// @param single_line Line which was changed, if only one line was
 	/// @return Unique identifier for the new undo group
 	int Commit(std::string const& desc, int type, int commitId = -1, AssDialogue *single_line = nullptr);
+
+	/// Commit with an exact set of changed dialogue lines. The span is consumed
+	/// synchronously and is not retained after this function returns.
+	int Commit(std::string const& desc, int type, int commitId, AssDialogue *single_line,
+		AssDialogueCommitSpan changed_lines);
 
 	/// Comparison function for use when sorting
 	typedef bool (*CompFunc)(AssDialogue const& lft, AssDialogue const& rgt);

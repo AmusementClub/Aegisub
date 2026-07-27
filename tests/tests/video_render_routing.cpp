@@ -108,3 +108,15 @@ TEST(video_render_routing, shared_frame_storage_without_overlay_stays_on_source_
 		VideoRenderRoutingMode::SourceFrameOnly,
 		DecideVideoRenderRouting(packet, true));
 }
+
+TEST(video_render_routing, deferred_integrated_packet_invalidates_scene_cache_when_consumed) {
+	EXPECT_TRUE(ShouldInvalidateSceneCacheAfterDeferredPacket(
+		true,
+		VideoRenderRoutingMode::FallbackCompositedFrame));
+	EXPECT_FALSE(ShouldInvalidateSceneCacheAfterDeferredPacket(
+		false,
+		VideoRenderRoutingMode::FallbackCompositedFrame));
+	EXPECT_FALSE(ShouldInvalidateSceneCacheAfterDeferredPacket(
+		true,
+		VideoRenderRoutingMode::SecondaryRendererDirectOverlay));
+}

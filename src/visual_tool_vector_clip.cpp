@@ -384,6 +384,9 @@ void VisualToolVectorClip::Commit(wxString message) {
 	if (changed) {
 		VisualToolBase::Commit(message);
 	}
+	else {
+		ClearChangedLines();
+	}
 	if (has_selection)
 		last_committed_clip = value;
 }

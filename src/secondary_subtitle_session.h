@@ -24,6 +24,7 @@ class AssDialogue;
 class AssFile;
 class AsyncVideoProvider;
 class WatchedFile;
+struct AssFileCommitDetails;
 struct SecondarySubtitlePacketStream;
 struct VideoRenderPacket;
 
@@ -151,7 +152,7 @@ class SecondarySubtitleSession final {
 
 	void OnVideoProviderChanged(AsyncVideoProvider *main_provider);
 	void OnTimecodesChanged(agi::vfr::Framerate const& timecodes);
-	void OnAssCommit(int type, AssDialogue const* changed);
+	void OnAssCommit(AssFileCommitDetails commit);
 	void OnPrimaryFramePresented(int frame_number);
 	void OnFrameReady(VideoRenderPacket packet, double time);
 	void OnVideoError(std::string const& message);

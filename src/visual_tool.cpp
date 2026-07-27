@@ -42,8 +42,13 @@
 #include <libaegisub/ass/time.h>
 #include <libaegisub/format.h>
 #include <libaegisub/of_type_adaptor.h>
+#include <libaegisub/scope_exit.h>
 
 #include <algorithm>
+
+namespace {
+constexpr int kInteractionRenderIntervalMs = 16;
+}
 
 VisualToolBase::VisualToolBase(VideoDisplay *parent, agi::Context *context)
 : c(context)
@@ -65,6 +70,10 @@ VisualToolBase::VisualToolBase(VideoDisplay *parent, agi::Context *context)
 	connections.push_back(core.videoController->AddSeekListener(&VisualToolBase::OnSeek, this));
 	parent->Bind(wxEVT_MOUSE_CAPTURE_LOST, &VisualToolBase::OnMouseCaptureLost, this);
 
+	interaction_render_timer_id = wxNewId();
+	interaction_render_timer.SetOwner(parent, interaction_render_timer_id);
+	parent->Bind(wxEVT_TIMER, &VisualToolBase::OnInteractionRenderTimer, this, interaction_render_timer_id);
+
 	// Coalesce keyboard-nudge undos while keys are held/repeated; split after idle.
 	// Explicit id so this handler does not receive every timer event on VideoDisplay.
 	commit_id_reset_timer_id = wxNewId();
@@ -73,9 +82,17 @@ VisualToolBase::VisualToolBase(VideoDisplay *parent, agi::Context *context)
 }
 
 VisualToolBase::~VisualToolBase() {
+	interaction_render_timer.Stop();
+	parent->Unbind(wxEVT_TIMER, &VisualToolBase::OnInteractionRenderTimer, this, interaction_render_timer_id);
 	commit_id_reset_timer.Stop();
 	parent->Unbind(wxEVT_TIMER, &VisualToolBase::OnCommitIdResetTimer, this, commit_id_reset_timer_id);
 	parent->Unbind(wxEVT_MOUSE_CAPTURE_LOST, &VisualToolBase::OnMouseCaptureLost, this);
+	CancelInteraction(true);
+}
+
+void VisualToolBase::OnInteractionRenderTimer(wxTimerEvent &) {
+	if (IsInteracting())
+		parent->RenderNow();
 }
 
 void VisualToolBase::OnCommitIdResetTimer(wxTimerEvent &) {
@@ -111,10 +128,7 @@ void VisualToolBase::OnCommit(int type, AssDialogue const* changed) {
 	if (local_commit && !command_session.ShouldObserveLocalCommit())
 		return;
 
-	if (!local_commit) {
-		holding = false;
-		dragging = false;
-	}
+	bool const interaction_cancelled = !local_commit && CancelInteraction(true);
 
 	auto *new_active_line = GetActiveDialogueLine();
 	bool needs_render = false;
@@ -147,7 +161,7 @@ void VisualToolBase::OnCommit(int type, AssDialogue const* changed) {
 		needs_render = true;
 	}
 
-	if (needs_render)
+	if (needs_render || interaction_cancelled)
 		parent->Render();
 }
 
@@ -159,31 +173,55 @@ void VisualToolBase::OnSeek(int new_frame) {
 
 	AssDialogue *new_line = GetActiveDialogueLine();
 	if (new_line != active_line) {
-		dragging = false;
+		bool const interaction_cancelled = CancelInteraction(true);
 		active_line = new_line;
 		OnLineChanged();
+		if (interaction_cancelled)
+			parent->Render();
 	}
 }
 
 void VisualToolBase::OnMouseCaptureLost(wxMouseCaptureLostEvent &) {
-	holding = false;
-	dragging = false;
-	command_session.ResetCommitId();
+	bool const was_interacting = CancelInteraction(false);
 	OnFileChanged();
-	parent->Render();
+	if (was_interacting) {
+		parent->RenderNow();
+	}
+	else {
+		parent->Render();
+	}
 }
 
 void VisualToolBase::OnActiveLineChanged(AssDialogue *new_line) {
 	if (!IsDisplayed(new_line))
 		new_line = nullptr;
 
-	holding = false;
-	dragging = false;
+	bool const interaction_cancelled = CancelInteraction(true);
 	if (new_line != active_line) {
 		active_line = new_line;
 		OnLineChanged();
 		parent->Render();
 	}
+	else if (interaction_cancelled) {
+		parent->Render();
+	}
+}
+
+bool VisualToolBase::CancelInteraction(bool release_capture) {
+	bool const was_interacting = IsInteracting();
+	interaction_render_timer.Stop();
+	holding = false;
+	dragging = false;
+	if (was_interacting) {
+		command_session.ResetCommitId();
+	}
+	if (interaction_trace_active) {
+		perf_trace::ObserveVideoUiDuration("visual_tool.interaction_end", 0.0);
+		interaction_trace_active = false;
+	}
+	if (release_capture && parent->HasCapture())
+		parent->ReleaseMouse();
+	return was_interacting;
 }
 
 bool VisualToolBase::IsDisplayed(AssDialogue const* line) const {
@@ -198,10 +236,7 @@ bool VisualToolBase::IsDisplayed(AssDialogue const* line) const {
 }
 
 AssDialogue *VisualToolBase::GetCommitTargetLine() const {
-	auto const& selected = c->GetCore().selectionController->GetSelectedSet();
-	if (selected.size() == 1)
-		return *selected.begin();
-	return nullptr;
+	return changed_lines.size() == 1 ? single_changed_line : nullptr;
 }
 
 void VisualToolBase::Commit(wxString message) {
@@ -210,22 +245,31 @@ void VisualToolBase::Commit(wxString message) {
 
 	auto const& selected = c->GetCore().selectionController->GetSelectedSet();
 	AssDialogue *target_line = GetCommitTargetLine();
+	auto clear_changed_lines = agi::make_scope_exit([this] { ClearChangedLines(); });
 	perf_trace::VideoUiDurationScope commit_trace(
 		"visual_tool.commit",
 		static_cast<int>(selected.size()),
-		target_line ? 1 : 0);
+		static_cast<int>(changed_lines.size()));
 	command_session.Commit(
 		from_wx(message),
 		AssFile::COMMIT_DIAG_TEXT,
 		command_session.GetCommitId(),
-		target_line);
+		target_line,
+		changed_lines);
 }
 
 void VisualToolBase::CommitNudge(wxString message) {
 	if (message.empty())
 		message = _("visual typesetting");
 
-	command_session.Commit(from_wx(message), AssFile::COMMIT_DIAG_TEXT, command_session.GetCommitId(), GetCommitTargetLine());
+	AssDialogue *target_line = GetCommitTargetLine();
+	auto clear_changed_lines = agi::make_scope_exit([this] { ClearChangedLines(); });
+	command_session.Commit(
+		from_wx(message),
+		AssFile::COMMIT_DIAG_TEXT,
+		command_session.GetCommitId(),
+		target_line,
+		changed_lines);
 	// Key-repeat merges into one undo; a short idle starts a new group.
 	commit_id_reset_timer.Start(500, wxTIMER_ONE_SHOT);
 	parent->Render();
@@ -235,11 +279,14 @@ void VisualToolBase::CommitAndRefresh(wxString message) {
 	if (message.empty())
 		message = _("visual typesetting");
 
+	AssDialogue *target_line = GetCommitTargetLine();
+	auto clear_changed_lines = agi::make_scope_exit([this] { ClearChangedLines(); });
 	command_session.CommitWithFeedback(
 		from_wx(message),
 		AssFile::COMMIT_DIAG_TEXT,
 		command_session.GetCommitId(),
-		GetCommitTargetLine(),
+		target_line,
+		changed_lines,
 		aegisub::LocalCommitFeedback::ObserveSelf);
 }
 
@@ -262,11 +309,10 @@ void VisualToolBase::SetDisplayArea(int x, int y, int w, int h) {
 	video_pos = Vector2D(x, y);
 	video_res = Vector2D(w, h);
 
-	holding = false;
-	dragging = false;
-	if (parent->HasCapture())
-		parent->ReleaseMouse();
+	bool const interaction_cancelled = CancelInteraction(true);
 	OnCoordinateSystemsChanged();
+	if (interaction_cancelled)
+		parent->Render();
 }
 
 Vector2D VisualToolBase::ToScriptCoords(Vector2D point) const {
@@ -285,6 +331,8 @@ VisualTool<FeatureType>::VisualTool(VideoDisplay *parent, agi::Context *context)
 
 template<class FeatureType>
 void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
+	bool const interaction_was_active = holding || dragging;
+	bool release_mouse = false;
 	bool left_click = event.LeftDown();
 	bool left_double = event.LeftDClick();
 	shift_down = event.ShiftDown();
@@ -318,6 +366,7 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 			for (auto sel : sel_features)
 				UpdateDrag(sel);
 			Commit();
+			ScheduleInteractionRender();
 		}
 		// end drag
 		else {
@@ -335,20 +384,18 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 			}
 
 			active_feature = nullptr;
-			parent->ReleaseMouse();
-			parent->SetFocus();
+			release_mouse = true;
 		}
 	}
 	else if (holding) {
 		if (!event.LeftIsDown()) {
 			holding = false;
-
-			parent->ReleaseMouse();
-			parent->SetFocus();
+			release_mouse = true;
 		}
 
 		UpdateHold();
 		Commit();
+		ScheduleInteractionRender();
 
 	}
 	else if (left_click) {
@@ -391,10 +438,29 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 	if (active_line && left_double)
 		OnDoubleClick();
 
-	if (holding || dragging)
+	bool const interaction_is_active = holding || dragging;
+	bool const interaction_started = !interaction_was_active && interaction_is_active;
+	bool const interaction_ended = interaction_was_active && !interaction_is_active;
+	if (interaction_ended) {
+		interaction_render_timer.Stop();
 		parent->RenderNow();
-	else
+	}
+	else if (interaction_started || !interaction_is_active) {
 		parent->Render();
+	}
+
+	if (interaction_started) {
+		interaction_trace_active = true;
+		perf_trace::ObserveVideoUiDuration("visual_tool.interaction_begin", 0.0, static_cast<int>(sel_features.size()));
+	}
+	if (interaction_ended && interaction_trace_active) {
+		perf_trace::ObserveVideoUiDuration("visual_tool.interaction_end", 0.0, static_cast<int>(sel_features.size()));
+		interaction_trace_active = false;
+	}
+	if (release_mouse) {
+		parent->ReleaseMouse();
+		parent->SetFocus();
+	}
 
 	// Only coalesce the changes made in a single drag
 	if (!event.LeftIsDown())
@@ -677,6 +743,17 @@ void VisualToolBase::SetSelectedOverride(std::string const& tag, std::string con
 		SetOverride(line, tag, value);
 }
 
+void VisualToolBase::ClearChangedLines() {
+	changed_lines.clear();
+	changed_line_set.clear();
+	single_changed_line = nullptr;
+}
+
+void VisualToolBase::ScheduleInteractionRender() {
+	if (!interaction_render_timer.IsRunning())
+		interaction_render_timer.Start(kInteractionRenderIntervalMs, wxTIMER_ONE_SHOT);
+}
+
 void VisualToolBase::SetOverride(AssDialogue* line, std::string const& tag, std::string const& value) {
 	if (!line) return;
 
@@ -708,6 +785,11 @@ void VisualToolBase::SetOverride(AssDialogue* line, std::string const& tag, std:
 	}
 	else
 		line->Text = "{" + tag + value + "}" + line->Text.get();
+
+	if (changed_line_set.insert(line).second) {
+		single_changed_line = changed_lines.empty() ? line : nullptr;
+		changed_lines.push_back(line);
+	}
 }
 
 // If only export worked

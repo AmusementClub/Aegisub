@@ -35,6 +35,46 @@ struct VideoProviderState {
 	bool released = false;
 };
 
+class ScopedVideoProviderBlock {
+	std::shared_ptr<VideoProviderState> state;
+	bool released = false;
+
+public:
+	explicit ScopedVideoProviderBlock(std::shared_ptr<VideoProviderState> state)
+	: state(std::move(state)) {
+		std::lock_guard<std::mutex> lock(this->state->mutex);
+		this->state->block_next = true;
+		this->state->entered = false;
+		this->state->released = false;
+	}
+
+	~ScopedVideoProviderBlock() {
+		Release();
+	}
+
+	bool WaitUntilBlocked() {
+		bool entered = false;
+		{
+			std::unique_lock<std::mutex> lock(state->mutex);
+			entered = state->cv.wait_for(lock, std::chrono::seconds(2), [&] { return state->entered; });
+		}
+		if (!entered)
+			Release();
+		return entered;
+	}
+
+	void Release() {
+		if (released)
+			return;
+		{
+			std::lock_guard<std::mutex> lock(state->mutex);
+			state->released = true;
+			released = true;
+		}
+		state->cv.notify_all();
+	}
+};
+
 struct FakeNativeFrameStorage {
 	std::vector<unsigned char> plane0;
 	std::vector<unsigned char> plane1;
@@ -588,6 +628,59 @@ public:
 	}
 };
 
+class SubtitleLoadRecorder {
+	std::mutex mutex;
+	std::condition_variable cv;
+	std::vector<std::vector<std::string>> snapshots;
+
+public:
+	void Record(AssFile const& file) {
+		std::vector<std::string> texts;
+		texts.reserve(file.Events.size());
+		for (auto const& line : file.Events)
+			texts.push_back(line.Text.get());
+
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			snapshots.push_back(std::move(texts));
+		}
+		cv.notify_all();
+	}
+
+	bool WaitForCount(size_t count) {
+		std::unique_lock<std::mutex> lock(mutex);
+		return cv.wait_for(lock, std::chrono::seconds(2), [&] { return snapshots.size() >= count; });
+	}
+
+	bool WaitForSnapshot(std::vector<std::string> const& expected) {
+		std::unique_lock<std::mutex> lock(mutex);
+		return cv.wait_for(lock, std::chrono::seconds(2), [&] {
+			return std::find(snapshots.begin(), snapshots.end(), expected) != snapshots.end();
+		});
+	}
+
+	std::vector<std::vector<std::string>> Snapshot() {
+		std::lock_guard<std::mutex> lock(mutex);
+		return snapshots;
+	}
+};
+
+SubtitleLoadRecorder *g_subtitle_load_recorder = nullptr;
+
+class ScopedSubtitleLoadRecorder {
+	SubtitleLoadRecorder *previous = nullptr;
+
+public:
+	explicit ScopedSubtitleLoadRecorder(SubtitleLoadRecorder& recorder)
+	: previous(g_subtitle_load_recorder) {
+		g_subtitle_load_recorder = &recorder;
+	}
+
+	~ScopedSubtitleLoadRecorder() {
+		g_subtitle_load_recorder = previous;
+	}
+};
+
 AssFile MakeSubtitleFile(std::string const& text) {
 	AssFile file;
 	auto *line = new AssDialogue;
@@ -595,6 +688,28 @@ AssFile MakeSubtitleFile(std::string const& text) {
 	line->End = 5000;
 	line->Row = 0;
 	line->Text = text;
+	file.Events.push_back(*line);
+	return file;
+}
+
+AssFile MakeSubtitleFile(std::string const& first, std::string const& second) {
+	auto file = MakeSubtitleFile(first);
+	auto *line = new AssDialogue;
+	line->Start = 0;
+	line->End = 5000;
+	line->Row = 1;
+	line->Text = second;
+	file.Events.push_back(*line);
+	return file;
+}
+
+AssFile MakeSubtitleFile(std::string const& first, std::string const& second, std::string const& third) {
+	auto file = MakeSubtitleFile(first, second);
+	auto *line = new AssDialogue;
+	line->Start = 0;
+	line->End = 5000;
+	line->Row = 2;
+	line->Text = third;
 	file.Events.push_back(*line);
 	return file;
 }
@@ -632,7 +747,9 @@ std::unique_ptr<SubtitlesProvider> SubtitlesProviderFactory::GetProvider(Subtitl
 		return g_subtitles_provider_factory(env);
 	return nullptr;
 }
-void SubtitlesProvider::LoadSubtitles(AssFile *, int, agi::vfr::Framerate const*) {
+void SubtitlesProvider::LoadSubtitles(AssFile *subs, int, agi::vfr::Framerate const*) {
+	if (g_subtitle_load_recorder)
+		g_subtitle_load_recorder->Record(*subs);
 	static const char payload[] = "test";
 	LoadSubtitles(payload, sizeof(payload) - 1);
 }
@@ -787,6 +904,216 @@ TEST(async_video_provider, load_subtitles_invalidates_stale_render_result) {
 	ASSERT_EQ(1u, frames.size());
 	EXPECT_EQ(1, frames.back().frame_number);
 	EXPECT_EQ(2, frames.back().subtitle_generation);
+}
+
+TEST(async_video_provider, pending_full_subtitles_coalesce_same_line_updates) {
+	auto state = std::make_shared<VideoProviderState>();
+	SubtitleLoadRecorder load_recorder;
+	ScopedSubtitleLoadRecorder scoped_load_recorder(load_recorder);
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	ScopedVideoProviderBlock block(state);
+	provider.RequestFrame(1, 1000);
+	ASSERT_TRUE(block.WaitUntilBlocked());
+
+	auto subtitles = MakeSubtitleFile("before", "unchanged");
+	provider.LoadSubtitles(&subtitles);
+	subtitles.Events.front().Text = "during";
+	provider.UpdateSubtitles(&subtitles, &subtitles.Events.front());
+	subtitles.Events.front().Text = "latest";
+	provider.UpdateSubtitles(&subtitles, &subtitles.Events.front());
+
+	block.Release();
+
+	ASSERT_TRUE(load_recorder.WaitForSnapshot({ "latest", "unchanged" }));
+}
+
+TEST(async_video_provider, pending_different_line_updates_preserve_both_lines) {
+	auto state = std::make_shared<VideoProviderState>();
+	SubtitleLoadRecorder load_recorder;
+	ScopedSubtitleLoadRecorder scoped_load_recorder(load_recorder);
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	auto subtitles = MakeSubtitleFile("first-before", "second-before");
+	provider.LoadSubtitles(&subtitles);
+	provider.GetRenderPacket(0, 0);
+	ASSERT_TRUE(load_recorder.WaitForCount(1));
+
+	ScopedVideoProviderBlock block(state);
+	provider.RequestFrame(1, 1000);
+	ASSERT_TRUE(block.WaitUntilBlocked());
+
+	auto first = subtitles.Events.begin();
+	auto second = std::next(first);
+	first->Text = "first-latest";
+	provider.UpdateSubtitles(&subtitles, &*first);
+	second->Text = "second-latest";
+	provider.UpdateSubtitles(&subtitles, &*second);
+
+	block.Release();
+
+	ASSERT_TRUE(load_recorder.WaitForSnapshot({ "first-latest", "second-latest" }));
+}
+
+TEST(async_video_provider, pending_multi_line_update_applies_all_rows) {
+	auto state = std::make_shared<VideoProviderState>();
+	SubtitleLoadRecorder load_recorder;
+	ScopedSubtitleLoadRecorder scoped_load_recorder(load_recorder);
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	ScopedVideoProviderBlock block(state);
+	provider.RequestFrame(1, 1000);
+	ASSERT_TRUE(block.WaitUntilBlocked());
+
+	auto subtitles = MakeSubtitleFile("first-before", "second-before", "third-before");
+	provider.LoadSubtitles(&subtitles);
+	auto first = subtitles.Events.begin();
+	auto third = std::next(first, 2);
+	first->Text = "first-latest";
+	third->Text = "third-latest";
+	const AssDialogue *changed[] = { &*third, &*first };
+	provider.UpdateSubtitles(&subtitles, changed);
+
+	block.Release();
+
+	ASSERT_TRUE(load_recorder.WaitForSnapshot({ "first-latest", "second-before", "third-latest" }));
+}
+
+TEST(async_video_provider, pending_multi_line_updates_merge_across_calls_latest_wins) {
+	auto state = std::make_shared<VideoProviderState>();
+	SubtitleLoadRecorder load_recorder;
+	ScopedSubtitleLoadRecorder scoped_load_recorder(load_recorder);
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	auto subtitles = MakeSubtitleFile("first-before", "second-before", "third-before");
+	provider.LoadSubtitles(&subtitles);
+	provider.GetRenderPacket(0, 0);
+	ASSERT_TRUE(load_recorder.WaitForSnapshot({ "first-before", "second-before", "third-before" }));
+
+	ScopedVideoProviderBlock block(state);
+	provider.RequestFrame(1, 1000);
+	ASSERT_TRUE(block.WaitUntilBlocked());
+
+	auto first = subtitles.Events.begin();
+	auto second = std::next(first);
+	auto third = std::next(second);
+	first->Text = "first-update";
+	second->Text = "second-outdated";
+	const AssDialogue *first_batch[] = { &*first, &*second };
+	provider.UpdateSubtitles(&subtitles, first_batch);
+
+	second->Text = "second-latest";
+	third->Text = "third-latest";
+	const AssDialogue *second_batch[] = { &*third, &*second };
+	provider.UpdateSubtitles(&subtitles, second_batch);
+
+	block.Release();
+
+	ASSERT_TRUE(load_recorder.WaitForSnapshot({ "first-update", "second-latest", "third-latest" }));
+}
+
+TEST(async_video_provider, same_size_reorder_falls_back_to_latest_full_snapshot) {
+	auto state = std::make_shared<VideoProviderState>();
+	SubtitleLoadRecorder load_recorder;
+	ScopedSubtitleLoadRecorder scoped_load_recorder(load_recorder);
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	auto subtitles = MakeSubtitleFile("first-before", "second-before");
+	provider.LoadSubtitles(&subtitles);
+	provider.GetRenderPacket(0, 0);
+	ASSERT_TRUE(load_recorder.WaitForSnapshot({ "first-before", "second-before" }));
+
+	ScopedVideoProviderBlock block(state);
+	provider.RequestFrame(1, 1000);
+	ASSERT_TRUE(block.WaitUntilBlocked());
+
+	subtitles.Events.reverse();
+	int row = 0;
+	for (auto& line : subtitles.Events)
+		line.Row = row++;
+	subtitles.Events.front().Text = "second-latest";
+	provider.UpdateSubtitles(&subtitles, &subtitles.Events.front());
+
+	block.Release();
+
+	ASSERT_TRUE(load_recorder.WaitForSnapshot({ "second-latest", "first-before" }));
+}
+
+TEST(async_video_provider, multi_line_update_rejects_any_pointer_outside_source_rows) {
+	auto state = std::make_shared<VideoProviderState>();
+	SubtitleLoadRecorder load_recorder;
+	ScopedSubtitleLoadRecorder scoped_load_recorder(load_recorder);
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	ScopedVideoProviderBlock block(state);
+	provider.RequestFrame(1, 1000);
+	ASSERT_TRUE(block.WaitUntilBlocked());
+
+	auto subtitles = MakeSubtitleFile("first-before", "second-before");
+	provider.LoadSubtitles(&subtitles);
+	auto second = std::next(subtitles.Events.begin());
+	subtitles.Events.front().Text = "first-latest";
+	second->Text = "second-latest";
+	AssDialogue external;
+	external.Row = 0;
+	external.Text = "external-invalid";
+	const AssDialogue *changed[] = { &external, &*second };
+	provider.UpdateSubtitles(&subtitles, changed);
+
+	block.Release();
+
+	ASSERT_TRUE(load_recorder.WaitForSnapshot({ "first-latest", "second-latest" }));
+}
+
+TEST(async_video_provider, source_id_change_at_same_address_falls_back_to_latest_full_snapshot) {
+	auto state = std::make_shared<VideoProviderState>();
+	SubtitleLoadRecorder load_recorder;
+	ScopedSubtitleLoadRecorder scoped_load_recorder(load_recorder);
+
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	ScopedVideoProviderBlock block(state);
+	provider.RequestFrame(1, 1000);
+	ASSERT_TRUE(block.WaitUntilBlocked());
+
+	auto subtitles = MakeSubtitleFile("first-before", "second-before");
+	provider.LoadSubtitles(&subtitles);
+	auto& first = subtitles.Events.front();
+	first.Id += 1000000;
+	first.Text = "first-latest";
+	std::next(subtitles.Events.begin())->Text = "second-latest";
+	provider.UpdateSubtitles(&subtitles, &first);
+
+	block.Release();
+
+	ASSERT_TRUE(load_recorder.WaitForSnapshot({ "first-latest", "second-latest" }));
 }
 
 TEST(async_video_provider, get_frame_flushes_pending_subtitle_state) {

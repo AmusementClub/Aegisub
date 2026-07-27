@@ -44,6 +44,7 @@
 #include "utils.h"
 #include "video_controller_timer.h"
 #include "video_navigation_ops.h"
+#include "video_subtitle_update_policy.h"
 
 #include <libaegisub/ass/time.h>
 #include <libaegisub/log.h>
@@ -55,7 +56,7 @@ VideoController::VideoController(agi::Context *c)
 {
 	auto core = context->GetCore();
 	ui_activation.AddConnections(
-		core.ass->AddCommitListener(&VideoController::OnSubtitlesCommit, this),
+		core.ass->AddCommitDetailsListener(&VideoController::OnSubtitlesCommit, this),
 		core.project->AddVideoProviderListener(&VideoController::OnNewVideoProvider, this),
 		core.project->AddTimecodesListener(&VideoController::OnTimecodesChanged, this),
 		core.selectionController->AddActiveLineListener(&VideoController::OnActiveLineChanged, this));
@@ -84,14 +85,14 @@ void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 	ResetPlaybackState();
 }
 
-void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
+void VideoController::OnSubtitlesCommit(AssFileCommitDetails commit) {
 	if (!provider) return;
 	auto core = context->GetCore();
 	ClearInspectionStepState();
 	ClearInteractiveSeekPreviewState();
 	ClearRecentRenderPacketCache();
 
-	if ((type & AssFile::COMMIT_SCRIPTINFO) || type == AssFile::COMMIT_NEW) {
+	if ((commit.type & AssFile::COMMIT_SCRIPTINFO) || commit.type == AssFile::COMMIT_NEW) {
 		auto new_matrix = core.ass->GetScriptInfo("YCbCr Matrix");
 		if (!new_matrix.empty() && new_matrix != color_matrix) {
 			color_matrix = new_matrix;
@@ -99,14 +100,16 @@ void VideoController::OnSubtitlesCommit(int type, const AssDialogue *changed) {
 		}
 	}
 
+	auto const update_mode = video_subtitle_update_policy::SelectUpdateMode(
+		commit.type, commit.changed_lines);
 	perf_trace::VideoUiDurationScope subtitle_update_trace(
 		"video_controller.subtitle_update",
-		changed ? 1 : 0,
-		static_cast<int>(core.ass->Events.size()));
-	if (!changed)
-		provider->LoadSubtitles(core.ass.get());
+		static_cast<int>(commit.changed_lines.size()),
+		update_mode == video_subtitle_update_policy::UpdateMode::IncrementalLines ? 1 : 0);
+	if (update_mode == video_subtitle_update_policy::UpdateMode::IncrementalLines)
+		provider->UpdateSubtitles(core.ass.get(), commit.changed_lines);
 	else
-		provider->UpdateSubtitles(core.ass.get(), changed);
+		provider->LoadSubtitles(core.ass.get());
 }
 
 void VideoController::OnTimecodesChanged(agi::vfr::Framerate const&) {

@@ -30,6 +30,8 @@
 
 #include <set>
 #include <string>
+#include <unordered_set>
+#include <vector>
 
 #include <wx/timer.h>
 
@@ -61,6 +63,7 @@ enum class VisualNudgeMagnitude {
 class VisualToolBase {
 	void OnCommit(int type, AssDialogue const* changed);
 	void OnSeek(int new_frame);
+	bool CancelInteraction(bool release_capture);
 	void UpdateScriptResolution();
 	void UpdateLayoutResolution();
 
@@ -110,6 +113,7 @@ protected:
 	bool holding = false; ///< Is a hold currently in progress?
 	AssDialogue *active_line = nullptr; ///< Active dialogue line; nullptr if it is not visible on the current frame
 	bool dragging = false; ///< Is a drag currently in progress?
+	bool interaction_trace_active = false;
 
 	int frame_number; ///< Current frame number
 
@@ -132,11 +136,17 @@ protected:
 	const agi::OptionValue *shaded_area_alpha_opt;
 
 	aegisub::SubtitleCommandSession command_session;
+	std::vector<AssDialogue const *> changed_lines;
+	std::unordered_set<AssDialogue const *> changed_line_set;
+	AssDialogue *single_changed_line = nullptr;
 	agi::signal::Connection file_changed_connection;
+	int interaction_render_timer_id;
+	wxTimer interaction_render_timer;
 	int commit_id_reset_timer_id; ///< Distinct from other timers on VideoDisplay
 	wxTimer commit_id_reset_timer; ///< Splits keyboard-nudge undo after idle
+	void OnInteractionRenderTimer(wxTimerEvent &);
 
-	/// @brief Identify the line to pass to AssFile::Commit when a single-line edit is likely
+	/// @brief Identify the line to pass to AssFile::Commit when exactly one line changed
 	virtual AssDialogue *GetCommitTargetLine() const;
 
 	/// @brief Commit the current file state
@@ -159,6 +169,7 @@ protected:
 	void GetLineClip(AssDialogue *diag, Vector2D &p1, Vector2D &p2, bool &inverse);
 	std::string GetLineVectorClip(AssDialogue *diag, int &scale, bool &inverse);
 
+	void ClearChangedLines();
 	void SetOverride(AssDialogue* line, std::string const& tag, std::string const& value);
 	void SetSelectedOverride(std::string const& tag, std::string const& value);
 
@@ -178,6 +189,8 @@ public:
 	virtual bool Nudge(Vector2D /*direction*/, VisualNudgeMagnitude /*magnitude*/) { return false; }
 	/// Whether this tool implements keyboard nudge (not merely has a hotkey context).
 	virtual bool SupportsNudge() const { return false; }
+	/// Request a paced redraw after an interaction-related subtitle packet arrives.
+	void ScheduleInteractionRender();
 	/// Select a tool-specific sub-mode. Return true when applied.
 	virtual bool SetSubMode(int /*mode*/) { return false; }
 	/// Current sub-mode, or -1 when the tool has none.

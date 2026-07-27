@@ -29,6 +29,7 @@
 #include "video_controller.h"
 #include "video_frame_wx.h"
 #include "video_provider_dummy.h"
+#include "video_subtitle_update_policy.h"
 #include "watched_file.h"
 
 #include <libaegisub/color.h>
@@ -174,7 +175,7 @@ SecondarySubtitleSession::SecondarySubtitleSession(agi::Context *context)
 	ui_activation.AddConnections(
 		core.project->AddVideoProviderListener(&SecondarySubtitleSession::OnVideoProviderChanged, this),
 		core.project->AddTimecodesListener(&SecondarySubtitleSession::OnTimecodesChanged, this),
-		core.ass->AddCommitListener(&SecondarySubtitleSession::OnAssCommit, this),
+		core.ass->AddCommitDetailsListener(&SecondarySubtitleSession::OnAssCommit, this),
 		core.subsController->AddFileOpenListener([this](agi::fs::path const& filename, bool is_reload) { OnMainSubtitlesFileChanged(filename, is_reload); }),
 		core.subsController->AddUpdatePropertiesListener(&SecondarySubtitleSession::OnUpdateProperties, this),
 		core.videoController->AddFramePresentedListener(&SecondarySubtitleSession::OnPrimaryFramePresented, this),
@@ -873,13 +874,14 @@ void SecondarySubtitleSession::OnTimecodesChanged(agi::vfr::Framerate const&) {
 		RequestFrame(core.videoController->GetFrameN());
 }
 
-void SecondarySubtitleSession::OnAssCommit(int, AssDialogue const* changed) {
+void SecondarySubtitleSession::OnAssCommit(AssFileCommitDetails commit) {
 	if (!provider || source_mode != SecondarySubtitleSourceMode::CurrentScript)
 		return;
 
 	auto core = context->GetCore();
-	if (changed)
-		provider->UpdateSubtitles(core.ass.get(), changed);
+	if (video_subtitle_update_policy::SelectUpdateMode(commit.type, commit.changed_lines)
+		== video_subtitle_update_policy::UpdateMode::IncrementalLines)
+		provider->UpdateSubtitles(core.ass.get(), commit.changed_lines);
 	else
 		provider->LoadSubtitles(core.ass.get());
 

@@ -49,6 +49,42 @@ namespace {
 constexpr char const *kSourceModeLogTag = "video/source/mode";
 constexpr char const *kSubtitleProviderUseLogTag = "subtitle/provider/use";
 
+std::vector<std::pair<const AssDialogue*, int>> CaptureSubtitleSourceLines(AssFile const& file) {
+	std::vector<std::pair<const AssDialogue*, int>> lines;
+	for (auto const& line : file.Events)
+		lines.emplace_back(&line, line.Id);
+	return lines;
+}
+
+void MergePendingChangedLines(
+	std::vector<AssDialogueBase>& pending,
+	std::vector<AssDialogueBase> updates) {
+	if (pending.empty()) {
+		pending = std::move(updates);
+		return;
+	}
+
+	std::vector<AssDialogueBase> merged;
+	merged.reserve(pending.size() + updates.size());
+	size_t pending_index = 0;
+	size_t update_index = 0;
+	while (pending_index < pending.size() && update_index < updates.size()) {
+		if (pending[pending_index].Row < updates[update_index].Row)
+			merged.push_back(std::move(pending[pending_index++]));
+		else if (updates[update_index].Row < pending[pending_index].Row)
+			merged.push_back(std::move(updates[update_index++]));
+		else {
+			merged.push_back(std::move(updates[update_index++]));
+			++pending_index;
+		}
+	}
+	while (pending_index < pending.size())
+		merged.push_back(std::move(pending[pending_index++]));
+	while (update_index < updates.size())
+		merged.push_back(std::move(updates[update_index++]));
+	pending = std::move(merged);
+}
+
 std::string FormatSourceModeList(std::vector<SourceFrameOutputMode> const& modes) {
 	std::string value = "[";
 	for (size_t i = 0; i < modes.size(); ++i) {
@@ -609,7 +645,10 @@ AsyncVideoProviderMemoryStats AsyncVideoProvider::CollectMemoryStats() {
 				subs_provider->GetRenderMode() == SubtitleRenderMode::CompatibilityFrameOnly;
 		}
 		stats.subtitles_loaded = static_cast<bool>(subs);
-		stats.pending_subtitles_update = static_cast<bool>(pending_subs);
+		{
+			std::lock_guard<std::mutex> lock(pending_mutex);
+			stats.pending_subtitles_update = static_cast<bool>(pending_subs) || !pending_changed_lines.empty();
+		}
 		if (subs)
 			stats.subtitles_event_count = static_cast<int>(subs->Events.size());
 
@@ -666,12 +705,13 @@ void AsyncVideoProvider::GenerateSceneChangeKeyframes(agi::fs::path const& outpu
 }
 
 void AsyncVideoProvider::LoadSubtitles(const AssFile *new_subs) throw() {
-	auto copy = agi::make_unique<AssFile>(*new_subs);
-	++content_version;
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
-		pending_subs = std::move(copy);
-		pending_changed_line.reset();
+		++content_version;
+		pending_subs = agi::make_unique<AssFile>(*new_subs);
+		pending_changed_lines.clear();
+		subtitle_source_file = new_subs;
+		subtitle_source_lines = CaptureSubtitleSourceLines(*new_subs);
 		pending_overlay_upload_continuity_invalidation = true;
 		pending_check_updated = false;
 	}
@@ -679,29 +719,51 @@ void AsyncVideoProvider::LoadSubtitles(const AssFile *new_subs) throw() {
 }
 
 void AsyncVideoProvider::UpdateSubtitles(const AssFile *new_subs, const AssDialogue *changed) throw() {
-	++content_version;
+	if (!changed) {
+		UpdateSubtitles(new_subs, std::span<const AssDialogue *const>{});
+		return;
+	}
+	const AssDialogue *changed_lines[] = { changed };
+	UpdateSubtitles(new_subs, changed_lines);
+}
+
+void AsyncVideoProvider::UpdateSubtitles(
+	const AssFile *new_subs,
+	std::span<const AssDialogue *const> changed) throw() {
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
-		if (changed) {
-			// UpdateSubtitles only supports in-place changes to existing lines.
-			// If we can't reliably identify the target line, fall back to a
-			// full reload.
-			int const row = static_cast<AssDialogueBase const&>(*changed).Row;
-			if (row < 0 || row >= static_cast<int>(new_subs->Events.size())) {
-				pending_subs = agi::make_unique<AssFile>(*new_subs);
-				pending_changed_line.reset();
+		++content_version;
+		bool valid = !changed.empty() && subtitle_source_file == new_subs;
+		for (auto line : changed) {
+			if (!valid)
+				break;
+			if (!line || line->Row < 0 || static_cast<size_t>(line->Row) >= subtitle_source_lines.size()) {
+				valid = false;
+				break;
 			}
-			else if (pending_subs) {
-				pending_subs = agi::make_unique<AssFile>(*new_subs);
-				pending_changed_line.reset();
-			}
-			else {
-				pending_changed_line = agi::make_unique<AssDialogueBase>(static_cast<AssDialogueBase const&>(*changed));
-			}
+			auto const& identity = subtitle_source_lines[static_cast<size_t>(line->Row)];
+			if (identity.first != line || identity.second != line->Id)
+				valid = false;
+		}
+
+		if (valid) {
+			std::vector<AssDialogueBase> updates;
+			updates.reserve(changed.size());
+			for (auto line : changed)
+				updates.emplace_back(static_cast<AssDialogueBase const&>(*line));
+			std::sort(updates.begin(), updates.end(), [](auto const& left, auto const& right) {
+				return left.Row < right.Row;
+			});
+			updates.erase(std::unique(updates.begin(), updates.end(), [](auto const& left, auto const& right) {
+				return left.Row == right.Row;
+			}), updates.end());
+			MergePendingChangedLines(pending_changed_lines, std::move(updates));
 		}
 		else {
 			pending_subs = agi::make_unique<AssFile>(*new_subs);
-			pending_changed_line.reset();
+			pending_changed_lines.clear();
+			subtitle_source_file = new_subs;
+			subtitle_source_lines = CaptureSubtitleSourceLines(*new_subs);
 		}
 		pending_overlay_upload_continuity_invalidation = true;
 		if (!has_pending_frame)
@@ -711,26 +773,26 @@ void AsyncVideoProvider::UpdateSubtitles(const AssFile *new_subs, const AssDialo
 }
 
 void AsyncVideoProvider::RequestFrame(int new_frame, double new_time, bool supersede_in_flight) throw() {
-	if (supersede_in_flight)
-		++request_version;
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_time = new_time;
 		pending_frame_number = new_frame;
 		has_pending_frame = true;
 		pending_check_updated = false;
+		if (supersede_in_flight)
+			++request_version;
 	}
 	ScheduleProcessing();
 }
 
 void AsyncVideoProvider::CancelPendingFrameRequests() noexcept {
-	request_version.fetch_add(1, std::memory_order_relaxed);
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		has_pending_frame = false;
 		pending_frame_number = -1;
 		pending_time = -1.;
 		pending_check_updated = false;
+		request_version.fetch_add(1, std::memory_order_relaxed);
 	}
 }
 
@@ -809,7 +871,7 @@ void AsyncVideoProvider::ScheduleProcessing() {
 bool AsyncVideoProvider::ProcessPending() {
 	struct PendingWork {
 		std::unique_ptr<AssFile> subs;
-		std::unique_ptr<AssDialogueBase> changed_line;
+		std::vector<AssDialogueBase> changed_lines;
 		bool check_updated = false;
 		bool has_frame = false;
 		int frame_number = -1;
@@ -828,7 +890,7 @@ bool AsyncVideoProvider::ProcessPending() {
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		if (!pending_subs
-			&& !pending_changed_line
+			&& pending_changed_lines.empty()
 			&& !has_pending_frame
 			&& !has_pending_current_frame_context
 			&& !has_pending_color_space) {
@@ -837,7 +899,7 @@ bool AsyncVideoProvider::ProcessPending() {
 		}
 
 		work.subs = std::move(pending_subs);
-		work.changed_line = std::move(pending_changed_line);
+		work.changed_lines.swap(pending_changed_lines);
 		work.invalidate_overlay_upload_continuity = pending_overlay_upload_continuity_invalidation;
 		pending_overlay_upload_continuity_invalidation = false;
 		work.check_updated = pending_check_updated;
@@ -853,14 +915,14 @@ bool AsyncVideoProvider::ProcessPending() {
 			work.has_current_frame_context = true;
 			work.current_frame_number = pending_current_frame_number;
 			work.current_time = pending_current_time;
-			if (work.subs || work.changed_line) {
+			if (work.subs || !work.changed_lines.empty()) {
 				work.has_frame = true;
 				work.frame_number = pending_current_frame_number;
 				work.time = pending_current_time;
 			}
 			has_pending_current_frame_context = false;
 		}
-		else if ((work.subs || work.changed_line) && frame_number >= 0) {
+		else if ((work.subs || !work.changed_lines.empty()) && frame_number >= 0) {
 			work.has_frame = true;
 			work.frame_number = frame_number;
 			work.time = time;
@@ -890,16 +952,22 @@ bool AsyncVideoProvider::ProcessPending() {
 
 	if (work.subs) {
 		subs = std::move(work.subs);
+		subs_lines_by_row.clear();
+		for (auto& line : subs->Events)
+			subs_lines_by_row.push_back(&line);
 		single_frame = NEW_SUBS_FILE;
 	}
-	else if (work.changed_line && subs) {
-		int const target_row = work.changed_line->Row;
-		if (target_row >= 0 && target_row < static_cast<int>(subs->Events.size())) {
-			auto it = subs->Events.begin();
-			std::advance(it, target_row);
-			static_cast<AssDialogueBase&>(*it) = *work.changed_line;
-			single_frame = NEW_SUBS_FILE;
+	if (!work.changed_lines.empty() && subs) {
+		bool applied = false;
+		for (auto const& changed_line : work.changed_lines) {
+			int const target_row = changed_line.Row;
+			if (target_row < 0 || static_cast<size_t>(target_row) >= subs_lines_by_row.size())
+				continue;
+			static_cast<AssDialogueBase&>(*subs_lines_by_row[static_cast<size_t>(target_row)]) = changed_line;
+			applied = true;
 		}
+		if (applied)
+			single_frame = NEW_SUBS_FILE;
 	}
 
 	if (!work.has_frame)
@@ -1206,11 +1274,11 @@ VideoRenderPacket AsyncVideoProvider::GetRenderPacket(int frame, double time, bo
 }
 
 void AsyncVideoProvider::SetColorSpace(std::string const& matrix) {
-	++content_version;
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		pending_color_space = matrix;
 		has_pending_color_space = true;
+		++content_version;
 	}
 	ScheduleProcessing();
 }

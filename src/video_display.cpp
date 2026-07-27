@@ -833,10 +833,17 @@ void VideoDisplay::UploadFrameData(VideoRenderPacket const& packet, double) {
 		pending_packet_deferred_for_visual_interaction = true;
 		scene_cache_waiting_for_subtitle_packet = false;
 		render_requested = true;
-		ScheduleRender();
+		if (con->videoController->IsPlaying())
+			ScheduleRender();
 		return;
 	}
 
+	bool const throttle_paused_visual_interaction =
+		!con->videoController->IsPlaying()
+		&& tool
+		&& tool->IsInteracting()
+		&& has_displayed_packet
+		&& packet.frame_number == displayed_packet.frame_number;
 	bool const defer_interactive_playback_same_frame_packet =
 		con->videoController->IsPlaying()
 		&& tool
@@ -861,7 +868,9 @@ void VideoDisplay::UploadFrameData(VideoRenderPacket const& packet, double) {
 	scene_cache_waiting_for_subtitle_packet = false;
 	if (!can_reuse_video_only_scene_cache || !IsSceneCacheUsableForCurrentPlayback())
 		InvalidateSceneCache();
-	if (defer_interactive_playback_same_frame_packet)
+	if (throttle_paused_visual_interaction)
+		tool->ScheduleInteractionRender();
+	if (defer_interactive_playback_same_frame_packet || throttle_paused_visual_interaction)
 		return;
 
 	// Instead of calling Render(), we force a render here to minimize delay
@@ -1768,7 +1777,7 @@ void VideoDisplay::OnSubtitlesCommit(int type, AssDialogue const* changed) {
 		return;
 
 	auto render_after_commit = [&] {
-		if (con->videoController->IsPlaying() && tool && tool->IsInteracting())
+		if (tool && tool->IsInteracting())
 			return;
 		Render();
 	};
@@ -1859,6 +1868,7 @@ void VideoDisplay::DoRender() try {
 
 	try {
 		if (has_pending_packet && !(pending_packet_deferred_for_visual_interaction && tool && tool->IsInteracting())) {
+			bool const packet_was_deferred_for_visual_interaction = pending_packet_deferred_for_visual_interaction;
 			first_presented_frame = !has_displayed_packet;
 			bool const reuse_uploaded_source_frame =
 				pending_packet.allow_source_frame_upload_reuse
@@ -1871,6 +1881,10 @@ void VideoDisplay::DoRender() try {
 			auto const routing = DecideVideoRenderRouting(
 				pending_packet,
 				videoRenderer->SupportsDirectOverlay());
+			if (ShouldInvalidateSceneCacheAfterDeferredPacket(
+				packet_was_deferred_for_visual_interaction,
+				routing))
+				InvalidateSceneCache();
 			last_frame_had_separate_overlay = (routing == VideoRenderRoutingMode::SecondaryRendererDirectOverlay);
 
 			if (routing == VideoRenderRoutingMode::SourceFrameOnly) {

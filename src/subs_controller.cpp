@@ -667,21 +667,19 @@ void SubsController::SetFileName(agi::fs::path const& path) {
 void SubsController::OnCommit(AssFileCommit c) {
 	if (c.message.empty() && !undo_stack.empty()) return;
 
+	auto core = context->GetCore();
 	if (c.single_line && c.single_line->Group() == AssEntryGroup::DIALOGUE)
-		context->GetCore().selectionController->RecordEditedLine(c.single_line);
+		core.selectionController->RecordEditedLine(c.single_line);
 
 	commit_id = next_commit_id++;
 	// Allow coalescing only if it's the last change and the file has not been
 	// saved since the last change
 	if (commit_id == *c.commit_id+1 && redo_stack.empty() && saved_commit_id+1 != commit_id) {
-		// If only one line changed just modify it instead of copying the file
-		if (c.single_line && c.single_line->Group() == AssEntryGroup::DIALOGUE) {
-			for (auto& diag : undo_stack.back().events) {
-				if (diag.Id == c.single_line->Id) {
-					diag = *c.single_line;
-					break;
-				}
-			}
+		auto const dialogue_only = c.type != AssFile::COMMIT_NEW
+			&& (c.type & AssFile::COMMIT_DIAG_FULL) != 0
+			&& (c.type & ~AssFile::COMMIT_DIAG_FULL) == 0;
+		if (dialogue_only
+			&& subs_controller_detail::TryAmendDialogueSnapshot(undo_stack.back().events, c.changed_lines)) {
 			*c.commit_id = commit_id;
 			return;
 		}
@@ -690,7 +688,6 @@ void SubsController::OnCommit(AssFileCommit c) {
 	}
 
 	// Make sure the file has at least one style and one dialogue line
-	auto core = context->GetCore();
 	if (core.ass->Styles.empty())
 		core.ass->Styles.push_back(*new AssStyle);
 	if (core.ass->Events.empty()) {

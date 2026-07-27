@@ -47,6 +47,7 @@
 class AssDialogue;
 class AsyncVideoProvider;
 class VideoControllerTimer;
+struct AssFileCommitDetails;
 
 namespace agi {
 	struct Context;
@@ -149,7 +150,7 @@ class VideoController final {
 	void ClearRecentRenderPacketCache();
 	bool TrySeekAndDeliverRecentRenderPacket(int frame);
 
-	void OnSubtitlesCommit(int type, const AssDialogue *changed);
+	void OnSubtitlesCommit(AssFileCommitDetails commit);
 	void OnNewVideoProvider(AsyncVideoProvider *provider);
 	void OnActiveLineChanged(AssDialogue *line);
 	void OnTimecodesChanged(agi::vfr::Framerate const&);

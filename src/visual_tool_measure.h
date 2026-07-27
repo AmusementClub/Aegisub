@@ -44,7 +44,7 @@ class VisualToolMeasure final : public VisualToolBase {
 	void BeginInteraction(wxMouseEvent& event);
 	void UpdateInteraction();
 	void FinishInteraction();
-	void CancelInteraction();
+	void CancelInteraction(bool render = true);
 	void DrawWithContext(VideoOverlayDrawContext& context);
 	void DrawHandles(VideoOverlayDrawContext& context, VisualGuide const& guide);
 	void OnSubTool(wxCommandEvent& event);

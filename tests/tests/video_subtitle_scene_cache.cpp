@@ -1,6 +1,7 @@
 #include <main.h>
 
 #include "../../src/video_subtitle_scene_cache.h"
+#include "../../src/video_subtitle_update_policy.h"
 
 #include <libaegisub/vfr.h>
 
@@ -175,5 +176,52 @@ TEST(video_subtitle_scene_cache, animated_timing_change_waits_even_without_singl
 		1500,
 		snapshot);
 	EXPECT_TRUE(wait);
+}
+
+TEST(video_subtitle_update_policy, pure_dialogue_commits_use_single_line_updates) {
+	AssDialogue changed;
+	AssDialogue const *changed_lines[] = {&changed};
+	auto const incremental = video_subtitle_update_policy::UpdateMode::IncrementalLines;
+
+	EXPECT_EQ(incremental, video_subtitle_update_policy::SelectUpdateMode(AssFile::COMMIT_DIAG_META, changed_lines));
+	EXPECT_EQ(incremental, video_subtitle_update_policy::SelectUpdateMode(AssFile::COMMIT_DIAG_TIME, changed_lines));
+	EXPECT_EQ(incremental, video_subtitle_update_policy::SelectUpdateMode(AssFile::COMMIT_DIAG_TEXT, changed_lines));
+	EXPECT_EQ(incremental, video_subtitle_update_policy::SelectUpdateMode(AssFile::COMMIT_DIAG_FULL, changed_lines));
+}
+
+TEST(video_subtitle_update_policy, missing_changed_line_requires_full_reload) {
+	auto const full_reload = video_subtitle_update_policy::UpdateMode::FullReload;
+	EXPECT_EQ(full_reload, video_subtitle_update_policy::SelectUpdateMode(AssFile::COMMIT_DIAG_TEXT, {}));
+}
+
+TEST(video_subtitle_update_policy, project_session_insert_with_single_line_requires_full_reload) {
+	AssDialogue inserted;
+	AssDialogue const *changed_lines[] = {&inserted};
+	auto const full_reload = video_subtitle_update_policy::UpdateMode::FullReload;
+	EXPECT_EQ(full_reload, video_subtitle_update_policy::SelectUpdateMode(AssFile::COMMIT_DIAG_ADDREM, changed_lines));
+}
+
+TEST(video_subtitle_update_policy, non_dialogue_and_mixed_commits_require_full_reload) {
+	AssDialogue changed;
+	AssDialogue const *changed_lines[] = {&changed};
+	auto const full_reload = video_subtitle_update_policy::UpdateMode::FullReload;
+	int const full_reload_types[] = {
+		AssFile::COMMIT_NEW,
+		AssFile::COMMIT_ORDER,
+		AssFile::COMMIT_SCRIPTINFO,
+		AssFile::COMMIT_STYLES,
+		AssFile::COMMIT_ATTACHMENT,
+		AssFile::COMMIT_DIAG_ADDREM,
+		AssFile::COMMIT_EXTRADATA,
+		AssFile::COMMIT_DIAG_TEXT | AssFile::COMMIT_ORDER,
+		AssFile::COMMIT_DIAG_TEXT | AssFile::COMMIT_SCRIPTINFO,
+		AssFile::COMMIT_DIAG_TEXT | AssFile::COMMIT_STYLES,
+		AssFile::COMMIT_DIAG_TEXT | AssFile::COMMIT_ATTACHMENT,
+		AssFile::COMMIT_DIAG_TEXT | AssFile::COMMIT_DIAG_ADDREM,
+		AssFile::COMMIT_DIAG_TEXT | AssFile::COMMIT_EXTRADATA,
+	};
+
+	for (int type : full_reload_types)
+		EXPECT_EQ(full_reload, video_subtitle_update_policy::SelectUpdateMode(type, changed_lines)) << type;
 }
 

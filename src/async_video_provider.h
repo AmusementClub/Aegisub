@@ -31,6 +31,9 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <span>
+#include <utility>
+#include <vector>
 
 class AssDialogue;
 class AssFile;
@@ -93,6 +96,8 @@ class AsyncVideoProvider {
 
 	/// Copy of the subtitles file to avoid having to touch the project context
 	std::unique_ptr<AssFile> subs;
+	/// Worker-owned row index for applying incremental subtitle patches.
+	std::vector<AssDialogue*> subs_lines_by_row;
 
 	/// If >= 0, the subtitles provider current has just the lines visible on
 	/// that frame loaded. If -1, the entire file is loaded. If -2, the
@@ -132,9 +137,14 @@ class AsyncVideoProvider {
 	/// Continuity generation for GPU overlay upload planning.
 	uint64_t overlay_continuity_generation = 1;
 
+	/// Pending payload changes and their version increments are committed together.
 	std::mutex pending_mutex;
 	std::unique_ptr<AssFile> pending_subs;
-	std::unique_ptr<AssDialogueBase> pending_changed_line;
+	/// Sorted, unique, latest-wins snapshots of changed existing lines.
+	std::vector<AssDialogueBase> pending_changed_lines;
+	/// UI-side identity of the source AssFile represented by pending/worker state.
+	const AssFile *subtitle_source_file = nullptr;
+	std::vector<std::pair<const AssDialogue*, int>> subtitle_source_lines;
 	bool pending_overlay_upload_continuity_invalidation = false;
 	bool pending_check_updated = false;
 	bool has_pending_current_frame_context = false;
@@ -174,6 +184,7 @@ public:
 	/// This function only supports changes to existing lines, and not
 	/// insertions or deletions.
 	void UpdateSubtitles(const AssFile *subs, const AssDialogue *changes) throw();
+	void UpdateSubtitles(const AssFile *subs, std::span<const AssDialogue *const> changes) throw();
 
 	/// @brief Queue a latest-only preview request for a frame
 	/// @brief frame Frame number

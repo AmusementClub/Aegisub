@@ -23,6 +23,13 @@ enum class VideoRenderRoutingMode {
 	FallbackCompositedFrame
 };
 
+inline bool ShouldInvalidateSceneCacheAfterDeferredPacket(
+	bool was_deferred_for_visual_interaction,
+	VideoRenderRoutingMode routing) noexcept {
+	return was_deferred_for_visual_interaction
+		&& routing == VideoRenderRoutingMode::FallbackCompositedFrame;
+}
+
 inline VideoRenderRoutingMode DecideVideoRenderRouting(
 	VideoRenderPacket const& packet,
 	bool primary_renderer_supports_direct_overlay) {

@@ -280,14 +280,27 @@ AssStyle *AssFile::GetStyle(std::string const& name) {
 }
 
 int AssFile::Commit(std::string const& desc, int type, int amend_id, AssDialogue *single_line) {
+	if (!single_line)
+		return Commit(desc, type, amend_id, nullptr, {});
+
+	AssDialogue const *changed_lines[] = {single_line};
+	return Commit(desc, type, amend_id, single_line, changed_lines);
+}
+
+int AssFile::Commit(std::string const& desc, int type, int amend_id, AssDialogue *single_line,
+	AssDialogueCommitSpan changed_lines) {
+	// Exact changed-lines metadata is authoritative when supplied.
+	single_line = changed_lines.size() == 1 && single_line == changed_lines.front() ? single_line : nullptr;
+
 	if (type == COMMIT_NEW || (type & COMMIT_DIAG_ADDREM) || (type & COMMIT_ORDER)) {
 		int i = 0;
 		for (auto& event : Events)
 			event.Row = i++;
 	}
 
-	PushState({desc, &amend_id, single_line});
+	PushState({desc, &amend_id, single_line, type, changed_lines});
 
+	AnnounceCommitDetails({type, single_line, changed_lines});
 	AnnounceCommit(type, single_line);
 
 	return amend_id;

@@ -17,13 +17,16 @@
 #include <libaegisub/fs_fwd.h>
 #include <libaegisub/signal.h>
 
+#include "ass_dialogue.h"
+#include "subs_controller_timer.h"
+
 #include <boost/container/list.hpp>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
 #include <optional>
-
-#include "subs_controller_timer.h"
+#include <span>
+#include <vector>
 
 class SelectionController;
 class WatchedFile;
@@ -35,6 +38,28 @@ namespace agi {
 }
 struct AssFileCommit;
 struct ProjectProperties;
+
+namespace subs_controller_detail {
+	inline bool TryAmendDialogueSnapshot(
+		std::vector<AssDialogueBase>& snapshot,
+		std::span<AssDialogue const *const> changed_lines) {
+		if (changed_lines.empty())
+			return false;
+
+		for (auto const line : changed_lines) {
+			if (!line || line->Row < 0 || static_cast<size_t>(line->Row) >= snapshot.size())
+				return false;
+
+			auto const& previous = snapshot[static_cast<size_t>(line->Row)];
+			if (previous.Row != line->Row || previous.Id != line->Id)
+				return false;
+		}
+
+		for (auto const line : changed_lines)
+			snapshot[static_cast<size_t>(line->Row)] = *line;
+		return true;
+	}
+}
 
 class SubsController {
 	agi::Context *context;

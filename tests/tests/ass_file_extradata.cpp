@@ -6,6 +6,7 @@
 #include "../../src/ass_info.h"
 #include "../../src/ass_io_core.h"
 #include "../../src/ass_style.h"
+#include "../../src/subs_controller.h"
 
 #include <libaegisub/vfr.h>
 
@@ -14,6 +15,98 @@
 #include <iterator>
 #include <limits>
 #include <map>
+
+TEST(ass_file_commit, detailed_metadata_normalizes_legacy_single_and_explicit_multi_line_changes) {
+	AssFile file;
+	file.Events.push_back(*new AssDialogue);
+	file.Events.push_back(*new AssDialogue);
+	auto first = file.Events.begin();
+	auto second = std::next(first);
+	first->Row = 0;
+	second->Row = 1;
+
+	struct Observation {
+		AssDialogue *single_line = nullptr;
+		std::vector<AssDialogue const *> changed_lines;
+	};
+	std::vector<Observation> undo_observations;
+	std::vector<Observation> detailed_observations;
+	std::vector<AssDialogue const *> legacy_observations;
+
+	auto undo_connection = agi::signal::Connection(file.AddUndoManager([&](AssFileCommit commit) {
+		undo_observations.push_back({commit.single_line, {commit.changed_lines.begin(), commit.changed_lines.end()}});
+	}));
+	auto detailed_connection = agi::signal::Connection(file.AddCommitDetailsListener([&](AssFileCommitDetails commit) {
+		detailed_observations.push_back({commit.single_line, {commit.changed_lines.begin(), commit.changed_lines.end()}});
+	}));
+	auto legacy_connection = agi::signal::Connection(file.AddCommitListener([&](int, AssDialogue const *single_line) {
+		legacy_observations.push_back(single_line);
+	}));
+
+	file.Commit("legacy single", AssFile::COMMIT_DIAG_TEXT, -1, &*first);
+	std::vector<AssDialogue const *> multiple = {&*first, &*second};
+	file.Commit("explicit multi", AssFile::COMMIT_DIAG_TEXT, -1, &*first, multiple);
+	file.Commit("explicit empty", AssFile::COMMIT_DIAG_TEXT, -1, &*first, {});
+
+	ASSERT_EQ(3u, undo_observations.size());
+	ASSERT_EQ(3u, detailed_observations.size());
+	ASSERT_EQ(3u, legacy_observations.size());
+
+	EXPECT_EQ(&*first, undo_observations[0].single_line);
+	ASSERT_EQ(1u, undo_observations[0].changed_lines.size());
+	EXPECT_EQ(&*first, undo_observations[0].changed_lines[0]);
+	EXPECT_EQ(&*first, detailed_observations[0].single_line);
+	EXPECT_EQ(&*first, legacy_observations[0]);
+
+	EXPECT_EQ(nullptr, undo_observations[1].single_line);
+	EXPECT_EQ(multiple, undo_observations[1].changed_lines);
+	EXPECT_EQ(nullptr, detailed_observations[1].single_line);
+	EXPECT_EQ(multiple, detailed_observations[1].changed_lines);
+	EXPECT_EQ(nullptr, legacy_observations[1]);
+
+	EXPECT_EQ(nullptr, undo_observations[2].single_line);
+	EXPECT_TRUE(undo_observations[2].changed_lines.empty());
+	EXPECT_EQ(nullptr, detailed_observations[2].single_line);
+	EXPECT_TRUE(detailed_observations[2].changed_lines.empty());
+	EXPECT_EQ(nullptr, legacy_observations[2]);
+}
+
+TEST(subs_controller_undo, amends_changed_dialogue_rows_by_row_and_id) {
+	AssDialogue first;
+	first.Row = 0;
+	first.Text = "first before";
+	AssDialogue second;
+	second.Row = 1;
+	second.Text = "second before";
+	std::vector<AssDialogueBase> snapshot = {first, second};
+
+	first.Text = "first after";
+	second.Text = "second after";
+	std::vector<AssDialogue const *> changed_lines = {&second, &first};
+
+	ASSERT_TRUE(subs_controller_detail::TryAmendDialogueSnapshot(snapshot, changed_lines));
+	EXPECT_EQ("first after", snapshot[0].Text.get());
+	EXPECT_EQ("second after", snapshot[1].Text.get());
+}
+
+TEST(subs_controller_undo, rejects_invalid_rows_without_partial_update) {
+	AssDialogue first;
+	first.Row = 0;
+	first.Text = "first before";
+	AssDialogue second;
+	second.Row = 1;
+	second.Text = "second before";
+	std::vector<AssDialogueBase> snapshot = {first, second};
+
+	first.Text = "first after";
+	AssDialogue wrong_line;
+	wrong_line.Row = 1;
+	wrong_line.Text = "wrong";
+	std::vector<AssDialogue const *> invalid_lines = {&first, &wrong_line};
+	EXPECT_FALSE(subs_controller_detail::TryAmendDialogueSnapshot(snapshot, invalid_lines));
+	EXPECT_EQ("first before", snapshot[0].Text.get());
+	EXPECT_EQ("second before", snapshot[1].Text.get());
+}
 
 TEST(ass_file_extradata, cleaning_copy_does_not_mutate_original_file_state) {
 	AssFile original;

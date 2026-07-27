@@ -61,6 +61,7 @@ VisualToolMeasure::VisualToolMeasure(VideoDisplay *parent, agi::Context *context
 }
 
 VisualToolMeasure::~VisualToolMeasure() {
+	CancelInteraction(false);
 	if (toolbar)
 		toolbar->Unbind(wxEVT_TOOL, &VisualToolMeasure::OnSubTool, this);
 }
@@ -206,7 +207,7 @@ void VisualToolMeasure::FinishInteraction() {
 	parent->SetFocus();
 }
 
-void VisualToolMeasure::CancelInteraction() {
+void VisualToolMeasure::CancelInteraction(bool render) {
 	if (interaction == Interaction::None)
 		return;
 
@@ -222,7 +223,8 @@ void VisualToolMeasure::CancelInteraction() {
 		controller->Update(*id, std::move(*original));
 	if (parent->HasCapture())
 		parent->ReleaseMouse();
-	parent->Render();
+	if (render)
+		parent->Render();
 }
 
 void VisualToolMeasure::OnMouseEvent(wxMouseEvent& event) {

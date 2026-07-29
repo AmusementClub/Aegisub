@@ -27,7 +27,10 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#include "subtitle_character_markers.h"
+
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 #include <wx/stc/stc.h>
@@ -116,6 +119,26 @@ class SubsStyledTextEditCtrl final : public wxStyledTextCtrl {
 	void SetStyles();
 
 	void UpdateStyle();
+
+	/// Cached character-marker spans for the current line_text
+	std::vector<aegisub::CharacterMarkerSpan> character_marker_spans;
+	/// Encoded characters currently installed via SetRepresentation for this feature
+	std::set<std::string> installed_character_representations;
+	/// True while a character-marker calltip owns the calltip UI
+	bool marker_calltip_active = false;
+	/// Coalesce multiple option callbacks into one CallAfter refresh
+	bool character_marker_refresh_queued = false;
+
+	aegisub::CharacterMarkerShowConfig ReadCharacterMarkerShowConfig() const;
+	aegisub::CharacterMarkerErrorConfig ReadCharacterMarkerErrorConfig() const;
+	void SubscribeCharacterMarkerOptions();
+	void QueueCharacterMarkerRefresh();
+	void ApplyCharacterMarkerSettings();
+	void UpdateCharacterMarkers();
+	void ClearCharacterMarkerIndicators();
+	void OnCharacterMarkerDwellStart(wxStyledTextEvent& event);
+	void OnCharacterMarkerDwellEnd(wxStyledTextEvent& event);
+	wxString BuildCharacterMarkerTooltip(aegisub::CharacterMarkerSpan const& span) const;
 
 	/// Add the thesaurus suggestions to a menu
 	void AddThesaurusEntries(wxMenu &menu);

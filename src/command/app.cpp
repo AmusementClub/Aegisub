@@ -278,6 +278,146 @@ struct app_updates final : public Command {
 	}
 };
 
+/// Character-marker view toggles. STR_MENU/STR_HELP use string literals so
+/// xgettext (-kSTR_MENU -kSTR_HELP) can extract them without macro expansion.
+/// WITH_WXSTC=OFF: registered but Validate() is false (menu item disabled).
+static bool CharacterMarkerCommandsAvailable() {
+#ifdef WITH_WXSTC
+	return true;
+#else
+	return false;
+#endif
+}
+
+struct app_character_markers_space final : public Command {
+	CMD_NAME("app/character_markers/space")
+	STR_MENU("&Normal Spaces")
+	STR_DISP("Normal Spaces")
+	STR_HELP("Show markers for ordinary spaces (U+0020)")
+	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
+	bool Validate(const agi::Context *) override { return CharacterMarkerCommandsAvailable(); }
+	bool IsActive(const agi::Context *) override {
+		return OPT_GET("Subtitle/Edit Box/Character Markers/Show/Space")->GetBool();
+	}
+	void operator()(agi::Context *) override {
+		agi::OptionValue *opt = OPT_SET("Subtitle/Edit Box/Character Markers/Show/Space");
+		opt->SetBool(!opt->GetBool());
+	}
+};
+
+struct app_character_markers_ideographic_space final : public Command {
+	CMD_NAME("app/character_markers/ideographic_space")
+	STR_MENU("&Ideographic Spaces")
+	STR_DISP("Ideographic Spaces")
+	STR_HELP("Show markers for ideographic spaces (U+3000)")
+	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
+	bool Validate(const agi::Context *) override { return CharacterMarkerCommandsAvailable(); }
+	bool IsActive(const agi::Context *) override {
+		return OPT_GET("Subtitle/Edit Box/Character Markers/Show/Ideographic Space")->GetBool();
+	}
+	void operator()(agi::Context *) override {
+		agi::OptionValue *opt = OPT_SET("Subtitle/Edit Box/Character Markers/Show/Ideographic Space");
+		opt->SetBool(!opt->GetBool());
+	}
+};
+
+struct app_character_markers_unicode_whitespace final : public Command {
+	CMD_NAME("app/character_markers/unicode_whitespace")
+	STR_MENU("&No-Break and Other Unicode Spaces")
+	STR_DISP("No-Break and Other Unicode Spaces")
+	STR_HELP("Show markers for no-break spaces and other Unicode whitespace")
+	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
+	bool Validate(const agi::Context *) override { return CharacterMarkerCommandsAvailable(); }
+	bool IsActive(const agi::Context *) override {
+		return OPT_GET("Subtitle/Edit Box/Character Markers/Show/Unicode Whitespace")->GetBool();
+	}
+	void operator()(agi::Context *) override {
+		agi::OptionValue *opt = OPT_SET("Subtitle/Edit Box/Character Markers/Show/Unicode Whitespace");
+		opt->SetBool(!opt->GetBool());
+	}
+};
+
+struct app_character_markers_line_endings final : public Command {
+	CMD_NAME("app/character_markers/line_endings")
+	STR_MENU("&CR/LF")
+	STR_DISP("CR/LF")
+	STR_HELP("Show markers for carriage return and line feed characters")
+	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
+	bool Validate(const agi::Context *) override { return CharacterMarkerCommandsAvailable(); }
+	bool IsActive(const agi::Context *) override {
+		return OPT_GET("Subtitle/Edit Box/Character Markers/Show/Line Endings")->GetBool();
+	}
+	void operator()(agi::Context *) override {
+		agi::OptionValue *opt = OPT_SET("Subtitle/Edit Box/Character Markers/Show/Line Endings");
+		opt->SetBool(!opt->GetBool());
+	}
+};
+
+struct app_character_markers_control final : public Command {
+	CMD_NAME("app/character_markers/control")
+	STR_MENU("Con&trol Characters")
+	STR_DISP("Control Characters")
+	STR_HELP("Show markers for TAB and other control characters")
+	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
+	bool Validate(const agi::Context *) override { return CharacterMarkerCommandsAvailable(); }
+	bool IsActive(const agi::Context *) override {
+		return OPT_GET("Subtitle/Edit Box/Character Markers/Show/Control Characters")->GetBool();
+	}
+	void operator()(agi::Context *) override {
+		agi::OptionValue *opt = OPT_SET("Subtitle/Edit Box/Character Markers/Show/Control Characters");
+		opt->SetBool(!opt->GetBool());
+	}
+};
+
+struct app_character_markers_invisible final : public Command {
+	CMD_NAME("app/character_markers/invisible")
+	STR_MENU("&Unicode Invisible Characters")
+	STR_DISP("Unicode Invisible Characters")
+	STR_HELP("Show markers for bidi controls, join controls, and other invisible characters")
+	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
+	bool Validate(const agi::Context *) override { return CharacterMarkerCommandsAvailable(); }
+	bool IsActive(const agi::Context *) override {
+		return OPT_GET("Subtitle/Edit Box/Character Markers/Show/Invisible Characters")->GetBool();
+	}
+	void operator()(agi::Context *) override {
+		agi::OptionValue *opt = OPT_SET("Subtitle/Edit Box/Character Markers/Show/Invisible Characters");
+		opt->SetBool(!opt->GetBool());
+	}
+};
+
+static char const* const kCharacterMarkerShowOptions[] = {
+	"Subtitle/Edit Box/Character Markers/Show/Space",
+	"Subtitle/Edit Box/Character Markers/Show/Ideographic Space",
+	"Subtitle/Edit Box/Character Markers/Show/Unicode Whitespace",
+	"Subtitle/Edit Box/Character Markers/Show/Line Endings",
+	"Subtitle/Edit Box/Character Markers/Show/Control Characters",
+	"Subtitle/Edit Box/Character Markers/Show/Invisible Characters",
+};
+
+struct app_character_markers_show_all final : public Command {
+	CMD_NAME("app/character_markers/show_all")
+	STR_MENU("Show &All Markers")
+	STR_DISP("Show All Markers")
+	STR_HELP("Enable or disable every character marker display category")
+	CMD_TYPE(COMMAND_VALIDATE | COMMAND_TOGGLE)
+
+	bool Validate(const agi::Context *) override { return CharacterMarkerCommandsAvailable(); }
+
+	bool IsActive(const agi::Context *) override {
+		for (auto const* path : kCharacterMarkerShowOptions) {
+			if (!OPT_GET(path)->GetBool())
+				return false;
+		}
+		return true;
+	}
+
+	void operator()(agi::Context *) override {
+		bool const all_on = IsActive(nullptr);
+		for (auto const* path : kCharacterMarkerShowOptions)
+			OPT_SET(path)->SetBool(!all_on);
+	}
+};
+
 #ifdef __WXMAC__
 struct app_minimize final : public Command {
 	CMD_NAME("app/minimize")
@@ -330,6 +470,13 @@ namespace cmd {
 		reg(agi::make_unique<app_options>());
 		reg(agi::make_unique<app_toggle_global_hotkeys>());
 		reg(agi::make_unique<app_toggle_toolbar>());
+		reg(agi::make_unique<app_character_markers_space>());
+		reg(agi::make_unique<app_character_markers_ideographic_space>());
+		reg(agi::make_unique<app_character_markers_unicode_whitespace>());
+		reg(agi::make_unique<app_character_markers_line_endings>());
+		reg(agi::make_unique<app_character_markers_control>());
+		reg(agi::make_unique<app_character_markers_invisible>());
+		reg(agi::make_unique<app_character_markers_show_all>());
 #ifdef __WXMAC__
 		reg(agi::make_unique<app_minimize>());
 		reg(agi::make_unique<app_maximize>());

@@ -232,6 +232,8 @@
 		},
 		"Subtitle" : {
 			"Background" : "rgb(255, 255, 255)",
+			"Character Marker" : "rgb(90, 120, 180)",
+			"Character Marker Error" : "rgb(210, 60, 60)",
 			"Syntax" : {
 				"Background" : {
 					"Brackets" : "",
@@ -406,6 +408,31 @@
 			"Use Contains Matching" : false
 		},
 		"Edit Box" : {
+			"Character Markers" : {
+				"Show" : {
+					"Space" : false,
+					"Ideographic Space" : false,
+					"Unicode Whitespace" : false,
+					"Line Endings" : false,
+					"Control Characters" : false,
+					"Invisible Characters" : false
+				},
+				"Error" : {
+					"Enabled" : false,
+					"Space" : false,
+					"Ideographic Space" : false,
+					"No-Break Space" : true,
+					"Other Unicode Whitespace" : true,
+					"Line Endings" : true,
+					"Tab" : true,
+					"Other Control Characters" : true,
+					"Bidi Controls" : true,
+					"Join Controls" : true,
+					"Other Invisible Characters" : true,
+					"Join Control Context Policy" : 0,
+					"Variation Selector Context Policy" : 0
+				}
+			},
 			"Command Buttons" : {
 				"Commands" : [
 					{"string": ""}

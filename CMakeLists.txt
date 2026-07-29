@@ -762,6 +762,7 @@ set(AEGISUB_CORE_SOURCES
     # migrated to the exe until that surface is abstracted.
     src/export_framerate_transform.cpp
     # Subtitle edit / grid / timing ops (framework-agnostic)
+    src/subtitle_character_markers.cpp
     src/subtitle_edit_ops.cpp
     src/subtitle_editor_ops.cpp
     src/subtitle_grid_ops.cpp

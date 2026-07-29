@@ -202,7 +202,19 @@
         { "command" : "grid/tags/simplify" },
         { "command" : "grid/tags/hide" },
         {},
+        { "submenu" : "main/view/character markers", "text" : "Character Mar&kers" },
+        {},
         { "command" : "app/toggle/toolbar" }
+    ],
+    "main/view/character markers" : [
+        { "command" : "app/character_markers/space" },
+        { "command" : "app/character_markers/ideographic_space" },
+        { "command" : "app/character_markers/unicode_whitespace" },
+        { "command" : "app/character_markers/line_endings" },
+        { "command" : "app/character_markers/control" },
+        { "command" : "app/character_markers/invisible" },
+        {},
+        { "command" : "app/character_markers/show_all" }
     ],
     "main/help" : [
         { "command" : "help/contents" },

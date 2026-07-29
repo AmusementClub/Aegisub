@@ -701,6 +701,60 @@ void BuildInterfacePage(OptionPage *p) {
 	binder->AddFont(_("Font"), "Subtitle/Edit Box/");
 	binder->AddInt(_("Edit box height"), "Subtitle/Edit Box/Display Height", -1, 2000);
 
+#ifdef WITH_WXSTC
+	binder->AddCategory(_("Character Markers"));
+	binder->AddBool(_("Show normal spaces"), "Subtitle/Edit Box/Character Markers/Show/Space");
+	binder->AddBool(_("Show ideographic spaces"), "Subtitle/Edit Box/Character Markers/Show/Ideographic Space");
+	binder->AddBool(_("Show no-break and other Unicode spaces"), "Subtitle/Edit Box/Character Markers/Show/Unicode Whitespace");
+	binder->AddBool(_("Show CR/LF"), "Subtitle/Edit Box/Character Markers/Show/Line Endings");
+	binder->AddBool(_("Show control characters"), "Subtitle/Edit Box/Character Markers/Show/Control Characters");
+	binder->AddBool(_("Show Unicode invisible characters"), "Subtitle/Edit Box/Character Markers/Show/Invisible Characters");
+
+	binder->AddCategory(_("Character Error Highlights"));
+	auto *error_enabled = binder->AddBool(_("Enable character error highlights"), "Subtitle/Edit Box/Character Markers/Error/Enabled");
+	auto *error_space = binder->AddBool(_("Mark normal spaces as errors"), "Subtitle/Edit Box/Character Markers/Error/Space");
+	auto *error_ideo = binder->AddBool(_("Mark ideographic spaces as errors"), "Subtitle/Edit Box/Character Markers/Error/Ideographic Space");
+	auto *error_nbsp = binder->AddBool(_("Mark no-break spaces as errors"), "Subtitle/Edit Box/Character Markers/Error/No-Break Space");
+	auto *error_other_ws = binder->AddBool(_("Mark other Unicode whitespace as errors"), "Subtitle/Edit Box/Character Markers/Error/Other Unicode Whitespace");
+	auto *error_eol = binder->AddBool(_("Mark CR/LF as errors"), "Subtitle/Edit Box/Character Markers/Error/Line Endings");
+	auto *error_tab = binder->AddBool(_("Mark TAB as errors"), "Subtitle/Edit Box/Character Markers/Error/Tab");
+	auto *error_ctrl = binder->AddBool(_("Mark other control characters as errors"), "Subtitle/Edit Box/Character Markers/Error/Other Control Characters");
+	auto *error_bidi = binder->AddBool(_("Mark bidi control characters as errors"), "Subtitle/Edit Box/Character Markers/Error/Bidi Controls");
+	auto *error_join = binder->AddBool(_("Mark join control characters as errors"), "Subtitle/Edit Box/Character Markers/Error/Join Controls");
+	auto *error_invis = binder->AddBool(_("Mark other invisible characters as errors"), "Subtitle/Edit Box/Character Markers/Error/Other Invisible Characters");
+	const wxString context_policy_labels[] = {
+		_("Always follow category setting"),
+		_("Exempt recognized valid contexts"),
+		_("Never mark as errors")
+	};
+	wxArrayString context_policy_choices(3, context_policy_labels);
+	auto *join_policy = binder->AddChoice(_("Join control context policy"), context_policy_choices, "Subtitle/Edit Box/Character Markers/Error/Join Control Context Policy");
+	auto *variation_selector_policy = binder->AddChoice(_("Variation selector context policy"), context_policy_choices, "Subtitle/Edit Box/Character Markers/Error/Variation Selector Context Policy");
+	// Read the property value (pending UI state), not OPT_GET: option writes are
+	// deferred until Apply, so OPT_GET stays stale while the user edits.
+	auto update_error_enable = [grid, error_enabled, error_space, error_ideo, error_nbsp, error_other_ws, error_eol, error_tab, error_ctrl, error_bidi, error_join, error_invis, join_policy, variation_selector_policy]() {
+		bool const enabled = error_enabled->GetValue().GetBool();
+		grid->EnableProperty(error_space, enabled);
+		grid->EnableProperty(error_ideo, enabled);
+		grid->EnableProperty(error_nbsp, enabled);
+		grid->EnableProperty(error_other_ws, enabled);
+		grid->EnableProperty(error_eol, enabled);
+		grid->EnableProperty(error_tab, enabled);
+		grid->EnableProperty(error_ctrl, enabled);
+		grid->EnableProperty(error_bidi, enabled);
+		grid->EnableProperty(error_join, enabled);
+		grid->EnableProperty(error_invis, enabled);
+		grid->EnableProperty(join_policy, enabled);
+		grid->EnableProperty(variation_selector_policy, enabled);
+	};
+	update_error_enable();
+	grid->Bind(wxEVT_PG_CHANGED, [error_enabled, update_error_enable](wxPropertyGridEvent& evt) {
+		if (evt.GetProperty() == error_enabled)
+			update_error_enable();
+		evt.Skip();
+	});
+#endif
+
 	binder->AddCategory(_("Character Counter"));
 	binder->AddInt(_("Maximum characters per line"), "Subtitle/Character Limit", 0, 1000);
 	binder->AddInt(_("Characters Per Second Warning Threshold"), "Subtitle/Character Counter/CPS Warning Threshold", 0, 1000);
@@ -764,6 +818,8 @@ void BuildInterfaceColoursPage(OptionPage *p) {
 	binder->AddColour(_("Line Break"), "Colour/Subtitle/Syntax/Line Break");
 	binder->AddColour(_("Karaoke templates"), "Colour/Subtitle/Syntax/Karaoke Template");
 	binder->AddColour(_("Karaoke variables"), "Colour/Subtitle/Syntax/Karaoke Variable");
+	binder->AddColour(_("Character marker"), "Colour/Subtitle/Character Marker");
+	binder->AddColour(_("Character marker error"), "Colour/Subtitle/Character Marker Error");
 #endif
 
 	binder->AddCategory(_("Audio Color Schemes"));

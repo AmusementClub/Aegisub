@@ -41,6 +41,7 @@
 #include "stc_compat.h"
 #include "text_selection_controller.h"
 #include "thesaurus.h"
+#include "subtitle_character_markers.h"
 #include "subtitle_edit_ops.h"
 #include "utils.h"
 
@@ -53,6 +54,7 @@
 
 #include <functional>
 #include <string_view>
+#include <utility>
 
 #include <wx/clipbrd.h>
 #include <wx/dnd.h>
@@ -67,6 +69,95 @@
 namespace {
 	constexpr int BRACE_HIGHLIGHT_INDICATOR = 2;
 	constexpr int BRACE_BAD_INDICATOR = 3;
+	// Character markers own indicators 4–9; keep numbers centralized.
+	// Primary/alt pairs share style so consecutive same-kind ranges paint as
+	// separate units (Scintilla merges runs of a single indicator).
+	constexpr int CHAR_MARKER_SPACE_INDICATOR = 4;           // U+0020 / U+3000 dashed box
+	constexpr int CHAR_MARKER_SPACE_ALT_INDICATOR = 7;
+	constexpr int CHAR_MARKER_OTHER_SPACE_INDICATOR = 5;     // other whitespace dashed underline
+	constexpr int CHAR_MARKER_OTHER_SPACE_ALT_INDICATOR = 8;
+	constexpr int CHAR_MARKER_ERROR_INDICATOR = 6;           // solid error box
+	constexpr int CHAR_MARKER_ERROR_ALT_INDICATOR = 9;
+	constexpr int CHAR_MARKER_DWELL_MS = 500;
+
+	void ConfigureCharacterMarkerIndicator(wxStyledTextCtrl* ctrl, int indicator, int style, wxColour const& colour, int fill_alpha, int outline_alpha) {
+		ctrl->IndicatorSetStyle(indicator, style);
+		ctrl->IndicatorSetForeground(indicator, colour);
+		ctrl->IndicatorSetUnder(indicator, true);
+		ctrl->IndicatorSetAlpha(indicator, fill_alpha);
+		ctrl->IndicatorSetOutlineAlpha(indicator, outline_alpha);
+	}
+
+	std::string Utf8EncodeCodepoint(char32_t cp) {
+		std::string out;
+		if (cp <= 0x7F) {
+			out.push_back(static_cast<char>(cp));
+		} else if (cp <= 0x7FF) {
+			out.push_back(static_cast<char>(0xC0 | ((cp >> 6) & 0x1F)));
+			out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+		} else if (cp <= 0xFFFF) {
+			out.push_back(static_cast<char>(0xE0 | ((cp >> 12) & 0x0F)));
+			out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+			out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+		} else {
+			out.push_back(static_cast<char>(0xF0 | ((cp >> 18) & 0x07)));
+			out.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3F)));
+			out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
+			out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
+		}
+		return out;
+	}
+
+	wxString KindTitle(aegisub::CharacterMarkerKind kind, char32_t cp) {
+		using K = aegisub::CharacterMarkerKind;
+		if ((cp >= 0xFE00 && cp <= 0xFE0F) || (cp >= 0xE0100 && cp <= 0xE01EF))
+			return _("Variation Selector");
+		switch (cp) {
+		case 0x0020: return _("Space");
+		case 0x3000: return _("Ideographic Space");
+		case 0x00A0: return _("No-Break Space");
+		case 0x0009: return _("Tab");
+		case 0x000A: return _("Line Feed");
+		case 0x000D: return _("Carriage Return");
+		case 0x200B: return _("Zero Width Space");
+		case 0x200C: return _("Zero Width Non-Joiner");
+		case 0x200D: return _("Zero Width Joiner");
+		case 0x200E: return _("Left-to-Right Mark");
+		case 0x200F: return _("Right-to-Left Mark");
+		case 0xFEFF: return _("Byte Order Mark");
+		case 0x2060: return _("Word Joiner");
+		default:
+			break;
+		}
+		switch (kind) {
+		case K::Space: return _("Space");
+		case K::IdeographicSpace: return _("Ideographic Space");
+		case K::NoBreakSpace: return _("No-Break Space");
+		case K::UnicodeWhitespace: return _("Unicode Whitespace");
+		case K::CarriageReturn: return _("Carriage Return");
+		case K::LineFeed: return _("Line Feed");
+		case K::Tab: return _("Tab");
+		case K::Control: return _("Control Character");
+		case K::BidiControl: return _("Bidirectional Control Character");
+		case K::JoinControl: return _("Join Control Character");
+		case K::Invisible: return _("Invisible Character");
+		}
+		return _("Invisible Character");
+	}
+
+	wxString CategoryDescription(std::string const& code) {
+		if (code == "Zs") return _("Space Separator (Zs)");
+		if (code == "Zl") return _("Line Separator (Zl)");
+		if (code == "Zp") return _("Paragraph Separator (Zp)");
+		if (code == "Cc") return _("Control (Cc)");
+		if (code == "Cf") return _("Format (Cf)");
+		if (code == "Cn") return _("Unassigned (Cn)");
+		if (code == "Co") return _("Private Use (Co)");
+		if (code == "Cs") return _("Surrogate (Cs)");
+		if (!code.empty())
+			return wxString::Format(_("General Category (%s)"), to_wx(code).wx_str());
+		return _("General Category");
+	}
 
 	bool IsHighlightableBrace(int character) {
 		return character == '{' || character == '}' || character == '(' || character == ')';
@@ -315,6 +406,12 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 	OPT_SUB("Subtitle/Highlight/Syntax", &SubsStyledTextEditCtrl::UpdateStyle, this);
 	OPT_SUB("App/Call Tips", &SubsStyledTextEditCtrl::UpdateCallTip, this);
 
+	SubscribeCharacterMarkerOptions();
+	SetMouseDwellTime(CHAR_MARKER_DWELL_MS);
+	Bind(wxEVT_STC_DWELLSTART, &SubsStyledTextEditCtrl::OnCharacterMarkerDwellStart, this);
+	Bind(wxEVT_STC_DWELLEND, &SubsStyledTextEditCtrl::OnCharacterMarkerDwellEnd, this);
+	ApplyCharacterMarkerSettings();
+
 	Bind(wxEVT_MENU, [=](wxCommandEvent&) {
 		if (spellchecker) spellchecker->AddWord(currentWord);
 		UpdateStyle();
@@ -348,6 +445,13 @@ END_EVENT_TABLE()
 
 void SubsStyledTextEditCtrl::OnLoseFocus(wxFocusEvent &event) {
 	CallTipCancel();
+	if (marker_calltip_active) {
+		marker_calltip_active = false;
+		// Allow syntax calltips to resume after focus returns.
+		calltip_position = static_cast<size_t>(-1);
+		calltip_text.clear();
+		cursor_pos = -1;
+	}
 	event.Skip();
 }
 
@@ -629,6 +733,18 @@ void SubsStyledTextEditCtrl::SetStyles() {
 	IndicatorSetForeground(BRACE_BAD_INDICATOR, to_wx(OPT_GET("Colour/Subtitle/Syntax/Error")->GetColor()));
 	IndicatorSetUnder(BRACE_BAD_INDICATOR, true);
 	BraceBadLightIndicator(true, BRACE_BAD_INDICATOR);
+
+	// Character marker indicators (independent of spelling/brace indicators).
+	auto marker_colour = to_wx(OPT_GET("Colour/Subtitle/Character Marker")->GetColor());
+	auto error_colour = to_wx(OPT_GET("Colour/Subtitle/Character Marker Error")->GetColor());
+
+	ConfigureCharacterMarkerIndicator(this, CHAR_MARKER_SPACE_INDICATOR, wxSTC_INDIC_DOTBOX, marker_colour, 0, 200);
+	ConfigureCharacterMarkerIndicator(this, CHAR_MARKER_SPACE_ALT_INDICATOR, wxSTC_INDIC_DOTBOX, marker_colour, 0, 200);
+	// Bottom dash style distinguishes NBSP/other whitespace from U+0020/U+3000 boxes.
+	ConfigureCharacterMarkerIndicator(this, CHAR_MARKER_OTHER_SPACE_INDICATOR, wxSTC_INDIC_DASH, marker_colour, 0, 200);
+	ConfigureCharacterMarkerIndicator(this, CHAR_MARKER_OTHER_SPACE_ALT_INDICATOR, wxSTC_INDIC_DASH, marker_colour, 0, 200);
+	ConfigureCharacterMarkerIndicator(this, CHAR_MARKER_ERROR_INDICATOR, wxSTC_INDIC_STRAIGHTBOX, error_colour, 40, 220);
+	ConfigureCharacterMarkerIndicator(this, CHAR_MARKER_ERROR_ALT_INDICATOR, wxSTC_INDIC_STRAIGHTBOX, error_colour, 40, 220);
 }
 
 void SubsStyledTextEditCtrl::UpdateStyle() {
@@ -649,10 +765,15 @@ void SubsStyledTextEditCtrl::UpdateStyle() {
 
 	if (!OPT_GET("Subtitle/Highlight/Syntax")->GetBool()) {
 		SetStyling(line_text.size(), 0);
+		// Character markers are independent of syntax highlighting.
+		UpdateCharacterMarkers();
 		return;
 	}
 
-	if (line_text.empty()) return;
+	if (line_text.empty()) {
+		UpdateCharacterMarkers();
+		return;
+	}
 
 	SetIndicatorCurrent(0);
 	size_t pos = 0;
@@ -667,6 +788,8 @@ void SubsStyledTextEditCtrl::UpdateStyle() {
 		}
 		pos += style_range.length;
 	}
+
+	UpdateCharacterMarkers();
 }
 
 void SubsStyledTextEditCtrl::UpdateBraceHighlight() {
@@ -692,6 +815,10 @@ void SubsStyledTextEditCtrl::UpdateBraceHighlight() {
 }
 
 void SubsStyledTextEditCtrl::UpdateCallTip() {
+	// Marker tooltips own the calltip while active; do not overwrite them.
+	if (marker_calltip_active)
+		return;
+
 	if (!OPT_GET("App/Call Tips")->GetBool()) return;
 
 	int pos = GetCurrentPos();
@@ -738,6 +865,9 @@ void SubsStyledTextEditCtrl::SetTextTo(std::string const& text) {
 	}
 
 	SetEvtHandlerEnabled(true);
+	// Events were disabled during SetTextRaw, so force a full style/marker refresh.
+	line_text = GetTextRaw().data();
+	UpdateStyle();
 	UpdateBraceHighlight();
 	Thaw();
 }
@@ -758,6 +888,9 @@ void SubsStyledTextEditCtrl::Paste() {
 
 	SetSelectionStart(sel_start);
 	SetSelectionEnd(sel_start);
+
+	line_text = GetTextRaw().data();
+	UpdateStyle();
 }
 
 void SubsStyledTextEditCtrl::OnContextMenu(wxContextMenuEvent &event) {
@@ -976,4 +1109,221 @@ std::pair<int, int> SubsStyledTextEditCtrl::GetBoundsOfWordAtPosition(int pos) {
 	}
 
 	return {0, 0};
+}
+
+aegisub::CharacterMarkerShowConfig SubsStyledTextEditCtrl::ReadCharacterMarkerShowConfig() const {
+	aegisub::CharacterMarkerShowConfig cfg;
+	cfg.space = OPT_GET("Subtitle/Edit Box/Character Markers/Show/Space")->GetBool();
+	cfg.ideographic_space = OPT_GET("Subtitle/Edit Box/Character Markers/Show/Ideographic Space")->GetBool();
+	cfg.unicode_whitespace = OPT_GET("Subtitle/Edit Box/Character Markers/Show/Unicode Whitespace")->GetBool();
+	cfg.line_endings = OPT_GET("Subtitle/Edit Box/Character Markers/Show/Line Endings")->GetBool();
+	cfg.control_characters = OPT_GET("Subtitle/Edit Box/Character Markers/Show/Control Characters")->GetBool();
+	cfg.invisible_characters = OPT_GET("Subtitle/Edit Box/Character Markers/Show/Invisible Characters")->GetBool();
+	return cfg;
+}
+
+aegisub::CharacterMarkerErrorConfig SubsStyledTextEditCtrl::ReadCharacterMarkerErrorConfig() const {
+	aegisub::CharacterMarkerErrorConfig cfg;
+	cfg.enabled = OPT_GET("Subtitle/Edit Box/Character Markers/Error/Enabled")->GetBool();
+	cfg.space = OPT_GET("Subtitle/Edit Box/Character Markers/Error/Space")->GetBool();
+	cfg.ideographic_space = OPT_GET("Subtitle/Edit Box/Character Markers/Error/Ideographic Space")->GetBool();
+	cfg.no_break_space = OPT_GET("Subtitle/Edit Box/Character Markers/Error/No-Break Space")->GetBool();
+	cfg.other_unicode_whitespace = OPT_GET("Subtitle/Edit Box/Character Markers/Error/Other Unicode Whitespace")->GetBool();
+	cfg.line_endings = OPT_GET("Subtitle/Edit Box/Character Markers/Error/Line Endings")->GetBool();
+	cfg.tab = OPT_GET("Subtitle/Edit Box/Character Markers/Error/Tab")->GetBool();
+	cfg.other_control_characters = OPT_GET("Subtitle/Edit Box/Character Markers/Error/Other Control Characters")->GetBool();
+	cfg.bidi_controls = OPT_GET("Subtitle/Edit Box/Character Markers/Error/Bidi Controls")->GetBool();
+	cfg.join_controls = OPT_GET("Subtitle/Edit Box/Character Markers/Error/Join Controls")->GetBool();
+	cfg.other_invisible_characters = OPT_GET("Subtitle/Edit Box/Character Markers/Error/Other Invisible Characters")->GetBool();
+	cfg.join_control_context_policy = static_cast<aegisub::JoinControlContextPolicy>(
+		OPT_GET("Subtitle/Edit Box/Character Markers/Error/Join Control Context Policy")->GetInt());
+	cfg.variation_selector_context_policy = static_cast<aegisub::VariationSelectorContextPolicy>(
+		OPT_GET("Subtitle/Edit Box/Character Markers/Error/Variation Selector Context Policy")->GetInt());
+	return cfg;
+}
+
+void SubsStyledTextEditCtrl::SubscribeCharacterMarkerOptions() {
+	auto queue = [this](agi::OptionValue const&) { QueueCharacterMarkerRefresh(); };
+
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Show/Space", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Show/Ideographic Space", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Show/Unicode Whitespace", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Show/Line Endings", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Show/Control Characters", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Show/Invisible Characters", queue);
+
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Error/Enabled", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Error/Space", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Error/Ideographic Space", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Error/No-Break Space", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Error/Other Unicode Whitespace", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Error/Line Endings", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Error/Tab", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Error/Other Control Characters", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Error/Bidi Controls", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Error/Join Controls", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Error/Other Invisible Characters", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Error/Join Control Context Policy", queue);
+	OPT_SUB("Subtitle/Edit Box/Character Markers/Error/Variation Selector Context Policy", queue);
+
+	OPT_SUB("Colour/Subtitle/Character Marker", queue);
+	OPT_SUB("Colour/Subtitle/Character Marker Error", queue);
+}
+
+void SubsStyledTextEditCtrl::QueueCharacterMarkerRefresh() {
+	if (character_marker_refresh_queued)
+		return;
+	character_marker_refresh_queued = true;
+	CallAfter([this] {
+		character_marker_refresh_queued = false;
+		// Re-apply indicator colours/styles and representations, then rescan.
+		SetStyles();
+		ApplyCharacterMarkerSettings();
+		UpdateCharacterMarkers();
+	});
+}
+
+void SubsStyledTextEditCtrl::ApplyCharacterMarkerSettings() {
+	// Representations depend on the current line's context. Clear owned mappings
+	// here; UpdateCharacterMarkers() rebuilds them from scanned spans only.
+	for (auto const& encoded : installed_character_representations)
+		ClearRepresentation(wxString::FromUTF8(encoded));
+	installed_character_representations.clear();
+}
+
+void SubsStyledTextEditCtrl::ClearCharacterMarkerIndicators() {
+	int const length = GetTextLength();
+	if (length <= 0)
+		return;
+
+	for (int indicator : {
+		CHAR_MARKER_SPACE_INDICATOR,
+		CHAR_MARKER_SPACE_ALT_INDICATOR,
+		CHAR_MARKER_OTHER_SPACE_INDICATOR,
+		CHAR_MARKER_OTHER_SPACE_ALT_INDICATOR,
+		CHAR_MARKER_ERROR_INDICATOR,
+		CHAR_MARKER_ERROR_ALT_INDICATOR,
+	}) {
+		SetIndicatorCurrent(indicator);
+		IndicatorClearRange(0, length);
+	}
+}
+
+void SubsStyledTextEditCtrl::UpdateCharacterMarkers() {
+	auto const show = ReadCharacterMarkerShowConfig();
+	auto const error = ReadCharacterMarkerErrorConfig();
+
+	character_marker_spans = aegisub::ScanCharacterMarkers(line_text);
+	auto const render_plan = aegisub::BuildCharacterMarkerRenderPlan(character_marker_spans, show, error);
+
+	// Rebuild representations exactly from current-line spans with real context.
+	// Error-only zero-width characters get a compact blob so the error indicator
+	// and dwell hit target have non-zero width.
+	std::set<std::string> needed;
+	for (auto const& representation : render_plan.representations) {
+		auto encoded = Utf8EncodeCodepoint(representation.codepoint);
+		needed.insert(encoded);
+		if (installed_character_representations.count(encoded))
+			continue;
+		SetRepresentation(wxString::FromUTF8(encoded), to_wx(representation.label));
+	}
+
+	for (auto const& encoded : installed_character_representations) {
+		if (!needed.count(encoded))
+			ClearRepresentation(wxString::FromUTF8(encoded));
+	}
+	installed_character_representations = std::move(needed);
+
+	ClearCharacterMarkerIndicators();
+
+	for (auto const& span : render_plan.indicators) {
+		int indicator;
+		switch (span.style) {
+		case aegisub::CharacterMarkerIndicatorStyle::Error:
+			indicator = CHAR_MARKER_ERROR_INDICATOR;
+			break;
+		case aegisub::CharacterMarkerIndicatorStyle::ErrorAlt:
+			indicator = CHAR_MARKER_ERROR_ALT_INDICATOR;
+			break;
+		case aegisub::CharacterMarkerIndicatorStyle::OtherWhitespace:
+			indicator = CHAR_MARKER_OTHER_SPACE_INDICATOR;
+			break;
+		case aegisub::CharacterMarkerIndicatorStyle::OtherWhitespaceAlt:
+			indicator = CHAR_MARKER_OTHER_SPACE_ALT_INDICATOR;
+			break;
+		case aegisub::CharacterMarkerIndicatorStyle::SpaceAlt:
+			indicator = CHAR_MARKER_SPACE_ALT_INDICATOR;
+			break;
+		case aegisub::CharacterMarkerIndicatorStyle::Space:
+		default:
+			indicator = CHAR_MARKER_SPACE_INDICATOR;
+			break;
+		}
+
+		SetIndicatorCurrent(indicator);
+		IndicatorFillRange(static_cast<int>(span.byte_start), static_cast<int>(span.byte_length));
+	}
+}
+
+wxString SubsStyledTextEditCtrl::BuildCharacterMarkerTooltip(aegisub::CharacterMarkerSpan const& span) const {
+	auto const title = KindTitle(span.kind, span.codepoint);
+	auto const icu_name = aegisub::CharacterMarkerIcuName(span.codepoint);
+	auto const cat_code = aegisub::CharacterMarkerGeneralCategoryCode(span.codepoint);
+	auto const cat_desc = CategoryDescription(cat_code);
+
+	wxString codepoint_line;
+	if (!icu_name.empty())
+		codepoint_line = wxString::Format(wxS("U+%04X %s"), static_cast<unsigned>(span.codepoint), to_wx(icu_name));
+	else
+		codepoint_line = wxString::Format(wxS("U+%04X"), static_cast<unsigned>(span.codepoint));
+
+	auto const error = ReadCharacterMarkerErrorConfig();
+	bool const is_error = aegisub::IsCharacterMarkerError(span, error);
+	wxString status = is_error
+		? _("Status: marked as error by current settings")
+		: _("Status: shown as character marker");
+
+	return wxString::Format(wxS("%s\n%s\n%s: %s\n%s"),
+		title,
+		codepoint_line,
+		_("Category"),
+		cat_desc,
+		status);
+}
+
+void SubsStyledTextEditCtrl::OnCharacterMarkerDwellStart(wxStyledTextEvent& event) {
+	int const pos = event.GetPosition();
+	if (pos < 0) {
+		event.Skip();
+		return;
+	}
+
+	auto const* span = aegisub::FindCharacterMarkerAtByte(character_marker_spans, static_cast<std::size_t>(pos));
+	if (!span) {
+		event.Skip();
+		return;
+	}
+
+	auto const show = ReadCharacterMarkerShowConfig();
+	auto const error = ReadCharacterMarkerErrorConfig();
+	if (!aegisub::CharacterMarkerNeedsVisual(*span, show, error)) {
+		event.Skip();
+		return;
+	}
+
+	marker_calltip_active = true;
+	CallTipShow(static_cast<int>(span->byte_start), BuildCharacterMarkerTooltip(*span));
+	event.Skip(false);
+}
+
+void SubsStyledTextEditCtrl::OnCharacterMarkerDwellEnd(wxStyledTextEvent& event) {
+	if (marker_calltip_active) {
+		CallTipCancel();
+		marker_calltip_active = false;
+		// Invalidate syntax calltip cache so the next idle pass can restore it.
+		calltip_position = static_cast<size_t>(-1);
+		calltip_text.clear();
+		cursor_pos = -1;
+	}
+	event.Skip();
 }

@@ -187,6 +187,16 @@ inline std::string trim_right_copy(view value) {
 	return copy;
 }
 
+/// Unicode White_Space plus U+FEFF, which is commonly treated as a BOM or
+/// zero-width no-break space at text boundaries.
+bool is_unicode_trim_character(char32_t codepoint);
+
+/// Trim Unicode boundary characters from UTF-8 text. Invalid UTF-8 bytes are
+/// preserved and stop trimming at that edge.
+std::string trim_utf8_left_copy(view value);
+std::string trim_utf8_right_copy(view value);
+std::string trim_utf8_copy(view value);
+
 inline void replace_all_inplace(std::string& value, view needle, view replacement) {
 	if (needle.empty()) return;
 	std::size_t pos = 0;

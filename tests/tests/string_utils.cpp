@@ -8,7 +8,11 @@ namespace {
 using agi::util::strings::sized_match;
 using agi::util::strings::expand_unicode_codepoint_escapes;
 using agi::util::strings::find;
+using agi::util::strings::is_unicode_trim_character;
 using agi::util::strings::npos;
+using agi::util::strings::trim_utf8_copy;
+using agi::util::strings::trim_utf8_left_copy;
+using agi::util::strings::trim_utf8_right_copy;
 using agi::util::strings::utf8_find_icase;
 using agi::util::strings::utf8_icase_searcher;
 
@@ -68,6 +72,32 @@ TEST(lagi_string_utils, expand_unicode_codepoint_escapes_rejects_invalid_input) 
 	EXPECT_FALSE(expand_unicode_codepoint_escapes("\\u12", expanded));
 	EXPECT_FALSE(expand_unicode_codepoint_escapes("u+110000", expanded));
 	EXPECT_FALSE(expand_unicode_codepoint_escapes("U+D800", expanded));
+}
+
+TEST(lagi_string_utils, unicode_trim_characters_include_white_space_and_bom) {
+	EXPECT_TRUE(is_unicode_trim_character(U' '));
+	EXPECT_TRUE(is_unicode_trim_character(U'\u00A0'));
+	EXPECT_TRUE(is_unicode_trim_character(U'\u3000'));
+	EXPECT_TRUE(is_unicode_trim_character(U'\uFEFF'));
+	EXPECT_FALSE(is_unicode_trim_character(U'\u200B'));
+	EXPECT_FALSE(is_unicode_trim_character(U'A'));
+}
+
+TEST(lagi_string_utils, utf8_trim_handles_unicode_boundary_characters) {
+	std::string const boundaries = "\t\xC2\xA0\xE3\x80\x80\xEF\xBB\xBF\n";
+	std::string const text = boundaries + "center" + boundaries;
+
+	EXPECT_EQ("center" + boundaries, trim_utf8_left_copy(text));
+	EXPECT_EQ(boundaries + "center", trim_utf8_right_copy(text));
+	EXPECT_EQ("center", trim_utf8_copy(text));
+}
+
+TEST(lagi_string_utils, utf8_trim_preserves_invalid_utf8_at_boundaries) {
+	std::string const invalid_prefix = "\xFF value";
+	std::string const invalid_suffix = "value \xFF";
+
+	EXPECT_EQ(invalid_prefix, trim_utf8_left_copy(invalid_prefix));
+	EXPECT_EQ(invalid_suffix, trim_utf8_right_copy(invalid_suffix));
 }
 
 // find() is the case-sensitive primitive the search engine relies on for its

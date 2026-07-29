@@ -143,6 +143,18 @@ TEST(subtitle_edit_ops, split_text_at_position_trims_both_halves) {
 	EXPECT_EQ("beta", split.second);
 }
 
+TEST(subtitle_edit_ops, split_text_at_position_trims_unicode_boundaries_on_both_halves) {
+	std::string const boundaries = "\xC2\xA0\xE3\x80\x80\xEF\xBB\xBF ";
+	std::string text = "alpha" + boundaries;
+	auto const split_position = static_cast<int>(text.size());
+	text += boundaries + "beta";
+
+	auto split = aegisub::subtitle_edit_ops::SplitTextAtPosition(text, split_position);
+
+	EXPECT_EQ("alpha", split.first);
+	EXPECT_EQ("beta", split.second);
+}
+
 TEST(subtitle_edit_ops, estimate_split_time_uses_text_length_ratio) {
 	auto split = aegisub::subtitle_edit_ops::EstimateSplitTime(1000, 2000, "abc", "de");
 

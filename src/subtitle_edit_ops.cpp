@@ -215,8 +215,8 @@ RecombineResult RecombineSelection(std::vector<AssDialogue *> selection) {
 std::pair<std::string, std::string> SplitTextAtPosition(std::string const& text, int pos) {
 	size_t const split_pos = static_cast<size_t>(std::clamp(pos, 0, static_cast<int>(text.size())));
 	return {
-		agi::util::strings::trim_right_copy(text.substr(0, split_pos)),
-		agi::util::strings::trim_left_copy(text.substr(split_pos))
+		agi::util::strings::trim_utf8_right_copy(std::string_view(text).substr(0, split_pos)),
+		agi::util::strings::trim_utf8_left_copy(std::string_view(text).substr(split_pos))
 	};
 }
 

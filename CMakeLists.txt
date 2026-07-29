@@ -324,6 +324,7 @@ add_library(libaegisub STATIC
     libaegisub/common/option.cpp
     libaegisub/common/option_value.cpp
     libaegisub/common/path.cpp
+    libaegisub/common/string_utils.cpp
     libaegisub/common/thesaurus.cpp
     libaegisub/common/util.cpp
     libaegisub/common/vfr.cpp

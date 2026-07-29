@@ -218,6 +218,65 @@ TEST(subtitle_edit_ops, autoclose_ignores_selected_text_for_parentheses) {
 	EXPECT_FALSE(aegisub::subtitle_edit_ops::BuildAutoCloseEdit("{\\pos}", 1, 5, AutoCloseKey::OpenParen).handled);
 }
 
+TEST(subtitle_edit_ops, text_drag_preview_moves_selection_in_both_directions) {
+	using aegisub::subtitle_edit_ops::BuildTextDragPreview;
+
+	auto preview = BuildTextDragPreview("one TWO three", 4, 7, 13, false);
+	EXPECT_TRUE(preview.changed);
+	EXPECT_EQ("one  threeTWO", preview.text);
+	EXPECT_EQ(10, preview.selection_start);
+	EXPECT_EQ(13, preview.selection_end);
+
+	preview = BuildTextDragPreview("one TWO three", 4, 7, 0, false);
+	EXPECT_TRUE(preview.changed);
+	EXPECT_EQ("TWOone  three", preview.text);
+	EXPECT_EQ(0, preview.selection_start);
+	EXPECT_EQ(3, preview.selection_end);
+
+	preview = BuildTextDragPreview("\xE7\x94\xB2T\xE4\xB9\x99", 3, 4, 7, false);
+	EXPECT_TRUE(preview.changed);
+	EXPECT_EQ("\xE7\x94\xB2\xE4\xB9\x99T", preview.text);
+	EXPECT_EQ(6, preview.selection_start);
+	EXPECT_EQ(7, preview.selection_end);
+}
+
+TEST(subtitle_edit_ops, text_drag_preview_handles_copy_and_rejected_internal_drops) {
+	using aegisub::subtitle_edit_ops::BuildTextDragPreview;
+
+	auto preview = BuildTextDragPreview("one TWO", 4, 7, 0, true);
+	EXPECT_TRUE(preview.changed);
+	EXPECT_EQ("TWOone TWO", preview.text);
+	EXPECT_EQ(0, preview.selection_start);
+	EXPECT_EQ(3, preview.selection_end);
+
+	preview = BuildTextDragPreview("one TWO", 4, 7, 5, false);
+	EXPECT_FALSE(preview.changed);
+	EXPECT_EQ("one TWO", preview.text);
+	EXPECT_EQ(4, preview.selection_start);
+	EXPECT_EQ(7, preview.selection_end);
+
+	preview = BuildTextDragPreview("one TWO", 4, 7, 5, true);
+	EXPECT_FALSE(preview.changed);
+	EXPECT_EQ("one TWO", preview.text);
+}
+
+TEST(subtitle_edit_ops, text_drag_preview_maps_live_positions_back_to_source) {
+	using aegisub::subtitle_edit_ops::MapTextDragPreviewPosition;
+
+	// "one TWO three" -> "TWOone  three"
+	EXPECT_EQ(0, MapTextDragPreviewPosition(2, 13, 4, 7, 0, false, true));
+	EXPECT_EQ(2, MapTextDragPreviewPosition(5, 13, 4, 7, 0, false, true));
+	EXPECT_EQ(7, MapTextDragPreviewPosition(7, 13, 4, 7, 0, false, true));
+
+	// "one TWO three" -> "one  threeTWO"
+	EXPECT_EQ(8, MapTextDragPreviewPosition(5, 13, 4, 7, 13, false, true));
+	EXPECT_EQ(13, MapTextDragPreviewPosition(11, 13, 4, 7, 13, false, true));
+
+	// "one TWO" -> "TWOone TWO"
+	EXPECT_EQ(0, MapTextDragPreviewPosition(2, 7, 4, 7, 0, true, true));
+	EXPECT_EQ(2, MapTextDragPreviewPosition(5, 7, 4, 7, 0, true, true));
+}
+
 TEST(subtitle_edit_ops, home_blocks_step_over_ass_blocks) {
 	std::string const text = "hello{\\i1}world";
 

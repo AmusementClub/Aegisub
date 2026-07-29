@@ -42,6 +42,10 @@ namespace agi {
 /// @class SubsStyledTextEditCtrl
 /// @brief A Scintilla control with spell checking and syntax highlighting
 class SubsStyledTextEditCtrl final : public wxStyledTextCtrl {
+#if wxUSE_DRAG_AND_DROP
+	class DropTarget;
+#endif
+
 	/// Backend spellchecker to use
 	std::unique_ptr<agi::SpellChecker> spellchecker;
 
@@ -80,6 +84,14 @@ class SubsStyledTextEditCtrl final : public wxStyledTextCtrl {
 	/// Tokenized version of line_text
 	std::vector<agi::ass::DialogueToken> tokenized_line;
 
+	std::string drag_source_text;
+	int drag_source_start = 0;
+	int drag_source_end = 0;
+	int drag_preview_drop = 0;
+	bool drag_preview_active = false;
+	bool drag_preview_copy = false;
+	bool drag_preview_changed = false;
+
 	void OnContextMenu(wxContextMenuEvent &);
 	void OnDoubleClick(wxStyledTextEvent&);
 	void OnUseSuggestion(wxCommandEvent &event);
@@ -88,6 +100,13 @@ class SubsStyledTextEditCtrl final : public wxStyledTextCtrl {
 	void OnLoseFocus(wxFocusEvent &event);
 	void OnChar(wxKeyEvent &event);
 	void OnKeyDown(wxKeyEvent &event);
+	void OnStartDrag(wxStyledTextEvent &event);
+	void OnDragOver(wxStyledTextEvent &event);
+	void OnDoDrop(wxStyledTextEvent &event);
+
+	void CancelTextDragPreview();
+	int MapTextDragPreviewPosition(int position) const;
+	void SetTextDragPreview(std::string const& text, int selection_start, int selection_end);
 
 	void SetSyntaxStyle(int id, wxFont &font, std::string const& name, wxColor const& default_background);
 	void Subscribe(std::string const& name);

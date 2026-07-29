@@ -289,6 +289,95 @@ AutoCloseEdit BuildAutoCloseEdit(std::string_view text, int selection_start, int
 	return {};
 }
 
+TextDragPreview BuildTextDragPreview(
+	std::string_view text,
+	int selection_start,
+	int selection_end,
+	int drop_position,
+	bool copy) {
+	int const text_length = static_cast<int>(text.size());
+	selection_start = std::clamp(selection_start, 0, text_length);
+	selection_end = std::clamp(selection_end, 0, text_length);
+	if (selection_start > selection_end)
+		std::swap(selection_start, selection_end);
+	drop_position = std::clamp(drop_position, 0, text_length);
+
+	TextDragPreview preview{std::string(text), selection_start, selection_end, false};
+	if (selection_start == selection_end)
+		return preview;
+
+	bool const drop_inside_selection = drop_position > selection_start && drop_position < selection_end;
+	bool const drop_on_selection_edge = drop_position == selection_start || drop_position == selection_end;
+	if (drop_inside_selection || (!copy && drop_on_selection_edge))
+		return preview;
+
+	std::string const selected(text.substr(
+		static_cast<size_t>(selection_start),
+		static_cast<size_t>(selection_end - selection_start)));
+	int insertion_position = drop_position;
+	if (!copy) {
+		preview.text.erase(
+			static_cast<size_t>(selection_start),
+			static_cast<size_t>(selection_end - selection_start));
+		if (drop_position > selection_end)
+			insertion_position -= selection_end - selection_start;
+	}
+
+	preview.text.insert(static_cast<size_t>(insertion_position), selected);
+	preview.selection_start = insertion_position;
+	preview.selection_end = insertion_position + static_cast<int>(selected.size());
+	preview.changed = true;
+	return preview;
+}
+
+int MapTextDragPreviewPosition(
+	int preview_position,
+	int text_length,
+	int selection_start,
+	int selection_end,
+	int drop_position,
+	bool copy,
+	bool preview_changed) {
+	text_length = std::max(text_length, 0);
+	selection_start = std::clamp(selection_start, 0, text_length);
+	selection_end = std::clamp(selection_end, 0, text_length);
+	if (selection_start > selection_end)
+		std::swap(selection_start, selection_end);
+	drop_position = std::clamp(drop_position, 0, text_length);
+
+	int const selection_length = selection_end - selection_start;
+	int const preview_length = text_length + (copy && preview_changed ? selection_length : 0);
+	preview_position = std::clamp(preview_position, 0, preview_length);
+	if (!preview_changed || selection_length == 0)
+		return std::min(preview_position, text_length);
+
+	if (copy) {
+		if (preview_position <= drop_position)
+			return preview_position;
+		if (preview_position <= drop_position + selection_length)
+			return drop_position;
+		return preview_position - selection_length;
+	}
+
+	if (drop_position < selection_start) {
+		if (preview_position <= drop_position)
+			return preview_position;
+		if (preview_position <= drop_position + selection_length)
+			return drop_position;
+		if (preview_position < selection_end)
+			return preview_position - selection_length;
+		return preview_position;
+	}
+
+	if (preview_position <= selection_start)
+		return preview_position;
+	if (preview_position < drop_position - selection_length)
+		return preview_position + selection_length;
+	if (preview_position <= drop_position)
+		return drop_position;
+	return preview_position;
+}
+
 int GetPreviousBlockStart(std::vector<agi::ass::DialogueToken> const& tokens, int pos) {
 	namespace dt = agi::ass::DialogueTokenType;
 

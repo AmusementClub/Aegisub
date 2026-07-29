@@ -55,6 +55,7 @@
 #include <string_view>
 
 #include <wx/clipbrd.h>
+#include <wx/dnd.h>
 #include <wx/intl.h>
 #include <wx/menu.h>
 #include <wx/settings.h>
@@ -174,6 +175,32 @@ void ApplyAutoCloseEdit(wxStyledTextCtrl *ctrl, aegisub::subtitle_edit_ops::Auto
 	}
 }
 
+#if wxUSE_DRAG_AND_DROP
+class SubsStyledTextEditCtrl::DropTarget final : public wxTextDropTarget {
+	SubsStyledTextEditCtrl *ctrl;
+
+public:
+	explicit DropTarget(SubsStyledTextEditCtrl *ctrl) : ctrl(ctrl) { }
+
+	bool OnDropText(wxCoord x, wxCoord y, wxString const& data) override {
+		return ctrl->DoDropText(x, y, data);
+	}
+
+	wxDragResult OnEnter(wxCoord x, wxCoord y, wxDragResult result) override {
+		return ctrl->DoDragEnter(x, y, result);
+	}
+
+	wxDragResult OnDragOver(wxCoord x, wxCoord y, wxDragResult result) override {
+		return ctrl->DoDragOver(x, y, result);
+	}
+
+	void OnLeave() override {
+		ctrl->CancelTextDragPreview();
+		ctrl->DoDragLeave();
+	}
+};
+#endif
+
 SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, long style, agi::Context *context)
 : wxStyledTextCtrl(parent, -1, wxDefaultPosition, wsize, style)
 , spellchecker(SpellCheckerFactory::GetSpellChecker())
@@ -181,6 +208,10 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 , context(context)
 {
 	aegisub::stc::ConfigureWindowsSelectionRendering(this);
+
+#if wxUSE_DRAG_AND_DROP
+	SetDropTarget(new DropTarget(this));
+#endif
 
 	// Set properties
 	SetWrapMode(wxSTC_WRAP_WORD);
@@ -250,6 +281,9 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 		event.Skip();
 	});
 	Bind(wxEVT_STC_DOUBLECLICK, &SubsStyledTextEditCtrl::OnDoubleClick, this);
+	Bind(wxEVT_STC_START_DRAG, &SubsStyledTextEditCtrl::OnStartDrag, this);
+	Bind(wxEVT_STC_DRAG_OVER, &SubsStyledTextEditCtrl::OnDragOver, this);
+	Bind(wxEVT_STC_DO_DROP, &SubsStyledTextEditCtrl::OnDoDrop, this);
 	Bind(wxEVT_STC_STYLENEEDED, [=](wxStyledTextEvent&) {
 		{
 			std::string text = GetTextRaw().data();
@@ -414,6 +448,122 @@ void SubsStyledTextEditCtrl::OnKeyDown(wxKeyEvent &event) {
 		SetSelection(sel_start + 2, sel_start + 2);
 		event.Skip(false);
 	}
+}
+
+void SubsStyledTextEditCtrl::OnStartDrag(wxStyledTextEvent &event) {
+	CancelTextDragPreview();
+
+	drag_source_start = GetSelectionStart();
+	drag_source_end = GetSelectionEnd();
+	if (drag_source_start == drag_source_end) {
+		event.Skip();
+		return;
+	}
+
+	wxCharBuffer text = GetTextRaw();
+	drag_source_text.assign(text.data(), text.length());
+	drag_preview_drop = drag_source_start;
+	drag_preview_active = true;
+	drag_preview_copy = false;
+	drag_preview_changed = false;
+	event.Skip();
+}
+
+int SubsStyledTextEditCtrl::MapTextDragPreviewPosition(int position) const {
+	return aegisub::subtitle_edit_ops::MapTextDragPreviewPosition(
+		position,
+		static_cast<int>(drag_source_text.size()),
+		drag_source_start,
+		drag_source_end,
+		drag_preview_drop,
+		drag_preview_copy,
+		drag_preview_changed);
+}
+
+void SubsStyledTextEditCtrl::SetTextDragPreview(std::string const& text, int selection_start, int selection_end) {
+	int const mod_event_mask = GetModEventMask();
+	bool const collecting_undo = GetUndoCollection();
+	bool const event_handler_enabled = GetEvtHandlerEnabled();
+
+	// Preview edits are transient UI state, not subtitle edits or undo steps.
+	SetModEventMask(0);
+	SetEvtHandlerEnabled(false);
+	if (collecting_undo)
+		SetUndoCollection(false);
+
+	SetTargetRange(0, GetTextLength());
+	ReplaceTargetRaw(text.data(), static_cast<int>(text.size()));
+	SetSelection(selection_start, selection_end);
+
+	if (collecting_undo)
+		SetUndoCollection(true);
+	SetEvtHandlerEnabled(event_handler_enabled);
+	SetModEventMask(mod_event_mask);
+
+	line_text = text;
+	UpdateStyle();
+	UpdateBraceHighlight();
+	Refresh(false);
+}
+
+void SubsStyledTextEditCtrl::CancelTextDragPreview() {
+	if (!drag_preview_active)
+		return;
+
+	SetTextDragPreview(drag_source_text, drag_source_start, drag_source_end);
+	drag_preview_active = false;
+	drag_preview_changed = false;
+}
+
+void SubsStyledTextEditCtrl::OnDragOver(wxStyledTextEvent &event) {
+	if (!drag_preview_active) {
+		event.Skip();
+		return;
+	}
+
+	int const drop_position = MapTextDragPreviewPosition(event.GetPosition());
+	bool const copy = event.GetDragResult() == wxDragCopy;
+	bool const move = event.GetDragResult() == wxDragMove;
+	if ((move || copy) && drop_position == drag_preview_drop && copy == drag_preview_copy) {
+		event.SetPosition(drop_position);
+		event.Skip();
+		return;
+	}
+	if (!move && !copy) {
+		SetTextDragPreview(drag_source_text, drag_source_start, drag_source_end);
+		drag_preview_drop = drop_position;
+		drag_preview_copy = copy;
+		drag_preview_changed = false;
+		event.Skip();
+		return;
+	}
+
+	auto preview = aegisub::subtitle_edit_ops::BuildTextDragPreview(
+		drag_source_text,
+		drag_source_start,
+		drag_source_end,
+		drop_position,
+		copy);
+	SetTextDragPreview(preview.text, preview.selection_start, preview.selection_end);
+	drag_preview_drop = drop_position;
+	drag_preview_copy = copy;
+	drag_preview_changed = preview.changed;
+	event.SetPosition(drop_position);
+	event.Skip();
+}
+
+void SubsStyledTextEditCtrl::OnDoDrop(wxStyledTextEvent &event) {
+	if (!drag_preview_active) {
+		event.Skip();
+		return;
+	}
+
+	int const drop_position = MapTextDragPreviewPosition(event.GetPosition());
+	SetTextDragPreview(drag_source_text, drag_source_start, drag_source_end);
+	drag_preview_active = false;
+	drag_preview_changed = false;
+	event.SetPosition(drop_position);
+	event.Skip();
 }
 
 void SubsStyledTextEditCtrl::SetSyntaxStyle(int id, wxFont &font, std::string const& name, wxColor const& default_background) {

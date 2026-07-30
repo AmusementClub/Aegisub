@@ -397,7 +397,7 @@
 			}
 		},
 		"SceneChange" : {
-			"Backend" : "auto",
+			"Backend" : "wwxd",
 			"Cache" : {
 				"Files" : 20,
 				"Size" : 42

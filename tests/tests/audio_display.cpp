@@ -5,6 +5,7 @@
 #include "../../src/audio_display_analysis.h"
 #include "../../src/audio_display_invalidation_planner.h"
 #include "../../src/audio_latest_range_scheduler.h"
+#include "../../src/audio_marker_drag_dead_zone.h"
 #include "../../src/audio_display_source.h"
 #include "../../src/audio_mix_policy.h"
 #include "../../src/audio_spectrum_analysis_cache.h"
@@ -581,4 +582,26 @@ TEST(lagi_audio_display, invalidation_planner_unions_selection_edge_rects) {
 
 	auto const dirty = Planner::PlanSelectionEdgeDirtyRect(1000, 995, 900, 10, 50);
 	EXPECT_EQ((Planner::Rect{ 94, 10, 8, 50 }), dirty);
+}
+
+TEST(lagi_audio_display, marker_drag_dead_zone_ignores_horizontal_jitter) {
+	AudioMarkerDragDeadZone dead_zone(100, 5);
+
+	EXPECT_FALSE(dead_zone.ShouldDrag(95));
+	EXPECT_FALSE(dead_zone.ShouldDrag(105));
+	EXPECT_TRUE(dead_zone.ShouldDrag(106));
+}
+
+TEST(lagi_audio_display, marker_drag_dead_zone_stays_active_after_threshold) {
+	AudioMarkerDragDeadZone dead_zone(100, 5);
+
+	EXPECT_TRUE(dead_zone.ShouldDrag(94));
+	EXPECT_TRUE(dead_zone.ShouldDrag(100));
+}
+
+TEST(lagi_audio_display, marker_drag_dead_zone_can_be_disabled) {
+	AudioMarkerDragDeadZone dead_zone(100, 0);
+
+	EXPECT_FALSE(dead_zone.ShouldDrag(100));
+	EXPECT_TRUE(dead_zone.ShouldDrag(101));
 }

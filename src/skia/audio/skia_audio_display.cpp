@@ -7,6 +7,7 @@
 #include "../../project.h"
 #include "../../audio_controller.h"
 #include "../../audio_colorscheme.h"
+#include "../../audio_marker_drag_dead_zone.h"
 #include "../../audio_renderer_spectrum.h"
 #include "../../audio_timing.h"
 #include "../../include/aegisub/hotkey.h"
@@ -219,6 +220,7 @@ struct SkiaAudioDisplay::Impl {
 	int mouse_position_ms = -1;
 	std::vector<AudioMarker *> dragged_markers;
 	wxMouseButton dragged_button = wxMOUSE_BTN_NONE;
+	AudioMarkerDragDeadZone marker_drag_dead_zone;
 	bool timeline_dragging = false;
 	bool scrollbar_dragging = false;
 	bool middle_seek_active = false;
@@ -1126,6 +1128,8 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 		bool const button_down = impl->dragged_button == wxMOUSE_BTN_LEFT
 			? event.LeftIsDown() : event.RightIsDown();
 		if (button_down && timing) {
+			if (!impl->marker_drag_dead_zone.ShouldDrag(mouse.x))
+				return;
 			if (mouse.x < 0)
 				ScrollBy(mouse.x - client_width / 20);
 			else if (mouse.x >= client_width)
@@ -1140,6 +1144,7 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 		else {
 			impl->dragged_markers.clear();
 			impl->dragged_button = wxMOUSE_BTN_NONE;
+			impl->marker_drag_dead_zone.Reset(0, 0);
 			SetCursor(wxNullCursor);
 			if (HasCapture()) ReleaseMouse();
 		}
@@ -1193,6 +1198,8 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 			: timing->OnRightClick(time_from_x(mouse.x), event.CmdDown(), sensitivity, snap);
 		if (!impl->dragged_markers.empty()) {
 			impl->dragged_button = event.LeftDown() ? wxMOUSE_BTN_LEFT : wxMOUSE_BTN_RIGHT;
+			impl->marker_drag_dead_zone.Reset(
+				mouse.x, OPT_GET("Audio/Drag Dead Zone")->GetInt());
 			impl->mouse_position_ms = -1;
 			if (!HasCapture()) CaptureMouse();
 		}
@@ -1221,6 +1228,7 @@ void SkiaAudioDisplay::OnMouseCaptureLost(wxMouseCaptureLostEvent&) {
 		&& impl->content_scroll_left != impl->scroll_left;
 	impl->dragged_markers.clear();
 	impl->dragged_button = wxMOUSE_BTN_NONE;
+	impl->marker_drag_dead_zone.Reset(0, 0);
 	impl->timeline_dragging = false;
 	impl->scrollbar_dragging = false;
 	if (commit_scrollbar_target)

@@ -53,6 +53,7 @@
 			"Waveform Style" : 0
 		},
 		"Downmixer" : "ConvertToMono",
+		"Drag Dead Zone" : 5,
 		"Drag Timing" : true,
 		"Inactive Lines Display Mode" : 3,
 		"Karaoke" : {

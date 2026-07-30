@@ -31,6 +31,7 @@
 #include "audio_display.h"
 
 #include "audio_controller.h"
+#include "audio_marker_drag_dead_zone.h"
 #include "audio_renderer.h"
 #include "audio_renderer_spectrum.h"
 #include "audio_renderer_waveform.h"
@@ -551,19 +552,21 @@ class AudioMarkerInteractionObject final : public AudioDisplayInteractionObject 
 	bool default_snap = OPT_GET("Audio/Snap/Enable")->GetBool();
 	// Range in pixels to snap at
 	int snap_range = OPT_GET("Audio/Snap/Distance")->GetInt();
+	AudioMarkerDragDeadZone drag_dead_zone;
 
 public:
-	AudioMarkerInteractionObject(std::vector<AudioMarker*> markers, AudioTimingController *timing_controller, AudioDisplay *display, wxMouseButton button_used)
+	AudioMarkerInteractionObject(std::vector<AudioMarker*> markers, AudioTimingController *timing_controller, AudioDisplay *display, wxMouseButton button_used, int initial_x)
 	: markers(std::move(markers))
 	, timing_controller(timing_controller)
 	, display(display)
 	, button_used(button_used)
+	, drag_dead_zone(initial_x, OPT_GET("Audio/Drag Dead Zone")->GetInt())
 	{
 	}
 
 	bool OnMouseEvent(wxMouseEvent &event) override
 	{
-		if (event.Dragging())
+		if (event.Dragging() && drag_dead_zone.ShouldDrag(event.GetPosition().x))
 		{
 			timing_controller->OnMarkerDrag(
 				markers,
@@ -1500,7 +1503,7 @@ void AudioDisplay::OnMouseEvent(wxMouseEvent& event)
 		if (markers.size())
 		{
 			RemoveTrackCursor();
-			audio_marker = agi::make_unique<AudioMarkerInteractionObject>(markers, timing, this, (wxMouseButton)event.GetButton());
+			audio_marker = agi::make_unique<AudioMarkerInteractionObject>(markers, timing, this, (wxMouseButton)event.GetButton(), mouse_x);
 			SetDraggedObject(audio_marker.get());
 			return;
 		}

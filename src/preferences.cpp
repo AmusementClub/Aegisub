@@ -572,6 +572,11 @@ void BuildAudioPage(OptionPage *p) {
 		aegisub::audio_playback_section::MaximumDurationMs);
 
 	binder->AddInt(_("Marker drag-start sensitivity (px)"), "Audio/Start Drag Sensitivity", 1, 15);
+	auto *drag_dead_zone = binder->AddInt(
+		_("Marker drag dead zone (px)"), "Audio/Drag Dead Zone", 0, 50);
+	drag_dead_zone->SetHelpString(_(
+		"Horizontal mouse movement ignored before marker dragging begins. "
+		"Set to 0 to require any horizontal movement."));
 	binder->AddInt(_("Line boundary thickness (px)"), "Audio/Line Boundaries Thickness", 1, 5);
 	binder->AddInt(_("Maximum snap distance (px)"), "Audio/Snap/Distance", 0, 25);
 

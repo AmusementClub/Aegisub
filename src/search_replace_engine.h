@@ -14,9 +14,10 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
-#include "subtitle_matcher.h"
+#include "subtitle_match_report.h"
 
 #include <string>
+#include <vector>
 
 namespace agi { struct Context; }
 class AssDialogue;
@@ -26,6 +27,9 @@ class SearchReplaceEngine {
 	bool initialized = false;
 	SearchReplaceSettings settings;
 
+	std::vector<aegisub::subtitle_match_report::MatchHit> last_matches;
+	std::vector<aegisub::subtitle_match_report::ReplacementHit> last_replacements;
+
 	bool FindReplace(bool replace);
 	void Replace(AssDialogue *line, MatchState &ms);
 
@@ -33,8 +37,16 @@ public:
 	bool FindNext() { return FindReplace(false); }
 	bool ReplaceNext() { return FindReplace(true); }
 	bool ReplaceAll();
+	bool FindAll();
 
 	void Configure(SearchReplaceSettings const& new_settings);
+
+	std::vector<aegisub::subtitle_match_report::MatchHit> const& GetLastMatches() const {
+		return last_matches;
+	}
+	std::vector<aegisub::subtitle_match_report::ReplacementHit> const& GetLastReplacements() const {
+		return last_replacements;
+	}
 
 	static std::function<MatchState (const AssDialogue*, size_t)> GetMatcher(SearchReplaceSettings const& settings) {
 		return MakeSubtitleMatcher(settings);

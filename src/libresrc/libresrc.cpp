@@ -64,3 +64,7 @@ wxIcon libresrc_geticon(const unsigned char *buff, size_t size) {
 	icon.CopyFromBitmap(wxBitmap(wxImage(mem)));
 	return icon;
 }
+
+std::pair<const char *, size_t> libresrc_getconfig(const unsigned char *data, size_t size) {
+	return {reinterpret_cast<const char *>(data), size};
+}

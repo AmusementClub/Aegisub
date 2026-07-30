@@ -56,7 +56,7 @@ void InitializeRuntimePathsAndOptions(AppRuntimeInitOptions const& options) {
 	try {
 		auto conf_local(config::path->Decode("?data/config.json"));
 		std::unique_ptr<std::istream> local_config(agi::io::Open(conf_local));
-		config::opt = new agi::Options(conf_local, GET_DEFAULT_CONFIG(default_config));
+		config::opt = new agi::Options(conf_local, libresrc_getconfig(default_config, default_config_size));
 		config::path->SetToken("?user", config::path->Decode("?data"));
 		config::path->SetToken("?local", config::path->Decode("?data"));
 		crash_writer::Initialize(config::path->Decode("?user"));
@@ -67,9 +67,9 @@ void InitializeRuntimePathsAndOptions(AppRuntimeInitOptions const& options) {
 #endif
 
 	if (!config::opt)
-		config::opt = new agi::Options(config::path->Decode("?user/config.json"), GET_DEFAULT_CONFIG(default_config));
+		config::opt = new agi::Options(config::path->Decode("?user/config.json"), libresrc_getconfig(default_config, default_config_size));
 
-	boost::interprocess::ibufferstream stream((const char *)default_config_platform, sizeof(default_config_platform));
+	boost::interprocess::ibufferstream stream((const char *)default_config_platform, default_config_platform_size);
 	config::opt->ConfigNext(stream);
 
 #ifdef _WIN32
@@ -83,7 +83,7 @@ void InitializeRuntimePathsAndOptions(AppRuntimeInitOptions const& options) {
 	}
 #endif
 
-	config::mru = new agi::MRUManager(config::path->Decode("?user/mru.json"), GET_DEFAULT_CONFIG(default_mru), config::opt);
+	config::mru = new agi::MRUManager(config::path->Decode("?user/mru.json"), libresrc_getconfig(default_mru, default_mru_size), config::opt);
 }
 
 void InitializeRuntimeLoggingAndPerfTrace() {

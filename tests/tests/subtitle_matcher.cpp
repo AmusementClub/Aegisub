@@ -112,3 +112,18 @@ TEST(subtitle_matcher, reports_match_offsets) {
 	EXPECT_EQ(6u, ms.start);
 	EXPECT_EQ(11u, ms.end);
 }
+
+TEST(subtitle_matcher, regex_replacement_scope_distinguishes_replace_next_and_all) {
+	auto s = base_settings("a");
+	s.use_regex = true;
+	s.replace_with = "$'";
+	auto matcher = MakeSubtitleMatcher(s);
+	AssDialogue line = make_line("abc");
+
+	auto ms = matcher(&line, 0);
+	ASSERT_TRUE(ms);
+	EXPECT_EQ("", ExpandSubtitleMatchReplacement(
+		ms, s, SubtitleMatchReplacementScope::MATCH_ONLY));
+	EXPECT_EQ("bc", ExpandSubtitleMatchReplacement(
+		ms, s, SubtitleMatchReplacementScope::SEARCH_CONTEXT));
+}

@@ -164,7 +164,7 @@ agi::hotkey::Hotkey *inst = nullptr;
 void init() {
 	inst = new agi::hotkey::Hotkey(
 		config::path->Decode("?user/hotkey.json"),
-		GET_DEFAULT_CONFIG(default_hotkey));
+		libresrc_getconfig(default_hotkey, default_hotkey_size));
 
 	auto migrations = OPT_GET("App/Hotkey Migrations")->GetListString();
 

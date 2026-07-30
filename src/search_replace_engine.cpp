@@ -30,7 +30,7 @@
 
 namespace {
 static const size_t bad_pos = -1;
-static const MatchState bad_match{nullptr, 0, bad_pos};
+static const MatchState bad_match{0, bad_pos};
 
 auto get_dialogue_field(SearchReplaceSettings::Field field) -> decltype(&AssDialogueBase::Text) {
 	switch (field) {
@@ -61,11 +61,8 @@ void SearchReplaceEngine::Replace(AssDialogue *diag, MatchState &ms) {
 	auto& diag_field = diag->*get_dialogue_field(settings.field);
 	auto text = diag_field.get();
 
-	std::string replacement = settings.replace_with;
-	if (ms.re) {
-		auto to_replace = text.substr(ms.start, ms.end - ms.start);
-		replacement = u32regex_replace(to_replace, *ms.re, replacement, boost::format_first_only);
-	}
+	std::string replacement = ExpandSubtitleMatchReplacement(
+		ms, settings, SubtitleMatchReplacementScope::MATCH_ONLY);
 
 	agi::util::strings::replace_range_inplace(text, ms.start, ms.end, replacement);
 	diag_field = std::move(text);
@@ -75,6 +72,10 @@ void SearchReplaceEngine::Replace(AssDialogue *diag, MatchState &ms) {
 bool SearchReplaceEngine::FindReplace(bool replace) {
 	if (!initialized)
 		return false;
+
+	// Find/Replace Next do not produce a report for the results panel.
+	last_matches.clear();
+	last_replacements.clear();
 
 	auto core = context->GetCore();
 	auto matches = GetMatcher(settings);
@@ -120,14 +121,7 @@ bool SearchReplaceEngine::FindReplace(bool replace) {
 
 	do {
 		if (selection_only && !sel.count(&*it)) continue;
-		if (settings.ignore_comments && it->Comment) continue;
-		if (!settings.match_styles.empty()) {
-			bool ok = false;
-			for (auto const& s : settings.match_styles) {
-				if (it->Style.get() == s) { ok = true; break; }
-			}
-			if (!ok) continue;
-		}
+		if (!aegisub::subtitle_match_report::LineIsEligible(*it, settings)) continue;
 
 		if (MatchState ms = matches(&*it, pos)) {
 			if (selection_only)
@@ -151,52 +145,52 @@ bool SearchReplaceEngine::FindReplace(bool replace) {
 	return true;
 }
 
+bool SearchReplaceEngine::FindAll() {
+	if (!initialized)
+		return false;
+
+	last_matches.clear();
+	last_replacements.clear();
+
+	auto core = context->GetCore();
+
+	std::vector<AssDialogue const *> selection;
+	if (settings.limit_to == SearchReplaceSettings::Limit::SELECTED) {
+		auto const& sel = core.selectionController->GetSelectedSet();
+		selection.assign(sel.begin(), sel.end());
+	}
+
+	last_matches = aegisub::subtitle_match_report::FindAll(core.ass->Events, settings, selection);
+
+	if (last_matches.empty())
+		context->ShowInfo(from_wx(_("No matches found.")));
+
+	return true;
+}
+
 bool SearchReplaceEngine::ReplaceAll() {
 	if (!initialized)
 		return false;
 
-	size_t count = 0;
+	last_matches.clear();
+	last_replacements.clear();
 
 	auto core = context->GetCore();
-	auto matches = GetMatcher(settings);
+	auto enumerate = MakeSubtitleMatchEnumerator(settings);
 
 	auto const& sel = core.selectionController->GetSelectedSet();
 	bool selection_only = settings.limit_to == SearchReplaceSettings::Limit::SELECTED;
 
 	for (auto& diag : core.ass->Events) {
 		if (selection_only && !sel.count(&diag)) continue;
-		if (settings.ignore_comments && diag.Comment) continue;
-		if (!settings.match_styles.empty()) {
-			bool ok = false;
-			for (auto const& s : settings.match_styles) {
-				if (diag.Style.get() == s) { ok = true; break; }
-			}
-			if (!ok) continue;
-		}
+		if (!aegisub::subtitle_match_report::LineIsEligible(diag, settings)) continue;
 
-		if (settings.use_regex) {
-			if (MatchState ms = matches(&diag, 0)) {
-				auto& diag_field = diag.*get_dialogue_field(settings.field);
-				std::string const& text = diag_field.get();
-				count += std::distance(
-					boost::u32regex_iterator<std::string::const_iterator>(begin(text), end(text), *ms.re),
-					boost::u32regex_iterator<std::string::const_iterator>());
-				diag_field = u32regex_replace(text, *ms.re, settings.replace_with);
-			}
-			continue;
-		}
-
-		size_t pos = 0;
-		while (MatchState ms = matches(&diag, pos)) {
-			++count;
-			Replace(&diag, ms);
-			pos = ms.end;
-		}
+		aegisub::subtitle_match_report::ReplaceInLine(diag, settings, enumerate, last_replacements);
 	}
 
-	if (count > 0) {
+	if (!last_replacements.empty()) {
 		core.ass->Commit(from_wx(_("replace")), AssFile::COMMIT_DIAG_TEXT);
-		context->ShowInfo(from_wx(fmt_plural(count, "One match was replaced.", "%d matches were replaced.", (int)count)));
+		// Hits go to the results panel; do not show a modal success box first.
 	}
 	else {
 		context->ShowInfo(from_wx(_("No matches found.")));

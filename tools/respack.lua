@@ -40,6 +40,7 @@ local out_h = try_open(arg[3], 'w')
 local path = arg[1]:match'(.*/).*' or ''
 
 out_cpp:write('#include "libresrc.h"\n')
+out_h:write('#include <cstddef>\n\n')
 
 for line in manifest:lines() do
   if line:find('.') then
@@ -59,7 +60,13 @@ for line in manifest:lines() do
       end
     end
     out_cpp:write('};\n')
-    out_h:write(string.format('extern const unsigned char %s[%d];\n', id, len))
+    if id:match('^default_') then
+      out_cpp:write(string.format('const std::size_t %s_size = sizeof(%s);\n', id, id))
+      out_h:write(string.format('extern const unsigned char %s[];\n', id))
+      out_h:write(string.format('extern const std::size_t %s_size;\n', id))
+    else
+      out_h:write(string.format('extern const unsigned char %s[%d];\n', id, len))
+    end
     file:close()
   end
 end

@@ -1620,7 +1620,7 @@ void Preferences::OnResetDefault(wxCommandEvent&) {
 	}
 	config::opt->Flush();
 
-	agi::hotkey::Hotkey def_hotkeys("", GET_DEFAULT_CONFIG(default_hotkey));
+	agi::hotkey::Hotkey def_hotkeys("", libresrc_getconfig(default_hotkey, default_hotkey_size));
 	hotkey::inst->SetHotkeyMap(def_hotkeys.GetHotkeyMap());
 
 	// Close and reopen the dialog to update all the controls with the new values

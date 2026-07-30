@@ -272,7 +272,7 @@ class ScopedTemporaryMru final {
 public:
 	explicit ScopedTemporaryMru(agi::fs::path const& path) {
 		previous_mru = config::mru;
-		temporary_mru = new agi::MRUManager(path, GET_DEFAULT_CONFIG(default_mru), config::opt);
+		temporary_mru = new agi::MRUManager(path, libresrc_getconfig(default_mru, default_mru_size), config::opt);
 		config::mru = temporary_mru;
 	}
 

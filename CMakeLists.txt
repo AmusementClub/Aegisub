@@ -565,6 +565,7 @@ add_custom_command(
         "${PROJECT_SOURCE_DIR}/src/libresrc/default_mru.json"
         "${PROJECT_SOURCE_DIR}/src/libresrc/default_toolbar.json"
         "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config_platform.json"
+        "${PROJECT_SOURCE_DIR}/tools/respack.lua"
     COMMAND luajit-minilua "${PROJECT_SOURCE_DIR}/tools/respack.lua" manifest.respack default_config.cpp default_config.h
     WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc"
 )
@@ -576,6 +577,17 @@ add_custom_command(
         "${PROJECT_SOURCE_DIR}/tools/respack.lua"
     COMMAND luajit-minilua ../../tools/respack.lua manifest.respack "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.cpp" "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.h"
     WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}/src/bitmaps
+)
+
+# Visual Studio can evaluate C++ compilation before custom commands in the
+# same project have updated generated headers. Generate resources in a
+# dependency target so header timestamps are current before compile checks.
+add_custom_target(aegisub_generated_resources
+    DEPENDS
+        "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config.cpp"
+        "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config.h"
+        "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.cpp"
+        "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.h"
 )
 
 add_subdirectory("vendor/csri")
@@ -927,6 +939,7 @@ set(AEGISUB_CORE_SOURCES
 )
 
 add_library(aegisub_core STATIC ${AEGISUB_CORE_SOURCES})
+add_dependencies(aegisub_core aegisub_generated_resources)
 target_sources(aegisub_core PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/bitmap.h"
     "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc/default_config.h"
@@ -1080,6 +1093,7 @@ add_executable(Aegisub WIN32
     src/wx_translation_service.cpp
     src/context.cpp
     src/search_replace_engine.cpp
+    src/subtitle_match_report.cpp
     src/subtitle_matcher.cpp
     src/subs_controller.cpp
     src/command/app.cpp
@@ -1121,6 +1135,7 @@ add_executable(Aegisub WIN32
     src/dialog_properties.cpp
     src/dialog_resample.cpp
     src/dialog_search_replace.cpp
+    src/dialog_search_results.cpp
     src/dialog_selected_choices.cpp
     src/dialog_selection.cpp
     src/dialog_shift_times.cpp
@@ -1242,6 +1257,7 @@ add_executable(Aegisub WIN32
     ${AEGISUB_SHARED_EXE_ENTRY_SOURCES}
     ${AEGISUB_SHARED_HEADLESS_ENTRY_BOOTSTRAP_SOURCES}
 )
+add_dependencies(Aegisub aegisub_generated_resources)
 if(WITH_SKIA_VIDEO_TOOLS OR WITH_SKIA_AUDIO_DISPLAY)
     target_sources(Aegisub PRIVATE
         src/skia/skia_gl_contract.cpp

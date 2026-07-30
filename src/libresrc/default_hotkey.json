@@ -170,6 +170,9 @@
 		"subtitle/find/next" : [
 			"F3"
 		],
+		"subtitle/find/all" : [
+			"Ctrl-Shift-F"
+		],
 		"subtitle/new" : [
 			"Ctrl-N"
 		],

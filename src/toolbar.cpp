@@ -53,7 +53,7 @@ namespace {
 	json::Object const& get_root() {
 		static json::Object root;
 		if (root.empty()) {
-			boost::interprocess::ibufferstream stream((const char *)default_toolbar, sizeof(default_toolbar));
+			boost::interprocess::ibufferstream stream((const char *)default_toolbar, default_toolbar_size);
 			root = std::move(static_cast<json::Object&>(agi::json_util::parse(stream)));
 		}
 		return root;

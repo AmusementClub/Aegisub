@@ -24,6 +24,7 @@
 #include "ass_dialogue.h"
 #include "ass_file.h"
 #include "compat.h"
+#include "dialog_search_results.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "options.h"
@@ -126,12 +127,14 @@ DialogSearchReplace::DialogSearchReplace(agi::Context* c, bool replace)
 	filter_sizer->Add(style_filter_sizer, wxSizerFlags(1).Expand());
 
 	auto find_next = new wxButton(this, -1, _("&Find next"));
+	auto find_all = new wxButton(this, -1, _("Find &all"));
 	auto replace_next = new wxButton(this, -1, _("Replace &next"));
 	auto replace_all = new wxButton(this, -1, _("Replace &all"));
 	find_next->SetDefault();
 
 	auto button_sizer = new wxBoxSizer(wxVERTICAL);
 	button_sizer->Add(find_next, wxSizerFlags().Border(wxBOTTOM));
+	button_sizer->Add(find_all, wxSizerFlags().Border(wxBOTTOM));
 	button_sizer->Add(replace_next, wxSizerFlags().Border(wxBOTTOM));
 	button_sizer->Add(replace_all, wxSizerFlags().Border(wxBOTTOM));
 	button_sizer->Add(new wxButton(this, wxID_CANCEL));
@@ -159,6 +162,7 @@ DialogSearchReplace::DialogSearchReplace(agi::Context* c, bool replace)
 	if (has_replace)
 	  replace_edit->Bind(wxEVT_TEXT_ENTER, std::bind(&DialogSearchReplace::FindReplace, this, &SearchReplaceEngine::ReplaceNext));
 	find_next->Bind(wxEVT_BUTTON, std::bind(&DialogSearchReplace::FindReplace, this, &SearchReplaceEngine::FindNext));
+	find_all->Bind(wxEVT_BUTTON, std::bind(&DialogSearchReplace::FindReplace, this, &SearchReplaceEngine::FindAll));
 	replace_next->Bind(wxEVT_BUTTON, std::bind(&DialogSearchReplace::FindReplace, this, &SearchReplaceEngine::ReplaceNext));
 	replace_all->Bind(wxEVT_BUTTON, std::bind(&DialogSearchReplace::FindReplace, this, &SearchReplaceEngine::ReplaceAll));
 
@@ -202,6 +206,22 @@ void DialogSearchReplace::FindReplace(bool (SearchReplaceEngine::*func)()) {
 		return;
 	}
 
+	// Find All / Replace All store reports on the engine; open the panel here
+	// rather than from the engine so dialog lifetime stays in dialog code.
+	// Empty results must dismiss any previous panel so the UI cannot keep
+	// showing a report from an earlier query.
+	bool results_shown = false;
+	if (!core.search->GetLastReplacements().empty()) {
+		DialogSearchResults::Show(c, core.search->GetLastReplacements());
+		results_shown = true;
+	}
+	else if (!core.search->GetLastMatches().empty()) {
+		DialogSearchResults::Show(c, core.search->GetLastMatches());
+		results_shown = true;
+	}
+	else if (func == &SearchReplaceEngine::FindAll || func == &SearchReplaceEngine::ReplaceAll)
+		DialogSearchResults::Dismiss(c);
+
 	config::mru->Add("Find", settings->find);
 	if (has_replace)
 		config::mru->Add("Replace", settings->replace_with);
@@ -215,7 +235,8 @@ void DialogSearchReplace::FindReplace(bool (SearchReplaceEngine::*func)()) {
 	OPT_SET("Tool/Search Replace/Affect")->SetInt(static_cast<int>(settings->limit_to));
 
 	UpdateDropDowns();
-	find_edit->SetFocus();
+	if (!results_shown)
+		find_edit->SetFocus();
 }
 
 static void update_mru(wxComboBox *cb, const char *mru_name) {

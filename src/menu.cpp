@@ -396,7 +396,7 @@ json::Object const& get_menus_root() {
 	if (!root.empty()) return root;
 
 	try {
-		root = std::move(static_cast<json::Object&>(agi::json_util::file(config::path->Decode("?user/menu.json"), GET_DEFAULT_CONFIG(default_menu))));
+		root = std::move(static_cast<json::Object&>(agi::json_util::file(config::path->Decode("?user/menu.json"), libresrc_getconfig(default_menu, default_menu_size))));
 		return root;
 	}
 	catch (json::Reader::ParseException const& e) {

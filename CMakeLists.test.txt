@@ -131,6 +131,7 @@ if(GTEST_FOUND)
         src/vobsub_packet_stream.cpp
         src/text_file_reader.cpp
         src/string_codec.cpp
+        src/subtitle_match_report.cpp
         src/subtitle_matcher.cpp
         src/time_display_mode.cpp
         src/threaded_ui_timer.cpp
@@ -234,6 +235,7 @@ if(GTEST_FOUND)
         tests/tests/subtitle_grid_selection_policy.cpp
         tests/tests/subtitle_timing_ops.cpp
         tests/tests/subtitle_matcher.cpp
+        tests/tests/subtitle_match_report.cpp
         tests/tests/syntax_highlight.cpp
         tests/tests/thesaurus.cpp
         tests/tests/time.cpp

@@ -36,6 +36,7 @@
 #include "../charset_detect.h"
 #include "../compat.h"
 #include "../dialog_search_replace.h"
+#include "../dialog_search_results.h"
 #include "../dialogs.h"
 #include "../frame_main.h"
 #include "../include/aegisub/context.h"
@@ -137,6 +138,37 @@ struct subtitle_find_next final : public Command {
 		core.videoController->Stop();
 		if (!core.search->FindNext())
 			DialogSearchReplace::Show(c, false);
+	}
+};
+
+struct subtitle_find_all final : public Command {
+	CMD_NAME("subtitle/find/all")
+	STR_MENU("Find &All")
+	STR_DISP("Find All")
+	STR_HELP("List every match of the last search")
+
+	void operator()(agi::Context *c) override {
+		auto core = c->GetCore();
+		core.videoController->Stop();
+		try {
+			if (!core.search->FindAll()) {
+				DialogSearchReplace::Show(c, false);
+				return;
+			}
+		}
+		catch (agi::Exception const& e) {
+			c->ShowError(e.GetMessage());
+			return;
+		}
+		catch (std::exception const& e) {
+			c->ShowError(e.what());
+			return;
+		}
+
+		if (!core.search->GetLastMatches().empty())
+			DialogSearchResults::Show(c, core.search->GetLastMatches());
+		else
+			DialogSearchResults::Dismiss(c);
 	}
 };
 
@@ -484,6 +516,7 @@ namespace cmd {
 		reg(agi::make_unique<subtitle_attachment>());
 		reg(agi::make_unique<subtitle_find>());
 		reg(agi::make_unique<subtitle_find_next>());
+		reg(agi::make_unique<subtitle_find_all>());
 		reg(agi::make_unique<subtitle_insert_after>());
 		reg(agi::make_unique<subtitle_insert_after_videotime>());
 		reg(agi::make_unique<subtitle_insert_before>());

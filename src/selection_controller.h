@@ -53,7 +53,6 @@ class SelectionController {
 	bool restoring_selection_history = false;
 
 	int GetActiveLineId() const;
-	AssDialogue *GetDialogueById(int line_id) const;
 	bool IsLiveDialogueId(int line_id) const;
 	aegisub::selection_navigation_history::History::LineIdIsValid GetLiveLineValidator() const;
 	void RecordActiveLineChange(AssDialogue *old_line, AssDialogue *new_line);
@@ -61,6 +60,9 @@ class SelectionController {
 
 public:
 	SelectionController(agi::Context *context);
+
+	/// Resolve a live dialogue by AssDialogue::Id, or nullptr if it is gone.
+	AssDialogue *GetDialogueById(int line_id) const;
 
 	/// @brief Change the active line
 	/// @param new_line Subtitle line to become the new active line

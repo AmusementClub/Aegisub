@@ -71,6 +71,7 @@
         {},
         { "command" : "subtitle/find" },
         { "command" : "subtitle/find/next" },
+        { "command" : "subtitle/find/all" },
         { "command" : "edit/find_replace" },
         { "command" : "subtitle/spellcheck" }
     ],

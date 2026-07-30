@@ -22,6 +22,8 @@
 /// unit-tested without pulling in the GUI/context dependencies that the rest
 /// of the engine requires.
 
+#pragma once
+
 #include <functional>
 #include <boost/regex/icu.hpp>
 #include <string>
@@ -31,10 +33,26 @@ class AssDialogue;
 
 /// Result of a single match attempt against a dialogue line.
 struct MatchState {
-	boost::u32regex *re;
-	size_t start, end;
+	/// Byte range in the original field text (after NFC/tag mapping).
+	size_t start = static_cast<size_t>(-1);
+	size_t end = static_cast<size_t>(-1);
+	/// Exclusive end of this match on the searchable surface (NFC and/or
+	/// tag-stripped). Full-line enumeration advances in this space so combining
+	/// reordering cannot drop earlier original characters.
+	size_t search_end = 0;
+	/// Regex replacements are expanded while the successful match result and
+	/// its ICU traits are still available. Replace Next and Replace All have
+	/// different prefix/suffix semantics, so keep both expansions.
+	bool has_regex_replacement = false;
+	std::string match_only_replacement;
+	std::string search_context_replacement;
 
-	operator bool() const { return end != (size_t)-1; }
+	operator bool() const { return end != static_cast<size_t>(-1); }
+};
+
+enum class SubtitleMatchReplacementScope {
+	MATCH_ONLY,
+	SEARCH_CONTEXT
 };
 
 /// All options that govern how the find/replace engine matches text.
@@ -74,6 +92,27 @@ struct SearchReplaceSettings {
 /// Note on Unicode normalization: when match_case is set, neither the needle
 /// nor the haystack is normalized, so the comparison is byte-exact. Otherwise
 /// both are NFC-normalized so that visually identical strings in different
-/// Unicode forms still match.
+/// Unicode forms still match. MatchState offsets are always in the original
+/// field text (NFC ranges are mapped back, including combining reordering).
 std::function<MatchState(const AssDialogue *, size_t)>
 MakeSubtitleMatcher(SearchReplaceSettings const &settings);
+
+/// Build a reusable whole-line enumerator. Unlike repeatedly calling
+/// MakeSubtitleMatcher with advancing original offsets, this preserves
+/// searchable-surface order across NFC reordering and Boost's empty-match
+/// retry semantics. Regex patterns are compiled once when the enumerator is
+/// created, then reused for every line.
+using SubtitleMatchEnumerator = std::function<std::vector<MatchState>(AssDialogue const&)>;
+SubtitleMatchEnumerator
+MakeSubtitleMatchEnumerator(SearchReplaceSettings const& settings);
+
+/// Enumerate every match on one line in searchable-surface order (NFC /
+/// tagless left-to-right), with Boost-style empty-match handling
+/// (retry same position with match_not_initial_null before advancing).
+std::vector<MatchState>
+EnumerateLineMatches(AssDialogue const& line, SearchReplaceSettings const& settings);
+
+/// Return the replacement expanded by the matcher for the requested scope.
+std::string ExpandSubtitleMatchReplacement(MatchState const& ms,
+                                           SearchReplaceSettings const& settings,
+                                           SubtitleMatchReplacementScope scope);

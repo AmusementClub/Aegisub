@@ -19,6 +19,7 @@
 #include "preferences.h"
 
 #include "ass_style_storage.h"
+#include "audio_playback_section.h"
 #include "audio_provider_factory.h"
 #include "audio_renderer_waveform.h"
 #include "command/command.h"
@@ -549,6 +550,26 @@ void BuildAudioPage(OptionPage *p) {
 	binder->AddInt(_("Default timing length (ms)"), "Timing/Default Duration", 0, 36000);
 	binder->AddInt(_("Default lead-in length (ms)"), "Audio/Lead/IN", 0, 36000);
 	binder->AddInt(_("Default lead-out length (ms)"), "Audio/Lead/OUT", 0, 36000);
+	binder->AddInt(
+		_("Playback length before selection (ms)"),
+		aegisub::audio_playback_section::BeforeOption,
+		0,
+		aegisub::audio_playback_section::MaximumDurationMs);
+	binder->AddInt(
+		_("Playback length after selection (ms)"),
+		aegisub::audio_playback_section::AfterOption,
+		0,
+		aegisub::audio_playback_section::MaximumDurationMs);
+	binder->AddInt(
+		_("Playback length at selection start (ms)"),
+		aegisub::audio_playback_section::BeginOption,
+		0,
+		aegisub::audio_playback_section::MaximumDurationMs);
+	binder->AddInt(
+		_("Playback length at selection end (ms)"),
+		aegisub::audio_playback_section::EndOption,
+		0,
+		aegisub::audio_playback_section::MaximumDurationMs);
 
 	binder->AddInt(_("Marker drag-start sensitivity (px)"), "Audio/Start Drag Sensitivity", 1, 15);
 	binder->AddInt(_("Line boundary thickness (px)"), "Audio/Line Boundaries Thickness", 1, 5);

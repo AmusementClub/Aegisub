@@ -69,6 +69,14 @@
 		"Medusa Timing Hotkeys" : false,
 		"Next Line on Commit" : true,
 		"Player" : "",
+		"Play" : {
+			"Section" : {
+				"After" : 500,
+				"Before" : 500,
+				"Begin" : 500,
+				"End" : 500
+			}
+		},
 		"Plays When Stepping Video" : false,
 		"Provider" : "ffmpegsource",
 		"Renderer" : {

@@ -36,6 +36,7 @@
 #include "../audio_box.h"
 #include "../audio_controller.h"
 #include "../audio_karaoke.h"
+#include "../audio_playback_section.h"
 #include "../audio_timing.h"
 #include "../compat.h"
 #include "../include/aegisub/context.h"
@@ -54,6 +55,11 @@
 
 namespace {
 	using cmd::Command;
+	using namespace aegisub::audio_playback_section;
+
+int playback_section_duration(char const *option_name) {
+	return NormalizeDuration(config::GetIntOptionOrDefault(option_name, DefaultDurationMs));
+}
 
 agi::OpenFileDialogRequest make_open_audio_file_request() {
 	return {
@@ -296,62 +302,64 @@ struct audio_stop final : public Command {
 struct audio_play_before final : public validate_audio_open {
 	CMD_NAME("audio/play/selection/before")
 	CMD_ICON(button_playfivehbefore)
-	STR_MENU("Play 500 ms before selection")
-	STR_DISP("Play 500 ms before selection")
-	STR_HELP("Play 500 ms before selection")
+	STR_MENU("Play before selection")
+	STR_DISP("Play before selection")
+	STR_HELP("Play the configured duration before selection")
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
 		core.videoController->Stop();
-		int begin = core.audioController->GetPrimaryPlaybackRange().begin();
-		core.audioController->PlayRange(TimeRange(begin - 500, begin));
+		auto const selection = core.audioController->GetPrimaryPlaybackRange();
+		auto const range = Before(selection.begin(), playback_section_duration(BeforeOption));
+		core.audioController->PlayRange(TimeRange(range.begin, range.end));
 	}
 };
 
 struct audio_play_after final : public validate_audio_open {
 	CMD_NAME("audio/play/selection/after")
 	CMD_ICON(button_playfivehafter)
-	STR_MENU("Play 500 ms after selection")
-	STR_DISP("Play 500 ms after selection")
-	STR_HELP("Play 500 ms after selection")
+	STR_MENU("Play after selection")
+	STR_DISP("Play after selection")
+	STR_HELP("Play the configured duration after selection")
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
 		core.videoController->Stop();
-		int end = core.audioController->GetPrimaryPlaybackRange().end();
-		core.audioController->PlayRange(TimeRange(end, end + 500));
+		auto const selection = core.audioController->GetPrimaryPlaybackRange();
+		auto const range = After(selection.end(), playback_section_duration(AfterOption));
+		core.audioController->PlayRange(TimeRange(range.begin, range.end));
 	}
 };
 
 struct audio_play_end final : public validate_audio_open {
 	CMD_NAME("audio/play/selection/end")
 	CMD_ICON(button_playlastfiveh)
-	STR_MENU("Play last 500 ms of selection")
-	STR_DISP("Play last 500 ms of selection")
-	STR_HELP("Play last 500 ms of selection")
+	STR_MENU("Play end of selection")
+	STR_DISP("Play end of selection")
+	STR_HELP("Play the configured duration at the end of the selection")
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
 		core.videoController->Stop();
-		TimeRange times(core.audioController->GetPrimaryPlaybackRange());
-		core.audioController->PlayToEndOfPrimary(times.end() - std::min(500, times.length()));
+		auto const selection = core.audioController->GetPrimaryPlaybackRange();
+		auto const range = End(selection.begin(), selection.end(), playback_section_duration(EndOption));
+		core.audioController->PlayToEndOfPrimary(range.begin);
 	}
 };
 
 struct audio_play_begin final : public validate_audio_open {
 	CMD_NAME("audio/play/selection/begin")
 	CMD_ICON(button_playfirstfiveh)
-	STR_MENU("Play first 500 ms of selection")
-	STR_DISP("Play first 500 ms of selection")
-	STR_HELP("Play first 500 ms of selection")
+	STR_MENU("Play beginning of selection")
+	STR_DISP("Play beginning of selection")
+	STR_HELP("Play the configured duration at the beginning of the selection")
 
 	void operator()(agi::Context *c) override {
 		auto core = c->GetCore();
 		core.videoController->Stop();
-		TimeRange times(core.audioController->GetPrimaryPlaybackRange());
-		core.audioController->PlayRange(TimeRange(
-			times.begin(),
-			times.begin() + std::min(500, times.length())));
+		auto const selection = core.audioController->GetPrimaryPlaybackRange();
+		auto const range = Begin(selection.begin(), selection.end(), playback_section_duration(BeginOption));
+		core.audioController->PlayRange(TimeRange(range.begin, range.end));
 	}
 };
 

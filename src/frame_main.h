@@ -84,6 +84,7 @@ class FrameMain : public wxFrame {
 
 	void OnStatusClear(wxTimerEvent &event);
 	void OnSelectedSetChanged();
+	void UpdateSelectionAnchorStatus();
 #ifdef _WIN32
 	void OnFontChangeDebounce(wxTimerEvent &event);
 	void OnAudioOutputRecoveryDebounce(wxTimerEvent &event);

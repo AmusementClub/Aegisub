@@ -129,6 +129,55 @@ struct grid_selection_forward final : public Command {
 	}
 };
 
+struct grid_selection_anchor final : public Command {
+	CMD_NAME("grid/selection/anchor")
+	STR_HELP("Anchor the active subtitle line, or return to and clear the current anchor")
+	CMD_TYPE(COMMAND_VALIDATE | COMMAND_DYNAMIC_NAME)
+
+	wxString StrMenu(const agi::Context *c) const override {
+		auto anchor = c->GetCore().selectionController->GetSelectionAnchor();
+		if (!anchor)
+			return _("&Anchor Current Line");
+		if (!anchor->available)
+			return wxString::Format(_("&Clear Unavailable Anchor (line %d)"), anchor->row + 1);
+		return wxString::Format(_("&Return to Anchor (line %d)"), anchor->row + 1);
+	}
+
+	wxString StrDisplay(const agi::Context *c) const override {
+		auto anchor = c->GetCore().selectionController->GetSelectionAnchor();
+		if (!anchor)
+			return _("Anchor Current Line");
+		if (!anchor->available)
+			return wxString::Format(_("Clear Unavailable Anchor (line %d)"), anchor->row + 1);
+		return wxString::Format(_("Return to Anchor (line %d)"), anchor->row + 1);
+	}
+
+	bool Validate(const agi::Context *c) override {
+		auto const& controller = c->GetCore().selectionController;
+		return controller->HasSelectionAnchor() || controller->GetActiveLine();
+	}
+
+	void operator()(agi::Context *c) override {
+		auto result = c->GetCore().selectionController->ToggleSelectionAnchor();
+		switch (result.action) {
+			case SelectionController::AnchorAction::Pinned:
+				c->ShowStatus(from_wx(wxString::Format(_("Anchored line %d"), result.row + 1)));
+				break;
+			case SelectionController::AnchorAction::Returned:
+				c->ShowStatus(from_wx(wxString::Format(_("Returned to line %d; anchor cleared"), result.row + 1)));
+				break;
+			case SelectionController::AnchorAction::Cleared:
+				c->ShowStatus(from_wx(wxString::Format(_("Anchor cleared from line %d"), result.row + 1)));
+				break;
+			case SelectionController::AnchorAction::Missing:
+				c->ShowStatus(from_wx(wxString::Format(_("Anchor at line %d is unavailable; anchor cleared"), result.row + 1)));
+				break;
+			case SelectionController::AnchorAction::None:
+				break;
+		}
+	}
+};
+
 struct grid_sort_actor final : public Command {
 	CMD_NAME("grid/sort/actor")
 	STR_MENU("&Actor Name")
@@ -428,6 +477,7 @@ namespace cmd {
 		reg(agi::make_unique<grid_line_next>());
 		reg(agi::make_unique<grid_line_next_create>());
 		reg(agi::make_unique<grid_line_prev>());
+		reg(agi::make_unique<grid_selection_anchor>());
 		reg(agi::make_unique<grid_selection_back>());
 		reg(agi::make_unique<grid_selection_forward>());
 		reg(agi::make_unique<grid_sort_actor>());

@@ -29,10 +29,12 @@
 
 #pragma once
 
+#include "selection_anchor.h"
 #include "selection_navigation_history.h"
 
 #include <libaegisub/signal.h>
 
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -44,21 +46,37 @@ namespace agi { struct Context; }
 class SelectionController {
 	agi::signal::Signal<AssDialogue *> AnnounceActiveLineChanged;
 	agi::signal::Signal<> AnnounceSelectedSetChanged;
+	agi::signal::Signal<> AnnounceSelectionAnchorChanged;
 
 	agi::Context *context;
 
 	Selection selection; ///< Currently selected lines
 	AssDialogue *active_line = nullptr; ///< The currently active line or 0 if none
+	aegisub::selection_anchor::Anchor selection_anchor;
 	aegisub::selection_navigation_history::History selection_history;
 	bool restoring_selection_history = false;
 
 	int GetActiveLineId() const;
 	bool IsLiveDialogueId(int line_id) const;
+	aegisub::selection_anchor::Anchor::ResolveRow GetLineRowResolver() const;
 	aegisub::selection_navigation_history::History::LineIdIsValid GetLiveLineValidator() const;
 	void RecordActiveLineChange(AssDialogue *old_line, AssDialogue *new_line);
 	bool NavigateSelectionHistory(bool forward);
 
 public:
+	enum class AnchorAction {
+		None,
+		Pinned,
+		Returned,
+		Cleared,
+		Missing,
+	};
+
+	struct AnchorResult {
+		AnchorAction action = AnchorAction::None;
+		int row = -1;
+	};
+
 	SelectionController(agi::Context *context);
 
 	/// Resolve a live dialogue by AssDialogue::Id, or nullptr if it is gone.
@@ -102,6 +120,16 @@ public:
 	/// Clear back/forward selection navigation history
 	void ClearSelectionHistory();
 
+	/// Inspect the anchor without changing its last-known row.
+	std::optional<aegisub::selection_anchor::Snapshot> GetSelectionAnchor() const;
+
+	/// Resolve the anchor and update its last-known row when it is live.
+	std::optional<aegisub::selection_anchor::Snapshot> RefreshSelectionAnchor();
+
+	bool HasSelectionAnchor() const { return selection_anchor.IsSet(); }
+	AnchorResult ToggleSelectionAnchor();
+	void ClearSelectionAnchor();
+
 	/// Add an edited line to the selection navigation history
 	void RecordEditedLine(AssDialogue *line);
 
@@ -138,4 +166,5 @@ public:
 
 	DEFINE_SIGNAL_ADDERS(AnnounceSelectedSetChanged, AddSelectionListener)
 	DEFINE_SIGNAL_ADDERS(AnnounceActiveLineChanged, AddActiveLineListener)
+	DEFINE_SIGNAL_ADDERS(AnnounceSelectionAnchorChanged, AddSelectionAnchorListener)
 };

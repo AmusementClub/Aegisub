@@ -162,6 +162,7 @@ if(GTEST_FOUND)
         src/video_session_ops.cpp
         src/video_snapshot_ops.cpp
         src/subtitle_timing_ops.cpp
+        src/selection_anchor.cpp
         src/selection_navigation_history.cpp
         src/presentation/subtitle_grid_query_service.cpp
         src/presentation/subtitle_grid_display.cpp
@@ -181,6 +182,7 @@ if(GTEST_FOUND)
         tests/tests/fs.cpp
         tests/tests/grid_layout_core.cpp
         tests/tests/hotkey.cpp
+        tests/tests/hotkey_migration.cpp
         tests/tests/host_boundary_policy.cpp
         tests/tests/iconv.cpp
         tests/tests/ifind.cpp
@@ -216,6 +218,7 @@ if(GTEST_FOUND)
         tests/tests/scenechange_native_api.cpp
         tests/tests/scope_exit.cpp
         tests/tests/secondary_subtitle_strip_layout.cpp
+        tests/tests/selection_anchor.cpp
         tests/tests/selection_navigation_history.cpp
         tests/tests/signals.cpp
         tests/tests/single_choice_layout.cpp

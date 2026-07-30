@@ -784,6 +784,7 @@ set(AEGISUB_CORE_SOURCES
     # context.cpp currently also constructs ContextUiState/DialogManager, so it
     # remains with the wx executable until core/UI construction is split.
     src/initial_line_state.cpp
+    src/selection_anchor.cpp
     src/selection_controller.cpp
     src/selection_navigation_history.cpp
     # project.h exposes wxString in ShowError's public signature; migrate to

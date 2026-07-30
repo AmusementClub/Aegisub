@@ -16,6 +16,7 @@
 
 #include "include/aegisub/hotkey.h"
 
+#include "hotkey_migration.h"
 #include "libresrc/libresrc.h"
 #include "command/command.h"
 #include "compat.h"
@@ -207,21 +208,10 @@ void init() {
 
 	if (std::find(begin(migrations), end(migrations), "duplicate -> split") == end(migrations)) {
 		auto hk_map = hotkey::inst->GetHotkeyMap();
-		auto shift_range = hk_map.equal_range("edit/line/duplicate/shift");
-		for (auto it = shift_range.first; it != shift_range.second; ++it) {
-			auto const& hotkey = *it;
-			auto combo = agi::hotkey::Combo(hotkey.second.Context(), "edit/line/split/before", hotkey.second.Str());
-			hk_map.insert({combo.CmdName(), combo});
-		}
-		auto shift_back_range = hk_map.equal_range("edit/line/duplicate/shift_back");
-		for (auto it = shift_back_range.first; it != shift_back_range.second; ++it) {
-			auto const& hotkey = *it;
-			auto combo = agi::hotkey::Combo(hotkey.second.Context(), "edit/line/split/after", hotkey.second.Str());
-			hk_map.insert({combo.CmdName(), combo});
-		}
-
-		hk_map.erase("edit/line/duplicate/shift");
-		hk_map.erase("edit/line/duplicate/shift_back");
+		aegisub::hotkey_migration::RenameCommand(
+			hk_map, "edit/line/duplicate/shift", "edit/line/split/before");
+		aegisub::hotkey_migration::RenameCommand(
+			hk_map, "edit/line/duplicate/shift_back", "edit/line/split/after");
 
 		hotkey::inst->SetHotkeyMap(std::move(hk_map));
 		migrations.emplace_back("duplicate -> split");

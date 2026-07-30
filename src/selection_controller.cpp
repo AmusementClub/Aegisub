@@ -45,6 +45,14 @@ bool SelectionController::IsLiveDialogueId(int line_id) const {
 	return GetDialogueById(line_id) != nullptr;
 }
 
+aegisub::selection_anchor::Anchor::ResolveRow SelectionController::GetLineRowResolver() const {
+	return [this](int line_id) -> std::optional<int> {
+		if (auto *line = GetDialogueById(line_id))
+			return line->Row;
+		return std::nullopt;
+	};
+}
+
 aegisub::selection_navigation_history::History::LineIdIsValid SelectionController::GetLiveLineValidator() const {
 	return [this](int line_id) { return IsLiveDialogueId(line_id); };
 }
@@ -116,6 +124,55 @@ std::vector<AssDialogue *> SelectionController::GetSortedSelection() const {
 
 void SelectionController::ClearSelectionHistory() {
 	selection_history.Clear();
+}
+
+std::optional<aegisub::selection_anchor::Snapshot> SelectionController::GetSelectionAnchor() const {
+	return selection_anchor.Peek(GetLineRowResolver());
+}
+
+std::optional<aegisub::selection_anchor::Snapshot> SelectionController::RefreshSelectionAnchor() {
+	return selection_anchor.Refresh(GetLineRowResolver());
+}
+
+SelectionController::AnchorResult SelectionController::ToggleSelectionAnchor() {
+	if (!selection_anchor.IsSet()) {
+		if (!active_line)
+			return {};
+
+		selection_anchor.Set(active_line->Id, active_line->Row);
+		AnnounceSelectionAnchorChanged();
+		return {AnchorAction::Pinned, active_line->Row};
+	}
+
+	auto anchor = selection_anchor.Refresh(GetLineRowResolver());
+	if (!anchor)
+		return {};
+
+	AnchorResult result{AnchorAction::Missing, anchor->row};
+	if (anchor->available) {
+		auto *target = GetDialogueById(anchor->line_id);
+		if (target == active_line) {
+			result.action = AnchorAction::Cleared;
+		}
+		else if (target) {
+			// Anchor returns are ordinary navigation so Back can revisit the prior line.
+			SetSelectionAndActive({target}, target);
+			result.action = AnchorAction::Returned;
+			result.row = target->Row;
+		}
+	}
+
+	selection_anchor.Clear();
+	AnnounceSelectionAnchorChanged();
+	return result;
+}
+
+void SelectionController::ClearSelectionAnchor() {
+	if (!selection_anchor.IsSet())
+		return;
+
+	selection_anchor.Clear();
+	AnnounceSelectionAnchorChanged();
 }
 
 void SelectionController::RecordEditedLine(AssDialogue *line) {

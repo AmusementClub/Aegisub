@@ -241,6 +241,10 @@ FrameMain::FrameMain()
 		int widths[] = { -4, -3, -3, FromDIP(140) };
 		status_bar->SetStatusWidths(4, widths);
 	}
+	ui_activation.AddConnections(
+		core.ass->AddCommitListener(&FrameMain::UpdateSelectionAnchorStatus, this),
+		core.selectionController->AddSelectionAnchorListener(&FrameMain::UpdateSelectionAnchorStatus, this));
+	UpdateSelectionAnchorStatus();
 
 	StartupLog("Set icon");
 #ifdef _WIN32
@@ -789,6 +793,19 @@ void FrameMain::StatusTimeout(wxString text,int ms) {
 
 void FrameMain::SetLastCommand(wxString text) {
 	SetStatusText(text, 2);
+}
+
+void FrameMain::UpdateSelectionAnchorStatus() {
+	auto anchor = context->GetCore().selectionController->RefreshSelectionAnchor();
+	if (!anchor) {
+		SetStatusText(wxString(), 0);
+		return;
+	}
+
+	auto text = anchor->available
+		? wxString::Format(_("Anchor: line %d"), anchor->row + 1)
+		: wxString::Format(_("Anchor: line %d (unavailable)"), anchor->row + 1);
+	SetStatusText(text, 0);
 }
 
 BEGIN_EVENT_TABLE(FrameMain, wxFrame)

@@ -211,6 +211,11 @@ TEST(presentation_contract, formats_grid_cells_without_gui_framework_types) {
 	EXPECT_EQ("Actor", FormatSubtitleGridCell(row, SubtitleGridColumnIdActor, options));
 	EXPECT_EQ("fx", FormatSubtitleGridCell(row, SubtitleGridColumnIdEffect, options));
 	EXPECT_EQ("#Hello# world", FormatSubtitleGridCell(row, SubtitleGridColumnIdText, options));
+
+	row.margins = {{-15, 0, -10000}};
+	EXPECT_EQ("-15", FormatSubtitleGridCell(row, SubtitleGridColumnIdMarginLeft, options));
+	EXPECT_EQ("", FormatSubtitleGridCell(row, SubtitleGridColumnIdMarginRight, options));
+	EXPECT_EQ("-10000", FormatSubtitleGridCell(row, SubtitleGridColumnIdMarginVertical, options));
 }
 
 TEST(presentation_contract, grid_text_formatter_preserves_override_modes) {

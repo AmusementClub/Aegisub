@@ -98,7 +98,7 @@ class SubsEditBox final : public wxPanel {
 	TimeEdit *end_time;
 	TimeEdit *duration;
 	wxSpinCtrl *layer;
-	std::array<wxTextCtrl *, 3> margin;
+	std::array<wxSpinCtrl *, 3> margin;
 	Placeholder<wxComboBox> *effect_box;
 	wxRadioButton *by_ass;
 	wxRadioButton *by_exact;
@@ -137,7 +137,7 @@ class SubsEditBox final : public wxPanel {
 	boost::container::map<AssDialogue *, std::pair<agi::Time, agi::Time>> initial_times;
 
 	// Constructor helpers
-	wxTextCtrl *MakeMarginCtrl(wxString const& tooltip, int margin, wxString const& commit_msg);
+	wxSpinCtrl *MakeMarginCtrl(wxString const& tooltip, int margin, wxString const& commit_msg);
 	TimeEdit *MakeTimeCtrl(wxString const& tooltip, TimeField field);
 	void MakeButton(const char *cmd_name);
 	wxButton *MakeBottomButton(const char *cmd_name);

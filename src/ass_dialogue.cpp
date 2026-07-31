@@ -34,6 +34,7 @@
 #include "ass_dialogue.h"
 #include "ass_compat.h"
 #include "ass_parse_error.h"
+#include "ass_style.h"
 
 #include <libaegisub/of_type_adaptor.h>
 #include <libaegisub/split.h>
@@ -119,7 +120,7 @@ void AssDialogue::Parse(std::string const& raw) {
 	for (int& margin : Margin) {
 		if (!AssCompat::ParseInteger(tkn.next_str(), margin))
 			throw SubtitleFormatParseError("Failed parsing line: " + raw);
-		margin = agi::util::mid(-9999, margin, 99999);
+		margin = agi::util::mid(AssStyle::MinMargin, margin, AssStyle::MaxMargin);
 	}
 	Effect = tkn.next_str_trim();
 

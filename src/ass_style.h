@@ -46,8 +46,9 @@ public:
 	static constexpr double DefaultShadowWidth = 2.;
 	static constexpr int DefaultAlignment = 2;
 	static constexpr int DefaultMargin = 10;
-	static constexpr int MinMargin = -9999;
-	static constexpr int MaxMargin = 99999;
+	/// Matches xy-VSFilter style editor spin range (SetRange32).
+	static constexpr int MinMargin = -10000;
+	static constexpr int MaxMargin = 10000;
 	static constexpr int DefaultEncoding = 1;
 
 	std::string name = "Default"; ///< Name of the style; must be case-insensitively unique within a file despite being case-sensitive

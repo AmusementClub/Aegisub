@@ -292,12 +292,17 @@ struct GridColumnMargin : GridColumn {
 	}
 
 	int WidthFromRows(const agi::Context *, WidthHelper &helper, aegisub::presentation::SubtitleGridWindow const& rows) const override {
-		int max = 0;
+		// Format hides 0 (style default). Non-zero values — including negatives —
+		// must reserve width from the actual display string, not only positive max.
+		int w = 0;
 		for (auto const& row : rows.rows) {
-			if (row.margins[index] > max)
-				max = row.margins[index];
+			if (row.margins[index] == 0)
+				continue;
+			int width = helper(std::to_wstring(row.margins[index]));
+			if (width > w)
+				w = width;
 		}
-		return max == 0 ? 0 : helper(std::to_wstring(max));
+		return w;
 	}
 };
 

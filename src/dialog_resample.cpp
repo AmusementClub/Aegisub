@@ -15,6 +15,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "ass_file.h"
+#include "ass_style.h"
 #include "compat.h"
 #include "help_button.h"
 #include "include/aegisub/context.h"
@@ -94,7 +95,8 @@ DialogResample::DialogResample(agi::Context *c, ResampleSettings &settings)
 
 	// Create all controls and set validators
 	for (size_t i = 0; i < 4; ++i) {
-		margin_ctrl[i] = new wxSpinCtrl(&d, -1, wxS("0"), wxDefaultPosition, wxDefaultSize, wxSP_ARROW_KEYS, -9999, 9999, 0);
+		margin_ctrl[i] = new wxSpinCtrl(&d, -1, wxS("0"), wxDefaultPosition, wxDefaultSize,
+			wxSP_ARROW_KEYS, AssStyle::MinMargin, AssStyle::MaxMargin, 0);
 		margin_ctrl[i]->SetValidator(wxGenericValidator(&settings.margin[i]));
 	}
 

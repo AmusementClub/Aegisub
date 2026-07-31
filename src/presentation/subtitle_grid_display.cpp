@@ -11,8 +11,10 @@
 namespace aegisub::presentation {
 namespace {
 
+// Empty cell for 0 (layer 0 / margin default-from-style). Non-zero values,
+// including negatives, are shown.
 std::string optional_int(int value) {
-	return value ? std::to_string(value) : std::string();
+	return value != 0 ? std::to_string(value) : std::string();
 }
 
 std::string format_time(

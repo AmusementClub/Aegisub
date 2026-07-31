@@ -31,6 +31,22 @@ TEST(lagi_ass_style, parses_compatible_integer_fields_and_normalizes_output) {
 		style.GetEntryData());
 }
 
+TEST(lagi_ass_style, clamps_margins_to_vsfilter_style_editor_range) {
+	AssStyle low(
+		"Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
+		"-1,0,0,0,100,100,0,0,1,2,2,2,-10001,-10000,10001,1");
+	EXPECT_EQ(AssStyle::MinMargin, low.Margin[0]);
+	EXPECT_EQ(AssStyle::MinMargin, low.Margin[1]);
+	EXPECT_EQ(AssStyle::MaxMargin, low.Margin[2]);
+
+	AssStyle high(
+		"Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
+		"-1,0,0,0,100,100,0,0,1,2,2,2,10000,99999,-99999,1");
+	EXPECT_EQ(AssStyle::MaxMargin, high.Margin[0]);
+	EXPECT_EQ(AssStyle::MaxMargin, high.Margin[1]);
+	EXPECT_EQ(AssStyle::MinMargin, high.Margin[2]);
+}
+
 TEST(lagi_ass_style, preserves_negative_style_values_in_memory_and_clamps_saved_output) {
 	AssStyle style("Style: Default,Arial,48,&H00FFFFFF,&H000000FF,&H00000000,&H64000000,-1,0,0,0,-10,-20,-3,0,1,-4,-5,2,10,20,30,1");
 

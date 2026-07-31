@@ -36,6 +36,7 @@
 
 #include "ass_dialogue.h"
 #include "ass_file.h"
+#include "ass_style.h"
 #include "base_grid.h"
 #include "command/command.h"
 #include "compat.h"
@@ -61,11 +62,9 @@
 #include "timeedit_ctrl.h"
 #include "tooltip_manager.h"
 #include "utils.h"
-#include "validators.h"
 
 #include <libaegisub/character_count.h>
 #include <libaegisub/fs.h>
-#include <libaegisub/util.h>
 
 #include <algorithm>
 #include <functional>
@@ -80,12 +79,6 @@
 #include <wx/spinctrl.h>
 
 namespace {
-
-/// Work around wxGTK's fondness for generating events from ChangeValue
-void change_value(wxTextCtrl *ctrl, wxString const& value) {
-	if (value != ctrl->GetValue())
-		ctrl->ChangeValue(value);
-}
 
 wxString new_value(wxComboBox *ctrl, wxCommandEvent &evt) {
 #ifdef __WXGTK__
@@ -496,22 +489,27 @@ void SubsEditBox::SetEditControlSelection(int start, int stop) {
 	FocusEditControl();
 }
 
-wxTextCtrl *SubsEditBox::MakeMarginCtrl(wxString const& tooltip, int margin, wxString const& commit_msg) {
-	wxTextCtrl *ctrl = new wxTextCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize, wxTE_CENTRE | wxTE_PROCESS_ENTER, IntValidator(0, true));
-#if wxCHECK_VERSION(3, 1, 3)
+wxSpinCtrl *SubsEditBox::MakeMarginCtrl(wxString const& tooltip, int margin, wxString const& commit_msg) {
+	// Match Layer: integer spin control with step 1 (wxSpinCtrl default).
+	// Range matches AssStyle parse clamp / xy-VSFilter style editor (±10000).
+	wxSpinCtrl *ctrl = new wxSpinCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize,
+		wxSP_ARROW_KEYS | wxTE_PROCESS_ENTER, AssStyle::MinMargin, AssStyle::MaxMargin, 0);
+#ifdef __WXGTK3__
+	// GTK3 has a bug that we cannot shrink the size of a widget, so do nothing here.
+#elif wxCHECK_VERSION(3, 1, 3)
 	ctrl->SetInitialSize(ctrl->GetSizeFromText(wxS("00000")));
 #else
 	ctrl->SetInitialSize(ctrl->GetSizeFromTextSize(GetTextExtent(wxS("00000"))));
 #endif
-	ctrl->SetMaxLength(5);
 	ctrl->SetToolTip(tooltip);
 	middle_left_sizer->Add(ctrl, wxSizerFlags().Expand());
 
-	Bind(wxEVT_TEXT, [=](wxCommandEvent&) {
-		int value = agi::util::mid(-9999, atoi(ctrl->GetValue().utf8_str()), 99999);
-		SetSelectedRows([&](AssDialogue *d) { d->Margin[margin] = value; },
+	auto commit = [=](wxCommandEvent&) {
+		SetSelectedRows([&](AssDialogue *d) { d->Margin[margin] = ctrl->GetValue(); },
 			commit_msg, AssFile::COMMIT_DIAG_META);
-	}, ctrl->GetId());
+	};
+	Bind(wxEVT_TEXT, commit, ctrl->GetId());
+	Bind(wxEVT_SPINCTRL, commit, ctrl->GetId());
 
 	return ctrl;
 }
@@ -647,7 +645,7 @@ void SubsEditBox::UpdateFields(int type, bool repopulate_lists) {
 		auto core = c->GetCore();
 		layer->SetValue(line->Layer);
 		for (size_t i = 0; i < margin.size(); ++i)
-			change_value(margin[i], std::to_wstring(line->Margin[i]));
+			margin[i]->SetValue(line->Margin[i]);
 		comment_box->SetValue(line->Comment);
 		style_box->Select(style_box->FindString(to_wx(line->Style)));
 		active_style = line ? core.ass->GetStyle(line->Style) : nullptr;

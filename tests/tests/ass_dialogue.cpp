@@ -367,6 +367,18 @@ TEST(ass_dialogue, parses_compatible_integer_fields_and_normalizes_output) {
 		parsed.GetEntryData());
 }
 
+TEST(ass_dialogue, clamps_margins_to_vsfilter_style_editor_range) {
+	AssDialogue low("Dialogue: 0,0:00:00.00,0:00:01.00,Default,,-10001,-10000,0,,text");
+	EXPECT_EQ(-10000, low.Margin[0]);
+	EXPECT_EQ(-10000, low.Margin[1]);
+	EXPECT_EQ(0, low.Margin[2]);
+
+	AssDialogue high("Dialogue: 0,0:00:00.00,0:00:01.00,Default,,10000,10001,99999,,text");
+	EXPECT_EQ(10000, high.Margin[0]);
+	EXPECT_EQ(10000, high.Margin[1]);
+	EXPECT_EQ(10000, high.Margin[2]);
+}
+
 TEST(ass_dialogue, rejects_integer_fields_without_digits) {
 	EXPECT_THROW(
 		AssDialogue("Dialogue: nope,0:00:00.00,0:00:01.00,Default,,0,0,0,,text"),

@@ -197,7 +197,7 @@
     {
       "sourceType": "archive",
       "name": "lsmasnative",
-      "url": "https://github.com/MIRIMIRIM/LsmasSharp/releases/download/202606/lsmasnative-win64-hoe_202606.zip",
+      "url": "https://github.com/MIRIMIRIM/LsmasSharp/releases/download/202607/lsmasnative-win64-hoe_202607.zip",
       "path": [
         {
           "source": "lsmasnative.dll",
@@ -207,12 +207,23 @@
     },
     {
       "sourceType": "archive",
-      "name": "scenechange_native",
-      "url": "https://github.com/MIRIMIRIM/SceneChangeSharp/releases/download/v0.0.2/scenechange_native-win-x64.7z",
+      "name": "scenechange_wwxd",
+      "url": "https://github.com/MIRIMIRIM/SceneChangeSharp/releases/download/v0.1.0/scenechange_wwxd-v0.1.0-win-x64.zip",
       "path": [
         {
-          "source": "scenechange_native.dll",
-          "target": "runtimes/scenechange_native.dll"
+          "source": "scenechange_wwxd.dll",
+          "target": "runtimes/scenechange_wwxd.dll"
+        }
+      ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "scenechange_xvid",
+      "url": "https://github.com/MIRIMIRIM/SceneChangeSharp/releases/download/v0.1.0/scenechange_xvid-v0.1.0-win-x64.zip",
+      "path": [
+        {
+          "source": "scenechange_xvid.dll",
+          "target": "runtimes/scenechange_xvid.dll"
         }
       ]
     }

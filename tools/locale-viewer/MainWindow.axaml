@@ -1,0 +1,350 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:Aegisub.LocaleViewer"
+        x:Class="Aegisub.LocaleViewer.MainWindow"
+        x:DataType="vm:MainWindowViewModel"
+        x:CompileBindings="True"
+        Title="Aegisub Localization"
+        Width="1180"
+        Height="760"
+        MinWidth="960"
+        MinHeight="620"
+        WindowStartupLocation="CenterScreen">
+  <Window.Styles>
+    <Style Selector="Border.metric">
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseLowBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="Padding" Value="12" />
+    </Style>
+    <Style Selector="Border.panel">
+      <Setter Property="BorderBrush" Value="{DynamicResource SystemControlForegroundBaseLowBrush}" />
+      <Setter Property="BorderThickness" Value="1" />
+      <Setter Property="CornerRadius" Value="8" />
+      <Setter Property="ClipToBounds" Value="True" />
+    </Style>
+    <Style Selector="TextBlock.caption">
+      <Setter Property="Foreground" Value="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
+      <Setter Property="FontSize" Value="12" />
+    </Style>
+    <Style Selector="TextBlock.value">
+      <Setter Property="FontSize" Value="24" />
+      <Setter Property="FontWeight" Value="SemiBold" />
+    </Style>
+    <Style Selector="TextBlock.heading">
+      <Setter Property="FontWeight" Value="SemiBold" />
+      <Setter Property="FontSize" Value="14" />
+    </Style>
+    <Style Selector="TextBlock.mono">
+      <Setter Property="FontFamily" Value="Consolas, Cascadia Mono, monospace" />
+      <Setter Property="FontSize" Value="12" />
+    </Style>
+    <Style Selector="SelectableTextBlock.mono">
+      <Setter Property="FontFamily" Value="Consolas, Cascadia Mono, monospace" />
+      <Setter Property="FontSize" Value="12" />
+    </Style>
+    <Style Selector="Border.sectionHeader">
+      <Setter Property="Padding" Value="10,8" />
+      <Setter Property="Background" Value="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}" />
+    </Style>
+    <Style Selector="TextBox.editor">
+      <Setter Property="AcceptsReturn" Value="True" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="FontFamily" Value="Consolas, Cascadia Mono, monospace" />
+      <Setter Property="MinHeight" Value="92" />
+    </Style>
+  </Window.Styles>
+
+  <DockPanel>
+    <Border DockPanel.Dock="Top"
+            Padding="16,12"
+            BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+            BorderThickness="0,0,0,1">
+      <Grid RowDefinitions="Auto,Auto,Auto" RowSpacing="8">
+        <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto" ColumnSpacing="8">
+          <TextBlock Text="Aegisub Localization" FontSize="20" FontWeight="SemiBold" VerticalAlignment="Center" />
+          <ProgressBar Grid.Column="2"
+                       IsIndeterminate="True"
+                       IsVisible="{Binding IsLoading}"
+                       Width="100"
+                       VerticalAlignment="Center" />
+          <Button Grid.Column="3"
+                  Name="RefreshButton"
+                  Content="Refresh"
+                  Command="{Binding RefreshCommand}"
+                  VerticalAlignment="Center"
+                  ToolTip.Tip="F5" />
+          <Button Grid.Column="4"
+                  Name="SaveButton"
+                  Content="Save"
+                  Command="{Binding SaveCommand}"
+                  VerticalAlignment="Center"
+                  ToolTip.Tip="Ctrl+S" />
+        </Grid>
+        <Grid Grid.Row="1" ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+          <TextBlock Text="Repository:" VerticalAlignment="Center" Classes="caption" />
+          <TextBlock Grid.Column="1" Text="{Binding RepositoryRoot}" Classes="caption" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+          <Button Grid.Column="2" Content="Browse..." Command="{Binding BrowseRepositoryCommand}" MinWidth="80" />
+        </Grid>
+        <TextBlock Grid.Row="2"
+                   Name="StatusText"
+                   Text="{Binding StatusText}"
+                   Classes="caption" />
+      </Grid>
+    </Border>
+
+    <Grid RowDefinitions="Auto,*"
+          Margin="16"
+          RowSpacing="14">
+      <Grid ColumnDefinitions="*,*,*,*"
+            ColumnSpacing="10">
+        <Border Classes="metric">
+          <StackPanel>
+            <TextBlock Text="Languages" Classes="caption" />
+            <TextBlock Text="{Binding LanguageCount}" Classes="value" />
+          </StackPanel>
+        </Border>
+        <Border Grid.Column="1" Classes="metric">
+          <StackPanel>
+            <TextBlock Text="Average" Classes="caption" />
+            <TextBlock Text="{Binding AverageCoverageText}" Classes="value" />
+          </StackPanel>
+        </Border>
+        <Border Grid.Column="2" Classes="metric">
+          <StackPanel>
+            <TextBlock Text="Fuzzy" Classes="caption" />
+            <TextBlock Text="{Binding TotalFuzzy}" Classes="value" />
+          </StackPanel>
+        </Border>
+        <Border Grid.Column="3" Classes="metric">
+          <StackPanel>
+            <TextBlock Text="Missing" Classes="caption" />
+            <TextBlock Text="{Binding TotalMissing}" Classes="value" />
+          </StackPanel>
+        </Border>
+      </Grid>
+
+      <Grid Grid.Row="1"
+            ColumnDefinitions="240,5,*,5,390"
+            ColumnSpacing="0">
+        <Border Classes="panel">
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Classes="sectionHeader">
+              <TextBlock Text="Languages" Classes="heading" />
+            </Border>
+            <ListBox Name="LanguageRows"
+                     ItemsSource="{Binding Languages}"
+                     SelectedItem="{Binding SelectedLanguage}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:LanguageStatusViewModel">
+                  <Grid ColumnDefinitions="62,*,52" ColumnSpacing="8" MinHeight="34">
+                    <TextBlock Text="{Binding Language}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <ProgressBar Grid.Column="1"
+                                 Minimum="0"
+                                 Maximum="100"
+                                 Value="{Binding Coverage}"
+                                 VerticalAlignment="Center" />
+                    <TextBlock Grid.Column="2"
+                               Text="{Binding CoverageText}"
+                               HorizontalAlignment="Right"
+                               VerticalAlignment="Center"
+                               Classes="caption" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+
+        <GridSplitter Grid.Column="1"
+                      ResizeDirection="Columns"
+                      Background="{DynamicResource SystemControlForegroundBaseLowBrush}" />
+
+        <Border Grid.Column="2" Classes="panel">
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Classes="sectionHeader">
+              <Grid RowDefinitions="Auto,Auto" RowSpacing="8">
+                <Grid ColumnDefinitions="*,Auto">
+                  <TextBlock Text="{Binding SelectedLanguageText}" Classes="heading" TextTrimming="CharacterEllipsis" />
+                  <TextBlock Grid.Column="1"
+                             Text="{Binding EditStatusText}"
+                             Classes="caption"
+                             HorizontalAlignment="Right"
+                             TextTrimming="CharacterEllipsis"
+                             MaxWidth="200" />
+                </Grid>
+                <TextBox Grid.Row="1"
+                         Name="EntryFilterBox"
+                         PlaceholderText="Search source or translation"
+                         Text="{Binding EntryFilter}"
+                         ToolTip.Tip="Ctrl+F to focus" />
+              </Grid>
+            </Border>
+            <Border DockPanel.Dock="Top"
+                    Background="{DynamicResource SystemControlBackgroundChromeMediumLowBrush}"
+                    Padding="10,6">
+              <ComboBox Name="StateFilter"
+                        SelectedIndex="{Binding FilterState}"
+                        HorizontalAlignment="Stretch"
+                        ToolTip.Tip="Ctrl+1/2/3/4 to switch">
+                <ComboBoxItem Content="All entries" />
+                <ComboBoxItem Content="Translated only" />
+                <ComboBoxItem Content="Fuzzy only" />
+                <ComboBoxItem Content="Missing only" />
+              </ComboBox>
+            </Border>
+            <Panel DockPanel.Dock="Top"
+                   Height="40"
+                   Background="{DynamicResource SystemControlBackgroundAltMediumLowBrush}"
+                   IsVisible="{Binding IsEntriesEmpty}">
+              <TextBlock Text="No entries match the current filter"
+                         Classes="caption"
+                         HorizontalAlignment="Center"
+                         VerticalAlignment="Center"
+                         Foreground="{DynamicResource SystemControlForegroundBaseMediumBrush}" />
+            </Panel>
+            <ListBox Name="EntryList"
+                     ItemsSource="{Binding TranslationEntries}"
+                     SelectedItem="{Binding SelectedEntry}">
+              <ListBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:TranslationEntryViewModel">
+                  <Grid RowDefinitions="Auto,Auto" RowSpacing="4" Margin="0,4">
+                    <Grid ColumnDefinitions="45,*,75" ColumnSpacing="8">
+                      <TextBlock Text="{Binding Number}"
+                                 Classes="caption"
+                                 VerticalAlignment="Center"
+                                 TextAlignment="Right" />
+                      <TextBlock Grid.Column="1"
+                                 Text="{Binding SourcePreview}"
+                                 FontWeight="SemiBold"
+                                 TextTrimming="CharacterEllipsis"
+                                 VerticalAlignment="Center" />
+                      <TextBlock Grid.Column="2"
+                                 Text="{Binding StateText}"
+                                 Classes="caption"
+                                 HorizontalAlignment="Right"
+                                 VerticalAlignment="Center" />
+                    </Grid>
+                    <TextBlock Grid.Row="1"
+                               Text="{Binding TranslationPreview}"
+                               Classes="caption"
+                               TextTrimming="CharacterEllipsis"
+                               Margin="53,0,0,0" />
+                  </Grid>
+                </DataTemplate>
+              </ListBox.ItemTemplate>
+            </ListBox>
+          </DockPanel>
+        </Border>
+
+        <GridSplitter Grid.Column="3"
+                      ResizeDirection="Columns"
+                      Background="{DynamicResource SystemControlForegroundBaseLowBrush}" />
+
+        <Border Grid.Column="4"
+                Name="TranslationEditor"
+                Classes="panel"
+                IsEnabled="{Binding IsEntryEditorEnabled}">
+          <DockPanel>
+            <Border DockPanel.Dock="Top" Classes="sectionHeader">
+              <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="Entry" Classes="heading" />
+                <CheckBox Grid.Column="1"
+                          Content="Fuzzy"
+                          IsChecked="{Binding SelectedEntry.IsFuzzy}" />
+              </Grid>
+            </Border>
+            <ScrollViewer Padding="12">
+              <StackPanel Spacing="12" Margin="0,0,0,50">
+                <StackPanel IsVisible="{Binding SelectedEntry.HasContext}">
+                  <TextBlock Text="Context" Classes="caption" />
+                  <SelectableTextBlock Text="{Binding SelectedEntry.ContextText}"
+                                       TextWrapping="Wrap"
+                                       Classes="mono" />
+                </StackPanel>
+
+                <StackPanel>
+                  <TextBlock Text="Source" Classes="caption" />
+                  <SelectableTextBlock Name="SourceText"
+                                       Text="{Binding SelectedEntry.SourceText}"
+                                       TextWrapping="Wrap"
+                                       Classes="mono" />
+                </StackPanel>
+
+                <StackPanel IsVisible="{Binding SelectedEntry.HasPlural}">
+                  <TextBlock Text="Plural Source" Classes="caption" />
+                  <SelectableTextBlock Text="{Binding SelectedEntry.PluralSourceText}"
+                                       TextWrapping="Wrap"
+                                       Classes="mono" />
+                </StackPanel>
+
+                <ItemsControl ItemsSource="{Binding SelectedEntry.Forms}">
+                  <ItemsControl.ItemTemplate>
+                    <DataTemplate x:DataType="vm:TranslationFormViewModel">
+                      <StackPanel Spacing="4" Margin="0,0,0,10">
+                        <TextBlock Text="{Binding Label}" Classes="caption" />
+                        <TextBox Name="TranslationText"
+                                 Classes="editor"
+                                 Text="{Binding Translation, Mode=TwoWay}" />
+                      </StackPanel>
+                    </DataTemplate>
+                  </ItemsControl.ItemTemplate>
+                </ItemsControl>
+
+                <StackPanel IsVisible="{Binding SelectedEntry.HasReference}">
+                  <TextBlock Text="References" Classes="caption" />
+                  <SelectableTextBlock Text="{Binding SelectedEntry.ReferenceText}"
+                                       TextWrapping="Wrap"
+                                       Classes="mono" />
+                </StackPanel>
+
+                <StackPanel IsVisible="{Binding SelectedEntry.HasComment}">
+                  <TextBlock Text="Translator Comments" Classes="caption" />
+                  <SelectableTextBlock Text="{Binding SelectedEntry.CommentText}"
+                                       TextWrapping="Wrap"
+                                       Classes="mono" />
+                </StackPanel>
+
+                <StackPanel Spacing="6">
+                  <Grid ColumnDefinitions="*,Auto">
+                    <TextBlock Text="Other Languages" Classes="caption" />
+                    <Button Grid.Column="1"
+                            Content="Filter..."
+                            Command="{Binding FilterComparisonLanguagesCommand}"
+                            Padding="6,2"
+                            FontSize="11" />
+                  </Grid>
+                  <ItemsControl Name="ComparisonRows"
+                                ItemsSource="{Binding ComparisonEntries}">
+                    <ItemsControl.ItemTemplate>
+                      <DataTemplate x:DataType="vm:TranslationComparisonViewModel">
+                        <Border BorderBrush="{DynamicResource SystemControlForegroundBaseLowBrush}"
+                                BorderThickness="0,1,0,0"
+                                Padding="0,8">
+                          <Grid RowDefinitions="Auto,Auto" RowSpacing="4">
+                            <Grid ColumnDefinitions="*,Auto">
+                              <TextBlock Text="{Binding Language}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                              <TextBlock Grid.Column="1"
+                                         Text="{Binding StateText}"
+                                         Classes="caption"
+                                         HorizontalAlignment="Right" />
+                            </Grid>
+                            <SelectableTextBlock Grid.Row="1"
+                                                 Text="{Binding TranslationText}"
+                                                 TextWrapping="Wrap"
+                                                 Classes="mono" />
+                          </Grid>
+                        </Border>
+                      </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                  </ItemsControl>
+                </StackPanel>
+              </StackPanel>
+            </ScrollViewer>
+          </DockPanel>
+        </Border>
+      </Grid>
+    </Grid>
+  </DockPanel>
+</Window>

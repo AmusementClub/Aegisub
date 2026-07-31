@@ -77,7 +77,100 @@ helpers live in `tests/gui-automation/driver`; the Skia entry retains only
 audio/video-specific input scenarios and guarded `SendInput`. It must not reach
 into Aegisub internals. The external UIA correctness driver covers ready/PID
 validation, main-window discovery, focus, a UIA `TogglePattern` state change on
-the non-document `Show Original` control, fatal-dialog checks, PNG capture, and
-clean exit. The smoke opens the checked-in subtitle fixture so the control is
-deterministically available. Future AX and AT-SPI drivers consume the same
-host/result protocol without changing scenario semantics.
+the non-document `Show Original` control, and font selection through standard
+`ValuePattern`, `ExpandCollapsePattern`, and `SelectionItemPattern` operations
+in both Style Editor and the custom Select Font dialog. The font phase exercises
+both an `EM_REPLACESEL` retype and a `WM_CHAR` retype; the latter is dispatched
+through the native EDIT wndproc and triggers the native `CBS_DROPDOWN`
+auto-select path, specifically verifying that a backward highlight jump (new
+match sorting above the previous match, e.g. `ahom` -> Tahoma then `nsol` ->
+Consolas) lands on the correct row.
+
+Audio performance runs may explicitly isolate `Audio/Provider`,
+`Audio/Cache/Type`, `Audio/Player`, and waveform/spectrum selection with the
+driver's `--audio-provider`, `--audio-cache-type`, `--audio-player`, and
+`--audio-view` options. `--cursor-time on|off` isolates the mouse time-label
+setting. The explicit `audio-cursor-state-matrix` scenario uses guarded
+foreground input to exercise native enter/leave behavior and requires
+`--allow-global-input`; its trace assertion checks mouse -> playback -> restored
+mouse -> leave -> re-enter -> resize ordering for both waveform and spectrum.
+It also rejects any visible-content request, lookup, tile draw, or upload on a
+cursor-only frame. `audio_display_snapshot` records `cursor_source`,
+`cursor_position_ms`, `cursor_device_x`, and `cursor_label_visible` so the
+assertion checks the state actually presented rather than only the input sent.
+The `audio-playback-marker-drag` and `audio-spectrum-playback-marker-drag`
+scenarios also require guarded foreground input. They create a deterministic
+selection, keep real playback active while repeatedly dragging its marker, and
+use the snapshot `marker_revision` to prove the presented marker state changed
+while the cursor source remained playback. Their trace gate also requires the
+cursor-only frames between marker updates to remain free of content work and
+rejects new worker payload builds or GPU tile uploads caused by the marker drag.
+The `audio-middle-seek-cursor` and `audio-spectrum-middle-seek-cursor`
+scenarios exercise native middle-button state, an inside release, an
+outside-canvas release detected by the widget timer, and pointer re-entry. They
+require a real video provider and `--allow-global-input`; headless fake clocks
+cannot reproduce Windows button state, capture/release delivery, or the
+presented mouse/video-position-marker ordering. Their trace gate requires two
+preview/commit intervals, immediate mouse-cursor restoration after an inside
+release, `none` after an outside release, mouse restoration on re-entry, and no
+content request, lookup, tile draw, upload, or worker build on retained
+cursor/marker overlay frames. Absolute pointer input is normalized against the
+virtual desktop and uses `MOUSEEVENTF_VIRTUALDESK`; the re-entry phase also
+checks that the actual system cursor lands on the Audio Display HWND so
+multi-monitor coordinate virtualization cannot produce a false result.
+The `audio-waveform-focus-colour` and `audio-spectrum-focus-colour` scenarios
+exercise native child-window focus and a running Preferences transaction. They
+move focus Audio Display -> subtitle edit -> Audio Display -> subtitle edit,
+open the real Preferences dialog through UIA, select the deterministic
+waveform/spectrum scheme through the visible wxPropertyGrid owner-drawn choice,
+and invoke Apply. Headless mode cannot reproduce native focus events, the modal
+dialog, pending option values, or the Apply-time option subscriptions. The
+trace gate requires every focus transition to advance `chrome_revision`, the
+Apply operation to advance `presentation_revision`, and analysis generation,
+CPU/FFT misses, raw/payload worker builds, and GPU content-tile uploads to stay
+unchanged. Waveform permits no palette upload; spectrum permits only the small
+bounded set of newly used palette textures. These scenarios use background
+native window messages plus UIA and do not require `--allow-global-input`.
+The `audio-waveform-dpi-transition` and `audio-spectrum-dpi-transition`
+scenarios enumerate the attached displays, move the real Aegisub main window
+to a display with a different effective DPI, wait for the child Audio Display
+to settle, and then restore the original display. They require the Skia Audio
+Display runtime opt-in but do not use global pointer input. The trace gate uses
+the `audio_display_snapshot.content_scale` field to require an
+initial -> target -> restored sequence with complete content at every scale;
+analysis, presentation, and Chrome revisions must advance at both transitions,
+and replacement worker payloads and GPU content tiles must be published instead
+of reusing stale device-scale content. If all attached displays have the same
+effective DPI, the driver reports
+`uia.dpi_transition.trace_validation=not-run:no-different-dpi-monitor` and does
+not emit a passing trace-validation result. It never changes the user's system
+display scaling to manufacture this condition.
+The `audio-waveform-runtime-fallback` and
+`audio-spectrum-runtime-fallback` scenarios exercise failure after a real Skia
+widget has already presented content. They require
+`AEGISUB_SKIA_AUDIO_FAILURE_INJECTION=flush-submit` together with a bounded
+positive `AEGISUB_SKIA_AUDIO_FAILURE_AFTER_CONTENT_FRAMES` value. The latter
+keeps startup frames healthy and arms the existing injection only after the
+configured number of successful content frames. The driver first performs a
+background timeline drag so the Skia widget owns a non-zero viewport which
+bypasses the slot's ordinary wheel-delta bookkeeping. It then generates
+background mouse-cursor frames, discovers the native runtime-error dialog,
+invokes its real `Switch to wx` action through UIA, and waits for the Skia
+`wxGLCanvas` to be replaced by the compatibility widget. Its trace gate requires
+at least the configured number of successful Skia snapshots followed by wx
+frame `1`, rejects any later Skia snapshot, and requires that first wx frame to
+render the same waveform/spectrum mode with real bitmap-cache activity and the
+same logical left viewport after normalizing the Skia device-column value by
+`content_scale`. This is
+the post-startup fallback contract; the existing immediate injection remains
+the startup automatic-fallback seam.
+The playback-scroll scenarios keep real audio output active
+while sending background wheel input to the Audio Display. Headless playback
+uses a fake audio clock and therefore cannot replace this GUI seam for
+provider-read, output-fill, or Audio Display worker contention measurements.
+It also verifies explicit selection commit, fatal dialogs, PNG capture, and
+clean exit. The smoke opens the checked-in subtitle
+fixture so the controls are deterministically available; the font-dialog phase
+also requires the configured subtitles-provider runtime to be staged beside the
+built executable. Future AX and AT-SPI drivers consume the same host/result
+protocol without changing scenario semantics.

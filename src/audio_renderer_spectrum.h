@@ -135,9 +135,11 @@ class AudioSpectrumRenderer final : public AudioRendererBitmapProvider {
 
 	/// Pointers to FFT power data for each pixel column (mono/aggregated path)
 	std::vector<const float *> power_columns;
+	std::vector<std::shared_ptr<float const[]>> power_blocks;
 
 	/// Pointers to per-channel FFT power data for the current pixel column
 	std::vector<const float *> channel_power_inputs;
+	std::vector<std::shared_ptr<float const[]>> channel_power_blocks;
 
 	/// Pointers to merged per-bin power data per pixel column (per-bin aggregation path)
 	std::vector<const float *> combined_power_columns;
@@ -212,4 +214,7 @@ public:
 	/// @brief Cleans up the cache
 	/// @param max_size Maximum size in bytes for the cache
 	void AgeCache(size_t max_size) override;
+
+	void Prefetch(int start, int length) override;
+	bool GetCacheMetrics(AudioRendererCacheMetrics &metrics) const override;
 };

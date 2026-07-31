@@ -50,6 +50,16 @@ TEST(skia_audio_display_contract, audio_failure_injection_parser_is_exact) {
 	EXPECT_EQ(audio::FailureInjection::Unsupported, audio::ParseFailureInjection("flush"));
 }
 
+TEST(skia_audio_display_contract, deferred_failure_frame_parser_accepts_only_positive_exact_integers) {
+	EXPECT_EQ(0, audio::ParseFailureInjectionAfterContentFrames(""));
+	EXPECT_EQ(0, audio::ParseFailureInjectionAfterContentFrames("0"));
+	EXPECT_EQ(1, audio::ParseFailureInjectionAfterContentFrames("1"));
+	EXPECT_EQ(32, audio::ParseFailureInjectionAfterContentFrames("32"));
+	EXPECT_EQ(0, audio::ParseFailureInjectionAfterContentFrames("-1"));
+	EXPECT_EQ(0, audio::ParseFailureInjectionAfterContentFrames("2x"));
+	EXPECT_EQ(0, audio::ParseFailureInjectionAfterContentFrames("18446744073709551616"));
+}
+
 TEST(skia_audio_display_contract, frame_target_and_surface_key_require_exact_generation_and_size) {
 	audio::FrameTarget target;
 	target.context_generation = 7;
@@ -113,6 +123,18 @@ TEST(skia_audio_display_contract, cursor_update_is_overlay_only) {
 	EXPECT_FALSE(plan.request_visible_tiles);
 }
 
+TEST(skia_audio_display_contract, content_ready_invalidates_only_the_retained_base) {
+	audio::Revisions current;
+	auto const plan = audio::PlanTransition(current, audio::Change::ContentReady);
+	EXPECT_EQ(current.content + 1, plan.next.content);
+	EXPECT_EQ(current.analysis, plan.next.analysis);
+	EXPECT_EQ(current.viewport, plan.next.viewport);
+	EXPECT_EQ(audio::Layer::Content, plan.dirty_layers);
+	EXPECT_FALSE(plan.invalidate_analysis_tiles);
+	EXPECT_FALSE(plan.invalidate_gpu_content_tiles);
+	EXPECT_FALSE(plan.request_visible_tiles);
+}
+
 TEST(skia_audio_display_contract, marker_update_does_not_touch_content) {
 	audio::Revisions current;
 	auto const plan = audio::PlanTransition(current, audio::Change::Marker);
@@ -120,6 +142,16 @@ TEST(skia_audio_display_contract, marker_update_does_not_touch_content) {
 	EXPECT_EQ(current.content, plan.next.content);
 	EXPECT_EQ(current.analysis, plan.next.analysis);
 	EXPECT_EQ(audio::Layer::Marker, plan.dirty_layers);
+}
+
+TEST(skia_audio_display_contract, retained_overlay_accepts_only_marker_and_cursor_layers) {
+	EXPECT_TRUE(audio::CanRenderRetainedOverlay(audio::Layer::Cursor));
+	EXPECT_TRUE(audio::CanRenderRetainedOverlay(audio::Layer::Marker));
+	EXPECT_TRUE(audio::CanRenderRetainedOverlay(audio::Layer::Marker | audio::Layer::Cursor));
+	EXPECT_FALSE(audio::CanRenderRetainedOverlay(audio::Layer::None));
+	EXPECT_FALSE(audio::CanRenderRetainedOverlay(audio::Layer::Content | audio::Layer::Cursor));
+	EXPECT_FALSE(audio::CanRenderRetainedOverlay(audio::Layer::Style | audio::Layer::Marker));
+	EXPECT_FALSE(audio::CanRenderRetainedOverlay(audio::Layer::Chrome | audio::Layer::Cursor));
 }
 
 TEST(skia_audio_display_contract, scroll_recomposes_without_invalidating_tiles) {
@@ -174,6 +206,31 @@ TEST(skia_audio_display_contract, resize_recreates_surface_without_reanalysis) {
 	EXPECT_TRUE(plan.request_visible_tiles);
 	EXPECT_EQ(current.analysis, plan.next.analysis);
 	EXPECT_FALSE(plan.invalidate_analysis_tiles);
+}
+
+TEST(skia_audio_display_contract, focus_chrome_change_preserves_content_and_cursor_revisions) {
+	audio::Revisions current;
+	auto const plan = audio::PlanTransition(current, audio::Change::Chrome);
+	EXPECT_EQ(current.content, plan.next.content);
+	EXPECT_EQ(current.analysis, plan.next.analysis);
+	EXPECT_EQ(current.cursor, plan.next.cursor);
+	EXPECT_EQ(current.chrome + 1, plan.next.chrome);
+	EXPECT_EQ(audio::Layer::Chrome, plan.dirty_layers);
+	EXPECT_TRUE(plan.invalidate_text_cache);
+	EXPECT_FALSE(plan.request_visible_tiles);
+}
+
+TEST(skia_audio_display_contract, dpi_change_rebuilds_scale_dependent_analysis_and_device_layers) {
+	audio::Revisions current;
+	auto const plan = audio::PlanTransition(current, audio::Change::Dpi);
+	EXPECT_EQ(current.analysis + 1, plan.next.analysis);
+	EXPECT_EQ(current.cursor + 1, plan.next.cursor);
+	EXPECT_EQ(audio::Layer::All, plan.dirty_layers);
+	EXPECT_TRUE(plan.invalidate_analysis_tiles);
+	EXPECT_TRUE(plan.invalidate_gpu_content_tiles);
+	EXPECT_TRUE(plan.invalidate_text_cache);
+	EXPECT_TRUE(plan.request_visible_tiles);
+	EXPECT_TRUE(plan.recreate_surface);
 }
 
 TEST(skia_audio_display_contract, failure_is_sticky_and_preserves_first_reason) {

@@ -24,22 +24,28 @@
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
 #include <include/core/SkPaint.h>
+#include <include/core/SkPicture.h>
+#include <include/core/SkPictureRecorder.h>
 #include <include/core/SkRect.h>
 #include <include/core/SkSamplingOptions.h>
 #include <include/core/SkString.h>
 #include <include/core/SkSurface.h>
 #include <include/effects/SkGradient.h>
 #include <include/effects/SkRuntimeEffect.h>
+#include <include/gpu/GpuTypes.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
 #include <include/gpu/ganesh/SkImageGanesh.h>
+#include <include/gpu/ganesh/SkSurfaceGanesh.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <iomanip>
 #include <limits>
 #include <optional>
 #include <queue>
+#include <span>
 #include <sstream>
 #include <unordered_map>
 #include <utility>
@@ -48,10 +54,42 @@
 namespace aegisub::skia::audio {
 namespace {
 
-constexpr int kWaveformMaskHeight = 256;
-constexpr float kSpectrumPowerEncodingMaximum = 8.f;
 constexpr std::size_t kDefaultContentCacheBudget = 32 * 1024 * 1024;
 constexpr std::size_t kGaneshResourceCacheBudget = 64 * 1024 * 1024;
+
+using FrameTraceClock = std::chrono::steady_clock;
+
+FrameTraceClock::time_point BeginFrameTrace(bool enabled) noexcept {
+	return enabled ? FrameTraceClock::now() : FrameTraceClock::time_point {};
+}
+
+double EndFrameTrace(FrameTraceClock::time_point started) noexcept {
+	if (started == FrameTraceClock::time_point {})
+		return -1.0;
+	return std::chrono::duration<double, std::milli>(FrameTraceClock::now() - started).count();
+}
+
+perf_trace::AudioContentTileEvent MakeTileEvent(
+	char const *stage,
+	ContentTileKey const& key) noexcept {
+	perf_trace::AudioContentTileEvent event;
+	event.stage = stage;
+	event.spectrum = key.kind == ContentKind::Spectrum;
+	event.provider_generation = key.generation.provider;
+	event.analysis_generation = key.generation.analysis;
+	event.tile_index = key.tile_index;
+	event.column_count = key.column_count;
+	event.spectrum_bin_count = key.spectrum_bin_count;
+	return event;
+}
+
+perf_trace::AudioContentTileEvent MakePayloadEvent(
+	char const *stage,
+	ContentUploadPayloadKey const& key) noexcept {
+	auto event = MakeTileEvent(stage, key.tile);
+	event.variant_revision = key.variant_revision;
+	return event;
+}
 
 SkiaGlFailureInjection DeviceFailureInjection(FailureInjection injection) noexcept {
 	switch (injection) {
@@ -72,21 +110,6 @@ std::string ReadGlString(GLenum name) {
 	return value ? reinterpret_cast<char const *>(value) : std::string{};
 }
 
-struct ContentTileKeyHash {
-	std::size_t operator()(ContentTileKey const& key) const noexcept {
-		auto combine = [](std::size_t seed, std::uint64_t value) {
-			return seed ^ (static_cast<std::size_t>(value) + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
-		};
-		std::size_t hash = 0;
-		hash = combine(hash, key.generation.provider);
-		hash = combine(hash, key.generation.analysis);
-		hash = combine(hash, static_cast<std::uint64_t>(key.kind));
-		hash = combine(hash, key.tile_index);
-		hash = combine(hash, key.column_count);
-		return combine(hash, key.spectrum_bin_count);
-	}
-};
-
 sk_sp<SkImage> UploadTexture(
 	GrDirectContext *context,
 	SkImageInfo const& info,
@@ -102,63 +125,6 @@ sk_sp<SkImage> UploadTexture(
 	if (!raster)
 		return nullptr;
 	return SkImages::TextureFromImage(context, raster);
-}
-
-int WaveformMaskY(float value) noexcept {
-	value = std::clamp(value, -1.f, 1.f);
-	auto const coordinate = (1.f - value) * 0.5f * (kWaveformMaskHeight - 1);
-	return std::clamp(static_cast<int>(std::lround(coordinate)), 0, kWaveformMaskHeight - 1);
-}
-
-std::vector<std::uint8_t> BuildWaveformMask(ContentTile const& tile, bool average) {
-	auto const width = static_cast<std::size_t>(tile.key.column_count);
-	std::vector<std::uint8_t> mask(width * kWaveformMaskHeight);
-	for (std::size_t x = 0; x < width; ++x) {
-		auto const& column = tile.waveform[x];
-		auto low = average ? column.average_min : column.peak_min;
-		auto high = average ? column.average_max : column.peak_max;
-		if (low > high)
-			std::swap(low, high);
-		auto const top = WaveformMaskY(high);
-		auto const bottom = WaveformMaskY(low);
-		for (int y = top; y <= bottom; ++y)
-			mask[static_cast<std::size_t>(y) * width + x] = 255;
-	}
-	return mask;
-}
-
-std::vector<std::uint8_t> EncodeSpectrumPower(ContentTile const& tile, SpectrumBandPlan const& plan) {
-	auto const width = static_cast<std::size_t>(tile.key.column_count);
-	auto const height = static_cast<std::size_t>(plan.output_height);
-	std::vector<std::uint8_t> pixels(width * height * 4);
-	for (std::size_t x = 0; x < width; ++x) {
-		for (std::size_t y = 0; y < height; ++y) {
-			auto const& band = plan.bands[y];
-			float power = 0.f;
-			if (plan.interpolated) {
-				auto const lower = tile.spectrum_power[
-					x * tile.key.spectrum_bin_count + band.first];
-				auto const upper = tile.spectrum_power[
-					x * tile.key.spectrum_bin_count + band.last];
-				power = (1.f - band.fraction) * lower + band.fraction * upper;
-			}
-			else {
-				for (auto bin = band.first; bin <= band.last; ++bin)
-					power = std::max(power, tile.spectrum_power[
-						x * tile.key.spectrum_bin_count + bin]);
-			}
-			power = std::clamp(power, 0.f, kSpectrumPowerEncodingMaximum);
-			auto const encoded = static_cast<std::uint16_t>(std::lround(
-				power / kSpectrumPowerEncodingMaximum * std::numeric_limits<std::uint16_t>::max()));
-			auto const image_y = height - 1 - y;
-			auto *pixel = pixels.data() + (image_y * width + x) * 4;
-			pixel[0] = static_cast<std::uint8_t>(encoded >> 8);
-			pixel[1] = static_cast<std::uint8_t>(encoded & 0xFF);
-			pixel[2] = 0;
-			pixel[3] = 255;
-		}
-	}
-	return pixels;
 }
 
 std::vector<std::uint8_t> EncodePalette(SpectrumPalette const& palette) {
@@ -227,10 +193,32 @@ std::string FormatTimelineLabel(std::int64_t milliseconds) {
 	return out.str();
 }
 
+enum class FrameLayerPart : std::uint32_t {
+	None = 0,
+	Timeline = 1u << 0,
+	Marker = 1u << 1,
+	CursorLine = 1u << 2,
+	TimingLabel = 1u << 3,
+	CursorLabel = 1u << 4,
+	Scrollbar = 1u << 5,
+	All = (1u << 6) - 1,
+};
+
+constexpr FrameLayerPart operator|(FrameLayerPart lhs, FrameLayerPart rhs) noexcept {
+	return static_cast<FrameLayerPart>(
+		static_cast<std::uint32_t>(lhs) | static_cast<std::uint32_t>(rhs));
+}
+
+constexpr bool HasFrameLayerPart(FrameLayerPart mask, FrameLayerPart part) noexcept {
+	return (static_cast<std::uint32_t>(mask) & static_cast<std::uint32_t>(part)) != 0;
+}
+
 void DrawAudioFrameLayers(
 	SkCanvas *canvas,
 	FrameTarget const& target,
-	ContentFrame const& frame) {
+	ContentFrame const& frame,
+	PresenterFrameTrace *frame_trace,
+	FrameLayerPart parts = FrameLayerPart::All) {
 	if (!canvas)
 		return;
 
@@ -239,7 +227,8 @@ void DrawAudioFrameLayers(
 
 	// Timeline is deliberately drawn after content in the same canvas submit.
 	// Its scroll origin is expressed in device pixels, matching FrameViewport.
-	if (frame.timeline && frame.timeline->height > 0) {
+	if (HasFrameLayerPart(parts, FrameLayerPart::Timeline)
+		&& frame.timeline && frame.timeline->height > 0) {
 		auto const timeline_y = static_cast<float>(frame.timeline->y);
 		auto const timeline_height = static_cast<float>(frame.timeline->height);
 		paint.setColor(static_cast<SkColor>(frame.timeline->background_color));
@@ -296,53 +285,85 @@ void DrawAudioFrameLayers(
 	// Marker lines, feet and labels are all batched into this frame. The frame
 	// builder supplies device-space x coordinates, so no extra time conversion
 	// or intermediate surface is needed here.
-	canvas->save();
-	canvas->clipRect(SkRect::MakeXYWH(frame.x, frame.y, frame.width, frame.height));
-	for (auto const& marker : frame.markers) {
-		if (!std::isfinite(marker.x) || marker.x < frame.x - 2.f || marker.x > frame.x + frame.width + 2.f)
-			continue;
-		paint.setColor(static_cast<SkColor>(marker.color));
-		paint.setStrokeWidth(static_cast<float>(std::max(1, marker.width)));
-		canvas->drawLine(marker.x, frame.y, marker.x, frame.y + frame.height, paint);
-		if (marker.feet & 1u) {
-			canvas->drawLine(marker.x, frame.y, marker.x - 4.f, frame.y + 4.f, paint);
-			canvas->drawLine(marker.x, frame.y + frame.height, marker.x - 4.f, frame.y + frame.height - 4.f, paint);
+	if (HasFrameLayerPart(parts, FrameLayerPart::Marker)
+		|| HasFrameLayerPart(parts, FrameLayerPart::CursorLine)) {
+		canvas->save();
+		canvas->clipRect(SkRect::MakeXYWH(frame.x, frame.y, frame.width, frame.height));
+		if (HasFrameLayerPart(parts, FrameLayerPart::Marker)) {
+			auto const marker_trace_started = BeginFrameTrace(frame_trace != nullptr);
+			int markers_drawn = 0;
+			for (auto const& marker : frame.markers) {
+				if (!std::isfinite(marker.x) || marker.x < frame.x - 2.f || marker.x > frame.x + frame.width + 2.f)
+					continue;
+				paint.setColor(static_cast<SkColor>(marker.color));
+				paint.setStrokeWidth(static_cast<float>(std::max(1, marker.width)));
+				canvas->drawLine(marker.x, frame.y, marker.x, frame.y + frame.height, paint);
+				if (marker.feet & 1u) {
+					canvas->drawLine(marker.x, frame.y, marker.x - 4.f, frame.y + 4.f, paint);
+					canvas->drawLine(marker.x, frame.y + frame.height, marker.x - 4.f, frame.y + frame.height - 4.f, paint);
+				}
+				if (marker.feet & 2u) {
+					canvas->drawLine(marker.x, frame.y, marker.x + 4.f, frame.y + 4.f, paint);
+					canvas->drawLine(marker.x, frame.y + frame.height, marker.x + 4.f, frame.y + frame.height - 4.f, paint);
+				}
+				++markers_drawn;
+			}
+			if (frame_trace) {
+				frame_trace->marker_layer_rebuild_ms = EndFrameTrace(marker_trace_started);
+				frame_trace->marker_count = static_cast<int>(frame.markers.size());
+				frame_trace->markers_drawn = markers_drawn;
+			}
 		}
-		if (marker.feet & 2u) {
-			canvas->drawLine(marker.x, frame.y, marker.x + 4.f, frame.y + 4.f, paint);
-			canvas->drawLine(marker.x, frame.y + frame.height, marker.x + 4.f, frame.y + frame.height - 4.f, paint);
+		if (HasFrameLayerPart(parts, FrameLayerPart::CursorLine)
+			&& frame.cursor && std::isfinite(frame.cursor->x)) {
+			paint.setColor(static_cast<SkColor>(frame.cursor->color));
+			paint.setStrokeWidth(1.f);
+			canvas->drawLine(frame.cursor->x, frame.y, frame.cursor->x, frame.y + frame.height, paint);
 		}
+		canvas->restore();
 	}
-	if (frame.cursor && std::isfinite(frame.cursor->x)) {
-		paint.setColor(static_cast<SkColor>(frame.cursor->color));
-		paint.setStrokeWidth(1.f);
-		canvas->drawLine(frame.cursor->x, frame.y, frame.cursor->x, frame.y + frame.height, paint);
-	}
-	canvas->restore();
 
-	if (!frame.labels.empty() || (frame.cursor && !frame.cursor->label.empty())) {
+	if ((HasFrameLayerPart(parts, FrameLayerPart::TimingLabel) && !frame.labels.empty())
+		|| (HasFrameLayerPart(parts, FrameLayerPart::CursorLabel)
+			&& frame.cursor && !frame.cursor->label.empty())) {
+		auto const label_trace_started = BeginFrameTrace(
+			frame_trace && HasFrameLayerPart(parts, FrameLayerPart::TimingLabel)
+			&& !frame.labels.empty());
 		SkFont font;
 		font.setSize(11.f);
 		paint.setAntiAlias(true);
 		paint.setColor(SK_ColorWHITE);
 		auto const label_y = frame.y + 12.f;
-		for (auto const& label : frame.labels) {
-			if (label.text.empty() || !std::isfinite(label.x)
-				|| !std::isfinite(label.width) || label.width <= 0.f)
-				continue;
-			canvas->save();
-			canvas->clipRect(SkRect::MakeXYWH(label.x, frame.y, label.width, frame.height));
-			canvas->drawSimpleText(label.text.data(), label.text.size(), SkTextEncoding::kUTF8,
-				label.x, label_y, font, paint);
-			canvas->restore();
+		int labels_drawn = 0;
+		if (HasFrameLayerPart(parts, FrameLayerPart::TimingLabel)) {
+			for (auto const& label : frame.labels) {
+				if (label.text.empty() || !std::isfinite(label.x)
+					|| !std::isfinite(label.width) || label.width <= 0.f)
+					continue;
+				canvas->save();
+				canvas->clipRect(SkRect::MakeXYWH(label.x, frame.y, label.width, frame.height));
+				canvas->drawSimpleText(label.text.data(), label.text.size(), SkTextEncoding::kUTF8,
+					label.x, label_y, font, paint);
+				canvas->restore();
+				++labels_drawn;
+			}
 		}
-		if (frame.cursor && !frame.cursor->label.empty() && std::isfinite(frame.cursor->x)) {
+		if (frame_trace && HasFrameLayerPart(parts, FrameLayerPart::TimingLabel)
+			&& !frame.labels.empty()) {
+			frame_trace->label_layer_rebuild_ms = EndFrameTrace(label_trace_started);
+			frame_trace->label_count = static_cast<int>(frame.labels.size());
+			frame_trace->labels_drawn = labels_drawn;
+		}
+		if (HasFrameLayerPart(parts, FrameLayerPart::CursorLabel)
+			&& frame.cursor && !frame.cursor->label.empty() && std::isfinite(frame.cursor->x)) {
 			canvas->drawSimpleText(frame.cursor->label.data(), frame.cursor->label.size(), SkTextEncoding::kUTF8,
 				frame.cursor->x + 3.f, frame.y + 12.f, font, paint);
 		}
 	}
 
-	if (frame.scrollbar && frame.scrollbar->height > 0) {
+	if (HasFrameLayerPart(parts, FrameLayerPart::Scrollbar)
+		&& frame.scrollbar && frame.scrollbar->height > 0) {
+		auto const scrollbar_trace_started = BeginFrameTrace(frame_trace != nullptr);
 		auto const scrollbar = *frame.scrollbar;
 		auto const y = static_cast<float>(std::clamp(scrollbar.y, 0, target.height - scrollbar.height));
 		auto const h = static_cast<float>(scrollbar.height);
@@ -359,8 +380,11 @@ void DrawAudioFrameLayers(
 			scrollbar.load_position,
 			scrollbar.selection_start,
 			scrollbar.selection_length);
-		if (!geometry.valid)
+		if (!geometry.valid) {
+			if (frame_trace)
+				frame_trace->scrollbar_layer_rebuild_ms = EndFrameTrace(scrollbar_trace_started);
 			return;
+		}
 
 		canvas->save();
 		canvas->clipRect(SkRect::MakeXYWH(0.f, y, track, h));
@@ -416,7 +440,54 @@ void DrawAudioFrameLayers(
 		canvas->drawRect(SkRect::MakeXYWH(
 			geometry.thumb_x, y, geometry.thumb_width, h), paint);
 		canvas->restore();
+		if (frame_trace) {
+			frame_trace->scrollbar_layer_rebuild_ms = EndFrameTrace(scrollbar_trace_started);
+			frame_trace->scrollbar_selection_visible = geometry.selection_visible;
+			frame_trace->scrollbar_load_visible = geometry.load_visible;
+		}
 	}
+}
+
+void DrawTimelineLayer(SkCanvas *canvas, ContentFrame const& frame) {
+	DrawAudioFrameLayers(canvas, {}, frame, nullptr, FrameLayerPart::Timeline);
+}
+
+void DrawMarkerLayer(SkCanvas *canvas, ContentFrame const& frame, PresenterFrameTrace *trace) {
+	DrawAudioFrameLayers(canvas, {}, frame, trace, FrameLayerPart::Marker);
+}
+
+void DrawTimingLabelLayer(SkCanvas *canvas, ContentFrame const& frame, PresenterFrameTrace *trace) {
+	DrawAudioFrameLayers(canvas, {}, frame, trace, FrameLayerPart::TimingLabel);
+}
+
+void DrawCursorLayer(SkCanvas *canvas, ContentFrame const& frame, bool label) {
+	DrawAudioFrameLayers(
+		canvas,
+		{},
+		frame,
+		nullptr,
+		label ? FrameLayerPart::CursorLabel : FrameLayerPart::CursorLine);
+}
+
+void DrawScrollbarLayer(
+	SkCanvas *canvas,
+	FrameTarget const& target,
+	ContentFrame const& frame,
+	PresenterFrameTrace *trace) {
+	DrawAudioFrameLayers(canvas, target, frame, trace, FrameLayerPart::Scrollbar);
+}
+
+sk_sp<SkPicture> RecordLayerPicture(
+	FrameTarget const& target,
+	std::function<void(SkCanvas *)> const& draw) {
+	SkPictureRecorder recorder;
+	auto *canvas = recorder.beginRecording(
+		static_cast<SkScalar>(target.width),
+		static_cast<SkScalar>(target.height));
+	if (!canvas)
+		return nullptr;
+	draw(canvas);
+	return recorder.finishRecordingAsPicture();
 }
 
 }
@@ -427,11 +498,10 @@ struct Presenter::Impl {
 		sk_sp<SkImage> secondary;
 		std::size_t bytes = 0;
 		std::uint64_t touch = 0;
-		std::uint64_t spectrum_revision = 0;
 	};
 	struct GpuContentTouch {
 		std::uint64_t touch = 0;
-		ContentTileKey key;
+		ContentUploadPayloadKey key;
 		bool operator>(GpuContentTouch const& other) const noexcept { return touch > other.touch; }
 	};
 
@@ -462,16 +532,22 @@ struct Presenter::Impl {
 	SkiaSurfaceProvider surface_provider;
 	sk_sp<SkSurface> surface;
 	std::optional<SurfaceKey> surface_key;
-	std::unordered_map<ContentTileKey, GpuContentEntry, ContentTileKeyHash> content_cache;
+	std::unordered_map<ContentUploadPayloadKey, GpuContentEntry, ContentUploadPayloadKeyHash> content_cache;
 	std::priority_queue<GpuContentTouch, std::vector<GpuContentTouch>, std::greater<GpuContentTouch>> content_touches;
 	std::size_t content_cache_budget = kDefaultContentCacheBudget;
 	std::size_t content_cache_bytes = 0;
 	std::uint64_t content_touch_counter = 0;
 	sk_sp<SkRuntimeEffect> spectrum_effect;
 	std::string spectrum_effect_error;
-	std::uint64_t palette_revision = 0;
-	sk_sp<SkImage> palette_image;
 	std::unordered_map<std::uint64_t, sk_sp<SkImage>> palette_images;
+	std::uint64_t retained_static_revision = 0;
+	SurfaceKey retained_surface_key;
+	bool retained_layers_ready = false;
+	sk_sp<SkImage> retained_base_image;
+	sk_sp<SkPicture> retained_timeline;
+	sk_sp<SkPicture> retained_markers;
+	sk_sp<SkPicture> retained_timing_labels;
+	sk_sp<SkPicture> retained_post_cursor;
 	PresenterMetrics metrics;
 	SkiaGlContextToken last_context;
 	bool failure_logged = false;
@@ -492,10 +568,19 @@ struct Presenter::Impl {
 		content_touches = {};
 		content_cache_bytes = 0;
 		content_touch_counter = 0;
-		palette_image.reset();
 		palette_images.clear();
-		palette_revision = 0;
 		UpdateContentMetrics();
+	}
+
+	void ResetRetainedLayers() noexcept {
+		retained_static_revision = 0;
+		retained_surface_key = {};
+		retained_layers_ready = false;
+		retained_base_image.reset();
+		retained_timeline.reset();
+		retained_markers.reset();
+		retained_timing_labels.reset();
+		retained_post_cursor.reset();
 	}
 
 	void Fail(SkiaGlContextToken context, SkiaGlDeviceFailure failure, std::string detail) noexcept {
@@ -503,10 +588,11 @@ struct Presenter::Impl {
 		surface.reset();
 		surface_key.reset();
 		ResetContentCache();
+		ResetRetainedLayers();
 		device.Fail(context, failure, std::move(detail));
 	}
 
-	void TouchContent(ContentTileKey const& key, GpuContentEntry& entry) {
+	void TouchContent(ContentUploadPayloadKey const& key, GpuContentEntry& entry) {
 		entry.touch = ++content_touch_counter;
 		content_touches.push({ entry.touch, key });
 		if (content_touches.size() > content_cache.size() * 4 + 64) {
@@ -526,9 +612,13 @@ struct Presenter::Impl {
 				auto entry = content_cache.find(candidate.key);
 				if (entry == content_cache.end() || entry->second.touch != candidate.touch)
 					continue;
+				auto event = MakePayloadEvent("gpu_evict", entry->first);
+				event.outcome = "budget";
+				event.bytes = entry->second.bytes;
 				content_cache_bytes -= entry->second.bytes;
 				content_cache.erase(entry);
 				++metrics.content_evictions;
+				perf_trace::ObserveAudioContentTileEvent(event);
 				evicted = true;
 				break;
 			}
@@ -631,95 +721,85 @@ struct Presenter::Impl {
 	}
 
 	std::optional<GpuContentEntry> UploadContentTile(
-		ContentTile const& tile,
-		SpectrumBandPlan const *spectrum_band_plan) {
+		ContentUploadPayload const& payload) {
 		auto *context = device.Get();
-		if (!context)
+		if (!context || !payload.IsValid())
 			return std::nullopt;
 
 		GpuContentEntry uploaded;
-		if (tile.key.kind == ContentKind::Waveform) {
-			auto peak_mask = BuildWaveformMask(tile, false);
-			auto average_mask = BuildWaveformMask(tile, true);
+		if (payload.key.tile.kind == ContentKind::Waveform) {
 			auto const info = SkImageInfo::MakeA8(
-				static_cast<int>(tile.key.column_count),
-				kWaveformMaskHeight);
+				static_cast<int>(payload.width),
+				static_cast<int>(payload.height));
 			uploaded.primary = UploadTexture(
 				context,
 				info,
-				peak_mask.data(),
-				peak_mask.size(),
-				tile.key.column_count);
+				payload.primary.data(),
+				payload.primary.size(),
+				payload.width);
 			uploaded.secondary = UploadTexture(
 				context,
 				info,
-				average_mask.data(),
-				average_mask.size(),
-				tile.key.column_count);
+				payload.secondary.data(),
+				payload.secondary.size(),
+				payload.width);
 			if (!uploaded.primary || !uploaded.secondary)
 				return std::nullopt;
 			uploaded.bytes = uploaded.primary->textureSize() + uploaded.secondary->textureSize();
 			if (!uploaded.bytes)
-				uploaded.bytes = peak_mask.size() + average_mask.size();
+				uploaded.bytes = payload.primary.size() + payload.secondary.size();
 		}
 		else {
-			if (!spectrum_band_plan || !spectrum_band_plan->IsValid())
-				return std::nullopt;
-			auto pixels = EncodeSpectrumPower(tile, *spectrum_band_plan);
 			auto const info = SkImageInfo::Make(
-				static_cast<int>(tile.key.column_count),
-				spectrum_band_plan->output_height,
+				static_cast<int>(payload.width),
+				static_cast<int>(payload.height),
 				kRGBA_8888_SkColorType,
 				kOpaque_SkAlphaType,
 				nullptr);
 			uploaded.primary = UploadTexture(
 				context,
 				info,
-				pixels.data(),
-				pixels.size(),
-				static_cast<std::size_t>(tile.key.column_count) * 4);
+				payload.primary.data(),
+				payload.primary.size(),
+				static_cast<std::size_t>(payload.width) * 4);
 			if (!uploaded.primary)
 				return std::nullopt;
-			uploaded.spectrum_revision = spectrum_band_plan->revision;
 			uploaded.bytes = uploaded.primary->textureSize();
 			if (!uploaded.bytes)
-				uploaded.bytes = pixels.size();
+				uploaded.bytes = payload.primary.size();
 		}
 		return uploaded;
 	}
 
 	std::optional<GpuContentEntry> AcquireContentTile(
-		ContentTile const& tile,
-		SpectrumBandPlan const *spectrum_band_plan) {
-		auto found = content_cache.find(tile.key);
+		ContentUploadPayload const& payload) {
+		auto found = content_cache.find(payload.key);
 		if (found != content_cache.end()) {
-			if (tile.key.kind != ContentKind::Spectrum
-				|| (spectrum_band_plan && found->second.spectrum_revision == spectrum_band_plan->revision)) {
-				TouchContent(found->first, found->second);
-				++metrics.content_cache_hits;
-				return found->second;
-			}
-			content_cache_bytes -= found->second.bytes;
-			content_cache.erase(found);
-			UpdateContentMetrics();
+			TouchContent(found->first, found->second);
+			++metrics.content_cache_hits;
+			return found->second;
 		}
 
 		++metrics.content_cache_misses;
-		if (!tile.IsValid())
+		if (!payload.IsValid())
 			return std::nullopt;
-		auto uploaded = UploadContentTile(tile, spectrum_band_plan);
+		auto uploaded = UploadContentTile(payload);
 		if (!uploaded)
 			return std::nullopt;
 		if (uploaded->bytes > content_cache_budget)
 			return std::nullopt;
 
-		auto const key = tile.key;
+		auto const key = payload.key;
 		auto [entry, inserted] = content_cache.emplace(key, std::move(*uploaded));
 		if (!inserted)
 			return entry->second;
 		content_cache_bytes += entry->second.bytes;
 		metrics.content_upload_bytes += entry->second.bytes;
 		++metrics.content_uploads;
+		auto event = MakePayloadEvent("gpu_upload", entry->first);
+		event.outcome = "uploaded";
+		event.bytes = entry->second.bytes;
+		perf_trace::ObserveAudioContentTileEvent(event);
 		TouchContent(entry->first, entry->second);
 		TrimContentCache();
 		return entry->second;
@@ -744,13 +824,13 @@ struct Presenter::Impl {
 			pixels.size());
 		if (!uploaded)
 			return nullptr;
-		palette_image = uploaded;
-		palette_revision = palette.revision;
 		if (palette_images.size() >= 8)
 			palette_images.erase(palette_images.begin());
-		palette_images.emplace(palette.revision, uploaded);
+		auto [entry, inserted] = palette_images.emplace(palette.revision, std::move(uploaded));
+		if (!inserted)
+			return entry->second;
 		++metrics.palette_uploads;
-		return palette_image;
+		return entry->second;
 	}
 };
 
@@ -796,6 +876,7 @@ bool Presenter::RenderContentFrame(
 	FrameTarget const& target,
 	ContentFrame const& frame) try {
 	++impl->metrics.frame_attempts;
+	impl->metrics.last_frame_trace = {};
 	if (!impl->PrepareFrame(context, target))
 		return false;
 	if (auto const error = ValidateContentFrame(target, frame); !error.empty()) {
@@ -803,6 +884,11 @@ bool Presenter::RenderContentFrame(
 		return false;
 	}
 
+	auto const trace_enabled = perf_trace::IsCategoryEnabled(perf_trace::Category::Audio);
+	PresenterFrameTrace frame_trace;
+	auto *trace = trace_enabled ? &frame_trace : nullptr;
+	auto const compose_trace_started = BeginFrameTrace(trace_enabled);
+	auto const base_trace_started = BeginFrameTrace(trace_enabled);
 	auto *canvas = impl->surface->getCanvas();
 	canvas->clear(static_cast<SkColor>(frame.background_color));
 	SkRect const content_bounds = SkRect::MakeXYWH(
@@ -812,24 +898,23 @@ bool Presenter::RenderContentFrame(
 		static_cast<float>(frame.height));
 	SkPaint paint;
 	paint.setAntiAlias(false);
-	std::vector<StyleFrame> styles = frame.styles;
+	StyleFrame default_style;
+	std::span<StyleFrame const> styles = frame.styles;
 	if (styles.empty()) {
-		StyleFrame style;
-		style.x = frame.x;
-		style.width = frame.width;
-		style.background_color = frame.background_color;
-		style.waveform_peak_color = frame.waveform_peak_color;
-		style.waveform_average_color = frame.waveform_average_color;
-		style.waveform_zero_color = frame.waveform_zero_color;
-		style.spectrum_palette = frame.spectrum_palette;
-		styles.push_back(std::move(style));
+		default_style.x = frame.x;
+		default_style.width = frame.width;
+		default_style.background_color = frame.background_color;
+		default_style.waveform_peak_color = frame.waveform_peak_color;
+		default_style.waveform_average_color = frame.waveform_average_color;
+		default_style.waveform_zero_color = frame.waveform_zero_color;
+		default_style.spectrum_palette = frame.spectrum_palette;
+		styles = std::span<StyleFrame const>(&default_style, 1);
 	}
 	for (auto const& style : styles) {
 		paint.setColor(static_cast<SkColor>(style.background_color));
 		canvas->drawRect(SkRect::MakeXYWH(style.x, frame.y, style.width, frame.height), paint);
 	}
 
-	std::unordered_map<std::uint64_t, sk_sp<SkImage>> palettes;
 	if (frame.kind == ContentKind::Spectrum) {
 		if (!impl->spectrum_effect) {
 			impl->Fail(
@@ -839,15 +924,10 @@ bool Presenter::RenderContentFrame(
 			return false;
 		}
 		for (auto const& style : styles) {
-			auto const revision = style.spectrum_palette->revision;
-			if (palettes.contains(revision))
-				continue;
-			auto palette = impl->AcquirePalette(*style.spectrum_palette);
-			if (!palette) {
+			if (!impl->AcquirePalette(*style.spectrum_palette)) {
 				impl->Fail(context, SkiaGlDeviceFailure::ContentUploadFailed, "failed to upload an Audio spectrum style palette");
 				return false;
 			}
-			palettes.emplace(revision, std::move(palette));
 		}
 	}
 
@@ -855,28 +935,32 @@ bool Presenter::RenderContentFrame(
 	canvas->clipRect(content_bounds);
 	for (auto const& tile : frame.tiles) {
 		if (!tile
-			|| !tile->HasValidShape()
-			|| tile->key.generation != frame.generation
-			|| tile->key.kind != frame.kind
+			|| !tile->IsValid()
+			|| tile->key.tile.generation != frame.generation
+			|| tile->key.tile.kind != frame.kind
+			|| (frame.kind == ContentKind::Waveform
+				&& tile->key.variant_revision != kWaveformUploadPayloadRevision)
 			|| (frame.kind == ContentKind::Spectrum
-				&& tile->key.spectrum_bin_count != frame.spectrum_band_plan->bin_count)
-			|| tile->key.tile_index > std::numeric_limits<std::uint64_t>::max() / tile->key.column_count) {
+				&& (tile->key.tile.spectrum_bin_count != frame.spectrum_band_plan->bin_count
+					|| tile->key.variant_revision != frame.spectrum_band_plan->revision
+					|| tile->height != static_cast<std::uint32_t>(frame.spectrum_band_plan->output_height)))
+			|| tile->key.tile.tile_index
+				> std::numeric_limits<std::uint64_t>::max() / tile->key.tile.column_count) {
 			++impl->metrics.content_tiles_skipped;
 			continue;
 		}
 
-		auto const tile_first = tile->key.tile_index * tile->key.column_count;
+		auto const& tile_key = tile->key.tile;
+		auto const tile_first = tile_key.tile_index * tile_key.column_count;
 		double relative_x = tile_first >= frame.first_column
 			? static_cast<double>(tile_first - frame.first_column)
 			: -static_cast<double>(frame.first_column - tile_first);
 		if (relative_x >= frame.width
-			|| relative_x + tile->key.column_count <= 0.0) {
+			|| relative_x + tile_key.column_count <= 0.0) {
 			continue;
 		}
 
-		auto gpu_tile = impl->AcquireContentTile(
-			*tile,
-			frame.kind == ContentKind::Spectrum ? frame.spectrum_band_plan.get() : nullptr);
+		auto gpu_tile = impl->AcquireContentTile(*tile);
 		if (!gpu_tile) {
 			impl->Fail(context, SkiaGlDeviceFailure::ContentUploadFailed, "failed to upload or retain an Audio content tile");
 			return false;
@@ -887,12 +971,12 @@ bool Presenter::RenderContentFrame(
 			auto const amplitude = std::clamp(frame.amplitude, 0.f, 64.f);
 			auto const scaled_height = frame.height * amplitude;
 			SkRect const source = SkRect::MakeWH(
-				static_cast<float>(tile->key.column_count),
-				static_cast<float>(kWaveformMaskHeight));
+				static_cast<float>(tile_key.column_count),
+				static_cast<float>(kWaveformUploadMaskHeight));
 			SkRect const destination = SkRect::MakeXYWH(
 				destination_x,
 				frame.y + (frame.height - scaled_height) * 0.5f,
-				static_cast<float>(tile->key.column_count),
+				static_cast<float>(tile_key.column_count),
 				scaled_height);
 			if (destination.height() > 0.f) {
 				for (auto const& style : styles) {
@@ -929,7 +1013,7 @@ bool Presenter::RenderContentFrame(
 			SkRect const destination = SkRect::MakeXYWH(
 				destination_x,
 				frame.y,
-				static_cast<float>(tile->key.column_count),
+				static_cast<float>(tile_key.column_count),
 				frame.height);
 			for (auto const& style : styles) {
 				auto const style_bounds = SkRect::MakeXYWH(style.x, frame.y, style.width, frame.height);
@@ -938,7 +1022,12 @@ bool Presenter::RenderContentFrame(
 				auto power_shader = gpu_tile->primary->makeRawShader(
 					SkSamplingOptions(SkFilterMode::kLinear),
 					nullptr);
-				auto palette_shader = palettes.at(style.spectrum_palette->revision)->makeShader(
+				auto palette = impl->AcquirePalette(*style.spectrum_palette);
+				if (!palette) {
+					impl->Fail(context, SkiaGlDeviceFailure::ContentUploadFailed, "failed to retain an Audio spectrum style palette");
+					return false;
+				}
+				auto palette_shader = palette->makeShader(
 					SkSamplingOptions(SkFilterMode::kLinear),
 					nullptr);
 				if (!power_shader || !palette_shader) {
@@ -961,7 +1050,7 @@ bool Presenter::RenderContentFrame(
 				canvas->clipRect(style_bounds);
 				canvas->translate(destination_x, frame.y);
 				canvas->drawRect(SkRect::MakeWH(
-					static_cast<float>(tile->key.column_count),
+					static_cast<float>(tile_key.column_count),
 					frame.height), paint);
 				canvas->restore();
 			}
@@ -983,8 +1072,59 @@ bool Presenter::RenderContentFrame(
 		}
 	}
 	canvas->restore();
-	DrawAudioFrameLayers(canvas, target, frame);
-	return impl->FinishFrame(context);
+	auto retained_base_image = frame.static_revision
+		? impl->surface->makeImageSnapshot()
+		: sk_sp<SkImage>{};
+	if (trace) {
+		trace->base_layer_rebuild_ms = EndFrameTrace(base_trace_started);
+		trace->tile_count = static_cast<int>(frame.tiles.size());
+		trace->style_count = static_cast<int>(styles.size());
+	}
+	DrawTimelineLayer(canvas, frame);
+	DrawMarkerLayer(canvas, frame, trace);
+	DrawCursorLayer(canvas, frame, false);
+	DrawTimingLabelLayer(canvas, frame, trace);
+	DrawCursorLayer(canvas, frame, true);
+	DrawScrollbarLayer(canvas, target, frame, trace);
+
+	if (frame.static_revision) {
+		auto timeline = RecordLayerPicture(target, [&frame](SkCanvas *recording) {
+			DrawTimelineLayer(recording, frame);
+		});
+		auto markers = RecordLayerPicture(target, [&frame](SkCanvas *recording) {
+			DrawMarkerLayer(recording, frame, nullptr);
+		});
+		auto timing_labels = RecordLayerPicture(target, [&frame](SkCanvas *recording) {
+			DrawTimingLabelLayer(recording, frame, nullptr);
+		});
+		auto post_cursor = RecordLayerPicture(target, [&target, &frame](SkCanvas *recording) {
+			DrawScrollbarLayer(recording, target, frame, nullptr);
+		});
+		if (!retained_base_image || !timeline || !markers || !timing_labels || !post_cursor) {
+			impl->ResetRetainedLayers();
+		}
+		else {
+			impl->retained_static_revision = frame.static_revision;
+			impl->retained_surface_key = MakeSurfaceKey(target);
+			impl->retained_base_image = std::move(retained_base_image);
+			impl->retained_timeline = std::move(timeline);
+			impl->retained_markers = std::move(markers);
+			impl->retained_timing_labels = std::move(timing_labels);
+			impl->retained_post_cursor = std::move(post_cursor);
+			impl->retained_layers_ready = true;
+		}
+	}
+	else {
+		impl->ResetRetainedLayers();
+	}
+	if (trace) {
+		trace->frame_compose_ms = EndFrameTrace(compose_trace_started);
+		trace->valid = true;
+	}
+	auto const finished = impl->FinishFrame(context);
+	if (finished && trace)
+		impl->metrics.last_frame_trace = frame_trace;
+	return finished;
 }
 catch (std::exception const& err) {
 	impl->Fail(context, SkiaGlDeviceFailure::ContentUploadFailed, err.what());
@@ -995,9 +1135,86 @@ catch (...) {
 	return false;
 }
 
+bool Presenter::RenderCursorFrame(
+	SkiaGlContextToken context,
+	FrameTarget const& target,
+	ContentFrame const& frame) {
+	return RenderRetainedOverlayFrame(context, target, frame, Layer::Cursor);
+}
+
+bool Presenter::RenderRetainedOverlayFrame(
+	SkiaGlContextToken context,
+	FrameTarget const& target,
+	ContentFrame const& frame,
+	Layer updated_layers) try {
+	++impl->metrics.frame_attempts;
+	impl->metrics.last_frame_trace = {};
+	if (!CanRenderRetainedOverlay(updated_layers)
+		|| !frame.static_revision
+		|| !impl->retained_layers_ready
+		|| impl->retained_static_revision != frame.static_revision
+		|| impl->retained_surface_key != MakeSurfaceKey(target)
+		|| !impl->retained_base_image
+		|| !impl->retained_timeline
+		|| !impl->retained_markers
+		|| !impl->retained_timing_labels
+		|| !impl->retained_post_cursor) {
+		return false;
+	}
+	sk_sp<SkPicture> updated_markers;
+	auto const trace_enabled = perf_trace::IsCategoryEnabled(perf_trace::Category::Audio);
+	PresenterFrameTrace frame_trace;
+	frame_trace.retained_layers_reused = true;
+	frame_trace.cursor_only = updated_layers == Layer::Cursor;
+	frame_trace.base_layer_rebuild_ms = -1.0;
+	if (HasLayer(updated_layers, Layer::Marker)) {
+		updated_markers = RecordLayerPicture(target, [&frame, &frame_trace, trace_enabled](SkCanvas *recording) {
+			DrawMarkerLayer(recording, frame, trace_enabled ? &frame_trace : nullptr);
+		});
+		if (!updated_markers)
+			return false;
+	}
+	if (!impl->PrepareFrame(context, target))
+		return false;
+
+	auto const compose_trace_started = BeginFrameTrace(trace_enabled);
+	auto *canvas = impl->surface->getCanvas();
+	canvas->clear(SK_ColorTRANSPARENT);
+	canvas->drawImage(impl->retained_base_image, 0.f, 0.f);
+	canvas->drawPicture(impl->retained_timeline);
+	if (updated_markers)
+		impl->retained_markers = std::move(updated_markers);
+	canvas->drawPicture(impl->retained_markers);
+	DrawCursorLayer(canvas, frame, false);
+	canvas->drawPicture(impl->retained_timing_labels);
+	DrawCursorLayer(canvas, frame, true);
+	canvas->drawPicture(impl->retained_post_cursor);
+	if (trace_enabled) {
+		frame_trace.frame_compose_ms = EndFrameTrace(compose_trace_started);
+		frame_trace.valid = true;
+	}
+	auto const finished = impl->FinishFrame(context);
+	if (finished && trace_enabled)
+		impl->metrics.last_frame_trace = frame_trace;
+	return finished;
+}
+catch (std::exception const& err) {
+	impl->Fail(context, SkiaGlDeviceFailure::ContentUploadFailed, err.what());
+	return false;
+}
+catch (...) {
+	impl->Fail(context, SkiaGlDeviceFailure::ContentUploadFailed, "an unknown exception escaped Audio retained overlay rendering");
+	return false;
+}
+
 void Presenter::SetContentCacheBudget(std::size_t budget_bytes) {
 	impl->content_cache_budget = std::max<std::size_t>(1, budget_bytes);
 	impl->TrimContentCache();
+}
+
+void Presenter::SetFailureInjection(FailureInjection failure_injection) noexcept {
+	impl->failure_injection = failure_injection;
+	impl->device.SetFailureInjection(DeviceFailureInjection(failure_injection));
 }
 
 void Presenter::Fail(
@@ -1012,6 +1229,7 @@ void Presenter::Release(SkiaGlContextToken context) noexcept {
 	impl->surface.reset();
 	impl->surface_key.reset();
 	impl->ResetContentCache();
+	impl->ResetRetainedLayers();
 	impl->device.ReleaseResourcesAndAbandon(context);
 }
 
@@ -1020,6 +1238,7 @@ void Presenter::Abandon() noexcept {
 	impl->surface.reset();
 	impl->surface_key.reset();
 	impl->ResetContentCache();
+	impl->ResetRetainedLayers();
 }
 
 SkiaGlDeviceHealth Presenter::Health() const noexcept {

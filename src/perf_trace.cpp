@@ -407,6 +407,11 @@ public:
 		value += ToString(field_value);
 	}
 
+	void AddUInt(std::string_view key, uint64_t field_value) {
+		AddKey(key);
+		value += ToString(field_value);
+	}
+
 	void AddDouble(std::string_view key, double field_value) {
 		AddKey(key);
 		value += ToStringDouble(field_value);
@@ -474,6 +479,18 @@ struct DurationSummary {
 			max_ms = std::max(max_ms, duration_ms);
 		}
 	}
+};
+
+struct AudioDisplayTraceSummary {
+	uint64_t samples = 0;
+	uint64_t complete_content_frames = 0;
+	uint64_t swap_failures = 0;
+	uint64_t source_cache_max_bytes = 0;
+	uint64_t cpu_tile_max_bytes = 0;
+	uint64_t cpu_payload_max_bytes = 0;
+	uint64_t fft_max_bytes = 0;
+	uint64_t gpu_tile_max_bytes = 0;
+	AudioDisplaySnapshot latest;
 };
 
 struct Summary {
@@ -545,6 +562,7 @@ struct Summary {
 	DurationSummary window_open_duration;
 	DurationSummary lua_dialog_duration;
 	DurationSummary audio_output_fill_duration;
+	AudioDisplayTraceSummary audio_display;
 };
 
 class TraceLogEmitter final : public agi::log::Emitter {
@@ -826,10 +844,9 @@ void WriteManifest(Session const& session) {
 	out << "started_local=" << session.started_local << "\n";
 	out << "pid=" << wxGetProcessId() << "\n";
 	out << "platform=" << wxGetOsDescription().ToStdString(wxConvUTF8) << "\n";
-	out << "cwd=" << agi::fs::PathToString(std::filesystem::current_path()) << "\n";
-	out << "session_dir=" << agi::fs::PathToString(session.directory) << "\n";
-	out << "trace_file=" << agi::fs::PathToString(session.directory / "trace.ndjson") << "\n";
-	out << "summary_file=" << agi::fs::PathToString(session.directory / "summary.txt") << "\n";
+	out << "session_dir=.\n";
+	out << "trace_file=trace.ndjson\n";
+	out << "summary_file=summary.txt\n";
 	out.flush();
 }
 
@@ -891,6 +908,73 @@ void WriteSummaryLocked(Session const& session) {
 		out << "audio_ui_phase." << key << ".max_ms=" << ToStringDouble(phase.max_ms) << "\n";
 		out << "audio_ui_phase." << key << ".mean_ms=" << ToStringDouble(phase.count ? phase.total_ms / phase.count : 0.0) << "\n";
 	}
+	auto const& audio_display = session.summary.audio_display;
+	write_int("audio_display.snapshot.samples", audio_display.samples);
+	write_int("audio_display.content.complete_frames", audio_display.complete_content_frames);
+	write_int("audio_display.swap.failures", audio_display.swap_failures);
+	write_int("audio_display.source_cache.bytes.max", audio_display.source_cache_max_bytes);
+	write_int("audio_display.cpu_tile.bytes.max", audio_display.cpu_tile_max_bytes);
+	write_int("audio_display.cpu_payload.bytes.max", audio_display.cpu_payload_max_bytes);
+	write_int("audio_display.fft.bytes.max", audio_display.fft_max_bytes);
+	write_int("audio_display.gpu_tile.bytes.max", audio_display.gpu_tile_max_bytes);
+	out << "audio_display.renderer.latest=" << audio_display.latest.renderer_name << "\n";
+	out << "audio_display.content_kind.latest=" << audio_display.latest.content_kind << "\n";
+	write_int("audio_display.frame.latest", audio_display.latest.frame_id);
+	write_double("audio_display.content_scale.latest", audio_display.latest.content_scale);
+	out << "audio_display.cursor.source.latest=" << audio_display.latest.cursor_source << "\n";
+	out << "audio_display.cursor.position_ms.latest=" << audio_display.latest.cursor_position_ms << "\n";
+	write_double("audio_display.cursor.device_x.latest", audio_display.latest.cursor_device_x);
+	write_int("audio_display.cursor.label_visible.latest", audio_display.latest.cursor_label_visible ? 1 : 0);
+	write_int("audio_display.bitmap_cache.hits.latest", audio_display.latest.bitmap_cache_hits);
+	write_int("audio_display.bitmap_cache.misses.latest", audio_display.latest.bitmap_cache_misses);
+	write_int("audio_display.source_cache.budget_bytes.latest", audio_display.latest.source_cache_budget_bytes);
+	write_int("audio_display.source_cache.bytes.latest", audio_display.latest.source_cache_bytes);
+	write_int("audio_display.source_cache.entries.latest", audio_display.latest.source_cache_entries);
+	write_int("audio_display.source_cache.hits.latest", audio_display.latest.source_cache_hits);
+	write_int("audio_display.source_cache.misses.latest", audio_display.latest.source_cache_misses);
+	write_int("audio_display.source_cache.visible_builds.latest", audio_display.latest.source_cache_visible_builds);
+	write_int("audio_display.source_cache.visible_lock_contention.latest", audio_display.latest.source_cache_visible_lock_contention);
+	write_int("audio_display.source_cache.prefetch_requests.latest", audio_display.latest.source_cache_prefetch_requests);
+	write_int("audio_display.source_cache.prefetch_builds.latest", audio_display.latest.source_cache_prefetch_builds);
+	write_int("audio_display.source_cache.prefetch_busy_skips.latest", audio_display.latest.source_cache_prefetch_busy_skips);
+	write_int("audio_display.source_cache.stale_drops.latest", audio_display.latest.source_cache_stale_drops);
+	write_int("audio_display.source_cache.evictions.latest", audio_display.latest.source_cache_evictions);
+	write_int("audio_display.source_cache.prefetch_enabled.latest", audio_display.latest.source_cache_prefetch_enabled ? 1 : 0);
+	write_int("audio_display.cpu_tile.budget_bytes.latest", audio_display.latest.cpu_tile_budget_bytes);
+	write_int("audio_display.cpu_tile.bytes.latest", audio_display.latest.cpu_tile_bytes);
+	write_int("audio_display.cpu_tile.entries.latest", audio_display.latest.cpu_tile_entries);
+	write_int("audio_display.cpu_tile.evictions.latest", audio_display.latest.cpu_tile_evictions);
+	write_int("audio_display.cpu_tile.hits.latest", audio_display.latest.cpu_tile_hits);
+	write_int("audio_display.cpu_tile.misses.latest", audio_display.latest.cpu_tile_misses);
+	write_int("audio_display.cpu_payload.budget_bytes.latest", audio_display.latest.cpu_payload_budget_bytes);
+	write_int("audio_display.cpu_payload.bytes.latest", audio_display.latest.cpu_payload_bytes);
+	write_int("audio_display.cpu_payload.entries.latest", audio_display.latest.cpu_payload_entries);
+	write_int("audio_display.cpu_payload.evictions.latest", audio_display.latest.cpu_payload_evictions);
+	write_int("audio_display.cpu_payload.hits.latest", audio_display.latest.cpu_payload_hits);
+	write_int("audio_display.cpu_payload.misses.latest", audio_display.latest.cpu_payload_misses);
+	write_int("audio_display.fft.budget_bytes.latest", audio_display.latest.fft_budget_bytes);
+	write_int("audio_display.fft.active_cache_budget_bytes.latest", audio_display.latest.fft_active_cache_budget_bytes);
+	write_int("audio_display.fft.bytes.latest", audio_display.latest.fft_bytes);
+	write_int("audio_display.fft.entries.latest", audio_display.latest.fft_entries);
+	write_int("audio_display.fft.evictions.latest", audio_display.latest.fft_evictions);
+	write_int("audio_display.fft.hits.latest", audio_display.latest.fft_hits);
+	write_int("audio_display.fft.misses.latest", audio_display.latest.fft_misses);
+	write_int("audio_display.fft.visible_builds.latest", audio_display.latest.fft_visible_builds);
+	write_int("audio_display.gpu_tile.budget_bytes.latest", audio_display.latest.gpu_tile_budget_bytes);
+	write_int("audio_display.gpu_tile.bytes.latest", audio_display.latest.gpu_tile_bytes);
+	write_int("audio_display.gpu_tile.entries.latest", audio_display.latest.gpu_tile_entries);
+	write_int("audio_display.gpu_tile.evictions.latest", audio_display.latest.gpu_tile_evictions);
+	write_int("audio_display.gpu_tile.hits.latest", audio_display.latest.gpu_tile_hits);
+	write_int("audio_display.gpu_tile.misses.latest", audio_display.latest.gpu_tile_misses);
+	write_int("audio_display.gpu_tile.uploads.latest", audio_display.latest.gpu_tile_uploads);
+	write_int("audio_display.gpu_tile.upload_bytes.latest", audio_display.latest.gpu_tile_upload_bytes);
+	write_int("audio_display.worker.builds_started.latest", audio_display.latest.worker_builds_started);
+	write_int("audio_display.worker.builds_ready.latest", audio_display.latest.worker_builds_ready);
+	write_int("audio_display.worker.builds_cancelled.latest", audio_display.latest.worker_builds_cancelled);
+	write_int("audio_display.worker.payload_builds_started.latest", audio_display.latest.worker_payload_builds_started);
+	write_int("audio_display.worker.payload_builds_ready.latest", audio_display.latest.worker_payload_builds_ready);
+	write_int("audio_display.worker.payload_builds_cancelled.latest", audio_display.latest.worker_payload_builds_cancelled);
+	write_int("audio_display.worker.superseded_requests.latest", audio_display.latest.worker_superseded_requests);
 	for (auto const& key : session.summary.video_ui_phase_order) {
 		auto const it = session.summary.video_ui_phase_durations.find(key);
 		if (it == session.summary.video_ui_phase_durations.end())
@@ -1502,6 +1586,173 @@ void ObserveAudioOutputSnapshot(AudioOutputSnapshot const& snapshot) {
 		payload.Finish(),
 		snapshot.starved || snapshot.recovered || snapshot.end_of_stream,
 		timestamp_ns);
+}
+
+void ObserveAudioDisplaySnapshot(AudioDisplaySnapshot const& snapshot) {
+	if (!trace_active.load(std::memory_order_relaxed))
+		return;
+
+	auto const timestamp_ns = NowNs();
+	JsonObjectBuilder payload;
+	payload.AddString("renderer", snapshot.renderer_name);
+	payload.AddString("content_kind", snapshot.content_kind);
+	payload.AddUInt("frame_id", snapshot.frame_id);
+	payload.AddUInt("provider_generation", snapshot.provider_generation);
+	payload.AddUInt("analysis_generation", snapshot.analysis_generation);
+	payload.AddUInt("marker_revision", snapshot.marker_revision);
+	payload.AddUInt("chrome_revision", snapshot.chrome_revision);
+	payload.AddUInt("presentation_revision", snapshot.presentation_revision);
+	payload.AddDouble("content_scale", snapshot.content_scale);
+	payload.AddUInt("viewport_first_column", snapshot.viewport_first_column);
+	payload.AddUInt("viewport_column_count", snapshot.viewport_column_count);
+	payload.AddUInt("target_width", snapshot.target_width);
+	payload.AddUInt("target_height", snapshot.target_height);
+	payload.AddUInt("visible_tile_count", snapshot.visible_tile_count);
+	payload.AddUInt("ready_tile_count", snapshot.ready_tile_count);
+	payload.AddBool("complete_content_viewport", snapshot.complete_content_viewport);
+	payload.AddBool("retained_content_frame", snapshot.retained_content_frame);
+	payload.AddBool("cursor_only", snapshot.cursor_only);
+	payload.AddBool("retained_layers_reused", snapshot.retained_layers_reused);
+	payload.AddBool("focused", snapshot.focused);
+	payload.AddBool("middle_seek_active", snapshot.middle_seek_active);
+	payload.AddString("cursor_source", snapshot.cursor_source);
+	payload.AddInt("cursor_position_ms", snapshot.cursor_position_ms);
+	payload.AddDouble("cursor_device_x", snapshot.cursor_device_x);
+	payload.AddBool("cursor_label_visible", snapshot.cursor_label_visible);
+	payload.AddBool("visible_content_request_called", snapshot.visible_content_request_called);
+	payload.AddBool("content_lookup_performed", snapshot.content_lookup_performed);
+	payload.AddUInt("content_tiles_drawn_this_frame", snapshot.content_tiles_drawn_this_frame);
+	payload.AddUInt("gpu_tile_uploads_this_frame", snapshot.gpu_tile_uploads_this_frame);
+	payload.AddBool("swap_attempted", snapshot.swap_attempted);
+	payload.AddBool("swapped", snapshot.swapped);
+
+	payload.AddUInt("bitmap_cache_hits", snapshot.bitmap_cache_hits);
+	payload.AddUInt("bitmap_cache_misses", snapshot.bitmap_cache_misses);
+	payload.AddUInt("source_cache_budget_bytes", snapshot.source_cache_budget_bytes);
+	payload.AddUInt("source_cache_bytes", snapshot.source_cache_bytes);
+	payload.AddUInt("source_cache_entries", snapshot.source_cache_entries);
+	payload.AddUInt("source_cache_hits", snapshot.source_cache_hits);
+	payload.AddUInt("source_cache_misses", snapshot.source_cache_misses);
+	payload.AddUInt("source_cache_visible_builds", snapshot.source_cache_visible_builds);
+	payload.AddUInt("source_cache_visible_lock_contention", snapshot.source_cache_visible_lock_contention);
+	payload.AddUInt("source_cache_prefetch_requests", snapshot.source_cache_prefetch_requests);
+	payload.AddUInt("source_cache_prefetch_builds", snapshot.source_cache_prefetch_builds);
+	payload.AddUInt("source_cache_prefetch_busy_skips", snapshot.source_cache_prefetch_busy_skips);
+	payload.AddUInt("source_cache_stale_drops", snapshot.source_cache_stale_drops);
+	payload.AddUInt("source_cache_evictions", snapshot.source_cache_evictions);
+	payload.AddBool("source_cache_prefetch_enabled", snapshot.source_cache_prefetch_enabled);
+
+	payload.AddUInt("cpu_tile_budget_bytes", snapshot.cpu_tile_budget_bytes);
+	payload.AddUInt("cpu_tile_bytes", snapshot.cpu_tile_bytes);
+	payload.AddUInt("cpu_tile_entries", snapshot.cpu_tile_entries);
+	payload.AddUInt("cpu_tile_hits", snapshot.cpu_tile_hits);
+	payload.AddUInt("cpu_tile_misses", snapshot.cpu_tile_misses);
+	payload.AddUInt("cpu_tile_evictions", snapshot.cpu_tile_evictions);
+
+	payload.AddUInt("cpu_payload_budget_bytes", snapshot.cpu_payload_budget_bytes);
+	payload.AddUInt("cpu_payload_bytes", snapshot.cpu_payload_bytes);
+	payload.AddUInt("cpu_payload_entries", snapshot.cpu_payload_entries);
+	payload.AddUInt("cpu_payload_hits", snapshot.cpu_payload_hits);
+	payload.AddUInt("cpu_payload_misses", snapshot.cpu_payload_misses);
+	payload.AddUInt("cpu_payload_evictions", snapshot.cpu_payload_evictions);
+
+	payload.AddUInt("fft_budget_bytes", snapshot.fft_budget_bytes);
+	payload.AddUInt("fft_active_cache_budget_bytes", snapshot.fft_active_cache_budget_bytes);
+	payload.AddUInt("fft_bytes", snapshot.fft_bytes);
+	payload.AddUInt("fft_entries", snapshot.fft_entries);
+	payload.AddUInt("fft_hits", snapshot.fft_hits);
+	payload.AddUInt("fft_misses", snapshot.fft_misses);
+	payload.AddUInt("fft_visible_builds", snapshot.fft_visible_builds);
+	payload.AddUInt("fft_evictions", snapshot.fft_evictions);
+
+	payload.AddUInt("gpu_tile_budget_bytes", snapshot.gpu_tile_budget_bytes);
+	payload.AddUInt("gpu_tile_bytes", snapshot.gpu_tile_bytes);
+	payload.AddUInt("gpu_tile_entries", snapshot.gpu_tile_entries);
+	payload.AddUInt("gpu_tile_hits", snapshot.gpu_tile_hits);
+	payload.AddUInt("gpu_tile_misses", snapshot.gpu_tile_misses);
+	payload.AddUInt("gpu_tile_uploads", snapshot.gpu_tile_uploads);
+	payload.AddUInt("gpu_tile_upload_bytes", snapshot.gpu_tile_upload_bytes);
+	payload.AddUInt("gpu_tile_evictions", snapshot.gpu_tile_evictions);
+	payload.AddUInt("gpu_palette_uploads", snapshot.gpu_palette_uploads);
+
+	payload.AddUInt("worker_builds_started", snapshot.worker_builds_started);
+	payload.AddUInt("worker_builds_ready", snapshot.worker_builds_ready);
+	payload.AddUInt("worker_builds_cancelled", snapshot.worker_builds_cancelled);
+	payload.AddUInt("worker_payload_builds_started", snapshot.worker_payload_builds_started);
+	payload.AddUInt("worker_payload_builds_ready", snapshot.worker_payload_builds_ready);
+	payload.AddUInt("worker_payload_builds_cancelled", snapshot.worker_payload_builds_cancelled);
+	payload.AddUInt("worker_superseded_requests", snapshot.worker_superseded_requests);
+	auto serialized_payload = payload.Finish();
+
+	auto& session = GetSession();
+	std::lock_guard<std::mutex> lock(session.mutex);
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::Audio))
+		return;
+
+	auto& summary = session.summary.audio_display;
+	++summary.samples;
+	if (snapshot.complete_content_viewport)
+		++summary.complete_content_frames;
+	if (snapshot.swap_attempted && !snapshot.swapped)
+		++summary.swap_failures;
+	summary.source_cache_max_bytes = std::max(summary.source_cache_max_bytes, snapshot.source_cache_bytes);
+	summary.cpu_tile_max_bytes = std::max(summary.cpu_tile_max_bytes, snapshot.cpu_tile_bytes);
+	summary.cpu_payload_max_bytes = std::max(summary.cpu_payload_max_bytes, snapshot.cpu_payload_bytes);
+	summary.fft_max_bytes = std::max(summary.fft_max_bytes, snapshot.fft_bytes);
+	summary.gpu_tile_max_bytes = std::max(summary.gpu_tile_max_bytes, snapshot.gpu_tile_bytes);
+	summary.latest = snapshot;
+	AppendEntryLocked(
+		session,
+		"metric",
+		"audio_display_snapshot",
+		serialized_payload,
+		snapshot.swap_attempted && !snapshot.swapped,
+		timestamp_ns);
+}
+
+void ObserveAudioContentTileEvent(AudioContentTileEvent const& event) noexcept try {
+	if (!trace_active.load(std::memory_order_relaxed))
+		return;
+
+	auto const timestamp_ns = NowNs();
+	JsonObjectBuilder payload;
+	payload.AddString("stage", event.stage ? event.stage : "");
+	payload.AddString("outcome", event.outcome ? event.outcome : "");
+	payload.AddString("content_kind", event.spectrum ? "spectrum" : "waveform");
+	payload.AddUInt("provider_generation", event.provider_generation);
+	payload.AddUInt("analysis_generation", event.analysis_generation);
+	payload.AddUInt("tile_index", event.tile_index);
+	payload.AddUInt("column_count", event.column_count);
+	payload.AddUInt("spectrum_bin_count", event.spectrum_bin_count);
+	if (event.request_serial)
+		payload.AddUInt("request_serial", event.request_serial);
+	if (event.bytes)
+		payload.AddUInt("bytes", event.bytes);
+	if (event.variant_revision)
+		payload.AddUInt("variant_revision", event.variant_revision);
+	if (event.visible >= 0)
+		payload.AddBool("visible", event.visible != 0);
+	if (event.include_fft_deltas) {
+		payload.AddUInt("fft_cache_hits_delta", event.fft_cache_hits_delta);
+		payload.AddUInt("fft_cache_misses_delta", event.fft_cache_misses_delta);
+		payload.AddUInt("fft_visible_builds_delta", event.fft_visible_builds_delta);
+		payload.AddUInt("fft_cache_evictions_delta", event.fft_cache_evictions_delta);
+	}
+	auto serialized_payload = payload.Finish();
+
+	auto& session = GetSession();
+	std::lock_guard<std::mutex> lock(session.mutex);
+	if (!session.enabled || session.closing || !IsCategoryEnabledLocked(session, TraceCategory::Audio))
+		return;
+	AppendEntryLocked(
+		session,
+		"metric",
+		"audio_content_tile_event",
+		serialized_payload,
+		false,
+		timestamp_ns);
+}
+catch (...) {
 }
 
 void ObserveVideoPlaybackTick(int frame) {

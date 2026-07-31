@@ -812,11 +812,13 @@ set(AEGISUB_CORE_SOURCES
     # The wx-free analysis/source/player pieces below are kept in core.
     src/audio_display_analysis.cpp
     src/audio_display_source.cpp
+    src/audio_latest_range_scheduler.cpp
     src/audio_mix_policy.cpp
     # audio_player.cpp's factory table requires the WITH_* audio-backend defines
     # (ALSA/DirectSound/XAudio2/...) which are exe-only; stays in the exe.
     src/audio_spectrum_analysis_cache.cpp
     src/audio_spectrum_fftw3.cpp
+    src/audio_waveform_summary_cache.cpp
     src/resample_dialog_policy.cpp
     src/resolution_resampler.cpp
     # Video rendering / session ops
@@ -1290,6 +1292,7 @@ if(WITH_SKIA_AUDIO_DISPLAY)
         src/skia/audio/skia_audio_content_analysis.cpp
         src/skia/audio/skia_audio_content_worker.cpp
         src/skia/audio/skia_audio_frame_model.cpp
+        src/skia/audio/skia_audio_upload_payload.cpp
         src/skia/audio/skia_audio_display_contract.cpp
         src/skia/audio/skia_audio_display.cpp
         src/skia/audio/skia_audio_presenter.cpp

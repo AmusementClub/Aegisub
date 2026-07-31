@@ -29,6 +29,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -70,6 +71,31 @@ struct AudioRendererBitmapCacheBitmapFactory {
 /// The type of a bitmap cache
 typedef DataBlockCache<wxBitmap, 8, AudioRendererBitmapCacheBitmapFactory> AudioRendererBitmapCache;
 
+enum class AudioRendererContentKind {
+	Waveform,
+	Spectrum,
+};
+
+struct AudioRendererCacheMetrics {
+	AudioRendererContentKind content_kind = AudioRendererContentKind::Waveform;
+	std::uint64_t generation = 0;
+	std::uint64_t bitmap_cache_hits = 0;
+	std::uint64_t bitmap_cache_misses = 0;
+	std::uint64_t source_cache_hits = 0;
+	std::uint64_t source_cache_misses = 0;
+	std::uint64_t visible_builds = 0;
+	std::uint64_t visible_lock_contention = 0;
+	std::uint64_t prefetch_requests = 0;
+	std::uint64_t prefetch_builds = 0;
+	std::uint64_t prefetch_busy_skips = 0;
+	std::uint64_t stale_drops = 0;
+	std::uint64_t evictions = 0;
+	std::uint64_t cache_entries = 0;
+	std::uint64_t cache_bytes = 0;
+	std::uint64_t cache_budget_bytes = 0;
+	bool prefetch_enabled = false;
+};
+
 
 /// @class AudioRenderer
 /// @brief Renders audio to bitmap images for display on screen
@@ -98,6 +124,10 @@ class AudioRenderer {
 	size_t cache_renderer_maxsize = 0;
 	/// Do the caches need to be aged?
 	bool needs_age = false;
+	/// Did the current paint synchronously create at least one bitmap block?
+	bool needs_prefetch = false;
+	std::uint64_t bitmap_cache_hits = 0;
+	std::uint64_t bitmap_cache_misses = 0;
 
 	/// Actual renderer for bitmaps
 	AudioRendererBitmapProvider *renderer = nullptr;
@@ -205,6 +235,12 @@ public:
 	/// of audio samples rendered is length*pixel_samples.
 	void Render(wxDC &dc, wxPoint origin, int start, int length, AudioRenderingStyle style);
 
+	/// Queue bounded background preparation after the current paint is complete.
+	void Prefetch(int start, int length);
+
+	/// Read renderer/cache counters without changing rendering state.
+	bool GetCacheMetrics(AudioRendererCacheMetrics &metrics) const;
+
 	/// @brief Invalidate all cached data
 	///
 	/// Invalidates all cached bitmaps for another reason, usually as a signal that
@@ -288,4 +324,10 @@ public:
 	/// Deriving classes should override this method if they implement any
 	/// kind of caching.
 	virtual void AgeCache(size_t max_size) { }
+
+	/// Queue bounded background preparation for a rendered pixel range.
+	/// The current render has already completed when this hook is called.
+	virtual void Prefetch(int start, int length) { }
+
+	virtual bool GetCacheMetrics(AudioRendererCacheMetrics &metrics) const { return false; }
 };

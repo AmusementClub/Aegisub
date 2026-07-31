@@ -125,6 +125,7 @@ class AudioDisplay: public wxWindow {
 
 	/// Height of main audio area in pixels
 	int audio_height = 0;
+	std::uint64_t perf_trace_frame_id = 0;
 
 	/// Width of the audio marker feet in pixels
 	static const int foot_size = 6;

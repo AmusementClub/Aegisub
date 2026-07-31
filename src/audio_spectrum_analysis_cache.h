@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -15,6 +16,8 @@
 #ifdef WITH_PFFFT
 #include <pffft/pffft.h>
 #endif
+
+class AudioLatestRangeScheduler;
 
 #ifdef WITH_FFTW3
 namespace audio::spectrum {
@@ -36,6 +39,7 @@ struct AudioSpectrumAnalysisCacheMetrics {
 	uint64_t evictions = 0;
 	size_t cache_entries = 0;
 	size_t cache_bytes = 0;
+	size_t cache_budget_bytes = 0;
 };
 
 enum class SpectrumCacheFormat {
@@ -44,7 +48,11 @@ enum class SpectrumCacheFormat {
 };
 
 class AudioSpectrumAnalysisCache {
-	using CacheBlock = std::unique_ptr<float[]>;
+public:
+	using BlockHandle = std::shared_ptr<float const[]>;
+
+private:
+	using MutableBlock = std::shared_ptr<float[]>;
 
 	struct TouchEntry {
 		uint64_t touch = 0;
@@ -65,7 +73,7 @@ class AudioSpectrumAnalysisCache {
 
 	mutable std::mutex cache_mutex;
 	std::mutex build_mutex;
-	std::unordered_map<size_t, CacheBlock> cache_blocks;
+	std::unordered_map<size_t, BlockHandle> cache_blocks;
 	std::unordered_map<size_t, uint64_t> cache_touch;
 	std::priority_queue<TouchEntry, std::vector<TouchEntry>, std::greater<TouchEntry>> touch_heap;
 
@@ -90,9 +98,24 @@ class AudioSpectrumAnalysisCache {
 	uint64_t metrics_cache_hits = 0;
 	uint64_t metrics_cache_misses = 0;
 	uint64_t metrics_visible_builds = 0;
+	uint64_t metrics_visible_lock_contention = 0;
 	uint64_t metrics_prefetch_requests = 0;
+	uint64_t metrics_prefetch_builds = 0;
+	uint64_t metrics_prefetch_busy_skips = 0;
+	uint64_t metrics_stale_drops = 0;
 	uint64_t metrics_evictions = 0;
-	bool prefetch_enabled = true;
+	std::atomic<bool> prefetch_enabled { true };
+	std::atomic<size_t> prefetch_build_max_blocks { 64 };
+	std::atomic<uint32_t> visible_waiters { 0 };
+
+	std::mutex scheduler_mutex;
+	std::unique_ptr<AudioLatestRangeScheduler> scheduler;
+	std::atomic<uint64_t> active_prefetch_generation { 0 };
+	bool has_active_prefetch_range = false;
+	size_t active_prefetch_first = 0;
+	size_t active_prefetch_last = 0;
+
+	mutable std::mutex ready_callback_mutex;
 	std::function<void()> ready_callback;
 
 	size_t BinCount() const { return static_cast<size_t>(1) << derivation_size; }
@@ -101,8 +124,12 @@ class AudioSpectrumAnalysisCache {
 	size_t BlockBytes() const { return sizeof(float) * BinCount(); }
 
 	void RecreateCache();
+	void StopScheduler();
 	void DestroyFftResources();
-	CacheBlock BuildBlock(size_t block_index);
+	MutableBlock BuildBlock(size_t block_index);
+	void ProcessPrefetch(size_t first_block, size_t last_block, uint64_t generation);
+	bool IsCurrentPrefetchGeneration(uint64_t generation) const;
+	void NotifyReady() const;
 	void TouchLocked(size_t block_index);
 	void TrimLocked();
 	void ClearLocked();
@@ -118,12 +145,12 @@ public:
 	void SetResolution(size_t new_derivation_size, size_t new_derivation_dist);
 	void Age(size_t max_size);
 	bool IsReady() const;
-	const float* Get(size_t block_index);
-	const float* GetIfReady(size_t block_index);
+	BlockHandle Get(size_t block_index);
+	BlockHandle GetIfReady(size_t block_index);
 	bool AreBlocksReady(size_t first_block, size_t last_block);
 	void Prefetch(size_t first_block, size_t last_block);
 	void SetPrefetchEnabled(bool enabled);
-	void SetPrefetchBuildMaxBlocks(size_t) { }
-	void SetReadyCallback(std::function<void()> callback) { ready_callback = std::move(callback); }
+	void SetPrefetchBuildMaxBlocks(size_t max_blocks);
+	void SetReadyCallback(std::function<void()> callback);
 	AudioSpectrumAnalysisCacheMetrics GetMetricsSnapshot() const;
 };

@@ -50,6 +50,72 @@ TEST(skia_audio_frame_model, viewport_preserves_fractional_dpi_scroll_alignment)
 	EXPECT_DOUBLE_EQ(viewport.milliseconds_per_column, 16.0);
 }
 
+TEST(skia_audio_frame_model, mouse_position_uses_only_the_logical_audio_content_area) {
+	audio::FrameViewportRequest request;
+	request.logical_width = 801;
+	request.logical_height = 200;
+	request.content_scale = 1.25;
+	request.timeline_height = 18;
+	request.scrollbar_height = 15;
+	request.scroll_left = 3;
+	request.duration_ms = 60000;
+	request.milliseconds_per_logical_pixel = 20.0;
+	auto const viewport = audio::BuildFrameViewport(request);
+	ASSERT_TRUE(viewport.IsValid());
+
+	EXPECT_EQ(8060, audio::MousePositionMsForClientPoint(viewport, 400, 100, 1.25, 20.0));
+	EXPECT_EQ(-1, audio::MousePositionMsForClientPoint(viewport, 400, 10, 1.25, 20.0));
+	EXPECT_EQ(-1, audio::MousePositionMsForClientPoint(viewport, 400, 190, 1.25, 20.0));
+	EXPECT_EQ(-1, audio::MousePositionMsForClientPoint(viewport, -1, 100, 1.25, 20.0));
+	EXPECT_EQ(-1, audio::MousePositionMsForClientPoint(viewport, 801, 100, 1.25, 20.0));
+	EXPECT_EQ(-1, audio::MousePositionMsForClientPoint(viewport, 400, 100, 0.0, 20.0));
+}
+
+TEST(skia_audio_frame_model, cursor_placement_prefers_playback_and_uses_device_viewport_coordinates) {
+	audio::FrameViewportRequest request;
+	request.logical_width = 801;
+	request.logical_height = 200;
+	request.content_scale = 1.25;
+	request.timeline_height = 18;
+	request.scrollbar_height = 15;
+	request.scroll_left = 3;
+	request.duration_ms = 60000;
+	request.milliseconds_per_logical_pixel = 20.0;
+	auto const viewport = audio::BuildFrameViewport(request);
+	ASSERT_TRUE(viewport.IsValid());
+
+	auto const playback = audio::BuildCursorPlacement(viewport, 400, 800);
+	EXPECT_EQ(audio::CursorSource::Playback, playback.source);
+	EXPECT_EQ(800, playback.position_ms);
+	EXPECT_NEAR(46.25f, playback.device_x, 0.001f);
+	EXPECT_STREQ("playback", audio::CursorSourceName(playback.source));
+
+	auto const mouse = audio::BuildCursorPlacement(viewport, 400, -1);
+	EXPECT_EQ(audio::CursorSource::Mouse, mouse.source);
+	EXPECT_EQ(400, mouse.position_ms);
+	EXPECT_NEAR(21.25f, mouse.device_x, 0.001f);
+	EXPECT_STREQ("mouse", audio::CursorSourceName(mouse.source));
+}
+
+TEST(skia_audio_frame_model, cursor_placement_hides_when_no_live_source_or_viewport) {
+	audio::FrameViewportRequest request;
+	request.logical_width = 320;
+	request.logical_height = 120;
+	request.content_scale = 1.0;
+	request.timeline_height = 10;
+	request.scrollbar_height = 10;
+	request.duration_ms = 3000;
+	request.milliseconds_per_logical_pixel = 20.0;
+	auto const viewport = audio::BuildFrameViewport(request);
+	ASSERT_TRUE(viewport.IsValid());
+
+	auto const hidden = audio::BuildCursorPlacement(viewport, -1, -1);
+	EXPECT_FALSE(hidden.IsActive());
+	EXPECT_EQ(-1, hidden.position_ms);
+	EXPECT_STREQ("none", audio::CursorSourceName(hidden.source));
+	EXPECT_FALSE(audio::BuildCursorPlacement({}, 100, -1).IsActive());
+}
+
 TEST(skia_audio_frame_model, viewport_clamps_scroll_to_audio_extent) {
 	audio::FrameViewportRequest request;
 	request.logical_width = 500;
@@ -162,6 +228,44 @@ TEST(skia_audio_frame_model, empty_style_ranges_cover_the_visible_content_as_nor
 	EXPECT_EQ(audio::FrameStyle::Normal, spans[0].style);
 	EXPECT_FLOAT_EQ(static_cast<float>(viewport.content.x), spans[0].x);
 	EXPECT_FLOAT_EQ(static_cast<float>(viewport.content.width), spans[0].width);
+}
+
+TEST(skia_audio_frame_model, style_span_sweep_preserves_overlaps_and_shared_boundaries) {
+	audio::FrameViewportRequest request;
+	request.logical_width = 200;
+	request.logical_height = 120;
+	request.content_scale = 1.0;
+	request.timeline_height = 10;
+	request.scrollbar_height = 10;
+	request.duration_ms = 4000;
+	request.milliseconds_per_logical_pixel = 10.0;
+	auto const viewport = audio::BuildFrameViewport(request);
+	ASSERT_TRUE(viewport.IsValid());
+
+	std::vector<audio::TimeStyleRange> ranges {
+		{ 0, 500, audio::FrameStyle::Inactive },
+		{ 100, 300, audio::FrameStyle::Selected },
+		{ 200, 400, audio::FrameStyle::Selected },
+		{ 300, 350, audio::FrameStyle::Primary },
+		{ 500, 700, audio::FrameStyle::Primary },
+	};
+	auto const spans = audio::BuildDeviceStyleSpans(ranges, viewport);
+	ASSERT_EQ(7u, spans.size());
+	EXPECT_EQ(audio::FrameStyle::Inactive, spans[0].style);
+	EXPECT_EQ(audio::FrameStyle::Selected, spans[1].style);
+	EXPECT_EQ(audio::FrameStyle::Primary, spans[2].style);
+	EXPECT_EQ(audio::FrameStyle::Selected, spans[3].style);
+	EXPECT_EQ(audio::FrameStyle::Inactive, spans[4].style);
+	EXPECT_EQ(audio::FrameStyle::Primary, spans[5].style);
+	EXPECT_EQ(audio::FrameStyle::Normal, spans[6].style);
+	EXPECT_FLOAT_EQ(0.f, spans[0].x);
+	EXPECT_FLOAT_EQ(10.f, spans[0].width);
+	EXPECT_FLOAT_EQ(20.f, spans[1].width);
+	EXPECT_FLOAT_EQ(5.f, spans[2].width);
+	EXPECT_FLOAT_EQ(5.f, spans[3].width);
+	EXPECT_FLOAT_EQ(10.f, spans[4].width);
+	EXPECT_FLOAT_EQ(20.f, spans[5].width);
+	EXPECT_FLOAT_EQ(130.f, spans[6].width);
 }
 
 TEST(skia_audio_frame_model, style_span_validation_tolerates_float_boundary_reconstruction) {

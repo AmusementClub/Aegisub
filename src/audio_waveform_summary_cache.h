@@ -2,7 +2,6 @@
 
 #include <array>
 #include <atomic>
-#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -13,12 +12,22 @@
 
 #include "audio_display_analysis.h"
 #include "audio_display_source.h"
-#include "audio_latest_range_scheduler.h"
 #include "audio_mix_policy.h"
+
+class AudioLatestRangeScheduler;
+
+struct AudioWaveformPcm16Summary {
+	int peak_min = 0;
+	int peak_max = 0;
+	int64_t avg_min_accum = 0;
+	int64_t avg_max_accum = 0;
+};
 
 struct AudioWaveformSummaryBlock {
 	static constexpr size_t width = 32;
 	std::array<AudioWaveformSummary, width> summaries;
+	std::array<AudioWaveformPcm16Summary, width> pcm16_summaries;
+	bool has_exact_pcm16 = false;
 };
 
 struct AudioWaveformSummaryCacheMetrics {
@@ -26,21 +35,31 @@ struct AudioWaveformSummaryCacheMetrics {
 	uint64_t cache_hits = 0;
 	uint64_t cache_misses = 0;
 	uint64_t visible_builds = 0;
+	uint64_t visible_lock_contention = 0;
 	uint64_t prefetch_requests = 0;
 	uint64_t prefetch_builds = 0;
+	uint64_t prefetch_busy_skips = 0;
+	bool prefetch_enabled = true;
 	uint64_t stale_drops = 0;
 	uint64_t evictions = 0;
 	size_t cache_entries = 0;
 	size_t cache_bytes = 0;
+	size_t cache_budget_bytes = 0;
+	size_t cache_touch_entries = 0;
 };
 
 class AudioWaveformSummaryCache {
+public:
+	using BlockHandle = std::shared_ptr<AudioWaveformSummaryBlock const>;
+
+private:
+	using MutableBlock = std::shared_ptr<AudioWaveformSummaryBlock>;
+	using BuiltBlocks = std::vector<std::pair<size_t, MutableBlock>>;
+
 	struct TouchEntry {
 		uint64_t touch = 0;
 		size_t index = 0;
-		bool operator>(const TouchEntry &other) const {
-			return touch > other.touch;
-		}
+		bool operator>(TouchEntry const& other) const { return touch > other.touch; }
 	};
 
 	AudioDisplaySource *source = nullptr;
@@ -53,43 +72,45 @@ class AudioWaveformSummaryCache {
 	uint64_t touch_counter = 0;
 
 	mutable std::mutex cache_mutex;
-	std::vector<std::unique_ptr<AudioWaveformSummaryBlock>> cache_blocks;
+	std::mutex build_mutex;
+	std::vector<BlockHandle> cache_blocks;
 	std::vector<uint64_t> cache_touch;
-	std::vector<uint8_t> pending_blocks;
 	std::priority_queue<TouchEntry, std::vector<TouchEntry>, std::greater<TouchEntry>> touch_heap;
 
-	std::mutex ready_mutex;
-	std::vector<std::pair<size_t, std::unique_ptr<AudioWaveformSummaryBlock>>> ready_blocks;
-	std::atomic<bool> has_ready_blocks{false};
-
+	std::mutex scheduler_mutex;
 	std::unique_ptr<AudioLatestRangeScheduler> scheduler;
- 	mutable std::mutex scheduler_mutex;
+	std::atomic<uint64_t> active_prefetch_generation { 0 };
+	bool has_active_prefetch_range = false;
+	size_t active_prefetch_first = 0;
+	size_t active_prefetch_last = 0;
 
-	std::atomic<uint64_t> metrics_generation{0};
-	std::atomic<uint64_t> metrics_cache_hits{0};
-	std::atomic<uint64_t> metrics_cache_misses{0};
-	std::atomic<uint64_t> metrics_visible_builds{0};
-	std::atomic<uint64_t> metrics_prefetch_requests{0};
-	std::atomic<uint64_t> metrics_prefetch_builds{0};
-	std::atomic<bool> prefetch_enabled{true};
-	std::atomic<size_t> prefetch_build_max_blocks{64};
-	std::atomic<uint64_t> active_prefetch_generation{0};
-	std::atomic<uint64_t> metrics_stale_drops{0};
-	std::atomic<uint64_t> metrics_evictions{0};
+	std::atomic<bool> prefetch_enabled { true };
+	std::atomic<size_t> prefetch_build_max_blocks { 64 };
+	std::atomic<uint32_t> visible_waiters { 0 };
+
+	uint64_t metrics_generation = 0;
+	uint64_t metrics_cache_hits = 0;
+	uint64_t metrics_cache_misses = 0;
+	uint64_t metrics_visible_builds = 0;
+	uint64_t metrics_visible_lock_contention = 0;
+	uint64_t metrics_prefetch_requests = 0;
+	uint64_t metrics_prefetch_builds = 0;
+	uint64_t metrics_prefetch_busy_skips = 0;
+	uint64_t metrics_stale_drops = 0;
+	uint64_t metrics_evictions = 0;
+
+	mutable std::mutex ready_callback_mutex;
 	std::function<void()> ready_callback;
 
 	void StopScheduler();
 	bool IsCurrentPrefetchGeneration(uint64_t generation) const;
+	void NotifyReady() const;
 	void RecreateCache();
-	std::unique_ptr<AudioWaveformSummaryBlock> BuildBlock(size_t block_index) const;
-	size_t GetMaxBuildBlocks(size_t preferred_cap) const;
-	std::vector<std::pair<size_t, std::unique_ptr<AudioWaveformSummaryBlock>>> BuildBlocksInternal(size_t first_block, size_t last_block, uint64_t generation, bool check_generation) const;
-	std::vector<std::pair<size_t, std::unique_ptr<AudioWaveformSummaryBlock>>> BuildBlocks(size_t first_block, size_t last_block) const;
-	std::vector<std::pair<size_t, std::unique_ptr<AudioWaveformSummaryBlock>>> BuildBlocks(size_t first_block, size_t last_block, uint64_t generation) const;
+	BuiltBlocks BuildBlocks(size_t first_block, size_t last_block, uint64_t generation = 0) const;
 	void TouchLocked(size_t block_index);
+	void CompactTouchHeapLocked();
 	void TrimLocked();
-	void DrainReady();
-	void ClearPendingRange(size_t first_block, size_t last_block);
+	void ClearLocked();
 	void ProcessPrefetch(size_t first_block, size_t last_block, uint64_t generation);
 
 public:
@@ -101,12 +122,12 @@ public:
 	void SetMixPolicy(AudioMixPolicy new_policy);
 	void Age(size_t max_size);
 	bool IsReady() const;
-	const AudioWaveformSummaryBlock& Get(size_t block_index);
-	const AudioWaveformSummaryBlock* GetIfReady(size_t block_index);
+	BlockHandle Get(size_t block_index);
+	BlockHandle GetIfReady(size_t block_index);
 	bool AreBlocksReady(size_t first_block, size_t last_block);
 	void Prefetch(size_t first_block, size_t last_block);
 	void SetPrefetchEnabled(bool enabled);
-	void SetPrefetchBuildMaxBlocks(size_t max_blocks) { prefetch_build_max_blocks.store(std::max<size_t>(1, max_blocks), std::memory_order_relaxed); }
-	void SetReadyCallback(std::function<void()> callback) { ready_callback = std::move(callback); }
+	void SetPrefetchBuildMaxBlocks(size_t max_blocks);
+	void SetReadyCallback(std::function<void()> callback);
 	AudioWaveformSummaryCacheMetrics GetMetricsSnapshot() const;
 };

@@ -17,6 +17,7 @@ class wxMouseCaptureLostEvent;
 class wxFocusEvent;
 class wxKeyEvent;
 class wxSizeEvent;
+class wxDPIChangedEvent;
 class wxThreadEvent;
 class wxTimerEvent;
 class TimeRange;
@@ -25,6 +26,14 @@ class AudioController;
 namespace agi { class AudioProvider; struct Context; }
 
 namespace aegisub::skia::audio {
+
+struct SkiaAudioDisplayViewState {
+	int zoom_level = 0;
+	float amplitude_scale = 1.f;
+	int scroll_left = 0;
+
+	friend bool operator==(SkiaAudioDisplayViewState const&, SkiaAudioDisplayViewState const&) = default;
+};
 
 // Opt-in retained Audio Display. Audio analysis runs on a coalescing worker;
 // the UI thread composes cached content tiles with live timing overlays and
@@ -36,6 +45,7 @@ class SkiaAudioDisplay final : public wxGLCanvas {
 	void OnPaint(wxPaintEvent& event);
 	void OnEraseBackground(wxEraseEvent& event);
 	void OnSize(wxSizeEvent& event);
+	void OnDPIChanged(wxDPIChangedEvent& event);
 	void OnContentReady(wxThreadEvent& event);
 	void OnContentFailure(wxThreadEvent& event);
 	void OnPresentationTimer(wxTimerEvent& event);
@@ -46,6 +56,9 @@ class SkiaAudioDisplay final : public wxGLCanvas {
 	void OnPlaybackStop();
 	void OnTimingControllerChanged();
 	void OnTimingDataChanged();
+	void OnMarkerMoved();
+	void OnSelectionChanged();
+	void OnStyleRangesChanged();
 	void OnMouseEvent(wxMouseEvent& event);
 	void OnMouseEnter(wxMouseEvent& event);
 	void OnMouseLeave(wxMouseEvent& event);
@@ -57,12 +70,15 @@ class SkiaAudioDisplay final : public wxGLCanvas {
 	void FinishMiddleSeek(int time_ms);
 	void CancelMiddleSeek();
 	void OnRenderingSettingsChanged();
+	void OnCacheBudgetChanged();
 	void ReconfigureAnalysis();
 	void RebuildViewport();
+	bool EnsureSpectrumBandPlan();
 	void RequestVisibleContent();
 	bool HasCompleteVisibleContent() const;
 	void CommitScrollbarContentViewport();
 	void UpdatePresentationTiming();
+	void Invalidate(Change change);
 	void RequestRepaint(bool interactive = false);
 	void RequestFallback(std::string message);
 
@@ -74,6 +90,7 @@ public:
 		AudioController *controller,
 		agi::Context *context,
 		FailureInjection failure_injection,
+		std::uint64_t failure_injection_after_content_frames,
 		FailureCallback failure_callback);
 	~SkiaAudioDisplay();
 
@@ -82,6 +99,7 @@ public:
 
 	void ClearFailureCallback();
 	bool HasPresentedContentFrame() const noexcept;
+	SkiaAudioDisplayViewState GetViewState() const noexcept;
 	void SyncToCurrentAudioProvider();
 	void ScrollBy(int pixel_amount);
 	void ScrollBy(int pixel_amount, int mouse_x);

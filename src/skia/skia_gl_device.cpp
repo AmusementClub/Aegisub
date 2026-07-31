@@ -138,6 +138,11 @@ bool SkiaGlDevice::FlushAndSubmit(SkiaGlContextToken token) {
 	return true;
 }
 
+void SkiaGlDevice::SetFailureInjection(
+	SkiaGlFailureInjection failure_injection) noexcept {
+	impl->failure_injection = failure_injection;
+}
+
 void SkiaGlDevice::ResetTextureBindingsForExternalUse(SkiaGlContextToken token) noexcept {
 	if (!impl->context
 		|| impl->context->abandoned()

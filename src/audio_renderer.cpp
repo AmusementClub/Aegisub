@@ -170,9 +170,13 @@ wxBitmap const& AudioRenderer::GetCachedBitmap(const int i, const AudioRendering
 	auto& bmp = bitmaps[style].Get(i, &created);
 	if (created)
 	{
+		++bitmap_cache_misses;
 		renderer->Render(bmp, i*cache_bitmap_width, style);
 		needs_age = true;
+		needs_prefetch = true;
 	}
+	else
+		++bitmap_cache_hits;
 
 	assert(bmp.IsOk());
 	return bmp;
@@ -218,12 +222,33 @@ void AudioRenderer::Render(wxDC &dc, wxPoint origin, const int start, const int 
 		renderer->AgeCache(cache_renderer_maxsize);
 		needs_age = false;
 	}
+
+}
+
+void AudioRenderer::Prefetch(int start, int length)
+{
+	if (!needs_prefetch || !provider || !renderer || start < 0 || length <= 0)
+		return;
+	needs_prefetch = false;
+	renderer->Prefetch(start, length);
+}
+
+bool AudioRenderer::GetCacheMetrics(AudioRendererCacheMetrics &metrics) const
+{
+	if (!renderer || !renderer->GetCacheMetrics(metrics))
+		return false;
+	metrics.bitmap_cache_hits = bitmap_cache_hits;
+	metrics.bitmap_cache_misses = bitmap_cache_misses;
+	return true;
 }
 
 void AudioRenderer::Invalidate()
 {
 	for (auto& bmp : bitmaps) bmp.Age(0);
 	needs_age = false;
+	needs_prefetch = false;
+	bitmap_cache_hits = 0;
+	bitmap_cache_misses = 0;
 }
 
 void AudioRendererBitmapProvider::SetProvider(agi::AudioProvider *const _provider)

@@ -9,11 +9,12 @@ public:
 	mutable std::mutex mutex;
 	std::condition_variable_any cv;
 	Callback callback;
-	std::jthread worker;
 	bool has_request = false;
 	size_t first = 0;
 	size_t last = 0;
 	uint64_t generation = 0;
+	// Keep the worker last so all state exists before it starts and outlives its join.
+	std::jthread worker;
 
 	explicit Impl(Callback callback)
 	: callback(std::move(callback))

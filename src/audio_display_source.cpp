@@ -232,6 +232,13 @@ public:
 		provider->GetInt16MonoAudio(scratch.s16_buffer.data(), start, count);
 		aegisub::simd::DecodeInt16ToFloat(scratch.s16_buffer.data(), static_cast<size_t>(count), buf);
 	}
+
+	bool GetInt16MonoAudio(int16_t *buf, int64_t start, int64_t count) const override {
+		if (!provider || !buf || count <= 0)
+			return false;
+		provider->GetInt16MonoAudio(buf, start, count);
+		return true;
+	}
 };
 }
 

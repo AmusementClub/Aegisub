@@ -53,6 +53,32 @@ int AudioScrollLeftAfterZoom(
 	double new_milliseconds_per_pixel,
 	double anchor_time_ms = -1.0) noexcept;
 FrameViewport BuildFrameViewport(FrameViewportRequest const& request) noexcept;
+int MousePositionMsForClientPoint(
+	FrameViewport const& viewport,
+	int logical_x,
+	int logical_y,
+	double content_scale,
+	double milliseconds_per_logical_pixel) noexcept;
+
+enum class CursorSource : std::uint8_t {
+	None,
+	Mouse,
+	Playback,
+};
+
+struct CursorPlacement {
+	CursorSource source = CursorSource::None;
+	int position_ms = -1;
+	float device_x = 0.f;
+
+	bool IsActive() const noexcept { return source != CursorSource::None; }
+};
+
+CursorPlacement BuildCursorPlacement(
+	FrameViewport const& viewport,
+	int mouse_position_ms,
+	int playback_position_ms) noexcept;
+char const *CursorSourceName(CursorSource source) noexcept;
 
 struct ScrollbarGeometry {
 	float selection_x = 0.f;

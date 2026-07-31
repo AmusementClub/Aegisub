@@ -26,6 +26,7 @@ public:
 
 	bool BeginExternalFrame(SkiaGlContextToken token);
 	bool FlushAndSubmit(SkiaGlContextToken token);
+	void SetFailureInjection(SkiaGlFailureInjection failure_injection) noexcept;
 	void ResetTextureBindingsForExternalUse(SkiaGlContextToken token) noexcept;
 	void Fail(SkiaGlContextToken token, SkiaGlDeviceFailure failure, std::string detail) noexcept;
 	void ReleaseResourcesAndAbandon(SkiaGlContextToken token) noexcept;

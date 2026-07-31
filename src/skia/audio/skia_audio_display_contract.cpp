@@ -1,5 +1,6 @@
 #include "skia_audio_display_contract.h"
 
+#include <charconv>
 #include <cctype>
 #include <limits>
 #include <string>
@@ -60,6 +61,18 @@ FailureInjection ParseFailureInjection(std::string_view value) noexcept {
 	if (value == "flush-submit")
 		return FailureInjection::FlushSubmit;
 	return FailureInjection::Unsupported;
+}
+
+std::uint64_t ParseFailureInjectionAfterContentFrames(std::string_view value) noexcept {
+	if (value.empty())
+		return 0;
+	std::uint64_t frames = 0;
+	auto const result = std::from_chars(value.data(), value.data() + value.size(), frames);
+	return result.ec == std::errc{}
+		&& result.ptr == value.data() + value.size()
+		&& frames > 0
+		? frames
+		: 0;
 }
 
 FrameTargetValidation ValidateFrameTarget(FrameTarget const& target, std::uint64_t context_generation) {
@@ -129,6 +142,11 @@ TransitionPlan PlanTransition(Revisions const& current, Change change) {
 			plan.invalidate_gpu_content_tiles = true;
 			plan.invalidate_text_cache = true;
 			plan.request_visible_tiles = true;
+			break;
+
+		case Change::ContentReady:
+			Bump(plan.next.content);
+			plan.dirty_layers = Layer::Content;
 			break;
 
 		case Change::AnalysisSettings:
@@ -201,12 +219,14 @@ TransitionPlan PlanTransition(Revisions const& current, Change change) {
 
 		case Change::Dpi:
 			Bump(plan.next.viewport);
+			Bump(plan.next.analysis);
 			Bump(plan.next.content);
 			Bump(plan.next.style);
 			Bump(plan.next.marker);
 			Bump(plan.next.cursor);
 			Bump(plan.next.chrome);
 			plan.dirty_layers = Layer::All;
+			plan.invalidate_analysis_tiles = true;
 			plan.invalidate_gpu_content_tiles = true;
 			plan.invalidate_text_cache = true;
 			plan.request_visible_tiles = true;

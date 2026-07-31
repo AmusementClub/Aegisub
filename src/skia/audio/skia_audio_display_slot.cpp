@@ -43,8 +43,17 @@ AudioDisplaySlot::AudioDisplaySlot(
 
 	auto const *injection_value = std::getenv("AEGISUB_SKIA_AUDIO_FAILURE_INJECTION");
 	auto const injection = ParseFailureInjection(injection_value ? injection_value : "");
+	auto const *deferred_frames_value =
+		std::getenv("AEGISUB_SKIA_AUDIO_FAILURE_AFTER_CONTENT_FRAMES");
+	auto const parsed_deferred_frames = ParseFailureInjectionAfterContentFrames(
+		deferred_frames_value ? deferred_frames_value : "");
+	auto const deferred_frames =
+		injection == FailureInjection::FrameBegin
+			|| injection == FailureInjection::FlushSubmit
+		? parsed_deferred_frames
+		: 0;
 	try {
-		skia_display = new SkiaAudioDisplay(parent, controller, context, injection, [this](std::string message) {
+		skia_display = new SkiaAudioDisplay(parent, controller, context, injection, deferred_frames, [this](std::string message) {
 			RequestWxFallback(std::move(message));
 		});
 		active_window = skia_display;
@@ -106,7 +115,6 @@ void AudioDisplaySlot::RequestWxFallback(std::string message) {
 	CallAfter([this, message = std::move(message), disposition] {
 		if (!display && skia_display) {
 			auto *failed_display = skia_display;
-			failed_display->ClearFailureCallback();
 			if (failed_display->HasCapture())
 				failed_display->ReleaseMouse();
 			if (disposition == RuntimeFallbackDisposition::Confirm
@@ -114,6 +122,15 @@ void AudioDisplaySlot::RequestWxFallback(std::string message) {
 				LOG_W("audio/display/skia") << "User kept the failed Skia Audio Display instead of switching to wx";
 				return;
 			}
+			auto const view_state = failed_display->GetViewState();
+			zoom_set = true;
+			zoom_level = view_state.zoom_level;
+			amplitude_set = true;
+			amplitude_scale = view_state.amplitude_scale;
+			exact_scroll_left_set = true;
+			exact_scroll_left = view_state.scroll_left;
+			pending_scroll_pixels = 0;
+			failed_display->ClearFailureCallback();
 			CreateWxDisplay(failed_display);
 		}
 	});
@@ -136,12 +153,16 @@ bool AudioDisplaySlot::ConfirmRuntimeFallback(std::string const& message) {
 void AudioDisplaySlot::ApplyStateToWxDisplay() {
 	if (!display)
 		return;
+	if (sync_requested)
+		display->SyncToCurrentAudioProvider();
 	if (zoom_set)
 		display->SetZoomLevel(zoom_level);
 	if (amplitude_set)
 		display->SetAmplitudeScale(amplitude_scale);
-	if (sync_requested)
-		display->SyncToCurrentAudioProvider();
+	if (exact_scroll_left_set) {
+		display->ScrollPixelToLeft(exact_scroll_left);
+		return;
+	}
 	if (visible_range_set)
 		display->ScrollTimeRangeInView(TimeRange(visible_range_begin, visible_range_end));
 	if (pending_scroll_pixels) {

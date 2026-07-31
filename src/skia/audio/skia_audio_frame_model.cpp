@@ -1,6 +1,7 @@
 #include "skia_audio_frame_model.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cmath>
 #include <cstring>
@@ -187,6 +188,79 @@ FrameViewport BuildFrameViewport(FrameViewportRequest const& request) noexcept {
 	return viewport.IsValid() ? viewport : FrameViewport {};
 }
 
+int MousePositionMsForClientPoint(
+	FrameViewport const& viewport,
+	int logical_x,
+	int logical_y,
+	double content_scale,
+	double milliseconds_per_logical_pixel) noexcept {
+	if (!viewport.IsValid()
+		|| !std::isfinite(content_scale)
+		|| content_scale < 1.0
+		|| !std::isfinite(milliseconds_per_logical_pixel)
+		|| milliseconds_per_logical_pixel <= 0.0) {
+		return -1;
+	}
+
+	auto const logical_width = static_cast<int>(std::ceil(viewport.target_width / content_scale));
+	auto const logical_height = static_cast<int>(std::ceil(viewport.target_height / content_scale));
+	auto const timeline_bottom = static_cast<int>(std::ceil(
+		(viewport.timeline.y + viewport.timeline.height) / content_scale));
+	auto const scrollbar_top = static_cast<int>(std::floor(viewport.scrollbar.y / content_scale));
+	if (logical_x < 0 || logical_x >= logical_width
+		|| logical_y < 0 || logical_y >= logical_height
+		|| logical_y < timeline_bottom || logical_y >= scrollbar_top) {
+		return -1;
+	}
+
+	auto const value = (viewport.scroll_left + logical_x) * milliseconds_per_logical_pixel;
+	return static_cast<int>(std::clamp(
+		value,
+		0.0,
+		static_cast<double>(std::numeric_limits<int>::max())));
+}
+
+CursorPlacement BuildCursorPlacement(
+	FrameViewport const& viewport,
+	int mouse_position_ms,
+	int playback_position_ms) noexcept {
+	CursorPlacement placement;
+	if (!viewport.IsValid())
+		return placement;
+
+	if (playback_position_ms >= 0) {
+		placement.source = CursorSource::Playback;
+		placement.position_ms = playback_position_ms;
+	}
+	else if (mouse_position_ms >= 0) {
+		placement.source = CursorSource::Mouse;
+		placement.position_ms = mouse_position_ms;
+	}
+	else {
+		return placement;
+	}
+
+	auto const device_x = viewport.content.x
+		+ placement.position_ms / viewport.milliseconds_per_column
+		- viewport.first_column_exact;
+	if (!std::isfinite(device_x)
+		|| device_x < std::numeric_limits<float>::lowest()
+		|| device_x > std::numeric_limits<float>::max()) {
+		return {};
+	}
+	placement.device_x = static_cast<float>(device_x);
+	return placement;
+}
+
+char const *CursorSourceName(CursorSource source) noexcept {
+	switch (source) {
+		case CursorSource::None: return "none";
+		case CursorSource::Mouse: return "mouse";
+		case CursorSource::Playback: return "playback";
+	}
+	return "none";
+}
+
 ScrollbarGeometry BuildScrollbarGeometry(
 	float track_width,
 	float minimum_thumb_width,
@@ -289,41 +363,45 @@ std::vector<DeviceStyleSpan> BuildDeviceStyleSpans(
 		|| visible_last_ms <= visible_first_ms)
 		return result;
 
-	std::vector<double> points { visible_first_ms, visible_last_ms };
+	struct StyleEvent {
+		double time = 0.0;
+		FrameStyle style = FrameStyle::Normal;
+		int delta = 0;
+	};
+	std::vector<StyleEvent> events;
+	events.reserve(ranges.size() * 2);
 	for (auto const& range : ranges) {
 		if (range.end_ms <= range.start_ms)
 			continue;
 		auto const start = std::max<double>(visible_first_ms, range.start_ms);
 		auto const end = std::min<double>(visible_last_ms, range.end_ms);
-		if (end > start) {
-			points.push_back(start);
-			points.push_back(end);
+		if (end > start && range.style != FrameStyle::Normal) {
+			events.push_back({ start, range.style, 1 });
+			events.push_back({ end, range.style, -1 });
 		}
 	}
-	std::sort(points.begin(), points.end());
-	points.erase(std::unique(points.begin(), points.end()), points.end());
+	std::sort(events.begin(), events.end(), [](StyleEvent const& left, StyleEvent const& right) {
+		return left.time < right.time;
+	});
 
-	auto const style_at = [&ranges](double time) {
-		FrameStyle style = FrameStyle::Normal;
-		for (auto const& range : ranges) {
-			if (range.start_ms <= time && time < range.end_ms
-				&& static_cast<std::uint8_t>(range.style) > static_cast<std::uint8_t>(style))
-				style = range.style;
-		}
-		return style;
+	constexpr auto style_count = static_cast<std::size_t>(FrameStyle::Primary) + 1;
+	std::array<std::size_t, style_count> active {};
+	auto const current_style = [&active] {
+		for (auto index = active.size(); index-- > 1; )
+			if (active[index])
+				return static_cast<FrameStyle>(index);
+		return FrameStyle::Normal;
 	};
-	for (std::size_t i = 1; i < points.size(); ++i) {
-		auto const start = points[i - 1];
-		auto const end = points[i];
+	auto append_span = [&](double start, double end) {
 		if (!(end > start))
-			continue;
+			return;
 		auto const x1 = static_cast<float>(viewport.content.x
 			+ (start - visible_first_ms) / viewport.milliseconds_per_column);
 		auto const x2 = static_cast<float>(viewport.content.x
 			+ (end - visible_first_ms) / viewport.milliseconds_per_column);
 		if (!(x2 > x1))
-			continue;
-		auto const style = style_at((start + end) * 0.5);
+			return;
+		auto const style = current_style();
 		if (!result.empty() && result.back().style == style
 			&& std::abs(result.back().x + result.back().width - x1) < 0.001f) {
 			result.back().width = x2 - result.back().x;
@@ -331,7 +409,26 @@ std::vector<DeviceStyleSpan> BuildDeviceStyleSpans(
 		else {
 			result.push_back({ x1, x2 - x1, style });
 		}
+	};
+
+	double position = visible_first_ms;
+	std::size_t event_index = 0;
+	while (event_index < events.size()) {
+		auto const event_time = events[event_index].time;
+		append_span(position, event_time);
+		while (event_index < events.size() && events[event_index].time == event_time) {
+			auto const style_index = static_cast<std::size_t>(events[event_index].style);
+			if (style_index < active.size()) {
+				if (events[event_index].delta > 0)
+					++active[style_index];
+				else if (active[style_index])
+					--active[style_index];
+			}
+			++event_index;
+		}
+		position = event_time;
 	}
+	append_span(position, visible_last_ms);
 	return result;
 }
 

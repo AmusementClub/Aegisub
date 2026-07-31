@@ -55,6 +55,7 @@ enum class FailureInjection {
 };
 
 FailureInjection ParseFailureInjection(std::string_view value) noexcept;
+std::uint64_t ParseFailureInjectionAfterContentFrames(std::string_view value) noexcept;
 
 struct FrameTarget {
 	std::uint64_t context_generation = 0;
@@ -87,8 +88,8 @@ struct SurfaceKey {
 
 SurfaceKey MakeSurfaceKey(FrameTarget const& target);
 
-// Design-level invalidation model. Production painting currently uses its own
-// retained-content scheduling rather than consuming these transition plans.
+// Production invalidation model shared by the display's retained-frame
+// scheduler and contract tests.
 enum class Layer : uint32_t {
 	None = 0,
 	Content = 1u << 0,
@@ -111,8 +112,16 @@ constexpr bool HasLayer(Layer mask, Layer layer) {
 	return (mask & layer) != Layer::None;
 }
 
+constexpr bool CanRenderRetainedOverlay(Layer mask) {
+	return mask != Layer::None
+		&& !HasLayer(mask, Layer::Content)
+		&& !HasLayer(mask, Layer::Style)
+		&& !HasLayer(mask, Layer::Chrome);
+}
+
 enum class Change {
 	Provider,
+	ContentReady,
 	AnalysisSettings,
 	Zoom,
 	Scroll,

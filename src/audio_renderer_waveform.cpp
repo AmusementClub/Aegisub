@@ -30,11 +30,15 @@
 #include "audio_renderer_waveform.h"
 
 #include "audio_colorscheme.h"
+#include "audio_display_source.h"
+#include "audio_waveform_column_ref.h"
+#include "audio_waveform_summary_cache.h"
 #include "options.h"
 
 #include <libaegisub/audio/provider.h>
 
 #include <algorithm>
+#include <limits>
 #include <wx/dcmemory.h>
 
 enum {
@@ -46,7 +50,8 @@ enum {
 };
 
 AudioWaveformRenderer::AudioWaveformRenderer(std::string const& color_scheme_name)
-: render_averages(OPT_GET("Audio/Display/Waveform Style")->GetInt() == Waveform_MaxAvg)
+: summary_cache(std::make_unique<AudioWaveformSummaryCache>())
+, render_averages(OPT_GET("Audio/Display/Waveform Style")->GetInt() == Waveform_MaxAvg)
 {
 	colors.reserve(AudioStyle_MAX);
 	for (int i = 0; i < AudioStyle_MAX; ++i)
@@ -54,6 +59,56 @@ AudioWaveformRenderer::AudioWaveformRenderer(std::string const& color_scheme_nam
 }
 
 AudioWaveformRenderer::~AudioWaveformRenderer() { }
+
+void AudioWaveformRenderer::OnSetProvider() {
+	summary_cache->SetSource(nullptr);
+	display_source = CreateInt16MonoAudioDisplaySource(provider);
+	summary_cache->SetSource(display_source.get());
+}
+
+void AudioWaveformRenderer::OnSetMillisecondsPerPixel() {
+	summary_cache->SetMillisecondsPerPixel(pixel_ms);
+}
+
+void AudioWaveformRenderer::AgeCache(size_t max_size) {
+	summary_cache->Age(max_size);
+}
+
+void AudioWaveformRenderer::Prefetch(int start, int length) {
+	if (!display_source || !provider)
+		return;
+
+	auto const range = PlanWaveformPrefetchBlocks(
+		start,
+		length,
+		provider->GetDecodedSamples(),
+		provider->GetSampleRate(),
+		pixel_ms);
+	if (range)
+		summary_cache->Prefetch(range->first, range->last);
+}
+
+bool AudioWaveformRenderer::GetCacheMetrics(AudioRendererCacheMetrics &metrics) const {
+	if (!summary_cache)
+		return false;
+	auto const source = summary_cache->GetMetricsSnapshot();
+	metrics.content_kind = AudioRendererContentKind::Waveform;
+	metrics.generation = source.generation;
+	metrics.source_cache_hits = source.cache_hits;
+	metrics.source_cache_misses = source.cache_misses;
+	metrics.visible_builds = source.visible_builds;
+	metrics.visible_lock_contention = source.visible_lock_contention;
+	metrics.prefetch_requests = source.prefetch_requests;
+	metrics.prefetch_builds = source.prefetch_builds;
+	metrics.prefetch_busy_skips = source.prefetch_busy_skips;
+	metrics.stale_drops = source.stale_drops;
+	metrics.evictions = source.evictions;
+	metrics.cache_entries = source.cache_entries;
+	metrics.cache_bytes = source.cache_bytes;
+	metrics.cache_budget_bytes = source.cache_budget_bytes;
+	metrics.prefetch_enabled = source.prefetch_enabled;
+	return true;
+}
 
 void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle style)
 {
@@ -70,46 +125,40 @@ void AudioWaveformRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 	dc.SetPen(*wxTRANSPARENT_PEN);
 	dc.DrawRectangle(rect);
 
-	// Make sure we've got a buffer to fill with audio data
-	if (!audio_buffer)
-	{
-		// Buffer for one pixel strip of audio
-		size_t buffer_needed = pixel_samples * provider->GetChannels() * provider->GetBytesPerSample();
-		audio_buffer.reset(new char[buffer_needed]);
-	}
-
-	double cur_sample = start * pixel_samples;
-
 	wxPen pen_peaks(wxPen(pal->get(0.4f)));
 	wxPen pen_avgs(wxPen(pal->get(0.7f)));
 
+	size_t active_block_index = std::numeric_limits<size_t>::max();
+	AudioWaveformSummaryCache::BlockHandle active_block;
 	for (int x = 0; x < rect.width; ++x)
 	{
-		provider->GetInt16MonoAudio(reinterpret_cast<int16_t*>(audio_buffer.get()), (int64_t)cur_sample, (int64_t)pixel_samples);
-		cur_sample += pixel_samples;
-
-		int peak_min = 0, peak_max = 0;
-		int64_t avg_min_accum = 0, avg_max_accum = 0;
-		auto aud = reinterpret_cast<const int16_t *>(audio_buffer.get());
-		for (int si = pixel_samples; si > 0; --si, ++aud)
-		{
-			if (*aud > 0)
-			{
-				peak_max = std::max(peak_max, (int)*aud);
-				avg_max_accum += *aud;
-			}
-			else
-			{
-				peak_min = std::min(peak_min, (int)*aud);
-				avg_min_accum += *aud;
-			}
+		const auto column_ref = GetWaveformSummaryColumnRef(start + x);
+		if (column_ref.block_index != active_block_index) {
+			active_block_index = column_ref.block_index;
+			active_block = summary_cache->Get(active_block_index);
 		}
+		if (!active_block)
+			continue;
 
 		// midpoint is half height
-		peak_min = std::max((int)(peak_min * amplitude_scale * midpoint) / 0x8000, -midpoint);
-		peak_max = std::min((int)(peak_max * amplitude_scale * midpoint) / 0x8000, midpoint);
-		int avg_min = std::max((int)(avg_min_accum * amplitude_scale * midpoint / pixel_samples) / 0x8000, -midpoint);
-		int avg_max = std::min((int)(avg_max_accum * amplitude_scale * midpoint / pixel_samples) / 0x8000, midpoint);
+		int peak_min = 0;
+		int peak_max = 0;
+		int avg_min = 0;
+		int avg_max = 0;
+		if (active_block->has_exact_pcm16) {
+			const auto &summary = active_block->pcm16_summaries[column_ref.summary_index];
+			peak_min = std::max((int)(summary.peak_min * amplitude_scale * midpoint) / 0x8000, -midpoint);
+			peak_max = std::min((int)(summary.peak_max * amplitude_scale * midpoint) / 0x8000, midpoint);
+			avg_min = std::max((int)(summary.avg_min_accum * amplitude_scale * midpoint / pixel_samples) / 0x8000, -midpoint);
+			avg_max = std::min((int)(summary.avg_max_accum * amplitude_scale * midpoint / pixel_samples) / 0x8000, midpoint);
+		}
+		else {
+			const auto &summary = active_block->summaries[column_ref.summary_index];
+			peak_min = std::max(static_cast<int>(summary.peak_min * amplitude_scale * midpoint), -midpoint);
+			peak_max = std::min(static_cast<int>(summary.peak_max * amplitude_scale * midpoint), midpoint);
+			avg_min = std::max(static_cast<int>(summary.avg_min * amplitude_scale * midpoint), -midpoint);
+			avg_max = std::min(static_cast<int>(summary.avg_max * amplitude_scale * midpoint), midpoint);
+		}
 
 		dc.SetPen(pen_peaks);
 		dc.DrawLine(x, midpoint - peak_max, x, midpoint - peak_min);

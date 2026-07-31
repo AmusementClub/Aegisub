@@ -43,6 +43,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <limits>
 
 #include <wx/dcmemory.h>
 #include <wx/image.h>
@@ -324,6 +325,7 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 		combined_power_scratch.resize(static_cast<size_t>(width) * bin_count);
 		combined_power_columns.resize(width);
 		channel_power_inputs.resize(per_channel_caches.size());
+		channel_power_blocks.resize(per_channel_caches.size());
 
 		size_t last_block_index = static_cast<size_t>(-1);
 		const float *last_power = nullptr;
@@ -335,8 +337,12 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 				continue;
 			}
 
-			for (size_t ch = 0; ch < per_channel_caches.size(); ++ch)
-				channel_power_inputs[ch] = per_channel_caches[ch] ? per_channel_caches[ch]->Get(block_index) : nullptr;
+			for (size_t ch = 0; ch < per_channel_caches.size(); ++ch) {
+				channel_power_blocks[ch] = per_channel_caches[ch]
+					? per_channel_caches[ch]->Get(block_index)
+					: AudioSpectrumAnalysisCache::BlockHandle {};
+				channel_power_inputs[ch] = channel_power_blocks[ch].get();
+			}
 
 			float *dst = combined_power_scratch.data() + column * bin_count;
 			if (mono_mix_mode == AudioSpectrumMonoMixMode::PerBinMaxPower)
@@ -358,6 +364,7 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 			interpolated,
 			amplitude_scale,
 			*pal);
+		channel_power_blocks.clear();
 		return;
 	}
 
@@ -365,15 +372,18 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 		return;
 
 	power_columns.resize(width);
+	power_blocks.resize(width);
 	size_t last_block_index = static_cast<size_t>(-1);
-	const float *last_power = nullptr;
+	AudioSpectrumAnalysisCache::BlockHandle last_power;
 	for (int ax = start; ax < end; ++ax) {
 		size_t block_index = static_cast<size_t>(ax * samples_per_pixel) >> derivation_dist;
 		if (block_index != last_block_index) {
 			last_power = analysis_cache->Get(block_index);
 			last_block_index = block_index;
 		}
-		power_columns[static_cast<size_t>(ax - start)] = last_power;
+		auto const column = static_cast<size_t>(ax - start);
+		power_blocks[column] = last_power;
+		power_columns[column] = last_power.get();
 	}
 
 	RenderSpectrumColumnsToBitmap(
@@ -385,6 +395,7 @@ void AudioSpectrumRenderer::Render(wxBitmap &bmp, int start, AudioRenderingStyle
 		interpolated,
 		amplitude_scale,
 		*pal);
+	power_blocks.clear();
 }
 
 void AudioSpectrumRenderer::RenderBlank(wxDC &dc, const wxRect &rect, AudioRenderingStyle style) {
@@ -413,4 +424,75 @@ void AudioSpectrumRenderer::AgeCache(size_t max_size) {
 				cache->Age(0);
 		}
 	}
+}
+
+void AudioSpectrumRenderer::Prefetch(int start, int length) {
+	if (!display_source || pixel_ms <= 0.0 || start < 0 || length <= 0)
+		return;
+
+	auto const samples_per_pixel = static_cast<long double>(pixel_ms)
+		* display_source->GetSampleRate() / 1000.0L;
+	auto const last_column = static_cast<int64_t>(start) + length - 1;
+	auto const first_sample = static_cast<long double>(start) * samples_per_pixel;
+	auto const last_sample = static_cast<long double>(last_column) * samples_per_pixel;
+	if (!std::isfinite(samples_per_pixel)
+		|| samples_per_pixel <= 0.0L
+		|| first_sample < 0.0L
+		|| last_sample < first_sample
+		|| last_sample > static_cast<long double>(std::numeric_limits<size_t>::max())) {
+		return;
+	}
+
+	auto first_block = static_cast<size_t>(first_sample) >> derivation_dist;
+	auto last_block = static_cast<size_t>(last_sample) >> derivation_dist;
+	constexpr size_t margin_blocks = 32;
+	first_block = first_block > margin_blocks ? first_block - margin_blocks : 0;
+	last_block = last_block <= std::numeric_limits<size_t>::max() - margin_blocks
+		? last_block + margin_blocks
+		: std::numeric_limits<size_t>::max();
+
+	if (UsesPerChannelMonoAggregation()) {
+		for (auto &cache : per_channel_caches) {
+			if (cache)
+				cache->Prefetch(first_block, last_block);
+		}
+	}
+	else if (analysis_cache) {
+		analysis_cache->Prefetch(first_block, last_block);
+	}
+}
+
+bool AudioSpectrumRenderer::GetCacheMetrics(AudioRendererCacheMetrics &metrics) const {
+	metrics.content_kind = AudioRendererContentKind::Spectrum;
+	metrics.prefetch_enabled = true;
+	size_t cache_count = 0;
+	auto append = [&](AudioSpectrumAnalysisCache const& cache) {
+		auto const source = cache.GetMetricsSnapshot();
+		++cache_count;
+		metrics.generation = std::max(metrics.generation, source.generation);
+		metrics.source_cache_hits += source.cache_hits;
+		metrics.source_cache_misses += source.cache_misses;
+		metrics.visible_builds += source.visible_builds;
+		metrics.visible_lock_contention += source.visible_lock_contention;
+		metrics.prefetch_requests += source.prefetch_requests;
+		metrics.prefetch_builds += source.prefetch_builds;
+		metrics.prefetch_busy_skips += source.prefetch_busy_skips;
+		metrics.stale_drops += source.stale_drops;
+		metrics.evictions += source.evictions;
+		metrics.cache_entries += source.cache_entries;
+		metrics.cache_bytes += source.cache_bytes;
+		metrics.cache_budget_bytes += source.cache_budget_bytes;
+		metrics.prefetch_enabled = metrics.prefetch_enabled && source.prefetch_enabled;
+	};
+
+	if (UsesPerChannelMonoAggregation()) {
+		for (auto const& cache : per_channel_caches) {
+			if (cache)
+				append(*cache);
+		}
+	}
+	else if (analysis_cache) {
+		append(*analysis_cache);
+	}
+	return cache_count != 0;
 }

@@ -2,6 +2,7 @@
 
 #include "skia_audio_content.h"
 #include "skia_audio_content_analysis.h"
+#include "skia_audio_upload_payload.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -40,10 +41,23 @@ struct ContentWorkerMetrics {
 	std::uint64_t builds_ready = 0;
 	std::uint64_t builds_cancelled = 0;
 	std::uint64_t builds_invalid = 0;
+	std::uint64_t decode_deferred_tiles = 0;
+	std::uint64_t payload_builds_started = 0;
+	std::uint64_t payload_builds_ready = 0;
+	std::uint64_t payload_builds_cancelled = 0;
+	std::uint64_t payload_builds_invalid = 0;
 	std::uint64_t ready_notifications = 0;
 	bool provider_attached = false;
 	bool request_pending = false;
 	bool build_active = false;
+};
+
+struct ContentCacheBudgets {
+	std::size_t content_bytes = kDefaultContentCacheBudgetBytes;
+	std::size_t upload_payload_bytes = kDefaultUploadPayloadCacheBudgetBytes;
+	std::size_t spectrum_analysis_bytes = kMinimumSpectrumAnalysisBudgetBytes;
+
+	friend bool operator==(ContentCacheBudgets const&, ContentCacheBudgets const&) = default;
 };
 
 // One coalescing analysis worker for one AudioProvider lifetime. SetProvider
@@ -64,7 +78,7 @@ public:
 	explicit ContentWorker(
 		ReadyCallback ready_callback = {},
 		FailureCallback failure_callback = {},
-		std::size_t content_budget_bytes = 32 * 1024 * 1024);
+		std::size_t content_budget_bytes = kDefaultContentCacheBudgetBytes);
 	~ContentWorker();
 
 	ContentWorker(ContentWorker const&) = delete;
@@ -72,13 +86,19 @@ public:
 
 	ContentGeneration SetProvider(agi::AudioProvider *provider);
 	ContentGeneration SetAnalysis(ContentAnalysisConfig config);
+	bool SetCacheBudgets(ContentCacheBudgets budgets);
 	ContentGeneration Generation() const;
 
-	void Request(ContentViewportRequest request);
+	void Request(
+		ContentViewportRequest request,
+		std::shared_ptr<SpectrumBandPlan const> spectrum_band_plan = {});
 	std::shared_ptr<ContentTile const> Find(ContentTileKey const& key);
+	std::shared_ptr<ContentUploadPayload const> FindPayload(ContentUploadPayloadKey const& key);
 
 	ContentWorkerMetrics Metrics() const;
 	ContentStoreMetrics StoreMetrics() const;
+	ContentStoreMetrics PayloadMetrics() const;
+	ContentAnalysisCacheMetrics AnalysisMetrics() const;
 };
 
 }

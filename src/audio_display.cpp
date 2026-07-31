@@ -883,46 +883,107 @@ void AudioDisplay::OnLoadTimer(wxTimerEvent&)
 void AudioDisplay::OnPaint(wxPaintEvent&)
 {
 	if (!audio_renderer_provider || !provider) return;
-	perf_trace::AudioUiDurationScope trace("audio_display.paint");
-
-	wxAutoBufferedPaintDC dc(this);
-
-	wxRect audio_bounds(0, audio_top, GetClientSize().GetWidth(), audio_height);
-	bool redraw_scrollbar = false;
-	bool redraw_timeline = false;
-	int region_count = 0;
-	int audio_region_count = 0;
-
-	for (wxRegionIterator region(GetUpdateRegion()); region; ++region)
 	{
-		++region_count;
-		wxRect updrect = region.GetRect();
+		perf_trace::AudioUiDurationScope trace("audio_display.paint");
+		wxAutoBufferedPaintDC dc(this);
 
-		redraw_scrollbar |= scrollbar->GetBounds().Intersects(updrect);
-		redraw_timeline |= timeline->GetBounds().Intersects(updrect);
+		wxRect audio_bounds(0, audio_top, GetClientSize().GetWidth(), audio_height);
+		bool redraw_scrollbar = false;
+		bool redraw_timeline = false;
+		int region_count = 0;
+		int audio_region_count = 0;
+		bool has_prefetch_range = false;
+		int prefetch_first = 0;
+		int prefetch_last = 0;
 
-		if (audio_bounds.Intersects(updrect))
+		for (wxRegionIterator region(GetUpdateRegion()); region; ++region)
 		{
-			++audio_region_count;
-			TimeRange updtime(
-				std::max(0, TimeFromRelativeX(updrect.x - foot_size)),
-				std::max(0, TimeFromRelativeX(updrect.x + updrect.width + foot_size)));
+			++region_count;
+			wxRect updrect = region.GetRect();
 
-			PaintAudio(dc, updtime, updrect);
-			PaintMarkers(dc, updtime);
-			PaintLabels(dc, updtime);
+			redraw_scrollbar |= scrollbar->GetBounds().Intersects(updrect);
+			redraw_timeline |= timeline->GetBounds().Intersects(updrect);
+
+			if (audio_bounds.Intersects(updrect))
+			{
+				++audio_region_count;
+				wxRect audio_update = updrect;
+				audio_update.Intersect(audio_bounds);
+				if (!has_prefetch_range) {
+					has_prefetch_range = true;
+					prefetch_first = audio_update.GetLeft();
+					prefetch_last = audio_update.GetRight() + 1;
+				}
+				else {
+					prefetch_first = std::min(prefetch_first, audio_update.GetLeft());
+					prefetch_last = std::max(prefetch_last, audio_update.GetRight() + 1);
+				}
+				TimeRange updtime(
+					std::max(0, TimeFromRelativeX(updrect.x - foot_size)),
+					std::max(0, TimeFromRelativeX(updrect.x + updrect.width + foot_size)));
+
+				PaintAudio(dc, updtime, updrect);
+				PaintMarkers(dc, updtime);
+				PaintLabels(dc, updtime);
+			}
 		}
+
+		if (track_cursor_pos >= 0)
+			PaintTrackCursor(dc);
+
+		if (redraw_scrollbar)
+			scrollbar->Paint(dc, HasFocus(), audio_load_position);
+		if (redraw_timeline)
+			timeline->Paint(dc);
+		if (has_prefetch_range && prefetch_last > prefetch_first)
+			audio_renderer->Prefetch(prefetch_first + scroll_left, prefetch_last - prefetch_first);
+
+		trace.SetDetails(region_count, audio_region_count);
 	}
 
-	if (track_cursor_pos >= 0)
-		PaintTrackCursor(dc);
-
-	if (redraw_scrollbar)
-		scrollbar->Paint(dc, HasFocus(), audio_load_position);
-	if (redraw_timeline)
-		timeline->Paint(dc);
-
-	trace.SetDetails(region_count, audio_region_count);
+	if (perf_trace::IsCategoryEnabled(perf_trace::Category::Audio)) {
+		AudioRendererCacheMetrics metrics;
+		if (audio_renderer->GetCacheMetrics(metrics)) {
+			perf_trace::AudioDisplaySnapshot snapshot;
+			snapshot.renderer_name = "wx";
+			snapshot.content_kind = metrics.content_kind == AudioRendererContentKind::Spectrum
+				? "spectrum" : "waveform";
+			snapshot.frame_id = ++perf_trace_frame_id;
+			snapshot.analysis_generation = metrics.generation;
+			snapshot.content_scale = std::max(
+				1.0,
+				static_cast<double>(GetContentScaleFactor()));
+			snapshot.viewport_first_column = static_cast<std::uint64_t>(std::max(0, scroll_left));
+			snapshot.viewport_column_count = static_cast<std::uint64_t>(std::max(0, GetClientSize().GetWidth()));
+			snapshot.target_width = snapshot.viewport_column_count;
+			snapshot.target_height = static_cast<std::uint64_t>(std::max(0, audio_height));
+			snapshot.focused = HasFocus();
+			snapshot.middle_seek_active = middle_seek_active;
+			if (track_cursor_pos >= 0) {
+				snapshot.cursor_source = controller->IsPlaying() ? "playback" : "mouse";
+				snapshot.cursor_position_ms = TimeFromAbsoluteX(track_cursor_pos);
+				snapshot.cursor_device_x = track_cursor_pos - scroll_left;
+				snapshot.cursor_label_visible = !track_cursor_label.empty();
+			}
+			snapshot.swap_attempted = false;
+			snapshot.bitmap_cache_hits = metrics.bitmap_cache_hits;
+			snapshot.bitmap_cache_misses = metrics.bitmap_cache_misses;
+			snapshot.source_cache_budget_bytes = metrics.cache_budget_bytes;
+			snapshot.source_cache_bytes = metrics.cache_bytes;
+			snapshot.source_cache_entries = metrics.cache_entries;
+			snapshot.source_cache_hits = metrics.source_cache_hits;
+			snapshot.source_cache_misses = metrics.source_cache_misses;
+			snapshot.source_cache_visible_builds = metrics.visible_builds;
+			snapshot.source_cache_visible_lock_contention = metrics.visible_lock_contention;
+			snapshot.source_cache_prefetch_requests = metrics.prefetch_requests;
+			snapshot.source_cache_prefetch_builds = metrics.prefetch_builds;
+			snapshot.source_cache_prefetch_busy_skips = metrics.prefetch_busy_skips;
+			snapshot.source_cache_stale_drops = metrics.stale_drops;
+			snapshot.source_cache_evictions = metrics.evictions;
+			snapshot.source_cache_prefetch_enabled = metrics.prefetch_enabled;
+			perf_trace::ObserveAudioDisplaySnapshot(snapshot);
+		}
+	}
 }
 
 void AudioDisplay::PaintAudio(wxDC &dc, const TimeRange updtime, const wxRect updrect)
@@ -1227,6 +1288,8 @@ void AudioDisplay::SetDraggedObject(AudioDisplayInteractionObject *new_obj)
 void AudioDisplay::SetTrackCursor(int new_pos, bool show_time)
 {
 	if (new_pos == track_cursor_pos) return;
+	perf_trace::AudioUiDurationScope trace(
+		"audio_display.cursor_update", 0, show_time ? 1 : 0);
 
 	int old_pos = track_cursor_pos;
 	track_cursor_pos = new_pos;

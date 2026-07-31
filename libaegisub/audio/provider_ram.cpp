@@ -28,6 +28,21 @@ using namespace agi;
 #define CacheBits 22
 #define CacheBlockSize (1 << CacheBits)
 
+std::string FormatWrappedProviderName(char const* wrapper_name, AudioProvider const* source) {
+	std::string name = wrapper_name;
+	if (!source)
+		return name;
+
+	auto const source_name = source->GetMemoryStats().provider_name;
+	if (source_name.empty())
+		return name;
+
+	name += " (";
+	name += source_name;
+	name += ")";
+	return name;
+}
+
 class RAMAudioProvider final : public AudioProviderWrapper {
 #ifdef _MSC_VER
 	boost::container::stable_vector<char[CacheBlockSize]> blockcache;
@@ -66,6 +81,13 @@ public:
 	~RAMAudioProvider() {
 		cancelled = true;
 		decoder.join();
+	}
+
+	AudioProviderMemoryStats GetMemoryStats() const override {
+		return BuildMemoryStats(
+			FormatWrappedProviderName("RAM", source.get()),
+			"memory",
+			blockcache.size() * static_cast<size_t>(CacheBlockSize));
 	}
 };
 

@@ -14,7 +14,6 @@ namespace aegisub::skia::audio {
 namespace {
 
 constexpr std::size_t kWaveformScratchBudget = 1024 * 1024;
-constexpr std::size_t kSpectrumAnalysisCacheBudget = 8 * 1024 * 1024;
 constexpr std::uint32_t kMaximumTileColumns = 512;
 constexpr std::uint32_t kMaximumSpectrumBins = 4096;
 constexpr std::size_t kMinimumSpectrumDerivationSize = 4;
@@ -105,6 +104,7 @@ struct WaveformAccumulator {
 
 struct ContentAnalyzer::Impl {
 	AudioDisplaySource& source;
+	std::size_t spectrum_cache_budget = kMinimumSpectrumAnalysisBudgetBytes;
 	std::unique_ptr<AudioSpectrumAnalysisCache> spectrum_cache;
 	AudioMixPolicy spectrum_mix_policy = AudioMixPolicy::MonoAverage;
 	std::size_t spectrum_derivation_size = 0;
@@ -115,6 +115,21 @@ struct ContentAnalyzer::Impl {
 
 	explicit Impl(AudioDisplaySource& source)
 	: source(source) {
+	}
+
+	std::size_t PerChannelBudget(std::size_t channel) const noexcept {
+		auto const channel_count = std::max<std::size_t>(1, per_channel_caches.size());
+		return spectrum_cache_budget / channel_count
+			+ (channel < spectrum_cache_budget % channel_count ? 1 : 0);
+	}
+
+	void ApplySpectrumCacheBudget() {
+		if (spectrum_cache)
+			spectrum_cache->Age(spectrum_cache_budget);
+		for (std::size_t channel = 0; channel < per_channel_caches.size(); ++channel) {
+			if (per_channel_caches[channel])
+				per_channel_caches[channel]->Age(std::max<std::size_t>(1, PerChannelBudget(channel)));
+		}
 	}
 
 	AudioSpectrumAnalysisCache& SpectrumCache(SpectrumBuildRequest const& request) {
@@ -131,7 +146,7 @@ struct ContentAnalyzer::Impl {
 			spectrum_cache->SetMixPolicy(request.mix_policy);
 			spectrum_cache->SetSource(&source);
 			spectrum_cache->SetResolution(request.derivation_size, request.derivation_distance);
-			spectrum_cache->Age(kSpectrumAnalysisCacheBudget);
+			spectrum_cache->Age(spectrum_cache_budget);
 		}
 		return *spectrum_cache;
 	}
@@ -153,17 +168,14 @@ struct ContentAnalyzer::Impl {
 			spectrum_channel_mode = request.channel_mode;
 			spectrum_derivation_size = request.derivation_size;
 			spectrum_derivation_distance = request.derivation_distance;
-			auto const per_channel_budget = std::max<std::size_t>(
-				1,
-				kSpectrumAnalysisCacheBudget / static_cast<std::size_t>(source.GetChannels()));
 			for (int channel = 0; channel < source.GetChannels(); ++channel) {
 				per_channel_sources.push_back(CreateSingleChannelAudioDisplaySource(&source, channel));
 				auto cache = std::make_unique<AudioSpectrumAnalysisCache>();
 				cache->SetSource(per_channel_sources.back().get());
 				cache->SetResolution(request.derivation_size, request.derivation_distance);
-				cache->Age(per_channel_budget);
 				per_channel_caches.push_back(std::move(cache));
 			}
+			ApplySpectrumCacheBudget();
 		}
 	}
 };
@@ -173,6 +185,37 @@ ContentAnalyzer::ContentAnalyzer(AudioDisplaySource& source)
 }
 
 ContentAnalyzer::~ContentAnalyzer() = default;
+
+void ContentAnalyzer::SetSpectrumCacheBudget(std::size_t budget_bytes) {
+	budget_bytes = std::max<std::size_t>(1, budget_bytes);
+	if (impl->spectrum_cache_budget == budget_bytes)
+		return;
+	impl->spectrum_cache_budget = budget_bytes;
+	impl->ApplySpectrumCacheBudget();
+}
+
+ContentAnalysisCacheMetrics ContentAnalyzer::Metrics() const {
+	ContentAnalysisCacheMetrics metrics;
+	metrics.configured_spectrum_budget_bytes = impl->spectrum_cache_budget;
+	auto append = [&metrics](AudioSpectrumAnalysisCache const& cache) {
+		auto const snapshot = cache.GetMetricsSnapshot();
+		++metrics.spectrum_cache_count;
+		metrics.spectrum_cache_budget_bytes += snapshot.cache_budget_bytes;
+		metrics.spectrum_cache_bytes += snapshot.cache_bytes;
+		metrics.spectrum_cache_entries += snapshot.cache_entries;
+		metrics.spectrum_cache_hits += snapshot.cache_hits;
+		metrics.spectrum_cache_misses += snapshot.cache_misses;
+		metrics.spectrum_visible_builds += snapshot.visible_builds;
+		metrics.spectrum_cache_evictions += snapshot.evictions;
+	};
+	if (impl->spectrum_cache)
+		append(*impl->spectrum_cache);
+	for (auto const& cache : impl->per_channel_caches) {
+		if (cache)
+			append(*cache);
+	}
+	return metrics;
+}
 
 ContentBuildResult ContentAnalyzer::BuildWaveform(
 	WaveformBuildRequest const& request,
@@ -280,12 +323,14 @@ ContentBuildResult ContentAnalyzer::BuildSpectrum(
 	tile->key = request.key;
 	tile->spectrum_power.resize(static_cast<std::size_t>(request.key.column_count) * bin_count);
 	std::size_t previous_block = std::numeric_limits<std::size_t>::max();
-	float const *previous_power = nullptr;
+	AudioSpectrumAnalysisCache::BlockHandle previous_power;
 	std::vector<float> merged_power;
 	std::vector<const float *> channel_power_inputs;
+	std::vector<AudioSpectrumAnalysisCache::BlockHandle> channel_power_blocks;
 	if (!cache) {
 		merged_power.resize(bin_count);
 		channel_power_inputs.resize(impl->per_channel_caches.size());
+		channel_power_blocks.resize(impl->per_channel_caches.size());
 	}
 	for (std::uint32_t column = 0; column < request.key.column_count; ++column) {
 		if (!Current(request.key.generation, is_current))
@@ -302,8 +347,10 @@ ContentBuildResult ContentAnalyzer::BuildSpectrum(
 				previous_power = cache->Get(block_index);
 			}
 			else {
-				for (std::size_t channel = 0; channel < impl->per_channel_caches.size(); ++channel)
-					channel_power_inputs[channel] = impl->per_channel_caches[channel]->Get(block_index);
+				for (std::size_t channel = 0; channel < impl->per_channel_caches.size(); ++channel) {
+					channel_power_blocks[channel] = impl->per_channel_caches[channel]->Get(block_index);
+					channel_power_inputs[channel] = channel_power_blocks[channel].get();
+				}
 				if (request.channel_mode == SpectrumChannelMode::PerBinMaxPower)
 					MergeSpectrumPowerBinsMax(channel_power_inputs, bin_count, merged_power.data());
 				else
@@ -315,7 +362,7 @@ ContentBuildResult ContentAnalyzer::BuildSpectrum(
 			return {};
 		if (!cache && merged_power.empty())
 			return {};
-		auto const *power = cache ? previous_power : merged_power.data();
+		auto const *power = cache ? previous_power.get() : merged_power.data();
 		std::copy(power, power + bin_count,
 			tile->spectrum_power.begin() + static_cast<std::size_t>(column) * bin_count);
 	}

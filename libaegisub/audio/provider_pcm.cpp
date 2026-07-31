@@ -63,6 +63,10 @@ protected:
 	mutable read_file_mapping file;
 	uint64_t file_pos = 0;
 
+	AudioProviderMemoryStats GetMemoryStats() const override {
+		return BuildMemoryStats("PCM", "mapped", file.size());
+	}
+
 	PCMAudioProvider(fs::path const& filename) : file(filename) { }
 
 	template<typename T, typename UInt>

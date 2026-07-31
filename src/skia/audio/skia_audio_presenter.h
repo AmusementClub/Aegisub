@@ -3,6 +3,7 @@
 #include "skia_audio_content.h"
 #include "skia_audio_display_contract.h"
 #include "skia_audio_frame_model.h"
+#include "skia_audio_upload_payload.h"
 #include "../skia_gl_device.h"
 
 #include <array>
@@ -13,6 +14,25 @@
 #include <vector>
 
 namespace aegisub::skia::audio {
+
+struct PresenterFrameTrace {
+	bool valid = false;
+	bool retained_layers_reused = false;
+	bool cursor_only = false;
+	double frame_compose_ms = 0.0;
+	double base_layer_rebuild_ms = 0.0;
+	double marker_layer_rebuild_ms = -1.0;
+	double label_layer_rebuild_ms = -1.0;
+	double scrollbar_layer_rebuild_ms = -1.0;
+	int tile_count = 0;
+	int style_count = 0;
+	int marker_count = 0;
+	int markers_drawn = 0;
+	int label_count = 0;
+	int labels_drawn = 0;
+	bool scrollbar_selection_visible = false;
+	bool scrollbar_load_visible = false;
+};
 
 struct PresenterMetrics {
 	std::uint64_t frame_attempts = 0;
@@ -29,6 +49,7 @@ struct PresenterMetrics {
 	std::size_t content_cache_entries = 0;
 	std::size_t content_cache_bytes = 0;
 	std::size_t content_cache_budget_bytes = 0;
+	PresenterFrameTrace last_frame_trace;
 };
 
 struct SpectrumPalette {
@@ -65,6 +86,8 @@ struct CursorFrame {
 	float x = 0.f;
 	std::uint32_t color = 0xFFFFFFFF;
 	std::string label;
+	int position_ms = -1;
+	bool playback = false;
 };
 
 struct TimelineFrame {
@@ -95,6 +118,10 @@ struct ScrollbarFrame {
 
 struct ContentFrame {
 	ContentGeneration generation;
+	// Non-zero values identify a display-side static frame model. Cursor-only
+	// frames keep this revision unchanged so the presenter can reuse its
+	// retained pre/post-cursor pictures safely.
+	std::uint64_t static_revision = 0;
 	ContentKind kind = ContentKind::Waveform;
 	std::uint64_t first_column = 0;
 	float x = 0.f;
@@ -110,7 +137,7 @@ struct ContentFrame {
 	bool draw_waveform_average = true;
 	std::shared_ptr<SpectrumPalette const> spectrum_palette;
 	std::shared_ptr<SpectrumBandPlan const> spectrum_band_plan;
-	std::vector<std::shared_ptr<ContentTile const>> tiles;
+	std::vector<std::shared_ptr<ContentUploadPayload const>> tiles;
 	std::vector<StyleFrame> styles;
 	std::vector<MarkerFrame> markers;
 	std::vector<LabelFrame> labels;
@@ -135,6 +162,13 @@ public:
 
 	bool RenderDiagnosticFrame(SkiaGlContextToken context, FrameTarget const& target);
 	bool RenderContentFrame(SkiaGlContextToken context, FrameTarget const& target, ContentFrame const& frame);
+	bool RenderCursorFrame(SkiaGlContextToken context, FrameTarget const& target, ContentFrame const& frame);
+	bool RenderRetainedOverlayFrame(
+		SkiaGlContextToken context,
+		FrameTarget const& target,
+		ContentFrame const& frame,
+		Layer updated_layers);
+	void SetFailureInjection(FailureInjection failure_injection) noexcept;
 	void SetContentCacheBudget(std::size_t budget_bytes);
 	void Fail(SkiaGlContextToken context, SkiaGlDeviceFailure failure, std::string detail) noexcept;
 	void Release(SkiaGlContextToken context) noexcept;

@@ -5,6 +5,7 @@
 #include "../../audio_mix_policy.h"
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <memory>
 
@@ -46,6 +47,18 @@ struct SpectrumBuildRequest {
 	std::size_t derivation_distance = 0;
 };
 
+struct ContentAnalysisCacheMetrics {
+	std::size_t configured_spectrum_budget_bytes = 0;
+	std::size_t spectrum_cache_count = 0;
+	std::size_t spectrum_cache_budget_bytes = 0;
+	std::size_t spectrum_cache_bytes = 0;
+	std::size_t spectrum_cache_entries = 0;
+	std::uint64_t spectrum_cache_hits = 0;
+	std::uint64_t spectrum_cache_misses = 0;
+	std::uint64_t spectrum_visible_builds = 0;
+	std::uint64_t spectrum_cache_evictions = 0;
+};
+
 // Owned by one analysis worker for one provider lifetime. FFT resources and a
 // small bounded power cache are reused across spectrum tile requests. Destroy
 // the analyzer (and join its worker) before the referenced source/provider.
@@ -59,6 +72,9 @@ public:
 
 	ContentAnalyzer(ContentAnalyzer const&) = delete;
 	ContentAnalyzer& operator=(ContentAnalyzer const&) = delete;
+
+	void SetSpectrumCacheBudget(std::size_t budget_bytes);
+	ContentAnalysisCacheMetrics Metrics() const;
 
 	ContentBuildResult BuildWaveform(
 		WaveformBuildRequest const& request,

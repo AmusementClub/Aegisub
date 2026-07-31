@@ -764,6 +764,27 @@ TEST(lagi_audio, ram_cache) {
 		ASSERT_EQ(static_cast<uint16_t>((1 << 22) - 256 + i), buff[i]);
 }
 
+TEST(lagi_audio, ram_cache_reports_memory_stats) {
+	auto provider = agi::CreateRAMAudioProvider(agi::make_unique<TestAudioProvider<>>());
+	ASSERT_TRUE(WaitUntil([&] {
+		return provider->GetDecodedSamples() == provider->GetNumSamples();
+	}));
+
+	auto const stats = provider->GetMemoryStats();
+	EXPECT_EQ("RAM", stats.provider_name);
+	EXPECT_EQ("memory", stats.storage_kind);
+	EXPECT_GE(stats.storage_bytes, stats.logical_bytes);
+	EXPECT_LT(stats.storage_bytes, stats.logical_bytes + (1u << 22));
+	EXPECT_EQ(stats.logical_bytes, stats.decoded_bytes);
+}
+
+TEST(lagi_audio, ram_cache_preserves_wrapped_provider_name) {
+	auto provider = agi::CreateRAMAudioProvider(agi::make_unique<NamedTestAudioProvider<>>());
+
+	auto const stats = provider->GetMemoryStats();
+	EXPECT_EQ("RAM (TestSource)", stats.provider_name);
+}
+
 TEST(lagi_audio, hd_cache) {
 	auto provider = agi::CreateHDAudioProvider(agi::make_unique<TestAudioProvider<>>(), agi::Path().Decode("?temp"));
 	ASSERT_TRUE(WaitUntil([&] {
@@ -1005,6 +1026,26 @@ TEST(lagi_audio, pcm_simple) {
 			provider->GetAudio(&sample, i, 1);
 			ASSERT_EQ(i, sample);
 		}
+	}
+
+	agi::fs::Remove(path);
+}
+
+TEST(lagi_audio, pcm_reports_mapped_memory_stats) {
+	auto path = agi::Path().Decode("?temp/pcm_memory_stats");
+	{
+		TestAudioProvider<> provider;
+		agi::SaveAudioClip(provider, path, 0, 1000);
+	}
+
+	{
+		auto provider = agi::CreatePCMAudioProvider(path, nullptr);
+		auto const stats = provider->GetMemoryStats();
+		EXPECT_EQ("PCM", stats.provider_name);
+		EXPECT_EQ("mapped", stats.storage_kind);
+		EXPECT_EQ(static_cast<size_t>(44) + static_cast<size_t>(48000) * sizeof(uint16_t), stats.storage_bytes);
+		EXPECT_EQ(static_cast<size_t>(48000) * sizeof(uint16_t), stats.logical_bytes);
+		EXPECT_EQ(stats.logical_bytes, stats.decoded_bytes);
 	}
 
 	agi::fs::Remove(path);

@@ -13,6 +13,7 @@ public:
 	virtual int GetChannels() const = 0;
 	virtual int GetSampleRate() const = 0;
 	virtual void GetFloatAudio(float *buf, int64_t start, int64_t count) const = 0;
+	virtual bool GetInt16MonoAudio(int16_t *buf, int64_t start, int64_t count) const { return false; }
 	virtual bool GetFloatAudioChannel(float *buf, int channel, int64_t start, int64_t count) const { return false; }
 	virtual void HintFloatAudio(int64_t start, int64_t count) const { }
 };

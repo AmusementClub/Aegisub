@@ -73,6 +73,11 @@ sealed record DriverOptions(
     int DurationSeconds,
     string? Project,
     string? Audio,
+    string? AudioProvider,
+    int? AudioCacheType,
+    string? AudioPlayer,
+    bool? AudioSpectrum,
+    bool? CursorTime,
     string? Video,
     string? Artifacts,
     int Width,
@@ -93,7 +98,13 @@ sealed record DriverOptions(
     public bool RequiresVideoCanvas =>
         Scenario.Equals("video-crosshair-sweep", StringComparison.OrdinalIgnoreCase)
         || Scenario.Equals("video-playback-audio-scroll", StringComparison.OrdinalIgnoreCase)
-        || Scenario.Equals("video-playback-audio-scrollbar-drag", StringComparison.OrdinalIgnoreCase);
+        || Scenario.Equals("video-playback-audio-scrollbar-drag", StringComparison.OrdinalIgnoreCase)
+        || Scenario.Equals("audio-middle-seek-cursor", StringComparison.OrdinalIgnoreCase)
+        || Scenario.Equals("audio-spectrum-middle-seek-cursor", StringComparison.OrdinalIgnoreCase);
+
+    public bool IsFocusColourScenario =>
+        Scenario.Equals("audio-waveform-focus-colour", StringComparison.OrdinalIgnoreCase)
+        || Scenario.Equals("audio-spectrum-focus-colour", StringComparison.OrdinalIgnoreCase);
 
     public static DriverOptions Parse(string[] args)
     {
@@ -102,6 +113,11 @@ sealed record DriverOptions(
         int duration = 30;
         string? project = null;
         string? audio = null;
+        string? audioProvider = null;
+        int? audioCacheType = null;
+        string? audioPlayer = null;
+        bool? audioSpectrum = null;
+        bool? cursorTime = null;
         string? video = null;
         string? artifacts = null;
         int width = 1280;
@@ -155,6 +171,21 @@ sealed record DriverOptions(
                 case "--audio":
                     audio = Value();
                     break;
+                case "--audio-provider":
+                    audioProvider = ParseNonEmpty(Value(), arg);
+                    break;
+                case "--audio-cache-type":
+                    audioCacheType = ParseAudioCacheType(Value(), arg);
+                    break;
+                case "--audio-player":
+                    audioPlayer = ParseNonEmpty(Value(), arg);
+                    break;
+                case "--audio-view":
+                    audioSpectrum = ParseAudioView(Value(), arg);
+                    break;
+                case "--cursor-time":
+                    cursorTime = ParseOnOff(Value(), arg);
+                    break;
                 case "--video":
                     video = Value();
                     break;
@@ -185,7 +216,8 @@ sealed record DriverOptions(
         }
 
         if (help)
-            return new DriverOptions(executable ?? "Aegisub.exe", scenario, duration, project, audio, video,
+            return new DriverOptions(executable ?? "Aegisub.exe", scenario, duration, project, audio,
+                audioProvider, audioCacheType, audioPlayer, audioSpectrum, cursorTime, video,
                 artifacts,
                 width, height, dumpTree, dryRun, keepOpen, warmup, scrollDelta, scrollIntervalMilliseconds,
                 allowGlobalInput) { Help = true };
@@ -196,7 +228,8 @@ sealed record DriverOptions(
         if (!dryRun && ScenarioRequiresVideoCanvas(scenario) && string.IsNullOrWhiteSpace(video))
             throw new ArgumentException("--video is required for an automated video scenario");
 
-        return new DriverOptions(Path.GetFullPath(executable), scenario, duration, project, audio, video,
+        return new DriverOptions(Path.GetFullPath(executable), scenario, duration, project, audio,
+            audioProvider, audioCacheType, audioPlayer, audioSpectrum, cursorTime, video,
             string.IsNullOrWhiteSpace(artifacts) ? null : Path.GetFullPath(artifacts),
             width, height, dumpTree, dryRun, keepOpen, warmup, scrollDelta, scrollIntervalMilliseconds,
             allowGlobalInput);
@@ -208,26 +241,33 @@ sealed record DriverOptions(
     private static bool ScenarioRequiresVideoCanvas(string scenario) =>
         scenario.Equals("video-crosshair-sweep", StringComparison.OrdinalIgnoreCase)
         || scenario.Equals("video-playback-audio-scroll", StringComparison.OrdinalIgnoreCase)
-        || scenario.Equals("video-playback-audio-scrollbar-drag", StringComparison.OrdinalIgnoreCase);
+        || scenario.Equals("video-playback-audio-scrollbar-drag", StringComparison.OrdinalIgnoreCase)
+        || scenario.Equals("audio-middle-seek-cursor", StringComparison.OrdinalIgnoreCase)
+        || scenario.Equals("audio-spectrum-middle-seek-cursor", StringComparison.OrdinalIgnoreCase);
 
     public static void PrintHelp()
     {
         Console.WriteLine("Aegisub background UIA driver");
         Console.WriteLine("  --exe PATH                         Aegisub.exe");
-        Console.WriteLine("  --scenario NAME                    audio-waveform-scroll, audio-scrollbar-drag, video-crosshair-sweep, video-playback-audio-scroll, video-playback-audio-scrollbar-drag, audio-spectrum-scroll, audio-spectrum-scrollbar-drag, audio-cursor-marker, audio-spectrum-cursor-marker, audio-playback-cursor, all");
+        Console.WriteLine("  --scenario NAME                    audio-waveform-scroll, audio-scrollbar-drag, video-crosshair-sweep, video-playback-audio-scroll, video-playback-audio-scrollbar-drag, audio-spectrum-scroll, audio-spectrum-scrollbar-drag, audio-cursor-marker, audio-spectrum-cursor-marker, audio-playback-cursor, audio-spectrum-playback-cursor, audio-playback-marker-drag, audio-spectrum-playback-marker-drag, audio-middle-seek-cursor, audio-spectrum-middle-seek-cursor, audio-cursor-state-matrix, audio-waveform-focus-colour, audio-spectrum-focus-colour, audio-waveform-dpi-transition, audio-spectrum-dpi-transition, audio-waveform-runtime-fallback, audio-spectrum-runtime-fallback, audio-waveform-playback-scroll, audio-spectrum-playback-scroll, all");
         Console.WriteLine("  --duration-seconds N               active scenario duration (default 30)");
         Console.WriteLine("  --warmup-seconds N                 warmup before input (default 5)");
         Console.WriteLine("  --scroll-delta N                   wheel delta magnitude for scroll scenarios (default 120)");
         Console.WriteLine("  --scroll-interval-ms N             delay between wheel messages (default 45)");
         Console.WriteLine("  --project PATH                     optional ASS/project file passed at startup");
         Console.WriteLine("  --audio PATH                       optional audio file passed at startup");
+        Console.WriteLine("  --audio-provider NAME              optional Audio/Provider profile override");
+        Console.WriteLine("  --audio-cache-type N               optional Audio/Cache/Type override (0-2)");
+        Console.WriteLine("  --audio-player NAME                optional Audio/Player profile override");
+        Console.WriteLine("  --audio-view waveform|spectrum     optional Audio/Spectrum profile override");
+        Console.WriteLine("  --cursor-time on|off               optional mouse cursor time-label override");
         Console.WriteLine("  --video PATH                       optional video file passed at startup");
         Console.WriteLine("  --artifacts PATH                   persistent artifacts directory for perf sessions");
         Console.WriteLine("  --width N --height N               fixed top-level window size (default 1280x900)");
         Console.WriteLine("  --dump-tree                        print UIA and Win32 child window inventory");
         Console.WriteLine("  --dry-run                          start, inspect and exit without input");
         Console.WriteLine("  --keep-open                        leave Aegisub open after the scenario");
-        Console.WriteLine("  --allow-global-input               force foreground SendInput for cursor-marker scenarios");
+        Console.WriteLine("  --allow-global-input               allow foreground SendInput for pointer cursor scenarios");
     }
 
     private static int ParsePositive(string value, string option) =>
@@ -239,6 +279,34 @@ sealed record DriverOptions(
         int.TryParse(value, out var result) && result >= 0
             ? result
             : throw new ArgumentException($"{option} must be a non-negative integer");
+
+    private static int ParseAudioCacheType(string value, string option) =>
+        int.TryParse(value, out var result) && result is >= 0 and <= 2
+            ? result
+            : throw new ArgumentException($"{option} must be 0, 1, or 2");
+
+    private static string ParseNonEmpty(string value, string option) =>
+        !string.IsNullOrWhiteSpace(value)
+            ? value
+            : throw new ArgumentException($"{option} must not be empty");
+
+    private static bool ParseAudioView(string value, string option) =>
+        value.Equals("spectrum", StringComparison.OrdinalIgnoreCase)
+            ? true
+            : value.Equals("waveform", StringComparison.OrdinalIgnoreCase)
+                ? false
+                : throw new ArgumentException($"{option} must be waveform or spectrum");
+
+    private static bool ParseOnOff(string value, string option) =>
+        value.Equals("on", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("1", StringComparison.OrdinalIgnoreCase)
+            ? true
+            : value.Equals("off", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("false", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("0", StringComparison.OrdinalIgnoreCase)
+                ? false
+                : throw new ArgumentException($"{option} must be on or off");
 }
 
 sealed class AegisubSession : IDisposable
@@ -256,6 +324,9 @@ sealed class AegisubSession : IDisposable
         Environment.GetEnvironmentVariable("AEGISUB_ENABLE_SKIA_AUDIO_DISPLAY"));
     private bool scenarioSucceeded;
     private bool cleanShutdown;
+    private double? dpiTransitionInitialScale;
+    private double? dpiTransitionTargetScale;
+    private int runtimeFallbackRequiredSkiaFrames;
 
     public AegisubSession(DriverOptions options) => this.options = options;
 
@@ -288,7 +359,7 @@ sealed class AegisubSession : IDisposable
             ? Path.Combine(automationProjectDirectory!, "artifacts")
             : Path.GetFullPath(options.Artifacts);
         Directory.CreateDirectory(automationArtifactsDirectory);
-        WriteAutomationConfig(automationProfileDirectory);
+        WriteAutomationConfig(automationProfileDirectory, options);
         Console.WriteLine($"uia.project={automationProjectPath}");
 
         var startInfo = new ProcessStartInfo
@@ -404,6 +475,14 @@ sealed class AegisubSession : IDisposable
         var scenarios = options.Scenario.Equals("all", StringComparison.OrdinalIgnoreCase)
             ? new[] { "audio-waveform-scroll", "audio-scrollbar-drag", "audio-spectrum-scroll", "audio-cursor-marker", "audio-playback-cursor" }
             : new[] { options.Scenario };
+        var cursorStateMatrixRan = false;
+        var playbackMarkerDragRan = false;
+        var middleSeekCursorRan = false;
+        var focusColourRan = false;
+        var focusColourSpectrum = false;
+        var dpiTransitionRan = false;
+        var runtimeFallbackRan = false;
+        var runtimeFallbackSpectrum = false;
 
         foreach (var scenario in scenarios)
         {
@@ -443,15 +522,89 @@ sealed class AegisubSession : IDisposable
                 case "audio-playback-cursor":
                     await RunPlaybackAsync();
                     break;
+                case "audio-spectrum-playback-cursor":
+                    await EnableSpectrumAsync();
+                    await RunPlaybackAsync();
+                    break;
+                case "audio-playback-marker-drag":
+                    await RunPlaybackMarkerDragAsync();
+                    playbackMarkerDragRan = true;
+                    break;
+                case "audio-spectrum-playback-marker-drag":
+                    await EnableSpectrumAsync();
+                    await RunPlaybackMarkerDragAsync();
+                    playbackMarkerDragRan = true;
+                    break;
+                case "audio-middle-seek-cursor":
+                    await RunMiddleSeekCursorAsync();
+                    middleSeekCursorRan = true;
+                    break;
+                case "audio-spectrum-middle-seek-cursor":
+                    await EnableSpectrumAsync();
+                    await RunMiddleSeekCursorAsync();
+                    middleSeekCursorRan = true;
+                    break;
+                case "audio-cursor-state-matrix":
+                    await RunCursorStateMatrixAsync();
+                    cursorStateMatrixRan = true;
+                    break;
+                case "audio-waveform-focus-colour":
+                    await RunFocusColourAsync(false);
+                    focusColourRan = true;
+                    break;
+                case "audio-spectrum-focus-colour":
+                    await EnableSpectrumAsync();
+                    await RunFocusColourAsync(true);
+                    focusColourRan = true;
+                    focusColourSpectrum = true;
+                    break;
+                case "audio-waveform-dpi-transition":
+                    dpiTransitionRan = await RunDpiTransitionAsync(false);
+                    break;
+                case "audio-spectrum-dpi-transition":
+                    await EnableSpectrumAsync();
+                    dpiTransitionRan = await RunDpiTransitionAsync(true);
+                    break;
+                case "audio-waveform-runtime-fallback":
+                    await RunRuntimeFallbackAsync(false);
+                    runtimeFallbackRan = true;
+                    break;
+                case "audio-spectrum-runtime-fallback":
+                    await EnableSpectrumAsync();
+                    await RunRuntimeFallbackAsync(true);
+                    runtimeFallbackRan = true;
+                    runtimeFallbackSpectrum = true;
+                    break;
+                case "audio-waveform-playback-scroll":
+                    await RunPlaybackScrollAsync(false);
+                    break;
+                case "audio-spectrum-playback-scroll":
+                    await EnableSpectrumAsync();
+                    await RunPlaybackScrollAsync(true);
+                    break;
                 default:
                     throw new ArgumentException($"Unknown scenario: {scenario}");
             }
             Console.WriteLine($"uia.scenario.end={scenario}");
         }
 
-        scenarioSucceeded = true;
         if (!options.KeepOpen)
+        {
             Close();
+            if (cursorStateMatrixRan)
+                ValidateCursorStateMatrixTrace();
+            if (playbackMarkerDragRan)
+                ValidatePlaybackMarkerDragTrace();
+            if (middleSeekCursorRan)
+                ValidateMiddleSeekCursorTrace();
+            if (focusColourRan)
+                ValidateFocusColourTrace(focusColourSpectrum);
+            if (dpiTransitionRan)
+                ValidateDpiTransitionTrace();
+            if (runtimeFallbackRan)
+                ValidateRuntimeFallbackTrace(runtimeFallbackSpectrum);
+        }
+        scenarioSucceeded = true;
     }
 
     public void DumpWindowTree()
@@ -577,6 +730,729 @@ sealed class AegisubSession : IDisposable
         SendKeyToWindow(audioCanvas, (ushort)'B');
         await Task.Delay(TimeSpan.FromSeconds(options.DurationSeconds));
         SendKeyToWindow(audioCanvas, (ushort)'H');
+    }
+
+    private async Task RunPlaybackMarkerDragAsync()
+    {
+        if (!options.AllowGlobalInput)
+            throw new InvalidOperationException(
+                "audio playback marker drag requires --allow-global-input so native mouse capture is real");
+
+        EnsureForeground();
+        WaitForAudioCanvas();
+        var centerY = audioCanvasRect.Top + Math.Max(20, audioCanvasRect.Height / 2);
+        var selectionStartX = audioCanvasRect.Left + Math.Max(12, audioCanvasRect.Width / 12);
+        var outerMarkerX = audioCanvasRect.Right - Math.Max(12, audioCanvasRect.Width / 12);
+        var innerMarkerX = audioCanvasRect.Left + audioCanvasRect.Width * 3 / 4;
+
+        Console.WriteLine("uia.playback_marker_drag.phase=prepare-selection");
+        Drag(new WinPoint(selectionStartX, centerY), new WinPoint(outerMarkerX, centerY), 32, 10);
+        await Task.Delay(350);
+
+        Console.WriteLine("uia.playback_marker_drag.phase=playback");
+        // Play to the end of the audio so changing the selection marker cannot
+        // terminate playback and hide a cursor/marker ordering regression.
+        SendKeyToWindow(audioCanvas, (ushort)'T');
+        await Task.Delay(500);
+
+        var currentMarkerX = outerMarkerX;
+        var markerMoves = 0;
+        var end = Stopwatch.GetTimestamp() + Stopwatch.Frequency * options.DurationSeconds;
+        try
+        {
+            Console.WriteLine("uia.playback_marker_drag.phase=drag");
+            while (Stopwatch.GetTimestamp() < end)
+            {
+                var nextMarkerX = currentMarkerX == outerMarkerX ? innerMarkerX : outerMarkerX;
+                Drag(new WinPoint(currentMarkerX, centerY), new WinPoint(nextMarkerX, centerY), 20, 10);
+                currentMarkerX = nextMarkerX;
+                ++markerMoves;
+                await Task.Delay(60);
+            }
+        }
+        finally
+        {
+            SendKeyToWindow(audioCanvas, (ushort)'H');
+        }
+        await Task.Delay(350);
+        Console.WriteLine($"uia.playback_marker_drag.moves={markerMoves}");
+    }
+
+    private async Task RunMiddleSeekCursorAsync()
+    {
+        if (!options.AllowGlobalInput)
+            throw new InvalidOperationException(
+                "audio middle seek cursor requires --allow-global-input so native middle-button state is real");
+
+        EnsureForeground();
+        WaitForVideoCanvas();
+        WaitForAudioCanvas();
+        var centerY = audioCanvasRect.Top + Math.Max(20, audioCanvasRect.Height / 2);
+        var left = audioCanvasRect.Left + audioCanvasRect.Width / 5;
+        var right = audioCanvasRect.Right - audioCanvasRect.Width / 5;
+        var outsideRight = audioCanvasRect.Right + 40;
+
+        Console.WriteLine("uia.middle_seek.phase=mouse-before");
+        MovePointer(new WinPoint(left, centerY));
+        await Task.Delay(350);
+
+        Console.WriteLine("uia.middle_seek.phase=inside-drag");
+        MiddleDrag(new WinPoint(left, centerY), new WinPoint(right, centerY), 36, 10);
+        await Task.Delay(500);
+
+        Console.WriteLine("uia.middle_seek.phase=outside-release");
+        MovePointer(new WinPoint(right, centerY));
+        SendMiddleMouseButton(true);
+        for (var step = 1; step <= 36; ++step)
+        {
+            var x = right + (outsideRight - right) * step / 36;
+            MovePointer(new WinPoint(x, centerY));
+            await Task.Delay(10);
+        }
+        SendMiddleMouseButton(false);
+        await Task.Delay(750);
+
+        Console.WriteLine("uia.middle_seek.phase=reenter");
+        WaitForAudioCanvas();
+        centerY = audioCanvasRect.Top + Math.Max(20, audioCanvasRect.Height / 2);
+        var reenterX = audioCanvasRect.Left + audioCanvasRect.Width / 2;
+        MovePointer(new WinPoint(reenterX, centerY));
+        await Task.Delay(100);
+        if (!GetCursorPos(out var firstCursorPosition))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "GetCursorPos failed after middle-seek re-entry");
+        var firstReenterTarget = WindowFromPoint(firstCursorPosition);
+        Console.WriteLine($"uia.middle_seek.reenter_position={firstCursorPosition.X},{firstCursorPosition.Y}");
+        Console.WriteLine($"uia.middle_seek.reenter_target=0x{firstReenterTarget:X}:{GetClassName(firstReenterTarget)}");
+        MovePointer(new WinPoint(reenterX + Math.Min(20, audioCanvasRect.Width / 10), centerY));
+        await Task.Delay(100);
+        if (!GetCursorPos(out var secondCursorPosition))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "GetCursorPos failed after middle-seek re-entry motion");
+        var secondReenterTarget = WindowFromPoint(secondCursorPosition);
+        Console.WriteLine($"uia.middle_seek.reenter_motion_position={secondCursorPosition.X},{secondCursorPosition.Y}");
+        Console.WriteLine($"uia.middle_seek.reenter_motion_target=0x{secondReenterTarget:X}:{GetClassName(secondReenterTarget)}");
+        if (firstReenterTarget != audioCanvas || secondReenterTarget != audioCanvas)
+            throw new InvalidDataException("Middle-seek re-entry pointer did not land on the Audio Display canvas");
+        await Task.Delay(300);
+    }
+
+    private async Task RunCursorStateMatrixAsync()
+    {
+        if (!options.AllowGlobalInput)
+            throw new InvalidOperationException(
+                "audio-cursor-state-matrix requires --allow-global-input so native enter/leave state is real");
+        EnsureForeground();
+        var centerY = audioCanvasRect.Top + Math.Max(10, audioCanvasRect.Height / 2);
+        var firstX = audioCanvasRect.Left + Math.Max(10, audioCanvasRect.Width / 4);
+        var secondX = audioCanvasRect.Left + Math.Max(30, audioCanvasRect.Width * 3 / 4);
+        var thirdX = audioCanvasRect.Left + Math.Max(10, audioCanvasRect.Width / 2);
+
+        Console.WriteLine("uia.cursor_matrix.phase=mouse-reset-outside");
+        MovePointer(new WinPoint(
+            GetSystemMetrics(SystemMetric.VirtualScreenLeft) + 5,
+            GetSystemMetrics(SystemMetric.VirtualScreenTop) + 5));
+        await Task.Delay(250);
+
+        Console.WriteLine("uia.cursor_matrix.phase=mouse-before-playback");
+        MovePointer(new WinPoint(firstX, centerY));
+        await Task.Delay(350);
+
+        Console.WriteLine("uia.cursor_matrix.phase=playback");
+        SendKeyToWindow(audioCanvas, (ushort)'B');
+        await Task.Delay(500);
+        MovePointer(new WinPoint(secondX, centerY));
+        await Task.Delay(TimeSpan.FromSeconds(options.DurationSeconds));
+
+        Console.WriteLine("uia.cursor_matrix.phase=playback-stop");
+        SendKeyToWindow(audioCanvas, (ushort)'H');
+        await Task.Delay(350);
+
+        Console.WriteLine("uia.cursor_matrix.phase=mouse-leave");
+        MovePointer(new WinPoint(
+            GetSystemMetrics(SystemMetric.VirtualScreenLeft) + 5,
+            GetSystemMetrics(SystemMetric.VirtualScreenTop) + 5));
+        await Task.Delay(350);
+
+        Console.WriteLine("uia.cursor_matrix.phase=mouse-reenter");
+        MovePointer(new WinPoint(thirdX, centerY));
+        await Task.Delay(350);
+
+        if (process is null || process.HasExited || process.MainWindowHandle == 0)
+            throw new InvalidOperationException("Aegisub main window disappeared before cursor resize validation");
+        Console.WriteLine("uia.cursor_matrix.phase=resize");
+        SetWindowPos(process.MainWindowHandle, 0, 40, 40, options.Width + 160, options.Height,
+            SetWindowPosFlags.ShowWindow | SetWindowPosFlags.NoActivate);
+        await Task.Delay(750);
+        WaitForAudioCanvas();
+        centerY = audioCanvasRect.Top + Math.Max(10, audioCanvasRect.Height / 2);
+        thirdX = audioCanvasRect.Left + Math.Max(10, audioCanvasRect.Width / 2);
+        MovePointer(new WinPoint(thirdX, centerY));
+        await Task.Delay(350);
+    }
+
+    private async Task RunPlaybackScrollAsync(bool spectrum)
+    {
+        SendKeyToWindow(audioCanvas, (ushort)'B');
+        await Task.Delay(500);
+        try
+        {
+            await RunScrollAsync(spectrum);
+        }
+        finally
+        {
+            SendKeyToWindow(audioCanvas, (ushort)'H');
+        }
+    }
+
+    private async Task RunFocusColourAsync(bool spectrum)
+    {
+        if (process is null || process.HasExited || mainWindow is null)
+            throw new InvalidOperationException("Aegisub was not ready for the focus/colour scenario");
+
+        var focusSink = FindNativeFocusSink();
+        FocusAudioCanvas();
+        await Task.Delay(300);
+
+        FocusNativeWindow(focusSink);
+        await Task.Delay(300);
+        FocusAudioCanvas();
+        await Task.Delay(300);
+        FocusNativeWindow(focusSink);
+        await Task.Delay(300);
+
+        mainWindow = RefreshMainWindow() ?? mainWindow;
+        var configure = UiaDriver.FindEnabledInvokableButton(
+            mainWindow,
+            "Configure Aegisub", "Options", "Preferences", "设置", "选项");
+        if (configure is null)
+            throw new InvalidOperationException("Could not locate the Preferences command through UIA");
+
+        UiaDriver.Invoke(configure);
+        var preferences = WaitForPreferencesWindow();
+        Console.WriteLine($"uia.focus_colour.preferences={preferences.Current.Name}");
+        Console.WriteLine($"uia.focus_colour.spectrum={spectrum}");
+        if (options.DumpTree)
+        {
+            Console.WriteLine("uia.preferences_tree.begin");
+            DumpAutomation(preferences, 0, 8);
+            Console.WriteLine("uia.preferences_tree.end");
+        }
+
+        var selection = ChangeAudioColourScheme(preferences, spectrum);
+        Console.WriteLine($"uia.focus_colour.scheme={selection.Before}->{selection.After}");
+        var apply = WaitForEnabledPreferencesButton(
+            preferences,
+            TimeSpan.FromSeconds(5),
+            "Apply", "应用", "套用");
+        UiaDriver.Invoke(apply);
+        Console.WriteLine("uia.focus_colour.apply=invoke");
+        await Task.Delay(1000);
+
+        if (!preferences.TryGetCurrentPattern(WindowPattern.Pattern, out var windowPattern))
+            throw new InvalidOperationException("Preferences window did not expose WindowPattern");
+        ((WindowPattern)windowPattern).Close();
+        await Task.Delay(300);
+    }
+
+    private async Task<bool> RunDpiTransitionAsync(bool spectrum)
+    {
+        if (process is null || process.HasExited || process.MainWindowHandle == 0)
+            throw new InvalidOperationException("Aegisub main window was not ready for the DPI transition scenario");
+        if (!preferSkiaCanvas)
+            throw new InvalidOperationException(
+                "The DPI transition scenario requires AEGISUB_ENABLE_SKIA_AUDIO_DISPLAY so it validates the Skia production handler");
+
+        var hwnd = process.MainWindowHandle;
+        var originalRect = GetWindowRect(hwnd);
+        var originalDpi = GetDpiForWindow(hwnd);
+        if (originalDpi == 0)
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "GetDpiForWindow failed for the Aegisub main window");
+
+        var currentMonitor = MonitorFromWindow(hwnd, MonitorDefaultToNearest);
+        var monitors = EnumerateMonitors();
+        foreach (var monitor in monitors)
+        {
+            Console.WriteLine(
+                $"uia.dpi_transition.monitor=0x{monitor.Handle:X} dpi={monitor.DpiX}x{monitor.DpiY} work={monitor.Work.Left},{monitor.Work.Top},{monitor.Work.Width}x{monitor.Work.Height}");
+        }
+
+        var target = monitors
+            .Where(monitor => monitor.Handle != currentMonitor
+                && monitor.DpiX != 0
+                && monitor.DpiY != 0
+                && (monitor.DpiX != originalDpi || monitor.DpiY != originalDpi))
+            .OrderBy(monitor => Math.Abs((long)monitor.DpiX - originalDpi))
+            .FirstOrDefault();
+        if (target.Handle == 0)
+        {
+            Console.WriteLine($"uia.dpi_transition.renderer={(preferSkiaCanvas ? "skia" : "legacy")}");
+            Console.WriteLine($"uia.dpi_transition.spectrum={spectrum}");
+            Console.WriteLine($"uia.dpi_transition.initial_dpi={originalDpi}");
+            Console.WriteLine("uia.dpi_transition.available=false");
+            Console.WriteLine("uia.dpi_transition.trace_validation=not-run:no-different-dpi-monitor");
+            return false;
+        }
+
+        dpiTransitionInitialScale = originalDpi / 96.0;
+        dpiTransitionTargetScale = target.DpiX / 96.0;
+        var maximumWidth = Math.Max(200, target.Work.Width - 40);
+        var maximumHeight = Math.Max(160, target.Work.Height - 40);
+        var targetWidth = Math.Clamp(
+            checked((int)Math.Round(originalRect.Width * target.DpiX / (double)originalDpi)),
+            Math.Min(320, maximumWidth),
+            maximumWidth);
+        var targetHeight = Math.Clamp(
+            checked((int)Math.Round(originalRect.Height * target.DpiY / (double)originalDpi)),
+            Math.Min(240, maximumHeight),
+            maximumHeight);
+        var targetX = target.Work.Left + Math.Max(0, (target.Work.Width - targetWidth) / 2);
+        var targetY = target.Work.Top + Math.Max(0, (target.Work.Height - targetHeight) / 2);
+        var settleDelay = TimeSpan.FromSeconds(Math.Clamp(options.DurationSeconds, 2, 5));
+
+        Console.WriteLine($"uia.dpi_transition.renderer={(preferSkiaCanvas ? "skia" : "legacy")}");
+        Console.WriteLine($"uia.dpi_transition.spectrum={spectrum}");
+        Console.WriteLine($"uia.dpi_transition.initial_dpi={originalDpi}");
+        Console.WriteLine($"uia.dpi_transition.target_dpi={target.DpiX}");
+        Console.WriteLine("uia.dpi_transition.available=true");
+        await Task.Delay(500);
+
+        try
+        {
+            Console.WriteLine("uia.dpi_transition.phase=move-target");
+            SetWindowPosChecked(hwnd, targetX, targetY, targetWidth, targetHeight);
+            WaitForWindowDpi(hwnd, target.DpiX, TimeSpan.FromSeconds(10));
+            await Task.Delay(settleDelay);
+            WaitForAudioCanvas();
+        }
+        finally
+        {
+            Console.WriteLine("uia.dpi_transition.phase=restore");
+            SetWindowPosChecked(
+                hwnd,
+                originalRect.Left,
+                originalRect.Top,
+                originalRect.Width,
+                originalRect.Height);
+            WaitForWindowDpi(hwnd, originalDpi, TimeSpan.FromSeconds(10));
+            await Task.Delay(settleDelay);
+            WaitForAudioCanvas();
+        }
+
+        Console.WriteLine("uia.dpi_transition.sequence=initial,target,restored");
+        return true;
+    }
+
+    private static void SetWindowPosChecked(nint hwnd, int x, int y, int width, int height)
+    {
+        if (!SetWindowPos(
+            hwnd,
+            0,
+            x,
+            y,
+            width,
+            height,
+            SetWindowPosFlags.ShowWindow | SetWindowPosFlags.NoActivate))
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "SetWindowPos failed during DPI transition");
+        }
+    }
+
+    private static void WaitForWindowDpi(nint hwnd, uint expectedDpi, TimeSpan timeout)
+    {
+        var deadline = Stopwatch.GetTimestamp()
+            + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+        uint observedDpi = 0;
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            observedDpi = GetDpiForWindow(hwnd);
+            if (observedDpi == expectedDpi)
+                return;
+            Thread.Sleep(50);
+        }
+        throw new TimeoutException(
+            $"Window DPI did not reach {expectedDpi}; last observed value was {observedDpi}");
+    }
+
+    private static IReadOnlyList<MonitorDescriptor> EnumerateMonitors()
+    {
+        var monitors = new List<MonitorDescriptor>();
+        bool AddMonitor(nint monitor, nint _, ref NativeRect bounds, nint __)
+        {
+            var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+            if (!GetMonitorInfo(monitor, ref info))
+                return true;
+            var result = GetDpiForMonitor(
+                monitor,
+                MonitorDpiType.Effective,
+                out var dpiX,
+                out var dpiY);
+            if (result != 0)
+            {
+                dpiX = 0;
+                dpiY = 0;
+            }
+            monitors.Add(new MonitorDescriptor(
+                monitor,
+                new WinRect(
+                    info.Work.Left,
+                    info.Work.Top,
+                    info.Work.Right - info.Work.Left,
+                    info.Work.Bottom - info.Work.Top),
+                dpiX,
+                dpiY));
+            return true;
+        }
+
+        MonitorEnumProc callback = AddMonitor;
+        if (!EnumDisplayMonitors(0, 0, callback, 0))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "EnumDisplayMonitors failed");
+        GC.KeepAlive(callback);
+        return monitors;
+    }
+
+    private async Task RunRuntimeFallbackAsync(bool spectrum)
+    {
+        if (process is null || process.HasExited || process.MainWindowHandle == 0)
+            throw new InvalidOperationException("Aegisub main window was not ready for the runtime fallback scenario");
+        if (!preferSkiaCanvas)
+            throw new InvalidOperationException(
+                "The runtime fallback scenario requires AEGISUB_ENABLE_SKIA_AUDIO_DISPLAY");
+        var injection = Environment.GetEnvironmentVariable("AEGISUB_SKIA_AUDIO_FAILURE_INJECTION");
+        if (!string.Equals(injection, "flush-submit", StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "The runtime fallback scenario requires AEGISUB_SKIA_AUDIO_FAILURE_INJECTION=flush-submit");
+        var deferredFramesValue = Environment.GetEnvironmentVariable(
+            "AEGISUB_SKIA_AUDIO_FAILURE_AFTER_CONTENT_FRAMES");
+        if (!int.TryParse(deferredFramesValue, out runtimeFallbackRequiredSkiaFrames)
+            || runtimeFallbackRequiredSkiaFrames is < 4 or > 256)
+        {
+            throw new InvalidOperationException(
+                "The runtime fallback scenario requires AEGISUB_SKIA_AUDIO_FAILURE_AFTER_CONTENT_FRAMES in the range 4-256");
+        }
+
+        WaitForAudioCanvas();
+        if (!GetClassName(audioCanvas).Equals("wxGLCanvas", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Runtime fallback did not start from a Skia wxGLCanvas");
+        Console.WriteLine($"uia.runtime_fallback.spectrum={spectrum}");
+        Console.WriteLine($"uia.runtime_fallback.deferred_frames={runtimeFallbackRequiredSkiaFrames}");
+        Console.WriteLine("uia.runtime_fallback.phase=successful-skia-content");
+
+        var timelineY = Math.Max(1, Math.Min(audioCanvasRect.Height - 20, 6));
+        var dragStartX = Math.Max(96, audioCanvasRect.Width * 2 / 3);
+        var dragDistance = Math.Max(48, Math.Min(160, audioCanvasRect.Width / 8));
+        var dragEndX = Math.Max(1, dragStartX - dragDistance);
+        SendMouseToWindow(audioCanvas, WindowMessage.MouseMove, dragStartX, timelineY, 0);
+        SendMouseToWindow(audioCanvas, WindowMessage.LeftButtonDown, dragStartX, timelineY, 1);
+        SendMouseToWindow(audioCanvas, WindowMessage.MouseMove, dragEndX, timelineY, 1);
+        SendMouseToWindow(audioCanvas, WindowMessage.LeftButtonUp, dragEndX, timelineY, 0);
+        await Task.Delay(750);
+        Console.WriteLine($"uia.runtime_fallback.direct_timeline_scroll={dragDistance}");
+
+        AutomationElement? dialog = FindRuntimeFallbackDialog();
+        var centerY = Math.Max(10, audioCanvasRect.Height / 2);
+        var left = Math.Max(10, audioCanvasRect.Width / 4);
+        var right = Math.Max(left + 1, audioCanvasRect.Width * 3 / 4);
+        var maximumMoves = runtimeFallbackRequiredSkiaFrames * 4 + 96;
+        var deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 20;
+        for (var move = 0;
+            dialog is null && move < maximumMoves && Stopwatch.GetTimestamp() < deadline;
+            ++move)
+        {
+            var x = move % 2 == 0 ? left : right;
+            try
+            {
+                SendMouseToWindow(audioCanvas, WindowMessage.MouseMove, x, centerY, 0);
+            }
+            catch (Win32Exception)
+            {
+                for (var retry = 0; retry < 20 && dialog is null; ++retry)
+                {
+                    dialog = FindRuntimeFallbackDialog();
+                    if (dialog is null)
+                        Thread.Sleep(50);
+                }
+                if (dialog is null)
+                    throw;
+                break;
+            }
+            await Task.Delay(25);
+            if (move % 4 == 3)
+            {
+                dialog = FindRuntimeFallbackDialog();
+                if (dialog is not null)
+                    break;
+            }
+        }
+        dialog ??= WaitForRuntimeFallbackDialog(TimeSpan.FromSeconds(10));
+        Console.WriteLine($"uia.runtime_fallback.dialog={dialog.Current.Name}");
+
+        var switchButton = UiaDriver.FindEnabledInvokableButton(
+            dialog,
+            "Switch to wx", "切换到 wx", "切換到 wx");
+        if (switchButton is null)
+            throw new InvalidOperationException("Runtime fallback dialog did not expose the Switch to wx action");
+        UiaDriver.Invoke(switchButton);
+        Console.WriteLine("uia.runtime_fallback.confirm=switch-to-wx");
+
+        audioCanvas = WaitForLegacyAudioCanvas(TimeSpan.FromSeconds(15));
+        audioCanvasRect = GetWindowRect(audioCanvas);
+        Console.WriteLine($"uia.runtime_fallback.legacy_canvas_hwnd=0x{audioCanvas:X}");
+        Console.WriteLine($"uia.runtime_fallback.legacy_canvas_class={GetClassName(audioCanvas)}");
+        Console.WriteLine($"uia.runtime_fallback.legacy_canvas_rect={audioCanvasRect.Left},{audioCanvasRect.Top},{audioCanvasRect.Width}x{audioCanvasRect.Height}");
+        await Task.Delay(1000);
+        Console.WriteLine("uia.runtime_fallback.phase=legacy-first-frame");
+    }
+
+    private AutomationElement? FindRuntimeFallbackDialog()
+    {
+        if (process is null || process.HasExited)
+            return null;
+        foreach (var hwnd in EnumerateTopLevelWindows(process.Id))
+        {
+            if (GetWindowText(hwnd).Contains(
+                "Skia Audio Display runtime error",
+                StringComparison.OrdinalIgnoreCase))
+                return AutomationElement.FromHandle(hwnd);
+        }
+        return null;
+    }
+
+    private AutomationElement WaitForRuntimeFallbackDialog(TimeSpan timeout)
+    {
+        var deadline = Stopwatch.GetTimestamp()
+            + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            if (process is not null && process.HasExited)
+                throw new InvalidOperationException(
+                    $"Aegisub exited before the runtime fallback dialog appeared (exit code {process.ExitCode})");
+            if (FindRuntimeFallbackDialog() is AutomationElement dialog)
+                return dialog;
+            Thread.Sleep(50);
+        }
+        throw new TimeoutException("Skia runtime failure did not open the fallback confirmation dialog");
+    }
+
+    private nint WaitForLegacyAudioCanvas(TimeSpan timeout)
+    {
+        if (process is null)
+            throw new InvalidOperationException("Aegisub process was not started");
+        var deadline = Stopwatch.GetTimestamp()
+            + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            if (process.HasExited)
+                throw new InvalidOperationException(
+                    $"Aegisub exited before the legacy Audio Display appeared (exit code {process.ExitCode})");
+            mainWindow = RefreshMainWindow() ?? mainWindow;
+            if (mainWindow is not null)
+            {
+                var mainHandle = new nint(mainWindow.Current.NativeWindowHandle);
+                var candidate = FindAudioCanvas(mainWindow, false);
+                if (candidate != 0
+                    && !GetClassName(candidate).Equals("wxGLCanvas", StringComparison.OrdinalIgnoreCase)
+                    && mainHandle != 0
+                    && IsWindowEnabled(mainHandle))
+                {
+                    return candidate;
+                }
+            }
+            Thread.Sleep(100);
+        }
+        throw new TimeoutException("The wx compatibility Audio Display did not replace the failed Skia canvas");
+    }
+
+    private ColourSchemeSelection ChangeAudioColourScheme(
+        AutomationElement preferences,
+        bool spectrum)
+    {
+        var grids = preferences.FindAll(
+            TreeScope.Descendants,
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Pane));
+        var grid = grids.Cast<AutomationElement>().FirstOrDefault(element =>
+        {
+            try
+            {
+                return element.Current.NativeWindowHandle != 0
+                    && string.Equals(element.Current.Name, "wxPropertyGrid", StringComparison.Ordinal);
+            }
+            catch (ElementNotAvailableException)
+            {
+                return false;
+            }
+        });
+        if (grid is null)
+            throw new InvalidOperationException("Preferences Colors page did not expose its wxPropertyGrid window");
+
+        var gridHwnd = new nint(grid.Current.NativeWindowHandle);
+        SendMouseToWindow(gridHwnd, WindowMessage.LeftButtonDown, 20, 10, 1);
+        SendMouseToWindow(gridHwnd, WindowMessage.LeftButtonUp, 20, 10, 0);
+        SendKeyToWindow(gridHwnd, VirtualKeyHome);
+        for (var step = 0; step < 160; ++step)
+            SendKeyToWindow(gridHwnd, VirtualKeyDown);
+
+        var schemeChoice = 0;
+        double? lastChoiceTop = null;
+        var gridRect = GetWindowRect(gridHwnd);
+        var valueX = Math.Clamp(gridRect.Width * 3 / 4, 1, Math.Max(1, gridRect.Width - 2));
+        for (var y = 2; y < gridRect.Height - 2; y += 3)
+        {
+            SendMouseToWindow(gridHwnd, WindowMessage.LeftButtonDown, valueX, y, 1);
+            SendMouseToWindow(gridHwnd, WindowMessage.LeftButtonUp, valueX, y, 0);
+            Thread.Sleep(10);
+
+            var editors = preferences.FindAll(
+                TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Pane));
+            var editor = editors.Cast<AutomationElement>().FirstOrDefault(element =>
+            {
+                try
+                {
+                    return element.Current.NativeWindowHandle != 0
+                        && string.Equals(
+                            element.Current.Name,
+                            "wxOwnerDrawnComboBox",
+                            StringComparison.Ordinal);
+                }
+                catch (ElementNotAvailableException)
+                {
+                    return false;
+                }
+            });
+            if (editor is null)
+                continue;
+
+            var choiceTop = editor.Current.BoundingRectangle.Top;
+            if (lastChoiceTop is double previousTop && Math.Abs(previousTop - choiceTop) < 1.0)
+                continue;
+            lastChoiceTop = choiceTop;
+
+            ++schemeChoice;
+            var expectedChoice = spectrum ? 1 : 2;
+            if (schemeChoice != expectedChoice)
+                continue;
+
+            var editorHwnd = new nint(editor.Current.NativeWindowHandle);
+            SendKeyToWindow(editorHwnd, spectrum ? VirtualKeyUp : VirtualKeyDown);
+            return spectrum
+                ? new ColourSchemeSelection("Icy Blue", "Green")
+                : new ColourSchemeSelection("Green", "Icy Blue");
+        }
+
+        throw new InvalidOperationException(
+            $"Could not locate the {(spectrum ? "Spectrum" : "Waveform")} colour scheme property in wxPropertyGrid");
+    }
+
+    private static AutomationElement WaitForEnabledPreferencesButton(
+        AutomationElement preferences,
+        TimeSpan timeout,
+        params string[] names)
+    {
+        var deadline = Stopwatch.GetTimestamp()
+            + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            var button = UiaDriver.FindEnabledInvokableButton(preferences, names);
+            if (button is not null)
+                return button;
+            Thread.Sleep(50);
+        }
+        throw new TimeoutException(
+            $"Preferences button did not become enabled: {string.Join(',', names)}");
+    }
+
+    private nint FindNativeFocusSink()
+    {
+        if (process is null)
+            throw new InvalidOperationException("Aegisub process was not started");
+        var sink = EnumerateChildWindows(process.MainWindowHandle)
+            .FirstOrDefault(hwnd => hwnd != audioCanvas
+                && IsWindowVisible(hwnd)
+                && GetClassName(hwnd).Equals("Edit", StringComparison.OrdinalIgnoreCase));
+        return sink != 0
+            ? sink
+            : throw new InvalidOperationException("Could not locate a native focus sink outside Audio Display");
+    }
+
+    private void FocusAudioCanvas()
+    {
+        var x = Math.Clamp(audioCanvasRect.Width / 2, 1, Math.Max(1, audioCanvasRect.Width - 2));
+        SendMouseToWindow(audioCanvas, WindowMessage.LeftButtonDown, x, 2, 1);
+        SendMouseToWindow(audioCanvas, WindowMessage.LeftButtonUp, x, 2, 0);
+        WaitForAudioCanvasFocus(true);
+        Console.WriteLine("uia.focus_colour.focus=audio");
+    }
+
+    private void FocusNativeWindow(nint hwnd)
+    {
+        var rect = GetWindowRect(hwnd);
+        var x = Math.Clamp(rect.Width / 2, 1, Math.Max(1, rect.Width - 2));
+        var y = Math.Clamp(rect.Height / 2, 1, Math.Max(1, rect.Height - 2));
+        SendMouseToWindow(hwnd, WindowMessage.LeftButtonDown, x, y, 1);
+        SendMouseToWindow(hwnd, WindowMessage.LeftButtonUp, x, y, 0);
+        WaitForAudioCanvasFocus(false);
+        Console.WriteLine($"uia.focus_colour.focus=other:{GetClassName(hwnd)}");
+    }
+
+    private void WaitForAudioCanvasFocus(bool expected)
+    {
+        var threadId = GetWindowThreadProcessId(audioCanvas, out _);
+        if (threadId == 0)
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Could not resolve the Audio Display UI thread");
+        var deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 5;
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            var info = new GuiThreadInfo { Size = Marshal.SizeOf<GuiThreadInfo>() };
+            if (!GetGUIThreadInfo(threadId, ref info))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), "GetGUIThreadInfo failed");
+            if ((info.Focus == audioCanvas) == expected)
+                return;
+            Thread.Sleep(25);
+        }
+        throw new TimeoutException(expected
+            ? "Audio Display did not receive native keyboard focus"
+            : "Audio Display did not release native keyboard focus");
+    }
+
+    private AutomationElement WaitForPreferencesWindow()
+    {
+        if (process is null)
+            throw new InvalidOperationException("Aegisub process was not started");
+        var mainHandle = process.MainWindowHandle.ToInt64();
+        var deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency * 10;
+        var lastCandidates = Array.Empty<string>();
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            ThrowIfFatalDialog();
+            var windows = AutomationElement.RootElement.FindAll(
+                TreeScope.Descendants,
+                new PropertyCondition(AutomationElement.ProcessIdProperty, process.Id));
+            var candidates = new List<string>();
+            foreach (AutomationElement window in windows)
+            {
+                try
+                {
+                    var current = window.Current;
+                    if (current.NativeWindowHandle != 0)
+                    {
+                        candidates.Add($"{current.ControlType.ProgrammaticName}:{current.Name}:{current.ClassName}:0x{current.NativeWindowHandle:X}");
+                    }
+                    if (current.NativeWindowHandle != 0
+                        && current.NativeWindowHandle != mainHandle
+                        && (current.ControlType == ControlType.Window
+                            || current.ClassName.Equals("wxWindowNR", StringComparison.OrdinalIgnoreCase))
+                        && ContainsAny(current.Name ?? string.Empty,
+                            "Preferences", "Options", "设置", "选项"))
+                        return window;
+                }
+                catch (ElementNotAvailableException)
+                {
+                }
+            }
+            lastCandidates = candidates.ToArray();
+            Thread.Sleep(100);
+        }
+        throw new TimeoutException(
+            $"Preferences window was not discovered through UIA; candidates={string.Join('|', lastCandidates)}");
     }
 
     private Task RunVideoPlaybackAudioScrollAsync() =>
@@ -815,6 +1691,12 @@ sealed class AegisubSession : IDisposable
 
     private async Task EnableSpectrumAsync()
     {
+        if (options.AudioSpectrum is true)
+        {
+            Console.WriteLine("uia.spectrum_toggle=profile:spectrum");
+            await Task.Delay(250);
+            return;
+        }
         for (var attempt = 1; attempt <= 4; ++attempt)
         {
             mainWindow = RefreshMainWindow() ?? mainWindow;
@@ -1017,23 +1899,72 @@ sealed class AegisubSession : IDisposable
         return project;
     }
 
-    private static void WriteAutomationConfig(string profileDirectory)
+    private static void WriteAutomationConfig(string profileDirectory, DriverOptions options)
     {
         var userDirectory = Path.Combine(profileDirectory, "user");
         Directory.CreateDirectory(userDirectory);
         var configPath = Path.Combine(userDirectory, "config.json");
-        var config = new
+        var config = new Dictionary<string, object>
         {
-            Subtitle = new
+            ["Subtitle"] = new Dictionary<string, object>
             {
-                Provider = "libass"
+                ["Provider"] = "libass"
             }
         };
+        var configSummary = new List<string> { "subtitle-provider:libass" };
+        if (options.IsFocusColourScenario)
+        {
+            config["Tool"] = new Dictionary<string, object>
+            {
+                ["Preferences"] = new Dictionary<string, object> { ["Page"] = 5 }
+            };
+            config["Colour"] = new Dictionary<string, object>
+            {
+                ["Audio Display"] = new Dictionary<string, object>
+                {
+                    ["Spectrum"] = "Icy Blue",
+                    ["Waveform"] = "Green"
+                }
+            };
+            configSummary.Add("preferences-page:colors");
+            configSummary.Add("audio-colours:deterministic");
+        }
+        var audioConfig = new Dictionary<string, object>();
+        if (!string.IsNullOrWhiteSpace(options.AudioProvider))
+        {
+            audioConfig["Provider"] = options.AudioProvider;
+            configSummary.Add($"audio-provider:{options.AudioProvider}");
+        }
+        if (options.AudioCacheType is int audioCacheType)
+        {
+            audioConfig["Cache"] = new Dictionary<string, object> { ["Type"] = audioCacheType };
+            configSummary.Add($"audio-cache-type:{audioCacheType}");
+        }
+        if (!string.IsNullOrWhiteSpace(options.AudioPlayer))
+        {
+            audioConfig["Player"] = options.AudioPlayer;
+            configSummary.Add($"audio-player:{options.AudioPlayer}");
+        }
+        if (options.AudioSpectrum is bool audioSpectrum)
+        {
+            audioConfig["Spectrum"] = audioSpectrum;
+            configSummary.Add($"audio-view:{(audioSpectrum ? "spectrum" : "waveform")}");
+        }
+        if (options.CursorTime is bool cursorTime)
+        {
+            audioConfig["Display"] = new Dictionary<string, object>
+            {
+                ["Draw"] = new Dictionary<string, object> { ["Cursor Time"] = cursorTime }
+            };
+            configSummary.Add($"cursor-time:{(cursorTime ? "on" : "off")}");
+        }
+        if (audioConfig.Count > 0)
+            config["Audio"] = audioConfig;
         File.WriteAllText(
             configPath,
             JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true }),
             new UTF8Encoding(false));
-        Console.WriteLine("uia.config=subtitle-provider:libass");
+        Console.WriteLine($"uia.config={string.Join(',', configSummary)}");
     }
 
     private string BuildAutomationProjectContent(string source)
@@ -1203,6 +2134,749 @@ sealed class AegisubSession : IDisposable
         }
     }
 
+    private void ValidateCursorStateMatrixTrace()
+    {
+        var traceSelection = Environment.GetEnvironmentVariable("AEGISUB_PERF_TRACE");
+        if (string.IsNullOrWhiteSpace(traceSelection)
+            || traceSelection.Equals("0", StringComparison.OrdinalIgnoreCase)
+            || traceSelection.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || traceSelection.Equals("off", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("uia.cursor_matrix.trace_validation=skipped:not-enabled");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(automationProfileDirectory))
+            throw new InvalidOperationException("Cursor matrix profile directory was not initialized");
+
+        var sessionRoot = Path.Combine(automationProfileDirectory, "user", "perf-sessions");
+        var traces = Directory.Exists(sessionRoot)
+            ? Directory.EnumerateFiles(sessionRoot, "trace.ndjson", SearchOption.AllDirectories).ToArray()
+            : Array.Empty<string>();
+        if (traces.Length != 1)
+            throw new InvalidDataException($"Cursor matrix expected exactly one perf trace, found {traces.Length}");
+
+        var snapshots = new List<CursorTraceSnapshot>();
+        foreach (var line in File.ReadLines(traces[0]))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("name", out var name)
+                || !name.ValueEquals("audio_display_snapshot")
+                || !root.TryGetProperty("payload", out var payload)
+                || !payload.TryGetProperty("renderer", out var renderer)
+                || !renderer.ValueEquals("skia"))
+            {
+                continue;
+            }
+
+            snapshots.Add(new CursorTraceSnapshot(
+                payload.GetProperty("cursor_source").GetString() ?? "none",
+                payload.GetProperty("cursor_position_ms").GetInt32(),
+                payload.GetProperty("cursor_device_x").GetDouble(),
+                payload.GetProperty("cursor_label_visible").GetBoolean(),
+                payload.GetProperty("cursor_only").GetBoolean(),
+                payload.GetProperty("target_width").GetInt32(),
+                payload.GetProperty("visible_content_request_called").GetBoolean(),
+                payload.GetProperty("content_lookup_performed").GetBoolean(),
+                payload.GetProperty("content_tiles_drawn_this_frame").GetInt64(),
+                payload.GetProperty("gpu_tile_uploads_this_frame").GetInt64()));
+        }
+        if (snapshots.Count == 0)
+            throw new InvalidDataException("Cursor matrix trace did not contain Skia Audio Display snapshots");
+
+        var mouseLabelVisible = options.CursorTime ?? true;
+        var initialMouse = FindCursorSnapshot(snapshots, 0,
+            snapshot => snapshot.Source == "mouse" && snapshot.LabelVisible == mouseLabelVisible);
+        var playback = FindCursorSnapshot(snapshots, initialMouse + 1,
+            snapshot => snapshot.Source == "playback" && !snapshot.LabelVisible);
+        var restoredMouse = FindCursorSnapshot(snapshots, playback + 1,
+            snapshot => snapshot.Source == "mouse"
+                && snapshot.LabelVisible == mouseLabelVisible
+                && snapshot.PositionMs > snapshots[initialMouse].PositionMs);
+        var mouseLeft = FindCursorSnapshot(snapshots, restoredMouse + 1,
+            snapshot => snapshot.Source == "none" && snapshot.PositionMs == -1);
+        var reenteredMouse = FindCursorSnapshot(snapshots, mouseLeft + 1,
+            snapshot => snapshot.Source == "mouse" && snapshot.LabelVisible == mouseLabelVisible);
+        var resizedMouse = FindCursorSnapshot(snapshots, reenteredMouse + 1,
+            snapshot => snapshot.Source == "mouse"
+                && snapshot.LabelVisible == mouseLabelVisible
+                && snapshot.TargetWidth != snapshots[initialMouse].TargetWidth);
+
+        var invalidCursorOnly = snapshots.Where(snapshot => snapshot.CursorOnly
+            && (snapshot.VisibleRequest
+                || snapshot.ContentLookup
+                || snapshot.TilesDrawn != 0
+                || snapshot.GpuUploads != 0)).ToArray();
+        if (invalidCursorOnly.Length != 0)
+            throw new InvalidDataException("Cursor matrix found content work on a cursor-only frame");
+
+        Console.WriteLine($"uia.cursor_matrix.sequence={initialMouse},{playback},{restoredMouse},{mouseLeft},{reenteredMouse},{resizedMouse}");
+        Console.WriteLine($"uia.cursor_matrix.restored_mouse_ms={snapshots[restoredMouse].PositionMs}");
+        Console.WriteLine($"uia.cursor_matrix.resize_width={snapshots[initialMouse].TargetWidth}->{snapshots[resizedMouse].TargetWidth}");
+        Console.WriteLine("uia.cursor_matrix.trace_validation=ok");
+    }
+
+    private static int FindCursorSnapshot(
+        IReadOnlyList<CursorTraceSnapshot> snapshots,
+        int start,
+        Func<CursorTraceSnapshot, bool> predicate)
+    {
+        for (var index = Math.Max(0, start); index < snapshots.Count; ++index)
+        {
+            if (predicate(snapshots[index]))
+                return index;
+        }
+        throw new InvalidDataException($"Cursor matrix trace sequence was incomplete after snapshot {start}");
+    }
+
+    private void ValidatePlaybackMarkerDragTrace()
+    {
+        var traceSelection = Environment.GetEnvironmentVariable("AEGISUB_PERF_TRACE");
+        if (string.IsNullOrWhiteSpace(traceSelection)
+            || traceSelection.Equals("0", StringComparison.OrdinalIgnoreCase)
+            || traceSelection.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || traceSelection.Equals("off", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("uia.playback_marker_drag.trace_validation=skipped:not-enabled");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(automationProfileDirectory))
+            throw new InvalidOperationException("Playback marker drag profile directory was not initialized");
+
+        var sessionRoot = Path.Combine(automationProfileDirectory, "user", "perf-sessions");
+        var traces = Directory.Exists(sessionRoot)
+            ? Directory.EnumerateFiles(sessionRoot, "trace.ndjson", SearchOption.AllDirectories).ToArray()
+            : Array.Empty<string>();
+        if (traces.Length != 1)
+            throw new InvalidDataException($"Playback marker drag expected exactly one perf trace, found {traces.Length}");
+
+        var snapshots = new List<PlaybackMarkerTraceSnapshot>();
+        foreach (var line in File.ReadLines(traces[0]))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("name", out var name)
+                || !name.ValueEquals("audio_display_snapshot")
+                || !root.TryGetProperty("payload", out var payload)
+                || !payload.TryGetProperty("renderer", out var renderer)
+                || !renderer.ValueEquals("skia"))
+            {
+                continue;
+            }
+
+            snapshots.Add(new PlaybackMarkerTraceSnapshot(
+                payload.GetProperty("marker_revision").GetInt64(),
+                payload.GetProperty("cursor_source").GetString() ?? "none",
+                payload.GetProperty("cursor_position_ms").GetInt32(),
+                payload.GetProperty("cursor_label_visible").GetBoolean(),
+                payload.GetProperty("cursor_only").GetBoolean(),
+                payload.GetProperty("visible_content_request_called").GetBoolean(),
+                payload.GetProperty("content_lookup_performed").GetBoolean(),
+                payload.GetProperty("content_tiles_drawn_this_frame").GetInt64(),
+                payload.GetProperty("gpu_tile_uploads_this_frame").GetInt64(),
+                payload.GetProperty("worker_builds_started").GetInt64(),
+                payload.GetProperty("worker_payload_builds_started").GetInt64()));
+        }
+
+        var playback = snapshots.Where(snapshot => snapshot.Source == "playback").ToArray();
+        if (playback.Length < 3)
+            throw new InvalidDataException("Playback marker drag did not retain enough playback cursor snapshots");
+        if (playback.Any(snapshot => snapshot.LabelVisible))
+            throw new InvalidDataException("Playback marker drag displayed a mouse cursor label during playback");
+        if (playback.Max(snapshot => snapshot.PositionMs) <= playback.Min(snapshot => snapshot.PositionMs))
+            throw new InvalidDataException("Playback cursor did not advance while markers were dragged");
+
+        var initialMarkerRevision = playback[0].MarkerRevision;
+        var markerFrames = playback
+            .Where(snapshot => snapshot.MarkerRevision > initialMarkerRevision && !snapshot.CursorOnly)
+            .ToArray();
+        var markerRevisions = playback.Select(snapshot => snapshot.MarkerRevision).Distinct().ToArray();
+        if (markerFrames.Length < 2 || markerRevisions.Length < 3)
+            throw new InvalidDataException("Marker revision did not advance repeatedly while playback remained active");
+        if (!playback.Any(snapshot => snapshot.CursorOnly))
+            throw new InvalidDataException("Playback marker drag did not resume the cursor-only path between marker updates");
+
+        var invalidCursorOnly = playback.Where(snapshot => snapshot.CursorOnly
+            && (snapshot.VisibleRequest
+                || snapshot.ContentLookup
+                || snapshot.TilesDrawn != 0
+                || snapshot.GpuUploads != 0)).ToArray();
+        if (invalidCursorOnly.Length != 0)
+            throw new InvalidDataException("Playback marker drag found content work on a cursor-only frame");
+
+        var firstMarkerFrame = markerFrames[0];
+        var lastMarkerFrame = markerFrames[^1];
+        if (lastMarkerFrame.WorkerBuildsStarted != firstMarkerFrame.WorkerBuildsStarted
+            || lastMarkerFrame.WorkerPayloadBuildsStarted != firstMarkerFrame.WorkerPayloadBuildsStarted)
+        {
+            throw new InvalidDataException("Marker drag started new audio content or upload-payload worker builds");
+        }
+        if (markerFrames.Any(snapshot => snapshot.GpuUploads != 0))
+            throw new InvalidDataException("Marker drag uploaded new GPU content tiles after warmup");
+
+        Console.WriteLine($"uia.playback_marker_drag.playback_snapshots={playback.Length}");
+        Console.WriteLine($"uia.playback_marker_drag.marker_frames={markerFrames.Length}");
+        Console.WriteLine($"uia.playback_marker_drag.marker_revisions={markerRevisions.Length}");
+        Console.WriteLine($"uia.playback_marker_drag.full_frame_content_requests={markerFrames.Count(snapshot => snapshot.VisibleRequest)}");
+        Console.WriteLine($"uia.playback_marker_drag.full_frame_content_lookups={markerFrames.Count(snapshot => snapshot.ContentLookup)}");
+        Console.WriteLine("uia.playback_marker_drag.trace_validation=ok");
+    }
+
+    private void ValidateMiddleSeekCursorTrace()
+    {
+        var traceSelection = Environment.GetEnvironmentVariable("AEGISUB_PERF_TRACE");
+        if (string.IsNullOrWhiteSpace(traceSelection)
+            || traceSelection.Equals("0", StringComparison.OrdinalIgnoreCase)
+            || traceSelection.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || traceSelection.Equals("off", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("uia.middle_seek.trace_validation=skipped:not-enabled");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(automationProfileDirectory))
+            throw new InvalidOperationException("Middle seek profile directory was not initialized");
+
+        var sessionRoot = Path.Combine(automationProfileDirectory, "user", "perf-sessions");
+        var traces = Directory.Exists(sessionRoot)
+            ? Directory.EnumerateFiles(sessionRoot, "trace.ndjson", SearchOption.AllDirectories).ToArray()
+            : Array.Empty<string>();
+        if (traces.Length != 1)
+            throw new InvalidDataException($"Middle seek expected exactly one perf trace, found {traces.Length}");
+
+        var snapshots = new List<MiddleSeekTraceSnapshot>();
+        var seekEvents = new List<MiddleSeekTraceEvent>();
+        foreach (var line in File.ReadLines(traces[0]))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("name", out var name)
+                || !root.TryGetProperty("payload", out var payload))
+            {
+                continue;
+            }
+
+            if (name.ValueEquals("audio_display_snapshot")
+                && payload.TryGetProperty("renderer", out var renderer)
+                && renderer.ValueEquals("skia"))
+            {
+                snapshots.Add(new MiddleSeekTraceSnapshot(
+                    payload.GetProperty("middle_seek_active").GetBoolean(),
+                    payload.GetProperty("cursor_source").GetString() ?? "none",
+                    payload.GetProperty("cursor_position_ms").GetInt32(),
+                    payload.GetProperty("cursor_label_visible").GetBoolean(),
+                    payload.GetProperty("cursor_only").GetBoolean(),
+                    payload.GetProperty("retained_layers_reused").GetBoolean(),
+                    payload.GetProperty("visible_content_request_called").GetBoolean(),
+                    payload.GetProperty("content_lookup_performed").GetBoolean(),
+                    payload.GetProperty("content_tiles_drawn_this_frame").GetInt64(),
+                    payload.GetProperty("gpu_tile_uploads_this_frame").GetInt64(),
+                    payload.GetProperty("gpu_tile_uploads").GetInt64(),
+                    payload.GetProperty("worker_builds_started").GetInt64(),
+                    payload.GetProperty("worker_payload_builds_started").GetInt64()));
+            }
+            else if (name.ValueEquals("audio_middle_seek"))
+            {
+                seekEvents.Add(new MiddleSeekTraceEvent(
+                    payload.GetProperty("phase").GetString() ?? string.Empty,
+                    payload.GetProperty("time_ms").GetInt32(),
+                    payload.GetProperty("frame").GetInt32()));
+            }
+        }
+        if (snapshots.Count == 0)
+            throw new InvalidDataException("Middle seek trace did not contain Skia Audio Display snapshots");
+
+        var activeGroups = new List<List<int>>();
+        List<int>? activeGroup = null;
+        for (var index = 0; index < snapshots.Count; ++index)
+        {
+            if (snapshots[index].Active)
+            {
+                if (activeGroup is null)
+                {
+                    activeGroup = new List<int>();
+                    activeGroups.Add(activeGroup);
+                }
+                activeGroup.Add(index);
+            }
+            else
+            {
+                activeGroup = null;
+            }
+        }
+        if (activeGroups.Count < 2)
+            throw new InvalidDataException("Middle seek did not produce both inside-release and outside-release active intervals");
+
+        var expectedLabelVisible = options.CursorTime ?? true;
+        var activeIndices = activeGroups.Take(2).SelectMany(group => group).ToArray();
+        var activeSnapshots = activeIndices.Select(index => snapshots[index]).ToArray();
+        if (activeSnapshots.Any(snapshot => snapshot.Source != "mouse"
+            || snapshot.LabelVisible != expectedLabelVisible))
+        {
+            throw new InvalidDataException("Middle seek cursor source or time-label state was incorrect while dragging");
+        }
+        foreach (var group in activeGroups.Take(2))
+        {
+            var positions = group.Select(index => snapshots[index].PositionMs).ToArray();
+            if (positions.Length < 3 || positions.Max() <= positions.Min())
+                throw new InvalidDataException("Middle seek cursor did not follow the dragged pointer");
+        }
+
+        var activeRetained = activeSnapshots.Where(snapshot => snapshot.RetainedLayersReused).ToArray();
+        var activeCursorOnly = activeSnapshots.Where(snapshot => snapshot.CursorOnly).ToArray();
+        if (activeRetained.Length * 5 < activeSnapshots.Length * 4)
+            throw new InvalidDataException("Middle seek did not predominantly use retained cursor/marker overlays");
+        if (activeCursorOnly.Length < 2)
+            throw new InvalidDataException("Middle seek did not produce pure cursor-only frames between marker previews");
+        if (activeRetained.Any(snapshot => snapshot.VisibleRequest
+            || snapshot.ContentLookup
+            || snapshot.TilesDrawn != 0
+            || snapshot.GpuUploadsThisFrame != 0))
+        {
+            throw new InvalidDataException("Middle seek found content work on a retained overlay frame");
+        }
+
+        var firstGroup = activeGroups[0];
+        var secondGroup = activeGroups[1];
+        var restoredMouse = FindMiddleSeekSnapshot(snapshots, firstGroup[^1] + 1,
+            snapshot => !snapshot.Active
+                && snapshot.Source == "mouse"
+                && snapshot.LabelVisible == expectedLabelVisible);
+        var outsideRelease = FindMiddleSeekSnapshot(snapshots, secondGroup[^1] + 1,
+            snapshot => !snapshot.Active && snapshot.Source == "none" && snapshot.PositionMs == -1);
+        var reenteredMouse = FindMiddleSeekSnapshot(snapshots, outsideRelease + 1,
+            snapshot => !snapshot.Active
+                && snapshot.Source == "mouse"
+                && snapshot.LabelVisible == expectedLabelVisible);
+
+        var firstActive = snapshots[firstGroup[0]];
+        var finalMouse = snapshots[reenteredMouse];
+        if (finalMouse.GpuTileUploads != firstActive.GpuTileUploads
+            || finalMouse.WorkerBuildsStarted != firstActive.WorkerBuildsStarted
+            || finalMouse.WorkerPayloadBuildsStarted != firstActive.WorkerPayloadBuildsStarted)
+        {
+            throw new InvalidDataException("Middle seek started audio worker work or uploaded content tiles");
+        }
+
+        var commits = seekEvents.Where(entry => entry.Phase == "commit").ToArray();
+        var previews = seekEvents.Where(entry => entry.Phase == "preview").ToArray();
+        if (commits.Length != 2 || previews.Length < 2)
+            throw new InvalidDataException("Middle seek did not emit the expected preview/commit trace sequence");
+        if (commits.Any(entry => entry.TimeMs < 0 || entry.Frame < 0))
+            throw new InvalidDataException("Middle seek committed an invalid time or video frame");
+
+        Console.WriteLine($"uia.middle_seek.active_groups={activeGroups.Count}");
+        Console.WriteLine($"uia.middle_seek.active_snapshots={activeSnapshots.Length}");
+        Console.WriteLine($"uia.middle_seek.retained_overlay_snapshots={activeRetained.Length}");
+        Console.WriteLine($"uia.middle_seek.cursor_only_snapshots={activeCursorOnly.Length}");
+        Console.WriteLine($"uia.middle_seek.preview_events={previews.Length}");
+        Console.WriteLine($"uia.middle_seek.commit_times_ms={string.Join(",", commits.Select(entry => entry.TimeMs))}");
+        Console.WriteLine($"uia.middle_seek.sequence={firstGroup[0]},{restoredMouse},{secondGroup[0]},{outsideRelease},{reenteredMouse}");
+        Console.WriteLine("uia.middle_seek.trace_validation=ok");
+    }
+
+    private static int FindMiddleSeekSnapshot(
+        IReadOnlyList<MiddleSeekTraceSnapshot> snapshots,
+        int start,
+        Func<MiddleSeekTraceSnapshot, bool> predicate)
+    {
+        for (var index = Math.Max(0, start); index < snapshots.Count; ++index)
+        {
+            if (predicate(snapshots[index]))
+                return index;
+        }
+        throw new InvalidDataException($"Middle seek trace sequence was incomplete after snapshot {start}");
+    }
+
+    private void ValidateFocusColourTrace(bool spectrum)
+    {
+        var traceSelection = Environment.GetEnvironmentVariable("AEGISUB_PERF_TRACE");
+        if (string.IsNullOrWhiteSpace(traceSelection)
+            || traceSelection.Equals("0", StringComparison.OrdinalIgnoreCase)
+            || traceSelection.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || traceSelection.Equals("off", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("uia.focus_colour.trace_validation=skipped:not-enabled");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(automationProfileDirectory))
+            throw new InvalidOperationException("Focus/colour profile directory was not initialized");
+
+        var sessionRoot = Path.Combine(automationProfileDirectory, "user", "perf-sessions");
+        var traces = Directory.Exists(sessionRoot)
+            ? Directory.EnumerateFiles(sessionRoot, "trace.ndjson", SearchOption.AllDirectories).ToArray()
+            : Array.Empty<string>();
+        if (traces.Length != 1)
+            throw new InvalidDataException($"Focus/colour expected exactly one perf trace, found {traces.Length}");
+
+        var snapshots = new List<FocusColourTraceSnapshot>();
+        foreach (var line in File.ReadLines(traces[0]))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("name", out var name)
+                || !name.ValueEquals("audio_display_snapshot")
+                || !root.TryGetProperty("payload", out var payload)
+                || !payload.TryGetProperty("renderer", out var renderer)
+                || !renderer.ValueEquals("skia"))
+            {
+                continue;
+            }
+
+            snapshots.Add(new FocusColourTraceSnapshot(
+                payload.GetProperty("frame_id").GetInt64(),
+                payload.GetProperty("content_kind").GetString() ?? string.Empty,
+                payload.GetProperty("focused").GetBoolean(),
+                payload.GetProperty("chrome_revision").GetInt64(),
+                payload.GetProperty("presentation_revision").GetInt64(),
+                payload.GetProperty("analysis_generation").GetInt64(),
+                payload.GetProperty("complete_content_viewport").GetBoolean(),
+                payload.GetProperty("gpu_tile_uploads_this_frame").GetInt64(),
+                payload.GetProperty("gpu_tile_uploads").GetInt64(),
+                payload.GetProperty("gpu_palette_uploads").GetInt64(),
+                payload.GetProperty("cpu_tile_misses").GetInt64(),
+                payload.GetProperty("fft_misses").GetInt64(),
+                payload.GetProperty("fft_visible_builds").GetInt64(),
+                payload.GetProperty("worker_builds_started").GetInt64(),
+                payload.GetProperty("worker_payload_builds_started").GetInt64()));
+        }
+
+        var expectedKind = spectrum ? "spectrum" : "waveform";
+        var target = snapshots.Where(snapshot => snapshot.Kind == expectedKind).ToArray();
+        if (target.Length < 6)
+            throw new InvalidDataException($"Focus/colour trace did not contain enough {expectedKind} snapshots");
+
+        var firstFocused = FindFocusColourSnapshot(target, 0, snapshot => snapshot.Focused);
+        if (firstFocused == 0)
+            throw new InvalidDataException("Focus/colour trace did not contain a settled unfocused baseline");
+        var firstUnfocused = FindFocusColourSnapshot(target, firstFocused + 1, snapshot => !snapshot.Focused);
+        var secondFocused = FindFocusColourSnapshot(target, firstUnfocused + 1, snapshot => snapshot.Focused);
+        var secondUnfocused = FindFocusColourSnapshot(target, secondFocused + 1, snapshot => !snapshot.Focused);
+
+        var baseline = target[firstFocused - 1];
+        var focusSequence = new[]
+        {
+            target[firstFocused],
+            target[firstUnfocused],
+            target[secondFocused],
+            target[secondUnfocused]
+        };
+        if (!baseline.CompleteContentViewport)
+            throw new InvalidDataException("Focus/colour baseline did not have a complete audio viewport");
+        if (focusSequence.Any(snapshot => snapshot.PresentationRevision != baseline.PresentationRevision
+            || snapshot.AnalysisGeneration != baseline.AnalysisGeneration
+            || snapshot.GpuUploadsThisFrame != 0))
+        {
+            throw new InvalidDataException("Focus switching invalidated presentation/analysis or uploaded a GPU content tile");
+        }
+        if (!(focusSequence[0].ChromeRevision > baseline.ChromeRevision
+            && focusSequence[1].ChromeRevision > focusSequence[0].ChromeRevision
+            && focusSequence[2].ChromeRevision > focusSequence[1].ChromeRevision
+            && focusSequence[3].ChromeRevision > focusSequence[2].ChromeRevision))
+        {
+            throw new InvalidDataException("Focus switching did not advance chrome revisions for every state transition");
+        }
+        if (!AudioContentCountersEqual(baseline, focusSequence[^1]))
+            throw new InvalidDataException("Focus switching started audio analysis/worker work or uploaded content tiles");
+
+        var colourIndex = FindFocusColourSnapshot(
+            target,
+            secondUnfocused + 1,
+            snapshot => snapshot.PresentationRevision > baseline.PresentationRevision);
+        var colour = target[colourIndex];
+        if (colour.AnalysisGeneration != baseline.AnalysisGeneration
+            || colour.ChromeRevision != focusSequence[^1].ChromeRevision
+            || colour.GpuUploadsThisFrame != 0
+            || !AudioContentCountersEqual(focusSequence[^1], colour))
+        {
+            throw new InvalidDataException("Colour scheme apply rebuilt audio analysis/content or uploaded a GPU content tile");
+        }
+
+        var paletteDelta = colour.GpuPaletteUploads - focusSequence[^1].GpuPaletteUploads;
+        if (!spectrum && paletteDelta != 0)
+            throw new InvalidDataException("Waveform colour apply unexpectedly uploaded a spectrum palette texture");
+        if (spectrum && paletteDelta is < 1 or > 4)
+            throw new InvalidDataException($"Spectrum colour apply uploaded an unexpected number of palettes: {paletteDelta}");
+
+        Console.WriteLine($"uia.focus_colour.kind={expectedKind}");
+        Console.WriteLine($"uia.focus_colour.focus_frames={string.Join(',', focusSequence.Select(snapshot => snapshot.FrameId))}");
+        Console.WriteLine($"uia.focus_colour.chrome_revisions={baseline.ChromeRevision}->{string.Join(',', focusSequence.Select(snapshot => snapshot.ChromeRevision))}");
+        Console.WriteLine($"uia.focus_colour.presentation_revision={baseline.PresentationRevision}->{colour.PresentationRevision}");
+        Console.WriteLine($"uia.focus_colour.palette_upload_delta={paletteDelta}");
+        Console.WriteLine("uia.focus_colour.content_rebuild_delta=0");
+        Console.WriteLine("uia.focus_colour.trace_validation=ok");
+    }
+
+    private static bool AudioContentCountersEqual(
+        FocusColourTraceSnapshot left,
+        FocusColourTraceSnapshot right) =>
+        left.GpuTileUploads == right.GpuTileUploads
+        && left.CpuTileMisses == right.CpuTileMisses
+        && left.FftMisses == right.FftMisses
+        && left.FftVisibleBuilds == right.FftVisibleBuilds
+        && left.WorkerBuildsStarted == right.WorkerBuildsStarted
+        && left.WorkerPayloadBuildsStarted == right.WorkerPayloadBuildsStarted;
+
+    private static int FindFocusColourSnapshot(
+        IReadOnlyList<FocusColourTraceSnapshot> snapshots,
+        int start,
+        Func<FocusColourTraceSnapshot, bool> predicate)
+    {
+        for (var index = Math.Max(0, start); index < snapshots.Count; ++index)
+        {
+            if (predicate(snapshots[index]))
+                return index;
+        }
+        throw new InvalidDataException($"Focus/colour trace sequence was incomplete after snapshot {start}");
+    }
+
+    private void ValidateDpiTransitionTrace()
+    {
+        var traceSelection = Environment.GetEnvironmentVariable("AEGISUB_PERF_TRACE");
+        if (string.IsNullOrWhiteSpace(traceSelection)
+            || traceSelection.Equals("0", StringComparison.OrdinalIgnoreCase)
+            || traceSelection.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || traceSelection.Equals("off", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("uia.dpi_transition.trace_validation=skipped:not-enabled");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(automationProfileDirectory)
+            || dpiTransitionInitialScale is not double initialScale
+            || dpiTransitionTargetScale is not double targetScale)
+        {
+            throw new InvalidOperationException("DPI transition trace state was not initialized");
+        }
+
+        var sessionRoot = Path.Combine(automationProfileDirectory, "user", "perf-sessions");
+        var traces = Directory.Exists(sessionRoot)
+            ? Directory.EnumerateFiles(sessionRoot, "trace.ndjson", SearchOption.AllDirectories).ToArray()
+            : Array.Empty<string>();
+        if (traces.Length != 1)
+            throw new InvalidDataException($"DPI transition expected exactly one perf trace, found {traces.Length}");
+
+        var snapshots = new List<DpiTransitionTraceSnapshot>();
+        foreach (var line in File.ReadLines(traces[0]))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("name", out var name)
+                || !name.ValueEquals("audio_display_snapshot")
+                || !root.TryGetProperty("payload", out var payload)
+                || !payload.TryGetProperty("renderer", out var renderer)
+                || !renderer.ValueEquals("skia"))
+            {
+                continue;
+            }
+
+            snapshots.Add(new DpiTransitionTraceSnapshot(
+                payload.GetProperty("frame_id").GetInt64(),
+                payload.GetProperty("content_scale").GetDouble(),
+                payload.GetProperty("analysis_generation").GetInt64(),
+                payload.GetProperty("chrome_revision").GetInt64(),
+                payload.GetProperty("presentation_revision").GetInt64(),
+                payload.GetProperty("complete_content_viewport").GetBoolean(),
+                payload.GetProperty("target_width").GetInt32(),
+                payload.GetProperty("target_height").GetInt32(),
+                payload.GetProperty("gpu_tile_uploads").GetInt64(),
+                payload.GetProperty("worker_builds_started").GetInt64(),
+                payload.GetProperty("worker_payload_builds_started").GetInt64()));
+        }
+        if (snapshots.Count < 3)
+            throw new InvalidDataException("DPI transition trace did not contain enough Skia Audio Display snapshots");
+
+        var targetIndex = FindDpiTransitionSnapshot(
+            snapshots,
+            0,
+            snapshot => snapshot.CompleteContentViewport
+                && SameContentScale(snapshot.ContentScale, targetScale));
+        var baselineIndex = -1;
+        for (var index = targetIndex - 1; index >= 0; --index)
+        {
+            if (snapshots[index].CompleteContentViewport
+                && SameContentScale(snapshots[index].ContentScale, initialScale))
+            {
+                baselineIndex = index;
+                break;
+            }
+        }
+        if (baselineIndex < 0)
+            throw new InvalidDataException("DPI transition trace did not contain a complete initial-scale baseline");
+        var restoredIndex = FindDpiTransitionSnapshot(
+            snapshots,
+            targetIndex + 1,
+            snapshot => snapshot.CompleteContentViewport
+                && SameContentScale(snapshot.ContentScale, initialScale));
+
+        var baseline = snapshots[baselineIndex];
+        var target = snapshots[targetIndex];
+        var restored = snapshots[restoredIndex];
+        if (!(target.AnalysisGeneration > baseline.AnalysisGeneration
+            && restored.AnalysisGeneration > target.AnalysisGeneration))
+        {
+            throw new InvalidDataException("DPI transitions did not rebuild scale-dependent audio analysis generations");
+        }
+        if (!(target.PresentationRevision > baseline.PresentationRevision
+            && restored.PresentationRevision > target.PresentationRevision
+            && target.ChromeRevision > baseline.ChromeRevision
+            && restored.ChromeRevision > target.ChromeRevision))
+        {
+            throw new InvalidDataException("DPI transitions did not invalidate presentation and device-space Chrome layers");
+        }
+        if (!(target.WorkerBuildsStarted > baseline.WorkerBuildsStarted
+            && restored.WorkerBuildsStarted > target.WorkerBuildsStarted
+            && target.WorkerPayloadBuildsStarted > baseline.WorkerPayloadBuildsStarted
+            && restored.WorkerPayloadBuildsStarted > target.WorkerPayloadBuildsStarted
+            && target.GpuTileUploads > baseline.GpuTileUploads
+            && restored.GpuTileUploads > target.GpuTileUploads))
+        {
+            throw new InvalidDataException("DPI transitions reused stale scale-dependent content or did not publish replacement tiles");
+        }
+        if (target.TargetWidth <= 0 || target.TargetHeight <= 0
+            || restored.TargetWidth <= 0 || restored.TargetHeight <= 0)
+        {
+            throw new InvalidDataException("DPI transition produced an invalid Skia render target");
+        }
+
+        Console.WriteLine($"uia.dpi_transition.frames={baseline.FrameId},{target.FrameId},{restored.FrameId}");
+        Console.WriteLine($"uia.dpi_transition.content_scale={baseline.ContentScale}->{target.ContentScale}->{restored.ContentScale}");
+        Console.WriteLine($"uia.dpi_transition.analysis_generation={baseline.AnalysisGeneration}->{target.AnalysisGeneration}->{restored.AnalysisGeneration}");
+        Console.WriteLine($"uia.dpi_transition.presentation_revision={baseline.PresentationRevision}->{target.PresentationRevision}->{restored.PresentationRevision}");
+        Console.WriteLine($"uia.dpi_transition.chrome_revision={baseline.ChromeRevision}->{target.ChromeRevision}->{restored.ChromeRevision}");
+        Console.WriteLine($"uia.dpi_transition.gpu_tile_uploads={baseline.GpuTileUploads}->{target.GpuTileUploads}->{restored.GpuTileUploads}");
+        Console.WriteLine("uia.dpi_transition.trace_validation=ok");
+    }
+
+    private static int FindDpiTransitionSnapshot(
+        IReadOnlyList<DpiTransitionTraceSnapshot> snapshots,
+        int start,
+        Func<DpiTransitionTraceSnapshot, bool> predicate)
+    {
+        for (var index = Math.Max(0, start); index < snapshots.Count; ++index)
+        {
+            if (predicate(snapshots[index]))
+                return index;
+        }
+        throw new InvalidDataException($"DPI transition trace sequence was incomplete after snapshot {start}");
+    }
+
+    private static bool SameContentScale(double left, double right) =>
+        Math.Abs(left - right) <= 0.01;
+
+    private void ValidateRuntimeFallbackTrace(bool spectrum)
+    {
+        var traceSelection = Environment.GetEnvironmentVariable("AEGISUB_PERF_TRACE");
+        if (string.IsNullOrWhiteSpace(traceSelection)
+            || traceSelection.Equals("0", StringComparison.OrdinalIgnoreCase)
+            || traceSelection.Equals("false", StringComparison.OrdinalIgnoreCase)
+            || traceSelection.Equals("off", StringComparison.OrdinalIgnoreCase))
+        {
+            Console.WriteLine("uia.runtime_fallback.trace_validation=skipped:not-enabled");
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(automationProfileDirectory)
+            || runtimeFallbackRequiredSkiaFrames <= 0)
+        {
+            throw new InvalidOperationException("Runtime fallback trace state was not initialized");
+        }
+
+        var sessionRoot = Path.Combine(automationProfileDirectory, "user", "perf-sessions");
+        var traces = Directory.Exists(sessionRoot)
+            ? Directory.EnumerateFiles(sessionRoot, "trace.ndjson", SearchOption.AllDirectories).ToArray()
+            : Array.Empty<string>();
+        if (traces.Length != 1)
+            throw new InvalidDataException($"Runtime fallback expected exactly one perf trace, found {traces.Length}");
+
+        var snapshots = new List<RuntimeFallbackTraceSnapshot>();
+        foreach (var line in File.ReadLines(traces[0]))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            if (!root.TryGetProperty("name", out var name)
+                || !name.ValueEquals("audio_display_snapshot")
+                || !root.TryGetProperty("payload", out var payload))
+            {
+                continue;
+            }
+            var renderer = payload.GetProperty("renderer").GetString() ?? string.Empty;
+            if (renderer is not ("skia" or "wx"))
+                continue;
+            snapshots.Add(new RuntimeFallbackTraceSnapshot(
+                renderer,
+                payload.GetProperty("content_kind").GetString() ?? string.Empty,
+                payload.GetProperty("frame_id").GetInt64(),
+                payload.GetProperty("content_scale").GetDouble(),
+                payload.GetProperty("viewport_first_column").GetInt64(),
+                payload.GetProperty("complete_content_viewport").GetBoolean(),
+                payload.GetProperty("target_width").GetInt32(),
+                payload.GetProperty("target_height").GetInt32(),
+                payload.GetProperty("swap_attempted").GetBoolean(),
+                payload.GetProperty("bitmap_cache_hits").GetInt64(),
+                payload.GetProperty("bitmap_cache_misses").GetInt64()));
+        }
+
+        var firstWxIndex = snapshots.FindIndex(snapshot => snapshot.Renderer == "wx");
+        if (firstWxIndex <= 0)
+            throw new InvalidDataException("Runtime fallback trace did not contain a Skia -> wx renderer transition");
+        var skiaSnapshots = snapshots.Take(firstWxIndex)
+            .Where(snapshot => snapshot.Renderer == "skia")
+            .ToArray();
+        if (skiaSnapshots.Length < runtimeFallbackRequiredSkiaFrames)
+        {
+            throw new InvalidDataException(
+                $"Runtime fallback occurred before the configured successful-frame threshold: {skiaSnapshots.Length}/{runtimeFallbackRequiredSkiaFrames}");
+        }
+        if (snapshots.Skip(firstWxIndex + 1).Any(snapshot => snapshot.Renderer == "skia"))
+            throw new InvalidDataException("A failed Skia canvas rendered again after the wx fallback became active");
+
+        var expectedKind = spectrum ? "spectrum" : "waveform";
+        var lastSkia = skiaSnapshots.LastOrDefault(snapshot =>
+            snapshot.Kind == expectedKind && snapshot.CompleteContentViewport);
+        if (lastSkia.Renderer != "skia")
+            throw new InvalidDataException($"Runtime fallback lacked a complete {expectedKind} Skia baseline");
+        var firstWx = snapshots[firstWxIndex];
+        if (firstWx.Kind != expectedKind
+            || firstWx.FrameId != 1
+            || firstWx.SwapAttempted
+            || firstWx.TargetWidth <= 0
+            || firstWx.TargetHeight <= 0
+            || firstWx.BitmapCacheHits + firstWx.BitmapCacheMisses <= 0)
+        {
+            throw new InvalidDataException("The first wx fallback frame did not render the expected audio content");
+        }
+        if (!SameContentScale(lastSkia.ContentScale, firstWx.ContentScale))
+            throw new InvalidDataException("The wx fallback did not preserve the active display scale");
+        if (lastSkia.ViewportFirstColumn <= 0)
+            throw new InvalidDataException("Runtime fallback did not establish a non-zero direct Skia viewport before failure");
+        if (firstWx.ViewportFirstColumn <= 0)
+            throw new InvalidDataException("The wx fallback lost the non-zero Skia viewport");
+        var lastSkiaLogicalScroll = lastSkia.ViewportFirstColumn / lastSkia.ContentScale;
+        if (Math.Abs(lastSkiaLogicalScroll - firstWx.ViewportFirstColumn) > 1.0)
+        {
+            throw new InvalidDataException(
+                $"The wx fallback did not preserve the exact Skia viewport: {lastSkiaLogicalScroll:F2} -> {firstWx.ViewportFirstColumn}");
+        }
+
+        Console.WriteLine($"uia.runtime_fallback.skia_successful_snapshots={skiaSnapshots.Length}");
+        Console.WriteLine($"uia.runtime_fallback.last_skia_frame={lastSkia.FrameId}");
+        Console.WriteLine($"uia.runtime_fallback.first_wx_frame={firstWx.FrameId}");
+        Console.WriteLine($"uia.runtime_fallback.first_wx_bitmap_cache={firstWx.BitmapCacheHits}/{firstWx.BitmapCacheMisses}");
+        Console.WriteLine($"uia.runtime_fallback.viewport={lastSkiaLogicalScroll:F2}/{firstWx.ViewportFirstColumn}");
+        Console.WriteLine($"uia.runtime_fallback.content_kind={firstWx.Kind}");
+        Console.WriteLine("uia.runtime_fallback.trace_validation=ok");
+    }
+
     private void PreservePerfSessions()
     {
         if (string.IsNullOrWhiteSpace(automationProfileDirectory)
@@ -1252,6 +2926,19 @@ sealed class AegisubSession : IDisposable
             Thread.Sleep(delayMs);
         }
         SendMouseButton(false);
+    }
+
+    private void MiddleDrag(WinPoint start, WinPoint end, int steps, int delayMs)
+    {
+        MovePointer(start);
+        SendMiddleMouseButton(true);
+        for (var i = 1; i <= steps; ++i)
+        {
+            MovePointer(new WinPoint(start.X + (end.X - start.X) * i / steps,
+                start.Y + (end.Y - start.Y) * i / steps));
+            Thread.Sleep(delayMs);
+        }
+        SendMiddleMouseButton(false);
     }
 
     private static bool ContainsAny(string value, params string[] needles) =>
@@ -1330,7 +3017,10 @@ sealed class AegisubSession : IDisposable
             Type = InputMouse,
             Mouse = new MouseInput
             {
-                Flags = MouseEventFlags.Move | MouseEventFlags.Absolute,
+                // Absolute SendInput coordinates use the primary display unless
+                // VirtualDesk is set, while the normalization above deliberately
+                // uses the full virtual-screen bounds.
+                Flags = MouseEventFlags.Move | MouseEventFlags.Absolute | MouseEventFlags.VirtualDesk,
                 X = (int)Math.Clamp((point.X - left) * 65535L / width, 0, 65535),
                 Y = (int)Math.Clamp((point.Y - top) * 65535L / height, 0, 65535),
             }
@@ -1346,6 +3036,11 @@ sealed class AegisubSession : IDisposable
     private static void SendMouseButton(bool down)
     {
         SendMouseInput(down ? MouseEventFlags.LeftDown : MouseEventFlags.LeftUp, 0);
+    }
+
+    private static void SendMiddleMouseButton(bool down)
+    {
+        SendMouseInput(down ? MouseEventFlags.MiddleDown : MouseEventFlags.MiddleUp, 0);
     }
 
     private static void SendMouseInput(MouseEventFlags flags, uint data)
@@ -1436,10 +3131,29 @@ sealed class AegisubSession : IDisposable
         return result;
     }
 
+    private static IEnumerable<nint> EnumerateTopLevelWindows(int processId)
+    {
+        var result = new List<nint>();
+        EnumWindows((hwnd, _) =>
+        {
+            GetWindowThreadProcessId(hwnd, out var ownerProcessId);
+			if (ownerProcessId == (uint)processId)
+                result.Add(hwnd);
+            return true;
+        }, 0);
+        return result;
+    }
+
     private static string GetClassName(nint hwnd)
     {
         var buffer = new StringBuilder(256);
         return GetClassName(hwnd, buffer, buffer.Capacity) == 0 ? string.Empty : buffer.ToString();
+    }
+
+    private static string GetWindowText(nint hwnd)
+    {
+        var buffer = new StringBuilder(512);
+        return GetWindowText(hwnd, buffer, buffer.Capacity) == 0 ? string.Empty : buffer.ToString();
     }
 
     private static WinRect GetWindowRect(nint hwnd)
@@ -1490,11 +3204,15 @@ sealed class AegisubSession : IDisposable
 
     private const uint InputMouse = 0;
     private const uint InputKeyboard = 1;
+    private const uint MonitorDefaultToNearest = 2;
+    private const ushort VirtualKeyHome = 0x24;
+    private const ushort VirtualKeyUp = 0x26;
+    private const ushort VirtualKeyDown = 0x28;
 
     [Flags]
     private enum SetWindowPosFlags : uint { NoActivate = 0x0010, ShowWindow = 0x0040 }
     [Flags]
-    private enum MouseEventFlags : uint { Move = 0x0001, LeftDown = 0x0002, LeftUp = 0x0004, Wheel = 0x0800, Absolute = 0x8000 }
+    private enum MouseEventFlags : uint { Move = 0x0001, LeftDown = 0x0002, LeftUp = 0x0004, MiddleDown = 0x0020, MiddleUp = 0x0040, Wheel = 0x0800, VirtualDesk = 0x4000, Absolute = 0x8000 }
     [Flags]
     private enum KeyboardEventFlags : uint { KeyUp = 0x0002 }
     [Flags]
@@ -1510,8 +3228,93 @@ sealed class AegisubSession : IDisposable
         MouseWheel = 0x020A
     }
     private enum SystemMetric { VirtualScreenLeft = 76, VirtualScreenTop = 77, VirtualScreenWidth = 78, VirtualScreenHeight = 79 }
+    private enum MonitorDpiType { Effective = 0 }
 
     private readonly record struct WinPoint(int X, int Y);
+    private readonly record struct CursorTraceSnapshot(
+        string Source,
+        int PositionMs,
+        double DeviceX,
+        bool LabelVisible,
+        bool CursorOnly,
+        int TargetWidth,
+        bool VisibleRequest,
+        bool ContentLookup,
+        long TilesDrawn,
+        long GpuUploads);
+    private readonly record struct PlaybackMarkerTraceSnapshot(
+        long MarkerRevision,
+        string Source,
+        int PositionMs,
+        bool LabelVisible,
+        bool CursorOnly,
+        bool VisibleRequest,
+        bool ContentLookup,
+        long TilesDrawn,
+        long GpuUploads,
+        long WorkerBuildsStarted,
+        long WorkerPayloadBuildsStarted);
+    private readonly record struct MiddleSeekTraceSnapshot(
+        bool Active,
+        string Source,
+        int PositionMs,
+        bool LabelVisible,
+        bool CursorOnly,
+        bool RetainedLayersReused,
+        bool VisibleRequest,
+        bool ContentLookup,
+        long TilesDrawn,
+        long GpuUploadsThisFrame,
+        long GpuTileUploads,
+        long WorkerBuildsStarted,
+        long WorkerPayloadBuildsStarted);
+    private readonly record struct MiddleSeekTraceEvent(string Phase, int TimeMs, int Frame);
+    private readonly record struct FocusColourTraceSnapshot(
+        long FrameId,
+        string Kind,
+        bool Focused,
+        long ChromeRevision,
+        long PresentationRevision,
+        long AnalysisGeneration,
+        bool CompleteContentViewport,
+        long GpuUploadsThisFrame,
+        long GpuTileUploads,
+        long GpuPaletteUploads,
+        long CpuTileMisses,
+        long FftMisses,
+        long FftVisibleBuilds,
+        long WorkerBuildsStarted,
+        long WorkerPayloadBuildsStarted);
+    private readonly record struct DpiTransitionTraceSnapshot(
+        long FrameId,
+        double ContentScale,
+        long AnalysisGeneration,
+        long ChromeRevision,
+        long PresentationRevision,
+        bool CompleteContentViewport,
+        int TargetWidth,
+        int TargetHeight,
+        long GpuTileUploads,
+        long WorkerBuildsStarted,
+        long WorkerPayloadBuildsStarted);
+    private readonly record struct RuntimeFallbackTraceSnapshot(
+        string Renderer,
+        string Kind,
+        long FrameId,
+        double ContentScale,
+        long ViewportFirstColumn,
+        bool CompleteContentViewport,
+        int TargetWidth,
+        int TargetHeight,
+        bool SwapAttempted,
+        long BitmapCacheHits,
+        long BitmapCacheMisses);
+    private readonly record struct MonitorDescriptor(
+        nint Handle,
+        WinRect Work,
+        uint DpiX,
+        uint DpiY);
+    private readonly record struct ColourSchemeSelection(string Before, string After);
     private readonly record struct WinRect(int Left, int Top, int Width, int Height)
     {
         public int Right => Left + Width;
@@ -1522,24 +3325,54 @@ sealed class AegisubSession : IDisposable
 
     [StructLayout(LayoutKind.Sequential)] private struct NativeRect { public int Left, Top, Right, Bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct NativePoint { public int X, Y; public NativePoint(int x, int y) { X = x; Y = y; } }
+    [StructLayout(LayoutKind.Sequential)] private struct MonitorInfo
+    {
+        public int Size;
+        public NativeRect Monitor;
+        public NativeRect Work;
+        public uint Flags;
+    }
+    [StructLayout(LayoutKind.Sequential)] private struct GuiThreadInfo
+    {
+        public int Size;
+        public uint Flags;
+        public nint Active;
+        public nint Focus;
+        public nint Capture;
+        public nint MenuOwner;
+        public nint MoveSize;
+        public nint Caret;
+        public NativeRect CaretRect;
+    }
     [StructLayout(LayoutKind.Sequential)] private struct Input { public uint Type; public InputUnion Union; public MouseInput Mouse { get => Union.Mouse; set => Union.Mouse = value; } public KeyboardInput Keyboard { get => Union.Keyboard; set => Union.Keyboard = value; } }
     [StructLayout(LayoutKind.Explicit)] private struct InputUnion { [FieldOffset(0)] public MouseInput Mouse; [FieldOffset(0)] public KeyboardInput Keyboard; }
     [StructLayout(LayoutKind.Sequential)] private struct MouseInput { public int X, Y; public uint Data; public MouseEventFlags Flags; public uint Time; public nint ExtraInfo; }
     [StructLayout(LayoutKind.Sequential)] private struct KeyboardInput { public ushort VirtualKey, ScanCode; public KeyboardEventFlags Flags; public uint Time; public nint ExtraInfo; }
 
     private delegate bool EnumWindowsProc(nint hwnd, nint lParam);
+    private delegate bool MonitorEnumProc(nint monitor, nint hdc, ref NativeRect bounds, nint data);
 
     [DllImport("user32.dll", SetLastError = true)] private static extern uint SendInput(uint inputCount, Input[] inputs, int size);
     [DllImport("user32.dll", SetLastError = true)] private static extern bool PostMessage(nint hwnd, uint message, nint wParam, nint lParam);
     [DllImport("user32.dll", SetLastError = true)] private static extern nint SendMessageTimeout(nint hwnd, uint message, nint wParam, nint lParam, SendMessageTimeoutFlags flags, uint timeoutMs, out nint result);
     [DllImport("user32.dll")] private static extern nint WindowFromPoint(NativePoint point);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool GetCursorPos(out NativePoint point);
     [DllImport("user32.dll")] private static extern bool ScreenToClient(nint hwnd, ref NativePoint point);
     [DllImport("user32.dll")] private static extern bool EnumChildWindows(nint parent, EnumWindowsProc callback, nint lParam);
+    [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, nint lParam);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool EnumDisplayMonitors(nint hdc, nint clip, MonitorEnumProc callback, nint data);
     [DllImport("user32.dll")] private static extern bool IsWindowVisible(nint hwnd);
     [DllImport("user32.dll")] private static extern bool IsWindowEnabled(nint hwnd);
+    [DllImport("user32.dll", SetLastError = true)] private static extern uint GetWindowThreadProcessId(nint hwnd, out uint processId);
+    [DllImport("user32.dll", SetLastError = true)] private static extern bool GetGUIThreadInfo(uint threadId, ref GuiThreadInfo info);
     [DllImport("user32.dll")] private static extern nint GetParent(nint hwnd);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetClassName(nint hwnd, StringBuilder className, int maxCount);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern int GetWindowText(nint hwnd, StringBuilder text, int maxCount);
     [DllImport("user32.dll")] private static extern bool GetWindowRect(nint hwnd, out NativeRect rect);
+    [DllImport("user32.dll")] private static extern uint GetDpiForWindow(nint hwnd);
+    [DllImport("user32.dll")] private static extern nint MonitorFromWindow(nint hwnd, uint flags);
+    [DllImport("user32.dll", EntryPoint = "GetMonitorInfoW", SetLastError = true)] private static extern bool GetMonitorInfo(nint monitor, ref MonitorInfo info);
+    [DllImport("shcore.dll")] private static extern int GetDpiForMonitor(nint monitor, MonitorDpiType dpiType, out uint dpiX, out uint dpiY);
     [DllImport("user32.dll")] private static extern bool SetForegroundWindow(nint hwnd);
     [DllImport("user32.dll")] private static extern bool ShowWindow(nint hwnd, int command);
     [DllImport("user32.dll")] private static extern bool SetWindowPos(nint hwnd, nint insertAfter, int x, int y, int width, int height, SetWindowPosFlags flags);

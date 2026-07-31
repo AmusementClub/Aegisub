@@ -71,6 +71,117 @@ struct AudioOutputSnapshot {
 	bool end_of_stream = false;
 };
 
+struct AudioDisplaySnapshot {
+	std::string renderer_name;
+	std::string content_kind;
+	std::uint64_t frame_id = 0;
+	std::uint64_t provider_generation = 0;
+	std::uint64_t analysis_generation = 0;
+	std::uint64_t marker_revision = 0;
+	std::uint64_t chrome_revision = 0;
+	std::uint64_t presentation_revision = 0;
+	double content_scale = 1.0;
+	std::uint64_t viewport_first_column = 0;
+	std::uint64_t viewport_column_count = 0;
+	std::uint64_t target_width = 0;
+	std::uint64_t target_height = 0;
+	std::uint64_t visible_tile_count = 0;
+	std::uint64_t ready_tile_count = 0;
+	bool complete_content_viewport = false;
+	bool retained_content_frame = false;
+	bool cursor_only = false;
+	bool retained_layers_reused = false;
+	bool focused = false;
+	bool middle_seek_active = false;
+	std::string cursor_source = "none";
+	std::int64_t cursor_position_ms = -1;
+	double cursor_device_x = -1.0;
+	bool cursor_label_visible = false;
+	bool visible_content_request_called = false;
+	bool content_lookup_performed = false;
+	std::uint64_t content_tiles_drawn_this_frame = 0;
+	std::uint64_t gpu_tile_uploads_this_frame = 0;
+	bool swap_attempted = true;
+	bool swapped = false;
+
+	std::uint64_t bitmap_cache_hits = 0;
+	std::uint64_t bitmap_cache_misses = 0;
+	std::uint64_t source_cache_budget_bytes = 0;
+	std::uint64_t source_cache_bytes = 0;
+	std::uint64_t source_cache_entries = 0;
+	std::uint64_t source_cache_hits = 0;
+	std::uint64_t source_cache_misses = 0;
+	std::uint64_t source_cache_visible_builds = 0;
+	std::uint64_t source_cache_visible_lock_contention = 0;
+	std::uint64_t source_cache_prefetch_requests = 0;
+	std::uint64_t source_cache_prefetch_builds = 0;
+	std::uint64_t source_cache_prefetch_busy_skips = 0;
+	std::uint64_t source_cache_stale_drops = 0;
+	std::uint64_t source_cache_evictions = 0;
+	bool source_cache_prefetch_enabled = false;
+
+	std::uint64_t cpu_tile_budget_bytes = 0;
+	std::uint64_t cpu_tile_bytes = 0;
+	std::uint64_t cpu_tile_entries = 0;
+	std::uint64_t cpu_tile_hits = 0;
+	std::uint64_t cpu_tile_misses = 0;
+	std::uint64_t cpu_tile_evictions = 0;
+
+	std::uint64_t cpu_payload_budget_bytes = 0;
+	std::uint64_t cpu_payload_bytes = 0;
+	std::uint64_t cpu_payload_entries = 0;
+	std::uint64_t cpu_payload_hits = 0;
+	std::uint64_t cpu_payload_misses = 0;
+	std::uint64_t cpu_payload_evictions = 0;
+
+	std::uint64_t fft_budget_bytes = 0;
+	std::uint64_t fft_active_cache_budget_bytes = 0;
+	std::uint64_t fft_bytes = 0;
+	std::uint64_t fft_entries = 0;
+	std::uint64_t fft_hits = 0;
+	std::uint64_t fft_misses = 0;
+	std::uint64_t fft_visible_builds = 0;
+	std::uint64_t fft_evictions = 0;
+
+	std::uint64_t gpu_tile_budget_bytes = 0;
+	std::uint64_t gpu_tile_bytes = 0;
+	std::uint64_t gpu_tile_entries = 0;
+	std::uint64_t gpu_tile_hits = 0;
+	std::uint64_t gpu_tile_misses = 0;
+	std::uint64_t gpu_tile_uploads = 0;
+	std::uint64_t gpu_tile_upload_bytes = 0;
+	std::uint64_t gpu_tile_evictions = 0;
+	std::uint64_t gpu_palette_uploads = 0;
+
+	std::uint64_t worker_builds_started = 0;
+	std::uint64_t worker_builds_ready = 0;
+	std::uint64_t worker_builds_cancelled = 0;
+	std::uint64_t worker_payload_builds_started = 0;
+	std::uint64_t worker_payload_builds_ready = 0;
+	std::uint64_t worker_payload_builds_cancelled = 0;
+	std::uint64_t worker_superseded_requests = 0;
+};
+
+struct AudioContentTileEvent {
+	char const *stage = nullptr;
+	char const *outcome = nullptr;
+	bool spectrum = false;
+	std::uint64_t provider_generation = 0;
+	std::uint64_t analysis_generation = 0;
+	std::uint64_t tile_index = 0;
+	std::uint64_t column_count = 0;
+	std::uint64_t spectrum_bin_count = 0;
+	std::uint64_t request_serial = 0;
+	std::uint64_t bytes = 0;
+	std::uint64_t variant_revision = 0;
+	int visible = -1;
+	bool include_fft_deltas = false;
+	std::uint64_t fft_cache_hits_delta = 0;
+	std::uint64_t fft_cache_misses_delta = 0;
+	std::uint64_t fft_visible_builds_delta = 0;
+	std::uint64_t fft_cache_evictions_delta = 0;
+};
+
 bool IsEnabled();
 bool IsCategoryEnabled(Category category);
 bool ShouldSampleVideoMemory(bool force = false);
@@ -101,6 +212,8 @@ void ObserveVideoUiDuration(char const* phase, double duration_ms, int detail_a 
 void ObserveAudioUiTimerPosition(int ms);
 void ObserveAudioUiDuration(char const* phase, double duration_ms, int detail_a = -1, int detail_b = -1, bool immediate = false);
 void ObserveAudioOutputSnapshot(AudioOutputSnapshot const& snapshot);
+void ObserveAudioDisplaySnapshot(AudioDisplaySnapshot const& snapshot);
+void ObserveAudioContentTileEvent(AudioContentTileEvent const& event) noexcept;
 void ObserveVideoPlaybackTick(int frame);
 
 void TraceWindowOpenBegin(char const* window_kind);

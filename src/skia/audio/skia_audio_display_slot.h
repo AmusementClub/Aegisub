@@ -41,6 +41,8 @@ class AudioDisplaySlot final : public wxEvtHandler {
 	int visible_range_begin = 0;
 	int visible_range_end = 0;
 	std::int64_t pending_scroll_pixels = 0;
+	bool exact_scroll_left_set = false;
+	int exact_scroll_left = 0;
 
 	void CreateWxDisplay(wxWindow *replaced_window = nullptr);
 	void RequestWxFallback(std::string message);

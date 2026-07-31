@@ -1,5 +1,7 @@
 #include "audio_spectrum_analysis_cache.h"
 
+#include "audio_latest_range_scheduler.h"
+
 #ifdef WITH_FFTW3
 #include "audio_spectrum_fftw3.h"
 #endif
@@ -12,6 +14,8 @@
 #include <cmath>
 
 namespace {
+constexpr size_t kSpectrumPrefetchHardMaxBlocks = 64;
+
 void FillBlockWithBuiltinFft(
 	std::vector<float> &fft_scratch,
 	std::vector<float> const& mono_scratch,
@@ -40,7 +44,20 @@ AudioSpectrumAnalysisCache::AudioSpectrumAnalysisCache() {
 }
 
 AudioSpectrumAnalysisCache::~AudioSpectrumAnalysisCache() {
+	StopScheduler();
 	DestroyFftResources();
+}
+
+void AudioSpectrumAnalysisCache::StopScheduler() {
+	std::unique_ptr<AudioLatestRangeScheduler> old_scheduler;
+	{
+		std::lock_guard<std::mutex> lock(scheduler_mutex);
+		active_prefetch_generation.store(0, std::memory_order_release);
+		has_active_prefetch_range = false;
+		if (scheduler)
+			scheduler->Invalidate();
+		old_scheduler = std::move(scheduler);
+	}
 }
 
 void AudioSpectrumAnalysisCache::DestroyFftResources() {
@@ -136,6 +153,7 @@ void AudioSpectrumAnalysisCache::RecreateCache() {
 }
 
 void AudioSpectrumAnalysisCache::SetSource(AudioDisplaySource *new_source) {
+	StopScheduler();
 	std::lock_guard<std::mutex> build_lock(build_mutex);
 	if (source == new_source)
 		return;
@@ -144,6 +162,7 @@ void AudioSpectrumAnalysisCache::SetSource(AudioDisplaySource *new_source) {
 }
 
 void AudioSpectrumAnalysisCache::SetMixPolicy(AudioMixPolicy new_policy) {
+	StopScheduler();
 	std::lock_guard<std::mutex> build_lock(build_mutex);
 	if (mix_policy == new_policy)
 		return;
@@ -159,6 +178,7 @@ void AudioSpectrumAnalysisCache::SetCacheFormat(SpectrumCacheFormat) {
 }
 
 void AudioSpectrumAnalysisCache::SetResolution(size_t new_derivation_size, size_t new_derivation_dist) {
+	StopScheduler();
 	std::lock_guard<std::mutex> build_lock(build_mutex);
 	new_derivation_dist = std::min(new_derivation_dist, new_derivation_size);
 	if (derivation_size == new_derivation_size && derivation_dist == new_derivation_dist)
@@ -169,6 +189,8 @@ void AudioSpectrumAnalysisCache::SetResolution(size_t new_derivation_size, size_
 }
 
 void AudioSpectrumAnalysisCache::Age(size_t max_size) {
+	if (max_size == 0)
+		StopScheduler();
 	std::lock_guard<std::mutex> build_lock(build_mutex);
 	std::lock_guard<std::mutex> lock(cache_mutex);
 	if (max_size > 0) {
@@ -185,12 +207,12 @@ bool AudioSpectrumAnalysisCache::IsReady() const {
 	return source && block_count > 0 && derivation_size > 0;
 }
 
-AudioSpectrumAnalysisCache::CacheBlock AudioSpectrumAnalysisCache::BuildBlock(size_t block_index) {
+AudioSpectrumAnalysisCache::MutableBlock AudioSpectrumAnalysisCache::BuildBlock(size_t block_index) {
 	const int channels = std::max(1, source->GetChannels());
 	const size_t sample_count = WindowSampleCount();
 	const size_t hop_samples = HopSampleCount();
 	const size_t bin_count = BinCount();
-	auto block = std::make_unique<float[]>(bin_count);
+	auto block = MutableBlock(new float[bin_count], std::default_delete<float[]>());
 
 	int64_t first_sample = (static_cast<int64_t>(block_index) << derivation_dist) - (static_cast<int64_t>(1) << derivation_size);
 	bool reused_window = rolling_window_valid
@@ -293,42 +315,58 @@ void AudioSpectrumAnalysisCache::TrimLocked() {
 	}
 }
 
-const float* AudioSpectrumAnalysisCache::Get(size_t block_index) {
-	CacheBlock built;
+AudioSpectrumAnalysisCache::BlockHandle AudioSpectrumAnalysisCache::Get(size_t block_index) {
+	MutableBlock built;
 	{
 		std::lock_guard<std::mutex> lock(cache_mutex);
 		if (block_count == 0)
-			return nullptr;
+			return {};
 		block_index = std::min(block_index, block_count - 1);
 		auto block_it = cache_blocks.find(block_index);
 		if (block_it != cache_blocks.end() && block_it->second) {
 			TouchLocked(block_index);
 			++metrics_cache_hits;
-			return block_it->second.get();
+			return block_it->second;
 		}
 	}
 
 	{
-		std::lock_guard<std::mutex> build_lock(build_mutex);
+		std::unique_lock<std::mutex> build_lock(build_mutex, std::try_to_lock);
+		if (!build_lock.owns_lock()) {
+			visible_waiters.fetch_add(1, std::memory_order_acq_rel);
+			{
+				std::lock_guard<std::mutex> lock(cache_mutex);
+				++metrics_visible_lock_contention;
+			}
+			try {
+				build_lock.lock();
+			}
+			catch (...) {
+				visible_waiters.fetch_sub(1, std::memory_order_acq_rel);
+				throw;
+			}
+			visible_waiters.fetch_sub(1, std::memory_order_acq_rel);
+		}
 		{
 			std::lock_guard<std::mutex> lock(cache_mutex);
 			if (block_index >= block_count)
-				return nullptr;
+				return {};
 			auto block_it = cache_blocks.find(block_index);
 			if (block_it != cache_blocks.end() && block_it->second) {
 				TouchLocked(block_index);
 				++metrics_cache_hits;
-				return block_it->second.get();
+				return block_it->second;
 			}
 		}
 		built = BuildBlock(block_index);
 
 		std::lock_guard<std::mutex> lock(cache_mutex);
 		if (block_index >= block_count)
-			return nullptr;
+			return {};
 		auto block_it = cache_blocks.find(block_index);
 		if (block_it == cache_blocks.end() || !block_it->second) {
-			block_it = cache_blocks.emplace(block_index, std::move(built)).first;
+			BlockHandle published = std::move(built);
+			block_it = cache_blocks.emplace(block_index, std::move(published)).first;
 			current_cache_bytes += BlockBytes();
 			++current_cache_entries;
 			++metrics_cache_misses;
@@ -336,19 +374,19 @@ const float* AudioSpectrumAnalysisCache::Get(size_t block_index) {
 		}
 		TouchLocked(block_index);
 		TrimLocked();
-		return block_it->second.get();
+		return block_it->second;
 	}
-	return nullptr;
+	return {};
 }
 
-const float* AudioSpectrumAnalysisCache::GetIfReady(size_t block_index) {
+AudioSpectrumAnalysisCache::BlockHandle AudioSpectrumAnalysisCache::GetIfReady(size_t block_index) {
 	std::lock_guard<std::mutex> lock(cache_mutex);
 	if (block_count == 0 || block_index >= block_count)
-		return nullptr;
+		return {};
 	auto block_it = cache_blocks.find(block_index);
 	if (block_it == cache_blocks.end() || !block_it->second)
-		return nullptr;
-	return block_it->second.get();
+		return {};
+	return block_it->second;
 }
 
 bool AudioSpectrumAnalysisCache::AreBlocksReady(size_t first_block, size_t last_block) {
@@ -369,25 +407,207 @@ bool AudioSpectrumAnalysisCache::AreBlocksReady(size_t first_block, size_t last_
 }
 
 void AudioSpectrumAnalysisCache::Prefetch(size_t first_block, size_t last_block) {
-	if (!prefetch_enabled || !source || last_block < first_block)
+	if (!prefetch_enabled.load(std::memory_order_relaxed) || last_block < first_block)
 		return;
 	{
 		std::lock_guard<std::mutex> lock(cache_mutex);
+		if (!source || block_count == 0 || first_block >= block_count)
+			return;
+		last_block = std::min(last_block, block_count - 1);
 		++metrics_prefetch_requests;
 	}
 
-	const auto half_window = static_cast<int64_t>(BinCount());
-	const auto start_sample = std::max<int64_t>(0, (static_cast<int64_t>(first_block) << derivation_dist) - half_window);
-	const auto end_sample = std::min<int64_t>(
-		source->GetNumSamples(),
-		(static_cast<int64_t>(last_block) << derivation_dist) + half_window);
-	if (end_sample <= start_sample)
+	std::lock_guard<std::mutex> lock(scheduler_mutex);
+	if (has_active_prefetch_range
+		&& active_prefetch_first == first_block
+		&& active_prefetch_last == last_block) {
 		return;
-	source->HintFloatAudio(start_sample, end_sample - start_sample);
+	}
+	if (!scheduler) {
+		scheduler = std::make_unique<AudioLatestRangeScheduler>(
+			[this](size_t first, size_t last, uint64_t generation) {
+				ProcessPrefetch(first, last, generation);
+			});
+	}
+	auto const generation = scheduler->CurrentGeneration() + 1;
+	active_prefetch_generation.store(generation, std::memory_order_release);
+	has_active_prefetch_range = true;
+	active_prefetch_first = first_block;
+	active_prefetch_last = last_block;
+	scheduler->Request(first_block, last_block);
 }
 
 void AudioSpectrumAnalysisCache::SetPrefetchEnabled(bool enabled) {
-	prefetch_enabled = enabled;
+	prefetch_enabled.store(enabled, std::memory_order_relaxed);
+	if (!enabled)
+		StopScheduler();
+}
+
+void AudioSpectrumAnalysisCache::SetPrefetchBuildMaxBlocks(size_t max_blocks) {
+	prefetch_build_max_blocks.store(
+		std::max<size_t>(1, std::min(kSpectrumPrefetchHardMaxBlocks, max_blocks)),
+		std::memory_order_relaxed);
+}
+
+void AudioSpectrumAnalysisCache::SetReadyCallback(std::function<void()> callback) {
+	std::lock_guard<std::mutex> lock(ready_callback_mutex);
+	ready_callback = std::move(callback);
+}
+
+bool AudioSpectrumAnalysisCache::IsCurrentPrefetchGeneration(uint64_t generation) const {
+	return generation != 0
+		&& generation == active_prefetch_generation.load(std::memory_order_acquire);
+}
+
+void AudioSpectrumAnalysisCache::NotifyReady() const {
+	std::function<void()> callback;
+	{
+		std::lock_guard<std::mutex> lock(ready_callback_mutex);
+		callback = ready_callback;
+	}
+	if (!callback)
+		return;
+	try {
+		callback();
+	}
+	catch (...) {
+		LOG_W("audio/spectrum/prefetch") << "Spectrum prefetch ready callback failed";
+	}
+}
+
+void AudioSpectrumAnalysisCache::ProcessPrefetch(
+	size_t first_block,
+	size_t last_block,
+	uint64_t generation) {
+	bool built_any = false;
+	bool stale_recorded = false;
+	auto record_stale = [&] {
+		if (stale_recorded)
+			return;
+		std::lock_guard<std::mutex> lock(cache_mutex);
+		++metrics_stale_drops;
+		stale_recorded = true;
+	};
+	auto record_busy = [&] {
+		std::lock_guard<std::mutex> lock(cache_mutex);
+		++metrics_prefetch_busy_skips;
+	};
+	auto build_one = [&](size_t block_index) {
+		if (!IsCurrentPrefetchGeneration(generation)) {
+			record_stale();
+			return false;
+		}
+		{
+			std::lock_guard<std::mutex> lock(cache_mutex);
+			if (block_index >= block_count)
+				return false;
+			auto const found = cache_blocks.find(block_index);
+			if (found != cache_blocks.end() && found->second)
+				return true;
+		}
+		if (visible_waiters.load(std::memory_order_acquire) != 0) {
+			record_busy();
+			return false;
+		}
+
+		std::unique_lock<std::mutex> build_lock(build_mutex, std::try_to_lock);
+		if (!build_lock.owns_lock()) {
+			record_busy();
+			return false;
+		}
+		if (!IsCurrentPrefetchGeneration(generation)) {
+			record_stale();
+			return false;
+		}
+		{
+			std::lock_guard<std::mutex> lock(cache_mutex);
+			auto const found = cache_blocks.find(block_index);
+			if (found != cache_blocks.end() && found->second)
+				return true;
+		}
+
+		MutableBlock built;
+		try {
+			built = BuildBlock(block_index);
+		}
+		catch (...) {
+			rolling_window_valid = false;
+			record_busy();
+			return false;
+		}
+		if (!IsCurrentPrefetchGeneration(generation)) {
+			record_stale();
+			return false;
+		}
+
+		std::lock_guard<std::mutex> lock(cache_mutex);
+		if (block_index >= block_count)
+			return false;
+		auto found = cache_blocks.find(block_index);
+		if (found == cache_blocks.end() || !found->second) {
+			BlockHandle published = std::move(built);
+			found = cache_blocks.emplace(block_index, std::move(published)).first;
+			current_cache_bytes += BlockBytes();
+			++current_cache_entries;
+			++metrics_prefetch_builds;
+			built_any = true;
+		}
+		TouchLocked(block_index);
+		TrimLocked();
+		return true;
+	};
+
+	auto hint_and_build = [&](size_t range_first, size_t range_last) {
+		if (range_last < range_first || !IsCurrentPrefetchGeneration(generation))
+			return false;
+		try {
+			auto const half_window = static_cast<int64_t>(BinCount());
+			auto const start_sample = std::max<int64_t>(
+				0,
+				(static_cast<int64_t>(range_first) << derivation_dist) - half_window);
+			auto const end_sample = std::min<int64_t>(
+				source->GetNumSamples(),
+				(static_cast<int64_t>(range_last) << derivation_dist) + half_window);
+			if (end_sample > start_sample)
+				source->HintFloatAudio(start_sample, end_sample - start_sample);
+		}
+		catch (...) {
+			record_busy();
+			return false;
+		}
+		for (size_t block_index = range_first; block_index <= range_last; ++block_index) {
+			if (!build_one(block_index))
+				return false;
+		}
+		return true;
+	};
+
+	if (last_block >= first_block) {
+		auto const max_blocks = prefetch_build_max_blocks.load(std::memory_order_relaxed);
+		auto const span_minus_one = last_block - first_block;
+		if (span_minus_one < max_blocks) {
+			hint_and_build(first_block, last_block);
+		}
+		else {
+			auto const lower_count = (max_blocks + 1) / 2;
+			auto const upper_count = max_blocks - lower_count;
+			bool const lower_complete = hint_and_build(
+				first_block,
+				first_block + lower_count - 1);
+			if (lower_complete && upper_count > 0)
+				hint_and_build(last_block - upper_count + 1, last_block);
+		}
+	}
+
+	{
+		std::lock_guard<std::mutex> lock(scheduler_mutex);
+		if (IsCurrentPrefetchGeneration(generation)) {
+			active_prefetch_generation.store(0, std::memory_order_release);
+			has_active_prefetch_range = false;
+		}
+	}
+	if (built_any)
+		NotifyReady();
 }
 
 AudioSpectrumAnalysisCacheMetrics AudioSpectrumAnalysisCache::GetMetricsSnapshot() const {
@@ -397,14 +617,15 @@ AudioSpectrumAnalysisCacheMetrics AudioSpectrumAnalysisCache::GetMetricsSnapshot
 	m.cache_hits = metrics_cache_hits;
 	m.cache_misses = metrics_cache_misses;
 	m.visible_builds = metrics_visible_builds;
-	m.visible_lock_contention = 0;
+	m.visible_lock_contention = metrics_visible_lock_contention;
 	m.prefetch_requests = metrics_prefetch_requests;
-	m.prefetch_builds = 0;
-	m.prefetch_busy_skips = 0;
-	m.prefetch_enabled = prefetch_enabled;
-	m.stale_drops = 0;
+	m.prefetch_builds = metrics_prefetch_builds;
+	m.prefetch_busy_skips = metrics_prefetch_busy_skips;
+	m.prefetch_enabled = prefetch_enabled.load(std::memory_order_relaxed);
+	m.stale_drops = metrics_stale_drops;
 	m.evictions = metrics_evictions;
 	m.cache_entries = current_cache_entries;
 	m.cache_bytes = current_cache_bytes;
+	m.cache_budget_bytes = max_cache_bytes;
 	return m;
 }

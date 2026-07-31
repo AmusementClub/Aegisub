@@ -2,10 +2,16 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
 namespace aegisub::skia::audio {
+
+inline constexpr std::size_t kDefaultContentCacheBudgetBytes = 32 * 1024 * 1024;
+inline constexpr std::size_t kDefaultUploadPayloadCacheBudgetBytes = 8 * 1024 * 1024;
+inline constexpr std::size_t kMinimumSpectrumAnalysisBudgetBytes = 8 * 1024 * 1024;
+inline constexpr std::uint32_t kMaximumContentPrefetchTileCount = 4;
 
 enum class ContentKind {
 	Waveform,
@@ -80,7 +86,11 @@ class ContentTileStore final {
 	std::unique_ptr<Impl> impl;
 
 public:
-	explicit ContentTileStore(std::size_t budget_bytes = 32 * 1024 * 1024);
+	using EvictionCallback = std::function<void(ContentTileKey const&, std::size_t)>;
+
+	explicit ContentTileStore(
+		std::size_t budget_bytes = kDefaultContentCacheBudgetBytes,
+		EvictionCallback eviction_callback = {});
 	~ContentTileStore();
 
 	ContentTileStore(ContentTileStore const&) = delete;
@@ -109,6 +119,25 @@ struct ContentViewportRequest {
 	friend bool operator==(ContentViewportRequest const&, ContentViewportRequest const&) = default;
 };
 
+struct ContentCacheBudgetPlan {
+	std::size_t configured_total_bytes = 0;
+	std::size_t effective_total_bytes = 0;
+	std::size_t visible_bytes = 0;
+	std::size_t prefetch_bytes = 0;
+	std::size_t content_budget_bytes = 0;
+	std::size_t payload_visible_bytes = 0;
+	std::size_t payload_prefetch_bytes = 0;
+	std::size_t payload_budget_bytes = 0;
+	std::size_t spectrum_analysis_budget_bytes = 0;
+	bool soft_limit_exceeded = false;
+	bool valid = false;
+};
+
 std::vector<ContentTileKey> PlanVisibleContentTiles(ContentViewportRequest const& request);
+std::size_t EstimateContentTileBytes(ContentTileKey const& key) noexcept;
+ContentCacheBudgetPlan PlanContentCacheBudget(
+	ContentViewportRequest const& request,
+	std::size_t configured_total_bytes,
+	std::uint32_t spectrum_output_height = 0);
 
 }

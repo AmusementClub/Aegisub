@@ -16,6 +16,10 @@
 #include <stdexcept>
 #include <vector>
 
+namespace perf_trace {
+void SetAudioCategoryEnabledForSmoke(bool enabled) noexcept;
+}
+
 namespace {
 
 class HiddenGlWindow final {
@@ -129,6 +133,34 @@ bool PixelIsColor(
 		&& pixels[offset + 3] >= 250;
 }
 
+bool ColumnContainsColor(
+	std::vector<unsigned char> const& pixels,
+	int width,
+	int height,
+	int x,
+	unsigned char red,
+	unsigned char green,
+	unsigned char blue) {
+	for (int y = 0; y < height; ++y)
+		if (PixelIsColor(pixels, width, x, y, red, green, blue))
+			return true;
+	return false;
+}
+
+bool NearbyColumnsContainColor(
+	std::vector<unsigned char> const& pixels,
+	int width,
+	int height,
+	int x,
+	unsigned char red,
+	unsigned char green,
+	unsigned char blue) {
+	for (int candidate = std::max(0, x - 1); candidate <= std::min(width - 1, x + 1); ++candidate)
+		if (ColumnContainsColor(pixels, width, height, candidate, red, green, blue))
+			return true;
+	return false;
+}
+
 std::vector<unsigned char> ReadBack(aegisub::skia::audio::FrameTarget const& target) {
 	std::vector<unsigned char> pixels(static_cast<std::size_t>(target.width) * target.height * 4);
 	glReadBuffer(GL_BACK);
@@ -138,7 +170,7 @@ std::vector<unsigned char> ReadBack(aegisub::skia::audio::FrameTarget const& tar
 	return pixels;
 }
 
-std::shared_ptr<aegisub::skia::audio::ContentTile const> MakeWaveformTile(
+std::shared_ptr<aegisub::skia::audio::ContentUploadPayload const> MakeWaveformTile(
 	aegisub::skia::audio::ContentGeneration generation,
 	std::uint64_t tile_index,
 	std::uint32_t columns) {
@@ -151,7 +183,10 @@ std::shared_ptr<aegisub::skia::audio::ContentTile const> MakeWaveformTile(
 		auto const peak = 0.25f + phase * 0.65f;
 		tile->waveform[x] = { -peak, peak, -peak * 0.38f, peak * 0.38f };
 	}
-	return tile;
+	auto built = BuildWaveformUploadPayload(*tile);
+	if (built.status != ContentUploadPayloadBuildStatus::Ready || !built.payload)
+		throw std::runtime_error("failed to build waveform upload payload");
+	return std::move(built.payload);
 }
 
 std::shared_ptr<aegisub::skia::audio::ContentTile const> MakeSpectrumTile(
@@ -278,7 +313,7 @@ bool ValidateSpectrumContent(
 	aegisub::skia::audio::PresenterMetrics& final_metrics) {
 	using namespace aegisub::skia::audio;
 	ContentGeneration const generation { 7, 11 };
-	auto tile = MakeSpectrumTile(generation, 0, 96, 32);
+	auto raw_tile = MakeSpectrumTile(generation, 0, 96, 32);
 	Presenter presenter(FailureInjection::None);
 	ContentFrame frame;
 	frame.generation = generation;
@@ -288,7 +323,10 @@ bool ValidateSpectrumContent(
 	frame.background_color = 0xFF101010;
 	frame.spectrum_palette = MakePalette(1, false);
 	frame.spectrum_band_plan = MakeBandPlan(32, target.height, SpectrumScaleMode::LegacyLinear);
-	frame.tiles = { tile };
+	auto first_payload = BuildSpectrumUploadPayload(*raw_tile, *frame.spectrum_band_plan);
+	if (first_payload.status != ContentUploadPayloadBuildStatus::Ready || !first_payload.payload)
+		return false;
+	frame.tiles = { first_payload.payload };
 
 	if (!presenter.RenderContentFrame(context, target, frame)) {
 		std::cerr << presenter.TakeFailureLogMessage() << '\n';
@@ -311,6 +349,10 @@ bool ValidateSpectrumContent(
 		return false;
 	}
 	frame.spectrum_band_plan = MakeBandPlan(32, target.height, SpectrumScaleMode::FrequencyCurve);
+	auto second_payload = BuildSpectrumUploadPayload(*raw_tile, *frame.spectrum_band_plan);
+	if (second_payload.status != ContentUploadPayloadBuildStatus::Ready || !second_payload.payload)
+		return false;
+	frame.tiles = { second_payload.payload };
 	if (!presenter.RenderContentFrame(context, target, frame)) {
 		std::cerr << "spectrum band-plan change failed to remap retained power\n";
 		return false;
@@ -338,6 +380,7 @@ bool ValidateFrameLayerComposition(
 	Presenter presenter(FailureInjection::None);
 	ContentFrame frame;
 	frame.generation = generation;
+	frame.static_revision = 1;
 	frame.kind = ContentKind::Waveform;
 	frame.x = 0.f;
 	frame.y = 20.f;
@@ -368,7 +411,7 @@ bool ValidateFrameLayerComposition(
 	scrollbar->thumb_color = 0xFFB0B0B0;
 	scrollbar->selection_color = 0xFFFFFFFF;
 	frame.scrollbar = scrollbar;
-	frame.markers.push_back({ target.width * 0.25f, 0xFFFFFFFF, 2, 3 });
+	frame.markers.push_back({ target.width * 0.25f, 0xFFFF00FF, 2, 3 });
 	frame.labels.push_back({ target.width * 0.5f, target.width * 0.25f, "label" });
 	auto cursor = std::make_shared<CursorFrame>();
 	cursor->x = target.width * 0.75f;
@@ -380,17 +423,185 @@ bool ValidateFrameLayerComposition(
 		std::cerr << presenter.TakeFailureLogMessage() << '\n';
 		return false;
 	}
-	auto const pixels = ReadBack(target);
-	bool const passed = ContainsColor(pixels, 32, 32, 64)
-		&& ContainsColor(pixels, 64, 32, 32)
-		&& ContainsColor(pixels, 16, 32, 48)
-		&& ContainsColor(pixels, 48, 48, 48)
-		&& ContainsColor(pixels, 255, 255, 0)
+	auto const initial_pixels = ReadBack(target);
+	auto const initial_metrics = presenter.Metrics();
+	auto const initial_trace = initial_metrics.last_frame_trace;
+	bool const initial_composition_valid = ContainsColor(initial_pixels, 32, 32, 64)
+		&& ContainsColor(initial_pixels, 64, 32, 32)
+		&& ContainsColor(initial_pixels, 16, 32, 48)
+		&& ContainsColor(initial_pixels, 48, 48, 48)
+		&& ContainsColor(initial_pixels, 255, 0, 255)
+		&& ContainsColor(initial_pixels, 255, 255, 0)
 		// Selection overlaps the thumb in this frame. The wx-compatible
 		// z-order requires the thumb to remain the visible top layer.
-		&& PixelIsColor(pixels, target.width, 30, 7, 176, 176, 176);
+		&& PixelIsColor(initial_pixels, target.width, 30, 7, 176, 176, 176)
+		&& initial_trace.valid
+		&& initial_trace.base_layer_rebuild_ms >= 0.0
+		&& initial_trace.marker_layer_rebuild_ms >= 0.0
+		&& initial_trace.label_layer_rebuild_ms >= 0.0
+		&& initial_trace.scrollbar_layer_rebuild_ms >= 0.0
+		&& initial_trace.frame_compose_ms >= initial_trace.base_layer_rebuild_ms;
+	if (!initial_composition_valid)
+		std::cerr << "initial retained layer composition was invalid\n";
+
+	auto const old_cursor_x = static_cast<int>(cursor->x);
+	cursor->x = target.width * 0.625f;
+	auto const new_cursor_x = static_cast<int>(cursor->x);
+	if (!presenter.RenderCursorFrame(context, target, frame)) {
+		std::cerr << "retained cursor-only frame failed\n";
+		presenter.Release(context);
+		return false;
+	}
+	auto const cursor_pixels = ReadBack(target);
+	auto const cursor_metrics = presenter.Metrics();
+	auto const cursor_trace = cursor_metrics.last_frame_trace;
+	bool const old_cursor_cleared = !NearbyColumnsContainColor(
+		cursor_pixels, target.width, target.height, old_cursor_x, 255, 255, 0);
+	bool const new_cursor_visible = NearbyColumnsContainColor(
+		cursor_pixels, target.width, target.height, new_cursor_x, 255, 255, 0);
+	bool const cursor_metrics_valid = cursor_metrics.content_tiles_drawn == initial_metrics.content_tiles_drawn
+		&& cursor_metrics.content_uploads == initial_metrics.content_uploads
+		&& cursor_metrics.content_upload_bytes == initial_metrics.content_upload_bytes
+		&& cursor_trace.valid
+		&& cursor_trace.retained_layers_reused
+		&& cursor_trace.cursor_only
+		&& cursor_trace.base_layer_rebuild_ms < 0.0
+		&& cursor_trace.marker_layer_rebuild_ms < 0.0
+		&& cursor_trace.label_layer_rebuild_ms < 0.0
+		&& cursor_trace.scrollbar_layer_rebuild_ms < 0.0;
+	if (!old_cursor_cleared)
+		std::cerr << "old retained cursor pixels remained visible\n";
+	if (!new_cursor_visible)
+		std::cerr << "new retained cursor was not visible\n";
+	if (!cursor_metrics_valid)
+		std::cerr << "cursor-only trace or cache metrics were invalid\n";
+
+	auto const old_marker_x = static_cast<int>(frame.markers[0].x);
+	frame.markers[0].x = target.width * 0.375f;
+	auto const new_marker_x = static_cast<int>(frame.markers[0].x);
+	if (!presenter.RenderRetainedOverlayFrame(
+		context, target, frame, Layer::Marker | Layer::Cursor)) {
+		std::cerr << "retained marker/cursor overlay frame failed\n";
+		presenter.Release(context);
+		return false;
+	}
+	auto const marker_pixels = ReadBack(target);
+	auto const marker_metrics = presenter.Metrics();
+	auto const marker_trace = marker_metrics.last_frame_trace;
+	bool const old_marker_cleared = !NearbyColumnsContainColor(
+		marker_pixels, target.width, target.height, old_marker_x, 255, 0, 255);
+	bool const new_marker_visible = NearbyColumnsContainColor(
+		marker_pixels, target.width, target.height, new_marker_x, 255, 0, 255);
+	bool const marker_metrics_valid = marker_metrics.content_tiles_drawn == initial_metrics.content_tiles_drawn
+		&& marker_metrics.content_uploads == initial_metrics.content_uploads
+		&& marker_metrics.content_upload_bytes == initial_metrics.content_upload_bytes
+		&& marker_trace.valid
+		&& marker_trace.retained_layers_reused
+		&& !marker_trace.cursor_only
+		&& marker_trace.base_layer_rebuild_ms < 0.0
+		&& marker_trace.marker_layer_rebuild_ms >= 0.0
+		&& marker_trace.label_layer_rebuild_ms < 0.0
+		&& marker_trace.scrollbar_layer_rebuild_ms < 0.0;
+	if (!old_marker_cleared)
+		std::cerr << "old retained marker pixels remained visible\n";
+	if (!new_marker_visible)
+		std::cerr << "new retained marker was not visible\n";
+	if (!marker_metrics_valid)
+		std::cerr << "marker overlay trace or cache metrics were invalid\n";
+
+	frame.static_revision = 2;
+	if (!presenter.RenderContentFrame(context, target, frame)) {
+		std::cerr << "full cursor reference frame failed\n";
+		presenter.Release(context);
+		return false;
+	}
+	auto const reference_pixels = ReadBack(target);
+	bool const retained_output_matches_full_frame = marker_pixels == reference_pixels;
+	if (!retained_output_matches_full_frame)
+		std::cerr << "retained overlay pixels differed from full-frame composition\n";
+
+	auto mismatch = frame;
+	++mismatch.static_revision;
+	auto const before_mismatch = presenter.Metrics();
+	bool const mismatch_rejected = !presenter.RenderCursorFrame(context, target, mismatch);
+	auto const after_mismatch = presenter.Metrics();
+	bool const mismatch_skipped_frame_begin = after_mismatch.submits == before_mismatch.submits
+		&& after_mismatch.surface_acquisitions == before_mismatch.surface_acquisitions;
+	if (!mismatch_rejected || !mismatch_skipped_frame_begin)
+		std::cerr << "retained-key mismatch was not rejected before frame begin\n";
+	bool const passed = initial_composition_valid
+		&& old_cursor_cleared
+		&& new_cursor_visible
+		&& cursor_metrics_valid
+		&& old_marker_cleared
+		&& new_marker_visible
+		&& marker_metrics_valid
+		&& retained_output_matches_full_frame
+		&& mismatch_rejected
+		&& mismatch_skipped_frame_begin;
 	presenter.Release(context);
 	return passed;
+}
+
+bool ValidateContentTraceSubmitFailure(
+	aegisub::skia::audio::FrameTarget const& target,
+	SkiaGlContextToken context) {
+	using namespace aegisub::skia::audio;
+	ContentGeneration const generation { 29, 31 };
+	Presenter presenter(FailureInjection::FlushSubmit);
+	ContentFrame frame;
+	frame.generation = generation;
+	frame.kind = ContentKind::Waveform;
+	frame.width = static_cast<float>(target.width);
+	frame.height = static_cast<float>(target.height);
+	frame.tiles = { MakeWaveformTile(generation, 0, 64) };
+	if (presenter.RenderContentFrame(context, target, frame)) {
+		std::cerr << "flush injection unexpectedly presented a content frame\n";
+		return false;
+	}
+	if (presenter.LastFailure() != SkiaGlDeviceFailure::FlushInjected) {
+		std::cerr << "content flush injection reported the wrong failure\n";
+		return false;
+	}
+	if (presenter.Metrics().last_frame_trace.valid) {
+		std::cerr << "failed content submit published a successful frame trace\n";
+		return false;
+	}
+	return true;
+}
+
+bool ValidateDeferredContentSubmitFailure(
+	aegisub::skia::audio::FrameTarget const& target,
+	SkiaGlContextToken context) {
+	using namespace aegisub::skia::audio;
+	ContentGeneration const generation { 37, 41 };
+	Presenter presenter(FailureInjection::None);
+	ContentFrame frame;
+	frame.generation = generation;
+	frame.static_revision = 1;
+	frame.kind = ContentKind::Waveform;
+	frame.width = static_cast<float>(target.width);
+	frame.height = static_cast<float>(target.height);
+	frame.tiles = { MakeWaveformTile(generation, 0, 64) };
+	if (!presenter.RenderContentFrame(context, target, frame)) {
+		std::cerr << "deferred failure baseline content frame did not present\n";
+		return false;
+	}
+	auto const baseline = presenter.Metrics();
+	presenter.SetFailureInjection(FailureInjection::FlushSubmit);
+	++frame.static_revision;
+	if (presenter.RenderContentFrame(context, target, frame)) {
+		std::cerr << "deferred flush injection unexpectedly presented a content frame\n";
+		return false;
+	}
+	auto const failed = presenter.Metrics();
+	if (presenter.LastFailure() != SkiaGlDeviceFailure::FlushInjected
+		|| failed.submits != baseline.submits
+		|| failed.last_frame_trace.valid) {
+		std::cerr << "deferred content failure did not preserve the successful baseline contract\n";
+		return false;
+	}
+	return true;
 }
 
 bool ValidateInjectedFailure(
@@ -461,8 +672,14 @@ int main() try {
 	PresenterMetrics spectrum_metrics;
 	if (!ValidateSpectrumContent(target, context, spectrum_metrics))
 		throw std::runtime_error("spectrum retained content smoke failed");
+	perf_trace::SetAudioCategoryEnabledForSmoke(true);
 	if (!ValidateFrameLayerComposition(target, context))
 		throw std::runtime_error("audio frame layer composition smoke failed");
+	if (!ValidateContentTraceSubmitFailure(target, context))
+		throw std::runtime_error("audio content trace failure smoke failed");
+	if (!ValidateDeferredContentSubmitFailure(target, context))
+		throw std::runtime_error("audio deferred content failure smoke failed");
+	perf_trace::SetAudioCategoryEnabledForSmoke(false);
 
 	bool passed = true;
 	passed = ValidateInjectedFailure(

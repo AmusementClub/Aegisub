@@ -8,6 +8,8 @@
 
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Windows.Automation;
 using Aegisub.GuiAutomation.Driver;
@@ -74,6 +76,7 @@ static int Run(string[] args)
         ? Path.Combine(root, "profile")
         : Path.Combine(output, "profile");
     PrepareRunArtifacts(output, profile);
+    PrepareFontSelectorProfile(profile);
     Console.WriteLine($"uia.correctness.artifacts={output}");
     var startInfo = new ProcessStartInfo
     {
@@ -137,6 +140,13 @@ static int Run(string[] args)
         Console.WriteLine("uia.correctness.observable_state_change=true");
         UiaDriver.ThrowIfFatalDialog(process);
 
+        VerifyFontSelectors(
+            window,
+            process,
+            output,
+            TimeSpan.FromSeconds(timeoutSeconds));
+        UiaDriver.ThrowIfFatalDialog(process);
+
         var screenshot = Path.Combine(output, "correctness-main-window.png");
         var capture = ScreenCapture.SaveWindowPng(window, screenshot);
         Console.WriteLine($"uia.correctness.capture={screenshot}");
@@ -163,6 +173,720 @@ static int Run(string[] args)
     return 0;
 }
 
+static void VerifyFontSelectors(
+    AutomationElement mainWindow,
+    Process process,
+    string output,
+    TimeSpan timeout)
+{
+    var stylesCommand = UiaDriver.FindEnabledInvokableButtonByAutomationId(
+            mainWindow,
+            "Item 5014",
+            "Open the styles manager")
+        ?? throw new InvalidOperationException("The Styles Manager command was not found");
+    var stylesInvoke = Task.Run(() => UiaDriver.Invoke(stylesCommand));
+    var stylesManager = WaitForWindow(process, timeout, "Styles Manager");
+
+    var currentStyle = FindSelectedListItem(stylesManager, "Default")
+        ?? throw new InvalidOperationException(
+            "The selected current-script Default style was not found");
+    if (!currentStyle.TryGetCurrentPattern(SelectionItemPattern.Pattern, out var currentPattern))
+        throw new InvalidOperationException("The current style is not UIA-selectable");
+    ((SelectionItemPattern)currentPattern).Select();
+
+    var edit = UiaDriver.FindEnabledInvokableButton(stylesManager, "Edit")
+        ?? throw new InvalidOperationException(
+            "The current-script Style Editor command was not found");
+    var editInvoke = Task.Run(() => UiaDriver.Invoke(edit));
+    var styleEditor = WaitForDialogWithProviderCheck(
+        process, timeout, "Style Editor");
+    VerifyFontSelector(
+        styleEditor,
+        process,
+        output,
+        "style_editor",
+        timeout);
+    CloseDialog(styleEditor, "Cancel");
+    WaitForTask(editInvoke, timeout, "Style Editor did not close");
+
+    CloseDialog(stylesManager, "Close");
+    WaitForTask(stylesInvoke, timeout, "Styles Manager did not close");
+
+    process.Refresh();
+    if (process.MainWindowHandle == 0)
+        throw new InvalidOperationException(
+            "Aegisub lost its main window after Styles Manager closed");
+    mainWindow = AutomationElement.FromHandle(process.MainWindowHandle);
+    var fontFaceCommand = UiaDriver.FindEnabledInvokableButtonByAutomationId(
+            mainWindow,
+            "6000",
+            "Font Face")
+        ?? throw new InvalidOperationException("The Font Face command was not found");
+    Console.WriteLine("uia.correctness.font_face_entry=button");
+    var fontFaceInvoke = Task.Run(() => UiaDriver.Invoke(fontFaceCommand));
+    var selectFont = WaitForDialogWithProviderCheck(
+        process, timeout, "Select Font");
+    VerifyFontSelector(
+        selectFont,
+        process,
+        output,
+        "select_font",
+        timeout);
+    CloseDialog(selectFont, "Cancel");
+    WaitForTask(fontFaceInvoke, timeout, "Select Font did not close");
+    Console.WriteLine("uia.correctness.font_selectors=true");
+}
+
+static void VerifyFontSelector(
+    AutomationElement dialog,
+    Process process,
+    string output,
+    string label,
+    TimeSpan timeout)
+{
+    var combo = FindEditableComboBox(dialog)
+        ?? throw new InvalidOperationException(
+            $"The editable font selector was not found in {dialog.Current.Name}");
+    if (!combo.TryGetCurrentPattern(ValuePattern.Pattern, out var valueObject))
+        throw new InvalidOperationException("The font selector has no ValuePattern");
+    var value = (ValuePattern)valueObject;
+    if (value.Current.IsReadOnly)
+        throw new InvalidOperationException("The font selector is read-only");
+    if (!combo.TryGetCurrentPattern(
+            ExpandCollapsePattern.Pattern,
+            out var expandObject))
+        throw new InvalidOperationException(
+            "The font selector has no ExpandCollapsePattern");
+    var expand = (ExpandCollapsePattern)expandObject;
+
+    UiaDriver.FocusAndVerify(dialog, process, TimeSpan.FromSeconds(5));
+    combo.SetFocus();
+    // Each pass uses a distinct contains-hit in a different list region so a
+    // retype cannot pass by reusing leftover highlight state, and so native
+    // autoselect anchored on the previous match is exposed if not reset.
+    const string query1 = "rial";
+    const string expected1 = "Arial";
+    // pass2 (EM_REPLACESEL path): short, unambiguous rank-2 contains hit,
+    // guaranteed installed on Windows, far from the Arial region.
+    const string query2 = "nsol";
+    const string expected2 = "Consolas";
+    var comboHwnd = new IntPtr(combo.Current.NativeWindowHandle);
+
+    // Cycle the user reported:
+    //   type → open list → close list → clear → retype (other font) → open list
+    // Edit must stay as the typed query unless the user explicitly selects;
+    // list caret must jump to the contains match each time the list opens.
+    ClearComboEdit(combo);
+    WaitForValue(combo, string.Empty, timeout);
+
+    // --- pass 1: type + expand ---
+    TypeIntoCombo(combo, query1, charByChar: true);
+    ExpectEdit(combo, query1, label, "after_type", timeout);
+
+    expand.Expand();
+    var samples1 = SampleHighlightTimeline(
+        combo, process, query1, expected1, $"{label}_pass1");
+    AssertHighlightSettled(dialog, samples1, query1, expected1, label, "pass1");
+    Console.WriteLine(
+        $"uia.correctness.{label}_pass1_timeline={FormatHighlightTimeline(samples1)}");
+
+    // Close without selecting — edit must remain the typed query.
+    CollapseCombo(expand);
+    Thread.Sleep(200);
+    ExpectEdit(combo, query1, label, "after_close", timeout);
+    if (NativeKeyboard.IsComboDropped(comboHwnd))
+        throw new InvalidOperationException(
+            $"{dialog.Current.Name} drop-down still open after close");
+
+    // --- clear, retype a different font, expand again ---
+    ClearComboEdit(combo);
+    WaitForValue(combo, string.Empty, timeout);
+    Console.WriteLine($"uia.correctness.{label}_after_clear=");
+
+    TypeIntoCombo(combo, query2, charByChar: true);
+    ExpectEdit(combo, query2, label, "after_retype", timeout);
+
+    expand.Expand();
+    var samples2 = SampleHighlightTimeline(
+        combo, process, query2, expected2, $"{label}_pass2");
+    AssertHighlightSettled(dialog, samples2, query2, expected2, label, "pass2");
+    Console.WriteLine(
+        $"uia.correctness.{label}_pass2_timeline={FormatHighlightTimeline(samples2)}");
+
+    // Close and start fresh so pass2b begins from a closed state, matching the
+    // user's "close → clear → retype" cycle.
+    CollapseCombo(expand);
+    Thread.Sleep(200);
+    if (NativeKeyboard.IsComboDropped(comboHwnd))
+        throw new InvalidOperationException(
+            $"{dialog.Current.Name} drop-down still open after pass2 close");
+
+    // --- pass 2b: WM_CHAR (native-key path) backward-jump retype ---
+    // EM_REPLACESEL writes the edit directly and bypasses the native CBS_DROPDOWN
+    // auto-select that fires on real WM_CHAR keystrokes. pass2b types via WM_CHAR
+    // to the EDIT child, which IS dispatched through the native EDIT wndproc and
+    // triggers auto-select — reproducing the user's real-keyboard path without
+    // the foreground-focus flakiness of SendInput. The bug specifically needs a
+    // BACKWARD jump: type a query whose match is far down the list (queryFar),
+    // then type a query whose match is ABOVE it (queryNear). Native auto-select
+    // only searches forward from the caret, so without a caret reset the
+    // highlight stays stranded on queryFar and never reaches queryNear. This
+    // mirrors the user's "skip → fot" cycle (fot's first match sorts before
+    // skip's match) using robust core Windows fonts.
+    const string queryFar = "ahom";   // -> Tahoma (T region)
+    const string expectedFar = "Tahoma";
+    const string queryNear = "nsol";  // -> Consolas (C region, before Tahoma)
+    const string expectedNear = "Consolas";
+
+    ClearComboEdit(combo);
+    WaitForValue(combo, string.Empty, timeout);
+    Console.WriteLine($"uia.correctness.{label}_pass2b_after_clear=");
+
+    // Step 1: WM_CHAR type the far query, expand, verify it lands there.
+    NativeKeyboard.TypeCharsViaComboKeys(comboHwnd, queryFar);
+    ExpectEdit(combo, queryFar, label, "pass2b_after_far_retype", timeout);
+    expand.Expand();
+    var samplesFar = SampleHighlightTimeline(
+        combo, process, queryFar, expectedFar, $"{label}_pass2b_far");
+    AssertHighlightSettled(dialog, samplesFar, queryFar, expectedFar, label, "pass2b_far");
+    Console.WriteLine(
+        $"uia.correctness.{label}_pass2b_far_timeline={FormatHighlightTimeline(samplesFar)}");
+    CollapseCombo(expand);
+    Thread.Sleep(200);
+
+    // Step 2: clear and type the near query (above the far match) via WM_CHAR,
+    // then expand. Highlight MUST jump backward to the near match.
+    ClearComboEdit(combo);
+    WaitForValue(combo, string.Empty, timeout);
+    NativeKeyboard.TypeCharsViaComboKeys(comboHwnd, queryNear);
+    ExpectEdit(combo, queryNear, label, "pass2b_after_near_retype", timeout);
+    expand.Expand();
+    var samplesNear = SampleHighlightTimeline(
+        combo, process, queryNear, expectedNear, $"{label}_pass2b_near");
+    AssertHighlightSettled(dialog, samplesNear, queryNear, expectedNear, label, "pass2b_near");
+    Console.WriteLine(
+        $"uia.correctness.{label}_pass2b_near_timeline={FormatHighlightTimeline(samplesNear)}");
+    Console.WriteLine(
+        $"uia.correctness.{label}_pass2b_backward_jump_verified={expectedNear}");
+
+    CollapseCombo(expand);
+
+    // --- explicit selection commit ---
+    // Selecting a real item after contains matching must replace the typed
+    // query with the chosen family. Choose a second matching row so UIA must
+    // perform a selection change rather than treating the provisional caret
+    // as already selected.
+    ClearComboEdit(combo);
+    WaitForValue(combo, string.Empty, timeout);
+    TypeIntoCombo(combo, query1, charByChar: true);
+    ExpectEdit(combo, query1, label, "before_explicit_select", timeout);
+    expand.Expand();
+    WaitForHighlightedListItem(combo, process, expected1, timeout);
+    const string committedFont = "Arial Black";
+    var committedItem = FindListItem(
+            combo, committedFont, requireSelected: false)
+        ?? throw new InvalidOperationException(
+            $"The selectable font item '{committedFont}' was not found");
+    if (!committedItem.TryGetCurrentPattern(
+            SelectionItemPattern.Pattern,
+            out var committedSelectionObject))
+        throw new InvalidOperationException(
+            $"The font item '{committedFont}' is not UIA-selectable");
+    var selectionPattern = (SelectionItemPattern)committedSelectionObject;
+    selectionPattern.Select();
+    Thread.Sleep(250);
+    var postSelectValue = value.Current.Value ?? string.Empty;
+    Console.WriteLine(
+        $"uia.correctness.{label}_post_select=" +
+        $"edit='{postSelectValue}';" +
+        $"native='{NativeKeyboard.GetComboHighlightText(comboHwnd) ?? string.Empty}';" +
+        $"dropped={NativeKeyboard.IsComboDropped(comboHwnd)};" +
+        $"selected={selectionPattern.Current.IsSelected}");
+    var committedValue = WaitForValue(combo, committedFont, timeout);
+    if (string.IsNullOrEmpty(committedValue))
+        throw new InvalidOperationException(
+            $"{dialog.Current.Name} cleared the explicitly selected font");
+    Console.WriteLine(
+        $"uia.correctness.{label}_explicit_selection={committedValue}");
+
+    var screenshot = Path.Combine(output, $"correctness-{label}.png");
+    var capture = ScreenCapture.SaveWindowPng(dialog, screenshot);
+    Console.WriteLine(
+        $"uia.correctness.{label}_capture={capture.Width}x{capture.Height};" +
+        $"non_black_pixels={capture.NonBlackPixelCount}");
+}
+
+static void ExpectEdit(
+    AutomationElement combo,
+    string expectedEdit,
+    string label,
+    string phase,
+    TimeSpan timeout)
+{
+    var actual = WaitForValue(combo, expectedEdit, timeout);
+    Console.WriteLine($"uia.correctness.{label}_{phase}={actual}");
+    if (!string.Equals(actual, expectedEdit, StringComparison.Ordinal))
+        throw new InvalidOperationException(
+            $"Edit at {phase} is '{actual}', expected typed '{expectedEdit}' " +
+            "(must not auto-complete / fill the match name until explicit select)");
+}
+
+static void AssertHighlightSettled(
+    AutomationElement dialog,
+    List<(int Ms, string Edit, string Sel, int ListCount, bool Match, bool Lost)> samples,
+    string query,
+    string expected,
+    string label,
+    string pass)
+{
+    var afterExpand = samples[^1].Edit;
+    Console.WriteLine($"uia.correctness.{label}_{pass}_after_expand={afterExpand}");
+    if (!string.Equals(afterExpand, query, StringComparison.Ordinal))
+        throw new InvalidOperationException(
+            $"{dialog.Current.Name} {pass}: edit on expand is '{afterExpand}', " +
+            $"expected typed '{query}'");
+
+    var listCount = samples.Max(s => s.ListCount);
+    Console.WriteLine($"uia.correctness.{label}_{pass}_list_count={listCount}");
+    if (listCount < 20)
+        throw new InvalidOperationException(
+            $"{dialog.Current.Name} {pass}: font list looks filtered ({listCount} items)");
+
+    if (samples.Any(s => s.Lost))
+        throw new InvalidOperationException(
+            $"{dialog.Current.Name} {pass}: highlight jumped to '{expected}' then snapped away: " +
+            FormatHighlightTimeline(samples));
+    if (!samples.Any(s => s.Match))
+        throw new InvalidOperationException(
+            $"{dialog.Current.Name} {pass}: highlight never settled on '{expected}': " +
+            FormatHighlightTimeline(samples));
+    if (!samples[^1].Match)
+        throw new InvalidOperationException(
+            $"{dialog.Current.Name} {pass}: highlight not on '{expected}' after settle: " +
+            FormatHighlightTimeline(samples));
+
+    // Edit must stay typed for every sample in this open.
+    foreach (var sample in samples)
+    {
+        if (!string.Equals(sample.Edit, query, StringComparison.Ordinal)
+            && sample.ListCount > 0)
+            throw new InvalidOperationException(
+                $"{dialog.Current.Name} {pass}: edit became '{sample.Edit}' at {sample.Ms}ms " +
+                $"(expected typed '{query}'); " + FormatHighlightTimeline(samples));
+    }
+
+    Console.WriteLine($"uia.correctness.{label}_{pass}_highlighted={expected}");
+}
+
+static void CollapseCombo(ExpandCollapsePattern expand)
+{
+    try
+    {
+        expand.Collapse();
+    }
+    catch (InvalidOperationException)
+    {
+    }
+    catch (ElementNotAvailableException)
+    {
+    }
+}
+
+static void ClearComboEdit(AutomationElement combo)
+{
+    var comboHwnd = new IntPtr(combo.Current.NativeWindowHandle);
+    var editHwnd = NativeKeyboard.GetComboEditHwnd(comboHwnd);
+    if (editHwnd == IntPtr.Zero)
+        editHwnd = comboHwnd;
+    combo.SetFocus();
+    Thread.Sleep(50);
+    NativeKeyboard.SetEditText(editHwnd, string.Empty);
+    Thread.Sleep(100);
+}
+
+static void TypeIntoCombo(AutomationElement combo, string text, bool charByChar)
+{
+    var comboHwnd = new IntPtr(combo.Current.NativeWindowHandle);
+    if (comboHwnd == IntPtr.Zero)
+        throw new InvalidOperationException("Font combo has no native HWND");
+    combo.SetFocus();
+    Thread.Sleep(50);
+    // Prefer the real EDIT child from COMBOBOXINFO; UIA child lookup can miss it.
+    var editHwnd = NativeKeyboard.GetComboEditHwnd(comboHwnd);
+    if (editHwnd == IntPtr.Zero)
+    {
+        var edit = combo.FindFirst(
+            TreeScope.Descendants,
+            new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.Edit));
+        if (edit is not null)
+            editHwnd = new IntPtr(edit.Current.NativeWindowHandle);
+    }
+    if (editHwnd == IntPtr.Zero)
+        editHwnd = comboHwnd;
+    Console.WriteLine(
+        $"uia.correctness.font_combo_hwnd=0x{comboHwnd.ToInt64():X};edit_hwnd=0x{editHwnd.ToInt64():X}");
+    if (charByChar)
+        NativeKeyboard.TypeCharsOneByOne(editHwnd, text);
+    else
+        NativeKeyboard.TypeCharsViaWindowMessage(editHwnd, text);
+}
+
+static int CountListItems(Process process)
+{
+    var root = AutomationElement.RootElement;
+    var condition = new AndCondition(
+        new PropertyCondition(AutomationElement.ProcessIdProperty, process.Id),
+        new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem));
+    return root.FindAll(TreeScope.Descendants, condition).Count;
+}
+
+static AutomationElement? FindEditableComboBox(AutomationElement root)
+{
+    var combos = root.FindAll(
+        TreeScope.Descendants,
+        new PropertyCondition(
+            AutomationElement.ControlTypeProperty,
+            ControlType.ComboBox));
+    foreach (AutomationElement combo in combos)
+    {
+        try
+        {
+            if (combo.Current.IsEnabled
+                && combo.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern)
+                && !((ValuePattern)pattern).Current.IsReadOnly)
+                return combo;
+        }
+        catch (ElementNotAvailableException)
+        {
+        }
+    }
+    return null;
+}
+
+static AutomationElement? FindSelectedListItem(
+    AutomationElement root,
+    string name)
+{
+    var items = root.FindAll(
+        TreeScope.Descendants,
+        new AndCondition(
+            new PropertyCondition(
+                AutomationElement.ControlTypeProperty,
+                ControlType.ListItem),
+            new PropertyCondition(AutomationElement.NameProperty, name)));
+    foreach (AutomationElement item in items)
+    {
+        try
+        {
+            if (item.TryGetCurrentPattern(
+                    SelectionItemPattern.Pattern,
+                    out var pattern)
+                && ((SelectionItemPattern)pattern).Current.IsSelected)
+                return item;
+        }
+        catch (ElementNotAvailableException)
+        {
+        }
+    }
+    return null;
+}
+
+static AutomationElement WaitForDialogWithProviderCheck(
+    Process process,
+    TimeSpan timeout,
+    string expectedTitle)
+{
+    var dialog = WaitForWindow(
+        process,
+        timeout,
+        expectedTitle,
+        "No subtitles provider");
+    if (string.Equals(
+            dialog.Current.Name,
+            "No subtitles provider",
+            StringComparison.OrdinalIgnoreCase))
+        throw new InvalidOperationException(
+            $"{expectedTitle} requires the staged subtitles-provider runtime");
+    return dialog;
+}
+
+static AutomationElement WaitForWindow(
+    Process process,
+    TimeSpan timeout,
+    params string[] titles)
+{
+    var deadline = Stopwatch.GetTimestamp()
+        + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+    var observed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+    while (Stopwatch.GetTimestamp() < deadline)
+    {
+        UiaDriver.ThrowIfFatalDialog(process);
+        var windows = AutomationElement.RootElement.FindAll(
+            TreeScope.Descendants,
+            new AndCondition(
+                new PropertyCondition(
+                    AutomationElement.ProcessIdProperty,
+                    process.Id),
+                new PropertyCondition(
+                    AutomationElement.ControlTypeProperty,
+                    ControlType.Window)));
+        foreach (AutomationElement window in windows)
+        {
+            try
+            {
+                var title = window.Current.Name ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(title))
+                    observed.Add(title);
+                if (titles.Any(candidate => string.Equals(
+                        title,
+                        candidate,
+                        StringComparison.OrdinalIgnoreCase)))
+                    return window;
+            }
+            catch (ElementNotAvailableException)
+            {
+            }
+        }
+        Thread.Sleep(50);
+    }
+    throw new TimeoutException(
+        $"UIA window was not found: {string.Join(" or ", titles)}; " +
+        $"observed={string.Join(" | ", observed)}");
+}
+
+// Sample tuple: ms, edit, selectedName, listCount, matchHighlighted, sawMatchThenLost
+static List<(int Ms, string Edit, string Sel, int ListCount, bool Match, bool Lost)>
+    SampleHighlightTimeline(
+        AutomationElement combo,
+        Process process,
+        string query,
+        string expected,
+        string label)
+{
+    // Delayed samples after expand. Prefer cheap named lookups so sampling
+    // itself does not stall the desktop UIA tree for seconds per tick.
+    int[] delaysMs = [0, 50, 100, 200, 350, 500, 750, 1000, 1500, 2000];
+    var samples = new List<(int Ms, string Edit, string Sel, int ListCount, bool Match, bool Lost)>(
+        delaysMs.Length);
+    var started = Stopwatch.StartNew();
+    var sawMatch = false;
+    var lostAfterMatch = false;
+    var listCount = 0;
+
+    foreach (var targetMs in delaysMs)
+    {
+        var wait = targetMs - (int)started.ElapsedMilliseconds;
+        if (wait > 0)
+            Thread.Sleep(wait);
+
+        var edit = string.Empty;
+        try
+        {
+            if (combo.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern))
+                edit = ((ValuePattern)pattern).Current.Value ?? string.Empty;
+        }
+        catch (ElementNotAvailableException)
+        {
+        }
+
+        // Font catalog size: count once after the popup is up (expensive).
+        if (listCount < 20)
+            listCount = CountListItems(process);
+
+        // Read the real Win32 list caret (UIA IsSelected is unreliable on
+        // CBS_DROPDOWN listboxes after CB_SETCURSEL + edit restore).
+        var comboHwnd = new IntPtr(combo.Current.NativeWindowHandle);
+        var selectedName = NativeKeyboard.GetComboHighlightText(comboHwnd) ?? "";
+        var matchHighlighted = string.Equals(
+            selectedName, expected, StringComparison.OrdinalIgnoreCase);
+        var dropped = NativeKeyboard.IsComboDropped(comboHwnd);
+
+        if (matchHighlighted)
+            sawMatch = true;
+        else if (sawMatch)
+            lostAfterMatch = true;
+
+        var sample = (
+            Ms: (int)started.ElapsedMilliseconds,
+            Edit: edit,
+            Sel: selectedName,
+            ListCount: listCount,
+            Match: matchHighlighted,
+            Lost: lostAfterMatch);
+        samples.Add(sample);
+        Console.WriteLine(
+            $"uia.correctness.{label}_t{sample.Ms}ms=" +
+            $"edit='{sample.Edit}';sel='{sample.Sel}';" +
+            $"match={sample.Match};dropped={dropped};list={sample.ListCount}");
+    }
+
+    if (lostAfterMatch)
+    {
+        for (var i = 0; i < samples.Count; ++i)
+        {
+            var s = samples[i];
+            samples[i] = (s.Ms, s.Edit, s.Sel, s.ListCount, s.Match, true);
+        }
+    }
+
+    // Edit must stay on the typed query for every sample (no late auto-complete).
+    foreach (var sample in samples)
+    {
+        if (!string.Equals(sample.Edit, query, StringComparison.Ordinal)
+            && !string.IsNullOrEmpty(sample.Edit)
+            && sample.ListCount > 0)
+        {
+            throw new InvalidOperationException(
+                $"Edit left typed query during highlight settle at {sample.Ms}ms: " +
+                $"'{sample.Edit}' (expected '{query}'); " +
+                FormatHighlightTimeline(samples));
+        }
+    }
+
+    return samples;
+}
+
+static string FormatHighlightTimeline(
+    IReadOnlyList<(int Ms, string Edit, string Sel, int ListCount, bool Match, bool Lost)> samples) =>
+    string.Join(
+        " | ",
+        samples.Select(s => $"{s.Ms}ms:edit='{s.Edit}',sel='{s.Sel}',match={s.Match}"));
+
+/// Wait until the named drop-down item is the current Win32 list caret.
+static AutomationElement WaitForHighlightedListItem(
+    AutomationElement combo,
+    Process process,
+    string name,
+    TimeSpan timeout)
+{
+    var comboHwnd = new IntPtr(combo.Current.NativeWindowHandle);
+    var deadline = Stopwatch.GetTimestamp()
+        + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+    while (Stopwatch.GetTimestamp() < deadline)
+    {
+        var highlight = NativeKeyboard.GetComboHighlightText(comboHwnd);
+        if (string.Equals(highlight, name, StringComparison.OrdinalIgnoreCase))
+        {
+            // Prefer UIA item for later Select(); fall back to name lookup.
+            var item = FindListItem(combo, name, requireSelected: false);
+            if (item is not null)
+                return item;
+        }
+        Thread.Sleep(50);
+    }
+    throw new TimeoutException(
+        $"Font list highlight did not jump to '{name}' after expand " +
+        $"(native caret='{NativeKeyboard.GetComboHighlightText(comboHwnd) ?? ""}')");
+}
+
+static AutomationElement? FindListItem(
+    AutomationElement combo,
+    string name,
+    bool requireSelected)
+{
+    var comboHwnd = new IntPtr(combo.Current.NativeWindowHandle);
+    var listHwnd = NativeKeyboard.GetComboListHwnd(comboHwnd);
+    if (listHwnd == IntPtr.Zero)
+        return null;
+    var list = AutomationElement.FromHandle(listHwnd);
+    var items = list.FindAll(
+        TreeScope.Descendants,
+        new AndCondition(
+            new PropertyCondition(
+                AutomationElement.ControlTypeProperty,
+                ControlType.ListItem),
+            new PropertyCondition(AutomationElement.NameProperty, name)));
+    // Scope the lookup to the current combo's native list HWND. wx/MSW can
+    // otherwise leave same-named items from a closed dialog in the root tree.
+    for (var index = items.Count - 1; index >= 0; --index)
+    {
+        var item = items[index];
+        try
+        {
+            if (!item.Current.IsEnabled
+                || !item.TryGetCurrentPattern(
+                    SelectionItemPattern.Pattern,
+                    out var selectionObject))
+                continue;
+            var selection = (SelectionItemPattern)selectionObject;
+            var container = selection.Current.SelectionContainer;
+            if (container is null || !container.Current.IsEnabled)
+                continue;
+            if (requireSelected && !selection.Current.IsSelected)
+                continue;
+            return item;
+        }
+        catch (ElementNotAvailableException)
+        {
+        }
+    }
+    return null;
+}
+
+static string WaitForValue(
+    AutomationElement element,
+    string expected,
+    TimeSpan timeout)
+{
+    var deadline = Stopwatch.GetTimestamp()
+        + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+    var current = string.Empty;
+    while (Stopwatch.GetTimestamp() < deadline)
+    {
+        try
+        {
+            if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern))
+            {
+                current = ((ValuePattern)pattern).Current.Value ?? string.Empty;
+                if (string.Equals(current, expected, StringComparison.Ordinal))
+                    return current;
+            }
+        }
+        catch (ElementNotAvailableException)
+        {
+        }
+        Thread.Sleep(50);
+    }
+    throw new TimeoutException(
+        $"Font selector value did not become '{expected}'; current='{current}'");
+}
+
+static void CloseDialog(AutomationElement dialog, string buttonName)
+{
+    var button = UiaDriver.FindEnabledInvokableButtonByAutomationId(
+            dialog,
+            "5101",
+            buttonName)
+        ?? throw new InvalidOperationException(
+            $"{dialog.Current.Name} has no {buttonName} button");
+    UiaDriver.Invoke(button);
+}
+
+static void WaitForTask(Task task, TimeSpan timeout, string message)
+{
+    if (!task.Wait(timeout))
+        throw new TimeoutException(message);
+    task.GetAwaiter().GetResult();
+}
+
+static void PrepareFontSelectorProfile(string profile)
+{
+    var user = Path.Combine(profile, "user");
+    Directory.CreateDirectory(user);
+    File.WriteAllText(
+        Path.Combine(user, "config.json"),
+        """
+        {
+          "Subtitle": {
+            "Font": {
+              "Prefer Localized Family Names": false,
+              "Use Contains Matching": true
+            }
+          }
+        }
+        """);
+}
+
 static void PrepareRunArtifacts(string output, string profile)
 {
     Directory.CreateDirectory(output);
@@ -171,6 +895,8 @@ static void PrepareRunArtifacts(string output, string profile)
         "ready.json",
         "result.json",
         "correctness-main-window.png",
+        "correctness-style_editor.png",
+        "correctness-select_font.png",
         "startup.log",
     })
     {
@@ -197,4 +923,212 @@ static bool PathsEqual(string left, string right)
     {
         return false;
     }
+}
+
+file static class NativeKeyboard
+{
+    private const int EmReplaceSel = 0x00C2;
+    private const int EmSetSel = 0x00B1;
+    private const int WmChar = 0x0102;
+    private const int WmCommand = 0x0111;
+    private const int EnChange = 0x0300;
+    private const int CbGetCurSel = 0x0147;
+    private const int CbGetLbText = 0x0148;
+    private const int CbGetLbTextLen = 0x0149;
+    private const int CbGetDroppedState = 0x0157;
+    private const int LbGetCurSel = 0x0188;
+    private const int LbGetText = 0x0189;
+    private const int LbGetTextLen = 0x018A;
+
+    public static IntPtr GetComboEditHwnd(IntPtr comboHwnd)
+    {
+        var info = new ComboBoxInfo { cbSize = Marshal.SizeOf<ComboBoxInfo>() };
+        if (!GetComboBoxInfo(comboHwnd, ref info))
+            return IntPtr.Zero;
+        return info.hwndItem;
+    }
+
+    public static IntPtr GetComboListHwnd(IntPtr comboHwnd)
+    {
+        var info = new ComboBoxInfo { cbSize = Marshal.SizeOf<ComboBoxInfo>() };
+        if (!GetComboBoxInfo(comboHwnd, ref info))
+            return IntPtr.Zero;
+        return info.hwndList;
+    }
+
+    public static bool IsComboDropped(IntPtr comboHwnd)
+    {
+        if (comboHwnd == IntPtr.Zero)
+            return false;
+        return SendMessage(comboHwnd, CbGetDroppedState, IntPtr.Zero, IntPtr.Zero) != IntPtr.Zero;
+    }
+
+    /// Current list caret text: prefer open listbox LB_GETCURSEL, else CB_GETCURSEL.
+    public static string? GetComboHighlightText(IntPtr comboHwnd)
+    {
+        if (comboHwnd == IntPtr.Zero)
+            return null;
+        var info = new ComboBoxInfo { cbSize = Marshal.SizeOf<ComboBoxInfo>() };
+        if (GetComboBoxInfo(comboHwnd, ref info) && info.hwndList != IntPtr.Zero)
+        {
+            var listIndex = SendMessage(
+                info.hwndList, LbGetCurSel, IntPtr.Zero, IntPtr.Zero).ToInt32();
+            if (listIndex >= 0)
+            {
+                var listText = GetListBoxText(info.hwndList, listIndex);
+                if (!string.IsNullOrEmpty(listText))
+                    return listText;
+            }
+        }
+
+        var comboIndex = SendMessage(
+            comboHwnd, CbGetCurSel, IntPtr.Zero, IntPtr.Zero).ToInt32();
+        if (comboIndex < 0)
+            return null;
+        return GetComboBoxListText(comboHwnd, comboIndex);
+    }
+
+    public static void SetEditText(IntPtr editHwnd, string text)
+    {
+        var parent = GetParent(editHwnd);
+        var editId = GetDlgCtrlID(editHwnd);
+        SendMessage(editHwnd, EmSetSel, IntPtr.Zero, (IntPtr)(-1));
+        SendMessage(editHwnd, EmReplaceSel, (IntPtr)1, text ?? string.Empty);
+        if (parent != IntPtr.Zero && editId != 0)
+        {
+            var wParam = (IntPtr)((EnChange << 16) | (editId & 0xFFFF));
+            SendMessage(parent, WmCommand, wParam, editHwnd);
+        }
+        Thread.Sleep(100);
+    }
+
+    public static void TypeCharsViaWindowMessage(IntPtr editHwnd, string text)
+    {
+        // Replace the whole edit contents in one shot.
+        SetEditText(editHwnd, text);
+        // Allow deferred CallAfter match application on the UI thread.
+        Thread.Sleep(400);
+    }
+
+    /// Type one character at a time (user-like). Each char allows the app to
+    /// strip native auto-complete and update list highlight.
+    public static void TypeCharsOneByOne(IntPtr editHwnd, string text)
+    {
+        SetEditText(editHwnd, string.Empty);
+        Thread.Sleep(100);
+        foreach (var ch in text)
+        {
+            // Append one character at the end.
+            SendMessage(editHwnd, EmSetSel, (IntPtr)(-1), (IntPtr)(-1));
+            SendMessage(editHwnd, EmReplaceSel, (IntPtr)1, ch.ToString());
+            var parent = GetParent(editHwnd);
+            var editId = GetDlgCtrlID(editHwnd);
+            if (parent != IntPtr.Zero && editId != 0)
+            {
+                var wParam = (IntPtr)((EnChange << 16) | (editId & 0xFFFF));
+                SendMessage(parent, WmCommand, wParam, editHwnd);
+            }
+            // Let CallAfter / hold-timer strip auto-complete and jump the list.
+            Thread.Sleep(120);
+        }
+        Thread.Sleep(300);
+    }
+
+    /// Type into the combo edit by sending WM_CHAR directly to the EDIT child.
+    /// Unlike EM_REPLACESEL (which replaces the selection and only fires
+    /// EN_CHANGE), WM_CHAR is dispatched through the native EDIT wndproc that
+    /// wx subclasses, so it triggers the native CBS_DROPDOWN auto-select /
+    /// prefix-completion path — exactly what real keystrokes do. This is
+    /// focus-immune (synchronous cross-process SendMessage) and reproduces the
+    /// stale-list-caret bug without the flakiness of foreground SendInput.
+    public static void TypeCharsViaComboKeys(IntPtr comboHwnd, string text)
+    {
+        if (comboHwnd == IntPtr.Zero)
+            throw new InvalidOperationException("Font combo has no native HWND");
+        var editHwnd = GetComboEditHwnd(comboHwnd);
+        if (editHwnd == IntPtr.Zero)
+            throw new InvalidOperationException("Font combo edit has no native HWND");
+
+        // Ensure the drop-down is closed so typing behaves like a fresh query.
+        if (IsComboDropped(comboHwnd))
+        {
+            SendMessage(comboHwnd, 0x014D, IntPtr.Zero, IntPtr.Zero); // CB_SHOWDROPDOWN(FALSE)
+            Thread.Sleep(100);
+        }
+
+        // Start from an empty edit so each appended WM_CHAR is unambiguous.
+        SetEditText(editHwnd, string.Empty);
+        Thread.Sleep(100);
+
+        foreach (var ch in text)
+        {
+            // Move the caret to the end and inject one character via WM_CHAR,
+            // which the native EDIT wndproc turns into text + auto-select.
+            SendMessage(editHwnd, EmSetSel, (IntPtr)(-1), (IntPtr)(-1));
+            SendMessage(editHwnd, WmChar, (IntPtr)ch, IntPtr.Zero);
+            Thread.Sleep(150);
+        }
+        Thread.Sleep(350);
+    }
+
+    private static string? GetComboBoxListText(IntPtr comboHwnd, int index)
+    {
+        var len = SendMessage(
+            comboHwnd, CbGetLbTextLen, (IntPtr)index, IntPtr.Zero).ToInt32();
+        if (len < 0)
+            return null;
+        var buffer = new StringBuilder(len + 1);
+        SendMessage(comboHwnd, CbGetLbText, (IntPtr)index, buffer);
+        return buffer.ToString();
+    }
+
+    private static string? GetListBoxText(IntPtr listHwnd, int index)
+    {
+        var len = SendMessage(
+            listHwnd, LbGetTextLen, (IntPtr)index, IntPtr.Zero).ToInt32();
+        if (len < 0)
+            return null;
+        var buffer = new StringBuilder(len + 1);
+        SendMessage(listHwnd, LbGetText, (IntPtr)index, buffer);
+        return buffer.ToString();
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct Rect
+    {
+        public int left, top, right, bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ComboBoxInfo
+    {
+        public int cbSize;
+        public Rect rcItem;
+        public Rect rcButton;
+        public int stateButton;
+        public IntPtr hwndCombo;
+        public IntPtr hwndItem;
+        public IntPtr hwndList;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool GetComboBoxInfo(IntPtr hwndCombo, ref ComboBoxInfo pcbi);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, StringBuilder lParam);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
+    // EM_SETSEL uses LPARAM as character index pair via wParam/lParam.
+    // Overload already covers (hwnd, msg, wParam, lParam).
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetParent(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    private static extern int GetDlgCtrlID(IntPtr hWnd);
 }

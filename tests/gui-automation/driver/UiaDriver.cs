@@ -342,7 +342,9 @@ public static class UiaDriver
                 // UIA focus is subject to the Windows foreground-lock policy.
                 // Restore and request the foreground window before asking UIA
                 // to move keyboard focus into the native window.
-                targetWindowHandle = process.MainWindowHandle;
+                targetWindowHandle = new IntPtr(element.Current.NativeWindowHandle);
+                if (targetWindowHandle == IntPtr.Zero)
+                    targetWindowHandle = process.MainWindowHandle;
                 if (targetWindowHandle != IntPtr.Zero)
                 {
                     if (IsIconic(targetWindowHandle))
@@ -384,7 +386,7 @@ public static class UiaDriver
         {
         }
         throw new TimeoutException(
-            "Main window did not accept focus " +
+            "UIA window did not accept focus " +
             $"(target_pid={process.Id};target_session={targetSession};" +
             $"target_hwnd=0x{targetWindowHandle.ToInt64():X};" +
             $"foreground_pid={foregroundProcessId};" +

@@ -10,10 +10,18 @@ local expected = assert(os.getenv("AEGISUB_DEPENDENCY_CONTROL_FIXTURE_EXPECTED")
 local Updater = require("l0.DependencyControl.Updater")
 local DependencyControl = require("l0.DependencyControl")
 assert(DependencyControl.Updater == Updater)
+local requirement = { module_name }
+local required_version = os.getenv(
+  "AEGISUB_DEPENDENCY_CONTROL_FIXTURE_REQUIRED_VERSION")
+if required_version and required_version ~= "" then
+  requirement.version = required_version
+elseif os.getenv("AEGISUB_DEPENDENCY_CONTROL_FIXTURE_NO_VERSION") ~= "1" then
+  requirement.version = "1.0.0"
+end
 local version = DependencyControl {
   feed = feed,
   {
-    { module_name, version = "1.0.0" }
+    requirement
   }
 }
 
@@ -112,7 +120,14 @@ else
 end
   if success and not uninstall_recovery then
     assert(type(module) == "table")
-    assert(module.value == expected)
+    if os.getenv("AEGISUB_DEPENDENCY_CONTROL_FIXTURE_JSON_TEST") == "1" then
+      assert(type(module.encode) == "function")
+      assert(type(module.decode) == "function")
+      local decoded = module.decode(module.encode({ value = expected }))
+      assert(type(decoded) == "table" and decoded.value == expected)
+    else
+      assert(module.value == expected)
+    end
     local installed_test = os.getenv(
       "AEGISUB_DEPENDENCY_CONTROL_FIXTURE_INSTALLED_STATE_TEST")
     if installed_test and installed_test ~= "" then
@@ -285,7 +300,11 @@ end
   if uninstall_recovery then
     file:write("ok:uninstall-recovered")
   elseif success then
-    file:write("ok:" .. tostring(type(module) == "table" and module.value or module))
+    if os.getenv("AEGISUB_DEPENDENCY_CONTROL_FIXTURE_JSON_TEST") == "1" then
+      file:write("ok:" .. expected)
+    else
+      file:write("ok:" .. tostring(type(module) == "table" and module.value or module))
+    end
   else
     file:write("error:" .. tostring(module))
   end

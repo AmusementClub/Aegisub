@@ -1564,10 +1564,23 @@ void SkiaAudioDisplay::OnMarkerMoved() {
 }
 
 void SkiaAudioDisplay::OnSelectionChanged() {
-	if (impl) {
-		Invalidate(Change::Chrome);
-		RequestRepaint(true);
+	if (!impl)
+		return;
+	// Mirror the legacy AudioDisplay::OnSelectionChanged auto-scroll: when no
+	// marker is being dragged and Audio/Auto/Scroll is on, bring the active
+	// line's primary range into view (including scrolling backward). Skia
+	// handles marker-drag out-of-view via OnMouseEvent's ScrollBy, so only the
+	// non-drag branch is ported here.
+	if (impl->dragged_markers.empty() && OPT_GET("Audio/Auto/Scroll")->GetBool()) {
+		auto *timing = impl->audio_controller ? impl->audio_controller->GetTimingController() : nullptr;
+		if (timing) {
+			auto const sel = timing->GetPrimaryPlaybackRange();
+			if (sel.end() != 0)
+				ScrollTimeRangeInView(sel);
+		}
 	}
+	Invalidate(Change::Chrome);
+	RequestRepaint(true);
 }
 
 void SkiaAudioDisplay::OnStyleRangesChanged() {

@@ -470,7 +470,8 @@
 			},
 			"Display Height" : -1,
 			"Font Face" : "",
-			"Font Size" : 10
+			"Font Size" : 10,
+			"Margin Spin Step" : 1
 		},
 		"Grid" : {
 			"Column" : [

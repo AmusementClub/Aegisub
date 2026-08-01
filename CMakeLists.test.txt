@@ -175,6 +175,7 @@ if(GTEST_FOUND)
         tests/tests/character_count.cpp
         tests/tests/compat.cpp
         tests/tests/subtitle_character_markers.cpp
+        tests/tests/subtitle_edit_box_options.cpp
         tests/tests/core_host_context.cpp
         tests/tests/color.cpp
         tests/tests/csri_renderer_discovery.cpp

@@ -305,6 +305,13 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 		core.initialLineState->AddChangeListener(&SubsEditBox::OnLineInitialTextChanged, this),
 		core.subsController->AddFileOpenListener([this](agi::fs::path const&, bool) { UpdateTimeDisplayModeFromFile(true); }),
 		core.subsController->AddFileSaveListener([this] { UpdateTimeDisplayModeFromFile(false); }),
+		OPT_SUB("Subtitle/Edit Box/Margin Spin Step", [this](agi::OptionValue const& option) {
+			// Keep integer range fixed; only the arrow/key step size changes.
+			int const step = static_cast<int>(std::clamp<int64_t>(
+				option.GetInt(), 1, AssStyle::MaxMargin));
+			for (auto *ctrl : margin)
+				ctrl->SetIncrement(step);
+		}),
 	 });
 
 #ifdef WITH_WXSTC
@@ -490,10 +497,14 @@ void SubsEditBox::SetEditControlSelection(int start, int stop) {
 }
 
 wxSpinCtrl *SubsEditBox::MakeMarginCtrl(wxString const& tooltip, int margin, wxString const& commit_msg) {
-	// Match Layer: integer spin control with step 1 (wxSpinCtrl default).
-	// Range matches AssStyle parse clamp / xy-VSFilter style editor (±10000).
+	// Integer-only control: range stays AssStyle ±10000; step is preferences-driven.
+	// Manual entry may still set any integer in range (wxSpinCtrl SetIncrement contract).
+	int const step = static_cast<int>(std::clamp<int64_t>(
+		OPT_GET("Subtitle/Edit Box/Margin Spin Step")->GetInt(), 1, AssStyle::MaxMargin));
 	wxSpinCtrl *ctrl = new wxSpinCtrl(this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize,
-		wxSP_ARROW_KEYS | wxTE_PROCESS_ENTER, AssStyle::MinMargin, AssStyle::MaxMargin, 0);
+		wxSP_ARROW_KEYS | wxTE_PROCESS_ENTER | wxTE_CENTER,
+		AssStyle::MinMargin, AssStyle::MaxMargin, 0);
+	ctrl->SetIncrement(step);
 #ifdef __WXGTK3__
 	// GTK3 has a bug that we cannot shrink the size of a widget, so do nothing here.
 #elif wxCHECK_VERSION(3, 1, 3)

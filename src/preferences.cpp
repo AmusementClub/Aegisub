@@ -18,6 +18,7 @@
 
 #include "preferences.h"
 
+#include "ass_style.h"
 #include "ass_style_storage.h"
 #include "audio_playback_section.h"
 #include "audio_provider_factory.h"
@@ -726,6 +727,7 @@ void BuildInterfacePage(OptionPage *p) {
 	binder->AddDirectory(_("Dictionaries path"), "Path/Dictionary");
 	binder->AddFont(_("Font"), "Subtitle/Edit Box/");
 	binder->AddInt(_("Edit box height"), "Subtitle/Edit Box/Display Height", -1, 2000);
+	binder->AddInt(_("Margin spin step"), "Subtitle/Edit Box/Margin Spin Step", 1, AssStyle::MaxMargin);
 
 #ifdef WITH_WXSTC
 	binder->AddCategory(_("Character Markers"));

@@ -102,10 +102,6 @@
       "url": "https://github.com/AmusementClub/Aegisub/releases/download/artifacts/aegisub-win64-cmake-20210713-r9212.zip",
       "path": [
         {
-          "source": "AssDraw3.exe",
-          "target": "AssDraw3.exe"
-        },
-        {
           "source": "AssDraw3.chm",
           "target": "AssDraw3.chm"
         },
@@ -124,6 +120,17 @@
         {
           "source": "licenses/*",
           "target": "licenses/*"
+        }
+      ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "assdraw3",
+      "url": "https://github.com/MIRIMIRIM/assdraw/releases/download/v3.1.0/assdraw3-v3.1.0-win-x64.zip",
+      "path": [
+        {
+          "source": "assdraw3.exe",
+          "target": "AssDraw3.exe"
         }
       ]
     },

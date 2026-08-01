@@ -43,6 +43,17 @@
           "target": "include/ass/*"
         }
       ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "ragbag",
+      "url": "https://github.com/MIRIMIRIM/RagbagSubtitle/releases/download/v0.2.0/ragbag-subtitle-ffmpeg-windows-x64-v0.2.0.zip",
+      "path": [
+        {
+          "source": "subtitle_plugin_api.h",
+          "target": "include/ragbag/subtitle_plugin_api.h"
+        }
+      ]
     }
   ],
   "package": [
@@ -224,6 +235,16 @@
         {
           "source": "scenechange_xvid.dll",
           "target": "runtimes/scenechange_xvid.dll"
+        }
+      ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "ragbag",
+      "path": [
+        {
+          "source": "ragbag-subtitle-ffmpeg.dll",
+          "target": "runtimes/ragbag-subtitle.dll"
         }
       ]
     }

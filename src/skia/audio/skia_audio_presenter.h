@@ -88,6 +88,9 @@ struct CursorFrame {
 	std::string label;
 	int position_ms = -1;
 	bool playback = false;
+	/// Optional font face override for the cursor label, mirroring the legacy
+	/// "Audio/Track Cursor/Font Face" option. Empty means use the default face.
+	std::string font_face;
 };
 
 struct TimelineFrame {

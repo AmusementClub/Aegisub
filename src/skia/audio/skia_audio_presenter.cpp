@@ -8,6 +8,9 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include <include/ports/SkTypeface_win.h>
+#elif defined(__APPLE__)
+#include <include/ports/SkFontMgr_mac_ct.h>
 #endif
 
 #ifdef HAVE_OPENGL_GL_H
@@ -21,6 +24,8 @@
 #include <include/core/SkColorSpace.h>
 #include <include/core/SkData.h>
 #include <include/core/SkFont.h>
+#include <include/core/SkFontMgr.h>
+#include <include/core/SkFontStyle.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
 #include <include/core/SkPaint.h>
@@ -30,6 +35,7 @@
 #include <include/core/SkSamplingOptions.h>
 #include <include/core/SkString.h>
 #include <include/core/SkSurface.h>
+#include <include/core/SkTypeface.h>
 #include <include/effects/SkGradient.h>
 #include <include/effects/SkRuntimeEffect.h>
 #include <include/gpu/GpuTypes.h>
@@ -58,6 +64,69 @@ constexpr std::size_t kDefaultContentCacheBudget = 32 * 1024 * 1024;
 constexpr std::size_t kGaneshResourceCacheBudget = 64 * 1024 * 1024;
 
 using FrameTraceClock = std::chrono::steady_clock;
+
+// Lazily-built, cached font manager used to resolve the cursor label font
+// face. Mirrors skia_runtime/skia_text_layout_cache.cpp's CreateFontManager,
+// kept self-contained here so the audio display does not couple to the
+// (frozen) Skia video tools target. Each platform wires its native backend;
+// SkFontMgr::RefEmpty() is the last-resort fallback (no families resolvable).
+SkFontMgr *GetCursorLabelFontManager() {
+	static sk_sp<SkFontMgr> const font_mgr = []() -> sk_sp<SkFontMgr> {
+#if defined(_WIN32)
+		if (auto mgr = SkFontMgr_New_DirectWrite())
+			return mgr;
+		if (auto mgr = SkFontMgr_New_GDI())
+			return mgr;
+#elif defined(__APPLE__)
+		if (auto mgr = SkFontMgr_New_CoreText(nullptr))
+			return mgr;
+#endif
+		// NOTE: Linux/FontConfig is not wired here — it requires a
+		// SkFontScanner (FreeType) + FcConfig hookup that is not available in
+		// the audio build. The empty manager means named faces cannot be
+		// resolved on Linux, but the cursor label still renders bold via the
+		// algorithmic embolden fallback in ApplyCursorLabelFont.
+		return SkFontMgr::RefEmpty();
+	}();
+	return font_mgr.get();
+}
+
+// Resolve a bold typeface for the given family name. An empty family resolves
+// the default family's bold variant (matching legacy, which always applies bold
+// even when no face is configured). Returns nullptr if the platform's font
+// manager has no families (empty manager) — caller then falls back to
+// algorithmic embolden.
+sk_sp<SkTypeface> ResolveCursorLabelTypeface(std::string const& family) {
+	auto *mgr = GetCursorLabelFontManager();
+	if (!mgr)
+		return {};
+	static SkFontStyle const kBold(
+		SkFontStyle::kBold_Weight, SkFontStyle::kNormal_Width, SkFontStyle::kUpright_Slant);
+	auto const *family_cstr = family.empty() ? nullptr : family.c_str();
+	if (auto face = mgr->matchFamilyStyle(family_cstr, kBold))
+		return face;
+	// Fall back to the default family's bold variant when the named family
+	// is unavailable (also covers the empty-family default case on platforms
+	// where the named lookup surprisingly misses).
+	return mgr->matchFamilyStyle(nullptr, kBold);
+}
+
+// Apply the cursor label typography: always bold (matching legacy's
+// unconditional wxFONTWEIGHT_BOLD), with an optional face override read from
+// the "Audio/Track Cursor/Font Face" option. When the requested bold typeface
+// can be resolved it is used directly; otherwise the default font is emboldened
+// algorithmically so the cursor label is bold on every platform.
+SkFont MakeCursorLabelFont(SkFont const& base, std::string const& font_face) {
+	SkFont font = base;
+	if (auto typeface = ResolveCursorLabelTypeface(font_face)) {
+		font.setTypeface(std::move(typeface));
+		return font;
+	}
+	// No resolvable bold typeface (e.g. empty font manager on Linux): embolden
+	// the default font so the label is still bold, matching legacy intent.
+	font.setEmbolden(true);
+	return font;
+}
 
 FrameTraceClock::time_point BeginFrameTrace(bool enabled) noexcept {
 	return enabled ? FrameTraceClock::now() : FrameTraceClock::time_point {};
@@ -356,8 +425,12 @@ void DrawAudioFrameLayers(
 		}
 		if (HasFrameLayerPart(parts, FrameLayerPart::CursorLabel)
 			&& frame.cursor && !frame.cursor->label.empty() && std::isfinite(frame.cursor->x)) {
+			// The cursor label is always bold (legacy PaintTrackCursor sets
+			// wxFONTWEIGHT_BOLD unconditionally), with an optional face override
+			// from "Audio/Track Cursor/Font Face".
+			auto const cursor_font = MakeCursorLabelFont(font, frame.cursor->font_face);
 			canvas->drawSimpleText(frame.cursor->label.data(), frame.cursor->label.size(), SkTextEncoding::kUTF8,
-				frame.cursor->x + 3.f, frame.y + 12.f, font, paint);
+				frame.cursor->x + 3.f, frame.y + 12.f, cursor_font, paint);
 		}
 	}
 

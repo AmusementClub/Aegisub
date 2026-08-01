@@ -334,7 +334,7 @@ SkiaAudioDisplay::SkiaAudioDisplay(
 	FailureInjection failure_injection,
 	std::uint64_t failure_injection_after_content_frames,
 	FailureCallback failure_callback)
-: wxGLCanvas(parent, wxID_ANY, gl_attributes, wxDefaultPosition, wxDefaultSize, wxFULL_REPAINT_ON_RESIZE)
+: wxGLCanvas(parent, wxID_ANY, gl_attributes, wxDefaultPosition, wxDefaultSize, wxFULL_REPAINT_ON_RESIZE | wxWANTS_CHARS)
 , impl(std::make_unique<Impl>(
 	this,
 	controller,
@@ -394,6 +394,7 @@ SkiaAudioDisplay::SkiaAudioDisplay(
 	Bind(wxEVT_MOUSE_CAPTURE_LOST, &SkiaAudioDisplay::OnMouseCaptureLost, this);
 	Bind(wxEVT_SET_FOCUS, &SkiaAudioDisplay::OnFocus, this);
 	Bind(wxEVT_KILL_FOCUS, &SkiaAudioDisplay::OnFocus, this);
+	Bind(wxEVT_CHAR_HOOK, &SkiaAudioDisplay::OnKeyDown, this);
 	Bind(wxEVT_KEY_DOWN, &SkiaAudioDisplay::OnKeyDown, this);
 	OnTimingControllerChanged();
 }
@@ -655,8 +656,13 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 			? ToArgb(OPT_GET("Colour/Audio Display/Play Cursor")->GetColor())
 			: 0xFFFFFFFFu;
 		if (!cursor->playback
-			&& OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool())
+			&& OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool()) {
 			cursor->label = agi::Time(cursor->position_ms).GetAssFormatted();
+			// Mirror the legacy "Audio/Track Cursor/Font Face" option (read via
+			// FontFace("Audio/Track Cursor") in legacy PaintTrackCursor). Empty
+			// keeps the default face.
+			cursor->font_face = OPT_GET("Audio/Track Cursor/Font Face")->GetString();
+		}
 		return cursor;
 	};
 	auto const trace_audio = perf_trace::IsCategoryEnabled(perf_trace::Category::Audio);
@@ -1575,8 +1581,24 @@ void SkiaAudioDisplay::OnSelectionChanged() {
 		auto *timing = impl->audio_controller ? impl->audio_controller->GetTimingController() : nullptr;
 		if (timing) {
 			auto const sel = timing->GetPrimaryPlaybackRange();
-			if (sel.end() != 0)
+			if (sel.end() != 0) {
 				ScrollTimeRangeInView(sel);
+				// The scroll moved the viewport under the (stationary) mouse, so
+				// the mouse-position track cursor must be recomputed against the
+				// current screen mouse or its time label drifts off-cursor.
+				// Mirrors legacy UpdateTrackCursorFromCurrentMouse().
+				if (!impl->audio_controller->IsPlaying() && impl->viewport.IsValid()) {
+					auto const point = ScreenToClient(wxGetMousePosition());
+					auto const scale = std::max(1.0, static_cast<double>(GetContentScaleFactor()));
+					impl->mouse_position_ms = MousePositionMsForClientPoint(
+						impl->viewport,
+						point.x,
+						point.y,
+						scale,
+						AudioMillisecondsPerLogicalPixel(impl->zoom_level));
+					Invalidate(Change::Cursor);
+				}
+			}
 		}
 	}
 	Invalidate(Change::Chrome);
@@ -1596,6 +1618,15 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 	if (hotkey::check("Audio", impl->project_context, event))
 		return;
 
+	// On platforms that report mouse move events while the cursor is outside
+	// the client rectangle (notably macOS when the window has focus), drop the
+	// spurious motion so the track cursor does not follow it. Matches legacy
+	// AudioDisplay::OnMouseEvent.
+	if (event.Moving() && !GetClientRect().Contains(event.GetPosition())) {
+		event.Skip();
+		return;
+	}
+
 	RebuildViewport();
 	if (!impl->viewport.IsValid())
 		return;
@@ -1610,6 +1641,17 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 		return static_cast<int>(std::clamp<double>(value, 0.0, std::numeric_limits<int>::max()));
 	};
 	auto *timing = impl->audio_controller ? impl->audio_controller->GetTimingController() : nullptr;
+
+	// Scroll the display after a mouse-up near one of the edges, mirroring the
+	// legacy AudioDisplay::OnMouseEvent edge-scroll. Placed before the drag/
+	// middle-seek branches so it fires on LeftUp/RightUp regardless of which
+	// interaction is ending (matching legacy ordering), using the raw mouse x.
+	if ((event.LeftUp() || event.RightUp()) && OPT_GET("Audio/Auto/Scroll")->GetBool()) {
+		if (mouse.x < client_width / 20)
+			ScrollBy(-client_width / 3);
+		else if (client_width - mouse.x < client_width / 20)
+			ScrollBy(client_width / 3);
+	}
 
 	if (event.MiddleIsDown()) {
 		auto core = impl->project_context->GetCore();
@@ -1714,6 +1756,10 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 	if (event.IsButton())
 		SetFocus();
 	if (event.LeftDown() && mouse.y < timeline_bottom) {
+		// The motion path sets SIZEWE on hover, but a press can start the drag
+		// without a prior motion event (e.g. focus jump + click). Set it here
+		// too, mirroring legacy ForwardMouseEvent's timeline LeftDown handling.
+		SetCursor(wxCursor(wxCURSOR_SIZEWE));
 		impl->timeline_dragging = true;
 		impl->drag_last_x = mouse.x;
 		if (!HasCapture()) CaptureMouse();
@@ -1744,7 +1790,12 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 			Invalidate(Change::Cursor);
 			RequestRepaint(true);
 		}
-		if (timing && over_audio) {
+		if (mouse.y < timeline_bottom) {
+			// Hovering the timeline strip: it is draggable, so show the resize
+			// cursor unconditionally (mirrors legacy ForwardMouseEvent).
+			SetCursor(wxCursor(wxCURSOR_SIZEWE));
+		}
+		else if (timing && over_audio) {
 			auto const sensitivity = static_cast<int>(
 				OPT_GET("Audio/Start Drag Sensitivity")->GetInt()
 				* AudioMillisecondsPerLogicalPixel(impl->zoom_level));
@@ -1763,9 +1814,29 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 			? static_cast<int>(OPT_GET("Audio/Snap/Distance")->GetInt()
 				* AudioMillisecondsPerLogicalPixel(impl->zoom_level))
 			: 0;
+		// OnLeftClick/OnRightClick synchronously announce an updated primary
+		// range, which OnSelectionChanged may react to by auto-scrolling under
+		// Audio/Auto/Scroll. Clicking should never move the viewport, so capture
+		// the scroll position (and the mouse-position cursor derived from it)
+		// before the click and restore it after, mirroring the legacy
+		// AudioDisplay::OnMouseEvent click guard.
+		auto const saved_scroll_left = impl->scroll_left;
+		auto const saved_content_scroll_left = impl->content_scroll_left;
+		auto const saved_mouse_position_ms = impl->mouse_position_ms;
 		impl->dragged_markers = event.LeftDown()
 			? timing->OnLeftClick(time_from_x(mouse.x), event.CmdDown(), event.AltDown(), sensitivity, snap)
 			: timing->OnRightClick(time_from_x(mouse.x), event.CmdDown(), sensitivity, snap);
+		if (impl->scroll_left != saved_scroll_left) {
+			impl->scroll_left = saved_scroll_left;
+			impl->content_scroll_left = saved_content_scroll_left;
+			// OnSelectionChanged recomputed the cursor against the temporary
+			// scrolled viewport; the restored viewport matches the pre-click
+			// state, so the saved cursor time is correct again.
+			impl->mouse_position_ms = saved_mouse_position_ms;
+			RebuildViewport();
+			Invalidate(Change::Scroll);
+			Invalidate(Change::Cursor);
+		}
 		if (!impl->dragged_markers.empty()) {
 			impl->dragged_button = event.LeftDown() ? wxMOUSE_BTN_LEFT : wxMOUSE_BTN_RIGHT;
 			impl->marker_drag_dead_zone.Reset(
@@ -1840,8 +1911,12 @@ void SkiaAudioDisplay::OnFocus(wxFocusEvent& event) {
 }
 
 void SkiaAudioDisplay::OnKeyDown(wxKeyEvent& event) {
-	if (!hotkey::check("Audio", impl->project_context, event))
-		event.Skip();
+	// Mirrors the legacy AudioDisplay and VideoDisplay contract: hotkey::check
+	// dispatches the binding and calls evt.Skip() itself when nothing matches,
+	// so unmatched keys propagate without an extra Skip wrapper here. The ctor
+	// sets wxWANTS_CHARS and binds wxEVT_CHAR_HOOK so navigation keys (arrows,
+	// space, tab) reach this handler before default wx handling can swallow them.
+	hotkey::check("Audio", impl->project_context, event);
 }
 
 void SkiaAudioDisplay::OnAudioOpen(agi::AudioProvider *provider) {
@@ -1942,6 +2017,10 @@ void SkiaAudioDisplay::ScrollTimeRangeInView(TimeRange const& range) {
 		return;
 	if (end - begin < page)
 		impl->scroll_left = begin - (page - (end - begin)) / 2 - margin;
+	// Range larger than the viewport and the viewport is on a middle slice of
+	// it: leave the scroll alone (mirrors legacy AudioDisplay::ScrollTimeRangeInView).
+	else if (begin < impl->scroll_left + margin && end > impl->scroll_left + margin + page)
+		return;
 	else if (end >= impl->scroll_left + margin && end < impl->scroll_left + margin + page)
 		impl->scroll_left = end - page - margin;
 	else

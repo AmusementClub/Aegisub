@@ -90,4 +90,10 @@ std::vector<MatchHit> FindAll(EntryList<AssDialogue> const& events,
 std::size_t ReplaceInLine(AssDialogue& line, SearchReplaceSettings const& settings,
 	                      MatchEnumerator& enumerate, std::vector<ReplacementHit>& out);
 
+/// Full field text as it would read if only this hit's replacement were
+/// applied: `original[:start] + replacement + original[end:]`. Each hit stands
+/// on its own (matches the existing per-hit Replacement column) rather than
+/// reflecting the combined result of Replace All.
+std::string ReplacedLineText(ReplacementHit const& hit);
+
 }

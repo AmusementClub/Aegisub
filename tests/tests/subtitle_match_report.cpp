@@ -246,6 +246,53 @@ TEST(subtitle_match_report, replace_in_line_preserves_original_offsets_when_leng
 }
 
 // ----------------------------------------------------------------------------
+// ReplacedLineText: per-hit isolated view of the line after applying only this
+// hit's replacement (matches the Replacement column, not the combined result).
+// ----------------------------------------------------------------------------
+TEST(subtitle_match_report, replaced_line_text_splices_replacement_into_original) {
+	auto s = base_settings("a");
+	s.replace_with = "XX";
+	auto matcher = MakeSubtitleMatchEnumerator(s);
+	AssDialogue line = make_line("a-a");
+
+	std::vector<aegisub::subtitle_match_report::ReplacementHit> hits;
+	aegisub::subtitle_match_report::ReplaceInLine(line, s, matcher, hits);
+
+	ASSERT_EQ(2u, hits.size());
+	// Each hit reflects an isolated single replacement, not the combined "XX-XX".
+	EXPECT_EQ("XX-a", aegisub::subtitle_match_report::ReplacedLineText(hits[0]));
+	EXPECT_EQ("a-XX", aegisub::subtitle_match_report::ReplacedLineText(hits[1]));
+}
+
+TEST(subtitle_match_report, replaced_line_text_handles_shorter_replacement) {
+	auto s = base_settings("aa");
+	s.replace_with = "b";
+	auto matcher = MakeSubtitleMatchEnumerator(s);
+	AssDialogue line = make_line("aaXaa");
+
+	std::vector<aegisub::subtitle_match_report::ReplacementHit> hits;
+	aegisub::subtitle_match_report::ReplaceInLine(line, s, matcher, hits);
+
+	ASSERT_EQ(2u, hits.size());
+	EXPECT_EQ("bXaa", aegisub::subtitle_match_report::ReplacedLineText(hits[0]));
+	EXPECT_EQ("aaXb", aegisub::subtitle_match_report::ReplacedLineText(hits[1]));
+}
+
+TEST(subtitle_match_report, replaced_line_text_preserves_utf8_boundaries) {
+	auto s = base_settings(decomposed_e);
+	s.match_case = false;
+	s.replace_with = "ZZ";
+	auto matcher = MakeSubtitleMatchEnumerator(s);
+	AssDialogue line = make_line("xx" + decomposed_e + "yy");
+
+	std::vector<aegisub::subtitle_match_report::ReplacementHit> hits;
+	aegisub::subtitle_match_report::ReplaceInLine(line, s, matcher, hits);
+
+	ASSERT_EQ(1u, hits.size());
+	EXPECT_EQ("xxZZyy", aegisub::subtitle_match_report::ReplacedLineText(hits[0]));
+}
+
+// ----------------------------------------------------------------------------
 // skip_tags: match offsets map back into the original (tagged) field text.
 // ----------------------------------------------------------------------------
 TEST(subtitle_match_report, skip_tags_maps_offsets_to_original_text) {

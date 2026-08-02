@@ -55,16 +55,22 @@ void DialogSearchResults::InitCommon(bool replace_mode) {
 	for (auto const& hit : hits)
 		hit_line_ids.insert(hit.line_id);
 
-	list = new wxListView(this, -1, wxDefaultPosition, FromDIP(wxSize(720, 280)),
+	list = new wxListView(this, -1, wxDefaultPosition, FromDIP(wxSize(860, 280)),
 	                      wxLC_REPORT);
 
+	// Column order: Line/Start/Style are quick orientation; Match|Replacement
+	// pair the before/after fragments; Context|Replaced line pair the full
+	// before/after line so a diff scan stays eye-adjacent.
 	list->InsertColumn(0, _("Line"), wxLIST_FORMAT_RIGHT, FromDIP(50));
 	list->InsertColumn(1, _("Start"), wxLIST_FORMAT_LEFT, FromDIP(90));
 	list->InsertColumn(2, _("Style"), wxLIST_FORMAT_LEFT, FromDIP(100));
 	list->InsertColumn(3, _("Match"), wxLIST_FORMAT_LEFT, FromDIP(120));
-	list->InsertColumn(4, _("Context"), wxLIST_FORMAT_LEFT, FromDIP(240));
 	if (has_replacement)
-		list->InsertColumn(5, _("Replacement"), wxLIST_FORMAT_LEFT, FromDIP(120));
+		list->InsertColumn(4, _("Replacement"), wxLIST_FORMAT_LEFT, FromDIP(120));
+	list->InsertColumn(has_replacement ? 5 : 4, _("Context"),
+	                   wxLIST_FORMAT_LEFT, FromDIP(240));
+	if (has_replacement)
+		list->InsertColumn(6, _("Replaced line"), wxLIST_FORMAT_LEFT, FromDIP(240));
 
 	copy_button = new wxButton(this, -1, _("&Copy selected lines"));
 	auto close_button = new wxButton(this, wxID_CLOSE);
@@ -102,6 +108,23 @@ void DialogSearchResults::InitCommon(bool replace_mode) {
 		&DialogSearchResults::OnCommit, this);
 
 	PopulateList();
+
+	// Autosize text-heavy columns to their content so the new "Replaced line"
+	// column is visible without horizontal scrolling. Fixed widths remain for
+	// Line/Start/Style (short, bounded). Take the larger of content/header so a
+	// long header label never truncates.
+	auto fit = [&](int col) {
+		list->SetColumnWidth(col, wxLIST_AUTOSIZE);
+		int const content = list->GetColumnWidth(col);
+		list->SetColumnWidth(col, wxLIST_AUTOSIZE_USEHEADER);
+		int const header = list->GetColumnWidth(col);
+		if (content > header)
+			list->SetColumnWidth(col, content);
+	};
+	fit(3); // Match
+	if (has_replacement) fit(4); // Replacement
+	fit(has_replacement ? 5 : 4); // Context
+	if (has_replacement) fit(6); // Replaced line
 }
 
 DialogSearchResults::DialogSearchResults(agi::Context *context,
@@ -143,6 +166,9 @@ DialogSearchResults::DialogSearchResults(agi::Context *context,
 		d.start_time = std::move(hit.start_time);
 		d.style = std::move(hit.style);
 		d.matched = std::move(hit.matched);
+		// Compute replaced_line before move()-ing line_text/replacement out of
+		// `hit` — ReplacedLineText reads both.
+		d.replaced_line = aegisub::subtitle_match_report::ReplacedLineText(hit);
 		d.line_text = std::move(hit.line_text);
 		d.replacement = std::move(hit.replacement);
 		d.field = hit.field;
@@ -172,9 +198,11 @@ void DialogSearchResults::PopulateList() {
 		list->SetItem(idx, 1, to_wx(hit.start_time));
 		list->SetItem(idx, 2, to_wx(hit.style));
 		list->SetItem(idx, 3, to_wx(hit.matched));
-		list->SetItem(idx, 4, to_wx(*hit.line_text));
 		if (has_replacement)
-			list->SetItem(idx, 5, to_wx(hit.replacement));
+			list->SetItem(idx, 4, to_wx(hit.replacement));
+		list->SetItem(idx, has_replacement ? 5 : 4, to_wx(*hit.line_text));
+		if (has_replacement)
+			list->SetItem(idx, 6, to_wx(hit.replaced_line));
 		list->SetItemData(idx, static_cast<long>(i));
 	}
 

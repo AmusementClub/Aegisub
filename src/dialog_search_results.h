@@ -34,6 +34,9 @@ class DialogSearchResults final : public wxDialog {
 		std::string matched;
 		std::shared_ptr<std::string const> line_text;
 		std::string replacement;
+		/// Full field text as it would read if only this hit's replacement were
+		/// applied (per-hit isolated view, matches the Replacement column).
+		std::string replaced_line;
 		SearchReplaceSettings::Field field = SearchReplaceSettings::Field::TEXT;
 		/// Byte range in `line_text` (pre-replacement for replace reports).
 		std::size_t match_start = 0;

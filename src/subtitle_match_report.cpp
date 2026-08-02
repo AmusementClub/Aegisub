@@ -168,4 +168,20 @@ std::size_t ReplaceInLine(AssDialogue& line, SearchReplaceSettings const& settin
 	return count;
 }
 
+std::string ReplacedLineText(ReplacementHit const& hit) {
+	std::string out;
+	if (!hit.line_text)
+		return out;
+	auto const& original = *hit.line_text;
+	// start/end are clamped defensively: callers (ReplaceInLine, tests) produce
+	// in-range coordinates, but a malformed hit must never read out of bounds.
+	auto const start = hit.start <= original.size() ? hit.start : original.size();
+	auto const end = hit.end <= original.size() ? hit.end : original.size();
+	out.reserve(start + hit.replacement.size() + (original.size() - end));
+	out.append(original, 0, start);
+	out.append(hit.replacement);
+	out.append(original, end, std::string::npos);
+	return out;
+}
+
 }

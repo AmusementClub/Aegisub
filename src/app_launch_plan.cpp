@@ -471,159 +471,264 @@ std::string const& SelectedInput(SingleInputOptions const& options) {
 	return options.positional.empty() ? options.named : options.positional;
 }
 
-void ParseHeadless(std::vector<std::string> const& args, AppLaunchPlan& plan) {
-	CLI::App app{"Run Aegisub automation and inspection without the GUI", "Aegisub.exe --headless"};
-	ConfigureRoot(app);
-
+struct HeadlessCliState {
 	RunOptions run_options;
-	auto* run = app.add_subcommand("run", "Run a versioned JSON automation scenario");
-	AddRunOptions(*run, run_options, true);
-
 	ProbeOptions probe_options;
-	auto* probe = app.add_subcommand("probe", "Run a focused runtime probe");
-	probe->require_subcommand(1, 1);
-	auto* playback = probe->add_subcommand("playback", "Validate playback timing and provider selection");
-	AddProbeOptions(*playback, probe_options);
-
 	MediaInspectOptions media_options;
 	SingleInputOptions ass_info_options;
 	SingleInputOptions trace_options;
 	std::string ass_encoding;
+	CLI::App* run = nullptr;
+	CLI::App* playback = nullptr;
+	CLI::App* media = nullptr;
+	CLI::App* ass_info = nullptr;
+	CLI::App* trace = nullptr;
+};
+
+struct FontCollectorCliState {
+	using Options = aegisub::fontcollector_subcommand::Options;
+	using Operation = aegisub::fontcollector_subcommand::Operation;
+
+	Options check_options;
+	Options collect_options;
+	Options validate_options;
+	Options list_options;
+	Options normalize_options;
+	CLI::App* check = nullptr;
+	CLI::App* collect = nullptr;
+	CLI::App* validate = nullptr;
+	CLI::App* list = nullptr;
+	CLI::App* normalize = nullptr;
+
+	FontCollectorCliState() {
+		check_options.operation = Operation::Check;
+		collect_options.operation = Operation::Collect;
+		validate_options.operation = Operation::Validate;
+		validate_options.strict = true;
+		list_options.operation = Operation::List;
+		normalize_options.operation = Operation::Normalize;
+	}
+};
+
+struct GuiTestCliState {
+	GuiHostOptions host_options;
+	RunOptions run_options;
+	CLI::App* host = nullptr;
+	CLI::App* run = nullptr;
+};
+
+constexpr char const* kCliProgramName = "Aegisub.exe";
+constexpr char const* kHeadlessModeDescription =
+	"Run automation and inspection without the GUI";
+constexpr char const* kGuiTestModeDescription =
+	"Run or host deterministic GUI automation";
+constexpr char const* kFontCollectorModeDescription =
+	"Collect, validate, list, or normalize fonts used by ASS/SSA subtitle scripts";
+
+void RegisterHeadless(CLI::App& app, HeadlessCliState& state) {
+	ConfigureRoot(app);
+
+	state.run = app.add_subcommand("run", "Run a versioned JSON automation scenario");
+	AddRunOptions(*state.run, state.run_options, true);
+
+	auto* probe = app.add_subcommand("probe", "Run a focused runtime probe");
+	probe->require_subcommand(1, 1);
+	state.playback = probe->add_subcommand(
+		"playback", "Validate playback timing and provider selection");
+	AddProbeOptions(*state.playback, state.probe_options);
+
 	auto* inspect = app.add_subcommand("inspect", "Inspect runtime-readable project artifacts");
 	inspect->require_subcommand(1, 1);
-	auto* media = inspect->add_subcommand("media", "Inspect media providers, tracks, and playback state");
-	AddMediaInspectOptions(*media, media_options);
-	auto* ass_info = inspect->add_subcommand("ass-info", "Inspect subtitle script metadata");
-	AddSingleInputOptions(*ass_info, ass_info_options, "subtitle", "Subtitle script path");
-	ass_info->add_option("--encoding", ass_encoding, "Subtitle character encoding")
+	state.media = inspect->add_subcommand(
+		"media", "Inspect media providers, tracks, and playback state");
+	AddMediaInspectOptions(*state.media, state.media_options);
+	state.ass_info = inspect->add_subcommand("ass-info", "Inspect subtitle script metadata");
+	AddSingleInputOptions(*state.ass_info, state.ass_info_options, "subtitle", "Subtitle script path");
+	state.ass_info->add_option("--encoding", state.ass_encoding, "Subtitle character encoding")
 		->check(NonEmptyValue());
-	auto* trace = inspect->add_subcommand("trace", "Inspect a trace session");
-	AddSingleInputOptions(*trace, trace_options, "trace", "Trace session directory or trace file");
+	state.trace = inspect->add_subcommand("trace", "Inspect a trace session");
+	AddSingleInputOptions(
+		*state.trace, state.trace_options, "trace", "Trace session directory or trace file");
+}
 
-	if (!ParseWithCli11(app, args, 2, plan))
-		return;
-
-	if (*run) {
-		plan.headless_run = BuildRunRequest(run_options);
+void ApplyHeadless(HeadlessCliState& state, AppLaunchPlan& plan) {
+	if (*state.run) {
+		plan.headless_run = BuildRunRequest(state.run_options);
 		return;
 	}
-	if (*playback) {
-		plan.headless_service.emplace(BuildProbeCommand(probe_options));
+	if (*state.playback) {
+		plan.headless_service.emplace(BuildProbeCommand(state.probe_options));
 		return;
 	}
-	if (*media) {
-		plan.headless_service.emplace(BuildMediaInspectCommand(media_options));
+	if (*state.media) {
+		plan.headless_service.emplace(BuildMediaInspectCommand(state.media_options));
 		return;
 	}
-	if (*ass_info) {
+	if (*state.ass_info) {
 		aegisub::ass_info_service::AssInfoInspectRequest request;
-		request.subtitle_path = agi::fs::PathFromString(SelectedInput(ass_info_options));
-		request.encoding = std::move(ass_encoding);
+		request.subtitle_path = agi::fs::PathFromString(SelectedInput(state.ass_info_options));
+		request.encoding = std::move(state.ass_encoding);
 		plan.headless_service.emplace(
 			aegisub::headless_service_cli::InspectAssInfoCommand{std::move(request)});
 		return;
 	}
-	if (*trace) {
+	if (*state.trace) {
 		aegisub::trace_inspect_service::TraceInspectRequest request;
-		request.input_path = agi::fs::PathFromString(SelectedInput(trace_options));
+		request.input_path = agi::fs::PathFromString(SelectedInput(state.trace_options));
 		plan.headless_service.emplace(
 			aegisub::headless_service_cli::InspectTraceCommand{std::move(request)});
 	}
 }
 
-void ParseFontCollector(std::vector<std::string> const& args, AppLaunchPlan& plan) {
-	using aegisub::fontcollector_subcommand::Options;
-	using aegisub::fontcollector_subcommand::Operation;
-
-	CLI::App app{
-		"Collect, validate, list, or normalize fonts used by ASS/SSA subtitle scripts",
-		"Aegisub.exe fontcollector"};
+void RegisterFontCollector(CLI::App& app, FontCollectorCliState& state) {
 	ConfigureRoot(app);
 
-	Options check_options;
-	check_options.operation = Operation::Check;
-	auto* check = app.add_subcommand("check", "Check fonts used by subtitle scripts");
-	AddFontCollectorCommonOptions(*check, check_options);
-	check->add_flag("--strict", check_options.strict,
+	state.check = app.add_subcommand("check", "Check fonts used by subtitle scripts");
+	AddFontCollectorCommonOptions(*state.check, state.check_options);
+	state.check->add_flag("--strict", state.check_options.strict,
 		"Exit non-zero when fonts, glyphs, or styles are missing");
 
-	Options collect_options;
-	collect_options.operation = Operation::Collect;
-	auto* collect = app.add_subcommand("collect", "Copy fonts used by subtitle scripts");
-	AddFontCollectorCommonOptions(*collect, collect_options);
-	auto* destination = collect->add_option_group("Destination");
-	destination->add_option("--to", collect_options.destination, "Copy fonts to directory")
+	state.collect = app.add_subcommand("collect", "Copy fonts used by subtitle scripts");
+	AddFontCollectorCommonOptions(*state.collect, state.collect_options);
+	auto* destination = state.collect->add_option_group("Destination");
+	destination->add_option("--to", state.collect_options.destination, "Copy fonts to directory")
 		->option_text("DIR")
 		->check(NonEmptyValue());
-	destination->add_flag("--to-script-dir", collect_options.copy_to_script_directory,
+	destination->add_flag("--to-script-dir", state.collect_options.copy_to_script_directory,
 		"Copy fonts next to each subtitle file");
 	destination->require_option(1, 1);
-	collect->add_flag("--strict", collect_options.strict,
+	state.collect->add_flag("--strict", state.collect_options.strict,
 		"Exit non-zero when fonts, glyphs, styles, or copies are missing");
 
-	Options validate_options;
-	validate_options.operation = Operation::Validate;
-	validate_options.strict = true;
-	auto* validate = app.add_subcommand("validate", "Validate fonts with strict exit status");
-	AddFontCollectorCommonOptions(*validate, validate_options);
+	state.validate = app.add_subcommand("validate", "Validate fonts with strict exit status");
+	AddFontCollectorCommonOptions(*state.validate, state.validate_options);
 
-	Options list_options;
-	list_options.operation = Operation::List;
-	auto* list = app.add_subcommand("list", "List fonts used by subtitle scripts");
-	AddFontCollectorCommonOptions(*list, list_options);
-	list->add_flag("-q,--quiet", list_options.quiet, "Suppress normal font list output");
+	state.list = app.add_subcommand("list", "List fonts used by subtitle scripts");
+	AddFontCollectorCommonOptions(*state.list, state.list_options);
+	state.list->add_flag("-q,--quiet", state.list_options.quiet, "Suppress normal font list output");
 
-	Options normalize_options;
-	normalize_options.operation = Operation::Normalize;
-	auto* normalize = app.add_subcommand(
+	state.normalize = app.add_subcommand(
 		"normalize", "Build a read-only ASS font-name normalization plan");
-	AddFontCollectorNormalizationOptions(*normalize, normalize_options);
-
-	if (!ParseWithCli11(app, args, 2, plan))
-		return;
-
-	if (*check)
-		plan.fontcollector_options.emplace(std::move(check_options));
-	else if (*collect)
-		plan.fontcollector_options.emplace(std::move(collect_options));
-	else if (*validate)
-		plan.fontcollector_options.emplace(std::move(validate_options));
-	else if (*list)
-		plan.fontcollector_options.emplace(std::move(list_options));
-	else if (*normalize)
-		plan.fontcollector_options.emplace(std::move(normalize_options));
+	AddFontCollectorNormalizationOptions(*state.normalize, state.normalize_options);
 }
 
-void ParseGuiTest(std::vector<std::string> const& args, AppLaunchPlan& plan) {
-	CLI::App app{"Run or host deterministic Aegisub GUI automation", "Aegisub.exe --gui-test"};
+void ApplyFontCollector(FontCollectorCliState& state, AppLaunchPlan& plan) {
+	if (*state.check)
+		plan.fontcollector_options.emplace(std::move(state.check_options));
+	else if (*state.collect)
+		plan.fontcollector_options.emplace(std::move(state.collect_options));
+	else if (*state.validate)
+		plan.fontcollector_options.emplace(std::move(state.validate_options));
+	else if (*state.list)
+		plan.fontcollector_options.emplace(std::move(state.list_options));
+	else if (*state.normalize)
+		plan.fontcollector_options.emplace(std::move(state.normalize_options));
+}
+
+void RegisterGuiTest(CLI::App& app, GuiTestCliState& state) {
 	ConfigureRoot(app);
 
-	GuiHostOptions host_options;
-	auto* host = app.add_subcommand("host", "Start an isolated GUI host for an external driver");
-	AddGuiHostOptions(*host, host_options);
+	state.host = app.add_subcommand("host", "Start an isolated GUI host for an external driver");
+	AddGuiHostOptions(*state.host, state.host_options);
 
-	RunOptions run_options;
-	auto* run = app.add_subcommand("run", "Run a versioned JSON scenario inside the GUI");
-	AddRunOptions(*run, run_options, false);
+	state.run = app.add_subcommand("run", "Run a versioned JSON scenario inside the GUI");
+	AddRunOptions(*state.run, state.run_options, false);
+}
 
-	if (!ParseWithCli11(app, args, 2, plan))
-		return;
-
-	if (*host) {
+void ApplyGuiTest(GuiTestCliState& state, AppLaunchPlan& plan) {
+	if (*state.host) {
 		plan.gui_test_host = true;
 		aegisub::headless_automation_cli::RunRequest request;
-		if (!host_options.profile_directory.empty())
-			request.profile_directory = agi::fs::PathFromString(host_options.profile_directory);
-		if (!host_options.artifacts_directory.empty())
-			request.artifacts_directory = agi::fs::PathFromString(host_options.artifacts_directory);
-		request.keep_profile = host_options.keep_profile;
-		plan.gui_test_open_files = std::move(host_options.open_files);
+		if (!state.host_options.profile_directory.empty()) {
+			request.profile_directory =
+				agi::fs::PathFromString(state.host_options.profile_directory);
+		}
+		if (!state.host_options.artifacts_directory.empty()) {
+			request.artifacts_directory =
+				agi::fs::PathFromString(state.host_options.artifacts_directory);
+		}
+		request.keep_profile = state.host_options.keep_profile;
+		plan.gui_test_open_files = std::move(state.host_options.open_files);
 		plan.gui_test_run.emplace(std::move(request));
 		return;
 	}
 
-	if (*run)
-		plan.gui_test_run = BuildRunRequest(run_options);
+	if (*state.run)
+		plan.gui_test_run = BuildRunRequest(state.run_options);
+}
+
+std::string ModeInvocationName(std::vector<std::string> const& args) {
+	if (args.size() < 2)
+		return kCliProgramName;
+	return std::string(kCliProgramName) + " " + args[1];
+}
+
+void ParseHeadless(std::vector<std::string> const& args, AppLaunchPlan& plan) {
+	CLI::App app{
+		kHeadlessModeDescription,
+		ModeInvocationName(args)};
+	HeadlessCliState state;
+	RegisterHeadless(app, state);
+	if (!ParseWithCli11(app, args, 2, plan))
+		return;
+	ApplyHeadless(state, plan);
+}
+
+void ParseFontCollector(std::vector<std::string> const& args, AppLaunchPlan& plan) {
+	CLI::App app{
+		kFontCollectorModeDescription,
+		ModeInvocationName(args)};
+	FontCollectorCliState state;
+	RegisterFontCollector(app, state);
+	if (!ParseWithCli11(app, args, 2, plan))
+		return;
+	ApplyFontCollector(state, plan);
+}
+
+void ParseGuiTest(std::vector<std::string> const& args, AppLaunchPlan& plan) {
+	CLI::App app{
+		kGuiTestModeDescription,
+		ModeInvocationName(args)};
+	GuiTestCliState state;
+	RegisterGuiTest(app, state);
+	if (!ParseWithCli11(app, args, 2, plan))
+		return;
+	ApplyGuiTest(state, plan);
+}
+
+// Root help lists only top-level modes (subcommand discovery). Nested commands and
+// options belong to each mode's own --help via the shared Register* trees.
+std::string BuildRootHelpText() {
+	HeadlessCliState headless_state;
+	GuiTestCliState gui_test_state;
+	FontCollectorCliState fontcollector_state;
+	CLI::App app{"Aegisub subtitle editor and CLI tools", kCliProgramName};
+	app.footer(
+		"Without a CLI mode, remaining arguments open the GUI (for example subtitle files).\n"
+		"Modes are subcommands. Prefer: headless, gui-test, fontcollector.\n"
+		"Legacy tokens --headless and --gui-test remain accepted.\n"
+		"Use \"Aegisub.exe <mode> --help\" for that mode's subcommands and options.");
+
+	// Register the complete mode trees so root discovery and mode help share the
+	// same command definitions. CLI11's normal formatter still shows only the
+	// root's immediate subcommands here.
+	auto* headless = app.add_subcommand("headless", kHeadlessModeDescription);
+	RegisterHeadless(*headless, headless_state);
+	auto* gui_test = app.add_subcommand("gui-test", kGuiTestModeDescription);
+	RegisterGuiTest(*gui_test, gui_test_state);
+	auto* fontcollector = app.add_subcommand(
+		"fontcollector", kFontCollectorModeDescription);
+	RegisterFontCollector(*fontcollector, fontcollector_state);
+
+	return app.help();
+}
+
+bool IsHeadlessModeToken(std::string const& token) {
+	return token == "headless" || token == "--headless";
+}
+
+bool IsGuiTestModeToken(std::string const& token) {
+	return token == "gui-test" || token == "--gui-test";
 }
 
 }
@@ -634,13 +739,19 @@ AppLaunchPlan ParseAppLaunchPlan(std::vector<std::string> const& args) {
 	if (args.size() < 2)
 		return plan;
 
-	if (args[1] == "--headless") {
+	if (args[1] == "--help" || args[1] == "-h") {
+		plan.immediate_exit_code = 0;
+		plan.immediate_output = BuildRootHelpText();
+		return plan;
+	}
+
+	if (IsHeadlessModeToken(args[1])) {
 		plan.mode = AppLaunchMode::Headless;
 		ParseHeadless(args, plan);
 		return plan;
 	}
 
-	if (args[1] == "--gui-test") {
+	if (IsGuiTestModeToken(args[1])) {
 		plan.mode = AppLaunchMode::GuiTest;
 		ParseGuiTest(args, plan);
 		return plan;
@@ -654,11 +765,12 @@ AppLaunchPlan ParseAppLaunchPlan(std::vector<std::string> const& args) {
 
 	if (args[1] == "--cli") {
 		plan.mode = AppLaunchMode::Headless;
-		plan.error = "--cli is no longer supported; use --headless run, probe, or inspect";
+		plan.error = "--cli is no longer supported; use headless run, probe, or inspect";
 	}
 	else if (args[1] == "--headless-playback-probe") {
 		plan.mode = AppLaunchMode::Headless;
-		plan.error = "--headless-playback-probe is no longer supported; use --headless probe playback";
+		plan.error =
+			"--headless-playback-probe is no longer supported; use headless probe playback";
 	}
 	return plan;
 }

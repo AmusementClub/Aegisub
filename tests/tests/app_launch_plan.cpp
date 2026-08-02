@@ -12,6 +12,97 @@ TEST(app_launch_plan, leaves_normal_gui_file_arguments_untouched) {
 	EXPECT_FALSE(plan.immediate_exit_code);
 }
 
+TEST(app_launch_plan, root_help_lists_only_top_level_modes) {
+	for (auto const* flag : {"--help", "-h"}) {
+		auto plan = ParseAppLaunchPlan({"Aegisub", flag});
+
+		ASSERT_TRUE(plan.immediate_exit_code) << flag;
+		EXPECT_EQ(*plan.immediate_exit_code, 0) << flag;
+		EXPECT_TRUE(plan.ParseSucceeded()) << flag;
+		EXPECT_TRUE(plan.RequestedPlainProcess()) << flag;
+		EXPECT_EQ(plan.mode, AppLaunchMode::Gui) << flag;
+		// Root help is discovery-only: mode subcommands, not nested trees.
+		EXPECT_NE(plan.immediate_output.find("headless"), std::string::npos) << flag;
+		EXPECT_NE(plan.immediate_output.find("gui-test"), std::string::npos) << flag;
+		EXPECT_NE(plan.immediate_output.find("fontcollector"), std::string::npos) << flag;
+		// Nested command tokens / options must not appear at root (word "normalize"
+		// may still appear inside the fontcollector description text).
+		EXPECT_EQ(plan.immediate_output.find("playback"), std::string::npos) << flag;
+		EXPECT_EQ(plan.immediate_output.find("ass-info"), std::string::npos) << flag;
+		EXPECT_EQ(plan.immediate_output.find("--scenario"), std::string::npos) << flag;
+		EXPECT_EQ(plan.immediate_output.find("--probe-video"), std::string::npos) << flag;
+	}
+}
+
+TEST(app_launch_plan, help_uses_a_stable_program_name) {
+	auto plan = ParseAppLaunchPlan({"private/bin/Aegisub.exe", "--help"});
+
+	ASSERT_TRUE(plan.immediate_exit_code);
+	EXPECT_EQ(*plan.immediate_exit_code, 0);
+	EXPECT_NE(plan.immediate_output.find("Aegisub.exe"), std::string::npos);
+	EXPECT_EQ(plan.immediate_output.find("private/bin"), std::string::npos);
+}
+
+TEST(app_launch_plan, mode_help_lists_immediate_subcommands_not_nested_options) {
+	auto headless = ParseAppLaunchPlan({"Aegisub", "headless", "--help"});
+	auto gui_test = ParseAppLaunchPlan({"Aegisub", "gui-test", "--help"});
+	auto fontcollector = ParseAppLaunchPlan({"Aegisub", "fontcollector", "--help"});
+
+	ASSERT_TRUE(headless.immediate_exit_code);
+	ASSERT_TRUE(gui_test.immediate_exit_code);
+	ASSERT_TRUE(fontcollector.immediate_exit_code);
+
+	for (auto const* name : {"run", "probe", "inspect"}) {
+		EXPECT_NE(headless.immediate_output.find(name), std::string::npos) << name;
+	}
+	// Nested under probe/inspect: use "headless probe --help", not mode --help.
+	EXPECT_EQ(headless.immediate_output.find("playback"), std::string::npos);
+	EXPECT_EQ(headless.immediate_output.find("ass-info"), std::string::npos);
+	EXPECT_EQ(headless.immediate_output.find("--probe-video"), std::string::npos);
+
+	for (auto const* name : {"host", "run"}) {
+		EXPECT_NE(gui_test.immediate_output.find(name), std::string::npos) << name;
+	}
+	EXPECT_EQ(gui_test.immediate_output.find("--scenario"), std::string::npos);
+
+	for (auto const* name : {"check", "collect", "validate", "list", "normalize"}) {
+		EXPECT_NE(fontcollector.immediate_output.find(name), std::string::npos) << name;
+	}
+	EXPECT_EQ(fontcollector.immediate_output.find("--matcher"), std::string::npos);
+}
+
+TEST(app_launch_plan, nested_help_lists_the_next_command_level) {
+	auto probe = ParseAppLaunchPlan({"Aegisub", "headless", "probe", "--help"});
+	auto playback = ParseAppLaunchPlan({
+		"Aegisub", "headless", "probe", "playback", "--help"});
+	auto inspect = ParseAppLaunchPlan({"Aegisub", "headless", "inspect", "--help"});
+
+	for (auto const* plan : {&probe, &playback, &inspect}) {
+		ASSERT_TRUE(plan->immediate_exit_code);
+		EXPECT_EQ(*plan->immediate_exit_code, 0);
+		EXPECT_TRUE(plan->ParseSucceeded());
+	}
+	EXPECT_NE(probe.immediate_output.find("playback"), std::string::npos);
+	EXPECT_NE(playback.immediate_output.find("--probe-video"), std::string::npos);
+	EXPECT_NE(inspect.immediate_output.find("media"), std::string::npos);
+}
+
+TEST(app_launch_plan, accepts_flag_style_mode_aliases) {
+	auto bare = ParseAppLaunchPlan({"Aegisub", "headless", "inspect", "trace", "--input", "trace"});
+	auto dashed = ParseAppLaunchPlan({"Aegisub", "--headless", "inspect", "trace", "--input", "trace"});
+	ASSERT_TRUE(bare.headless_service);
+	ASSERT_TRUE(dashed.headless_service);
+	EXPECT_TRUE(std::holds_alternative<aegisub::headless_service_cli::InspectTraceCommand>(
+		*bare.headless_service));
+	EXPECT_TRUE(std::holds_alternative<aegisub::headless_service_cli::InspectTraceCommand>(
+		*dashed.headless_service));
+
+	auto gui_bare = ParseAppLaunchPlan({"Aegisub", "gui-test", "host"});
+	auto gui_dashed = ParseAppLaunchPlan({"Aegisub", "--gui-test", "host"});
+	EXPECT_TRUE(gui_bare.gui_test_host);
+	EXPECT_TRUE(gui_dashed.gui_test_host);
+}
+
 TEST(app_launch_plan, rejects_removed_cli_entry) {
 	auto plan = ParseAppLaunchPlan({"Aegisub", "--cli", "inspect", "media"});
 

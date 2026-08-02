@@ -76,29 +76,63 @@ bool HasBoundStdHandle(DWORD handle_id) {
 	return GetLastError() == ERROR_SUCCESS;
 }
 
-void EnsurePlainProcessConsoleStreams() {
-	auto const needs_stdin = !HasBoundStdHandle(STD_INPUT_HANDLE);
+// GUI-subsystem binaries do not own a console. AttachConsole lets CLI output
+// reach the parent shell. The attached console must be released explicitly so
+// stream cleanup does not depend on process teardown.
+bool EnsurePlainProcessConsoleStreams() {
 	auto const needs_stdout = !HasBoundStdHandle(STD_OUTPUT_HANDLE);
 	auto const needs_stderr = !HasBoundStdHandle(STD_ERROR_HANDLE);
-	if (!needs_stdin && !needs_stdout && !needs_stderr)
-		return;
+	if (!needs_stdout && !needs_stderr)
+		return false;
 
 	if (!AttachConsole(ATTACH_PARENT_PROCESS))
-		return;
+		return false;
 
+	// Do not reopen CONIN$: sharing console input with the parent shell makes
+	// the stuck-prompt problem worse and is unnecessary for current CLI paths.
 	FILE* stream = nullptr;
-	if (needs_stdin)
-		freopen_s(&stream, "CONIN$", "r", stdin);
-	if (needs_stdout)
+	if (needs_stdout) {
 		freopen_s(&stream, "CONOUT$", "w", stdout);
-	if (needs_stderr)
+		setvbuf(stdout, nullptr, _IONBF, 0);
+	}
+	if (needs_stderr) {
 		freopen_s(&stream, "CONOUT$", "w", stderr);
+		setvbuf(stderr, nullptr, _IONBF, 0);
+	}
 
 	std::ios::sync_with_stdio(true);
 	std::cout.clear();
 	std::cerr.clear();
 	std::clog.clear();
+	return true;
 }
+
+void FlushPlainProcessConsoleStreams() {
+	std::cout.flush();
+	std::cerr.flush();
+	std::clog.flush();
+	fflush(stdout);
+	fflush(stderr);
+}
+
+class ScopedParentConsoleAttachment final {
+	bool attached;
+
+public:
+	explicit ScopedParentConsoleAttachment(bool attached) noexcept
+	: attached(attached) {
+	}
+
+	~ScopedParentConsoleAttachment() {
+		if (!attached)
+			return;
+		FlushPlainProcessConsoleStreams();
+		FreeConsole();
+	}
+
+	ScopedParentConsoleAttachment(ScopedParentConsoleAttachment const&) = delete;
+	ScopedParentConsoleAttachment& operator=(ScopedParentConsoleAttachment const&) = delete;
+};
 
 }
 
@@ -119,7 +153,7 @@ extern "C" int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, wxCm
 	observe_phase("startup.entry.capture_process_args");
 	if (launch_plan.RequestedPlainProcess()) {
 		observe_phase("startup.entry.headless_command_check");
-		EnsurePlainProcessConsoleStreams();
+		ScopedParentConsoleAttachment console(EnsurePlainProcessConsoleStreams());
 		return RunAppLaunchPlanInPlainProcessHost(launch_plan);
 	}
 	observe_phase("startup.entry.headless_command_check");

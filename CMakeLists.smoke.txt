@@ -13,6 +13,15 @@ add_custom_target(run-aegisub-gui-test-command-smoke
     USES_TERMINAL
     VERBATIM
 )
+add_custom_target(run-aegisub-cli-help-smoke
+    COMMAND "${CMAKE_COMMAND}"
+        "-DAEGISUB_EXE=$<TARGET_FILE:Aegisub>"
+        -P "${PROJECT_SOURCE_DIR}/tests/smoke/aegisub_cli_help_smoke.cmake"
+    DEPENDS Aegisub
+    COMMENT "Running the Aegisub CLI help smoke"
+    USES_TERMINAL
+    VERBATIM
+)
 if(WIN32)
     add_custom_target(run-aegisub-fontcollector-smoke
         COMMAND "${CMAKE_COMMAND}"
@@ -504,6 +513,17 @@ if(WIN32)
 endif()
 
 if(BUILD_TESTING)
+    add_test(
+        NAME aegisub_cli_help_smoke
+        COMMAND "${CMAKE_COMMAND}"
+            "-DAEGISUB_EXE=$<TARGET_FILE:Aegisub>"
+            -P "${PROJECT_SOURCE_DIR}/tests/smoke/aegisub_cli_help_smoke.cmake"
+    )
+    set_tests_properties(aegisub_cli_help_smoke PROPERTIES
+        LABELS "smoke;cli;process"
+        TIMEOUT 40
+    )
+
     add_executable(fontcollector_api_smoke EXCLUDE_FROM_ALL
         tests/smoke/fontcollector_api_smoke.cpp
     )

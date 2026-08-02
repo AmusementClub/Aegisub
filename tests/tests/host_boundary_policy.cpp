@@ -1042,6 +1042,8 @@ TEST(host_boundary_policy, shared_exe_headless_entry_flows_directly_to_plain_pro
 	auto app_entry_runtime_include_hits = FindLiteralHits(app_entry_cpp, "headless_runtime_bootstrap.h");
 	auto app_entry_plan_parse_hits = FindLiteralHits(app_entry_cpp, "ParseAppLaunchPlan(args)");
 	auto app_entry_plain_host_call_hits = FindLiteralHits(app_entry_cpp, "RunAppLaunchPlanInPlainProcessHost(launch_plan)");
+	auto app_entry_global_input_hits = FindLiteralHits(app_entry_cpp, "SendInput");
+	auto app_entry_return_key_hits = FindLiteralHits(app_entry_cpp, "VK_RETURN");
 	auto process_entry_runtime_include_hits = FindLiteralHits(headless_process_entry_cpp, "headless_runtime_bootstrap.h");
 	auto process_entry_runtime_call_hits = FindLiteralHits(headless_process_entry_cpp, "RunPlainProcessLaunchPlan(plan)");
 	auto process_entry_wx_hits = FindWxMarkers(headless_process_entry_cpp);
@@ -1052,6 +1054,8 @@ TEST(host_boundary_policy, shared_exe_headless_entry_flows_directly_to_plain_pro
 	EXPECT_TRUE(app_entry_runtime_include_hits.empty()) << JoinLines(app_entry_runtime_include_hits);
 	EXPECT_FALSE(app_entry_plan_parse_hits.empty());
 	EXPECT_FALSE(app_entry_plain_host_call_hits.empty());
+	EXPECT_TRUE(app_entry_global_input_hits.empty()) << JoinLines(app_entry_global_input_hits);
+	EXPECT_TRUE(app_entry_return_key_hits.empty()) << JoinLines(app_entry_return_key_hits);
 	EXPECT_FALSE(process_entry_runtime_include_hits.empty());
 	EXPECT_FALSE(process_entry_runtime_call_hits.empty());
 	EXPECT_TRUE(process_entry_wx_hits.empty()) << JoinLines(process_entry_wx_hits);

@@ -25,12 +25,24 @@ function Get-GitText([string[]]$Arguments) {
     return [string]::Join("`n", @($result)).Trim()
 }
 
+function Get-BuildTimeUtc {
+    if ($env:SOURCE_DATE_EPOCH -match '^\d+$') {
+        $epochBase = [DateTime]::SpecifyKind([DateTime]::Parse('1970-01-01'), [DateTimeKind]::Utc)
+        return $epochBase.AddSeconds([int64]$env:SOURCE_DATE_EPOCH).ToString("yyyyMMdd'T'HHmmss'Z'")
+    }
+
+    return (Get-Date).ToUniversalTime().ToString("yyyyMMdd'T'HHmmss'Z'")
+}
+
+$buildTimeUtc = Get-BuildTimeUtc
+
 if (-not (Test-Path (Join-Path $repoRootResolved '.git'))) {
     $forcedVersion = $env:FORCE_GIT_VERSION
     if ($forcedVersion) {
         $content = @(
             '#define BUILD_GIT_VERSION_NUMBER 0',
             "#define BUILD_GIT_VERSION_STRING `"$($forcedVersion.Trim())`"",
+            "#define BUILD_GIT_BUILD_TIME_UTC `"$buildTimeUtc`"",
             '#define TAGGED_RELEASE 0',
             '#define INSTALLER_VERSION "0.0.0"',
             '#define RESOURCE_BASE_VERSION 0, 0, 0'
@@ -48,9 +60,16 @@ if (-not (Test-Path (Join-Path $repoRootResolved '.git'))) {
     throw 'git repo not found and no cached git_version.h - use FORCE_GIT_VERSION to override'
 }
 
-$gitRevision = $lastSvnRevision + [int](Get-GitText @('rev-list', '--count', "$lastSvnHash..HEAD"))
-if ($gitRevision -eq $lastSvnRevision) {
+$revCountText = Get-GitText @('rev-list', '--count', "$lastSvnHash..HEAD")
+if ($revCountText -eq '') {
+    Write-Warning "Could not count commits since $lastSvnHash (shallow clone or missing history?). Version number will be 0. Use fetch-depth: 0 in CI."
     $gitRevision = 0
+}
+else {
+    $gitRevision = $lastSvnRevision + [int]$revCountText
+    if ($gitRevision -eq $lastSvnRevision) {
+        $gitRevision = 0
+    }
 }
 
 $gitVersion = Get-GitText @('describe', '--exact-match')
@@ -75,12 +94,13 @@ else {
         $gitBranch = '(unnamed branch)'
     }
     $gitHash = Get-GitText @('rev-parse', '--short', 'HEAD')
-    $gitVersion = "$gitRevision-$gitBranch-$gitHash"
+    $gitVersion = "$gitRevision-$gitBranch-$gitHash-$buildTimeUtc"
 }
 
 $header = @(
     "#define BUILD_GIT_VERSION_NUMBER $gitRevision",
     "#define BUILD_GIT_VERSION_STRING `"$gitVersion`"",
+    "#define BUILD_GIT_BUILD_TIME_UTC `"$buildTimeUtc`"",
     "#define TAGGED_RELEASE $taggedRelease",
     "#define INSTALLER_VERSION `"$installerVersion`"",
     "#define RESOURCE_BASE_VERSION $resourceVersion"

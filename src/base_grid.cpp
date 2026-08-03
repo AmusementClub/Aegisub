@@ -42,6 +42,7 @@
 #include "grid_column.h"
 #include "grid_column_painter.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "presentation/subtitle_grid_diff.h"
 #include "presentation/subtitle_grid_projection.h"
 #include "project.h"
@@ -99,6 +100,7 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 
 		core.selectionController->AddActiveLineListener(&BaseGrid::OnActiveLineChanged, this),
 		core.selectionController->AddSelectionListener([&]{
+			perf_trace::VideoUiDurationScope trace("grid_select.grid.selection", GetRows());
 			++grid_revision;
 			auto new_selected_rows = GetSelectedRowsInWindow();
 			RefreshChangedVisibleRows(selected_rows, new_selected_rows);
@@ -269,6 +271,7 @@ void BaseGrid::UpdateMaps() {
 }
 
 void BaseGrid::OnActiveLineChanged(AssDialogue *new_active) {
+	perf_trace::VideoUiDurationScope trace("grid_select.grid.active", GetRows());
 	++grid_revision;
 
 	if (new_active) {
@@ -612,6 +615,10 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 			{shift, ctrl, alt},
 		});
 		if (plan.handled) {
+			perf_trace::VideoUiDurationScope select_trace(
+				"grid_select.mouse.total",
+				static_cast<int>(plan.selected_rows.size()),
+				plan.activate_media ? 1 : 0);
 			if (plan.set_active) {
 				// SetActiveLine will scroll the grid if the row is only half-visible,
 				// but we don't want to scroll until the mouse moves or the button is
@@ -1052,6 +1059,10 @@ void BaseGrid::OnKeyDown(wxKeyEvent &event) {
 		event.Skip();
 		return;
 	}
+
+	perf_trace::VideoUiDurationScope select_trace(
+		"grid_select.key.total",
+		static_cast<int>(plan.selected_rows.size()));
 
 	if (plan.set_active) {
 		core.selectionController->SetActiveLine(GetDialogue(plan.active_row));

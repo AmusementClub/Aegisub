@@ -456,6 +456,7 @@ void AudioTimingControllerDialogue::GetMarkers(const TimeRange &range, AudioMark
 
 void AudioTimingControllerDialogue::OnSelectedSetChanged()
 {
+	perf_trace::VideoUiDurationScope trace("grid_select.audio.selection", inactive_line_mode->GetInt());
 	RegenerateSelectedLines();
 	RegenerateInactiveLines();
 }
@@ -543,6 +544,7 @@ void AudioTimingControllerDialogue::DoCommit(bool user_triggered)
 
 void AudioTimingControllerDialogue::Revert()
 {
+	perf_trace::VideoUiDurationScope trace("grid_select.audio.revert", inactive_line_mode->GetInt());
 	command_session.ResetCommitId();
 	auto core = context->GetCore();
 

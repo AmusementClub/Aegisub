@@ -48,6 +48,7 @@
 #include "include/aegisub/hotkey.h"
 #include "initial_line_state.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "project.h"
 #include "placeholder_ctrl.h"
 #include "selection_controller.h"
@@ -68,6 +69,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <limits>
 #include <unordered_set>
 
 #include <wx/bmpbuttn.h>
@@ -629,6 +631,7 @@ void SubsEditBox::UpdateFields(int type, bool repopulate_lists) {
 	if (!line) return;
 
 	if (type & AssFile::COMMIT_DIAG_TIME) {
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.time");
 		// Linked-time ASS projection is no longer needed; keep calls commented
 		// as documentation of the historical paired-control relationship.
 		// start_time->SetLinkedTime(line->End);
@@ -639,36 +642,85 @@ void SubsEditBox::UpdateFields(int type, bool repopulate_lists) {
 	}
 
 	if (type & AssFile::COMMIT_DIAG_TEXT) {
+		auto const text_bytes = static_cast<int>(std::min(
+			line->Text.get().size(),
+			static_cast<size_t>(std::numeric_limits<int>::max())));
 #ifdef WITH_WXSTC
-		if (use_stc) {
-			edit_ctrl_stc->SetTextTo(line->Text);
-		}
-		else {
+		int const styled_text_control = use_stc ? 1 : 0;
+#else
+		int const styled_text_control = 0;
 #endif
-			edit_ctrl_tc->SetValue(to_wx(line->Text));
+		perf_trace::VideoUiDurationScope text_trace(
+			"grid_select.editbox.text",
+			text_bytes,
+			styled_text_control);
+
+		{
+			perf_trace::VideoUiDurationScope set_trace(
+				"grid_select.editbox.text.set",
+				text_bytes,
+				styled_text_control);
 #ifdef WITH_WXSTC
-		}
+			if (use_stc) {
+				edit_ctrl_stc->SetTextTo(line->Text);
+			}
+			else
 #endif
-		UpdateCharacterCount(line->Text);
+			{
+				edit_ctrl_tc->SetValue(to_wx(line->Text));
+			}
+		}
+		{
+			perf_trace::VideoUiDurationScope count_trace(
+				"grid_select.editbox.text.count",
+				text_bytes);
+			UpdateCharacterCount(line->Text);
+		}
 	}
 
 	if (type & AssFile::COMMIT_DIAG_META) {
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.meta");
 		auto core = c->GetCore();
-		layer->SetValue(line->Layer);
-		for (size_t i = 0; i < margin.size(); ++i)
-			margin[i]->SetValue(line->Margin[i]);
-		comment_box->SetValue(line->Comment);
-		style_box->Select(style_box->FindString(to_wx(line->Style)));
-		active_style = line ? core.ass->GetStyle(line->Style) : nullptr;
-		style_edit_button->Enable(active_style != nullptr);
+		{
+			perf_trace::VideoUiDurationScope meta_trace("grid_select.editbox.meta.layer_margin");
+			layer->SetValue(line->Layer);
+			for (size_t i = 0; i < margin.size(); ++i)
+				margin[i]->SetValue(line->Margin[i]);
+		}
+		{
+			perf_trace::VideoUiDurationScope meta_trace("grid_select.editbox.meta.comment");
+			comment_box->SetValue(line->Comment);
+		}
+		{
+			perf_trace::VideoUiDurationScope meta_trace("grid_select.editbox.meta.style", style_box->GetCount());
+			style_box->Select(style_box->FindString(to_wx(line->Style)));
+			active_style = line ? core.ass->GetStyle(line->Style) : nullptr;
+			style_edit_button->Enable(active_style != nullptr);
+		}
 
-		if (repopulate_lists) PopulateList(effect_box, AssDialogue_Effect);
-		effect_box->ChangeValue(to_wx(line->Effect));
-		effect_box->SetStringSelection(to_wx(line->Effect));
+		if (repopulate_lists) {
+			perf_trace::VideoUiDurationScope populate_trace(
+				"grid_select.editbox.meta.populate.effect",
+				static_cast<int>(core.ass->Events.size()));
+			PopulateList(effect_box, AssDialogue_Effect);
+		}
+		{
+			perf_trace::VideoUiDurationScope meta_trace("grid_select.editbox.meta.effect", effect_box->GetCount());
+			effect_box->ChangeValue(to_wx(line->Effect));
+			effect_box->SetStringSelection(to_wx(line->Effect));
+		}
 
-		if (repopulate_lists) PopulateList(actor_box, AssDialogue_Actor);
-		actor_box->ChangeValue(to_wx(line->Actor));
-		actor_box->SetStringSelection(to_wx(line->Actor));
+		if (repopulate_lists) {
+			perf_trace::VideoUiDurationScope populate_trace(
+				"grid_select.editbox.meta.populate.actor",
+				static_cast<int>(core.ass->Events.size()));
+			PopulateList(actor_box, AssDialogue_Actor);
+		}
+		{
+			perf_trace::VideoUiDurationScope meta_trace("grid_select.editbox.meta.actor", actor_box->GetCount());
+			actor_box->ChangeValue(to_wx(line->Actor));
+			actor_box->SetStringSelection(to_wx(line->Actor));
+		}
 	}
 }
 
@@ -702,6 +754,7 @@ void SubsEditBox::PopulateList(wxComboBox *combo, boost::flyweight<std::string> 
 }
 
 void SubsEditBox::OnActiveLineChanged(AssDialogue *new_line) {
+	perf_trace::VideoUiDurationScope trace("grid_select.editbox");
 	wxEventBlocker blocker(this);
 	line = new_line;
 	command_session.ResetCommitId();

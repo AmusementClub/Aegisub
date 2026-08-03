@@ -119,6 +119,10 @@ void VideoController::OnTimecodesChanged(agi::vfr::Framerate const&) {
 }
 
 void VideoController::OnActiveLineChanged(AssDialogue *line) {
+	perf_trace::VideoUiDurationScope trace(
+		"grid_select.video.seek",
+		(line && OPT_GET("Video/Subtitle Sync")->GetBool()) ? 1 : 0,
+		provider ? 1 : 0);
 	if (line && provider && OPT_GET("Video/Subtitle Sync")->GetBool()) {
 		Stop();
 		JumpToTime(line->Start);

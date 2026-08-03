@@ -37,6 +37,7 @@
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "include/aegisub/spellchecker.h"
+#include "perf_trace.h"
 #include "selection_controller.h"
 #include "stc_compat.h"
 #include "text_selection_controller.h"
@@ -52,7 +53,9 @@
 #include <libaegisub/spellchecker.h>
 #include <libaegisub/string_utils.h>
 
+#include <algorithm>
 #include <functional>
+#include <limits>
 #include <string_view>
 #include <utility>
 
@@ -748,48 +751,73 @@ void SubsStyledTextEditCtrl::SetStyles() {
 }
 
 void SubsStyledTextEditCtrl::UpdateStyle() {
-	AssDialogue *diag = context ? context->GetCore().selectionController->GetActiveLine() : nullptr;
-	bool template_line = diag && diag->Comment && agi::util::strings::istarts_with(diag->Effect.get(), "template");
-
-	tokenized_line = agi::ass::TokenizeDialogueBody(line_text, template_line);
-	agi::ass::SplitWords(line_text, tokenized_line);
+	auto const text_bytes = static_cast<int>(std::min(
+		line_text.size(),
+		static_cast<size_t>(std::numeric_limits<int>::max())));
+	bool template_line = false;
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.tokenize", text_bytes);
+		AssDialogue *diag = context ? context->GetCore().selectionController->GetActiveLine() : nullptr;
+		template_line = diag && diag->Comment && agi::util::strings::istarts_with(diag->Effect.get(), "template");
+		tokenized_line = agi::ass::TokenizeDialogueBody(line_text, template_line);
+		agi::ass::SplitWords(line_text, tokenized_line);
+	}
 
 	cursor_pos = -1;
-	UpdateCallTip();
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.calltip", text_bytes);
+		UpdateCallTip();
+	}
 
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.begin", text_bytes);
 #if wxCHECK_VERSION (3, 1, 0)
-	StartStyling(0);
+		StartStyling(0);
 #else
-	StartStyling(0,255);
+		StartStyling(0,255);
 #endif
+	}
 
 	if (!OPT_GET("Subtitle/Highlight/Syntax")->GetBool()) {
-		SetStyling(line_text.size(), 0);
+		{
+			perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.plain", text_bytes);
+			SetStyling(line_text.size(), 0);
+		}
 		// Character markers are independent of syntax highlighting.
-		UpdateCharacterMarkers();
+		{
+			perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.markers", text_bytes);
+			UpdateCharacterMarkers();
+		}
 		return;
 	}
 
 	if (line_text.empty()) {
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.markers", text_bytes);
 		UpdateCharacterMarkers();
 		return;
 	}
 
-	SetIndicatorCurrent(0);
-	size_t pos = 0;
-	for (auto const& style_range : agi::ass::SyntaxHighlight(line_text, tokenized_line, spellchecker.get())) {
-		if (style_range.type == agi::ass::SyntaxStyle::SPELLING) {
-			SetStyling(style_range.length, agi::ass::SyntaxStyle::NORMAL);
-			IndicatorFillRange(pos, style_range.length);
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.syntax", text_bytes, template_line ? 1 : 0);
+		SetIndicatorCurrent(0);
+		size_t pos = 0;
+		for (auto const& style_range : agi::ass::SyntaxHighlight(line_text, tokenized_line, spellchecker.get())) {
+			if (style_range.type == agi::ass::SyntaxStyle::SPELLING) {
+				SetStyling(style_range.length, agi::ass::SyntaxStyle::NORMAL);
+				IndicatorFillRange(pos, style_range.length);
+			}
+			else {
+				SetStyling(style_range.length, style_range.type);
+				IndicatorClearRange(pos, style_range.length);
+			}
+			pos += style_range.length;
 		}
-		else {
-			SetStyling(style_range.length, style_range.type);
-			IndicatorClearRange(pos, style_range.length);
-		}
-		pos += style_range.length;
 	}
 
-	UpdateCharacterMarkers();
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.markers", text_bytes);
+		UpdateCharacterMarkers();
+	}
 }
 
 void SubsStyledTextEditCtrl::UpdateBraceHighlight() {
@@ -842,34 +870,66 @@ void SubsStyledTextEditCtrl::UpdateCallTip() {
 }
 
 void SubsStyledTextEditCtrl::SetTextTo(std::string const& text) {
-	SetEvtHandlerEnabled(false);
-	Freeze();
+	auto const text_bytes = static_cast<int>(std::min(
+		text.size(),
+		static_cast<size_t>(std::numeric_limits<int>::max())));
 
-	auto insertion_point = GetInsertionPoint();
-	if (static_cast<size_t>(insertion_point) > line_text.size())
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.freeze", text_bytes);
+		SetEvtHandlerEnabled(false);
+		Freeze();
+	}
+
+	size_t old_pos = 0;
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.caret_capture", text_bytes);
+		auto insertion_point = GetInsertionPoint();
+		if (static_cast<size_t>(insertion_point) > line_text.size())
+			line_text = GetTextRaw().data();
+		old_pos = agi::CharacterCount(line_text.begin(), line_text.begin() + insertion_point, 0);
+		line_text.clear();
+	}
+
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.selection_reset", text_bytes);
+		if (context)
+			context->GetCore().textSelectionController->SetSelection(0, 0);
+		else
+			SetSelection(0, 0);
+	}
+
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.set_text_raw", text_bytes);
+		SetTextRaw(text.c_str());
+	}
+
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.selection_restore", text_bytes);
+		auto pos = agi::IndexOfCharacter(text, old_pos);
+		if (context)
+			context->GetCore().textSelectionController->SetSelection(pos, pos);
+		else
+			SetSelection(pos, pos);
+	}
+
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.sync", text_bytes);
+		SetEvtHandlerEnabled(true);
+		// Events were disabled during SetTextRaw, so force a full style/marker refresh.
 		line_text = GetTextRaw().data();
-	auto old_pos = agi::CharacterCount(line_text.begin(), line_text.begin() + insertion_point, 0);
-	line_text.clear();
-
-	if (context) {
-		context->GetCore().textSelectionController->SetSelection(0, 0);
-		SetTextRaw(text.c_str());
-		auto pos = agi::IndexOfCharacter(text, old_pos);
-		context->GetCore().textSelectionController->SetSelection(pos, pos);
 	}
-	else {
-		SetSelection(0, 0);
-		SetTextRaw(text.c_str());
-		auto pos = agi::IndexOfCharacter(text, old_pos);
-		SetSelection(pos, pos);
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style", text_bytes);
+		UpdateStyle();
 	}
-
-	SetEvtHandlerEnabled(true);
-	// Events were disabled during SetTextRaw, so force a full style/marker refresh.
-	line_text = GetTextRaw().data();
-	UpdateStyle();
-	UpdateBraceHighlight();
-	Thaw();
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.brace", text_bytes);
+		UpdateBraceHighlight();
+	}
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.thaw", text_bytes);
+		Thaw();
+	}
 }
 
 void SubsStyledTextEditCtrl::Paste() {

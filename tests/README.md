@@ -10,7 +10,6 @@
   native process runners.
 - `gui-automation/` contains the Windows UIA correctness and specialized Skia
   drivers, plus their shared black-box driver support.
-- `dotnet/` contains the Locale Viewer headless test project.
 - `fixtures/` contains source fixtures. `setup.ps1`, `setup.bat`, and
   `setup.sh` copy them into the build-tree test runtime before unit tests run.
 - `support/` contains shared GoogleTest fixtures and test-only stubs.

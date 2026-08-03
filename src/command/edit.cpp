@@ -70,6 +70,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -350,24 +351,133 @@ struct parsed_line {
 	parsed_line(AssDialogue *line) : line(line), blocks(line->ParseTags()) { }
 	parsed_line(parsed_line&& r) = default;
 
-	const AssOverrideTag *find_tag(int blockn, std::string const& tag_name, std::string const& alt) const {
+	/// Index of the last override block in effect at the plain-text offset
+	/// `pos`, i.e. the last block whose closing `}` is at or before the cursor.
+	/// Unlike `block_at_pos` (which leans right so `set_tag` can reuse an
+	/// adjacent block), this never counts a block that starts after the cursor,
+	/// so a `\r` sitting just past the cursor does not retroactively discard
+	/// earlier overrides. Returns -1 when no override block precedes the cursor.
+	int block_for_read(int pos) const {
+		auto const& text = line->Text.get();
+		int max = (int)text.size() - 1;
+		int n = -1;            // index of the override block being scanned / last closed
+		bool in_block = false;
+		for (int i = 0; i <= max; ++i) {
+			if (text[i] == '{') {
+				if (!in_block) ++n;
+				in_block = true;
+			}
+			else if (text[i] == '}' && in_block) {
+				in_block = false;
+				// This block has now closed; n stays at its index so the
+				// plain-text cursor positions immediately after it still see it
+				// as the last effective block.
+			}
+			else if (!in_block) {
+				if (--pos <= 0)
+					return n;
+			}
+		}
+		return n;
+	}
+
+	/// Resolve the style a `\r` tag targets: bare `\r` (or empty/unresolved
+	/// name) resets to `event_style`; `\r Name` is resolved through
+	/// `resolve_reset`, falling back to `event_style` when it returns null.
+	/// This is the single source of truth for `\r` target resolution so the two
+	/// scanners below cannot drift apart.
+	static AssStyle const* reset_target(
+		AssOverrideTag const& tag,
+		AssStyle const& event_style,
+		std::function<AssStyle const*(std::string_view)> const& resolve_reset)
+	{
+		std::string name;
+		if (!tag.Params.empty() && !tag.Params.front().omitted &&
+		    !tag.Params.front().empty)
+			name = tag.Params.front().Get<std::string>();
+		if (name.empty() || !resolve_reset)
+			return &event_style;
+		if (auto const* rs = resolve_reset(name))
+			return rs;
+		return &event_style;
+	}
+
+	/// Resolve the base style in effect at `blockn` by scanning backward for
+	/// the nearest `\r`. `event_style` must outlive the returned pointer.
+	AssStyle const* base_style_at(
+		int blockn,
+		AssStyle const& event_style,
+		std::function<AssStyle const*(std::string_view)> const& resolve_reset) const
+	{
+		for (int i = blockn; i >= 0; --i) {
+			auto* ovr = dynamic_cast<AssDialogueBlockOverride*>(blocks[i].get());
+			if (!ovr) continue;
+			for (auto it = ovr->Tags.rbegin(); it != ovr->Tags.rend(); ++it) {
+				if (it->Name == "\\r")
+					return reset_target(*it, event_style, resolve_reset);
+			}
+		}
+		return &event_style;
+	}
+
+	/// Result of a reset-aware override lookup. `tag` is the nearest matching
+	/// override not shadowed by a `\r` between it and the cursor, or null.
+	/// `base` is the fallback style for an absent or empty/invalid override.
+	/// When `tag` is non-null `base` is always the event style: an override
+	/// found before any `\r` means no reset is in effect, and an empty/invalid
+	/// override value falls back to the event baseline (VSFilter semantics —
+	/// `{\rAlt\c}` with an empty `\c` uses the event style, not Alt). `base`
+	/// only reflects a `\r` target when no unshadowed target tag was found.
+	/// `event_style` must outlive the returned pointer.
+	struct ResetAwareLookup {
+		AssOverrideTag const* tag = nullptr;
+		AssStyle const* base = nullptr;
+	};
+
+	/// Scan backward from `blockn` for `tag_name`/`alt`, honouring `\r` reset
+	/// semantics: a target tag found before any `\r` is authoritative and
+	/// returned immediately (with base == event style); a `\r` found before any
+	/// target discards earlier overrides and establishes the fallback style via
+	/// `base`. Use this instead of plain tag lookup when a value must reflect
+	/// `\r` resets (font dialog preview, colour/strikethrough current-state
+	/// reads). `event_style` must outlive the returned pointer.
+	ResetAwareLookup find_tag_with_reset(
+		int blockn,
+		std::string const& tag_name,
+		AssStyle const& event_style,
+		std::function<AssStyle const*(std::string_view)> const& resolve_reset,
+		std::string const& alt = "") const
+	{
 		for (int i = blockn; i >= 0; --i) {
 			auto* ovr = dynamic_cast<AssDialogueBlockOverride*>(blocks[i].get());
 			if (!ovr) continue;
 			for (auto it = ovr->Tags.rbegin(); it != ovr->Tags.rend(); ++it) {
 				if (it->Name == tag_name || it->Name == alt)
-					return &*it;
+					return { &*it, &event_style };
+				if (it->Name == "\\r")
+					return { nullptr, reset_target(*it, event_style, resolve_reset) };
 			}
 		}
-		return nullptr;
+		return { nullptr, &event_style };
 	}
 
+	/// Resolve the effective scalar value of `tag_name`/`alt` at `blockn`,
+	/// honouring `\r` reset semantics: the override's value if a matching tag is
+	/// found before any `\r`, otherwise `field` of the base style in effect at
+	/// the cursor. `event_style` must outlive the call. Colours need separate
+	/// tag+alpha lookups (ParseOverrideColor clobbers alpha), so callers must use
+	/// find_tag_with_reset directly for colours.
 	template<typename T>
-	T get_value(int blockn, T initial, std::string const& tag_name, std::string const& alt = "") const {
-		auto tag = find_tag(blockn, tag_name, alt);
-		if (tag)
-			return tag->Params[0].template Get<T>(initial);
-		return initial;
+	T get_value_with_reset(
+		int blockn,
+		T AssStyle::*field,
+		std::string const& tag_name,
+		AssStyle const& event_style,
+		std::function<AssStyle const*(std::string_view)> const& resolve_reset,
+		std::string const& alt = "") const
+	{
+		auto lk = find_tag_with_reset(blockn, tag_name, event_style, resolve_reset, alt);
+		return lk.tag ? lk.tag->Params[0].template Get<T>(lk.base->*field) : lk.base->*field;
 	}
 
 	int block_at_pos(int pos) const {
@@ -564,14 +674,22 @@ void update_lines(const agi::Context *c, std::string const& undo_msg, Func&& f) 
 
 void toggle_override_tag(const agi::Context *c, bool (AssStyle::*field), const char *tag, std::string const& undo_msg) {
 	auto core = c->GetCore();
+	AssStyle const fallback_style;
+	auto resolve_reset = [&core](std::string_view name) -> AssStyle const* {
+		return aegisub::ass_style_resolution::ResolveResetStyle(*core.ass, std::string(name));
+	};
 	update_lines(c, undo_msg, [&](AssDialogue *line, int sel_start, int sel_end, int norm_sel_start, int norm_sel_end) {
 		AssStyle const* const style = core.ass->GetStyle(line->Style);
-		bool state = style ? style->*field : AssStyle().*field;
+		AssStyle const& event_style = style ? *style : fallback_style;
 
 		parsed_line parsed(line);
-		int blockn = parsed.block_at_pos(norm_sel_start);
+		// Read-only lookup: use block_for_read so a block starting past the
+		// cursor (e.g. a trailing {\r}) does not participate.
+		int blockn = parsed.block_for_read(norm_sel_start);
 
-		state = parsed.get_value(blockn, state, tag);
+		// Honour \r reset semantics so toggling reads the state that actually
+		// renders at the cursor, not a value shadowed by a preceding \r.
+		bool state = parsed.get_value_with_reset(blockn, field, tag, event_style, resolve_reset);
 
 		int shift = parsed.set_tag(tag, state ? "0" : "1", norm_sel_start, sel_start);
 		if (sel_start != sel_end)
@@ -598,6 +716,10 @@ void show_color_picker(const agi::Context *c, agi::Color (AssStyle::*field), con
 		int norm_sel_start;
 	};
 	std::vector<line_info> lines;
+	AssStyle const fallback_style;
+	auto resolve_reset = [&core](std::string_view name) -> AssStyle const* {
+		return aegisub::ass_style_resolution::ResolveResetStyle(*core.ass, std::string(name));
+	};
 	for (auto line : sel) {
 		int line_sel_start = sel_start;
 		int line_norm_sel_start = norm_sel_start;
@@ -608,14 +730,29 @@ void show_color_picker(const agi::Context *c, agi::Color (AssStyle::*field), con
 		}
 
 		AssStyle const* const style = core.ass->GetStyle(line->Style);
-		agi::Color color = (style ? style->*field : AssStyle().*field);
+		AssStyle const& event_style = style ? *style : fallback_style;
+		agi::Color color;
 
 		parsed_line parsed(line);
-		int blockn = parsed.block_at_pos(line_norm_sel_start);
+		// Read-only lookup: use block_for_read so a block starting past the
+		// cursor does not participate.
+		int blockn = parsed.block_for_read(line_norm_sel_start);
 
-		int a = parsed.get_value(blockn, (int)color.a, alpha, "\\alpha");
-		color = parsed.get_value(blockn, color, tag, alt);
-		color.a = a;
+		// Honour \r reset semantics so the colour shown in the picker matches
+		// what renders at the cursor.
+		auto lookup = parsed.find_tag_with_reset(blockn, tag, event_style, resolve_reset, alt);
+		auto lookup_a = parsed.find_tag_with_reset(blockn, alpha, event_style, resolve_reset, "\\alpha");
+		AssStyle const& base = *lookup.base;
+		AssStyle const& base_a = *lookup_a.base;
+		// ParseOverrideColor unconditionally assigns all four bytes, so the colour
+		// tag would clobber alpha; apply alpha last and take its default from the
+		// style (not the just-overwritten colour).
+		color = base.*field;
+		if (lookup.tag)
+			color = lookup.tag->Params[0].Get<agi::Color>(color);
+		int default_a = (base_a.*field).a;
+		color.a = static_cast<unsigned char>(
+			lookup_a.tag ? lookup_a.tag->Params[0].Get<int>(default_a) : default_a);
 
 		if (line == active_line)
 			initial_color = color;
@@ -767,7 +904,9 @@ struct edit_font final : public Command {
 		};
 
 		auto font_for_line = [&](parsed_line const& line, int insertion_point) -> line_font_state {
-			const int blockn = line.block_at_pos(insertion_point);
+			// Read-only lookup: use block_for_read so a block starting past the
+			// cursor (e.g. a trailing {\r}) does not participate.
+			const int blockn = line.block_for_read(insertion_point);
 
 			const AssStyle *style = aegisub::ass_style_resolution::ResolveEventStyle(
 				*core.ass, line.line->Style);
@@ -803,7 +942,41 @@ struct edit_font final : public Command {
 			state.displayed.italic = request.italic;
 			state.displayed.has_explicit_weight = request.has_explicit_bold;
 			state.displayed.has_explicit_italic = request.has_explicit_italic;
-			state.displayed.underline = line.get_value(blockn, style->underline, "\\u");
+
+			// Carry the line's border/shadow/colors/underline into the font dialog
+			// preview so it reflects the line's appearance instead of AssStyle
+			// defaults. These are display-only and never written back. The override
+			// lookups honour \r reset semantics so the preview matches what renders
+			// at the cursor.
+			auto resolve_reset_style = [&](std::string_view name) -> AssStyle const* {
+				return aegisub::ass_style_resolution::ResolveResetStyle(*core.ass, std::string(name));
+			};
+			auto read_color = [&](std::string const& tag, std::string const& alt,
+			                      std::string const& alpha_tag, agi::Color AssStyle::*field) -> agi::Color {
+				auto lookup = line.find_tag_with_reset(blockn, tag, *style, resolve_reset_style, alt);
+				auto lookup_a = line.find_tag_with_reset(blockn, alpha_tag, *style, resolve_reset_style, "\\alpha");
+				AssStyle const& fb = *lookup.base;
+				AssStyle const& fb_a = *lookup_a.base;
+				// ParseOverrideColor unconditionally assigns all four bytes, so the
+				// colour tag would clobber alpha; apply alpha last and take its
+				// default from the style (not the just-overwritten colour).
+				agi::Color c = fb.*field;
+				if (lookup.tag)
+					c = lookup.tag->Params[0].Get<agi::Color>(c);
+				int default_a = (fb_a.*field).a;
+				c.a = static_cast<unsigned char>(
+					lookup_a.tag ? lookup_a.tag->Params[0].Get<int>(default_a) : default_a);
+				return c;
+			};
+			state.displayed.outline_w = line.get_value_with_reset(blockn, &AssStyle::outline_w, "\\bord", *style, resolve_reset_style);
+			state.displayed.shadow_w = line.get_value_with_reset(blockn, &AssStyle::shadow_w, "\\shad", *style, resolve_reset_style);
+			state.displayed.underline = line.get_value_with_reset(blockn, &AssStyle::underline, "\\u", *style, resolve_reset_style);
+			// borderstyle has no override tag, so it is the base style's value at
+			// the cursor (honouring \r resets).
+			state.displayed.borderstyle = line.base_style_at(blockn, *style, resolve_reset_style)->borderstyle;
+			state.displayed.primary = read_color("\\c", "\\1c", "\\1a", &AssStyle::primary);
+			state.displayed.outline = read_color("\\3c", "", "\\3a", &AssStyle::outline);
+			state.displayed.shadow = read_color("\\4c", "", "\\4a", &AssStyle::shadow);
 			return state;
 		};
 

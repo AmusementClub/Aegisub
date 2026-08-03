@@ -1,5 +1,9 @@
 #pragma once
 
+#include "ass_style.h"
+
+#include <libaegisub/color.h>
+
 #include <functional>
 #include <cstdint>
 #include <optional>
@@ -28,6 +32,17 @@ struct FontFaceDialogSelection {
 	bool implicit_variant_pinned = false;
 	bool allow_replace_explicit = false;
 	bool from_native_dialog = false;
+
+	/// Preview appearance carried from the active line's style + overrides, so
+	/// the preview reflects the line's border/shadow/colors instead of AssStyle
+	/// defaults. These are display-only and never written back.
+	double outline_w = AssStyle::DefaultOutlineWidth;
+	double shadow_w = AssStyle::DefaultShadowWidth;
+	/// \borderstyle has no override tag, so only the style value is carried.
+	int borderstyle = AssStyle::DefaultBorderStyle;
+	agi::Color primary{ 255, 255, 255 };
+	agi::Color outline{ 0, 0, 0 };
+	agi::Color shadow{ 0, 0, 0 };
 };
 
 /// Show the native system font selector when prefer-localized is on, otherwise

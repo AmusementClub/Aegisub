@@ -760,6 +760,15 @@ public:
 		preview->SetText(from_wx(preview_text->GetValue()));
 		UpdateVariantControls(false);
 		UpdateInformation();
+		// Carry the active line's border/shadow/colors into the preview style so
+		// the preview reflects the line's appearance instead of AssStyle defaults.
+		// These fields are never changed from within the dialog, so set them once.
+		preview_style.outline_w = initial.outline_w;
+		preview_style.shadow_w = initial.shadow_w;
+		preview_style.borderstyle = initial.borderstyle;
+		preview_style.primary = initial.primary;
+		preview_style.outline = initial.outline;
+		preview_style.shadow = initial.shadow;
 		UpdatePreview();
 	}
 

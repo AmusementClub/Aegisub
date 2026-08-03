@@ -567,8 +567,9 @@ namespace {
 	void push_visual_guide(lua_State *L, Automation4::AutomationVisualGuide const& guide)
 	{
 		// id, kind, coordinate_space, first, second, delta_x, delta_y, distance,
-		// angle_degrees
-		lua_createtable(L, 0, 9);
+		// angle_degrees, shear_x, shear_y, angle_horizontal_degrees,
+		// angle_vertical_degrees
+		lua_createtable(L, 0, 13);
 		set_field(L, "id", guide.id);
 		set_field(L, "kind", guide.kind);
 		set_field(L, "coordinate_space", guide.coordinate_space);
@@ -580,6 +581,10 @@ namespace {
 		set_field(L, "delta_y", guide.delta_y);
 		set_field(L, "distance", guide.distance);
 		set_field(L, "angle_degrees", guide.angle_degrees);
+		set_field(L, "shear_x", guide.shear_x);
+		set_field(L, "shear_y", guide.shear_y);
+		set_field(L, "angle_horizontal_degrees", guide.angle_horizontal_degrees);
+		set_field(L, "angle_vertical_degrees", guide.angle_vertical_degrees);
 	}
 
 	void push_visual_guide_resolution(lua_State *L, int width, int height)

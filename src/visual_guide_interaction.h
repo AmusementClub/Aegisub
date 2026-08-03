@@ -5,11 +5,15 @@
 
 #include <string>
 
+class VideoOverlayDrawContext;
+
 enum class VisualGuideHitPart {
 	None,
 	FirstEndpoint,
 	SecondEndpoint,
 	Line,
+	/// The floating measurement info box. Dragging it moves the whole guide.
+	Label,
 };
 
 struct VisualGuideHit {
@@ -28,12 +32,15 @@ enum class VisualGuideDragAction {
 };
 
 /// Hit-test using canvas logical pixels. Selected measurement endpoints have
-/// priority, followed by other endpoints and then guide bodies in reverse draw
-/// order.
+/// priority, followed by other endpoints, then guide bodies, and finally the
+/// info boxes (in reverse draw order). The draw context is needed only to
+/// measure the info-box text so its selection rectangle matches the render.
 [[nodiscard]] VisualGuideHit HitTestVisualGuides(
 	Vector2D point,
 	VisualGuideSnapshotView const& snapshot,
 	VisualGuideViewport const& viewport,
+	VisualGuideOverlayStyle const& style,
+	VideoOverlayDrawContext& context,
 	double tolerance) noexcept;
 
 /// Snap a measurement endpoint to 0, 45 or 90 degrees when enabled.

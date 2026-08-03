@@ -1,5 +1,7 @@
 #include "visual_guide_interaction.h"
 
+#include "video_overlay_draw_context.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -10,6 +12,13 @@ double SquaredDistance(Vector2D first, Vector2D second) noexcept {
 	double const x = static_cast<double>(first.X()) - second.X();
 	double const y = static_cast<double>(first.Y()) - second.Y();
 	return x * x + y * y;
+}
+
+bool PointInsideRectangle(Vector2D point, Vector2D origin, Vector2D size) noexcept {
+	return point.X() >= origin.X()
+		&& point.Y() >= origin.Y()
+		&& point.X() <= origin.X() + size.X()
+		&& point.Y() <= origin.Y() + size.Y();
 }
 
 double DistanceToSegment(Vector2D point, Vector2D first, Vector2D second) noexcept {
@@ -39,6 +48,8 @@ VisualGuideHit HitTestVisualGuides(
 	Vector2D point,
 	VisualGuideSnapshotView const& snapshot,
 	VisualGuideViewport const& viewport,
+	VisualGuideOverlayStyle const& style,
+	VideoOverlayDrawContext& context,
 	double tolerance) noexcept {
 	if (!std::isfinite(point.X()) || !std::isfinite(point.Y())
 		|| !std::isfinite(tolerance) || tolerance < 0.0
@@ -86,6 +97,21 @@ VisualGuideHit HitTestVisualGuides(
 			VisualGuideToCanvas(guide->first, viewport),
 			VisualGuideToCanvas(guide->second, viewport)) <= tolerance)
 			return { guide->id, VisualGuideHitPart::Line };
+	}
+
+	// Info boxes last, so they never shadow endpoint or line-body drags. A user
+	// can still select the box by aiming at its interior padding.
+	for (auto guide = snapshot.guides.crbegin(); guide != snapshot.guides.crend(); ++guide) {
+		if (!IsValidVisualGuide(*guide))
+			continue;
+
+		auto const geometry = ComputeMeasurementLabelGeometry(
+			context, *guide, viewport,
+			VisualGuideToCanvas(guide->first, viewport),
+			VisualGuideToCanvas(guide->second, viewport),
+			style);
+		if (PointInsideRectangle(point, geometry.origin, geometry.size))
+			return { guide->id, VisualGuideHitPart::Label };
 	}
 
 	return {};

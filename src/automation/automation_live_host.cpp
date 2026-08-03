@@ -68,6 +68,10 @@ AutomationVisualGuide ToAutomationVisualGuide(VisualGuide const& guide)
 	result.delta_y = metrics.delta_y;
 	result.distance = metrics.distance;
 	result.angle_degrees = metrics.angle_degrees;
+	result.shear_x = metrics.shear_x;
+	result.shear_y = metrics.shear_y;
+	result.angle_horizontal_degrees = metrics.angle_horizontal;
+	result.angle_vertical_degrees = metrics.angle_vertical;
 	return result;
 }
 

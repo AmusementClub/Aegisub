@@ -43,6 +43,9 @@ VisualGuideOverlayStyle MakeOverlayStyle(
 	VisualGuideOverlayStyle style;
 	style.line_colour = to_wx(line_colour->GetColor());
 	style.highlight_colour = to_wx(highlight_colour->GetColor());
+	// Fixed white label border for contrast; the selected state borrows the
+	// highlight colour instead. Not user-configurable to avoid a new option.
+	style.label_border_colour = wxColour(255, 255, 255);
 	style.label_font_size = OPT_GET("Tool/Visual/Coordinate Font Size")->GetInt();
 	return style;
 }
@@ -89,8 +92,12 @@ void VisualToolMeasure::BeginInteraction(wxMouseEvent&) {
 		return;
 
 	auto const viewport = parent->GetVisualGuideViewport();
+	auto const style = MakeOverlayStyle(line_color_primary_opt, highlight_color_primary_opt);
+	// Hit-testing needs to measure the info-box text so selection matches the
+	// rendered rectangle; reuse the same legacy context the draw pass uses.
+	LegacyVideoOverlayDrawContext hit_context(gl, *text);
 	if (auto hit = HitTestVisualGuides(
-		mouse_pos, controller->CaptureView(), viewport, kHitTolerance)) {
+		mouse_pos, controller->CaptureView(), viewport, style, hit_context, kHitTolerance)) {
 		std::optional<VisualGuide> guide;
 		{
 			auto const snapshot = controller->CaptureView();
@@ -116,6 +123,8 @@ void VisualToolMeasure::BeginInteraction(wxMouseEvent&) {
 				interaction = Interaction::DraggingSecondEndpoint;
 				break;
 			case VisualGuideHitPart::Line:
+			case VisualGuideHitPart::Label:
+				// Dragging the info box translates the whole guide, like the body.
 				interaction = Interaction::DraggingLine;
 				break;
 			case VisualGuideHitPart::None:

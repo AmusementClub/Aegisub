@@ -149,26 +149,69 @@ TEST(visual_guide_overlay, draws_selected_measurement_with_filled_quads_and_labe
 	style.highlight_colour = wxColour(40, 50, 60);
 	VisualGuideOverlay().Draw(context, MakeViewport(), ViewFrom(snapshot), style);
 
-	// Outline quad then core quad.
-	ASSERT_EQ(2u, context.polygons.size());
+	// Two line-stroke quads (outline + core) then two arrowhead triangles
+	// (outline + core) at the second endpoint.
+	ASSERT_EQ(4u, context.polygons.size());
 	EXPECT_EQ(4u, context.polygons[0].points.size());
 	EXPECT_EQ(4u, context.polygons[1].points.size());
+	EXPECT_EQ(3u, context.polygons[2].points.size());
+	EXPECT_EQ(3u, context.polygons[3].points.size());
 	EXPECT_EQ(40, context.polygons[1].fill_colour.Red());
 	EXPECT_EQ(50, context.polygons[1].fill_colour.Green());
 	EXPECT_EQ(60, context.polygons[1].fill_colour.Blue());
 	EXPECT_FLOAT_EQ(1.0f, context.polygons[1].fill_alpha);
+	// Arrowhead core uses the highlight colour for a selected guide.
+	EXPECT_EQ(40, context.polygons[3].fill_colour.Red());
 	EXPECT_EQ(0, context.invert_count);
 
-	// Label background rectangle plus three metric lines (no unit row).
+	// Label background rectangle plus the seven metric rows.
 	ASSERT_EQ(1u, context.rectangles.size());
 	EXPECT_GE(context.rectangles[0].first.X(), 100.0f);
 	EXPECT_GE(context.rectangles[0].first.Y(), 50.0f);
 	EXPECT_LE(context.rectangles[0].second.X(), 900.0f);
 	EXPECT_LE(context.rectangles[0].second.Y(), 450.0f);
-	ASSERT_EQ(3u, context.text.size());
+	ASSERT_EQ(7u, context.text.size());
 	EXPECT_EQ("dX +100", context.text[0].value);
 	EXPECT_EQ("dY +50", context.text[1].value);
 	EXPECT_EQ("L 111.8", context.text[2].value);
+	// shear_x = dx/dy = 2, shear_y = dy/dx = 0.5 (no leading + for shears).
+	EXPECT_EQ("sx 2", context.text[3].value);
+	EXPECT_EQ("sy 0.5", context.text[4].value);
+	EXPECT_EQ("angH 26.57 deg", context.text[5].value);
+	EXPECT_EQ("angV 63.43 deg", context.text[6].value);
+}
+
+TEST(visual_guide_overlay, label_is_anchored_at_second_endpoint_and_renders_axis_dash) {
+	VisualGuide guide;
+	guide.id = "guide-1";
+	// Pure horizontal segment: shear_x denominator (dy) is 0, so sx shows a dash.
+	guide.first = { 100.0, 50.0 };
+	guide.second = { 200.0, 50.0 };
+
+	VisualGuideSnapshot snapshot;
+	snapshot.guides.push_back(guide);
+
+	CaptureOverlayContext context;
+	VisualGuideOverlay().Draw(context, MakeViewport(), ViewFrom(snapshot), {});
+
+	ASSERT_EQ(7u, context.text.size());
+	EXPECT_EQ("sx -", context.text[3].value); // dash when dy == 0
+	// shear_y = dy/dx = 0 -> formatted as 0.
+	EXPECT_EQ("sy 0", context.text[4].value);
+
+	// The label is anchored beside the second endpoint (x=200 script ->
+	// canvas 500, y=50 script -> canvas 150) with its corner at the endpoint
+	// plus a normal-side gap, so it must NOT straddle the endpoint on the
+	// vertical axis (it sits entirely above or below the line).
+	ASSERT_EQ(1u, context.rectangles.size());
+	auto const& rect = context.rectangles[0];
+	auto const top = std::min(rect.first.Y(), rect.second.Y());
+	auto const bottom = std::max(rect.first.Y(), rect.second.Y());
+	bool const straddles_y = top <= 150.0f && bottom >= 150.0f;
+	EXPECT_FALSE(straddles_y);
+	// The box still overlaps the endpoint horizontally (anchored on its edge).
+	EXPECT_LE(rect.first.X(), 500.0f);
+	EXPECT_GE(rect.second.X(), 500.0f);
 }
 
 TEST(visual_guide_overlay, skips_guides_when_viewport_is_unmappable) {

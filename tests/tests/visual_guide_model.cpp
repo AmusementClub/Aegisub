@@ -20,6 +20,24 @@ TEST(visual_guide_model, measurement_metrics_follow_screen_coordinate_angle_defi
 	EXPECT_DOUBLE_EQ(4.0, metrics.delta_y);
 	EXPECT_DOUBLE_EQ(5.0, metrics.distance);
 	EXPECT_NEAR(53.13010235415598, metrics.angle_degrees, 1e-12);
+	// shear_x = dx/dy, shear_y = dy/dx (mirrors the \fax / \fay shear tags).
+	EXPECT_NEAR(0.75, metrics.shear_x, 1e-12);
+	EXPECT_NEAR(4.0 / 3.0, metrics.shear_y, 1e-12);
+	// angle_horizontal mirrors angle_degrees; angle_vertical is the Y-axis angle.
+	EXPECT_NEAR(53.13010235415598, metrics.angle_horizontal, 1e-12);
+	EXPECT_NEAR(36.86989764584402, metrics.angle_vertical, 1e-12);
+}
+
+TEST(visual_guide_model, shear_is_zero_on_axis_aligned_segments) {
+	// Horizontal: dy == 0, so shear_x denominator vanishes -> 0; shear_y = 0/dx = 0.
+	auto const horizontal = CalculateVisualGuideMetrics(Measurement(1.0, 5.0, 4.0, 5.0));
+	EXPECT_DOUBLE_EQ(0.0, horizontal.shear_x);
+	EXPECT_DOUBLE_EQ(0.0, horizontal.shear_y);
+
+	// Vertical: dx == 0, so shear_y denominator vanishes -> 0; shear_x = 0/dy = 0.
+	auto const vertical = CalculateVisualGuideMetrics(Measurement(5.0, 1.0, 5.0, 4.0));
+	EXPECT_DOUBLE_EQ(0.0, vertical.shear_x);
+	EXPECT_DOUBLE_EQ(0.0, vertical.shear_y);
 }
 
 TEST(visual_guide_model, measurement_metrics_cover_cardinal_and_zero_length_segments) {

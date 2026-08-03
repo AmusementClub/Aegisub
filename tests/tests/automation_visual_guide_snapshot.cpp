@@ -96,6 +96,10 @@ TEST(automation_visual_guide_snapshot, serializes_measurement_fields_as_values) 
 	measurement.delta_y = 20.0;
 	measurement.distance = 25.0;
 	measurement.angle_degrees = 53.13010235415598;
+	measurement.shear_x = 0.75;
+	measurement.shear_y = 1.3333333333333333;
+	measurement.angle_horizontal_degrees = 53.13010235415598;
+	measurement.angle_vertical_degrees = 36.86989764584402;
 	source.guides.push_back(measurement);
 
 	auto second = MakeGuide("second");
@@ -142,6 +146,10 @@ TEST(automation_visual_guide_snapshot, serializes_measurement_fields_as_values) 
 		near(measurement.delta_y, 20.0)
 		near(measurement.distance, 25.0)
 		near(measurement.angle_degrees, 53.13010235415598)
+		near(measurement.shear_x, 0.75)
+		near(measurement.shear_y, 1.3333333333333333)
+		near(measurement.angle_horizontal_degrees, 53.13010235415598)
+		near(measurement.angle_vertical_degrees, 36.86989764584402)
 		assert(measurement.visible == nil)
 		assert(measurement.locked == nil)
 		assert(measurement.show_label == nil)

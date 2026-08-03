@@ -28,6 +28,14 @@ struct AutomationVisualGuide {
 	double delta_y = 0.0;
 	double distance = 0.0;
 	double angle_degrees = 0.0;
+	// Shear coefficients aligned with the \fax/\fay tags. shear_x = Δx/Δy,
+	// shear_y = Δy/Δx; 0.0 when the denominator is 0. angle_horizontal/vertical
+	// are the angles to the X/Y axes in degrees (atan2-based). Added after
+	// schema 1; scripts that ignore unknown keys are unaffected.
+	double shear_x = 0.0;
+	double shear_y = 0.0;
+	double angle_horizontal_degrees = 0.0;
+	double angle_vertical_degrees = 0.0;
 };
 
 // A value-only snapshot captured by the live UI host. It intentionally has no

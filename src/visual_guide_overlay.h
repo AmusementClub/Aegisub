@@ -42,10 +42,30 @@ struct VisualGuideOverlayStyle {
 	wxColour highlight_colour = wxColour(255, 255, 0);
 	wxColour outline_colour = wxColour(0, 0, 0);
 	wxColour label_background_colour = wxColour(0, 0, 0);
+	wxColour label_border_colour = wxColour(255, 255, 255);
 	int label_font_size = 12;
 };
 
-/// Format one value exactly as it is displayed in the measurement label.
+/// Geometry of the floating measurement label, in canvas logical pixels. Shared
+/// between the draw pass and hit-testing so selection stays in sync with what
+/// the user sees. Origin is the top-left of the background rectangle.
+struct VisualGuideLabelGeometry {
+	Vector2D origin;
+	Vector2D size;
+};
+
+/// Compute the label rectangle that DrawMeasurementLabel would render. The
+/// anchor is the second endpoint; the rectangle is auto-flipped and clamped to
+/// the viewport the same way the draw pass does.
+[[nodiscard]] VisualGuideLabelGeometry ComputeMeasurementLabelGeometry(
+	VideoOverlayDrawContext& context,
+	VisualGuide const& guide,
+	VisualGuideViewport const& viewport,
+	Vector2D first,
+	Vector2D second,
+	VisualGuideOverlayStyle const& style);
+
+/// Format one value exactly as it is displayed in the measurement labels.
 /// This is intentionally separate from the Lua DTO, which always receives
 /// unrounded doubles.
 [[nodiscard]] std::string FormatVisualGuideLabelNumber(

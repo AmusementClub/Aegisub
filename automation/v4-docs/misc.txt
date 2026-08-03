@@ -78,7 +78,8 @@ When available is false, generation is 0, frame is -1, both resolutions are
 last_measurement_id are nil.
 
 Every guide has id, kind, coordinate_space, first, second, delta_x, delta_y,
-distance, and angle_degrees.
+distance, angle_degrees, shear_x, shear_y, angle_horizontal_degrees,
+and angle_vertical_degrees.
 
 kind is currently always "measurement_segment". coordinate_space is currently
 always "script" and identifies the units used by all coordinates (script
@@ -91,6 +92,13 @@ distance is non-negative. angle_degrees uses atan2(delta_y, delta_x) in the
 range [-180, 180]; because the video and ASS y axis points down, positive
 angles appear clockwise on screen. Values are raw doubles and are not rounded
 to match an overlay label.
+
+shear_x is delta_x/delta_y (0.0 when delta_y is 0), the horizontal shear
+coefficient matching the \fax tag. shear_y is delta_y/delta_x (0.0 when
+delta_x is 0), matching \fay. angle_horizontal_degrees equals angle_degrees
+(the angle to the X axis). angle_vertical_degrees is the angle to the Y axis,
+atan2(delta_x, delta_y) in [-180, 180]. All four are raw doubles; the on-screen
+overlay renders them as ASCII ("deg" suffix, "-" for an axis-parallel shear).
 
 The returned table is a value snapshot. It does not change after later guide
 edits, and the API cannot create, modify, delete, draw, or receive mouse events

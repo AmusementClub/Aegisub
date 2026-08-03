@@ -31,10 +31,17 @@ VisualGuideMetrics CalculateVisualGuideMetrics(VisualGuide const& guide) noexcep
 	if (delta_x == 0.0 && delta_y == 0.0)
 		return {};
 
+	double const shear_x = delta_y == 0.0 ? 0.0 : delta_x / delta_y;
+	double const shear_y = delta_x == 0.0 ? 0.0 : delta_y / delta_x;
+
 	return {
 		delta_x,
 		delta_y,
 		std::hypot(delta_x, delta_y),
 		std::atan2(delta_y, delta_x) * 180.0 / std::numbers::pi,
+		shear_x,
+		shear_y,
+		std::atan2(delta_y, delta_x) * 180.0 / std::numbers::pi,
+		std::atan2(delta_x, delta_y) * 180.0 / std::numbers::pi,
 	};
 }

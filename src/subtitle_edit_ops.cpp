@@ -507,4 +507,92 @@ int GetNextBlockEnd(std::vector<agi::ass::DialogueToken> const& tokens, int pos)
 	return text_len;
 }
 
+std::pair<int, int> GetBoundsOfTagAtPosition(std::vector<agi::ass::DialogueToken> const& tokens, int pos) {
+	namespace dt = agi::ass::DialogueTokenType;
+
+	if (pos < 0)
+		return {0, 0};
+
+	// Locate the token containing pos, tracking byte offsets as we go.
+	size_t hit_index = tokens.size();
+	int hit_start = 0;
+	for (size_t i = 0; i < tokens.size(); ++i) {
+		int const len = static_cast<int>(tokens[i].length);
+		if (pos < hit_start + len) {
+			hit_index = i;
+			break;
+		}
+		hit_start += len;
+	}
+	if (hit_index == tokens.size())
+		return {0, 0};
+
+	int const hit_type = tokens[hit_index].type;
+
+	// When pos is on a value, select just that argument so the selection does
+	// not swallow adjacent tag name characters: the "5" in \bord5 is selected
+	// alone, not "bord5".
+	if (hit_type == dt::ARG)
+		return {hit_start, static_cast<int>(tokens[hit_index].length)};
+
+	if (hit_type != dt::TAG_START && hit_type != dt::TAG_NAME)
+		return {0, 0};
+
+	// Walk back to the TAG_START opening this tag. Only WHITESPACE can sit
+	// between the backslash and the name, but stop at block boundaries anyway.
+	size_t start_index = hit_index;
+	int start = hit_start;
+	if (hit_type != dt::TAG_START) {
+		bool found = false;
+		for (size_t i = hit_index; i-- > 0; ) {
+			int const type = tokens[i].type;
+			if (type == dt::OVR_BEGIN || type == dt::OVR_END || type == dt::ERROR)
+				break;
+			start -= static_cast<int>(tokens[i].length);
+			if (type == dt::TAG_START) {
+				start_index = i;
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+			return {0, 0};
+	}
+
+	// Walk forward to the end of the tag, tracking paren depth so that a tag
+	// nested in another tag's arguments (\t(0,500,\frz30)) neither truncates the
+	// outer tag at the inner backslash nor lets the inner tag run past the paren
+	// closing the outer one. Runs of ')' are lexed as a single CLOSE_PAREN token
+	// (the "))" in \t(0,100,\clip(...))), so the end can land inside a token.
+	int end = start + static_cast<int>(tokens[start_index].length);
+	int depth = 0;
+	for (size_t i = start_index + 1; i < tokens.size(); ++i) {
+		int const type = tokens[i].type;
+		int const len = static_cast<int>(tokens[i].length);
+
+		// ERROR is a stray '{' inside the block.
+		if (type == dt::OVR_BEGIN || type == dt::OVR_END || type == dt::ERROR)
+			break;
+		// Only a backslash outside of parens starts the next tag.
+		if (type == dt::TAG_START && depth == 0)
+			break;
+
+		if (type == dt::OPEN_PAREN)
+			depth += len;
+		else if (type == dt::CLOSE_PAREN) {
+			if (len > depth) {
+				// This run also closes parens opened by an enclosing tag; take
+				// only the ones that are ours.
+				end += depth;
+				break;
+			}
+			depth -= len;
+		}
+
+		end += len;
+	}
+
+	return {start, end - start};
+}
+
 }

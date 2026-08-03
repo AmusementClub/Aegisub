@@ -81,6 +81,17 @@ std::vector<int> WalkEndBlocks(std::string const& text, int start_pos, bool kara
 	return positions;
 }
 
+/// Tokenize `marked` with the double-click position marked by '|' and return the
+/// text GetBoundsOfTagAtPosition would select ("" when it selects nothing).
+std::string TagAtCaret(std::string marked, bool karaoke_templater = false) {
+	auto input = UnmarkCaret(std::move(marked));
+	auto tokens = agi::ass::TokenizeDialogueBody(input.text, karaoke_templater);
+	agi::ass::SplitWords(input.text, tokens);
+
+	auto const bounds = aegisub::subtitle_edit_ops::GetBoundsOfTagAtPosition(tokens, input.caret);
+	return input.text.substr(static_cast<size_t>(bounds.first), static_cast<size_t>(bounds.second));
+}
+
 }
 
 TEST(subtitle_edit_ops, join_selection_into_first_adds_karaoke_tags_and_extends_end) {
@@ -317,4 +328,60 @@ TEST(subtitle_edit_ops, end_blocks_stay_at_end) {
 
 TEST(subtitle_edit_ops, end_blocks_include_line_breaks) {
 	EXPECT_EQ((std::vector<int>{5, 7, 12}), WalkEndBlocks("hello\\Nthere", 0));
+}
+
+TEST(subtitle_edit_ops, tag_bounds_select_whole_tag_from_backslash_or_name) {
+	EXPECT_EQ("\\bord5", TagAtCaret("{|\\bord5}"));
+	EXPECT_EQ("\\bord5", TagAtCaret("{\\bo|rd5}"));
+	EXPECT_EQ("\\1c&H0000FF&", TagAtCaret("{|\\1c&H0000FF&}"));
+	EXPECT_EQ("\\pos(100,200)", TagAtCaret("{|\\pos(100,200)\\b1}"));
+	EXPECT_EQ("\\b1", TagAtCaret("{\\pos(100,200)\\|b1}"));
+}
+
+TEST(subtitle_edit_ops, tag_bounds_select_only_the_argument_on_a_value) {
+	EXPECT_EQ("5", TagAtCaret("{\\bord|5}"));
+	EXPECT_EQ("&H0000FF&", TagAtCaret("{\\1c&H00|00FF&}"));
+	EXPECT_EQ("100", TagAtCaret("{\\pos(1|00,200)}"));
+	EXPECT_EQ("200", TagAtCaret("{\\pos(100,2|00)}"));
+}
+
+TEST(subtitle_edit_ops, tag_bounds_keep_parens_balanced_for_nested_tags) {
+	// The outer tag must not be truncated at the inner backslash.
+	EXPECT_EQ("\\t(0,500,\\frz30)", TagAtCaret("{|\\t(0,500,\\frz30)}"));
+	EXPECT_EQ("\\t(0,500,\\frz30)", TagAtCaret("{\\|t(0,500,\\frz30)}"));
+	// ...and the inner tag must not swallow the paren closing the outer one.
+	EXPECT_EQ("\\frz30", TagAtCaret("{\\t(0,500,|\\frz30)}"));
+	EXPECT_EQ("\\frz30", TagAtCaret("{\\t(0,500,\\fr|z30)}"));
+
+	// The "))" here is lexed as a single CLOSE_PAREN token, so the inner tag
+	// ends in the middle of a token.
+	EXPECT_EQ("\\clip(1,m 0 0 l 10 10)",
+		TagAtCaret("{\\t(0,100,|\\clip(1,m 0 0 l 10 10))}"));
+	EXPECT_EQ("\\t(0,100,\\clip(1,m 0 0 l 10 10))",
+		TagAtCaret("{|\\t(0,100,\\clip(1,m 0 0 l 10 10))}"));
+}
+
+TEST(subtitle_edit_ops, tag_bounds_stop_at_block_boundaries) {
+	// A stray '{' inside the block ends the tag.
+	EXPECT_EQ("\\b1", TagAtCaret("{|\\b1{\\i1}"));
+	// VSFilter renders an unclosed block as literal text, and MarkDrawings
+	// retypes it as TEXT, so there is no tag to select.
+	EXPECT_EQ("", TagAtCaret("{|\\pos(100,200"));
+}
+
+TEST(subtitle_edit_ops, tag_bounds_keep_whitespace_inside_the_tag) {
+	// Whitespace in the ARG state is part of the argument (VSFilter semantics).
+	EXPECT_EQ("\\b1 ", TagAtCaret("{|\\b1 \\i1}"));
+	EXPECT_EQ("\\ fn Comic Sans MS ", TagAtCaret("{ |\\ fn Comic Sans MS }asd"));
+	EXPECT_EQ("\\ fn Comic Sans MS ", TagAtCaret("{ \\ f|n Comic Sans MS }asd"));
+}
+
+TEST(subtitle_edit_ops, tag_bounds_select_nothing_outside_tags) {
+	EXPECT_EQ("", TagAtCaret("hel|lo world"));
+	EXPECT_EQ("", TagAtCaret("|{\\b1}"));
+	EXPECT_EQ("", TagAtCaret("{\\pos|(100,200)}"));
+	EXPECT_EQ("", TagAtCaret("{\\pos(100|,200)}"));
+	EXPECT_EQ("", TagAtCaret("{\\b1|}"));
+	EXPECT_EQ("", TagAtCaret("{\\b1}|"));
+	EXPECT_EQ("", TagAtCaret("|"));
 }

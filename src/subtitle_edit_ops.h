@@ -81,4 +81,11 @@ int GetPreviousBlockStart(std::vector<agi::ass::DialogueToken> const& tokens, in
 /// Blocks are override tags ({...}), line breaks (\N, \n), and runs of text.
 int GetNextBlockEnd(std::vector<agi::ass::DialogueToken> const& tokens, int pos);
 
+/// Get the span to select when double-clicking inside an override block, as
+/// {start, length} in bytes. Returns the whole tag (backslash, name and all of
+/// its arguments, with balanced parens) when pos is on the backslash or the tag
+/// name, just the argument when pos is on a value, and {0, 0} when pos is not
+/// on a tag.
+std::pair<int, int> GetBoundsOfTagAtPosition(std::vector<agi::ass::DialogueToken> const& tokens, int pos);
+
 }

@@ -1004,7 +1004,15 @@ void SubsStyledTextEditCtrl::OnDoubleClick(wxStyledTextEvent &evt) {
 		SetSelection(line_text.size() - tok.length, line_text.size());
 	}
 	else {
-		auto bounds = GetBoundsOfWordAtPosition(evt.GetPosition());
+		// First try selecting a whole ASS override tag (\tagname(...) with the
+		// backslash and all of its arguments).
+		auto tag_bounds = aegisub::subtitle_edit_ops::GetBoundsOfTagAtPosition(tokenized_line, pos);
+		if (tag_bounds.second != 0) {
+			SetSelection(tag_bounds.first, tag_bounds.first + tag_bounds.second);
+			return;
+		}
+		// Otherwise fall back to a plain WORD token (used by the spell checker).
+		auto bounds = GetBoundsOfWordAtPosition(pos);
 		if (bounds.second != 0)
 			SetSelection(bounds.first, bounds.first + bounds.second);
 		else

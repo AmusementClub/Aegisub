@@ -25,16 +25,48 @@ function Get-GitText([string[]]$Arguments) {
     return [string]::Join("`n", @($result)).Trim()
 }
 
-function Get-BuildTimeUtc {
+# Resolve the build moment as UTC epoch seconds, honoring SOURCE_DATE_EPOCH for
+# reproducible builds (https://reproducible-builds.org/docs/source-date-epoch/).
+function Get-BuildEpochSeconds {
     if ($env:SOURCE_DATE_EPOCH -match '^\d+$') {
-        $epochBase = [DateTime]::SpecifyKind([DateTime]::Parse('1970-01-01'), [DateTimeKind]::Utc)
-        return $epochBase.AddSeconds([int64]$env:SOURCE_DATE_EPOCH).ToString("yyyyMMdd'T'HHmmss'Z'")
+        return [int64]$env:SOURCE_DATE_EPOCH
     }
-
-    return (Get-Date).ToUniversalTime().ToString("yyyyMMdd'T'HHmmss'Z'")
+    $now = [DateTimeOffset]::new([DateTime]::UtcNow, [TimeSpan]::Zero)
+    return [int64][double]::floor(($now - [DateTimeOffset]::UnixEpoch).TotalSeconds)
 }
 
-$buildTimeUtc = Get-BuildTimeUtc
+# Parse BUILD_TIME_OFFSET (e.g. "8", "+8", "-5", "5:30", "+05:30") into signed
+# minutes. Defaults to +480 (UTC+8) when unset or empty.
+function Get-OffsetMinutes {
+    $raw = $env:BUILD_TIME_OFFSET
+    if ([string]::IsNullOrWhiteSpace($raw)) { $raw = '8' }
+    if ($raw -notmatch '^\s*([+-]?)(\d+)(?::(\d{1,2}))?\s*$') {
+        Write-Warning "BUILD_TIME_OFFSET='$raw' is not a valid offset (e.g. 8, -5, 5:30); falling back to +8."
+        $raw = '8'
+        if ($raw -notmatch '^\s*([+-]?)(\d+)(?::(\d{1,2}))?\s*$') { return 480 }
+    }
+    $signStr = $matches[1]; if ($signStr -eq '-') { $sign = -1 } else { $sign = 1 }
+    $hours = [int]$matches[2]
+    $mins = 0; if ($matches[3]) { $mins = [int]$matches[3] }
+    return $sign * ($hours * 60 + $mins)
+}
+
+function Format-EpochLocal {
+    param([int64]$EpochSeconds, [int]$OffsetMinutes)
+    $moment = [DateTimeOffset]::UnixEpoch.AddSeconds($EpochSeconds + $OffsetMinutes * 60)
+    $base = $moment.ToString("yyyyMMdd'T'HHmmss")
+    if ($OffsetMinutes -eq 0) { return "${base}Z" }
+    $sign = if ($OffsetMinutes -lt 0) { '-' } else { '+' }
+    $absMin = [math]::Abs($OffsetMinutes)
+    $h = [int][math]::Floor($absMin / 60.0)
+    $m = $absMin % 60
+    return ($base + $sign + ('{0:D2}{1:D2}' -f $h, $m))
+}
+
+$buildEpoch = Get-BuildEpochSeconds
+$offsetMinutes = Get-OffsetMinutes
+$buildTimeUtc = Format-EpochLocal -EpochSeconds $buildEpoch -OffsetMinutes 0
+$buildTime = Format-EpochLocal -EpochSeconds $buildEpoch -OffsetMinutes $offsetMinutes
 
 if (-not (Test-Path (Join-Path $repoRootResolved '.git'))) {
     $forcedVersion = $env:FORCE_GIT_VERSION
@@ -43,6 +75,7 @@ if (-not (Test-Path (Join-Path $repoRootResolved '.git'))) {
             '#define BUILD_GIT_VERSION_NUMBER 0',
             "#define BUILD_GIT_VERSION_STRING `"$($forcedVersion.Trim())`"",
             "#define BUILD_GIT_BUILD_TIME_UTC `"$buildTimeUtc`"",
+            "#define BUILD_GIT_BUILD_TIME `"$buildTime`"",
             '#define TAGGED_RELEASE 0',
             '#define INSTALLER_VERSION "0.0.0"',
             '#define RESOURCE_BASE_VERSION 0, 0, 0'
@@ -94,13 +127,14 @@ else {
         $gitBranch = '(unnamed branch)'
     }
     $gitHash = Get-GitText @('rev-parse', '--short', 'HEAD')
-    $gitVersion = "$gitRevision-$gitBranch-$gitHash-$buildTimeUtc"
+    $gitVersion = "$gitRevision-$gitBranch-$gitHash-$buildTime"
 }
 
 $header = @(
     "#define BUILD_GIT_VERSION_NUMBER $gitRevision",
     "#define BUILD_GIT_VERSION_STRING `"$gitVersion`"",
     "#define BUILD_GIT_BUILD_TIME_UTC `"$buildTimeUtc`"",
+    "#define BUILD_GIT_BUILD_TIME `"$buildTime`"",
     "#define TAGGED_RELEASE $taggedRelease",
     "#define INSTALLER_VERSION `"$installerVersion`"",
     "#define RESOURCE_BASE_VERSION $resourceVersion"

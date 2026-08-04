@@ -315,9 +315,10 @@ DialogStyleEditor::DialogStyleEditor(wxWindow *parent, AssStyle *style, agi::Con
 	// Create controls
 	StyleName = new wxTextCtrl(this, -1, to_wx(style->name));
 	auto const contains_matching = OPT_GET("Subtitle/Font/Use Contains Matching")->GetBool();
+	auto const auto_expand = OPT_GET("Subtitle/Font/Auto Expand List On Input")->GetBool();
 	FontName = new FontNameComboBox(
 		this, to_wx(style->font), wxSize(150, -1), font_model.choices,
-		contains_matching);
+		contains_matching, auto_expand);
 	FontStyle = new wxComboBox(
 		this, -1, wxEmptyString, wxDefaultPosition, wxDefaultSize,
 		0, nullptr, wxCB_READONLY);

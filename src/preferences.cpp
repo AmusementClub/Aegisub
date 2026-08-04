@@ -467,6 +467,15 @@ void BuildGeneralPage(OptionPage *p) {
 		"uses contains matching instead of the native prefix matching. Other "
 		"combo behaviour is unchanged. The Windows system font dialog is not "
 		"affected."));
+	auto *auto_expand = p->OptionAdd(
+		font_names,
+		_("Automatically expand font list while typing"),
+		"Subtitle/Font/Auto Expand List On Input");
+	auto_expand->SetToolTip(_(
+		"When enabled, typing a matching name in Style Editor or the custom "
+		"Select Font dialog opens the candidate list automatically. Use the "
+		"arrow keys and Enter to choose a font without the mouse. Manual font "
+		"names remain supported. The Windows system font dialog is not affected."));
 #ifdef _WIN32
 	auto *compact_vertical = p->OptionAdd(
 		font_names,

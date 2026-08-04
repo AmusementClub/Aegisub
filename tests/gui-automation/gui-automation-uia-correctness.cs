@@ -279,11 +279,11 @@ static void VerifyFontSelector(
     ClearComboEdit(combo);
     WaitForValue(combo, string.Empty, timeout);
 
-    // --- pass 1: type + expand ---
+    // --- pass 1: type + automatic expand ---
     TypeIntoCombo(combo, query1, charByChar: true);
     ExpectEdit(combo, query1, label, "after_type", timeout);
-
-    expand.Expand();
+    WaitForComboDropState(comboHwnd, expectedDropped: true, timeout);
+    Console.WriteLine($"uia.correctness.{label}_auto_expanded=true");
     var samples1 = SampleHighlightTimeline(
         combo, process, query1, expected1, $"{label}_pass1");
     AssertHighlightSettled(dialog, samples1, query1, expected1, label, "pass1");
@@ -298,7 +298,7 @@ static void VerifyFontSelector(
         throw new InvalidOperationException(
             $"{dialog.Current.Name} drop-down still open after close");
 
-    // --- clear, retype a different font, expand again ---
+    // --- clear, retype a different font, verify the expanded list again ---
     ClearComboEdit(combo);
     WaitForValue(combo, string.Empty, timeout);
     Console.WriteLine($"uia.correctness.{label}_after_clear=");
@@ -370,6 +370,19 @@ static void VerifyFontSelector(
         $"uia.correctness.{label}_pass2b_backward_jump_verified={expectedNear}");
 
     CollapseCombo(expand);
+
+    // --- keyboard-only selection after automatic expansion ---
+    ClearComboEdit(combo);
+    WaitForValue(combo, string.Empty, timeout);
+    NativeKeyboard.TypeCharsViaComboKeys(comboHwnd, query2);
+    ExpectEdit(combo, query2, label, "before_keyboard_commit", timeout);
+    WaitForComboDropState(comboHwnd, expectedDropped: true, timeout);
+    WaitForHighlightedListItem(combo, process, expected2, timeout);
+    NativeKeyboard.CommitHighlightedComboItem(comboHwnd);
+    var keyboardCommittedValue = WaitForValue(combo, expected2, timeout);
+    WaitForComboDropState(comboHwnd, expectedDropped: false, timeout);
+    Console.WriteLine(
+        $"uia.correctness.{label}_keyboard_selection={keyboardCommittedValue}");
 
     // --- explicit selection commit ---
     // Selecting a real item after contains matching must replace the typed
@@ -490,6 +503,23 @@ static void CollapseCombo(ExpandCollapsePattern expand)
     catch (ElementNotAvailableException)
     {
     }
+}
+
+static void WaitForComboDropState(
+    IntPtr comboHwnd,
+    bool expectedDropped,
+    TimeSpan timeout)
+{
+    var deadline = Stopwatch.GetTimestamp()
+        + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+    while (Stopwatch.GetTimestamp() < deadline)
+    {
+        if (NativeKeyboard.IsComboDropped(comboHwnd) == expectedDropped)
+            return;
+        Thread.Sleep(25);
+    }
+    throw new TimeoutException(
+        $"Font combo drop state did not become {expectedDropped}");
 }
 
 static void ClearComboEdit(AutomationElement combo)
@@ -880,7 +910,8 @@ static void PrepareFontSelectorProfile(string profile)
           "Subtitle": {
             "Font": {
               "Prefer Localized Family Names": false,
-              "Use Contains Matching": true
+              "Use Contains Matching": true,
+              "Auto Expand List On Input": true
             }
           }
         }
@@ -929,8 +960,11 @@ file static class NativeKeyboard
 {
     private const int EmReplaceSel = 0x00C2;
     private const int EmSetSel = 0x00B1;
+    private const int WmKeyDown = 0x0100;
+    private const int WmKeyUp = 0x0101;
     private const int WmChar = 0x0102;
     private const int WmCommand = 0x0111;
+    private const int VkReturn = 0x0D;
     private const int EnChange = 0x0300;
     private const int CbGetCurSel = 0x0147;
     private const int CbGetLbText = 0x0148;
@@ -1069,6 +1103,22 @@ file static class NativeKeyboard
             Thread.Sleep(150);
         }
         Thread.Sleep(350);
+    }
+
+    public static void CommitHighlightedComboItem(IntPtr comboHwnd)
+    {
+        if (comboHwnd == IntPtr.Zero)
+            throw new InvalidOperationException("Font combo has no native HWND");
+        var editHwnd = GetComboEditHwnd(comboHwnd);
+        if (editHwnd == IntPtr.Zero)
+            throw new InvalidOperationException("Font combo edit has no native HWND");
+        SendMessage(editHwnd, WmKeyDown, (IntPtr)VkReturn, IntPtr.Zero);
+        // A real key press produces WM_CHAR between key-down and key-up. This
+        // must not escape to the dialog's default OK button after the combo
+        // has already committed the highlighted font.
+        SendMessage(editHwnd, WmChar, (IntPtr)'\r', IntPtr.Zero);
+        SendMessage(editHwnd, WmKeyUp, (IntPtr)VkReturn, IntPtr.Zero);
+        Thread.Sleep(250);
     }
 
     private static string? GetComboBoxListText(IntPtr comboHwnd, int index)

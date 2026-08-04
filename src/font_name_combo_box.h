@@ -26,6 +26,23 @@ struct ContainsMatch {
 	FontFamilyId family_id = 0;
 };
 
+/// First choice whose label starts with the query (case-insensitive).
+inline std::optional<ContainsMatch> FindPrefixMatch(
+	std::vector<std::pair<wxString, FontFamilyId>> const& choices,
+	wxString const& query) noexcept
+{
+	if (query.empty())
+		return std::nullopt;
+
+	auto const folded_query = Fold(query);
+	for (std::size_t index = 0; index < choices.size(); ++index) {
+		auto const& [label, family_id] = choices[index];
+		if (Fold(label).StartsWith(folded_query))
+			return ContainsMatch{index, family_id};
+	}
+	return std::nullopt;
+}
+
 /// First choice whose label contains the query (case-insensitive).
 /// Always searches from the catalog head; the list itself is never filtered.
 inline std::optional<ContainsMatch> FindContainsMatch(
@@ -94,8 +111,12 @@ class FontNameComboBox final : public wxComboBox {
 	/// User-typed query while searching; edit should show this until commit.
 	wxString typed_query;
 	bool contains_matching = false;
+	bool auto_expand_on_input = false;
 	bool applying = false;
 	bool committing_list_selection = false;
+	bool suppress_auto_expand = false;
+	bool suppress_keyboard_text_enter = false;
+	bool drop_down_open = false;
 	wxTimer settle_timer;
 
 	static wxArrayString ToWxChoices(std::vector<FontFamilyChoice> const& choices) {
@@ -109,12 +130,10 @@ class FontNameComboBox final : public wxComboBox {
 	bool IsDropDownOpen() const {
 #ifdef __WXMSW__
 		auto const hwnd = GetHWND();
-		if (!hwnd)
-			return false;
-		return ::SendMessageW(reinterpret_cast<HWND>(hwnd), CB_GETDROPPEDSTATE, 0, 0) != 0;
-#else
-		return false;
+		if (hwnd)
+			return ::SendMessageW(reinterpret_cast<HWND>(hwnd), CB_GETDROPPEDSTATE, 0, 0) != 0;
 #endif
+		return drop_down_open;
 	}
 
 	std::optional<FontFamilyId> ExactListMatch(wxString const& value) const {
@@ -295,16 +314,91 @@ class FontNameComboBox final : public wxComboBox {
 			ForceEditText(typed_query);
 	}
 
+	void AutoExpandForInput() {
+		if (!auto_expand_on_input || applying || suppress_auto_expand || IsDropDownOpen())
+			return;
+
+		auto const query = CaptureTypedQuery();
+		if (query.empty()) {
+			highlight_index.reset();
+			return;
+		}
+
+		if (!contains_matching) {
+			if (auto const exact = ExactListMatch(query))
+				selected_family_id = exact;
+			else
+				selected_family_id.reset();
+		}
+
+		auto const match = contains_matching
+			? font_name_combo_box_detail::FindContainsMatch(match_choices, query)
+			: font_name_combo_box_detail::FindPrefixMatch(match_choices, query);
+		if (!match) {
+			highlight_index.reset();
+			return;
+		}
+
+		highlight_index = match->index;
+		Popup();
+	}
+
+	void OnKeyDown(wxKeyEvent& event) {
+		auto const key = event.GetKeyCode();
+		if (auto_expand_on_input && IsDropDownOpen() && highlight_index
+			&& (key == WXK_RETURN || key == WXK_NUMPAD_ENTER)) {
+			auto const selection = *highlight_index;
+			if (selection >= all_choices.size()) {
+				event.Skip();
+				return;
+			}
+			suppress_keyboard_text_enter = true;
+			Dismiss();
+
+			wxCommandEvent selected(wxEVT_COMBOBOX, GetId());
+			selected.SetEventObject(this);
+			selected.SetInt(static_cast<int>(selection));
+			selected.SetString(all_choices[selection].label);
+			ProcessWindowEvent(selected);
+			return;
+		}
+		event.Skip();
+	}
+
+	void OnKeyUp(wxKeyEvent& event) {
+		auto const key = event.GetKeyCode();
+		if (key == WXK_RETURN || key == WXK_NUMPAD_ENTER)
+			suppress_keyboard_text_enter = false;
+		event.Skip();
+	}
+
+	void OnTextEnter(wxCommandEvent& event) {
+		if (suppress_keyboard_text_enter) {
+			suppress_keyboard_text_enter = false;
+			return;
+		}
+		event.Skip();
+	}
+
 	void OnText(wxCommandEvent& event) {
-		if (!applying && contains_matching) {
+		if (committing_list_selection) {
+			suppress_auto_expand = true;
+		}
+		else if (!applying && (contains_matching || auto_expand_on_input)) {
+			// A committed list choice suppresses only its own text notification;
+			// the next real edit is allowed to open the list again.
+			suppress_auto_expand = false;
 			CallAfter([this] {
-				UpdateContainsHighlight(/*force_jump=*/IsDropDownOpen());
+				if (contains_matching)
+					UpdateContainsHighlight(/*force_jump=*/IsDropDownOpen());
+				AutoExpandForInput();
 			});
 		}
 		event.Skip();
 	}
 
 	void OnDropDown(wxCommandEvent& event) {
+		drop_down_open = true;
 		if (!applying && contains_matching) {
 			// Snapshot typed text before open-side effects rewrite the edit.
 			// Do this synchronously so the deferred jump uses the real query
@@ -325,6 +419,7 @@ class FontNameComboBox final : public wxComboBox {
 	}
 
 	void OnCloseUp(wxCommandEvent& event) {
+		drop_down_open = false;
 		StopSettleTimer();
 		// Closing without an explicit pick must leave the typed query, not the
 		// temporarily highlighted family name.
@@ -341,6 +436,7 @@ class FontNameComboBox final : public wxComboBox {
 		}
 
 		auto const& choice = all_choices[static_cast<std::size_t>(selection)];
+		suppress_auto_expand = true;
 		StopSettleTimer();
 		highlight_index.reset();
 		typed_query = choice.label;
@@ -372,8 +468,20 @@ class FontNameComboBox final : public wxComboBox {
 
 	bool ProcessEvent(wxEvent& event) override {
 		if (!applying && event.GetId() == GetId()
-			&& event.GetEventType() == wxEVT_COMBOBOX)
+			&& event.GetEventType() == wxEVT_COMBOBOX) {
+			// Keep text notifications generated by this combo event classified as
+			// a committed list choice on every wxWidgets backend.
+			struct RestoreCommitState {
+				bool& state;
+				bool previous;
+				~RestoreCommitState() { state = previous; }
+			};
+			RestoreCommitState restore{
+				committing_list_selection, committing_list_selection};
+			committing_list_selection = true;
 			CommitListSelection(static_cast<wxCommandEvent&>(event).GetInt());
+			return wxComboBox::ProcessEvent(event);
+		}
 		return wxComboBox::ProcessEvent(event);
 	}
 
@@ -383,11 +491,13 @@ public:
 		wxString const& value,
 		wxSize const& size,
 		std::vector<FontFamilyChoice> const& choices,
-		bool contains_matching)
+		bool contains_matching,
+		bool auto_expand_on_input)
 	: wxComboBox(parent, -1, value, wxDefaultPosition, size, ToWxChoices(choices),
 		wxCB_DROPDOWN | wxTE_PROCESS_ENTER)
 	, typed_query(value)
 	, contains_matching(contains_matching)
+	, auto_expand_on_input(auto_expand_on_input)
 	{
 		all_choices.reserve(choices.size());
 		match_choices.reserve(choices.size());
@@ -397,16 +507,25 @@ public:
 			match_choices.emplace_back(label, choice.family_id);
 		}
 
+		if (contains_matching || auto_expand_on_input)
+			Bind(wxEVT_TEXT, &FontNameComboBox::OnText, this);
+		if (auto_expand_on_input) {
+			Bind(wxEVT_KEY_DOWN, &FontNameComboBox::OnKeyDown, this);
+			Bind(wxEVT_KEY_UP, &FontNameComboBox::OnKeyUp, this);
+			Bind(wxEVT_TEXT_ENTER, &FontNameComboBox::OnTextEnter, this);
+		}
+
 		if (contains_matching) {
 			settle_timer.SetOwner(this);
 			Bind(wxEVT_TIMER, &FontNameComboBox::OnSettleTimer, this,
 				settle_timer.GetId());
-			Bind(wxEVT_TEXT, &FontNameComboBox::OnText, this);
+		}
 #if wxCHECK_VERSION(3, 1, 0)
+		if (contains_matching || auto_expand_on_input) {
 			Bind(wxEVT_COMBOBOX_DROPDOWN, &FontNameComboBox::OnDropDown, this);
 			Bind(wxEVT_COMBOBOX_CLOSEUP, &FontNameComboBox::OnCloseUp, this);
-#endif
 		}
+#endif
 
 		if (auto const exact = ExactListMatch(value))
 			selected_family_id = exact;

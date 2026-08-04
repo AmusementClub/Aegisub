@@ -642,9 +642,10 @@ public:
 		implicit_base_weight = effective_weight;
 		implicit_base_italic = initial.italic;
 		auto const contains_matching = OPT_GET("Subtitle/Font/Use Contains Matching")->GetBool();
+		auto const auto_expand = OPT_GET("Subtitle/Font/Auto Expand List On Input")->GetBool();
 		face_name = new FontNameComboBox(
 			this, to_wx(initial.face_name), wxSize(400, -1),
-			font_model.choices, contains_matching);
+			font_model.choices, contains_matching, auto_expand);
 		committed_family = from_wx(face_name->GetValue());
 		face_name->SetToolTip(_("Font face; this exact name will be written to ASS"));
 		font_style = new wxComboBox(

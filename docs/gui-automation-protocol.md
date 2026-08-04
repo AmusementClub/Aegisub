@@ -84,7 +84,9 @@ both an `EM_REPLACESEL` retype and a `WM_CHAR` retype; the latter is dispatched
 through the native EDIT wndproc and triggers the native `CBS_DROPDOWN`
 auto-select path, specifically verifying that a backward highlight jump (new
 match sorting above the previous match, e.g. `ahom` -> Tahoma then `nsol` ->
-Consolas) lands on the correct row.
+Consolas) lands on the correct row. It enables automatic font-list expansion,
+requires typing to open the list without an explicit expand action, and commits
+the highlighted match with Enter to verify a keyboard-only selection path.
 
 Audio performance runs may explicitly isolate `Audio/Provider`,
 `Audio/Cache/Type`, `Audio/Player`, and waveform/spectrum selection with the

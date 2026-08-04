@@ -24,6 +24,26 @@ TEST(font_name_combo_box, committed_drop_down_choice_is_not_an_empty_query) {
 	EXPECT_EQ(5u, font_name_combo_box_detail::TypedQueryLength(5, 0, 0, 0));
 }
 
+TEST(font_name_combo_box, prefix_match_supports_auto_expanding_native_matching) {
+	auto const choices = SampleChoices();
+	auto const arial = font_name_combo_box_detail::FindPrefixMatch(
+		choices, wxString::FromUTF8("ari"));
+	ASSERT_TRUE(arial.has_value());
+	EXPECT_EQ(0u, arial->index);
+	EXPECT_EQ(1, arial->family_id);
+
+	auto const times = font_name_combo_box_detail::FindPrefixMatch(
+		choices, wxString::FromUTF8("TIMES"));
+	ASSERT_TRUE(times.has_value());
+	EXPECT_EQ(3u, times->index);
+	EXPECT_EQ(4, times->family_id);
+
+	EXPECT_FALSE(font_name_combo_box_detail::FindPrefixMatch(
+		choices, wxString::FromUTF8("rial")).has_value());
+	EXPECT_FALSE(font_name_combo_box_detail::FindPrefixMatch(
+		choices, wxString()).has_value());
+}
+
 TEST(font_name_combo_box, contains_match_returns_first_list_index_without_filtering) {
 	auto const choices = SampleChoices();
 	auto const arial = font_name_combo_box_detail::FindContainsMatch(

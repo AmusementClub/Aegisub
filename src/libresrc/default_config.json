@@ -434,6 +434,7 @@
 		"Font" : {
 			"Prefer Localized Family Names" : true,
 			"Use Contains Matching" : false,
+			"Auto Expand List On Input" : false,
 			"Compact Vertical Font List" : false
 		},
 		"Edit Box" : {

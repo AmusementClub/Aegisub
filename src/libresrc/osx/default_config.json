@@ -414,7 +414,8 @@
 			"Width" : 1280
 		},
 		"Font" : {
-			"Use Contains Matching" : false
+			"Use Contains Matching" : false,
+			"Auto Expand List On Input" : false
 		},
 		"Edit Box" : {
 			"Character Markers" : {

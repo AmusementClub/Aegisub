@@ -203,6 +203,15 @@ void AudioDisplaySlot::ScrollBy(int pixel_amount, int mouse_x) {
 		pending_scroll_pixels += pixel_amount;
 }
 
+void AudioDisplaySlot::ScrollToTime(int time_ms) {
+	visible_range_set = false;
+	pending_scroll_pixels = 0;
+	if (display)
+		display->ScrollToTime(time_ms);
+	else if (skia_display)
+		skia_display->ScrollToTime(time_ms);
+}
+
 void AudioDisplaySlot::ScrollTimeRangeInView(TimeRange const& range) {
 	visible_range_set = true;
 	visible_range_begin = range.begin();

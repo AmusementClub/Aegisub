@@ -102,6 +102,7 @@ namespace Automation4 {
 		// Captures temporary visual-guide UI state as a value object. A missing
 		// value means that this host has no live GUI/controller/video snapshot.
 		virtual std::optional<AutomationVisualGuideSnapshot> TryGetVisualGuides() const = 0;
+		virtual bool ScrollAudioToTime(int time_ms) = 0;
 		virtual bool FocusSubtitleEditBox() = 0;
 		virtual bool SetSubtitleEditBoxCursor(int character_index, bool after) = 0;
 		virtual bool SetSubtitleEditBoxSelection(int start, int stop) = 0;

@@ -35,6 +35,7 @@
 #include "audio_renderer.h"
 #include "audio_renderer_spectrum.h"
 #include "audio_renderer_waveform.h"
+#include "audio_scroll_position.h"
 #include "audio_timing.h"
 #include "compat.h"
 #include "format.h"
@@ -682,6 +683,12 @@ void AudioDisplay::ScrollPixelToLeft(int pixel_position)
 	trace.SetDetails(
 		scroll_delta >= 0 ? scroll_delta : -scroll_delta,
 		used_scroll_window ? 1 : 0);
+}
+
+void AudioDisplay::ScrollToTime(int time_ms)
+{
+	ScrollPixelToLeft(aegisub::audio::CenteredScrollLeft(
+		time_ms, GetClientRect().GetWidth(), ms_per_pixel));
 }
 
 void AudioDisplay::ScrollTimeRangeInView(const TimeRange &range)

@@ -9,6 +9,7 @@
 #include "../../audio_colorscheme.h"
 #include "../../audio_marker_drag_dead_zone.h"
 #include "../../audio_renderer_spectrum.h"
+#include "../../audio_scroll_position.h"
 #include "../../audio_timing.h"
 #include "../../include/aegisub/hotkey.h"
 #include "../../navigation_preview_policy.h"
@@ -2002,6 +2003,24 @@ void SkiaAudioDisplay::ScrollBy(int pixel_amount, int mouse_x) {
 			value, 0.0, std::numeric_limits<int>::max()));
 		RequestRepaint(true);
 	}
+}
+
+void SkiaAudioDisplay::ScrollToTime(int time_ms) {
+	RebuildViewport();
+	if (!impl->viewport.IsValid())
+		return;
+
+	auto const old_scroll_left = impl->scroll_left;
+	impl->scroll_left = aegisub::audio::CenteredScrollLeft(
+		time_ms,
+		GetClientSize().GetWidth(),
+		AudioMillisecondsPerLogicalPixel(impl->zoom_level));
+	impl->content_scroll_left = impl->scroll_left;
+	RebuildViewport();
+	RequestVisibleContent();
+	if (impl->scroll_left != old_scroll_left)
+		Invalidate(Change::Scroll);
+	RequestRepaint(true);
 }
 
 void SkiaAudioDisplay::ScrollTimeRangeInView(TimeRange const& range) {

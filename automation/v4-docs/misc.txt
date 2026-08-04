@@ -41,6 +41,24 @@ Returns: 2 values, all numbers.
 
 ---
 
+Scrolling the audio display to a time
+
+function aegisub.scroll_audio_to(time_ms)
+
+Centers the audio waveform or spectrum display on the requested time as far as
+the audio boundaries allow. This does not change the audio selection, playback
+position, or playback state.
+
+@time_ms (number)
+  Target time in milliseconds. Times before the start or after the end of the
+  audio are clamped by the display.
+
+Returns: 1 value, boolean.
+  true if the current Automation host has a live audio display and audio is
+  loaded, false otherwise.
+
+---
+
 Getting a read-only visual-guide snapshot
 
 function aegisub.get_visual_guides()

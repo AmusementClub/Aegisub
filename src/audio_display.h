@@ -250,6 +250,9 @@ public:
 	/// @param pixel_position Absolute pixel to put at left edge of the audio display
 	void ScrollPixelToLeft(int pixel_position);
 
+	/// Center the audio display on a time in milliseconds.
+	void ScrollToTime(int time_ms);
+
 	/// @brief Scroll the audio display
 	/// @param range Time range to ensure is in view
 	///

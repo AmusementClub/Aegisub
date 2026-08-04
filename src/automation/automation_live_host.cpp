@@ -20,6 +20,7 @@
 #include "../ass_info.h"
 #include "../ass_style.h"
 #include "../async_video_provider.h"
+#include "../audio_box.h"
 #include "../audio_controller.h"
 #include "../audio_timing.h"
 #include "../auto4_base.h"
@@ -285,6 +286,25 @@ public:
 			for (auto const& guide : source.guides)
 				snapshot.guides.push_back(ToAutomationVisualGuide(guide));
 			return snapshot;
+		});
+	}
+
+	bool ScrollAudioToTime(int time_ms) override
+	{
+		return agi::ui::MainInvoke([this, time_ms] {
+			if (!context)
+				return false;
+
+			auto ui = context->GetUI();
+			if (!ui.frame || ui.frame->GetAsyncUiLifetime().expired() || !ui.audioBox)
+				return false;
+
+			auto core = GetCore(context);
+			if (!core.project->AudioProvider())
+				return false;
+
+			ui.audioBox->ScrollToTime(time_ms);
+			return true;
 		});
 	}
 

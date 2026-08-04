@@ -118,6 +118,9 @@ public:
 	/// A positive amount moves the display to the right, making later parts of the audio visible.
 	void ScrollAudioBy(int pixel_amount);
 
+	/// Center the audio display on a time in milliseconds.
+	void ScrollToTime(int time_ms);
+
 	/// Make the currently active line visible in the audio display
 	void ScrollToActiveLine();
 

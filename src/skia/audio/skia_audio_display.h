@@ -103,6 +103,7 @@ public:
 	void SyncToCurrentAudioProvider();
 	void ScrollBy(int pixel_amount);
 	void ScrollBy(int pixel_amount, int mouse_x);
+	void ScrollToTime(int time_ms);
 	void ScrollTimeRangeInView(TimeRange const& range);
 	void SetZoomLevel(int zoom_level);
 	int GetZoomLevel() const;

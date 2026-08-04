@@ -415,6 +415,14 @@ namespace {
 		return 1;
 	}
 
+	int lua_scroll_audio_to(lua_State *L)
+	{
+		int time_ms = check_int(L, 1);
+		auto *host = get_host(L);
+		push_value(L, host && host->Ui().ScrollAudioToTime(time_ms));
+		return 1;
+	}
+
 	int lua_set_status_text(lua_State *L)
 	{
 		auto *host = get_host(L);
@@ -707,7 +715,7 @@ namespace {
 
 		// make "aegisub" table
 		lua_pushstring(L, "aegisub");
-		lua_createtable(L, 0, 22);
+		lua_createtable(L, 0, 23);
 
 		set_field<LuaCommand::LuaRegister>(L, "register_macro");
 		set_field<LuaExportFilter::LuaRegister>(L, "register_filter");
@@ -726,6 +734,7 @@ namespace {
 		set_field<get_translation>(L, "gettext");
 		set_field<project_properties>(L, "project_properties");
 		set_field<lua_get_audio_selection>(L, "get_audio_selection");
+		set_field<lua_scroll_audio_to>(L, "scroll_audio_to");
 		set_field<lua_get_visual_guides>(L, "get_visual_guides");
 		set_field<lua_set_status_text>(L, "set_status_text");
 		set_field<lua_focus_edit_box>(L, "focus_edit_box");

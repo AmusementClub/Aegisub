@@ -8,6 +8,7 @@
 #include "../../src/audio_marker_drag_dead_zone.h"
 #include "../../src/audio_display_source.h"
 #include "../../src/audio_mix_policy.h"
+#include "../../src/audio_scroll_position.h"
 #include "../../src/audio_spectrum_analysis_cache.h"
 #include "../../src/audio_waveform_column_ref.h"
 #include "../../src/audio_waveform_summary_cache.h"
@@ -311,6 +312,18 @@ bool WaitForBlockingProvider(BlockingSpectrumProvider const& provider) {
 	if (!entered)
 		provider.Release();
 	return entered;
+}
+
+TEST(lagi_audio_display, centered_scroll_position_places_time_at_viewport_center) {
+	EXPECT_EQ(300, aegisub::audio::CenteredScrollLeft(10000, 400, 20.0));
+	EXPECT_EQ(9800, aegisub::audio::CenteredScrollLeft(10000, 400, 1.0));
+}
+
+TEST(lagi_audio_display, centered_scroll_position_clamps_invalid_or_early_targets) {
+	EXPECT_EQ(0, aegisub::audio::CenteredScrollLeft(-100, 400, 20.0));
+	EXPECT_EQ(0, aegisub::audio::CenteredScrollLeft(1000, 0, 20.0));
+	EXPECT_EQ(0, aegisub::audio::CenteredScrollLeft(1000, 400, 0.0));
+	EXPECT_EQ(0, aegisub::audio::CenteredScrollLeft(1000, 400, std::numeric_limits<double>::infinity()));
 }
 
 bool WaitForSpectrumPrefetchBuilds(

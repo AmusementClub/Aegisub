@@ -47,6 +47,9 @@ class DialogSearchReplace final : public wxDialog {
 
 public:
 	static void Show(agi::Context *context, bool with_replace);
+	/// Focus the existing visible Find/Replace dialog for `context`. Does not
+	/// create or re-open a dialog the user has already closed.
+	static void Focus(agi::Context *context);
 
 	DialogSearchReplace(agi::Context* c, bool with_replace);
 	~DialogSearchReplace();

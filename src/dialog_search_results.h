@@ -129,6 +129,9 @@ class DialogSearchResults final : public wxDialog {
 	void OnCommit(AssFileCommitDetails commit);
 	void OnActivate(wxListEvent& evt);
 	void OnCopySelected(wxCommandEvent&);
+	/// Close a user-dismissed results dialog and return keyboard focus to the
+	/// still-visible Find/Replace dialog which launched it.
+	void CloseAndReturnFocus();
 	/// `hit_index` is the index into `hits` (stored as item data), not the
 	/// list-view visual row.
 	void JumpToHit(std::size_t hit_index);

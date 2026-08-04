@@ -7,6 +7,7 @@
 #include "ass_file.h"
 #include "compat.h"
 #include "format.h"
+#include "dialog_search_replace.h"
 #include "include/aegisub/context.h"
 #include "include/aegisub/context_ui.h"
 #include "selection_controller.h"
@@ -76,6 +77,7 @@ void DialogSearchResults::InitCommon(bool replace_mode) {
 
 	copy_button = new wxButton(this, -1, _("&Copy selected lines"));
 	auto close_button = new wxButton(this, wxID_CLOSE);
+	SetEscapeId(wxID_CLOSE);
 
 	status = new wxStaticText(this, -1, wxEmptyString);
 
@@ -93,15 +95,14 @@ void DialogSearchResults::InitCommon(bool replace_mode) {
 
 	list->Bind(wxEVT_LIST_ITEM_ACTIVATED, &DialogSearchResults::OnActivate, this);
 	copy_button->Bind(wxEVT_BUTTON, &DialogSearchResults::OnCopySelected, this);
-	close_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { Close(); });
+	close_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { CloseAndReturnFocus(); });
 
 	// Modeless wxDialog defaults to Hide() on close; that would leave the
 	// object and its AssFile commit listener alive forever. Match DialogManager:
 	// Skip the event, then Destroy.
 	Bind(wxEVT_CLOSE_WINDOW, [](wxCloseEvent& evt) {
 		auto *dlg = static_cast<DialogSearchResults *>(evt.GetEventObject());
-		evt.Skip();
-		dlg->Destroy();
+		dlg->CloseAndReturnFocus();
 	});
 
 	// Details give changed_lines so unrelated single-line edits do not wipe a
@@ -724,6 +725,14 @@ void DialogSearchResults::OnCopySelected(wxCommandEvent&) {
 		return;
 	}
 	SetClipboard(out);
+}
+
+void DialogSearchResults::CloseAndReturnFocus() {
+	// Hide first so wxMSW can transfer activation away from this top-level
+	// window before its deferred Destroy runs.
+	Hide();
+	DialogSearchReplace::Focus(c);
+	Destroy();
 }
 
 void DialogSearchResults::Show(agi::Context *context, SearchReplaceSettings settings,

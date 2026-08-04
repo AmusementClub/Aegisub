@@ -54,6 +54,10 @@
 #include <wx/valgen.h>
 #include <wx/wupdlock.h>
 
+namespace {
+DialogSearchReplace *search_replace_dialog = nullptr;
+}
+
 DialogSearchReplace::DialogSearchReplace(agi::Context* c, bool replace)
 : wxDialog(c->GetUI().parent, -1, replace ? _("Replace") : _("Find"))
 , c(c)
@@ -179,6 +183,10 @@ DialogSearchReplace::DialogSearchReplace(agi::Context* c, bool replace)
 }
 
 DialogSearchReplace::~DialogSearchReplace() {
+	// Show can replace one dialog shape with the other using asynchronous
+	// Destroy(). Do not let the old instance clear the newer pointer later.
+	if (search_replace_dialog == this)
+		search_replace_dialog = nullptr;
 }
 
 void DialogSearchReplace::FindReplace(bool (SearchReplaceEngine::*func)()) {
@@ -301,26 +309,33 @@ void DialogSearchReplace::OnCommit(int type, AssDialogue const* /*changed*/) {
 }
 
 void DialogSearchReplace::Show(agi::Context *context, bool replace) {
-	static DialogSearchReplace *diag = nullptr;
-
 	wxString preselected = get_selected_text_for_search(context);
 
-	if (diag && replace != diag->has_replace) {
+	if (search_replace_dialog && replace != search_replace_dialog->has_replace) {
 		// Already opened, but wrong type - destroy and create the right one
-		diag->Destroy();
-		diag = nullptr;
+		search_replace_dialog->Destroy();
+		search_replace_dialog = nullptr;
 	}
 
-	if (!diag)
-		diag = new DialogSearchReplace(context, replace);
+	if (!search_replace_dialog)
+		search_replace_dialog = new DialogSearchReplace(context, replace);
 
 	if (!preselected.empty()) {
-		diag->find_edit->SetValue(preselected);
-		diag->settings->find = from_wx(preselected);
+		search_replace_dialog->find_edit->SetValue(preselected);
+		search_replace_dialog->settings->find = from_wx(preselected);
 	}
 
-	diag->find_edit->SetFocus();
-	diag->find_edit->SelectAll();
-	diag->wxDialog::Show();
-	diag->Raise();
+	search_replace_dialog->find_edit->SetFocus();
+	search_replace_dialog->find_edit->SelectAll();
+	search_replace_dialog->wxDialog::Show();
+	search_replace_dialog->Raise();
+}
+
+void DialogSearchReplace::Focus(agi::Context *context) {
+	if (!search_replace_dialog || search_replace_dialog->c != context ||
+	    !search_replace_dialog->IsShown())
+		return;
+
+	search_replace_dialog->Raise();
+	search_replace_dialog->find_edit->SetFocus();
 }

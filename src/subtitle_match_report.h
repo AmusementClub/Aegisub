@@ -77,6 +77,36 @@ std::size_t AdvancePastEmptyMatch(std::string const& text, std::size_t pos);
 void FindInLine(AssDialogue const& line, SearchReplaceSettings const& settings,
 	             MatchEnumerator& enumerate, std::vector<MatchHit>& out);
 
+/// Outcome of re-matching a previously reported line against its live text.
+struct RecomputeResult {
+	/// Hits whose match was found again (at possibly new offsets) and updated.
+	std::size_t refreshed = 0;
+	/// Hits that no longer line up with a fresh match (or whose line became
+	/// ineligible, or vanished). The caller marks these per-hit stale.
+	std::size_t orphaned = 0;
+};
+
+/// Re-match `line` with the original `settings`/`enumerate` and update the hits
+/// in `[hits_begin, hits_end)` that carry `line.Id`, by appearance order: the
+/// i-th such hit is aligned to the i-th fresh match (same rule FindInLine uses
+/// to order matches).
+///
+/// Every hit on the line gets its display metadata refreshed against the live
+/// line (`line_text`/`row`/`start_time`/`style`), so the Context column never
+/// lags behind an edit. Refreshed hits additionally get updated
+/// `start`/`end`/`matched`. Orphaned hits (beyond the fresh match count, or on
+/// a line that became ineligible) keep their old `start`/`end`/`matched` —
+/// those coordinates are no longer meaningful, and the caller marks the row
+/// per-hit stale — but still carry the refreshed metadata.
+///
+/// If the line is no longer eligible (comment/style filters), every hit in the
+/// range is orphaned. Pure logic, no GUI dependencies; unit-testable.
+RecomputeResult RecomputeLineHits(AssDialogue const& line,
+                                  SearchReplaceSettings const& settings,
+                                  MatchEnumerator& enumerate,
+                                  std::vector<MatchHit>::iterator hits_begin,
+                                  std::vector<MatchHit>::iterator hits_end);
+
 /// Enumerate every match across `events`, honoring the comment and style
 /// filters. When settings.limit_to is SELECTED, only lines present in
 /// `selection` are considered (an empty selection yields no hits).

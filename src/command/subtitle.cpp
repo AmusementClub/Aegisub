@@ -166,7 +166,7 @@ struct subtitle_find_all final : public Command {
 		}
 
 		if (!core.search->GetLastMatches().empty())
-			DialogSearchResults::Show(c, core.search->GetLastMatches());
+			DialogSearchResults::Show(c, core.search->GetSettings(), core.search->GetLastMatches());
 		else
 			DialogSearchResults::Dismiss(c);
 	}

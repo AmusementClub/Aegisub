@@ -127,3 +127,31 @@ TEST(subtitle_matcher, regex_replacement_scope_distinguishes_replace_next_and_al
 	EXPECT_EQ("bc", ExpandSubtitleMatchReplacement(
 		ms, s, SubtitleMatchReplacementScope::SEARCH_CONTEXT));
 }
+
+// ----------------------------------------------------------------------------
+// An empty replace_with short-circuits the per-match regex format expansion
+// (the Find-report recompute path never reads replacements). The match is still
+// reported and marked, but both replacement fields stay empty — pinning this
+// so a future change to the short-circuit does not silently regress the
+// per-keystroke cost.
+// ----------------------------------------------------------------------------
+TEST(subtitle_matcher, empty_replace_with_short_circuits_format_expansion) {
+	auto s = base_settings("\\w+");
+	s.use_regex = true;
+	// replace_with is "" (base_settings default) — the short-circuit path.
+	auto enumerate = MakeSubtitleMatchEnumerator(s);
+	AssDialogue line = make_line("abc def");
+
+	auto matches = enumerate(line);
+	ASSERT_EQ(2u, matches.size());
+	for (auto const& ms : matches) {
+		EXPECT_TRUE(ms.has_regex_replacement);
+		EXPECT_EQ("", ms.match_only_replacement);
+		EXPECT_EQ("", ms.search_context_replacement);
+		// ExpandSubtitleMatchReplacement must agree (returns empty for both scopes).
+		EXPECT_EQ("", ExpandSubtitleMatchReplacement(
+			ms, s, SubtitleMatchReplacementScope::MATCH_ONLY));
+		EXPECT_EQ("", ExpandSubtitleMatchReplacement(
+			ms, s, SubtitleMatchReplacementScope::SEARCH_CONTEXT));
+	}
+}

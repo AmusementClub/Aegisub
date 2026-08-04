@@ -41,6 +41,12 @@ public:
 
 	void Configure(SearchReplaceSettings const& new_settings);
 
+	/// The settings that produced the current last_matches/last_replacements.
+	/// Prefer this copy over the live dialog settings: the report panel needs
+	/// the settings that were in effect when its hits were generated, so an
+	/// in-place recompute matches against the same query that listed them.
+	SearchReplaceSettings const& GetSettings() const { return settings; }
+
 	std::vector<aegisub::subtitle_match_report::MatchHit> const& GetLastMatches() const {
 		return last_matches;
 	}

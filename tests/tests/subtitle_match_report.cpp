@@ -630,3 +630,256 @@ TEST(subtitle_match_report, regex_prefix_format_uses_search_context) {
 	ASSERT_EQ(1u, hits.size());
 	EXPECT_EQ("aac", line.Text.get());
 }
+
+// ----------------------------------------------------------------------------
+// RecomputeLineHits re-matches a previously reported line against its live
+// text and aligns old hits to fresh matches by appearance order. Refreshed
+// hits get updated offsets/matched/line_text; leftover hits (fewer fresh
+// matches than old) count as orphaned and are left untouched for the caller
+// to grey out.
+// ----------------------------------------------------------------------------
+TEST(subtitle_match_report, recompute_refreshes_hits_at_new_offsets) {
+	auto s = base_settings("a");
+	auto matcher = MakeSubtitleMatchEnumerator(s);
+
+	// Original line had three 'a's in "banana": offsets 1,3,5.
+	AssDialogue line = make_line("banana");
+	std::vector<aegisub::subtitle_match_report::MatchHit> hits;
+	aegisub::subtitle_match_report::FindInLine(line, s, matcher, hits);
+	ASSERT_EQ(3u, hits.size());
+
+	// User edits the line: prefix shifts every match by one byte.
+	line.Text = "xbanana";
+
+	auto res = aegisub::subtitle_match_report::RecomputeLineHits(
+		line, s, matcher, hits.begin(), hits.end());
+
+	EXPECT_EQ(3u, res.refreshed);
+	EXPECT_EQ(0u, res.orphaned);
+	// Offsets advanced by the one-byte prefix; matched text unchanged.
+	EXPECT_EQ(2u, hits[0].start);
+	EXPECT_EQ(3u, hits[0].end);
+	EXPECT_EQ(4u, hits[1].start);
+	EXPECT_EQ(5u, hits[1].end);
+	EXPECT_EQ(6u, hits[2].start);
+	EXPECT_EQ(7u, hits[2].end);
+	EXPECT_EQ("a", hits[0].matched);
+	EXPECT_EQ("xbanana", *hits[0].line_text);
+}
+
+TEST(subtitle_match_report, recompute_orphans_hits_when_matches_shrink) {
+	auto s = base_settings("a");
+	auto matcher = MakeSubtitleMatchEnumerator(s);
+
+	AssDialogue line = make_line("banana");
+	std::vector<aegisub::subtitle_match_report::MatchHit> hits;
+	aegisub::subtitle_match_report::FindInLine(line, s, matcher, hits);
+	ASSERT_EQ(3u, hits.size());
+
+	// Edit removes two of the three 'a's: only the first survives, at a new
+	// offset ("ban" -> the lone 'a' is now at index 1 still, but the later
+	// matches are gone).
+	line.Text = "banxxx";
+
+	auto res = aegisub::subtitle_match_report::RecomputeLineHits(
+		line, s, matcher, hits.begin(), hits.end());
+
+	EXPECT_EQ(1u, res.refreshed);
+	EXPECT_EQ(2u, res.orphaned);
+	// First hit realigned to the surviving match; offset unchanged here.
+	EXPECT_EQ(1u, hits[0].start);
+	EXPECT_EQ(2u, hits[0].end);
+	EXPECT_EQ("banxxx", *hits[0].line_text);
+	// Orphaned hits keep their old matched fragment (no fresh match exists),
+	// but line_text/metadata are refreshed so the Context column does not show
+	// stale text alongside a surviving sibling row on the same line.
+	EXPECT_EQ("banxxx", *hits[1].line_text);
+	EXPECT_EQ("banxxx", *hits[2].line_text);
+	// Old matched fragment retained (a was at original offsets 3/5).
+	EXPECT_EQ("a", hits[1].matched);
+	EXPECT_EQ("a", hits[2].matched);
+}
+
+TEST(subtitle_match_report, recompute_orphans_all_when_line_no_longer_matches) {
+	auto s = base_settings("foo");
+	auto matcher = MakeSubtitleMatchEnumerator(s);
+
+	AssDialogue line = make_line("foo bar foo");
+	std::vector<aegisub::subtitle_match_report::MatchHit> hits;
+	aegisub::subtitle_match_report::FindInLine(line, s, matcher, hits);
+	ASSERT_EQ(2u, hits.size());
+
+	// Match word removed entirely.
+	line.Text = "bar baz";
+
+	auto res = aegisub::subtitle_match_report::RecomputeLineHits(
+		line, s, matcher, hits.begin(), hits.end());
+
+	EXPECT_EQ(0u, res.refreshed);
+	EXPECT_EQ(2u, res.orphaned);
+}
+
+TEST(subtitle_match_report, recompute_orphans_all_when_line_becomes_ineligible) {
+	auto s = base_settings("a");
+	s.ignore_comments = true;
+	auto matcher = MakeSubtitleMatchEnumerator(s);
+
+	AssDialogue line = make_line("banana");
+	std::vector<aegisub::subtitle_match_report::MatchHit> hits;
+	aegisub::subtitle_match_report::FindInLine(line, s, matcher, hits);
+	ASSERT_EQ(3u, hits.size());
+
+	// Turning the line into a comment makes it ineligible under the settings;
+	// every hit is orphaned without running the matcher.
+	line.Comment = true;
+
+	auto res = aegisub::subtitle_match_report::RecomputeLineHits(
+		line, s, matcher, hits.begin(), hits.end());
+
+	EXPECT_EQ(0u, res.refreshed);
+	EXPECT_EQ(3u, res.orphaned);
+}
+
+TEST(subtitle_match_report, recompute_only_touches_hits_for_the_given_line) {
+	auto s = base_settings("a");
+	auto matcher = MakeSubtitleMatchEnumerator(s);
+
+	report_fixture fx;
+	auto *line1 = fx.AddLine("banana"); // 3 hits (offsets 1,3,5)
+	auto *line2 = fx.AddLine("papaya"); // 3 hits (offsets 1,3,5)
+
+	std::vector<aegisub::subtitle_match_report::MatchHit> hits;
+	aegisub::subtitle_match_report::FindInLine(*line1, s, matcher, hits);
+	aegisub::subtitle_match_report::FindInLine(*line2, s, matcher, hits);
+	ASSERT_EQ(6u, hits.size());
+	auto const line2_first_start = hits[3].start;
+	auto const line2_first_text = hits[3].line_text;
+
+	// Edit only line1; line2's hits must be left untouched.
+	line1->Text = "xbanana";
+	auto res = aegisub::subtitle_match_report::RecomputeLineHits(
+		*line1, s, matcher, hits.begin(), hits.end());
+
+	EXPECT_EQ(3u, res.refreshed);
+	EXPECT_EQ(0u, res.orphaned);
+	// line2 hits unchanged (start, line_text, matched all preserved).
+	EXPECT_EQ(line2_first_start, hits[3].start);
+	EXPECT_EQ(line2_first_text, hits[3].line_text);
+}
+
+TEST(subtitle_match_report, recompute_aligns_regex_matches_in_order) {
+	auto s = base_settings("\\d+");
+	s.use_regex = true;
+	auto matcher = MakeSubtitleMatchEnumerator(s);
+
+	AssDialogue line = make_line("a1b22c333");
+	std::vector<aegisub::subtitle_match_report::MatchHit> hits;
+	aegisub::subtitle_match_report::FindInLine(line, s, matcher, hits);
+	ASSERT_EQ(3u, hits.size());
+
+	// Insert a one-byte prefix; offsets advance by one but order is preserved.
+	line.Text = "za1b22c333";
+	auto res = aegisub::subtitle_match_report::RecomputeLineHits(
+		line, s, matcher, hits.begin(), hits.end());
+
+	ASSERT_EQ(3u, res.refreshed);
+	EXPECT_EQ("1", hits[0].matched);
+	EXPECT_EQ("22", hits[1].matched);
+	EXPECT_EQ("333", hits[2].matched);
+	EXPECT_EQ(2u, hits[0].start);  // z a [1]
+	EXPECT_EQ(4u, hits[1].start);  // z a 1 b [2]2
+	EXPECT_EQ(7u, hits[2].start);  // z a 1 b 2 2 c [3]33
+}
+
+// ----------------------------------------------------------------------------
+// When the edited line has MORE matches than before, the extra fresh matches
+// are dropped: the panel lists a fixed number of rows and cannot grow new ones
+// from a recompute. This pins that behaviour so a future change notices.
+// ----------------------------------------------------------------------------
+TEST(subtitle_match_report, recompute_drops_extra_matches_when_count_grows) {
+	auto s = base_settings("a");
+	auto matcher = MakeSubtitleMatchEnumerator(s);
+
+	AssDialogue line = make_line("banana"); // 3 hits
+	std::vector<aegisub::subtitle_match_report::MatchHit> hits;
+	aegisub::subtitle_match_report::FindInLine(line, s, matcher, hits);
+	ASSERT_EQ(3u, hits.size());
+
+	// Editing adds a 4th 'a'. The recompute refreshes the 3 existing rows at
+	// their new offsets; the brand-new 4th match is not reported because there
+	// is no row to align it to.
+	line.Text = "bananaxa"; // a at 1,3,5,7
+	auto res = aegisub::subtitle_match_report::RecomputeLineHits(
+		line, s, matcher, hits.begin(), hits.end());
+
+	EXPECT_EQ(3u, res.refreshed);
+	EXPECT_EQ(0u, res.orphaned);
+	EXPECT_EQ(1u, hits[0].start);
+	EXPECT_EQ(3u, hits[1].start);
+	EXPECT_EQ(5u, hits[2].start);
+	EXPECT_EQ("bananaxa", *hits[2].line_text);
+}
+
+// ----------------------------------------------------------------------------
+// Recompute works on non-TEXT fields and does not rewrite `field`.
+// ----------------------------------------------------------------------------
+TEST(subtitle_match_report, recompute_supports_non_text_field_without_rewriting_it) {
+	auto s = base_settings("Default");
+	s.field = SearchReplaceSettings::Field::STYLE;
+	auto matcher = MakeSubtitleMatchEnumerator(s);
+
+	AssDialogue line = make_line("body text");
+	line.Style = "Default"; // one match in the Style field
+	std::vector<aegisub::subtitle_match_report::MatchHit> hits;
+	aegisub::subtitle_match_report::FindInLine(line, s, matcher, hits);
+	ASSERT_EQ(1u, hits.size());
+	ASSERT_EQ(SearchReplaceSettings::Field::STYLE, hits[0].field);
+
+	// Rename to a value that still contains "Default" as a substring: the match
+	// survives (substring search), realigned to the new field text.
+	line.Style = "DefaultBold";
+	auto res = aegisub::subtitle_match_report::RecomputeLineHits(
+		line, s, matcher, hits.begin(), hits.end());
+
+	EXPECT_EQ(1u, res.refreshed);
+	EXPECT_EQ(0u, res.orphaned);
+	// field is preserved, line_text now reflects the renamed style.
+	EXPECT_EQ(SearchReplaceSettings::Field::STYLE, hits[0].field);
+	EXPECT_EQ("DefaultBold", *hits[0].line_text);
+
+	// Now rename to something the needle is not a substring of: the hit orphans
+	// but line_text is still refreshed to the live field text.
+	line.Style = "Title";
+	res = aegisub::subtitle_match_report::RecomputeLineHits(
+		line, s, matcher, hits.begin(), hits.end());
+	EXPECT_EQ(0u, res.refreshed);
+	EXPECT_EQ(1u, res.orphaned);
+	EXPECT_EQ("Title", *hits[0].line_text);
+	EXPECT_EQ(SearchReplaceSettings::Field::STYLE, hits[0].field);
+}
+
+// ----------------------------------------------------------------------------
+// Even when every hit orphans, line_text/metadata are refreshed first, so the
+// Context column never lags behind the live text on a fully-greyed line.
+// ----------------------------------------------------------------------------
+TEST(subtitle_match_report, recompute_refreshes_line_text_even_when_all_orphan) {
+	auto s = base_settings("foo");
+	auto matcher = MakeSubtitleMatchEnumerator(s);
+
+	AssDialogue line = make_line("foo bar foo");
+	std::vector<aegisub::subtitle_match_report::MatchHit> hits;
+	aegisub::subtitle_match_report::FindInLine(line, s, matcher, hits);
+	ASSERT_EQ(2u, hits.size());
+
+	line.Text = "completely different";
+	auto res = aegisub::subtitle_match_report::RecomputeLineHits(
+		line, s, matcher, hits.begin(), hits.end());
+
+	EXPECT_EQ(0u, res.refreshed);
+	EXPECT_EQ(2u, res.orphaned);
+	// No fresh matches, but line_text was still updated to the live text.
+	EXPECT_EQ("completely different", *hits[0].line_text);
+	EXPECT_EQ("completely different", *hits[1].line_text);
+	// Old matched fragment retained (there is nothing accurate to replace it).
+	EXPECT_EQ("foo", hits[0].matched);
+}

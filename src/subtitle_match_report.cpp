@@ -55,19 +55,27 @@ std::size_t AdvancePastEmptyMatch(std::string const& text, std::size_t pos) {
 	return next;
 }
 
-void FindInLine(AssDialogue const& line, SearchReplaceSettings const& settings,
-	             MatchEnumerator& enumerate, std::vector<MatchHit>& out) {
-	auto const& text = (line.*get_dialogue_field(settings.field)).get();
+// Enumerate this line's matches in stable original-order (NFC reordering and
+// Boost empty-match retries resolved by the enumerator). Shared by FindInLine
+// and RecomputeLineHits so both agree on what counts as a match and in what
+// order alignment by index is meaningful. `static` for internal linkage: no
+// external symbol, no header declaration.
+static std::vector<MatchState> CollectLineMatches(AssDialogue const& line,
+                                                  MatchEnumerator& enumerate) {
 	auto matches = enumerate(line);
-	if (matches.empty())
-		return;
-
-	// NFC can reorder combining marks, so searchable-surface order is not
-	// necessarily original byte order. Reports and replacement splicing use
-	// original coordinates and therefore need a stable original-order view.
 	std::stable_sort(matches.begin(), matches.end(), [](MatchState const& a, MatchState const& b) {
 		return a.start < b.start || (a.start == b.start && a.end < b.end);
 	});
+	return matches;
+}
+
+void FindInLine(AssDialogue const& line, SearchReplaceSettings const& settings,
+	             MatchEnumerator& enumerate, std::vector<MatchHit>& out) {
+	auto const& text = (line.*get_dialogue_field(settings.field)).get();
+	auto matches = CollectLineMatches(line, enumerate);
+	if (matches.empty())
+		return;
+
 	auto const line_text = std::make_shared<std::string const>(text);
 
 	for (auto const& ms : matches) {
@@ -83,6 +91,62 @@ void FindInLine(AssDialogue const& line, SearchReplaceSettings const& settings,
 		hit.line_text = line_text;
 		out.push_back(std::move(hit));
 	}
+}
+
+RecomputeResult RecomputeLineHits(AssDialogue const& line,
+                                  SearchReplaceSettings const& settings,
+                                  MatchEnumerator& enumerate,
+                                  std::vector<MatchHit>::iterator hits_begin,
+                                  std::vector<MatchHit>::iterator hits_end) {
+	// Gather this line's hits in report order (they are already in appearance
+	// order because FindAll/FindInLine append matches left-to-right).
+	std::vector<MatchHit *> mine;
+	for (auto it = hits_begin; it != hits_end; ++it) {
+		if (it->line_id == line.Id)
+			mine.push_back(&*it);
+	}
+
+	if (mine.empty())
+		return {};
+
+	// Refresh the live display metadata on every hit regardless of alignment:
+	// the Context column renders *line_text, so keeping stale text on orphaned
+	// rows would show two versions of the same line side by side.
+	auto const line_text = std::make_shared<std::string const>(
+		(line.*get_dialogue_field(settings.field)).get());
+	for (auto *hit : mine) {
+		hit->row = line.Row;
+		hit->start_time = line.Start.GetAssFormatted();
+		hit->style = line.Style.get();
+		hit->line_text = line_text;
+	}
+
+	// An ineligible line (turned into a comment, dropped by style filter, ...)
+	// invalidates every match without further work; metadata above is already
+	// refreshed so the Context column stays honest.
+	if (!LineIsEligible(line, settings)) {
+		RecomputeResult r;
+		r.orphaned = mine.size();
+		return r;
+	}
+
+	auto matches = CollectLineMatches(line, enumerate);
+
+	RecomputeResult r;
+	std::size_t i = 0;
+	for (; i < mine.size() && i < matches.size(); ++i) {
+		auto *hit = mine[i];
+		auto const& ms = matches[i];
+		// Only a realigned hit gets fresh coordinates + matched text; orphaned
+		// hits keep their old matched fragment (that match no longer exists,
+		// so there is nothing accurate to show) but the live line_text above.
+		hit->start = ms.start;
+		hit->end = ms.end;
+		hit->matched = line_text->substr(ms.start, ms.end - ms.start);
+		++r.refreshed;
+	}
+	r.orphaned = mine.size() - i;
+	return r;
 }
 
 std::vector<MatchHit> FindAll(EntryList<AssDialogue> const& events,

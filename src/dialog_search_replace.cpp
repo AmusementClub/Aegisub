@@ -209,14 +209,15 @@ void DialogSearchReplace::FindReplace(bool (SearchReplaceEngine::*func)()) {
 	// Find All / Replace All store reports on the engine; open the panel here
 	// rather than from the engine so dialog lifetime stays in dialog code.
 	// Empty results must dismiss any previous panel so the UI cannot keep
-	// showing a report from an earlier query.
+	// showing a report from an earlier query. Pass the active settings so the
+	// panel can re-match an edited row in place instead of greying the report.
 	bool results_shown = false;
 	if (!core.search->GetLastReplacements().empty()) {
-		DialogSearchResults::Show(c, core.search->GetLastReplacements());
+		DialogSearchResults::Show(c, core.search->GetSettings(), core.search->GetLastReplacements());
 		results_shown = true;
 	}
 	else if (!core.search->GetLastMatches().empty()) {
-		DialogSearchResults::Show(c, core.search->GetLastMatches());
+		DialogSearchResults::Show(c, core.search->GetSettings(), core.search->GetLastMatches());
 		results_shown = true;
 	}
 	else if (func == &SearchReplaceEngine::FindAll || func == &SearchReplaceEngine::ReplaceAll)

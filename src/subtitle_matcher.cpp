@@ -517,6 +517,16 @@ std::string format_regex_match(u32_match const& source, boost::u32regex const& r
 void set_regex_replacements(MatchState& ms, u32_match const& result,
                             boost::u32regex const& regex, std::string const& format) {
 	ms.has_regex_replacement = true;
+	// Short-circuit an empty format: format_regex_match does two UTF-32
+	// traversals per call, and a Find report (or any search with no replace
+	// string) never consumes the result. Avoiding the work matters on the
+	// per-keystroke recompute path, where the enumerator runs once per edited
+	// line per keystroke.
+	if (format.empty()) {
+		ms.match_only_replacement.clear();
+		ms.search_context_replacement.clear();
+		return;
+	}
 	ms.match_only_replacement = format_regex_match(result, regex, format, true);
 	ms.search_context_replacement = format_regex_match(result, regex, format, false);
 }

@@ -6,7 +6,6 @@
 #include "subtitle_match_report.h"
 
 #include <libaegisub/signal.h>
-#include <wx/colour.h>
 #include <wx/dialog.h>
 
 #include <memory>
@@ -16,16 +15,18 @@
 namespace agi { struct Context; }
 struct AssFileCommitDetails;
 class AssDialogue;
-class wxListView;
+class wxDataViewCtrl;
+class wxDataViewEvent;
 class wxStaticText;
 class wxButton;
-class wxListEvent;
 
 /// Modeless list of matches or replacements produced by SearchReplaceEngine.
 /// Not registered with DialogManager: construction needs the hit vectors, not
 /// only an agi::Context*. Closed via Destroy (not Hide) so commit listeners
 /// cannot accumulate.
 class DialogSearchResults final : public wxDialog {
+	class ResultsModel;
+
 	/// Display rows: MatchHit fields plus optional replacement / post-edit range.
 	struct DisplayHit {
 		int line_id = 0;
@@ -84,15 +85,13 @@ class DialogSearchResults final : public wxDialog {
 	/// Empty when the panel is a replace report or the matcher failed to build.
 	aegisub::subtitle_match_report::MatchEnumerator enumerator;
 
-	wxListView *list = nullptr;
+	wxDataViewCtrl *list = nullptr;
+	ResultsModel *model = nullptr;
 	wxStaticText *status = nullptr;
 	wxButton *copy_button = nullptr;
 	agi::signal::Connection file_changed_slot;
 
 	std::vector<DisplayHit> hits;
-	/// Cached visual row for each index in `hits`. PopulateList establishes the
-	/// mapping; ReindexListRows repairs it if list order changes later.
-	std::vector<long> list_row_by_hit;
 	/// Hit indices grouped by line Id, for O(1) commit intersection and O(k)
 	/// access to the k rows affected by one changed subtitle line.
 	std::unordered_map<int, std::vector<std::size_t>> hit_indices_by_line;
@@ -105,13 +104,10 @@ class DialogSearchResults final : public wxDialog {
 	/// failures (bad regex) and leaves `enumerator` empty.
 	void RebuildEnumerator();
 	void PopulateList();
-	void ReindexListRows();
-	/// Refresh one list-view row from its DisplayHit (text + grey state) in
+	/// Refresh one result row from its DisplayHit (text + grey state) in
 	/// place, preserving selection/scroll. Used after a per-line recompute so a
-	/// large report does not get fully rebuilt on every keystroke. Colours are
-	/// passed in (queried once per OnCommit, not per row) to match PopulateList
-	/// and avoid a SendMessage per UpdateListRow.
-	void UpdateListRow(std::size_t hit_index, wxColour const& grey, wxColour const& normal);
+	/// large report does not get fully rebuilt on every keystroke.
+	void UpdateListRow(std::size_t hit_index);
 	void UpdateStatusBar();
 	void MarkStale();
 	/// Undo/redo COMMIT_NEW keeps AssDialogue::Id values. Find reports re-match
@@ -127,13 +123,12 @@ class DialogSearchResults final : public wxDialog {
 	/// if matching failed and the report had to be marked stale.
 	bool RecomputeChangedLine(AssDialogue const& line, std::vector<std::size_t>& touched);
 	void OnCommit(AssFileCommitDetails commit);
-	void OnActivate(wxListEvent& evt);
+	void OnActivate(wxDataViewEvent& evt);
 	void OnCopySelected(wxCommandEvent&);
 	/// Close a user-dismissed results dialog and return keyboard focus to the
 	/// still-visible Find/Replace dialog which launched it.
 	void CloseAndReturnFocus();
-	/// `hit_index` is the index into `hits` (stored as item data), not the
-	/// list-view visual row.
+	/// `hit_index` is the row/index in the virtual result model and `hits`.
 	void JumpToHit(std::size_t hit_index);
 
 	DialogSearchResults(agi::Context *c, SearchReplaceSettings settings,

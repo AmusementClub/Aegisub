@@ -17,12 +17,14 @@
 #include <libaegisub/exception.h>
 
 #include <wx/button.h>
-#include <wx/listctrl.h>
+#include <wx/dataview.h>
+#include <wx/dc.h>
 #include <wx/settings.h>
 #include <wx/sizer.h>
 #include <wx/stattext.h>
 #include <wx/utils.h>
 
+#include <algorithm>
 #include <unordered_map>
 
 namespace {
@@ -47,7 +49,173 @@ std::string const& dialogue_field_text(AssDialogue const& line,
 	}
 	throw agi::InternalError("Bad field for search results");
 }
+
+enum class HighlightKind {
+	Original,
+	Replacement
+};
+
+wxString highlighted_value(std::string const& text, std::size_t byte_start,
+                           std::size_t byte_end, bool active) {
+	byte_start = std::min(byte_start, text.size());
+	byte_end = std::clamp(byte_end, byte_start, text.size());
+
+	wxString const prefix = to_wx(text.substr(0, byte_start));
+	wxString const marked = to_wx(text.substr(byte_start, byte_end - byte_start));
+	wxString const full = to_wx(text);
+	return wxString::Format(wxS("%d:%llu:%llu:"), active ? 1 : 0,
+		static_cast<unsigned long long>(prefix.length()),
+		static_cast<unsigned long long>(marked.length())) + full;
 }
+
+class HighlightedTextRenderer final : public wxDataViewCustomRenderer {
+	wxString text;
+	std::size_t highlight_start = 0;
+	std::size_t highlight_length = 0;
+	bool highlight_active = false;
+	wxColour highlight_colour;
+
+public:
+	explicit HighlightedTextRenderer(HighlightKind kind)
+	: wxDataViewCustomRenderer(wxS("string"), wxDATAVIEW_CELL_INERT,
+	                           wxALIGN_LEFT | wxALIGN_CENTER_VERTICAL)
+	, highlight_colour(kind == HighlightKind::Original
+		? wxColour(255, 184, 108)
+		: wxColour(126, 220, 150))
+	{
+		EnableEllipsize(wxELLIPSIZE_END);
+	}
+
+	bool SetValue(wxVariant const& var) override {
+		wxString rest = var.GetString();
+		if (!rest.Contains(':')) {
+			text = std::move(rest);
+			highlight_active = false;
+			return true;
+		}
+
+		wxString const active = rest.BeforeFirst(':');
+		rest = rest.AfterFirst(':');
+		if (!rest.Contains(':')) {
+			text = var.GetString();
+			highlight_active = false;
+			return true;
+		}
+
+		wxString const start = rest.BeforeFirst(':');
+		rest = rest.AfterFirst(':');
+		if (!rest.Contains(':')) {
+			text = var.GetString();
+			highlight_active = false;
+			return true;
+		}
+
+		wxString const length = rest.BeforeFirst(':');
+		text = rest.AfterFirst(':');
+
+		unsigned long long parsed_start = 0;
+		unsigned long long parsed_length = 0;
+		if (!start.ToULongLong(&parsed_start) || !length.ToULongLong(&parsed_length)) {
+			text = var.GetString();
+			highlight_active = false;
+			return true;
+		}
+
+		highlight_start = std::min<std::size_t>(parsed_start, text.length());
+		highlight_length = std::min<std::size_t>(parsed_length, text.length() - highlight_start);
+		highlight_active = active == wxS("1");
+		return true;
+	}
+
+	bool Render(wxRect rect, wxDC *dc, int state) override {
+		if (highlight_active) {
+			int const prefix_width = GetTextExtent(text.Left(highlight_start)).x;
+			int marked_width = GetTextExtent(text.Mid(highlight_start, highlight_length)).x;
+			if (marked_width == 0) {
+				auto const view = GetView();
+				marked_width = view ? view->FromDIP(3) : 3;
+			}
+
+			wxRect marker(rect.x + prefix_width, rect.y + 1,
+			              marked_width, std::max(1, rect.height - 2));
+			marker.Intersect(rect);
+			if (!marker.IsEmpty()) {
+				wxBrush const brush(highlight_colour);
+				wxDCBrushChanger const set_brush(*dc, brush);
+				wxDCPenChanger const set_pen(*dc, *wxTRANSPARENT_PEN);
+				dc->DrawRectangle(marker);
+			}
+		}
+
+		RenderText(text, 0, rect, dc, state);
+		return true;
+	}
+
+	wxSize GetSize() const override {
+		if (!text.empty())
+			return GetTextExtent(text);
+		auto const view = GetView();
+		return view ? view->FromDIP(wxSize(80, 20)) : wxSize(80, 20);
+	}
+
+	bool GetValue(wxVariant&) const override { return false; }
+};
+}
+
+class DialogSearchResults::ResultsModel final : public wxDataViewVirtualListModel {
+	DialogSearchResults *owner;
+	wxColour const stale_colour = wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
+
+public:
+	explicit ResultsModel(DialogSearchResults *owner)
+	: wxDataViewVirtualListModel(static_cast<unsigned int>(owner->hits.size()))
+	, owner(owner)
+	{
+	}
+
+	void GetValueByRow(wxVariant& value, unsigned row, unsigned col) const override {
+		if (row >= owner->hits.size()) {
+			value = wxEmptyString;
+			return;
+		}
+
+		auto const& hit = owner->hits[row];
+		switch (col) {
+			case 0: value = fmt_wx("%d", hit.row + 1); return;
+			case 1: value = to_wx(hit.start_time); return;
+			case 2: value = to_wx(hit.style); return;
+			case 3: value = to_wx(hit.matched); return;
+			case 4:
+				if (owner->has_replacement) {
+					value = to_wx(hit.replacement);
+					return;
+				}
+				break;
+			case 5:
+				if (owner->has_replacement)
+					break;
+				value = wxEmptyString;
+				return;
+			case 6:
+				value = highlighted_value(hit.replaced_line, hit.match_start,
+					hit.match_start + hit.replacement.size(), !hit.per_hit_stale);
+				return;
+			default: value = wxEmptyString; return;
+		}
+
+		value = highlighted_value(hit.line_text ? *hit.line_text : std::string(),
+			hit.match_start, hit.match_end, !hit.per_hit_stale);
+	}
+
+	bool SetValueByRow(wxVariant const&, unsigned, unsigned) override { return false; }
+
+	bool GetAttrByRow(unsigned row, unsigned, wxDataViewItemAttr& attr) const override {
+		if (row >= owner->hits.size() || !owner->hits[row].per_hit_stale)
+			return false;
+		attr.SetColour(stale_colour);
+		return true;
+	}
+};
 
 void DialogSearchResults::InitCommon(bool replace_mode) {
 	has_replacement = replace_mode;
@@ -58,22 +226,35 @@ void DialogSearchResults::InitCommon(bool replace_mode) {
 	for (std::size_t i = 0; i < hits.size(); ++i)
 		hit_indices_by_line[hits[i].line_id].push_back(i);
 
-	list = new wxListView(this, -1, wxDefaultPosition, FromDIP(wxSize(860, 280)),
-	                      wxLC_REPORT);
+	list = new wxDataViewCtrl(this, -1, wxDefaultPosition, FromDIP(wxSize(980, 320)),
+	                          wxDV_MULTIPLE | wxDV_ROW_LINES | wxDV_VERT_RULES);
+	model = new ResultsModel(this);
+	list->AssociateModel(model);
+	model->DecRef(); // owned by the control after AssociateModel
 
 	// Column order: Line/Start/Style are quick orientation; Match|Replacement
 	// pair the before/after fragments; Context|Replaced line pair the full
 	// before/after line so a diff scan stays eye-adjacent.
-	list->InsertColumn(0, _("Line"), wxLIST_FORMAT_RIGHT, FromDIP(50));
-	list->InsertColumn(1, _("Start"), wxLIST_FORMAT_LEFT, FromDIP(90));
-	list->InsertColumn(2, _("Style"), wxLIST_FORMAT_LEFT, FromDIP(100));
-	list->InsertColumn(3, _("Match"), wxLIST_FORMAT_LEFT, FromDIP(120));
+	auto const column_flags = wxDATAVIEW_COL_RESIZABLE;
+	list->AppendTextColumn(_("Line"), 0, wxDATAVIEW_CELL_INERT,
+	                       FromDIP(50), wxALIGN_RIGHT, column_flags);
+	list->AppendTextColumn(_("Start"), 1, wxDATAVIEW_CELL_INERT,
+	                       FromDIP(90), wxALIGN_LEFT, column_flags);
+	list->AppendTextColumn(_("Style"), 2, wxDATAVIEW_CELL_INERT,
+	                       FromDIP(100), wxALIGN_LEFT, column_flags);
+	list->AppendTextColumn(_("Match"), 3, wxDATAVIEW_CELL_INERT,
+	                       FromDIP(120), wxALIGN_LEFT, column_flags);
 	if (has_replacement)
-		list->InsertColumn(4, _("Replacement"), wxLIST_FORMAT_LEFT, FromDIP(120));
-	list->InsertColumn(has_replacement ? 5 : 4, _("Context"),
-	                   wxLIST_FORMAT_LEFT, FromDIP(240));
-	if (has_replacement)
-		list->InsertColumn(6, _("Replaced line"), wxLIST_FORMAT_LEFT, FromDIP(240));
+		list->AppendTextColumn(_("Replacement"), 4, wxDATAVIEW_CELL_INERT,
+		                       FromDIP(120), wxALIGN_LEFT, column_flags);
+	list->AppendColumn(new wxDataViewColumn(_("Context"),
+		new HighlightedTextRenderer(HighlightKind::Original), has_replacement ? 5 : 4,
+		FromDIP(300), wxALIGN_LEFT, column_flags));
+	if (has_replacement) {
+		list->AppendColumn(new wxDataViewColumn(_("Replaced line"),
+			new HighlightedTextRenderer(HighlightKind::Replacement), 6,
+			FromDIP(300), wxALIGN_LEFT, column_flags));
+	}
 
 	copy_button = new wxButton(this, -1, _("&Copy selected lines"));
 	auto close_button = new wxButton(this, wxID_CLOSE);
@@ -93,13 +274,13 @@ void DialogSearchResults::InitCommon(bool replace_mode) {
 	SetSizerAndFit(main_sizer);
 	CenterOnParent();
 
-	list->Bind(wxEVT_LIST_ITEM_ACTIVATED, &DialogSearchResults::OnActivate, this);
+	list->Bind(wxEVT_DATAVIEW_ITEM_ACTIVATED, &DialogSearchResults::OnActivate, this);
 	copy_button->Bind(wxEVT_BUTTON, &DialogSearchResults::OnCopySelected, this);
 	close_button->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { CloseAndReturnFocus(); });
 
 	// Modeless wxDialog defaults to Hide() on close; that would leave the
-	// object and its AssFile commit listener alive forever. Match DialogManager:
-	// Skip the event, then Destroy.
+	// object and its AssFile commit listener alive forever. Destroy it after
+	// returning focus to Find/Replace.
 	Bind(wxEVT_CLOSE_WINDOW, [](wxCloseEvent& evt) {
 		auto *dlg = static_cast<DialogSearchResults *>(evt.GetEventObject());
 		dlg->CloseAndReturnFocus();
@@ -116,23 +297,6 @@ void DialogSearchResults::InitCommon(bool replace_mode) {
 	RebuildEnumerator();
 
 	PopulateList();
-
-	// Autosize text-heavy columns to their content so the new "Replaced line"
-	// column is visible without horizontal scrolling. Fixed widths remain for
-	// Line/Start/Style (short, bounded). Take the larger of content/header so a
-	// long header label never truncates.
-	auto fit = [&](int col) {
-		list->SetColumnWidth(col, wxLIST_AUTOSIZE);
-		int const content = list->GetColumnWidth(col);
-		list->SetColumnWidth(col, wxLIST_AUTOSIZE_USEHEADER);
-		int const header = list->GetColumnWidth(col);
-		if (content > header)
-			list->SetColumnWidth(col, content);
-	};
-	fit(3); // Match
-	if (has_replacement) fit(4); // Replacement
-	fit(has_replacement ? 5 : 4); // Context
-	if (has_replacement) fit(6); // Replaced line
 }
 
 void DialogSearchResults::RebuildEnumerator() {
@@ -240,80 +404,17 @@ DialogSearchResults::~DialogSearchResults() {
 }
 
 void DialogSearchResults::PopulateList() {
-	list->DeleteAllItems();
-	list_row_by_hit.assign(hits.size(), -1);
-
-	// System gray text for rows whose match no longer exists on the live line.
-	// Cached once so PopulateList does not hit wxSystemSettings per row.
-	wxColour const grey = wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
-
-	for (std::size_t i = 0; i < hits.size(); ++i) {
-		auto const& hit = hits[i];
-		long idx = list->InsertItem(static_cast<long>(i), fmt_wx("%d", hit.row + 1));
-		list->SetItem(idx, 1, to_wx(hit.start_time));
-		list->SetItem(idx, 2, to_wx(hit.style));
-		list->SetItem(idx, 3, to_wx(hit.matched));
-		if (has_replacement)
-			list->SetItem(idx, 4, to_wx(hit.replacement));
-		list->SetItem(idx, has_replacement ? 5 : 4, to_wx(*hit.line_text));
-		if (has_replacement)
-			list->SetItem(idx, 6, to_wx(hit.replaced_line));
-		list->SetItemData(idx, static_cast<long>(i));
-		list_row_by_hit[i] = idx;
-		if (hit.per_hit_stale)
-			list->SetItemTextColour(idx, grey);
-	}
-
+	model->Reset(static_cast<unsigned int>(hits.size()));
 	UpdateStatusBar();
 }
 
-void DialogSearchResults::ReindexListRows() {
-	list_row_by_hit.assign(hits.size(), -1);
-	long const count = list->GetItemCount();
-	for (long row = 0; row < count; ++row) {
-		auto const hit_index = static_cast<std::size_t>(list->GetItemData(row));
-		if (hit_index < list_row_by_hit.size())
-			list_row_by_hit[hit_index] = row;
-	}
-}
-
-void DialogSearchResults::UpdateListRow(std::size_t hit_index,
-                                        wxColour const& grey, wxColour const& normal) {
+void DialogSearchResults::UpdateListRow(std::size_t hit_index) {
 	// In-place refresh of one row's text + colour, preserving selection and
-	// scroll position. Avoids DeleteAllItems/InsertItem churn (each is several
-	// SendMessage calls on Win32) on every keystroke for large reports.
+	// scroll position. The virtual model maps hit indices directly to rows, so
+	// this is O(1) even for large reports.
 	if (hit_index >= hits.size())
 		return;
-	// Use the cached hit-to-row mapping so updating k matches on one edited line
-	// is O(k), not O(k * rows). Validate the cached entry to remain correct if a
-	// future column-sort handler reorders the control without updating the map;
-	// one O(rows) repair then serves all subsequent updates.
-	long row = hit_index < list_row_by_hit.size() ? list_row_by_hit[hit_index] : -1;
-	if (row < 0 || row >= list->GetItemCount() ||
-	    static_cast<std::size_t>(list->GetItemData(row)) != hit_index) {
-		ReindexListRows();
-		row = hit_index < list_row_by_hit.size() ? list_row_by_hit[hit_index] : -1;
-	}
-	if (row < 0)
-		return;
-	auto const& hit = hits[hit_index];
-	list->SetItem(row, 0, fmt_wx("%d", hit.row + 1));
-	list->SetItem(row, 1, to_wx(hit.start_time));
-	list->SetItem(row, 2, to_wx(hit.style));
-	list->SetItem(row, 3, to_wx(hit.matched));
-	if (has_replacement)
-		list->SetItem(row, 4, to_wx(hit.replacement));
-	list->SetItem(row, has_replacement ? 5 : 4, to_wx(*hit.line_text));
-	if (has_replacement)
-		list->SetItem(row, 6, to_wx(hit.replaced_line));
-
-	// Colours are queried once per OnCommit (see caller) and passed in, so a
-	// multi-row recompute does not issue a wxSystemSettings + LVM_GETTEXTCOLOR
-	// SendMessage per row. `normal` is list->GetTextColour(): writing it back
-	// explicitly is required because wxNullColour is a no-op under wxMSW's
-	// wxItemAttr::AssignFrom (HasTextColour() is false), so a row greyed by a
-	// prior recompute would stay grey after its match comes back.
-	list->SetItemTextColour(row, hit.per_hit_stale ? grey : normal);
+	model->RowChanged(static_cast<unsigned int>(hit_index));
 }
 
 void DialogSearchResults::UpdateStatusBar() {
@@ -653,18 +754,14 @@ void DialogSearchResults::OnCommit(AssFileCommitDetails commit) {
 
 	// Re-render only the rows RecomputeChangedLine actually modified (it never
 	// touches hits on other line ids), avoiding a full-rebuild per keystroke.
-	// Query the two colours once: wxSystemSettings::GetColour is not free and
-	// list->GetTextColour() is a SendMessage (LVM_GETTEXTCOLOR) on wxMSW.
-	wxColour const grey = wxSystemSettings::GetColour(wxSYS_COLOUR_GRAYTEXT);
-	wxColour const normal = list->GetTextColour();
 	for (auto i : touched)
-		UpdateListRow(i, grey, normal);
+		UpdateListRow(i);
 	UpdateStatusBar();
 }
 
-void DialogSearchResults::OnActivate(wxListEvent& evt) {
-	// Item data is the hits index; visual row may diverge if columns are sorted.
-	JumpToHit(static_cast<std::size_t>(list->GetItemData(evt.GetIndex())));
+void DialogSearchResults::OnActivate(wxDataViewEvent& evt) {
+	if (evt.GetItem().IsOk())
+		JumpToHit(model->GetRow(evt.GetItem()));
 }
 
 void DialogSearchResults::JumpToHit(std::size_t hit_index) {
@@ -701,9 +798,10 @@ void DialogSearchResults::OnCopySelected(wxCommandEvent&) {
 
 	std::string out;
 	int selected = 0;
-	long i = -1;
-	while ((i = list->GetNextItem(i, wxLIST_NEXT_ALL, wxLIST_STATE_SELECTED)) != -1) {
-		auto const idx = static_cast<std::size_t>(list->GetItemData(i));
+	wxDataViewItemArray selections;
+	list->GetSelections(selections);
+	for (auto const& item : selections) {
+		auto const idx = static_cast<std::size_t>(model->GetRow(item));
 		if (idx >= hits.size())
 			continue;
 		++selected;

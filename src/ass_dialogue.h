@@ -36,6 +36,7 @@
 
 #include <array>
 #include <boost/flyweight.hpp>
+#include <memory>
 #include <vector>
 
 enum class AssBlockType {
@@ -117,6 +118,13 @@ public:
 	/// @param userData User data to pass to callback function
 	void ProcessParameters(ProcessParametersCallback callback, void *userData);
 };
+
+/// Return the ParseTags() block index whose overrides should be used for a
+/// read at a raw dialogue-text caret position. A caret inside an override block
+/// includes that block, while a caret immediately before it does not.
+int FindDialogueBlockForRead(
+	std::vector<std::unique_ptr<AssDialogueBlock>> const& blocks,
+	int raw_position);
 
 struct AssDialogueBase {
 	/// Unique ID of this line. Copies of the line for Undo/Redo purposes

@@ -351,34 +351,11 @@ struct parsed_line {
 	parsed_line(AssDialogue *line) : line(line), blocks(line->ParseTags()) { }
 	parsed_line(parsed_line&& r) = default;
 
-	/// Index of the last override block in effect at the plain-text offset
-	/// `pos`, i.e. the last block whose closing `}` is at or before the cursor.
-	/// Unlike `block_at_pos` (which leans right so `set_tag` can reuse an
-	/// adjacent block), this never counts a block that starts after the cursor,
-	/// so a `\r` sitting just past the cursor does not retroactively discard
-	/// earlier overrides. Returns -1 when no override block precedes the cursor.
-	int block_for_read(int pos) const {
-		auto const& text = line->Text.get();
-		int max = (int)text.size() - 1;
-		int n = -1;            // index of the override block being scanned / last closed
-		bool in_block = false;
-		for (int i = 0; i <= max; ++i) {
-			if (text[i] == '{') {
-				if (!in_block) ++n;
-				in_block = true;
-			}
-			else if (text[i] == '}' && in_block) {
-				in_block = false;
-				// This block has now closed; n stays at its index so the
-				// plain-text cursor positions immediately after it still see it
-				// as the last effective block.
-			}
-			else if (!in_block) {
-				if (--pos <= 0)
-					return n;
-			}
-		}
-		return n;
+	/// ParseTags() block index in effect at a raw dialogue-text caret position.
+	/// This uses the raw position so a caret inside an override reads that block,
+	/// while a caret immediately before a following block remains left-biased.
+	int block_for_read(int raw_pos) const {
+		return FindDialogueBlockForRead(blocks, raw_pos);
 	}
 
 	/// Resolve the style a `\r` tag targets: bare `\r` (or empty/unresolved
@@ -683,9 +660,8 @@ void toggle_override_tag(const agi::Context *c, bool (AssStyle::*field), const c
 		AssStyle const& event_style = style ? *style : fallback_style;
 
 		parsed_line parsed(line);
-		// Read-only lookup: use block_for_read so a block starting past the
-		// cursor (e.g. a trailing {\r}) does not participate.
-		int blockn = parsed.block_for_read(norm_sel_start);
+		// Read from the same raw caret location that set_tag will modify.
+		int blockn = parsed.block_for_read(sel_start);
 
 		// Honour \r reset semantics so toggling reads the state that actually
 		// renders at the cursor, not a value shadowed by a preceding \r.
@@ -734,9 +710,8 @@ void show_color_picker(const agi::Context *c, agi::Color (AssStyle::*field), con
 		agi::Color color;
 
 		parsed_line parsed(line);
-		// Read-only lookup: use block_for_read so a block starting past the
-		// cursor does not participate.
-		int blockn = parsed.block_for_read(line_norm_sel_start);
+		// Read from the same raw caret location that set_tag will modify.
+		int blockn = parsed.block_for_read(line_sel_start);
 
 		// Honour \r reset semantics so the colour shown in the picker matches
 		// what renders at the cursor.
@@ -893,7 +868,7 @@ struct edit_font final : public Command {
 		auto ui = c->GetUI();
 		auto font_model = BuildFontFamilyCatalogUiModel();
 		const parsed_line active(core.selectionController->GetActiveLine());
-		const int active_insertion_point = normalize_pos(active.line->Text, core.textSelectionController->GetInsertionPoint());
+		const int active_insertion_point = core.textSelectionController->GetInsertionPoint();
 		const size_t insertion_chars = character_pos(active.line->Text, core.textSelectionController->GetInsertionPoint());
 
 		struct line_font_state {
@@ -904,8 +879,8 @@ struct edit_font final : public Command {
 		};
 
 		auto font_for_line = [&](parsed_line const& line, int insertion_point) -> line_font_state {
-			// Read-only lookup: use block_for_read so a block starting past the
-			// cursor (e.g. a trailing {\r}) does not participate.
+			// Use the raw caret position so a caret inside an override reads the
+			// same block that set_tag will modify.
 			const int blockn = line.block_for_read(insertion_point);
 
 			const AssStyle *style = aegisub::ass_style_resolution::ResolveEventStyle(
@@ -990,7 +965,7 @@ struct edit_font final : public Command {
 					parsed_line parsed(line);
 					int line_insertion_point = line == active.line
 						? active_insertion_point
-						: remap_pos_for_line(line, insertion_chars).plain;
+						: remap_pos_for_line(line, insertion_chars).raw;
 					auto const current = font_for_line(parsed, line_insertion_point);
 					if ((current.displayed.has_explicit_weight &&
 					     current.displayed.effective_weight != selected.effective_weight) ||
@@ -1115,7 +1090,7 @@ struct edit_font final : public Command {
 				parsed_line parsed(line);
 				int line_insertion_point = active_insertion_point;
 				if (line != active.line)
-					line_insertion_point = remap_pos_for_line(line, insertion_chars).plain;
+					line_insertion_point = remap_pos_for_line(line, insertion_chars).raw;
 				auto const startfont = font_for_line(parsed, line_insertion_point);
 				auto const variant = variant_for_line(startfont);
 				if (!variant.automatic_variant_reliable) {
@@ -1145,7 +1120,7 @@ struct edit_font final : public Command {
 				parsed_line parsed(line);
 				int line_insertion_point = active_insertion_point;
 				if (line != active.line)
-					line_insertion_point = remap_pos_for_line(line, insertion_chars).plain;
+					line_insertion_point = remap_pos_for_line(line, insertion_chars).raw;
 
 				const auto startfont = font_for_line(parsed, line_insertion_point);
 				auto const variant = variant_for_line(startfont);

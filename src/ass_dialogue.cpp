@@ -42,9 +42,32 @@
 #include <libaegisub/string_utils.h>
 #include <libaegisub/util.h>
 
+#include <algorithm>
 #include <boost/regex.hpp>
 
 static int next_id = 0;
+
+int FindDialogueBlockForRead(
+	std::vector<std::unique_ptr<AssDialogueBlock>> const& blocks,
+	int raw_position)
+{
+	if (blocks.empty())
+		return -1;
+
+	size_t const position = static_cast<size_t>(std::max(raw_position, 0));
+	size_t block_end = 0;
+	for (size_t index = 0; index < blocks.size(); ++index) {
+		block_end += blocks[index]->GetText().size();
+		// Caret positions sit between bytes. Choosing the block on the left at a
+		// boundary prevents a following override (notably a trailing \r) from
+		// affecting the state before the caret. Position zero still selects the
+		// first block, which is the formatting applied to the first visible text.
+		if (position <= block_end)
+			return static_cast<int>(index);
+	}
+
+	return static_cast<int>(blocks.size()) - 1;
+}
 
 AssDialogue::AssDialogue() {
 	Id = ++next_id;

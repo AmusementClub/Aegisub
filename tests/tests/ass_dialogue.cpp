@@ -19,6 +19,34 @@ TEST(ass_dialogue, escaped_braces_remain_plain_text) {
 	EXPECT_EQ(line.Text, line.GetStrippedText());
 }
 
+TEST(ass_dialogue, read_block_uses_raw_position_and_parse_tags_indices) {
+	AssDialogue line;
+	line.Text = R"({\fnFirst}first\N{\fnSecond}second)";
+	auto blocks = line.ParseTags();
+	ASSERT_EQ(4u, blocks.size());
+
+	auto const second_start = static_cast<int>(line.Text.get().find(R"({\fnSecond})"));
+	auto const second_end = second_start + static_cast<int>(std::string(R"({\fnSecond})").size());
+
+	EXPECT_EQ(0, FindDialogueBlockForRead(blocks, 0));
+	EXPECT_EQ(1, FindDialogueBlockForRead(blocks, second_start));
+	EXPECT_EQ(2, FindDialogueBlockForRead(blocks, second_start + 1));
+	EXPECT_EQ(2, FindDialogueBlockForRead(blocks, second_start + 5));
+	EXPECT_EQ(2, FindDialogueBlockForRead(blocks, second_end));
+	EXPECT_EQ(3, FindDialogueBlockForRead(blocks, second_end + 1));
+}
+
+TEST(ass_dialogue, read_block_does_not_apply_a_trailing_reset_before_the_caret) {
+	AssDialogue line;
+	line.Text = R"({\fnFirst}text{\r})";
+	auto blocks = line.ParseTags();
+	ASSERT_EQ(3u, blocks.size());
+
+	auto const reset_start = static_cast<int>(line.Text.get().find(R"({\r})"));
+	EXPECT_EQ(1, FindDialogueBlockForRead(blocks, reset_start));
+	EXPECT_EQ(2, FindDialogueBlockForRead(blocks, reset_start + 1));
+}
+
 TEST(ass_time_projection, legacy_output_uses_symmetric_rounding_for_ass_storage) {
 	AssDialogue line;
 	line.Comment = false;

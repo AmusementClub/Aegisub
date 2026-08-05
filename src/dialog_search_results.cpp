@@ -236,7 +236,7 @@ void DialogSearchResults::InitCommon(bool replace_mode) {
 	// pair the before/after fragments; Context|Replaced line pair the full
 	// before/after line so a diff scan stays eye-adjacent.
 	auto const column_flags = wxDATAVIEW_COL_RESIZABLE;
-	list->AppendTextColumn(_("Line"), 0, wxDATAVIEW_CELL_INERT,
+	list->AppendTextColumn(_("Line number"), 0, wxDATAVIEW_CELL_INERT,
 	                       FromDIP(50), wxALIGN_RIGHT, column_flags);
 	list->AppendTextColumn(_("Start"), 1, wxDATAVIEW_CELL_INERT,
 	                       FromDIP(90), wxALIGN_LEFT, column_flags);

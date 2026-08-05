@@ -88,4 +88,8 @@ int GetNextBlockEnd(std::vector<agi::ass::DialogueToken> const& tokens, int pos)
 /// on a tag.
 std::pair<int, int> GetBoundsOfTagAtPosition(std::vector<agi::ass::DialogueToken> const& tokens, int pos);
 
+/// Get the span of the ASS text escape (\N, \n, or \h) at pos, as
+/// {start, length} in bytes. Returns {0, 0} when pos is not on an escape.
+std::pair<int, int> GetBoundsOfEscapeAtPosition(std::vector<agi::ass::DialogueToken> const& tokens, int pos);
+
 }

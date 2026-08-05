@@ -92,6 +92,17 @@ std::string TagAtCaret(std::string marked, bool karaoke_templater = false) {
 	return input.text.substr(static_cast<size_t>(bounds.first), static_cast<size_t>(bounds.second));
 }
 
+/// Tokenize `marked` with the double-click position marked by '|' and return the
+/// text GetBoundsOfEscapeAtPosition would select ("" when it selects nothing).
+std::string EscapeAtCaret(std::string marked) {
+	auto input = UnmarkCaret(std::move(marked));
+	auto tokens = agi::ass::TokenizeDialogueBody(input.text);
+	agi::ass::SplitWords(input.text, tokens);
+
+	auto const bounds = aegisub::subtitle_edit_ops::GetBoundsOfEscapeAtPosition(tokens, input.caret);
+	return input.text.substr(static_cast<size_t>(bounds.first), static_cast<size_t>(bounds.second));
+}
+
 }
 
 TEST(subtitle_edit_ops, join_selection_into_first_adds_karaoke_tags_and_extends_end) {
@@ -328,6 +339,27 @@ TEST(subtitle_edit_ops, end_blocks_stay_at_end) {
 
 TEST(subtitle_edit_ops, end_blocks_include_line_breaks) {
 	EXPECT_EQ((std::vector<int>{5, 7, 12}), WalkEndBlocks("hello\\Nthere", 0));
+}
+
+TEST(subtitle_edit_ops, escape_bounds_select_the_whole_escape_from_either_character) {
+	EXPECT_EQ("\\N", EscapeAtCaret("a|\\Nb"));
+	EXPECT_EQ("\\N", EscapeAtCaret("a\\|Nb"));
+	EXPECT_EQ("\\n", EscapeAtCaret("a|\\nb"));
+	EXPECT_EQ("\\n", EscapeAtCaret("a\\|nb"));
+	EXPECT_EQ("\\h", EscapeAtCaret("a|\\hb"));
+	EXPECT_EQ("\\h", EscapeAtCaret("a\\|hb"));
+}
+
+TEST(subtitle_edit_ops, escape_bounds_select_only_one_of_adjacent_escapes) {
+	EXPECT_EQ("\\n", EscapeAtCaret("a\\N|\\n\\hb"));
+	EXPECT_EQ("\\h", EscapeAtCaret("a\\N\\n\\|hb"));
+}
+
+TEST(subtitle_edit_ops, escape_bounds_select_nothing_outside_escapes) {
+	EXPECT_EQ("", EscapeAtCaret("hel|lo"));
+	EXPECT_EQ("", EscapeAtCaret("{|\\b1}"));
+	EXPECT_EQ("", EscapeAtCaret("a\\N|b"));
+	EXPECT_EQ("", EscapeAtCaret("|"));
 }
 
 TEST(subtitle_edit_ops, tag_bounds_select_whole_tag_from_backslash_or_name) {

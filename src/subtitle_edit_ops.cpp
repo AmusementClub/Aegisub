@@ -507,6 +507,27 @@ int GetNextBlockEnd(std::vector<agi::ass::DialogueToken> const& tokens, int pos)
 	return text_len;
 }
 
+std::pair<int, int> GetBoundsOfEscapeAtPosition(std::vector<agi::ass::DialogueToken> const& tokens, int pos) {
+	if (pos < 0)
+		return {0, 0};
+
+	int offset = 0;
+	for (auto const& token : tokens) {
+		int const len = static_cast<int>(token.length);
+		if (pos < offset + len) {
+			if (token.type != agi::ass::DialogueTokenType::LINE_BREAK)
+				return {0, 0};
+
+			// Adjacent escapes are coalesced into one LINE_BREAK token. Select
+			// only the two-byte escape containing the clicked character.
+			return {offset + (pos - offset) / 2 * 2, 2};
+		}
+		offset += len;
+	}
+
+	return {0, 0};
+}
+
 std::pair<int, int> GetBoundsOfTagAtPosition(std::vector<agi::ass::DialogueToken> const& tokens, int pos) {
 	namespace dt = agi::ass::DialogueTokenType;
 

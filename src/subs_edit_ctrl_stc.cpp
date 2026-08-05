@@ -1004,6 +1004,13 @@ void SubsStyledTextEditCtrl::OnDoubleClick(wxStyledTextEvent &evt) {
 		SetSelection(line_text.size() - tok.length, line_text.size());
 	}
 	else {
+		// ASS text escapes are one editing unit even though Scintilla's word
+		// selection treats the backslash as punctuation.
+		auto escape_bounds = aegisub::subtitle_edit_ops::GetBoundsOfEscapeAtPosition(tokenized_line, pos);
+		if (escape_bounds.second != 0) {
+			SetSelection(escape_bounds.first, escape_bounds.first + escape_bounds.second);
+			return;
+		}
 		// First try selecting a whole ASS override tag (\tagname(...) with the
 		// backslash and all of its arguments).
 		auto tag_bounds = aegisub::subtitle_edit_ops::GetBoundsOfTagAtPosition(tokenized_line, pos);

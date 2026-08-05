@@ -102,8 +102,8 @@ class SubsController {
 	std::optional<FileWatchSnapshot> last_prompted_file_snapshot;
 	bool external_file_change_pending = false;
 	bool external_file_prompt_active = false;
-	/// GUI shells only: load/save snapshots, overwrite confirm, live watch.
-	/// Never inferred from file_watch==nullptr (that also means "option off").
+	/// GUI shells only: permits external-change snapshots and live watching when
+	/// the preference is enabled. Never inferred from file_watch==nullptr.
 	bool tracks_external_file_state = false;
 
 	// Declared after the state they touch so they disconnect first on destruction
@@ -130,9 +130,8 @@ class SubsController {
 
 	void UpdateFileWatch();
 	void ClearFileWatch();
-	/// Create or tear down the external-change file watcher to match the current
-	/// App/Auto/Reload External Changes option. Safe to call when the option is
-	/// toggled at runtime (no restart required).
+	/// Arm or disarm external-change detection to match the current option.
+	/// Safe to call when the option is toggled at runtime (no restart required).
 	void ApplyReloadExternalChangesOption();
 	FileWatchSnapshot MakeFileWatchSnapshot(agi::fs::path const& path) const;
 	static bool FileWatchSnapshotsEqual(FileWatchSnapshot const& left, FileWatchSnapshot const& right);

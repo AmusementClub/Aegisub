@@ -161,6 +161,8 @@ public:
 			file_watch->ClearTargetPath();
 		if (plan.clear_pending)
 			pending = false;
+		if (plan.clear_snapshots)
+			has_baseline = false;
 
 		if (plan.create_watcher) {
 			auto owned = std::make_unique<FakeFileSystemWatcherBackend>();
@@ -193,6 +195,16 @@ TEST(reload_external_changes_policy, snapshots_are_gui_shell_only) {
 	EXPECT_TRUE(ShouldTrackExternalFileSnapshots(true));
 }
 
+TEST(reload_external_changes_policy, overwrite_check_requires_enabled_detection) {
+	using reload_external_changes::ShouldCheckExternalFileSnapshot;
+
+	EXPECT_TRUE(ShouldCheckExternalFileSnapshot(true, true, true, true));
+	EXPECT_FALSE(ShouldCheckExternalFileSnapshot(true, false, true, true));
+	EXPECT_FALSE(ShouldCheckExternalFileSnapshot(false, true, true, true));
+	EXPECT_FALSE(ShouldCheckExternalFileSnapshot(true, true, false, true));
+	EXPECT_FALSE(ShouldCheckExternalFileSnapshot(true, true, true, false));
+}
+
 // --- Arm / disarm policy ---
 
 TEST(reload_external_changes_policy, disable_disarms_without_destroy_intent) {
@@ -204,6 +216,7 @@ TEST(reload_external_changes_policy, disable_disarms_without_destroy_intent) {
 	EXPECT_FALSE(plan.bind_target);
 	EXPECT_FALSE(plan.record_baseline_if_missing);
 	EXPECT_TRUE(plan.clear_pending);
+	EXPECT_TRUE(plan.clear_snapshots);
 }
 
 TEST(reload_external_changes_policy, enable_with_existing_baseline_does_not_rebaseline) {
@@ -213,11 +226,13 @@ TEST(reload_external_changes_policy, enable_with_existing_baseline_does_not_reba
 	EXPECT_FALSE(already_armed.create_watcher);
 	EXPECT_TRUE(already_armed.bind_target);
 	EXPECT_FALSE(already_armed.record_baseline_if_missing);
+	EXPECT_FALSE(already_armed.clear_snapshots);
 
 	auto const reenable = PlanWatchArm(true, false, true, true);
 	EXPECT_TRUE(reenable.create_watcher);
 	EXPECT_TRUE(reenable.bind_target);
 	EXPECT_FALSE(reenable.record_baseline_if_missing);
+	EXPECT_FALSE(reenable.clear_snapshots);
 }
 
 TEST(reload_external_changes_policy, enable_without_baseline_records_once) {
@@ -226,6 +241,7 @@ TEST(reload_external_changes_policy, enable_without_baseline_records_once) {
 	EXPECT_TRUE(plan.create_watcher);
 	EXPECT_TRUE(plan.bind_target);
 	EXPECT_TRUE(plan.record_baseline_if_missing);
+	EXPECT_FALSE(plan.clear_snapshots);
 }
 
 TEST(reload_external_changes_policy, after_prompt_yes_always_reloads) {
@@ -263,13 +279,14 @@ TEST(reload_external_changes_policy, fake_session_enable_disable_keeps_watcher_o
 	EXPECT_EQ(alive_backend, session.backend);
 	EXPECT_GT(alive_backend->reset_count, resets_before);
 	EXPECT_TRUE(session.file_watch->GetTargetPath().empty());
-	EXPECT_TRUE(session.has_baseline) << "overwrite baseline must survive disable";
+	EXPECT_FALSE(session.has_baseline) << "disabled detection must forget its disk baseline";
 
-	// Re-enable with existing object: bind again, do not rebaseline.
+	// Re-enable with existing object: bind again and record a fresh baseline.
 	session.ApplyOption(true, true, path);
 	EXPECT_EQ(alive_backend, session.backend);
 	EXPECT_FALSE(session.file_watch->GetTargetPath().empty());
 	EXPECT_GE(alive_backend->watch_count, 2);
+	EXPECT_TRUE(session.has_baseline);
 }
 
 TEST(reload_external_changes_policy, disarm_inside_changed_callback_is_safe) {
@@ -300,7 +317,7 @@ TEST(reload_external_changes_policy, disarm_inside_changed_callback_is_safe) {
 	EXPECT_EQ(alive_watch, session.file_watch.get()) << "watcher object must not be destroyed in-callback";
 	EXPECT_EQ(alive_backend, session.backend);
 	EXPECT_TRUE(session.file_watch->GetTargetPath().empty());
-	EXPECT_TRUE(session.has_baseline);
+	EXPECT_FALSE(session.has_baseline);
 }
 
 TEST(reload_external_changes_policy, redundant_enable_notify_does_not_drop_baseline_flag) {

@@ -215,7 +215,7 @@ SubsController::SubsController(agi::Context *context)
 
 	// Explicit GUI-only flag: headless/automation must not hash open files or
 	// block Save() on overwrite interaction. Do not use file_watch==nullptr for
-	// this (nullptr also means "live reload option off" on a GUI shell).
+	// this (nullptr can also mean detection is off on a GUI shell).
 	tracks_external_file_state = reload_external_changes::ShouldTrackExternalFileSnapshots(true);
 
 	// Live directory watching is optional (App/Auto/Reload External Changes).
@@ -417,12 +417,18 @@ void SubsController::UpdateFileWatch() {
 		return;
 	}
 
-	// Live directory watching is optional. On GUI shells, disk snapshots for the
-	// save-time overwrite warning are maintained on load/save even when live
-	// reload is off (file_watch may be null or idle). Turning off
-	// App/Auto/Reload External Changes only stops continuous watches and reload
-	// prompts — not overwrite checks.
-	if (file_watch && OPT_GET("App/Auto/Reload External Changes")->GetBool())
+	// The preference controls both live reload prompts and save-time overwrite
+	// warnings. Do not retain a baseline while detection is disabled.
+	if (!OPT_GET("App/Auto/Reload External Changes")->GetBool()) {
+		if (file_watch)
+			file_watch->ClearTargetPath();
+		last_known_file_snapshot.reset();
+		last_prompted_file_snapshot.reset();
+		external_file_change_pending = false;
+		return;
+	}
+
+	if (file_watch)
 		file_watch->SetTargetPath(filename);
 	RecordCurrentFileSnapshot();
 }
@@ -457,6 +463,10 @@ void SubsController::ApplyReloadExternalChangesOption() {
 	}
 	if (plan.clear_pending)
 		external_file_change_pending = false;
+	if (plan.clear_snapshots) {
+		last_known_file_snapshot.reset();
+		last_prompted_file_snapshot.reset();
+	}
 
 	if (plan.create_watcher) {
 		file_watch = agi::make_unique<WatchedFile>(CreateWxFileSystemWatcherBackend());
@@ -470,8 +480,8 @@ void SubsController::ApplyReloadExternalChangesOption() {
 
 	// Do not call UpdateFileWatch() here: it always rebaselines, and option
 	// ValueChanged fires even when Preferences Apply/Reset SetValue keeps the
-	// same bool. Rebaselining would hide external edits and weaken overwrite
-	// protection ("since last loaded or saved").
+	// same bool. Rebaselining would hide external edits while detection remains
+	// enabled.
 	if (plan.bind_target && file_watch)
 		file_watch->SetTargetPath(filename);
 	if (plan.record_baseline_if_missing)
@@ -512,7 +522,11 @@ void SubsController::RecordCurrentFileSnapshot() {
 }
 
 bool SubsController::HasFileChangedOnDisk() const {
-	if (!tracks_external_file_state || filename.empty() || !last_known_file_snapshot)
+	if (!reload_external_changes::ShouldCheckExternalFileSnapshot(
+		tracks_external_file_state,
+		OPT_GET("App/Auto/Reload External Changes")->GetBool(),
+		!filename.empty(),
+		last_known_file_snapshot.has_value()))
 		return false;
 
 	auto current_snapshot = MakeFileWatchSnapshot(filename);
@@ -643,7 +657,6 @@ void SubsController::ReloadFileFromDisk(bool load_linked_files) {
 	if (!core.project->ReloadSubtitles(filename, "", load_linked_files))
 		return;
 
-	RecordCurrentFileSnapshot();
 	context->ShowStatus(from_wx(_("Subtitles reloaded from disk.")));
 }
 

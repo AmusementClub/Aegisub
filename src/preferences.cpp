@@ -911,8 +911,8 @@ void BuildBackupPage(OptionPage *p) {
 		_("Detect external modifications to open subtitle files"),
 		"App/Auto/Reload External Changes");
 	reload_external->SetToolTip(_(
-		"When enabled, Aegisub watches the currently open subtitle file and prompts to reload it if another program changes the file on disk. "
-		"Disabling this stops continuous directory watches and reload prompts only; saving still warns if the file changed on disk since it was last loaded or saved. "
+		"When enabled, Aegisub watches the currently open subtitle file, prompts to reload external changes, and warns before saving over them. "
+		"Disabling this stops external-change detection and both kinds of prompts. "
 		"Takes effect when you click Apply or OK; no restart required."));
 
 	p->SetSizerAndFit(p->sizer);

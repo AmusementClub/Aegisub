@@ -12,6 +12,15 @@ inline bool ShouldTrackExternalFileSnapshots(bool is_gui_runtime_shell) noexcept
 	return is_gui_runtime_shell;
 }
 
+/// Whether a save should compare the current file against its disk snapshot.
+inline bool ShouldCheckExternalFileSnapshot(
+	bool tracks_external_file_state,
+	bool option_enabled,
+	bool has_file,
+	bool has_snapshot) noexcept {
+	return tracks_external_file_state && option_enabled && has_file && has_snapshot;
+}
+
 /// How to arm or disarm live directory watching for one option notification.
 struct WatchArmPlan {
 	/// Create a WatchedFile if one does not exist.
@@ -28,6 +37,10 @@ struct WatchArmPlan {
 	bool disarm_watcher = false;
 	/// Clear coalesced external-change pending flags.
 	bool clear_pending = false;
+	/// Forget disk snapshots while detection is disabled. Re-enabling starts
+	/// from the file's then-current state rather than reporting changes which
+	/// happened while detection was off.
+	bool clear_snapshots = false;
 };
 
 inline WatchArmPlan PlanWatchArm(
@@ -39,6 +52,7 @@ inline WatchArmPlan PlanWatchArm(
 		WatchArmPlan plan;
 		plan.disarm_watcher = has_watcher;
 		plan.clear_pending = true;
+		plan.clear_snapshots = true;
 		return plan;
 	}
 

@@ -422,6 +422,21 @@ static void VerifyFontSelector(
     Console.WriteLine(
         $"uia.correctness.{label}_explicit_selection={committedValue}");
 
+    // A manual selection or copy can be followed by an unchanged edit
+    // notification. It must not schedule another automatic expansion.
+    CollapseCombo(expand);
+    WaitForComboDropState(comboHwnd, expectedDropped: false, timeout);
+    var committedEditHwnd = NativeKeyboard.GetComboEditHwnd(comboHwnd);
+    if (committedEditHwnd == IntPtr.Zero)
+        throw new InvalidOperationException("Font combo edit has no native HWND");
+    NativeKeyboard.SetEditText(committedEditHwnd, committedValue);
+    Thread.Sleep(400);
+    if (NativeKeyboard.IsComboDropped(comboHwnd))
+        throw new InvalidOperationException(
+            $"{dialog.Current.Name} reopened after an unchanged edit notification");
+    Console.WriteLine(
+        $"uia.correctness.{label}_unchanged_edit_stayed_closed=true");
+
     var screenshot = Path.Combine(output, $"correctness-{label}.png");
     var capture = ScreenCapture.SaveWindowPng(dialog, screenshot);
     Console.WriteLine(

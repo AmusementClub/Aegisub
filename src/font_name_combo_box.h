@@ -124,6 +124,10 @@ class FontNameComboBox final : public wxComboBox {
 	std::optional<std::size_t> highlight_index;
 	/// User-typed query while searching; edit should show this until commit.
 	wxString typed_query;
+	/// Last query observed by the text handler; selection/copy notifications
+	/// which leave it unchanged must not reopen a dismissed list.
+	wxString last_text_query;
+	std::size_t auto_expand_revision = 0;
 	bool contains_matching = false;
 	bool auto_expand_on_input = false;
 	bool applying = false;
@@ -229,6 +233,7 @@ class FontNameComboBox final : public wxComboBox {
 		if (GetValue() != text)
 			ChangeValue(text);
 		SetInsertionPoint(static_cast<long>(text.length()));
+		last_text_query = text;
 		applying = false;
 	}
 
@@ -414,14 +419,22 @@ class FontNameComboBox final : public wxComboBox {
 	}
 
 	void OnText(wxCommandEvent& event) {
+		auto const query = CaptureTypedQuery();
+		auto const query_changed = query != last_text_query;
+		last_text_query = query;
 		if (committing_list_selection) {
 			suppress_auto_expand = true;
+			++auto_expand_revision;
 		}
-		else if (!applying && (contains_matching || auto_expand_on_input)) {
+		else if (!applying && query_changed
+			&& (contains_matching || auto_expand_on_input)) {
 			// A committed list choice suppresses only its own text notification;
 			// the next real edit is allowed to open the list again.
 			suppress_auto_expand = false;
-			CallAfter([this] {
+			auto const revision = ++auto_expand_revision;
+			CallAfter([this, revision] {
+				if (revision != auto_expand_revision || suppress_auto_expand)
+					return;
 				if (contains_matching)
 					UpdateContainsHighlight(/*force_jump=*/IsDropDownOpen());
 				AutoExpandForInput();
@@ -453,6 +466,7 @@ class FontNameComboBox final : public wxComboBox {
 
 	void OnCloseUp(wxCommandEvent& event) {
 		drop_down_open = false;
+		++auto_expand_revision;
 		StopSettleTimer();
 		// Closing without an explicit pick must leave the typed query, not the
 		// temporarily highlighted family name.
@@ -470,6 +484,7 @@ class FontNameComboBox final : public wxComboBox {
 
 		auto const& choice = all_choices[static_cast<std::size_t>(selection)];
 		suppress_auto_expand = true;
+		++auto_expand_revision;
 		StopSettleTimer();
 		highlight_index.reset();
 		typed_query = choice.label;
@@ -529,6 +544,7 @@ public:
 	: wxComboBox(parent, -1, value, wxDefaultPosition, size, ToWxChoices(choices),
 		wxCB_DROPDOWN | wxTE_PROCESS_ENTER)
 	, typed_query(value)
+	, last_text_query(value)
 	, contains_matching(contains_matching)
 	, auto_expand_on_input(auto_expand_on_input)
 	{

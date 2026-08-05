@@ -17,13 +17,14 @@ constexpr double kLabelPadding = 4.0;
 constexpr double kLabelOffset = 12.0;
 // Filled-quad stroke widths in canvas logical pixels. Geometry owns the width
 // so the result does not depend on glLineWidth / GL_LINE_SMOOTH quality.
-constexpr float kGuideOutlineWidth = 4.0f;
-constexpr float kGuideCoreWidth = 2.0f;
+// Sized to match the smaller measure-tool endpoints (radius 3).
+constexpr float kGuideOutlineWidth = 3.0f;
+constexpr float kGuideCoreWidth = 1.5f;
 // Arrowhead at the second endpoint, built as a filled triangle. The outline
 // pass is one pixel larger in both length and half-width so it peeks around
 // the core the same way the stroke outline does.
-constexpr float kArrowCoreLength = 12.0f;
-constexpr float kArrowCoreHalfWidth = 5.0f;
+constexpr float kArrowCoreLength = 9.0f;
+constexpr float kArrowCoreHalfWidth = 3.5f;
 constexpr float kArrowOutlineGrowth = 1.0f;
 constexpr float kArrowOutlineAlpha = 0.85f;
 // Reject near-zero segments before Unit(). Sub-pixel directions make

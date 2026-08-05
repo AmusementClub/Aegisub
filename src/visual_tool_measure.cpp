@@ -24,8 +24,8 @@
 #include <wx/translation.h>
 
 namespace {
-constexpr float kHandleRadius = 5.0f;
-constexpr float kHitTolerance = 8.0f;
+constexpr float kHandleRadius = 3.0f;
+constexpr float kHitTolerance = 5.0f;
 
 VisualGuide const* FindGuide(
 	VisualGuideSnapshotView const& snapshot,

@@ -26,6 +26,20 @@ struct ContainsMatch {
 	FontFamilyId family_id = 0;
 };
 
+/// Prefer the row currently highlighted by the open list. The tracked match
+/// can lag behind native prefix matching or explicit keyboard navigation.
+inline std::optional<std::size_t> ResolveCommitSelection(
+	std::size_t choice_count,
+	std::optional<std::size_t> list_caret,
+	std::optional<std::size_t> tracked_match) noexcept
+{
+	if (list_caret && *list_caret < choice_count)
+		return list_caret;
+	if (tracked_match && *tracked_match < choice_count)
+		return tracked_match;
+	return std::nullopt;
+}
+
 /// First choice whose label starts with the query (case-insensitive).
 inline std::optional<ContainsMatch> FindPrefixMatch(
 	std::vector<std::pair<wxString, FontFamilyId>> const& choices,
@@ -106,7 +120,7 @@ class FontNameComboBox final : public wxComboBox {
 	std::vector<DisplayChoice> all_choices;
 	std::vector<std::pair<wxString, FontFamilyId>> match_choices;
 	std::optional<FontFamilyId> selected_family_id;
-	/// Last contains match row while searching (not a committed selection).
+	/// Last prefix/contains match row while searching (not a committed selection).
 	std::optional<std::size_t> highlight_index;
 	/// User-typed query while searching; edit should show this until commit.
 	wxString typed_query;
@@ -134,6 +148,24 @@ class FontNameComboBox final : public wxComboBox {
 			return ::SendMessageW(reinterpret_cast<HWND>(hwnd), CB_GETDROPPEDSTATE, 0, 0) != 0;
 #endif
 		return drop_down_open;
+	}
+
+	std::optional<std::size_t> CurrentListCaret() const noexcept {
+#ifdef __WXMSW__
+		auto const combo_hwnd = reinterpret_cast<HWND>(GetHWND());
+		if (!combo_hwnd)
+			return std::nullopt;
+		COMBOBOXINFO info{};
+		info.cbSize = sizeof(info);
+		if (!::GetComboBoxInfo(combo_hwnd, &info) || !info.hwndList)
+			return std::nullopt;
+		auto const selection = ::SendMessageW(info.hwndList, LB_GETCURSEL, 0, 0);
+#else
+		auto const selection = wxComboBox::GetSelection();
+#endif
+		if (selection < 0 || static_cast<std::size_t>(selection) >= all_choices.size())
+			return std::nullopt;
+		return static_cast<std::size_t>(selection);
 	}
 
 	std::optional<FontFamilyId> ExactListMatch(wxString const& value) const {
@@ -345,10 +377,11 @@ class FontNameComboBox final : public wxComboBox {
 
 	void OnKeyDown(wxKeyEvent& event) {
 		auto const key = event.GetKeyCode();
-		if (auto_expand_on_input && IsDropDownOpen() && highlight_index
+		if (auto_expand_on_input && IsDropDownOpen()
 			&& (key == WXK_RETURN || key == WXK_NUMPAD_ENTER)) {
-			auto const selection = *highlight_index;
-			if (selection >= all_choices.size()) {
+			auto const selection = font_name_combo_box_detail::ResolveCommitSelection(
+				all_choices.size(), CurrentListCaret(), highlight_index);
+			if (!selection) {
 				event.Skip();
 				return;
 			}
@@ -357,8 +390,8 @@ class FontNameComboBox final : public wxComboBox {
 
 			wxCommandEvent selected(wxEVT_COMBOBOX, GetId());
 			selected.SetEventObject(this);
-			selected.SetInt(static_cast<int>(selection));
-			selected.SetString(all_choices[selection].label);
+			selected.SetInt(static_cast<int>(*selection));
+			selected.SetString(all_choices[*selection].label);
 			ProcessWindowEvent(selected);
 			return;
 		}

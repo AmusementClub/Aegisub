@@ -24,6 +24,13 @@ TEST(font_name_combo_box, committed_drop_down_choice_is_not_an_empty_query) {
 	EXPECT_EQ(5u, font_name_combo_box_detail::TypedQueryLength(5, 0, 0, 0));
 }
 
+TEST(font_name_combo_box, enter_commits_visible_list_caret_before_tracked_match) {
+	EXPECT_EQ(3u, font_name_combo_box_detail::ResolveCommitSelection(4, 3u, 0u));
+	EXPECT_EQ(2u, font_name_combo_box_detail::ResolveCommitSelection(
+		4, std::nullopt, 2u));
+	EXPECT_FALSE(font_name_combo_box_detail::ResolveCommitSelection(4, 4u, 5u));
+}
+
 TEST(font_name_combo_box, prefix_match_supports_auto_expanding_native_matching) {
 	auto const choices = SampleChoices();
 	auto const arial = font_name_combo_box_detail::FindPrefixMatch(

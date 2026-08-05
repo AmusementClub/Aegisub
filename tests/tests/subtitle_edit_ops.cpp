@@ -93,6 +93,35 @@ std::string TagAtCaret(std::string marked, bool karaoke_templater = false) {
 }
 
 /// Tokenize `marked` with the double-click position marked by '|' and return the
+/// text GetBoundsOfTagNameAtPosition would select ("" when it selects nothing).
+std::string TagNameAtCaret(std::string marked) {
+	auto input = UnmarkCaret(std::move(marked));
+	auto tokens = agi::ass::TokenizeDialogueBody(input.text);
+	agi::ass::SplitWords(input.text, tokens);
+
+	auto const bounds = aegisub::subtitle_edit_ops::GetBoundsOfTagNameAtPosition(tokens, input.caret);
+	return input.text.substr(static_cast<size_t>(bounds.first), static_cast<size_t>(bounds.second));
+}
+
+struct planned_tag_text {
+	std::string selection;
+	std::pair<int, int> repeat_tag_name_bounds;
+};
+
+planned_tag_text PlanTagAtCaret(std::string marked, std::pair<int, int> repeat_tag_name_bounds = {-1, 0}) {
+	auto input = UnmarkCaret(std::move(marked));
+	auto tokens = agi::ass::TokenizeDialogueBody(input.text);
+	agi::ass::SplitWords(input.text, tokens);
+
+	auto const plan = aegisub::subtitle_edit_ops::PlanTagDoubleClick(
+		input.text, tokens, input.caret, repeat_tag_name_bounds);
+	return {
+		input.text.substr(static_cast<size_t>(plan.selection.first), static_cast<size_t>(plan.selection.second)),
+		plan.repeat_tag_name_bounds
+	};
+}
+
+/// Tokenize `marked` with the double-click position marked by '|' and return the
 /// text GetBoundsOfEscapeAtPosition would select ("" when it selects nothing).
 std::string EscapeAtCaret(std::string marked) {
 	auto input = UnmarkCaret(std::move(marked));
@@ -368,6 +397,44 @@ TEST(subtitle_edit_ops, tag_bounds_select_whole_tag_from_backslash_or_name) {
 	EXPECT_EQ("\\1c&H0000FF&", TagAtCaret("{|\\1c&H0000FF&}"));
 	EXPECT_EQ("\\pos(100,200)", TagAtCaret("{|\\pos(100,200)\\b1}"));
 	EXPECT_EQ("\\b1", TagAtCaret("{\\pos(100,200)\\|b1}"));
+}
+
+TEST(subtitle_edit_ops, tag_name_bounds_select_only_the_clicked_name) {
+	EXPECT_EQ("pos", TagNameAtCaret("{\\|pos(100,200)}"));
+	EXPECT_EQ("pos", TagNameAtCaret("{\\po|s(100,200)}"));
+	EXPECT_EQ("move", TagNameAtCaret("{\\|move(0,0,100,100)}"));
+	EXPECT_EQ("move", TagNameAtCaret("{\\mo|ve(0,0,100,100)}"));
+}
+
+TEST(subtitle_edit_ops, tag_name_bounds_select_nothing_outside_the_name) {
+	EXPECT_EQ("", TagNameAtCaret("{|\\pos(100,200)}"));
+	EXPECT_EQ("", TagNameAtCaret("{\\pos|(100,200)}"));
+	EXPECT_EQ("", TagNameAtCaret("{\\pos(1|00,200)}"));
+	EXPECT_EQ("", TagNameAtCaret("a|bc"));
+}
+
+TEST(subtitle_edit_ops, position_tags_expand_on_a_repeated_double_click) {
+	auto const first_pos = PlanTagAtCaret("{\\po|s(100,200)}");
+	EXPECT_EQ("pos", first_pos.selection);
+	EXPECT_EQ("\\pos(100,200)",
+		PlanTagAtCaret("{\\po|s(100,200)}", first_pos.repeat_tag_name_bounds).selection);
+
+	auto const first_move = PlanTagAtCaret("{\\mo|ve(0,0,100,100)}");
+	EXPECT_EQ("move", first_move.selection);
+	EXPECT_EQ("\\move(0,0,100,100)",
+		PlanTagAtCaret("{\\mo|ve(0,0,100,100)}", first_move.repeat_tag_name_bounds).selection);
+}
+
+TEST(subtitle_edit_ops, position_tag_expansion_requires_the_same_tag_name) {
+	auto const first = PlanTagAtCaret("{\\po|s(100,200)\\pos(300,400)}");
+	EXPECT_EQ("pos", first.selection);
+	EXPECT_EQ("pos", PlanTagAtCaret(
+		"{\\pos(100,200)\\po|s(300,400)}", first.repeat_tag_name_bounds).selection);
+}
+
+TEST(subtitle_edit_ops, other_tags_keep_single_stage_whole_tag_selection) {
+	EXPECT_EQ("\\bord5", PlanTagAtCaret("{\\bo|rd5}").selection);
+	EXPECT_EQ("100", PlanTagAtCaret("{\\pos(1|00,200)}").selection);
 }
 
 TEST(subtitle_edit_ops, tag_bounds_select_only_the_argument_on_a_value) {

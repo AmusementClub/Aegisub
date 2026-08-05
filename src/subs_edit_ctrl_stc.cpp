@@ -356,6 +356,13 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 
 	Bind(wxEVT_CHAR_HOOK, &SubsStyledTextEditCtrl::OnKeyDown, this);
 	Bind(wxEVT_CHAR, &SubsStyledTextEditCtrl::OnChar, this);
+	Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent& event) {
+		int const pos = PositionFromPoint(event.GetPosition());
+		if (pos < repeat_tag_name_bounds.first ||
+			pos >= repeat_tag_name_bounds.first + repeat_tag_name_bounds.second)
+			repeat_tag_name_bounds = {-1, 0};
+		event.Skip();
+	});
 
 	Bind(wxEVT_MENU, bind(&SubsStyledTextEditCtrl::Cut, this), EDIT_MENU_CUT);
 	Bind(wxEVT_MENU, bind(&SubsStyledTextEditCtrl::Copy, this), EDIT_MENU_COPY);
@@ -382,6 +389,7 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 		{
 			std::string text = GetTextRaw().data();
 			if (text == line_text) return;
+			repeat_tag_name_bounds = {-1, 0};
 			line_text = move(text);
 		}
 
@@ -447,6 +455,7 @@ BEGIN_EVENT_TABLE(SubsStyledTextEditCtrl,wxStyledTextCtrl)
 END_EVENT_TABLE()
 
 void SubsStyledTextEditCtrl::OnLoseFocus(wxFocusEvent &event) {
+	repeat_tag_name_bounds = {-1, 0};
 	CallTipCancel();
 	if (marker_calltip_active) {
 		marker_calltip_active = false;
@@ -481,6 +490,7 @@ void SubsStyledTextEditCtrl::OnChar(wxKeyEvent &event) {
 }
 
 void SubsStyledTextEditCtrl::OnKeyDown(wxKeyEvent &event) {
+	repeat_tag_name_bounds = {-1, 0};
 	event.Skip();
 
 	// Smart Home: navigate backward through ASS text blocks.
@@ -870,6 +880,7 @@ void SubsStyledTextEditCtrl::UpdateCallTip() {
 }
 
 void SubsStyledTextEditCtrl::SetTextTo(std::string const& text) {
+	repeat_tag_name_bounds = {-1, 0};
 	auto const text_bytes = static_cast<int>(std::min(
 		text.size(),
 		static_cast<size_t>(std::numeric_limits<int>::max())));
@@ -954,6 +965,7 @@ void SubsStyledTextEditCtrl::Paste() {
 }
 
 void SubsStyledTextEditCtrl::OnContextMenu(wxContextMenuEvent &event) {
+	repeat_tag_name_bounds = {-1, 0};
 	wxPoint pos = event.GetPosition();
 	int activePos;
 	if (pos == wxDefaultPosition)
@@ -999,6 +1011,8 @@ void SubsStyledTextEditCtrl::OnContextMenu(wxContextMenuEvent &event) {
 
 void SubsStyledTextEditCtrl::OnDoubleClick(wxStyledTextEvent &evt) {
 	int pos = evt.GetPosition();
+	auto const previous_tag_name_bounds = repeat_tag_name_bounds;
+	repeat_tag_name_bounds = {-1, 0};
 	if (pos == -1 && !tokenized_line.empty()) {
 		auto tok = tokenized_line.back();
 		SetSelection(line_text.size() - tok.length, line_text.size());
@@ -1011,11 +1025,13 @@ void SubsStyledTextEditCtrl::OnDoubleClick(wxStyledTextEvent &evt) {
 			SetSelection(escape_bounds.first, escape_bounds.first + escape_bounds.second);
 			return;
 		}
-		// First try selecting a whole ASS override tag (\tagname(...) with the
-		// backslash and all of its arguments).
-		auto tag_bounds = aegisub::subtitle_edit_ops::GetBoundsOfTagAtPosition(tokenized_line, pos);
-		if (tag_bounds.second != 0) {
-			SetSelection(tag_bounds.first, tag_bounds.first + tag_bounds.second);
+		// Position tags use two-stage selection: name first, then the whole tag
+		// when the same name is double-clicked again.
+		auto const tag_plan = aegisub::subtitle_edit_ops::PlanTagDoubleClick(
+			line_text, tokenized_line, pos, previous_tag_name_bounds);
+		if (tag_plan.selection.second != 0) {
+			SetSelection(tag_plan.selection.first, tag_plan.selection.first + tag_plan.selection.second);
+			repeat_tag_name_bounds = tag_plan.repeat_tag_name_bounds;
 			return;
 		}
 		// Otherwise fall back to a plain WORD token (used by the spell checker).

@@ -87,6 +87,9 @@ class SubsStyledTextEditCtrl final : public wxStyledTextCtrl {
 	/// Tokenized version of line_text
 	std::vector<agi::ass::DialogueToken> tokenized_line;
 
+	/// Tag name armed for whole-tag selection on the next double-click.
+	std::pair<int, int> repeat_tag_name_bounds{-1, 0};
+
 	std::string drag_source_text;
 	int drag_source_start = 0;
 	int drag_source_end = 0;

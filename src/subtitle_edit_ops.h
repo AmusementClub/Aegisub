@@ -24,6 +24,11 @@ struct RecombineResult {
 	std::vector<AssDialogue *> lines_to_remove;
 };
 
+struct TagDoubleClickPlan {
+	std::pair<int, int> selection{0, 0};
+	std::pair<int, int> repeat_tag_name_bounds{-1, 0};
+};
+
 enum class AutoCloseKey {
 	OpenBrace,
 	CloseBrace,
@@ -87,6 +92,20 @@ int GetNextBlockEnd(std::vector<agi::ass::DialogueToken> const& tokens, int pos)
 /// name, just the argument when pos is on a value, and {0, 0} when pos is not
 /// on a tag.
 std::pair<int, int> GetBoundsOfTagAtPosition(std::vector<agi::ass::DialogueToken> const& tokens, int pos);
+
+/// Get the span of the override tag name at pos, excluding the leading
+/// backslash, as {start, length} in bytes. Returns {0, 0} when pos is not on a
+/// tag name.
+std::pair<int, int> GetBoundsOfTagNameAtPosition(std::vector<agi::ass::DialogueToken> const& tokens, int pos);
+
+/// Plan the override-tag selection for a double-click. The first click on a
+/// pos or move name selects just the name and arms it for expansion; repeating
+/// the double-click on the armed name selects the whole tag.
+TagDoubleClickPlan PlanTagDoubleClick(
+	std::string_view text,
+	std::vector<agi::ass::DialogueToken> const& tokens,
+	int pos,
+	std::pair<int, int> repeat_tag_name_bounds);
 
 /// Get the span of the ASS text escape (\N, \n, or \h) at pos, as
 /// {start, length} in bytes. Returns {0, 0} when pos is not on an escape.

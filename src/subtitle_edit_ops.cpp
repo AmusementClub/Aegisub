@@ -616,4 +616,48 @@ std::pair<int, int> GetBoundsOfTagAtPosition(std::vector<agi::ass::DialogueToken
 	return {start, end - start};
 }
 
+std::pair<int, int> GetBoundsOfTagNameAtPosition(std::vector<agi::ass::DialogueToken> const& tokens, int pos) {
+	if (pos < 0)
+		return {0, 0};
+
+	int offset = 0;
+	for (auto const& token : tokens) {
+		int const len = static_cast<int>(token.length);
+		if (pos < offset + len) {
+			if (token.type == agi::ass::DialogueTokenType::TAG_NAME)
+				return {offset, len};
+			return {0, 0};
+		}
+		offset += len;
+	}
+
+	return {0, 0};
+}
+
+TagDoubleClickPlan PlanTagDoubleClick(
+	std::string_view text,
+	std::vector<agi::ass::DialogueToken> const& tokens,
+	int pos,
+	std::pair<int, int> repeat_tag_name_bounds) {
+	TagDoubleClickPlan plan;
+	plan.selection = GetBoundsOfTagAtPosition(tokens, pos);
+	if (plan.selection.second == 0)
+		return plan;
+
+	auto const name_bounds = GetBoundsOfTagNameAtPosition(tokens, pos);
+	if (name_bounds.second == 0)
+		return plan;
+
+	auto const name = text.substr(name_bounds.first, name_bounds.second);
+	if (name != "pos" && name != "move")
+		return plan;
+
+	if (name_bounds != repeat_tag_name_bounds) {
+		plan.selection = name_bounds;
+		plan.repeat_tag_name_bounds = name_bounds;
+	}
+
+	return plan;
+}
+
 }

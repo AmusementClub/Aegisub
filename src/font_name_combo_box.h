@@ -378,6 +378,24 @@ class FontNameComboBox final : public wxComboBox {
 
 		highlight_index = match->index;
 		Popup();
+#ifdef __WXMSW__
+		// Opening by keyboard does not generate mouse movement, so the newly shown
+		// controls can retain a transparent cursor previously set by the video
+		// canvas. Ask the Aegisub window under the pointer to choose its cursor.
+		// Sending WM_MOUSEMOVE (or moving the pointer) would change the hovered row.
+		POINT cursor_position{};
+		if (::GetCursorPos(&cursor_position)) {
+			auto const cursor_window = ::WindowFromPoint(cursor_position);
+			DWORD process_id = 0;
+			if (cursor_window)
+				::GetWindowThreadProcessId(cursor_window, &process_id);
+			if (process_id == ::GetCurrentProcessId()) {
+				::PostMessageW(cursor_window, WM_SETCURSOR,
+					reinterpret_cast<WPARAM>(cursor_window),
+					MAKELPARAM(HTCLIENT, WM_MOUSEMOVE));
+			}
+		}
+#endif
 	}
 
 	void OnKeyDown(wxKeyEvent& event) {

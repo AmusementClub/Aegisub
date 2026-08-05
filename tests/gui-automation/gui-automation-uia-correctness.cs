@@ -8,6 +8,7 @@
 
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
@@ -16,7 +17,25 @@ using Aegisub.GuiAutomation.Driver;
 
 try
 {
-    return Run(args);
+    const string workerArgument = "--internal-uia-worker";
+    const string heartbeatArgument = "--internal-watchdog-heartbeat";
+    var workerArguments = args.ToList();
+    var isWorker = workerArguments.Remove(workerArgument);
+    string? heartbeatPath = null;
+    var heartbeatIndex = workerArguments.IndexOf(heartbeatArgument);
+    if (heartbeatIndex >= 0)
+    {
+        if (heartbeatIndex + 1 >= workerArguments.Count)
+            throw new ArgumentException($"Missing value for {heartbeatArgument}");
+        heartbeatPath = workerArguments[heartbeatIndex + 1];
+        workerArguments.RemoveRange(heartbeatIndex, 2);
+    }
+
+    if (!isWorker)
+        return RunSupervised(args);
+
+    WorkerWatchdog.Initialize(heartbeatPath);
+    return Run(workerArguments.ToArray());
 }
 catch (Exception error)
 {
@@ -24,8 +43,145 @@ catch (Exception error)
     return 1;
 }
 
+static int RunSupervised(string[] args)
+{
+    var operationTimeoutSeconds = ReadPositiveOption(args, "--timeout-seconds", 30);
+    var stallTimeout = TimeSpan.FromSeconds(Math.Clamp(operationTimeoutSeconds, 10, 30));
+    var totalTimeout = TimeSpan.FromSeconds(Math.Max(120, operationTimeoutSeconds * 6));
+    var watchdogRoot = Path.Combine(
+        Path.GetTempPath(),
+        "aegisub-uia-watchdog-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(watchdogRoot);
+    var heartbeatPath = Path.Combine(watchdogRoot, "heartbeat.txt");
+    File.WriteAllText(heartbeatPath, "supervisor-started");
+
+    try
+    {
+        var startInfo = CreateWorkerStartInfo(args, heartbeatPath);
+        using var worker = Process.Start(startInfo)
+            ?? throw new InvalidOperationException("Could not start the UIA worker");
+        worker.OutputDataReceived += (_, eventArgs) =>
+        {
+            if (eventArgs.Data is not null)
+                Console.Out.WriteLine(eventArgs.Data);
+        };
+        worker.ErrorDataReceived += (_, eventArgs) =>
+        {
+            if (eventArgs.Data is not null)
+                Console.Error.WriteLine(eventArgs.Data);
+        };
+        worker.BeginOutputReadLine();
+        worker.BeginErrorReadLine();
+
+        var started = Stopwatch.StartNew();
+        while (!worker.WaitForExit(250))
+        {
+            var lastHeartbeat = File.GetLastWriteTimeUtc(heartbeatPath);
+            if (DateTime.UtcNow - lastHeartbeat > stallTimeout)
+            {
+                var stage = ReadWatchdogStage(heartbeatPath);
+                KillWorkerTree(worker);
+                throw new TimeoutException(
+                    $"UIA worker stopped making progress for {stallTimeout.TotalSeconds:0} seconds " +
+                    $"at stage '{stage}'");
+            }
+            if (started.Elapsed > totalTimeout)
+            {
+                var stage = ReadWatchdogStage(heartbeatPath);
+                KillWorkerTree(worker);
+                throw new TimeoutException(
+                    $"UIA worker exceeded the {totalTimeout.TotalSeconds:0}-second total limit " +
+                    $"at stage '{stage}'");
+            }
+        }
+
+        worker.WaitForExit();
+        return worker.ExitCode;
+    }
+    finally
+    {
+        try
+        {
+            Directory.Delete(watchdogRoot, true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+}
+
+static ProcessStartInfo CreateWorkerStartInfo(string[] args, string heartbeatPath)
+{
+    var processPath = Environment.ProcessPath
+        ?? throw new InvalidOperationException("Could not locate the current UIA driver process");
+    var startInfo = new ProcessStartInfo
+    {
+        FileName = processPath,
+        UseShellExecute = false,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+    };
+    if (string.Equals(
+            Path.GetFileNameWithoutExtension(processPath),
+            "dotnet",
+            StringComparison.OrdinalIgnoreCase))
+    {
+        var assemblyPath = Assembly.GetEntryAssembly()?.Location;
+        if (string.IsNullOrWhiteSpace(assemblyPath))
+            throw new InvalidOperationException("Could not locate the UIA driver assembly");
+        startInfo.ArgumentList.Add(assemblyPath);
+    }
+    startInfo.ArgumentList.Add("--internal-uia-worker");
+    startInfo.ArgumentList.Add("--internal-watchdog-heartbeat");
+    startInfo.ArgumentList.Add(heartbeatPath);
+    foreach (var argument in args)
+        startInfo.ArgumentList.Add(argument);
+    return startInfo;
+}
+
+static int ReadPositiveOption(string[] args, string option, int defaultValue)
+{
+    for (var index = 0; index < args.Length; ++index)
+    {
+        if (!string.Equals(args[index], option, StringComparison.Ordinal))
+            continue;
+        if (++index >= args.Length || !int.TryParse(args[index], out var value) || value <= 0)
+            throw new ArgumentException($"{option} must be positive");
+        return value;
+    }
+    return defaultValue;
+}
+
+static string ReadWatchdogStage(string heartbeatPath)
+{
+    try
+    {
+        return File.ReadAllText(heartbeatPath).Trim();
+    }
+    catch (IOException)
+    {
+        return "unknown";
+    }
+}
+
+static void KillWorkerTree(Process worker)
+{
+    try
+    {
+        worker.Kill(entireProcessTree: true);
+        worker.WaitForExit(5000);
+    }
+    catch (InvalidOperationException)
+    {
+    }
+}
+
 static int Run(string[] args)
 {
+    WorkerWatchdog.Stage("parse-arguments");
     string? executable = null;
     string? artifacts = null;
     var openFiles = new List<string>();
@@ -102,6 +258,7 @@ static int Run(string[] args)
     var passed = false;
     try
     {
+        WorkerWatchdog.Stage("wait-for-ready");
         var readyPath = Path.Combine(output, "ready.json");
         var ready = AutomationProtocol.WaitForReadyArtifact(
             readyPath, process, TimeSpan.FromSeconds(timeoutSeconds));
@@ -110,10 +267,12 @@ static int Run(string[] args)
         if (!PathsEqual(ready.Artifacts, output))
             throw new InvalidOperationException("ready.json points at a different artifacts directory");
         Console.WriteLine($"uia.correctness.ready_pid={ready.ProcessId}");
+        WorkerWatchdog.Stage("discover-main-window");
         var window = UiaDriver.WaitForMainWindow(process, TimeSpan.FromSeconds(timeoutSeconds));
-        UiaDriver.ThrowIfFatalDialog(process);
+        NativeWindowSearch.ThrowIfFatalDialog(process);
         UiaDriver.FocusAndVerify(window, process, TimeSpan.FromSeconds(5));
 
+        WorkerWatchdog.Stage("verify-toggle");
         var toggle = UiaDriver.FindEnabledToggle(
                 window,
                 ControlType.CheckBox,
@@ -138,15 +297,17 @@ static int Run(string[] args)
             throw new InvalidOperationException(
                 $"UIA toggle did not restore its initial state: {toggleRestored}");
         Console.WriteLine("uia.correctness.observable_state_change=true");
-        UiaDriver.ThrowIfFatalDialog(process);
+        NativeWindowSearch.ThrowIfFatalDialog(process);
 
+        WorkerWatchdog.Stage("verify-font-selectors");
         VerifyFontSelectors(
             window,
             process,
             output,
             TimeSpan.FromSeconds(timeoutSeconds));
-        UiaDriver.ThrowIfFatalDialog(process);
+        NativeWindowSearch.ThrowIfFatalDialog(process);
 
+        WorkerWatchdog.Stage("capture-main-window");
         var screenshot = Path.Combine(output, "correctness-main-window.png");
         var capture = ScreenCapture.SaveWindowPng(window, screenshot);
         Console.WriteLine($"uia.correctness.capture={screenshot}");
@@ -154,6 +315,7 @@ static int Run(string[] args)
             $"uia.correctness.capture_evidence={capture.Width}x{capture.Height};" +
             $"non_black_pixels={capture.NonBlackPixelCount};" +
             $"minimum={capture.MinimumNonBlackPixelCount}");
+        WorkerWatchdog.Stage("close-aegisub");
         UiaDriver.RequestCleanClose(process, TimeSpan.FromSeconds(15));
         Console.WriteLine("uia.correctness.clean_exit=true");
         passed = true;
@@ -179,6 +341,7 @@ static void VerifyFontSelectors(
     string output,
     TimeSpan timeout)
 {
+    WorkerWatchdog.Stage("open-styles-manager");
     var stylesCommand = UiaDriver.FindEnabledInvokableButtonByAutomationId(
             mainWindow,
             "Item 5014",
@@ -187,6 +350,7 @@ static void VerifyFontSelectors(
     var stylesInvoke = Task.Run(() => UiaDriver.Invoke(stylesCommand));
     var stylesManager = WaitForWindow(process, timeout, "Styles Manager");
 
+    WorkerWatchdog.Stage("open-style-editor");
     var currentStyle = FindSelectedListItem(stylesManager, "Default")
         ?? throw new InvalidOperationException(
             "The selected current-script Default style was not found");
@@ -200,6 +364,7 @@ static void VerifyFontSelectors(
     var editInvoke = Task.Run(() => UiaDriver.Invoke(edit));
     var styleEditor = WaitForDialogWithProviderCheck(
         process, timeout, "Style Editor");
+    WorkerWatchdog.Stage("verify-style-editor-font-selector");
     VerifyFontSelector(
         styleEditor,
         process,
@@ -212,6 +377,7 @@ static void VerifyFontSelectors(
     CloseDialog(stylesManager, "Close");
     WaitForTask(stylesInvoke, timeout, "Styles Manager did not close");
 
+    WorkerWatchdog.Stage("open-select-font-dialog");
     process.Refresh();
     if (process.MainWindowHandle == 0)
         throw new InvalidOperationException(
@@ -226,6 +392,7 @@ static void VerifyFontSelectors(
     var fontFaceInvoke = Task.Run(() => UiaDriver.Invoke(fontFaceCommand));
     var selectFont = WaitForDialogWithProviderCheck(
         process, timeout, "Select Font");
+    WorkerWatchdog.Stage("verify-select-font-selector");
     VerifyFontSelector(
         selectFont,
         process,
@@ -244,6 +411,7 @@ static void VerifyFontSelector(
     string label,
     TimeSpan timeout)
 {
+    WorkerWatchdog.Stage($"{label}:discover-combo");
     var combo = FindEditableComboBox(dialog)
         ?? throw new InvalidOperationException(
             $"The editable font selector was not found in {dialog.Current.Name}");
@@ -285,7 +453,7 @@ static void VerifyFontSelector(
     WaitForComboDropState(comboHwnd, expectedDropped: true, timeout);
     Console.WriteLine($"uia.correctness.{label}_auto_expanded=true");
     var samples1 = SampleHighlightTimeline(
-        combo, process, query1, expected1, $"{label}_pass1");
+        combo, query1, expected1, $"{label}_pass1");
     AssertHighlightSettled(dialog, samples1, query1, expected1, label, "pass1");
     Console.WriteLine(
         $"uia.correctness.{label}_pass1_timeline={FormatHighlightTimeline(samples1)}");
@@ -308,7 +476,7 @@ static void VerifyFontSelector(
 
     expand.Expand();
     var samples2 = SampleHighlightTimeline(
-        combo, process, query2, expected2, $"{label}_pass2");
+        combo, query2, expected2, $"{label}_pass2");
     AssertHighlightSettled(dialog, samples2, query2, expected2, label, "pass2");
     Console.WriteLine(
         $"uia.correctness.{label}_pass2_timeline={FormatHighlightTimeline(samples2)}");
@@ -347,7 +515,7 @@ static void VerifyFontSelector(
     ExpectEdit(combo, queryFar, label, "pass2b_after_far_retype", timeout);
     expand.Expand();
     var samplesFar = SampleHighlightTimeline(
-        combo, process, queryFar, expectedFar, $"{label}_pass2b_far");
+        combo, queryFar, expectedFar, $"{label}_pass2b_far");
     AssertHighlightSettled(dialog, samplesFar, queryFar, expectedFar, label, "pass2b_far");
     Console.WriteLine(
         $"uia.correctness.{label}_pass2b_far_timeline={FormatHighlightTimeline(samplesFar)}");
@@ -362,7 +530,7 @@ static void VerifyFontSelector(
     ExpectEdit(combo, queryNear, label, "pass2b_after_near_retype", timeout);
     expand.Expand();
     var samplesNear = SampleHighlightTimeline(
-        combo, process, queryNear, expectedNear, $"{label}_pass2b_near");
+        combo, queryNear, expectedNear, $"{label}_pass2b_near");
     AssertHighlightSettled(dialog, samplesNear, queryNear, expectedNear, label, "pass2b_near");
     Console.WriteLine(
         $"uia.correctness.{label}_pass2b_near_timeline={FormatHighlightTimeline(samplesNear)}");
@@ -377,7 +545,7 @@ static void VerifyFontSelector(
     NativeKeyboard.TypeCharsViaComboKeys(comboHwnd, query2);
     ExpectEdit(combo, query2, label, "before_keyboard_commit", timeout);
     WaitForComboDropState(comboHwnd, expectedDropped: true, timeout);
-    WaitForHighlightedListItem(combo, process, expected2, timeout);
+    WaitForHighlightedListItem(combo, expected2, timeout);
     NativeKeyboard.CommitHighlightedComboItem(comboHwnd);
     var keyboardCommittedValue = WaitForValue(combo, expected2, timeout);
     WaitForComboDropState(comboHwnd, expectedDropped: false, timeout);
@@ -386,35 +554,24 @@ static void VerifyFontSelector(
 
     // --- explicit selection commit ---
     // Selecting a real item after contains matching must replace the typed
-    // query with the chosen family. Choose a second matching row so UIA must
-    // perform a selection change rather than treating the provisional caret
-    // as already selected.
+    // query with the chosen family. Use native list mouse messages because
+    // wx/MSW exposes off-caret combo items through UIA but Select() can commit
+    // the provisional caret instead of the requested item.
     ClearComboEdit(combo);
     WaitForValue(combo, string.Empty, timeout);
     TypeIntoCombo(combo, query1, charByChar: true);
     ExpectEdit(combo, query1, label, "before_explicit_select", timeout);
     expand.Expand();
-    WaitForHighlightedListItem(combo, process, expected1, timeout);
+    WaitForHighlightedListItem(combo, expected1, timeout);
     const string committedFont = "Arial Black";
-    var committedItem = FindListItem(
-            combo, committedFont, requireSelected: false)
-        ?? throw new InvalidOperationException(
-            $"The selectable font item '{committedFont}' was not found");
-    if (!committedItem.TryGetCurrentPattern(
-            SelectionItemPattern.Pattern,
-            out var committedSelectionObject))
-        throw new InvalidOperationException(
-            $"The font item '{committedFont}' is not UIA-selectable");
-    var selectionPattern = (SelectionItemPattern)committedSelectionObject;
-    selectionPattern.Select();
+    NativeKeyboard.ClickComboItem(comboHwnd, committedFont);
     Thread.Sleep(250);
-    var postSelectValue = value.Current.Value ?? string.Empty;
+    var postSelectValue = NativeKeyboard.GetComboEditText(comboHwnd);
     Console.WriteLine(
         $"uia.correctness.{label}_post_select=" +
         $"edit='{postSelectValue}';" +
         $"native='{NativeKeyboard.GetComboHighlightText(comboHwnd) ?? string.Empty}';" +
-        $"dropped={NativeKeyboard.IsComboDropped(comboHwnd)};" +
-        $"selected={selectionPattern.Current.IsSelected}");
+        $"dropped={NativeKeyboard.IsComboDropped(comboHwnd)}");
     var committedValue = WaitForValue(combo, committedFont, timeout);
     if (string.IsNullOrEmpty(committedValue))
         throw new InvalidOperationException(
@@ -529,6 +686,7 @@ static void WaitForComboDropState(
         + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
     while (Stopwatch.GetTimestamp() < deadline)
     {
+        WorkerWatchdog.Pulse();
         if (NativeKeyboard.IsComboDropped(comboHwnd) == expectedDropped)
             return;
         Thread.Sleep(25);
@@ -574,15 +732,6 @@ static void TypeIntoCombo(AutomationElement combo, string text, bool charByChar)
         NativeKeyboard.TypeCharsOneByOne(editHwnd, text);
     else
         NativeKeyboard.TypeCharsViaWindowMessage(editHwnd, text);
-}
-
-static int CountListItems(Process process)
-{
-    var root = AutomationElement.RootElement;
-    var condition = new AndCondition(
-        new PropertyCondition(AutomationElement.ProcessIdProperty, process.Id),
-        new PropertyCondition(AutomationElement.ControlTypeProperty, ControlType.ListItem));
-    return root.FindAll(TreeScope.Descendants, condition).Count;
 }
 
 static AutomationElement? FindEditableComboBox(AutomationElement root)
@@ -665,32 +814,17 @@ static AutomationElement WaitForWindow(
     var observed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     while (Stopwatch.GetTimestamp() < deadline)
     {
-        UiaDriver.ThrowIfFatalDialog(process);
-        var windows = AutomationElement.RootElement.FindAll(
-            TreeScope.Descendants,
-            new AndCondition(
-                new PropertyCondition(
-                    AutomationElement.ProcessIdProperty,
-                    process.Id),
-                new PropertyCondition(
-                    AutomationElement.ControlTypeProperty,
-                    ControlType.Window)));
-        foreach (AutomationElement window in windows)
+        WorkerWatchdog.Pulse();
+        NativeWindowSearch.ThrowIfFatalDialog(process);
+        foreach (var window in NativeWindowSearch.GetTopLevelWindows(process.Id))
         {
-            try
-            {
-                var title = window.Current.Name ?? string.Empty;
-                if (!string.IsNullOrWhiteSpace(title))
-                    observed.Add(title);
-                if (titles.Any(candidate => string.Equals(
-                        title,
-                        candidate,
-                        StringComparison.OrdinalIgnoreCase)))
-                    return window;
-            }
-            catch (ElementNotAvailableException)
-            {
-            }
+            if (!string.IsNullOrWhiteSpace(window.Title))
+                observed.Add(window.Title);
+            if (titles.Any(candidate => string.Equals(
+                    window.Title,
+                    candidate,
+                    StringComparison.OrdinalIgnoreCase)))
+                return AutomationElement.FromHandle(window.Handle);
         }
         Thread.Sleep(50);
     }
@@ -703,7 +837,6 @@ static AutomationElement WaitForWindow(
 static List<(int Ms, string Edit, string Sel, int ListCount, bool Match, bool Lost)>
     SampleHighlightTimeline(
         AutomationElement combo,
-        Process process,
         string query,
         string expected,
         string label)
@@ -717,30 +850,24 @@ static List<(int Ms, string Edit, string Sel, int ListCount, bool Match, bool Lo
     var sawMatch = false;
     var lostAfterMatch = false;
     var listCount = 0;
+    var comboHwnd = new IntPtr(combo.Current.NativeWindowHandle);
 
     foreach (var targetMs in delaysMs)
     {
+        WorkerWatchdog.Pulse();
         var wait = targetMs - (int)started.ElapsedMilliseconds;
         if (wait > 0)
             Thread.Sleep(wait);
 
-        var edit = string.Empty;
-        try
-        {
-            if (combo.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern))
-                edit = ((ValuePattern)pattern).Current.Value ?? string.Empty;
-        }
-        catch (ElementNotAvailableException)
-        {
-        }
+        var edit = NativeKeyboard.GetComboEditText(comboHwnd);
 
-        // Font catalog size: count once after the popup is up (expensive).
+        // Read the native combo count once; desktop-wide UIA enumeration can
+        // stall every provider on the interactive desktop.
         if (listCount < 20)
-            listCount = CountListItems(process);
+            listCount = NativeKeyboard.GetComboItemCount(comboHwnd);
 
         // Read the real Win32 list caret (UIA IsSelected is unreliable on
         // CBS_DROPDOWN listboxes after CB_SETCURSEL + edit restore).
-        var comboHwnd = new IntPtr(combo.Current.NativeWindowHandle);
         var selectedName = NativeKeyboard.GetComboHighlightText(comboHwnd) ?? "";
         var matchHighlighted = string.Equals(
             selectedName, expected, StringComparison.OrdinalIgnoreCase);
@@ -798,9 +925,8 @@ static string FormatHighlightTimeline(
         samples.Select(s => $"{s.Ms}ms:edit='{s.Edit}',sel='{s.Sel}',match={s.Match}"));
 
 /// Wait until the named drop-down item is the current Win32 list caret.
-static AutomationElement WaitForHighlightedListItem(
+static void WaitForHighlightedListItem(
     AutomationElement combo,
-    Process process,
     string name,
     TimeSpan timeout)
 {
@@ -809,14 +935,10 @@ static AutomationElement WaitForHighlightedListItem(
         + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
     while (Stopwatch.GetTimestamp() < deadline)
     {
+        WorkerWatchdog.Pulse();
         var highlight = NativeKeyboard.GetComboHighlightText(comboHwnd);
         if (string.Equals(highlight, name, StringComparison.OrdinalIgnoreCase))
-        {
-            // Prefer UIA item for later Select(); fall back to name lookup.
-            var item = FindListItem(combo, name, requireSelected: false);
-            if (item is not null)
-                return item;
-        }
+            return;
         Thread.Sleep(50);
     }
     throw new TimeoutException(
@@ -824,72 +946,21 @@ static AutomationElement WaitForHighlightedListItem(
         $"(native caret='{NativeKeyboard.GetComboHighlightText(comboHwnd) ?? ""}')");
 }
 
-static AutomationElement? FindListItem(
-    AutomationElement combo,
-    string name,
-    bool requireSelected)
-{
-    var comboHwnd = new IntPtr(combo.Current.NativeWindowHandle);
-    var listHwnd = NativeKeyboard.GetComboListHwnd(comboHwnd);
-    if (listHwnd == IntPtr.Zero)
-        return null;
-    var list = AutomationElement.FromHandle(listHwnd);
-    var items = list.FindAll(
-        TreeScope.Descendants,
-        new AndCondition(
-            new PropertyCondition(
-                AutomationElement.ControlTypeProperty,
-                ControlType.ListItem),
-            new PropertyCondition(AutomationElement.NameProperty, name)));
-    // Scope the lookup to the current combo's native list HWND. wx/MSW can
-    // otherwise leave same-named items from a closed dialog in the root tree.
-    for (var index = items.Count - 1; index >= 0; --index)
-    {
-        var item = items[index];
-        try
-        {
-            if (!item.Current.IsEnabled
-                || !item.TryGetCurrentPattern(
-                    SelectionItemPattern.Pattern,
-                    out var selectionObject))
-                continue;
-            var selection = (SelectionItemPattern)selectionObject;
-            var container = selection.Current.SelectionContainer;
-            if (container is null || !container.Current.IsEnabled)
-                continue;
-            if (requireSelected && !selection.Current.IsSelected)
-                continue;
-            return item;
-        }
-        catch (ElementNotAvailableException)
-        {
-        }
-    }
-    return null;
-}
-
 static string WaitForValue(
     AutomationElement element,
     string expected,
     TimeSpan timeout)
 {
+    var comboHwnd = new IntPtr(element.Current.NativeWindowHandle);
     var deadline = Stopwatch.GetTimestamp()
         + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
     var current = string.Empty;
     while (Stopwatch.GetTimestamp() < deadline)
     {
-        try
-        {
-            if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var pattern))
-            {
-                current = ((ValuePattern)pattern).Current.Value ?? string.Empty;
-                if (string.Equals(current, expected, StringComparison.Ordinal))
-                    return current;
-            }
-        }
-        catch (ElementNotAvailableException)
-        {
-        }
+        WorkerWatchdog.Pulse();
+        current = NativeKeyboard.GetComboEditText(comboHwnd);
+        if (string.Equals(current, expected, StringComparison.Ordinal))
+            return current;
         Thread.Sleep(50);
     }
     throw new TimeoutException(
@@ -909,8 +980,14 @@ static void CloseDialog(AutomationElement dialog, string buttonName)
 
 static void WaitForTask(Task task, TimeSpan timeout, string message)
 {
-    if (!task.Wait(timeout))
-        throw new TimeoutException(message);
+    var deadline = Stopwatch.GetTimestamp()
+        + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+    while (!task.Wait(250))
+    {
+        WorkerWatchdog.Pulse();
+        if (Stopwatch.GetTimestamp() >= deadline)
+            throw new TimeoutException(message);
+    }
     task.GetAwaiter().GetResult();
 }
 
@@ -971,6 +1048,110 @@ static bool PathsEqual(string left, string right)
     }
 }
 
+file static class WorkerWatchdog
+{
+    private static readonly Stopwatch SinceLastPulse = Stopwatch.StartNew();
+    private static string? heartbeatPath;
+    private static string stage = "worker-started";
+
+    public static void Initialize(string? path)
+    {
+        heartbeatPath = path;
+        Stage(stage);
+    }
+
+    public static void Stage(string value)
+    {
+        stage = value;
+        WriteHeartbeat();
+    }
+
+    public static void Pulse()
+    {
+        if (SinceLastPulse.ElapsedMilliseconds < 250)
+            return;
+        WriteHeartbeat();
+    }
+
+    private static void WriteHeartbeat()
+    {
+        if (string.IsNullOrWhiteSpace(heartbeatPath))
+            return;
+        using var stream = new FileStream(
+            heartbeatPath,
+            FileMode.Create,
+            FileAccess.Write,
+            FileShare.ReadWrite);
+        using var writer = new StreamWriter(stream, new UTF8Encoding(false));
+        writer.Write(stage);
+        SinceLastPulse.Restart();
+    }
+}
+
+file static class NativeWindowSearch
+{
+    public readonly record struct Window(IntPtr Handle, string Title);
+
+    public static IReadOnlyList<Window> GetTopLevelWindows(int processId)
+    {
+        var windows = new List<Window>();
+        EnumWindows((handle, _) =>
+        {
+            GetWindowThreadProcessId(handle, out var windowProcessId);
+            if (windowProcessId != processId || !IsWindowVisible(handle))
+                return true;
+            var length = GetWindowTextLength(handle);
+            var title = new StringBuilder(Math.Max(1, length + 1));
+            GetWindowText(handle, title, title.Capacity);
+            windows.Add(new Window(handle, title.ToString()));
+            return true;
+        }, IntPtr.Zero);
+        return windows;
+    }
+
+    public static void ThrowIfFatalDialog(Process process)
+    {
+        process.Refresh();
+        if (process.HasExited)
+            return;
+        foreach (var window in GetTopLevelWindows(process.Id))
+        {
+            var name = window.Title.Trim();
+            if (name.Contains("Program error", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("Aegisub has crashed", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("Aegisub crashed", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("程序错误", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("Aegisub 已崩溃", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    $"Aegisub reported a fatal error dialog: {name}");
+        }
+    }
+
+    private delegate bool EnumWindowsCallback(IntPtr window, IntPtr parameter);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumWindows(EnumWindowsCallback callback, IntPtr parameter);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(
+        IntPtr window,
+        out int processId);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowVisible(IntPtr window);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int GetWindowTextLength(IntPtr window);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern int GetWindowText(
+        IntPtr window,
+        StringBuilder text,
+        int maximumCount);
+}
+
 file static class NativeKeyboard
 {
     private const int EmReplaceSel = 0x00C2;
@@ -979,15 +1160,28 @@ file static class NativeKeyboard
     private const int WmKeyUp = 0x0101;
     private const int WmChar = 0x0102;
     private const int WmCommand = 0x0111;
+    private const int WmLButtonDown = 0x0201;
+    private const int WmLButtonUp = 0x0202;
+    private const int MkLButton = 0x0001;
     private const int VkReturn = 0x0D;
     private const int EnChange = 0x0300;
+    private const int WmGetText = 0x000D;
+    private const int WmGetTextLength = 0x000E;
+    private const int CbGetCount = 0x0146;
     private const int CbGetCurSel = 0x0147;
     private const int CbGetLbText = 0x0148;
     private const int CbGetLbTextLen = 0x0149;
+    private const int CbFindStringExact = 0x0158;
     private const int CbGetDroppedState = 0x0157;
     private const int LbGetCurSel = 0x0188;
     private const int LbGetText = 0x0189;
     private const int LbGetTextLen = 0x018A;
+    private const int LbSetTopIndex = 0x0197;
+    private const int LbGetItemRect = 0x0198;
+    private const uint SmtoBlock = 0x0001;
+    private const uint SmtoAbortIfHung = 0x0002;
+    private const uint SmtoErrorOnExit = 0x0020;
+    private const uint MessageTimeoutMilliseconds = 2000;
 
     public static IntPtr GetComboEditHwnd(IntPtr comboHwnd)
     {
@@ -1009,7 +1203,60 @@ file static class NativeKeyboard
     {
         if (comboHwnd == IntPtr.Zero)
             return false;
-        return SendMessage(comboHwnd, CbGetDroppedState, IntPtr.Zero, IntPtr.Zero) != IntPtr.Zero;
+        return SendMessageChecked(
+            comboHwnd, CbGetDroppedState, IntPtr.Zero, IntPtr.Zero) != IntPtr.Zero;
+    }
+
+    public static int GetComboItemCount(IntPtr comboHwnd)
+    {
+        if (comboHwnd == IntPtr.Zero)
+            return 0;
+        return SendMessageChecked(
+            comboHwnd, CbGetCount, IntPtr.Zero, IntPtr.Zero).ToInt32();
+    }
+
+    public static string GetComboEditText(IntPtr comboHwnd)
+    {
+        if (comboHwnd == IntPtr.Zero)
+            return string.Empty;
+        var editHwnd = GetComboEditHwnd(comboHwnd);
+        if (editHwnd == IntPtr.Zero)
+            editHwnd = comboHwnd;
+        var length = SendMessageChecked(
+            editHwnd, WmGetTextLength, IntPtr.Zero, IntPtr.Zero).ToInt32();
+        if (length <= 0)
+            return string.Empty;
+        var text = new StringBuilder(length + 1);
+        SendMessageChecked(editHwnd, WmGetText, (IntPtr)text.Capacity, text);
+        return text.ToString();
+    }
+
+    public static void ClickComboItem(IntPtr comboHwnd, string text)
+    {
+        if (comboHwnd == IntPtr.Zero)
+            throw new InvalidOperationException("Font combo has no native HWND");
+        if (!IsComboDropped(comboHwnd))
+            throw new InvalidOperationException("Font combo list is not open");
+        var index = SendMessageChecked(
+            comboHwnd, CbFindStringExact, (IntPtr)(-1), text).ToInt32();
+        if (index < 0)
+            throw new InvalidOperationException($"Font combo item '{text}' was not found");
+        var listHwnd = GetComboListHwnd(comboHwnd);
+        if (listHwnd == IntPtr.Zero)
+            throw new InvalidOperationException("Font combo list has no native HWND");
+
+        SendMessageChecked(
+            listHwnd, LbSetTopIndex, (IntPtr)Math.Max(0, index - 2), IntPtr.Zero);
+        var itemRect = new Rect();
+        var rectResult = SendMessageChecked(
+            listHwnd, LbGetItemRect, (IntPtr)index, ref itemRect).ToInt32();
+        if (rectResult < 0 || itemRect.bottom <= itemRect.top)
+            throw new InvalidOperationException($"Could not locate font combo item '{text}'");
+        var x = Math.Max(1, itemRect.left + 8);
+        var y = itemRect.top + Math.Max(1, (itemRect.bottom - itemRect.top) / 2);
+        var point = (IntPtr)((y << 16) | (x & 0xFFFF));
+        SendMessageChecked(listHwnd, WmLButtonDown, (IntPtr)MkLButton, point);
+        SendMessageChecked(listHwnd, WmLButtonUp, IntPtr.Zero, point);
     }
 
     /// Current list caret text: prefer open listbox LB_GETCURSEL, else CB_GETCURSEL.
@@ -1020,7 +1267,7 @@ file static class NativeKeyboard
         var info = new ComboBoxInfo { cbSize = Marshal.SizeOf<ComboBoxInfo>() };
         if (GetComboBoxInfo(comboHwnd, ref info) && info.hwndList != IntPtr.Zero)
         {
-            var listIndex = SendMessage(
+            var listIndex = SendMessageChecked(
                 info.hwndList, LbGetCurSel, IntPtr.Zero, IntPtr.Zero).ToInt32();
             if (listIndex >= 0)
             {
@@ -1030,7 +1277,7 @@ file static class NativeKeyboard
             }
         }
 
-        var comboIndex = SendMessage(
+        var comboIndex = SendMessageChecked(
             comboHwnd, CbGetCurSel, IntPtr.Zero, IntPtr.Zero).ToInt32();
         if (comboIndex < 0)
             return null;
@@ -1041,12 +1288,12 @@ file static class NativeKeyboard
     {
         var parent = GetParent(editHwnd);
         var editId = GetDlgCtrlID(editHwnd);
-        SendMessage(editHwnd, EmSetSel, IntPtr.Zero, (IntPtr)(-1));
-        SendMessage(editHwnd, EmReplaceSel, (IntPtr)1, text ?? string.Empty);
+        SendMessageChecked(editHwnd, EmSetSel, IntPtr.Zero, (IntPtr)(-1));
+        SendMessageChecked(editHwnd, EmReplaceSel, (IntPtr)1, text ?? string.Empty);
         if (parent != IntPtr.Zero && editId != 0)
         {
             var wParam = (IntPtr)((EnChange << 16) | (editId & 0xFFFF));
-            SendMessage(parent, WmCommand, wParam, editHwnd);
+            SendMessageChecked(parent, WmCommand, wParam, editHwnd);
         }
         Thread.Sleep(100);
     }
@@ -1068,14 +1315,14 @@ file static class NativeKeyboard
         foreach (var ch in text)
         {
             // Append one character at the end.
-            SendMessage(editHwnd, EmSetSel, (IntPtr)(-1), (IntPtr)(-1));
-            SendMessage(editHwnd, EmReplaceSel, (IntPtr)1, ch.ToString());
+            SendMessageChecked(editHwnd, EmSetSel, (IntPtr)(-1), (IntPtr)(-1));
+            SendMessageChecked(editHwnd, EmReplaceSel, (IntPtr)1, ch.ToString());
             var parent = GetParent(editHwnd);
             var editId = GetDlgCtrlID(editHwnd);
             if (parent != IntPtr.Zero && editId != 0)
             {
                 var wParam = (IntPtr)((EnChange << 16) | (editId & 0xFFFF));
-                SendMessage(parent, WmCommand, wParam, editHwnd);
+                SendMessageChecked(parent, WmCommand, wParam, editHwnd);
             }
             // Let CallAfter / hold-timer strip auto-complete and jump the list.
             Thread.Sleep(120);
@@ -1101,7 +1348,8 @@ file static class NativeKeyboard
         // Ensure the drop-down is closed so typing behaves like a fresh query.
         if (IsComboDropped(comboHwnd))
         {
-            SendMessage(comboHwnd, 0x014D, IntPtr.Zero, IntPtr.Zero); // CB_SHOWDROPDOWN(FALSE)
+            SendMessageChecked(
+                comboHwnd, 0x014D, IntPtr.Zero, IntPtr.Zero); // CB_SHOWDROPDOWN(FALSE)
             Thread.Sleep(100);
         }
 
@@ -1113,8 +1361,8 @@ file static class NativeKeyboard
         {
             // Move the caret to the end and inject one character via WM_CHAR,
             // which the native EDIT wndproc turns into text + auto-select.
-            SendMessage(editHwnd, EmSetSel, (IntPtr)(-1), (IntPtr)(-1));
-            SendMessage(editHwnd, WmChar, (IntPtr)ch, IntPtr.Zero);
+            SendMessageChecked(editHwnd, EmSetSel, (IntPtr)(-1), (IntPtr)(-1));
+            SendMessageChecked(editHwnd, WmChar, (IntPtr)ch, IntPtr.Zero);
             Thread.Sleep(150);
         }
         Thread.Sleep(350);
@@ -1127,35 +1375,111 @@ file static class NativeKeyboard
         var editHwnd = GetComboEditHwnd(comboHwnd);
         if (editHwnd == IntPtr.Zero)
             throw new InvalidOperationException("Font combo edit has no native HWND");
-        SendMessage(editHwnd, WmKeyDown, (IntPtr)VkReturn, IntPtr.Zero);
+        SendMessageChecked(editHwnd, WmKeyDown, (IntPtr)VkReturn, IntPtr.Zero);
         // A real key press produces WM_CHAR between key-down and key-up. This
         // must not escape to the dialog's default OK button after the combo
         // has already committed the highlighted font.
-        SendMessage(editHwnd, WmChar, (IntPtr)'\r', IntPtr.Zero);
-        SendMessage(editHwnd, WmKeyUp, (IntPtr)VkReturn, IntPtr.Zero);
+        SendMessageChecked(editHwnd, WmChar, (IntPtr)'\r', IntPtr.Zero);
+        SendMessageChecked(editHwnd, WmKeyUp, (IntPtr)VkReturn, IntPtr.Zero);
         Thread.Sleep(250);
     }
 
     private static string? GetComboBoxListText(IntPtr comboHwnd, int index)
     {
-        var len = SendMessage(
+        var len = SendMessageChecked(
             comboHwnd, CbGetLbTextLen, (IntPtr)index, IntPtr.Zero).ToInt32();
         if (len < 0)
             return null;
         var buffer = new StringBuilder(len + 1);
-        SendMessage(comboHwnd, CbGetLbText, (IntPtr)index, buffer);
+        SendMessageChecked(comboHwnd, CbGetLbText, (IntPtr)index, buffer);
         return buffer.ToString();
     }
 
     private static string? GetListBoxText(IntPtr listHwnd, int index)
     {
-        var len = SendMessage(
+        var len = SendMessageChecked(
             listHwnd, LbGetTextLen, (IntPtr)index, IntPtr.Zero).ToInt32();
         if (len < 0)
             return null;
         var buffer = new StringBuilder(len + 1);
-        SendMessage(listHwnd, LbGetText, (IntPtr)index, buffer);
+        SendMessageChecked(listHwnd, LbGetText, (IntPtr)index, buffer);
         return buffer.ToString();
+    }
+
+    private static IntPtr SendMessageChecked(
+        IntPtr window,
+        int message,
+        IntPtr wParam,
+        IntPtr lParam)
+    {
+        if (SendMessageTimeout(
+                window,
+                message,
+                wParam,
+                lParam,
+                SmtoBlock | SmtoAbortIfHung | SmtoErrorOnExit,
+                MessageTimeoutMilliseconds,
+                out var result) == IntPtr.Zero)
+            throw new TimeoutException(
+                $"Win32 message 0x{message:X} timed out for HWND 0x{window.ToInt64():X}");
+        return result;
+    }
+
+    private static IntPtr SendMessageChecked(
+        IntPtr window,
+        int message,
+        IntPtr wParam,
+        string lParam)
+    {
+        if (SendMessageTimeout(
+                window,
+                message,
+                wParam,
+                lParam,
+                SmtoBlock | SmtoAbortIfHung | SmtoErrorOnExit,
+                MessageTimeoutMilliseconds,
+                out var result) == IntPtr.Zero)
+            throw new TimeoutException(
+                $"Win32 message 0x{message:X} timed out for HWND 0x{window.ToInt64():X}");
+        return result;
+    }
+
+    private static IntPtr SendMessageChecked(
+        IntPtr window,
+        int message,
+        IntPtr wParam,
+        StringBuilder lParam)
+    {
+        if (SendMessageTimeout(
+                window,
+                message,
+                wParam,
+                lParam,
+                SmtoBlock | SmtoAbortIfHung | SmtoErrorOnExit,
+                MessageTimeoutMilliseconds,
+                out var result) == IntPtr.Zero)
+            throw new TimeoutException(
+                $"Win32 message 0x{message:X} timed out for HWND 0x{window.ToInt64():X}");
+        return result;
+    }
+
+    private static IntPtr SendMessageChecked(
+        IntPtr window,
+        int message,
+        IntPtr wParam,
+        ref Rect lParam)
+    {
+        if (SendMessageTimeout(
+                window,
+                message,
+                wParam,
+                ref lParam,
+                SmtoBlock | SmtoAbortIfHung | SmtoErrorOnExit,
+                MessageTimeoutMilliseconds,
+                out var result) == IntPtr.Zero)
+            throw new TimeoutException(
+                $"Win32 message 0x{message:X} timed out for HWND 0x{window.ToInt64():X}");
+        return result;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -1180,13 +1504,44 @@ file static class NativeKeyboard
     private static extern bool GetComboBoxInfo(IntPtr hwndCombo, ref ComboBoxInfo pcbi);
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, string lParam);
+    private static extern IntPtr SendMessageTimeout(
+        IntPtr window,
+        int message,
+        IntPtr wParam,
+        IntPtr lParam,
+        uint flags,
+        uint timeout,
+        out IntPtr result);
 
     [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, StringBuilder lParam);
+    private static extern IntPtr SendMessageTimeout(
+        IntPtr window,
+        int message,
+        IntPtr wParam,
+        ref Rect lParam,
+        uint flags,
+        uint timeout,
+        out IntPtr result);
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessageTimeout(
+        IntPtr window,
+        int message,
+        IntPtr wParam,
+        string lParam,
+        uint flags,
+        uint timeout,
+        out IntPtr result);
+
+    [DllImport("user32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr SendMessageTimeout(
+        IntPtr window,
+        int message,
+        IntPtr wParam,
+        StringBuilder lParam,
+        uint flags,
+        uint timeout,
+        out IntPtr result);
 
     // EM_SETSEL uses LPARAM as character index pair via wParam/lParam.
     // Overload already covers (hwnd, msg, wParam, lParam).

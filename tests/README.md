@@ -27,3 +27,7 @@ dotnet run --file tests/gui-automation/gui-automation-uia-correctness.cs `
   --open tests/plugin-bridge-smoke/trim-selected-input.ass `
   --artifacts build-dir/gui-automation-uia-correctness/RelWithDebInfo
 ```
+
+The entry point runs UIA in a supervised worker process. `--timeout-seconds`
+also bounds worker stalls (clamped to 10-30 seconds); a stalled worker and the
+Aegisub process it started are terminated together.

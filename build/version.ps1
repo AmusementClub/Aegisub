@@ -27,12 +27,20 @@ function Get-GitText([string[]]$Arguments) {
 
 # Resolve the build moment as UTC epoch seconds, honoring SOURCE_DATE_EPOCH for
 # reproducible builds (https://reproducible-builds.org/docs/source-date-epoch/).
+# Computed from a literal 1970-01-01T00:00:00Z instead of [DateTimeOffset]::UnixEpoch:
+# that static is absent from some PowerShell/.NET combinations, so using it would
+# break the version step on those hosts while producing the same value here.
+function Get-UnixEpoch {
+    [DateTimeOffset]::new([DateTime]::new(1970, 1, 1, 0, 0, 0, [DateTimeKind]::Utc),
+                          [TimeSpan]::Zero)
+}
+
 function Get-BuildEpochSeconds {
     if ($env:SOURCE_DATE_EPOCH -match '^\d+$') {
         return [int64]$env:SOURCE_DATE_EPOCH
     }
     $now = [DateTimeOffset]::new([DateTime]::UtcNow, [TimeSpan]::Zero)
-    return [int64][double]::floor(($now - [DateTimeOffset]::UnixEpoch).TotalSeconds)
+    return [int64][Math]::Floor(($now - (Get-UnixEpoch)).TotalSeconds)
 }
 
 # Parse BUILD_TIME_OFFSET (e.g. "8", "+8", "-5", "5:30", "+05:30") into signed
@@ -53,7 +61,7 @@ function Get-OffsetMinutes {
 
 function Format-EpochLocal {
     param([int64]$EpochSeconds, [int]$OffsetMinutes)
-    $moment = [DateTimeOffset]::UnixEpoch.AddSeconds($EpochSeconds + $OffsetMinutes * 60)
+    $moment = (Get-UnixEpoch).AddSeconds($EpochSeconds + $OffsetMinutes * 60)
     $base = $moment.ToString("yyyyMMdd'T'HHmmss")
     if ($OffsetMinutes -eq 0) { return "${base}Z" }
     $sign = if ($OffsetMinutes -lt 0) { '-' } else { '+' }

@@ -127,6 +127,14 @@ function New-FailureRow {
         trace_window_mode = $TraceWindow
         status = "failed"
         error = $ErrorMessage
+        build_label = $null
+        git_revision = $script:GitRevision
+        git_dirty = $script:GitDirty
+        renderer = $null
+        subtitle_provider = $null
+        video_width = $null
+        video_height = $null
+        subtitle_use_stc = $null
         event_count = $null
         motion_count = $null
         drain_ms = $null
@@ -146,6 +154,9 @@ function New-FailureRow {
         commit_p50_ms = $null
         commit_p95_ms = $null
         commit_max_ms = $null
+        marked_line_count = $null
+        actual_text_change_count = $null
+        unchanged_text_count = $null
         subtitle_update_p95_ms = $null
         display_render_count = $null
         presented_render_count = $null
@@ -157,6 +168,26 @@ function New-FailureRow {
         process_immediate_flushes = $null
         process_buffered_flushes = $null
         window_slow_scope_count = $null
+        scene_cache_fill_count = $null
+        scene_cache_fill_total_ms = $null
+        scene_cache_reuse_count = $null
+        scene_cache_reuse_total_ms = $null
+        scene_cache_direct_count = $null
+        scene_cache_direct_total_ms = $null
+        scene_cache_direct_waiting_count = $null
+        scene_cache_direct_warmup_count = $null
+        scene_cache_direct_playback_count = $null
+        scene_cache_direct_policy_count = $null
+        scene_cache_direct_fallback_count = $null
+        overlay_full_upload_count = $null
+        overlay_full_upload_total_ms = $null
+        overlay_dirty_upload_count = $null
+        overlay_dirty_upload_total_ms = $null
+        overlay_reuse_count = $null
+        overlay_reuse_total_ms = $null
+        overlay_hide_count = $null
+        overlay_hide_total_ms = $null
+        overlay_estimated_upload_bytes = $null
     }
 }
 
@@ -283,6 +314,38 @@ function Invoke-DriverRun {
             [int]$result.trace_metrics.RepaintRenderCount -ne $displayRenderCount) {
             throw "Trace-on result reported inconsistent display render counts."
         }
+        $environment = $result.environment
+        if ([string]::IsNullOrWhiteSpace([string]$environment.BuildLabel) -or
+            $environment.BuildLabel -eq "unknown" -or
+            -not [string]::Equals([string]$environment.Renderer, "OpenGL", [System.StringComparison]::OrdinalIgnoreCase) -or
+            -not [string]::Equals([string]$environment.SubtitleProvider, "libass", [System.StringComparison]::OrdinalIgnoreCase) -or
+            [int]$environment.VideoWidth -ne 640 -or
+            [int]$environment.VideoHeight -ne 480 -or
+            $environment.SubtitleUseStc -ne $true) {
+            throw "Trace-on result reported incomplete or unexpected benchmark environment metadata."
+        }
+        $overrideCount = [int]$result.trace_metrics.ActualTextChangeCount +
+            [int]$result.trace_metrics.UnchangedTextCount
+        if ($overrideCount -lt 1 -or
+            $overrideCount -ne [int]$result.trace_metrics.MarkedLineCount) {
+            throw "Trace-on result reported inconsistent visual-tool override counts."
+        }
+        $sceneCacheOutcomeCount = [int]$result.trace_metrics.SceneCacheFill.Count +
+            [int]$result.trace_metrics.SceneCacheReuse.Count +
+            [int]$result.trace_metrics.SceneCacheDirect.Count
+        if ($sceneCacheOutcomeCount -ne $displayRenderCount) {
+            throw "Trace-on result reported incomplete scene-cache render outcomes."
+        }
+        $overlayActionCount = [int]$result.trace_metrics.OverlayFullUpload.Count +
+            [int]$result.trace_metrics.OverlayDirtyUpload.Count +
+            [int]$result.trace_metrics.OverlayReuse.Count +
+            [int]$result.trace_metrics.OverlayHide.Count
+        if (($InputMode -eq "paced-hold" -and $overlayActionCount -lt 1) -or
+            (([int]$result.trace_metrics.OverlayFullUpload.Count +
+                [int]$result.trace_metrics.OverlayDirtyUpload.Count) -gt 0 -and
+                [long]$result.trace_metrics.OverlayEstimatedUploadBytes -lt 1)) {
+            throw "Trace-on result reported incomplete overlay upload metrics."
+        }
         $expectedWindowSource = if ($TraceWindow -eq "markers") {
             "interaction-markers"
         }
@@ -319,6 +382,20 @@ foreach ($requiredFile in @($resolvedExecutable, $resolvedVideo, $resolvedDriver
 $dotnetCommand = Get-Command dotnet -ErrorAction SilentlyContinue
 if (-not $dotnetCommand) {
     throw "dotnet was not found. The UIA benchmark requires the local .NET SDK."
+}
+
+$script:GitRevision = "unknown"
+$script:GitDirty = $null
+$gitCommand = Get-Command git -ErrorAction SilentlyContinue
+if ($gitCommand) {
+    $revisionOutput = & $gitCommand.Source rev-parse HEAD 2>$null
+    if ($LASTEXITCODE -eq 0 -and $revisionOutput) {
+        $script:GitRevision = ($revisionOutput | Select-Object -First 1).Trim()
+        $statusOutput = & $gitCommand.Source status --porcelain 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $script:GitDirty = @($statusOutput).Count -gt 0
+        }
+    }
 }
 
 if ([string]::IsNullOrWhiteSpace($ArtifactsRoot)) {
@@ -396,6 +473,19 @@ for ($runIndex = 1; $runIndex -le $Repetitions; ++$runIndex) {
                 $commit = Get-OptionalProperty $traceMetrics "Commit"
                 $subtitleUpdate = Get-OptionalProperty $traceMetrics "SubtitleUpdate"
                 $displayRender = Get-OptionalProperty $traceMetrics "DisplayRender"
+                $environment = Get-OptionalProperty $result "environment"
+                $sceneCacheFill = Get-OptionalProperty $traceMetrics "SceneCacheFill"
+                $sceneCacheReuse = Get-OptionalProperty $traceMetrics "SceneCacheReuse"
+                $sceneCacheDirect = Get-OptionalProperty $traceMetrics "SceneCacheDirect"
+                $sceneCacheDirectWaiting = Get-OptionalProperty $traceMetrics "SceneCacheDirectWaiting"
+                $sceneCacheDirectWarmup = Get-OptionalProperty $traceMetrics "SceneCacheDirectWarmup"
+                $sceneCacheDirectPlayback = Get-OptionalProperty $traceMetrics "SceneCacheDirectPlayback"
+                $sceneCacheDirectPolicy = Get-OptionalProperty $traceMetrics "SceneCacheDirectPolicy"
+                $sceneCacheDirectFallback = Get-OptionalProperty $traceMetrics "SceneCacheDirectFallback"
+                $overlayFullUpload = Get-OptionalProperty $traceMetrics "OverlayFullUpload"
+                $overlayDirtyUpload = Get-OptionalProperty $traceMetrics "OverlayDirtyUpload"
+                $overlayReuse = Get-OptionalProperty $traceMetrics "OverlayReuse"
+                $overlayHide = Get-OptionalProperty $traceMetrics "OverlayHide"
                 $rows.Add([pscustomobject]@{
                     label = $Label
                     run_index = $runIndex
@@ -407,6 +497,14 @@ for ($runIndex = 1; $runIndex -le $Repetitions; ++$runIndex) {
                     trace_window_mode = $result.trace_window_mode
                     status = "passed"
                     error = ""
+                    build_label = Get-OptionalProperty $environment "BuildLabel"
+                    git_revision = $script:GitRevision
+                    git_dirty = $script:GitDirty
+                    renderer = Get-OptionalProperty $environment "Renderer"
+                    subtitle_provider = Get-OptionalProperty $environment "SubtitleProvider"
+                    video_width = Get-OptionalProperty $environment "VideoWidth"
+                    video_height = Get-OptionalProperty $environment "VideoHeight"
+                    subtitle_use_stc = Get-OptionalProperty $environment "SubtitleUseStc"
                     event_count = $result.event_count
                     motion_count = $result.motion_count
                     drain_ms = [double]$result.input.drain_ms
@@ -426,6 +524,9 @@ for ($runIndex = 1; $runIndex -le $Repetitions; ++$runIndex) {
                     commit_p50_ms = Get-OptionalProperty $commit "P50Milliseconds"
                     commit_p95_ms = Get-OptionalProperty $commit "P95Milliseconds"
                     commit_max_ms = Get-OptionalProperty $commit "MaxMilliseconds"
+                    marked_line_count = Get-OptionalProperty $traceMetrics "MarkedLineCount"
+                    actual_text_change_count = Get-OptionalProperty $traceMetrics "ActualTextChangeCount"
+                    unchanged_text_count = Get-OptionalProperty $traceMetrics "UnchangedTextCount"
                     subtitle_update_p95_ms = Get-OptionalProperty $subtitleUpdate "P95Milliseconds"
                     display_render_count = Get-OptionalProperty $displayRender "Count"
                     presented_render_count = Get-OptionalProperty $traceMetrics "PresentedRenderCount"
@@ -437,6 +538,26 @@ for ($runIndex = 1; $runIndex -le $Repetitions; ++$runIndex) {
                     process_immediate_flushes = Get-OptionalProperty $traceMetrics "ProcessImmediateFlushes"
                     process_buffered_flushes = Get-OptionalProperty $traceMetrics "ProcessBufferedFlushes"
                     window_slow_scope_count = Get-OptionalProperty $traceMetrics "WindowSlowScopeCount"
+                    scene_cache_fill_count = Get-OptionalProperty $sceneCacheFill "Count"
+                    scene_cache_fill_total_ms = Get-OptionalProperty $sceneCacheFill "TotalMilliseconds"
+                    scene_cache_reuse_count = Get-OptionalProperty $sceneCacheReuse "Count"
+                    scene_cache_reuse_total_ms = Get-OptionalProperty $sceneCacheReuse "TotalMilliseconds"
+                    scene_cache_direct_count = Get-OptionalProperty $sceneCacheDirect "Count"
+                    scene_cache_direct_total_ms = Get-OptionalProperty $sceneCacheDirect "TotalMilliseconds"
+                    scene_cache_direct_waiting_count = Get-OptionalProperty $sceneCacheDirectWaiting "Count"
+                    scene_cache_direct_warmup_count = Get-OptionalProperty $sceneCacheDirectWarmup "Count"
+                    scene_cache_direct_playback_count = Get-OptionalProperty $sceneCacheDirectPlayback "Count"
+                    scene_cache_direct_policy_count = Get-OptionalProperty $sceneCacheDirectPolicy "Count"
+                    scene_cache_direct_fallback_count = Get-OptionalProperty $sceneCacheDirectFallback "Count"
+                    overlay_full_upload_count = Get-OptionalProperty $overlayFullUpload "Count"
+                    overlay_full_upload_total_ms = Get-OptionalProperty $overlayFullUpload "TotalMilliseconds"
+                    overlay_dirty_upload_count = Get-OptionalProperty $overlayDirtyUpload "Count"
+                    overlay_dirty_upload_total_ms = Get-OptionalProperty $overlayDirtyUpload "TotalMilliseconds"
+                    overlay_reuse_count = Get-OptionalProperty $overlayReuse "Count"
+                    overlay_reuse_total_ms = Get-OptionalProperty $overlayReuse "TotalMilliseconds"
+                    overlay_hide_count = Get-OptionalProperty $overlayHide "Count"
+                    overlay_hide_total_ms = Get-OptionalProperty $overlayHide "TotalMilliseconds"
+                    overlay_estimated_upload_bytes = Get-OptionalProperty $traceMetrics "OverlayEstimatedUploadBytes"
                 })
             }
             catch {
@@ -455,9 +576,11 @@ for ($runIndex = 1; $runIndex -le $Repetitions; ++$runIndex) {
 $matrixTimer.Stop()
 
 $summary = [ordered]@{
-    version = 3
+    version = 4
     label = $Label
     run_mode = $RunMode
+    git_revision = $script:GitRevision
+    git_dirty = $script:GitDirty
     executable = Get-DisplayPath $resolvedExecutable
     executable_sha256 = (Get-FileHash -LiteralPath $resolvedExecutable -Algorithm SHA256).Hash
     video = Get-DisplayPath $resolvedVideo

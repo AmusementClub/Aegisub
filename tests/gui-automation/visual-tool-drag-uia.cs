@@ -215,7 +215,7 @@ static int Run(DriverOptions options)
 
         var result = new
         {
-            version = 1,
+            version = 2,
             scenario = options.InputMode == "throughput"
                 ? $"{options.Size}-{options.Selection}"
                 : $"{options.Size}-{options.Selection}-{options.InputMode}",
@@ -230,6 +230,13 @@ static int Run(DriverOptions options)
             canvas = new { width = videoClient.Width, height = videoClient.Height },
             client_delta = new { x = actualDeltaX, y = actualDeltaY },
             expected_script_delta = new { x = expectedDelta.X, y = expectedDelta.Y },
+            environment = trace?.Environment ?? new TraceEnvironment(
+                "unknown",
+                "opengl",
+                "libass",
+                640,
+                480,
+                true),
             input = new
             {
                 post_ms = ElapsedMilliseconds(started, posted),
@@ -319,7 +326,11 @@ static void WriteProfileConfig(string profilePath)
                 ["Load Linked Files"] = 0,
             },
         },
-        ["Subtitle"] = new Dictionary<string, object> { ["Provider"] = "libass" },
+        ["Subtitle"] = new Dictionary<string, object>
+        {
+            ["Provider"] = "libass",
+            ["Use STC"] = true,
+        },
         ["Tool"] = new Dictionary<string, object>
         {
             ["Visual"] = new Dictionary<string, object> { ["Autohide"] = false },
@@ -401,9 +412,16 @@ static void SelectDragTool(AutomationElement mainWindow)
             if (element.TryGetCurrentPattern(TogglePattern.Pattern, out var togglePattern))
             {
                 var toggle = (TogglePattern)togglePattern;
-                if (toggle.Current.ToggleState != ToggleState.On)
-                    toggle.Toggle();
-                if (toggle.Current.ToggleState != ToggleState.On)
+                var state = toggle.Current.ToggleState;
+                if (state != ToggleState.On)
+                {
+                    UiaDriver.Toggle(element);
+                    state = UiaDriver.WaitForToggleStateChange(
+                        element,
+                        state,
+                        TimeSpan.FromSeconds(5));
+                }
+                if (state != ToggleState.On)
                     throw new InvalidOperationException("Drag subtitles toolbar item did not toggle on");
                 return;
             }
@@ -982,7 +1000,20 @@ sealed record AssSnapshot(IReadOnlyList<AssDialogueSnapshot> Dialogues)
     }
 }
 
-sealed record TraceScope(int Count, double P50Milliseconds, double P95Milliseconds, double MaxMilliseconds);
+sealed record TraceScope(
+    int Count,
+    double TotalMilliseconds,
+    double P50Milliseconds,
+    double P95Milliseconds,
+    double MaxMilliseconds);
+
+sealed record TraceEnvironment(
+    string BuildLabel,
+    string Renderer,
+    string SubtitleProvider,
+    int VideoWidth,
+    int VideoHeight,
+    bool SubtitleUseStc);
 
 sealed record TraceMetrics(
     string WindowSource,
@@ -990,6 +1021,9 @@ sealed record TraceMetrics(
     TraceScope Commit,
     int CoalescedCommitCount,
     double CommitRatio,
+    int MarkedLineCount,
+    int ActualTextChangeCount,
+    int UnchangedTextCount,
     TraceScope SubtitleUpdate,
     TraceScope DisplayRender,
     int PresentedRenderCount,
@@ -999,7 +1033,21 @@ sealed record TraceMetrics(
     int DroppedPackets,
     int ProcessImmediateFlushes,
     int ProcessBufferedFlushes,
-    int WindowSlowScopeCount)
+    int WindowSlowScopeCount,
+    TraceScope SceneCacheFill,
+    TraceScope SceneCacheReuse,
+    TraceScope SceneCacheDirect,
+    TraceScope SceneCacheDirectWaiting,
+    TraceScope SceneCacheDirectWarmup,
+    TraceScope SceneCacheDirectPlayback,
+    TraceScope SceneCacheDirectPolicy,
+    TraceScope SceneCacheDirectFallback,
+    TraceScope OverlayFullUpload,
+    TraceScope OverlayDirtyUpload,
+    TraceScope OverlayReuse,
+    TraceScope OverlayHide,
+    long OverlayEstimatedUploadBytes,
+    TraceEnvironment Environment)
 {
     public static TraceMetrics Read(
         string profilePath,
@@ -1087,6 +1135,17 @@ sealed record TraceMetrics(
 
         var commitScope = Scope(window, "visual_tool.commit");
         var displayRenderScope = Scope(window, "video_display.render");
+        var memorySnapshot = entries.LastOrDefault(entry =>
+            entry.Name == "video_memory_snapshot"
+                && entry.Reason == "frame_presented");
+        var videoOpen = entries.LastOrDefault(entry => entry.Name == "video_open");
+        var environment = new TraceEnvironment(
+            summary.TryGetValue("build", out var buildLabel) ? buildLabel : "unknown",
+            memorySnapshot?.RendererPrimary ?? "unknown",
+            memorySnapshot?.SubtitlesProvider ?? "unknown",
+            videoOpen?.Width ?? 0,
+            videoOpen?.Height ?? 0,
+            true);
         var presentedRenderCount = window.Count(entry =>
             entry.Name == "video_ui_duration"
                 && entry.Phase == "video_display.render"
@@ -1103,6 +1162,13 @@ sealed record TraceMetrics(
             commitScope,
             expectedMotionCount - commitScope.Count,
             commitScope.Count / (double)expectedMotionCount,
+            commits.Sum(entry => entry.DetailB ?? 0),
+            window.Count(entry => entry.Name == "video_ui_duration"
+                && entry.Phase == "visual_tool.override"
+                && entry.DetailA == 1),
+            window.Count(entry => entry.Name == "video_ui_duration"
+                && entry.Phase == "visual_tool.override"
+                && entry.DetailA == 0),
             Scope(window, "video_controller.subtitle_update"),
             displayRenderScope,
             presentedRenderCount,
@@ -1112,7 +1178,24 @@ sealed record TraceMetrics(
             window.Count(entry => entry.Name == "video_frame_dropped"),
             SummaryInt(summary, "trace.flushes.immediate"),
             SummaryInt(summary, "trace.flushes.buffered"),
-            slowScopes);
+            slowScopes,
+            Scope(window, "video_display.scene_cache.fill"),
+            Scope(window, "video_display.scene_cache.reuse"),
+            ScopePrefix(window, "video_display.scene_cache.direct."),
+            Scope(window, "video_display.scene_cache.direct.waiting"),
+            Scope(window, "video_display.scene_cache.direct.warmup"),
+            Scope(window, "video_display.scene_cache.direct.playback"),
+            Scope(window, "video_display.scene_cache.direct.policy"),
+            Scope(window, "video_display.scene_cache.direct.fallback"),
+            Scope(window, "video_overlay.upload.full"),
+            Scope(window, "video_overlay.upload.dirty"),
+            Scope(window, "video_overlay.upload.reuse"),
+            Scope(window, "video_overlay.upload.hide"),
+            window.Where(entry => entry.Name == "video_ui_duration"
+                    && (entry.Phase == "video_overlay.upload.full"
+                        || entry.Phase == "video_overlay.upload.dirty"))
+                .Sum(entry => (long)(entry.DetailA ?? 0)),
+            environment);
     }
 
     private static TraceScope Scope(IEnumerable<TraceEntry> entries, string phase)
@@ -1123,9 +1206,29 @@ sealed record TraceMetrics(
             .OrderBy(value => value)
             .ToArray();
         if (values.Length == 0)
-            return new TraceScope(0, 0.0, 0.0, 0.0);
+            return new TraceScope(0, 0.0, 0.0, 0.0, 0.0);
         return new TraceScope(
             values.Length,
+            values.Sum(),
+            Percentile(values, 0.50),
+            Percentile(values, 0.95),
+            values[^1]);
+    }
+
+    private static TraceScope ScopePrefix(IEnumerable<TraceEntry> entries, string phasePrefix)
+    {
+        var values = entries
+            .Where(entry => entry.Name == "video_ui_duration"
+                && entry.Phase is not null
+                && entry.Phase.StartsWith(phasePrefix, StringComparison.Ordinal))
+            .Select(entry => entry.DurationMilliseconds)
+            .OrderBy(value => value)
+            .ToArray();
+        if (values.Length == 0)
+            return new TraceScope(0, 0.0, 0.0, 0.0, 0.0);
+        return new TraceScope(
+            values.Length,
+            values.Sum(),
             Percentile(values, 0.50),
             Percentile(values, 0.95),
             values[^1]);
@@ -1149,7 +1252,13 @@ sealed record TraceEntry(
     string Name,
     string? Phase,
     double DurationMilliseconds,
-    int? DetailA)
+    int? DetailA,
+    int? DetailB,
+    string? Reason,
+    string? RendererPrimary,
+    string? SubtitlesProvider,
+    int? Width,
+    int? Height)
 {
     public static TraceEntry Parse(string line)
     {
@@ -1161,7 +1270,13 @@ sealed record TraceEntry(
             root.GetProperty("name").GetString() ?? string.Empty,
             payload.TryGetProperty("phase", out var phase) ? phase.GetString() : null,
             payload.TryGetProperty("duration_ms", out var duration) ? duration.GetDouble() : 0.0,
-            payload.TryGetProperty("detail_a", out var detailA) ? detailA.GetInt32() : null);
+            payload.TryGetProperty("detail_a", out var detailA) ? detailA.GetInt32() : null,
+            payload.TryGetProperty("detail_b", out var detailB) ? detailB.GetInt32() : null,
+            payload.TryGetProperty("reason", out var reason) ? reason.GetString() : null,
+            payload.TryGetProperty("renderer_primary", out var renderer) ? renderer.GetString() : null,
+            payload.TryGetProperty("subtitles_provider", out var provider) ? provider.GetString() : null,
+            payload.TryGetProperty("width", out var width) ? width.GetInt32() : null,
+            payload.TryGetProperty("height", out var height) ? height.GetInt32() : null);
     }
 }
 

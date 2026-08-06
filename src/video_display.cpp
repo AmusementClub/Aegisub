@@ -1960,15 +1960,29 @@ void VideoDisplay::DoRender() try {
 	bool const skip_scene_cache_for_renderer_warmup = first_presented_frame || renderer_was_just_created;
 
 	bool rendered_from_scene_cache = false;
-	if (!skip_scene_cache_for_renderer_warmup
-		&& !scene_cache_waiting_for_subtitle_packet
-		&& IsSceneCacheUsableForCurrentPlayback()
-		&& ShouldAttemptSceneCache(canvas_width, canvas_height)) {
+	char const* direct_render_phase = nullptr;
+	bool attempt_scene_cache = false;
+	if (skip_scene_cache_for_renderer_warmup)
+		direct_render_phase = "video_display.scene_cache.direct.warmup";
+	else if (scene_cache_waiting_for_subtitle_packet)
+		direct_render_phase = "video_display.scene_cache.direct.waiting";
+	else if (!IsSceneCacheUsableForCurrentPlayback())
+		direct_render_phase = "video_display.scene_cache.direct.playback";
+	else if (!ShouldAttemptSceneCache(canvas_width, canvas_height))
+		direct_render_phase = "video_display.scene_cache.direct.policy";
+	else
+		attempt_scene_cache = true;
+
+	if (attempt_scene_cache) {
 		try {
 			if (scene_cache_dirty
 				|| !scene_cache_valid
 				|| scene_cache_width != canvas_width
 				|| scene_cache_height != canvas_height) {
+				perf_trace::VideoUiDurationScope fill_trace(
+					"video_display.scene_cache.fill",
+					canvas_width,
+					canvas_height);
 				if (!RenderSceneToCache(client_size, canvas_width, canvas_height)) {
 					LOG_W("video/display/scene_cache")
 						<< "Video scene cache could not be created for canvas "
@@ -1976,8 +1990,16 @@ void VideoDisplay::DoRender() try {
 						<< "; falling back to direct backend rendering until the display size changes or the renderer resets.";
 					BlockSceneCacheUntilRetry(canvas_width, canvas_height);
 				}
+				if (!scene_cache_retry_blocked) {
+					DrawSceneCache(client_size, canvas_width, canvas_height);
+					rendered_from_scene_cache = true;
+				}
 			}
-			if (!scene_cache_retry_blocked) {
+			else {
+				perf_trace::VideoUiDurationScope reuse_trace(
+					"video_display.scene_cache.reuse",
+					canvas_width,
+					canvas_height);
 				DrawSceneCache(client_size, canvas_width, canvas_height);
 				rendered_from_scene_cache = true;
 			}
@@ -1990,8 +2012,14 @@ void VideoDisplay::DoRender() try {
 				<< err.GetMessage();
 			BlockSceneCacheUntilRetry(canvas_width, canvas_height);
 		}
+		if (!rendered_from_scene_cache)
+			direct_render_phase = "video_display.scene_cache.direct.fallback";
 	}
 	if (!rendered_from_scene_cache) {
+		perf_trace::VideoUiDurationScope direct_trace(
+			direct_render_phase ? direct_render_phase : "video_display.scene_cache.direct.policy",
+			canvas_width,
+			canvas_height);
 		BindWindowFramebufferForDisplayRender();
 		RenderBackendScene(canvas_width, canvas_height);
 		scene_cache_valid = false;

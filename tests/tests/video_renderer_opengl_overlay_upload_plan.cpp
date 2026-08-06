@@ -251,6 +251,32 @@ TEST(video_renderer_opengl_overlay_upload_plan, invisible_overlay_hides_layer_in
 	EXPECT_FALSE(plan.next_state.has_visible_content);
 }
 
+TEST(video_renderer_opengl_overlay_upload_plan, estimates_full_and_dirty_upload_bytes) {
+	SubtitleOverlayDirtyRect dirty_rects[] = {
+		{ 1, 2, 3, 4 },
+		{ -2, 8, 5, 5 },
+	};
+	auto storage = make_storage(10, 10);
+	auto overlay = storage.MakeView(true);
+	overlay.width = 10;
+	overlay.height = 10;
+	overlay.dirty_rects = dirty_rects;
+	overlay.dirty_rect_count = 2;
+
+	EXPECT_EQ(400, EstimateOpenGLVideoRendererOverlayUploadBytes(
+		OpenGLVideoRendererOverlayUploadAction::FullUpload,
+		&overlay));
+	EXPECT_EQ(72, EstimateOpenGLVideoRendererOverlayUploadBytes(
+		OpenGLVideoRendererOverlayUploadAction::DirtyUpload,
+		&overlay));
+	EXPECT_EQ(0, EstimateOpenGLVideoRendererOverlayUploadBytes(
+		OpenGLVideoRendererOverlayUploadAction::ReuseExistingContent,
+		&overlay));
+	EXPECT_EQ(0, EstimateOpenGLVideoRendererOverlayUploadBytes(
+		OpenGLVideoRendererOverlayUploadAction::HideKeepResources,
+		nullptr));
+}
+
 TEST(video_renderer_opengl_overlay_upload_plan, cropped_storage_overlay_with_dirty_rects_forces_full_upload) {
 	auto storage = make_storage(4, 2);
 	storage.dirty_rects.push_back({ 0, 0, 2, 2 });

@@ -766,6 +766,11 @@ void VisualToolBase::ScheduleInteractionRender() {
 void VisualToolBase::SetOverride(AssDialogue* line, std::string const& tag, std::string const& value) {
 	if (!line) return;
 
+	perf_trace::VideoUiDurationScope override_trace("visual_tool.override");
+	std::string original_text;
+	if (override_trace.IsActive())
+		original_text = line->Text.get();
+
 	std::string removeTag;
 	if (tag == "\\1c") removeTag = "\\c";
 	else if (tag == "\\frz") removeTag = "\\fr";
@@ -794,6 +799,9 @@ void VisualToolBase::SetOverride(AssDialogue* line, std::string const& tag, std:
 	}
 	else
 		line->Text = "{" + tag + value + "}" + line->Text.get();
+
+	if (override_trace.IsActive())
+		override_trace.SetDetails(original_text == line->Text.get() ? 0 : 1);
 
 	if (changed_line_set.insert(line).second) {
 		single_changed_line = changed_lines.empty() ? line : nullptr;

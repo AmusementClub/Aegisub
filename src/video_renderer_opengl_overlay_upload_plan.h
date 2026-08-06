@@ -16,7 +16,9 @@
 
 #include "subtitle_overlay.h"
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 
 enum class OpenGLVideoRendererOverlayUploadAction {
 	HideKeepResources,
@@ -124,4 +126,36 @@ inline OpenGLVideoRendererOverlayUploadPlan DecideOpenGLVideoRendererOverlayUplo
 	// Current overlay providers use an empty dirty-rect set to mean pixel content is unchanged.
 	plan.action = OpenGLVideoRendererOverlayUploadAction::ReuseExistingContent;
 	return plan;
+}
+
+inline int EstimateOpenGLVideoRendererOverlayUploadBytes(
+	OpenGLVideoRendererOverlayUploadAction action,
+	SubtitleOverlay const* overlay) {
+	if (!overlay)
+		return 0;
+
+	int64_t const overlay_width = std::max(0, overlay->width);
+	int64_t const overlay_height = std::max(0, overlay->height);
+	int64_t pixels = 0;
+	if (action == OpenGLVideoRendererOverlayUploadAction::FullUpload) {
+		pixels = overlay_width * overlay_height;
+	}
+	else if (action == OpenGLVideoRendererOverlayUploadAction::DirtyUpload
+		&& overlay->dirty_rects
+		&& overlay->dirty_rect_count > 0) {
+		for (int index = 0; index < overlay->dirty_rect_count; ++index) {
+			auto const& rect = overlay->dirty_rects[index];
+			int64_t const x0 = std::clamp<int64_t>(rect.x, 0, overlay_width);
+			int64_t const y0 = std::clamp<int64_t>(rect.y, 0, overlay_height);
+			int64_t const x1 = std::clamp<int64_t>(static_cast<int64_t>(rect.x) + rect.width, 0, overlay_width);
+			int64_t const y1 = std::clamp<int64_t>(static_cast<int64_t>(rect.y) + rect.height, 0, overlay_height);
+			pixels += std::max<int64_t>(0, x1 - x0) * std::max<int64_t>(0, y1 - y0);
+			if (pixels >= std::numeric_limits<int>::max() / 4)
+				return std::numeric_limits<int>::max();
+		}
+	}
+
+	if (pixels >= std::numeric_limits<int>::max() / 4)
+		return std::numeric_limits<int>::max();
+	return static_cast<int>(pixels * 4);
 }

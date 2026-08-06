@@ -15,6 +15,7 @@
 #include "video_renderer_opengl.h"
 
 #include "legacy_gl_draw.h"
+#include "perf_trace.h"
 #include "video_render_opengl_proc_loader.h"
 #include "video_renderer_opengl_overlay_upload_plan.h"
 #include "video_renderer_error.h"
@@ -732,6 +733,27 @@ void OpenGLVideoRenderer::UploadOverlay(SubtitleOverlay const* overlay) {
 	auto const* render_overlay = overlay ? &adjusted_overlay : nullptr;
 
 	auto plan = DecideOpenGLVideoRendererOverlayUploadPlan(state, render_overlay);
+	char const* upload_phase = nullptr;
+	switch (plan.action) {
+		case OpenGLVideoRendererOverlayUploadAction::HideKeepResources:
+			upload_phase = "video_overlay.upload.hide";
+			break;
+		case OpenGLVideoRendererOverlayUploadAction::FullUpload:
+			upload_phase = "video_overlay.upload.full";
+			break;
+		case OpenGLVideoRendererOverlayUploadAction::DirtyUpload:
+			upload_phase = "video_overlay.upload.dirty";
+			break;
+		case OpenGLVideoRendererOverlayUploadAction::ReuseExistingContent:
+			upload_phase = "video_overlay.upload.reuse";
+			break;
+	}
+	perf_trace::VideoUiDurationScope upload_trace(upload_phase);
+	if (upload_trace.IsActive()) {
+		upload_trace.SetDetails(
+			EstimateOpenGLVideoRendererOverlayUploadBytes(plan.action, render_overlay),
+			render_overlay ? render_overlay->dirty_rect_count : 0);
+	}
 	bool const apply_source_display_transform =
 		has_source_geometry && source_output_mode == SourceFrameOutputMode::Native;
 	if (plan.action == OpenGLVideoRendererOverlayUploadAction::HideKeepResources) {

@@ -452,7 +452,8 @@
 			"Display Height" : -1,
 			"Font Face" : "",
 			"Font Size" : 13,
-			"Margin Spin Step" : 1
+			"Margin Spin Step" : 1,
+			"Use DirectWrite" : false
 		},
 		"Grid" : {
 			"Column" : [

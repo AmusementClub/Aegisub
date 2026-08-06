@@ -732,6 +732,10 @@ void BuildInterfacePage(OptionPage *p) {
 	binder->AddBool(_("Overwrite in time boxes"), "Subtitle/Time Edit/Insert Mode");
 #ifdef WITH_WXSTC
 	binder->AddBool(_("Enable syntax highlighting"), "Subtitle/Highlight/Syntax");
+#ifdef __WXMSW__
+	// Opt-in only: historical default-on DirectWrite was reverted on Win10.
+	binder->AddBool(_("Use DirectWrite for styled edit box (experimental)"), "Subtitle/Edit Box/Use DirectWrite");
+#endif
 #endif
 	binder->AddDirectory(_("Dictionaries path"), "Path/Dictionary");
 	binder->AddFont(_("Font"), "Subtitle/Edit Box/");

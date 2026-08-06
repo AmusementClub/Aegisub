@@ -4,6 +4,7 @@
 
 #include "font_file_lister.h"
 #include "font_matching_libass.h"
+#include "perf_trace.h"
 
 #include <dwrite.h>
 #include <dwrite_3.h>
@@ -639,6 +640,263 @@ std::vector<DWriteLocalizedName> DWriteBridge::GetFullNamesFromFace(IDWriteFontF
 
 std::vector<DWriteLocalizedName> DWriteBridge::GetPostScriptNamesFromFace(IDWriteFontFace *face) const {
 	return informational_names_from_face(face, DWRITE_INFORMATIONAL_STRING_POSTSCRIPT_NAME);
+}
+
+namespace {
+bool locale_tag_equals_ci(std::string_view left, std::string_view right) {
+	if (left.size() != right.size())
+		return false;
+	for (size_t i = 0; i < left.size(); ++i) {
+		auto const a = static_cast<unsigned char>(left[i]);
+		auto const b = static_cast<unsigned char>(right[i]);
+		if (std::tolower(a) != std::tolower(b))
+			return false;
+	}
+	return true;
+}
+
+std::string pick_localized_family_name(std::vector<DWriteLocalizedName> const& names) {
+	if (names.empty())
+		return {};
+
+	// Any localized family name resolves in CreateTextFormat/FindFamilyName —
+	// IDWriteFontCollection matches every localized name and the lookup is not
+	// restricted to one locale. Preferring the UI locale only selects which name
+	// we *return* so logs show the name the user sees; an en-us name would
+	// resolve identically.
+	std::string user_locale;
+	wchar_t locale_buf[LOCALE_NAME_MAX_LENGTH] = {};
+	if (GetUserDefaultLocaleName(locale_buf, LOCALE_NAME_MAX_LENGTH) > 0)
+		user_locale = wide_to_utf8(locale_buf, static_cast<UINT32>(wcslen(locale_buf)));
+
+	if (!user_locale.empty()) {
+		for (auto const& name : names) {
+			if (locale_tag_equals_ci(name.locale, user_locale))
+				return name.value;
+		}
+		// Match language subtag only (zh-CN vs zh-Hans / zh).
+		auto const dash = user_locale.find('-');
+		std::string_view lang = dash == std::string::npos
+			? std::string_view(user_locale)
+			: std::string_view(user_locale).substr(0, dash);
+		for (auto const& name : names) {
+			if (name.locale.size() >= lang.size() &&
+			    locale_tag_equals_ci(name.locale.substr(0, lang.size()), lang) &&
+			    (name.locale.size() == lang.size() || name.locale[lang.size()] == '-'))
+				return name.value;
+		}
+	}
+
+	for (auto const& name : names) {
+		if (name.locale == "en-us" || name.locale == "en-US")
+			return name.value;
+	}
+	for (auto const& name : names) {
+		if (name.locale.empty())
+			return name.value;
+	}
+	return names.front().value;
+}
+
+} // namespace
+
+DWriteBridge::TextFormatFace DWriteBridge::ResolveTextFormatFaceFromGdiFace(
+	std::string_view gdi_face_utf8,
+	int request_weight,
+	bool italic) const {
+	TextFormatFace result;
+	if (!available_ || !gdi_interop)
+		return result;
+
+	// FW_DONTCARE(0) is accepted by the API but is *not* a weight: clamped it
+	// would become 1 (thinnest face) for GetFirstMatchingFont, while LOGFONT
+	// treats 0 as "unspecified" ≈ FW_NORMAL. Normalize once so both paths
+	// agree on the request.
+	int const effective_weight =
+		request_weight > 0 ? std::clamp(request_weight, 1, 999) : FW_NORMAL;
+
+	// One wide string serves both lookups: FindFamilyName has no LF_FACESIZE
+	// limit (a 34-char family like "Noto Sans Simplified Chinese Light" must
+	// not fail the raw check for the wrong reason, only to resurface
+	// unvalidated as result.family via the remap fallback), while lfFaceName
+	// takes a truncated copy of the same string below.
+	std::wstring const face_wide = utf8_to_wide(gdi_face_utf8);
+
+	// The system collection backs the raw check, the raw-path weight/italic
+	// measurement and the mapped-name validation, so fetch it once — the same
+	// lookup IDWriteFactory::CreateTextFormat performs internally.
+	// FindFamilyName matches the collection's own localized strings, so this
+	// is a faithful pre-check (case behaviour included).
+	IDWriteFontCollection *collection = nullptr;
+	auto release_collection = agi::make_scope_exit(
+		[&] { if (collection) collection->Release(); });
+	auto find_family_index = [&](std::wstring const& family, UINT32 *out_index) -> bool {
+		// Fetch on first use only. Written as a nested if rather than
+		// `!collection && FAILED(...)`: the side effect belongs to the
+		// have-we-got-one-yet test, and folding both into one condition has
+		// already inverted once into `!collection || FAILED(...)`, which
+		// short-circuits before the call and leaves the collection null
+		// forever (every lookup then fails and the whole remap silently
+		// degrades to the GDI fallback). On failure collection stays null and
+		// the next call retries.
+		if (!collection) {
+			if (FAILED(factory->GetSystemFontCollection(&collection, FALSE)) || !collection)
+				return false;
+		}
+		BOOL exists = FALSE;
+		collection->FindFamilyName(family.c_str(), out_index, &exists);
+		return exists != FALSE;
+	};
+
+	// If the GDI face name is itself a system-collection family, the whole
+	// LOGFONT→GetFamilyNames remap and the HDC weight/italic probe below are
+	// unnecessary: CreateTextFormat resolves the raw name directly (the
+	// library-style suffix in the face string, e.g. "思源黑体 Medium", is then
+	// a real family in DWrite and the original blank-font problem was purely in
+	// technology selection).
+	UINT32 family_index = 0;
+	bool const raw_is_family = find_family_index(face_wide, &family_index);
+
+	// LOGFONT is only needed for the non-raw paths (the raw path never
+	// touches GDI); wcsncpy_s truncates the full name for lfFaceName's
+	// 32-wchar buffer.
+	LOGFONTW lf{};
+	lf.lfHeight = -16;
+	lf.lfWeight = effective_weight;
+	lf.lfItalic = italic ? TRUE : FALSE;
+	lf.lfCharSet = DEFAULT_CHARSET;
+	lf.lfOutPrecision = OUT_TT_PRECIS;
+	lf.lfClipPrecision = CLIP_DEFAULT_PRECIS;
+	lf.lfQuality = DEFAULT_QUALITY;
+	lf.lfPitchAndFamily = DEFAULT_PITCH | FF_DONTCARE;
+	wcsncpy_s(lf.lfFaceName, face_wide.c_str(), _TRUNCATE);
+
+	// LOGFONT path: family name only. CreateFontFromLOGFONT maps the GDI
+	// selection into the system DirectWrite collection; GetFamilyNames() is the
+	// name CreateTextFormat actually resolves — not typographic name-table ID 16.
+	std::vector<DWriteLocalizedName> family_names;
+	// True when family_names came from the LOGFONT path rather than the
+	// typographic/preferred name-table fallback (distinguishes LogFont vs
+	// Typographic in TextFormatFace::source).
+	bool family_names_from_logfont = false;
+	IDWriteFont *font = nullptr;
+	if (!raw_is_family &&
+	    SUCCEEDED(gdi_interop->CreateFontFromLOGFONT(&lf, &font)) && font) {
+		auto release_font_obj = agi::make_scope_exit([&] { font->Release(); });
+		IDWriteFontFamily *family = nullptr;
+		if (SUCCEEDED(font->GetFontFamily(&family)) && family) {
+			auto release_family = agi::make_scope_exit([&] { family->Release(); });
+			IDWriteLocalizedStrings *names = nullptr;
+			if (SUCCEEDED(family->GetFamilyNames(&names)) && names) {
+				auto release_names = agi::make_scope_exit([&] { names->Release(); });
+				family_names = localized_strings_with_locale(names);
+				family_names_from_logfont = !family_names.empty();
+			}
+		}
+	}
+
+	// GDI's font mapper never fails: for a name it does not enumerate it
+	// silently substitutes another face. When raw_is_family the family is
+	// already locked by CreateTextFormat, so trusting that substitute's
+	// weight/italic would attach an unrelated font's metrics onto it — skip the
+	// whole probe on that common path; the raw branch measures weight/italic
+	// from the collection itself below.
+	if (!raw_is_family) {
+		HDC hdc = CreateCompatibleDC(nullptr);
+		if (hdc) {
+			auto release_dc = agi::make_scope_exit([&] { DeleteDC(hdc); });
+			HFONT hfont = CreateFontIndirectW(&lf);
+			if (hfont) {
+				auto release_hfont = agi::make_scope_exit([&] { DeleteObject(hfont); });
+				HGDIOBJ previous = SelectObject(hdc, hfont);
+				if (previous && previous != HGDI_ERROR) {
+					auto restore_font = agi::make_scope_exit([&] { SelectObject(hdc, previous); });
+					if (perf_trace::IsCategoryEnabled(perf_trace::Category::Log)) {
+						wchar_t selected[LF_FACESIZE] = {};
+						if (GetTextFaceW(hdc, LF_FACESIZE, selected) > 0) {
+							result.gdi_selected_face =
+								wide_to_utf8(selected, static_cast<UINT32>(wcslen(selected)));
+						}
+					}
+					if (IDWriteFontFace *face = CreateFontFaceFromHdc(hdc)) {
+						auto release_face = agi::make_scope_exit([&] { face->Release(); });
+						IDWriteFontFace3 *face3 = nullptr;
+						if (SUCCEEDED(face->QueryInterface(&face3)) && face3) {
+							result.weight = std::clamp(static_cast<int>(face3->GetWeight()), 1, 999);
+							result.italic = face3->GetStyle() != DWRITE_FONT_STYLE_NORMAL;
+							face3->Release();
+						}
+						if (family_names.empty()) {
+							family_names = informational_names_from_face(
+								face, DWRITE_INFORMATIONAL_STRING_TYPOGRAPHIC_FAMILY_NAMES);
+							if (family_names.empty()) {
+								family_names = informational_names_from_face(
+									face, DWRITE_INFORMATIONAL_STRING_PREFERRED_FAMILY_NAMES);
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if (raw_is_family) {
+		result.family = std::string(gdi_face_utf8);
+		result.source = TextFormatFace::Source::Raw;
+		// Weight/italic come from the collection, not the request defaults:
+		// a style-carrying raw name (e.g. "思源黑体 Medium") is its own family
+		// and may only exist at one weight, and GetFirstMatchingFont is the
+		// exact selection CreateTextFormat makes. Unlike the HDC probe there is
+		// no substituted-face risk — the family is the one we are about to
+		// format.
+		IDWriteFontFamily *family = nullptr;
+		if (collection && SUCCEEDED(collection->GetFontFamily(family_index, &family)) && family) {
+			auto release_family = agi::make_scope_exit([&] { family->Release(); });
+			IDWriteFont *matching = nullptr;
+			if (SUCCEEDED(family->GetFirstMatchingFont(
+					static_cast<DWRITE_FONT_WEIGHT>(effective_weight),
+					DWRITE_FONT_STRETCH_NORMAL,
+					italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
+					&matching)) && matching) {
+				auto release_matching = agi::make_scope_exit([&] { matching->Release(); });
+				result.weight = std::clamp(static_cast<int>(matching->GetWeight()), 1, 999);
+				result.italic = matching->GetStyle() != DWRITE_FONT_STYLE_NORMAL;
+			}
+		}
+	}
+	else {
+		std::string const mapped = pick_localized_family_name(family_names);
+		UINT32 mapped_index = 0;
+		if (!mapped.empty() && find_family_index(utf8_to_wide(mapped), &mapped_index)) {
+			result.family = mapped;
+			result.source = family_names_from_logfont
+				? TextFormatFace::Source::LogFont
+				: TextFormatFace::Source::Typographic;
+		}
+		else {
+			// CreateTextFormat does not fail on an unknown family — it silently
+			// renders with a substituted face and its metrics (ascent/descent/
+			// averageCharWidth) come from that substitute. Only claim a family we
+			// can prove is in the collection; otherwise keep the GDI face name
+			// the user picked.
+			if (!mapped.empty()) {
+				LOG_W("font/dwrite")
+					<< "resolved family absent from system collection, using GDI face"
+					<< " requested=" << gdi_face_utf8
+					<< " resolved=" << mapped;
+			}
+			result.family = std::string(gdi_face_utf8);
+			result.source = TextFormatFace::Source::GdiFallback;
+			// The HDC probe reported GDI's substitution for this name; DWrite
+			// substitutes independently, so those weight/italic are not this
+			// family's. Keep the request defaults and let callers treat 0 as
+			// "not measured".
+			result.weight = 0;
+			result.italic = italic;
+		}
+	}
+	result.ok = !result.family.empty();
+	return result;
 }
 
 std::vector<std::string> DWriteBridge::GetFullNamesFromFont(IDWriteFont *font) const {

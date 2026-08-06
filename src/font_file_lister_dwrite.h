@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct IDWriteFactory;
@@ -59,6 +60,56 @@ public:
 	/// Create a face via GDI interop (system DWrite path).
 	IDWriteFontFace *CreateFontFaceFromHdc(HDC hdc) const;
 	IDWriteFontFace *CreateFontFaceFromFont(IDWriteFont *font) const;
+
+	/// Result of mapping a GDI face name onto CreateTextFormat parameters.
+	///
+	/// GDI often stores style in the face string (e.g. "Source Han Sans Medium") while
+	/// DirectWrite wants collection family + weight. If the GDI face name is
+	/// already a system-collection family it is returned as-is (the remap is
+	/// then unnecessary); otherwise the family comes from
+	/// CreateFontFromLOGFONT → GetFontFamily → GetFamilyNames (the name
+	/// CreateTextFormat actually matches), with typographic/preferred
+	/// name-table strings used only when that yields nothing. The picked
+	/// family is validated against the system collection so CreateTextFormat
+	/// cannot silently substitute a fallback font. weight/italic are measured,
+	/// not taken from LOGFONT: on the raw short-circuit from the collection
+	/// itself (GetFirstMatchingFont, the same selection CreateTextFormat
+	/// makes), otherwise from the HDC face (IDWriteFontFace3), the authority
+	/// for the actually selected GDI face.
+	struct TextFormatFace {
+		/// Where the resolved family came from. Logged as `source=` so a raw
+		/// short-circuit is distinguishable from a no-op remap, and so the
+		/// LOGFONT/typographic remap machinery can be judged as dead code.
+		enum class Source {
+			None,          ///< No resolution (bridge unavailable).
+			Raw,           ///< Name is itself a system-collection family; no remap.
+			LogFont,       ///< CreateFontFromLOGFONT → GetFamilyNames.
+			Typographic,   ///< Typographic/preferred name-table fallback.
+			GdiFallback,   ///< No collection-provable name; kept the GDI face.
+		} source = Source::None;
+
+		/// UTF-8 family name suitable for IDWriteFactory::CreateTextFormat.
+		std::string family;
+		/// Measured family weight, or 0 when it would not be authoritative:
+		/// bridge unavailable, the collection/HDC probe failed, or
+		/// GdiFallback (the HDC numbers describe GDI's substitution, not the
+		/// DWrite family). Callers treat 0 as "not measured" and keep their
+		/// own bold state.
+		int weight = 0;
+		bool italic = false;
+		/// GetTextFaceW after GDI selection (diagnostic).
+		std::string gdi_selected_face;
+		bool ok = false;
+	};
+
+	/// Resolve a GDI face string for wxSTC/DirectWrite CreateTextFormat.
+	/// `request_weight` is the LOGFONT weight (FW_DONTCARE/FW_NORMAL/...);
+	/// FW_DONTCARE is normalized to FW_NORMAL so both the LOGFONT and
+	/// GetFirstMatchingFont paths agree.
+	TextFormatFace ResolveTextFormatFaceFromGdiFace(
+		std::string_view gdi_face_utf8,
+		int request_weight = FW_DONTCARE,
+		bool italic = false) const;
 	bool BuildFontCatalog(std::vector<FontMatchCandidate>& faces,
 	                      std::vector<IDWriteFontFace *>& dwrite_faces,
 	                      std::vector<std::string> const& additional_font_files,

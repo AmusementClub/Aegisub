@@ -69,6 +69,7 @@
 
 #ifdef __WXMSW__
 #include <windows.h>
+#include "font_file_lister_dwrite.h"
 #endif
 
 // Maximum number of languages (locales)
@@ -97,6 +98,17 @@ namespace {
 
 	double PaintTimingDurationMs(std::int64_t started_ns, std::int64_t finished_ns) noexcept {
 		return static_cast<double>(finished_ns - started_ns) / 1'000'000.0;
+	}
+
+	const char *FaceSourceName(DWriteBridge::TextFormatFace::Source source) {
+		switch (source) {
+			case DWriteBridge::TextFormatFace::Source::None: return "none";
+			case DWriteBridge::TextFormatFace::Source::Raw: return "raw";
+			case DWriteBridge::TextFormatFace::Source::LogFont: return "logfont";
+			case DWriteBridge::TextFormatFace::Source::Typographic: return "typographic";
+			case DWriteBridge::TextFormatFace::Source::GdiFallback: return "gdi-fallback";
+		}
+		return "?";
 	}
 #endif
 
@@ -319,6 +331,7 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 , context(context)
 {
 	aegisub::stc::ConfigureWindowsSelectionRendering(this);
+	ApplyScintillaTuning();
 
 #if wxUSE_DRAG_AND_DROP
 	SetDropTarget(new DropTarget(this));
@@ -415,6 +428,10 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 
 	OPT_SUB("Subtitle/Edit Box/Font Face", &SubsStyledTextEditCtrl::SetStyles, this);
 	OPT_SUB("Subtitle/Edit Box/Font Size", &SubsStyledTextEditCtrl::SetStyles, this);
+	OPT_SUB("Subtitle/Edit Box/Use DirectWrite", [this](agi::OptionValue const&) {
+		ApplyScintillaTuning();
+		SetStyles();
+	});
 	Subscribe("Normal");
 	Subscribe("Comment");
 	Subscribe("Drawing Command");
@@ -469,15 +486,39 @@ WXLRESULT SubsStyledTextEditCtrl::MSWWindowProc(WXUINT message, WXWPARAM wParam,
 		return result;
 
 	auto const paint_finished_ns = PaintTimingNowNs();
+	auto const technology = GetTechnology();
 	LOG_I("subtitle/editbox/stc_paint_timing")
 		<< "update_id=" << timing.update_id
 		<< " phase=first_paint_complete"
 		<< " text_bytes=" << timing.text_bytes
+		<< " technology=" << (technology == wxSTC_TECHNOLOGY_DIRECTWRITE ? "directwrite" : "default")
+		<< " technology_code=" << technology
 		<< " paint_queue_wait_ms=" << PaintTimingDurationMs(timing.requested_ns, paint_started_ns)
 		<< " paint_ms=" << PaintTimingDurationMs(paint_started_ns, paint_finished_ns);
 	return result;
 }
 #endif
+
+void SubsStyledTextEditCtrl::ApplyScintillaTuning() {
+#ifdef __WXMSW__
+	// Experimental: default remains GDI (wxSTC_TECHNOLOGY_DEFAULT). DirectWrite
+	// was tried then reverted on Win10 (fac78e6a9); keep it opt-in and log the
+	// actual technology in case SetTechnology silently fails to initialise D2D.
+	bool const want_directwrite = OPT_GET("Subtitle/Edit Box/Use DirectWrite")->GetBool();
+	int const requested = want_directwrite
+		? wxSTC_TECHNOLOGY_DIRECTWRITE
+		: wxSTC_TECHNOLOGY_DEFAULT;
+	SetTechnology(requested);
+	int const actual = GetTechnology();
+	if (perf_trace::IsCategoryEnabled(perf_trace::Category::Log) ||
+	    (want_directwrite && actual != wxSTC_TECHNOLOGY_DIRECTWRITE)) {
+		LOG_I("subtitle/editbox/stc_technology")
+			<< "requested=" << (want_directwrite ? "directwrite" : "default")
+			<< " actual=" << (actual == wxSTC_TECHNOLOGY_DIRECTWRITE ? "directwrite" : "default")
+			<< " actual_code=" << actual;
+	}
+#endif
+}
 
 void SubsStyledTextEditCtrl::Subscribe(std::string const& name) {
 	OPT_SUB("Colour/Subtitle/Syntax/" + name, &SubsStyledTextEditCtrl::SetStyles, this);
@@ -723,9 +764,32 @@ void SubsStyledTextEditCtrl::OnDoDrop(wxStyledTextEvent &event) {
 	event.Skip();
 }
 
-void SubsStyledTextEditCtrl::SetSyntaxStyle(int id, wxFont &font, std::string const& name, wxColor const& default_background) {
-	StyleSetFont(id, font);
-	StyleSetBold(id, OPT_GET("Colour/Subtitle/Syntax/Bold/" + name)->GetBool());
+void SubsStyledTextEditCtrl::SetSyntaxStyle(int id, wxFont const& font, std::string const& name, wxColor const& default_background) {
+	// Size/encoding come from a valid GDI-facing wxFont. DirectWrite family
+	// names must not pass through wxFont::SetFaceName — IsValidFacename only
+	// knows GDI EnumFontFamiliesEx names and UnRef()s the font on failure.
+	bool const syntax_bold = OPT_GET("Colour/Subtitle/Syntax/Bold/" + name)->GetBool();
+#ifdef __WXMSW__
+	if (!directwrite_face.empty()) {
+		// One StyleSetFontAttr instead of StyleSetFont (GDI face) followed by
+		// StyleSetFaceName — each StyleSetFaceName sends SCI_STYLESETFONT with
+		// its own InvalidateStyleRedraw. resolved.italic is threaded through so
+		// an italic edit-box face is not flattened to upright by the remap.
+		StyleSetFontAttr(id, font.GetPointSize(), directwrite_face,
+		                 syntax_bold, directwrite_style_italic, false,
+		                 font.GetEncoding());
+		// StyleSetBold inside StyleSetFontAttr writes 400/700 only. Restore the
+		// resolved weight for non-bold styles so Medium (500) etc. are kept;
+		// bold styles keep 700 and let DirectWrite pick or synthesize a bold face.
+		if (directwrite_style_weight > 0 && !syntax_bold)
+			StyleSetWeight(id, directwrite_style_weight);
+	}
+	else
+#endif
+	{
+		StyleSetFont(id, font);
+		StyleSetBold(id, syntax_bold);
+	}
 	StyleSetForeground(id, to_wx(OPT_GET("Colour/Subtitle/Syntax/" + name)->GetColor()));
 	const agi::OptionValue *background = OPT_GET("Colour/Subtitle/Syntax/Background/" + name);
 	if (background->GetType() == agi::OptionType::Color)
@@ -738,12 +802,122 @@ void SubsStyledTextEditCtrl::SetStyles() {
 	wxFont font = wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
 	font.SetEncoding(wxFONTENCODING_DEFAULT); // this solves problems with some fonts not working properly
 	wxString fontname = FontFace("Subtitle/Edit Box");
-	if (!fontname.empty()) font.SetFaceName(fontname);
+	if (!fontname.empty() && !font.SetFaceName(fontname)) {
+		// The configured face was uninstalled or renamed. SetFaceName failed
+		// and UnRef'd the shared refdata; the next SetPointSize would then
+		// AllocExclusive a fresh default and silently drop the explicit
+		// encoding above. Rebuild from the system default instead.
+		// Many option subscriptions call SetStyles(); only log when the
+		// missing face actually changes, not on every restyle.
+		if (fontname != last_missing_font_logged) {
+			last_missing_font_logged = fontname;
+			LOG_D("subtitle/editbox/font")
+				<< "configured edit-box font face is unavailable, using system default: "
+				<< from_wx(fontname);
+		}
+		fontname.clear();
+		font = wxSystemSettings::GetFont(wxSYS_DEFAULT_GUI_FONT);
+		font.SetEncoding(wxFONTENCODING_DEFAULT);
+	}
+	else
+		last_missing_font_logged.clear();
 	font.SetPointSize(OPT_GET("Subtitle/Edit Box/Font Size")->GetInt());
+
+#ifdef __WXMSW__
+	// Map GDI face strings onto DirectWrite CreateTextFormat family+weight.
+	// Do not write the DWrite family back into wxFont (SetFaceName would UnRef
+	// when the name is not a GDI-enumerated facename).
+	if (GetTechnology() != wxSTC_TECHNOLOGY_DIRECTWRITE || fontname.empty()) {
+		directwrite_face.clear();
+		directwrite_style_weight = 0;
+		directwrite_style_italic = false;
+		directwrite_resolve_request_face.clear();
+	}
+	else if (directwrite_resolve_request_face != fontname) {
+		if (!dwrite_face_bridge)
+			dwrite_face_bridge = std::make_unique<DWriteBridge>(DWriteBridgeMode::SystemOnly);
+		auto resolved = dwrite_face_bridge->ResolveTextFormatFaceFromGdiFace(
+			from_wx(fontname), FW_NORMAL, false);
+		directwrite_resolve_request_face = fontname;
+		// GdiFallback returns the unproven GDI face together with weight/italic
+		// measured from GDI's own substitution for it — DirectWrite substitutes
+		// independently, so applying those to the same face name would be worse
+		// than not remapping at all. Fall back to the plain GDI branch.
+		bool const use_dwrite_face = resolved.ok &&
+			resolved.source != DWriteBridge::TextFormatFace::Source::GdiFallback;
+		if (use_dwrite_face) {
+			directwrite_face = to_wx(resolved.family);
+			directwrite_style_weight = resolved.weight;
+			directwrite_style_italic = resolved.italic;
+			if (perf_trace::IsCategoryEnabled(perf_trace::Category::Log)) {
+				// gdi_selected only exists on the HDC probe, which the raw
+				// short-circuit skips; omit it there so the log does not look
+				// like a dropped field.
+				std::string const gdi_log = resolved.gdi_selected_face.empty()
+					? std::string()
+					: " gdi_selected=" + resolved.gdi_selected_face;
+				LOG_I("subtitle/editbox/stc_dwrite_face")
+					<< "requested=" << from_wx(fontname)
+					<< " source=" << FaceSourceName(resolved.source)
+					<< gdi_log
+					<< " dwrite_family=" << resolved.family
+					<< " weight=" << resolved.weight
+					<< " italic=" << (resolved.italic ? 1 : 0);
+			}
+		}
+		else if (resolved.ok) {
+			// DirectWrite present but the face name is not provable in the
+			// system collection; keep GDI rendering for it.
+			directwrite_face.clear();
+			directwrite_style_weight = 0;
+			directwrite_style_italic = false;
+			if (perf_trace::IsCategoryEnabled(perf_trace::Category::Log)) {
+				std::string const gdi_log = resolved.gdi_selected_face.empty()
+					? std::string()
+					: " gdi_selected=" + resolved.gdi_selected_face;
+				LOG_I("subtitle/editbox/stc_dwrite_face")
+					<< "requested=" << from_wx(fontname)
+					<< " source=" << FaceSourceName(resolved.source)
+					<< gdi_log
+					<< " dwrite_face=unused";
+			}
+		}
+		else {
+			// ok == false ⟺ no DirectWrite at all: every resolvable branch
+			// fills a family, so there is no second failure mode to report.
+			directwrite_face.clear();
+			directwrite_style_weight = 0;
+			directwrite_style_italic = false;
+			if (perf_trace::IsCategoryEnabled(perf_trace::Category::Log)) {
+				LOG_I("subtitle/editbox/stc_dwrite_face")
+					<< "requested=" << from_wx(fontname)
+					<< " dwrite=unavailable";
+			}
+		}
+	}
+#endif
 
 	auto default_background = to_wx(OPT_GET("Colour/Subtitle/Background")->GetColor());
 
 	namespace ss = agi::ass::SyntaxStyle;
+	// STYLE_DEFAULT participates in line metrics (ascent/descent, tab width).
+	// Keep it on the same face as syntax styles so row height matches the edit
+	// font. Same single StyleSetFontAttr as SetSyntaxStyle — StyleSetFaceName
+	// after StyleSetFont would send a second SCI_STYLESETFONT with its own
+	// InvalidateStyleRedraw. Fields are set/cleared together inside the guard.
+#ifdef __WXMSW__
+	if (!directwrite_face.empty()) {
+		StyleSetFontAttr(wxSTC_STYLE_DEFAULT, font.GetPointSize(), directwrite_face,
+		                 false, directwrite_style_italic, false,
+		                 font.GetEncoding());
+		if (directwrite_style_weight > 0)
+			StyleSetWeight(wxSTC_STYLE_DEFAULT, directwrite_style_weight);
+	}
+	else
+#endif
+	{
+		StyleSetFont(wxSTC_STYLE_DEFAULT, font);
+	}
 	SetSyntaxStyle(ss::NORMAL, font, "Normal", default_background);
 	SetSyntaxStyle(ss::COMMENT, font, "Comment", default_background);
 	SetSyntaxStyle(ss::DRAWING_CMD, font, "Drawing Command", default_background);

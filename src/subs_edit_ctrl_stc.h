@@ -105,6 +105,10 @@ class SubsStyledTextEditCtrl final : public wxStyledTextCtrl {
 	/// Tag name armed for whole-tag selection on the next double-click.
 	std::pair<int, int> repeat_tag_name_bounds{-1, 0};
 
+	/// Last configured face reported missing by SetStyles; dedupes the LOG_D
+	/// across the many option subscriptions that trigger a restyle.
+	wxString last_missing_font_logged;
+
 	std::string drag_source_text;
 	int drag_source_start = 0;
 	int drag_source_end = 0;
@@ -129,12 +133,28 @@ class SubsStyledTextEditCtrl final : public wxStyledTextCtrl {
 	int MapTextDragPreviewPosition(int position) const;
 	void SetTextDragPreview(std::string const& text, int selection_start, int selection_end);
 
-	void SetSyntaxStyle(int id, wxFont &font, std::string const& name, wxColor const& default_background);
+	void SetSyntaxStyle(int id, wxFont const& font, std::string const& name, wxColor const& default_background);
 	void Subscribe(std::string const& name);
 
 	void UpdateCallTip();
 	void UpdateBraceHighlight();
 	void SetStyles();
+	/// Apply experimental MSW STC rendering technology (DirectWrite opt-in).
+	/// Does not re-apply styles; call SetStyles() after technology changes.
+	void ApplyScintillaTuning();
+#ifdef __WXMSW__
+	/// DirectWrite family for StyleSetFaceName (must not go through wxFont::SetFaceName).
+	wxString directwrite_face;
+	/// Non-zero when DirectWrite styles should use this weight after StyleSetBold.
+	int directwrite_style_weight = 0;
+	/// True when the resolved DirectWrite face is a software-italic face
+	/// (StyleSetFont would flatten it to upright once the face is remapped).
+	bool directwrite_style_italic = false;
+	/// Cache key for the last successful GDI→DWrite face resolve.
+	wxString directwrite_resolve_request_face;
+	/// Long-lived system DWrite bridge for edit-box face resolve (lazy).
+	std::unique_ptr<class DWriteBridge> dwrite_face_bridge;
+#endif
 
 	void UpdateStyle();
 

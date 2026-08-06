@@ -29,6 +29,8 @@
 
 #include <libaegisub/signal.h>
 
+#include <chrono>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -46,6 +48,20 @@ class GridColumn;
 class WidthHelper;
 
 class BaseGrid final : public wxWindow {
+	using InputTimingClock = std::chrono::steady_clock;
+
+	struct PendingClickPaintTiming {
+		bool pending = false;
+		bool slow_input = false;
+		std::uint64_t event_id = 0;
+		int row = -1;
+		double message_age_ms = -1.0;
+		double handler_ms = 0.0;
+		double focus_ms = 0.0;
+		InputTimingClock::time_point click_started;
+		InputTimingClock::time_point handler_finished;
+	};
+
 	std::vector<agi::signal::Connection> connections;
 	int lineHeight = 1;     ///< Height of a line in pixels in the current font
 	bool holding = false;   ///< Is a drag selection in process?
@@ -69,6 +85,8 @@ class BaseGrid final : public wxWindow {
 	std::vector<int> visible_rows;
 	std::vector<int> selected_rows;
 	aegisub::presentation::Revision grid_revision = 0;
+	std::uint64_t next_click_timing_id = 0;
+	PendingClickPaintTiming pending_click_paint_timing;
 
 	agi::Context *context; ///< Associated project context
 

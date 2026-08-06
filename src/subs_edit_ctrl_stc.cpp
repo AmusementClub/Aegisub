@@ -50,10 +50,12 @@
 #include <libaegisub/calltip_provider.h>
 #include <libaegisub/character_count.h>
 #include <libaegisub/make_unique.h>
+#include <libaegisub/log.h>
 #include <libaegisub/spellchecker.h>
 #include <libaegisub/string_utils.h>
 
 #include <algorithm>
+#include <chrono>
 #include <functional>
 #include <limits>
 #include <string_view>
@@ -64,6 +66,10 @@
 #include <wx/intl.h>
 #include <wx/menu.h>
 #include <wx/settings.h>
+
+#ifdef __WXMSW__
+#include <windows.h>
+#endif
 
 // Maximum number of languages (locales)
 // It should be above 100 (at least 242) and probably not more than 1000
@@ -82,6 +88,17 @@ namespace {
 	constexpr int CHAR_MARKER_ERROR_INDICATOR = 6;           // solid error box
 	constexpr int CHAR_MARKER_ERROR_ALT_INDICATOR = 9;
 	constexpr int CHAR_MARKER_DWELL_MS = 500;
+
+#ifdef __WXMSW__
+	std::int64_t PaintTimingNowNs() noexcept {
+		return std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+	}
+
+	double PaintTimingDurationMs(std::int64_t started_ns, std::int64_t finished_ns) noexcept {
+		return static_cast<double>(finished_ns - started_ns) / 1'000'000.0;
+	}
+#endif
 
 	void ConfigureCharacterMarkerIndicator(wxStyledTextCtrl* ctrl, int indicator, int style, wxColour const& colour, int fill_alpha, int outline_alpha) {
 		ctrl->IndicatorSetStyle(indicator, style);
@@ -438,6 +455,29 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 
 SubsStyledTextEditCtrl::~SubsStyledTextEditCtrl() {
 }
+
+#ifdef __WXMSW__
+WXLRESULT SubsStyledTextEditCtrl::MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lParam) {
+	if (message != WM_PAINT)
+		return wxStyledTextCtrl::MSWWindowProc(message, wParam, lParam);
+
+	auto const timing = pending_paint_timing;
+	pending_paint_timing.pending = false;
+	auto const paint_started_ns = timing.pending ? PaintTimingNowNs() : 0;
+	auto const result = wxStyledTextCtrl::MSWWindowProc(message, wParam, lParam);
+	if (!timing.pending)
+		return result;
+
+	auto const paint_finished_ns = PaintTimingNowNs();
+	LOG_I("subtitle/editbox/stc_paint_timing")
+		<< "update_id=" << timing.update_id
+		<< " phase=first_paint_complete"
+		<< " text_bytes=" << timing.text_bytes
+		<< " paint_queue_wait_ms=" << PaintTimingDurationMs(timing.requested_ns, paint_started_ns)
+		<< " paint_ms=" << PaintTimingDurationMs(paint_started_ns, paint_finished_ns);
+	return result;
+}
+#endif
 
 void SubsStyledTextEditCtrl::Subscribe(std::string const& name) {
 	OPT_SUB("Colour/Subtitle/Syntax/" + name, &SubsStyledTextEditCtrl::SetStyles, this);
@@ -941,6 +981,20 @@ void SubsStyledTextEditCtrl::SetTextTo(std::string const& text) {
 		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.thaw", text_bytes);
 		Thaw();
 	}
+
+#ifdef __WXMSW__
+	if (perf_trace::IsCategoryEnabled(perf_trace::Category::Log)) {
+		pending_paint_timing = {
+			true,
+			++next_paint_timing_id,
+			text_bytes,
+			PaintTimingNowNs(),
+		};
+	}
+	else {
+		pending_paint_timing.pending = false;
+	}
+#endif
 }
 
 void SubsStyledTextEditCtrl::Paste() {

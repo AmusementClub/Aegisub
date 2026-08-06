@@ -35,6 +35,9 @@
 #include <vector>
 
 #include <wx/combobox.h>
+#ifdef __WXMSW__
+#include <wx/odcombo.h>
+#endif
 #include <wx/panel.h>
 #include <wx/timer.h>
 
@@ -60,6 +63,12 @@ class wxStyledTextCtrl;
 class wxStyledTextEvent;
 class wxTextCtrl;
 struct AssDialogueBase;
+
+#ifdef __WXMSW__
+using SubsEditStyleComboBox = wxOwnerDrawnComboBox;
+#else
+using SubsEditStyleComboBox = wxComboBox;
+#endif
 
 template<class Base> class Placeholder;
 
@@ -91,7 +100,7 @@ class SubsEditBox final : public wxPanel {
 
 	// Box controls
 	wxCheckBox *comment_box;
-	wxComboBox *style_box;
+	SubsEditStyleComboBox *style_box;
 	wxButton *style_edit_button;
 	Placeholder<wxComboBox> *actor_box;
 	TimeEdit *start_time;
@@ -141,7 +150,7 @@ class SubsEditBox final : public wxPanel {
 	TimeEdit *MakeTimeCtrl(wxString const& tooltip, TimeField field);
 	void MakeButton(const char *cmd_name);
 	wxButton *MakeBottomButton(const char *cmd_name);
-	wxComboBox *MakeComboBox(wxString const& initial_text, int style, void (SubsEditBox::*handler)(wxCommandEvent&), wxString const& tooltip);
+	SubsEditStyleComboBox *MakeStyleComboBox(wxString const& initial_text, void (SubsEditBox::*handler)(wxCommandEvent&), wxString const& tooltip);
 	wxRadioButton *MakeRadio(wxString const& text, bool start, wxString const& tooltip);
 
 #ifdef WITH_WXSTC

@@ -28,6 +28,7 @@
 #include "format.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
+#include "perf_trace.h"
 #include "utils.h"
 
 #include <libaegisub/cajun/reader.h>
@@ -36,11 +37,13 @@
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
+#include <libaegisub/scope_exit.h>
 #include <libaegisub/split.h>
 #include <libaegisub/string_utils.h>
 
 #include <algorithm>
 #include <boost/locale/collator.hpp>
+#include <chrono>
 #include <unordered_set>
 #include <vector>
 #include <wx/frame.h>
@@ -89,6 +92,11 @@ namespace {
 #endif
 		}
 	};
+
+	double DurationMs(std::chrono::steady_clock::time_point started) noexcept {
+		return std::chrono::duration<double, std::milli>(
+			std::chrono::steady_clock::now() - started).count();
+	}
 
 class MruMenu final : public wxMenu {
 	/// Window ID of first menu item
@@ -550,6 +558,20 @@ class AutomationMenu final : public wxMenu {
 	};
 
 	void Regenerate() {
+		auto const trace_timing =
+			perf_trace::IsCategoryEnabled(perf_trace::Category::Log);
+		auto const started = std::chrono::steady_clock::now();
+		std::size_t global_macro_count = 0;
+		std::size_t local_macro_count = 0;
+		auto log_timing = agi::make_scope_exit([&] {
+			if (!trace_timing)
+				return;
+			LOG_I("automation/menu/timing")
+				<< "menu_regenerate_ms=" << DurationMs(started)
+				<< " global_macro_count=" << global_macro_count
+				<< " local_macro_count=" << local_macro_count
+				<< " menu_item_count=" << GetMenuItemCount();
+		});
 		auto ui = c->GetUI();
 		MenuBarRedrawBlock redraw_block(ui.parent);
 
@@ -562,8 +584,10 @@ class AutomationMenu final : public wxMenu {
 			Delete(items[items.size() - 1]);
 
 		auto macros = config::global_scripts->GetMacros();
+		global_macro_count = macros.size();
 		auto core = c->GetCore();
 		auto const& local_macros = core.local_scripts->GetMacros();
+		local_macro_count = local_macros.size();
 		macros.insert(macros.end(), local_macros.begin(), local_macros.end());
 		if (macros.empty()) {
 			Append(-1, _("No Automation macros loaded"))->Enable(false);

@@ -53,9 +53,22 @@
 #include "video_controller.h"
 
 #include <libaegisub/make_unique.h>
+#include <libaegisub/log.h>
+#include <libaegisub/scope_exit.h>
 #include <libaegisub/util.h>
 
 #include <algorithm>
+#include <chrono>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
 
 #include <wx/dcbuffer.h>
 #include <wx/menu.h>
@@ -67,6 +80,30 @@ enum {
 	GRID_SCROLLBAR = 1730,
 	MENU_SHOW_COL = (wxID_HIGHEST + 1) + 2000 // Needs 15 IDs after this
 };
+
+namespace {
+	constexpr double GridTimingLogThresholdMs = 16.0;
+
+	double DurationMs(
+		std::chrono::steady_clock::time_point started,
+		std::chrono::steady_clock::time_point finished = std::chrono::steady_clock::now()) noexcept
+	{
+		return std::chrono::duration<double, std::milli>(finished - started).count();
+	}
+
+	double CurrentWindowsMessageAgeMs() noexcept {
+#ifdef _WIN32
+		auto const now = static_cast<DWORD>(::GetTickCount());
+		auto const raw_message_time = ::GetMessageTime();
+		if (raw_message_time == 0 || raw_message_time == -1)
+			return -1.0;
+		auto const message_time = static_cast<DWORD>(raw_message_time);
+		return static_cast<double>(static_cast<DWORD>(now - message_time));
+#else
+		return -1.0;
+#endif
+	}
+}
 
 BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 : wxWindow(parent, -1, wxDefaultPosition, wxDefaultSize, wxWANTS_CHARS | wxSUNKEN_BORDER)
@@ -326,6 +363,37 @@ void BaseGrid::OnIdle(wxIdleEvent&) {
 }
 
 void BaseGrid::OnPaint(wxPaintEvent &) {
+	auto click_timing = pending_click_paint_timing;
+	pending_click_paint_timing.pending = false;
+	auto const paint_started = click_timing.pending
+		? InputTimingClock::now()
+		: InputTimingClock::time_point{};
+	auto log_click_paint_timing = agi::make_scope_exit([click_timing, paint_started] {
+		if (!click_timing.pending)
+			return;
+		auto const paint_finished = InputTimingClock::now();
+		auto const paint_queue_wait_ms =
+			DurationMs(click_timing.handler_finished, paint_started);
+		auto const paint_ms = DurationMs(paint_started, paint_finished);
+		auto const click_to_paint_end_ms =
+			DurationMs(click_timing.click_started, paint_finished);
+		if (!click_timing.slow_input &&
+			paint_queue_wait_ms < GridTimingLogThresholdMs &&
+			paint_ms < GridTimingLogThresholdMs &&
+			click_to_paint_end_ms < GridTimingLogThresholdMs)
+			return;
+		LOG_I("subtitle/grid/input_timing")
+			<< "event_id=" << click_timing.event_id
+			<< " phase=first_paint_complete"
+			<< " row=" << click_timing.row
+			<< " message_age_ms=" << click_timing.message_age_ms
+			<< " handler_ms=" << click_timing.handler_ms
+			<< " focus_ms=" << click_timing.focus_ms
+			<< " paint_queue_wait_ms=" << paint_queue_wait_ms
+			<< " paint_ms=" << paint_ms
+			<< " click_to_paint_end_ms=" << click_to_paint_end_ms;
+	});
+
 	int w = 0;
 	int h = 0;
 	GetClientSize(&w,&h);
@@ -546,6 +614,60 @@ void BaseGrid::OnScroll(wxScrollEvent &event) {
 }
 
 void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
+	auto const trace_left_click =
+		perf_trace::IsCategoryEnabled(perf_trace::Category::Log)
+		&& (event.LeftDown() || event.LeftDClick());
+	auto const event_id = trace_left_click ? ++next_click_timing_id : 0;
+	auto const click_started = trace_left_click
+		? InputTimingClock::now()
+		: InputTimingClock::time_point{};
+	auto const message_age_ms = trace_left_click ? CurrentWindowsMessageAgeMs() : -1.0;
+	auto const revision_at_entry = grid_revision;
+	double focus_ms = 0.0;
+	bool focus_requested = false;
+	bool focus_changed = false;
+	bool selection_handled = false;
+	int trace_row = -1;
+	auto log_click_timing = agi::make_scope_exit([&] {
+		if (!trace_left_click)
+			return;
+		auto const handler_finished = InputTimingClock::now();
+		auto const handler_ms = DurationMs(click_started, handler_finished);
+		auto const slow_input =
+			message_age_ms >= GridTimingLogThresholdMs ||
+			handler_ms >= GridTimingLogThresholdMs ||
+			focus_ms >= GridTimingLogThresholdMs;
+		auto const revision_changed = grid_revision != revision_at_entry;
+		// Keep the first click while its invalidation is waiting for paint; later
+		// clicks can be coalesced into the same first repaint by wxWidgets.
+		if (selection_handled && revision_changed && !pending_click_paint_timing.pending) {
+			pending_click_paint_timing = {
+				true,
+				slow_input,
+				event_id,
+				trace_row,
+				message_age_ms,
+				handler_ms,
+				focus_ms,
+				click_started,
+				handler_finished,
+			};
+		}
+		if (!slow_input)
+			return;
+		LOG_I("subtitle/grid/input_timing")
+			<< "event_id=" << event_id
+			<< " phase=mouse_handler_complete"
+			<< " row=" << trace_row
+			<< " message_age_ms=" << message_age_ms
+			<< " handler_ms=" << handler_ms
+			<< " focus_requested=" << focus_requested
+			<< " focus_changed=" << focus_changed
+			<< " focus_ms=" << focus_ms
+			<< " selection_handled=" << selection_handled
+			<< " revision_changed=" << revision_changed;
+	});
+
 	if (hotkey::check("Subtitle Grid", context, event))
 		return;
 
@@ -560,13 +682,19 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 	bool click = event.LeftDown();
 	bool dclick = event.LeftDClick();
 	int row = event.GetY() / lineHeight + yPos - 1;
+	trace_row = row;
 	if (holding && !click)
 		row = mid(0, row, GetRows()-1);
 	AssDialogue *dlg = GetDialogue(row);
 	if (!dlg) row = 0;
 
-	if (event.ButtonDown() && OPT_GET("Subtitle/Grid/Focus Allow")->GetBool())
+	focus_requested = event.ButtonDown() && OPT_GET("Subtitle/Grid/Focus Allow")->GetBool();
+	if (focus_requested) {
+		focus_changed = wxWindow::FindFocus() != this;
+		auto const focus_started = InputTimingClock::now();
 		SetFocus();
+		focus_ms = DurationMs(focus_started);
+	}
 
 	if (holding) {
 		if (!event.LeftIsDown()) {
@@ -615,6 +743,7 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 			{shift, ctrl, alt},
 		});
 		if (plan.handled) {
+			selection_handled = true;
 			perf_trace::VideoUiDurationScope select_trace(
 				"grid_select.mouse.total",
 				static_cast<int>(plan.selected_rows.size()),

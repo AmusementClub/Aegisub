@@ -66,8 +66,11 @@
 
 #include <libaegisub/character_count.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/log.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstdint>
 #include <functional>
 #include <limits>
 #include <unordered_set>
@@ -80,9 +83,80 @@
 #include <wx/sizer.h>
 #include <wx/spinctrl.h>
 
+#ifdef __WXMSW__
+#include <windows.h>
+#endif
+
 namespace {
 
-wxString new_value(wxComboBox *ctrl, wxCommandEvent &evt) {
+#ifdef __WXMSW__
+	std::int64_t ComboPaintTimingNowNs() noexcept {
+		return std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::steady_clock::now().time_since_epoch()).count();
+	}
+
+	double ComboPaintTimingDurationMs(std::int64_t started_ns, std::int64_t finished_ns) noexcept {
+		return static_cast<double>(finished_ns - started_ns) / 1'000'000.0;
+	}
+
+	class TracedSubsEditStyleComboBox final : public wxOwnerDrawnComboBox {
+		struct PendingPaintTiming {
+			bool pending = false;
+			std::uint64_t update_id = 0;
+			int previous_selection = wxNOT_FOUND;
+			int selection = wxNOT_FOUND;
+			std::int64_t requested_ns = 0;
+		};
+
+		PendingPaintTiming pending_paint_timing;
+		std::uint64_t next_paint_timing_id = 0;
+
+		WXLRESULT MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lParam) override {
+			if (message != WM_PAINT)
+				return wxOwnerDrawnComboBox::MSWWindowProc(message, wParam, lParam);
+
+			auto const timing = pending_paint_timing;
+			pending_paint_timing.pending = false;
+			auto const paint_started_ns = timing.pending ? ComboPaintTimingNowNs() : 0;
+			auto const result = wxOwnerDrawnComboBox::MSWWindowProc(message, wParam, lParam);
+			if (!timing.pending)
+				return result;
+
+			auto const paint_finished_ns = ComboPaintTimingNowNs();
+			LOG_I("subtitle/editbox/style_paint_timing")
+				<< "update_id=" << timing.update_id
+				<< " phase=first_paint_complete"
+				<< " previous_selection=" << timing.previous_selection
+				<< " selection=" << timing.selection
+				<< " paint_queue_wait_ms=" << ComboPaintTimingDurationMs(timing.requested_ns, paint_started_ns)
+				<< " paint_ms=" << ComboPaintTimingDurationMs(paint_started_ns, paint_finished_ns);
+			return result;
+		}
+
+	public:
+		using wxOwnerDrawnComboBox::wxOwnerDrawnComboBox;
+
+		void Select(int selection) override {
+			auto const previous_selection = GetSelection();
+			wxOwnerDrawnComboBox::Select(selection);
+			if (perf_trace::IsCategoryEnabled(perf_trace::Category::Log)) {
+				pending_paint_timing = {
+					true,
+					++next_paint_timing_id,
+					previous_selection,
+					selection,
+					ComboPaintTimingNowNs(),
+				};
+			}
+			else {
+				pending_paint_timing.pending = false;
+			}
+		}
+	};
+#endif
+
+template<typename ComboBox>
+wxString new_value(ComboBox *ctrl, wxCommandEvent &evt) {
 #ifdef __WXGTK__
 	return ctrl->GetValue();
 #else
@@ -130,7 +204,7 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 #endif
 	top_sizer->Add(comment_box, wxSizerFlags().Expand().Border(wxRIGHT, 5));
 
-	style_box = MakeComboBox(wxS("Default"), wxCB_READONLY, &SubsEditBox::OnStyleChange, _("Style for this line"));
+	style_box = MakeStyleComboBox(wxS("Default"), &SubsEditBox::OnStyleChange, _("Style for this line"));
 
 	style_edit_button = new wxButton(this, -1, _("Edit"), wxDefaultPosition, wxDefaultSize, wxBU_EXACTFIT);
 	style_edit_button->Bind(wxEVT_BUTTON, [=](wxCommandEvent&) {
@@ -570,9 +644,29 @@ wxButton *SubsEditBox::MakeBottomButton(const char *cmd_name) {
 	return btn;
 }
 
-wxComboBox *SubsEditBox::MakeComboBox(wxString const& initial_text, int style, void (SubsEditBox::*handler)(wxCommandEvent&), wxString const& tooltip) {
+SubsEditStyleComboBox *SubsEditBox::MakeStyleComboBox(wxString const& initial_text, void (SubsEditBox::*handler)(wxCommandEvent&), wxString const& tooltip) {
 	wxString styles[] = { wxS("Default") };
-	wxComboBox *ctrl = new wxComboBox(this, -1, initial_text, wxDefaultPosition, wxDefaultSize, 1, styles, style | wxTE_PROCESS_ENTER);
+#ifdef __WXMSW__
+	auto *ctrl = new TracedSubsEditStyleComboBox(
+		this,
+		-1,
+		initial_text,
+		wxDefaultPosition,
+		wxDefaultSize,
+		1,
+		styles,
+		wxCB_READONLY | wxODCB_STD_CONTROL_PAINT);
+#else
+	auto *ctrl = new wxComboBox(
+		this,
+		-1,
+		initial_text,
+		wxDefaultPosition,
+		wxDefaultSize,
+		1,
+		styles,
+		wxCB_READONLY | wxTE_PROCESS_ENTER);
+#endif
 	ctrl->SetToolTip(tooltip);
 	top_sizer->Add(ctrl, wxSizerFlags(2).Expand().Border(wxRIGHT));
 	Bind(wxEVT_COMBOBOX, handler, this, ctrl->GetId());
@@ -617,7 +711,11 @@ void SubsEditBox::OnCommit(int type, AssDialogue const* changed) {
 		return;
 	}
 	else if ((type & AssFile::COMMIT_STYLES) && line)
-		style_box->Select(style_box->FindString(to_wx(line->Style)));
+	{
+		auto const style_index = style_box->FindString(to_wx(line->Style));
+		if (style_box->GetSelection() != style_index)
+			style_box->Select(style_index);
+	}
 
 	if (!(type ^ AssFile::COMMIT_ORDER) || !affects_current_line)
 		return;
@@ -692,10 +790,41 @@ void SubsEditBox::UpdateFields(int type, bool repopulate_lists) {
 			comment_box->SetValue(line->Comment);
 		}
 		{
-			perf_trace::VideoUiDurationScope meta_trace("grid_select.editbox.meta.style", style_box->GetCount());
-			style_box->Select(style_box->FindString(to_wx(line->Style)));
-			active_style = line ? core.ass->GetStyle(line->Style) : nullptr;
-			style_edit_button->Enable(active_style != nullptr);
+			perf_trace::VideoUiDurationScope style_trace(
+				"grid_select.editbox.meta.style",
+				style_box->GetCount());
+			int style_index = -1;
+			int const current_style_index = style_box->GetSelection();
+			{
+				perf_trace::VideoUiDurationScope find_trace(
+					"grid_select.editbox.meta.style.find",
+					style_box->GetCount(),
+					current_style_index);
+				style_index = style_box->FindString(to_wx(line->Style));
+				find_trace.SetDetails(style_box->GetCount(), style_index);
+			}
+			{
+				perf_trace::VideoUiDurationScope select_trace(
+					"grid_select.editbox.meta.style.select",
+					current_style_index,
+					style_index);
+				wxString const target_style = style_index == wxNOT_FOUND
+					? wxString{}
+					: style_box->GetString(style_index);
+				if (current_style_index != style_index || style_box->GetValue() != target_style)
+					style_box->Select(style_index);
+			}
+			{
+				perf_trace::VideoUiDurationScope resolve_trace(
+					"grid_select.editbox.meta.style.resolve");
+				active_style = line ? core.ass->GetStyle(line->Style) : nullptr;
+			}
+			{
+				perf_trace::VideoUiDurationScope button_trace(
+					"grid_select.editbox.meta.style.button",
+					active_style != nullptr ? 1 : 0);
+				style_edit_button->Enable(active_style != nullptr);
+			}
 		}
 
 		if (repopulate_lists) {

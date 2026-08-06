@@ -51,6 +51,7 @@
 
 #include <libaegisub/format.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/log.h>
 #include <libaegisub/path.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/string_utils.h>
@@ -76,6 +77,15 @@
 
 namespace Automation4 {
 	namespace {
+		using AutoloadTimingClock = std::chrono::steady_clock;
+
+		double AutoloadDurationMs(
+			AutoloadTimingClock::time_point started,
+			AutoloadTimingClock::time_point finished = AutoloadTimingClock::now()) noexcept
+		{
+			return std::chrono::duration<double, std::milli>(finished - started).count();
+		}
+
 		class ScriptCompatibilityWrapper final : public Script {
 			std::unique_ptr<AutomationScriptInstance> impl;
 
@@ -922,25 +932,91 @@ namespace Automation4 {
 		auto path_copy = path;
 		auto managed_plugin_root_copy = managed_plugin_root;
 		auto const reload_id = generation->fetch_add(1, std::memory_order_relaxed) + 1;
+		auto const scheduled_at = AutoloadTimingClock::now();
+		LOG_I_IF(perf_trace::IsCategoryEnabled(perf_trace::Category::Log), "automation/autoload/timing")
+			<< "reload_id=" << reload_id << " phase=scheduled";
 
 		agi::dispatch::Background().Async([this, lifetime, generation, reload_id,
+			scheduled_at,
 			path_copy = std::move(path_copy),
 			managed_plugin_root_copy = std::move(managed_plugin_root_copy)] {
+			auto const background_started = AutoloadTimingClock::now();
+			auto const background_dispatch_delay_ms =
+				AutoloadDurationMs(scheduled_at, background_started);
 			auto result = std::make_shared<AutoloadReloadResult>(
 				LoadAutoloadScripts(path_copy, managed_plugin_root_copy));
-			agi::dispatch::Main().Async([this, lifetime, generation, reload_id, result] {
-				if (!lifetime.lock())
+			auto const background_finished = AutoloadTimingClock::now();
+			auto const background_load_ms =
+				AutoloadDurationMs(background_started, background_finished);
+			std::size_t loaded_script_count = 0;
+			std::size_t macro_count = 0;
+			std::size_t filter_count = 0;
+			for (auto const& script : result->scripts) {
+				if (!script || !script->GetLoadedState())
+					continue;
+				++loaded_script_count;
+				macro_count += script->GetMacros().size();
+				filter_count += script->GetFilters().size();
+			}
+			auto const script_count = result->scripts.size();
+			auto const error_count = result->error_count;
+			auto const diagnostic_count = result->diagnostics.size();
+			LOG_I_IF(perf_trace::IsCategoryEnabled(perf_trace::Category::Log), "automation/autoload/timing")
+				<< "reload_id=" << reload_id
+				<< " phase=background_complete"
+				<< " background_dispatch_delay_ms=" << background_dispatch_delay_ms
+				<< " background_load_ms=" << background_load_ms
+				<< " script_count=" << script_count
+				<< " loaded_script_count=" << loaded_script_count
+				<< " macro_count=" << macro_count
+				<< " filter_count=" << filter_count
+				<< " error_count=" << error_count
+				<< " diagnostic_count=" << diagnostic_count;
+
+			agi::dispatch::Main().Async([this, lifetime, generation, reload_id, result,
+				background_finished, background_dispatch_delay_ms, background_load_ms,
+				script_count, loaded_script_count, macro_count, filter_count,
+				error_count, diagnostic_count] {
+				auto const main_started = AutoloadTimingClock::now();
+				auto const main_queue_wait_ms =
+					AutoloadDurationMs(background_finished, main_started);
+				if (!lifetime.lock()) {
+					LOG_I_IF(perf_trace::IsCategoryEnabled(perf_trace::Category::Log), "automation/autoload/timing")
+						<< "reload_id=" << reload_id
+						<< " phase=main_skipped reason=lifetime_expired"
+						<< " main_queue_wait_ms=" << main_queue_wait_ms;
 					return;
-				if (generation->load(std::memory_order_relaxed) != reload_id)
+				}
+				if (generation->load(std::memory_order_relaxed) != reload_id) {
+					LOG_I_IF(perf_trace::IsCategoryEnabled(perf_trace::Category::Log), "automation/autoload/timing")
+						<< "reload_id=" << reload_id
+						<< " phase=main_skipped reason=superseded"
+						<< " main_queue_wait_ms=" << main_queue_wait_ms;
 					return;
+				}
 				std::vector<std::pair<std::string, bool>> diagnostics;
 				for (auto& diagnostic : result->diagnostics)
 					diagnostics.emplace_back(
 						std::move(diagnostic.message), diagnostic.error);
+				auto const apply_started = AutoloadTimingClock::now();
 				ApplyReloadedScripts(
 					std::move(result->scripts),
 					result->error_count,
 					std::move(diagnostics));
+				auto const apply_ms = AutoloadDurationMs(apply_started);
+				LOG_I_IF(perf_trace::IsCategoryEnabled(perf_trace::Category::Log), "automation/autoload/timing")
+					<< "reload_id=" << reload_id
+					<< " phase=main_complete"
+					<< " background_dispatch_delay_ms=" << background_dispatch_delay_ms
+					<< " background_load_ms=" << background_load_ms
+					<< " main_queue_wait_ms=" << main_queue_wait_ms
+					<< " apply_ms=" << apply_ms
+					<< " script_count=" << script_count
+					<< " loaded_script_count=" << loaded_script_count
+					<< " macro_count=" << macro_count
+					<< " filter_count=" << filter_count
+					<< " error_count=" << error_count
+					<< " diagnostic_count=" << diagnostic_count;
 			});
 		});
 	}

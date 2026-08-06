@@ -29,6 +29,7 @@
 
 #include "subtitle_character_markers.h"
 
+#include <cstdint>
 #include <memory>
 #include <set>
 #include <string>
@@ -47,6 +48,20 @@ namespace agi {
 class SubsStyledTextEditCtrl final : public wxStyledTextCtrl {
 #if wxUSE_DRAG_AND_DROP
 	class DropTarget;
+#endif
+
+#ifdef __WXMSW__
+	struct PendingPaintTiming {
+		bool pending = false;
+		std::uint64_t update_id = 0;
+		int text_bytes = 0;
+		std::int64_t requested_ns = 0;
+	};
+
+	PendingPaintTiming pending_paint_timing;
+	std::uint64_t next_paint_timing_id = 0;
+
+	WXLRESULT MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lParam) override;
 #endif
 
 	/// Backend spellchecker to use

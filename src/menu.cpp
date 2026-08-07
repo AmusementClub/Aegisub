@@ -186,8 +186,8 @@ class CommandManager {
 
 	/// Project context
 	agi::Context *context;
-	/// True while a menu popup session is active; used to avoid repeated
-	/// updates when switching between menu titles/submenus.
+	/// True after dynamic items have been refreshed for the current menu popup
+	/// session; used to avoid repeated updates when switching titles/submenus.
 	bool menu_open_active = false;
 
 	/// Connection for hotkey change signal
@@ -318,20 +318,18 @@ public:
 			return;
 		if (menu_open_active)
 			return;
-		menu_open_active = true;
 
 		wxMenu *opened_menu = evt.GetMenu();
-		if (opened_menu && !owned_menus.count(opened_menu)) {
-			menu_open_active = false;
+		if (opened_menu && !owned_menus.count(opened_menu))
 			return;
-		}
-		bool limit_scope = opened_menu != nullptr;
 
-		for (auto const& item : dynamic_items) {
-			if (limit_scope && item.second->GetMenu() != opened_menu)
-				continue;
+		menu_open_active = true;
+
+		// wxEVT_MENU_OPEN is not reliable for submenus on every platform. Refresh
+		// all items once per popup session so nested toggle/radio state is ready
+		// even when only the top-level menu reports an open event.
+		for (auto const& item : dynamic_items)
 			UpdateItem(item);
-		}
 
 		for (auto item : mru)
 			item->Update();

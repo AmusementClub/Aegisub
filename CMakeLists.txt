@@ -794,6 +794,7 @@ set(AEGISUB_CORE_SOURCES
     # search_replace_engine / secondary_subtitle_session / subs_controller /
     # subs_controller_timer still call UI-facing Context or GUI-only features.
     src/project_session_ops.cpp
+    src/secondary_subtitle_reload_policy.cpp
     # src/secondary_subtitle_session.cpp  ← moved to exe (GUI-only feature: dual subtitle preview)
     # subs_controller is still the GUI document controller: it calls
     # SubtitleFormat, command dispatch, FrameMain, and wx file watching.

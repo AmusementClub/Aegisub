@@ -21,6 +21,7 @@ if(GTEST_FOUND)
         tests/tests/access.cpp
         tests/tests/aegisublocale_compat.cpp
         tests/tests/ass_drawing.cpp
+        tests/tests/ass_file_app.cpp
         tests/tests/ass_dialogue.cpp
         tests/tests/ass_file_extradata.cpp
         tests/tests/ass_project_garbage.cpp
@@ -94,6 +95,8 @@ if(GTEST_FOUND)
         src/ass_style.cpp
         src/ass_style_resolution.cpp
         src/ass_style_storage.cpp
+        src/ass_file_app.cpp
+        src/secondary_subtitle_reload_policy.cpp
         src/async_video_provider.cpp
         src/async_video_provider_host.cpp
         src/async_video_trace.cpp
@@ -219,6 +222,7 @@ if(GTEST_FOUND)
         tests/tests/ready_flag.cpp
         tests/tests/scenechange_native_api.cpp
         tests/tests/scope_exit.cpp
+        tests/tests/secondary_subtitle_reload_policy.cpp
         tests/tests/secondary_subtitle_strip_layout.cpp
         tests/tests/selection_anchor.cpp
         tests/tests/selection_navigation_history.cpp

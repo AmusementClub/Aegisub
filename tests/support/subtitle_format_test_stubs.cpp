@@ -8,32 +8,6 @@
 #include <algorithm>
 #include <utility>
 
-void LoadDefaultAssFileWithAppOptions(AssFile& file, bool include_dialogue_line, std::string const&) {
-	file.LoadDefault(false);
-	if (include_dialogue_line)
-		file.Events.push_back(*new AssDialogue);
-}
-
-std::string GetSubtitleFormatDefaultStyleCatalog(std::string const&) {
-	return {};
-}
-
-std::string GetTextImportActorSeparator() {
-	return ":";
-}
-
-std::string GetTextImportCommentStarter() {
-	return "#";
-}
-
-bool GetTextImportIncludeBlank() {
-	return false;
-}
-
-ScriptResolutionType GetAppScriptResolutionPreference() {
-	return ScriptResolutionType::PlayRes;
-}
-
 SubtitleFormat::SubtitleFormat(std::string name)
 : name(std::move(name)) {
 }

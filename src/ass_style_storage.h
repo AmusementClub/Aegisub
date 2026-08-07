@@ -86,6 +86,10 @@ public:
 	/// Make a list of all existing style catalogs in the default location
 	static std::vector<std::string> GetCatalogs();
 
+	/// Resolve a catalog name to its file in the default location.
+	/// Returns an empty path when no catalog is selected or paths are unavailable.
+	static agi::fs::path GetCatalogPath(std::string const& catalogname);
+
 	/// Check whether the name catalog exists in the default location
 	/// @param catalogname Basename for the catalog file to check for.
 	static bool CatalogExists(std::string const& catalogname);

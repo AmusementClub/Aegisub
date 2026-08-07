@@ -20,6 +20,7 @@
 #include "project.h"
 #include "pgs_sup_packet_stream.h"
 #include "secondary_subtitle_decoder.h"
+#include "secondary_subtitle_reload_policy.h"
 #include "vobsub_packet_stream.h"
 #include "subtitle_fps_choice.h"
 #include "subs_controller.h"
@@ -169,7 +170,8 @@ SecondarySubtitleSession::SecondarySubtitleSession(agi::Context *context)
 : context(context)
 , external_subtitle_watch(agi::make_unique<WatchedFile>(CreateWxFileSystemWatcherBackend()))
 , external_subtitle_companion_watch(agi::make_unique<WatchedFile>(CreateWxFileSystemWatcherBackend()))
-, external_subtitle_alternate_companion_watch(agi::make_unique<WatchedFile>(CreateWxFileSystemWatcherBackend())) {
+, external_subtitle_alternate_companion_watch(agi::make_unique<WatchedFile>(CreateWxFileSystemWatcherBackend()))
+, external_style_catalog_watch(agi::make_unique<WatchedFile>(CreateWxFileSystemWatcherBackend())) {
 	auto core = context->GetCore();
 	auto ui = context->GetUI();
 	ui_activation.AddConnections(
@@ -182,6 +184,7 @@ SecondarySubtitleSession::SecondarySubtitleSession(agi::Context *context)
 		OPT_SUB("Colour/Secondary Subtitle Strip/Dummy Background", &SecondarySubtitleSession::OnDummyBackgroundColorChanged, this),
 		OPT_SUB("Video/Secondary Subtitles/Dummy/Pattern", &SecondarySubtitleSession::OnDummyBackgroundPatternChanged, this),
 		OPT_SUB("Video/Secondary Subtitles/Provider", &SecondarySubtitleSession::OnConfiguredProviderChanged, this),
+		OPT_SUB("Subtitle Format/SRT/Default Style Catalog", &SecondarySubtitleSession::OnSrtStyleCatalogChanged, this),
 		OPT_SUB("Subtitle/Provider", &SecondarySubtitleSession::OnGlobalProviderChanged, this));
 	external_subtitle_watch->SetChangedCallback([this](agi::fs::path const& path) {
 		OnExternalSubtitleFileChanged(path);
@@ -201,10 +204,17 @@ SecondarySubtitleSession::SecondarySubtitleSession(agi::Context *context)
 	external_subtitle_alternate_companion_watch->SetErrorCallback([this](std::string const& message) {
 		OnExternalSubtitleWatchError(message);
 	});
+	external_style_catalog_watch->SetChangedCallback([this](agi::fs::path const& path) {
+		OnExternalStyleCatalogFileChanged(path);
+	});
+	external_style_catalog_watch->SetErrorCallback([this](std::string const& message) {
+		OnExternalSubtitleWatchError(message);
+	});
 	RestoreSourceFromProjectProperties();
 }
 
 SecondarySubtitleSession::~SecondarySubtitleSession() {
+	external_style_catalog_watch.reset();
 	external_subtitle_alternate_companion_watch.reset();
 	external_subtitle_companion_watch.reset();
 	external_subtitle_watch.reset();
@@ -232,6 +242,7 @@ void SecondarySubtitleSession::ClearExternalSubtitles() {
 	external_subtitle_reload_pending = false;
 	external_subtitle_fps_selection.reset();
 	external_subtitles_follow_video_timecodes = false;
+	external_subtitles_are_srt = false;
 	external_vobsub_track_index.reset();
 }
 
@@ -279,6 +290,12 @@ void SecondarySubtitleSession::OnGlobalProviderChanged(agi::OptionValue const&) 
 	}
 
 	RebuildProvider(context->GetCore().project->VideoProvider());
+}
+
+void SecondarySubtitleSession::OnSrtStyleCatalogChanged(agi::OptionValue const&) {
+	UpdateExternalStyleCatalogWatch();
+	if (source_mode == SecondarySubtitleSourceMode::ExternalFile && external_subtitles_are_srt)
+		ReloadExternalSubtitlesAfterChange();
 }
 
 void SecondarySubtitleSession::OnMainSubtitlesFileChanged(agi::fs::path const&, bool is_reload) {
@@ -347,6 +364,7 @@ void SecondarySubtitleSession::RequestFrame(int frame_number) {
 }
 
 void SecondarySubtitleSession::UpdateExternalSubtitleWatch() {
+	UpdateExternalStyleCatalogWatch();
 	if (!external_subtitle_watch)
 		return;
 
@@ -383,6 +401,20 @@ void SecondarySubtitleSession::UpdateExternalSubtitleWatch() {
 		external_subtitle_alternate_companion_watch->SetTargetPath(upper_case);
 	}
 #endif
+}
+
+void SecondarySubtitleSession::UpdateExternalStyleCatalogWatch() {
+	if (!external_style_catalog_watch)
+		return;
+
+	auto const path = ResolveSecondarySubtitleStyleCatalogWatchPath(
+		source_mode == SecondarySubtitleSourceMode::ExternalFile,
+		external_subtitles_are_srt,
+		GetSubtitleFormatDefaultStyleCatalog("SRT"));
+	if (path.empty())
+		external_style_catalog_watch->ClearTargetPath();
+	else
+		external_style_catalog_watch->SetTargetPath(path);
 }
 
 AssFile *SecondarySubtitleSession::ResolveSubtitlesForProvider(AsyncVideoProvider *main_provider) {
@@ -435,8 +467,53 @@ bool SecondarySubtitleSession::LoadConfiguredExternalSubtitles(bool show_errors,
 	return LoadExternalSubtitlesFromPath(path_string, show_errors);
 }
 
+void SecondarySubtitleSession::RefreshProviderAfterExternalReload() {
+	auto const action = PlanSecondarySubtitleExternalReload(
+		active,
+		provider != nullptr,
+		external_subtitles && external_subtitles_are_srt && !bitmap_subtitles);
+	switch (action) {
+		case SecondarySubtitleExternalReloadAction::ReleaseProvider:
+			ReleaseProvider();
+			return;
+
+		case SecondarySubtitleExternalReloadAction::RebuildProvider:
+			RebuildProvider(context->GetCore().project->VideoProvider());
+			return;
+
+		case SecondarySubtitleExternalReloadAction::ReloadInPlace:
+			break;
+	}
+
+	auto core = context->GetCore();
+	auto *main_provider = core.project->VideoProvider();
+	UpdateExternalSubtitleResolution(main_provider);
+	provider->SetSubtitlesTimecodes(core.project->Timecodes());
+	provider->LoadSubtitles(external_subtitles.get());
+	RequestFrame(core.videoController->GetFrameN());
+}
+
+void SecondarySubtitleSession::ReloadExternalSubtitlesAfterChange() {
+	if (source_mode != SecondarySubtitleSourceMode::ExternalFile || external_subtitle_path.empty())
+		return;
+
+	external_subtitle_reload_pending = true;
+	if (!active)
+		return;
+	if (!LoadConfiguredExternalSubtitles(false, true))
+		return;
+
+	RefreshProviderAfterExternalReload();
+}
+
 bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& path_string, bool show_errors) {
 	auto const path = agi::fs::PathFromString(path_string);
+	auto report_error = [&](std::string const& message) {
+		if (show_errors)
+			context->ShowError(message, kSecondarySubtitleWarningTitle);
+		else
+			wxLogWarning(wxS("Secondary subtitle reload failed: %s"), to_wx(message));
+	};
 	auto install_bitmap_stream = [&](SecondarySubtitlePacketStream stream,
 		std::optional<int> vobsub_track_index) {
 		FillMissingBitmapCanvasFromVideo(
@@ -448,7 +525,9 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 		external_subtitle_reload_pending = false;
 		external_subtitle_fps_selection.reset();
 		external_subtitles_follow_video_timecodes = false;
+		external_subtitles_are_srt = false;
 		external_vobsub_track_index = vobsub_track_index;
+		UpdateExternalStyleCatalogWatch();
 		return true;
 	};
 	try {
@@ -505,6 +584,7 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 		auto const *reader = SubtitleFormat::GetReader(path, charset);
 		if (!reader)
 			throw UnknownSubtitleFormatError("Subtitle format for extension not found");
+		bool const is_srt = reader->GetName() == "SubRip";
 
 		auto core = context->GetCore();
 		auto const reuse_fps_selection = loaded_external_subtitle_path == path_string
@@ -539,23 +619,22 @@ bool SecondarySubtitleSession::LoadExternalSubtitlesFromPath(std::string const& 
 		external_subtitle_fps_selection = choice_sink->GetRecordedSelection();
 		external_subtitles_follow_video_timecodes =
 			external_subtitle_fps_selection && external_subtitle_fps_selection->follow_video;
+		external_subtitles_are_srt = is_srt;
 		external_vobsub_track_index.reset();
+		UpdateExternalStyleCatalogWatch();
 		return true;
 	}
 	catch (agi::UserCancelException const&) {
 		return false;
 	}
 	catch (agi::Exception const& err) {
-		if (show_errors)
-			context->ShowError(err.GetMessage(), kSecondarySubtitleWarningTitle);
+		report_error(err.GetMessage());
 	}
 	catch (std::exception const& err) {
-		if (show_errors)
-			context->ShowError(err.what(), kSecondarySubtitleWarningTitle);
+		report_error(err.what());
 	}
 	catch (...) {
-		if (show_errors)
-			context->ShowError("Unknown error while loading secondary subtitles.", kSecondarySubtitleWarningTitle);
+		report_error("Unknown error while loading secondary subtitles.");
 	}
 	return false;
 }
@@ -632,6 +711,7 @@ bool SecondarySubtitleSession::LoadVideoEmbeddedSubtitles(bool show_errors, std:
 				external_subtitle_reload_pending = false;
 				external_subtitle_fps_selection.reset();
 				external_subtitles_follow_video_timecodes = false;
+				external_subtitles_are_srt = false;
 				external_vobsub_track_index.reset();
 				external_subtitle_path.clear();
 				return true;
@@ -655,6 +735,7 @@ bool SecondarySubtitleSession::LoadVideoEmbeddedSubtitles(bool show_errors, std:
 		external_subtitle_reload_pending = false;
 		external_subtitle_fps_selection.reset();
 		external_subtitles_follow_video_timecodes = false;
+		external_subtitles_are_srt = false;
 		external_vobsub_track_index.reset();
 		external_subtitle_path.clear();
 		return true;
@@ -857,7 +938,7 @@ void SecondarySubtitleSession::OnTimecodesChanged(agi::vfr::Framerate const&) {
 		&& external_subtitles_follow_video_timecodes) {
 		external_subtitle_reload_pending = true;
 		if (active && LoadConfiguredExternalSubtitles(false, true)) {
-			RebuildProvider(core.project->VideoProvider());
+			RefreshProviderAfterExternalReload();
 			return;
 		}
 
@@ -1051,10 +1132,8 @@ bool SecondarySubtitleSession::ReloadSubtitles() {
 	}
 
 	bool const reloaded = LoadConfiguredExternalSubtitles(true, true);
-	if (active)
-		RebuildProvider(context->GetCore().project->VideoProvider());
-	else
-		ReleaseProvider();
+	if (reloaded)
+		RefreshProviderAfterExternalReload();
 	return reloaded;
 }
 
@@ -1257,6 +1336,7 @@ void SecondarySubtitleSession::ActivateLoadedSource(size_t index) {
 	// own PlayRes and are never re-scaled.
 	external_subtitles_follow_video_resolution = src.follow_video_resolution;
 	loaded_external_subtitle_path.clear();
+	external_subtitles_are_srt = false;
 	external_vobsub_track_index.reset();
 	current_source_index = index;
 	SyncExternalSubtitleProjectProperty(); // VideoEmbedded clears the property
@@ -1268,29 +1348,13 @@ void SecondarySubtitleSession::ActivateLoadedSource(size_t index) {
 }
 
 void SecondarySubtitleSession::OnExternalSubtitleFileChanged(agi::fs::path const&) {
-	if (source_mode != SecondarySubtitleSourceMode::ExternalFile || external_subtitle_path.empty())
-		return;
-	if (!active) {
-		external_subtitle_reload_pending = true;
-		return;
-	}
+	ReloadExternalSubtitlesAfterChange();
+}
 
-	if (!LoadConfiguredExternalSubtitles(false, true))
+void SecondarySubtitleSession::OnExternalStyleCatalogFileChanged(agi::fs::path const&) {
+	if (source_mode != SecondarySubtitleSourceMode::ExternalFile || !external_subtitles_are_srt)
 		return;
-
-	// Text providers can replace their AssFile in place. A bitmap provider owns
-	// the decoder session created from the previous immutable packet stream, so
-	// a changed bitmap subtitle source requires a new provider/session.
-	if (provider && bitmap_subtitles) {
-		RebuildProvider(context->GetCore().project->VideoProvider());
-	}
-	else if (provider) {
-		SyncConfiguredSubtitlesSource(context->GetCore().project->VideoProvider());
-		RequestFrame(context->GetCore().videoController->GetFrameN());
-	}
-	else if (active) {
-		RebuildProvider(context->GetCore().project->VideoProvider());
-	}
+	ReloadExternalSubtitlesAfterChange();
 }
 
 void SecondarySubtitleSession::OnExternalSubtitleWatchError(std::string const& message) {

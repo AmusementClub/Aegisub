@@ -80,6 +80,7 @@ class SecondarySubtitleSession final {
 	std::unique_ptr<WatchedFile> external_subtitle_watch;
 	std::unique_ptr<WatchedFile> external_subtitle_companion_watch;
 	std::unique_ptr<WatchedFile> external_subtitle_alternate_companion_watch;
+	std::unique_ptr<WatchedFile> external_style_catalog_watch;
 	SecondarySubtitleSourceMode source_mode = SecondarySubtitleSourceMode::CurrentScript;
 	std::string external_subtitle_path;
 	std::string loaded_external_subtitle_path;
@@ -89,6 +90,7 @@ class SecondarySubtitleSession final {
 	bool external_subtitle_reload_pending = false;
 	std::optional<SecondarySubtitleFpsSelection> external_subtitle_fps_selection;
 	bool external_subtitles_follow_video_timecodes = false;
+	bool external_subtitles_are_srt = false;
 	// Guards the "video has embedded subtitles" auto-prompt so it asks at most
 	// once per video. Reset whenever the video provider changes.
 	bool video_embedded_auto_prompted = false;
@@ -135,17 +137,21 @@ class SecondarySubtitleSession final {
 	void OnDummyBackgroundPatternChanged(agi::OptionValue const& opt);
 	void OnConfiguredProviderChanged(agi::OptionValue const& opt);
 	void OnGlobalProviderChanged(agi::OptionValue const& opt);
+	void OnSrtStyleCatalogChanged(agi::OptionValue const& opt);
 	void OnMainSubtitlesFileChanged(agi::fs::path const& filename, bool is_reload);
 	void OnUpdateProperties();
 	void RestoreSourceFromProjectProperties();
 	void SyncExternalSubtitleProjectProperty();
 	void UpdateExternalSubtitleWatch();
+	void UpdateExternalStyleCatalogWatch();
 	AssFile *ResolveSubtitlesForProvider(AsyncVideoProvider *main_provider);
 	void RebuildProvider(AsyncVideoProvider *main_provider);
 	void RequestFrame(int frame_number);
 	void SyncConfiguredSubtitlesSource(AsyncVideoProvider *main_provider = nullptr);
 	bool LoadConfiguredExternalSubtitles(bool show_errors, bool force_reload = false);
 	bool LoadExternalSubtitlesFromPath(std::string const& path_string, bool show_errors);
+	void RefreshProviderAfterExternalReload();
+	void ReloadExternalSubtitlesAfterChange();
 	void UpdateExternalSubtitleResolution(AsyncVideoProvider *main_provider);
 	bool LoadVideoEmbeddedSubtitles(bool show_errors, std::string *selected_track_label = nullptr);
 	void OnVideoHasSubtitlesAvailable();
@@ -158,6 +164,7 @@ class SecondarySubtitleSession final {
 	void OnVideoError(std::string const& message);
 	void OnSubtitlesError(std::string const& message);
 	void OnExternalSubtitleFileChanged(agi::fs::path const& path);
+	void OnExternalStyleCatalogFileChanged(agi::fs::path const& path);
 	void OnExternalSubtitleWatchError(std::string const& message);
 
 public:

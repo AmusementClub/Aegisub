@@ -818,7 +818,6 @@ public:
 				notebook->ChangeSelection(FindTab(*patch.selected_tab_id));
 			revision = patch.revision;
 			Layout();
-			FitInside();
 			applying_patch = false;
 			return true;
 		}

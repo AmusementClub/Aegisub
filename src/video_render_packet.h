@@ -18,7 +18,15 @@
 #include "subtitle_overlay.h"
 #include "video_frame.h"
 
+#include <cstdint>
 #include <memory>
+
+struct VideoRenderDeliveryVersion {
+	std::uint64_t content = 0;
+	std::uint64_t request = 0;
+
+	bool operator==(VideoRenderDeliveryVersion const&) const = default;
+};
 
 struct VideoRenderPacket {
 	// For compatibility-only subtitle providers, this may already hold the
@@ -29,6 +37,7 @@ struct VideoRenderPacket {
 	std::shared_ptr<SubtitleOverlayStorage> subtitle_overlay_storage;
 
 	int frame_number = -1;
+	VideoRenderDeliveryVersion delivery_version;
 	SourceFrame source_frame;
 	SubtitleOverlay subtitle_overlay;
 	bool has_subtitle_overlay = false;

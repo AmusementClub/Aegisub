@@ -22,8 +22,10 @@
 #include <cstdint>
 #include <cstring>
 #include <condition_variable>
+#include <deque>
 #include <functional>
 #include <mutex>
+#include <thread>
 
 namespace {
 struct VideoProviderState {
@@ -628,6 +630,62 @@ public:
 	}
 };
 
+class MainThreadDeliveryFixture : public ::testing::Test {
+protected:
+	std::mutex mutex;
+	std::condition_variable cv;
+	std::deque<agi::dispatch::Thunk> main_queue;
+	std::thread::id main_thread_id = std::this_thread::get_id();
+
+	void SetUp() override {
+		agi::dispatch::Init([this](agi::dispatch::Thunk thunk) {
+			{
+				std::lock_guard<std::mutex> lock(mutex);
+				main_queue.emplace_back(std::move(thunk));
+			}
+			cv.notify_all();
+		}, [this] {
+			return std::this_thread::get_id() == main_thread_id;
+		}, [this] {
+			return PumpMainTasks();
+		});
+	}
+
+	void TearDown() override {
+		PumpMainTasks();
+		agi::dispatch::Init([](agi::dispatch::Thunk) { }, [] {
+			return false;
+		}, [] {
+			return std::size_t{ 0 };
+		});
+	}
+
+	bool WaitForMainTasks(size_t count) {
+		std::unique_lock<std::mutex> lock(mutex);
+		return cv.wait_for(lock, std::chrono::seconds(2), [&] { return main_queue.size() >= count; });
+	}
+
+	std::size_t PumpOneMainTask() {
+		agi::dispatch::Thunk thunk;
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			if (main_queue.empty())
+				return 0;
+			thunk = std::move(main_queue.front());
+			main_queue.pop_front();
+		}
+		thunk();
+		return 1;
+	}
+
+	std::size_t PumpMainTasks() {
+		std::size_t executed = 0;
+		while (PumpOneMainTask())
+			++executed;
+		return executed;
+	}
+};
+
 class SubtitleLoadRecorder {
 	std::mutex mutex;
 	std::condition_variable cv;
@@ -904,6 +962,85 @@ TEST(async_video_provider, load_subtitles_invalidates_stale_render_result) {
 	ASSERT_EQ(1u, frames.size());
 	EXPECT_EQ(1, frames.back().frame_number);
 	EXPECT_EQ(2, frames.back().subtitle_generation);
+}
+
+TEST_F(MainThreadDeliveryFixture, queued_same_frame_packet_is_rejected_after_subtitle_reload) {
+	std::unique_ptr<AsyncVideoProvider> provider;
+	auto event_lifetime = agi::ui::MakeLifetime();
+	int expected_frame = 7;
+	int callback_count = 0;
+	bool version_current = true;
+	bool frame_matches = false;
+	bool accepted = true;
+
+	auto sink = CreateAsyncVideoProviderMainThreadSink(
+		event_lifetime,
+		{
+			[&](VideoRenderPacket packet, double) {
+				++callback_count;
+				version_current = provider->IsCurrent(packet.delivery_version);
+				frame_matches = packet.frame_number == expected_frame;
+				accepted = provider->IsCurrent(packet, expected_frame);
+			},
+			{},
+			{}
+		});
+	provider = agi::make_unique<AsyncVideoProvider>(
+		agi::make_unique<FakeVideoProvider>(std::make_shared<VideoProviderState>()),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		std::move(sink));
+
+	auto old_subtitles = MakeSubtitleFile("old");
+	auto new_subtitles = MakeSubtitleFile("new");
+	provider->LoadSubtitles(&old_subtitles);
+	provider->RequestFrame(expected_frame, 7000);
+	ASSERT_TRUE(WaitForMainTasks(1));
+
+	// The old result is already in the UI queue when the same-frame style data changes.
+	provider->LoadSubtitles(&new_subtitles);
+	ASSERT_EQ(1u, PumpOneMainTask());
+
+	EXPECT_EQ(1, callback_count);
+	EXPECT_TRUE(frame_matches);
+	EXPECT_FALSE(version_current);
+	EXPECT_FALSE(accepted);
+}
+
+TEST_F(MainThreadDeliveryFixture, queued_packet_is_rejected_when_expected_frame_changes) {
+	std::unique_ptr<AsyncVideoProvider> provider;
+	auto event_lifetime = agi::ui::MakeLifetime();
+	int expected_frame = 3;
+	int callback_count = 0;
+	bool version_current = false;
+	bool frame_matches = true;
+	bool accepted = true;
+
+	auto sink = CreateAsyncVideoProviderMainThreadSink(
+		event_lifetime,
+		{
+			[&](VideoRenderPacket packet, double) {
+				++callback_count;
+				version_current = provider->IsCurrent(packet.delivery_version);
+				frame_matches = packet.frame_number == expected_frame;
+				accepted = provider->IsCurrent(packet, expected_frame);
+			},
+			{},
+			{}
+		});
+	provider = agi::make_unique<AsyncVideoProvider>(
+		agi::make_unique<FakeVideoProvider>(std::make_shared<VideoProviderState>()),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		std::move(sink));
+
+	provider->RequestFrame(expected_frame, 3000);
+	ASSERT_TRUE(WaitForMainTasks(1));
+	expected_frame = 4;
+	ASSERT_EQ(1u, PumpOneMainTask());
+
+	EXPECT_EQ(1, callback_count);
+	EXPECT_TRUE(version_current);
+	EXPECT_FALSE(frame_matches);
+	EXPECT_FALSE(accepted);
 }
 
 TEST(async_video_provider, pending_full_subtitles_coalesce_same_line_updates) {

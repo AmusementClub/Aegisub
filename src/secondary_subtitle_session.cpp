@@ -898,7 +898,8 @@ void SecondarySubtitleSession::OnPrimaryFramePresented(int frame_number) {
 }
 
 void SecondarySubtitleSession::OnFrameReady(VideoRenderPacket packet, double) {
-	if (!active || !presentation_demand.HasDemand())
+	if (!active || !presentation_demand.HasDemand() || !provider
+		|| !provider->IsCurrent(packet, current_frame))
 		return;
 
 	auto frame = BakePacketForCpuReadback(packet);

@@ -796,6 +796,15 @@ void AsyncVideoProvider::CancelPendingFrameRequests() noexcept {
 	}
 }
 
+bool AsyncVideoProvider::IsCurrent(VideoRenderDeliveryVersion version) const noexcept {
+	return version.content == content_version.load(std::memory_order_relaxed)
+		&& version.request == request_version.load(std::memory_order_relaxed);
+}
+
+bool AsyncVideoProvider::IsCurrent(VideoRenderPacket const& packet, int expected_frame) const noexcept {
+	return packet.frame_number == expected_frame && IsCurrent(packet.delivery_version);
+}
+
 void AsyncVideoProvider::SetCurrentFrameContext(int current_frame, double current_time) throw() {
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
@@ -882,8 +891,7 @@ bool AsyncVideoProvider::ProcessPending() {
 		bool has_color_space = false;
 		std::string color_space;
 		bool invalidate_overlay_upload_continuity = false;
-		uint_fast32_t request_version = 0;
-		uint_fast32_t content_version = 0;
+		VideoRenderDeliveryVersion delivery_version;
 	};
 
 	PendingWork work;
@@ -933,8 +941,8 @@ bool AsyncVideoProvider::ProcessPending() {
 			has_pending_color_space = false;
 			pending_color_space.clear();
 		}
-		work.request_version = request_version.load(std::memory_order_relaxed);
-		work.content_version = content_version.load(std::memory_order_relaxed);
+		work.delivery_version.request = request_version.load(std::memory_order_relaxed);
+		work.delivery_version.content = content_version.load(std::memory_order_relaxed);
 	}
 
 	if (work.has_color_space)
@@ -999,8 +1007,7 @@ bool AsyncVideoProvider::ProcessPending() {
 	// Mouse-drag subtitle edits can outpace expensive compatibility renderers.
 	// If newer work arrived before entering the renderer, skip this stale pass
 	// instead of spending a long CSRI render only to drop the packet afterwards.
-	if (work.content_version != content_version.load(std::memory_order_relaxed)
-		|| work.request_version != request_version.load(std::memory_order_relaxed)) {
+	if (!IsCurrent(work.delivery_version)) {
 		AdvanceOverlayUploadContinuity();
 		return true;
 	}
@@ -1010,15 +1017,12 @@ bool AsyncVideoProvider::ProcessPending() {
 		auto packet = ProcRenderPacket(frame_number, time, false, false);
 		auto const render_duration_ms =
 			std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - render_begin).count();
-		auto current_content_version = content_version.load(std::memory_order_relaxed);
-		auto current_request_version = request_version.load(std::memory_order_relaxed);
-		bool should_deliver =
-			work.content_version == current_content_version &&
-			work.request_version == current_request_version;
+		bool should_deliver = IsCurrent(work.delivery_version);
 		aegisub::async_video_trace::ObserveVideoFrameRenderDuration(frame_number, time, should_deliver, false, render_duration_ms);
 		aegisub::async_video_trace::ObserveFrameResult(frame_number, time, should_deliver, false);
 		if (should_deliver) {
 			remember_rendered_lines();
+			packet.delivery_version = work.delivery_version;
 			DeliverFrameReady(std::move(packet), time);
 		}
 		else {
@@ -1026,11 +1030,7 @@ bool AsyncVideoProvider::ProcessPending() {
 		}
 	}
 	catch (AsyncVideoProviderVideoError const& err) {
-		auto current_content_version = content_version.load(std::memory_order_relaxed);
-		auto current_request_version = request_version.load(std::memory_order_relaxed);
-		bool should_deliver =
-			work.content_version == current_content_version &&
-			work.request_version == current_request_version;
+		bool should_deliver = IsCurrent(work.delivery_version);
 		if (should_deliver)
 			DeliverVideoError(err.GetMessage());
 		else {
@@ -1038,11 +1038,7 @@ bool AsyncVideoProvider::ProcessPending() {
 		}
 	}
 	catch (AsyncVideoProviderSubtitlesError const& err) {
-		auto current_content_version = content_version.load(std::memory_order_relaxed);
-		auto current_request_version = request_version.load(std::memory_order_relaxed);
-		bool should_deliver =
-			work.content_version == current_content_version &&
-			work.request_version == current_request_version;
+		bool should_deliver = IsCurrent(work.delivery_version);
 		if (should_deliver)
 			DeliverSubtitlesError(err.GetMessage());
 		else {

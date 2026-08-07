@@ -127,9 +127,9 @@ class AsyncVideoProvider {
 	void UpdateCachedSourceFrame(int frame, bool force_bgra_frame, VideoRenderPacket const& packet) noexcept;
 
 	/// Monotonic counter used to identify the latest seek/drag request.
-	std::atomic<uint_fast32_t> request_version{ 0 };
+	std::atomic<std::uint64_t> request_version{ 0 };
 	/// Monotonic counter used to invalidate frames when the rendered content changes.
-	std::atomic<uint_fast32_t> content_version{ 0 };
+	std::atomic<std::uint64_t> content_version{ 0 };
 
 	std::vector<std::shared_ptr<VideoFrame>> source_buffers;
 	std::vector<std::shared_ptr<VideoFrame>> composited_buffers;
@@ -220,6 +220,10 @@ public:
 	void SetColorSpace(std::string const& matrix);
 	bool SetPreferredSourceModes(std::vector<SourceFrameOutputMode> modes);
 	void ReplaceSubtitlesProvider(std::unique_ptr<SubtitlesProvider> provider);
+	/// Check whether a packet still represents the latest content and request.
+	bool IsCurrent(VideoRenderDeliveryVersion version) const noexcept;
+	/// Check both delivery version and the frame currently expected by a consumer.
+	bool IsCurrent(VideoRenderPacket const& packet, int expected_frame) const noexcept;
 	SourceFrameOutputMode GetSelectedSourceMode() const { return selected_source_mode; }
 	AsyncVideoProviderMemoryStats CollectMemoryStats();
 

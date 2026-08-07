@@ -1001,7 +1001,7 @@ static void PrepareFontSelectorProfile(string profile)
         {
           "Subtitle": {
             "Font": {
-              "Prefer Localized Family Names": false,
+              "Prefer Localized Family Names": true,
               "Use Contains Matching": true,
               "Auto Expand List On Input": true
             }

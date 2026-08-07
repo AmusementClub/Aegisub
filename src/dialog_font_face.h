@@ -45,10 +45,10 @@ struct FontFaceDialogSelection {
 	agi::Color shadow{ 0, 0, 0 };
 };
 
-/// Show the native system font selector when prefer-localized is on, otherwise
-/// always Aegisub's custom selector (catalog English names, or enumerator
-/// fallback if the catalog is empty). The displayed face name is also the
-/// exact face name returned for ASS writing.
+/// Show Aegisub's custom selector using localized or English catalog names as
+/// configured. If the catalog is empty, the selector uses enumerated fallback
+/// names. The displayed face name is also the exact face name returned for ASS
+/// writing.
 ///
 /// The callback is called when the dialog's Apply button is pressed. Apply
 /// leaves the dialog open so callers can inspect the result and continue

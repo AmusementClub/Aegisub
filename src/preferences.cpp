@@ -450,13 +450,12 @@ void BuildGeneralPage(OptionPage *p) {
 		"Subtitle/Font/Prefer Localized Family Names");
 	prefer_localized->SetToolTip(_(
 		"When enabled, Style Editor and \\fn selectors display and write the "
-		"system-localized family name. Style Editor always uses its embedded "
-		"font combo; the \\fn Select Font command uses the Windows system font "
-		"dialog. When disabled, both prefer validated English Win32 family "
+		"system-localized family name. Both Style Editor and the \\fn Select Font "
+		"command use Aegisub's custom font selectors. When disabled, both prefer "
+		"validated English Win32 family "
 		"names, falling back when unavailable (localized catalog name, or the "
 		"enumerator list if the catalog is not ready), for better "
-		"cross-language portability; \\fn Select Font uses Aegisub's custom "
-		"dialog (waiting for the font catalog on first use if needed)."));
+		"cross-language portability."));
 #endif
 	auto *contains_matching = p->OptionAdd(
 		font_names,
@@ -465,8 +464,7 @@ void BuildGeneralPage(OptionPage *p) {
 	contains_matching->SetToolTip(_(
 		"When enabled, typing in Style Editor or the custom Select Font dialog "
 		"uses contains matching instead of the native prefix matching. Other "
-		"combo behaviour is unchanged. The Windows system font dialog is not "
-		"affected."));
+		"combo behaviour is unchanged."));
 	auto *auto_expand = p->OptionAdd(
 		font_names,
 		_("Automatically expand font list while typing"),
@@ -475,7 +473,7 @@ void BuildGeneralPage(OptionPage *p) {
 		"When enabled, typing a matching name in Style Editor or the custom "
 		"Select Font dialog opens the candidate list automatically. Use the "
 		"arrow keys and Enter to choose a font without the mouse. Manual font "
-		"names remain supported. The Windows system font dialog is not affected."));
+		"names remain supported."));
 #ifdef _WIN32
 	auto *compact_vertical = p->OptionAdd(
 		font_names,
@@ -488,8 +486,7 @@ void BuildGeneralPage(OptionPage *p) {
 		"checkbox appears for families GDI registered with a leading '@'; "
 		"the face text box still shows the full ASS name (with '@' when "
 		"vertical is on). Uninstalled fonts keep the typed name; Vertical is "
-		"disabled when capability cannot be verified. The Windows system font "
-		"dialog is not affected."));
+		"disabled when capability cannot be verified."));
 #endif
 
 	p->SetSizerAndFit(p->sizer);

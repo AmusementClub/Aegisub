@@ -219,12 +219,12 @@
     ],
     "main/help" : [
         { "command" : "help/contents" },
+        { "command" : "help/changelog" },
         {},
         { "command" : "help/website" },
         { "command" : "help/forums" },
         { "command" : "help/bugs" },
         {},
-        { "command" : "help/irc" },
         { "command" : "app/updates" },
         { "command" : "app/about", "special" : "about" },
         { "command" : "app/log" }

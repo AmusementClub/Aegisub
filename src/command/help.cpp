@@ -58,7 +58,7 @@ struct help_bugs final : public Command {
 				throw c->GetUI().parent;
 			}
 		}
-		wxLaunchDefaultBrowser(wxS("https://github.com/Aegisub/Aegisub/issues"), wxBROWSER_NEW_WINDOW);
+		wxLaunchDefaultBrowser(wxS("https://github.com/AmusementClub/Aegisub/issues"), wxBROWSER_NEW_WINDOW);
 	}
 };
 
@@ -70,19 +70,18 @@ struct help_contents final : public Command {
 	STR_HELP("Help topics")
 
 	void operator()(agi::Context *) override {
-		HelpButton::OpenPage("Main");
+		wxLaunchDefaultBrowser(wxS("https://mirimirim.github.io/aegisite/docs"), wxBROWSER_NEW_WINDOW);
 	}
 };
 
-struct help_irc final : public Command {
-	CMD_NAME("help/irc")
-	CMD_ICON(irc_button)
-	STR_MENU("&IRC Channel")
-	STR_DISP("IRC Channel")
-	STR_HELP("Visit Aegisub's official IRC channel")
+struct help_changelog final : public Command {
+	CMD_NAME("help/changelog")
+	STR_MENU("Change&log")
+	STR_DISP("Changelog")
+	STR_HELP("View Aegisub's changelog")
 
 	void operator()(agi::Context *) override {
-		wxLaunchDefaultBrowser(wxS("irc://irc.rizon.net/aegisub"), wxBROWSER_NEW_WINDOW);
+		wxLaunchDefaultBrowser(wxS("https://mirimirim.github.io/aegisite/changelog/"), wxBROWSER_NEW_WINDOW);
 	}
 };
 
@@ -106,7 +105,7 @@ struct help_website final : public Command {
 	STR_HELP("Visit Aegisub's official website")
 
 	void operator()(agi::Context *) override {
-		wxLaunchDefaultBrowser(wxS("http://www.aegisub.org/"), wxBROWSER_NEW_WINDOW);
+		wxLaunchDefaultBrowser(wxS("https://mirimirim.github.io/aegisite"), wxBROWSER_NEW_WINDOW);
 	}
 };
 }
@@ -115,7 +114,7 @@ namespace cmd {
 	void init_help() {
 		reg(agi::make_unique<help_bugs>());
 		reg(agi::make_unique<help_contents>());
-		reg(agi::make_unique<help_irc>());
+		reg(agi::make_unique<help_changelog>());
 		reg(agi::make_unique<help_video>());
 		reg(agi::make_unique<help_website>());
 	}

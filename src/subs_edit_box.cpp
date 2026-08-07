@@ -63,6 +63,7 @@
 #include "timeedit_ctrl.h"
 #include "tooltip_manager.h"
 #include "utils.h"
+#include "video_display.h"
 
 #include <libaegisub/character_count.h>
 #include <libaegisub/fs.h>
@@ -88,6 +89,7 @@
 #endif
 
 namespace {
+	constexpr int VISUAL_TOOL_TEXT_SYNC_INTERVAL_MS = 16;
 
 #ifdef __WXMSW__
 	std::int64_t ComboPaintTimingNowNs() noexcept {
@@ -185,6 +187,7 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 , c(context)
 , command_session(context->GetCore().ass.get())
 , undo_timer(GetEventHandler())
+, visual_tool_text_sync_timer(GetEventHandler())
 #ifdef WITH_WXSTC
 , use_stc(OPT_GET("Subtitle/Use STC")->GetBool())
 #endif
@@ -366,7 +369,13 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 
 	Bind(wxEVT_CHAR_HOOK, &SubsEditBox::OnKeyDown, this);
 	Bind(wxEVT_SIZE, &SubsEditBox::OnSize, this);
-	Bind(wxEVT_TIMER, [=](wxTimerEvent&) { command_session.ResetCommitId(); });
+	Bind(wxEVT_TIMER,
+		[this](wxTimerEvent&) { command_session.ResetCommitId(); },
+		undo_timer.GetId());
+	Bind(wxEVT_TIMER,
+		&SubsEditBox::OnVisualToolTextSyncTimer,
+		this,
+		visual_tool_text_sync_timer.GetId());
 
 	wxSizeEvent evt;
 	OnSize(evt);
@@ -414,6 +423,7 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 }
 
 SubsEditBox::~SubsEditBox() {
+	CancelVisualToolTextSync();
 	c->GetCore().textSelectionController->SetControl((wxTextCtrl*)nullptr);
 }
 
@@ -682,6 +692,54 @@ wxRadioButton *SubsEditBox::MakeRadio(wxString const& text, bool start, wxString
 	return ctrl;
 }
 
+bool SubsEditBox::IsVisualToolInteracting() const {
+	auto *display = c->GetUI().videoDisplay;
+	return display && display->IsVisualToolInteracting();
+}
+
+void SubsEditBox::QueueVisualToolTextSync() {
+	visual_tool_text_sync_pending = true;
+	auto const text_bytes = line
+		? static_cast<int>(std::min(
+			line->Text.get().size(),
+			static_cast<size_t>(std::numeric_limits<int>::max())))
+		: 0;
+	perf_trace::ObserveVideoUiDuration(
+		"grid_select.editbox.text.deferred",
+		0.0,
+		text_bytes);
+	if (!visual_tool_text_sync_timer.IsRunning())
+		visual_tool_text_sync_timer.StartOnce(VISUAL_TOOL_TEXT_SYNC_INTERVAL_MS);
+}
+
+void SubsEditBox::CancelVisualToolTextSync() {
+	visual_tool_text_sync_timer.Stop();
+	visual_tool_text_sync_pending = false;
+}
+
+void SubsEditBox::FlushVisualToolTextSync() {
+	if (!visual_tool_text_sync_pending)
+		return;
+
+	CancelVisualToolTextSync();
+	if (!line)
+		return;
+
+	auto const text_bytes = static_cast<int>(std::min(
+		line->Text.get().size(),
+		static_cast<size_t>(std::numeric_limits<int>::max())));
+	perf_trace::VideoUiDurationScope trace(
+		"grid_select.editbox.text.coalesced_flush",
+		text_bytes,
+		IsVisualToolInteracting() ? 1 : 0);
+	wxEventBlocker blocker(this);
+	UpdateFields(AssFile::COMMIT_DIAG_TEXT, false);
+}
+
+void SubsEditBox::OnVisualToolTextSyncTimer(wxTimerEvent&) {
+	FlushVisualToolTextSync();
+}
+
 void SubsEditBox::OnCommit(int type, AssDialogue const* changed) {
 	bool const local_commit = command_session.IsLocalCommitInProgress();
 	if (local_commit && !command_session.ShouldObserveLocalCommit())
@@ -694,6 +752,16 @@ void SubsEditBox::OnCommit(int type, AssDialogue const* changed) {
 		|| (type & (AssFile::COMMIT_STYLES | AssFile::COMMIT_ORDER | AssFile::COMMIT_DIAG_ADDREM))
 		|| (!changed && !!line)
 		|| changed == line;
+	bool const defer_text_sync =
+		affects_current_line
+		&& (type & AssFile::COMMIT_DIAG_TEXT)
+		&& IsVisualToolInteracting();
+	if (visual_tool_text_sync_pending && !defer_text_sync) {
+		if (type == AssFile::COMMIT_DIAG_TEXT)
+			FlushVisualToolTextSync();
+		else
+			CancelVisualToolTextSync();
+	}
 
 	if (type == AssFile::COMMIT_NEW || type & AssFile::COMMIT_STYLES) {
 		wxEventBlocker blocker(this);
@@ -720,9 +788,17 @@ void SubsEditBox::OnCommit(int type, AssDialogue const* changed) {
 	if (!(type ^ AssFile::COMMIT_ORDER) || !affects_current_line)
 		return;
 
+	int update_type = type;
+	if (defer_text_sync) {
+		QueueVisualToolTextSync();
+		update_type &= ~AssFile::COMMIT_DIAG_TEXT;
+		if (!update_type)
+			return;
+	}
+
 	wxEventBlocker blocker(this);
 	SetControlsState(!!line);
-	UpdateFields(type, true);
+	UpdateFields(update_type, true);
 }
 
 void SubsEditBox::UpdateFields(int type, bool repopulate_lists) {
@@ -885,6 +961,7 @@ void SubsEditBox::PopulateList(wxComboBox *combo, boost::flyweight<std::string> 
 void SubsEditBox::OnActiveLineChanged(AssDialogue *new_line) {
 	perf_trace::VideoUiDurationScope trace("grid_select.editbox");
 	wxEventBlocker blocker(this);
+	CancelVisualToolTextSync();
 	line = new_line;
 	command_session.ResetCommitId();
 

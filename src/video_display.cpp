@@ -52,6 +52,7 @@
 #include "project.h"
 #include "retina_helper.h"
 #include "spline_curve.h"
+#include "subs_edit_box.h"
 #include "utils.h"
 #include "video_render_opengl_proc_loader.h"
 #include "video_renderer_factory.h"
@@ -2579,8 +2580,11 @@ void VideoDisplay::OnMouseEvent(wxMouseEvent& event) {
 
 	last_mouse_pos = mouse_pos = current_pos;
 
+	bool const interaction_was_active = IsVisualToolInteracting();
 	if (tool)
 		tool->OnMouseEvent(event);
+	if (interaction_was_active && !IsVisualToolInteracting())
+		FlushVisualToolEditBoxSync();
 }
 
 void VideoDisplay::OnMouseLeave(wxMouseEvent& event) {
@@ -2757,6 +2761,15 @@ void VideoDisplay::SetTool(std::unique_ptr<VisualToolBase> new_tool) {
 			viewport_width / scale_factor, viewport_height / scale_factor);
 		Render();
 	}
+}
+
+bool VideoDisplay::IsVisualToolInteracting() const noexcept {
+	return tool && tool->IsInteracting();
+}
+
+void VideoDisplay::FlushVisualToolEditBoxSync() {
+	if (auto *edit_box = con->GetUI().subsEditBox)
+		edit_box->FlushVisualToolTextSync();
 }
 
 void VideoDisplay::Pan(Vector2D delta) {

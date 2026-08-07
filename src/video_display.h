@@ -331,6 +331,7 @@ class VideoDisplay final : public wxGLCanvas {
 	void DoRender();
 	void LayoutContainingSizers();
 	void FinishPointSelection(bool cancelled, bool notify);
+	void FlushVisualToolEditBoxSync();
 
 public:
 	/// @brief Constructor
@@ -386,6 +387,7 @@ public:
 	void CancelPointSelection(std::string const& owner, bool notify = true);
 
 	void SetTool(std::unique_ptr<VisualToolBase> new_tool);
+	bool IsVisualToolInteracting() const noexcept;
 
 	bool ToolIsType(std::type_info const& type) const;
 

@@ -636,3 +636,29 @@ TEST(subtitle_character_markers, icu_name_and_category) {
 	EXPECT_EQ("Zs", CharacterMarkerGeneralCategoryCode(0x00A0));
 	EXPECT_EQ("Cc", CharacterMarkerGeneralCategoryCode(0x0009));
 }
+
+TEST(subtitle_character_markers, disabled_options_do_not_require_marker_scanning) {
+	CharacterMarkerShowConfig show{};
+	CharacterMarkerErrorConfig error{};
+	EXPECT_FALSE(CharacterMarkersEnabled(show, error));
+
+	show.space = true;
+	EXPECT_TRUE(CharacterMarkersEnabled(show, error));
+	show.space = false;
+
+	error.enabled = true;
+	error.space = false;
+	error.ideographic_space = false;
+	error.no_break_space = false;
+	error.other_unicode_whitespace = false;
+	error.line_endings = false;
+	error.tab = false;
+	error.other_control_characters = false;
+	error.bidi_controls = false;
+	error.join_controls = false;
+	error.other_invisible_characters = false;
+	EXPECT_FALSE(CharacterMarkersEnabled(show, error));
+
+	error.join_controls = true;
+	EXPECT_TRUE(CharacterMarkersEnabled(show, error));
+}

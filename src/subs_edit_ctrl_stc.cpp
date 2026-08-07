@@ -90,6 +90,13 @@ namespace {
 	constexpr int CHAR_MARKER_ERROR_ALT_INDICATOR = 9;
 	constexpr int CHAR_MARKER_DWELL_MS = 500;
 
+	bool IsTemplateLine(agi::Context *context) {
+		auto *diag = context ? context->GetCore().selectionController->GetActiveLine() : nullptr;
+		return diag
+			&& diag->Comment
+			&& agi::util::strings::istarts_with(diag->Effect.get(), "template");
+	}
+
 #ifdef __WXMSW__
 	std::int64_t PaintTimingNowNs() noexcept {
 		return std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -978,11 +985,11 @@ void SubsStyledTextEditCtrl::UpdateStyle() {
 	auto const text_bytes = static_cast<int>(std::min(
 		line_text.size(),
 		static_cast<size_t>(std::numeric_limits<int>::max())));
-	bool template_line = false;
+	bool const template_line = IsTemplateLine(context);
+	last_template_line = template_line;
+	style_context_valid = true;
 	{
 		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.tokenize", text_bytes);
-		AssDialogue *diag = context ? context->GetCore().selectionController->GetActiveLine() : nullptr;
-		template_line = diag && diag->Comment && agi::util::strings::istarts_with(diag->Effect.get(), "template");
 		tokenized_line = agi::ass::TokenizeDialogueBody(line_text, template_line);
 		agi::ass::SplitWords(line_text, tokenized_line);
 	}
@@ -1094,7 +1101,14 @@ void SubsStyledTextEditCtrl::UpdateCallTip() {
 }
 
 void SubsStyledTextEditCtrl::SetTextTo(std::string const& text) {
+	bool const template_line = IsTemplateLine(context);
+	if (text == line_text
+		&& style_context_valid
+		&& template_line == last_template_line)
+		return;
+
 	repeat_tag_name_bounds = {-1, 0};
+	bool const event_handler_enabled = GetEvtHandlerEnabled();
 	auto const text_bytes = static_cast<int>(std::min(
 		text.size(),
 		static_cast<size_t>(std::numeric_limits<int>::max())));
@@ -1106,27 +1120,43 @@ void SubsStyledTextEditCtrl::SetTextTo(std::string const& text) {
 	}
 
 	size_t old_pos = 0;
+	aegisub::subtitle_edit_ops::TextChangeRange text_change;
 	{
 		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.caret_capture", text_bytes);
 		auto insertion_point = GetInsertionPoint();
 		if (static_cast<size_t>(insertion_point) > line_text.size())
 			line_text = GetTextRaw().data();
 		old_pos = agi::CharacterCount(line_text.begin(), line_text.begin() + insertion_point, 0);
-		line_text.clear();
+		text_change = aegisub::subtitle_edit_ops::FindMinimalTextChange(line_text, text);
 	}
 
-	{
-		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.selection_reset", text_bytes);
-		if (context)
-			context->GetCore().textSelectionController->SetSelection(0, 0);
-		else
-			SetSelection(0, 0);
-	}
+	if (text_change.changed) {
+		auto const removed_bytes = text_change.old_end - text_change.old_begin;
+		auto const inserted_bytes = text_change.new_end - text_change.new_begin;
+		perf_trace::VideoUiDurationScope trace(
+			"grid_select.editbox.stc.replace_text_range",
+			static_cast<int>(std::min(removed_bytes, static_cast<size_t>(std::numeric_limits<int>::max()))),
+			static_cast<int>(std::min(inserted_bytes, static_cast<size_t>(std::numeric_limits<int>::max()))));
 
-	{
-		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.set_text_raw", text_bytes);
-		SetTextRaw(text.c_str());
+		int const mod_event_mask = GetModEventMask();
+		bool const collecting_undo = GetUndoCollection();
+		SetModEventMask(0);
+		if (collecting_undo)
+			SetUndoCollection(false);
+
+		SetTargetRange(
+			static_cast<int>(text_change.old_begin),
+			static_cast<int>(text_change.old_end));
+		auto const replacement = std::string_view(text).substr(
+			text_change.new_begin,
+			inserted_bytes);
+		ReplaceTargetRaw(replacement.data(), static_cast<int>(replacement.size()));
+
+		if (collecting_undo)
+			SetUndoCollection(true);
+		SetModEventMask(mod_event_mask);
 	}
+	line_text = text;
 
 	{
 		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.selection_restore", text_bytes);
@@ -1139,9 +1169,8 @@ void SubsStyledTextEditCtrl::SetTextTo(std::string const& text) {
 
 	{
 		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.sync", text_bytes);
-		SetEvtHandlerEnabled(true);
-		// Events were disabled during SetTextRaw, so force a full style/marker refresh.
-		line_text = GetTextRaw().data();
+		SetEvtHandlerEnabled(event_handler_enabled);
+		// Events were disabled during the range replacement, so force a style refresh.
 	}
 	{
 		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style", text_bytes);
@@ -1531,8 +1560,31 @@ void SubsStyledTextEditCtrl::ClearCharacterMarkerIndicators() {
 void SubsStyledTextEditCtrl::UpdateCharacterMarkers() {
 	auto const show = ReadCharacterMarkerShowConfig();
 	auto const error = ReadCharacterMarkerErrorConfig();
+	if (!aegisub::CharacterMarkersEnabled(show, error)) {
+		if (!character_marker_spans.empty() || !installed_character_representations.empty()) {
+			for (auto const& encoded : installed_character_representations)
+				ClearRepresentation(wxString::FromUTF8(encoded));
+			installed_character_representations.clear();
+			ClearCharacterMarkerIndicators();
+		}
+		character_marker_spans.clear();
+		if (marker_calltip_active) {
+			CallTipCancel();
+			marker_calltip_active = false;
+			calltip_position = static_cast<size_t>(-1);
+			calltip_text.clear();
+			cursor_pos = -1;
+		}
+		return;
+	}
 
-	character_marker_spans = aegisub::ScanCharacterMarkers(line_text);
+	{
+		auto const text_bytes = static_cast<int>(std::min(
+			line_text.size(),
+			static_cast<size_t>(std::numeric_limits<int>::max())));
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.markers.scan", text_bytes);
+		character_marker_spans = aegisub::ScanCharacterMarkers(line_text);
+	}
 	auto const render_plan = aegisub::BuildCharacterMarkerRenderPlan(character_marker_spans, show, error);
 
 	// Rebuild representations exactly from current-line spans with real context.

@@ -139,6 +139,14 @@ class SubsEditBox final : public wxPanel {
 
 	/// Timer to stop coalescing changes after a break with no edits
 	wxTimer undo_timer;
+	/// Caps visual-tool text synchronization to roughly one edit-box update per frame.
+	wxTimer visual_tool_text_sync_timer;
+	bool visual_tool_text_sync_pending = false;
+
+	bool IsVisualToolInteracting() const;
+	void QueueVisualToolTextSync();
+	void CancelVisualToolTextSync();
+	void OnVisualToolTextSyncTimer(wxTimerEvent& event);
 
 	/// The start and end times of the selected lines without changes made to
 	/// avoid negative durations, so that they can be restored if future changes
@@ -235,6 +243,8 @@ public:
 	bool CanFocusEditControl() const;
 	/// Give keyboard focus to the main subtitle text editor.
 	void FocusEditControl();
+	/// Apply the latest deferred edit-box text when a visual interaction ends.
+	void FlushVisualToolTextSync();
 	/// Return the current selection in the main subtitle text editor.
 	std::string GetEditControlSelectedText() const;
 	/// Return the current caret/selection as 0-based character offsets [start, stop).

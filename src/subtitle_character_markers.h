@@ -110,6 +110,11 @@ struct CharacterMarkerRenderPlan {
 /// Default error policy from product decisions (error master switch off).
 CharacterMarkerErrorConfig DefaultCharacterMarkerErrorConfig();
 
+/// Whether the option snapshot can produce any marker or error visual.
+bool CharacterMarkersEnabled(
+	CharacterMarkerShowConfig const& show,
+	CharacterMarkerErrorConfig const& error);
+
 /// Scan UTF-8 text and return marker spans sorted by byte_start.
 /// Invalid UTF-8 sequences are skipped without crashing; first version does not
 /// emit markers for invalid bytes.

@@ -26,6 +26,10 @@ bool has_char_at(std::string_view text, int pos, char value) {
 	return pos >= 0 && pos < static_cast<int>(text.size()) && text[static_cast<size_t>(pos)] == value;
 }
 
+bool is_utf8_continuation(char value) {
+	return (static_cast<unsigned char>(value) & 0xC0) == 0x80;
+}
+
 aegisub::subtitle_edit_ops::AutoCloseEdit make_replace_edit(int start, int end, std::string replacement, int caret) {
 	return {true, start, end, std::move(replacement), caret};
 }
@@ -142,6 +146,43 @@ bool is_text_block_token(int type) {
 }
 
 namespace aegisub::subtitle_edit_ops {
+
+TextChangeRange FindMinimalTextChange(std::string_view old_text, std::string_view new_text) {
+	std::size_t prefix = 0;
+	auto const shared_size = std::min(old_text.size(), new_text.size());
+	while (prefix < shared_size && old_text[prefix] == new_text[prefix])
+		++prefix;
+
+	if (prefix == old_text.size() && prefix == new_text.size())
+		return {prefix, prefix, prefix, prefix, false};
+
+	// A changed codepoint can share its leading UTF-8 byte with the old one.
+	while (prefix > 0
+		&& ((prefix < old_text.size() && is_utf8_continuation(old_text[prefix]))
+			|| (prefix < new_text.size() && is_utf8_continuation(new_text[prefix]))))
+		--prefix;
+
+	std::size_t suffix = 0;
+	auto const max_suffix = std::min(old_text.size() - prefix, new_text.size() - prefix);
+	while (suffix < max_suffix
+		&& old_text[old_text.size() - suffix - 1] == new_text[new_text.size() - suffix - 1])
+		++suffix;
+
+	// Matching continuation bytes at the end of different codepoints are not a
+	// reusable suffix. Advance both suffix starts to the next codepoint boundary.
+	while (suffix > 0
+		&& (is_utf8_continuation(old_text[old_text.size() - suffix])
+			|| is_utf8_continuation(new_text[new_text.size() - suffix])))
+		--suffix;
+
+	return {
+		prefix,
+		old_text.size() - suffix,
+		prefix,
+		new_text.size() - suffix,
+		true,
+	};
+}
 
 bool JoinSelectionIntoFirst(std::vector<AssDialogue *> const& selection, JoinMode mode) {
 	if (selection.empty())

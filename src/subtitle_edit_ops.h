@@ -2,6 +2,7 @@
 
 #include "ass_dialogue.h"
 
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -52,6 +53,17 @@ struct TextDragPreview {
 	bool changed = false;
 };
 
+/// Minimal byte ranges which transform old_text into new_text. All boundaries
+/// are UTF-8 codepoint boundaries even when the differing codepoints share
+/// leading or trailing bytes.
+struct TextChangeRange {
+	std::size_t old_begin = 0;
+	std::size_t old_end = 0;
+	std::size_t new_begin = 0;
+	std::size_t new_end = 0;
+	bool changed = false;
+};
+
 bool JoinSelectionIntoFirst(std::vector<AssDialogue *> const& selection, JoinMode mode);
 RecombineResult RecombineSelection(std::vector<AssDialogue *> selection);
 std::pair<std::string, std::string> SplitTextAtPosition(std::string const& text, int pos);
@@ -59,6 +71,8 @@ std::optional<int> EstimateSplitTime(int start_ms, int end_ms, std::string const
 std::string BuildTagOnlyText(AssDialogue const& line);
 std::string ReplaceRangeWithText(std::string text, int start, int end, std::string const& replacement);
 AutoCloseEdit BuildAutoCloseEdit(std::string_view text, int selection_start, int selection_end, AutoCloseKey key);
+
+TextChangeRange FindMinimalTextChange(std::string_view old_text, std::string_view new_text);
 
 /// Build the document shown while selected text is dragged over a new position.
 TextDragPreview BuildTextDragPreview(

@@ -226,6 +226,54 @@ TEST(subtitle_edit_ops, replace_range_with_text_clamps_invalid_ranges) {
 	EXPECT_EQ("aXYde", aegisub::subtitle_edit_ops::ReplaceRangeWithText("abcde", 1, 3, "XY"));
 }
 
+TEST(subtitle_edit_ops, minimal_text_change_is_the_changed_tag_argument) {
+	auto const change = aegisub::subtitle_edit_ops::FindMinimalTextChange(
+		"{\\pos(100,200)}Text",
+		"{\\pos(101,200)}Text");
+	EXPECT_TRUE(change.changed);
+	EXPECT_EQ(8u, change.old_begin);
+	EXPECT_EQ(9u, change.old_end);
+	EXPECT_EQ(8u, change.new_begin);
+	EXPECT_EQ(9u, change.new_end);
+}
+
+TEST(subtitle_edit_ops, minimal_text_change_handles_insert_delete_and_equal_text) {
+	auto const inserted = aegisub::subtitle_edit_ops::FindMinimalTextChange("abcd", "abXYcd");
+	EXPECT_EQ(2u, inserted.old_begin);
+	EXPECT_EQ(2u, inserted.old_end);
+	EXPECT_EQ(2u, inserted.new_begin);
+	EXPECT_EQ(4u, inserted.new_end);
+
+	auto const deleted = aegisub::subtitle_edit_ops::FindMinimalTextChange("abXYcd", "abcd");
+	EXPECT_EQ(2u, deleted.old_begin);
+	EXPECT_EQ(4u, deleted.old_end);
+	EXPECT_EQ(2u, deleted.new_begin);
+	EXPECT_EQ(2u, deleted.new_end);
+
+	auto const equal = aegisub::subtitle_edit_ops::FindMinimalTextChange("same", "same");
+	EXPECT_FALSE(equal.changed);
+	EXPECT_EQ(4u, equal.old_begin);
+	EXPECT_EQ(4u, equal.old_end);
+}
+
+TEST(subtitle_edit_ops, minimal_text_change_never_splits_utf8_codepoints) {
+	auto const shared_lead = aegisub::subtitle_edit_ops::FindMinimalTextChange(
+		"A\xC3\xA9Z",
+		"A\xC3\xAAZ");
+	EXPECT_EQ(1u, shared_lead.old_begin);
+	EXPECT_EQ(3u, shared_lead.old_end);
+	EXPECT_EQ(1u, shared_lead.new_begin);
+	EXPECT_EQ(3u, shared_lead.new_end);
+
+	auto const shared_tail = aegisub::subtitle_edit_ops::FindMinimalTextChange(
+		"\xE4\xB8\x80",
+		"\xE5\x80\x80");
+	EXPECT_EQ(0u, shared_tail.old_begin);
+	EXPECT_EQ(3u, shared_tail.old_end);
+	EXPECT_EQ(0u, shared_tail.new_begin);
+	EXPECT_EQ(3u, shared_tail.new_end);
+}
+
 TEST(subtitle_edit_ops, autoclose_inserts_and_skips_override_braces) {
 	using aegisub::subtitle_edit_ops::AutoCloseKey;
 

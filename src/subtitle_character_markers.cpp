@@ -323,6 +323,30 @@ CharacterMarkerErrorConfig DefaultCharacterMarkerErrorConfig() {
 	return {};
 }
 
+bool CharacterMarkersEnabled(
+	CharacterMarkerShowConfig const& show,
+	CharacterMarkerErrorConfig const& error) {
+	bool const show_enabled =
+		show.space
+		|| show.ideographic_space
+		|| show.unicode_whitespace
+		|| show.line_endings
+		|| show.control_characters
+		|| show.invisible_characters;
+	bool const error_enabled = error.enabled
+		&& (error.space
+			|| error.ideographic_space
+			|| error.no_break_space
+			|| error.other_unicode_whitespace
+			|| error.line_endings
+			|| error.tab
+			|| error.other_control_characters
+			|| error.bidi_controls
+			|| error.join_controls
+			|| error.other_invisible_characters);
+	return show_enabled || error_enabled;
+}
+
 std::vector<CharacterMarkerSpan> ScanCharacterMarkers(std::string_view utf8) {
 	std::vector<CharacterMarkerSpan> spans;
 	std::size_t offset = 0;

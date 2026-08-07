@@ -240,10 +240,19 @@ AssDialogue *VisualToolBase::GetCommitTargetLine() const {
 }
 
 void VisualToolBase::Commit(wxString message) {
+	auto const& selected = c->GetCore().selectionController->GetSelectedSet();
+	if (changed_lines.empty()) {
+		perf_trace::ObserveVideoUiDuration(
+			"visual_tool.commit.skipped_no_change",
+			0.0,
+			static_cast<int>(selected.size()),
+			0);
+		return;
+	}
+
 	if (message.empty())
 		message = _("visual typesetting");
 
-	auto const& selected = c->GetCore().selectionController->GetSelectedSet();
 	AssDialogue *target_line = GetCommitTargetLine();
 	auto clear_changed_lines = agi::make_scope_exit([this] { ClearChangedLines(); });
 	perf_trace::VideoUiDurationScope commit_trace(
@@ -259,6 +268,17 @@ void VisualToolBase::Commit(wxString message) {
 }
 
 void VisualToolBase::CommitNudge(wxString message) {
+	if (changed_lines.empty()) {
+		auto const& selected = c->GetCore().selectionController->GetSelectedSet();
+		perf_trace::ObserveVideoUiDuration(
+			"visual_tool.commit.skipped_no_change",
+			0.0,
+			static_cast<int>(selected.size()),
+			1);
+		parent->Render();
+		return;
+	}
+
 	if (message.empty())
 		message = _("visual typesetting");
 
@@ -276,6 +296,16 @@ void VisualToolBase::CommitNudge(wxString message) {
 }
 
 void VisualToolBase::CommitAndRefresh(wxString message) {
+	if (changed_lines.empty()) {
+		auto const& selected = c->GetCore().selectionController->GetSelectedSet();
+		perf_trace::ObserveVideoUiDuration(
+			"visual_tool.commit.skipped_no_change",
+			0.0,
+			static_cast<int>(selected.size()),
+			2);
+		return;
+	}
+
 	if (message.empty())
 		message = _("visual typesetting");
 
@@ -767,9 +797,7 @@ void VisualToolBase::SetOverride(AssDialogue* line, std::string const& tag, std:
 	if (!line) return;
 
 	perf_trace::VideoUiDurationScope override_trace("visual_tool.override");
-	std::string original_text;
-	if (override_trace.IsActive())
-		original_text = line->Text.get();
+	std::string const original_text = line->Text.get();
 
 	std::string removeTag;
 	if (tag == "\\1c") removeTag = "\\c";
@@ -800,10 +828,11 @@ void VisualToolBase::SetOverride(AssDialogue* line, std::string const& tag, std:
 	else
 		line->Text = "{" + tag + value + "}" + line->Text.get();
 
+	bool const text_changed = original_text != line->Text.get();
 	if (override_trace.IsActive())
-		override_trace.SetDetails(original_text == line->Text.get() ? 0 : 1);
+		override_trace.SetDetails(text_changed ? 1 : 0);
 
-	if (changed_line_set.insert(line).second) {
+	if (text_changed && changed_line_set.insert(line).second) {
 		single_changed_line = changed_lines.empty() ? line : nullptr;
 		changed_lines.push_back(line);
 	}

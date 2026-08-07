@@ -9,6 +9,8 @@ param(
     [string]$Label = "current",
     [ValidateRange(100, 100000)]
     [int]$Motions = 128,
+    [ValidateRange(1, 16)]
+    [int]$MotionRepeat = 1,
     [ValidateRange(100, 250)]
     [int]$HoldMilliseconds = 150,
     [ValidateRange(2, 1000000)]
@@ -137,6 +139,7 @@ function New-FailureRow {
         subtitle_use_stc = $null
         event_count = $null
         motion_count = $null
+        motion_repeat = $MotionRepeat
         drain_ms = $null
         motions_per_second = $null
         capture_released = $null
@@ -150,6 +153,7 @@ function New-FailureRow {
         trace_window_ms = $null
         commit_count = $null
         coalesced_commit_count = $null
+        skipped_no_change_commit_count = $null
         commit_ratio = $null
         commit_p50_ms = $null
         commit_p95_ms = $null
@@ -218,6 +222,7 @@ function Invoke-DriverRun {
         "--trace", $Trace,
         "--trace-window", $TraceWindow,
         "--motions", $Motions.ToString([System.Globalization.CultureInfo]::InvariantCulture),
+        "--motion-repeat", $MotionRepeat.ToString([System.Globalization.CultureInfo]::InvariantCulture),
         "--hold-ms", $HoldMilliseconds.ToString([System.Globalization.CultureInfo]::InvariantCulture),
         "--small-events", $SmallEvents.ToString([System.Globalization.CultureInfo]::InvariantCulture),
         "--large-events", $LargeEvents.ToString([System.Globalization.CultureInfo]::InvariantCulture),
@@ -293,6 +298,7 @@ function Invoke-DriverRun {
     $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
     if ($result.input_mode -ne $InputMode -or
         $result.motion_count -ne $Motions -or
+        $result.motion_repeat -ne $MotionRepeat -or
         $result.input.capture_released -ne $true -or
         $result.correctness.drag_valid -ne $true -or
         $result.correctness.undo_restored -ne $true) {
@@ -306,6 +312,7 @@ function Invoke-DriverRun {
         $expectedCoalesced = $Motions - $commitCount
         $expectedRatio = $commitCount / [double]$Motions
         if ([int]$result.trace_metrics.CoalescedCommitCount -ne $expectedCoalesced -or
+            [int]$result.trace_metrics.SkippedNoChangeCommitCount -ne $expectedCoalesced -or
             [Math]::Abs([double]$result.trace_metrics.CommitRatio - $expectedRatio) -gt 1e-12) {
             throw "Trace-on result reported inconsistent commit coalescing metrics."
         }
@@ -324,10 +331,13 @@ function Invoke-DriverRun {
             $environment.SubtitleUseStc -ne $true) {
             throw "Trace-on result reported incomplete or unexpected benchmark environment metadata."
         }
-        $overrideCount = [int]$result.trace_metrics.ActualTextChangeCount +
-            [int]$result.trace_metrics.UnchangedTextCount
-        if ($overrideCount -lt 1 -or
-            $overrideCount -ne [int]$result.trace_metrics.MarkedLineCount) {
+        $actualTextChangeCount = [int]$result.trace_metrics.ActualTextChangeCount
+        $overrideCount = $actualTextChangeCount + [int]$result.trace_metrics.UnchangedTextCount
+        $markedLineCount = [int]$result.trace_metrics.MarkedLineCount
+        $expectedOverrideCount = $Motions * [int]$result.selected_line_count
+        if ($overrideCount -ne $expectedOverrideCount -or
+            $markedLineCount -lt $actualTextChangeCount -or
+            $markedLineCount -gt $overrideCount) {
             throw "Trace-on result reported inconsistent visual-tool override counts."
         }
         $sceneCacheOutcomeCount = [int]$result.trace_metrics.SceneCacheFill.Count +
@@ -507,6 +517,7 @@ for ($runIndex = 1; $runIndex -le $Repetitions; ++$runIndex) {
                     subtitle_use_stc = Get-OptionalProperty $environment "SubtitleUseStc"
                     event_count = $result.event_count
                     motion_count = $result.motion_count
+                    motion_repeat = $result.motion_repeat
                     drain_ms = [double]$result.input.drain_ms
                     motions_per_second = [double]$result.input.motions_per_second
                     capture_released = [bool]$result.input.capture_released
@@ -520,6 +531,7 @@ for ($runIndex = 1; $runIndex -le $Repetitions; ++$runIndex) {
                     trace_window_ms = Get-OptionalProperty $traceMetrics "WindowMilliseconds"
                     commit_count = Get-OptionalProperty $commit "Count"
                     coalesced_commit_count = Get-OptionalProperty $traceMetrics "CoalescedCommitCount"
+                    skipped_no_change_commit_count = Get-OptionalProperty $traceMetrics "SkippedNoChangeCommitCount"
                     commit_ratio = Get-OptionalProperty $traceMetrics "CommitRatio"
                     commit_p50_ms = Get-OptionalProperty $commit "P50Milliseconds"
                     commit_p95_ms = Get-OptionalProperty $commit "P95Milliseconds"
@@ -576,7 +588,7 @@ for ($runIndex = 1; $runIndex -le $Repetitions; ++$runIndex) {
 $matrixTimer.Stop()
 
 $summary = [ordered]@{
-    version = 4
+    version = 5
     label = $Label
     run_mode = $RunMode
     git_revision = $script:GitRevision
@@ -590,6 +602,7 @@ $summary = [ordered]@{
     runner = Get-DisplayPath $PSCommandPath
     runner_sha256 = (Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash
     motions = $Motions
+    motion_repeat = $MotionRepeat
     hold_milliseconds = if ($RunMode -eq "paced-hold") { $HoldMilliseconds } else { 0 }
     small_events = $SmallEvents
     large_events = $LargeEvents

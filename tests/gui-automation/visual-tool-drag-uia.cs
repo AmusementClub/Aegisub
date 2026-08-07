@@ -158,10 +158,21 @@ static int Run(DriverOptions options)
             SendMouseToWindow(videoCanvas, WindowMessage.LeftButtonDown, start, NativeConstants.MouseKeyLeftButton);
             WaitForCapture(videoCanvas, captured: true, process, options.TimeoutSeconds);
 
-            var points = BuildMotionPath(start, final, options.MotionCount, videoClient.Width, videoClient.Height);
+            var points = BuildMotionPath(
+                start,
+                final,
+                options.MotionCount,
+                options.MotionRepeat,
+                videoClient.Width,
+                videoClient.Height);
             started = Stopwatch.GetTimestamp();
-            foreach (var point in points)
-                PostMouseToWindow(videoCanvas, WindowMessage.MouseMove, point, NativeConstants.MouseKeyLeftButton);
+            for (var pointIndex = 0; pointIndex < points.Count; ++pointIndex)
+            {
+                var mouseKeys = NativeConstants.MouseKeyLeftButton;
+                if (options.MotionRepeat > 1 && pointIndex < points.Count - 1)
+                    mouseKeys |= NativeConstants.MouseKeyShift;
+                PostMouseToWindow(videoCanvas, WindowMessage.MouseMove, points[pointIndex], mouseKeys);
+            }
             posted = Stopwatch.GetTimestamp();
 
             if (options.InputMode == "paced-hold")
@@ -215,7 +226,7 @@ static int Run(DriverOptions options)
 
         var result = new
         {
-            version = 2,
+            version = 3,
             scenario = options.InputMode == "throughput"
                 ? $"{options.Size}-{options.Selection}"
                 : $"{options.Size}-{options.Selection}-{options.InputMode}",
@@ -227,6 +238,7 @@ static int Run(DriverOptions options)
             event_count = eventCount,
             selected_line_count = options.Selection == "multi" ? 2 : 1,
             motion_count = options.MotionCount,
+            motion_repeat = options.MotionRepeat,
             canvas = new { width = videoClient.Width, height = videoClient.Height },
             client_delta = new { x = actualDeltaX, y = actualDeltaY },
             expected_script_delta = new { x = expectedDelta.X, y = expectedDelta.Y },
@@ -446,15 +458,19 @@ static IReadOnlyList<PointI> BuildMotionPath(
     PointI start,
     PointI final,
     int count,
+    int repeat,
     int clientWidth,
     int clientHeight)
 {
     var result = new List<PointI>(count);
     for (var index = 0; index < count - 1; ++index)
     {
-        var phase = index % 160;
+        var logicalIndex = index / repeat;
+        var phase = logicalIndex % 160;
         var xOffset = phase <= 80 ? phase - 40 : 120 - phase;
-        var yOffset = ((index / 20) % 2 == 0 ? -12 : 12) + index % 3;
+        var yOffset = ((logicalIndex / 20) % 2 == 0 ? -12 : 12)
+            + logicalIndex % 3
+            + index % repeat;
         result.Add(new PointI(
             Math.Clamp(start.X + xOffset, 16, clientWidth - 16),
             Math.Clamp(start.Y + yOffset, 16, clientHeight - 16)));
@@ -756,6 +772,7 @@ static class NativeConstants
 {
     public const int ShowNoActivate = 4;
     public const int MouseKeyLeftButton = 0x0001;
+    public const int MouseKeyShift = 0x0004;
     public const ushort VirtualKeyControl = 0x11;
 }
 
@@ -769,6 +786,7 @@ sealed record DriverOptions(
     string Trace,
     string TraceWindow,
     int MotionCount,
+    int MotionRepeat,
     int HoldMilliseconds,
     int SmallEventCount,
     int LargeEventCount,
@@ -790,6 +808,7 @@ sealed record DriverOptions(
         var trace = "off";
         var traceWindow = "markers";
         var motions = 128;
+        var motionRepeat = 1;
         var holdMilliseconds = 150;
         var smallEvents = 32;
         var largeEvents = 10000;
@@ -826,6 +845,7 @@ sealed record DriverOptions(
                 case "--trace": trace = Choice(Value(), option, "off", "on"); break;
                 case "--trace-window": traceWindow = Choice(Value(), option, "markers", "legacy"); break;
                 case "--motions": motions = Positive(Value(), option); break;
+                case "--motion-repeat": motionRepeat = Positive(Value(), option); break;
                 case "--hold-ms": holdMilliseconds = NonNegative(Value(), option); break;
                 case "--small-events": smallEvents = Positive(Value(), option); break;
                 case "--large-events": largeEvents = Positive(Value(), option); break;
@@ -871,6 +891,7 @@ sealed record DriverOptions(
             trace,
             traceWindow,
             motions,
+            motionRepeat,
             holdMilliseconds,
             smallEvents,
             largeEvents,
@@ -909,6 +930,7 @@ sealed record DriverOptions(
         Console.WriteLine("  [--size small|large] [--selection single|multi] [--trace off|on]");
         Console.WriteLine("  [--trace-window markers|legacy]");
         Console.WriteLine("  [--motions N>=100] [--small-events N] [--large-events N]");
+        Console.WriteLine("  [--motion-repeat N] repeats each effective position with suppressed-axis jitter");
         Console.WriteLine("  [--timeout-seconds N] [--settle-ms N] [--width N --height N]");
     }
 }
@@ -1020,6 +1042,7 @@ sealed record TraceMetrics(
     double WindowMilliseconds,
     TraceScope Commit,
     int CoalescedCommitCount,
+    int SkippedNoChangeCommitCount,
     double CommitRatio,
     int MarkedLineCount,
     int ActualTextChangeCount,
@@ -1161,6 +1184,8 @@ sealed record TraceMetrics(
             (end - start) / 1_000_000.0,
             commitScope,
             expectedMotionCount - commitScope.Count,
+            window.Count(entry => entry.Name == "video_ui_duration"
+                && entry.Phase == "visual_tool.commit.skipped_no_change"),
             commitScope.Count / (double)expectedMotionCount,
             commits.Sum(entry => entry.DetailB ?? 0),
             window.Count(entry => entry.Name == "video_ui_duration"

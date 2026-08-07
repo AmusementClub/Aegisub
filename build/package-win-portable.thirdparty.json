@@ -254,6 +254,21 @@
           "target": "runtimes/ragbag-subtitle.dll"
         }
       ]
+    },
+    {
+      "sourceType": "archive",
+      "name": "dependency-control",
+      "url": "https://github.com/MIRIMIRIM/AegisubBridge/releases/download/dc-v0.1.0/dependency-control-win-x64.zip",
+      "path": [
+        {
+          "source": "plugin.json",
+          "target": "plugins/dependency-control/plugin.json"
+        },
+        {
+          "source": "Aegisub.DependencyControl.NativeAot.dll",
+          "target": "plugins/dependency-control/Aegisub.DependencyControl.NativeAot.dll"
+        }
+      ]
     }
   ]
 }

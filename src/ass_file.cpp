@@ -335,19 +335,40 @@ void AssFile::Sort(EntryList<AssDialogue> &lst, CompFunc comp, std::set<AssDialo
 		return;
 	}
 
+	// The membership test below runs once per line in the whole file, so it is
+	// the dominant cost of a partial sort on a large script. std::set::count
+	// walks a red-black tree per probe; copying the (already pointer-ordered)
+	// set into a flat vector lets us binary search contiguous memory instead.
+	std::vector<AssDialogue *> selected(limit.begin(), limit.end());
+	auto is_selected = [&selected](AssDialogue *line) {
+		return std::binary_search(selected.begin(), selected.end(), line);
+	};
+
 	// Sort each selected block separately, leaving everything else untouched
-	for (auto begin = lst.begin(); begin != lst.end(); ++begin) {
-		if (!limit.count(&*begin)) continue;
-		auto end = begin;
-		while (end != lst.end() && limit.count(&*end)) ++end;
+	size_t remaining = selected.size();
+	for (auto begin = lst.begin(); begin != lst.end() && remaining > 0; ++begin) {
+		if (!is_selected(&*begin)) continue;
 
-		// sort doesn't support only sorting a sublist, so move them to a temp list
-		EntryList<AssDialogue> tmp;
-		tmp.splice(tmp.begin(), lst, begin, end);
-		tmp.sort(comp);
-		lst.splice(end, tmp);
+		// begin is known selected, so start scanning the block after it
+		auto end = std::next(begin);
+		size_t block_size = 1;
+		while (end != lst.end() && is_selected(&*end)) {
+			++end;
+			++block_size;
+		}
+		// Stop scanning once every selected line has been accounted for
+		remaining -= block_size;
 
-		begin = --end;
+		// A single-line block is already sorted; splicing it would be pure overhead
+		if (block_size > 1) {
+			// sort doesn't support only sorting a sublist, so move them to a temp list
+			EntryList<AssDialogue> tmp;
+			tmp.splice(tmp.begin(), lst, begin, end);
+			tmp.sort(comp);
+			lst.splice(end, tmp);
+		}
+
+		begin = std::prev(end);
 	}
 }
 

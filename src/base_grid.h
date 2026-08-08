@@ -150,7 +150,12 @@ class BaseGrid final : public wxWindow {
 	aegisub::presentation::SubtitleGridRowState ResolveGridRowState(AssDialogue const& line) const;
 	bool IsDisplayed(const AssDialogue *line) const;
 
-	void UpdateMaps();
+	/// Rebuild the row maps after a structural change.
+	/// @param remeasure_columns Recompute column widths. Every column derives its
+	/// width from an order-independent aggregate (a max over all rows, the total
+	/// row count, or a fixed string), so a commit that only reorders existing
+	/// lines can skip the full-file remeasure.
+	void UpdateMaps(bool remeasure_columns = true);
 	void UpdateStyle();
 
 	int GetRows() const { return index_line_map.size(); }

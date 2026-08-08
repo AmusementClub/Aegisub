@@ -204,7 +204,13 @@ void BaseGrid::OnSubtitlesCommit(int type, const AssDialogue *single_line) {
 		diff_column_ids);
 
 	if (diff.kind == aegisub::presentation::SubtitleGridDiffKind::Reset) {
-		UpdateMaps();
+		// A commit that is exactly COMMIT_ORDER (sort / move / swap) permutes
+		// existing lines without touching any field or the row count, so the
+		// column widths cannot have changed. Skipping the remeasure avoids
+		// projecting and re-measuring every row in the file on each sort.
+		// COMMIT_NEW is 0 and any combination with ADDREM/META still remeasures.
+		bool const order_only = type == AssFile::COMMIT_ORDER;
+		UpdateMaps(!order_only);
 		return;
 	}
 
@@ -291,9 +297,12 @@ void BaseGrid::UpdateStyle() {
 	Refresh(false);
 }
 
-void BaseGrid::UpdateMaps() {
+void BaseGrid::UpdateMaps(bool remeasure_columns) {
+	auto const previous_rows = index_line_map.size();
 	index_line_map.clear();
 	projection_line_map.clear();
+	index_line_map.reserve(previous_rows);
+	projection_line_map.reserve(previous_rows);
 
 	auto core = context->GetCore();
 	for (auto& curdiag : core.ass->Events) {
@@ -301,7 +310,8 @@ void BaseGrid::UpdateMaps() {
 		projection_line_map.push_back(&curdiag);
 	}
 
-	SetColumnWidths();
+	if (remeasure_columns)
+		SetColumnWidths();
 	AdjustScrollbar();
 	selected_rows = GetSelectedRowsInWindow();
 	Refresh(false);

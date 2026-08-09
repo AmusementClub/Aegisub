@@ -373,7 +373,7 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 
 	if (event.Leaving()) {
 		mouse_pos = Vector2D();
-		parent->Render();
+		parent->RenderToolFeedback();
 		return;
 	}
 
@@ -478,7 +478,7 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 		parent->RenderNow();
 	}
 	else if (interaction_started || !interaction_is_active) {
-		parent->Render();
+		parent->RenderToolFeedback();
 	}
 
 	if (interaction_started) {

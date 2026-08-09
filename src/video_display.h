@@ -183,6 +183,9 @@ class VideoDisplay final : public wxGLCanvas {
 	bool render_requested = false;
 	bool render_in_progress = false;
 	bool render_scheduled = false;
+	/// Visual tool state changed while playing back; the repaint was left to the
+	/// next presented frame, and is flushed on idle once playback ends
+	bool tool_feedback_dirty = false;
 	bool scene_cache_enabled = true;
 	bool scene_cache_retry_blocked = false;
 	bool scene_cache_valid = false;
@@ -347,6 +350,8 @@ public:
 	void Render();
 	/// @brief Render immediately on the UI thread; used for high-frequency tool feedback
 	void RenderNow();
+	/// @brief Request a repaint for per-mouse-event visual tool state changes
+	void RenderToolFeedback();
 	wxImage GetFrameImage(bool raw);
 	VideoDisplayMemoryStats CollectMemoryStats() const;
 	DEFINE_SIGNAL_ADDERS(FramePresented, AddFramePresentedListener)

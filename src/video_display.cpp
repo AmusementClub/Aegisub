@@ -435,7 +435,7 @@ VideoDisplay::VideoDisplay(wxToolBar *toolbar, bool freeSize, wxComboBox *zoomBo
 			// The attached display stays alive while a detached display owns the
 			// shared context. Only the current display should render guide updates.
 			if (con->GetUI().videoDisplay == this)
-				Render();
+				RenderToolFeedback();
 		}));
 	}
 	// Persistent guides read colours/font size each frame via OPT_GET, but a
@@ -920,6 +920,23 @@ void VideoDisplay::RenderNow() {
 	DoRender();
 }
 
+void VideoDisplay::RenderToolFeedback() {
+	// Mouse motion arrives far faster than the video frame rate, and every
+	// render ends in a SwapBuffers() that can block the UI thread until vsync.
+	// Scheduling a render per motion event during playback therefore interleaves
+	// extra vsync stalls between video packets, delaying the UploadFrameData
+	// callbacks that present them: the picture visibly freezes while the mouse
+	// moves. Packet presentation already redraws the overlay from live tool
+	// state on every presented frame, so during playback only mark the frame
+	// dirty and let that cadence own the repaint.
+	if (con->videoController->IsPlaying()) {
+		tool_feedback_dirty = true;
+		return;
+	}
+
+	Render();
+}
+
 void VideoDisplay::OnEraseBackground(wxEraseEvent &) {
 }
 
@@ -1127,6 +1144,12 @@ wxImage VideoDisplay::GetFrameImage(bool raw) {
 }
 
 void VideoDisplay::OnIdle(wxIdleEvent&) {
+	// Tool feedback deferred during playback rides along with the next presented
+	// frame, but once playback stops no further frame is presented to carry it,
+	// so promote it to a real render request here.
+	if (tool_feedback_dirty && !con->videoController->IsPlaying())
+		render_requested = true;
+
 	if (render_requested)
 		DoRender();
 }
@@ -1840,6 +1863,9 @@ void VideoDisplay::DoRender() try {
 			ScheduleRender();
 	});
 	render_requested = false;
+	// This pass redraws the overlay from live tool state, so it satisfies any
+	// visual tool change that was deferred while playing back.
+	tool_feedback_dirty = false;
 
 	if (!con->project->VideoProvider() || !InitContext() || (!videoRenderer && !has_pending_packet))
 		return;

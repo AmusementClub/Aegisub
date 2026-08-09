@@ -242,7 +242,7 @@ void VisualToolMeasure::OnMouseEvent(wxMouseEvent& event) {
 	alt_down = event.AltDown();
 	if (event.Leaving() && interaction == Interaction::None) {
 		mouse_pos = Vector2D();
-		parent->Render();
+		parent->RenderToolFeedback();
 		return;
 	}
 
@@ -264,7 +264,7 @@ void VisualToolMeasure::OnMouseEvent(wxMouseEvent& event) {
 		}
 	}
 
-	parent->Render();
+	parent->RenderToolFeedback();
 }
 
 bool VisualToolMeasure::OnKeyDown(wxKeyEvent& event) {

@@ -383,6 +383,12 @@ static void VerifyFontSelectors(
         throw new InvalidOperationException(
             "Aegisub lost its main window after Styles Manager closed");
     mainWindow = AutomationElement.FromHandle(process.MainWindowHandle);
+    var subtitleEdit = FindTextElementContaining(mainWindow, "Selected line")
+        ?? throw new InvalidOperationException("The active subtitle Edit Box was not found");
+    var subtitleEditHwnd = new IntPtr(subtitleEdit.Current.NativeWindowHandle);
+    if (subtitleEditHwnd == IntPtr.Zero)
+        throw new InvalidOperationException("The active subtitle Edit Box has no native HWND");
+    var pristineSubtitleText = NativeKeyboard.GetWindowText(subtitleEditHwnd);
     var fontFaceCommand = UiaDriver.FindEnabledInvokableButtonByAutomationId(
             mainWindow,
             "6000",
@@ -399,8 +405,22 @@ static void VerifyFontSelectors(
         output,
         "select_font",
         timeout);
+    var previewSubtitleText = WaitForWindowText(
+        subtitleEditHwnd,
+        value => value.Contains("\\fnArial Black", StringComparison.Ordinal),
+        "Select Font did not update the active subtitle Edit Box",
+        timeout);
+    Console.WriteLine(
+        $"uia.correctness.select_font_live_edit_box=" +
+        $"{previewSubtitleText.Contains("\\fnArial Black", StringComparison.Ordinal)}");
     CloseDialog(selectFont, "Cancel");
     WaitForTask(fontFaceInvoke, timeout, "Select Font did not close");
+    WaitForWindowText(
+        subtitleEditHwnd,
+        value => string.Equals(value, pristineSubtitleText, StringComparison.Ordinal),
+        "Cancelling Select Font did not restore the active subtitle Edit Box",
+        timeout);
+    Console.WriteLine("uia.correctness.select_font_cancel_restored=true");
     Console.WriteLine("uia.correctness.font_selectors=true");
 }
 
@@ -562,6 +582,9 @@ static void VerifyFontSelector(
     TypeIntoCombo(combo, query1, charByChar: true);
     ExpectEdit(combo, query1, label, "before_explicit_select", timeout);
     expand.Expand();
+    if (!NativeKeyboard.IsComboDropped(comboHwnd))
+        NativeKeyboard.SetComboDropped(comboHwnd, true);
+    WaitForComboDropState(comboHwnd, expectedDropped: true, timeout);
     WaitForHighlightedListItem(combo, expected1, timeout);
     const string committedFont = "Arial Black";
     NativeKeyboard.ClickComboItem(comboHwnd, committedFont);
@@ -755,6 +778,63 @@ static AutomationElement? FindEditableComboBox(AutomationElement root)
         }
     }
     return null;
+}
+
+static AutomationElement? FindTextElementContaining(
+    AutomationElement root,
+    string marker)
+{
+    var controls = root.FindAll(
+        TreeScope.Descendants,
+        new OrCondition(
+            new PropertyCondition(
+                AutomationElement.ControlTypeProperty,
+                ControlType.Document),
+            new PropertyCondition(
+                AutomationElement.ControlTypeProperty,
+                ControlType.Edit)));
+    foreach (AutomationElement control in controls)
+    {
+        try
+        {
+            var value = ReadElementText(control);
+            if (value?.Contains(marker, StringComparison.Ordinal) == true)
+                return control;
+        }
+        catch (ElementNotAvailableException)
+        {
+        }
+    }
+    return null;
+}
+
+static string? ReadElementText(AutomationElement element)
+{
+    if (element.TryGetCurrentPattern(ValuePattern.Pattern, out var valuePattern))
+        return ((ValuePattern)valuePattern).Current.Value;
+    if (element.TryGetCurrentPattern(TextPattern.Pattern, out var textPattern))
+        return ((TextPattern)textPattern).DocumentRange.GetText(-1);
+    return null;
+}
+
+static string WaitForWindowText(
+    IntPtr window,
+    Func<string, bool> predicate,
+    string failureMessage,
+    TimeSpan timeout)
+{
+    var deadline = Stopwatch.GetTimestamp()
+        + (long)(timeout.TotalSeconds * Stopwatch.Frequency);
+    var current = string.Empty;
+    while (Stopwatch.GetTimestamp() < deadline)
+    {
+        WorkerWatchdog.Pulse();
+        current = NativeKeyboard.GetWindowText(window);
+        if (predicate(current))
+            return current;
+        Thread.Sleep(50);
+    }
+    throw new TimeoutException($"{failureMessage}; current='{current}'");
 }
 
 static AutomationElement? FindSelectedListItem(
@@ -1000,6 +1080,7 @@ static void PrepareFontSelectorProfile(string profile)
         """
         {
           "Subtitle": {
+            "Use STC": false,
             "Font": {
               "Prefer Localized Family Names": true,
               "Use Contains Matching": true,
@@ -1173,6 +1254,7 @@ file static class NativeKeyboard
     private const int CbGetLbTextLen = 0x0149;
     private const int CbFindStringExact = 0x0158;
     private const int CbGetDroppedState = 0x0157;
+    private const int CbShowDropDown = 0x014F;
     private const int LbGetCurSel = 0x0188;
     private const int LbGetText = 0x0189;
     private const int LbGetTextLen = 0x018A;
@@ -1191,6 +1273,19 @@ file static class NativeKeyboard
         return info.hwndItem;
     }
 
+    public static string GetWindowText(IntPtr window)
+    {
+        if (window == IntPtr.Zero)
+            return string.Empty;
+        var length = SendMessageChecked(
+            window, WmGetTextLength, IntPtr.Zero, IntPtr.Zero).ToInt32();
+        if (length <= 0)
+            return string.Empty;
+        var text = new StringBuilder(length + 1);
+        SendMessageChecked(window, WmGetText, (IntPtr)text.Capacity, text);
+        return text.ToString();
+    }
+
     public static IntPtr GetComboListHwnd(IntPtr comboHwnd)
     {
         var info = new ComboBoxInfo { cbSize = Marshal.SizeOf<ComboBoxInfo>() };
@@ -1205,6 +1300,17 @@ file static class NativeKeyboard
             return false;
         return SendMessageChecked(
             comboHwnd, CbGetDroppedState, IntPtr.Zero, IntPtr.Zero) != IntPtr.Zero;
+    }
+
+    public static void SetComboDropped(IntPtr comboHwnd, bool dropped)
+    {
+        if (comboHwnd == IntPtr.Zero)
+            throw new InvalidOperationException("Font combo has no native HWND");
+        SendMessageChecked(
+            comboHwnd,
+            CbShowDropDown,
+            dropped ? (IntPtr)1 : IntPtr.Zero,
+            IntPtr.Zero);
     }
 
     public static int GetComboItemCount(IntPtr comboHwnd)
@@ -1348,8 +1454,7 @@ file static class NativeKeyboard
         // Ensure the drop-down is closed so typing behaves like a fresh query.
         if (IsComboDropped(comboHwnd))
         {
-            SendMessageChecked(
-                comboHwnd, 0x014D, IntPtr.Zero, IntPtr.Zero); // CB_SHOWDROPDOWN(FALSE)
+            SetComboDropped(comboHwnd, false);
             Thread.Sleep(100);
         }
 

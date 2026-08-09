@@ -71,6 +71,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -918,55 +919,99 @@ struct edit_font final : public Command {
 			state.displayed.has_explicit_weight = request.has_explicit_bold;
 			state.displayed.has_explicit_italic = request.has_explicit_italic;
 
-			// Carry the line's border/shadow/colors/underline into the font dialog
-			// preview so it reflects the line's appearance instead of AssStyle
-			// defaults. These are display-only and never written back. The override
-			// lookups honour \r reset semantics so the preview matches what renders
-			// at the cursor.
+			// Underline is part of the font selection and must reflect the state at
+			// the cursor, including any \r reset.
 			auto resolve_reset_style = [&](std::string_view name) -> AssStyle const* {
 				return aegisub::ass_style_resolution::ResolveResetStyle(*core.ass, std::string(name));
 			};
-			auto read_color = [&](std::string const& tag, std::string const& alt,
-			                      std::string const& alpha_tag, agi::Color AssStyle::*field) -> agi::Color {
-				auto lookup = line.find_tag_with_reset(blockn, tag, *style, resolve_reset_style, alt);
-				auto lookup_a = line.find_tag_with_reset(blockn, alpha_tag, *style, resolve_reset_style, "\\alpha");
-				AssStyle const& fb = *lookup.base;
-				AssStyle const& fb_a = *lookup_a.base;
-				// ParseOverrideColor unconditionally assigns all four bytes, so the
-				// colour tag would clobber alpha; apply alpha last and take its
-				// default from the style (not the just-overwritten colour).
-				agi::Color c = fb.*field;
-				if (lookup.tag)
-					c = lookup.tag->Params[0].Get<agi::Color>(c);
-				int default_a = (fb_a.*field).a;
-				c.a = static_cast<unsigned char>(
-					lookup_a.tag ? lookup_a.tag->Params[0].Get<int>(default_a) : default_a);
-				return c;
-			};
-			state.displayed.outline_w = line.get_value_with_reset(blockn, &AssStyle::outline_w, "\\bord", *style, resolve_reset_style);
-			state.displayed.shadow_w = line.get_value_with_reset(blockn, &AssStyle::shadow_w, "\\shad", *style, resolve_reset_style);
 			state.displayed.underline = line.get_value_with_reset(blockn, &AssStyle::underline, "\\u", *style, resolve_reset_style);
-			// borderstyle has no override tag, so it is the base style's value at
-			// the cursor (honouring \r resets).
-			state.displayed.borderstyle = line.base_style_at(blockn, *style, resolve_reset_style)->borderstyle;
-			state.displayed.primary = read_color("\\c", "\\1c", "\\1a", &AssStyle::primary);
-			state.displayed.outline = read_color("\\3c", "", "\\3a", &AssStyle::outline);
-			state.displayed.shadow = read_color("\\4c", "", "\\4a", &AssStyle::shadow);
 			return state;
 		};
 
+		// The dialog previews onto the real document, so every pass has to start
+		// from the same text and the same caret positions. Snapshot both once:
+		// set_tag is not idempotent (it only writes a tag when the value differs
+		// from the line's current state), and reading the caret after a preview
+		// would let it drift by the length of the tags the previous pass inserted.
+		struct preview_line {
+			AssDialogue *line = nullptr;
+			std::string pristine_text;
+			std::string rendered_text;
+			int sel_start = 0;
+			int sel_end = 0;
+			int norm_sel_start = 0;
+			int norm_sel_end = 0;
+			int insertion_point = 0;
+		};
+
+		std::vector<preview_line> preview_lines;
+		{
+			auto const *active_line = core.selectionController->GetActiveLine();
+			const int sel_start = core.textSelectionController->GetSelectionStart();
+			const int sel_end = core.textSelectionController->GetSelectionEnd();
+			const size_t sel_start_chars = character_pos(active_line->Text, sel_start);
+			const size_t sel_end_chars = character_pos(active_line->Text, sel_end);
+
+			auto const& selected_set = core.selectionController->GetSelectedSet();
+			preview_lines.reserve(selected_set.size());
+			for (auto *line : selected_set) {
+				preview_line snapshot;
+				snapshot.line = line;
+				snapshot.pristine_text = line->Text.get();
+				snapshot.rendered_text = snapshot.pristine_text;
+				if (line == active_line) {
+					snapshot.sel_start = sel_start;
+					snapshot.sel_end = sel_end;
+					snapshot.norm_sel_start = normalize_pos(line->Text, sel_start);
+					snapshot.norm_sel_end = normalize_pos(line->Text, sel_end);
+					snapshot.insertion_point = active_insertion_point;
+				}
+				else {
+					auto start = remap_pos_for_line(line, sel_start_chars);
+					auto end = remap_pos_for_line(line, sel_end_chars);
+					snapshot.sel_start = start.raw;
+					snapshot.sel_end = end.raw;
+					snapshot.norm_sel_start = start.plain;
+					snapshot.norm_sel_end = end.plain;
+					snapshot.insertion_point = remap_pos_for_line(line, insertion_chars).raw;
+				}
+				preview_lines.push_back(std::move(snapshot));
+			}
+		}
+		auto *active_preview = [&]() -> preview_line * {
+			auto found = std::find_if(
+				preview_lines.begin(), preview_lines.end(),
+				[&](preview_line const& snapshot) { return snapshot.line == active.line; });
+			return found == preview_lines.end() ? nullptr : &*found;
+		}();
+
 		std::optional<bool> native_override_permission;
-		auto apply_selection = [&](FontFaceDialogSelection const& selected) {
+		// Hoisted so the resolver's GDI probe memo survives across previews.
+		std::unique_ptr<FontVariantResolver> live_resolver;
+		auto apply_selection = [&](FontFaceDialogSelection const& selected, bool permanent) {
+			// Build every result from the state at dialog entry. The temporary
+			// restore and rewrite happen on the UI thread before a refresh is sent,
+			// so no intermediate frame is visible.
+			for (auto& snapshot : preview_lines) {
+				if (snapshot.line->Text.get() != snapshot.pristine_text)
+					snapshot.line->Text = snapshot.pristine_text;
+			}
+			// Preview caret shifts update the current undo snapshot. Put its saved
+			// caret back before creating the final snapshot so Undo restores both
+			// the entry text and selection from dialog entry.
+			if (permanent && active_preview)
+				core.textSelectionController->SetSelection(
+					active_preview->sel_start, active_preview->sel_end);
+
 			bool allow_replace_explicit = selected.allow_replace_explicit;
+			// A preview must never raise a modal prompt of its own; without a
+			// decision yet, preview conservatively as "don't replace".
 			if (selected.from_native_dialog && selected.variant_modified &&
-			    !allow_replace_explicit) {
+			    !allow_replace_explicit && !(!permanent && !native_override_permission)) {
 				bool has_conflict = false;
-				for (auto *line : core.selectionController->GetSelectedSet()) {
-					parsed_line parsed(line);
-					int line_insertion_point = line == active.line
-						? active_insertion_point
-						: remap_pos_for_line(line, insertion_chars).raw;
-					auto const current = font_for_line(parsed, line_insertion_point);
+				for (auto const& snapshot : preview_lines) {
+					parsed_line parsed(snapshot.line);
+					auto const current = font_for_line(parsed, snapshot.insertion_point);
 					if ((current.displayed.has_explicit_weight &&
 					     current.displayed.effective_weight != selected.effective_weight) ||
 					    (current.displayed.has_explicit_italic &&
@@ -1000,7 +1045,6 @@ struct edit_font final : public Command {
 				bool automatic_variant_reliable = true;
 			};
 
-			std::unique_ptr<FontVariantResolver> live_resolver;
 			FontFamilyRecord const *selected_record = nullptr;
 			if (selected.implicit_variant_pinned && !selected.variant_modified &&
 			    font_model.catalog && !font_model.catalog->empty()) {
@@ -1011,9 +1055,14 @@ struct edit_font final : public Command {
 					if (resolved.family)
 						selected_record = font_model.catalog->Find(*resolved.family);
 				}
-				if (selected_record)
+				if (selected_record && !live_resolver)
 					live_resolver = CreatePlatformFontVariantResolver();
 			}
+
+			// Family and height are fixed within one pass, so the profile only
+			// varies by charset; most selections share one, collapsing N probes
+			// into one.
+			std::map<int, std::optional<FontFamilyVariantProfile>> profile_cache;
 
 			auto variant_for_line = [&](line_font_state const& startfont) {
 				line_variant_selection target{
@@ -1028,10 +1077,16 @@ struct edit_font final : public Command {
 					return target;
 				}
 
-				auto profile = BuildFontVariantProfileForFamily(
-					*live_resolver, *selected_record,
-					startfont.displayed.charset,
-					static_cast<double>(selected.point_size));
+				auto cached = profile_cache.find(startfont.displayed.charset);
+				if (cached == profile_cache.end()) {
+					cached = profile_cache.emplace(
+						startfont.displayed.charset,
+						BuildFontVariantProfileForFamily(
+							*live_resolver, *selected_record,
+							startfont.displayed.charset,
+							static_cast<double>(selected.point_size))).first;
+				}
+				auto const& profile = cached->second;
 				if (!profile || !profile->automatic_pinning_reliable) {
 					target.automatic_variant_reliable = false;
 					return target;
@@ -1069,66 +1124,28 @@ struct edit_font final : public Command {
 				return target;
 			};
 
-			auto selection_changes_line = [&](line_font_state const& startfont,
-			                                  line_variant_selection const& variant) {
-				return ShouldWriteFontFace(
-						startfont.stored_face_name,
-						startfont.displayed.face_name,
-						startfont.has_explicit_face_override,
-						selected.face_name)
-					|| selected.point_size != startfont.displayed.point_size
-					|| (variant.automatic_variant_reliable && may_write_weight(startfont) &&
-					    variant.weight != startfont.displayed.effective_weight)
-					|| (variant.automatic_variant_reliable && may_write_italic(startfont) &&
-					    variant.italic != startfont.displayed.italic)
-					|| selected.underline != startfont.displayed.underline;
-			};
-
-			bool has_changes = false;
+			// Single pass: derive from pristine text, write the tags, then compare
+			// both with the last rendered preview and the dialog-entry state.
 			int unknown_skipped = 0;
-			for (auto *line : core.selectionController->GetSelectedSet()) {
+			int active_shift = 0;
+			bool has_final_changes = false;
+			std::vector<AssDialogue const *> refresh_lines;
+			std::vector<AssDialogue const *> commit_lines;
+			refresh_lines.reserve(preview_lines.size());
+			commit_lines.reserve(preview_lines.size());
+
+			for (auto& snapshot : preview_lines) {
+				AssDialogue *line = snapshot.line;
 				parsed_line parsed(line);
-				int line_insertion_point = active_insertion_point;
-				if (line != active.line)
-					line_insertion_point = remap_pos_for_line(line, insertion_chars).raw;
-				auto const startfont = font_for_line(parsed, line_insertion_point);
-				auto const variant = variant_for_line(startfont);
-				if (!variant.automatic_variant_reliable) {
-					++unknown_skipped;
-					continue;
-				}
-				if (selection_changes_line(startfont, variant)) {
-					has_changes = true;
-				}
-			}
-
-			auto show_unknown_summary = [&] {
-				if (unknown_skipped == 0)
-					return;
-				wxMessageBox(
-					wxString::Format(_("%d line(s) were not changed because their font state could not be resolved reliably."), unknown_skipped),
-					_("Font variant not changed"),
-					wxOK | wxICON_WARNING,
-					ui.parent);
-			};
-			if (!has_changes) {
-				show_unknown_summary();
-				return;
-			}
-
-			update_lines(c, from_wx(_("set font")), [&](AssDialogue *line, int sel_start, int sel_end, int norm_sel_start, int norm_sel_end) {
-				parsed_line parsed(line);
-				int line_insertion_point = active_insertion_point;
-				if (line != active.line)
-					line_insertion_point = remap_pos_for_line(line, insertion_chars).raw;
-
-				const auto startfont = font_for_line(parsed, line_insertion_point);
+				auto const startfont = font_for_line(parsed, snapshot.insertion_point);
 				auto const variant = variant_for_line(startfont);
 				if (!variant.automatic_variant_reliable)
-					return 0;
+					++unknown_skipped;
+
 				int shift = 0;
 				auto do_set_tag = [&](const char *tag_name, std::string const& value) {
-					shift += parsed.set_tag(tag_name, value, norm_sel_start, sel_start + shift);
+					shift += parsed.set_tag(
+						tag_name, value, snapshot.norm_sel_start, snapshot.sel_start + shift);
 				};
 
 				if (ShouldWriteFontFace(
@@ -1152,16 +1169,95 @@ struct edit_font final : public Command {
 				if (selected.underline != startfont.displayed.underline)
 					do_set_tag("\\u", std::to_string(selected.underline));
 
-				return shift;
-			});
+				if (line == active.line)
+					active_shift = shift;
+
+				bool const needs_refresh = line->Text.get() != snapshot.rendered_text;
+				bool const differs_from_entry = line->Text.get() != snapshot.pristine_text;
+				if (needs_refresh)
+					refresh_lines.push_back(line);
+				if (permanent && (needs_refresh || differs_from_entry))
+					commit_lines.push_back(line);
+				has_final_changes |= differs_from_entry;
+			}
+
+			auto show_unknown_summary = [&] {
+				if (!permanent || unknown_skipped == 0)
+					return;
+				wxMessageBox(
+					wxString::Format(
+						_("%d line(s) kept their existing weight/italic because their font variant state could not be resolved reliably."),
+						unknown_skipped),
+					_("Font variant not changed"),
+					wxOK | wxICON_WARNING,
+					ui.parent);
+			};
+
+			if (permanent && has_final_changes) {
+				core.ass->Commit(
+					from_wx(_("set font")), AssFile::COMMIT_DIAG_TEXT, -1,
+					commit_lines.size() == 1 ? const_cast<AssDialogue *>(commit_lines.front()) : nullptr,
+					AssDialogueCommitSpan(commit_lines.data(), commit_lines.size()));
+			}
+			else if (!refresh_lines.empty()) {
+				// Empty descriptions are broadcast to renderers and editors but are
+				// ignored by SubsController's undo/redo and autosave-on-change path.
+				core.ass->Commit(
+					"", AssFile::COMMIT_DIAG_TEXT, -1,
+					refresh_lines.size() == 1 ? const_cast<AssDialogue *>(refresh_lines.front()) : nullptr,
+					AssDialogueCommitSpan(refresh_lines.data(), refresh_lines.size()));
+			}
+
+			for (auto& snapshot : preview_lines)
+				snapshot.rendered_text = snapshot.line->Text.get();
+
+			if (active_preview)
+				core.textSelectionController->SetSelection(
+					active_preview->sel_start + active_shift,
+					active_preview->sel_end + active_shift);
+
 			show_unknown_summary();
 		};
 
 		auto initial = font_for_line(active, active_insertion_point);
+
+		FontFaceDialogHooks hooks;
+		hooks.on_preview = [&](FontFaceDialogSelection const& selected) {
+			apply_selection(selected, false);
+		};
+	hooks.on_commit = [&](FontFaceDialogSelection const& selected) {
+			apply_selection(selected, true);
+		};
+		hooks.on_revert = [&] {
+			// Restore the unshifted selection while the longer preview text is
+			// still displayed; shrinking the text first would briefly leave the
+			// edit control with a range past end-of-text.
+			if (active_preview)
+				core.textSelectionController->SetSelection(
+					active_preview->sel_start, active_preview->sel_end);
+
+			std::vector<AssDialogue const *> restored;
+			restored.reserve(preview_lines.size());
+			for (auto& snapshot : preview_lines) {
+				if (snapshot.line->Text.get() != snapshot.pristine_text) {
+					snapshot.line->Text = snapshot.pristine_text;
+					restored.push_back(snapshot.line);
+				}
+				snapshot.rendered_text = snapshot.pristine_text;
+			}
+			if (!restored.empty()) {
+				core.ass->Commit("", AssFile::COMMIT_DIAG_TEXT, -1,
+					restored.size() == 1 ? const_cast<AssDialogue *>(restored.front()) : nullptr,
+					AssDialogueCommitSpan(restored.data(), restored.size()));
+			}
+		};
+
+		auto autosave_inhibitor = core.subsController->InhibitAutosave();
 		auto selected = ShowFontFaceDialog(
-			ui.parent, c, initial.displayed, font_model, apply_selection);
-		if (selected)
-			apply_selection(*selected);
+			ui.parent, initial.displayed, font_model, std::move(hooks));
+		// OK already committed through on_commit; applying `selected` again would
+		// double-write.
+		(void)selected;
 	}
 };
 

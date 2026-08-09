@@ -106,6 +106,25 @@ namespace {
 	}
 }
 
+SubsController::AutosaveInhibitor::AutosaveInhibitor(SubsController *controller)
+: controller(controller) {
+	++controller->autosave_inhibit_depth;
+}
+
+SubsController::AutosaveInhibitor::AutosaveInhibitor(AutosaveInhibitor&& other) noexcept
+: controller(other.controller) {
+	other.controller = nullptr;
+}
+
+SubsController::AutosaveInhibitor::~AutosaveInhibitor() {
+	if (controller)
+		--controller->autosave_inhibit_depth;
+}
+
+SubsController::AutosaveInhibitor SubsController::InhibitAutosave() {
+	return AutosaveInhibitor(this);
+}
+
 struct SubsController::UndoInfo {
 	std::string undo_description;
 	int commit_id;
@@ -366,7 +385,7 @@ int SubsController::TryToClose(bool allow_cancel) const {
 }
 
 void SubsController::AutoSave() {
-	if (commit_id == autosaved_commit_id)
+	if (autosave_inhibit_depth > 0 || commit_id == autosaved_commit_id)
 		return;
 
 	auto core = context->GetCore();

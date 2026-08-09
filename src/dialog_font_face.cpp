@@ -1,23 +1,19 @@
 #include "dialog_font_face.h"
 
-#include "ass_file.h"
-#include "ass_style.h"
-#include "colour_button.h"
 #include "compat.h"
 #include "font_family_catalog.h"
 #include "font_family_catalog_ui.h"
 #include "font_name_combo_box.h"
 #include "font_variant_policy.h"
 #include "font_variant_resolver.h"
-#include "include/aegisub/context.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
-#include "subs_preview.h"
 #include "utils.h"
-#include "wx_style_editor_ui_host.h"
 
 #include <algorithm>
 #include <functional>
+#include <memory>
+#include <optional>
 #include <set>
 #include <utility>
 #include <vector>
@@ -31,6 +27,7 @@
 #include <wx/spinctrl.h>
 #include <wx/stattext.h>
 #include <wx/textctrl.h>
+#include <wx/timer.h>
 
 #ifdef _WIN32
 #ifndef NOMINMAX
@@ -243,9 +240,26 @@ std::optional<FontFaceDialogSelection> ShowNativeFontFaceDialog(
 
 #endif
 
+/// Coalesce live document previews to at most one update per display frame.
+constexpr int LivePreviewIntervalMs = 16;
+
 class FontFaceDialog final : public wxDialog {
 	FontFamilySelectionModel const& font_model;
-	std::function<void(FontFaceDialogSelection const&)> on_apply;
+	FontFaceDialogHooks hooks;
+	/// Kept for the dialog's lifetime so the resolver's internal probe memo
+	/// survives across previews; a per-call resolver would re-probe GDI on
+	/// every keystroke.
+	std::unique_ptr<FontVariantResolver> variant_resolver;
+	wxTimer live_timer;
+	/// Set once construction is done, so building the initial UI state cannot
+	/// fire a preview.
+	bool live_ready = false;
+	/// A preview has been applied to the document and not yet made permanent.
+	bool live_dirty = false;
+	/// Guards against GetSelection()'s own control updates re-entering the
+	/// debounce request.
+	bool emitting_live = false;
+	std::optional<FontFaceDialogSelection> sealed_selection;
 	FontNameComboBox *face_name;
 	wxComboBox *font_style;
 	wxSpinCtrl *point_size;
@@ -255,10 +269,7 @@ class FontFaceDialog final : public wxDialog {
 	wxCheckBox *vertical = nullptr;
 	wxCheckBox *allow_replace_explicit;
 	wxStaticText *variant_status;
-	SubtitlesPreview *preview;
-	wxTextCtrl *preview_text;
 	wxTextCtrl *font_information;
-	AssStyle preview_style;
 	std::vector<FontVariantChoice> variant_choices;
 	int effective_weight = 400;
 	int charset = 1;
@@ -489,18 +500,53 @@ class FontFaceDialog final : public wxDialog {
 		value.Trim(true).Trim(false);
 		if (auto *ok = FindWindow(wxID_OK))
 			ok->Enable(!value.empty());
-		if (auto *apply = FindWindow(wxID_APPLY))
-			apply->Enable(!value.empty());
 	}
 
-	void UpdatePreview() {
-		preview_style.font = from_wx(face_name->GetValue());
-		preview_style.fontsize = point_size->GetValue();
-		preview_style.encoding = charset;
-		preview_style.bold = bold->GetValue();
-		preview_style.italic = italic->GetValue();
-		preview_style.underline = underline->GetValue();
-		preview->SetStyle(preview_style);
+	void UpdatePreview() { RequestLivePreview(); }
+
+	/// Schedule a document preview. Every caller of UpdatePreview() is a point
+	/// where the effective selection changed, so this rides along with the
+	/// in-dialog preview instead of duplicating the event wiring.
+	void RequestLivePreview() {
+		if (!live_ready || emitting_live || !hooks.on_preview)
+			return;
+		if (!live_timer.IsRunning())
+			live_timer.StartOnce(LivePreviewIntervalMs);
+	}
+
+	FontFaceDialogSelection ReadSelectionForCallback(bool commit_family_change) {
+		emitting_live = true;
+		auto selection = GetSelection(commit_family_change);
+		emitting_live = false;
+		return selection;
+	}
+
+	void EmitLivePreview() {
+		if (!hooks.on_preview)
+			return;
+		// Preview reads the current edit value without committing the combo box's
+		// provisional family state, so an open drop-down stays open while typing.
+		auto const selection = ReadSelectionForCallback(false);
+		hooks.on_preview(selection);
+		live_dirty = true;
+	}
+
+	/// Apply any deferred preview immediately so the document matches the
+	/// controls before the state is read or made permanent.
+	void FlushLivePreview() {
+		if (!live_timer.IsRunning())
+			return;
+		live_timer.Stop();
+		EmitLivePreview();
+	}
+
+	void SealSelection() {
+		FlushLivePreview();
+		auto selection = ReadSelectionForCallback(true);
+		if (hooks.on_commit)
+			hooks.on_commit(selection);
+		sealed_selection = std::move(selection);
+		live_dirty = false;
 	}
 
 	void OnFaceText(wxCommandEvent &event) {
@@ -512,6 +558,7 @@ class FontFaceDialog final : public wxDialog {
 		// Refresh soft GDI-limit / match status while typing without committing.
 		UpdateVariantControls(false);
 		UpdateInformation();
+		UpdatePreview();
 		event.Skip();
 	}
 
@@ -600,36 +647,26 @@ class FontFaceDialog final : public wxDialog {
 		event.Skip();
 	}
 
-	void OnPreviewText(wxCommandEvent &event) {
-		preview->SetText(from_wx(preview_text->GetValue()));
-		event.Skip();
-	}
-
-	void OnPreviewColour(ValueEvent<agi::Color> &event) {
-		preview->SetColour(event.Get());
-		OPT_SET("Colour/Style Editor/Background/Preview")->SetColor(event.Get());
-	}
-
 	void OnCopyInformation(wxCommandEvent &) {
 		SetClipboard(from_wx(font_information->GetValue()));
 	}
 
-	void OnApply(wxCommandEvent &) {
-		if (on_apply)
-			on_apply(GetSelection());
+	void OnOk(wxCommandEvent &) {
+		SealSelection();
+		EndModal(wxID_OK);
 	}
 
 public:
 	FontFaceDialog(
 		wxWindow *parent,
-		agi::Context *context,
 		FontFaceDialogSelection const& initial,
 		FontFamilySelectionModel const& font_model,
-		std::function<void(FontFaceDialogSelection const&)> on_apply)
+		FontFaceDialogHooks hooks)
 	: wxDialog(parent, -1, _("Select Font"), wxDefaultPosition, wxDefaultSize,
 		wxDEFAULT_DIALOG_STYLE | wxRESIZE_BORDER)
 	, font_model(font_model)
-	, on_apply(std::move(on_apply))
+	, hooks(std::move(hooks))
+	, variant_resolver(CreatePlatformFontVariantResolver())
 	, effective_weight(initial.effective_weight)
 	, charset(initial.charset)
 	, vertical_requested(!FontFamilyCatalog::SplitVerticalPrefix(
@@ -692,28 +729,6 @@ public:
 		font_style->Hide();
 		variant_status->Hide();
 
-		std::shared_ptr<const TransientFontSet> transient_fonts;
-		if (context)
-			transient_fonts = context->GetCore().ass->GetTransientFonts();
-		preview = new SubtitlesPreview(
-			this,
-			wxSize(520, 100),
-			wxSUNKEN_BORDER,
-			OPT_GET("Colour/Style Editor/Background/Preview")->GetColor(),
-			std::move(transient_fonts),
-			agi::ResolveStyleEditorNotificationSink(context, this));
-		preview_text = new wxTextCtrl(
-			this, -1, to_wx(OPT_GET("Tool/Style Editor/Preview Text")->GetString()));
-		auto *preview_colour = new ColourButton(
-			this, wxSize(45, 16), false,
-			OPT_GET("Colour/Style Editor/Background/Preview")->GetColor());
-		auto *preview_bottom = new wxBoxSizer(wxHORIZONTAL);
-		preview_bottom->Add(preview_text, wxSizerFlags(1).Expand().Border(wxRIGHT, 5));
-		preview_bottom->Add(preview_colour, wxSizerFlags().Expand());
-		auto *preview_box = new wxStaticBoxSizer(wxVERTICAL, this, _("Preview"));
-		preview_box->Add(preview, wxSizerFlags(1).Expand().Border(wxBOTTOM, 5));
-		preview_box->Add(preview_bottom, wxSizerFlags().Expand());
-
 		font_information = new wxTextCtrl(
 			this, -1, wxEmptyString, wxDefaultPosition, wxSize(-1, 130),
 			wxTE_MULTILINE | wxTE_READONLY | wxTE_DONTWRAP);
@@ -725,9 +740,8 @@ public:
 
 		auto *main_sizer = new wxBoxSizer(wxVERTICAL);
 		main_sizer->Add(font_box, wxSizerFlags().Expand().Border(wxALL, 10));
-		main_sizer->Add(preview_box, wxSizerFlags(1).Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 10));
 		main_sizer->Add(information_box, wxSizerFlags(1).Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 10));
-		main_sizer->Add(CreateStdDialogButtonSizer(wxOK | wxCANCEL | wxAPPLY),
+		main_sizer->Add(CreateStdDialogButtonSizer(wxOK | wxCANCEL),
 			wxSizerFlags().Expand().Border(wxLEFT | wxRIGHT | wxBOTTOM, 10));
 		SetSizerAndFit(main_sizer);
 		SetMinSize(GetSize());
@@ -751,30 +765,45 @@ public:
 		font_style->Bind(wxEVT_COMBOBOX, &FontFaceDialog::OnStyleUpdate, this);
 		allow_replace_explicit->Bind(wxEVT_CHECKBOX, [this](wxCommandEvent &event) {
 			UpdateVariantControls(true);
+			// The checkbox changes which tags get written, so the document
+			// preview has to be refreshed even though no font control moved.
+			UpdatePreview();
 			event.Skip();
 		});
-		preview_text->Bind(wxEVT_TEXT, &FontFaceDialog::OnPreviewText, this);
-		preview_colour->Bind(EVT_COLOR, &FontFaceDialog::OnPreviewColour, this);
 		copy_information->Bind(wxEVT_BUTTON, &FontFaceDialog::OnCopyInformation, this);
-		Bind(wxEVT_BUTTON, &FontFaceDialog::OnApply, this, wxID_APPLY);
+		Bind(wxEVT_BUTTON, &FontFaceDialog::OnOk, this, wxID_OK);
+		point_size->Bind(wxEVT_TEXT, [this](wxCommandEvent &event) {
+			UpdatePreview();
+			event.Skip();
+		});
+		live_timer.Bind(wxEVT_TIMER, [this](wxTimerEvent&) { EmitLivePreview(); });
 
-		preview->SetText(from_wx(preview_text->GetValue()));
 		UpdateVariantControls(false);
 		UpdateInformation();
-		// Carry the active line's border/shadow/colors into the preview style so
-		// the preview reflects the line's appearance instead of AssStyle defaults.
-		// These fields are never changed from within the dialog, so set them once.
-		preview_style.outline_w = initial.outline_w;
-		preview_style.shadow_w = initial.shadow_w;
-		preview_style.borderstyle = initial.borderstyle;
-		preview_style.primary = initial.primary;
-		preview_style.outline = initial.outline;
-		preview_style.shadow = initial.shadow;
-		UpdatePreview();
+		// Opening the dialog must not touch the document; only user edits from
+		// here on schedule a live preview.
+		live_ready = true;
 	}
 
-	FontFaceDialogSelection GetSelection() {
-		CommitFaceFamilyChange();
+	/// Discard an unsealed preview. Called after ShowModal() returns anything
+	/// other than OK, which covers Cancel, Escape and the close box in one
+	/// place rather than chasing every close path.
+	void CancelLivePreview() {
+		live_timer.Stop();
+		if (!live_dirty)
+			return;
+		live_dirty = false;
+		if (hooks.on_revert)
+			hooks.on_revert();
+	}
+
+	std::optional<FontFaceDialogSelection> const& SealedSelection() const {
+		return sealed_selection;
+	}
+
+	FontFaceDialogSelection GetSelection(bool commit_family_change) {
+		if (commit_family_change)
+			CommitFaceFamilyChange();
 		FontFaceDialogSelection result;
 		result.face_name = from_wx(face_name->GetValue());
 		result.selected_family_id = face_name->SelectedFamilyId();
@@ -815,10 +844,9 @@ public:
 		    !result.variant_modified) {
 			bool pin_confirmed = false;
 			auto const *record = SelectedRecord();
-			if (record && font_model.catalog) {
-				auto resolver = CreatePlatformFontVariantResolver();
+			if (record && font_model.catalog && variant_resolver) {
 				auto profile = BuildFontVariantProfileForFamily(
-					*resolver, *record, result.charset,
+					*variant_resolver, *record, result.charset,
 					static_cast<double>(result.point_size));
 				if (profile) {
 					auto adjusted = AdjustFamilySelection(
@@ -845,9 +873,6 @@ public:
 		return result;
 	}
 
-	std::string GetPreviewText() const {
-		return from_wx(preview_text->GetValue());
-	}
 };
 
 #ifndef _WIN32
@@ -858,14 +883,15 @@ std::optional<FontFaceDialogSelection> ShowNativeFontFaceDialog(
 	FontFamilySelectionModel const& font_model,
 	std::function<void(FontFaceDialogSelection const&)> const& on_apply)
 {
-	FontFaceDialog dialog(parent, nullptr, initial, font_model,
-		[&on_apply](FontFaceDialogSelection const& selection) {
-			if (on_apply)
-				on_apply(selection);
-		});
+	FontFaceDialogHooks hooks;
+	hooks.on_commit = [&on_apply](FontFaceDialogSelection const& selection) {
+		if (on_apply)
+			on_apply(selection);
+	};
+	FontFaceDialog dialog(parent, initial, font_model, std::move(hooks));
 	if (dialog.ShowModal() != wxID_OK)
 		return std::nullopt;
-	return dialog.GetSelection();
+	return dialog.SealedSelection();
 }
 
 #endif
@@ -874,18 +900,20 @@ std::optional<FontFaceDialogSelection> ShowNativeFontFaceDialog(
 
 std::optional<FontFaceDialogSelection> ShowFontFaceDialog(
 	wxWindow *parent,
-	agi::Context *context,
 	FontFaceDialogSelection const& initial,
 	FontFamilySelectionModel const& font_model,
-	std::function<void(FontFaceDialogSelection const&)> on_apply)
+	FontFaceDialogHooks hooks)
 {
 	// Both name preferences use the custom dialog. BuildFontFamilyCatalogUiModel
 	// keeps the localized-vs-English choice in the model and supplies enumerator
 	// fallback choices if the catalog is not ready yet.
-	FontFaceDialog dialog(parent, context, initial, font_model, std::move(on_apply));
+	FontFaceDialog dialog(parent, initial, font_model, std::move(hooks));
 	auto const result = dialog.ShowModal();
-	OPT_SET("Tool/Style Editor/Preview Text")->SetString(dialog.GetPreviewText());
-	if (result != wxID_OK)
+	if (result != wxID_OK) {
+		dialog.CancelLivePreview();
 		return std::nullopt;
-	return dialog.GetSelection();
+	}
+	// OnOk already sealed the selection through the commit hook, so the caller
+	// must not apply it again.
+	return dialog.SealedSelection();
 }

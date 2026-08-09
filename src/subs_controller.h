@@ -85,6 +85,7 @@ class SubsController {
 
 	/// Timer for triggering autosaves on GUI shells only.
 	std::unique_ptr<SubsControllerTimer> autosave_timer;
+	int autosave_inhibit_depth = 0;
 
 	/// Queue which autosaves are performed on
 	std::unique_ptr<agi::dispatch::Queue> autosave_queue;
@@ -150,8 +151,25 @@ class SubsController {
 	void OnTextSelectionChanged();
 
 public:
+	class AutosaveInhibitor {
+		SubsController *controller = nullptr;
+		explicit AutosaveInhibitor(SubsController *controller);
+		friend class SubsController;
+
+	public:
+		AutosaveInhibitor(AutosaveInhibitor const&) = delete;
+		AutosaveInhibitor& operator=(AutosaveInhibitor const&) = delete;
+		AutosaveInhibitor(AutosaveInhibitor&& other) noexcept;
+		AutosaveInhibitor& operator=(AutosaveInhibitor&&) = delete;
+		~AutosaveInhibitor();
+	};
+
 	SubsController(agi::Context *context);
 	~SubsController();
+
+	/// Temporarily prevent the periodic autosave timer from snapshotting
+	/// transient document state. Nested inhibitors are supported.
+	AutosaveInhibitor InhibitAutosave();
 
 	/// Set the selection controller to use
 	///

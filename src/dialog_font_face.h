@@ -1,9 +1,5 @@
 #pragma once
 
-#include "ass_style.h"
-
-#include <libaegisub/color.h>
-
 #include <functional>
 #include <cstdint>
 #include <optional>
@@ -11,7 +7,6 @@
 
 struct FontFamilySelectionModel;
 class wxWindow;
-namespace agi { struct Context; }
 
 struct FontFaceDialogSelection {
 	std::string face_name;
@@ -33,16 +28,29 @@ struct FontFaceDialogSelection {
 	bool allow_replace_explicit = false;
 	bool from_native_dialog = false;
 
-	/// Preview appearance carried from the active line's style + overrides, so
-	/// the preview reflects the line's border/shadow/colors instead of AssStyle
-	/// defaults. These are display-only and never written back.
-	double outline_w = AssStyle::DefaultOutlineWidth;
-	double shadow_w = AssStyle::DefaultShadowWidth;
-	/// \borderstyle has no override tag, so only the style value is carried.
-	int borderstyle = AssStyle::DefaultBorderStyle;
-	agi::Color primary{ 255, 255, 255 };
-	agi::Color outline{ 0, 0, 0 };
-	agi::Color shadow{ 0, 0, 0 };
+};
+
+/// Callbacks that let the dialog drive a live, revertible edit of the document
+/// so the video frame shows the real result while the dialog is open.
+///
+/// Lifecycle: zero or more `on_preview` calls, then either `on_commit` (OK) or
+/// `on_revert` (Cancel/close).
+struct FontFaceDialogHooks {
+	/// Apply the selection to the document as a temporary preview. Calls must
+	/// not alter undo/redo or persistent modified state, and must be idempotent:
+	/// each call fully replaces the previous preview rather than stacking.
+	///
+	/// The dialog debounces control changes before calling this, so an
+	/// implementation may commit and re-render without extra throttling.
+	std::function<void(FontFaceDialogSelection const&)> on_preview;
+
+	/// Make the current preview permanent (OK). Any deferred preview
+	/// is flushed first; this is where the caller creates the single undo entry.
+	std::function<void(FontFaceDialogSelection const&)> on_commit;
+
+	/// Discard everything previewed since the last `on_commit`. Only called
+	/// when at least one `on_preview` was emitted.
+	std::function<void()> on_revert;
 };
 
 /// Show Aegisub's custom selector using localized or English catalog names as
@@ -50,12 +58,11 @@ struct FontFaceDialogSelection {
 /// names. The displayed face name is also the exact face name returned for ASS
 /// writing.
 ///
-/// The callback is called when the dialog's Apply button is pressed. Apply
-/// leaves the dialog open so callers can inspect the result and continue
-/// editing the selection.
+/// Returns the selection that was made permanent, or nullopt if the dialog was
+/// cancelled. On OK the hooks have already committed it, so callers must not
+/// apply the returned selection a second time.
 std::optional<FontFaceDialogSelection> ShowFontFaceDialog(
 	wxWindow *parent,
-	agi::Context *context,
 	FontFaceDialogSelection const& initial,
 	FontFamilySelectionModel const& font_model,
-	std::function<void(FontFaceDialogSelection const&)> on_apply = {});
+	FontFaceDialogHooks hooks = {});

@@ -433,8 +433,11 @@ FrameMain::~FrameMain () {
 void FrameMain::EnableToolBar(agi::OptionValue const& opt) {
 	if (opt.GetBool()) {
 		if (!GetToolBar()) {
+			// AttachToolbar already attaches via SetToolBar() and then
+			// populates, and Populate() ends in Realize(), so the toolbar
+			// comes back fully realized. Realizing again here rebuilt the
+			// native image list and re-inserted every button for nothing.
 			toolbar::AttachToolbar(this, "main", context.get(), "Default");
-			GetToolBar()->Realize();
 		}
 	}
 	else if (wxToolBar *old_tb = GetToolBar()) {

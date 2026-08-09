@@ -343,10 +343,13 @@ namespace {
 					AddTool(TOOL_ID_BASE + commands.size(), display, bitmap, GetTooltip(command), kind);
 				}
 				else {
-					wxBitmap bitmap = command->Icon(icon_size, layout_direction);
-					wxBitmapBundle bundle = bitmap.IsOk()
-						? command->IconBundle(layout_direction)
-						: wxBitmapBundle::FromBitmap(make_text_tool_bitmap(this, display, cmd_name, icon_size, !command_option.empty()));
+					// Ask for the bundle directly: probing with Icon() first would
+					// decode and rescale a bitmap that is then thrown away, and
+					// both accessors come from the same CMD_ICON macro, so an
+					// empty bundle already means "this command has no icon".
+					wxBitmapBundle bundle = command->IconBundle(layout_direction);
+					if (!bundle.IsOk())
+						bundle = wxBitmapBundle::FromBitmap(make_text_tool_bitmap(this, display, cmd_name, icon_size, !command_option.empty()));
 					AddTool(TOOL_ID_BASE + commands.size(), display, bundle, GetTooltip(command), kind);
 				}
 

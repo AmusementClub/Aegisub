@@ -321,6 +321,14 @@ struct ContentWorker::Impl {
 		return !stop && revision == content_budget_revision;
 	}
 
+	void NotifyVisiblePayloadReady(bool visible, ContentGeneration candidate) {
+		if (!visible || !ready_callback || !IsGenerationCurrent(candidate))
+			return;
+		ready_callback(candidate);
+		std::lock_guard<std::mutex> lock(mutex);
+		++metrics.ready_notifications;
+	}
+
 	void PublishAnalysisMetrics(ContentAnalyzer const& analyzer) {
 		auto snapshot = analyzer.Metrics();
 		std::lock_guard<std::mutex> lock(mutex);
@@ -434,8 +442,15 @@ struct ContentWorker::Impl {
 						++metrics.payload_builds_invalid;
 						continue;
 					}
-					if (payload_store.Find(payload_key))
+					// A payload can have been published by an older viewport request
+					// while this request was waiting in the queue. The data is ready,
+					// but the old request deliberately did not notify for its prefetch
+					// tile. Notify for the visible cache hit so the display repaints and
+					// picks up the now-complete viewport.
+					if (payload_store.Find(payload_key)) {
+						NotifyVisiblePayloadReady(visible, plan->generation);
 						continue;
+					}
 
 					auto const trace_tile = perf_trace::IsCategoryEnabled(perf_trace::Category::Audio);
 					auto tile = store.Find(key);
@@ -618,13 +633,7 @@ struct ContentWorker::Impl {
 						std::lock_guard<std::mutex> lock(mutex);
 						++metrics.payload_builds_ready;
 					}
-					if (visible
-						&& ready_callback
-						&& IsGenerationCurrent(plan->generation)) {
-						ready_callback(plan->generation);
-						std::lock_guard<std::mutex> lock(mutex);
-						++metrics.ready_notifications;
-					}
+					NotifyVisiblePayloadReady(visible, plan->generation);
 				}
 				if (analyzer && plan->analysis.kind == ContentKind::Spectrum)
 					PublishAnalysisMetrics(*analyzer);

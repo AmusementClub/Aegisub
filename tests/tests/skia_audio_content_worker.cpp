@@ -81,6 +81,12 @@ public:
 		condition.notify_all();
 	}
 
+	void BlockNextFill() const {
+		std::lock_guard<std::mutex> lock(mutex);
+		entered = false;
+		released = false;
+	}
+
 	std::uint64_t FillCount() const { return fills.load(); }
 };
 
@@ -269,6 +275,78 @@ bool WaitForDecodeDeferrals(
 		std::this_thread::sleep_for(1ms);
 	}
 	return false;
+}
+
+void ExpectVisiblePayloadCacheHitNotifiesAfterPrefetchRace(ContentKind kind) {
+	GateAudioProvider provider;
+	ReadyLatch ready;
+	std::mutex callback_mutex;
+	std::condition_variable callback_condition;
+	bool first_callback_entered = false;
+	bool release_first_callback = false;
+	ContentWorker worker([&](ContentGeneration generation) {
+		ready.Notify(generation);
+		std::unique_lock<std::mutex> lock(callback_mutex);
+		if (first_callback_entered)
+			return;
+		first_callback_entered = true;
+		callback_condition.notify_all();
+		callback_condition.wait(lock, [&] { return release_first_callback; });
+	});
+
+	worker.SetProvider(&provider);
+	auto const generation = worker.SetAnalysis(
+		kind == ContentKind::Waveform ? WaveformAnalysis() : SpectrumAnalysis());
+	auto old_viewport = kind == ContentKind::Waveform
+		? WaveformViewport(generation, 64, 64)
+		: SpectrumViewport(generation, 4, 4);
+	old_viewport.prefetch_tile_count = 1;
+	auto prefetched_key = FirstKey(old_viewport);
+	++prefetched_key.tile_index;
+	auto latest_viewport = kind == ContentKind::Waveform
+		? WaveformViewport(generation, 128, 64)
+		: SpectrumViewport(generation, 8, 4);
+	auto const band_plan = kind == ContentKind::Spectrum ? SpectrumPlan() : nullptr;
+
+	worker.Request(old_viewport, band_plan);
+	bool callback_entered = false;
+	{
+		std::unique_lock<std::mutex> lock(callback_mutex);
+		callback_entered = callback_condition.wait_for(
+			lock, 2s, [&] { return first_callback_entered; });
+	}
+	if (!callback_entered) {
+		{
+			std::lock_guard<std::mutex> lock(callback_mutex);
+			release_first_callback = true;
+		}
+		callback_condition.notify_all();
+		worker.SetProvider(nullptr);
+		FAIL() << "visible tile did not reach the ready callback";
+	}
+
+	// Let the old request enter its adjacent prefetch read, then replace it
+	// with a viewport for that same tile while the read is in flight.
+	provider.BlockNextFill();
+	{
+		std::lock_guard<std::mutex> lock(callback_mutex);
+		release_first_callback = true;
+	}
+	callback_condition.notify_all();
+	if (!provider.WaitUntilEntered()) {
+		provider.Release();
+		worker.SetProvider(nullptr);
+		FAIL() << "prefetch tile did not enter the provider";
+	}
+	worker.Request(latest_viewport, band_plan);
+	provider.Release();
+
+	ASSERT_TRUE(ready.WaitFor(2));
+	ASSERT_TRUE(WaitForPayloadBuilds(worker, 2));
+	EXPECT_NE(worker.FindPayload(MakeContentUploadPayloadKey(
+		prefetched_key, band_plan.get())), nullptr);
+	EXPECT_EQ(worker.Metrics().ready_notifications, 2u);
+	worker.SetProvider(nullptr);
 }
 
 }
@@ -463,6 +541,14 @@ TEST(skia_audio_content_worker, request_builds_adjacent_prefetch_without_extra_n
 	EXPECT_NE(worker.Find(after), nullptr);
 	EXPECT_EQ(worker.Metrics().ready_notifications, 1u);
 	worker.SetProvider(nullptr);
+}
+
+TEST(skia_audio_content_worker, waveform_visible_payload_cache_hit_notifies_after_prefetch_race) {
+	ExpectVisiblePayloadCacheHitNotifiesAfterPrefetchRace(ContentKind::Waveform);
+}
+
+TEST(skia_audio_content_worker, spectrum_visible_payload_cache_hit_notifies_after_prefetch_race) {
+	ExpectVisiblePayloadCacheHitNotifiesAfterPrefetchRace(ContentKind::Spectrum);
 }
 
 TEST(skia_audio_content_worker, prefetch_never_evicts_visible_tile_from_tight_budget) {

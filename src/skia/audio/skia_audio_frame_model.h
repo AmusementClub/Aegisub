@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace aegisub::skia::audio {
@@ -105,6 +106,77 @@ ScrollbarGeometry BuildScrollbarGeometry(
 	int selection_length) noexcept;
 
 std::chrono::nanoseconds PresentationFrameInterval(int display_refresh_rate) noexcept;
+
+/// Timeline scale-mark granularity. Mirrors the legacy AudioDisplayTimeline
+/// Scale enum one-for-one so both renderers pick the same marks at any zoom.
+enum class TimelineScale : std::uint8_t {
+	Millisecond,
+	Centisecond,
+	Decisecond,
+	Second,
+	Decasecond,
+	Minute,
+	Decaminute,
+	Hour,
+	Decahour,
+};
+
+struct TimelineScalePlan {
+	TimelineScale scale = TimelineScale::Second;
+	/// Mark index multiplied by this gives the mark time in milliseconds.
+	double minor_divisor = 1000.0;
+	/// A mark is major when its index % major_modulo == 0.
+	int major_modulo = 10;
+	bool valid = false;
+
+	friend bool operator==(TimelineScalePlan const&, TimelineScalePlan const&) = default;
+};
+
+/// Pick the scale-mark plan for a zoom level, keyed on milliseconds per pixel.
+/// Uses the legacy pixels-per-second thresholds, including the modulo-6 majors
+/// at Decasecond and Decaminute (so majors land on whole minutes and hours).
+TimelineScalePlan BuildTimelineScalePlan(double milliseconds_per_pixel) noexcept;
+
+struct TimelineMark {
+	/// Absolute minor-mark index; mark time is index * minor_divisor.
+	std::int64_t index = 0;
+	double time_ms = 0.0;
+	/// Pixel offset from the left edge of the timeline, in device pixels.
+	double x = 0.0;
+	bool major = false;
+
+	friend bool operator==(TimelineMark const&, TimelineMark const&) = default;
+};
+
+/// Enumerate the visible scale marks left-to-right. Like legacy, this walks
+/// every minor mark from the first one at or after the scroll position and
+/// keeps going until one lands past the right edge, so the mark past the edge
+/// is included and marks are not clamped to the audio duration.
+std::vector<TimelineMark> BuildTimelineMarks(
+	TimelineScalePlan const& plan,
+	double scroll_left,
+	double width,
+	double milliseconds_per_pixel);
+
+/// Stateful timeline label text builder. Legacy suppresses the hour and minute
+/// fields while they are unchanged from the previous label, so labels must be
+/// formatted in left-to-right order through one instance per repaint.
+class TimelineLabelFormatter final {
+	TimelineScale scale = TimelineScale::Second;
+	int last_hour = -1;
+	int last_minute = -1;
+
+public:
+	/// duration_ms is the audio duration, used only for legacy's "hide hours on
+	/// short audio" test. That test compares a millisecond duration against
+	/// 3600, so it only engages below 3.6s; it is reproduced verbatim because
+	/// it is what makes the first label of a normal file carry a "h:mm:" prefix.
+	TimelineLabelFormatter(TimelineScale scale, int duration_ms) noexcept;
+
+	/// Format the label for one major mark. Must be called in left-to-right
+	/// order: each call updates the suppression state for the next one.
+	std::string Format(double mark_time_ms);
+};
 
 enum class FrameStyle : std::uint8_t {
 	Normal,

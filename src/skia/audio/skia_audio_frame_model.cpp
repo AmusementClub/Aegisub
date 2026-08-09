@@ -5,7 +5,9 @@
 #include <bit>
 #include <cmath>
 #include <cstring>
+#include <iomanip>
 #include <limits>
+#include <sstream>
 
 namespace aegisub::skia::audio {
 namespace {
@@ -13,6 +15,10 @@ namespace {
 constexpr int kMaximumDeviceDimension = 32768;
 constexpr std::uint32_t kMaximumSpectrumBins = 4096;
 constexpr int kMaximumSpectrumHeight = 32768;
+// The scale thresholds keep minor marks at least ~3px apart, so a full-width
+// pass over a 32768px target needs well under 11k marks. This only guards
+// against a pathological milliseconds_per_pixel producing an endless loop.
+constexpr std::size_t kMaximumTimelineMarks = 16384;
 
 int ScaleBoundary(int logical, double scale) noexcept {
 	if (logical <= 0)
@@ -314,6 +320,149 @@ std::chrono::nanoseconds PresentationFrameInterval(int display_refresh_rate) noe
 	if (display_refresh_rate < 24 || display_refresh_rate > 1000)
 		display_refresh_rate = 60;
 	return std::chrono::nanoseconds { 1'000'000'000LL / display_refresh_rate };
+}
+
+TimelineScalePlan BuildTimelineScalePlan(double milliseconds_per_pixel) noexcept {
+	TimelineScalePlan plan;
+	if (!std::isfinite(milliseconds_per_pixel) || milliseconds_per_pixel <= 0.0)
+		return plan;
+
+	// Thresholds transcribed from AudioDisplayTimeline::ChangeZoom so both
+	// renderers pick the same scale, and therefore the same major-mark spacing,
+	// at every zoom level. Note the modulo is 6 (not 10) at Decasecond and
+	// Decaminute so major marks land on whole minutes and whole hours.
+	auto const px_sec = 1000.0 / milliseconds_per_pixel;
+	if (px_sec > 3000) {
+		plan.scale = TimelineScale::Millisecond;
+		plan.minor_divisor = 1.0;
+		plan.major_modulo = 10;
+	}
+	else if (px_sec > 300) {
+		plan.scale = TimelineScale::Centisecond;
+		plan.minor_divisor = 10.0;
+		plan.major_modulo = 10;
+	}
+	else if (px_sec > 30) {
+		plan.scale = TimelineScale::Decisecond;
+		plan.minor_divisor = 100.0;
+		plan.major_modulo = 10;
+	}
+	else if (px_sec > 3) {
+		plan.scale = TimelineScale::Second;
+		plan.minor_divisor = 1000.0;
+		plan.major_modulo = 10;
+	}
+	else if (px_sec > 1.0 / 3.0) {
+		plan.scale = TimelineScale::Decasecond;
+		plan.minor_divisor = 10000.0;
+		plan.major_modulo = 6;
+	}
+	else if (px_sec > 1.0 / 9.0) {
+		plan.scale = TimelineScale::Minute;
+		plan.minor_divisor = 60000.0;
+		plan.major_modulo = 10;
+	}
+	else if (px_sec > 1.0 / 90.0) {
+		plan.scale = TimelineScale::Decaminute;
+		plan.minor_divisor = 600000.0;
+		plan.major_modulo = 6;
+	}
+	else {
+		plan.scale = TimelineScale::Hour;
+		plan.minor_divisor = 3600000.0;
+		plan.major_modulo = 10;
+	}
+	plan.valid = true;
+	return plan;
+}
+
+std::vector<TimelineMark> BuildTimelineMarks(
+	TimelineScalePlan const& plan,
+	double scroll_left,
+	double width,
+	double milliseconds_per_pixel) {
+	std::vector<TimelineMark> marks;
+	if (!plan.valid
+		|| plan.minor_divisor <= 0.0
+		|| plan.major_modulo <= 0
+		|| !std::isfinite(scroll_left)
+		|| !std::isfinite(width)
+		|| !std::isfinite(milliseconds_per_pixel)
+		|| milliseconds_per_pixel <= 0.0
+		|| width <= 0.0)
+		return marks;
+
+	scroll_left = std::max(0.0, scroll_left);
+
+	// Figure out the first scale mark to show, matching the legacy rounding:
+	// truncate towards zero, then step forward one mark if that landed left of
+	// the visible time.
+	auto const ms_left = scroll_left * milliseconds_per_pixel;
+	auto index = static_cast<std::int64_t>(ms_left / plan.minor_divisor);
+	if (index * plan.minor_divisor < ms_left)
+		index += 1;
+
+	// The legacy loop is a do/while on the mark position, so it always emits at
+	// least one mark and keeps going one mark past the right edge. It is not
+	// clamped to the audio duration either: marks continue for the full widget
+	// width even past the end of the audio.
+	marks.reserve(static_cast<std::size_t>(
+		std::min(width / std::max(1.0, plan.minor_divisor / milliseconds_per_pixel) + 4.0, 1024.0)));
+	double position = 0.0;
+	do {
+		position = index * plan.minor_divisor / milliseconds_per_pixel - scroll_left;
+		marks.push_back({
+			index,
+			index * plan.minor_divisor,
+			position,
+			index % plan.major_modulo == 0,
+		});
+		index += 1;
+	} while (position < width && marks.size() < kMaximumTimelineMarks);
+	return marks;
+}
+
+TimelineLabelFormatter::TimelineLabelFormatter(TimelineScale scale, int duration_ms) noexcept
+: scale(scale) {
+	// Verbatim legacy quirk: the test is against a millisecond duration but the
+	// constant reads as seconds, so it only fires for audio shorter than 3.6s.
+	// Keeping it means a normal file leaves last_hour at -1, which is what makes
+	// the leftmost label of every repaint carry the full "h:mm:" prefix.
+	if (duration_ms < 3600)
+		last_hour = 0;
+}
+
+std::string TimelineLabelFormatter::Format(double mark_time_ms) {
+	// Legacy computes the mark time in seconds, then splits it, so the seconds
+	// component keeps its fractional part for the sub-second scales.
+	auto const mark_time = mark_time_ms / 1000.0;
+	auto const mark_hour = static_cast<int>(mark_time / 3600);
+	auto const mark_minute = static_cast<int>(mark_time / 60) % 60;
+	auto const mark_second = mark_time - mark_hour * 3600.0 - mark_minute * 60.0;
+
+	std::ostringstream out;
+	auto const changed_hour = mark_hour != last_hour;
+	auto const changed_minute = mark_minute != last_minute;
+	if (changed_hour) {
+		out << mark_hour << ':' << std::setfill('0') << std::setw(2) << mark_minute << ':';
+		last_hour = mark_hour;
+		last_minute = mark_minute;
+	}
+	else if (changed_minute) {
+		out << mark_minute << ':';
+		last_minute = mark_minute;
+	}
+
+	// fmt_wx("%02d", double) truncates towards zero; "%02.Nf" is fixed-point
+	// with a minimum field width of 2 (which the "0" flag zero-fills).
+	out << std::setfill('0');
+	if (scale >= TimelineScale::Decisecond)
+		out << std::setw(2) << static_cast<std::int64_t>(mark_second);
+	else
+		out << std::fixed
+			<< std::setprecision(scale == TimelineScale::Centisecond ? 1 : 2)
+			<< std::setw(2) << mark_second;
+	return out.str();
 }
 
 bool IsValidDeviceStyleSpan(

@@ -24,6 +24,7 @@
 #include <include/core/SkColorSpace.h>
 #include <include/core/SkData.h>
 #include <include/core/SkFont.h>
+#include <include/core/SkFontMetrics.h>
 #include <include/core/SkFontMgr.h>
 #include <include/core/SkFontStyle.h>
 #include <include/core/SkImage.h>
@@ -47,8 +48,8 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
-#include <iomanip>
 #include <limits>
+#include <mutex>
 #include <optional>
 #include <queue>
 #include <span>
@@ -65,12 +66,17 @@ constexpr std::size_t kGaneshResourceCacheBudget = 64 * 1024 * 1024;
 
 using FrameTraceClock = std::chrono::steady_clock;
 
-// Lazily-built, cached font manager used to resolve the cursor label font
-// face. Mirrors skia_runtime/skia_text_layout_cache.cpp's CreateFontManager,
-// kept self-contained here so the audio display does not couple to the
-// (frozen) Skia video tools target. Each platform wires its native backend;
-// SkFontMgr::RefEmpty() is the last-resort fallback (no families resolvable).
-SkFontMgr *GetCursorLabelFontManager() {
+// Lazily-built, cached font manager used to resolve every typeface the audio
+// display draws with. Mirrors skia_runtime/skia_text_layout_cache.cpp's
+// CreateFontManager, kept self-contained here so the audio display does not
+// couple to the (frozen) Skia video tools target. Each platform wires its
+// native backend; SkFontMgr::RefEmpty() is the last-resort fallback.
+//
+// This must exist for any text to appear at all: a default-constructed SkFont
+// is backed by SkTypeface::MakeEmpty(), which has no glyphs, so it silently
+// draws nothing and measures zero. Skia no longer offers SkFontMgr::RefDefault,
+// and this build has skia_use_freetype=false, so there is no implicit fallback.
+SkFontMgr *GetAudioFontManager() {
 	static sk_sp<SkFontMgr> const font_mgr = []() -> sk_sp<SkFontMgr> {
 #if defined(_WIN32)
 		if (auto mgr = SkFontMgr_New_DirectWrite())
@@ -83,49 +89,136 @@ SkFontMgr *GetCursorLabelFontManager() {
 #endif
 		// NOTE: Linux/FontConfig is not wired here — it requires a
 		// SkFontScanner (FreeType) + FcConfig hookup that is not available in
-		// the audio build. The empty manager means named faces cannot be
-		// resolved on Linux, but the cursor label still renders bold via the
-		// algorithmic embolden fallback in ApplyCursorLabelFont.
+		// the audio build. The empty manager resolves no families at all, so on
+		// Linux the audio display draws no text until that is wired up. It never
+		// draws garbage: MakeAudioFont returns nullopt and callers skip the draw.
 		return SkFontMgr::RefEmpty();
 	}();
 	return font_mgr.get();
 }
 
-// Resolve a bold typeface for the given family name. An empty family resolves
-// the default family's bold variant (matching legacy, which always applies bold
-// even when no face is configured). Returns nullptr if the platform's font
-// manager has no families (empty manager) — caller then falls back to
-// algorithmic embolden.
-sk_sp<SkTypeface> ResolveCursorLabelTypeface(std::string const& family) {
-	auto *mgr = GetCursorLabelFontManager();
-	if (!mgr)
-		return {};
-	static SkFontStyle const kBold(
-		SkFontStyle::kBold_Weight, SkFontStyle::kNormal_Width, SkFontStyle::kUpright_Slant);
-	auto const *family_cstr = family.empty() ? nullptr : family.c_str();
-	if (auto face = mgr->matchFamilyStyle(family_cstr, kBold))
-		return face;
-	// Fall back to the default family's bold variant when the named family
-	// is unavailable (also covers the empty-family default case on platforms
-	// where the named lookup surprisingly misses).
-	return mgr->matchFamilyStyle(nullptr, kBold);
+// Cache key for a resolved typeface. Family plus weight is enough: the audio
+// display only ever asks for upright, normal-width faces.
+struct AudioTypefaceKey {
+	std::string family;
+	bool bold = false;
+
+	friend bool operator==(AudioTypefaceKey const&, AudioTypefaceKey const&) = default;
+};
+
+struct AudioTypefaceKeyHash {
+	std::size_t operator()(AudioTypefaceKey const& key) const noexcept {
+		return std::hash<std::string> {}(key.family) ^ (key.bold ? 0x9e3779b9u : 0u);
+	}
+};
+
+// Resolve a typeface for the given family name, cached because every repaint
+// asks for the same two or three faces. An empty family means "the platform
+// default UI face", which is what legacy gets from the window's wxFont.
+//
+// legacyMakeTypeface is the API that actually implements a default-family
+// fallback. matchFamilyStyle(nullptr, ...) returns nullptr on DirectWrite,
+// because onMatchFamily rejects a null name and the empty style set it falls
+// back to matches nothing — that is why the previous code resolved no face and
+// every string silently drew with an empty typeface.
+sk_sp<SkTypeface> ResolveAudioTypeface(std::string const& family, bool bold) {
+	static std::mutex mutex;
+	static std::unordered_map<AudioTypefaceKey, sk_sp<SkTypeface>, AudioTypefaceKeyHash> cache;
+
+	AudioTypefaceKey const key { family, bold };
+	{
+		std::lock_guard lock(mutex);
+		if (auto const found = cache.find(key); found != cache.end())
+			return found->second;
+	}
+
+	sk_sp<SkTypeface> typeface;
+	if (auto *mgr = GetAudioFontManager()) {
+		SkFontStyle const style(
+			bold ? SkFontStyle::kBold_Weight : SkFontStyle::kNormal_Weight,
+			SkFontStyle::kNormal_Width,
+			SkFontStyle::kUpright_Slant);
+		auto const *name = family.empty() ? nullptr : family.c_str();
+		typeface = mgr->legacyMakeTypeface(name, style);
+		if (!typeface && name)
+			typeface = mgr->legacyMakeTypeface(nullptr, style);
+		if (!typeface && name)
+			typeface = mgr->matchFamilyStyle(name, style);
+	}
+
+	std::lock_guard lock(mutex);
+	cache[key] = typeface;
+	return typeface;
 }
 
-// Apply the cursor label typography: always bold (matching legacy's
-// unconditional wxFONTWEIGHT_BOLD), with an optional face override read from
-// the "Audio/Track Cursor/Font Face" option. When the requested bold typeface
-// can be resolved it is used directly; otherwise the default font is emboldened
-// algorithmically so the cursor label is bold on every platform.
-SkFont MakeCursorLabelFont(SkFont const& base, std::string const& font_face) {
-	SkFont font = base;
-	if (auto typeface = ResolveCursorLabelTypeface(font_face)) {
-		font.setTypeface(std::move(typeface));
-		return font;
+// Build the SkFont for one draw site from the display's base text style. Returns
+// nullopt when no typeface resolves, so callers skip the draw instead of
+// emitting invisible glyphs from an empty typeface.
+//
+// face_override mirrors legacy's per-site wxFont::SetFaceName (only the track
+// cursor uses it); bold mirrors its wxFONTWEIGHT_BOLD.
+std::optional<SkFont> MakeAudioFont(
+	TextStyleFrame const& style,
+	bool bold,
+	std::string const& face_override = {}) {
+	auto const& family = face_override.empty() ? style.face : face_override;
+	auto typeface = ResolveAudioTypeface(family, bold);
+	if (!typeface && !face_override.empty()) {
+		// A configured face that does not exist should not cost us the label.
+		typeface = ResolveAudioTypeface(style.face, bold);
 	}
-	// No resolvable bold typeface (e.g. empty font manager on Linux): embolden
-	// the default font so the label is still bold, matching legacy intent.
-	font.setEmbolden(true);
+	if (!typeface)
+		return std::nullopt;
+
+	auto const size = std::isfinite(style.size) && style.size > 0.f
+		? std::clamp(style.size, 4.f, 256.f)
+		: 11.f;
+	SkFont font(std::move(typeface), size);
+	font.setEdging(SkFont::Edging::kAntiAlias);
+	// Legacy renders through wxDC, which snaps glyph origins to whole pixels.
+	font.setSubpixel(false);
+	// Synthesise bold when the resolved face has no real bold variant, which is
+	// what GDI/DirectWrite do for legacy.
+	if (bold && font.getTypeface() && !font.getTypeface()->isBold())
+		font.setEmbolden(true);
 	return font;
+}
+
+// wxDC draws a 1px line on one exact pixel column. Skia's drawLine centres a
+// 1px stroke on the coordinate, so it straddles two columns and lands a half
+// pixel left of where legacy puts it. Thin timeline rules and ticks are drawn as
+// pixel-snapped rects instead so both renderers light the same columns.
+void FillDeviceRect(
+	SkCanvas *canvas, float x, float y, float width, float height, SkPaint const& paint) {
+	canvas->drawRect(
+		SkRect::MakeXYWH(
+			std::floor(x),
+			std::floor(y),
+			std::max(1.f, std::round(width)),
+			std::max(1.f, std::round(height))),
+		paint);
+}
+
+// wxDC::DrawText anchors text by its top-left corner; Skia anchors it by the
+// baseline. fAscent is negative, hence the subtraction.
+float TextBaselineForTop(SkFont const& font, float top) {
+	SkFontMetrics metrics;
+	font.getMetrics(&metrics);
+	return top - metrics.fAscent;
+}
+
+float TextLineHeight(SkFont const& font) {
+	SkFontMetrics metrics;
+	font.getMetrics(&metrics);
+	return metrics.fDescent - metrics.fAscent;
+}
+
+// Device pixels per logical pixel, used to scale the pixel offsets legacy
+// hardcodes for a 1x display.
+float FrameContentScale(ContentFrame const& frame) noexcept {
+	return std::isfinite(frame.content_scale)
+		? std::clamp(frame.content_scale, 1.f, 8.f)
+		: 1.f;
 }
 
 FrameTraceClock::time_point BeginFrameTrace(bool enabled) noexcept {
@@ -243,25 +336,6 @@ std::string ValidateContentFrame(FrameTarget const& target, ContentFrame const& 
 	return {};
 }
 
-std::string FormatTimelineLabel(std::int64_t milliseconds) {
-	milliseconds = std::max<std::int64_t>(0, milliseconds);
-	auto const hours = milliseconds / 3600000;
-	milliseconds %= 3600000;
-	auto const minutes = milliseconds / 60000;
-	milliseconds %= 60000;
-	auto const seconds = milliseconds / 1000;
-	auto const centiseconds = (milliseconds % 1000) / 10;
-	std::ostringstream out;
-	if (hours > 0)
-		out << hours << ':' << std::setfill('0') << std::setw(2) << minutes << ':'
-			<< std::setw(2) << seconds;
-	else if (minutes > 0)
-		out << minutes << ':' << std::setfill('0') << std::setw(2) << seconds;
-	else
-		out << seconds << '.' << std::setfill('0') << std::setw(2) << centiseconds;
-	return out.str();
-}
-
 enum class FrameLayerPart : std::uint32_t {
 	None = 0,
 	Timeline = 1u << 0,
@@ -300,54 +374,63 @@ void DrawAudioFrameLayers(
 		&& frame.timeline && frame.timeline->height > 0) {
 		auto const timeline_y = static_cast<float>(frame.timeline->y);
 		auto const timeline_height = static_cast<float>(frame.timeline->height);
+		auto const timeline_bottom = timeline_y + timeline_height;
+		auto const scale = FrameContentScale(frame);
 		paint.setColor(static_cast<SkColor>(frame.timeline->background_color));
 		canvas->drawRect(SkRect::MakeXYWH(frame.x, timeline_y, frame.width, timeline_height), paint);
 
 		paint.setColor(static_cast<SkColor>(frame.timeline->foreground_color));
-		paint.setStrokeWidth(1.f);
+
+		// Legacy's "Top line": a full-width rule along the bottom of the timeline
+		// band, separating it from the waveform.
+		FillDeviceRect(canvas, frame.x, timeline_bottom - scale, frame.width, scale, paint);
+
 		auto const ms_per_pixel = frame.timeline->milliseconds_per_pixel;
-		if (std::isfinite(ms_per_pixel) && ms_per_pixel > 0.0 && frame.timeline->duration_ms > 0) {
+		auto const plan = BuildTimelineScalePlan(ms_per_pixel);
+		if (plan.valid) {
 			auto const scroll_left = std::isfinite(frame.timeline->scroll_left_exact)
 				&& (frame.timeline->scroll_left_exact != 0.0 || frame.timeline->scroll_left == 0)
 				? frame.timeline->scroll_left_exact
 				: static_cast<double>(frame.timeline->scroll_left);
-			auto const pixels_per_second = 1000.0 / ms_per_pixel;
-			int tick_ms = 1000;
-			if (pixels_per_second > 3000.0) tick_ms = 1;
-			else if (pixels_per_second > 300.0) tick_ms = 10;
-			else if (pixels_per_second > 30.0) tick_ms = 100;
-			else if (pixels_per_second > 3.0) tick_ms = 1000;
-			else if (pixels_per_second > 1.0 / 3.0) tick_ms = 10000;
-			else if (pixels_per_second > 1.0 / 9.0) tick_ms = 60000;
-			else if (pixels_per_second > 1.0 / 90.0) tick_ms = 600000;
-			else tick_ms = 3600000;
-			auto const visible_start = std::max<std::int64_t>(
-				0, static_cast<std::int64_t>(std::floor(scroll_left * ms_per_pixel)));
-			auto const visible_end = std::min<std::int64_t>(
-				frame.timeline->duration_ms,
-				static_cast<std::int64_t>(std::ceil((scroll_left + frame.width) * ms_per_pixel)));
-			auto ms = visible_start / tick_ms * tick_ms;
-			if (ms < visible_start) ms += tick_ms;
-			SkFont timeline_font;
-			timeline_font.setSize(11.f);
-			float last_label_right = frame.x - 1.f;
-			for (; ms <= visible_end; ms += tick_ms) {
-				auto const x = frame.x + static_cast<float>(ms / ms_per_pixel - scroll_left);
-				if (x < frame.x - 1.f || x > frame.x + frame.width + 1.f)
+			auto const marks = BuildTimelineMarks(plan, scroll_left, frame.width, ms_per_pixel);
+			auto const font = MakeAudioFont(frame.text_style, false);
+			TimelineLabelFormatter formatter(plan.scale, frame.timeline->duration_ms);
+			// Clip to the timeline band so an edge label is truncated rather than
+			// dropped, which is what wxDC does for the legacy timeline.
+			canvas->save();
+			canvas->clipRect(SkRect::MakeXYWH(frame.x, timeline_y, frame.width, timeline_height));
+			SkPaint text_paint(paint);
+			text_paint.setAntiAlias(true);
+			double last_text_right = -1.0;
+			for (auto const& mark : marks) {
+				// Legacy tick heights: major bottom-6..bottom-1, minor
+				// bottom-4..bottom-1, i.e. 5px and 3px stopping one pixel short of
+				// the rule. Scaled so they keep their proportions on HiDPI.
+				auto const tick_height = (mark.major ? 5.f : 3.f) * scale;
+				FillDeviceRect(
+					canvas,
+					frame.x + static_cast<float>(mark.x),
+					timeline_bottom - scale - tick_height,
+					scale,
+					tick_height,
+					paint);
+				// Legacy only formats a label when it will actually be drawn, so
+				// the hour/minute suppression state advances on drawn labels only.
+				if (!mark.major || !font || mark.x <= last_text_right)
 					continue;
-				auto const major = ((ms / tick_ms) % 10) == 0;
-				canvas->drawLine(x, timeline_y + timeline_height - (major ? 7.f : 4.f),
-					x, timeline_y + timeline_height - 1.f, paint);
-				if (major) {
-					auto const label = FormatTimelineLabel(ms);
-					auto const label_width = timeline_font.measureText(label.data(), label.size(), SkTextEncoding::kUTF8);
-					if (x >= last_label_right && x + label_width <= frame.x + frame.width + 1.f) {
-						canvas->drawSimpleText(label.data(), label.size(), SkTextEncoding::kUTF8,
-							x, timeline_y + 11.f, timeline_font, paint);
-						last_label_right = x + label_width + 2.f;
-					}
-				}
+				auto const label = formatter.Format(mark.time_ms);
+				if (label.empty())
+					continue;
+				last_text_right = mark.x + font->measureText(
+					label.data(), label.size(), SkTextEncoding::kUTF8);
+				canvas->drawSimpleText(
+					label.data(), label.size(), SkTextEncoding::kUTF8,
+					std::floor(frame.x + static_cast<float>(mark.x)),
+					TextBaselineForTop(*font, timeline_y),
+					*font,
+					text_paint);
 			}
+			canvas->restore();
 		}
 	}
 
@@ -398,22 +481,38 @@ void DrawAudioFrameLayers(
 		auto const label_trace_started = BeginFrameTrace(
 			frame_trace && HasFrameLayerPart(parts, FrameLayerPart::TimingLabel)
 			&& !frame.labels.empty());
-		SkFont font;
-		font.setSize(11.f);
+		// Legacy PaintLabels bolds the window font; PaintTrackCursor does the same
+		// on top of its optional face override.
+		auto const scale = FrameContentScale(frame);
+		auto const bold_font = MakeAudioFont(frame.text_style, true);
 		paint.setAntiAlias(true);
 		paint.setColor(SK_ColorWHITE);
-		auto const label_y = frame.y + 12.f;
 		int labels_drawn = 0;
-		if (HasFrameLayerPart(parts, FrameLayerPart::TimingLabel)) {
+		if (HasFrameLayerPart(parts, FrameLayerPart::TimingLabel) && bold_font) {
+			// Legacy anchors timing labels 4px below the top of the waveform.
+			auto const label_top = frame.y + 4.f * scale;
+			auto const baseline = TextBaselineForTop(*bold_font, label_top);
+			auto const line_height = TextLineHeight(*bold_font);
 			for (auto const& label : frame.labels) {
 				if (label.text.empty() || !std::isfinite(label.x)
 					|| !std::isfinite(label.width) || label.width <= 0.f)
 					continue;
-				canvas->save();
-				canvas->clipRect(SkRect::MakeXYWH(label.x, frame.y, label.width, frame.height));
-				canvas->drawSimpleText(label.text.data(), label.text.size(), SkTextEncoding::kUTF8,
-					label.x, label_y, font, paint);
-				canvas->restore();
+				auto const text_width = bold_font->measureText(
+					label.text.data(), label.text.size(), SkTextEncoding::kUTF8);
+				if (label.width < text_width) {
+					// Too narrow for the text: truncate it, as legacy does.
+					canvas->save();
+					canvas->clipRect(SkRect::MakeXYWH(label.x, label_top, label.width, line_height));
+					canvas->drawSimpleText(label.text.data(), label.text.size(), SkTextEncoding::kUTF8,
+						label.x, baseline, *bold_font, paint);
+					canvas->restore();
+				}
+				else {
+					// Otherwise centre it in the range.
+					canvas->drawSimpleText(label.text.data(), label.text.size(), SkTextEncoding::kUTF8,
+						std::floor(label.x + (label.width - text_width) * 0.5f),
+						baseline, *bold_font, paint);
+				}
 				++labels_drawn;
 			}
 		}
@@ -428,9 +527,35 @@ void DrawAudioFrameLayers(
 			// The cursor label is always bold (legacy PaintTrackCursor sets
 			// wxFONTWEIGHT_BOLD unconditionally), with an optional face override
 			// from "Audio/Track Cursor/Font Face".
-			auto const cursor_font = MakeCursorLabelFont(font, frame.cursor->font_face);
-			canvas->drawSimpleText(frame.cursor->label.data(), frame.cursor->label.size(), SkTextEncoding::kUTF8,
-				frame.cursor->x + 3.f, frame.y + 12.f, cursor_font, paint);
+			auto const cursor_font = MakeAudioFont(frame.text_style, true, frame.cursor->font_face);
+			if (cursor_font) {
+				auto const& text = frame.cursor->label;
+				auto const text_width = cursor_font->measureText(
+					text.data(), text.size(), SkTextEncoding::kUTF8);
+				// Legacy centres the label on the cursor, then keeps it inside the
+				// client area with a 2px margin on both sides.
+				auto const margin = 2.f * scale;
+				auto const limit = std::max(
+					margin, static_cast<float>(target.width) - text_width - margin);
+				auto const label_x = std::clamp(frame.cursor->x - text_width * 0.5f, margin, limit);
+				auto const label_top = frame.y + margin;
+				auto const baseline = TextBaselineForTop(*cursor_font, label_top);
+				auto const draw = [&](float dx, float dy) {
+					canvas->drawSimpleText(
+						text.data(), text.size(), SkTextEncoding::kUTF8,
+						std::floor(label_x) + dx, baseline + dy, *cursor_font, paint);
+				};
+				// Legacy draws the label four times offset by one pixel in a dark
+				// grey to outline it, then once in white on top, so it stays
+				// readable over a bright waveform.
+				paint.setColor(SkColorSetRGB(64, 64, 64));
+				draw(-scale, -scale);
+				draw(-scale, scale);
+				draw(scale, -scale);
+				draw(scale, scale);
+				paint.setColor(SK_ColorWHITE);
+				draw(0.f, 0.f);
+			}
 		}
 	}
 
@@ -533,10 +658,13 @@ void DrawTimingLabelLayer(SkCanvas *canvas, ContentFrame const& frame, Presenter
 	DrawAudioFrameLayers(canvas, {}, frame, trace, FrameLayerPart::TimingLabel);
 }
 
-void DrawCursorLayer(SkCanvas *canvas, ContentFrame const& frame, bool label) {
+// The target is needed here: legacy clamps the cursor time label to the client
+// width so it stays fully on screen when the cursor is near either edge.
+void DrawCursorLayer(
+	SkCanvas *canvas, FrameTarget const& target, ContentFrame const& frame, bool label) {
 	DrawAudioFrameLayers(
 		canvas,
-		{},
+		target,
 		frame,
 		nullptr,
 		label ? FrameLayerPart::CursorLabel : FrameLayerPart::CursorLine);
@@ -1155,9 +1283,9 @@ bool Presenter::RenderContentFrame(
 	}
 	DrawTimelineLayer(canvas, frame);
 	DrawMarkerLayer(canvas, frame, trace);
-	DrawCursorLayer(canvas, frame, false);
+	DrawCursorLayer(canvas, target, frame, false);
 	DrawTimingLabelLayer(canvas, frame, trace);
-	DrawCursorLayer(canvas, frame, true);
+	DrawCursorLayer(canvas, target, frame, true);
 	DrawScrollbarLayer(canvas, target, frame, trace);
 
 	if (frame.static_revision) {
@@ -1258,9 +1386,9 @@ bool Presenter::RenderRetainedOverlayFrame(
 	if (updated_markers)
 		impl->retained_markers = std::move(updated_markers);
 	canvas->drawPicture(impl->retained_markers);
-	DrawCursorLayer(canvas, frame, false);
+	DrawCursorLayer(canvas, target, frame, false);
 	canvas->drawPicture(impl->retained_timing_labels);
-	DrawCursorLayer(canvas, frame, true);
+	DrawCursorLayer(canvas, target, frame, true);
 	canvas->drawPicture(impl->retained_post_cursor);
 	if (trace_enabled) {
 		frame_trace.frame_compose_ms = EndFrameTrace(compose_trace_started);

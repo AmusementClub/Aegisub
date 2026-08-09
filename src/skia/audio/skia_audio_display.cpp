@@ -58,6 +58,36 @@ namespace {
 wxDEFINE_EVENT(EVT_SKIA_AUDIO_CONTENT_READY, wxThreadEvent);
 wxDEFINE_EVENT(EVT_SKIA_AUDIO_CONTENT_FAILURE, wxThreadEvent);
 
+// Mirror this window's wxFont into the frame so the presenter's Skia text has
+// the same face and size as legacy's wxDC text. Legacy simply draws with
+// dc.GetFont(), which is the window font; the Skia presenter has no wxDC, so the
+// font has to travel through the frame.
+//
+// The size is an em size in device pixels. On MSW GetContentScaleFactor() is 1.0
+// and wx coordinates already are device pixels, so wxFont::GetPixelSize() is
+// directly usable. On Apple/GTK3 the factor is the backing-store ratio and wx
+// coordinates are logical, so the em size scales up with it to match the
+// device-pixel frame geometry.
+TextStyleFrame BuildTextStyle(wxWindow const& window, double content_scale) {
+	TextStyleFrame style;
+	auto const font = window.GetFont();
+	if (!font.IsOk())
+		return style;
+
+	style.face = font.GetFaceName().utf8_string();
+	auto size = static_cast<double>(font.GetPixelSize().GetHeight());
+	if (!(size > 0.0)) {
+		auto const points = font.GetFractionalPointSize();
+		auto const dpi = window.GetDPI().GetHeight();
+		if (points > 0.0 && dpi > 0)
+			size = points * dpi / 72.0;
+	}
+	if (!(size > 0.0))
+		size = 11.0;
+	style.size = static_cast<float>(size * std::max(1.0, content_scale));
+	return style;
+}
+
 class DeferredAudioUiDuration final {
 	char const *phase;
 	std::chrono::steady_clock::time_point started;
@@ -852,6 +882,9 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 		frame.height = static_cast<float>(impl->viewport.content.height);
 		frame.first_column_offset = static_cast<float>(impl->viewport.first_column_offset);
 		frame.amplitude = impl->amplitude_scale;
+		auto const content_scale = std::max(1.0, static_cast<double>(GetContentScaleFactor()));
+		frame.content_scale = static_cast<float>(content_scale);
+		frame.text_style = BuildTextStyle(*this, content_scale);
 		if (!impl->presentation_colors_ready) {
 			auto const waveform_scheme_name =
 				OPT_GET("Colour/Audio Display/Waveform")->GetString();

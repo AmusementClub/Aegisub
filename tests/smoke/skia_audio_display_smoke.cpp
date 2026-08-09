@@ -161,6 +161,30 @@ bool NearbyColumnsContainColor(
 	return false;
 }
 
+// glReadPixels returns rows bottom-up, so canvas row r is buffer row
+// height - 1 - r. Counts pixels that are *not* the given colour inside an
+// inclusive canvas row range. Text assertions use this on a band that only
+// glyphs can paint: a font that resolved to no glyphs leaves the band at the
+// background colour exactly, so any non-zero count means real glyphs landed,
+// whatever coverage antialiasing gave them.
+int CountPixelsDifferingInCanvasRows(
+	std::vector<unsigned char> const& pixels,
+	int width,
+	int height,
+	int first_canvas_row,
+	int last_canvas_row,
+	unsigned char red,
+	unsigned char green,
+	unsigned char blue) {
+	int found = 0;
+	for (int row = std::max(0, first_canvas_row); row <= std::min(height - 1, last_canvas_row); ++row) {
+		for (int x = 0; x < width; ++x)
+			if (!PixelIsColor(pixels, width, x, height - 1 - row, red, green, blue))
+				++found;
+	}
+	return found;
+}
+
 std::vector<unsigned char> ReadBack(aegisub::skia::audio::FrameTarget const& target) {
 	std::vector<unsigned char> pixels(static_cast<std::size_t>(target.width) * target.height * 4);
 	glReadBuffer(GL_BACK);
@@ -444,6 +468,27 @@ bool ValidateFrameLayerComposition(
 	if (!initial_composition_valid)
 		std::cerr << "initial retained layer composition was invalid\n";
 
+	// The timeline band is canvas rows 0..19 in this frame: the separator rule is
+	// row 19, major ticks rows 14..18, minor ticks rows 16..18. Rows 0..12 can
+	// therefore only be painted by scale labels, so a non-background pixel there
+	// is proof that a real typeface resolved and emitted glyphs. A
+	// default-constructed SkFont is backed by SkTypeface::MakeEmpty(), draws
+	// nothing and measures zero, which would leave this band at the background
+	// colour exactly.
+	int const timeline_label_pixels = CountPixelsDifferingInCanvasRows(
+		initial_pixels, target.width, target.height, 0, 12, 16, 32, 48);
+	bool const timeline_labels_drawn = timeline_label_pixels > 0;
+	if (!timeline_labels_drawn)
+		std::cerr << "timeline scale labels drew no glyphs\n";
+
+	// Legacy PaintTrackCursor outlines the cursor label by drawing it four times
+	// in dark grey before the white pass. Nothing else in this frame paints
+	// (64,64,64), so finding it means the bold cursor-label font resolved and
+	// drew as well.
+	bool const cursor_label_drawn = ContainsColor(initial_pixels, 64, 64, 64);
+	if (!cursor_label_drawn)
+		std::cerr << "cursor time label drew no glyphs\n";
+
 	auto const old_cursor_x = static_cast<int>(cursor->x);
 	cursor->x = target.width * 0.625f;
 	auto const new_cursor_x = static_cast<int>(cursor->x);
@@ -530,6 +575,8 @@ bool ValidateFrameLayerComposition(
 	if (!mismatch_rejected || !mismatch_skipped_frame_begin)
 		std::cerr << "retained-key mismatch was not rejected before frame begin\n";
 	bool const passed = initial_composition_valid
+		&& timeline_labels_drawn
+		&& cursor_label_drawn
 		&& old_cursor_cleared
 		&& new_cursor_visible
 		&& cursor_metrics_valid

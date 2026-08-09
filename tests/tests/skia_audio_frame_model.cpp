@@ -335,3 +335,118 @@ TEST(skia_audio_frame_model, invalid_spectrum_plans_are_rejected) {
 	request.output_height = 0;
 	EXPECT_FALSE(audio::BuildSpectrumBandPlan(request).IsValid());
 }
+
+TEST(skia_audio_frame_model, timeline_scale_plan_matches_legacy_thresholds) {
+	auto const plan_for = [](double ms_per_pixel) {
+		return audio::BuildTimelineScalePlan(ms_per_pixel);
+	};
+
+	// px/sec is 1000/ms_per_pixel; the boundaries are legacy's ChangeZoom cases.
+	EXPECT_EQ(plan_for(0.1).scale, audio::TimelineScale::Millisecond);
+	EXPECT_EQ(plan_for(1.0).scale, audio::TimelineScale::Centisecond);
+	EXPECT_EQ(plan_for(20.0).scale, audio::TimelineScale::Decisecond);
+	EXPECT_EQ(plan_for(100.0).scale, audio::TimelineScale::Second);
+	EXPECT_EQ(plan_for(1000.0).scale, audio::TimelineScale::Decasecond);
+	EXPECT_EQ(plan_for(5000.0).scale, audio::TimelineScale::Minute);
+	EXPECT_EQ(plan_for(20000.0).scale, audio::TimelineScale::Decaminute);
+	EXPECT_EQ(plan_for(200000.0).scale, audio::TimelineScale::Hour);
+
+	EXPECT_DOUBLE_EQ(plan_for(0.1).minor_divisor, 1.0);
+	EXPECT_DOUBLE_EQ(plan_for(100.0).minor_divisor, 1000.0);
+	EXPECT_DOUBLE_EQ(plan_for(200000.0).minor_divisor, 3600000.0);
+
+	// The two modulo-6 scales are what put major marks on whole minutes and
+	// whole hours instead of every 100 seconds / 100 minutes.
+	EXPECT_EQ(plan_for(1000.0).major_modulo, 6);
+	EXPECT_EQ(plan_for(20000.0).major_modulo, 6);
+	EXPECT_EQ(plan_for(100.0).major_modulo, 10);
+	EXPECT_EQ(plan_for(5000.0).major_modulo, 10);
+
+	EXPECT_FALSE(plan_for(0.0).valid);
+	EXPECT_FALSE(plan_for(-1.0).valid);
+	EXPECT_FALSE(plan_for(std::numeric_limits<double>::quiet_NaN()).valid);
+	EXPECT_FALSE(plan_for(std::numeric_limits<double>::infinity()).valid);
+	EXPECT_TRUE(plan_for(100.0).valid);
+}
+
+TEST(skia_audio_frame_model, timeline_marks_walk_every_minor_mark_past_the_right_edge) {
+	auto const plan = audio::BuildTimelineScalePlan(100.0);
+	ASSERT_EQ(plan.scale, audio::TimelineScale::Second);
+
+	// 1000ms per mark at 100ms per pixel is one mark every 10px.
+	auto const marks = audio::BuildTimelineMarks(plan, 0.0, 100.0, 100.0);
+	ASSERT_EQ(marks.size(), 11u);
+	EXPECT_EQ(marks.front().index, 0);
+	EXPECT_DOUBLE_EQ(marks.front().x, 0.0);
+	EXPECT_TRUE(marks.front().major);
+	EXPECT_DOUBLE_EQ(marks[1].x, 10.0);
+	EXPECT_FALSE(marks[1].major);
+	EXPECT_DOUBLE_EQ(marks[1].time_ms, 1000.0);
+	// Legacy's do/while tests the position after drawing, so the first mark at or
+	// past the right edge is still emitted.
+	EXPECT_EQ(marks.back().index, 10);
+	EXPECT_DOUBLE_EQ(marks.back().x, 100.0);
+	EXPECT_TRUE(marks.back().major);
+
+	// Scrolled: the first mark is the first one at or after the scroll position,
+	// not the one before it.
+	auto const scrolled = audio::BuildTimelineMarks(plan, 5.0, 100.0, 100.0);
+	ASSERT_EQ(scrolled.size(), 11u);
+	EXPECT_EQ(scrolled.front().index, 1);
+	EXPECT_DOUBLE_EQ(scrolled.front().x, 5.0);
+	EXPECT_EQ(scrolled.back().index, 11);
+	EXPECT_DOUBLE_EQ(scrolled.back().x, 105.0);
+	EXPECT_TRUE(scrolled[9].major);
+	EXPECT_EQ(scrolled[9].index, 10);
+
+	EXPECT_TRUE(audio::BuildTimelineMarks({}, 0.0, 100.0, 100.0).empty());
+	EXPECT_TRUE(audio::BuildTimelineMarks(plan, 0.0, 0.0, 100.0).empty());
+	EXPECT_TRUE(audio::BuildTimelineMarks(plan, 0.0, 100.0, 0.0).empty());
+}
+
+TEST(skia_audio_frame_model, timeline_labels_suppress_unchanged_hour_and_minute) {
+	audio::TimelineLabelFormatter formatter(audio::TimelineScale::Second, 60000);
+	// The leftmost label of a repaint always carries the full prefix, because the
+	// suppression state starts out unset.
+	EXPECT_EQ("0:00:00", formatter.Format(0.0));
+	// Same hour and minute: only the seconds, zero-filled to two digits.
+	EXPECT_EQ("10", formatter.Format(10000.0));
+	EXPECT_EQ("50", formatter.Format(50000.0));
+	// Minute rolled over: the minute comes back, the hour stays suppressed.
+	EXPECT_EQ("1:00", formatter.Format(60000.0));
+	EXPECT_EQ("30", formatter.Format(90000.0));
+	// Hour rolled over: both come back.
+	EXPECT_EQ("1:00:00", formatter.Format(3600000.0));
+	// 01:01:00 — the hour is unchanged so only the minute is reprinted, which is
+	// why a label mid-timeline can read the same as one an hour earlier.
+	EXPECT_EQ("1:00", formatter.Format(3660000.0));
+}
+
+TEST(skia_audio_frame_model, timeline_label_seconds_precision_follows_the_scale) {
+	// At and above Decisecond the seconds are whole and zero-filled.
+	audio::TimelineLabelFormatter deci(audio::TimelineScale::Decisecond, 60000);
+	EXPECT_EQ("0:00:00", deci.Format(0.0));
+	EXPECT_EQ("01", deci.Format(1000.0));
+	EXPECT_EQ("09", deci.Format(9900.0));
+
+	// Centisecond keeps one decimal, Millisecond keeps two.
+	audio::TimelineLabelFormatter centi(audio::TimelineScale::Centisecond, 60000);
+	EXPECT_EQ("0:00:0.0", centi.Format(0.0));
+	EXPECT_EQ("0.1", centi.Format(100.0));
+	EXPECT_EQ("1.0", centi.Format(1000.0));
+
+	audio::TimelineLabelFormatter milli(audio::TimelineScale::Millisecond, 60000);
+	EXPECT_EQ("0:00:0.00", milli.Format(0.0));
+	EXPECT_EQ("0.01", milli.Format(10.0));
+}
+
+TEST(skia_audio_frame_model, timeline_label_reproduces_the_legacy_short_audio_hour_quirk) {
+	// Legacy tests a millisecond duration against the constant 3600, so the
+	// "hide the hour" path only engages for audio shorter than 3.6 seconds. It is
+	// reproduced verbatim: this is what decides whether the leftmost label of a
+	// repaint reads "0:00:00" or "0:00".
+	EXPECT_EQ("0:00", audio::TimelineLabelFormatter(
+		audio::TimelineScale::Second, 3599).Format(0.0));
+	EXPECT_EQ("0:00:00", audio::TimelineLabelFormatter(
+		audio::TimelineScale::Second, 3600).Format(0.0));
+}

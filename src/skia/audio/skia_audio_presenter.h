@@ -82,6 +82,17 @@ struct LabelFrame {
 	std::string text;
 };
 
+/// Base text style for every string the audio display draws (timeline scale
+/// labels, timing labels, cursor time). Legacy pulls these from the window's
+/// wxFont via wxDC, so the display side mirrors that font here to keep the two
+/// renderers metrically identical. Bold is applied per draw site, not here.
+struct TextStyleFrame {
+	/// Family name of the window UI font. Empty resolves the platform default.
+	std::string face;
+	/// Em size in device pixels (already multiplied by the content scale).
+	float size = 11.f;
+};
+
 struct CursorFrame {
 	float x = 0.f;
 	std::uint32_t color = 0xFFFFFFFF;
@@ -133,6 +144,10 @@ struct ContentFrame {
 	float height = 0.f;
 	float first_column_offset = 0.f;
 	float amplitude = 1.f;
+	/// Device pixels per logical pixel, used to scale the fixed pixel offsets
+	/// legacy hardcodes (tick heights, label insets, cursor label border).
+	float content_scale = 1.f;
+	TextStyleFrame text_style;
 	std::uint32_t background_color = 0xFF182230;
 	std::uint32_t waveform_peak_color = 0xFF2A9D8F;
 	std::uint32_t waveform_average_color = 0xFFE9C46A;

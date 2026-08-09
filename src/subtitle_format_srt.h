@@ -44,6 +44,7 @@ public:
 	std::vector<std::string> GetWriteWildcards() const override;
 
 	bool CanSave(const AssFile *file) const override;
+	bool SupportsBackgroundWriting() const override { return true; }
 
 	void ReadFile(AssFile *target, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& forceEncoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink, std::shared_ptr<agi::BackgroundRunnerFactory> background_runner_factory) const override;
 	void WriteFile(const AssFile *src, agi::fs::path const& filename, agi::vfr::Framerate const& fps, std::string const& encoding, std::shared_ptr<agi::SingleChoiceInteractionSink> choice_sink) const override;

@@ -51,7 +51,10 @@
 // #include <wx/msgdlg.h>  ← unused, removed (using context->ShowWarning/RequestInteraction instead)
 
 #include <array>
+#include <atomic>
+#include <functional>
 #include <fstream>
+#include <mutex>
 
 namespace {
 	constexpr uint64_t kFileWatchFnvOffset = 1469598103934665603ULL;
@@ -223,12 +226,62 @@ struct SubsController::UndoInfo {
 	}
 };
 
+struct SubsController::SaveEveryChangeState {
+	struct Request {
+		uint64_t generation = 0;
+		std::function<bool()> prepare;
+		std::function<std::function<void()>()> publish;
+		std::function<void(std::string const&)> report_error;
+	};
+
+	std::mutex mutex;
+	subs_controller_detail::LatestSaveState<Request> latest;
+	std::vector<std::function<void()>> completed;
+	std::function<void()> notify_main;
+	bool drain_scheduled = false;
+	std::atomic<bool> alive{true};
+};
+
+namespace {
+	struct SaveEveryChangeStagingFile {
+		agi::fs::path path;
+		bool published = false;
+
+		~SaveEveryChangeStagingFile() {
+			if (published || path.empty())
+				return;
+			try {
+				if (agi::fs::FileExists(path))
+					agi::fs::Remove(path);
+			}
+			catch (...) {
+			}
+		}
+	};
+
+	agi::fs::path make_save_every_change_staging_path(agi::fs::path const& target) {
+		auto model = agi::fs::PathToString(target.stem())
+			+ ".aegisub-save-%%%%%%%%"
+			+ agi::fs::PathToString(target.extension());
+		return agi::fs::UniquePath(target.parent_path() / agi::fs::PathFromString(model));
+	}
+}
+
 SubsController::SubsController(agi::Context *context)
 : context(context)
 , undo_connection(context->GetCore().ass->AddUndoManager(&SubsController::OnCommit, this))
 , text_selection_connection(context->GetCore().textSelectionController->AddSelectionListener(&SubsController::OnTextSelectionChanged, this))
 , autosave_queue(agi::dispatch::Create())
+, save_every_change_state(std::make_shared<SaveEveryChangeState>())
 {
+	auto state = save_every_change_state;
+	state->notify_main = [this, state] {
+		agi::dispatch::Main().Async([this, state] {
+			if (state->alive.load(std::memory_order_acquire))
+				ApplyCompletedSaveEveryChangeWrites();
+		});
+	};
+
 	if (!IsGuiRuntimeShell())
 		return;
 
@@ -262,8 +315,15 @@ SubsController::~SubsController() {
 	autosave_enable_connection.Disconnect();
 	autosave_interval_connection.Disconnect();
 
+	save_every_change_state->alive.store(false, std::memory_order_release);
+	{
+		std::lock_guard<std::mutex> lock(save_every_change_state->mutex);
+		save_every_change_state->latest.Stop();
+		save_every_change_state->notify_main = {};
+	}
 	ClearFileWatch();
-	// Make sure there are no autosaves in progress
+	// Background writers admitted by SupportsBackgroundWriting never request
+	// the UI, so draining this queue from the UI thread cannot deadlock.
 	autosave_queue->Sync([]{ });
 }
 
@@ -274,6 +334,7 @@ void SubsController::SetSelectionController(SelectionController *selection_contr
 }
 
 ProjectProperties SubsController::Load(agi::fs::path const& filename, std::string charset, bool is_reload) {
+	WaitForSaveEveryChangeWrites(true);
 	AssFile temp;
 	auto core = context->GetCore();
 
@@ -308,6 +369,9 @@ ProjectProperties SubsController::Load(agi::fs::path const& filename, std::strin
 }
 
 void SubsController::Save(agi::fs::path const& filename, std::string const& encoding) {
+	// Establish a barrier before any foreground save. An older automatic write
+	// can finish staging, but cannot replace the target after this invalidation.
+	WaitForSaveEveryChangeWrites(true);
 	const SubtitleFormat *writer = SubtitleFormat::GetWriter(filename);
 	if (!writer)
 		throw agi::InvalidInputException("Unknown file type.");
@@ -352,6 +416,7 @@ void SubsController::Save(agi::fs::path const& filename, std::string const& enco
 }
 
 void SubsController::Close() {
+	WaitForSaveEveryChangeWrites(true);
 	undo_stack.clear();
 	redo_stack.clear();
 	autosaved_commit_id = saved_commit_id = commit_id + 1;
@@ -365,7 +430,10 @@ void SubsController::Close() {
 	FileOpen(filename, false);
 }
 
-int SubsController::TryToClose(bool allow_cancel) const {
+int SubsController::TryToClose(bool allow_cancel) {
+	// Preserve the old synchronous option semantics: if the latest automatic
+	// write succeeds, closing should not briefly prompt for already-saved work.
+	WaitForSaveEveryChangeWrites(false);
 	if (!IsModified())
 		return wxYES;
 
@@ -424,6 +492,193 @@ void SubsController::AutoSave() {
 		if (status_sink)
 			status_sink->ShowStatus(from_wx(msg));
 	});
+}
+
+uint64_t SubsController::BeginSaveEveryChangeRevision() {
+	std::vector<std::function<void()>> completed;
+	std::optional<SaveEveryChangeState::Request> discarded;
+	uint64_t generation = 0;
+	{
+		std::lock_guard<std::mutex> lock(save_every_change_state->mutex);
+		completed.swap(save_every_change_state->completed);
+		generation = save_every_change_state->latest.BeginRevision(&discarded);
+	}
+
+	for (auto& apply : completed)
+		apply();
+	return generation;
+}
+
+void SubsController::ApplyCompletedSaveEveryChangeWrites() {
+	std::vector<std::function<void()>> completed;
+	{
+		std::lock_guard<std::mutex> lock(save_every_change_state->mutex);
+		completed.swap(save_every_change_state->completed);
+	}
+
+	for (auto& apply : completed)
+		apply();
+}
+
+void SubsController::WaitForSaveEveryChangeWrites(bool invalidate) {
+	if (invalidate)
+		BeginSaveEveryChangeRevision();
+	else
+		ApplyCompletedSaveEveryChangeWrites();
+
+	autosave_queue->Sync([] { });
+	ApplyCompletedSaveEveryChangeWrites();
+}
+
+void SubsController::QueueSaveEveryChange(
+		uint64_t generation,
+		const SubtitleFormat *writer,
+		std::optional<FileWatchSnapshot> expected_target) {
+	auto core = context->GetCore();
+
+	// Properties are part of the persisted snapshot. Keep this on the UI
+	// thread, where subscribers and core.ass are owned.
+	UpdateProperties();
+
+	auto snapshot = std::make_shared<AssFile>(*core.ass);
+	if (!snapshot->Extradata.empty())
+		snapshot->CleanExtradata();
+
+	auto const snapshot_id = commit_id;
+	auto const target = filename;
+	auto const fps = core.project->Timecodes();
+	auto const encoding = SubtitleFormat::ResolveWriteEncoding("");
+	auto const status_sink = context->GetStatusSink();
+	auto const state = save_every_change_state;
+	auto staging = std::make_shared<SaveEveryChangeStagingFile>();
+	auto staging_snapshot = std::make_shared<std::optional<FileWatchSnapshot>>();
+
+	SaveEveryChangeState::Request request;
+	request.generation = generation;
+	request.report_error = [status_sink](std::string const& message) {
+		if (status_sink)
+			status_sink->ShowStatus(message);
+	};
+	request.prepare = [this, snapshot, target, fps, encoding, writer, status_sink,
+	                   staging, staging_snapshot, expected_target] {
+		try {
+			staging->path = make_save_every_change_staging_path(target);
+			writer->WriteFile(snapshot.get(), staging->path, fps, encoding, {});
+			if (!agi::fs::FileExists(staging->path)) {
+				if (status_sink)
+					status_sink->ShowStatus("Save on every change did not produce an output file.");
+				return false;
+			}
+
+			*staging_snapshot = MakeFileWatchSnapshot(staging->path);
+			if (expected_target) {
+				auto const current_target = MakeFileWatchSnapshot(target);
+				auto const target_unchanged = expected_target->hash_valid
+					? FileWatchSnapshotsEqual(current_target, *expected_target)
+					: FileWatchMetadataEqual(current_target, *expected_target);
+				if (!target_unchanged) {
+					if (status_sink)
+						status_sink->ShowStatus(
+							"Automatic save skipped because the subtitle file changed while the save was pending.");
+					return false;
+				}
+			}
+			return true;
+		}
+		catch (agi::Exception const& e) {
+			if (status_sink)
+				status_sink->ShowStatus("Save failed: " + e.GetMessage());
+			return false;
+		}
+		catch (std::exception const& e) {
+			if (status_sink)
+				status_sink->ShowStatus("Save failed: " + std::string(e.what()));
+			return false;
+		}
+		catch (...) {
+			if (status_sink)
+				status_sink->ShowStatus("Save on every change: unhandled write error.");
+			return false;
+		}
+	};
+	request.publish = [this, state, staging, staging_snapshot, target, snapshot_id] {
+		auto completion = std::function<void()>([this, state, staging_snapshot, target, snapshot_id] {
+			if (!state->alive.load(std::memory_order_acquire) || filename != target)
+				return;
+			saved_commit_id = snapshot_id;
+			autosaved_commit_id = snapshot_id;
+			FileSave();
+			if (tracks_external_file_state
+					&& OPT_GET("App/Auto/Reload External Changes")->GetBool()
+					&& *staging_snapshot) {
+				last_known_file_snapshot = **staging_snapshot;
+				last_prompted_file_snapshot.reset();
+				external_file_change_pending = false;
+			}
+		});
+		agi::fs::Rename(staging->path, target);
+		staging->published = true;
+		return completion;
+	};
+
+	bool schedule_drain = false;
+	std::optional<SaveEveryChangeState::Request> discarded;
+	{
+		std::lock_guard<std::mutex> lock(state->mutex);
+		if (!state->latest.Submit(generation, std::move(request), &discarded))
+			return;
+		if (!state->drain_scheduled) {
+			state->drain_scheduled = true;
+			schedule_drain = true;
+		}
+	}
+
+	if (schedule_drain)
+		autosave_queue->Async([state] { DrainSaveEveryChangeQueue(std::move(state)); });
+}
+
+void SubsController::DrainSaveEveryChangeQueue(std::shared_ptr<SaveEveryChangeState> state) {
+	for (;;) {
+		std::optional<SaveEveryChangeState::Request> request;
+		{
+			std::lock_guard<std::mutex> lock(state->mutex);
+			if (state->latest.IsStopping()) {
+				state->drain_scheduled = false;
+				return;
+			}
+			request = state->latest.TakePending();
+			if (!request) {
+				state->drain_scheduled = false;
+				return;
+			}
+		}
+
+		if (!request->prepare())
+			continue;
+
+		std::function<void()> notify_main;
+		try {
+			std::lock_guard<std::mutex> lock(state->mutex);
+			if (state->latest.CanPublish(request->generation)) {
+				auto completion = request->publish();
+				if (completion)
+					state->completed.emplace_back(std::move(completion));
+				notify_main = state->notify_main;
+			}
+		}
+		catch (agi::Exception const& e) {
+			request->report_error("Save failed: " + e.GetMessage());
+		}
+		catch (std::exception const& e) {
+			request->report_error("Save failed: " + std::string(e.what()));
+		}
+		catch (...) {
+			request->report_error("Save on every change: unhandled publish error.");
+		}
+
+		if (notify_main)
+			notify_main();
+	}
 }
 
 void SubsController::UpdateFileWatch() {
@@ -507,7 +762,8 @@ void SubsController::ApplyReloadExternalChangesOption() {
 		RecordCurrentFileSnapshot();
 }
 
-SubsController::FileWatchSnapshot SubsController::MakeFileWatchSnapshot(agi::fs::path const& path) const {
+SubsController::FileWatchSnapshot SubsController::MakeFileWatchSnapshot(
+		agi::fs::path const& path, bool include_hash) const {
 	FileWatchSnapshot snapshot;
 	if (path.empty())
 		return snapshot;
@@ -517,7 +773,8 @@ SubsController::FileWatchSnapshot SubsController::MakeFileWatchSnapshot(agi::fs:
 		if (snapshot.exists) {
 			snapshot.size = agi::fs::Size(path);
 			snapshot.modified_time = agi::fs::ModifiedTime(path);
-			snapshot.hash_valid = try_hash_file(path, snapshot.content_hash);
+			if (include_hash)
+				snapshot.hash_valid = try_hash_file(path, snapshot.content_hash);
 		}
 	}
 	catch (agi::fs::FileSystemError const&) {
@@ -527,9 +784,18 @@ SubsController::FileWatchSnapshot SubsController::MakeFileWatchSnapshot(agi::fs:
 	return snapshot;
 }
 
+bool SubsController::FileWatchMetadataEqual(
+		FileWatchSnapshot const& left, FileWatchSnapshot const& right) {
+	return left.exists == right.exists
+		&& left.size == right.size
+		&& left.modified_time == right.modified_time;
+}
+
 bool SubsController::FileWatchSnapshotsEqual(FileWatchSnapshot const& left, FileWatchSnapshot const& right) {
-	if (left.exists != right.exists || left.size != right.size || left.modified_time != right.modified_time)
+	if (!FileWatchMetadataEqual(left, right))
 		return false;
+	if (!left.exists)
+		return true;
 	if (!left.hash_valid || !right.hash_valid)
 		return false;
 	return left.content_hash == right.content_hash;
@@ -553,6 +819,7 @@ bool SubsController::HasFileChangedOnDisk() const {
 }
 
 void SubsController::OnWatchedFileChanged(agi::fs::path const&) {
+	ApplyCompletedSaveEveryChangeWrites();
 	if (filename.empty())
 		return;
 	// Option may have been disabled while a debounce/callback was already queued,
@@ -645,10 +912,7 @@ bool SubsController::PromptReloadAfterExternalChange(FileWatchSnapshot const& cu
 	return result == agi::InteractionResult::Yes;
 }
 
-bool SubsController::ConfirmOverwriteExternalChanges(agi::fs::path const& target) const {
-	if (!HasFile() || target != filename || !HasFileChangedOnDisk())
-		return true;
-
+bool SubsController::PromptOverwriteExternalChanges(agi::fs::path const& target) const {
 	std::string message;
 	if (agi::fs::FileExists(target)) {
 		message = from_wx(_("The subtitle file has been modified by another program since it was last loaded or saved.\n\nSaving now will overwrite those external changes. Continue?"));
@@ -663,6 +927,45 @@ bool SubsController::ConfirmOverwriteExternalChanges(agi::fs::path const& target
 		agi::InteractionIcon::Warning
 	});
 	return result == agi::InteractionResult::Yes;
+}
+
+bool SubsController::ConfirmOverwriteExternalChanges(agi::fs::path const& target) const {
+	if (!HasFile() || target != filename || !HasFileChangedOnDisk())
+		return true;
+	return PromptOverwriteExternalChanges(target);
+}
+
+bool SubsController::ConfirmOverwriteExternalChangesForAsync(
+		agi::fs::path const& target,
+		std::optional<FileWatchSnapshot>& expected_target) const {
+	expected_target.reset();
+	if (!HasFile() || target != filename)
+		return true;
+
+	if (!reload_external_changes::ShouldCheckExternalFileSnapshot(
+		tracks_external_file_state,
+		OPT_GET("App/Auto/Reload External Changes")->GetBool(),
+		!filename.empty(),
+		last_known_file_snapshot.has_value()))
+		return true;
+
+	// The common path only reads metadata on the UI thread. The worker hashes
+	// the target immediately before publishing its staging file and compares it
+	// with this trusted baseline, retaining same-size/same-time protection.
+	auto const current_metadata = MakeFileWatchSnapshot(target, false);
+	if (FileWatchMetadataEqual(current_metadata, *last_known_file_snapshot)
+			&& last_known_file_snapshot->hash_valid) {
+		expected_target = last_known_file_snapshot;
+		return true;
+	}
+
+	if (!PromptOverwriteExternalChanges(target))
+		return false;
+
+	// Metadata changes are rare and already require user interaction. Hash once
+	// after confirmation so the worker can still detect another intervening edit.
+	expected_target = MakeFileWatchSnapshot(target);
+	return true;
 }
 
 void SubsController::UpdateTitleAfterExternalChange() {
@@ -698,8 +1001,39 @@ void SubsController::SetFileName(agi::fs::path const& path) {
 
 void SubsController::OnCommit(AssFileCommit c) {
 	if (c.message.empty() && !undo_stack.empty()) return;
+	auto const save_generation = BeginSaveEveryChangeRevision();
 
 	auto core = context->GetCore();
+	auto save_on_change = [&] {
+		if (undo_stack.size() <= 1
+				|| !OPT_GET("App/Auto/Save on Every Change")->GetBool()
+				|| filename.empty())
+			return;
+
+		const SubtitleFormat *writer = nullptr;
+		try {
+			writer = SubtitleFormat::GetWriter(filename);
+			if (!writer || !writer->CanSave(core.ass.get()))
+				return;
+		}
+		catch (...) {
+			return;
+		}
+
+		// Formats which may request a frame-rate or other UI choice retain the
+		// proven synchronous path. Background-capable formats never call back to
+		// the UI, which makes queue draining during close safe.
+		if (!writer->SupportsBackgroundWriting()) {
+			Save(filename);
+			return;
+		}
+
+		std::optional<FileWatchSnapshot> expected_target;
+		if (!ConfirmOverwriteExternalChangesForAsync(filename, expected_target))
+			return;
+		QueueSaveEveryChange(save_generation, writer, std::move(expected_target));
+	};
+
 	if (c.single_line && c.single_line->Group() == AssEntryGroup::DIALOGUE)
 		core.selectionController->RecordEditedLine(c.single_line);
 
@@ -713,6 +1047,7 @@ void SubsController::OnCommit(AssFileCommit c) {
 		if (dialogue_only
 			&& subs_controller_detail::TryAmendDialogueSnapshot(undo_stack.back().events, c.changed_lines)) {
 			*c.commit_id = commit_id;
+			save_on_change();
 			return;
 		}
 
@@ -735,8 +1070,7 @@ void SubsController::OnCommit(AssFileCommit c) {
 	while ((int)undo_stack.size() > depth)
 		undo_stack.pop_front();
 
-	if (undo_stack.size() > 1 && OPT_GET("App/Auto/Save on Every Change")->GetBool() && !filename.empty() && CanSave())
-		Save(filename);
+	save_on_change();
 
 	*c.commit_id = commit_id;
 }
@@ -758,6 +1092,7 @@ void SubsController::OnTextSelectionChanged() {
 
 void SubsController::Undo() {
 	if (undo_stack.size() <= 1) return;
+	BeginSaveEveryChangeRevision();
 	redo_stack.splice(redo_stack.end(), undo_stack, std::prev(undo_stack.end()));
 
 	commit_id = undo_stack.back().commit_id;
@@ -769,6 +1104,7 @@ void SubsController::Undo() {
 
 void SubsController::Redo() {
 	if (redo_stack.empty()) return;
+	BeginSaveEveryChangeRevision();
 	undo_stack.splice(undo_stack.end(), redo_stack, std::prev(redo_stack.end()));
 
 	commit_id = undo_stack.back().commit_id;

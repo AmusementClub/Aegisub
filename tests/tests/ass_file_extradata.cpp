@@ -7,6 +7,7 @@
 #include "../../src/ass_io_core.h"
 #include "../../src/ass_style.h"
 #include "../../src/subs_controller.h"
+#include "../../src/subtitle_format.h"
 
 #include <libaegisub/vfr.h>
 
@@ -106,6 +107,55 @@ TEST(subs_controller_undo, rejects_invalid_rows_without_partial_update) {
 	EXPECT_FALSE(subs_controller_detail::TryAmendDialogueSnapshot(snapshot, invalid_lines));
 	EXPECT_EQ("first before", snapshot[0].Text.get());
 	EXPECT_EQ("second before", snapshot[1].Text.get());
+}
+
+TEST(subs_controller_save_on_change, retains_only_the_latest_pending_snapshot) {
+	subs_controller_detail::LatestSaveState<int> state;
+	auto const generation = state.BeginRevision();
+
+	ASSERT_TRUE(state.Submit(generation, 10));
+	ASSERT_TRUE(state.Submit(generation, 20));
+	auto request = state.TakePending();
+
+	ASSERT_TRUE(request.has_value());
+	EXPECT_EQ(20, *request);
+	EXPECT_FALSE(state.TakePending().has_value());
+}
+
+TEST(subs_controller_save_on_change, newer_revision_prevents_stale_publish) {
+	subs_controller_detail::LatestSaveState<int> state;
+	auto const old_generation = state.BeginRevision();
+	ASSERT_TRUE(state.Submit(old_generation, 10));
+	auto active = state.TakePending();
+	ASSERT_TRUE(active.has_value());
+
+	auto const new_generation = state.BeginRevision();
+	EXPECT_FALSE(state.CanPublish(old_generation));
+	EXPECT_TRUE(state.Submit(new_generation, 20));
+	EXPECT_TRUE(state.CanPublish(new_generation));
+}
+
+TEST(subs_controller_save_on_change, stop_discards_pending_and_rejects_new_work) {
+	subs_controller_detail::LatestSaveState<int> state;
+	auto const generation = state.BeginRevision();
+	ASSERT_TRUE(state.Submit(generation, 10));
+
+	state.Stop();
+
+	EXPECT_TRUE(state.IsStopping());
+	EXPECT_FALSE(state.TakePending().has_value());
+	EXPECT_FALSE(state.CanPublish(generation));
+	EXPECT_FALSE(state.Submit(state.Generation(), 20));
+}
+
+TEST(subs_controller_save_on_change, subtitle_formats_must_explicitly_opt_in_to_background_writes) {
+	class UnspecifiedFormat final : public SubtitleFormat {
+	public:
+		UnspecifiedFormat() : SubtitleFormat("test") { }
+	};
+
+	UnspecifiedFormat format;
+	EXPECT_FALSE(format.SupportsBackgroundWriting());
 }
 
 TEST(ass_file_extradata, cleaning_copy_does_not_mutate_original_file_state) {

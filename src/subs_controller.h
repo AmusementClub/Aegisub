@@ -24,11 +24,14 @@
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 class SelectionController;
+class SubtitleFormat;
 class WatchedFile;
 namespace agi {
 	namespace dispatch {
@@ -40,6 +43,53 @@ struct AssFileCommit;
 struct ProjectProperties;
 
 namespace subs_controller_detail {
+	template<class Request>
+	class LatestSaveState {
+		std::optional<Request> pending;
+		uint64_t generation = 0;
+		bool stopping = false;
+
+	public:
+		uint64_t BeginRevision(std::optional<Request> *discarded = nullptr) {
+			if (discarded)
+				discarded->swap(pending);
+			else
+				pending.reset();
+			return ++generation;
+		}
+
+		bool Submit(uint64_t request_generation, Request request,
+				std::optional<Request> *discarded = nullptr) {
+			if (stopping || request_generation != generation)
+				return false;
+			if (discarded)
+				discarded->swap(pending);
+			else
+				pending.reset();
+			pending.emplace(std::move(request));
+			return true;
+		}
+
+		std::optional<Request> TakePending() {
+			std::optional<Request> request;
+			request.swap(pending);
+			return request;
+		}
+
+		bool CanPublish(uint64_t request_generation) const {
+			return !stopping && request_generation == generation;
+		}
+
+		bool IsStopping() const { return stopping; }
+		uint64_t Generation() const { return generation; }
+
+		void Stop() {
+			stopping = true;
+			pending.reset();
+			++generation;
+		}
+	};
+
 	inline bool TryAmendDialogueSnapshot(
 		std::vector<AssDialogueBase>& snapshot,
 		std::span<AssDialogue const *const> changed_lines) {
@@ -90,6 +140,9 @@ class SubsController {
 	/// Queue which autosaves are performed on
 	std::unique_ptr<agi::dispatch::Queue> autosave_queue;
 
+	struct SaveEveryChangeState;
+	std::shared_ptr<SaveEveryChangeState> save_every_change_state;
+
 	struct FileWatchSnapshot {
 		bool exists = false;
 		uintmax_t size = 0;
@@ -128,20 +181,31 @@ class SubsController {
 
 	/// Autosave the file if there have been any chances since the last autosave
 	void AutoSave();
+	uint64_t BeginSaveEveryChangeRevision();
+	void ApplyCompletedSaveEveryChangeWrites();
+	void WaitForSaveEveryChangeWrites(bool invalidate);
+	void QueueSaveEveryChange(uint64_t generation, const SubtitleFormat *writer,
+		std::optional<FileWatchSnapshot> expected_target);
+	static void DrainSaveEveryChangeQueue(std::shared_ptr<SaveEveryChangeState> state);
 
 	void UpdateFileWatch();
 	void ClearFileWatch();
 	/// Arm or disarm external-change detection to match the current option.
 	/// Safe to call when the option is toggled at runtime (no restart required).
 	void ApplyReloadExternalChangesOption();
-	FileWatchSnapshot MakeFileWatchSnapshot(agi::fs::path const& path) const;
+	FileWatchSnapshot MakeFileWatchSnapshot(agi::fs::path const& path, bool include_hash = true) const;
+	static bool FileWatchMetadataEqual(FileWatchSnapshot const& left, FileWatchSnapshot const& right);
 	static bool FileWatchSnapshotsEqual(FileWatchSnapshot const& left, FileWatchSnapshot const& right);
 	void RecordCurrentFileSnapshot();
 	bool HasFileChangedOnDisk() const;
 	void OnWatchedFileChanged(agi::fs::path const& path);
 	void OnFileWatchError(std::string const& message);
 	bool PromptReloadAfterExternalChange(FileWatchSnapshot const& current_snapshot);
+	bool PromptOverwriteExternalChanges(agi::fs::path const& target) const;
 	bool ConfirmOverwriteExternalChanges(agi::fs::path const& target) const;
+	bool ConfirmOverwriteExternalChangesForAsync(
+		agi::fs::path const& target,
+		std::optional<FileWatchSnapshot>& expected_target) const;
 	void UpdateTitleAfterExternalChange();
 	void ReloadFileFromDisk(bool load_linked_files);
 
@@ -204,7 +268,7 @@ public:
 	/// If there are unsaved changes, asl the user if they want to save them
 	/// @param allow_cancel Let the user cancel the closing
 	/// @return wxYES, wxNO or wxCANCEL (note: all three are true in a boolean context)
-	int TryToClose(bool allow_cancel = true) const;
+	int TryToClose(bool allow_cancel = true);
 
 	/// Can the file be saved in its current format?
 	bool CanSave() const;

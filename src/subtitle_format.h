@@ -101,6 +101,10 @@ public:
 	/// styles, and any overrides
 	virtual bool CanSave(const AssFile *file) const;
 
+	/// Whether WriteFile can run on a worker without requesting UI interaction.
+	/// Host-provided formats must opt in explicitly.
+	virtual bool SupportsBackgroundWriting() const { return false; }
+
 	/// Load a subtitle file
 	/// @param[out] target Destination to read lines into
 	/// @param filename File to load

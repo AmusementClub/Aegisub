@@ -802,6 +802,22 @@ void BuildInterfacePage(OptionPage *p) {
 	binder->AddBool(_("Show CPS with one decimal place"), "Subtitle/Character Counter/Show Decimal CPS");
 
 	binder->AddCategory(_("Grid"));
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+	auto *skia_grid = binder->AddBool(
+		_("Use Skia subtitle grid (restart required)"),
+		"Subtitle/Grid/Skia/Enabled");
+	skia_grid->SetHelpString(_(
+		"Use the experimental Skia CPU renderer for the subtitle grid. "
+		"The wx renderer remains the compatibility fallback. Restart Aegisub after changing this option."));
+#ifdef __WXMSW__
+	auto *skia_grid_clear_type = binder->AddBool(
+		_("Use ClearType in Skia subtitle grid"),
+		"Subtitle/Grid/Skia/ClearType");
+	skia_grid_clear_type->SetHelpString(_(
+		"Keep disabled for grayscale natural-symmetric text. When enabled, ClearType is still used only "
+		"for an eligible local, opaque, unscaled display; remote and uncertain sessions remain grayscale."));
+#endif
+#endif
 	binder->AddBool(_("Focus grid on click"), "Subtitle/Grid/Focus Allow");
 	binder->AddBool(_("Highlight visible subtitles"), "Subtitle/Grid/Highlight Subtitles in Frame");
 	auto *hide_overrides_char = binder->AddString(_("Hide overrides symbol"), "Subtitle/Grid/Hide Overrides Char");

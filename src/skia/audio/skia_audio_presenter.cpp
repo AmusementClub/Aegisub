@@ -1,16 +1,17 @@
 #include "skia_audio_presenter.h"
 
 #include "../../perf_trace.h"
+#include "../../skia_runtime/platform_font_runtime.h"
 #include "../../skia_runtime/skia_surface_provider.h"
 
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
-#include <include/ports/SkTypeface_win.h>
-#elif defined(__APPLE__)
-#include <include/ports/SkFontMgr_mac_ct.h>
 #endif
 
 #ifdef HAVE_OPENGL_GL_H
@@ -25,8 +26,6 @@
 #include <include/core/SkData.h>
 #include <include/core/SkFont.h>
 #include <include/core/SkFontMetrics.h>
-#include <include/core/SkFontMgr.h>
-#include <include/core/SkFontStyle.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
 #include <include/core/SkPaint.h>
@@ -49,7 +48,6 @@
 #include <cmath>
 #include <functional>
 #include <limits>
-#include <mutex>
 #include <optional>
 #include <queue>
 #include <span>
@@ -66,89 +64,16 @@ constexpr std::size_t kGaneshResourceCacheBudget = 64 * 1024 * 1024;
 
 using FrameTraceClock = std::chrono::steady_clock;
 
-// Lazily-built, cached font manager used to resolve every typeface the audio
-// display draws with. Mirrors skia_runtime/skia_text_layout_cache.cpp's
-// CreateFontManager, kept self-contained here so the audio display does not
-// couple to the (frozen) Skia video tools target. Each platform wires its
-// native backend; SkFontMgr::RefEmpty() is the last-resort fallback.
-//
-// This must exist for any text to appear at all: a default-constructed SkFont
-// is backed by SkTypeface::MakeEmpty(), which has no glyphs, so it silently
-// draws nothing and measures zero. Skia no longer offers SkFontMgr::RefDefault,
-// and this build has skia_use_freetype=false, so there is no implicit fallback.
-SkFontMgr *GetAudioFontManager() {
-	static sk_sp<SkFontMgr> const font_mgr = []() -> sk_sp<SkFontMgr> {
-#if defined(_WIN32)
-		if (auto mgr = SkFontMgr_New_DirectWrite())
-			return mgr;
-		if (auto mgr = SkFontMgr_New_GDI())
-			return mgr;
-#elif defined(__APPLE__)
-		if (auto mgr = SkFontMgr_New_CoreText(nullptr))
-			return mgr;
-#endif
-		// NOTE: Linux/FontConfig is not wired here — it requires a
-		// SkFontScanner (FreeType) + FcConfig hookup that is not available in
-		// the audio build. The empty manager resolves no families at all, so on
-		// Linux the audio display draws no text until that is wired up. It never
-		// draws garbage: MakeAudioFont returns nullopt and callers skip the draw.
-		return SkFontMgr::RefEmpty();
-	}();
-	return font_mgr.get();
-}
-
-// Cache key for a resolved typeface. Family plus weight is enough: the audio
-// display only ever asks for upright, normal-width faces.
-struct AudioTypefaceKey {
-	std::string family;
-	bool bold = false;
-
-	friend bool operator==(AudioTypefaceKey const&, AudioTypefaceKey const&) = default;
-};
-
-struct AudioTypefaceKeyHash {
-	std::size_t operator()(AudioTypefaceKey const& key) const noexcept {
-		return std::hash<std::string> {}(key.family) ^ (key.bold ? 0x9e3779b9u : 0u);
-	}
-};
-
 // Resolve a typeface for the given family name, cached because every repaint
 // asks for the same two or three faces. An empty family means "the platform
 // default UI face", which is what legacy gets from the window's wxFont.
-//
-// legacyMakeTypeface is the API that actually implements a default-family
-// fallback. matchFamilyStyle(nullptr, ...) returns nullptr on DirectWrite,
-// because onMatchFamily rejects a null name and the empty style set it falls
-// back to matches nothing — that is why the previous code resolved no face and
-// every string silently drew with an empty typeface.
 sk_sp<SkTypeface> ResolveAudioTypeface(std::string const& family, bool bold) {
-	static std::mutex mutex;
-	static std::unordered_map<AudioTypefaceKey, sk_sp<SkTypeface>, AudioTypefaceKeyHash> cache;
-
-	AudioTypefaceKey const key { family, bold };
-	{
-		std::lock_guard lock(mutex);
-		if (auto const found = cache.find(key); found != cache.end())
-			return found->second;
-	}
-
-	sk_sp<SkTypeface> typeface;
-	if (auto *mgr = GetAudioFontManager()) {
-		SkFontStyle const style(
-			bold ? SkFontStyle::kBold_Weight : SkFontStyle::kNormal_Weight,
-			SkFontStyle::kNormal_Width,
-			SkFontStyle::kUpright_Slant);
-		auto const *name = family.empty() ? nullptr : family.c_str();
-		typeface = mgr->legacyMakeTypeface(name, style);
-		if (!typeface && name)
-			typeface = mgr->legacyMakeTypeface(nullptr, style);
-		if (!typeface && name)
-			typeface = mgr->matchFamilyStyle(name, style);
-	}
-
-	std::lock_guard lock(mutex);
-	cache[key] = typeface;
-	return typeface;
+	return PlatformFontRuntime::Get().ResolveTypeface({
+		family,
+		bold ? SkFontStyle::kBold_Weight : SkFontStyle::kNormal_Weight,
+		SkFontStyle::kNormal_Width,
+		SkFontStyle::kUpright_Slant,
+	});
 }
 
 // Build the SkFont for one draw site from the display's base text style. Returns

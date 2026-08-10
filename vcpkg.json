@@ -70,6 +70,27 @@
         }
       ]
     },
+    "skia-grid": {
+      "description": "Install CPU-only Skia and native text dependencies for the subtitle grid.",
+      "dependencies": [
+        {
+          "name": "skia",
+          "default-features": false,
+          "platform": "windows | osx"
+        },
+        {
+          "name": "skia",
+          "default-features": false,
+          "features": [
+            "fontconfig",
+            "freetype",
+            "harfbuzz",
+            "icu"
+          ],
+          "platform": "linux | bsd"
+        }
+      ]
+    },
     "skia": {
       "description": "Install full Skia for opt-in GUI rendering features such as video tools.",
       "dependencies": [

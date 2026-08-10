@@ -162,6 +162,8 @@ if(GTEST_FOUND)
         src/playback_transport_policy.cpp
         src/grid_core/grid_layout.cpp
         src/grid_core/grid_layout.h
+        src/grid_core/subtitle_grid_renderer_contract.cpp
+        src/grid_core/windows_text_raster_policy.cpp
         src/video_controller_timer.cpp
         src/video_session_core_ops.cpp
         src/video_session_ops.cpp
@@ -243,6 +245,7 @@ if(GTEST_FOUND)
         tests/tests/subtitle_editor_ops.cpp
         tests/tests/subtitle_grid_ops.cpp
         tests/tests/subtitle_grid_selection_policy.cpp
+        tests/tests/subtitle_grid_renderer_contract.cpp
         tests/tests/subtitle_timing_ops.cpp
         tests/tests/subtitle_matcher.cpp
         tests/tests/subtitle_match_report.cpp
@@ -311,6 +314,7 @@ if(GTEST_FOUND)
             src/font_family_observe_win.cpp
             src/gdi_font_resolver.cpp
             src/font_file_lister_dwrite.cpp
+            src/skia_runtime/dwrite_runtime.cpp
         )
         target_link_libraries(gtest-run PRIVATE Usp10 dwrite Version ole32)
 

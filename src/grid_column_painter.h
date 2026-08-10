@@ -34,6 +34,11 @@ public:
 	/// any measurement pass.
 	virtual void SetFont(class wxFont const& font) = 0;
 
+	/// Clear the current update region using the supplied opaque background.
+	/// wx clears its buffered paint surface; retained raster backends clear only
+	/// the clipped update rectangles so untouched pixels remain valid.
+	virtual void Clear(agi::Color const& color) = 0;
+
 	/// Measure the extent (width, height) of utf8 in the current grid font.
 	/// Matches wxDC::GetTextExtent semantics: width is advance width, height
 	/// is the font's line height. Out-params are untouched when text is empty.

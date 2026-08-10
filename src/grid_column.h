@@ -41,6 +41,7 @@ class WidthHelper {
 
 public:
 	void SetPainter(GridColumnPainter *p) { this->painter = p; }
+	void Reset();
 	void Age();
 
 	int operator()(boost::flyweight<std::string> const& str);

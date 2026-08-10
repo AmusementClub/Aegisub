@@ -51,6 +51,9 @@
 #include "subs_controller.h"
 #include "subtitle_grid_selection_policy.h"
 #include "video_controller.h"
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+#include "subtitle_grid_renderer_slot.h"
+#endif
 
 #include <libaegisub/make_unique.h>
 #include <libaegisub/log.h>
@@ -113,6 +116,10 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 , columns(GetGridColumns())
 , columns_visible(OPT_GET("Subtitle/Grid/Column")->GetListBool())
 {
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+	renderer_slot = std::make_unique<aegisub::grid::SubtitleGridRendererSlot>();
+	width_renderer_generation = renderer_slot->Generation();
+#endif
 	scrollBar->SetScrollbar(0,10,100,10);
 
 	auto scrollbarpositioner = new wxBoxSizer(wxHORIZONTAL);
@@ -148,6 +155,11 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 
 		OPT_SUB("Subtitle/Grid/Font Face", &BaseGrid::UpdateStyle, this),
 		OPT_SUB("Subtitle/Grid/Font Size", &BaseGrid::UpdateStyle, this),
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+		OPT_SUB("Subtitle/Grid/Skia/ClearType", [this](agi::OptionValue const&) {
+			NotifyTextRasterPolicyChanged();
+		}),
+#endif
 		OPT_SUB("Colour/Subtitle Grid/Active Border", &BaseGrid::UpdateStyle, this),
 		OPT_SUB("Colour/Subtitle Grid/Background/Background", &BaseGrid::UpdateStyle, this),
 		OPT_SUB("Colour/Subtitle Grid/Background/Comment", &BaseGrid::UpdateStyle, this),
@@ -167,9 +179,18 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 	});
 
 	Bind(wxEVT_CONTEXT_MENU, &BaseGrid::OnContextMenu, this);
+	Bind(wxEVT_DPI_CHANGED, &BaseGrid::OnDPIChanged, this);
 }
 
 BaseGrid::~BaseGrid() { }
+
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+bool BaseGrid::CanUseSkiaRenderer() const noexcept {
+	return renderer_slot
+		&& renderer_slot->UsesSkia()
+		&& renderer_slot->SupportsContentScale(GetContentScaleFactor());
+}
+#endif
 
 BEGIN_EVENT_TABLE(BaseGrid,wxWindow)
 	EVT_PAINT(BaseGrid::OnPaint)
@@ -275,12 +296,32 @@ void BaseGrid::UpdateStyle() {
 	font.SetFaceName(fontname);
 	font.SetPointSize(OPT_GET("Subtitle/Grid/Font Size")->GetInt());
 	font.SetWeight(wxFONTWEIGHT_NORMAL);
+	if (width_helper)
+		width_helper->Reset();
 
 	wxClientDC dc(this);
 	dc.SetFont(font);
 
 	// Set line height
 	lineHeight = dc.GetCharHeight() + 4;
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+	if (CanUseSkiaRenderer()) {
+		try {
+			if (auto painter = renderer_slot->CreateMeasurementPainter(font)) {
+				int measured_width = 0;
+				int measured_height = 0;
+				painter->MeasureText(L"Ag", measured_width, measured_height);
+				if (measured_height > 0)
+					lineHeight = measured_height + 4;
+			}
+		}
+		catch (std::exception const& error) {
+			LOG_W("subtitle/grid/renderer")
+				<< "Skia line-height measurement failed; retaining wx metric: "
+				<< error.what();
+		}
+	}
+#endif
 
 	// Set row brushes
 	row_colors.Default.SetColour(to_wx(OPT_GET("Colour/Subtitle Grid/Background/Background")->GetColor()));
@@ -373,6 +414,7 @@ void BaseGrid::OnIdle(wxIdleEvent&) {
 }
 
 void BaseGrid::OnPaint(wxPaintEvent &) {
+	auto const grid_paint_started = InputTimingClock::now();
 	auto click_timing = pending_click_paint_timing;
 	pending_click_paint_timing.pending = false;
 	auto const paint_started = click_timing.pending
@@ -450,18 +492,27 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 	}
 
 	if (!any) {
+		if (perf_trace::IsCategoryEnabled(perf_trace::Category::Log)) {
+			auto const update_box = GetUpdateRegion().GetBox();
+			LOG_I("subtitle/grid/paint_skip")
+				<< "reason=empty-content-update"
+				<< " client_width=" << w
+				<< " client_height=" << h
+				<< " update_x=" << update_box.x
+				<< " update_y=" << update_box.y
+				<< " update_width=" << update_box.width
+				<< " update_height=" << update_box.height;
+		}
 		wxBufferedPaintDC dc(this);
 		dc.SetBackground(row_colors.Default);
 		dc.Clear();
 		return;
 	}
 
-	wxBufferedPaintDC dc(this);
-	auto painter = MakeWxDcGridColumnPainter(dc);
+	auto paint_grid = [&](GridColumnPainter& backend_painter) {
+	auto *painter = &backend_painter;
 	painter->SetFont(font);
-
-	dc.SetBackground(row_colors.Default);
-	dc.Clear();
+	painter->Clear(from_wx(row_colors.Default.GetColour()));
 
 	// Draw labels
 	bool const has_dirty_rows = first_dirty_row <= last_dirty_row;
@@ -605,6 +656,70 @@ void BaseGrid::OnPaint(wxPaintEvent &) {
 		painter->StrokeRectangle(0, (active_screen_row + 1) * lineHeight, w, lineHeight + 1,
 			OPT_GET("Colour/Subtitle Grid/Active Border")->GetColor());
 	}
+	};
+	auto log_host_frame = [&](char const *backend) {
+		if (!perf_trace::IsCategoryEnabled(perf_trace::Category::Log))
+			return;
+		LOG_I("subtitle/grid/host_frame")
+			<< "backend=" << backend
+			<< " total_ms=" << DurationMs(grid_paint_started);
+	};
+
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+	if (CanUseSkiaRenderer()) {
+		bool handled = false;
+		{
+			// The retained raster target and presentation bridge already provide
+			// the frame buffer. Present directly so wx does not allocate and BitBlt
+			// a second full-window buffer after the dirty-region blits.
+			wxPaintDC dc(this);
+			handled = renderer_slot->Paint(
+				*this, dc, wxSize(w, h), GetUpdateRegion(), font, paint_grid,
+				DurationMs(grid_paint_started));
+		}
+		if (handled) {
+			log_host_frame("skia");
+			return;
+		}
+	}
+#endif
+	{
+		wxBufferedPaintDC dc(this);
+		auto painter = MakeWxDcGridColumnPainter(dc);
+		paint_grid(*painter);
+	}
+	log_host_frame("wx");
+}
+
+void BaseGrid::OnDPIChanged(wxDPIChangedEvent &event) {
+	event.Skip();
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+	if (renderer_slot)
+		renderer_slot->InvalidateRasterPolicy();
+#endif
+	UpdateStyle();
+	Refresh(false);
+}
+
+void BaseGrid::NotifySystemFontsChanged() {
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+	if (!renderer_slot)
+		return;
+	renderer_slot->InvalidateSystemFonts();
+	if (width_helper)
+		width_helper->Reset();
+	UpdateStyle();
+	Refresh(false);
+#endif
+}
+
+void BaseGrid::NotifyTextRasterPolicyChanged() {
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+	if (!renderer_slot)
+		return;
+	renderer_slot->InvalidateRasterPolicy();
+	Refresh(false);
+#endif
 }
 
 void BaseGrid::OnSize(wxSizeEvent &) {
@@ -1010,16 +1125,29 @@ void BaseGrid::SetColumnWidths() {
 	int w, h;
 	GetClientSize(&w, &h);
 
-	// DC for text extents test
-	wxClientDC dc(this);
-	auto painter = MakeWxDcGridColumnPainter(dc);
-	painter->SetFont(font);
+	std::unique_ptr<GridColumnPainter> painter;
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+	if (CanUseSkiaRenderer())
+		painter = renderer_slot->CreateMeasurementPainter(font);
+#endif
+	std::unique_ptr<wxClientDC> dc;
+	if (!painter) {
+		dc = std::make_unique<wxClientDC>(this);
+		painter = MakeWxDcGridColumnPainter(*dc);
+		painter->SetFont(font);
+	}
 
 	text_refresh_rects.clear();
 	int x = 0;
 
 	if (!width_helper)
 		width_helper = agi::make_unique<WidthHelper>();
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+	if (renderer_slot && width_renderer_generation != renderer_slot->Generation()) {
+		width_helper->Reset();
+		width_renderer_generation = renderer_slot->Generation();
+	}
+#endif
 	width_helper->SetPainter(painter.get());
 
 	aegisub::presentation::VisibleSubtitleRowsRequest request;

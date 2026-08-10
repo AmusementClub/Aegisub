@@ -5,6 +5,7 @@
 #include "font_file_lister.h"
 #include "font_matching_libass.h"
 #include "perf_trace.h"
+#include "skia_runtime/dwrite_runtime.h"
 
 #include <dwrite.h>
 #include <dwrite_3.h>
@@ -18,14 +19,10 @@
 #include <utility>
 #include <vector>
 
-#include <winver.h>
-
 #include <libaegisub/log.h>
-#include <libaegisub/native_library.h>
 #include <libaegisub/scope_exit.h>
 
 namespace {
-using DWriteCreateFactoryFn = HRESULT (WINAPI *)(DWRITE_FACTORY_TYPE, REFIID, IUnknown **);
 
 uint16_t read_big_endian_16(uint8_t const *data) {
 	return static_cast<uint16_t>((static_cast<uint16_t>(data[0]) << 8) | data[1]);
@@ -81,80 +78,6 @@ std::wstring utf8_to_wide(std::string_view utf8) {
 	MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()),
 	                    &result[0], len);
 	return result;
-}
-
-HMODULE try_load_dwrite_core(DWriteCreateFactoryFn &out_create_fn) {
-	// DWriteCore should not be picked up from system paths.
-	auto probes = agi::native::BuildLibraryLoadProbes("DWriteCore",
-		agi::native::DefaultAppLocalLoadOptions(false));
-	for (auto const& probe : probes) {
-		auto wide_probe = utf8_to_wide(probe);
-		if (wide_probe.empty()) continue;
-		auto mod = LoadLibraryW(wide_probe.c_str());
-		if (!mod) continue;
-
-		out_create_fn = reinterpret_cast<DWriteCreateFactoryFn>(
-			GetProcAddress(mod, "DWriteCoreCreateFactory"));
-		if (out_create_fn) return mod;
-		FreeLibrary(mod);
-	}
-	return nullptr;
-}
-
-HMODULE try_load_system_dwrite(DWriteCreateFactoryFn &out_create_fn) {
-	// System DWrite must come from System32 to avoid DLL hijacking.
-	auto mod = LoadLibraryExW(L"dwrite.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
-	if (!mod)
-		return nullptr;
-
-	out_create_fn = reinterpret_cast<DWriteCreateFactoryFn>(
-		GetProcAddress(mod, "DWriteCreateFactory"));
-	if (!out_create_fn) {
-		FreeLibrary(mod);
-		return nullptr;
-	}
-	return mod;
-}
-
-/// Process-lifetime pin for system dwrite.dll.
-///
-/// Bridges borrow this module handle and must not FreeLibrary it. Per-instance
-/// LoadLibrary without a matching FreeLibrary used to leak a refcount on every
-/// GdiFontResolver construction; a single pin keeps SHARED factories valid for
-/// concurrent catalog builds without unbounded ref growth.
-struct SystemDWritePin {
-	HMODULE mod = nullptr;
-	DWriteCreateFactoryFn create_fn = nullptr;
-
-	SystemDWritePin() {
-		mod = try_load_system_dwrite(create_fn);
-		// Intentionally never FreeLibrary(mod): pin for process lifetime.
-	}
-};
-
-SystemDWritePin const& system_dwrite_pin() {
-	static SystemDWritePin const pin;
-	return pin;
-}
-
-bool init_dwrite_factory(DWriteCreateFactoryFn create_fn, IDWriteFactory **out_factory,
-                          IDWriteGdiInterop **out_interop) {
-	IDWriteFactory *factory = nullptr;
-	auto hr = create_fn(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-	                    reinterpret_cast<IUnknown **>(&factory));
-	if (FAILED(hr) || !factory)
-		return false;
-
-	IDWriteGdiInterop *interop = nullptr;
-	hr = factory->GetGdiInterop(&interop);
-	if (FAILED(hr) || !interop) {
-		factory->Release();
-		return false;
-	}
-
-	*out_factory = factory;
-	*out_interop = interop;
-	return true;
 }
 
 std::string wide_to_utf8(wchar_t const *wstr, UINT32 len) {
@@ -310,100 +233,30 @@ bool get_font_file_and_key(IDWriteFontFace *face, IDWriteFontFile **out_file,
 	return true;
 }
 
-std::string get_dll_description(HMODULE dll, bool is_dwritecore) {
-	std::string result = is_dwritecore ? "DWriteCore" : "system DWrite";
-
-	wchar_t dll_path[MAX_PATH] = {};
-	if (GetModuleFileNameW(dll, dll_path, MAX_PATH)) {
-		result += " (";
-		result += wide_to_utf8(dll_path, static_cast<UINT32>(wcslen(dll_path)));
-		DWORD handle = 0;
-		auto size = GetFileVersionInfoSizeW(dll_path, &handle);
-		if (size) {
-			std::vector<char> ver_data(size);
-			if (GetFileVersionInfoW(dll_path, 0, size, ver_data.data())) {
-				VS_FIXEDFILEINFO *info = nullptr;
-				UINT info_len = 0;
-				if (VerQueryValueW(ver_data.data(), L"\\", reinterpret_cast<void **>(&info), &info_len) && info) {
-					result += ", ";
-					result += std::to_string(HIWORD(info->dwFileVersionMS)) + ".";
-					result += std::to_string(LOWORD(info->dwFileVersionMS)) + ".";
-					result += std::to_string(HIWORD(info->dwFileVersionLS)) + ".";
-					result += std::to_string(LOWORD(info->dwFileVersionLS));
-				}
-			}
-		}
-		result += ")";
-	}
-	return result;
-}
-
 } // anonymous namespace
 
 DWriteBridge::DWriteBridge(DWriteBridgeMode mode) {
-	DWriteCreateFactoryFn create_fn = nullptr;
-	// True only for app-local DWriteCore loads owned by this instance.
-	bool owns_module = false;
-
-	if (mode != DWriteBridgeMode::SystemOnly) {
-		dll_handle = try_load_dwrite_core(create_fn);
-		if (dll_handle) {
-			is_dwritecore_ = true;
-			owns_module = true;
-		}
-	}
-
-	if (!dll_handle) {
-		// Borrow the process pin; do not LoadLibrary per bridge instance.
-		auto const& pin = system_dwrite_pin();
-		dll_handle = pin.mod;
-		create_fn = pin.create_fn;
-		is_dwritecore_ = false;
-		owns_module = false;
-	}
-
-	if (!dll_handle || !create_fn) {
+	runtime = aegisub::font::DWriteRuntime::Acquire(
+		mode == DWriteBridgeMode::SystemOnly
+			? aegisub::font::DWriteRuntimeMode::SystemOnly
+			: aegisub::font::DWriteRuntimeMode::PreferProvider);
+	if (!runtime || !runtime->available()) {
 		LOG_D("font/dwrite") << "DWrite bridge unavailable: failed to load DWrite DLL";
-		dll_handle = nullptr;
 		return;
 	}
-
-	if (!init_dwrite_factory(create_fn, &factory, &gdi_interop)) {
-		LOG_D("font/dwrite") << "DWrite bridge unavailable: failed to create factory or GDI interop";
-		if (gdi_interop) { gdi_interop->Release(); gdi_interop = nullptr; }
-		if (factory) { factory->Release(); factory = nullptr; }
-		if (owns_module && dll_handle) {
-			FreeLibrary(dll_handle);
-		}
-		dll_handle = nullptr;
-		return;
-	}
-
-	// Stash ownership in is_dwritecore_ for the destructor: only Core loads are
-	// instance-owned. System pin is never freed here.
+	factory = runtime->factory();
+	gdi_interop = runtime->gdi_interop();
 	available_ = true;
-	dll_description_ = get_dll_description(dll_handle, is_dwritecore_);
+	is_dwritecore_ = runtime->is_dwrite_core();
+	dll_description_ = runtime->description();
 	LOG_I("font/dwrite") << "DWrite bridge initialized: " << dll_description_;
 }
 
 DWriteBridge::~DWriteBridge() {
-	// Drop COM first so no interface outlives the DLL mapping we still hold.
-	if (gdi_interop) {
-		gdi_interop->Release();
-		gdi_interop = nullptr;
-	}
-	if (factory) {
-		factory->Release();
-		factory = nullptr;
-	}
+	gdi_interop = nullptr;
+	factory = nullptr;
 	available_ = false;
-
-	// Only FreeLibrary instance-owned DWriteCore modules. System dwrite.dll is
-	// held by system_dwrite_pin() for process lifetime so concurrent catalog
-	// builds cannot unload it under another bridge's CreateFontFaceFromHdc.
-	if (dll_handle && is_dwritecore_)
-		FreeLibrary(dll_handle);
-	dll_handle = nullptr;
+	runtime.reset();
 }
 
 IDWriteFontFace *DWriteBridge::CreateFontFaceFromHdc(HDC hdc) const {

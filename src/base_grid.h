@@ -46,6 +46,9 @@ namespace agi {
 class AssDialogue;
 class GridColumn;
 class WidthHelper;
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+namespace aegisub::grid { class SubtitleGridRendererSlot; }
+#endif
 
 class BaseGrid final : public wxWindow {
 	using InputTimingClock = std::chrono::steady_clock;
@@ -80,6 +83,11 @@ class BaseGrid final : public wxWindow {
 	int current_frame = -1;
 
 	std::unique_ptr<WidthHelper> width_helper;
+#ifdef AEGISUB_WITH_SKIA_SUBTITLE_GRID
+	std::unique_ptr<aegisub::grid::SubtitleGridRendererSlot> renderer_slot;
+	std::uint64_t width_renderer_generation = 0;
+	bool CanUseSkiaRenderer() const noexcept;
+#endif
 
 	/// Rows which are visible on the current video frame
 	std::vector<int> visible_rows;
@@ -117,6 +125,7 @@ class BaseGrid final : public wxWindow {
 	std::unique_ptr<wxMenu> context_menu;
 
 	void OnContextMenu(wxContextMenuEvent &evt);
+	void OnDPIChanged(wxDPIChangedEvent &evt);
 	void OnHighlightVisibleChange(agi::OptionValue const& opt);
 	void OnIdle(wxIdleEvent&);
 	void OnKeyDown(wxKeyEvent &event);
@@ -173,6 +182,8 @@ public:
 	void SetDisplayMode(SubtitleTimeDisplayMode mode);
 	void SetByFrame(bool state);
 	void ScrollTo(int y);
+	void NotifySystemFontsChanged();
+	void NotifyTextRasterPolicyChanged();
 
 	DECLARE_EVENT_TABLE()
 };

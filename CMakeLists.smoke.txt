@@ -416,6 +416,7 @@ if(WIN32)
             src/skia/audio/skia_audio_frame_model.cpp
             src/skia/audio/skia_audio_upload_payload.cpp
             src/skia/audio/skia_audio_presenter.cpp
+            src/skia_runtime/platform_font_runtime.cpp
             src/skia_runtime/skia_surface_provider.cpp
         )
         target_compile_definitions(skia-audio-display-smoke PRIVATE
@@ -430,7 +431,11 @@ if(WIN32)
             src
             "${PROJECT_SOURCE_DIR}/libaegisub/include"
         )
-        target_link_libraries(skia-audio-display-smoke PRIVATE unofficial::skia::skia OpenGL::GL)
+        target_link_libraries(skia-audio-display-smoke PRIVATE
+            libaegisub
+            unofficial::skia::skia
+            OpenGL::GL
+        )
     endif()
 
     add_executable(opengl-overlay-smoke EXCLUDE_FROM_ALL
@@ -512,6 +517,64 @@ if(WIN32)
     endif()
 endif()
 
+if(WITH_SKIA_SUBTITLE_GRID)
+    add_executable(skia-grid-raster-smoke EXCLUDE_FROM_ALL
+        tests/smoke/skia_grid_raster_smoke.cpp
+        tests/smoke/perf_trace_audio_stub.cpp
+        src/skia_grid_renderer.cpp
+        src/skia_grid_text_backend_skshaper.cpp
+    )
+    if(WIN32)
+        target_sources(skia-grid-raster-smoke PRIVATE
+            src/grid_core/windows_text_raster_policy.cpp
+            src/skia_grid_text_backend_dwrite.cpp
+        )
+    else()
+        target_sources(skia-grid-raster-smoke PRIVATE
+            src/skia_runtime/platform_font_runtime.cpp
+        )
+    endif()
+    target_compile_features(skia-grid-raster-smoke PRIVATE cxx_std_20)
+    target_compile_definitions(skia-grid-raster-smoke PRIVATE
+        CMAKE_BUILD
+        AEGISUB_WITH_SKIA_SUBTITLE_GRID=1
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+    )
+    target_include_directories(skia-grid-raster-smoke PRIVATE
+        src
+        "${PROJECT_SOURCE_DIR}/libaegisub/include"
+    )
+    target_link_libraries(skia-grid-raster-smoke PRIVATE
+        aegisub_core
+        libaegisub
+        luajit
+        unofficial::skia::skia
+        ${wxWidgets_LIBRARIES}
+    )
+    if(NOT WIN32)
+        target_link_libraries(skia-grid-raster-smoke PRIVATE
+            unofficial::skia::modules::skshaper
+        )
+    endif()
+    add_custom_target(test-skia-grid-raster
+        COMMAND skia-grid-raster-smoke
+        DEPENDS skia-grid-raster-smoke
+        WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+    )
+    if(BUILD_TESTING)
+        add_test(
+            NAME skia_grid_raster_smoke
+            COMMAND "$<TARGET_FILE:skia-grid-raster-smoke>"
+            WORKING_DIRECTORY "${PROJECT_BINARY_DIR}"
+        )
+        set_tests_properties(skia_grid_raster_smoke PROPERTIES
+            LABELS "smoke;grid;skia;cpu-raster"
+            TIMEOUT 120
+        )
+    endif()
+endif()
+
 if(BUILD_TESTING)
     add_test(
         NAME aegisub_cli_help_smoke
@@ -560,7 +623,7 @@ endif()
 if(NOT TARGET test-aegisub-all)
     add_custom_target(test-aegisub-all)
 endif()
-foreach(_aegisub_test_dep IN ITEMS test-core-smoke test-provider-manager-registry test-fontcollector-api)
+foreach(_aegisub_test_dep IN ITEMS test-core-smoke test-provider-manager-registry test-fontcollector-api test-skia-grid-raster)
     if(TARGET ${_aegisub_test_dep})
         add_dependencies(test-aegisub-all ${_aegisub_test_dep})
     endif()

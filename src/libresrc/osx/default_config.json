@@ -464,7 +464,11 @@
 			"Font Size" : 12,
 			"Hide Overrides" : 1,
 			"Hide Overrides Char" : "☀",
-			"Highlight Subtitles in Frame" : true
+			"Highlight Subtitles in Frame" : true,
+			"Skia" : {
+				"ClearType" : false,
+				"Enabled" : false
+			}
 		},
 		"Highlight" : {
 			"Syntax" : true

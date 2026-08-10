@@ -35,6 +35,7 @@
         "AEGISUB_MATROSKA_PARSING": "ON",
         "WITH_DRAWING_SKIA": "ON",
         "WITH_SKIA_AUDIO_DISPLAY": "ON",
+        "WITH_SKIA_SUBTITLE_GRID": "ON",
         "WITH_PLUGIN_BRIDGE": "ON",
         "WITH_TEST": "ON",
         "WITH_SMOKE": "ON",

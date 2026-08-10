@@ -134,12 +134,44 @@ bool IsRelevantSessionChange(WXWPARAM wParam) {
 	}
 }
 
+bool IsRelevantGridSessionChange(WXWPARAM wParam) {
+	if (IsRelevantSessionChange(wParam))
+		return true;
+	switch (static_cast<DWORD>(wParam)) {
+		case WTS_SESSION_LOGON:
+		case WTS_SESSION_LOGOFF:
+		case WTS_SESSION_LOCK:
+		case WTS_SESSION_UNLOCK:
+		case WTS_SESSION_REMOTE_CONTROL:
+			return true;
+		default:
+			return false;
+	}
+}
+
+bool IsRelevantTextRasterSettingChange(WXWPARAM wParam) {
+	switch (static_cast<UINT>(wParam)) {
+		case SPI_SETFONTSMOOTHING:
+		case SPI_SETFONTSMOOTHINGTYPE:
+		case SPI_SETFONTSMOOTHINGCONTRAST:
+		case SPI_SETFONTSMOOTHINGORIENTATION:
+			return true;
+		default:
+			return false;
+	}
+}
+
 char const* DescribeSessionChange(WXWPARAM wParam) {
 	switch (static_cast<DWORD>(wParam)) {
 		case WTS_CONSOLE_CONNECT: return "WM_WTSSESSION_CHANGE/WTS_CONSOLE_CONNECT";
 		case WTS_CONSOLE_DISCONNECT: return "WM_WTSSESSION_CHANGE/WTS_CONSOLE_DISCONNECT";
 		case WTS_REMOTE_CONNECT: return "WM_WTSSESSION_CHANGE/WTS_REMOTE_CONNECT";
 		case WTS_REMOTE_DISCONNECT: return "WM_WTSSESSION_CHANGE/WTS_REMOTE_DISCONNECT";
+		case WTS_SESSION_LOGON: return "WM_WTSSESSION_CHANGE/WTS_SESSION_LOGON";
+		case WTS_SESSION_LOGOFF: return "WM_WTSSESSION_CHANGE/WTS_SESSION_LOGOFF";
+		case WTS_SESSION_LOCK: return "WM_WTSSESSION_CHANGE/WTS_SESSION_LOCK";
+		case WTS_SESSION_UNLOCK: return "WM_WTSSESSION_CHANGE/WTS_SESSION_UNLOCK";
+		case WTS_SESSION_REMOTE_CONTROL: return "WM_WTSSESSION_CHANGE/WTS_SESSION_REMOTE_CONTROL";
 		default: return "WM_WTSSESSION_CHANGE";
 	}
 }
@@ -865,6 +897,8 @@ void FrameMain::OnFontChangeDebounce(wxTimerEvent &) {
 	// Drop cached family catalog so style editor / \\fn preference remapping
 	// pick up newly installed or removed fonts on next open/use.
 	font_family_catalog_cache::Invalidate();
+	if (auto *grid = context->GetUI().subsGrid)
+		grid->NotifySystemFontsChanged();
 	// Kick a background rebuild so the next interactive use is warm.
 	font_family_catalog_cache::WarmAsync();
 	context->GetCore().project->ReloadSubtitlesProvider();
@@ -923,8 +957,20 @@ WXLRESULT FrameMain::MSWWindowProc(WXUINT message, WXWPARAM wParam, WXLPARAM lPa
 	if (message == WM_DEVICECHANGE && IsRelevantAudioDeviceChange(wParam))
 		QueueAudioOutputRecovery(DescribeAudioDeviceChange(wParam));
 
-	if (message == WM_WTSSESSION_CHANGE && IsRelevantSessionChange(wParam))
-		QueueAudioOutputRecovery(DescribeSessionChange(wParam));
+	if (message == WM_WTSSESSION_CHANGE) {
+		if (IsRelevantSessionChange(wParam))
+			QueueAudioOutputRecovery(DescribeSessionChange(wParam));
+		if (IsRelevantGridSessionChange(wParam)) {
+			if (auto *grid = context->GetUI().subsGrid)
+				grid->NotifyTextRasterPolicyChanged();
+		}
+	}
+
+	if ((message == WM_DISPLAYCHANGE
+		|| (message == WM_SETTINGCHANGE && IsRelevantTextRasterSettingChange(wParam)))) {
+		if (auto *grid = context->GetUI().subsGrid)
+			grid->NotifyTextRasterPolicyChanged();
+	}
 
 	if (message == WM_SIZE) {
 		WXLRESULT res = wxFrame::MSWWindowProc(message, wParam, lParam);

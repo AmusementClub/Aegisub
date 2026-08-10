@@ -26,6 +26,10 @@ public:
 	explicit WxDcGridColumnPainter(wxDC& dc) : dc(dc) { }
 
 	void SetFont(wxFont const& font) override { dc.SetFont(font); }
+	void Clear(agi::Color const& color) override {
+		dc.SetBackground(wxBrush(to_wx(color)));
+		dc.Clear();
+	}
 
 	void MeasureText(std::string const& utf8, int& out_width, int& out_height) override {
 		// wxString::FromUTF8 matches the historical non-Windows measure path;

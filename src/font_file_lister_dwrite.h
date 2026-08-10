@@ -8,6 +8,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -18,6 +19,7 @@ struct IDWriteGdiInterop;
 struct IDWriteFontFace;
 struct IDWriteFont;
 struct FontMatchCandidate;
+namespace aegisub::font { class DWriteRuntime; }
 
 /// Select which DirectWrite implementation a bridge may load.
 ///
@@ -39,9 +41,9 @@ struct DWriteLocalizedName {
 /// @class DWriteBridge
 /// @brief Bridges GDI font selection to DirectWrite for file path and metadata.
 class DWriteBridge {
+	std::shared_ptr<aegisub::font::DWriteRuntime const> runtime;
 	IDWriteFactory *factory = nullptr;
 	IDWriteGdiInterop *gdi_interop = nullptr;
-	HMODULE dll_handle = nullptr;
 	bool available_ = false;
 	bool is_dwritecore_ = false;
 	std::string dll_description_;

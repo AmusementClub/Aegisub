@@ -438,6 +438,7 @@ option(WITH_CSRI "Enable CSRI support" ON)
 option(WITH_DRAWING_SKIA "Enable Skia-backed Lua drawing path operations" OFF)
 option(WITH_SKIA_VIDEO_TOOLS "Build the opt-in Skia video tools overlay" OFF)
 option(WITH_SKIA_AUDIO_DISPLAY "Build the opt-in full Skia audio display" OFF)
+option(WITH_SKIA_SUBTITLE_GRID "Build the opt-in Skia CPU subtitle grid renderer" OFF)
 option(WITH_SKIA_SOFTWARE_VIDEO "Build the Skia software video presenter (not implemented)" OFF)
 
 foreach(_aegisub_unimplemented_skia_feature IN ITEMS
@@ -449,7 +450,7 @@ foreach(_aegisub_unimplemented_skia_feature IN ITEMS
     endif()
 endforeach()
 
-if(WITH_SKIA_VIDEO_TOOLS OR WITH_SKIA_AUDIO_DISPLAY OR WITH_DRAWING_SKIA)
+if(WITH_SKIA_VIDEO_TOOLS OR WITH_SKIA_AUDIO_DISPLAY OR WITH_SKIA_SUBTITLE_GRID OR WITH_DRAWING_SKIA)
     # unofficial-skia resolves a few Windows system import libraries while its
     # package config is loaded. Seed those lookups before find_package so a
     # fresh configure does not silently omit them.
@@ -492,6 +493,32 @@ if(WITH_SKIA_VIDEO_TOOLS OR WITH_SKIA_AUDIO_DISPLAY OR WITH_DRAWING_SKIA)
     endif()
 
     find_package(unofficial-skia CONFIG QUIET)
+endif()
+if(WITH_SKIA_SUBTITLE_GRID)
+    if(NOT TARGET unofficial::skia::skia)
+        message(FATAL_ERROR
+            "WITH_SKIA_SUBTITLE_GRID is ON, but the Skia package was not found.\n"
+            "Configure with -DVCPKG_MANIFEST_FEATURES=skia-grid (or skia when a GPU Skia "
+            "feature is also enabled), or disable the subtitle grid feature."
+        )
+    endif()
+    if(NOT WIN32 AND NOT TARGET unofficial::skia::modules::skshaper)
+        message(FATAL_ERROR
+            "WITH_SKIA_SUBTITLE_GRID requires SkShaper on macOS/Linux, but the package target is unavailable."
+        )
+    endif()
+    if(NOT WITH_SKIA_VIDEO_TOOLS AND NOT WITH_SKIA_AUDIO_DISPLAY)
+        get_target_property(_aegisub_grid_skia_compile_definitions
+            unofficial::skia::skia INTERFACE_COMPILE_DEFINITIONS)
+        if("${_aegisub_grid_skia_compile_definitions}" MATCHES "(^|;)SK_GL(;|$)")
+            message(FATAL_ERROR
+                "A subtitle-grid-only build selected a GL-enabled Skia package. Create a fresh "
+                "build directory and configure with -DVCPKG_MANIFEST_FEATURES=skia-grid, or "
+                "enable the Audio/Video Skia feature which owns the GPU dependency."
+            )
+        endif()
+        unset(_aegisub_grid_skia_compile_definitions)
+    endif()
 endif()
 option(WITH_FFTW3 "Enable app-local runtime loading of FFTW3 for spectrum FFT support" ON)
 find_package(pffft CONFIG QUIET)
@@ -1303,6 +1330,30 @@ if(WITH_SKIA_AUDIO_DISPLAY)
         AEGISUB_WITH_SKIA_AUDIO_DISPLAY=1
     )
 endif()
+if(WITH_SKIA_AUDIO_DISPLAY OR WITH_SKIA_SUBTITLE_GRID)
+    target_sources(Aegisub PRIVATE
+        src/skia_runtime/platform_font_runtime.cpp
+    )
+endif()
+if(WITH_SKIA_SUBTITLE_GRID)
+    target_sources(Aegisub PRIVATE
+        src/grid_core/subtitle_grid_renderer_contract.cpp
+        src/grid_core/windows_text_raster_policy.cpp
+        src/skia_grid_renderer.cpp
+        src/skia_grid_text_backend_skshaper.cpp
+        src/subtitle_grid_renderer_slot.cpp
+    )
+    if(WIN32)
+        target_sources(Aegisub PRIVATE src/skia_grid_text_backend_dwrite.cpp)
+    endif()
+    target_compile_definitions(Aegisub PRIVATE
+        AEGISUB_WITH_SKIA_SUBTITLE_GRID=1
+    )
+    target_link_libraries(Aegisub PRIVATE unofficial::skia::skia)
+    if(NOT WIN32)
+        target_link_libraries(Aegisub PRIVATE unofficial::skia::modules::skshaper)
+    endif()
+endif()
 if(WITH_LIBPLACEBO AND HAVE_LIBPLACEBO)
     target_sources(Aegisub PRIVATE src/video_renderer_placebo_gl.cpp)
     set_source_files_properties(
@@ -1415,6 +1466,7 @@ if(WIN32)
     target_sources(aegisub_core PRIVATE
         src/font_file_lister_gdi.cpp
         src/font_file_lister_dwrite.cpp
+        src/skia_runtime/dwrite_runtime.cpp
         src/gdi_font_resolver.cpp
         src/font_family_observe_win.cpp
         src/font_family_derive_win.cpp
@@ -2043,6 +2095,7 @@ message(STATUS "\n"
     "  Drawing Skia:          ${WITH_DRAWING_SKIA}\n"
     "  Video tools Skia:      ${WITH_SKIA_VIDEO_TOOLS}\n"
     "  Audio display Skia:    ${WITH_SKIA_AUDIO_DISPLAY}\n"
+    "  Subtitle grid Skia:    ${WITH_SKIA_SUBTITLE_GRID}\n"
     "  Software video Skia:   ${WITH_SKIA_SOFTWARE_VIDEO}\n"
     "\n"
     "Dynamic Loading\n"

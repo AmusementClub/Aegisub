@@ -39,6 +39,11 @@ void WidthHelper::Age() {
 	++age;
 }
 
+void WidthHelper::Reset() {
+	widths.clear();
+	age = 0;
+}
+
 int WidthHelper::operator()(boost::flyweight<std::string> const& str) {
 	if (str.get().empty()) return 0;
 	auto it = widths.find(str);

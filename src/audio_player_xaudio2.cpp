@@ -31,11 +31,14 @@
 #include "include/aegisub/audio_player.h"
 
 #include "options.h"
+#include "perf_trace.h"
 
 #include <libaegisub/audio/provider.h>
 #include <libaegisub/scoped_ptr.h>
 #include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
+
+#include <chrono>
 
 #ifndef XAUDIO2_REDIST
 #include <xaudio2.h>
@@ -353,6 +356,59 @@ void XAudio2Thread::Run() {
 	for (auto& i : buff)
 		i.resize(wanted_latency_bytes);
 
+	XAUDIO2_VOICE_DETAILS mastering_details{};
+	pMasterVoice->GetVoiceDetails(&mastering_details);
+	bool const trace_audio_output = perf_trace::IsCategoryEnabled(perf_trace::Category::Audio);
+	bool output_starved = false;
+	auto emit_audio_output = [&](char const* reason, int64_t submitted_frames = -1,
+		int64_t submitted_bytes = -1, double fill_duration_ms = -1.0,
+		bool track_queue_health = false) {
+		if (!trace_audio_output)
+			return;
+
+		XAUDIO2_VOICE_STATE voice_state{};
+		pSourceVoice->GetState(&voice_state);
+		XAUDIO2_PERFORMANCE_DATA performance{};
+		pXAudio2->GetPerformanceData(&performance);
+
+		bool const starved = track_queue_health
+			&& playback_should_be_running
+			&& next_input_frame < end_frame
+			&& voice_state.BuffersQueued == 0;
+		bool const recovered = track_queue_health
+			&& output_starved
+			&& voice_state.BuffersQueued > 0;
+		if (starved)
+			output_starved = true;
+		else if (recovered)
+			output_starved = false;
+
+		perf_trace::AudioOutputSnapshot snapshot;
+		snapshot.backend_name = "xaudio2";
+		snapshot.reason = reason ? reason : "";
+		snapshot.queued_buffers = voice_state.BuffersQueued;
+		snapshot.queued_ms = static_cast<double>(voice_state.BuffersQueued)
+			* static_cast<double>(wanted_frames) * 1000.0
+			/ static_cast<double>(wfx.nSamplesPerSec);
+		snapshot.submitted_buffers = submitted_frames > 0 ? 1 : 0;
+		snapshot.submitted_frames = submitted_frames;
+		snapshot.submitted_bytes = submitted_bytes;
+		snapshot.submitted_ms = submitted_frames >= 0
+			? static_cast<double>(submitted_frames) * 1000.0 / static_cast<double>(wfx.nSamplesPerSec)
+			: -1.0;
+		snapshot.fill_duration_ms = fill_duration_ms;
+		snapshot.played_frames = static_cast<int64_t>(voice_state.SamplesPlayed);
+		snapshot.engine_latency_frames = performance.CurrentLatencyInSamples;
+		snapshot.glitch_count = performance.GlitchesSinceEngineStarted;
+		snapshot.source_rate_hz = static_cast<int>(wfx.nSamplesPerSec);
+		snapshot.mastering_rate_hz = static_cast<int>(mastering_details.InputSampleRate);
+		snapshot.low_water = voice_state.BuffersQueued <= 1 && next_input_frame < end_frame;
+		snapshot.starved = starved;
+		snapshot.recovered = recovered;
+		snapshot.end_of_stream = next_input_frame >= end_frame && voice_state.BuffersQueued == 0;
+		perf_trace::ObserveAudioOutputSnapshot(snapshot);
+	};
+
 	while (running) {
 		DWORD wait_result = WaitForMultipleObjects(sizeof(events_to_wait) / sizeof(HANDLE), events_to_wait, FALSE, INFINITE);
 
@@ -366,11 +422,13 @@ void XAudio2Thread::Run() {
 			playback_should_be_running = true;
 			pSourceVoice->Start();
 			SetEvent(is_playing);
+			emit_audio_output("start_empty");
 			goto do_fill_buffer;
 
 		case WAIT_OBJECT_0 + 1:
 		stop_playback:
 			// Stop playing
+			emit_audio_output("stop");
 			ResetEvent(is_playing);
 			pSourceVoice->Stop();
 			pSourceVoice->FlushSourceBuffers();
@@ -390,6 +448,7 @@ void XAudio2Thread::Run() {
 
 		case WAIT_OBJECT_0 + 4:
 			// Buffer end
+			emit_audio_output("buffer_end", -1, -1, -1.0, true);
 		do_fill_buffer:
 			// Time to fill more into buffer
 			if (!playback_should_be_running)
@@ -401,10 +460,17 @@ void XAudio2Thread::Run() {
 					if (fill_len <= 0)
 						break;
 					buffer_occupied[i] = true;
+					auto const fill_started = trace_audio_output
+						? std::chrono::steady_clock::now()
+						: std::chrono::steady_clock::time_point{};
 					if (original)
 						provider->GetAudio(buff[i].data(), next_input_frame, fill_len);
 					else
 						provider->GetInt16MonoAudio(reinterpret_cast<int16_t*>(buff[i].data()), next_input_frame, fill_len);
+					double const fill_duration_ms = trace_audio_output
+						? static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(
+							std::chrono::steady_clock::now() - fill_started).count()) / 1000.0
+						: -1.0;
 					next_input_frame += fill_len;
 					XAUDIO2_BUFFER xbf;
 					xbf.Flags = fill_len + next_input_frame == end_frame ? XAUDIO2_END_OF_STREAM : 0;
@@ -419,6 +485,7 @@ void XAudio2Thread::Run() {
 					if (FAILED(hr = pSourceVoice->SubmitSourceBuffer(&xbf))) {
 						REPORT_ERROR("Failed initializing Submit Buffer")
 					}
+					emit_audio_output("submit", fill_len, xbf.AudioBytes, fill_duration_ms, true);
 				}
 			}
 			break;

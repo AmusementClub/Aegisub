@@ -65,6 +65,11 @@ struct AudioOutputSnapshot {
 	int64_t submitted_bytes = -1;
 	double submitted_ms = -1.0;
 	double fill_duration_ms = -1.0;
+	int64_t played_frames = -1;
+	int64_t engine_latency_frames = -1;
+	int64_t glitch_count = -1;
+	int source_rate_hz = -1;
+	int mastering_rate_hz = -1;
 	bool low_water = false;
 	bool starved = false;
 	bool recovered = false;

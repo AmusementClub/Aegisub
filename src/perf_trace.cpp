@@ -1575,6 +1575,16 @@ void ObserveAudioOutputSnapshot(AudioOutputSnapshot const& snapshot) {
 		payload.AddDouble("submitted_ms", snapshot.submitted_ms);
 	if (snapshot.fill_duration_ms >= 0.0)
 		payload.AddDouble("fill_duration_ms", snapshot.fill_duration_ms);
+	if (snapshot.played_frames >= 0)
+		payload.AddInt("played_frames", snapshot.played_frames);
+	if (snapshot.engine_latency_frames >= 0)
+		payload.AddInt("engine_latency_frames", snapshot.engine_latency_frames);
+	if (snapshot.glitch_count >= 0)
+		payload.AddInt("glitch_count", snapshot.glitch_count);
+	if (snapshot.source_rate_hz >= 0)
+		payload.AddInt("source_rate_hz", snapshot.source_rate_hz);
+	if (snapshot.mastering_rate_hz >= 0)
+		payload.AddInt("mastering_rate_hz", snapshot.mastering_rate_hz);
 	payload.AddBool("low_water", snapshot.low_water);
 	payload.AddBool("starved", snapshot.starved);
 	payload.AddBool("recovered", snapshot.recovered);

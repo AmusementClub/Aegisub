@@ -57,6 +57,11 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	output_snapshot.submitted_bytes = 3840;
 	output_snapshot.submitted_ms = 20.0;
 	output_snapshot.fill_duration_ms = 1.25;
+	output_snapshot.played_frames = 1440;
+	output_snapshot.engine_latency_frames = 256;
+	output_snapshot.glitch_count = 3;
+	output_snapshot.source_rate_hz = 48000;
+	output_snapshot.mastering_rate_hz = 48000;
 	output_snapshot.low_water = true;
 	perf_trace::ObserveAudioOutputSnapshot(output_snapshot);
 	perf_trace::AudioDisplaySnapshot display_snapshot;
@@ -209,6 +214,11 @@ TEST(PerfTrace, WritesExpectedSessionFiles) {
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"video_ui_duration\""));
 	EXPECT_NE(std::string::npos, trace.find("\"phase\":\"video_display.scoped_test\""));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_output_snapshot\""));
+	EXPECT_NE(std::string::npos, trace.find("\"played_frames\":1440"));
+	EXPECT_NE(std::string::npos, trace.find("\"engine_latency_frames\":256"));
+	EXPECT_NE(std::string::npos, trace.find("\"glitch_count\":3"));
+	EXPECT_NE(std::string::npos, trace.find("\"source_rate_hz\":48000"));
+	EXPECT_NE(std::string::npos, trace.find("\"mastering_rate_hz\":48000"));
 	EXPECT_NE(std::string::npos, trace.find("\"name\":\"audio_display_snapshot\""));
 	EXPECT_NE(std::string::npos, trace.find("\"renderer\":\"skia\""));
 	EXPECT_NE(std::string::npos, trace.find("\"content_kind\":\"spectrum\""));

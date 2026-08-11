@@ -15,6 +15,9 @@
 
 namespace aegisub::skia::audio {
 
+inline constexpr std::size_t kSpectrumPaletteFactor = 1u << 12;
+inline constexpr std::size_t kSpectrumPaletteColorCount = kSpectrumPaletteFactor + 1;
+
 struct PresenterFrameTrace {
 	bool valid = false;
 	bool retained_layers_reused = false;
@@ -54,9 +57,9 @@ struct PresenterMetrics {
 
 struct SpectrumPalette {
 	std::uint64_t revision = 0;
-	// SkColor-compatible AARRGGBB entries. Linear sampling between these 256
-	// points preserves presentation changes without re-uploading power tiles.
-	std::array<std::uint32_t, 256> colors {};
+	// SkColor-compatible AARRGGBB entries. Legacy spectrum rendering uses a
+	// 12-bit lookup table, including the saturated endpoint.
+	std::array<std::uint32_t, kSpectrumPaletteColorCount> colors {};
 };
 
 struct StyleFrame {
@@ -69,11 +72,19 @@ struct StyleFrame {
 	std::shared_ptr<SpectrumPalette const> spectrum_palette;
 };
 
+enum class MarkerLineStyle : std::uint8_t {
+	Solid,
+	Dotted,
+};
+
 struct MarkerFrame {
 	float x = 0.f;
 	std::uint32_t color = 0xFFFFFFFF;
 	int width = 1;
 	std::uint8_t feet = 0;
+	std::uint32_t left_foot_color = color;
+	std::uint32_t right_foot_color = color;
+	MarkerLineStyle line_style = MarkerLineStyle::Solid;
 };
 
 struct LabelFrame {

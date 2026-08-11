@@ -10,6 +10,8 @@
 
 struct AudioMarkerPixel {
 	const AudioMarker *marker = nullptr;
+	const AudioMarker *left_foot_marker = nullptr;
+	const AudioMarker *right_foot_marker = nullptr;
 	int x = 0;
 	AudioMarker::FeetStyle feet = AudioMarker::Feet_None;
 	int priority = 0;
@@ -28,8 +30,11 @@ inline int AudioMarkerPixelPriority(AudioMarker::Kind kind) noexcept {
 	return 0;
 }
 
-/// Collapse dense markers which rasterize to the same device pixel. Results
-/// retain provider order so neighbouring thick strokes keep the legacy z-order.
+/// Collapse dense markers which rasterize to the same device pixel. The line
+/// uses semantic priority while each directional foot retains its own highest
+/// priority source, preserving distinct start/end colors at shared boundaries.
+/// Results retain provider order so neighbouring thick strokes keep the legacy
+/// z-order.
 template<typename Projector>
 std::vector<AudioMarkerPixel> AggregateAudioMarkersByPixel(
 	AudioMarkerVector const& markers,
@@ -51,21 +56,27 @@ std::vector<AudioMarkerPixel> AggregateAudioMarkersByPixel(
 
 		auto const priority = AudioMarkerPixelPriority(marker->GetKind());
 		auto &slot = pixels[static_cast<std::size_t>(pixel - first_pixel)];
-		if (!slot || priority > slot->priority) {
-			slot = AudioMarkerPixel{
-				marker,
-				pixel,
-				marker->GetFeet(),
-				priority,
-				order,
-			};
+		if (!slot) {
+			slot = AudioMarkerPixel{};
+			slot->x = pixel;
 		}
-		else if (priority == slot->priority) {
+		if (!slot->marker || priority >= slot->priority) {
 			slot->marker = marker;
-			slot->feet = static_cast<AudioMarker::FeetStyle>(
-				static_cast<int>(slot->feet) | static_cast<int>(marker->GetFeet()));
+			slot->priority = priority;
 			slot->order = order;
 		}
+
+		auto const feet = marker->GetFeet();
+		slot->feet = static_cast<AudioMarker::FeetStyle>(
+			static_cast<int>(slot->feet) | static_cast<int>(feet));
+		if ((feet & AudioMarker::Feet_Left)
+			&& (!slot->left_foot_marker
+				|| priority >= AudioMarkerPixelPriority(slot->left_foot_marker->GetKind())))
+			slot->left_foot_marker = marker;
+		if ((feet & AudioMarker::Feet_Right)
+			&& (!slot->right_foot_marker
+				|| priority >= AudioMarkerPixelPriority(slot->right_foot_marker->GetKind())))
+			slot->right_foot_marker = marker;
 	}
 
 	std::vector<AudioMarkerPixel> result;

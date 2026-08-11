@@ -77,6 +77,10 @@ TEST(lagi_audio_display, dense_markers_collapse_to_device_pixels_with_semantic_p
 	ASSERT_NE(prioritized.end(), it);
 	EXPECT_EQ(AudioMarker::Kind::Active, it->marker->GetKind());
 	EXPECT_EQ(AudioMarker::Feet_Both, it->feet);
+	ASSERT_NE(nullptr, it->left_foot_marker);
+	ASSERT_NE(nullptr, it->right_foot_marker);
+	EXPECT_EQ(AudioMarker::Kind::Active, it->left_foot_marker->GetKind());
+	EXPECT_EQ(AudioMarker::Kind::Active, it->right_foot_marker->GetKind());
 
 	storage.emplace_back(501, AudioMarker::Kind::Selected);
 	markers.push_back(&storage.back());
@@ -101,6 +105,33 @@ TEST(lagi_audio_display, dense_markers_collapse_to_device_pixels_with_semantic_p
 	EXPECT_EQ(AudioMarker::Kind::Selected, kind_at(501));
 	EXPECT_EQ(AudioMarker::Kind::Keyframe, kind_at(502));
 	EXPECT_EQ(AudioMarker::Kind::VideoPosition, kind_at(503));
+}
+
+TEST(lagi_audio_display, shared_boundaries_keep_foot_styles_from_lower_priority_markers) {
+	std::vector<SyntheticAudioMarker> storage;
+	storage.reserve(4);
+	AudioMarkerVector markers;
+
+	storage.emplace_back(100, AudioMarker::Kind::Inactive, AudioMarker::Feet_Left);
+	markers.push_back(&storage.back());
+	storage.emplace_back(100, AudioMarker::Kind::Active, AudioMarker::Feet_Right);
+	markers.push_back(&storage.back());
+	storage.emplace_back(200, AudioMarker::Kind::Active, AudioMarker::Feet_Right);
+	markers.push_back(&storage.back());
+	storage.emplace_back(200, AudioMarker::Kind::Inactive, AudioMarker::Feet_Left);
+	markers.push_back(&storage.back());
+
+	auto const collapsed = AggregateAudioMarkersByPixel(
+		markers, 0, 300, [](AudioMarker const& marker) { return marker.GetPosition(); });
+	ASSERT_EQ(2u, collapsed.size());
+	EXPECT_EQ(markers[1], collapsed[0].marker);
+	EXPECT_EQ(markers[0], collapsed[0].left_foot_marker);
+	EXPECT_EQ(markers[1], collapsed[0].right_foot_marker);
+	EXPECT_EQ(AudioMarker::Feet_Both, collapsed[0].feet);
+	EXPECT_EQ(markers[2], collapsed[1].marker);
+	EXPECT_EQ(markers[3], collapsed[1].left_foot_marker);
+	EXPECT_EQ(markers[2], collapsed[1].right_foot_marker);
+	EXPECT_EQ(AudioMarker::Feet_Both, collapsed[1].feet);
 }
 
 class ScopedTestDeadline {

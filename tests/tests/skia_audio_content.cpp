@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <thread>
 
@@ -99,6 +100,20 @@ audio::ContentViewportRequest HighestQualitySpectrumViewport(
 	return request;
 }
 
+std::uint16_t WaveformEndpointAt(
+	audio::ContentUploadPayload const& payload,
+	std::size_t column,
+	std::size_t endpoint) {
+	std::uint16_t value = 0;
+	std::memcpy(
+		&value,
+		payload.primary.data()
+			+ column * audio::kWaveformUploadBytesPerColumn
+			+ endpoint * sizeof(value),
+		sizeof(value));
+	return value;
+}
+
 }
 
 TEST(skia_audio_content, immutable_waveform_and_spectrum_tiles_validate_exact_shape) {
@@ -112,7 +127,7 @@ TEST(skia_audio_content, immutable_waveform_and_spectrum_tiles_validate_exact_sh
 	EXPECT_FALSE(invalid->IsValid());
 }
 
-TEST(skia_audio_content, waveform_upload_payload_builds_exact_peak_and_average_masks) {
+TEST(skia_audio_content, waveform_upload_payload_builds_compact_peak_and_average_endpoints) {
 	audio::ContentGeneration const generation { 2, 4 };
 	auto tile = MakeWaveformTile(generation, 0, 1);
 	auto const built = audio::BuildWaveformUploadPayload(*tile);
@@ -121,14 +136,14 @@ TEST(skia_audio_content, waveform_upload_payload_builds_exact_peak_and_average_m
 	EXPECT_TRUE(built.payload->IsValid());
 	EXPECT_EQ(audio::kWaveformUploadPayloadRevision, built.payload->key.variant_revision);
 	EXPECT_EQ(1u, built.payload->width);
-	EXPECT_EQ(audio::kWaveformUploadMaskHeight, built.payload->height);
-	ASSERT_EQ(audio::kWaveformUploadMaskHeight, built.payload->primary.size());
-	ASSERT_EQ(audio::kWaveformUploadMaskHeight, built.payload->secondary.size());
-	EXPECT_EQ(255, built.payload->primary.front());
-	EXPECT_EQ(255, built.payload->primary.back());
-	EXPECT_EQ(0, built.payload->secondary.front());
-	EXPECT_EQ(0, built.payload->secondary.back());
-	EXPECT_EQ(255, built.payload->secondary[audio::kWaveformUploadMaskHeight / 2]);
+	EXPECT_EQ(audio::kWaveformUploadTextureHeight, built.payload->height);
+	ASSERT_EQ(audio::kWaveformUploadBytesPerColumn, built.payload->primary.size());
+	EXPECT_TRUE(built.payload->secondary.empty());
+	EXPECT_EQ(0, WaveformEndpointAt(*built.payload, 0, 0));
+	EXPECT_EQ(std::numeric_limits<std::uint16_t>::max(),
+		WaveformEndpointAt(*built.payload, 0, 1));
+	EXPECT_EQ(16384, WaveformEndpointAt(*built.payload, 0, 2));
+	EXPECT_EQ(49151, WaveformEndpointAt(*built.payload, 0, 3));
 
 	auto const cancelled = audio::BuildWaveformUploadPayload(
 		*tile,
@@ -169,6 +184,28 @@ TEST(skia_audio_content, spectrum_upload_payload_is_revisioned_without_mutating_
 	ASSERT_NE(nullptr, second.payload);
 	EXPECT_NE(first.payload->key, second.payload->key);
 	EXPECT_EQ(raw_power, tile->spectrum_power);
+}
+
+TEST(skia_audio_content, spectrum_upload_payload_preserves_power_with_24_bit_precision) {
+	audio::ContentGeneration const generation { 7, 9 };
+	auto tile = std::make_shared<audio::ContentTile>();
+	tile->key = { generation, audio::ContentKind::Spectrum, 0, 1, 8 };
+	tile->spectrum_power.assign(8, 4.f);
+
+	audio::SpectrumBandPlanRequest request;
+	request.bin_count = 8;
+	request.output_height = 1;
+	request.sample_rate = 48000;
+	auto const plan = audio::BuildSpectrumBandPlan(request);
+	ASSERT_TRUE(plan.IsValid());
+	auto const built = audio::BuildSpectrumUploadPayload(*tile, plan);
+	ASSERT_EQ(audio::ContentUploadPayloadBuildStatus::Ready, built.status);
+	ASSERT_NE(nullptr, built.payload);
+	ASSERT_EQ(4u, built.payload->primary.size());
+	EXPECT_EQ(0x80, built.payload->primary[0]);
+	EXPECT_EQ(0x00, built.payload->primary[1]);
+	EXPECT_EQ(0x00, built.payload->primary[2]);
+	EXPECT_EQ(0xFF, built.payload->primary[3]);
 }
 
 TEST(skia_audio_content, upload_payload_store_is_generation_safe_and_budgeted_by_variant) {

@@ -31,6 +31,7 @@ struct FrameViewportRequest {
 struct FrameViewport {
 	int target_width = 0;
 	int target_height = 0;
+	double content_scale = 1.0;
 	DeviceRect timeline;
 	DeviceRect content;
 	DeviceRect scrollbar;
@@ -47,6 +48,10 @@ struct FrameViewport {
 
 int AudioZoomFactor(int zoom_level) noexcept;
 double AudioMillisecondsPerLogicalPixel(int zoom_level) noexcept;
+int AudioDurationMsFromSamples(std::int64_t sample_count, int sample_rate) noexcept;
+int LegacyLogicalPixelFromTime(int time_ms, double milliseconds_per_logical_pixel) noexcept;
+float LegacyDeviceXFromTime(FrameViewport const& viewport, int time_ms) noexcept;
+float LegacyDeviceWidthFromDuration(FrameViewport const& viewport, int duration_ms) noexcept;
 int AudioScrollLeftAfterZoom(
 	int scroll_left,
 	int client_width,
@@ -78,6 +83,7 @@ struct CursorPlacement {
 CursorPlacement BuildCursorPlacement(
 	FrameViewport const& viewport,
 	int mouse_position_ms,
+	int mouse_logical_x,
 	int playback_position_ms) noexcept;
 char const *CursorSourceName(CursorSource source) noexcept;
 

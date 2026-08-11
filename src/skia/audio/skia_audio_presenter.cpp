@@ -29,6 +29,7 @@
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
 #include <include/core/SkPaint.h>
+#include <include/core/SkPathBuilder.h>
 #include <include/core/SkPicture.h>
 #include <include/core/SkPictureRecorder.h>
 #include <include/core/SkRect.h>
@@ -36,6 +37,7 @@
 #include <include/core/SkString.h>
 #include <include/core/SkSurface.h>
 #include <include/core/SkTypeface.h>
+#include <include/effects/SkDashPathEffect.h>
 #include <include/effects/SkGradient.h>
 #include <include/effects/SkRuntimeEffect.h>
 #include <include/gpu/GpuTypes.h>
@@ -61,6 +63,15 @@ namespace {
 
 constexpr std::size_t kDefaultContentCacheBudget = 32 * 1024 * 1024;
 constexpr std::size_t kGaneshResourceCacheBudget = 64 * 1024 * 1024;
+constexpr int kSpectrumPaletteTextureWidth = 2048;
+constexpr int kSpectrumPaletteTextureHeight = static_cast<int>(
+	(kSpectrumPaletteColorCount + kSpectrumPaletteTextureWidth - 1)
+	/ kSpectrumPaletteTextureWidth);
+// Matches AudioDisplay::foot_size in the legacy wx renderer.
+constexpr float kMarkerFootSize = 6.f;
+
+static_assert(kSpectrumPaletteTextureHeight == 3);
+
 using FrameTraceClock = std::chrono::steady_clock;
 
 // Resolve a typeface for the given family name, cached because every repaint
@@ -123,6 +134,26 @@ void FillDeviceRect(
 		paint);
 }
 
+float DeviceStrokeWidth(float width) noexcept {
+	return std::max(1.f, std::round(width));
+}
+
+float DeviceStrokeLeft(float x, float width) noexcept {
+	width = DeviceStrokeWidth(width);
+	return std::floor(x - width * 0.5f + 0.5f);
+}
+
+void FillDeviceVerticalStroke(
+	SkCanvas *canvas,
+	float x,
+	float y,
+	float height,
+	float width,
+	SkPaint const& paint) {
+	width = DeviceStrokeWidth(width);
+	FillDeviceRect(canvas, DeviceStrokeLeft(x, width), y, width, height, paint);
+}
+
 // wxDC::DrawText anchors text by its top-left corner; Skia anchors it by the
 // baseline. fAscent is negative, hence the subtraction.
 float TextBaselineForTop(SkFont const& font, float top) {
@@ -143,6 +174,28 @@ float FrameContentScale(ContentFrame const& frame) noexcept {
 	return std::isfinite(frame.content_scale)
 		? std::clamp(frame.content_scale, 1.f, 8.f)
 		: 1.f;
+}
+
+void DrawMarkerFoot(
+	SkCanvas *canvas,
+	float marker_x,
+	float marker_top,
+	float marker_bottom,
+	float direction,
+	float size,
+	SkPaint const& paint) {
+	SkPathBuilder feet;
+	feet.moveTo(marker_x + direction * size, marker_top);
+	feet.lineTo(marker_x, marker_top);
+	feet.lineTo(marker_x, marker_top + size);
+	feet.close();
+	feet.moveTo(marker_x + direction * size, marker_bottom);
+	feet.lineTo(marker_x, marker_bottom - size);
+	feet.lineTo(marker_x, marker_bottom);
+	feet.close();
+	SkPaint fill(paint);
+	fill.setStyle(SkPaint::kFill_Style);
+	canvas->drawPath(feet.detach(), fill);
 }
 
 FrameTraceClock::time_point BeginFrameTrace(bool enabled) noexcept {
@@ -214,14 +267,20 @@ sk_sp<SkImage> UploadTexture(
 }
 
 std::vector<std::uint8_t> EncodePalette(SpectrumPalette const& palette) {
-	std::vector<std::uint8_t> pixels(palette.colors.size() * 4);
+	std::vector<std::uint8_t> pixels(
+		static_cast<std::size_t>(kSpectrumPaletteTextureWidth)
+			* kSpectrumPaletteTextureHeight * 4);
+	auto const write_color = [&pixels](std::size_t index, std::uint32_t color) {
+		pixels[index * 4 + 0] = static_cast<std::uint8_t>((color >> 16) & 0xFF);
+		pixels[index * 4 + 1] = static_cast<std::uint8_t>((color >> 8) & 0xFF);
+		pixels[index * 4 + 2] = static_cast<std::uint8_t>(color & 0xFF);
+		pixels[index * 4 + 3] = static_cast<std::uint8_t>((color >> 24) & 0xFF);
+	};
 	for (std::size_t i = 0; i < palette.colors.size(); ++i) {
-		auto const color = palette.colors[i];
-		pixels[i * 4 + 0] = static_cast<std::uint8_t>((color >> 16) & 0xFF);
-		pixels[i * 4 + 1] = static_cast<std::uint8_t>((color >> 8) & 0xFF);
-		pixels[i * 4 + 2] = static_cast<std::uint8_t>(color & 0xFF);
-		pixels[i * 4 + 3] = static_cast<std::uint8_t>((color >> 24) & 0xFF);
+		write_color(i, palette.colors[i]);
 	}
+	for (std::size_t i = palette.colors.size(); i < pixels.size() / 4; ++i)
+		write_color(i, palette.colors.back());
 	return pixels;
 }
 
@@ -309,14 +368,19 @@ void DrawAudioFrameLayers(
 		// band, separating it from the waveform.
 		FillDeviceRect(canvas, frame.x, timeline_bottom - scale, frame.width, scale, paint);
 
-		auto const ms_per_pixel = frame.timeline->milliseconds_per_pixel;
-		auto const plan = BuildTimelineScalePlan(ms_per_pixel);
+		auto const device_ms_per_pixel = frame.timeline->milliseconds_per_pixel;
+		auto const logical_ms_per_pixel = device_ms_per_pixel * scale;
+		auto const plan = BuildTimelineScalePlan(logical_ms_per_pixel);
 		if (plan.valid) {
-			auto const scroll_left = std::isfinite(frame.timeline->scroll_left_exact)
+			auto const logical_scroll_left = std::isfinite(frame.timeline->scroll_left_exact)
 				&& (frame.timeline->scroll_left_exact != 0.0 || frame.timeline->scroll_left == 0)
-				? frame.timeline->scroll_left_exact
+				? frame.timeline->scroll_left_exact / scale
 				: static_cast<double>(frame.timeline->scroll_left);
-			auto const marks = BuildTimelineMarks(plan, scroll_left, frame.width, ms_per_pixel);
+			auto const marks = BuildTimelineMarks(
+				plan,
+				logical_scroll_left,
+				frame.width / scale,
+				logical_ms_per_pixel);
 			auto const font = MakeAudioFont(frame.text_style, false);
 			TimelineLabelFormatter formatter(plan.scale, frame.timeline->duration_ms);
 			// Clip to the timeline band so an edge label is truncated rather than
@@ -327,29 +391,30 @@ void DrawAudioFrameLayers(
 			text_paint.setAntiAlias(true);
 			double last_text_right = -1.0;
 			for (auto const& mark : marks) {
+				auto const device_mark_x = static_cast<float>(mark.x * scale);
 				// Legacy tick heights: major bottom-6..bottom-1, minor
 				// bottom-4..bottom-1, i.e. 5px and 3px stopping one pixel short of
 				// the rule. Scaled so they keep their proportions on HiDPI.
 				auto const tick_height = (mark.major ? 5.f : 3.f) * scale;
 				FillDeviceRect(
 					canvas,
-					frame.x + static_cast<float>(mark.x),
+					frame.x + device_mark_x,
 					timeline_bottom - scale - tick_height,
 					scale,
 					tick_height,
 					paint);
 				// Legacy only formats a label when it will actually be drawn, so
 				// the hour/minute suppression state advances on drawn labels only.
-				if (!mark.major || !font || mark.x <= last_text_right)
+				if (!mark.major || !font || device_mark_x <= last_text_right)
 					continue;
 				auto const label = formatter.Format(mark.time_ms);
 				if (label.empty())
 					continue;
-				last_text_right = mark.x + font->measureText(
+				last_text_right = device_mark_x + font->measureText(
 					label.data(), label.size(), SkTextEncoding::kUTF8);
 				canvas->drawSimpleText(
 					label.data(), label.size(), SkTextEncoding::kUTF8,
-					std::floor(frame.x + static_cast<float>(mark.x)),
+					std::floor(frame.x + device_mark_x),
 					TextBaselineForTop(*font, timeline_y),
 					*font,
 					text_paint);
@@ -367,20 +432,50 @@ void DrawAudioFrameLayers(
 		canvas->clipRect(SkRect::MakeXYWH(frame.x, frame.y, frame.width, frame.height));
 		if (HasFrameLayerPart(parts, FrameLayerPart::Marker)) {
 			auto const marker_trace_started = BeginFrameTrace(frame_trace != nullptr);
+			auto const scale = FrameContentScale(frame);
+			auto const marker_foot_size = kMarkerFootSize * scale;
+			SkScalar const dotted_intervals[] { scale, scale };
+			auto const dotted_effect = SkDashPathEffect::Make(
+				SkSpan<const SkScalar>(dotted_intervals, 2), 0.f);
 			int markers_drawn = 0;
 			for (auto const& marker : frame.markers) {
-				if (!std::isfinite(marker.x) || marker.x < frame.x - 2.f || marker.x > frame.x + frame.width + 2.f)
+				if (!std::isfinite(marker.x)
+					|| marker.x < frame.x - marker_foot_size
+					|| marker.x > frame.x + frame.width + marker_foot_size)
 					continue;
+				paint.reset();
+				paint.setAntiAlias(false);
 				paint.setColor(static_cast<SkColor>(marker.color));
-				paint.setStrokeWidth(static_cast<float>(std::max(1, marker.width)));
-				canvas->drawLine(marker.x, frame.y, marker.x, frame.y + frame.height, paint);
+				auto const marker_width = DeviceStrokeWidth(
+					static_cast<float>(std::max(1, marker.width)));
+				if (marker.line_style == MarkerLineStyle::Dotted && dotted_effect) {
+					paint.setStyle(SkPaint::kStroke_Style);
+					paint.setStrokeWidth(marker_width);
+					paint.setStrokeCap(SkPaint::kButt_Cap);
+					paint.setPathEffect(dotted_effect);
+					auto const marker_center = DeviceStrokeLeft(marker.x, marker_width)
+						+ marker_width * 0.5f;
+					canvas->drawLine(
+						marker_center,
+						frame.y,
+						marker_center,
+						frame.y + frame.height,
+						paint);
+					paint.setPathEffect(nullptr);
+				}
+				else {
+					FillDeviceVerticalStroke(
+						canvas, marker.x, frame.y, frame.height, marker_width, paint);
+				}
 				if (marker.feet & 1u) {
-					canvas->drawLine(marker.x, frame.y, marker.x - 4.f, frame.y + 4.f, paint);
-					canvas->drawLine(marker.x, frame.y + frame.height, marker.x - 4.f, frame.y + frame.height - 4.f, paint);
+					paint.setColor(static_cast<SkColor>(marker.left_foot_color));
+					DrawMarkerFoot(canvas, marker.x, frame.y, frame.y + frame.height,
+						-1.f, marker_foot_size, paint);
 				}
 				if (marker.feet & 2u) {
-					canvas->drawLine(marker.x, frame.y, marker.x + 4.f, frame.y + 4.f, paint);
-					canvas->drawLine(marker.x, frame.y + frame.height, marker.x + 4.f, frame.y + frame.height - 4.f, paint);
+					paint.setColor(static_cast<SkColor>(marker.right_foot_color));
+					DrawMarkerFoot(canvas, marker.x, frame.y, frame.y + frame.height,
+						1.f, marker_foot_size, paint);
 				}
 				++markers_drawn;
 			}
@@ -393,8 +488,8 @@ void DrawAudioFrameLayers(
 		if (HasFrameLayerPart(parts, FrameLayerPart::CursorLine)
 			&& frame.cursor && std::isfinite(frame.cursor->x)) {
 			paint.setColor(static_cast<SkColor>(frame.cursor->color));
-			paint.setStrokeWidth(1.f);
-			canvas->drawLine(frame.cursor->x, frame.y, frame.cursor->x, frame.y + frame.height, paint);
+			FillDeviceVerticalStroke(
+				canvas, frame.cursor->x, frame.y, frame.height, 1.f, paint);
 		}
 		canvas->restore();
 	}
@@ -523,16 +618,12 @@ void DrawAudioFrameLayers(
 				geometry.selection_x, y, geometry.selection_width, h), paint);
 		}
 
-		auto const border_width = std::max(1.f, scale);
-		auto const border_inset = border_width * 0.5f;
-		paint.setStyle(SkPaint::kStroke_Style);
-		paint.setStrokeWidth(border_width);
+		auto const border_width = std::max(1.f, std::round(scale));
 		paint.setColor(static_cast<SkColor>(scrollbar.thumb_color));
-		canvas->drawRect(SkRect::MakeLTRB(
-			border_inset,
-			y + border_inset,
-			std::max(border_inset, track - border_inset),
-			std::max(y + border_inset, y + h - border_inset)), paint);
+		FillDeviceRect(canvas, 0.f, y, track, border_width, paint);
+		FillDeviceRect(canvas, 0.f, y + h - border_width, track, border_width, paint);
+		FillDeviceRect(canvas, 0.f, y, border_width, h, paint);
+		FillDeviceRect(canvas, track - border_width, y, border_width, h, paint);
 
 		if (geometry.load_visible) {
 			std::array<SkColor4f, 2> colors {
@@ -646,7 +737,6 @@ sk_sp<SkImage> RasterizeMarkerLayer(
 struct Presenter::Impl {
 	struct GpuContentEntry {
 		sk_sp<SkImage> primary;
-		sk_sp<SkImage> secondary;
 		std::size_t bytes = 0;
 		std::uint64_t touch = 0;
 	};
@@ -659,23 +749,67 @@ struct Presenter::Impl {
 	explicit Impl(FailureInjection failure_injection)
 	: failure_injection(failure_injection)
 	, device(DeviceFailureInjection(failure_injection)) {
-		auto const sksl = SkString(R"(
+		{
+			auto const sksl = SkString(R"(
+				uniform shader endpoint_texture;
+				uniform float height;
+				uniform float amplitude;
+				uniform float draw_average;
+				layout(color) uniform half4 peak_color;
+				layout(color) uniform half4 average_color;
+
+				float truncate_to_zero(float value) {
+					return value < 0.0 ? ceil(value) : floor(value);
+				}
+
+				half4 main(float2 p) {
+					half4 encoded = endpoint_texture.eval(float2(p.x, 0.5));
+					float4 endpoints = float4(encoded) * 2.0 - 1.0;
+					float midpoint = floor(height * 0.5);
+					float4 scaled = float4(
+						truncate_to_zero(endpoints.r * amplitude * midpoint),
+						truncate_to_zero(endpoints.g * amplitude * midpoint),
+						truncate_to_zero(endpoints.b * amplitude * midpoint),
+						truncate_to_zero(endpoints.a * amplitude * midpoint));
+					scaled = clamp(scaled, -midpoint, midpoint);
+					float row = floor(p.y);
+					bool in_peak = row >= midpoint - scaled.g
+						&& row <= midpoint - scaled.r;
+					bool in_average = row >= midpoint - scaled.a
+						&& row <= midpoint - scaled.b;
+					if (draw_average > 0.5 && in_average)
+						return average_color;
+					return in_peak ? peak_color : half4(0.0);
+				}
+			)");
+			auto result = SkRuntimeEffect::MakeForShader(sksl);
+			waveform_effect = std::move(result.effect);
+			if (!waveform_effect)
+				waveform_effect_error = result.errorText.c_str();
+		}
+		{
+			auto const sksl = SkString(R"(
 			uniform shader power_texture;
 			uniform shader palette_texture;
 			uniform float amplitude;
 			half4 main(float2 p) {
 				half4 encoded = power_texture.eval(p);
-				float normalized = encoded.r * (65280.0 / 65535.0)
-				                 + encoded.g * (255.0 / 65535.0);
+				float normalized = encoded.r * (16711680.0 / 16777215.0)
+				                 + encoded.g * (65280.0 / 16777215.0)
+				                 + encoded.b * (255.0 / 16777215.0);
 				float power = normalized * 8.0;
-				float palette_x = clamp(power * amplitude, 0.0, 1.0) * 255.0 + 0.5;
-				return palette_texture.eval(float2(palette_x, 0.5));
+				float palette_index = floor(
+					clamp(power * amplitude, 0.0, 1.0) * 4096.0);
+				float palette_y = floor(palette_index / 2048.0);
+				float palette_x = palette_index - palette_y * 2048.0;
+				return palette_texture.eval(float2(palette_x + 0.5, palette_y + 0.5));
 			}
 		)");
-		auto result = SkRuntimeEffect::MakeForShader(sksl);
-		spectrum_effect = std::move(result.effect);
-		if (!spectrum_effect)
-			spectrum_effect_error = result.errorText.c_str();
+			auto result = SkRuntimeEffect::MakeForShader(sksl);
+			spectrum_effect = std::move(result.effect);
+			if (!spectrum_effect)
+				spectrum_effect_error = result.errorText.c_str();
+		}
 	}
 
 	FailureInjection failure_injection = FailureInjection::None;
@@ -688,6 +822,8 @@ struct Presenter::Impl {
 	std::size_t content_cache_budget = kDefaultContentCacheBudget;
 	std::size_t content_cache_bytes = 0;
 	std::uint64_t content_touch_counter = 0;
+	sk_sp<SkRuntimeEffect> waveform_effect;
+	std::string waveform_effect_error;
 	sk_sp<SkRuntimeEffect> spectrum_effect;
 	std::string spectrum_effect_error;
 	std::unordered_map<std::uint64_t, sk_sp<SkImage>> palette_images;
@@ -879,26 +1015,23 @@ struct Presenter::Impl {
 
 		GpuContentEntry uploaded;
 		if (payload.key.tile.kind == ContentKind::Waveform) {
-			auto const info = SkImageInfo::MakeA8(
+			auto const info = SkImageInfo::Make(
 				static_cast<int>(payload.width),
-				static_cast<int>(payload.height));
+				static_cast<int>(payload.height),
+				kR16G16B16A16_unorm_SkColorType,
+				kUnpremul_SkAlphaType,
+				nullptr);
 			uploaded.primary = UploadTexture(
 				context,
 				info,
 				payload.primary.data(),
 				payload.primary.size(),
-				payload.width);
-			uploaded.secondary = UploadTexture(
-				context,
-				info,
-				payload.secondary.data(),
-				payload.secondary.size(),
-				payload.width);
-			if (!uploaded.primary || !uploaded.secondary)
+				static_cast<std::size_t>(payload.width) * kWaveformUploadBytesPerColumn);
+			if (!uploaded.primary)
 				return std::nullopt;
-			uploaded.bytes = uploaded.primary->textureSize() + uploaded.secondary->textureSize();
+			uploaded.bytes = uploaded.primary->textureSize();
 			if (!uploaded.bytes)
-				uploaded.bytes = payload.primary.size() + payload.secondary.size();
+				uploaded.bytes = payload.primary.size();
 		}
 		else {
 			auto const info = SkImageInfo::Make(
@@ -962,8 +1095,8 @@ struct Presenter::Impl {
 
 		auto pixels = EncodePalette(palette);
 		auto const info = SkImageInfo::Make(
-			static_cast<int>(palette.colors.size()),
-			1,
+			kSpectrumPaletteTextureWidth,
+			kSpectrumPaletteTextureHeight,
 			kRGBA_8888_SkColorType,
 			kUnpremul_SkAlphaType,
 			SkColorSpace::MakeSRGB());
@@ -972,7 +1105,7 @@ struct Presenter::Impl {
 			info,
 			pixels.data(),
 			pixels.size(),
-			pixels.size());
+			static_cast<std::size_t>(kSpectrumPaletteTextureWidth) * 4);
 		if (!uploaded)
 			return nullptr;
 		if (palette_images.size() >= 8)
@@ -1066,6 +1199,13 @@ bool Presenter::RenderContentFrame(
 		canvas->drawRect(SkRect::MakeXYWH(style.x, frame.y, style.width, frame.height), paint);
 	}
 
+	if (frame.kind == ContentKind::Waveform && !impl->waveform_effect) {
+		impl->Fail(
+			context,
+			SkiaGlDeviceFailure::ContentShaderUnavailable,
+			"Skia waveform runtime effect failed to compile: " + impl->waveform_effect_error);
+		return false;
+	}
 	if (frame.kind == ContentKind::Spectrum) {
 		if (!impl->spectrum_effect) {
 			impl->Fail(
@@ -1119,45 +1259,49 @@ bool Presenter::RenderContentFrame(
 		auto const destination_x = frame.x + frame.first_column_offset + static_cast<float>(relative_x);
 
 		if (frame.kind == ContentKind::Waveform) {
-			auto const amplitude = std::clamp(frame.amplitude, 0.f, 64.f);
-			auto const scaled_height = frame.height * amplitude;
-			SkRect const source = SkRect::MakeWH(
-				static_cast<float>(tile_key.column_count),
-				static_cast<float>(kWaveformUploadMaskHeight));
 			SkRect const destination = SkRect::MakeXYWH(
 				destination_x,
-				frame.y + (frame.height - scaled_height) * 0.5f,
+				frame.y,
 				static_cast<float>(tile_key.column_count),
-				scaled_height);
-			if (destination.height() > 0.f) {
-				for (auto const& style : styles) {
-					auto const style_bounds = SkRect::MakeXYWH(style.x, frame.y, style.width, frame.height);
-					if (!SkRect::Intersects(style_bounds, destination))
-						continue;
-					canvas->save();
-					canvas->clipRect(style_bounds);
-					paint.reset();
-					paint.setAntiAlias(false);
-					paint.setColor(static_cast<SkColor>(style.waveform_peak_color));
-					canvas->drawImageRect(
-						gpu_tile->primary,
-						source,
-						destination,
-						SkSamplingOptions(SkFilterMode::kNearest),
-						&paint,
-						SkCanvas::kStrict_SrcRectConstraint);
-					if (frame.draw_waveform_average) {
-						paint.setColor(static_cast<SkColor>(style.waveform_average_color));
-						canvas->drawImageRect(
-							gpu_tile->secondary,
-							source,
-							destination,
-							SkSamplingOptions(SkFilterMode::kNearest),
-							&paint,
-							SkCanvas::kStrict_SrcRectConstraint);
-					}
-					canvas->restore();
+				frame.height);
+			auto endpoint_shader = gpu_tile->primary->makeRawShader(
+				SkSamplingOptions(SkFilterMode::kNearest),
+				nullptr);
+			if (!endpoint_shader) {
+				impl->Fail(context, SkiaGlDeviceFailure::ContentShaderUnavailable,
+					"failed to create a waveform endpoint child shader");
+				return false;
+			}
+			for (auto const& style : styles) {
+				auto const style_bounds = SkRect::MakeXYWH(style.x, frame.y, style.width, frame.height);
+				if (!SkRect::Intersects(style_bounds, destination))
+					continue;
+				SkRuntimeShaderBuilder builder(impl->waveform_effect);
+				builder.child("endpoint_texture") = endpoint_shader;
+				builder.uniform("height") = frame.height;
+				builder.uniform("amplitude") = std::clamp(frame.amplitude, 0.f, 64.f);
+				builder.uniform("draw_average") = frame.draw_waveform_average ? 1.f : 0.f;
+				builder.uniform("peak_color") = SkColor4f::FromColor(
+					static_cast<SkColor>(style.waveform_peak_color));
+				builder.uniform("average_color") = SkColor4f::FromColor(
+					static_cast<SkColor>(style.waveform_average_color));
+				auto shader = builder.makeShader();
+				if (!shader) {
+					impl->Fail(context, SkiaGlDeviceFailure::ContentShaderUnavailable,
+						"failed to instantiate the waveform runtime shader");
+					return false;
 				}
+
+				paint.reset();
+				paint.setAntiAlias(false);
+				paint.setShader(std::move(shader));
+				canvas->save();
+				canvas->clipRect(style_bounds);
+				canvas->translate(destination_x, frame.y);
+				canvas->drawRect(SkRect::MakeWH(
+					static_cast<float>(tile_key.column_count),
+					frame.height), paint);
+				canvas->restore();
 			}
 		}
 		else {
@@ -1179,7 +1323,7 @@ bool Presenter::RenderContentFrame(
 					return false;
 				}
 				auto palette_shader = palette->makeShader(
-					SkSamplingOptions(SkFilterMode::kLinear),
+					SkSamplingOptions(SkFilterMode::kNearest),
 					nullptr);
 				if (!power_shader || !palette_shader) {
 					impl->Fail(context, SkiaGlDeviceFailure::ContentShaderUnavailable, "failed to create a spectrum child shader");
@@ -1214,11 +1358,12 @@ bool Presenter::RenderContentFrame(
 			paint.reset();
 			paint.setAntiAlias(false);
 			paint.setColor(static_cast<SkColor>(style.waveform_zero_color));
-			canvas->drawLine(
+			FillDeviceRect(
+				canvas,
 				style.x,
-				frame.y + frame.height * 0.5f,
-				style.x + style.width,
-				frame.y + frame.height * 0.5f,
+				frame.y + std::floor(frame.height * 0.5f),
+				style.width,
+				1.f,
 				paint);
 		}
 	}
@@ -1239,8 +1384,8 @@ bool Presenter::RenderContentFrame(
 		canvas->drawImage(marker_image, 0.f, 0.f);
 	else
 		DrawMarkerLayer(canvas, frame, trace);
-	DrawCursorLayer(canvas, target, frame, false);
 	DrawTimingLabelLayer(canvas, frame, trace);
+	DrawCursorLayer(canvas, target, frame, false);
 	DrawCursorLayer(canvas, target, frame, true);
 	DrawScrollbarLayer(canvas, target, frame, trace);
 
@@ -1341,8 +1486,8 @@ bool Presenter::RenderRetainedOverlayFrame(
 	if (updated_markers)
 		impl->retained_markers = std::move(updated_markers);
 	canvas->drawImage(impl->retained_markers, 0.f, 0.f);
-	DrawCursorLayer(canvas, target, frame, false);
 	canvas->drawPicture(impl->retained_timing_labels);
+	DrawCursorLayer(canvas, target, frame, false);
 	DrawCursorLayer(canvas, target, frame, true);
 	canvas->drawPicture(impl->retained_post_cursor);
 	if (trace_enabled) {

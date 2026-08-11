@@ -138,6 +138,19 @@ bool PixelIsColor(
 		&& pixels[offset + 3] >= 250;
 }
 
+bool CanvasPixelIsColor(
+	std::vector<unsigned char> const& pixels,
+	int width,
+	int height,
+	int x,
+	int y,
+	unsigned char red,
+	unsigned char green,
+	unsigned char blue) {
+	return x >= 0 && x < width && y >= 0 && y < height
+		&& PixelIsColor(pixels, width, x, height - 1 - y, red, green, blue);
+}
+
 bool ColumnContainsColor(
 	std::vector<unsigned char> const& pixels,
 	int width,
@@ -242,7 +255,8 @@ std::shared_ptr<aegisub::skia::audio::SpectrumPalette const> MakePalette(
 	auto palette = std::make_shared<SpectrumPalette>();
 	palette->revision = revision;
 	for (std::size_t i = 0; i < palette->colors.size(); ++i) {
-		auto const value = static_cast<std::uint32_t>(i);
+		auto const value = static_cast<std::uint32_t>(
+			i * 255u / kSpectrumPaletteFactor);
 		palette->colors[i] = green
 			? 0xFF000000u | (value << 8)
 			: 0xFF000000u | (value << 16) | (255u - value);
@@ -334,6 +348,59 @@ bool ValidateWaveformContent(
 		std::cerr << "waveform retained cache metrics were unexpected\n";
 	presenter.Release(context);
 	return passed;
+}
+
+bool ValidateExactWaveformRasterization(
+	aegisub::skia::audio::FrameTarget const& target,
+	SkiaGlContextToken context) {
+	using namespace aegisub::skia::audio;
+	ContentGeneration const generation { 53, 59 };
+	auto raw = std::make_shared<ContentTile>();
+	raw->key = { generation, ContentKind::Waveform, 0, 1, 0 };
+	raw->waveform = { { -0.1f, 0.1f, -0.04f, 0.04f } };
+	auto built = BuildWaveformUploadPayload(*raw);
+	if (built.status != ContentUploadPayloadBuildStatus::Ready || !built.payload)
+		return false;
+
+	Presenter presenter(FailureInjection::None);
+	ContentFrame frame;
+	frame.generation = generation;
+	frame.kind = ContentKind::Waveform;
+	frame.width = static_cast<float>(target.width);
+	frame.height = static_cast<float>(target.height);
+	frame.background_color = 0xFF182230;
+	frame.waveform_peak_color = 0xFF2A9D8F;
+	frame.waveform_average_color = 0xFFE9C46A;
+	frame.waveform_zero_color = 0xFFE76F51;
+	frame.draw_waveform_average = false;
+	frame.tiles = { built.payload };
+	if (!presenter.RenderContentFrame(context, target, frame)) {
+		std::cerr << presenter.TakeFailureLogMessage() << '\n';
+		return false;
+	}
+
+	auto const pixels = ReadBack(target);
+	auto const midpoint = target.height / 2;
+	bool const exact_peak_rows = CanvasPixelIsColor(
+		pixels, target.width, target.height, 0, midpoint - 4, 42, 157, 143)
+		&& CanvasPixelIsColor(
+			pixels, target.width, target.height, 0, midpoint + 4, 42, 157, 143)
+		&& CanvasPixelIsColor(
+			pixels, target.width, target.height, 0, midpoint - 5, 24, 34, 48)
+		&& CanvasPixelIsColor(
+			pixels, target.width, target.height, 0, midpoint + 5, 24, 34, 48);
+	bool const exact_zero_row = CanvasPixelIsColor(
+		pixels, target.width, target.height, target.width - 1, midpoint, 231, 111, 81)
+		&& CanvasPixelIsColor(
+			pixels, target.width, target.height, target.width - 1, midpoint - 1, 24, 34, 48)
+		&& CanvasPixelIsColor(
+			pixels, target.width, target.height, target.width - 1, midpoint + 1, 24, 34, 48);
+	if (!exact_peak_rows)
+		std::cerr << "waveform endpoint shader did not match legacy integer peak rows\n";
+	if (!exact_zero_row)
+		std::cerr << "waveform zero line was not aligned to one exact midpoint row\n";
+	presenter.Release(context);
+	return exact_peak_rows && exact_zero_row;
 }
 
 bool ValidateSpectrumContent(
@@ -440,7 +507,19 @@ bool ValidateFrameLayerComposition(
 	scrollbar->thumb_color = 0xFFB0B0B0;
 	scrollbar->selection_color = 0xFFFFFFFF;
 	frame.scrollbar = scrollbar;
-	frame.markers.push_back({ target.width * 0.25f, 0xFFFF00FF, 2, 3 });
+	frame.markers.push_back({
+		target.width * 0.25f,
+		0xFFFF00FF,
+		2,
+		3,
+		0xFFFF0000,
+		0xFF00FFFF,
+	});
+	MarkerFrame dotted_marker;
+	dotted_marker.x = target.width * 0.125f;
+	dotted_marker.color = 0xFF0080FF;
+	dotted_marker.line_style = MarkerLineStyle::Dotted;
+	frame.markers.push_back(dotted_marker);
 	frame.labels.push_back({ target.width * 0.5f, target.width * 0.25f, "label" });
 	auto cursor = std::make_shared<CursorFrame>();
 	cursor->x = target.width * 0.75f;
@@ -455,6 +534,49 @@ bool ValidateFrameLayerComposition(
 	auto const initial_pixels = ReadBack(target);
 	auto const initial_metrics = presenter.Metrics();
 	auto const initial_trace = initial_metrics.last_frame_trace;
+	auto const marker_x = static_cast<int>(frame.markers[0].x);
+	auto const marker_top = static_cast<int>(frame.y);
+	auto const marker_bottom = static_cast<int>(frame.y + frame.height);
+	bool const marker_top_left_filled = CanvasPixelIsColor(
+		initial_pixels, target.width, target.height,
+		marker_x - 2, marker_top + 3, 255, 0, 0);
+	bool const marker_top_right_filled = CanvasPixelIsColor(
+		initial_pixels, target.width, target.height,
+		marker_x + 1, marker_top + 3, 0, 255, 255);
+	bool const marker_bottom_left_filled = CanvasPixelIsColor(
+		initial_pixels, target.width, target.height,
+		marker_x - 2, marker_bottom - 4, 255, 0, 0);
+	bool const marker_bottom_right_filled = CanvasPixelIsColor(
+		initial_pixels, target.width, target.height,
+		marker_x + 1, marker_bottom - 4, 0, 255, 255);
+	bool const marker_feet_filled = marker_top_left_filled
+		&& marker_top_right_filled
+		&& marker_bottom_left_filled
+		&& marker_bottom_right_filled;
+	auto const marker_midpoint = static_cast<int>(frame.y + frame.height * 0.5f);
+	bool const solid_marker_pixel_aligned = CanvasPixelIsColor(
+		initial_pixels, target.width, target.height,
+		marker_x - 1, marker_midpoint, 255, 0, 255)
+		&& CanvasPixelIsColor(
+			initial_pixels, target.width, target.height,
+			marker_x, marker_midpoint, 255, 0, 255)
+		&& !CanvasPixelIsColor(
+			initial_pixels, target.width, target.height,
+			marker_x + 1, marker_midpoint, 255, 0, 255);
+	auto const dotted_x = static_cast<int>(dotted_marker.x);
+	int dotted_pixels = 0;
+	int dotted_gaps = 0;
+	for (int y = marker_top + 8; y < marker_bottom - 8; ++y) {
+		if (CanvasPixelIsColor(
+			initial_pixels, target.width, target.height,
+			dotted_x, y, 0, 128, 255)) {
+			++dotted_pixels;
+		}
+		else {
+			++dotted_gaps;
+		}
+	}
+	bool const dotted_marker_has_gaps = dotted_pixels > 0 && dotted_gaps > 0;
 	bool const initial_composition_valid = ContainsColor(initial_pixels, 32, 32, 64)
 		&& ContainsColor(initial_pixels, 64, 32, 32)
 		&& ContainsColor(initial_pixels, 16, 32, 48)
@@ -472,6 +594,15 @@ bool ValidateFrameLayerComposition(
 		&& initial_trace.frame_compose_ms >= initial_trace.base_layer_rebuild_ms;
 	if (!initial_composition_valid)
 		std::cerr << "initial retained layer composition was invalid\n";
+	if (!marker_feet_filled)
+		std::cerr << "audio marker feet were not filled triangles with independent colors: "
+			<< marker_top_left_filled << marker_top_right_filled
+			<< marker_bottom_left_filled << marker_bottom_right_filled << '\n';
+	if (!solid_marker_pixel_aligned)
+		std::cerr << "solid audio marker did not occupy the exact legacy pixel columns\n";
+	if (!dotted_marker_has_gaps)
+		std::cerr << "dotted audio marker rendered as a solid line\n";
+
 	// The timeline band is canvas rows 0..19 in this frame: the separator rule is
 	// row 19, major ticks rows 14..18, minor ticks rows 16..18. Rows 0..12 can
 	// therefore only be painted by scale labels, so a non-background pixel there
@@ -579,6 +710,9 @@ bool ValidateFrameLayerComposition(
 	if (!mismatch_rejected || !mismatch_skipped_frame_begin)
 		std::cerr << "retained-key mismatch was not rejected before frame begin\n";
 	bool const passed = initial_composition_valid
+		&& marker_feet_filled
+		&& solid_marker_pixel_aligned
+		&& dotted_marker_has_gaps
 		&& timeline_labels_drawn
 		&& cursor_label_drawn
 		&& old_cursor_cleared
@@ -830,6 +964,8 @@ int main() try {
 	PresenterMetrics waveform_metrics;
 	if (!ValidateWaveformContent(target, context, waveform_metrics))
 		throw std::runtime_error("waveform retained content smoke failed");
+	if (!ValidateExactWaveformRasterization(target, context))
+		throw std::runtime_error("waveform exact rasterization smoke failed");
 	PresenterMetrics spectrum_metrics;
 	if (!ValidateSpectrumContent(target, context, spectrum_metrics))
 		throw std::runtime_error("spectrum retained content smoke failed");

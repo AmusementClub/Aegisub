@@ -1048,13 +1048,16 @@ void AudioDisplay::PaintMarkers(wxDC &dc, TimeRange updtime)
 
 		if (pixel.feet == AudioMarker::Feet_None) continue;
 
-		dc.SetBrush(wxBrush(marker->GetStyle().GetColour()));
 		dc.SetPen(*wxTRANSPARENT_PEN);
 
-		if (pixel.feet & AudioMarker::Feet_Left)
+		if (pixel.left_foot_marker) {
+			dc.SetBrush(wxBrush(pixel.left_foot_marker->GetStyle().GetColour()));
 			PaintFoot(dc, marker_x, -1);
-		if (pixel.feet & AudioMarker::Feet_Right)
+		}
+		if (pixel.right_foot_marker) {
+			dc.SetBrush(wxBrush(pixel.right_foot_marker->GetStyle().GetColour()));
 			PaintFoot(dc, marker_x, 1);
+		}
 	}
 }
 

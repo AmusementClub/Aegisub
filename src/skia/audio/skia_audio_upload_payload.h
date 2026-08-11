@@ -11,8 +11,9 @@
 
 namespace aegisub::skia::audio {
 
-inline constexpr std::uint32_t kWaveformUploadMaskHeight = 256;
-inline constexpr std::uint64_t kWaveformUploadPayloadRevision = 1;
+inline constexpr std::uint32_t kWaveformUploadTextureHeight = 1;
+inline constexpr std::size_t kWaveformUploadBytesPerColumn = sizeof(std::uint16_t) * 4;
+inline constexpr std::uint64_t kWaveformUploadPayloadRevision = 2;
 
 struct ContentUploadPayloadKey {
 	ContentTileKey tile;
@@ -26,8 +27,9 @@ struct ContentUploadPayloadKeyHash {
 };
 
 // Immutable worker output in the exact byte layout consumed by Skia uploads.
-// Waveform payloads contain two A8 masks; spectrum payloads contain one RGBA
-// power texture and are revisioned by the SpectrumBandPlan.
+// Waveform payloads contain one compact RGBA16 endpoint texture (peak min/max,
+// average min/max); spectrum payloads contain one RGBA power texture and are
+// revisioned by the SpectrumBandPlan.
 struct ContentUploadPayload {
 	ContentUploadPayloadKey key;
 	std::uint32_t width = 0;

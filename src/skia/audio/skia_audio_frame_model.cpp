@@ -64,6 +64,9 @@ bool ValidSpectrumRequest(SpectrumBandPlanRequest const& request) noexcept {
 bool FrameViewport::IsValid() const noexcept {
 	return target_width > 0
 		&& target_height > 0
+		&& std::isfinite(content_scale)
+		&& content_scale >= 1.0
+		&& content_scale <= 8.0
 		&& content.IsValid()
 		&& scroll_left >= 0
 		&& logical_audio_width > 0
@@ -98,6 +101,49 @@ int AudioZoomFactor(int zoom_level) noexcept {
 
 double AudioMillisecondsPerLogicalPixel(int zoom_level) noexcept {
 	return 2000.0 / AudioZoomFactor(zoom_level);
+}
+
+int AudioDurationMsFromSamples(std::int64_t sample_count, int sample_rate) noexcept {
+	if (sample_count <= 0 || sample_rate <= 0)
+		return 0;
+	auto const duration = std::ceil(
+		static_cast<long double>(sample_count) * 1000.0L / sample_rate);
+	return static_cast<int>(std::clamp<long double>(
+		duration,
+		0.0L,
+		static_cast<long double>(std::numeric_limits<int>::max())));
+}
+
+int LegacyLogicalPixelFromTime(int time_ms, double milliseconds_per_logical_pixel) noexcept {
+	if (!std::isfinite(milliseconds_per_logical_pixel)
+		|| milliseconds_per_logical_pixel <= 0.0) {
+		return 0;
+	}
+	auto const value = static_cast<double>(time_ms) / milliseconds_per_logical_pixel;
+	return static_cast<int>(std::clamp(
+		value,
+		static_cast<double>(std::numeric_limits<int>::min()),
+		static_cast<double>(std::numeric_limits<int>::max())));
+}
+
+float LegacyDeviceXFromTime(FrameViewport const& viewport, int time_ms) noexcept {
+	if (!viewport.IsValid())
+		return 0.f;
+	auto const logical_milliseconds_per_pixel =
+		viewport.milliseconds_per_column * viewport.content_scale;
+	auto const logical_x = LegacyLogicalPixelFromTime(
+		time_ms, logical_milliseconds_per_pixel) - viewport.scroll_left;
+	return static_cast<float>(viewport.content.x + logical_x * viewport.content_scale);
+}
+
+float LegacyDeviceWidthFromDuration(FrameViewport const& viewport, int duration_ms) noexcept {
+	if (!viewport.IsValid())
+		return 0.f;
+	auto const logical_milliseconds_per_pixel =
+		viewport.milliseconds_per_column * viewport.content_scale;
+	auto const logical_width = LegacyLogicalPixelFromTime(
+		duration_ms, logical_milliseconds_per_pixel);
+	return static_cast<float>(logical_width * viewport.content_scale);
 }
 
 int AudioScrollLeftAfterZoom(
@@ -148,6 +194,7 @@ FrameViewport BuildFrameViewport(FrameViewportRequest const& request) noexcept {
 
 	viewport.target_width = ScaleBoundary(request.logical_width, request.content_scale);
 	viewport.target_height = ScaleBoundary(request.logical_height, request.content_scale);
+	viewport.content_scale = request.content_scale;
 	auto const timeline_bottom = std::min(
 		viewport.target_height,
 		ScaleBoundary(request.timeline_height, request.content_scale));
@@ -229,6 +276,7 @@ int MousePositionMsForClientPoint(
 CursorPlacement BuildCursorPlacement(
 	FrameViewport const& viewport,
 	int mouse_position_ms,
+	int mouse_logical_x,
 	int playback_position_ms) noexcept {
 	CursorPlacement placement;
 	if (!viewport.IsValid())
@@ -237,24 +285,21 @@ CursorPlacement BuildCursorPlacement(
 	if (playback_position_ms >= 0) {
 		placement.source = CursorSource::Playback;
 		placement.position_ms = playback_position_ms;
+		placement.device_x = LegacyDeviceXFromTime(viewport, playback_position_ms);
 	}
 	else if (mouse_position_ms >= 0) {
 		placement.source = CursorSource::Mouse;
 		placement.position_ms = mouse_position_ms;
+		placement.device_x = static_cast<float>(
+			viewport.content.x + mouse_logical_x * viewport.content_scale);
 	}
 	else {
 		return placement;
 	}
 
-	auto const device_x = viewport.content.x
-		+ placement.position_ms / viewport.milliseconds_per_column
-		- viewport.first_column_exact;
-	if (!std::isfinite(device_x)
-		|| device_x < std::numeric_limits<float>::lowest()
-		|| device_x > std::numeric_limits<float>::max()) {
+	if (!std::isfinite(placement.device_x)) {
 		return {};
 	}
-	placement.device_x = static_cast<float>(device_x);
 	return placement;
 }
 
@@ -393,11 +438,18 @@ std::vector<TimelineMark> BuildTimelineMarks(
 		return marks;
 
 	scroll_left = std::max(0.0, scroll_left);
+	auto const pixel_left = static_cast<std::int64_t>(std::clamp(
+		scroll_left,
+		0.0,
+		static_cast<double>(std::numeric_limits<std::int64_t>::max())));
 
 	// Figure out the first scale mark to show, matching the legacy rounding:
 	// truncate towards zero, then step forward one mark if that landed left of
 	// the visible time.
-	auto const ms_left = scroll_left * milliseconds_per_pixel;
+	auto const ms_left = static_cast<std::int64_t>(std::clamp(
+		pixel_left * milliseconds_per_pixel,
+		0.0,
+		static_cast<double>(std::numeric_limits<std::int64_t>::max())));
 	auto index = static_cast<std::int64_t>(ms_left / plan.minor_divisor);
 	if (index * plan.minor_divisor < ms_left)
 		index += 1;
@@ -410,7 +462,11 @@ std::vector<TimelineMark> BuildTimelineMarks(
 		std::min(width / std::max(1.0, plan.minor_divisor / milliseconds_per_pixel) + 4.0, 1024.0)));
 	double position = 0.0;
 	do {
-		position = index * plan.minor_divisor / milliseconds_per_pixel - scroll_left;
+		auto const absolute_pixel = static_cast<std::int64_t>(std::clamp(
+			index * plan.minor_divisor / milliseconds_per_pixel,
+			static_cast<double>(std::numeric_limits<std::int64_t>::min()),
+			static_cast<double>(std::numeric_limits<std::int64_t>::max())));
+		position = static_cast<double>(absolute_pixel - pixel_left);
 		marks.push_back({
 			index,
 			index * plan.minor_divisor,
@@ -544,10 +600,21 @@ std::vector<DeviceStyleSpan> BuildDeviceStyleSpans(
 	auto append_span = [&](double start, double end) {
 		if (!(end > start))
 			return;
-		auto const x1 = static_cast<float>(viewport.content.x
-			+ (start - visible_first_ms) / viewport.milliseconds_per_column);
-		auto const x2 = static_cast<float>(viewport.content.x
-			+ (end - visible_first_ms) / viewport.milliseconds_per_column);
+		auto const content_left = static_cast<float>(viewport.content.x);
+		auto const content_right = static_cast<float>(
+			viewport.content.x + viewport.content.width);
+		auto const x1 = start <= visible_first_ms
+			? content_left
+			: std::clamp(
+				LegacyDeviceXFromTime(viewport, static_cast<int>(start)),
+				content_left,
+				content_right);
+		auto const x2 = end >= visible_last_ms
+			? content_right
+			: std::clamp(
+				LegacyDeviceXFromTime(viewport, static_cast<int>(end)),
+				content_left,
+				content_right);
 		if (!(x2 > x1))
 			return;
 		auto const style = current_style();

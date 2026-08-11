@@ -17,6 +17,17 @@ TEST(skia_audio_frame_model, zoom_math_matches_legacy_audio_display) {
 	EXPECT_DOUBLE_EQ(audio::AudioMillisecondsPerLogicalPixel(1), 16.0);
 }
 
+TEST(skia_audio_frame_model, duration_and_time_projection_match_legacy_integer_rules) {
+	EXPECT_EQ(0, audio::AudioDurationMsFromSamples(0, 48000));
+	EXPECT_EQ(1, audio::AudioDurationMsFromSamples(1, 48000));
+	EXPECT_EQ(1001, audio::AudioDurationMsFromSamples(48001, 48000));
+	EXPECT_EQ(0, audio::AudioDurationMsFromSamples(48000, 0));
+
+	EXPECT_EQ(3, audio::LegacyLogicalPixelFromTime(79, 20.0));
+	EXPECT_EQ(4, audio::LegacyLogicalPixelFromTime(80, 20.0));
+	EXPECT_EQ(-3, audio::LegacyLogicalPixelFromTime(-79, 20.0));
+}
+
 TEST(skia_audio_frame_model, zoom_preserves_cursor_or_viewport_center_time) {
 	EXPECT_EQ(225, audio::AudioScrollLeftAfterZoom(100, 200, 20.0, 10.0, 2500.0));
 	EXPECT_EQ(300, audio::AudioScrollLeftAfterZoom(100, 200, 20.0, 10.0));
@@ -84,13 +95,13 @@ TEST(skia_audio_frame_model, cursor_placement_prefers_playback_and_uses_device_v
 	auto const viewport = audio::BuildFrameViewport(request);
 	ASSERT_TRUE(viewport.IsValid());
 
-	auto const playback = audio::BuildCursorPlacement(viewport, 400, 800);
+	auto const playback = audio::BuildCursorPlacement(viewport, 400, 17, 800);
 	EXPECT_EQ(audio::CursorSource::Playback, playback.source);
 	EXPECT_EQ(800, playback.position_ms);
 	EXPECT_NEAR(46.25f, playback.device_x, 0.001f);
 	EXPECT_STREQ("playback", audio::CursorSourceName(playback.source));
 
-	auto const mouse = audio::BuildCursorPlacement(viewport, 400, -1);
+	auto const mouse = audio::BuildCursorPlacement(viewport, 400, 17, -1);
 	EXPECT_EQ(audio::CursorSource::Mouse, mouse.source);
 	EXPECT_EQ(400, mouse.position_ms);
 	EXPECT_NEAR(21.25f, mouse.device_x, 0.001f);
@@ -109,11 +120,29 @@ TEST(skia_audio_frame_model, cursor_placement_hides_when_no_live_source_or_viewp
 	auto const viewport = audio::BuildFrameViewport(request);
 	ASSERT_TRUE(viewport.IsValid());
 
-	auto const hidden = audio::BuildCursorPlacement(viewport, -1, -1);
+	auto const hidden = audio::BuildCursorPlacement(viewport, -1, -1, -1);
 	EXPECT_FALSE(hidden.IsActive());
 	EXPECT_EQ(-1, hidden.position_ms);
 	EXPECT_STREQ("none", audio::CursorSourceName(hidden.source));
-	EXPECT_FALSE(audio::BuildCursorPlacement({}, 100, -1).IsActive());
+	EXPECT_FALSE(audio::BuildCursorPlacement({}, 100, 5, -1).IsActive());
+}
+
+TEST(skia_audio_frame_model, legacy_device_projection_truncates_before_hidpi_scaling) {
+	audio::FrameViewportRequest request;
+	request.logical_width = 200;
+	request.logical_height = 120;
+	request.content_scale = 1.25;
+	request.timeline_height = 10;
+	request.scrollbar_height = 10;
+	request.scroll_left = 3;
+	request.duration_ms = 6000;
+	request.milliseconds_per_logical_pixel = 20.0;
+	auto const viewport = audio::BuildFrameViewport(request);
+	ASSERT_TRUE(viewport.IsValid());
+
+	EXPECT_FLOAT_EQ(0.f, audio::LegacyDeviceXFromTime(viewport, 79));
+	EXPECT_FLOAT_EQ(1.25f, audio::LegacyDeviceXFromTime(viewport, 80));
+	EXPECT_FLOAT_EQ(3.75f, audio::LegacyDeviceWidthFromDuration(viewport, 79));
 }
 
 TEST(skia_audio_frame_model, viewport_clamps_scroll_to_audio_extent) {

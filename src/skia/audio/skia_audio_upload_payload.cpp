@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <mutex>
 #include <queue>
@@ -12,6 +13,7 @@ namespace aegisub::skia::audio {
 namespace {
 
 constexpr float kSpectrumPowerEncodingMaximum = 8.f;
+constexpr std::uint32_t kSpectrumPowerEncodingFactor = (1u << 24) - 1;
 
 bool CheckedAdd(std::size_t left, std::size_t right, std::size_t& result) noexcept {
 	if (left > std::numeric_limits<std::size_t>::max() - right)
@@ -41,13 +43,16 @@ std::size_t HashTileKey(ContentTileKey const& key) noexcept {
 	return HashCombine(hash, key.spectrum_bin_count);
 }
 
-int WaveformMaskY(float value) noexcept {
+std::uint16_t EncodeWaveformEndpoint(float value) noexcept {
 	value = std::clamp(value, -1.f, 1.f);
-	auto const coordinate = (1.f - value) * 0.5f * (kWaveformUploadMaskHeight - 1);
-	return std::clamp(
-		static_cast<int>(std::lround(coordinate)),
-		0,
-		static_cast<int>(kWaveformUploadMaskHeight - 1));
+	auto const normalized = (static_cast<double>(value) + 1.0) * 0.5;
+	return static_cast<std::uint16_t>(std::lround(
+		normalized * std::numeric_limits<std::uint16_t>::max()));
+}
+
+void StoreWaveformEndpoint(std::uint8_t *destination, float value) noexcept {
+	auto const encoded = EncodeWaveformEndpoint(value);
+	std::memcpy(destination, &encoded, sizeof(encoded));
 }
 
 bool Continue(
@@ -86,11 +91,13 @@ bool ContentUploadPayload::HasValidShape() const noexcept {
 	if (!CheckedMultiply(width, height, pixels))
 		return false;
 	if (key.tile.kind == ContentKind::Waveform) {
+		std::size_t bytes = 0;
 		return key.variant_revision == kWaveformUploadPayloadRevision
 			&& key.tile.spectrum_bin_count == 0
-			&& height == kWaveformUploadMaskHeight
-			&& primary.size() == pixels
-			&& secondary.size() == pixels;
+			&& height == kWaveformUploadTextureHeight
+			&& CheckedMultiply(width, kWaveformUploadBytesPerColumn, bytes)
+			&& primary.size() == bytes
+			&& secondary.empty();
 	}
 
 	std::size_t bytes = 0;
@@ -124,25 +131,27 @@ ContentUploadPayloadBuildResult BuildWaveformUploadPayload(
 	auto payload = std::make_shared<ContentUploadPayload>();
 	payload->key = MakeContentUploadPayloadKey(tile.key);
 	payload->width = tile.key.column_count;
-	payload->height = kWaveformUploadMaskHeight;
-	auto const pixel_count = static_cast<std::size_t>(payload->width) * payload->height;
-	payload->primary.resize(pixel_count);
-	payload->secondary.resize(pixel_count);
+	payload->height = kWaveformUploadTextureHeight;
+	payload->primary.resize(
+		static_cast<std::size_t>(payload->width) * kWaveformUploadBytesPerColumn);
 
 	for (std::size_t x = 0; x < payload->width; ++x) {
 		if (!Continue(should_continue, tile.key.generation))
 			return { ContentUploadPayloadBuildStatus::Cancelled, {} };
 		auto const& column = tile.waveform[x];
-		auto draw = [&](std::vector<std::uint8_t>& mask, float low, float high) {
-			if (low > high)
-				std::swap(low, high);
-			auto const top = WaveformMaskY(high);
-			auto const bottom = WaveformMaskY(low);
-			for (int y = top; y <= bottom; ++y)
-				mask[static_cast<std::size_t>(y) * payload->width + x] = 255;
-		};
-		draw(payload->primary, column.peak_min, column.peak_max);
-		draw(payload->secondary, column.average_min, column.average_max);
+		auto peak_min = column.peak_min;
+		auto peak_max = column.peak_max;
+		auto average_min = column.average_min;
+		auto average_max = column.average_max;
+		if (peak_min > peak_max)
+			std::swap(peak_min, peak_max);
+		if (average_min > average_max)
+			std::swap(average_min, average_max);
+		auto *encoded = payload->primary.data() + x * kWaveformUploadBytesPerColumn;
+		StoreWaveformEndpoint(encoded + sizeof(std::uint16_t) * 0, peak_min);
+		StoreWaveformEndpoint(encoded + sizeof(std::uint16_t) * 1, peak_max);
+		StoreWaveformEndpoint(encoded + sizeof(std::uint16_t) * 2, average_min);
+		StoreWaveformEndpoint(encoded + sizeof(std::uint16_t) * 3, average_max);
 	}
 
 	if (!payload->IsValid())
@@ -187,15 +196,15 @@ ContentUploadPayloadBuildResult BuildSpectrumUploadPayload(
 						x * tile.key.spectrum_bin_count + bin]);
 			}
 			power = std::clamp(power, 0.f, kSpectrumPowerEncodingMaximum);
-			auto const encoded = static_cast<std::uint16_t>(std::lround(
+			auto const encoded = static_cast<std::uint32_t>(std::lround(
 				power / kSpectrumPowerEncodingMaximum
-					* std::numeric_limits<std::uint16_t>::max()));
+					* kSpectrumPowerEncodingFactor));
 			auto const image_y = payload->height - 1 - y;
 			auto *pixel = payload->primary.data()
 				+ (static_cast<std::size_t>(image_y) * payload->width + x) * 4;
-			pixel[0] = static_cast<std::uint8_t>(encoded >> 8);
-			pixel[1] = static_cast<std::uint8_t>(encoded & 0xFF);
-			pixel[2] = 0;
+			pixel[0] = static_cast<std::uint8_t>(encoded >> 16);
+			pixel[1] = static_cast<std::uint8_t>((encoded >> 8) & 0xFF);
+			pixel[2] = static_cast<std::uint8_t>(encoded & 0xFF);
 			pixel[3] = 255;
 		}
 	}
@@ -211,7 +220,7 @@ std::size_t EstimateContentUploadPayloadBytes(
 	if (key.column_count == 0)
 		return 0;
 	auto const height = key.kind == ContentKind::Waveform
-		? kWaveformUploadMaskHeight : spectrum_output_height;
+		? kWaveformUploadTextureHeight : spectrum_output_height;
 	if (height == 0)
 		return 0;
 
@@ -221,7 +230,8 @@ std::size_t EstimateContentUploadPayloadBytes(
 	if (!CheckedMultiply(key.column_count, height, pixels))
 		return 0;
 	if (key.kind == ContentKind::Waveform) {
-		if (key.spectrum_bin_count != 0 || !CheckedMultiply(pixels, 2, bytes))
+		if (key.spectrum_bin_count != 0
+			|| !CheckedMultiply(key.column_count, kWaveformUploadBytesPerColumn, bytes))
 			return 0;
 	}
 	else if (key.spectrum_bin_count == 0 || !CheckedMultiply(pixels, 4, bytes)) {

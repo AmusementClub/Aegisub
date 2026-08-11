@@ -161,6 +161,25 @@ std::uint32_t ToArgb(agi::Color const& color) {
 		| static_cast<std::uint32_t>(color.b);
 }
 
+MarkerFrame BuildMarkerFrame(AudioMarkerPixel const& pixel, double content_scale) {
+	auto const pen = pixel.marker->GetStyle();
+	auto const color = ToArgb(pen.GetColour());
+	auto const foot_color = [color](AudioMarker const *marker) {
+		return marker ? ToArgb(marker->GetStyle().GetColour()) : color;
+	};
+	return {
+		static_cast<float>(pixel.x),
+		color,
+		std::max(1, static_cast<int>(std::lround(pen.GetWidth() * content_scale))),
+		static_cast<std::uint8_t>(pixel.feet),
+		foot_color(pixel.left_foot_marker),
+		foot_color(pixel.right_foot_marker),
+		pen.GetStyle() == wxPENSTYLE_DOT
+			? MarkerLineStyle::Dotted
+			: MarkerLineStyle::Solid,
+	};
+}
+
 struct UiChromeColors {
 	std::uint32_t dark = 0;
 	std::uint32_t light = 0;
@@ -179,13 +198,18 @@ public:
 };
 
 int ProviderDurationMs(agi::AudioProvider const *provider) {
-	if (!provider || provider->GetSampleRate() <= 0)
-		return 0;
-	auto const duration = static_cast<long double>(provider->GetNumSamples())
-		* 1000.0L / provider->GetSampleRate();
-	if (!std::isfinite(static_cast<double>(duration)))
-		return 0;
-	return static_cast<int>(std::clamp<long double>(duration, 0, std::numeric_limits<int>::max()));
+	return provider
+		? AudioDurationMsFromSamples(provider->GetNumSamples(), provider->GetSampleRate())
+		: 0;
+}
+
+int RelativeLogicalXFromTime(int time_ms, int scroll_left, double milliseconds_per_pixel) {
+	auto const absolute = LegacyLogicalPixelFromTime(time_ms, milliseconds_per_pixel);
+	auto const relative = static_cast<std::int64_t>(absolute) - scroll_left;
+	return static_cast<int>(std::clamp<std::int64_t>(
+		relative,
+		std::numeric_limits<int>::min(),
+		std::numeric_limits<int>::max()));
 }
 
 int SpectrumQuality() {
@@ -330,6 +354,7 @@ struct SkiaAudioDisplay::Impl {
 	int presentation_refresh_rate = 60;
 	int playback_position_ms = -1;
 	int mouse_position_ms = -1;
+	int mouse_position_x = -1;
 	std::vector<AudioMarker *> dragged_markers;
 	wxMouseButton dragged_button = wxMOUSE_BTN_NONE;
 	AudioMarkerDragDeadZone marker_drag_dead_zone;
@@ -366,7 +391,13 @@ SkiaAudioDisplay::SkiaAudioDisplay(
 	FailureInjection failure_injection,
 	std::uint64_t failure_injection_after_content_frames,
 	FailureCallback failure_callback)
-: wxGLCanvas(parent, wxID_ANY, gl_attributes, wxDefaultPosition, wxDefaultSize, wxFULL_REPAINT_ON_RESIZE | wxWANTS_CHARS)
+: wxGLCanvas(
+	parent,
+	wxID_ANY,
+	gl_attributes,
+	wxDefaultPosition,
+	wxDefaultSize,
+	wxFULL_REPAINT_ON_RESIZE | wxWANTS_CHARS | wxBORDER_SIMPLE)
 , impl(std::make_unique<Impl>(
 	this,
 	controller,
@@ -676,6 +707,7 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 		auto const placement = BuildCursorPlacement(
 			impl->viewport,
 			impl->mouse_position_ms,
+			impl->mouse_position_x,
 			impl->playback_position_ms);
 		if (!placement.IsActive())
 			return {};
@@ -684,9 +716,9 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 		cursor->x = placement.device_x;
 		cursor->position_ms = placement.position_ms;
 		cursor->playback = placement.source == CursorSource::Playback;
-		cursor->color = cursor->playback
-			? ToArgb(OPT_GET("Colour/Audio Display/Play Cursor")->GetColor())
-			: 0xFFFFFFFFu;
+		// Legacy PaintTrackCursor always uses wxWHITE for both mouse and
+		// playback cursors; the configured play-cursor colour is not consulted.
+		cursor->color = 0xFFFFFFFFu;
 		if (!cursor->playback
 			&& OPT_GET("Audio/Display/Draw/Cursor Time")->GetBool()) {
 			cursor->label = agi::Time(cursor->position_ms).GetAssFormatted();
@@ -791,10 +823,8 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 		AudioMarkerVector markers;
 		timing->GetMarkers(TimeRange(first_visible_ms, last_visible_ms), markers);
 		auto const x_from_marker = [this](AudioMarker const& marker) {
-			return static_cast<int>(std::lround(
-				impl->viewport.content.x
-				+ marker.GetPosition() / impl->viewport.milliseconds_per_column
-				- impl->viewport.first_column_exact));
+			return static_cast<int>(LegacyDeviceXFromTime(
+				impl->viewport, marker.GetPosition()));
 		};
 		auto const pixels = AggregateAudioMarkersByPixel(
 			markers,
@@ -802,17 +832,8 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 			static_cast<int>(std::ceil(impl->viewport.content.x + impl->viewport.content.width)) + 8,
 			x_from_marker);
 		frame.markers.reserve(pixels.size());
-		for (auto const& pixel : pixels) {
-			auto const *marker = pixel.marker;
-			auto const pen = marker->GetStyle();
-			frame.markers.push_back({
-				static_cast<float>(pixel.x),
-				ToArgb(pen.GetColour()),
-				std::max(1, static_cast<int>(std::lround(
-					pen.GetWidth() * GetContentScaleFactor()))),
-				static_cast<std::uint8_t>(pixel.feet),
-			});
-		}
+		for (auto const& pixel : pixels)
+			frame.markers.push_back(BuildMarkerFrame(pixel, GetContentScaleFactor()));
 	};
 	if (!impl->provider) {
 		if (!impl->presenter->RenderDiagnosticFrame(context, target)) {
@@ -915,7 +936,7 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 			}
 			for (int style = AudioStyle_Normal; style < AudioStyle_MAX; ++style) {
 				AudioColorScheme waveform_scheme(
-					8,
+					6,
 					waveform_scheme_name,
 					static_cast<AudioRenderingStyle>(style));
 				impl->waveform_style_colors[style] = {
@@ -929,12 +950,13 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 					palette->revision = (impl->presentation_revision << 3)
 						| static_cast<std::uint64_t>(style + 1);
 					AudioColorScheme spectrum_scheme(
-						8,
+						12,
 						spectrum_scheme_name,
 						static_cast<AudioRenderingStyle>(style));
 					for (std::size_t i = 0; i < palette->colors.size(); ++i)
 						palette->colors[i] = ToArgb(
-							spectrum_scheme.get(static_cast<float>(i) / 255.f));
+							spectrum_scheme.get(static_cast<float>(i)
+								/ static_cast<float>(kSpectrumPaletteFactor)));
 					impl->spectrum_style_palettes[style] = std::move(palette);
 				}
 			}
@@ -974,11 +996,14 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 		scrollbar_frame->selection_color = ui_colors.selection;
 		frame.scrollbar = scrollbar_frame;
 
+		frame.draw_waveform_average =
+			OPT_GET("Audio/Display/Waveform Style")->GetInt() != 0;
+		auto const waveform_zero_color_index = frame.draw_waveform_average ? 3 : 1;
 		frame.background_color = impl->waveform_style_colors[AudioStyle_Normal][0];
 		frame.waveform_peak_color = impl->waveform_style_colors[AudioStyle_Normal][1];
 		frame.waveform_average_color = impl->waveform_style_colors[AudioStyle_Normal][2];
-		frame.waveform_zero_color = impl->waveform_style_colors[AudioStyle_Normal][3];
-		frame.draw_waveform_average = OPT_GET("Audio/Display/Waveform Style")->GetInt() != 0;
+		frame.waveform_zero_color =
+			impl->waveform_style_colors[AudioStyle_Normal][waveform_zero_color_index];
 
 		if (frame.kind == ContentKind::Spectrum) {
 			frame.spectrum_palette = impl->spectrum_style_palettes[AudioStyle_Normal];
@@ -1001,7 +1026,8 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 			style.background_color = impl->waveform_style_colors[style_index][0];
 			style.waveform_peak_color = impl->waveform_style_colors[style_index][1];
 			style.waveform_average_color = impl->waveform_style_colors[style_index][2];
-			style.waveform_zero_color = impl->waveform_style_colors[style_index][3];
+			style.waveform_zero_color =
+				impl->waveform_style_colors[style_index][waveform_zero_color_index];
 			if (frame.kind == ContentKind::Spectrum) {
 				style.spectrum_palette = impl->spectrum_style_palettes[style_index];
 				style.background_color = style.spectrum_palette->colors.front();
@@ -1016,19 +1042,12 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 				(impl->viewport.first_column_exact + impl->viewport.content.width)
 					* impl->viewport.milliseconds_per_column)));
 			TimeRange const visible_range(first_visible_ms, last_visible_ms);
-			auto const x_from_ms = [this](int time_ms) {
-				return static_cast<float>(impl->viewport.content.x
-					+ time_ms / impl->viewport.milliseconds_per_column
-					- impl->viewport.first_column_exact);
-			};
 
 			AudioMarkerVector markers;
 			timing->GetMarkers(visible_range, markers);
 			auto const x_from_marker = [this](AudioMarker const& marker) {
-				return static_cast<int>(std::lround(
-					impl->viewport.content.x
-					+ marker.GetPosition() / impl->viewport.milliseconds_per_column
-					- impl->viewport.first_column_exact));
+				return static_cast<int>(LegacyDeviceXFromTime(
+					impl->viewport, marker.GetPosition()));
 			};
 			auto const pixels = AggregateAudioMarkersByPixel(
 				markers,
@@ -1036,24 +1055,16 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 				static_cast<int>(std::ceil(impl->viewport.content.x + impl->viewport.content.width)) + 8,
 				x_from_marker);
 			frame.markers.reserve(pixels.size());
-			for (auto const& pixel : pixels) {
-				auto const *marker = pixel.marker;
-				auto const pen = marker->GetStyle();
-				frame.markers.push_back({
-					static_cast<float>(pixel.x),
-					ToArgb(pen.GetColour()),
-					std::max(1, static_cast<int>(std::lround(pen.GetWidth() * GetContentScaleFactor()))),
-					static_cast<std::uint8_t>(pixel.feet),
-				});
-			}
+			for (auto const& pixel : pixels)
+				frame.markers.push_back(BuildMarkerFrame(pixel, GetContentScaleFactor()));
 
 			std::vector<AudioLabelProvider::AudioLabel> labels;
 			timing->GetLabels(visible_range, labels);
 			frame.labels.reserve(labels.size());
 			for (auto const& label : labels) {
 				frame.labels.push_back({
-					x_from_ms(label.range.begin()),
-					static_cast<float>(label.range.length() / impl->viewport.milliseconds_per_column),
+					LegacyDeviceXFromTime(impl->viewport, label.range.begin()),
+					LegacyDeviceWidthFromDuration(impl->viewport, label.range.length()),
 					label.text.utf8_string(),
 				});
 			}
@@ -1061,8 +1072,8 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 			auto const selection = timing->GetPrimaryPlaybackRange();
 			scrollbar_frame->selection_start = std::max(0, static_cast<int>(std::floor(
 				selection.begin() / impl->viewport.milliseconds_per_column)));
-			scrollbar_frame->selection_length = std::max(0, static_cast<int>(std::ceil(
-				selection.length() / impl->viewport.milliseconds_per_column)));
+			scrollbar_frame->selection_length = std::max(0, static_cast<int>(
+				selection.length() / impl->viewport.milliseconds_per_column));
 		}
 		frame.cursor = make_cursor_frame();
 
@@ -1492,6 +1503,10 @@ void SkiaAudioDisplay::ScheduleMiddleSeekTimer() {
 		auto const point = ScreenToClient(wxGetMousePosition());
 		impl->mouse_position_ms = std::max(0, static_cast<int>(
 			(impl->scroll_left + point.x) * AudioMillisecondsPerLogicalPixel(impl->zoom_level)));
+		impl->mouse_position_x = RelativeLogicalXFromTime(
+			impl->mouse_position_ms,
+			impl->scroll_left,
+			AudioMillisecondsPerLogicalPixel(impl->zoom_level));
 	}
 	auto next = impl->middle_seek_policy.NextPreviewTime();
 	if (!next) {
@@ -1519,6 +1534,7 @@ void SkiaAudioDisplay::FinishMiddleSeek(int time_ms) {
 		point.y,
 		scale,
 		AudioMillisecondsPerLogicalPixel(impl->zoom_level));
+	impl->mouse_position_x = impl->mouse_position_ms >= 0 ? point.x : -1;
 	Invalidate(Change::Cursor);
 	RequestRepaint(true);
 }
@@ -1535,6 +1551,7 @@ void SkiaAudioDisplay::CancelMiddleSeek() {
 			core.videoController->CancelInteractiveSeekPreview();
 	}
 	impl->mouse_position_ms = -1;
+	impl->mouse_position_x = -1;
 }
 
 void SkiaAudioDisplay::OnMiddleSeekTimer(wxTimerEvent&) {
@@ -1548,6 +1565,10 @@ void SkiaAudioDisplay::OnMiddleSeekTimer(wxTimerEvent&) {
 		auto const point = ScreenToClient(wxGetMousePosition());
 		impl->mouse_position_ms = std::max(0, static_cast<int>(
 			(impl->scroll_left + point.x) * AudioMillisecondsPerLogicalPixel(impl->zoom_level)));
+		impl->mouse_position_x = RelativeLogicalXFromTime(
+			impl->mouse_position_ms,
+			impl->scroll_left,
+			AudioMillisecondsPerLogicalPixel(impl->zoom_level));
 	}
 	if (auto output = impl->middle_seek_policy.OnTimer(NavigationPreviewPolicy::Clock::now()))
 		EmitMiddleSeekOutput(output->target, false);
@@ -1591,6 +1612,8 @@ void SkiaAudioDisplay::OnPlaybackStop() {
 		return;
 	perf_trace::AudioUiDurationScope trace("audio_display.cursor_update", 1, 0);
 	impl->playback_position_ms = -1;
+	impl->mouse_position_ms = -1;
+	impl->mouse_position_x = -1;
 	Invalidate(Change::Cursor);
 	RequestRepaint();
 }
@@ -1653,6 +1676,7 @@ void SkiaAudioDisplay::OnSelectionChanged() {
 						point.y,
 						scale,
 						AudioMillisecondsPerLogicalPixel(impl->zoom_level));
+					impl->mouse_position_x = impl->mouse_position_ms >= 0 ? point.x : -1;
 					Invalidate(Change::Cursor);
 				}
 			}
@@ -1698,38 +1722,39 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 		return static_cast<int>(std::clamp<double>(value, 0.0, std::numeric_limits<int>::max()));
 	};
 	auto *timing = impl->audio_controller ? impl->audio_controller->GetTimingController() : nullptr;
+	auto const set_middle_cursor = [&](int time_ms) {
+		impl->mouse_position_ms = time_ms;
+		impl->mouse_position_x = RelativeLogicalXFromTime(
+			time_ms,
+			impl->scroll_left,
+			AudioMillisecondsPerLogicalPixel(impl->zoom_level));
+	};
 
-	// Scroll the display after a mouse-up near one of the edges, mirroring the
-	// legacy AudioDisplay::OnMouseEvent edge-scroll. Placed before the drag/
-	// middle-seek branches so it fires on LeftUp/RightUp regardless of which
-	// interaction is ending (matching legacy ordering), using the raw mouse x.
-	if ((event.LeftUp() || event.RightUp()) && OPT_GET("Audio/Auto/Scroll")->GetBool()) {
-		if (mouse.x < client_width / 20)
-			ScrollBy(-client_width / 3);
-		else if (client_width - mouse.x < client_width / 20)
-			ScrollBy(client_width / 3);
-	}
-
-	if (event.MiddleIsDown()) {
-		auto core = impl->project_context->GetCore();
-		if (core.videoController && core.project->VideoProvider()) {
+	if (impl->middle_seek_active) {
+		if (event.MiddleUp() || !event.MiddleIsDown()) {
+			FinishMiddleSeek(time_from_x(mouse.x));
+		}
+		else {
 			auto const time_ms = time_from_x(mouse.x);
-			impl->mouse_position_ms = time_ms;
-			if (!impl->middle_seek_active)
-				core.videoController->BeginInteractiveSeekPreview();
-			impl->middle_seek_active = true;
+			set_middle_cursor(time_ms);
 			if (auto output = impl->middle_seek_policy.OnMotion(
-				time_ms, NavigationPreviewPolicy::Clock::now(), event.MiddleDown()))
+				time_ms, NavigationPreviewPolicy::Clock::now(), event.MiddleDown())) {
 				EmitMiddleSeekOutput(output->target, false);
+			}
 			ScheduleMiddleSeekTimer();
 			Invalidate(Change::Cursor);
 			RequestRepaint(true);
 		}
 		return;
 	}
-	if (event.MiddleUp() && impl->middle_seek_active) {
-		FinishMiddleSeek(time_from_x(mouse.x));
-		return;
+
+	// Scroll the display after a mouse-up near one of the edges, mirroring the
+	// legacy AudioDisplay::OnMouseEvent edge-scroll, using the raw mouse x.
+	if ((event.LeftUp() || event.RightUp()) && OPT_GET("Audio/Auto/Scroll")->GetBool()) {
+		if (mouse.x < client_width / 20)
+			ScrollBy(-client_width / 3);
+		else if (client_width - mouse.x < client_width / 20)
+			ScrollBy(client_width / 3);
 	}
 
 	if (impl->timeline_dragging) {
@@ -1812,22 +1837,53 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 
 	if (event.IsButton())
 		SetFocus();
-	if (event.LeftDown() && mouse.y < timeline_bottom) {
-		// The motion path sets SIZEWE on hover, but a press can start the drag
-		// without a prior motion event (e.g. focus jump + click). Set it here
-		// too, mirroring legacy ForwardMouseEvent's timeline LeftDown handling.
-		SetCursor(wxCursor(wxCURSOR_SIZEWE));
-		impl->timeline_dragging = true;
-		impl->drag_last_x = mouse.x;
-		if (!HasCapture()) CaptureMouse();
+	auto const over_timeline = mouse.y < timeline_bottom;
+	auto const over_scrollbar = mouse.y >= scrollbar_top;
+	if (over_timeline || over_scrollbar) {
+		if (!impl->audio_controller->IsPlaying()
+			&& (impl->mouse_position_ms >= 0 || impl->mouse_position_x >= 0)) {
+			impl->mouse_position_ms = -1;
+			impl->mouse_position_x = -1;
+			Invalidate(Change::Cursor);
+			RequestRepaint(true);
+		}
+		if (over_timeline)
+			SetCursor(wxCursor(wxCURSOR_SIZEWE));
+		else if (event.Moving())
+			SetCursor(wxNullCursor);
+
+		if (event.LeftDown() && over_timeline) {
+			impl->timeline_dragging = true;
+			impl->drag_last_x = mouse.x;
+			if (!HasCapture()) CaptureMouse();
+		}
+		else if (event.LeftDown() && over_scrollbar) {
+			impl->scrollbar_dragging = true;
+			if (!HasCapture()) CaptureMouse();
+			wxMouseEvent motion(event);
+			motion.SetEventType(wxEVT_MOTION);
+			OnMouseEvent(motion);
+		}
+		// Legacy ForwardMouseEvent consumes every event in the timeline and
+		// scrollbar bands, including middle-button events.
 		return;
 	}
-	if (event.LeftDown() && mouse.y >= scrollbar_top) {
-		impl->scrollbar_dragging = true;
-		if (!HasCapture()) CaptureMouse();
-		wxMouseEvent motion(event);
-		motion.SetEventType(wxEVT_MOTION);
-		OnMouseEvent(motion);
+
+	if (event.MiddleIsDown()) {
+		auto core = impl->project_context->GetCore();
+		if (core.videoController && core.project->VideoProvider()) {
+			auto const time_ms = time_from_x(mouse.x);
+			set_middle_cursor(time_ms);
+			core.videoController->BeginInteractiveSeekPreview();
+			impl->middle_seek_active = true;
+			if (auto output = impl->middle_seek_policy.OnMotion(
+				time_ms, NavigationPreviewPolicy::Clock::now(), event.MiddleDown())) {
+				EmitMiddleSeekOutput(output->target, false);
+			}
+			ScheduleMiddleSeekTimer();
+			Invalidate(Change::Cursor);
+			RequestRepaint(true);
+		}
 		return;
 	}
 
@@ -1838,6 +1894,7 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 			mouse.y,
 			scale,
 			AudioMillisecondsPerLogicalPixel(impl->zoom_level));
+		impl->mouse_position_x = impl->mouse_position_ms >= 0 ? mouse.x : -1;
 		auto const over_audio = impl->mouse_position_ms >= 0;
 		if (!impl->audio_controller->IsPlaying()) {
 			auto const cursor_time_detail = perf_trace::IsEnabled()
@@ -1880,6 +1937,7 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 		auto const saved_scroll_left = impl->scroll_left;
 		auto const saved_content_scroll_left = impl->content_scroll_left;
 		auto const saved_mouse_position_ms = impl->mouse_position_ms;
+		auto const saved_mouse_position_x = impl->mouse_position_x;
 		impl->dragged_markers = event.LeftDown()
 			? timing->OnLeftClick(time_from_x(mouse.x), event.CmdDown(), event.AltDown(), sensitivity, snap)
 			: timing->OnRightClick(time_from_x(mouse.x), event.CmdDown(), sensitivity, snap);
@@ -1890,6 +1948,7 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 			// scrolled viewport; the restored viewport matches the pre-click
 			// state, so the saved cursor time is correct again.
 			impl->mouse_position_ms = saved_mouse_position_ms;
+			impl->mouse_position_x = saved_mouse_position_x;
 			RebuildViewport();
 			Invalidate(Change::Scroll);
 			Invalidate(Change::Cursor);
@@ -1899,6 +1958,7 @@ void SkiaAudioDisplay::OnMouseEvent(wxMouseEvent& event) {
 			impl->marker_drag_dead_zone.Reset(
 				mouse.x, OPT_GET("Audio/Drag Dead Zone")->GetInt());
 			impl->mouse_position_ms = -1;
+			impl->mouse_position_x = -1;
 			if (!HasCapture()) CaptureMouse();
 		}
 		Invalidate(Change::Marker);
@@ -1921,6 +1981,7 @@ void SkiaAudioDisplay::OnMouseEnter(wxMouseEvent& event) {
 			point.y,
 			scale,
 			AudioMillisecondsPerLogicalPixel(impl->zoom_level));
+		impl->mouse_position_x = impl->mouse_position_ms >= 0 ? point.x : -1;
 		perf_trace::AudioUiDurationScope trace("audio_display.cursor_update", 1, 0);
 		Invalidate(Change::Cursor);
 		RequestRepaint(true);
@@ -1934,6 +1995,7 @@ void SkiaAudioDisplay::OnMouseLeave(wxMouseEvent& event) {
 	if (impl && !impl->middle_seek_active && impl->audio_controller) {
 		auto const playing = impl->audio_controller->IsPlaying();
 		impl->mouse_position_ms = -1;
+		impl->mouse_position_x = -1;
 		if (!playing) {
 			perf_trace::AudioUiDurationScope trace("audio_display.cursor_update", 1, 0);
 			Invalidate(Change::Cursor);
@@ -2057,6 +2119,7 @@ void SkiaAudioDisplay::ScrollBy(int pixel_amount, int mouse_x) {
 			* AudioMillisecondsPerLogicalPixel(impl->zoom_level);
 		impl->mouse_position_ms = static_cast<int>(std::clamp<double>(
 			value, 0.0, std::numeric_limits<int>::max()));
+		impl->mouse_position_x = mouse_x;
 		RequestRepaint(true);
 	}
 }

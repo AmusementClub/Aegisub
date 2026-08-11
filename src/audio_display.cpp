@@ -32,6 +32,7 @@
 
 #include "audio_controller.h"
 #include "audio_marker_drag_dead_zone.h"
+#include "audio_marker_pixel_aggregation.h"
 #include "audio_renderer.h"
 #include "audio_renderer_spectrum.h"
 #include "audio_renderer_waveform.h"
@@ -996,8 +997,14 @@ void AudioDisplay::OnPaint(wxPaintEvent&)
 void AudioDisplay::PaintAudio(wxDC &dc, const TimeRange updtime, const wxRect updrect)
 {
 	perf_trace::AudioUiDurationScope trace("audio_display.paint_audio");
-	auto pt = begin(style_ranges), pe = end(style_ranges);
-	while (pt != pe && pt + 1 != pe && (pt + 1)->first < updtime.begin()) ++pt;
+	auto pt = std::upper_bound(
+		begin(style_ranges),
+		end(style_ranges),
+		updtime.begin(),
+		[](int time, auto const& range) { return time < range.first; });
+	if (pt != begin(style_ranges))
+		--pt;
+	auto pe = end(style_ranges);
 
 	int rendered_segment_count = 0;
 	while (pt != pe && pt->first < updtime.end())
@@ -1023,24 +1030,30 @@ void AudioDisplay::PaintMarkers(wxDC &dc, TimeRange updtime)
 	AudioMarkerVector markers;
 	controller->GetTimingController()->GetMarkers(updtime, markers);
 	if (markers.empty()) return;
+	auto const pixels = AggregateAudioMarkersByPixel(
+		markers,
+		-foot_size,
+		GetClientSize().GetWidth() + foot_size,
+		[this](AudioMarker const& marker) { return RelativeXFromTime(marker.GetPosition()); });
 
 	wxDCPenChanger pen_retainer(dc, wxPen());
 	wxDCBrushChanger brush_retainer(dc, wxBrush());
-	for (const auto marker : markers)
+	for (auto const& pixel : pixels)
 	{
-		int marker_x = RelativeXFromTime(marker->GetPosition());
+		auto const *marker = pixel.marker;
+		int marker_x = pixel.x;
 
 		dc.SetPen(marker->GetStyle());
 		dc.DrawLine(marker_x, audio_top, marker_x, audio_top+audio_height);
 
-		if (marker->GetFeet() == AudioMarker::Feet_None) continue;
+		if (pixel.feet == AudioMarker::Feet_None) continue;
 
 		dc.SetBrush(wxBrush(marker->GetStyle().GetColour()));
 		dc.SetPen(*wxTRANSPARENT_PEN);
 
-		if (marker->GetFeet() & AudioMarker::Feet_Left)
+		if (pixel.feet & AudioMarker::Feet_Left)
 			PaintFoot(dc, marker_x, -1);
-		if (marker->GetFeet() & AudioMarker::Feet_Right)
+		if (pixel.feet & AudioMarker::Feet_Right)
 			PaintFoot(dc, marker_x, 1);
 	}
 }
@@ -1167,14 +1180,19 @@ bool AudioDisplay::AppendMarkerRects(TimeRange const& range, std::vector<wxRect>
 
 	AudioMarkerVector markers;
 	controller->GetTimingController()->GetMarkers(range, markers);
-	if (rects.size() + markers.size() > max_marker_rects)
+	auto const pixels = AggregateAudioMarkersByPixel(
+		markers,
+		-foot_size,
+		GetClientSize().GetWidth() + foot_size,
+		[this](AudioMarker const& marker) { return RelativeXFromTime(marker.GetPosition()); });
+	if (rects.size() + pixels.size() > max_marker_rects)
 		return false;
 
-	rects.reserve(rects.size() + markers.size());
-	for (auto const marker : markers)
+	rects.reserve(rects.size() + pixels.size());
+	for (auto const& pixel : pixels)
 	{
-		int const marker_x = RelativeXFromTime(marker->GetPosition());
-		int const pen_width = std::max(1, marker->GetStyle().GetWidth());
+		int const marker_x = pixel.x;
+		int const pen_width = std::max(1, pixel.marker->GetStyle().GetWidth());
 		int const left = marker_x - (pen_width + 1) / 2 - foot_size;
 		int const width = pen_width + foot_size * 2 + 2;
 		rects.emplace_back(left, audio_top, width, audio_height);

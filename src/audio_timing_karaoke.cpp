@@ -47,6 +47,7 @@ public:
 	int GetPosition() const override { return position; }
 	wxPen GetStyle() const override { return *pen; }
 	FeetStyle GetFeet() const override { return style; }
+	Kind GetKind() const override { return Kind::Active; }
 
 	void Move(int new_pos) { position = new_pos; }
 

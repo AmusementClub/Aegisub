@@ -78,6 +78,16 @@ public:
 	int       GetPosition() const override { return position; }
 	wxPen     GetStyle()    const override { return *style; }
 	FeetStyle GetFeet()     const override { return feet; }
+	Kind GetKind() const override {
+		switch (type) {
+			case AudioStyle_Inactive: return Kind::Inactive;
+			case AudioStyle_Selected: return Kind::Selected;
+			case AudioStyle_Primary: return Kind::Active;
+			case AudioStyle_Normal: return Kind::Generic;
+			case AudioStyle_MAX: break;
+		}
+		return Kind::Generic;
+	}
 
 	/// Move the marker to a new position
 	/// @param new_position The position to move the marker to, in milliseconds

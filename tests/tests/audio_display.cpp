@@ -6,6 +6,7 @@
 #include "../../src/audio_display_invalidation_planner.h"
 #include "../../src/audio_latest_range_scheduler.h"
 #include "../../src/audio_marker_drag_dead_zone.h"
+#include "../../src/audio_marker_pixel_aggregation.h"
 #include "../../src/audio_display_source.h"
 #include "../../src/audio_mix_policy.h"
 #include "../../src/audio_scroll_position.h"
@@ -15,6 +16,7 @@
 
 #include <libaegisub/audio/provider.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -27,7 +29,80 @@
 #include <thread>
 #include <vector>
 
+#include <wx/pen.h>
+
 namespace {
+class SyntheticAudioMarker final : public AudioMarker {
+	int position;
+	Kind kind;
+	FeetStyle feet;
+
+public:
+	SyntheticAudioMarker(int position, Kind kind, FeetStyle feet = Feet_None)
+	: position(position), kind(kind), feet(feet) { }
+	int GetPosition() const override { return position; }
+	wxPen GetStyle() const override { return wxPen(); }
+	FeetStyle GetFeet() const override { return feet; }
+	Kind GetKind() const override { return kind; }
+};
+
+TEST(lagi_audio_display, dense_markers_collapse_to_device_pixels_with_semantic_priority) {
+	std::vector<SyntheticAudioMarker> storage;
+	storage.reserve(44289 * 2 + 10);
+	AudioMarkerVector markers;
+	markers.reserve(storage.capacity());
+	for (int line = 0; line < 44289; ++line) {
+		storage.emplace_back(line % 1000, AudioMarker::Kind::Inactive);
+		markers.push_back(&storage.back());
+		storage.emplace_back(line % 1000, AudioMarker::Kind::Inactive);
+		markers.push_back(&storage.back());
+	}
+	auto const collapsed = AggregateAudioMarkersByPixel(
+		markers, 0, 999, [](AudioMarker const& marker) { return marker.GetPosition(); });
+	EXPECT_EQ(88578u, markers.size());
+	EXPECT_EQ(1000u, collapsed.size());
+
+	storage.emplace_back(500, AudioMarker::Kind::Active, AudioMarker::Feet_Left);
+	markers.push_back(&storage.back());
+	storage.emplace_back(500, AudioMarker::Kind::Inactive, AudioMarker::Feet_Right);
+	markers.push_back(&storage.back());
+	storage.emplace_back(500, AudioMarker::Kind::Active, AudioMarker::Feet_Right);
+	markers.push_back(&storage.back());
+	auto const prioritized = AggregateAudioMarkersByPixel(
+		markers, 0, 999, [](AudioMarker const& marker) { return marker.GetPosition(); });
+	ASSERT_EQ(1000u, prioritized.size());
+	auto const it = std::find_if(prioritized.begin(), prioritized.end(), [](auto const& marker) {
+		return marker.x == 500;
+	});
+	ASSERT_NE(prioritized.end(), it);
+	EXPECT_EQ(AudioMarker::Kind::Active, it->marker->GetKind());
+	EXPECT_EQ(AudioMarker::Feet_Both, it->feet);
+
+	storage.emplace_back(501, AudioMarker::Kind::Selected);
+	markers.push_back(&storage.back());
+	storage.emplace_back(501, AudioMarker::Kind::Inactive);
+	markers.push_back(&storage.back());
+	storage.emplace_back(502, AudioMarker::Kind::Keyframe);
+	markers.push_back(&storage.back());
+	storage.emplace_back(502, AudioMarker::Kind::Active);
+	markers.push_back(&storage.back());
+	storage.emplace_back(503, AudioMarker::Kind::VideoPosition);
+	markers.push_back(&storage.back());
+	storage.emplace_back(503, AudioMarker::Kind::Keyframe);
+	markers.push_back(&storage.back());
+	auto const all_priorities = AggregateAudioMarkersByPixel(
+		markers, 0, 999, [](AudioMarker const& marker) { return marker.GetPosition(); });
+	auto kind_at = [&](int x) {
+		auto const marker = std::find_if(all_priorities.begin(), all_priorities.end(), [=](auto const& item) {
+			return item.x == x;
+		});
+		return marker == all_priorities.end() ? AudioMarker::Kind::Generic : marker->marker->GetKind();
+	};
+	EXPECT_EQ(AudioMarker::Kind::Selected, kind_at(501));
+	EXPECT_EQ(AudioMarker::Kind::Keyframe, kind_at(502));
+	EXPECT_EQ(AudioMarker::Kind::VideoPosition, kind_at(503));
+}
+
 class ScopedTestDeadline {
 	std::jthread watchdog;
 

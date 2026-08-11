@@ -10,7 +10,11 @@
 #include <GL/gl.h>
 
 #include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <iomanip>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -94,6 +98,7 @@ public:
 	void const *ContextIdentity() const noexcept { return context; }
 	int Width() const noexcept { return width; }
 	int Height() const noexcept { return height; }
+	bool MakeCurrent() const noexcept { return wglMakeCurrent(dc, context) == TRUE; }
 };
 
 bool Near(unsigned char actual, unsigned char expected) {
@@ -467,7 +472,6 @@ bool ValidateFrameLayerComposition(
 		&& initial_trace.frame_compose_ms >= initial_trace.base_layer_rebuild_ms;
 	if (!initial_composition_valid)
 		std::cerr << "initial retained layer composition was invalid\n";
-
 	// The timeline band is canvas rows 0..19 in this frame: the separator rule is
 	// row 19, major ticks rows 14..18, minor ticks rows 16..18. Rows 0..12 can
 	// therefore only be painted by scale labels, so a non-background pixel there
@@ -617,6 +621,116 @@ bool ValidateContentTraceSubmitFailure(
 	return true;
 }
 
+bool ValidateDenseMarkerCursorBenchmark(
+	aegisub::skia::audio::FrameTarget const& target,
+	SkiaGlContextToken context) {
+	using namespace aegisub::skia::audio;
+	using Clock = std::chrono::steady_clock;
+	constexpr int marker_count = 90809;
+	constexpr int warmup_frames = 4;
+	constexpr int sampled_frames = 84;
+
+	ContentGeneration const generation { 43, 47 };
+	Presenter presenter(FailureInjection::None);
+	ContentFrame frame;
+	frame.generation = generation;
+	frame.static_revision = 1;
+	frame.kind = ContentKind::Waveform;
+	frame.width = static_cast<float>(target.width);
+	frame.height = static_cast<float>(target.height);
+	frame.tiles = { MakeWaveformTile(generation, 0, 64) };
+	frame.markers.reserve(marker_count);
+	for (int marker = 0; marker < marker_count; ++marker) {
+		frame.markers.push_back({
+			static_cast<float>(marker % target.width),
+			0xFFFF00FF,
+			1,
+			0,
+		});
+	}
+	auto cursor = std::make_shared<CursorFrame>();
+	cursor->color = 0xFFFFFF00;
+	frame.cursor = cursor;
+
+	if (!presenter.RenderContentFrame(context, target, frame)) {
+		std::cerr << "dense marker baseline frame failed\n";
+		presenter.Release(context);
+		return false;
+	}
+	auto const initial_trace = presenter.Metrics().last_frame_trace;
+	if (!initial_trace.valid
+		|| initial_trace.marker_count != marker_count
+		|| initial_trace.markers_drawn != marker_count
+		|| initial_trace.marker_layer_rebuild_ms < 0.0) {
+		std::cerr << "dense marker baseline trace was invalid\n";
+		presenter.Release(context);
+		return false;
+	}
+
+	std::vector<double> compose_ms;
+	std::vector<double> wall_ms;
+	compose_ms.reserve(sampled_frames);
+	wall_ms.reserve(sampled_frames);
+	for (int frame_index = 0; frame_index < warmup_frames + sampled_frames; ++frame_index) {
+		cursor->x = static_cast<float>((frame_index * 17) % target.width);
+		auto const started = Clock::now();
+		if (!presenter.RenderCursorFrame(context, target, frame)) {
+			std::cerr << "dense marker cursor-only frame failed\n";
+			presenter.Release(context);
+			return false;
+		}
+		auto const elapsed = std::chrono::duration<double, std::milli>(Clock::now() - started).count();
+		auto const trace = presenter.Metrics().last_frame_trace;
+		if (!trace.valid
+			|| !trace.cursor_only
+			|| !trace.retained_layers_reused
+			|| trace.marker_layer_rebuild_ms >= 0.0
+			|| trace.marker_count != 0
+			|| trace.markers_drawn != 0) {
+			std::cerr << "dense marker cursor-only frame replayed marker work\n";
+			presenter.Release(context);
+			return false;
+		}
+		if (frame_index >= warmup_frames) {
+			compose_ms.push_back(trace.frame_compose_ms);
+			wall_ms.push_back(elapsed);
+		}
+	}
+
+	auto summarize = [](std::vector<double> samples) {
+		std::sort(samples.begin(), samples.end());
+		double total = 0.0;
+		for (auto const sample : samples)
+			total += sample;
+		auto const percentile_index = static_cast<std::size_t>(
+			std::ceil(samples.size() * 0.95)) - 1;
+		return std::array<double, 3>{
+			total / samples.size(),
+			samples[percentile_index],
+			samples.back(),
+		};
+	};
+	auto const compose = summarize(compose_ms);
+	auto const wall = summarize(wall_ms);
+	if (compose[2] >= 10.0) {
+		std::cerr << "dense marker cursor-only composition exceeded the raster-cache budget\n";
+		presenter.Release(context);
+		return false;
+	}
+	std::cout << std::fixed << std::setprecision(3)
+		<< "dense_marker_benchmark.input_markers=" << marker_count
+		<< " initial_marker_rebuild_ms=" << initial_trace.marker_layer_rebuild_ms
+		<< " cursor_frames=" << sampled_frames
+		<< " frame_compose_mean_ms=" << compose[0]
+		<< " frame_compose_p95_ms=" << compose[1]
+		<< " frame_compose_max_ms=" << compose[2]
+		<< " wall_mean_ms=" << wall[0]
+		<< " wall_p95_ms=" << wall[1]
+		<< " wall_max_ms=" << wall[2] << '\n';
+	presenter.Release(context);
+	return true;
+}
+
 bool ValidateDeferredContentSubmitFailure(
 	aegisub::skia::audio::FrameTarget const& target,
 	SkiaGlContextToken context) {
@@ -722,6 +836,21 @@ int main() try {
 	perf_trace::SetAudioCategoryEnabledForSmoke(true);
 	if (!ValidateFrameLayerComposition(target, context))
 		throw std::runtime_error("audio frame layer composition smoke failed");
+	HiddenGlWindow dense_window(1114, 161);
+	SkiaGlContextToken const dense_context { dense_window.ContextIdentity(), 1 };
+	GLint dense_stencil_bits = 0;
+	glGetIntegerv(GL_STENCIL_BITS, &dense_stencil_bits);
+	FrameTarget dense_target;
+	dense_target.context_generation = dense_context.generation;
+	dense_target.width = dense_window.Width();
+	dense_target.height = dense_window.Height();
+	dense_target.stencil_bits = std::max(0, static_cast<int>(dense_stencil_bits));
+	dense_target.framebuffer_id = 0;
+	dense_target.bottom_left_origin = true;
+	if (!ValidateDenseMarkerCursorBenchmark(dense_target, dense_context))
+		throw std::runtime_error("dense marker retained cursor benchmark failed");
+	if (!window.MakeCurrent())
+		throw std::runtime_error("restoring the primary WGL context failed");
 	if (!ValidateContentTraceSubmitFailure(target, context))
 		throw std::runtime_error("audio content trace failure smoke failed");
 	if (!ValidateDeferredContentSubmitFailure(target, context))

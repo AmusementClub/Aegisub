@@ -61,7 +61,6 @@ namespace {
 
 constexpr std::size_t kDefaultContentCacheBudget = 32 * 1024 * 1024;
 constexpr std::size_t kGaneshResourceCacheBudget = 64 * 1024 * 1024;
-
 using FrameTraceClock = std::chrono::steady_clock;
 
 // Resolve a typeface for the given family name, cached because every repaint
@@ -616,6 +615,32 @@ sk_sp<SkPicture> RecordLayerPicture(
 	return recorder.finishRecordingAsPicture();
 }
 
+sk_sp<SkImage> RasterizeMarkerLayer(
+	GrDirectContext *context,
+	FrameTarget const& target,
+	ContentFrame const& frame,
+	PresenterFrameTrace *trace) {
+	if (!context || target.width <= 0 || target.height <= 0)
+		return nullptr;
+	auto surface = SkSurfaces::RenderTarget(
+		context,
+		skgpu::Budgeted::kYes,
+		SkImageInfo::Make(
+			target.width,
+			target.height,
+			kRGBA_8888_SkColorType,
+			kPremul_SkAlphaType,
+			SkColorSpace::MakeSRGB()),
+		0,
+		nullptr);
+	if (!surface)
+		return nullptr;
+	auto *canvas = surface->getCanvas();
+	canvas->clear(SK_ColorTRANSPARENT);
+	DrawMarkerLayer(canvas, frame, trace);
+	return surface->makeImageSnapshot();
+}
+
 }
 
 struct Presenter::Impl {
@@ -671,7 +696,7 @@ struct Presenter::Impl {
 	bool retained_layers_ready = false;
 	sk_sp<SkImage> retained_base_image;
 	sk_sp<SkPicture> retained_timeline;
-	sk_sp<SkPicture> retained_markers;
+	sk_sp<SkImage> retained_markers;
 	sk_sp<SkPicture> retained_timing_labels;
 	sk_sp<SkPicture> retained_post_cursor;
 	PresenterMetrics metrics;
@@ -1207,7 +1232,13 @@ bool Presenter::RenderContentFrame(
 		trace->style_count = static_cast<int>(styles.size());
 	}
 	DrawTimelineLayer(canvas, frame);
-	DrawMarkerLayer(canvas, frame, trace);
+	auto marker_image = frame.static_revision
+		? RasterizeMarkerLayer(impl->device.Get(), target, frame, trace)
+		: sk_sp<SkImage>{};
+	if (marker_image)
+		canvas->drawImage(marker_image, 0.f, 0.f);
+	else
+		DrawMarkerLayer(canvas, frame, trace);
 	DrawCursorLayer(canvas, target, frame, false);
 	DrawTimingLabelLayer(canvas, frame, trace);
 	DrawCursorLayer(canvas, target, frame, true);
@@ -1217,16 +1248,13 @@ bool Presenter::RenderContentFrame(
 		auto timeline = RecordLayerPicture(target, [&frame](SkCanvas *recording) {
 			DrawTimelineLayer(recording, frame);
 		});
-		auto markers = RecordLayerPicture(target, [&frame](SkCanvas *recording) {
-			DrawMarkerLayer(recording, frame, nullptr);
-		});
 		auto timing_labels = RecordLayerPicture(target, [&frame](SkCanvas *recording) {
 			DrawTimingLabelLayer(recording, frame, nullptr);
 		});
 		auto post_cursor = RecordLayerPicture(target, [&target, &frame](SkCanvas *recording) {
 			DrawScrollbarLayer(recording, target, frame, nullptr);
 		});
-		if (!retained_base_image || !timeline || !markers || !timing_labels || !post_cursor) {
+		if (!retained_base_image || !timeline || !marker_image || !timing_labels || !post_cursor) {
 			impl->ResetRetainedLayers();
 		}
 		else {
@@ -1234,7 +1262,7 @@ bool Presenter::RenderContentFrame(
 			impl->retained_surface_key = MakeSurfaceKey(target);
 			impl->retained_base_image = std::move(retained_base_image);
 			impl->retained_timeline = std::move(timeline);
-			impl->retained_markers = std::move(markers);
+			impl->retained_markers = std::move(marker_image);
 			impl->retained_timing_labels = std::move(timing_labels);
 			impl->retained_post_cursor = std::move(post_cursor);
 			impl->retained_layers_ready = true;
@@ -1287,21 +1315,23 @@ bool Presenter::RenderRetainedOverlayFrame(
 		|| !impl->retained_post_cursor) {
 		return false;
 	}
-	sk_sp<SkPicture> updated_markers;
+	sk_sp<SkImage> updated_markers;
 	auto const trace_enabled = perf_trace::IsCategoryEnabled(perf_trace::Category::Audio);
 	PresenterFrameTrace frame_trace;
 	frame_trace.retained_layers_reused = true;
 	frame_trace.cursor_only = updated_layers == Layer::Cursor;
 	frame_trace.base_layer_rebuild_ms = -1.0;
+	if (!impl->PrepareFrame(context, target))
+		return false;
 	if (HasLayer(updated_layers, Layer::Marker)) {
-		updated_markers = RecordLayerPicture(target, [&frame, &frame_trace, trace_enabled](SkCanvas *recording) {
-			DrawMarkerLayer(recording, frame, trace_enabled ? &frame_trace : nullptr);
-		});
+		updated_markers = RasterizeMarkerLayer(
+			impl->device.Get(),
+			target,
+			frame,
+			trace_enabled ? &frame_trace : nullptr);
 		if (!updated_markers)
 			return false;
 	}
-	if (!impl->PrepareFrame(context, target))
-		return false;
 
 	auto const compose_trace_started = BeginFrameTrace(trace_enabled);
 	auto *canvas = impl->surface->getCanvas();
@@ -1310,7 +1340,7 @@ bool Presenter::RenderRetainedOverlayFrame(
 	canvas->drawPicture(impl->retained_timeline);
 	if (updated_markers)
 		impl->retained_markers = std::move(updated_markers);
-	canvas->drawPicture(impl->retained_markers);
+	canvas->drawImage(impl->retained_markers, 0.f, 0.f);
 	DrawCursorLayer(canvas, target, frame, false);
 	canvas->drawPicture(impl->retained_timing_labels);
 	DrawCursorLayer(canvas, target, frame, true);

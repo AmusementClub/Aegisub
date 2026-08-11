@@ -44,6 +44,9 @@ protected:
 public:
 	enum class Kind {
 		Generic,
+		Inactive,
+		Selected,
+		Active,
 		Keyframe,
 		VideoPosition
 	};

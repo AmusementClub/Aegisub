@@ -8,6 +8,7 @@
 #include "../../audio_controller.h"
 #include "../../audio_colorscheme.h"
 #include "../../audio_marker_drag_dead_zone.h"
+#include "../../audio_marker_pixel_aggregation.h"
 #include "../../audio_renderer_spectrum.h"
 #include "../../audio_scroll_position.h"
 #include "../../audio_timing.h"
@@ -789,17 +790,27 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 				* impl->viewport.milliseconds_per_column)));
 		AudioMarkerVector markers;
 		timing->GetMarkers(TimeRange(first_visible_ms, last_visible_ms), markers);
-		frame.markers.reserve(markers.size());
-		for (auto const *marker : markers) {
+		auto const x_from_marker = [this](AudioMarker const& marker) {
+			return static_cast<int>(std::lround(
+				impl->viewport.content.x
+				+ marker.GetPosition() / impl->viewport.milliseconds_per_column
+				- impl->viewport.first_column_exact));
+		};
+		auto const pixels = AggregateAudioMarkersByPixel(
+			markers,
+			static_cast<int>(std::floor(impl->viewport.content.x)) - 8,
+			static_cast<int>(std::ceil(impl->viewport.content.x + impl->viewport.content.width)) + 8,
+			x_from_marker);
+		frame.markers.reserve(pixels.size());
+		for (auto const& pixel : pixels) {
+			auto const *marker = pixel.marker;
 			auto const pen = marker->GetStyle();
 			frame.markers.push_back({
-				static_cast<float>(impl->viewport.content.x
-					+ marker->GetPosition() / impl->viewport.milliseconds_per_column
-					- impl->viewport.first_column_exact),
+				static_cast<float>(pixel.x),
 				ToArgb(pen.GetColour()),
 				std::max(1, static_cast<int>(std::lround(
 					pen.GetWidth() * GetContentScaleFactor()))),
-				static_cast<std::uint8_t>(marker->GetFeet()),
+				static_cast<std::uint8_t>(pixel.feet),
 			});
 		}
 	};
@@ -1013,14 +1024,26 @@ void SkiaAudioDisplay::OnPaint(wxPaintEvent&) try {
 
 			AudioMarkerVector markers;
 			timing->GetMarkers(visible_range, markers);
-			frame.markers.reserve(markers.size());
-			for (auto const *marker : markers) {
+			auto const x_from_marker = [this](AudioMarker const& marker) {
+				return static_cast<int>(std::lround(
+					impl->viewport.content.x
+					+ marker.GetPosition() / impl->viewport.milliseconds_per_column
+					- impl->viewport.first_column_exact));
+			};
+			auto const pixels = AggregateAudioMarkersByPixel(
+				markers,
+				static_cast<int>(std::floor(impl->viewport.content.x)) - 8,
+				static_cast<int>(std::ceil(impl->viewport.content.x + impl->viewport.content.width)) + 8,
+				x_from_marker);
+			frame.markers.reserve(pixels.size());
+			for (auto const& pixel : pixels) {
+				auto const *marker = pixel.marker;
 				auto const pen = marker->GetStyle();
 				frame.markers.push_back({
-					x_from_ms(marker->GetPosition()),
+					static_cast<float>(pixel.x),
 					ToArgb(pen.GetColour()),
 					std::max(1, static_cast<int>(std::lround(pen.GetWidth() * GetContentScaleFactor()))),
-					static_cast<std::uint8_t>(marker->GetFeet()),
+					static_cast<std::uint8_t>(pixel.feet),
 				});
 			}
 

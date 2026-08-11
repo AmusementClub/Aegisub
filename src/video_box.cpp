@@ -274,8 +274,14 @@ void VideoBox::OnCurrentFrameChanged(int frame_number) {
 	if (closing)
 		return;
 
+	// Keep an unmodified frame input synchronized even while it owns focus. A
+	// focused spin control can still be merely selected; only preserve its value
+	// when it differs from the frame that was previously presented, which means
+	// the user is in the middle of editing a jump target.
+	bool const input_tracks_current_frame =
+		VideoFrameInput->GetValue() == current_frame;
 	current_frame = frame_number;
-	if (!VideoFrameInput->HasFocus())
+	if (input_tracks_current_frame || !VideoFrameInput->HasFocus())
 		VideoFrameInput->SetValue(frame_number);
 	UpdateTimeBoxes();
 }

@@ -43,8 +43,36 @@ void erase_row(std::vector<int>& rows, int row) {
 void add_range(std::vector<int>& rows, int first, int last) {
 	if (first > last)
 		std::swap(first, last);
-	for (int row = first; row <= last; ++row)
-		insert_row(rows, row);
+
+	// Both inputs are sorted and unique. Merge the requested interval in one
+	// pass; inserting each row with lower_bound turns a long drag into a
+	// quadratic operation as the selected range grows.
+	auto const range_size = static_cast<size_t>(last) - static_cast<size_t>(first) + 1u;
+	if (rows.empty()) {
+		rows.reserve(range_size);
+		for (int row = first;; ++row) {
+			rows.push_back(row);
+			if (row == last)
+				break;
+		}
+		return;
+	}
+
+	std::vector<int> merged;
+	merged.reserve(rows.size() + range_size);
+	auto existing = rows.begin();
+	for (int row = first;; ++row) {
+		while (existing != rows.end() && *existing < row)
+			merged.push_back(*existing++);
+		if (existing == rows.end() || *existing > row)
+			merged.push_back(row);
+		else
+			++existing;
+		if (row == last)
+			break;
+	}
+	merged.insert(merged.end(), existing, rows.end());
+	rows.swap(merged);
 }
 
 int normalized_anchor(int row_count, int anchor_row, int fallback_row) {
@@ -68,11 +96,11 @@ SelectionPlan PlanMouseSelection(MouseSelectionInput input) {
 	if (!input.click && !input.double_click && !input.dragging)
 		return {};
 
-	auto selected = normalized_rows(std::move(input.selected_rows), input.row_count);
 	auto const modifiers = input.modifiers;
 	auto plan = active_plan(input.target_row);
 
 	if (input.click && modifiers.ctrl && !modifiers.shift && !modifiers.alt) {
+		auto selected = normalized_rows(std::move(input.selected_rows), input.row_count);
 		bool const target_selected = contains_row(selected, input.target_row);
 		if (target_selected && selected.size() == 1)
 			return plan;
@@ -98,7 +126,9 @@ SelectionPlan PlanMouseSelection(MouseSelectionInput input) {
 
 	if ((input.click && modifiers.shift && !modifiers.alt) || input.dragging) {
 		int const anchor = normalized_anchor(input.row_count, input.anchor_row, input.target_row);
-		std::vector<int> next_selection = modifiers.ctrl ? std::move(selected) : std::vector<int>{};
+		std::vector<int> next_selection;
+		if (modifiers.ctrl)
+			next_selection = normalized_rows(std::move(input.selected_rows), input.row_count);
 		add_range(next_selection, input.target_row, anchor);
 		plan.anchor_row = anchor;
 		plan.set_selection = true;

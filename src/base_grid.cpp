@@ -847,15 +847,24 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 		CaptureMouse();
 	}
 
+	if (holding && !click && !dclick && row == extendRow) {
+		// Mouse motion within the current row cannot change the drag selection.
+		// Avoid rebuilding the selected-row vector and invalidating the same row
+		// for every motion event delivered by wx.
+		return;
+	}
+
 	if ((click || holding || dclick) && dlg) {
 		int old_extend = extendRow;
 
 		auto const& selection = core.selectionController->GetSelectedSet();
 		std::vector<int> selected_rows;
-		selected_rows.reserve(selection.size());
-		for (auto *line : selection)
-			if (line)
-				selected_rows.push_back(line->Row);
+		if (ctrl) {
+			selected_rows.reserve(selection.size());
+			for (auto *line : selection)
+				if (line)
+					selected_rows.push_back(line->Row);
+		}
 
 		auto plan = aegisub::subtitle_grid_selection_policy::PlanMouseSelection({
 			GetRows(),

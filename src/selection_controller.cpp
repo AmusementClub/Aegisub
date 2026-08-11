@@ -84,6 +84,8 @@ bool SelectionController::NavigateSelectionHistory(bool forward) {
 }
 
 void SelectionController::SetSelectedSet(Selection new_selection) {
+	if (selection == new_selection)
+		return;
 	selection = std::move(new_selection);
 	AnnounceSelectedSetChanged();
 }

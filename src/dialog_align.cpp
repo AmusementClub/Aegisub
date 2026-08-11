@@ -41,6 +41,7 @@
 #include "selection_controller.h"
 #include "video_controller.h"
 #include "async_video_provider.h"
+#include "align_video_fade.h"
 #include "colour_button.h"
 #include "image_position_picker.h"
 
@@ -48,8 +49,11 @@
 #include <libaegisub/vfr.h>
 
 #include <wx/dialog.h>
+#include <wx/checkbox.h>
 #include <wx/sizer.h>
 #include <wx/textctrl.h>
+
+#include <algorithm>
 
 namespace {
 	// Key-point alignment needs contiguous frame ranges, so do not skip over
@@ -68,6 +72,7 @@ namespace {
 		wxTextCtrl* selected_x;
 		wxTextCtrl* selected_y;
 		wxTextCtrl* selected_tolerance;
+		wxCheckBox* detect_fade;
 
 		void update_from_textbox();
 		void update_from_textbox(wxCommandEvent&);
@@ -90,6 +95,7 @@ namespace {
 
 		auto tolerance = OPT_GET("Tool/Align to Video/Tolerance")->GetInt();
 		auto maximized = OPT_GET("Tool/Align to Video/Maximized")->GetBool();
+		auto detect_fade_option = OPT_GET("Tool/Align to Video/Detect Fade")->GetBool();
 
 		current_n_frame = core.videoController->GetFrameN();
 		auto frame = provider->GetFrameBgra(
@@ -114,16 +120,20 @@ namespace {
 		selected_y->SetToolTip(_("The y coord of the key point"));
 		selected_tolerance = new wxTextCtrl(this, -1, wxString::Format(wxT("%i"), int(tolerance)));
 		selected_tolerance->SetToolTip(_("Max tolerance of the color"));
+		detect_fade = new wxCheckBox(this, -1, _("Enable fade detection"));
+		detect_fade->SetValue(detect_fade_option);
+		detect_fade->SetToolTip(_("Extend the aligned range and write ASS fade tags when a fade is detected"));
 
 		selected_x->Bind(wxEVT_TEXT, &DialogAlignToVideo::update_from_textbox, this);
 		selected_y->Bind(wxEVT_TEXT, &DialogAlignToVideo::update_from_textbox, this);
 		update_from_textbox();
 
-		wxFlexGridSizer* right_sizer = new wxFlexGridSizer(4, 2, 5, 5);
+		wxFlexGridSizer* right_sizer = new wxFlexGridSizer(0, 2, 5, 5);
 		add_with_label(right_sizer, _("X"), selected_x);
 		add_with_label(right_sizer, _("Y"), selected_y);
 		add_with_label(right_sizer, _("Color"), selected_color);
 		add_with_label(right_sizer, _("Tolerance"), selected_tolerance);
+		add_with_label(right_sizer, _("Fade"), detect_fade);
 		right_sizer->AddGrowableCol(1, 1);
 
 		wxSizer* main_sizer = new wxBoxSizer(wxHORIZONTAL);
@@ -147,6 +157,8 @@ namespace {
 
 	DialogAlignToVideo::~DialogAlignToVideo()
 	{
+		OPT_SET("Tool/Align to Video/Detect Fade")->SetBool(detect_fade->GetValue());
+
 		long lt;
 		if (!selected_tolerance->GetValue().ToLong(&lt))
 			return;
@@ -185,17 +197,29 @@ namespace {
 		auto r = color.r;
 		auto b = color.b;
 		auto g = color.g;
-		auto scan = provider->FindKeyPointRange({
-			current_n_frame,
-			x,
-			y,
-			r,
-			g,
-			b,
-			tolerance,
-			kKeyPointScanStep,
-			5
-		});
+		auto timecode = core.project->Timecodes();
+		bool const detect_fade_enabled = detect_fade->GetValue();
+		int max_fade_frames = 0;
+		if (detect_fade_enabled) {
+			int const anchor_time = timecode.TimeAtFrame(current_n_frame, agi::vfr::EXACT);
+			int const before = current_n_frame - timecode.FrameAtTime(anchor_time - 2000, agi::vfr::EXACT);
+			int const after = timecode.FrameAtTime(anchor_time + 2000, agi::vfr::EXACT) - current_n_frame;
+			max_fade_frames = std::clamp(std::max({ before, after, 1 }), 1, 240);
+		}
+
+		KeyPointRangeScanRequest request;
+		request.frame = current_n_frame;
+		request.x = x;
+		request.y = y;
+		request.r = r;
+		request.g = g;
+		request.b = b;
+		request.tolerance = tolerance;
+		request.scan_step = kKeyPointScanStep;
+		request.bounds_tolerance = 5;
+		request.detect_fade = detect_fade_enabled;
+		request.max_fade_frames = max_fade_frames;
+		auto scan = provider->FindKeyPointRange(request);
 		if (scan.status == KeyPointRangeScanStatus::FrameUnavailable) {
 			wxMessageBox(_("Could not retrieve a CPU-readable frame for key-point alignment."));
 			return;
@@ -209,15 +233,38 @@ namespace {
 			return;
 		}
 
-		auto timecode = core.project->Timecodes();
 		auto line = core.selectionController->GetActiveLine();
 		if (!line) {
 			wxMessageBox(_("No active subtitle line is selected."));
 			return;
 		}
-		line->Start = timecode.TimeAtFrame(scan.left, agi::vfr::Time::START);
-		line->End = timecode.TimeAtFrame(scan.right, agi::vfr::Time::END); // exclusive
-		core.ass->Commit(from_wx(_("Align to video by key point")), AssFile::COMMIT_DIAG_TIME);
+		auto const fade_timing = aegisub::align_video_fade::BuildAssFadeTiming(
+			timecode,
+			scan.left,
+			scan.right,
+			scan.fade_in_end,
+			scan.fade_out_start,
+			scan.fade_in_detected,
+			scan.fade_out_detected);
+		line->Start = fade_timing.start_ms;
+		line->End = fade_timing.end_ms;
+
+		bool text_changed = false;
+		if (detect_fade_enabled && (scan.fade_in_detected || scan.fade_out_detected)) {
+			auto const updated = aegisub::align_video_fade::ApplyAssFade(
+				line->Text.get(),
+				fade_timing.end_ms - fade_timing.start_ms,
+				fade_timing.fade_in_ms,
+				fade_timing.fade_out_ms);
+			text_changed = updated.text != line->Text.get();
+			if (text_changed)
+				line->Text = updated.text;
+		}
+
+		int commit_flags = AssFile::COMMIT_DIAG_TIME;
+		if (text_changed)
+			commit_flags |= AssFile::COMMIT_DIAG_TEXT;
+		core.ass->Commit(from_wx(_("Align to video by key point")), commit_flags);
 		Close();
 	}
 	void DialogAlignToVideo::update_from_textbox()

@@ -684,7 +684,8 @@
 		},
 		"Align to Video" : {
 			"Tolerance" : 20,
-			"Maximized" : true
+			"Maximized" : true,
+			"Detect Fade" : false
 		}
 	},
 

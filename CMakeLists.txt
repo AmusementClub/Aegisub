@@ -847,6 +847,7 @@ set(AEGISUB_CORE_SOURCES
     src/audio_spectrum_analysis_cache.cpp
     src/audio_spectrum_fftw3.cpp
     src/audio_waveform_summary_cache.cpp
+    src/align_video_fade.cpp
     src/resample_dialog_policy.cpp
     src/resolution_resampler.cpp
     # Video rendering / session ops

@@ -203,6 +203,78 @@ public:
 	std::string GetDecoderName() const override { return "fake"; }
 };
 
+void SetBgraPixel(VideoFrame& frame, int x, int y, unsigned char b, unsigned char g, unsigned char r) {
+	size_t const base = static_cast<size_t>(y) * frame.pitch + static_cast<size_t>(x) * 4;
+	frame.data[base + 0] = b;
+	frame.data[base + 1] = g;
+	frame.data[base + 2] = r;
+	frame.data[base + 3] = 255;
+}
+
+void FillSyntheticVisibilityFrame(
+	int n,
+	VideoFrame& frame,
+	int visibility,
+	bool noisy_background) {
+	constexpr int background_b = 16;
+	constexpr int background_g = 24;
+	constexpr int background_r = 32;
+	constexpr int foreground_b = 196;
+	constexpr int foreground_g = 148;
+	constexpr int foreground_r = 100;
+
+	for (int y = 0; y < static_cast<int>(frame.height); ++y) {
+		for (int x = 0; x < static_cast<int>(frame.width); ++x) {
+			int noise = noisy_background ? ((x * 13 + y * 7 + n * 5) % 9) - 4 : 0;
+			int b = background_b + noise;
+			int g = background_g + noise;
+			int r = background_r + noise;
+			if (x >= 8 && x < 15 && y >= 8 && y < 15) {
+				b = (foreground_b * visibility + background_b * (100 - visibility)) / 100;
+				g = (foreground_g * visibility + background_g * (100 - visibility)) / 100;
+				r = (foreground_r * visibility + background_r * (100 - visibility)) / 100;
+			}
+			SetBgraPixel(frame, x, y, static_cast<unsigned char>(b), static_cast<unsigned char>(g), static_cast<unsigned char>(r));
+		}
+	}
+}
+
+void FillSyntheticFadeFrame(
+	int n,
+	VideoFrame& frame,
+	bool hard_cut = false,
+	bool noisy_background = false) {
+	int visibility = 100;
+	if (hard_cut)
+		visibility = n >= 7 && n <= 17 ? 100 : 0;
+	else if (n < 2)
+		visibility = 0;
+	else if (n < 7)
+		visibility = (n - 2) * 20;
+	else if (n <= 17)
+		visibility = 100;
+	else if (n < 23)
+		visibility = (22 - n) * 20;
+	else
+		visibility = 0;
+	FillSyntheticVisibilityFrame(n, frame, visibility, noisy_background);
+}
+
+void FillSyntheticLongFadeFrame(int n, VideoFrame& frame) {
+	int visibility = 100;
+	if (n < 5)
+		visibility = 0;
+	else if (n < 25)
+		visibility = (n - 5) * 5;
+	else if (n <= 45)
+		visibility = 100;
+	else if (n < 66)
+		visibility = (65 - n) * 5;
+	else
+		visibility = 0;
+	FillSyntheticVisibilityFrame(n, frame, visibility, false);
+}
+
 class FakeSubtitlesProvider final : public SubtitlesProvider {
 public:
 	int load_calls = 0;
@@ -1592,6 +1664,196 @@ TEST(async_video_provider, find_key_point_range_frame_by_frame_scan_does_not_cro
 	EXPECT_EQ(8, result.left);
 	EXPECT_EQ(10, result.right);
 	EXPECT_EQ((std::vector<int>{ 10, 9, 8, 7, 11 }), state->requested_frames);
+}
+
+TEST(async_video_provider, find_key_point_range_keeps_strict_range_when_fade_detection_is_disabled) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 24;
+	video->frame_height = 24;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		FillSyntheticFadeFrame(n, frame);
+	};
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	auto result = provider.FindKeyPointRange({
+		12, 10, 10, 100, 148, 196, 0, 1, 5, false, 0
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_EQ(7, result.left);
+	EXPECT_EQ(17, result.right);
+	EXPECT_EQ(result.left, result.strict_left);
+	EXPECT_EQ(result.right, result.strict_right);
+	EXPECT_FALSE(result.fade_in_detected);
+	EXPECT_FALSE(result.fade_out_detected);
+}
+
+TEST(async_video_provider, find_key_point_range_detects_bounded_fades) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 24;
+	video->frame_height = 24;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		FillSyntheticFadeFrame(n, frame);
+	};
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	auto result = provider.FindKeyPointRange({
+		12, 10, 10, 100, 148, 196, 0, 1, 5, true, 12
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_EQ(7, result.strict_left);
+	EXPECT_EQ(17, result.strict_right);
+	EXPECT_TRUE(result.fade_in_detected);
+	EXPECT_TRUE(result.fade_out_detected);
+	EXPECT_LT(result.left, result.strict_left);
+	EXPECT_GT(result.right, result.strict_right);
+	EXPECT_GE(result.fade_in_end, result.strict_left - 1);
+	EXPECT_LE(result.fade_in_end, result.strict_left + 1);
+	EXPECT_GE(result.fade_out_start, result.strict_right - 1);
+	EXPECT_LE(result.fade_out_start, result.strict_right + 1);
+	EXPECT_GT(result.fade_in_confidence, 0.2);
+	EXPECT_GT(result.fade_out_confidence, 0.2);
+}
+
+TEST(async_video_provider, find_key_point_range_finishes_fade_inside_tolerant_strict_range) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 24;
+	video->frame_height = 24;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		FillSyntheticLongFadeFrame(n, frame);
+	};
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	auto result = provider.FindKeyPointRange({
+		35, 10, 10, 100, 148, 196, 20, 1, 5, true, 40
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_EQ(14, result.strict_left);
+	EXPECT_EQ(56, result.strict_right);
+	EXPECT_TRUE(result.fade_in_detected);
+	EXPECT_TRUE(result.fade_out_detected);
+	EXPECT_EQ(6, result.left);
+	EXPECT_EQ(25, result.fade_in_end);
+	EXPECT_GT(result.fade_in_end, result.strict_left);
+	EXPECT_EQ(45, result.fade_out_start);
+	EXPECT_EQ(64, result.right);
+	EXPECT_LT(result.fade_out_start, result.strict_right);
+}
+
+TEST(async_video_provider, find_key_point_range_reanchors_a_partially_faded_selection_on_full_visibility) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 24;
+	video->frame_height = 24;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		FillSyntheticLongFadeFrame(n, frame);
+	};
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	// Frame 20 is only 75% visible. The selected color therefore must not be
+	// treated as the fully-visible reference when locating the fade plateau.
+	auto result = provider.FindKeyPointRange({
+		20, 10, 10, 83, 117, 151, 20, 1, 5, true, 40
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_TRUE(result.fade_in_detected);
+	EXPECT_TRUE(result.fade_out_detected);
+	EXPECT_EQ(6, result.left);
+	EXPECT_EQ(25, result.fade_in_end);
+	EXPECT_EQ(45, result.fade_out_start);
+	EXPECT_EQ(64, result.right);
+}
+
+TEST(async_video_provider, find_key_point_range_does_not_extend_beyond_fade_budget) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 24;
+	video->frame_height = 24;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		FillSyntheticFadeFrame(n, frame);
+	};
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	auto result = provider.FindKeyPointRange({
+		12, 10, 10, 100, 148, 196, 0, 1, 5, true, 2
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_EQ(7, result.strict_left);
+	EXPECT_EQ(17, result.strict_right);
+	EXPECT_GE(result.left, result.strict_left - 2);
+	EXPECT_LE(result.right, result.strict_right + 2);
+}
+
+TEST(async_video_provider, find_key_point_range_rejects_hard_cut_as_fade) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 24;
+	video->frame_height = 24;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		FillSyntheticFadeFrame(n, frame, true);
+	};
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	auto result = provider.FindKeyPointRange({
+		12, 10, 10, 100, 148, 196, 0, 1, 5, true, 12
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_EQ(7, result.left);
+	EXPECT_EQ(17, result.right);
+	EXPECT_FALSE(result.fade_in_detected);
+	EXPECT_FALSE(result.fade_out_detected);
+}
+
+TEST(async_video_provider, find_key_point_range_tolerates_local_background_noise) {
+	auto state = std::make_shared<VideoProviderState>();
+	auto *video = new FakeVideoProvider(state);
+	video->frame_width = 24;
+	video->frame_height = 24;
+	video->fill_frame = [](int n, VideoFrame& frame) {
+		FillSyntheticFadeFrame(n, frame, false, true);
+	};
+	AsyncVideoProvider provider(
+		std::unique_ptr<VideoProvider>(video),
+		std::unique_ptr<SubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	auto result = provider.FindKeyPointRange({
+		12, 10, 10, 100, 148, 196, 0, 1, 5, true, 12
+	});
+
+	EXPECT_EQ(KeyPointRangeScanStatus::Success, result.status);
+	EXPECT_TRUE(result.fade_in_detected);
+	EXPECT_TRUE(result.fade_out_detected);
+	EXPECT_EQ(3, result.left);
+	EXPECT_EQ(7, result.fade_in_end);
+	EXPECT_EQ(17, result.fade_out_start);
+	EXPECT_EQ(21, result.right);
 }
 
 TEST(async_video_provider, get_render_packet_exposes_source_frame_and_overlay) {

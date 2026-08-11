@@ -66,12 +66,22 @@ struct KeyPointRangeScanRequest {
 	unsigned char tolerance = 0;
 	int scan_step = 2;
 	int bounds_tolerance = 5;
+	bool detect_fade = false;
+	int max_fade_frames = 0;
 };
 
 struct KeyPointRangeScanResult {
 	KeyPointRangeScanStatus status = KeyPointRangeScanStatus::InvalidRequest;
 	int left = -1;
 	int right = -1;
+	int strict_left = -1;
+	int strict_right = -1;
+	int fade_in_end = -1;
+	int fade_out_start = -1;
+	bool fade_in_detected = false;
+	bool fade_out_detected = false;
+	double fade_in_confidence = 0.0;
+	double fade_out_confidence = 0.0;
 };
 
 /// Asynchronous helper for video frame requests.

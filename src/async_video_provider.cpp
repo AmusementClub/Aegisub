@@ -52,6 +52,18 @@ enum {
 namespace {
 constexpr char const *kSourceModeLogTag = "video/source/mode";
 constexpr char const *kSubtitleProviderUseLogTag = "subtitle/provider/use";
+std::atomic<std::uint64_t> next_provider_delivery_version{1};
+
+void MergeSubtitleUpdateOptions(
+	VideoSubtitleUpdateOptions &pending,
+	VideoSubtitleUpdateOptions incoming) noexcept {
+	// Delivery class follows the newest subtitle operation. Force rendering is
+	// sticky until this pending work is captured, so a later line update cannot
+	// erase a final-frame guarantee from the same coalesced work.
+	pending.delivery_class = incoming.delivery_class;
+	pending.visual_interaction_id = incoming.visual_interaction_id;
+	pending.force_current_frame_render |= incoming.force_current_frame_render;
+}
 
 std::vector<std::pair<const AssDialogue*, int>> CaptureSubtitleSourceLines(AssFile const& file) {
 	std::vector<std::pair<const AssDialogue*, int>> lines;
@@ -784,6 +796,7 @@ AsyncVideoProvider::AsyncVideoProvider(std::unique_ptr<VideoProvider> source_pro
 , subs_provider(std::move(subs_provider))
 , source_provider(std::move(source_provider))
 , event_sink(std::move(event_sink))
+, provider_version(next_provider_delivery_version.fetch_add(1, std::memory_order_relaxed))
 {
 	subtitles_timecodes = this->source_provider->GetFPS();
 	if (this->subs_provider) {
@@ -872,7 +885,9 @@ void AsyncVideoProvider::GenerateSceneChangeKeyframes(agi::fs::path const& outpu
 		run(nullptr);
 }
 
-void AsyncVideoProvider::LoadSubtitles(const AssFile *new_subs) throw() {
+void AsyncVideoProvider::LoadSubtitles(
+	const AssFile *new_subs,
+	VideoSubtitleUpdateOptions options) throw() {
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		++content_version;
@@ -882,22 +897,28 @@ void AsyncVideoProvider::LoadSubtitles(const AssFile *new_subs) throw() {
 		subtitle_source_lines = CaptureSubtitleSourceLines(*new_subs);
 		pending_overlay_upload_continuity_invalidation = true;
 		pending_check_updated = false;
+		pending_force_current_frame_render |= options.force_current_frame_render;
+		MergeSubtitleUpdateOptions(pending_subtitle_update_options, options);
 	}
 	ScheduleProcessing();
 }
 
-void AsyncVideoProvider::UpdateSubtitles(const AssFile *new_subs, const AssDialogue *changed) throw() {
+void AsyncVideoProvider::UpdateSubtitles(
+	const AssFile *new_subs,
+	const AssDialogue *changed,
+	VideoSubtitleUpdateOptions options) throw() {
 	if (!changed) {
-		UpdateSubtitles(new_subs, std::span<const AssDialogue *const>{});
+		UpdateSubtitles(new_subs, std::span<const AssDialogue *const>{}, options);
 		return;
 	}
 	const AssDialogue *changed_lines[] = { changed };
-	UpdateSubtitles(new_subs, changed_lines);
+	UpdateSubtitles(new_subs, changed_lines, options);
 }
 
 void AsyncVideoProvider::UpdateSubtitles(
 	const AssFile *new_subs,
-	std::span<const AssDialogue *const> changed) throw() {
+	std::span<const AssDialogue *const> changed,
+	VideoSubtitleUpdateOptions options) throw() {
 	{
 		std::lock_guard<std::mutex> lock(pending_mutex);
 		++content_version;
@@ -936,6 +957,8 @@ void AsyncVideoProvider::UpdateSubtitles(
 		pending_overlay_upload_continuity_invalidation = true;
 		if (!has_pending_frame)
 			pending_check_updated = true;
+		pending_force_current_frame_render |= options.force_current_frame_render;
+		MergeSubtitleUpdateOptions(pending_subtitle_update_options, options);
 	}
 	ScheduleProcessing();
 }
@@ -946,6 +969,7 @@ void AsyncVideoProvider::RequestFrame(int new_frame, double new_time, bool super
 		pending_time = new_time;
 		pending_frame_number = new_frame;
 		has_pending_frame = true;
+		pending_normal_frame_request = true;
 		pending_check_updated = false;
 		if (supersede_in_flight)
 			++request_version;
@@ -960,12 +984,14 @@ void AsyncVideoProvider::CancelPendingFrameRequests() noexcept {
 		pending_frame_number = -1;
 		pending_time = -1.;
 		pending_check_updated = false;
+		pending_normal_frame_request = false;
 		request_version.fetch_add(1, std::memory_order_relaxed);
 	}
 }
 
 bool AsyncVideoProvider::IsCurrent(VideoRenderDeliveryVersion version) const noexcept {
-	return version.content == content_version.load(std::memory_order_relaxed)
+	return version.provider == provider_version
+		&& version.content == content_version.load(std::memory_order_relaxed)
 		&& version.request == request_version.load(std::memory_order_relaxed);
 }
 
@@ -1059,6 +1085,10 @@ bool AsyncVideoProvider::ProcessPending() {
 		bool has_color_space = false;
 		std::string color_space;
 		bool invalidate_overlay_upload_continuity = false;
+		bool force_current_frame_render = false;
+		VideoSubtitleUpdateOptions subtitle_update_options;
+		VideoRenderDeliveryClass delivery_class = VideoRenderDeliveryClass::EveryFrame;
+		std::uint64_t visual_interaction_id = 0;
 		VideoRenderDeliveryVersion delivery_version;
 	};
 
@@ -1080,6 +1110,12 @@ bool AsyncVideoProvider::ProcessPending() {
 		pending_overlay_upload_continuity_invalidation = false;
 		work.check_updated = pending_check_updated;
 		pending_check_updated = false;
+		work.force_current_frame_render = pending_force_current_frame_render;
+		pending_force_current_frame_render = false;
+		work.subtitle_update_options = pending_subtitle_update_options;
+		pending_subtitle_update_options = {};
+		bool const normal_frame_request = pending_normal_frame_request;
+		pending_normal_frame_request = false;
 		if (has_pending_frame) {
 			work.has_frame = true;
 			work.frame_number = pending_frame_number;
@@ -1109,8 +1145,17 @@ bool AsyncVideoProvider::ProcessPending() {
 			has_pending_color_space = false;
 			pending_color_space.clear();
 		}
+		work.delivery_version.provider = provider_version;
 		work.delivery_version.request = request_version.load(std::memory_order_relaxed);
 		work.delivery_version.content = content_version.load(std::memory_order_relaxed);
+		work.delivery_class = normal_frame_request
+			? VideoRenderDeliveryClass::EveryFrame
+			: work.subtitle_update_options.delivery_class;
+		work.visual_interaction_id = normal_frame_request
+			? 0
+			: work.subtitle_update_options.visual_interaction_id;
+		work.force_current_frame_render = work.force_current_frame_render
+			|| work.subtitle_update_options.force_current_frame_render;
 	}
 
 	if (work.has_color_space)
@@ -1161,7 +1206,7 @@ bool AsyncVideoProvider::ProcessPending() {
 		}
 	}
 
-	if (work.check_updated && !NeedUpdate(visible_lines))
+	if (work.check_updated && !work.force_current_frame_render && !NeedUpdate(visible_lines))
 		return true;
 
 	auto remember_rendered_lines = [&] {
@@ -1191,6 +1236,8 @@ bool AsyncVideoProvider::ProcessPending() {
 		if (should_deliver) {
 			remember_rendered_lines();
 			packet.delivery_version = work.delivery_version;
+			packet.delivery_class = work.delivery_class;
+			packet.visual_interaction_id = work.visual_interaction_id;
 			DeliverFrameReady(std::move(packet), time);
 		}
 		else {

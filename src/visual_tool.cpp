@@ -45,10 +45,9 @@
 #include <libaegisub/scope_exit.h>
 
 #include <algorithm>
-
-namespace {
-constexpr int kInteractionRenderIntervalMs = 16;
-}
+#include <chrono>
+#include <cstdint>
+#include <limits>
 
 VisualToolBase::VisualToolBase(VideoDisplay *parent, agi::Context *context)
 : c(context)
@@ -91,8 +90,61 @@ VisualToolBase::~VisualToolBase() {
 }
 
 void VisualToolBase::OnInteractionRenderTimer(wxTimerEvent &) {
-	if (IsInteracting())
-		parent->RenderNow();
+	if (!IsInteracting() || !interaction_render_pacer.IsActive())
+		return;
+
+	if (interaction_render_pacer.OnTimer(DeadlinePacingPolicy::Clock::now()))
+		RenderInteractionFrame(1);
+	else
+		ArmInteractionRenderTimer();
+}
+
+void VisualToolBase::ArmInteractionRenderTimer() {
+	if (interaction_render_timer.IsRunning())
+		return;
+
+	auto const deadline = interaction_render_pacer.NextDeadline();
+	if (!deadline)
+		return;
+
+	auto const remaining = *deadline - DeadlinePacingPolicy::Clock::now();
+	auto const delay = std::max<std::int64_t>(
+		1,
+		std::chrono::ceil<std::chrono::milliseconds>(remaining).count());
+	interaction_render_timer.Start(
+		static_cast<int>(std::min<std::int64_t>(delay, std::numeric_limits<int>::max())),
+		wxTIMER_ONE_SHOT);
+}
+
+void VisualToolBase::RenderInteractionFrame(int reason) {
+	perf_trace::ObserveVideoUiDuration("visual_tool.interaction_render", 0.0, reason);
+	parent->RenderNow();
+}
+
+void VisualToolBase::BeginInteractionPacing(int selection_count) {
+	if (interaction_render_pacer.IsActive())
+		return;
+
+	interaction_render_pacer.Begin(DeadlinePacingPolicy::Clock::now());
+	c->GetCore().videoController->BeginVisualSubtitleInteraction();
+	interaction_trace_active = true;
+	perf_trace::ObserveVideoUiDuration("visual_tool.interaction_begin", 0.0, selection_count);
+}
+
+void VisualToolBase::EndInteractionPacing(bool render_final, int selection_count) {
+	if (!interaction_render_pacer.IsActive())
+		return;
+
+	interaction_render_timer.Stop();
+	interaction_render_pacer.Force(DeadlinePacingPolicy::Clock::now());
+	interaction_render_pacer.End();
+	c->GetCore().videoController->EndVisualSubtitleInteraction();
+	if (interaction_trace_active) {
+		perf_trace::ObserveVideoUiDuration("visual_tool.interaction_end", 0.0, selection_count);
+		interaction_trace_active = false;
+	}
+	if (render_final)
+		RenderInteractionFrame(2);
 }
 
 void VisualToolBase::OnCommitIdResetTimer(wxTimerEvent &) {
@@ -161,8 +213,12 @@ void VisualToolBase::OnCommit(int type, AssDialogue const* changed) {
 		needs_render = true;
 	}
 
-	if (needs_render || interaction_cancelled)
-		parent->Render();
+	if (needs_render || interaction_cancelled) {
+		if (interaction_cancelled)
+			parent->RenderNow();
+		else
+			parent->Render();
+	}
 }
 
 void VisualToolBase::OnSeek(int new_frame) {
@@ -181,7 +237,7 @@ void VisualToolBase::OnSeek(int new_frame) {
 		active_line = new_line;
 		OnLineChanged();
 		if (interaction_cancelled)
-			parent->Render();
+			parent->RenderNow();
 	}
 }
 
@@ -209,24 +265,23 @@ void VisualToolBase::OnActiveLineChanged(AssDialogue *new_line) {
 	if (new_line != active_line) {
 		active_line = new_line;
 		OnLineChanged();
-		parent->Render();
+		if (interaction_cancelled)
+			parent->RenderNow();
+		else
+			parent->Render();
 	}
 	else if (interaction_cancelled) {
-		parent->Render();
+		parent->RenderNow();
 	}
 }
 
 bool VisualToolBase::CancelInteraction(bool release_capture) {
 	bool const was_interacting = IsInteracting();
-	interaction_render_timer.Stop();
 	holding = false;
 	dragging = false;
 	if (was_interacting) {
 		command_session.ResetCommitId();
-	}
-	if (interaction_trace_active) {
-		perf_trace::ObserveVideoUiDuration("visual_tool.interaction_end", 0.0);
-		interaction_trace_active = false;
+		EndInteractionPacing(false);
 	}
 	if (release_capture && parent->HasCapture())
 		parent->ReleaseMouse();
@@ -351,7 +406,7 @@ void VisualToolBase::SetDisplayArea(int x, int y, int w, int h) {
 	bool const interaction_cancelled = CancelInteraction(true);
 	OnCoordinateSystemsChanged();
 	if (interaction_cancelled)
-		parent->Render();
+		parent->RenderNow();
 }
 
 Vector2D VisualToolBase::ToScriptCoords(Vector2D point) const {
@@ -483,21 +538,14 @@ void VisualTool<FeatureType>::OnMouseEvent(wxMouseEvent &event) {
 	bool const interaction_started = !interaction_was_active && interaction_is_active;
 	bool const interaction_ended = interaction_was_active && !interaction_is_active;
 	if (interaction_ended) {
-		interaction_render_timer.Stop();
-		parent->RenderNow();
+		EndInteractionPacing(true, static_cast<int>(sel_features.size()));
 	}
 	else if (interaction_started || !interaction_is_active) {
 		parent->RenderToolFeedback();
 	}
 
-	if (interaction_started) {
-		interaction_trace_active = true;
-		perf_trace::ObserveVideoUiDuration("visual_tool.interaction_begin", 0.0, static_cast<int>(sel_features.size()));
-	}
-	if (interaction_ended && interaction_trace_active) {
-		perf_trace::ObserveVideoUiDuration("visual_tool.interaction_end", 0.0, static_cast<int>(sel_features.size()));
-		interaction_trace_active = false;
-	}
+	if (interaction_started)
+		BeginInteractionPacing(static_cast<int>(sel_features.size()));
 	if (release_mouse) {
 		parent->ReleaseMouse();
 		parent->SetFocus();
@@ -798,8 +846,16 @@ void VisualToolBase::ClearChangedLines() {
 }
 
 void VisualToolBase::ScheduleInteractionRender() {
-	if (!interaction_render_timer.IsRunning())
-		interaction_render_timer.Start(kInteractionRenderIntervalMs, wxTIMER_ONE_SHOT);
+	if (!IsInteracting() || !interaction_render_pacer.IsActive())
+		return;
+
+	if (interaction_render_pacer.Request(DeadlinePacingPolicy::Clock::now())) {
+		interaction_render_timer.Stop();
+		RenderInteractionFrame(0);
+	}
+	else {
+		ArmInteractionRenderTimer();
+	}
 }
 
 void VisualToolBase::SetOverride(AssDialogue* line, std::string const& tag, std::string const& value) {

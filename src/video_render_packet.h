@@ -22,10 +22,23 @@
 #include <memory>
 
 struct VideoRenderDeliveryVersion {
+	std::uint64_t provider = 0;
 	std::uint64_t content = 0;
 	std::uint64_t request = 0;
 
 	bool operator==(VideoRenderDeliveryVersion const&) const = default;
+};
+
+enum class VideoRenderDeliveryClass {
+	EveryFrame,
+	VisualSubtitleIntermediate,
+	VisualSubtitleFinal
+};
+
+struct VideoSubtitleUpdateOptions {
+	VideoRenderDeliveryClass delivery_class = VideoRenderDeliveryClass::EveryFrame;
+	std::uint64_t visual_interaction_id = 0;
+	bool force_current_frame_render = false;
 };
 
 struct VideoRenderPacket {
@@ -38,6 +51,8 @@ struct VideoRenderPacket {
 
 	int frame_number = -1;
 	VideoRenderDeliveryVersion delivery_version;
+	VideoRenderDeliveryClass delivery_class = VideoRenderDeliveryClass::EveryFrame;
+	std::uint64_t visual_interaction_id = 0;
 	SourceFrame source_frame;
 	SubtitleOverlay subtitle_overlay;
 	bool has_subtitle_overlay = false;

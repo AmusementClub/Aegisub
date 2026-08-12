@@ -49,9 +49,35 @@
 #include <libaegisub/ass/time.h>
 #include <libaegisub/log.h>
 
+#include <algorithm>
+#include <chrono>
+#include <cstdint>
+#include <limits>
+#include <utility>
+#include <vector>
+
+namespace {
+void AddSubtitleCommit(
+	video_subtitle_update_policy::UpdateCoalescer& updates,
+	video_subtitle_update_policy::UpdateMode mode,
+	AssDialogueCommitSpan changed_lines) {
+	if (mode == video_subtitle_update_policy::UpdateMode::FullReload) {
+		updates.AddFullReload();
+		return;
+	}
+
+	std::vector<int> rows;
+	rows.reserve(changed_lines.size());
+	for (auto const* line : changed_lines)
+		rows.push_back(line ? line->Row : -1);
+	updates.AddIncrementalRows(rows);
+}
+}
+
 VideoController::VideoController(agi::Context *c)
 : context(c)
 , playback_timer(CreateVideoControllerTimer([this] { OnPlayTimer(); }))
+, visual_subtitle_update_timer(CreateVideoControllerTimer([this] { OnVisualSubtitleUpdateTimer(); }))
 , playAudioOnStep(OPT_GET("Audio/Plays When Stepping Video"))
 {
 	auto core = context->GetCore();
@@ -64,6 +90,7 @@ VideoController::VideoController(agi::Context *c)
 
 VideoController::~VideoController() {
 	ui_activation.Deactivate();
+	ResetVisualSubtitleInteraction();
 }
 
 void VideoController::ResetPlaybackState() {
@@ -75,6 +102,7 @@ void VideoController::ResetPlaybackState() {
 
 void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 	Stop();
+	ResetVisualSubtitleInteraction();
 	provider = new_provider;
 	presented_frame_n = -1;
 	ClearLatePreviewFrameAcceptance();
@@ -102,14 +130,164 @@ void VideoController::OnSubtitlesCommit(AssFileCommitDetails commit) {
 
 	auto const update_mode = video_subtitle_update_policy::SelectUpdateMode(
 		commit.type, commit.changed_lines);
+	if (visual_subtitle_interaction_active) {
+		AddSubtitleCommit(pending_visual_subtitle_updates, update_mode, commit.changed_lines);
+		AddSubtitleCommit(final_visual_subtitle_updates, update_mode, commit.changed_lines);
+		if (visual_subtitle_update_pacer.Request(DeadlinePacingPolicy::Clock::now())) {
+			visual_subtitle_update_timer->Stop();
+			FlushPendingVisualSubtitleUpdate();
+		}
+		else {
+			ArmVisualSubtitleUpdateTimer();
+		}
+		return;
+	}
+
+	bool const incremental = update_mode == video_subtitle_update_policy::UpdateMode::IncrementalLines;
+	perf_trace::ObserveVideoUiDuration(
+		"video_controller.subtitle_update.immediate",
+		0.0,
+		static_cast<int>(commit.changed_lines.size()),
+		incremental ? 1 : 0);
 	perf_trace::VideoUiDurationScope subtitle_update_trace(
 		"video_controller.subtitle_update",
 		static_cast<int>(commit.changed_lines.size()),
-		update_mode == video_subtitle_update_policy::UpdateMode::IncrementalLines ? 1 : 0);
-	if (update_mode == video_subtitle_update_policy::UpdateMode::IncrementalLines)
+		incremental ? 1 : 0);
+	if (incremental)
 		provider->UpdateSubtitles(core.ass.get(), commit.changed_lines);
 	else
 		provider->LoadSubtitles(core.ass.get());
+}
+
+void VideoController::BeginVisualSubtitleInteraction() {
+	if (visual_subtitle_interaction_active)
+		return;
+
+	visual_subtitle_update_timer->Stop();
+	pending_visual_subtitle_updates.Clear();
+	final_visual_subtitle_updates.Clear();
+	if (++visual_subtitle_interaction_id == 0)
+		++visual_subtitle_interaction_id;
+	visual_subtitle_update_pacer.Begin(DeadlinePacingPolicy::Clock::now());
+	visual_subtitle_interaction_active = true;
+}
+
+void VideoController::EndVisualSubtitleInteraction() {
+	if (!visual_subtitle_interaction_active)
+		return;
+
+	visual_subtitle_interaction_active = false;
+	visual_subtitle_update_timer->Stop();
+	visual_subtitle_update_pacer.Force(DeadlinePacingPolicy::Clock::now());
+	visual_subtitle_update_pacer.End();
+	pending_visual_subtitle_updates.Clear();
+	auto final_update = final_visual_subtitle_updates.Take();
+	if (final_update)
+		SubmitSubtitleUpdate(std::move(*final_update), 2);
+}
+
+void VideoController::OnVisualSubtitleUpdateTimer() {
+	if (!visual_subtitle_interaction_active)
+		return;
+
+	if (visual_subtitle_update_pacer.OnTimer(DeadlinePacingPolicy::Clock::now()))
+		FlushPendingVisualSubtitleUpdate();
+	else
+		ArmVisualSubtitleUpdateTimer();
+}
+
+void VideoController::ArmVisualSubtitleUpdateTimer() {
+	if (visual_subtitle_update_timer->IsRunning())
+		return;
+
+	auto const deadline = visual_subtitle_update_pacer.NextDeadline();
+	if (!deadline)
+		return;
+
+	auto const remaining = *deadline - DeadlinePacingPolicy::Clock::now();
+	auto const delay = std::max<std::int64_t>(
+		1,
+		std::chrono::ceil<std::chrono::milliseconds>(remaining).count());
+	visual_subtitle_update_timer->StartOnce(
+		static_cast<int>(std::min<std::int64_t>(delay, std::numeric_limits<int>::max())));
+}
+
+void VideoController::FlushPendingVisualSubtitleUpdate() {
+	auto update = pending_visual_subtitle_updates.Take();
+	if (update)
+		SubmitSubtitleUpdate(std::move(*update), 1);
+}
+
+void VideoController::FlushDueVisualSubtitleUpdateBeforeFrameRequest() {
+	if (!visual_subtitle_interaction_active || pending_visual_subtitle_updates.Empty())
+		return;
+
+	if (visual_subtitle_update_pacer.Request(DeadlinePacingPolicy::Clock::now())) {
+		visual_subtitle_update_timer->Stop();
+		FlushPendingVisualSubtitleUpdate();
+	}
+	else {
+		ArmVisualSubtitleUpdateTimer();
+	}
+}
+
+void VideoController::SubmitSubtitleUpdate(
+	video_subtitle_update_policy::CoalescedUpdate update,
+	int reason) {
+	if (!provider)
+		return;
+
+	auto core = context->GetCore();
+	std::vector<AssDialogue const*> changed_lines;
+	if (update.mode == video_subtitle_update_policy::UpdateMode::IncrementalLines) {
+		changed_lines.reserve(update.rows.size());
+		auto row = update.rows.begin();
+		for (auto const& line : core.ass->Events) {
+			if (row == update.rows.end())
+				break;
+			if (line.Row == *row) {
+				changed_lines.push_back(&line);
+				++row;
+			}
+		}
+		if (changed_lines.size() != update.rows.size()) {
+			update.mode = video_subtitle_update_policy::UpdateMode::FullReload;
+			changed_lines.clear();
+		}
+	}
+
+	bool const incremental = update.mode == video_subtitle_update_policy::UpdateMode::IncrementalLines;
+	char const* phase = reason == 2
+		? "video_controller.subtitle_update.final"
+		: "video_controller.subtitle_update.paced";
+	perf_trace::ObserveVideoUiDuration(
+		phase,
+		0.0,
+		static_cast<int>(changed_lines.size()),
+		incremental ? 1 : 0);
+	perf_trace::VideoUiDurationScope subtitle_update_trace(
+		"video_controller.subtitle_update",
+		static_cast<int>(changed_lines.size()),
+		incremental ? 1 : 0);
+	if (incremental)
+		provider->UpdateSubtitles(core.ass.get(), changed_lines, {
+			reason == 1 ? VideoRenderDeliveryClass::VisualSubtitleIntermediate : VideoRenderDeliveryClass::VisualSubtitleFinal,
+			visual_subtitle_interaction_id,
+			reason == 2});
+	else
+		provider->LoadSubtitles(core.ass.get(), {
+			reason == 1 ? VideoRenderDeliveryClass::VisualSubtitleIntermediate : VideoRenderDeliveryClass::VisualSubtitleFinal,
+			visual_subtitle_interaction_id,
+			reason == 2});
+}
+
+void VideoController::ResetVisualSubtitleInteraction() noexcept {
+	if (visual_subtitle_update_timer)
+		visual_subtitle_update_timer->Stop();
+	visual_subtitle_update_pacer.End();
+	pending_visual_subtitle_updates.Clear();
+	final_visual_subtitle_updates.Clear();
+	visual_subtitle_interaction_active = false;
 }
 
 void VideoController::OnTimecodesChanged(agi::vfr::Framerate const&) {
@@ -134,6 +312,7 @@ void VideoController::RequestFrame() {
 }
 
 void VideoController::RequestFrame(bool supersede_in_flight) {
+	FlushDueVisualSubtitleUpdateBeforeFrameRequest();
 	auto core = context->GetCore();
 	core.ass->Properties.video_position = frame_n;
 	if (supersede_in_flight)
@@ -144,6 +323,7 @@ void VideoController::RequestFrame(bool supersede_in_flight) {
 }
 
 void VideoController::RequestFrameImmediate() {
+	FlushDueVisualSubtitleUpdateBeforeFrameRequest();
 	auto core = context->GetCore();
 	ClearInspectionStepState();
 	ClearInteractiveSeekPreviewState();
@@ -754,6 +934,13 @@ AsyncVideoProviderEventSink VideoController::CreateAsyncVideoProviderEventSink()
 		GetAsyncUiLifetime(),
 		{
 			[this](VideoRenderPacket packet, double time) {
+				if (!provider || !provider->IsCurrent(packet.delivery_version)) {
+					perf_trace::ObserveVideoUiDuration(
+						"video_controller.frame_ready_stale",
+						0.0,
+						packet.frame_number);
+					return;
+				}
 				DeliverFrameReady(std::move(packet), time);
 			},
 			[this](std::string const& message) {
@@ -762,5 +949,6 @@ AsyncVideoProviderEventSink VideoController::CreateAsyncVideoProviderEventSink()
 			[this](std::string const& message) {
 				HandleSubtitlesError(message);
 			}
-		});
+		},
+		AsyncVideoFrameDeliveryMode::VisualSubtitleBatches);
 }

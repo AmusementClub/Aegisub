@@ -274,6 +274,8 @@ if(GTEST_FOUND)
         tests/tests/visual_guide_model.cpp
         tests/tests/visual_guide_overlay.cpp
         tests/tests/navigation_preview_policy.cpp
+        tests/tests/deadline_pacing_policy.cpp
+        tests/tests/video_subtitle_update_policy.cpp
         tests/tests/playback_transport_policy.cpp
         tests/tests/video_session_ops.cpp
         tests/tests/video_snapshot_ops.cpp

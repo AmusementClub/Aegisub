@@ -2,6 +2,7 @@
 
 #include "../../src/source_frame.h"
 #include "../../src/video_display_layout.h"
+#include "../../src/video_display_frame_policy.h"
 #include "../../src/video_render_geometry.h"
 #include "../../src/video_frame.h"
 
@@ -200,4 +201,11 @@ TEST(video_display_layout, display_aspect_ratio_helper_uses_baked_quarter_turn_p
 	EXPECT_EQ(6, display.width);
 	EXPECT_EQ(8, display.height);
 	EXPECT_DOUBLE_EQ(0.6, GetSourceFrameDisplayAspectRatio(geometry));
+}
+
+TEST(video_display_frame_policy, inactive_attached_display_ignores_frame_ready) {
+	EXPECT_TRUE(ShouldIgnoreVideoDisplayFrameReady(false, false));
+	EXPECT_FALSE(ShouldIgnoreVideoDisplayFrameReady(false, true));
+	EXPECT_FALSE(ShouldIgnoreVideoDisplayFrameReady(true, false));
+	EXPECT_FALSE(ShouldIgnoreVideoDisplayFrameReady(true, true));
 }

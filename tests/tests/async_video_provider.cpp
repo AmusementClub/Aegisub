@@ -639,6 +639,8 @@ struct RecordedFrame {
 	int overlay_dirty_rect_count = 0;
 	uint64_t overlay_continuity_generation = 0;
 	SourceFrameRect source_visible_rect = { };
+	VideoRenderDeliveryClass delivery_class = VideoRenderDeliveryClass::EveryFrame;
+	uint64_t visual_interaction_id = 0;
 };
 
 class EventRecorder {
@@ -658,6 +660,8 @@ public:
 		frame.overlay_dirty_rect_count = packet.subtitle_overlay.dirty_rect_count;
 		frame.overlay_continuity_generation = packet.subtitle_overlay.continuity_generation;
 		frame.source_visible_rect = GetSourceFrameVisibleRect(packet.source_frame);
+		frame.delivery_class = packet.delivery_class;
+		frame.visual_interaction_id = packet.visual_interaction_id;
 
 		{
 			std::lock_guard<std::mutex> lock(mutex);
@@ -735,6 +739,11 @@ protected:
 	bool WaitForMainTasks(size_t count) {
 		std::unique_lock<std::mutex> lock(mutex);
 		return cv.wait_for(lock, std::chrono::seconds(2), [&] { return main_queue.size() >= count; });
+	}
+
+	std::size_t MainTaskCount() {
+		std::lock_guard<std::mutex> lock(mutex);
+		return main_queue.size();
 	}
 
 	std::size_t PumpOneMainTask() {
@@ -1113,6 +1122,232 @@ TEST_F(MainThreadDeliveryFixture, queued_packet_is_rejected_when_expected_frame_
 	EXPECT_TRUE(version_current);
 	EXPECT_FALSE(frame_matches);
 	EXPECT_FALSE(accepted);
+}
+
+TEST_F(MainThreadDeliveryFixture, queued_packet_is_rejected_after_provider_replacement) {
+	std::unique_ptr<AsyncVideoProvider> provider;
+	auto event_lifetime = agi::ui::MakeLifetime();
+	int callback_count = 0;
+	bool version_current = true;
+	auto sink = CreateAsyncVideoProviderMainThreadSink(
+		event_lifetime,
+		{
+			[&](VideoRenderPacket packet, double) {
+				++callback_count;
+				version_current = provider->IsCurrent(packet.delivery_version);
+			},
+			{},
+			{}
+		});
+	provider = agi::make_unique<AsyncVideoProvider>(
+		agi::make_unique<FakeVideoProvider>(std::make_shared<VideoProviderState>()),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		std::move(sink));
+
+	provider->RequestFrame(3, 3000);
+	ASSERT_TRUE(WaitForMainTasks(1));
+	provider = agi::make_unique<AsyncVideoProvider>(
+		agi::make_unique<FakeVideoProvider>(std::make_shared<VideoProviderState>()),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+	ASSERT_EQ(1u, PumpOneMainTask());
+
+	EXPECT_EQ(1, callback_count);
+	EXPECT_FALSE(version_current);
+}
+
+TEST_F(MainThreadDeliveryFixture, visual_subtitle_batches_stop_when_ui_lifetime_expires) {
+	auto event_lifetime = agi::ui::MakeLifetime();
+	int callback_count = 0;
+	auto sink = CreateAsyncVideoProviderMainThreadSink(
+		event_lifetime,
+		{
+			[&](VideoRenderPacket, double) {
+				++callback_count;
+			},
+			{},
+		{}},
+		AsyncVideoFrameDeliveryMode::VisualSubtitleBatches);
+
+	VideoRenderPacket packet;
+	packet.delivery_class = VideoRenderDeliveryClass::VisualSubtitleIntermediate;
+	packet.visual_interaction_id = 11;
+	sink.on_frame_ready(std::move(packet), 0.0);
+	ASSERT_TRUE(WaitForMainTasks(1));
+	event_lifetime.reset();
+
+	EXPECT_EQ(1u, PumpOneMainTask());
+	EXPECT_EQ(0, callback_count);
+	EXPECT_EQ(0u, MainTaskCount());
+}
+
+TEST_F(MainThreadDeliveryFixture, default_delivery_preserves_every_frame) {
+	auto event_lifetime = agi::ui::MakeLifetime();
+	std::vector<int> delivered_frames;
+	auto sink = CreateAsyncVideoProviderMainThreadSink(
+		event_lifetime,
+		{
+			[&](VideoRenderPacket packet, double) {
+				delivered_frames.push_back(packet.frame_number);
+			},
+			{},
+			{}
+		});
+
+	for (int frame = 0; frame < 3; ++frame) {
+		VideoRenderPacket packet;
+		packet.frame_number = frame;
+		sink.on_frame_ready(std::move(packet), 0.0);
+	}
+
+	ASSERT_TRUE(WaitForMainTasks(3));
+	EXPECT_EQ(3u, MainTaskCount());
+	EXPECT_EQ(3u, PumpMainTasks());
+	EXPECT_EQ((std::vector<int>{0, 1, 2}), delivered_frames);
+}
+
+TEST_F(MainThreadDeliveryFixture, visual_subtitle_batches_coalesce_only_visual_packets) {
+	auto event_lifetime = agi::ui::MakeLifetime();
+	std::vector<int> delivered_frames;
+	auto sink = CreateAsyncVideoProviderMainThreadSink(
+		event_lifetime,
+		{
+			[&](VideoRenderPacket packet, double) {
+				delivered_frames.push_back(packet.frame_number);
+			},
+			{},
+			{}},
+		AsyncVideoFrameDeliveryMode::VisualSubtitleBatches);
+
+	auto visual_packet = [](int frame, VideoRenderDeliveryClass delivery_class, uint64_t interaction_id) {
+		VideoRenderPacket packet;
+		packet.frame_number = frame;
+		packet.delivery_class = delivery_class;
+		packet.visual_interaction_id = interaction_id;
+		return packet;
+	};
+
+	sink.on_frame_ready(visual_packet(1, VideoRenderDeliveryClass::VisualSubtitleIntermediate, 7), 0.0);
+	sink.on_frame_ready(visual_packet(2, VideoRenderDeliveryClass::VisualSubtitleIntermediate, 7), 1.0);
+	sink.on_frame_ready(visual_packet(3, VideoRenderDeliveryClass::VisualSubtitleIntermediate, 7), 2.0);
+	sink.on_frame_ready(visual_packet(4, VideoRenderDeliveryClass::EveryFrame, 0), 3.0);
+	sink.on_frame_ready(visual_packet(5, VideoRenderDeliveryClass::VisualSubtitleIntermediate, 7), 4.0);
+	sink.on_frame_ready(visual_packet(6, VideoRenderDeliveryClass::EveryFrame, 0), 5.0);
+	sink.on_frame_ready(visual_packet(7, VideoRenderDeliveryClass::EveryFrame, 0), 6.0);
+
+	ASSERT_TRUE(WaitForMainTasks(5));
+	EXPECT_EQ(5u, MainTaskCount());
+	EXPECT_EQ(5u, PumpMainTasks());
+	EXPECT_EQ((std::vector<int>{3, 4, 5, 6, 7}), delivered_frames);
+}
+
+TEST_F(MainThreadDeliveryFixture, visual_subtitle_batch_after_normal_packet_does_not_overtake_it) {
+	auto event_lifetime = agi::ui::MakeLifetime();
+	std::vector<int> delivered_frames;
+	auto sink = CreateAsyncVideoProviderMainThreadSink(
+		event_lifetime,
+		{
+			[&](VideoRenderPacket packet, double) {
+				delivered_frames.push_back(packet.frame_number);
+			},
+			{},
+		{}},
+		AsyncVideoFrameDeliveryMode::VisualSubtitleBatches);
+
+	VideoRenderPacket first_visual;
+	first_visual.frame_number = 1;
+	first_visual.delivery_class = VideoRenderDeliveryClass::VisualSubtitleIntermediate;
+	first_visual.visual_interaction_id = 12;
+	sink.on_frame_ready(std::move(first_visual), 0.0);
+
+	VideoRenderPacket normal;
+	normal.frame_number = 2;
+	normal.delivery_class = VideoRenderDeliveryClass::EveryFrame;
+	sink.on_frame_ready(std::move(normal), 1.0);
+
+	VideoRenderPacket later_visual;
+	later_visual.frame_number = 3;
+	later_visual.delivery_class = VideoRenderDeliveryClass::VisualSubtitleIntermediate;
+	later_visual.visual_interaction_id = 12;
+	sink.on_frame_ready(std::move(later_visual), 2.0);
+
+	ASSERT_TRUE(WaitForMainTasks(3));
+	EXPECT_EQ(3u, MainTaskCount());
+	EXPECT_EQ(3u, PumpMainTasks());
+	EXPECT_EQ((std::vector<int>{1, 2, 3}), delivered_frames);
+}
+
+TEST_F(MainThreadDeliveryFixture, visual_subtitle_batches_keep_visual_queue_bounded_while_every_frame_remains_exact) {
+	auto event_lifetime = agi::ui::MakeLifetime();
+	std::vector<int> delivered_frames;
+	auto sink = CreateAsyncVideoProviderMainThreadSink(
+		event_lifetime,
+		{
+			[&](VideoRenderPacket packet, double) {
+				delivered_frames.push_back(packet.frame_number);
+			},
+			{},
+		{}},
+		AsyncVideoFrameDeliveryMode::VisualSubtitleBatches);
+
+	for (int frame = 0; frame < 100; ++frame) {
+		VideoRenderPacket packet;
+		packet.frame_number = frame;
+		packet.delivery_class = VideoRenderDeliveryClass::VisualSubtitleIntermediate;
+		packet.visual_interaction_id = 9;
+		sink.on_frame_ready(std::move(packet), frame);
+	}
+
+	ASSERT_TRUE(WaitForMainTasks(1));
+	EXPECT_EQ(1u, MainTaskCount());
+	ASSERT_EQ(1u, PumpMainTasks());
+	ASSERT_EQ(1u, delivered_frames.size());
+	EXPECT_EQ(99, delivered_frames.front());
+}
+
+TEST_F(MainThreadDeliveryFixture, visual_subtitle_final_packet_is_not_replaced_by_late_intermediate) {
+	auto event_lifetime = agi::ui::MakeLifetime();
+	std::vector<VideoRenderDeliveryClass> delivered_classes;
+	auto sink = CreateAsyncVideoProviderMainThreadSink(
+		event_lifetime,
+		{
+			[&](VideoRenderPacket packet, double) {
+				delivered_classes.push_back(packet.delivery_class);
+			},
+			{},
+			{}},
+		AsyncVideoFrameDeliveryMode::VisualSubtitleBatches);
+
+	VideoRenderPacket intermediate;
+	intermediate.frame_number = 1;
+	intermediate.delivery_class = VideoRenderDeliveryClass::VisualSubtitleIntermediate;
+	intermediate.visual_interaction_id = 8;
+	sink.on_frame_ready(std::move(intermediate), 0.0);
+
+	VideoRenderPacket final;
+	final.frame_number = 2;
+	final.delivery_class = VideoRenderDeliveryClass::VisualSubtitleFinal;
+	final.visual_interaction_id = 8;
+	sink.on_frame_ready(std::move(final), 1.0);
+
+	VideoRenderPacket late_intermediate;
+	late_intermediate.frame_number = 3;
+	late_intermediate.delivery_class = VideoRenderDeliveryClass::VisualSubtitleIntermediate;
+	late_intermediate.visual_interaction_id = 8;
+	sink.on_frame_ready(std::move(late_intermediate), 2.0);
+
+	ASSERT_TRUE(WaitForMainTasks(1));
+	EXPECT_EQ(1u, MainTaskCount());
+	ASSERT_EQ(1u, PumpMainTasks());
+	ASSERT_EQ(1u, delivered_classes.size());
+	EXPECT_EQ(VideoRenderDeliveryClass::VisualSubtitleFinal, delivered_classes.front());
+
+	late_intermediate = {};
+	late_intermediate.frame_number = 4;
+	late_intermediate.delivery_class = VideoRenderDeliveryClass::VisualSubtitleIntermediate;
+	late_intermediate.visual_interaction_id = 8;
+	sink.on_frame_ready(std::move(late_intermediate), 3.0);
+	EXPECT_EQ(0u, MainTaskCount());
 }
 
 TEST(async_video_provider, pending_full_subtitles_coalesce_same_line_updates) {
@@ -2696,6 +2931,32 @@ TEST(async_video_provider, dropped_compatibility_render_does_not_mark_visible_li
 	EXPECT_EQ(4, frames.back().frame_number);
 	EXPECT_GT(frames.back().subtitle_generation, frames.front().subtitle_generation);
 	EXPECT_EQ(3, subs->draw_calls);
+}
+
+TEST(async_video_provider, visual_subtitle_final_update_keeps_incremental_packet_metadata) {
+	auto state = std::make_shared<VideoProviderState>();
+	EventRecorder recorder;
+	AsyncVideoProvider provider(
+		agi::make_unique<FakeVideoProvider>(state),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		recorder);
+
+	auto subtitles = MakeSubtitleFile("before");
+	provider.LoadSubtitles(&subtitles);
+	provider.RequestFrame(0, 0);
+	ASSERT_TRUE(recorder.WaitForCount(1));
+
+	provider.UpdateSubtitles(&subtitles, &subtitles.Events.front(), {
+		VideoRenderDeliveryClass::VisualSubtitleFinal,
+		42,
+		true});
+	ASSERT_TRUE(recorder.WaitForCount(2));
+
+	auto frames = recorder.Snapshot();
+	ASSERT_EQ(2u, frames.size());
+	EXPECT_EQ(VideoRenderDeliveryClass::EveryFrame, frames.front().delivery_class);
+	EXPECT_EQ(VideoRenderDeliveryClass::VisualSubtitleFinal, frames.back().delivery_class);
+	EXPECT_EQ(42u, frames.back().visual_interaction_id);
 }
 
 TEST(async_video_provider, dropped_packet_advances_overlay_continuity_generation_on_next_delivered_event) {

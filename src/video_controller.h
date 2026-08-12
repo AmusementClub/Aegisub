@@ -30,7 +30,9 @@
 #pragma once
 
 #include "async_video_provider_host.h"
+#include "deadline_pacing_policy.h"
 #include "video_render_packet.h"
+#include "video_subtitle_update_policy.h"
 
 #include <libaegisub/signal.h>
 #include <libaegisub/vfr.h>
@@ -88,6 +90,12 @@ class VideoController final {
 	/// Playback timer used to periodically check if we should go to the next
 	/// frame while playing video
 	std::unique_ptr<VideoControllerTimer> playback_timer;
+	std::unique_ptr<VideoControllerTimer> visual_subtitle_update_timer;
+	DeadlinePacingPolicy visual_subtitle_update_pacer{std::chrono::milliseconds(33)};
+	video_subtitle_update_policy::UpdateCoalescer pending_visual_subtitle_updates;
+	video_subtitle_update_policy::UpdateCoalescer final_visual_subtitle_updates;
+	bool visual_subtitle_interaction_active = false;
+	std::uint64_t visual_subtitle_interaction_id = 0;
 
 	/// Time when playback was last started
 	std::chrono::steady_clock::time_point playback_start_time;
@@ -142,6 +150,14 @@ class VideoController final {
 	std::deque<VideoRenderPacket> recent_render_packets;
 
 	void OnPlayTimer();
+	void OnVisualSubtitleUpdateTimer();
+	void ArmVisualSubtitleUpdateTimer();
+	void FlushPendingVisualSubtitleUpdate();
+	void FlushDueVisualSubtitleUpdateBeforeFrameRequest();
+	void SubmitSubtitleUpdate(
+		video_subtitle_update_policy::CoalescedUpdate update,
+		int reason);
+	void ResetVisualSubtitleInteraction() noexcept;
 
 	void HandleVideoError(std::string const& message);
 	void HandleSubtitlesError(std::string const& message);
@@ -194,6 +210,10 @@ public:
 	void NotifyFramePresented(int frame_number);
 	/// Drop cached render packets after external video render pipeline changes
 	void InvalidateRenderPacketCache();
+	/// Begin coalescing subtitle-provider updates produced by a legacy visual tool.
+	void BeginVisualSubtitleInteraction();
+	/// Submit and present the final subtitle state for a legacy visual interaction.
+	void EndVisualSubtitleInteraction();
 
 	/// Get the actual aspect ratio from a predefined AR type
 	double GetARFromType(AspectRatio type) const;

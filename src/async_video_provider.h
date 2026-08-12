@@ -140,6 +140,8 @@ class AsyncVideoProvider {
 	std::atomic<std::uint64_t> request_version{ 0 };
 	/// Monotonic counter used to invalidate frames when the rendered content changes.
 	std::atomic<std::uint64_t> content_version{ 0 };
+	/// Process-unique identity used to reject queued packets from replaced providers.
+	std::uint64_t const provider_version;
 
 	std::vector<std::shared_ptr<VideoFrame>> source_buffers;
 	std::vector<std::shared_ptr<VideoFrame>> composited_buffers;
@@ -157,6 +159,9 @@ class AsyncVideoProvider {
 	std::vector<std::pair<const AssDialogue*, int>> subtitle_source_lines;
 	bool pending_overlay_upload_continuity_invalidation = false;
 	bool pending_check_updated = false;
+	bool pending_force_current_frame_render = false;
+	VideoSubtitleUpdateOptions pending_subtitle_update_options;
+	bool pending_normal_frame_request = false;
 	bool has_pending_current_frame_context = false;
 	int pending_current_frame_number = -1;
 	double pending_current_time = -1.;
@@ -185,7 +190,7 @@ public:
 	///
 	/// This function blocks until is it is safe for the calling thread to
 	/// modify subs
-	void LoadSubtitles(const AssFile *subs) throw();
+	void LoadSubtitles(const AssFile *subs, VideoSubtitleUpdateOptions options = {}) throw();
 
 	/// @brief Update a previously loaded subtitle file
 	/// @param subs Subtitle file which was last passed to LoadSubtitles
@@ -193,8 +198,14 @@ public:
 	///
 	/// This function only supports changes to existing lines, and not
 	/// insertions or deletions.
-	void UpdateSubtitles(const AssFile *subs, const AssDialogue *changes) throw();
-	void UpdateSubtitles(const AssFile *subs, std::span<const AssDialogue *const> changes) throw();
+	void UpdateSubtitles(
+		const AssFile *subs,
+		const AssDialogue *changes,
+		VideoSubtitleUpdateOptions options = {}) throw();
+	void UpdateSubtitles(
+		const AssFile *subs,
+		std::span<const AssDialogue *const> changes,
+		VideoSubtitleUpdateOptions options = {}) throw();
 
 	/// @brief Queue a latest-only preview request for a frame
 	/// @brief frame Frame number

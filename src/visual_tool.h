@@ -21,6 +21,7 @@
 #pragma once
 
 #include "gl_wrap.h"
+#include "deadline_pacing_policy.h"
 #include "vector2d.h"
 #include "options.h"
 #include "subtitle_command_session.h"
@@ -142,9 +143,14 @@ protected:
 	agi::signal::Connection file_changed_connection;
 	int interaction_render_timer_id;
 	wxTimer interaction_render_timer;
+	DeadlinePacingPolicy interaction_render_pacer{std::chrono::milliseconds(16)};
 	int commit_id_reset_timer_id; ///< Distinct from other timers on VideoDisplay
 	wxTimer commit_id_reset_timer; ///< Splits keyboard-nudge undo after idle
 	void OnInteractionRenderTimer(wxTimerEvent &);
+	void ArmInteractionRenderTimer();
+	void RenderInteractionFrame(int reason);
+	void BeginInteractionPacing(int selection_count);
+	void EndInteractionPacing(bool render_final, int selection_count = -1);
 
 	/// @brief Identify the line to pass to AssFile::Commit when exactly one line changed
 	virtual AssDialogue *GetCommitTargetLine() const;

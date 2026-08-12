@@ -60,6 +60,7 @@
 #include "video_renderer_opengl.h"
 #include "video_render_routing.h"
 #include "video_display_layout.h"
+#include "video_display_frame_policy.h"
 #include "video_memory_stats.h"
 #include "video_overlay_draw_context_legacy_gl.h"
 #include "video_zoom.h"
@@ -827,6 +828,16 @@ void VideoDisplay::OnVideoProviderChanged(AsyncVideoProvider *provider) {
 }
 
 void VideoDisplay::UploadFrameData(VideoRenderPacket const& packet, double) {
+	if (ShouldIgnoreVideoDisplayFrameReady(
+		freeSize,
+		con->GetUI().videoDisplay == this)) {
+		perf_trace::ObserveVideoUiDuration(
+			"video_display.frame_ready_ignored_hidden_attached",
+			0.0,
+			packet.frame_number);
+		return;
+	}
+
 	bool const defer_interactive_subtitle_packet = ShouldDeferIncomingSubtitlePacket(packet);
 	if (defer_interactive_subtitle_packet) {
 		pending_packet = packet;

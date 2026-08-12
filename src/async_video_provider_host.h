@@ -12,6 +12,12 @@ struct AsyncVideoProviderEventSink {
 	std::function<void(std::string const&)> on_subtitles_error;
 };
 
+enum class AsyncVideoFrameDeliveryMode {
+	EveryFrame,
+	VisualSubtitleBatches
+};
+
 AsyncVideoProviderEventSink CreateAsyncVideoProviderMainThreadSink(
 	agi::ui::WeakLifetime event_lifetime,
-	AsyncVideoProviderEventSink sink);
+	AsyncVideoProviderEventSink sink,
+	AsyncVideoFrameDeliveryMode frame_delivery_mode = AsyncVideoFrameDeliveryMode::EveryFrame);

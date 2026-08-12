@@ -66,8 +66,10 @@ void add_range(std::vector<int>& rows, int first, int last) {
 			merged.push_back(*existing++);
 		if (existing == rows.end() || *existing > row)
 			merged.push_back(row);
-		else
+		else {
+			merged.push_back(row);
 			++existing;
+		}
 		if (row == last)
 			break;
 	}

@@ -167,6 +167,10 @@ void VisualToolBase::OnCommit(int type, AssDialogue const* changed) {
 
 void VisualToolBase::OnSeek(int new_frame) {
 	if (frame_number == new_frame) return;
+	perf_trace::VideoUiDurationScope trace(
+		"grid_select.visual.seek",
+		frame_number,
+		new_frame);
 
 	frame_number = new_frame;
 	OnFrameChanged();
@@ -193,7 +197,12 @@ void VisualToolBase::OnMouseCaptureLost(wxMouseCaptureLostEvent &) {
 }
 
 void VisualToolBase::OnActiveLineChanged(AssDialogue *new_line) {
-	if (!IsDisplayed(new_line))
+	bool const displayed = IsDisplayed(new_line);
+	perf_trace::VideoUiDurationScope trace(
+		"grid_select.visual.active",
+		new_line ? 1 : 0,
+		displayed ? 1 : 0);
+	if (!displayed)
 		new_line = nullptr;
 
 	bool const interaction_cancelled = CancelInteraction(true);

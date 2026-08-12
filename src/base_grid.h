@@ -68,6 +68,18 @@ class BaseGrid final : public wxWindow {
 	std::vector<agi::signal::Connection> connections;
 	int lineHeight = 1;     ///< Height of a line in pixels in the current font
 	bool holding = false;   ///< Is a drag selection in process?
+	/// Last handled drag-selection input, used to coalesce duplicate mouse motion.
+	int last_drag_row = -1;
+	int last_drag_modifiers = -1;
+	aegisub::presentation::Revision last_drag_revision = 0;
+	bool drag_selection_preview_active = false;
+	int drag_selection_preview_active_row = -1;
+	int drag_selection_preview_first_row = -1;
+	int drag_selection_preview_last_row = -1;
+	bool drag_selection_preview_add_base = false;
+	bool committing_drag_selection_preview = false;
+	bool handling_mouse_selection = false;
+	std::vector<int> drag_selection_base_rows;
 	wxFont font;            ///< Current grid font
 	wxScrollBar *scrollBar; ///< The grid's scrollbar
 	SubtitleTimeDisplayMode display_mode = SubtitleTimeDisplayMode::Ass;
@@ -131,6 +143,7 @@ class BaseGrid final : public wxWindow {
 	void OnKeyDown(wxKeyEvent &event);
 	void OnCharHook(wxKeyEvent &event);
 	void OnMouseEvent(wxMouseEvent &event);
+	void OnMouseCaptureLost(wxMouseCaptureLostEvent &event);
 	void OnPaint(wxPaintEvent &event);
 	void OnScroll(wxScrollEvent &event);
 	void OnShowColMenu(wxCommandEvent &event);
@@ -141,6 +154,9 @@ class BaseGrid final : public wxWindow {
 	void OnVideoProviderChanged();
 
 	void AdjustScrollbar();
+	void ApplyDragSelectionPreview(int active_row, int anchor_row, bool add_base);
+	void CommitDragSelectionPreview();
+	void ClearDragSelectionPreview(bool cancel_drag = false);
 	std::vector<int> GetRowsDisplayedAtCurrentFrame() const;
 	std::vector<int> GetSelectedRowsInWindow() const;
 	wxRect GetScrollableRect() const;

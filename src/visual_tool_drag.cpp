@@ -27,6 +27,8 @@
 #include "include/aegisub/context_ui.h"
 #include "libresrc/libresrc.h"
 #include "options.h"
+#include "perf_trace.h"
+#include "project.h"
 #include "selection_controller.h"
 #include "utils.h"
 #include "video_controller.h"
@@ -38,6 +40,7 @@
 #include <libaegisub/make_unique.h>
 
 #include <algorithm>
+#include <unordered_set>
 #include <wx/toolbar.h>
 
 static const DraggableFeatureType DRAG_ORIGIN = DRAG_BIG_TRIANGLE;
@@ -49,8 +52,12 @@ VisualToolDrag::VisualToolDrag(VideoDisplay *parent, agi::Context *context)
 {
 	auto core = c->GetCore();
 	connections.push_back(core.selectionController->AddSelectionListener(&VisualToolDrag::OnSelectedSetChanged, this));
+	connections.push_back(core.project->AddTimecodesListener([this](agi::vfr::Framerate const&) {
+		OnFileChanged();
+		this->parent->Render();
+	}));
 	auto const& sel_set = core.selectionController->GetSelectedSet();
-	selection.insert(begin(selection), begin(sel_set), end(sel_set));
+	selection = sel_set;
 }
 
 void VisualToolDrag::SetToolbar(wxToolBar *tb) {
@@ -124,65 +131,113 @@ void VisualToolDrag::OnFileChanged() {
 	primary = nullptr;
 	active_feature = nullptr;
 
-	auto core = c->GetCore();
-	for (auto& diag : core.ass->Events) {
-		if (IsDisplayed(&diag))
+	RebuildFrameVisibility();
+	for (auto& diag : c->GetCore().ass->Events)
+		if (frame_visibility.Visible().count(&diag))
 			MakeFeatures(&diag);
-	}
 
 	UpdateToggleButtons();
 }
 
 void VisualToolDrag::OnFrameChanged() {
-	if (primary && !IsDisplayed(primary->line))
-		primary = nullptr;
+	perf_trace::VideoUiDurationScope trace(
+		"grid_select.visual.frame",
+		static_cast<int>(frame_visibility.Visible().size()),
+		static_cast<int>(features.size()));
 
-	auto feat = features.begin();
-	auto end = features.end();
+	if (!frame_visibility_valid) {
+		OnFileChanged();
+		return;
+	}
 
+	std::vector<AssDialogue *> entered;
+	std::vector<AssDialogue *> exited;
+	frame_visibility.Advance(frame_visibility_frame, frame_number, entered, exited);
+	frame_visibility_frame = frame_number;
+	auto const changed_line_count = entered.size() + exited.size();
+	RemoveFeatures(exited);
+	AddFeatures(std::move(entered));
+	trace.SetDetails(
+		static_cast<int>(changed_line_count),
+		static_cast<int>(features.size()));
+}
+
+void VisualToolDrag::RebuildFrameVisibility() {
 	auto core = c->GetCore();
+	std::vector<aegisub::visual_frame_visibility::Interval<AssDialogue>> intervals;
+	intervals.reserve(core.ass->Events.size());
 	for (auto& diag : core.ass->Events) {
-		if (IsDisplayed(&diag)) {
-			// Features don't exist and should
-			if (feat == end || feat->line != &diag)
-				MakeFeatures(&diag, feat);
-			// Move past already existing features for the line
-			else
-				while (feat != end && feat->line == &diag) ++feat;
+		if (diag.Comment)
+			continue;
+		intervals.push_back({
+			core.videoController->FrameAtTime(diag.Start, agi::vfr::START),
+			core.videoController->FrameAtTime(diag.End, agi::vfr::END),
+			&diag,
+		});
+	}
+	frame_visibility.Rebuild(intervals, frame_number);
+	frame_visibility_valid = true;
+	frame_visibility_frame = frame_number;
+}
+
+void VisualToolDrag::RemoveFeatures(std::vector<AssDialogue *> const& lines) {
+	if (lines.empty())
+		return;
+
+	std::unordered_set<AssDialogue *> removed_lines(lines.begin(), lines.end());
+	if (primary && removed_lines.count(primary->line))
+		primary = nullptr;
+	for (auto feat = features.begin(); feat != features.end(); ) {
+		if (!removed_lines.count(feat->line)) {
+			++feat;
+			continue;
 		}
-		else {
-			// Remove all features for this line (if any)
-			while (feat != end && feat->line == &diag) {
-				if (&*feat == active_feature) active_feature = nullptr;
-				feat->line = nullptr;
-				RemoveSelection(&*feat);
-				feat = features.erase(feat);
-			}
-		}
+		if (&*feat == active_feature)
+			active_feature = nullptr;
+		sel_features.erase(&*feat);
+		feat->line = nullptr;
+		feat = features.erase(feat);
 	}
 }
 
-template<class C, class T> static bool line_not_present(C const& set, T const& it) {
-	return std::none_of(set.begin(), set.end(), [&](typename C::value_type const& cmp) {
-		return cmp->line == it->line;
+void VisualToolDrag::AddFeatures(std::vector<AssDialogue *> lines) {
+	if (lines.empty())
+		return;
+
+	std::sort(lines.begin(), lines.end(), [](AssDialogue const* left, AssDialogue const* right) {
+		return left->Row < right->Row;
 	});
+	auto pos = features.begin();
+	for (auto *diag : lines) {
+		while (pos != features.end() && pos->line && pos->line->Row < diag->Row)
+			++pos;
+		MakeFeatures(diag, pos);
+	}
 }
 
 void VisualToolDrag::OnSelectedSetChanged() {
 	auto core = c->GetCore();
 	auto const& new_sel_set = core.selectionController->GetSelectedSet();
-	std::vector<AssDialogue *> new_sel(begin(new_sel_set), end(new_sel_set));
+	perf_trace::VideoUiDurationScope trace(
+		"grid_select.visual.selection",
+		static_cast<int>(new_sel_set.size()),
+		static_cast<int>(features.size()));
+	std::set<AssDialogue *> selected_feature_lines;
+	for (auto *feature : sel_features)
+		if (feature->line)
+			selected_feature_lines.insert(feature->line);
 
 	bool any_changed = false;
 	for (auto it = features.begin(); it != features.end(); ) {
-		bool was_selected = std::binary_search(selection.begin(), selection.end(), it->line);
-		bool is_selected = std::binary_search(new_sel.begin(), new_sel.end(), it->line);
+		bool was_selected = selection.count(it->line) != 0;
+		bool is_selected = new_sel_set.count(it->line) != 0;
 		if (was_selected && !is_selected) {
 			sel_features.erase(&*it++);
 			any_changed = true;
 		}
 		else {
-			if (is_selected && !was_selected && it->type == DRAG_START && line_not_present(sel_features, it)) {
+			if (is_selected && !was_selected && it->type == DRAG_START
+				&& selected_feature_lines.insert(it->line).second) {
 				sel_features.insert(&*it);
 				any_changed = true;
 			}
@@ -192,7 +247,7 @@ void VisualToolDrag::OnSelectedSetChanged() {
 
 	if (any_changed)
 		parent->Render();
-	selection = std::move(new_sel);
+	selection = new_sel_set;
 }
 
 void VisualToolDrag::Draw() {
@@ -289,7 +344,7 @@ void VisualToolDrag::MakeFeatures(AssDialogue *diag, feature_list::iterator pos)
 	feat->type = DRAG_START;
 	feat->line = diag;
 
-	if (std::binary_search(selection.begin(), selection.end(), diag))
+	if (selection.count(diag))
 		sel_features.insert(feat.get());
 	features.insert(pos, *feat.release());
 

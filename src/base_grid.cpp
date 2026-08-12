@@ -145,9 +145,17 @@ BaseGrid::BaseGrid(wxWindow* parent, agi::Context *context)
 		core.selectionController->AddActiveLineListener(&BaseGrid::OnActiveLineChanged, this),
 		core.selectionController->AddSelectionListener([&]{
 			perf_trace::VideoUiDurationScope trace("grid_select.grid.selection", GetRows());
+			bool const cancelled_preview = drag_selection_preview_active
+				&& !committing_drag_selection_preview
+				&& !handling_mouse_selection;
+			if (cancelled_preview)
+				ClearDragSelectionPreview(true);
 			++grid_revision;
 			auto new_selected_rows = GetSelectedRowsInWindow();
-			RefreshChangedVisibleRows(selected_rows, new_selected_rows);
+			if (cancelled_preview)
+				Refresh(false);
+			else
+				RefreshChangedVisibleRows(selected_rows, new_selected_rows);
 			selected_rows = std::move(new_selected_rows);
 		}),
 		core.project->AddVideoProviderListener(&BaseGrid::OnVideoProviderChanged, this),
@@ -197,6 +205,7 @@ BEGIN_EVENT_TABLE(BaseGrid,wxWindow)
 	EVT_SIZE(BaseGrid::OnSize)
 	EVT_COMMAND_SCROLL(GRID_SCROLLBAR,BaseGrid::OnScroll)
 	EVT_MOUSE_EVENTS(BaseGrid::OnMouseEvent)
+	EVT_MOUSE_CAPTURE_LOST(BaseGrid::OnMouseCaptureLost)
 	EVT_KEY_DOWN(BaseGrid::OnKeyDown)
 	EVT_CHAR_HOOK(BaseGrid::OnCharHook)
 	EVT_MENU_RANGE(MENU_SHOW_COL,MENU_SHOW_COL+15,BaseGrid::OnShowColMenu)
@@ -204,6 +213,11 @@ BEGIN_EVENT_TABLE(BaseGrid,wxWindow)
 END_EVENT_TABLE()
 
 void BaseGrid::OnSubtitlesCommit(int type, const AssDialogue *single_line) {
+	if (type == AssFile::COMMIT_NEW
+		|| (type & AssFile::COMMIT_ORDER)
+		|| (type & AssFile::COMMIT_DIAG_ADDREM))
+		ClearDragSelectionPreview(true);
+
 	auto const before_revision = grid_revision;
 	++grid_revision;
 	std::vector<std::string> diff_column_ids;
@@ -360,6 +374,13 @@ void BaseGrid::UpdateMaps(bool remeasure_columns) {
 
 void BaseGrid::OnActiveLineChanged(AssDialogue *new_active) {
 	perf_trace::VideoUiDurationScope trace("grid_select.grid.active", GetRows());
+	bool const cancelled_preview = drag_selection_preview_active
+		&& !committing_drag_selection_preview
+		&& !handling_mouse_selection;
+	if (cancelled_preview) {
+		ClearDragSelectionPreview(true);
+		selected_rows = GetSelectedRowsInWindow();
+	}
 	++grid_revision;
 
 	if (new_active) {
@@ -368,8 +389,11 @@ void BaseGrid::OnActiveLineChanged(AssDialogue *new_active) {
 		extendRow = active_row = new_active->Row;
 		Refresh(false);
 	}
-	else
+	else {
 		active_row = -1;
+		if (cancelled_preview)
+			Refresh(false);
+	}
 }
 
 void BaseGrid::MakeRowVisible(int row) {
@@ -800,6 +824,7 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 	bool shift = event.ShiftDown();
 	bool alt = event.AltDown();
 	bool ctrl = event.CmdDown();
+	int const drag_modifiers = (shift ? 1 : 0) | (ctrl ? 2 : 0) | (alt ? 4 : 0);
 	auto core = context->GetCore();
 	auto ui = context->GetUI();
 
@@ -826,7 +851,11 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 			if (dlg)
 				MakeRowVisible(row);
 			holding = false;
+			last_drag_row = -1;
+			last_drag_modifiers = -1;
 			ReleaseMouse();
+			CommitDragSelectionPreview();
+			return;
 		}
 		else {
 			// Only scroll if the mouse has moved to a different row to avoid
@@ -847,7 +876,10 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 		CaptureMouse();
 	}
 
-	if (holding && !click && !dclick && row == extendRow) {
+	if (holding && !click && !dclick
+		&& row == last_drag_row
+		&& drag_modifiers == last_drag_modifiers
+		&& grid_revision == last_drag_revision) {
 		// Mouse motion within the current row cannot change the drag selection.
 		// Avoid rebuilding the selected-row vector and invalidating the same row
 		// for every motion event delivered by wx.
@@ -856,10 +888,39 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 
 	if ((click || holding || dclick) && dlg) {
 		int old_extend = extendRow;
+		bool const drag_motion = holding && !click && !dclick;
+		if (drag_motion) {
+			// A modifier transition changes the selection base in the legacy
+			// per-motion implementation. Materialize the current preview once so
+			// re-pressing Ctrl continues from what is actually selected on screen.
+			bool const ctrl_changed = last_drag_modifiers >= 0
+				&& ((last_drag_modifiers ^ drag_modifiers) & 2) != 0;
+			if (ctrl_changed && drag_selection_preview_active) {
+				CommitDragSelectionPreview();
+			}
+			if (ctrl && !drag_selection_preview_active && drag_selection_base_rows.empty()) {
+				auto const& current_selection = core.selectionController->GetSelectedSet();
+				drag_selection_base_rows.reserve(current_selection.size());
+				for (auto *line : current_selection)
+					if (line)
+						drag_selection_base_rows.push_back(line->Row);
+				std::sort(drag_selection_base_rows.begin(), drag_selection_base_rows.end());
+			}
 
-		auto const& selection = core.selectionController->GetSelectedSet();
+			selection_handled = true;
+			perf_trace::VideoUiDurationScope select_trace(
+				"grid_select.mouse.total",
+				std::abs(row - old_extend) + 1);
+			ApplyDragSelectionPreview(row, old_extend, ctrl);
+			last_drag_row = row;
+			last_drag_modifiers = drag_modifiers;
+			last_drag_revision = grid_revision;
+			return;
+		}
+
 		std::vector<int> selected_rows;
 		if (ctrl) {
+			auto const& selection = core.selectionController->GetSelectedSet();
 			selected_rows.reserve(selection.size());
 			for (auto *line : selection)
 				if (line)
@@ -878,6 +939,10 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 		});
 		if (plan.handled) {
 			selection_handled = true;
+			handling_mouse_selection = true;
+			auto end_mouse_selection = agi::make_scope_exit([&] {
+				handling_mouse_selection = false;
+			});
 			perf_trace::VideoUiDurationScope select_trace(
 				"grid_select.mouse.total",
 				static_cast<int>(plan.selected_rows.size()),
@@ -905,6 +970,20 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 					ui.audioBox->ScrollToActiveLine();
 				core.videoController->JumpToTime(dlg->Start);
 			}
+			if (holding && click) {
+				drag_selection_base_rows.clear();
+				auto const& current_selection = core.selectionController->GetSelectedSet();
+				drag_selection_base_rows.reserve(current_selection.size());
+				for (auto *line : current_selection)
+					if (line)
+						drag_selection_base_rows.push_back(line->Row);
+				std::sort(drag_selection_base_rows.begin(), drag_selection_base_rows.end());
+			}
+			if (holding) {
+				last_drag_row = row;
+				last_drag_modifiers = drag_modifiers;
+				last_drag_revision = grid_revision;
+			}
 			return;
 		}
 	}
@@ -919,6 +998,104 @@ void BaseGrid::OnMouseEvent(wxMouseEvent &event) {
 	}
 
 	event.Skip();
+}
+
+void BaseGrid::OnMouseCaptureLost(wxMouseCaptureLostEvent &) {
+	holding = false;
+	last_drag_row = -1;
+	last_drag_modifiers = -1;
+	CommitDragSelectionPreview();
+}
+
+void BaseGrid::ApplyDragSelectionPreview(int active_row, int anchor_row, bool add_base) {
+	perf_trace::VideoUiDurationScope trace(
+		"grid_select.mouse.preview",
+		std::abs(active_row - anchor_row) + 1,
+		add_base ? static_cast<int>(drag_selection_base_rows.size()) : 0);
+	int preview_first_row = std::min(active_row, anchor_row);
+	int preview_last_row = std::max(active_row, anchor_row);
+	// Ctrl drag is additive in the legacy grid: folding back keeps every row
+	// crossed while Ctrl was held. All ranges share the anchor, so their union
+	// remains one interval and can be accumulated without per-row work.
+	if (add_base && drag_selection_preview_active && drag_selection_preview_add_base) {
+		preview_first_row = std::min(preview_first_row, drag_selection_preview_first_row);
+		preview_last_row = std::max(preview_last_row, drag_selection_preview_last_row);
+	}
+	int const old_active_row = drag_selection_preview_active
+		? drag_selection_preview_active_row
+		: this->active_row;
+
+	drag_selection_preview_active = true;
+	drag_selection_preview_active_row = active_row;
+	drag_selection_preview_first_row = preview_first_row;
+	drag_selection_preview_last_row = preview_last_row;
+	drag_selection_preview_add_base = add_base;
+	++grid_revision;
+
+	auto new_selected_rows = GetSelectedRowsInWindow();
+	RefreshChangedVisibleRows(selected_rows, new_selected_rows);
+	selected_rows = std::move(new_selected_rows);
+	if (old_active_row != active_row) {
+		RefreshSubtitleGridRow(old_active_row);
+		RefreshSubtitleGridRow(active_row);
+	}
+}
+
+void BaseGrid::CommitDragSelectionPreview() {
+	if (!drag_selection_preview_active)
+		return;
+
+	auto const active_row = drag_selection_preview_active_row;
+	bool const add_base = drag_selection_preview_add_base;
+	int const anchor_row = extendRow;
+	int const first_row = drag_selection_preview_first_row;
+	int const last_row = drag_selection_preview_last_row;
+	auto base_rows = add_base ? std::move(drag_selection_base_rows) : std::vector<int>{};
+	ClearDragSelectionPreview();
+	committing_drag_selection_preview = true;
+	auto end_commit = agi::make_scope_exit([&] { committing_drag_selection_preview = false; });
+
+	perf_trace::VideoUiDurationScope trace(
+		"grid_select.mouse.commit",
+		std::abs(active_row - anchor_row) + 1,
+		static_cast<int>(base_rows.size()));
+	auto plan = aegisub::subtitle_grid_selection_policy::PlanMouseSelection({
+		GetRows(),
+		first_row,
+		last_row,
+		std::move(base_rows),
+		false,
+		false,
+		true,
+		{false, add_base, false},
+	});
+
+	auto core = context->GetCore();
+	core.selectionController->SetActiveLine(GetDialogue(active_row));
+	extendRow = anchor_row;
+
+	Selection new_selection;
+	for (int selected_row : plan.selected_rows)
+		if (auto *line = GetDialogue(selected_row))
+			new_selection.insert(line);
+	core.selectionController->SetSelectedSet(std::move(new_selection));
+}
+
+void BaseGrid::ClearDragSelectionPreview(bool cancel_drag) {
+	bool const release_capture = cancel_drag && holding && HasCapture();
+	if (cancel_drag) {
+		holding = false;
+		last_drag_row = -1;
+		last_drag_modifiers = -1;
+	}
+	drag_selection_preview_active = false;
+	drag_selection_preview_active_row = -1;
+	drag_selection_preview_first_row = -1;
+	drag_selection_preview_last_row = -1;
+	drag_selection_preview_add_base = false;
+	drag_selection_base_rows.clear();
+	if (release_capture)
+		ReleaseMouse();
 }
 
 void BaseGrid::OnContextMenu(wxContextMenuEvent &evt) {
@@ -980,13 +1157,29 @@ std::vector<int> BaseGrid::GetSelectedRowsInWindow() const {
 	lines = mid(0, lines, GetRows() - yPos);
 	rows.reserve(lines);
 
-	auto window = QueryGridWindow(
-		yPos,
-		lines,
-		std::vector<std::string>{aegisub::presentation::SubtitleGridColumnIdLineNumber});
-	for (auto const& row : window.rows)
-		if (row.state.selected)
-			rows.push_back(row.row_index);
+	// Selection repaint only needs row indices. Avoid building projection rows and
+	// column values on every mouse motion while a drag preview is active.
+	auto const& selection = context->GetCore().selectionController->GetSelectedSet();
+	for (int row = yPos; row < yPos + lines; ++row) {
+		auto const* line = GetDialogue(row);
+		if (!line)
+			continue;
+
+		bool selected = false;
+		if (drag_selection_preview_active) {
+			selected = row >= drag_selection_preview_first_row
+				&& row <= drag_selection_preview_last_row;
+			if (!selected && drag_selection_preview_add_base)
+				selected = std::binary_search(
+					drag_selection_base_rows.begin(), drag_selection_base_rows.end(), row);
+		}
+		else {
+			selected = selection.count(const_cast<AssDialogue *>(line)) != 0;
+		}
+
+		if (selected)
+			rows.push_back(row);
+	}
 
 	return rows;
 }
@@ -1242,13 +1435,26 @@ aegisub::presentation::SubtitleGridRowState BaseGrid::ResolveGridRowState(AssDia
 	auto const& selection = core.selectionController->GetSelectedSet();
 
 	aegisub::presentation::SubtitleGridRowState state;
-	auto const* active_line = core.selectionController->GetActiveLine();
-	state.selected = selection.count(const_cast<AssDialogue*>(&line)) != 0;
-	state.active = active_line == &line;
+	auto const* committed_active_line = core.selectionController->GetActiveLine();
+	auto const* displayed_active_line = drag_selection_preview_active
+		? GetDialogue(drag_selection_preview_active_row)
+		: committed_active_line;
+	if (drag_selection_preview_active) {
+		state.selected =
+			(line.Row >= drag_selection_preview_first_row && line.Row <= drag_selection_preview_last_row)
+			|| (drag_selection_preview_add_base
+				&& std::binary_search(drag_selection_base_rows.begin(), drag_selection_base_rows.end(), line.Row));
+	}
+	else {
+		state.selected = selection.count(const_cast<AssDialogue*>(&line)) != 0;
+	}
+	state.active = displayed_active_line == &line;
 	state.visible_at_current_frame =
 		OPT_GET("Subtitle/Grid/Highlight Subtitles in Frame")->GetBool() &&
 		IsDisplayed(&line);
-	state.collides_with_active = active_line && active_line != &line && line.CollidesWith(active_line);
+	state.collides_with_active = committed_active_line
+		&& committed_active_line != &line
+		&& line.CollidesWith(committed_active_line);
 	return state;
 }
 
@@ -1261,10 +1467,12 @@ bool BaseGrid::IsDisplayed(const AssDialogue *line) const {
 }
 
 void BaseGrid::OnCharHook(wxKeyEvent &event) {
+	int const key = event.GetKeyCode();
+	bool const modifier_only = key == WXK_SHIFT || key == WXK_CONTROL || key == WXK_ALT;
+	if (!holding || !modifier_only)
+		CommitDragSelectionPreview();
 	if (hotkey::check("Subtitle Grid", context, event))
 		return;
-
-	int key = event.GetKeyCode();
 
 	if (key == WXK_UP || key == WXK_DOWN ||
 		key == WXK_PAGEUP || key == WXK_PAGEDOWN ||
@@ -1278,10 +1486,13 @@ void BaseGrid::OnCharHook(wxKeyEvent &event) {
 }
 
 void BaseGrid::OnKeyDown(wxKeyEvent &event) {
+	int const key = event.GetKeyCode();
+	bool const modifier_only = key == WXK_SHIFT || key == WXK_CONTROL || key == WXK_ALT;
+	if (!holding || !modifier_only)
+		CommitDragSelectionPreview();
 	int w,h;
 	GetClientSize(&w, &h);
 
-	int key = event.GetKeyCode();
 	bool ctrl = event.CmdDown();
 	bool alt = event.AltDown();
 	bool shift = event.ShiftDown();

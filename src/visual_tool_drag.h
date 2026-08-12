@@ -20,6 +20,7 @@
 ///
 
 #include "visual_feature.h"
+#include "visual_frame_visibility_index.h"
 #include "visual_tool.h"
 
 /// @class VisualToolDragDraggableFeature
@@ -46,7 +47,10 @@ class VisualToolDrag final : public VisualTool<VisualToolDragDraggableFeature> {
 	/// longer exists
 	Feature *primary = nullptr;
 	/// The last announced selection set
-	std::vector<AssDialogue *> selection;
+	std::set<AssDialogue *> selection;
+	aegisub::visual_frame_visibility::Index<AssDialogue> frame_visibility;
+	bool frame_visibility_valid = false;
+	int frame_visibility_frame = -1;
 
 	/// When the button is pressed, will it convert the line to a move (vs. from
 	/// move to pos)? Used to avoid changing the button's icon unnecessarily
@@ -57,6 +61,9 @@ class VisualToolDrag final : public VisualTool<VisualToolDragDraggableFeature> {
 	/// @param pos Insertion point in the feature list
 	void MakeFeatures(AssDialogue *diag, feature_list::iterator pos);
 	void MakeFeatures(AssDialogue *diag);
+	void RebuildFrameVisibility();
+	void RemoveFeatures(std::vector<AssDialogue *> const& lines);
+	void AddFeatures(std::vector<AssDialogue *> lines);
 
 	void OnSelectedSetChanged();
 

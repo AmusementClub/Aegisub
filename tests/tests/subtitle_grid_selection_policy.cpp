@@ -132,6 +132,52 @@ TEST(subtitle_grid_selection_policy, dragging_uses_anchor_even_without_shift) {
 	EXPECT_EQ((std::vector<int>{1, 2, 3, 4}), plan.selected_rows);
 }
 
+TEST(subtitle_grid_selection_policy, ctrl_drag_keeps_selected_rows_inside_added_range) {
+	auto plan = policy::PlanMouseSelection({
+		8,
+		5,
+		2,
+		{0, 2, 4, 7},
+		false,
+		false,
+		true,
+		{false, true, false},
+	});
+
+	ASSERT_TRUE(plan.handled);
+	ASSERT_TRUE(plan.set_selection);
+	EXPECT_EQ(2, plan.anchor_row);
+	EXPECT_EQ((std::vector<int>{0, 2, 3, 4, 5, 7}), plan.selected_rows);
+}
+
+TEST(subtitle_grid_selection_policy, ctrl_drag_foldback_keeps_rows_already_crossed) {
+	auto outward = policy::PlanMouseSelection({
+		8,
+		6,
+		2,
+		{0, 7},
+		false,
+		false,
+		true,
+		{false, true, false},
+	});
+	ASSERT_TRUE(outward.set_selection);
+
+	auto folded_back = policy::PlanMouseSelection({
+		8,
+		4,
+		2,
+		std::move(outward.selected_rows),
+		false,
+		false,
+		true,
+		{false, true, false},
+	});
+
+	ASSERT_TRUE(folded_back.set_selection);
+	EXPECT_EQ((std::vector<int>{0, 2, 3, 4, 5, 6, 7}), folded_back.selected_rows);
+}
+
 TEST(subtitle_grid_selection_policy, keyboard_plain_move_replaces_selection) {
 	auto plan = policy::PlanKeyboardSelection({
 		10,

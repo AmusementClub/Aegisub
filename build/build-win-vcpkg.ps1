@@ -6,6 +6,7 @@ param(
     [string]$BuildDir = 'build-dir',
     [string]$Configuration = 'Release',
     [string]$Triplet = 'x64-windows-release',
+    [string]$HostTriplet = '',
     [string]$AviSynthIncludeDir = './include/avisynth',
     [string]$FFMS2IncludeDir = './include/ffms2',
     [string]$LibPlaceboIncludeDir = './include/libplacebo',
@@ -91,6 +92,7 @@ function Configure-CMake([string]$CMakePath, [string]$GeneratorName) {
     }
 
     $cmakeArgs = [System.Collections.Generic.List[string]]::new()
+    $effectiveHostTriplet = if ($HostTriplet) { $HostTriplet } else { $Triplet }
     foreach ($arg in @(
         '-S', '.',
         '-B', $BuildDir,
@@ -98,6 +100,7 @@ function Configure-CMake([string]$CMakePath, [string]$GeneratorName) {
         '-A', 'x64',
         "-DCMAKE_TOOLCHAIN_FILE=$resolvedVcpkgRoot/scripts/buildsystems/vcpkg.cmake",
         "-DVCPKG_TARGET_TRIPLET=$Triplet",
+        "-DVCPKG_HOST_TRIPLET=$effectiveHostTriplet",
         "-DVCPKG_OVERLAY_TRIPLETS=$PSScriptRoot/../cmake",
         "-DVCPKG_MANIFEST_FEATURES=skia",
         '-DLUA_WITH_LUASOCKET=ON',

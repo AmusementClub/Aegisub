@@ -17,7 +17,7 @@ endif()
 
 find_package(GTest)
 if(GTEST_FOUND)
-    add_executable(gtest-run EXCLUDE_FROM_ALL
+    set(AEGISUB_GTEST_SOURCES
         tests/tests/access.cpp
         tests/tests/aegisublocale_compat.cpp
         tests/tests/ass_drawing.cpp
@@ -304,6 +304,18 @@ if(GTEST_FOUND)
         src/provider_catalog_builder.cpp
         src/provider_open_policy.cpp
     )
+
+    # Tests consume production objects from the existing libraries. Keep the
+    # explicit list readable, but filter out sources already compiled there.
+    get_target_property(_aegisub_core_sources aegisub_core SOURCES)
+    get_target_property(_libaegisub_sources libaegisub SOURCES)
+    list(REMOVE_ITEM AEGISUB_GTEST_SOURCES
+        ${_aegisub_core_sources}
+        ${_libaegisub_sources}
+    )
+    add_executable(gtest-run EXCLUDE_FROM_ALL ${AEGISUB_GTEST_SOURCES})
+    unset(_aegisub_core_sources)
+    unset(_libaegisub_sources)
     if(WIN32)
         # Observation replay is Windows-specific but intentionally has no live
         # resolver dependency, so deterministic derivation tests stay in gtest.
@@ -312,14 +324,6 @@ if(GTEST_FOUND)
             tests/tests/font_family_obs_store.cpp
             tests/tests/font_family_obs_repository_win.cpp
             tests/tests/font_family_observe_win.cpp
-            src/font_family_derive_win.cpp
-            src/font_family_obs_store.cpp
-            src/font_family_obs_face_stamp_win.cpp
-            src/font_family_obs_repository_win.cpp
-            src/font_family_observe_win.cpp
-            src/gdi_font_resolver.cpp
-            src/font_file_lister_dwrite.cpp
-            src/skia_runtime/dwrite_runtime.cpp
         )
         target_link_libraries(gtest-run PRIVATE Usp10 dwrite Version ole32)
 
@@ -327,11 +331,7 @@ if(GTEST_FOUND)
     if(WITH_LIBPLACEBO)
         target_sources(gtest-run PRIVATE
             tests/tests/video_renderer_placebo_runtime.cpp
-            src/video_renderer_placebo_runtime.cpp
         )
-    endif()
-    if(WITH_FFTW3)
-        target_sources(gtest-run PRIVATE src/audio_spectrum_fftw3.cpp)
     endif()
     if(WITH_SKIA_VIDEO_TOOLS OR WITH_SKIA_AUDIO_DISPLAY)
         target_sources(gtest-run PRIVATE
@@ -405,7 +405,155 @@ if(GTEST_FOUND)
         )
         target_link_libraries(gtest-run PRIVATE aegisub_core)
     endif()
-    target_link_libraries(gtest-run PRIVATE aegisub_features libaegisub luajit CLI11::CLI11 "GTest::GTest" "Iconv::Iconv" pugixml::pugixml "ZLIB::ZLIB" "Boost::locale" ${wxWidgets_LIBRARIES})
+
+    # Sources which still belong to the application target should use the
+    # exact production compile environment, while being compiled only once
+    # when CI builds Aegisub before gtest-run.
+    get_target_property(_aegisub_executable_sources Aegisub SOURCES)
+    get_target_property(_gtest_target_sources gtest-run SOURCES)
+    set(_aegisub_test_production_sources)
+    set(_aegisub_test_production_source_keys)
+    foreach(_test_source IN LISTS _gtest_target_sources)
+        if(_test_source MATCHES "^\\$<"
+            OR NOT _test_source MATCHES "\\.(c|cc|cpp|cxx|m|mm)$")
+            continue()
+        endif()
+
+        get_filename_component(_test_source_absolute "${_test_source}"
+            ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+        set(_test_source_key "${_test_source_absolute}")
+        if(WIN32)
+            string(TOLOWER "${_test_source_key}" _test_source_key)
+        endif()
+
+        foreach(_executable_source IN LISTS _aegisub_executable_sources)
+            if(_executable_source MATCHES "^\\$<")
+                continue()
+            endif()
+            get_filename_component(_executable_source_absolute
+                "${_executable_source}" ABSOLUTE
+                BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+            set(_executable_source_key "${_executable_source_absolute}")
+            if(WIN32)
+                string(TOLOWER "${_executable_source_key}"
+                    _executable_source_key)
+            endif()
+            if(_test_source_key STREQUAL _executable_source_key)
+                list(FIND _aegisub_test_production_source_keys
+                    "${_test_source_key}" _shared_source_index)
+                if(_shared_source_index EQUAL -1)
+                    list(APPEND _aegisub_test_production_sources
+                        "${_test_source_absolute}")
+                    list(APPEND _aegisub_test_production_source_keys
+                        "${_test_source_key}")
+                endif()
+                break()
+            endif()
+        endforeach()
+    endforeach()
+
+    if(_aegisub_test_production_sources)
+        set(_aegisub_executable_sources_filtered)
+        foreach(_source IN LISTS _aegisub_executable_sources)
+            if(_source MATCHES "^\\$<")
+                list(APPEND _aegisub_executable_sources_filtered "${_source}")
+                continue()
+            endif()
+            get_filename_component(_source_absolute "${_source}"
+                ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+            set(_source_key "${_source_absolute}")
+            if(WIN32)
+                string(TOLOWER "${_source_key}" _source_key)
+            endif()
+            list(FIND _aegisub_test_production_source_keys
+                "${_source_key}" _shared_source_index)
+            if(_shared_source_index EQUAL -1)
+                list(APPEND _aegisub_executable_sources_filtered "${_source}")
+            endif()
+        endforeach()
+
+        set(_gtest_target_sources_filtered)
+        foreach(_source IN LISTS _gtest_target_sources)
+            if(_source MATCHES "^\\$<")
+                list(APPEND _gtest_target_sources_filtered "${_source}")
+                continue()
+            endif()
+            get_filename_component(_source_absolute "${_source}"
+                ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+            set(_source_key "${_source_absolute}")
+            if(WIN32)
+                string(TOLOWER "${_source_key}" _source_key)
+            endif()
+            list(FIND _aegisub_test_production_source_keys
+                "${_source_key}" _shared_source_index)
+            if(_shared_source_index EQUAL -1)
+                list(APPEND _gtest_target_sources_filtered "${_source}")
+            endif()
+        endforeach()
+
+        set_property(TARGET Aegisub PROPERTY SOURCES
+            "${_aegisub_executable_sources_filtered}")
+        set_property(TARGET gtest-run PROPERTY SOURCES
+            "${_gtest_target_sources_filtered}")
+
+        add_library(aegisub_test_production_objects OBJECT
+            ${_aegisub_test_production_sources})
+        set_target_properties(aegisub_test_production_objects PROPERTIES
+            EXCLUDE_FROM_ALL TRUE)
+
+        foreach(_property IN ITEMS
+            COMPILE_DEFINITIONS
+            COMPILE_FEATURES
+            COMPILE_OPTIONS
+            INCLUDE_DIRECTORIES
+            SYSTEM_INCLUDE_DIRECTORIES
+            CXX_EXTENSIONS
+            CXX_STANDARD
+            CXX_STANDARD_REQUIRED
+            MSVC_RUNTIME_LIBRARY
+            POSITION_INDEPENDENT_CODE)
+            get_target_property(_property_value Aegisub ${_property})
+            if(NOT "${_property_value}" STREQUAL "_property_value-NOTFOUND"
+                AND NOT "${_property_value}" STREQUAL "")
+                set_property(TARGET aegisub_test_production_objects
+                    PROPERTY ${_property} "${_property_value}")
+            endif()
+        endforeach()
+
+        get_target_property(_aegisub_link_libraries Aegisub LINK_LIBRARIES)
+        if(NOT "${_aegisub_link_libraries}" STREQUAL
+            "_aegisub_link_libraries-NOTFOUND")
+            target_link_libraries(aegisub_test_production_objects PRIVATE
+                ${_aegisub_link_libraries})
+        endif()
+        get_target_property(_aegisub_dependencies Aegisub
+            MANUALLY_ADDED_DEPENDENCIES)
+        if(NOT "${_aegisub_dependencies}" STREQUAL
+            "_aegisub_dependencies-NOTFOUND")
+            add_dependencies(aegisub_test_production_objects
+                ${_aegisub_dependencies})
+        endif()
+
+        get_target_property(_aegisub_precompile_headers Aegisub
+            PRECOMPILE_HEADERS)
+        if(NOT "${_aegisub_precompile_headers}" STREQUAL
+            "_aegisub_precompile_headers-NOTFOUND"
+            AND NOT "${_aegisub_precompile_headers}" STREQUAL "")
+            target_precompile_headers(aegisub_test_production_objects PRIVATE
+                ${_aegisub_precompile_headers})
+        endif()
+
+        target_link_libraries(Aegisub PRIVATE
+            aegisub_test_production_objects)
+        target_link_libraries(gtest-run PRIVATE
+            aegisub_test_production_objects)
+
+        list(LENGTH _aegisub_test_production_sources
+            _aegisub_test_production_source_count)
+        message(STATUS
+            "gtest-run reuses ${_aegisub_test_production_source_count} Aegisub production objects")
+    endif()
+    target_link_libraries(gtest-run PRIVATE aegisub_core aegisub_features libaegisub luajit CLI11::CLI11 "GTest::GTest" "Iconv::Iconv" pugixml::pugixml "ZLIB::ZLIB" "Boost::locale" ${wxWidgets_LIBRARIES})
     target_include_directories(gtest-run PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/src/libresrc")
     aegisub_enable_highway(gtest-run)
     if(WIN32)

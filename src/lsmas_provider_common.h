@@ -4,8 +4,10 @@
 
 #include <libaegisub/fs_fwd.h>
 
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace agi {
@@ -20,9 +22,20 @@ enum class TrackType {
     Audio
 };
 
+struct TrackRational {
+    int64_t numerator = 0;
+    int64_t denominator = 0;
+};
+
 struct TrackChoice {
     int stream_index = -1;
     std::string codec_name;
+    std::string language;
+    std::string title;
+    int channels = 0;
+    int width = 0;
+    int height = 0;
+    TrackRational frame_rate;
     std::string display_name;
 };
 
@@ -39,6 +52,7 @@ struct ErrorString {
     std::string Message(std::string const& fallback = {}) const;
 };
 
+std::vector<TrackChoice> ParseTrackChoicesJson(std::string_view json_text, TrackType type);
 std::vector<TrackChoice> ProbeTracks(agi::fs::path const& filename, TrackType type);
 int SelectTrack(agi::fs::path const& filename,
                 TrackType type,

@@ -220,9 +220,14 @@ void ShowSecondarySubtitleStripSettings(wxWindow *parent, int min_height, int ma
 }
 }
 
-SecondarySubtitleStrip::SecondarySubtitleStrip(wxWindow *parent, agi::Context *context, std::shared_ptr<SecondarySubtitleSession> shared_session)
+SecondarySubtitleStrip::SecondarySubtitleStrip(
+	wxWindow *parent,
+	agi::Context *context,
+	std::shared_ptr<SecondarySubtitleSession> shared_session,
+	bool detached_mode)
 : wxPanel(parent, -1)
 , session(std::move(shared_session))
+, detached_mode(detached_mode)
 , entry_button(new wxToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTB_FLAT | wxTB_NODIVIDER | wxTB_HORIZONTAL))
 , reload_button(new wxToolBar(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, wxTB_FLAT | wxTB_NODIVIDER | wxTB_HORIZONTAL))
 , scroll_bar(new wxScrollBar(this, -1, wxDefaultPosition, wxDefaultSize, wxSB_VERTICAL)) {
@@ -802,6 +807,20 @@ void SecondarySubtitleStrip::OnPaint(wxPaintEvent &) {
 			dc.SetBrush(wxBrush(grip_colour));
 			dc.DrawRoundedRectangle(grip_rect.x, grip_rect.y, grip_rect.width, grip_rect.height, grip_rect.height / 2.0);
 		}
+
+	// The detached strip shares the dialog background with its letterboxed
+	// margins. Frame the actual video viewport so its boundary stays visible
+	// even when the subtitle bitmap is empty or mostly transparent.
+	if (detached_mode && content_rect.width > 0 && content_rect.height > 0) {
+		auto frame_highlight = wxSystemSettings::GetColour(wxSYS_COLOUR_3DLIGHT);
+		dc.SetPen(wxPen(shadow_colour));
+		dc.DrawLine(content_rect.GetLeft(), content_rect.GetTop(), content_rect.GetRight(), content_rect.GetTop());
+		dc.DrawLine(content_rect.GetLeft(), content_rect.GetTop(), content_rect.GetLeft(), content_rect.GetBottom());
+		dc.SetPen(wxPen(frame_highlight));
+		dc.DrawLine(content_rect.GetLeft(), content_rect.GetBottom(), content_rect.GetRight(), content_rect.GetBottom());
+		dc.DrawLine(content_rect.GetRight(), content_rect.GetTop(), content_rect.GetRight(), content_rect.GetBottom());
+		dc.DrawPoint(content_rect.GetRight(), content_rect.GetBottom());
+	}
 	}
 
 void SecondarySubtitleStrip::OnSize(wxSizeEvent &event) {

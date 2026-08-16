@@ -147,7 +147,7 @@ VideoBox::VideoBox(
 	VideoSizer->Add(videoSlider, 0, wxEXPAND, 0);
 	VideoSizer->Add(videoBottomSizer, 0, wxEXPAND | wxBOTTOM, 5);
 	secondarySubtitleStripSeparator = new wxStaticLine(this);
-	secondarySubtitleStrip = new SecondarySubtitleStrip(this, context, secondarySubtitleSession);
+	secondarySubtitleStrip = new SecondarySubtitleStrip(this, context, secondarySubtitleSession, isDetached);
 	VideoSizer->Add(secondarySubtitleStripSeparator, 0, wxEXPAND, 0);
 	VideoSizer->Add(secondarySubtitleStrip, 0, wxEXPAND, 0);
 	VideoSizer->Show(secondarySubtitleStripSeparator, false);

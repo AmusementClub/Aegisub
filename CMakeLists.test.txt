@@ -205,6 +205,7 @@ if(GTEST_FOUND)
         tests/tests/locale_pick.cpp
         tests/tests/lsmas_native_api_version.cpp
         tests/tests/lua_drawing_module.cpp
+        tests/tests/lua_re.cpp
         tests/tests/lua_script_reader.cpp
         tests/tests/mkv_wrap_common.cpp
         tests/tests/pgs_sup_packet_stream.cpp

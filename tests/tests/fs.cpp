@@ -170,6 +170,14 @@ TEST(lagi_fs, has_extension) {
 	EXPECT_FALSE(HasExtension("foo.tar.gz", "tar"));
 }
 
+TEST(lagi_fs, has_extension_stops_at_embedded_nul) {
+	std::string value("foo.txt\0.bak", 12);
+	auto const path = PathFromString(value);
+
+	EXPECT_TRUE(HasExtension(path, "txt"));
+	EXPECT_FALSE(HasExtension(path, "bak"));
+}
+
 TEST(lagi_fs, create_directory_creates_intermediate_directories) {
 	auto const root = std::filesystem::path("data/fs_nested");
 	auto const leaf = root / "alpha" / "beta" / "gamma";

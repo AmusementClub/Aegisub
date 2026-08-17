@@ -223,7 +223,10 @@ namespace {
 	}
 
 	bool HasExtension(path const& p, std::string const& ext) {
-		auto filename = PathToString(p.filename());
+		// Match the C-string semantics used by the std::filesystem operations
+		// which consume this path. Embedded NULs are not valid filesystem names,
+		// but can still occur in an in-memory path supplied by a caller.
+		std::string filename = PathToString(p.filename()).c_str();
 		if (filename.size() < ext.size() + 1) return false;
 		if (filename[filename.size() - ext.size() - 1] != '.') return false;
 		return agi::util::strings::iends_with(filename, ext);

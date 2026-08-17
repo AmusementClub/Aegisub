@@ -16,6 +16,51 @@ TEST(ass_project_garbage, parses_secondary_subtitles_file) {
 	EXPECT_EQ("../secondary.ass", file.Properties.secondary_subtitles_file);
 }
 
+TEST(ass_project_garbage, replaces_embedded_nul_with_unicode_replacement_character) {
+	AssFile file;
+	AssParser parser(&file, 1);
+	std::string line = "Secondary Subtitles File: secondary";
+	line.push_back('\0');
+	line += ".ass";
+
+	parser.AddLine("[Aegisub Project Garbage]");
+	parser.AddLine(line);
+
+	EXPECT_EQ(std::string("secondary") + "\xEF\xBF\xBD" + ".ass", file.Properties.secondary_subtitles_file);
+}
+
+TEST(ass_extradata, replaces_embedded_nul_with_unicode_replacement_character) {
+	AssFile file;
+	AssParser parser(&file, 1);
+	std::string line = "Data: 7,ow";
+	line.push_back('\0');
+	line += "ner,eval";
+	line.push_back('\0');
+	line += "ue";
+
+	parser.AddLine("[Aegisub Extradata]");
+	parser.AddLine(line);
+
+	ASSERT_EQ(1u, file.Extradata.size());
+	EXPECT_EQ(7u, file.Extradata.front().id);
+	EXPECT_EQ(std::string("ow") + "\xEF\xBF\xBD" + "ner", file.Extradata.front().key);
+	EXPECT_EQ(std::string("val") + "\xEF\xBF\xBD" + "ue", file.Extradata.front().value);
+}
+
+TEST(ass_parser, preserves_embedded_nul_in_event_text) {
+	AssFile file;
+	AssParser parser(&file, 1);
+	std::string line = "Dialogue: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,before";
+	line.push_back('\0');
+	line += "after";
+
+	parser.AddLine("[Events]");
+	parser.AddLine(line);
+
+	ASSERT_EQ(1u, file.Events.size());
+	EXPECT_EQ(std::string("before\0after", 12), file.Events.front().Text.get());
+}
+
 TEST(ass_parser, accepts_section_headers_with_surrounding_whitespace) {
 	AssFile file;
 	AssParser parser(&file, 1);

@@ -13,9 +13,13 @@
 -- OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 lfs = require 'aegisub.lfs'
-uuid = require 'uuid'
 
-uuid.randomseed os.time()
+-- os.tmpname creates the file on POSIX; remove it because the tests only need
+-- a unique temporary name.
+temp_name = ->
+  name = os.tmpname!
+  os.remove name
+  name
 
 get_pwd = ->
   pwd = io.popen 'pwd'
@@ -44,7 +48,7 @@ describe 'lfs', ->
       assert.is.equal get_pwd!, dir
 
     it 'should fail on an invalid path', ->
-      name = '/tmp/' .. uuid! .. '/' .. uuid!
+      name = temp_name! .. '/child'
       res, msg = lfs.chdir name
 
       assert.is.nil res
@@ -52,18 +56,47 @@ describe 'lfs', ->
 
   describe 'mkdir', ->
     it 'should be able to create new directories', ->
-      name = '/tmp/' .. uuid!
-      lfs.mkdir name
+      name = temp_name!
+      assert.is_true lfs.mkdir name
       assert.is.equal lfs.attributes(name, 'mode'), 'directory'
 
       res, msg = lfs.rmdir name
+      assert.is_true res
       assert.is.nil lfs.attributes name, 'mode'
 
   describe 'touch', ->
     it 'should create files if given a nonexistent filename', ->
-      name = '/tmp/' .. uuid!
-      lfs.touch name
+      name = temp_name!
+      assert.is_true lfs.touch name
       assert.is.equal lfs.attributes(name).mode, 'file'
 
       os.remove(name)
       assert.is.nil lfs.attributes name, 'mode'
+
+  describe 'dir', ->
+    it 'should iterate over the files in a directory', ->
+      name = temp_name!
+      lfs.mkdir name
+      lfs.touch name .. '/a'
+      lfs.touch name .. '/b'
+
+      files = [f for f in lfs.dir name]
+      table.sort files
+      assert.is.same {'a', 'b'}, files
+
+      os.remove name .. '/a'
+      os.remove name .. '/b'
+      assert.is_true lfs.rmdir name
+
+    it 'should error for a nonexistent path like vanilla lfs', ->
+      ok, err = pcall -> lfs.dir temp_name!
+      assert.is.false ok
+      assert.is.truthy err\find 'cannot open', 1, true
+
+    it 'should error when given a file rather than a directory', ->
+      name = temp_name!
+      assert.is_true lfs.touch name
+      ok, err = pcall -> lfs.dir name
+      assert.is.false ok
+      assert.is.truthy err\find 'cannot open', 1, true
+      os.remove name

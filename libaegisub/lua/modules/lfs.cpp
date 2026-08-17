@@ -18,6 +18,8 @@
 #include "libaegisub/lua/ffi.h"
 
 #include <filesystem>
+#include <stdexcept>
+#include <system_error>
 
 using namespace agi::fs;
 using namespace agi::lua;
@@ -94,6 +96,13 @@ void dir_free(DirectoryIterator *it) {
 
 DirectoryIterator *dir_new(const char *path, char **err) {
 	return wrap(err, [=]{
+		// DirectoryIterator deliberately treats an unopenable directory as an
+		// empty iterator for its other callers. The Lua lfs contract is stricter:
+		// lfs.dir must report an error immediately, like vanilla lfs.
+		std::error_code ec;
+		bfs::directory_iterator(PathFromString(path), ec);
+		if (ec)
+			throw std::runtime_error("cannot open " + std::string(path) + ": " + ec.message());
 		return new DirectoryIterator(PathFromString(path), "");
 	});
 }

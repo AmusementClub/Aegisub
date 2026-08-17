@@ -110,11 +110,11 @@ void AssDialogue::Parse(std::string const& raw) {
 	agi::StringRange str;
 	if (agi::util::strings::starts_with(raw, "Dialogue:")) {
 		Comment = false;
-		str = agi::StringRange(raw.begin() + 10, raw.end());
+		str = agi::StringRange(raw.begin() + std::min<size_t>(raw.size(), 10), raw.end());
 	}
 	else if (agi::util::strings::starts_with(raw, "Comment:")) {
 		Comment = true;
-		str = agi::StringRange(raw.begin() + 9, raw.end());
+		str = agi::StringRange(raw.begin() + std::min<size_t>(raw.size(), 9), raw.end());
 	}
 	else
 		throw SubtitleFormatParseError("Failed parsing line: " + raw);

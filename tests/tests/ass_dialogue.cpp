@@ -374,6 +374,11 @@ TEST(ass_dialogue, rejects_malformed_file_times) {
 		SubtitleFormatParseError);
 }
 
+TEST(ass_dialogue, rejects_bare_event_prefixes_without_reading_past_the_input) {
+	EXPECT_THROW(AssDialogue("Dialogue:"), SubtitleFormatParseError);
+	EXPECT_THROW(AssDialogue("Comment:"), SubtitleFormatParseError);
+}
+
 TEST(ass_dialogue, rejects_hexadecimal_file_time_components) {
 	EXPECT_THROW(
 		AssDialogue("Dialogue: 0,0x0A:0x0B:0x0C.0x0D,0:00:01.00,Default,,0,0,0,,bad"),

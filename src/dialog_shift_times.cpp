@@ -26,6 +26,7 @@
 #include "options.h"
 #include "project.h"
 #include "selection_controller.h"
+#include "shift_times_input.h"
 #include "subs_controller.h"
 #include "timeedit_ctrl.h"
 
@@ -232,11 +233,9 @@ DialogShiftTimes::DialogShiftTimes(agi::Context *context)
 }
 
 DialogShiftTimes::~DialogShiftTimes() {
-	long shift;
-	shift_frames->GetValue().ToLong(&shift);
-
 	OPT_SET("Tool/Shift Times/Time")->SetInt(shift_time->GetTime());
-	OPT_SET("Tool/Shift Times/Frames")->SetInt(shift);
+	if (auto shift = dialog_shift_times_detail::ParseFrameInput(shift_frames->GetValue()))
+		OPT_SET("Tool/Shift Times/Frames")->SetInt(*shift);
 	OPT_SET("Tool/Shift Times/ByTime")->SetBool(shift_by_time->GetValue());
 	OPT_SET("Tool/Shift Times/Type")->SetInt(time_fields->GetSelection());
 	OPT_SET("Tool/Shift Times/Affect")->SetInt(selection_mode->GetSelection());
@@ -373,7 +372,7 @@ void DialogShiftTimes::Process(wxCommandEvent &) {
 
 	auto const& sel = core.selectionController->GetSelectedSet();
 
-	long shift;
+	int shift = 0;
 	if (by_time) {
 		shift = shift_time->GetTime();
 		if (shift == 0) {
@@ -381,11 +380,17 @@ void DialogShiftTimes::Process(wxCommandEvent &) {
 			return;
 		}
 	}
-	else
-		shift_frames->GetValue().ToLong(&shift);
+	else {
+		auto parsed_shift = dialog_shift_times_detail::ParseFrameInput(shift_frames->GetValue());
+		if (!parsed_shift)
+			return;
+		shift = *parsed_shift;
+	}
 
-	if (reverse)
-		shift = -shift;
+	if (auto directed_shift = dialog_shift_times_detail::ApplyDirection(shift, reverse))
+		shift = *directed_shift;
+	else
+		return;
 
 	// Track which rows were shifted for the log
 	int block_start = 0;

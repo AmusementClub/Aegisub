@@ -20,6 +20,7 @@
 #include <climits>
 #include <fstream>
 #include <iterator>
+#include <limits>
 
 #include <main.h>
 #include <util.h>
@@ -70,6 +71,17 @@ TEST(lagi_vfr, constructors_bad_timecodes) {
 	EXPECT_THROW(Framerate({0}), InvalidFramerate);
 	EXPECT_THROW(Framerate({10, 0}), InvalidFramerate);
 	EXPECT_THROW(Framerate({0, 0}), InvalidFramerate);
+}
+
+TEST(lagi_vfr, unloaded_time_at_frame_is_zero_for_all_time_modes) {
+	Framerate fps;
+	ASSERT_FALSE(fps.IsLoaded());
+
+	for (int frame : {std::numeric_limits<int>::min(), -1, 0, 1, std::numeric_limits<int>::max()}) {
+		EXPECT_EQ(0, fps.TimeAtFrame(frame, EXACT));
+		EXPECT_EQ(0, fps.TimeAtFrame(frame, START));
+		EXPECT_EQ(0, fps.TimeAtFrame(frame, END));
+	}
 }
 
 TEST(lagi_vfr, constructors_bad_v1) {

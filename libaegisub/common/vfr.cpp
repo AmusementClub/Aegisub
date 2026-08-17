@@ -233,6 +233,12 @@ int Framerate::FrameAtTime(int ms, Time type) const {
 }
 
 int Framerate::TimeAtFrame(int frame, Time type) const {
+	// An unloaded framerate has no timecode table or rational rate.  Return
+	// the stable sentinel before the START/END helpers adjust the frame; doing
+	// so also avoids signed overflow for INT_MIN/INT_MAX inputs.
+	if (numerator == 0)
+		return 0;
+
 	if (type == START) {
 		int prev = TimeAtFrame(frame - 1);
 		int cur = TimeAtFrame(frame);

@@ -760,6 +760,7 @@ set(AEGISUB_CORE_SOURCES
     src/numeric_utils.cpp
     src/perspective_forward.cpp
     src/perspective_quad_geometry.cpp
+    src/perspective_tag_solver.cpp
     src/translation_service.cpp
     # ASS data model
     src/ass_attachment.cpp

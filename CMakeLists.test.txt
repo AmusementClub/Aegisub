@@ -225,6 +225,7 @@ if(GTEST_FOUND)
         tests/tests/paste_over_policy.cpp
         tests/tests/perspective_forward.cpp
         tests/tests/perspective_quad_geometry.cpp
+        tests/tests/perspective_tag_solver.cpp
         tests/tests/perf_trace.cpp
         tests/tests/presentation_contract.cpp
         tests/tests/project_session_ops.cpp

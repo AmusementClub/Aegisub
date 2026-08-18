@@ -1,0 +1,996 @@
+// Copyright (c) 2022, arch1t3cht <arch1t3cht@gmail.com>
+//
+// Permission to use, copy, modify, and distribute this software for any
+// purpose with or without fee is hereby granted, provided that the above
+// copyright notice and this permission notice appear in all copies.
+//
+// THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+// WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+// MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+// ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+// WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+// ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+// OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+
+// Inverse Perspective decomposition adapted from arch1t3cht/Aegisub commits
+// f44883844f3179fb2f52b937854b1e6f2e014bee,
+// 438aa6882b41f5488e31f3f4af31b324507e900b, and
+// 947af58ad98e36dee47c6fbb88d89ae271cfa517.
+
+#include "perspective_tag_solver.h"
+
+#include <algorithm>
+#include <array>
+#include <charconv>
+#include <cmath>
+#include <limits>
+#include <string_view>
+#include <system_error>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+namespace perspective {
+namespace {
+
+constexpr double Pi = 3.1415926535897932384626433832795;
+constexpr double RadiansToDegrees = 180.0 / Pi;
+constexpr double DegreesToRadians = Pi / 180.0;
+constexpr std::size_t ParameterCount = 8;
+constexpr std::size_t CornerResidualCount = 8;
+
+struct AffineMap {
+	double a00 = 1.0;
+	double a01 = 0.0;
+	double a10 = 0.0;
+	double a11 = 1.0;
+	double b0 = 0.0;
+	double b1 = 0.0;
+};
+
+struct Vec3 {
+	double x = 0.0;
+	double y = 0.0;
+	double z = 0.0;
+
+	Vec3 operator+(Vec3 other) const { return {x + other.x, y + other.y, z + other.z}; }
+	Vec3 operator-(Vec3 other) const { return {x - other.x, y - other.y, z - other.z}; }
+	Vec3 operator*(double factor) const { return {x * factor, y * factor, z * factor}; }
+	double Length() const { return std::sqrt(x * x + y * y + z * z); }
+	Vec3 Cross(Vec3 other) const {
+		return {y * other.z - z * other.y,
+			z * other.x - x * other.z,
+			x * other.y - y * other.x};
+	}
+};
+
+Vec3 RotateX(Vec3 value, double radians) {
+	double const cosine = std::cos(radians);
+	double const sine = std::sin(radians);
+	return {value.x, cosine * value.y - sine * value.z,
+		sine * value.y + cosine * value.z};
+}
+
+Vec3 RotateY(Vec3 value, double radians) {
+	double const cosine = std::cos(radians);
+	double const sine = std::sin(radians);
+	return {cosine * value.x - sine * value.z, value.y,
+		sine * value.x + cosine * value.z};
+}
+
+Vec3 RotateZ(Vec3 value, double radians) {
+	double const cosine = std::cos(radians);
+	double const sine = std::sin(radians);
+	return {cosine * value.x - sine * value.y,
+		sine * value.x + cosine * value.y, value.z};
+}
+
+bool IsFinite(Vec3 value) {
+	return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+}
+
+bool NearlyEqual(double left, double right) {
+	double const scale = std::max({1.0, std::abs(left), std::abs(right)});
+	return std::abs(left - right) <= 1.0e-9 * scale;
+}
+
+bool NearlyEqual(Vec2 left, Vec2 right) {
+	return NearlyEqual(left.x, right.x) && NearlyEqual(left.y, right.y);
+}
+
+double Quantize(double value, int decimals) {
+	static constexpr std::array<double, 10> factors {
+		1.0, 10.0, 100.0, 1000.0, 10000.0,
+		100000.0, 1000000.0, 10000000.0, 100000000.0, 1000000000.0,
+	};
+	decimals = std::clamp(decimals, 0, static_cast<int>(factors.size() - 1));
+	double const result = std::round(value * factors[decimals]) / factors[decimals];
+	return result == 0.0 ? 0.0 : result;
+}
+
+void AppendRectSamples(std::vector<Vec2>& samples, Rect bounds, bool include_center) {
+	double const center_x = (bounds.left + bounds.right) / 2.0;
+	double const center_y = (bounds.top + bounds.bottom) / 2.0;
+	std::array<Vec2, 8> const perimeter {{
+		{bounds.left, bounds.top},
+		{bounds.right, bounds.top},
+		{bounds.right, bounds.bottom},
+		{bounds.left, bounds.bottom},
+		{center_x, bounds.top},
+		{bounds.right, center_y},
+		{center_x, bounds.bottom},
+		{bounds.left, center_y},
+	}};
+	samples.insert(samples.end(), perimeter.begin(), perimeter.end());
+	if (include_center)
+		samples.push_back({center_x, center_y});
+}
+
+std::vector<Vec2> ResidualSamples(
+	BaseBounds const& bounds,
+	EvaluatedTransformState const& source) {
+	std::vector<Vec2> samples;
+	samples.reserve(25 + bounds.residual_samples.size());
+	AppendRectSamples(samples, bounds.rectangle, true);
+	double const outline_x = std::abs(source.outline_x);
+	double const outline_y = std::abs(source.outline_y);
+	Rect const outlined {
+		bounds.rectangle.left - outline_x,
+		bounds.rectangle.top - outline_y,
+		bounds.rectangle.right + outline_x,
+		bounds.rectangle.bottom + outline_y,
+	};
+	if (outline_x > 0.0 || outline_y > 0.0)
+		AppendRectSamples(samples, outlined, false);
+	if (source.shadow_x != 0.0 || source.shadow_y != 0.0) {
+		Rect const shadowed {
+			outlined.left + source.shadow_x,
+			outlined.top + source.shadow_y,
+			outlined.right + source.shadow_x,
+			outlined.bottom + source.shadow_y,
+		};
+		AppendRectSamples(samples, shadowed, false);
+	}
+	samples.insert(
+		samples.end(), bounds.residual_samples.begin(), bounds.residual_samples.end());
+	return samples;
+}
+
+std::optional<double> MaxResidual(
+	ForwardResult const& candidate,
+	Homography const& target,
+	BaseBounds const& bounds,
+	EvaluatedTransformState const& source,
+	OutputCoordinateMapping mapping) {
+	double maximum = 0.0;
+	for (auto const sample : ResidualSamples(bounds, source)) {
+		auto const actual = candidate.transform.Map(sample);
+		auto const expected = target.Map(sample);
+		if (!actual || !expected)
+			return std::nullopt;
+		double const dx = (actual->x - expected->x) * mapping.scale_x;
+		double const dy = (actual->y - expected->y) * mapping.scale_y;
+		double const residual = std::hypot(dx, dy);
+		if (!std::isfinite(residual))
+			return std::nullopt;
+		maximum = std::max(maximum, residual);
+	}
+	return maximum;
+}
+
+bool IsValidOutputMapping(OutputCoordinateMapping mapping) {
+	return std::isfinite(mapping.scale_x)
+		&& std::isfinite(mapping.scale_y)
+		&& mapping.scale_x > 0.0 && mapping.scale_y > 0.0
+		&& mapping.scale_x <= MaxAbsCoordinate
+		&& mapping.scale_y <= MaxAbsCoordinate;
+}
+
+bool HasValidResidualSamples(BaseBounds const& bounds) {
+	return std::all_of(
+		bounds.residual_samples.begin(), bounds.residual_samples.end(),
+		[](Vec2 point) {
+			return std::isfinite(point.x) && std::isfinite(point.y)
+				&& std::abs(point.x) <= MaxAbsCoordinate
+				&& std::abs(point.y) <= MaxAbsCoordinate;
+		});
+}
+
+ForwardInput CanonicalizeCurrentGeometry(ForwardInput input) {
+	auto& state = input.state;
+	state.position = {};
+	state.origin.reset();
+	state.scale_x = 100.0;
+	state.scale_y = 100.0;
+	state.shear_x = 0.0;
+	state.shear_y = 0.0;
+	state.rotation_x = 0.0;
+	state.rotation_y = 0.0;
+	state.rotation_z = 0.0;
+	return input;
+}
+
+std::optional<double> StateResidual(
+	SolverInput const& input,
+	Homography const& target,
+	EvaluatedTransformState const& state) {
+	auto forward_input = input.source;
+	forward_input.state = state;
+	auto const forward = ForwardQuad(forward_input);
+	if (!forward)
+		return std::nullopt;
+	return MaxResidual(
+		forward, target, input.source.bounds, input.source.state,
+		input.output_mapping);
+}
+
+SerializedTransformState Serialize(EvaluatedTransformState const& state) {
+	SerializedTransformState serialized;
+	serialized.position = FormatAssPoint(state.position, 4);
+	if (state.origin)
+		serialized.origin = FormatAssPoint(*state.origin, 4);
+	serialized.scale_x = FormatAssNumber(state.scale_x, 4);
+	serialized.scale_y = FormatAssNumber(state.scale_y, 4);
+	serialized.shear_x = FormatAssNumber(state.shear_x, 6);
+	serialized.shear_y = FormatAssNumber(state.shear_y, 6);
+	serialized.rotation_x = FormatAssNumber(state.rotation_x, 5);
+	serialized.rotation_y = FormatAssNumber(state.rotation_y, 5);
+	serialized.rotation_z = FormatAssNumber(state.rotation_z, 5);
+	return serialized;
+}
+
+std::size_t TokenSize(std::string_view tag, std::string const& value) {
+	return tag.size() + value.size();
+}
+
+CandidateScore ScoreCandidate(
+	EvaluatedTransformState const& source,
+	EvaluatedTransformState const& candidate,
+	SerializedTransformState const& serialized,
+	CandidateFamily family,
+	double residual) {
+	CandidateScore score;
+	score.family_rank = static_cast<int>(family);
+	score.residual = residual;
+	if (!NearlyEqual(source.position, candidate.position)) {
+		++score.changed_tag_count;
+		score.token_count += TokenSize("\\pos", serialized.position);
+	}
+	bool const origin_changed = source.origin.has_value() != candidate.origin.has_value()
+		|| (source.origin && candidate.origin && !NearlyEqual(*source.origin, *candidate.origin));
+	if (origin_changed) {
+		++score.changed_tag_count;
+		if (serialized.origin)
+			score.token_count += TokenSize("\\org", *serialized.origin);
+	}
+	if (candidate.origin && origin_changed)
+		++score.explicit_origin_penalty;
+
+	auto const scalar = [&](double old_value, double new_value, std::string_view tag,
+		std::string const& text) {
+		if (!NearlyEqual(old_value, new_value)) {
+			++score.changed_tag_count;
+			score.token_count += TokenSize(tag, text);
+		}
+	};
+	scalar(source.scale_x, candidate.scale_x, "\\fscx", serialized.scale_x);
+	scalar(source.scale_y, candidate.scale_y, "\\fscy", serialized.scale_y);
+	scalar(source.shear_x, candidate.shear_x, "\\fax", serialized.shear_x);
+	scalar(source.shear_y, candidate.shear_y, "\\fay", serialized.shear_y);
+	scalar(source.rotation_x, candidate.rotation_x, "\\frx", serialized.rotation_x);
+	scalar(source.rotation_y, candidate.rotation_y, "\\fry", serialized.rotation_y);
+	scalar(source.rotation_z, candidate.rotation_z, "\\frz", serialized.rotation_z);
+	score.perspective_penalty = (std::abs(candidate.rotation_x) > 1.0e-9 ? 1 : 0)
+		+ (std::abs(candidate.rotation_y) > 1.0e-9 ? 1 : 0);
+	score.condition_penalty =
+		std::abs(std::log(candidate.scale_x / 100.0))
+		+ std::abs(std::log(candidate.scale_y / 100.0))
+		+ std::abs(candidate.shear_x) + std::abs(candidate.shear_y)
+		+ (std::abs(candidate.rotation_x) + std::abs(candidate.rotation_y)
+			+ std::abs(candidate.rotation_z)) / 180.0;
+	return score;
+}
+
+bool BetterScore(CandidateScore const& left, CandidateScore const& right) {
+	return std::tie(
+		left.changed_tag_count,
+		left.explicit_origin_penalty,
+		left.perspective_penalty,
+		left.token_count,
+		left.condition_penalty,
+		left.family_rank,
+		left.residual)
+		< std::tie(
+			right.changed_tag_count,
+			right.explicit_origin_penalty,
+			right.perspective_penalty,
+			right.token_count,
+			right.condition_penalty,
+			right.family_rank,
+			right.residual);
+}
+
+template<typename Apply>
+void CompactField(
+	EvaluatedTransformState& state,
+	EvaluatedTransformState const& raw,
+	int maximum_decimals,
+	Apply&& apply,
+	SolverInput const& input,
+	Homography const& target) {
+	for (int decimals = 0; decimals <= maximum_decimals; ++decimals) {
+		auto trial = state;
+		apply(trial, raw, decimals);
+		auto const residual = StateResidual(input, target, trial);
+		if (residual && *residual <= input.max_error) {
+			state = std::move(trial);
+			return;
+		}
+	}
+}
+
+std::optional<SolverCandidate> QuantizeCandidate(
+	SolverInput const& input,
+	Homography const& target,
+	CandidateFamily family,
+	EvaluatedTransformState const& raw) {
+	auto state = raw;
+	if (family != CandidateFamily::NoOp) {
+		state.position = {Quantize(raw.position.x, 4), Quantize(raw.position.y, 4)};
+		if (raw.origin)
+			state.origin = Vec2 {Quantize(raw.origin->x, 4), Quantize(raw.origin->y, 4)};
+		state.scale_x = Quantize(raw.scale_x, 4);
+		state.scale_y = Quantize(raw.scale_y, 4);
+		state.shear_x = Quantize(raw.shear_x, 6);
+		state.shear_y = Quantize(raw.shear_y, 6);
+		state.rotation_x = Quantize(raw.rotation_x, 5);
+		state.rotation_y = Quantize(raw.rotation_y, 5);
+		state.rotation_z = Quantize(raw.rotation_z, 5);
+	}
+	auto residual = StateResidual(input, target, state);
+	if (!residual || *residual > input.max_error)
+		return std::nullopt;
+
+	if (family != CandidateFamily::NoOp) {
+		CompactField(state, raw, 4, [](auto& value, auto const& original, int decimals) {
+			value.position = {Quantize(original.position.x, decimals), Quantize(original.position.y, decimals)};
+		}, input, target);
+		if (raw.origin) {
+			CompactField(state, raw, 4, [](auto& value, auto const& original, int decimals) {
+				value.origin = Vec2 {Quantize(original.origin->x, decimals), Quantize(original.origin->y, decimals)};
+			}, input, target);
+		}
+		CompactField(state, raw, 4, [](auto& value, auto const& original, int decimals) {
+			value.scale_x = Quantize(original.scale_x, decimals);
+		}, input, target);
+		CompactField(state, raw, 4, [](auto& value, auto const& original, int decimals) {
+			value.scale_y = Quantize(original.scale_y, decimals);
+		}, input, target);
+		CompactField(state, raw, 6, [](auto& value, auto const& original, int decimals) {
+			value.shear_x = Quantize(original.shear_x, decimals);
+		}, input, target);
+		CompactField(state, raw, 6, [](auto& value, auto const& original, int decimals) {
+			value.shear_y = Quantize(original.shear_y, decimals);
+		}, input, target);
+		CompactField(state, raw, 5, [](auto& value, auto const& original, int decimals) {
+			value.rotation_x = Quantize(original.rotation_x, decimals);
+		}, input, target);
+		CompactField(state, raw, 5, [](auto& value, auto const& original, int decimals) {
+			value.rotation_y = Quantize(original.rotation_y, decimals);
+		}, input, target);
+		CompactField(state, raw, 5, [](auto& value, auto const& original, int decimals) {
+			value.rotation_z = Quantize(original.rotation_z, decimals);
+		}, input, target);
+	}
+
+	residual = StateResidual(input, target, state);
+	if (!residual || *residual > input.max_error)
+		return std::nullopt;
+	auto serialized = Serialize(state);
+	return SolverCandidate {
+		family,
+		state,
+		serialized,
+		ScoreCandidate(input.source.state, state, serialized, family, *residual),
+		*residual,
+	};
+}
+
+bool Solve2x2(
+	double a11, double a12, double a21, double a22,
+	double b1, double b2, double& x1, double& x2) {
+	double const determinant = a11 * a22 - a12 * a21;
+	double const scale = std::abs(a11 * a22) + std::abs(a12 * a21);
+	if (!std::isfinite(determinant) || scale == 0.0
+		|| std::abs(determinant) <= 64.0 * std::numeric_limits<double>::epsilon() * scale)
+		return false;
+	x1 = (b1 * a22 - a12 * b2) / determinant;
+	x2 = (a11 * b2 - b1 * a21) / determinant;
+	return std::isfinite(x1) && std::isfinite(x2);
+}
+
+std::optional<AffineMap> LocalAffine(Homography const& homography, Vec2 center) {
+	auto const& matrix = homography.Matrix();
+	double const denominator = homography.Denominator(center);
+	if (!std::isfinite(denominator) || denominator == 0.0)
+		return std::nullopt;
+	double const numerator_x = matrix(0, 0) * center.x + matrix(0, 1) * center.y + matrix(0, 2);
+	double const numerator_y = matrix(1, 0) * center.x + matrix(1, 1) * center.y + matrix(1, 2);
+	double const denominator_squared = denominator * denominator;
+	AffineMap result;
+	result.a00 = (matrix(0, 0) * denominator - numerator_x * matrix(2, 0)) / denominator_squared;
+	result.a01 = (matrix(0, 1) * denominator - numerator_x * matrix(2, 1)) / denominator_squared;
+	result.a10 = (matrix(1, 0) * denominator - numerator_y * matrix(2, 0)) / denominator_squared;
+	result.a11 = (matrix(1, 1) * denominator - numerator_y * matrix(2, 1)) / denominator_squared;
+	auto const mapped = homography.Map(center);
+	if (!mapped)
+		return std::nullopt;
+	result.b0 = mapped->x - result.a00 * center.x - result.a01 * center.y;
+	result.b1 = mapped->y - result.a10 * center.x - result.a11 * center.y;
+	for (double const value : {result.a00, result.a01, result.a10, result.a11, result.b0, result.b1}) {
+		if (!std::isfinite(value))
+			return std::nullopt;
+	}
+	return result;
+}
+
+std::optional<AffineMap> ExactAffine(Homography const& homography, Rect bounds) {
+	auto const corners = MakeQuad(bounds);
+	double min_denominator = homography.Denominator(corners[0]);
+	double max_denominator = min_denominator;
+	double scale = std::abs(min_denominator);
+	for (auto const point : corners) {
+		double const denominator = homography.Denominator(point);
+		min_denominator = std::min(min_denominator, denominator);
+		max_denominator = std::max(max_denominator, denominator);
+		scale = std::max(scale, std::abs(denominator));
+	}
+	if (scale == 0.0 || max_denominator - min_denominator > scale * 1.0e-10)
+		return std::nullopt;
+	auto const& matrix = homography.Matrix();
+	double const divisor = matrix(2, 2);
+	if (!std::isfinite(divisor) || std::abs(divisor) <= scale * 1.0e-14)
+		return std::nullopt;
+	return AffineMap {
+		matrix(0, 0) / divisor,
+		matrix(0, 1) / divisor,
+		matrix(1, 0) / divisor,
+		matrix(1, 1) / divisor,
+		matrix(0, 2) / divisor,
+		matrix(1, 2) / divisor,
+	};
+}
+
+std::optional<EvaluatedTransformState> DecomposeAffine(
+	AffineMap const& map,
+	ForwardInput const& source,
+	bool use_fay) {
+	auto state = source.state;
+	state.origin.reset();
+	state.rotation_x = 0.0;
+	state.rotation_y = 0.0;
+	state.shear_x = 0.0;
+	state.shear_y = 0.0;
+	double theta = 0.0;
+	double scale_x = 0.0;
+	double scale_y = 0.0;
+	if (!use_fay) {
+		scale_x = std::hypot(map.a00, map.a10);
+		if (scale_x == 0.0)
+			return std::nullopt;
+		double const cosine = map.a00 / scale_x;
+		double const sine = map.a10 / scale_x;
+		theta = std::atan2(sine, cosine);
+		scale_y = -sine * map.a01 + cosine * map.a11;
+		if (scale_y <= 0.0)
+			return std::nullopt;
+		state.shear_x = (cosine * map.a01 + sine * map.a11) / scale_x;
+	} else {
+		scale_y = std::hypot(map.a01, map.a11);
+		if (scale_y == 0.0)
+			return std::nullopt;
+		double const sine = -map.a01 / scale_y;
+		double const cosine = map.a11 / scale_y;
+		theta = std::atan2(sine, cosine);
+		scale_x = cosine * map.a00 + sine * map.a10;
+		if (scale_x <= 0.0)
+			return std::nullopt;
+		state.shear_y = (-sine * map.a00 + cosine * map.a10) / scale_y;
+	}
+
+	state.scale_x = scale_x * 100.0;
+	state.scale_y = scale_y * 100.0;
+	state.rotation_z = -theta * RadiansToDegrees;
+	double const cosine = std::cos(theta);
+	double const sine = std::sin(theta);
+	Vec2 const shift = ResolveBoundsAlignmentShift(source.bounds, state.alignment);
+	Vec2 const rotated_scaled_shift {
+		cosine * scale_x * shift.x - sine * scale_y * shift.y,
+		sine * scale_x * shift.x + cosine * scale_y * shift.y,
+	};
+	state.position = {map.b0 - rotated_scaled_shift.x, map.b1 - rotated_scaled_shift.y};
+	return state;
+}
+
+std::optional<EvaluatedTransformState> TranslationCandidate(
+	AffineMap const& map,
+	ForwardInput const& source) {
+	double const tolerance = 1.0e-10;
+	if (std::abs(map.a00 - 1.0) > tolerance || std::abs(map.a11 - 1.0) > tolerance
+		|| std::abs(map.a01) > tolerance || std::abs(map.a10) > tolerance)
+		return std::nullopt;
+	auto state = source.state;
+	state.origin.reset();
+	state.scale_x = 100.0;
+	state.scale_y = 100.0;
+	state.shear_x = 0.0;
+	state.shear_y = 0.0;
+	state.rotation_x = 0.0;
+	state.rotation_y = 0.0;
+	state.rotation_z = 0.0;
+	Vec2 const shift = ResolveBoundsAlignmentShift(source.bounds, state.alignment);
+	state.position = {map.b0 - shift.x, map.b1 - shift.y};
+	return state;
+}
+
+std::optional<EvaluatedTransformState> SimilarityCandidate(
+	AffineMap const& map,
+	ForwardInput const& source) {
+	auto candidate = DecomposeAffine(map, source, false);
+	if (!candidate)
+		return std::nullopt;
+	double const scale = (candidate->scale_x + candidate->scale_y) / 2.0;
+	double const tolerance = 1.0e-9 * std::max(100.0, std::abs(scale));
+	if (std::abs(candidate->scale_x - candidate->scale_y) > tolerance
+		|| std::abs(candidate->shear_x) > 1.0e-9)
+		return std::nullopt;
+	candidate->scale_x = scale;
+	candidate->scale_y = scale;
+	candidate->shear_x = 0.0;
+	double const theta = -candidate->rotation_z * DegreesToRadians;
+	double const factor = scale / 100.0;
+	Vec2 const shift = ResolveBoundsAlignmentShift(source.bounds, candidate->alignment);
+	Vec2 const rotated_shift {
+		factor * (std::cos(theta) * shift.x - std::sin(theta) * shift.y),
+		factor * (std::sin(theta) * shift.x + std::cos(theta) * shift.y),
+	};
+	candidate->position = {map.b0 - rotated_shift.x, map.b1 - rotated_shift.y};
+	return candidate;
+}
+
+std::optional<EvaluatedTransformState> ExplicitOriginCandidate(
+	SolverInput const& input,
+	ForwardResult const& projection_context) {
+	auto const center = QuadCenter(input.target);
+	if (!center)
+		return std::nullopt;
+	auto q0 = input.target[0] - *center;
+	auto q1 = input.target[1] - *center;
+	auto q2 = input.target[2] - *center;
+	auto q3 = input.target[3] - *center;
+	Vec2 const diagonal = input.target[2] - input.target[0];
+	Vec2 const side2 = input.target[1] - input.target[2];
+	Vec2 const side3 = input.target[3] - input.target[2];
+	double z1 = 0.0;
+	double z3 = 0.0;
+	if (!Solve2x2(side2.x, side3.x, side2.y, side3.y,
+		-diagonal.x, -diagonal.y, z1, z3))
+		return std::nullopt;
+
+	double const distance = projection_context.camera_distance;
+	std::array<Vec3, 4> points {{
+		{q0.x, q0.y, distance},
+		{q1.x * z1, q1.y * z1, distance * z1},
+		{q2.x * (z1 + z3 - 1.0), q2.y * (z1 + z3 - 1.0), distance * (z1 + z3 - 1.0)},
+		{q3.x * z3, q3.y * z3, distance * z3},
+	}};
+	Vec3 const side0 = points[1] - points[0];
+	Vec3 const side1 = points[3] - points[0];
+	double lambda0 = 0.0;
+	double lambda1 = 0.0;
+	if (!Solve2x2(side0.x, side1.x, side0.y, side1.y,
+		-points[0].x, -points[0].y, lambda0, lambda1))
+		return std::nullopt;
+	double const origin_z = (points[0] + side0 * lambda0 + side1 * lambda1).z;
+	if (!std::isfinite(origin_z) || std::abs(origin_z) <= 1.0e-12)
+		return std::nullopt;
+	for (auto& point : points) {
+		point = point * (distance / origin_z) - Vec3 {0.0, 0.0, distance};
+		if (!IsFinite(point))
+			return std::nullopt;
+	}
+
+	Vec3 normal = (points[1] - points[0]).Cross(points[3] - points[0]);
+	if (normal.Length() <= 1.0e-12)
+		return std::nullopt;
+	double const rotate_y = std::atan2(normal.x, normal.z);
+	normal = RotateY(normal, rotate_y);
+	double const rotate_x = std::atan2(normal.y, normal.z);
+	for (auto& point : points)
+		point = RotateX(RotateY(point, rotate_y), rotate_x);
+	Vec3 top = points[1] - points[0];
+	double const rotate_z = std::atan2(top.y, top.x);
+	for (auto& point : points)
+		point = RotateZ(point, -rotate_z);
+
+	top = points[1] - points[0];
+	Vec3 const left = points[3] - points[0];
+	if (std::abs(left.y) <= 1.0e-12)
+		return std::nullopt;
+	double const width = input.source.bounds.rectangle.Width();
+	double const height = input.source.bounds.rectangle.Height();
+	double const scale_x = top.Length() / width;
+	double const scale_y = std::abs(left.y) / height;
+	if (!std::isfinite(scale_x) || !std::isfinite(scale_y)
+		|| scale_x <= 0.0 || scale_y <= 0.0)
+		return std::nullopt;
+
+	auto state = input.source.state;
+	state.origin = *center;
+	state.scale_x = scale_x * 100.0;
+	state.scale_y = scale_y * 100.0;
+	state.shear_x = (left.x / left.y) * scale_y / scale_x;
+	state.shear_y = 0.0;
+	state.rotation_x = rotate_x * RadiansToDegrees;
+	state.rotation_y = -rotate_y * RadiansToDegrees;
+	state.rotation_z = -rotate_z * RadiansToDegrees;
+	Vec2 const first = {input.source.bounds.rectangle.left, input.source.bounds.rectangle.top};
+	Vec2 const shift = ResolveBoundsAlignmentShift(input.source.bounds, state.alignment);
+	Vec2 const local {
+		(first.x + first.y * state.shear_x + shift.x) * scale_x,
+		(first.x * state.shear_y + first.y + shift.y) * scale_y,
+	};
+	state.position = *center + Vec2 {points[0].x - local.x, points[0].y - local.y};
+	return state;
+}
+
+using Parameters = std::array<double, ParameterCount>;
+using ResidualVector = std::array<double, CornerResidualCount>;
+using LinearMatrix = std::array<std::array<double, ParameterCount>, ParameterCount>;
+
+Parameters ParametersFromState(EvaluatedTransformState const& state, bool use_fay) {
+	return {
+		state.position.x,
+		state.position.y,
+		std::log(state.scale_x / 100.0),
+		std::log(state.scale_y / 100.0),
+		use_fay ? state.shear_y : state.shear_x,
+		state.rotation_z * DegreesToRadians,
+		state.rotation_x * DegreesToRadians,
+		state.rotation_y * DegreesToRadians,
+	};
+}
+
+std::optional<EvaluatedTransformState> StateFromParameters(
+	EvaluatedTransformState const& source,
+	Parameters const& parameters,
+	bool use_fay) {
+	for (double const value : parameters) {
+		if (!std::isfinite(value))
+			return std::nullopt;
+	}
+	auto state = source;
+	state.origin.reset();
+	state.position = {parameters[0], parameters[1]};
+	state.scale_x = 100.0 * std::exp(parameters[2]);
+	state.scale_y = 100.0 * std::exp(parameters[3]);
+	state.shear_x = use_fay ? 0.0 : parameters[4];
+	state.shear_y = use_fay ? parameters[4] : 0.0;
+	state.rotation_z = parameters[5] * RadiansToDegrees;
+	state.rotation_x = parameters[6] * RadiansToDegrees;
+	state.rotation_y = parameters[7] * RadiansToDegrees;
+	if (!std::isfinite(state.scale_x) || !std::isfinite(state.scale_y))
+		return std::nullopt;
+	return state;
+}
+
+bool EvaluateParameters(
+	SolverInput const& input,
+	Parameters const& parameters,
+	bool use_fay,
+	ResidualVector& residual,
+	double& cost) {
+	auto const state = StateFromParameters(input.source.state, parameters, use_fay);
+	if (!state)
+		return false;
+	auto forward_input = input.source;
+	forward_input.state = *state;
+	auto const forward = ForwardQuad(forward_input);
+	if (!forward)
+		return false;
+	cost = 0.0;
+	for (std::size_t index = 0; index < input.target.size(); ++index) {
+		residual[index * 2] =
+			(forward.quad[index].x - input.target[index].x) * input.output_mapping.scale_x;
+		residual[index * 2 + 1] =
+			(forward.quad[index].y - input.target[index].y) * input.output_mapping.scale_y;
+		cost += residual[index * 2] * residual[index * 2]
+			+ residual[index * 2 + 1] * residual[index * 2 + 1];
+	}
+	return std::isfinite(cost);
+}
+
+bool SolveLinear(LinearMatrix matrix, Parameters right, Parameters& solution) {
+	for (std::size_t column = 0; column < ParameterCount; ++column) {
+		std::size_t pivot = column;
+		for (std::size_t row = column + 1; row < ParameterCount; ++row) {
+			if (std::abs(matrix[row][column]) > std::abs(matrix[pivot][column]))
+				pivot = row;
+		}
+		if (std::abs(matrix[pivot][column]) <= 1.0e-18)
+			return false;
+		if (pivot != column) {
+			std::swap(matrix[pivot], matrix[column]);
+			std::swap(right[pivot], right[column]);
+		}
+		double const divisor = matrix[column][column];
+		for (std::size_t entry = column; entry < ParameterCount; ++entry)
+			matrix[column][entry] /= divisor;
+		right[column] /= divisor;
+		for (std::size_t row = 0; row < ParameterCount; ++row) {
+			if (row == column)
+				continue;
+			double const factor = matrix[row][column];
+			for (std::size_t entry = column; entry < ParameterCount; ++entry)
+				matrix[row][entry] -= factor * matrix[column][entry];
+			right[row] -= factor * right[column];
+		}
+	}
+	solution = right;
+	return true;
+}
+
+std::optional<EvaluatedTransformState> OptimizeImplicitOrigin(
+	SolverInput const& input,
+	EvaluatedTransformState const& initial,
+	bool use_fay) {
+	Parameters parameters = ParametersFromState(initial, use_fay);
+	ResidualVector residual {};
+	double cost = 0.0;
+	if (!EvaluateParameters(input, parameters, use_fay, residual, cost))
+		return std::nullopt;
+	double damping = 1.0e-3;
+	for (int iteration = 0; iteration < 80; ++iteration) {
+		std::array<ResidualVector, ParameterCount> derivatives {};
+		for (std::size_t column = 0; column < ParameterCount; ++column) {
+			double const step = (column < 2 ? 1.0e-4 : 1.0e-6)
+				* std::max(1.0, std::abs(parameters[column]));
+			auto plus = parameters;
+			auto minus = parameters;
+			plus[column] += step;
+			minus[column] -= step;
+			ResidualVector plus_residual {};
+			ResidualVector minus_residual {};
+			double plus_cost = 0.0;
+			double minus_cost = 0.0;
+			bool const has_plus = EvaluateParameters(input, plus, use_fay, plus_residual, plus_cost);
+			bool const has_minus = EvaluateParameters(input, minus, use_fay, minus_residual, minus_cost);
+			if (!has_plus && !has_minus)
+				return std::nullopt;
+			for (std::size_t row = 0; row < CornerResidualCount; ++row) {
+				if (has_plus && has_minus)
+					derivatives[column][row] = (plus_residual[row] - minus_residual[row]) / (2.0 * step);
+				else if (has_plus)
+					derivatives[column][row] = (plus_residual[row] - residual[row]) / step;
+				else
+					derivatives[column][row] = (residual[row] - minus_residual[row]) / step;
+			}
+		}
+
+		LinearMatrix normal {};
+		Parameters gradient {};
+		for (std::size_t left = 0; left < ParameterCount; ++left) {
+			for (std::size_t row = 0; row < CornerResidualCount; ++row)
+				gradient[left] += derivatives[left][row] * residual[row];
+			for (std::size_t right = 0; right < ParameterCount; ++right) {
+				for (std::size_t row = 0; row < CornerResidualCount; ++row)
+					normal[left][right] += derivatives[left][row] * derivatives[right][row];
+			}
+			normal[left][left] += damping * (normal[left][left] + 1.0e-9);
+			gradient[left] = -gradient[left];
+		}
+		Parameters delta {};
+		if (!SolveLinear(normal, gradient, delta)) {
+			damping *= 10.0;
+			continue;
+		}
+		auto trial = parameters;
+		double delta_norm = 0.0;
+		for (std::size_t index = 0; index < ParameterCount; ++index) {
+			trial[index] += delta[index];
+			delta_norm = std::max(delta_norm, std::abs(delta[index]));
+		}
+		trial[2] = std::clamp(trial[2], -12.0, 12.0);
+		trial[3] = std::clamp(trial[3], -12.0, 12.0);
+		trial[4] = std::clamp(trial[4], -1000.0, 1000.0);
+		trial[5] = std::remainder(trial[5], 2.0 * Pi);
+		trial[6] = std::remainder(trial[6], 2.0 * Pi);
+		trial[7] = std::remainder(trial[7], 2.0 * Pi);
+		ResidualVector trial_residual {};
+		double trial_cost = 0.0;
+		if (EvaluateParameters(input, trial, use_fay, trial_residual, trial_cost)
+			&& trial_cost < cost) {
+			parameters = trial;
+			residual = trial_residual;
+			cost = trial_cost;
+			damping = std::max(1.0e-12, damping / 3.0);
+			if (delta_norm <= 1.0e-10 || cost <= 1.0e-18)
+				break;
+		} else {
+			damping = std::min(1.0e12, damping * 10.0);
+		}
+	}
+	return StateFromParameters(input.source.state, parameters, use_fay);
+}
+
+}
+
+char const* DescribeSolverError(SolverError error) {
+	switch (error) {
+		case SolverError::None: return "Perspective solver succeeded";
+		case SolverError::InvalidSource: return "source Perspective state is invalid";
+		case SolverError::InvalidTarget: return "target Perspective quad is invalid";
+		case SolverError::InvalidOutputMapping: return "output coordinate mapping is invalid";
+		case SolverError::InvalidErrorBudget: return "Perspective error budget is invalid";
+		case SolverError::NoFeasibleCandidate: return "no quantized Perspective tag candidate meets the error budget";
+	}
+	return "unknown Perspective solver error";
+}
+
+char const* DescribeResidualError(ResidualError error) {
+	switch (error) {
+		case ResidualError::None: return "Perspective residual measurement succeeded";
+		case ResidualError::InvalidCandidate: return "candidate Perspective state is invalid";
+		case ResidualError::InvalidTarget: return "target Perspective quad is invalid";
+		case ResidualError::InvalidOutputMapping: return "output coordinate mapping is invalid";
+		case ResidualError::ProjectionDomain: return "Perspective residual sample is outside the projection domain";
+	}
+	return "unknown Perspective residual error";
+}
+
+std::string FormatAssNumber(double value, int maximum_decimals) {
+	if (!std::isfinite(value))
+		return {};
+	maximum_decimals = std::clamp(maximum_decimals, 0, 9);
+	value = Quantize(value, maximum_decimals);
+	std::array<char, 128> buffer {};
+	auto const conversion = std::to_chars(
+		buffer.data(), buffer.data() + buffer.size(), value,
+		std::chars_format::fixed, maximum_decimals);
+	if (conversion.ec != std::errc())
+		return {};
+	std::string result(buffer.data(), conversion.ptr);
+	if (auto const decimal = result.find('.'); decimal != std::string::npos) {
+		while (!result.empty() && result.back() == '0')
+			result.pop_back();
+		if (!result.empty() && result.back() == '.')
+			result.pop_back();
+	}
+	if (result == "-0" || result.empty())
+		return "0";
+	return result;
+}
+
+std::string FormatAssPoint(Vec2 point, int maximum_decimals) {
+	auto const x = FormatAssNumber(point.x, maximum_decimals);
+	auto const y = FormatAssNumber(point.y, maximum_decimals);
+	if (x.empty() || y.empty())
+		return {};
+	return "(" + x + "," + y + ")";
+}
+
+ResidualResult MeasurePerspectiveResidual(
+	ForwardInput const& candidate,
+	Quad const& target,
+	OutputCoordinateMapping output_mapping) {
+	if (!IsValidOutputMapping(output_mapping))
+		return {ResidualError::InvalidOutputMapping};
+	if (!HasValidResidualSamples(candidate.bounds))
+		return {ResidualError::InvalidCandidate, GeometryError::None,
+			ForwardError::InvalidBounds};
+	auto const forward = ForwardQuad(candidate);
+	if (!forward)
+		return {ResidualError::InvalidCandidate, GeometryError::None, forward.error};
+	auto const target_validation = ValidateQuad(target);
+	if (!target_validation)
+		return {ResidualError::InvalidTarget, target_validation.error};
+	auto const target_transform = MakeHomography(candidate.bounds.rectangle, target);
+	if (!target_transform)
+		return {ResidualError::InvalidTarget, target_transform.error};
+	auto const residual = MaxResidual(
+		forward, target_transform.value, candidate.bounds, candidate.state,
+		output_mapping);
+	if (!residual)
+		return {ResidualError::ProjectionDomain};
+	return {ResidualError::None, GeometryError::None, ForwardError::None, *residual};
+}
+
+SolverResult SolvePerspectiveTags(SolverInput const& input) {
+	if (!HasValidResidualSamples(input.source.bounds))
+		return {SolverError::InvalidSource, GeometryError::None,
+			ForwardError::InvalidBounds};
+	auto const current_forward = ForwardQuad(input.source);
+	auto projection_context = current_forward;
+	if (!projection_context) {
+		projection_context = ForwardQuad(CanonicalizeCurrentGeometry(input.source));
+		if (!projection_context)
+			return {SolverError::InvalidSource, GeometryError::None,
+				projection_context.error};
+	}
+	auto const target_validation = ValidateQuad(input.target);
+	if (!target_validation)
+		return {SolverError::InvalidTarget, target_validation.error};
+	if (!IsValidOutputMapping(input.output_mapping))
+		return {SolverError::InvalidOutputMapping};
+	if (!std::isfinite(input.max_error) || input.max_error <= 0.0)
+		return {SolverError::InvalidErrorBudget};
+	auto const target_transform = MakeHomography(input.source.bounds.rectangle, input.target);
+	if (!target_transform)
+		return {SolverError::InvalidTarget, target_transform.error};
+
+	std::vector<std::pair<CandidateFamily, EvaluatedTransformState>> raw_candidates;
+	if (current_forward) {
+		raw_candidates.emplace_back(CandidateFamily::NoOp, input.source.state);
+
+		Vec2 translation;
+		for (std::size_t index = 0; index < input.target.size(); ++index)
+			translation = translation
+				+ (input.target[index] - current_forward.quad[index]) / 4.0;
+		auto position_only = input.source.state;
+		position_only.position = position_only.position + translation;
+		raw_candidates.emplace_back(CandidateFamily::CurrentRepresentation, position_only);
+		if (input.source.state.origin) {
+			auto translated_current = position_only;
+			translated_current.origin = *translated_current.origin + translation;
+			raw_candidates.emplace_back(
+				CandidateFamily::CurrentRepresentation, translated_current);
+		}
+	}
+
+	if (auto const affine = ExactAffine(target_transform.value, input.source.bounds.rectangle)) {
+		if (auto const candidate = TranslationCandidate(*affine, input.source))
+			raw_candidates.emplace_back(CandidateFamily::Translation, *candidate);
+		if (auto const candidate = SimilarityCandidate(*affine, input.source))
+			raw_candidates.emplace_back(CandidateFamily::Similarity, *candidate);
+		if (auto const candidate = DecomposeAffine(*affine, input.source, false))
+			raw_candidates.emplace_back(CandidateFamily::AffineFax, *candidate);
+		if (auto const candidate = DecomposeAffine(*affine, input.source, true))
+			raw_candidates.emplace_back(CandidateFamily::AffineFay, *candidate);
+	}
+
+	Vec2 const source_center {
+		(input.source.bounds.rectangle.left + input.source.bounds.rectangle.right) / 2.0,
+		(input.source.bounds.rectangle.top + input.source.bounds.rectangle.bottom) / 2.0,
+	};
+	if (auto const local_affine = LocalAffine(target_transform.value, source_center)) {
+		for (bool const use_fay : {false, true}) {
+			if (auto const initial = DecomposeAffine(*local_affine, input.source, use_fay)) {
+				if (auto const candidate = OptimizeImplicitOrigin(input, *initial, use_fay)) {
+				raw_candidates.emplace_back(
+					use_fay ? CandidateFamily::ProjectiveImplicitFay
+						: CandidateFamily::ProjectiveImplicitFax,
+					*candidate);
+				}
+			}
+		}
+	}
+	if (auto const explicit_candidate = ExplicitOriginCandidate(input, projection_context))
+		raw_candidates.emplace_back(
+			CandidateFamily::ProjectiveExplicitOrigin, *explicit_candidate);
+
+	std::optional<SolverCandidate> best;
+	for (auto const& [family, state] : raw_candidates) {
+		auto candidate = QuantizeCandidate(input, target_transform.value, family, state);
+		if (!candidate)
+			continue;
+		if (!best || BetterScore(candidate->score, best->score))
+			best = std::move(candidate);
+	}
+	if (!best)
+		return {SolverError::NoFeasibleCandidate, GeometryError::None,
+			ForwardError::None, std::nullopt, raw_candidates.size()};
+	return {SolverError::None, GeometryError::None, ForwardError::None,
+		std::move(best), raw_candidates.size()};
+}
+
+}

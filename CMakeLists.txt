@@ -758,6 +758,7 @@ set(AEGISUB_CORE_SOURCES
     src/core_host_context.cpp
     src/ebu_export_settings.cpp
     src/numeric_utils.cpp
+    src/perspective_quad_geometry.cpp
     src/translation_service.cpp
     # ASS data model
     src/ass_attachment.cpp

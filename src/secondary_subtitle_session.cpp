@@ -37,6 +37,7 @@
 #include <libaegisub/background_runner.h>
 #include <libaegisub/exception.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/path.h>
 #include <libaegisub/string_utils.h>
@@ -411,10 +412,20 @@ void SecondarySubtitleSession::UpdateExternalStyleCatalogWatch() {
 		source_mode == SecondarySubtitleSourceMode::ExternalFile,
 		external_subtitles_are_srt,
 		GetSubtitleFormatDefaultStyleCatalog("SRT"));
-	if (path.empty())
+	if (path.empty()) {
 		external_style_catalog_watch->ClearTargetPath();
-	else
-		external_style_catalog_watch->SetTargetPath(path);
+		return;
+	}
+
+	// The catalog directory is only created when a catalog is first saved from
+	// the style manager; until then there is nothing to watch and attempting it
+	// just reports an error.
+	if (!agi::fs::DirectoryExists(path.parent_path())) {
+		external_style_catalog_watch->ClearTargetPath();
+		return;
+	}
+
+	external_style_catalog_watch->SetTargetPath(path);
 }
 
 AssFile *SecondarySubtitleSession::ResolveSubtitlesForProvider(AsyncVideoProvider *main_provider) {
@@ -1358,5 +1369,5 @@ void SecondarySubtitleSession::OnExternalStyleCatalogFileChanged(agi::fs::path c
 }
 
 void SecondarySubtitleSession::OnExternalSubtitleWatchError(std::string const& message) {
-	wxLogWarning(wxS("Secondary subtitle watcher error: %s"), to_wx(message));
+	LOG_W("secondary_subtitle/session") << "Secondary subtitle watcher error: " << message;
 }

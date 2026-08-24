@@ -1,5 +1,9 @@
 # Aegisub clang-tidy configuration (C++20)
 # Based on codebase style: tab indent, GoogleTest, Boost libraries
+# Note: readability-identifier-naming is disabled; the existing code
+# mixes naming conventions (camelBack members vs snake_case free
+# functions) and the noise outweighs the benefit. Rules are kept in
+# git history for a future re-enable.
 ---
 Checks: >
   clang-diagnostic-*,
@@ -12,6 +16,7 @@ Checks: >
   -readability-magic-numbers,
   -readability-convert-member-functions-to-static,
   -readability-named-parameter,
+  -readability-identifier-naming,
   -modernize-return-braced-init-list,
   -modernize-pass-by-value,
   -modernize-avoid-c-arrays,
@@ -25,17 +30,4 @@ HeaderFilterRegex: "(src/|libaegisub/|tests/|tools/).*"
 FormatStyle: none
 
 CheckOptions:
-  - { key: readability-identifier-naming.ClassCase,                  value: CamelCase }
-  - { key: readability-identifier-naming.StructCase,                 value: CamelCase }
-  - { key: readability-identifier-naming.EnumCase,                   value: CamelCase }
-  - { key: readability-identifier-naming.FunctionCase,               value: camelBack }
-  - { key: readability-identifier-naming.VariableCase,               value: camelBack }
-  - { key: readability-identifier-naming.MemberCase,                 value: camelBack }
-  - { key: readability-identifier-naming.MemberSuffix,              value: _ }
-  - { key: readability-identifier-naming.ParameterCase,              value: camelBack }
-  - { key: readability-identifier-naming.ConstantCase,               value: UPPER_CASE }
-  - { key: readability-identifier-naming.ConstantPrefix,            value: k }
-  - { key: readability-identifier-naming.ConstantSuffix,            value:  }
-  - { key: readability-identifier-naming.NamespaceCase,             value: aNy_CasE }
-  - { key: readability-identifier-naming.MacroDefinitionCase,       value: UPPER_CASE }
   - { key: readability-simplify-boolean-expr.SimplifyDeMorgan,      value: false }

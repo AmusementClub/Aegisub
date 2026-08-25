@@ -86,6 +86,7 @@ void AudioSpectrumAnalysisCache::DestroyFftResources() {
 void AudioSpectrumAnalysisCache::ClearLocked() {
 	cache_blocks.clear();
 	cache_touch.clear();
+	silent_rebuild_blocks.clear();
 	touch_heap = {};
 	current_cache_bytes = 0;
 	current_cache_entries = 0;
@@ -286,6 +287,25 @@ void AudioSpectrumAnalysisCache::TouchLocked(size_t block_index) {
 	touch_heap.push(TouchEntry{ touch, block_index });
 }
 
+// A block of exact zeros is either genuine digital silence or the residue of
+// a transient upstream read failure that was zero-filled. The two cannot be
+// told apart here, so the first all-zero build of a block is handed out but
+// not retained, giving a later rebuild the chance to recover real audio. A
+// second all-zero build in the same generation is treated as genuine silence
+// and cached so silent audio is not re-analyzed forever.
+bool AudioSpectrumAnalysisCache::ShouldDeferSilentBlockLocked(
+	size_t block_index,
+	float const *block) {
+	for (size_t i = 0, bin_count = BinCount(); i < bin_count; ++i) {
+		if (block[i] != 0.f)
+			return false;
+	}
+	if (silent_rebuild_blocks.erase(block_index) > 0)
+		return false;
+	silent_rebuild_blocks.insert(block_index);
+	return true;
+}
+
 void AudioSpectrumAnalysisCache::TrimLocked() {
 	const size_t block_bytes = BlockBytes();
 	while (current_cache_bytes > max_cache_bytes && current_cache_entries > 0) {
@@ -363,14 +383,16 @@ AudioSpectrumAnalysisCache::BlockHandle AudioSpectrumAnalysisCache::Get(size_t b
 		std::lock_guard<std::mutex> lock(cache_mutex);
 		if (block_index >= block_count)
 			return {};
+		++metrics_cache_misses;
+		++metrics_visible_builds;
+		if (ShouldDeferSilentBlockLocked(block_index, built.get()))
+			return built;
 		auto block_it = cache_blocks.find(block_index);
 		if (block_it == cache_blocks.end() || !block_it->second) {
 			BlockHandle published = std::move(built);
 			block_it = cache_blocks.emplace(block_index, std::move(published)).first;
 			current_cache_bytes += BlockBytes();
 			++current_cache_entries;
-			++metrics_cache_misses;
-			++metrics_visible_builds;
 		}
 		TouchLocked(block_index);
 		TrimLocked();
@@ -545,11 +567,13 @@ void AudioSpectrumAnalysisCache::ProcessPrefetch(
 			return false;
 		auto found = cache_blocks.find(block_index);
 		if (found == cache_blocks.end() || !found->second) {
+			++metrics_prefetch_builds;
+			if (ShouldDeferSilentBlockLocked(block_index, built.get()))
+				return true;
 			BlockHandle published = std::move(built);
 			found = cache_blocks.emplace(block_index, std::move(published)).first;
 			current_cache_bytes += BlockBytes();
 			++current_cache_entries;
-			++metrics_prefetch_builds;
 			built_any = true;
 		}
 		TouchLocked(block_index);

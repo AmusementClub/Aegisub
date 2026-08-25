@@ -8,6 +8,7 @@
 
 #include <libaegisub/background_runner.h>
 #include <libaegisub/fs.h>
+#include <libaegisub/log.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/scope_exit.h>
 
@@ -26,7 +27,13 @@ class LsmasAudioProvider final : public agi::AudioProvider {
 
     void FillBuffer(void *buf, int64_t start, int64_t count) const override {
         lsmas_provider::ErrorString error;
-        auto got = lsmas::GetApi().audio_get_samples(handle, buf, start, count, error.Out());
+        auto const frame_bytes = static_cast<int64_t>(channels) * bytes_per_sample;
+        auto const got = lsmas_provider::ReadAudioFramesWithRetry(
+            buf, start, count, frame_bytes,
+            [&error, this](void *dst, int64_t at, int64_t wanted) {
+                error.Reset();
+                return lsmas::GetApi().audio_get_samples(handle, dst, at, wanted, error.Out());
+            });
         if (got < 0)
             throw agi::AudioDecodeError(error.Message("failed to decode audio samples"));
         if (got < count) {
@@ -34,6 +41,14 @@ class LsmasAudioProvider final : public agi::AudioProvider {
             auto offset = got * channels * bytes_per_sample;
             auto remaining = (count - got) * channels * bytes_per_sample;
             std::fill(bytes + offset, bytes + offset + remaining, 0);
+            // A short read that ends before the stream ends is not an
+            // end-of-stream tail: the data exists, so report the gap instead
+            // of letting silence get cached as if it were real audio.
+            if (start + count <= num_samples) {
+                LOG_W("audio_provider/lsmas")
+                    << "LsmasNative audio returned " << got << " of " << count
+                    << " frames at frame " << start << "; filling the remainder with silence";
+            }
         }
     }
 

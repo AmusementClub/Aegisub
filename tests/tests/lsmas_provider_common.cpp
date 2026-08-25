@@ -2,6 +2,9 @@
 
 #include "../../src/lsmas_provider_common.h"
 
+#include <cstdint>
+#include <vector>
+
 using lsmas_provider::ParseTrackChoicesJson;
 using lsmas_provider::TrackType;
 
@@ -91,4 +94,101 @@ TEST(lsmas_provider_common, frame_rates_keep_exact_rational_values) {
 
     ASSERT_EQ(1U, tracks.size());
     EXPECT_EQ("Track 01: mpeg2video, 720x576, 25/1 fps", tracks[0].display_name);
+}
+
+TEST(lsmas_provider_common, audio_retry_recovers_transient_short_read) {
+    std::vector<std::int64_t> read_starts;
+    int calls = 0;
+    std::int16_t buffer[4] = {};
+
+    auto const frames = lsmas_provider::ReadAudioFramesWithRetry(
+        buffer, 10, 4, sizeof(std::int16_t),
+        [&](void *dst, std::int64_t start, std::int64_t count) {
+            ++calls;
+            read_starts.push_back(start);
+            auto const deliver = calls == 1 ? 1 : count;
+            auto *out = static_cast<std::int16_t *>(dst);
+            for (std::int64_t i = 0; i < deliver; ++i)
+                out[i] = 42;
+            return deliver;
+        });
+
+    EXPECT_EQ(4, frames);
+    EXPECT_EQ(2, calls);
+    ASSERT_EQ(2u, read_starts.size());
+    EXPECT_EQ(10, read_starts[0]);
+    EXPECT_EQ(11, read_starts[1]);
+    EXPECT_EQ(42, buffer[3]);
+}
+
+TEST(lsmas_provider_common, audio_retry_resumes_interleaved_frames_at_frame_boundaries) {
+    int calls = 0;
+    // Stereo int16: one frame is 4 bytes, matching LsmasAudioProvider.
+    std::int16_t buffer[2 * 3] = {};
+
+    auto const frames = lsmas_provider::ReadAudioFramesWithRetry(
+        buffer, 0, 3, 2 * static_cast<std::int64_t>(sizeof(std::int16_t)),
+        [&](void *dst, std::int64_t, std::int64_t count) {
+            ++calls;
+            auto const deliver = calls == 1 ? 2 : count;
+            auto *out = static_cast<std::int16_t *>(dst);
+            for (std::int64_t i = 0; i < deliver; ++i) {
+                out[i * 2 + 0] = 100;
+                out[i * 2 + 1] = -100;
+            }
+            return deliver;
+        });
+
+    ASSERT_EQ(3, frames);
+    ASSERT_EQ(2, calls);
+    for (std::size_t frame = 0; frame < 3; ++frame) {
+        EXPECT_EQ(100, buffer[frame * 2 + 0]);
+        EXPECT_EQ(-100, buffer[frame * 2 + 1]);
+    }
+}
+
+TEST(lsmas_provider_common, audio_retry_bounded_when_read_makes_no_progress) {
+    int calls = 0;
+    std::int16_t buffer[2] = {};
+
+    auto const frames = lsmas_provider::ReadAudioFramesWithRetry(
+        buffer, 0, 2, sizeof(std::int16_t),
+        [&](void *, std::int64_t, std::int64_t) {
+            ++calls;
+            return 0;
+        });
+
+    EXPECT_EQ(0, frames);
+    EXPECT_EQ(lsmas_provider::kAudioShortReadMaxAttempts, calls);
+}
+
+TEST(lsmas_provider_common, audio_retry_propagates_error_immediately) {
+    int calls = 0;
+    std::int16_t buffer[2] = {};
+
+    auto const frames = lsmas_provider::ReadAudioFramesWithRetry(
+        buffer, 0, 2, sizeof(std::int16_t),
+        [&](void *, std::int64_t, std::int64_t) {
+            ++calls;
+            return -5;
+        });
+
+    EXPECT_EQ(-5, frames);
+    EXPECT_EQ(1, calls);
+}
+
+TEST(lsmas_provider_common, audio_retry_reports_persistent_shortfall) {
+    int calls = 0;
+    std::int16_t buffer[5] = {};
+
+    auto const frames = lsmas_provider::ReadAudioFramesWithRetry(
+        buffer, 0, 5, sizeof(std::int16_t),
+        [&](void *dst, std::int64_t, std::int64_t) {
+            ++calls;
+            *static_cast<std::int16_t *>(dst) = 7;
+            return 1;
+        });
+
+    EXPECT_EQ(lsmas_provider::kAudioShortReadMaxAttempts, frames);
+    EXPECT_EQ(lsmas_provider::kAudioShortReadMaxAttempts, calls);
 }

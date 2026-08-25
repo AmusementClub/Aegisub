@@ -272,6 +272,29 @@ struct PatternMonoProvider final : agi::AudioProvider {
 	}
 };
 
+struct FlippingSilenceProvider final : agi::AudioProvider {
+	mutable std::atomic<int> fill_calls{0};
+	int silent_calls = 1;
+
+	explicit FlippingSilenceProvider(int silent_calls = 1)
+		: silent_calls(silent_calls) {
+		channels = 1;
+		num_samples = 1 << 20;
+		decoded_samples = num_samples;
+		sample_rate = 48000;
+		bytes_per_sample = sizeof(int16_t);
+		float_samples = false;
+	}
+
+	void FillBuffer(void *buf, int64_t, int64_t count) const override {
+		auto const call = fill_calls.fetch_add(1) + 1;
+		std::fill_n(
+			static_cast<int16_t *>(buf),
+			static_cast<size_t>(count),
+			call <= silent_calls ? int16_t{0} : int16_t{12345});
+	}
+};
+
 struct ExtremeMetadataMonoProvider final : agi::AudioProvider {
 	ExtremeMetadataMonoProvider() {
 		channels = 1;
@@ -1426,6 +1449,79 @@ TEST(lagi_audio_display, spectrum_analysis_cache_prefetch_caps_sparse_range_at_b
 	EXPECT_NE(nullptr, cache.GetIfReady(299));
 	EXPECT_NE(nullptr, cache.GetIfReady(300));
 	EXPECT_EQ(4u, cache.GetMetricsSnapshot().prefetch_builds);
+}
+
+TEST(lagi_audio_display, spectrum_analysis_cache_does_not_retain_silent_blocks) {
+	FlippingSilenceProvider provider;
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(9, 7);
+
+	auto silent = cache.Get(0);
+	ASSERT_NE(nullptr, silent);
+	for (size_t bin = 0; bin < (size_t(1) << 9); ++bin)
+		EXPECT_EQ(0.f, silent[bin]);
+	// Silence is also what a transient upstream read failure produces, so the
+	// block is served but not retained: a rebuild must be able to recover.
+	EXPECT_EQ(nullptr, cache.GetIfReady(0));
+	EXPECT_EQ(1, provider.fill_calls.load());
+
+	auto recovered = cache.Get(0);
+	ASSERT_NE(nullptr, recovered);
+	EXPECT_EQ(2, provider.fill_calls.load());
+	EXPECT_GT(recovered[0], 0.f);
+	EXPECT_NE(nullptr, cache.GetIfReady(0));
+}
+
+TEST(lagi_audio_display, spectrum_analysis_cache_prefetch_does_not_retain_silent_blocks) {
+	FlippingSilenceProvider provider{1000};
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(9, 7);
+
+	cache.Prefetch(0, 0);
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+	while (provider.fill_calls.load() < 1 && std::chrono::steady_clock::now() < deadline)
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	ASSERT_GE(provider.fill_calls.load(), 1);
+
+	// The synchronous Get shares or follows the prefetch build and rebuilds
+	// an unretained block. Had the prefetch wrongly retained the silent
+	// block, this Get would hit the cache and skip the rebuild.
+	auto block = cache.Get(0);
+	ASSERT_NE(nullptr, block);
+	EXPECT_EQ(2, provider.fill_calls.load());
+	// The rebuilt block is still silent, so revalidation retains it.
+	EXPECT_NE(nullptr, cache.GetIfReady(0));
+}
+
+TEST(lagi_audio_display, spectrum_analysis_cache_revalidation_caches_genuine_silence) {
+	FlippingSilenceProvider provider{1000};
+	auto source = CreateAudioDisplaySource(&provider);
+	AudioSpectrumAnalysisCache cache;
+	cache.SetSource(source.get());
+	cache.SetMixPolicy(AudioMixPolicy::MonoAverage);
+	cache.SetResolution(9, 7);
+
+	auto first = cache.Get(0);
+	ASSERT_NE(nullptr, first);
+	EXPECT_EQ(1, provider.fill_calls.load());
+	EXPECT_EQ(nullptr, cache.GetIfReady(0));
+
+	// The second silent build in the same generation is retained, so genuine
+	// digital silence is not re-analyzed forever.
+	auto second = cache.Get(0);
+	ASSERT_NE(nullptr, second);
+	EXPECT_EQ(2, provider.fill_calls.load());
+	EXPECT_NE(nullptr, cache.GetIfReady(0));
+
+	auto third = cache.Get(0);
+	ASSERT_NE(nullptr, third);
+	EXPECT_EQ(2, provider.fill_calls.load());
 }
 
 TEST(lagi_audio_display, spectrum_analysis_cache_visible_get_shares_inflight_prefetch_build) {

@@ -79,6 +79,9 @@ public:
 	/// The block's text exactly as parsed. Unlike GetText() this never
 	/// normalizes (GetText on an override block re-serializes its tags), so
 	/// callers rewriting text they do not own can preserve the original bytes.
+	/// Not symmetric across block kinds: an override block stores the
+	/// brace-free contents, but AssDialogueBlockComment's constructor stores
+	/// "{" + text + "}", so a comment block's raw text includes the braces.
 	std::string const& GetRawText() const { return text; }
 };
 

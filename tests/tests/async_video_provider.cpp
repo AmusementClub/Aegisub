@@ -3296,6 +3296,108 @@ TEST(async_video_provider_raw_batch, non_agi_exception_maps_to_error) {
 	EXPECT_EQ(RawVideoBatchStatus::Completed, result.status);
 }
 
+TEST(async_video_provider_raw_batch, invalid_frame_buffer_maps_to_frame_unavailable) {
+	auto fake = agi::make_unique<FakeVideoProvider>(std::make_shared<VideoProviderState>());
+	fake->fill_frame = [](int, VideoFrame& frame) {
+		frame.data.clear();
+		frame.pitch = 0;
+	};
+	auto provider = agi::make_unique<AsyncVideoProvider>(
+		std::move(fake),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	RawVideoBatchResult result = provider->RunRawVideoBatch(
+		provider->GetRawVideoIdentity(),
+		[&](RawFrameAccess& access) {
+			aegisub::motion_track::RawBgraView view;
+			auto read = access.FetchBgra(0, view);
+			if (read.status != aegisub::motion_track::FrameReadStatus::FrameUnavailable)
+				return RawVideoBatchStatus::Error;
+			return RawVideoBatchStatus::Completed;
+		});
+	EXPECT_EQ(RawVideoBatchStatus::Completed, result.status);
+}
+
+TEST(async_video_provider_raw_batch, wrapping_pitch_product_maps_to_frame_unavailable) {
+	// pitch * height wraps in size_t (2^63 * 2 == 2^64 == 0), so a naive
+	// "data.size() < pitch * height" check passed this 16-byte buffer through;
+	// the reader would then have indexed rows through a garbage int pitch.
+	auto fake = agi::make_unique<FakeVideoProvider>(std::make_shared<VideoProviderState>());
+	fake->fill_frame = [](int, VideoFrame& frame) {
+		frame.pitch = (size_t(1) << 63);
+	};
+	auto provider = agi::make_unique<AsyncVideoProvider>(
+		std::move(fake),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	RawVideoBatchResult result = provider->RunRawVideoBatch(
+		provider->GetRawVideoIdentity(),
+		[&](RawFrameAccess& access) {
+			aegisub::motion_track::RawBgraView view;
+			auto read = access.FetchBgra(0, view);
+			if (read.status != aegisub::motion_track::FrameReadStatus::FrameUnavailable)
+				return RawVideoBatchStatus::Error;
+			return RawVideoBatchStatus::Completed;
+		});
+	EXPECT_EQ(RawVideoBatchStatus::Completed, result.status);
+}
+
+TEST(async_video_provider_raw_batch, wrapping_width_with_zero_pitch_maps_to_frame_unavailable) {
+	// width * 4 wraps to 0 for width == 2^62, so a zero pitch used to slip
+	// past the chained ordering check and the buffer-size division divided by
+	// zero (UB). The geometry check now runs before any size arithmetic and
+	// rejects the frame instead.
+	auto fake = agi::make_unique<FakeVideoProvider>(std::make_shared<VideoProviderState>());
+	fake->fill_frame = [](int, VideoFrame& frame) {
+		frame.width = static_cast<size_t>(1) << 62;
+		frame.height = 1;
+		frame.pitch = 0;
+		frame.data.assign(1, 0);
+	};
+	auto provider = agi::make_unique<AsyncVideoProvider>(
+		std::move(fake),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	RawVideoBatchResult result = provider->RunRawVideoBatch(
+		provider->GetRawVideoIdentity(),
+		[&](RawFrameAccess& access) {
+			aegisub::motion_track::RawBgraView view;
+			auto read = access.FetchBgra(0, view);
+			if (read.status != aegisub::motion_track::FrameReadStatus::FrameUnavailable)
+				return RawVideoBatchStatus::Error;
+			return RawVideoBatchStatus::Completed;
+		});
+	EXPECT_EQ(RawVideoBatchStatus::Completed, result.status);
+}
+
+TEST(async_video_provider_raw_batch, zero_pitch_with_matching_geometry_maps_to_frame_unavailable) {
+	// A zero pitch on an otherwise well-formed frame must hit the explicit
+	// pitch rejection rather than the data.size() / pitch division.
+	auto fake = agi::make_unique<FakeVideoProvider>(std::make_shared<VideoProviderState>());
+	fake->fill_frame = [](int, VideoFrame& frame) {
+		frame.pitch = 0;
+		frame.data.assign(4, 0);
+	};
+	auto provider = agi::make_unique<AsyncVideoProvider>(
+		std::move(fake),
+		agi::make_unique<FakeSubtitlesProvider>(),
+		AsyncVideoProviderEventSink{});
+
+	RawVideoBatchResult result = provider->RunRawVideoBatch(
+		provider->GetRawVideoIdentity(),
+		[&](RawFrameAccess& access) {
+			aegisub::motion_track::RawBgraView view;
+			auto read = access.FetchBgra(0, view);
+			if (read.status != aegisub::motion_track::FrameReadStatus::FrameUnavailable)
+				return RawVideoBatchStatus::Error;
+			return RawVideoBatchStatus::Completed;
+		});
+	EXPECT_EQ(RawVideoBatchStatus::Completed, result.status);
+}
+
 TEST(async_video_provider_raw_batch, nested_sync_inside_callback_returns_null_without_deadlock) {
 	auto provider = MakeRawTestProvider();
 	RawVideoBatchResult result = provider->RunRawVideoBatch(

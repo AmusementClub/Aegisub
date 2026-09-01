@@ -83,7 +83,9 @@ bool HasCompetingNccPeak(GrayView templ, GrayView image,
 	double ratio, double min_score);
 
 // Parabolic subpixel refinement around an integer peak. Returns delta in
-// [-0.75, 0.75]; 0 when the curvature denominator vanishes.
+// [-0.75, 0.75]; 0 when the center is not a local maximum (e.g. a
+// candidate clamped at the search-window edge) or the curvature
+// denominator vanishes.
 double ParabolicSubpixel(double left, double center, double right);
 
 // --- Occlusion-robust acceptance scoring -------------------------------

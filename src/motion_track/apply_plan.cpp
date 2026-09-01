@@ -1,11 +1,15 @@
 #include "apply_plan.h"
 
 #include "../align_video_fade.h"
+#include "../ass_tag_scanner.h"
 
+#include "ass_compat.h"
 #include "ass_dialogue.h"
 #include "ass_file.h"
-
+#include "ass_info.h"
 #include "ass_style.h"
+
+#include <libaegisub/ass/time.h>
 
 #include <algorithm>
 #include <cmath>
@@ -14,6 +18,8 @@
 #include <numbers>
 #include <optional>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace aegisub::motion_track {
 
@@ -27,7 +33,20 @@ struct PositionInfo {
 	bool has_move = false;
 	double move_x1 = 0.0, move_y1 = 0.0, move_x2 = 0.0, move_y2 = 0.0;
 	int move_t1 = 0, move_t2 = 0;
+	// The \move spelled 6 arguments: t1/t2 are an explicit window even when
+	// one bound is 0 (libass falls back to the whole event only when BOTH
+	// are non-positive). A 4-arg \move leaves this false.
+	bool has_move_window = false;
+	// \org / \clip / \iclip present in the raw tag bytes: the line needs a
+	// manual-review warning (see MotionTrackApplyPlan).
+	bool has_org = false;
+	bool has_clip = false;
 	int alignment_override = 0; // \\an / \\a (already converted to \\an space)
+	// Whether any \an or \a was seen at all. A legacy \a with an out-of-range
+	// value converts to 0 yet still consumes libass's PARSED_A slot (the
+	// style alignment renders), so "converted value == 0" cannot double as
+	// "not seen".
+	bool has_alignment = false;
 	// Inline transform tags (last occurrence wins, matching ASS override
 	// semantics). Used as the similarity apply base so user styling survives.
 	bool has_frz = false;
@@ -54,48 +73,170 @@ struct PositionInfo {
 	double blur = 0.0;
 };
 
-bool IsTagNameChar(char c) {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
-	    || (c >= '0' && c <= '9');
+// --- raw \pos / \move / \an / \a scanning ---------------------------------
+//
+// Classification rules, all relative to the shared scanner's libass-faithful
+// cut (aegisub::ass_tag_scanner: spaces/tabs after '\' skipped so
+// "{\ pos(10,20)}" is a real tag, names are prefixes (mystrcmp), arguments
+// end at the first ')' unless a '\' swallows through the next one):
+//   * pos/move require nargs == 2 and nargs == 4 or 6 after dropping
+//     empty/whitespace arguments; extra arguments (3-arg \pos, 7-arg
+//     \move) are ignored and do not occupy the slot;
+//   * unconvertible numeric arguments become 0 (argtod/argtoi32 ignore
+//     conversion failure) and still occupy libass's EVENT_POSITIONED /
+//     PARSED_A slots, so a later well-formed instance does not win;
+//   * \t argument regions are parsed as tag lists again; other tags are not.
+
+struct RawPositionState {
+	bool has_pos = false;
+	double pos_x = 0.0, pos_y = 0.0;
+	bool has_move = false;
+	double move_x1 = 0.0, move_y1 = 0.0, move_x2 = 0.0, move_y2 = 0.0;
+	int move_t1 = 0, move_t2 = 0;
+	// The \move spelled 6 arguments, so t1/t2 are an explicit window even
+	// when one bound is 0. The 4-arg form leaves this false; both forms can
+	// carry move_t1 = move_t2 = 0, and only the explicit one distinguishes
+	// "window [0, 0]" from "no window given".
+	bool has_move_window = false;
+	// The event carries \org (libass's arity-2 first-wins rotation origin)
+	// or \clip/\iclip in any argument form libass accepts, including
+	// \t-animated instances. These pin absolute script-space geometry the
+	// tracked rewrite cannot follow; the plan flags such lines for manual
+	// review instead of trying to rewrite them.
+	bool has_org = false;
+	bool has_clip = false;
+	bool has_alignment = false;
+	int alignment_override = 0;
+};
+
+void ConsumeAlignment(RawPositionState& state, bool legacy_a, int value) {
+	if (state.has_alignment)
+		return;
+	state.has_alignment = true;
+	if (legacy_a)
+		state.alignment_override = AssCompat::NormalizeLegacyAssAlignment(value, 0);
+	else
+		state.alignment_override = (value >= 1 && value <= 9) ? value : 0;
+}
+
+// Scans one raw override-block body in textual order; call it for every
+// override block of the event in order so the state carries across blocks.
+// pos and move share one event-level slot (libass's EVENT_POSITIONED): the
+// first arity-valid instance of either kind blocks later instances of both.
+// \t regions recurse; the depth cap keeps pathological nesting from
+// exhausting the stack (libass itself does not bound the depth, but 32
+// levels exceed any real event and match perspective_ass_state.cpp).
+void ScanRawPositions(std::string_view body, RawPositionState& state,
+					  int depth) {
+	if (depth >= 32)
+		return;
+	ass_tag_scanner::ScanRawTags(body, [&](ass_tag_scanner::RawTag const& tag) {
+		if (!tag.has_paren) {
+			// "\a6" / "\an7" must not steal "\alpha": the scanner classifies
+			// a handful of tags, so the short-tag rule stands in for libass's
+			// chain order (alpha tested before a/an).
+			if (ass_tag_scanner::NameIs(tag.name, "an"))
+				ConsumeAlignment(state, false,
+								 ass_tag_scanner::ArgToInt(tag.name.substr(2)));
+			else if (ass_tag_scanner::NameIs(tag.name, "a"))
+				ConsumeAlignment(state, true,
+								 ass_tag_scanner::ArgToInt(tag.name.substr(1)));
+			return;
+		}
+		auto const parts = ass_tag_scanner::SplitLibassArgs(tag.args);
+		if (ass_tag_scanner::NameHasPrefix(tag.name, "t")) {
+			ScanRawPositions(tag.args, state, depth + 1);
+		}
+		else if (ass_tag_scanner::NameHasPrefix(tag.name, "pos") && !state.has_pos && !state.has_move) {
+			if (parts.size() == 2) {
+				state.has_pos = true;
+				state.pos_x = ass_tag_scanner::ArgToDouble(parts[0]);
+				state.pos_y = ass_tag_scanner::ArgToDouble(parts[1]);
+			}
+		}
+		else if (ass_tag_scanner::NameHasPrefix(tag.name, "move") && !state.has_pos && !state.has_move) {
+			if (parts.size() == 4 || parts.size() == 6) {
+				state.has_move = true;
+				state.move_x1 = ass_tag_scanner::ArgToDouble(parts[0]);
+				state.move_y1 = ass_tag_scanner::ArgToDouble(parts[1]);
+				state.move_x2 = ass_tag_scanner::ArgToDouble(parts[2]);
+				state.move_y2 = ass_tag_scanner::ArgToDouble(parts[3]);
+				state.move_t1 = 0;
+				state.move_t2 = 0;
+				if (parts.size() == 6) {
+					state.has_move_window = true;
+					state.move_t1 = ass_tag_scanner::ArgToInt(parts[4]);
+					state.move_t2 = ass_tag_scanner::ArgToInt(parts[5]);
+					// libass swaps a reversed window unconditionally, before
+					// the both-non-positive fallback check, so a reversed
+					// explicit window renders as [t2, t1] and never falls
+					// back and never fails.
+					if (state.move_t1 > state.move_t2)
+						std::swap(state.move_t1, state.move_t2);
+				}
+			}
+		}
+		else if (ass_tag_scanner::NameIs(tag.name, "an")) {
+			int const value = parts.empty()
+				? ass_tag_scanner::ArgToInt(tag.name.substr(2))
+				: ass_tag_scanner::ArgToInt(parts[0]);
+			ConsumeAlignment(state, false, value);
+		}
+		else if (ass_tag_scanner::NameIs(tag.name, "a")) {
+			int const value = parts.empty()
+				? ass_tag_scanner::ArgToInt(tag.name.substr(1))
+				: ass_tag_scanner::ArgToInt(parts[0]);
+			ConsumeAlignment(state, true, value);
+		}
+		else if (ass_tag_scanner::NameHasPrefix(tag.name, "org")) {
+			// libass honors \org only with exactly two arguments, first-wins
+			// per event; a bare \org renders nothing and needs no review.
+			if (parts.size() == 2)
+				state.has_org = true;
+		}
+		else if (ass_tag_scanner::NameHasPrefix(tag.name, "clip")
+			|| ass_tag_scanner::NameHasPrefix(tag.name, "iclip")) {
+			// Rectangles (4 args) and vector drawings (scale + drawing text)
+			// both clip; any accepted argument form pins script-space
+			// geometry, and \t-animated instances count through the
+			// recursion above.
+			if (!parts.empty())
+				state.has_clip = true;
+		}
+	});
+}
+
+// \frz and the bare \fr alias are two proto entries for the same z-axis
+// rotation (\fr30 parses to the name "\fr"), so both spellings feed the
+// inline base and both are dropped when the base is re-emitted.
+bool IsRotationZTag(std::string const& name) {
+	return name == "\\frz" || name == "\\fr";
 }
 
 PositionInfo ExtractPositionInfo(AssDialogue const& line) {
 	PositionInfo info;
 	auto blocks = line.ParseTags();
+	RawPositionState raw;
 	for (auto const& block : blocks) {
-		if (block->GetType() != AssBlockType::OVERRIDE) continue;
-		auto const* ov = static_cast<AssDialogueBlockOverride const*>(block.get());
+		if (block->GetType() != AssBlockType::OVERRIDE)
+			continue;
+		auto const *ov = static_cast<AssDialogueBlockOverride const *>(block.get());
+		// pos/move/alignment all come from the raw scan above: it is a
+		// superset of the parsed tag list and visits every instance in
+		// textual order, so first-wins resolves exactly like libass does.
+		// The parsed loop only collects the transform families, which are
+		// last-wins per family.
+		ScanRawPositions(ov->GetRawText(), raw, 0);
 		for (auto const& tag : ov->Tags) {
-			if (tag.Name == "\\pos" && tag.Params.size() >= 2
-			    && !info.has_pos) {
-				info.has_pos = true;
-				info.pos_x = tag.Params[0].Get<double>(0.0);
-				info.pos_y = tag.Params[1].Get<double>(0.0);
-			} else if (tag.Name == "\\move" && tag.Params.size() >= 4
-			           && !info.has_move) {
-				info.has_move = true;
-				info.move_x1 = tag.Params[0].Get<double>(0.0);
-				info.move_y1 = tag.Params[1].Get<double>(0.0);
-				info.move_x2 = tag.Params[2].Get<double>(0.0);
-				info.move_y2 = tag.Params[3].Get<double>(0.0);
-				info.move_t1 = tag.Params.size() > 4
-				    ? tag.Params[4].Get<int>(0) : 0;
-				info.move_t2 = tag.Params.size() > 5
-				    ? tag.Params[5].Get<int>(0) : 0;
-			} else if (tag.Name == "\\an" && tag.Params.size() >= 1
-			           && info.alignment_override == 0) {
-				info.alignment_override = tag.Params[0].Get<int>(0);
-			} else if (tag.Name == "\\a" && tag.Params.size() >= 1
-			           && info.alignment_override == 0) {
-				info.alignment_override =
-					AssStyle::SsaToAss(tag.Params[0].Get<int>(2));
-			} else if (tag.Name == "\\frz" && tag.Params.size() >= 1) {
+			if (IsRotationZTag(tag.Name) && tag.Params.size() >= 1) {
 				info.has_frz = true;
 				info.frz = tag.Params[0].Get<double>(0.0);
-			} else if (tag.Name == "\\fscx" && tag.Params.size() >= 1) {
+			}
+			else if (tag.Name == "\\fscx" && tag.Params.size() >= 1) {
 				info.has_fscx = true;
 				info.fscx = tag.Params[0].Get<double>(100.0);
-			} else if (tag.Name == "\\fscy" && tag.Params.size() >= 1) {
+			}
+			else if (tag.Name == "\\fscy" && tag.Params.size() >= 1) {
 				info.has_fscy = true;
 				info.fscy = tag.Params[0].Get<double>(100.0);
 			}
@@ -129,16 +270,33 @@ PositionInfo ExtractPositionInfo(AssDialogue const& line) {
 			}
 		}
 	}
+	info.has_pos = raw.has_pos;
+	info.pos_x = raw.pos_x;
+	info.pos_y = raw.pos_y;
+	info.has_move = raw.has_move;
+	info.move_x1 = raw.move_x1;
+	info.move_y1 = raw.move_y1;
+	info.move_x2 = raw.move_x2;
+	info.move_y2 = raw.move_y2;
+	info.move_t1 = raw.move_t1;
+	info.move_t2 = raw.move_t2;
+	info.has_move_window = raw.has_move_window;
+	if (raw.has_alignment) {
+		info.has_alignment = true;
+		info.alignment_override = raw.alignment_override;
+	}
+	info.has_org = raw.has_org;
+	info.has_clip = raw.has_clip;
 	return info;
 }
 
-} // namespace
-
-bool ResolveDialogueOrigin(AssFile const& file, AssDialogue const& line,
-                           int seed_time_ms, int script_width,
-                           int script_height, double& out_x, double& out_y) {
-	PositionInfo const info = ExtractPositionInfo(line);
-
+// The info-consuming half of ResolveDialogueOrigin. BuildApplyPlan calls
+// this with the info it already extracted, so a planned line's tags are
+// parsed exactly once.
+bool ResolveDialogueOriginInfo(AssFile const& file, PositionInfo const& info,
+							   AssDialogue const& line, int seed_time_ms,
+							   int script_width, int script_height,
+							   double& out_x, double& out_y) {
 	if (info.has_pos) {
 		out_x = info.pos_x;
 		out_y = info.pos_y;
@@ -146,24 +304,27 @@ bool ResolveDialogueOrigin(AssFile const& file, AssDialogue const& line,
 	}
 
 	if (info.has_move) {
-		// VSFilter treats omitted/non-positive times as whole-event window;
-		// an explicit window must be strictly ordered to be valid.
+		// libass (ass_parse.c, complex_tag("move")): a 6-arg \move swaps
+		// t1 > t2 at parse time and falls back to the whole-event window
+		// only when BOTH bounds are non-positive, so a window with any
+		// positive bound -- including t1 = 0 -- is honored as written. The
+		// scanner applied the swap, so w1 <= w2 holds for explicit windows.
 		int const rel = seed_time_ms - int(line.Start);
 		int w1 = info.move_t1;
 		int w2 = info.move_t2;
-		if (w1 <= 0 || w2 <= 0) {
+		if (!info.has_move_window || (w1 <= 0 && w2 <= 0)) {
 			w1 = 0;
 			w2 = int(line.End) - int(line.Start);
-		} else if (w2 <= w1) {
-			return false;
 		}
 		if (rel <= w1) {
 			out_x = info.move_x1;
 			out_y = info.move_y1;
-		} else if (rel >= w2) {
+		}
+		else if (rel >= w2) {
 			out_x = info.move_x2;
 			out_y = info.move_y2;
-		} else {
+		}
+		else {
 			double const t = double(rel - w1) / double(w2 - w1);
 			out_x = info.move_x1 + (info.move_x2 - info.move_x1) * t;
 			out_y = info.move_y1 + (info.move_y2 - info.move_y1) * t;
@@ -175,10 +336,11 @@ bool ResolveDialogueOrigin(AssFile const& file, AssDialogue const& line,
 	// GetLinePosition without the wx-bound context lookups).
 	auto margin = line.Margin;
 	int align = 2;
-	if (AssStyle const* style = const_cast<AssFile&>(file).GetStyle(line.Style)) {
+	if (AssStyle const *style = const_cast<AssFile&>(file).GetStyle(line.Style)) {
 		align = style->alignment;
 		for (int i = 0; i < 3; ++i)
-			if (margin[i] == 0) margin[i] = style->Margin[i];
+			if (margin[i] == 0)
+				margin[i] = style->Margin[i];
 	}
 	if (info.alignment_override > 0 && info.alignment_override <= 9)
 		align = info.alignment_override;
@@ -203,92 +365,346 @@ bool ResolveDialogueOrigin(AssFile const& file, AssDialogue const& line,
 	return true;
 }
 
+} // namespace
+
+bool ResolveDialogueOrigin(AssFile const& file, AssDialogue const& line,
+						   int seed_time_ms, int script_width,
+						   int script_height, double& out_x, double& out_y) {
+	return ResolveDialogueOriginInfo(file, ExtractPositionInfo(line), line,
+									 seed_time_ms, script_width, script_height,
+									 out_x, out_y);
+}
+
+void FillApplyInputScriptResolution(ApplyPlanInput& input, AssFile const& file) {
+	int w = 0, h = 0;
+	file.GetResolution(ScriptResolutionType::PlayRes, w, h);
+	input.script_width = std::max(1, w);
+	input.script_height = std::max(1, h);
+}
+
 namespace {
 
-// Strips the named tags from every override block and inserts `tag` into the
-// first block (creating one when absent), matching SetOverride's placement
-// convention. `extra_drops` names additional tags to strip wholesale (the
-// growth-compensated emission owns its tag families).
+MotionTrackLineFingerprint FingerprintLine(AssFile const& file,
+										   AssDialogue const& line) {
+	MotionTrackLineFingerprint fp;
+	fp.identity = reinterpret_cast<std::uintptr_t>(&line);
+	fp.id = line.Id;
+	fp.row = line.Row;
+	fp.comment = line.Comment;
+	fp.layer = line.Layer;
+	fp.margins = line.Margin;
+	fp.start_ms = int(line.Start);
+	fp.end_ms = int(line.End);
+	fp.style = line.Style.get();
+	fp.actor = line.Actor.get();
+	fp.effect = line.Effect.get();
+	fp.extradata_ids = line.ExtradataIds.get();
+	fp.text = line.Text.get();
+	if (AssStyle const *style = const_cast<AssFile&>(file).GetStyle(line.Style))
+		fp.style_entry = style->GetEntryData();
+	return fp;
+}
+
+bool SameLineFingerprint(AssDialogue const& line,
+						 MotionTrackLineFingerprint const& expected,
+						 AssFile const& file) {
+	if (reinterpret_cast<std::uintptr_t>(&line) != expected.identity || line.Id != expected.id || line.Row != expected.row || line.Comment != expected.comment || line.Layer != expected.layer || line.Margin != expected.margins || int(line.Start) != expected.start_ms || int(line.End) != expected.end_ms || line.Style.get() != expected.style || line.Actor.get() != expected.actor || line.Effect.get() != expected.effect || line.ExtradataIds.get() != expected.extradata_ids || line.Text.get() != expected.text)
+		return false;
+	std::string style_entry;
+	if (AssStyle const *style = const_cast<AssFile&>(file).GetStyle(line.Style))
+		style_entry = style->GetEntryData();
+	return style_entry == expected.style_entry;
+}
+
+bool SameTimecodes(agi::vfr::Framerate const& left,
+				   agi::vfr::Framerate const& right, int frame_count) {
+	// IsVFR is the source representation (CFR vs a v2 table), not the
+	// consumed frame timeline. A constant-rate file and a uniform v2 table
+	// with the same boundaries must keep the session valid. FPSFraction is
+	// kept so two rates that happen to agree on the sampled frames but
+	// differ in the average used to extrapolate still mismatch.
+	if (left.IsLoaded() != right.IsLoaded() || left.FPSFraction() != right.FPSFraction())
+		return false;
+	int const n = std::max(0, frame_count);
+	for (int f = 0; f < n; ++f) {
+		if (left.TimeAtFrame(f) != right.TimeAtFrame(f))
+			return false;
+	}
+	// The final frame's end boundary: Apply reads TimeAtFrame(last, END) for
+	// the domain end and the fade-out anchor, and that value is exactly
+	// START(n) (identical midpoint formula in Framerate::TimeAtFrame), which
+	// the loop above never reaches. Without this comparison a changed final
+	// frame duration kept a stale session alive with mixed timelines.
+	return left.TimeAtFrame(n, agi::vfr::Time::START) == right.TimeAtFrame(n, agi::vfr::Time::START);
+}
+
+std::vector<std::string> ScriptInfoEntries(AssFile const& file) {
+	std::vector<std::string> entries;
+	entries.reserve(file.Info.size());
+	for (auto const& info : file.Info)
+		entries.push_back(info.GetEntryData());
+	return entries;
+}
+
+} // namespace
+
+MotionTrackSourceSnapshot CaptureMotionTrackSource(
+	AssFile const& file,
+	std::vector<AssDialogue *> const& lines,
+	agi::vfr::Framerate const& timecodes,
+	int video_frame_count) {
+	MotionTrackSourceSnapshot snap;
+	snap.file_identity = reinterpret_cast<std::uintptr_t>(&file);
+	snap.script_info_entries = ScriptInfoEntries(file);
+	snap.timecodes = timecodes;
+	snap.video_frame_count = video_frame_count;
+	snap.lines.reserve(lines.size());
+	for (auto *line : lines) {
+		if (!line)
+			continue;
+		snap.lines.push_back(FingerprintLine(file, *line));
+	}
+	return snap;
+}
+
+bool MotionTrackSourceIsCurrent(
+	AssFile const& file,
+	MotionTrackSourceSnapshot const& expected,
+	agi::vfr::Framerate const& timecodes) {
+	if (reinterpret_cast<std::uintptr_t>(&file) != expected.file_identity)
+		return false;
+	if (ScriptInfoEntries(file) != expected.script_info_entries)
+		return false;
+	if (!SameTimecodes(expected.timecodes, timecodes, expected.video_frame_count))
+		return false;
+	std::string unused;
+	return !ResolveMotionTrackSourceLines(const_cast<AssFile&>(file), expected,
+										  unused)
+				.empty();
+}
+
+std::vector<AssDialogue *> ResolveMotionTrackSourceLines(
+	AssFile& file,
+	MotionTrackSourceSnapshot const& expected,
+	std::string& message) {
+	std::vector<AssDialogue *> resolved;
+	if (reinterpret_cast<std::uintptr_t>(&file) != expected.file_identity) {
+		message = "subtitle file changed since Analyze";
+		return {};
+	}
+	if (expected.lines.empty()) {
+		message = "no target lines were captured for this session";
+		return {};
+	}
+	for (auto const& fp : expected.lines) {
+		AssDialogue *found = nullptr;
+		for (auto& event : file.Events) {
+			if (reinterpret_cast<std::uintptr_t>(&event) == fp.identity && event.Id == fp.id) {
+				found = &event;
+				break;
+			}
+		}
+		if (!found) {
+			message = "a tracked line is no longer in the file; re-run Analyze";
+			return {};
+		}
+		if (!SameLineFingerprint(*found, fp, file)) {
+			message = "a tracked line changed since Analyze; re-run Analyze";
+			return {};
+		}
+		if (std::find(resolved.begin(), resolved.end(), found) != resolved.end()) {
+			message = "duplicate target line in the Analyze snapshot";
+			return {};
+		}
+		resolved.push_back(found);
+	}
+	return resolved;
+}
+
+bool MotionTrackContinueTargetsMatch(
+	MotionTrackSourceSnapshot const& expected,
+	std::vector<AssDialogue *> const& targets) {
+	if (expected.lines.size() != targets.size())
+		return false;
+	for (size_t i = 0; i < targets.size(); ++i) {
+		auto *line = targets[i];
+		auto const& fp = expected.lines[i];
+		if (!line
+		    || reinterpret_cast<std::uintptr_t>(line) != fp.identity
+		    || line->Id != fp.id
+		    || int(line->Start) != fp.start_ms
+		    || int(line->End) != fp.end_ms)
+			return false;
+	}
+	return true;
+}
+
+bool MotionTrackTimecodesMatch(
+	MotionTrackSourceSnapshot const& expected,
+	agi::vfr::Framerate const& timecodes) {
+	return SameTimecodes(expected.timecodes, timecodes,
+	                     expected.video_frame_count);
+}
+
+namespace {
+
+bool ShouldDropOverrideTag(std::string const& name, bool drop_transform_tags,
+						   std::vector<std::string_view> const& extra_drops) {
+	if (name == "\\pos" || name == "\\move")
+		return true;
+	// The whole inline rotation/scale family drops when the planner
+	// re-emits it: leaving any member behind would win last-wins over the
+	// appended compensation.
+	if (drop_transform_tags &&
+		(IsRotationZTag(name) || name == "\\fscx" || name == "\\fscy"))
+		return true;
+	for (auto extra : extra_drops)
+		if (name == extra)
+			return true;
+	return false;
+}
+
+// True when `kept` block bytes still contain a \pos/\move a renderer would
+// honor. Uses the raw scan, so the spellings the drop pass cannot classify
+// ("\ pos(...)" or an instance nested in \t) count too.
+bool KeptStillHasPosition(std::string const& kept) {
+	RawPositionState scan;
+	ScanRawPositions(kept, scan, 0);
+	return scan.has_pos || scan.has_move;
+}
+
+// Drops matching top-level override tags and splices `tag` raw into the
+// first override — the planner already emits parenthesized values. Kept tags
+// are copied from the original text byte-for-byte: re-serializing through
+// AssDialogueBlockOverride::GetText() would normalize libass-compatible
+// input the planner never touches (extra \fad parameters beyond the two in
+// the proto table, style-name spacing after \r, ...), so Apply must not
+// round-trip through the parser.
+//
+// `insert_first` marks `tag` as position-sensitive (libass resolves pos/move
+// first-wins per event). The replacement then leads the kept bytes when —
+// and only when — the kept bytes of the insertion block still carry a
+// position the drop pass could not remove (a "\ pos(...)" spelling or one
+// nested in \t). Leading unconditionally would needlessly reorder clean
+// lines and let a surviving last-wins tag override appended transform
+// components — the drop pass removes the whole inline rotation/scale family
+// (\frz, its \fr alias, \fscx/\fscy) for exactly that reason — so the
+// common case keeps its historical byte layout.
 std::string ReplaceTagsDropping(std::string const& text,
 								std::string const& tag,
 								bool drop_transform_tags,
+								bool insert_first,
 								std::vector<std::string_view> extra_drops = {}) {
+	AssDialogue line;
+	line.Text = text;
+	auto blocks = line.ParseTags();
+
 	std::string out;
 	out.reserve(text.size() + tag.size() + 4);
-
-	auto is_dropped_tag = [&](size_t at, size_t name_len) {
-		auto matches = [&](std::string_view name) {
-			return name_len == name.size() && text.compare(at, name.size(), name) == 0;
-		};
-		if (matches("\\pos") || matches("\\move"))
-			return true;
-		if (drop_transform_tags && (matches("\\frz") || matches("\\fscx") || matches("\\fscy")))
-			return true;
-		for (auto name : extra_drops)
-			if (matches(name))
-				return true;
-		return false;
-	};
-
-	size_t i = 0;
 	bool inserted = false;
-	while (i < text.size()) {
-		char const c = text[i];
-		if (c != '{') {
-			out.push_back(c);
-			++i;
+	for (auto& block : blocks) {
+		if (block->GetType() != AssBlockType::OVERRIDE) {
+			out += block->GetText();
 			continue;
 		}
 
-		out.push_back('{');
-		++i;
-
-		// Copy the block contents, dropping the selected tags entirely.
-		while (i < text.size() && text[i] != '}') {
-			if (text[i] == '\\') {
-				size_t j = i + 1;
-				while (j < text.size() && IsTagNameChar(text[j])) ++j;
-				size_t const name_len = j - i;
-				if (is_dropped_tag(i, name_len)) {
-					// Consume the argument list up to ')' or the next token.
-					size_t k = j;
-					while (k < text.size() && text[k] != '}'
-					       && text[k] != '\\') {
-						if (text[k] == ')') {
-							++k;
-							break;
-						}
-						++k;
-					}
-					i = k;
-					continue;
-				}
-				out.append(text, i, name_len);
-				i = j;
-				continue;
+		// Same span split as AssDialogueBlockOverride::ParseTags, including
+		// its starting index of 1: the first body byte is never examined, so
+		// it can neither start a tag nor open a paren region — a body like
+		// "(\pos(10,20))\p1" splits into the junk span "(" plus the
+		// recognized \pos span, exactly the way the parser sees it. (A ')' at
+		// depth 0 is ignored, so the tracked depth never goes below zero.)
+		// Backslashes inside parentheses belong to a nested \t block and
+		// never start a top-level tag.
+		std::string const& body = block->GetRawText();
+		std::string kept;
+		kept.reserve(body.size());
+		int depth = 0;
+		size_t start = 0;
+		auto flush_span = [&](size_t end) {
+			std::string_view const span(
+				body.data() + start, end == std::string::npos ? body.size() - start : end - start);
+			if (span.empty())
+				return;
+			AssOverrideTag const parsed{std::string(span)};
+			if (!ShouldDropOverrideTag(parsed.Name, drop_transform_tags,
+									   extra_drops))
+				kept += span;
+		};
+		for (size_t i = 1; i < body.size(); ++i) {
+			char const c = body[i];
+			if (depth > 0) {
+				if (c == '(')
+					++depth;
+				else if (c == ')')
+					--depth;
 			}
-			out.push_back(text[i]);
-			++i;
+			else if (c == '\\') {
+				if (i > start)
+					flush_span(i);
+				start = i;
+			}
+			else if (c == '(')
+				++depth;
 		}
+		flush_span(std::string::npos);
 
 		if (!inserted) {
-			out += tag;
+			// libass resolves pos/move first-wins per event: when the kept
+			// bytes still hold a position spelling the drop pass cannot see,
+			// the replacement must precede them to take effect.
+			bool const lead = insert_first && KeptStillHasPosition(kept);
+			out += '{';
+			if (lead)
+				out += tag;
+			out += kept;
+			if (!lead)
+				out += tag;
+			out += '}';
 			inserted = true;
 		}
+		else if (!kept.empty())
+			out += '{' + kept + '}';
 	}
-
 	if (!inserted)
 		return "{" + tag + "}" + out;
+	return out;
+}
+
+// Appends `tag` to the end of the first override block, keeping every
+// existing byte as-is. Used for the last-wins transform components after the
+// position pass has already dropped the tags it replaces, so nothing here
+// needs dropping -- not even \pos, which ReplaceTagsDropping always strips.
+std::string AppendTagToFirstBlock(std::string const& text,
+								  std::string const& tag) {
+	AssDialogue line;
+	line.Text = text;
+	auto blocks = line.ParseTags();
+	std::string out;
+	bool appended = false;
+	for (auto& block : blocks) {
+		if (block->GetType() != AssBlockType::OVERRIDE) {
+			out += block->GetText();
+			continue;
+		}
+		out += '{';
+		out += block->GetRawText();
+		if (!appended) {
+			out += tag;
+			appended = true;
+		}
+		out += '}';
+	}
+	if (!appended)
+		return "{" + tag + "}" + text;
 	return out;
 }
 }
 
 std::string ReplacePositionTag(std::string const& text, std::string const& tag) {
-	return ReplaceTagsDropping(text, tag, false);
-}
-
-std::string ReplaceMotionTags(std::string const& text, std::string const& tag) {
-	return ReplaceTagsDropping(text, tag, true);
+	// pos/move are first-wins in libass: lead the kept bytes whenever a
+	// stale position survives the drop pass (see ReplaceTagsDropping).
+	return ReplaceTagsDropping(text, tag, false, true);
 }
 
 namespace {
@@ -329,17 +745,28 @@ std::string FormatCoord(double v, int decimals) {
 	return buf;
 }
 
-TrackSample const* FindOkAt(std::vector<TrackSample> const& samples, int frame) {
-	auto const* s = FindSample(samples, frame);
+// An uncovered prefix/suffix whose boundaries collapse onto the same ASS
+// centisecond serializes as a zero-duration event carrying the original text,
+// so the planner must not emit it. Skipping is seamless by construction: the
+// adjacent covered part's boundary already rounds onto the line's own
+// centisecond, so nothing renderable is lost. Mirrors the rounding of
+// agi::Time::operator int(), which drives event serialization.
+int CentisecondRounded(int ms) {
+	return int(agi::Time(ms));
+}
+
+TrackSample const *FindOkAt(std::vector<TrackSample> const& samples, int frame) {
+	auto const *s = FindSample(samples, frame);
 	return s && s->status == TrackStatus::Ok ? s : nullptr;
 }
 
 // Nearest Ok sample scanning away from `from` within decode bounds; nullptr
 // when none exists on that side.
-TrackSample const* FindNearestOk(std::vector<TrackSample> const& samples,
-                                 int from, int step, FrameInterval const& decode) {
+TrackSample const *FindNearestOk(std::vector<TrackSample> const& samples,
+								 int from, int step, FrameInterval const& decode) {
 	for (int g = from; g >= decode.first && g <= decode.last; g += step) {
-		if (auto const* ok = FindOkAt(samples, g)) return ok;
+		if (auto const *ok = FindOkAt(samples, g))
+			return ok;
 	}
 	return nullptr;
 }
@@ -350,8 +777,9 @@ TrackSample const* FindNearestOk(std::vector<TrackSample> const& samples,
 // white per-frame jitter shrinks by roughly 1/sqrt(window). Frames inside a
 // run are contiguous integers, so the window is frame-indexed.
 void SmoothRun(std::vector<ResolvedPoint>& pts, size_t i0, size_t i1,
-               int half_window) {
-	if (half_window <= 0 || i1 - i0 + 1 < 3) return;
+			   int half_window) {
+	if (half_window <= 0 || i1 - i0 + 1 < 3)
+		return;
 	int const f_first = pts[i0].frame;
 	int const f_last = pts[i1].frame;
 	std::vector<double> sx(i1 - i0 + 1), sy(i1 - i0 + 1);
@@ -381,7 +809,8 @@ void SmoothRun(std::vector<ResolvedPoint>& pts, size_t i0, size_t i1,
 		sy[i - i0] = (sys - by * sg) / n;
 	}
 	for (size_t i = i0; i <= i1; ++i) {
-		if (pts[i].held) continue; // holds are constant by construction
+		if (pts[i].held)
+			continue; // holds are constant by construction
 		pts[i].x = sx[i - i0];
 		pts[i].y = sy[i - i0];
 	}
@@ -519,8 +948,8 @@ struct FitPiece {
 // matrix is tridiagonal (symmetric positive definite; Thomas, no pivoting)
 // and position continuity between segments holds by construction.
 std::vector<double> FitKnotAxis(std::vector<ResolvedPoint> const& points,
-                                std::vector<size_t> const& knots,
-                                bool y_axis) {
+								std::vector<size_t> const& knots,
+								bool y_axis) {
 	size_t const K = knots.size();
 	std::vector<double> diag(K, 0.0), off(K - 1, 0.0), rhs(K, 0.0);
 	auto const sample = [&](ResolvedPoint const& p) {
@@ -529,7 +958,8 @@ std::vector<double> FitKnotAxis(std::vector<ResolvedPoint> const& points,
 	size_t seg = 0;
 	for (size_t s = knots.front(); s <= knots.back(); ++s) {
 		int const f = points[s].frame;
-		while (points[knots[seg + 1]].frame < f) ++seg;
+		while (points[knots[seg + 1]].frame < f)
+			++seg;
 		int const fa = points[knots[seg]].frame;
 		int const fb = points[knots[seg + 1]].frame;
 		double wa = 1.0, wb = 0.0;
@@ -559,17 +989,18 @@ std::vector<double> FitKnotAxis(std::vector<ResolvedPoint> const& points,
 // Max storage-space deviation of the samples from the fitted spline over
 // `knots`; optionally reports the worst sample index.
 double MaxDeviation(std::vector<ResolvedPoint> const& points,
-                    std::vector<size_t> const& knots,
-                    std::vector<double> const& cx,
-                    std::vector<double> const& cy,
-                    double inv_scale_x, double inv_scale_y,
-                    size_t* worst = nullptr) {
+					std::vector<size_t> const& knots,
+					std::vector<double> const& cx,
+					std::vector<double> const& cy,
+					double inv_scale_x, double inv_scale_y,
+					size_t *worst = nullptr) {
 	double worst_d = -1.0;
 	size_t worst_s = knots.front();
 	size_t seg = 0;
 	for (size_t s = knots.front(); s <= knots.back(); ++s) {
 		int const f = points[s].frame;
-		while (points[knots[seg + 1]].frame < f) ++seg;
+		while (points[knots[seg + 1]].frame < f)
+			++seg;
 		int const fa = points[knots[seg]].frame;
 		int const fb = points[knots[seg + 1]].frame;
 		double wa = 1.0, wb = 0.0;
@@ -580,14 +1011,15 @@ double MaxDeviation(std::vector<ResolvedPoint> const& points,
 		double const ex = cx[seg] * wa + cx[seg + 1] * wb;
 		double const ey = cy[seg] * wa + cy[seg + 1] * wb;
 		double const d = std::hypot(
-		    (points[s].x - ex) * inv_scale_x,
-		    (points[s].y - ey) * inv_scale_y);
+			(points[s].x - ex) * inv_scale_x,
+			(points[s].y - ey) * inv_scale_y);
 		if (d > worst_d) {
 			worst_d = d;
 			worst_s = s;
 		}
 	}
-	if (worst) *worst = worst_s;
+	if (worst)
+		*worst = worst_s;
 	return worst_d;
 }
 
@@ -607,9 +1039,9 @@ double MaxDeviation(std::vector<ResolvedPoint> const& points,
 // set lands below the old Douglas-Peucker segment count while keeping the
 // least-squares fit and the per-frame epsilon guarantee.
 std::vector<FitPiece> FitRunPieces(std::vector<ResolvedPoint> const& points,
-                                   std::pair<size_t, size_t> const& run,
-                                   double eps_storage, double inv_scale_x,
-                                   double inv_scale_y) {
+								   std::pair<size_t, size_t> const& run,
+								   double eps_storage, double inv_scale_x,
+								   double inv_scale_y) {
 	std::vector<FitPiece> pieces;
 	size_t const n = run.second - run.first + 1;
 	if (n < 2) {
@@ -631,8 +1063,8 @@ std::vector<FitPiece> FitRunPieces(std::vector<ResolvedPoint> const& points,
 		cy = FitKnotAxis(points, knots, true);
 		size_t worst = run.first;
 		double const worst_d =
-		    MaxDeviation(points, knots, cx, cy, inv_scale_x, inv_scale_y,
-		                 &worst);
+			MaxDeviation(points, knots, cx, cy, inv_scale_x, inv_scale_y,
+						 &worst);
 		if (worst_d <= eps_storage || knots.size() >= n)
 			break;
 		size_t add = worst;
@@ -651,7 +1083,8 @@ std::vector<FitPiece> FitRunPieces(std::vector<ResolvedPoint> const& points,
 					break;
 				}
 			}
-			if (add == SIZE_MAX) break; // every frame is a knot already
+			if (add == SIZE_MAX)
+				break; // every frame is a knot already
 		}
 		knots.insert(std::lower_bound(knots.begin(), knots.end(), add), add);
 	}
@@ -666,14 +1099,14 @@ std::vector<FitPiece> FitRunPieces(std::vector<ResolvedPoint> const& points,
 			auto chk_x = FitKnotAxis(points, cand, false);
 			auto chk_y = FitKnotAxis(points, cand, true);
 			if (MaxDeviation(points, cand, chk_x, chk_y, inv_scale_x,
-			                 inv_scale_y)
-			    <= eps_storage) {
+							 inv_scale_y) <= eps_storage) {
 				knots = std::move(cand);
 				cx = std::move(chk_x);
 				cy = std::move(chk_y);
 				removed_any = true;
 				// A new knot slides into slot k; try it too.
-			} else {
+			}
+			else {
 				++k;
 			}
 		}
@@ -696,19 +1129,17 @@ std::vector<FitPiece> FitRunPieces(std::vector<ResolvedPoint> const& points,
 
 MotionTrackApplyPlan BuildApplyPlan(
 	AssFile const& file,
-	std::vector<AssDialogue*> const& targets,
+	std::vector<AssDialogue *> const& targets,
 	ApplyPlanInput const& input) {
 	MotionTrackApplyPlan plan;
 
-	if (input.model != TrackModel::Translation
-	    && input.model != TrackModel::Similarity) {
+	if (input.model != TrackModel::Translation && input.model != TrackModel::Similarity) {
 		plan.status = ApplyPlanStatus::UnsupportedModel;
 		plan.message = "only Translation and Similarity trajectories can be "
-		               "applied";
+					   "applied";
 		return plan;
 	}
-	if (input.model == TrackModel::Similarity
-	    && input.options.mode != ApplyMode::Exact) {
+	if (input.model == TrackModel::Similarity && input.options.mode != ApplyMode::Exact) {
 		plan.status = ApplyPlanStatus::UnsupportedMode;
 		plan.message = "similarity trajectories support Exact apply mode only";
 		return plan;
@@ -718,17 +1149,16 @@ MotionTrackApplyPlan BuildApplyPlan(
 		plan.message = "no video frames";
 		return plan;
 	}
-	if (input.storage_width <= 0 || input.storage_height <= 0
-	    || input.script_width <= 0 || input.script_height <= 0) {
+	if (input.storage_width <= 0 || input.storage_height <= 0 || input.script_width <= 0 || input.script_height <= 0) {
 		plan.status = ApplyPlanStatus::InvalidInput;
 		plan.message = "missing resolution information";
 		return plan;
 	}
 
 	double const scale_x =
-	    double(input.script_width) / double(input.storage_width);
+		double(input.script_width) / double(input.storage_width);
 	double const scale_y =
-	    double(input.script_height) / double(input.storage_height);
+		double(input.script_height) / double(input.storage_height);
 	// Compact's deviation threshold is defined in storage pixels; deviations
 	// are measured in script space, so convert per axis for the comparison.
 	double const inv_scale_x = 1.0 / scale_x;
@@ -774,12 +1204,14 @@ MotionTrackApplyPlan BuildApplyPlan(
 	size_t event_count = 0;
 	bool any_uncovered = false;
 
-	for (AssDialogue* line : targets) {
-		if (!line || line->Comment) continue;
+	for (AssDialogue *line : targets) {
+		if (!line || line->Comment)
+			continue;
 
 		auto const line_start = int(line->Start);
 		auto const line_end = int(line->End);
-		if (line_end <= line_start) continue;
+		if (line_end <= line_start)
+			continue;
 
 		int const lf = std::clamp(
 			input.timecodes.FrameAtTime(line_start, agi::vfr::Time::START),
@@ -791,7 +1223,8 @@ MotionTrackApplyPlan BuildApplyPlan(
 		FrameInterval domain;
 		domain.first = std::max(lf, input.direction_domain.first);
 		domain.last = std::min(ll, input.direction_domain.last);
-		if (domain.first > domain.last) continue;
+		if (domain.first > domain.last)
+			continue;
 
 		int const dom_start_ms = std::max(
 			line_start,
@@ -799,14 +1232,30 @@ MotionTrackApplyPlan BuildApplyPlan(
 		int const dom_end_ms = std::min(
 			line_end,
 			input.timecodes.TimeAtFrame(domain.last, agi::vfr::Time::END));
-		if (dom_end_ms <= dom_start_ms) continue;
+		if (dom_end_ms <= dom_start_ms)
+			continue;
+
+		PositionInfo const info = ExtractPositionInfo(*line);
+		// \org and \clip pin absolute script-space geometry: a rotation
+		// origin or clip rectangle does not follow the emitted \pos/\move,
+		// so text swung around a stale \org wobbles and text pushed out of
+		// a stale \clip disappears. Following them is a design question,
+		// so the plan applies anyway and the line is flagged for the
+		// caller's manual-review warning.
+		if (info.has_org || info.has_clip)
+			plan.needs_manual_review.push_back(line);
 
 		double origin_x = 0.0, origin_y = 0.0;
-		if (!ResolveDialogueOrigin(file, *line, input.seed_time_ms,
-		                           input.script_width, input.script_height,
-		                           origin_x, origin_y)) {
+		if (!ResolveDialogueOriginInfo(file, info, *line, input.seed_time_ms,
+									   input.script_width, input.script_height,
+									   origin_x, origin_y)) {
+			// Every \move spelling resolves (reversed windows are swapped
+			// in the scanner, and the whole-event fallback covers
+			// everything else), so this is an invariant guard rather than
+			// a per-line rejection path: if it ever fires, bail loudly
+			// instead of applying from a defaulted origin.
 			plan.status = ApplyPlanStatus::InvalidInput;
-			plan.message = "line has an invalid explicit \\move window";
+			plan.message = "line position could not be resolved";
 			return plan;
 		}
 
@@ -820,11 +1269,11 @@ MotionTrackApplyPlan BuildApplyPlan(
 		double style_outline_w = 0.0, style_shadow_w = 0.0;
 		PositionInfo pose_info;
 		if (input.model == TrackModel::Similarity) {
-			pose_info = ExtractPositionInfo(*line);
+			pose_info = info;
 			inline_frz = pose_info.has_frz;
 			inline_scale = pose_info.has_fscx || pose_info.has_fscy;
-			if (AssStyle const* st =
-			        const_cast<AssFile&>(file).GetStyle(line->Style)) {
+			if (AssStyle const *st =
+					const_cast<AssFile&>(file).GetStyle(line->Style)) {
 				style_scale_x = st->scalex;
 				style_scale_y = st->scaley;
 				style_angle = st->angle;
@@ -843,15 +1292,13 @@ MotionTrackApplyPlan BuildApplyPlan(
 		// rotated and scaled about the current center, so a subtitle placed
 		// off-center on the object stays glued to it as the object turns.
 		auto resolve_point = [&](TrackSample const& s, int frame,
-		                         bool held) {
+								 bool held) {
 			ResolvedPoint p;
 			p.frame = frame;
 			p.held = held;
 			if (input.model == TrackModel::Translation) {
-				p.x = origin_x
-				    + (s.center_x - input.origin_center_x) * scale_x;
-				p.y = origin_y
-				    + (s.center_y - input.origin_center_y) * scale_y;
+				p.x = origin_x + (s.center_x - input.origin_center_x) * scale_x;
+				p.y = origin_y + (s.center_y - input.origin_center_y) * scale_y;
 				return p;
 			}
 			double const m00 = s.transform.matrix[0];
@@ -887,23 +1334,22 @@ MotionTrackApplyPlan BuildApplyPlan(
 		std::vector<ResolvedPoint> points;
 		std::vector<UncoveredRange> uncovered;
 		for (int f = domain.first; f <= domain.last; ++f) {
-			if (auto const* ok = FindOkAt(input.samples, f)) {
+			if (auto const *ok = FindOkAt(input.samples, f)) {
 				points.push_back(resolve_point(*ok, f, false));
 				continue;
 			}
-			auto const* s = FindSample(input.samples, f);
+			auto const *s = FindSample(input.samples, f);
 			if (s && s->status == TrackStatus::Failed) {
-				auto const* before = FindNearestOk(
+				auto const *before = FindNearestOk(
 					input.samples, f - 1, -1, input.decode_interval);
-				auto const* after = FindNearestOk(
+				auto const *after = FindNearestOk(
 					input.samples, f + 1, +1, input.decode_interval);
 				if (before && after) {
 					points.push_back(resolve_point(*before, f, true));
 					continue;
 				}
 			}
-			if (!uncovered.empty()
-			    && uncovered.back().last == f - 1)
+			if (!uncovered.empty() && uncovered.back().last == f - 1)
 				uncovered.back().last = f;
 			else
 				uncovered.push_back(UncoveredRange{f, f});
@@ -914,7 +1360,8 @@ MotionTrackApplyPlan BuildApplyPlan(
 			uncovered_lines.push_back(LineUncovered{line, std::move(uncovered)});
 			continue;
 		}
-		if (points.empty()) continue;
+		if (points.empty())
+			continue;
 
 		// Split points into forced runs at hold boundaries (held <-> tracked
 		// transitions): segments must never interpolate across a gap hold.
@@ -922,7 +1369,7 @@ MotionTrackApplyPlan BuildApplyPlan(
 		size_t run_start = 0;
 		for (size_t i = 1; i < points.size(); ++i) {
 			bool const boundary =
-			    points[i].held != points[i - 1].held;
+				points[i].held != points[i - 1].held;
 			if (boundary) {
 				runs.emplace_back(run_start, i - 1);
 				run_start = i;
@@ -937,7 +1384,7 @@ MotionTrackApplyPlan BuildApplyPlan(
 		if (input.model == TrackModel::Translation)
 			for (auto const& run : runs)
 				SmoothRun(points, run.first, run.second,
-				          input.options.smooth_frames);
+						  input.options.smooth_frames);
 
 		// Optional stabilization chain (see StabilizeRun): similarity pose
 		// channels always, positions in Exact mode. Never touches held runs
@@ -1005,17 +1452,10 @@ MotionTrackApplyPlan BuildApplyPlan(
 			};
 			auto same_rounded = [&](size_t a, size_t b) {
 				bool const same_pos =
-				    std::round(points[a].x) == std::round(points[b].x)
-				    && std::round(points[a].y) == std::round(points[b].y);
-				if (!same_pos
-				    || input.model != TrackModel::Similarity)
+					std::round(points[a].x) == std::round(points[b].x) && std::round(points[a].y) == std::round(points[b].y);
+				if (!same_pos || input.model != TrackModel::Similarity)
 					return same_pos;
-				return rounded2(points[a].rot_deg)
-				         == rounded2(points[b].rot_deg)
-				    && rounded2(points[a].scale_pct_x)
-				         == rounded2(points[b].scale_pct_x)
-				    && rounded2(points[a].scale_pct_y)
-				         == rounded2(points[b].scale_pct_y);
+				return rounded2(points[a].rot_deg) == rounded2(points[b].rot_deg) && rounded2(points[a].scale_pct_x) == rounded2(points[b].scale_pct_x) && rounded2(points[a].scale_pct_y) == rounded2(points[b].scale_pct_y);
 			};
 			for (auto const& run : runs) {
 				size_t group_start = run.first;
@@ -1037,7 +1477,8 @@ MotionTrackApplyPlan BuildApplyPlan(
 				p.y0 = p.y1 = points[group_start].y;
 				pieces.push_back(p);
 			}
-		} else {
+		}
+		else {
 			// Continuous piecewise-linear least-squares fit per forced run:
 			// each segment is uniform-velocity, adjacent segments share their
 			// boundary position exactly (no artificial velocity steps at
@@ -1045,11 +1486,11 @@ MotionTrackApplyPlan BuildApplyPlan(
 			// storage-space deviation is within the threshold.
 			for (auto const& run : runs) {
 				auto run_pieces = FitRunPieces(
-				    points, run, input.options.compact_epsilon,
-				    inv_scale_x, inv_scale_y);
+					points, run, input.options.compact_epsilon,
+					inv_scale_x, inv_scale_y);
 				pieces.insert(pieces.end(),
-				              std::make_move_iterator(run_pieces.begin()),
-				              std::make_move_iterator(run_pieces.end()));
+							  std::make_move_iterator(run_pieces.begin()),
+							  std::make_move_iterator(run_pieces.end()));
 			}
 		}
 
@@ -1059,7 +1500,7 @@ MotionTrackApplyPlan BuildApplyPlan(
 		pl.source = line;
 
 		int cursor = dom_start_ms;
-		if (dom_start_ms > line_start) {
+		if (CentisecondRounded(dom_start_ms) > CentisecondRounded(line_start)) {
 			PlannedLinePart prefix;
 			prefix.start_ms = line_start;
 			prefix.end_ms = dom_start_ms;
@@ -1072,12 +1513,12 @@ MotionTrackApplyPlan BuildApplyPlan(
 			auto const& piece = pieces[p];
 			PlannedLinePart part;
 			part.start_ms = p == 0 ? dom_start_ms
-			    : input.timecodes.TimeAtFrame(points[piece.i0].frame,
-			                                  agi::vfr::Time::START);
+								   : input.timecodes.TimeAtFrame(points[piece.i0].frame,
+																 agi::vfr::Time::START);
 			part.end_ms = p + 1 == pieces.size()
-			    ? dom_end_ms
-			    : input.timecodes.TimeAtFrame(points[piece.i1].frame + 1,
-			                                  agi::vfr::Time::START);
+							  ? dom_end_ms
+							  : input.timecodes.TimeAtFrame(points[piece.i1].frame + 1,
+															agi::vfr::Time::START);
 			part.start_ms = std::clamp(part.start_ms, cursor, dom_end_ms);
 			part.end_ms = std::clamp(part.end_ms, part.start_ms, dom_end_ms);
 			cursor = part.end_ms;
@@ -1094,19 +1535,24 @@ MotionTrackApplyPlan BuildApplyPlan(
 					return std::round(v * 100.0) / 100.0;
 				};
 				bool const emit_frz =
-				    inline_frz
-				    || rounded2(pt.rot_deg) != rounded2(style_angle);
+					inline_frz || rounded2(pt.rot_deg) != rounded2(style_angle);
 				bool const emit_scale =
-				    inline_scale
-				    || rounded2(pt.scale_pct_x) != rounded2(style_scale_x)
-				    || rounded2(pt.scale_pct_y) != rounded2(style_scale_y);
+					inline_scale || rounded2(pt.scale_pct_x) != rounded2(style_scale_x) || rounded2(pt.scale_pct_y) != rounded2(style_scale_y);
 				int const dec_s = input.options.position_decimals;
-				std::string tag =
+				// The position and transform components are spliced
+				// separately: \pos must be able to lead the kept bytes
+				// (libass pos/move first-wins), while the transform tags
+				// keep their historical append-after placement (last-wins;
+				// a leading transform would let a surviving kept tag
+				// override it, and the drop pass already removes the whole
+				// inline \frz/\fr/\fscx/\fscy family so none can).
+				std::string const pos_tag =
 					"\\pos(" + FormatCoord(pt.x, dec_s) + "," + FormatCoord(pt.y, dec_s) + ")";
+				std::string transforms;
 				if (emit_frz)
-					tag += "\\frz(" + FormatCoord(pt.rot_deg, 2) + ")";
+					transforms += "\\frz(" + FormatCoord(pt.rot_deg, 2) + ")";
 				if (emit_scale)
-					tag += "\\fscx(" + FormatCoord(pt.scale_pct_x, 2) + ")\\fscy(" + FormatCoord(pt.scale_pct_y, 2) + ")";
+					transforms += "\\fscx(" + FormatCoord(pt.scale_pct_x, 2) + ")\\fscy(" + FormatCoord(pt.scale_pct_y, 2) + ")";
 
 				// Border/shadow/blur growth compensation: scale the composed
 				// base (style + inline override) with the transform's local
@@ -1143,11 +1589,11 @@ MotionTrackApplyPlan BuildApplyPlan(
 							scaled_differs(by, pt.growth_y, style_outline_w);
 						if (emit_x || emit_y) {
 							if (emit_x) {
-								tag += "\\xbord(" + FormatCoord(bx * pt.growth_x, 2) + ")";
+								transforms += "\\xbord(" + FormatCoord(bx * pt.growth_x, 2) + ")";
 								growth_drops.emplace_back("\\xbord");
 							}
 							if (emit_y) {
-								tag += "\\ybord(" + FormatCoord(by * pt.growth_y, 2) + ")";
+								transforms += "\\ybord(" + FormatCoord(by * pt.growth_y, 2) + ")";
 								growth_drops.emplace_back("\\ybord");
 							}
 							// A uniform inline \bord would override the
@@ -1157,7 +1603,7 @@ MotionTrackApplyPlan BuildApplyPlan(
 					}
 					else if (scaled_differs(base, growth_geo,
 											style_outline_w)) {
-						tag += "\\bord(" + FormatCoord(base * growth_geo, 2) + ")";
+						transforms += "\\bord(" + FormatCoord(base * growth_geo, 2) + ")";
 						growth_drops.emplace_back("\\bord");
 					}
 				}
@@ -1175,11 +1621,11 @@ MotionTrackApplyPlan BuildApplyPlan(
 							scaled_differs(sy, pt.growth_y, style_shadow_w);
 						if (emit_x || emit_y) {
 							if (emit_x) {
-								tag += "\\xshad(" + FormatCoord(sx * pt.growth_x, 2) + ")";
+								transforms += "\\xshad(" + FormatCoord(sx * pt.growth_x, 2) + ")";
 								growth_drops.emplace_back("\\xshad");
 							}
 							if (emit_y) {
-								tag += "\\yshad(" + FormatCoord(sy * pt.growth_y, 2) + ")";
+								transforms += "\\yshad(" + FormatCoord(sy * pt.growth_y, 2) + ")";
 								growth_drops.emplace_back("\\yshad");
 							}
 							growth_drops.emplace_back("\\shad");
@@ -1187,7 +1633,7 @@ MotionTrackApplyPlan BuildApplyPlan(
 					}
 					else if (scaled_differs(base, growth_geo,
 											style_shadow_w)) {
-						tag += "\\shad(" + FormatCoord(base * growth_geo, 2) + ")";
+						transforms += "\\shad(" + FormatCoord(base * growth_geo, 2) + ")";
 						growth_drops.emplace_back("\\shad");
 					}
 				}
@@ -1196,13 +1642,18 @@ MotionTrackApplyPlan BuildApplyPlan(
 					// value or 0, and 0 never emits.
 					double const base = pose_info.has_blur ? pose_info.blur : 0.0;
 					if (scaled_differs(base, growth_geo, 0.0)) {
-						tag += "\\blur(" + FormatCoord(base * growth_geo, 2) + ")";
+						transforms += "\\blur(" + FormatCoord(base * growth_geo, 2) + ")";
 						growth_drops.emplace_back("\\blur");
 					}
 				}
 
-				part.text = ReplaceTagsDropping(line->Text, tag, true,
-												growth_drops);
+				// The position component goes in ahead of any surviving
+				// stale position (first-wins); the transform components
+				// append after the kept bytes so they stay last-wins.
+				part.text = ReplaceTagsDropping(line->Text, pos_tag, true,
+												true, growth_drops);
+				if (!transforms.empty())
+					part.text = AppendTagToFirstBlock(part.text, transforms);
 				part.x0 = part.x1 = pt.x;
 				part.y0 = part.y1 = pt.y;
 				part.covered = true;
@@ -1220,8 +1671,8 @@ MotionTrackApplyPlan BuildApplyPlan(
 			int const tb = input.timecodes.TimeAtFrame(points[piece.i1].frame);
 			auto spline_at = [&](int t_ms, double ka, double kb) {
 				double const u = tb > ta
-				    ? std::clamp(double(t_ms - ta) / double(tb - ta), 0.0, 1.0)
-				    : 0.0;
+									 ? std::clamp(double(t_ms - ta) / double(tb - ta), 0.0, 1.0)
+									 : 0.0;
 				return ka + (kb - ka) * u;
 			};
 			double const ex0 = spline_at(part.start_ms, piece.x0, piece.x1);
@@ -1233,27 +1684,23 @@ MotionTrackApplyPlan BuildApplyPlan(
 			std::string const x0s = FormatCoord(ex0, dec);
 			std::string const y0s = FormatCoord(ey0, dec);
 			std::string tag;
-			if (input.options.mode == ApplyMode::Exact
-			    || (std::round(ex0) == std::round(ex1)
-			        && std::round(ey0) == std::round(ey1))) {
+			if (input.options.mode == ApplyMode::Exact || (std::round(ex0) == std::round(ex1) && std::round(ey0) == std::round(ey1))) {
 				tag = "\\pos(" + x0s + "," + y0s + ")";
-			} else {
+			}
+			else {
 				// The endpoint anchors land on the frames the endpoints were
 				// sampled at (a frame renders at its EXACT timecode), with an
-				// explicit window: renderers -- and ResolveDialogueOrigin
-				// above -- read a t1 or t2 of <= 0 as "no explicit window",
-				// so both stay strictly positive and ordered. Nudging t1 from
-				// 0 to 1 costs a sub-pixel of accuracy; being misread as a
-				// 4-arg \move costs a whole frame.
+				// explicit window: libass -- and ResolveDialogueOrigin above
+				// -- reads a window with ANY positive bound as explicit, so
+				// t1 = 0 with a positive t2 is honored and emitted verbatim.
+				// Only a window with BOTH bounds non-positive would degrade
+				// to the whole event.
 				int const dur = part.end_ms - part.start_ms;
 				int const t1 = std::clamp(
-				    ta - part.start_ms, 1, std::max(1, dur - 1));
+					ta - part.start_ms, 0, std::max(0, dur - 1));
 				int const t2 = std::clamp(
-				    tb - part.start_ms, t1 + 1, std::max(t1 + 1, dur));
-				tag = "\\move(" + x0s + "," + y0s + ","
-				    + FormatCoord(ex1, dec) + ","
-				    + FormatCoord(ey1, dec) + ","
-				    + std::to_string(t1) + "," + std::to_string(t2) + ")";
+					tb - part.start_ms, t1 + 1, std::max(t1 + 1, dur));
+				tag = "\\move(" + x0s + "," + y0s + "," + FormatCoord(ex1, dec) + "," + FormatCoord(ey1, dec) + "," + std::to_string(t1) + "," + std::to_string(t2) + ")";
 			}
 			part.text = ReplacePositionTag(line->Text, tag);
 			part.covered = true;
@@ -1301,9 +1748,11 @@ MotionTrackApplyPlan BuildApplyPlan(
 			if (part.covered)
 				++event_count;
 
-		if (cursor < dom_end_ms) {
+		if (CentisecondRounded(dom_end_ms) > CentisecondRounded(cursor)) {
 			// Defensive: rounding clamps should make this unreachable, but a
-			// trailing filler keeps the timeline seamless.
+			// trailing filler keeps the timeline seamless. A sub-centisecond
+			// filler is dropped for the same reason as the prefix/suffix
+			// slivers.
 			PlannedLinePart tail;
 			tail.start_ms = cursor;
 			tail.end_ms = dom_end_ms;
@@ -1311,7 +1760,7 @@ MotionTrackApplyPlan BuildApplyPlan(
 			tail.covered = false;
 			pl.parts.push_back(std::move(tail));
 		}
-		if (dom_end_ms < line_end) {
+		if (CentisecondRounded(line_end) > CentisecondRounded(dom_end_ms)) {
 			PlannedLinePart suffix;
 			suffix.start_ms = dom_end_ms;
 			suffix.end_ms = line_end;
@@ -1435,13 +1884,12 @@ MotionTrackApplyPlan BuildApplyPlan(
 	if (any_uncovered) {
 		plan.status = ApplyPlanStatus::IncompleteCoverage;
 		plan.message = "trajectory does not cover every target line's apply "
-		               "domain";
+					   "domain";
 		plan.uncovered = std::move(uncovered_lines);
 		return plan;
 	}
-
 	plan.status = event_count > 100 ? ApplyPlanStatus::NeedsConfirmation
-	                                : ApplyPlanStatus::Ok;
+									: ApplyPlanStatus::Ok;
 	plan.event_count = event_count;
 	plan.lines = std::move(planned_lines);
 	return plan;

@@ -134,11 +134,15 @@ TEST(motion_track_ncc, flat_sides_report_not_found) {
 	EXPECT_FALSE(best.found);
 }
 
-TEST(motion_track_ncc, parabolic_subpixel_is_symmetric_zero_and_clamped) {
+TEST(motion_track_ncc, parabolic_subpixel_symmetry_and_local_maximum_gate) {
 	EXPECT_NEAR(0.0, ParabolicSubpixel(0.5, 1.0, 0.5), 1e-12);
-	// Raw delta 1.5 / -1.5 must clamp to ±0.75.
-	EXPECT_NEAR(0.75, ParabolicSubpixel(0.0, 0.4, 0.6), 1e-12);
-	EXPECT_NEAR(-0.75, ParabolicSubpixel(0.6, 0.4, 0.0), 1e-12);
+	// A center that is not a local maximum models no peak: the parabola
+	// through it opens upward and its vertex points away from the higher
+	// neighbour, so the refinement holds the integer peak instead of
+	// steering (these triples used to return that upward parabola's
+	// vertex, clamped to ±0.75).
+	EXPECT_NEAR(0.0, ParabolicSubpixel(0.0, 0.4, 0.6), 1e-12);
+	EXPECT_NEAR(0.0, ParabolicSubpixel(0.6, 0.4, 0.0), 1e-12);
 	// In-range asymmetric peak keeps its raw value.
 	EXPECT_NEAR(-0.38888888888888889,
 	            ParabolicSubpixel(0.9, 1.0, 0.2), 1e-12);

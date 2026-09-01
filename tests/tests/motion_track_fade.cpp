@@ -1212,7 +1212,7 @@ TEST(motion_track_fade, apply_plan_fad_is_mode_agnostic) {
 	ASSERT_EQ(size_t(2), parts.size()); // covered \move part + suffix
 	EXPECT_TRUE(parts[0].covered);
 	EXPECT_EQ(
-		R"({\fade(255,0,242,0,0,1050,1950)\move(100.00,100.00,119.00,100.00,1,1900)}x)",
+		R"({\fade(255,0,242,0,0,1050,1950)\move(100.00,100.00,119.00,100.00,0,1900)}x)",
 		parts[0].text);
 	EXPECT_FALSE(parts[1].covered);
 	EXPECT_EQ(R"({\pos(100,100)}x)", parts[1].text);
@@ -1245,17 +1245,16 @@ TEST(motion_track_fade, session_interval_flows_into_apply_plan_fad) {
 	ApplyFixture fx;
 	auto *line = fx.AddLine(0, kFrames * 100, R"({\pos(43.5,29.5)}x)");
 	auto input = FadeApplyBaseInput();
-	input.decode_interval = FrameInterval{0, kFrames - 1};
-	input.direction_domain = FrameInterval{0, kFrames - 1};
+	FillApplyInputFromSnapshot(input, *snap);
+	ASSERT_TRUE(input.fade_interval);
+	EXPECT_TRUE(input.fade_interval->fade_out.detected);
 	input.storage_width = FadeScene::kWidth;
 	input.storage_height = FadeScene::kHeight;
 	input.script_width = FadeScene::kWidth;
 	input.script_height = FadeScene::kHeight;
 	input.video_frame_count = kFrames;
-	input.samples = snap->samples;
 	input.origin_center_x = SeedCenterX();
 	input.origin_center_y = SeedCenterY();
-	input.fade_interval = snap->fade_interval;
 	input.options.apply_fad = true;
 
 	auto plan = BuildApplyPlan(fx.file, {line}, input);

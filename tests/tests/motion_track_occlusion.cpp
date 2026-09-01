@@ -202,8 +202,10 @@ TEST(motion_track_occlusion, inlier_rescore_rejects_near_total_occlusion) {
 TEST(motion_track_occlusion, masked_subpixel_handles_window_at_image_edge) {
 	// A tight crop pins the scan window to the single offset (0,0): the
 	// masked subpixel neighbours then probe (-1, 0) and (0, -1), which lie
-	// outside the image and must fall back to the peak's own score instead
-	// of reading out of bounds.
+	// outside the image. Those axes must skip the parabola fit (delta 0)
+	// instead of reading out of bounds -- and must not substitute the
+	// peak's own score for a missing side, which would fit a constant
+	// half-pixel bias onto the position (hence the tight tolerance).
 	OcclusionScene scene;
 	TranslationTrackerBackend backend;
 	TranslationTrackerConfig config;
@@ -223,7 +225,9 @@ TEST(motion_track_occlusion, masked_subpixel_handles_window_at_image_edge) {
 		<< "reason " << int(step.failure) << " conf " << step.confidence;
 	double const err = std::hypot(step.candidate_center_x - ObjectCenterX(kFrame),
 								  step.candidate_center_y - ObjectCenterY());
-	EXPECT_LT(err, 1.5);
+	// A missing-side bias of exactly 0.5 px (or 1.5 px against a 1 px
+	// integer error) must not pass; the fixed path keeps the integer peak.
+	EXPECT_LT(err, 0.5);
 }
 
 TEST(motion_track_occlusion, tie_break_prefers_offset_nearest_center) {
@@ -358,6 +362,47 @@ TEST(motion_track_occlusion, select_inlier_pixels_adapts_to_uniform_noise) {
 	ASSERT_TRUE(SelectInlierPixels(diffs, {}, kept));
 	for (bool k : kept)
 		EXPECT_TRUE(k);
+}
+
+TEST(motion_track_occlusion, select_inlier_pixels_survives_mixed_small_noise) {
+	// The MAD collapses to 0 whenever the visible side sits on one value,
+	// which pins the cutoff onto the anchor and fails the selection once
+	// two visible pixels stray a single gray level. With the floor the
+	// eleven visible pixels stay and the 60-level occluder stays out.
+	std::vector<double> diffs;
+	diffs.insert(diffs.end(), 9, 1.0);
+	diffs.insert(diffs.end(), 2, 2.0);  // one level above the anchor
+	diffs.insert(diffs.end(), 9, 60.0); // the occluder
+	std::vector<bool> kept;
+	ASSERT_TRUE(SelectInlierPixels(diffs, {}, kept));
+	EXPECT_EQ(size_t(11), std::count(kept.begin(), kept.end(), true));
+}
+
+TEST(motion_track_occlusion, select_inlier_blocks_survives_small_dispersion) {
+	// Nine blocks at the median and seven half a level above it: with the
+	// cutoff pinned at the median, the +0.5 blocks would all be judged
+	// occluders in a single round.
+	std::vector<double> residuals;
+	residuals.insert(residuals.end(), 9, 1.0);
+	residuals.insert(residuals.end(), 7, 1.5);
+	std::vector<bool> kept;
+	ASSERT_TRUE(SelectInlierBlocks(residuals, {}, kept));
+	EXPECT_EQ(residuals.size(), kept.size());
+	for (bool k : kept)
+		EXPECT_TRUE(k);
+}
+
+TEST(motion_track_occlusion, parabolic_subpixel_rejects_non_local_maximum) {
+	// A candidate clamped at the search-window edge has its higher
+	// neighbour outside the window; the parabola through the three
+	// samples opens upward and its vertex points away from the true
+	// peak. The gate holds the integer peak instead of steering.
+	EXPECT_DOUBLE_EQ(0.0, ParabolicSubpixel(1.0, 0.8, 0.79));
+	EXPECT_DOUBLE_EQ(0.0, ParabolicSubpixel(0.79, 0.8, 1.0));
+	// A flat surface has no curvature to fit and a genuine local maximum
+	// still does.
+	EXPECT_DOUBLE_EQ(0.0, ParabolicSubpixel(0.5, 0.5, 0.5));
+	EXPECT_DOUBLE_EQ(-0.25, ParabolicSubpixel(0.6, 0.8, 0.2));
 }
 
 TEST(motion_track_occlusion, select_inlier_pixels_enforces_area_cap) {

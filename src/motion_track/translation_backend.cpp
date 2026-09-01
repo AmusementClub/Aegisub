@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 
 namespace aegisub::motion_track {
@@ -209,16 +210,12 @@ std::uint64_t HashWindow(GrayView image, int ox, int oy, int win_w, int win_h) {
 }
 
 // Stage 1 (exact signature) + Stage 2 (dither gate) over the whole window:
-// `prev` and the window at (ox, oy) must agree in size. Fills
-// out_mean_abs_diff with the mean |difference| for the held result's
-// residual. Window must lie fully inside the image.
-bool WindowIsHeld(GrayView prev, GrayView image, int ox, int oy,
-				  double& out_mean_abs_diff) {
-	if (HashWindow(prev, 0, 0, prev.width, prev.height)
-		== HashWindow(image, ox, oy, prev.width, prev.height)) {
-		out_mean_abs_diff = 0.0;
+// `prev` and the window at (ox, oy) must agree in size. The mean
+// |difference| is the held criterion's own threshold quantity, not the
+// published residual. Window must lie fully inside the image.
+bool WindowIsHeld(GrayView prev, GrayView image, int ox, int oy) {
+	if (HashWindow(prev, 0, 0, prev.width, prev.height) == HashWindow(image, ox, oy, prev.width, prev.height))
 		return true;
-	}
 	long long sum = 0;
 	long long changed = 0;
 	for (int y = 0; y < prev.height; ++y) {
@@ -232,8 +229,8 @@ bool WindowIsHeld(GrayView prev, GrayView image, int ox, int oy,
 		}
 	}
 	double const count = double(prev.width) * double(prev.height);
-	out_mean_abs_diff = double(sum) / count;
-	return out_mean_abs_diff <= kHeldMeanAbsDiff && double(changed) <= kHeldChangedFraction * count;
+	double const mean_abs_diff = double(sum) / count;
+	return mean_abs_diff <= kHeldMeanAbsDiff && double(changed) <= kHeldChangedFraction * count;
 }
 
 } // namespace
@@ -262,7 +259,7 @@ void TranslationTrackerBackend::ClearTemplate() {
 	fade_phase_ = FadePhase::NotFaded;
 	fade_frames_since_probe_ = 0;
 	fade_last_slope_ = -1.0;
-	fade_last_mean_abs_ = 0.0;
+	fade_last_residual_ = 0.0;
 }
 
 void TranslationTrackerBackend::BeginDirectionArm() {
@@ -276,7 +273,7 @@ void TranslationTrackerBackend::BeginDirectionArm() {
 	fade_phase_ = FadePhase::NotFaded;
 	fade_frames_since_probe_ = 0;
 	fade_last_slope_ = -1.0;
-	fade_last_mean_abs_ = 0.0;
+	fade_last_residual_ = 0.0;
 }
 
 TrackStatus TranslationTrackerBackend::Reset(TrackerSeed const& seed) {
@@ -297,28 +294,28 @@ TrackStatus TranslationTrackerBackend::Reset(TrackerSeed const& seed) {
 			template_pixels_.begin() + int64_t(y) * roi_w_);
 	}
 	// Fade reference statistic: the worst-case median |template - window| a
-	// certified scaled copy of this template can reach while fading, matching
-	// MadResidual's median semantics. A copy at slope a fading toward level L
-	// differs by (1 - a) * median |t - L|; that median is maximal at the
-	// extrema L in {0, 255} (fade to black/white: median |t - 0| = med and
-	// median |t - 255| = 255 - med), while median |t - med| covers only fades
-	// toward the template's own median. Take the max of the three so the
-	// residual gate's fade exemption is armed for every fade direction (see
-	// the ResidualHigh exemption in Step).
+	// certified scaled copy of this template can reach while fading, in
+	// MadResidual's convention (lower median, index (size - 1) / 2 -- the
+	// same element the residual gate compares). A copy at slope a fading
+	// toward level L differs by (1 - a) * median |t - L|; that median is
+	// maximal at the extrema L in {0, 255} (fade to black/white: median
+	// |t - 0| = med and median |t - 255| = 255 - med), while median |t -
+	// med| covers only fades toward the template's own median. Take the max
+	// of the three so the residual gate's fade exemption is armed for every
+	// fade direction (see the ResidualHigh exemption in Step).
 	{
 		std::vector<double> vals(template_pixels_.size());
 		for (size_t i = 0; i < vals.size(); ++i)
 			vals[i] = double(template_pixels_[i]);
-		auto const mid = vals.begin() + vals.size() / 2;
+		auto const mid = vals.begin() + (vals.size() - 1) / 2;
 		std::nth_element(vals.begin(), mid, vals.end());
 		double const med = *mid;
 		std::vector<double> devs(vals.size());
 		for (size_t i = 0; i < vals.size(); ++i)
 			devs[i] = std::abs(vals[i] - med);
-		std::nth_element(devs.begin(), devs.begin() + devs.size() / 2,
-						 devs.end());
-		template_mad_ = std::max(
-			{devs[devs.size() / 2], med, 255.0 - med});
+		auto const dev_mid = devs.begin() + (devs.size() - 1) / 2;
+		std::nth_element(devs.begin(), dev_mid, devs.end());
+		template_mad_ = std::max({*dev_mid, med, 255.0 - med});
 	}
 	has_template_ = true;
 	return TrackStatus::Ok;
@@ -446,8 +443,14 @@ TranslationTrackerBackend::SpatialPyramidFallback(
 
 	// Subpixel parabola neighbours: masked scores in the occlusion path so
 	// the peak the parabola fits is the same peak that was accepted. An
-	// out-of-image or degenerate neighbour keeps the peak's own score
-	// (parabolic delta 0), matching the historical behaviour.
+	// out-of-image or degenerate neighbour reports "unavailable" rather
+	// than the peak's own score: substituting center for a missing side
+	// makes the parabola's delta exactly -0.5 (left == center collapses
+	// the denominator onto the right neighbour), a constant half-pixel
+	// bias pointing at the unmeasured side, and the per-frame velocity
+	// feedback turns that one-shot error into a real drift.
+	constexpr double kScoreUnavailable =
+		std::numeric_limits<double>::quiet_NaN();
 	auto score_at = [&](int ox, int oy) -> double {
 		double v = 0.0;
 		if (masked) {
@@ -455,9 +458,11 @@ TranslationTrackerBackend::SpatialPyramidFallback(
 			return MaskedNccAt(template_pixels_.data(), roi_w_, roi_h_,
 							   image, ox, oy, kept, v, median)
 					   ? v
-					   : best.ncc;
+					   : kScoreUnavailable;
 		}
-		return ZeroMeanNccScalar(templ_full, image, ox, oy, v) ? v : best.ncc;
+		return ZeroMeanNccScalar(templ_full, image, ox, oy, v)
+				   ? v
+				   : kScoreUnavailable;
 	};
 	double ncc_left = score_at(best.offset_x - 1, best.offset_y);
 	double ncc_right = score_at(best.offset_x + 1, best.offset_y);
@@ -472,12 +477,14 @@ TranslationTrackerBackend::SpatialPyramidFallback(
 	// Adapted from croni1012/Aegisub src/typesetting_auto_motion.cpp
 	// (ISC license).
 	bool const exact_integer_match = best.ncc > 1.0 - 1e-9;
-	double const dx = exact_integer_match
-						  ? 0.0
-						  : ParabolicSubpixel(ncc_left, best.ncc, ncc_right);
-	double const dy = exact_integer_match
-						  ? 0.0
-						  : ParabolicSubpixel(ncc_up, best.ncc, ncc_down);
+	double const dx =
+		(exact_integer_match || std::isnan(ncc_left) || std::isnan(ncc_right))
+			? 0.0
+			: ParabolicSubpixel(ncc_left, best.ncc, ncc_right);
+	double const dy =
+		(exact_integer_match || std::isnan(ncc_up) || std::isnan(ncc_down))
+			? 0.0
+			: ParabolicSubpixel(ncc_up, best.ncc, ncc_down);
 	est.ok = true;
 	est.local_dx = double(best.offset_x - anchor_x) + dx;
 	est.local_dy = double(best.offset_y - anchor_y) + dy;
@@ -538,15 +545,13 @@ TrackStepResult TranslationTrackerBackend::Step(
 	bool held = false;
 	int held_ox = 0;
 	int held_oy = 0;
-	double held_mean_diff = 0.0;
 	if (config_.held_frame_check && held_has_previous_) {
 		held_ox = prev_match_abs_x_ - request.image_origin_x;
 		held_oy = prev_match_abs_y_ - request.image_origin_y;
 		if (held_ox >= 0 && held_oy >= 0 && held_ox + roi_w_ <= image.width && held_oy + roi_h_ <= image.height) {
 			GrayView const prev_view{prev_window_.data(), roi_w_, roi_w_,
 									 roi_h_};
-			held = WindowIsHeld(prev_view, image, held_ox, held_oy,
-								held_mean_diff);
+			held = WindowIsHeld(prev_view, image, held_ox, held_oy);
 		}
 	}
 
@@ -567,26 +572,32 @@ TrackStepResult TranslationTrackerBackend::Step(
 								 : anchor_y;
 	double hold_ncc = -1.0;
 	double hold_slope = 1.0;
-	double hold_mean_abs = 0.0;
 	bool const fade_hold_in_crop = config_.fade_detection && MeasureFadeSignal(image, fade_hold_ox, fade_hold_oy, hold_ncc,
-																			   hold_slope, hold_mean_abs);
+																			   hold_slope);
+
+	// Template view shared by the held fast path and the fade-held
+	// assembly below.
+	GrayView const templ_full{template_pixels_.data(), roi_w_, roi_w_, roi_h_};
 
 	// Fade-held step assembly: Ok at the last accepted position with the
 	// measured contrast slope as visibility. Confidence is the slope
 	// clamped into the documented [0, 1] range -- it is the exact quantity
 	// the fade gates trust, so the published confidence tracks how visible
 	// the target still is instead of the brightness-invariant (and hence
-	// fade-blind) NCC. Residual is the mean |template - window| difference
-	// at the reported position. The stored accepted center is re-reported
+	// fade-blind) NCC. Residual is the median |template - window| at the
+	// reported position, the same statistic the regular path publishes and
+	// the residual gate is calibrated against; the mean |difference| the
+	// fade pass measures stays the held criterion's internal quantity.
+	// The stored accepted center is re-reported
 	// verbatim, so the hold is exactly static and the session's velocity
 	// prior decays on natural zero deltas. Held-window state and template
 	// are left untouched: no refresh on fade frames, and the held pre-check
 	// keeps comparing against the last full-search window. `measured` says
-	// whether (slope, mean_abs_diff) is a real measurement from this step;
+	// whether (slope, position) is a real measurement from this step;
 	// an unmeasured hold reuses the last measured signal, and when none
 	// exists yet it reports unmeasured visibility (-1) with a bounded
 	// confidence instead of inventing a fully-visible slope.
-	auto make_fade_held = [&](bool measured, double slope, double mean_abs_diff) {
+	auto make_fade_held = [&](bool measured, double slope, int ox, int oy) {
 		fade_phase_ = FadePhase::Fading;
 		result.status = TrackStatus::Ok;
 		if (!measured) {
@@ -597,17 +608,16 @@ TrackStepResult TranslationTrackerBackend::Step(
 			}
 			else {
 				slope = fade_last_slope_;
-				mean_abs_diff = fade_last_mean_abs_;
 				result.confidence = std::clamp(slope, 0.0, 1.0);
-				result.residual = mean_abs_diff;
+				result.residual = fade_last_residual_;
 				result.fade_visibility = std::clamp(slope, 0.0, 2.0);
 			}
 		}
 		else {
 			fade_last_slope_ = slope;
-			fade_last_mean_abs_ = mean_abs_diff;
+			fade_last_residual_ = MadResidual(templ_full, image, ox, oy);
 			result.confidence = std::clamp(slope, 0.0, 1.0);
-			result.residual = mean_abs_diff;
+			result.residual = fade_last_residual_;
 			result.fade_visibility = std::clamp(slope, 0.0, 2.0);
 		}
 		if (held_has_previous_) {
@@ -624,8 +634,6 @@ TrackStepResult TranslationTrackerBackend::Step(
 	bool pending_recovery = false;
 	double probe_slope = -1.0;
 	if (held) {
-		GrayView const templ_full{template_pixels_.data(), roi_w_, roi_w_,
-								  roi_h_};
 		double ncc = 0.0;
 		// A degenerate (flat) window at the kept offset has no plain score;
 		// fall through to the full search, which owns that failure mode.
@@ -635,7 +643,7 @@ TrackStepResult TranslationTrackerBackend::Step(
 			est.local_dy = double(held_oy - anchor_y);
 			est.ncc = ncc;
 			est.plain_ncc = ncc;
-			est.residual = held_mean_diff;
+			est.residual = MadResidual(templ_full, image, held_ox, held_oy);
 			est.match_ox = held_ox;
 			est.match_oy = held_oy;
 		}
@@ -651,7 +659,7 @@ TrackStepResult TranslationTrackerBackend::Step(
 		int const probe_interval = std::max(1, config_.fade_probe_interval);
 		bool const probe = !fade_hold_in_crop || ++fade_frames_since_probe_ >= probe_interval;
 		if (!probe) {
-			make_fade_held(fade_hold_in_crop, hold_slope, hold_mean_abs);
+			make_fade_held(fade_hold_in_crop, hold_slope, fade_hold_ox, fade_hold_oy);
 			return result;
 		}
 		fade_frames_since_probe_ = 0;
@@ -659,15 +667,14 @@ TrackStepResult TranslationTrackerBackend::Step(
 									 radius_y, /*allow_fade_enter=*/false);
 		double match_ncc = 0.0;
 		double match_slope = 2.0;
-		double match_mean_abs = 0.0;
 		if (est.ok)
 			MeasureFadeSignal(image, est.match_ox, est.match_oy, match_ncc,
-							  match_slope, match_mean_abs);
+							  match_slope);
 		if (!est.ok) {
 			// The probe found nothing holdable (a fully flat deep fade scores
 			// no peak at all): keep holding. A lost target needs a confident
 			// displaced match to fail.
-			make_fade_held(fade_hold_in_crop, hold_slope, hold_mean_abs);
+			make_fade_held(fade_hold_in_crop, hold_slope, fade_hold_ox, fade_hold_oy);
 			return result;
 		}
 		if (match_slope >= config_.fade_exit_slope) {
@@ -693,7 +700,7 @@ TrackStepResult TranslationTrackerBackend::Step(
 			return result;
 		}
 		else {
-			make_fade_held(fade_hold_in_crop, hold_slope, hold_mean_abs);
+			make_fade_held(fade_hold_in_crop, hold_slope, fade_hold_ox, fade_hold_oy);
 			return result;
 		}
 	}
@@ -720,14 +727,14 @@ TrackStepResult TranslationTrackerBackend::Step(
 	if (est.fade_held) {
 		// The search's fade gate claimed this weak frame; assemble the held
 		// result from backend state.
-		make_fade_held(fade_hold_in_crop, hold_slope, hold_mean_abs);
+		make_fade_held(fade_hold_in_crop, hold_slope, fade_hold_ox, fade_hold_oy);
 		return result;
 	}
 	if (est.ncc < config_.ncc_min) {
 		if (pending_recovery) {
 			// The recovery candidate failed the acceptance gate; keep
 			// holding rather than flipping out of the fade and failing.
-			make_fade_held(fade_hold_in_crop, hold_slope, hold_mean_abs);
+			make_fade_held(fade_hold_in_crop, hold_slope, fade_hold_ox, fade_hold_oy);
 			return result;
 		}
 		result.status = TrackStatus::Failed;
@@ -760,18 +767,17 @@ TrackStepResult TranslationTrackerBackend::Step(
 		if (config_.fade_detection && est.plain_ncc >= kFadeCorrelationFloor) {
 			double match_ncc = 0.0;
 			double match_slope = 2.0;
-			double match_mean_abs = 0.0;
 			if (MeasureFadeSignal(image, est.match_ox, est.match_oy,
-								  match_ncc, match_slope, match_mean_abs) &&
+								  match_ncc, match_slope) &&
 				match_slope <= enter_gate) {
-				make_fade_held(true, match_slope, match_mean_abs);
+				make_fade_held(true, match_slope, est.match_ox, est.match_oy);
 				return result;
 			}
 		}
 		if (pending_recovery) {
 			// The recovery candidate failed the residual gate; keep holding
 			// rather than flipping out of the fade and failing.
-			make_fade_held(fade_hold_in_crop, hold_slope, hold_mean_abs);
+			make_fade_held(fade_hold_in_crop, hold_slope, fade_hold_ox, fade_hold_oy);
 			return result;
 		}
 		result.status = TrackStatus::Failed;
@@ -804,9 +810,8 @@ TrackStepResult TranslationTrackerBackend::Step(
 	else if (config_.fade_detection && result.fade_visibility < 0.0) {
 		double vis_ncc = 0.0;
 		double vis_slope = 0.0;
-		double vis_mean_abs = 0.0;
 		if (MeasureFadeSignal(image, est.match_ox, est.match_oy, vis_ncc,
-							  vis_slope, vis_mean_abs))
+							  vis_slope))
 			result.fade_visibility = std::clamp(vis_slope, 0.0, 2.0);
 	}
 	// Slow template refresh after confident matches only: a low-NCC match is
@@ -843,7 +848,7 @@ TrackStepResult TranslationTrackerBackend::Step(
 
 bool TranslationTrackerBackend::MeasureFadeSignal(
 	GrayView image, int ox, int oy, double& out_ncc, double& out_slope,
-	double& out_mean_abs) const {
+	double *out_mean_abs) const {
 	if (ox < 0 || oy < 0 || ox + roi_w_ > image.width || oy + roi_h_ > image.height)
 		return false;
 	GrayView const templ{
@@ -855,6 +860,8 @@ bool TranslationTrackerBackend::MeasureFadeSignal(
 	out_ncc = ZeroMeanNccScalar(templ, image, ox, oy, ncc, &out_slope)
 				  ? ncc
 				  : -1.0;
+	if (!out_mean_abs)
+		return true;
 	long long sum = 0;
 	for (int y = 0; y < roi_h_; ++y) {
 		auto const *trow =
@@ -864,7 +871,7 @@ bool TranslationTrackerBackend::MeasureFadeSignal(
 		for (int x = 0; x < roi_w_; ++x)
 			sum += std::abs(static_cast<int>(trow[x]) - static_cast<int>(irow[x]));
 	}
-	out_mean_abs = static_cast<double>(sum) / (static_cast<double>(roi_w_) * static_cast<double>(roi_h_));
+	*out_mean_abs = static_cast<double>(sum) / (static_cast<double>(roi_w_) * static_cast<double>(roi_h_));
 	return true;
 }
 

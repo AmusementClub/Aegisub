@@ -17,6 +17,8 @@
 
 #include <libaegisub/vfr.h>
 
+#include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -137,14 +139,14 @@ struct ApplyPlanOptions {
 struct ApplyPlanInput {
 	std::vector<TrackSample> samples; // ascending by frame (published copy)
 	TrackModel model = TrackModel::Translation;
-	double origin_center_x = 0.0;     // absolute storage px of the origin seed
+	double origin_center_x = 0.0; // absolute storage px of the origin seed
 	double origin_center_y = 0.0;
-	FrameInterval decode_interval;    // inclusive; anchors may come from here
-	FrameInterval direction_domain;   // inclusive; intersected per line
+	FrameInterval decode_interval;  // inclusive; anchors may come from here
+	FrameInterval direction_domain; // inclusive; intersected per line
 	int storage_width = 0;
 	int storage_height = 0;
-	int script_width = 0;             // layout resolution (LayoutRes preferred,
-	int script_height = 0;            //  PlayRes fallback)
+	int script_width = 0;  // PlayRes: libass maps \pos/\move with PlayRes
+	int script_height = 0; // LayoutRes is not a \pos coordinate space
 	agi::vfr::Framerate timecodes{};
 	int video_frame_count = 0;
 	int seed_time_ms = 0;
@@ -157,25 +159,25 @@ struct ApplyPlanInput {
 
 enum class ApplyPlanStatus {
 	Ok,
-	NeedsConfirmation,    // plan is complete; it would create >100 events
-	IncompleteCoverage,   // zero mutations; see uncovered
-	UnsupportedModel,     // non-Translation/Similarity trajectory
-	UnsupportedMode,      // e.g. Similarity with Compact apply mode
-	InvalidInput,         // e.g. reversed explicit \move window at seed
+	NeedsConfirmation,  // plan is complete; it would create >100 events
+	IncompleteCoverage, // zero mutations; see uncovered
+	UnsupportedModel,   // non-Translation/Similarity trajectory
+	UnsupportedMode,    // e.g. Similarity with Compact apply mode
+	InvalidInput,       // malformed inputs: no frames, missing resolution
 };
 
 struct PlannedLinePart {
 	int start_ms = 0;
 	int end_ms = 0;
 	std::string text;
-	bool covered = true;  // false for preserved out-of-domain prefix/suffix
+	bool covered = true; // false for preserved out-of-domain prefix/suffix
 	// Fitted position in script px at the part's own start/end instants;
 	// equal on both ends for \pos parts. Only meaningful while covered.
 	double x0 = 0.0, y0 = 0.0, x1 = 0.0, y1 = 0.0;
 };
 
 struct PlannedLine {
-	AssDialogue* source = nullptr;
+	AssDialogue *source = nullptr;
 	std::vector<PlannedLinePart> parts; // replaces source entirely when applied
 };
 
@@ -185,7 +187,7 @@ struct UncoveredRange {
 };
 
 struct LineUncovered {
-	AssDialogue* source = nullptr;
+	AssDialogue *source = nullptr;
 	std::vector<UncoveredRange> ranges;
 };
 
@@ -196,12 +198,22 @@ struct MotionTrackApplyPlan {
 	std::vector<LineUncovered> uncovered;
 	size_t event_count = 0; // new events the covered parts introduce
 
+	// Lines whose raw tag bytes carry \org, \clip or \iclip (rect or vector,
+	// including \t-animated instances): absolute script-space geometry the
+	// emitted \pos/\move cannot follow. A pinned \org keeps the rotation
+	// center fixed while the text moves (the swing arm changes length and
+	// direction), and text pushed out of a \clip/\iclip rectangle or vector
+	// disappears. The plan still applies -- following these tags is a
+	// separate design question -- so the caller warns that the listed lines
+	// need manual review afterwards. Pointers follow the same validity
+	// contract as lines/uncovered.
+	std::vector<AssDialogue *> needs_manual_review;
+
 	bool needs_confirmation() const {
 		return status == ApplyPlanStatus::NeedsConfirmation;
 	}
 	bool has_mutations() const {
-		return status == ApplyPlanStatus::Ok
-		    || status == ApplyPlanStatus::NeedsConfirmation;
+		return (status == ApplyPlanStatus::Ok || status == ApplyPlanStatus::NeedsConfirmation) && !lines.empty();
 	}
 };
 
@@ -210,23 +222,88 @@ struct MotionTrackApplyPlan {
 // is applied.
 MotionTrackApplyPlan BuildApplyPlan(
 	AssFile const& file,
-	std::vector<AssDialogue*> const& targets,
+	std::vector<AssDialogue *> const& targets,
 	ApplyPlanInput const& input);
 
 // Resolves where the line sits at seed_time_ms in script pixels: explicit
-// \pos wins, then \move interpolated at the seed instant (VSFilter <=0 means
-// whole-event window; reversed explicit windows fail), then style/\an/\a/
-// margin fallback. Returns false on invalid input.
+// \pos wins, then \move interpolated at the seed instant with libass's
+// window semantics (a 6-arg \move with any positive bound is an explicit
+// window, and a reversed one is swapped; a 4-arg \move or a window with
+// both bounds non-positive spans the whole event), then style/\an/\a/
+// margin fallback. Every spelling resolves to a position, so the bool
+// return is an invariant for callers rather than a per-line rejection.
 bool ResolveDialogueOrigin(AssFile const& file, AssDialogue const& line,
-                           int seed_time_ms, int script_width,
-                           int script_height, double& out_x, double& out_y);
+						   int seed_time_ms, int script_width,
+						   int script_height, double& out_x, double& out_y);
+
+// PlayRes is the \pos/\move coordinate space libass actually renders.
+// LayoutRes only participates in blur/3D/border scaling and must not be
+// copied into script_width/height.
+void FillApplyInputScriptResolution(ApplyPlanInput& input, AssFile const& file);
+
+// Identity tokens are compared only and never turned back into pointers.
+struct MotionTrackLineFingerprint {
+	std::uintptr_t identity = 0;
+	int id = 0;
+	int row = -1;
+	bool comment = false;
+	int layer = 0;
+	std::array<int, 3> margins{};
+	int start_ms = 0;
+	int end_ms = 0;
+	std::string style;
+	std::string actor;
+	std::string effect;
+	std::vector<std::uint32_t> extradata_ids;
+	std::string text;
+	std::string style_entry;
+};
+
+struct MotionTrackSourceSnapshot {
+	std::uintptr_t file_identity = 0;
+	std::vector<MotionTrackLineFingerprint> lines;
+	std::vector<std::string> script_info_entries;
+	agi::vfr::Framerate timecodes;
+	int video_frame_count = 0;
+};
+
+MotionTrackSourceSnapshot CaptureMotionTrackSource(
+	AssFile const& file,
+	std::vector<AssDialogue *> const& lines,
+	agi::vfr::Framerate const& timecodes,
+	int video_frame_count);
+
+// True when every captured line is still the same object with the same
+// dialogue/style/script-info fields and the timecodes mapping is unchanged.
+bool MotionTrackSourceIsCurrent(
+	AssFile const& file,
+	MotionTrackSourceSnapshot const& expected,
+	agi::vfr::Framerate const& timecodes);
+
+// Reconstructs live pointers in capture order. Empty with `message` set when
+// any line is missing, duplicated, or stale.
+std::vector<AssDialogue *> ResolveMotionTrackSourceLines(
+	AssFile& file,
+	MotionTrackSourceSnapshot const& expected,
+	std::string& message);
+
+// Continue keys: same objects and Ids with unchanged Start/End. Timing
+// edits keep the pointer/Id but invalidate the session's decode domain.
+bool MotionTrackContinueTargetsMatch(
+	MotionTrackSourceSnapshot const& expected,
+	std::vector<AssDialogue *> const& targets);
+
+// True when the snapshot's stored frame→time mapping still matches `timecodes`.
+bool MotionTrackTimecodesMatch(
+	MotionTrackSourceSnapshot const& expected,
+	agi::vfr::Framerate const& timecodes);
 
 // Strips existing \pos/\move tags from every override block and inserts the
-// new tag into the first block (creating one when absent).
+// new tag into the first block (creating one when absent). Nested \t
+// transforms are left intact. libass resolves pos/move first-wins per event,
+// so when the kept bytes still hold a position spelling the drop pass cannot
+// see ("\ pos(...)" or one nested in \t), the new tag is placed in front of
+// the kept bytes instead of after them.
 std::string ReplacePositionTag(std::string const& text, std::string const& tag);
-
-// Same, but also strips \frz/\fscx/\fscy — used for similarity applies, where
-// the emitted tags fully own the transform.
-std::string ReplaceMotionTags(std::string const& text, std::string const& tag);
 
 } // namespace aegisub::motion_track

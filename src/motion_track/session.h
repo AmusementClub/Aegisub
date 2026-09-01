@@ -49,8 +49,8 @@ struct MotionTrackSnapshot {
 };
 
 struct SessionDomains {
-	FrameInterval decode_interval;   // inclusive
-	FrameInterval direction_domain;  // inclusive
+	FrameInterval decode_interval;  // inclusive
+	FrameInterval direction_domain; // inclusive
 	int video_frame_count = 0;
 	int storage_width = 0;
 	int storage_height = 0;
@@ -58,17 +58,49 @@ struct SessionDomains {
 	int search_radius_override = 0;
 };
 
+/// The ride affine at one frame. The dialog ROI is expressed in the
+/// coordinate space of the frame it was last edited at; the anchor is that
+/// frame's tracked center (absolute storage) and linear part, and makes the
+/// ROI's space concrete. Invalid when the frame has no Ok sample -- the ROI
+/// is then plain storage coordinates and no riding mapping is defined.
+struct RoiRideAnchor {
+	bool valid = false;
+	int frame = -1;
+	double center_x = 0.0;
+	double center_y = 0.0;
+	/// Linear part of the sample's transform; identity for Translation.
+	double m00 = 1.0, m01 = 0.0, m10 = 0.0, m11 = 1.0;
+};
+
+RoiRideAnchor RideAnchorAtFrame(MotionTrackSnapshot const& snap, int frame);
+
+/// Anchor for a Continue/reseed: the new seed center in storage, with the
+/// linear part of the Ok sample nearest `frame` (identity when there is
+/// none, or for Translation). The manual seed sample carries that linear
+/// part, so the overlay/spin ROI — already in storage at the seed frame —
+/// must be pinned to it rather than to identity.
+RoiRideAnchor ReseedRoiAnchor(MotionTrackSnapshot const& snap, int frame,
+							  double center_x, double center_y);
+
+/// Maps an ROI expressed at `anchor`'s frame to storage coordinates at
+/// `frame`, riding the trajectory between the two: the bounding box of the
+/// mapped corners (exact for Translation, inflating slightly for rotated
+/// Similarity quads). Returns `roi` unchanged when either end lacks an Ok
+/// sample, so callers fall back to the raw rectangle.
+RoiRect MapRoiToFrame(MotionTrackSnapshot const& snap, int frame, RoiRect roi,
+					  RoiRideAnchor const& anchor);
+
 /// Runs one frame fetch inside a provider-lifetime-checked batch. Receives a
 /// closure that performs the actual FetchGray against a caller-supplied
 /// MotionFrameReader; production implementations bind it to a
 /// RawBatchMotionFrameReader over RawFrameAccess, tests bind it to any
 /// reader directly.
 using RawBatchExecutor =
-	    std::function<RawVideoBatchStatus(
-		        std::function<FrameReadResult(MotionFrameReader&)> const&)>;
+	std::function<RawVideoBatchStatus(
+		std::function<FrameReadResult(MotionFrameReader&)> const&)>;
 
 struct AnalyzeRunHooks {
-	std::function<bool()> user_cancelled;          // polled between frames
+	std::function<bool()> user_cancelled;              // polled between frames
 	std::function<void(int done, int total)> progress; // optional
 	/// Production path: runs one worker batch per frame. When unset (core
 	/// tests), `reader` is used directly on the calling thread. The seed
@@ -84,11 +116,16 @@ enum class RangeCheck {
 	TooLong,           // decode span > 10000 frames -> refuse
 };
 
+/// Range cap used by the session and the dialog so Analyze can refuse a
+/// TooLong span (or ask before a long run) without constructing a session
+/// or touching an existing one.
+RangeCheck CheckDecodeInterval(FrameInterval interval);
+
 class MotionTrackSession {
-public:
+	public:
 	MotionTrackSession(SessionDomains domains, RoiRect roi,
-	                   TrackDirection direction, TrackModel model,
-	                   TranslationTrackerConfig backend_config = {});
+					   TrackDirection direction, TrackModel model,
+					   TranslationTrackerConfig backend_config = {});
 
 	RangeCheck CheckRange() const;
 
@@ -97,7 +134,7 @@ public:
 	/// Continue flow: the caller moves/redraws the ROI onto the object at
 	///  (mirroring the user dragging the box), then seeds there.
 	void SetBackendSeed(int frame, RoiRect roi, double center_x,
-	                    double center_y);
+						double center_y);
 	int BackendSeedFrame() const { return backend_seed_frame_; }
 
 	/// Runs the analyze protocol on the current thread (the progress-task
@@ -117,9 +154,9 @@ public:
 	/// path, so a provider retirement waiting in WaitForLeaseDrain is not
 	/// held up by a finished run. Continue re-acquires a fresh handle.
 	AnalyzeStopReason RunAnalyze(MotionFrameReader& reader,
-	                             TrackerBackend& backend,
-	                             VideoProviderLeaseState::Handle& lease_handle,
-	                             AnalyzeRunHooks hooks);
+								 TrackerBackend& backend,
+								 VideoProviderLeaseState::Handle& lease_handle,
+								 AnalyzeRunHooks hooks);
 
 	/// Clears all samples and re-derives origin from the next successful run.
 	void Invalidate(AnalyzeStopReason reason, std::string message);
@@ -130,7 +167,7 @@ public:
 		return published_.load();
 	}
 
-private:
+	private:
 	struct DirectionState {
 		bool has_center = false;
 		double last_x = 0.0, last_y = 0.0;
@@ -156,6 +193,18 @@ private:
 	bool has_origin_ = false;
 	int backend_seed_frame_ = -1;
 	double backend_seed_x_ = 0.0, backend_seed_y_ = 0.0;
+	/// Linear part of the published transform at the frame the backend
+	/// template was last rebuilt on, captured by SetBackendSeed from the Ok
+	/// sample nearest the new seed ({m00, m01, m10, m11}, column-vector
+	/// layout). A re-seeded backend measures every step against its new
+	/// template -- the reseed frame's current pose -- so published samples
+	/// must compose this base back in (template-relative step · base) to stay
+	/// origin-relative; identity on a fresh session, after Invalidate, and
+	/// for the translation model (whose steps are identity anyway).
+	struct ReseedBase {
+		double m00 = 1.0, m01 = 0.0, m10 = 0.0, m11 = 1.0;
+	};
+	ReseedBase reseed_base_;
 	DirectionState fwd_, back_;
 	std::vector<TrackSample> samples_;
 	/// Fade intervals extracted from samples_ at the end of the last
@@ -186,5 +235,12 @@ private:
 	static double EffectiveRadius(int roi_max_side);
 	int SearchRadiusForRoi() const;
 };
+
+/// Copies the published trajectory fields a planner run needs. Does not
+/// touch script resolution, timecodes, seed time, or apply options — those
+/// come from the file/video/UI. Always copies `fade_interval` so the
+/// dialog's "Write \\fad from fade" checkbox has data to apply.
+void FillApplyInputFromSnapshot(ApplyPlanInput& input,
+								MotionTrackSnapshot const& snap);
 
 } // namespace aegisub::motion_track

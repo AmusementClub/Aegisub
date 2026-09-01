@@ -99,6 +99,9 @@ struct TrackSample {
 	TrackFailureReason failure = TrackFailureReason::None; // only when Failed
 	double confidence = 0.0;     // NCC peak [0,1]; display/export only — failure
 	                             // decisions use the individual metric thresholds
+	/// Median |template - window| at the accepted match, in the same
+	/// lower-median convention the backend's residual gate is calibrated
+	/// against (held and fade-held steps included). Display/export only.
 	double residual = 0.0;
 	TrackTransform transform;
 	double center_x = 0.0;

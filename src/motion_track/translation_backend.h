@@ -170,6 +170,8 @@ private:
 		/// template-refresh gate must keep judging the plain match, never a
 		/// partly-occluded one it would then blend into the template.
 		double plain_ncc = 0.0;
+		/// Median |template - window| at the accepted match (MadResidual's
+		/// lower-median convention), held and fade-held steps included.
 		double residual = 0.0;
 		int match_ox = 0; // integer window offset of the match inside the image
 		int match_oy = 0;
@@ -188,13 +190,18 @@ private:
 
 	/// Measures the fade signal of the image window at (ox, oy) against the
 	/// seed template in one scalar pass: plain NCC (-1.0 when undefined,
-	/// e.g. a flat window), the least-squares contrast slope (0.0 for a flat
-	/// window, pinned 1.0 for a flat template; see ZeroMeanNccScalar), and
-	/// the mean |template - window| difference. Returns false when the
-	/// window lies outside the image.
+	/// e.g. a flat window) and the least-squares contrast slope (0.0 for a
+	/// flat window, pinned 1.0 for a flat template; see ZeroMeanNccScalar).
+	/// Returns false when the window lies outside the image.
+	///
+	/// `out_mean_abs`, when given, also receives the mean
+	/// |template - window| difference. It costs a second pass over the
+	/// window and no caller needs it since the published residual became
+	/// MadResidual, so it is opt-in rather than a required out-param every
+	/// call site has to declare a variable for.
 	bool MeasureFadeSignal(GrayView image, int ox, int oy,
 						   double& out_ncc, double& out_slope,
-						   double& out_mean_abs) const;
+						   double *out_mean_abs = nullptr) const;
 
 	/// Occlusion fallback for the pyramid search; see
 	/// TranslationTrackerConfig::robust_inlier_scoring. When the
@@ -246,11 +253,12 @@ private:
 	/// Fade-held frames processed since the last full-search probe.
 	int fade_frames_since_probe_ = 0;
 	/// Last fade signal actually measured at the hold/match position (slope
-	/// and mean |difference|), for steps whose own measurement is impossible
-	/// (hold position outside the fetched crop): a hold must not publish an
-	/// invented slope. Negative slope = nothing measured yet.
+	/// and the median |template - window| residual there), for steps whose
+	/// own measurement is impossible (hold position outside the fetched
+	/// crop): a hold must not publish an invented slope. Negative slope =
+	/// nothing measured yet.
 	double fade_last_slope_ = -1.0;
-	double fade_last_mean_abs_ = 0.0;
+	double fade_last_residual_ = 0.0;
 	/// Worst-case median |template - window| a certified scaled copy of this
 	/// template can show while fading: max(median |t - med|, med, 255 - med)
 	/// with med = median template value, computed once in Reset with the same

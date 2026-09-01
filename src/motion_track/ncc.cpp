@@ -128,6 +128,15 @@ BestNccResult FindBestNccScalar(GrayView templ, GrayView image,
 }
 
 double ParabolicSubpixel(double left, double center, double right) {
+	// A parabola only models a peak through a local maximum. A candidate
+	// clamped at the search-window edge has its higher neighbour outside
+	// the window; through such a triple the parabola opens upward and its
+	// vertex sits on the side opposite the true peak -- P(1.0, 0.8, 0.79)
+	// = +0.553 steers half a pixel away from the higher left neighbour --
+	// and the clamp cannot undo it. Hold the integer peak instead of
+	// steering away from the true one.
+	if (center < left || center < right)
+		return 0.0;
 	double const denom = left - 2.0 * center + right;
 	if (denom == 0.0)
 		return 0.0;
@@ -175,7 +184,10 @@ bool SelectInlierBlocks(std::vector<double> const& block_residuals,
 		abs_dev.reserve(current.size());
 		for (double v : current)
 			abs_dev.push_back(std::abs(v - median));
-		double const mad = MedianOf(abs_dev);
+		// Same floor as SelectInlierPixels: a MAD of 0 says the blocks at
+		// the median share one value, and a cutoff pinned at the median
+		// would cull every block only half a gray level above it.
+		double const mad = std::max(MedianOf(abs_dev), 1.0);
 		double const cutoff = median + params.outlier_k * 1.4826 * mad;
 
 		std::size_t next_count = 0;
@@ -218,7 +230,15 @@ bool SelectInlierPixels(std::vector<double> const& pixel_diffs,
 	lower_dev.reserve(n / 2);
 	for (std::size_t i = 0; i < n / 2; ++i)
 		lower_dev.push_back(std::abs(sorted[i] - anchor));
-	double const cutoff = anchor + params.outlier_k * 1.4826 * MedianOf(lower_dev);
+	// A MAD of 0 only says the pixels near the lower quartile share one
+	// value, not that the noise is zero. Without a floor the cutoff
+	// collapses onto the anchor itself, and then a visible side whose
+	// pixels stray a single gray level (compression noise alone does
+	// that) fails the selection and the whole occlusion rescue with it.
+	// One gray level is the smallest spread a real match carries; the
+	// 60-level occluder this gate exists for stays far above it.
+	double const scale = std::max(MedianOf(lower_dev), 1.0);
+	double const cutoff = anchor + params.outlier_k * 1.4826 * scale;
 
 	std::size_t kept_count = 0;
 	for (double v : pixel_diffs)

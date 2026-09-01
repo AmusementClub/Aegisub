@@ -10,6 +10,8 @@ FrameReadResult RawBatchMotionFrameReader::FetchGray(
 	auto result = access.FetchBgra(frame, view);
 	if (result.status != FrameReadStatus::Ok)
 		return result;
+	if (!view.data || view.width <= 0 || view.height <= 0 || static_cast<int64_t>(view.pitch) < int64_t(view.width) * 4)
+		return {FrameReadStatus::FrameUnavailable, "invalid frame buffer"};
 
 	int const w = std::max(roi.w, 0);
 	int const h = std::max(roi.h, 0);
@@ -23,7 +25,7 @@ FrameReadResult RawBatchMotionFrameReader::FetchGray(
 		// flipped view stores row 0 last, so sampling y directly would average
 		// a different band of the frame than the one actually copied.
 		int const physical_y = LogicalRowToPhysicalRow(y, view.height, view.flipped);
-		auto const* row = view.data + int64_t(physical_y) * view.pitch;
+		auto const *row = view.data + int64_t(physical_y) * view.pitch;
 		for (int x = std::max(roi.x, 0); x < std::min(roi.x + w, view.width); ++x) {
 			// Same helper the copy loop uses, so filled borders and
 			// converted interiors can never drift apart.
@@ -50,12 +52,10 @@ FrameReadResult RawBatchMotionFrameReader::FetchGray(
 		for (int x = 0; x < w; ++x) {
 			int const sx = roi.x + x;
 			bool const inside =
-			    inside_y && sx >= 0 && sx < view.width;
+				inside_y && sx >= 0 && sx < view.width;
 			std::uint8_t value = fill;
 			if (inside)
-				value = BgraPixelToGray(view.data
-				                      + int64_t(physical_y) * view.pitch
-				                      + size_t(sx) * 4);
+				value = BgraPixelToGray(view.data + int64_t(physical_y) * view.pitch + size_t(sx) * 4);
 			out.gray[size_t(y) * size_t(w) + size_t(x)] = value;
 		}
 	}

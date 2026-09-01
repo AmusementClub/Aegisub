@@ -41,6 +41,7 @@
 #include <chrono>
 #include <cmath>
 #include <exception>
+#include <limits>
 #include <string>
 #include <unordered_map>
 
@@ -1878,18 +1879,39 @@ aegisub::motion_track::FrameReadResult RawFrameAccess::FetchBgra(
 	int frame, aegisub::motion_track::RawBgraView& out) noexcept {
 	try {
 		if (frame < 0 || frame >= identity.frame_count)
-			return {aegisub::motion_track::FrameReadStatus::FrameUnavailable, "frame out of range"};
+			return {.status = aegisub::motion_track::FrameReadStatus::FrameUnavailable, .message = "frame out of range"};
 		source.GetFrame(frame, scratch);
+		// The checks are ordered so no size arithmetic runs before width and
+		// height are known sane. The geometry comparison against the identity
+		// comes first: the identity carries the provider's int dimensions, so
+		// past it both fields are bounded by int range and the width * 4
+		// product below cannot wrap size_t (before the reorder, a wrapped
+		// product could pass a zero pitch into the division further down).
+		// Each pitch condition then guards that division: pitch == 0 is
+		// rejected outright, pitch >= width * 4 and data.size() >= pitch *
+		// height hold by non-wrapping arithmetic, and pitches beyond int range
+		// are rejected because RawBgraView carries the stride as int.
+		if (scratch.data.empty() || scratch.data.data() == nullptr || scratch.width == 0 || scratch.height == 0)
+			return {.status = aegisub::motion_track::FrameReadStatus::FrameUnavailable,
+					.message = "invalid frame buffer"};
+		auto const identity_width = static_cast<size_t>(identity.width);
+		auto const identity_height = static_cast<size_t>(identity.height);
+		if (scratch.width != identity_width || scratch.height != identity_height)
+			return {.status = aegisub::motion_track::FrameReadStatus::FrameUnavailable,
+					.message = "frame geometry does not match provider identity"};
+		if (scratch.pitch == 0 || scratch.pitch < static_cast<size_t>(scratch.width) * 4 || scratch.pitch > static_cast<size_t>(std::numeric_limits<int>::max()) || scratch.data.size() / scratch.pitch < static_cast<size_t>(scratch.height))
+			return {.status = aegisub::motion_track::FrameReadStatus::FrameUnavailable,
+					.message = "invalid frame buffer"};
 		out.data = scratch.data.data();
 		out.width = static_cast<int>(scratch.width);
 		out.height = static_cast<int>(scratch.height);
 		out.pitch = static_cast<int>(scratch.pitch);
 		out.flipped = scratch.flipped;
-		return {aegisub::motion_track::FrameReadStatus::Ok, {}};
+		return {.status = aegisub::motion_track::FrameReadStatus::Ok};
 	} catch (agi::Exception const& e) {
-		return {aegisub::motion_track::FrameReadStatus::DecodeError, e.GetMessage()};
+		return {.status = aegisub::motion_track::FrameReadStatus::DecodeError, .message = e.GetMessage()};
 	} catch (...) {
-		return {aegisub::motion_track::FrameReadStatus::Error, "unknown decode failure"};
+		return {.status = aegisub::motion_track::FrameReadStatus::Error, .message = "unknown decode failure"};
 	}
 }
 

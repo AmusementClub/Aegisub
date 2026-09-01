@@ -53,6 +53,7 @@
 #include "placeholder_ctrl.h"
 #include "selection_controller.h"
 #include "subtitle_edit_box_focus.h"
+#include "subtitle_edit_box_input.h"
 #include "subs_edit_ctrl.h"
 #include "subs_controller.h"
 #ifdef WITH_WXSTC
@@ -251,6 +252,10 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 	layer->SetInitialSize(layer->GetSizeFromTextSize(GetTextExtent(wxS("00"))));
 #endif
 	layer->SetToolTip(_("Layer number"));
+	// Same as the margin spin controls: keep Ctrl+C/X/V inside the field.
+	layer->Bind(wxEVT_CHAR_HOOK, [](wxKeyEvent& event) {
+		TextControlClipboardCharHook(event, true);
+	});
 	middle_left_sizer->Add(layer, wxSizerFlags().Expand());
 	middle_left_sizer->AddSpacer(5);
 
@@ -602,11 +607,24 @@ wxSpinCtrl *SubsEditBox::MakeMarginCtrl(wxString const& tooltip, int margin, wxS
 	middle_left_sizer->Add(ctrl, wxSizerFlags().Expand());
 
 	auto commit = [=](wxCommandEvent&) {
-		SetSelectedRows([&](AssDialogue *d) { d->Margin[margin] = ctrl->GetValue(); },
+		auto text = ctrl->GetTextValue();
+		text.Trim(true);
+		text.Trim(false);
+		auto const input = aegisub::subtitle_edit_box_input::ResolveMarginInput(
+			text.empty(), [=] { return ctrl->GetValue(); });
+		if (input.normalize_control)
+			ctrl->SetValue(input.value);
+
+		SetSelectedRows([&](AssDialogue *d) { d->Margin[margin] = input.value; },
 			commit_msg, AssFile::COMMIT_DIAG_META);
 	};
 	Bind(wxEVT_TEXT, commit, ctrl->GetId());
 	Bind(wxEVT_SPINCTRL, commit, ctrl->GetId());
+	// wxSpinCtrl is not a wxTextEntry, so the Default-context edit/line/*
+	// hotkeys would cut/paste subtitle lines instead of the field text.
+	ctrl->Bind(wxEVT_CHAR_HOOK, [](wxKeyEvent& event) {
+		TextControlClipboardCharHook(event, true);
+	});
 
 	return ctrl;
 }

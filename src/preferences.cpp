@@ -638,24 +638,7 @@ void BuildVideoPage(OptionPage *p) {
 	binder->BindEvents(binder);
 
 	binder->AddCategory(_("Options"));
-#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
-	auto *skia_video_tools = binder->AddBool(
-		_("Use Skia video tools (restart required)"),
-		"Video/Skia Tools/Enabled");
-	skia_video_tools->SetHelpString(_(
-		"Use Skia for interactive video tool overlays. Video frame rendering and subtitles "
-		"continue to use their existing renderers. Restart Aegisub after changing this option."));
-#endif
 	binder->AddBool(_("Show keyframes in slider"), "Video/Slider/Show Keyframes");
-	binder->AddBool(_("Only show visual tools when mouse is over video"), "Tool/Visual/Autohide");
-	binder->AddInt(_("Visual tools coordinate font size"), "Tool/Visual/Coordinate Font Size", 6, 72);
-	auto *perspective_decimals = binder->AddInt(
-		_("Perspective decimal places"),
-		"Tool/Visual/Perspective/Decimal Places",
-		0, 6);
-	perspective_decimals->SetHelpString(_(
-		"Maximum digits after the decimal point in generated Perspective tags. "
-		"The default is 2. Use 0 for integers, or increase up to 6 if Apply cannot fit the target."));
 	binder->AddBool(_("Seek video to line start on selection change"), "Video/Subtitle Sync");
 	binder->AddBool(_("Automatically open audio when opening video"), "Video/Open Audio");
 
@@ -708,13 +691,52 @@ void BuildVideoPage(OptionPage *p) {
 	wxArrayString choice_res(4, cres_arr);
 	binder->AddChoice(_("Match video resolution on open"), choice_res, "Video/Script Resolution Mismatch");
 
-	binder->AddCategory(_("Visual tool nudge"));
-	binder->AddInt(_("Rotate step (degrees)"), "Tool/Visual/Nudge/Rotate Step", 1, 180);
-	binder->AddInt(_("Rotate large step (degrees)"), "Tool/Visual/Nudge/Rotate Step Large", 1, 180);
-	binder->AddInt(_("Scale step (percent)"), "Tool/Visual/Nudge/Scale Step", 1, 100);
-	binder->AddInt(_("Scale large step (percent)"), "Tool/Visual/Nudge/Scale Step Large", 1, 100);
-	binder->AddInt(_("Origin step (pixels)"), "Tool/Visual/Nudge/Origin Step", 1, 1000);
-	binder->AddInt(_("Origin large step (pixels)"), "Tool/Visual/Nudge/Origin Step Large", 1, 1000);
+	p->sizer->Add(grid, 1, wxEXPAND);
+	p->SetSizerAndFit(p->sizer);
+}
+
+/// Visual tools preferences page
+void BuildVisualToolsPage(OptionPage *p) {
+	auto binder = std::make_shared<PropertyGridOptionBinder>(p);
+	auto *grid = binder->GetGrid();
+	binder->BindEvents(binder);
+
+	binder->AddCategory(_("Options"));
+#ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
+	auto *skia_video_tools = binder->AddBool(
+		_("Use Skia video tools (restart required)"),
+		"Video/Skia Tools/Enabled");
+	skia_video_tools->SetHelpString(_(
+		"Use Skia for interactive video tool overlays. Video frame rendering and subtitles "
+		"continue to use their existing renderers. Restart Aegisub after changing this option."));
+#endif
+	binder->AddBool(_("Only show visual tools when mouse is over video"), "Tool/Visual/Autohide");
+	binder->AddInt(_("Coordinate font size"), "Tool/Visual/Coordinate Font Size", 6, 72);
+
+	binder->AddCategory(_("Perspective"));
+	auto *fit_text = binder->AddBool(_("Fit Text"), "Tool/Visual/Perspective/Fit Text");
+	fit_text->SetHelpString(_(
+		"Scale text to fit the target quadrilateral"));
+	auto *fax_frz_only = binder->AddBool(
+		_("Fax + Frz Only"),
+		"Tool/Visual/Perspective/Fax Frz Only");
+	fax_frz_only->SetHelpString(_(
+		"Allow position and scale changes, but restrict Perspective to fax and frz"));
+	auto *perspective_decimals = binder->AddInt(
+		_("Decimal places"),
+		"Tool/Visual/Perspective/Decimal Places",
+		0, 6);
+	perspective_decimals->SetHelpString(_(
+		"Maximum digits after the decimal point in generated Perspective tags. "
+		"The default is 2. Use 0 for integers, or increase up to 6 if Apply cannot fit the target."));
+
+	binder->AddCategory(_("Nudge"));
+	binder->AddDouble(_("Rotate step (degrees)"), "Tool/Visual/Nudge/Rotate Step", 0.01, 180, 0.1, 2);
+	binder->AddDouble(_("Rotate large step (degrees)"), "Tool/Visual/Nudge/Rotate Step Large", 0.01, 180, 0.1, 2);
+	binder->AddDouble(_("Scale step (percent)"), "Tool/Visual/Nudge/Scale Step", 0.01, 100, 0.1, 2);
+	binder->AddDouble(_("Scale large step (percent)"), "Tool/Visual/Nudge/Scale Step Large", 0.01, 100, 0.1, 2);
+	binder->AddDouble(_("Origin step (pixels)"), "Tool/Visual/Nudge/Origin Step", 0.01, 1000, 0.1, 2);
+	binder->AddDouble(_("Origin large step (pixels)"), "Tool/Visual/Nudge/Origin Step Large", 0.01, 1000, 0.1, 2);
 
 	p->sizer->Add(grid, 1, wxEXPAND);
 	p->SetSizerAndFit(p->sizer);
@@ -1723,6 +1745,9 @@ Preferences::Preferences(wxWindow *parent): wxDialog(parent, -1, _("Preferences"
 	register_deferred_page("page_default_styles", _("Default styles"), OptionPage::PAGE_SUB, BuildGeneralDefaultStylesPage);
 	register_deferred_page("page_audio", _("Audio"), OptionPage::PAGE_DEFAULT, BuildAudioPage);
 	register_deferred_page("page_video", _("Video"), OptionPage::PAGE_DEFAULT, BuildVideoPage);
+	// Inserting pages here shifts Tool/Preferences/Page indices used by
+	// tests/gui-automation/skia-audio-uia.cs (Colors is currently page 6).
+	register_deferred_page("page_visual_tools", _("Visual Tools"), OptionPage::PAGE_DEFAULT, BuildVisualToolsPage);
 	register_deferred_page("page_interface", _("Interface"), OptionPage::PAGE_DEFAULT, BuildInterfacePage);
 	register_deferred_page("page_interface_colours", _("Colors"), OptionPage::PAGE_SCROLL | OptionPage::PAGE_SUB, BuildInterfaceColoursPage);
 	register_deferred_page("page_interface_command_buttons", _("Commands Bar"), OptionPage::PAGE_SUB, BuildCommandButtonsPage);

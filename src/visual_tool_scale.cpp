@@ -21,15 +21,141 @@
 #include "visual_tool_scale.h"
 
 #include "compat.h"
+#include "include/aegisub/context.h"
+#include "libresrc/libresrc.h"
+#include "numeric_utils.h"
 #include "options.h"
+#include "selection_controller.h"
+#include "utils.h"
 #include "video_overlay_draw_context.h"
 #include "video_overlay_helpers.h"
+#include "visual_tool_scale_policy.h"
 
+#include <libaegisub/scope_exit.h>
+
+#include <cmath>
+#include <optional>
+#include <vector>
 #include <wx/colour.h>
+#include <wx/toolbar.h>
+
+namespace {
+using visual_tool_scale_policy::Axis;
+using visual_tool_scale_policy::NormalizeSelectionTo100;
+
+std::optional<Axis> ToPolicyAxis(VisualScaleAxis axis) {
+	switch (axis) {
+		case VisualScaleAxis::X: return Axis::X;
+		case VisualScaleAxis::Y: return Axis::Y;
+	}
+	return std::nullopt;
+}
+}
 
 VisualToolScale::VisualToolScale(VideoDisplay *parent, agi::Context *context)
 : VisualTool<VisualDraggableFeature>(parent, context)
 {
+	connections.push_back(context->GetCore().selectionController->AddSelectionListener(
+		&VisualToolScale::UpdateToolbarState, this));
+}
+
+VisualToolScale::~VisualToolScale() {
+	if (toolbar)
+		toolbar->Unbind(wxEVT_TOOL, &VisualToolScale::OnSubTool, this);
+}
+
+void VisualToolScale::SetToolbar(wxToolBar *new_toolbar) {
+	if (toolbar)
+		toolbar->Unbind(wxEVT_TOOL, &VisualToolScale::OnSubTool, this);
+	toolbar = new_toolbar;
+	normalize_x_button = -1;
+	normalize_y_button = -1;
+	if (!toolbar)
+		return;
+
+	int const icon_size = GetVideoUiIconSize(toolbar, OPT_GET("App/Toolbar Icon Size")->GetInt());
+	toolbar->SetToolBitmapSize(wxSize(icon_size, icon_size));
+	toolbar->AddSeparator();
+	normalize_x_button = toolbar->AddTool(
+		wxID_ANY, _("Set X to 100%"),
+		wxBitmapBundle::FromBitmap(CMD_ICON_GET(visual_scale_x_100, wxLayout_Default, icon_size)),
+		_("Set X scale to 100% and adjust Y to preserve the ratio"))->GetId();
+	normalize_y_button = toolbar->AddTool(
+		wxID_ANY, _("Set Y to 100%"),
+		wxBitmapBundle::FromBitmap(CMD_ICON_GET(visual_scale_y_100, wxLayout_Default, icon_size)),
+		_("Set Y scale to 100% and adjust X to preserve the ratio"))->GetId();
+	toolbar->Realize();
+	toolbar->Show(true);
+	toolbar->Bind(wxEVT_TOOL, &VisualToolScale::OnSubTool, this);
+	UpdateToolbarState();
+}
+
+void VisualToolScale::OnSubTool(wxCommandEvent &event) {
+	if (event.GetId() == normalize_x_button) {
+		NormalizeScale(VisualScaleAxis::X);
+		return;
+	}
+	if (event.GetId() == normalize_y_button)
+		NormalizeScale(VisualScaleAxis::Y);
+}
+
+void VisualToolScale::UpdateToolbarState() {
+	if (!toolbar)
+		return;
+
+	if (normalize_x_button >= 0)
+		toolbar->EnableTool(normalize_x_button, CanNormalizeScale(VisualScaleAxis::X));
+	if (normalize_y_button >= 0)
+		toolbar->EnableTool(normalize_y_button, CanNormalizeScale(VisualScaleAxis::Y));
+}
+
+bool VisualToolScale::CanNormalizeScale(VisualScaleAxis axis) {
+	auto const fixed_axis = ToPolicyAxis(axis);
+	if (!active_line || !fixed_axis)
+		return false;
+
+	auto const& selected = c->GetCore().selectionController->GetSelectedSet();
+	if (selected.empty())
+		return false;
+
+	std::vector<Vector2D> current;
+	current.reserve(selected.size());
+	for (auto *line : selected) {
+		Vector2D scale;
+		GetLineScale(line, scale);
+		current.push_back(scale);
+	}
+	return NormalizeSelectionTo100(current, *fixed_axis).has_value();
+}
+
+bool VisualToolScale::NormalizeScale(VisualScaleAxis axis) {
+	auto const fixed_axis = ToPolicyAxis(axis);
+	if (!active_line || !fixed_axis)
+		return false;
+
+	auto const& selected = c->GetCore().selectionController->GetSelectedSet();
+	std::vector<AssDialogue *> lines;
+	std::vector<Vector2D> current;
+	lines.reserve(selected.size());
+	current.reserve(selected.size());
+	for (auto *line : selected) {
+		Vector2D scale;
+		GetLineScale(line, scale);
+		lines.push_back(line);
+		current.push_back(scale);
+	}
+	auto normalized = NormalizeSelectionTo100(current, *fixed_axis);
+	if (!normalized)
+		return false;
+
+	command_session.ResetCommitId();
+	auto reset_commit_id = agi::make_scope_exit([this] { command_session.ResetCommitId(); });
+	for (std::size_t i = 0; i < lines.size(); ++i) {
+		SetOverride(lines[i], "\\fscx", float_to_string((*normalized)[i].X()));
+		SetOverride(lines[i], "\\fscy", float_to_string((*normalized)[i].Y()));
+	}
+	CommitAndRefresh(_("scale normalization"));
+	return true;
 }
 
 void VisualToolScale::Draw() {
@@ -187,26 +313,30 @@ void VisualToolScale::UpdateHold() {
 }
 
 void VisualToolScale::DoRefresh() {
-	if (!active_line) return;
+	if (!active_line) {
+		UpdateToolbarState();
+		return;
+	}
 
 	GetLineScale(active_line, scale);
 	GetLineRotation(active_line, rx, ry, rz);
 	pos = FromScriptCoords(GetLinePosition(active_line));
+	UpdateToolbarState();
 }
 
 bool VisualToolScale::Nudge(Vector2D direction, VisualNudgeMagnitude magnitude) {
 	if (!active_line)
 		return false;
 
-	float const step = static_cast<float>(
-		magnitude == VisualNudgeMagnitude::Large
-			? OPT_GET("Tool/Visual/Nudge/Scale Step Large")->GetInt()
-			: OPT_GET("Tool/Visual/Nudge/Scale Step")->GetInt());
+	float const step = static_cast<float>(GetNudgeStep(
+		"Tool/Visual/Nudge/Scale Step",
+		"Tool/Visual/Nudge/Scale Step Large",
+		magnitude));
 
-	// Same polarity as UpdateHold: right → +\fscx, up → +\fscy
+	// Same polarity as UpdateHold: right -> +\fscx, up -> +\fscy.
 	scale = Vector2D(0, 0).Max(scale + Vector2D(direction.X(), -direction.Y()) * step);
-	SetSelectedOverride("\\fscx", std::to_string(static_cast<int>(scale.X())));
-	SetSelectedOverride("\\fscy", std::to_string(static_cast<int>(scale.Y())));
+	SetSelectedOverride("\\fscx", float_to_string(scale.X()));
+	SetSelectedOverride("\\fscy", float_to_string(scale.Y()));
 
 	DoRefresh();
 	CommitNudge();

@@ -199,6 +199,18 @@ TEST_F(lagi_option, int_vs_double) {
 	EXPECT_NO_THROW(opt.Get("double")->GetDouble());
 }
 
+TEST_F(lagi_option, user_int_coerces_onto_default_double) {
+	const char def[] = R"({"step" : 1.0})";
+	{
+		std::ofstream out("data/options/tmp");
+		ASSERT_TRUE(out);
+		out << R"({"step" : 3})";
+	}
+	agi::Options opt("data/options/tmp", def, agi::Options::FLUSH_SKIP);
+	ASSERT_NO_THROW(opt.ConfigUser());
+	EXPECT_DOUBLE_EQ(3.0, opt.Get("step")->GetDouble());
+}
+
 struct empty_arr_options : public agi::Options {
 	empty_arr_options() : agi::Options("", "{ \"arr\" : [] }", agi::Options::FLUSH_SKIP) { }
 };

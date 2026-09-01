@@ -44,7 +44,13 @@ namespace agi {
 
 CONFIG_DEFINE_SET(String, std::string)
 CONFIG_DEFINE_SET(Int, int64_t)
-CONFIG_DEFINE_SET(Double, double)
+void OptionValueDouble::Set(const OptionValue *nv) {
+	if (nv->GetType() == OptionType::Int)
+		SetValue(static_cast<double>(nv->GetInt()));
+	else
+		SetValue(nv->GetDouble());
+}
+void OptionValueListDouble::Set(const OptionValue *nv) { SetValue(nv->GetListDouble()); }
 CONFIG_DEFINE_SET(Color, Color)
 CONFIG_DEFINE_SET(Bool, bool)
 }

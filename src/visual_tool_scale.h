@@ -22,7 +22,19 @@
 #include "visual_feature.h"
 #include "visual_tool.h"
 
+class wxCommandEvent;
+class wxToolBar;
+
+enum class VisualScaleAxis {
+	X,
+	Y,
+};
+
 class VisualToolScale final : public VisualTool<VisualDraggableFeature> {
+	wxToolBar *toolbar = nullptr;
+	int normalize_x_button = -1;
+	int normalize_y_button = -1;
+
 	Vector2D scale; ///< The current scale
 	Vector2D initial_scale; ///< The scale at the beginning of the current hold
 	Vector2D pos; ///< Position of the line
@@ -38,8 +50,14 @@ class VisualToolScale final : public VisualTool<VisualDraggableFeature> {
 	void Draw() override;
 	bool SupportsOverlayContext() const override { return true; }
 	void DrawOverlay(VideoOverlayDrawContext &context) override;
+	void OnSubTool(wxCommandEvent &event);
+	void UpdateToolbarState();
 public:
 	VisualToolScale(VideoDisplay *parent, agi::Context *context);
+	~VisualToolScale() override;
+	void SetToolbar(wxToolBar *toolbar) override;
+	bool CanNormalizeScale(VisualScaleAxis axis);
+	bool NormalizeScale(VisualScaleAxis axis);
 	bool Nudge(Vector2D direction, VisualNudgeMagnitude magnitude) override;
 	bool SupportsNudge() const override { return true; }
 	std::string GetHotkeyContext() const override { return "Visual Scale"; }

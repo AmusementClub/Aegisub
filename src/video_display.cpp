@@ -68,6 +68,7 @@
 #include "video_frame_wx.h"
 #include "visual_guide_overlay.h"
 #include "visual_tool.h"
+#include "visual_tool_scale.h"
 
 #include <libaegisub/color.h>
 #include <libaegisub/make_unique.h>
@@ -2890,6 +2891,16 @@ bool VideoDisplay::CanNudgeTool() const {
 
 bool VideoDisplay::NudgeTool(Vector2D direction, VisualNudgeMagnitude magnitude) {
 	return tool && tool->Nudge(direction, magnitude);
+}
+
+bool VideoDisplay::CanNormalizeScaleTool(VisualScaleAxis axis) const {
+	auto *scale_tool = dynamic_cast<VisualToolScale *>(tool.get());
+	return scale_tool && scale_tool->CanNormalizeScale(axis);
+}
+
+bool VideoDisplay::NormalizeScaleTool(VisualScaleAxis axis) {
+	auto *scale_tool = dynamic_cast<VisualToolScale *>(tool.get());
+	return scale_tool && scale_tool->NormalizeScale(axis);
 }
 
 bool VideoDisplay::SetToolSubMode(int mode) {

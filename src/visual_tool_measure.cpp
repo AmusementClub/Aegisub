@@ -125,6 +125,23 @@ VisualToolMeasure::VisualToolMeasure(VideoDisplay *parent, agi::Context *context
 			RebindPerspective();
 		this->parent->Render();
 	}));
+	auto subscribe_solver_option = [this](char const* name, bool& cached) {
+		connections.push_back(OPT_SUB(name, [this, &cached](agi::OptionValue const& value) {
+			bool const next = value.GetBool();
+			if (cached == next)
+				return;
+			cached = next;
+			if (this->perspective_diagnostic_depends_on_solver_options) {
+				this->perspective_diagnostic.clear();
+				this->perspective_diagnostic_depends_on_solver_options = false;
+				this->c->ShowStatus({});
+			}
+			this->UpdateToolbarState();
+			this->parent->Render();
+		}));
+	};
+	subscribe_solver_option(kPerspectiveFitTextOption, fit_text_to_target);
+	subscribe_solver_option(kPerspectiveFaxFrzOnlyOption, fax_frz_only);
 }
 
 VisualToolMeasure::~VisualToolMeasure() {

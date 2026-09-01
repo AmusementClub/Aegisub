@@ -117,6 +117,37 @@ namespace {
 		STR_HELP("Clip subtitles to a vectorial area")
 	};
 
+	template<VisualScaleAxis Axis>
+	struct visual_scale_normalize : public Command {
+		CMD_TYPE(COMMAND_VALIDATE)
+
+		bool Validate(const agi::Context *c) override {
+			auto *display = c->GetUI().videoDisplay;
+			return display && display->CanNormalizeScaleTool(Axis);
+		}
+
+		void operator()(agi::Context *c) override {
+			if (auto *display = c->GetUI().videoDisplay)
+				display->NormalizeScaleTool(Axis);
+		}
+	};
+
+	struct visual_scale_normalize_x final : public visual_scale_normalize<VisualScaleAxis::X> {
+		CMD_NAME("video/tool/scale/normalize/x")
+		CMD_ICON(visual_scale_x_100)
+		STR_MENU("Scale: Set X to 100%")
+		STR_DISP("Scale: Set X to 100%")
+		STR_HELP("Set X scale to 100% and adjust Y to preserve the ratio")
+	};
+
+	struct visual_scale_normalize_y final : public visual_scale_normalize<VisualScaleAxis::Y> {
+		CMD_NAME("video/tool/scale/normalize/y")
+		CMD_ICON(visual_scale_y_100)
+		STR_MENU("Scale: Set Y to 100%")
+		STR_DISP("Scale: Set Y to 100%")
+		STR_HELP("Set Y scale to 100% and adjust X to preserve the ratio")
+	};
+
 	template<int dx, int dy, VisualNudgeMagnitude Mag>
 	struct visual_tool_nudge : public Command {
 		CMD_TYPE(COMMAND_VALIDATE)
@@ -271,6 +302,8 @@ namespace cmd {
 		reg(agi::make_unique<visual_mode_rotate_z>());
 		reg(agi::make_unique<visual_mode_rotate_xy>());
 		reg(agi::make_unique<visual_mode_scale>());
+		reg(agi::make_unique<visual_scale_normalize_x>());
+		reg(agi::make_unique<visual_scale_normalize_y>());
 		reg(agi::make_unique<visual_mode_clip>());
 		reg(agi::make_unique<visual_mode_vector_clip>());
 		reg(agi::make_unique<visual_mode_measure>());

@@ -169,6 +169,10 @@ protected:
 
 	/// Commit a keyboard nudge and schedule undo-coalesce reset after idle.
 	void CommitNudge(wxString message = wxString());
+	[[nodiscard]] static double GetNudgeStep(
+		char const* option,
+		char const* large_option,
+		VisualNudgeMagnitude magnitude);
 
 	/// Get the line's position if it's set, or it's default based on style if not
 	Vector2D GetLinePosition(AssDialogue *diag);

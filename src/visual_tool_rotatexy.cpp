@@ -272,10 +272,10 @@ bool VisualToolRotateXY::Nudge(Vector2D direction, VisualNudgeMagnitude magnitud
 	if (!active_line)
 		return false;
 
-	float const step = static_cast<float>(
-		magnitude == VisualNudgeMagnitude::Large
-			? OPT_GET("Tool/Visual/Nudge/Rotate Step Large")->GetInt()
-			: OPT_GET("Tool/Visual/Nudge/Rotate Step")->GetInt());
+	float const step = static_cast<float>(GetNudgeStep(
+		"Tool/Visual/Nudge/Rotate Step",
+		"Tool/Visual/Nudge/Rotate Step Large",
+		magnitude));
 
 	// Same polarity as UpdateHold: right → +\fry, up → +\frx
 	if (direction.X() != 0.f) {

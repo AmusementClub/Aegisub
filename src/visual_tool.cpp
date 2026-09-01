@@ -335,6 +335,14 @@ void VisualToolBase::Commit(wxString message) {
 		changed_lines);
 }
 
+double VisualToolBase::GetNudgeStep(
+	char const* option,
+	char const* large_option,
+	VisualNudgeMagnitude magnitude) {
+	return OPT_GET(magnitude == VisualNudgeMagnitude::Large ? large_option : option)
+		->GetDouble();
+}
+
 void VisualToolBase::CommitNudge(wxString message) {
 	if (changed_lines.empty()) {
 		auto const& selected = c->GetCore().selectionController->GetSelectedSet();

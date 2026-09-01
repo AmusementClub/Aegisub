@@ -75,6 +75,7 @@ class VideoController;
 class VideoOverlayDrawContext;
 struct VisualGuideViewport;
 class VisualToolBase;
+enum class VisualScaleAxis;
 enum class VisualNudgeMagnitude;
 class wxComboBox;
 class wxTextCtrl;
@@ -400,6 +401,10 @@ public:
 	bool CanNudgeTool() const;
 	/// Forward a keyboard nudge to the current visual tool.
 	bool NudgeTool(Vector2D direction, VisualNudgeMagnitude magnitude);
+	/// Whether the Scale tool can normalize every selected line on this axis.
+	bool CanNormalizeScaleTool(VisualScaleAxis axis) const;
+	/// Normalize every selected line on one axis using the current Scale tool.
+	bool NormalizeScaleTool(VisualScaleAxis axis);
 	/// Select a tool-specific sub-mode on the current visual tool.
 	bool SetToolSubMode(int mode);
 	/// Current tool sub-mode, or -1 when none.

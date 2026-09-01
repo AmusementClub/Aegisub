@@ -246,10 +246,10 @@ bool VisualToolRotateZ::Nudge(Vector2D direction, VisualNudgeMagnitude magnitude
 	bool changed = false;
 
 	if (direction.X() != 0.f) {
-		float const step = static_cast<float>(
-			magnitude == VisualNudgeMagnitude::Large
-				? OPT_GET("Tool/Visual/Nudge/Rotate Step Large")->GetInt()
-				: OPT_GET("Tool/Visual/Nudge/Rotate Step")->GetInt());
+		float const step = static_cast<float>(GetNudgeStep(
+			"Tool/Visual/Nudge/Rotate Step",
+			"Tool/Visual/Nudge/Rotate Step Large",
+			magnitude));
 		// Right = clockwise = +\frz in ASS
 		angle = fmodf(angle + direction.X() * step + 360.f, 360.f);
 		SetSelectedOverride("\\frz", agi::format("%.4g", angle));
@@ -257,10 +257,10 @@ bool VisualToolRotateZ::Nudge(Vector2D direction, VisualNudgeMagnitude magnitude
 	}
 
 	if (direction.Y() != 0.f) {
-		float const step = static_cast<float>(
-			magnitude == VisualNudgeMagnitude::Large
-				? OPT_GET("Tool/Visual/Nudge/Origin Step Large")->GetInt()
-				: OPT_GET("Tool/Visual/Nudge/Origin Step")->GetInt());
+		float const step = static_cast<float>(GetNudgeStep(
+			"Tool/Visual/Nudge/Origin Step",
+			"Tool/Visual/Nudge/Origin Step Large",
+			magnitude));
 		// Up = negative script Y (same coordinate system as mouse drag of \\org)
 		Vector2D const delta(0.f, direction.Y() * step);
 

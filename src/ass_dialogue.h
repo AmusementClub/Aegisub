@@ -76,6 +76,10 @@ public:
 
 	virtual AssBlockType GetType() const = 0;
 	virtual std::string GetText() { return text; }
+	/// The block's text exactly as parsed. Unlike GetText() this never
+	/// normalizes (GetText on an override block re-serializes its tags), so
+	/// callers rewriting text they do not own can preserve the original bytes.
+	std::string const& GetRawText() const { return text; }
 };
 
 class AssDialogueBlockPlain final : public AssDialogueBlock {

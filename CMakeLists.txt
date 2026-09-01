@@ -781,6 +781,7 @@ set(AEGISUB_CORE_SOURCES
     src/ass_style.cpp
     src/ass_style_resolution.cpp
     src/ass_style_storage.cpp
+    src/ass_tag_scanner.cpp
     src/ass_time_projection.cpp
     # Subtitle formats
     src/subtitle_format.cpp

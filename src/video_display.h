@@ -50,6 +50,7 @@
 #include <typeinfo>
 #include <utility>
 #include <vector>
+#include <wx/cursor.h>
 #include <wx/glcanvas.h>
 
 #ifdef AEGISUB_WITH_SKIA_VIDEO_TOOLS
@@ -116,6 +117,12 @@ class VideoDisplay final : public wxGLCanvas {
 		std::vector<std::pair<double, double>> points;
 		std::function<void(
 			std::vector<std::pair<double, double>>, int, bool)> completed;
+		/// Cursor shown over the canvas for the duration of the session, so the
+		/// mode is visible rather than inferred from a status line that times out.
+		wxCursor cursor;
+		/// Localized "what to do now, how to get out" hint, re-shown whenever the
+		/// pointer re-enters the canvas.
+		wxString hint;
 	};
 	std::optional<PointSelectionSession> point_selection;
 
@@ -335,6 +342,10 @@ class VideoDisplay final : public wxGLCanvas {
 	void DoRender();
 	void LayoutContainingSizers();
 	void FinishPointSelection(bool cancelled, bool notify);
+	/// Apply the cursor the current state asks for: the point-selection session's
+	/// while one is active, otherwise the active tool's idle cursor. Single owner
+	/// of the canvas cursor, so ending a session cannot strand the tool's.
+	void RefreshCursor();
 	void FlushVisualToolEditBoxSync();
 
 public:
@@ -383,14 +394,30 @@ public:
 	/// Begin a host-owned video point-selection session. Coordinates are
 	/// returned in script resolution when script_coordinates is true, otherwise
 	/// in source-frame pixels. Starting a new session cancels the old one.
+	///
+	/// `cursor` is shown over the canvas while the session is armed and should
+	/// say what the mode does (an eyedropper for colour sampling); an invalid
+	/// cursor falls back to a crosshair. `hint` overrides the generic
+	/// "click n points" status hint, which is re-shown on every canvas re-entry
+	/// because the status bar clears itself on a timer.
 	void BeginPointSelection(
 		std::string owner,
 		int point_count,
 		bool script_coordinates,
 		std::function<void(
-			std::vector<std::pair<double, double>>, int, bool)> completed);
+			std::vector<std::pair<double, double>>, int, bool)> completed,
+		wxCursor cursor = wxNullCursor,
+		wxString hint = wxString());
 	/// Cancel the active selection only when its opaque owner matches.
 	void CancelPointSelection(std::string const& owner, bool notify = true);
+
+	/// Map a display-client position onto a virtual canvas of the given size
+	/// (script resolution or source frame), handling letterbox, zoom, pan and
+	/// DPI scale. Returns nullopt when outside the video viewport.
+	std::optional<std::pair<double, double>> MapClientToVideoPoint(
+		wxPoint client_pos, double target_width, double target_height) const;
+	/// Map a global screen position to the nearest raw video pixel.
+	std::optional<wxPoint> MapScreenToVideoPixel(wxPoint screen_pos) const;
 
 	void SetTool(std::unique_ptr<VisualToolBase> new_tool);
 	bool IsVisualToolInteracting() const noexcept;

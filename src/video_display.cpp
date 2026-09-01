@@ -2580,36 +2580,32 @@ void VideoDisplay::OnSizeEvent(wxSizeEvent &event) {
 }
 
 void VideoDisplay::OnMouseEvent(wxMouseEvent& event) {
+	// FrameMain clears the status bar on a timer while the session stays armed
+	// indefinitely, so re-state the mode whenever the pointer comes back.
+	if (point_selection && event.Entering())
+		con->ShowStatus(from_wx(point_selection->hint));
+
 	if (point_selection && event.LeftDown()) {
 		SetFocus();
-		auto point = event.GetPosition();
-		auto left = static_cast<double>(viewport_left) / scale_factor;
-		auto top = static_cast<double>(viewport_top) / scale_factor;
-		auto width = static_cast<double>(viewport_width) / scale_factor;
-		auto height = static_cast<double>(viewport_height) / scale_factor;
-		if (width > 0.0 && height > 0.0 && point.x >= left && point.y >= top &&
-			point.x <= left + width && point.y <= top + height) {
-			double target_width = 0.0;
-			double target_height = 0.0;
-			if (point_selection->script_coordinates) {
-				int script_width = 0;
-				int script_height = 0;
-				con->ass->GetResolution(script_width, script_height);
-				target_width = script_width;
-				target_height = script_height;
-			}
-			else if (auto* provider = con->project->VideoProvider()) {
-				target_width = provider->GetWidth();
-				target_height = provider->GetHeight();
-			}
-			if (target_width > 0.0 && target_height > 0.0) {
-				point_selection->points.emplace_back(
-					(point.x - left) * target_width / width,
-					(point.y - top) * target_height / height);
-				if (static_cast<int>(point_selection->points.size()) >=
-					point_selection->point_count)
-					FinishPointSelection(false, true);
-			}
+		double target_width = 0.0;
+		double target_height = 0.0;
+		if (point_selection->script_coordinates) {
+			int script_width = 0;
+			int script_height = 0;
+			con->ass->GetResolution(script_width, script_height);
+			target_width = script_width;
+			target_height = script_height;
+		}
+		else if (auto *provider = con->project->VideoProvider()) {
+			target_width = provider->GetWidth();
+			target_height = provider->GetHeight();
+		}
+		auto mapped = MapClientToVideoPoint(event.GetPosition(), target_width, target_height);
+		if (mapped) {
+			point_selection->points.emplace_back(*mapped);
+			if (static_cast<int>(point_selection->points.size()) >=
+				point_selection->point_count)
+				FinishPointSelection(false, true);
 		}
 		return;
 	}
@@ -2699,9 +2695,18 @@ void VideoDisplay::OnMouseWheel(wxMouseEvent& event) {
 }
 
 void VideoDisplay::OnContextMenu(wxContextMenuEvent&) {
+	// Right-click is the usual "get me out of this mode" gesture, and opening a
+	// menu mid-session would strand the pick armed behind it.
+	if (point_selection) {
+		FinishPointSelection(true, true);
+		return;
+	}
 	if (!context_menu) context_menu = menu::GetMenu("video_context", (wxID_HIGHEST + 1) + 9000, con);
+	// Show the pointer for the menu even under a tool that hides it, then hand
+	// the canvas back; PopupMenu returns once the menu closes.
 	SetCursor(wxNullCursor);
 	menu::OpenPopupMenu(context_menu.get(), this);
+	RefreshCursor();
 }
 
 void VideoDisplay::OnKeyDown(wxKeyEvent &event) {
@@ -2722,19 +2727,27 @@ void VideoDisplay::BeginPointSelection(
 	std::string owner,
 	int point_count,
 	bool script_coordinates,
-	std::function<void(std::vector<std::pair<double, double>>, int, bool)> completed) {
+	std::function<void(std::vector<std::pair<double, double>>, int, bool)> completed,
+	wxCursor cursor,
+	wxString hint) {
 	if (owner.empty() || point_count <= 0 || !completed)
 		throw std::invalid_argument("Invalid video point-selection session");
 	if (!con->project->VideoProvider())
 		throw std::runtime_error("Video point selection requires an open video");
 	FinishPointSelection(true, true);
+	if (hint.empty())
+		hint = fmt_plural(
+			point_count,
+			"Click a point in the video; Escape or right-click cancels.",
+			"Click %d points in the video; Escape or right-click cancels.",
+			point_count);
 	point_selection = PointSelectionSession{
-		std::move(owner), point_count, script_coordinates, {}, std::move(completed)};
-	SetCursor(wxCursor(wxCURSOR_CROSS));
+		std::move(owner), point_count, script_coordinates, {}, std::move(completed),
+		cursor.IsOk() ? cursor : wxCursor(wxCURSOR_CROSS), hint};
+	RefreshCursor();
+	// The session answers Escape, so it needs the focus the click came from.
 	SetFocus();
-	con->ShowStatus(
-		"Select " + std::to_string(point_count) +
-		" point(s) in the video; press Escape to cancel.");
+	con->ShowStatus(from_wx(hint));
 }
 
 void VideoDisplay::CancelPointSelection(std::string const& owner, bool notify) {
@@ -2742,15 +2755,63 @@ void VideoDisplay::CancelPointSelection(std::string const& owner, bool notify) {
 		FinishPointSelection(true, notify);
 }
 
+std::optional<std::pair<double, double>> VideoDisplay::MapClientToVideoPoint(
+	wxPoint client_pos, double target_width, double target_height) const {
+	auto const left = static_cast<double>(viewport_left) / scale_factor;
+	auto const top = static_cast<double>(viewport_top) / scale_factor;
+	auto const width = static_cast<double>(viewport_width) / scale_factor;
+	auto const height = static_cast<double>(viewport_height) / scale_factor;
+	if (width <= 0.0 || height <= 0.0 || target_width <= 0.0 || target_height <= 0.0)
+		return {};
+	if (client_pos.x < left || client_pos.y < top ||
+		client_pos.x > left + width || client_pos.y > top + height)
+		return {};
+	return std::make_pair(
+		(client_pos.x - left) * target_width / width,
+		(client_pos.y - top) * target_height / height);
+}
+
+std::optional<wxPoint> VideoDisplay::MapScreenToVideoPixel(wxPoint screen_pos) const {
+	auto *provider = con ? con->project->VideoProvider() : nullptr;
+	if (!provider || provider->GetWidth() <= 0 || provider->GetHeight() <= 0)
+		return {};
+	auto mapped = MapClientToVideoPoint(
+		ScreenToClient(screen_pos),
+		static_cast<double>(provider->GetWidth()),
+		static_cast<double>(provider->GetHeight()));
+	if (!mapped)
+		return {};
+	return wxPoint(
+		static_cast<int>(std::llround(mapped->first)),
+		static_cast<int>(std::llround(mapped->second)));
+}
+
+void VideoDisplay::RefreshCursor() {
+	if (point_selection) {
+		SetCursor(point_selection->cursor);
+		return;
+	}
+	auto const idle = tool ? tool->GetIdleCursor() : wxCURSOR_NONE;
+	SetCursor(idle == wxCURSOR_NONE ? wxNullCursor : wxCursor(idle));
+}
+
 void VideoDisplay::FinishPointSelection(bool cancelled, bool notify) {
 	if (!point_selection) return;
 	auto session = std::move(*point_selection);
 	point_selection.reset();
-	SetCursor(wxNullCursor);
+	// Hand the canvas back to the tool: resetting to the platform default here
+	// would strand a tool that hides the pointer to draw its own crosshair.
+	RefreshCursor();
 	if (notify) {
-		auto frame = con && con->videoController
-			? con->videoController->GetFrameN()
-			: 0;
+		int frame = 0;
+		if (con && con->videoController) {
+			// GetFrameN() is the last *requested* frame and can run ahead of
+			// the picture on screen during playback or scrubbing; consumers
+			// sampling pixels want the frame that was actually presented.
+			frame = con->videoController->GetPresentedFrameN();
+			if (frame < 0)
+				frame = con->videoController->GetFrameN();
+		}
 		session.completed(std::move(session.points), frame, cancelled);
 	}
 }
@@ -2794,6 +2855,8 @@ void VideoDisplay::SetTool(std::unique_ptr<VisualToolBase> new_tool) {
 #endif
 	// Set the tool first to prevent repeated initialization from VideoDisplay::Render
 	tool = std::move(new_tool);
+	// A session cursor outranks the tool's, so this is a no-op while one is armed.
+	RefreshCursor();
 
 	// Hide the tool bar first to eliminate unecessary size changes
 	toolBar->Show(false);

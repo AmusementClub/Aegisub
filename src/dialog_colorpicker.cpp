@@ -1127,11 +1127,7 @@ void DialogColorPicker::OnRecentSelect(ValueEvent<agi::Color> &evt) {
 void DialogColorPicker::OnDropperMouse(wxMouseEvent &evt) {
 	if (evt.LeftDown() && !screen_dropper_icon->HasCapture()) {
 		Freeze();
-#ifdef WIN32
-		screen_dropper_icon->SetCursor(wxCursor(wxS("eyedropper_cursor")));
-#else
-		screen_dropper_icon->SetCursor(*wxCROSS_CURSOR);
-#endif
+		screen_dropper_icon->SetCursor(GetEyedropperCursor());
 		wxSize size = screen_dropper_icon->GetSize();
 		screen_dropper_icon->SetBitmap(wxNullBitmap);
 		screen_dropper_icon->SetSize(size);

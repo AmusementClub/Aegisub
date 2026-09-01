@@ -27,6 +27,8 @@
 //
 // Aegisub Project http://www.aegisub.org/
 
+#pragma once
+
 /// @file ass_override.h
 /// @see ass_override.cpp
 /// @ingroup subs_storage

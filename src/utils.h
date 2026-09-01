@@ -39,6 +39,7 @@
 #include <vector>
 
 #include <wx/bitmap.h>
+#include <wx/cursor.h>
 #include <wx/string.h>
 
 class wxKeyEvent;
@@ -68,6 +69,11 @@ void SetFloatOnParent(wxWindow *window);
 /// @param evt The event
 /// @return Should the calling code process the event?
 bool ForwardMouseWheelEvent(wxWindow *source, wxMouseEvent &evt);
+
+/// The eyedropper cursor used by every colour-sampling mode, so the video
+/// quick pick and the colour picker's screen dropper look the same. Falls back
+/// to a crosshair on ports without the bundled cursor resource.
+wxCursor GetEyedropperCursor();
 
 bool IsVideoDpiScaled();
 int ScaleVideoUi(wxWindow *window, int value);

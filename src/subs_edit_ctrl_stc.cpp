@@ -88,6 +88,11 @@ namespace {
 	constexpr int CHAR_MARKER_OTHER_SPACE_ALT_INDICATOR = 8;
 	constexpr int CHAR_MARKER_ERROR_INDICATOR = 6;           // solid error box
 	constexpr int CHAR_MARKER_ERROR_ALT_INDICATOR = 9;
+	// Colour swatch indicator over the hex digits of \c-family parameters:
+	// a box stroked and tinted in the tag's colour. The colour comes from the
+	// per-range indicator value (INDICFLAG_VALUEFORE); the value must carry
+	// wxSTC_INDICVALUEBIT or a pure-black swatch would vanish.
+	constexpr int COLOR_SWATCH_BOX_INDICATOR = 10;
 	constexpr int CHAR_MARKER_DWELL_MS = 500;
 
 	bool IsTemplateLine(agi::Context *context) {
@@ -202,6 +207,17 @@ namespace {
 		return character == '{' || character == '}' || character == '(' || character == ')';
 	}
 
+	int ScintillaColourOf(agi::Color const& color) {
+		// Scintilla colours are 0x00BBGGRR.
+		return (color.b << 16) | (color.g << 8) | color.r;
+	}
+
+	/// Sibling of subtitle_edit_ops.cpp's is_escaped_open_brace: same ParseTags
+	/// rule (a '{' after an odd number of backslashes is plain text), different
+	/// container. This one reads the live control a byte at a time because brace
+	/// highlighting runs on every UPDATEUI and must not copy the whole buffer;
+	/// the ops one takes the string_view the swatch pass already holds. Keep the
+	/// odd/even test in step if either changes.
 	bool IsEscapedOpenBrace(wxStyledTextCtrl const& ctrl, int position) {
 		if (ctrl.GetCharAt(position) != '{')
 			return false;
@@ -419,6 +435,7 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 		event.Skip();
 	});
 	Bind(wxEVT_STC_DOUBLECLICK, &SubsStyledTextEditCtrl::OnDoubleClick, this);
+	Bind(wxEVT_STC_INDICATOR_RELEASE, &SubsStyledTextEditCtrl::OnIndicatorRelease, this);
 	Bind(wxEVT_STC_START_DRAG, &SubsStyledTextEditCtrl::OnStartDrag, this);
 	Bind(wxEVT_STC_DRAG_OVER, &SubsStyledTextEditCtrl::OnDragOver, this);
 	Bind(wxEVT_STC_DO_DROP, &SubsStyledTextEditCtrl::OnDoDrop, this);
@@ -456,6 +473,7 @@ SubsStyledTextEditCtrl::SubsStyledTextEditCtrl(wxWindow* parent, wxSize wsize, l
 
 	OPT_SUB("Colour/Subtitle/Background", &SubsStyledTextEditCtrl::SetStyles, this);
 	OPT_SUB("Subtitle/Highlight/Syntax", &SubsStyledTextEditCtrl::UpdateStyle, this);
+	OPT_SUB("Subtitle/Highlight/Color Swatches", &SubsStyledTextEditCtrl::UpdateStyle, this);
 	OPT_SUB("App/Call Tips", &SubsStyledTextEditCtrl::UpdateCallTip, this);
 
 	SubscribeCharacterMarkerOptions();
@@ -623,6 +641,21 @@ void SubsStyledTextEditCtrl::OnKeyDown(wxKeyEvent &event) {
 		return;
 	}
 
+	// Alt+Left/Right: walk the block under the caret through the line one step
+	// at a time. Alt+Shift+arrow is Scintilla's rectangular selection, so this
+	// requires Alt alone.
+	if ((event.GetKeyCode() == WXK_LEFT || event.GetKeyCode() == WXK_RIGHT)
+		&& event.GetModifiers() == wxMOD_ALT)
+	{
+		if (MoveBlockUnderCaret(event.GetKeyCode() == WXK_LEFT
+			? aegisub::subtitle_edit_ops::BlockMoveDirection::Left
+			: aegisub::subtitle_edit_ops::BlockMoveDirection::Right))
+		{
+			event.Skip(false);
+			return;
+		}
+	}
+
 	aegisub::subtitle_edit_ops::AutoCloseKey auto_close_key;
 	if (GetAutoCloseKeyDownKey(event, auto_close_key)) {
 		wxCharBuffer old = GetTextRaw();
@@ -653,6 +686,40 @@ void SubsStyledTextEditCtrl::OnKeyDown(wxKeyEvent &event) {
 		SetSelection(sel_start + 2, sel_start + 2);
 		event.Skip(false);
 	}
+}
+
+bool SubsStyledTextEditCtrl::MoveBlockUnderCaret(aegisub::subtitle_edit_ops::BlockMoveDirection direction) {
+	// Tokenize the live text rather than reusing tokenized_line: that pair is
+	// refreshed from STYLENEEDED at paint time, and an edit spliced at byte
+	// offsets from tokens a keystroke older would cut the wrong bytes.
+	wxCharBuffer const buffer = GetTextRaw();
+	std::string const text(buffer.data(), buffer.length());
+	auto const tokens = agi::ass::TokenizeDialogueBody(text, IsTemplateLine(context));
+
+	int const anchor = GetAnchor();
+	int const caret = GetCurrentPos();
+	auto const edit = aegisub::subtitle_edit_ops::MoveBlockAtPosition(
+		text, tokens, caret, direction);
+	if (!edit.handled)
+		return false;
+
+	auto in_block = [&](int position) {
+		return position >= edit.block_start && position <= edit.block_end;
+	};
+	// A selection wholly inside the block rides along with it, so a selected
+	// tag stays selected across a run of nudges; anything wider collapses to
+	// the caret, which the block carries either way.
+	bool const keep_selection = in_block(anchor) && in_block(caret);
+	int const new_caret = in_block(caret) ? caret + edit.delta : caret;
+	int const new_anchor = keep_selection ? anchor + edit.delta : new_caret;
+
+	BeginUndoAction();
+	SetSelection(edit.replace_start, edit.replace_end);
+	ReplaceSelection(wxString::FromUTF8Unchecked(edit.replacement.c_str()));
+	SetAnchor(new_anchor);
+	SetCurrentPos(new_caret);
+	EndUndoAction();
+	return true;
 }
 
 void SubsStyledTextEditCtrl::OnStartDrag(wxStyledTextEvent &event) {
@@ -979,6 +1046,21 @@ void SubsStyledTextEditCtrl::SetStyles() {
 	ConfigureCharacterMarkerIndicator(this, CHAR_MARKER_OTHER_SPACE_ALT_INDICATOR, wxSTC_INDIC_DASH, marker_colour, 0, 200);
 	ConfigureCharacterMarkerIndicator(this, CHAR_MARKER_ERROR_INDICATOR, wxSTC_INDIC_STRAIGHTBOX, error_colour, 40, 220);
 	ConfigureCharacterMarkerIndicator(this, CHAR_MARKER_ERROR_ALT_INDICATOR, wxSTC_INDIC_STRAIGHTBOX, error_colour, 40, 220);
+
+	// Colour swatch indicator. With INDICFLAG_VALUEFORE the box stroke and
+	// fill come from each range's indicator value rather than a static
+	// foreground, so every swatch carries its own colour and no static
+	// IndicatorSetForeground is needed (Indicator::Draw overwrites it from the
+	// range value). The parameter text keeps its syntax colour; the light tint
+	// plus stroke is the swatch.
+	IndicatorSetStyle(COLOR_SWATCH_BOX_INDICATOR, wxSTC_INDIC_STRAIGHTBOX);
+	IndicatorSetFlags(COLOR_SWATCH_BOX_INDICATOR, wxSTC_INDICFLAG_VALUEFORE);
+	// Under the text, like every other indicator here: the tint then sits
+	// between the selection background and the glyphs instead of washing over
+	// them (indicators draw after the selection background either way).
+	IndicatorSetUnder(COLOR_SWATCH_BOX_INDICATOR, true);
+	IndicatorSetAlpha(COLOR_SWATCH_BOX_INDICATOR, 40);
+	IndicatorSetOutlineAlpha(COLOR_SWATCH_BOX_INDICATOR, 220);
 }
 
 void SubsStyledTextEditCtrl::UpdateStyle() {
@@ -1019,12 +1101,23 @@ void SubsStyledTextEditCtrl::UpdateStyle() {
 			perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.markers", text_bytes);
 			UpdateCharacterMarkers();
 		}
+		// Colour swatches are independent of syntax highlighting too.
+		{
+			perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.swatches", text_bytes);
+			UpdateColorSwatches();
+		}
 		return;
 	}
 
 	if (line_text.empty()) {
-		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.markers", text_bytes);
-		UpdateCharacterMarkers();
+		{
+			perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.markers", text_bytes);
+			UpdateCharacterMarkers();
+		}
+		{
+			perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.swatches", text_bytes);
+			UpdateColorSwatches();
+		}
 		return;
 	}
 
@@ -1048,6 +1141,11 @@ void SubsStyledTextEditCtrl::UpdateStyle() {
 	{
 		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.markers", text_bytes);
 		UpdateCharacterMarkers();
+	}
+
+	{
+		perf_trace::VideoUiDurationScope trace("grid_select.editbox.stc.style.swatches", text_bytes);
+		UpdateColorSwatches();
 	}
 }
 
@@ -1697,4 +1795,132 @@ void SubsStyledTextEditCtrl::OnCharacterMarkerDwellEnd(wxStyledTextEvent& event)
 		cursor_pos = -1;
 	}
 	event.Skip();
+}
+
+void SubsStyledTextEditCtrl::ClearColorSwatchIndicators() {
+	int const length = GetTextLength();
+	if (length <= 0)
+		return;
+
+	SetIndicatorCurrent(COLOR_SWATCH_BOX_INDICATOR);
+	IndicatorClearRange(0, length);
+}
+
+void SubsStyledTextEditCtrl::UpdateColorSwatches() {
+	ClearColorSwatchIndicators();
+	color_swatch_spans.clear();
+
+	if (!OPT_GET("Subtitle/Highlight/Color Swatches")->GetBool())
+		return;
+
+	color_swatch_spans = aegisub::subtitle_edit_ops::FindColorSpans(line_text, tokenized_line);
+
+	for (auto const& span : color_swatch_spans) {
+		// Alpha swatches wait for an alpha write path; \t-nested tags have no
+		// set_tag target either, and a swatch that cannot be clicked would
+		// misrepresent the tag as editable here.
+		if (span.is_alpha || span.nested)
+			continue;
+
+		// The swatch covers only the hex digits, so the &H prefix and trailing
+		// & keep their syntax colour and stay free for caret placement.
+		auto const value_bounds = aegisub::subtitle_edit_ops::GetColorValueBounds(line_text, span);
+		if (value_bounds.second <= 0)
+			continue;
+
+		SetIndicatorCurrent(COLOR_SWATCH_BOX_INDICATOR);
+		SetIndicatorValue(wxSTC_INDICVALUEBIT | ScintillaColourOf(span.rgb()));
+		IndicatorFillRange(value_bounds.first, value_bounds.second);
+	}
+}
+
+void SubsStyledTextEditCtrl::OnIndicatorRelease(wxStyledTextEvent& event) {
+	event.Skip();
+
+	int const pos = event.GetPosition();
+	// The notification arrives for every indicator at the released position
+	// (spelling, IME, brace, character markers); only the swatch box acts.
+	// Requiring the release point to still be on the swatch also discards
+	// presses that dragged a selection off the value.
+	if (pos < 0 || !(IndicatorAllOnFor(pos) & (1 << COLOR_SWATCH_BOX_INDICATOR)))
+		return;
+	if (!context)
+		return;
+	if (GetSelectionStart() != GetSelectionEnd())
+		return;
+
+	aegisub::subtitle_edit_ops::ColorSpan const *clicked = nullptr;
+	for (auto const& span : color_swatch_spans) {
+		if (span.is_alpha || span.nested)
+			continue;
+		auto const value_bounds = aegisub::subtitle_edit_ops::GetColorValueBounds(line_text, span);
+		if (pos >= value_bounds.first && pos < value_bounds.first + value_bounds.second) {
+			clicked = &span;
+			break;
+		}
+	}
+	// Mirror UpdateColorSwatches' paint filter: unclicked spans can't fire.
+	if (!clicked)
+		return;
+
+	char const *command = nullptr;
+	switch (clicked->slot) {
+		case 1: command = "edit/color/primary"; break;
+		case 2: command = "edit/color/secondary"; break;
+		case 3: command = "edit/color/outline"; break;
+		case 4: command = "edit/color/shadow"; break;
+		default: return;
+	}
+
+	int const arg_start = clicked->byte_start;
+	int const arg_length = clicked->byte_length;
+	int const arg_slot = clicked->slot;
+	// Select the whole clicked parameter, not just a caret inside it. The colour
+	// commands resolve the override block from the selection start, which is the
+	// parameter start either way, and the selected range is the value the picker
+	// is about to rewrite — the same unit a double click on the value selects.
+	// It also gives the picker's cancel path (which restores the selection as it
+	// was on entry) the range back instead of a bare caret.
+	// CallAfter keeps the picker out of Scintilla's mouse-button handling.
+	CallAfter([this, command, arg_start, arg_length, arg_slot] {
+		if (!context)
+			return;
+		// TextSelectionController::SetSelection skips the control entirely when
+		// its own cached range already equals the requested one, and its cache
+		// only resyncs from the control on STC_UPDATEUI, which Scintilla defers.
+		// The picker's cancel path restores the range this handler set on entry,
+		// which primes that cache to exactly what the re-selection below asks
+		// for, so going through the controller alone would be swallowed and the
+		// control would keep whatever selection it really had. Write the control
+		// first, then let the controller record it and announce the change.
+		auto select = [this](int start, int end) {
+			SetSelection(start, end);
+			// SetSelection already moves the insertion point; calling
+			// SetInsertionPoint too would just announce the change twice.
+			context->GetCore().textSelectionController->SetSelection(start, end);
+		};
+		select(arg_start, arg_start + arg_length);
+		cmd::call(command, context);
+
+		// Every COMMIT_DIAG_TEXT goes through SetTextTo, which collapses the
+		// selection to the insertion point, so the range above is gone by the
+		// time the picker returns and the rewritten value would sit unselected.
+		// Cancelling instead restores the entry range, but through the same
+		// controller whose cache the restore just primed, so the control can be
+		// left behind either way. Re-select from the spans the commit rebuilt,
+		// matching the span of the same slot that still spans where we clicked:
+		// an in-place value replacement keeps the parameter roughly put, but it
+		// can shift a byte or two — re-serializing the block drops a blank the
+		// old text had between the tag name and its value — so this cannot
+		// require an exact start. Leave the caret alone if nothing matches
+		// rather than guess.
+		for (auto const& span : color_swatch_spans) {
+			if (span.is_alpha || span.nested || span.slot != arg_slot)
+				continue;
+			if (arg_start < span.byte_start || arg_start > span.byte_start + span.byte_length)
+				continue;
+			select(span.byte_start, span.byte_start + span.byte_length);
+			return;
+		}
+	});
 }

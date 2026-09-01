@@ -34,6 +34,7 @@
 #include <unordered_set>
 #include <vector>
 
+#include <wx/gdicmn.h>
 #include <wx/timer.h>
 
 class AssDialogue;
@@ -213,6 +214,12 @@ public:
 	virtual int GetSubMode() const { return -1; }
 	/// Hotkey context owned by this tool; empty means it has none.
 	virtual std::string GetHotkeyContext() const { return {}; }
+	/// Cursor this tool wants over the video while it is idle. wxCURSOR_NONE
+	/// means the platform default. The display owns the canvas cursor and asks
+	/// for this, so a tool must never set the parent's cursor itself: a
+	/// host-owned mode (a point-selection session) has to be able to show its
+	/// own cursor and hand the tool's back afterwards.
+	virtual wxStockCursor GetIdleCursor() const { return wxCURSOR_NONE; }
 	/// Whether the tool currently has an active (on-frame) dialogue line.
 	bool HasActiveLine() const { return active_line != nullptr; }
 	virtual void Draw()=0;

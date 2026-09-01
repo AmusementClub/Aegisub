@@ -121,6 +121,34 @@ planned_tag_text PlanTagAtCaret(std::string marked, std::pair<int, int> repeat_t
 	};
 }
 
+/// Apply one block nudge to `marked` (caret marked by '|') and return the
+/// resulting text with the caret marked again ("" when nothing was movable).
+std::string NudgeBlock(std::string marked, aegisub::subtitle_edit_ops::BlockMoveDirection direction) {
+	auto input = UnmarkCaret(std::move(marked));
+	auto tokens = agi::ass::TokenizeDialogueBody(input.text);
+
+	auto const edit = aegisub::subtitle_edit_ops::MoveBlockAtPosition(
+		input.text, tokens, input.caret, direction);
+	if (!edit.handled)
+		return "";
+
+	auto text = aegisub::subtitle_edit_ops::ReplaceRangeWithText(
+		input.text, edit.replace_start, edit.replace_end, edit.replacement);
+	int caret = input.caret;
+	if (caret >= edit.block_start && caret <= edit.block_end)
+		caret += edit.delta;
+	text.insert(static_cast<size_t>(caret), "|");
+	return text;
+}
+
+std::string NudgeLeft(std::string marked) {
+	return NudgeBlock(std::move(marked), aegisub::subtitle_edit_ops::BlockMoveDirection::Left);
+}
+
+std::string NudgeRight(std::string marked) {
+	return NudgeBlock(std::move(marked), aegisub::subtitle_edit_ops::BlockMoveDirection::Right);
+}
+
 /// Tokenize `marked` with the double-click position marked by '|' and return the
 /// text GetBoundsOfEscapeAtPosition would select ("" when it selects nothing).
 std::string EscapeAtCaret(std::string marked) {
@@ -416,6 +444,77 @@ TEST(subtitle_edit_ops, end_blocks_stay_at_end) {
 
 TEST(subtitle_edit_ops, end_blocks_include_line_breaks) {
 	EXPECT_EQ((std::vector<int>{5, 7, 12}), WalkEndBlocks("hello\\Nthere", 0));
+}
+
+TEST(subtitle_edit_ops, nudge_walks_an_override_block_one_character_at_a_time) {
+	EXPECT_EQ("hell{\\|i1}oworld", NudgeLeft("hello{\\|i1}world"));
+	EXPECT_EQ("hellow{\\|i1}orld", NudgeRight("hello{\\|i1}world"));
+}
+
+TEST(subtitle_edit_ops, nudge_carries_the_caret_along_from_either_edge_of_the_block) {
+	EXPECT_EQ("hellow{\\i1}|orld", NudgeRight("hello{\\i1}|world"));
+	EXPECT_EQ("hellow|{\\i1}orld", NudgeRight("hello|{\\i1}world"));
+	EXPECT_EQ("hell{\\i1}|oworld", NudgeLeft("hello{\\i1}|world"));
+}
+
+TEST(subtitle_edit_ops, nudge_moves_line_break_escapes_too) {
+	EXPECT_EQ("hell\\|Noworld", NudgeLeft("hello\\|Nworld"));
+	EXPECT_EQ("hellow\\|Norld", NudgeRight("hello\\|Nworld"));
+}
+
+TEST(subtitle_edit_ops, nudge_steps_over_a_neighbouring_block_whole) {
+	// Landing between the braces of the neighbour, or between the two bytes of
+	// an escape, would leave a line no further nudge could continue from.
+	EXPECT_EQ("{\\|i1}{\\b1}", NudgeLeft("{\\b1}{\\|i1}"));
+	EXPECT_EQ("{\\b1}{\\|i1}", NudgeRight("{\\|i1}{\\b1}"));
+	EXPECT_EQ("{\\|i1}\\N", NudgeLeft("\\N{\\|i1}"));
+	EXPECT_EQ("\\N{\\|i1}", NudgeRight("{\\|i1}\\N"));
+}
+
+TEST(subtitle_edit_ops, nudge_steps_over_whole_utf8_codepoints) {
+	EXPECT_EQ("\xe6\x97\xa5{\\|i1}\xe6\x9c\xac\xe8\xaa\x9e",
+		NudgeLeft("\xe6\x97\xa5\xe6\x9c\xac{\\|i1}\xe8\xaa\x9e"));
+	EXPECT_EQ("\xe6\x97\xa5\xe6\x9c\xac\xe8\xaa\x9e{\\|i1}",
+		NudgeRight("\xe6\x97\xa5\xe6\x9c\xac{\\|i1}\xe8\xaa\x9e"));
+}
+
+TEST(subtitle_edit_ops, nudge_keeps_backslash_runs_glued_to_what_they_escape) {
+	// Splitting the run would newly escape the block's own '{'.
+	EXPECT_EQ("a{\\|i1}\\\\b", NudgeLeft("a\\\\{\\|i1}b"));
+	EXPECT_EQ("a\\\\b{\\|i1}", NudgeRight("a\\\\{\\|i1}b"));
+	// A literal '\{' hops whole: leaving its '{' bare would open a block.
+	EXPECT_EQ("\\{{\\|i1}x", NudgeRight("{\\|i1}\\{x"));
+	// That result is the documented dead end: the lexer reads the block after
+	// an escaped brace as an error region, so it stops being movable.
+	EXPECT_EQ("", NudgeRight("\\{{\\|i1}x"));
+}
+
+TEST(subtitle_edit_ops, nudge_does_nothing_without_a_block_under_the_caret) {
+	EXPECT_EQ("", NudgeLeft("hel|lo"));
+	EXPECT_EQ("", NudgeRight("hel|lo"));
+	EXPECT_EQ("", NudgeLeft("hello{\\i1}wo|rld"));
+	// An unterminated brace has no closing brace to carry along.
+	EXPECT_EQ("", NudgeRight("hello{\\|i1"));
+}
+
+TEST(subtitle_edit_ops, nudge_stops_at_the_ends_of_the_line) {
+	EXPECT_EQ("", NudgeLeft("{\\|i1}world"));
+	EXPECT_EQ("", NudgeRight("hello{\\|i1}"));
+}
+
+TEST(subtitle_edit_ops, nudge_moves_a_selection_inside_the_block_with_it) {
+	std::string const text = "hello{\\i1}world";
+	auto const tokens = agi::ass::TokenizeDialogueBody(text);
+	auto const edit = aegisub::subtitle_edit_ops::MoveBlockAtPosition(
+		text, tokens, 8, aegisub::subtitle_edit_ops::BlockMoveDirection::Right);
+
+	ASSERT_TRUE(edit.handled);
+	EXPECT_EQ(5, edit.block_start);
+	EXPECT_EQ(10, edit.block_end);
+	EXPECT_EQ(1, edit.delta);
+	EXPECT_EQ(5, edit.replace_start);
+	EXPECT_EQ(11, edit.replace_end);
+	EXPECT_EQ("w{\\i1}", edit.replacement);
 }
 
 TEST(subtitle_edit_ops, escape_bounds_select_the_whole_escape_from_either_character) {

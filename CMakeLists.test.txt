@@ -46,6 +46,7 @@ if(GTEST_FOUND)
         tests/tests/automation_scenario_contract.cpp
         tests/tests/audio_display.cpp
         tests/tests/align_video_fade.cpp
+        tests/tests/video_color_pick.cpp
         tests/tests/async_video_provider.cpp
         tests/tests/dispatch.cpp
         tests/tests/export_framerate_transform.cpp
@@ -100,6 +101,7 @@ if(GTEST_FOUND)
         src/ass_file_app.cpp
         src/secondary_subtitle_reload_policy.cpp
         src/align_video_fade.cpp
+        src/video_color_pick.cpp
         src/async_video_provider.cpp
         src/async_video_provider_host.cpp
         src/async_video_trace.cpp
@@ -183,11 +185,13 @@ if(GTEST_FOUND)
         tests/tests/character_count.cpp
         tests/tests/compat.cpp
         tests/tests/subtitle_character_markers.cpp
+        tests/tests/subtitle_edit_box_color_click.cpp
         tests/tests/subtitle_edit_box_input.cpp
         tests/tests/subtitle_edit_box_options.cpp
         tests/tests/text_control_clipboard_char_hook.cpp
         tests/tests/core_host_context.cpp
         tests/tests/color.cpp
+        tests/tests/color_span.cpp
         tests/tests/csri_renderer_discovery.cpp
         tests/tests/dialogue_lexer.cpp
         tests/tests/format.cpp

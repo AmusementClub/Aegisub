@@ -52,6 +52,7 @@
 #include "project.h"
 #include "placeholder_ctrl.h"
 #include "selection_controller.h"
+#include "status_sink.h"
 #include "subtitle_edit_box_focus.h"
 #include "subtitle_edit_box_input.h"
 #include "subs_edit_ctrl.h"
@@ -181,16 +182,30 @@ void time_edit_char_hook(wxKeyEvent &event) {
 // in VC++ 2015 Update 2, with it instead passing a null pointer
 const auto AssDialogue_Actor = &AssDialogue::Actor;
 const auto AssDialogue_Effect = &AssDialogue::Effect;
+
+/// OS double-click interval; colour buttons defer single clicks by this much
+/// so the second press can reroute to the pick-from-video command. MSW wraps
+/// GetDoubleClickTime and GTK reads the user's gtk-double-click-time. Known
+/// limitation: wxSYS_DCLICK_MSEC on Cocoa is a hardcoded 500 ms that ignores
+/// the user's Double-Click Speed setting (wxWidgets' own comment there says
+/// to rely on the system click count), so users with a slower system double
+/// click see the dialog open before their second press arrives; reading the
+/// com.apple.mouse.doubleClickInterval default behind NSEvent.doubleClick-
+/// Interval would fix it once it can be verified on macOS. The constant only
+/// backstops ports without the metric. The deferral runs from the click's
+/// release while the OS window runs from its press, so the press hold time
+/// absorbs any boundary jitter between the two clocks.
+int ColorDoubleClickIntervalMs() {
+	int const ms = wxSystemSettings::GetMetric(wxSYS_DCLICK_MSEC);
+	return ms > 0 ? ms : 400;
+}
 }
 
 SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
-: wxPanel(parent, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxRAISED_BORDER | wxCLIP_CHILDREN, wxS("SubsEditBox"))
-, c(context)
-, command_session(context->GetCore().ass.get())
-, undo_timer(GetEventHandler())
-, visual_tool_text_sync_timer(GetEventHandler())
+	: wxPanel(parent, -1, wxDefaultPosition, wxDefaultSize, wxTAB_TRAVERSAL | wxRAISED_BORDER | wxCLIP_CHILDREN, wxS("SubsEditBox")), c(context), command_session(context->GetCore().ass.get()), undo_timer(GetEventHandler()), visual_tool_text_sync_timer(GetEventHandler()), color_click_timer(GetEventHandler())
 #ifdef WITH_WXSTC
-, use_stc(OPT_GET("Subtitle/Use STC")->GetBool())
+	  ,
+	  use_stc(OPT_GET("Subtitle/Use STC")->GetBool())
 #endif
 {
 	using std::bind;
@@ -278,10 +293,10 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 	MakeButton("edit/style/strikeout");
 	MakeButton("edit/font");
 	middle_right_sizer->AddSpacer(5);
-	MakeButton("edit/color/primary");
-	MakeButton("edit/color/secondary");
-	MakeButton("edit/color/outline");
-	MakeButton("edit/color/shadow");
+	MakeColorButton("edit/color/primary", "edit/color/primary/pick/video");
+	MakeColorButton("edit/color/secondary", "edit/color/secondary/pick/video");
+	MakeColorButton("edit/color/outline", "edit/color/outline/pick/video");
+	MakeColorButton("edit/color/shadow", "edit/color/shadow/pick/video");
 	middle_right_sizer->AddSpacer(5);
 	MakeButton("grid/line/next/create");
 	middle_right_sizer->AddSpacer(10);
@@ -377,6 +392,7 @@ SubsEditBox::SubsEditBox(wxWindow *parent, agi::Context *context)
 	Bind(wxEVT_TIMER,
 		[this](wxTimerEvent&) { command_session.ResetCommitId(); },
 		undo_timer.GetId());
+	Bind(wxEVT_TIMER, [this](wxTimerEvent&) { ConfirmPendingColorClick(); }, color_click_timer.GetId());
 	Bind(wxEVT_TIMER,
 		&SubsEditBox::OnVisualToolTextSyncTimer,
 		this,
@@ -660,7 +676,89 @@ void SubsEditBox::MakeButton(const char *cmd_name) {
 	ToolTipManager::Bind(btn, command->StrHelp(), "Subtitle Edit Box", cmd_name);
 
 	middle_right_sizer->Add(btn, wxSizerFlags().Expand());
-	btn->Bind(wxEVT_BUTTON, std::bind(&SubsEditBox::CallCommand, this, cmd_name));
+	btn->Bind(wxEVT_BUTTON, [this, cmd_name](wxCommandEvent&) { CallCommand(cmd_name); });
+}
+
+void SubsEditBox::MakeColorButton(const char *open_cmd_name, const char *pick_cmd_name) {
+	cmd::Command *command = cmd::get(open_cmd_name);
+#ifdef __WXMSW__
+	wxBitmapButton *btn = new wxBitmapButton(this, -1, wxNullBitmap);
+	btn->SetBitmap(command->IconBundle(GetLayoutDirection()));
+#else
+	wxBitmapButton *btn = new wxBitmapButton(this, -1, command->Icon(OPT_GET("App/Toolbar Icon Size")->GetInt()));
+#endif
+	btn->SetLabel(command->StrDisplay(c));
+	btn->SetName(command->StrDisplay(c));
+	ToolTipManager::Bind(btn, command->StrHelp(), "Subtitle Edit Box", open_cmd_name);
+	btn->SetToolTip(btn->GetToolTipText() + to_wx("\n") + _("Double-click to pick this color straight from the video."));
+
+	middle_right_sizer->Add(btn, wxSizerFlags().Expand());
+
+	// The native button still reports every completed press/release as a
+	// click; single clicks stay deferred until the double-click window closes
+	// (see ConfirmPendingColorClick), and the port-paired second press
+	// reroutes to the pick-from-video command instead. Gesture resolution
+	// lives in subtitle_edit_box_color_click.h: only wxEVT_LEFT_DCLICK ever
+	// reroutes. wxMSW delivers one physical double-click press to both
+	// handlers — wxAnyButton::MSWWindowProc synthesizes a WM_LBUTTONDOWN for
+	// the WM_LBUTTONDBLCLK before processing the real double click — so the
+	// plain-down binding must stay pass-through; rerouting there would also
+	// hijack two ordinary clicks whose second press landed past the system
+	// double-click rectangle (ports report that as a plain down).
+	btn->Bind(wxEVT_BUTTON, [this, open_cmd_name, pick_cmd_name](wxCommandEvent&) {
+		if (color_click_sequencer.OnButtonClick(pick_cmd_name) !=
+			aegisub::subtitle_edit_box_color_click::Action::DeferOpen)
+			return;
+		pending_color_open_command = open_cmd_name;
+		color_click_timer.Start(ColorDoubleClickIntervalMs(), wxTIMER_ONE_SHOT);
+	});
+	btn->Bind(wxEVT_LEFT_DCLICK, [this, pick_cmd_name](wxMouseEvent& event) {
+		if (color_click_sequencer.OnDoublePress(pick_cmd_name) ==
+			aegisub::subtitle_edit_box_color_click::Action::RunPick) {
+			// Swallow the whole press: passing it on would run the native
+			// default handling (the BUTTON class treats the double click as
+			// another press), which pushes the button again and pulls focus
+			// back from the video display — the only control that answers the
+			// Escape-cancel hint of the pick session.
+			RunPendingColorQuickPick(pick_cmd_name);
+			return;
+		}
+		// Not our double click (e.g. the third press of a triple click); on
+		// Windows the press already ran the plain-down handler, which does
+		// the stale-swallow cleanup for it.
+		event.Skip();
+	});
+	btn->Bind(wxEVT_LEFT_DOWN, [this](wxMouseEvent& event) {
+		color_click_sequencer.OnPlainPress();
+		event.Skip();
+	});
+}
+
+void SubsEditBox::RunPendingColorQuickPick(const char *pick_cmd_name) {
+	pending_color_open_command = nullptr;
+	color_click_timer.Stop();
+	// Ports that hand the taken-over press back to the native button still
+	// report one more click on release; the sequencer's swallow debt covers
+	// it, and a debt left by a press released outside its button is retired
+	// by the next plain press.
+	// cmd::call drops commands failing Validate before their operator could
+	// explain, but a double-click with no video open owes the user the hint,
+	// so invoke the operator directly, the way hotkey dispatch does.
+	cmd::Command *command = cmd::get(pick_cmd_name);
+	auto sink = c->GetStatusSink();
+	if (sink)
+		sink->SetLastCommand(from_wx(command->StrDisplay(c)));
+	(*command)(c);
+}
+
+void SubsEditBox::ConfirmPendingColorClick() {
+	if (color_click_sequencer.OnWindowExpired() !=
+		aegisub::subtitle_edit_box_color_click::Action::OpenDialog)
+		return;
+	auto const open_cmd = pending_color_open_command;
+	pending_color_open_command = nullptr;
+	if (open_cmd)
+		CallCommand(open_cmd);
 }
 
 wxButton *SubsEditBox::MakeBottomButton(const char *cmd_name) {
@@ -668,7 +766,7 @@ wxButton *SubsEditBox::MakeBottomButton(const char *cmd_name) {
 	wxButton *btn = new wxButton(this, -1, command->StrDisplay(c));
 	ToolTipManager::Bind(btn, command->StrHelp(), "Subtitle Edit Box", cmd_name);
 
-	btn->Bind(wxEVT_BUTTON, std::bind(&SubsEditBox::CallCommand, this, cmd_name));
+	btn->Bind(wxEVT_BUTTON, [this, cmd_name](wxCommandEvent&) { CallCommand(cmd_name); });
 	return btn;
 }
 
@@ -1299,8 +1397,10 @@ void SubsEditBox::OnCommentChange(wxCommandEvent &evt) {
 	SetSelectedRows(&AssDialogue::Comment, !!evt.GetInt(), _("comment change"), AssFile::COMMIT_DIAG_META);
 }
 
-void SubsEditBox::CallCommand(const char *cmd_name) {
+void SubsEditBox::CallCommand(const char *cmd_name, bool refocus_edit_control) {
 	cmd::call(cmd_name, c);
+	if (!refocus_edit_control)
+		return;
 #ifdef WITH_WXSTC
 	if (use_stc) {
 		edit_ctrl_stc->SetFocus();

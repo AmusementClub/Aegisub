@@ -335,6 +335,7 @@ public:
 	int GetFrameCount() const             { return source_provider->GetFrameCount(); }
 	int GetWidth() const                  { return source_provider->GetWidth(); }
 	int GetHeight() const                 { return source_provider->GetHeight(); }
+	SourceFrameGeometry GetFrameGeometry() const { return source_provider->GetFrameGeometry(); }
 	double GetDAR() const                 { return source_provider->GetDAR(); }
 	agi::vfr::Framerate GetFPS() const    { return source_provider->GetFPS(); }
 	std::vector<int> GetKeyFrames() const { return source_provider->GetKeyFrames(); }

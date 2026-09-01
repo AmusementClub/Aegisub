@@ -1,5 +1,7 @@
 #include "subtitle_edit_ops.h"
 
+#include "ass_compat.h"
+
 #include <libaegisub/ass/dialogue_parser.h>
 #include <libaegisub/string_utils.h>
 
@@ -143,6 +145,140 @@ bool is_text_block_token(int type) {
 	}
 }
 
+bool is_color_tag_name(std::string_view name) {
+	constexpr auto& known = aegisub::subtitle_edit_ops::ColorTagNames;
+	return std::find(std::begin(known), std::end(known), name) != std::end(known);
+}
+
+/// Mirrors the escaped-open-brace rule of AssDialogue::ParseTags: a '{'
+/// preceded by an odd number of backslashes is plain text there (only the
+/// opening brace checks escaping), so tags lexed inside such a run are not
+/// override tags and must not become swatches.
+///
+/// Sibling of IsEscapedOpenBrace in subs_edit_ctrl_stc.cpp, which applies the
+/// same rule to a live wxStyledTextCtrl. Callers here pass an OVR_BEGIN offset,
+/// so the '{' at `position` is already known and is not re-checked.
+bool is_escaped_open_brace(std::string_view text, size_t position) {
+	size_t slashes = 0;
+	while (position > slashes && text[position - slashes - 1] == '\\')
+		++slashes;
+	return (slashes & 1) != 0;
+}
+
+/// One unit a block nudge can move, as a byte range of the dialogue body:
+/// a brace block ({...}) or a single two-byte escape (\N, \n, \h).
+struct movable_block {
+	int start = 0;
+	int end = 0;
+};
+
+/// The brace blocks and escapes of a tokenized body, in document order.
+///
+/// An unterminated '{' yields no block: there is no closing brace to carry
+/// along, and treating the rest of the line as the block would move text the
+/// user never selected. An escaped '{' is plain text (is_escaped_open_brace),
+/// so it opens nothing here — the lexer disagrees and will read the following
+/// real block as an error region, which is why a block after an escaped brace
+/// simply stops being movable rather than moving as something else.
+std::vector<movable_block> find_movable_blocks(
+	std::string_view text,
+	std::vector<agi::ass::DialogueToken> const& tokens)
+{
+	namespace dt = agi::ass::DialogueTokenType;
+
+	std::vector<movable_block> blocks;
+	int offset = 0;
+	int brace_start = -1;
+
+	for (auto const& token : tokens) {
+		int const len = static_cast<int>(token.length);
+
+		if (token.type == dt::OVR_BEGIN) {
+			if (!is_escaped_open_brace(text, static_cast<size_t>(offset)))
+				brace_start = offset;
+		}
+		else if (token.type == dt::OVR_END) {
+			if (brace_start >= 0)
+				blocks.push_back({brace_start, offset + len});
+			brace_start = -1;
+		}
+		else if (token.type == dt::LINE_BREAK) {
+			// Adjacent escapes coalesce into one token; each moves on its own.
+			for (int escape = offset; escape + 1 < offset + len; escape += 2)
+				blocks.push_back({escape, escape + 2});
+		}
+
+		offset += len;
+	}
+
+	return blocks;
+}
+
+/// Index into `blocks` of the block a nudge at `pos` should move, or -1.
+///
+/// A caret at a boundary between two blocks moves the one starting there,
+/// following the caret's usual forward bias. Between a block and plain text
+/// there is no contest: only the block is movable, from either of its edges.
+int find_block_for_move(std::vector<movable_block> const& blocks, int pos) {
+	int best = -1;
+	for (size_t i = 0; i < blocks.size(); ++i) {
+		if (blocks[i].start > pos)
+			break;
+		if (pos <= blocks[i].end)
+			best = static_cast<int>(i);
+	}
+	return best;
+}
+
+/// Start of the backslash run ending at `pos`.
+int backslash_run_start(std::string_view text, int pos) {
+	while (pos > 0 && text[static_cast<size_t>(pos - 1)] == '\\')
+		--pos;
+	return pos;
+}
+
+/// Start of the plain-text unit ending at `end`: one codepoint, extended left
+/// over an odd backslash run so a run stays glued to the byte it escapes. Left
+/// unextended, a nudge over the tail of "\\{" would leave a bare '{' opening a
+/// block, or leave the moved block's own '{' newly escaped.
+int plain_unit_start(std::string_view text, int end) {
+	int start = end - 1;
+	while (start > 0 && is_utf8_continuation(text[static_cast<size_t>(start)]))
+		--start;
+
+	int const run_start = backslash_run_start(text, start);
+	if ((start - run_start) % 2 != 0)
+		start = run_start;
+	return start;
+}
+
+/// End of the plain-text unit starting at `start`, mirroring plain_unit_start:
+/// a unit opening with a backslash run takes the whole run, plus the codepoint
+/// the run escapes when the run is odd.
+int plain_unit_end(std::string_view text, int start) {
+	auto const size = static_cast<int>(text.size());
+	int end = start;
+
+	if (text[static_cast<size_t>(end)] == '\\') {
+		while (end < size && text[static_cast<size_t>(end)] == '\\')
+			++end;
+		if ((end - start) % 2 == 0 || end == size)
+			return end;
+	}
+
+	++end;
+	while (end < size && is_utf8_continuation(text[static_cast<size_t>(end)]))
+		++end;
+	return end;
+}
+
+/// Style slot a colour/alpha tag writes: the leading digit of \1c-style
+/// names, primary for bare \c, and 0 for the all-slot \alpha.
+int color_tag_slot(std::string_view name) {
+	if (name[0] >= '1' && name[0] <= '4')
+		return name[0] - '0';
+	return name == "alpha" ? 0 : 1;
+}
 }
 
 namespace aegisub::subtitle_edit_ops {
@@ -548,6 +684,71 @@ int GetNextBlockEnd(std::vector<agi::ass::DialogueToken> const& tokens, int pos)
 	return text_len;
 }
 
+BlockMoveEdit MoveBlockAtPosition(
+	std::string_view text,
+	std::vector<agi::ass::DialogueToken> const& tokens,
+	int pos,
+	BlockMoveDirection direction)
+{
+	BlockMoveEdit edit;
+	if (pos < 0 || pos > static_cast<int>(text.size()))
+		return edit;
+
+	auto const blocks = find_movable_blocks(text, tokens);
+	int const index = find_block_for_move(blocks, pos);
+	if (index < 0)
+		return edit;
+
+	auto const block = blocks[static_cast<size_t>(index)];
+	int step_start = 0, step_end = 0;
+
+	if (direction == BlockMoveDirection::Left) {
+		if (block.start == 0)
+			return edit;
+
+		step_end = block.start;
+		// Step over a neighbouring block whole rather than into it.
+		step_start = index > 0 && blocks[static_cast<size_t>(index - 1)].end == block.start
+			? blocks[static_cast<size_t>(index - 1)].start
+			: plain_unit_start(text, step_end);
+
+		edit.replacement.append(text.substr(
+			static_cast<size_t>(block.start),
+			static_cast<size_t>(block.end - block.start)));
+		edit.replacement.append(text.substr(
+			static_cast<size_t>(step_start),
+			static_cast<size_t>(step_end - step_start)));
+		edit.replace_start = step_start;
+		edit.replace_end = block.end;
+		edit.delta = step_start - block.start;
+	}
+	else {
+		if (block.end == static_cast<int>(text.size()))
+			return edit;
+
+		step_start = block.end;
+		step_end = index + 1 < static_cast<int>(blocks.size())
+				&& blocks[static_cast<size_t>(index + 1)].start == block.end
+			? blocks[static_cast<size_t>(index + 1)].end
+			: plain_unit_end(text, step_start);
+
+		edit.replacement.append(text.substr(
+			static_cast<size_t>(step_start),
+			static_cast<size_t>(step_end - step_start)));
+		edit.replacement.append(text.substr(
+			static_cast<size_t>(block.start),
+			static_cast<size_t>(block.end - block.start)));
+		edit.replace_start = block.start;
+		edit.replace_end = step_end;
+		edit.delta = step_end - step_start;
+	}
+
+	edit.handled = true;
+	edit.block_start = block.start;
+	edit.block_end = block.end;
+	return edit;
+}
+
 std::pair<int, int> GetBoundsOfEscapeAtPosition(std::vector<agi::ass::DialogueToken> const& tokens, int pos) {
 	if (pos < 0)
 		return {0, 0};
@@ -701,4 +902,101 @@ TagDoubleClickPlan PlanTagDoubleClick(
 	return plan;
 }
 
+std::vector<ColorSpan> FindColorSpans(
+	std::string_view text,
+	std::vector<agi::ass::DialogueToken> const& tokens) {
+	namespace dt = agi::ass::DialogueTokenType;
+
+	std::vector<ColorSpan> spans;
+	size_t pos = 0;
+	// Colour tags never take parentheses of their own, so any paren depth
+	// above zero marks the tag as nested inside a \t(...) transform.
+	int paren_depth = 0;
+	std::string_view pending_name;
+	bool name_is_color_tag = false;
+	// True while inside a backslash-escaped '{...}' run, which the lexer
+	// treats as an override block but ParseTags treats as plain text.
+	bool escaped_block = false;
+
+	for (auto const& token : tokens) {
+		switch (token.type) {
+			case dt::TAG_NAME: {
+				auto const name = text.substr(pos, token.length);
+				name_is_color_tag = !escaped_block && is_color_tag_name(name);
+				if (name_is_color_tag)
+					pending_name = name;
+				break;
+			}
+			case dt::OPEN_PAREN:
+				++paren_depth;
+				name_is_color_tag = false;
+				break;
+			case dt::CLOSE_PAREN:
+				if (paren_depth > 0)
+					--paren_depth;
+				name_is_color_tag = false;
+				break;
+			case dt::OVR_BEGIN:
+				paren_depth = 0;
+				name_is_color_tag = false;
+				escaped_block = is_escaped_open_brace(text, pos);
+				break;
+			case dt::OVR_END:
+				paren_depth = 0;
+				name_is_color_tag = false;
+				escaped_block = false;
+				break;
+			case dt::WHITESPACE:
+				// Renderers skip the gap between a tag name and its value.
+				break;
+			case dt::ARG: {
+				if (!name_is_color_tag)
+					break;
+				name_is_color_tag = false;
+				ColorSpan span;
+				span.byte_start = static_cast<int>(pos);
+				span.byte_length = static_cast<int>(token.length);
+				{
+					// The lexer keeps leading/trailing blanks inside the
+					// argument run; the AssOverrideTag rewrite path trims them,
+					// so the value parse must too.
+					auto const arg = text.substr(pos, token.length);
+					size_t begin = 0, end = arg.size();
+					while (begin < end && agi::util::strings::is_space(arg[begin]))
+						++begin;
+					while (end > begin && agi::util::strings::is_space(arg[end - 1]))
+						--end;
+					if (!AssCompat::ParseOverrideColor(arg.substr(begin, end - begin), span.color))
+						break;
+				}
+				span.slot = color_tag_slot(pending_name);
+				span.is_alpha = pending_name.back() == 'a';
+				span.nested = paren_depth > 0;
+				spans.push_back(span);
+				break;
+			}
+			default:
+				name_is_color_tag = false;
+				break;
+		}
+		pos += token.length;
+	}
+
+	return spans;
+}
+
+std::pair<int, int> GetColorValueBounds(std::string_view text, ColorSpan const& span) {
+	// Swatches cover only the value digits: skip the blanks and &/H sigils
+	// the parse tolerates, then stop at the first non-hex byte, so the &H
+	// prefix and trailing & keep their syntax colour and stay click-free.
+	size_t begin = static_cast<size_t>(span.byte_start);
+	size_t const end = begin + static_cast<size_t>(span.byte_length);
+	while (begin < end && (agi::util::strings::is_space(text[begin]) || text[begin] == '&' || agi::util::strings::ascii_iequals(text[begin], 'h')))
+		++begin;
+	size_t digits = begin;
+	std::uint32_t dummy = 0;
+	while (digits < end && AssCompat::digit_value(text[digits], 16, dummy))
+		++digits;
+	return {static_cast<int>(begin), static_cast<int>(digits - begin)};
+}
 }

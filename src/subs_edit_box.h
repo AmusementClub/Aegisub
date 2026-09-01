@@ -44,6 +44,7 @@
 #include <libaegisub/signal.h>
 
 #include "subtitle_command_session.h"
+#include "subtitle_edit_box_color_click.h"
 #include "time_display_mode.h"
 
 namespace agi { namespace vfr { class Framerate; } }
@@ -143,6 +144,15 @@ class SubsEditBox final : public wxPanel {
 	wxTimer visual_tool_text_sync_timer;
 	bool visual_tool_text_sync_pending = false;
 
+	/// Colour buttons resolve single vs double clicks themselves: a click only
+	/// opens its dialog command once the double-click window passes, and the
+	/// port-paired second press (wxEVT_LEFT_DCLICK) runs the pick-from-video
+	/// command instead. Plain presses never reroute — see
+	/// subtitle_edit_box_color_click.h for the per-port event sequences.
+	wxTimer color_click_timer;
+	aegisub::subtitle_edit_box_color_click::ColorClickSequencer color_click_sequencer;
+	const char *pending_color_open_command = nullptr;
+
 	bool IsVisualToolInteracting() const;
 	void QueueVisualToolTextSync();
 	void CancelVisualToolTextSync();
@@ -157,6 +167,7 @@ class SubsEditBox final : public wxPanel {
 	wxSpinCtrl *MakeMarginCtrl(wxString const& tooltip, int margin, wxString const& commit_msg);
 	TimeEdit *MakeTimeCtrl(wxString const& tooltip, TimeField field);
 	void MakeButton(const char *cmd_name);
+	void MakeColorButton(const char *open_cmd_name, const char *pick_cmd_name);
 	wxButton *MakeBottomButton(const char *cmd_name);
 	SubsEditStyleComboBox *MakeStyleComboBox(wxString const& initial_text, void (SubsEditBox::*handler)(wxCommandEvent&), wxString const& tooltip);
 	wxRadioButton *MakeRadio(wxString const& text, bool start, wxString const& tooltip);
@@ -221,8 +232,13 @@ class SubsEditBox final : public wxPanel {
 	/// Update the character count box for the given text
 	void UpdateCharacterCount(std::string const& text);
 
-	/// Call a command the restore focus to the edit box
-	void CallCommand(const char *cmd_name);
+	/// Call a command and optionally restore focus to the edit control
+	/// (quick-pick entries skip the refocus so status hints stay visible).
+	void CallCommand(const char *cmd_name, bool refocus_edit_control = true);
+	/// Second mouse-down on a colour button inside the double-click window.
+	void RunPendingColorQuickPick(const char *pick_cmd_name);
+	/// Double-click window elapsed without a second press: fire the dialog.
+	void ConfirmPendingColorClick();
 
 	void SetDurationField();
 

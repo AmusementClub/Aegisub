@@ -2,7 +2,10 @@
 
 #include "ass_dialogue.h"
 
+#include <libaegisub/color.h>
+
 #include <cstddef>
+#include <iterator>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -100,6 +103,42 @@ int GetPreviousBlockStart(std::vector<agi::ass::DialogueToken> const& tokens, in
 /// Blocks are override tags ({...}), line breaks (\N, \n), and runs of text.
 int GetNextBlockEnd(std::vector<agi::ass::DialogueToken> const& tokens, int pos);
 
+/// Direction a block nudge travels.
+enum class BlockMoveDirection {
+	Left,
+	Right
+};
+
+/// A block nudge as one text replacement, plus where the moved block was and
+/// how far it travelled so the caller can carry the caret along with it.
+struct BlockMoveEdit {
+	bool handled = false;  ///< False when the caret has nothing movable under it
+	int replace_start = 0; ///< Byte range of the passed text the replacement covers
+	int replace_end = 0;
+	std::string replacement;
+	int block_start = 0;   ///< Byte range the moved block occupied before the move
+	int block_end = 0;
+	int delta = 0;         ///< Bytes the block travelled; negative moving left
+};
+
+/// Swap the block under the caret with the unit beside it, so a nudge walks an
+/// override block or a \\N-style escape through the line one step at a time.
+///
+/// What moves is a whole brace block ({...}, tags or comment) or one two-byte
+/// escape; plain text stays put and a caret in it yields an unhandled edit.
+/// What the block steps over is one codepoint of plain text, or the
+/// neighbouring block whole — landing a block between braces, or between the
+/// two bytes of an escape, would not leave a line the next nudge could
+/// continue from. Backslash runs travel with what they escape, so a nudge
+/// cannot newly escape the block's '{' or unescape a literal one.
+///
+/// `tokens` must be the tokenization of `text`.
+BlockMoveEdit MoveBlockAtPosition(
+	std::string_view text,
+	std::vector<agi::ass::DialogueToken> const& tokens,
+	int pos,
+	BlockMoveDirection direction);
+
 /// Get the span to select when double-clicking inside an override block, as
 /// {start, length} in bytes. Returns the whole tag (backslash, name and all of
 /// its arguments, with balanced parens) when pos is on the backslash or the tag
@@ -125,4 +164,55 @@ TagDoubleClickPlan PlanTagDoubleClick(
 /// {start, length} in bytes. Returns {0, 0} when pos is not on an escape.
 std::pair<int, int> GetBoundsOfEscapeAtPosition(std::vector<agi::ass::DialogueToken> const& tokens, int pos);
 
+/// Override tag names whose single parameter is a colour or alpha value,
+/// without the leading backslash. Their agreement with the override proto
+/// table in ass_override.cpp is enforced by the classification assertions in
+/// tests/tests/color_span.cpp rather than by shared code.
+inline constexpr std::string_view ColorTagNames[] = {
+	"c",
+	"1c",
+	"2c",
+	"3c",
+	"4c",
+	"alpha",
+	"1a",
+	"2a",
+	"3a",
+	"4a",
+};
+
+/// One colour- or alpha-valued override parameter in a dialogue body.
+struct ColorSpan {
+	int byte_start = 0;    ///< Byte offset of the parameter run
+	int byte_length = 0;   ///< Byte length of the parameter run
+	/// Value parsed by AssCompat::ParseOverrideColor. Read it through
+	/// alpha_value()/rgb() rather than directly: for an is_alpha span the tag
+	/// carries one byte, and ParseOverrideColor lands it in `.r` (which is what
+	/// ParseOverrideAlpha reads back), so `.r` is opacity and not red there.
+	agi::Color color;
+	int slot = 0;          ///< Style slot 1-4; \c counts as 1, \alpha as 0 (all slots)
+	bool is_alpha = false; ///< \alpha family rather than \c family
+	bool nested = false;   ///< Inside a \t(...) transform
+
+	/// Opacity byte of an \alpha-family span (0 opaque, 255 transparent).
+	/// Meaningless on a \c-family span.
+	int alpha_value() const { return color.r; }
+	/// Renderable colour of a \c-family span. Meaningless on an \alpha span.
+	agi::Color rgb() const { return agi::Color(color.r, color.g, color.b); }
+};
+
+/// Enumerate the colour/alpha override parameters of a tokenized dialogue
+/// body in document order. A tag yields a span only when its parameter token
+/// parses as an override colour — the same lenient &H-hex parse that
+/// AssOverrideParameter::Get<agi::Color> and the renderers use — so the set
+/// of spans matches the set of values the colour-editing path understands.
+std::vector<ColorSpan> FindColorSpans(
+	std::string_view text,
+	std::vector<agi::ass::DialogueToken> const& tokens);
+
+/// Byte range of just the hex digits of a span's parameter, as {start,
+/// length}: skips the blanks and &/H sigils the value parse tolerates and
+/// stops at the first non-hex byte. Swatches paint and accept clicks over
+/// this range rather than the full parameter run.
+std::pair<int, int> GetColorValueBounds(std::string_view text, ColorSpan const& span);
 }

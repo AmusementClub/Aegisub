@@ -59,6 +59,17 @@
 #include <CoreText/CTFont.h>
 #endif
 
+wxCursor GetEyedropperCursor() {
+#ifdef __WXMSW__
+	// Named cursor resource from res.rc; only the MSW port loads cursors by
+	// resource name.
+	wxCursor eyedropper(wxS("eyedropper_cursor"));
+	if (eyedropper.IsOk())
+		return eyedropper;
+#endif
+	return *wxCROSS_CURSOR;
+}
+
 /// @brief There shall be no kiB, MiB stuff here Pretty reading of size
 wxString PrettySize(int bytes) {
 	const wxString suffix[] = {

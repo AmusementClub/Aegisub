@@ -58,12 +58,17 @@
 #include "../selection_controller.h"
 #include "../subtitle_edit_ops.h"
 #include "../subs_controller.h"
+#include "../async_video_provider.h"
+#include "../source_frame.h"
 #include "../text_selection_controller.h"
 #include "../utils.h"
+#include "../video_color_pick.h"
 #include "../video_controller.h"
+#include "../video_display.h"
 
 #include <libaegisub/address_of_adaptor.h>
 #include <libaegisub/character_count.h>
+#include <libaegisub/exception.h>
 #include <libaegisub/of_type_adaptor.h>
 #include <libaegisub/make_unique.h>
 #include <libaegisub/string_utils.h>
@@ -71,9 +76,11 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <iomanip>
 #include <map>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <string_view>
 
 #include <wx/dataobj.h>
@@ -348,6 +355,13 @@ AssDialogue *paste_over(wxWindow *parent, std::vector<bool>& pasteOverOptions, A
 struct parsed_line {
 	AssDialogue *line;
 	std::vector<std::unique_ptr<AssDialogueBlock>> blocks;
+	/// True once set_tag has rewritten line->Text. Callers chain set_tag calls by
+	/// advancing the raw position with the returned shift, but that shift only
+	/// covers the tag just written: UpdateText re-serializes every block, so any
+	/// block that does not round-trip byte-identically (a blank between tags is
+	/// dropped, for one) moves the text by more than the shift. Raw positions are
+	/// therefore only exact before the first rewrite.
+	bool text_rewritten = false;
 
 	parsed_line(AssDialogue *line) : line(line), blocks(line->ParseTags()) { }
 	parsed_line(parsed_line&& r) = default;
@@ -487,6 +501,29 @@ struct parsed_line {
 	int set_tag(std::string const& tag, std::string const& value, int norm_pos, int orig_pos) {
 		int blockn = block_at_pos(norm_pos);
 
+		// block_at_pos is plain-text-count based, so a caret inside an
+		// override block that directly follows another override block (no
+		// plain text between them) resolves to the earlier block. The raw
+		// position is exact: when it sits inside an override block, that
+		// block is the one the read path (block_for_read) and the user mean,
+		// so prefer it and keep reads and writes on the same block.
+		//
+		// Only while the raw position is still exact, though. Callers that
+		// chain set_tag calls pass orig_pos + shift, which drifts once
+		// UpdateText has re-serialized the line (see text_rewritten), and a
+		// drifted position resolves to a neighbouring override block just as
+		// readily as to the right one. norm_pos is immune to that drift
+		// because re-serialization only changes override text, so fall back
+		// to block_at_pos alone after the first rewrite.
+		if (orig_pos >= 0 && !text_rewritten) {
+			int const raw_blockn = block_for_read(orig_pos);
+			auto valid_override = [&](int index) {
+				return index >= 0 && index < static_cast<int>(blocks.size()) && blocks[index]->GetType() == AssBlockType::OVERRIDE;
+			};
+			if (raw_blockn != blockn && valid_override(raw_blockn) && valid_override(blockn))
+				blockn = raw_blockn;
+		}
+
 		AssDialogueBlockPlain *plain = nullptr;
 		AssDialogueBlockOverride *ovr = nullptr;
 		while (blockn >= 0 && !plain && !ovr) {
@@ -525,6 +562,7 @@ struct parsed_line {
 			line->Text = std::move(new_text);
 			shift += 2;
 			blocks = line->ParseTags();
+			text_rewritten = true;
 		}
 		else {
 			// We've reached here, ovr cannot be null
@@ -550,6 +588,7 @@ struct parsed_line {
 				ovr->AddTag(insert);
 
 			line->UpdateText(blocks);
+			text_rewritten = true;
 		}
 
 		return shift;
@@ -675,29 +714,54 @@ void toggle_override_tag(const agi::Context *c, bool (AssStyle::*field), const c
 	});
 }
 
-void show_color_picker(const agi::Context *c, agi::Color (AssStyle::*field), const char *tag, const char *alt, const char *alpha) {
+/// Which colour a colour-editing entry point manipulates: the ASS style field
+/// holding the default, and the override tags carrying it (colour, alternate
+/// spelling, alpha).
+struct ColorEditTarget {
+	agi::Color AssStyle::*field;
+	const char *tag;
+	const char *alt;
+	const char *alpha;
+};
+
+struct PreparedColorEdit {
+	struct LineState {
+		agi::Color color; ///< Effective colour at this line's caret, incl. alpha
+		parsed_line parsed;
+		int sel_start;      ///< Raw caret position in this line's text
+		int norm_sel_start; ///< Plain-text caret position in this line's text
+	};
+
+	ColorEditTarget target;
+	AssDialogue *active_line = nullptr;
+	Selection selection;      ///< Snapshot of the lines the edit applies to
+	int sel_start = 0;        ///< Active line raw caret at prepare time
+	int sel_end = 0;          ///< Active line raw selection end at prepare time
+	agi::Color initial_color; ///< Active line's colour, seeds dialogs
+	std::vector<LineState> lines;
+	int commit_id = -1; ///< Amended commit id from ApplyPreparedColorEdit
+};
+
+PreparedColorEdit PrepareColorEdit(agi::Context *c, ColorEditTarget target) {
 	auto core = c->GetCore();
-	auto ui = c->GetUI();
-	agi::Color initial_color;
 	const auto active_line = core.selectionController->GetActiveLine();
 	const int sel_start = core.textSelectionController->GetSelectionStart();
 	const int sel_end = core.textSelectionController->GetSelectionEnd();
 	const int norm_sel_start = normalize_pos(active_line->Text, sel_start);
 	const size_t sel_start_chars = character_pos(active_line->Text, sel_start);
 
-	auto const& sel = core.selectionController->GetSelectedSet();
-	struct line_info {
-		agi::Color color;
-		parsed_line parsed;
-		int sel_start;
-		int norm_sel_start;
-	};
-	std::vector<line_info> lines;
+	PreparedColorEdit edit;
+	edit.target = target;
+	edit.active_line = active_line;
+	edit.selection = core.selectionController->GetSelectedSet();
+	edit.sel_start = sel_start;
+	edit.sel_end = sel_end;
+
 	AssStyle const fallback_style;
 	auto resolve_reset = [&core](std::string_view name) -> AssStyle const* {
 		return aegisub::ass_style_resolution::ResolveResetStyle(*core.ass, std::string(name));
 	};
-	for (auto line : sel) {
+	for (auto line : core.selectionController->GetSelectedSet()) {
 		int line_sel_start = sel_start;
 		int line_norm_sel_start = norm_sel_start;
 		if (line != active_line) {
@@ -716,49 +780,80 @@ void show_color_picker(const agi::Context *c, agi::Color (AssStyle::*field), con
 
 		// Honour \r reset semantics so the colour shown in the picker matches
 		// what renders at the cursor.
-		auto lookup = parsed.find_tag_with_reset(blockn, tag, event_style, resolve_reset, alt);
-		auto lookup_a = parsed.find_tag_with_reset(blockn, alpha, event_style, resolve_reset, "\\alpha");
+		auto lookup = parsed.find_tag_with_reset(blockn, target.tag, event_style, resolve_reset, target.alt);
+		auto lookup_a = parsed.find_tag_with_reset(blockn, target.alpha, event_style, resolve_reset, "\\alpha");
 		AssStyle const& base = *lookup.base;
 		AssStyle const& base_a = *lookup_a.base;
 		// ParseOverrideColor unconditionally assigns all four bytes, so the colour
 		// tag would clobber alpha; apply alpha last and take its default from the
 		// style (not the just-overwritten colour).
-		color = base.*field;
+		color = base.*target.field;
 		if (lookup.tag)
 			color = lookup.tag->Params[0].Get<agi::Color>(color);
-		int default_a = (base_a.*field).a;
+		int default_a = (base_a.*target.field).a;
 		color.a = static_cast<unsigned char>(
 			lookup_a.tag ? lookup_a.tag->Params[0].Get<int>(default_a) : default_a);
 
 		if (line == active_line)
-			initial_color = color;
+			edit.initial_color = color;
 
-		lines.push_back({ color, std::move(parsed), line_sel_start, line_norm_sel_start });
+		edit.lines.push_back({color, std::move(parsed), line_sel_start, line_norm_sel_start});
 	}
+	return edit;
+}
 
+int ApplyPreparedColorEdit(
+	agi::Context *c,
+	PreparedColorEdit& edit,
+	agi::Color new_color,
+	std::string const& undo_text,
+	bool preserve_line_alpha = false) {
+	auto core = c->GetCore();
 	int active_shift = 0;
-	int commit_id = -1;
-	bool ok = GetColorFromUser(ui.parent, initial_color, true, [&](agi::Color new_color) {
-		for (auto& line : lines) {
-			int shift = line.parsed.set_tag(tag, AssCompat::FormatOverrideColor(new_color), line.norm_sel_start, line.sel_start);
-			if (new_color.a != line.color.a) {
-				shift += line.parsed.set_tag(alpha, AssCompat::FormatOverrideAlpha(new_color.a), line.norm_sel_start, line.sel_start + shift);
-				line.color.a = new_color.a;
-			}
-
-			if (line.parsed.line == active_line)
-				active_shift = shift;
+	for (auto& line : edit.lines) {
+		// Entry points without an alpha input (the video quick pick) must not
+		// rewrite transparency: keep each line's effective alpha instead of
+		// forcing the seed colour's alpha onto every selected line.
+		agi::Color const applied = preserve_line_alpha
+									   ? agi::Color(new_color.r, new_color.g, new_color.b, line.color.a)
+									   : new_color;
+		int shift = line.parsed.set_tag(edit.target.tag, AssCompat::FormatOverrideColor(applied), line.norm_sel_start, line.sel_start);
+		if (applied.a != line.color.a) {
+			shift += line.parsed.set_tag(edit.target.alpha, AssCompat::FormatOverrideAlpha(applied.a), line.norm_sel_start, line.sel_start + shift);
+			line.color.a = applied.a;
 		}
 
-		commit_id = core.ass->Commit(from_wx(_("set color")), AssFile::COMMIT_DIAG_TEXT, commit_id, sel.size() == 1 ? *sel.begin() : nullptr);
-		if (active_shift)
-			core.textSelectionController->SetSelection(sel_start + active_shift, sel_start + active_shift);
+		if (line.parsed.line == edit.active_line)
+			active_shift = shift;
+	}
+
+	edit.commit_id = core.ass->Commit(
+		undo_text,
+		AssFile::COMMIT_DIAG_TEXT,
+		edit.commit_id,
+		edit.selection.size() == 1 ? *edit.selection.begin() : nullptr);
+	if (active_shift)
+		core.textSelectionController->SetSelection(edit.sel_start + active_shift, edit.sel_start + active_shift);
+	return edit.commit_id;
+}
+
+void show_color_picker(agi::Context *c, ColorEditTarget target) {
+	auto core = c->GetCore();
+	auto ui = c->GetUI();
+	auto edit = PrepareColorEdit(c, target);
+
+	bool ok = GetColorFromUser(ui.parent, edit.initial_color, true, [&](agi::Color new_color) {
+		ApplyPreparedColorEdit(c, edit, new_color, from_wx(_("set color")));
 	});
 
-	if (!ok && commit_id != -1) {
+	if (!ok && edit.commit_id != -1) {
 		core.subsController->Undo();
-		core.textSelectionController->SetSelection(sel_start, sel_end);
+		core.textSelectionController->SetSelection(edit.sel_start, edit.sel_end);
 	}
+}
+
+void show_color_picker(agi::Context *c, agi::Color(AssStyle::*field), const char *tag, const char *alt, const char *alpha) {
+	show_color_picker(c, ColorEditTarget{field, tag, alt, alpha});
 }
 
 struct edit_color_primary final : public Command {
@@ -807,6 +902,222 @@ struct edit_color_shadow final : public Command {
 	void operator()(agi::Context *c) override {
 		show_color_picker(c, &AssStyle::shadow, "\\4c", "", "\\4a");
 	}
+};
+
+/// One-shot "click the video to fill this colour slot" session. The command
+/// starts it; the actual ASS edit happens when the user later clicks inside
+/// the video display. Anything that mutates subtitles, moves the caret or
+/// selection, or replaces the video provider while waiting cancels the
+/// session instead of writing stale edits.
+class VideoQuickPickSession final {
+	public:
+	static void Begin(agi::Context *c, ColorEditTarget target, std::string owner, wxString mode_name) {
+		auto core = c->GetCore();
+		auto *display = c->GetUI().videoDisplay;
+		if (!display || !core.project->VideoProvider() ||
+			!core.selectionController->GetActiveLine() ||
+			core.selectionController->GetSelectedSet().empty()) {
+			c->ShowStatus(from_wx(_("Video color picking needs a loaded video and an active subtitle line.")));
+			return;
+		}
+
+		try {
+			auto session = std::make_shared<VideoQuickPickSession>(c, target, std::move(owner));
+			display->BeginPointSelection(
+				session->owner,
+				1,
+				false,
+				[session](std::vector<std::pair<double, double>> points, int frame, bool cancelled) {
+					session->Complete(std::move(points), frame, cancelled);
+				},
+				// Name the mode and both ways out: the pick is armed until the
+				// user acts, and the eyedropper is what says so on screen.
+				GetEyedropperCursor(),
+				fmt_tl("%s: click the video to sample; Escape or right-click cancels.",
+					   mode_name));
+		}
+		catch (std::exception const& err) {
+			c->ShowError(err.what(), "Video Color Pick");
+		}
+	}
+
+	VideoQuickPickSession(agi::Context *context, ColorEditTarget target, std::string owner)
+		: context(context), prepared(PrepareColorEdit(context, target)), owner(std::move(owner)) {
+		auto core = context->GetCore();
+		connections = agi::signal::make_vector({
+			core.ass->AddCommitListener([this](int, AssDialogue const *) { Invalidate(); }),
+			core.selectionController->AddActiveLineListener([this](AssDialogue *) { Invalidate(); }),
+			core.selectionController->AddSelectionListener([this] { Invalidate(); }),
+			// The prepared edit snapshots each line's caret position, so a
+			// caret move in the edit box must cancel rather than write the
+			// tags at the stale position.
+			core.textSelectionController->AddSelectionListener([this] { Invalidate(); }),
+			core.project->AddVideoProviderListener([this](AsyncVideoProvider *) { Invalidate(); }),
+		});
+	}
+
+	void Complete(std::vector<std::pair<double, double>> points, int frame, bool cancelled) {
+		// Disconnect first so our own commit below cannot re-trigger cancel
+		// paths, then decide whether the snapshot is still trustworthy.
+		connections.clear();
+		if (cancelled)
+			return;
+
+		auto core = context->GetCore();
+		auto *provider = core.project->VideoProvider();
+		bool const stale = frame < 0 || !provider || core.selectionController->GetSelectedSet() != prepared.selection || core.selectionController->GetActiveLine() != prepared.active_line;
+		if (stale) {
+			context->ShowStatus(from_wx(_("Video color pick cancelled: subtitles or video changed meanwhile.")));
+			return;
+		}
+
+		if (points.empty())
+			return;
+
+		// The clicked point is in the provider's visible/display space while
+		// the raw BGRA frame is full storage, so map through the frame
+		// geometry to pick up any clean-aperture/crop offset.
+		auto const storage = aegisub::color_pick::MapDisplayPointToStorage(
+			provider->GetFrameGeometry(), points[0].first, points[0].second);
+		if (storage.first < 0 || storage.second < 0) {
+			context->ShowStatus(from_wx(_("Could not sample a colour at the clicked point.")));
+			return;
+		}
+
+		auto frame_time = core.project->Timecodes().TimeAtFrame(frame);
+		std::shared_ptr<VideoFrame> bgra;
+		try {
+			bgra = provider->GetFrameBgra(frame, frame_time, /*raw=*/true);
+		}
+		catch (agi::Exception const& err) {
+			// agi::Exception deliberately does not derive from std::exception;
+			// uncaught it would reach the app-wide handler and demand a
+			// restart for what is an ordinary decode failure.
+			context->ShowStatus(from_wx(_("Could not read the video frame for color picking: ")) + err.GetMessage());
+			return;
+		}
+		if (!bgra || bgra->data.empty()) {
+			context->ShowStatus(from_wx(_("Could not read the video frame for color picking.")));
+			return;
+		}
+
+		int const x = mid(0, storage.first, static_cast<int>(bgra->width) - 1);
+		int const y = mid(0, storage.second, static_cast<int>(bgra->height) - 1);
+
+		auto const result = aegisub::color_pick::PickColor(*bgra, x, y, {});
+		if (!result.pixels) {
+			context->ShowStatus(from_wx(_("Could not sample a colour at the clicked point.")));
+			return;
+		}
+
+		agi::Color const chosen{result.color.r, result.color.g, result.color.b, 0};
+		ApplyPreparedColorEdit(
+			context, prepared, chosen, from_wx(_("set color from video")),
+			/*preserve_line_alpha=*/true);
+
+		auto region_summary = [&]() {
+			std::ostringstream summary;
+			summary << from_wx(_("region")) << " " << result.pixels << " px ("
+					<< result.bbox_w << "x" << result.bbox_h << "), "
+					<< from_wx(_("confidence")) << " " << std::fixed << std::setprecision(2)
+					<< result.confidence;
+			return summary.str();
+		};
+
+		std::ostringstream status;
+		status << chosen.GetHexFormatted() << " @ " << x << ',' << y << " - "
+			   << from_wx(_("video color pick")) << ": " << region_summary();
+		if (result.edge_snapped)
+			status << ", " << from_wx(_("edge snapped"));
+		if (result.fallback)
+			status << ", " << from_wx(_("region unstable, using local median"));
+		if (result.capped)
+			status << ", " << from_wx(_("capped at size limit"));
+		context->ShowStatus(status.str());
+	}
+
+	private:
+	/// Drop the pending pick because subtitles or video changed underneath us.
+	void Invalidate() {
+		if (!connections.empty()) {
+			connections.clear();
+			context->ShowStatus(from_wx(_("Video color pick cancelled: subtitles or video changed meanwhile.")));
+			auto *display = context->GetUI().videoDisplay;
+			if (display)
+				display->CancelPointSelection(owner, false);
+		}
+	}
+
+	agi::Context *context;
+	PreparedColorEdit prepared;
+	std::string owner;
+	std::vector<agi::signal::Connection> connections;
+};
+
+struct edit_color_quick_pick_video_base : public Command {
+	CMD_TYPE(COMMAND_VALIDATE)
+	virtual ColorEditTarget Target() const = 0;
+	virtual const char *PickOwner() const = 0;
+
+	bool Validate(const agi::Context *c) override {
+		auto core = c->GetCore();
+		// The active line can be null independently of the selected set
+		// (SetActiveLine(nullptr) is legal and does not touch the selection),
+		// and the prepared edit dereferences it.
+		return core.selectionController->GetActiveLine() != nullptr && !core.selectionController->GetSelectedSet().empty() && !!core.project->VideoProvider() && !!c->GetUI().videoDisplay && core.videoController->GetFrameN() >= 0;
+	}
+
+	void operator()(agi::Context *c) override {
+		if (!Validate(c)) {
+			c->ShowStatus(from_wx(_("Video color picking needs a loaded video and an active subtitle line.")));
+			return;
+		}
+		VideoQuickPickSession::Begin(c, Target(), PickOwner(), StrDisplay(c));
+	}
+};
+
+struct edit_color_primary_pick_video final : public edit_color_quick_pick_video_base {
+	CMD_NAME("edit/color/primary/pick/video")
+	CMD_ICON(button_color_one)
+	STR_MENU("Primary Color from Video...")
+	STR_DISP("Primary Color from Video")
+	STR_HELP("Pick the primary fill color (\\c) from a raw video frame")
+
+	ColorEditTarget Target() const override { return {&AssStyle::primary, "\\c", "\\1c", "\\1a"}; }
+	const char *PickOwner() const override { return "edit/color/primary/pick/video"; }
+};
+
+struct edit_color_secondary_pick_video final : public edit_color_quick_pick_video_base {
+	CMD_NAME("edit/color/secondary/pick/video")
+	CMD_ICON(button_color_two)
+	STR_MENU("Secondary Color from Video...")
+	STR_DISP("Secondary Color from Video")
+	STR_HELP("Pick the secondary (karaoke) fill color (\\2c) from a raw video frame")
+
+	ColorEditTarget Target() const override { return {&AssStyle::secondary, "\\2c", "", "\\2a"}; }
+	const char *PickOwner() const override { return "edit/color/secondary/pick/video"; }
+};
+
+struct edit_color_outline_pick_video final : public edit_color_quick_pick_video_base {
+	CMD_NAME("edit/color/outline/pick/video")
+	CMD_ICON(button_color_three)
+	STR_MENU("Outline Color from Video...")
+	STR_DISP("Outline Color from Video")
+	STR_HELP("Pick the outline color (\\3c) from a raw video frame")
+
+	ColorEditTarget Target() const override { return {&AssStyle::outline, "\\3c", "", "\\3a"}; }
+	const char *PickOwner() const override { return "edit/color/outline/pick/video"; }
+};
+
+struct edit_color_shadow_pick_video final : public edit_color_quick_pick_video_base {
+	CMD_NAME("edit/color/shadow/pick/video")
+	CMD_ICON(button_color_four)
+	STR_MENU("Shadow Color from Video...")
+	STR_DISP("Shadow Color from Video")
+	STR_HELP("Pick the shadow color (\\4c) from a raw video frame")
+
+	ColorEditTarget Target() const override { return {&AssStyle::shadow, "\\4c", "", "\\4a"}; }
+	const char *PickOwner() const override { return "edit/color/shadow/pick/video"; }
 };
 
 struct edit_style_bold final : public Command {
@@ -1952,6 +2263,10 @@ namespace cmd {
 		reg(agi::make_unique<edit_color_secondary>());
 		reg(agi::make_unique<edit_color_outline>());
 		reg(agi::make_unique<edit_color_shadow>());
+		reg(agi::make_unique<edit_color_primary_pick_video>());
+		reg(agi::make_unique<edit_color_secondary_pick_video>());
+		reg(agi::make_unique<edit_color_outline_pick_video>());
+		reg(agi::make_unique<edit_color_shadow_pick_video>());
 		reg(agi::make_unique<edit_font>());
 		reg(agi::make_unique<edit_find_replace>());
 		reg(agi::make_unique<edit_line_copy>());

@@ -47,6 +47,56 @@ TEST(ass_dialogue, read_block_does_not_apply_a_trailing_reset_before_the_caret) 
 	EXPECT_EQ(2, FindDialogueBlockForRead(blocks, reset_start + 1));
 }
 
+// UpdateText re-serializes every block through GetText(), and an override
+// block's GetText() rebuilds "{" + each tag + "}" from the parsed tags, so
+// anything in the original bytes that is not part of a tag is dropped. Callers
+// that edit one tag and then advance a raw caret position by that tag's own
+// size therefore drift: the rewrite moved the rest of the line too. Whoever
+// makes raw positions survive a rewrite has to reckon with this.
+TEST(ass_dialogue, update_text_does_not_round_trip_blanks_between_tags) {
+	AssDialogue line;
+	line.Text = R"({\b1 \i1}text)";
+
+	auto blocks = line.ParseTags();
+	line.UpdateText(blocks);
+
+	EXPECT_EQ(R"({\b1\i1}text)", line.Text.get());
+	// One byte shorter than it started, with no tag having been edited at all.
+	EXPECT_EQ(13u, std::string(R"({\b1 \i1}text)").size());
+	EXPECT_EQ(12u, line.Text.get().size());
+}
+
+// An in-place tag edit reports how much that one tag grew, which is what
+// callers add to a raw caret position to follow the text. The rewrite that
+// carries the edit also drops the blank, so the line moves by a different
+// amount than the edit reported: here the tag's own delta is zero while the
+// line loses a byte. Positions advanced by the reported delta are wrong by the
+// difference, and nothing in the reported value reveals it.
+TEST(ass_dialogue, in_place_tag_edit_delta_disagrees_with_line_delta) {
+	AssDialogue line;
+	line.Text = R"({\b1 \i1}text)";
+	auto const original_size = static_cast<int>(line.Text.get().size());
+
+	auto blocks = line.ParseTags();
+	auto *ovr = dynamic_cast<AssDialogueBlockOverride *>(blocks.front().get());
+	ASSERT_NE(nullptr, ovr);
+	ASSERT_EQ(2u, ovr->Tags.size());
+	ASSERT_EQ("\\b", ovr->Tags[0].Name);
+
+	// What set_tag's override branch computes for a same-width replacement.
+	int const reported_delta =
+		static_cast<int>(std::string("\\b0").size()) -
+		static_cast<int>(static_cast<std::string>(ovr->Tags[0]).size());
+	ovr->Tags[0].Params[0].Set<std::string>("0");
+	line.UpdateText(blocks);
+
+	int const line_delta = static_cast<int>(line.Text.get().size()) - original_size;
+	EXPECT_EQ(0, reported_delta);
+	EXPECT_EQ(-1, line_delta);
+	EXPECT_NE(reported_delta, line_delta);
+	EXPECT_EQ(R"({\b0\i1}text)", line.Text.get());
+}
+
 TEST(ass_time_projection, legacy_output_uses_symmetric_rounding_for_ass_storage) {
 	AssDialogue line;
 	line.Comment = false;

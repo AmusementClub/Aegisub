@@ -36,6 +36,9 @@ class VisualToolCross final : public VisualTool<VisualDraggableFeature> {
 
 	void OnDoubleClick() override;
 	void Draw() override;
+	/// The tool draws its own full-canvas crosshair, so the OS pointer would
+	/// only sit on top of it.
+	wxStockCursor GetIdleCursor() const override { return wxCURSOR_BLANK; }
 	bool SupportsOverlayContext() const override { return true; }
 	void DrawOverlay(VideoOverlayDrawContext &context) override;
 	void DrawWithContext(VideoOverlayDrawContext &context);

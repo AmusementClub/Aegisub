@@ -39,13 +39,12 @@ VisualToolCross::VisualToolCross(VideoDisplay *parent, agi::Context *context)
 , gl_text(agi::make_unique<OpenGLText>())
 , coordinate_font_size_opt(OPT_GET("Tool/Visual/Coordinate Font Size"))
 {
-	parent->SetCursor(wxCursor(wxCURSOR_BLANK));
 	connections.push_back(OPT_SUB("Tool/Visual/Coordinate Font Size", [=](agi::OptionValue const&) { parent->Render(); }));
 }
 
-VisualToolCross::~VisualToolCross() {
-	parent->SetCursor(wxNullCursor);
-}
+// Out of line because the OpenGLText member is only forward declared in the
+// header. The cursor is the display's to manage; see GetIdleCursor.
+VisualToolCross::~VisualToolCross() = default;
 
 void VisualToolCross::OnDoubleClick() {
 	Vector2D d = ToScriptCoords(mouse_pos) - GetLinePosition(active_line);

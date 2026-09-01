@@ -28,6 +28,7 @@
 // Aegisub Project http://www.aegisub.org/
 
 #include "subtitle_character_markers.h"
+#include "subtitle_edit_ops.h"
 
 #include <cstdint>
 #include <memory>
@@ -128,6 +129,11 @@ class SubsStyledTextEditCtrl final : public wxStyledTextCtrl {
 	void OnLoseFocus(wxFocusEvent &event);
 	void OnChar(wxKeyEvent &event);
 	void OnKeyDown(wxKeyEvent &event);
+
+	/// Nudge the ASS block under the caret one step through the line.
+	/// Returns false when the caret has nothing movable under it.
+	bool MoveBlockUnderCaret(aegisub::subtitle_edit_ops::BlockMoveDirection direction);
+
 	void OnStartDrag(wxStyledTextEvent &event);
 	void OnDragOver(wxStyledTextEvent &event);
 	void OnDoDrop(wxStyledTextEvent &event);
@@ -160,6 +166,13 @@ class SubsStyledTextEditCtrl final : public wxStyledTextCtrl {
 #endif
 
 	void UpdateStyle();
+
+	/// Cached colour-swatch spans for the current line_text
+	std::vector<aegisub::subtitle_edit_ops::ColorSpan> color_swatch_spans;
+
+	void UpdateColorSwatches();
+	void ClearColorSwatchIndicators();
+	void OnIndicatorRelease(wxStyledTextEvent& event);
 
 	/// Cached character-marker spans for the current line_text
 	std::vector<aegisub::CharacterMarkerSpan> character_marker_spans;

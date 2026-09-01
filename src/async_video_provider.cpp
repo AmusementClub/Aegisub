@@ -832,9 +832,14 @@ AsyncVideoProvider::AsyncVideoProvider(std::unique_ptr<VideoProvider> source_pro
 }
 
 AsyncVideoProvider::~AsyncVideoProvider() {
+	{
+		std::lock_guard<std::mutex> lock(pending_mutex);
+		prefetch_shutdown = true;
+	}
 	worker->Sync([this] {
 		WorkerSyncTracker sync_tracker(*this);
-		while (ProcessPending()) { }
+		while (ProcessPending()) {
+		}
 	});
 }
 AsyncVideoProviderMemoryStats AsyncVideoProvider::CollectMemoryStats() {
@@ -1017,6 +1022,83 @@ void AsyncVideoProvider::CancelPendingFrameRequests() noexcept {
 		pending_check_updated = false;
 		pending_normal_frame_request = false;
 		request_version.fetch_add(1, std::memory_order_relaxed);
+	}
+}
+
+void AsyncVideoProvider::PrefetchFrames(int first_frame, int count) noexcept {
+	{
+		std::lock_guard<std::mutex> lock(pending_mutex);
+		if (prefetch_shutdown || first_frame < 0 || count <= 0)
+			return;
+		prefetch_next_frame = first_frame;
+		prefetch_end_frame = first_frame + count;
+		prefetch_request_version = request_version.load(std::memory_order_relaxed);
+		prefetch_content_version = content_version.load(std::memory_order_relaxed);
+		if (prefetch_scheduled)
+			return;
+		prefetch_scheduled = true;
+	}
+	worker->Async([this] { ProcessPrefetch(); });
+}
+
+void AsyncVideoProvider::ProcessPrefetch() {
+	int frame = -1;
+	bool more_frames = false;
+	{
+		std::lock_guard<std::mutex> lock(pending_mutex);
+		bool const stale =
+			prefetch_shutdown || prefetch_request_version != request_version.load(std::memory_order_relaxed) || prefetch_content_version != content_version.load(std::memory_order_relaxed);
+		bool const interactive_work_queued =
+			has_pending_frame || has_pending_current_frame_context || has_pending_color_space || pending_subs || !pending_changed_lines.empty();
+		if (stale || interactive_work_queued || prefetch_next_frame < 0 || prefetch_next_frame >= prefetch_end_frame) {
+			prefetch_scheduled = false;
+			return;
+		}
+		frame = prefetch_next_frame++;
+		more_frames = prefetch_next_frame < prefetch_end_frame;
+	}
+
+	if (!source_provider->HasFrameCache()) {
+		std::lock_guard<std::mutex> lock(pending_mutex);
+		prefetch_next_frame = -1;
+		prefetch_end_frame = -1;
+		prefetch_scheduled = false;
+		return;
+	}
+
+	try {
+		// Decode through the same path interactive requests use so the cache
+		// key matches what playback will ask for.
+		if (selected_source_mode == SourceFrameOutputMode::Native) {
+			SourceFrame native_frame;
+			std::shared_ptr<void> owner;
+			source_provider->GetNativeFrame(frame, native_frame, owner);
+		}
+		else {
+			auto scratch = acquire_buffer(source_buffers);
+			source_provider->GetFrame(frame, *scratch);
+		}
+	}
+	catch (VideoProviderError const& err) {
+		LOG_E("video_provider/prefetch") << "Frame " << frame << " prefetch failed: " << err.GetMessage();
+		std::lock_guard<std::mutex> lock(pending_mutex);
+		prefetch_next_frame = -1;
+		prefetch_end_frame = -1;
+		prefetch_scheduled = false;
+		return;
+	}
+
+	{
+		// Re-post under the mutex together with the shutdown check: the
+		// destructor sets the flag under this mutex before enqueueing its
+		// drain, so a link that passes here is always queued ahead of the
+		// drain and runs while the object is still alive.
+		std::lock_guard<std::mutex> lock(pending_mutex);
+		prefetch_scheduled = false;
+		if (more_frames && !prefetch_shutdown) {
+			prefetch_scheduled = true;
+			worker->Async([this] { ProcessPrefetch(); });
+		}
 	}
 }
 

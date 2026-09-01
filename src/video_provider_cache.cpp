@@ -193,6 +193,7 @@ public:
 		return master->SetColorSpace(m);
 	}
 
+	bool HasFrameCache() const override { return true; }
 	int GetFrameCount() const override             { return master->GetFrameCount(); }
 	int GetWidth() const override                  { return master->GetWidth(); }
 	int GetHeight() const override                 { return master->GetHeight(); }

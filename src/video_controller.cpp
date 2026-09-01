@@ -80,12 +80,18 @@ constexpr int PlaybackStartWaitNoticeMs = 300;
 /// up and letting the audio clock run (the picture snaps forward once the
 /// stalled read completes)
 constexpr int PlaybackStartFallbackMs = 10000;
+/// How long to stay idle after a presentation before prefetching ahead
+constexpr int PausedPrefetchDebounceMs = 250;
+/// How far ahead of the playhead idle prefetch warms the frame cache
+constexpr int PausedPrefetchLookaheadMs = 500;
+constexpr int PausedPrefetchMaxFrames = 16;
 }
 
 VideoController::VideoController(agi::Context *c)
 : context(c)
 , playback_timer(CreateVideoControllerTimer([this] { OnPlayTimer(); }))
 , visual_subtitle_update_timer(CreateVideoControllerTimer([this] { OnVisualSubtitleUpdateTimer(); }))
+, paused_prefetch_timer(CreateVideoControllerTimer([this] { OnPausedPrefetchTimer(); }))
 , playAudioOnStep(OPT_GET("Audio/Plays When Stepping Video"))
 {
 	auto core = context->GetCore();
@@ -113,6 +119,7 @@ void VideoController::ResetPlaybackState() {
 
 void VideoController::OnNewVideoProvider(AsyncVideoProvider *new_provider) {
 	Stop();
+	paused_prefetch_timer->Stop();
 	ResetVisualSubtitleInteraction();
 	provider = new_provider;
 	presented_frame_n = -1;
@@ -802,6 +809,7 @@ void VideoController::StopPlayback(bool clear_interactive_seek_preview) {
 	}
 	HidePlaybackStartWaitNotice();
 	ResetPlaybackState();
+	SchedulePausedFramePrefetch();
 }
 
 void VideoController::Stop() {
@@ -854,6 +862,35 @@ void VideoController::OnPlayTimer() {
 
 	if (reached_end)
 		Stop();
+}
+
+void VideoController::SchedulePausedFramePrefetch() {
+	if (!provider || IsPlaying())
+		return;
+
+	paused_prefetch_timer->Stop();
+	paused_prefetch_timer->StartOnce(PausedPrefetchDebounceMs);
+}
+
+void VideoController::OnPausedPrefetchTimer() {
+	if (!provider || IsPlaying() || playback_start_pending)
+		return;
+
+	// Only warm ahead of a frame that actually made it to the display, so a
+	// still-in-flight seek cannot prefetch from a stale position.
+	if (presented_frame_n != frame_n)
+		return;
+
+	int const frame_count = provider->GetFrameCount();
+	if (frame_n + 1 >= frame_count)
+		return;
+
+	int const lookahead_frame = FrameAtTime(TimeAtFrame(frame_n) + PausedPrefetchLookaheadMs);
+	int const count = std::min(
+		std::min(lookahead_frame, frame_count - 1) - frame_n,
+		PausedPrefetchMaxFrames);
+	if (count > 0)
+		provider->PrefetchFrames(frame_n + 1, count);
 }
 
 double VideoController::GetARFromType(AspectRatio type) const {
@@ -982,6 +1019,7 @@ void VideoController::NotifyFramePresented(int frame_number) {
 		inspection_step_frame = -1;
 		RequestPendingInspectionStepTarget();
 	}
+	SchedulePausedFramePrefetch();
 }
 
 void VideoController::RequestPendingInspectionStepTarget() {

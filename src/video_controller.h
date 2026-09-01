@@ -91,6 +91,8 @@ class VideoController final {
 	/// frame while playing video
 	std::unique_ptr<VideoControllerTimer> playback_timer;
 	std::unique_ptr<VideoControllerTimer> visual_subtitle_update_timer;
+	/// Debounce timer for idle prefetch of the frames ahead of the playhead
+	std::unique_ptr<VideoControllerTimer> paused_prefetch_timer;
 	DeadlinePacingPolicy visual_subtitle_update_pacer{std::chrono::milliseconds(33)};
 	video_subtitle_update_policy::UpdateCoalescer pending_visual_subtitle_updates;
 	video_subtitle_update_policy::UpdateCoalescer final_visual_subtitle_updates;
@@ -158,6 +160,8 @@ class VideoController final {
 	std::deque<VideoRenderPacket> recent_render_packets;
 
 	void OnPlayTimer();
+	void OnPausedPrefetchTimer();
+	void SchedulePausedFramePrefetch();
 	void OnVisualSubtitleUpdateTimer();
 	void ArmVisualSubtitleUpdateTimer();
 	void FlushPendingVisualSubtitleUpdate();

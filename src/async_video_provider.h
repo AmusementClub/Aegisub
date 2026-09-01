@@ -227,11 +227,24 @@ class AsyncVideoProvider {
 	bool has_pending_color_space = false;
 	std::string pending_color_space;
 	bool processing_scheduled = false;
-	std::vector<SourceFrameOutputMode> preferred_source_modes = { SourceFrameOutputMode::Bgra8 };
+	/// Idle prefetch of upcoming frames; guarded by pending_mutex. One frame
+	/// is decoded per posted job so interactive requests interleave ahead of
+	/// the prefetch chain, and any new request/content version aborts it.
+	int prefetch_next_frame = -1;
+	int prefetch_end_frame = -1;
+	std::uint64_t prefetch_request_version = 0;
+	std::uint64_t prefetch_content_version = 0;
+	bool prefetch_scheduled = false;
+	/// Set under pending_mutex before the destructor enqueues its drain, so
+	/// the self-reposting prefetch chain can never queue a link that would
+	/// run after destruction. Check-and-repost must be atomic under the same
+	/// mutex for the FIFO ordering argument to hold.
+	bool prefetch_shutdown = false;
+	std::vector<SourceFrameOutputMode> preferred_source_modes = {SourceFrameOutputMode::Bgra8};
 	SourceFrameOutputMode selected_source_mode = SourceFrameOutputMode::Bgra8;
 	bool has_logged_source_mode = false;
 
-public:
+	public:
 	/// Reentrancy bookkeeping for synchronous worker entries. Manipulated
 	/// only by WorkerSyncTracker on the worker thread; public entries read
 	/// it to reject same-thread nesting before it deadlocks Queue::Sync.
@@ -252,6 +265,7 @@ private:
 	bool ReconfigureSourceOutputMode();
 	void ScheduleProcessing();
 	bool ProcessPending();
+	void ProcessPrefetch();
 	bool IsReentrantWorkerCall() const;
 
 public:
@@ -293,6 +307,17 @@ public:
 	/// Align the provider's current-frame context with a frame presented from an
 	/// external cache, without requesting another render.
 	void SetCurrentFrameContext(int frame, double time) throw();
+
+	/// @brief Warm the frame cache for upcoming frames while idle
+	/// @brief first_frame First frame to decode
+	/// @brief count     Number of frames to decode
+	///
+	/// Decodes frames on the worker queue purely to populate the source frame
+	/// cache; no packets are rendered or delivered. One frame is decoded per
+	/// posted job so interactive requests are never queued behind more than a
+	/// single prefetch decode, and the prefetch aborts as soon as a newer
+	/// request or content version arrives. No-op without a frame cache.
+	void PrefetchFrames(int first_frame, int count) noexcept;
 
 	/// @brief Synchronously get a CPU-readable BGRA frame
 	/// @brief frame Frame number

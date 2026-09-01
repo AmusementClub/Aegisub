@@ -141,6 +141,11 @@ public:
 	/// @brief Does this provider want Aegisub to cache video frames?
 	/// @return Returns true if caching is desired, false otherwise.
 	virtual bool WantsCaching() const { return false; }
+	/// @brief Does decoding through this provider populate a frame cache?
+	///
+	/// True for the cache wrapper itself, so background prefetch can tell
+	/// whether decoding a frame now will make a later request cheaper.
+	virtual bool HasFrameCache() const { return false; }
 	virtual VideoProviderMemoryStats GetMemoryStats() const { return { }; }
 
 	/// Should the video properties in the script be set to this video's property if they already have values?
